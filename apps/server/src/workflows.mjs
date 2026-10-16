@@ -26,6 +26,11 @@ const STUCK_MS = 10 * 60 * 1000;
 const MAX_VISITS = 20;
 /** 连线的终点：走完就结束 */
 const END = 'end';
+/**
+ * 内建模板**改名前**的 id（2026-10-16 之前叫这个）。
+ * 它跟技能名 `bandi-flow` 撞了 —— 老库里的模板 id 靠 ensureBuiltInTemplate 迁过来。
+ */
+const LEGACY_TEMPLATE_ID = 'bandi-flow';
 
 /**
  * 内建模板：班底交付流程。
@@ -35,9 +40,13 @@ const END = 'end';
  * ⚠️ **节点不声明技能**：技能是"这个人会干什么"，绑在数字员工身上；
  * 流程负责把不同的人组合起来，所以每一步**只差点名**（`personaId`）。
  * 没点名 = 故意留空：到站即「已阻塞」，等人指派（见 assigneeFor）。
+ *
+ * ⚠️ id 原来是 `bandi-flow`，跟**技能名撞了**（技能也叫 `bandi-flow`，是能力包）：
+ * 一个是平台的流程图，一个是员工身上的能力，同名让人和模型都分不清。
+ * 2026-10-16 起叫 `bandi-delivery`，老库里的旧 id 由 ensureBuiltInTemplate 迁过来。
  */
 export const BUILT_IN_TEMPLATE = {
-  id: 'bandi-flow',
+  id: 'bandi-delivery',
   name: '班底交付流程',
   builtIn: true,
   start: 'n1',
@@ -66,6 +75,10 @@ export const BUILT_IN_TEMPLATE = {
       id: 'n5', name: '部署', x: 480, y: 210,
       detail: '把本版本发布出去，记录发布结果和回滚方式。部署永远要人下令。',
       approve: END, reject: 'n4', // 发布失败 → 回去重测
+      // ⚠️ **部署永远要人下令**（契约「四」写的硬规矩，这里必须落成开关）：
+      // 没有它，onAgentRunFinished 会在这一步跑完后自动 decide('通过') ——
+      // 契约上写着"不自动流转"，代码里却在自动流转，是最难发现的那种不一致。
+      manual: true,
     },
   ],
 };
@@ -74,20 +87,42 @@ export const BUILT_IN_TEMPLATE = {
 
 /** 保证内建模板是**最新版**（v1 的线性模板要升级成带分支的 v2） */
 export function ensureBuiltInTemplate() {
+  // 改名迁移（只做一次）：老库里的内建模板 id 还叫 `bandi-flow`。
+  // 新 id 已经存在就不动 —— 那只可能是用户自己建了个同名的，交给人处理，别替他决定。
+  if (store.getWorkflowTemplate(LEGACY_TEMPLATE_ID) && !store.getWorkflowTemplate(BUILT_IN_TEMPLATE.id)) {
+    const moved = store.renameWorkflowTemplate(LEGACY_TEMPLATE_ID, BUILT_IN_TEMPLATE.id);
+    if (moved) console.log(`流程模板改名：${LEGACY_TEMPLATE_ID} → ${BUILT_IN_TEMPLATE.id}（实例的 templateId 一起改）`);
+  }
+
   const cur = store.getWorkflowTemplate(BUILT_IN_TEMPLATE.id);
   if (!cur || !cur.nodes) return store.upsertWorkflowTemplate(BUILT_IN_TEMPLATE);
 
-  // 已经有了：**只补坐标**（老模板没 x/y，画布上会叠在一起）。
-  // 名字、说明、连线一律不动 —— 用户可能已经用设计器改过了，覆盖他的改动是最糟的。
+  // 已经有了：**只补平台后来新增的东西**，用户改过的一律不动 —— 覆盖用户的改动是最糟的。
+  //   ① 坐标：老模板没 x/y，画布上会叠在一起；
+  //   ② `manual`：契约写着"部署永远要人下令"，可老种子数据里压根没这个字段，
+  //      引擎只看 `manual`，没有它部署跑完就会自动流转。
+  //      所以只补**从来没设过**的（`undefined`）——设计器一保存就会写 true/false，
+  //      那是用户的选择，`false` 也得留住。
   const nodes = nodesOf(cur);
-  if (nodes.length && nodes.every((n) => !Number.isFinite(n.x))) {
-    const byId = new Map(BUILT_IN_TEMPLATE.nodes.map((n) => [n.id, n]));
-    const seeded = nodes.map((n, i) => {
+  const needCoords = nodes.length > 0 && nodes.every((n) => !Number.isFinite(n.x));
+  const wantManual = new Set(BUILT_IN_TEMPLATE.nodes.filter((n) => n.manual === true).map((n) => n.id));
+  const byId = new Map(BUILT_IN_TEMPLATE.nodes.map((n) => [n.id, n]));
+  let touched = false;
+  const fixed = nodes.map((n, i) => {
+    const next = { ...n };
+    if (needCoords) {
       const ref = byId.get(n.id);
-      return { ...n, x: ref?.x ?? 40 + (i % 4) * 260, y: ref?.y ?? 60 + Math.floor(i / 4) * 150 };
-    });
-    store.upsertWorkflowTemplate({ id: cur.id, name: cur.name, nodes: seeded, builtIn: !!cur.builtIn });
-  }
+      next.x = ref?.x ?? 40 + (i % 4) * 260;
+      next.y = ref?.y ?? 60 + Math.floor(i / 4) * 150;
+      touched = true;
+    }
+    if (wantManual.has(n.id) && n.manual === undefined) {
+      next.manual = true;
+      touched = true;
+    }
+    return next;
+  });
+  if (touched) store.upsertWorkflowTemplate({ id: cur.id, name: cur.name, nodes: fixed, builtIn: !!cur.builtIn });
   return store.getWorkflowTemplate(BUILT_IN_TEMPLATE.id);
 }
 

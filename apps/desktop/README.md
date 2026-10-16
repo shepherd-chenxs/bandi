@@ -18,6 +18,7 @@
 | `smoke-shell.mjs` | 壳的协议与分寸（26 项） |
 | `fetch-node.mjs` | 取一份 Node 运行时放进 `binaries/` —— **打包前必跑** |
 | `stage-runtime.mjs` | 把运行时摊到 `runtime/` —— **打包前必跑**（见下） |
+| `installer-hooks.nsh` | 卸载钩子：问一句"要不要连数据一起删"（见下「卸载」）。**必须 UTF-8 带 BOM** |
 
 **两半之间只有三行协议**（stdout；人看的话都走 stderr，免得解析被搅）：
 
@@ -130,4 +131,24 @@ Add-Type -AssemblyName System.Drawing
 - 装出来的目录：`bandi-desktop.exe`、`node.exe`、`apps/**`（控制面 + 界面 + `shell.mjs`）、`skills/`、`plugins/`
 - 双击 → 窗口标题「班底 <版本>」（版本真源 `version.json`）、里面就是平台界面
 - **PATH 上没有 node，照样跑** —— 用的是安装目录里那份 `node.exe`（控制面的 `repoRoot` 就是安装目录）
-- 关掉窗口 → 它起的控制面被收掉；卸载 → 目录与注册表都干净
+- 关掉窗口 → 它起的控制面被收掉；卸载 → 目录与注册表都干净（**要连数据一起清，卸载时选「完全卸载」，见下**）
+
+## 卸载（多了一个「完全卸载」）
+
+卸载器会**多问一句**：要不要连数据一起删掉。**默认按钮是「否」。**
+
+| 选 | 会做什么 |
+| --- | --- |
+| 否（默认） | 只卸载程序。数据留在 `%APPDATA%\bandi`，下次装回来还是原来那个环境 |
+| 是 · 完全卸载 | 先收掉在跑的进程与开机自启，再删 `%APPDATA%\bandi`（库、访问令牌、端口、插件与连接器、日志、备份）、`%APPDATA%\bandi-node`（节点数据与自启脚本）、`%USERPROFILE%\.bandi`（服务器登记表），最后删启动文件夹里的 `bandi-*.vbs` |
+
+**为什么做成选项**：数据目录里是用户的工作（会话、事件流、流程实例），误删回不来 —— 所以默认不删；
+**静默卸载（`/S`）一律不删**（没人能回答那个问句）。
+
+**不会动的东西**：`~/.ssh` 里的密钥（那是标准位置，别的工具也在用）；如果你把 `BANDI_DATA` 指到了
+别处，卸载器不知道那个路径，也不会去删它。
+
+实现在 `installer-hooks.nsh`（挂在 `bundle.windows.nsis.installerHooks`）。两个坑写在文件头上，
+改之前先看一眼：**必须 UTF-8 带 BOM**（`Unicode true` 下 makensis 只认带 BOM 的 UTF-8，不带就直接
+"Bad text encoding" 编译失败）；**启动文件夹那个常量是 `$SMSTARTUP` 不是 `$STARTUP`**。
+想单独验语法不用整套 build：`%LOCALAPPDATA%\tauri\NSIS\makensis.exe` 编一个 `!insertmacro` 的小脚本即可。

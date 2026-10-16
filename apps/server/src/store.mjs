@@ -1977,6 +1977,36 @@ export function upsertWorkflowTemplate({ id, name, nodes, steps, start, builtIn 
   return getWorkflowTemplate(sid);
 }
 
+/**
+ * 把一条模板**换个 id**（连同引用它的实例一起）。
+ *
+ * 只为内建模板那一次改名存在：它原来叫 `bandi-flow`，跟技能名撞了（2026-10-16 起叫
+ * `bandi-delivery`）。**实例存的是 templateId 这个字符串**，不一起改的话老实例就指向
+ * 一个不存在的模板 —— 节点查不出来，当前那一步会显示成"悬空"。
+ *
+ * 旧 id 不在、或新 id 已存在 → 返回 null，什么都不做（别猜，交给人处理）。
+ * 故意**不动 `updatedAt`**：那是"多久没动了"的依据，改名不该让所有实例看着刚被动过。
+ */
+export function renameWorkflowTemplate(oldId, newId) {
+  const from = getWorkflowTemplate(oldId);
+  if (!from || getWorkflowTemplate(newId)) return null;
+  const now = nowIso();
+  db.exec('BEGIN');
+  try {
+    db.prepare(
+      `INSERT INTO workflow_templates (id, name, steps, nodes, startNode, publishedAt, builtIn, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(newId, from.name, from.steps, from.nodes, from.startNode, from.publishedAt, from.builtIn, from.createdAt, now);
+    db.prepare('DELETE FROM workflow_templates WHERE id = ?').run(oldId);
+    db.prepare('UPDATE workflow_runs SET templateId = ? WHERE templateId = ?').run(newId, oldId);
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+  return getWorkflowTemplate(newId);
+}
+
 /* ------------------------------------------------- 工作流：实例 */
 
 export function createWorkflowRun({

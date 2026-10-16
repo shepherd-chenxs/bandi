@@ -1486,9 +1486,6 @@ async function renderDeviceList() {
     : `<section class="fx" style="margin-top:26px">
         <label>局域网</label>
         <div class="hint">
-          开着的时候，<b>同一个局域网里的其他机器</b>才能加入这台机器。<br />
-          ⚠️ 打开后，别的机器用浏览器打开这个面板要填一次<b>访问令牌</b>
-          （在控制面数据目录的 <code>token</code> 文件里）；<b>本机这个窗口不用填</b>。<br />
           改完要<b>重启班底</b>才生效。
         </div>
         <div class="row-item">

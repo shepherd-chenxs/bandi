@@ -10,7 +10,7 @@ import path from 'node:path';
  * **只搬只读的那半截**——一键部署、登记部署目标、发布记录回写全部留在归档里：
  * 面板在平台里的定位是「看记录」，执行是数字员工的活。
  *
- * ── 契约（照 `.bandi/README.md`）────────────────────────────────
+ * ── 契约（见 `skills/bandi-flow/references/契约.md`）────────────
  * 进度文件固定是项目根下的 `.bandi/status.yaml`，只覆盖三种形状：
  *   1. 顶层 `键: 值`；
  *   2. `键:` 下面是 `- 项` 的映射列表（`versions`、`tasks`）；
@@ -32,7 +32,7 @@ import path from 'node:path';
  * 跳出项目根的路径一律拒绝 —— 只读不等于可以变成任意文件读取器。
  */
 
-/** 进度文件相对项目根的位置，按 `.bandi/README.md` 的契约固定。 */
+/** 进度文件相对项目根的位置，按契约（`skills/bandi-flow/references/契约.md`）固定。 */
 export const STATUS_REL = path.posix.join('.bandi', 'status.yaml');
 
 /** 读版本文档时的字节上限与要点条数上限，避免把整份大文档塞进接口。 */

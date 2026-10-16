@@ -7,6 +7,12 @@
  *     **引擎不许按技能挑一个人顶上**，原因里也不提技能（不是每个节点都有对应技能）；
  *   · 技能是"这个人会干什么"，绑在数字员工身上；流程不拿它当路由键。
  *
+ * 另外两条钉在这儿（2026-10-16 补）：
+ *   · **内建模板改名**：旧 id `bandi-flow` 跟技能名撞了 → `bandi-delivery`，
+ *     老库里的模板与**实例的 templateId** 一起迁（见 ⑧）；
+ *   · **部署永远要人下令**：内建模板的部署节点必须带 `manual`，且这个开关真的管住
+ *     自动流转（见 ⑨⑩）—— 契约上写着不自动流转，代码里就不能自动流转。
+ *
  * 隔离：临时数据库 + 临时目录，不碰 data/ 里的真账。
  * 跑法：node apps/server/src/smoke-workflows.mjs
  */
@@ -139,6 +145,89 @@ const cols = (t) => db.prepare(`PRAGMA table_info('${t}')`).all().map((c) => c.n
 check('workflow_tasks 没有 skill 列', !cols('workflow_tasks').includes('skill'), cols('workflow_tasks').join(','));
 check('workflow_steps 没有 skill 列', !cols('workflow_steps').includes('skill'), cols('workflow_steps').join(','));
 db.close();
+
+/*
+ * ⑧ 内建模板**改名**：老库里的 id 是 `bandi-flow`，跟技能名撞了。
+ * 迁移必须把**实例的 templateId 一起改** —— 不改的话老实例指向一个不存在的模板，
+ * 界面上那一步会显示成"当前节点悬空"。
+ */
+console.log('\n⑧ 老库的 bandi-flow 模板 + 实例 → 自动迁到 bandi-delivery');
+store.upsertWorkflowTemplate({
+  id: 'bandi-flow',
+  name: '班底交付流程',
+  start: 'n1',
+  nodes: [{ id: 'n1', name: '谈需求', x: 220, y: 60, manual: true, approve: 'end', reject: 'end' }],
+});
+const oldRun = store.createWorkflowRun({ templateId: 'bandi-flow', title: '老库里的实例' });
+store.setWorkflowCurrentNode(oldRun.id, 'n1');
+workflows.ensureBuiltInTemplate();
+check('内建模板 id 是 bandi-delivery（bandi-flow 只留给技能）', workflows.BUILT_IN_TEMPLATE.id === 'bandi-delivery', workflows.BUILT_IN_TEMPLATE.id);
+check('旧 id 的模板没了', !store.getWorkflowTemplate('bandi-flow'));
+check('新 id 的模板在', !!store.getWorkflowTemplate('bandi-delivery'));
+check('实例的 templateId 跟着改了', store.getWorkflowRun(oldRun.id)?.templateId === 'bandi-delivery', String(store.getWorkflowRun(oldRun.id)?.templateId));
+const migrated = workflows.getWorkflowView(oldRun.id);
+check('老实例照新 id 仍读得出节点（没悬空）', migrated.nodes.some((n) => n.id === migrated.currentNodeId), `${migrated.currentNodeId} vs ${migrated.nodes.map((n) => n.id).join(',')}`);
+check('迁移不改「多久没动」', !!store.getWorkflowRun(oldRun.id)?.updatedAt, String(store.getWorkflowRun(oldRun.id)?.updatedAt));
+
+/*
+ * ⑨ 内建模板本身：**部署永远要人下令**（契约「四」的硬规矩）必须有开关兜着。
+ * 没有它，onAgentRunFinished 会在跑完后自动 decide('通过') —— 契约写着不自动流转，
+ * 代码里却在自动流转。
+ */
+console.log('\n⑨ 内建模板：部署节点带 manual');
+const deployNode = workflows.BUILT_IN_TEMPLATE.nodes.find((n) => n.name === '部署');
+check('建模板里有「部署」这一步', !!deployNode, String(deployNode?.id));
+check('部署节点 manual = true', deployNode?.manual === true, String(deployNode?.manual));
+const seeded = store.upsertWorkflowTemplate(workflows.BUILT_IN_TEMPLATE);
+const seededNodes = workflows.nodesOf(seeded);
+check('入库之后仍然带 manual', seededNodes.find((n) => n.name === '部署')?.manual === true);
+const seededRun = workflows.startWorkflow({ templateId: 'bandi-delivery', title: '内建模板用例', autoStart: false });
+const seededView = workflows.getWorkflowView(seededRun.id);
+check('实例视图把 manual 带出来（界面据此标「需人工确认」）', seededView.nodes.find((n) => n.name === '部署')?.manual === true);
+
+// 老库里的种子数据（五个节点、没坐标、没 manual）——启动时该补上，但**用户明确关掉的要留住**
+const seed5 = (n5) => store.upsertWorkflowTemplate({
+  id: 'bandi-delivery', name: '班底交付流程', builtIn: true, start: 'n1',
+  nodes: [
+    { id: 'n1', name: '谈需求', approve: 'n2', reject: 'end' },
+    { id: 'n2', name: '定计划', approve: 'n3', reject: 'n1' },
+    { id: 'n3', name: '写代码', approve: 'n4', reject: 'n2' },
+    { id: 'n4', name: '测试', approve: 'n5', reject: 'n3' },
+    { id: 'n5', name: '部署', approve: 'end', reject: 'n4', ...n5 },
+  ],
+});
+seed5({});
+workflows.ensureBuiltInTemplate();
+const upgraded = workflows.nodesOf(store.getWorkflowTemplate('bandi-delivery'));
+check('老种子：部署节点补上了 manual', upgraded.find((n) => n.id === 'n5')?.manual === true);
+check('老种子：坐标也一并补上', upgraded.every((n) => Number.isFinite(n.x) && Number.isFinite(n.y)));
+seed5({ x: 1, y: 1, manual: false });
+workflows.ensureBuiltInTemplate();
+check('用户明确关掉（manual: false）→ 不被覆盖', workflows.nodesOf(store.getWorkflowTemplate('bandi-delivery')).find((n) => n.id === 'n5')?.manual === false);
+
+/*
+ * ⑩ manual 开关真的管住自动流转 —— ⑨ 只证明开关在，这里证明它起作用。
+ * 两个节点只差 manual，喂同一条"干完了"的假运行，看流程走不走。
+ */
+console.log('\n⑩ manual 开关真的管住自动流转');
+const worker = store.createPersona({ name: '干活的', runtime: 'codex', cwd: tmp, instructions: '' });
+const oneNode = (id, manual) => store.upsertWorkflowTemplate({
+  id, name: id, start: 'n1',
+  nodes: [{ id: 'n1', name: '部署', personaId: worker.id, manual, approve: 'end', reject: 'end' }],
+});
+const finishWith = (templateId, agentRunId) => {
+  const r = workflows.startWorkflow({ templateId, title: templateId, autoStart: false });
+  const t = store.listWorkflowTasks(r.id)[0];
+  store.updateWorkflowTask(t.id, { status: '进行中', agentRunId });
+  workflows.onAgentRunFinished({ id: agentRunId, status: '已完成', finalText: '干完了' });
+  return { run: store.getWorkflowRun(r.id), task: store.getWorkflowTask(t.runId, 'n1', 1) };
+};
+oneNode('t-pause', true);
+const paused = finishWith('t-pause', 'ar-pause');
+check('manual：停在「待确认」，流程还卡在这一步', paused.task?.status === '待确认' && paused.run?.status === '进行中', `${paused.task?.status} / ${paused.run?.status}`);
+oneNode('t-auto', false);
+const auto = finishWith('t-auto', 'ar-auto');
+check('非 manual：自动往下走，approve=end → 流程收尾', auto.run?.status === '已完成', `${auto.task?.status} / ${auto.run?.status}`);
 
 try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* 临时目录，删不掉就算了 */ }
 console.log(`\n结论：${failed ? '有 ' + failed + ' 项没通过' : '全通过'}`);
