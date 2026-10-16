@@ -50,6 +50,12 @@ npx --yes @tauri-apps/cli@2 build     # 3) 出安装包
 
 产物：`target/release/bundle/nsis/班底_<版本>_x64-setup.exe`（约 22 MB；装完约 86 MB，其中 82 MB 是 node.exe）。
 
+**CI 也会出包**（[../../.github/workflows/release.yml](../../.github/workflows/release.yml)）：推一个 `v<版本>` tag
+（**必须等于 `apps/desktop/version.json`**，不一致 CI 直接失败），GitHub 的 windows runner 上跑同样三步，
+把 `班底_<版本>_x64-setup.exe` 与 `SHA256SUMS-v<版本>.txt` 挂到 Release 上供人下载。
+⚠️ **产物没有代码签名**：下载的人会看到 SmartScreen「未知发布者」；要消掉得买证书（OV/EV 或
+Azure Trusted Signing），再在 workflow 里加一步 signtool。Release 正文里已写明这一点。
+
 **安装包里的许可文本（已打通，别删那几条映射）**：随包分发必须带三份文件 —— `stage-runtime.mjs`
 把它们摊进 `runtime/`，`tauri.conf.json` 的 `bundle.resources` 各有映射，装完落在**安装目录根**上：
 

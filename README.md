@@ -185,6 +185,10 @@ dsh --profile headless --json --session-id <id> -       # turn 变成 2
   照样起窗口、控制面用的是**安装目录里那份 `node.exe`**；卸载后目录与注册表都干净。
   **2026-10-16 起卸载器多问一句「要不要连数据一起删」（完全卸载）**——默认不删、静默卸载不删，
   用来清出一个全新环境验证新机安装（见 [apps/desktop/README.md](apps/desktop/README.md)「卸载」）。
+  **安装包可以从 GitHub Releases 直接下载**：推一个 `v<版本>` tag，Actions 就在 windows runner 上
+  打包并把 exe 与 `SHA256SUMS` 挂到 Release（[.github/workflows/release.yml](.github/workflows/release.yml)；
+  tag 必须等于 `apps/desktop/version.json`，不一致 CI 直接失败）。产物**未代码签名**，Windows 会提示
+  「未知发布者」，按提示选「仍要运行」。
   打包三步（`fetch-node.mjs` → `stage-runtime.mjs` → `npx tauri build`）与几个环境坑
   见 [apps/desktop/README.md](apps/desktop/README.md)。
 - **起停逻辑抽成一份**（2026-10-15）：`apps/server/src/lifecycle.mjs`，

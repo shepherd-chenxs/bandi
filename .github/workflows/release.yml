@@ -1,0 +1,98 @@
+# 打 tag 就出 Windows 安装包，并挂到 Release 上供人下载。
+#
+# 为什么放 CI：这台机器上打安装包要手工备 NSIS 缓存、本机还得有 Rust；
+# GitHub 的 windows runner 三步直接跑通，而且谁都能复现同一份产物。
+#
+# 触发：
+#   · push tag（形如 v0.9.0）—— **tag 必须与 apps/desktop/version.json 相同**（版本真源唯一），
+#     不一致直接失败，免得发出去的包和仓库里的号对不上；
+#   · 手动（workflow_dispatch）—— 用 version.json 当 tag 名，方便补发已经打过的版本。
+#
+# ⚠️ 产物**没有代码签名**：下载的人会看到 Windows SmartScreen「未知发布者」。
+#    要消掉得买证书（OV/EV 或 Azure Trusted Signing），再在这里加一步 signtool ——
+#    在那之前，Release 正文里写明"按提示选仍要运行"，并把 SHA256SUMS 一起传上去。
+
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+# 建 Release 要写权限；仓库默认的 GITHUB_TOKEN 可能是只读，所以显式声明。
+permissions:
+  contents: write
+
+jobs:
+  windows-installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop
+
+      - name: 读版本号（真源：apps/desktop/version.json）
+        id: ver
+        shell: pwsh
+        run: |
+          $v = (Get-Content apps/desktop/version.json -Raw | ConvertFrom-Json).version
+          if (-not $v) { throw 'apps/desktop/version.json 里没有 version' }
+          "version=$v" >> $env:GITHUB_OUTPUT
+          Write-Host "版本：$v"
+
+      - name: tag 与版本号必须一致
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        run: |
+          $want = "v${{ steps.ver.outputs.version }}"
+          if ('${{ github.ref_name }}' -ne $want) {
+            throw "tag 是 ${{ github.ref_name }}，但 version.json 是 $want —— 版本真源唯一，先改 version.json 再打 tag。"
+          }
+
+      - name: 取 Node 运行时（安装包必须自带，不许要求用户自装）
+        run: node apps/desktop/fetch-node.mjs
+
+      - name: 摊运行时与许可文本到 runtime/
+        run: node apps/desktop/stage-runtime.mjs
+
+      - name: 出安装包
+        working-directory: apps/desktop
+        run: npx --yes @tauri-apps/cli@2 build
+
+      - name: 算校验和
+        shell: pwsh
+        run: |
+          $dir = 'apps/desktop/target/release/bundle/nsis'
+          $exe = Get-ChildItem $dir -Filter '*-setup.exe' | Select-Object -First 1
+          if (-not $exe) { throw "没找到安装包：$dir" }
+          $sums = Join-Path $dir "SHA256SUMS-v${{ steps.ver.outputs.version }}.txt"
+          "$((Get-FileHash $exe.FullName -Algorithm SHA256).Hash.ToLower())  $($exe.Name)" |
+            Set-Content $sums -Encoding utf8NoBOM
+          Get-Content $sums
+
+      - name: 挂到 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('v{0}', steps.ver.outputs.version) }}
+          name: 班底 ${{ steps.ver.outputs.version }}
+          body: |
+            **Windows 安装包**（自带 Node 运行时，装完即用）。
+
+            - 下载 `班底_${{ steps.ver.outputs.version }}_x64-setup.exe`，双击安装。
+            - 校验和见 `SHA256SUMS-v${{ steps.ver.outputs.version }}.txt`。
+            - 许可：随包带 `LICENSE` / `NOTICE` / `node-LICENSE.txt`（Apache-2.0，二进制分发同样适用）。
+            - 卸载时可选**完全卸载**：连数据一起删（库、令牌、插件与连接器、机器登记表、开机自启项），
+              默认不删；静默卸载不删。
+
+            ⚠️ 这份产物**没有代码签名**，Windows 可能提示「未知发布者」—— 按提示选「仍要运行」即可。
+          files: |
+            apps/desktop/target/release/bundle/nsis/*-setup.exe
+            apps/desktop/target/release/bundle/nsis/SHA256SUMS-*.txt
