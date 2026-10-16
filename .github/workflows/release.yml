@@ -67,26 +67,49 @@ jobs:
         working-directory: apps/desktop
         run: npx --yes @tauri-apps/cli@2 build
 
-      - name: 算校验和
+      - name: 规范成 ASCII 资产名（GitHub 会把中文资产名吃掉，2026-10-16 实测：班底_ → _）
         shell: pwsh
         run: |
           $dir = 'apps/desktop/target/release/bundle/nsis'
-          $exe = Get-ChildItem $dir -Filter '*-setup.exe' | Select-Object -First 1
+          $exe = Get-ChildItem $dir -Filter '*-setup.exe' | Where-Object { $_.Name -notlike 'bandi_*' } | Select-Object -First 1
           if (-not $exe) { throw "没找到安装包：$dir" }
-          $sums = Join-Path $dir "SHA256SUMS-v${{ steps.ver.outputs.version }}.txt"
-          "$((Get-FileHash $exe.FullName -Algorithm SHA256).Hash.ToLower())  $($exe.Name)" |
-            Set-Content $sums -Encoding utf8NoBOM
-          Get-Content $sums
+          $out = Join-Path $dir "bandi_${{ steps.ver.outputs.version }}_x64-setup.exe"
+          Copy-Item $exe.FullName $out -Force
+          "$((Get-FileHash $out -Algorithm SHA256).Hash.ToLower())  $(Split-Path $out -Leaf)" |
+            Set-Content (Join-Path $dir "SHA256SUMS-v${{ steps.ver.outputs.version }}.txt") -Encoding utf8NoBOM
+          Get-Content (Join-Path $dir "SHA256SUMS-v${{ steps.ver.outputs.version }}.txt")
+
+      - name: 清掉这个 Release 上名字不对的旧资产
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "v${{ steps.ver.outputs.version }}"
+          $keep = @("bandi_${{ steps.ver.outputs.version }}_x64-setup.exe",
+                    "SHA256SUMS-v${{ steps.ver.outputs.version }}.txt")
+          try {
+            $rel = Invoke-RestMethod "$env:GITHUB_API_URL/repos/$env:GITHUB_REPOSITORY/releases/tags/$tag" `
+              -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; 'User-Agent' = 'bandi-ci' }
+          } catch { Write-Host "这个 tag 还没有 Release，跳过清理"; exit 0 }
+          foreach ($a in $rel.assets) {
+            if ($keep -notcontains $a.name) {
+              Invoke-RestMethod -Method Delete -Uri $a.url `
+                -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; 'User-Agent' = 'bandi-ci' }
+              Write-Host "删掉旧资产：$($a.name)"
+            }
+          }
 
       - name: 挂到 Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('v{0}', steps.ver.outputs.version) }}
           name: 班底 ${{ steps.ver.outputs.version }}
+          overwrite_files: true
           body: |
             **Windows 安装包**（自带 Node 运行时，装完即用）。
 
-            - 下载 `班底_${{ steps.ver.outputs.version }}_x64-setup.exe`，双击安装。
+            - 下载 `bandi_${{ steps.ver.outputs.version }}_x64-setup.exe`，双击安装。
+              （文件名用 ASCII 是因为 GitHub 会把中文资产名吃掉；装出来的程序仍叫「班底」。）
             - 校验和见 `SHA256SUMS-v${{ steps.ver.outputs.version }}.txt`。
             - 许可：随包带 `LICENSE` / `NOTICE` / `node-LICENSE.txt`（Apache-2.0，二进制分发同样适用）。
             - 卸载时可选**完全卸载**：连数据一起删（库、令牌、插件与连接器、机器登记表、开机自启项），
@@ -94,5 +117,5 @@ jobs:
 
             ⚠️ 这份产物**没有代码签名**，Windows 可能提示「未知发布者」—— 按提示选「仍要运行」即可。
           files: |
-            apps/desktop/target/release/bundle/nsis/*-setup.exe
+            apps/desktop/target/release/bundle/nsis/bandi_*-setup.exe
             apps/desktop/target/release/bundle/nsis/SHA256SUMS-*.txt

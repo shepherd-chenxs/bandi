@@ -52,7 +52,10 @@ npx --yes @tauri-apps/cli@2 build     # 3) 出安装包
 
 **CI 也会出包**（[../../.github/workflows/release.yml](../../.github/workflows/release.yml)）：推一个 `v<版本>` tag
 （**必须等于 `apps/desktop/version.json`**，不一致 CI 直接失败），GitHub 的 windows runner 上跑同样三步，
-把 `班底_<版本>_x64-setup.exe` 与 `SHA256SUMS-v<版本>.txt` 挂到 Release 上供人下载。
+把安装包与 `SHA256SUMS-v<版本>.txt` 挂到 Release 上供人下载。
+**资产名走 ASCII**（`bandi_<版本>_x64-setup.exe`）：GitHub 会把中文资产名吃掉
+（2026-10-16 实测：`班底_0.9.0_x64-setup.exe` 传上去变成 `_0.9.0_x64-setup.exe`），而装出来的程序仍叫「班底」。
+workflow 里还有一步：上传前把这个 Release 上名字不对的旧资产删掉（重跑不留垃圾）。
 ⚠️ **产物没有代码签名**：下载的人会看到 SmartScreen「未知发布者」；要消掉得买证书（OV/EV 或
 Azure Trusted Signing），再在 workflow 里加一步 signtool。Release 正文里已写明这一点。
 
