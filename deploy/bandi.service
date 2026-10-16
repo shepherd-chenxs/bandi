@@ -1,0 +1,55 @@
+# 班底控制面 —— Linux 部署单元（2026-10-15）
+#
+# ⚠️ 这个服务端**还没有鉴权**（`LOCAL_USER` 是写死的）。所以这里让它**只听本机**，
+#    外面走 SSH 隧道进来（见同目录 README.md）。**别把 8787 开到公网** ——
+#    那等于把 agent 的控制权交出去。
+#
+# 装法（细节见 README.md）：
+#   sudo cp deploy/bandi.service /etc/systemd/system/bandi.service
+#   sudo systemctl daemon-reload && sudo systemctl enable --now bandi
+#   journalctl -u bandi -f
+#
+# 前置：Node 22+（服务端用 `node:sqlite`）。**零依赖** —— 不需要 npm install。
+
+[Unit]
+Description=bandi 控制面
+Documentation=https://gitee.com/cm9531/bandi
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=bandi
+Group=bandi
+WorkingDirectory=/opt/bandi
+
+# 数据落点**必须显式指**：
+# 默认是 `<仓库>/data`，而仓库在 /opt/bandi —— 升级（重拉代码 / 覆盖目录）会把库和账本
+# 一起冲掉，而且服务用户也未必写得进去。参见 docs/形态决策.md §十二 第 1 条。
+Environment=BANDI_DATA=/var/lib/bandi
+Environment=BANDI_PORT=8787
+# 只听本机。远程访问走 SSH 隧道（不用开端口，也不用碰下面这两行之外的配置）。
+# 真要开内网/公网，才需要 BANDI_HOST=0.0.0.0 ＋ BANDI_ORIGINS=<访问来源>，
+# 而且**不配 BANDI_ORIGINS 的话远端浏览器能看不能动**（写请求全 403）。
+Environment=BANDI_HOST=127.0.0.1
+
+# ⚠️ ExecStart 里的 node 路径要按机器改：先 `which node`。
+#    这里写 /usr/bin/node 是 NodeSource 的装法；用 nvm 装的会是 ~/.nvm/... 下的绝对路径
+#    （**必须绝对路径** —— systemd 不读你 shell 的 PATH）。
+ExecStart=/usr/bin/node /opt/bandi/apps/server/src/server.mjs
+
+Restart=always
+RestartSec=3
+# 日志走 journald：`journalctl -u bandi -f`
+StandardOutput=journal
+StandardError=journal
+
+# KillMode 用默认值（control-group）：退出时把整个 cgroup 一起收掉。
+# 控制面会 spawn agent CLI 子进程 —— 只杀主进程会把它们变成孤儿，
+# 继续花额度、继续改文件。（这一条在服务端兼执行端时才是要害。）
+TimeoutStopSec=20
+
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

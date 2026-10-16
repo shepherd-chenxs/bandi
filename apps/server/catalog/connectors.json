@@ -1,0 +1,87 @@
+[
+  {
+    "id": "filesystem",
+    "label": "文件系统",
+    "category": "生产力",
+    "description": "让数字员工读写指定的几个目录。比放开 shell 更可控：只给这几个目录。",
+    "source": { "kind": "npm", "ref": "@modelcontextprotocol/server-filesystem" },
+    "transport": "stdio",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-filesystem", "${cwd}"],
+    "note": "把 ${cwd} 换成要放开的目录（装完可以在「已安装」里改）。"
+  },
+  {
+    "id": "everything",
+    "label": "全能测试服务器",
+    "category": "生产力",
+    "description": "MCP 官方的测试服务器：echo / add / longRunning 等一堆小工具，专门用来验证链路通不通。",
+    "source": { "kind": "npm", "ref": "@modelcontextprotocol/server-everything" },
+    "transport": "stdio",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-everything"]
+  },
+  {
+    "id": "memory",
+    "label": "长期记忆",
+    "category": "生产力",
+    "description": "一个知识图谱记忆：数字员工可以把事实存进去，换个会话还能想起来。",
+    "source": { "kind": "npm", "ref": "@modelcontextprotocol/server-memory" },
+    "transport": "stdio",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-memory"]
+  },
+  {
+    "id": "sequential-thinking",
+    "label": "分步思考",
+    "category": "生产力",
+    "description": "把复杂问题拆成可回退的思考步骤，适合长链路推理。",
+    "source": { "kind": "npm", "ref": "@modelcontextprotocol/server-sequential-thinking" },
+    "transport": "stdio",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+  },
+  {
+    "id": "ssh",
+    "label": "服务器与密钥（SSH）",
+    "category": "运维",
+    "description": "把 ~/.bandi/servers.yaml 里登记的机器交给数字员工：列登记、取公钥、生成上公钥指引，并直接连上去执行命令。",
+    "source": { "kind": "local", "ref": "apps/server/mcp/bandi-ssh.mjs" },
+    "transport": "stdio",
+    "command": "node",
+    "args": ["${repo}/apps/server/mcp/bandi-ssh.mjs"],
+    "note": "登记表默认只读；要让它自己登记/删除机器，在「已安装」里给这条加环境变量 BANDI_SSH_ALLOW_WRITE=1。执行默认开着，BANDI_SSH_ALLOW_EXEC=0 可关。"
+  },
+  {
+    "id": "github",
+    "label": "GitHub",
+    "category": "开发",
+    "description": "读写仓库、Issue、PR。需要一个带 repo 权限的个人访问令牌。",
+    "source": { "kind": "npm", "ref": "@modelcontextprotocol/server-github" },
+    "transport": "stdio",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-github"],
+    "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "env:GITHUB_PERSONAL_ACCESS_TOKEN" },
+    "requires": ["GITHUB_PERSONAL_ACCESS_TOKEN"],
+    "note": "令牌不写进班底：引用环境变量，值由班底进程的环境提供。"
+  },
+  {
+    "id": "chrome-devtools",
+    "label": "浏览器操作",
+    "category": "开发",
+    "description": "驱动一个真实的 Chrome：看页面、点元素、读控制台与网络。",
+    "source": { "kind": "npm", "ref": "chrome-devtools-mcp" },
+    "transport": "stdio",
+    "command": "npx",
+    "args": ["-y", "chrome-devtools-mcp"]
+  },
+  {
+    "id": "echo-local",
+    "label": "回声（本机示例）",
+    "category": "个人",
+    "description": "仓库里自带的零依赖 MCP server，只回显一段文本。用来确认「登记 → 接线 → 调用」整条链路是通的。",
+    "source": { "kind": "local", "ref": "apps/server/src/fixtures/mcp-echo.mjs" },
+    "transport": "stdio",
+    "command": "node",
+    "args": ["${repo}/apps/server/src/fixtures/mcp-echo.mjs"]
+  }
+]

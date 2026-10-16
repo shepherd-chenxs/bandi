@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>班底</title>
+<link rel="stylesheet" href="/style.css" />
+<script>
+  // 在首次绘制之前就把主题定下来。放在这里而不是 app.js：styles.css 一加载就会画，
+  // 等到 body 末尾再改属性，浅色用户会先闪一下深色。
+  try {
+    var t = localStorage.getItem('bandi.theme') || 'system';
+    document.documentElement.dataset.theme =
+      t === 'system' ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : t;
+  } catch (e) { /* 读不了就算了，交给 app.js */ }
+</script>
+</head>
+<body>
+
+<!-- 一级：图标栏 -->
+<nav class="rail">
+  <div class="rail-logo">班</div>
+  <button class="nav-btn active" data-nav="messages">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round">
+      <path d="M4 5.5h16v10H9l-5 4z" />
+    </svg>
+    <span>消息</span>
+  </button>
+  <button class="nav-btn" data-nav="contacts">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+      <circle cx="9" cy="8.2" r="3.3" />
+      <path d="M3.4 19.2c0-3 2.5-5.2 5.6-5.2s5.6 2.2 5.6 5.2" />
+      <circle cx="17.2" cy="9.4" r="2.4" />
+      <path d="M15.8 19.2c0-2.2 1-3.7 2.8-4.2" />
+    </svg>
+    <span>通讯录</span>
+  </button>
+  <button class="nav-btn" data-nav="plugins">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round">
+      <rect x="3" y="3" width="7.6" height="7.6" rx="2" />
+      <rect x="13.4" y="3" width="7.6" height="7.6" rx="2" />
+      <rect x="3" y="13.4" width="7.6" height="7.6" rx="2" />
+      <rect x="13.4" y="13.4" width="7.6" height="7.6" rx="2" />
+    </svg>
+    <span>工作台</span>
+  </button>
+  <button class="nav-btn rail-bottom" data-nav="settings">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+      <circle cx="12" cy="12" r="3" />
+      <path d="M12 2.6v2.1M12 19.3v2.1M2.6 12h2.1M19.3 12h2.1M5.4 5.4l1.5 1.5M17.1 17.1l1.5 1.5M18.6 5.4l-1.5 1.5M6.9 17.1l-1.5 1.5" />
+    </svg>
+    <span>设置</span>
+  </button>
+</nav>
+
+<!-- 二级：列表 -->
+<div class="list-panel">
+  <div class="list-head">
+    <b id="listTitle">消息</b>
+    <button id="listAction" class="mini" title="新建数字员工">＋</button>
+  </div>
+  <div class="list-search"><input id="search" placeholder="搜索" /></div>
+  <div class="list-body" id="listBody"></div>
+</div>
+
+<!-- 三级：内容 -->
+<main>
+  <div id="chatView">
+    <div class="chat-head" id="chatHead">
+      <span class="dim" style="padding:6px 0">左边选一个人，开始说话</span>
+    </div>
+    <div class="chat" id="chat"><div class="empty">还没有对话</div></div>
+    <div class="composer is-hidden">
+      <div class="input-wrap">
+        <div class="mention-pop" id="mentionPop"></div>
+        <textarea id="input" placeholder="说点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
+        <div class="input-tools">
+          <div id="dPermMount"></div>
+          <div id="dModelMount"></div>
+          <button class="primary" id="send">发送</button>
+        </div>
+      </div>
+    </div>
+    <div class="hint is-hidden" id="hint"></div>
+  </div>
+  <div id="detailView"></div>
+  <div id="settingsView"></div>
+  <div id="groupView"></div>
+  <div id="pluginView"></div>
+  <div id="flowView"></div>
+  <div id="placeholderView"></div>
+</main>
+
+<dialog id="personaDlg">
+  <form method="dialog">
+    <b>新建数字员工</b>
+    <label>名字</label><input id="pName" placeholder="例如：老周" />
+    <label>职责与身份设定（作为这段对话的设定带进去）</label>
+    <textarea id="pInstr" style="height:92px" placeholder="你是这个项目的研发。一次只推进一步，做完汇报。"></textarea>
+    <div class="grid2">
+      <div><label>Runtime</label><div id="pRuntimeMount"></div></div>
+      <div><label>权限（沙箱）</label><div id="pSandboxMount"></div></div>
+    </div>
+    <label>工作目录</label><input id="pCwd" />
+    <div class="dlg-actions">
+      <button type="button" value="cancel">取消</button>
+      <button class="primary" id="pOk" value="ok">创建并进入对话</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="flowStartDlg">
+  <form method="dialog">
+    <b>发起流程</b>
+    <label>流程名称</label><input id="fsTitle" placeholder="起个名字（会显示在发起记录里；不填就取想法的第一行）" />
+    <label>项目（AI 就在这个目录里干活）</label>
+    <div id="fsProjectMount"></div>
+    <div class="dim" id="fsProjectPath" style="font-size:12px;margin-top:4px"></div>
+    <label>想法</label><textarea id="fsIntent" rows="5" placeholder="要干什么？说清楚一点 —— 这段话会发给第一个节点的人"></textarea>
+    <div class="dlg-actions">
+      <button type="button" value="cancel">取消</button>
+      <button class="primary" id="fsOk" value="ok">发起</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="groupDlg">
+  <form method="dialog">
+    <b>新建项目群</b>
+    <label>群名</label><input id="gTitle" placeholder="例如：班底平台 v0.1" />
+    <label>群助手（没人被 @ 时由他接话）</label><div id="gAssistantMount"></div>
+    <label>成员（群主自动在列）</label>
+    <div id="gMembers" class="members"></div>
+    <div class="dlg-actions">
+      <button type="button" value="cancel">取消</button>
+      <button class="primary" id="gOk" value="ok">创建</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- 群设置抽屉 -->
+<div id="scrim"></div>
+<aside id="drawer"></aside>
+
+<dialog id="memberDlg">
+  <form method="dialog">
+    <b>拉人进群</b>
+    <div class="dim" style="font-size:12px;margin-top:2px">新人会从「最近 20 条消息之前」开始读，既能看到近期背景，又不会把整段历史灌进去。</div>
+    <input id="mSearch" placeholder="搜索数字员工" style="margin-top:12px" />
+    <div id="mList" class="members" style="margin-top:10px"></div>
+    <div class="dlg-actions">
+      <button type="button" value="cancel">取消</button>
+      <button class="primary" id="mOk" value="ok">拉进来</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="assistantDlg">
+  <form method="dialog">
+    <b>换群助手</b>
+    <div class="dim" style="font-size:12px;margin-top:2px">群助手是没人被 @ 时接话的那个数字员工，必须是群成员。</div>
+    <div id="aList" class="members" style="margin-top:12px"></div>
+    <div class="dlg-actions">
+      <button type="button" value="cancel">取消</button>
+      <button class="primary" id="aOk" value="ok">就他了</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="skillDlg">
+  <form method="dialog">
+    <b>新建技能</b>
+    <div class="dim" style="font-size:12px;margin-top:2px">存成 <code>skills/&lt;名字&gt;/SKILL.md</code>。正文会按需读取，不用写长。</div>
+    <label>名字（目录名，建完就别改了）</label>
+    <input id="nSkillName" placeholder="例如 evidence-discipline" />
+    <label>描述 —— 决定「什么时候该用它」；模型先看这一句</label>
+    <input id="nSkillDesc" placeholder="例如：写开发报告前的证据检查" />
+    <label>正文（Markdown）</label>
+    <textarea id="nSkillBody" style="height:190px" placeholder="# 什么时候用&#10;…"></textarea>
+    <div class="dlg-actions">
+      <button type="button" value="cancel">取消</button>
+      <button class="primary" id="nSkillOk" value="ok">创建</button>
+    </div>
+  </form>
+</dialog>
+
+
+</dialog>
+
+<dialog id="importDlg">
+  <form method="dialog">
+    <b>从本地导入</b>
+    <label>扫描哪个目录</label>
+    <div class="row-inline">
+      <input id="impRoot" />
+      <button id="impScan">扫描</button>
+    </div>
+    <div class="dim" style="font-size:11.5px;margin-top:6px" id="impHint">
+      递归找 SKILL.md，跳过 .git / node_modules，也跳过库自己。
+    </div>
+    <div id="impList" class="members" style="margin-top:10px;max-height:260px"></div>
+    <div class="dlg-actions">
+      <button type="button" value="cancel">取消</button>
+      <button class="primary" id="impOk" value="ok">导入选中的</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="linkSkillDlg">
+  <form method="dialog">
+    <b>关联技能</b>
+    <div class="dim" style="font-size:12px;margin-top:2px">只列还没关联的；要解除就在员工详情里点芯片上的 ×。</div>
+    <input id="lkSearch" placeholder="搜索名字或描述" style="margin-top:12px" />
+    <div id="lkList" class="members" style="margin-top:10px;max-height:280px"></div>
+    <div class="dlg-actions">
+      <button type="button" value="cancel">取消</button>
+      <button class="primary" id="lkOk" value="ok">关联选中的</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- 反方向：在技能页把**这个技能**发给若干个数字员工 -->
+<dialog id="skAssignDlg">
+  <form method="dialog">
+    <b>添加到数字员工</b>
+    <div class="dim" style="font-size:12px;margin-top:2px">挂载之后他才用得到这个技能。挂载关系两边共用 —— 解除在员工详情里。</div>
+    <div class="chips" style="margin-top:12px"><span class="chip owner" id="skAssignName"></span></div>
+    <input id="skAssignSearch" placeholder="搜索数字员工" style="margin-top:10px" />
+    <div id="skAssignList" class="members" style="margin-top:10px"></div>
+    <div class="dlg-actions">
+      <button type="button" value="cancel">取消</button>
+      <button class="primary" id="skAssignOk" value="ok" disabled>添加</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="addRtDlg">
+  <form method="dialog">
+    <b id="addRtTitle">安装</b>
+
+    <!-- 输入框 + 检测同一行（跟 CLI 详情页的「路径 + 检测」一个模式） -->
+    <div class="row-inline" style="margin-top:10px">
+      <input id="addRtPath" spellcheck="false" />
+      <button type="button" id="addRtTest">检测</button>
+    </div>
+
+    <div class="dlg-actions" style="margin-top:14px">
+      <button type="button" value="cancel">取消</button>
+      <button class="primary" id="addRtOk" value="ok">接入</button>
+    </div>
+
+    <!--
+      底部这一行**同时**是常驻提示和检测结果：不点检测时显示"什么情况下该手动填"，
+      点了就换成结果。这样中间不用留一块空地（留了就是个空洞），
+      而两行的高度是**固定**的 —— 弹窗居中，高度一变整块会跳。
+    -->
+    <div id="addRtFoot"
+         style="font-size:11.5px;line-height:1.7;min-height:40px;margin-top:14px;border-top:1px solid var(--line);padding-top:10px"></div>
+  </form>
+</dialog>
+
+<dialog id="connDlg">
+  <form method="dialog">
+    <b id="connDlgTitle">添加连接器</b>
+    <div class="dim" style="font-size:12px;margin-top:2px">
+      连接器 = 一条外部能力的登记。班底只登记和接线，代码在 codex / dsh 自己的进程里跑。
+    </div>
+
+    <label>名字（字母数字 _ -，1–32 位；两个运行时都用它当服务器的名字）</label>
+    <input id="cId" placeholder="例如 filesystem" spellcheck="false" />
+    <label>显示名</label>
+    <input id="cLabel" placeholder="例如 文件系统" />
+
+    <label>类型</label>
+    <div class="seg" id="connTransport">
+      <button type="button" data-tr="stdio">本地进程（stdio）</button>
+      <button type="button" data-tr="streamable-http">远端服务（http）</button>
+    </div>
+
+    <div id="cStdio">
+      <label>可执行文件</label>
+      <input id="cCommand" placeholder="例如 npx / node / 某个 exe 的绝对路径" spellcheck="false" />
+      <label>参数（一行一个）</label>
+      <textarea id="cArgs" style="height:70px" spellcheck="false" placeholder="-y&#10;@modelcontextprotocol/server-filesystem&#10;E:某个目录"></textarea>
+      <label>工作目录（可空）</label>
+      <input id="cCwd" spellcheck="false" />
+    </div>
+
+    <div id="cHttp" class="plg-hidden">
+      <label>端点 URL</label>
+      <input id="cUrl" placeholder="https://example.com/mcp" spellcheck="false" />
+      <label>Bearer 令牌的环境变量名（可空）</label>
+      <input id="cBearer" placeholder="例如 MCP_TOKEN" spellcheck="false" />
+    </div>
+
+    <label>环境变量（一行一个 KEY=值；值写成 env:名字 表示引用环境变量）</label>
+    <div class="dim" style="font-size:11.5px" id="cEnvKeys">目前没有环境变量</div>
+    <textarea id="cEnv" style="height:64px" spellcheck="false" placeholder="GITHUB_PERSONAL_ACCESS_TOKEN=env:GITHUB_PERSONAL_ACCESS_TOKEN"></textarea>
+
+    <label>请求头（只有 http 用；一行一个 KEY=值，规则同上）</label>
+    <div class="dim" style="font-size:11.5px" id="cHdrKeys">目前没有请求头</div>
+    <textarea id="cHdr" style="height:52px" spellcheck="false" placeholder="Authorization=env:MCP_TOKEN"></textarea>
+
+    <label>给哪些运行时用（都不勾＝全部）</label>
+    <div id="cRuntimes" class="plg-rts"></div>
+
+    <div class="dlg-actions">
+      <button type="button" value="cancel">取消</button>
+      <button class="primary" id="cOk" value="ok">保存</button>
+    </div>
+  </form>
+</dialog>
+
+
+<dialog id="plgFormDlg">
+  <form method="dialog">
+    <b id="plgFormTitle">填写</b>
+    <div id="plgFormBody"></div>
+    <div class="dlg-actions">
+      <button type="button" value="cancel">取消</button>
+      <button class="primary" id="plgFormOk" value="ok">保存</button>
+    </div>
+  </form>
+</dialog>
+
+<!--
+  通用的「问一句 / 确认一下」。
+
+  为什么不用原生的 prompt() / confirm()（2026-10-16 用户指着改名那个框说的）：那是**浏览器**的框 ——
+  标题栏里印着 `127.0.0.1:8787 显示`，跟班底长得不是一个东西，而且没法用班底自己的样式与说明。
+  这一个 dialog 同时管两件事：`askText`（要一段文字，有输入框）和 `askConfirm`（只要一个是/否）。
+-->
+<dialog id="askDlg">
+  <form method="dialog">
+    <b id="askTitle">标题</b>
+    <!-- white-space:pre-line：说明文字里的 \n 要真的换行（改名那条就有两行） -->
+    <div id="askBody" class="dim" style="margin-top:8px;font-size:12.5px;line-height:1.75;white-space:pre-line"></div>
+    <div id="askField" style="margin-top:12px">
+      <input id="askInput" spellcheck="false" />
+    </div>
+    <!--
+      可选的勾选框。**为什么要有**（2026-10-16 用户提的）：让普通用户去填镜像地址是错的
+      ——他不知道该填什么。有勾选框，问题就变成"要不要走镜像"，而地址由我们内置。
+    -->
+    <label id="askCheckWrap" style="display:none;margin-top:12px;text-align:left">
+      <!-- width:auto 是必须的：style.css 里有一条 input,select,textarea{width:100%}，
+           不写它，勾选框会被拉成整行、并被弹窗居中摆到文字上面去（调了三次） -->
+      <input type="checkbox" id="askCheck" style="width:auto;margin:0 8px 0 0;vertical-align:-1px" />
+      <span id="askCheckLabel" style="font-size:12.5px;line-height:1.6"></span>
+    </label>
+    <div class="dlg-actions">
+      <button type="button" value="cancel">取消</button>
+      <button class="primary" id="askOk" value="ok">确定</button>
+    </div>
+  </form>
+</dialog>
+
+<!--
+  「让一台新机器加入」：发一个**一次性邀请码**，把能直接粘的整条命令摆出来。
+
+  为什么要有这一步（2026-10-16）：节点原来用的是总机那枚 master 令牌 ✗ ——
+  一台节点被翻等于整套被翻，而且「忘掉」踢不掉它（令牌还有效）。
+  现在换成"邀请码 → 每节点一枚自己的令牌"，界面上就得有个地方**发这个码**、
+  并且把"下一步在那台机器上粘什么"摆清楚（不然用户拿到码也不知道干嘛）。
+-->
+<dialog id="joinDlg">
+  <form method="dialog">
+    <b>让一台新机器加入</b>
+    <div class="dim" style="margin-top:8px;font-size:12.5px;line-height:1.75">
+      在那台机器上跑下面这条。它凭这个<b>一次性</b>的码，换回<b>只属于它自己</b>的一枚令牌 ——
+      那枚只能干它自己那台的事（报到/心跳/领活/回传），读对话、改员工、看设备名单都不行。
+    </div>
+    <pre id="joinCmd" style="margin-top:12px;padding:10px 12px;background:var(--input);border:1px solid var(--line);border-radius:8px;font-size:11.5px;line-height:1.7;white-space:pre-wrap;word-break:break-all;max-height:230px;overflow:auto"></pre>
+    <div class="dlg-actions">
+      <button type="button" value="cancel">关闭</button>
+      <button type="button" class="primary" id="joinCopy">复制命令</button>
+    </div>
+    <div id="joinFoot" class="dim" style="font-size:11.5px;line-height:1.7;margin-top:10px;border-top:1px solid var(--line);padding-top:10px"></div>
+  </form>
+</dialog>
+
+<script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,67 @@
+# 系统
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# 编辑器
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# 本地试跑残留
+*.log
+tmp/
+
+# 密钥（绝不进版本控制）
+*.pem
+*.key
+.env
+
+# 运行期数据（本机的库、账本、CLI 路径 —— 每台机器都不一样，不入库）
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# 构建产物
+apps/desktop/target/
+
+# cargo check 的产物
+check.out
+check.err
+
+
+# 随包分发的 Node 运行时（80 MB；打包前跑 node apps/desktop/fetch-node.mjs 取，绝不进版本控制）
+apps/desktop/binaries/
+
+# 摊给安装包用的运行时副本（打包前跑 node apps/desktop/stage-runtime.mjs 生成；源头是 apps/ 与 skills/）
+apps/desktop/runtime/
+
+# 图标预览图（make-icon.py --preview 生成；图标本身 icons/ 是入库的）
+apps/desktop/icon-preview-*.png
+
+# 内部工作文档（排期、任务卡、版本台账）—— 里面带着我们自己的服务器地址与内网信息，
+# 公开仓库不发（2026-10-16 开源前清的）。要发的那部分请单独挑出来放 docs/。
+docs/项目文档-by班底/
+
+# 本地 agent 插件市场源：里面的 marketplace.json 指向 plugins/bandi，而那个插件
+# 还没随仓库发布（T-012 归档了）—— 是条悬空引用，不入库；文件仍留在本机。
+.agents/
+
+# 仓库自己的账本：`status.yaml` 里是任务卡台账（T-001~T-019）与内部姓名分工表，
+# `README.md` 里是同一批内部约定 —— 记录的是本机的开发过程，公开仓库不发
+# （2026-10-16 上传前移出跟踪）。**平台读的是"每个被纳管项目"根下的
+# `.bandi/status.yaml`，与它是否入库无关**，所以本地功能一行都不受影响；
+# 新克隆的仓库里这个项目会显示「未纳管」，符合预期。文件仍留在本机。
+.bandi/
+
+
+# 数据目录的备份/搬迁残留 —— 里面有库与令牌，任何形式都不进版本控制
+data.moved-*
+data.backup-*
+bandi.backup-*
+*.empty-*
+

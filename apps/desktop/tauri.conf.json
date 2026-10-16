@@ -1,0 +1,46 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "班底",
+  "version": "0.9.0",
+  "identifier": "app.local.desktop-shell",
+  "build": {
+    "beforeDevCommand": "",
+    "beforeBuildCommand": "",
+    "frontendDist": "http://127.0.0.1:8787/"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:"
+    },
+    "withGlobalTauri": true
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": [
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "version.json": "version.json",
+      "binaries/node.exe": "node.exe",
+      "runtime/apps": "apps",
+      "runtime/skills": "skills",
+      "runtime/plugins": "plugins",
+      "runtime/LICENSE": "LICENSE",
+      "runtime/NOTICE": "NOTICE",
+      "runtime/node-LICENSE.txt": "node-LICENSE.txt"
+    },
+    "copyright": "Copyright 2026 牧羊人",
+    "publisher": "牧羊人",
+    "category": "Utility",
+    "shortDescription": "客户端薄壳：本地控制面 + 执行节点",
+    "longDescription": "薄壳：拉起本地控制面并把窗口指向它，界面复用 apps/web（不再自带第二套前端）。形态与角色划分见 docs/形态决策.md。",
+    "windows": {
+      "nsis": {
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico"
+      }
+    }
+  }
+}

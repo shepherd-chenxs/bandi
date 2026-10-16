@@ -1,0 +1,10 @@
+# 行尾策略：入库一律 LF；Windows 批处理按 CRLF 检出（cmd.exe 对 LF-only 的 goto/label 不稳）。
+* text=auto eol=lf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+*.sh  text eol=lf
+
+# 二进制，别当文本处理
+*.ico binary
+*.png binary

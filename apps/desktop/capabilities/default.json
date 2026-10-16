@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "空壳最小权限：只开主窗口，不给文件系统、shell、网络权限。",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

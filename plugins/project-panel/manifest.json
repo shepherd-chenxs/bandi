@@ -1,0 +1,65 @@
+{
+  "id": "project-panel",
+  "label": "项目面板",
+  "version": "0.1.0",
+  "description": "把平台项目账本里各项目的 .bandi/status.yaml 汇到一页看：有几个版本、每版要做什么、发布记录在哪。只读，不改任何项目文件。（任务看板不在这儿——那是平台「项目」页的一等功能。）",
+  "category": "研发",
+  "panel": {
+    "slot": "plugins",
+    "mode": "declarative",
+    "blocks": [
+      {
+        "type": "text",
+        "heading": "这是什么",
+        "text": "只读看板：项目清单来自平台的「项目」账本，版本记录现读各项目根下的 .bandi/status.yaml。它不改任何项目文件，也没有写接口 —— 部署、发布这类要动手的事交给数字员工在会话里做，这里只留记录。读不到进度文件的项目标「未纳管」，记录不会自动删。**任务看板不在这儿**：平台「项目」页点进任何一个项目就能看到（流程的每一次办理 + 聊天派活）。"
+      }
+    ],
+    "split": {
+      "master": {
+        "heading": "项目",
+        "keyField": "id",
+        "source": { "api": "/api/status/projects", "pick": "projects" },
+        "title": "{name}",
+        "subtitle": "{subtitle}",
+        "empty": "项目账本里还没有项目 —— 先去「项目」加一个"
+      },
+      "detail": {
+        "title": "{name}",
+        "subtitle": "{root}",
+        "empty": "左边选一个项目",
+        "blocks": [
+          {
+            "type": "keyvalue",
+            "heading": "纳管情况",
+            "source": { "api": "/api/status/projects/{id}" },
+            "rows": [
+              { "label": "项目名", "value": "{project}" },
+              { "label": "目录", "value": "{root}" },
+              { "label": "进度文件", "value": "{status_file}" },
+              { "label": "纳管状态", "value": "{state_text}" },
+              { "label": "进度文件更新", "value": "{updated}" },
+              { "label": "版本", "value": "{version_count}" },
+              { "label": "已发布版本", "value": "{released_count}" }
+            ]
+          },
+          {
+            "type": "table",
+            "heading": "版本",
+            "source": { "api": "/api/status/projects/{id}", "pick": "versions" },
+            "columns": [
+              { "label": "版本", "key": "version_shown", "width": "66px" },
+              { "label": "主题", "key": "title" },
+              { "label": "发布", "key": "released_note", "width": "70px" },
+              { "label": "发布记录", "key": "released_path", "width": "180px" },
+              { "label": "这一版要做什么（摘自版本文档）", "key": "points_text", "width": "380px" }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "permissions": [
+    "GET:/api/status/projects",
+    "GET:/api/status/projects/{id}"
+  ]
+}
