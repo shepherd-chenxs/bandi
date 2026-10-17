@@ -112,6 +112,49 @@ try {
   // ⚠️ Windows 上环境变量真名常常是 `Path`（大小写），别只查 PATH
   const pathKey = Object.keys(env).find((k) => k.toUpperCase() === 'PATH');
   check('普通环境变量不受影响（PATH 还在）', !!pathKey && String(env[pathKey]).length > 0, String(pathKey));
+  console.log('\n④ 本地已有目录：直接用它，不再克隆（用户实报的那件事）');
+  const { execFileSync } = await import('node:child_process');
+  const mkLocal = (name, origin) => {
+    const dir = path.join(tmp, name);
+    execFileSync('git', ['init', '-q', dir]);
+    if (origin) execFileSync('git', ['-C', dir, 'remote', 'add', 'origin', origin]);
+    execFileSync('git', ['-C', dir, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'x']);
+    return dir;
+  };
+  const info = (n) => ({
+    owner: { login: 'smoke' },
+    name: n,
+    private: false,
+    default_branch: 'main',
+    language: null,
+    clone_url: `https://github.com/smoke/${n}.git`,
+  });
+  const local1 = mkLocal('local1', 'https://github.com/smoke/demo.git');
+  const out1 = await git.connectRepo('smoke/demo', info('demo'), local1);
+  check('接入用的是本地目录（没另建克隆）', out1.repo.localPath === local1, out1.repo.localPath);
+  check('数据目录里没有冒出一份克隆', !fs.existsSync(path.join(tmp, 'repos', 'smoke__demo')));
+  check('备注说明用了本地已有目录', /本地已有目录/.test(out1.note ?? ''), out1.note);
+  check('origin 一致 → 不警告', out1.warning === null, String(out1.warning));
+  let dupErr = '';
+  try {
+    await git.connectRepo('smoke/demo2', info('demo2'), local1);
+  } catch (e) {
+    dupErr = e.message;
+  }
+  check('同一个目录不许接给两个仓库', /已经接给/.test(dupErr), dupErr);
+  const notGit = fs.mkdtempSync(path.join(tmp, 'notgit-'));
+  let notGitErr = '';
+  try {
+    await git.connectRepo('smoke/demo3', info('demo3'), notGit);
+  } catch (e) {
+    notGitErr = e.message;
+  }
+  check('不是 git 仓库 → 拒绝并说清楚', /不是 git 仓库/.test(notGitErr), notGitErr);
+  const local2 = mkLocal('local2', 'https://github.com/someone/else.git');
+  const out2 = await git.connectRepo('smoke/demo4', info('demo4'), local2);
+  check('origin 不一致 → 仍然接入（fork/镜像也合理）', out2.repo.localPath === local2);
+  check('但要给警告说清楚', /不一致/.test(out2.warning ?? ''), String(out2.warning));
+
 } finally {
   child.kill();
   await new Promise((r) => setTimeout(r, 300));

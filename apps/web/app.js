@@ -6216,6 +6216,84 @@ async function openSkill(name) {
  * 「＋」也在这儿（`#listAction` 那个在设置页是隐藏的，见 setNav）。
  */
 /**
+ * 接入一个仓库：**克隆一份** 还是 **用本地已有目录**（2026-10-17 用户实报：
+ * 本地明明已经有克隆了，点接入又在别处克隆一份，白占盘）。
+ *
+ * 选"用本地已有目录"时会核对 origin 指向是不是这个仓库 —— 不一致只提示、不拦
+ * （fork / 镜像 / 自己改了 remote 都是合理情况）。
+ */
+function openGitAddDialog(fullName, onDone) {
+  const dlg = document.createElement('dialog');
+  dlg.id = 'gitAddDlg';
+  dlg.innerHTML = `
+    <form method="dialog">
+      <b>接入 ${esc(fullName)}</b>
+      <label class="check"><input type="radio" name="gitMode" value="clone" checked />
+        <span>克隆到数据目录<em>——平台自己管一份</em></span></label>
+      <label class="check"><input type="radio" name="gitMode" value="local" />
+        <span>用本地已有目录<em>——不重复克隆、不占第二份盘</em></span></label>
+      <div class="row-with-btn">
+        <input id="gitLocalPath" placeholder="例如：E:\\02CodeSpace\\github\\bandi" disabled />
+        <button type="button" id="gitLocalPick" disabled>选择</button>
+      </div>
+      <div class="counter left" id="gitAddHint">克隆位置：数据目录 \\ repos \\ &lt;owner&gt;__&lt;name&gt;</div>
+      <div class="dlg-actions">
+        <button type="button" value="cancel">取消</button>
+        <button class="primary" id="gitAddOk">接入</button>
+      </div>
+    </form>`;
+  document.body.append(dlg);
+  wireDialogHead(dlg.querySelector('form'));
+  dlg.addEventListener('close', () => dlg.remove());
+
+  const syncMode = () => {
+    const local = dlg.querySelector('input[name="gitMode"]:checked')?.value === 'local';
+    $('gitLocalPath').disabled = !local;
+    $('gitLocalPick').disabled = !local;
+    $('gitAddHint').textContent = local
+      ? '会用这个目录里现成的克隆；平台只记路径，不复制代码。'
+      : '克隆位置：数据目录 / repos / <owner>__<name>';
+  };
+  dlg.querySelectorAll('input[name="gitMode"]').forEach((r) => (r.onchange = syncMode));
+  syncMode();
+
+  $('gitLocalPick').onclick = async () => {
+    try {
+      const r = await api('/api/fs/pick-dir', { method: 'POST' });
+      if (r?.path) $('gitLocalPath').value = r.path;
+    } catch (e) {
+      alert(e.message);
+    }
+  };
+
+  $('gitAddOk').onclick = async (e) => {
+    e.preventDefault();
+    const local = dlg.querySelector('input[name="gitMode"]:checked')?.value === 'local';
+    const localPath = local ? $('gitLocalPath').value.trim() : '';
+    if (local && !localPath) return alert('选了"用本地已有目录"，但路径是空的');
+    const btn = $('gitAddOk');
+    btn.disabled = true;
+    btn.textContent = local ? '接入中…' : '克隆中…';
+    try {
+      const r = await api('/api/git/repos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fullName, ...(localPath ? { localPath } : {}) }),
+      });
+      dlg.close();
+      await onDone();
+      const warn = r.warning ? '\n\n⚠️ ' + r.warning : '';
+      alert(`${fullName} 已接入（${r.note}）\n${r.repo.localPath}${warn}`);
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = '接入';
+      alert(err.message);
+    }
+  };
+  dlg.showModal();
+}
+
+/**
  * 「设置 → 代码托管」（2026-10-17）。
  *
  * 用户：我有很多个 git 仓库 —— 所以这里是一张**仓库清单**：
@@ -6376,7 +6454,10 @@ async function renderGitRepos() {
       e.preventDefault();
       const repo = repos.find((r) => r.id === el.dataset.gitProject);
       if (!repo) return;
-      // 项目名用 owner/name，免得两个仓库同名（比如都有 README 那个 common）
+      // 同一个目录已经有项目了就别再建一个（看板上会出现两个一模一样的项目）
+      const exist = (S.projects ?? []).find((p) => p.root === repo.localPath);
+      if (exist) return alert(`已经有一个项目用这个目录了：「${exist.name}」`);
+      // 项目名用 owner/name，免得两个仓库同名
       try {
         const d = await api('/api/projects', {
           method: 'POST',
@@ -6428,22 +6509,7 @@ async function renderGitRepos() {
       $('gitAvail').querySelectorAll('[data-git-add]').forEach((el) => {
         el.onclick = async (e) => {
           e.preventDefault();
-          const fullName = el.dataset.gitAdd;
-          el.disabled = true;
-          el.textContent = '克隆中…';
-          try {
-            const r = await api('/api/git/repos', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ fullName }),
-            });
-            alert(`${fullName} 已接入（${r.note}）：${r.repo.localPath}`);
-            await refresh();
-          } catch (err) {
-            el.disabled = false;
-            el.textContent = '接入';
-            alert(err.message);
-          }
+          openGitAddDialog(el.dataset.gitAdd, refresh);
         };
       });
     };
