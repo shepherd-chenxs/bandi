@@ -115,6 +115,10 @@ export async function listAvailableRepos() {
     updatedAt: r.updated_at ?? null,
     cloneUrl: r.clone_url ?? `https://github.com/${r.full_name}.git`,
     description: r.description ?? null,
+    // 这个令牌能不能**写**这个仓库（GitHub 的 permissions 告诉我们）。
+    // 说明：fine-grained token 永远能**读**所有公开仓库 —— Repository access 限制的是写权限与私有仓库，
+    // 所以"只勾了一个仓库、却看见好几个公开仓库"是正常的（2026-10-17 用户问过）。
+    canWrite: r.permissions?.push === true,
   }));
 }
 

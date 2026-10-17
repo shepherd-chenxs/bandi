@@ -6296,6 +6296,11 @@ async function renderGitRepos() {
         st.connected
           ? `<section class="group">
                <div class="group-title">从 GitHub 添加</div>
+               <div class="counter left" style="margin:2px 0 6px">
+                 只列出**你账号下**的仓库。注意：GitHub 的 fine-grained 令牌**永远能读所有公开仓库**，
+                 token 里的 Repository access 限制的是**写权限和私有仓库** —— 所以这里会看到没勾的公开仓库，
+                 它们能克隆、但推代码会被拒（标「只读」）。
+               </div>
                <input id="gitFilter" placeholder="搜仓库名…（账号下的仓库，按最近更新排）" style="margin:8px 0" />
                <div id="gitAvail"><div class="sk-blank">拉取中…</div></div>
              </section>`
@@ -6406,6 +6411,7 @@ async function renderGitRepos() {
                 <div class="sk-main">
                   <b>${esc(r.fullName)}</b>
                   ${r.isPrivate ? '<span class="pill">私有</span>' : ''}
+                  ${r.canWrite === false ? '<span class="pill" title="能克隆，推代码会被拒（token 没给它写权限）">只读</span>' : '<span class="pill" title="能克隆、也能推代码">可写</span>'}
                   <div class="sk-desc">${esc(r.description || r.language || '')}${
                     r.connected ? ' · 已接入' : ''
                   }</div>
