@@ -2,11 +2,17 @@
  * 冒烟测试：服务器与密钥（SSH MCP server）。
  *
  * 三块，各自不互相掩盖：
- *   ① 只读：工具清单、登记表、公钥、上公钥指引
- *   ② 写：在**临时登记表**上增删改 —— 绝不碰 ~/.bandi/servers.yaml
- *   ③ 真连：ssh_test / ssh_run 打一台真机器（只跑只读命令）
+ *   ① 只读：工具清单、登记表、公钥、上公钥指引 —— 跑在**临时夹具登记表**上
+ *   ② 写：在夹具上增删改 —— 绝不碰 ~/.bandi/servers.yaml
+ *   ③ 真连：打一台真机器（只跑只读命令）—— **可选**，设了 `BANDI_SSH_LIVE=<别名>` 才跑
+ *
+ * ⚠️ 2026-10-17 改：原来 ① 断言**本机**登记表里有某台机器、还比对磁盘上的 ~/.ssh/*.pub，
+ *    ② 无条件把真登记表拷进临时目录，③ 直接连那台机器 —— 换台机器（CI、新同事）必然挂。
+ *    现在：夹具自己造（登记与公钥都在临时目录里现造），真连那半截改成**显式 opt-in**。
+ *    教训写在 docs/审阅经验.md 第一条（测试不许依赖开发者本机状态）。
  *
  * 跑法：node apps/server/src/smoke-ssh.mjs
+ *       BANDI_SSH_LIVE=某台机器 node apps/server/src/smoke-ssh.mjs   # 连上真机器再验一遍
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -16,7 +22,6 @@ import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const SERVER = path.join(here, '..', 'mcp', 'bandi-ssh.mjs');
-const REAL_REGISTRY = path.join(os.homedir(), '.bandi', 'servers.yaml');
 
 let failed = 0;
 const check = (label, ok, detail = '') => {
@@ -90,77 +95,96 @@ function mcpClient(env) {
   };
 }
 
-/* ------------------------------------------------ ①② 只读 + 写（临时账本） */
+/* ------------------------------------------------------- 夹具（现造，不碰本机） */
 
-const live = mcpClient({});
+const work = fs.mkdtempSync(path.join(os.tmpdir(), 'bandi-ssh-'));
+const KEY_DIR = path.join(work, 'keys');
+fs.mkdirSync(KEY_DIR);
+const ALIAS = 'fixture-box';
+const PUB_TEXT = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFixtureKeyForSmokeTestOnly000000000000 smoke@fixture';
+const KEY_PATH = path.join(KEY_DIR, ALIAS);
+fs.writeFileSync(`${KEY_PATH}.pub`, PUB_TEXT + '\n', 'utf8');
+const REG = path.join(work, 'servers.yaml');
+
+console.log('⓪ 夹具（临时登记表 + 临时公钥，跟本机的 ~/.bandi 无关）');
+{
+  const seed = mcpClient({ BANDI_SSH_REGISTRY: REG, BANDI_SSH_ALLOW_WRITE: '1' });
+  await seed.ready();
+  const r = await seed.call('server_upsert', { alias: ALIAS, host: '10.0.0.9', port: 22, user: 'ops', key_path: KEY_PATH, purpose: '冒烟夹具' });
+  check('夹具造出来了', !r.isError, r.text.slice(0, 120));
+  seed.close();
+}
+
+/* ------------------------------------------------------ ① 只读（夹具登记表） */
+
+console.log('\n① 只读');
+const live = mcpClient({ BANDI_SSH_REGISTRY: REG });
 await live.ready();
-
-console.log('① 只读');
 const tools = await live.tools();
 check('工具数 7 个', tools.length === 7, String(tools.length));
 check('带上了 ssh_run / ssh_test', tools.includes('ssh_run') && tools.includes('ssh_test'));
 check('带上了登记与公钥相关工具', ['servers_list', 'server_public_key', 'ssh_guide', 'server_upsert', 'server_remove'].every((t) => tools.includes(t)));
 
 const list = await live.call('servers_list');
-/*
- * ⚠️ 这条原来把**我们自己的服务器地址**写死在断言里 ✗ —— 两个问题：公开仓库里泄漏地址 ✓，
- * 而且别人 clone 下来跑这条**必然失败** ✗（他们的登记表里当然没有那台）。
- * 2026-10-16 开源前改成"只要读得到、且内容像一台机器" ✓（本机没有登记表时也不会误报）。
- */
-const looksLikeEntry = /(?:\d{1,3}\.){3}\d{1,3}|\balias\b|:22\b|主机/i.test(list.text ?? '');
-check('登记表读得到（不依赖具体是哪台）', !list.isError && (list.text ?? '').trim().length > 0, list.isError ? list.text.slice(0, 120) : (list.text ?? '').trim().split('\n')[0]);
-check('登记内容像一台机器（有地址/别名/主机字样）', looksLikeEntry, (list.text ?? '').trim().slice(0, 120));
+check('登记表读得到', !list.isError && list.text.includes(ALIAS), list.isError ? list.text.slice(0, 120) : list.text.trim().split('\n')[0]);
 console.log('  --- servers_list ---');
 console.log(list.text.split('\n').map((l) => '  ' + l).join('\n'));
 
-const pk = await live.call('server_public_key', { alias: 'bandi-hs4g' });
-const pubFile = fs.existsSync(path.join(os.homedir(), '.ssh', 'bandi-hs4g.pub'))
-  ? fs.readFileSync(path.join(os.homedir(), '.ssh', 'bandi-hs4g.pub'), 'utf8').trim()
-  : '';
-check('公钥和磁盘 .pub 一字不差', !pk.isError && pk.text.includes(pubFile) && pubFile !== '');
+const pk = await live.call('server_public_key', { alias: ALIAS });
+check('公钥就是夹具里那把（一字不差）', !pk.isError && pk.text.includes(PUB_TEXT), pk.isError ? pk.text.slice(0, 120) : '');
 check('公钥是 ed25519 且不含私钥内容', pk.text.includes('ssh-ed25519 ') && !pk.text.includes('PRIVATE KEY'));
 
-const guide = await live.call('ssh_guide', { alias: 'bandi-hs4g' });
+const guide = await live.call('ssh_guide', { alias: ALIAS });
 check('指引里有 authorized_keys 和真实公钥', guide.text.includes('authorized_keys') && guide.text.includes('ssh-ed25519'));
 
 const noWrite = await live.call('server_upsert', { alias: 'tmp-x', host: '10.0.0.1', user: 'root' });
 check('写默认关闭，且说清了怎么开', noWrite.isError && noWrite.text.includes('默认关闭'));
 
 const missing = await live.call('ssh_run', { alias: '不存在的机器', command: 'hostname' });
-check('找不到机器时报错清楚并列出可选项', missing.isError && missing.text.includes('bandi-hs4g'));
+check('找不到机器时报错清楚并列出可选项', missing.isError && missing.text.includes(ALIAS));
 live.close();
 
-console.log('\n② 写（临时登记表，不碰真账本）');
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bandi-ssh-'));
-const tmpReg = path.join(tmp, 'servers.yaml');
-fs.copyFileSync(REAL_REGISTRY, tmpReg);
-const wr = mcpClient({ BANDI_SSH_REGISTRY: tmpReg, BANDI_SSH_ALLOW_WRITE: '1' });
+// 只读客户端跑完，登记表应该**一个字没多**（它没有写权限）
+const afterRead = fs.readFileSync(REG, 'utf8');
+check('只读客户端没往登记表里写东西', !afterRead.includes('tmp-x') && (afterRead.match(/^ {2}- /gm) ?? []).length === 1, String((afterRead.match(/^ {2}- /gm) ?? []).length));
+
+/* -------------------------------------------------------- ② 写（同一份夹具） */
+
+console.log('\n② 写（夹具登记表，不碰真账本）');
+const wr = mcpClient({ BANDI_SSH_REGISTRY: REG, BANDI_SSH_ALLOW_WRITE: '1' });
 await wr.ready();
-const up = await wr.call('server_upsert', { alias: 'tmp-box', host: '10.1.2.3', port: 2222, user: 'ops', purpose: '临时测试\n第二行' });
+const up = await wr.call('server_upsert', { alias: 'tmp-box', host: '10.1.2.3', port: 2222, user: 'ops', key_path: path.join(KEY_DIR, 'tmp-box'), purpose: '临时测试\n第二行' });
 check('登记成功', !up.isError, up.text.slice(0, 120));
 const list2 = await wr.call('servers_list');
 check('登记后列得出来', list2.text.includes('10.1.2.3'));
-const reloaded = fs.readFileSync(tmpReg, 'utf8');
+const reloaded = fs.readFileSync(REG, 'utf8');
 check('多行备注往返没坏', /purpose: \|-\n\s+临时测试\n\s+第二行/.test(reloaded), reloaded.includes('|-') ? '用了块标量' : '（没写成块标量）');
 const rm = await wr.call('server_remove', { alias: 'tmp-box' });
 check('删得掉', !rm.isError && rm.text.includes('已从登记表删掉'));
-check('真账本一个字没动', fs.readFileSync(REAL_REGISTRY, 'utf8') === fs.readFileSync(tmpReg, 'utf8').replace(/\n$/, '\n') || !fs.readFileSync(REAL_REGISTRY, 'utf8').includes('10.1.2.3'));
+const afterWrite = fs.readFileSync(REG, 'utf8');
+check('删完那台不在了，夹具那台还在', !afterWrite.includes('10.1.2.3') && afterWrite.includes(ALIAS));
 wr.close();
-fs.rmSync(tmp, { recursive: true, force: true });
 
-/* ------------------------------------------------------------ ③ 真连 */
+/* ------------------------------------------------------------- ③ 真连（可选） */
 
 console.log('\n③ 真连（只跑只读命令）');
-const net = mcpClient({});
-await net.ready();
-const t = await net.call('ssh_test', { alias: 'bandi-hs4g' });
-check('ssh_test 连上了', !t.isError && t.text.startsWith('✅'), t.text.split('\n').slice(0, 4).join(' / '));
-if (t.text.startsWith('✅')) console.log(t.text.split('\n').map((l) => '  ' + l).join('\n'));
+const liveAlias = process.env.BANDI_SSH_LIVE;
+if (!liveAlias) {
+  console.log('  · 跳过：没设 BANDI_SSH_LIVE=<登记表里的别名>。这一块要一台真机器与网络，');
+  console.log('    不该在 CI / 别人机器上默认跑（设了就真连一次，只跑只读命令）。');
+} else {
+  const net = mcpClient({});
+  await net.ready();
+  const t = await net.call('ssh_test', { alias: liveAlias });
+  check('ssh_test 连上了', !t.isError && t.text.startsWith('✅'), t.text.split('\n').slice(0, 4).join(' / '));
+  if (t.text.startsWith('✅')) console.log(t.text.split('\n').map((l) => '  ' + l).join('\n'));
 
-const run = await net.call('ssh_run', { alias: 'bandi-hs4g', command: 'hostname; whoami; echo 班底在这里' });
-check('ssh_run 执行成功', !run.isError && run.text.startsWith('✅'), run.text.split('\n').slice(0, 3).join(' / '));
-if (run.text.startsWith('✅')) console.log(run.text.split('\n').map((l) => '  ' + l).join('\n'));
-net.close();
+  const run = await net.call('ssh_run', { alias: liveAlias, command: 'hostname; whoami; echo 班底在这里' });
+  check('ssh_run 执行成功', !run.isError && run.text.startsWith('✅'), run.text.split('\n').slice(0, 3).join(' / '));
+  if (run.text.startsWith('✅')) console.log(run.text.split('\n').map((l) => '  ' + l).join('\n'));
+  net.close();
+}
 
+fs.rmSync(work, { recursive: true, force: true });
 console.log(`\n结论：${failed ? `${failed} 项没通过` : '全通过'}`);
 process.exit(failed ? 1 : 0);

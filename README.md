@@ -81,6 +81,7 @@ node start.mjs        # 起控制面 + 开浏览器；Windows 也可以直接双
 | 部署、SSH 隧道访问、节点报到、备份与排障 | [deploy/README.md](deploy/README.md) |
 | 桌面壳与打包（三步、环境坑、卸载） | [apps/desktop/README.md](apps/desktop/README.md) |
 | 技能库：怎么给数字员工加能力 | [skills/README.md](skills/README.md) |
+| 仓库值班：什么样 PR 不该合、怎么回话（判据台账） | [docs/审阅经验.md](docs/审阅经验.md) |
 | 安全边界与报告方式 | [SECURITY.md](SECURITY.md) |
 
 ## 版本

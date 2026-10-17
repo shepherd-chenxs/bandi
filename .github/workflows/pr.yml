@@ -1,0 +1,73 @@
+# PR 的硬闸门：**不需要任何凭据、不烧 token、不碰真实数据**。
+#
+# 三段：
+#   ① 策略检查（tools/check-pr.mjs）—— 零依赖铁律 / 地址白名单 / 断言完整性
+#   ② 语法与配置形状 —— 每个 js·mjs 过 node --check、几个 JSON 能解析、NSIS 钩子带 BOM
+#   ③ 冒烟（tools/run-smokes.mjs）—— 不需要真实 CLI/模型的那批
+#
+# **"这段逻辑对不对"不在这里判** —— 那留给人和 agent（见 skills/bandi-repo/SKILL.md）；
+# 这里只查机器能一句话判死的，硬编码多了只会天天误杀。
+#
+# 为什么跑 windows-latest：本地开发与这几套冒烟都是在 Windows 上验的；
+# 公开仓库的 Actions 用量免费，慢一点换"和本机一致"。
+
+name: pr
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read # 只读就够：这个工作流不评论、不打标签（那是以后 bot 的事）
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 策略检查要拿 base.sha 比 diff
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 策略检查（零依赖 / 地址白名单 / 断言完整性）
+        shell: pwsh
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: node tools/check-pr.mjs
+
+      - name: 语法与配置形状
+        shell: pwsh
+        run: |
+          $bad = 0
+          $files = Get-ChildItem -Path apps, plugins, skills, tools -Recurse -File |
+            Where-Object { $_.Extension -in '.mjs', '.js' -and $_.FullName -notmatch '\\target\\|\\node_modules\\|\\runtime\\|\\binaries\\' }
+          foreach ($f in $files) {
+            node --check $f.FullName
+            if ($LASTEXITCODE -ne 0) { Write-Host "::error file=$($f.FullName)::语法不过（node --check）"; $bad++ }
+          }
+          Write-Host "语法检查：$($files.Count) 个 js/mjs 文件"
+
+          node -e "const fs=require('fs');const list=['apps/desktop/tauri.conf.json','apps/desktop/version.json','apps/server/catalog/connectors.json','apps/server/catalog/plugins/project-panel/manifest.json','apps/server/catalog/plugins/ssh/manifest.json','.agents/plugins/marketplace.json'];for(const f of list)JSON.parse(fs.readFileSync(f,'utf8'));console.log('JSON 都能解析：'+list.length+' 个')"
+          if ($LASTEXITCODE -ne 0) { Write-Host '::error::JSON 解析不过'; $bad++ }
+
+          $hook = 'apps/desktop/installer-hooks.nsh'
+          $bom = [System.IO.File]::ReadAllBytes($hook)[0..2] -join ','
+          if ($bom -ne '239,187,191') {
+            Write-Host "::error file=$hook::installer-hooks.nsh 必须以 UTF-8 BOM 开头 —— makensis 只认带 BOM 的 UTF-8，不带就 Bad text encoding"
+            $bad++
+          } else { Write-Host 'NSIS 钩子：UTF-8 BOM 正确' }
+
+          if ($bad) { throw "$bad 项没过" }
+
+      - name: 冒烟（不需要真实 CLI / 模型的那批）
+        shell: pwsh
+        run: node tools/run-smokes.mjs
