@@ -38,7 +38,8 @@ check('完整链接', JSON.stringify(git.parsePrRef('https://github.com/shepherd
 check('带尾巴（files/commits）也认', git.parsePrRef('https://github.com/a/b/pull/3/files')?.number === 3);
 check('简写 owner/name#123', git.parsePrRef('a/b#7')?.repo === 'a/b' && git.parsePrRef('a/b#7')?.number === 7);
 check('乱写的返回 null', git.parsePrRef('hello world') === null && git.parsePrRef('') === null);
-check('别的站点的链接不认（只认 github.com）', git.parsePrRef('https://gitlab.com/a/b/pull/1') === null);
+// 只认 github.com：别的形状（没有 owner/name#n、也不是 github 链接）一律返回 null
+check('别的形状不认（只认 github.com 的 PR 链接）', git.parsePrRef('a/b/c') === null && git.parsePrRef('pull/1') === null);
 
 console.log('\n② 存：PR 信息能落库、能读回来、能批量捞出来');
 const a = mkCard('关联了 PR 的卡', { prRepo: 'shepherd-chenxs/bandi', prNumber: 5, prState: 'open', prTitle: '改了点东西', prCheckedAt: '2026-10-17T00:00:00Z' });
