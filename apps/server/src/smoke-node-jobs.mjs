@@ -20,6 +20,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { repoRoot } from './config.mjs';
 import { stopRunning, sleep } from './lifecycle.mjs';
+import { makeFakeCodexBin } from './fixtures/fake-codex.mjs';
 
 const PORT = Number(process.env.SMOKE_PORT ?? 8870);
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -28,6 +29,12 @@ const CP_DATA = path.join(tmp, 'cp-data');
 const NODE_DATA = path.join(tmp, 'node-data');
 const SERVER = path.join(repoRoot, 'apps', 'server', 'src', 'server.mjs');
 const NODE = path.join(repoRoot, 'apps', 'server', 'src', 'node.mjs');
+
+/*
+ * 自带的假 codex 塞进 PATH（2026-10-17）：原来这套用例靠"本机装了真 codex"才能过 ——
+ * 本地全绿、CI 上节点自报的运行时是空的，于是红。用例不该依赖跑它的那台机器。
+ */
+process.env.PATH = makeFakeCodexBin(path.join(tmp, 'fake-codex')) + path.delimiter + (process.env.PATH ?? '');
 const FAKE = path.join(repoRoot, 'apps', 'server', 'src', 'fixtures', 'fake-agent.js');
 
 let failed = 0;

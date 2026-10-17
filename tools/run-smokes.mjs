@@ -90,6 +90,15 @@ for (const f of RUN) {
   if (!ok) {
     failed.push(f);
     const out = ((r.stdout ?? '') + (r.stderr ?? '')).trim();
+    /*
+     * 失败时先**把每条 ✗ 捞出来**（2026-10-17：CI 上只看得到 15 行尾巴，
+     * 而失败的那条恰好被截掉，只能靠再跑一遍才能问出"到底是哪一项"）。
+     */
+    const bad = out.split('\n').filter((l) => /✗|跑挂了/.test(l));
+    if (bad.length) {
+      console.log('    ---- 没过的那几项 ----');
+      for (const l of bad) console.log('    ' + l.trim());
+    }
     const tail = out.split('\n').slice(-15).join('\n');
     console.log('    ---- 输出尾部 ----');
     console.log(

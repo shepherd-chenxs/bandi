@@ -252,24 +252,26 @@ main { min-height: 0; }
           font-size: 19px; font-weight: 600;
           background: linear-gradient(135deg, #4b6cb7, #182848); }
 .wb-name { font-size: 12.5px; color: var(--text); text-align: center; line-height: 1.3; }
-/* 插件的图标**左上角挂个角标**：工作台里混着平台自带的入口（项目 / 任务看板 / 流程），
-   只靠磁贴样子分不出哪个是装进来的插件。角标就一个小图贴着图标左上角，
-   **不要底框、不要边框** —— 加过底和描边，浅色下会变成一圈很重的框，抢了图标本身。
-   锚点用**磁贴（.wb-tile）**而不是图标、并且给磁贴留出内边距：
-   角标要**落在入口卡这块背景框里**，不能挑到框外去（用户实报就是这个）。
-   所以插件磁贴自己多出 6px 的内边距把角标装进来 ——
-   ⚠️ 只能加在 .has-badge 上，不能加到 .wb-tile：那样平台自带的几块图标也会被挤，
-   和插件那列对不齐（截图上看过）。平台自带的那些不挂（没有 .has-badge 就没有角标）。
-   颜色走 --text（浅色主题是深灰、深色主题是近白），两边都够对比。 */
-.wb-tile.has-badge { position: relative; padding: 22px 14px 14px; }
-/* 角标贴着图标的左上圆角站，但**整个落在磁贴框内**（不往外挑） */
-.wb-tile.has-badge .wb-badge { position: absolute; left: 14px; top: 15px;
-                    width: 16px; height: 16px; display: flex;
+/* **插件**的图标角上挂一个小角标：工作台里混着平台自带的入口（项目 / 任务看板 / 流程），
+   只靠磁贴样子分不出哪个是装进来的插件。
+   位置是**骑在图标左上那个圆角上** —— 一多半压在色块上、一少半探出去，
+   既看得出属于这块图标，又不占图标里面那点地方（图标里只有一个字，塞进去会挤）。
+   探出去的那点还在磁贴内边距里，不会出到入口卡背景框外。
+   ⚠️ 颜色必须跟图标里的字一样用 #fff：图标底是深蓝，
+   --text 在浅色主题是深灰，压上去几乎看不见（截图上看过）。
+   平台自带的那几块图标没有 .has-plug，也就没有角标。 */
+.wb-ico.has-plug { position: relative; }
+/* 白色插头一半压在深蓝图标上、一半探到浅色背景上 —— 纯白在浅背景上会"化掉"，
+   所以描一圈深色：压在图标上时看不出描边，探出去那半圈立刻有轮廓（截图上看过）。
+   尺寸取 18px（图标才 46px）：14px 时在 100% 缩放下太小，一眼看不出是个插头。 */
+.wb-ico.has-plug .wb-badge { position: absolute; left: -7px; top: -7px;
+                    width: 18px; height: 18px; display: flex;
                     align-items: center; justify-content: center;
-                    color: var(--text);
-                    filter: drop-shadow(0 1px 1.5px var(--shadow)); }
-.wb-tile.has-badge .wb-badge svg { width: 16px; height: 16px; display: block; }
-/* 悬停整块磁贴时角标跟着亮一下，提示"这个小图是有意思的" */
+                    color: #fff;
+                    filter: drop-shadow(0 0 .7px rgba(15, 20, 32, .95))
+                            drop-shadow(0 1px 2px rgba(0, 0, 0, .5)); }
+.wb-ico.has-plug .wb-badge svg { width: 18px; height: 18px; display: block; }
+/* 悬停整块磁贴时角标亮成强调色，提示"这个小图是有意思的" */
 .wb-tile:hover .wb-badge { color: var(--accent); }
 
 /* 插件表单（L1 声明式渲染出来的） */

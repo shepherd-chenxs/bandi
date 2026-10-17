@@ -18,6 +18,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import { repoRoot } from './config.mjs';
+import { makeFakeCodexBin } from './fixtures/fake-codex.mjs';
 
 const PORT = Number(process.env.SMOKE_PORT ?? 8798);
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -26,6 +27,12 @@ const DB = path.join(tmp, 'bandi.db');
 const NODE_STATE = path.join(tmp, 'node.json');
 const SERVER = path.join(repoRoot, 'apps', 'server', 'src', 'server.mjs');
 const NODE = path.join(repoRoot, 'apps', 'server', 'src', 'node.mjs');
+
+/*
+ * 自带的假 codex 塞进 PATH（2026-10-17）：别靠"跑用例的这台机器恰好装了 codex"。
+ * 没有它，CI 的干净 runner 上节点自报的运行时是空的，这套用例就红（本地却全绿）。
+ */
+process.env.PATH = makeFakeCodexBin(path.join(tmp, 'fake-codex')) + path.delimiter + (process.env.PATH ?? '');
 
 let failed = 0;
 const check = (label, ok, detail = '') => {
