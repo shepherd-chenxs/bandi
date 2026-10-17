@@ -3863,66 +3863,133 @@ function wireBoard(view, { refresh, taskProject = () => null }) {
   view.querySelectorAll('[data-kb-open]').forEach((el) => {
     el.onclick = (e) => {
       if (e.target.closest('[data-kb-del]')) return; // × 自己处理，别把弹窗也带出来
-      openTaskCard(el.dataset.kbOpen, refresh);
+      openTaskCardPage(el.dataset.kbOpen);
     };
     el.onkeydown = (e) => {
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
-        openTaskCard(el.dataset.kbOpen, refresh);
+        openTaskCardPage(el.dataset.kbOpen);
       }
     };
   });
 }
 
 /**
- * 点开一张本地卡（手工 / 仓库值班）：看**全文**、改标题描述、**改执行人**、改状态、开始工作、删掉。
+ * **任务卡详情页**（2026-10-17）：看板点开一张本地卡（手工 / 仓库值班）进这里。
  *
- * 为什么要有这个弹窗：
- *   · 看板上那张卡是截断过的 —— 仓库值班写进来的「结论 ＋ 该跑的命令 ＋ 链接」在卡上根本看不全；
- *   · 建卡时能选执行人，**建完之后原来没有入口能改**。
+ * 为什么做成"页"而不是弹窗：
+ *   · 卡上写的是"这件事的来龙去脉"（仓库值班把结论、证据、链接全写进描述），弹窗那点地方不够；
+ *   · 看完往往要**接着办** —— 办的过程就是跟执行人说句话，所以这一页要有**往来**。
  *
- * 「开始工作」和建卡时那个「创建后立即开始工作」走的是服务端同一条链路（`startProjectTask`）：
- * 派到执行人的 1:1 会话，工作目录＝这张卡挂的项目。**会真起一次 agent CLI（烧 token）**，所以按钮上写明。
+ * 聊天完全复用既有那套（不另造）：
+ *   取消息 `GET /api/conversations/:id`（messages + runs）→ `bubble()` 画；
+ *   发消息 `POST /api/conversations/:id/messages` → 拿 runId → `streamRun()` 接实时流；
+ *   实时输出跟主聊天页一个写法：**一个气泡里追加分块**，收尾后从库里重画（别留半截）。
+ * 「保存并开始工作」跟建卡时那个「立即开始」同一条服务端链路（`startProjectTask`）。
  */
-async function openTaskCard(taskId, refresh) {
+async function openTaskCardPage(taskId) {
+  const view = $('pluginView');
+  view.classList.add('kb-page'); // 这一页要满屏（见 style.css 的 #pluginView.kb-page）
+  S.plugin = null;               // 任务卡不是插件，别让插件那条路抢走位置
+  await paintTaskCardPage(taskId);
+}
+
+async function paintTaskCardPage(taskId) {
+  const view = $('pluginView');
   let task;
   try {
     task = (await api(`/api/projects/tasks/${encodeURIComponent(taskId)}`)).task;
   } catch (e) {
-    return alert(e.message);
+    view.innerHTML = `<div class="detail-head">${breadcrumb([{ label: '项目', to: 'projects' }, { label: '任务卡' }])}</div>
+      <div class="empty" style="padding:24px 4px">任务取不到：${esc(e.message)}</div>`;
+    return;
   }
-  if (!task) return alert('这张卡不在了');
-
-  const dlg = document.createElement('dialog');
-  dlg.id = 'taskCardDlg';
+  const proj = (S.projects ?? []).find((p) => p.id === task.projectId) ?? null;
   const isRepo = task.source === 'repo';
-  dlg.innerHTML = `
-    <form method="dialog">
-      <b>任务卡</b>
-      <div class="dim" style="font-size:12px;margin:4px 0 10px">
-        ${isRepo ? '仓库值班写进来的卡' : '手工建的卡'} —— 拖到「已完成」＝ 处理完了，删掉 ＝ 忽略。
-        这里可以改执行人、开始工作。
+  const assignee = S.personas.find((p) => p.id === task.assigneePersonaId) ?? null;
+
+  // 往来：派过活才有会话
+  let conv = null;
+  if (task.conversationId) {
+    try { conv = await api(`/api/conversations/${encodeURIComponent(task.conversationId)}`); } catch { conv = null; }
+  }
+  const runningRun = (conv?.runs ?? []).find((r) => r.status === '跑中') ?? null;
+  const whoName = conv?.conversation?.personaName ?? assignee?.name ?? '执行人';
+
+  const msgHtml = (d) => {
+    const msgs = d?.messages ?? [];
+    if (msgs.length) return msgs.map((m) => bubble(m.role, m.text, whoName, m.who)).join('');
+    return d
+      ? '<div class="nc-empty">还没聊过。说一句，他接着办。</div>'
+      : '<div class="nc-empty">还没派活 —— 先选执行人，点「保存并开始工作」，这里就能跟他说话。</div>';
+  };
+
+  view.innerHTML = `
+    <div class="detail-head">
+      ${breadcrumb([{ label: '项目', to: 'projects' }, { label: proj?.name ?? '（项目已不在）' }, { label: '任务卡' }])}
+      <div class="head-actions" style="margin-left:auto">
+        <button id="tcBack">← 返回看板</button>
+        <button class="danger" id="tcDel">删掉这张卡</button>
       </div>
-      <label>标题</label>
-      <input id="tcTitle" value="${esc(task.title)}" />
-      <label>描述${isRepo ? '（巡查结论与证据都在这儿）' : '（可留空）'}</label>
-      <textarea id="tcDesc" rows="9" style="font-family:ui-monospace,'Cascadia Mono',Consolas,monospace;font-size:12px">${esc(task.description || '')}</textarea>
-      <div class="grid2">
-        <div><label>状态</label><div id="tcStatusMount"></div></div>
-        <div><label>执行人</label><div id="tcWhoMount"></div></div>
+    </div>
+    <div class="detail-body tc-page">
+      <div class="tc-main">
+        <div class="p-head">
+          <div class="avatar">${esc(initial(task.title))}</div>
+          <div class="p-head-main">
+            <h2>${esc(task.title)}<span class="pill">${esc(task.status)}</span><span class="pill ${isRepo ? 'role' : ''}">${isRepo ? '仓库值班' : '手动'}</span></h2>
+            <div class="dim" style="font-size:12.5px">
+              ${esc(proj?.name ?? '（项目已不在）')}
+              ｜ 执行人 <b id="tcWhoText">${esc(assignee?.name ?? '（没派活）')}</b>
+              ｜ 更新 <span id="tcAt">${esc(String(task.updatedAt ?? '').replace('T', ' ').slice(0, 16))}</span>
+            </div>
+          </div>
+        </div>
+
+        <section class="group">
+          <div class="group-title">描述</div>
+          <div class="tc-desc">${task.description ? renderMarkdown(task.description) : '<span class="dim">（没有描述）</span>'}</div>
+        </section>
+
+        <section class="group">
+          <div class="group-title">改这张卡</div>
+          <div class="form-row"><div class="row-label">标题</div><input id="tcTitle" value="${esc(task.title)}" /></div>
+          <div class="form-row top"><div class="row-label">描述</div><textarea id="tcDesc" rows="6">${esc(task.description || '')}</textarea></div>
+          <div class="grid2">
+            <div><div class="row-label">状态</div><div id="tcStatusMount"></div></div>
+            <div><div class="row-label">执行人</div><div id="tcWhoMount"></div></div>
+          </div>
+          <div class="dlg-actions" style="margin-top:12px">
+            <button class="primary" id="tcSave">保存</button>
+            <button id="tcStart">保存并开始工作</button>
+          </div>
+          <div class="counter left" id="tcHint"></div>
+        </section>
       </div>
-      <div class="dim" id="tcHint" style="font-size:12px;margin-top:8px"></div>
-      <div class="dlg-actions">
-        <button type="button" class="danger" id="tcDel">删掉这张卡</button>
-        <button type="button" value="cancel">关闭</button>
-        <button type="button" id="tcStart">保存并开始工作</button>
-        <button class="primary" id="tcSave" value="ok">保存</button>
-      </div>
-    </form>`;
-  document.body.append(dlg);
-  // 动态建的对话框得自己包一次头部（页面加载那一遍它还不存在，见 wireDialogHead）
-  wireDialogHead(dlg.querySelector('form'));
-  dlg.addEventListener('close', () => dlg.remove());
+
+      <aside class="tc-thread">
+        <div class="nc-head"><b>往来</b><span class="dim" id="tcThreadHint" style="font-size:12px">${conv ? esc(whoName) : '还没派活'}</span></div>
+        <div class="tc-msgs" id="tcMsgs">${msgHtml(conv)}</div>
+        <div class="nc-say">
+          <div class="input-wrap">
+            <textarea id="tcInput" rows="4" placeholder="跟执行人说一句…（回车换行）" ${conv ? '' : 'disabled'}></textarea>
+            <div class="input-tools">
+              <button class="primary nc-send" type="button" id="tcSend" title="发送" aria-label="发送" ${conv ? '' : 'disabled'}>
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+                     stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M12 19V6" /><path d="M6 12l6-6 6 6" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </div>`;
+
+  const backTo = (proj ? () => openProjectDetail(proj.id) : () => openProjectsPage());
+  view.querySelector('[data-crumb-to="projects"]')?.addEventListener('click', () => openProjectsPage().catch((e) => alert(e.message)));
+  $('tcBack').onclick = () => backTo().catch((e) => alert(e.message));
+  $('tcMsgs').scrollTop = $('tcMsgs').scrollHeight;
 
   const statusCombo = createCombo({
     mount: $('tcStatusMount'),
@@ -3942,7 +4009,7 @@ async function openTaskCard(taskId, refresh) {
     const won = !!whoCombo.value();
     $('tcHint').textContent = won
       ? '「保存并开始工作」会派到他的 1:1 会话（工作目录＝这个项目），真跑一次 agent CLI —— 会烧 token。'
-      : '先指定执行人，才能开始工作。';
+      : '先指定执行人，才能开始工作；没开始过就没有往来。';
     $('tcStart').disabled = !won;
   };
   syncHint();
@@ -3963,32 +4030,99 @@ async function openTaskCard(taskId, refresh) {
   $('tcSave').onclick = async () => {
     try {
       await patch(false);
-      dlg.close();
-      await refresh();
+      await paintTaskCardPage(taskId);
     } catch (e) { alert(e.message); }
   };
   $('tcStart').onclick = async () => {
     try {
       await patch(true);
-      dlg.close();
     } catch (e) {
-      // 服务端会说清"存了，但没派出去：…" —— 卡已经存了，所以照样刷新看板
-      alert(e.message);
-    } finally {
-      await refresh();
+      alert(e.message); // 服务端会说清"存了，但没派出去：…"；卡已经存住了
     }
+    await paintTaskCardPage(taskId); // 重画：往来区这时才有会话
   };
   $('tcDel').onclick = async () => {
     if (!confirm('删掉这张任务卡？（＝忽略它，以后不再提）')) return;
     try {
       await api(`/api/projects/tasks/${encodeURIComponent(taskId)}`, { method: 'DELETE' });
-      dlg.close();
-      await refresh();
+      await backTo();
     } catch (e) { alert(e.message); }
   };
 
-  dlg.showModal();
-  $('tcTitle').focus();
+  /* ---------------- 往来：取消息 / 发消息 / 实时流（全走既有那三件套） ---------------- */
+
+  const convId = task.conversationId;
+  if (!convId) return; // 没派活：输入框已经禁用，提示写在往来区
+  let stream = null;
+  const refreshThread = async () => {
+    try {
+      const d = await api(`/api/conversations/${encodeURIComponent(convId)}`);
+      conv = d;
+      const box = $('tcMsgs');
+      if (!box) return;
+      box.innerHTML = msgHtml(d);
+      box.scrollTop = box.scrollHeight;
+    } catch { /* 拉不到就保持原样，别把页面弄炸 */ }
+  };
+  /**
+   * 接实时流：**一个气泡里追加分块**（跟主聊天页 `attachStream` 一个写法），
+   * 收尾后从库里重画 —— 流式气泡是临时的，库里那份才是完整的。
+   */
+  const attach = (runId) => {
+    if (!runId || stream) return;
+    const id = 'tcLive-' + runId;
+    $('tcMsgs')?.insertAdjacentHTML(
+      'beforeend',
+      `<div class="row" id="${id}"><div class="avatar sm">${esc(initial(whoName))}</div>
+        <div class="bubble"><div class="typing"><i></i><i></i><i></i></div></div></div>`,
+    );
+    $('tcMsgs').scrollTop = $('tcMsgs').scrollHeight;
+    const body = document.querySelector('#' + id + ' .bubble');
+    const add = (cls, text, asHtml = false) => {
+      body?.querySelector('.typing')?.remove();
+      const d = document.createElement('div');
+      d.className = 'step ' + cls;
+      if (asHtml) d.innerHTML = text; else d.textContent = text;
+      body?.appendChild(d);
+      const box = $('tcMsgs');
+      if (box) box.scrollTop = box.scrollHeight;
+    };
+    stream = streamRun(runId, {
+      onText: (chunk) => add('text', renderMarkdown(chunk), true),
+      onRunError: (msg) => add('bad', '· ' + firstMeaningfulLine(msg)),
+      onDone: () => {
+        stream?.close?.();
+        stream = null;
+        refreshThread();
+      },
+      onReconnect: () => refreshThread(),
+    });
+  };
+  if (runningRun) attach(runningRun.id); // 打开时正好在跑 → 接上，不等刷新
+
+  const sendText = async () => {
+    const text = $('tcInput').value.trim();
+    if (!text) return;
+    $('tcInput').disabled = true;
+    try {
+      const r = await api(`/api/conversations/${encodeURIComponent(convId)}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      $('tcInput').value = '';
+      $('tcMsgs').insertAdjacentHTML('beforeend', bubble('user', text, ''));
+      $('tcMsgs').scrollTop = $('tcMsgs').scrollHeight;
+      attach(r?.runId);
+    } catch (e) {
+      // 400/409 的原因要原样说出来（比如"他还在跑上一条"）
+      alert(`没发出去：${e.message}`);
+    } finally {
+      $('tcInput').disabled = false;
+      $('tcInput').focus();
+    }
+  };
+  $('tcSend').onclick = sendText;
 }
 
 /**

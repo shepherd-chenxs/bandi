@@ -253,22 +253,22 @@ main { min-height: 0; }
           background: linear-gradient(135deg, #4b6cb7, #182848); }
 .wb-name { font-size: 12.5px; color: var(--text); text-align: center; line-height: 1.3; }
 /* 插件的图标**左上角挂个角标**：工作台里混着平台自带的入口（项目 / 任务看板 / 流程），
-   只靠磁贴样子分不出哪个是装进来的插件。角标就一个小图贴在图标左上角，
+   只靠磁贴样子分不出哪个是装进来的插件。角标就一个小图贴着图标左上角，
    **不要底框、不要边框** —— 加过底和描边，浅色下会变成一圈很重的框，抢了图标本身。
-   锚点用**磁贴（.wb-tile）**而不是图标：图标一挪/一缩，角标就跟着跑到框外面去了
-   （用户 2026-10-17 实报"图标放到入口卡的背景框里，不要放外面"）。
-   给磁贴留出内边距（padding-top/left 各多 6px），角标落在**框内**左上角，
-   骑在图标左上那个圆角上，不越出框。平台自带的那些**不挂**（加 .is-plug 才出）。
+   锚点用**磁贴（.wb-tile）**而不是图标、并且给磁贴留出内边距：
+   角标要**落在入口卡这块背景框里**，不能挑到框外去（用户实报就是这个）。
+   所以插件磁贴自己多出 6px 的内边距把角标装进来 ——
+   ⚠️ 只能加在 .has-badge 上，不能加到 .wb-tile：那样平台自带的几块图标也会被挤，
+   和插件那列对不齐（截图上看过）。平台自带的那些不挂（没有 .has-badge 就没有角标）。
    颜色走 --text（浅色主题是深灰、深色主题是近白），两边都够对比。 */
-.wb-tile { padding: 22px 8px 14px 14px; }
-.wb-tile.has-badge { position: relative; }
+.wb-tile.has-badge { position: relative; padding: 22px 14px 14px; }
 /* 角标贴着图标的左上圆角站，但**整个落在磁贴框内**（不往外挑） */
-.wb-tile .wb-badge { position: absolute; left: 16px; top: 15px;
+.wb-tile.has-badge .wb-badge { position: absolute; left: 14px; top: 15px;
                     width: 16px; height: 16px; display: flex;
                     align-items: center; justify-content: center;
                     color: var(--text);
                     filter: drop-shadow(0 1px 1.5px var(--shadow)); }
-.wb-tile .wb-badge svg { width: 16px; height: 16px; display: block; }
+.wb-tile.has-badge .wb-badge svg { width: 16px; height: 16px; display: block; }
 /* 悬停整块磁贴时角标跟着亮一下，提示"这个小图是有意思的" */
 .wb-tile:hover .wb-badge { color: var(--accent); }
 
@@ -1476,3 +1476,20 @@ dialog::backdrop { background: var(--scrim); }
 .nc-say .nc-send.stopping { background: color-mix(in srgb, var(--accent) 78%, #fff); }
 .nc-say .nc-send.stopping:hover { background: var(--accent); }
 .nc-say .nc-send.stopping svg { fill: #fff; }
+
+/* ===== 任务卡详情页（2026-10-17）：左边卡片信息，右边往来（聊天） =====
+   往来那半截复用流程实例页的 .nc-head / .nc-say / .input-wrap 一套，不另写样式。 */
+.tc-page { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 440px);
+           gap: 18px; height: 100%; min-height: 0; padding: 14px 18px 18px; }
+.tc-main { min-width: 0; overflow: auto; display: flex; flex-direction: column; gap: 16px; }
+.tc-desc { font-size: 13px; line-height: 1.75; }
+.tc-desc pre { overflow: auto; }
+.tc-thread { display: flex; flex-direction: column; min-height: 0;
+             border-left: 1px solid var(--line); padding-left: 16px; }
+.tc-msgs { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column;
+           gap: 10px; padding: 6px 2px 12px; }
+@media (max-width: 1100px) {
+  .tc-page { grid-template-columns: minmax(0, 1fr); }
+  .tc-thread { border-left: 0; padding-left: 0; border-top: 1px solid var(--line);
+               padding-top: 12px; min-height: 320px; }
+}
