@@ -35,6 +35,7 @@ const RUN = [
   'apps/server/src/smoke-runtime-heal.mjs',
   'apps/server/src/smoke-ssh.mjs',
   'apps/server/src/smoke-status.mjs',
+  'apps/server/src/smoke-task-run-sync.mjs',
   'apps/server/src/smoke-workflows.mjs',
   'apps/desktop/smoke-shell.mjs',
 ];

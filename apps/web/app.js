@@ -48,6 +48,11 @@ const S = {
   projectList: false,       // 在看项目列表
   projectId: null,          // 在看哪个项目的看板
   boardAll: false,          // 在看<b>全局任务看板</b>（所有项目的活，工作台那个入口）
+  /*
+   * 在看哪张**任务卡详情页**（2026-10-17）。记它是因为：同一次会话里常常"看卡 → 回去看板 → 再回卡"，
+   * 更要紧的是**刷新之后要能回来** —— 这张页刚上线时按 F5 会掉回消息页（用户实报）。
+   */
+  taskCardId: null,
   // 看板的筛选：项目看板与全局面板**共用一套**（它们本来就是同一张看板换个范围）。
   // 现在只有"状态"这一维，空数组 = 不筛。切页面、刷新重画都不丢 —— 它就存在这儿。
   kbFilter: { statuses: [] },
@@ -121,6 +126,8 @@ function savePlace() {
         projectList: S.projectList === true,
         project: S.projectId ?? null,
         taskBoard: S.boardAll === true,   // 全局任务看板（工作台那个入口）
+        // 任务卡详情页（2026-10-17）：不记的话按 F5 就掉回消息页（用户实报）
+        taskCard: S.taskCardId ?? null,
         // 看板筛选：只记状态这一维（勾着「失败」按 F5 回来还是筛着的 —— 不然会以为功能坏了）
         kbStatuses: S.kbFilter?.statuses ?? [],
         designer: S.designerOpen ?? null,   // 当时在编排哪个模板
@@ -167,7 +174,10 @@ async function restorePlace() {
   try {
     if (p.nav === 'plugins') {
       // 项目页优先：它跟"选了哪个插件"是两条路（项目是平台功能，不是插件）
-      if (p.taskBoard) {
+      if (p.taskCard) {
+        // 任务卡详情页最具体，排最前 —— 它的父级是看板，先开看板会把这张页盖掉
+        await openTaskCardPage(p.taskCard);
+      } else if (p.taskBoard) {
         // 全局任务看板（工作台 → 任务看板）—— 它没有"当前项目"，单独一条路
         await openTaskBoard();
       } else if (p.project) {
@@ -3435,6 +3445,7 @@ function workbenchProjectSection() {
 }
 
 async function openProjectsPage() {
+  S.taskCardId = null; // 离开任务卡详情页（位置记忆只在那一页有效）
   S.projects = (await api('/api/projects')).projects ?? [];
   const view = $('pluginView');
   view.classList.remove('kb-page'); // 列表页按普通长页面滚，不套看板那套满屏布局
@@ -3514,6 +3525,7 @@ function projectRow(p) {
  * 两者都能到，才叫"看得到、点得进去"；否则看板只是个只读报表。
  */
 async function openProjectDetail(id) {
+  S.taskCardId = null;
   const view = $('pluginView');
   view.classList.add('kb-page'); // 这一页要满屏（见 style.css 的 #pluginView.kb-page）
   S.projectId = id;              // 位置记忆：刷新回到这个项目的看板
@@ -3891,6 +3903,10 @@ async function openTaskCardPage(taskId) {
   const view = $('pluginView');
   view.classList.add('kb-page'); // 这一页要满屏（见 style.css 的 #pluginView.kb-page）
   S.plugin = null;               // 任务卡不是插件，别让插件那条路抢走位置
+  S.taskCardId = taskId;         // 位置记忆：刷新回到这张卡（见 savePlace / restorePlace）
+  S.projectList = false;
+  S.boardAll = false;
+  savePlace();
   await paintTaskCardPage(taskId);
 }
 
@@ -3987,8 +4003,18 @@ async function paintTaskCardPage(taskId) {
     </div>`;
 
   const backTo = (proj ? () => openProjectDetail(proj.id) : () => openProjectsPage());
-  view.querySelector('[data-crumb-to="projects"]')?.addEventListener('click', () => openProjectsPage().catch((e) => alert(e.message)));
-  $('tcBack').onclick = () => backTo().catch((e) => alert(e.message));
+  // 离开这张卡就把位置记忆清掉：否则下一次刷新又会被拽回这张卡
+  const leaveTo = async () => {
+    S.taskCardId = null;
+    savePlace();
+    await backTo();
+  };
+  view.querySelector('[data-crumb-to="projects"]')?.addEventListener('click', () => {
+    S.taskCardId = null;
+    savePlace();
+    openProjectsPage().catch((e) => alert(e.message));
+  });
+  $('tcBack').onclick = () => leaveTo().catch((e) => alert(e.message));
   $('tcMsgs').scrollTop = $('tcMsgs').scrollHeight;
 
   const statusCombo = createCombo({
@@ -4045,7 +4071,7 @@ async function paintTaskCardPage(taskId) {
     if (!confirm('删掉这张任务卡？（＝忽略它，以后不再提）')) return;
     try {
       await api(`/api/projects/tasks/${encodeURIComponent(taskId)}`, { method: 'DELETE' });
-      await backTo();
+      await leaveTo();
     } catch (e) { alert(e.message); }
   };
 
@@ -4137,6 +4163,7 @@ async function paintTaskCardPage(taskId) {
  * 右侧那栏换成**按项目分堆的概览**，点一行就钻进那个项目的看板（全局 → 单个）。
  */
 async function openTaskBoard() {
+  S.taskCardId = null;
   const view = $('pluginView');
   view.classList.add('kb-page'); // 跟项目看板一样满屏（同一套 CSS）
   S.boardAll = true;             // 位置记忆：刷新回到全局面板
@@ -7873,6 +7900,7 @@ let pluginResult = {};
  * 回来时若发现页面已被别的路径接管（选中了什么、或停在看板上）就不画宫格了。
  */
 async function openPlugins() {
+  S.taskCardId = null;
   S.plugin = null;
   S.projectList = false;   // 回宫格 = 离开项目页
   S.projectId = null;
