@@ -6216,6 +6216,74 @@ async function openSkill(name) {
  * 「＋」也在这儿（`#listAction` 那个在设置页是隐藏的，见 setNav）。
  */
 /**
+ * **手动接入**（2026-10-17）：私有仓库 / 令牌没授权的仓库 / 离线时用。
+ *
+ * 为什么要它：令牌的 Repository access 没勾的私有仓库**根本不出现在列表里**，
+ * 而本地可能早就克隆好了 —— 那就手填 owner/name ＋ 本地目录：
+ * 平台只记路径、不联网、不复制代码。
+ */
+function openGitManualDialog(onDone) {
+  const dlg = document.createElement('dialog');
+  dlg.id = 'gitManualDlg';
+  dlg.innerHTML = `
+    <form method="dialog">
+      <b>手动接入仓库</b>
+      <label>仓库（owner/name）</label>
+      <input id="gitManualName" placeholder="例如：shepherd-chenxs/yuku" autocomplete="off" />
+      <label>本地目录（这个仓库已存在的克隆）</label>
+      <div class="row-with-btn">
+        <input id="gitManualPath" placeholder="例如：E:\\repos\\yuku" />
+        <button type="button" id="gitManualPick">选择</button>
+      </div>
+      <div class="counter left">
+        用于私有仓库、令牌没授权的仓库、离线场景。平台**只记路径**：不复制代码、不联网查元数据；
+        私有状态显示为未知，「同步」需要该仓库在令牌的 Repository access 里。
+      </div>
+      <div class="dlg-actions">
+        <button type="button" value="cancel">取消</button>
+        <button class="primary" id="gitManualOk">接入</button>
+      </div>
+    </form>`;
+  document.body.append(dlg);
+  wireDialogHead(dlg.querySelector('form'));
+  dlg.addEventListener('close', () => dlg.remove());
+
+  $('gitManualPick').onclick = async () => {
+    try {
+      const r = await api('/api/fs/pick-dir', { method: 'POST' });
+      if (r?.path) $('gitManualPath').value = r.path;
+    } catch (e) {
+      alert(e.message);
+    }
+  };
+  $('gitManualOk').onclick = async (e) => {
+    e.preventDefault();
+    const fullName = $('gitManualName').value.trim();
+    const localPath = $('gitManualPath').value.trim();
+    if (!/^[\w.-]+\/[\w.-]+$/.test(fullName)) return alert('仓库写成 owner/name');
+    if (!localPath) return alert('本地目录不能空（手动接入必须指向已有的克隆）');
+    const btn = $('gitManualOk');
+    btn.disabled = true;
+    btn.textContent = '接入中…';
+    try {
+      const r = await api('/api/git/repos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fullName, localPath }),
+      });
+      dlg.close();
+      await onDone();
+      alert(`${fullName} 已接入\n${r.repo.localPath}${r.warning ? '\n\n⚠️ ' + r.warning : ''}`);
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = '接入';
+      alert(err.message);
+    }
+  };
+  dlg.showModal();
+}
+
+/**
  * 接入一个仓库：**克隆一份** 还是 **用本地已有目录**（2026-10-17 用户实报：
  * 本地明明已经有克隆了，点接入又在别处克隆一份，白占盘）。
  *
@@ -6366,7 +6434,10 @@ async function renderGitRepos() {
       </section>
 
       <section class="group">
-        <div class="group-title">已接入的仓库 <span class="dim" style="font-weight:400">${repos.length} 个</span></div>
+        <div class="group-title">已接入的仓库 <span class="dim" style="font-weight:400">${repos.length} 个</span>
+          <button class="mini auto" id="gitManualAdd" style="float:right;margin-top:-2px"
+                  title="私有仓库 / 令牌没授权的仓库 / 离线：只记本地路径，不联网">＋ 手动接入</button>
+        </div>
         ${repos.length ? repos.map(repoRow).join('') : '<div class="sk-blank">还没接入仓库。连上 GitHub 之后，在下面「从 GitHub 添加」里挑。</div>'}
       </section>
 
@@ -6388,6 +6459,10 @@ async function renderGitRepos() {
 
   const refresh = () => renderGitRepos();
 
+  $('gitManualAdd')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    openGitManualDialog(refresh);
+  });
   $('gitConnect')?.addEventListener('click', async (e) => {
     e.preventDefault();
     const token = $('gitToken').value.trim();

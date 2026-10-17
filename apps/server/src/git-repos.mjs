@@ -202,16 +202,30 @@ export async function connectRepo(fullName, info = null, localPath = null) {
   if (!/^[\w.-]+\/[\w.-]+$/.test(clean)) throw new Error(`仓库名写成 owner/name：${clean}`);
   if (store.getGitRepoByFullName(clean)) throw new Error('这个仓库已经接入过了');
 
-  const meta = info ?? (await ghFetch(`/repos/${clean}`));
-  const record = (dir, note, warning = null) => {
+  /*
+   * 元数据**懒加载 + 容错**：本地已有目录这条路不该依赖联网。
+   * 私有仓库常见情况：令牌没给它授权（GitHub 只默认开放公开仓库）→ 查 /repos 会 404；
+   * 这时仍然要能接入（不克隆、只用本地目录），私有状态就不知道（存 0，界面不显示"私有"）。
+   */
+  let meta = info;
+  const getMeta = async () => {
+    if (meta) return meta;
+    try {
+      meta = await ghFetch(`/repos/${clean}`);
+    } catch {
+      meta = null;
+    }
+    return meta;
+  };
+  const record = (dir, note, warning = null, m = null) => {
     const row = store.addGitRepo({
       fullName: clean,
-      owner: meta.owner?.login ?? clean.split('/')[0],
-      name: meta.name ?? clean.split('/')[1],
-      isPrivate: meta.private ? 1 : 0,
-      defaultBranch: meta.default_branch ?? null,
+      owner: m?.owner?.login ?? clean.split('/')[0],
+      name: m?.name ?? clean.split('/')[1],
+      isPrivate: m?.private ? 1 : 0,
+      defaultBranch: m?.default_branch ?? null,
       localPath: dir,
-      language: meta.language ?? null,
+      language: m?.language ?? null,
     });
     return { repo: store.touchGitRepoSync(row.id), note, warning };
   };
@@ -227,8 +241,18 @@ export async function connectRepo(fullName, info = null, localPath = null) {
     let warning = null;
     if (origin.code !== 0) warning = '这个目录没有 origin（不是从 GitHub 克隆的）—— 接入后「同步」不可用';
     else if (!sameRepo(origin.out, clean)) warning = `本地 origin 指向 ${origin.out}，跟 ${clean} 不一致（fork 或镜像？）`;
-    return record(dir, '使用本地已有目录（没有另建克隆）', warning);
+    const m = await getMeta();
+    if (!m) warning = (warning ? warning + '；' : '') + '令牌读不到这个仓库（私有仓库要授权才读得到元数据），已按本地信息接入';
+    // 默认分支：查不到就用本地 HEAD
+    if (!m) {
+      const head = await run('git', ['symbolic-ref', '--short', 'HEAD'], { cwd: dir, env: GIT_ENV });
+      meta = { default_branch: head.code === 0 ? head.out : null };
+    }
+    return record(dir, '使用本地已有目录（没有另建克隆）', warning, m ?? meta);
   }
+  const meta2 = await getMeta();
+  if (!meta2) throw new Error('令牌读不到这个仓库（私有仓库要在令牌的 Repository access 里勾上它）');
+  meta = meta2;
   const dir = localPathFor(clean);
   const url = meta.clone_url ?? `https://github.com/${clean}.git`;
   fs.mkdirSync(REPOS_DIR, { recursive: true });
