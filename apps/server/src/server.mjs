@@ -1963,7 +1963,7 @@ async function handleGit(req, res, url) {
   if (req.method === 'POST' && url.pathname === '/api/git/repos') {
     const body = await readBody(req);
     try {
-      const out = await git.connectRepo(String(body.fullName ?? ''), null);
+      const out = await git.connectRepo(String(body.fullName ?? ''), null, body.localPath ? String(body.localPath) : null);
       return sendJson(res, 201, out), true;
     } catch (e) {
       return fail(res, 400, 'E1064', String(e.message ?? e)), true;

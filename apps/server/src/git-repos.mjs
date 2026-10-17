@@ -177,12 +177,58 @@ const isGitRepo = (dir) => {
  * 接入一个仓库：克隆到本地（已经克隆过的就拉一下），并记进表。
  * 返回表里的那一行。
  */
-export async function connectRepo(fullName, info = null) {
+/**
+ * remote 地址跟 `owner/name` 是不是同一个仓库（https / ssh / 带 .git 都算）。
+ * 只用来给个提醒，**不拿它当闸门** —— 有人故意改 remote（fork、镜像）也是合理的。
+ */
+function sameRepo(url, fullName) {
+  const u = String(url ?? '')
+    .trim()
+    .replace(/^git@([^:]+):/, 'https://$1/')
+    .replace(/\.git$/, '')
+    .replace(/\/$/, '')
+    .toLowerCase();
+  return u.endsWith('/' + String(fullName).toLowerCase());
+}
+
+/**
+ * 接入一个仓库。
+ *
+ * `localPath`：**本地已经有克隆**时直接用它 —— 不另建一份（用户实报：点了接入又在别处克隆一份，
+ * 白占盘、还容易两边不同步）。会核对 origin 指向是不是这个仓库；不一致只**提示**不拦（fork/镜像也合理）。
+ */
+export async function connectRepo(fullName, info = null, localPath = null) {
   const clean = String(fullName ?? '').trim();
   if (!/^[\w.-]+\/[\w.-]+$/.test(clean)) throw new Error(`仓库名写成 owner/name：${clean}`);
   if (store.getGitRepoByFullName(clean)) throw new Error('这个仓库已经接入过了');
 
   const meta = info ?? (await ghFetch(`/repos/${clean}`));
+  const record = (dir, note, warning = null) => {
+    const row = store.addGitRepo({
+      fullName: clean,
+      owner: meta.owner?.login ?? clean.split('/')[0],
+      name: meta.name ?? clean.split('/')[1],
+      isPrivate: meta.private ? 1 : 0,
+      defaultBranch: meta.default_branch ?? null,
+      localPath: dir,
+      language: meta.language ?? null,
+    });
+    return { repo: store.touchGitRepoSync(row.id), note, warning };
+  };
+
+  /* **用本地已有目录**：不克隆，只核对一下 */
+  if (localPath) {
+    const dir = path.resolve(String(localPath).trim());
+    if (!fs.existsSync(dir)) throw new Error(`本地目录不存在：${dir}`);
+    if (!isGitRepo(dir)) throw new Error(`这个目录不是 git 仓库（没有 .git）：${dir}`);
+    const dup = store.getGitRepoByPath(dir);
+    if (dup) throw new Error(`这个目录已经接给仓库 ${dup.fullName} 了`);
+    const origin = await run('git', ['remote', 'get-url', 'origin'], { cwd: dir, env: GIT_ENV });
+    let warning = null;
+    if (origin.code !== 0) warning = '这个目录没有 origin（不是从 GitHub 克隆的）—— 接入后「同步」不可用';
+    else if (!sameRepo(origin.out, clean)) warning = `本地 origin 指向 ${origin.out}，跟 ${clean} 不一致（fork 或镜像？）`;
+    return record(dir, '使用本地已有目录（没有另建克隆）', warning);
+  }
   const dir = localPathFor(clean);
   const url = meta.clone_url ?? `https://github.com/${clean}.git`;
   fs.mkdirSync(REPOS_DIR, { recursive: true });
@@ -200,16 +246,7 @@ export async function connectRepo(fullName, info = null) {
     note = '已克隆';
   }
 
-  const row = store.addGitRepo({
-    fullName: clean,
-    owner: meta.owner?.login ?? clean.split('/')[0],
-    name: meta.name ?? clean.split('/')[1],
-    isPrivate: meta.private ? 1 : 0,
-    defaultBranch: meta.default_branch ?? null,
-    localPath: dir,
-    language: meta.language ?? null,
-  });
-  return { repo: store.touchGitRepoSync(row.id), note };
+  return record(dir, note);
 }
 
 /** 拉一下已接入的仓库（fast-forward；分叉了就说清楚） */

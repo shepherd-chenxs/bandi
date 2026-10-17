@@ -2291,6 +2291,10 @@ export function getGitRepo(id) {
   return db.prepare('SELECT * FROM git_repos WHERE id = ?').get(id) ?? null;
 }
 
+export function getGitRepoByPath(localPath) {
+  return db.prepare('SELECT * FROM git_repos WHERE localPath = ?').get(localPath) ?? null;
+}
+
 export function getGitRepoByFullName(fullName) {
   return db.prepare('SELECT * FROM git_repos WHERE fullName = ?').get(fullName) ?? null;
 }
