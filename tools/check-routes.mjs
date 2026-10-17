@@ -48,6 +48,20 @@ const bad = (msg) => {
 };
 
 if (!src.includes('function openRoute(')) bad('app.js 里没有 openRoute() 分发器');
+/*
+ * 启动链路的三件套必须**在且只有一份**（2026-10-17 真踩过：重构脚本误删了 restorePlace 的整个函数体，
+ * 只剩调用 → 启动时 ReferenceError 被 catch 住、位置恢复永远失效，而 node --check 照样通过）。
+ */
+for (const [sig, label] of [
+  ['async function restorePlace(', '启动恢复函数 restorePlace'],
+  ['function openRoute(', '路由分发器 openRoute'],
+  ['function setRoute(', '记录当前位置 setRoute'],
+  ['const ROUTES = {', '路由表 ROUTES'],
+]) {
+  const n = src.split(sig).length - 1;
+  if (n !== 1) bad(`${label} 应该正好 1 份，实际 ${n} 份（${sig}）`);
+}
+if (!src.includes('.then(() => restorePlace())')) bad('启动处没有调 restorePlace()');
 if (!registered.length) bad('ROUTES 表是空的');
 
 for (const v of produced) {
