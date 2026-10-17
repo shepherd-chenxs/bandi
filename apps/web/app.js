@@ -245,6 +245,20 @@ function setRoute(view, params = {}) {
 
 /** 启动时回到上次的位置。**回不去就退回消息页**——
  * 会话可能被移除、技能被删、插件被卸，存着的位置不一定还在。 */
+async function restorePlace() {
+  const p = readPlace();
+  // 跟页面无关的界面状态先还原（看板筛选）
+  if (Array.isArray(p?.kbStatuses)) S.kbFilter.statuses = p.kbStatuses.filter((x) => typeof x === 'string');
+  const route = p?.route && typeof p.route.view === 'string' ? p.route : null;
+  if (!route) return setNav('messages');
+  try {
+    await openRoute(route);
+  } catch {
+    // 位置重建失败就算了，停在消息页也挺好
+    setNav('messages');
+  }
+}
+
 /** 把 'system' 解析成实际的 light/dark，写到 <html data-theme>；CSS 只认这个属性 */
 function applyTheme() {
   const resolved = S.theme === 'system' ? (prefersLight() ? 'light' : 'dark') : S.theme;
