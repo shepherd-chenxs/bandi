@@ -6982,7 +6982,7 @@ function renderDetail({ persona, runtimes, runs, platformRoot, skills: personaSk
                       <label class="switch sm" title="${l.enabled ? '暂停使用（保留分配）' : '恢复使用'}">
                         <input type="checkbox" data-skill-toggle="${esc(l.name)}" ${l.enabled ? 'checked' : ''} /><span></span>
                       </label>
-                      <button class="mini sm" data-unlink="${esc(l.name)}" title="解绑：只是不再分配给他，技能本身还在库里">解绑</button>
+                      <button class="mini sm txt" data-unlink="${esc(l.name)}" title="解绑：只是不再分配给他，技能本身还在库里">解绑</button>
                     </div>`,
                   )
                   .join('')
