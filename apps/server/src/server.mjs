@@ -21,7 +21,7 @@ import { dispatchToThread, personaRoots } from './dispatch.mjs';
 import * as workflows from './workflows.mjs';
 import * as quota from './quota.mjs';
 import * as status from './status.mjs';
-import { projectTasks, allTasks, createProjectTask, updateProjectTask, startProjectTask, onTaskRunFinished } from './project-tasks.mjs';
+import { projectTasks, allTasks, createProjectTask, updateProjectTask, startProjectTask, onTaskRunFinished, afterMerged } from './project-tasks.mjs';
 import * as git from './git-repos.mjs';
 
 const webDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'web');
@@ -1918,7 +1918,9 @@ async function handleSsh(req, res, url) {
  * 克隆/拉取是**异步子进程**（不 spawnSync）—— 大仓库克隆时控制面不能整台卡住。
  */
 async function handleGit(req, res, url) {
-  if (!url.pathname.startsWith('/api/git/')) return false;
+  // 这个 handler 管两类路径：/api/git/*（代码托管）与 /api/projects/tasks/:id/pr*（PR 联动）
+  const isPrRoute = /^\/api\/projects\/tasks\/[^/]+\/pr(\/refresh)?$/.test(url.pathname);
+  if (!url.pathname.startsWith('/api/git/') && !isPrRoute) return false;
 
   if (req.method === 'GET' && url.pathname === '/api/git/status') {
     const connected = !!git.readToken();
@@ -1968,6 +1970,88 @@ async function handleGit(req, res, url) {
     } catch (e) {
       return fail(res, 400, 'E1064', String(e.message ?? e)), true;
     }
+  }
+
+  /* ---- PR 联动：卡片 ↔ GitHub PR ------------------------------------- */
+
+  const prOf = /^\/api\/projects\/tasks\/([^/]+)\/pr(\/refresh)?$/.exec(url.pathname);
+  if (prOf) {
+    const taskId = decodeURIComponent(prOf[1]);
+    const task = store.getProjectTask(taskId);
+    if (!task) return fail(res, 404, 'E1068', '任务不存在'), true;
+
+    // 关联：body { url }（也接受 owner/name#123）
+    if (req.method === 'POST' && !prOf[2]) {
+      const body = await readBody(req);
+      const ref = git.parsePrRef(body.url ?? body.pr ?? '');
+      if (!ref) return fail(res, 400, 'E1069', '看不懂这个 PR：贴链接，或写成 owner/name#123'), true;
+      if (!git.readToken()) return fail(res, 400, 'E1070', '先连接 GitHub（设置 → 代码托管）'), true;
+      let snap;
+      try {
+        snap = await git.fetchPull(ref.repo, ref.number);
+      } catch (e) {
+        return fail(res, 400, 'E1071', `查不到这个 PR：${e.message}`), true;
+      }
+      const next = store.updateProjectTask(taskId, {
+        prRepo: ref.repo,
+        prNumber: ref.number,
+        prState: snap.state,
+        prTitle: snap.title,
+        prCheckedAt: new Date().toISOString(),
+      });
+      return sendJson(res, 200, { task: afterMerged(next), pr: snap }), true;
+    }
+
+    // 刷新：重新查一次
+    if (req.method === 'POST' && prOf[2]) {
+      if (!task.prRepo || !task.prNumber) return fail(res, 400, 'E1072', '这张卡还没关联 PR'), true;
+      let snap;
+      try {
+        snap = await git.fetchPull(task.prRepo, task.prNumber);
+      } catch (e) {
+        return fail(res, 400, 'E1073', `查不到这个 PR：${e.message}`), true;
+      }
+      const next = store.updateProjectTask(taskId, {
+        prState: snap.state,
+        prTitle: snap.title,
+        prCheckedAt: new Date().toISOString(),
+      });
+      return sendJson(res, 200, { task: afterMerged(next), pr: snap }), true;
+    }
+
+    // 取消关联
+    if (req.method === 'DELETE') {
+      const next = store.updateProjectTask(taskId, {
+        prRepo: null,
+        prNumber: null,
+        prState: null,
+        prTitle: null,
+        prCheckedAt: null,
+      });
+      return sendJson(res, 200, { task: next }), true;
+    }
+  }
+
+  // 批量刷新：所有关联了 PR 的卡（看板/代码托管页上的「刷新 PR 状态」）
+  if (req.method === 'POST' && url.pathname === '/api/git/prs/refresh') {
+    if (!git.readToken()) return fail(res, 400, 'E1074', '先连接 GitHub（设置 → 代码托管）'), true;
+    let updated = 0;
+    const failed = [];
+    for (const t of store.listProjectTasksWithPr().slice(0, 50)) {
+      try {
+        const snap = await git.fetchPull(t.prRepo, t.prNumber);
+        const next = store.updateProjectTask(t.id, {
+          prState: snap.state,
+          prTitle: snap.title,
+          prCheckedAt: new Date().toISOString(),
+        });
+        afterMerged(next);
+        updated++;
+      } catch (e) {
+        failed.push({ id: t.id, error: String(e.message ?? e) });
+      }
+    }
+    return sendJson(res, 200, { updated, failed }), true;
   }
 
   const syncOne = /^\/api\/git\/repos\/([^/]+)\/sync$/.exec(url.pathname);

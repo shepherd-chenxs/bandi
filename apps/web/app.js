@@ -363,6 +363,70 @@ function wireDialogHead(form) {
 // 静态那些（index.html 里写死的 12 个）在加载时一次包完
 document.querySelectorAll('dialog > form').forEach(wireDialogHead);
 
+/* ------------------------------------------------- 标题旁的「?」说明（2026-10-17） */
+
+/** 帮助图标：一个圈里一个问号（跟 ICON_CHAT 那批同一套画法，只填路径不填色） */
+const ICON_HELP =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.6"/><path d="M9.6 9.4a2.4 2.4 0 1 1 3.3 2.2c-.7.3-1 .9-1 1.6v.4"/><path d="M12 16.6h.01"/></svg>';
+
+/**
+ * 给一颗「?」按钮挂一段说明：点开，再点 / 点别处 / Esc 收起。
+ *
+ * 为什么不做成 `title` 悬浮（全站小说明都走 title）：这段是**分步骤的操作流**——
+ * 三行、带加粗、还带一个外链，鼠标一移开就没了，照着做一半就没得看了。
+ * 也不做成 `<dialog>`：那是"要你表态"的分量，读一段说明犯不上盖住整页。
+ *
+ * 说明的 HTML 由调用方给（已经 `esc()` 过的内容，或带 `<b>` 的常量文案）。
+ * 同时只开一个；收起/换页时的清理走 `close()`，所以重绘不会攒下旧监听器。
+ */
+let helpPop = null; // { btn, pop } —— 现在开着的那一个
+
+function closeHelpPop() {
+  if (!helpPop) return;
+  const { btn, pop } = helpPop;
+  helpPop = null;
+  pop.classList.add('is-hidden');
+  btn.classList.remove('on');
+  btn.setAttribute('aria-expanded', 'false');
+}
+
+// 点别处 / Esc 一律收起。只装一次（不是每挂一颗「?」装一遍 —— 那会在重绘时攒下一堆）。
+document.addEventListener('click', closeHelpPop);
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeHelpPop();
+});
+
+function wireHelpPop(btn, html) {
+  const wrap = document.createElement('span');
+  wrap.className = 'help-wrap';
+  btn.after(wrap);
+  wrap.append(btn);
+
+  const pop = document.createElement('div');
+  pop.className = 'help-pop is-hidden';
+  pop.innerHTML = html;
+  wrap.append(pop);
+  // 点弹出层里面不收（里面可能有可点的链接）
+  pop.addEventListener('click', (e) => e.stopPropagation());
+
+  btn.setAttribute('aria-expanded', 'false');
+  btn.onclick = (e) => {
+    e.preventDefault();
+    e.stopPropagation(); // 别顺着冒泡把整个设置节再点一遍
+    const willOpen = helpPop?.btn !== btn;
+    closeHelpPop();
+    if (!willOpen) return;
+    pop.classList.remove('is-hidden');
+    btn.classList.add('on');
+    btn.setAttribute('aria-expanded', 'true');
+    // 贴右边缘时把弹出层往左拽，别探出视口（跟 .add-menu 同一个顾虑）
+    const r = pop.getBoundingClientRect();
+    const over = r.right - (window.innerWidth - 12);
+    pop.style.left = over > 0 ? `${-over}px` : '';
+    helpPop = { btn, pop };
+  };
+}
+
 /* ------------------------------------------------- 自建下拉（全站公共组件） */
 
 /**
@@ -4025,6 +4089,33 @@ async function paintTaskCardPage(taskId) {
           </div>
           <div class="counter left" id="tcHint"></div>
         </section>
+
+        <section class="group">
+          <div class="group-title">Pull Request</div>
+          ${
+            task.prRepo && task.prNumber
+              ? `<div class="form-row"><div class="row-label">关联的 PR</div><div>
+                   <a href="https://github.com/${esc(task.prRepo)}/pull/${task.prNumber}" target="_blank" rel="noreferrer"
+                      style="color:var(--accent)">${esc(task.prRepo)}#${task.prNumber}</a>
+                   <span class="pill">${
+                     task.prState === 'merged' ? '已合并' : task.prState === 'closed' ? '已关闭' : task.prState === 'open' ? '开着' : '状态未知'
+                   }</span>
+                   ${task.prTitle ? `<div class="dim" style="font-size:12px;margin-top:4px">${esc(task.prTitle)}</div>` : ''}
+                   ${task.prCheckedAt ? `<div class="dim" style="font-size:11.5px;margin-top:2px">上次查：${esc(String(task.prCheckedAt).replace('T', ' ').slice(0, 16))}</div>` : ''}
+                 </div></div>
+                 <div class="dlg-actions">
+                   <button id="tcPrRefresh">刷新状态</button>
+                   <button id="tcPrUnlink">取消关联</button>
+                 </div>`
+              : `<div class="form-row"><div class="row-label">关联 PR</div><div>
+                   <div class="row-with-btn">
+                     <input id="tcPrUrl" placeholder="贴 PR 链接，或 owner/name#123" />
+                     <button class="primary" id="tcPrLink">关联</button>
+                   </div>
+                   <div class="counter left">合并后这张卡会转到「待确认」——不自动「已完成」，等你点头。</div>
+                 </div></div>`
+          }
+        </section>
       </div>
 
       <aside class="tc-thread">
@@ -4110,6 +4201,56 @@ async function paintTaskCardPage(taskId) {
       await leaveTo();
     } catch (e) { alert(e.message); }
   };
+
+  /* ---------------- PR 联动（卡片 ↔ GitHub PR） ---------------- */
+  const prStateText = (state) => (state === 'merged' ? '已合并' : state === 'closed' ? '已关闭' : state === 'open' ? '开着' : '未知');
+
+  $('tcPrLink')?.addEventListener('click', async (e) => {
+    e.preventDefault();
+    const url = $('tcPrUrl').value.trim();
+    if (!url) return alert('先贴 PR 链接（或 owner/name#123）');
+    const btn = $('tcPrLink');
+    btn.disabled = true;
+    btn.textContent = '查询中…';
+    try {
+      const r = await api(`/api/projects/tasks/${encodeURIComponent(taskId)}/pr`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      });
+      await paintTaskCardPage(taskId);
+      alert(`已关联：${r.pr.repo}#${r.pr.number} —— ${prStateText(r.pr.state)}`);
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = '关联';
+      alert(err.message);
+    }
+  });
+  $('tcPrRefresh')?.addEventListener('click', async (e) => {
+    e.preventDefault();
+    const btn = $('tcPrRefresh');
+    btn.disabled = true;
+    btn.textContent = '查询中…';
+    try {
+      const r = await api(`/api/projects/tasks/${encodeURIComponent(taskId)}/pr/refresh`, { method: 'POST' });
+      await paintTaskCardPage(taskId);
+      alert(`PR 现在：${prStateText(r.pr.state)}${r.task?.status === '待确认' ? '（卡已转到「待确认」）' : ''}`);
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = '刷新状态';
+      alert(err.message);
+    }
+  });
+  $('tcPrUnlink')?.addEventListener('click', async (e) => {
+    e.preventDefault();
+    if (!confirm('取消这张卡和 PR 的关联？（不会动 GitHub 上的 PR）')) return;
+    try {
+      await api(`/api/projects/tasks/${encodeURIComponent(taskId)}/pr`, { method: 'DELETE' });
+      await paintTaskCardPage(taskId);
+    } catch (err) {
+      alert(err.message);
+    }
+  });
 
   /* ---------------- 往来：取消息 / 发消息 / 实时流（全走既有那三件套） ---------------- */
 
@@ -4316,6 +4457,13 @@ function kbColumn(col) {
  *   · 流程卡 → 那条实例；聊天卡 → 那个会话；手工卡 → 那个会话（没派活就没地方可去）
  *   · **手工卡可以拖到别的列**（改状态）—— 看板上最自然的手势，跟 Multica 一致
  */
+/** PR 联动（2026-10-17）：卡片上那枚「PR #n 开着/已合并」小标签；没关联 PR 就什么都不画 */
+function prPillOf(r) {
+  if (!r?.pr) return '';
+  const text = r.pr.state === 'merged' ? '已合并' : r.pr.state === 'closed' ? '已关闭' : '开着';
+  return `<span class="kb-tag pr" title="关联的 Pull Request">PR #${r.pr.number} ${text}</span>`;
+}
+
 function kbCard(r) {
   /*
    * 「本地卡」= 存在 project_tasks 里的那些：手工建的（`manual`）与**仓库值班写进来的**（`repo`）。
@@ -4341,7 +4489,7 @@ function kbCard(r) {
   const srcCls = r.source === 'chat' ? ' chat' : r.source === 'repo' ? ' repo' : local ? ' manual' : '';
   return `<article class="kb-card ${local ? 'manual' : ''}" ${jump} ${drag}${local ? ` data-kb-open="${esc(r.manual_id)}" tabindex="0"` : ''} data-col="${esc(r.col)}" title="${esc(r.note || '')}">
     <div class="kb-card-top">
-      ${proj}<span class="kb-tag${srcCls}">${esc(r.source_text)}</span>
+      ${proj}<span class="kb-tag${srcCls}">${esc(r.source_text)}</span>${prPillOf(r)}
       <span class="kb-state">${esc(r.status)}</span>
       ${del}
     </div>
@@ -6370,6 +6518,19 @@ function openGitAddDialog(fullName, onDone) {
  *
  * 安全：令牌只存平台、只回显后 4 位；克隆/拉取走请求头带令牌（`.git/config` 里不留带令牌的 URL）。
  */
+/* 「怎么拿令牌」—— 一段分步骤的说明，就挂在「GitHub 连接」标题旁那颗「?」上。
+ *
+ * 为什么只在「?」里、不在输入框下面也贴一份（2026-10-17）：原来表单下面确实贴着一份，
+ * 但那等于**同一段话在页面上出现两次**（而且连上之后表单没了、只剩「?」，两处还在时才显得多余）。
+ * 「?」在**连上与没连上时都在** —— 而"给下一个仓库补授权""令牌 90 天到期要换"
+ * 恰恰是**连着的时候**才要照着做，所以放在「?」里是覆盖面更全的那一处。 */
+const GIT_TOKEN_HELP = `
+  在 GitHub 建：Settings → Developer settings → Personal access tokens → <b>Fine-grained tokens</b>；
+  权限勾 <b>Contents: Read and write</b>（要开 PR 再加 <b>Pull requests: Read and write</b>）；
+  Repository access 选你要接入的那几个仓库。令牌只存在本机数据目录，不进日志。
+  <a class="help-link" href="https://github.com/settings/personal-access-tokens"
+     target="_blank" rel="noreferrer">去 GitHub 建一个 →</a>`;
+
 async function renderGitRepos() {
   const view = $('settingsView');
   showView('settings');
@@ -6394,11 +6555,7 @@ async function renderGitRepos() {
           <input id="gitToken" type="password" placeholder="粘贴 fine-grained PAT（只填一次，之后只显示后 4 位）" autocomplete="off" />
           <button class="primary" id="gitConnect">连接 GitHub</button>
         </div>
-        <div class="counter left">
-          在 GitHub 建：Settings → Developer settings → Personal access tokens → <b>Fine-grained tokens</b>；
-          权限勾 <b>Contents: Read and write</b>（要开 PR 再加 <b>Pull requests: Read and write</b>）；
-          Repository access 选你要接入的那几个仓库。令牌只存在本机数据目录，不进日志。
-        </div>
+        <div class="counter left">${GIT_TOKEN_HELP}</div>
       </div>
     </div>`;
 
@@ -6419,7 +6576,8 @@ async function renderGitRepos() {
       <span class="dim" style="font-size:12.5px;margin-left:8px">连接 GitHub、把仓库接进来给数字员工用</span>
     </div>
     <div class="detail-body">
-      <div class="group-title">GitHub 连接</div>
+      <div class="group-title">GitHub 连接<button type="button" class="help-btn" id="gitTokenHelp"
+              title="怎么拿到这个令牌？">${ICON_HELP}</button></div>
       <div class="group">
         ${
           st.connected
@@ -6456,6 +6614,10 @@ async function renderGitRepos() {
     </div>`;
 
   const refresh = () => renderGitRepos();
+
+  // 标题旁那颗「?」：点开是"怎么拿令牌"。连上 GitHub 之后表单没了，就靠它看。
+  const helpBtn = $('gitTokenHelp');
+  if (helpBtn) wireHelpPop(helpBtn, GIT_TOKEN_HELP);
 
   $('gitManualAdd')?.addEventListener('click', (e) => {
     e.preventDefault();

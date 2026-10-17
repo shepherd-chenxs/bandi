@@ -29,6 +29,7 @@ const RUN = [
   'apps/server/src/smoke-node-jobs.mjs',
   'apps/server/src/smoke-node-task.mjs',
   'apps/server/src/smoke-personas.mjs',
+  'apps/server/src/smoke-pr-link.mjs',
   'apps/server/src/smoke-project-tasks.mjs',
   'apps/server/src/smoke-quota.mjs',
   'apps/server/src/smoke-repo-cards.mjs',
@@ -39,6 +40,7 @@ const RUN = [
   'apps/server/src/smoke-task-run-sync.mjs',
   'apps/server/src/smoke-workflows.mjs',
   'apps/desktop/smoke-shell.mjs',
+  'tools/smoke-help-pop.mjs',
 ];
 
 /** 不跑的：写明原因（要真实 CLI / 模型，会烧 token） */
@@ -51,7 +53,7 @@ const SKIP = {
 
 /* ------------------------------------------- 清单完整性：不许有"没人管的用例" */
 
-const dirs = ['apps/server/src', 'apps/desktop'];
+const dirs = ['apps/server/src', 'apps/desktop', 'tools'];
 const found = dirs.flatMap((d) =>
   fs
     .readdirSync(path.join(repo, d))

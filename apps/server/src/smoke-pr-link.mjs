@@ -1,0 +1,79 @@
+/**
+ * PR 联动的离线验收（2026-10-17）。
+ *
+ * 这轮打通的链路：卡片关联 GitHub PR → 平台去 GitHub 查状态 → 存库里 → **合并后转「待确认」**。
+ * 需要网络的那半截（真查 GitHub）不在这里跑；这里验的是**解析 / 存 / 状态机**这三件不联网的事，
+ * 它们恰恰是最容易写错、也最容易被忽略的。
+ *
+ * 跑法：node apps/server/src/smoke-pr-link.mjs
+ */
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bandi-prlink-'));
+process.env.BANDI_DATA = tmp;
+process.env.BANDI_DB = path.join(tmp, 'bandi.db');
+
+// ⚠️ 必须在设好环境变量之后再 import
+const store = await import('./store.mjs');
+const git = await import('./git-repos.mjs');
+const pt = await import('./project-tasks.mjs');
+
+let failed = 0;
+const check = (label, ok, detail = '') => {
+  console.log(`  ${ok ? '✓' : '✗'} ${label}${detail ? ' — ' + detail : ''}`);
+  if (!ok) failed += 1;
+};
+
+const project = store.listProjects()[0];
+const mkCard = (title, extra = {}) => {
+  const row = store.createProjectTask({ projectId: project.id, title, status: '进行中' });
+  store.updateProjectTask(row.id, extra);
+  return store.getProjectTask(row.id);
+};
+
+console.log('① 解析 PR 引用：链接 / 简写都认，乱七八糟的返回 null');
+check('完整链接', JSON.stringify(git.parsePrRef('https://github.com/shepherd-chenxs/bandi/pull/12')) === '{"repo":"shepherd-chenxs/bandi","number":12}', JSON.stringify(git.parsePrRef('https://github.com/shepherd-chenxs/bandi/pull/12')));
+check('带尾巴（files/commits）也认', git.parsePrRef('https://github.com/a/b/pull/3/files')?.number === 3);
+check('简写 owner/name#123', git.parsePrRef('a/b#7')?.repo === 'a/b' && git.parsePrRef('a/b#7')?.number === 7);
+check('乱写的返回 null', git.parsePrRef('hello world') === null && git.parsePrRef('') === null);
+check('别的站点的链接不认（只认 github.com）', git.parsePrRef('https://gitlab.com/a/b/pull/1') === null);
+
+console.log('\n② 存：PR 信息能落库、能读回来、能批量捞出来');
+const a = mkCard('关联了 PR 的卡', { prRepo: 'shepherd-chenxs/bandi', prNumber: 5, prState: 'open', prTitle: '改了点东西', prCheckedAt: '2026-10-17T00:00:00Z' });
+const a2 = store.getProjectTask(a.id);
+check('prRepo/prNumber 存住了', a2.prRepo === 'shepherd-chenxs/bandi' && a2.prNumber === 5, `${a2.prRepo}#${a2.prNumber}`);
+check('prState/prTitle 存住了', a2.prState === 'open' && a2.prTitle === '改了点东西');
+check('批量捞得到它', store.listProjectTasksWithPr().some((t) => t.id === a.id));
+check('没 PR 的卡不在批量清单里', store.listProjectTasksWithPr().every((t) => t.prRepo), String(store.listProjectTasksWithPr().length));
+
+console.log('\n③ 合并后：**进行中 → 待确认**，别的一律不动（卡的状态是人的指令）');
+const b = mkCard('进行中 + PR 已合并', { prState: 'merged' });
+check('进行中 → 待确认', pt.afterMerged(b).status === '待确认', pt.afterMerged(b).status);
+
+const c = mkCard('已完成 + PR 已合并', { prState: 'merged' });
+store.updateProjectTask(c.id, { status: '已完成' });
+check('已完成不被覆盖', pt.afterMerged(store.getProjectTask(c.id)).status === '已完成');
+
+const d = mkCard('进行中 + PR 还开着', { prState: 'open' });
+check('PR 还开着 → 不动', pt.afterMerged(d).status === '进行中');
+
+const e = mkCard('进行中 + PR 已关闭（没合并）', { prState: 'closed' });
+check('PR 关掉但没合并 → 不动', pt.afterMerged(e).status === '进行中');
+
+const f = mkCard('进行中 + 没有 PR');
+check('没有 PR → 不动', pt.afterMerged(f).status === '进行中');
+
+console.log('\n④ 取消关联：四个字段一起清掉（不留半截状态）');
+store.updateProjectTask(a.id, { prRepo: null, prNumber: null, prState: null, prTitle: null, prCheckedAt: null });
+const a3 = store.getProjectTask(a.id);
+check('四个字段全空', !a3.prRepo && !a3.prNumber && !a3.prState && !a3.prTitle && !a3.prCheckedAt, JSON.stringify({ r: a3.prRepo, n: a3.prNumber, s: a3.prState }));
+
+try {
+  fs.rmSync(tmp, { recursive: true, force: true });
+} catch {
+  /* 删不掉就算了 */
+}
+console.log(`\n结论：${failed ? `有 ${failed} 项没通过` : '全通过'}`);
+process.exit(failed ? 1 : 0);
