@@ -553,6 +553,16 @@ function ensureProjects() {
 }
 ensureProjects();
 
+/*
+ * 本地卡（`project_tasks`：手工建的、以及**仓库值班写进来的**）—— 同一张表同一族：
+ *   · `source`：'manual' = 人在列头「＋」建的；'repo' = 仓库巡检写进来的（看板上标「仓库值班」）；
+ *   · `externalKey`：**去重键**（如 `pr:3` / `issue:2` / `note:branch-protection`）——
+ *     同一个 PR 巡检十次也只该有一张卡，重复写要更新而不是再建一张。
+ * 两者都能拖、都能删（**卡的状态就是人给它的指令**）。
+ */
+ensureColumn('project_tasks', 'source', "source TEXT NOT NULL DEFAULT 'manual'");
+ensureColumn('project_tasks', 'externalKey', 'externalKey TEXT');
+
 /**
  * 内置的默认项目：`<文档>\bandi\default-workspace`。
  *
@@ -673,6 +683,8 @@ export function createProjectTask({
   assigneePersonaId = null,
   conversationId = null,
   runId = null,
+  source = 'manual',
+  externalKey = null,
 }) {
   const ts = nowIso();
   const row = {
@@ -684,13 +696,15 @@ export function createProjectTask({
     assigneePersonaId,
     conversationId,
     runId,
+    source,
+    externalKey,
     createdAt: ts,
     updatedAt: ts,
   };
   db.prepare(
     `INSERT INTO project_tasks
-       (id, projectId, title, description, status, assigneePersonaId, conversationId, runId, createdAt, updatedAt)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, projectId, title, description, status, assigneePersonaId, conversationId, runId, source, externalKey, createdAt, updatedAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     row.id,
     row.projectId,
@@ -700,10 +714,18 @@ export function createProjectTask({
     row.assigneePersonaId,
     row.conversationId,
     row.runId,
+    row.source,
+    row.externalKey,
     row.createdAt,
     row.updatedAt,
   );
   return row;
+}
+
+/** 按去重键找这张卡（同一个 PR 巡检多次只该有一张） */
+export function getProjectTaskByExternalKey(projectId, externalKey) {
+  if (!externalKey) return null;
+  return db.prepare('SELECT * FROM project_tasks WHERE projectId = ? AND externalKey = ?').get(projectId, externalKey) ?? null;
 }
 
 export function listProjectTasks(projectId) {

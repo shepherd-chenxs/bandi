@@ -144,14 +144,17 @@ function flowRows(run) {
 }
 
 /**
- * 手工任务：一行 = 一张卡（没派人就只是张卡，派了人并"立即开始"才真的跑起来）。
- * 项目与全局共用；全局那边自己贴 `project_id`（手工卡一定挂在某个项目下）。
+ * 本地卡（存在 `project_tasks` 里的）：人在列头「＋」建的手工卡，与**仓库值班**写进来的卡。
+ * 同一族、同一张表 —— 都能拖（**卡的状态就是人给它的指令**）、都能删。
  */
+const SOURCE_TEXT = { manual: '手动', repo: '仓库值班' };
+
 function manualRows(t) {
   const persona = t.assigneePersonaId ? store.getPersona(t.assigneePersonaId) : null;
+  const source = t.source ?? 'manual';
   return {
-    source: 'manual',
-    source_text: '手动',
+    source,
+    source_text: SOURCE_TEXT[source] ?? '手动',
     task: clip(t.title, TASK_LIMIT),
     status: t.status,
     col: COL_OF_MANUAL[t.status] ?? 'other',
@@ -159,7 +162,9 @@ function manualRows(t) {
     assignee: persona?.name ?? '（没派活）',
     at: stamp(t.updatedAt),
     note: t.description ? clip(t.description, NOTE_LIMIT) : '手工建的任务',
+    // 行 id：拖拽 / 改状态 / 删卡都走它（手工卡与仓库值班卡共用这一套）
     manual_id: t.id,
+    external_key: t.externalKey ?? null,
     conversation_id: t.conversationId,
     run_id: t.runId,
   };
@@ -265,6 +270,7 @@ function board(rows, extra = {}) {
     total: sorted.length,
     chat_count: count((r) => r.source === 'chat'),
     manual_count: count((r) => r.source === 'manual'),
+    repo_count: count((r) => r.source === 'repo'),
     // 跟看板「停下等人」那一列**同一个口径**：那一列收流程的「已阻塞」和聊天的「已停止」
     // （平台语义上它们同类，见上面 COLUMNS 的注释）。口径不一致的话，
     // 概览写 1、列里站着 1 张却是"已停止"，人就会怀疑哪边错了

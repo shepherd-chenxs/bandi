@@ -1500,6 +1500,48 @@ async function handleProject(req, res, url) {
     return ok ? sendJson(res, 200, { ok: true }) : fail(res, 404, 'E2038', '任务不存在');
   }
 
+  /*
+   * **仓库值班写卡**（2026-10-17）：巡检（本机脚本；以后也可以是 Actions）把"要人管的事"
+   * 写进看板。为什么单开一条、不直接复用上面那个建卡接口：
+   *
+   *   ① **去重** —— 同一个 PR 巡检十次只该有一张卡（按 `projectId + externalKey` 找）；
+   *   ② **保护人的指令** —— 重复巡检只更新标题与描述，**状态一律不动**。卡的状态是人给的指令：
+   *      拖到「已完成」＝ 批准，删掉 ＝ 忽略。重跑一次把它弹回「待办」，是最招人烦的那种 bug。
+   *
+   * body：{ key, title, body }（key 必填，如 `pr:3` / `issue:2` / `note:branch-protection`）
+   */
+  const repoCards = /^\/api\/projects\/([^/]+)\/repo-cards$/.exec(url.pathname);
+  if (req.method === 'POST' && repoCards) {
+    const p = store.getProject(decodeURIComponent(repoCards[1]));
+    if (!p) return fail(res, 404, 'E2042', '项目不存在');
+    const body = await readBody(req);
+    const title = String(body.title ?? '').trim();
+    if (!title) return fail(res, 400, 'E1046', '卡要有标题');
+    const key = String(body.key ?? '').trim();
+    if (!key) {
+      return fail(res, 400, 'E1047', '卡要有去重键（如 pr:3 / issue:2 / note:xxx）—— 没有它每次巡检都会重复建卡');
+    }
+    const description = String(body.body ?? '').trim();
+    const existing = store.getProjectTaskByExternalKey(p.id, key);
+    if (existing) {
+      const changed = existing.title !== title || existing.description !== description;
+      return sendJson(res, 200, {
+        task: changed ? store.updateProjectTask(existing.id, { title, description }) : existing,
+        created: false,
+        changed,
+      });
+    }
+    const task = store.createProjectTask({
+      projectId: p.id,
+      title,
+      description,
+      status: '待办',
+      source: 'repo',
+      externalKey: key,
+    });
+    return sendJson(res, 201, { task, created: true, changed: true });
+  }
+
   if (req.method === 'POST' && url.pathname === '/api/projects') {
     const body = await readBody(req);
     const name = String(body.name ?? '').trim();

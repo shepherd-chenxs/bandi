@@ -3566,6 +3566,7 @@ async function openProjectDetail(id) {
                   ${stat('流程实例', data?.flow_count)}
                   ${stat('聊天派活', data?.chat_count)}
                   ${stat('手动', data?.manual_count)}
+                  ${data?.repo_count ? stat('仓库值班', data.repo_count) : ''}
                   ${stat('待人确认', data?.waiting_count)}
                   ${stat('停下等人', data?.blocked_count)}
                   ${stat('失败', data?.failed_count)}
@@ -3909,6 +3910,7 @@ async function openTaskBoard() {
                   ${stat('流程实例', data?.flow_count)}
                   ${stat('聊天派活', data?.chat_count)}
                   ${stat('手动', data?.manual_count)}
+                  ${data?.repo_count ? stat('仓库值班', data.repo_count) : ''}
                   ${stat('待人确认', data?.waiting_count)}
                   ${stat('停下等人', data?.blocked_count)}
                   ${stat('失败', data?.failed_count)}
@@ -3984,25 +3986,31 @@ function kbColumn(col) {
  *   · **手工卡可以拖到别的列**（改状态）—— 看板上最自然的手势，跟 Multica 一致
  */
 function kbCard(r) {
-  const manual = r.source === 'manual';
+  /*
+   * 「本地卡」= 存在 project_tasks 里的那些：手工建的（`manual`）与**仓库值班写进来的**（`repo`）。
+   * 同一族：都能拖（**拖到哪一列就是人给的指令**）、都能删（＝忽略）。
+   * 流程卡与聊天卡的状态归平台管，拖不动。
+   */
+  const local = r.source === 'manual' || r.source === 'repo';
   const jump = r.source === 'flow'
     ? `data-kb-flow="${esc(r.flow_id)}" data-kb-tpl="${esc(r.template_id || '')}"`
     : r.conversation_id
       ? `data-kb-conv="${esc(r.conversation_id)}"`
       : '';
-  const drag = manual
+  const drag = local
     ? `draggable="true" data-kb-manual="${esc(r.manual_id)}"`
     : '';
-  // 手工卡多一颗删除（拖错了、建错了要能撤）
-  const del = manual ? `<button class="kb-del" type="button" data-kb-del="${esc(r.manual_id)}" title="删掉这张卡">×</button>` : '';
+  // 本地卡多一颗删除（拖错了、建错了、不想管了要能撤）
+  const del = local ? `<button class="kb-del" type="button" data-kb-del="${esc(r.manual_id)}" title="删掉这张卡">×</button>` : '';
   // 全局面板的行才带 project_name（项目看板的行服务端已经摘掉了）——
   // 站在全局看，第一眼要知道的就是"这是哪个项目的活"
   const proj = r.project_name
     ? `<span class="kb-tag proj" title="属于哪个项目">${esc(r.project_name)}</span>`
     : '';
-  return `<article class="kb-card ${manual ? 'manual' : ''}" ${jump} ${drag} data-col="${esc(r.col)}" title="${esc(r.note || '')}">
+  const srcCls = r.source === 'chat' ? ' chat' : r.source === 'repo' ? ' repo' : local ? ' manual' : '';
+  return `<article class="kb-card ${local ? 'manual' : ''}" ${jump} ${drag} data-col="${esc(r.col)}" title="${esc(r.note || '')}">
     <div class="kb-card-top">
-      ${proj}<span class="kb-tag ${r.source === 'chat' ? 'chat' : ''}${manual ? ' manual' : ''}">${esc(r.source_text)}</span>
+      ${proj}<span class="kb-tag${srcCls}">${esc(r.source_text)}</span>
       <span class="kb-state">${esc(r.status)}</span>
       ${del}
     </div>
@@ -7531,6 +7539,22 @@ function tplUrl(s, ctx) {
   });
 }
 
+/**
+ * 工作台磁贴左上角那个**插件角标**：一块小拼块。
+ *
+ * 为什么要标：工作台是混排的 —— 「项目 / 任务看板 / 流程」是平台自带的，
+ * 「服务器与密钥 / 项目面板」是装进来的插件。光看磁贴长得一样，分不出哪个是一等功能、
+ * 哪个是插件。所以插件磁贴的图标左上角挂这个小块（平台自带的那几块不挂）。
+ *
+ * 用 svg 不用 emoji：emoji 在不同系统上样子差太多，还可能被字体吃掉。
+ * 形状跟一级栏「工作台」那颗（四个方块）同源，扫一眼就能对上是"插件"。
+ */
+const PLUGIN_BADGE_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round">
+  <rect x="3" y="3" width="7.6" height="7.6" rx="1.8" />
+  <rect x="13.4" y="3" width="7.6" height="7.6" rx="1.8" />
+  <rect x="3" y="13.4" width="7.6" height="7.6" rx="1.8" />
+</svg>`;
+
 /** 从接口返回里取数组：可以是数组本身，也可以 pick 某个键 */
 function pickItems(body, pick) {
   if (Array.isArray(body)) return body;
@@ -7632,7 +7656,7 @@ function renderWorkbenchGrid() {
                   ${items
                     .map(
                       (p) => `<button class="wb-tile" data-wb-open="${esc(p.id)}" title="${esc(p.description || p.label)}">
-                        <span class="wb-ico">${esc(initial(p.label))}</span>
+                        <span class="wb-ico is-plug">${esc(initial(p.label))}<i class="wb-badge" title="插件" aria-label="插件">${PLUGIN_BADGE_SVG}</i></span>
                         <span class="wb-name">${esc(p.label)}</span>
                       </button>`,
                     )
