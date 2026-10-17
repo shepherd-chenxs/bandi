@@ -442,9 +442,41 @@ export function startProjectTask(id) {
   return store.updateProjectTask(row.id, { status: '进行中', conversationId: conv, runId: run.id });
 }
 
+/**
+ * 运行跑完时把**卡片**的状态收一下（2026-10-17）。
+ *
+ * 为什么必须有这一步：原来卡片派活后状态永远停在「进行中」—— 人把运行停掉了，卡还写着「进行中」，
+ * 看板上看不出"这活已经停了、在等人处理"。
+ *
+ * 落点（用户定的口径，别改）：
+ *   · 跑完了（`完成`）        → **待确认**：等经办人确认结果；
+ *   · 人停的 / 跑挂了（`已停止` / `失败`） → **已阻塞**：进「停下等人」，管理员看到再处理。
+ *     ⚠️ **绝不回「待办」**：有些待办会被自动重新派活，失败一次就再派一次 —— 死循环。
+ *
+ * 只动"当前还是进行中"的卡：人已经手动改过状态（比如直接拖到已完成）就不覆盖 —— **卡的状态是人的指令**。
+ */
+export function onTaskRunFinished(run) {
+  if (!run?.id) return;
+  const task = store.getProjectTaskByRunId(run.id);
+  if (!task || task.status !== '进行中') return;
+  const next =
+    run.status === '完成' ? '待确认' : run.status === '已停止' || run.status === '失败' ? '已阻塞' : null;
+  if (!next) return;
+  const why =
+    run.status === '完成'
+      ? '跑完了，等你确认'
+      : run.status === '已停止'
+        ? '被人停掉了，等你处理'
+        : `跑挂了${run.error ? `：${String(run.error).split('\n')[0].slice(0, 200)}` : ''}`;
+  const descr = `${task.description ?? ''}`.trim();
+  store.updateProjectTask(task.id, {
+    status: next,
+    description: `${descr}${descr ? '\n\n' : ''}---\n[运行结束] ${why}`,
+  });
+}
+
 /** 改一张手工卡（状态 / 执行人 / 标题描述）。只动手工卡，流程与聊天的卡改不了这里。 */
-export function updateProjectTask(id, fields = {}) {
-  const cur = store.getProjectTask(id);
+export function updateProjectTask(id, fields = {}) {  const cur = store.getProjectTask(id);
   if (!cur) throw new Error('任务不存在');
   const patch = {};
   if (fields.title !== undefined) {

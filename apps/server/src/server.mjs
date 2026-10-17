@@ -21,7 +21,7 @@ import { dispatchToThread, personaRoots } from './dispatch.mjs';
 import * as workflows from './workflows.mjs';
 import * as quota from './quota.mjs';
 import * as status from './status.mjs';
-import { projectTasks, allTasks, createProjectTask, updateProjectTask, startProjectTask } from './project-tasks.mjs';
+import { projectTasks, allTasks, createProjectTask, updateProjectTask, startProjectTask, onTaskRunFinished } from './project-tasks.mjs';
 
 const webDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'web');
 
@@ -2093,6 +2093,9 @@ if (reaped) console.log(`清理了 ${reaped} 条被中断的运行`);
 // 工作流：内建模板保证存在；**把引擎挂在 run 完成点上** —— 推进由平台做，不靠数字员工自觉
 workflows.ensureBuiltInTemplate();
 runs.onRunFinish(workflows.onAgentRunFinished);
+// 任务卡同理（2026-10-17）：运行跑完/被停/跑挂了，卡不能永远挂在「进行中」——
+// 完成 → 待确认；人停的 / 跑挂的 → 已阻塞（**不回待办**，否则会被自动重新派活 → 死循环）
+runs.onRunFinish(onTaskRunFinished);
 // 进程重启会把在跑的执行判死（reapStaleRuns），可工作流的任务还写着「进行中」——
 // 那条任务就永远卡住了。所以启动时把这类任务也收尾，别让人对着一个假"进行中"等。
 const stuckTasks = store

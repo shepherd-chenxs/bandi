@@ -728,6 +728,17 @@ export function getProjectTaskByExternalKey(projectId, externalKey) {
   return db.prepare('SELECT * FROM project_tasks WHERE projectId = ? AND externalKey = ?').get(projectId, externalKey) ?? null;
 }
 
+/**
+ * 这次运行是哪张卡的（2026-10-17）。
+ *
+ * 用途：运行跑完时把卡的状态收一下（完成 → 待确认；人停的/跑挂的 → 已阻塞）。
+ * **回到「待办」是错的** —— 有些待办会被自动重新派活，失败一次就再派一次，等于死循环。
+ */
+export function getProjectTaskByRunId(runId) {
+  if (!runId) return null;
+  return db.prepare('SELECT * FROM project_tasks WHERE runId = ? ORDER BY updatedAt DESC LIMIT 1').get(runId) ?? null;
+}
+
 export function listProjectTasks(projectId) {
   return db
     .prepare('SELECT * FROM project_tasks WHERE projectId = ? ORDER BY createdAt DESC')
