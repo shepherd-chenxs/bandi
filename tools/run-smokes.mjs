@@ -75,6 +75,19 @@ if (unregistered.length || vanished.length) {
 
 /* ------------------------------------------------------------------ 开跑 */
 
+/*
+ * 先跑**前端的静态自检**（不需要浏览器）：路由表与 setRoute 调用必须对得上。
+ * 放这儿是因为 CI 只调这一个入口 —— 单开一个 workflow 步骤容易漏。
+ */
+const routes = spawnSync(process.execPath, [path.join(repo, 'tools', 'check-routes.mjs')], {
+  cwd: repo,
+  stdio: 'inherit',
+});
+if (routes.status !== 0) {
+  console.error('✗ 前端路由自检没过（见上）');
+  process.exit(1);
+}
+
 console.log(`跳过 ${Object.keys(SKIP).length} 个（要真实 CLI / 模型）：`);
 for (const [f, why] of Object.entries(SKIP)) console.log(`  · ${path.basename(f)} —— ${why}`);
 console.log(`\n跑 ${RUN.length} 个：`);

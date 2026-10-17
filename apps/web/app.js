@@ -3,6 +3,13 @@ const $ = (id) => document.getElementById(id);
 
 const S = {
   nav: 'messages',          // messages | contacts | skills | settings
+  /*
+   * **整站只有一个"我在哪儿"**（2026-10-17 统一路由）。形状：{ view, ...params }。
+   * 以前每加一个页面都要在 savePlace（逐字段）和 restorePlace（逐页 if/else）各登记一次，
+   * 忘了就"刷新记不住位置"—— 项目页 / 任务看板 / 流程实例 / 任务卡，四次都是这个病。
+   * 现在：存位置＝存这个对象；恢复＝openRoute(它)；新页面＝入口里一行 setRoute ＋ ROUTES 表一行。
+   */
+  route: null,
   filter: '',
   runtimes: [],
   personas: [],
@@ -48,11 +55,6 @@ const S = {
   projectList: false,       // 在看项目列表
   projectId: null,          // 在看哪个项目的看板
   boardAll: false,          // 在看<b>全局任务看板</b>（所有项目的活，工作台那个入口）
-  /*
-   * 在看哪张**任务卡详情页**（2026-10-17）。记它是因为：同一次会话里常常"看卡 → 回去看板 → 再回卡"，
-   * 更要紧的是**刷新之后要能回来** —— 这张页刚上线时按 F5 会掉回消息页（用户实报）。
-   */
-  taskCardId: null,
   // 看板的筛选：项目看板与全局面板**共用一套**（它们本来就是同一张看板换个范围）。
   // 现在只有"状态"这一维，空数组 = 不筛。切页面、刷新重画都不丢 —— 它就存在这儿。
   kbFilter: { statuses: [] },
@@ -112,30 +114,23 @@ const prefersLight = () => window.matchMedia('(prefers-color-scheme: light)').ma
  */
 const PLACE_KEY = 'bandi.place';
 
+/**
+ * 记下"我在哪儿"。
+ *
+ * **只存一个 route**（2026-10-17 统一路由）：以前是逐字段手写（nav / conversation / skill / plugin /
+ * project / taskBoard / taskCard / designer / flowMode / flowRun…），每加一个页面都要回来加一行，
+ * 忘了就刷新掉回消息页。现在只有一份 —— 加页面不用再动这个函数。
+ *
+ * 跟页面无关的界面状态（看板筛选）另存：它不是"位置"，但刷新后也该保持。
+ */
 function savePlace() {
   try {
     localStorage.setItem(
       PLACE_KEY,
       JSON.stringify({
-        nav: S.nav,
-        conversation: S.conversation?.id ?? null,
-        skill: S.skill ?? null,
-        plugin: S.plugin ?? null,
-        pluginRow: S.pluginRow ?? null,
-        // 项目页（列表 / 看板）——不记的话刷新就掉回工作台
-        projectList: S.projectList === true,
-        project: S.projectId ?? null,
-        taskBoard: S.boardAll === true,   // 全局任务看板（工作台那个入口）
-        // 任务卡详情页（2026-10-17）：不记的话按 F5 就掉回消息页（用户实报）
-        taskCard: S.taskCardId ?? null,
-        // 看板筛选：只记状态这一维（勾着「失败」按 F5 回来还是筛着的 —— 不然会以为功能坏了）
+        version: 2,
+        route: S.route ?? { view: S.nav },
         kbStatuses: S.kbFilter?.statuses ?? [],
-        designer: S.designerOpen ?? null,   // 当时在编排哪个模板
-        // 工作流有两种模式（编排模板 / 看某条发起记录），位置要分开记
-        flowMode: S.flowMode ?? 'design',
-        flowRun: S.flowMode === 'run' ? (S.flowRunId ?? null) : null,
-        flowTemplate: S.flowTemplate ?? null,
-        settingsSection: S.settingsSection ?? null,
       }),
     );
   } catch { /* 隐私模式下写不了就算了，不影响用 */ }
@@ -150,77 +145,106 @@ function readPlace() {
   }
 }
 
+/* ---------------------------------------------------------------- 路由 */
 /**
- * 启动时回到上次的位置。**回不去就退回消息页**——
- * 会话可能被移除、技能被删、插件被卸，存着的位置不一定还在。
+ * **所有页面的唯一注册表**：view 名字 → 打开它的函数（参数从 route 里取）。
+ *
+ * 新加一个页面：① 写一个 openXxx(params) ② 在它开头调 setRoute(view, params)
+ * ③ 在这里加一行。savePlace / restorePlace 都不用动 —— 这就是这次重构要解决的问题。
+ *
+ * 注意：具体页面（会话/项目/任务卡…）先 `setNav(..., { skipOpen: true })` 把一级栏摆好，
+ * 再调入口函数；不 skipOpen 的话 setNav 会先把默认页画一遍，两边抢着渲染。
  */
-async function restorePlace() {
-  const p = readPlace();
-  if (!p?.nav) return setNav('messages');
+const ROUTES = {
+  messages: () => setNav('messages'),
+  contacts: () => setNav('contacts'),
+  settings: ({ section } = {}) => {
+    S.settingsSection = section || 'prefs';
+    return setNav('settings');
+  },
+  skill: ({ name } = {}) => {
+    S.settingsSection = 'skills';
+    setNav('settings', { skipOpen: true });
+    return openSkill(name);
+  },
+  conversation: ({ id }) => {
+    setNav('messages', { skipOpen: true });
+    return openConversation(id);
+  },
+  persona: ({ id }) => {
+    setNav('contacts', { skipOpen: true });
+    return openDetail(id);
+  },
+  group: ({ id }) => {
+    setNav('contacts', { skipOpen: true });
+    return openGroupDetail(id);
+  },
+  workflows: ({ template } = {}) => {
+    setNav('workflows', { skipOpen: true });
+    return openWorkflows(template ?? null);
+  },
+  designer: ({ template } = {}) => {
+    setNav('workflows', { skipOpen: true });
+    return openDesigner(template ?? null);
+  },
+  flowRun: ({ template, run } = {}) => {
+    setNav('workflows', { skipOpen: true });
+    return openFlowRun(template, run);
+  },
+  plugins: () => {
+    setNav('plugins', { skipOpen: true });
+    return openPlugins();
+  },
+  plugin: ({ id, row } = {}) => {
+    setNav('plugins', { skipOpen: true });
+    S.plugin = id ?? null;
+    S.pluginRow = row ?? null;
+    return renderPluginPanel();
+  },
+  projects: () => {
+    setNav('plugins', { skipOpen: true });
+    return openProjectsPage();
+  },
+  project: ({ id } = {}) => {
+    setNav('plugins', { skipOpen: true });
+    return openProjectDetail(id);
+  },
+  taskBoard: () => {
+    setNav('plugins', { skipOpen: true });
+    return openTaskBoard();
+  },
+  taskCard: ({ id } = {}) => {
+    setNav('plugins', { skipOpen: true });
+    return openTaskCardPage(id);
+  },
+};
 
-  // 先把选中项塞进状态，再 setNav —— setNav 会按 nav 打开对应视图，那时就得有东西可开
-  if (p.skill) S.skill = p.skill;
-  if (p.settingsSection) S.settingsSection = p.settingsSection;
-  // 看板筛选也一起回来（存的是字符串数组；旧的/坏的就当没有）
-  if (Array.isArray(p.kbStatuses)) S.kbFilter.statuses = p.kbStatuses.filter((x) => typeof x === 'string');
-  if (p.plugin) {
-    S.plugin = p.plugin;
-    S.pluginRow = p.pluginRow ?? null;
+/**
+ * 打开"某个位置"。**整站唯一的分发点**。
+ *
+ * 恢复位置、以后可能的链接直达，都走它 —— 别在各处再写"如果 nav 是 X 就开 Y"的分支。
+ */
+function openRoute(route) {
+  const r = route && typeof route === 'object' && typeof route.view === 'string' ? route : { view: 'messages' };
+  const open = ROUTES[r.view];
+  if (!open) {
+    setNav('messages');
+    return Promise.resolve();
   }
+  return Promise.resolve(open(r));
+}
 
-  setNav(p.nav);
-
-  // setNav 之后再看情况落到具体那一项
-  try {
-    if (p.nav === 'plugins') {
-      // 项目页优先：它跟"选了哪个插件"是两条路（项目是平台功能，不是插件）
-      if (p.taskCard) {
-        // 任务卡详情页最具体，排最前 —— 它的父级是看板，先开看板会把这张页盖掉
-        await openTaskCardPage(p.taskCard);
-      } else if (p.taskBoard) {
-        // 全局任务看板（工作台 → 任务看板）—— 它没有"当前项目"，单独一条路
-        await openTaskBoard();
-      } else if (p.project) {
-        await openProjectsPage();
-        await openProjectDetail(p.project);
-      } else if (p.projectList) {
-        await openProjectsPage();
-      } else if (p.plugin) {
-        /*
-         * openPlugins 会清掉 S.plugin（它默认回宫格）；这里显式回到那个插件。
-         *
-         * ⚠️ **得自己先把插件清单拿到手**：`setNav('plugins')` 里的 openPlugins() 是
-         * 异步发起、没人 await 的，走到这儿 S.plugins 往往还是空的 ——
-         * renderPluginPanel 找不到这个插件就会「S.plugin = null + 回宫格」，
-         * 于是刷新一下插件面板就掉回工作台（用户 2026-10-14 实报的就是这个）。
-         */
-        if (!(S.plugins ?? []).length) {
-          try {
-            S.plugins = (await api('/api/plugins')).plugins ?? [];
-          } catch {
-            S.plugins = [];
-          }
-        }
-        S.plugin = p.plugin;
-        S.pluginRow = p.pluginRow ?? null;
-        await renderPluginPanel();
-      }
-    } else if (p.nav === 'messages' && p.conversation) {
-      await openConversation(p.conversation);
-      return;   // openConversation 自己会存位置
-    } else if (p.nav === 'workflows') {
-      // 工作流有两种模式，恢复到当时那个：
-      //   run    → 回到在看的那条发起记录（否则从工作台点进来一刷新就掉回工作台）
-      //   design → 回到在编排的那个模板
-      if (p.flowMode === 'run' && p.flowRun) await openFlowRun(p.flowTemplate, p.flowRun);
-      else if (p.designer) await openDesigner(p.designer);
-    }
-  } catch {
-    /* 位置重建失败就算了，停在列表页也挺好 */
-  }
+/**
+ * 记下"现在在看哪个具体页面"：入口函数在摆好界面之后调一次。
+ * setNav 也会顺手清掉它、并用 {view: nav} 兜底（见 savePlace）—— 所以最终存下来的永远是最具体的那个。
+ */
+function setRoute(view, params = {}) {
+  S.route = { view, ...params };
   savePlace();
 }
 
+/** 启动时回到上次的位置。**回不去就退回消息页**——
+ * 会话可能被移除、技能被删、插件被卸，存着的位置不一定还在。 */
 /** 把 'system' 解析成实际的 light/dark，写到 <html data-theme>；CSS 只认这个属性 */
 function applyTheme() {
   const resolved = S.theme === 'system' ? (prefersLight() ? 'light' : 'dark') : S.theme;
@@ -727,6 +751,8 @@ function syncContactsPoll() {
 
 function setNav(nav, opts = {}) {
   S.nav = nav;
+  // 一级栏只是兜底：具体页面的入口函数会在摆好后调 setRoute 覆盖成更具体的那个
+  S.route = null;
   // 离开工作台那一栏 = 离开项目列表 / 项目看板 / 全局面板 —— 顺手清掉。
   // 不清的话它们会一直挂着：位置记里留着一个"在看板"（刷新时那条路会被优先捡起来），
   // 而从看板点会话卡会切到消息页（那时看板状态就该结束）。这些标志只对工作台那一栏有意义。
@@ -780,6 +806,7 @@ function setNav(nav, opts = {}) {
 /* ---------------------------------------------------------------- 设置 */
 
 function openSettings(section) {
+  setRoute('settings', { section: section || S.settingsSection || 'prefs' });
   S.settingsSection = section || 'prefs';
   showView('settings');
   renderList();
@@ -3318,6 +3345,7 @@ async function openWorkflows(pickId = null) {
   setNav('workflows', { skipOpen: true });
   document.body.classList.remove('no-list');
   $('listTitle').textContent = '工作流';
+  setRoute('workflows', pickId ? { template: pickId } : {});
   $('listAction').classList.remove('hidden');
   $('listAction').title = '新建流程模板';
   $('search').closest('.list-search')?.classList.add('hidden');
@@ -3445,7 +3473,7 @@ function workbenchProjectSection() {
 }
 
 async function openProjectsPage() {
-  S.taskCardId = null; // 离开任务卡详情页（位置记忆只在那一页有效）
+  setRoute('projects');
   S.projects = (await api('/api/projects')).projects ?? [];
   const view = $('pluginView');
   view.classList.remove('kb-page'); // 列表页按普通长页面滚，不套看板那套满屏布局
@@ -3525,7 +3553,7 @@ function projectRow(p) {
  * 两者都能到，才叫"看得到、点得进去"；否则看板只是个只读报表。
  */
 async function openProjectDetail(id) {
-  S.taskCardId = null;
+  setRoute('project', { id });
   const view = $('pluginView');
   view.classList.add('kb-page'); // 这一页要满屏（见 style.css 的 #pluginView.kb-page）
   S.projectId = id;              // 位置记忆：刷新回到这个项目的看板
@@ -3900,10 +3928,10 @@ function wireBoard(view, { refresh, taskProject = () => null }) {
  * 「保存并开始工作」跟建卡时那个「立即开始」同一条服务端链路（`startProjectTask`）。
  */
 async function openTaskCardPage(taskId) {
+  setRoute('taskCard', { id: taskId });
   const view = $('pluginView');
   view.classList.add('kb-page'); // 这一页要满屏（见 style.css 的 #pluginView.kb-page）
   S.plugin = null;               // 任务卡不是插件，别让插件那条路抢走位置
-  S.taskCardId = taskId;         // 位置记忆：刷新回到这张卡（见 savePlace / restorePlace）
   S.projectList = false;
   S.boardAll = false;
   savePlace();
@@ -4004,16 +4032,8 @@ async function paintTaskCardPage(taskId) {
 
   const backTo = (proj ? () => openProjectDetail(proj.id) : () => openProjectsPage());
   // 离开这张卡就把位置记忆清掉：否则下一次刷新又会被拽回这张卡
-  const leaveTo = async () => {
-    S.taskCardId = null;
-    savePlace();
-    await backTo();
-  };
-  view.querySelector('[data-crumb-to="projects"]')?.addEventListener('click', () => {
-    S.taskCardId = null;
-    savePlace();
-    openProjectsPage().catch((e) => alert(e.message));
-  });
+  const leaveTo = async () => { await backTo(); };
+  view.querySelector('[data-crumb-to="projects"]')?.addEventListener('click', () => openProjectsPage().catch((e) => alert(e.message)));
   $('tcBack').onclick = () => leaveTo().catch((e) => alert(e.message));
   $('tcMsgs').scrollTop = $('tcMsgs').scrollHeight;
 
@@ -4163,7 +4183,7 @@ async function paintTaskCardPage(taskId) {
  * 右侧那栏换成**按项目分堆的概览**，点一行就钻进那个项目的看板（全局 → 单个）。
  */
 async function openTaskBoard() {
-  S.taskCardId = null;
+  setRoute('taskBoard');
   const view = $('pluginView');
   view.classList.add('kb-page'); // 跟项目看板一样满屏（同一套 CSS）
   S.boardAll = true;             // 位置记忆：刷新回到全局面板
@@ -4701,6 +4721,7 @@ async function openFlowRun(templateId, pickRunId) {
   setNav('workflows', { skipOpen: true });
   document.body.classList.remove('no-list');
   $('listTitle').textContent = '发起记录';
+  setRoute('flowRun', { template: templateId ?? null, run: pickRunId ?? S.flowRunId ?? null });
   // 左栏顶上的「＋」在这儿是**发起一条**（不是新建模板）
   $('listAction').classList.remove('hidden');
   $('listAction').title = '发起一条';
@@ -5746,6 +5767,7 @@ function hint(text) {
  */
 
 async function openDesigner(templateId = null) {
+  setRoute('designer', { template: templateId ?? null });
   const id = templateId || S.designerId || S.flowTemplates[0]?.id;
   if (!id) return alert('还没有流程模板');
   let tpl;
@@ -6159,6 +6181,7 @@ function removeNode(id) {
 /* ---------------------------------------------------------------- 技能 */
 
 async function openSkill(name) {
+  setRoute('skill', { name });
   const d = await api('/api/skills/' + encodeURIComponent(name));
   S.skill = d.skill;
   showView('settings'); // 技能现在住在「设置 → 技能」里，主区还是 settingsView
@@ -6720,6 +6743,7 @@ function setComposer(on) {
 }
 
 async function openConversation(id) {
+  setRoute('conversation', { id });
   // 换会话/刷新视图时，先把上一次的事件流停掉
   closeMentionPop();
   if (S.es) { S.es.close(); S.es = null; }
@@ -7145,6 +7169,7 @@ function insertMention(i) {
 /* -------------------------------------------------------------- 员工详情 */
 
 async function openDetail(personaId) {
+  setRoute('persona', { id: personaId });
   if (S.es) { S.es.close(); S.es = null; S.running = false; setBusy(false); }
   const d = await api('/api/personas/' + encodeURIComponent(personaId));
   S.persona = d.persona;
@@ -7796,6 +7821,7 @@ function paintGroupDetail(thread) {
 }
 
 async function openGroupDetail(threadId) {
+  setRoute('group', { id: threadId });
   const d = await api('/api/conversations/' + encodeURIComponent(threadId));
   // 先把抽屉清空：两边都渲染同一批 id（drawerSearch 等），同时存在必然打架
   closeDrawer();
@@ -7900,7 +7926,7 @@ let pluginResult = {};
  * 回来时若发现页面已被别的路径接管（选中了什么、或停在看板上）就不画宫格了。
  */
 async function openPlugins() {
-  S.taskCardId = null;
+  setRoute('plugins');
   S.plugin = null;
   S.projectList = false;   // 回宫格 = 离开项目页
   S.projectId = null;
@@ -7980,6 +8006,7 @@ function renderWorkbenchGrid() {
   $('pluginView').querySelectorAll('[data-wb-open]').forEach((el) => {
     el.onclick = () => {
       S.plugin = el.dataset.wbOpen;
+      setRoute('plugin', { id: S.plugin });
       S.pluginRow = null;      // 换插件了，上一个的选中行不适用
       S.projectList = false;   // 进插件 = 离开项目页（不然刷新会被项目那条路抢走）
       S.projectId = null;
