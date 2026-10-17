@@ -675,6 +675,8 @@ main { min-height: 0; }
         border: 1px solid var(--line); border-radius: 6px; padding: 1px 7px; }
 /* 员工详情上的「工作中」：跟通讯录的绿点一个语义，一眼能认出来 */
 .pill.busy { color: var(--ok); border-color: var(--ok); }
+/* 岗位（2026-10-17）：这人在团队里是什么 —— 比 runtime 更该被一眼看到，所以给它加一点分量 */
+.pill.role { color: var(--accent); border-color: var(--accent); }
 .pill-ok { display: inline-flex; align-items: center; gap: 5px;
            font-size: 11.5px; font-weight: 400; color: var(--ok); }
 .pill-ok::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }

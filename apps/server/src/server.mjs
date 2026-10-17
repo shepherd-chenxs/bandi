@@ -248,6 +248,8 @@ const routes = {
     // 现在的权威是 CLI 自己 —— 名字填错了它会报，班底替它把关只会把新模型挡在门外。
     const persona = store.createPersona({
       name,
+      // 岗位：自由文本、可空。**只用于看人/辨认，不参与派活**（引擎只认节点上点的名）
+      role: String(body.role ?? '').trim() || null,
       instructions: String(body.instructions ?? ''),
       runtime,
       sandbox: String(body.sandbox ?? 'danger-full-access'),
@@ -566,6 +568,8 @@ async function handlePersona(req, res, url) {
 
     const persona = store.updatePersona(id, {
       name,
+      // undefined = 这次没带这个字段；空串 = 显式清掉岗位
+      role: body.role === undefined ? undefined : String(body.role ?? '').trim() || null,
       instructions: String(body.instructions ?? ''),
       runtime,
       sandbox: body.sandbox ? String(body.sandbox) : undefined,

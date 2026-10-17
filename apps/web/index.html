@@ -95,6 +95,7 @@
   <form method="dialog">
     <b>新建数字员工</b>
     <label>名字</label><input id="pName" placeholder="例如：老周" />
+    <label>岗位</label><input id="pRole" list="roleSuggest" placeholder="比如：研发（留空也行）" />
     <label>职责与身份设定（作为这段对话的设定带进去）</label>
     <textarea id="pInstr" style="height:92px" placeholder="你是这个项目的研发。一次只推进一步，做完汇报。"></textarea>
     <div class="grid2">
@@ -378,6 +379,9 @@
     <div id="joinFoot" class="dim" style="font-size:11.5px;line-height:1.7;margin-top:10px;border-top:1px solid var(--line);padding-top:10px"></div>
   </form>
 </dialog>
+
+<!-- 岗位的建议列表：内容由 app.js 从 ROLE_SUGGEST 填（一处定义，别在 HTML 里再抄一份） -->
+<datalist id="roleSuggest"></datalist>
 
 <script src="/app.js"></script>
 </body>

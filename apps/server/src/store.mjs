@@ -173,6 +173,14 @@ ensureColumn('persona_skills', 'enabled', 'enabled INTEGER NOT NULL DEFAULT 1');
 ensureColumn('personas', 'rootDirs', 'rootDirs TEXT');
 
 /*
+ * **岗位**（2026-10-17）：这人在团队里**是什么**，跟"他会干什么"（技能）是两件事。
+ *   · 岗位：一个值、可空、自由文本（界面给建议列表）；技能可以有很多、能挂能摘。
+ *   · 用途：看人时一眼分清、人工指派时辨认。**引擎不读它** —— 派活仍只认节点上点的名
+ *     （见 workflows.assigneeFor；冒烟 smoke-personas.mjs 钉着这条）。
+ */
+ensureColumn('personas', 'role', 'role TEXT');
+
+/*
  * 这次运行**实际用的模型**。
  *
  * 为什么非要落库：额度是**按模型**算的（限额挂在模型上，因为贵/便宜分在模型 id 上，
@@ -808,18 +816,18 @@ export function getPersona(id) {
   return db.prepare('SELECT * FROM personas WHERE id = ?').get(id) ?? null;
 }
 
-export function createPersona({ name, instructions = '', runtime = 'codex', sandbox = 'danger-full-access', cwd = null, model = null, showThinking = 0, rootDirs = [] }) {
+export function createPersona({ name, role = null, instructions = '', runtime = 'codex', sandbox = 'danger-full-access', cwd = null, model = null, showThinking = 0, rootDirs = [] }) {
   const row = {
-    id: newId('p'), name, instructions, runtime, sandbox, cwd, model,
+    id: newId('p'), name, role, instructions, runtime, sandbox, cwd, model,
     showThinking: showThinking ? 1 : 0,
     rootDirs: Array.isArray(rootDirs) && rootDirs.length ? JSON.stringify(rootDirs) : null,
     createdAt: nowIso(),
   };
   db.prepare(
-    `INSERT INTO personas (id, name, instructions, runtime, sandbox, cwd, model, showThinking, rootDirs, createdAt)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO personas (id, name, role, instructions, runtime, sandbox, cwd, model, showThinking, rootDirs, createdAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
-    row.id, row.name, row.instructions, row.runtime, row.sandbox, row.cwd, row.model,
+    row.id, row.name, row.role, row.instructions, row.runtime, row.sandbox, row.cwd, row.model,
     row.showThinking, row.rootDirs, row.createdAt,
   );
   return row;
@@ -878,6 +886,8 @@ export function updatePersona(id, fields) {
   if (!current) return null;
   const next = {
     name: fields.name ?? current.name,
+    // 岗位：跟 model 一个口径 —— undefined = 没提供；空串/null = 显式清掉
+    role: fields.role === undefined ? current.role : (String(fields.role ?? '').trim() || null),
     instructions: fields.instructions ?? current.instructions,
     runtime: fields.runtime ?? current.runtime,
     sandbox: fields.sandbox ?? current.sandbox,
@@ -891,10 +901,10 @@ export function updatePersona(id, fields) {
         : (Array.isArray(fields.rootDirs) && fields.rootDirs.length ? JSON.stringify(fields.rootDirs) : null),
   };
   db.prepare(
-    `UPDATE personas SET name = ?, instructions = ?, runtime = ?, sandbox = ?, cwd = ?, model = ?, showThinking = ?, rootDirs = ?
+    `UPDATE personas SET name = ?, role = ?, instructions = ?, runtime = ?, sandbox = ?, cwd = ?, model = ?, showThinking = ?, rootDirs = ?
       WHERE id = ?`,
   ).run(
-    next.name, next.instructions, next.runtime, next.sandbox, next.cwd, next.model,
+    next.name, next.role, next.instructions, next.runtime, next.sandbox, next.cwd, next.model,
     next.showThinking, next.rootDirs, id,
   );
   return { ...current, ...next };

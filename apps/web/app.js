@@ -232,6 +232,27 @@ window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', ()
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
+/*
+ * 岗位（2026-10-17）：这人在团队里**是什么**，跟"他会干什么"（技能）是两件事。
+ *   · 一个值、可空、自由文本（表单给建议列表，不锁枚举 —— 组织会变）；
+ *   · 用在看人、看板、**人工指派时辨认**这几处；
+ *   · **引擎不读它** —— 派活仍只认流程节点上点的名（见 workflows.assigneeFor）。
+ * 这里只放"怎么显示/怎么拼标签"两件小事，判断逻辑一律在服务端。
+ */
+const ROLE_SUGGEST = ['产品', '研发', '测试', '运维', '架构', '设计', '项目'];
+
+// 建议列表只此一份：填进 #roleSuggest（新建对话框与员工详情共用一个 datalist）
+{
+  const dl = document.getElementById('roleSuggest');
+  if (dl) dl.innerHTML = ROLE_SUGGEST.map((r) => `<option value="${esc(r)}"></option>`).join('');
+}
+
+/** 人员下拉里的标签：有岗位就 `研发 · 波哥`，没岗位就只有名字 */
+const personLabel = (p) => (p.role ? `${p.role} · ${p.name}` : p.name);
+
+/** 通讯录那一行的副标题：有岗位显示岗位，没岗位退回运行时（sandbox 是技术细节，只在详情里） */
+const personSubtitle = (p) => (p.role ? `${p.role} · ${p.runtime}` : String(p.runtime ?? ''));
+
 /* ------------------------------------------------------------ 对话框通用件 */
 
 /**
@@ -3142,7 +3163,7 @@ function renderList() {
         <div class="avatar">${esc(initial(p.name))}</div>
         <div class="who">
           <div class="line1"><b>${esc(p.name)}</b></div>
-          <div class="line2">${esc(p.runtime)} · ${esc(p.sandbox)}</div>
+          <div class="line2">${esc(personSubtitle(p))}</div>
         </div>
         <i class="dot ${p.busy ? 'busy' : ''}" title="${p.busy ? '正在干活' : '现在闲着'}"></i>
       </div>`,
@@ -4068,7 +4089,7 @@ function taskDialog(project, colKey) {
       });
   const whoCombo = createCombo({
     mount: $('tkWhoMount'),
-    items: [{ id: '', label: '不派活' }, ...(S.personas ?? []).map((p) => ({ id: p.id, label: p.name }))],
+    items: [{ id: '', label: '不派活' }, ...(S.personas ?? []).map((p) => ({ id: p.id, label: personLabel(p) }))],
     value: '',
     search: true,
     placeholder: '搜数字员工…',
@@ -5012,7 +5033,7 @@ function wireRun(v) {
     const backTo = cur.assigneePersonaId ?? '';
     assignCombo = createCombo({
       mount: assignMount,
-      items: (S.personas ?? []).map((p) => ({ id: p.id, label: p.name })),
+      items: (S.personas ?? []).map((p) => ({ id: p.id, label: personLabel(p) })),
       value: backTo,
       blank: '没人',
       // 人多了就得能搜 —— 用词跟流程设计里那个人选下拉（mountAssigneePicker）保持一致
@@ -5555,7 +5576,7 @@ function mountAssigneePicker(view, sel) {
     placeholder: '搜名字…',
     empty: '没有匹配的人',
     value: sel.personaId || '',
-    items: [{ id: '', label: '不指定' }].concat((S.personas ?? []).map((p) => ({ id: p.id, label: p.name }))),
+    items: [{ id: '', label: '不指定' }].concat((S.personas ?? []).map((p) => ({ id: p.id, label: personLabel(p) }))),
     onChange: (id) => {
       const n = nodeOf(S.designerSel);
       if (!n) return;
@@ -6853,7 +6874,7 @@ function renderDetail({ persona, runtimes, runs, platformRoot, skills: personaSk
       <div class="p-head">
         <div class="avatar">${esc(initial(persona.name))}</div>
         <div class="p-head-main">
-          <h2>${esc(persona.name)}<span class="pill">${esc(rt ? rt.label : persona.runtime)}</span>${
+          <h2>${esc(persona.name)}${persona.role ? `<span class="pill role">${esc(persona.role)}</span>` : ''}<span class="pill">${esc(rt ? rt.label : persona.runtime)}</span>${
             persona.busy
               ? `<span class="pill busy" id="dBusy" title="${esc(persona.busyLabel ?? '正在干活')}">${
                   persona.busyLabel ? '工作中·' + esc(persona.busyLabel) : '工作中'
@@ -6886,6 +6907,13 @@ function renderDetail({ persona, runtimes, runs, platformRoot, skills: personaSk
           <div class="form-row">
             <div class="row-label">名字</div>
             <input id="dName" value="${esc(persona.name)}" />
+          </div>
+          <div class="form-row">
+            <div class="row-label">岗位</div>
+            <div>
+              <input id="dRole" list="roleSuggest" placeholder="比如：研发（留空也行）" value="${esc(persona.role || '')}" />
+              <div class="counter left">他在团队里是干什么的（一个值）。技能是"他会干什么"，可以挂很多个；引擎派活只认流程节点上点的名，不看岗位。</div>
+            </div>
           </div>
           <div class="form-row top">
             <div class="row-label">职责与身份设定</div>
@@ -7093,6 +7121,7 @@ function renderDetail({ persona, runtimes, runs, platformRoot, skills: personaSk
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: $('dName').value,
+          role: $('dRole').value,
           instructions: $('dInstr').value,
           runtime: rtCombo.value(),
           sandbox: sbCombo.value(),
@@ -8530,7 +8559,7 @@ function renderGroupMembers() {
       return `<label class="member${isAssistant ? ' locked' : ''}">
         <input type="checkbox" value="${p.id}" ${isAssistant ? 'checked disabled' : ''} />
         <span>${esc(p.name)}${isAssistant ? '<em class="tag-inline">群助手</em>' : ''}</span>
-        <em>${esc(p.runtime)} · ${esc(p.sandbox)}</em>
+        <em>${esc(personSubtitle(p))}</em>
       </label>`;
     })
     .join('');
@@ -8539,7 +8568,7 @@ function renderGroupMembers() {
 function openGroupDialog() {
   if (!S.personas.length) return alert('先建至少一个数字员工，群里只能放数字员工');
   $('gTitle').value = '';
-  gAssistantCombo.setItems(S.personas.map((p) => ({ id: p.id, label: p.name })), false);
+  gAssistantCombo.setItems(S.personas.map((p) => ({ id: p.id, label: personLabel(p) })), false);
   gAssistantCombo.setValue(S.personas[0]?.id ?? '');
   renderGroupMembers();
   $('groupDlg').showModal();
@@ -8647,11 +8676,11 @@ $('pOk').onclick = async (e) => {
   e.preventDefault();
   try {
     const d = await post('/api/personas', {
-      name: $('pName').value, instructions: $('pInstr').value,
+      name: $('pName').value, role: $('pRole').value, instructions: $('pInstr').value,
       runtime: pRuntimeCombo.value(), sandbox: pSandboxCombo.value(), cwd: $('pCwd').value,
     });
     $('personaDlg').close();
-    $('pName').value = ''; $('pInstr').value = '';
+    $('pName').value = ''; $('pRole').value = ''; $('pInstr').value = '';
     await load();
     // 建完停在详情，好让人接着配他（要聊再点「发消息」）
     await openDetail(d.persona.id);
