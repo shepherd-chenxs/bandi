@@ -801,6 +801,28 @@ main { min-height: 0; }
 .counter.left { text-align: left; }
 .is-hidden { display: none !important; }
 
+/* ---------- 标题旁的「?」说明（2026-10-17，先用在「代码托管 → GitHub 连接」） ----------
+   走悬停 title 的小说明全站有的是（"从列表移除"那类），但**分步骤的操作流**
+   （去哪建、勾什么权限）悬浮看不完：鼠标一挪就没了。所以点开留得住，能照着做。
+   ⚠️ .group-title 是 600 字重 + 13px，弹出层继承下来会又粗又大 —— 自己压回 400/11.5px。 */
+.help-wrap { position: relative; display: inline-flex; vertical-align: middle; }
+.help-btn { width: 17px; height: 17px; padding: 0; margin-left: 5px;
+            border: 0; background: transparent; color: var(--dim);
+            display: grid; place-items: center; cursor: pointer; }
+.help-btn svg { width: 13px; height: 13px; }
+/* hover 只提亮、不换底：它是"字里行间的一个提示"，不该长得像一颗按钮 */
+.help-btn:hover, .help-btn.on { color: var(--accent); }
+.help-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 50%; }
+.help-pop { position: absolute; z-index: 20; top: calc(100% + 8px); left: 0;
+            width: max-content; max-width: min(380px, 68vw);
+            padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px;
+            background: var(--panel); box-shadow: 0 10px 28px var(--shadow);
+            font-size: 11.5px; font-weight: 400; color: var(--dim);
+            line-height: 1.8; text-align: left; cursor: default; }
+/* 说明里那条外链：跟着 --link，别用默认的主题蓝实心底 */
+.help-link { display: inline-block; margin-top: 6px; color: var(--link); }
+.help-link:hover { text-decoration: underline; }
+
 /* ---------- 模型设置：左选运行时 / 右列模型 ---------- */
 .ms-toolbar { display: flex; justify-content: flex-end; gap: 8px; margin-bottom: 14px; }
 /* 左右同一个卡片：左边列表靠一条竖线分开，而不是各套一张卡 */
@@ -1355,6 +1377,8 @@ dialog::backdrop { background: var(--scrim); }
 .kb-tag.chat { color: var(--accent); border-color: var(--accent); }
 /* 仓库值班写进来的卡（2026-10-17）：跟聊天卡区分开，一眼知道"这是巡检提上来的" */
 .kb-tag.repo { color: var(--warn); border-color: var(--warn); }
+/* PR 联动：任务卡上那枚 PR 状态（跟 .proj 区分开，别用前缀判断） */
+.kb-tag.pr { color: var(--accent); border-color: var(--accent); }
 /* 全局面板：卡片上那枚「属于哪个项目」的标签（项目看板的行不带它）。
    项目名可能很长，截断成一行 —— 完整名字在 title 里 */
 .kb-tag.proj { color: var(--ok); border-color: var(--ok);

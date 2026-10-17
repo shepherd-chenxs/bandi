@@ -475,6 +475,20 @@ export function onTaskRunFinished(run) {
   });
 }
 
+/**
+ * PR 合并后把卡收一下（2026-10-17）：**只把「进行中」改成「待确认」**。
+ *
+ * 为什么不直接「已完成」：卡的状态是**人给的指令**（合并 ≠ 验收通过）。
+ * 其他状态一律不动 —— 人已经拖到「已完成」的，别覆盖。
+ */
+export function afterMerged(task) {
+  if (!task) return task;
+  if (task.prState === 'merged' && task.status === '进行中') {
+    return store.updateProjectTask(task.id, { status: '待确认' });
+  }
+  return task;
+}
+
 /** 改一张手工卡（状态 / 执行人 / 标题描述）。只动手工卡，流程与聊天的卡改不了这里。 */
 export function updateProjectTask(id, fields = {}) {  const cur = store.getProjectTask(id);
   if (!cur) throw new Error('任务不存在');

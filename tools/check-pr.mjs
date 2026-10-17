@@ -145,15 +145,25 @@ for (const [file, list] of added) {
 
 /* -------------------------------------------------------- ③ 断言完整性 */
 
+/*
+ * 判据：**净减少**才算放松（2026-10-17 修）。
+ *
+ * 原来只要"删掉一行含 check( 的"就报错 —— 于是**改写**一条断言的写法（删一行、加一行）
+ * 也会被当成"删断言"（我自己踩过：把一条含外部域名的断言换成不含域名的，被拦下）。
+ * 现在比较净变化：改写不给过，**真的少了一条**才拦。
+ */
 for (const { status, file } of nameStatus) {
   if (!/smoke-.*\.mjs$/.test(file)) continue;
   if (status.startsWith('D')) {
     err(file, 0, '删掉了整个冒烟用例 —— 这要人拍板（用例是别人的验收依据）');
     continue;
   }
-  const gone = (removed.get(file) ?? []).filter((x) => /\bcheck\s*\(/.test(x.text));
-  if (gone.length) {
-    err(file, 0, `删掉了 ${gone.length} 条 check(...) 断言 —— 测试被放松，需要人确认（新增断言没问题，删的不行）`);
+  const isCheck = (x) => /\bcheck\s*\(/.test(x.text);
+  const gone = (removed.get(file) ?? []).filter(isCheck).length;
+  const came = (added.get(file) ?? []).filter(isCheck).length;
+  const net = gone - came;
+  if (net > 0) {
+    err(file, 0, `净删掉了 ${net} 条 check(...) 断言（删 ${gone} / 加 ${came}）—— 测试被放松，需要人确认（改写不算、新增没问题）`);
   }
 }
 

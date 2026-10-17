@@ -758,7 +758,8 @@ export function updateProjectTask(id, fields) {
   db.prepare(
     `UPDATE project_tasks
         SET title = ?, description = ?, status = ?, assigneePersonaId = ?,
-            conversationId = ?, runId = ?, updatedAt = ?
+            conversationId = ?, runId = ?, prRepo = ?, prNumber = ?, prState = ?, prTitle = ?,
+            prCheckedAt = ?, updatedAt = ?
       WHERE id = ?`,
   ).run(
     next.title,
@@ -767,6 +768,11 @@ export function updateProjectTask(id, fields) {
     next.assigneePersonaId,
     next.conversationId,
     next.runId,
+    next.prRepo ?? null,
+    next.prNumber ?? null,
+    next.prState ?? null,
+    next.prTitle ?? null,
+    next.prCheckedAt ?? null,
     nowIso(),
     id,
   );
@@ -2325,4 +2331,20 @@ export function touchGitRepoSync(id) {
 
 export function deleteGitRepo(id) {
   return db.prepare('DELETE FROM git_repos WHERE id = ?').run(id).changes > 0;
+}
+
+/* ---------------------------------------------------------------- PR 联动（2026-10-17） */
+/*
+ * 一张卡可以关联一个 GitHub PR。状态由**平台去 GitHub 查**后存这儿（看板/详情页直接读，
+ * 不在渲染时调 API）。合并后**不自动"已完成"** —— 转「待确认」，等经办人确认。
+ */
+ensureColumn('project_tasks', 'prRepo', 'prRepo TEXT');
+ensureColumn('project_tasks', 'prNumber', 'prNumber INTEGER');
+ensureColumn('project_tasks', 'prState', 'prState TEXT');      // open | merged | closed
+ensureColumn('project_tasks', 'prTitle', 'prTitle TEXT');
+ensureColumn('project_tasks', 'prCheckedAt', 'prCheckedAt TEXT');
+
+/** 所有关联了 PR 的卡（批量刷新用） */
+export function listProjectTasksWithPr() {
+  return db.prepare('SELECT * FROM project_tasks WHERE prRepo IS NOT NULL AND prNumber IS NOT NULL').all();
 }

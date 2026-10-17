@@ -310,3 +310,29 @@ export function agentEnv() {
   env.GCM_INTERACTIVE = 'never';
   return env;
 }
+
+/* ---------------------------------------------------------------- PR 联动 */
+
+/** 从「PR 链接」或「owner/name#123」解析 { repo, number }；解析不出返回 null */
+export function parsePrRef(input) {
+  const s = String(input ?? '').trim();
+  let m = /^https?:\/\/github\.com\/([^/\s]+)\/([^/\s]+)\/pull\/(\d+)/i.exec(s);
+  if (m) return { repo: `${m[1]}/${m[2]}`, number: Number(m[3]) };
+  m = /^([\w.-]+\/[\w.-]+)#(\d+)$/.exec(s);
+  if (m) return { repo: m[1], number: Number(m[2]) };
+  return null;
+}
+
+/** 查一个 PR 的当前状态（走平台令牌）；state 归一成 open / merged / closed */
+export async function fetchPull(repo, number) {
+  const pr = await ghFetch(`/repos/${repo}/pulls/${number}`);
+  return {
+    repo,
+    number: Number(number),
+    title: pr.title ?? '',
+    state: pr.merged ? 'merged' : pr.state === 'open' ? 'open' : 'closed',
+    mergedAt: pr.merged_at ?? null,
+    url: pr.html_url ?? `https://github.com/${repo}/pull/${number}`,
+    headRef: pr.head?.ref ?? null,
+  };
+}
