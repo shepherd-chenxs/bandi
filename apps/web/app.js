@@ -6390,17 +6390,16 @@ async function renderGitRepos() {
     <div class="form-row top">
       <div class="row-label">令牌</div>
       <div>
-        <input id="gitToken" type="password" placeholder="粘贴 fine-grained PAT（只填一次，之后只显示后 4 位）" autocomplete="off" />
+        <div class="row-with-btn">
+          <input id="gitToken" type="password" placeholder="粘贴 fine-grained PAT（只填一次，之后只显示后 4 位）" autocomplete="off" />
+          <button class="primary" id="gitConnect">连接 GitHub</button>
+        </div>
         <div class="counter left">
           在 GitHub 建：Settings → Developer settings → Personal access tokens → <b>Fine-grained tokens</b>；
           权限勾 <b>Contents: Read and write</b>（要开 PR 再加 <b>Pull requests: Read and write</b>）；
           Repository access 选你要接入的那几个仓库。令牌只存在本机数据目录，不进日志。
         </div>
       </div>
-    </div>
-    <div class="dlg-actions" style="margin-top:10px">
-      <button class="primary" id="gitConnect">连接 GitHub</button>
-      ${st.connected ? '<button id="gitDisconnect">断开</button>' : ''}
     </div>`;
 
   const repoRow = (r) => `
