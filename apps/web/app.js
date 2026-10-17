@@ -828,6 +828,7 @@ function openSettings(section) {
   if (S.settingsSection === 'plugins') return renderPlugins();
   if (S.settingsSection === 'quota') return renderQuota();
   if (S.settingsSection === 'skills') return renderSkillCards();
+  if (S.settingsSection === 'code') return renderGitRepos();
   if (S.settingsSection !== 'prefs') return;
 
   const opts = [
@@ -3151,6 +3152,7 @@ function renderList() {
       // 左栏在这儿**始终是分节列表**，技能列表画在主区（见 renderSkillCards）——
       // 换一种做法（点技能后左栏变成技能列表）会让分节列表消失，就回不到别的节了。
       ['skills', '技能', '给数字员工用的能力包'],
+      ['code', '代码托管', '连接 GitHub、接入仓库'],
     ];
     $('listBody').innerHTML = items
       .map(
@@ -6213,6 +6215,237 @@ async function openSkill(name) {
  *
  * 「＋」也在这儿（`#listAction` 那个在设置页是隐藏的，见 setNav）。
  */
+/**
+ * 「设置 → 代码托管」（2026-10-17）。
+ *
+ * 用户：我有很多个 git 仓库 —— 所以这里是一张**仓库清单**：
+ *   连接 GitHub（fine-grained PAT）→ 从账号里挑仓库接入（克隆到数据目录）→ 数字员工在那个目录里干活。
+ * 项目 / 任务卡引用仓库，不把每个仓库硬变成项目。
+ *
+ * 安全：令牌只存平台、只回显后 4 位；克隆/拉取走请求头带令牌（`.git/config` 里不留带令牌的 URL）。
+ */
+async function renderGitRepos() {
+  const view = $('settingsView');
+  showView('settings');
+  renderList();
+  view.innerHTML = '<div class="empty" style="padding:24px 4px">取代码托管状态…</div>';
+
+  let st;
+  try {
+    st = await api('/api/git/status');
+  } catch (e) {
+    view.innerHTML = `<div class="empty" style="padding:24px 4px">取不到：${esc(e.message)}</div>`;
+    return;
+  }
+  const repos = st.repos ?? [];
+  const hint = st.hint ? `令牌 ${st.hint}` : '';
+
+  const tokenForm = `
+    <div class="form-row top">
+      <div class="row-label">令牌</div>
+      <div>
+        <input id="gitToken" type="password" placeholder="粘贴 fine-grained PAT（只填一次，之后只显示后 4 位）" autocomplete="off" />
+        <div class="counter left">
+          在 GitHub 建：Settings → Developer settings → Personal access tokens → <b>Fine-grained tokens</b>；
+          权限勾 <b>Contents: Read and write</b>（要开 PR 再加 <b>Pull requests: Read and write</b>）；
+          Repository access 选你要接入的那几个仓库。令牌只存在本机数据目录，不进日志。
+        </div>
+      </div>
+    </div>
+    <div class="dlg-actions" style="margin-top:10px">
+      <button class="primary" id="gitConnect">连接 GitHub</button>
+      ${st.connected ? '<button id="gitDisconnect">断开</button>' : ''}
+    </div>`;
+
+  const repoRow = (r) => `
+    <div class="sk-row">
+      <div class="sk-main">
+        <b>${esc(r.fullName)}</b>
+        ${r.isPrivate ? '<span class="pill">私有</span>' : ''}
+        <div class="sk-desc">${esc(r.localPath)}${r.lastSyncAt ? ` · 上次同步 ${esc(String(r.lastSyncAt).replace('T', ' ').slice(0, 16))}` : ''}</div>
+      </div>
+      <button class="mini auto" data-git-project="${esc(r.id)}" title="用这个仓库建一个项目（工作目录就是克隆目录）">建成项目</button>
+      <button class="mini auto" data-git-sync="${esc(r.id)}" title="git pull --ff-only">同步</button>
+      <button class="mini auto" data-git-remove="${esc(r.id)}" title="只移除记录，本地目录保留">移除</button>
+    </div>`;
+
+  view.innerHTML = `
+    <div class="detail-head"><b>代码托管</b>
+      <span class="dim" style="font-size:12.5px;margin-left:8px">连接 GitHub、把仓库接进来给数字员工用</span>
+    </div>
+    <div class="detail-body">
+      <section class="group">
+        <div class="group-title">GitHub 连接</div>
+        ${
+          st.connected
+            ? `<div class="form-row"><div class="row-label">状态</div><div>
+                 <b style="color:var(--ok)">已连接</b>${st.login ? ` —— @${esc(st.login)}` : ''}
+                 ${hint ? `<span class="dim" style="margin-left:8px">${esc(hint)}</span>` : ''}
+               </div></div>
+               <div class="dlg-actions"><button id="gitDisconnect">断开连接</button></div>`
+            : tokenForm
+        }
+      </section>
+
+      <section class="group">
+        <div class="group-title">已接入的仓库 <span class="dim" style="font-weight:400">${repos.length} 个</span></div>
+        ${repos.length ? repos.map(repoRow).join('') : '<div class="sk-blank">还没接入仓库。连上 GitHub 之后，在下面「从 GitHub 添加」里挑。</div>'}
+      </section>
+
+      ${
+        st.connected
+          ? `<section class="group">
+               <div class="group-title">从 GitHub 添加</div>
+               <input id="gitFilter" placeholder="搜仓库名…（账号下的仓库，按最近更新排）" style="margin:8px 0" />
+               <div id="gitAvail"><div class="sk-blank">拉取中…</div></div>
+             </section>`
+          : ''
+      }
+    </div>`;
+
+  const refresh = () => renderGitRepos();
+
+  $('gitConnect')?.addEventListener('click', async (e) => {
+    e.preventDefault();
+    const token = $('gitToken').value.trim();
+    if (!token) return alert('先把令牌粘进来');
+    const btn = $('gitConnect');
+    btn.disabled = true;
+    btn.textContent = '验证中…';
+    try {
+      const r = await api('/api/git/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token }),
+      });
+      alert(`已连接：@${r.login}`);
+      await refresh();
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = '连接 GitHub';
+      alert(err.message);
+    }
+  });
+  $('gitDisconnect')?.addEventListener('click', async (e) => {
+    e.preventDefault();
+    if (!confirm('断开 GitHub？已接入的仓库记录和本地克隆都保留。')) return;
+    try {
+      await api('/api/git/token', { method: 'DELETE' });
+      await refresh();
+    } catch (err) {
+      alert(err.message);
+    }
+  });
+
+  // 已接入仓库的三个动作
+  view.querySelectorAll('[data-git-sync]').forEach((el) => {
+    el.onclick = async (e) => {
+      e.preventDefault();
+      el.disabled = true;
+      el.textContent = '同步中…';
+      try {
+        await api(`/api/git/repos/${encodeURIComponent(el.dataset.gitSync)}/sync`, { method: 'POST' });
+        await refresh();
+      } catch (err) {
+        el.disabled = false;
+        el.textContent = '同步';
+        alert(err.message);
+      }
+    };
+  });
+  view.querySelectorAll('[data-git-remove]').forEach((el) => {
+    el.onclick = async (e) => {
+      e.preventDefault();
+      if (!confirm('从清单移除这个仓库？（只删记录，本地克隆目录保留，里面可能有你没推的东西）')) return;
+      try {
+        const r = await api(`/api/git/repos/${encodeURIComponent(el.dataset.gitRemove)}`, { method: 'DELETE' });
+        alert(`已移除。本地目录还在：${r.keptPath}`);
+        await refresh();
+      } catch (err) {
+        alert(err.message);
+      }
+    };
+  });
+  view.querySelectorAll('[data-git-project]').forEach((el) => {
+    el.onclick = async (e) => {
+      e.preventDefault();
+      const repo = repos.find((r) => r.id === el.dataset.gitProject);
+      if (!repo) return;
+      // 项目名用 owner/name，免得两个仓库同名（比如都有 README 那个 common）
+      try {
+        const d = await api('/api/projects', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: repo.fullName, root: repo.localPath }),
+        });
+        await load();
+        alert(`项目已建好：${repo.fullName}`);
+        if (d.project?.id) await openProjectDetail(d.project.id);
+      } catch (err) {
+        alert(err.message);
+      }
+    };
+  });
+
+  // 从 GitHub 选仓库
+  if (st.connected) {
+    let available = [];
+    try {
+      available = (await api('/api/git/available')).repos ?? [];
+    } catch (e) {
+      $('gitAvail').innerHTML = `<div class="empty" style="padding:12px 4px">拉不到仓库清单：${esc(e.message)}</div>`;
+      return;
+    }
+    const drawAvail = (q = '') => {
+      const kw = q.trim().toLowerCase();
+      const list = available.filter((r) => !kw || r.fullName.toLowerCase().includes(kw));
+      $('gitAvail').innerHTML = list.length
+        ? list
+            .map(
+              (r) => `<div class="sk-row">
+                <div class="sk-main">
+                  <b>${esc(r.fullName)}</b>
+                  ${r.isPrivate ? '<span class="pill">私有</span>' : ''}
+                  <div class="sk-desc">${esc(r.description || r.language || '')}${
+                    r.connected ? ' · 已接入' : ''
+                  }</div>
+                </div>
+                ${
+                  r.connected
+                    ? '<span class="pill">已接入</span>'
+                    : `<button class="mini auto primary" data-git-add="${esc(r.fullName)}">接入</button>`
+                }
+              </div>`,
+            )
+            .join('')
+        : '<div class="sk-blank">没有匹配的仓库</div>';
+      $('gitAvail').querySelectorAll('[data-git-add]').forEach((el) => {
+        el.onclick = async (e) => {
+          e.preventDefault();
+          const fullName = el.dataset.gitAdd;
+          el.disabled = true;
+          el.textContent = '克隆中…';
+          try {
+            const r = await api('/api/git/repos', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ fullName }),
+            });
+            alert(`${fullName} 已接入（${r.note}）：${r.repo.localPath}`);
+            await refresh();
+          } catch (err) {
+            el.disabled = false;
+            el.textContent = '接入';
+            alert(err.message);
+          }
+        };
+      });
+    };
+    drawAvail();
+    $('gitFilter').oninput = () => drawAvail($('gitFilter').value);
+  }
+}
+
 function renderSkillCards() {
   S.skill = null;
   showView('settings');

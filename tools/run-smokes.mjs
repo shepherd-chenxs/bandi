@@ -23,6 +23,7 @@ const RUN = [
   'apps/server/src/smoke-autostart.mjs',
   'apps/server/src/smoke-connectors.mjs',
   'apps/server/src/smoke-data-dir.mjs',
+  'apps/server/src/smoke-git-repos.mjs',
   'apps/server/src/smoke-lifecycle.mjs',
   'apps/server/src/smoke-node.mjs',
   'apps/server/src/smoke-node-jobs.mjs',

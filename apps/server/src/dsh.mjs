@@ -1,3 +1,4 @@
+import { agentEnv } from './git-repos.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -137,7 +138,7 @@ export function probe(pathOverride) {
       l = launchCommand(pathOverride);
       child = spawn(l.file, [...l.args, '--version'], {
         windowsHide: true,
-        env: { ...process.env, ...l.env },
+        env: { ...agentEnv(), ...l.env },
         stdio: ['ignore', 'pipe', 'pipe'],
       });
     } catch (e) {
@@ -201,7 +202,7 @@ export function runDsh({
     const child = spawn(l.file, [...l.args, ...args], {
       cwd,
       windowsHide: true,
-      env: { ...process.env, ...l.env },
+      env: { ...agentEnv(), ...l.env },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     if (routeNote) console.log(`[模型] dsh 这一步用覆盖层 ${routeNote}`);
