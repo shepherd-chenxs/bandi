@@ -6420,8 +6420,8 @@ async function renderGitRepos() {
       <span class="dim" style="font-size:12.5px;margin-left:8px">连接 GitHub、把仓库接进来给数字员工用</span>
     </div>
     <div class="detail-body">
-      <section class="group">
-        <div class="group-title">GitHub 连接</div>
+      <div class="group-title">GitHub 连接</div>
+      <div class="group">
         ${
           st.connected
             ? `<div class="form-row"><div class="row-label">状态</div><div>
@@ -6431,27 +6431,27 @@ async function renderGitRepos() {
                <div class="dlg-actions"><button id="gitDisconnect">断开连接</button></div>`
             : tokenForm
         }
-      </section>
+      </div>
 
-      <section class="group">
-        <div class="group-title">已接入的仓库 <span class="dim" style="font-weight:400">${repos.length} 个</span>
-          <button class="mini auto" id="gitManualAdd" style="float:right;margin-top:-2px"
-                  title="私有仓库 / 令牌没授权的仓库 / 离线：只记本地路径，不联网">＋ 手动接入</button>
-        </div>
+      <div class="group-title">已接入的仓库 <span class="dim" style="font-weight:400">${repos.length} 个</span>
+        <button class="mini auto" id="gitManualAdd" style="float:right;margin-top:-2px"
+                title="私有仓库 / 令牌没授权的仓库 / 离线：只记本地路径，不联网">＋ 手动接入</button>
+      </div>
+      <div class="group">
         ${repos.length ? repos.map(repoRow).join('') : '<div class="sk-blank">还没接入仓库。连上 GitHub 之后，在下面「从 GitHub 添加」里挑。</div>'}
-      </section>
+      </div>
 
       ${
         st.connected
-          ? `<section class="group">
-               <div class="group-title">从 GitHub 添加</div>
-               <div class="counter left" style="margin:2px 0 6px">
+          ? `<div class="group-title">从 GitHub 添加</div>
+             <div class="group">
+               <div class="counter left" style="margin:10px 0 6px">
                  这里列的是**令牌能访问的仓库**：公开仓库总是能读；私有仓库要在令牌的
                  Repository access 里选中才会出现。标「只读」的能克隆、推代码会被拒（403）。
                </div>
                <input id="gitFilter" placeholder="搜仓库名…（账号下的仓库，按最近更新排）" style="margin:8px 0" />
                <div id="gitAvail"><div class="sk-blank">拉取中…</div></div>
-             </section>`
+             </div>`
           : ''
       }
     </div>`;
