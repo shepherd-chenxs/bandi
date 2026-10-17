@@ -67,12 +67,17 @@ node start.mjs        # 起控制面 + 开浏览器；Windows 也可以直接双
 
 - [Apache-2.0](LICENSE)：可商用、可闭源再分发，**含显式专利授权**。收 PR 按第 5 条
   inbound = outbound，**不需要 CLA**；提交请带 `git commit -s`（DCO，见 [CONTRIBUTING.md](CONTRIBUTING.md)）。
+  
 - Copyright 2026 **牧羊人**（见 [NOTICE](NOTICE)）。**名称与 logo 不随协议授权** ——
   代码随便拿去做别的产品，但**别叫「班底」**。
+  
 - **不分发第三方**：Codex CLI / Claude Code / DeepSeek Harness 由使用者自行安装、自备凭据；
   magpie 是**独立项目**，平台只是"认得它、能帮你装它、能看见它跑没跑"。
+  
 - 安装包**随包带** `LICENSE`、`NOTICE`、`node-LICENSE.txt`（内嵌 `node.exe`）：二进制分发同样满足
   Apache-2.0 第 4 条。
+  
+  
 
 ## 文档在哪
 
