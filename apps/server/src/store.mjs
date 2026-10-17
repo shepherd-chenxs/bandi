@@ -2260,3 +2260,65 @@ export function updateWorkflowStep(id, fields) {
   ).run(next.status, next.note, next.conversationId, next.agentRunId, next.startedAt, next.endedAt, id);
   return db.prepare('SELECT * FROM workflow_steps WHERE id = ?').get(id);
 }
+
+
+/* ---------------------------------------------------------------- 代码托管（GitHub 仓库） */
+/*
+ * 「一个仓库」是一等资源（2026-10-17 用户：我有很多个 git 仓库）：
+ *   · 仓库连接/克隆/同步都记在这张表；项目与任务卡**引用**它（不把每个仓库硬变成项目）。
+ *   · 真正的凭据（GitHub token）**不在这张表里**：单独一个文件、只在 git-repos.mjs 里读写。
+ */
+db.exec(`
+  CREATE TABLE IF NOT EXISTS git_repos (
+    id            TEXT PRIMARY KEY,
+    fullName      TEXT NOT NULL UNIQUE,
+    owner         TEXT NOT NULL,
+    name          TEXT NOT NULL,
+    isPrivate     INTEGER NOT NULL DEFAULT 0,
+    defaultBranch TEXT,
+    localPath     TEXT NOT NULL,
+    language      TEXT,
+    addedAt       TEXT NOT NULL,
+    lastSyncAt    TEXT
+  );
+`);
+
+export function listGitRepos() {
+  return db.prepare('SELECT * FROM git_repos ORDER BY addedAt DESC').all();
+}
+
+export function getGitRepo(id) {
+  return db.prepare('SELECT * FROM git_repos WHERE id = ?').get(id) ?? null;
+}
+
+export function getGitRepoByFullName(fullName) {
+  return db.prepare('SELECT * FROM git_repos WHERE fullName = ?').get(fullName) ?? null;
+}
+
+export function addGitRepo({ fullName, owner, name, isPrivate = 0, defaultBranch = null, localPath, language = null }) {
+  const row = {
+    id: newId('gr'),
+    fullName,
+    owner,
+    name,
+    isPrivate: isPrivate ? 1 : 0,
+    defaultBranch,
+    localPath,
+    language,
+    addedAt: nowIso(),
+  };
+  db.prepare(
+    `INSERT INTO git_repos (id, fullName, owner, name, isPrivate, defaultBranch, localPath, language, addedAt, lastSyncAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+  ).run(row.id, row.fullName, row.owner, row.name, row.isPrivate, row.defaultBranch, row.localPath, row.language, row.addedAt);
+  return getGitRepo(row.id);
+}
+
+export function touchGitRepoSync(id) {
+  db.prepare('UPDATE git_repos SET lastSyncAt = ? WHERE id = ?').run(nowIso(), id);
+  return getGitRepo(id);
+}
+
+export function deleteGitRepo(id) {
+  return db.prepare('DELETE FROM git_repos WHERE id = ?').run(id).changes > 0;
+}

@@ -22,6 +22,7 @@ import * as workflows from './workflows.mjs';
 import * as quota from './quota.mjs';
 import * as status from './status.mjs';
 import { projectTasks, allTasks, createProjectTask, updateProjectTask, startProjectTask, onTaskRunFinished } from './project-tasks.mjs';
+import * as git from './git-repos.mjs';
 
 const webDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'web');
 
@@ -1910,6 +1911,86 @@ async function handleSsh(req, res, url) {
   return false;
 }
 
+/*
+ * **代码托管**（GitHub 仓库接入，2026-10-17）。
+ *
+ * 令牌只在 git-repos.mjs 里读写，这里**从不回显完整令牌**（只给后 4 位）。
+ * 克隆/拉取是**异步子进程**（不 spawnSync）—— 大仓库克隆时控制面不能整台卡住。
+ */
+async function handleGit(req, res, url) {
+  if (!url.pathname.startsWith('/api/git/')) return false;
+
+  if (req.method === 'GET' && url.pathname === '/api/git/status') {
+    const connected = !!git.readToken();
+    let login = null;
+    if (connected) login = await git.verifyToken().then((x) => x.login).catch(() => null);
+    return sendJson(res, 200, { connected, login, hint: git.tokenHint(), repos: git.listConnected() }), true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/git/token') {
+    const body = await readBody(req);
+    const token = String(body.token ?? '').trim();
+    if (!token) return fail(res, 400, 'E1061', '令牌是空的');
+    let me;
+    try {
+      me = await git.verifyToken(token);
+    } catch (e) {
+      return fail(res, 400, 'E1062', String(e.message ?? e)), true;
+    }
+    git.saveToken(token);
+    return sendJson(res, 200, { connected: true, login: me.login, hint: git.tokenHint() }), true;
+  }
+
+  if (req.method === 'DELETE' && url.pathname === '/api/git/token') {
+    git.clearToken();
+    return sendJson(res, 200, { connected: false }), true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/git/available') {
+    try {
+      const list = await git.listAvailableRepos();
+      const connected = new Set(git.listConnected().map((r) => r.fullName));
+      return sendJson(res, 200, { repos: list.map((r) => ({ ...r, connected: connected.has(r.fullName) })) }), true;
+    } catch (e) {
+      return fail(res, 400, 'E1063', String(e.message ?? e)), true;
+    }
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/git/repos') {
+    return sendJson(res, 200, { repos: git.listConnected() }), true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/git/repos') {
+    const body = await readBody(req);
+    try {
+      const out = await git.connectRepo(String(body.fullName ?? ''), null);
+      return sendJson(res, 201, out), true;
+    } catch (e) {
+      return fail(res, 400, 'E1064', String(e.message ?? e)), true;
+    }
+  }
+
+  const syncOne = /^\/api\/git\/repos\/([^/]+)\/sync$/.exec(url.pathname);
+  if (req.method === 'POST' && syncOne) {
+    try {
+      return sendJson(res, 200, { repo: await git.syncRepo(decodeURIComponent(syncOne[1])) }), true;
+    } catch (e) {
+      return fail(res, 400, 'E1065', String(e.message ?? e)), true;
+    }
+  }
+
+  const one = /^\/api\/git\/repos\/([^/]+)$/.exec(url.pathname);
+  if (req.method === 'DELETE' && one) {
+    try {
+      return sendJson(res, 200, git.removeRepo(decodeURIComponent(one[1]))), true;
+    } catch (e) {
+      return fail(res, 404, 'E1066', String(e.message ?? e)), true;
+    }
+  }
+
+  return fail(res, 404, 'E1067', '没有这个接口'), true;
+}
+
 async function handleRun(req, res, url) {
   const stream = /^\/api\/runs\/([^/]+)\/stream$/.exec(url.pathname);
   const abort = /^\/api\/runs\/([^/]+)\/abort$/.exec(url.pathname);
@@ -2078,6 +2159,9 @@ const server = http.createServer(async (req, res) => {
 
     const handledRun = await handleRun(req, res, url);
     if (handledRun !== false) return;
+
+    const handledGit = await handleGit(req, res, url);
+    if (handledGit !== false) return;
 
     fail(res, 404, 'E2036', '没有这个接口');
   } catch (err) {

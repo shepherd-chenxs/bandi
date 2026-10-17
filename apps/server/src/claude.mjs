@@ -1,3 +1,4 @@
+import { agentEnv } from './git-repos.mjs';
 import fs from 'node:fs';
 import { spawn } from 'node:child_process';
 import { runCwd } from './config.mjs';
@@ -95,7 +96,7 @@ export function runTask({
     const child = spawn(launch.file, [...launch.args, ...args], {
       cwd,
       windowsHide: true,
-      env: { ...process.env, ...launch.env },
+      env: { ...agentEnv(), ...launch.env },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
