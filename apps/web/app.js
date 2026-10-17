@@ -6446,9 +6446,8 @@ async function renderGitRepos() {
           ? `<section class="group">
                <div class="group-title">从 GitHub 添加</div>
                <div class="counter left" style="margin:2px 0 6px">
-                 只列出**你账号下**的仓库。注意：GitHub 的 fine-grained 令牌**永远能读所有公开仓库**，
-                 token 里的 Repository access 限制的是**写权限和私有仓库** —— 所以这里会看到没勾的公开仓库，
-                 它们能克隆、但推代码会被拒（标「只读」）。
+                 这里列的是**令牌能访问的仓库**：公开仓库总是能读；私有仓库要在令牌的
+                 Repository access 里选中才会出现。标「只读」的能克隆、推代码会被拒（403）。
                </div>
                <input id="gitFilter" placeholder="搜仓库名…（账号下的仓库，按最近更新排）" style="margin:8px 0" />
                <div id="gitAvail"><div class="sk-blank">拉取中…</div></div>
