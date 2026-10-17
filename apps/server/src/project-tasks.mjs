@@ -165,6 +165,8 @@ function manualRows(t) {
     // 行 id：拖拽 / 改状态 / 删卡都走它（手工卡与仓库值班卡共用这一套）
     manual_id: t.id,
     external_key: t.externalKey ?? null,
+    // PR 联动（2026-10-17）：看板卡片上一眼看到"这个 PR 开着还是合了"
+    pr: t.prRepo && t.prNumber ? { repo: t.prRepo, number: t.prNumber, state: t.prState ?? null, title: t.prTitle ?? null } : null,
     conversation_id: t.conversationId,
     run_id: t.runId,
   };
