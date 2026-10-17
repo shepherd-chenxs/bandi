@@ -150,6 +150,13 @@ try {
     notGitErr = e.message;
   }
   check('不是 git 仓库 → 拒绝并说清楚', /不是 git 仓库/.test(notGitErr), notGitErr);
+  // 私有仓库常见情况：令牌读不到元数据（这里没令牌）→ 仍要能按本地信息接入
+  const local3 = mkLocal('local3', 'https://github.com/smoke/private.git');
+  const out3 = await git.connectRepo('smoke/private', null, local3);
+  check('没有令牌、查不到元数据 → 仍按本地信息接入', out3.repo.localPath === local3, out3.repo.localPath);
+  check('并且明确警告"令牌读不到"', /令牌读不到/.test(out3.warning ?? ''), String(out3.warning));
+  check('默认分支从本地 HEAD 兜底', !!out3.repo.defaultBranch, String(out3.repo.defaultBranch));
+
   const local2 = mkLocal('local2', 'https://github.com/someone/else.git');
   const out2 = await git.connectRepo('smoke/demo4', info('demo4'), local2);
   check('origin 不一致 → 仍然接入（fork/镜像也合理）', out2.repo.localPath === local2);
