@@ -6964,7 +6964,7 @@ function renderDetail({ persona, runtimes, runs, platformRoot, skills: personaSk
         <div class="sk-head">
           <div>
             <b>分配给智能体</b>
-            <div class="sk-hint">关闭后暂停使用，仍保留分配。</div>
+            <div class="sk-hint">关闭＝暂停使用（仍保留分配）；解绑＝取消分配（技能还在库里）。</div>
           </div>
           <button class="mini auto" id="linkSkill">＋ 添加技能</button>
         </div>
@@ -6982,7 +6982,7 @@ function renderDetail({ persona, runtimes, runs, platformRoot, skills: personaSk
                       <label class="switch sm" title="${l.enabled ? '暂停使用（保留分配）' : '恢复使用'}">
                         <input type="checkbox" data-skill-toggle="${esc(l.name)}" ${l.enabled ? 'checked' : ''} /><span></span>
                       </label>
-                      <button class="mini sm" data-unlink="${esc(l.name)}" title="解除分配">删</button>
+                      <button class="mini sm" data-unlink="${esc(l.name)}" title="解绑：只是不再分配给他，技能本身还在库里">解绑</button>
                     </div>`,
                   )
                   .join('')
