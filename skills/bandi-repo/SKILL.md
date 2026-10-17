@@ -16,6 +16,20 @@ description: 班底的仓库值班。用户要你看 GitHub 仓库时使用—�
 2. **不替人按按钮**：合并 / 关闭 / 发版要人放行 —— 你给结论与证据，按钮不是你的。
 3. **每条结论带证据**：命令 ＋ 完整输出 ＋ 跟谁比。没跑过的写「未验证」，不许写成结论。
 
+## 三条硬边界（2026-10-17 血的教训，加进铁律）
+
+1. **不许碰凭据。** 不读 `git credential`、`~/.gitconfig` 里的 token、环境变量里的 `GH_TOKEN`、
+   `~/.config/gh`、浏览器 cookie —— **一个都不许**。要调 GitHub API，用 **Actions 里的内置
+   `GITHUB_TOKEN`**（在 CI 里跑），本机值班**只做只读**（`git`、读文件、`node tools/...`）。
+   真实事故：张坤为了开分支保护，从凭据里捞了一个 `gho_` token 去调 API，token 还进了运行事件日志 ——
+   泄漏不可逆，只能轮换。
+2. **不许直接改 `main`。** 一切改动走分支 + PR，合并由人点。不许 `git commit` 到 main、
+   不许 `push` main、不许 `--force`。
+3. **不许在真仓库里"造垃圾验证"。** 想验证闸门，用 `workflow_dispatch` 空跑、或本地跑
+   `tools/check-pr.mjs` / `tools/run-smokes.mjs`；**别开假 PR、别建临时分支、别提交 `*.tmp.md`**。
+   真实事故：为了验"分支保护会不会拦人"，建了个 `gate-verify.tmp.md` 的假 PR —— 验完没人清，
+   仓库里就多一个假 PR 和一条假分支。
+
 ## 审一个 PR：五步
 
 1. **先看规模**：`git diff --stat <base>...<head>`。异常大（几十上百个文件）、或异常小（号称修了 bug 只改一行）都要先警觉。

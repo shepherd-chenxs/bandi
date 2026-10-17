@@ -56,8 +56,17 @@ jobs:
           }
           Write-Host "语法检查：$($files.Count) 个 js/mjs 文件"
 
-          node -e "const fs=require('fs');const list=['apps/desktop/tauri.conf.json','apps/desktop/version.json','apps/server/catalog/connectors.json','apps/server/catalog/plugins/project-panel/manifest.json','apps/server/catalog/plugins/ssh/manifest.json','.agents/plugins/marketplace.json'];for(const f of list)JSON.parse(fs.readFileSync(f,'utf8'));console.log('JSON 都能解析：'+list.length+' 个')"
-          if ($LASTEXITCODE -ne 0) { Write-Host '::error::JSON 解析不过'; $bad++ }
+          # JSON：**只查被跟踪的文件，用 git 枚举** —— 别硬编码路径。
+          # 硬编码踩过（2026-10-17，PR #1 的红就是它）：原来的列表里放了
+          # `.agents/plugins/marketplace.json`，而 `.agents/` 在 .gitignore 里、一个文件都没被跟踪
+          # → 本地有它（所以本地全绿）、CI 的 checkout 里没有（所以 CI 必红 ENOENT）。
+          # **本地绿了不算绿**：门禁里出现的每个路径，都得能在干净 checkout 里找到。
+          $jsons = git ls-files '*.json'
+          foreach ($f in $jsons) {
+            node -e "JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'))" $f
+            if ($LASTEXITCODE -ne 0) { Write-Host "::error file=$f::JSON 解析不过"; $bad++ }
+          }
+          Write-Host "JSON 检查：$($jsons.Count) 个被跟踪的 json"
 
           $hook = 'apps/desktop/installer-hooks.nsh'
           $bom = [System.IO.File]::ReadAllBytes($hook)[0..2] -join ','

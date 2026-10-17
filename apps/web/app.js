@@ -7926,9 +7926,8 @@ function renderWorkbenchGrid() {
                 <div class="wb-grid">
                   ${items
                     .map(
-                      (p) => `<button class="wb-tile has-badge" data-wb-open="${esc(p.id)}" title="${esc(p.description || p.label)}">
-                        <span class="wb-ico">${esc(initial(p.label))}</span>
-                        <i class="wb-badge" title="插件" aria-label="插件">${PLUGIN_BADGE_SVG}</i>
+                      (p) => `<button class="wb-tile" data-wb-open="${esc(p.id)}" title="${esc(p.description || p.label)}">
+                        <span class="wb-ico has-plug"><i class="wb-badge" title="插件" aria-label="插件">${PLUGIN_BADGE_SVG}</i>${esc(initial(p.label))}</span>
                         <span class="wb-name">${esc(p.label)}</span>
                       </button>`,
                     )
