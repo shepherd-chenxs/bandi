@@ -21,7 +21,7 @@ import { dispatchToThread, personaRoots } from './dispatch.mjs';
 import * as workflows from './workflows.mjs';
 import * as quota from './quota.mjs';
 import * as status from './status.mjs';
-import { projectTasks, allTasks, createProjectTask, updateProjectTask } from './project-tasks.mjs';
+import { projectTasks, allTasks, createProjectTask, updateProjectTask, startProjectTask } from './project-tasks.mjs';
 
 const webDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'web');
 
@@ -1484,12 +1484,29 @@ async function handleProject(req, res, url) {
     }
   }
 
-  // 改一张手工卡（拖到别的列 = 改状态；也可以改执行人/标题）
+  // 单张本地卡：拿**全文**（看板行里的标题/描述是截断过的 —— 卡片详情要看完整描述）
   const taskOne = /^\/api\/projects\/tasks\/([^/]+)$/.exec(url.pathname);
+  if (req.method === 'GET' && taskOne) {
+    const t = store.getProjectTask(decodeURIComponent(taskOne[1]));
+    return t ? sendJson(res, 200, { task: t }) : fail(res, 404, 'E2039', '任务不存在');
+  }
+
+  // 改一张本地卡（拖到别的列 = 改状态；也能改标题 / 描述 / **执行人**）。
+  // 带 `startNow: true` ＝ 「保存并开始工作」：存完立刻派活 —— 跟建卡时那个「立即开始」同一条链路。
   if (req.method === 'PATCH' && taskOne) {
+    const id = decodeURIComponent(taskOne[1]);
     const body = await readBody(req);
     try {
-      return sendJson(res, 200, { task: updateProjectTask(decodeURIComponent(taskOne[1]), body) });
+      const task = updateProjectTask(id, body);
+      if (body.startNow === true) {
+        try {
+          return sendJson(res, 200, { task: startProjectTask(id), started: true });
+        } catch (e) {
+          // 卡改好了、但没派出去：把原因说清楚，别让人以为存都没存
+          return fail(res, 400, 'E1048', `存了，但没派出去：${e.message}`, { taskId: id, task });
+        }
+      }
+      return sendJson(res, 200, { task });
     } catch (e) {
       const missing = /不存在/.test(String(e.message));
       return sendJson(res, missing ? 404 : 400, { error: String(e.message ?? e) });

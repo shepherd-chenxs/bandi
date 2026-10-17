@@ -401,25 +401,45 @@ export function createProjectTask(project, { title, description = '', status = '
   // 前端也会把那个勾选框灰掉，但**判据放服务端**才作数（接口谁都能直接调）。
   if (!persona || !startNow || st === '想法') return store.getProjectTask(row.id);
 
-  // 派到他的 1:1 会话（没有就建一个）——跟流程派活用同一条链路
+  try {
+    return startProjectTask(row.id);
+  } catch (e) {
+    // 没派出去也要说清楚：卡建了、状态没动
+    throw Object.assign(new Error(`任务建好了，但没派出去：${e.message}`), { taskId: row.id });
+  }
+}
+
+/**
+ * 把一张**已经在看板上的**卡派出去（2026-10-17 从 `createProjectTask` 里抽出来的）。
+ *
+ * 为什么抽：建卡时那个「立即开始」和以后在卡片详情里点「保存并开始工作」必须是**同一条链路** ——
+ * 各写一份迟早走样（跟流程引擎复用 `dispatchToThread` 是同一个道理）。
+ * 派到执行人的 1:1 会话，工作目录就是这个卡挂的项目。
+ */
+export function startProjectTask(id) {
+  const row = store.getProjectTask(id);
+  if (!row) throw new Error('任务不存在');
+  const project = store.getProject(row.projectId);
+  if (!project) throw new Error('这张卡挂的项目已经不在了');
+  if (!row.assigneePersonaId) throw new Error('先指定执行人，再开始');
+  const persona = store.getPersona(row.assigneePersonaId);
+  if (!persona) throw new Error('指定的执行人不在了');
+  if (row.status === '想法') throw new Error('「想法」还没决定要不要做，先挪到「待办」再开始');
+  if (row.status === '进行中' && row.runId) throw new Error('这张卡已经在跑了');
+
   const conv =
     store.listConversations().find((c) => c.kind === 'direct' && c.personaId === persona.id && !c.hiddenAt)?.id ??
     store.ensureConversationForPersona(persona.id).id;
   const text = [
-    `【任务 · ${project.name || project.id}】${name}`,
+    `【任务 · ${project.name || project.id}】${row.title}`,
     row.description ? `\n${row.description}` : '',
     `\n工作目录就是这个项目的目录：${project.root}`,
     '做完直接说明结果即可。',
   ]
     .filter(Boolean)
     .join('\n');
-  try {
-    const { run } = dispatchToThread(conv, text, { projectId: project.id });
-    return store.updateProjectTask(row.id, { status: '进行中', conversationId: conv, runId: run.id });
-  } catch (e) {
-    // 没派出去也要说清楚：卡建了、状态没动
-    throw Object.assign(new Error(`任务建好了，但没派出去：${e.message}`), { taskId: row.id });
-  }
+  const { run } = dispatchToThread(conv, text, { projectId: project.id });
+  return store.updateProjectTask(row.id, { status: '进行中', conversationId: conv, runId: run.id });
 }
 
 /** 改一张手工卡（状态 / 执行人 / 标题描述）。只动手工卡，流程与聊天的卡改不了这里。 */

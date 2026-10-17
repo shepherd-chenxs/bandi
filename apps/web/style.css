@@ -253,18 +253,24 @@ main { min-height: 0; }
           background: linear-gradient(135deg, #4b6cb7, #182848); }
 .wb-name { font-size: 12.5px; color: var(--text); text-align: center; line-height: 1.3; }
 /* 插件的图标**左上角挂个角标**：工作台里混着平台自带的入口（项目 / 任务看板 / 流程），
-   只靠磁贴样子分不出哪个是装进来的插件。角标压在圆角上、稍稍出一点头，
-   看着像"贴上去的标签"；平台自带的那些**不挂**（加 .is-plug 才出）。
-   颜色跟图标底色的深蓝是两套，浅色主题下也照样看得清。 */
-.wb-ico.is-plug { position: relative; }
-.wb-ico .wb-badge { position: absolute; left: -5px; top: -5px;
-                    width: 18px; height: 18px; border-radius: 6px;
-                    display: flex; align-items: center; justify-content: center;
-                    background: var(--panel); color: var(--dim);
-                    border: 1px solid var(--line); box-shadow: 0 1px 3px var(--shadow); }
-.wb-ico .wb-badge svg { width: 10px; height: 10px; display: block; }
-/* 悬停整块磁贴时角标跟着亮一点，提示"这个小块是有意思的" */
-.wb-tile:hover .wb-ico .wb-badge { color: var(--text); border-color: var(--accent); }
+   只靠磁贴样子分不出哪个是装进来的插件。角标就一个小图贴在图标左上角，
+   **不要底框、不要边框** —— 加过底和描边，浅色下会变成一圈很重的框，抢了图标本身。
+   锚点用**磁贴（.wb-tile）**而不是图标：图标一挪/一缩，角标就跟着跑到框外面去了
+   （用户 2026-10-17 实报"图标放到入口卡的背景框里，不要放外面"）。
+   给磁贴留出内边距（padding-top/left 各多 6px），角标落在**框内**左上角，
+   骑在图标左上那个圆角上，不越出框。平台自带的那些**不挂**（加 .is-plug 才出）。
+   颜色走 --text（浅色主题是深灰、深色主题是近白），两边都够对比。 */
+.wb-tile { padding: 22px 8px 14px 14px; }
+.wb-tile.has-badge { position: relative; }
+/* 角标贴着图标的左上圆角站，但**整个落在磁贴框内**（不往外挑） */
+.wb-tile .wb-badge { position: absolute; left: 16px; top: 15px;
+                    width: 16px; height: 16px; display: flex;
+                    align-items: center; justify-content: center;
+                    color: var(--text);
+                    filter: drop-shadow(0 1px 1.5px var(--shadow)); }
+.wb-tile .wb-badge svg { width: 16px; height: 16px; display: block; }
+/* 悬停整块磁贴时角标跟着亮一下，提示"这个小图是有意思的" */
+.wb-tile:hover .wb-badge { color: var(--accent); }
 
 /* 插件表单（L1 声明式渲染出来的） */
 .plg-form { max-width: 560px; }

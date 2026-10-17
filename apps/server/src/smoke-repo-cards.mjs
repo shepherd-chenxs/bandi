@@ -85,7 +85,10 @@ try {
   check('它和手工卡一样可拖（带 manual_id）', !!card1?.manual_id);
 
   console.log('\n② 同一个 key 再来一次：只更新，不新建');
-  const body2 = { ...body1, body: '结论：待审（第二次巡检，描述变了）' };
+  const body2 = {
+    ...body1,
+    body: '结论：待审（第二次巡检，描述变长了）\n要跑的命令：node tools/check-pr.mjs && node tools/run-smokes.mjs —— 这一行故意写长，用来验「看板行截断」与「详情全文」的区别。',
+  };
   const c2 = await req(`/api/projects/${encodeURIComponent(pid)}/repo-cards`, { method: 'POST', body: JSON.stringify(body2) });
   check('200 且 created=false', c2.status === 200 && c2.b.created === false, `status=${c2.status} created=${c2.b?.created}`);
   check('识别出内容变了', c2.b.changed === true, String(c2.b?.changed));
@@ -94,7 +97,23 @@ try {
   const board2 = (await req(`/api/projects/${encodeURIComponent(pid)}/tasks`)).b;
   check('看板上仍然只有一张', board2.rows.filter((r) => r.external_key === 'pr:3').length === 1, String(board2.rows.filter((r) => r.external_key === 'pr:3').length));
 
-  console.log('\n③ 人把它拖到「已完成」→ 巡检再写一次，状态不许被弹回去');
+  console.log('\n③ 卡详情拿全文 + 改执行人');
+  const full = await req(`/api/projects/tasks/${encodeURIComponent(c1.b.task.id)}`);
+  check('单张卡能拿到全文（看板行是截断的）', full.status === 200 && String(full.b?.task?.description ?? '').length > 90, `${String(full.b?.task?.description ?? '').length} 字`);
+  check('看板行确实被截短了（所以详情必须有入口）', String(card1?.note ?? '').length <= 91, `${String(card1?.note ?? '').length} 字`);
+  const persona = await req('/api/personas', {
+    method: 'POST',
+    body: JSON.stringify({ name: '测试执行人', role: '研发', runtime: 'codex', instructions: '' }),
+  });
+  const assigned = await req(`/api/projects/tasks/${encodeURIComponent(c1.b.task.id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ personaId: persona.b.persona.id }),
+  });
+  check('改执行人成功', assigned.status === 200 && assigned.b?.task?.assigneePersonaId === persona.b.persona.id, String(assigned.b?.task?.assigneePersonaId));
+  const boardWho = (await req(`/api/projects/${encodeURIComponent(pid)}/tasks`)).b.rows.find((r) => r.manual_id === c1.b.task.id);
+  check('看板上执行人跟着变', boardWho?.assignee === '测试执行人', String(boardWho?.assignee));
+
+  console.log('\n④ 人把它拖到「已完成」→ 巡检再写一次，状态不许被弹回去');
   const moved = await req(`/api/projects/tasks/${encodeURIComponent(c1.b.task.id)}`, { method: 'PATCH', body: JSON.stringify({ status: '已完成' }) });
   check('拖到「已完成」', moved.b?.task?.status === '已完成', String(moved.b?.task?.status));
   const body3 = { ...body1, title: 'PR #3 待审：标题又改了', body: '结论：待审（第三次巡检）' };
@@ -102,7 +121,7 @@ try {
   check('状态还是「已完成」（人的指令优先）', c3.b?.task?.status === '已完成', String(c3.b?.task?.status));
   check('标题跟着更新了', c3.b?.task?.title === body3.title, String(c3.b?.task?.title));
 
-  console.log('\n④ 必填校验与清理');
+  console.log('\n⑤ 必填校验与清理');
   const noKey = await req(`/api/projects/${encodeURIComponent(pid)}/repo-cards`, { method: 'POST', body: JSON.stringify({ title: '没有 key' }) });
   check('缺去重键 → 400（否则每次巡检都会重复建卡）', noKey.status === 400, `${noKey.status} ${noKey.b?.error ?? ''}`);
   const noTitle = await req(`/api/projects/${encodeURIComponent(pid)}/repo-cards`, { method: 'POST', body: JSON.stringify({ key: 'x:1' }) });

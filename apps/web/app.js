@@ -3855,6 +3855,140 @@ function wireBoard(view, { refresh, taskProject = () => null }) {
       }
     };
   });
+  /*
+   * 本地卡（手工 / 仓库值班）：**点开卡片详情** —— 看全文、改标题描述、**改执行人**、开始工作、删掉。
+   * 看板行是**截断过**的（标题 70 字、描述 90 字），仓库值班写进来的证据与命令根本看不全；
+   * 而且建卡之后原来没有改执行人的入口（2026-10-17 用户问"怎么给这个任务指定人物"）。
+   */
+  view.querySelectorAll('[data-kb-open]').forEach((el) => {
+    el.onclick = (e) => {
+      if (e.target.closest('[data-kb-del]')) return; // × 自己处理，别把弹窗也带出来
+      openTaskCard(el.dataset.kbOpen, refresh);
+    };
+    el.onkeydown = (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        openTaskCard(el.dataset.kbOpen, refresh);
+      }
+    };
+  });
+}
+
+/**
+ * 点开一张本地卡（手工 / 仓库值班）：看**全文**、改标题描述、**改执行人**、改状态、开始工作、删掉。
+ *
+ * 为什么要有这个弹窗：
+ *   · 看板上那张卡是截断过的 —— 仓库值班写进来的「结论 ＋ 该跑的命令 ＋ 链接」在卡上根本看不全；
+ *   · 建卡时能选执行人，**建完之后原来没有入口能改**。
+ *
+ * 「开始工作」和建卡时那个「创建后立即开始工作」走的是服务端同一条链路（`startProjectTask`）：
+ * 派到执行人的 1:1 会话，工作目录＝这张卡挂的项目。**会真起一次 agent CLI（烧 token）**，所以按钮上写明。
+ */
+async function openTaskCard(taskId, refresh) {
+  let task;
+  try {
+    task = (await api(`/api/projects/tasks/${encodeURIComponent(taskId)}`)).task;
+  } catch (e) {
+    return alert(e.message);
+  }
+  if (!task) return alert('这张卡不在了');
+
+  const dlg = document.createElement('dialog');
+  dlg.id = 'taskCardDlg';
+  const isRepo = task.source === 'repo';
+  dlg.innerHTML = `
+    <form method="dialog">
+      <b>任务卡</b>
+      <div class="dim" style="font-size:12px;margin:4px 0 10px">
+        ${isRepo ? '仓库值班写进来的卡' : '手工建的卡'} —— 拖到「已完成」＝ 处理完了，删掉 ＝ 忽略。
+        这里可以改执行人、开始工作。
+      </div>
+      <label>标题</label>
+      <input id="tcTitle" value="${esc(task.title)}" />
+      <label>描述${isRepo ? '（巡查结论与证据都在这儿）' : '（可留空）'}</label>
+      <textarea id="tcDesc" rows="9" style="font-family:ui-monospace,'Cascadia Mono',Consolas,monospace;font-size:12px">${esc(task.description || '')}</textarea>
+      <div class="grid2">
+        <div><label>状态</label><div id="tcStatusMount"></div></div>
+        <div><label>执行人</label><div id="tcWhoMount"></div></div>
+      </div>
+      <div class="dim" id="tcHint" style="font-size:12px;margin-top:8px"></div>
+      <div class="dlg-actions">
+        <button type="button" class="danger" id="tcDel">删掉这张卡</button>
+        <button type="button" value="cancel">关闭</button>
+        <button type="button" id="tcStart">保存并开始工作</button>
+        <button class="primary" id="tcSave" value="ok">保存</button>
+      </div>
+    </form>`;
+  document.body.append(dlg);
+  // 动态建的对话框得自己包一次头部（页面加载那一遍它还不存在，见 wireDialogHead）
+  wireDialogHead(dlg.querySelector('form'));
+  dlg.addEventListener('close', () => dlg.remove());
+
+  const statusCombo = createCombo({
+    mount: $('tcStatusMount'),
+    items: ['想法', '待办', '进行中', '待确认', '已阻塞', '已完成'].map((s) => ({ id: s, label: s })),
+    value: task.status,
+  });
+  const whoCombo = createCombo({
+    mount: $('tcWhoMount'),
+    items: [{ id: '', label: '（不指定）' }, ...(S.personas ?? []).map((p) => ({ id: p.id, label: personLabel(p) }))],
+    value: task.assigneePersonaId || '',
+    search: true,
+    placeholder: '搜名字或岗位…',
+    empty: '没有匹配的人',
+    onChange: () => syncHint(),
+  });
+  const syncHint = () => {
+    const won = !!whoCombo.value();
+    $('tcHint').textContent = won
+      ? '「保存并开始工作」会派到他的 1:1 会话（工作目录＝这个项目），真跑一次 agent CLI —— 会烧 token。'
+      : '先指定执行人，才能开始工作。';
+    $('tcStart').disabled = !won;
+  };
+  syncHint();
+
+  const patch = (startNow) =>
+    api(`/api/projects/tasks/${encodeURIComponent(taskId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: $('tcTitle').value,
+        description: $('tcDesc').value,
+        status: statusCombo.value(),
+        personaId: whoCombo.value(),
+        ...(startNow ? { startNow: true } : {}),
+      }),
+    });
+
+  $('tcSave').onclick = async () => {
+    try {
+      await patch(false);
+      dlg.close();
+      await refresh();
+    } catch (e) { alert(e.message); }
+  };
+  $('tcStart').onclick = async () => {
+    try {
+      await patch(true);
+      dlg.close();
+    } catch (e) {
+      // 服务端会说清"存了，但没派出去：…" —— 卡已经存了，所以照样刷新看板
+      alert(e.message);
+    } finally {
+      await refresh();
+    }
+  };
+  $('tcDel').onclick = async () => {
+    if (!confirm('删掉这张任务卡？（＝忽略它，以后不再提）')) return;
+    try {
+      await api(`/api/projects/tasks/${encodeURIComponent(taskId)}`, { method: 'DELETE' });
+      dlg.close();
+      await refresh();
+    } catch (e) { alert(e.message); }
+  };
+
+  dlg.showModal();
+  $('tcTitle').focus();
 }
 
 /**
@@ -4008,7 +4142,7 @@ function kbCard(r) {
     ? `<span class="kb-tag proj" title="属于哪个项目">${esc(r.project_name)}</span>`
     : '';
   const srcCls = r.source === 'chat' ? ' chat' : r.source === 'repo' ? ' repo' : local ? ' manual' : '';
-  return `<article class="kb-card ${local ? 'manual' : ''}" ${jump} ${drag} data-col="${esc(r.col)}" title="${esc(r.note || '')}">
+  return `<article class="kb-card ${local ? 'manual' : ''}" ${jump} ${drag}${local ? ` data-kb-open="${esc(r.manual_id)}" tabindex="0"` : ''} data-col="${esc(r.col)}" title="${esc(r.note || '')}">
     <div class="kb-card-top">
       ${proj}<span class="kb-tag${srcCls}">${esc(r.source_text)}</span>
       <span class="kb-state">${esc(r.status)}</span>
@@ -7540,19 +7674,22 @@ function tplUrl(s, ctx) {
 }
 
 /**
- * 工作台磁贴左上角那个**插件角标**：一块小拼块。
+ * 工作台磁贴左上角那个**插件角标**：插接口（插头 + 插座）。
  *
  * 为什么要标：工作台是混排的 —— 「项目 / 任务看板 / 流程」是平台自带的，
  * 「服务器与密钥 / 项目面板」是装进来的插件。光看磁贴长得一样，分不出哪个是一等功能、
- * 哪个是插件。所以插件磁贴的图标左上角挂这个小块（平台自带的那几块不挂）。
+ * 哪个是插件。所以插件磁贴的图标左上角挂这个小图（平台自带的那几块不挂）。
  *
- * 用 svg 不用 emoji：emoji 在不同系统上样子差太多，还可能被字体吃掉。
- * 形状跟一级栏「工作台」那颗（四个方块）同源，扫一眼就能对上是"插件"。
+ * 为什么是"插接口"而不是四个方块：平台里"装进来的外部能力"就叫**连接器**（connector），
+ * ssh 插件本身就是 `"connector": "ssh"` —— 插件 = 往平台里插一个东西，
+ * 插头的形状正好说的是这件事。也不加底框、不加边框：就一个小图骑在图标角上，
+ * 不抢图标本身（加框试过，浅色下会变成一圈很重的描边）。
  */
-const PLUGIN_BADGE_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round">
-  <rect x="3" y="3" width="7.6" height="7.6" rx="1.8" />
-  <rect x="13.4" y="3" width="7.6" height="7.6" rx="1.8" />
-  <rect x="3" y="13.4" width="7.6" height="7.6" rx="1.8" />
+const PLUGIN_BADGE_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M15 3v6" />
+  <path d="M9 3v6" />
+  <path d="M6.5 9h11v3.2a5.5 5.5 0 0 1-11 0z" />
+  <path d="M12 17.7V22" />
 </svg>`;
 
 /** 从接口返回里取数组：可以是数组本身，也可以 pick 某个键 */
@@ -7655,8 +7792,9 @@ function renderWorkbenchGrid() {
                 <div class="wb-grid">
                   ${items
                     .map(
-                      (p) => `<button class="wb-tile" data-wb-open="${esc(p.id)}" title="${esc(p.description || p.label)}">
-                        <span class="wb-ico is-plug">${esc(initial(p.label))}<i class="wb-badge" title="插件" aria-label="插件">${PLUGIN_BADGE_SVG}</i></span>
+                      (p) => `<button class="wb-tile has-badge" data-wb-open="${esc(p.id)}" title="${esc(p.description || p.label)}">
+                        <span class="wb-ico">${esc(initial(p.label))}</span>
+                        <i class="wb-badge" title="插件" aria-label="插件">${PLUGIN_BADGE_SVG}</i>
                         <span class="wb-name">${esc(p.label)}</span>
                       </button>`,
                     )
