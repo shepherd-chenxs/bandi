@@ -34,6 +34,8 @@ BANDI_SHELL FAILED <说明>       起不来
 
 - **数据目录进用户目录**，绝不塞安装目录（否则用户机器上要么要管理员权限、要么升级被覆盖）：
   Windows `%APPDATA%\bandi`、macOS `~/Library/Application Support/bandi`、Linux `$XDG_DATA_HOME/bandi`。
+  这个默认与命令行**同一份**（2026-10-18 起，`apps/server/src/data-dir.mjs`）—— 没有"开发版一个库、
+  安装版另一个库"；要沙盒/临时/真实库，显式 `BANDI_DATA`。
   里面有 `bandi.db`、`server.log`、`shell.log`（**正式安装包没有控制台**，这份日志是唯一能看"壳当时说了什么"的地方）、`port`。
 - **端口自己挑**：从 8787 往上 —— 空着就用、是我们自己的实例就**复用**、是**别人的程序就跳过**。
   选中的记进 `port`，下次据此复用自己那个。命令行的 8787 是"给人用的约定"，桌面版没这个约定；
