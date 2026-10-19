@@ -3921,17 +3921,20 @@ async function openProjectsPage(selectId) {
     el.onclick = () => openProjectsPage(el.dataset.projSel).catch((e) => toast(e.message, 'error'));
   });
 
-  // 主区照**员工详情页**的骨架（2026-10-18 用户定的）：
-  // detail-head 页题 → p-head（概览信息 + 按钮一行）→ tabs（基础信息 / 项目规章）→ 内容
-  // 页头跟其它子页对齐：左「← 工作台」、中间写当前项目名（不再是干巴巴的"项目详情"）、右边让详情自己放按钮
+  /* 页头：**项目页不要返回按钮**（2026-10-19 用户指着它说"去掉这个按钮"）。
+     理由跟这页的结构有关：左栏就是项目清单，切项目靠点左栏那一行 —— **要回哪儿都能直接点**，
+     那枚「← 工作台」显得多余，还占掉页头最左边、把标题推得比别的页靠右。
+     所以这里不走 headRow()，只保留"标题 + 动作"两段。
+     工作台另外几页（看板 / 定时 / 流程 / 插件面板）仍然有返回按钮 —— 它们的左栏不是上一级。 */
   view.innerHTML = `
-    ${headRow('项目' + (sel ? ` <span class="head-sep">›</span> <b>${esc(sel.name)}</b>` : ''))}
+    <div class="detail-head head-row">
+      <div class="head-title">项目${sel ? ` <span class="head-sep">›</span> <b>${esc(sel.name)}</b>` : ''}</div>
+    </div>
     <div class="detail-body" id="projDetail">${
       sel ? '<div class="dim">加载中…</div>' : '<div class="empty" style="padding:36px 12px">左边选一个项目</div>'
     }</div>`;
   S.view = 'plugin';
   showView('plugin');
-  wireBackWb(view);
   if (sel) await renderProjDetail(sel);
 }
 
@@ -3966,7 +3969,12 @@ async function renderProjDetail(p) {
         </div>
       </div>
       <div class="hero-actions">
-        <button id="pjSave">保存</button>
+        <!-- 保存状态：改了就自动存，这里是唯一的回执（跟员工详情同一条 .save-state 样式）。
+             原来这儿是一颗「保存」按钮 —— 四个字段都要点一次，忘了点就白改。
+             ⚠️ 它**不占位**：宽度 0 + 往左溢出，所以"改成已保存"时不推按钮；
+                 靠 text-align:right 让它从按钮左边往回长，永远不会被右边界截掉。
+                 （样式在 style.css 的 .pj-save） -->
+        <span class="save-state pj-save" id="pjSaveState"></span>
         <button class="primary" id="pjTasks">任务</button>
         ${p.builtIn ? '' : '<button class="danger" id="pjDel">删除</button>'}
       </div>
@@ -3981,7 +3989,11 @@ async function renderProjDetail(p) {
       <div class="group">
         <div class="form-row">
           <div class="row-label">项目名称</div>
-          <input id="pjName" value="${esc(p.name ?? '')}" placeholder="例如：班底" />
+          <div>
+            <input id="pjName" value="${esc(p.name ?? '')}" placeholder="例如：班底" />
+            <!-- 名字不能空（服务端也会拒）：写在字段下面比让人在保存后自己找原因近 -->
+            <div class="counter left">改了自动保存，不用点按钮。</div>
+          </div>
         </div>
         <div class="form-row">
           <div class="row-label">工作目录</div>
@@ -4035,41 +4047,129 @@ async function renderProjDetail(p) {
     </section>`;
 
   // 标签：一次渲染、切显隐 —— 不重建 DOM，所以在「基础信息」改了一半去「规章」再回来，改动还在
+  // （切之前先 flush：刚敲完就切走，防抖那 700ms 不该把改动吞掉）
   const tabs = box.querySelectorAll('[data-tab]');
   const panels = box.querySelectorAll('[data-panel]');
   const showTab = (key) => {
     tabs.forEach((t) => t.classList.toggle('on', t.dataset.tab === key));
     panels.forEach((sec) => { sec.hidden = sec.dataset.panel !== key; });
   };
-  tabs.forEach((t) => { t.onclick = () => showTab(t.dataset.tab); });
+  tabs.forEach((t) => { t.onclick = () => { pjSaveNow(); showTab(t.dataset.tab); }; });
   showTab('basics');
 
   $('pjPick').onclick = () => pickProjectDir('pjPick', 'pjRoot');
-  $('pjSave').addEventListener('click', async () => {
-    const name = $('pjName').value.trim();
-    const root = $('pjRoot').value.trim();
-    if (!name) return toast('给项目起个名字');
-    if (!root) return toast('工作目录不能空 —— AI 要在这儿干活');
-    const extraRoots = $('pjExtra').value.split('\n').map((s) => s.trim()).filter(Boolean);
-    const note = $('pjNote').value.trim();
-    const constitution = $('projConstInput').value.trim();
+
+  /* ---------------- 自动保存（2026-10-19 用户要求：去掉「保存」按钮） ----------------
+   * 分寸跟员工详情、任务卡那条一样：
+   *   · 输入框防抖 700ms；失焦立刻存；切标签 / 离开页面先 flush。
+   *   · **不重画整页**：重画会丢焦点、把标签弹回"基础信息"；
+   *     只有名字变了才同步左栏那一行（那是另一个容器，跟焦点无关）。
+   *   · 名字 / 目录空着不提交（服务端会拒）：状态直接写清楚，人知道自己少填了什么。
+   *   · 保存中又来改动 → 存完补一次（串行；同时打两个 PUT 会互相覆盖）。 */
+  const pjState = $('pjSaveState');
+  const setPjState = (text, kind = '') => {
+    if (!pjState) return;
+    pjState.textContent = text;
+    pjState.className = 'save-state' + (kind ? ' ' + kind : '');
+  };
+  const collect = () => ({
+    name: $('pjName').value.trim(),
+    root: $('pjRoot').value.trim(),
+    extraRoots: $('pjExtra').value.split('\n').map((s) => s.trim()).filter(Boolean),
+    note: $('pjNote').value.trim(),
+    constitution: $('projConstInput').value.trim(),
+  });
+  let lastSaved = JSON.stringify(collect());
+  let pjTimer = null;
+  let pjSaving = false;
+  let pjQueued = false;
+
+  const pjSaveNow = async ({ keepalive = false } = {}) => {
+    if (pjTimer) { clearTimeout(pjTimer); pjTimer = null; }
+    if (!box.isConnected) return false; // 页面已经换了，别再往旧项目上写
+    const payload = collect();
+    if (!payload.name) { setPjState('名字不能空 · 未保存', 'bad'); return false; }
+    if (!payload.root) { setPjState('工作目录不能空 · 未保存', 'bad'); return false; }
+    const json = JSON.stringify(payload);
+    if (json === lastSaved) { setPjState('已保存', 'ok'); return true; }
+    if (pjSaving) { pjQueued = true; return false; }
+    pjSaving = true;
+    setPjState('保存中…', 'wait');
     try {
-      await api('/api/projects/' + encodeURIComponent(p.id), {
+      const d = await api('/api/projects/' + encodeURIComponent(p.id), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, root, extraRoots, note, constitution }),
+        body: json,
+        ...(keepalive ? { keepalive: true } : {}),
       });
-      // 整页重画：左栏清单的名字/目录跟着刷新，详情用服务端归一后的值
-      await openProjectsPage(p.id);
+      lastSaved = JSON.stringify(payload);
+      // 服务端会归一（比如目录去尾斜杠）：把返回值写回内存，左栏和下次进入都用它
+      const saved = d?.project;
+      if (saved) {
+        const i = (S.projects ?? []).findIndex((x) => x.id === saved.id);
+        if (i >= 0) S.projects[i] = { ...S.projects[i], ...saved };
+      }
+      // 名字 / 目录改了才动左栏那一行 —— 那是另一个容器，重画它不影响输入框焦点
+      const items = $('listBody')?.querySelectorAll('[data-proj-sel]') ?? [];
+      items.forEach((el) => {
+        if (el.dataset.projSel !== p.id) return;
+        const b = el.querySelector('.line1 b');
+        const sub = el.querySelector('.line2');
+        if (b) b.textContent = payload.name;
+        if (sub) sub.textContent = payload.root;
+      });
+      /** 页头两处（面包屑那截名字 + p-head 里的 h2）跟着改名走。
+          头像里那个字、目录 pill 也一起更 —— 不然"名字改了、上面还是旧的"，
+          看着像没存上（第一版就只同步了左栏，截图里露馅了）。 */
+      const paintName = (name) => {
+        const crumb = $('pluginView')?.querySelector('.detail-head .head-title b');
+        if (crumb) crumb.textContent = name;
+        const h2 = box.querySelector('.p-head h2');
+        if (h2) {
+          h2.firstChild.nodeType === 3
+            ? (h2.firstChild.nodeValue = name)
+            : h2.insertBefore(document.createTextNode(name), h2.firstChild);
+        }
+        const av = box.querySelector('.p-head .avatar');
+        if (av) av.textContent = initial(name);
+        const rootPill = box.querySelector('.p-meta .pill');
+        if (rootPill) rootPill.textContent = $('pjRoot').value.trim();
+      };
+      paintName(payload.name);
+      setPjState('已保存', 'ok');
+      return true;
     } catch (e) {
-      toast(e.message, 'error');
+      setPjState('保存失败：' + (e?.message ?? '服务异常'), 'bad');
+      console.error('[班底] 项目自动保存失败', e?.detail ?? e);
+      return false;
+    } finally {
+      pjSaving = false;
+      if (pjQueued) { pjQueued = false; pjSaveNow(); }
     }
-  });
-  $('pjTasks').addEventListener('click', () => {
+  };
+  const schedulePjSave = (ms = 700) => {
+    setPjState('未保存…', 'wait');
+    if (pjTimer) clearTimeout(pjTimer);
+    pjTimer = setTimeout(() => { pjTimer = null; pjSaveNow(); }, ms);
+  };
+  // 离开这一页（切标签页 / 回列表 / 关窗口）前兜底存一次 —— 走的是全局那条 flush 口子
+  const stopFlush = () => { flushDetailSave = null; };
+  flushDetailSave = (opts) => { pjSaveNow(opts); };
+
+  for (const id of ['pjName', 'pjRoot', 'pjExtra', 'pjNote', 'projConstInput']) {
+    $(id)?.addEventListener('input', () => schedulePjSave(700));
+    $(id)?.addEventListener('blur', () => pjSaveNow());
+  }
+
+  $('pjTasks').addEventListener('click', async () => {
+    // 先落盘再走：不然刚改的目录/名字带不进看板（看板是另一个页面）
+    await pjSaveNow();
+    stopFlush();
     openProjectDetail(p.id).catch((e) => toast(e.message, 'error'));
   });
   $('pjDel')?.addEventListener('click', async () => {
     if (!(await confirmDo(`删掉项目「${p.name}」？\n\n绑在它上面的会话会自动解绑（回到员工默认工作目录），会话本身不删。`))) return;
+    stopFlush();
     try {
       await api('/api/projects/' + encodeURIComponent(p.id), { method: 'DELETE' });
       S.projSel = null;

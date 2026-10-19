@@ -1041,6 +1041,11 @@ main { min-height: 0; }
 .save-state.wait { color: var(--warn); }
 .save-state.ok { color: var(--ok); }
 .save-state.bad { color: var(--bad); }
+/* 项目页那颗回执：`.hero-actions` 是 `margin-left:auto` 顶到右沿的 flex，
+   状态字一出现就会**把「任务」「删除」往左推**（四个字能推 40px，页面会"抖一下"）。
+   所以让它撑 0 宽、往左溢出，并且右对齐 —— 字从按钮左边往回长，永远挨着按钮、也永远不被截。 */
+.pj-save { width: 0; margin-right: 0; text-align: right; justify-self: end;
+           overflow: visible; pointer-events: none; }
 
 .tabs { display: flex; gap: 22px; border-bottom: 1px solid var(--line); margin: 18px 0 22px; }
 .tab { border: 0; background: transparent; color: var(--dim); cursor: pointer;
