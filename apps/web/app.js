@@ -1713,16 +1713,12 @@ const rtLoading = (title) =>
   `<div class="detail-head"><b>${esc(title)}</b><span class="dim" style="font-size:12px">加载中…</span></div>`;
 
 /**
- * 页头的「← 工作台」（2026-10-19）。
+ * 页头的「← 工作台」—— **2026-10-19 起不再调用**（用户要求统一去掉，见 headRow 的注释）。
  *
- * **为什么工作台的子页要用按钮，不用面包屑**：这些页的左栏一进来就换成了自己的列表
- * （项目清单 / 发起记录 / 工具列表），原来挂在那儿的「‹ 工作台」就没了 ——
- * 只能靠页头那串「工作台 › 定时任务」里的第一段点回去。但面包屑的**第一段是灰的**，
- * 一眼看不出它能点；而且它跟标题挤在同一行，读起来像"路径"，不像"返回"。
- *
- * 现在统一：工作台的每一页（项目 / 看板 / 定时任务 / 流程编排 / 流程记录 / 插件面板）
- * 页头最左边都是这枚按钮，样式跟消息页的「‹ 返回消息」同一套。
- * 面包屑只留标题段（`工作台 › xxx` 里的 xxx），不再重复"返回"这个动作。
+ * 当初加它的理由记在这儿，免得以后有人"发现"它没被用就删掉、过了半年又想不明白为什么要加：
+ * 这些页的左栏一进来就换成了自己的列表，原来左栏顶上那条「‹ 工作台」就没了，
+ * 只能靠页头那段灰面包屑点回去 —— 而面包屑第一段是灰的，一眼看不出能点。
+ * 后来验证下来：**左栏那几行本身就够用**，按钮是重复入口。所以撤掉按钮，只留这份实现。
  */
 function backToWorkbench(label = '工作台') {
   return `<button class="icon-btn head-back" data-back-wb title="回${esc(label)}">
@@ -1735,23 +1731,30 @@ function backToWorkbench(label = '工作台') {
 }
 
 /**
- * 页头统一结构：左边「← 上级」，中间标题（可以是一段 HTML，比如带徽标 / 输入框），右边按钮组。
+ * 页头统一结构：左边标题（可以是一段 HTML，比如带徽标 / 输入框），右边按钮组。
  *
- * backLabel 给**更深的层**用：任务卡是从看板点进去的，它的上一层是「任务看板」或某个项目，
- * 写「工作台」会把人一步弹回最外层，中间那层就跳过了 —— 所以标签要跟真实上一层一致。
+ * **不要返回按钮**（2026-10-19 用户第二次指着它说「统一去掉这个按钮」）。
+ * 理由跟项目页那次一样，只是现在推广到全部子页：**每一页的左栏都已经写着"上一级"**
+ *   · 项目 / 看板 —— 左栏是项目清单
+ *   · 流程编排 / 流程记录 —— 左栏是流程模板 / 发起记录清单
+ *   · 定时任务 / 插件面板 —— 左栏是工具清单
+ * 想回哪儿都能直接点那一行，页头再放一枚「← 工作台」就是同一件事的第二个入口，
+ * 还白占页头最左边、把标题推得比别处靠右。
+ *
+ * 因此 `backToWorkbench` / `wireBackWb` 一对**保留但不再调用** ——
+ * 留着是因为它们把"哪一页该回哪"这条知识写下来了（任务卡回看板、看板回项目），
+ * 哪天要重新加回按钮，接线不用再猜一遍。
  */
-function headRow(titleHtml, actionsHtml = '', backLabel = '工作台') {
-  return `<div class="detail-head head-row">${backToWorkbench(backLabel)}<div class="head-title">${titleHtml || ''}</div>${
+function headRow(titleHtml, actionsHtml = '') {
+  return `<div class="detail-head head-row"><div class="head-title">${titleHtml || ''}</div>${
     actionsHtml ? `<div class="head-actions">${actionsHtml}</div>` : ''
   }</div>`;
 }
 
 /**
- * 接线页头那枚「← 工作台」。
- *
- * 默认回工作台首页；项目看板这种"上一层是项目列表"的，传自己的返回函数。
- * 统一用一个函数接：以前每页各写一遍 `querySelector('[data-crumb-to=workbench]')`，
- * 改一次页头就得找七处。
+ * 接线页头那枚「← 上级」—— **2026-10-19 起不再调用**（按钮已从 headRow 里撤掉）。
+ * 留着它是因为它把"哪一页回哪里"这条知识写下来了：任务卡回看板、看板回项目、
+ * 其余回工作台。哪天要把按钮加回来，直接接这一根，不用每页重猜一遍。
  */
 function wireBackWb(root, back = () => openPlugins()) {
   root.querySelector('[data-back-wb]')?.addEventListener('click', () => {
@@ -3774,7 +3777,6 @@ function renderFlowEmpty() {
     <div class="detail-body"><div class="wip">还没有流程模板 —— 点左栏右上角的「＋」新建一个</div></div>`;
   S.view = 'flow';
   showView('flow');
-  wireBackWb($('flowView'));
 }
 
 /** 新建模板：先给一个起点节点，进去再改 */
@@ -3921,11 +3923,10 @@ async function openProjectsPage(selectId) {
     el.onclick = () => openProjectsPage(el.dataset.projSel).catch((e) => toast(e.message, 'error'));
   });
 
-  /* 页头：**项目页不要返回按钮**（2026-10-19 用户指着它说"去掉这个按钮"）。
-     理由跟这页的结构有关：左栏就是项目清单，切项目靠点左栏那一行 —— **要回哪儿都能直接点**，
-     那枚「← 工作台」显得多余，还占掉页头最左边、把标题推得比别的页靠右。
-     所以这里不走 headRow()，只保留"标题 + 动作"两段。
-     工作台另外几页（看板 / 定时 / 流程 / 插件面板）仍然有返回按钮 —— 它们的左栏不是上一级。 */
+  /* 页头：**项目页不放返回按钮**。
+     这一页的左栏就是项目清单，切项目靠点左栏那一行 —— 要回哪儿都能直接点。
+     2026-10-19 用户先指着这页说"去掉这个按钮"，随后又说"统一去掉" —— 于是全站子页都不放了，
+     理由在这页上最直观：页头那枚「← 工作台」既是重复入口，又把标题推得比别处靠右。 */
   view.innerHTML = `
     <div class="detail-head head-row">
       <div class="head-title">项目${sel ? ` <span class="head-sep">›</span> <b>${esc(sel.name)}</b>` : ''}</div>
@@ -4258,8 +4259,7 @@ async function openBoardPage({ project = null } = {}) {
 
   S.view = 'plugin';
   showView('plugin');
-  // 「← 工作台」：全局面板直接回工作台；项目看板先回项目列表（那是它的上一层）
-  wireBackWb(view, isAll ? () => openPlugins() : () => openProjectsPage());
+  // 页头不放开返回按钮（统一去掉）：回到别处靠左栏点那一行
   view.querySelector('[data-kb-refresh]')?.addEventListener('click', () => {
     (isAll ? openTaskBoard() : openProjectDetail(project.id)).catch((e) => toast(e.message, 'error'));
   });
@@ -4976,10 +4976,9 @@ async function paintTaskCardPage(taskId) {
   try {
     task = (await api(`/api/projects/tasks/${encodeURIComponent(taskId)}`)).task;
   } catch (e) {
-    // 取不到也得是个能走的页：页头照统一格式给一枚返回，不然错误页就是个死胡同
-    view.innerHTML = `${headRow('任务卡', '', '项目')}
+    view.innerHTML = `${headRow('任务卡')}
       <div class="empty" style="padding:24px 4px">任务取不到：${esc(e.message)}</div>`;
-    wireBackWb(view, () => openProjectsPage());
+    // 错误页也得能走：左栏点任意一张卡 / 任意一个项目就离开了这一页
     return;
   }
   const proj = (S.projects ?? []).find((p) => p.id === task.projectId) ?? null;
@@ -5111,17 +5110,11 @@ async function paintTaskCardPage(taskId) {
    * 页面形态照 Multica 的任务详情（2026-10-18 用户要求"简洁一些"）：
    *   · 主区从上到下就是这件事本身：大标题 → 描述 → 讨论，别的一概不摆；
    *   · 属性全收进右栏三段：属性（状态/执行人/项目/来源）、Pull Request、详情（创建/更新时间）；
-   *   · 页头统一成「← 上一层 + 标题 + 删除」—— 原来这里是三级面包屑
-   *     （`工作台 › 任务看板 › 任务卡`），跟它上一层的「← 工作台 + 任务看板」不是一个东西：
-   *     同一个位置两种不同的返回方式。改成同一枚返回按钮后，往下钻几层读法都一样。
-   *     返回标签写**真实上一层**（任务看板 / 项目名），不是一律「工作台」。
+   *   · 页头只有「任务卡 + 删除」（原来的三级面包屑 `工作台 › 任务看板 › 任务卡`
+   *     统一去掉返回后一并撤了；回看板靠左栏点那一行 —— 左栏本来就是看板那一列）。
    */
   view.innerHTML = `
-    ${headRow(
-      '任务卡',
-      '<button class="tc-del" id="tcDel" title="删掉这张卡（＝忽略它）">删除</button>',
-      taskCardFromAll ? '任务看板' : proj?.name ?? '项目',
-    )}
+    ${headRow('任务卡', '<button class="tc-del" id="tcDel" title="删掉这张卡（＝忽略它）">删除</button>')}
     <div class="detail-body tc-page">
       <div class="tc-main">
         <div class="tc-main-scroll">
@@ -5214,8 +5207,7 @@ async function paintTaskCardPage(taskId) {
     : proj ? () => openProjectDetail(proj.id) : () => openProjectsPage();
   // 离开这张卡就把位置记忆清掉：否则下一次刷新又会被拽回这张卡
   const leaveTo = async () => { await backTo(); };
-  // 页头那枚返回按钮 = backTo（跟上面 tcDel 旁的那颗是同一条路）
-  wireBackWb(view, backTo);
+  // （页头不再有返回按钮；backTo 只剩 leaveTo 在用 —— 删卡这类动作完事后回看板）
 
   /* ---------------- 标题 / 描述：就地编辑（2026-10-18 用户要求：没有编辑按钮，点了就改，改完自动存）
      做法跟 Multica 一致：标题、描述平时就是"读"的样子，点上去原地变成输入框；
@@ -6331,8 +6323,11 @@ function renderRunList() {
 
 function renderRunEmpty() {
   // 还没发起过：说清楚下一步点哪儿，别给个死页
+  // ⚠️ 标题**恒为「发起记录」**：这里原来写的是「有模板就不显示」—— 那是为了给页头那枚
+  //    「← 工作台」腾地方（模板名已经写在左栏顶上）。按钮统一撤掉之后，这个条件就只剩
+  //    "页头是一条没有字的横线"。空态也得有标题，写类别（跟流程编排空态一个套路）。
   $('flowView').innerHTML = `
-    ${headRow(esc(S.flowTemplate ? '' : '发起记录'))}
+    ${headRow('发起记录')}
     <div class="detail-body run-wrap">
       <div class="wip">这个流程还没有发起过
         <div style="margin-top:14px"><button class="primary" data-run-new>发起一条</button></div>
@@ -6340,7 +6335,6 @@ function renderRunEmpty() {
     </div>`;
   S.view = 'flow';
   showView('flow');
-  wireBackWb($('flowView'));
   $('flowView').querySelector('[data-run-new]')?.addEventListener('click', () => openFlowStart(S.flowTemplate));
 }
 
@@ -6754,9 +6748,9 @@ function runHTML(v) {
     <div class="run-page">
       <div class="run-left">
         <!-- 顶栏：只属于左边这一栏（右边对话栏自带一条头，两栏等高，见 .run-head 那条规则）。
-             左边先「← 工作台」，再接推拉列表面板的按钮，然后标题 + 状态徽标，右边是动作。 -->
+             左边是推拉列表面板的按钮 + 标题 + 状态徽标，右边是动作。
+             返回按钮统一去掉了：回工作台 / 换一条记录都点左栏那一行。 -->
         <div class="detail-head run-head">
-          ${backToWorkbench()}
           <!-- 推拉列表面板：放<b>顶栏</b>里 —— 列表面板收起后这块还在，按钮不会跟着消失 -->
           <button class="icon-btn run-toggle" type="button" data-run-toggle title="收起列表面板"
                   aria-label="收起列表面板">
@@ -7022,7 +7016,6 @@ function wireRun(v) {
       toast(e.message, 'error');
     }
   };
-  wireBackWb(view);
   // 推拉：收起/放出**最左侧的列表面板**（用 app 现成的 no-list 机制，工作台也是它）
   const toggle = view.querySelector('[data-run-toggle]');
   if (toggle) toggle.onclick = (e) => {
@@ -7548,7 +7541,6 @@ function paintDesigner() {
 
 function wireDesigner() {
   const view = $('flowView');
-  wireBackWb(view);
 
   view.querySelectorAll('[data-vd-add]').forEach((el) => {
     el.onclick = () => {
@@ -8362,8 +8354,6 @@ async function renderSchedules() {
     </div>`;
 
   $('schNew')?.addEventListener('click', () => scheduleDialog(null));
-  // 「← 工作台」：回工作台目录首页（默认行为就是 openPlugins）
-  wireBackWb(view);
   view.querySelectorAll('[data-sch-run]').forEach((el) => {
     el.onclick = async () => {
       const id = el.dataset.schRun;
@@ -10957,8 +10947,9 @@ function renderWorkbench() {
  *   · 首页的职责是**总览**（一屏扫完所有入口、看得见分组），不是"再往里走一层"；
  *   · 换成目录后主区是一大块空白，等于把整个页面浪费掉；
  *   · 入口还被塞进常态收起的左栏 —— 打开 app 第一眼反而什么都看不见。
- * 所以定下来：**首页宫格（左栏收起）、子页才走「← 上级 + 标题 + 动作」的页头。**
+ * 所以定下来：**首页宫格（左栏收起）、子页才走「标题 + 动作」的页头。**
  * 这是有意的分野：入口页长得像入口，工作页长得像工作页。
+ * （页头前面不放按钮 —— 当天加过一枚「← 工作台」，用户说"统一去掉"，见 headRow 的注释。）
  */
 function renderWorkbenchGrid() {
   resetWbHues(); // 每次重画从头发色：分组顺序不变 → 颜色不变；顺序变了 → 颜色跟着重排（不追求跨次稳定）
@@ -11437,13 +11428,6 @@ async function renderPluginPanel() {
     ${headRow(esc(plugin.label))}
     <div class="detail-body" id="plgPanel"><div class="dim">加载中…</div></div>`;
   showView('plugin');
-
-  // 回工作台 = 退出这个面板（S.plugin 清掉，左栏重新画成目录）
-  wireBackWb($('pluginView'), () => {
-    S.plugin = null;
-    renderList();
-    renderWorkbenchGrid();
-  });
 
   S.pluginData = {};
   pluginRows = {};
