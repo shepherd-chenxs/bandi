@@ -6809,14 +6809,11 @@ function runHTML(v) {
              左边是推拉列表面板的按钮 + 标题 + 状态徽标，右边是动作。
              返回按钮统一去掉了：回工作台 / 换一条记录都点左栏那一行。 -->
         <div class="detail-head run-head">
-          <!-- 推拉列表面板：放<b>顶栏</b>里 —— 列表面板收起后这块还在，按钮不会跟着消失 -->
-          <button class="icon-btn run-toggle" type="button" data-run-toggle title="收起列表面板"
-                  aria-label="收起列表面板">
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"
-                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M11 6l-5 6 5 6" /><path d="M18 6l-5 6 5 6" />
-            </svg>
-          </button>
+          <!-- ⚠️ 顶栏最左边原来有一枚「«」推拉按钮（收起/放出最左侧的列表面板）。
+               2026-10-19 用户要求去掉这一页的收缩展开：这一页的左栏是**发起记录**，
+               换一条记录全靠点它 —— 收起来等于把自己唯一的路收掉，而省下的那点宽度
+               换不来什么（右边还有一整栏对话）。整页统一：**左栏常驻，不推拉**。
+               所以这里不再有前置按钮，页头最左边就是标题（跟其它子页一个规矩）。 -->
           <div class="head-title"><b>${esc(v.title)}</b>
             <span class="flow-badge ${b.cls}">${esc(b.text)}</span></div>
           <div class="head-actions">${acts.join('')}</div>
@@ -7108,21 +7105,7 @@ function wireRun(v) {
       toast(e.message, 'error');
     }
   };
-  // 推拉：收起/放出**最左侧的列表面板**（用 app 现成的 no-list 机制，工作台也是它）
-  const toggle = view.querySelector('[data-run-toggle]');
-  if (toggle) toggle.onclick = (e) => {
-    const btn = e.currentTarget;
-    const off = document.body.classList.toggle('no-list');
-    btn.title = off ? '展开列表面板' : '收起列表面板';
-    btn.setAttribute('aria-label', btn.title);
-    // 箭头方向跟着状态：收起时朝左（面板往左退），展开时朝右（拉出来）
-    btn.innerHTML = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"
-      stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${
-        off
-          ? '<path d="M6 6l5 6-5 6"/><path d="M13 6l5 6-5 6"/>'
-          : '<path d="M11 6l-5 6 5 6"/><path d="M18 6l-5 6 5 6"/>'
-      }</svg>`;
-  };
+  // （那枚推拉列表面板的按钮 2026-10-19 撤了 —— 接线跟着删，见 runHTML 里的说明）
   // 「指派」「改状态」现在都长在时间轴"当前这一步"那一行里 —— 任务卡已撤；
   // 「重跑」也删了（改状态成「待办」就是重跑）。行内只剩：通过 / 驳回（快乐路径）。
   view.querySelectorAll('[data-run-decide]').forEach((el) => {

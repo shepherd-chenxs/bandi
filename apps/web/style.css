@@ -552,9 +552,9 @@ main { min-height: 0; }
 .run-page { flex: 1; min-height: 0; display: flex; position: relative; }
 .run-left { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .run-left > .detail-head { flex: 0 0 auto; }
-/* 推拉列表面板的按钮：在**顶栏里**（列表面板收起后顶栏还在，按钮不会跟着消失）。
-   样式走 .icon-btn，这里只补一个左侧间距。 */
-.run-toggle { flex: 0 0 auto; margin-right: 2px; }
+/* ⚠️ 这里原来是 `.run-toggle`（推拉列表面板那枚「«」的左侧间距），
+   2026-10-19 按钮撤了：这一页的左栏是「发起记录」，换记录全靠点它，不该能收起来。
+   样式随按钮一起没了 —— 别再无出处地加回来。 */
 /* 两栏的顶栏**等高**：右边多了个 26px 的 ✕，不定高就被撑起来，左右看着不齐 */
 .run-left > .detail-head,
 .run-page .nc-head { height: 50px; padding-top: 0; padding-bottom: 0;
