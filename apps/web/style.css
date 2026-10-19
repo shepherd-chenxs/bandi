@@ -87,7 +87,16 @@
   --av-cli: #3a5a8c; --av-cli-2: #16233a;      /* 运行时 / 流程（6.95） */
   --av-skill: #6d4fc4; --av-skill-2: #2b1d52;  /* 技能（5.89） */
   --av-grp: #2b7062; --av-grp-2: #123028;      /* 群（5.84） */
-  --av-dim: #2b3a55; --av-dim-2: #1a2233;      /* 小号头像（11.42） */
+  --av-dim: #2b3a55; --av-dim-2: #1a2233;      /* 旧小号头像底色（已弃用，见 .avatar.sm） */
+  /* 四档底色：中性灰蓝 / 偏蓝 / 偏紫 / 偏青。
+     ⚠️ 上一版把字设成 --av-sm-fg #f2f3f4（近白，实测 8.62:1）—— 参数上是够的，
+     但 **32px 方框里一个 12px 中文字，8.6:1 看着仍然发灰**（字小、笔画细，对比度要打折看）。
+     用户截图划的就是这两处。现在直接给纯白：9.58:1，视觉上一眼就清楚。 */
+  --av-sm-fg: #ffffff;
+  --av-sm-a: #3a4152;    /* 中性灰蓝 */
+  --av-sm-b: #35465f;    /* 偏蓝 */
+  --av-sm-c: #4a3f52;    /* 偏紫 */
+  --av-sm-d: #3d4a4c;    /* 偏青 */
   /* ── 实心块（主按钮、角标）：底色 + 上面的字 ──
      **为什么不能直接用 --accent**：--accent 是给"蓝字/蓝图标压在深底上"用的，
      深色下取 #0a84ff（当字用 5.46:1，够）。但主按钮是"白字压在蓝底上"，方向相反 ——
@@ -156,6 +165,13 @@
   --av-skill: #6d4fc4; --av-skill-2: #5a3fae;
   --av-grp: #2b7062; --av-grp-2: #1f5a4e;
   --av-dim: #52688c; --av-dim-2: #3d4f6e;
+  /* 浅色小头像：四档都要**压得住白字**（实测 7.75 / 7.79 / 8.06 / 7.9:1）。
+     换成浅底深字会跟旁边 38px 的浅灰行头像撞脸，分不清"这是个标识"还是"这是行首"。 */
+  --av-sm-fg: #ffffff;
+  --av-sm-a: #46536b;
+  --av-sm-b: #3c5470;
+  --av-sm-c: #5b4a63;
+  --av-sm-d: #44575a;
   /* 浅色主按钮：--accent #0066cc 配白字 5.57，本来就够，不用再开一档 */
   --btn-solid: #0066cc;
 
@@ -283,12 +299,31 @@ body.no-list .list-panel { display: none; }
    改成 hsl 底色需要按名字取色 —— 那样每个人都不一样、一屏几十个又成了调色盘；
    这里统一用 --chip 淡底 + --dim 字：名单靠"字 + 副标题"辨认已经够了，
    头像的作用只是让眼睛有个落点（Linear 自己也是这么做的）。 */
+/* 头像三种量级
+   ① `.avatar` 38px —— 列表行（通讯录 / 会话列表），配色由 app.js 的 `avatarStyle()` 内联给出
+      （按名字哈希取低饱和色，同一个人永远同色）。
+   ② `.avatar.sm` 32px —— 对话行、群设置、任务评论里的小头像。
+   ③ `.avatar.big` / `.p-head` / `.hero` 52~58px —— 详情页主标识。
+   ⚠️ 小头像原来压在 `--av-dim` 这组深靛蓝渐变上、字是 `--dim`（灰蓝）——
+   **用户截图报"看不清字"就是这个**：颜色本身就是用来区分的，但底色和字都是蓝灰，
+   字在里面糊成一片。现在单独定三档配色（灰 / 偏蓝 / 偏暖），字一律近白。
+   `.me`（我自己）用同一档灰，只把字换成 --text，跟对方头像靠位置 + 右侧对齐区分，
+   不额外加色（Linear 里自己的评论也不换个颜色）。 */
 .avatar { width: 38px; height: 38px; border-radius: 6px; flex: 0 0 38px; display: grid; place-items: center;
           font-weight: 500; color: var(--dim); background: var(--chip);
           border: 1px solid var(--line); font-size: 13px; }
 .avatar.clickable:hover { outline: 2px solid var(--accent); outline-offset: 1px; }
 .avatar.sm { width: 32px; height: 32px; flex-basis: 32px; font-size: 12px;
-             background: linear-gradient(135deg, var(--av-dim), var(--av-dim-2)); }
+             background: var(--av-sm-a); border-color: transparent;
+             color: var(--av-sm-fg); font-weight: 600; letter-spacing: .02em; }
+.avatar.sm[data-tone='2'] { background: var(--av-sm-b); }
+.avatar.sm[data-tone='3'] { background: var(--av-sm-c); }
+.avatar.sm[data-tone='4'] { background: var(--av-sm-d); }
+/* 「没跑成」那个感叹号（失败块的头像）：底色混一点 --bad。
+   它不是第五种"人"的身份色，是**状态** —— 所以单独用一个非数字的档名。 */
+.avatar.sm[data-tone='a'] { background: color-mix(in srgb, var(--bad) 42%, var(--av-sm-a)); }
+.avatar.sm.me { background: var(--chip); color: var(--text);
+                border-color: var(--line); font-weight: 500; letter-spacing: 0; }
 .item .who { min-width: 0; flex: 1; }
 .item .line1 { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
 .item .line1 b { font-weight: 500; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

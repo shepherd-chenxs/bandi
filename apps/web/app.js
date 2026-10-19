@@ -831,6 +831,24 @@ function avatarStyle(name) {
   const hue = AV_HUES[h % AV_HUES.length];
   return `style="background:hsl(${hue} 34% 26%);border-color:transparent;color:#fff"`;
 }
+
+/**
+ * 小头像（对话行 / 群设置 / 任务评论）：三档底色里按名字稳定挑一档。
+ *
+ * 为什么不再靠 `--av-dim` 那组深靛蓝渐变：字是 `--dim`（灰蓝）压在深靛蓝上，
+ * 用户直接截图报「看不清字」—— 字和底色同一色系，本来就糊。
+ * 现在三档底色 + 近白字（--av-sm-fg），名字本身已经不承担"区分身份"的职责，
+ * 只负责让眼睛有个落点、不同的人不是一模一样。
+ * 我自己那行（me）走灰底 + --text 字，靠气泡右侧对齐和位置区分，不额外上色。
+ */
+const AV_TONES = [1, 2, 3, 4];
+function smAvatar(name, extra = '') {
+  const s = String(name || '?');
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 9973;
+  const tone = AV_TONES[h % AV_TONES.length];
+  return `<div class="avatar sm${extra ? ' ' + extra : ''}" data-tone="${tone}">${esc(initial(s))}</div>`;
+}
 const hhmm = (iso) => { try { return new Date(iso).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }); } catch { return ''; } };
 const dt = (iso) => { try { return new Date(iso).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch { return ''; } };
 const cut = (s, n = 34) => (String(s ?? '').replace(/\s+/g, ' ').slice(0, n));
@@ -4862,7 +4880,7 @@ async function paintTaskCardPage(taskId) {
   const cmtItem = (m) => {
     const mine = m.role === 'user';
     return `<div class="tc-cmt${mine ? ' mine' : ''}">
-      <div class="avatar sm">${esc(mine ? '我' : initial(whoName))}</div>
+      ${mine ? smAvatar('我', 'me') : smAvatar(whoName)}
       <div class="tc-cmt-main">
         <div class="tc-cmt-meta">${mine ? '' : `<b>${esc(whoName)}</b>`}<time>${esc(cmtTime(m.createdAt))}</time></div>
         <div class="tc-cmt-text">${renderMarkdown(m.text)}</div>
@@ -4936,7 +4954,7 @@ async function paintTaskCardPage(taskId) {
         // 作者行在**正文上面**（跟普通评论一致）：头像旁边第一行就是"我 + 时间"，
         // 再往下才是内容 —— 反过来会让人以为下面又开了一条评论（2026-10-18 用户指出）
         return `<article class="tc-topic${t.head ? '' : ' pre'}" data-topic="${esc(t.id)}">
-          ${t.head && !startNote ? `<div class="avatar sm">${esc(t.head.role === 'user' ? '我' : initial(whoName))}</div>` : ''}
+          ${t.head && !startNote ? (t.head.role === 'user' ? smAvatar('我', 'me') : smAvatar(whoName)) : ''}
           <div class="tc-topic-body">
             ${meta}${head}
             ${replies}
@@ -5551,7 +5569,7 @@ async function paintTaskCardPage(taskId) {
     host?.insertAdjacentHTML(
       'beforeend',
       `<div class="tc-cmt live" id="${id}">
-        <div class="avatar sm">${esc(initial(whoName))}</div>
+        ${smAvatar(whoName)}
         <div class="tc-cmt-main"><div class="tc-cmt-meta"><b>${esc(whoName)}</b><span class="dim">正在说…</span></div>
         <div class="tc-cmt-text"><div class="typing"><i></i><i></i><i></i></div></div></div></div>`,
     );
@@ -9250,7 +9268,7 @@ async function openConversation(id) {
   } else {
     const name = d.conversation.personaName || S.persona?.name || '数字员工';
     $('chatHead').innerHTML = `
-      <div class="avatar sm clickable" data-detail="${esc(d.conversation.personaId)}" title="配置他的 agent CLI">${esc(initial(name))}</div>
+      ${smAvatar(name, `clickable" data-detail="${esc(d.conversation.personaId)}" title="配置他的 agent CLI`)}
       <div class="meta">
         <div><b>${esc(name)}</b> ${badge}</div>
       </div>
@@ -9300,8 +9318,8 @@ function bubble(role, text, name, who, showName = false, at = '') {
   const label = mine ? '我' : (who || name || '数字员工');
   // 时间放在气泡**外面**的下方（2026-10-19 用户要求，别塞在气泡里）：绝对定位，不占布局
   const t = at ? stampOf(at) : '';
-  return `<div class="row ${mine ? 'me' : ''}">
-    <div class="avatar sm">${esc(mine ? '我' : initial(label))}</div>
+    return `<div class="row ${mine ? 'me' : ''}">
+    ${mine ? smAvatar('我', 'me') : smAvatar(label)}
     <div class="bubble">${showName && !mine ? `<div class="who-line">${esc(label)}</div>` : ''}${renderMarkdown(text)}</div>
     ${t ? `<div class="btime">${esc(t)}</div>` : ''}
   </div>`;
@@ -9359,7 +9377,7 @@ function failBlock(r) {
       ? `<details class="fail-more"><summary>完整报错</summary><pre>${esc(full)}</pre></details>`
       : '';
   return `<div class="row">
-    <div class="avatar sm">!</div>
+    <div class="avatar sm" data-tone="a">!</div>
     <div class="bubble"><div class="step bad">没跑成：${esc(why)}${esc(code)}</div>${more}</div>
   </div>`;
 }
@@ -9448,7 +9466,7 @@ function attachStream(runId) {
   const id = 'live-' + runId;
   $('chat').insertAdjacentHTML('beforeend',
     `<div class="row" id="${id}">
-       <div class="avatar sm">${esc(initial(name))}</div>
+       ${smAvatar(name)}
        <div class="bubble"><div class="typing"><i></i><i></i><i></i></div></div>
      </div>`);
   scrollDown();
