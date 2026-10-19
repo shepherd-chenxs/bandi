@@ -3935,13 +3935,11 @@ async function openProjectsPage(selectId) {
   // 2026-10-19 统一子页页头后撤掉了：**返回只留在页头最左边**。
   // 留着它等于同一件事两个地方能做，而且只有项目页有，别的子页没有 —— 这就是不统一。
   document.body.classList.remove('no-list');
-  // 左栏顶上写「工作台 › 项目 › 名字」：面包屑从右页头挪到这儿（2026-10-19 用户要求）。
-  // 名字可能被用户改（自动保存），所以下面 paintName 里还要就地同步这一段。
-  setListTitle([
-    { label: '工作台', to: 'workbench' },
-    { label: '项目', to: 'projects' },
-    ...(sel ? [{ label: sel.name }] : []),
-  ]);
+  /* 左栏顶上**只写到二级**「工作台 › 项目」（2026-10-19 用户：「项目这个只要二级目录就可以了，
+     不需要三级目录。因为右边的详情区有了」）：项目名就在右侧详情区的 p-head 里，
+     面包屑再写一遍是同一件事说两遍；而且左栏列表里当前项目本来就高亮着。
+     ⚠️ 右边再没有这一段了，所以项目改名时**不用**同步标题（名字只在详情里变）。 */
+  setListTitle([{ label: '工作台', to: 'workbench' }, { label: '项目' }]);
   $('listAction').classList.remove('hidden');
   $('listAction').title = '新建项目';
   $('listBody').innerHTML =
@@ -4157,14 +4155,9 @@ async function renderProjDetail(p) {
         if (b) b.textContent = payload.name;
         if (sub) sub.textContent = payload.root;
       });
-      /* 左栏面包屑第三段就是项目名（右页头已经去掉了，见 openProjectsPage）。
-         不重画左栏列表，只把标题这一小段重建 —— 不会碰输入框焦点。 */
+      /* 改名同步的是**详情区自己**（p-head 的 h2 / 头像 / 目录 pill），不碰左栏标题 ——
+         左栏面包屑只到「工作台 › 项目」二级，项目名不写在里面（见 openProjectsPage）。 */
       const paintName = (name) => {
-        setListTitle([
-          { label: '工作台', to: 'workbench' },
-          { label: '项目', to: 'projects' },
-          { label: name },
-        ]);
         const h2 = box.querySelector('.p-head h2');
         if (h2) {
           h2.firstChild.nodeType === 3
