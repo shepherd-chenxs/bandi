@@ -1713,6 +1713,55 @@ const rtLoading = (title) =>
   `<div class="detail-head"><b>${esc(title)}</b><span class="dim" style="font-size:12px">加载中…</span></div>`;
 
 /**
+ * 页头的「← 工作台」（2026-10-19）。
+ *
+ * **为什么工作台的子页要用按钮，不用面包屑**：这些页的左栏一进来就换成了自己的列表
+ * （项目清单 / 发起记录 / 工具列表），原来挂在那儿的「‹ 工作台」就没了 ——
+ * 只能靠页头那串「工作台 › 定时任务」里的第一段点回去。但面包屑的**第一段是灰的**，
+ * 一眼看不出它能点；而且它跟标题挤在同一行，读起来像"路径"，不像"返回"。
+ *
+ * 现在统一：工作台的每一页（项目 / 看板 / 定时任务 / 流程编排 / 流程记录 / 插件面板）
+ * 页头最左边都是这枚按钮，样式跟消息页的「‹ 返回消息」同一套。
+ * 面包屑只留标题段（`工作台 › xxx` 里的 xxx），不再重复"返回"这个动作。
+ */
+function backToWorkbench(label = '工作台') {
+  return `<button class="icon-btn head-back" data-back-wb title="回${esc(label)}">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 6l-6 6 6 6" />
+            </svg>
+            <span>${esc(label)}</span>
+          </button>`;
+}
+
+/**
+ * 页头统一结构：左边「← 上级」，中间标题（可以是一段 HTML，比如带徽标 / 输入框），右边按钮组。
+ *
+ * backLabel 给**更深的层**用：任务卡是从看板点进去的，它的上一层是「任务看板」或某个项目，
+ * 写「工作台」会把人一步弹回最外层，中间那层就跳过了 —— 所以标签要跟真实上一层一致。
+ */
+function headRow(titleHtml, actionsHtml = '', backLabel = '工作台') {
+  return `<div class="detail-head head-row">${backToWorkbench(backLabel)}<div class="head-title">${titleHtml || ''}</div>${
+    actionsHtml ? `<div class="head-actions">${actionsHtml}</div>` : ''
+  }</div>`;
+}
+
+/**
+ * 接线页头那枚「← 工作台」。
+ *
+ * 默认回工作台首页；项目看板这种"上一层是项目列表"的，传自己的返回函数。
+ * 统一用一个函数接：以前每页各写一遍 `querySelector('[data-crumb-to=workbench]')`，
+ * 改一次页头就得找七处。
+ */
+function wireBackWb(root, back = () => openPlugins()) {
+  root.querySelector('[data-back-wb]')?.addEventListener('click', () => {
+    Promise.resolve()
+      .then(back)
+      .catch((e) => toast(e.message, 'error'));
+  });
+}
+
+/**
  * 可点的面包屑。
  * items: [{ label, to? }]；to 是 'devices' | 'device'，省略即"当前层"（不可点）。
  * 有了它就不需要"返回"按钮了 —— 而且一眼看得出自己在第几层。
@@ -3721,10 +3770,11 @@ function renderFlowList() {
 
 function renderFlowEmpty() {
   $('flowView').innerHTML = `
-    <div class="detail-head"><b>工作流</b></div>
+    ${headRow('流程编排')}
     <div class="detail-body"><div class="wip">还没有流程模板 —— 点左栏右上角的「＋」新建一个</div></div>`;
   S.view = 'flow';
   showView('flow');
+  wireBackWb($('flowView'));
 }
 
 /** 新建模板：先给一个起点节点，进去再改 */
@@ -3764,14 +3814,12 @@ function workbenchFlowSection() {
       <button class="wb-tile" data-flow-design title="画流程：节点、指派、发布">
         <span class="wb-ico flow">编</span>
         <span class="wb-name">流程编排</span>
-        <span class="wb-sub">画节点、指派、发布</span>
       </button>
       ${list
         .map(
           (f) => `<button class="wb-tile" data-flow-start="${esc(f.id)}" title="点开看发起记录">
             <span class="wb-ico flow">流</span>
             <span class="wb-name">${esc(f.name)}</span>
-            <span class="wb-sub">查看发起记录</span>
           </button>`,
         )
         .join('')}
@@ -3794,7 +3842,6 @@ function workbenchAutoSection() {
       <button class="wb-tile" data-schedules title="到点自动做一件事：写一句要它干什么、交给谁、多久一次">
         <span class="wb-ico cron">时</span>
         <span class="wb-name">定时任务</span>
-        <span class="wb-sub">到点自动做一件事</span>
       </button>
     </div>`;
 }
@@ -3820,12 +3867,10 @@ function workbenchProjectSection() {
       <button class="wb-tile" data-projects title="项目的名字、目录、规矩都在这儿管">
         <span class="wb-ico proj">项</span>
         <span class="wb-name">项目</span>
-        <span class="wb-sub">名字、目录、规矩</span>
       </button>
       <button class="wb-tile" data-task-board title="所有项目的活，铺在同一张看板上（站在全局看）">
         <span class="wb-ico board">板</span>
         <span class="wb-name">任务看板</span>
-        <span class="wb-sub">所有项目的活</span>
       </button>
     </div>`;
 }
@@ -3848,15 +3893,15 @@ async function openProjectsPage(selectId) {
   const sel = S.projects.find((x) => x.id === (selectId ?? S.projSel)) ?? S.projects[0] ?? null;
   S.projSel = sel?.id ?? null;
 
-  // 左栏 = 项目列表（左栏让出来：宫格进项目页时它是收着的）。
-  // 面包屑也搬进左栏：最上面一条「‹ 工作台」管回宫格（消息页「‹ 返回消息」同一个路数），
-  // 主区就只放项目详情，不再占一行面包屑。
+  // 左栏 = 项目列表（左栏让出来：从目录进项目页时它是收着的）。
+  // ⚠️ 原来左栏最上面还有一条「‹ 工作台」（照消息页「‹ 返回消息」那套路数加的），
+  // 2026-10-19 统一子页页头后撤掉了：**返回只留在页头最左边**。
+  // 留着它等于同一件事两个地方能做，而且只有项目页有，别的子页没有 —— 这就是不统一。
   document.body.classList.remove('no-list');
   $('listTitle').textContent = '项目';
   $('listAction').classList.remove('hidden');
   $('listAction').title = '新建项目';
   $('listBody').innerHTML =
-    `<div class="list-sec" id="projBack" title="回工作台宫格" style="cursor:pointer">‹ 工作台</div>` +
     (S.projects.length
       ? S.projects
           .map(
@@ -3871,9 +3916,6 @@ async function openProjectsPage(selectId) {
           )
           .join('')
       : '<div class="empty" style="padding:36px 12px">还没有项目<br />点右上角 ＋ 新建一个</div>');
-  $('listBody').querySelector('#projBack')?.addEventListener('click', () => {
-    openPlugins().catch((e) => toast(e.message, 'error'));
-  });
   // 左栏选谁，右边看谁（就地换详情，不整页跳）
   $('listBody').querySelectorAll('[data-proj-sel]').forEach((el) => {
     el.onclick = () => openProjectsPage(el.dataset.projSel).catch((e) => toast(e.message, 'error'));
@@ -3881,13 +3923,15 @@ async function openProjectsPage(selectId) {
 
   // 主区照**员工详情页**的骨架（2026-10-18 用户定的）：
   // detail-head 页题 → p-head（概览信息 + 按钮一行）→ tabs（基础信息 / 项目规章）→ 内容
+  // 页头跟其它子页对齐：左「← 工作台」、中间写当前项目名（不再是干巴巴的"项目详情"）、右边让详情自己放按钮
   view.innerHTML = `
-    <div class="detail-head"><b>项目详情</b></div>
+    ${headRow('项目' + (sel ? ` <span class="head-sep">›</span> <b>${esc(sel.name)}</b>` : ''))}
     <div class="detail-body" id="projDetail">${
       sel ? '<div class="dim">加载中…</div>' : '<div class="empty" style="padding:36px 12px">左边选一个项目</div>'
     }</div>`;
   S.view = 'plugin';
   showView('plugin');
+  wireBackWb(view);
   if (sel) await renderProjDetail(sel);
 }
 
@@ -4096,18 +4140,10 @@ async function openBoardPage({ project = null } = {}) {
     }
   }
 
-  const crumbs = isAll
-    ? breadcrumb([{ label: '工作台', to: 'workbench' }, { label: '任务看板' }])
-    : breadcrumb([{ label: '项目', to: 'projects' }, { label: project.name }]);
-
   view.innerHTML = `
-    <div class="detail-head">${crumbs}
-      <div class="head-actions" style="margin-left:auto">
-        ${err ? '' : kbFilterBar(data)}
-        ${err ? '' : kbPrRefreshHtml(data)}
-        <button data-kb-refresh>刷新</button>
-      </div>
-    </div>
+    ${headRow(isAll ? '任务看板' : esc(project.name), `${
+      err ? '' : kbFilterBar(data) + kbPrRefreshHtml(data)
+    }<button data-kb-refresh>刷新</button>`)}
     <div class="detail-body run-wrap">
       ${
         err
@@ -4122,12 +4158,8 @@ async function openBoardPage({ project = null } = {}) {
 
   S.view = 'plugin';
   showView('plugin');
-  view.querySelector('[data-crumb-to="workbench"]')?.addEventListener('click', () => {
-    openPlugins().catch((e) => toast(e.message, 'error'));
-  });
-  view.querySelector('[data-crumb-to="projects"]')?.addEventListener('click', () => {
-    openProjectsPage().catch((e) => toast(e.message, 'error'));
-  });
+  // 「← 工作台」：全局面板直接回工作台；项目看板先回项目列表（那是它的上一层）
+  wireBackWb(view, isAll ? () => openPlugins() : () => openProjectsPage());
   view.querySelector('[data-kb-refresh]')?.addEventListener('click', () => {
     (isAll ? openTaskBoard() : openProjectDetail(project.id)).catch((e) => toast(e.message, 'error'));
   });
@@ -4844,8 +4876,10 @@ async function paintTaskCardPage(taskId) {
   try {
     task = (await api(`/api/projects/tasks/${encodeURIComponent(taskId)}`)).task;
   } catch (e) {
-    view.innerHTML = `<div class="detail-head">${breadcrumb([{ label: '项目', to: 'projects' }, { label: '任务卡' }])}</div>
+    // 取不到也得是个能走的页：页头照统一格式给一枚返回，不然错误页就是个死胡同
+    view.innerHTML = `${headRow('任务卡', '', '项目')}
       <div class="empty" style="padding:24px 4px">任务取不到：${esc(e.message)}</div>`;
+    wireBackWb(view, () => openProjectsPage());
     return;
   }
   const proj = (S.projects ?? []).find((p) => p.id === task.projectId) ?? null;
@@ -4977,22 +5011,17 @@ async function paintTaskCardPage(taskId) {
    * 页面形态照 Multica 的任务详情（2026-10-18 用户要求"简洁一些"）：
    *   · 主区从上到下就是这件事本身：大标题 → 描述 → 讨论，别的一概不摆；
    *   · 属性全收进右栏三段：属性（状态/执行人/项目/来源）、Pull Request、详情（创建/更新时间）；
-   *   · 页头只留面包屑 + 两颗小动作（返回/删除），大按钮、来源 pill、执行人重复展示都撤掉。
+   *   · 页头统一成「← 上一层 + 标题 + 删除」—— 原来这里是三级面包屑
+   *     （`工作台 › 任务看板 › 任务卡`），跟它上一层的「← 工作台 + 任务看板」不是一个东西：
+   *     同一个位置两种不同的返回方式。改成同一枚返回按钮后，往下钻几层读法都一样。
+   *     返回标签写**真实上一层**（任务看板 / 项目名），不是一律「工作台」。
    */
   view.innerHTML = `
-    <div class="detail-head">
-      ${taskCardFromAll
-        ? breadcrumb([{ label: '工作台', to: 'workbench' }, { label: '任务看板', to: 'taskBoard' }, { label: '任务卡' }])
-        : breadcrumb([
-            { label: '项目', to: 'projects' },
-            // 项目名可点：回这个项目的看板（`project:<id>` 由下面的监听解析）
-            { label: proj?.name ?? '（项目已不在）', to: proj ? `project:${proj.id}` : undefined },
-            { label: '任务卡' },
-          ])}
-      <div class="head-actions" style="margin-left:auto">
-        <button class="tc-del" id="tcDel" title="删掉这张卡（＝忽略它）">删除</button>
-      </div>
-    </div>
+    ${headRow(
+      '任务卡',
+      '<button class="tc-del" id="tcDel" title="删掉这张卡（＝忽略它）">删除</button>',
+      taskCardFromAll ? '任务看板' : proj?.name ?? '项目',
+    )}
     <div class="detail-body tc-page">
       <div class="tc-main">
         <div class="tc-main-scroll">
@@ -5085,16 +5114,8 @@ async function paintTaskCardPage(taskId) {
     : proj ? () => openProjectDetail(proj.id) : () => openProjectsPage();
   // 离开这张卡就把位置记忆清掉：否则下一次刷新又会被拽回这张卡
   const leaveTo = async () => { await backTo(); };
-  view.querySelector('[data-crumb-to="projects"]')?.addEventListener('click', () => openProjectsPage().catch((e) => toast(e.message, 'error')));
-  // 项目名（`project:<id>`）→ 回这个项目的看板
-  view.querySelectorAll('[data-crumb-to^="project:"]').forEach((el) => {
-    el.addEventListener('click', () => {
-      const id = el.dataset.crumbTo.slice('project:'.length);
-      openProjectDetail(id).catch((e) => toast(e.message, 'error'));
-    });
-  });
-  view.querySelector('[data-crumb-to="workbench"]')?.addEventListener('click', () => openPlugins().catch((e) => toast(e.message, 'error')));
-  view.querySelector('[data-crumb-to="taskBoard"]')?.addEventListener('click', () => openTaskBoard().catch((e) => toast(e.message, 'error')));
+  // 页头那枚返回按钮 = backTo（跟上面 tcDel 旁的那颗是同一条路）
+  wireBackWb(view, backTo);
 
   /* ---------------- 标题 / 描述：就地编辑（2026-10-18 用户要求：没有编辑按钮，点了就改，改完自动存）
      做法跟 Multica 一致：标题、描述平时就是"读"的样子，点上去原地变成输入框；
@@ -6211,7 +6232,7 @@ function renderRunList() {
 function renderRunEmpty() {
   // 还没发起过：说清楚下一步点哪儿，别给个死页
   $('flowView').innerHTML = `
-    <div class="detail-head"><b>${esc(S.flowTemplate ? '' : '发起记录')}</b></div>
+    ${headRow(esc(S.flowTemplate ? '' : '发起记录'))}
     <div class="detail-body run-wrap">
       <div class="wip">这个流程还没有发起过
         <div style="margin-top:14px"><button class="primary" data-run-new>发起一条</button></div>
@@ -6219,6 +6240,7 @@ function renderRunEmpty() {
     </div>`;
   S.view = 'flow';
   showView('flow');
+  wireBackWb($('flowView'));
   $('flowView').querySelector('[data-run-new]')?.addEventListener('click', () => openFlowStart(S.flowTemplate));
 }
 
@@ -6631,7 +6653,10 @@ function runHTML(v) {
   return `
     <div class="run-page">
       <div class="run-left">
-        <div class="detail-head">
+        <!-- 顶栏：只属于左边这一栏（右边对话栏自带一条头，两栏等高，见 .run-head 那条规则）。
+             左边先「← 工作台」，再接推拉列表面板的按钮，然后标题 + 状态徽标，右边是动作。 -->
+        <div class="detail-head run-head">
+          ${backToWorkbench()}
           <!-- 推拉列表面板：放<b>顶栏</b>里 —— 列表面板收起后这块还在，按钮不会跟着消失 -->
           <button class="icon-btn run-toggle" type="button" data-run-toggle title="收起列表面板"
                   aria-label="收起列表面板">
@@ -6640,9 +6665,9 @@ function runHTML(v) {
               <path d="M11 6l-5 6 5 6" /><path d="M18 6l-5 6 5 6" />
             </svg>
           </button>
-          <b>${esc(v.title)}</b>
-          <span class="flow-badge ${b.cls}">${esc(b.text)}</span>
-          <div class="head-actions" style="margin-left:auto">${acts.join('')}</div>
+          <div class="head-title"><b>${esc(v.title)}</b>
+            <span class="flow-badge ${b.cls}">${esc(b.text)}</span></div>
+          <div class="head-actions">${acts.join('')}</div>
         </div>
         <div class="detail-body run-wrap">
 
@@ -6897,6 +6922,7 @@ function wireRun(v) {
       toast(e.message, 'error');
     }
   };
+  wireBackWb(view);
   // 推拉：收起/放出**最左侧的列表面板**（用 app 现成的 no-list 机制，工作台也是它）
   const toggle = view.querySelector('[data-run-toggle]');
   if (toggle) toggle.onclick = (e) => {
@@ -7362,14 +7388,12 @@ function paintDesigner() {
     .join('');
 
   $('flowView').innerHTML = `
-    <div class="detail-head">
-      <b>流程设计</b>
-      <input id="dzName" value="${esc(S.designerName ?? '')}" placeholder="流程名字" style="max-width:220px" />
-      <div class="head-actions" style="margin-left:auto">
-        <button data-vd-publish>${S.designerPublished ? '已发布 · 下架' : '发布到工作台'}</button>
-        <button class="primary" data-vd-save>保存</button>
-      </div>
-    </div>
+    ${headRow(
+      `<span class="head-kicker">流程设计</span>
+       <input id="dzName" value="${esc(S.designerName ?? '')}" placeholder="流程名字" style="max-width:220px" />`,
+      `<button data-vd-publish>${S.designerPublished ? '已发布 · 下架' : '发布到工作台'}</button>
+       <button class="primary" data-vd-save>保存</button>`,
+    )}
     <div class="detail-body dz-wrap">
       ${
         S.designerRestored
@@ -7424,6 +7448,7 @@ function paintDesigner() {
 
 function wireDesigner() {
   const view = $('flowView');
+  wireBackWb(view);
 
   view.querySelectorAll('[data-vd-add]').forEach((el) => {
     el.onclick = () => {
@@ -8220,9 +8245,7 @@ async function renderSchedules() {
   };
 
   view.innerHTML = `
-    <div class="detail-head">${breadcrumb([{ label: '工作台', to: 'workbench' }, { label: '定时任务' }])}
-      <div class="head-actions" style="margin-left:auto"><button class="primary" id="schNew">＋ 新建任务</button></div>
-    </div>
+    ${headRow('定时任务', '<button class="primary" id="schNew">＋ 新建任务</button>')}
     <div class="detail-body">
       <div class="group-title">任务 <span class="dim" style="font-weight:400">${jobs.length} 个</span></div>
       <div class="group">
@@ -8239,10 +8262,8 @@ async function renderSchedules() {
     </div>`;
 
   $('schNew')?.addEventListener('click', () => scheduleDialog(null));
-  // 面包屑「工作台」：回到宫格首页（跟任务看板那条一样）
-  view.querySelector('[data-crumb-to="workbench"]')?.addEventListener('click', () => {
-    openPlugins().catch((e) => toast(e.message, 'error'));
-  });
+  // 「← 工作台」：回工作台目录首页（默认行为就是 openPlugins）
+  wireBackWb(view);
   view.querySelectorAll('[data-sch-run]').forEach((el) => {
     el.onclick = async () => {
       const id = el.dataset.schRun;
@@ -10816,15 +10837,29 @@ async function openPlugins() {
   if (S.nav !== 'plugins' || S.plugin || S.projectList || S.projectId || S.boardAll) return;
   renderList();
   renderWorkbench();
+  // 显式「回工作台」时把**选择也复位**：否则下次重进工作台，renderList 会把上次那个
+  // 插件 / 项目看板的位置又画回去（用户在子页里点了返回，结果一刷新又跳回去过 —— 踩过）
+  delete S.plugin;
+  delete S.pluginRow;
 }
 
-/** 工作台：没选应用就是宫格，选了就是那个应用的页面 */
+/** 工作台：没选应用就是目录，选了就是那个应用的页面 */
 function renderWorkbench() {
   if (S.plugin) return renderPluginPanel();
   renderWorkbenchGrid();
 }
 
-/** 工作台首页：按 manifest 里的 category 分组的应用宫格 */
+/**
+ * 工作台首页 = **整页宫格**（2026-10-19 用户明确要求保留：「这个是整体的入口页，不能变」）。
+ *
+ * ⚠️ 中途我把它改成过"左栏目录 + 右栏空态"，理由是"工作台的子页全是左栏列表 + 右侧内容，
+ * 首页也该一样"。那是**从形式倒推**的，回来一看明显不对：
+ *   · 首页的职责是**总览**（一屏扫完所有入口、看得见分组），不是"再往里走一层"；
+ *   · 换成目录后主区是一大块空白，等于把整个页面浪费掉；
+ *   · 入口还被塞进常态收起的左栏 —— 打开 app 第一眼反而什么都看不见。
+ * 所以定下来：**首页宫格（左栏收起）、子页才走「← 上级 + 标题 + 动作」的页头。**
+ * 这是有意的分野：入口页长得像入口，工作页长得像工作页。
+ */
 function renderWorkbenchGrid() {
   resetWbHues(); // 每次重画从头发色：分组顺序不变 → 颜色不变；顺序变了 → 颜色跟着重排（不追求跨次稳定）
   const list = usablePlugins();
@@ -10833,7 +10868,7 @@ function renderWorkbenchGrid() {
   $('listTitle').textContent = '工作台';
   $('listBody').innerHTML = '';
   $('listAction').classList.add('hidden');
-  // 装上了但 manifest 有问题的：原来提示在左栏，左栏收掉后挪到这里，
+  // 装上了但 manifest 有问题的：提示放在宫格最下面，
   // 否则插件作者只会看到"我装的插件不见了"，不知道哪里错了
   const broken = S.plugins.filter((p) => p.panel?.slot === 'plugins' && p.installed && !p.valid);
   const groups = new Map();
@@ -10843,12 +10878,9 @@ function renderWorkbenchGrid() {
     groups.get(key).push(p);
   }
 
-  /* 工作台改成**无分带**的一行排开（2026-10-19 用户反馈"图标很大不美观"后重做）。
-     原来每个分组是一个 `<section class="fx">`，`.fx + .fx` 自带一条横分隔线，
-     于是 5 个小组竖着叠成 5 条横带，每条右侧一片空白 —— 分隔线反而比内容显眼。
-     现在：所有分组**共用一个宫格容器**，分组名退化成一行小标题（`.wb-sec`），
-     一屏铺得下就连续排下去；装得多了也只是换个行，不会再出现"一带一块"。
-     排序照旧：先插件（按 manifest 分类），再项目/自动化/流程。 */
+  /* 所有分组**共用一个宫格容器**，分组名退化成一行小标题（`.wb-sec`）。
+     原来每个分组是 `<section class="fx">`，`.fx + .fx` 自带横分隔线 —— 5 个小组竖着叠成
+     5 条横带，每条右侧一片空白，分隔线反而比内容显眼。现在一屏铺不下就换行，不会"一带一块"。 */
   const pluginSections = [...groups]
     .map(
       ([cat, items]) => `<div class="wb-sec">${esc(cat)}</div>
@@ -10858,7 +10890,6 @@ function renderWorkbenchGrid() {
               (p) => `<button class="wb-tile" data-wb-open="${esc(p.id)}" title="${esc(p.description || p.label)}">
                 <span class="wb-ico has-plug" ${wbIcoStyle(cat)}><i class="wb-badge" title="插件" aria-label="插件">${PLUGIN_BADGE_SVG}</i>${esc(initial(p.label))}</span>
                 <span class="wb-name">${esc(p.label)}</span>
-                <span class="wb-sub">${esc(cut(p.description, 40) || '插件')}</span>
               </button>`,
             )
             .join('')}
@@ -10868,9 +10899,9 @@ function renderWorkbenchGrid() {
 
   $('pluginView').classList.remove('kb-page'); // 宫格是长页面，按普通滚动
   $('pluginView').innerHTML = `
-    <div class="detail-head"><b>工作台</b></div>
+    <div class="detail-head head-row"><div class="head-title">工作台</div></div>
     <div class="detail-body wb-page">${
-      list.length ? pluginSections : '' // 没装应用就不渲染这个区：空态横幅没人需要（装第一个应用时自然会知道去哪装）
+      list.length ? pluginSections : '' // 没装应用就不渲染这个区：空态横幅没人需要
     }${workbenchProjectSection()}${workbenchAutoSection()}${workbenchFlowSection()}${
       broken.length
         ? `<div class="wb-sec">装不上台面</div>
@@ -10881,7 +10912,8 @@ function renderWorkbenchGrid() {
     }</div>`;
   showView('plugin');
 
-  $('pluginView').querySelectorAll('[data-wb-open]').forEach((el) => {
+  const view = $('pluginView');
+  view.querySelectorAll('[data-wb-open]').forEach((el) => {
     el.onclick = () => {
       S.plugin = el.dataset.wbOpen;
       setRoute('plugin', { id: S.plugin });
@@ -10895,23 +10927,23 @@ function renderWorkbenchGrid() {
     };
   });
   // 流程编排：画节点、指派、发布（入口原来在 rail 的「工作流」，现在收进工作台）
-  $('pluginView').querySelector('[data-flow-design]')?.addEventListener('click', () => {
+  view.querySelector('[data-flow-design]')?.addEventListener('click', () => {
     openWorkflows().catch((e) => toast(e.message, 'error'));
   });
   // 流程：点一下先看**这个流程的发起记录**；发起是那个页面上的动作（＋）
-  $('pluginView').querySelectorAll('[data-flow-start]').forEach((el) => {
+  view.querySelectorAll('[data-flow-start]').forEach((el) => {
     el.onclick = () => openFlowRun(el.dataset.flowStart);
   });
   // 项目：点一下进项目列表（增删改查都在那儿）
-  $('pluginView').querySelector('[data-projects]')?.addEventListener('click', () => {
+  view.querySelector('[data-projects]')?.addEventListener('click', () => {
     openProjectsPage().catch((e) => toast(e.message, 'error'));
   });
-  // 任务看板：项目旁边那个入口 —— 同一张看板，范围是**所有项目**（站在全局看）
-  $('pluginView').querySelector('[data-task-board]')?.addEventListener('click', () => {
+  // 任务看板：同一张看板，范围是**所有项目**（站在全局看）
+  view.querySelector('[data-task-board]')?.addEventListener('click', () => {
     openTaskBoard().catch((e) => toast(e.message, 'error'));
   });
   // 定时任务：入口原来在「设置」里，搬到工作台（2026-10-17 用户要求）
-  $('pluginView').querySelector('[data-schedules]')?.addEventListener('click', () => {
+  view.querySelector('[data-schedules]')?.addEventListener('click', () => {
     openSchedules().catch((e) => toast(e.message, 'error'));
   });
 }
@@ -11302,20 +11334,16 @@ async function renderPluginPanel() {
   S.projectList = false;
   S.projectId = null;
   $('pluginView').innerHTML = `
-    <div class="detail-head">
-      ${breadcrumb([{ label: '工作台', to: 'workbench' }, { label: plugin.label }])}
-    </div>
+    ${headRow(esc(plugin.label))}
     <div class="detail-body" id="plgPanel"><div class="dim">加载中…</div></div>`;
   showView('plugin');
 
-  const back = $('pluginView').querySelector('[data-crumb-to]');
-  if (back) {
-    back.onclick = () => {
-      S.plugin = null;
-      renderList();
-      renderWorkbenchGrid();
-    };
-  }
+  // 回工作台 = 退出这个面板（S.plugin 清掉，左栏重新画成目录）
+  wireBackWb($('pluginView'), () => {
+    S.plugin = null;
+    renderList();
+    renderWorkbenchGrid();
+  });
 
   S.pluginData = {};
   pluginRows = {};

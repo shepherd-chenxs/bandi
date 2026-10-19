@@ -431,76 +431,65 @@ main { min-height: 0; }
 .plg-row-actions { display: flex; gap: 8px; align-items: center; flex: 0 0 auto; }
 .plg-row-actions button { padding: 4px 12px; font-size: 12.5px; }
 
-/* 工作台（Linear 语汇，2026-10-19 用户要求"全部 Linear"）：**宫格改成行式列表**。
-   为什么连宫格一起去掉：iOS 主屏那种"彩色方块铺开"就是 iOS 语汇本身 ——
-   它是给手指戳的入口地图，Linear 一族里没有这个形态（Linear 的入口是侧栏列表 + 命令面板）。
-   要统一，就得换成 Linear 真有的样子：**一行一个入口**，左标识、右名字 + 一句说明。
-
-   留了什么：行首那个色块**保留但降级**（40px → 24px、圆角 12 → 6），
-   Linear 原教旨这里该是 16px 单色小图标；全灰会让七个入口变成七行差不多的字，
-   我认为保留一点色彩语义更值，所以取 24px 这个"标识"量级。
-
-   行高走 --pad-row + --r-row（6px），跟设置页、通讯录完全同一档；悬停只给淡底，不描边不上浮。 */
-.wb-grid { display: flex; flex-direction: column; gap: 2px; }
-.wb-tile { display: flex; align-items: center; gap: 10px; width: 100%;
-           padding: var(--pad-row); border: 1px solid transparent; border-radius: var(--r-row);
-           background: transparent; cursor: pointer; text-align: left;
-           -webkit-tap-highlight-color: transparent; }
+/* 工作台首页：**整页宫格**（2026-10-19 用户明确要求改回来：「这个是整体的入口页，不能变」）。
+   ⚠️ 中途我试过把它改成"左栏目录 + 右栏空态"，理由是"下面的子页都是左栏列表 + 右侧内容"。
+   那是从"形式统一"倒推的，漏了一件事：**这一页的职责是"总览"，不是"再往里走一层"** ——
+   宫格一屏能扫完所有入口、看得见分组和数量；换成目录之后右栏是一大块空白，
+   入口还被塞进常态收起的左栏里。两个形态干的是两种活，不该为了长得像而统一。
+   所以：**首页宫格、子页才走「← 上级 + 标题 + 动作」的页头**，这是有意的分野，不是没做完。
+   下面是宫格本体（40px 图标 / 96px 定宽列）—— 尺寸是 2026-10-19「图标很大不美观」那一轮收敛过的。 */
+/* 列宽**定死 96px、不拉伸**（不是 minmax(96px, 1fr)）：
+   `1fr` 会把 4 块磁贴摊到 1000px 宽里，每块 250px —— 图标还是 40px，
+   于是每块磁贴的左右各空 100px，整排看着像"四个孤零零的点撒在左边缘"。
+   定宽之后磁贴挨在一起成组，右边留白变成一整块（这是对的：留白成块才像呼吸，撒开就像漏排）。 */
+.wb-grid { display: grid; grid-template-columns: repeat(auto-fill, 96px); gap: 4px;
+           justify-content: start; }
+.wb-tile { display: flex; flex-direction: column; align-items: center; gap: 8px;
+           padding: 14px 6px 12px; border: 1px solid transparent; border-radius: 10px;
+           background: transparent; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .wb-tile:hover { background: var(--hover); }
 .wb-tile:active { background: var(--active); }
-.wb-ico { width: 24px; height: 24px; border-radius: 6px; display: flex; flex: 0 0 auto;
+.wb-ico { width: 40px; height: 40px; border-radius: 12px; display: flex;
           align-items: center; justify-content: center; color: var(--on-solid);
-          font-size: 11.5px; font-weight: 600;
+          font-size: 17px; font-weight: 600; flex: 0 0 auto;
+          /* 一档极淡的高光，让色块有"实体"感而不是一块平涂。
+             用 --on-solid（就是白色）而不是写死 #fff：这样"色块上的白"只有一个来源。 */
+          box-shadow: inset 0 1px 0 color-mix(in srgb, var(--on-solid) 16%, transparent);
           background: linear-gradient(135deg, var(--logo-1), var(--logo-2)); }
-/* 行式之后名字左对齐、一行显示完（宫格要限两行是为了不撑变形，行式没这个问题）。
-   `flex: 0 1 auto` + 说明那一侧先让位：名字是**主体**，说明是可省的补充 ——
-   挤的时候该截的是说明，不是名字。 */
-.wb-name { font-size: 13px; color: var(--text); flex: 0 1 auto; min-width: 0;
-           overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* 一句说明：这是行式**比宫格多出来的信息量** —— 宫格放不下说明、只能挂在 title 上靠悬停，
-   行式直接写出来，扫一眼就知道点进去是什么。
-   ⚠️ **紧跟名字，不能用 margin-left:auto 顶到右沿**（第一版那样做了，截图上看很难看）：
-   窗口一宽，名字在左、说明在 900px 之外的右沿，一行断成两截，读者得横跨半个屏幕把它们连起来。
-   现在：名字 + 说明连成一句，右边留白就留白 —— 留白在行尾是"没内容"，不是"两块内容之间的沟"。 */
-.wb-sub { font-size: 11.5px; color: var(--dim); flex: 0 1 auto; min-width: 0;
-          overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 名字**限宽居中** —— 中文名能撑到两行的就两行（"流程编排"），再长才省略 */
+.wb-name { font-size: 12.5px; color: var(--text); text-align: center; line-height: 1.3;
+           max-width: 100%; overflow-wrap: anywhere;
+           display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 /* 插件磁贴：**按分组取色**（颜色由 app.js 的 wbIcoStyle 内联给出，见那里的注释）。
    兜底是品牌蓝 —— 万一哪天没带 --wb-1/--wb-2，磁贴也不会变成透明色块。 */
 .wb-ico.has-plug { background: linear-gradient(135deg,
                       var(--wb-1, var(--logo-1)), var(--wb-2, var(--logo-2))); }
-/* ⚠️ 这里原来还有一条**宫格时代的** `.wb-name`（12.5px / text-align:center / 两行裁切），
-   排在行式那条之后 —— 同优先级后写的赢，于是名字被居中了、还被限成两行。
-   宫格改行式时漏删了它，截图上看就是"名字居中偏到说明那边去"。已删除。 */
-/* 分组小标题（`.wb-sec`，2026-10-19 取代原来的 `section.fx > label`）。
-   三处作用：
-   ① 它是分组唯一还剩下的"分"—— **不带分隔线、不占一条横带**，只占一行字；
-   ② 字号退到 11.5px 灰字：铺在主屏上不能跟磁贴名字抢视线；
-   ③ 它跟上一行宫格之间留 20px、跟自己的宫格只留 8px —— 靠"离上远、离下近"来表达从属关系，
-      比画一条线轻，效果一样（这是分组标题的通用做法）。
+/* 分组小标题：它是分组唯一还剩下的"分" —— **不带分隔线、不占一条横带**，只占一行字。
+   靠"离上远（20px）、离下近（8px）"表达从属关系，比画一条线轻。
    `:first-child` 去掉上边距：整页第一组不该顶着页头往下缩。 */
-.wb-sec { font-size: 11.5px; font-weight: 600; letter-spacing: .04em; color: var(--dim);
+/* 字号 / 字重 / 字距**跟左栏 `.list-sec` 对齐**（11.5px / 600 / .3px）：
+   两边是同一个语义（分组），同一个 app 里不该有两种分组标题。
+   ⚠️ **别去掉字距**：.3px 是给中文分组名留的呼吸，去掉之后"研发""运维"会贴成一坨，
+   看着像图注而不是标题（第一版写成 .04em，等于又多加了一层，改名时顺手抹平了）。 */
+.wb-sec { font-size: 11.5px; font-weight: 600; letter-spacing: .3px; color: var(--dim);
           margin: 20px 0 8px; padding-left: 2px; }
 .wb-sec:first-child { margin-top: 0; }
 /* **插件**的图标角上挂一个小角标：工作台里混着平台自带的入口（项目 / 任务看板 / 流程），
    只靠磁贴样子分不出哪个是装进来的插件。
-   位置是**骑在图标左上那个圆角上** —— 一多半压在色块上、一少半探出去，
-   既看得出属于这块图标，又不占图标里面那点地方（图标里只有一个字，塞进去会挤）。
-   探出去的那点还在磁贴内边距里，不会出到入口卡背景框外。
+   位置是**骑在图标左上那个圆角上** —— 一多半压在色块上、一少半探出去。
    ⚠️ 这里写死 #fff 是**故意的**：它是一个白色插头图形，不是文字压在底色上 ——
-   跟着 --text 走的话，浅色主题会变成深灰插头（截图上看过，很怪）。
-   平台自带的那几块图标没有 .has-plug，也就没有角标。 */
+   跟着 --text 走的话，浅色主题会变成深灰插头（截图上看过，很怪）。 */
 .wb-ico.has-plug { position: relative; }
-/* 白色插头一半压在深蓝图标上、一半探到浅色背景上 —— 纯白在浅背景上会"化掉"，
-   所以描一圈深色：压在图标上时看不出描边，探出去那半圈立刻有轮廓（截图上看过）。
-   尺寸**跟着图标走**，占图标 37% 上下：56px 图标配 18px、40px 配 15px、现在的 24px 配 11px。
-   再大就会比图标里的字还显眼 —— 一眼看过去先看见插头，而不是入口本身。 */
-.wb-ico.has-plug .wb-badge { position: absolute; left: -4px; top: -4px;
-                    width: 11px; height: 11px; display: flex;
+/* 白色插头一半压在深色图标上、一半探到浅色背景上 —— 纯白在浅背景上会"化掉"，
+   所以描一圈深色：压在图标上时看不出描边，探出去那半圈立刻有轮廓。
+   尺寸**跟着图标走**，占图标 37% 上下：56px 配 18px、现在的 40px 配 15px。 */
+.wb-ico.has-plug .wb-badge { position: absolute; left: -6px; top: -6px;
+                    width: 15px; height: 15px; display: flex;
                     align-items: center; justify-content: center;
                     color: #ffffff;   /* 固定白：这是图形不是文字，见上面的注释 */
                     filter: drop-shadow(0 0 .7px rgba(15, 20, 32, .95))
-                            drop-shadow(0 1px 1.5px rgba(0, 0, 0, .5)); }
-.wb-ico.has-plug .wb-badge svg { width: 11px; height: 11px; display: block; }
+                            drop-shadow(0 1px 2px rgba(0, 0, 0, .5)); }
+.wb-ico.has-plug .wb-badge svg { width: 15px; height: 15px; display: block; }
 /* 悬停整块磁贴时角标亮成强调色，提示"这个小图是有意思的" */
 .wb-tile:hover .wb-badge { color: var(--accent); }
 
@@ -1078,8 +1067,10 @@ main { min-height: 0; }
 .pt-note b { color: var(--text); font-weight: 500; }
 
 .group-title { font-size: 13px; font-weight: 600; margin: 0 0 8px; }
+/* `min-width: 0` 是给 grid/flex 父级留的：`.group` 一旦被当成 flex item 放进窄列，
+   默认的"最小内容宽"会让里面那句不换行的长文**把整块撑出容器**（实测浅色下右边被截掉半句）。 */
 .group { border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
-         padding: 2px 16px; margin-bottom: 22px; }
+         padding: 2px 16px; margin-bottom: 22px; min-width: 0; }
 .form-row { display: grid; grid-template-columns: 132px minmax(0, 1fr);
             gap: 16px; align-items: center; padding: 13px 0; border-top: 1px solid var(--line); }
 .form-row:first-child { border-top: 0; }
@@ -1178,7 +1169,13 @@ input.locked:focus { outline: none; border-color: var(--line); }
 .sk-head b { font-size: 14px; }
 .sk-hint { margin-top: 3px; font-size: 12px; color: var(--dim); line-height: 1.6; }
 .sk-list { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); overflow: hidden; }
-.sk-row { display: flex; align-items: center; gap: 14px; padding: 11px 14px; }
+/* ⚠️ `align-items: center` 原来是默认，配上 `.sk-main{flex:0 1 auto}` 会出事：
+   文字区可以被压到 0 宽，而里面的 `.sk-desc` 是 `nowrap` 不参与收缩计算 ——
+   于是容器一旦窄下来（比如窗口只留出 70px 宽的内容区），整行被"压扁"成
+   一列竖排的单个字，按钮叠在一起（2026-10-19 截图里看到的）。
+   两处一起改：行顶对齐（行内变成多行高度时不会把图标挤到中间），
+   文字区**保底**一段宽度、能换行，长句折行而不是把字掰成一列。 */
+.sk-row { display: flex; align-items: flex-start; gap: 14px; padding: 11px 14px; }
 .sk-row + .sk-row { border-top: 1px solid var(--line); }
 /* 动作区（行里第一颗按钮 / 开关）靠右，文字别贴上去。
    ⚠️ 不能按"第 3 个孩子"数：各页行结构不一样 —— 技能行是 图标+文字+开关（第 3 个正好），
@@ -1188,13 +1185,24 @@ input.locked:focus { outline: none; border-color: var(--line); }
 .sk-row > label:first-of-type { margin-left: auto; }
 .sk-ico { flex: 0 0 auto; width: 34px; height: 34px; border-radius: 9px; background: var(--hover);
           color: var(--dim); display: grid; place-items: center; }
-.sk-main { flex: 0 1 auto; min-width: 0; max-width: 620px; }   /* 文字区给个上限，别一直顶到按钮跟前 */
+/* 文字区给个上限，别一直顶到按钮跟前；同时给个下限（14em ≈ 四五个汉字宽×若干），
+   窄屏下先折行、再不行就让整行横向溢出 —— 总之不许把字压成一列。 */
+.sk-main { flex: 0 1 auto; min-width: 14em; max-width: 620px; }
 .sk-main b { font-size: 13.5px; }
+/* 长说明折两行就够：单行 ellipsis 在窄容器里会把"每 30 分钟 · 上次…"整句切掉，
+   而行高固定住 → 行高不跳。手机上这行基本只剩省略号，所以改成两行 clamp。 */
 .sk-desc { margin-top: 2px; font-size: 12.5px; color: var(--dim);
-           overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+           display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+           overflow: hidden; }
 .sk-empty { display: flex; align-items: center; gap: 10px; padding: 18px 16px; font-size: 12.5px;
             color: var(--dim); border: 1px dashed var(--line); border-radius: 8px; }
-.sk-blank { display: flex; align-items: center; gap: 10px; padding: 18px 16px; font-size: 12.5px; color: var(--dim); }
+/* 空态说明（定时任务 / 仓库没东西时那段长文）：**.group 是 flex item，不给 min-width:0 时
+   "不可断行"的最小内容宽会把整块撑出容器** —— 浅色截图里看到它把右边截掉半句。
+   这里补两件事：① `min-width:0` 允许被压窄；② 本来就是一整段话，按块排、正常换行。 */
+.sk-blank { display: flex; align-items: center; gap: 10px; padding: 18px 16px; font-size: 12.5px;
+            color: var(--dim); min-width: 0; line-height: 1.7; }
+/* 定时任务 / 仓库那几行：`.group` 里装的是 flex 行，行本身也要能被压窄 */
+.sk-row { min-width: 0; }
 
 /* 小号图标按钮：模型行、技能行、toast 共用，别比整行信息更抢眼 */
 .mini.sm { width: 20px; height: 20px; font-size: 11.5px; border-radius: 5px;
@@ -1404,6 +1412,39 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 /* ---------- 详情页 ---------- */
 .detail-head { padding: 15px 20px; border-bottom: 1px solid var(--line); background: var(--side);
                display: flex; align-items: center; gap: 12px; position: sticky; top: 0; z-index: 2; }
+/* ── 页头三种写法收敛成一种（2026-10-19）────────────────────────────────
+   工作台的子页原来各写各的：有的标题是 `工作台 › 定时任务` 面包屑、有的只有一个 `<b>`、
+   有的干脆没有页头（项目页只有"项目详情"四个字）。**同一个地方，七种样子** ——
+   用户问"是不是该统一一下"，确实该。
+   现在统一成 headRow()：左边「← 工作台」，中间 `.head-title`（标题 / 面包屑 / 带徽标），
+   右边 `.head-actions`。下面这组样式只管布局，按钮/徽标/面包屑各自原有样式不动。 */
+.head-row { gap: 10px; }
+.head-row .head-title { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
+.head-row .head-title > b { font-size: 13px; font-weight: 600; white-space: nowrap;
+                            overflow: hidden; text-overflow: ellipsis; }
+/* 「← 工作台」：文字 + 箭头的小按钮，跟消息页「‹ 返回消息」同一套气质 ——
+   icon-btn 原本是 26×26 的方钮，装不下字，所以宽度自适应、去掉方框感。 */
+/* ⚠️ `.icon-btn` 自带 `display:grid; place-items:center; padding:5px 7px` ——
+   grid 会把 svg 和文字排成**上下两行**（截图上看过：箭头在上、"工作台"在下）。
+   所以这里显式改成 flex + 单行，并覆盖掉 grid 的居中。 */
+/* ⚠️ `.icon-btn`（第 1739 行）在后面，`display:grid` 会**盖掉**这里的 inline-flex ——
+   所以要比它更具体（`.detail-head .head-back`）。第一次就栽在这儿：
+   规则写了、截图里箭头和文字还是上下两行。
+   高度也跟着 .icon-btn 的 padding 撑到了 45px，把页头撑高，一并压回一行。 */
+.detail-head .head-back { width: auto; padding: 4px 8px 4px 4px; gap: 4px; font-size: 12.5px;
+             color: var(--dim); display: inline-flex; align-items: center; flex: 0 0 auto;
+             border-radius: 6px; line-height: 1.2; white-space: nowrap; height: 26px; }
+.head-back:hover { color: var(--text); background: var(--hover); }
+/* 标题里的 `项目 › 名字`：分隔符用淡色，跟面包屑同一档（`.crumb-sep`） */
+.head-sep { color: var(--line); margin: 0 2px; font-weight: 400; }
+/* 流程设计页标题前的小字（"流程设计"是类别，后面那个输入框才是当前流程的名字） */
+.head-kicker { font-size: 12.5px; color: var(--dim); white-space: nowrap; }
+/* 流程记录页顶栏是两栏结构里的一栏，高度要跟右栏对话头对齐（原有规则用的选择器
+   是 `.run-left > .detail-head`，结构没变，这里只是补上 head-title 的间距） */
+.run-head .head-title { gap: 8px; }
+/* ⚠️ 这里原来有一组 `.avatar.wb-ico-sm`（26px 的左栏入口小图标）+ `.wb-hint`，
+   都是"工作台首页改成左栏目录"那一版留下的。用户否掉了那个版本（首页必须是宫格），
+   这组样式就没有宿主了 —— 已删，别再搜不到出处地加回来。 */
 /* 流程页顶栏的「终止 / 删除」：小一号 + **明确分开**。
    原来两个按钮之间是 0 间隙 —— `acts.join('')` 拼出来中间没有空白字符，
    而 .head-actions 是 display:block，于是两个按钮紧贴（实测前一个 right 正好等于后一个 left）。
