@@ -7775,8 +7775,9 @@ function paintDesigner() {
   $('flowView').innerHTML = `
     ${headRow(
       // 面包屑「工作台 › 流程编排」在**左栏顶上**（2026-10-19 用户要求挪过去），页头这边
-      // 只留当前这一项：旁边这个输入框（流程名就地可改）。再写一遍名字等于同一个东西三处各写一次。
-      `<input id="dzName" value="${esc(S.designerName ?? '')}" placeholder="流程名字" style="max-width:220px" />`,
+      // 只留当前这一项：流程名。**看上去是标题、点上去能改**（不要输入框的样子，见 #dzName 的样式），
+      // 再写一遍名字等于同一个东西三处各写一次。
+      `<input id="dzName" value="${esc(S.designerName ?? '')}" placeholder="流程名字" spellcheck="false" title="点一下改流程名" />`,
       `<button data-vd-publish>${S.designerPublished ? '已发布 · 下架' : '发布到工作台'}</button>
        <button class="primary" data-vd-save>保存</button>`,
     )}
@@ -7838,6 +7839,23 @@ function paintDesigner() {
 
 function wireDesigner() {
   const view = $('flowView');
+
+  /* 流程名：**看上去是标题、点上去就能改**（输入框的边框/底色在 #dzName 里抹掉了）。
+     宽度跟着字数走 —— 它是个标题，不该有一块固定宽的透明点击区伸到右边空白里。
+     汉字约 1em 宽：最短 6em（够放 placeholder），最长 26em（再长就省略/滚动，别把页头顶爆）。 */
+  const dz = view.querySelector('#dzName');
+  if (dz) {
+    const fitDz = () => {
+      const n = Math.min(26, Math.max(6, [...(dz.value || dz.placeholder)].length + 1));
+      dz.style.width = n + 'em';
+    };
+    dz.addEventListener('input', () => {
+      fitDz();
+      S.designerName = dz.value;
+      scheduleDraftSave();
+    });
+    fitDz();
+  }
 
   view.querySelectorAll('[data-vd-add]').forEach((el) => {
     el.onclick = () => {
