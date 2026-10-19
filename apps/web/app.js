@@ -4989,15 +4989,107 @@ async function openTaskCardPage(taskId, opts = {}) {
   await paintTaskCardPage(taskId);
 }
 
-async function paintTaskCardPage(taskId) {
-  const view = $('pluginView');
+/** 弹窗里那张卡接着的实时流（关弹窗时要掐掉 —— 见 openTaskCardDialog） */
+let tcDlgStream = null;
+
+/** 关掉任务卡弹窗（同一时刻只该有一个；开新的之前先收掉旧的） */
+function closeTaskCardDialog() {
+  document.getElementById('tcDlg')?.close?.();
+}
+
+/**
+ * 在**弹窗**里打开一张任务卡（2026-10-19）。
+ *
+ * 为什么不是整页跳转：人在流程时间轴上看着「写代码」这一步，点「任务」是想看/改这一步的
+ * 细节 —— 整页换掉等于把他从那条流程里拽走，改完还得自己找回去（用户原话："操作体验不好"）。
+ * 弹窗盖在时间轴上，关掉就还在刚才那一步，顺手把这一页重新拉一遍
+ * （这一步刚建出来的卡要认上、经办人/会话跟着刷新）。
+ *
+ * 形态照定时任务那个两栏大弹窗（`.sch-dlg`）：定高、里面自己滚、右上角有全屏。
+ * ⚠️ 不用 `<form>`：任务卡里那些按钮（关联 PR / 刷新 / 取消关联）没标 type，
+ *    进 form 就成了提交按钮，一点就把弹窗关了（隐式提交这个坑在别处踩过一次）。
+ */
+async function openTaskCardDialog(taskId, opts = {}) {
+  closeTaskCardDialog(); // 只留一个
+  const dlg = document.createElement('dialog');
+  dlg.id = 'tcDlg';
+  dlg.className = 'tc-dlg';
+  dlg.setAttribute('data-max', ''); // 讨论区一长，占满屏舒服（wireDialogHead 认这个属性）
+  // 「删除」先放在这儿，建完头部再搬进去（头部是 wireDialogHead 现建的）
+  dlg.innerHTML = `
+    <div class="tc-dlg-wrap">
+      <b>任务卡</b>
+      <button type="button" class="tc-dlg-del" id="tcDlgDel" title="删掉这张卡（＝忽略它，以后不再提）">删除</button>
+      <div id="tcDlgBody"></div>
+    </div>`;
+  document.body.append(dlg);
+  wireDialogHead(dlg.querySelector('.tc-dlg-wrap'));
+  const head = dlg.querySelector('.dlg-head');
+  // 「删除」排到 × 左边（头部第一个 button 会被 CSS 推到右边，见 .dlg-head）
+  head?.insertBefore($('tcDlgDel'), head.querySelector('.dlg-close:not(.dlg-max)') ?? null);
+  // 标题带上节点名：不写的话，一张「测试2 · 写代码」摆在弹窗里，得自己回想是哪一步
+  const titleEl = head?.querySelector('b');
+  if (titleEl && opts.fromFlow?.nodeName) titleEl.textContent = `任务卡 · ${opts.fromFlow.nodeName}`;
+
+  const cleanups = [];
+  dlg.addEventListener('close', () => {
+    for (const fn of cleanups) { try { fn(); } catch { /* 摘不掉也不影响 */ } }
+    tcDlgStream?.close?.();
+    tcDlgStream = null;
+    dlg.remove();
+    /*
+     * 刷回流程时间轴（2026-10-19）。
+     *
+     * 为什么要刷、为什么"看起来没变化"是正常的：
+     *   时间轴那一行显示的是 `workflow_tasks` 自己的状态（已阻塞 / 已完成…），
+     *   而卡上那个「状态」是 `project_tasks` 的 —— **两份数据，同一个词的两种含义**
+     *   （早先定过：流程那一套状态在 workflow_tasks，卡上不改它，两处各记各的）。
+     *   所以改卡的状态不会让那一行变字；这里刷的是**别的**：这一步现在有没有卡
+     *   （`projectTaskId` 是刚建出来的话要认上）、经办人、以及刚聊出来的会话。
+     *   ⚠️ 别为了"看着有变化"去把卡状态反写进 workflow_tasks —— 那会让流程状态机
+     *      跟着人改卡而乱走（卡上点「已完成」＝悄悄把流程那一步也办了）。
+     *
+     * 只在这条流程还开着的时候刷 —— 人已经切走就别抢他的页面。
+     */
+    const runId = opts.fromFlow?.runId;
+    if (runId && S.view === 'flow' && S.flowRunId === runId) paintRun(runId).catch(() => {});
+  });
+
+  taskCardFromFlow = opts.fromFlow ?? null; // 删完卡之后 backTo 用得上
+  dlg.showModal();
+  await paintTaskCardPage(taskId, { dlg, cleanups });
+  return dlg;
+}
+
+/**
+ * 画一张任务卡。**画在哪**由 `opts.dlg` 决定（2026-10-19）：
+ *   · 不传 —— 画进 `#pluginView`（整页，看板 / 项目点进来那条路）；
+ *   · 传了 dialog —— 画进弹窗里（**流程的某一步**点进来那条路）。
+ *
+ * 为什么分两条路而不是统一成一种：从**列表**点进详情，换页是自然的（列表就在左栏，
+ * 换页只是把主区占满）；从**流程时间轴**点「任务」是"看一眼这一步的细节"，
+ * 整页换掉等于把他从那条流程里拽走 —— 那种该弹窗（见 openTaskCardDialog）。
+ *
+ * 两条路共用这一份内容与这一套接线（全部按 id 取元素，id 在同一时刻只存在于一处），
+ * 差别只有：页头那行（弹窗用自己的头部）、「来自流程」那行（弹窗不写）、离开时去哪。
+ */
+async function paintTaskCardPage(taskId, opts = {}) {
+  const dlg = opts.dlg ?? null;
+  const host = dlg ? $('tcDlgBody') : $('pluginView');
+  /*
+   * 挂在 document 上的那两个"点别处收起"：
+   *   · 整页走 `window.__pageCleanups`（换页时统一摘，见 setRoute）；
+   *   · 弹窗没有换页这一说，走弹窗自己那一份 —— 关的时候摘。
+   *     不分开的话，每开一次弹窗就往 document 上多叠一层监听。
+   */
+  const cleanups = opts.cleanups ?? (window.__pageCleanups ??= []);
   let task;
   try {
     task = (await api(`/api/projects/tasks/${encodeURIComponent(taskId)}`)).task;
   } catch (e) {
-    view.innerHTML = `${headRow('任务卡')}
+    // 整页那条路还带页头（左栏点别的就走了）；弹窗里就一句话 + 右上角的 ×
+    host.innerHTML = `${dlg ? '' : headRow('任务卡')}
       <div class="empty" style="padding:24px 4px">任务取不到：${esc(e.message)}</div>`;
-    // 错误页也得能走：左栏点任意一张卡 / 任意一个项目就离开了这一页
     return;
   }
   const proj = (S.projects ?? []).find((p) => p.id === task.projectId) ?? null;
@@ -5139,7 +5231,11 @@ async function paintTaskCardPage(taskId) {
    * 那行**可以点**：直接回那条流程（跟删完卡之后回的是同一个地方）。
    * 从看板进来的没有这一行 —— 来源本来就在左栏上写着，再写一遍是噪音。
    */
-  const fromFlowBar = taskCardFromFlow?.runId
+  /*
+   * 弹窗里**不写**那行来路：流程时间轴就在弹窗背后露着，弹窗自己的标题也已经写了
+   * 「任务卡 · 节点名」——再把"你从哪来"写一遍是噪音。整页那条路照旧要写（那边没有上下文）。
+   */
+  const fromFlowBar = !dlg && taskCardFromFlow?.runId
     ? `<button type="button" class="tc-from" id="tcFromFlow"
          title="回到这条流程的时间轴">
          <span class="tc-from-k">来自流程</span>
@@ -5147,9 +5243,9 @@ async function paintTaskCardPage(taskId) {
          ${taskCardFromFlow.nodeName ? `<span class="tc-from-sep">›</span> <span>${esc(taskCardFromFlow.nodeName)}</span>` : ''}
        </button>`
     : '';
-  view.innerHTML = `
-    ${headRow('任务卡', '<button class="tc-del" id="tcDel" title="删掉这张卡（＝忽略它）">删除</button>')}
-    <div class="detail-body tc-page">
+  host.innerHTML = `
+    ${dlg ? '' : headRow('任务卡', '<button class="tc-del" id="tcDel" title="删掉这张卡（＝忽略它）">删除</button>')}
+    <div class="detail-body tc-page${dlg ? ' in-dlg' : ''}">
       <div class="tc-main">
         <div class="tc-main-scroll">
           <div class="tc-headblock">
@@ -5242,11 +5338,13 @@ async function paintTaskCardPage(taskId) {
    * 删完卡 / 干完事却落回看板，等于把他从上下文里拽走了，还得自己找回去。
    * 其余照旧：全局看板 → 全局看板，项目看板 → 那个项目。
    */
-  const backTo = taskCardFromFlow?.runId
-    ? () => openFlowRun(taskCardFromFlow.templateId ?? null, taskCardFromFlow.runId)
-    : taskCardFromAll
-      ? () => openTaskBoard()
-      : proj ? () => openProjectDetail(proj.id) : () => openProjectsPage();
+  const backTo = dlg
+    ? () => { dlg.close('done'); } // 弹窗这条路：**关掉就是回去**（流程页一直在底下，没走过）
+    : taskCardFromFlow?.runId
+      ? () => openFlowRun(taskCardFromFlow.templateId ?? null, taskCardFromFlow.runId)
+      : taskCardFromAll
+        ? () => openTaskBoard()
+        : proj ? () => openProjectDetail(proj.id) : () => openProjectsPage();
   // 离开这张卡就把位置记忆清掉：否则下一次刷新又会被拽回这张卡
   const leaveTo = async () => { await backTo(); };
   // （页头不再有返回按钮；backTo 只剩 leaveTo 和下面那行「来自流程」在用）
@@ -5399,7 +5497,7 @@ async function paintTaskCardPage(taskId) {
   const repaintKeepingDraft = async () => {
     const draft = $('tcInput')?.value ?? '';
     const topicId = replyTo;
-    await paintTaskCardPage(taskId);
+    await paintTaskCardPage(taskId, opts);
     if (draft) {
       const el = $('tcInput');
       if (el) el.value = draft;
@@ -5448,13 +5546,28 @@ async function paintTaskCardPage(taskId) {
     }
   };
 
-  $('tcDel').onclick = async () => {
-    if (!(await confirmDo('删掉这张任务卡？（＝忽略它，以后不再提）'))) return;
-    try {
-      await api(`/api/projects/tasks/${encodeURIComponent(taskId)}`, { method: 'DELETE' });
-      await leaveTo();
-    } catch (e) { toast(e.message, 'error'); }
-  };
+  /*
+   * 关弹窗 / 换页之前，**先把没落库的改动存掉**（2026-10-19）。
+   * 原来的排版是"敲完字马上失焦（弹窗里就关掉）"，靠 blur 触发存；现在改完状态可能
+   * 直接按 Esc —— 不补这一下，那一下改动就没了，人还以为存上了。
+   * 放在这里（PR 那几块上面）：下面所有交互都可能在存完之前关窗。
+   */
+  cleanups.push(() => {
+    if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+    if (JSON.stringify(snapshot()) !== lastSaved) saveNow?.({ keepalive: true });
+  });
+
+  // 弹窗那条路的「删除」在弹窗自己头上（静态的 #tcDlgDel），整页那条路在页头
+  const delEl = dlg ? $('tcDlgDel') : $('tcDel');
+  if (delEl) {
+    delEl.onclick = async () => {
+      if (!(await confirmDo('删掉这张任务卡？（＝忽略它，以后不再提）'))) return;
+      try {
+        await api(`/api/projects/tasks/${encodeURIComponent(taskId)}`, { method: 'DELETE' });
+        await leaveTo();
+      } catch (e) { toast(e.message, 'error'); }
+    };
+  }
 
   /* ---------------- PR 联动（卡片 ↔ GitHub PR） ---------------- */
   const prStateText = (state) => (state === 'merged' ? '已合并' : state === 'closed' ? '已关闭' : state === 'open' ? '开着' : '未知');
@@ -5472,7 +5585,7 @@ async function paintTaskCardPage(taskId) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url }),
       });
-      await paintTaskCardPage(taskId);
+      await paintTaskCardPage(taskId, opts);
       toast(`已关联：${r.pr.repo}#${r.pr.number} —— ${prStateText(r.pr.state)}`);
     } catch (err) {
       btn.disabled = false;
@@ -5487,7 +5600,7 @@ async function paintTaskCardPage(taskId) {
     btn.textContent = '查询中…';
     try {
       const r = await api(`/api/projects/tasks/${encodeURIComponent(taskId)}/pr/refresh`, { method: 'POST' });
-      await paintTaskCardPage(taskId);
+      await paintTaskCardPage(taskId, opts);
       toast(`PR 现在：${prStateText(r.pr.state)}${r.task?.status === '待确认' ? '（卡已转到「待确认」）' : ''}`);
     } catch (err) {
       btn.disabled = false;
@@ -5500,7 +5613,7 @@ async function paintTaskCardPage(taskId) {
     if (!(await confirmDo('取消这张卡和 PR 的关联？（不会动 GitHub 上的 PR）'))) return;
     try {
       await api(`/api/projects/tasks/${encodeURIComponent(taskId)}/pr`, { method: 'DELETE' });
-      await paintTaskCardPage(taskId);
+      await paintTaskCardPage(taskId, opts);
     } catch (err) {
       toast(err.message, 'error');
     }
@@ -5625,7 +5738,7 @@ async function paintTaskCardPage(taskId) {
     if (!e.target.closest?.('.tc-reply-pick')) closeReplyMenu();
   };
   document.addEventListener('click', onReplyPickOutside);
-  (window.__pageCleanups ??= []).push(() => {
+  cleanups.push(() => {
     document.removeEventListener('click', onReplyPickOutside);
   });
 
@@ -5757,6 +5870,9 @@ async function paintTaskCardPage(taskId) {
       },
       onReconnect: () => refreshThread(),
     });
+    // 弹窗那条路：记到模块级，openTaskCardDialog 关弹窗时掐掉
+    // （不掐的话它还在后台收消息，往一个已经从文档里摘掉的 DOM 里写）
+    if (dlg) tcDlgStream = stream;
   };
   if (runningRun) attach(runningRun.id, null); // 打开时正好在跑 → 接上，不等刷新
 
@@ -5806,8 +5922,8 @@ async function paintTaskCardPage(taskId) {
   };
   $('tcSend').onclick = sendText;
 
-  // 页面要被换掉时，把挂在 document 上的收起监听摘掉（否则会一层层堆起来，见 setRoute）
-  (window.__pageCleanups ??= []).push(() => document.removeEventListener('click', onDocClick));
+  // 页面要被换掉 / 弹窗要关时，把挂在 document 上的收起监听摘掉（否则会一层层堆起来，见 setRoute）
+  cleanups.push(() => document.removeEventListener('click', onDocClick));
 }
 
 /**
@@ -6723,7 +6839,7 @@ function runHTML(v) {
             `<button class="icon-btn run-chat" type="button" data-run-card data-task="${esc(t.id)}"${
               canOpenCard || canTalk ? '' : ' disabled'
             } title="${canOpenCard
-              ? (t.projectTaskId ? '打开这一步的任务卡' : '打开任务卡（第一次点会建一张）')
+              ? (t.projectTaskId ? '打开这一步的任务卡（不离开这条流程）' : '打开任务卡（第一次点会建一张）')
               : canTalk ? '跟经办人对话' : '先派活才能对话'}">${ICON_CHAT}</button>`
           }</span>
           <span><i>经办时间</i>${
@@ -6926,20 +7042,23 @@ function wireRun(v) {
    * 节点上那颗按钮 → **这一步的任务卡**（2026-10-19）；没有卡、也不能开卡时退回对话栏。
    *
    * 三条路，顺序不能反：
-   *   ① 服务端说"已经有卡" → 直接跳（不写库，纯跳转）；
-   *   ② 说"能开" → 让服务端现开一张再跳（`POST .../card` 是幂等的，点两次不会两张）；
+   *   ① 服务端说"已经有卡" → 直接开弹窗（不写库）；
+   *   ② 说"能开" → 让服务端现开一张再开（`POST .../card` 是幂等的，点两次不会两张）；
    *   ③ 都没有（流程没挂项目）→ 退回原来的对话栏 —— 那条路还在，只是不再是首选。
    * 一次点击只该发生一件事，所以用 if/else 串起来而不是各挂各的。
+   *
+   * ⚠️ ①②落在**弹窗**里（`openTaskCardDialog`），不换页（2026-10-19）：
+   *    换页会把人从这条流程里带走，改完还得自己找回来 —— 换来的只是一个"整页"的壳。
    */
   view.querySelectorAll('[data-run-card]').forEach((el) => {
     el.onclick = async () => {
       const taskId = el.dataset.task;
       const step = (v.tasks ?? []).find((x) => x.id === taskId) ?? null;
       if (!step) return;
-      // 来路：让卡页头写得出「来自流程 · 流程名 › 节点名」，离开时也回得来这条流程
+      // 来路：让弹窗标题写得出「任务卡 · 节点名」，关掉之后也知道该刷哪条流程
       const fromFlow = { runId: v.id, templateId: v.templateId ?? null, runTitle: v.title, nodeName: step.nodeName };
       if (step.projectTaskId) {
-        return openTaskCardPage(step.projectTaskId, { fromFlow }).catch((e) => toast(e.message, 'error'));
+        return openTaskCardDialog(step.projectTaskId, { fromFlow }).catch((e) => toast(e.message, 'error'));
       }
       if (step.canOpenTaskCard) {
         el.disabled = true;
@@ -6948,7 +7067,7 @@ function wireRun(v) {
             `/api/workflows/runs/${encodeURIComponent(v.id)}/tasks/${encodeURIComponent(taskId)}/card`,
             { method: 'POST' },
           );
-          if (d?.task?.id) return await openTaskCardPage(d.task.id, { fromFlow });
+          if (d?.task?.id) return await openTaskCardDialog(d.task.id, { fromFlow });
           throw new Error('没拿到卡');
         } catch (e) {
           toast(`开不了卡：${e.message}`, 'error');
@@ -10052,7 +10171,6 @@ function renderDetail({ persona, runtimes, runs, platformRoot, skills: personaSk
                   <div class="row-label">岗位</div>
                   <div>
                     <input id="dRole" list="roleSuggest" placeholder="比如：研发（留空也行）" value="${esc(persona.role || '')}" />
-                    <div class="counter left">他在团队里是干什么的（一个值）。技能是"他会干什么"，可以挂很多个；引擎派活只认流程节点上点的名，不看岗位。</div>
                   </div>
                 </div>
                 <div class="form-row top">
@@ -10146,14 +10264,22 @@ function renderDetail({ persona, runtimes, runs, platformRoot, skills: personaSk
         </div>
         <div class="counter" style="text-align:left">清单在会话的<strong>第一句</strong>交给它，正文它自己按需读 —— 挂完（或改了启停）要新开会话才生效。</div>
 
-        <div class="sk-head" style="margin-top:26px">
-          <div>
-            <b>从运行时继承</b>
-            <div class="sk-hint">自动从 <strong>${esc(rt ? rt.label : persona.runtime)}</strong> 发现；只要该智能体在这个运行时执行，就可以直接使用。</div>
+        <!-- 从运行时继承：可折叠面板（默认折叠）。折叠时不扫描，展开第一次才去要列表，
+             省得每个员工详情都白跑一遍 runtime-skills。状态记在 data-open 上，不进持久化 ——
+             这种"列表长又低频看"的区块不值得占路由。 -->
+        <div class="sk-fold" id="dInheritFold" data-open="0" style="margin-top:26px">
+          <div class="sk-fold-head" id="dInheritHead" role="button" tabindex="0">
+            <span class="fold-arrow" aria-hidden="true">▸</span>
+            <span class="fold-title">
+              <b>从运行时继承</b>
+              <div class="sk-hint">自动从 <strong>${esc(rt ? rt.label : persona.runtime)}</strong> 发现；只要该智能体在这个运行时执行，就可以直接使用。</div>
+            </span>
+            <button class="mini auto" id="skRefresh" title="重新扫描运行时的技能目录">刷新</button>
           </div>
-          <button class="mini auto" id="skRefresh" title="重新扫描运行时的技能目录">刷新</button>
+          <div class="sk-fold-body" id="dInheritBody" hidden>
+            <div class="sk-list" id="dInherit"></div>
+          </div>
         </div>
-        <div class="sk-list" id="dInherit"><div class="sk-empty" style="border-style:solid">正在扫描…</div></div>
         ${
           personaSkills.length > 8
             ? '<div class="rm-hint">挂了 8 个以上：首轮清单会变长，模型「选得准」也会下降。建议改成"换"而不是"堆"。</div>'
@@ -10540,7 +10666,11 @@ function renderDetail({ persona, runtimes, runs, platformRoot, skills: personaSk
   const linkBtn = $('linkSkill');
   if (linkBtn) linkBtn.onclick = () => openLinkSkillDialog(persona, allSkills, personaSkills.map((l) => l.name));
 
-  // 从运行时继承：只发现、不改 CLI 的文件；"导入"才是把它拷进班底的库
+  // 从运行时继承：只发现、不改 CLI 的文件；"导入"才是把它拷进班底的库。
+  // 折叠面板默认收起 —— 展开那一刻才扫描（懒加载），折叠状态下不发请求；
+  // 「刷新」只在面板已展开时触发扫描，收起状态点它先展开再扫。
+  const fold = $('dInheritFold');
+  const body = $('dInheritBody');
   const loadInherited = async () => {
     const box = $('dInherit');
     if (!box) return;
@@ -10580,9 +10710,28 @@ function renderDetail({ persona, runtimes, runs, platformRoot, skills: personaSk
       box.innerHTML = '<div class="sk-empty">扫描失败：' + failHtml(err) + '</div>';
     }
   };
-  loadInherited();
+  const setFold = (open) => {
+    fold.dataset.open = open ? '1' : '0';
+    body.hidden = !open;
+    $('dInheritHead').querySelector('.fold-arrow').textContent = open ? '▾' : '▸';
+    if (open && !body.dataset.loaded) {
+      body.dataset.loaded = '1';
+      loadInherited();
+    }
+  };
+  $('dInheritHead').onclick = (e) => {
+    if (e.target.closest('#skRefresh')) return; // 刷新是独立动作，别顺带折叠
+    setFold(fold.dataset.open !== '1');
+  };
+  $('dInheritHead').onkeydown = (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setFold(fold.dataset.open !== '1'); }
+  };
   const refresh = $('skRefresh');
-  if (refresh) refresh.onclick = loadInherited;
+  if (refresh)
+    refresh.onclick = () => {
+      setFold(true); // 收着就点刷新 = 展开并重扫
+      loadInherited();
+    };
 }
 
 

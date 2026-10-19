@@ -1174,6 +1174,17 @@ input.locked:focus { outline: none; border-color: var(--line); }
 .sk-head b { font-size: 14px; }
 .sk-hint { margin-top: 3px; font-size: 12px; color: var(--dim); line-height: 1.6; }
 .sk-list { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); overflow: hidden; }
+/* 「从运行时继承」折叠面板（2026-10-19）：默认收起，整块可点展开。
+   head 是行内布局，箭头随 data-open 转（JS 里切 ▸/▾）；
+   body 收起时 hidden，展开才挂列表（懒加载，见 app.js 的 setFold）。 */
+.sk-fold { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.sk-fold[data-open='1'] { padding-bottom: 12px; }
+.sk-fold-head { display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 12px 14px; cursor: pointer; border: 0; background: none; text-align: left; }
+.sk-fold-head:hover { background: color-mix(in srgb, var(--dim) 6%, transparent); }
+.fold-arrow { flex: 0 0 auto; color: var(--dim); font-size: 12px; margin-top: 2px; }
+.fold-title { flex: 1; min-width: 0; }
+.fold-title b { font-size: 14px; }
+.sk-fold-head .sk-hint { margin-top: 3px; }
 /* ⚠️ `align-items: center` 原来是默认，配上 `.sk-main{flex:0 1 auto}` 会出事：
    文字区可以被压到 0 宽，而里面的 `.sk-desc` 是 `nowrap` 不参与收缩计算 ——
    于是容器一旦窄下来（比如窗口只留出 70px 宽的内容区），整行被"压扁"成
@@ -1559,6 +1570,30 @@ dialog > form { padding: 0 20px 20px; }
    dialog 默认的滚动区会把它直接裁掉（同 flowStartDlg，撞过）。 */
 #taskDlg { overflow: visible; }
 dialog::backdrop { background: var(--scrim); }
+
+/* ---------- 任务卡弹窗（2026-10-19） ----------
+   从流程时间轴的某一步点「任务」→ 就地打开这一张卡。底下那条时间轴**不走**，
+   关掉就还在刚才那一步（比整页跳转少一次"找回去"）。
+   尺寸照定时任务那个两栏大弹窗：**定高、里面自己滚**（讨论区是长的，不许把窗口撑大）。
+   ⚠️ overflow: visible —— 卡里的状态 / 执行人是 .combo 自绘浮层，
+      dialog 默认 overflow:auto 会把往外伸的那截裁掉（跟 #taskDlg 同一个坑）。 */
+dialog.tc-dlg { width: 1000px; max-width: 94vw; height: min(720px, 90vh);
+                display: flex; flex-direction: column; overflow: visible; }
+/* padding 放在内层（跟 `dialog > form` 同理）：.dlg-head 靠它的负边距把头铺满整宽，
+   直接给 dialog 加 padding 会从头部和遮罩之间透出内容缝。 */
+.tc-dlg > .tc-dlg-wrap { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column;
+                         padding: 0 20px 18px; }
+#tcDlgBody { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+/* 弹窗里的卡铺满弹窗剩余高度（整页那条路它吃的是 #pluginView 的高度，已经在 .tc-page 的 flex:1 上）。
+   左右内边距交给外层：这里再给 18px 的话，正文会被推到离弹窗边 58px，太松。 */
+.tc-page.in-dlg { padding: 6px 0 0; }
+/* 头部那颗「删除」：跟整页页头那颗一个气质 —— 平时灰字不吭声，悬停才示警 */
+.tc-dlg-del { flex: 0 0 auto; background: none; border: 0; cursor: pointer; color: var(--dim);
+              font-size: 12.5px; padding: 5px 8px; border-radius: 8px; }
+.tc-dlg-del:hover { color: var(--bad); background: color-mix(in srgb, var(--bad) 10%, transparent); }
+/* 「展开成抽屉」（带 data-max 的弹窗才有这颗按钮）：看长讨论时用。
+   ⚠️ 这条规则是通用的 —— 之前只有 JS 在切 .full，CSS 空着，点了没反应。 */
+dialog.full { width: 96vw; max-width: 96vw; height: 94vh; max-height: 94vh; }
 
 /* 定时任务弹窗：照「元舱的新建自动化」做成**左输入、右配置**的两栏（2026-10-17 用户截图要求）。
    左 = 名字 + 动作声明的输入区（textarea 撑满高度）；右 = 做法 + 下拉/数字 + 重复方式 + 启用。
@@ -2064,8 +2099,10 @@ dialog.sch-dlg > form { flex: 1 1 auto; min-height: 0; display: flex; flex-direc
 /* ===== 任务卡详情页（2026-10-18 二改：照 Multica 的任务详情，简洁一些） =====
    形态：主区从上到下就是这件事本身 —— 大标题（点了就编辑）→ 描述 → 讨论；
    属性全收右栏三段（属性 / Pull Request / 详情），页头不摆 pill 和大按钮。 */
+/* 底部内边距给足（22）：讨论区滚到底时，最后一行字别贴着那条横线
+   —— 弹窗里尤其明显（2026-10-19 用户提"下面挤"） */
 .tc-page { display: grid; grid-template-columns: minmax(0, 1fr) 286px;
-           gap: 0; flex: 1; min-height: 0; padding: 14px 18px 18px; }
+           gap: 0; flex: 1; min-height: 0; padding: 14px 18px 22px; }
 /* 竖线由**左栏自己**画（border-right），输入框横线也是左栏的 border-top ——
    同源同宽，永远不会出现"横线比竖线短一截"（2026-10-19 用户连着问两次） */
 .tc-main { min-width: 0; display: flex; flex-direction: column; min-height: 0; overflow: hidden;
