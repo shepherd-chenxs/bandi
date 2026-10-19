@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>班底 v1.0.1 · Linear 与 iOS 对比</title>
+<style>
+:root {
+  color-scheme: dark;
+  --g0: #08090a; --g1: #0d0e10; --g2: #111214; --g3: #16171a;
+  --line-1: #1a1b1e; --line-2: #202225;
+  --text: #e8e9ea; --text-2: #9b9ea3; --text-3: #6b6e73; --text-4: #4a4d51;
+  --accent: #5e6ad2; --accent-hi: #6e79dd;
+  --r-md: 7px; --r-lg: 12px;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Hiragino Sans GB", "Microsoft YaHei", "Source Han Sans SC", sans-serif;
+  --mono: "SF Mono", "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--g0); color: var(--text);
+  font-family: var(--font); font-size: 13.5px; line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+.page { max-width: 1320px; margin: 0 auto; padding: 52px 30px 100px; }
+
+.eyebrow {
+  font-size: 11px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--accent); margin-bottom: 11px;
+}
+h1 { margin: 0 0 12px; font-size: 31px; font-weight: 600; letter-spacing: -.028em; line-height: 1.2; }
+h1 em { font-style: normal; color: var(--text-3); }
+.lead { margin: 0 0 42px; max-width: 640px; color: var(--text-2); font-size: 14px; }
+
+/* ── 并排对照 ── */
+.pair { margin-bottom: 54px; }
+.pair-head {
+  display: flex; align-items: baseline; gap: 12px; margin-bottom: 14px;
+}
+.pair-head h2 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -.015em; }
+.pair-head .tag {
+  font-size: 10.5px; font-family: var(--mono); color: var(--text-4);
+  border: 1px solid var(--line-2); border-radius: 4px; padding: 1px 6px;
+}
+.pair-head .see { margin-left: auto; font-size: 12px; }
+.pair-head .see a { color: var(--accent-hi); text-decoration: none; }
+.pair-head .see a:hover { text-decoration: underline; }
+
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+
+.frame { border-radius: var(--r-lg); overflow: hidden; border: 1px solid var(--line-2); }
+.frame-cap {
+  display: flex; align-items: center; gap: 7px;
+  padding: 8px 12px; font-size: 11.5px; color: var(--text-3);
+  background: var(--g2); border-bottom: 1px solid var(--line-1);
+}
+.frame-cap .sw { width: 9px; height: 9px; border-radius: 50%; border: 1px solid rgba(255,255,255,.12); }
+.frame img { display: block; width: 100%; height: auto; }
+
+/* ── 对照表 ── */
+.cmp { width: 100%; border-collapse: collapse; margin-top: 8px;
+  border: 1px solid var(--line-1); border-radius: var(--r-md); overflow: hidden; }
+.cmp th, .cmp td {
+  padding: 10px 14px; text-align: left; font-size: 12.5px;
+  border-bottom: 1px solid var(--line-1); vertical-align: top;
+}
+.cmp th {
+  background: var(--g2); color: var(--text-3); font-size: 10.5px; font-weight: 600;
+  letter-spacing: .06em; text-transform: uppercase; white-space: nowrap;
+}
+.cmp td { background: var(--g1); color: var(--text-2); }
+.cmp tr:last-child td { border-bottom: 0; }
+.cmp td:first-child { color: var(--text); font-weight: 500; white-space: nowrap; }
+.cmp code {
+  font-family: var(--mono); font-size: 11.5px; color: var(--text);
+  background: rgba(255,255,255,.05); padding: 1px 5px; border-radius: 3px;
+  border: 1px solid var(--line-1);
+}
+.sw2 {
+  display: inline-block; width: 12px; height: 12px; border-radius: 3px;
+  vertical-align: -2px; margin-right: 6px; border: 1px solid rgba(255,255,255,.12);
+}
+
+section { margin-bottom: 56px; }
+h2.sec {
+  margin: 0 0 6px; font-size: 19px; font-weight: 600; letter-spacing: -.02em;
+  display: flex; align-items: baseline; gap: 10px;
+}
+h2.sec .num { font-family: var(--mono); font-size: 12px; font-weight: 500; color: var(--text-4); }
+h2.sec + p { margin: 0 0 20px; color: var(--text-3); font-size: 13px; }
+
+.rules { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+.rule {
+  background: var(--g2); border: 1px solid var(--line-1);
+  border-radius: var(--r-md); padding: 15px 17px;
+}
+.rule h3 {
+  margin: 0 0 6px; font-size: 12.5px; font-weight: 600;
+  display: flex; align-items: center; gap: 7px;
+}
+.rule h3::before {
+  content: ""; width: 3px; height: 12px; border-radius: 2px;
+  background: var(--accent); flex: 0 0 auto;
+}
+.rule p { margin: 0; font-size: 12.5px; color: var(--text-2); line-height: 1.62; }
+.rule code {
+  font-family: var(--mono); font-size: 11.5px;
+  background: rgba(255,255,255,.05); padding: 1px 5px; border-radius: 3px;
+  border: 1px solid var(--line-1);
+}
+
+.note-inline {
+  margin-top: 22px; padding: 12px 15px;
+  border-left: 2px solid var(--line-2); background: var(--g1);
+  border-radius: 0 var(--r-md) var(--r-md) 0;
+  font-size: 12.5px; color: var(--text-2);
+}
+.note-inline b { color: var(--text); }
+
+.tip {
+  background: linear-gradient(180deg, rgba(94,106,210,.07), rgba(94,106,210,.02));
+  border: 1px solid rgba(94,106,210,.22);
+  border-radius: var(--r-lg); padding: 16px 20px; margin-bottom: 40px;
+  font-size: 13px; color: var(--text-2);
+}
+.tip b { color: var(--text); }
+.tip code {
+  font-family: var(--mono); font-size: 11.5px; color: var(--accent-hi);
+}
+
+@media (max-width: 900px) {
+  .two, .rules { grid-template-columns: 1fr; }
+  .page { padding: 34px 18px 70px; }
+  h1 { font-size: 24px; }
+}
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="eyebrow">班底 v1.0.1 · Linear 与 iOS</div>
+  <h1>Linear 克制，<br /><em>iOS 有体温</em></h1>
+  <p class="lead">
+    左边是同一套界面的两种语言。Linear 把界面压到几乎不存在，靠灰阶和细线；
+    iOS 给它圆角、彩色图标和大标题，让界面"有温度"。同一份信息，两种气质。
+  </p>
+
+  <div class="tip">
+    <b>两张稿子都能切深浅色：</b>打开后左下角有切换按钮。
+    Linear 版：<a href="01-messages.html" style="color:var(--accent-hi);text-decoration:none;border-bottom:1px solid rgba(94,106,210,.4)">消息</a>
+    · <a href="02-workbench.html" style="color:var(--accent-hi);text-decoration:none;border-bottom:1px solid rgba(94,106,210,.4)">工作台</a>
+    &nbsp;|&nbsp;
+    iOS 版：<a href="ios-messages.html" style="color:var(--accent-hi);text-decoration:none;border-bottom:1px solid rgba(94,106,210,.4)">消息</a>
+    · <a href="ios-workbench.html" style="color:var(--accent-hi);text-decoration:none;border-bottom:1px solid rgba(94,106,210,.4)">工作台</a>
+  </div>
+
+  <div class="pair">
+    <div class="pair-head">
+      <h2>消息 · 对话主界面</h2>
+      <span class="tag">同一份内容，两种语言</span>
+    </div>
+    <div class="two">
+      <div class="frame">
+        <div class="frame-cap"><span class="sw" style="background:#16171a"></span>Linear 风（深色）</div>
+        <img src="01-messages.png" alt="Linear 风 消息" />
+      </div>
+      <div class="frame">
+        <div class="frame-cap"><span class="sw" style="background:#ffffff;border-color:#ccc"></span>iOS 风（浅色）</div>
+        <img src="ios-messages.png" alt="iOS 风 消息" />
+      </div>
+    </div>
+  </div>
+
+  <div class="pair">
+    <div class="pair-head">
+      <h2>工作台</h2>
+      <span class="tag">分组模型差别最大的一页</span>
+    </div>
+    <div class="two">
+      <div class="frame">
+        <div class="frame-cap"><span class="sw" style="background:#16171a"></span>Linear 风（深色）</div>
+        <img src="02-workbench.png" alt="Linear 风 工作台" />
+      </div>
+      <div class="frame">
+        <div class="frame-cap"><span class="sw" style="background:#ffffff;border-color:#ccc"></span>iOS 风（浅色）</div>
+        <img src="ios-workbench.png" alt="iOS 风 工作台" />
+      </div>
+    </div>
+  </div>
+
+  <section>
+    <h2 class="sec"><span class="num">01</span> 同一个组件，两种做法</h2>
+    <p>不是"换皮"，是每一样都要重新决定。</p>
+
+    <table class="cmp">
+      <thead>
+        <tr><th>组件</th><th>Linear 风</th><th>iOS 风</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>导航选中态</td>
+          <td>左侧 2px 竖条 + 极淡底</td>
+          <td>整行蓝色胶囊（系统蓝实心）</td>
+        </tr>
+        <tr>
+          <td>入口图标</td>
+          <td>单色线框，悬停才染色</td>
+          <td><b>彩色圆角方块</b>，永远着色</td>
+        </tr>
+        <tr>
+          <td>分组</td>
+          <td>1px 通栏细线切分</td>
+          <td>白色圆角卡片，行间<b>内嵌</b>细线</td>
+        </tr>
+        <tr>
+          <td>我的气泡</td>
+          <td>极浅紫底 + 淡紫边（怕实心太吵）</td>
+          <td><b>系统蓝实心 + 白字</b>（就是要跳出来）</td>
+        </tr>
+        <tr>
+          <td>气泡圆角</td>
+          <td>10px，无尾巴</td>
+          <td>18px，更接近 iMessage</td>
+        </tr>
+        <tr>
+          <td>主按钮</td>
+          <td>矩形，写"发送"二字</td>
+          <td>圆形，只有一个 ↑ 图标</td>
+        </tr>
+        <tr>
+          <td>页面标题</td>
+          <td>13px，行内小字</td>
+          <td><b>22px 大标题</b>（iOS large title）</td>
+        </tr>
+        <tr>
+          <td>行高</td>
+          <td>32px（鼠标精度，能密就密）</td>
+          <td>44px（手指精度，留够余量）</td>
+        </tr>
+        <tr>
+          <td>阴影</td>
+          <td>几乎没有</td>
+          <td>卡片有极淡的 0.5px 描边式阴影</td>
+        </tr>
+        <tr>
+          <td>材质模糊</td>
+          <td>不用</td>
+          <td>只用在<b>浮层</b>（backdrop-filter）</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2 class="sec"><span class="num">02</span> iOS 搬到桌面，必须改的三处</h2>
+    <p>照抄手机会立刻不对劲，这三条是我做的时候实际调过的。</p>
+
+    <div class="rules">
+      <div class="rule">
+        <h3>44pt 要收到 36px</h3>
+        <p>Apple HIG 规定触控目标最小 44pt，那是给手指的。鼠标精度高得多，
+          桌面端同行高会让「12 行」变成「18 行」，一屏装不下。
+          <b>收，但不能收到 32 以下</b> —— 再小就失去 iOS 的"从容感"了。</p>
+      </div>
+      <div class="rule">
+        <h3>毛玻璃只给浮层</h3>
+        <p>iOS 的 <code>backdrop-filter</code> 是为了让浮层"透出底下的内容"。
+          侧栏是<b>常驻</b>的，背后什么都没有，加毛玻璃只是白白吃 GPU。
+          侧栏用纯白整块，只有弹出的菜单才模糊。</p>
+      </div>
+      <div class="rule">
+        <h3>输入条不能横跨整屏</h3>
+        <p>手机上输入条天生只有一屏宽。搬到 1440 的桌面上如果还拉满，
+          立刻变成"网页表单"。<b>封顶 820px、跟对话内容左对齐</b>，
+          它才还是 iOS 的输入条。</p>
+      </div>
+      <div class="rule">
+        <h3>深色底用纯黑，不用深灰</h3>
+        <p>这点跟几乎所有人想的不一样：iOS 深色的分组底是 <code>#000000</code>，
+          卡片是 <code>#1c1c1e</code>。Linear 则是深灰底 <code>#08090a</code> + 稍亮卡片。
+          <b>iOS 的层次是"黑上浮起一块灰"</b>，看起来更沉。</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2 class="sec"><span class="num">03</span> 选哪个，取决于班底是什么</h2>
+    <p>这不是审美题，是产品定位题。</p>
+
+    <table class="cmp">
+      <thead>
+        <tr><th></th><th>选 Linear 风</th><th>选 iOS 风</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>它说班底是</td>
+          <td>一件精密工具（像 IDE、像终端）</td>
+          <td>一个身边的助手（像备忘录、像微信）</td>
+        </tr>
+        <tr>
+          <td>一屏能放多少</td>
+          <td>多 —— 适合看板、日志、任务流</td>
+          <td>少 —— 适合对话、做决定</td>
+        </tr>
+        <tr>
+          <td>上手门槛</td>
+          <td>偏高，像"开发者工具"</td>
+          <td><b>低</b>，中国用户对 iOS 语法是熟的</td>
+        </tr>
+        <tr>
+          <td>专业感</td>
+          <td>强</td>
+          <td>弱一些，但亲和</td>
+        </tr>
+        <tr>
+          <td>和微信像不像</td>
+          <td>不像</td>
+          <td><b>有些像</b>（蓝色气泡、圆形按钮）</td>
+        </tr>
+        <tr>
+          <td>最适合的页面</td>
+          <td>任务看板、运行日志、设置</td>
+          <td>消息、通讯录、工作台</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="note-inline">
+      <b>我的判断：</b>班底是"和数字员工一起干活"，每天打开几十次。
+      高频工具用 Linear 那种密度更省力；但班底的核心页面是<b>对话</b>，
+      而对话恰好是 iOS 语汇最擅长的地方 —— 气泡、头像、时间、大标题。
+      <b>所以我认为最好的答案不是二选一。</b>下一页说怎么混。
+    </div>
+  </section>
+
+  <p style="color:var(--text-4); font-size:12px; margin-top:36px">
+    班底 v1.0.1 · 深色 / 浅色对照 · 1440×900 渲染
+  </p>
+
+</div>
+</body>
+</html>

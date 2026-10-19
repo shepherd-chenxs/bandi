@@ -1,0 +1,617 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>班底 v1.0.1 设计稿 · iOS 风 · 消息</title>
+<style>
+/* ═══════════════════════════════════════════════════════════════
+   iOS 风（Apple HIG）· 桌面版
+
+   和 Linear 最大的区别不是"圆角更大"，而是**分组的物理模型**：
+     Linear：所有东西在同一张平面上，用 1px 线切分
+     iOS   ：一张灰色桌面上，摞着若干张白色圆角卡片（inset grouped list）
+
+   搬到桌面上要做的三处调整（照抄手机会很怪）：
+     ① 触控 44pt → 桌面 36px。手指需要的余量鼠标不需要，
+        44 会让 12 行的列表变成 18 行高，一屏放不下
+     ② 阴影极淡。iOS 的卡片在手机上几乎无阴影（靠底色差），
+        桌面上更不需要 —— 加投影会立刻变成"网页组件库"
+     ③ 材质（模糊）只用在浮层。侧栏常驻，不需要毛玻璃；
+        弹层/菜单才用 backdrop-filter —— 这才是 iOS 的用法
+
+   颜色：iOS 系统蓝 #007AFF（浅色）/ #0A84FF（深色）。
+   这是 Apple 的语义色，不是"随便选的蓝"。
+   ═══════════════════════════════════════════════════════════════ */
+
+:root {
+  color-scheme: dark;
+
+  /* ── 浅色（默认，iOS 的"默认状态"就是浅色） ── */
+  --bg:        #f2f2f7;   /* iOS systemGroupedBackground：微微偏蓝的灰 */
+  --card:      #ffffff;   /* 卡片 = 纯白，浮在灰底上 */
+  --card-2:    #f2f2f7;   /* 卡片内的次级分组 */
+  --fill:      #78788014; /* iOS 的控制填充（半透黑） */
+  --fill-2:    #78788028;
+  --sep:       #3c3c431f; /* iOS separator：不是实色，是半透黑 */
+  --sep-strong:#3c3c4338;
+
+  /* iOS label 四档：label / secondary / tertiary / quaternary */
+  --t1: #000000;
+  --t2: #3c3c4399;
+  --t3: #3c3c434d;
+  --t4: #3c3c432e;
+
+  --blue:   #007aff;   /* iOS systemBlue */
+  --blue-hi:#0a6fd6;
+  --green:  #34c759;
+  --red:    #ff3b30;
+  --orange: #ff9500;
+  --purple: #af52de;
+
+  /* iOS 的圆角是"连续曲率"（squircle），CSS 只能用大圆角近似 */
+  --r-sm: 8px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-xl: 18px;
+
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
+          "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+
+  --shadow-card: 0 0 0 0.5px rgba(0,0,0,.04);
+  --shadow-pop: 0 10px 40px rgba(0,0,0,.14), 0 0 0 0.5px rgba(0,0,0,.05);
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg:        #000000;   /* iOS 深色分组底是**纯黑**（不是深灰） */
+  --card:      #1c1c1e;   /* secondarySystemGroupedBackground */
+  --card-2:    #2c2c2e;
+  --fill:      #7878805c;
+  --fill-2:    #7878807a;
+  --sep:       #54545899;
+  --sep-strong:#545458a0;
+
+  --t1: #ffffff;
+  --t2: #ebebf599;
+  --t3: #ebebf54d;
+  --t4: #ebebf52e;
+
+  --blue:   #0a84ff;   /* iOS 深色下的 systemBlue 会提亮一档 */
+  --blue-hi:#409cff;
+  --green:  #30d158;
+  --red:    #ff453a;
+  --orange: #ff9f0a;
+  --purple: #bf5af2;
+
+  --shadow-card: none;
+  --shadow-pop: 0 10px 40px rgba(0,0,0,.6), 0 0 0 0.5px rgba(255,255,255,.1);
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--t1);
+  /* iOS 正文字号 17pt，桌面按比例收到 13.5 —— 太小会失去 iOS 的"从容感" */
+  font-size: 13.5px;
+  line-height: 1.47;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+/* ═══════════ 布局：iOS 的分组列表模型 ═══════════
+   macOS 版 iOS 应用（备忘录、提醒事项）是"侧栏 + 内容"，
+   侧栏是**整块**，内容区在灰底上摞卡片。
+   ════════════════════════════════════════════════ */
+.app {
+  display: grid;
+  grid-template-columns: 232px minmax(0, 1fr);
+  height: 100vh;
+  /* 侧栏和内容之间不用线，用底色差 —— 这是 iOS 的做法 */
+  background: var(--bg);
+}
+
+/* ── 侧栏 ── */
+.side {
+  background: var(--card);
+  display: flex; flex-direction: column;
+  min-height: 0;
+  padding: 0 0 8px;
+  /* 桌面版侧栏不需要毛玻璃（常驻、背后没有内容）
+     但给一条极淡的右边界，深色下才分得清 */
+  border-right: 0.5px solid var(--sep);
+}
+
+.side-head {
+  padding: 18px 16px 10px;
+  display: flex; align-items: center; gap: 9px;
+}
+.logo {
+  width: 26px; height: 26px; border-radius: 7px;
+  background: var(--t1);
+  color: var(--card);
+  display: grid; place-items: center;
+  font-size: 13px; font-weight: 600;
+  flex: 0 0 auto;
+  user-select: none;
+}
+.side-head .name { font-size: 14px; font-weight: 600; letter-spacing: -.01em; }
+.side-head .ver {
+  margin-left: auto; font-size: 10.5px; color: var(--t3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* iOS 的导航项：**胶囊圆角** + 选中时浅蓝底。
+   注意不是"左侧竖条"——竖条是 Linear/Material 的语汇 */
+.nav { padding: 0 10px; }
+.nav-item {
+  display: flex; align-items: center; gap: 9px;
+  height: 34px; padding: 0 11px;
+  border-radius: 9px;
+  border: 0; background: none;
+  color: var(--t1); font: inherit; font-size: 13.5px;
+  cursor: pointer; width: 100%; text-align: left;
+  transition: background-color .12s ease;
+}
+.nav-item:hover { background: var(--fill); }
+.nav-item.on { background: var(--blue); color: #fff; }
+.nav-item.on .ico { color: #fff; }
+.nav-item .ico {
+  width: 17px; height: 17px; flex: 0 0 auto;
+  color: var(--t2);
+  display: grid; place-items: center;
+}
+.nav-item .ico svg { width: 16px; height: 16px; }
+.nav-item .badge {
+  margin-left: auto; font-size: 11px; color: var(--t3);
+  font-variant-numeric: tabular-nums;
+}
+.nav-item.on .badge { color: rgba(255,255,255,.75); }
+
+/* 分组标题：iOS 的全大写小标题 */
+.nav-label {
+  padding: 14px 18px 5px;
+  font-size: 11px; font-weight: 600;
+  letter-spacing: .05em; text-transform: uppercase;
+  color: var(--t3); user-select: none;
+}
+
+.side-foot { margin-top: auto; padding: 8px; }
+
+/* ── 内容区 ── */
+.main {
+  display: flex; flex-direction: column;
+  min-width: 0; min-height: 0;
+}
+
+/* 顶部：iOS 的大标题导航（large title）。
+   这是 iOS 最有辨识度的东西，桌面版保留它 —— 
+   它给了界面一个"从容的起点"，正是 Linear 缺的 */
+.topbar {
+  flex: 0 0 auto;
+  padding: 16px 24px 12px;
+}
+.topbar .row1 {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 2px;
+}
+.topbar h1 {
+  margin: 0; font-size: 22px; font-weight: 700; letter-spacing: -.022em;
+}
+.topbar .sub { font-size: 12px; color: var(--t2); }
+.topbar .gap { flex: 1; }
+
+/* iOS 圆形图标按钮 */
+.cbtn {
+  width: 30px; height: 30px; border-radius: 50%;
+  border: 0; background: var(--fill);
+  color: var(--blue);
+  display: grid; place-items: center; cursor: pointer;
+  transition: background-color .12s ease;
+}
+.cbtn:hover { background: var(--fill-2); }
+.cbtn svg { width: 15px; height: 15px; }
+
+/* ═══════════ 分组卡片（inset grouped） ═══════════
+   这是 iOS 风的**灵魂**：一张白卡片里若干行，
+   行与行之间用内嵌细线（不是通栏线）。
+   ════════════════════════════════════════════════ */
+.scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 0 24px 20px; }
+
+.group { margin-bottom: 22px; }
+.group-title {
+  padding: 0 4px 7px;
+  font-size: 11.5px; font-weight: 600;
+  letter-spacing: .04em; text-transform: uppercase;
+  color: var(--t3); user-select: none;
+}
+
+.card {
+  background: var(--card);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+
+/* 列表行：34px 高（桌面版，不是手机的 44） */
+.row {
+  display: flex; align-items: center; gap: 10px;
+  min-height: 38px;
+  padding: 7px 14px;
+  cursor: pointer;
+  position: relative;
+  transition: background-color .1s ease;
+}
+.row:hover { background: var(--fill); }
+/* 内嵌分隔线：从文字起点开始，不到卡片边缘 —— iOS 的标志性细节 */
+.row + .row::before {
+  content: "";
+  position: absolute; top: 0; left: 14px; right: 0;
+  height: 0.5px; background: var(--sep);
+}
+.row .chev {
+  margin-left: auto; color: var(--t3);
+  display: grid; place-items: center;
+}
+.row .chev svg { width: 12px; height: 12px; }
+
+/* 头像：iOS 用的是**圆形**（联系人），不是圆角方形 */
+.ava {
+  width: 28px; height: 28px; border-radius: 50%;
+  display: grid; place-items: center;
+  font-size: 12px; font-weight: 600;
+  background: var(--fill);
+  color: var(--t2);
+  flex: 0 0 auto; user-select: none;
+}
+/* iOS 的彩色头像：用的是系统色的柔和版 */
+.ava.blue   { background: rgba(0,122,255,.13);  color: var(--blue); }
+.ava.green  { background: rgba(52,199,89,.14);  color: #248a3d; }
+.ava.orange { background: rgba(255,149,0,.14);  color: #c93400; }
+.ava.purple { background: rgba(175,82,222,.14); color: #8944ab; }
+
+.row-main { min-width: 0; flex: 1; }
+.row-name {
+  font-size: 13.5px; font-weight: 500; color: var(--t1);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  display: flex; align-items: center; gap: 6px;
+}
+.row-pre {
+  font-size: 12px; color: var(--t2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  margin-top: 1px;
+}
+.row-time { font-size: 12px; color: var(--t3); flex: 0 0 auto; }
+
+/* 未读：iOS 的蓝点 */
+.unread {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--blue); flex: 0 0 auto;
+}
+
+/* ═══════════ 对话 ═══════════ */
+.chat-wrap {
+  flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden;
+  padding: 4px 24px 8px;
+  display: flex; flex-direction: column;
+}
+/* 对话与输入条共用同一条"内容列"：左对齐、最宽 820。
+   这样底部输入条的左缘跟第一条消息的左缘在一条线上 */
+.chat-inner { width: 100%; max-width: 820px; }
+
+/* iOS 信息的日期分隔：居中灰色小字，两边不画线（跟 Linear 不同） */
+.date {
+  text-align: center; font-size: 11.5px; font-weight: 600;
+  color: var(--t3); margin: 6px 0 16px; user-select: none;
+}
+
+.msg { display: flex; gap: 8px; margin-bottom: 6px; padding-right: 60px; min-width: 0; }
+.msg.me { flex-direction: row-reverse; padding-right: 0; padding-left: 60px; }
+.msg .ava { width: 26px; height: 26px; font-size: 11px; margin-top: 1px; }
+
+.msg-col { min-width: 0; max-width: min(540px, calc(100% - 20px)); display: flex; flex-direction: column; }
+.msg.me .msg-col { margin-left: auto; align-items: flex-end; }
+
+.msg-who {
+  font-size: 11px; color: var(--t3); margin-bottom: 3px; padding: 0 12px;
+  display: flex; align-items: baseline; gap: 6px;
+}
+
+/* iOS 气泡：**大圆角 + 无边框 + 无尾巴**
+   而且整体圆角比 Linear 更大（18px），接近 iMessage 的形态 */
+.bubble {
+  border-radius: var(--r-xl);
+  padding: 9px 14px;
+  font-size: 13.5px; line-height: 1.5;
+  color: var(--t1);
+  background: var(--card);
+  box-shadow: var(--shadow-card);
+  word-break: break-word; overflow-wrap: anywhere; min-width: 0;
+}
+/* 我的消息：iOS 系统蓝实心 —— 这跟 Linear 的决定完全相反。
+   Linear 怕"实心蓝太吵"，iOS 恰恰用它来区分你我。 */
+.msg.me .bubble {
+  background: var(--blue);
+  color: #fff;
+  box-shadow: none;
+}
+.bubble .p { margin: 0; }
+.bubble .p + .p { margin-top: 8px; }
+.bubble code {
+  font-family: var(--mono); font-size: 11.5px;
+  background: var(--fill);
+  padding: 1px 5px; border-radius: 4px;
+}
+.msg.me .bubble code { background: rgba(255,255,255,.2); }
+
+/* 工具调用：iOS 里这类"系统信息"用极淡的灰底 + 等宽字 */
+.tool {
+  margin-top: 8px;
+  border-radius: var(--r-md);
+  background: var(--card-2);
+  padding: 8px 11px;
+  font-family: var(--mono); font-size: 11px;
+  color: var(--t2); line-height: 1.7;
+}
+.tool .h { display: flex; align-items: center; gap: 6px; margin-bottom: 2px; }
+.tool .ok { color: var(--green); }
+
+/* ── 输入区 ──
+   iOS 的输入框是**胶囊**，且浮在内容上。桌面上做成底部一条通栏 */
+.composer {
+  flex: 0 0 auto;
+  padding: 8px 24px 18px;
+  width: 100%;
+  display: flex; align-items: flex-end; gap: 9px;
+  /* iOS 的输入条不会横跨整个宽屏 —— 超过 760 就变成"网页表单"了。
+     限制宽度并靠左，跟对话内容同一个左对齐基准 */
+  max-width: 820px;
+}
+.ibox {
+  flex: 1; min-width: 0;
+  display: flex; align-items: center; gap: 8px;
+  background: var(--card);
+  border: 1px solid var(--sep-strong);
+  border-radius: 20px;
+  padding: 6px 8px 6px 14px;
+  transition: border-color .12s ease;
+}
+.ibox:focus-within { border-color: var(--blue); }
+.ibox textarea {
+  flex: 1; min-width: 0;
+  border: 0; outline: none; resize: none; background: none;
+  color: var(--t1); font: inherit; font-size: 13.5px;
+  line-height: 1.5; padding: 4px 0;
+  min-height: 26px; max-height: 140px;
+}
+.ibox textarea::placeholder { color: var(--t3); }
+.ibox .tools { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }
+.tbtn {
+  width: 26px; height: 26px; border-radius: 50%;
+  border: 0; background: none; color: var(--t2);
+  display: grid; place-items: center; cursor: pointer;
+}
+.tbtn:hover { background: var(--fill); }
+.tbtn svg { width: 15px; height: 15px; }
+
+/* 发送：iOS 的圆形蓝色按钮（不是矩形"发送"二字） */
+.send {
+  width: 32px; height: 32px; border-radius: 50%;
+  border: 0; background: var(--blue); color: #fff;
+  display: grid; place-items: center; cursor: pointer;
+  flex: 0 0 auto;
+  transition: background-color .12s ease, transform .1s ease;
+}
+.send:hover { background: var(--blue-hi); }
+.send:active { transform: scale(.94); }
+.send svg { width: 15px; height: 15px; }
+
+/* 滚动条：iOS 几乎看不见，悬停才出现细条 */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: transparent; border-radius: 4px;
+  border: 2px solid transparent; background-clip: content-box;
+}
+*:hover::-webkit-scrollbar-thumb { background: var(--t4); background-clip: content-box; }
+
+/* 主题切换（仅设计稿） */
+.theme-toggle {
+  position: fixed; left: 16px; bottom: 14px; z-index: 99;
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 28px; padding: 0 11px;
+  border-radius: 999px; border: 0;
+  background: var(--fill-2); color: var(--t2);
+  font: inherit; font-size: 11.5px; cursor: pointer;
+  backdrop-filter: blur(20px);
+  transition: background-color .12s;
+}
+.theme-toggle:hover { color: var(--t1); }
+.theme-toggle svg { width: 13px; height: 13px; }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <aside class="side">
+    <div class="side-head">
+      <div class="logo">班</div>
+      <span class="name">班底</span>
+      <span class="ver">1.0.1</span>
+    </div>
+
+    <div class="nav-label">主要</div>
+    <nav class="nav">
+      <button class="nav-item on">
+        <span class="ico">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round">
+            <path d="M4.5 5.5h15v10H9.5l-5 3.6z"/>
+          </svg>
+        </span>
+        消息 <span class="badge">3</span>
+      </button>
+      <button class="nav-item">
+        <span class="ico">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round">
+            <circle cx="9.2" cy="8.6" r="3.1"/>
+            <path d="M3.9 18.6c0-2.8 2.3-4.8 5.3-4.8s5.3 2 5.3 4.8"/>
+            <circle cx="17.2" cy="9.6" r="2.2"/>
+            <path d="M16 18.6c0-2 .8-3.4 2.5-3.9"/>
+          </svg>
+        </span>
+        通讯录
+      </button>
+      <button class="nav-item">
+        <span class="ico">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round">
+            <rect x="3.6" y="3.6" width="7" height="7" rx="2"/>
+            <rect x="13.4" y="3.6" width="7" height="7" rx="2"/>
+            <rect x="3.6" y="13.4" width="7" height="7" rx="2"/>
+            <rect x="13.4" y="13.4" width="7" height="7" rx="2"/>
+          </svg>
+        </span>
+        工作台
+      </button>
+    </nav>
+
+    <div class="nav-label">最近</div>
+    <nav class="nav">
+      <button class="nav-item">
+        <span class="ico">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round">
+            <path d="M4.5 6.5h15M4.5 12h15M4.5 17.5h9"/>
+          </svg>
+        </span>
+        任务看板 <span class="badge">18</span>
+      </button>
+      <button class="nav-item">
+        <span class="ico">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round">
+            <path d="M3.8 7.4l8.2-3.9 8.2 3.9v9.2l-8.2 3.9-8.2-3.9z"/>
+          </svg>
+        </span>
+        项目 <span class="badge">3</span>
+      </button>
+    </nav>
+
+    <div class="side-foot">
+      <button class="nav-item">
+        <span class="ico">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M18.4 5.6L17 7M7 17l-1.4 1.4"/>
+          </svg>
+        </span>
+        设置
+      </button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="topbar">
+      <div class="row1">
+        <h1>马超</h1>
+        <button class="cbtn" title="更多">
+          <svg viewBox="0 0 24 24" fill="currentColor">
+            <circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/>
+          </svg>
+        </button>
+        <span class="gap"></span>
+        <button class="cbtn" title="新建">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+            <path d="M12 5v14M5 12h14"/>
+          </svg>
+        </button>
+      </div>
+      <div class="sub">在线 · 执行人 · 可写文件</div>
+    </div>
+
+    <div class="chat-wrap">
+     <div class="chat-inner">
+      <div class="date">10月19日</div>
+
+      <div class="msg">
+        <span class="ava blue">马</span>
+        <div class="msg-col">
+          <div class="msg-who">马超 · 14:31</div>
+          <div class="bubble">
+            <p class="p">看了一遍，<code>task-comments</code> 这块有三处要动：</p>
+            <p class="p">一是回复目标的选取在长列表里要往上滑，二是时间显示了但没年月日，三是气泡宽度写死 460 在宽窗口下太窄。</p>
+            <div class="tool">
+              <div class="h"><span class="ok">✓</span> 读取 apps/web/style.css</div>
+              1912 行 · 已定位 .tc-threads / .bubble / .row
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="msg me">
+        <span class="ava">我</span>
+        <div class="msg-col">
+          <div class="msg-who">14:33</div>
+          <div class="bubble">
+            <p class="p">三处一起改，改完跑一遍冒烟。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="msg">
+        <span class="ava blue">马</span>
+        <div class="msg-col">
+          <div class="msg-who">马超 · 14:34</div>
+          <div class="bubble">
+            <p class="p">好，我先把这三处改掉，跑一遍再说。<code>stampOf</code> 那个我顺手把年份补上——聊天会跨天，只有时分看不出是哪天。</p>
+          </div>
+        </div>
+      </div>
+     </div>
+    </div>
+
+    <div class="composer">
+      <div class="ibox">
+        <textarea placeholder="发消息…"></textarea>
+        <div class="tools">
+          <button class="tbtn" title="附件">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round">
+              <path d="M12 5v14M5 12h14"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <button class="send" title="发送">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 19V5M5.5 11.5L12 5l6.5 6.5"/>
+        </svg>
+      </button>
+    </div>
+  </main>
+</div>
+
+<button class="theme-toggle" id="tt">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round">
+    <path d="M20.5 14.2A8.5 8.5 0 1 1 9.8 3.5a6.6 6.6 0 0 0 10.7 10.7z"/>
+  </svg>
+  <span id="ttLabel">深色</span>
+</button>
+<script>
+(function () {
+  var k = 'bandi.design.ios.theme';
+  var cur = 'light';
+  try { cur = localStorage.getItem(k) || 'light'; } catch (e) {}
+  var btn = document.getElementById('tt');
+  var lab = document.getElementById('ttLabel');
+  function apply(t) {
+    document.documentElement.setAttribute('data-theme', t);
+    lab.textContent = t === 'dark' ? '浅色' : '深色';
+    try { localStorage.setItem(k, t); } catch (e) {}
+  }
+  apply(cur);
+  btn.addEventListener('click', function () {
+    apply(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
+  });
+})();
+</script>
+</body>
+</html>

@@ -10668,6 +10668,49 @@ const PLUGIN_BADGE_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentCo
   <path d="M12 17.7V22" />
 </svg>`;
 
+/**
+ * 插件磁贴的图标配色（v1.0.1 第 3 步）。
+ *
+ * 为什么是"按分组顺序发色"，而不是按分组名哈希：
+ * 哈希看上去更"稳定"（同一个分类永远同色），但**碰撞是随机的** —— 实测哈希把
+ * 「研发」和「运维」撞成同一个紫、「开发」和「生产力」撞成同一个青，一眼就看得出。
+ * 而实际工作台上同时存在的分组只有 2~4 个（项目面板 / ssh 各自一个分类），
+ * 按**首次出现的顺序**发色，同屏的几组必然不同色 —— 这才是这一格要的效果。
+ * 代价：新装一个分类可能让后面几组的颜色挪位（分组重排时本来就会重排），可以接受。
+ *
+ * 色相只在 190°~330° 之间循环（青 → 蓝 → 紫 → 品红）：这一圈里**没有黄**。
+ * 白字压在色块上要 ≥ 4.5:1，黄/橙在同样明度上对比度掉得最快（实测 #a86400 只有 4.68，
+ * 再亮一点就破线）。绕开这一段，白字就稳。
+ * 饱和度 46%、明度 44%/28%：不是没颜色，是"分得开但压得住" ——
+ * 主屏上一排高饱和色块会抢注意力，而这些只是入口。
+ * ⚠️ **青/绿这一族要单独压暗**：同样的明度下，青绿在 WCAG 的亮度公式里权重大
+ * （G 的系数 0.7152），hsl(192 46% 44%) 白字只有 3.70、hsl(172 46% 44%) 只有 3.03 —— 破线。
+ * 所以 192 / 172 这两位的起点明度降到 36%（对应 4.9~5.1），其余保持 44%。
+ * 改任何一个色位都要重算："相对亮度 → 1.05/(L+0.05)"，白字 ≥ 4.5。
+ */
+const PLUGIN_HUES = [262, 192, 322, 214, 292, 172];
+/** 少数色位需要不同的明度（见上面的注释）。没列出的走默认 44%/28% */
+const PLUGIN_LIGHT = { 192: 36, 172: 34 };
+/** 一次渲染内：分组名 → 色位（每次重画重新发，顺序稳定则颜色稳定） */
+let wbHueTick = 0;
+let wbHueMap = new Map();
+const resetWbHues = () => { wbHueTick = 0; wbHueMap = new Map(); };
+function pluginHue(cat) {
+  const key = String(cat || '应用');
+  if (!wbHueMap.has(key)) {
+    wbHueMap.set(key, PLUGIN_HUES[wbHueTick % PLUGIN_HUES.length]);
+    wbHueTick++;
+  }
+  return wbHueMap.get(key);
+}
+/** 一个分组一种颜色的内联样式（起点亮、终点暗，同一档的渐变） */
+const wbIcoStyle = (cat) => {
+  const h = pluginHue(cat);
+  const l1 = PLUGIN_LIGHT[h] ?? 44;
+  const l2 = l1 - 16; // 终点固定比起点暗 16 个明度：同一色相的两档，渐变不会脏
+  return `style="--wb-1:hsl(${h} 46% ${l1}%);--wb-2:hsl(${h} 52% ${l2}%)"`;
+};
+
 /** 从接口返回里取数组：可以是数组本身，也可以 pick 某个键 */
 function pickItems(body, pick) {
   if (Array.isArray(body)) return body;
@@ -10741,6 +10784,7 @@ function renderWorkbench() {
 
 /** 工作台首页：按 manifest 里的 category 分组的应用宫格 */
 function renderWorkbenchGrid() {
+  resetWbHues(); // 每次重画从头发色：分组顺序不变 → 颜色不变；顺序变了 → 颜色跟着重排（不追求跨次稳定）
   const list = usablePlugins();
   // 宫格是整页布局：把左栏收掉（进插件后会由 renderPluginMaster 放回来）
   document.body.classList.add('no-list');
@@ -10770,7 +10814,7 @@ function renderWorkbenchGrid() {
                   ${items
                     .map(
                       (p) => `<button class="wb-tile" data-wb-open="${esc(p.id)}" title="${esc(p.description || p.label)}">
-                        <span class="wb-ico has-plug"><i class="wb-badge" title="插件" aria-label="插件">${PLUGIN_BADGE_SVG}</i>${esc(initial(p.label))}</span>
+                        <span class="wb-ico has-plug" ${wbIcoStyle(cat)}><i class="wb-badge" title="插件" aria-label="插件">${PLUGIN_BADGE_SVG}</i>${esc(initial(p.label))}</span>
                         <span class="wb-name">${esc(p.label)}</span>
                       </button>`,
                     )
