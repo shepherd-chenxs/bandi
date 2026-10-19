@@ -6405,16 +6405,16 @@ async function doStartFlow() {
 }
 
 /**
- * 左栏顶上的标题：`setListTitle('工作流')` 写名字，`setListTitle(['工作流','小鸡小鸡'])` 写面包屑。
+ * 左栏顶上的标题：`setListTitle('工作台')` 写名字，`setListTitle(['工作台','小鸡小鸡'])` 写面包屑。
  *
  * 为什么做成两个入口而不是让调用处拼 HTML（2026-10-19 用户截图：「改成面包屑」）：
- *   · 左栏`#listTitle` 原来是个 `<b>`，十几处直接写 `textContent`；
- *   · 流程页那一栏最上是**当前哪个流程**（「小鸡小鸡」），光写名字看不出它是"工作流下面的"，
- *     而这一页又是整站唯一点左栏不换页的地方 —— 补一段静态的「工作流」，人就认得出自己在哪；
- *   · 一级栏名**不可点**：这一栏本身就是"工作流"那个一级栏的列表，再给个"回工作流"只会让人
- *     以为这里是别的模块。面包屑在这儿只是"路径"，不是导航。
+ *   · 左栏 `#listTitle` 原来是个 `<b>`，十几处直接写 `textContent`；
+ *   · 流程页那一栏最上是**当前哪个流程**（「小鸡小鸡」），光写名字看不出它是"工作台下面的"，
+ *     而这一页又是整站唯一点左栏不换页的地方 —— 补一段「工作台」，人就认得出自己在哪；
+ *   · 这一段**可点**（2026-10-19 用户要求「第一个是工作台，要可点击」）：点它回工作台宫格首页。
+ *     用的是全站那颗 `.crumb-btn`，跟设置页 / 插件页的面包屑一个样子、一种悬停。
  *
- * 传数组时用 `textContent` 写（名字来自用户输入，不能进 innerHTML）。
+ * 传数组时全部用 `textContent` 写（流程名来自用户输入，不能进 innerHTML）。
  */
 function setListTitle(t) {
   const el = $('listTitle');
@@ -6431,8 +6431,18 @@ function setListTitle(t) {
       sep.textContent = '›';
       el.append(sep);
     }
-    const node = document.createElement(i === t.length - 1 ? 'b' : 'span');
-    if (i !== t.length - 1) node.className = 'list-title-up';
+    const last = i === t.length - 1;
+    const node = document.createElement(last ? 'b' : 'button');
+    if (!last) {
+      node.type = 'button';
+      node.className = 'crumb-btn';
+      node.title = '回工作台';
+      // ⚠️ 走 `setNav('plugins')`，**不是**直接 `openPlugins()`：
+      //    openPlugins 末尾有一句"页面已经被接管就别抢渲染"（`S.nav !== 'plugins'` 就 return）——
+      //    在流程页上 S.nav 是 workflows，直接调它只会把路由改成 plugins、什么都不画（实测过）。
+      //    setNav 会先切一级栏（顺带把标题写回「工作台」、收掉左栏）再开宫格。
+      node.onclick = () => setNav('plugins');
+    }
     node.textContent = part;
     el.append(node);
   });
@@ -6452,7 +6462,7 @@ async function openFlowRun(templateId, pickRunId) {
   // 一刷新就被恢复到工作台去了（踩过）
   setNav('workflows', { skipOpen: true });
   document.body.classList.remove('no-list');
-  setListTitle(['工作流', '发起记录']);
+  setListTitle(['工作台', '发起记录']);
   setRoute('flowRun', { template: templateId ?? null, run: pickRunId ?? S.flowRunId ?? null });
   // 左栏顶上的「＋」在这儿是**发起一条**（不是新建模板）
   $('listAction').classList.remove('hidden');
@@ -6465,7 +6475,7 @@ async function openFlowRun(templateId, pickRunId) {
   } catch { /* 拿不到就当空的 */ }
   S.flowTemplates = data.templates ?? [];
   const tpl = (data.templates ?? []).find((t) => t.id === templateId) ?? null;
-  if (tpl) setListTitle(['工作流', tpl.name]);
+  if (tpl) setListTitle(['工作台', tpl.name]);
 
   S.flowRuns = (data.runs ?? []).filter((r) => !templateId || r.templateId === templateId);
   if (pickRunId) S.flowRunId = pickRunId;

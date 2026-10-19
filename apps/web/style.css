@@ -242,23 +242,27 @@ body.no-list .list-panel { display: none; }
 .list-head { position: relative; padding: 14px 16px 8px; display: flex; align-items: center; justify-content: space-between; }
 .list-head b { font-size: 15px; }
 /* 左栏标题：一路 `<b>`，现在是个容器（里面可能是一段面包屑，见 app.js 的 setListTitle）。
-   `min-width:0 + 省略号`：流程名很长时别把它挤出左栏、也别把「＋」顶出去；
-   两段各自省略（父级先让位，当前那段保住最少 40% 的宽度，不然只剩一个「›」）。
-   `gap: 0`：段与段之间由 `.crumb-sep` 自己的左右 margin 撑开，跟别处的面包屑一致。
-   `padding-left: 6px` 是补偿：下面每一行 `.item` 有自己的左右内边距（`--pad-row`，这里算下来 6px），
-   而上一级是**灰字不可点**、没有 `.crumb-btn` 那层 6px 内边距 —— 不补的话「工作流」
-   比列表行的字往左突出 6px，看着像标题没对齐（截图里一眼就看出来）。 */
-.list-title { display: flex; align-items: center; gap: 0; min-width: 0;
-              padding-left: calc(var(--pad-row) - 10px); }
+   `min-width:0 + 省略号`：流程名很长时别把它挤出左栏、也别把「＋」顶出去。
+   `gap: 0`：段与段之间由 `.crumb-sep` 自己的左右 margin 撑开，跟别处的面包屑一致。 */
+.list-title { display: flex; align-items: center; gap: 0; min-width: 0; flex: 1; }
 .list-title > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .list-title > .crumb-sep { flex: 0 0 auto; }
-/* 上一级那段：**不可点**，所以是灰字而不是 `.crumb-btn`。
-   这一栏本身就是「工作流」的列表，再给个"回工作流"只会让人以为这里是别的模块 ——
-   面包屑在这儿只是路径，不是导航。 */
-.list-title-up { flex: 0 1 auto; color: var(--dim); font-size: 13px; font-weight: 400; }
-.list-title > b { flex: 1 1 auto; }
-/* 单段（没有面包屑）时不需要那 6px：别的页标题跟左栏列表行同一条左沿，别跟着缩进 */
-.list-title:not(:has(> .crumb-sep)) { padding-left: 0; }
+/* 面包屑形态（有两段以上）下**字体统一**：两段同号同粗细，只用颜色分主次（2026-10-19 用户要求
+   「面包屑字体一致，不要加粗」）。原来上一级 13px 灰、当前 15px 加粗，一个标题里两种字，看着像
+   手滑拼上去的。
+   · 上一级是 `.crumb-btn`（全站那颗，可点回工作台）：默认 13px + 2px 竖内边距，这里拉到 15px；
+     `margin-left: -6px` 抵掉它自带的左内边距，让「工作台」和下面的列表行共用同一条左沿
+     （`.list-head` 的 16px = `.list-body` 的 8px + `.item` 的 8px）。
+   · 当前那段去掉 15px 的 600，改成常规粗细 + 正文色 —— 靠颜色压过上一级，不靠加粗。 */
+.list-title:has(> .crumb-sep) { padding-left: 0; }
+.list-title > .crumb-btn { flex: 0 1 auto; margin-left: -6px; padding: 2px 6px;
+                           font-size: 15px; font-weight: 400; border-radius: 6px; }
+.list-title:has(> .crumb-sep) > b { flex: 1 1 auto; font-size: 15px; font-weight: 400; }
+/* 分隔符在这条标题里要**看得见**：全站那颗 `›` 是 `var(--line)`（边框色，几乎白），
+   放在 13px 的句子中间还剩个方向感，搁在 15px 标题里就糊掉了（用户："中间的标识明显一些"）。
+   只在这一处加深 + 放大，别处面包屑不动。
+   `margin: 0 6px 0 0`：左边那 6px 由 `.crumb-btn` 自己的右内边距顶着，两边看着才一样宽。 */
+.list-title > .crumb-sep { color: var(--dim); font-size: 14px; margin: 0 6px 0 0; }
 .mini { width: 26px; height: 26px; padding: 0; border-radius: 7px; font-size: 15px; line-height: 1; }
 .mini.hidden { display: none; }
 .list-search { padding: 0 12px 8px; }
