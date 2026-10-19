@@ -6526,12 +6526,11 @@ async function openFlowRun(templateId, pickRunId) {
   // 一刷新就被恢复到工作台去了（踩过）
   setNav('workflows', { skipOpen: true });
   document.body.classList.remove('no-list');
-  // 左栏这一栏是「发起记录」：面包屑写明它属于哪个流程（模板名取到后补成第三段）
-  setListTitle([
-    { label: '工作台', to: 'workbench' },
-    { label: '流程编排', to: 'flows' },
-    { label: '发起记录' },
-  ]);
+  // 左栏这一栏是「发起记录」：面包屑只到**二级**——工作台 › 流程名。
+  // 中间不能插「流程编排」（2026-10-19 用户截图：「这个只是个二级标题，没有流程编排」）：
+  // 发布过的流程是工作台上的**一级磁贴**，点它直接到这页，并不经过「流程编排」那一层；
+  // 而「流程编排」是"画流程"的那一页，两者的上一级都只是工作台。
+  setListTitle([{ label: '工作台', to: 'workbench' }, { label: '发起记录' }]);
   setRoute('flowRun', { template: templateId ?? null, run: pickRunId ?? S.flowRunId ?? null });
   // 左栏顶上的「＋」在这儿是**发起一条**（不是新建模板）
   $('listAction').classList.remove('hidden');
@@ -6544,13 +6543,7 @@ async function openFlowRun(templateId, pickRunId) {
   } catch { /* 拿不到就当空的 */ }
   S.flowTemplates = data.templates ?? [];
   const tpl = (data.templates ?? []).find((t) => t.id === templateId) ?? null;
-  if (tpl) {
-    setListTitle([
-      { label: '工作台', to: 'workbench' },
-      { label: '流程编排', to: 'flows' },
-      { label: tpl.name },
-    ]);
-  }
+  if (tpl) setListTitle([{ label: '工作台', to: 'workbench' }, { label: tpl.name }]);
 
   S.flowRuns = (data.runs ?? []).filter((r) => !templateId || r.templateId === templateId);
   if (pickRunId) S.flowRunId = pickRunId;
@@ -6604,7 +6597,7 @@ function renderRunList() {
 
 function renderRunEmpty() {
   // 还没发起过：说清楚下一步点哪儿，别给个死页。
-  // 没有页头：左栏顶上已经是「工作台 › 流程编排 › 模板名」，右页头再写一遍就是重复。
+  // 没有页头：左栏顶上已经是「工作台 › 模板名」，右页头再写一遍就是重复。
   $('flowView').innerHTML = `
     <div class="detail-body run-wrap">
       <div class="wip">这个流程还没有发起过
@@ -6628,14 +6621,11 @@ async function paintRun(id) {
   S.flowRunId = id;
   S.flowRun = v;
   S.flowTemplate = v.templateId ?? S.flowTemplate;
-  // 左栏面包屑第三段是**模板名**（这一栏就是模板下的发起记录）；换 run 时也刷一遍，
+  // 左栏面包屑第二段是**模板名**（这一栏就是模板下的发起记录）；换 run 时也刷一遍，
   // 万一这条 run 属于别的模板（理论上不会，但数据是老的时候可能），标题别停在上一份。
+  // 只到二级：工作台 › 模板名（中间没有「流程编排」，见 openFlowRun 的注释）。
   const tplNow = (S.flowTemplates ?? []).find((t) => t.id === S.flowTemplate);
-  setListTitle([
-    { label: '工作台', to: 'workbench' },
-    { label: '流程编排', to: 'flows' },
-    { label: tplNow?.name ?? '发起记录' },
-  ]);
+  setListTitle([{ label: '工作台', to: 'workbench' }, { label: tplNow?.name ?? '发起记录' }]);
   /*
    * **左栏那一行也要跟着换成这份新的。**
    *
@@ -7055,7 +7045,7 @@ function runHTML(v) {
                换一条记录全靠点它 —— 收起来等于把自己唯一的路收掉，而省下的那点宽度
                换不来什么（右边还有一整栏对话）。整页统一：**左栏常驻，不推拉**。
                所以这里不再有前置按钮，页头最左边就是标题（跟其它子页一个规矩）。
-               面包屑（工作台 › 流程编排 › 模板名）在左栏顶上，这里只写**这一条 run 的标题**。 -->
+               面包屑（工作台 › 模板名）在左栏顶上，这里只写**这一条 run 的标题**。 -->
           <div class="head-title"><b>${esc(v.title)}</b>
             <span class="flow-badge ${b.cls}">${esc(b.text)}</span></div>
           <div class="head-actions">${acts.join('')}</div>
