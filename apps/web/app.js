@@ -3977,7 +3977,10 @@ async function openProjectsPage(selectId) {
 
 /**
  * 右侧详情 = 照**员工详情页**的骨架改（2026-10-18 用户定的）：
- * 顶部 p-head 一行 = 项目概览信息（头像 + 名字 + pill，第二行元信息）+ 右侧动作按钮；
+ * 顶部 p-head 一行 = 项目概览信息（名字 + 目录 pill）+ 右侧动作按钮；
+ * ⚠️ 2026-10-19 用户截图圈掉左侧那枚蓝色「班」字方块（`.avatar.proj`）：去掉，
+ *    项目名本身就是页面标题，头像那个色块在这儿只是多一块颜色，没有"这是谁"的信息量
+ *    （员工头像不一样——它是"人"，项目是"地方"）。
  * 下面 tabs 两页：**基础信息**（名称/目录/附加目录/说明 + 任务统计）、**项目规章**（＝宪法）。
  * 字段仍是常驻输入区（没有"点编辑"那步）；tabs 一次渲染、切显隐 ——
  * 在基础信息改了一半去规章再回来，改动还在（同员工详情页的做法）。
@@ -3998,7 +4001,6 @@ async function renderProjDetail(p) {
   const stat = (label, n) => `<span class="kb-stat">${esc(label)} <b>${n ?? 0}</b></span>`;
   box.innerHTML = `
     <div class="p-head">
-      <div class="avatar proj">${esc(initial(p.name))}</div>
       <div class="p-head-main">
         <h2>${esc(p.name)}${p.builtIn ? '<span class="pill role">内置</span>' : ''}</h2>
         <div class="p-meta">
@@ -4155,8 +4157,9 @@ async function renderProjDetail(p) {
         if (b) b.textContent = payload.name;
         if (sub) sub.textContent = payload.root;
       });
-      /* 改名同步的是**详情区自己**（p-head 的 h2 / 头像 / 目录 pill），不碰左栏标题 ——
-         左栏面包屑只到「工作台 › 项目」二级，项目名不写在里面（见 openProjectsPage）。 */
+      /* 改名同步的是**详情区自己**（p-head 的 h2 / 目录 pill），不碰左栏标题 ——
+         左栏面包屑只到「工作台 › 项目」二级，项目名不写在里面（见 openProjectsPage）。
+         项目头像 2026-10-19 已按用户要求去掉（.avatar.proj 没有宿主了），这里不用再同步它。 */
       const paintName = (name) => {
         const h2 = box.querySelector('.p-head h2');
         if (h2) {
@@ -4164,8 +4167,6 @@ async function renderProjDetail(p) {
             ? (h2.firstChild.nodeValue = name)
             : h2.insertBefore(document.createTextNode(name), h2.firstChild);
         }
-        const av = box.querySelector('.p-head .avatar');
-        if (av) av.textContent = initial(name);
         const rootPill = box.querySelector('.p-meta .pill');
         if (rootPill) rootPill.textContent = $('pjRoot').value.trim();
       };
