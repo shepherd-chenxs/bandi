@@ -247,22 +247,23 @@ body.no-list .list-panel { display: none; }
 .list-title { display: flex; align-items: center; gap: 0; min-width: 0; flex: 1; }
 .list-title > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .list-title > .crumb-sep { flex: 0 0 auto; }
-/* 面包屑形态（有两段以上）下**字体统一**：两段同号同粗细，只用颜色分主次（2026-10-19 用户要求
-   「面包屑字体一致，不要加粗」）。原来上一级 13px 灰、当前 15px 加粗，一个标题里两种字，看着像
-   手滑拼上去的。
-   · 上一级是 `.crumb-btn`（全站那颗，可点回工作台）：默认 13px + 2px 竖内边距，这里拉到 15px；
+/* 面包屑形态（有两段以上）：**统一 13px + 加粗**（2026-10-19 用户要求「面包屑小一点，加粗」）。
+   上一轮试过 15px 常规粗细（那次的诉求是"字体一致、不要加粗"），实看下来 15px 放在左栏顶端
+   太抢眼 —— 它是"你在哪儿"，不是页面标题；13px 正是全站面包屑的号。
+   两段同号同粗细，主次仍然只靠颜色（上一级 --dim、当前 --text），别再给其中一段单独加粗。
+   · 上一级是 `.crumb-btn`（全站那颗，可点回工作台）：默认 13px，这里只补粗细；
      `margin-left: -6px` 抵掉它自带的左内边距，让「工作台」和下面的列表行共用同一条左沿
-     （`.list-head` 的 16px = `.list-body` 的 8px + `.item` 的 8px）。
-   · 当前那段去掉 15px 的 600，改成常规粗细 + 正文色 —— 靠颜色压过上一级，不靠加粗。 */
+     （`.list-head` 的 16px = `.list-body` 的 8px + `.item` 的 8px）。 */
 .list-title:has(> .crumb-sep) { padding-left: 0; }
 .list-title > .crumb-btn { flex: 0 1 auto; margin-left: -6px; padding: 2px 6px;
-                           font-size: 15px; font-weight: 400; border-radius: 6px; }
-.list-title:has(> .crumb-sep) > b { flex: 1 1 auto; font-size: 15px; font-weight: 400; }
+                           font-size: 13px; font-weight: 600; border-radius: 6px; }
+.list-title:has(> .crumb-sep) > b { flex: 1 1 auto; font-size: 13px; font-weight: 600; }
 /* 分隔符在这条标题里要**看得见**：全站那颗 `›` 是 `var(--line)`（边框色，几乎白），
-   放在 13px 的句子中间还剩个方向感，搁在 15px 标题里就糊掉了（用户："中间的标识明显一些"）。
-   只在这一处加深 + 放大，别处面包屑不动。
+   只剩个方向感；夹在加粗的字中间就糊掉了（用户："中间的标识明显一些"）。
+   这一处加深到 --dim，号跟字一样（13）—— 比字小一档的话，旁边一加粗它就显小、像漏了个点。
+   只改这一处，别处面包屑不动。
    `margin: 0 6px 0 0`：左边那 6px 由 `.crumb-btn` 自己的右内边距顶着，两边看着才一样宽。 */
-.list-title > .crumb-sep { color: var(--dim); font-size: 14px; margin: 0 6px 0 0; }
+.list-title > .crumb-sep { color: var(--dim); font-size: 13px; margin: 0 6px 0 0; }
 .mini { width: 26px; height: 26px; padding: 0; border-radius: 7px; font-size: 15px; line-height: 1; }
 .mini.hidden { display: none; }
 .list-search { padding: 0 12px 8px; }
