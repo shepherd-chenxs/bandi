@@ -1468,12 +1468,18 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 /* ⚠️ 这里原来有一组 `.avatar.wb-ico-sm`（26px 的左栏入口小图标）+ `.wb-hint`，
    都是"工作台首页改成左栏目录"那一版留下的。用户否掉了那个版本（首页必须是宫格），
    这组样式就没有宿主了 —— 已删，别再搜不到出处地加回来。 */
-/* 流程页顶栏的「终止 / 删除」：小一号 + **明确分开**。
-   原来两个按钮之间是 0 间隙 —— `acts.join('')` 拼出来中间没有空白字符，
+/* 流程页顶栏的「终止 / 删除」：**推到最右**，小一号 + 明确分开。
+   2026-10-19 用户截图指出：两颗按钮紧跟在标题后面，看着像标题的一部分。
+   病根是这里的页头没走 headRow()（那样才带 `.head-row` 那套 `flex:1 + margin-left` 布局），
+   标题和动作块各按内容宽并排 —— 而动作块本来就该靠右（全站子页一个规矩）。
+   所以照 `.head-row` 的做法给标题 `flex:1`，动作块被推到右边；标题太长自己省略号。
+
+   间距 16 是原样保留的：原来两个按钮之间是 0 间隙 —— `acts.join('')` 拼出来中间没有空白字符，
    而 .head-actions 是 display:block，于是两个按钮紧贴（实测前一个 right 正好等于后一个 left）。
    间距只靠模板里的空白符是不可靠的（同一个 class 在流程设计页就是靠换行撑开的），
    所以把布局写进 CSS。 */
-.run-left > .detail-head .head-actions { display: flex; align-items: center; gap: 16px; }
+.run-head .head-title { flex: 1; min-width: 0; }
+.run-left > .detail-head .head-actions { display: flex; align-items: center; gap: 16px; margin-left: auto; }
 .run-left > .detail-head .head-actions button { font-size: 12px; padding: 3px 10px; }
 /* 详情区（Linear 语汇）：26/30 → 20/24。
    原来那组值偏 iOS 的"大留白"，铺在桌面端一屏能少看两三行；
@@ -1854,7 +1860,7 @@ dialog.sch-dlg > form { flex: 1 1 auto; min-height: 0; display: flex; flex-direc
    ② 列底从"淡线混 8%"改成实色 `--well`（它是专门给凹槽定的，比混出来的更稳、深浅两边都不发花）；
    ③ 列头改成"小号灰字 + 状态点"，不用 600 黑体 —— Linear 的列头是标签，不是标题。
    颜色只留在列头那个圆点上（7 列各一块色会像调色盘）。 */
-.kb-col { --kb-c: var(--st-other); flex: 0 0 244px; border-radius: 10px; padding: 8px 8px 10px;
+.kb-col { --kb-c: var(--st-other); flex: 0 0 300px; border-radius: 10px; padding: 8px 8px 10px;
           background: var(--well); }
 .kb-col + .kb-col { margin-left: 0; }
 .kb-col-head { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500;
