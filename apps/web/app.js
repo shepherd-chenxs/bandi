@@ -1073,7 +1073,7 @@ function openSettings(section) {
     ['system', '跟随系统'],
   ];
   $('settingsView').innerHTML = `
-    <div class="detail-head"><b>偏好设置</b></div>
+    <div class="detail-head">${breadcrumb([{ label: '设置', to: 'settings' }, { label: '偏好设置' }])}</div>
     <div class="detail-body">
       <section class="set-sec">
         <div class="set-head"><b>外观</b><span class="set-tag">仅本设备</span></div>
@@ -1122,7 +1122,7 @@ async function renderQuota() {
     st = await api('/api/quota');
   } catch (err) {
     $('settingsView').innerHTML =
-      `<div class="detail-head"><b>额度</b></div><div class="empty">${failHtml(err)}</div>`;
+      `<div class="detail-head">${breadcrumb([{ label: '设置', to: 'settings' }, { label: '额度' }])}</div><div class="empty">${failHtml(err)}</div>`;
     return;
   }
   paintQuota(st);
@@ -1138,7 +1138,7 @@ function paintQuota(st) {
   const withLimit = rows.filter((r) => r.limitTokens || r.limitRuns).length;
 
   $('settingsView').innerHTML = `
-    <div class="detail-head"><b>额度</b></div>
+    <div class="detail-head">${breadcrumb([{ label: '设置', to: 'settings' }, { label: '额度' }])}</div>
     <div class="detail-body">
       <section class="set-sec">
         <div class="set-head"><b>今天</b><span class="set-tag">本机时区 00:00 起算</span></div>
@@ -1305,7 +1305,7 @@ async function renderPlugins() {
     ]);
   } catch (err) {
     $('settingsView').innerHTML =
-      `<div class="detail-head"><b>插件</b></div><div class="empty">${failHtml(err)}</div>`;
+      `<div class="detail-head">${breadcrumb([{ label: '设置', to: 'settings' }, { label: '插件' }])}</div><div class="empty">${failHtml(err)}</div>`;
     return;
   }
   S.connectors = list.connectors ?? [];
@@ -1321,7 +1321,7 @@ async function renderPlugins() {
   };
 
   $('settingsView').innerHTML = `
-    <div class="detail-head"><b>插件</b></div>
+    <div class="detail-head">${breadcrumb([{ label: '设置', to: 'settings' }, { label: '插件' }])}</div>
     <div class="detail-body">
       <div class="seg plg-tabs">
         ${PLG_TABS.map(
@@ -1713,7 +1713,8 @@ $('cOk').onclick = async (e) => {
 /* ----------------------------------------------------- 运行时：设备 → CLI → 详情 */
 
 const rtLoading = (title) =>
-  `<div class="detail-head"><b>${esc(title)}</b><span class="dim" style="font-size:12px">加载中…</span></div>`;
+  `<div class="detail-head">${breadcrumb([{ label: '设置', to: 'settings' }, { label: title }])}
+     <span class="dim" style="font-size:12px">加载中…</span></div>`;
 
 /**
  * 页头的「← 工作台」—— **2026-10-19 起不再调用**（用户要求统一去掉，见 headRow 的注释）。
@@ -1768,44 +1769,65 @@ function wireBackWb(root, back = () => openPlugins()) {
 }
 
 /**
- * 可点的面包屑。
- * items: [{ label, to? }]；to 是 'devices' | 'device'，省略即"当前层"（不可点）。
- * 有了它就不需要"返回"按钮了 —— 而且一眼看得出自己在第几层。
+ * 「上一级」点下去做什么 —— 面包屑的跳转表（2026-10-19 全站铺开时收口到这里）。
+ *
+ * 为什么要一张表 + 一次事件委托，而不是每处 `el.onclick = …`：
+ *   · 页头是随时重建的（十几处 innerHTML），逐个绑定既啰嗦又会漏 ——
+ *     原来只有设置页绑了，别的页面包屑点了毫无反应；
+ *   · 页头里不该知道"怎么回项目/怎么回流程"这些路由细节，写在这儿才好一起看。
+ *
+ * 值可以是字符串（= 设置里的分节 id，直接 openSettings）或函数（收一个 arg）。
+ * 指向的必须是**上一层**，不是"往回退一步"——面包屑表达的是层级，不是浏览历史。
+ */
+const CRUMB_GO = {
+  workbench: () => setNav('plugins'),   // 工作台宫格首页（点一级栏那条路，顺带收左栏）
+  contacts: () => setNav('contacts'),
+  settings: () => openSettings('prefs'),
+  // 工作台里的几处
+  // 带 arg 就是"项目清单里选中它"（面包屑里点某个项目的名字回到它的详情页）
+  projects: (id) => openProjectsPage(id ?? undefined),
+  board: () => openTaskBoard(),
+  flows: () => openWorkflows(),
+  // 设置里的分节（现在只有技能页用得上：设置 › 技能 › 某个技能）
+  skills: () => openSettings('skills'),
+  // 运行时那两级不是"分节"而是状态：得先把 S.rtLevel 摆好，renderRuntimes 按它分发
+  devices: () => { S.rtLevel = 'devices'; S.rtDevice = null; S.rtRuntime = null; return renderRuntimes(); },
+  device: () => { S.rtLevel = 'device'; S.rtRuntime = null; return renderRuntimes(); },
+};
+
+// 一次委托，管全站所有面包屑。页面重建不用重新绑。
+document.addEventListener('click', (e) => {
+  const el = e.target.closest?.('[data-crumb-to]');
+  if (!el) return;
+  const go = CRUMB_GO[el.dataset.crumbTo];
+  if (!go) return;
+  e.preventDefault();
+  Promise.resolve()
+    .then(() => go(el.dataset.crumbArg ?? null))
+    .catch((err) => toast(err?.message ?? String(err), 'error'));
+});
+
+/**
+ * 可点的面包屑（2026-10-19 起全站子页页头都用它）。
+ *
+ * items: `[{ label, to?, arg? }]` —— 最后一段**不传 to**（那是当前位置，不该点）。
+ *   · `to` 是 `CRUMB_GO` 里的键，不是 URL；
+ *   · `arg` 给需要 id 的那种（比如回某个项目）。
+ *
+ * 层级只表达"我在哪一层"，不承担"后退"——所以别把上一级的上一级也塞进来凑数，
+ * 三层以内最好读；四层以上先想想是不是层级设计本身有问题。
  */
 function breadcrumb(items) {
   return `<nav class="crumb">${items
-    .map(
-      (it, i) =>
-        `${i ? '<span class="crumb-sep">›</span>' : ''}` +
-        (it.to
-          ? `<button class="crumb-btn" data-crumb-to="${it.to}">${esc(it.label)}</button>`
-          : `<span class="crumb-cur">${esc(it.label)}</span>`),
-    )
+    .map((it, i) => {
+      const sep = i ? '<span class="crumb-sep">›</span>' : '';
+      if (!it.to) return `${sep}<span class="crumb-cur">${esc(it.label)}</span>`;
+      return (
+        `${sep}<button type="button" class="crumb-btn" data-crumb-to="${esc(it.to)}"` +
+        `${it.arg != null ? ` data-crumb-arg="${esc(it.arg)}"` : ''}>${esc(it.label)}</button>`
+      );
+    })
     .join('')}</nav>`;
-}
-
-/** 面包屑上任意一段的跳转 */
-function wireBreadcrumb() {
-  $('settingsView').querySelectorAll('[data-crumb-to]').forEach((el) => {
-    el.onclick = () => {
-      const to = el.dataset.crumbTo;
-      // 运行时那两级要先摆好 S.rtLevel —— renderRuntimes 是按它分发的
-      if (to === 'devices' || to === 'device') {
-        if (to === 'devices') {
-          S.rtLevel = 'devices';
-          S.rtDevice = null;
-          S.rtRuntime = null;
-        } else {
-          S.rtLevel = 'device';
-          S.rtRuntime = null;
-        }
-        return renderRuntimes();
-      }
-      // 其余当成**设置分节**（比如技能页的「技能 › xxx」那段）。
-      // 面包屑本来只有运行时页在用，所以这里原来写死了 devices/device 两种跳法。
-      openSettings(to);
-    };
-  });
 }
 
 async function renderRuntimes() {
@@ -1826,7 +1848,7 @@ async function renderDeviceList() {
     list = (await api('/api/devices')).devices;
   } catch (err) {
     $('settingsView').innerHTML =
-      `<div class="detail-head"><b>运行时</b></div><div class="empty">${failHtml(err)}</div>`;
+      `<div class="detail-head">${breadcrumb([{ label: '设置', to: 'settings' }, { label: '运行时' }])}</div><div class="empty">${failHtml(err)}</div>`;
     return;
   }
   // 局域网开关的现状（旧后端没这条路由 → 按默认画，页面不能因此白屏 ✗）
@@ -1874,7 +1896,7 @@ async function renderDeviceList() {
 
   $('settingsView').innerHTML = `
     <div class="detail-head">
-      ${breadcrumb([{ label: '运行时' }])}
+      ${breadcrumb([{ label: '设置', to: 'settings' }, { label: '运行时' }])}
     </div>
     <div class="detail-body">
       <section class="fx">
@@ -2540,7 +2562,11 @@ async function renderNodeDetail(dev) {
 
   $('settingsView').innerHTML = `
     <div class="detail-head">
-      ${breadcrumb([{ label: '运行时', to: 'devices' }, { label: dev.label }])}
+      ${breadcrumb([
+        { label: '设置', to: 'settings' },
+        { label: '运行时', to: 'devices' },
+        { label: dev.label },
+      ])}
     </div>
     <div class="detail-body">
       ${devHeadHtml(dev, {
@@ -2644,7 +2670,6 @@ async function renderNodeDetail(dev) {
   wireCopyButtons(); // 未安装那段的「复制命令」
   wireInstallRuntime(dev); // 未安装那段的「在这台机器上安装」—— 走节点的领活通道，命令在节点那侧查表
   wireExternalActions(dev); // 外部件那颗按钮：安装 / 重启 / 重装（按状态给，只给一颗）
-  wireBreadcrumb();
   // 有活在做就自己刷（进度是服务端的事实，不是点击时记的定时器）
   scheduleTaskPoll(dev);
 }
@@ -2867,7 +2892,7 @@ async function renderDeviceDetail() {
     ]);
   } catch (err) {
     $('settingsView').innerHTML =
-      `<div class="detail-head"><b>设备</b></div><div class="empty">${failHtml(err)}</div>`;
+      `<div class="detail-head">${breadcrumb([{ label: '设置', to: 'settings' }, { label: '运行时', to: 'devices' }, { label: '设备' }])}</div><div class="empty">${failHtml(err)}</div>`;
     return;
   }
 
@@ -2950,7 +2975,11 @@ async function renderDeviceDetail() {
 
   $('settingsView').innerHTML = `
     <div class="detail-head">
-      ${breadcrumb([{ label: '运行时', to: 'devices' }, { label: dev.label }])}
+      ${breadcrumb([
+        { label: '设置', to: 'settings' },
+        { label: '运行时', to: 'devices' },
+        { label: dev.label },
+      ])}
     </div>
     <div class="detail-body">
       ${devHeadHtml(dev, {
@@ -2993,7 +3022,6 @@ async function renderDeviceDetail() {
     </div>`;
 
   wireRenameDevice(dev);
-  wireBreadcrumb();
   wireCopyButtons(); // 外部件那段的「复制安装命令」（本机不给一键：控制面直接跑 curl|sh 不合适，用户在终端里粘一下更清楚）
 
   // 扫描：点了才跑（要 spawn 进程拿版本号，约半秒）
@@ -3210,13 +3238,18 @@ async function renderCliDetail() {
     if (!rt) throw new Error('这台设备上没有这个 CLI');
   } catch (err) {
     $('settingsView').innerHTML =
-      `<div class="detail-head"><b>运行时</b></div><div class="empty">${failHtml(err)}</div>`;
+      `<div class="detail-head">${breadcrumb([
+        { label: '设置', to: 'settings' },
+        { label: '运行时', to: 'devices' },
+        { label: '这个 CLI' },
+      ])}</div><div class="empty">${failHtml(err)}</div>`;
     return;
   }
 
   $('settingsView').innerHTML = `
     <div class="detail-head">
       ${breadcrumb([
+        { label: '设置', to: 'settings' },
         { label: '运行时', to: 'devices' },
         { label: S.rtDevice === 'local' ? '本机' : S.rtDevice, to: 'device' },
         { label: rt.label },
@@ -3261,7 +3294,6 @@ async function renderCliDetail() {
   });
   const url = `/api/devices/${encodeURIComponent(S.rtDevice)}/runtimes/${encodeURIComponent(S.rtRuntime)}`;
 
-  wireBreadcrumb();
 
   const delBtn = $('rtDelete');
   if (delBtn) {
@@ -3776,7 +3808,7 @@ function renderFlowList() {
 
 function renderFlowEmpty() {
   $('flowView').innerHTML = `
-    ${headRow('流程编排')}
+    ${headRow(breadcrumb([{ label: '工作台', to: 'workbench' }, { label: '工作流' }]))}
     <div class="detail-body"><div class="wip">还没有流程模板 —— 点左栏右上角的「＋」新建一个</div></div>`;
   S.view = 'flow';
   showView('flow');
@@ -3926,13 +3958,18 @@ async function openProjectsPage(selectId) {
     el.onclick = () => openProjectsPage(el.dataset.projSel).catch((e) => toast(e.message, 'error'));
   });
 
-  /* 页头：**项目页不放返回按钮**。
-     这一页的左栏就是项目清单，切项目靠点左栏那一行 —— 要回哪儿都能直接点。
-     2026-10-19 用户先指着这页说"去掉这个按钮"，随后又说"统一去掉" —— 于是全站子页都不放了，
-     理由在这页上最直观：页头那枚「← 工作台」既是重复入口，又把标题推得比别处靠右。 */
+  /* 页头：面包屑「工作台 › 项目 › 名字」（2026-10-19 全站统一）。
+     这里原来手拼了个 `项目 › 名字` 的假面包屑（head-sep），不能点、字号也不一样 ——
+     现在走同一个 breadcrumb()。
+     ⚠️ 页头**没有**「← 工作台」按钮：2026-10-19 用户要求全站子页统一去掉返回按钮
+     （左栏本身就写着上一级）。面包屑里的「工作台」是层级指示，不是返回按钮。 */
   view.innerHTML = `
     <div class="detail-head head-row">
-      <div class="head-title">项目${sel ? ` <span class="head-sep">›</span> <b>${esc(sel.name)}</b>` : ''}</div>
+      <div class="head-title">${breadcrumb([
+        { label: '工作台', to: 'workbench' },
+        { label: '项目', ...(sel ? { to: 'projects' } : {}) },
+        ...(sel ? [{ label: sel.name }] : []),
+      ])}</div>
     </div>
     <div class="detail-body" id="projDetail">${
       sel ? '<div class="dim">加载中…</div>' : '<div class="empty" style="padding:36px 12px">左边选一个项目</div>'
@@ -4245,7 +4282,15 @@ async function openBoardPage({ project = null } = {}) {
   }
 
   view.innerHTML = `
-    ${headRow(isAll ? '任务看板' : esc(project.name), `${
+    ${headRow(isAll
+      ? breadcrumb([{ label: '工作台', to: 'workbench' }, { label: '任务看板' }])
+      : breadcrumb([
+          { label: '工作台', to: 'workbench' },
+          { label: '项目', to: 'projects' },
+          { label: project.name, to: 'projects', arg: project.id },
+          { label: '任务看板' },
+        ]),
+      `${
       err ? '' : kbFilterBar(data) + kbPrRefreshHtml(data)
     }<button data-kb-refresh>刷新</button>`)}
     <div class="detail-body run-wrap">
@@ -5089,7 +5134,11 @@ async function paintTaskCardPage(taskId, opts = {}) {
     task = (await api(`/api/projects/tasks/${encodeURIComponent(taskId)}`)).task;
   } catch (e) {
     // 整页那条路还带页头（左栏点别的就走了）；弹窗里就一句话 + 右上角的 ×
-    host.innerHTML = `${dlg ? '' : headRow('任务卡')}
+    host.innerHTML = `${dlg ? '' : headRow(breadcrumb([
+      { label: '工作台', to: 'workbench' },
+      { label: '任务看板', to: 'board' },
+      { label: '任务卡' },
+    ]))}
       <div class="empty" style="padding:24px 4px">任务取不到：${esc(e.message)}</div>`;
     return;
   }
@@ -5245,7 +5294,17 @@ async function paintTaskCardPage(taskId, opts = {}) {
        </button>`
     : '';
   host.innerHTML = `
-    ${dlg ? '' : headRow('任务卡', '<button class="tc-del" id="tcDel" title="删掉这张卡（＝忽略它）">删除</button>')}
+    ${dlg ? '' : headRow(
+      taskCardFromAll || !proj
+        ? breadcrumb([{ label: '工作台', to: 'workbench' }, { label: '任务看板', to: 'board' }, { label: '任务卡' }])
+        : breadcrumb([
+            { label: '工作台', to: 'workbench' },
+            { label: '项目', to: 'projects' },
+            { label: proj.name, to: 'projects', arg: proj.id },
+            { label: '任务卡' },
+          ]),
+      '<button class="tc-del" id="tcDel" title="删掉这张卡（＝忽略它）">删除</button>',
+    )}
     <div class="detail-body tc-page${dlg ? ' in-dlg' : ''}">
       <div class="tc-main">
         <div class="tc-main-scroll">
@@ -6533,7 +6592,11 @@ function renderRunEmpty() {
   //    「← 工作台」腾地方（模板名已经写在左栏顶上）。按钮统一撤掉之后，这个条件就只剩
   //    "页头是一条没有字的横线"。空态也得有标题，写类别（跟流程编排空态一个套路）。
   $('flowView').innerHTML = `
-    ${headRow('发起记录')}
+    ${headRow(breadcrumb([
+      { label: '工作台', to: 'workbench' },
+      { label: '工作流', to: 'flows' },
+      { label: '发起记录' },
+    ]))}
     <div class="detail-body run-wrap">
       <div class="wip">这个流程还没有发起过
         <div style="margin-top:14px"><button class="primary" data-run-new>发起一条</button></div>
@@ -6975,7 +7038,11 @@ function runHTML(v) {
                换一条记录全靠点它 —— 收起来等于把自己唯一的路收掉，而省下的那点宽度
                换不来什么（右边还有一整栏对话）。整页统一：**左栏常驻，不推拉**。
                所以这里不再有前置按钮，页头最左边就是标题（跟其它子页一个规矩）。 -->
-          <div class="head-title"><b>${esc(v.title)}</b>
+          <div class="head-title">${breadcrumb([
+            { label: '工作台', to: 'workbench' },
+            { label: '工作流', to: 'flows' },
+            { label: v.title },
+          ])}
             <span class="flow-badge ${b.cls}">${esc(b.text)}</span></div>
           <div class="head-actions">${acts.join('')}</div>
         </div>
@@ -7721,7 +7788,11 @@ function paintDesigner() {
 
   $('flowView').innerHTML = `
     ${headRow(
-      `<span class="head-kicker">流程设计</span>
+      // 面包屑停在工作流这一层，**当前那一层就是旁边这个输入框**（流程名就地可改），
+      // 再写一遍名字等于同一个东西三个地方各写一次。
+      // 「工作流」这段是**当前位置**（不给 to）：这一页本身就是工作流的编排页，
+      // 做成可点的按钮只会点了原地重画一次。
+      `${breadcrumb([{ label: '工作台', to: 'workbench' }, { label: '工作流' }])}
        <input id="dzName" value="${esc(S.designerName ?? '')}" placeholder="流程名字" style="max-width:220px" />`,
       `<button data-vd-publish>${S.designerPublished ? '已发布 · 下架' : '发布到工作台'}</button>
        <button class="primary" data-vd-save>保存</button>`,
@@ -8347,7 +8418,7 @@ async function renderGitRepos() {
     </div>`;
 
   view.innerHTML = `
-    <div class="detail-head"><b>代码托管</b>
+    <div class="detail-head">${breadcrumb([{ label: '设置', to: 'settings' }, { label: '代码托管' }])}
       <span class="dim" style="font-size:12.5px;margin-left:8px">连接 GitHub、把仓库接进来给数字员工用</span>
     </div>
     <div class="detail-body">
@@ -8580,7 +8651,10 @@ async function renderSchedules() {
   };
 
   view.innerHTML = `
-    ${headRow('定时任务', '<button class="primary" id="schNew">＋ 新建任务</button>')}
+    ${headRow(
+      breadcrumb([{ label: '工作台', to: 'workbench' }, { label: '定时任务' }]),
+      '<button class="primary" id="schNew">＋ 新建任务</button>',
+    )}
     <div class="detail-body">
       <div class="group-title">任务 <span class="dim" style="font-weight:400">${jobs.length} 个</span></div>
       <div class="group">
@@ -8994,7 +9068,7 @@ function renderSkillCards() {
   const rows = S.skills ?? [];
   $('settingsView').innerHTML = `
     <div class="detail-head">
-      <b>技能</b>
+      ${breadcrumb([{ label: '设置', to: 'settings' }, { label: '技能' }])}
       <span class="dim" style="font-size:12px">${esc(S.skillsRoot || 'skills')}</span>
     </div>
     <div class="detail-body">
@@ -9020,7 +9094,6 @@ function renderSkillCards() {
         }
       </section>
     </div>`;
-  wireBreadcrumb();
   $('skNew').onclick = (e) => openAddMenu(skillAddItems(), e.currentTarget);
   $('settingsView').querySelectorAll('[data-sk]').forEach((el) => {
     el.onclick = () => openSkill(el.dataset.sk).catch((e) => toast(e.message, 'error'));
@@ -9131,7 +9204,7 @@ function renderSkillEditor(skill, isNew, linkedPersonas) {
   // 保存/删除从底部搬到了 hero 右侧的 .hero-actions —— 跟员工详情同一个位置（用户要求）。
   $('settingsView').innerHTML = `
     <div class="detail-head">
-      ${breadcrumb([{ label: '技能', to: 'skills' }, { label: skill.name }])}
+      ${breadcrumb([{ label: '设置', to: 'settings' }, { label: '技能', to: 'skills' }, { label: skill.name }])}
       <span class="dim" style="font-size:12px">${esc(filePath)}</span>
     </div>
     <div class="detail-body">
@@ -9214,7 +9287,6 @@ function renderSkillEditor(skill, isNew, linkedPersonas) {
     } catch (err) { toast(err.message, 'error'); }
   };
 
-  wireBreadcrumb(); // 顶部那条「技能 › xxx」：点「技能」回卡片列表
 
   $('sAssign').onclick = () => openSkillAssignDialog(skill.name, linkedPersonas.map((p) => p.id));
 }
@@ -10162,7 +10234,7 @@ function renderDetail({ persona, runtimes, runs, platformRoot, skills: personaSk
     : '<tr><td colspan="6" class="dim" style="padding-top:8px">还没有运行记录</td></tr>';
 
     $('detailView').innerHTML = `
-    <div class="detail-head"><b>员工详情</b></div>
+    <div class="detail-head">${breadcrumb([{ label: '通讯录', to: 'contacts' }, { label: persona.name }])}</div>
     <div class="detail-body">
       <div class="p-head">
         <div class="avatar" ${avatarStyle(persona.name)}>${esc(initial(persona.name))}</div>
@@ -11011,7 +11083,7 @@ function paintGroupDetail(thread) {
   const assistant = thread.members.find((m) => m.personaId === thread.assistantPersonaId);
 
   $('groupView').innerHTML = `
-    <div class="detail-head"><b>群聊详情</b></div>
+    <div class="detail-head">${breadcrumb([{ label: '通讯录', to: 'contacts' }, { label: thread.title }])}</div>
     <div class="detail-body">
       <div class="hero">
         <div class="avatar grp big">${esc(initial(thread.title))}</div>
@@ -11698,7 +11770,7 @@ async function renderPluginPanel() {
   S.projectList = false;
   S.projectId = null;
   $('pluginView').innerHTML = `
-    ${headRow(esc(plugin.label))}
+    ${headRow(breadcrumb([{ label: '工作台', to: 'workbench' }, { label: plugin.label }]))}
     <div class="detail-body" id="plgPanel"><div class="dim">加载中…</div></div>`;
   showView('plugin');
 

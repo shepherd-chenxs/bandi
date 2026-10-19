@@ -973,14 +973,22 @@ main { min-height: 0; }
            font-size: 11.5px; font-weight: 400; color: var(--ok); }
 .pill-ok::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
 
-/* 可点的面包屑：省掉"返回"按钮，还能一眼看出在第几层 */
-.crumb { display: flex; align-items: center; gap: 2px; }
+/* 可点的面包屑：省掉"返回"按钮，还能一眼看出在第几层（2026-10-19 起全站子页页头都用它） */
+.crumb { display: flex; align-items: center; gap: 2px; min-width: 0; }
+/* 名字长的时候要**各自省略**，不能让面包屑把页头顶宽（流程名/项目名都是用户输入的）。
+   `.crumb-sep` 不参与收缩：它是固定的那个 `›`，被压扁就看不见了。 */
+.crumb > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.crumb > .crumb-sep { flex: 0 0 auto; }
 .crumb-btn { border: 0; background: transparent; color: var(--dim);
              padding: 2px 6px; border-radius: 6px; font-size: 13px; cursor: pointer;
              transition: color .15s ease, background-color .15s ease; }
 .crumb-btn:hover { color: var(--accent); background: var(--hover); }
-/* 分隔符：淡到只剩一个方向指示，不跟文字抢视线（2026-10-19 精致化） */
-.crumb-sep { color: var(--line); font-size: 11px; margin: 0 4px; user-select: none; }
+/* 分隔符 `›`（2026-10-19 全站页头改面包屑时加深）：
+   原来是 `var(--line)`（边框色）11px —— 那是给"整行只有一个面包屑、旁边还有别的字"配的，
+   白底上几乎看不见，实拍里只剩一个小点（用户："中间的标识明显一些"）。
+   现在面包屑成了页标题本身，这个箭头是**唯一**的层级指示，必须看得见：
+   用次级文字色（--dim）+ 12px（比 13px 的字小半档，不抢视线但读得出来）。 */
+.crumb-sep { color: var(--dim); font-size: 12px; margin: 0 4px; user-select: none; }
 .crumb-cur { color: var(--text); font-weight: 600; padding: 2px 4px; font-size: 13px; }
 /* 面包屑当**页标题**用时（设置页顶栏、插件页顶栏），要跟别的页那个 <b> 一样高、一样左对齐。
    .crumb-btn / .crumb-cur 自带 2px 竖内边距和 13px 字号 —— 那是给"可点的面包屑"留的
@@ -1481,13 +1489,16 @@ button:disabled { opacity: .45; cursor: not-allowed; }
              color: var(--dim); display: inline-flex; align-items: center; flex: 0 0 auto;
              border-radius: 6px; line-height: 1.2; white-space: nowrap; height: 26px; }
 .head-back:hover { color: var(--text); background: var(--hover); }
-/* 标题里的 `项目 › 名字`：分隔符用淡色，跟面包屑同一档（`.crumb-sep`） */
-.head-sep { color: var(--line); margin: 0 2px; font-weight: 400; }
-/* 流程设计页标题前的小字（"流程设计"是类别，后面那个输入框才是当前流程的名字） */
-.head-kicker { font-size: 12.5px; color: var(--dim); white-space: nowrap; }
+/* ⚠️ `.head-sep`（手拼的 `项目 › 名字`）和 `.head-kicker`（流程设计页那枚"流程设计"小字）
+   2026-10-19 全站页头改成面包屑之后**没有宿主了** —— 两处都换成了 breadcrumb()。
+   样式已删，别再搜不到出处地加回来。 */
 /* 流程记录页顶栏是两栏结构里的一栏，高度要跟右栏对话头对齐（原有规则用的选择器
-   是 `.run-left > .detail-head`，结构没变，这里只是补上 head-title 的间距） */
-.run-head .head-title { gap: 8px; }
+   是 `.run-left > .detail-head`，结构没变，这里只是补上 head-title 的间距）。
+   ⚠️ 2026-10-19 页头改面包屑后必须补 `display:flex`：`.head-title` 原来是个**块**，
+   里面放的是 `<b>`（行内）+ 状态徽标，行内元素自己就排一行；换成 `<nav class="crumb">`
+   （块级）之后它独占一行，徽标被挤到第二行，整个页头从 50px 撑高（截图里一眼看见）。
+   尺寸/对齐跟 `.head-row .head-title` 保持一致。 */
+.run-head .head-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
 /* ⚠️ 这里原来有一组 `.avatar.wb-ico-sm`（26px 的左栏入口小图标）+ `.wb-hint`，
    都是"工作台首页改成左栏目录"那一版留下的。用户否掉了那个版本（首页必须是宫格），
    这组样式就没有宿主了 —— 已删，别再搜不到出处地加回来。 */
