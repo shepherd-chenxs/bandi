@@ -1249,15 +1249,30 @@ input.locked:focus { outline: none; border-color: var(--line); }
 /* 气泡上限 = 走廊的 90%（2026-10-19）：固定 460 在宽窗口下太窄（长回复换行碎、代码块露不全），
    改百分比后跟着窗口走；两侧各留 10% 走廊，所以左右边界仍不会贴成两个对齐的框。
    走廊本身 = 聊天区宽 - 两侧各 42（头像位），我的气泡左缘永远迈不进对方头像区。 */
-/* 消息正文（Linear 语汇）：**没有气泡**。
-   Linear 的评论区、Slack 的紧凑模式都是这个路子 —— 正文就是正文，不装在色块里。
-   谁说的靠**头像位置 + 对齐方向**区分（我的行 row-reverse 到右），不靠底色。
-   去掉了三样 iOS 的东西：底色（--bubble / --bubble-me）、18px 大圆角、投影。
-   左右分列**保留**：这里是 IM（"我"和"他"），不是线程讨论 —— 全左对齐会分不清谁在说话。 */
-.bubble { background: transparent; border: 0; border-radius: 0;
-          padding: 0; word-break: break-word; overflow-wrap: anywhere; min-width: 0;
+/* 消息正文（**Linear 语汇的气泡**，2026-10-19 用户要求"加气泡"）。
+   要气泡，但不要 iOS 那三个东西：**18px 大圆角 / 投影 / 高饱和实心块**。
+   Linear 一族里有"块"（评论、卡片、输入框），只是块是方的、平的、靠 1px 细线立住 ——
+   于是气泡就照"块"做：
+     · 圆角 8px（跟卡片同档，不是气泡专用的 18）
+     · 1px --line 描边，无投影 —— 块是"画出来的"，不是"浮起来的"
+     · padding 8px 11px（密排，比 iOS 的 9px 13px 紧）
+   颜色上分两档：**对方的灰（--panel）、我的淡蓝（--bubble-me）**。
+   淡蓝不是 iOS 那种实心蓝 —— 饱和度低到只当"这条是我说的"的语义标记，
+   不抢正文（实测正文压它 12.81:1、链接 6.46:1）。
+   左右分列**保留**：这里是 IM（"我"和"他"），不是线程讨论 —— 全左对齐分不清谁在说话。 */
+.bubble { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+          padding: 8px 11px; word-break: break-word; overflow-wrap: anywhere; min-width: 0;
           max-width: 90%; }
-.row.me .bubble { background: transparent; border-color: transparent; }
+.row.me .bubble { background: var(--bubble-me); border-color: var(--bubble-me-line); }
+/* 气泡里的代码块要**比气泡再暗一档**：否则 --input 跟 --panel 只差 4% 亮度，
+   代码区跟气泡糊成一片，读的人分不出"这是引用的一段代码"还是"正文换了底色"。
+   浅色反过来：气泡是白的，代码块压到 --well 那一档灰（不能用 --input，浅色下它更浅）。 */
+.bubble pre, .bubble code { background: var(--well); }
+.bubble pre { border-color: color-mix(in srgb, var(--line) 70%, var(--well)); }
+/* 行内代码反过来要**比气泡亮**：深色下 --well 比 --panel 暗（代码块凹进去是对的），
+   但行内代码夹在正文中间，凹一块会像"打了个补丁"；浅色下 --well 又比白气泡暗一点点，
+   跟 pre 是一个方向。两种主题各取所需，不强行统一。 */
+.bubble :not(pre) > code { background: var(--input); }
 .bubble .step { font-size: 12.5px; color: var(--dim); white-space: pre-wrap; }
 /* 消息时间：在气泡**外面**、气泡正下方（2026-10-19 用户要求）。绝对定位脱离 flex 流，
    所以 .row 要 position:relative，并用 padding-bottom 给它留出高度（13px≈11px 字 + 2px 间距）。
