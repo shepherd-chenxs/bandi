@@ -25,10 +25,19 @@ const BASE = process.env.BASE_SHA || process.env.BASE_REF || '';
 const head = 'HEAD';
 const range = BASE ? [`${BASE}`, head] : [head]; // 本地不给 base → 比工作区
 
+/*
+ * maxBuffer 必须给足：Node 默认 1MB（spawnSync 的默认），大 PR 的 `git diff -U0`
+ * 轻易就超（v1.0.0 这次是 946KB 的 stdout + 泄漏的 stderr 合计越界）。
+ * 超了 Node 会杀掉子进程，status 是 null、stdout 截断为空、error.code=ENOBUFS，
+ * 于是报出来变成一句没有下文的「失败：」—— 看着像 git 出错，其实是缓冲区太小。
+ */
 const git = (args) => {
-  const r = spawnSync('git', args, { cwd: repo, encoding: 'utf8' });
+  const r = spawnSync('git', args, { cwd: repo, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
   if (r.status !== 0) {
-    console.error(`git ${args.join(' ')} 失败：${(r.stderr ?? '').trim()}`);
+    const why = r.error
+      ? `${r.error.code ?? r.error.name}: ${r.error.message}`
+      : (r.stderr ?? '').trim() || `退出码 ${r.status}${r.signal ? `（信号 ${r.signal}）` : ''}`;
+    console.error(`git ${args.join(' ')} 失败：${why}`);
     process.exit(2);
   }
   return r.stdout ?? '';
@@ -131,11 +140,43 @@ for (const { status, file } of nameStatus) {
 
 const URL_RE = /https?:\/\/([A-Za-z0-9.-]+)/g;
 const hostAllowed = (h) => HOST_ALLOW.includes(h) || h.endsWith('.usemagpie.ai');
+
+/*
+ * 第三方 skill 的资产目录：`skills/**` 是原样收录的上游 skill（Apache-2.0，
+ * 见各目录 LICENSE.txt），里面的字体/CSS CDN、品牌图床都不是我们发起的请求。
+ * 改它们应该走"换掉这个 skill"，而不是逼着把字体 CDN 加进白名单。
+ */
+const isVendored = (f) => /^skills\//.test(f);
+
+/*
+ * 冒烟用例里的**反例字面量**：专门验证"不是 github 的 PR 链接 → null"这种
+ * 断言，得把 gitlab.com 写进字符串才测得了。
+ *
+ * 判据要小心，两条都别踩：
+ *   · `fetch("https://evil/v1")` 的 URL 同样在引号里 —— **引号内 ≠ 没发请求**
+ *   · `check(a.url === "https://x")` 才真的只是数据
+ * 所以放行条件收紧到"这一行是断言 / 纯注释"，并要求它不含发请求的动作。
+ */
+const REQUEST_CALL = /\b(fetch|request|axios|got|undici|WebSocket|\.open|createConnection)\s*\(/i;
+const isAssertion = (text) => {
+  const t = text.trim();
+  if (/^(\/\/|\*|\/\*|#)/.test(t)) return true; // 纯注释
+  if (!/\bcheck\s*\(/.test(t)) return false; // 只有 check(...) 里的才算反例数据
+  return !REQUEST_CALL.test(t);
+};
+
 for (const [file, list] of added) {
+  const vendored = isVendored(file);
   for (const { line, text } of list) {
+    const dataOnly = isAssertion(text);
     for (const m of text.matchAll(URL_RE)) {
       const host = m[1];
       if (hostAllowed(host)) continue;
+      if (vendored || dataOnly) {
+        if (isDoc(file)) note(file, `新增外部链接（文档，仅提示）：${host}`);
+        else note(file, `新增外部地址（${vendored ? '第三方 skill 资产' : '仅作断言/注释，未发起请求'}，仅提示）：${host} · 第 ${line} 行`);
+        continue;
+      }
       if (isDoc(file)) note(file, `新增外部链接（文档，仅提示）：${host}`);
       else err(file, line, `新增了白名单外的地址：${host} —— 中转站/网关这类必须说明来路（白名单在 tools/check-pr.mjs）`);
     }
