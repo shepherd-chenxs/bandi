@@ -1056,8 +1056,9 @@ function setNav(nav, opts = {}) {
 /* ---------------------------------------------------------------- 设置 */
 
 /**
- * 设置左侧那一列分节：**左栏列表和左栏面包屑共用这一份**，别在两边各写一遍标签
- * （2026-10-19 面包屑挪到左栏后，标题要写「设置 › 当前分节」）。
+ * 设置左侧那一列分节：左栏列表用这一份（顺序 + 标题 + 副标题）。
+ * 左栏顶上**只写模块名「设置」**，当前是哪个分节写在**右边**的页头里 ——
+ * 跟消息/通讯录同一个主从布局（左列是导航，右面是当前页）。
  */
 const SETTINGS_SECTIONS = [
   ['prefs', '偏好设置', '主题与外观'],
@@ -1072,9 +1073,10 @@ function openSettings(section) {
   setRoute('settings', { section: section || S.settingsSection || 'prefs' });
   S.settingsSection = section || 'prefs';
   showView('settings');
-  // 左栏顶上写「设置 › 当前分节」；更深的页（运行时/技能详情）会再往后补一段
-  const cur = SETTINGS_SECTIONS.find(([key]) => key === S.settingsSection);
-  setListTitle(cur ? [{ label: '设置', to: 'settings' }, { label: cur[1] }] : '设置');
+  /* 左栏顶上只写「设置」：这一列本身就是设置的分节列表，当前分节是右边的页面标题。
+     2026-10-19 用户截图：「这个二级标题应该放在右边」—— 之前写成「设置 › 偏好设置」，
+     等于把右边页面的标题挂在左边的列表头上，切换分节时左栏标题跟着跳，列表反而不像导航了。 */
+  setListTitle('设置');
   renderList();
   if (S.settingsSection === 'runtimes') return renderRuntimes();
   if (S.settingsSection === 'plugins') return renderPlugins();
@@ -1089,6 +1091,7 @@ function openSettings(section) {
     ['system', '跟随系统'],
   ];
   $('settingsView').innerHTML = `
+    ${headRow('<b>偏好设置</b>')}
     <div class="detail-body">
       <section class="set-sec">
         <div class="set-head"><b>外观</b><span class="set-tag">仅本设备</span></div>
@@ -1131,12 +1134,13 @@ function openSettings(section) {
  */
 async function renderQuota() {
   S.settingsSection = 'quota';
-  $('settingsView').innerHTML = rtLoading();
+  $('settingsView').innerHTML = rtLoading('额度');
   let st;
   try {
     st = await api('/api/quota');
   } catch (err) {
-    $('settingsView').innerHTML = `<div class="empty">${failHtml(err)}</div>`;
+    $('settingsView').innerHTML =
+      `${headRow('<b>额度</b>')}<div class="empty">${failHtml(err)}</div>`;
     return;
   }
   paintQuota(st);
@@ -1152,6 +1156,7 @@ function paintQuota(st) {
   const withLimit = rows.filter((r) => r.limitTokens || r.limitRuns).length;
 
   $('settingsView').innerHTML = `
+    ${headRow('<b>额度</b>')}
     <div class="detail-body">
       <section class="set-sec">
         <div class="set-head"><b>今天</b><span class="set-tag">本机时区 00:00 起算</span></div>
@@ -1304,7 +1309,7 @@ const localConnectors = () => S.connectors.filter((c) => c.source?.kind === 'loc
 const connectorById = (id) => S.connectors.find((c) => c.id === id) ?? null;
 
 async function renderPlugins() {
-  $('settingsView').innerHTML = rtLoading();
+  $('settingsView').innerHTML = rtLoading('插件');
   let list;
   let cat;
   let fam;
@@ -1317,7 +1322,7 @@ async function renderPlugins() {
       api('/api/plugins'),
     ]);
   } catch (err) {
-    $('settingsView').innerHTML = `<div class="empty">${failHtml(err)}</div>`;
+    $('settingsView').innerHTML = `${headRow('<b>插件</b>')}<div class="empty">${failHtml(err)}</div>`;
     return;
   }
   S.connectors = list.connectors ?? [];
@@ -1333,6 +1338,7 @@ async function renderPlugins() {
   };
 
   $('settingsView').innerHTML = `
+    ${headRow('<b>插件</b>')}
     <div class="detail-body">
       <div class="seg plg-tabs">
         ${PLG_TABS.map(
@@ -1723,8 +1729,8 @@ $('cOk').onclick = async (e) => {
 
 /* ----------------------------------------------------- 运行时：设备 → CLI → 详情 */
 
-// 加载态：不带页头 —— 面包屑已经挪到左栏顶上，正文里说一声就够
-const rtLoading = () => `<div class="empty" style="padding:24px 4px">加载中…</div>`;
+// 加载态：右页头先写当前页标题（左栏只写「设置」），正文里说一声
+const rtLoading = (title) => `${headRow(`<b>${esc(title)}</b>`)}<div class="empty" style="padding:24px 4px">加载中…</div>`;
 
 /**
  * 页头的「← 工作台」—— **2026-10-19 起不再调用**（用户要求统一去掉，见 headRow 的注释）。
@@ -1779,30 +1785,26 @@ function wireBackWb(root, back = () => openPlugins()) {
 }
 
 /**
- * 「上一级」点下去做什么 —— 面包屑的跳转表（2026-10-19 全站铺开时收口到这里）。
+ * 「上一级」点下去做什么 —— 面包屑的跳转表。
  *
  * 为什么要一张表 + 一次事件委托，而不是每处 `el.onclick = …`：
- *   · 页头是随时重建的（十几处 innerHTML），逐个绑定既啰嗦又会漏 ——
- *     原来只有设置页绑了，别的页面包屑点了毫无反应；
- *   · 页头里不该知道"怎么回项目/怎么回流程"这些路由细节，写在这儿才好一起看。
+ *   · 页面是随时重建的（十几处 innerHTML），逐个绑定既啰嗦又会漏；
+ *   · 页面里不该知道"怎么回项目/怎么回工作台"这些路由细节，写在这儿才好一起看。
  *
- * 值可以是字符串（= 设置里的分节 id，直接 openSettings）或函数（收一个 arg）。
- * 指向的必须是**上一层**，不是"往回退一步"——面包屑表达的是层级，不是浏览历史。
+ * 值收一个 arg（比如「项目清单里选中它」）。指向的必须是**上一层**，不是"往回退一步"。
+ *
+ * ⚠️ 2026-10-19 设置 / 流程模块的面包屑撤掉之后，`settings` / `skills` / `devices` / `device` /
+ *    `flows` 五个键没有宿主了，已删（设置模块现在是"左栏分节列表 + 右页标题"，不走面包屑）。
+ *    以后要在别处用，照原样加回来即可：settings→openSettings('prefs')、skills→openSettings('skills')、
+ *    devices/device→摆 S.rtLevel 后 renderRuntimes()、flows→openWorkflows()。
  */
 const CRUMB_GO = {
   workbench: () => setNav('plugins'),   // 工作台宫格首页（点一级栏那条路，顺带收左栏）
   contacts: () => setNav('contacts'),
-  settings: () => openSettings('prefs'),
   // 工作台里的几处
   // 带 arg 就是"项目清单里选中它"（面包屑里点某个项目的名字回到它的详情页）
   projects: (id) => openProjectsPage(id ?? undefined),
   board: () => openTaskBoard(),
-  flows: () => openWorkflows(),
-  // 设置里的分节（现在只有技能页用得上：设置 › 技能 › 某个技能）
-  skills: () => openSettings('skills'),
-  // 运行时那两级不是"分节"而是状态：得先把 S.rtLevel 摆好，renderRuntimes 按它分发
-  devices: () => { S.rtLevel = 'devices'; S.rtDevice = null; S.rtRuntime = null; return renderRuntimes(); },
-  device: () => { S.rtLevel = 'device'; S.rtRuntime = null; return renderRuntimes(); },
 };
 
 // 一次委托，管全站所有面包屑。页面重建不用重新绑。
@@ -1851,15 +1853,14 @@ async function renderDeviceList() {
   S.rtLevel = 'devices';
   S.rtDevice = null;
   S.rtRuntime = null;
-  // 左栏顶上：设置 › 运行时（面包屑从右页头挪过来）
-  setListTitle([{ label: '设置', to: 'settings' }, { label: '运行时' }]);
-  $('settingsView').innerHTML = rtLoading();
+  // 左栏只写「设置」（在 openSettings 里），这一页的标题「运行时」在右页头
+  $('settingsView').innerHTML = rtLoading('运行时');
 
   let list = [];
   try {
     list = (await api('/api/devices')).devices;
   } catch (err) {
-    $('settingsView').innerHTML = `<div class="empty">${failHtml(err)}</div>`;
+    $('settingsView').innerHTML = `${headRow('<b>运行时</b>')}<div class="empty">${failHtml(err)}</div>`;
     return;
   }
   // 局域网开关的现状（旧后端没这条路由 → 按默认画，页面不能因此白屏 ✗）
@@ -1906,6 +1907,7 @@ async function renderDeviceList() {
       </section>`;
 
   $('settingsView').innerHTML = `
+    ${headRow('<b>运行时</b>')}
     <div class="detail-body">
       <section class="fx">
         <!-- 标题右边右对齐：跟「识别本机运行时」同一个做法（.fx-head 就是 flex + space-between） -->
@@ -2509,12 +2511,8 @@ function externalsHtml(dev) {
  * 装上哪条命令在这"。判断依据是**节点自报的清单**（不是控制面本机的探测：那是两台机器）。
  */
 async function renderNodeDetail(dev) {
-  // 面包屑在左栏顶上：设置 › 运行时 › 这台机器（右页头已去掉，名字/状态/动作都在正文的 devHeadHtml 里）
-  setListTitle([
-    { label: '设置', to: 'settings' },
-    { label: '运行时', to: 'devices' },
-    { label: dev.label },
-  ]);
+  // 左栏只写「设置」（在 openSettings 里）；这台机器的名字/状态/动作都在正文的 devHeadHtml 里，
+  // 右页头不再重复一遍。
   const rts = dev.runtimes ?? [];
   // 族清单拉不到就不显示"未安装"那一段 —— 但这一页照常渲染，别因为一个附加块白屏
   let families = [];
@@ -2886,7 +2884,7 @@ function wireInstallRuntime(dev) {
  * 「安装」弹窗是唯一还可能出现手填的入口（"我装了、但你没认出来"），正常流程碰不到。
  */
 async function renderDeviceDetail() {
-  $('settingsView').innerHTML = rtLoading();
+  $('settingsView').innerHTML = rtLoading('设备');
 
   let dev;
   let families;
@@ -2898,16 +2896,12 @@ async function renderDeviceDetail() {
       api('/api/runtime-families').then((f) => f.families),
     ]);
   } catch (err) {
-    $('settingsView').innerHTML = `<div class="empty">${failHtml(err)}</div>`;
+    $('settingsView').innerHTML = `${headRow('<b>运行时</b>')}<div class="empty">${failHtml(err)}</div>`;
     return;
   }
 
-  // 面包屑在左栏顶上：设置 › 运行时 › 这台设备（右页头已去掉，设备名在正文的 devHeadHtml 里）
-  setListTitle([
-    { label: '设置', to: 'settings' },
-    { label: '运行时', to: 'devices' },
-    { label: dev.label },
-  ]);
+  // 左栏只写「设置」（在 openSettings 里）；设备名/状态/动作都在正文的 devHeadHtml 里，
+  // 右页头不再重复 —— 跟员工详情、项目详情同一个规矩。
 
   // 远程节点：这一版只报到，它的运行时是只读的 —— 别让它掉进下面那套"改本机"的交互里
   // 远程节点：交给它自己那页（那边要拉族清单，所以是异步的）
@@ -3235,7 +3229,7 @@ $('addRtOk').onclick = async (e) => {
 
 /* ③ CLI 详情 */
 async function renderCliDetail() {
-  $('settingsView').innerHTML = rtLoading();
+  $('settingsView').innerHTML = rtLoading('运行时');
 
   let dev;
   let rt;
@@ -3244,27 +3238,14 @@ async function renderCliDetail() {
     rt = dev.runtimes.find((r) => r.id === S.rtRuntime);
     if (!rt) throw new Error('这台设备上没有这个 CLI');
   } catch (err) {
-    setListTitle([
-      { label: '设置', to: 'settings' },
-      { label: '运行时', to: 'devices' },
-      { label: '这个 CLI' },
-    ]);
-    $('settingsView').innerHTML = `<div class="empty">${failHtml(err)}</div>`;
+    $('settingsView').innerHTML = `${headRow('<b>运行时</b>')}<div class="empty">${failHtml(err)}</div>`;
     return;
   }
 
-  // 面包屑在左栏顶上：设置 › 运行时 › 设备 › 这个 CLI（右页头整条已去掉）
-  // 「设备」那段可点（回设备详情）；末段是当前位置。
-  // 本机固定写「本机」（跟原来页头一样）——写主机名 DESKTOP-XXXX 会把 300px 的左栏挤爆，
-  // 四段各自被省略号截一刀，反而认不出是哪一层。
-  setListTitle([
-    { label: '设置', to: 'settings' },
-    { label: '运行时', to: 'devices' },
-    { label: S.rtDevice === 'local' ? '本机' : dev.label, to: 'device' },
-    { label: rt.label },
-  ]);
-
+  // 左栏只写「设置」；这一页的标题在右页头：CLI 名 + 它属于哪台设备（正文里没有名字可重复）。
+  // 不用面包屑：层级（设置 › 运行时 › 设备）已经在左栏的分节列表里高亮着了。
   $('settingsView').innerHTML = `
+    ${headRow(`<b>${esc(rt.label)}</b><span class="dim" style="font-size:12px">${esc(S.rtDevice === 'local' ? '本机' : dev.label)}</span>`)}
     <div class="detail-body">
       <!--
         这里原来有个「启用」勾选框。删掉了 —— 列表页那一行已经有开关（点一下立刻生效），
@@ -8420,9 +8401,8 @@ async function renderGitRepos() {
     </div>`;
 
   view.innerHTML = `
+    ${headRow('<b>代码托管</b><span class="dim" style="font-size:12.5px">连接 GitHub、把仓库接进来给数字员工用</span>')}
     <div class="detail-body">
-      <!-- 页头整条去掉了（面包屑在左栏顶上「设置 › 代码托管」）；原来页头右侧那句说明挪到正文顶上 -->
-      <div class="dim" style="font-size:12.5px;margin:0 2px 12px">连接 GitHub、把仓库接进来给数字员工用</div>
       <div class="group-title">GitHub 连接<button type="button" class="help-btn" id="gitTokenHelp"
               title="怎么拿到这个令牌？">${ICON_HELP}</button></div>
       <div class="group">
@@ -9066,11 +9046,10 @@ async function scheduleDialog(job) {
 function renderSkillCards() {
   S.skill = null;
   showView('settings');
-  setListTitle([{ label: '设置', to: 'settings' }, { label: '技能' }]);
   const rows = S.skills ?? [];
   $('settingsView').innerHTML = `
+    ${headRow(`<b>技能</b><span class="dim" style="font-size:12px">${esc(S.skillsRoot || 'skills')}</span>`)}
     <div class="detail-body">
-      <div class="dim" style="font-size:12px;margin:0 2px 10px">技能目录：${esc(S.skillsRoot || 'skills')}</div>
       <section class="fx">
         <div class="fx-head">
           <label>全部技能 <span class="count">${rows.length}</span></label>
@@ -9199,12 +9178,7 @@ $('nSkillOk').onclick = async (e) => {
 
 function renderSkillEditor(skill, isNew, linkedPersonas) {
   const filePath = `${S.skillsRoot || 'skills'}\\${skill.name}\\SKILL.md`;
-  // 面包屑在左栏顶上：设置 › 技能 › 这个名字（右页头已去掉；文件路径挪到正文的 p-head 里）
-  setListTitle([
-    { label: '设置', to: 'settings' },
-    { label: '技能', to: 'skills' },
-    { label: skill.name },
-  ]);
+  // 左栏只写「设置」；这一页的名字/描述/文件路径都在正文 hero 里，右页头不再重复。
   // 布局照**员工详情页**：hero（头像 + 名字 + 一句话 + 操作按钮）+ 分组卡片 + 左标签右内容。
   // 保存/删除从底部搬到了 hero 右侧的 .hero-actions —— 跟员工详情同一个位置（用户要求）。
   $('settingsView').innerHTML = `
