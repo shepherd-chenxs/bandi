@@ -56,7 +56,9 @@
 <!-- 二级：列表 -->
 <div class="list-panel">
   <div class="list-head">
-    <b id="listTitle">消息</b>
+    <!-- 左栏顶上的标题：**在流程页这一栏里是面包屑**（「工作流 › 小鸡小鸡」，见 openFlowRun）。
+         内容由 JS 填（setListTitle），默认这行是当前一级栏的名字。 -->
+    <div class="list-title" id="listTitle"><b>消息</b></div>
     <button id="listAction" class="mini" title="新建数字员工">＋</button>
   </div>
   <div class="list-search"><input id="search" placeholder="搜索" /></div>

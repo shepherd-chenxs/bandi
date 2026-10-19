@@ -1015,12 +1015,13 @@ function setNav(nav, opts = {}) {
   // 否则看着像"哪儿都没选中"。
   const hl = nav === 'workflows' ? 'plugins' : nav;
   document.querySelectorAll('.nav-btn').forEach((b) => b.classList.toggle('active', b.dataset.nav === hl));
-  $('listTitle').textContent =
+  setListTitle(
     nav === 'messages' ? '消息'
     : nav === 'contacts' ? '通讯录'
     : nav === 'workflows' ? '工作流'
     : nav === 'plugins' ? '工作台'
-    : '设置';
+    : '设置',
+  );
   $('listAction').textContent = '＋';
   $('listAction').title =
     nav === 'contacts' ? '发起群聊 / 添加数字员工' : '新建项目群';
@@ -3341,7 +3342,7 @@ function renderList() {
 
     $('archBack').onclick = () => {
       S.archivedView = false;
-      $('listTitle').textContent = '消息';
+      setListTitle('消息');
       renderList();
     };
     $('listBody').querySelectorAll('[data-restore]').forEach((btn) => {
@@ -3430,7 +3431,7 @@ function renderList() {
           S.archived = (await api('/api/archived')).conversations;
           S.archivedCount = S.archived.length;
           S.archivedView = true;
-          $('listTitle').textContent = '已移除的会话';
+          setListTitle('已移除的会话');
           renderList();
         } catch (err) { toast(err.message, 'error'); }
       };
@@ -3732,7 +3733,7 @@ async function openWorkflows(pickId = null) {
   // 从工作台进来时 S.nav 还是 plugins，不先切过来就会画出一片空白（踩过）。
   setNav('workflows', { skipOpen: true });
   document.body.classList.remove('no-list');
-  $('listTitle').textContent = '工作流';
+  setListTitle('工作流');
   setRoute('workflows', pickId ? { template: pickId } : {});
   $('listAction').classList.remove('hidden');
   $('listAction').title = '新建流程模板';
@@ -3902,7 +3903,7 @@ async function openProjectsPage(selectId) {
   // 2026-10-19 统一子页页头后撤掉了：**返回只留在页头最左边**。
   // 留着它等于同一件事两个地方能做，而且只有项目页有，别的子页没有 —— 这就是不统一。
   document.body.classList.remove('no-list');
-  $('listTitle').textContent = '项目';
+  setListTitle('项目');
   $('listAction').classList.remove('hidden');
   $('listAction').title = '新建项目';
   $('listBody').innerHTML =
@@ -6403,6 +6404,40 @@ async function doStartFlow() {
   }
 }
 
+/**
+ * 左栏顶上的标题：`setListTitle('工作流')` 写名字，`setListTitle(['工作流','小鸡小鸡'])` 写面包屑。
+ *
+ * 为什么做成两个入口而不是让调用处拼 HTML（2026-10-19 用户截图：「改成面包屑」）：
+ *   · 左栏`#listTitle` 原来是个 `<b>`，十几处直接写 `textContent`；
+ *   · 流程页那一栏最上是**当前哪个流程**（「小鸡小鸡」），光写名字看不出它是"工作流下面的"，
+ *     而这一页又是整站唯一点左栏不换页的地方 —— 补一段静态的「工作流」，人就认得出自己在哪；
+ *   · 一级栏名**不可点**：这一栏本身就是"工作流"那个一级栏的列表，再给个"回工作流"只会让人
+ *     以为这里是别的模块。面包屑在这儿只是"路径"，不是导航。
+ *
+ * 传数组时用 `textContent` 写（名字来自用户输入，不能进 innerHTML）。
+ */
+function setListTitle(t) {
+  const el = $('listTitle');
+  if (!el) return;
+  if (!Array.isArray(t)) {
+    el.innerHTML = `<b>${esc(t)}</b>`;
+    return;
+  }
+  el.innerHTML = '';
+  t.forEach((part, i) => {
+    if (i) {
+      const sep = document.createElement('span');
+      sep.className = 'crumb-sep';
+      sep.textContent = '›';
+      el.append(sep);
+    }
+    const node = document.createElement(i === t.length - 1 ? 'b' : 'span');
+    if (i !== t.length - 1) node.className = 'list-title-up';
+    node.textContent = part;
+    el.append(node);
+  });
+}
+
 /* -------------------------------------------------- 流程实例页（流转记录） */
 
 /**
@@ -6417,7 +6452,7 @@ async function openFlowRun(templateId, pickRunId) {
   // 一刷新就被恢复到工作台去了（踩过）
   setNav('workflows', { skipOpen: true });
   document.body.classList.remove('no-list');
-  $('listTitle').textContent = '发起记录';
+  setListTitle(['工作流', '发起记录']);
   setRoute('flowRun', { template: templateId ?? null, run: pickRunId ?? S.flowRunId ?? null });
   // 左栏顶上的「＋」在这儿是**发起一条**（不是新建模板）
   $('listAction').classList.remove('hidden');
@@ -6430,7 +6465,7 @@ async function openFlowRun(templateId, pickRunId) {
   } catch { /* 拿不到就当空的 */ }
   S.flowTemplates = data.templates ?? [];
   const tpl = (data.templates ?? []).find((t) => t.id === templateId) ?? null;
-  if (tpl) $('listTitle').textContent = tpl.name;
+  if (tpl) setListTitle(['工作流', tpl.name]);
 
   S.flowRuns = (data.runs ?? []).filter((r) => !templateId || r.templateId === templateId);
   if (pickRunId) S.flowRunId = pickRunId;
@@ -7518,7 +7553,7 @@ async function openDesigner(templateId = null) {
     clearDraft(); // 和模板一样 → 留着没意义，还会下次误报
   }
 
-  $('listTitle').textContent = '工作流';
+  setListTitle('工作流');
   renderFlowList();
   paintDesigner();
 }
@@ -11184,7 +11219,7 @@ function renderWorkbenchGrid() {
   const list = usablePlugins();
   // 宫格是整页布局：把左栏收掉（进插件后会由 renderPluginMaster 放回来）
   document.body.classList.add('no-list');
-  $('listTitle').textContent = '工作台';
+  setListTitle('工作台');
   $('listBody').innerHTML = '';
   $('listAction').classList.add('hidden');
   // 装上了但 manifest 有问题的：提示放在宫格最下面，
@@ -11558,7 +11593,7 @@ async function renderPluginMaster(plugin, split) {
   const sel = rows.find((r) => keyOf(r) === String(S.pluginRow)) ?? null;
 
   // 标题借用全局那一套；「＋」的 onclick 在全局按 S.nav 派发（别在这里覆盖）
-  $('listTitle').textContent = m.heading || plugin.label;
+  setListTitle(m.heading || plugin.label);
   $('listAction').classList.toggle('hidden', !m.add);
   $('listAction').title = m.add?.label || '';
   $('listBody').innerHTML = rows.length
@@ -11686,7 +11721,7 @@ async function renderPluginPanel() {
   let sel = null;
   if (split) sel = await renderPluginMaster(plugin, split);
   else {
-    $('listTitle').textContent = plugin.label;
+    setListTitle(plugin.label);
     $('listBody').innerHTML = '';
   }
 

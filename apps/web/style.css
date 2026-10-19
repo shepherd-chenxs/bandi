@@ -241,6 +241,24 @@ body.no-list .list-panel { display: none; }
               display: grid; grid-template-rows: auto auto 1fr; min-height: 0; }
 .list-head { position: relative; padding: 14px 16px 8px; display: flex; align-items: center; justify-content: space-between; }
 .list-head b { font-size: 15px; }
+/* 左栏标题：一路 `<b>`，现在是个容器（里面可能是一段面包屑，见 app.js 的 setListTitle）。
+   `min-width:0 + 省略号`：流程名很长时别把它挤出左栏、也别把「＋」顶出去；
+   两段各自省略（父级先让位，当前那段保住最少 40% 的宽度，不然只剩一个「›」）。
+   `gap: 0`：段与段之间由 `.crumb-sep` 自己的左右 margin 撑开，跟别处的面包屑一致。
+   `padding-left: 6px` 是补偿：下面每一行 `.item` 有自己的左右内边距（`--pad-row`，这里算下来 6px），
+   而上一级是**灰字不可点**、没有 `.crumb-btn` 那层 6px 内边距 —— 不补的话「工作流」
+   比列表行的字往左突出 6px，看着像标题没对齐（截图里一眼就看出来）。 */
+.list-title { display: flex; align-items: center; gap: 0; min-width: 0;
+              padding-left: calc(var(--pad-row) - 10px); }
+.list-title > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list-title > .crumb-sep { flex: 0 0 auto; }
+/* 上一级那段：**不可点**，所以是灰字而不是 `.crumb-btn`。
+   这一栏本身就是「工作流」的列表，再给个"回工作流"只会让人以为这里是别的模块 ——
+   面包屑在这儿只是路径，不是导航。 */
+.list-title-up { flex: 0 1 auto; color: var(--dim); font-size: 13px; font-weight: 400; }
+.list-title > b { flex: 1 1 auto; }
+/* 单段（没有面包屑）时不需要那 6px：别的页标题跟左栏列表行同一条左沿，别跟着缩进 */
+.list-title:not(:has(> .crumb-sep)) { padding-left: 0; }
 .mini { width: 26px; height: 26px; padding: 0; border-radius: 7px; font-size: 15px; line-height: 1; }
 .mini.hidden { display: none; }
 .list-search { padding: 0 12px 8px; }
