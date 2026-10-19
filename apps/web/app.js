@@ -810,6 +810,27 @@ function renderMarkdown(src) {
   return out.join('\n').replace(/\u0000(\d+)\u0000/g, (_m, i) => blocks[Number(i)]);
 }
 const initial = (s) => (String(s || '?').trim()[0] || '?').toUpperCase();
+
+/**
+ * 头像的内联配色（Linear 语汇，2026-10-19）。
+ *
+ * 为什么不再"所有人同一个灰"：Linear 的注释头像会用一小组固定的低饱和色按人分配。
+ * 一开始我把它统一成 `--chip` 灰底，截图一看通讯录里 7 行头像**全一样**，
+ * 眼睛完全没有落点、认人只能逐行读字 —— 这是把 Linear 的"克制"做成了"无信息"。
+ *
+ * 做法：一组**低饱和**色相（不是高饱和的彩色圆），按名字哈希稳定分配 ——
+ * 同一个人永远同色，换机器/刷新也不变（跟工作台磁贴的"顺序发色"不同：
+ * 人是有稳定身份的，颜色跟着人走才对）。
+ * 明度取 26%：白字压上去 ≥ 4.5（这批色相里最亮的那个也过线）。
+ */
+const AV_HUES = [210, 262, 190, 330, 292, 172, 240, 315];
+function avatarStyle(name) {
+  const s = String(name || '?');
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 9973;
+  const hue = AV_HUES[h % AV_HUES.length];
+  return `style="background:hsl(${hue} 34% 26%);border-color:transparent;color:#fff"`;
+}
 const hhmm = (iso) => { try { return new Date(iso).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }); } catch { return ''; } };
 const dt = (iso) => { try { return new Date(iso).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch { return ''; } };
 const cut = (s, n = 34) => (String(s ?? '').replace(/\s+/g, ' ').slice(0, n));
@@ -3307,7 +3328,7 @@ function renderList() {
             const title = isGroup ? c.title : (c.personaName || c.title || '（员工已删）');
             const avatar = isGroup
               ? `<div class="avatar grp">${esc(initial(c.title))}</div>`
-              : `<div class="avatar">${esc(initial(c.personaName))}</div>`;
+              : `<div class="avatar" ${avatarStyle(c.personaName)}>${esc(initial(c.personaName))}</div>`;
             const preview = esc(cut(plain(c.lastMessage), 34) || '还没聊过');
             const sub = isGroup ? `${c.memberCount} 人 · ${preview}` : preview;
             return `<div class="item ${S.conversation && S.conversation.id === c.id ? 'active' : ''}" data-conv="${c.id}">
@@ -3446,7 +3467,7 @@ function renderList() {
   const personRows = people
     .map(
       (p) => `<div class="item ${S.persona && S.persona.id === p.id ? 'active' : ''}" data-persona="${p.id}">
-        <div class="avatar">${esc(initial(p.name))}</div>
+        <div class="avatar" ${avatarStyle(p.name)}>${esc(initial(p.name))}</div>
         <div class="who">
           <div class="line1"><b>${esc(p.name)}${p.builtin ? '<i class="b-inline" title="出厂就在的员工，删不掉">内置</i>' : ''}</b></div>
           <div class="line2">${esc(personSubtitle(p))}</div>
@@ -3725,12 +3746,14 @@ function workbenchFlowSection() {
       <button class="wb-tile" data-flow-design title="画流程：节点、指派、发布">
         <span class="wb-ico flow">编</span>
         <span class="wb-name">流程编排</span>
+        <span class="wb-sub">画节点、指派、发布</span>
       </button>
       ${list
         .map(
           (f) => `<button class="wb-tile" data-flow-start="${esc(f.id)}" title="点开看发起记录">
             <span class="wb-ico flow">流</span>
             <span class="wb-name">${esc(f.name)}</span>
+            <span class="wb-sub">查看发起记录</span>
           </button>`,
         )
         .join('')}
@@ -3753,6 +3776,7 @@ function workbenchAutoSection() {
       <button class="wb-tile" data-schedules title="到点自动做一件事：写一句要它干什么、交给谁、多久一次">
         <span class="wb-ico cron">时</span>
         <span class="wb-name">定时任务</span>
+        <span class="wb-sub">到点自动做一件事</span>
       </button>
     </div>`;
 }
@@ -3778,10 +3802,12 @@ function workbenchProjectSection() {
       <button class="wb-tile" data-projects title="项目的名字、目录、规矩都在这儿管">
         <span class="wb-ico proj">项</span>
         <span class="wb-name">项目</span>
+        <span class="wb-sub">名字、目录、规矩</span>
       </button>
       <button class="wb-tile" data-task-board title="所有项目的活，铺在同一张看板上（站在全局看）">
         <span class="wb-ico board">板</span>
         <span class="wb-name">任务看板</span>
+        <span class="wb-sub">所有项目的活</span>
       </button>
     </div>`;
 }
@@ -9767,7 +9793,7 @@ function renderDetail({ persona, runtimes, runs, platformRoot, skills: personaSk
     <div class="detail-head"><b>员工详情</b></div>
     <div class="detail-body">
       <div class="p-head">
-        <div class="avatar">${esc(initial(persona.name))}</div>
+        <div class="avatar" ${avatarStyle(persona.name)}>${esc(initial(persona.name))}</div>
         <div class="p-head-main">
           <h2><span id="dNameText">${esc(persona.name)}</span>${persona.builtin ? '<span class="pill builtin" title="出厂就在的员工：不能删，可以改名和改职责">内置</span>' : ''}<span class="pill role" id="dRolePill"${persona.role ? '' : ' style="display:none"'}>${esc(persona.role || '')}</span>${
             persona.busy
@@ -10814,6 +10840,7 @@ function renderWorkbenchGrid() {
               (p) => `<button class="wb-tile" data-wb-open="${esc(p.id)}" title="${esc(p.description || p.label)}">
                 <span class="wb-ico has-plug" ${wbIcoStyle(cat)}><i class="wb-badge" title="插件" aria-label="插件">${PLUGIN_BADGE_SVG}</i>${esc(initial(p.label))}</span>
                 <span class="wb-name">${esc(p.label)}</span>
+                <span class="wb-sub">${esc(cut(p.description, 40) || '插件')}</span>
               </button>`,
             )
             .join('')}

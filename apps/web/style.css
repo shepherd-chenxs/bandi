@@ -1,10 +1,16 @@
 /* ══════════════════════════════════════════════════════════════════════
    设计变量（v1.0.1 · 2026-10-19）
    ─────────────────────────────────────────────────────────────────────
-   方向：iOS 与 Linear 混用 —— **语义变量名不动，只换值**。
-     · 对话处（消息 / 通讯录 / 工作台）用 iOS 语汇：气泡、行式列表、系统蓝
-     · 干活的地面（看板 / 项目 / 流程 / 设置 / 日志）用 Linear 语汇：灰阶分层、1px 细线
-   颜色是两边共用的 —— 换来换去的只有圆角 / 间距 / 阴影（见文件末尾 data-skin）。
+   方向（2026-10-19 用户拍板）：**全站统一 Linear**。
+     早先我提过"人和人说话用 iOS、人和系统打交道用 Linear"的混用方案，
+     用户看过截图后否掉了 —— 混合的结果是同一个软件里两套圆角、两套分层方式，
+     切换页面时要重新认一遍"这是什么"，比风格单调更糟。
+   于是第 3 步那些 iOS 语汇（彩色气泡、浮起卡片 --chat-bg/--card、18px 气泡圆角、
+   工作台宫格）已全部撤回，见下面各处注释。
+   现在全站只有两档圆角：**6px 给行和输入控件、8~10px 给"面"**（卡片/弹窗/看板列），
+   分层一律靠 1px 细线（--line），不靠底色差。
+
+   颜色是两边共用的 —— 换来换去的只有圆角 / 间距 / 阴影。
 
    值全部**实测过 WCAG 对比度**（不是估的）：
      · 深色 --text 最差 12.81:1、--dim 最差 5.79:1
@@ -45,22 +51,20 @@
   --bubble-me-line: #23375a;
   --link: #6ea8ff;           /* 正文里的链接：比 accent 亮，压在气泡灰底上才够（8.26:1） */
 
-  /* ── 对话处的表面色（iOS 语汇）──
-     消息 / 通讯录 / 工作台这一族要的是"卡片浮在底上"，跟看板那种"列底凹槽"是反的。
-     iOS 深色不靠边框分层（边框在纯黑上会画出一堆格子），靠**底色差 + 阴影**。 */
-  --chat-bg: #000000;        /* 对话区底：iOS 深色就是纯黑。跟 --bg #08090a 差 3% 亮度，
-                                切页面时看不出跳变，但气泡在纯黑上更"浮" */
-  --card: #1c1c1e;           /* iOS secondarySystemGroupedBackground */
+  /* ── 表面色 ──
+     v1.0.1 收口（2026-10-19 用户要求"全部 Linear"）：原来这里有一组 iOS 的"浮起次级面"
+     （--chat-bg 纯黑底 + --card 浮起卡片），现在**整页统一用 --bg / --side / --panel 三档灰阶**，
+     分层靠 1px 细线，不靠底色差 —— 这是 Linear 的做法。 */
+  --bg: #08090a;             /* 应用底 / 内容区底。消息区也用它，不再另起一层暗底 */
 
   /* ── 形状与节奏 ──
-     这两组是"混用"能落地的关键：组件规则只读它们，不写死数值。
-     以后想整体再软一点/紧一点，只改这里。 */
-  --r-row: 10px;             /* 列表行 / 输入盒（Linear 风：克制的小圆角） */
-  --r-card: 12px;            /* 卡片 / 气泡外框 */
-  --r-bub: 18px;             /* 气泡本身：iOS 那种大圆角 */
+     组件规则只读这些变量，不写死数值。以后想整体再软一点/紧一点，只改这里。
+     ⚠️ 全站只有**两档圆角**：6px 给行和输入控件、10px 给"面"（卡片 / 列 / 板块）。
+     超过 10px 的圆角（气泡 18、卡片 12、磁贴 18）都是 iOS 残留，已逐个清掉。 */
+  --r-row: 6px;              /* 列表行 / 输入框 / 按钮 —— Linear 的克制小圆角 */
   --gap-row: 2px;            /* 相邻两行之间的缝。2px = Linear 的密排 */
-  --pad-row: 8px 10px;       /* 行内边距 */
-  --touch: 36px;             /* 可点区域下限。iOS 是 44pt，桌面端 36 才不会显笨 */
+  --pad-row: 7px 8px;        /* 行内边距 */
+  --touch: 36px;             /* 可点区域下限。桌面端 36 既够点又不显笨 */
 
   --scrim: rgba(0, 0, 0, .5);
   --shadow: rgba(0, 0, 0, .45);
@@ -214,18 +218,21 @@ body.no-list .list-panel { display: none; }
 /* ---------- 二级：列表 ---------- */
 /* 列表栏底色用 --card 而不是 --side：iOS 里"列表"是浮在页面底上的那张卡，
    深色 #1c1c1e 比对话区纯黑亮一档，一眼分得出"这是导航、那是内容"。 */
-.list-panel { background: var(--card); border-right: 1px solid var(--line);
+/* 列表栏（Linear 语汇）：底色 **--card → --side**，跟顶栏同色 —— Linear 的侧栏不"浮起"，
+   它跟页面是一体的，靠右边那条 1px 竖线分开。
+   `--card`（iOS 的浮起次级面）在全局统一 Linear 之后不再用于结构面。 */
+.list-panel { background: var(--side); border-right: 1px solid var(--line);
               display: grid; grid-template-rows: auto auto 1fr; min-height: 0; }
 .list-head { position: relative; padding: 14px 16px 8px; display: flex; align-items: center; justify-content: space-between; }
 .list-head b { font-size: 15px; }
 .mini { width: 26px; height: 26px; padding: 0; border-radius: 7px; font-size: 15px; line-height: 1; }
 .mini.hidden { display: none; }
 .list-search { padding: 0 12px 8px; }
-/* 搜索框（iOS）：胶囊形、无边框、底色比栏底暗一档 —— 靠"凹进去"表示可输入。
-   原来是描边方框，跟下面那些行抢注意力。 */
+/* 搜索框（Linear）：圆角 10 → 6（胶囊感去掉，跟输入框/按钮同档）；
+   常态就画 1px 边框 —— Linear 的输入面是"看得见的框"，不靠"凹进去"暗示。 */
 .list-search input { width: 100%; background: var(--input); color: var(--text);
-                     border: 1px solid transparent; border-radius: 10px;
-                     padding: 7px 12px; font: inherit; font-size: 13px; }
+                     border: 1px solid var(--line); border-radius: 6px;
+                     padding: 6px 10px; font: inherit; font-size: 13px; }
 .list-search input:focus { border-color: var(--accent); outline: none; }
 .list-body { overflow: auto; padding: 4px 8px 10px; }
 /* 二级列表里的分段标题（通讯录：群聊 / 数字员工） */
@@ -270,9 +277,15 @@ body.no-list .list-panel { display: none; }
 .item:has(> .who > .line2) { min-height: 0; }
 .item:hover { background: var(--hover); }
 .item.active { background: var(--sel); }
-.avatar { width: 38px; height: 38px; border-radius: 50%; flex: 0 0 38px; display: grid; place-items: center;
-          font-weight: 600; color: var(--on-solid); background: linear-gradient(135deg, var(--logo-1), var(--logo-2));
-          font-size: 14px; }
+/* 头像（Linear 语汇）：**不再是圆形彩色块**。
+   iOS 的头像是"彩色圆 + 白色字"，一团高饱和色在列表里非常跳；Linear 的头像是一个
+   **淡底小方块 + 深色字**（6px 圆角、1px 描边），颜色只表达"是谁"，不争视线。
+   改成 hsl 底色需要按名字取色 —— 那样每个人都不一样、一屏几十个又成了调色盘；
+   这里统一用 --chip 淡底 + --dim 字：名单靠"字 + 副标题"辨认已经够了，
+   头像的作用只是让眼睛有个落点（Linear 自己也是这么做的）。 */
+.avatar { width: 38px; height: 38px; border-radius: 6px; flex: 0 0 38px; display: grid; place-items: center;
+          font-weight: 500; color: var(--dim); background: var(--chip);
+          border: 1px solid var(--line); font-size: 13px; }
 .avatar.clickable:hover { outline: 2px solid var(--accent); outline-offset: 1px; }
 .avatar.sm { width: 32px; height: 32px; flex-basis: 32px; font-size: 12px;
              background: linear-gradient(135deg, var(--av-dim), var(--av-dim-2)); }
@@ -338,10 +351,9 @@ main { min-height: 0; }
 #groupView .detail-body { max-width: 1400px; }
 /* 工作台宫格和插件页**共用这个容器**（renderWorkbenchGrid / renderPluginPanel 都写进 #pluginView），
    所以刷白是两页一起白 —— 它们一个是宫格、一个是分组卡片，都不该有灰底衬着。
-   v1.0.1：底色跟着对话区用 `--chat-bg` —— 宫格和消息页是同一层"桌布"，
-   磁贴/卡片浮在上面。顶栏和左栏仍是 --side，所以上沿会有一条极淡的接缝（深色 3% 明度差），
-   那正是 iOS 分组页的样子，不是漏色。 */
-#pluginView { display: none; height: 100%; overflow: auto; padding-bottom: 40px; background: var(--chat-bg); }
+   v1.0.1 收口：底色用 `--bg`，跟消息页、其他内容区同一档 —— 全站统一底色后，
+   顶栏（--side）和内容区（--bg）之间那条极淡的接缝就是唯一的分层，靠它就够了。 */
+#pluginView { display: none; height: 100%; overflow: auto; padding-bottom: 40px; background: var(--bg); }
 
 /* 主区的滚动容器都留出滚动条槽位（scrollbar-gutter: stable，2026-10-18 用户反馈）：
    内容一长一短时滚动条出现/消失，原来会把整块内容左右挤一下 —— 看着就是"页面抖动"。
@@ -384,50 +396,46 @@ main { min-height: 0; }
 .plg-row-actions { display: flex; gap: 8px; align-items: center; flex: 0 0 auto; }
 .plg-row-actions button { padding: 4px 12px; font-size: 12.5px; }
 
-/* 工作台宫格：图标在上、名字在下 —— **按"手机主屏"的语汇，按桌面端的尺寸**（v1.0.1 第 3 步 iOS 化，
-   2026-10-19 用户反馈"图标很大不好看"后收了一档尺寸）。
+/* 工作台（Linear 语汇，2026-10-19 用户要求"全部 Linear"）：**宫格改成行式列表**。
+   为什么连宫格一起去掉：iOS 主屏那种"彩色方块铺开"就是 iOS 语汇本身 ——
+   它是给手指戳的入口地图，Linear 一族里没有这个形态（Linear 的入口是侧栏列表 + 命令面板）。
+   要统一，就得换成 Linear 真有的样子：**一行一个入口**，左标识、右名字 + 一句说明。
 
-   ⚠️ 语汇和尺寸是**两件事**，别再一起搬：
-   iOS 主屏图标 60pt 是因为**手指**要戳中（44pt 是最小触摸目标）—— 这是移动端约束。
-   班底是桌面端、用鼠标，光标精确到像素，这个约束**不存在**。
-   所以"彩色圆角方块 + 分组 + 名字在下"这套语汇照搬（它说的是"这是入口地图"，跟输入设备无关），
-   尺寸却要按桌面端收 —— 56px 的彩色方块在深色底上一排排铺开，视觉噪音远大于它的信息量。
+   留了什么：行首那个色块**保留但降级**（40px → 24px、圆角 12 → 6），
+   Linear 原教旨这里该是 16px 单色小图标；全灰会让七个入口变成七行差不多的字，
+   我认为保留一点色彩语义更值，所以取 24px 这个"标识"量级。
 
-   量是怎么定的（现在的）：
-   - 格子 96px、图标 40px：跟 mac 的 Launchpad 缩略档、Linear 侧栏标识块同一量级。
-     40px 仍够画一个汉字（17px 字）且看得清渐变，再小就只剩一个色点、认不出是"入口"。
-   - 圆角 12px / 40px = 30%，跟 iOS 连续圆角（22~29%）的语感一致 —— 只缩尺寸、不改语感。
-   - 磁贴圆角 10px：**沿用全站那条"10 给面和行、18 留给对话"**，不在这里另开一档。
-   - 名字**限宽居中** —— 中文名字能撑到两行的就两行（"流程编排"），再长才省略；
-     不设这个宽度限制，窄窗口下名字会把格子撑变形，图标跟着偏。
-   - 悬停**只给极淡底色、不描边** —— 描边是 Linear 的语汇（面板/表单一类），
-     主屏磁贴是"摸一下"的感觉，一圈线会显得像卡片控件。 */
-/* 列宽**定死 96px、不拉伸**（不是 minmax(96px, 1fr)）：
-   `1fr` 会把 4 块磁贴摊到 1000px 宽里，每块 250px —— 图标还是 40px，
-   于是每块磁贴的左右各空 100px，整排看着像"四个孤零零的点撒在左边缘"。
-   定宽之后磁贴挨在一起成组，右边留白变成一整块（这是对的：留白成块才像呼吸，撒开就像漏排）。 */
-.wb-grid { display: grid; grid-template-columns: repeat(auto-fill, 96px); gap: 4px;
-           justify-content: start; }
-.wb-tile { display: flex; flex-direction: column; align-items: center; gap: 8px;
-           padding: 14px 6px 12px; border: 1px solid transparent; border-radius: 10px;
-           background: transparent; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+   行高走 --pad-row + --r-row（6px），跟设置页、通讯录完全同一档；悬停只给淡底，不描边不上浮。 */
+.wb-grid { display: flex; flex-direction: column; gap: 2px; }
+.wb-tile { display: flex; align-items: center; gap: 10px; width: 100%;
+           padding: var(--pad-row); border: 1px solid transparent; border-radius: var(--r-row);
+           background: transparent; cursor: pointer; text-align: left;
+           -webkit-tap-highlight-color: transparent; }
 .wb-tile:hover { background: var(--hover); }
 .wb-tile:active { background: var(--active); }
-.wb-ico { width: 40px; height: 40px; border-radius: 12px; display: flex;
+.wb-ico { width: 24px; height: 24px; border-radius: 6px; display: flex; flex: 0 0 auto;
           align-items: center; justify-content: center; color: var(--on-solid);
-          font-size: 17px; font-weight: 600; flex: 0 0 auto;
-          /* 一档极淡的高光，让色块有"实体"感而不是一块平涂。
-             用 --on-solid（就是白色）而不是写死 #fff：这样"色块上的白"只有一个来源，
-             哪天 --on-solid 换了（比如改成暖白），图标高光会跟着一起改，不会脱节。 */
-          box-shadow: inset 0 1px 0 color-mix(in srgb, var(--on-solid) 16%, transparent);
+          font-size: 11.5px; font-weight: 600;
           background: linear-gradient(135deg, var(--logo-1), var(--logo-2)); }
+/* 行式之后名字左对齐、一行显示完（宫格要限两行是为了不撑变形，行式没这个问题）。
+   `flex: 0 1 auto` + 说明那一侧先让位：名字是**主体**，说明是可省的补充 ——
+   挤的时候该截的是说明，不是名字。 */
+.wb-name { font-size: 13px; color: var(--text); flex: 0 1 auto; min-width: 0;
+           overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 一句说明：这是行式**比宫格多出来的信息量** —— 宫格放不下说明、只能挂在 title 上靠悬停，
+   行式直接写出来，扫一眼就知道点进去是什么。
+   ⚠️ **紧跟名字，不能用 margin-left:auto 顶到右沿**（第一版那样做了，截图上看很难看）：
+   窗口一宽，名字在左、说明在 900px 之外的右沿，一行断成两截，读者得横跨半个屏幕把它们连起来。
+   现在：名字 + 说明连成一句，右边留白就留白 —— 留白在行尾是"没内容"，不是"两块内容之间的沟"。 */
+.wb-sub { font-size: 11.5px; color: var(--dim); flex: 0 1 auto; min-width: 0;
+          overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 插件磁贴：**按分组取色**（颜色由 app.js 的 wbIcoStyle 内联给出，见那里的注释）。
    兜底是品牌蓝 —— 万一哪天没带 --wb-1/--wb-2，磁贴也不会变成透明色块。 */
 .wb-ico.has-plug { background: linear-gradient(135deg,
                       var(--wb-1, var(--logo-1)), var(--wb-2, var(--logo-2))); }
-.wb-name { font-size: 12.5px; color: var(--text); text-align: center; line-height: 1.3;
-           max-width: 100%; overflow-wrap: anywhere;
-           display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+/* ⚠️ 这里原来还有一条**宫格时代的** `.wb-name`（12.5px / text-align:center / 两行裁切），
+   排在行式那条之后 —— 同优先级后写的赢，于是名字被居中了、还被限成两行。
+   宫格改行式时漏删了它，截图上看就是"名字居中偏到说明那边去"。已删除。 */
 /* 分组小标题（`.wb-sec`，2026-10-19 取代原来的 `section.fx > label`）。
    三处作用：
    ① 它是分组唯一还剩下的"分"—— **不带分隔线、不占一条横带**，只占一行字；
@@ -449,15 +457,15 @@ main { min-height: 0; }
 .wb-ico.has-plug { position: relative; }
 /* 白色插头一半压在深蓝图标上、一半探到浅色背景上 —— 纯白在浅背景上会"化掉"，
    所以描一圈深色：压在图标上时看不出描边，探出去那半圈立刻有轮廓（截图上看过）。
-   尺寸 15px：**跟着图标走**（图标 56→40 那一档一起调的）。角标占图标的比例要稳定在 37% 上下 ——
-   18px 压在 40px 上是 45%，比图标里的字还大，一眼看过去先看见插头。 */
-.wb-ico.has-plug .wb-badge { position: absolute; left: -6px; top: -6px;
-                    width: 15px; height: 15px; display: flex;
+   尺寸**跟着图标走**，占图标 37% 上下：56px 图标配 18px、40px 配 15px、现在的 24px 配 11px。
+   再大就会比图标里的字还显眼 —— 一眼看过去先看见插头，而不是入口本身。 */
+.wb-ico.has-plug .wb-badge { position: absolute; left: -4px; top: -4px;
+                    width: 11px; height: 11px; display: flex;
                     align-items: center; justify-content: center;
                     color: #ffffff;   /* 固定白：这是图形不是文字，见上面的注释 */
                     filter: drop-shadow(0 0 .7px rgba(15, 20, 32, .95))
-                            drop-shadow(0 1px 2px rgba(0, 0, 0, .5)); }
-.wb-ico.has-plug .wb-badge svg { width: 15px; height: 15px; display: block; }
+                            drop-shadow(0 1px 1.5px rgba(0, 0, 0, .5)); }
+.wb-ico.has-plug .wb-badge svg { width: 11px; height: 11px; display: block; }
 /* 悬停整块磁贴时角标亮成强调色，提示"这个小图是有意思的" */
 .wb-tile:hover .wb-badge { color: var(--accent); }
 
@@ -477,7 +485,7 @@ main { min-height: 0; }
 /* 没有外层卡片：列表就是普通的左栏，右边每个分区各自一块卡 */
 .plg-detail { min-width: 0; }
 /* 详情区的分区卡：卡底用 --panel（页底是 --bg），跟左栏一致 */
-.plg-detail > .plg-sec > .fx { border: 1px solid var(--line); border-radius: 12px;
+.plg-detail > .plg-sec > .fx { border: 1px solid var(--line); border-radius: 8px;
                                background: var(--panel); padding: 14px 16px; }
 /* 标题在**卡片外面**：上面是 .plg-sec-head，下面才是卡 */
 .plg-sec + .plg-sec { margin-top: 14px; }
@@ -527,7 +535,9 @@ main { min-height: 0; }
 .run-left > .detail-head,
 .run-page .nc-head { height: 50px; padding-top: 0; padding-bottom: 0;
                      display: flex; align-items: center; }
-.run-wrap { flex: 1; min-height: 0; padding: 26px 30px; overflow: auto;
+/* 运行日志区（Linear 语汇）：内边距 26/30 → 18/20。
+   日志是"一眼扫很多行"的东西，宽松的边距会让可视行数白白少掉四五行。 */
+.run-wrap { flex: 1; min-height: 0; padding: 18px 20px; overflow: auto;
             scrollbar-width: none; -ms-overflow-style: none; }
 .run-wrap::-webkit-scrollbar { width: 0; height: 0; display: none; }
 
@@ -805,7 +815,7 @@ main { min-height: 0; }
 .plg-toast { position: fixed; right: 20px; bottom: 20px; z-index: 30;
              width: 460px; max-width: calc(100vw - 40px); max-height: 62vh;
              display: flex; flex-direction: column; overflow: hidden;
-             background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+             background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
              box-shadow: 0 12px 32px var(--shadow); }
 .plg-toast-head { display: flex; align-items: center; gap: 10px; flex: 0 0 auto;
                   padding: 9px 10px 9px 14px; border-bottom: 1px solid var(--line); }
@@ -889,7 +899,7 @@ main { min-height: 0; }
 /* 设备头：图标 + 机器名 + 状态 + 概要 */
 .dev-head { display: flex; align-items: center; gap: 16px;
             padding: 4px 0 22px; border-bottom: 1px solid var(--line); margin-bottom: 24px; }
-.dev-icon { width: 54px; height: 54px; flex: 0 0 auto; border-radius: 14px;
+.dev-icon { width: 54px; height: 54px; flex: 0 0 auto; border-radius: 8px;
             border: 1px solid var(--line); background: var(--panel); color: var(--dim);
             display: flex; align-items: center; justify-content: center; }
 .dev-icon svg { width: 26px; height: 26px; }
@@ -959,8 +969,8 @@ main { min-height: 0; }
                 display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .avatar.cli { background: linear-gradient(135deg, var(--av-cli), var(--av-cli-2)); border-radius: 10px; }
 /* 项目头像：跟工作台「项目」磁贴同一个主色，圆角方 —— 一眼认出是同一等功能 */
-.avatar.proj { background: linear-gradient(135deg, var(--ico-proj), var(--ico-proj-2)); border-radius: 12px; }
-.avatar.skill { background: linear-gradient(135deg, var(--av-skill), var(--av-skill-2)); border-radius: 11px; }
+.avatar.proj { background: linear-gradient(135deg, var(--ico-proj), var(--ico-proj-2)); border-radius: 8px; }
+.avatar.skill { background: linear-gradient(135deg, var(--av-skill), var(--av-skill-2)); border-radius: 8px; }
 
 /* 技能编辑页 / 员工详情：朴素表单分节，不用卡片 */
 .fx { padding-bottom: 24px; }
@@ -1033,7 +1043,7 @@ main { min-height: 0; }
 .pt-note b { color: var(--text); font-weight: 500; }
 
 .group-title { font-size: 13px; font-weight: 600; margin: 0 0 8px; }
-.group { border: 1px solid var(--line); border-radius: 12px; background: var(--panel);
+.group { border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
          padding: 2px 16px; margin-bottom: 22px; }
 .form-row { display: grid; grid-template-columns: 132px minmax(0, 1fr);
             gap: 16px; align-items: center; padding: 13px 0; border-top: 1px solid var(--line); }
@@ -1080,7 +1090,7 @@ main { min-height: 0; }
    ⚠️ overflow: auto 会把选中行左侧那条强调线一起裁掉（撞过），所以左边留 1px 内边距。 */
 #gitPickDlg { overflow: visible; }
 .git-avail-box { max-height: 46vh; overflow: auto; padding-left: 1px;
-                 border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+                 border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
 
 /* 可**选中**的行（从 GitHub 添加，2026-10-17）：原来是每行一颗「接入」按钮、点了就克隆，
    在一张几十个仓库的清单里手一抖就白等一场。现在是"先挑、再确认"。 */
@@ -1103,7 +1113,7 @@ input.locked:focus { outline: none; border-color: var(--line); }
 .ms-toolbar { display: flex; justify-content: flex-end; gap: 8px; margin-bottom: 14px; }
 /* 左右同一个卡片：左边列表靠一条竖线分开，而不是各套一张卡 */
 .ms-split { display: grid; grid-template-columns: 250px minmax(0, 1fr);
-            border: 1px solid var(--line); border-radius: 12px; background: var(--panel);
+            border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
             overflow: hidden; }
 .ms-side { padding: 8px; border-right: 1px solid var(--line); min-width: 0; }
 .ms-side-title { font-size: 12px; color: var(--dim); padding: 6px 8px 4px; }
@@ -1132,7 +1142,7 @@ input.locked:focus { outline: none; border-color: var(--line); }
 .sk-head > div:first-child { flex: 1; min-width: 0; }
 .sk-head b { font-size: 14px; }
 .sk-hint { margin-top: 3px; font-size: 12px; color: var(--dim); line-height: 1.6; }
-.sk-list { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); overflow: hidden; }
+.sk-list { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); overflow: hidden; }
 .sk-row { display: flex; align-items: center; gap: 14px; padding: 11px 14px; }
 .sk-row + .sk-row { border-top: 1px solid var(--line); }
 /* 动作区（行里第一颗按钮 / 开关）靠右，文字别贴上去。
@@ -1148,7 +1158,7 @@ input.locked:focus { outline: none; border-color: var(--line); }
 .sk-desc { margin-top: 2px; font-size: 12.5px; color: var(--dim);
            overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sk-empty { display: flex; align-items: center; gap: 10px; padding: 18px 16px; font-size: 12.5px;
-            color: var(--dim); border: 1px dashed var(--line); border-radius: 12px; }
+            color: var(--dim); border: 1px dashed var(--line); border-radius: 8px; }
 .sk-blank { display: flex; align-items: center; gap: 10px; padding: 18px 16px; font-size: 12.5px; color: var(--dim); }
 
 /* 小号图标按钮：模型行、技能行、toast 共用，别比整行信息更抢眼 */
@@ -1190,10 +1200,10 @@ input.locked:focus { outline: none; border-color: var(--line); }
 .badge.完成 { color: var(--ok); border-color: var(--ok); }
 .badge.失败 { color: var(--bad); border-color: var(--bad); }
 
-/* iOS 语汇：对话区自己是**最暗的一层**（深色纯黑 / 浅色浅灰），
-   页头、输入条浮在它上面 —— 跟"卡片浮在页面底上"是一个道理。
-   原来这里用 --side，跟列表栏同色，三层糊成一片。 */
-.chat { overflow-y: auto; overflow-x: hidden; padding: 20px 24px; background: var(--chat-bg); }
+/* Linear 语汇（v1.0.1 收口，2026-10-19 用户要求"全部 Linear"）：
+   对话区**跟页面同一个底色**，不另造一层暗底 —— 分层靠 1px 细线和间距，不靠底色差。
+   iOS 那套"对话区最暗、卡片浮起"在这里整体去掉了。 */
+.chat { overflow-y: auto; overflow-x: hidden; padding: 20px 24px; background: var(--bg); }
 /* 两侧对称：对方的行右侧留 42px（我的头像位），我的行左侧留 42px（对方头像位）——
    这样两边气泡都只活在 434~969 这条走廊里，谁也压不到对方的头像区。 */
 .row { display: flex; gap: 10px; margin-bottom: 16px; max-width: 920px; min-width: 0; padding-right: 42px; }   /* 一行别拉太长，长句子读起来累 */
@@ -1204,21 +1214,15 @@ input.locked:focus { outline: none; border-color: var(--line); }
 /* 气泡上限 = 走廊的 90%（2026-10-19）：固定 460 在宽窗口下太窄（长回复换行碎、代码块露不全），
    改百分比后跟着窗口走；两侧各留 10% 走廊，所以左右边界仍不会贴成两个对齐的框。
    走廊本身 = 聊天区宽 - 两侧各 42（头像位），我的气泡左缘永远迈不进对方头像区。 */
-/* 气泡（iOS 语汇）：大圆角、**不要边框** —— 深色下 1px 灰边压在纯黑上会画出一圈"格子"，
-   iOS 的气泡是纯色块，靠底色差跟背景分开。
-   圆角只有 18px 一档：原来是 12px，看着像工具提示不像对话。 */
-.bubble { background: var(--bubble); border: 0; border-radius: var(--r-bub);
-          padding: 9px 13px; word-break: break-word; overflow-wrap: anywhere; min-width: 0;
-          max-width: 90%;
-          /* 浅色下白气泡压 #f2f2f7：只差 4% 亮度，没阴影就"平"在两块白里（截图上看过）。
-             深色下这条几乎不可见，正好 —— 纯黑上一圈黑影会显脏。
-             用 --shadow 的一半强度：气泡是很小的面，阴影一重就像贴纸。 */
-          box-shadow: 0 1px 2px color-mix(in srgb, var(--shadow) 45%, transparent); }
-.row.me .bubble { background: var(--bubble-me); border-color: transparent; }
-/* iOS 的对话气泡有个"尾巴"：靠**角上收一档圆角**做出来（不用伪元素，也就不怕裁切）。
-   对方的气泡左上收小、我的右上收小 —— 人一眼就知道谁说的，比加个小三角干净。 */
-.row .bubble { border-top-left-radius: 6px; }
-.row.me .bubble { border-top-left-radius: var(--r-bub); border-top-right-radius: 6px; }
+/* 消息正文（Linear 语汇）：**没有气泡**。
+   Linear 的评论区、Slack 的紧凑模式都是这个路子 —— 正文就是正文，不装在色块里。
+   谁说的靠**头像位置 + 对齐方向**区分（我的行 row-reverse 到右），不靠底色。
+   去掉了三样 iOS 的东西：底色（--bubble / --bubble-me）、18px 大圆角、投影。
+   左右分列**保留**：这里是 IM（"我"和"他"），不是线程讨论 —— 全左对齐会分不清谁在说话。 */
+.bubble { background: transparent; border: 0; border-radius: 0;
+          padding: 0; word-break: break-word; overflow-wrap: anywhere; min-width: 0;
+          max-width: 90%; }
+.row.me .bubble { background: transparent; border-color: transparent; }
 .bubble .step { font-size: 12.5px; color: var(--dim); white-space: pre-wrap; }
 /* 消息时间：在气泡**外面**、气泡正下方（2026-10-19 用户要求）。绝对定位脱离 flex 流，
    所以 .row 要 position:relative，并用 padding-bottom 给它留出高度（13px≈11px 字 + 2px 间距）。
@@ -1267,10 +1271,13 @@ input.locked:focus { outline: none; border-color: var(--line); }
 /* 输入条（iOS）：底色跟对话区一致、输入盒是**浮在上面的圆角卡片**。
    原来 composer 用 --side、输入盒用 --panel，两个都跟对话区不同色，三层色块叠着很碎；
    iOS 的做法是"环境色统一，只让输入框自己浮起来"。 */
-.composer { background: var(--chat-bg); padding: 12px 20px 4px; }
-.input-wrap { position: relative; background: var(--card); border: 1px solid var(--line);
-              border-radius: 16px; padding: 6px 8px 5px;
-              box-shadow: 0 1px 3px color-mix(in srgb, var(--shadow) 55%, transparent); }
+/* 输入条：跟对话区同底（Linear 不搞"浮起的输入框"那层） */
+.composer { background: var(--bg); padding: 12px 20px 4px; }
+/* 输入框（Linear 语汇）：圆角 16 → 8、**去掉投影**（Linear 的输入面是平的），
+   聚焦时只把边框换成 accent —— 不靠阴影"浮起来"。
+   底色用 --input 而不是 --card：--card 是 iOS 那套"浮起的次级面"，这里不需要。 */
+.input-wrap { position: relative; background: var(--input); border: 1px solid var(--line);
+              border-radius: 8px; padding: 6px 8px 5px; }
 .input-wrap:focus-within { border-color: var(--accent); }   /* 焦点环画在整个盒子上 */
 /* 用 .composer 提高优先级：文件后面还有一条 input,select,textarea 的通配规则，
    同优先级下它会盖掉这里的 padding 和 resize（实测 padding-right 被改回 9px） */
@@ -1281,9 +1288,10 @@ input.locked:focus { outline: none; border-color: var(--line); }
 /* 输入框底部那一排：左边权限，右边发送 */
 .input-tools { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .input-tools .combo-btn { width: auto; padding: 4px 10px; font-size: 12px; }
-/* 发送键（iOS）：蓝色胶囊、**用 --btn-solid 不用 --accent** —— accent 深色下是 #0a84ff，
-   白字只有 3.65；--btn-solid #0071e3 才是 4.70。 */
-.input-tools #send { padding: 5px 16px; border-radius: 99px; background: var(--btn-solid);
+/* 发送键（Linear）：**方角小按钮**，不再是 iOS 那颗蓝色胶囊。
+   圆角 99px → 6px（跟输入框、看板卡片同一档）；底色仍用 --btn-solid 不用 --accent
+   —— accent 深色下是 #0a84ff，白字只有 3.65；#0071e3 才是 4.70。 */
+.input-tools #send { padding: 5px 14px; border-radius: 6px; background: var(--btn-solid);
                      border-color: var(--btn-solid); color: var(--on-solid); }
 .input-tools #send:hover { filter: brightness(1.08); }
 /* 模型切换**贴着发送按钮**：把"顶到最右"的那个 auto 边距从发送按钮挪到模型上，
@@ -1353,7 +1361,10 @@ button:disabled { opacity: .45; cursor: not-allowed; }
    所以把布局写进 CSS。 */
 .run-left > .detail-head .head-actions { display: flex; align-items: center; gap: 16px; }
 .run-left > .detail-head .head-actions button { font-size: 12px; padding: 3px 10px; }
-.detail-body { padding: 26px 30px; max-width: 1400px; }
+/* 详情区（Linear 语汇）：26/30 → 20/24。
+   原来那组值偏 iOS 的"大留白"，铺在桌面端一屏能少看两三行；
+   Linear 的做法是把边距让给内容，靠 1px 细线维持"分区感"而不是靠空白。 */
+.detail-body { padding: 20px 24px; max-width: 1400px; }
 .hero { display: flex; align-items: center; gap: 14px; }
 .hero .avatar { width: 58px; height: 58px; flex-basis: 58px; font-size: 22px; }
 .hero h2 { margin: 0; font-size: 18px; }
@@ -1369,7 +1380,7 @@ button:disabled { opacity: .45; cursor: not-allowed; }
                   box-shadow: 0 8px 24px var(--shadow); padding: 4px; }
 .hero-more-menu[hidden] { display: none; }
 .hero-more-menu .danger { display: block; width: 100%; text-align: left; border: 0; background: none; }
-.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
         padding: 16px 18px; margin-top: 18px; }
 .card > h4 { margin: 0 0 4px; font-size: 13px; }
 .card > .tip { color: var(--dim); font-size: 12px; margin-bottom: 8px; }
@@ -1433,7 +1444,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 /* padding 放在 form 上而不是 dialog 上：dialog 的内边距会落进滚动区，
    吸顶头部就盖不住它上面那一条 —— 内容会从缝里透出来。form 顶上不留空隙，头部就是第一个元素。 */
 dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line);
-         border-radius: 12px; padding: 0; width: 480px; max-width: 92vw; }
+         border-radius: 8px; padding: 0; width: 480px; max-width: 92vw; }
 dialog > form { padding: 0 20px 20px; }
 /* 字段多（名字/类型/命令/参数/环境变量/请求头…）的那个，给宽一点 */
 #connDlg { width: 640px; }
@@ -1461,7 +1472,8 @@ dialog.sch-dlg {
   overflow: visible;
 }
 dialog.sch-dlg > form { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
-.sch-cols { display: flex; gap: 24px; align-items: stretch; margin-top: 4px; flex: 1 1 auto; min-height: 0; }
+/* 定时任务两栏：间距 24 → 16（跟设置页那套密排一致，24 是 iOS 的大留白） */
+.sch-cols { display: flex; gap: 16px; align-items: stretch; margin-top: 4px; flex: 1 1 auto; min-height: 0; }
 /* 左栏：要**写**的东西。名字用大字（对齐截图里「自动化名称」的观感），输入区吃掉剩余高度 */
 .sch-left { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
 .sch-left #schName { font-size: 15px; font-weight: 600; }
@@ -1546,7 +1558,7 @@ dialog.sch-dlg > form { flex: 1 1 auto; min-height: 0; display: flex; flex-direc
 .drawer-head b { font-size: 15px; }
 .drawer-body { overflow: auto; padding: 14px; }
 
-.dcard { background: var(--side); border: 1px solid var(--line); border-radius: 12px;
+.dcard { background: var(--side); border: 1px solid var(--line); border-radius: 8px;
          padding: 14px; margin-bottom: 12px; }
 .dcard h4 { margin: 0; font-size: 13px; font-weight: 500;
             display: flex; align-items: center; justify-content: space-between; }
@@ -1559,7 +1571,7 @@ dialog.sch-dlg > form { flex: 1 1 auto; min-height: 0; display: flex; flex-direc
 /* 成员宫格 */
 .mgrid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px 6px; margin-top: 12px; }
 .mtile { display: grid; justify-items: center; gap: 6px; }
-.mavatar { position: relative; width: 48px; height: 48px; border-radius: 12px;
+.mavatar { position: relative; width: 48px; height: 48px; border-radius: 8px;
            display: grid; place-items: center; font-weight: 600; color: var(--on-solid); font-size: 16px;
            background: linear-gradient(135deg, var(--logo-1), var(--logo-2)); }
 .mbadge { position: absolute; bottom: -5px; left: 50%; transform: translateX(-50%);
@@ -1590,9 +1602,12 @@ dialog.sch-dlg > form { flex: 1 1 auto; min-height: 0; display: flex; flex-direc
 .plg-hidden { display: none; }
 .plg-tabs { margin-bottom: 18px; }
 .plg-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 10px; }
-.plg-card { display: flex; gap: 11px; align-items: flex-start; padding: 12px 13px;
-            border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
-.plg-card:hover { border-color: var(--accent); }
+/* 插件卡片（Linear 语汇）：圆角 12 → 8、内边距收一档；
+   悬停**不再把边框点亮成 accent**（跟看板卡片的改法一致：accent 边框一多，
+   一页十几张卡全是蓝框，等于没有强调）。改成一档极淡的提亮。 */
+.plg-card { display: flex; gap: 11px; align-items: flex-start; padding: 10px 12px;
+            border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.plg-card:hover { border-color: color-mix(in srgb, var(--dim) 55%, transparent); }
 .plg-card-main { flex: 1; min-width: 0; }
 .plg-ico { flex: 0 0 auto; width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center;
            background: var(--chip); border: 1px solid var(--line); font-size: 14px; font-weight: 600; }
@@ -1634,7 +1649,7 @@ dialog.sch-dlg > form { flex: 1 1 auto; min-height: 0; display: flex; flex-direc
 /* ---------- 群 ---------- */
 /* 群聊头像。类名用 grp 而不是 group：后者是表单卡片的类，
    撞上会吃到"margin-bottom: 22px + padding + border"，把列表项撑高、头像贴顶 */
-.avatar.grp { background: linear-gradient(135deg, var(--av-grp), var(--av-grp-2)); border-radius: 11px; }
+.avatar.grp { background: linear-gradient(135deg, var(--av-grp), var(--av-grp-2)); border-radius: 8px; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
 .chip { display: inline-flex; align-items: center; gap: 2px; padding: 1px 4px 1px 9px;
         border-radius: 99px; font-size: 12px; background: var(--chip);
@@ -2004,7 +2019,11 @@ dialog.sch-dlg > form { flex: 1 1 auto; min-height: 0; display: flex; flex-direc
 /* 讨论区：照 B 站评论的排法 —— 没有背景框，头像 + 内容平铺，议题之间用留白分隔 */
 .tc-threads { display: flex; flex-direction: column; gap: 18px; padding: 2px 0 10px 10px; }
 .tc-topic { display: flex; gap: 9px; align-items: flex-start; padding: 0; }
-.tc-topic.pre { border: 1px dashed var(--line); border-radius: 10px; padding: 10px 12px 8px; }
+/* "还没展开"的那条议题：原来是**虚线框**（iOS 那种"这里可以填"的暗示）。
+   Linear 没有虚线框 —— 虚线在 Linear 里只表示"拖放目标"，不表示占位。
+   改成浅实线 + --side 淡底：它像一条"还没成型"的条目，不像一个空槽。 */
+.tc-topic.pre { border: 1px solid var(--line); border-radius: 6px; background: var(--side);
+                padding: 10px 12px 8px; }
 .tc-topic-body { min-width: 0; flex: 1; }
 .tc-topic-title { font-size: 13px; line-height: 1.7; margin-top: 3px; }
 /* 正文首段别带浏览器默认的 1em 上边距 —— 否则作者行和正文之间会空一大截（量出来 13px） */

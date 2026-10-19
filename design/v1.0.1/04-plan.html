@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>班底 v1.0.1 · 改造建议（哪些用 iOS、哪些用 Linear）</title>
+<title>班底 v1.0.1 · 改造建议（已作废：最终全站 Linear）</title>
 <style>
 :root {
   color-scheme: dark;
@@ -192,12 +192,20 @@ footer { color: var(--text-4); font-size: 12px; margin-top: 46px; }
 <body>
 <div class="page">
 
-  <div class="eyebrow">班底 v1.0.1 · UI 改造</div>
-  <h1>哪部分用 iOS，<br />哪部分用 Linear</h1>
+  <div class="eyebrow">班底 v1.0.1 · UI 改造 · 历史方案</div>
+  <h1>哪部分用 iOS，<br />哪部分用 Linear <span style="font-size:.5em;color:#b4232a">（已作废）</span></h1>
   <p class="lede">
     上一页留下的那句「最好的答案不是二选一」，这里把它落到每个页面。
-    结论先给：<b>人和人说话的地方用 iOS，人和系统打交道的地方用 Linear。</b>
+    当时的结论是：<b>人和人说话的地方用 iOS，人和系统打交道的地方用 Linear。</b>
   </p>
+  <div class="tip" style="margin-top:14px;background:#fff4f4;border-color:#e5b4b4">
+    <b>本文 2026-10-19 作废。</b>
+    混用方案做出来（第 3 步：消息 / 通讯录 / 工作台）之后，用户看截图否掉了它 ——
+    同一个软件里两套圆角、两套分层方式，切页面要重新认一遍“这是什么”，比风格单调更糟。
+    最终决定：<b>全站统一 Linear</b>。iOS 语汇已全部撤回（彩色气泡 → 无气泡、
+    浮起卡片 → 同底 + 1px 细线、工作台宫格 → 行式列表）。
+    下面保留原始论证，只作决策记录，不要照它实现。
+  </div>
 
   <!-- ══════════ 结论 ══════════ -->
   <div class="thesis">
@@ -352,7 +360,7 @@ footer { color: var(--text-4); font-size: 12px; margin-top: 46px; }
 
   <!-- ══════════ 03 一套 token 两个组件层 ══════════ -->
   <section>
-    <h2><span class="num">03</span> 一套 token，两个组件层</h2>
+    <h2><span class="num">03</span> 一套 token，一个组件层</h2>
     <p>现有 CSS 已经是变量驱动的，这是最大的资产 —— 改造不用推倒重来。</p>
 
     <div class="grid2">
@@ -366,23 +374,31 @@ footer { color: var(--text-4); font-size: 12px; margin-top: 46px; }
         </ul>
       </div>
       <div class="comp note">
-        <h3>第 2 层 · 组件（按语汇分）</h3>
+        <h3>第 2 层 · 组件（最终只有 Linear 一套）</h3>
         <ul>
-          <li>iOS 一套：<code>.ios-row</code> <code>.ios-card</code> <code>.ios-bubble</code> <code>.ios-nav</code></li>
+          <li><del>iOS 一套：<code>.ios-row</code> <code>.ios-card</code> <code>.ios-bubble</code> <code>.ios-nav</code></del>（已撤回）</li>
           <li>Linear 一套：<code>.ln-row</code> <code>.ln-card</code> <code>.ln-col</code> <code>.ln-field</code></li>
-          <li>页面 div 上挂 <code>data-skin="ios"</code> / <code>data-skin="linear"</code></li>
-          <li>作用域内只覆盖 <b>圆角 / 间距 / 阴影 / 分隔线样式</b> 四样，不覆盖颜色</li>
+          <li><del>页面 div 上挂 <code>data-skin="ios"</code> / <code>data-skin="linear"</code></del>（未落地）</li>
+          <li>只覆盖 <b>圆角 / 间距 / 阴影 / 分隔线样式</b> 四样，不覆盖颜色</li>
         </ul>
       </div>
     </div>
 
     <div class="tip" style="margin-top:16px">
+      <b>⚠️ 这一节作废（2026-10-19 用户拍板「全部 Linear」）</b>
+      下面说的“按页面分皮肤”最终<b>没有落地</b>：先把 iOS 那套做出来（第 3 步）之后，
+      用户看截图否掉了混用方案，改为全站统一 Linear。实际做法是直接改各组件、
+      一个组件一个提交（好 revert），并没有 <code>data-skin</code> 这层机制。
+      iOS 语汇（彩色气泡、浮起卡片、18px 气泡圆角、工作台宫格）已全部撤回。
+    </div>
+
+    <div class="tip" style="margin-top:12px;text-decoration:line-through;opacity:.55">
       <b>为什么按"页面"分皮肤，而不是按"主题"分？</b>
       如果做成两套可选主题，等于维护两套完整样式表（现在 1912 行的两倍），
       而且用户切换后还得重新认路。按页面分，每个页面只学到<b>一种</b>形态，认知负担为零。
     </div>
 
-    <div class="tip" style="margin-top:12px;background:var(--g1);border-color:var(--line-2)">
+    <div class="tip" style="margin-top:12px;text-decoration:line-through;opacity:.55;background:var(--g1);border-color:var(--line-2)">
       <b>约 90 行作用域覆盖就能分家：</b>
       <code>[data-skin="ios"] { --radius-lg: 16px; --gap-row: 10px; --shadow-card: 0 1px 3px rgba(0,0,0,.06); }</code><br />
       <code>[data-skin="linear"] { --radius-lg: 7px; --gap-row: 2px; --shadow-card: none; }</code><br />
@@ -427,9 +443,10 @@ footer { color: var(--text-4); font-size: 12px; margin-top: 46px; }
       <div class="step">
         <div class="n todo">然后</div>
         <div>
-          <h3>第 3 步 · 消息 / 通讯录 / 工作台 → iOS 语汇</h3>
+          <h3>第 3 步 · 消息 / 通讯录 / 工作台 → <del>iOS 语汇</del> <span style="color:#b4232a">已做成 iOS，后按用户要求全部改回 Linear</span></h3>
           <p>三处是同一族（列表行 + 大标题 + 彩色图标），一次改完。改的是<b>组件类</b>，
-             JS 里那 166 处 <code>toast()</code> 和弹窗逻辑都不动。</p>
+             JS 里那 166 处 <code>toast()</code> 和弹窗逻辑都不动。提交 <code>36bf9d9</code>。</p>
+          <p><b>⚠️ 这一步的产物已被覆盖</b>：气泡/浮起卡片/宫格全部撤回，见 <code>style.css</code> 顶部注释。</p>
           <p><b>验收</b>：<code>node tools/run-smokes.mjs</code> 全过（16 个离线用例，与 PR 闸门共用清单）；
              <code>node tools/check-routes.mjs</code> 无缺路由。</p>
           <p class="files">style.css 中 .list-panel / .item / .bubble / .composer / .wb-* 相关段</p>
@@ -453,6 +470,11 @@ footer { color: var(--text-4); font-size: 12px; margin-top: 46px; }
   <section>
     <h2><span class="num">05</span> 只剩三件事要你定</h2>
     <p>其余我都按上面的切法往下推。这三件会明显改变观感，不替你决定。</p>
+    <div class="tip" style="margin-bottom:14px">
+      <b>实际结论（2026-10-19）：</b>三件都定了 —— 强调色留 <b>iOS 蓝</b>（不是 Linear 靛蓝，蓝压深底更清晰）；
+      深色底<b>全部用 <code>#08090a</code></b>（消息页也放弃了纯黑，纯黑上分层只能靠阴影，而 Linear 不靠阴影）；
+      侧栏<b>留</b>。下面这表只作决策记录。
+    </div>
 
     <table class="tbl">
       <thead><tr><th>问题</th><th>我的建议</th><th>另一条路</th></tr></thead>
