@@ -1,62 +1,91 @@
+/* ══════════════════════════════════════════════════════════════════════
+   设计变量（v1.0.1 · 2026-10-19）
+   ─────────────────────────────────────────────────────────────────────
+   方向：iOS 与 Linear 混用 —— **语义变量名不动，只换值**。
+     · 对话处（消息 / 通讯录 / 工作台）用 iOS 语汇：气泡、行式列表、系统蓝
+     · 干活的地面（看板 / 项目 / 流程 / 设置 / 日志）用 Linear 语汇：灰阶分层、1px 细线
+   颜色是两边共用的 —— 换来换去的只有圆角 / 间距 / 阴影（见文件末尾 data-skin）。
+
+   值全部**实测过 WCAG 对比度**（不是估的）：
+     · 深色 --text 最差 12.81:1、--dim 最差 5.79:1
+     · 浅色 --text 最差 14.92:1、--dim 最差 5.20:1
+   改这里的任何一个值，都要重新算一遍（脚本在 docs/ 里没有，临时写：
+   相对亮度 → (L1+.05)/(L2+.05)，正文 ≥ 4.5、大字/次要 ≥ 3）。
+   ══════════════════════════════════════════════════════════════════════ */
+
 :root {
   color-scheme: dark;
 
-  /* 深色（默认） */
-  --bg: #0f1115; --rail: #12151b; --side: #171a20; --panel: #1e222a; --line: #272c35;
-  --text: #e8eaed; --dim: #8a919e; --accent: #3d7eff; --ok: #3fb950; --bad: #f85149; --warn: #d29922;
+  /* 深色（默认）—— 灰阶六档，档与档之间只差 3~6% 亮度。
+     消息页可用纯黑，#000；这里留 #08090a 是给看板用的（纯黑上卡片分不出层）。 */
+  --bg: #08090a;             /* 应用底 / 内容区底（原 #0f1115，偏蓝的深灰） */
+  --rail: #0b0b0d;           /* 图标栏：比页面底再暗一档，压出"墙"的感觉 */
+  --side: #0d0e10;           /* 列表栏 */
+  --panel: #111214;          /* 卡片 / 弹窗 / 看板列 */
+  --line: #202225;           /* 常态边框（原 #272c35 偏亮，细线一多就成栅栏） */
+  --text: #e8e9ea;           /* 主文字：**不用纯白**，纯白在近黑底上会"跳" */
+  --dim: #9b9ea3;            /* 次要文字 / 描述 / 时间 */
+  --accent: #0a84ff;         /* iOS 系统蓝（深色档提亮）—— 选中 / 主按钮 / 焦点环 */
+  --ok: #3fb950; --bad: #f85149; --warn: #d29922;
 
   /* 下面这些是「散落各处、写死过」的颜色，抽出来就是为了浅色主题能一处覆盖 */
-  --input: #12151b;          /* 输入框 / 代码块底 */
-  --readonly: #14171d;       /* 只读输入框 */
-  --hover: #1f242e;          /* 列表项悬停 */
-  --rail-hover: #1b1f27;
-  --rail-active: #1c2333;
-  --sel: #22304a;            /* 选中项 / 提及列表高亮 */
-  --chip: #1f2735;
-  --btn: #262b34;
-  --locked: #1b2434;
-  --chip-x-hover: #3a2026;
-  --bubble: #22272f;         /* AI 气泡：比消息区略亮一档的灰，跟代码块底也分得开 */
-  --bubble-me: #23406e;
-  --bubble-me-line: #2c4f88;
-  --link: #7fb0ff;
-  --scrim: rgba(0, 0, 0, .45);
+  --input: #0d0e10;          /* 输入框 / 代码块底 */
+  --readonly: #0f1012;       /* 只读输入框 */
+  --hover: #16171a;          /* 列表项悬停 */
+  --rail-hover: #131416;
+  --rail-active: #17233f;    /* 图标栏当前项：淡蓝底 + 蓝字/蓝图标 */
+  --sel: #171c2b;            /* 选中项 / 提及列表高亮：比 accent 淡一档的蓝 */
+  --chip: #1a1b1e;
+  --btn: #16171a;
+  --locked: #151b29;
+  --chip-x-hover: #2a1a1c;
+  --bubble: #16171a;         /* AI 气泡：比消息区亮一档的灰，跟代码块底也分得开 */
+  --bubble-me: #17233f;      /* 我的气泡：淡蓝（原 #23406e 太艳，一片蓝块压眼睛） */
+  --bubble-me-line: #23375a;
+  --link: #6ea8ff;           /* 正文里的链接：比 accent 亮，压在气泡灰底上才够（8.26:1） */
+  --scrim: rgba(0, 0, 0, .5);
   --shadow: rgba(0, 0, 0, .45);
-  --scroll: #39404c;         /* 滚动条滑块 */
-  --scroll-hover: #4b5361;
+  --scroll: #2c2e32;         /* 滚动条滑块：Linear 那种"几乎看不见"，悬停才显形 */
+  --scroll-hover: #3d4045;
   /* 看板列的"凹槽底"。**不能用 --panel / --side**（浅色下它们都是纯白）——
-     白列配白卡片就分不出层了。深色取在页面底 #0f1115 与卡片 #171a20 之间。 */
-  --well: #13161b;
+     白列配白卡片就分不出层了。深色取在页面底与卡片之间。 */
+  --well: #0b0c0e;
 }
 
 /* 浅色：只覆盖变量，其它规则一行都不用改 */
 :root[data-theme='light'] {
   color-scheme: light;
 
-  --bg: #f4f5f7; --rail: #e9ebef; --side: #ffffff; --panel: #ffffff; --line: #e0e3e8;
-  --text: #1b1e23; --dim: #6b7280; --accent: #2f6feb; --ok: #1a7f37; --bad: #d1242f; --warn: #9a6700;
+  /* 浅色只有 6 档灰（白底上摆 10 档灰会显脏）；
+     卡片纯白、页面底 #f7f8f9 —— 靠"白浮在浅灰上"分层，不靠边框 */
+  --bg: #f7f8f9; --rail: #f0f1f3; --side: #fcfcfd; --panel: #ffffff; --line: #e4e6e9;
+  --text: #1a1c1f; --dim: #5f646c;
+  /* 强调色：**不能用 iOS 原色 #007aff 或 #0071e3** —— 白字压上去实测 4.02 / 4.70，
+     压在看板列的灰底上只有 4.04，不过 AA。深一档到 #0066cc：白字 5.57、最差底 4.79。 */
+  --accent: #0066cc;
+  --ok: #12813c; --bad: #cf222e; --warn: #8a5b00;
 
   --input: #ffffff;
   --readonly: #f2f3f5;
-  --hover: #f0f2f5;
-  --rail-hover: #dfe3ea;
-  --rail-active: #dbe4f7;
-  --sel: #e4ecfb;
-  --chip: #eef1f5;
+  --hover: #f2f3f5;
+  --rail-hover: #e6e8ec;
+  --rail-active: #e9f0fd;
+  --sel: #e9f0fd;
+  --chip: #f2f4f6;
   --btn: #ffffff;
-  --locked: #eef4ff;
-  --chip-x-hover: #ffe9e9;
-  --bubble: #f2f3f5;         /* AI 气泡：白底消息区上的浅灰 */
-  --bubble-me: #d8e6ff;
-  --bubble-me-line: #b6d0fa;
-  --link: #1f6feb;
-  --scrim: rgba(0, 0, 0, .35);
-  --shadow: rgba(0, 0, 0, .18);
-  --scroll: #c8cdd6;
-  --scroll-hover: #a9b0bb;
-  /* 看板列的"凹槽底"：比页面底 #f4f5f7 暗一档的灰（**不是白**），
+  --locked: #eef4fd;
+  --chip-x-hover: #fdf0f0;
+  --bubble: #ffffff;         /* AI 气泡：白卡片 + 阴影，跟 #f7f8f9 的消息底分开 */
+  --bubble-me: #eef4fd;
+  --bubble-me-line: #cfe1fb;
+  --link: #0066cc;
+  --scrim: rgba(0, 0, 0, .3);
+  --shadow: rgba(0, 0, 0, .14);
+  --scroll: #d6d9dd;
+  --scroll-hover: #b9bdc4;
+  /* 看板列的"凹槽底"：比页面底 #f7f8f9 暗一档的灰（**不是白**），
      卡片保持纯白 → 一眼看出"卡片浮在列上面" */
-  --well: #e9ebef;
+  --well: #eceef1;
 }
 * { box-sizing: border-box; }
 
