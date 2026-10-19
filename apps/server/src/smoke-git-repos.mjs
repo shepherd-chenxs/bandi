@@ -83,18 +83,24 @@ try {
   const unknownRoute = await req('/api/git/nope');
   check('未知 /api/git 路径 → 404（不是落到别的 handler）', unknownRoute.status === 404, String(unknownRoute.status));
 
-  console.log('\n② 令牌只在数据目录那个文件里：落盘 0600、读出可用、接口只给后 4 位');
+  console.log('\n② 令牌只在数据目录那个文件里：落盘 0600、读出可用、接口只给掩码');
   process.env.BANDI_DATA = tmp;
   const git = await import('./git-repos.mjs');
   git.saveToken('ghp_smoke1234abcd');
   const tokenFile = path.join(tmp, 'github-token');
   check('令牌文件写出来了', fs.existsSync(tokenFile));
   check('readToken 读得到', git.readToken() === 'ghp_smoke1234abcd');
-  check('tokenHint 只给后 4 位', git.tokenHint() === '…abcd', String(git.tokenHint()));
+  // 头 2 + 6 个星号 + 尾 4：认得出是哪一个，但中间那段还是没露
+  check('tokenHint 是 头2+******+尾4', git.tokenHint() === 'gh******abcd', String(git.tokenHint()));
+  check('hint 里没有令牌中段', !git.tokenHint().includes('smoke1234'));
   check('令牌没进数据库（表里没有 token 列）', !fs.readFileSync(path.join(tmp, 'bandi.db')).includes('ghp_smoke1234abcd'));
   const st2 = await req('/api/git/status');
-  check('再查 status：connected=true、hint 只给后 4 位', st2.b.connected === true && st2.b.hint === '…abcd', JSON.stringify(st2.b?.hint));
+  check('再查 status：connected=true、hint 是掩码', st2.b.connected === true && st2.b.hint === 'gh******abcd', JSON.stringify(st2.b?.hint));
   check('status 里绝不出现完整令牌', !JSON.stringify(st2.b).includes('ghp_smoke1234abcd'));
+  // 短令牌：头尾加起来就快露完了，一个字都不给
+  git.saveToken('gh1234');
+  check('短令牌只给 6 个星号（不按真实长度报）', git.tokenHint() === '******', String(git.tokenHint()));
+  check('短令牌的完整值没露出来', !git.tokenHint().includes('gh1234'));
   git.clearToken();
   check('断开后令牌文件没了', !fs.existsSync(tokenFile));
 
@@ -161,6 +167,59 @@ try {
   const out2 = await git.connectRepo('smoke/demo4', info('demo4'), local2);
   check('origin 不一致 → 仍然接入（fork/镜像也合理）', out2.repo.localPath === local2);
   check('但要给警告说清楚', /不一致/.test(out2.warning ?? ''), String(out2.warning));
+
+  /*
+   * ⑤ 仓库值班的 PR 卡（2026-10-17）：巡检扫来的卡**也要带 PR 字段**。
+   * 不带的话，同一个 PR，手动贴链接的卡在看板上能看到「开着/已合并」，机器扫进来的看不到 ——
+   * 而且它进不了「刷新 PR」的批量清单，合并了永远没人收。
+   */
+  console.log('\n⑤ 仓库值班写卡：PR 卡带上 PR 字段（看板标签 / 批量刷新都靠它）');
+  const proj = ((await req('/api/projects')).b?.projects ?? [])[0];
+  check('拿得到一个项目（内置默认项目）', !!proj?.id, proj?.name);
+  const cardBody = (extra = {}) => ({
+    key: 'pr:42',
+    title: 'PR #42 待审：改了点东西',
+    body: '链接：https://github.com/smoke/demo/pull/42',
+    pr: { url: 'https://github.com/smoke/demo/pull/42', title: '改了点东西', state: 'open' },
+    ...extra,
+  });
+  const c1 = await req(`/api/projects/${encodeURIComponent(proj.id)}/repo-cards`, {
+    method: 'POST',
+    body: JSON.stringify(cardBody()),
+  });
+  check('新建 201', c1.status === 201 && c1.b.created === true, String(c1.status));
+  check('prRepo / prNumber 落库', c1.b.task?.prRepo === 'smoke/demo' && c1.b.task?.prNumber === 42, `${c1.b.task?.prRepo}#${c1.b.task?.prNumber}`);
+  check('prState / prTitle 落库', c1.b.task?.prState === 'open' && c1.b.task?.prTitle === '改了点东西');
+  check('source 还是 repo（值班卡）', c1.b.task?.source === 'repo');
+  // 幂等：同样的内容再写一次 → 没变（否则巡检每次都报"更新"）
+  const c2 = await req(`/api/projects/${encodeURIComponent(proj.id)}/repo-cards`, {
+    method: 'POST',
+    body: JSON.stringify(cardBody()),
+  });
+  check('同样的内容再写一次 → changed=false', c2.b.changed === false, JSON.stringify(c2.b.changed));
+  // 标题变了 → 更新，PR 字段不被抹掉
+  const c3 = await req(`/api/projects/${encodeURIComponent(proj.id)}/repo-cards`, {
+    method: 'POST',
+    body: JSON.stringify(cardBody({ title: 'PR #42 待审：改了标题' })),
+  });
+  check('标题变了 → changed=true 且 PR 字段还在', c3.b.changed === true && c3.b.task?.prNumber === 42, String(c3.b.task?.prNumber));
+  // 报上来已经是 merged → 状态跟着变（这条是给"巡检/以后 Actions 直接报合并"留的路）
+  const c4 = await req(`/api/projects/${encodeURIComponent(proj.id)}/repo-cards`, {
+    method: 'POST',
+    body: JSON.stringify(cardBody({ pr: { url: 'https://github.com/smoke/demo/pull/42', title: '改了点东西', state: 'merged' } })),
+  });
+  check('报 merged → prState=merged', c4.b.task?.prState === 'merged', String(c4.b.task?.prState));
+  check('卡在「待办」→ 状态不动（人还没看）', c4.b.task?.status === '待办', String(c4.b.task?.status));
+  // 没带 pr 的 issue 卡：四个 PR 字段保持空，别凭空长出一个 PR
+  const i1 = await req(`/api/projects/${encodeURIComponent(proj.id)}/repo-cards`, {
+    method: 'POST',
+    body: JSON.stringify({ key: 'issue:7', title: 'issue #7 待分类：X', body: '链接：https://github.com/smoke/demo/issues/7' }),
+  });
+  check('issue 卡没有 PR 字段', !i1.b.task?.prRepo && !i1.b.task?.prNumber, JSON.stringify({ r: i1.b.task?.prRepo, n: i1.b.task?.prNumber }));
+  // 看板数据里带得出去（界面那枚标签就吃这个字段）
+  const board = await req(`/api/projects/${encodeURIComponent(proj.id)}/tasks`);
+  const row = (board.b?.columns ?? []).flatMap((c) => c.cards ?? []).find((r) => r.source === 'repo' && r.pr);
+  check('看板行里带 pr（标签才画得出来）', !!row && row.pr.number === 42, JSON.stringify(row?.pr));
 
 } finally {
   child.kill();

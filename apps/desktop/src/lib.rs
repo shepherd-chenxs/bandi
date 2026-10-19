@@ -33,8 +33,9 @@ pub fn run() {
             let launch = match shell::find_root() {
                 Some(root) => shell::launch(&root, packaged.as_deref()),
                 None => shell::Launch::Failed {
-                    message: "没找到安装根：往上找了六层都没看到 apps/desktop/shell.mjs。\n\n\
-                              用环境变量 BANDI_HOME 指一下安装目录，或者把程序放回安装目录里再启动。"
+                    message: "没找到安装根：往上找了六层，既没看到源码仓库（apps/desktop/shell.mjs + Cargo.toml），\
+                              也没看到安装布局（apps/desktop/shell.mjs）。\n\n\
+                              用环境变量 BANDI_HOME 指一下目录（仓库根或安装目录都行），再把程序放回去启动。"
                         .to_string(),
                 },
             };

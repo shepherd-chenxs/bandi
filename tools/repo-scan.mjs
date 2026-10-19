@@ -7,7 +7,7 @@
  *
  * 做什么：
  *   ① 拉 GitHub 的 open PR / open issue（公开仓库不需要令牌）；
- *   ② 每一条写成一张卡（PR 卡带上"该跑什么命令"的证据清单）；
+ *   ② 每一条写成一张卡（PR 卡带上"该跑什么命令"的证据清单，并把 PR 本身的状态一起报上去）；
  *   ③ 写到 `POST /api/projects/<id>/repo-cards` —— 服务端按去重键更新，**绝不覆盖你改过的状态**。
  *
  * 跑法：
@@ -76,6 +76,16 @@ function prCard(pr) {
   return {
     key: `pr:${pr.number}`,
     title: `PR #${pr.number} 待审：${clip(pr.title, 60)}`,
+    /*
+     * 把 PR 本身一起报上去（2026-10-17）：服务端据此写卡上的 `prRepo/prNumber/prState`，
+     * 看板才会出现「PR #n 开着」那枚标签，卡也才进得了「刷新 PR」的清单。
+     * 这里只报巡检看见的事实，**不替人下结论** —— 合并了卡片状态照样是人来拖。
+     */
+    pr: {
+      url: pr.html_url,
+      title: pr.title,
+      state: pr.merged_at ? 'merged' : pr.state === 'open' ? 'open' : 'closed',
+    },
     body: [
       `作者：${pr.user?.login ?? '?'} ｜ 改动：+${pr.additions ?? '?'} / -${pr.deletions ?? '?'} ｜ 文件 ${pr.changed_files ?? '?'}`,
       '',
@@ -89,7 +99,7 @@ function prCard(pr) {
       'node tools/check-pr.mjs      # 零依赖 / 地址白名单 / 断言完整性',
       'node tools/run-smokes.mjs    # 不需要真实 CLI 的那批',
       '```',
-      '判据见 docs/审阅经验.md；红线（一票否决）见 skills/bandi-repo/SKILL.md。',
+      '判据、红线（一票否决）、黄线都在 docs/审阅经验.md。',
       '',
       `链接：${pr.html_url}`,
       pr.body ? `\nPR 描述：${clip(pr.body, 300)}` : '',
@@ -107,7 +117,7 @@ function issueCard(issue) {
       `作者：${issue.user?.login ?? '?'}${labels.length ? ` ｜ 标签：${labels.join('、')}` : ''}`,
       '',
       '结论：**待分类**（值得做 / 不值得 / 广告引流 / 需要澄清）—— 定了再回复，别晾着。',
-      '回复模板见 skills/bandi-repo/SKILL.md（值得做 / 不值得做 / 广告三类）。',
+      '回复模板见 docs/审阅经验.md 末尾（值得做 / 不值得做 / 广告三类）。',
       '',
       `链接：${issue.html_url}`,
       issue.body ? `\n正文：${clip(issue.body, 300)}` : '',

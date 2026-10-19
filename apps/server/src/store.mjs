@@ -82,6 +82,8 @@ db.exec(`
     scope          TEXT NOT NULL DEFAULT '',
     sessionId      TEXT,
     lastSeenRowid  INTEGER NOT NULL DEFAULT 0,
+    -- 这个 sessionId 是**哪个运行时族**（codex / claude / dsh）给的。见下面 ensureColumn 的说明
+    family         TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (threadId, personaId, scope)
   );
 
@@ -163,6 +165,18 @@ function ensureColumn(table, column, ddl) {
   }
 }
 
+/*
+ * member_sessions.family：**这条 sessionId 是哪个运行时族给的**。
+ *
+ * 会话 id 是各 CLI 自己发的、也各自存各自的（Codex 的 rollout 在 `~/.codex/sessions`，
+ * Claude 的存在 `~/.claude/projects`），**互不相通**。换运行时后拿旧 id 去 resume，
+ * CLI 会直接报「no rollout found for thread id …」（2026-10-17 实报）。
+ * 记下族名，换族时就知道这个 id 不该再传给新运行时了。
+ *
+ * 老库补列后是 ''（不知道）—— 仍按老行为先试 resume，失败时由 runs 那边自动降级成新会话。
+ */
+ensureColumn('member_sessions', 'family', "family TEXT NOT NULL DEFAULT ''");
+
 // 「显示思考过程」：Codex 的 reasoning 事件关不掉（实测 summary=none / hide_agent_reasoning
 // / effort=minimal 都无效），所以这只能是平台层的显示开关。默认关：对话里只留他的回话。
 ensureColumn('personas', 'showThinking', 'showThinking INTEGER NOT NULL DEFAULT 0');
@@ -179,6 +193,15 @@ ensureColumn('personas', 'rootDirs', 'rootDirs TEXT');
  *     （见 workflows.assigneeFor；冒烟 smoke-personas.mjs 钉着这条）。
  */
 ensureColumn('personas', 'role', 'role TEXT');
+
+/*
+ * **内置员工**（2026-10-18）：出厂自带、删不掉的那种（第一个是「喜儿」，平台的秘书）。
+ *
+ * 为什么用标记而不是"按名字认"：名字是给人看的，用户随时能改（"喜儿"改成"小秘"很正常）。
+ * 系统要认的是"这一个"，所以认 id + 这个标记；改名不影响身份（跟 Multica 的 system_key 同一个道理）。
+ * 允许改指令/改权限 —— 她是用户的员工，不是平台的广告位；只是**不许丢**。
+ */
+ensureColumn('personas', 'builtin', 'builtin INTEGER NOT NULL DEFAULT 0');
 
 /*
  * 这次运行**实际用的模型**。
@@ -292,7 +315,7 @@ db.exec(`
     detail             TEXT NOT NULL DEFAULT '',
     assigneePersonaId  TEXT,
     mode               TEXT NOT NULL DEFAULT 'confirm',
-    status             TEXT NOT NULL DEFAULT '待开始',
+    status             TEXT NOT NULL DEFAULT '待办',
     note               TEXT,
     conversationId     TEXT,
     agentRunId         TEXT,
@@ -327,7 +350,7 @@ db.exec(`
     visit              INTEGER NOT NULL DEFAULT 1,
     detail             TEXT NOT NULL DEFAULT '',
     assigneePersonaId  TEXT,
-    status             TEXT NOT NULL DEFAULT '待开始',
+    status             TEXT NOT NULL DEFAULT '待办',
     decision           TEXT,
     note               TEXT,
     conversationId     TEXT,
@@ -364,6 +387,17 @@ db.exec(`UPDATE workflow_tasks
             SET note = REPLACE(note, '点这一步的「任务卡」选一个人就能接着办', '点上面「经办人」那儿选一个人就能接着办')
           WHERE note LIKE '%任务卡%'`);
 
+/*
+ * 流程步骤的状态更名（2026-10-17）：「待开始」这个叫法去掉了 —— 它和「待办」本来就是
+ * 同一个意思（"到站了、还没开跑"），两个词并存只会让人问"差在哪"。
+ * 老库里的存量行在这条 UPDATE 里一次性改过来；新库的建表默认值已经是「待办」。
+ * 改完之后「待办」不再只是个记号：调度节拍会把停在待办的步骤自动派出去（见 workflows.retryPendingSteps）。
+ * ⚠️ 必须放在 workflow_tasks 建表之后 —— 放前面的话全新库上这张表还不存在（前面那条订正踩过同一个坑）。
+ */
+for (const t of ['workflow_tasks', 'workflow_steps']) {
+  db.prepare(`UPDATE ${t} SET status = '待办' WHERE status = '待开始'`).run();
+}
+
 ensureColumn('workflow_templates', 'nodes', 'nodes TEXT');
 ensureColumn('workflow_templates', 'startNode', 'startNode TEXT');
 // 发布：null = 草稿（只在工作流模块里编）；有值 = 已发布（工作台里能点开起流程）
@@ -373,6 +407,14 @@ ensureColumn('workflow_runs', 'threadId', 'threadId TEXT');
 // 发起时填的「想法」：这段话就是发给第一个执行人的第一句，也是以后回头看的起因
 ensureColumn('workflow_runs', 'intent', 'intent TEXT');
 ensureColumn('workflow_runs', 'currentNodeId', 'currentNodeId TEXT');
+/*
+ * 一步的**执行结果**（2026-10-18）：`{ state, summary, artifacts[], error }` 的 JSON。
+ *
+ * 为什么不复用 `note`：note 是给列表一行用的、**存的时候就截到 160 字**；
+ * 而产物（改了哪个文件）经常落在被截掉的后半段里 —— 前端再想拆也拆不出来。
+ * 所以结果在 run 结束那一刻、拿**全文**拆好存这儿，界面照着渲染就行。
+ */
+ensureColumn('workflow_tasks', 'result', 'result TEXT');
 
 /**
  * 补「开始节点」这个显式概念。
@@ -492,6 +534,73 @@ function migrateAddConversationModel() {
 }
 migrateAddConversationModel();
 
+/**
+ * **工单会话**（2026-10-18）：流程的每一步、看板上的每张卡，各在自己的会话里跑。
+ *
+ * 为什么要有：原来流程和任务卡都派进员工唯一那条 1:1，于是
+ *   ① 消息模块被自动派活淹没；② 忙判定是按会话算的 → 一个员工同一时刻只能干一件活。
+ * 拆开之后：1:1 只做人和他的对话；每条流程 / 每张卡各一条工单会话（kind='exec'），
+ * 自己的上下文、自己的执行槽。**并发由项目互斥 + 每人上限兜着**（见 dispatch.mjs）。
+ *
+ * `execScope` 是"这条工单是谁"：`wf:<流程实例 id>` / `task:<任务卡 id>`。
+ * 同一张卡返工复用它 —— 上下文连续，但不会串到别的卡上。
+ */
+function migrateAddExecConversation() {
+  ensureColumn('conversations', 'execScope', 'execScope TEXT');
+  ensureColumn('conversations', 'projectId', 'projectId TEXT');
+  // 这次执行在哪个项目里干活 —— 项目互斥（同一目录同时只跑一个）靠它判
+  ensureColumn('runs', 'projectId', 'projectId TEXT');
+}
+migrateAddExecConversation();
+
+/** 取（或建）某条工单的会话。kind='exec' + execScope 唯一，标题跟着源头刷新 */
+export function ensureExecConversation({ personaId, scope, title, projectId = null }) {
+  const persona = getPersona(personaId);
+  if (!persona) return null;
+  const existing =
+    db
+      .prepare("SELECT * FROM conversations WHERE kind = 'exec' AND personaId = ? AND execScope = ?")
+      .get(personaId, scope) ?? null;
+  if (existing) {
+    const t = title || existing.title;
+    if (t !== existing.title || (projectId && projectId !== existing.projectId)) {
+      db.prepare('UPDATE conversations SET title = ?, projectId = ?, updatedAt = ? WHERE id = ?')
+        .run(t, projectId ?? existing.projectId, nowIso(), existing.id);
+    }
+    return getConversation(existing.id);
+  }
+  const ts = nowIso();
+  const row = {
+    id: newId('c'),
+    title: title || '（工单）',
+    personaId,
+    projectId,
+    execScope: scope,
+  };
+  db.prepare(
+    `INSERT INTO conversations (id, title, personaId, sessionId, status, kind, projectId, execScope, createdAt, updatedAt)
+     VALUES (?, ?, ?, NULL, '待跑', 'exec', ?, ?, ?, ?)`,
+  ).run(row.id, row.title, row.personaId, row.projectId, row.execScope, ts, ts);
+  return getConversation(row.id);
+}
+
+/** 这个员工手上正在跑几件（每人并发上限靠它） */
+export function countActiveRunsForPersona(personaId) {
+  return (
+    db.prepare("SELECT COUNT(*) AS n FROM runs WHERE personaId = ? AND status = '跑中'").get(personaId)?.n ?? 0
+  );
+}
+
+/** 这个项目里有没有正在跑的活（同一目录同时只许一个 —— 两个进程改同一份代码必出事） */
+export function activeRunForProject(projectId) {
+  if (!projectId) return null;
+  return (
+    db.prepare("SELECT * FROM runs WHERE projectId = ? AND status = '跑中' ORDER BY startedAt DESC").get(projectId) ??
+    null
+  );
+}
+
+
 /** 把会话的模型覆盖设成某个值；传 null / 空 = 收回，跟随员工默认 */
 export function setConversationModel(id, model) {
   db.prepare('UPDATE conversations SET model = ? WHERE id = ?').run(model || null, id);
@@ -524,9 +633,25 @@ function ensureProjects() {
   ensureColumn('conversations', 'projectId', 'projectId TEXT');
   ensureColumn('workflow_runs', 'projectId', 'projectId TEXT');
   ensureColumn('projects', 'builtIn', 'builtIn INTEGER NOT NULL DEFAULT 0');
+  // 项目宪法：本项目特有的硬约束，派活时注入首轮 prompt（见 dispatch.projectConstitutionBlock）。
+  // 存平台不落项目仓库 —— 可空 = 没写宪法，派活时什么都不注。
+  ensureColumn('projects', 'constitution', 'constitution TEXT');
   // 消息归属哪一步：**按标记取，不再靠时间窗口切**
   // （1:1 会话被多条流程共用，按时间切会把别的流程的派活也捞进来，用户实报）
   ensureColumn('messages', 'taskId', 'taskId TEXT');
+  /*
+   * **评论区的"回复挂在哪个议题下"**（2026-10-18）。
+   * 只允许**一层**：`parentId` 永远指向一条顶层评论（议题），回复本身不再被回复。
+   * NULL = 顶层议题。嵌套再深在侧栏里缩没了，人也不会那么用。
+   */
+  ensureColumn('messages', 'parentId', 'parentId TEXT');
+  /*
+   * **留言**（2026-10-19 用户定）：卡片评论里选了「只留言」的那条 —— 不叫醒执行人，
+   * 但**不是丢弃**：派活时由 dispatch 把上次水位线之后的这些便签一并补给他
+   * （见 dispatch.backfillBlock）。存成列而不是塞进正文前缀，是为了"再发一次"、
+   * 统计和将来"把便签并进派活"这类操作都能按结构取。
+   */
+  ensureColumn('messages', 'note', 'note INTEGER NOT NULL DEFAULT 0');
 
   /*
    * **手工任务**（用户 2026-10-14，参照 Multica 的看板）：在项目的某一列点「＋」直接建的任务。
@@ -562,6 +687,9 @@ ensureProjects();
  */
 ensureColumn('project_tasks', 'source', "source TEXT NOT NULL DEFAULT 'manual'");
 ensureColumn('project_tasks', 'externalKey', 'externalKey TEXT');
+// 排队标记：派活撞上"人满了 / 项目正忙"时落一个时间，30 秒节拍重试（见 schedules.mjs）。
+// ⚠️ 必须放在 project_tasks 建表**之后**（放前面会在新库上 no such table）
+ensureColumn('project_tasks', 'queuedAt', 'queuedAt TEXT');
 
 /**
  * 内置的默认项目：`<文档>\bandi\default-workspace`。
@@ -645,10 +773,15 @@ export function updateProject(id, fields) {
     root: fields.root ?? cur.root,
     extraRoots: fields.extraRoots === undefined ? cur.extraRoots : JSON.stringify(fields.extraRoots ?? []),
     note: fields.note === undefined ? cur.note : fields.note,
+    // 宪法：空串归一成 NULL（没写就是没写，别存一条 ''）
+    constitution:
+      fields.constitution === undefined
+        ? cur.constitution
+        : String(fields.constitution ?? '').trim() || null,
   };
   db.prepare(
-    'UPDATE projects SET name = ?, root = ?, extraRoots = ?, note = ?, updatedAt = ? WHERE id = ?',
-  ).run(next.name, next.root, next.extraRoots, next.note, nowIso(), id);
+    'UPDATE projects SET name = ?, root = ?, extraRoots = ?, note = ?, constitution = ?, updatedAt = ? WHERE id = ?',
+  ).run(next.name, next.root, next.extraRoots, next.note, next.constitution, nowIso(), id);
   return getProject(id);
 }
 /** 删项目**不动会话**：把绑在它上面的会话解绑（回到员工默认工作目录） */
@@ -745,6 +878,16 @@ export function listProjectTasks(projectId) {
     .all(projectId);
 }
 
+/**
+ * 排队中的卡：撞上"人满了 / 项目正忙"被退回「待办」、但标了 queuedAt 的那些。
+ * 30 秒节拍按先进先出重试（谁先排谁先试）。
+ */
+export function listQueuedProjectTasks() {
+  return db
+    .prepare("SELECT * FROM project_tasks WHERE queuedAt IS NOT NULL AND status = '待办' ORDER BY queuedAt")
+    .all();
+}
+
 export function getProjectTask(id) {
   return db.prepare('SELECT * FROM project_tasks WHERE id = ?').get(id) ?? null;
 }
@@ -759,7 +902,7 @@ export function updateProjectTask(id, fields) {
     `UPDATE project_tasks
         SET title = ?, description = ?, status = ?, assigneePersonaId = ?,
             conversationId = ?, runId = ?, prRepo = ?, prNumber = ?, prState = ?, prTitle = ?,
-            prCheckedAt = ?, updatedAt = ?
+            prCheckedAt = ?, queuedAt = ?, updatedAt = ?
       WHERE id = ?`,
   ).run(
     next.title,
@@ -773,6 +916,7 @@ export function updateProjectTask(id, fields) {
     next.prState ?? null,
     next.prTitle ?? null,
     next.prCheckedAt ?? null,
+    next.queuedAt ?? null,
     nowIso(),
     id,
   );
@@ -855,19 +999,22 @@ export function getPersona(id) {
   return db.prepare('SELECT * FROM personas WHERE id = ?').get(id) ?? null;
 }
 
-export function createPersona({ name, role = null, instructions = '', runtime = 'codex', sandbox = 'danger-full-access', cwd = null, model = null, showThinking = 0, rootDirs = [] }) {
+export function createPersona({ id = null, name, role = null, instructions = '', runtime = 'codex', sandbox = 'danger-full-access', cwd = null, model = null, showThinking = 0, rootDirs = [], builtin = 0 }) {
   const row = {
-    id: newId('p'), name, role, instructions, runtime, sandbox, cwd, model,
+    // 内置员工要**固定 id**（seed 幂等靠它）；普通员工仍自动生成
+    id: id || newId('p'),
+    name, role, instructions, runtime, sandbox, cwd, model,
     showThinking: showThinking ? 1 : 0,
     rootDirs: Array.isArray(rootDirs) && rootDirs.length ? JSON.stringify(rootDirs) : null,
+    builtin: builtin ? 1 : 0,
     createdAt: nowIso(),
   };
   db.prepare(
-    `INSERT INTO personas (id, name, role, instructions, runtime, sandbox, cwd, model, showThinking, rootDirs, createdAt)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO personas (id, name, role, instructions, runtime, sandbox, cwd, model, showThinking, rootDirs, builtin, createdAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     row.id, row.name, row.role, row.instructions, row.runtime, row.sandbox, row.cwd, row.model,
-    row.showThinking, row.rootDirs, row.createdAt,
+    row.showThinking, row.rootDirs, row.builtin, row.createdAt,
   );
   return row;
 }
@@ -880,6 +1027,16 @@ export function groupsWhereAssistant(personaId) {
 }
 
 /**
+ * 把某个员工钉成「内置」（不可删）。
+ *
+ * 只有 seed 用（`secretary.mjs`），**没有对应的 HTTP 接口** —— 内置与否是出厂属性，
+ * 不是用户在界面上能拨的开关。
+ */
+export function markPersonaBuiltin(id) {
+  return db.prepare('UPDATE personas SET builtin = 1 WHERE id = ?').run(id).changes;
+}
+
+/**
  * 删员工：**连带清掉他的关系数据**。
  *
  * 为什么要级联：`listMembers` 是 INNER JOIN personas，关系表里留悬空行不会报错，
@@ -889,6 +1046,16 @@ export function groupsWhereAssistant(personaId) {
  * 「已移除的会话」里找回来。留成"（员工已删）"的死条目反而更差：点进去发不了消息。
  */
 export function deletePersona(id) {
+  /*
+   * **内置员工不删**（2026-10-18）。判据在 store 这一层，不在路由 ——
+   * 接口谁都能直接调，前端把按钮藏起来只是提示，不作数。
+   * 允许改名、允许改指令、允许改权限，唯独不许丢：她是这台机器上唯一"出厂就在"的人。
+   */
+  const target = db.prepare('SELECT name, builtin FROM personas WHERE id = ?').get(id);
+  if (target?.builtin) {
+    throw new Error(`「${target.name}」是内置员工，不能删（可以改名或改她的指令）`);
+  }
+
   // 注意：node:sqlite 的 DatabaseSync **没有** better-sqlite3 那个 db.transaction() 助手，
   // 只能自己 BEGIN/COMMIT。级联删除要么全成、要么全不动，不能删一半。
   db.exec('BEGIN');
@@ -982,7 +1149,8 @@ export function getConversation(id) {
       .prepare(
         `SELECT c.*, p.name AS personaName, p.instructions AS personaInstructions,
                 p.runtime AS runtime, p.sandbox AS personaSandbox, p.cwd AS personaCwd,
-                p.model AS personaModel, p.showThinking AS showThinking, p.rootDirs AS personaRootDirs
+                p.model AS personaModel, p.showThinking AS showThinking, p.rootDirs AS personaRootDirs,
+                p.builtin AS personaBuiltin
            FROM conversations c LEFT JOIN personas p ON p.id = c.personaId
           WHERE c.id = ?`,
       )
@@ -1070,7 +1238,8 @@ export function removeMember(threadId, personaId) {
 export function listMembers(threadId) {
   return db
     .prepare(
-      `SELECT tm.personaId, tm.joinedAt, p.name, p.runtime, p.sandbox, p.cwd, p.model, p.instructions, p.rootDirs
+      `SELECT tm.personaId, tm.joinedAt, p.name, p.runtime, p.sandbox, p.cwd, p.model, p.instructions, p.rootDirs,
+              p.builtin
          FROM thread_members tm JOIN personas p ON p.id = tm.personaId
         WHERE tm.threadId = ? ORDER BY tm.joinedAt, p.name`,
     )
@@ -1118,8 +1287,23 @@ export function renameConversation(id, title) {
 
 /* --------------------------------------------------------------- messages */
 
-export function listMessages(conversationId) {
-  return db
+/**
+ * 按 rowid 找一条消息。
+ *
+ * 用在哪：运行结束时写他的回话，要把回话挂到**触发他的那条评论所在的议题**下。
+ * 运行记录里存的就是触发消息的 rowid（`run.watermark`），所以按它反查最省事 ——
+ * 不用给 runs 表加列，也不用猜"上一条 user 消息是哪条"。
+ */
+export function getMessageByRowid(conversationId, rowid) {
+  if (!rowid) return null;
+  return (
+    db
+      .prepare('SELECT * FROM messages WHERE conversationId = ? AND rowid = ?')
+      .get(conversationId, rowid) ?? null
+  );
+}
+
+export function listMessages(conversationId) {  return db
     .prepare(
       `SELECT m.*, p.name AS personaName
          FROM messages m LEFT JOIN personas p ON p.id = m.personaId
@@ -1143,10 +1327,10 @@ export function listMessagesSince(conversationId, afterRowid, excludeMessageId =
     .filter((m) => m.id !== excludeMessageId);
 }
 
-export function addMessage({ conversationId, runId = null, role, text, personaId = null, taskId = null }) {
-  const row = { id: newId('m'), conversationId, runId, role, text, personaId, taskId, createdAt: nowIso() };
+export function addMessage({ conversationId, runId = null, role, text, personaId = null, taskId = null, parentId = null, note = false }) {
+  const row = { id: newId('m'), conversationId, runId, role, text, personaId, taskId, parentId, note: note ? 1 : 0, createdAt: nowIso() };
   db.prepare(
-    'INSERT INTO messages (id, conversationId, runId, role, text, personaId, taskId, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    'INSERT INTO messages (id, conversationId, runId, role, text, personaId, taskId, parentId, note, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
   ).run(
     row.id,
     row.conversationId,
@@ -1155,6 +1339,8 @@ export function addMessage({ conversationId, runId = null, role, text, personaId
     row.text,
     row.personaId,
     row.taskId,
+    row.parentId,
+    row.note,
     row.createdAt,
   );
   // 说话就把它从"已从列表移除"里恢复 —— 否则会出现"我发了消息，列表里却没有"
@@ -1241,11 +1427,20 @@ export function getMemberSession(threadId, personaId, scope = '') {
   );
 }
 
-export function setMemberSession(threadId, personaId, sessionId, scope = '') {
+/**
+ * 写回某个成员在某个作用域里的 runtime 会话 id。
+ *
+ * `family` 记账这个 id 是**哪个运行时族**给的：换族之后这个 id 在对面那个 CLI 里
+ * 根本不存在（两家的会话存储互不相通），所以必须记下来（见 runs.mjs 的 resumeId）。
+ * 不传 family 时**保留原来的值** —— 别把已有记录降级成"不知道"。
+ */
+export function setMemberSession(threadId, personaId, sessionId, scope = '', family = '') {
   db.prepare(
-    `INSERT INTO member_sessions (threadId, personaId, scope, sessionId, lastSeenRowid) VALUES (?, ?, ?, ?, 0)
-     ON CONFLICT(threadId, personaId, scope) DO UPDATE SET sessionId = excluded.sessionId`,
-  ).run(threadId, personaId, scope, sessionId);
+    `INSERT INTO member_sessions (threadId, personaId, scope, sessionId, lastSeenRowid, family) VALUES (?, ?, ?, ?, 0, ?)
+     ON CONFLICT(threadId, personaId, scope) DO UPDATE SET
+       sessionId = excluded.sessionId,
+       family    = COALESCE(NULLIF(excluded.family, ''), member_sessions.family)`,
+  ).run(threadId, personaId, scope, sessionId, family ?? '');
 }
 
 export function setMemberWatermark(threadId, personaId, rowid, scope = '') {
@@ -1257,6 +1452,36 @@ export function setMemberWatermark(threadId, personaId, rowid, scope = '') {
 }
 
 /* ----------------------------------------------------------------- skills */
+
+/**
+ * 技能库换血时，把员工身上挂的老名字落到当前技能上（一次性、幂等）。
+ * 表里没有的名字原样留着 —— 那是人自己挂的，不替人改。
+ */
+const SKILL_REMAP = {
+  'bandi-pm': ['doc-coauthoring', 'brainstorming'],
+  'bandi-dev': ['test-driven-development', 'systematic-debugging', 'requesting-code-review', 'receiving-code-review'],
+  'bandi-qa': ['webapp-testing', 'verification-before-completion'],
+  'bandi-flow': [],
+  'bandi-ops': [],
+  'bandi-panel': [],
+  'bandi-repo': [],
+};
+
+export function remapPersonaSkills() {
+  let moved = 0;
+  for (const [from, to] of Object.entries(SKILL_REMAP)) {
+    const rows = db.prepare('SELECT personaId, enabled FROM persona_skills WHERE skillName = ?').all(from);
+    for (const r of rows) {
+      db.prepare('DELETE FROM persona_skills WHERE personaId = ? AND skillName = ?').run(r.personaId, from);
+      for (const name of to) {
+        db.prepare('INSERT OR IGNORE INTO persona_skills (personaId, skillName, addedAt, enabled) VALUES (?, ?, ?, ?)')
+          .run(r.personaId, name, nowIso(), r.enabled ?? 1);
+      }
+      moved += 1;
+    }
+  }
+  return moved;
+}
 
 /** 挂载关系（含启用状态）—— 界面要显示"分配了哪些、哪些暂停了" */
 export function listPersonaSkillLinks(personaId) {
@@ -1310,7 +1535,7 @@ export function forgetSkillEverywhere(skillName) {
 
 /* ------------------------------------------------------------------- runs */
 
-export function createRun({ conversationId, runtime, personaId = null, model = null, taskId = null }) {
+export function createRun({ conversationId, runtime, personaId = null, model = null, taskId = null, projectId = null }) {
   const row = {
     id: newId('r'),
     conversationId,
@@ -1319,6 +1544,8 @@ export function createRun({ conversationId, runtime, personaId = null, model = n
     model,
     // 是流程的一步就记下那一步（taskId = workflow_tasks.id）；手动聊天留空
     taskId,
+    // 这次在哪个项目里干活（项目互斥靠它判：同一目录同时只许一个 run）
+    projectId,
     status: '跑中',
     exitCode: null,
     error: null,
@@ -1327,8 +1554,8 @@ export function createRun({ conversationId, runtime, personaId = null, model = n
     endedAt: null,
   };
   db.prepare(
-    `INSERT INTO runs (id, conversationId, runtime, personaId, model, taskId, status, exitCode, error, usage, startedAt, endedAt)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO runs (id, conversationId, runtime, personaId, model, taskId, projectId, status, exitCode, error, usage, startedAt, endedAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     row.id,
     row.conversationId,
@@ -1336,6 +1563,7 @@ export function createRun({ conversationId, runtime, personaId = null, model = n
     row.personaId,
     row.model,
     row.taskId,
+    row.projectId,
     row.status,
     row.exitCode,
     row.error,
@@ -2159,7 +2387,7 @@ export function createWorkflowTask(row) {
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id, row.runId, row.nodeId, row.nodeName, row.visit ?? 1, row.detail ?? '',
-    row.assigneePersonaId ?? null, row.status ?? '待开始',
+    row.assigneePersonaId ?? null, row.status ?? '待办',
     row.decision ?? null, row.note ?? null, row.conversationId ?? null,
     row.agentRunId ?? null, row.startedAt ?? null, row.endedAt ?? null,
   );
@@ -2195,13 +2423,14 @@ export function updateWorkflowTask(id, fields) {
   for (const [k, v] of Object.entries(fields)) if (v !== undefined) next[k] = v;
   db.prepare(
     `UPDATE workflow_tasks
-        SET status = ?, decision = ?, note = ?, conversationId = ?, agentRunId = ?,
+        SET status = ?, decision = ?, note = ?, result = ?, conversationId = ?, agentRunId = ?,
             assigneePersonaId = ?, startedAt = ?, endedAt = ?
       WHERE id = ?`,
   ).run(
     next.status,
     next.decision,
     next.note,
+    next.result,
     next.conversationId,
     next.agentRunId,
     next.assigneePersonaId,
@@ -2233,7 +2462,7 @@ export function createWorkflowStep(row) {
     row.detail ?? '',
     row.assigneePersonaId ?? null,
     row.mode ?? 'confirm',
-    row.status ?? '待开始',
+    row.status ?? '待办',
     row.note ?? null,
     row.conversationId ?? null,
     row.agentRunId ?? null,
@@ -2333,6 +2562,143 @@ export function deleteGitRepo(id) {
   return db.prepare('DELETE FROM git_repos WHERE id = ?').run(id).changes > 0;
 }
 
+/*
+ * 一小块"任意 key/value"（复用迁移标记位那张 `meta` 表）。
+ *
+ * 目前只放一件跟代码托管有关的东西：**上次验到的 GitHub 账号**。
+ * 为什么值得落库：`api.github.com/user` 在国内常常几秒起步、偶尔干脆不回 ——
+ * 打开「代码托管」页面不该等它。先显示本地记住的名字，再在后台验一次；
+ * 程序重启之后这条也还在（不然每次启动第一次打开页面又是空白 + 等）。
+ */
+export function getMetaValue(key) {
+  const row = db.prepare('SELECT value FROM meta WHERE key = ?').get(key);
+  return row?.value ?? null;
+}
+
+export function setMetaValue(key, value) {
+  if (value === null || value === undefined) {
+    db.prepare('DELETE FROM meta WHERE key = ?').run(key);
+    return;
+  }
+  db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)').run(key, String(value));
+}
+
+/* ---------------------------------------------------------------- 定时任务（2026-10-17） */
+/*
+ * 「隔一段时间自动做一件事」是第一等需求（PR 巡检是第一个用户），所以**先有调度器、再有巡检**：
+ * 节拍（多久跑一次）、开关、上次结果都在这一张表里，动作本身在 `schedules.mjs` 的动作注册表里。
+ *
+ * 为什么存**间隔分钟**而不是 cron 表达式：Windows 上没有 cron，装一个 cron 解析器又违背零依赖；
+ * 「间隔」只是七种重复方式（间隔/单次/每天/每周/每双周/每月/每年，对齐 WorkBuddy 自己的定时任务）
+ * 里的一种，时间类的方式存「几点 / 星期几 / 几号 / 几月」，比 cron 表达式人一眼就懂。
+ *
+ * `config` 是 JSON（动作自己解释，比如 PR 巡检的仓库与落哪个项目）—— 调度核心不看它。
+ * `lastRunAt` 不只是给人看的：**下次什么时候该跑**由它算（重启后天然接上，不另存 nextRunAt）。
+ */
+db.exec(`
+  CREATE TABLE IF NOT EXISTS schedule_jobs (
+    id           TEXT PRIMARY KEY,
+    name         TEXT NOT NULL,
+    action       TEXT NOT NULL,
+    everyMinutes INTEGER NOT NULL,
+    enabled      INTEGER NOT NULL DEFAULT 1,
+    config       TEXT,
+    lastRunAt    TEXT,
+    lastStatus   TEXT,
+    lastError    TEXT,
+    lastSummary  TEXT,
+    createdAt    TEXT NOT NULL,
+    updatedAt    TEXT NOT NULL
+  );
+`);
+
+/* 2026-10-17 晚：加「重复方式」。老库一列列 ALTER（列可能已存在），旧行全部归成 interval
+ * —— everyMinutes 还在、语义不变，迁移完老任务照常按间隔跑。 */
+for (const ddl of [
+  "ALTER TABLE schedule_jobs ADD COLUMN repeat TEXT",
+  "ALTER TABLE schedule_jobs ADD COLUMN atTime TEXT",
+  "ALTER TABLE schedule_jobs ADD COLUMN weekday INTEGER",
+  "ALTER TABLE schedule_jobs ADD COLUMN dayOfMonth INTEGER",
+  "ALTER TABLE schedule_jobs ADD COLUMN month INTEGER",
+  "ALTER TABLE schedule_jobs ADD COLUMN runAt TEXT",
+]) {
+  try {
+    db.exec(ddl);
+  } catch {
+    /* 已有这列（重复启动），跳过 */
+  }
+}
+db.prepare("UPDATE schedule_jobs SET repeat = 'interval' WHERE repeat IS NULL").run();
+
+export function listSchedules() {
+  return db.prepare('SELECT * FROM schedule_jobs ORDER BY createdAt ASC').all();
+}
+
+export function getSchedule(id) {
+  return db.prepare('SELECT * FROM schedule_jobs WHERE id = ?').get(id) ?? null;
+}
+
+export function createSchedule({ name, action, everyMinutes, repeat = 'interval', atTime = null, weekday = null, dayOfMonth = null, month = null, runAt = null, enabled = 1, config = null }) {
+  const ts = nowIso();
+  const row = {
+    id: newId('sj'),
+    name,
+    action,
+    // 时间类的重复方式不用间隔字段，但列是 NOT NULL —— 填个无害的 30
+    everyMinutes: Number.isFinite(Number(everyMinutes)) ? Math.round(Number(everyMinutes)) : 30,
+    repeat,
+    atTime,
+    weekday,
+    dayOfMonth,
+    month,
+    runAt,
+    enabled: enabled ? 1 : 0,
+    config: config ? JSON.stringify(config) : null,
+    createdAt: ts,
+    updatedAt: ts,
+  };
+  db.prepare(
+    `INSERT INTO schedule_jobs (id, name, action, everyMinutes, repeat, atTime, weekday, dayOfMonth, month, runAt, enabled, config, lastRunAt, lastStatus, lastError, lastSummary, createdAt, updatedAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?)`,
+  ).run(row.id, row.name, row.action, row.everyMinutes, row.repeat, row.atTime, row.weekday, row.dayOfMonth, row.month, row.runAt, row.enabled, row.config, row.createdAt, row.updatedAt);
+  return getSchedule(row.id);
+}
+
+/** 只覆盖传进来的字段（undefined 不覆盖）。config 传 null = 清空。 */
+export function updateSchedule(id, fields = {}) {
+  const cur = getSchedule(id);
+  if (!cur) return null;
+  const next = { ...cur };
+  for (const [k, v] of Object.entries(fields)) {
+    if (v === undefined) continue;
+    next[k] = k === 'config' ? (v ? JSON.stringify(v) : null) : v;
+  }
+  db.prepare(
+    `UPDATE schedule_jobs SET name = ?, action = ?, everyMinutes = ?, repeat = ?, atTime = ?, weekday = ?, dayOfMonth = ?, month = ?, runAt = ?, enabled = ?, config = ?, updatedAt = ? WHERE id = ?`,
+  ).run(next.name, next.action, next.everyMinutes, next.repeat ?? 'interval', next.atTime ?? null, next.weekday ?? null, next.dayOfMonth ?? null, next.month ?? null, next.runAt ?? null, next.enabled ? 1 : 0, next.config ?? null, nowIso(), id);
+  return getSchedule(id);
+}
+
+export function deleteSchedule(id) {
+  return db.prepare('DELETE FROM schedule_jobs WHERE id = ?').run(id).changes > 0;
+}
+
+/**
+ * 记一次执行结果。**成功也写 `lastRunAt`** —— 它是"下次该不该跑"的唯一依据，
+ * 只记失败的话，一个一直失败的任务会永远到点（每 tick 都重试、把日志刷满）。
+ */
+export function touchScheduleRun(id, { status, error = null, summary = null, at = null }) {
+  db.prepare('UPDATE schedule_jobs SET lastRunAt = ?, lastStatus = ?, lastError = ?, lastSummary = ?, updatedAt = ? WHERE id = ?').run(
+    at ?? nowIso(),
+    status,
+    error,
+    summary,
+    nowIso(),
+    id,
+  );
+  return getSchedule(id);
+}
+
 /* ---------------------------------------------------------------- PR 联动（2026-10-17） */
 /*
  * 一张卡可以关联一个 GitHub PR。状态由**平台去 GitHub 查**后存这儿（看板/详情页直接读，
@@ -2348,3 +2714,20 @@ ensureColumn('project_tasks', 'prCheckedAt', 'prCheckedAt TEXT');
 export function listProjectTasksWithPr() {
   return db.prepare('SELECT * FROM project_tasks WHERE prRepo IS NOT NULL AND prNumber IS NOT NULL').all();
 }
+
+/* ---------------------------------------------------------------- 备份（2026-10-17） */
+/**
+ * 把当前库**一致地**导出一份到 `file`。
+ *
+ * 为什么用 `VACUUM INTO` 而不是复制文件：库开着 WAL，直接拷 `bandi.db` 会漏掉还在 `-wal` 里
+ * 没落盘的事务，拷出来的是一份"旧库"。`VACUUM INTO` 由 SQLite 自己保证快照一致，
+ * 而且顺带压实（备份文件通常比原库小）。
+ * 目标文件必须不存在 —— 调用方用时间戳命名，重复了就让 SQLite 报错，别覆盖旧备份。
+ */
+export function backupTo(file) {
+  db.exec(`VACUUM INTO '${String(file).replace(/'/g, "''")}'`);
+  return file;
+}
+
+/** 模块加载时跑一次：老技能名落到当前技能上（幂等，表里没有就什么都不做） */
+remapPersonaSkills();

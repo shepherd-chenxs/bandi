@@ -71,6 +71,35 @@ store.updateProjectTask(a.id, { prRepo: null, prNumber: null, prState: null, prT
 const a3 = store.getProjectTask(a.id);
 check('四个字段全空', !a3.prRepo && !a3.prNumber && !a3.prState && !a3.prTitle && !a3.prCheckedAt, JSON.stringify({ r: a3.prRepo, n: a3.prNumber, s: a3.prState }));
 
+/*
+ * ⑤ 巡检报上来的 PR 形状 → 卡片的五个字段（2026-10-17）。
+ * 这是「仓库值班的 PR 卡也有标签」那一半的**唯一一道转换**：转错了，卡上就是「PR null」。
+ */
+console.log('\n⑤ 巡检报的 PR（html_url / state / merged_at）→ 卡片的五个字段');
+const g1 = git.prFieldsOf({ url: 'https://github.com/smoke/demo/pull/42', title: '改了点东西', state: 'merged' });
+check('url → repo + number', g1?.prRepo === 'smoke/demo' && g1?.prNumber === 42, JSON.stringify({ r: g1?.prRepo, n: g1?.prNumber }));
+check('state 原样（merged）', g1?.prState === 'merged');
+check('title 带上，且盖了查询时间', g1?.prTitle === '改了点东西' && !!g1?.prCheckedAt);
+check('不认识的 state → 归一成 open', git.prFieldsOf({ url: 'https://github.com/a/b/pull/1', state: 'whatever' })?.prState === 'open');
+check('没 title → null（别留空串，界面上会画出空白标签）', git.prFieldsOf({ url: 'https://github.com/a/b/pull/1' })?.prTitle === null);
+// 解析不出就整个不要：宁可这张卡没有 PR 字段，也不要写半截进库
+check('没带 url → null', git.prFieldsOf({ title: 'x' }) === null);
+check('不是 github 的 PR 链接 → null', git.prFieldsOf({ url: 'https://gitlab.com/a/b/merge_requests/1' }) === null);
+check('不带 pr 整个入参 → null', git.prFieldsOf(undefined) === null);
+const g2 = git.prFieldsOf({ url: 'https://github.com/smoke/demo/pull/43/files', title: 't', state: 'open' });
+check('带 /files 尾巴也认', g2?.prNumber === 43 && g2?.prState === 'open', JSON.stringify(g2?.prNumber));
+
+console.log('\n⑥ 值班卡（source=repo）落库后：进得了「刷新 PR」的批量清单、看板行上带得出 pr');
+const repoCard = store.createProjectTask({ projectId: project.id, title: 'PR #42 待审：x', status: '待办', source: 'repo', externalKey: 'pr:42' });
+store.updateProjectTask(repoCard.id, g1);
+const rc = store.getProjectTask(repoCard.id);
+check('值班卡带上了 PR 字段', rc.prNumber === 42 && rc.prState === 'merged', `${rc.prRepo}#${rc.prNumber} ${rc.prState}`);
+check('批量清单收得到值班卡（=「刷新 PR」能刷到它）', store.listProjectTasksWithPr().some((t) => t.id === repoCard.id));
+const board = pt.projectTasks(project);
+const boardRow = (board?.columns ?? []).flatMap((c) => c.cards ?? []).find((r) => r.source === 'repo' && r.pr);
+check('看板行里带 pr（卡片标签吃这个字段）', !!boardRow && boardRow.pr.number === 42, JSON.stringify(boardRow?.pr));
+check('合并了，但卡在「待办」→ afterMerged 也不动（人还没看）', pt.afterMerged(store.getProjectTask(repoCard.id)).status === '待办');
+
 try {
   fs.rmSync(tmp, { recursive: true, force: true });
 } catch {

@@ -2,7 +2,26 @@ import * as store from './store.mjs';
 import * as runtimes from './runtimes.mjs';
 import * as cliModels from './cli-models.mjs';
 import * as connectors from './connectors.mjs';
+import { normalizeSandbox } from './sandbox.mjs';
 import { ADAPTERS } from './adapters.mjs';
+
+/**
+ * 「这条会话在对面那个 CLI 里不存在」的报错特征。
+ *
+ * 各家的说法不一样（都来自 CLI 自己，不由班底杜撰）：
+ *   · Codex ：`thread/resume failed: no rollout found for thread id <id>`（code -32600）
+ *   · Claude：`No conversation found with session ID: <id>`
+ * 命中它就说明：**这个 sessionId 是别的运行时给的，或者那边的会话文件没了**——
+ * 这种情况只能新开一条会话，硬 resume 永远失败。
+ */
+const SESSION_GONE =
+  /no rollout found for thread id|no conversation found with session id|session[^.]{0,40}not found|会话[^。]{0,20}(不存在|找不到)/i;
+
+/** 从适配器的返回值里抽出"错在哪儿"的那段文字（各家字段名不一样，挨个试） */
+const errorTextOf = (res) =>
+  String(
+    res?.error?.message ?? res?.error ?? res?.stderr ?? res?.turnReason?.error?.message ?? res?.text ?? '',
+  );
 
 const runs = new Map();
 const MAX_KEPT_RUNS = 50;
@@ -90,7 +109,7 @@ export function subscribe(runId, res, sinceSeq = 0) {
  * @param task       交给 runtime 的任务文本
  * @param watermark  本次运行"读到"的最后一条消息 rowid，跑完写回水位线
  */
-export function startRun({ thread, member, task, watermark = 0, workflowTaskId = null, sessionScope = '' }) {
+export function startRun({ thread, member, task, watermark = 0, workflowTaskId = null, sessionScope = '', projectId = null }) {
   const runtime = member.runtime ?? 'codex';
   const personaId = member.personaId;
 
@@ -118,12 +137,15 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
     model: eff.id,
     // 是流程的一步就记下那一步（下面 reply 消息也要带同一个标记）
     taskId: workflowTaskId,
+    // 在哪个项目里干活 —— 项目互斥（同一目录同时只跑一个）按它判
+    projectId,
   });
 
   const run = {
     id: row.id,
     conversationId: thread.id,
     personaId,
+    projectId,
     runtime,
     // 这次跑的是哪个模型（界面/额度要显示它），以及"从哪来的"（员工绑的 / CLI 默认）
     model: eff.id,
@@ -204,6 +226,26 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
   const prev = store.getMemberSession(thread.id, personaId, sessionScope);
   const startedAt = Date.now();
 
+  /*
+   * **跨运行时不能续会话**（2026-10-17 实报）。
+   *
+   * sessionId 是各 CLI 自己发、自己存的：Codex 记在 `~/.codex/sessions/<日期>/rollout-*.jsonl`，
+   * Claude 记在 `~/.claude/projects/…` —— 两家互不相通。员工把运行时从 Claude 换成 Codex，
+   * 上一轮那个 id 一并带过去，Codex 就会说「no rollout found for thread id …」，
+   * 然后这一整轮直接失败（用户看到的就是这句）。
+   *
+   * 所以：**记了族、且族不同 → 不 resume**，这轮新开一条，并在回话前面说明一句
+   * （记忆带不过来是事实，说清楚比默默丢掉上下文强）。
+   * 老库里没记族（family=''）的行仍按老行为先试，真接不上时下面会自动降级重跑。
+   */
+  const prevFamily = String(prev?.family ?? '');
+  const familyCrossed = !!prev?.sessionId && !!prevFamily && prevFamily !== rt.family;
+  const resumeId = familyCrossed ? null : (prev?.sessionId ?? null);
+  let memoryNote = familyCrossed
+    ? `（这个会话上一轮跑在「${runtimes.familyLabel(prevFamily)}」上，会话记忆存在那个 CLI 里，` +
+      `「${rt.label}」接不上 —— 这轮从新会话开始，之前的上下文带不过来。）\n\n`
+    : '';
+
   // ⚠️ **必须真的能停**：以前 run 对象上根本没有 abortController，
   //    而界面（和"终止流程"）都在调 `run.abortController?.abort()` ——
   //    于是点了"停止生成"只是改了数据库，**子进程还在跑**（状态说停了、实际没停）。
@@ -212,14 +254,23 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
   run.abortController = ctl;
   run.stoppedByUser = false;
 
-  let pending;
-  try {
-    pending = adapter({
+  /**
+   * 起一次。`sid` 非空时把 `error` 事件**先扣住** ——
+   * 万一只是"这条会话在对面那个 CLI 里不存在"，我们马上会重开一条重跑，
+   * 那个必然失败的报错不该先闪到人眼前（其它事件照常实时推，不耽误看进度）。
+   *
+   * 返回值里 `held` 是扣住的那几个；确认不是会话丢失时再按原顺序补发。
+   */
+  const runOnce = (sid) => {
+    const held = [];
+    const p = adapter({
       task,
-      sessionId: prev?.sessionId ?? null,
+      sessionId: sid,
       cwd: member.cwd || undefined,
       roots: member.roots ?? [],
-      sandbox: member.sandbox ?? 'danger-full-access',
+      // 权限模式按**当前运行时族**换算：这个值挂在员工身上，可能是上一个运行时留下的词
+      // （Claude 的 bypassPermissions 喂给 Codex 会让它读配置就报错退出）。
+      sandbox: normalizeSandbox(rt.family, member.sandbox) ?? 'danger-full-access',
       // 模型传**解析出来的那个**（不只是员工绑的）：账上记的、传给 CLI 的必须是同一个，
       // 否则按模型限额会盯错人（员工没绑时，实际用的是 CLI 默认值）
       model: eff.id,
@@ -228,8 +279,20 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
       cliPath: rt.path,
       connectorArgs: wiring.args,
       signal: ctl.signal,
-      onEvent: (evt) => pushEvent(run, evt),
+      onEvent: (evt) => {
+        if (sid && evt.type === 'error') {
+          held.push(evt);
+          return;
+        }
+        pushEvent(run, evt);
+      },
     });
+    return { p, held };
+  };
+
+  let first;
+  try {
+    first = runOnce(resumeId);
   } catch (err) {
     /*
      * ⚠️ 适配器会**同步**抛：`launchCommand()` 在返回 promise 之前就跑
@@ -241,19 +304,54 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
     return run;
   }
 
-  pending
+  /** 续不上就重开一条：同一轮任务在**新会话**里重跑一次，成功即照常收尾 */
+  const retryFresh = async () => {
+    memoryNote ||=
+      `（上一轮的会话在「${rt.label}」里找不到（CLI 那边没有这条会话的记录），` +
+      `已自动开一条新会话重跑这一轮，之前的上下文带不过来。）\n\n`;
+    try {
+      return await runOnce(null).p;
+    } catch (err) {
+      return { isError: true, error: `重开会话也起不来：${err?.message ?? err}`, exitCode: null };
+    }
+  };
+
+  first.p
+    .then(async (res) => {
+      // 续接失败且原因是"这条会话不在"→ 自动新开一条重跑；其它错照原样往上走。
+      // `run.seq === 0`：**这一轮还什么都没推出去**才敢重跑 —— 已经出过话再重跑，
+      // 用户会看到同一件事被说两遍（会话找不到是启动即失败，正常情况下 seq 就是 0）。
+      if (resumeId && run.seq === 0 && !ctl.signal.aborted && SESSION_GONE.test(errorTextOf(res))) {
+        return retryFresh();
+      }
+      // 不是会话丢失：把扣住的 error 事件按原顺序补发，画面与以前完全一致
+      for (const evt of first.held) pushEvent(run, evt);
+      return res;
+    })
     .then((res) => {
       run.sessionId = res.sessionId;
       // 各家适配器字段名不完全一样（codex/dsh 给 finalText，claude 给 text），这里归一
-      run.finalText = res.finalText ?? res.text ?? '';
+      const text = res.finalText ?? res.text ?? '';
+      // 跨运行时（或自动重开）时，先说一句"上下文带不过来"，再接他的回话
+      run.finalText = text ? memoryNote + text : text;
       run.exitCode = res.exitCode;
 
       // sessionId 写回**本作用域**那一行；水位线仍写主行（'' ）——
       // 它记的是"在这个会话里读到哪儿"，与 runtime 会话作用域无关。
-      if (res.sessionId) store.setMemberSession(thread.id, personaId, res.sessionId, sessionScope);
+      // 同时记下**是哪个族给的**这个 id：换运行时后不能拿它去 resume（见上面 familyCrossed）。
+      if (res.sessionId) store.setMemberSession(thread.id, personaId, res.sessionId, sessionScope, rt.family);
       if (watermark) store.setMemberWatermark(thread.id, personaId, watermark);
 
       if (run.finalText) {
+        /*
+         * 评论区（2026-10-18）：回话挂在**触发他的那条评论所在的议题**下。
+         * 触发消息的 rowid 就是 run.watermark，按它反查最稳 ——
+         * 别拿"最后一条 user 消息"猜，连着回复两个议题时会挂错。
+         *
+         * 顶层评论（parentId 为空）的回复挂到**这条评论自己**：只靠"时序"归组的话，
+         * 过几天回到旧议题补一句、中间又插了新议题时，回复会认到错的议题下。
+         */
+        const trigger = store.getMessageByRowid(thread.id, watermark);
         store.addMessage({
           conversationId: thread.id,
           runId: run.id,
@@ -263,6 +361,7 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
           // ⚠️ 回复也要带上这一步的标记：不带的话，流程面板按 taskId 筛时
           //    就只剩"我"这侧的消息，他的回话整段看不见（用户实报）
           taskId: run.workflowTaskId ?? null,
+          parentId: trigger?.parentId ?? trigger?.id ?? null,
         });
       }
 
@@ -319,16 +418,19 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
  */
 function queueRemoteRun(run, { thread, rt, task, member }) {
   const ms = store.getMemberSession(thread.id, run.personaId, run.sessionScope);
+  // 同上：那个 sessionId 是**记录里那个族**的，由别的族来 resume 必然找不到
+  const remoteSession = ms?.sessionId && (!ms.family || ms.family === rt.family) ? ms.sessionId : null;
   const job = store.enqueueNodeJob({
     runId: run.id,
     nodeId: rt.deviceId,
     family: rt.family,
     model: run.model,
-    sandbox: member.sandbox ?? null,
+    // 权限模式同样要换成那台机器上那个 CLI 认得的写法
+    sandbox: normalizeSandbox(rt.family, member.sandbox),
     cwd: member.cwd ?? null,
     task,
     // 续接用：**那台机器上**那个 CLI 的会话 id（空 = 让它在那边新开一条）
-    sessionId: ms?.sessionId ?? null,
+    sessionId: remoteSession,
   });
   run.remote = true;
   run.nodeId = rt.deviceId;
@@ -368,7 +470,14 @@ export function finishRemote(
   if (run.finished) return true;
   if (sessionId) {
     run.sessionId = sessionId;
-    store.setMemberSession(run.conversationId, run.personaId, sessionId, run.sessionScope);
+    // 远端那条路也要记族：这个 id 是**那台机器上那个 CLI**给的，换运行时后同样不能硬 resume
+    let fam = '';
+    try {
+      fam = runtimes.resolveForRun(run.runtime)?.family ?? '';
+    } catch {
+      /* 查不到就记空 —— 只是少一层保护，不影响这次收尾 */
+    }
+    store.setMemberSession(run.conversationId, run.personaId, sessionId, run.sessionScope, fam);
   }
   if (finalText) {
     run.finalText = finalText;

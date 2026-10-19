@@ -25,6 +25,7 @@ import { spawn } from 'node:child_process';
 import { dataDir } from './config.mjs';
 import * as runtimes from './runtimes.mjs';
 import * as externals from './externals.mjs';
+import { normalizeSandbox } from './sandbox.mjs';
 import { adapterFor } from './adapters.mjs';
 
 const STATE = process.env.BANDI_NODE_STATE ?? path.join(dataDir, 'node.json');
@@ -294,7 +295,7 @@ async function runJob(job) {
       task: job.task,
       sessionId: job.sessionId,
       cwd,
-      sandbox: job.sandbox ?? 'danger-full-access',
+      sandbox: normalizeSandbox(job.family, job.sandbox) ?? 'danger-full-access',
       model: job.model,
       cliPath,
       // 连接器（MCP 之类）是**控制面那台机器上的配置**：远端不注入，

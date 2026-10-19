@@ -38,10 +38,24 @@ export function readToken() {
   }
 }
 
-/** 给界面看的一小截（**绝不回显完整令牌**） */
+/**
+ * 给界面看的一小截（**绝不回显完整令牌**）：头 2 位 + 6 个星号 + 尾 4 位。
+ *
+ * 为什么是这个形状（2026-10-17）：原来只有尾 4 位 —— 认不出是哪一个。
+ * 一个 GitHub 账号下往往建了好几个 fine-grained PAT（不同仓库、不同权限），
+ * 90 天到期要换的时候，**"当前挂着的是哪一个"才是真正要回答的问题**，
+ * 尾 4 位区分不开。头 2 位 + 尾 4 位足够认出来，中间那 6 个星号是明说的"这里还有，但不给你看"。
+ *
+ * 星号**固定 6 个**（不按令牌真实长度变）：长度本身是信息 —— 变长变短等于在
+ * "报出令牌有多长"，而且每次换令牌界面都会抖一下。
+ *
+ * 短到头尾就快露完的那种（< 10 位）一个字都不给 —— 那已经不是"掩码"，等于把令牌摊开。
+ */
 export function tokenHint() {
   const t = readToken();
-  return t ? `…${t.slice(-4)}` : null;
+  if (!t) return null;
+  if (t.length < 10) return '******';
+  return `${t.slice(0, 2)}******${t.slice(-4)}`;
 }
 
 export function saveToken(token) {
@@ -54,6 +68,8 @@ export function saveToken(token) {
   } catch {
     /* 改不了权限就算了 */
   }
+  // 换了令牌，之前记下的那个账号就不再可信了（调用方验完身份会重新记一次）
+  forgetLogin();
 }
 
 export function clearToken() {
@@ -62,24 +78,114 @@ export function clearToken() {
   } catch {
     /* 删不掉也当没有 */
   }
+  forgetLogin();
+}
+
+/* ---------------------------------------------------------------- 身份缓存 */
+
+/**
+ * 「当前挂着的是哪个 GitHub 账号」—— **记一份**，别每次打开页面都去问 GitHub。
+ *
+ * 用户实报（2026-10-17）：「代码托管这个页面显示有延迟，估计是连 github 的原因」。
+ * 根因就是状态接口每被看一次就同步查一次 `/user`，而国内访问 api.github.com 常常
+ * 几秒起步。所以分两件事：
+ *   · 页面先用**本地**状态画出来（令牌文件 + 库里的仓库清单 + 这里记的账号）；
+ *   · 身份校验在**画完之后**由界面在后台问（`/api/git/whoami`），拿到了只补一小段文本。
+ *
+ * 为什么落库（`meta.github_login`）而不是只放内存：程序重启后第一次打开页面
+ * 也不该空白一下再跳。库里的值只用于**显示**，不做任何鉴权 —— 真假由后台那次校验负责。
+ */
+const LOGIN_KEY = 'github_login';
+const LOGIN_TTL_MS = 10 * 60 * 1000;
+let loginCache; // undefined = 还没从库里读；null = 库里也没有
+
+function readLoginCache() {
+  if (loginCache !== undefined) return loginCache;
+  try {
+    const j = store.getMetaValue(LOGIN_KEY) ? JSON.parse(store.getMetaValue(LOGIN_KEY)) : null;
+    loginCache = j?.login ? { login: String(j.login), at: Number(j.at) || 0 } : null;
+  } catch {
+    loginCache = null;
+  }
+  return loginCache;
+}
+
+export function rememberLogin(login) {
+  if (!login) return;
+  loginCache = { login: String(login), at: Date.now() };
+  try {
+    store.setMetaValue(LOGIN_KEY, JSON.stringify(loginCache));
+  } catch {
+    /* 写不进去就只在内存里记着 */
+  }
+}
+
+export function forgetLogin() {
+  loginCache = null;
+  try {
+    store.setMetaValue(LOGIN_KEY, null);
+  } catch {
+    /* 同上 */
+  }
+}
+
+/** 界面首屏能立刻显示的那个名字（没有就是 null，**不代表没连**） */
+export function cachedLogin() {
+  return readLoginCache()?.login ?? null;
+}
+
+/**
+ * 验一次身份。
+ *
+ * `fresh = false`（默认）：10 分钟内验过就直接用记下的 —— 页面后台那次调用
+ * 基本不联网、立即返回，不会因为网络慢又拖住什么。
+ * `fresh = true`：一定去问 GitHub（刚连上、或用户手动刷新时）。
+ */
+export async function whoami({ fresh = false, timeoutMs } = {}) {
+  const hit = readLoginCache();
+  if (!fresh && hit && Date.now() - hit.at < LOGIN_TTL_MS) return { login: hit.login, cached: true };
+  const me = await ghFetch('/user', timeoutMs ? { timeoutMs } : {});
+  rememberLogin(me.login);
+  return { login: me.login, name: me.name ?? null, avatar: me.avatar_url ?? null, cached: false };
 }
 
 /* ---------------------------------------------------------------- GitHub API */
 
-const ghFetch = async (pathname, { token, method = 'GET', body } = {}) => {
+/**
+ * 每个 GitHub 请求的上限。
+ *
+ * `fetch` **默认没有超时** —— 一个卡住的请求会把界面一直悬在"取状态…"上（这正是用户
+ * 看到的那段延迟）。有了上限，最坏情况是"明确地说没通"，而不是"永远在转"。
+ * 8 秒是给克隆之外的管理类调用定的；克隆/拉取走 git 子进程，另有自己的超时。
+ */
+const GH_TIMEOUT_MS = Number(process.env.BANDI_GH_TIMEOUT_MS ?? 8000);
+
+const ghFetch = async (pathname, { token, method = 'GET', body, timeoutMs = GH_TIMEOUT_MS } = {}) => {
   const t = token ?? readToken();
   if (!t) throw new Error('还没连接 GitHub（先去「设置 → 代码托管」填一个 fine-grained PAT）');
-  const r = await fetch(`https://api.github.com${pathname}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${t}`,
-      Accept: 'application/vnd.github+json',
-      'User-Agent': 'bandi',
-      ...(body ? { 'Content-Type': 'application/json' } : {}),
-    },
-    ...(body ? { body: JSON.stringify(body) } : {}),
-  });
-  const text = await r.text();
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  let r;
+  let text;
+  try {
+    r = await fetch(`https://api.github.com${pathname}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${t}`,
+        Accept: 'application/vnd.github+json',
+        'User-Agent': 'bandi',
+        ...(body ? { 'Content-Type': 'application/json' } : {}),
+      },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+      signal: ac.signal,
+    });
+    text = await r.text();
+  } catch (e) {
+    if (e?.name === 'AbortError') throw new Error(`GitHub 没在 ${Math.round(timeoutMs / 1000)} 秒内回应（网络或代理的问题）`);
+    throw new Error(`连不上 GitHub：${e?.message ?? e}`);
+  } finally {
+    clearTimeout(timer);
+  }
   let data = null;
   try {
     data = JSON.parse(text);
@@ -321,6 +427,60 @@ export function parsePrRef(input) {
   m = /^([\w.-]+\/[\w.-]+)#(\d+)$/.exec(s);
   if (m) return { repo: m[1], number: Number(m[2]) };
   return null;
+}
+
+/**
+ * 把「巡检报上来的 PR 信息」归一成卡片上的那五个字段（2026-10-17）。
+ *
+ * 巡检脚本（`tools/repo-scan.mjs`）手里是 GitHub 的原始形状（`html_url` / `state` / `merged_at`），
+ * 卡片要的是另一套。解析不出来的**返回 null** —— 让调用方按"这次没带 PR"处理，
+ * 绝不写半截字段进库：少一个 `prNumber`，界面就会画出「PR null」这种没名字的标签。
+ */
+export function prFieldsOf(pr) {
+  const ref = parsePrRef(pr?.url ?? pr?.ref ?? '');
+  if (!ref) return null;
+  const state = ['open', 'merged', 'closed'].includes(pr?.state) ? pr.state : 'open';
+  const title = String(pr?.title ?? '').trim();
+  return {
+    prRepo: ref.repo,
+    prNumber: ref.number,
+    prState: state,
+    prTitle: title || null,
+    prCheckedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * 列出一个仓库**开着的** PR（走平台令牌，私有仓库也能列）。
+ *
+ * 给「PR 巡检」定时任务用（2026-10-17）。和 `fetchPull` 的分工：
+ *   · 这里是**清单**（列表接口，一次 30 条，不逐条查详情 —— 那是 30 次请求）；
+ *   · 单条状态（尤其 merged）只有 `fetchPull` 知道：列表里关掉/合掉的 PR 根本不会出现。
+ * 所以巡检是"列表发现新的 + 按卡上记的再查一遍旧的"，两件事都得有。
+ */
+export async function listOpenPulls(repo) {
+  const list = await ghFetch(`/repos/${repo}/pulls?state=open&per_page=30&sort=updated&direction=desc`);
+  return (Array.isArray(list) ? list : []).map((p) => ({
+    number: Number(p.number),
+    title: String(p.title ?? ''),
+    url: p.html_url ?? `https://github.com/${repo}/pull/${p.number}`,
+    author: p.user?.login ?? '',
+    draft: !!p.draft,
+  }));
+}
+
+/** 列出开着的 issue（剔除 PR —— GitHub 的 issues 接口把 PR 也当 issue 返回） */
+export async function listOpenIssues(repo) {
+  const list = await ghFetch(`/repos/${repo}/issues?state=open&per_page=30&sort=updated&direction=desc`);
+  return (Array.isArray(list) ? list : [])
+    .filter((x) => !x.pull_request)
+    .map((x) => ({
+      number: Number(x.number),
+      title: String(x.title ?? ''),
+      url: x.html_url ?? '',
+      author: x.user?.login ?? '',
+      labels: (x.labels ?? []).map((l) => (typeof l === 'string' ? l : l.name)).filter(Boolean),
+    }));
 }
 
 /** 查一个 PR 的当前状态（走平台令牌）；state 归一成 open / merged / closed */
