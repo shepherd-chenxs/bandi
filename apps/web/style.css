@@ -402,8 +402,10 @@ main { min-height: 0; }
 .wb-ico { width: 56px; height: 56px; border-radius: 16px; display: flex;
           align-items: center; justify-content: center; color: var(--on-solid);
           font-size: 23px; font-weight: 600; flex: 0 0 auto;
-          /* 一档极淡的高光，让色块有"实体"感而不是一块平涂 */
-          box-shadow: inset 0 1px 0 color-mix(in srgb, #ffffff 16%, transparent);
+          /* 一档极淡的高光，让色块有"实体"感而不是一块平涂。
+             用 --on-solid（就是白色）而不是写死 #fff：这样"色块上的白"只有一个来源，
+             哪天 --on-solid 换了（比如改成暖白），图标高光会跟着一起改，不会脱节。 */
+          box-shadow: inset 0 1px 0 color-mix(in srgb, var(--on-solid) 16%, transparent);
           background: linear-gradient(135deg, var(--logo-1), var(--logo-2)); }
 /* 插件磁贴：**按分组取色**（颜色由 app.js 的 wbIcoStyle 内联给出，见那里的注释）。
    兜底是品牌蓝 —— 万一哪天没带 --wb-1/--wb-2，磁贴也不会变成透明色块。 */
