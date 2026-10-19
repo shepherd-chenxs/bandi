@@ -1018,7 +1018,7 @@ function setNav(nav, opts = {}) {
   setListTitle(
     nav === 'messages' ? '消息'
     : nav === 'contacts' ? '通讯录'
-    : nav === 'workflows' ? '工作流'
+    : nav === 'workflows' ? '流程编排'
     : nav === 'plugins' ? '工作台'
     : '设置',
   );
@@ -3764,8 +3764,10 @@ async function openWorkflows(pickId = null) {
   // 从工作台进来时 S.nav 还是 plugins，不先切过来就会画出一片空白（踩过）。
   setNav('workflows', { skipOpen: true });
   document.body.classList.remove('no-list');
-  // 左栏顶上就是"你在哪儿"：工作台 › 工作流（面包屑从右页头挪过来，见 setListTitle）
-  setListTitle([{ label: '工作台', to: 'workbench' }, { label: '工作流' }]);
+  // 左栏顶上就是"你在哪儿"：工作台 › 流程编排（面包屑从右页头挪过来，见 setListTitle）
+  // 二级叫「流程编排」而不是「工作流」：这一页是编排模板的地方，跟工作台那颗
+  // 「流程编排」磁贴同名（2026-10-19 用户截图指出）。
+  setListTitle([{ label: '工作台', to: 'workbench' }, { label: '流程编排' }]);
   setRoute('workflows', pickId ? { template: pickId } : {});
   $('listAction').classList.remove('hidden');
   $('listAction').title = '新建流程模板';
@@ -3807,7 +3809,7 @@ function renderFlowList() {
 }
 
 function renderFlowEmpty() {
-  // 没有页头：左栏顶上已经是「工作台 › 工作流」，右页头再写一遍就是同一件事写两处
+  // 没有页头：左栏顶上已经是「工作台 › 流程编排」，右页头再写一遍就是同一件事写两处
   $('flowView').innerHTML = `
     <div class="detail-body"><div class="wip">还没有流程模板 —— 点左栏右上角的「＋」新建一个</div></div>`;
   S.view = 'flow';
@@ -6459,7 +6461,7 @@ async function doStartFlow() {
 
 /**
  * 左栏顶上的标题：`setListTitle('工作台')` 写名字，
- * `setListTitle([{label:'工作台',to:'workbench'}, {label:'工作流'}])` 写面包屑。
+ * `setListTitle([{label:'工作台',to:'workbench'}, {label:'流程编排'}])` 写面包屑。
  *
  * 为什么做成两个入口而不是让调用处拼 HTML（2026-10-19 用户截图：「改成面包屑」）：
  *   · 左栏 `#listTitle` 原来是个 `<b>`，十几处直接写 `textContent`；
@@ -6527,7 +6529,7 @@ async function openFlowRun(templateId, pickRunId) {
   // 左栏这一栏是「发起记录」：面包屑写明它属于哪个流程（模板名取到后补成第三段）
   setListTitle([
     { label: '工作台', to: 'workbench' },
-    { label: '工作流', to: 'flows' },
+    { label: '流程编排', to: 'flows' },
     { label: '发起记录' },
   ]);
   setRoute('flowRun', { template: templateId ?? null, run: pickRunId ?? S.flowRunId ?? null });
@@ -6545,7 +6547,7 @@ async function openFlowRun(templateId, pickRunId) {
   if (tpl) {
     setListTitle([
       { label: '工作台', to: 'workbench' },
-      { label: '工作流', to: 'flows' },
+      { label: '流程编排', to: 'flows' },
       { label: tpl.name },
     ]);
   }
@@ -6602,7 +6604,7 @@ function renderRunList() {
 
 function renderRunEmpty() {
   // 还没发起过：说清楚下一步点哪儿，别给个死页。
-  // 没有页头：左栏顶上已经是「工作台 › 工作流 › 模板名」，右页头再写一遍就是重复。
+  // 没有页头：左栏顶上已经是「工作台 › 流程编排 › 模板名」，右页头再写一遍就是重复。
   $('flowView').innerHTML = `
     <div class="detail-body run-wrap">
       <div class="wip">这个流程还没有发起过
@@ -6631,7 +6633,7 @@ async function paintRun(id) {
   const tplNow = (S.flowTemplates ?? []).find((t) => t.id === S.flowTemplate);
   setListTitle([
     { label: '工作台', to: 'workbench' },
-    { label: '工作流', to: 'flows' },
+    { label: '流程编排', to: 'flows' },
     { label: tplNow?.name ?? '发起记录' },
   ]);
   /*
@@ -7053,7 +7055,7 @@ function runHTML(v) {
                换一条记录全靠点它 —— 收起来等于把自己唯一的路收掉，而省下的那点宽度
                换不来什么（右边还有一整栏对话）。整页统一：**左栏常驻，不推拉**。
                所以这里不再有前置按钮，页头最左边就是标题（跟其它子页一个规矩）。
-               面包屑（工作台 › 工作流 › 模板名）在左栏顶上，这里只写**这一条 run 的标题**。 -->
+               面包屑（工作台 › 流程编排 › 模板名）在左栏顶上，这里只写**这一条 run 的标题**。 -->
           <div class="head-title"><b>${esc(v.title)}</b>
             <span class="flow-badge ${b.cls}">${esc(b.text)}</span></div>
           <div class="head-actions">${acts.join('')}</div>
@@ -7642,8 +7644,8 @@ async function openDesigner(templateId = null) {
     clearDraft(); // 和模板一样 → 留着没意义，还会下次误报
   }
 
-  // 左栏顶上：工作台 › 工作流（当前流程名在页头那个输入框里，不再往面包屑里塞第三段）
-  setListTitle([{ label: '工作台', to: 'workbench' }, { label: '工作流' }]);
+  // 左栏顶上：工作台 › 流程编排（当前流程名在页头那个输入框里，不再往面包屑里塞第三段）
+  setListTitle([{ label: '工作台', to: 'workbench' }, { label: '流程编排' }]);
   renderFlowList();
   paintDesigner();
 }
@@ -7801,7 +7803,7 @@ function paintDesigner() {
 
   $('flowView').innerHTML = `
     ${headRow(
-      // 面包屑「工作台 › 工作流」在**左栏顶上**（2026-10-19 用户要求挪过去），页头这边
+      // 面包屑「工作台 › 流程编排」在**左栏顶上**（2026-10-19 用户要求挪过去），页头这边
       // 只留当前这一项：旁边这个输入框（流程名就地可改）。再写一遍名字等于同一个东西三处各写一次。
       `<input id="dzName" value="${esc(S.designerName ?? '')}" placeholder="流程名字" style="max-width:220px" />`,
       `<button data-vd-publish>${S.designerPublished ? '已发布 · 下架' : '发布到工作台'}</button>
