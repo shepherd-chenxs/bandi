@@ -3715,25 +3715,26 @@ async function newTemplateDialog() {
  */
 function workbenchFlowSection() {
   const list = S.flowPublished ?? [];
+  /* ⚠️ 工作台的三段（项目 / 自动化 / 流程）**不再用 `<section class="fx">`**（2026-10-19）：
+     `.fx + .fx` 自带一条横分隔线，几段竖着一叠就是几条横带、每带右侧一场空。
+     统一用 `.wb-sec`（一行小标题）+ `.wb-grid`，跟插件那几段接在同一条流里。 */
   return `
-    <section class="fx">
-      <label>流程 <span class="count">${list.length + 1}</span></label>
-      <div class="wb-grid">
-        <!-- 编排入口：原来在左边 rail 的「工作流」那一项，现在收进工作台 -->
-        <button class="wb-tile" data-flow-design title="画流程：节点、指派、发布">
-          <span class="wb-ico flow">编</span>
-          <span class="wb-name">流程编排</span>
-        </button>
-        ${list
-          .map(
-            (f) => `<button class="wb-tile" data-flow-start="${esc(f.id)}" title="点开看发起记录">
-              <span class="wb-ico flow">流</span>
-              <span class="wb-name">${esc(f.name)}</span>
-            </button>`,
-          )
-          .join('')}
-      </div>
-    </section>`;
+    <div class="wb-sec">流程</div>
+    <div class="wb-grid">
+      <!-- 编排入口：原来在左边 rail 的「工作流」那一项，现在收进工作台 -->
+      <button class="wb-tile" data-flow-design title="画流程：节点、指派、发布">
+        <span class="wb-ico flow">编</span>
+        <span class="wb-name">流程编排</span>
+      </button>
+      ${list
+        .map(
+          (f) => `<button class="wb-tile" data-flow-start="${esc(f.id)}" title="点开看发起记录">
+            <span class="wb-ico flow">流</span>
+            <span class="wb-name">${esc(f.name)}</span>
+          </button>`,
+        )
+        .join('')}
+    </div>`;
 }
 
 /* ---------------------------------------------------------------- 项目 */
@@ -3747,15 +3748,13 @@ function workbenchFlowSection() {
  */
 function workbenchAutoSection() {
   return `
-    <section class="fx">
-      <label>自动化</label>
-      <div class="wb-grid">
-        <button class="wb-tile" data-schedules title="到点自动做一件事：写一句要它干什么、交给谁、多久一次">
-          <span class="wb-ico cron">时</span>
-          <span class="wb-name">定时任务</span>
-        </button>
-      </div>
-    </section>`;
+    <div class="wb-sec">自动化</div>
+    <div class="wb-grid">
+      <button class="wb-tile" data-schedules title="到点自动做一件事：写一句要它干什么、交给谁、多久一次">
+        <span class="wb-ico cron">时</span>
+        <span class="wb-name">定时任务</span>
+      </button>
+    </div>`;
 }
 
 /**
@@ -3770,22 +3769,21 @@ function workbenchAutoSection() {
  * 这里看的是"所有的活"。所以它紧挨着「项目」放 —— 一个是"在哪儿干活"，一个是"都有什么活"。
  */
 function workbenchProjectSection() {
+  /* 分组名后面**不再挂计数**（2026-10-19 去掉）：`.wb-sec` 是一行小标题，
+     上面写"项目 2"会被读成"有 2 个项目"，而它其实说的是"这一格有 2 块磁贴" ——
+     两个意思撞在一个数字上。宫格里的东西一眼数得清，不需要计数。 */
   return `
-    <section class="fx">
-      <!-- 角标是**磁贴个数**（2026-10-17 用户要求）：这一组固定两块（项目、任务看板），
-           原来写的是项目数 —— 项目有 3 个时角标写 3，下面却只有 2 块磁贴，对不上。 -->
-      <label>项目 <span class="count">2</span></label>
-      <div class="wb-grid">
-        <button class="wb-tile" data-projects title="项目的名字、目录、规矩都在这儿管">
-          <span class="wb-ico proj">项</span>
-          <span class="wb-name">项目</span>
-        </button>
-        <button class="wb-tile" data-task-board title="所有项目的活，铺在同一张看板上（站在全局看）">
-          <span class="wb-ico board">板</span>
-          <span class="wb-name">任务看板</span>
-        </button>
-      </div>
-    </section>`;
+    <div class="wb-sec">项目</div>
+    <div class="wb-grid">
+      <button class="wb-tile" data-projects title="项目的名字、目录、规矩都在这儿管">
+        <span class="wb-ico proj">项</span>
+        <span class="wb-name">项目</span>
+      </button>
+      <button class="wb-tile" data-task-board title="所有项目的活，铺在同一张看板上（站在全局看）">
+        <span class="wb-ico board">板</span>
+        <span class="wb-name">任务看板</span>
+      </button>
+    </div>`;
 }
 
 /**
@@ -10801,37 +10799,39 @@ function renderWorkbenchGrid() {
     groups.get(key).push(p);
   }
 
+  /* 工作台改成**无分带**的一行排开（2026-10-19 用户反馈"图标很大不美观"后重做）。
+     原来每个分组是一个 `<section class="fx">`，`.fx + .fx` 自带一条横分隔线，
+     于是 5 个小组竖着叠成 5 条横带，每条右侧一片空白 —— 分隔线反而比内容显眼。
+     现在：所有分组**共用一个宫格容器**，分组名退化成一行小标题（`.wb-sec`），
+     一屏铺得下就连续排下去；装得多了也只是换个行，不会再出现"一带一块"。
+     排序照旧：先插件（按 manifest 分类），再项目/自动化/流程。 */
+  const pluginSections = [...groups]
+    .map(
+      ([cat, items]) => `<div class="wb-sec">${esc(cat)}</div>
+        <div class="wb-grid">
+          ${items
+            .map(
+              (p) => `<button class="wb-tile" data-wb-open="${esc(p.id)}" title="${esc(p.description || p.label)}">
+                <span class="wb-ico has-plug" ${wbIcoStyle(cat)}><i class="wb-badge" title="插件" aria-label="插件">${PLUGIN_BADGE_SVG}</i>${esc(initial(p.label))}</span>
+                <span class="wb-name">${esc(p.label)}</span>
+              </button>`,
+            )
+            .join('')}
+        </div>`,
+    )
+    .join('');
+
   $('pluginView').classList.remove('kb-page'); // 宫格是长页面，按普通滚动
   $('pluginView').innerHTML = `
     <div class="detail-head"><b>工作台</b></div>
-    <div class="detail-body">${
-      list.length
-        ? [...groups]
-            .map(
-              ([cat, items]) => `<section class="fx">
-                <label>${esc(cat)} <span class="count">${items.length}</span></label>
-                <div class="wb-grid">
-                  ${items
-                    .map(
-                      (p) => `<button class="wb-tile" data-wb-open="${esc(p.id)}" title="${esc(p.description || p.label)}">
-                        <span class="wb-ico has-plug" ${wbIcoStyle(cat)}><i class="wb-badge" title="插件" aria-label="插件">${PLUGIN_BADGE_SVG}</i>${esc(initial(p.label))}</span>
-                        <span class="wb-name">${esc(p.label)}</span>
-                      </button>`,
-                    )
-                    .join('')}
-                </div>
-              </section>`,
-            )
-            .join('')
-        : '' // 没装应用就不渲染这个区：空态横幅没人需要（装第一个应用时自然会知道去哪装）
+    <div class="detail-body wb-page">${
+      list.length ? pluginSections : '' // 没装应用就不渲染这个区：空态横幅没人需要（装第一个应用时自然会知道去哪装）
     }${workbenchProjectSection()}${workbenchAutoSection()}${workbenchFlowSection()}${
       broken.length
-        ? `<section class="fx">
-             <label>装不上台面 <span class="count">${broken.length}</span></label>
-             ${broken
-               .map((p) => `<div class="plg-err">${esc(p.id)}：${esc(p.errors.join('；'))}</div>`)
-               .join('')}
-           </section>`
+        ? `<div class="wb-sec">装不上台面</div>
+           ${broken
+             .map((p) => `<div class="plg-err">${esc(p.id)}：${esc(p.errors.join('；'))}</div>`)
+             .join('')}`
         : ''
     }</div>`;
   showView('plugin');

@@ -384,24 +384,38 @@ main { min-height: 0; }
 .plg-row-actions { display: flex; gap: 8px; align-items: center; flex: 0 0 auto; }
 .plg-row-actions button { padding: 4px 12px; font-size: 12.5px; }
 
-/* 工作台宫格：图标在上、名字在下，像**手机主屏**那样铺开（v1.0.1 第 3 步 iOS 化）。
-   量是怎么定的：
-   - 格子 116px、图标 56px —— 图标占格子一半稍弱，跟 iOS 主屏的观感一致（原来 46×104 偏"小方块"）；
-   - 圆角 16px / 56px ≈ 29%，比 iOS 的连续圆角(≈22%)略圆一点：这里图标里只有一个汉字，
-     圆角太小会显得方、太大汉字会顶边，29% 是截图里试出来的折中；
+/* 工作台宫格：图标在上、名字在下 —— **按"手机主屏"的语汇，按桌面端的尺寸**（v1.0.1 第 3 步 iOS 化，
+   2026-10-19 用户反馈"图标很大不好看"后收了一档尺寸）。
+
+   ⚠️ 语汇和尺寸是**两件事**，别再一起搬：
+   iOS 主屏图标 60pt 是因为**手指**要戳中（44pt 是最小触摸目标）—— 这是移动端约束。
+   班底是桌面端、用鼠标，光标精确到像素，这个约束**不存在**。
+   所以"彩色圆角方块 + 分组 + 名字在下"这套语汇照搬（它说的是"这是入口地图"，跟输入设备无关），
+   尺寸却要按桌面端收 —— 56px 的彩色方块在深色底上一排排铺开，视觉噪音远大于它的信息量。
+
+   量是怎么定的（现在的）：
+   - 格子 96px、图标 40px：跟 mac 的 Launchpad 缩略档、Linear 侧栏标识块同一量级。
+     40px 仍够画一个汉字（17px 字）且看得清渐变，再小就只剩一个色点、认不出是"入口"。
+   - 圆角 12px / 40px = 30%，跟 iOS 连续圆角（22~29%）的语感一致 —— 只缩尺寸、不改语感。
+   - 磁贴圆角 10px：**沿用全站那条"10 给面和行、18 留给对话"**，不在这里另开一档。
    - 名字**限宽居中** —— 中文名字能撑到两行的就两行（"流程编排"），再长才省略；
      不设这个宽度限制，窄窗口下名字会把格子撑变形，图标跟着偏。
    - 悬停**只给极淡底色、不描边** —— 描边是 Linear 的语汇（面板/表单一类），
      主屏磁贴是"摸一下"的感觉，一圈线会显得像卡片控件。 */
-.wb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(116px, 1fr)); gap: 4px; }
-.wb-tile { display: flex; flex-direction: column; align-items: center; gap: 10px;
-           padding: 18px 8px 16px; border: 1px solid transparent; border-radius: 18px;
+/* 列宽**定死 96px、不拉伸**（不是 minmax(96px, 1fr)）：
+   `1fr` 会把 4 块磁贴摊到 1000px 宽里，每块 250px —— 图标还是 40px，
+   于是每块磁贴的左右各空 100px，整排看着像"四个孤零零的点撒在左边缘"。
+   定宽之后磁贴挨在一起成组，右边留白变成一整块（这是对的：留白成块才像呼吸，撒开就像漏排）。 */
+.wb-grid { display: grid; grid-template-columns: repeat(auto-fill, 96px); gap: 4px;
+           justify-content: start; }
+.wb-tile { display: flex; flex-direction: column; align-items: center; gap: 8px;
+           padding: 14px 6px 12px; border: 1px solid transparent; border-radius: 10px;
            background: transparent; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .wb-tile:hover { background: var(--hover); }
 .wb-tile:active { background: var(--active); }
-.wb-ico { width: 56px; height: 56px; border-radius: 16px; display: flex;
+.wb-ico { width: 40px; height: 40px; border-radius: 12px; display: flex;
           align-items: center; justify-content: center; color: var(--on-solid);
-          font-size: 23px; font-weight: 600; flex: 0 0 auto;
+          font-size: 17px; font-weight: 600; flex: 0 0 auto;
           /* 一档极淡的高光，让色块有"实体"感而不是一块平涂。
              用 --on-solid（就是白色）而不是写死 #fff：这样"色块上的白"只有一个来源，
              哪天 --on-solid 换了（比如改成暖白），图标高光会跟着一起改，不会脱节。 */
@@ -414,12 +428,16 @@ main { min-height: 0; }
 .wb-name { font-size: 12.5px; color: var(--text); text-align: center; line-height: 1.3;
            max-width: 100%; overflow-wrap: anywhere;
            display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-/* 分组标题在工作台里比别处**收一档、退一档**（iOS 分组标题是小号灰字，不是黑体小节）：
-   `.fx > label` 在别的页是 13.5px 600 的正文级标题，铺在主屏上会跟磁贴名字抢视线。 */
-section.fx:has(> .wb-grid) > label { font-size: 11.5px; font-weight: 600;
-                                     letter-spacing: .04em; color: var(--dim);
-                                     margin-bottom: 6px; }
-section.fx:has(> .wb-grid) > label .count { font-size: 11px; }
+/* 分组小标题（`.wb-sec`，2026-10-19 取代原来的 `section.fx > label`）。
+   三处作用：
+   ① 它是分组唯一还剩下的"分"—— **不带分隔线、不占一条横带**，只占一行字；
+   ② 字号退到 11.5px 灰字：铺在主屏上不能跟磁贴名字抢视线；
+   ③ 它跟上一行宫格之间留 20px、跟自己的宫格只留 8px —— 靠"离上远、离下近"来表达从属关系，
+      比画一条线轻，效果一样（这是分组标题的通用做法）。
+   `:first-child` 去掉上边距：整页第一组不该顶着页头往下缩。 */
+.wb-sec { font-size: 11.5px; font-weight: 600; letter-spacing: .04em; color: var(--dim);
+          margin: 20px 0 8px; padding-left: 2px; }
+.wb-sec:first-child { margin-top: 0; }
 /* **插件**的图标角上挂一个小角标：工作台里混着平台自带的入口（项目 / 任务看板 / 流程），
    只靠磁贴样子分不出哪个是装进来的插件。
    位置是**骑在图标左上那个圆角上** —— 一多半压在色块上、一少半探出去，
@@ -431,14 +449,15 @@ section.fx:has(> .wb-grid) > label .count { font-size: 11px; }
 .wb-ico.has-plug { position: relative; }
 /* 白色插头一半压在深蓝图标上、一半探到浅色背景上 —— 纯白在浅背景上会"化掉"，
    所以描一圈深色：压在图标上时看不出描边，探出去那半圈立刻有轮廓（截图上看过）。
-   尺寸取 18px（图标已放大到 56px）：够小不抢字，100% 缩放下又认得出是个插头。 */
-.wb-ico.has-plug .wb-badge { position: absolute; left: -7px; top: -7px;
-                    width: 18px; height: 18px; display: flex;
+   尺寸 15px：**跟着图标走**（图标 56→40 那一档一起调的）。角标占图标的比例要稳定在 37% 上下 ——
+   18px 压在 40px 上是 45%，比图标里的字还大，一眼看过去先看见插头。 */
+.wb-ico.has-plug .wb-badge { position: absolute; left: -6px; top: -6px;
+                    width: 15px; height: 15px; display: flex;
                     align-items: center; justify-content: center;
                     color: #ffffff;   /* 固定白：这是图形不是文字，见上面的注释 */
                     filter: drop-shadow(0 0 .7px rgba(15, 20, 32, .95))
                             drop-shadow(0 1px 2px rgba(0, 0, 0, .5)); }
-.wb-ico.has-plug .wb-badge svg { width: 18px; height: 18px; display: block; }
+.wb-ico.has-plug .wb-badge svg { width: 15px; height: 15px; display: block; }
 /* 悬停整块磁贴时角标亮成强调色，提示"这个小图是有意思的" */
 .wb-tile:hover .wb-badge { color: var(--accent); }
 
