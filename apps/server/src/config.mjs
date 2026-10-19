@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { userDataDir } from './data-dir.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -12,20 +13,22 @@ export const repoRoot = path.resolve(here, '..', '..', '..');
  * 运行时数据目录（SQLite、`runtimes.json`、`plugins.json`、`connectors.json`、
  * `node.json`、`model-routes/` …—— 有 7 处从它派生）。
  *
- * **必须能指。** 以前写死成 `<仓库>/data`，桌面版装到用户机上时"仓库目录"就是**安装目录**，
- * 往里写要么要管理员权限（撞 `v1.0.0` 的 B5「不要求管理员权限」），要么升级时被覆盖。
- * 于是交给 `BANDI_DATA`，按形态各指各的：
+ * **默认只有一个：本机用户数据目录**（`userDataDir()`；Windows 是 `%APPDATA%\bandi`）。
+ * 命令行、桌面壳（开发版与安装版）走的是**同一个默认** —— 2026-10-18 收敛掉了原先
+ * "命令行落 `<仓库>/data`、桌面壳落用户目录"的两套默认（同一台机器两个库，最容易看错库）。
  *
- *   · 开发 / 从仓库跑        → 不设，还是 `<仓库>/data`（**行为不变**，不惊动既有数据）
- *   · 桌面客户端（薄壳）      → 薄壳设成用户目录：`%APPDATA%\bandi`（Linux/macOS 同理）
- *   · 服务器部署（systemd）   → 单元里设成 `/var/lib/bandi`
+ * 为什么不能默认就地放 `<仓库>/data`：安装版装到用户机上时"仓库目录"就是**安装目录**，
+ * 往里写要么要管理员权限（撞 `v1.0.0` 的 B5「不要求管理员权限」），要么升级时被覆盖。
+ * `<仓库>/data` 仍可显式指（`BANDI_DATA=<仓库>/data`）—— 那是**沙盒/隔离**用途。
+ *
+ * 其它形态一律显式指：服务器部署（systemd）指 `/var/lib/bandi`，smoke 用例指临时目录。
  *
  * 为什么不做「写不进去就自动换个家」的兜底：那会在权限一抖动时**悄悄换成一个空库**，
  * 用户看到的是"东西全没了" —— 比启动直接失败糟得多。指错了就让它失败，别猜。
  */
 export const dataDir = process.env.BANDI_DATA
   ? path.resolve(process.env.BANDI_DATA)
-  : path.join(repoRoot, 'data');
+  : userDataDir();
 export const dbPath = process.env.BANDI_DB ?? path.join(dataDir, 'bandi.db');
 
 /**

@@ -1,7 +1,8 @@
 /**
- * 数据落点与远程访问的验收（2026-10-15，部署前置）。
+ * 数据落点与远程访问的验收（2026-10-15 起；2026-10-18 加默认目录回归）。
  *
- * 验四件事：
+ * 验五件事：
+ *   ⓪ **不设 `BANDI_DATA` 时默认落本机用户目录** —— 命令行与桌面壳同一个默认，不再有"两套库"；
  *   ① `BANDI_DATA` 真的被认 —— 库和其它运行时数据落在指的那个目录，不碰 `<仓库>/data`；
  *   ② `BANDI_HOST` 能放开监听，而且**本机地址照样连得上**；
  *   ③ `BANDI_ORIGINS` 一配，远端浏览器来的写请求才不是 403 ——
@@ -14,7 +15,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import { repoRoot } from './config.mjs';
 
 const P1 = Number(process.env.SMOKE_PORT ?? 8804);
@@ -28,6 +30,32 @@ const check = (label, ok, detail = '') => {
   console.log(`  ${ok ? '✓' : '✗'} ${label}${detail ? ' — ' + detail : ''}`);
   if (!ok) failed += 1;
 };
+
+/**
+ * 在**干净环境**（去掉 BANDI_DATA / BANDI_DB）里问 `config.mjs`：默认数据目录是哪儿。
+ * 不启服务、不建库 —— 只验默认值本身，不能拿真实库试。
+ */
+function defaultDataDirFromChild() {
+  const env = { ...process.env };
+  delete env.BANDI_DATA;
+  delete env.BANDI_DB;
+  const url = pathToFileURL(path.join(repoRoot, 'apps', 'server', 'src', 'config.mjs')).href;
+  const r = spawnSync(
+    process.execPath,
+    ['--input-type=module', '-e', `const m = await import(${JSON.stringify(url)}); process.stdout.write(m.dataDir);`],
+    { cwd: repoRoot, env, encoding: 'utf8' },
+  );
+  if (r.status !== 0) return `(失败：${String(r.stderr).slice(-300)})`;
+  return String(r.stdout).trim();
+}
+
+/** 期望的默认目录（独立算一遍，不复用被测实现）。 */
+const expectedDefault = (() => {
+  const home = os.homedir();
+  if (process.platform === 'win32') return path.join(process.env.APPDATA || path.join(home, 'AppData', 'Roaming'), 'bandi');
+  if (process.platform === 'darwin') return path.join(home, 'Library', 'Application Support', 'bandi');
+  return path.join(process.env.XDG_DATA_HOME || path.join(home, '.local', 'share'), 'bandi');
+})();
 
 function start(port, extra = {}) {
   const child = spawn(process.execPath, [SERVER], {
@@ -81,7 +109,12 @@ async function writeWithOrigin(base, origin, { header = true, token = '' } = {})
 
 let ctx = null;
 try {
-  console.log('① BANDI_DATA：数据真的落在指的那个目录');
+  console.log('⓪ 不设 BANDI_DATA 时：默认落本机用户目录（命令行与桌面壳同一个默认）');
+  const def = defaultDataDirFromChild();
+  check('默认 = 用户数据目录', def === expectedDefault, def);
+  check('默认不是 <仓库>/data', def !== path.join(repoRoot, 'data'), def);
+
+  console.log('\n① BANDI_DATA：数据真的落在指的那个目录');
   ctx = start(P1);
   const base1 = `http://127.0.0.1:${P1}`;
   if (!(await waitUp(base1))) throw new Error('没起来：' + ctx.log().slice(-500));

@@ -32,31 +32,48 @@ pub enum Launch {
     Failed { message: String },
 }
 
-/// 安装/仓库根。**判据统一是"那儿有没有 `apps/desktop/shell.mjs`"** —— 比认目录名可靠。
+/// 安装/仓库根。
+///
+/// ⚠️ **两种布局必须用两个判据**。曾经只有一个"有 `apps/desktop/shell.mjs` 就算根"，
+/// 结果 `tauri build` 把 `runtime/apps` 摊成 exe 旁边的 `apps/` 之后，exe 自己那一层就满足条件，
+/// 开发版当场被冻结副本劫持 —— 仓库里改什么都不会生效，而且没有任何报错。
+///
+/// 现在分两种：
+///   - **源码根** = 有 `apps/desktop/shell.mjs` **且** 有 `apps/desktop/Cargo.toml`（Rust 源码在）
+///   - **安装根** = 有 `apps/desktop/shell.mjs`（payload 是摊平的，没有源码）
+///
 /// 顺序：
-///   1. `BANDI_HOME`（显式指定，排第一是为了能救急）
-///   2. 从 exe 所在目录往上找（开发布局：`<root>/apps/desktop/target/<profile>/bandi-desktop.exe`）
-///   3. exe 所在目录本身就是根（安装布局）
+///   1. `BANDI_HOME`（显式指定，宽松判据 —— 人说哪儿就是哪儿）
+///   2. 往上找**源码根**（开发布局：`<root>/apps/desktop/target/<profile>/bandi-desktop.exe`）
+///   3. 往上找**安装根**（安装布局：exe 同级摊着 payload）
 pub fn find_root() -> Option<PathBuf> {
-    let looks_like_root = |p: &Path| p.join("apps").join("desktop").join("shell.mjs").is_file();
+    let has_shell = |p: &Path| p.join("apps").join("desktop").join("shell.mjs").is_file();
+    // 只有源码检出才有 Cargo.toml，build 产物里没有 —— 这是区分两者的锚点
+    let is_source_root =
+        |p: &Path| has_shell(p) && p.join("apps").join("desktop").join("Cargo.toml").is_file();
 
     if let Ok(h) = std::env::var("BANDI_HOME") {
         let p = PathBuf::from(h);
-        if looks_like_root(&p) {
+        if has_shell(&p) {
             return Some(p);
         }
     }
 
     let exe = std::env::current_exe().ok()?;
+    let mut chain: Vec<PathBuf> = Vec::new();
     let mut cur = exe.parent().map(Path::to_path_buf);
     for _ in 0..6 {
-        let dir = cur?;
-        if looks_like_root(&dir) {
-            return Some(dir);
-        }
+        let Some(dir) = cur else { break };
+        chain.push(dir.clone());
         cur = dir.parent().map(Path::to_path_buf);
     }
-    None
+
+    // 先认源码根：哪怕 exe 旁边摊着 build 产物，也会继续往上走到真正的仓库根
+    if let Some(root) = chain.iter().find(|d| is_source_root(d)) {
+        return Some(root.clone());
+    }
+    // 再退安装根：安装版没有源码，靠这条活
+    chain.into_iter().find(|d| has_shell(d))
 }
 
 /// 随包分发的 Node。**正式安装包必须走这条** —— `v1.0.0` 的 B2 就一句话：

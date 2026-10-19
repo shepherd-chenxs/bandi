@@ -18,7 +18,7 @@ import * as quota from './quota.mjs';
 import * as runs from './runs.mjs';
 import * as cliModels from './cli-models.mjs';
 import * as runtimes from './runtimes.mjs';
-import { dispatchToThread } from './dispatch.mjs';
+import { dispatchToThread, projectConstitutionBlock } from './dispatch.mjs';
 
 /** 一步跑多久算「卡住」 */
 const STUCK_MS = 10 * 60 * 1000;
@@ -53,12 +53,12 @@ export const BUILT_IN_TEMPLATE = {
   nodes: [
     {
       id: 'n1', name: '谈需求', x: 220, y: 60,
-      detail: '把这次要做的东西谈清楚：目标、边界、验收标准、不做什么。产出落进需求文档。',
+      detail: '把这次要做的东西谈清楚：目标、边界、验收标准、不做什么。产出按 docs/模板/spec.md 的骨架写进需求文档（快照型，放 10-需求/10-版本/），每条验收场景要能执行、能复现。',
       approve: 'n2', reject: END, // 需求本身不成立 → 直接结束，不用往后走
     },
     {
       id: 'n2', name: '定计划', x: 480, y: 60,
-      detail: '把需求拆成任务卡，给出排期和版本号。产出落进排期文档。',
+      detail: '把需求拆成任务卡，给出排期和版本号。方案按 docs/模板/plan.md 写进排期文档；任务拆成看板上的卡（卡描述的格式按 docs/模板/task.md），每张卡标覆盖的场景编号 —— 不写卡文件。',
       approve: 'n3', reject: 'n1', // 计划谈不拢 → 回去把需求重谈清楚
     },
     {
@@ -68,7 +68,7 @@ export const BUILT_IN_TEMPLATE = {
     },
     {
       id: 'n4', name: '测试', x: 740, y: 210,
-      detail: '按验收标准验证，给出通过/不通过，以及证据（跑了什么、看到什么）。',
+      detail: '按卡的验收标准逐条验证，给出通过/不通过，以及证据（跑了什么、看到什么）。最后对照 spec 做一遍收敛检查：逐条场景与实现比对，结论写「已收敛」或差异清单，差异必须回填到卡或 spec。',
       approve: 'n5', reject: 'n3', // 测试不过 → 退回开发重修（最典型的那条回路）
     },
     {
@@ -118,6 +118,13 @@ export function ensureBuiltInTemplate() {
     }
     if (wantManual.has(n.id) && n.manual === undefined) {
       next.manual = true;
+      touched = true;
+    }
+    // ③ detail 是**平台写的提示词**（产物按哪份模板写、测试怎么收敛）：随内建模板更新。
+    //    只对 builtIn 模板做，且只动 detail —— 连线（approve/reject）与 manual 是用户的选择，永不覆盖。
+    const ref = byId.get(n.id);
+    if (cur.builtIn && ref?.detail && ref.detail !== next.detail) {
+      next.detail = ref.detail;
       touched = true;
     }
     return next;
@@ -276,9 +283,9 @@ function createTask(runId, node, visit) {
     // 谁办：**只认点名**（见 assigneeFor）。没点名就留空，
     // 紧接着那条 if 会把它标成「已阻塞」——那是**故意留空**，不是缺人。
     assigneePersonaId: assigneeFor(node),
-    status: '待开始',
+    status: '待办',
   });
-  // **到站即知**：这一步没点名的话，立刻标「已阻塞」，别让它显示成"待开始"等人点一下派活
+  // **到站即知**：这一步没点名的话，立刻标「已阻塞」，别让它显示成"待办"等人点一下派活
   // 才发现（用户实报："这种没人的情况应该是阻塞状态"）。
   // 之前只在"点派活"那一步才发现没人，于是节点到站时看着像随时会开跑 —— 但它永远不会自己动。
   if (!task.assigneePersonaId) {
@@ -374,6 +381,8 @@ export function startCurrentStep(runId, { force = false } = {}) {
     startedAt: store.nowIso(),
     endedAt: null,
     note: null,
+    // 新一轮开跑：上一轮的产物不该继续挂在"当前这一步"上（跑完会写新的）
+    result: null,
     agentRunId: null,
     decision: null,
   });
@@ -381,11 +390,19 @@ export function startCurrentStep(runId, { force = false } = {}) {
   // 派活：发到这条流程的**场地**（项目群 / 某个人的会话）里。
   // 群里必须 @ 到具体的人，否则会跑到群助手那儿去。
   // 派给谁就发到**谁那儿**（不建群、不选场地）。群里才需要 @ 人。
-  const conv = ensureDirectConversation(task.assigneePersonaId);
-  store.setWorkflowRunThread(runId, conv); // 记下"当前这一步在哪个会话"，实例页和会话卡片要用
+  /*
+   * **这条流程自己的工单会话**（2026-10-18）。
+   * 原来派进经办人唯一那条 1:1 —— 于是流程消息和聊天混在一起，而且一个员工同一时刻
+   * 只能干一件活（忙判定按会话算）。现在一条流程一套会话：上下文连续、执行槽独立，
+   * 消息模块里也归到「手上的活」那一组，不再淹没人和员工的对话。
+   */
+  const conv = runConversation(run, task.assigneePersonaId);
+  store.setWorkflowRunThread(runId, conv); // 记下"这一步在哪个会话"，实例页和会话卡片要用
   const at = store.getConversation(conv)?.kind === 'group' ? `@${store.getPersona(task.assigneePersonaId)?.name} ` : '';
   // 发起时填的「想法」就是发给第一个人的第一句 —— 后面几步也带上，作为起因的上下文
+  const constitution = projectConstitutionBlock(run.projectId);
   const text = [
+    constitution,
     `${at}【流程 · ${run.title}】`,
     run.intent ? `\n起因（发起人说的）：${run.intent}` : '',
     `\n这一步（第 ${task.visit} 次办理）：${task.nodeName}`,
@@ -413,7 +430,18 @@ export function startCurrentStep(runId, { force = false } = {}) {
     if (agentRun.finished) onAgentRunFinished(agentRun);
     return viewRun(store.getWorkflowRun(runId));
   } catch (e) {
-    store.updateWorkflowTask(task.id, { status: '失败', note: String(e.message ?? e), endedAt: store.nowIso() });
+    // **「他正忙」不算失败**（2026-10-17）：忙是暂时的，步骤退回「待办」，
+    // 重试节拍（30 秒一次）会再派 —— 人不用管。别的错（没这个运行时、网络…）才是真失败。
+    if (e?.code === 'busy') {
+      store.updateWorkflowTask(task.id, { status: '待办', agentRunId: null, endedAt: null });
+      throw e;
+    }
+    store.updateWorkflowTask(task.id, {
+      status: '失败',
+      note: String(e.message ?? e),
+      result: JSON.stringify(resultOf({ status: '失败', error: String(e.message ?? e) })),
+      endedAt: store.nowIso(),
+    });
     throw e;
   }
 }
@@ -460,8 +488,9 @@ export function assignCurrentStep(runId, personaId) {
   if (!p) throw new Error('这个人不在了');
   store.updateWorkflowTask(task.id, {
     assigneePersonaId: p.id,
-    status: '待开始', // 指派完回到待开始，接着走正常的派活
+    status: '待办', // 指派完回到待办，接着走正常的派活
     note: null,
+    result: null,
     endedAt: null,
   });
   store.touchWorkflowRun(runId);
@@ -481,12 +510,19 @@ export function runsOfThread(threadId) {
   return store.listWorkflowRunsByThread(threadId).map((r) => viewRun(r));
 }
 
-function ensureDirectConversation(personaId) {
-  const existing = store
-    .listConversations()
-    .find((c) => c.kind === 'direct' && c.personaId === personaId && !c.hiddenAt);
-  if (existing) return existing.id;
-  return store.ensureConversationForPersona(personaId).id;
+/**
+ * 这条流程的工单会话（一条流程一条，返工也续它）。
+ * 换经办人时作用域不变、只是人变了 —— 所以会话里带着 `personaId`，换个经办人就是另一条。
+ */
+function runConversation(run, personaId) {
+  const conv = store.ensureExecConversation({
+    personaId,
+    scope: `wf:${run.id}`,
+    title: `流程 · ${run.title}`,
+    projectId: run.projectId ?? null,
+  });
+  if (!conv) throw new Error('这个经办人已经不在了');
+  return conv.id;
 }
 
 /**
@@ -506,6 +542,8 @@ export function onAgentRunFinished(run) {
     store.updateWorkflowTask(task.id, {
       status: '已阻塞',
       note: run.finalText ? summarize(run.finalText) : '已停止生成',
+      // 执行结果按**全文**拆好存下来（note 是截断过的，产物常在截断之后）
+      result: JSON.stringify(resultOf({ status: '已停止', finalText: run.finalText })),
       endedAt: store.nowIso(),
     });
     store.touchWorkflowRun(task.runId);
@@ -516,13 +554,18 @@ export function onAgentRunFinished(run) {
     store.updateWorkflowTask(task.id, {
       status: '失败',
       note: run.error || '执行失败',
+      result: JSON.stringify(resultOf({ status: '失败', error: run.error })),
       endedAt: store.nowIso(),
     });
   } else {
     // 干完了。**停不停，看节点上的开关**：
     //   · manual = true  → 待确认，等用户拍板（需求那种"聊明白了我才放行"）
     //   · 否则           → 干完自动往下走（默认）
-    store.updateWorkflowTask(task.id, { status: '待确认', note: summarize(run.finalText) });
+    store.updateWorkflowTask(task.id, {
+      status: '待确认',
+      note: summarize(run.finalText),
+      result: JSON.stringify(resultOf({ status: run.status, finalText: run.finalText })),
+    });
     store.touchWorkflowRun(task.runId);
     const node = nodeById(store.getWorkflowTemplate(wf.templateId), task.nodeId);
     if (!node?.manual) {
@@ -567,7 +610,7 @@ export function decide(runId, decision) {
     return viewRun(store.setWorkflowRunStatus(runId, '已终止', `在「${task.nodeName}」终止`));
   }
 
-  if (task.status === '待开始') throw new Error(`「${task.nodeName}」还没开始，先派活（不能直接跳过）`);
+  if (task.status === '待办') throw new Error(`「${task.nodeName}」还没开跑 —— 它马上会被自动派活，稍等一下；不想等就终止流程`);
   if (task.status === '进行中') throw new Error(`「${task.nodeName}」还在跑，等它说完`);
   if (task.status === '失败') throw new Error(`「${task.nodeName}」失败了 —— 先重跑，或终止流程`);
 
@@ -620,10 +663,12 @@ export function retryCurrentStep(runId) {
   const task = currentTask(run);
   if (!task) throw new Error('找不到当前任务');
   if (task.status === '进行中') throw new Error('这一步正在跑，别重复派');
-  // **「重跑」= 「改成待办」+ 立刻派活**：复用同一段（否则两边迟早不一致 ——
-  // 之前这里就自己清 note、又不肯清 agentRunId，和"改状态→待办"对不上）。
-  setStepStatus(runId, '待办');
-  return startCurrentStep(runId);
+  /*
+   * 「重跑」就是「改成待办」—— 而改成待办现在**本身就会派活**（见 setStepStatus，
+   * 2026-10-17 用户定：待办即执行），所以这里只管改状态，不再自己调 startCurrentStep
+   * （调两次的话第二遍会撞上"这一步已经在跑了"）。
+   */
+  return setStepStatus(runId, '待办');
 }
 
 export function abortWorkflow(runId, note = '人工终止') {
@@ -656,15 +701,15 @@ function goto(runId, target, why) {
   store.setWorkflowCurrentNode(runId, target);
   const task = createTask(runId, node, visit);
   /*
-   * **到站即派活**，别停在「待开始」等人再点一下。
+   * **到站即派活**，别停在「待办」等人再点一下。
    *
    * 停不停**只由节点上的 `manual` 开关决定**（那是检查点：干完停住等人放行）。
    * 没勾就该一路跑下去 —— 通过、驳回、非人工节点的自动流转，三条路都走这儿。
    *
-   * ⚠️ 以前这里只建任务不派活，于是三条路都停在「待开始」，每一步都要人再点一次
-   *    「派活，开始这一步」；可**第一步**却是自动开跑的
-   *    （startWorkflow(autoStart) → startCurrentStep）—— 同一个流程两种规矩，
-   *    用户实报："目前的实现效果是要在下一步派活，这个不对。"
+   * 派不出去也不留人管：他正忙 → 退回「待办」，重试节拍（30 秒一次）会再派；
+   * 额度超了 / 没点名 → 已阻塞（等人处理，语义就对）；真失败 → 失败。
+   * 所以这里 catch 住只写日志 —— 以前那种"停在待开始、等人点派活按钮"的状态已经不存在了
+   * （2026-10-17 用户要求：去掉派活按钮和待开始，待办就直接执行）。
    *
    * 没人的不在这儿派：createTask 已经把它标成「已阻塞」了（到站即知），
    * 硬调 startCurrentStep 会抛。
@@ -673,7 +718,6 @@ function goto(runId, target, why) {
     try {
       startCurrentStep(runId);
     } catch (e) {
-      // 派活失败不该把"已经推进到这一步"弄坏：留在「待开始」，人可以自己点那颗派活按钮
       console.warn(`「${node.name}」到站自动派活没成功：${e.message}`);
     }
   }
@@ -686,7 +730,7 @@ function goto(runId, target, why) {
  * 卡住判断（和 v1 一样，但这版要按"任务"算）：
  *   · 进行中超过 STUCK_MS      → 真卡住了
  *   · 失败没人管               → 也是卡住
- *   · 待确认 / 待开始          → **不算卡住**，是"在等你"
+ *   · 待确认 / 待办            → **不算卡住**，是"在等你"（待办马上会被自动派活）
  */
 export function viewRun(run, { withTasks = false } = {}) {
   if (!run) return null;
@@ -714,8 +758,8 @@ export function viewRun(run, { withTasks = false } = {}) {
     else if (cur.status === '失败') stuck = '等人处理';
     else if (cur.status === '进行中' && elapsed > STUCK_MS) {
       stuck = `超过 ${Math.round(STUCK_MS / 60000)} 分钟没结果`;
-    } else if (cur.status === '待确认') waiting = '等你确认';
-    else if (cur.status === '待开始') waiting = '还没派活';
+    }     else if (cur.status === '待确认') waiting = '等你确认';
+    else if (cur.status === '待办') waiting = '马上自动派活（30 秒内）';
     else if (cur.status === '进行中') waiting = '正在跑';
   }
 
@@ -779,7 +823,7 @@ export function viewRun(run, { withTasks = false } = {}) {
         : ['待办', '已阻塞', '已完成'].filter(
             (s) =>
               s !==
-              (cur.status === '待开始' ? '待办'
+              (cur.status === '待办' ? '待办'
               : cur.status === '已阻塞' ? '已阻塞'
               : cur.status === '已完成' ? '已完成'
               : null),
@@ -854,6 +898,9 @@ function viewTask(t, withMessages = false, isLast = false, run = null) {
     // ⚠️ 不能用任务状态判断：李俊回复时任务还是「待确认」，状态不会变（踩过）。
     runningRunId: conv ? (store.activeRun(conv.id)?.id ?? null) : null,
     note: t.note,
+    // 执行结果（产物 / 一句话 / 报错）—— 界面照这三样渲染，不再整段贴 note。
+    // 老数据没有 result 列 → parseResult 用 note 兜底。
+    result: parseResult(t),
     startedAt: t.startedAt,
     endedAt: t.endedAt,
     conversationId: t.conversationId,
@@ -894,6 +941,169 @@ function summarize(text, max = 160) {
   return s.length > max ? s.slice(0, max) + '…' : s;
 }
 
+/* ------------------------------------------------- 执行结果：产物 / 一句话 / 报错 */
+
+/*
+ * 「执行结果」只该有三种样子（2026-10-18 用户要求）：
+ *   ① 有产物 → **只展示产物**（文件、链接）；
+ *   ② 没产物 → 一句话说做了什么；
+ *   ③ 失败   → 把报错原文摆出来。
+ *
+ * 以前是把模型那段自述整段贴上去 —— 它开头八成是"我先看了一下…"的铺垫，
+ * 真正要看的（改了哪个文件 / 报了什么错）反而被挤到下面，或者干脆被截掉。
+ * 拆解放在服务端、**在截断之前**做，界面拿到就是三个现成的字段。
+ *
+ * 格式（存 `workflow_tasks.result`，JSON）：
+ *   { state: 'done' | 'stopped' | 'error', summary, artifacts: [{kind,target,label}], error }
+ */
+
+// 认得出的产物类型。**只认带扩展名的**：`deploy.sh` 是产物，`npm test` 不是。
+const ARTIFACT_EXT =
+  /\.(md|markdown|txt|text|html?|css|m?js|cjs|tsx?|jsx|vue|svelte|json|ya?ml|toml|ini|conf|cfg|env|py|go|rs|java|kt|rb|php|cs|cpp|cxx|hpp|sh|bash|ps1|sql|xml|svg|png|jpe?g|gif|webp|ico|pdf|docx?|xlsx?|pptx?|csv|db|sqlite)$/i;
+
+/** 把一个 token 认成文件路径（认不出给 null） */
+function asFile(raw) {
+  let s = String(raw ?? '').trim();
+  // 引用文件时爱带行号（`index.html:6`）—— 那不是路径的一部分
+  s = s.replace(/:\d+(?::\d+)?$/, '');
+  s = s.replace(/^["'`]+|["'`]+$/g, '');
+  s = s.replace(/[，。、；：）)】」》]+$/, '');
+  if (!s || s.length > 160) return null;
+  if (/\s/.test(s)) return null; // 有空格 → 更像命令或一句话
+  if (/^(https?|mailto):/i.test(s)) return null;
+  if (!ARTIFACT_EXT.test(s)) return null;
+  if (!/^[\w.@~\-/\\\u4e00-\u9fa5]+$/.test(s)) return null;
+  return s;
+}
+
+/** 把一个地址认成链接（认不出给 null） */
+function asLink(raw, label) {
+  const u = String(raw ?? '')
+    .trim()
+    .replace(/[.,;:!?，。；：！？）)】」》]+$/, '');
+  if (!/^https?:\/\//i.test(u)) return null;
+  const text = String(label ?? '').replace(/\s+/g, ' ').trim();
+  return { kind: 'link', target: u, label: text || u.replace(/^https?:\/\//i, '') };
+}
+
+/**
+ * 从一段产出里挑出**产物**：文件路径 + 链接。
+ *
+ * 只取前 8 个 —— 一屏能读完的量。多出来的在界面上折成「还有 N 个」，
+ * 而不是把时间轴撑成一张文件清单。
+ */
+export function artifactsOf(text) {
+  const src = String(text ?? '');
+  const out = [];
+  const seen = new Set();
+  const add = (a) => {
+    if (!a) return;
+    const key = `${a.kind}|${a.target}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(a);
+  };
+  // ① markdown 链接：文案比地址好读（PR 标题、文档名）
+  for (const m of src.matchAll(/\[([^\]\n]{1,60})\]\((https?:\/\/[^)\s]+)\)/g)) add(asLink(m[2], m[1]));
+  // ② 裸链接
+  for (const m of src.matchAll(/https?:\/\/[^\s<>"'）)】」]+/g)) add(asLink(m[0]));
+  // ③ 反引号里的路径 —— 模型最爱这么写，也是最准的一档
+  for (const m of src.matchAll(/`([^`\n]{2,160})`/g)) {
+    const f = asFile(m[1]);
+    if (f) add({ kind: 'file', target: f, label: f });
+  }
+  // ④ 没被反引号包起来的路径：只认**带目录**的（`docs/x.md`），
+  //    不认光秃秃的文件名 —— 正文里"index.html"这种裸词经常只是顺口提一句
+  for (const m of src.matchAll(/(?:^|[\s（(])([\w.@~\-/\\\u4e00-\u9fa5]*\/[\w.@~\-\\\u4e00-\u9fa5]+\.[A-Za-z0-9]{1,8})(?=$|[\s，。、；：）)】」》])/g)) {
+    const f = asFile(m[1]);
+    if (f) add({ kind: 'file', target: f, label: f });
+  }
+  return out.slice(0, 8);
+}
+
+/**
+ * 一句话：这段产出"做了什么"。
+ *
+ * **按行取第一句有内容的话**，不是第一行、也不是第一段：
+ *   · 第一行常常只有 `**改动清单**` 几个字（标题不是结论）；
+ *   · 也不能把一整段列表拼起来 —— "改完了。- a - b"读起来是一串流水账。
+ * 所以先逐行拆、各自清理，再挑第一行够长度的。
+ */
+export function summaryOf(text, max = 90) {
+  let s = String(text ?? '');
+  if (!s.trim()) return null;
+  s = s.replace(/```[\s\S]*?```/g, ' '); // 代码块是"怎么做"，不是"做了什么"
+  s = s.replace(/\[([^\]\n]{1,60})\]\((https?:\/\/[^)\s]+)\)/g, '$1'); // 链接只留文案
+  const lines = [];
+  for (const para of s.split(/\n{2,}/)) {
+    for (const raw of para.split('\n')) {
+      const line = raw
+        .replace(/^#{1,6}\s*/, '')
+        .replace(/\*\*|__/g, '') // 先摘掉成对的加粗：`**标题**` 去掉后不该剩一个星号
+        .replace(/^[>\-*•]\s*/, '')
+        .replace(/`([^`]*)`/g, '$1') // 反引号去掉，路径本身留着（可读）
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (line) lines.push(line);
+    }
+  }
+  // 开场白（"好的，我先看看…"）不是结论 —— 后面还有话就跳过它
+  const isOpener = (p) => /^(好的|好|收到|明白|了解|ok|OK)[，,。.!！、\s]/.test(p) && p.length < 24;
+  const first = lines.find((p) => p.length >= 8 && !isOpener(p)) ?? lines.find((p) => !isOpener(p)) ?? null;
+  if (!first) return null;
+  /*
+   * 再收到**第一句**：一行里常常塞着"结论 + 解释"（"测试完成。结论：通过（带 2 项待确认）。…"），
+   * 结论就是第一句，后面那段是细节 —— 一行里全塞进执行结果，等于没摘要。
+   * 只在中文句号/问叹号、以及"点 + 空格"处切：英文小数点、文件名里的点不能被切开。
+   */
+  const sentence =
+    first.split(/(?<=[。！？])|(?<=[a-zA-Z])\.\s+/).find((x) => x.trim().length >= 8)?.trim() ?? first;
+  return sentence.length > max ? sentence.slice(0, max).replace(/[，,。.\s]+$/, '') + '…' : sentence;
+}
+
+/** 报错原文：保留换行（stack 折行有意义），但别把整篇日志搬进时间轴 */
+function clipError(raw, max = 500) {
+  const s = String(raw ?? '').trim();
+  if (!s) return '执行失败';
+  return s.length > max ? s.slice(0, max) + '…' : s;
+}
+
+/** 把一次执行拆成界面要的三样东西（见上面的说明） */
+export function resultOf({ status, finalText = '', error = null } = {}) {
+  if (status === '失败' || error) {
+    return { state: 'error', summary: null, artifacts: [], error: clipError(error || '执行失败') };
+  }
+  const stopped = status === '已停止';
+  return {
+    state: stopped ? 'stopped' : 'done',
+    summary: summaryOf(finalText),
+    artifacts: artifactsOf(finalText),
+    error: null,
+  };
+}
+
+/** 读库里的 result；老数据没这一列 → 拿 note 兜底（至少还能显示一句话/报错） */
+function parseResult(row) {
+  if (row?.result) {
+    try {
+      const r = JSON.parse(row.result);
+      if (r && typeof r === 'object') return r;
+    } catch {
+      /* 坏 JSON 就当没有 —— 下面用 note 兜底 */
+    }
+  }
+  const note = String(row?.note ?? '').trim();
+  if (!note) return null;
+  const failed = row?.status === '失败';
+  return {
+    state: failed ? 'error' : 'done',
+    // 兜底也走同一个"取一句话"，别把 160 字的截断串原样贴回去
+    summary: failed ? null : summaryOf(note),
+    artifacts: failed ? [] : artifactsOf(note),
+    error: failed ? clipError(note) : null,
+  };
+}
+
 /**
  * 人手动改这一步的状态：待办 / 已阻塞 / 已完成。
  *
@@ -903,7 +1113,8 @@ function summarize(text, max = 160) {
  * 界面上没有任何入口能收拾。这个函数就是那个入口。
  *
  * 语义（这是唯一的定义处，界面只按它渲染）：
- *   待办   → 回到「待开始」，可以再派活；把上一轮的执行痕迹清干净
+ *   待办   → **直接派活**（2026-10-17 用户定：改成待办就执行，不再需要人点「派活」）；
+ *            派不出去（他正忙）就留在待办，重试节拍会再派；把上一轮的执行痕迹清干净
  *   已阻塞 → 停下等人处理，不派活
  *   已完成 → **就是"通过"**，走 decide 那条路，不另写一套推进逻辑
  *
@@ -920,7 +1131,7 @@ export function setStepStatus(runId, wanted) {
 
   if (wanted === '待办') {
     store.updateWorkflowTask(task.id, {
-      status: '待开始',
+      status: '待办',
       agentRunId: null,
       decision: null,
       // ⚠️ **不清 note**：它记的是"这一步上次干出来什么"，是**历史事实**。
@@ -930,7 +1141,13 @@ export function setStepStatus(runId, wanted) {
       endedAt: null,
     });
     store.touchWorkflowRun(runId);
-    return viewRun(store.getWorkflowRun(runId), { withTasks: true });
+    // 改成待办 = 要它（再）跑：马上派一次。派不出去也不留人管 ——
+    // 他正忙 → 退回待办，重试节拍会接着派；额度超了 → 已阻塞（那个本来就该等人）。
+    try {
+      return startCurrentStep(runId);
+    } catch {
+      return viewRun(store.getWorkflowRun(runId), { withTasks: true });
+    }
   }
 
   if (wanted === '已阻塞') {
@@ -962,9 +1179,35 @@ export function stepStatusChoices(runId) {
   const task = currentTask(run);
   if (!task) return [];
   const cur =
-    task.status === '待开始' ? '待办'
+    task.status === '待办' ? '待办'
     : task.status === '已阻塞' ? '已阻塞'
     : task.status === '已完成' ? '已完成'
     : null;
   return ['待办', '已阻塞', '已完成'].filter((s) => s !== cur);
+}
+
+/**
+ * 把停在「待办」的当前步骤再派一遍（挂在 30 秒一次的调度节拍上）。
+ *
+ * 什么时候会停在待办：经办人上一条还在跑（busy 退回待办）、或者人手动改成了待办。
+ * 以前这种情况要人点「派活，开始这一步」—— 那颗按钮已经去掉了（2026-10-17 对齐 Multica：
+ * 待办即执行），这里就是补位的那只手。
+ *
+ * 只捞「当前步骤 + 待办 + 有经办人」的：已阻塞/失败本来就该等人，别去动它；
+ * 额度闸在 startCurrentStep 里会照常拦（拦下就变已阻塞，不会在这儿打转）。
+ */
+export function retryPendingSteps() {
+  const started = [];
+  for (const run of store.listWorkflowRuns()) {
+    if (run.status !== '进行中') continue;
+    const task = currentTask(run);
+    if (!task || task.status !== '待办' || !task.assigneePersonaId) continue;
+    try {
+      startCurrentStep(run.id);
+      started.push(task.nodeName);
+    } catch {
+      // 派不出去就留着，下个节拍再来 —— 每次失败都已经把原因写在任务上了
+    }
+  }
+  return started;
 }

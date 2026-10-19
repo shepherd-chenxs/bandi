@@ -303,6 +303,72 @@ try {
   });
   check('乱改状态 400', badStatus.status === 400, String(badStatus.status));
 
+  /*
+   * 拖进「进行中」＝开工（2026-10-17 对齐 Multica：状态到位 + 有执行人才触发）。
+   *
+   * 真派活会去起一次 agent CLI —— 冒烟里绝不能真跑（烧 token、还要连网）。
+   * 所以这里造一个**"这个项目正有活跑"**的现场（2026-10-18 起忙判定是
+   * 「每人最多 2 件」+「同一项目只跑一件」，卡派活不再受 1:1 会话忙的限制）：
+   * 插一条带 projectId 的跑中 run，派活就会在项目互斥上被挡住。验的正是最关键的三条：
+   *   ① 有执行人的卡进「进行中」**会去派活**（不是默默改个状态）；
+   *   ② 派不出去时**状态原地不动** —— 卡要是留在「进行中」却没跑，看板上就成了假话；
+   *   ③ 撞忙要落排队标记（30 秒节拍会自己再试，不靠人手动重点）。
+   */
+  const devConv = store.ensureConversationForPersona(dev.id);
+  store.createRun({ conversationId: devConv.id, runtime: 'codex', personaId: dev.id, projectId: proj.id });
+  const autoCard = await mk({ title: '手工卡：拖进进行中就开工', personaId: dev.id });
+  const autoId = autoCard.body?.task?.id ?? '';
+  const auto = await api(`/api/projects/tasks/${encodeURIComponent(autoId)}`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: '进行中' }),
+  });
+  check(
+    '有执行人 + 拖进「进行中」→ 真去派活（他正忙 → 400 并说清原因）',
+    auto.status === 400 && /没开工/.test(String(auto.body?.error ?? '')),
+    `${auto.status} ${JSON.stringify(auto.body?.error ?? '')}`,
+  );
+  check('派不出去时状态不动，卡还留在「待办」', store.getProjectTask(autoId)?.status === '待办', String(store.getProjectTask(autoId)?.status));
+  check('派不出去也不会留下 runId（看板不会显示"在跑"）', !store.getProjectTask(autoId)?.runId, String(store.getProjectTask(autoId)?.runId));
+  check('撞忙要落排队标记（节拍会自己再试）', !!store.getProjectTask(autoId)?.queuedAt, String(store.getProjectTask(autoId)?.queuedAt));
+  store.updateProjectTask(autoId, { queuedAt: null }); // 别给后面的用例留下会自动开工的卡
+
+  /*
+   * 工单会话（2026-10-18）：一张卡一条，不再复用执行人那条 1:1。
+   * 这是"收件箱 / 执行槽拆开"的落点，钉住三条：同卡复用、异卡分开、不混进 1:1。
+   */
+  const execA = store.ensureExecConversation({ personaId: dev.id, scope: `task:${autoId}`, title: '任务 · A', projectId: proj.id });
+  const execA2 = store.ensureExecConversation({ personaId: dev.id, scope: `task:${autoId}`, title: '任务 · A', projectId: proj.id });
+  const execB = store.ensureExecConversation({ personaId: dev.id, scope: 'task:another', title: '任务 · B', projectId: proj.id });
+  check('同一张卡两次取到同一条工单会话（返工续它）', execA.id === execA2.id, `${execA.id} / ${execA2.id}`);
+  check('不同卡是不同会话', execA.id !== execB.id);
+  check('工单会话 kind=exec 且带 execScope', execA.kind === 'exec' && execA.execScope === `task:${autoId}`, `${execA.kind} ${execA.execScope}`);
+  check('工单会话不是执行人那条 1:1', store.ensureConversationForPersona(dev.id).id !== execA.id);
+
+  /*
+   * 每人最多 2 件同时在跑（2026-10-18）。造两条跑中的 run（不带项目，避开项目互斥），
+   * 第三次派活必须被挡，而且理由说清是"人满了"。
+   */
+  const r1 = store.createRun({ conversationId: devConv.id, runtime: 'codex', personaId: dev.id });
+  const r2 = store.createRun({ conversationId: devConv.id, runtime: 'codex', personaId: dev.id });
+  const dispatch = await import('./dispatch.mjs');
+  let capErr = null;
+  try {
+    dispatch.dispatchToThread(execB.id, '试试第三件', {});
+  } catch (e) {
+    capErr = e;
+  }
+  // 理由里报的是"已经有 N 件在跑"（前面还有一条项目互斥造出来的跑中 run），
+  // 所以判"是不是人满了"只看措辞，不钉死数字
+  check('每人 2 件上限：第三件被挡（busy）', capErr?.code === 'busy' && /件活在跑/.test(String(capErr.message ?? '')), String(capErr?.message ?? '没挡住'));
+  store.finishRun(r1.id, { status: '完成' });
+  store.finishRun(r2.id, { status: '完成' });
+
+  // 任务卡的工单会话（kind=exec）里派活，**不该**投影成「聊天派活」卡 —— 它自己就是那张任务卡（2026-10-19）
+  const execRun = store.createRun({ conversationId: execB.id, runtime: 'codex', personaId: dev.id });
+  store.finishRun(execRun.id, { status: '完成', exitCode: 0 });
+  const afterExec = projectTasks(proj);
+  check('任务卡工单会话不投影成聊天派活卡', !afterExec.rows.some((r) => r.conversation_id === execB.id),
+    String(afterExec.rows.filter((r) => r.source === 'chat').map((r) => r.conversation_id).join(',')));
+
   const del = await api(`/api/projects/tasks/${encodeURIComponent(tid)}`, { method: 'DELETE' });
   check('删除 200', del.status === 200, String(del.status));
   const board3 = (await api(`/api/projects/${encodeURIComponent(proj.id)}/tasks`)).body;

@@ -164,8 +164,9 @@ export async function waitHealthy(port, ms = 30000) {
 /**
  * 起一个**脱离当前进程**的服务：终端关了、壳关了，它都还在。
  *
- * `dataDir` 只在给了的时候才设 `BANDI_DATA` —— 不设就还是 `<仓库>/data`，
- * 与命令行那条路的行为完全一致（桌面壳会显式指到用户目录，见 docs/形态决策.md §十二）。
+ * `dataDir` 只在给了的时候才设 `BANDI_DATA` —— 不设就用服务端自己的默认
+ * （本机用户目录，见 `config.mjs` / `data-dir.mjs`）。所有起法（命令行、桌面壳、自启）
+ * 都走同一个默认；要隔离/指定就用 `BANDI_DATA`（2026-10-18 收敛）。
  */
 export function startDetached({ port, dataDir, logFile, extraEnv = {} }) {
   fs.mkdirSync(path.dirname(logFile), { recursive: true });

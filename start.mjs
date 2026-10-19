@@ -13,16 +13,17 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { ensureRunning, urlOf } from './apps/server/src/lifecycle.mjs';
+import { userDataDir } from './apps/server/src/data-dir.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)));
 const PORT = Number(process.env.BANDI_PORT ?? 8787);
 const HOME = urlOf(PORT);
 /*
- * 日志跟着**数据目录**走（`BANDI_DATA`；不设就是 `<仓库>/data`）。
+ * 日志跟着**数据目录**走（`BANDI_DATA`；不设就是本机用户目录 —— 与桌面壳同一个默认）。
  * 日志本来就是运行时数据 —— 数据指到别处、日志还留在仓库里，是两半。
  * `deploy/start-control-plane.sh` 也是这个规矩（日志进 `~/bandi-data/`）。
  */
-const DATA = process.env.BANDI_DATA || path.join(root, 'data');
+const DATA = process.env.BANDI_DATA ? path.resolve(process.env.BANDI_DATA) : userDataDir();
 const LOG = path.join(DATA, 'server.log');
 const FORCE = process.argv.slice(2).some((a) => a === '--restart' || a === '-restart');
 const NO_BROWSER = process.env.BANDI_NO_BROWSER === '1'; // 测试时别真开浏览器
@@ -53,8 +54,9 @@ function openBrowser() {
 
 say(`班底平台 · 端口 ${PORT}`);
 say(`工作根 ${root}`);
+say(`数据目录 ${DATA}`);
 
-const r = await ensureRunning({ port: PORT, logFile: LOG, force: FORCE });
+const r = await ensureRunning({ port: PORT, dataDir: DATA, logFile: LOG, force: FORCE });
 
 // ① 已经在跑
 if (r.action === 'already') {

@@ -5,11 +5,12 @@
  * 分工：Rust 那半只管窗口与进程；"控制面起没起、要不要起、退出收不收"全在这儿 ——
  * 用的是 `apps/server/src/lifecycle.mjs`，**与 `start.cmd` 同一条实现**（不写第二份）。
  *
- * 与 `start.mjs` 的两处本质差别，都是"桌面应用"这个形态要求的：
- *   1. **数据目录进用户目录**（`%APPDATA%\bandi` 等），不塞安装目录 —— 否则用户机器上要么
- *      要管理员权限、要么升级时被覆盖（见 docs/形态决策.md §十二 第 1 条）；
- *   2. **端口自己挑**（下面 `pickPort` 有长注释）：命令行的 8787 是给人用的约定，
- *      桌面版没人关心端口，它只该**别撞上别人的程序、也别粘上别人的实例**。
+ * 与 `start.mjs` 的本质差别只剩**端口**（下面 `pickPort` 有长注释）：命令行的 8787 是
+ * 给人用的约定，桌面版没人关心端口 —— 它只该**别撞上别人的程序、也别粘上别人的实例**。
+ *
+ * 数据目录两边**同一个默认**：本机用户目录（`apps/server/src/data-dir.mjs`）。桌面版不能
+ * 塞安装目录 —— 否则用户机器上要么要管理员权限、要么升级被覆盖（docs/形态决策.md §十二 第 1 条）；
+ * 要沙盒/临时/真实库，显式 `BANDI_DATA`。
  *
  * 与 Rust 那半的协议（stdout 只出协议行，人看的话都走 stderr，免得解析被搅）：
  *   `BANDI_SHELL READY <url> <0|1>`   1 = 是我们起的（退出要收），0 = 本来就在跑
@@ -19,7 +20,6 @@
  * 退出信号：stdin 收到一行 `STOP`，或 stdin 被关闭（壳没了），或 SIGTERM/SIGINT。
  */
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import {
   ensureRunning,
@@ -30,6 +30,7 @@ import {
   processInfo,
   urlOf,
 } from '../server/src/lifecycle.mjs';
+import { userDataDir } from '../server/src/data-dir.mjs';
 
 /** 探测起点。桌面版**没有**"端口"这个概念要给人看，这里只是个起点。 */
 const BASE_PORT = Number(process.env.BANDI_PORT_BASE ?? 8787);
@@ -38,20 +39,8 @@ const PROBE_RANGE = 20;
 
 const emit = (line) => process.stdout.write(line + '\n');
 
-/** 桌面版的数据目录：**绝不能是安装目录** */
-function desktopDataDir() {
-  if (process.env.BANDI_DATA) return process.env.BANDI_DATA;
-  const home = os.homedir();
-  if (process.platform === 'win32') {
-    const base = process.env.APPDATA || path.join(home, 'AppData', 'Roaming');
-    return path.join(base, 'bandi');
-  }
-  if (process.platform === 'darwin') return path.join(home, 'Library', 'Application Support', 'bandi');
-  const base = process.env.XDG_DATA_HOME || path.join(home, '.local', 'share');
-  return path.join(base, 'bandi');
-}
-
-const DATA = desktopDataDir();
+/* 数据目录默认与命令行**同一份**（`userDataDir()`）；要沙盒/临时/真实库显式 `BANDI_DATA`。 */
+const DATA = process.env.BANDI_DATA ? path.resolve(process.env.BANDI_DATA) : userDataDir();
 const LOG = path.join(DATA, 'server.log');
 const PORT_FILE = path.join(DATA, 'port');
 const SHELL_LOG = path.join(DATA, 'shell.log');

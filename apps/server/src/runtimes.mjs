@@ -65,6 +65,11 @@ const FAMILIES = {
 
 const ADAPTERS = { codex, claude, dsh };
 
+/** 族 id → 人看的名字。报错和说明文字里用（别在界面/日志里裸奔一个 `claude`） */
+export function familyLabel(id) {
+  return FAMILIES[id]?.label ?? String(id ?? '');
+}
+
 /** 预置在本机的运行时：id 固定，可改不可删（删了就没有默认执行端了） */
 const SEEDED = ['codex', 'dsh'];
 
@@ -335,13 +340,36 @@ export function getRuntime(deviceId, runtimeId) {
   return getDevice(deviceId)?.runtimes.find((r) => r.id === runtimeId) ?? null;
 }
 
-/** 给一次运行找执行端：员工只记 runtime id，哪台设备来跑由这里挑 */
+/**
+ * 给一次运行找执行端：员工只记 runtime id，哪台设备来跑由这里挑。
+ *
+ * **`auto` = 用当下能跑的第一个**（2026-10-18）。
+ * 只有内置的「喜儿」用它：新装的机器上还没有任何运行时，她不该因为"没绑定"就没法用；
+ * 用户接上任意一个 CLI（Claude Code / Codex / dsh…）之后，她下一次派活就自动落过去。
+ *
+ * 普通员工**不该**用 auto —— 他们干的是具体活，该明确绑一个（否则换机器/换 CLI 时
+ * 行为会悄悄变）。这条只是给"出厂就在、但出厂时可能一台 CLI 都没有"的那个人留的。
+ */
 export function resolveForRun(runtimeId) {
+  if (String(runtimeId ?? '') === 'auto') {
+    for (const d of loadDevices()) {
+      const hit = d.runtimes.find(usableNow);
+      if (hit) return hit;
+    }
+    return null;
+  }
   for (const d of loadDevices()) {
     const rt = d.runtimes.find((r) => r.id === runtimeId);
     if (rt) return rt;
   }
   return null;
+}
+
+/** 现在就能起活吗：启用的、有路径的、班底起得来的（远端那台能不能起是它自己的事） */
+function usableNow(r) {
+  if (!r || !r.enabled) return false;
+  if (r.remote) return true;
+  return !!r.path && launchable(r.family, r.path);
 }
 
 function ensureScoped(saved, deviceId) {

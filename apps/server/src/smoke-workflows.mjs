@@ -39,10 +39,10 @@ const check = (label, ok, detail = '') => {
   if (!ok) failed += 1;
 };
 
-// 两个人：一个挂着 bandi-qa，一个什么技能都没挂
+// 两个人：一个挂着测试的技能，一个什么技能都没挂
 const qa = store.createPersona({ name: '星宇', runtime: 'codex', cwd: tmp, instructions: '' });
 const noSkills = store.createPersona({ name: '谁也没挂', runtime: 'codex', cwd: tmp, instructions: '' });
-store.setPersonaSkills(qa.id, ['bandi-qa']);
+store.setPersonaSkills(qa.id, ['webapp-testing']);
 
 store.upsertWorkflowTemplate({
   id: 't-assign',
@@ -62,7 +62,7 @@ check('第一步任务建出来了', !!first, first?.status);
 check('状态是「已阻塞」', first?.status === '已阻塞', first?.status);
 check('没有指派任何人（技能没被用来顶人）', !first?.assigneePersonaId, String(first?.assigneePersonaId));
 check('原因就是「没点名经办人」', first?.note?.startsWith('「测试」没点名经办人'), first?.note);
-check('原因里不含技能名（哪怕有人挂着 bandi-qa）', !/bandi-qa|技能/.test(first?.note ?? ''), first?.note);
+check('原因里不含技能名（哪怕有人挂着 webapp-testing）', !/webapp-testing|技能/.test(first?.note ?? ''), first?.note);
 check('流程照样建出来', run?.status === '进行中', run?.status);
 
 console.log('\n② 没点名的步骤不能直接派活');
@@ -155,13 +155,14 @@ console.log('\n⑧ 老库的 bandi-flow 模板 + 实例 → 自动迁到 bandi-d
 store.upsertWorkflowTemplate({
   id: 'bandi-flow',
   name: '班底交付流程',
+  builtIn: 1, // 真库里的内建模板带着这个标记 —— detail 同步只对它生效
   start: 'n1',
   nodes: [{ id: 'n1', name: '谈需求', x: 220, y: 60, manual: true, approve: 'end', reject: 'end' }],
 });
 const oldRun = store.createWorkflowRun({ templateId: 'bandi-flow', title: '老库里的实例' });
 store.setWorkflowCurrentNode(oldRun.id, 'n1');
 workflows.ensureBuiltInTemplate();
-check('内建模板 id 是 bandi-delivery（bandi-flow 只留给技能）', workflows.BUILT_IN_TEMPLATE.id === 'bandi-delivery', workflows.BUILT_IN_TEMPLATE.id);
+check('内建模板 id 是 bandi-delivery', workflows.BUILT_IN_TEMPLATE.id === 'bandi-delivery', workflows.BUILT_IN_TEMPLATE.id);
 check('旧 id 的模板没了', !store.getWorkflowTemplate('bandi-flow'));
 check('新 id 的模板在', !!store.getWorkflowTemplate('bandi-delivery'));
 check('实例的 templateId 跟着改了', store.getWorkflowRun(oldRun.id)?.templateId === 'bandi-delivery', String(store.getWorkflowRun(oldRun.id)?.templateId));
@@ -228,6 +229,72 @@ check('manual：停在「待确认」，流程还卡在这一步', paused.task?.
 oneNode('t-auto', false);
 const auto = finishWith('t-auto', 'ar-auto');
 check('非 manual：自动往下走，approve=end → 流程收尾', auto.run?.status === '已完成', `${auto.task?.status} / ${auto.run?.status}`);
+
+/*
+ * ⑪ 内建模板的 detail 随平台更新（产物模板 / 收敛检查写进节点提示词）＋ 项目宪法的注入块。
+ */
+console.log('\n⑪ 模板 detail 同步与项目宪法注入');
+workflows.ensureBuiltInTemplate();
+const details = new Map(workflows.nodesOf(store.getWorkflowTemplate('bandi-delivery')).map((n) => [n.id, n.detail]));
+check('谈需求指向 spec 模板', (details.get('n1') ?? '').includes('docs/模板/spec.md'), details.get('n1'));
+check('定计划指向 plan/task 模板且不写卡文件', (details.get('n2') ?? '').includes('docs/模板/plan.md') && (details.get('n2') ?? '').includes('docs/模板/task.md'));
+check('测试带收敛检查', (details.get('n4') ?? '').includes('收敛'), details.get('n4'));
+const dispatch = await import('./dispatch.mjs');
+const pj = store.createProject({ name: '宪法项目', root: tmp });
+check('没写宪法 → 什么都不注', dispatch.projectConstitutionBlock(pj.id) === '', JSON.stringify(dispatch.projectConstitutionBlock(pj.id)));
+store.updateProject(pj.id, { constitution: '零依赖，不许引入 npm 包' });
+const blk = dispatch.projectConstitutionBlock(pj.id);
+check('写了宪法 → 全文注入', blk.includes('零依赖，不许引入 npm 包'), blk);
+check('注入块带优先级规则（契约赢）', blk.includes('以契约为准'), blk.split('\n')[1]);
+store.updateProject(pj.id, { constitution: '   ' });
+check('清空宪法 → 回到不注入', dispatch.projectConstitutionBlock(pj.id) === '');
+check('updateProject 把空串归一成 NULL', store.getProject(pj.id).constitution === null, String(store.getProject(pj.id).constitution));
+
+/*
+ * ⑫ 执行结果（2026-10-18 用户要求：简洁明了）—— 界面只按三种样子渲染：
+ *   ① 有产物 → 只列产物（文件 / 链接）；
+ *   ② 没产物 → 一句话"做了什么"；
+ *   ③ 失败   → 报错原文。
+ * 所以在 run 结束那一刻、拿**全文**拆好存进 `workflow_tasks.result`。
+ */
+console.log('\n⑫ 执行结果：有产物列产物 / 没产物一句话 / 失败给原文');
+const doneRes = workflows.resultOf({
+  status: '已完成',
+  finalText: '已在 `index.html` 的卡片里加上这句话。\n\n改动：`index.html:6`，见 https://github.com/acme/web/pull/12',
+});
+check('完成 → state = done', doneRes.state === 'done', doneRes.state);
+check('产物认出文件（行号不被当成路径）', doneRes.artifacts.some((a) => a.kind === 'file' && a.target === 'index.html'), JSON.stringify(doneRes.artifacts));
+check('产物认出链接', doneRes.artifacts.some((a) => a.kind === 'link' && /pull\/12$/.test(a.target)), JSON.stringify(doneRes.artifacts));
+check('一句话取第一行有内容的', /已在 index\.html 的卡片里加上这句话/.test(doneRes.summary ?? ''), doneRes.summary);
+
+const plainRes = workflows.resultOf({ status: '已完成', finalText: '好的，我先看了一下项目。\n\n这次只做了检查，没改任何文件。' });
+check('没产物 → artifacts 为空', plainRes.artifacts.length === 0, JSON.stringify(plainRes.artifacts));
+check('没产物 → 一句话跳过开场白', /只做了检查/.test(plainRes.summary ?? ''), plainRes.summary);
+
+const badRes = workflows.resultOf({ status: '失败', error: '退出码 1：ENOENT 找不到 dist/index.html' });
+check('失败 → state = error 且带原文', badRes.state === 'error' && /ENOENT/.test(badRes.error ?? ''), JSON.stringify(badRes));
+check('失败 → 不硬凑一句话', badRes.summary === null, String(badRes.summary));
+
+// 落到库里 + 视图带出来：跑完这一步，界面拿到的就是拆好的结构
+oneNode('t-result', true);
+const resRun = workflows.startWorkflow({ templateId: 't-result', title: '结果', autoStart: false });
+const resTask = store.listWorkflowTasks(resRun.id)[0];
+store.updateWorkflowTask(resTask.id, { status: '进行中', agentRunId: 'ar-result' });
+workflows.onAgentRunFinished({
+  id: 'ar-result',
+  status: '已完成',
+  finalText: '改完了。\n\n- `src/app.js` 新增一个按钮\n- `README.md` 补了用法',
+});
+const resView = workflows.getWorkflowView(resRun.id);
+const resOut = (resView.tasks ?? [])[0]?.result ?? {};
+check('落库：result 是 JSON 串', !!store.getWorkflowTask(resRun.id, 'n1', 1)?.result, String(store.getWorkflowTask(resRun.id, 'n1', 1)?.result).slice(0, 40));
+check('视图：两个文件产物都带出来', (resOut.artifacts ?? []).filter((a) => a.kind === 'file').length === 2, JSON.stringify(resOut.artifacts));
+check('视图：一句话取第一行有内容的（不拼列表）', resOut.summary === 'src/app.js 新增一个按钮', resOut.summary);
+
+// 老数据没有 result 列 → 拿 note 兜底（至少还能显示一句话 / 产物）
+store.updateWorkflowTask(resTask.id, { result: null, note: '已把 `docs/需求.md` 写完' });
+const legacyRes = (workflows.getWorkflowView(resRun.id).tasks ?? [])[0]?.result ?? {};
+check('老数据：用 note 兜底出产物', (legacyRes.artifacts ?? []).some((a) => a.target === 'docs/需求.md'), JSON.stringify(legacyRes));
 
 try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* 临时目录，删不掉就算了 */ }
 console.log(`\n结论：${failed ? '有 ' + failed + ' 项没通过' : '全通过'}`);

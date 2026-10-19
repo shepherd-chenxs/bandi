@@ -21,8 +21,10 @@ import { dispatchToThread, personaRoots } from './dispatch.mjs';
 import * as workflows from './workflows.mjs';
 import * as quota from './quota.mjs';
 import * as status from './status.mjs';
-import { projectTasks, allTasks, createProjectTask, updateProjectTask, startProjectTask, onTaskRunFinished, afterMerged } from './project-tasks.mjs';
+import { projectTasks, allTasks, personaTasks, createProjectTask, updateProjectTask, startProjectTask, onTaskRunFinished, afterMerged, upsertRepoCard } from './project-tasks.mjs';
 import * as git from './git-repos.mjs';
+import * as schedules from './schedules.mjs';
+import * as secretary from './secretary.mjs';
 
 const webDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'web');
 
@@ -44,6 +46,16 @@ function runtimeOptions() {
     blocked: r.blocked,
     enabled: r.enabled,
   }));
+}
+
+/**
+ * 这个运行时 id 收不收。
+ *
+ * `'auto'` 也是合法值（`runtimes.resolveForRun` 认识它：按"谁现在能用"挑一个）——
+ * 内置秘书就用它，这样换机器、换 CLI 都不用回来改她。界面上只有内置员工的下拉里有这一条。
+ */
+function runtimesOk(id) {
+  return id === 'auto' || runtimeOptions().some((r) => r.id === id);
 }
 
 /**
@@ -166,6 +178,16 @@ function readBody(req) {
 }
 
 const routes = {
+  // 前端是长活 SPA：磁盘上的 app.js 换了，开着的页面不会自己换 —— 「点了没反应」多半是它。
+  // 前端每 60 秒来对一次指纹（mtime+size），变了就亮「刷新」提示条。只 stat 一个文件，几乎零成本。
+  'GET /api/web-version': async (req, res) => {
+    try {
+      const st = fs.statSync(path.join(webDir, 'app.js'));
+      sendJson(res, 200, { v: `${Math.round(st.mtimeMs)}-${st.size}` });
+    } catch {
+      sendJson(res, 200, { v: null });
+    }
+  },
   'GET /api/state': async (req, res) => {
     sendJson(res, 200, {
       runtimes: runtimeOptions(),
@@ -244,7 +266,7 @@ const routes = {
     const body = await readBody(req);
     const name = String(body.name ?? '').trim();
     if (!name) return fail(res, 400, 'E1002', '员工需要名字');
-    const runtime = runtimeOptions().some((r) => r.id === body.runtime) ? body.runtime : 'codex';
+    const runtime = runtimesOk(body.runtime) ? body.runtime : 'codex';
     // 模型名**不再校验**：以前要对着账本查"有没有这个模型"，账本已经下架了。
     // 现在的权威是 CLI 自己 —— 名字填错了它会报，班底替它把关只会把新模型挡在门外。
     const persona = store.createPersona({
@@ -461,6 +483,7 @@ async function handlePersona(req, res, url) {
   const skillsAll = /^\/api\/personas\/([^/]+)\/skills$/.exec(url.pathname);
   const skillOne = /^\/api\/personas\/([^/]+)\/skills\/([^/]+)$/.exec(url.pathname);
   const runtimeSkills = /^\/api\/personas\/([^/]+)\/runtime-skills$/.exec(url.pathname);
+  const personaTasksOf = /^\/api\/personas\/([^/]+)\/tasks$/.exec(url.pathname);
 
   // 删员工：级联清关系数据；是他的群助手就先拦下（换人再删）
   // （one 的正则到行尾为止，所以只可能命中 /api/personas/<id> 这一种路径）
@@ -468,6 +491,15 @@ async function handlePersona(req, res, url) {
     const id = decodeURIComponent(one[1]);
     const persona = store.getPersona(id);
     if (!persona) return fail(res, 404, 'E2005', '员工不存在');
+
+    /*
+     * 内置员工先拦在这儿（2026-10-18）。`store.deletePersona` 里也有一道 —— 那道是底线
+     * （别处绕过接口直接调 store 也删不掉），这道负责**把话说清楚、给对的状态码**：
+     * 到 store 里抛出来只会变成 500，前端弹一句"服务端出错"，人会以为是 bug。
+     */
+    if (persona.builtin) {
+      return fail(res, 403, 'E1075', `「${persona.name}」是内置员工，不能删 —— 可以改名，也可以改她的岗位指令。`);
+    }
 
     const asAssistant = store.groupsWhereAssistant(id);
     if (asAssistant.length) {
@@ -557,6 +589,15 @@ async function handlePersona(req, res, url) {
     });
   }
 
+  // 这个人的任务（员工详情 → 任务）：跟任务看板**同一批行**，服务端按执行人筛一遍。
+  // 单独一条路由而不是塞进上面那个 GET /api/personas/:id：那个是"配置"（打开就要），
+  // 这个要扫全部会话与流程，重得多 —— 前端并行取，取不到也不该把整页拖黑。
+  if (req.method === 'GET' && personaTasksOf) {
+    const persona = store.getPersona(decodeURIComponent(personaTasksOf[1]));
+    if (!persona) return fail(res, 404, 'E2008', '员工不存在');
+    return sendJson(res, 200, personaTasks(persona));
+  }
+
   if ((req.method === 'PUT' || req.method === 'PATCH') && one) {
     const id = decodeURIComponent(one[1]);
     const before = store.getPersona(id);
@@ -564,7 +605,7 @@ async function handlePersona(req, res, url) {
     const body = await readBody(req);
     const name = String(body.name ?? '').trim();
     if (!name) return fail(res, 400, 'E1011', '名字不能空');
-    const runtime = runtimeOptions().some((r) => r.id === body.runtime) ? body.runtime : undefined;
+    const runtime = runtimesOk(body.runtime) ? body.runtime : undefined;
     // 模型名不再对着账本校验（账本已下架）；见 POST /api/personas 那段说明
 
     const persona = store.updatePersona(id, {
@@ -1494,11 +1535,16 @@ async function handleProject(req, res, url) {
 
   // 改一张本地卡（拖到别的列 = 改状态；也能改标题 / 描述 / **执行人**）。
   // 带 `startNow: true` ＝ 「保存并开始工作」：存完立刻派活 —— 跟建卡时那个「立即开始」同一条链路。
+  //
+  // **拖进「进行中」＝开工**（2026-10-17，对齐 Multica）：有执行人的卡一进「进行中」就派活，
+  // 不用再点按钮。所以带 startNow 的时候要关掉那条自动路径（`autoStart: false`），
+  // 否则一次保存会派两遍 —— 第二遍还会撞上"他还在跑上一条"。
   if (req.method === 'PATCH' && taskOne) {
     const id = decodeURIComponent(taskOne[1]);
     const body = await readBody(req);
     try {
-      const task = updateProjectTask(id, body);
+      const before = store.getProjectTask(id);
+      const task = updateProjectTask(id, body, { autoStart: body.startNow !== true });
       if (body.startNow === true) {
         try {
           return sendJson(res, 200, { task: startProjectTask(id), started: true });
@@ -1507,15 +1553,88 @@ async function handleProject(req, res, url) {
           return fail(res, 400, 'E1048', `存了，但没派出去：${e.message}`, { taskId: id, task });
         }
       }
-      return sendJson(res, 200, { task });
+      // runId 变了 = 这一下真的派出去了（不是"改了个状态"），界面据此提示"已开跑"
+      const started = !!(before && task.runId && task.runId !== before.runId);
+      return sendJson(res, 200, { task, started });
     } catch (e) {
       const missing = /不存在/.test(String(e.message));
+      if (e?.taskId) {
+        // 拖进「进行中」但没派出去：字段存了、状态没动（见 project-tasks 里的说明）
+        return fail(res, 400, 'E1049', String(e.message), { taskId: e.taskId, statusUnchanged: true });
+      }
       return sendJson(res, missing ? 404 : 400, { error: String(e.message ?? e) });
     }
   }
   if (req.method === 'DELETE' && taskOne) {
     const ok = store.deleteProjectTask(decodeURIComponent(taskOne[1]));
     return ok ? sendJson(res, 200, { ok: true }) : fail(res, 404, 'E2038', '任务不存在');
+  }
+
+  /*
+   * **卡片评论**（2026-10-18 建，2026-10-19 改成三档）。
+   *
+   * 跟 `/api/conversations/:id/messages` 的差别：
+   *   ① 会话**按需建**：第一次评论才把这张卡的工单会话建出来（原来只有「开始工作」才建），
+   *      所以"还没开工也能先聊"；
+   *   ② 评论分**三档**（`body.mode`），档位决定"叫不叫醒他、叫醒后能不能动手"：
+   *        · `note`    便签 —— 只留一句话在卡上，**不叫醒**。给自己（和将来的人）看，
+   *          agent 不读、也不补投。这是 Multica `/note` 的本意；
+   *        · `discuss` 讨论 —— 叫醒他聊、看代码、给方案，但**只读不动手**（沙箱盖成 `plan`）；
+   *        · `execute` 执行 —— 叫醒他真正干活，用员工自己的沙箱（默认可写）。
+   *      三档都是"说话"，不因档位而改卡的状态或登记 runId —— 开工是另一条指令
+   *      （状态改「进行中」/「开始工作」→ startProjectTask）。
+   *   ③ `parentId` = 这条回复挂在哪个**顶层议题**下（只一层）。
+   */
+  const taskComments = /^\/api\/projects\/tasks\/([^/]+)\/comments$/.exec(url.pathname);
+  if (req.method === 'POST' && taskComments) {
+    const id = decodeURIComponent(taskComments[1]);
+    const task = store.getProjectTask(id);
+    if (!task) return fail(res, 404, 'E2039', '任务不存在');
+    const body = await readBody(req);
+    const text = String(body.text ?? '').trim();
+    if (!text) return fail(res, 400, 'E1010', '说点什么');
+    if (!task.assigneePersonaId) return fail(res, 400, 'E1061', '先指定执行人 —— 评论区是跟他讨论的');
+    const persona = store.getPersona(task.assigneePersonaId);
+    if (!persona) return fail(res, 400, 'E1062', '指定的执行人不在了');
+
+    const conv = store.ensureExecConversation({
+      personaId: persona.id,
+      scope: `task:${task.id}`,
+      title: `任务 · ${task.title}`,
+      projectId: task.projectId ?? null,
+    });
+    if (!conv) return fail(res, 400, 'E1063', '这个执行人已经不在了');
+    if (task.conversationId !== conv.id) store.updateProjectTask(task.id, { conversationId: conv.id });
+
+    // 只认这条会话里的**顶层**消息当议题：传了个回复的 id 或者别的会话的 id，就当没传（挂回顶层）
+    let parentId = String(body.parentId ?? '').trim() || null;
+    if (parentId) {
+      const hit = store.listMessages(conv.id).find((m) => m.id === parentId);
+      if (!hit) parentId = null;
+      else if (hit.parentId) parentId = hit.parentId;
+    }
+
+    // 档位归一：新接口用 mode，老客户端发 note:true 也认（等价于 note）
+    const mode = body.mode === 'note' || body.note === true ? 'note'
+      : body.mode === 'discuss' ? 'discuss'
+      : 'execute';
+
+    if (mode === 'note') {
+      // 便签：只落一条消息、不派活、不叫醒。**它是给人看的**，不补投给 agent。
+      const message = store.addMessage({ conversationId: conv.id, role: 'user', text, parentId, note: true });
+      return sendJson(res, 201, { note: true, mode, message, conversationId: conv.id });
+    }
+    try {
+      // 讨论 = 只读（plan）；执行 = 员工默认沙箱。不传 sandbox 就用默认。
+      const { run } = dispatchToThread(conv.id, text, {
+        projectId: task.projectId ?? null,
+        parentId,
+        sandbox: mode === 'discuss' ? 'plan' : undefined,
+      });
+      return sendJson(res, 202, { runId: run.id, mode, conversationId: conv.id });
+    } catch (e) {
+      return sendJson(res, e.code === 'busy' ? 409 : 400, { error: e.message });
+    }
   }
 
   /*
@@ -1526,7 +1645,13 @@ async function handleProject(req, res, url) {
    *   ② **保护人的指令** —— 重复巡检只更新标题与描述，**状态一律不动**。卡的状态是人给的指令：
    *      拖到「已完成」＝ 批准，删掉 ＝ 忽略。重跑一次把它弹回「待办」，是最招人烦的那种 bug。
    *
-   * body：{ key, title, body }（key 必填，如 `pr:3` / `issue:2` / `note:branch-protection`）
+   * body：{ key, title, body, pr? }（key 必填，如 `pr:3` / `issue:2` / `note:branch-protection`）
+   *
+   * `pr` 是 2026-10-17 补的：**PR 卡也要带上 PR 字段**（`git.prFieldsOf` 归一）。
+   * 不带的话巡检扫进来的卡既没有看板上那枚「PR #n 开着」标签，也进不了「刷新 PR」的批量清单 ——
+   * 同一个 PR，手动贴链接的卡能看见状态、机器扫进来的看不见，说不过去。
+   * `pr` 归状态走同一套 `afterMerged`：巡检报上来是 merged、卡在「进行中」，就收成「待确认」。
+   * 状态仍然只在这一个条件下动，别的列（人拖到「已完成」的）一律不碰。
    */
   const repoCards = /^\/api\/projects\/([^/]+)\/repo-cards$/.exec(url.pathname);
   if (req.method === 'POST' && repoCards) {
@@ -1540,24 +1665,10 @@ async function handleProject(req, res, url) {
       return fail(res, 400, 'E1047', '卡要有去重键（如 pr:3 / issue:2 / note:xxx）—— 没有它每次巡检都会重复建卡');
     }
     const description = String(body.body ?? '').trim();
-    const existing = store.getProjectTaskByExternalKey(p.id, key);
-    if (existing) {
-      const changed = existing.title !== title || existing.description !== description;
-      return sendJson(res, 200, {
-        task: changed ? store.updateProjectTask(existing.id, { title, description }) : existing,
-        created: false,
-        changed,
-      });
-    }
-    const task = store.createProjectTask({
-      projectId: p.id,
-      title,
-      description,
-      status: '待办',
-      source: 'repo',
-      externalKey: key,
-    });
-    return sendJson(res, 201, { task, created: true, changed: true });
+    // 写卡那套规矩（去重 / 不覆盖人的状态 / PR 字段只在真变了才写）在 project-tasks 里，
+    // 平台内「PR 巡检」定时动作走的是**同一个函数** —— 两处各写一遍迟早跑偏
+    const out = upsertRepoCard({ projectId: p.id, key, title, description, pr: git.prFieldsOf(body.pr) });
+    return sendJson(res, out.created ? 201 : 200, out);
   }
 
   if (req.method === 'POST' && url.pathname === '/api/projects') {
@@ -1579,6 +1690,7 @@ async function handleProject(req, res, url) {
       root: body.root === undefined ? undefined : String(body.root).trim(),
       extraRoots: body.extraRoots,
       note: body.note,
+      constitution: body.constitution,
     });
     if (!p) return fail(res, 404, 'E2025', '项目不存在');
     return sendJson(res, 200, { project: p });
@@ -1922,11 +2034,36 @@ async function handleGit(req, res, url) {
   const isPrRoute = /^\/api\/projects\/tasks\/[^/]+\/pr(\/refresh)?$/.test(url.pathname);
   if (!url.pathname.startsWith('/api/git/') && !isPrRoute) return false;
 
+  /*
+   * 状态**只读本机**（2026-10-17 改）：connected / hint / 仓库清单全在本地文件和库里，
+   * 登录名用上次验到的那一个（`meta.github_login`）。
+   *
+   * 原来这里每次都 `await git.verifyToken()` —— 页面每打开一次就往 api.github.com 打一次，
+   * 国内网络下界面就悬在"取代码托管状态…"好几秒（用户实报："这个页面显示有延迟"）。
+   * 现在身份校验挪到 `/api/git/whoami`，由界面**画完之后再在后台问**。
+   */
   if (req.method === 'GET' && url.pathname === '/api/git/status') {
     const connected = !!git.readToken();
-    let login = null;
-    if (connected) login = await git.verifyToken().then((x) => x.login).catch(() => null);
-    return sendJson(res, 200, { connected, login, hint: git.tokenHint(), repos: git.listConnected() }), true;
+    return sendJson(res, 200, { connected, login: connected ? git.cachedLogin() : null, hint: git.tokenHint(), repos: git.listConnected() }), true;
+  }
+
+  /*
+   * 后台验一次身份（界面首屏画完之后才调）。
+   *
+   * **失败也回 200**：这不是"操作失败"，只是"这次没问到"——页面已经用本地状态画完了，
+   * 回 200 + `error` 让它安静地不改那行字，而不是弹一个错误块把整页弄成失败态。
+   * 令牌明确失效（401）时顺手把记住的名字清掉，下次页面就不再显示一个已死的账号。
+   */
+  if (req.method === 'GET' && url.pathname === '/api/git/whoami') {
+    if (!git.readToken()) return sendJson(res, 200, { connected: false, login: null }), true;
+    try {
+      const me = await git.whoami({ fresh: url.searchParams.get('fresh') === '1' });
+      return sendJson(res, 200, { connected: true, login: me.login, name: me.name ?? null, cached: !!me.cached }), true;
+    } catch (e) {
+      const msg = String(e.message ?? e);
+      if (msg.includes('401')) git.forgetLogin();
+      return sendJson(res, 200, { connected: true, login: git.cachedLogin(), error: msg }), true;
+    }
   }
 
   if (req.method === 'POST' && url.pathname === '/api/git/token') {
@@ -1940,6 +2077,7 @@ async function handleGit(req, res, url) {
       return fail(res, 400, 'E1062', String(e.message ?? e)), true;
     }
     git.saveToken(token);
+    git.rememberLogin(me.login); // 刚验过，页面下次打开就能立刻显示 @名字
     return sendJson(res, 200, { connected: true, login: me.login, hint: git.tokenHint() }), true;
   }
 
@@ -2032,12 +2170,22 @@ async function handleGit(req, res, url) {
     }
   }
 
-  // 批量刷新：所有关联了 PR 的卡（看板/代码托管页上的「刷新 PR 状态」）
+  /*
+   * 批量刷新：所有关联了 PR 的卡（看板工具栏上的「刷新 PR（n）」）。
+   *
+   * `?projectId=` 只查某个项目 —— 项目看板上那颗按钮写的是"本板 n 张"，就该只动这几张
+   * （不然数字对不上：按钮说 2 张，背后刷了 20 张别的项目的卡）。全局面板不带它，查全部。
+   * 上限 50 张：一次点下去串行查 GitHub，几百张会卡到人以为点了没反应。
+   */
   if (req.method === 'POST' && url.pathname === '/api/git/prs/refresh') {
     if (!git.readToken()) return fail(res, 400, 'E1074', '先连接 GitHub（设置 → 代码托管）'), true;
+    const only = url.searchParams.get('projectId');
     let updated = 0;
     const failed = [];
-    for (const t of store.listProjectTasksWithPr().slice(0, 50)) {
+    for (const t of store
+      .listProjectTasksWithPr()
+      .filter((x) => !only || x.projectId === only)
+      .slice(0, 50)) {
       try {
         const snap = await git.fetchPull(t.prRepo, t.prNumber);
         const next = store.updateProjectTask(t.id, {
@@ -2168,6 +2316,157 @@ const AUTH = auth.setup({ host, dataDir, envToken: process.env.BANDI_TOKEN });
  * 于是"配置里想要什么"（netmode.json）和"实际听着什么"可能不再是一回事，
  * `/api/lan` 要如实分辨这两者 ✓。
  */
+/**
+ * 定时任务（`/api/schedules`，2026-10-17）。
+ *
+ * 界面只做三件事：看清单、改重复方式/开关、点「立即跑」。**执行**在 `schedules.mjs` 那个 30 秒的
+ * 心跳里，不在这条请求链路上 —— 一次巡检要几十秒，挂在 HTTP 上会被浏览器超时掐掉，
+ * 人还会以为"点了没反应"。所以「立即跑」也只是**同步跑一次并等它**，不走后台队列：
+ * 人要的是"现在到底行不行"这个答案，等几十秒比事后翻日志强。
+ *
+ * 重复方式七选一（对齐 WorkBuddy 的定时任务）：间隔（分钟）/ 单次（某时刻跑一次）/
+ * 每天 / 每周 / 每双周 / 每月 / 每年（都带「几点」）。时间字段只在对应方式下必填，
+ * PATCH 只改开关时不必带着时间。
+ */
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+function scheduleFields(body, { partial = false } = {}) {
+  const out = {};
+  if (body.repeat !== undefined || !partial) {
+    const r = String(body.repeat ?? 'interval');
+    if (!schedules.REPEATS.includes(r)) throw new BadRequest(`不认识的重复方式：${r}（可选：${schedules.REPEATS.join(' / ')}）`, 'E1083');
+    out.repeat = r;
+  }
+  const repeat = out.repeat;
+
+  if (repeat === 'interval' || body.everyMinutes !== undefined) {
+    const n = Math.round(Number(body.everyMinutes));
+    if (!Number.isFinite(n) || n < schedules.MIN_MINUTES) throw new BadRequest(`间隔至少 ${schedules.MIN_MINUTES} 分钟（再密就是白烧 GitHub 的速率上限）`, 'E1083');
+    if (n > 7 * 24 * 60) throw new BadRequest('间隔太大（最多 7 天）', 'E1083');
+    out.everyMinutes = n;
+  }
+
+  if (repeat === 'once' || body.runAt !== undefined) {
+    const t = Date.parse(body.runAt ?? '');
+    if (!Number.isFinite(t)) throw new BadRequest('单次要给一个有效的时间（如 2026-10-20T09:00）', 'E1083');
+    out.runAt = new Date(t).toISOString();
+  }
+
+  if ((repeat && repeat !== 'interval' && repeat !== 'once') || body.atTime !== undefined) {
+    if (!HHMM.test(String(body.atTime ?? ''))) throw new BadRequest('时间要写成 HH:MM（如 09:00）', 'E1083');
+    out.atTime = String(body.atTime);
+  }
+
+  if (repeat === 'weekly' || repeat === 'biweekly' || body.weekday !== undefined) {
+    const w = Math.round(Number(body.weekday));
+    if (!Number.isInteger(w) || w < 0 || w > 6) throw new BadRequest('星期几要在 0（日）到 6（六）之间', 'E1083');
+    out.weekday = w;
+  }
+
+  if (repeat === 'monthly' || repeat === 'yearly' || body.dayOfMonth !== undefined) {
+    const d = Math.round(Number(body.dayOfMonth));
+    if (!Number.isInteger(d) || d < 1 || d > 31) throw new BadRequest('几号要在 1 到 31 之间（小月会自动取当月最后一天）', 'E1083');
+    out.dayOfMonth = d;
+  }
+
+  if (repeat === 'yearly' || body.month !== undefined) {
+    const m = Math.round(Number(body.month));
+    if (!Number.isInteger(m) || m < 1 || m > 12) throw new BadRequest('几月要在 1 到 12 之间', 'E1083');
+    out.month = m;
+  }
+
+  if (body.name !== undefined || !partial) {
+    const name = String(body.name ?? '').trim();
+    if (!name) throw new BadRequest('任务要有名字', 'E1081');
+    out.name = name;
+  }
+  if (body.action !== undefined || !partial) {
+    if (!schedules.ACTIONS[String(body.action ?? '')]) throw new BadRequest(`不认识的动作：${body.action ?? '（空）'}`, 'E1082');
+    out.action = String(body.action);
+  }
+  if (body.enabled !== undefined) out.enabled = body.enabled ? 1 : 0;
+  if (body.config !== undefined) {
+    if (body.config !== null && typeof body.config !== 'object') throw new BadRequest('config 要是一个对象', 'E1084');
+    out.config = body.config;
+  }
+  return out;
+}
+
+/**
+ * 动作自己的校验（声明了 `validate` 的才跑）。
+ *
+ * 为什么放服务端：界面上「没写要做什么」当然会拦，但接口谁都能直接调；
+ * 更要紧的是**别让一个配错的定时任务建成功** —— 半夜到点跑一次、失败、写进 lastError，
+ * 人第二天才知道配错了。能在建的时候说清楚的，就在建的时候说。
+ */
+function assertActionConfig(actionId, config) {
+  const check = schedules.ACTIONS[actionId]?.validate;
+  if (!check) return;
+  const msg = check(config ?? {});
+  if (msg) throw new BadRequest(msg, 'E1087');
+}
+
+async function handleSchedules(req, res, url) {
+  if (!url.pathname.startsWith('/api/schedules')) return false;
+  const one = /^\/api\/schedules\/([^/]+)(\/run)?$/.exec(url.pathname);
+  const view = (j) => ({
+    ...j,
+    config: schedules.parseConfig(j),
+    text: schedules.describeRepeat(j),
+    running: schedules.runningIds().includes(j.id),
+  });
+
+  if (req.method === 'GET' && url.pathname === '/api/schedules') {
+    return (
+      sendJson(res, 200, {
+        jobs: store.listSchedules().map(view),
+        actions: schedules.actionCatalogue(),
+        minMinutes: schedules.MIN_MINUTES,
+      }),
+      true
+    );
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/schedules') {
+    const body = await readBody(req);
+    const fields = scheduleFields(body);
+    assertActionConfig(fields.action, fields.config);
+    const job = store.createSchedule(fields);
+    return sendJson(res, 201, { job: view(job) }), true;
+  }
+
+  if (one && !one[2] && req.method === 'PATCH') {
+    const job = store.getSchedule(decodeURIComponent(one[1]));
+    if (!job) return fail(res, 404, 'E1085', '没有这个定时任务'), true;
+    const patch = scheduleFields(await readBody(req), { partial: true });
+    // 只改开关/重复方式时，动作和参数都还是老样子 —— 校验要看**合并后**的那一份
+    assertActionConfig(patch.action ?? job.action, patch.config !== undefined ? patch.config : schedules.parseConfig(job));
+    return sendJson(res, 200, { job: view(Object.keys(patch).length ? store.updateSchedule(job.id, patch) : job) }), true;
+  }
+
+  if (one && !one[2] && req.method === 'DELETE') {
+    const ok = store.deleteSchedule(decodeURIComponent(one[1]));
+    return ok ? sendJson(res, 200, { ok: true }) : fail(res, 404, 'E1085', '没有这个定时任务'), true;
+  }
+
+  // 「立即跑」：不看间隔、不看开关（人点它就是要现在跑一次），同步等结果
+  if (one && one[2] === '/run' && req.method === 'POST') {
+    const id = decodeURIComponent(one[1]);
+    if (!store.getSchedule(id)) return fail(res, 404, 'E1085', '没有这个定时任务'), true;
+    let out;
+    try {
+      out = await schedules.runNow(id);
+    } catch (e) {
+      // 「这个任务正在跑」这种是**请求本身不合适**，不是服务出错 → 400，让人看见原话
+      return fail(res, 400, 'E1086', String(e?.message ?? e)), true;
+    }
+    // 200 + ok:false：请求成功了，是**这次执行**失败（原因在 error 里，界面照直说）
+    return sendJson(res, 200, out), true;
+  }
+
+  return false;
+}
+
 let boundHost = host;
 
 const server = http.createServer(async (req, res) => {
@@ -2247,6 +2546,9 @@ const server = http.createServer(async (req, res) => {
     const handledGit = await handleGit(req, res, url);
     if (handledGit !== false) return;
 
+    const handledSchedules = await handleSchedules(req, res, url);
+    if (handledSchedules !== false) return;
+
     fail(res, 404, 'E2036', '没有这个接口');
   } catch (err) {
     // 请求本身有问题 → 400；其余才是服务端出错 → 500。两边都带上编码
@@ -2260,6 +2562,14 @@ if (reaped) console.log(`清理了 ${reaped} 条被中断的运行`);
 
 // 工作流：内建模板保证存在；**把引擎挂在 run 完成点上** —— 推进由平台做，不靠数字员工自觉
 workflows.ensureBuiltInTemplate();
+// 出厂就有一个人能说话：内置秘书「喜儿」（幂等，已有则只补 builtin 标记，不改名不改指令）
+try {
+  const xier = secretary.ensureSecretary();
+  if (xier.created) console.log(`新建了内置员工「${xier.persona.name}」`);
+} catch (err) {
+  // seed 失败不该拦住整个服务：她能做的事少，服务起不来才是大事
+  console.log(`内置员工创建失败（不影响启动）：${err?.message ?? err}`);
+}
 runs.onRunFinish(workflows.onAgentRunFinished);
 // 任务卡同理（2026-10-17）：运行跑完/被停/跑挂了，卡不能永远挂在「进行中」——
 // 完成 → 待确认；人停的 / 跑挂的 → 已阻塞（**不回待办**，否则会被自动重新派活 → 死循环）
@@ -2325,6 +2635,13 @@ const sweep = setInterval(() => {
   }
 }, SWEEP_MS);
 sweep.unref(); // 别让这个定时器拖着进程不退出
+
+/*
+ * 定时任务的心跳（2026-10-17）：30 秒一跳，挑**到点的**任务串行跑。
+ * 只读动作（PR 巡检）第一条；它会自己去 GitHub 拉清单，所以这里不预判网络、令牌 ——
+ * 错了就记进任务的 `lastStatus/lastError`，在「设置 → 定时任务」那一行如实显示。
+ */
+schedules.start();
 
 server.listen(port, boundHost, logListen);
 

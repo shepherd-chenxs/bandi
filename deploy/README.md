@@ -361,7 +361,7 @@ BANDI_HOST=0.0.0.0 BANDI_ORIGINS=http://<你的公网IP>:8787 \
 
 ```sh
 cat $HOME/bandi-data/token          # 32 字符
-# Windows：type <数据目录>\token      例：type E:\02CodeSpace\bandi\data\token
+# Windows：type <数据目录>\token      例：type %APPDATA%\bandi\token
 #（⚠️ 它**不再**打进启动日志了 —— 日志会被贴出去、被备份，而它等于整套控制权）
 
 - **浏览器**：打开 `http://<你的公网IP>:8787/` → 会看到一张登录页 → 把令牌填进去。
