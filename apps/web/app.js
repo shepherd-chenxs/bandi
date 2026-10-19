@@ -11320,7 +11320,7 @@ function renderWorkbenchGrid() {
 
   $('pluginView').classList.remove('kb-page'); // 宫格是长页面，按普通滚动
   $('pluginView').innerHTML = `
-    <div class="detail-head head-row"><div class="head-title">工作台</div></div>
+    <div class="detail-head head-row"><div class="head-title"><b>工作台</b></div></div>
     <div class="detail-body wb-page">${
       list.length ? pluginSections : '' // 没装应用就不渲染这个区：空态横幅没人需要
     }${workbenchProjectSection()}${workbenchAutoSection()}${workbenchFlowSection()}${
