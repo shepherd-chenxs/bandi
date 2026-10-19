@@ -239,12 +239,15 @@ body.no-list .list-panel { display: none; }
    `--card`（iOS 的浮起次级面）在全局统一 Linear 之后不再用于结构面。 */
 .list-panel { background: var(--side); border-right: 1px solid var(--line);
               display: grid; grid-template-rows: auto auto 1fr; min-height: 0; }
-.list-head { position: relative; padding: 14px 16px 8px; display: flex; align-items: center; justify-content: space-between; }
+.list-head { position: relative; padding: 14px 16px 8px; display: flex; align-items: center; justify-content: space-between;
+             /* 面包屑变长（三四段）时会超出 300px 的左栏：grid 子项默认 min-width:auto 会按
+                max-content 撑开（实测 list-head 宽 353、盖到主区上），必须显式 min-width:0，
+                里面的 `.list-title` / 每段才会真的收缩 + 省略号。 */ min-width: 0; }
 .list-head b { font-size: 15px; }
 /* 左栏标题：一路 `<b>`，现在是个容器（里面可能是一段面包屑，见 app.js 的 setListTitle）。
    `min-width:0 + 省略号`：流程名很长时别把它挤出左栏、也别把「＋」顶出去。
    `gap: 0`：段与段之间由 `.crumb-sep` 自己的左右 margin 撑开，跟别处的面包屑一致。 */
-.list-title { display: flex; align-items: center; gap: 0; min-width: 0; flex: 1; }
+.list-title { display: flex; align-items: center; gap: 0; min-width: 0; flex: 1; overflow: hidden; }
 .list-title > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .list-title > .crumb-sep { flex: 0 0 auto; }
 /* 面包屑形态（有两段以上）：**统一 13px + 加粗**（2026-10-19 用户要求「面包屑小一点，加粗」）。
@@ -255,9 +258,17 @@ body.no-list .list-panel { display: none; }
      `margin-left: -6px` 抵掉它自带的左内边距，让「工作台」和下面的列表行共用同一条左沿
      （`.list-head` 的 16px = `.list-body` 的 8px + `.item` 的 8px）。 */
 .list-title:has(> .crumb-sep) { padding-left: 0; }
-.list-title > .crumb-btn { flex: 0 1 auto; margin-left: -6px; padding: 2px 6px;
+/* 上一级几段和当前这段都能收缩：**当前这段留 3em 下限**（`min-width`），
+   上一级再长也不会把当前项挤没（悬停有 `title` 能看全名）。
+   反过来，当前项很长时上一级会被压出省略号（「工…」）—— 这是可接受的：
+   层级信息还在、悬停可读全，优先保证"当前是哪一项"完整可见。 */
+.list-title > .crumb-btn { flex: 0 1 auto; padding: 2px 6px;
                            font-size: 13px; font-weight: 600; border-radius: 6px; }
-.list-title:has(> .crumb-sep) > b { flex: 1 1 auto; font-size: 13px; font-weight: 600; }
+/* 只有**第一段**抵掉它自带的左内边距（让「工作台」和下面的列表行同一条左沿）。
+   2026-10-19 面包屑从页头挪到左栏后变成两、三段，这条如果还给每一段都上
+   `margin-left:-6px`，中间那几段就会互相压进去。 */
+.list-title > .crumb-btn:first-child { margin-left: -6px; }
+.list-title:has(> .crumb-sep) > b { flex: 1 1 auto; min-width: 3em; font-size: 13px; font-weight: 600; }
 /* 分隔符在这条标题里要**看得见**：全站那颗 `›` 是 `var(--line)`（边框色，几乎白），
    只剩个方向感；夹在加粗的字中间就糊掉了（用户："中间的标识明显一些"）。
    这一处加深到 --dim，号跟字一样（13）—— 比字小一档的话，旁边一加粗它就显小、像漏了个点。
@@ -1499,6 +1510,10 @@ button:disabled { opacity: .45; cursor: not-allowed; }
    （块级）之后它独占一行，徽标被挤到第二行，整个页头从 50px 撑高（截图里一眼看见）。
    尺寸/对齐跟 `.head-row .head-title` 保持一致。 */
 .run-head .head-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+/* 页头只写这一条 run 的标题（面包屑挪到左栏后，这里不再是一段 crumb）：
+   标题是用户起的名字，可能很长 —— 自己省略号，别把状态徽标和右边两颗按钮挤走。 */
+.run-head .head-title > b { min-width: 0; overflow: hidden; text-overflow: ellipsis;
+                            white-space: nowrap; }
 /* ⚠️ 这里原来有一组 `.avatar.wb-ico-sm`（26px 的左栏入口小图标）+ `.wb-hint`，
    都是"工作台首页改成左栏目录"那一版留下的。用户否掉了那个版本（首页必须是宫格），
    这组样式就没有宿主了 —— 已删，别再搜不到出处地加回来。 */

@@ -1055,10 +1055,26 @@ function setNav(nav, opts = {}) {
 
 /* ---------------------------------------------------------------- 设置 */
 
+/**
+ * 设置左侧那一列分节：**左栏列表和左栏面包屑共用这一份**，别在两边各写一遍标签
+ * （2026-10-19 面包屑挪到左栏后，标题要写「设置 › 当前分节」）。
+ */
+const SETTINGS_SECTIONS = [
+  ['prefs', '偏好设置', '主题与外观'],
+  ['quota', '额度', '每个模型每天最多用多少'],
+  ['runtimes', '运行时', 'agent CLI 的路径与开关'],
+  ['plugins', '插件', '扩展点'],
+  ['skills', '技能', '给数字员工用的能力包'],
+  ['code', '代码托管', '连接 GitHub、接入仓库'],
+];
+
 function openSettings(section) {
   setRoute('settings', { section: section || S.settingsSection || 'prefs' });
   S.settingsSection = section || 'prefs';
   showView('settings');
+  // 左栏顶上写「设置 › 当前分节」；更深的页（运行时/技能详情）会再往后补一段
+  const cur = SETTINGS_SECTIONS.find(([key]) => key === S.settingsSection);
+  setListTitle(cur ? [{ label: '设置', to: 'settings' }, { label: cur[1] }] : '设置');
   renderList();
   if (S.settingsSection === 'runtimes') return renderRuntimes();
   if (S.settingsSection === 'plugins') return renderPlugins();
@@ -1073,7 +1089,6 @@ function openSettings(section) {
     ['system', '跟随系统'],
   ];
   $('settingsView').innerHTML = `
-    <div class="detail-head">${breadcrumb([{ label: '设置', to: 'settings' }, { label: '偏好设置' }])}</div>
     <div class="detail-body">
       <section class="set-sec">
         <div class="set-head"><b>外观</b><span class="set-tag">仅本设备</span></div>
@@ -1116,13 +1131,12 @@ function openSettings(section) {
  */
 async function renderQuota() {
   S.settingsSection = 'quota';
-  $('settingsView').innerHTML = rtLoading('额度');
+  $('settingsView').innerHTML = rtLoading();
   let st;
   try {
     st = await api('/api/quota');
   } catch (err) {
-    $('settingsView').innerHTML =
-      `<div class="detail-head">${breadcrumb([{ label: '设置', to: 'settings' }, { label: '额度' }])}</div><div class="empty">${failHtml(err)}</div>`;
+    $('settingsView').innerHTML = `<div class="empty">${failHtml(err)}</div>`;
     return;
   }
   paintQuota(st);
@@ -1138,7 +1152,6 @@ function paintQuota(st) {
   const withLimit = rows.filter((r) => r.limitTokens || r.limitRuns).length;
 
   $('settingsView').innerHTML = `
-    <div class="detail-head">${breadcrumb([{ label: '设置', to: 'settings' }, { label: '额度' }])}</div>
     <div class="detail-body">
       <section class="set-sec">
         <div class="set-head"><b>今天</b><span class="set-tag">本机时区 00:00 起算</span></div>
@@ -1291,7 +1304,7 @@ const localConnectors = () => S.connectors.filter((c) => c.source?.kind === 'loc
 const connectorById = (id) => S.connectors.find((c) => c.id === id) ?? null;
 
 async function renderPlugins() {
-  $('settingsView').innerHTML = rtLoading('插件');
+  $('settingsView').innerHTML = rtLoading();
   let list;
   let cat;
   let fam;
@@ -1304,8 +1317,7 @@ async function renderPlugins() {
       api('/api/plugins'),
     ]);
   } catch (err) {
-    $('settingsView').innerHTML =
-      `<div class="detail-head">${breadcrumb([{ label: '设置', to: 'settings' }, { label: '插件' }])}</div><div class="empty">${failHtml(err)}</div>`;
+    $('settingsView').innerHTML = `<div class="empty">${failHtml(err)}</div>`;
     return;
   }
   S.connectors = list.connectors ?? [];
@@ -1321,7 +1333,6 @@ async function renderPlugins() {
   };
 
   $('settingsView').innerHTML = `
-    <div class="detail-head">${breadcrumb([{ label: '设置', to: 'settings' }, { label: '插件' }])}</div>
     <div class="detail-body">
       <div class="seg plg-tabs">
         ${PLG_TABS.map(
@@ -1712,9 +1723,8 @@ $('cOk').onclick = async (e) => {
 
 /* ----------------------------------------------------- 运行时：设备 → CLI → 详情 */
 
-const rtLoading = (title) =>
-  `<div class="detail-head">${breadcrumb([{ label: '设置', to: 'settings' }, { label: title }])}
-     <span class="dim" style="font-size:12px">加载中…</span></div>`;
+// 加载态：不带页头 —— 面包屑已经挪到左栏顶上，正文里说一声就够
+const rtLoading = () => `<div class="empty" style="padding:24px 4px">加载中…</div>`;
 
 /**
  * 页头的「← 工作台」—— **2026-10-19 起不再调用**（用户要求统一去掉，见 headRow 的注释）。
@@ -1841,14 +1851,15 @@ async function renderDeviceList() {
   S.rtLevel = 'devices';
   S.rtDevice = null;
   S.rtRuntime = null;
-  $('settingsView').innerHTML = rtLoading('运行时');
+  // 左栏顶上：设置 › 运行时（面包屑从右页头挪过来）
+  setListTitle([{ label: '设置', to: 'settings' }, { label: '运行时' }]);
+  $('settingsView').innerHTML = rtLoading();
 
   let list = [];
   try {
     list = (await api('/api/devices')).devices;
   } catch (err) {
-    $('settingsView').innerHTML =
-      `<div class="detail-head">${breadcrumb([{ label: '设置', to: 'settings' }, { label: '运行时' }])}</div><div class="empty">${failHtml(err)}</div>`;
+    $('settingsView').innerHTML = `<div class="empty">${failHtml(err)}</div>`;
     return;
   }
   // 局域网开关的现状（旧后端没这条路由 → 按默认画，页面不能因此白屏 ✗）
@@ -1895,9 +1906,6 @@ async function renderDeviceList() {
       </section>`;
 
   $('settingsView').innerHTML = `
-    <div class="detail-head">
-      ${breadcrumb([{ label: '设置', to: 'settings' }, { label: '运行时' }])}
-    </div>
     <div class="detail-body">
       <section class="fx">
         <!-- 标题右边右对齐：跟「识别本机运行时」同一个做法（.fx-head 就是 flex + space-between） -->
@@ -2501,6 +2509,12 @@ function externalsHtml(dev) {
  * 装上哪条命令在这"。判断依据是**节点自报的清单**（不是控制面本机的探测：那是两台机器）。
  */
 async function renderNodeDetail(dev) {
+  // 面包屑在左栏顶上：设置 › 运行时 › 这台机器（右页头已去掉，名字/状态/动作都在正文的 devHeadHtml 里）
+  setListTitle([
+    { label: '设置', to: 'settings' },
+    { label: '运行时', to: 'devices' },
+    { label: dev.label },
+  ]);
   const rts = dev.runtimes ?? [];
   // 族清单拉不到就不显示"未安装"那一段 —— 但这一页照常渲染，别因为一个附加块白屏
   let families = [];
@@ -2561,13 +2575,6 @@ async function renderNodeDetail(dev) {
   };
 
   $('settingsView').innerHTML = `
-    <div class="detail-head">
-      ${breadcrumb([
-        { label: '设置', to: 'settings' },
-        { label: '运行时', to: 'devices' },
-        { label: dev.label },
-      ])}
-    </div>
     <div class="detail-body">
       ${devHeadHtml(dev, {
         badges: `<span class="${dev.online ? 'pill-ok' : 'pill'}">${dev.online ? '在线' : '离线'}</span><span class="pill">远程节点</span>`,
@@ -2879,7 +2886,7 @@ function wireInstallRuntime(dev) {
  * 「安装」弹窗是唯一还可能出现手填的入口（"我装了、但你没认出来"），正常流程碰不到。
  */
 async function renderDeviceDetail() {
-  $('settingsView').innerHTML = rtLoading('设备');
+  $('settingsView').innerHTML = rtLoading();
 
   let dev;
   let families;
@@ -2891,10 +2898,16 @@ async function renderDeviceDetail() {
       api('/api/runtime-families').then((f) => f.families),
     ]);
   } catch (err) {
-    $('settingsView').innerHTML =
-      `<div class="detail-head">${breadcrumb([{ label: '设置', to: 'settings' }, { label: '运行时', to: 'devices' }, { label: '设备' }])}</div><div class="empty">${failHtml(err)}</div>`;
+    $('settingsView').innerHTML = `<div class="empty">${failHtml(err)}</div>`;
     return;
   }
+
+  // 面包屑在左栏顶上：设置 › 运行时 › 这台设备（右页头已去掉，设备名在正文的 devHeadHtml 里）
+  setListTitle([
+    { label: '设置', to: 'settings' },
+    { label: '运行时', to: 'devices' },
+    { label: dev.label },
+  ]);
 
   // 远程节点：这一版只报到，它的运行时是只读的 —— 别让它掉进下面那套"改本机"的交互里
   // 远程节点：交给它自己那页（那边要拉族清单，所以是异步的）
@@ -2974,13 +2987,6 @@ async function renderDeviceDetail() {
   };
 
   $('settingsView').innerHTML = `
-    <div class="detail-head">
-      ${breadcrumb([
-        { label: '设置', to: 'settings' },
-        { label: '运行时', to: 'devices' },
-        { label: dev.label },
-      ])}
-    </div>
     <div class="detail-body">
       ${devHeadHtml(dev, {
         badges: '<span class="pill-ok">在线</span><span class="pill">本机</span>',
@@ -3229,32 +3235,36 @@ $('addRtOk').onclick = async (e) => {
 
 /* ③ CLI 详情 */
 async function renderCliDetail() {
-  $('settingsView').innerHTML = rtLoading('运行时');
+  $('settingsView').innerHTML = rtLoading();
 
+  let dev;
   let rt;
   try {
-    const dev = (await api('/api/devices/' + encodeURIComponent(S.rtDevice))).device;
+    dev = (await api('/api/devices/' + encodeURIComponent(S.rtDevice))).device;
     rt = dev.runtimes.find((r) => r.id === S.rtRuntime);
     if (!rt) throw new Error('这台设备上没有这个 CLI');
   } catch (err) {
-    $('settingsView').innerHTML =
-      `<div class="detail-head">${breadcrumb([
-        { label: '设置', to: 'settings' },
-        { label: '运行时', to: 'devices' },
-        { label: '这个 CLI' },
-      ])}</div><div class="empty">${failHtml(err)}</div>`;
+    setListTitle([
+      { label: '设置', to: 'settings' },
+      { label: '运行时', to: 'devices' },
+      { label: '这个 CLI' },
+    ]);
+    $('settingsView').innerHTML = `<div class="empty">${failHtml(err)}</div>`;
     return;
   }
 
+  // 面包屑在左栏顶上：设置 › 运行时 › 设备 › 这个 CLI（右页头整条已去掉）
+  // 「设备」那段可点（回设备详情）；末段是当前位置。
+  // 本机固定写「本机」（跟原来页头一样）——写主机名 DESKTOP-XXXX 会把 300px 的左栏挤爆，
+  // 四段各自被省略号截一刀，反而认不出是哪一层。
+  setListTitle([
+    { label: '设置', to: 'settings' },
+    { label: '运行时', to: 'devices' },
+    { label: S.rtDevice === 'local' ? '本机' : dev.label, to: 'device' },
+    { label: rt.label },
+  ]);
+
   $('settingsView').innerHTML = `
-    <div class="detail-head">
-      ${breadcrumb([
-        { label: '设置', to: 'settings' },
-        { label: '运行时', to: 'devices' },
-        { label: S.rtDevice === 'local' ? '本机' : S.rtDevice, to: 'device' },
-        { label: rt.label },
-      ])}
-    </div>
     <div class="detail-body">
       <!--
         这里原来有个「启用」勾选框。删掉了 —— 列表页那一行已经有开关（点一下立刻生效），
@@ -3500,19 +3510,8 @@ function renderList() {
   }
 
   if (S.nav === 'settings') {
-    const items = [
-      ['prefs', '偏好设置', '主题与外观'],
-      ['quota', '额度', '每个模型每天最多用多少'],
-      ['runtimes', '运行时', 'agent CLI 的路径与开关'],
-      ['plugins', '插件', '扩展点'],
-      // 「技能」原来在左侧一级栏上（2026-10-15 用户要求搬进设置）。
-      // 左栏在这儿**始终是分节列表**，技能列表画在主区（见 renderSkillCards）——
-      // 换一种做法（点技能后左栏变成技能列表）会让分节列表消失，就回不到别的节了。
-      ['skills', '技能', '给数字员工用的能力包'],
-      ['code', '代码托管', '连接 GitHub、接入仓库'],
-      // 「定时任务」不放这儿：它跟项目/看板/流程一样是**干活的地方**，入口在工作台
-      // （2026-10-17 用户要求搬过去）。设置里留着就成了两个门进同一间屋。
-    ];
+    // 分节清单跟左栏面包屑共用 SETTINGS_SECTIONS（见 openSettings）
+    const items = SETTINGS_SECTIONS;
     $('listBody').innerHTML = items
       .map(
         ([key, title, sub]) => `<div class="item ${S.settingsSection === key ? 'active' : ''}" data-set="${key}">
@@ -3765,7 +3764,8 @@ async function openWorkflows(pickId = null) {
   // 从工作台进来时 S.nav 还是 plugins，不先切过来就会画出一片空白（踩过）。
   setNav('workflows', { skipOpen: true });
   document.body.classList.remove('no-list');
-  setListTitle('工作流');
+  // 左栏顶上就是"你在哪儿"：工作台 › 工作流（面包屑从右页头挪过来，见 setListTitle）
+  setListTitle([{ label: '工作台', to: 'workbench' }, { label: '工作流' }]);
   setRoute('workflows', pickId ? { template: pickId } : {});
   $('listAction').classList.remove('hidden');
   $('listAction').title = '新建流程模板';
@@ -3807,8 +3807,8 @@ function renderFlowList() {
 }
 
 function renderFlowEmpty() {
+  // 没有页头：左栏顶上已经是「工作台 › 工作流」，右页头再写一遍就是同一件事写两处
   $('flowView').innerHTML = `
-    ${headRow(breadcrumb([{ label: '工作台', to: 'workbench' }, { label: '工作流' }]))}
     <div class="detail-body"><div class="wip">还没有流程模板 —— 点左栏右上角的「＋」新建一个</div></div>`;
   S.view = 'flow';
   showView('flow');
@@ -3935,7 +3935,13 @@ async function openProjectsPage(selectId) {
   // 2026-10-19 统一子页页头后撤掉了：**返回只留在页头最左边**。
   // 留着它等于同一件事两个地方能做，而且只有项目页有，别的子页没有 —— 这就是不统一。
   document.body.classList.remove('no-list');
-  setListTitle('项目');
+  // 左栏顶上写「工作台 › 项目 › 名字」：面包屑从右页头挪到这儿（2026-10-19 用户要求）。
+  // 名字可能被用户改（自动保存），所以下面 paintName 里还要就地同步这一段。
+  setListTitle([
+    { label: '工作台', to: 'workbench' },
+    { label: '项目', to: 'projects' },
+    ...(sel ? [{ label: sel.name }] : []),
+  ]);
   $('listAction').classList.remove('hidden');
   $('listAction').title = '新建项目';
   $('listBody').innerHTML =
@@ -3958,19 +3964,11 @@ async function openProjectsPage(selectId) {
     el.onclick = () => openProjectsPage(el.dataset.projSel).catch((e) => toast(e.message, 'error'));
   });
 
-  /* 页头：面包屑「工作台 › 项目 › 名字」（2026-10-19 全站统一）。
-     这里原来手拼了个 `项目 › 名字` 的假面包屑（head-sep），不能点、字号也不一样 ——
-     现在走同一个 breadcrumb()。
-     ⚠️ 页头**没有**「← 工作台」按钮：2026-10-19 用户要求全站子页统一去掉返回按钮
-     （左栏本身就写着上一级）。面包屑里的「工作台」是层级指示，不是返回按钮。 */
+  /* 右页头**去掉了**（2026-10-19 用户：「面包屑应该是在左边的列表上，右边的不用」）：
+     原来这里只有一段「工作台 › 项目 › 名字」，现在整段挪到了左栏顶上；右侧直接是详情，
+     名字/目录/动作都在详情自己的 p-head 里，页头再写一遍纯属重复。
+     （左栏顶上那条「‹ 工作台」也不加回来：面包屑的「工作台」段就是回宫格的入口。） */
   view.innerHTML = `
-    <div class="detail-head head-row">
-      <div class="head-title">${breadcrumb([
-        { label: '工作台', to: 'workbench' },
-        { label: '项目', ...(sel ? { to: 'projects' } : {}) },
-        ...(sel ? [{ label: sel.name }] : []),
-      ])}</div>
-    </div>
     <div class="detail-body" id="projDetail">${
       sel ? '<div class="dim">加载中…</div>' : '<div class="empty" style="padding:36px 12px">左边选一个项目</div>'
     }</div>`;
@@ -4159,12 +4157,14 @@ async function renderProjDetail(p) {
         if (b) b.textContent = payload.name;
         if (sub) sub.textContent = payload.root;
       });
-      /** 页头两处（面包屑那截名字 + p-head 里的 h2）跟着改名走。
-          头像里那个字、目录 pill 也一起更 —— 不然"名字改了、上面还是旧的"，
-          看着像没存上（第一版就只同步了左栏，截图里露馅了）。 */
+      /* 左栏面包屑第三段就是项目名（右页头已经去掉了，见 openProjectsPage）。
+         不重画左栏列表，只把标题这一小段重建 —— 不会碰输入框焦点。 */
       const paintName = (name) => {
-        const crumb = $('pluginView')?.querySelector('.detail-head .head-title b');
-        if (crumb) crumb.textContent = name;
+        setListTitle([
+          { label: '工作台', to: 'workbench' },
+          { label: '项目', to: 'projects' },
+          { label: name },
+        ]);
         const h2 = box.querySelector('.p-head h2');
         if (h2) {
           h2.firstChild.nodeType === 3
@@ -6464,46 +6464,55 @@ async function doStartFlow() {
 }
 
 /**
- * 左栏顶上的标题：`setListTitle('工作台')` 写名字，`setListTitle(['工作台','小鸡小鸡'])` 写面包屑。
+ * 左栏顶上的标题：`setListTitle('工作台')` 写名字，
+ * `setListTitle([{label:'工作台',to:'workbench'}, {label:'工作流'}])` 写面包屑。
  *
  * 为什么做成两个入口而不是让调用处拼 HTML（2026-10-19 用户截图：「改成面包屑」）：
  *   · 左栏 `#listTitle` 原来是个 `<b>`，十几处直接写 `textContent`；
- *   · 流程页那一栏最上是**当前哪个流程**（「小鸡小鸡」），光写名字看不出它是"工作台下面的"，
- *     而这一页又是整站唯一点左栏不换页的地方 —— 补一段「工作台」，人就认得出自己在哪；
- *   · 这一段**可点**（2026-10-19 用户要求「第一个是工作台，要可点击」）：点它回工作台宫格首页。
- *     用的是全站那颗 `.crumb-btn`，跟设置页 / 插件页的面包屑一个样子、一种悬停。
+ *   · 面包屑是"你在哪儿"，它该长在**左栏列表顶上**（2026-10-19 用户第二次截图：
+ *     「面包屑应该是在左边的列表上，右边的不用」）—— 于是右页头那条面包屑全撤了，
+ *     统一挪到这儿；页头只留当前这一项的名字 / 操作。
  *
- * 传数组时全部用 `textContent` 写（流程名来自用户输入，不能进 innerHTML）。
+ * 数组的每一段可以是字符串（= 当前这一层，不可点）或 `{label, to, arg?}`：
+ *   · 最后一段**永远不可点**（当前位置）；中间段必须给 `to`（`CRUMB_GO` 的键）；
+ *   · 点击走全站那一个 document 事件委托（`data-crumb-to`），页面里不写 onclick ——
+ *     左栏标题会随页面重画，逐个绑必漏。`to` 用 key 而不是函数，跟页头面包屑同一套。
+ *
+ * 传数组时全部用 `textContent` 写（流程名/项目名/员工名都来自用户输入，不能进 innerHTML）。
  */
 function setListTitle(t) {
   const el = $('listTitle');
   if (!el) return;
   if (!Array.isArray(t)) {
-    el.innerHTML = `<b>${esc(t)}</b>`;
+    el.innerHTML = `<b title="${esc(t)}">${esc(t)}</b>`;
     return;
   }
   el.innerHTML = '';
   t.forEach((part, i) => {
+    const it = typeof part === 'string' ? { label: part } : part;
     if (i) {
       const sep = document.createElement('span');
       sep.className = 'crumb-sep';
       sep.textContent = '›';
       el.append(sep);
     }
-    const last = i === t.length - 1;
-    const node = document.createElement(last ? 'b' : 'button');
-    if (!last) {
-      node.type = 'button';
-      node.className = 'crumb-btn';
-      node.title = '回工作台';
-      // ⚠️ 走 `setNav('plugins')`，**不是**直接 `openPlugins()`：
-      //    openPlugins 末尾有一句"页面已经被接管就别抢渲染"（`S.nav !== 'plugins'` 就 return）——
-      //    在流程页上 S.nav 是 workflows，直接调它只会把路由改成 plugins、什么都不画（实测过）。
-      //    setNav 会先切一级栏（顺带把标题写回「工作台」、收掉左栏）再开宫格。
-      node.onclick = () => setNav('plugins');
+    if (i === t.length - 1) {
+      const b = document.createElement('b');
+      b.textContent = it.label;
+      b.title = it.label; // 名字长时会被省略号截掉，悬停能看全
+      el.append(b);
+      return;
     }
-    node.textContent = part;
-    el.append(node);
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'crumb-btn';
+    btn.textContent = it.label;
+    btn.title = `回${it.label}`;
+    if (it.to) {
+      btn.dataset.crumbTo = it.to;
+      if (it.arg != null) btn.dataset.crumbArg = String(it.arg);
+    }
+    el.append(btn);
   });
 }
 
@@ -6521,7 +6530,12 @@ async function openFlowRun(templateId, pickRunId) {
   // 一刷新就被恢复到工作台去了（踩过）
   setNav('workflows', { skipOpen: true });
   document.body.classList.remove('no-list');
-  setListTitle(['工作台', '发起记录']);
+  // 左栏这一栏是「发起记录」：面包屑写明它属于哪个流程（模板名取到后补成第三段）
+  setListTitle([
+    { label: '工作台', to: 'workbench' },
+    { label: '工作流', to: 'flows' },
+    { label: '发起记录' },
+  ]);
   setRoute('flowRun', { template: templateId ?? null, run: pickRunId ?? S.flowRunId ?? null });
   // 左栏顶上的「＋」在这儿是**发起一条**（不是新建模板）
   $('listAction').classList.remove('hidden');
@@ -6534,7 +6548,13 @@ async function openFlowRun(templateId, pickRunId) {
   } catch { /* 拿不到就当空的 */ }
   S.flowTemplates = data.templates ?? [];
   const tpl = (data.templates ?? []).find((t) => t.id === templateId) ?? null;
-  if (tpl) setListTitle(['工作台', tpl.name]);
+  if (tpl) {
+    setListTitle([
+      { label: '工作台', to: 'workbench' },
+      { label: '工作流', to: 'flows' },
+      { label: tpl.name },
+    ]);
+  }
 
   S.flowRuns = (data.runs ?? []).filter((r) => !templateId || r.templateId === templateId);
   if (pickRunId) S.flowRunId = pickRunId;
@@ -6587,16 +6607,9 @@ function renderRunList() {
 }
 
 function renderRunEmpty() {
-  // 还没发起过：说清楚下一步点哪儿，别给个死页
-  // ⚠️ 标题**恒为「发起记录」**：这里原来写的是「有模板就不显示」—— 那是为了给页头那枚
-  //    「← 工作台」腾地方（模板名已经写在左栏顶上）。按钮统一撤掉之后，这个条件就只剩
-  //    "页头是一条没有字的横线"。空态也得有标题，写类别（跟流程编排空态一个套路）。
+  // 还没发起过：说清楚下一步点哪儿，别给个死页。
+  // 没有页头：左栏顶上已经是「工作台 › 工作流 › 模板名」，右页头再写一遍就是重复。
   $('flowView').innerHTML = `
-    ${headRow(breadcrumb([
-      { label: '工作台', to: 'workbench' },
-      { label: '工作流', to: 'flows' },
-      { label: '发起记录' },
-    ]))}
     <div class="detail-body run-wrap">
       <div class="wip">这个流程还没有发起过
         <div style="margin-top:14px"><button class="primary" data-run-new>发起一条</button></div>
@@ -6619,6 +6632,14 @@ async function paintRun(id) {
   S.flowRunId = id;
   S.flowRun = v;
   S.flowTemplate = v.templateId ?? S.flowTemplate;
+  // 左栏面包屑第三段是**模板名**（这一栏就是模板下的发起记录）；换 run 时也刷一遍，
+  // 万一这条 run 属于别的模板（理论上不会，但数据是老的时候可能），标题别停在上一份。
+  const tplNow = (S.flowTemplates ?? []).find((t) => t.id === S.flowTemplate);
+  setListTitle([
+    { label: '工作台', to: 'workbench' },
+    { label: '工作流', to: 'flows' },
+    { label: tplNow?.name ?? '发起记录' },
+  ]);
   /*
    * **左栏那一行也要跟着换成这份新的。**
    *
@@ -7037,12 +7058,9 @@ function runHTML(v) {
                2026-10-19 用户要求去掉这一页的收缩展开：这一页的左栏是**发起记录**，
                换一条记录全靠点它 —— 收起来等于把自己唯一的路收掉，而省下的那点宽度
                换不来什么（右边还有一整栏对话）。整页统一：**左栏常驻，不推拉**。
-               所以这里不再有前置按钮，页头最左边就是标题（跟其它子页一个规矩）。 -->
-          <div class="head-title">${breadcrumb([
-            { label: '工作台', to: 'workbench' },
-            { label: '工作流', to: 'flows' },
-            { label: v.title },
-          ])}
+               所以这里不再有前置按钮，页头最左边就是标题（跟其它子页一个规矩）。
+               面包屑（工作台 › 工作流 › 模板名）在左栏顶上，这里只写**这一条 run 的标题**。 -->
+          <div class="head-title"><b>${esc(v.title)}</b>
             <span class="flow-badge ${b.cls}">${esc(b.text)}</span></div>
           <div class="head-actions">${acts.join('')}</div>
         </div>
@@ -7630,7 +7648,8 @@ async function openDesigner(templateId = null) {
     clearDraft(); // 和模板一样 → 留着没意义，还会下次误报
   }
 
-  setListTitle('工作流');
+  // 左栏顶上：工作台 › 工作流（当前流程名在页头那个输入框里，不再往面包屑里塞第三段）
+  setListTitle([{ label: '工作台', to: 'workbench' }, { label: '工作流' }]);
   renderFlowList();
   paintDesigner();
 }
@@ -7788,12 +7807,9 @@ function paintDesigner() {
 
   $('flowView').innerHTML = `
     ${headRow(
-      // 面包屑停在工作流这一层，**当前那一层就是旁边这个输入框**（流程名就地可改），
-      // 再写一遍名字等于同一个东西三个地方各写一次。
-      // 「工作流」这段是**当前位置**（不给 to）：这一页本身就是工作流的编排页，
-      // 做成可点的按钮只会点了原地重画一次。
-      `${breadcrumb([{ label: '工作台', to: 'workbench' }, { label: '工作流' }])}
-       <input id="dzName" value="${esc(S.designerName ?? '')}" placeholder="流程名字" style="max-width:220px" />`,
+      // 面包屑「工作台 › 工作流」在**左栏顶上**（2026-10-19 用户要求挪过去），页头这边
+      // 只留当前这一项：旁边这个输入框（流程名就地可改）。再写一遍名字等于同一个东西三处各写一次。
+      `<input id="dzName" value="${esc(S.designerName ?? '')}" placeholder="流程名字" style="max-width:220px" />`,
       `<button data-vd-publish>${S.designerPublished ? '已发布 · 下架' : '发布到工作台'}</button>
        <button class="primary" data-vd-save>保存</button>`,
     )}
@@ -8418,10 +8434,9 @@ async function renderGitRepos() {
     </div>`;
 
   view.innerHTML = `
-    <div class="detail-head">${breadcrumb([{ label: '设置', to: 'settings' }, { label: '代码托管' }])}
-      <span class="dim" style="font-size:12.5px;margin-left:8px">连接 GitHub、把仓库接进来给数字员工用</span>
-    </div>
     <div class="detail-body">
+      <!-- 页头整条去掉了（面包屑在左栏顶上「设置 › 代码托管」）；原来页头右侧那句说明挪到正文顶上 -->
+      <div class="dim" style="font-size:12.5px;margin:0 2px 12px">连接 GitHub、把仓库接进来给数字员工用</div>
       <div class="group-title">GitHub 连接<button type="button" class="help-btn" id="gitTokenHelp"
               title="怎么拿到这个令牌？">${ICON_HELP}</button></div>
       <div class="group">
@@ -9065,13 +9080,11 @@ async function scheduleDialog(job) {
 function renderSkillCards() {
   S.skill = null;
   showView('settings');
+  setListTitle([{ label: '设置', to: 'settings' }, { label: '技能' }]);
   const rows = S.skills ?? [];
   $('settingsView').innerHTML = `
-    <div class="detail-head">
-      ${breadcrumb([{ label: '设置', to: 'settings' }, { label: '技能' }])}
-      <span class="dim" style="font-size:12px">${esc(S.skillsRoot || 'skills')}</span>
-    </div>
     <div class="detail-body">
+      <div class="dim" style="font-size:12px;margin:0 2px 10px">技能目录：${esc(S.skillsRoot || 'skills')}</div>
       <section class="fx">
         <div class="fx-head">
           <label>全部技能 <span class="count">${rows.length}</span></label>
@@ -9200,13 +9213,15 @@ $('nSkillOk').onclick = async (e) => {
 
 function renderSkillEditor(skill, isNew, linkedPersonas) {
   const filePath = `${S.skillsRoot || 'skills'}\\${skill.name}\\SKILL.md`;
+  // 面包屑在左栏顶上：设置 › 技能 › 这个名字（右页头已去掉；文件路径挪到正文的 p-head 里）
+  setListTitle([
+    { label: '设置', to: 'settings' },
+    { label: '技能', to: 'skills' },
+    { label: skill.name },
+  ]);
   // 布局照**员工详情页**：hero（头像 + 名字 + 一句话 + 操作按钮）+ 分组卡片 + 左标签右内容。
   // 保存/删除从底部搬到了 hero 右侧的 .hero-actions —— 跟员工详情同一个位置（用户要求）。
   $('settingsView').innerHTML = `
-    <div class="detail-head">
-      ${breadcrumb([{ label: '设置', to: 'settings' }, { label: '技能', to: 'skills' }, { label: skill.name }])}
-      <span class="dim" style="font-size:12px">${esc(filePath)}</span>
-    </div>
     <div class="detail-body">
       <div class="p-head">
         <div class="avatar">${esc(initial(skill.name))}</div>
@@ -9218,6 +9233,7 @@ function renderSkillEditor(skill, isNew, linkedPersonas) {
               linkedPersonas.length ? `${linkedPersonas.length} 个员工在用` : '还没挂给任何人'
             }</span>
           </div>
+          <div class="dim" style="font-size:11.5px;margin-top:2px">${esc(filePath)}</div>
         </div>
         <div class="hero-actions">
           <button id="sSave">保存</button>
@@ -10219,6 +10235,10 @@ function wirePersonaTaskLinks() {
 
 
 function renderDetail({ persona, runtimes, runs, platformRoot, skills: personaSkills = [], allSkills = [] }, taskBoard = null) {
+  // 面包屑在左栏顶上：通讯录 › 这个人（右页头已去掉；名字/岗位/头像/动作都在正文的 p-head 里）。
+  // 只在"左栏就是通讯录"时写 —— 从聊天页头点「查看资料」进来时 S.nav 还是 messages，
+  // 那一栏里是会话，标题写上「通讯录 › 名字」会跟下面的列表对不上。
+  if (S.nav === 'contacts') setListTitle([{ label: '通讯录', to: 'contacts' }, { label: persona.name }]);
   const rt = runtimes.find((r) => r.id === persona.runtime);
   let extraRoots = [];
   try { extraRoots = JSON.parse(persona.rootDirs || '[]'); } catch { extraRoots = []; }
@@ -10234,7 +10254,6 @@ function renderDetail({ persona, runtimes, runs, platformRoot, skills: personaSk
     : '<tr><td colspan="6" class="dim" style="padding-top:8px">还没有运行记录</td></tr>';
 
     $('detailView').innerHTML = `
-    <div class="detail-head">${breadcrumb([{ label: '通讯录', to: 'contacts' }, { label: persona.name }])}</div>
     <div class="detail-body">
       <div class="p-head">
         <div class="avatar" ${avatarStyle(persona.name)}>${esc(initial(persona.name))}</div>
@@ -10681,7 +10700,12 @@ function renderDetail({ persona, runtimes, runs, platformRoot, skills: personaSk
         // 左栏 / 会话里的名字也跟着变（只跟内存和左栏打交道，不重画详情页）
         (S.conversations || []).forEach((c) => { if (c.personaId === p.id) c.personaName = p.name; });
         if (S.conversation?.personaId === p.id) S.conversation.personaName = p.name;
-        if (S.nav === 'contacts' || S.nav === 'messages') renderList();
+        if (S.nav === 'contacts' || S.nav === 'messages') {
+          // 左栏面包屑末段就是当前员工名（页头已经去掉了）—— 不然"名字改了、上面还是旧的"。
+          // 只有左栏真是通记录时才改标题；在消息页那一栏是会话（从聊天页头点进资料会停在这条路）。
+          if (S.nav === 'contacts') setListTitle([{ label: '通讯录', to: 'contacts' }, { label: p.name }]);
+          renderList();
+        }
       }
       setSaveState('已保存', 'ok');
       return true;
@@ -11080,10 +11104,11 @@ function paintDrawer() {
 function paintGroupDetail(thread) {
   S.groupThread = thread;
   S.groupThreadId = thread.id;
+  // 面包屑在左栏顶上：通讯录 › 群名（右页头已去掉；名字/群助手/人数都在正文的 hero 里）
+  setListTitle([{ label: '通讯录', to: 'contacts' }, { label: thread.title }]);
   const assistant = thread.members.find((m) => m.personaId === thread.assistantPersonaId);
 
   $('groupView').innerHTML = `
-    <div class="detail-head">${breadcrumb([{ label: '通讯录', to: 'contacts' }, { label: thread.title }])}</div>
     <div class="detail-body">
       <div class="hero">
         <div class="avatar grp big">${esc(initial(thread.title))}</div>
@@ -11674,8 +11699,9 @@ async function renderPluginMaster(plugin, split) {
   if (!rows.some((r) => keyOf(r) === String(S.pluginRow))) S.pluginRow = rows.length ? keyOf(rows[0]) : null;
   const sel = rows.find((r) => keyOf(r) === String(S.pluginRow)) ?? null;
 
-  // 标题借用全局那一套；「＋」的 onclick 在全局按 S.nav 派发（别在这里覆盖）
-  setListTitle(m.heading || plugin.label);
+  // 左栏顶上：工作台 › 插件名（面包屑从右页头挪过来；页头整条已去掉）
+  // 不用 m.heading（「项目」「登记表」）—— 那是"这一列是什么"，面包屑要回答的是"你在哪儿"。
+  setListTitle([{ label: '工作台', to: 'workbench' }, { label: plugin.label }]);
   $('listAction').classList.toggle('hidden', !m.add);
   $('listAction').title = m.add?.label || '';
   $('listBody').innerHTML = rows.length
@@ -11765,12 +11791,18 @@ async function renderPluginPanel() {
     return;
   }
 
+  // 有主从布局 → 用**全局左栏**放列表（和消息/通讯录同一位置）；
+  // 没有 → 整页布局，把左栏收掉（见 CSS 的 body.no-list）。
+  // ⚠️ 2026-10-19 用户：「面包屑应该是在左边的列表上，右边的不用」——
+  //    有左栏时面包屑画在左栏顶上（renderPluginMaster 里），页头整条不要；
+  //    没左栏时（整页插件面板）页头仍是面包屑，否则页面上没有任何"你在哪"。
+  const split = plugin.panel.split ?? null;
   $('pluginView').classList.remove('kb-page'); // 插件面板是长页面（块会很长），按普通滚动
   // 进插件面板 = 离开项目页（两条路都写在 pluginView 里，位置记忆得分清是谁）
   S.projectList = false;
   S.projectId = null;
   $('pluginView').innerHTML = `
-    ${headRow(breadcrumb([{ label: '工作台', to: 'workbench' }, { label: plugin.label }]))}
+    ${split ? '' : headRow(breadcrumb([{ label: '工作台', to: 'workbench' }, { label: plugin.label }]))}
     <div class="detail-body" id="plgPanel"><div class="dim">加载中…</div></div>`;
   showView('plugin');
 
@@ -11779,7 +11811,6 @@ async function renderPluginPanel() {
   pluginCopy = {};
 
   // 顶部块 + 详情动作 + 详情块合成一张表：下标统一，按钮回查才不会串
-  const split = plugin.panel.split ?? null;
   const allBlocks = [
     ...(plugin.panel.blocks ?? []),
     ...(split?.detail?.actions ?? []),
