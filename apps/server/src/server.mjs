@@ -21,7 +21,7 @@ import { dispatchToThread, personaRoots } from './dispatch.mjs';
 import * as workflows from './workflows.mjs';
 import * as quota from './quota.mjs';
 import * as status from './status.mjs';
-import { projectTasks, allTasks, personaTasks, createProjectTask, updateProjectTask, startProjectTask, onTaskRunFinished, afterMerged, upsertRepoCard } from './project-tasks.mjs';
+import { projectTasks, allTasks, personaTasks, createProjectTask, updateProjectTask, startProjectTask, onTaskRunFinished, afterMerged, upsertRepoCard, ensureTaskCardForStep } from './project-tasks.mjs';
 import * as git from './git-repos.mjs';
 import * as schedules from './schedules.mjs';
 import * as secretary from './secretary.mjs';
@@ -1915,6 +1915,30 @@ async function handleWorkflow(req, res, url) {
     const id = decodeURIComponent(one[1]);
     if (!store.deleteWorkflowRun(id)) return fail(res, 404, 'E2030', '流程不存在');
     return sendJson(res, 200, { deleted: true });
+  }
+
+  /*
+   * 流程的一步 → 它那张**任务卡**（2026-10-19）：`POST /api/workflows/runs/:id/tasks/:taskId/card`
+   *
+   * 流程页那枚「对话」改成"打开这一步的任务卡"之后，需要这条路。
+   * 幂等：卡已经有了就返回原卡（不新建、不改内容）—— 点两次不会开两张。
+   * 单开一个 POST 而不是 GET：第一次点会**真的建一张卡**，用 GET 做写操作迟早出事
+   * （预取、刷新、爬虫，任何一个都会给它种一张卡）。前端只在点击时调。
+   */
+  const stepCard = /^\/api\/workflows\/runs\/([^/]+)\/tasks\/([^/]+)\/card$/.exec(url.pathname);
+  if (req.method === 'POST' && stepCard) {
+    const runId = decodeURIComponent(stepCard[1]);
+    const taskId = decodeURIComponent(stepCard[2]);
+    const run = store.getWorkflowRun(runId);
+    if (!run) return fail(res, 404, 'E2029', '流程不存在');
+    const step = store.listWorkflowTasks(runId).find((t) => t.id === taskId);
+    if (!step) return fail(res, 404, 'E2045', '这一步不在这条流程里');
+    try {
+      const card = ensureTaskCardForStep(run, step);
+      return sendJson(res, 200, { task: card });
+    } catch (e) {
+      return fail(res, 400, 'E2046', String(e?.message ?? e));
+    }
   }
 
   if (req.method === 'POST' && act) {

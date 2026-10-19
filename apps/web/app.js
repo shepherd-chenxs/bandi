@@ -221,9 +221,11 @@ const ROUTES = {
     setNav('plugins', { skipOpen: true });
     return openTaskBoard();
   },
-  taskCard: ({ id, fromAll } = {}) => {
+  taskCard: ({ id, fromAll, fromFlow } = {}) => {
     setNav('plugins', { skipOpen: true });
-    return openTaskCardPage(id, { fromAll });
+    // fromFlow：这张卡是从流程的某一步点进来的（`{ runId, taskId, runTitle, nodeName }`）。
+    // 只用来在页头写清"你从哪来" —— 卡本身不因为来路不同而长得不一样（见 openTaskCardPage）。
+    return openTaskCardPage(id, { fromAll, fromFlow });
   },
   // 定时任务：工作台里的一页（2026-10-17 从设置搬过来）
   schedules: () => {
@@ -4955,10 +4957,27 @@ function wireBoard(view, { refresh, taskProject = () => null }) {
  */
 let taskCardFromAll = false;
 
+/**
+ * 这张卡是**从流程的某一步**点进来的吗（2026-10-19）：`{ runId, taskId, runTitle, nodeName }`，否则 null。
+ *
+ * 跟上面那个 `taskCardFromAll` 不是一回事，两个都留着：
+ *   · `taskCardFromAll` 决定**离开时回哪**（看板 / 项目 / 流程）；
+ *   · 这个只决定**页头写不写那行来路**。
+ * 合在一起会逼着做二选一 —— 从流程进来的卡，回程本来就该是流程，不冲突。
+ */
+let taskCardFromFlow = null;
+
 async function openTaskCardPage(taskId, opts = {}) {
   // 来源定死：恢复位置时从 route 里带回来（刷新也还记得），否则看当前的 S.boardAll
   taskCardFromAll = opts.fromAll ?? !!S.boardAll; // 必须在 S.boardAll = false 之前读
-  setRoute('taskCard', { id: taskId, fromAll: taskCardFromAll });
+  /*
+   * 从流程那一步点进来的（2026-10-19）：记下"这条卡是哪条流程、哪个节点"。
+   * 只为了在页头写一行来路 —— 人刚在流程页看着「写代码」这一步，点进来要还认得出是它。
+   * 传 null 就是"不是从流程来的"（从看板点进来的），页头不写那行。
+   * ⚠️ 路由里必须带上它：不带的话刷新一下页头那行就没了，看着像"进错页面"。
+   */
+  taskCardFromFlow = opts.fromFlow ?? null;
+  setRoute('taskCard', { id: taskId, fromAll: taskCardFromAll, fromFlow: taskCardFromFlow });
   const view = $('pluginView');
   view.classList.add('kb-page'); // 这一页要满屏（见 style.css 的 #pluginView.kb-page）
   S.view = 'plugin';
@@ -5113,12 +5132,28 @@ async function paintTaskCardPage(taskId) {
    *   · 页头只有「任务卡 + 删除」（原来的三级面包屑 `工作台 › 任务看板 › 任务卡`
    *     统一去掉返回后一并撤了；回看板靠左栏点那一行 —— 左栏本来就是看板那一列）。
    */
+  /*
+   * 页头：**从流程进来的，标题下面补一行来路**（2026-10-19）。
+   * 人刚才在流程时间轴上看着「写代码」这一步，点进来要还认得出是它 ——
+   * 不然一张「测试2-不指定 · 写代码」的卡摆在眼前，得自己回想"这是哪条流程第几步"。
+   * 那行**可以点**：直接回那条流程（跟删完卡之后回的是同一个地方）。
+   * 从看板进来的没有这一行 —— 来源本来就在左栏上写着，再写一遍是噪音。
+   */
+  const fromFlowBar = taskCardFromFlow?.runId
+    ? `<button type="button" class="tc-from" id="tcFromFlow"
+         title="回到这条流程的时间轴">
+         <span class="tc-from-k">来自流程</span>
+         <b>${esc(taskCardFromFlow.runTitle ?? '')}</b>
+         ${taskCardFromFlow.nodeName ? `<span class="tc-from-sep">›</span> <span>${esc(taskCardFromFlow.nodeName)}</span>` : ''}
+       </button>`
+    : '';
   view.innerHTML = `
     ${headRow('任务卡', '<button class="tc-del" id="tcDel" title="删掉这张卡（＝忽略它）">删除</button>')}
     <div class="detail-body tc-page">
       <div class="tc-main">
         <div class="tc-main-scroll">
           <div class="tc-headblock">
+            ${fromFlowBar}
             <h1 class="tc-title" id="tcTitleText" contenteditable="plaintext-only" spellcheck="false">${esc(task.title)}</h1>
             <div class="tc-desc${task.description ? '' : ' empty'}" id="tcDescView">${task.description ? renderMarkdown(task.description) : '<span class="dim">添加描述…</span>'}</div>
           </div>
@@ -5201,13 +5236,23 @@ async function paintTaskCardPage(taskId) {
       </aside>
     </div>`;
 
-  // 从哪来回哪去：全局看板点进来的回全局看板，项目看板点进来的回那个项目
-  const backTo = taskCardFromAll
-    ? () => openTaskBoard()
-    : proj ? () => openProjectDetail(proj.id) : () => openProjectsPage();
+  /*
+   * 从哪来回哪去：**从流程那一步进来的就回那条流程**（2026-10-19）。
+   * 这是这轮改造的重点之一 —— 人是在流程时间轴上点「任务」过来的，
+   * 删完卡 / 干完事却落回看板，等于把他从上下文里拽走了，还得自己找回去。
+   * 其余照旧：全局看板 → 全局看板，项目看板 → 那个项目。
+   */
+  const backTo = taskCardFromFlow?.runId
+    ? () => openFlowRun(taskCardFromFlow.templateId ?? null, taskCardFromFlow.runId)
+    : taskCardFromAll
+      ? () => openTaskBoard()
+      : proj ? () => openProjectDetail(proj.id) : () => openProjectsPage();
   // 离开这张卡就把位置记忆清掉：否则下一次刷新又会被拽回这张卡
   const leaveTo = async () => { await backTo(); };
-  // （页头不再有返回按钮；backTo 只剩 leaveTo 在用 —— 删卡这类动作完事后回看板）
+  // （页头不再有返回按钮；backTo 只剩 leaveTo 和下面那行「来自流程」在用）
+
+  // 「来自流程」那行：点一下回那条流程的时间轴（跟删完卡之后回的是同一个地方）
+  $('tcFromFlow')?.addEventListener('click', () => { backTo().catch((e) => toast(e.message, 'error')); });
 
   /* ---------------- 标题 / 描述：就地编辑（2026-10-18 用户要求：没有编辑按钮，点了就改，改完自动存）
      做法跟 Multica 一致：标题、描述平时就是"读"的样子，点上去原地变成输入框；
@@ -6611,6 +6656,8 @@ function runHTML(v) {
       // 这样对话被锚定在这一个节点上，时间轴也不会被长对话淹掉。
       const n = (t.messages ?? []).length;
       const canTalk = !!t.conversationId && t.status !== '待办';
+      // 能不能通到任务卡：服务端给了「已有卡」或「能现开」之一就行（见 viewTask 的说明）
+      const canOpenCard = !!t.projectTaskId || t.canOpenTaskCard === true;
       // 这一步的记录（状态 / 经办人 / 第几次 / 时间 / 耗时）现在全在这一行的属性行里，
       // 不用再开一个面板 —— 任务卡就是为此撤掉的。
       const isCur = t.id === lastTaskId;
@@ -6659,14 +6706,25 @@ function runHTML(v) {
             canAssign ? '<span class="run-pick" id="runAssigneeMount"></span>' : esc(t.assigneeName ?? '没人')
           }${t.visit > 1 ? ` · 第 ${t.visit} 次` : ''}${
             /*
-             * 人名后面那颗对话图标：**跟下面那排的「对话」按钮是同一个动作** ——
-             * 都打开这一步的会话面板（那也就是跟经办人的往来，见 viewTask 的说明）。
-             * 放在人名后面，是因为"我想找他说句话"的时候，眼睛就在人名上。
-             * 两步用同一个 `data-run-chat` 接线，不另开一条路。
+             * 人名后面那颗按钮 —— **2026-10-19 起它开的是"这一步的任务卡"，不再开对话栏**。
+             *
+             * 用户的判断（"流程这个对话改成跳转到任务卡是不是更好"）对的地方在于：
+             * 这一步的往来记录、干成什么样、状态、换个经办人 —— 本来就是一张卡要回答的事，
+             * 对话栏只回答了其中一问，还挤在窄栏里。所以让它通到卡上去。
+             *
+             * 这里**不直接把 wt2- 当卡 id**：流程步骤和任务卡在库里是两张表
+             * （`workflow_tasks` / `project_tasks`），拿 `wt2-` 去查卡会 404（试过）。
+             * 服务端在每一步上给了 `projectTaskId`（已有卡）和 `canOpenTaskCard`（能现开），
+             * 两者都没有（流程没挂项目）时才退回老的对话栏 —— 那条路没删，还能用。
+             *
+             * 图标仍是"对话气泡"而不是"卡片"：对人来说这一下就是"去看看他在说什么/干了啥"，
+             * 文案也跟着变（title 写清楚去哪儿），别让人点了才知道。
              */
-            `<button class="icon-btn run-chat" type="button" data-run-chat data-task="${esc(t.id)}"${
-              canTalk ? '' : ' disabled'
-            } title="${canTalk ? '跟经办人对话' : '先派活才能对话'}">${ICON_CHAT}</button>`
+            `<button class="icon-btn run-chat" type="button" data-run-card data-task="${esc(t.id)}"${
+              canOpenCard || canTalk ? '' : ' disabled'
+            } title="${canOpenCard
+              ? (t.projectTaskId ? '打开这一步的任务卡' : '打开任务卡（第一次点会建一张）')
+              : canTalk ? '跟经办人对话' : '先派活才能对话'}">${ICON_CHAT}</button>`
           }</span>
           <span><i>经办时间</i>${
             t.startedAt ? esc(new Date(t.startedAt).toLocaleString('zh-CN')) : '—'
@@ -6867,9 +6925,43 @@ function wireRun(v) {
   // ⚠️ 按**按钮自己的状态**判断走哪条路，别依赖 ncCtx（那是右侧对话栏的东西，
   //    没开栏时它是 null，点击会掉进 sendNodeChat —— 空输入，看着像"点了没反应"）
   if (send) send.onclick = () => (send.classList.contains('stopping') ? stopNodeRun() : sendNodeChat());
-  // 节点上的「对话」→ 右边多出一栏
-  view.querySelectorAll('[data-run-chat]').forEach((el) => {
-    el.onclick = () => openNodeChat(v.id, el.dataset.task).catch((e) => toast(e.message, 'error'));
+  /*
+   * 节点上那颗按钮 → **这一步的任务卡**（2026-10-19）；没有卡、也不能开卡时退回对话栏。
+   *
+   * 三条路，顺序不能反：
+   *   ① 服务端说"已经有卡" → 直接跳（不写库，纯跳转）；
+   *   ② 说"能开" → 让服务端现开一张再跳（`POST .../card` 是幂等的，点两次不会两张）；
+   *   ③ 都没有（流程没挂项目）→ 退回原来的对话栏 —— 那条路还在，只是不再是首选。
+   * 一次点击只该发生一件事，所以用 if/else 串起来而不是各挂各的。
+   */
+  view.querySelectorAll('[data-run-card]').forEach((el) => {
+    el.onclick = async () => {
+      const taskId = el.dataset.task;
+      const step = (v.tasks ?? []).find((x) => x.id === taskId) ?? null;
+      if (!step) return;
+      // 来路：让卡页头写得出「来自流程 · 流程名 › 节点名」，离开时也回得来这条流程
+      const fromFlow = { runId: v.id, templateId: v.templateId ?? null, runTitle: v.title, nodeName: step.nodeName };
+      if (step.projectTaskId) {
+        return openTaskCardPage(step.projectTaskId, { fromFlow }).catch((e) => toast(e.message, 'error'));
+      }
+      if (step.canOpenTaskCard) {
+        el.disabled = true;
+        try {
+          const d = await api(
+            `/api/workflows/runs/${encodeURIComponent(v.id)}/tasks/${encodeURIComponent(taskId)}/card`,
+            { method: 'POST' },
+          );
+          if (d?.task?.id) return await openTaskCardPage(d.task.id, { fromFlow });
+          throw new Error('没拿到卡');
+        } catch (e) {
+          toast(`开不了卡：${e.message}`, 'error');
+        } finally {
+          el.disabled = false;
+        }
+        return;
+      }
+      openNodeChat(v.id, taskId).catch((e) => toast(e.message, 'error'));
+    };
   });
   /*
    * 产物：文件 → 复制路径（贴进编辑器或终端就是"打开"）；链接 → 新窗口。

@@ -905,6 +905,34 @@ function viewTask(t, withMessages = false, isLast = false, run = null) {
     endedAt: t.endedAt,
     conversationId: t.conversationId,
     elapsedMs: t.startedAt ? Date.parse(t.endedAt ?? store.nowIso()) - Date.parse(t.startedAt) : null,
+    /*
+     * **这一步「作为一张卡」时的身份**（2026-10-19）。
+     *
+     * 流程页那枚「对话」原来只弹一条窄对话栏，而人真正想看的常常是"这一步的活干成什么样、
+     * 能不能改状态/换人" —— 那正好是任务卡。可流程步骤和任务卡**在库里是两张表**
+     *   · 流程步骤：`workflow_tasks`（id 形如 `wt2-xxx`）
+     *   · 任务卡：`project_tasks`（id 形如 `pt-xxx`，详情接口只认它）
+     * 拿 `wt2-` 去查任务卡会直接 404（试过）。
+     *
+     * 所以这里给前端两样东西，让它能**顺着流程走到卡**：
+     *   1. `projectTaskId`：这一步**已经有一张自己的卡**时才有 ——
+     *      靠执行人的那次运行反查（`project_tasks.runId = 这一轮的 agentRunId`），
+     *      这是"同一件活"最硬的凭据，不靠标题猜；
+     *   2. `canOpenTaskCard`：还没有卡、但**可以现开一张**（下面那个接口）。
+     *
+     * 看板上的流程行是**每次办理一行**（按 `workflow_tasks` 算），跟"手建、能拖能改"的卡
+     * 本来就是两回事 —— 点流程行还是回流程实例，这里不做混淆。
+     */
+    projectTaskId: (() => {
+      // ① 人在流程页点过一次「任务」→ 卡上带着这一步的身份，直接认
+      const byKey = store.getProjectTaskBySourceKey(`flow:${t.runId}:${t.nodeId}:${t.visit ?? 1}`);
+      if (byKey) return byKey.id;
+      // ② 这一步派过活、而那一轮跑出来过一张卡 → 同一件活，认它（老数据没有 sourceKey 时靠这条）
+      return t.agentRunId ? (store.getProjectTaskByRunId(t.agentRunId)?.id ?? null) : null;
+    })(),
+    // 没有项目就跑不到卡上（`project_tasks` 必须挂一个项目）。agentRunId 不是必须的 ——
+    // 没派过活的那几步也允许开卡（只是卡上暂时没人）。
+    canOpenTaskCard: !!run?.projectId,
     // 这一步跟执行人的往来：**按 taskId 归属**。
     // ⚠️ 以前是按时间窗口从 1:1 会话里切 —— 而 1:1 会被多条流程共用，
     //    于是别的流程的派活也混进这一步的往来里（用户实报：看着像重复发了一遍）。

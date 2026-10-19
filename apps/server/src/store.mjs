@@ -690,6 +690,17 @@ ensureColumn('project_tasks', 'externalKey', 'externalKey TEXT');
 // 排队标记：派活撞上"人满了 / 项目正忙"时落一个时间，30 秒节拍重试（见 schedules.mjs）。
 // ⚠️ 必须放在 project_tasks 建表**之后**（放前面会在新库上 no such table）
 ensureColumn('project_tasks', 'queuedAt', 'queuedAt TEXT');
+/*
+ * 流程的一步 ↔ 一张卡（2026-10-19）：`sourceKey` = `flow:<runId>:<nodeId>:<visit>`，
+ * `sourceRunId` 单独存一份只是为了以后按流程反查不用解字符串。
+ *
+ * ⚠️ 这两列**只用来认身份**，不改卡的脾气 —— 它照样能拖、能改状态、能派活。
+ *    流程自己的状态在 `workflow_tasks`，两处各记各的、不强行同步
+ *    （同步了会互相覆盖：流程说"这一步办完了"，卡可能是人后来手动标了新状态）。
+ * 老卡这两列是 null —— `ensureTaskCardForStep` 会按标题把它们认下来并补上。
+ */
+ensureColumn('project_tasks', 'sourceKey', 'sourceKey TEXT');
+ensureColumn('project_tasks', 'sourceRunId', 'sourceRunId TEXT');
 
 /**
  * 内置的默认项目：`<文档>\bandi\default-workspace`。
@@ -818,6 +829,8 @@ export function createProjectTask({
   runId = null,
   source = 'manual',
   externalKey = null,
+  sourceKey = null,
+  sourceRunId = null,
 }) {
   const ts = nowIso();
   const row = {
@@ -831,13 +844,16 @@ export function createProjectTask({
     runId,
     source,
     externalKey,
+    // 流程的一步开出来的卡：'flow:<runId>:<nodeId>:<visit>'；手建的卡是 null
+    sourceKey,
+    sourceRunId,
     createdAt: ts,
     updatedAt: ts,
   };
   db.prepare(
     `INSERT INTO project_tasks
-       (id, projectId, title, description, status, assigneePersonaId, conversationId, runId, source, externalKey, createdAt, updatedAt)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, projectId, title, description, status, assigneePersonaId, conversationId, runId, source, externalKey, sourceKey, sourceRunId, createdAt, updatedAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     row.id,
     row.projectId,
@@ -849,6 +865,8 @@ export function createProjectTask({
     row.runId,
     row.source,
     row.externalKey,
+    row.sourceKey,
+    row.sourceRunId,
     row.createdAt,
     row.updatedAt,
   );
@@ -870,6 +888,15 @@ export function getProjectTaskByExternalKey(projectId, externalKey) {
 export function getProjectTaskByRunId(runId) {
   if (!runId) return null;
   return db.prepare('SELECT * FROM project_tasks WHERE runId = ? ORDER BY updatedAt DESC LIMIT 1').get(runId) ?? null;
+}
+
+/**
+ * 按「流程的一步」找它那张卡（`sourceKey = flow:<runId>:<nodeId>:<visit>`，见 ensureTaskCardForStep）。
+ * 有索引不需要（这张表最多几百行，走主键扫描也就一瞬）；真要慢了再加。
+ */
+export function getProjectTaskBySourceKey(sourceKey) {
+  if (!sourceKey) return null;
+  return db.prepare('SELECT * FROM project_tasks WHERE sourceKey = ? LIMIT 1').get(sourceKey) ?? null;
 }
 
 export function listProjectTasks(projectId) {
@@ -902,7 +929,7 @@ export function updateProjectTask(id, fields) {
     `UPDATE project_tasks
         SET title = ?, description = ?, status = ?, assigneePersonaId = ?,
             conversationId = ?, runId = ?, prRepo = ?, prNumber = ?, prState = ?, prTitle = ?,
-            prCheckedAt = ?, queuedAt = ?, updatedAt = ?
+            prCheckedAt = ?, queuedAt = ?, sourceKey = ?, sourceRunId = ?, updatedAt = ?
       WHERE id = ?`,
   ).run(
     next.title,
@@ -917,6 +944,9 @@ export function updateProjectTask(id, fields) {
     next.prTitle ?? null,
     next.prCheckedAt ?? null,
     next.queuedAt ?? null,
+    // `?? null` 而不是直接取：老库里这两列刚 ALTER 出来，历史行是 NULL —— 写回 null 是幂等的
+    next.sourceKey ?? null,
+    next.sourceRunId ?? null,
     nowIso(),
     id,
   );

@@ -2074,6 +2074,22 @@ dialog.sch-dlg > form { flex: 1 1 auto; min-height: 0; display: flex; flex-direc
 .tc-main-scroll { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 18px;
                   padding-right: 16px; }
 .tc-headblock { padding-top: 6px; }
+/*
+ * 「来自流程」那行（2026-10-19）：这张卡是从流程时间轴的某一步点进来的，写清哪条流程、哪一步。
+ * 它**排在标题上面** —— 先交代"这是件什么事里的"，再读标题；放标题下面会像一句副标题，
+ * 而这句其实是"你在哪儿"，性质不一样。
+ * 做成按钮（整行可点 = 回那条流程）：一个行内小胶囊，不带边框、悬停才浮起来 ——
+ * 跟 .head-back 那种"能点的字"同一档，不要在标题上方再画一块框。
+ */
+.tc-from { display: inline-flex; align-items: center; gap: 6px; max-width: 100%;
+           margin: 0 0 8px; padding: 2px 8px 2px 6px; border: 0; border-radius: 6px;
+           background: transparent; color: var(--dim); font-size: 12px; line-height: 1.5;
+           cursor: pointer; text-align: left; min-width: 0; }
+.tc-from:hover { background: var(--hover); color: var(--text); }
+.tc-from b { color: var(--text); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tc-from > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tc-from-sep { color: var(--line); flex: 0 0 auto; }
+.tc-from-k { flex: 0 0 auto; color: var(--dim); }
 .tc-title { margin: 0 0 12px; font-size: 20px; font-weight: 600; line-height: 1.4; padding: 0;
             cursor: text; overflow-wrap: anywhere; outline: none; caret-color: var(--accent); }
 .tc-desc { flex: 1; min-width: 0; font-size: 13px; line-height: 1.75; cursor: text; outline: none; }
