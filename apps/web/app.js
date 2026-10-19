@@ -7708,7 +7708,11 @@ function paintDesigner() {
                  <label>谁来办</label>
                  <div data-vd-pick-mount></div>
                  <label>这一步要干什么</label>
-                 <textarea data-vd-f="detail" style="height:80px">${esc(sel.detail ?? '')}</textarea>
+                 ${/* 高度 80 → 150（2026-10-19 用户截图要求）：这段是**干活的要求**，
+                       正常要写五六行（目标/边界/验收/产出），80px 只露三行，写的时候一大半在框外面，
+                       得一边写一边滚。150 约八行，一个节点写清楚不用滚。
+                       仍然可拖（resize 是 textarea 默认行为，没关掉）。 */ ''}
+                 <textarea data-vd-f="detail" style="height:150px">${esc(sel.detail ?? '')}</textarea>
                  <label>不通过时去哪</label>
                  <select data-vd-f="reject">${rejectOpts(sel.reject)}</select>
                  <!-- 流转开关：默认"做完自动往下走"；打开则停在这儿等人表态 -->
