@@ -1,0 +1,893 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>班底 v1.0.1 设计稿 · 消息</title>
+<style>
+/* ═══════════════════════════════════════════════════════════════
+   班底 v1.0.1 · Linear / Vercel 极简
+   参考：Linear 的密度与灰阶、Vercel Geist 的边框与排版
+   原则：颜色几乎全部让给灰阶，靛蓝紫 #5E6AD2 只出现在
+        "当前选中 / 主按钮 / 焦点环" 三个地方，别处一律不用。
+   ═══════════════════════════════════════════════════════════════ */
+
+:root {
+  color-scheme: dark;
+
+  /* ── 灰阶：从最底到最亮，共 10 档。层级只靠这一列 + 字重 ── */
+  --g0:  #08090a;   /* 应用底：比纯黑略暖，屏幕上看不出发灰但比 #000 柔和 */
+  --g1:  #0d0e10;   /* 一级面：图标栏 */
+  --g2:  #111214;   /* 二级面：列表栏 */
+  --g3:  #16171a;   /* 三级面：内容区 / 气泡 */
+  --g4:  #1c1e21;   /* 悬停 / 输入框底 */
+  --g5:  #242629;   /* 选中底 / 边框强调 */
+  --line-1: #1a1b1e;  /* 最弱分割线（列表内） */
+  --line-2: #202225;  /* 常态边框 */
+  --line-3: #2a2c30;  /* 强边框（输入、可聚焦） */
+
+  --text:  #e8e9ea;   /* 主文字：不用纯白，纯白在深底上会"跳" */
+  --text-2:#9b9ea3;   /* 次要：说明、时间 */
+  --text-3:#6b6e73;   /* 三级：占位、禁用 */
+  --text-4:#4a4d51;   /* 极弱：装饰性文字 */
+
+  /* ── 唯一的一处彩色 ── */
+  --accent: #5e6ad2;
+  --accent-hi: #6e79dd;
+  --accent-lo: rgba(94, 106, 210, .14);
+  --accent-ring: rgba(94, 106, 210, .38);
+
+  /* 语义色：保留但极度降饱和，只在真的有状态时出现 */
+  --ok: #4a9e7f;
+  --bad: #c9636b;
+  --warn: #b8874a;
+  /* 浅色里要换值的三个（淡紫/淡红字在白底上会消失） */
+  --accent-text: #c3c9f0;
+
+  --r-sm: 5px;
+  --r-md: 7px;
+  --r-lg: 10px;
+
+  /* Linear 的阴影几乎不可见 —— 层次靠边框和底色，不靠阴影 */
+  --shadow-pop: 0 8px 24px rgba(0,0,0,.45), 0 0 0 1px rgba(255,255,255,.04);
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Hiragino Sans GB", "Microsoft YaHei", "Source Han Sans SC", sans-serif;
+  --mono: "SF Mono", "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   浅色：不是"把深色反过来"，是重新排一遍层次。
+
+   深色里层次是"越往上越亮"（g0 最暗 → g5 最亮，卡片比底亮一档）。
+   浅色里要反过来：**底是浅灰，卡片是纯白** —— 白卡片浮在浅灰底上。
+   所以 g3（气泡/卡片）在浅色下反而是最亮的 #fff，而 g0（应用底）是 #f7f8f9。
+
+   另一个关键：**浅色只留 6 档灰，不用深色那 10 档**。
+   白底上相邻两档灰的差别小得多，档位太密会显得脏（像蒙了层灰）。
+   三档线也跟着收：线要更淡，否则浅色下线条会"割"屏幕。
+   ═══════════════════════════════════════════════════════════════ */
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --g0: #f7f8f9;   /* 应用底 / 内容区底：浅灰（卡片靠纯白浮起来） */
+  --g1: #fcfcfd;   /* 图标栏：接近白 */
+  --g2: #f2f3f5;   /* 列表栏 / 看板列底 */
+  --g3: #ffffff;   /* 气泡 / 卡片 / 输入框：纯白 */
+  --g4: #eef0f2;   /* 悬停 / 选中 — 只比列底暗一点点 */
+  --g5: #e4e7ea;   /* 图标底 / 标签底 */
+
+  --line-1: #eaeaec;  /* 浅色下线条必须更淡，否则会"割"屏幕 */
+  --line-2: #e0e2e5;
+  --line-3: #ced1d6;
+
+  --text:  #1a1c1f;   /* 主文字：近黑，不是纯黑（纯黑在白底上太硬） */
+  --text-2:#5f646c;   /* 次要 */
+  /* #868b93 在浅色列表底 #eceef1 上只有 2.95:1，不到 AA 的 3:1。
+     降到 #7e838b 后三处底分别是 3.28 / 3.59 / 3.81 —— 都过线，且跟深色一侧的 3.5~3.9 同一量级。 */
+  --text-3:#7e838b;   /* 占位 / 时间 */
+  --text-4:#a9aeb5;   /* 装饰 */
+
+  /* 强调色沿用 #5e6ad2 —— 它在白底上的对比度约 5.3:1，够用不用调。
+     但"极浅底"要加深一点：深色里 .14 的白混进去看得见，
+     浅色里同样的值会被白底吃掉。 */
+  --accent: #5e6ad2;
+  --accent-hi: #5563cc;
+  --accent-lo: rgba(94, 106, 210, .10);
+  --accent-ring: rgba(94, 106, 210, .30);
+
+  --ok: #2f7a5e;
+  --bad: #b4474f;
+  --warn: #96683a;
+
+  --shadow-pop: 0 8px 24px rgba(16,18,22,.10), 0 0 0 1px rgba(16,18,22,.05);
+}
+
+/* 主题切换：仅设计稿用，不属于产品 UI。
+   试过右上（压筛选条）、右下（压发送按钮）、左上（压 logo），
+   最后落左下**图标栏右边**——那块永远是空的。 */
+.theme-toggle {
+  position: fixed; left: 76px; bottom: 14px; z-index: 99;
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 28px; padding: 0 11px;
+  border-radius: 999px;
+  border: 1px solid var(--line-3);
+  background: var(--g3);
+  color: var(--text-2);
+  font: inherit; font-size: 11.5px; cursor: pointer;
+  box-shadow: var(--shadow-pop);
+  transition: background-color .12s, color .12s;
+}
+.theme-toggle:hover { background: var(--g4); color: var(--text); }
+.theme-toggle svg { width: 13px; height: 13px; }
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  font-family: var(--font);
+  background: var(--g0);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* 字体特性：让数字等宽，时间戳对齐才齐 */
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+}
+
+/* ─────────────────────────── 布局骨架 ───────────────────────────
+   Linear 的骨架是"面与面之间只差一阶灰 + 一条 1px 线"，不用阴影。
+   rail 64 / list 268 / main 自适应
+   ────────────────────────────────────────────────────────────── */
+.app {
+  display: grid;
+  grid-template-columns: 64px 268px minmax(0, 1fr);
+  height: 100vh;
+}
+
+/* ═══════════════════ 一级：图标栏 ═══════════════════ */
+.rail {
+  background: var(--g1);
+  border-right: 1px solid var(--line-1);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 14px 0 12px;
+  gap: 2px;
+}
+
+.logo {
+  width: 30px; height: 30px;
+  border-radius: 8px;
+  background: var(--text);
+  color: var(--g0);
+  display: grid;
+  place-items: center;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -.02em;
+  margin-bottom: 18px;
+  flex: 0 0 auto;
+  user-select: none;
+}
+
+.nav-btn {
+  width: 42px;
+  height: 46px;
+  border: 0;
+  background: none;
+  border-radius: var(--r-md);
+  color: var(--text-3);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 10px;
+  letter-spacing: .01em;
+  transition: color .12s ease, background-color .12s ease;
+  position: relative;
+}
+.nav-btn svg { width: 17px; height: 17px; }
+.nav-btn:hover { color: var(--text-2); background: var(--g3); }
+
+/* 选中：不铺色块，只用一点底色 + 文字变亮 + 左侧 2px 指示条 */
+.nav-btn.active { color: var(--text); background: var(--g3); }
+.nav-btn.active::before {
+  content: "";
+  position: absolute;
+  left: -11px; top: 50%;
+  transform: translateY(-50%);
+  width: 2px; height: 16px;
+  border-radius: 0 2px 2px 0;
+  background: var(--accent);
+}
+
+.rail-spacer { flex: 1; }
+
+/* ═══════════════════ 二级：列表 ═══════════════════ */
+.list {
+  background: var(--g2);
+  border-right: 1px solid var(--line-1);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.list-head {
+  height: 46px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px 0 16px;
+}
+.list-head h1 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -.005em;
+}
+
+/* 图标按钮：无边框，悬停才显形 —— 这是 Linear 的一个签名式的克制 */
+.icon-btn {
+  width: 24px; height: 24px;
+  display: grid; place-items: center;
+  border: 0; background: none;
+  border-radius: var(--r-sm);
+  color: var(--text-3);
+  cursor: pointer;
+  transition: background-color .12s ease, color .12s ease;
+}
+.icon-btn:hover { background: var(--g4); color: var(--text); }
+.icon-btn svg { width: 14px; height: 14px; }
+
+.search-wrap { padding: 0 10px 8px; }
+.search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 9px;
+  border-radius: var(--r-md);
+  background: var(--g4);
+  border: 1px solid transparent;
+  transition: border-color .12s ease, background-color .12s ease;
+}
+.search:focus-within {
+  background: var(--g3);
+  border-color: var(--accent-ring);
+}
+.search svg { width: 13px; height: 13px; color: var(--text-3); flex: 0 0 auto; }
+.search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: none;
+  outline: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+}
+.search input::placeholder { color: var(--text-3); }
+.kbd {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-3);
+  border: 1px solid var(--line-2);
+  border-radius: 3px;
+  padding: 0 4px;
+  line-height: 15px;
+  flex: 0 0 auto;
+}
+
+.list-body { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 6px 12px; }
+
+/* 分组标题：小、淡、大写字母间距 —— 欧美 SaaS 的通用做法 */
+.group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 14px 10px 5px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  user-select: none;
+}
+.group .cnt {
+  color: var(--text-4);
+  font-weight: 500;
+  letter-spacing: 0;
+  margin-left: auto;
+  font-size: 10.5px;
+}
+
+/* 列表项：选中用一档灰底 + 靛蓝左条，不用蓝底 */
+.row {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 9px;
+  border-radius: var(--r-md);
+  cursor: pointer;
+  position: relative;
+  transition: background-color .1s ease;
+}
+.row:hover { background: var(--g3); }
+.row.active { background: var(--g4); }
+.row.active::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 50%;
+  transform: translateY(-50%);
+  width: 2px; height: 14px;
+  border-radius: 0 2px 2px 0;
+  background: var(--accent);
+}
+
+/* 头像：纯灰阶 + 首字。彩色头像会让整列变花，这里去掉颜色 */
+.ava {
+  width: 24px; height: 24px;
+  border-radius: 6px;
+  display: grid; place-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-2);
+  background: var(--g5);
+  user-select: none;
+  flex: 0 0 auto;
+}
+.row.active .ava { background: var(--accent-lo); color: var(--accent-hi); }
+
+.row-main { min-width: 0; }
+.row-name {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.row-pre {
+  font-size: 11.5px;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 1px;
+}
+.row.active .row-pre { color: var(--text-2); }
+.row-time { font-size: 10.5px; color: var(--text-3); flex: 0 0 auto; padding-top: 1px; }
+
+/* 在线点：保留，但只有 5px，且用降饱和绿 */
+.dot {
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: var(--ok);
+  flex: 0 0 auto;
+}
+.dot.idle { background: var(--text-4); }
+
+/* ═══════════════════ 三级：对话 ═══════════════════ */
+.main {
+  background: var(--g0);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.head {
+  height: 46px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--line-1);
+}
+.head h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -.005em;
+}
+.head .meta {
+  color: var(--text-3);
+  font-size: 11.5px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.head .gap { flex: 1; }
+
+/* 次要按钮：描边式，悬停才亮 */
+.btn {
+  height: 26px;
+  padding: 0 10px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line-2);
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: background-color .12s, color .12s, border-color .12s;
+}
+.btn:hover { background: var(--g4); color: var(--text); border-color: var(--line-3); }
+.btn svg { width: 13px; height: 13px; }
+
+/* 消息区 */
+.chat {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* 左 28 与头部 padding 对齐；右 28 让"我的头像"也不贴边 */
+  padding: 22px 28px 8px;
+}
+
+/* 日期分隔：中间一条线，文字浮在上面 —— 比"一个胶囊"轻 */
+.date-sep {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0 20px;
+  color: var(--text-3);
+  font-size: 10.5px;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  user-select: none;
+}
+.date-sep::before, .date-sep::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--line-1);
+}
+
+.msg {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 18px;
+  padding-right: 56px;
+  min-width: 0;
+}
+.msg.me { flex-direction: row-reverse; padding-right: 0; padding-left: 56px; }
+
+/* 对方的气泡不许贴到右边界，我的气泡不许贴到左边界 —— 两边各留一条走廊 */
+.msg .msg-col { max-width: min(560px, calc(100% - 24px)); }
+.msg.me .msg-col { margin-left: auto; }
+
+.msg .ava {
+  width: 26px; height: 26px;
+  border-radius: 7px;
+  font-size: 11.5px;
+  margin-top: 1px;
+}
+
+.msg-col { min-width: 0; }
+.msg.me .msg-col { display: flex; flex-direction: column; align-items: flex-end; }
+
+/* 名字 + 时间：一行，都在气泡外面 —— 气泡本身保持干净 */
+.msg-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin-bottom: 5px;
+  padding: 0 1px;
+}
+.msg.me .msg-meta { flex-direction: row-reverse; }
+.msg-meta .who { font-size: 12px; font-weight: 600; color: var(--text); }
+.msg-meta .when { font-size: 10.5px; color: var(--text-3); }
+
+/* 气泡：**没有尾巴**、圆角统一 10px，靠底色区分而不是靠形状
+   —— 有尾巴的气泡是很"微信"的语汇，Linear/Notion 都不用 */
+.bubble {
+  background: var(--g3);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-lg);
+  padding: 9px 13px;
+  font-size: 13px;
+  line-height: 1.62;
+  color: var(--text);
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+/* 我的话：靛蓝紫只降到很低的透明度做底，文字仍是白的，不刺眼 */
+.msg.me .bubble {
+  background: var(--accent-lo);
+  border-color: rgba(94,106,210,.22);
+  color: #dfe1f5;
+}
+/* 浅色下"我的气泡"得整套重写：
+   ① .10 的透明度在白底上几乎等于没有 → 提到 .085 但配上更实的边框，边界才立得住
+   ② 文字不能用淡紫 #dfe1f5（白底上直接消失）→ 回到正常文字色
+   ③ 内嵌代码的底在浅色里要用"加深的紫"而不是"提亮的白" */
+:root[data-theme='light'] .msg.me .bubble {
+  background: rgba(94, 106, 210, .085);
+  border-color: rgba(94, 106, 210, .28);
+  color: var(--text);
+}
+:root[data-theme='light'] .msg.me .bubble code {
+  background: rgba(94, 106, 210, .09);
+}
+
+.bubble code {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  background: rgba(255,255,255,.055);
+  padding: 1px 5px;
+  border-radius: 4px;
+  border: 1px solid var(--line-1);
+}
+.msg.me .bubble code { background: rgba(0,0,0,.22); }
+
+.bubble .p { margin: 0; }
+.bubble .p + .p { margin-top: 8px; }
+
+/* 工具调用：一条细边框 + 等宽字，像终端日志。这是"有在干活"的证据，不该被藏起来 */
+.tool {
+  margin-top: 9px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  overflow: hidden;
+  background: var(--g2);
+}
+.tool-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 10px;
+  font-size: 11.5px;
+  color: var(--text-2);
+  font-family: var(--mono);
+  border-bottom: 1px solid var(--line-1);
+}
+.tool-head .ok { color: var(--ok); }
+.tool-body {
+  padding: 7px 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--text-3);
+  white-space: pre-wrap;
+}
+
+/* ── 底栏：输入框 ── */
+.composer {
+  flex: 0 0 auto;
+  padding: 10px 28px 18px;
+  background: var(--g0);
+}
+.box {
+  border: 1px solid var(--line-3);
+  border-radius: var(--r-lg);
+  background: var(--g3);
+  transition: border-color .12s ease, box-shadow .12s ease;
+}
+.box:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-lo);
+}
+.box textarea {
+  display: block;
+  width: 100%;
+  border: 0;
+  outline: none;
+  resize: none;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.6;
+  padding: 11px 13px 4px;
+  min-height: 46px;
+  max-height: 180px;
+}
+.box textarea::placeholder { color: var(--text-3); }
+
+.box-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px 8px 9px;
+}
+
+/* 小胶囊式选择器：模型 / 权限 */
+.pill {
+  height: 24px;
+  padding: 0 8px;
+  border-radius: var(--r-sm);
+  border: 1px solid transparent;
+  background: none;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: background-color .12s, color .12s, border-color .12s;
+}
+.pill:hover { background: var(--g4); color: var(--text); border-color: var(--line-2); }
+.pill svg { width: 12px; height: 12px; opacity: .8; }
+.pill .sep { color: var(--text-4); }
+.pill b { font-weight: 500; color: var(--text); }
+
+.box-foot .gap { flex: 1; }
+
+/* 发送：全场唯一一块实心彩色 —— 视线自然落到这儿。
+   浅色下要**加深**：#5e6ad2 在白底上的视觉重量比在近黑底上轻，
+   不加深会显得"飘"，跟周围克制的灰阶不在一个调子上。 */
+:root[data-theme='light'] .send {
+  background: #5560c8;
+  box-shadow: 0 1px 2px rgba(85, 96, 200, .28);
+}
+:root[data-theme='light'] .send:hover { background: #4b56bd; }
+.send {
+  height: 26px;
+  padding: 0 12px;
+  border-radius: var(--r-sm);
+  border: 0;
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: background-color .12s ease;
+}
+.send:hover { background: var(--accent-hi); }
+.send svg { width: 12px; height: 12px; }
+.send .k { font-size: 10px; opacity: .65; font-family: var(--mono); }
+
+/* 滚动条：极细，悬停才明显 —— Chromium 下才能这么细 */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+  transition: background-color .15s;
+}
+*:hover::-webkit-scrollbar-thumb { background: #2c2e32; background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: #3d4045; background-clip: content-box; }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ═══ 一级 ═══ -->
+  <nav class="rail">
+    <div class="logo">班</div>
+
+    <button class="nav-btn active">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round">
+        <path d="M4.5 5.8h15v9.4H9.2l-4.7 3.8z"/>
+      </svg>
+      <span>消息</span>
+    </button>
+
+    <button class="nav-btn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+        <circle cx="9.2" cy="8.4" r="3.2"/>
+        <path d="M3.6 19c0-2.9 2.4-5 5.6-5s5.6 2.1 5.6 5"/>
+        <circle cx="17.3" cy="9.6" r="2.3"/>
+        <path d="M16 19c0-2.1.9-3.6 2.7-4.1"/>
+      </svg>
+      <span>通讯录</span>
+    </button>
+
+    <button class="nav-btn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round">
+        <rect x="3.4" y="3.4" width="7.2" height="7.2" rx="1.8"/>
+        <rect x="13.4" y="3.4" width="7.2" height="7.2" rx="1.8"/>
+        <rect x="3.4" y="13.4" width="7.2" height="7.2" rx="1.8"/>
+        <rect x="13.4" y="13.4" width="7.2" height="7.2" rx="1.8"/>
+      </svg>
+      <span>工作台</span>
+    </button>
+
+    <div class="rail-spacer"></div>
+
+    <button class="nav-btn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M12 2.8v2M12 19.2v2M2.8 12h2M19.2 12h2M5.5 5.5l1.4 1.4M17.1 17.1l1.4 1.4M18.5 5.5l-1.4 1.4M6.9 17.1l-1.4 1.4"/>
+      </svg>
+      <span>设置</span>
+    </button>
+  </nav>
+
+  <!-- ═══ 二级 ═══ -->
+  <div class="list">
+    <div class="list-head">
+      <h1>消息</h1>
+      <button class="icon-btn" title="新建对话">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <path d="M12 5v14M5 12h14"/>
+        </svg>
+      </button>
+    </div>
+
+    <div class="search-wrap">
+      <label class="search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="11" cy="11" r="6.5"/><path d="M16 16l4 4" stroke-linecap="round"/>
+        </svg>
+        <input placeholder="搜索对话、成员" />
+        <span class="kbd">⌘K</span>
+      </label>
+    </div>
+
+    <div class="list-body">
+      <div class="group">最近 <span class="cnt">3</span></div>
+
+      <div class="row active">
+        <span class="ava">马</span>
+        <div class="row-main">
+          <div class="row-name">马超 <i class="dot"></i></div>
+          <div class="row-pre">好，我先把这三处改掉，跑一遍再说</div>
+        </div>
+        <span class="row-time">14:34</span>
+      </div>
+
+      <div class="row">
+        <span class="ava">星</span>
+        <div class="row-main">
+          <div class="row-name">星宇 <i class="dot idle"></i></div>
+          <div class="row-pre">好的，记下了——我叫星宇。以后…</div>
+        </div>
+        <span class="row-time">12:43</span>
+      </div>
+
+      <div class="row">
+        <span class="ava">喜</span>
+        <div class="row-main">
+          <div class="row-name">喜儿 <i class="dot"></i></div>
+          <div class="row-pre">今天的待办我整理好了，两条要你定</div>
+        </div>
+        <span class="row-time">09:12</span>
+      </div>
+
+      <div class="group">已归档 <span class="cnt">6</span></div>
+
+      <div class="row">
+        <span class="ava" style="background:none;border:1px dashed var(--line-3);color:var(--text-4)">档</span>
+        <div class="row-main">
+          <div class="row-name" style="color:var(--text-2)">已移除的会话</div>
+          <div class="row-pre">记录都还在，可随时恢复</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ 三级 ═══ -->
+  <main class="main">
+    <div class="head">
+      <h2>马超</h2>
+      <span class="meta"><i class="dot"></i>在线 · 执行人</span>
+      <span class="gap"></span>
+      <button class="btn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+          <path d="M4 6h16M4 12h16M4 18h10"/>
+        </svg>
+        任务
+      </button>
+      <button class="icon-btn" title="更多">
+        <svg viewBox="0 0 24 24" fill="currentColor">
+          <circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>
+        </svg>
+      </button>
+    </div>
+
+    <div class="chat">
+      <div class="date-sep">2026年10月19日</div>
+
+      <div class="msg">
+        <span class="ava">马</span>
+        <div class="msg-col">
+          <div class="msg-meta"><span class="who">马超</span><span class="when">14:31</span></div>
+          <div class="bubble">
+            <p class="p">看了一遍，<code>task-comments</code> 这块有三处要动：</p>
+            <p class="p">一是回复目标的选取在长列表里要往上滑，二是时间显示了但没年月日，三是气泡宽度写死 460 在宽窗口下太窄。</p>
+            <div class="tool">
+              <div class="tool-head"><span class="ok">✓</span> 读取 apps/web/style.css</div>
+              <div class="tool-body">1912 行 · 已定位 .tc-threads / .bubble / .row</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="msg me">
+        <span class="ava">我</span>
+        <div class="msg-col">
+          <div class="msg-meta"><span class="who">我</span><span class="when">14:33</span></div>
+          <div class="bubble">
+            <p class="p">三处一起改，改完跑一遍冒烟。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="msg">
+        <span class="ava">马</span>
+        <div class="msg-col">
+          <div class="msg-meta"><span class="who">马超</span><span class="when">14:34</span></div>
+          <div class="bubble">
+            <p class="p">好，我先把这三处改掉，跑一遍再说。<code>stampOf</code> 那个我顺手把年份补上——聊天会跨天，只有时分看不出是哪天。</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="composer">
+      <div class="box">
+        <textarea placeholder="说点什么…　Enter 发送 · Shift+Enter 换行"></textarea>
+        <div class="box-foot">
+          <button class="pill">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round">
+              <path d="M12 3.5l7.5 4.2v8.6L12 20.5 4.5 16.3V7.7z"/>
+            </svg>
+            马超
+          </button>
+          <span class="pill" style="cursor:default">
+            <span class="sep">·</span> <b>Sonnet 4.5</b>
+          </span>
+          <span class="pill" style="cursor:default">
+            <span class="sep">·</span> 可写文件
+          </span>
+          <span class="gap"></span>
+          <button class="send">
+            发送 <span class="k">↵</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+<!-- 主题切换（仅设计稿用，不属于产品 UI） -->
+<button class="theme-toggle" id="tt">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+    <circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M18.7 5.3l-1.4 1.4M6.7 17.3l-1.4 1.4"/>
+  </svg>
+  <span id="ttLabel">浅色</span>
+</button>
+<script>
+(function () {
+  var k = 'bandi.design.theme';
+  var cur = 'dark';
+  try { cur = localStorage.getItem(k) || 'dark'; } catch (e) {}
+  var btn = document.getElementById('tt');
+  var lab = document.getElementById('ttLabel');
+  function apply(t) {
+    document.documentElement.setAttribute('data-theme', t);
+    lab.textContent = t === 'dark' ? '浅色' : '深色';
+    try { localStorage.setItem(k, t); } catch (e) {}
+  }
+  apply(cur);
+  btn.addEventListener('click', function () {
+    var next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+    apply(next);
+  });
+})();
+</script>
+
+</body>
+</html>

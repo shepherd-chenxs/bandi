@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>班底 v1.0.1 · 深色 / 浅色对照</title>
+<style>
+:root {
+  color-scheme: dark;
+  --g0: #08090a; --g1: #0d0e10; --g2: #111214; --g3: #16171a;
+  --line-1: #1a1b1e; --line-2: #202225;
+  --text: #e8e9ea; --text-2: #9b9ea3; --text-3: #6b6e73; --text-4: #4a4d51;
+  --accent: #5e6ad2; --accent-hi: #6e79dd;
+  --r-md: 7px; --r-lg: 12px;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Hiragino Sans GB", "Microsoft YaHei", "Source Han Sans SC", sans-serif;
+  --mono: "SF Mono", "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--g0); color: var(--text);
+  font-family: var(--font); font-size: 13.5px; line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+.page { max-width: 1320px; margin: 0 auto; padding: 52px 30px 100px; }
+
+.eyebrow {
+  font-size: 11px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--accent); margin-bottom: 11px;
+}
+h1 { margin: 0 0 12px; font-size: 31px; font-weight: 600; letter-spacing: -.028em; line-height: 1.2; }
+h1 em { font-style: normal; color: var(--text-3); }
+.lead { margin: 0 0 42px; max-width: 640px; color: var(--text-2); font-size: 14px; }
+
+/* ── 并排对照 ── */
+.pair { margin-bottom: 54px; }
+.pair-head {
+  display: flex; align-items: baseline; gap: 12px; margin-bottom: 14px;
+}
+.pair-head h2 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -.015em; }
+.pair-head .tag {
+  font-size: 10.5px; font-family: var(--mono); color: var(--text-4);
+  border: 1px solid var(--line-2); border-radius: 4px; padding: 1px 6px;
+}
+.pair-head .see { margin-left: auto; font-size: 12px; }
+.pair-head .see a { color: var(--accent-hi); text-decoration: none; }
+.pair-head .see a:hover { text-decoration: underline; }
+
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+
+.frame { border-radius: var(--r-lg); overflow: hidden; border: 1px solid var(--line-2); }
+.frame-cap {
+  display: flex; align-items: center; gap: 7px;
+  padding: 8px 12px; font-size: 11.5px; color: var(--text-3);
+  background: var(--g2); border-bottom: 1px solid var(--line-1);
+}
+.frame-cap .sw { width: 9px; height: 9px; border-radius: 50%; border: 1px solid rgba(255,255,255,.12); }
+.frame img { display: block; width: 100%; height: auto; }
+
+/* ── 对照表 ── */
+.cmp { width: 100%; border-collapse: collapse; margin-top: 8px;
+  border: 1px solid var(--line-1); border-radius: var(--r-md); overflow: hidden; }
+.cmp th, .cmp td {
+  padding: 10px 14px; text-align: left; font-size: 12.5px;
+  border-bottom: 1px solid var(--line-1); vertical-align: top;
+}
+.cmp th {
+  background: var(--g2); color: var(--text-3); font-size: 10.5px; font-weight: 600;
+  letter-spacing: .06em; text-transform: uppercase; white-space: nowrap;
+}
+.cmp td { background: var(--g1); color: var(--text-2); }
+.cmp tr:last-child td { border-bottom: 0; }
+.cmp td:first-child { color: var(--text); font-weight: 500; white-space: nowrap; }
+.cmp code {
+  font-family: var(--mono); font-size: 11.5px; color: var(--text);
+  background: rgba(255,255,255,.05); padding: 1px 5px; border-radius: 3px;
+  border: 1px solid var(--line-1);
+}
+.sw2 {
+  display: inline-block; width: 12px; height: 12px; border-radius: 3px;
+  vertical-align: -2px; margin-right: 6px; border: 1px solid rgba(255,255,255,.12);
+}
+
+section { margin-bottom: 56px; }
+h2.sec {
+  margin: 0 0 6px; font-size: 19px; font-weight: 600; letter-spacing: -.02em;
+  display: flex; align-items: baseline; gap: 10px;
+}
+h2.sec .num { font-family: var(--mono); font-size: 12px; font-weight: 500; color: var(--text-4); }
+h2.sec + p { margin: 0 0 20px; color: var(--text-3); font-size: 13px; }
+
+.rules { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+.rule {
+  background: var(--g2); border: 1px solid var(--line-1);
+  border-radius: var(--r-md); padding: 15px 17px;
+}
+.rule h3 {
+  margin: 0 0 6px; font-size: 12.5px; font-weight: 600;
+  display: flex; align-items: center; gap: 7px;
+}
+.rule h3::before {
+  content: ""; width: 3px; height: 12px; border-radius: 2px;
+  background: var(--accent); flex: 0 0 auto;
+}
+.rule p { margin: 0; font-size: 12.5px; color: var(--text-2); line-height: 1.62; }
+.rule code {
+  font-family: var(--mono); font-size: 11.5px;
+  background: rgba(255,255,255,.05); padding: 1px 5px; border-radius: 3px;
+  border: 1px solid var(--line-1);
+}
+
+.note-inline {
+  margin-top: 22px; padding: 12px 15px;
+  border-left: 2px solid var(--line-2); background: var(--g1);
+  border-radius: 0 var(--r-md) var(--r-md) 0;
+  font-size: 12.5px; color: var(--text-2);
+}
+.note-inline b { color: var(--text); }
+
+.tip {
+  background: linear-gradient(180deg, rgba(94,106,210,.07), rgba(94,106,210,.02));
+  border: 1px solid rgba(94,106,210,.22);
+  border-radius: var(--r-lg); padding: 16px 20px; margin-bottom: 40px;
+  font-size: 13px; color: var(--text-2);
+}
+.tip b { color: var(--text); }
+.tip code {
+  font-family: var(--mono); font-size: 11.5px; color: var(--accent-hi);
+}
+
+@media (max-width: 900px) {
+  .two, .rules { grid-template-columns: 1fr; }
+  .page { padding: 34px 18px 70px; }
+  h1 { font-size: 24px; }
+}
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="eyebrow">班底 v1.0.1 · 双主题</div>
+  <h1>深色是骨架，<br /><em>浅色是另一副骨架</em></h1>
+  <p class="lead">
+    浅色不是把深色的颜色值反过来。在白底上，「越往上越亮」的逻辑会失效 ——
+    必须换成「浅灰底 + 纯白卡片浮起来」。灰阶也从 10 档收到 6 档。
+  </p>
+
+  <div class="tip">
+    <b>怎么切：</b>打开任意一张设计稿，左下角有一个「浅色 / 深色」按钮，
+    点一下就切（选择会记住）。三张稿子共用同一个偏好。
+  </div>
+
+  <!-- ═══════ 一、消息 ═══════ -->
+  <div class="pair">
+    <div class="pair-head">
+      <h2>消息 · 对话主界面</h2>
+      <span class="tag">01-messages.html</span>
+      <span class="see"><a href="01-messages.html" target="_blank">打开可交互版 →</a></span>
+    </div>
+    <div class="two">
+      <div class="frame">
+        <div class="frame-cap"><span class="sw" style="background:#08090a"></span>深色</div>
+        <img src="01-messages.png" alt="消息 深色" />
+      </div>
+      <div class="frame">
+        <div class="frame-cap"><span class="sw" style="background:#f7f8f9"></span>浅色</div>
+        <img src="01-messages-light.png" alt="消息 浅色" />
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════ 二、工作台 ═══════ -->
+  <div class="pair">
+    <div class="pair-head">
+      <h2>工作台</h2>
+      <span class="tag">02-workbench.html</span>
+      <span class="see"><a href="02-workbench.html" target="_blank">打开可交互版 →</a></span>
+    </div>
+    <div class="two">
+      <div class="frame">
+        <div class="frame-cap"><span class="sw" style="background:#08090a"></span>深色</div>
+        <img src="02-workbench.png" alt="工作台 深色" />
+      </div>
+      <div class="frame">
+        <div class="frame-cap"><span class="sw" style="background:#f7f8f9"></span>浅色</div>
+        <img src="02-workbench-light.png" alt="工作台 浅色" />
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════ 三、看板 ═══════ -->
+  <div class="pair">
+    <div class="pair-head">
+      <h2>任务看板</h2>
+      <span class="tag">03-board.html</span>
+      <span class="see"><a href="03-board.html" target="_blank">打开可交互版 →</a></span>
+    </div>
+    <div class="two">
+      <div class="frame">
+        <div class="frame-cap"><span class="sw" style="background:#08090a"></span>深色</div>
+        <img src="03-board.png" alt="看板 深色" />
+      </div>
+      <div class="frame">
+        <div class="frame-cap"><span class="sw" style="background:#f7f8f9"></span>浅色</div>
+        <img src="03-board-light.png" alt="看板 浅色" />
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════ 变量对照 ═══════ -->
+  <section>
+    <h2 class="sec"><span class="num">01</span> 同一个变量，两套值</h2>
+    <p>注意 <code>--g3</code> 这个反直觉的地方：它在深色里是「比底亮一档的灰」，在浅色里是「纯白」。</p>
+
+    <table class="cmp">
+      <thead>
+        <tr><th>变量</th><th>深色</th><th>浅色</th><th>说明</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>--g0</td>
+          <td><span class="sw2" style="background:#08090a"></span><code>#08090a</code></td>
+          <td><span class="sw2" style="background:#f7f8f9"></span><code>#f7f8f9</code></td>
+          <td>应用底。深色近黑、浅色浅灰</td>
+        </tr>
+        <tr>
+          <td>--g1</td>
+          <td><span class="sw2" style="background:#0d0e10"></span><code>#0d0e10</code></td>
+          <td><span class="sw2" style="background:#fcfcfd"></span><code>#fcfcfd</code></td>
+          <td>图标栏</td>
+        </tr>
+        <tr>
+          <td>--g2</td>
+          <td><span class="sw2" style="background:#111214"></span><code>#111214</code></td>
+          <td><span class="sw2" style="background:#eceef1"></span><code>#eceef1</code></td>
+          <td>列表栏 / 看板列底。浅色要比页面底<b>暗一档</b>，白卡片才浮得起来</td>
+        </tr>
+        <tr>
+          <td>--g3</td>
+          <td><span class="sw2" style="background:#16171a"></span><code>#16171a</code></td>
+          <td><span class="sw2" style="background:#ffffff"></span><code>#ffffff</code></td>
+          <td><b>反直觉的关键</b>：气泡 / 卡片。深色比底亮一档，浅色是纯白</td>
+        </tr>
+        <tr>
+          <td>--g4</td>
+          <td><span class="sw2" style="background:#1c1e21"></span><code>#1c1e21</code></td>
+          <td><span class="sw2" style="background:#eef0f2"></span><code>#eef0f2</code></td>
+          <td>悬停 / 选中</td>
+        </tr>
+        <tr>
+          <td>--g5</td>
+          <td><span class="sw2" style="background:#242629"></span><code>#242629</code></td>
+          <td><span class="sw2" style="background:#e4e7ea"></span><code>#e4e7ea</code></td>
+          <td>图标底 / 标签底</td>
+        </tr>
+        <tr>
+          <td>--text</td>
+          <td><span class="sw2" style="background:#e8e9ea"></span><code>#e8e9ea</code></td>
+          <td><span class="sw2" style="background:#1a1c1f"></span><code>#1a1c1f</code></td>
+          <td>主文字。<b>两边都不用纯黑/纯白</b>，纯的会「跳」</td>
+        </tr>
+        <tr>
+          <td>--text-2</td>
+          <td><span class="sw2" style="background:#9b9ea3"></span><code>#9b9ea3</code></td>
+          <td><span class="sw2" style="background:#5f646c"></span><code>#5f646c</code></td>
+          <td>次要文字 / 描述</td>
+        </tr>
+        <tr>
+          <td>--text-3</td>
+          <td><span class="sw2" style="background:#6b6e73"></span><code>#6b6e73</code></td>
+          <td><span class="sw2" style="background:#7e838b"></span><code>#7e838b</code></td>
+          <td>占位 / 时间 / 列名</td>
+        </tr>
+        <tr>
+          <td>--line-1</td>
+          <td><span class="sw2" style="background:#1a1b1e"></span><code>#1a1b1e</code></td>
+          <td><span class="sw2" style="background:#eaeaec"></span><code>#eaeaec</code></td>
+          <td>最弱分割线。浅色下必须更淡，否则会「割」屏幕</td>
+        </tr>
+        <tr>
+          <td>--line-2</td>
+          <td><span class="sw2" style="background:#202225"></span><code>#202225</code></td>
+          <td><span class="sw2" style="background:#e0e2e5"></span><code>#e0e2e5</code></td>
+          <td>常态边框</td>
+        </tr>
+        <tr>
+          <td>--line-3</td>
+          <td><span class="sw2" style="background:#2a2c30"></span><code>#2a2c30</code></td>
+          <td><span class="sw2" style="background:#ced1d6"></span><code>#ced1d6</code></td>
+          <td>强边框（输入、可聚焦）</td>
+        </tr>
+        <tr>
+          <td>--accent</td>
+          <td><span class="sw2" style="background:#5e6ad2"></span><code>#5e6ad2</code></td>
+          <td><span class="sw2" style="background:#5e6ad2"></span><code>#5e6ad2</code></td>
+          <td><b>两边不变</b>。深底 4.24:1、白底 4.70:1，都过 AA</td>
+        </tr>
+        <tr>
+          <td>--accent-lo</td>
+          <td><code>rgba(94,106,210,.14)</code></td>
+          <td><code>rgba(94,106,210,.10)</code></td>
+          <td>极浅底。<b>不能照抄</b> —— 深色里混白看得见，浅色里会被白底吃掉</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="note-inline">
+      <b>为什么 --line-1 在浅色里反而更淡？</b>深色下 1px 的线是「暗线压暗底」，对比天然低；
+      浅色下同样对比度的线会显得又粗又硬，像用尺子划过屏幕。所以浅色下线条要再退一档，
+      让「面」来分层，线只做提示。
+    </div>
+  </section>
+
+  <!-- ═══════ 三个必须单独处理的坑 ═══════ -->
+  <section>
+    <h2 class="sec"><span class="num">02</span> 换了主题会当场坏掉的三处</h2>
+    <p>这三处是我做浅色时实际撞上的，光换变量值不够，得单独写规则。</p>
+
+    <div class="rules">
+      <div class="rule">
+        <h3>「我的气泡」在白底上会消失</h3>
+        <p>深色用 <code>rgba(94,106,210,.14)</code> + 淡紫文字 <code>#dfe1f5</code>。
+          浅色下淡紫字<b>直接看不见</b>，极浅底也几乎没边界。得单独覆盖：底色提到
+          <code>.085</code>、边框提到 <code>.28</code>、文字回到 <code>var(--text)</code>。</p>
+      </div>
+      <div class="rule">
+        <h3>看板列底会「融进」页面</h3>
+        <p>第一版浅色给 <code>--g2</code> 用了 <code>#f2f3f5</code>，结果列和页面底几乎同色，
+          整块板塌成一片白。改成 <code>#eceef1</code>（比页面底暗一档），
+          白卡片才浮得起来 —— <b>浅色里「底」必须比「面」暗，这是铁律</b>。</p>
+      </div>
+      <div class="rule">
+        <h3>主按钮会显得「飘」</h3>
+        <p><code>#5e6ad2</code> 在近黑底上是全场最亮的一点，刚好；在白底上它的视觉重量
+          轻得多。浅色主按钮要加深到 <code>#5560c8</code>，再补一点极淡投影，
+          才跟周围克制的灰阶在同一个调子上。</p>
+      </div>
+      <div class="rule">
+        <h3>淡红 / 淡绿标签字也会没</h3>
+        <p>「已合入」的 <code>#79b99e</code>、「急」的 <code>#d18d93</code>，
+          在白底上近乎透明。这两组必须提成变量（<code>--ok-fg</code> / <code>--hot-fg</code>），
+          浅色下换成 <code>#2c7259</code> / <code>#97404a</code>。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════ 灰度对比度自检 ═══════ -->
+  <section>
+    <h2 class="sec"><span class="num">03</span> 文字对比度（WCAG 快速自检）</h2>
+    <p>四档文字各自跟自己的底比。数值是<b>实测</b>（WCAG 相对亮度公式），不是估值。AA 正文要求 4.5:1，大字/次要信息 3:1。<code>--g2</code> 取各主题下最暗的那档底。</p>
+
+    <table class="cmp">
+      <thead>
+        <tr><th>文字</th><th>对 --g0</th><th>对 --g2</th><th>对 --g3</th><th>结论</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>深色 text</td><td>16.39:1</td><td>15.42:1</td><td>14.74:1</td><td>远超 AA</td></tr>
+        <tr><td>深色 text-2</td><td>7.41:1</td><td>6.97:1</td><td>6.67:1</td><td>过 AA</td></tr>
+        <tr><td>深色 text-3</td><td>3.89:1</td><td>3.66:1</td><td>3.50:1</td><td>过 AA 大字线，仅用于占位/时间</td></tr>
+        <tr><td>浅色 text</td><td>16.06:1</td><td>14.69:1</td><td>17.08:1</td><td>远超 AA</td></tr>
+        <tr><td>浅色 text-2</td><td>5.60:1</td><td>5.12:1</td><td>5.96:1</td><td>过 AA</td></tr>
+        <tr><td>浅色 text-3</td><td>3.59:1</td><td>3.28:1</td><td>3.81:1</td><td>过 AA 大字线，与深色同量级</td></tr>
+          </table>
+
+    <div class="note-inline">
+      <b>两边刻意对齐：</b>text-3 都落在 3.3–3.9 之间 —— 刚好能读、但不该抢注意力。（初版浅色用的是 <code>#868b93</code>，实测只有 <b>2.95:1</b>，在列表底上没到 AA，已降到 <code>#7e838b</code>。）
+      它只用于占位符、时间戳、列名这类「扫一眼知道就行」的信息。
+      正文一律用 text 或 text-2。
+    </div>
+  </section>
+
+  <p style="color:var(--text-4); font-size:12px; margin-top:36px">
+    班底 v1.0.1 · 深色 / 浅色对照 · 1440×900 渲染
+  </p>
+
+</div>
+</body>
+</html>

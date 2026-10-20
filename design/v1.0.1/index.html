@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>班底 v1.0.1 · UI 改造设计稿总览</title>
+<style>
+:root {
+  color-scheme: dark;
+  --g0: #08090a; --g1: #0d0e10; --g2: #111214; --g3: #16171a;
+  --g4: #1c1e21; --g5: #242629;
+  --line-1: #1a1b1e; --line-2: #202225; --line-3: #2a2c30;
+  --text: #e8e9ea; --text-2: #9b9ea3; --text-3: #6b6e73; --text-4: #4a4d51;
+  --accent: #5e6ad2; --accent-hi: #6e79dd; --accent-lo: rgba(94,106,210,.14);
+  --r-md: 7px; --r-lg: 12px;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Hiragino Sans GB", "Microsoft YaHei", "Source Han Sans SC", sans-serif;
+  --mono: "SF Mono", "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0; background: var(--g0); color: var(--text);
+  font-family: var(--font); font-size: 13.5px; line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+.page { max-width: 1180px; margin: 0 auto; padding: 56px 32px 100px; }
+
+/* ── 抬头 ── */
+.mast { margin-bottom: 46px; }
+.eyebrow {
+  font-size: 11px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--accent); margin-bottom: 12px;
+}
+.mast h1 {
+  margin: 0 0 14px; font-size: 34px; line-height: 1.18;
+  font-weight: 600; letter-spacing: -.028em;
+}
+.mast h1 em { font-style: normal; color: var(--text-3); }
+.mast p { margin: 0; max-width: 620px; color: var(--text-2); font-size: 14px; }
+
+/* ── 元信息条 ── */
+.meta {
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  gap: 1px; background: var(--line-1);
+  border: 1px solid var(--line-1); border-radius: var(--r-lg);
+  overflow: hidden; margin: 30px 0 50px;
+}
+.meta > div { background: var(--g2); padding: 15px 18px; }
+.meta dt {
+  font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--text-3); margin-bottom: 5px;
+}
+.meta dd { margin: 0; font-size: 13px; color: var(--text); }
+.meta dd.mono { font-family: var(--mono); font-size: 12px; }
+
+.tip {
+  background: linear-gradient(180deg, rgba(94,106,210,.07), rgba(94,106,210,.02));
+  border: 1px solid rgba(94,106,210,.22);
+  border-radius: var(--r-lg); padding: 15px 19px;
+  font-size: 13px; color: var(--text-2);
+}
+.tip b { color: var(--text); }
+
+/* ── 章节 ── */
+h2 {
+  margin: 0 0 6px; font-size: 19px; font-weight: 600; letter-spacing: -.02em;
+  display: flex; align-items: baseline; gap: 10px;
+}
+h2 .num {
+  font-family: var(--mono); font-size: 12px; font-weight: 500;
+  color: var(--text-4); letter-spacing: 0;
+}
+h2 + p { margin: 0 0 22px; color: var(--text-3); font-size: 13px; }
+section { margin-bottom: 62px; }
+
+/* ── 截图卡 ── */
+.shot {
+  display: block; position: relative;
+  border: 1px solid var(--line-2); border-radius: var(--r-lg);
+  overflow: hidden; background: var(--g2);
+  text-decoration: none; color: inherit;
+  transition: border-color .15s ease, transform .15s ease;
+}
+.shot:hover { border-color: var(--accent); transform: translateY(-2px); }
+.shot img { display: block; width: 100%; height: auto; }
+.shot-bar {
+  display: flex; align-items: center; gap: 9px;
+  padding: 11px 15px; border-top: 1px solid var(--line-1);
+  background: var(--g2);
+}
+.shot-bar .dot-r { width: 8px; height: 8px; border-radius: 50%; background: var(--line-3); }
+.shot-bar .name { font-size: 12.5px; font-weight: 500; }
+.shot-bar .path {
+  margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--text-4);
+}
+.shot-bar .go { font-size: 12px; color: var(--accent-hi); text-decoration: none; }
+.shot-bar .path { text-decoration: none; }
+.shot, .shot:hover, .shot:visited { text-decoration: none; }
+.shot-bar span, .shot-bar .go { text-decoration: none; }
+
+.shot img { background: var(--g0); }
+
+/* ── 设计决策列表 ── */
+.rules { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-top: 20px; }
+.rule {
+  background: var(--g2); border: 1px solid var(--line-1);
+  border-radius: var(--r-md); padding: 15px 17px;
+}
+.rule h3 {
+  margin: 0 0 6px; font-size: 12.5px; font-weight: 600; color: var(--text);
+  display: flex; align-items: center; gap: 7px;
+}
+.rule h3::before {
+  content: ""; width: 3px; height: 12px; border-radius: 2px;
+  background: var(--accent); flex: 0 0 auto;
+}
+.rule p { margin: 0; font-size: 12.5px; color: var(--text-2); line-height: 1.62; }
+.rule code {
+  font-family: var(--mono); font-size: 11.5px;
+  background: rgba(255,255,255,.05); padding: 1px 5px; border-radius: 3px;
+  border: 1px solid var(--line-1); color: var(--text);
+}
+
+/* ── token 表 ── */
+.tokens {
+  width: 100%; border-collapse: collapse; margin-top: 14px;
+  border: 1px solid var(--line-1); border-radius: var(--r-md); overflow: hidden;
+}
+.tokens th, .tokens td {
+  padding: 8px 13px; text-align: left; font-size: 12.5px;
+  border-bottom: 1px solid var(--line-1);
+}
+.tokens th {
+  background: var(--g2); color: var(--text-3);
+  font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+}
+.tokens td { background: var(--g1); color: var(--text-2); }
+.tokens tr:last-child td { border-bottom: 0; }
+.tokens code { font-family: var(--mono); font-size: 11.5px; color: var(--text); }
+.swatch {
+  display: inline-block; width: 13px; height: 13px; border-radius: 3px;
+  vertical-align: -2px; margin-right: 7px;
+  border: 1px solid rgba(255,255,255,.09);
+}
+
+/* ── 待确认 ── */
+.ask {
+  background: linear-gradient(180deg, rgba(94,106,210,.07), rgba(94,106,210,.02));
+  border: 1px solid rgba(94,106,210,.22);
+  border-radius: var(--r-lg); padding: 22px 24px; margin-top: 18px;
+}
+.ask h3 { margin: 0 0 12px; font-size: 14px; font-weight: 600; }
+.ask ol { margin: 0; padding-left: 20px; color: var(--text-2); font-size: 13px; }
+.ask li { margin-bottom: 8px; }
+.ask li:last-child { margin-bottom: 0; }
+.ask b { color: var(--text); font-weight: 600; }
+
+.note-inline {
+  margin-top: 24px; padding: 12px 15px;
+  border-left: 2px solid var(--line-3);
+  background: var(--g1); border-radius: 0 var(--r-md) var(--r-md) 0;
+  font-size: 12.5px; color: var(--text-2);
+}
+.note-inline b { color: var(--text); }
+
+@media (max-width: 860px) {
+  .meta { grid-template-columns: repeat(2, 1fr); }
+  .rules { grid-template-columns: 1fr; }
+  .mast h1 { font-size: 26px; }
+  .page { padding: 36px 20px 70px; }
+}
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header class="mast">
+    <div class="eyebrow">班底 v1.0.1 · UI 改造</div>
+    <h1>把界面从「能用」<br />做到<em>「像一件产品」</em></h1>
+    <p>
+      方向：Linear / Vercel 的极简语汇。颜色几乎全部让给灰阶，
+      靛蓝紫只出现在三个地方 —— 当前选中、主按钮、焦点环。
+    </p>
+  </header>
+
+  <dl class="meta">
+    <div>
+      <dt>设计方向</dt>
+      <dd>Linear / Vercel 极简</dd>
+    </div>
+    <div>
+      <dt>强调色</dt>
+      <dd class="mono">#5E6AD2</dd>
+    </div>
+    <div>
+      <dt>灰阶层级</dt>
+      <dd>10 档（g0 → g5 + 3 档线）</dd>
+    </div>
+    <div>
+      <dt>画布基准</dt>
+      <dd>1440 × 900</dd>
+    </div>
+  </dl>
+
+  <div class="tip" style="margin:0 0 46px">
+    <b>先看这一页：</b>
+    <a href="04-plan.html" style="color:var(--accent-hi);text-decoration:none;border-bottom:1px solid rgba(94,106,210,.4)">改造建议 —— 哪部分用 iOS、哪部分用 Linear →</a>
+    （页面归属表 / 一套 token 两个组件层 / 四步走法 / 待你拍板的三件事）
+    <br />
+    <b>看浅色？</b>每张设计稿左下角有「浅色 / 深色」切换按钮。
+    也可以直接看 <a href="compare.html" style="color:var(--accent-hi);text-decoration:none;border-bottom:1px solid rgba(94,106,210,.4)">深色 / 浅色对照页 →</a>
+    —— 三屏并排、逐项变量对比、对比度实测。
+    <br />
+    <b style="margin-left:0">另有 iOS 风版本：</b>
+    <a href="ios-compare.html" style="color:var(--accent-hi);text-decoration:none;border-bottom:1px solid rgba(94,106,210,.4)">Linear 与 iOS 对比 →</a>
+    （<a href="ios-messages.html" style="color:var(--text-2)">消息</a> ·
+     <a href="ios-workbench.html" style="color:var(--text-2)">工作台</a>）
+  </div>
+
+  <!-- ══════════ 一 ══════════ -->
+  <section>
+    <h2><span class="num">01</span> 消息 · 对话主界面</h2>
+    <p>信息密度最高的一屏。去掉气泡尾巴、统一圆角，时间移到气泡外侧。</p>
+
+    <a class="shot" href="01-messages.html" target="_blank">
+      <img src="01-messages.png" alt="消息界面设计稿" />
+      <div class="shot-bar">
+        <span class="dot-r"></span>
+        <span class="name">消息 · 对话主界面</span>
+        <span class="path">01-messages.html</span>
+        <span class="go">打开 →</span>
+      </div>
+    </a>
+
+    <div class="rules">
+      <div class="rule">
+        <h3>气泡去掉尾巴</h3>
+        <p>有尾巴的气泡是很"微信"的语汇。Linear、Notion、Slack 新版都不用尾巴 ——
+          <code>border-radius</code> 统一 10px，靠底色差区分你我，界面立刻安静下来。</p>
+      </div>
+      <div class="rule">
+        <h3>我的话不用实心蓝</h3>
+        <p>原来是 <code>#23406e</code> 的实心蓝块，一屏里出现三次就很吵。
+          改成 <code>rgba(94,106,210,.14)</code> 的极浅底 + 淡紫边框，文字仍是亮的。</p>
+      </div>
+      <div class="rule">
+        <h3>时间在气泡外、与名字同一行</h3>
+        <p>比压在气泡底部更稳 —— 气泡高度随内容变，但"谁·什么时候"这条元信息的位置是固定的，
+          扫读时眼睛不用重新找。</p>
+      </div>
+      <div class="rule">
+        <h3>工具调用做成终端日志</h3>
+        <p>细边框 + 等宽字，像一段真实的执行记录。这是"它真的在干活"的证据，
+          应该看得见，但不该抢走对话本身的注意力。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════ 二 ══════════ -->
+  <section>
+    <h2><span class="num">02</span> 工作台</h2>
+    <p>原稿是六块彩色磁贴铺满一屏还有大片空白。改成行式条目，一屏读完。</p>
+
+    <a class="shot" href="02-workbench.html" target="_blank">
+      <img src="02-workbench.png" alt="工作台设计稿" />
+      <div class="shot-bar">
+        <span class="dot-r"></span>
+        <span class="name">工作台</span>
+        <span class="path">02-workbench.html</span>
+        <span class="go">打开 →</span>
+      </div>
+    </a>
+
+    <div class="rules">
+      <div class="rule">
+        <h3>磁贴 → 行式条目</h3>
+        <p>原稿每块磁贴 64×64，六个入口占满一屏、之间全是空的。改成一行一条：
+          <code>26px 图标 + 名称 + 一句描述 + 右侧计数</code>，全部内容一屏内完成。</p>
+      </div>
+      <div class="rule">
+        <h3>四种彩色图标 → 单色线框</h3>
+        <p>蓝、青、橙、紫四种颜色互相打架，红色还会被误读成"出错"。
+          现在图标默认是中性灰，<b>只有悬停时才染上靛蓝紫</b> —— 颜色成为交互反馈，而不是装饰。</p>
+      </div>
+      <div class="rule">
+        <h3>条目宽度上限 640px</h3>
+        <p>撑满整行会让右侧计数漂到很远的地方，跟左边的名称失去视觉联系。
+          640 是"名称 + 一句描述"读起来最舒服的上限。</p>
+      </div>
+      <div class="rule">
+        <h3>右侧元信息加竖分隔</h3>
+        <p>「进行中 7」这种带标签的计数，用 1px 竖线跟主内容隔开；
+          纯数字（如「2」）则直接靠右，不加线 —— 有无线本身就在区分信息类型。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════ 三 ══════════ -->
+  <section>
+    <h2><span class="num">03</span> 任务看板</h2>
+    <p>看板最容易犯的错是"每列一个颜色"。这里列头只用 6px 状态点着色。</p>
+
+    <a class="shot" href="03-board.html" target="_blank">
+      <img src="03-board.png" alt="任务看板设计稿" />
+      <div class="shot-bar">
+        <span class="dot-r"></span>
+        <span class="name">任务看板</span>
+        <span class="path">03-board.html</span>
+        <span class="go">打开 →</span>
+      </div>
+    </a>
+
+    <div class="rules">
+      <div class="rule">
+        <h3>七列七色 → 一列一点</h3>
+        <p>原稿每列有各自的彩色底和彩条，七列并排像一张 Excel 图表。
+          现在只有 <code>6px</code> 的状态点着色（外加一圈 16% 透明度的光晕让它"亮"），
+          列名全是中性灰。</p>
+      </div>
+      <div class="rule">
+        <h3>卡片去阴影，靠 1px 边框分层</h3>
+        <p>深色界面上阴影几乎看不见，反而糊成一片。改成
+          <code>border: 1px solid var(--line-2)</code>，悬停时边框亮一档 + 上浮 1px。</p>
+      </div>
+      <div class="rule">
+        <h3>列底板撑满，列内自己滚</h3>
+        <p><code>align-items: stretch</code> 让短列跟长列等高，一排才像"一排容器"；
+          卡片多时只滚这一列，不牵动整块板（避免"板里有板"的滚动套娃）。</p>
+      </div>
+      <div class="rule">
+        <h3>进度条只在"在跑"的卡上出现</h3>
+        <p>2px 细线，不用进度条控件。待办和已完成不需要它 ——
+          每条信息只在它有意义的时候出现，是这套设计最重要的纪律。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════ token ══════════ -->
+  <section>
+    <h2><span class="num">04</span> 设计变量（可直接落到 style.css）</h2>
+    <p>现有 CSS 已经是变量驱动的，改造基本只需要替换这一组值。</p>
+
+    <table class="tokens">
+      <thead>
+        <tr><th>变量</th><th>值</th><th>用途</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>--g0</code></td><td><span class="swatch" style="background:#08090a"></span><code>#08090a</code></td><td>应用底 / 内容区底</td></tr>
+        <tr><td><code>--g1</code></td><td><span class="swatch" style="background:#0d0e10"></span><code>#0d0e10</code></td><td>图标栏</td></tr>
+        <tr><td><code>--g2</code></td><td><span class="swatch" style="background:#111214"></span><code>#111214</code></td><td>列表栏 / 看板列底</td></tr>
+        <tr><td><code>--g3</code></td><td><span class="swatch" style="background:#16171a"></span><code>#16171a</code></td><td>气泡 / 卡片 / 输入框</td></tr>
+        <tr><td><code>--g4</code></td><td><span class="swatch" style="background:#1c1e21"></span><code>#1c1e21</code></td><td>悬停 / 选中</td></tr>
+        <tr><td><code>--g5</code></td><td><span class="swatch" style="background:#242629"></span><code>#242629</code></td><td>图标底 / 标签底</td></tr>
+        <tr><td><code>--text</code></td><td><span class="swatch" style="background:#e8e9ea"></span><code>#e8e9ea</code></td><td>主文字（不用纯白）</td></tr>
+        <tr><td><code>--text-2</code></td><td><span class="swatch" style="background:#9b9ea3"></span><code>#9b9ea3</code></td><td>次要文字 / 描述</td></tr>
+        <tr><td><code>--text-3</code></td><td><span class="swatch" style="background:#6b6e73"></span><code>#6b6e73</code></td><td>占位 / 时间 / 列名</td></tr>
+        <tr><td><code>--text-4</code></td><td><span class="swatch" style="background:#4a4d51"></span><code>#4a4d51</code></td><td>装饰性文字 / 分隔符</td></tr>
+        <tr><td><code>--accent</code></td><td><span class="swatch" style="background:#5e6ad2"></span><code>#5e6ad2</code></td><td>选中指示 / 主按钮 / 焦点环</td></tr>
+        <tr><td><code>--line-1</code></td><td><span class="swatch" style="background:#1a1b1e"></span><code>#1a1b1e</code></td><td>最弱分割线（列表内）</td></tr>
+        <tr><td><code>--line-2</code></td><td><span class="swatch" style="background:#202225"></span><code>#202225</code></td><td>常态边框</td></tr>
+        <tr><td><code>--line-3</code></td><td><span class="swatch" style="background:#2a2c30"></span><code>#2a2c30</code></td><td>强边框（输入、可聚焦）</td></tr>
+      </tbody>
+    </table>
+
+    <div class="note-inline">
+      <b>为什么主文字不用纯白？</b>纯白 <code>#fff</code> 在近黑底上会产生"跳"的感觉 ——
+      眼睛会不断被正文拽走，长时间读很累。降一档到 <code>#e8e9ea</code>，
+      再把真正的"最亮"留给悬停和选中态，层次反而更清楚。
+    </div>
+  </section>
+
+  <!-- ══════════ 待确认 ══════════ -->
+  <section>
+    <h2><span class="num">05</span> 需要你拍板的几件事</h2>
+    <p>这些我不替你决定 —— 每个都会明显改变产品气质。</p>
+
+    <div class="ask">
+      <h3>定完这四条我就动手改代码</h3>
+      <ol>
+        <li><b>浅色主题怎么办？</b>现在的浅色是"白底 + 蓝强调"。同一套设计语言在浅色下要重新定灰阶
+          （白底上 10 档灰会显得很脏）。我的建议是：<b>浅色只做 6 档灰、继续用 #5E6AD2</b>，
+          观感比现在更克制。也可以干脆浅色保持现状、只重做深色。</li>
+        <li><b>侧栏要不要去掉？</b>Linear 和 Vercel 都是单栏 + 顶部导航，而班底现在是
+          "图标栏 + 列表栏 + 内容区"三栏。三栏更接近 Slack，功能上没问题，但气质偏"传统 IM"。
+          <b>保留三栏</b>风险最低；想去掉列表栏就得重排信息架构，那是更大的工程。</li>
+        <li><b>字体要不要换？</b>现在是系统字体栈。欧美工具通常会带一款自己的无衬线
+          （如 Inter）。<b>引入 Inter 能立刻提升质感</b>，但要打包字体文件（约 100KB），
+          与"零依赖"原则不冲突（只是静态资源），需要你确认。</li>
+        <li><b>动效到什么程度？</b>现在几乎没有过渡。我建议只加三处：
+          悬停底色 120ms、气泡出现 160ms、看板卡片拖拽时的边框高亮。
+          <b>不做</b>入场动画、不做渐变光晕 —— 那是 Framer 的语言，不是 Linear 的。</li>
+      </ol>
+    </div>
+  </section>
+
+  <p style="color:var(--text-4); font-size:12px; margin-top:40px">
+    班底 v1.0.1 · 设计稿 · 1440×900 渲染
+  </p>
+
+</div>
+</body>
+</html>

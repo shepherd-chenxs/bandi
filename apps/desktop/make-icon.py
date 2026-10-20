@@ -1,24 +1,25 @@
 #!/usr/bin/env python3
 """生成桌面版图标：任务栏、窗口、exe、安装包都用这一份。
 
-**为什么要一个脚本**：图标以前是 `v1.0.0` 时代一次性做出来的（写死的「本软件」的「本」），
-产品改叫「班底」之后，任务栏上那个字就对不上了。换成同一个字的图，
-是"改一下字"这种事 —— 得有唯一入口，不能靠谁手里那张图。
+**为什么要有这个脚本**：图标必须只有一个生成入口，不能靠谁手里那张图
+（v1.0.0 时代吃过亏：图标是一次性做的，产品改名后没人改得动它）。
 
-**为什么用 Python**：把一个汉字画进位图需要**字体光栅化**（Pillow）。
-Node 那边手写 PNG/ICO 容易，但把字形轮廓栅格化不是几百行的事。
-Pillow 是平台自带的（见 `load_workspace_dependencies`），所以这是最省依赖的一条路。
+**现在的标是什么（2026-10-20 定稿）**：「列队」—— 三根圆角柱站成一排、
+中间那根领头，底下一道底座。意象就是「班底」两个字：*一班人 + 底*。
+纯几何形状，**不再光栅化字体** —— 旧做法（把微软雅黑里的「班」画进位图）
+除了小尺寸糊，还有授权悬案：字形的许可归字体管（见 git 历史里那版脚本的警告）。
+几何标是我们自己画的，没有这个问题。
+
+**为什么用 Python**：桌面构建链上 Pillow 是现成的；ICO 容器、多尺寸缩放
+（LANCZOS）它都顺手。画的是圆角矩形，不需要字体、不需要浏览器。
 
 跑法：
-    python apps/desktop/make-icon.py            # 出「班」
-    python apps/desktop/make-icon.py --glyph 本  # 换字
-    python apps/desktop/make-icon.py --preview   # 额外出一张 32px 预览（看小尺寸糊不糊）
+    python apps/desktop/make-icon.py            # 出「列队」标（默认）
+    python apps/desktop/make-icon.py --preview  # 额外出 16/32/64 预览（看小尺寸糊不糊）
+    python apps/desktop/make-icon.py --glyph 班 # 旧的字标（v1.0.1 及以前），留着备用
 
-风格是**从旧图标里量出来的**（底色、字色、字形大小），换字之后看着还是同一套东西。
-
-**⚠️ 字体授权**：这里光栅化的是系统字体（微软雅黑 / PingFang / Noto）里的字形。
-把某个字形做成产品 logo 归字体的许可管，**换字或换字体之后请自行确认授权**。
-仓库里入库的是生成结果 `icons/`；这个脚本只是"唯一的生成入口"。
+矢量母版在 `icons/icon.svg` —— 改形状先改 SVG、再把数值抄进下面的 MARK，
+两处必须一致（脚本不解析 SVG，别让它们悄悄分叉）。
 """
 import argparse
 import os
@@ -33,20 +34,29 @@ PNG_OUT = ICONS / "icon.png"      # 512×512，窗口/关于页用
 ICO_OUT = ICONS / "icon.ico"      # Windows：exe 嵌入、任务栏、安装包
 
 SIZE = 512
-RADIUS = 96                        # 圆角半径（跟旧图标一致）
-# 风格值：**冻在这里**，量自 v1.0.0 那个图标。
-#
-# 为什么不每次去"读当前图标"来推：那样基准就是自己的上一次输出，
-# 每跑一次会漂一两像素，脚本不幂等（第一版真这么写的，跑第二遍墨迹就从 253 掉到 251）。
-# 想看这些数从哪来，用 `--sample <某张旧图标.png>` 现量一次。
-BG = (32, 34, 40, 255)
-FG = (110, 168, 254, 255)
-TARGET_INK_H = 256                 # 旧图标里那个字的墨迹高度（512 画布上）
-# 旧图标不在时用上面这几个兜底
-BG_FALLBACK = BG
-FG_FALLBACK = FG
+RADIUS = 96                        # 圆角半径，沿用旧图标量出来的值
+
+# ── 「列队」标的几何（2026-10-20 定稿，与 icons/icon.svg 一致）──────────────
+# 每项：(x, y, w, h, 圆角半径, 不透明度 0-255)。坐标在 512 画布上。
+# 中间那根更高、更实 = 领头的；左右两根半透明 = 班子成员；底下那道 = 「底」。
+MARK = [
+    (148, 238, 62, 122, 31, 209),   # 左柱（0.82）
+    (225, 182, 62, 178, 31, 255),   # 中柱（领头）
+    (302, 238, 62, 122, 31, 209),   # 右柱（0.82）
+    (132, 372, 248, 22, 11, 128),   # 底座（0.5）
+]
+
+# 底色：应用内 logo 同一款品牌蓝（--logo-1 → --logo-2），上浅下深。
+# 不用旧图标的深灰底（32,34,40）—— 那是「本」时代的配色，跟界面里认得的蓝对不上。
+GRAD_TOP = (0x4B, 0x6C, 0xB7)
+GRAD_BOTTOM = (0x2B, 0x4A, 0x8F)
 
 ICO_SIZES = [16, 24, 32, 48, 64, 128, 256]
+
+# ── 旧字标（--glyph）用的常量，原样保留 ─────────────────────────────────
+BG = (32, 34, 40, 255)
+FG = (110, 168, 254, 255)
+TARGET_INK_H = 256
 FONT_CANDIDATES = [
     r"C:\Windows\Fonts\msyh.ttc",      # 微软雅黑
     r"C:\Windows\Fonts\msyhbd.ttc",
@@ -69,36 +79,6 @@ def pick_font(size):
     )
 
 
-def sample_old(path):
-    """从一张**指定的**图标里量出底色、字色，以及那个字的墨迹高度。
-
-    只在 `--sample` 时用：它回答"上面那几个常量是怎么来的"，不参与日常生成
-    （否则基准就是自己的上一次输出，跑几次就漂几次）。
-    """
-    im = Image.open(path).convert("RGBA")
-    w, h = im.size
-    px = im.load()
-
-    bg = px[w // 2, 12]                      # 顶部中间：一定是底色
-    counts = {}
-    for y in range(0, h, 2):
-        for x in range(0, w, 2):
-            c = px[x, y]
-            if abs(c[0] - bg[0]) + abs(c[1] - bg[1]) + abs(c[2] - bg[2]) < 60:
-                continue
-            counts[c] = counts.get(c, 0) + 1
-    fg = max(counts, key=counts.get) if counts else FG
-
-    box = None
-    for y in range(h):
-        for x in range(w):
-            c = px[x, y]
-            if abs(c[0] - fg[0]) + abs(c[1] - fg[1]) + abs(c[2] - fg[2]) < 90:
-                box = (x, y, x, y) if box is None else (min(box[0], x), min(box[1], y), max(box[2], x), max(box[3], y))
-    ink_h = (box[3] - box[1] + 1) if box else None
-    return bg, fg, ink_h
-
-
 def render_glyph(ch, font):
     """把一个字画在透明层上，返回 (图层, 墨迹框) —— 便于按**墨迹**而不是按 em 框居中。"""
     layer = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
@@ -107,45 +87,67 @@ def render_glyph(ch, font):
     return layer, layer.getchannel("A").getbbox()
 
 
+def gradient_bg():
+    """上浅下深的品牌蓝渐变，裁成圆角方块。
+
+    为什么不做对角渐变：SVG 母版的渐变方向接近竖直（x2=0.55），竖直近似
+    肉眼看不出差别，却省掉一整段旋转插值的代码 —— 不为用不上的精度买单。
+    """
+    g = Image.linear_gradient("L").resize((SIZE, SIZE))     # 0(顶) → 255(底)
+    chan = []
+    for t, b in zip(GRAD_TOP, GRAD_BOTTOM):
+        lut = [round(t + (b - t) * i / 255) for i in range(256)]
+        chan.append(g.point(lut))
+    chan.append(Image.new("L", g.size, 255))
+    full = Image.merge("RGBA", chan)
+
+    mask = Image.new("L", (SIZE, SIZE), 0)
+    ImageDraw.Draw(mask).rounded_rectangle([0, 0, SIZE - 1, SIZE - 1], radius=RADIUS, fill=255)
+    out = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
+    out.paste(full, (0, 0), mask)
+    return out
+
+
+def render_mark():
+    """「列队」标：渐变底 + 三柱一底座。数值与 icons/icon.svg 一一对应（见 MARK）。"""
+    out = gradient_bg()
+    layer = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    for x, y, w, h, r, a in MARK:
+        d.rounded_rectangle([x, y, x + w - 1, y + h - 1], radius=r, fill=(255, 255, 255, a))
+    out.alpha_composite(layer)
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--glyph", default="班", help="图标上那个字（默认「班」）")
+    ap.add_argument("--glyph", metavar="字", help="改出旧的字标（如 --glyph 班）。默认出「列队」几何标")
     ap.add_argument("--preview", action="store_true", help="额外出 16/32/64 预览，看小尺寸糊不糊")
-    ap.add_argument("--sample", help="从这张旧图标现量风格值（只为了让上面的常量可追溯，不参与生成）")
     args = ap.parse_args()
 
-    if args.sample:
-        bg, fg, ink = sample_old(args.sample)
-        print(f"sampled bg={bg[:3]} fg={fg[:3]} ink_h={ink}px  <- 抄进上面的常量")
-        return 0
-
-    bg, fg, target = BG, FG, TARGET_INK_H
-    print(f"style bg={bg[:3]} fg={fg[:3]} target_ink_h={target}px")
-
-    # 字号：让新字的墨迹高度对上目标 —— 换字之后视觉重量不变
-    best = None
-    for size in range(120, 340, 2):
-        layer, box = render_glyph(args.glyph, pick_font(size))
-        if not box:
-            continue
+    if args.glyph:
+        # 旧字标：深灰底 + 蓝字，v1.0.1 及以前的样式（留着备用，别删 —— 改主意时还能回来）
+        layer, box = render_glyph(args.glyph, pick_font(256))
         ink_h = box[3] - box[1] + 1
-        diff = abs(ink_h - target)
-        if best is None or diff < best[0]:
-            best = (diff, size, ink_h, box, layer)
-    if best is None:
-        raise SystemExit(f"渲染不出「{args.glyph}」这个字（字体里没有？）")
-    _, fsize, ink_h, box, layer = best
-    print(f"font={fsize}px -> ink_h={ink_h}px (target {target}px)")
-
-    # 底：圆角方块（满幅）
-    out = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
-    ImageDraw.Draw(out).rounded_rectangle([0, 0, SIZE - 1, SIZE - 1], radius=RADIUS, fill=bg)
-
-    # 字：按**墨迹中心**贴到画布中心，而不是按 em 框 —— 否则不同字会看着偏
-    ink = Image.new("RGBA", layer.size, fg)
-    ink.putalpha(layer.getchannel("A"))
-    cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
-    out.alpha_composite(ink, (int(SIZE / 2 - cx), int(SIZE / 2 - cy)))
+        # 字号：让墨迹高度对上目标 —— 换字之后视觉重量不变
+        best = None
+        for size in range(120, 340, 2):
+            l, b = render_glyph(args.glyph, pick_font(size))
+            if not b:
+                continue
+            diff = abs((b[3] - b[1] + 1) - TARGET_INK_H)
+            if best is None or diff < best[0]:
+                best = (diff, size, l, b)
+        _, fsize, layer, box = best
+        print(f"glyph mode font={fsize}px")
+        out = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
+        ImageDraw.Draw(out).rounded_rectangle([0, 0, SIZE - 1, SIZE - 1], radius=RADIUS, fill=BG)
+        ink = Image.new("RGBA", layer.size, FG)
+        ink.putalpha(layer.getchannel("A"))
+        cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+        out.alpha_composite(ink, (int(SIZE / 2 - cx), int(SIZE / 2 - cy)))
+    else:
+        out = render_mark()
 
     ICONS.mkdir(parents=True, exist_ok=True)
     out.save(PNG_OUT)

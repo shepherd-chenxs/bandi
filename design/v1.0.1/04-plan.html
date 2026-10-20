@@ -1,0 +1,523 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>班底 v1.0.1 · 改造建议（已作废：最终全站 Linear）</title>
+<style>
+:root {
+  color-scheme: dark;
+  --g0: #08090a; --g1: #0d0e10; --g2: #111214; --g3: #16171a;
+  --g4: #1c1e21; --g5: #242629;
+  --line-1: #1a1b1e; --line-2: #202225; --line-3: #2a2c30;
+  --text: #e8e9ea; --text-2: #9b9ea3; --text-3: #6b6e73; --text-4: #4a4d51;
+  --accent: #5e6ad2; --accent-hi: #6e79dd; --accent-lo: rgba(94,106,210,.14);
+  --blue: #0a84ff;
+  --ok: #3fb950; --warn: #d29922; --bad: #f85149;
+  --r-md: 7px; --r-lg: 12px;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Hiragino Sans GB", "Microsoft YaHei", "Source Han Sans SC", sans-serif;
+  --mono: "SF Mono", "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--g0); color: var(--text);
+  font-family: var(--font); font-size: 13.5px; line-height: 1.68;
+  -webkit-font-smoothing: antialiased;
+}
+.page { max-width: 1080px; margin: 0 auto; padding: 56px 32px 110px; }
+a { color: var(--accent-hi); text-decoration: none; border-bottom: 1px solid rgba(94,106,210,.4); }
+a:hover { border-bottom-color: var(--accent-hi); }
+
+.eyebrow {
+  font-family: var(--mono); font-size: 11px; letter-spacing: .12em;
+  text-transform: uppercase; color: var(--text-3); margin-bottom: 14px;
+}
+h1 {
+  margin: 0 0 16px; font-size: 34px; line-height: 1.28;
+  font-weight: 600; letter-spacing: -.025em;
+}
+h1 em { font-style: normal; color: var(--accent-hi); }
+.lede { margin: 0 0 26px; max-width: 680px; color: var(--text-2); font-size: 14px; }
+
+h2 {
+  margin: 0 0 6px; font-size: 19px; font-weight: 600; letter-spacing: -.02em;
+  display: flex; align-items: baseline; gap: 10px;
+}
+h2 .num {
+  font-family: var(--mono); font-size: 12px; font-weight: 500;
+  color: var(--text-4); letter-spacing: 0;
+}
+h2 + p { margin: 0 0 22px; color: var(--text-3); font-size: 13px; }
+section { margin-bottom: 60px; }
+h3 { margin: 0 0 8px; font-size: 13px; font-weight: 600; }
+code {
+  font-family: var(--mono); font-size: 11.5px;
+  background: rgba(255,255,255,.05); padding: 1px 5px; border-radius: 3px;
+  border: 1px solid var(--line-1); color: var(--text);
+}
+
+.tip {
+  background: linear-gradient(180deg, rgba(94,106,210,.07), rgba(94,106,210,.02));
+  border: 1px solid rgba(94,106,210,.22);
+  border-radius: var(--r-lg); padding: 16px 19px;
+  font-size: 13px; color: var(--text-2);
+}
+.tip b { color: var(--text); }
+
+/* ── 一句话结论 ── */
+.thesis {
+  margin: 34px 0 60px; padding: 24px 26px;
+  border: 1px solid var(--line-2); border-radius: var(--r-lg);
+  background: var(--g1);
+}
+.thesis p { margin: 0; font-size: 15px; line-height: 1.75; color: var(--text); }
+.thesis p + p { margin-top: 10px; font-size: 13px; color: var(--text-2); }
+.thesis .k { color: var(--accent-hi); font-weight: 600; }
+.thesis .k2 { color: var(--blue); font-weight: 600; }
+
+/* ── 骨架图 ── */
+.frame {
+  display: grid; grid-template-columns: 68px 260px minmax(0, 1fr);
+  gap: 1px; background: var(--line-2);
+  border: 1px solid var(--line-2); border-radius: var(--r-lg);
+  overflow: hidden; height: 250px; margin-top: 18px;
+}
+.frame > div { padding: 12px 14px; position: relative; }
+/* 说明放框外、按三栏等分：放框里（无论绝对定位还是新起一行）都会把某一栏撑得比邻居高 */
+.caps {
+  display: grid; grid-template-columns: 68px 260px minmax(0, 1fr);
+  margin-top: 10px;
+}
+.cap { padding: 0 12px; }
+.cap:first-child { padding-left: 0; }
+.cap b { display: block; font-size: 12px; color: var(--text); font-weight: 600; margin-bottom: 2px; }
+.cap span { font-size: 11px; color: var(--text-3); line-height: 1.45; display: block; }
+.f-rail { background: #0b0b0d; display: grid; align-content: start; justify-items: center; gap: 12px; padding-top: 16px; }
+.f-rail i {
+  width: 26px; height: 26px; border-radius: 7px; background: var(--g4);
+  display: block; font-style: normal;
+}
+.f-rail i:first-child { background: var(--blue); }
+.f-list { background: #0f0f11; }
+.f-main { background: #08090a; }
+.f-row {
+  height: 30px; border-radius: 7px; background: var(--g3); margin-bottom: 7px;
+  display: flex; align-items: center; gap: 8px; padding: 0 9px; font-size: 11.5px; color: var(--text-2);
+}
+.f-row.on { background: rgba(10,132,255,.16); color: var(--text); box-shadow: inset 0 0 0 1px rgba(10,132,255,.3); }
+.f-row .b { width: 15px; height: 15px; border-radius: 4px; background: var(--g5); flex: 0 0 auto; }
+.f-chat { display: flex; flex-direction: column; gap: 10px; height: 100%; }
+.f-bub {
+  max-width: 62%; padding: 8px 11px; border-radius: 15px; font-size: 11.5px;
+  background: var(--g4); color: var(--text-2); line-height: 1.5;
+}
+.f-bub.me { align-self: flex-end; background: var(--blue); color: #fff; }
+.f-bub .n { display: block; font-size: 10px; color: var(--text-3); margin-bottom: 2px; }
+.f-bub.me .n { color: rgba(255,255,255,.75); }
+
+.legend { display: flex; gap: 20px; flex-wrap: wrap; margin-top: 12px; font-size: 12px; color: var(--text-3); }
+.legend span { display: flex; align-items: center; gap: 7px; }
+.legend i { width: 9px; height: 9px; border-radius: 2px; display: block; }
+.legend .ios { background: var(--blue); }
+.legend .lin { background: var(--accent); }
+
+/* ── 页面归属表 ── */
+.tbl {
+  width: 100%; border-collapse: collapse; margin-top: 14px;
+  border: 1px solid var(--line-1); border-radius: var(--r-md); overflow: hidden;
+}
+.tbl th, .tbl td { padding: 10px 13px; text-align: left; font-size: 12.5px; border-bottom: 1px solid var(--line-1); vertical-align: top; }
+.tbl th {
+  background: var(--g2); color: var(--text-3);
+  font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+}
+.tbl td { background: var(--g1); color: var(--text-2); }
+.tbl tr:last-child td { border-bottom: 0; }
+.tbl td:first-child { color: var(--text); font-weight: 500; white-space: nowrap; }
+.tbl tbody tr:hover td { background: var(--g2); }
+.tag {
+  display: inline-block; padding: 1px 7px; border-radius: 4px;
+  font-size: 10.5px; font-weight: 600; letter-spacing: .03em; white-space: nowrap;
+}
+.tag.ios { background: rgba(10,132,255,.16); color: #6bb6ff; box-shadow: inset 0 0 0 1px rgba(10,132,255,.25); }
+.tag.lin { background: rgba(94,106,210,.16); color: #9aa3e8; box-shadow: inset 0 0 0 1px rgba(94,106,210,.25); }
+.tag.mix { background: rgba(155,158,163,.12); color: var(--text-2); box-shadow: inset 0 0 0 1px var(--line-3); }
+.tag.mono { font-family: var(--mono); }
+
+/* ── 组件归属 ── */
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 18px; }
+.comp {
+  background: var(--g2); border: 1px solid var(--line-1);
+  border-radius: var(--r-md); padding: 16px 18px;
+}
+.comp h3 { display: flex; align-items: center; gap: 8px; }
+.comp ul { margin: 8px 0 0; padding-left: 17px; color: var(--text-2); font-size: 12.5px; }
+.comp li { margin-bottom: 5px; }
+.comp li:last-child { margin-bottom: 0; }
+.comp.note { background: var(--g1); }
+
+/* ── 分步 ── */
+.steps { margin-top: 16px; }
+.step {
+  display: grid; grid-template-columns: 74px minmax(0, 1fr);
+  gap: 18px; padding: 16px 0; border-top: 1px solid var(--line-1);
+}
+.step:last-child { border-bottom: 1px solid var(--line-1); }
+.step .n {
+  font-family: var(--mono); font-size: 11px; color: var(--text-4);
+  letter-spacing: .08em; padding-top: 2px;
+}
+.step h3 { margin: 0 0 6px; font-size: 13.5px; }
+.step p { margin: 0; font-size: 12.5px; color: var(--text-2); }
+.step p + p { margin-top: 6px; }
+.step .files { font-family: var(--mono); font-size: 11px; color: var(--text-3); margin-top: 6px; }
+.done { color: var(--ok); }
+.todo { color: var(--warn); }
+
+.risk { border-left: 2px solid var(--bad); background: var(--g1); border-radius: 0 var(--r-md) var(--r-md) 0; padding: 12px 16px; font-size: 12.5px; color: var(--text-2); margin-top: 16px; }
+.risk b { color: var(--text); }
+
+footer { color: var(--text-4); font-size: 12px; margin-top: 46px; }
+
+@media (max-width: 860px) {
+  .grid2 { grid-template-columns: 1fr; }
+  .frame { grid-template-columns: 54px 1fr; height: auto; }
+  .f-main { display: none; }
+  .page { padding: 36px 20px 80px; }
+  h1 { font-size: 26px; }
+}
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="eyebrow">班底 v1.0.1 · UI 改造 · 历史方案</div>
+  <h1>哪部分用 iOS，<br />哪部分用 Linear <span style="font-size:.5em;color:#b4232a">（已作废）</span></h1>
+  <p class="lede">
+    上一页留下的那句「最好的答案不是二选一」，这里把它落到每个页面。
+    当时的结论是：<b>人和人说话的地方用 iOS，人和系统打交道的地方用 Linear。</b>
+  </p>
+  <div class="tip" style="margin-top:14px;background:#fff4f4;border-color:#e5b4b4">
+    <b>本文 2026-10-19 作废。</b>
+    混用方案做出来（第 3 步：消息 / 通讯录 / 工作台）之后，用户看截图否掉了它 ——
+    同一个软件里两套圆角、两套分层方式，切页面要重新认一遍“这是什么”，比风格单调更糟。
+    最终决定：<b>全站统一 Linear</b>。iOS 语汇已全部撤回（彩色气泡 → 无气泡、
+    浮起卡片 → 同底 + 1px 细线、工作台宫格 → 行式列表）。
+    下面保留原始论证，只作决策记录，不要照它实现。
+  </div>
+
+  <!-- ══════════ 结论 ══════════ -->
+  <div class="thesis">
+    <p>
+      <span class="k2">对话区走 iOS</span> —— 班底的主界面就是对话，而对话正是 iOS 语汇最成熟的地方：
+      气泡、头像、时间、输入条。这块照 iOS 做，用户第一天就觉得「顺手」。
+    </p>
+    <p>
+      <span class="k">所有"干活的地面"走 Linear</span> —— 看板、列表、设置、运行日志、流程编排。
+      这些页面要在一屏里塞几十条信息，iOS 那种大留白会把密度吃掉。
+    </p>
+    <p>
+      两套不是两套代码：<b>共享一份 token 层</b>，只在组件层分家（见第 03 节）。
+    </p>
+  </div>
+
+  <!-- ══════════ 01 为什么是这个切法 ══════════ -->
+  <section>
+    <h2><span class="num">01</span> 为什么是这个切法</h2>
+    <p>不是喜好问题，是这两个语汇各自被优化过的东西不一样。</p>
+
+    <div class="grid2">
+      <div class="comp">
+        <h3><span class="tag ios">iOS</span> 被优化的是「读得下去」</h3>
+        <ul>
+          <li>气泡是最省脑的对话形式：一眼看出谁说的、说到哪儿了</li>
+          <li>大留白 + 少分割线 → 注意力集中在内容本身</li>
+          <li>圆角、软色块 → 降低长期停留的压迫感</li>
+          <li><b>代价</b>：同样一屏，能摆的信息不到 Linear 的一半</li>
+        </ul>
+      </div>
+      <div class="comp">
+        <h3><span class="tag lin">Linear</span> 被优化的是「扫得快」</h3>
+        <ul>
+          <li>10 档灰阶把层级压平，眼睛靠明度而不是框线定位</li>
+          <li>1px 细线、几乎无阴影 → 一屏能摆 30 个条目还不乱</li>
+          <li>只在"当前选中"放一处亮色 → 视线有唯一落点</li>
+          <li><b>代价</b>：偏冷、偏紧，长时间读对话会觉得挤</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="tip" style="margin-top:16px">
+      <b>班底的特殊之处：</b>市面上的工具大多是"要么 IM 要么项目管理"，所以只能选一边。
+      班底是<b>「和数字员工一起干活」</b>—— 四个一级页面里，一个纯对话、三个纯"干活的地面"，
+      正好各归一边，不用妥协。这也解释了为什么二选一都是错的。
+    </div>
+  </section>
+
+  <!-- ══════════ 02 页面归属 ══════════ -->
+  <section>
+    <h2><span class="num">02</span> 落到每个页面</h2>
+    <p>骨架不变，还是「图标栏 + 列表栏 + 内容区」三栏 —— 只换语汇。</p>
+
+    <div class="frame">
+      <div class="f-rail">
+        <i></i><i></i><i></i>
+      </div>
+      <div class="f-list">
+        <div class="f-row on"><span class="b"></span>喜儿</div>
+        <div class="f-row"><span class="b"></span>波哥</div>
+        <div class="f-row"><span class="b"></span>手上的活 · 3</div>
+      </div>
+      <div class="f-main">
+        <div class="f-chat">
+          <div class="f-bub"><span class="n">喜儿</span>v1.0.1 的设计稿出了两版，你挑一个。</div>
+          <div class="f-bub me">先按 iOS 做消息页。</div>
+        </div>
+      </div>
+    </div>
+    <div class="caps">
+      <div class="cap">
+        <b>图标栏</b>
+        <span>iOS 彩色方块 / Linear 单色线稿</span>
+      </div>
+      <div class="cap">
+        <b>列表栏 · iOS</b>
+        <span>圆角行、彩色小图标、副标题</span>
+      </div>
+      <div class="cap">
+        <b>内容区</b>
+        <span>对话走 iOS 气泡，其它页走 Linear 密排</span>
+      </div>
+    </div>
+    <div class="legend">
+      <span><i class="ios"></i>iOS 语汇</span>
+      <span><i class="lin"></i>Linear 语汇</span>
+    </div>
+
+    <table class="tbl">
+      <thead>
+        <tr><th>页面 / 区块</th><th>语汇</th><th>理由</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>消息 · 对话</td><td><span class="tag ios">iOS</span></td>
+          <td>纯对话。气泡、头像、大标题、系统蓝只给「我的气泡 / 发送 / 选中会话」。</td>
+        </tr>
+        <tr>
+          <td>消息 · 左栏会话列表</td><td><span class="tag ios">iOS</span></td>
+          <td>它是对话的一部分。inset grouped 行 + 未读点 + 「手上的活」折叠组。</td>
+        </tr>
+        <tr>
+          <td>通讯录</td><td><span class="tag ios">iOS</span></td>
+          <td>人 + 群，本质是"挑一个人说话"。行式列表正是 iOS 最强的形态。</td>
+        </tr>
+        <tr>
+          <td>员工详情</td><td><span class="tag mix">iOS 骨架 + Linear 数据</span></td>
+          <td>头像是 iOS（大、圆、彩色）；下面「任务 / 会话 / 技能」标签页里的表格用 Linear 密度。</td>
+        </tr>
+        <tr>
+          <td>工作台首页</td><td><span class="tag ios">iOS</span></td>
+          <td>它是"应用抽屉"：几个大图标点进去。iOS 主屏逻辑天然对应，不需要密度。</td>
+        </tr>
+        <tr>
+          <td>项目列表 / 项目详情</td><td><span class="tag lin">Linear</span></td>
+          <td>多项目横向比较，要一行看到版本、负责人、进度。</td>
+        </tr>
+        <tr>
+          <td>任务看板（项目 / 全局）</td><td><span class="tag lin">Linear</span></td>
+          <td>班底最像 Linear 的地方。卡片密度、列头状态点、筛选弹层直接照搬。</td>
+        </tr>
+        <tr>
+          <td>任务卡详情（评论区）</td><td><span class="tag mix">Linear 骨架 + iOS 评论</span></td>
+          <td>左评论右设置的骨架不动；评论气泡按 iOS 做 —— 那里确实是在"对话"。</td>
+        </tr>
+        <tr>
+          <td>流程编排 / 实例</td><td><span class="tag lin">Linear</span></td>
+          <td>节点、连线、状态机，是图不是内容。细线 + 灰阶比圆角软色块清楚得多。</td>
+        </tr>
+        <tr>
+          <td>设置（全部）</td><td><span class="tag lin">Linear</span></td>
+          <td>表单为主，要在一屏看完所有项。inset grouped 会让设置页长得像手机。</td>
+        </tr>
+        <tr>
+          <td>运行日志 / 事件流</td><td><span class="tag lin">Linear</span></td>
+          <td>等宽、紧凑、整屏滚动。iOS 那套留白在这儿是灾难。</td>
+        </tr>
+        <tr>
+          <td>登录页 / 空状态</td><td><span class="tag mix">中性</span></td>
+          <td>两套都能做。建议用 Linear 的近黑 + 一行居中标题，克制。</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="risk">
+      <b>唯一的硬边界：</b>一个页面里不要出现两种语汇的<b>竞争</b>。
+      比如看板页就别给卡片加大圆角和彩色图标 —— 那会立刻变成"两个产品拼起来"。
+      混只允许出现在<b>一个页面内部的明确分区</b>（如任务卡：左评论右设置）。
+    </div>
+  </section>
+
+  <!-- ══════════ 03 一套 token 两个组件层 ══════════ -->
+  <section>
+    <h2><span class="num">03</span> 一套 token，一个组件层</h2>
+    <p>现有 CSS 已经是变量驱动的，这是最大的资产 —— 改造不用推倒重来。</p>
+
+    <div class="grid2">
+      <div class="comp note">
+        <h3>第 1 层 · token（两套共用）</h3>
+        <ul>
+          <li>语义变量名不变：<code>--bg --side --panel --line --text --dim --accent</code></li>
+          <li>只换值，<b>不新增第二套命名</b>（<code>--ios-bg</code> 这种一律不要）</li>
+          <li>深 / 浅各一份 —— 现在 <code>:root</code> + <code>:root[data-theme='light']</code> 的结构正好</li>
+          <li>状态色（待办 / 待人确认 / 失败）两套都要，且<b>语义同名同色</b></li>
+        </ul>
+      </div>
+      <div class="comp note">
+        <h3>第 2 层 · 组件（最终只有 Linear 一套）</h3>
+        <ul>
+          <li><del>iOS 一套：<code>.ios-row</code> <code>.ios-card</code> <code>.ios-bubble</code> <code>.ios-nav</code></del>（已撤回）</li>
+          <li>Linear 一套：<code>.ln-row</code> <code>.ln-card</code> <code>.ln-col</code> <code>.ln-field</code></li>
+          <li><del>页面 div 上挂 <code>data-skin="ios"</code> / <code>data-skin="linear"</code></del>（未落地）</li>
+          <li>只覆盖 <b>圆角 / 间距 / 阴影 / 分隔线样式</b> 四样，不覆盖颜色</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="tip" style="margin-top:16px">
+      <b>⚠️ 这一节作废（2026-10-19 用户拍板「全部 Linear」）</b>
+      下面说的“按页面分皮肤”最终<b>没有落地</b>：先把 iOS 那套做出来（第 3 步）之后，
+      用户看截图否掉了混用方案，改为全站统一 Linear。实际做法是直接改各组件、
+      一个组件一个提交（好 revert），并没有 <code>data-skin</code> 这层机制。
+      iOS 语汇（彩色气泡、浮起卡片、18px 气泡圆角、工作台宫格）已全部撤回。
+    </div>
+
+    <div class="tip" style="margin-top:12px;text-decoration:line-through;opacity:.55">
+      <b>为什么按"页面"分皮肤，而不是按"主题"分？</b>
+      如果做成两套可选主题，等于维护两套完整样式表（现在 1912 行的两倍），
+      而且用户切换后还得重新认路。按页面分，每个页面只学到<b>一种</b>形态，认知负担为零。
+    </div>
+
+    <div class="tip" style="margin-top:12px;text-decoration:line-through;opacity:.55;background:var(--g1);border-color:var(--line-2)">
+      <b>约 90 行作用域覆盖就能分家：</b>
+      <code>[data-skin="ios"] { --radius-lg: 16px; --gap-row: 10px; --shadow-card: 0 1px 3px rgba(0,0,0,.06); }</code><br />
+      <code>[data-skin="linear"] { --radius-lg: 7px; --gap-row: 2px; --shadow-card: none; }</code><br />
+      组件的其它规则一行不动 —— 因为它们读的都是变量。
+    </div>
+  </section>
+
+  <!-- ══════════ 04 分几步走 ══════════ -->
+  <section>
+    <h2><span class="num">04</span> 分四步，每步都能单独验收</h2>
+    <p>改造 14,207 行前端不可能一次换完。按「风险从低到高、可回退」排序。</p>
+
+    <div class="steps">
+      <div class="step">
+        <div class="n done">已完成</div>
+        <div>
+          <h3>第 0 步 · 设计稿</h3>
+          <p>Linear 三张（深 + 浅）+ iOS 两张 + 两张对照页。颜色、间距、组件形态都已定。</p>
+          <p class="files">design/v1.0.1/*.html</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="n todo">下一步</div>
+        <div>
+          <h3>第 1 步 · 只换 token（零风险）</h3>
+          <p>把 <code>style.css</code> 顶部那 30 个变量换成新色阶，深浅两套都换。
+             组件规则<b>一行都不改</b> —— 整个界面立刻换气质，不满意随时 git checkout 回去。</p>
+          <p><b>验收</b>：三个页面截图与设计稿并排看；跑一遍对比度脚本，<code>--dim</code> 在中性灰底上 ≥ 4.5:1。</p>
+          <p class="files">apps/web/style.css:1-62（约 60 行）</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="n todo">再下一步</div>
+        <div>
+          <h3>第 2 步 · 清掉写死的色值</h3>
+          <p>全文件目前有 <b>27 处</b>硬编码颜色（logo 渐变、各 avatar 渐变、看板状态色）。
+             先把它们收成变量，否则第 1 步换完之后这些地方会"漏出旧配色"。</p>
+          <p><b>验收</b>：<code>grep -E '#[0-9a-f]{6}' style.css</code> 只剩变量定义行；深浅切换无残留。</p>
+          <p class="files">style.css:92, 146, 150, 263, 265, 549-553, 616, 618, 779-782, 1125, 1360, 1434, 1497-1513 …</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="n todo">然后</div>
+        <div>
+          <h3>第 3 步 · 消息 / 通讯录 / 工作台 → <del>iOS 语汇</del> <span style="color:#b4232a">已做成 iOS，后按用户要求全部改回 Linear</span></h3>
+          <p>三处是同一族（列表行 + 大标题 + 彩色图标），一次改完。改的是<b>组件类</b>，
+             JS 里那 166 处 <code>toast()</code> 和弹窗逻辑都不动。提交 <code>36bf9d9</code>。</p>
+          <p><b>⚠️ 这一步的产物已被覆盖</b>：气泡/浮起卡片/宫格全部撤回，见 <code>style.css</code> 顶部注释。</p>
+          <p><b>验收</b>：<code>node tools/run-smokes.mjs</code> 全过（16 个离线用例，与 PR 闸门共用清单）；
+             <code>node tools/check-routes.mjs</code> 无缺路由。</p>
+          <p class="files">style.css 中 .list-panel / .item / .bubble / .composer / .wb-* 相关段</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="n todo">最后</div>
+        <div>
+          <h3>第 4 步 · 看板 / 设置 / 流程 → Linear 语汇</h3>
+          <p>这块最费工（看板有拖拽、筛选两级弹层、幽灵项）。但风险低 —— 结构本来就已经很像 Linear 了，
+             主要是色阶和线宽。</p>
+          <p><b>验收</b>：<code>node tools/run-smokes.mjs</code> 仍全过；
+             <code>node tools/smoke-help-pop.mjs</code>（55 项，专盯连接器那块表单）单跑一遍。</p>
+          <p class="files">style.css 中 .kb-* / .vd-* / dialog / 设置各节</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════ 05 还需要你定的 ══════════ -->
+  <section>
+    <h2><span class="num">05</span> 只剩三件事要你定</h2>
+    <p>其余我都按上面的切法往下推。这三件会明显改变观感，不替你决定。</p>
+    <div class="tip" style="margin-bottom:14px">
+      <b>实际结论（2026-10-19）：</b>三件都定了 —— 强调色留 <b>iOS 蓝</b>（不是 Linear 靛蓝，蓝压深底更清晰）；
+      深色底<b>全部用 <code>#08090a</code></b>（消息页也放弃了纯黑，纯黑上分层只能靠阴影，而 Linear 不靠阴影）；
+      侧栏<b>留</b>。下面这表只作决策记录。
+    </div>
+
+    <table class="tbl">
+      <thead><tr><th>问题</th><th>我的建议</th><th>另一条路</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>强调色用哪个？</td>
+          <td><b>iOS 蓝</b>。浅色用 <code>#0071E3</code>（白字 4.70:1，过 AA），深色用 <code>#0A84FF</code>。
+            苹果原色 <code>#007AFF</code> 实测只有 <b>4.02:1</b>，白字不够。</td>
+          <td>Linear 靛蓝 <code>#5E6AD2</code> —— 更"工具"，但浅色消息页里偏暗，气泡会显旧。</td>
+        </tr>
+        <tr>
+          <td>深色底用哪个？</td>
+          <td><b>消息页纯黑 <code>#000</code></b>（iOS 深色），<b>其它页 <code>#08090a</code></b>（Linear）。</td>
+          <td>全部纯黑 —— 最像手机，但看板在纯黑上卡片分层几乎看不出来。</td>
+        </tr>
+        <tr>
+          <td>侧栏留不留？</td>
+          <td><b>留</b>。三栏是班底的信息架构（图标栏 / 会话 / 对话），去掉要重排所有页面。</td>
+          <td>收成两栏 —— 那是 v1.1 的事，不是这次。</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="tip" style="margin-top:16px">
+      <b>实测数据（写脚本算的，不是估的）：</b>
+      白字压 <code>#007AFF</code> = <b>4.02:1</b>（没到 AA），压 <code>#0071E3</code> = <b>4.70:1</b>（过了）——
+      所以浅色主题的主按钮要用后者，苹果原色只留给图标和小色块（那里不靠对比度辨读）。
+      深色下 <code>#0A84FF</code> 反而更亮，白字没问题。
+    </div>
+
+    <div class="tip" style="margin-top:12px">
+      <b>一条我不同意自己的地方：</b>这页开头说"对话走 iOS"，但如果深色底用纯黑，
+      消息页和看板页切换时会有一次明显的<b>底色跳变</b>。所以第 05 节第 2 条给了折中：
+      消息页纯黑、其余 <code>#08090a</code> —— 两者亮度差约 3%，肉眼几乎看不出跳动，但各有各的好处。
+    </div>
+  </section>
+
+  <footer>
+    班底 v1.0.1 · 改造建议 · 2026-10-19　→　<a href="index.html">回总览</a> ·
+    <a href="ios-compare.html">Linear vs iOS 对比</a> ·
+    <a href="compare.html">深 / 浅对照</a>
+  </footer>
+
+</div>
+</body>
+</html>

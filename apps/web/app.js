@@ -39,11 +39,43 @@ const S = {
   taskPoll: null,           // 「有活在做就自己刷」的定时器（见 scheduleTaskPoll）
   rtDevice: null,
   rtRuntime: null,
-  groupThreadId: null,      // 正在看的群详情页（通讯录里点群进来）
-  groupThread: null,
-  archivedView: false,      // 消息列表切到「已归档」子视图
-  archived: [],
-  archivedCount: 0,
+  groupThreadId: null,      // 正在看的群详情页（通讯录里点群进来）—— 存的是**群 id**，不是会话 id
+  groupThread: null,        // 群身份行（groups 表那条：id/title/assistantPersonaId/members）
+  /*
+   * 消息模块的「已归档」子视图（2026-10-20）：左栏换成归档列表，右边照常是对话面板。
+   * 它不是一级栏、也不是路由 —— 就是个开关：离开消息/正常调 setNav 都会清掉。
+   */
+  archivedView: false,
+  /*
+   * 被「不显示」收走的会话（2026-10-20 去掉会话归档后）。
+   * `conversations` 是列表用的（不含隐藏的）；这一份**只给聊天记录抽屉**用 ——
+   * 「不显示」= 不在消息列表占行，但聊天记录里必须还看得到。
+   */
+  hiddenConversations: [],
+  /*
+   * 群的**容器列表**（`groups` 表，2026-10-20）：通讯录的「群聊」分段读它，不再从会话推。
+   * 为什么单列一份：群是容器（名字/成员/群助手），会话只是片段 —— 片段删光了群还在，
+   * 通讯录里不该凭空消失（用户实报过）。消息列表则继续只看 conversations。
+   */
+  groups: [],
+  /*
+   * 右侧抽屉只有一个 DOM（#drawer），两种内容共用，靠 drawerKind 分流（2026-10-20）：
+   *   nil     = 没开
+   *   'group' = 群成员设置（openGroupDrawer 写、paintDrawer 走原逻辑）
+   *   'log'   = 聊天记录（openChatLogDrawer 写、paintDrawer 首行就转 paintChatLogDrawer）
+   * 谁开谁置，closeDrawer 一律清空 —— 不清就会出现"下一次开群设置画出来是聊天记录"。
+   */
+  drawerKind: null,
+  logPersonaId: null,       // 聊天记录抽屉看的是谁（渲染时从 S.conversations 现算，不缓存列表）
+  logGroupId: null,         // 群聊天记录：抽屉看的是哪个群（一个群有多段会话，见 openChatLogDrawer）
+  logGroupTitle: null,      // 群名（抽屉标题用；不与 rows 耦合，抽屉空着也知道自己在看哪个群）
+  logLoading: false,        // 抽屉「正在拉…」瞬时标记，取完 / 关闭都置 false
+  /*
+   * 当前打开的这段会话**一条消息都没有**（「发消息」连点复用它，别堆空壳）。
+   * openConversation 按服务端返回的 messages 写、send 首行清 —— 不落盘、不进路由：
+   * 刷新后重新按库里算，结论一致。
+   */
+  convEmpty: false,
   plugins: [],              // 界面插件（plugins/<id>/manifest.json）
   plugin: null,             // 当前选中的插件 id
   pluginData: {},           // 插件面板按接口缓存的数据
@@ -221,9 +253,11 @@ const ROUTES = {
     setNav('plugins', { skipOpen: true });
     return openTaskBoard();
   },
-  taskCard: ({ id, fromAll } = {}) => {
+  taskCard: ({ id, fromAll, fromFlow } = {}) => {
     setNav('plugins', { skipOpen: true });
-    return openTaskCardPage(id, { fromAll });
+    // fromFlow：这张卡是从流程的某一步点进来的（`{ runId, taskId, runTitle, nodeName }`）。
+    // 只用来在页头写清"你从哪来" —— 卡本身不因为来路不同而长得不一样（见 openTaskCardPage）。
+    return openTaskCardPage(id, { fromAll, fromFlow });
   },
   // 定时任务：工作台里的一页（2026-10-17 从设置搬过来）
   schedules: () => {
@@ -278,10 +312,22 @@ async function restorePlace() {
   }
 }
 
-/** 把 'system' 解析成实际的 light/dark，写到 <html data-theme>；CSS 只认这个属性 */
+/**
+ * 把 'system' 解析成实际的 light/dark，写到 <html data-theme>；CSS 只认这个属性。
+ *
+ * 同一时刻还要**通知原生窗口**（2026-10-20 用户报「深色模式顶栏没变化」）：
+ * 标题栏是 Rust 那边画的，网页改 data-theme 它听不见 —— 它只认 `setTheme`。
+ * 「跟随系统」传 null（原生窗口自己跟系统走），手动档传实际的 light/dark。
+ * 只在桌面壳里跑：__TAURI__ 是 withGlobalTauri 注入的，浏览器里没有（capabilities
+ * 里给 127.0.0.1:8787 开了 core:window:allow-set-theme + remote urls，见 desktop）。
+ */
 function applyTheme() {
   const resolved = S.theme === 'system' ? (prefersLight() ? 'light' : 'dark') : S.theme;
   document.documentElement.dataset.theme = resolved;
+  try {
+    const win = window.__TAURI__?.window?.getCurrentWindow?.();
+    win?.setTheme?.(S.theme === 'system' ? null : resolved);
+  } catch { /* 浏览器里没有 __TAURI__；壳被旧版 exe 带着跑时 IPC 可能没开 —— 都不影响网页本身 */ }
 }
 
 function setTheme(theme) {
@@ -460,6 +506,31 @@ const ICON_CLOUD =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17.5a4 4 0 0 1 .5-8 5.5 5.5 0 0 1 10.4 1.2A3.6 3.6 0 0 1 17.5 17.5z"/><path d="M12 13.5v5M9.8 15.7 12 18l2.2-2.3"/></svg>';
 
 /**
+ * 定时任务卡片右上角的三颗动作图标（2026-10-20 用户："这三个改成图标按钮"）。
+ * 原来「立即执行 / 编辑 / 删除」是三个带边框的文字按钮，一行三块字比任务名还重；
+ * 换成图标后卡面安静了，动词靠 `title` + `aria-label` 兜住 —— 所以两个都不能省。
+ * 画法跟 ICON_HELP / ICON_FOLDER 同一套：只填路径，描边用 currentColor。
+ */
+const ICON_PLAY =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8.2 5.7 18.4 12 8.2 18.3z"/></svg>';
+const ICON_EDIT =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 4.2a2.05 2.05 0 0 1 2.9 2.9l-8.8 8.8-3.9.9.9-3.9z"/><path d="M14.4 6.3l3.3 3.3"/></svg>';
+const ICON_TRASH =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4.6 7h14.8"/><path d="M9.6 7V5.3A1.3 1.3 0 0 1 10.9 4h2.2a1.3 1.3 0 0 1 1.3 1.3V7"/><path d="M6.7 7l.7 11.2A1.7 1.7 0 0 0 9.1 20h5.8a1.7 1.7 0 0 0 1.7-1.8L17.3 7"/><path d="M10.4 10.8v5.4M13.6 10.8v5.4"/></svg>';
+
+/**
+ * 工作台磁贴的图标（2026-10-20 重设计）：原来磁贴上是一个"单字色块"（项/板/时/编/流），
+ * 撑不起 40px 的图标位，看着像没画完。换成跟全站一套的线性 SVG。
+ * 画法同上：只填路径、描边 currentColor，颜色由 .wb-ico 的渐变底给。
+ */
+const ICON_WB_BOARD =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M9.2 4.5v15M14.8 4.5v15"/></svg>';
+const ICON_WB_CLOCK =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.2"/><path d="M12 7.5V12l3 2.2"/></svg>';
+const ICON_WB_FLOW =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4" width="5.4" height="5.4" rx="1.4"/><rect x="15.1" y="4" width="5.4" height="5.4" rx="1.4"/><rect x="9.3" y="14.6" width="5.4" height="5.4" rx="1.4"/><path d="M6.2 9.4v2.1h11.6V9.4M12 11.5v3.1"/></svg>';
+
+/**
  * 给一颗「?」按钮挂一段说明：点开，再点 / 点别处 / Esc 收起。
  *
  * 为什么不做成 `title` 悬浮（全站小说明都走 title）：这段是**分步骤的操作流**——
@@ -516,6 +587,74 @@ function wireHelpPop(btn, html) {
     helpPop = { btn, pop };
   };
 }
+
+/* ------------------------------------------------- 悬浮提示（自建 data-tip） */
+
+/**
+ * 为什么不用原生 `title`：那个框是浏览器/系统画的 —— 方角、灰底、悬停一秒才出、样式一概改不了。
+ * 用户要圆角只能自己画一个。用法：`data-tip="文案"`，读屏仍走 `aria-label`
+ * （**两个别同时写**：留着 title 就会先冒原生框、再冒我们的，等于两个提示）。
+ *
+ * 单例 `#tipPop`，位置现算：默认在元素**上方**，上面塞不下就翻到下面；左右贴视口边时往回收。
+ * 事件用**一个 document 委托**装一次 —— 卡片是整页重绘的，逐个挂监听必漏（见 CRUMB_GO 那条同理）。
+ * 悬停等 100ms 再出：一排图标扫过去时不然会闪一片。
+ */
+let tipTimer = 0;
+let tipAnchor = null; // 现在这条提示挂在谁身上（同一个元素重复进入不重算）
+
+function hideTip() {
+  clearTimeout(tipTimer);
+  tipAnchor = null;
+  const p = $('tipPop');
+  if (!p) return;
+  p.classList.remove('on');
+  p.hidden = true;
+}
+
+function showTip(el) {
+  const p = $('tipPop');
+  const text = el?.dataset?.tip;
+  if (!p || !text || !el.isConnected) return;
+  p.textContent = text;
+  p.hidden = false;
+  p.classList.add('on'); // 先露出来才量得到尺寸（hidden 时 getBoundingClientRect 全是 0）
+  const r = el.getBoundingClientRect();
+  const b = p.getBoundingClientRect();
+  const gap = 8;
+  let top = r.top - b.height - gap;
+  if (top < 8) top = r.bottom + gap; // 上方放不下 → 翻到下面
+  // 左右贴边就往回收，别探出视口（跟 .help-pop 那个顾虑同一个）
+  const left = Math.max(8, Math.min(r.left + r.width / 2 - b.width / 2, window.innerWidth - b.width - 8));
+  p.style.top = `${Math.round(top)}px`;
+  p.style.left = `${Math.round(left)}px`;
+}
+
+document.addEventListener('mouseover', (e) => {
+  const el = e.target.closest?.('[data-tip]');
+  if (!el || el === tipAnchor) return;
+  hideTip();
+  tipAnchor = el;
+  tipTimer = setTimeout(() => showTip(el), 100);
+});
+document.addEventListener('mouseout', (e) => {
+  const el = e.target.closest?.('[data-tip]');
+  if (!el) return;
+  if (e.relatedTarget && el.contains(e.relatedTarget)) return; // 在元素内部挪不算离开
+  hideTip();
+});
+// 键盘用户走焦点：立刻出，不等那 100ms
+document.addEventListener('focusin', (e) => {
+  const el = e.target.closest?.('[data-tip]');
+  if (!el) return;
+  hideTip();
+  tipAnchor = el;
+  showTip(el);
+});
+document.addEventListener('focusout', hideTip);
+/* 滚动 / 换页 / 点下去一律立刻收起：提示是 fixed 定位、不会跟着元素走，
+   留着它就是一条对不上位置、还指着别处按钮的假信息。 */
+window.addEventListener('scroll', hideTip, true);
+document.addEventListener('click', hideTip);
 
 /* ------------------------------------------------- 自建下拉（全站公共组件） */
 
@@ -710,6 +849,137 @@ function createCombo({
 }
 
 /**
+ * 自建日期时间选择（定时任务「单次」那颗）。
+ *
+ * 为什么不用原生 `datetime-local`：那个日历是**浏览器画的** —— 位置一概改不了，
+ * 想右对齐、想让它待在弹窗里都办不到（2026-10-20 用户实报：它跑到了弹窗外面）。
+ * 跟原生 title 提示框换自绘是同一个病、同一个治法。
+ *
+ * 结构照全站 `.combo` 的路数：按钮 + 浮层，根节点也挂 `.combo`
+ * （点外面收起那条委托认的就是这个类，`openCombo` 的"同时只开一个"也跟着生效）。
+ * 浮层加 `.up.right`：这颗在弹窗右下角，往下开会顶出底边、往左对齐会探出右边。
+ *
+ * 用法：createDateTimePick({ mount, value, onChange })
+ *   value() 返回 `YYYY-MM-DDTHH:MM`（没选就是 ''）—— 跟 datetime-local 的取值同格式。
+ */
+function createDateTimePick({ mount, value = '', onChange = () => {} }) {
+  const root = document.createElement('div');
+  root.className = 'combo dt';
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'combo-btn';
+  const text = document.createElement('span');
+  text.className = 'combo-text';
+  btn.append(text, Object.assign(document.createElement('i'), { className: 'combo-chev' }));
+  const pop = document.createElement('div');
+  pop.className = 'combo-pop dt-pop is-hidden';
+  root.append(btn, pop);
+  mount.innerHTML = '';
+  mount.append(root);
+
+  const pad = (n) => String(n).padStart(2, '0');
+  // cur = 已选值；null = 还没选（按钮上写「选个时间」）
+  let cur = null;
+  let view = { y: 0, m: 1 }; // 日历正在看的月份（跟已选值分开：翻页不等于改值）
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(value)) {
+    const d = new Date(value);
+    cur = { y: d.getFullYear(), m: d.getMonth() + 1, d: d.getDate(), hh: d.getHours(), mm: d.getMinutes() };
+  }
+
+  const fmt = () => (cur ? `${cur.y}-${pad(cur.m)}-${pad(cur.d)} ${pad(cur.hh)}:${pad(cur.mm)}` : '选个时间');
+  const iso = () => (cur ? `${cur.y}-${pad(cur.m)}-${pad(cur.d)}T${pad(cur.hh)}:${pad(cur.mm)}` : '');
+  const set = (patch) => {
+    cur = { ...(cur ?? { hh: 9, mm: 0 }), ...patch };
+    text.textContent = fmt();
+    onChange(iso());
+  };
+
+  const close = () => {
+    pop.classList.add('is-hidden');
+    if (openCombo === api) openCombo = null;
+  };
+  const open = () => {
+    if (openCombo && openCombo !== api) openCombo.close();
+    openCombo = api;
+    const base = cur ?? (() => { const n = new Date(); return { y: n.getFullYear(), m: n.getMonth() + 1 }; })();
+    view = { y: base.y, m: base.m };
+    paint();
+    pop.classList.remove('is-hidden');
+    // 浮层高（日历 5~6 行），`.up` 往上开也可能顶出弹窗顶 —— 量一把，超界就整体下移，
+    // 宁可盖住按钮也不出弹窗（用户要的底线就是"别跑出去"）。每次打开都重算，弹窗大小会变。
+    pop.style.transform = '';
+    const dlgR = root.closest('dialog')?.getBoundingClientRect();
+    const pr = pop.getBoundingClientRect();
+    if (dlgR && pr.top < dlgR.top + 8) pop.style.transform = `translateY(${Math.round(dlgR.top + 8 - pr.top)}px)`;
+  };
+  btn.onclick = () => (pop.classList.contains('is-hidden') ? open() : close());
+
+  const paint = () => {
+    const first = new Date(view.y, view.m - 1, 1);
+    const lead = (first.getDay() + 6) % 7; // 表头周一起头（跟国内习惯一致）
+    const days = new Date(view.y, view.m, 0).getDate();
+    const prevDays = new Date(view.y, view.m - 1, 0).getDate();
+    const now = new Date();
+    const isToday = (d) => now.getFullYear() === view.y && now.getMonth() + 1 === view.m && now.getDate() === d;
+    let cells = '';
+    for (let i = lead - 1; i >= 0; i -= 1) cells += `<span class="dt-day out">${prevDays - i}</span>`;
+    for (let d = 1; d <= days; d += 1) {
+      const on = cur && cur.y === view.y && cur.m === view.m && cur.d === d;
+      cells += `<button type="button" class="dt-day ${on ? 'on' : isToday(d) ? 'today' : ''}" data-d="${d}">${d}</button>`;
+    }
+    const tail = (7 - ((lead + days) % 7)) % 7; // 尾部补齐整周，日历高度不跳动
+    for (let i = 1; i <= tail; i += 1) cells += `<span class="dt-day out">${i}</span>`;
+
+    const opt = (n, sel) => `<option value="${n}" ${n === sel ? 'selected' : ''}>${pad(n)}</option>`;
+    const hours = Array.from({ length: 24 }, (_, i) => opt(i, cur?.hh ?? 9)).join('');
+    const mins = Array.from({ length: 60 }, (_, i) => opt(i, cur?.mm ?? 0)).join('');
+
+    pop.innerHTML = `
+      <div class="dt-head">
+        <button type="button" class="dt-nav" data-nav="-1" aria-label="上个月">‹</button>
+        <span class="dt-title">${view.y} 年 ${view.m} 月</span>
+        <button type="button" class="dt-nav" data-nav="1" aria-label="下个月">›</button>
+      </div>
+      <div class="dt-week">${'一二三四五六日'.split('').map((c) => `<span>${c}</span>`).join('')}</div>
+      <div class="dt-grid">${cells}</div>
+      <div class="dt-time">
+        <select aria-label="时">${hours}</select>
+        <span class="dt-colon">:</span>
+        <select aria-label="分">${mins}</select>
+      </div>
+      <div class="dt-foot">
+        <button type="button" class="dt-clear">清除</button>
+        <button type="button" class="dt-today">今天</button>
+      </div>`;
+
+    pop.querySelectorAll('[data-nav]').forEach((b) => {
+      b.onclick = () => {
+        const d = new Date(view.y, view.m - 1 + Number(b.dataset.nav), 1); // 越年/越月交给 Date 自己进位
+        view = { y: d.getFullYear(), m: d.getMonth() + 1 };
+        paint();
+      };
+    });
+    pop.querySelectorAll('[data-d]').forEach((b) => {
+      b.onclick = () => set({ y: view.y, m: view.m, d: Number(b.dataset.d) });
+    });
+    const [hSel, mSel] = pop.querySelectorAll('.dt-time select');
+    hSel.onchange = () => set({ hh: Number(hSel.value) });
+    mSel.onchange = () => set({ mm: Number(mSel.value) });
+    pop.querySelector('.dt-clear').onclick = () => { cur = null; text.textContent = fmt(); onChange(iso()); paint(); };
+    pop.querySelector('.dt-today').onclick = () => {
+      const n = new Date();
+      set({ y: n.getFullYear(), m: n.getMonth() + 1, d: n.getDate() });
+      view = { y: cur.y, m: cur.m };
+      paint();
+    };
+  };
+
+  const api = { el: root, value: iso, close };
+  text.textContent = fmt();
+  return api;
+}
+
+/**
  * 「取消」这一类按钮：**只负责关弹窗，不是提交**。
  *
  * 为什么必须显式标 `type="button"`（index.html 里那十几处都标了）：
@@ -810,6 +1080,72 @@ function renderMarkdown(src) {
   return out.join('\n').replace(/\u0000(\d+)\u0000/g, (_m, i) => blocks[Number(i)]);
 }
 const initial = (s) => (String(s || '?').trim()[0] || '?').toUpperCase();
+
+/*
+ * 运行时 / 外部件的品牌图标（2026-10-20，用户截图报「图标显示看不清」）。
+ *
+ * 为什么不再用首字母：Codex CLI 与 Claude Code 都是「C」，两个方块长得一模一样，
+ * 图标没起到"一眼认出是哪家"的作用；深蓝渐变上的小字母本身也糊。
+ * 现在：认识的牌子给**品牌图形**（Simple Icons 的单色 path，CC0 许可，24×24；
+ * magpie 没有公开品牌标，用一枚自绘的喜鹊剪影）。认不出的牌子才退回首字母。
+ *
+ * **这里只管形状，颜色一律不在这里**（2026-10-20 收口）：底色/字色是 style.css 里
+ * `--tile-*` 的一对 token，按 `data-brand` 命中，浅深两套主题各有一组值。
+ * 上一版把浅色调内联写在这儿，切到深色主题就成了一排亮块 —— 别再内联颜色。
+ */
+const CLI_BRANDS = {
+  codex:  { svg: '<path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z"/>' },
+  claude: { svg: '<path d="m4.7144 15.9555 4.7174-2.6471.079-.2307-.079-.1275h-.2307l-.7893-.0486-2.6956-.0729-2.3375-.0971-2.2646-.1214-.5707-.1215-.5343-.7042.0546-.3522.4797-.3218.686.0608 1.5179.1032 2.2767.1578 1.6514.0972 2.4468.255h.3886l.0546-.1579-.1336-.0971-.1032-.0972L6.973 9.8356l-2.55-1.6879-1.3356-.9714-.7225-.4918-.3643-.4614-.1578-1.0078.6557-.7225.8803.0607.2246.0607.8925.686 1.9064 1.4754 2.4893 1.8336.3643.3035.1457-.1032.0182-.0728-.164-.2733-1.3539-2.4467-1.445-2.4893-.6435-1.032-.17-.6194c-.0607-.255-.1032-.4674-.1032-.7285L6.287.1335 6.6997 0l.9957.1336.419.3642.6192 1.4147 1.0018 2.2282 1.5543 3.0296.4553.8985.2429.8318.091.255h.1579v-.1457l.1275-1.706.2368-2.0947.2307-2.6957.0789-.7589.3764-.9107.7468-.4918.5828.2793.4797.686-.0668.4433-.2853 1.8517-.5586 2.9021-.3643 1.9429h.2125l.2429-.2429.9835-1.3053 1.6514-2.0643.7286-.8196.85-.9046.5464-.4311h1.0321l.759 1.1293-.34 1.1657-1.0625 1.3478-.8804 1.1414-1.2628 1.7-.7893 1.36.0729.1093.1882-.0183 2.8535-.607 1.5421-.2794 1.8396-.3157.8318.3886.091.3946-.3278.8075-1.967.4857-2.3072.4614-3.4364.8136-.0425.0304.0486.0607 1.5482.1457.6618.0364h1.621l3.0175.2247.7892.522.4736.6376-.079.4857-1.2142.6193-1.6393-.3886-3.825-.9107-1.3113-.3279h-.1822v.1093l1.0929 1.0686 2.0035 1.8092 2.5075 2.3314.1275.5768-.3218.4554-.34-.0486-2.2039-1.6575-.85-.7468-1.9246-1.621h-.1275v.17l.4432.6496 2.3436 3.5214.1214 1.0807-.17.3521-.6071.2125-.6679-.1214-1.3721-1.9246L14.38 17.959l-1.1414-1.9428-.1397.079-.674 7.2552-.3156.3703-.7286.2793-.6071-.4614-.3218-.7468.3218-1.4753.3886-1.9246.3157-1.53.2853-1.9004.17-.6314-.0121-.0425-.1397.0182-1.4328 1.9672-2.1796 2.9446-1.7243 1.8456-.4128.164-.7164-.3704.0667-.6618.4008-.5889 2.386-3.0357 1.4389-1.882.929-1.0868-.0062-.1579h-.0546l-6.3385 4.1164-1.1293.1457-.4857-.4554.0608-.7467.2307-.2429 1.9064-1.3114Z"/>' },
+  dsh:    { svg: '<path d="M23.748 4.651c-.254-.124-.364.113-.512.233-.051.04-.094.09-.137.137-.372.397-.806.657-1.373.626-.829-.046-1.537.214-2.163.848-.133-.782-.575-1.248-1.247-1.548-.352-.155-.708-.311-.955-.65-.172-.24-.219-.509-.305-.774-.055-.16-.11-.323-.293-.35-.2-.031-.278.136-.356.276-.313.572-.434 1.202-.422 1.84.027 1.436.633 2.58 1.838 3.393.137.094.172.187.129.323-.082.28-.18.553-.266.833-.055.179-.137.218-.328.14a5.5 5.5 0 0 1-1.737-1.179c-.857-.828-1.631-1.743-2.597-2.46a12 12 0 0 0-.689-.47c-.985-.957.13-1.743.387-1.836.27-.098.094-.433-.778-.428-.872.003-1.67.295-2.687.685a3 3 0 0 1-.465.136 9.6 9.6 0 0 0-2.883-.101c-1.885.21-3.39 1.1-4.497 2.622C.082 8.776-.231 10.854.152 13.02c.403 2.284 1.568 4.175 3.36 5.653 1.857 1.533 3.997 2.284 6.438 2.14 1.482-.085 3.132-.284 4.994-1.86.47.234.962.328 1.78.398.629.058 1.235-.031 1.705-.129.735-.155.684-.836.418-.961-2.155-1.004-1.682-.595-2.112-.926 1.095-1.295 2.768-3.598 3.284-6.733.05-.346.115-.834.108-1.114-.004-.171.035-.238.23-.257a4.2 4.2 0 0 0 1.545-.475c1.397-.763 1.96-2.016 2.093-3.517.02-.23-.004-.467-.247-.588M11.58 18.168c-2.088-1.642-3.101-2.183-3.52-2.16-.39.024-.32.472-.234.763.09.288.207.487.371.74.114.167.192.416-.113.603-.673.416-1.842-.14-1.897-.168-1.361-.801-2.5-1.86-3.301-3.306-.775-1.393-1.225-2.888-1.299-4.482-.02-.385.094-.522.477-.592a4.7 4.7 0 0 1 1.53-.038c2.131.311 3.946 1.264 5.467 2.774.868.86 1.525 1.887 2.202 2.89.72 1.066 1.494 2.082 2.48 2.915.348.291.626.513.892.677-.802.09-2.14.109-3.055-.615zm1.001-6.44a.306.306 0 0 1 .415-.287.3.3 0 0 1 .113.074.3.3 0 0 1 .086.214c0 .17-.136.307-.308.307a.303.303 0 0 1-.306-.307m3.11 1.596c-.2.081-.4.151-.591.16a1.25 1.25 0 0 1-.798-.254c-.274-.23-.47-.358-.551-.758a1.7 1.7 0 0 1 .015-.588c.07-.327-.007-.537-.238-.727-.188-.156-.426-.199-.689-.199a.6.6 0 0 1-.254-.078.253.253 0 0 1-.114-.358 1 1 0 0 1 .192-.21c.356-.202.767-.136 1.146.016.352.144.618.408 1.001.782.392.451.462.576.685.915.176.264.336.536.446.848.066.194-.02.353-.25.45"/>' },
+  magpie: { svg: '<path fill-rule="evenodd" d="M15.7 4.1a3.3 3.3 0 0 0-3.25 2.77c-2.2.55-4.05 2-5.2 4.02-.9 1.58-2.2 2.95-3.8 4.03-.52.35-.95 1-1.15 1.72-.14.53.4 1 .9.79 2.05-.8 3.5-.5 4.75.3 1.45.93 3.02 1.31 4.75.94 3.55-.78 5.95-3.85 5.95-7.55v-1.4l2.05-.92c.58-.26.6-1.08.03-1.37l-2.28-1.1A3.3 3.3 0 0 0 15.7 4.1Zm.85 2.3a1.05 1.05 0 1 1 0 2.1 1.05 1.05 0 0 1 0-2.1Z"/>' },
+};
+
+/** 运行时 / 外部件那一行的图标：kind 是协议族 id（runtimes.mjs 的 FAMILIES）或外部件 id（externals.mjs 的 EXTERNALS）；
+    认不出的退回首字母块 —— 后面新加 CLI 时先把 id 登记进 CLI_BRANDS，界面就自动带图标。 */
+function cliAvatar(kind, label) {
+  const b = CLI_BRANDS[kind];
+  if (!b) return `<div class="avatar cli">${esc(initial(label))}</div>`;
+  return `<div class="avatar cli" data-brand="${esc(kind)}" title="${esc(label ?? '')}"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">${b.svg}</svg></div>`;
+}
+
+/**
+ * 头像的内联配色（Linear 语汇，2026-10-19）。
+ *
+ * 为什么不再"所有人同一个灰"：Linear 的注释头像会用一小组固定的低饱和色按人分配。
+ * 一开始我把它统一成 `--chip` 灰底，截图一看通讯录里 7 行头像**全一样**，
+ * 眼睛完全没有落点、认人只能逐行读字 —— 这是把 Linear 的"克制"做成了"无信息"。
+ *
+ * 做法：一组**低饱和**色相（不是高饱和的彩色圆），按名字哈希稳定分配 ——
+ * 同一个人永远同色，换机器/刷新也不变（跟工作台磁贴的"顺序发色"不同：
+ * 人是有稳定身份的，颜色跟着人走才对）。
+ * 明度取 26%：白字压上去 ≥ 4.5（这批色相里最亮的那个也过线）。
+ */
+const AV_HUES = [210, 262, 190, 330, 292, 172, 240, 315];
+function avatarStyle(name) {
+  const s = String(name || '?');
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 9973;
+  const hue = AV_HUES[h % AV_HUES.length];
+  return `style="background:hsl(${hue} 34% 26%);border-color:transparent;color:#fff"`;
+}
+
+/**
+ * 小头像（对话行 / 群设置 / 任务评论）：三档底色里按名字稳定挑一档。
+ *
+ * 为什么不再靠 `--av-dim` 那组深靛蓝渐变：字是 `--dim`（灰蓝）压在深靛蓝上，
+ * 用户直接截图报「看不清字」—— 字和底色同一色系，本来就糊。
+ * 现在三档底色 + 近白字（--av-sm-fg），名字本身已经不承担"区分身份"的职责，
+ * 只负责让眼睛有个落点、不同的人不是一模一样。
+ * 我自己那行（me）走灰底 + --text 字，靠气泡右侧对齐和位置区分，不额外上色。
+ */
+const AV_TONES = [1, 2, 3, 4];
+function smAvatar(name, extra = '') {
+  const s = String(name || '?');
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 9973;
+  const tone = AV_TONES[h % AV_TONES.length];
+  return `<div class="avatar sm${extra ? ' ' + extra : ''}" data-tone="${tone}">${esc(initial(s))}</div>`;
+}
 const hhmm = (iso) => { try { return new Date(iso).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }); } catch { return ''; } };
 const dt = (iso) => { try { return new Date(iso).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch { return ''; } };
 const cut = (s, n = 34) => (String(s ?? '').replace(/\s+/g, ' ').slice(0, n));
@@ -906,7 +1242,8 @@ async function load() {
   S.me = s.me;
   S.skills = sk.skills;
   S.skillsRoot = sk.skillsRoot;
-  S.archivedCount = s.archivedCount ?? 0;
+  S.hiddenConversations = s.hiddenConversations ?? [];
+  S.groups = s.groups ?? [];
   // 已发布的流程（工作台要显示）。拿不到就当没有，别让整个 load 挂掉
   try {
     S.flowPublished = (await api('/api/workflows')).published ?? [];
@@ -961,6 +1298,12 @@ function setNav(nav, opts = {}) {
   S.nav = nav;
   // 一级栏只是兜底：具体页面的入口函数会在摆好后调 setRoute 覆盖成更具体的那个
   S.route = null;
+  /*
+   * 「已归档」是消息模块里的**子视图**（左栏换一份列表），离开消息、或走任何正常的
+   * setNav('messages') 都要退出它 —— 只有 enterArchiveView 自己带 keepArchiveView 进来。
+   * 不这样收口的话，从归档视图点去别处再回来，左栏还停在归档列表上。
+   */
+  if (!opts.keepArchiveView) S.archivedView = false;
   // 离开工作台那一栏 = 离开项目列表 / 项目看板 / 全局面板 —— 顺手清掉。
   // 不清的话它们会一直挂着：位置记里留着一个"在看板"（刷新时那条路会被优先捡起来），
   // 而从看板点会话卡会切到消息页（那时看板状态就该结束）。这些标志只对工作台那一栏有意义。
@@ -974,12 +1317,13 @@ function setNav(nav, opts = {}) {
   // 否则看着像"哪儿都没选中"。
   const hl = nav === 'workflows' ? 'plugins' : nav;
   document.querySelectorAll('.nav-btn').forEach((b) => b.classList.toggle('active', b.dataset.nav === hl));
-  $('listTitle').textContent =
+  setListTitle(
     nav === 'messages' ? '消息'
     : nav === 'contacts' ? '通讯录'
-    : nav === 'workflows' ? '工作流'
+    : nav === 'workflows' ? '流程编排'
     : nav === 'plugins' ? '工作台'
-    : '设置';
+    : '设置',
+  );
   $('listAction').textContent = '＋';
   $('listAction').title =
     nav === 'contacts' ? '发起群聊 / 添加数字员工' : '新建项目群';
@@ -1013,10 +1357,28 @@ function setNav(nav, opts = {}) {
 
 /* ---------------------------------------------------------------- 设置 */
 
+/**
+ * 设置左侧那一列分节：左栏列表用这一份（顺序 + 标题 + 副标题）。
+ * 左栏顶上**只写模块名「设置」**，当前是哪个分节写在**右边**的页头里 ——
+ * 跟消息/通讯录同一个主从布局（左列是导航，右面是当前页）。
+ */
+const SETTINGS_SECTIONS = [
+  ['prefs', '偏好设置', '主题与外观'],
+  ['quota', '额度', '每个模型每天最多用多少'],
+  ['runtimes', '运行时', 'agent CLI 的路径与开关'],
+  ['plugins', '插件', '扩展点'],
+  ['skills', '技能', '给数字员工用的能力包'],
+  ['code', '代码托管', '连接 GitHub、接入仓库'],
+];
+
 function openSettings(section) {
   setRoute('settings', { section: section || S.settingsSection || 'prefs' });
   S.settingsSection = section || 'prefs';
   showView('settings');
+  /* 左栏顶上只写「设置」：这一列本身就是设置的分节列表，当前分节是右边的页面标题。
+     2026-10-19 用户截图：「这个二级标题应该放在右边」—— 之前写成「设置 › 偏好设置」，
+     等于把右边页面的标题挂在左边的列表头上，切换分节时左栏标题跟着跳，列表反而不像导航了。 */
+  setListTitle('设置');
   renderList();
   if (S.settingsSection === 'runtimes') return renderRuntimes();
   if (S.settingsSection === 'plugins') return renderPlugins();
@@ -1031,7 +1393,7 @@ function openSettings(section) {
     ['system', '跟随系统'],
   ];
   $('settingsView').innerHTML = `
-    <div class="detail-head"><b>偏好设置</b></div>
+    ${headRow('<b>偏好设置</b>')}
     <div class="detail-body">
       <section class="set-sec">
         <div class="set-head"><b>外观</b><span class="set-tag">仅本设备</span></div>
@@ -1080,7 +1442,7 @@ async function renderQuota() {
     st = await api('/api/quota');
   } catch (err) {
     $('settingsView').innerHTML =
-      `<div class="detail-head"><b>额度</b></div><div class="empty">${failHtml(err)}</div>`;
+      `${headRow('<b>额度</b>')}<div class="empty">${failHtml(err)}</div>`;
     return;
   }
   paintQuota(st);
@@ -1096,7 +1458,7 @@ function paintQuota(st) {
   const withLimit = rows.filter((r) => r.limitTokens || r.limitRuns).length;
 
   $('settingsView').innerHTML = `
-    <div class="detail-head"><b>额度</b></div>
+    ${headRow('<b>额度</b>')}
     <div class="detail-body">
       <section class="set-sec">
         <div class="set-head"><b>今天</b><span class="set-tag">本机时区 00:00 起算</span></div>
@@ -1262,8 +1624,7 @@ async function renderPlugins() {
       api('/api/plugins'),
     ]);
   } catch (err) {
-    $('settingsView').innerHTML =
-      `<div class="detail-head"><b>插件</b></div><div class="empty">${failHtml(err)}</div>`;
+    $('settingsView').innerHTML = `${headRow('<b>插件</b>')}<div class="empty">${failHtml(err)}</div>`;
     return;
   }
   S.connectors = list.connectors ?? [];
@@ -1279,7 +1640,7 @@ async function renderPlugins() {
   };
 
   $('settingsView').innerHTML = `
-    <div class="detail-head"><b>插件</b></div>
+    ${headRow('<b>插件</b>')}
     <div class="detail-body">
       <div class="seg plg-tabs">
         ${PLG_TABS.map(
@@ -1670,49 +2031,133 @@ $('cOk').onclick = async (e) => {
 
 /* ----------------------------------------------------- 运行时：设备 → CLI → 详情 */
 
-const rtLoading = (title) =>
-  `<div class="detail-head"><b>${esc(title)}</b><span class="dim" style="font-size:12px">加载中…</span></div>`;
+// 加载态：右页头先写当前页标题（左栏只写「设置」），正文里说一声
+const rtLoading = (title) => `${headRow(`<b>${esc(title)}</b>`)}<div class="empty" style="padding:24px 4px">加载中…</div>`;
 
 /**
- * 可点的面包屑。
- * items: [{ label, to? }]；to 是 'devices' | 'device'，省略即"当前层"（不可点）。
- * 有了它就不需要"返回"按钮了 —— 而且一眼看得出自己在第几层。
+ * 页头的「← 工作台」—— **2026-10-19 起不再调用**（用户要求统一去掉，见 headRow 的注释）。
+ *
+ * 当初加它的理由记在这儿，免得以后有人"发现"它没被用就删掉、过了半年又想不明白为什么要加：
+ * 这些页的左栏一进来就换成了自己的列表，原来左栏顶上那条「‹ 工作台」就没了，
+ * 只能靠页头那段灰面包屑点回去 —— 而面包屑第一段是灰的，一眼看不出能点。
+ * 后来验证下来：**左栏那几行本身就够用**，按钮是重复入口。所以撤掉按钮，只留这份实现。
+ */
+function backToWorkbench(label = '工作台') {
+  return `<button class="icon-btn head-back" data-back-wb title="回${esc(label)}">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 6l-6 6 6 6" />
+            </svg>
+            <span>${esc(label)}</span>
+          </button>`;
+}
+
+/**
+ * 页头统一结构：左边标题（可以是一段 HTML，比如带徽标 / 输入框），右边按钮组。
+ *
+ * **不要返回按钮**（2026-10-19 用户第二次指着它说「统一去掉这个按钮」）。
+ * 理由跟项目页那次一样，只是现在推广到全部子页：**每一页的左栏都已经写着"上一级"**
+ *   · 项目 / 看板 —— 左栏是项目清单
+ *   · 流程编排 / 流程记录 —— 左栏是流程模板 / 发起记录清单
+ *   · 定时任务 / 插件面板 —— 左栏是工具清单
+ * 想回哪儿都能直接点那一行，页头再放一枚「← 工作台」就是同一件事的第二个入口，
+ * 还白占页头最左边、把标题推得比别处靠右。
+ *
+ * 因此 `backToWorkbench` / `wireBackWb` 一对**保留但不再调用** ——
+ * 留着是因为它们把"哪一页该回哪"这条知识写下来了（任务卡回看板、看板回项目），
+ * 哪天要重新加回按钮，接线不用再猜一遍。
+ */
+function headRow(titleHtml, actionsHtml = '') {
+  return `<div class="detail-head head-row"><div class="head-title">${titleHtml || ''}</div>${
+    actionsHtml ? `<div class="head-actions">${actionsHtml}</div>` : ''
+  }</div>`;
+}
+
+/**
+ * 接线页头那枚「← 上级」—— **2026-10-19 起不再调用**（按钮已从 headRow 里撤掉）。
+ * 留着它是因为它把"哪一页回哪里"这条知识写下来了：任务卡回看板、看板回项目、
+ * 其余回工作台。哪天要把按钮加回来，直接接这一根，不用每页重猜一遍。
+ */
+function wireBackWb(root, back = () => openPlugins()) {
+  root.querySelector('[data-back-wb]')?.addEventListener('click', () => {
+    Promise.resolve()
+      .then(back)
+      .catch((e) => toast(e.message, 'error'));
+  });
+}
+
+/**
+ * 「上一级」点下去做什么 —— 面包屑的跳转表。
+ *
+ * 为什么要一张表 + 一次事件委托，而不是每处 `el.onclick = …`：
+ *   · 页面是随时重建的（十几处 innerHTML），逐个绑定既啰嗦又会漏；
+ *   · 页面里不该知道"怎么回项目/怎么回工作台"这些路由细节，写在这儿才好一起看。
+ *
+ * 值收一个 arg（比如「项目清单里选中它」）。指向的必须是**上一层**，不是"往回退一步"。
+ *
+ * ⚠️ 2026-10-19 设置 / 流程模块的面包屑撤掉之后，`settings` / `skills` / `flows`
+ *    三个键没有宿主了，已删。`devices` / `device` 2026-10-20 又加回来了：
+ *    运行时是多层页面（运行时 › 设备 › CLI），页头要用面包屑导航。
+ *    以后要在别处用，照原样加回来即可：settings→openSettings('prefs')、
+ *    skills→openSettings('skills')、flows→openWorkflows()。
+ */
+const CRUMB_GO = {
+  workbench: () => setNav('plugins'),   // 工作台宫格首页（点一级栏那条路，顺带收左栏）
+  contacts: () => setNav('contacts'),
+  // 消息：从「已归档」子视图的面包屑回主列表（setNav 默认就会清掉 archivedView）
+  messages: () => setNav('messages'),
+  // 工作台里的几处
+  // 带 arg 就是"项目清单里选中它"（面包屑里点某个项目的名字回到它的详情页）
+  projects: (id) => openProjectsPage(id ?? undefined),
+  board: () => openTaskBoard(),
+  // 运行时那两级：不是"分节"而是状态 —— 得先把 S.rtLevel 摆好，renderRuntimes 按它分发
+  devices: () => { S.rtLevel = 'devices'; S.rtDevice = null; S.rtRuntime = null; return renderRuntimes(); },
+  device: () => { S.rtLevel = 'device'; S.rtRuntime = null; return renderRuntimes(); },
+  // 设置子页（技能等）的面包屑回设置首页
+  settings: () => openSettings('prefs'),
+  // 技能详情的面包屑回技能列表
+  skills: () => openSettings('skills'),
+};
+
+// 一次委托，管全站所有面包屑。页面重建不用重新绑。
+document.addEventListener('click', (e) => {
+  const el = e.target.closest?.('[data-crumb-to]');
+  if (!el) return;
+  const go = CRUMB_GO[el.dataset.crumbTo];
+  if (!go) return;
+  e.preventDefault();
+  Promise.resolve()
+    .then(() => go(el.dataset.crumbArg ?? null))
+    .catch((err) => toast(err?.message ?? String(err), 'error'));
+});
+
+/**
+ * 可点的面包屑（2026-10-19 起全站子页页头都用它）。
+ *
+ * items: `[{ label, to?, arg? }]` —— 最后一段**不传 to**（那是当前位置，不该点）。
+ *   · `to` 是 `CRUMB_GO` 里的键，不是 URL；
+ *   · `arg` 给需要 id 的那种（比如回某个项目）。
+ *
+ * 层级只表达"我在哪一层"，不承担"后退"——所以别把上一级的上一级也塞进来凑数，
+ * 三层以内最好读；四层以上先想想是不是层级设计本身有问题。
  */
 function breadcrumb(items) {
   return `<nav class="crumb">${items
-    .map(
-      (it, i) =>
-        `${i ? '<span class="crumb-sep">›</span>' : ''}` +
-        (it.to
-          ? `<button class="crumb-btn" data-crumb-to="${it.to}">${esc(it.label)}</button>`
-          : `<span class="crumb-cur">${esc(it.label)}</span>`),
-    )
+    .map((it, i) => {
+      const sep = i ? '<span class="crumb-sep">›</span>' : '';
+      if (!it.to) return `${sep}<span class="crumb-cur">${esc(it.label)}</span>`;
+      return (
+        `${sep}<button type="button" class="crumb-btn" data-crumb-to="${esc(it.to)}"` +
+        `${it.arg != null ? ` data-crumb-arg="${esc(it.arg)}"` : ''}>${esc(it.label)}</button>`
+      );
+    })
     .join('')}</nav>`;
 }
 
-/** 面包屑上任意一段的跳转 */
-function wireBreadcrumb() {
-  $('settingsView').querySelectorAll('[data-crumb-to]').forEach((el) => {
-    el.onclick = () => {
-      const to = el.dataset.crumbTo;
-      // 运行时那两级要先摆好 S.rtLevel —— renderRuntimes 是按它分发的
-      if (to === 'devices' || to === 'device') {
-        if (to === 'devices') {
-          S.rtLevel = 'devices';
-          S.rtDevice = null;
-          S.rtRuntime = null;
-        } else {
-          S.rtLevel = 'device';
-          S.rtRuntime = null;
-        }
-        return renderRuntimes();
-      }
-      // 其余当成**设置分节**（比如技能页的「技能 › xxx」那段）。
-      // 面包屑本来只有运行时页在用，所以这里原来写死了 devices/device 两种跳法。
-      openSettings(to);
-    };
-  });
-}
+/**
+ * 「局域网」那一行的状态话术已经不要了（2026-10-20 用户圈掉「已经开着 ✓」）：
+ * 开/关由开关本身表达，"改了要点重启"由上面那句说明承担 —— 卡上不再有第三句话。
+ */
 
 async function renderRuntimes() {
   if (S.rtLevel === 'cli' && S.rtDevice && S.rtRuntime) return renderCliDetail();
@@ -1725,14 +2170,14 @@ async function renderDeviceList() {
   S.rtLevel = 'devices';
   S.rtDevice = null;
   S.rtRuntime = null;
+  // 左栏只写「设置」（在 openSettings 里），这一页的标题「运行时」在右页头
   $('settingsView').innerHTML = rtLoading('运行时');
 
   let list = [];
   try {
     list = (await api('/api/devices')).devices;
   } catch (err) {
-    $('settingsView').innerHTML =
-      `<div class="detail-head"><b>运行时</b></div><div class="empty">${failHtml(err)}</div>`;
+    $('settingsView').innerHTML = `${headRow('<b>运行时</b>')}<div class="empty">${failHtml(err)}</div>`;
     return;
   }
   // 局域网开关的现状（旧后端没这条路由 → 按默认画，页面不能因此白屏 ✗）
@@ -1753,35 +2198,28 @@ async function renderDeviceList() {
     : `<section class="fx" style="margin-top:26px">
         <label>局域网</label>
         <div class="hint">
-          改完要<b>重启班底</b>才生效。
+          修改状态后，点击重启按钮生效
         </div>
         <div class="row-item">
           <div class="avatar">网</div>
           <div class="who">
             <b>允许局域网内的机器加入</b>
-            <div class="sub">${
-              lan.allowLan
-                ? lan.boundLan
-                  ? '已经开着 ✓'
-                  : '已开，<b>等重启生效</b>（现在还是只听本机）'
-                : '关着 —— 只有本机能用'
-            }</div>
-            ${lan.boundLan && lan.urls?.length ? `<div class="sub">别的机器连：${lan.urls.map((u) => `<code>${esc(u)}</code>`).join(' ')}</div>` : ''}
-            ${
-              /* 改了还没生效时给一颗按钮 —— 不用再"关掉软件重开"（2026-10-16 用户提的） */
-              lan.restartNeeded ? `<button class="btn-sm primary" id="lanRestart" style="margin-top:8px">重启生效</button>` : ''
-            }
+            ${lan.boundLan && lan.urls?.length ? `<div class="sub">连接地址：${lan.urls.map((u) => `<code>${esc(u)}</code>`).join(' ')}</div>` : ''}
           </div>
-          <label class="switch" title="${lan.allowLan ? '关掉它（重启后回到只有本机能用）' : '打开它（重启后局域网里的机器才能加入）'}">
+          ${
+            /* 「重启」**常显**（2026-10-20 用户："重启按钮要一直显示"）：原来只在
+               "改了还没生效"时冒出来，用户找不到它。摆在**右侧**、开关左边（同日："按钮放右边"） */
+            `<button class="btn-sm primary" id="lanRestart">重启</button>`
+          }
+          <!-- 开关不带悬停提示（2026-10-20 用户："悬停提示去掉"）：状态由开关和上面那句说明承担 -->
+          <label class="switch">
             <input type="checkbox" id="lanToggle" ${lan.allowLan ? 'checked' : ''} /><span></span>
           </label>
         </div>
       </section>`;
 
   $('settingsView').innerHTML = `
-    <div class="detail-head">
-      ${breadcrumb([{ label: '运行时' }])}
-    </div>
+    ${headRow('<b>运行时</b>')}
     <div class="detail-body">
       <section class="fx">
         <!-- 标题右边右对齐：跟「识别本机运行时」同一个做法（.fx-head 就是 flex + space-between） -->
@@ -1835,19 +2273,22 @@ async function renderDeviceList() {
          * `api()` 把 opts 原样交给 fetch，而 fetch 收到对象会变成字符串 `"[object Object]"` ✗，
          * 也没有 Content-Type → 服务端解析不出来 → **400** → 开关一点就回弹（用户报的"打不开"）。
          * 旁边的 `post()` 就是为这个存在的。
+         *
+         * 成功后**什么都不用改**（2026-10-20）—— 状态话术整行已删（用户圈掉「已经开着 ✓」），
+         * 「重启」按钮常显。别再 `renderRuntimes()` 整页重画：DOM 全换一遍就是用户报过的"闪一下"。
          */
         await post('/api/lan', { allowLan: allow });
       } catch {
         e.target.checked = !allow; // api() 已经提示过了，把开关拨回去
         return;
       }
-      renderRuntimes(); // 重画：会显示"等重启生效"
     };
   }
 
   /*
-   * 「重启生效」：让控制面**原地换监听**（进程不退出 ✓），等它回来再刷这一页 ✓。
-   * 为什么不叫"重启班底"：用户要的不是重启这个词，是"让刚才那个开关生效" ✓。
+   * 「重启」：让控制面**原地换监听**（进程不退出 ✓），等它回来再刷这一页 ✓。
+   * 按钮文案就叫「重启」（2026-10-20 用户定的）：短，动作清楚；"生效"那层意思
+   * 由下面那句「等重启生效」的说明承担，不重复写在按钮上。
    */
   const lr = $('lanRestart');
   if (lr) {
@@ -1858,7 +2299,7 @@ async function renderDeviceList() {
         await post('/api/restart', {});
       } catch {
         lr.disabled = false;
-        lr.textContent = '重启生效';
+        lr.textContent = '重启';
         return; // api() 已经提示过了
       }
       const t0 = Date.now();
@@ -2299,7 +2740,7 @@ function externalsHtml(dev) {
        */
       const lastFail = !busy && dev.task?.done && dev.task.status !== '完成' && dev.task.family === c.id ? dev.task : null;
       return `<div class="row-item ${health.cls === 'tag-ok' ? '' : 'off'}" data-ext-row="${esc(c.id)}">
-        <div class="avatar cli">${esc(initial(c.label))}</div>
+        ${cliAvatar(c.id, c.label)}
         <div class="who">
           <b>${esc(c.label)}<em class="${health.cls}" title="${esc(health.why)}">${esc(health.text)}</em>${panelBadge}</b>
           ${
@@ -2385,6 +2826,8 @@ function externalsHtml(dev) {
  * 装上哪条命令在这"。判断依据是**节点自报的清单**（不是控制面本机的探测：那是两台机器）。
  */
 async function renderNodeDetail(dev) {
+  // 左栏只写「设置」（在 openSettings 里）；这台机器的名字/状态/动作都在正文的 devHeadHtml 里，
+  // 右页头不再重复一遍。
   const rts = dev.runtimes ?? [];
   // 族清单拉不到就不显示"未安装"那一段 —— 但这一页照常渲染，别因为一个附加块白屏
   let families = [];
@@ -2409,7 +2852,7 @@ async function renderNodeDetail(dev) {
     // 上次没成的那件（同外部件那行：失败也要留痕，不然用户不知道上次为什么没成）
     const lastFail = !busy && dev.task?.done && dev.task.status !== '完成' && dev.task.family === f.id ? dev.task : null;
     return `<div class="row-item off" data-rt-row="${esc(f.id)}">
-      <div class="avatar cli">${esc(initial(f.label))}</div>
+      ${cliAvatar(f.id, f.label)}
       <div class="who">
         <b>${esc(f.label)}</b>
         ${
@@ -2445,9 +2888,7 @@ async function renderNodeDetail(dev) {
   };
 
   $('settingsView').innerHTML = `
-    <div class="detail-head">
-      ${breadcrumb([{ label: '运行时', to: 'devices' }, { label: dev.label }])}
-    </div>
+    ${headRow(breadcrumb([{ label: '运行时', to: 'devices' }, { label: dev.label }]))}
     <div class="detail-body">
       ${devHeadHtml(dev, {
         badges: `<span class="${dev.online ? 'pill-ok' : 'pill'}">${dev.online ? '在线' : '离线'}</span><span class="pill">远程节点</span>`,
@@ -2477,7 +2918,7 @@ async function renderNodeDetail(dev) {
                   (r) => {
                     const h = runtimeHealth(r);
                     return `<div class="row-item ${h.cls === 'tag-ok' ? '' : 'off'}">
-              <div class="avatar cli">${esc(initial(r.label))}</div>
+              ${cliAvatar(r.family ?? r.id, r.label)}
               <div class="who" title="${esc(r.path)}">
                 <b>${esc(r.label)}${healthTag(r)}</b>
                 ${h.showPath ? `<div class="sub">${esc(r.path)}</div>` : ''}
@@ -2550,7 +2991,6 @@ async function renderNodeDetail(dev) {
   wireCopyButtons(); // 未安装那段的「复制命令」
   wireInstallRuntime(dev); // 未安装那段的「在这台机器上安装」—— 走节点的领活通道，命令在节点那侧查表
   wireExternalActions(dev); // 外部件那颗按钮：安装 / 重启 / 重装（按状态给，只给一颗）
-  wireBreadcrumb();
   // 有活在做就自己刷（进度是服务端的事实，不是点击时记的定时器）
   scheduleTaskPoll(dev);
 }
@@ -2760,7 +3200,7 @@ function wireInstallRuntime(dev) {
  * 「安装」弹窗是唯一还可能出现手填的入口（"我装了、但你没认出来"），正常流程碰不到。
  */
 async function renderDeviceDetail() {
-  $('settingsView').innerHTML = rtLoading('设备');
+  $('settingsView').innerHTML = rtLoading('运行时');
 
   let dev;
   let families;
@@ -2772,10 +3212,13 @@ async function renderDeviceDetail() {
       api('/api/runtime-families').then((f) => f.families),
     ]);
   } catch (err) {
-    $('settingsView').innerHTML =
-      `<div class="detail-head"><b>设备</b></div><div class="empty">${failHtml(err)}</div>`;
+    $('settingsView').innerHTML = `${headRow('<b>运行时</b>')}<div class="empty">${failHtml(err)}</div>`;
     return;
   }
+
+  /* 运行时是**多层**的（运行时 › 设备 › CLI）：页头用面包屑，上级能直接点回去
+     （2026-10-20 用户截图：「运行时这个功能，下面有多层页面，应该改成面包屑模式」）。
+     左栏仍是「设置」的分节列表，所以面包屑从「运行时」这一层起 —— 不再写成"设置 › 运行时 › …"。 */
 
   // 远程节点：这一版只报到，它的运行时是只读的 —— 别让它掉进下面那套"改本机"的交互里
   // 远程节点：交给它自己那页（那边要拉族清单，所以是异步的）
@@ -2807,7 +3250,7 @@ async function renderDeviceDetail() {
     // 路径只在"路径本身有问题"时摆出来 —— 见 runtimeHealth 的 showPath
     const sub = h.showPath ? `<div class="sub">${esc(r.path)}</div>` : '';
     return `<div class="row-item ${h.cls === 'tag-ok' ? '' : 'off'}">
-      <div class="avatar cli">${esc(initial(r.label))}</div>
+      ${cliAvatar(r.family ?? r.id, r.label)}
       <div class="who" data-open-cli="${esc(r.id)}" style="cursor:pointer" title="${esc(r.path)}">
         <b>${esc(r.label)}${ver ? `<em class="tag-ok">${esc(ver)}</em>` : ''}${healthTag(r)}${healedTag(r)}</b>
         ${sub}
@@ -2824,7 +3267,7 @@ async function renderDeviceDetail() {
     const ver = verOf.get(f.id);
     const p = pathOf.get(f.id) ?? f.detectedPath ?? '';
     return `<div class="row-item">
-      <div class="avatar cli">${esc(initial(f.label))}</div>
+      ${cliAvatar(f.id, f.label)}
       <div class="who">
         <b>${esc(f.label)}${ver ? `<em class="tag-ok">${esc(ver)}</em>` : ''}</b>
         <div class="sub">还没接入 —— 打开右边的开关</div>
@@ -2844,7 +3287,7 @@ async function renderDeviceDetail() {
       ? `<div class="sub" style="font-family:ui-monospace,monospace;font-size:11.5px">${esc(inst.cmd)}</div>`
       : '<div class="sub">这台机器上没探测到</div>';
     return `<div class="row-item off">
-      <div class="avatar cli">${esc(initial(f.label))}</div>
+      ${cliAvatar(f.id, f.label)}
       <div class="who">
         <b>${esc(f.label)}</b>
         ${sub}
@@ -2855,9 +3298,7 @@ async function renderDeviceDetail() {
   };
 
   $('settingsView').innerHTML = `
-    <div class="detail-head">
-      ${breadcrumb([{ label: '运行时', to: 'devices' }, { label: dev.label }])}
-    </div>
+    ${headRow(breadcrumb([{ label: '运行时', to: 'devices' }, { label: dev.label }]))}
     <div class="detail-body">
       ${devHeadHtml(dev, {
         badges: '<span class="pill-ok">在线</span><span class="pill">本机</span>',
@@ -2899,7 +3340,6 @@ async function renderDeviceDetail() {
     </div>`;
 
   wireRenameDevice(dev);
-  wireBreadcrumb();
   wireCopyButtons(); // 外部件那段的「复制安装命令」（本机不给一键：控制面直接跑 curl|sh 不合适，用户在终端里粘一下更清楚）
 
   // 扫描：点了才跑（要 spawn 进程拿版本号，约半秒）
@@ -3109,25 +3549,25 @@ $('addRtOk').onclick = async (e) => {
 async function renderCliDetail() {
   $('settingsView').innerHTML = rtLoading('运行时');
 
+  let dev;
   let rt;
   try {
-    const dev = (await api('/api/devices/' + encodeURIComponent(S.rtDevice))).device;
+    dev = (await api('/api/devices/' + encodeURIComponent(S.rtDevice))).device;
     rt = dev.runtimes.find((r) => r.id === S.rtRuntime);
     if (!rt) throw new Error('这台设备上没有这个 CLI');
   } catch (err) {
-    $('settingsView').innerHTML =
-      `<div class="detail-head"><b>运行时</b></div><div class="empty">${failHtml(err)}</div>`;
+    $('settingsView').innerHTML = `${headRow('<b>运行时</b>')}<div class="empty">${failHtml(err)}</div>`;
     return;
   }
 
+  /* 运行时是**多层**的（运行时 › 设备 › 这个 CLI）：页头用面包屑，两级上级都能点回去。
+     左栏仍是「设置」的分节列表，所以面包屑从「运行时」这一层起。 */
   $('settingsView').innerHTML = `
-    <div class="detail-head">
-      ${breadcrumb([
-        { label: '运行时', to: 'devices' },
-        { label: S.rtDevice === 'local' ? '本机' : S.rtDevice, to: 'device' },
-        { label: rt.label },
-      ])}
-    </div>
+    ${headRow(breadcrumb([
+      { label: '运行时', to: 'devices' },
+      { label: dev.label, to: 'device' },
+      { label: rt.label },
+    ]))}
     <div class="detail-body">
       <!--
         这里原来有个「启用」勾选框。删掉了 —— 列表页那一行已经有开关（点一下立刻生效），
@@ -3167,7 +3607,6 @@ async function renderCliDetail() {
   });
   const url = `/api/devices/${encodeURIComponent(S.rtDevice)}/runtimes/${encodeURIComponent(S.rtRuntime)}`;
 
-  wireBreadcrumb();
 
   const delBtn = $('rtDelete');
   if (delBtn) {
@@ -3214,152 +3653,552 @@ async function renderCliDetail() {
   };
 }
 
+/* -------------------------------------------------------- 列表项右键菜单 */
+
+/**
+ * 打开右键菜单（单例 `#ctxMenu`，挂在 body 下、`position:fixed` 跟光标走）。
+ *
+ * 为什么只有这一个单例：每次右键只换内容与位置，**节点本身不动** ——
+ * 挂在它上面的监听在 boot 时注册一次就永远有效。列表是每次 `innerHTML` 重建的，
+ * 逐个绑事件在这个仓库里踩过多轮（见 `renderList` 那段注释），所以
+ * `contextmenu` 走 `#listBody` 上的**委托**，绝不写进 `renderList`。
+ *
+ * @param {number} x 视口坐标（事件里的 clientX）
+ * @param {number} y 视口坐标（事件里的 clientY）
+ * @param {Array<{label: string, danger?: boolean, disabled?: boolean, why?: string, run: Function}>} items
+ */
+function openCtxMenu(x, y, items) {
+  const menu = $('ctxMenu');
+  if (!menu || !items?.length) return;
+  menu.innerHTML = items
+    .map(
+      (it, i) =>
+        `<button class="ctx-item${it.danger ? ' danger' : ''}" role="menuitem" data-idx="${i}"` +
+        `${it.disabled ? ' disabled' : ''}${it.why ? ` title="${esc(it.why)}"` : ''}>${esc(it.label)}</button>`,
+    )
+    .join('');
+
+  // 项自己的点击：**先关菜单再做事** —— 反过来的话，await 期间菜单还挂在屏幕上，
+  // 用户会以为没点着，再点一下就又执行一遍。
+  // 兜底也用 toastConvErr：菜单里的项都是会话域动作（删除 / 不显示），三码要能说人话
+  menu.querySelectorAll('.ctx-item').forEach((btn) => {
+    btn.onclick = async () => {
+      const it = items[Number(btn.dataset.idx)];
+      if (!it || it.disabled) return;
+      closeCtxMenu();
+      try { await it.run(); } catch (err) { toastConvErr(err); }
+    };
+  });
+
+  menu.hidden = false;
+  // 先按光标摆，再量**真实尺寸**：菜单高度取决于有几项，不能预先算
+  menu.style.left = `${x}px`;
+  menu.style.top = `${y}px`;
+  const r = menu.getBoundingClientRect();
+  // 右/下越界就翻转（贴边留 8px，别正好压在屏幕边上）
+  if (x + r.width > window.innerWidth - 8) menu.style.left = `${Math.max(8, x - r.width)}px`;
+  if (y + r.height > window.innerHeight - 8) menu.style.top = `${Math.max(8, y - r.height)}px`;
+  // 焦点落到第一个**可用**项：键盘能直接上下选（P1-4），Enter/Space 由 <button> 原生负责
+  menu.querySelector('.ctx-item:not([disabled])')?.focus();
+}
+
+/** 收起右键菜单。可以随便多调 —— 已经收起时直接返回（滚动/失焦/重画都会调到它） */
+function closeCtxMenu() {
+  const menu = $('ctxMenu');
+  if (!menu || menu.hidden) return;
+  menu.hidden = true;
+  menu.innerHTML = '';
+}
+
+/* --------------------------------------------------- 会话域的错误人话 */
+
+/**
+ * 会话操作的错误人话（PRD v1.1，产品口径）。
+ *
+ * 为什么要有：`api()`（app.js:874）把所有 HTTP 错误统一成「E码：服务异常」，原因只进
+ * `err.detail` 和 console。而 `E2047 / E1050 / E4002` 恰恰是用户**卡住时最需要知道原因**
+ * 的三个场景 —— 只弹"服务异常"，人会以为出 bug 了、来截图。
+ *
+ * 三条纪律：
+ *  ① 用 `err.code` 映射，**不解析 `err.message`**（message 里只有"服务异常"，解析不出来）；
+ *  ② **不改全局 `api()`** —— 那会改掉全站每一处错误提示（工作台 / 插件 / 流程 / 设置），超范围；
+ *  ③ 表里没有的码**自动回落 `err.message`**，所以 hide 的 `E2001`、`/api/state` 的 `E5xxx`
+ *     行为与今天完全一致。
+ *
+ * **全仓只留这一份**：将来别的功能（比如群删除）要用人话，往这张表里加一行，别再抄一份。
+ */
+const CONV_ERR_ZH = {
+  E2047: '这段会话已经不在了，列表已刷新',
+  // E1050 = 工单会话（任务卡 / 流程）。群的删除路子 2026-10-20 起已经放开，别再写成"群请去解散"
+  E1050: '这是任务卡 / 流程里的会话，要去那边删任务',
+  E4002: '这段还在跑，等它跑完或先终止再删',
+  // 群会话：群没了 / 群已解散（E2016、E2017 归技能用，别串）
+  E2011: '这个群不存在了，已回到消息列表',
+  E2048: '这个群已经不在了，通讯录已刷新',
+  E2049: '这个群已经解散了，只能查看聊天记录',
+};
+function toastConvErr(err) {
+  const zh = CONV_ERR_ZH[err?.code];
+  // 有专属文案 → 「人话（E码）」；没有 → 保持现状（api() 已经 console.error 过完整一行）
+  toast(zh ? `${zh}（${err.code}）` : err?.message, 'error');
+}
+
+/**
+ * 「已归档」的会话 = 被收起来的、**员工已经被删掉**的单聊，以及**已经解散**的群。
+ *
+ * 为什么只认这两类：
+ *   · 正常员工的「不显示」是**临时收起来**（还能从对方聊天头部→聊天记录翻回来），
+ *     把它也算进「已归档」的话，用户会以为"不显示=归档"——那正是 2026-10-20 被否掉的语义；
+ *   · 员工删掉之后，那段会话没有别的入口了（连聊天头部都进不去），所以必须有个地方能看，
+ *     否则右键那个「归档」等于"永久消失"，跟文案说的"记录还在"自相矛盾；
+ *   · 解散的群同理（2026-10-20 用户要求右键给「归档」）：成员和助手都清了，
+ *     "不显示"的语义不成立 —— 归档视图就是它唯一的容身之处。
+ */
+function archivedConvs() {
+  const alive = new Set((S.personas ?? []).map((p) => p.id));
+  return (S.hiddenConversations ?? [])
+    .filter((c) => (c.kind === 'direct' && !alive.has(c.personaId)) || (c.kind === 'group' && c.dissolvedAt))
+    .sort((a, b) => String(b.hiddenAt ?? b.updatedAt).localeCompare(String(a.hiddenAt ?? a.updatedAt)));
+}
+
+/**
+ * 消息列表底部那行「已归档 N」。没有归档就不渲染（返回空串），不占地方。
+ *
+ * 为什么放在**列表底部**而不是导航里：它是"被收起来的东西"的收件箱，
+ * 用得少但需要时得一眼能找到；放导航会把它抬成和「消息」平级的功能。
+ */
+function archivedEntryHTML() {
+  const n = archivedConvs().length;
+  if (!n) return '';
+  return `<div class="arch-entry" id="archEntry" title="删掉员工 / 解散群之后收起来的会话，点开能翻看">
+    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+         stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3.5 7.5h17v11.2a1.8 1.8 0 0 1-1.8 1.8H5.3a1.8 1.8 0 0 1-1.8-1.8z" />
+      <path d="M2.6 4.2h18.8v3.3H2.6z" />
+      <path d="M9.4 12h5.2" />
+    </svg>
+    已归档<span class="arch-n">${n}</span>
+  </div>`;
+}
+
+/**
+ * 进入「已归档」子视图：**左栏换成归档列表**（不是抽屉，2026-10-20 用户要求
+ * "点击已归档，左侧列表应该改成归档的消息列表，如张三、李四"）。
+ *
+ * 右侧不动：点左栏那行就在右边打开对话面板（员工已删 → 输入框自动置灰），
+ * 头部的「聊天记录」还能把这个人跟自己的全部历史翻出来。
+ */
+function enterArchiveView() {
+  S.archivedView = true;
+  setNav('messages', { keepArchiveView: true }); // 先置位再 setNav：它内部就 renderList
+  // 右边还是上一次的会话也无所谓（归档视图只是"换了份左栏"）；没有任何会话时给句提示
+  if (!S.conversation) {
+    $('chat').innerHTML = '<div class="empty">左边选一段已归档的会话</div>';
+    $('chatHead').innerHTML = '<span class="dim" style="padding:6px 0">已归档</span>';
+    setComposer(false);
+  }
+}
+
+/**
+ * 左栏的归档列表。行与消息列表同一套 `.item` 样式（用户要的就是"像张三、李四那样列出来"），
+ * 只是副标题换成条数与"员工已删除"，右键菜单只给「删除」。
+ */
+function renderArchiveList() {
+  // 搜索框在左栏顶上，用户一定会往里打字 —— 归档视图也得认它，否则像坏了
+  const q = S.filter.trim().toLowerCase();
+  const rows0 = archivedConvs().filter((c) => !q || String(c.title || '').toLowerCase().includes(q));
+  setListTitle([{ label: '消息', to: 'messages' }, { label: '已归档' }]);
+  $('listAction').classList.add('hidden'); // 这里没有"新建"
+
+  const items = rows0
+    .map((c) => {
+      const title = c.title || '（没有标题）';
+      const active = S.conversation?.id === c.id;
+      return `<div class="item ${active ? 'active' : ''}" data-conv="${esc(c.id)}">
+        <div class="avatar" ${avatarStyle(title)}>${esc(initial(title))}</div>
+        <div class="who">
+          <div class="line1"><b>${esc(title)}</b><span>${hhmm(c.hiddenAt || c.updatedAt)}</span></div>
+          <div class="line2">${Number(c.messageCount) || 0} 条消息 · ${c.kind === 'group' ? '群已解散' : '员工已删除'}</div>
+        </div>
+      </div>`;
+    })
+    .join('');
+
+  $('listBody').innerHTML =
+    rows0.length
+      ? items
+      : '<div class="empty" style="padding:32px 12px">还没有归档的会话<br />' +
+        '<span class="dim" style="font-size:12px">删掉数字员工、或解散群之后，右键「归档」可以收进来</span></div>';
+
+  $('listBody').querySelectorAll('[data-conv]').forEach((el) => {
+    el.onclick = () => openConversationSafe(el.dataset.conv);
+  });
+  // 「← 返回消息」跟入口在同一个位置（底部固定条）：进出一眼都看得见，不用滚回顶部
+  const foot = $('listFoot');
+  if (foot) {
+    foot.innerHTML = `<div class="arch-entry" id="archBack" title="回到消息列表">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+           stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M14 6l-6 6 6 6" />
+      </svg>
+      返回消息
+    </div>`;
+    foot.querySelector('#archBack').onclick = () => setNav('messages'); // setNav 默认会清掉 archivedView
+  }
+}
+
+/**
+ * 「不显示」/「归档」：只把这一行从消息列表收走，**一条消息都不删**。
+ *
+ * 2026-10-20 起两种叫法走同一个接口，区别只在语义与文案：
+ *   · 正常员工 → **不显示**：还能在「聊天记录」里找到（hiddenConversations 里有它）；
+ *   · 已删除员工 → **归档**：进消息列表底部的「已归档」，在那儿能翻到、也能彻底删。
+ * 没有「恢复」入口（恢复 = 归档的意义就没了）；想让它回到列表，只能在里面再说一句话。
+ * 所以不做二次确认（不删数据，零风险）。
+ */
+async function hideConversationRow(c, mode = 'hide') {
+  try {
+    const r = await post(`/api/conversations/${encodeURIComponent(c.id)}/hide`, {});
+    // 服务端已把它从 listConversations 里剔除 → 下面的收敛会自动把上一条顶成「当前会话」
+    S.conversations = r.conversations;
+    if (r.hiddenConversations) S.hiddenConversations = r.hiddenConversations;
+    // 正在看的就是它：这段人还在（不显示），右栏留着无妨；人已删（归档）就回空态
+    if (mode === 'archive') {
+      if (S.conversation?.id === c.id) resetChatPane();
+      if (S.drawerKind === 'log') closeDrawer();
+    }
+    renderList();
+  } catch (err) { toastConvErr(err); }   // E2001 不在映射表里 → 自动回落，行为与今天一致
+}
+
+/**
+ * 这一行删下去，删的是"这一段"还是"一整档历史"？
+ *
+ * 两种「整档」（2026-10-20 用户分两轮定下的，后端各有一条专用 SQL）：
+ *   · `'group'`   —— **已解散的群**：行 = 这个群的全部历史（`purgeDissolvedGroup`）
+ *   · `'persona'` —— **员工已删的单聊**：行 = 这个人的全部历史（`purgePersonaHistory`）
+ *
+ * 为什么要抽成函数：菜单标签、确认框正文、删完复位哪儿，三处都要这个判断，
+ * 而菜单有两个入口（左栏 / 聊天记录抽屉）。复制三份的下场是迟早只改其中一处。
+ */
+function wipeScopeOf(c) {
+  if (!c) return null;
+  if (c.kind === 'group') return c.dissolvedAt ? 'group' : null;
+  if (c.kind !== 'direct') return null;
+  // 通讯录里已经没有这个人了（`deletePersona` 只删人、保留会话，见 store.mjs）
+  return (S.personas ?? []).some((p) => p.id === c.personaId) ? null : 'persona';
+}
+
+/**
+ * 「删除」= **物理删除**：会话连同消息一并抹掉，不可恢复。
+ *
+ * 二次确认只留**一句话**（2026-10-20 用户定稿）：
+ * 「本次会话删除后，消息内容不可恢复。请确认是否操作？」
+ *
+ * 这是对 PRD P0-3 / P1-5（"文案要讲清 ①找不回来 ②跟不显示的差别"）的一次**收敛**：
+ * 用户看过那版三点罗列后要求改成一句。理由站得住 —— 确认框的作用是让人停下来想一秒，
+ * 不是讲设计；「不显示」的差别在右键菜单里看得见，正文复述只会稀释"不可恢复"这个重点。
+ * 条数仍然不写：消息列表接口没有 messageCount，不为一句文案再加一次请求（v1.1 已明确）。
+ */
+async function removeConversationForever(c) {
+  /*
+   * 标题别写成 `和 ${c.title}` —— 老会话的 title 本身可能已经是「和 张三」
+   * （P1-1 之前建的都长这样），拼出来就是「和 和 张三」。
+   */
+  const isGroup = c.kind === 'group';
+  /*
+   * 「整档清空」的两种（见 `wipeScopeOf`）：确认框要说的是"全部聊天记录"，
+   * 不能沿用"这一段"的话术 —— 用户会以为只删了一段。
+   * 正文沿用一句话口径（2026-10-20 定稿），只把句子本身换成清档版的。
+   */
+  const wipe = wipeScopeOf(c);
+  const ok = await confirmDo(
+    wipe === 'group'
+      ? '这个群已解散。删除后会清空它的全部聊天记录，不可恢复。请确认是否操作？'
+      : wipe === 'persona'
+        ? '这个员工已删除。删除后会清空他的全部聊天记录，不可恢复。请确认是否操作？'
+        : '本次会话删除后，消息内容不可恢复。请确认是否操作？',
+    {
+      title: wipe ? '删除并清空聊天记录' : isGroup ? '永久删除这段群会话' : '永久删除这段会话',
+      ok: '永久删除',
+      danger: true,
+    },
+  );
+  if (!ok) return;
+  try {
+    const r = await api(`/api/conversations/${encodeURIComponent(c.id)}`, { method: 'DELETE' });
+    S.conversations = r.conversations ?? (S.conversations ?? []).filter((x) => x.id !== c.id);
+    if (r.hiddenConversations) S.hiddenConversations = r.hiddenConversations;
+    if (S.drawerKind === 'log') closeDrawer();                       // 抽屉里可能正列着它
+    // 群还有第二处状态：群设置抽屉 / 通讯录的群详情
+    if (S.groupThreadId === c.id) {
+      S.groupThread = null;
+      S.groupThreadId = null;
+      closeDrawer();
+    }
+    /*
+     * 清档：右边停在**这一档里的任何一段**都得复位 —— 它们全没了，
+     * 只认 `id === c.id` 会漏掉"正在看另一段"的情况（群和已删员工一个道理）。
+     */
+    const gid = gidOf(c);
+    const hitting =
+      wipe === 'group'
+        ? S.conversation?.groupId === gid
+        : wipe === 'persona'
+          ? S.conversation?.kind === 'direct' && S.conversation?.personaId === c.personaId
+          : S.conversation?.id === c.id;
+    if (hitting) resetChatPane();
+    renderList();
+    toast(
+      wipe === 'group'
+        ? '已删除。这个群的聊天记录都清掉了'
+        : wipe === 'persona'
+          ? '已删除。他的聊天记录都清掉了'
+          : isGroup
+            ? '已删除这段会话'
+            : '已删除。这段已经彻底没了',
+    );
+  } catch (err) {
+    /*
+     * E2047 = 另一个窗口刚把它删了。**列表要刷、"眼前这段"也要收拾**：
+     * 只刷列表的话，左栏没这行了、右边聊天区还开着，用户一打字又撞第二个错。
+     */
+    if (err?.code === 'E2047') {
+      if (S.conversation?.id === c.id) resetChatPane();   // 正在看的就是它 → 回空态、收输入区
+      if (S.drawerKind === 'log') closeDrawer();          // 抽屉里那行已经不存在了
+      await load().catch(() => {});
+      renderList();
+    }
+    toastConvErr(err);
+  }
+}
+
+/**
+ * 打开会话的统一入口（消息列表行 / 聊天记录行）。
+ *
+ * 为什么要包一层：`E2047`（这段已经被别人删了）在**两个窗口同时开**时最容易撞上。
+ * 不处理的话用户看到的是通用"服务异常"，左栏还高亮、右边空着，一刷新又撞一次。
+ * 这里必须把"眼前这段"一起收拾干净 —— 只刷列表，人就会对着一具尸体打字。
+ *
+ * ⚠️ **只给这两处列表入口用**，不接管全站 `openConversation` 的其它调用点
+ *    （工作台卡片 / 任务卡 / 流程实例），那样就是超范围改动。
+ */
+async function openConversationSafe(id) {
+  try {
+    await openConversation(id);
+  } catch (err) {
+    if (err?.code !== 'E2047') return toastConvErr(err);
+    closeDrawer();                 // 抽屉里那行已经不存在了（没开就是空操作）
+    resetChatPane();               // 右边回空态、收输入区
+    await load().catch(() => {});  // 列表刷成**真的**（文案说"已刷新"，界面就得真是新的）
+    // 回列表；顺带把 S.route 清掉（setNav 会置 null），否则刷新时 restorePlace
+    // 还会照着这个死 id 再撞一次 —— 用户会以为"刷新都修不好"
+    setNav('messages');
+    toastConvErr(err);
+  }
+}
+
+/**
+ * 把主聊天区复位成"还没选会话"的样子。
+ *
+ * 逐字照 `dissolveGroup`（app.js 里群解散那段）的复位抄 —— 那是本项目已有的
+ * "会话没了"处理，别写第二套（同一件事两份实现，迟早只修其中一份）。
+ */
+function resetChatPane() {
+  S.conversation = null;
+  S.convEmpty = false;
+  $('chat').innerHTML = '<div class="empty">还没有对话</div>';
+  $('chatHead').innerHTML = '<span class="dim" style="padding:6px 0">左边选一个人，开始说话</span>';
+  setComposer(false);
+}
+
 /* -------------------------------------------------------------- 二级列表 */
 
+/* ---------------------------------------------------- 通讯录：A–Z 分组 */
+
+/**
+ * 名字首字母（通讯录「数字员工」按 A–Z 分组，2026-10-20 用户要求：像微信通讯录）。
+ *
+ * 中文不能直接取首字 —— 要转拼音首字母。项目零依赖、不引 pinyin 库，
+ * 这里用 `Intl.Collator('zh-Hans-u-co-pinyin')` 的拼音排序能力：
+ * 给每个字母一个"该字母拼音区的最小字"当边界，最后一个 ≤ 名字首字的边界就是它的分组。
+ *   · 英文名直接取首字母；数字/符号/认不出的 → '#'（排最后，跟微信一样）
+ *   · 边界字选的是该声母下拼音最小的常见字（阿 a、八 ba、擦 ca…）；i/u/v 没有拼音音节，跳过
+ * 只依赖浏览器 ICU，不写死"姓氏表" —— 生僻姓也能分对（只要 ICU 认识这个字）。
+ */
+const PINYIN_BOUNDS = [
+  ['A', '阿'], ['B', '八'], ['C', '擦'], ['D', '搭'], ['E', '蛾'], ['F', '发'], ['G', '噶'], ['H', '哈'],
+  ['J', '击'], ['K', '喀'], ['L', '拉'], ['M', '妈'], ['N', '拿'], ['O', '哦'], ['P', '啪'], ['Q', '七'],
+  ['R', '燃'], ['S', '撒'], ['T', '塌'], ['W', '挖'], ['X', '夕'], ['Y', '压'], ['Z', '匝'],
+];
+const HAN_RE = /^[\u3400-\u9fff\uf900-\ufaff]/;
+let pinyinCollator = null;
+const zhNameCollator = () => {
+  if (!pinyinCollator) {
+    try {
+      pinyinCollator = new Intl.Collator('zh-Hans-u-co-pinyin');
+    } catch {
+      // 理论上不会（Chromium/WebView2 都带 ICU）；真不支持就退回中文默认排序，分组仍按边界字试
+      pinyinCollator = new Intl.Collator('zh-Hans');
+    }
+  }
+  return pinyinCollator;
+};
+
+/** 名字 → 分组字母（A–Z / '#'）。 */
+function nameInitial(name) {
+  const first = String(name ?? '').trim().charAt(0);
+  if (!first) return '#';
+  if (/[A-Za-z]/.test(first)) return first.toUpperCase();
+  if (!HAN_RE.test(first)) return '#';
+  const col = zhNameCollator();
+  let letter = '#';
+  for (const [L, bound] of PINYIN_BOUNDS) {
+    if (col.compare(first, bound) >= 0) letter = L;
+    else break;
+  }
+  return letter;
+}
+
+/** 通讯录「数字员工」排序 + 按首字母分组：[{ letter, rows }]，'#' 永远排最后。 */
+function groupPeopleByInitial(people) {
+  const col = zhNameCollator();
+  const sorted = [...people].sort((a, b) => {
+    const ia = nameInitial(a.name);
+    const ib = nameInitial(b.name);
+    if (ia !== ib) {
+      if (ia === '#') return 1;
+      if (ib === '#') return -1;
+      return ia < ib ? -1 : 1;
+    }
+    return col.compare(a.name ?? '', b.name ?? '');
+  });
+  const out = [];
+  for (const p of sorted) {
+    const letter = nameInitial(p.name);
+    const last = out.at(-1);
+    if (last && last.letter === letter) last.rows.push(p);
+    else out.push({ letter, rows: [p] });
+  }
+  return out;
+}
+
 function renderList() {
+  // 列表一重画，原来右键的那一行可能已经不在了 —— 菜单留着就是"点了个寂寞"
+  closeCtxMenu();
+  /*
+   * 左栏底部固定条（#listFoot）每次重画都先清空：它挂的是「已归档」这种**跨列表**的入口，
+   * 不该跟着某一份数据残留到通讯录/设置页上。哪个分支需要，自己再往里写。
+   */
+  const foot = $('listFoot');
+  if (foot) foot.innerHTML = '';
   const q = S.filter.trim().toLowerCase();
   const match = (name) => !q || String(name || '').toLowerCase().includes(q);
 
-  if (S.nav === 'messages' && S.archivedView) {
-    $('listBody').innerHTML =
-      `<div class="list-sec" id="archBack" style="cursor:pointer">‹ 返回消息</div>` +
-      (S.archived.length
-        ? S.archived
-            .map((c) => {
-              const isGroup = c.kind === 'group';
-              // 名字三级兜底：人物还在就用现名 → 否则用会话标题（删员工时会写进名字）
-              // → 都没有才是「（员工已删）」。只靠 personaName 的话，删了几个员工就
-              // 全变成清一色的「（员工已删）」，根本分不清哪条是哪条。
-              const title = isGroup ? c.title : c.personaName || c.title || '（员工已删）';
-              // 解散过的群：标明"已解散"、**不给恢复** —— 成员关系已经解除了，
-              // 恢复出来会是个没人、没助手、@ 不动的空群。留着记录可查就够了。
-              const dissolved = !!c.dissolvedAt;
-              return `<div class="item">
-                <div class="avatar ${isGroup ? 'grp' : ''}">${esc(initial(title))}</div>
-                <div class="who">
-                  <div class="line1"><b>${esc(title)}</b></div>
-                  <div class="line2">${c.messageCount} 条消息 · ${esc(hhmm(c.hiddenAt))} ${dissolved ? '已解散' : '移除'}</div>
-                </div>
-                ${dissolved ? '' : `<button class="btn-sm" data-restore="${c.id}">恢复</button>`}
-              </div>`;
-            })
-            .join('')
-        : '<div class="empty" style="padding:36px 12px">没有已移除的会话</div>');
-
-    $('archBack').onclick = () => {
-      S.archivedView = false;
-      $('listTitle').textContent = '消息';
-      renderList();
-    };
-    $('listBody').querySelectorAll('[data-restore]').forEach((btn) => {
-      btn.onclick = async (e) => {
-        e.stopPropagation();
-        try {
-          const r = await post(`/api/conversations/${encodeURIComponent(btn.dataset.restore)}/unhide`, {});
-          S.conversations = r.conversations;
-          S.archived = (await api('/api/archived')).conversations;
-          S.archivedCount = S.archived.length;
-          renderList();
-        } catch (err) { toast(err.message, 'error'); }
-      };
-    });
-    return;
-  }
+  /* 「已移除的会话」子视图已随归档功能一并删除（2026-10-20，用户要求）：
+     「不显示」不再往某个归档列表里放，它的记录只在「聊天记录」抽屉里可见；
+     已删员工的会话留在列表里只读，右键「归档」= 从界面收走（数据留库、无入口）。 */
 
   if (S.nav === 'messages') {
-    /* 工单会话（流程 / 任务卡）单独成一组：默认收起，不占地方，但一眼能看到他手上几件活。
-       —— 2026-10-18 拆开「收件箱」和「执行槽」之后它们不再混进 1:1。 */
-    const secMap = S.secCollapsed ?? (S.secCollapsed = {});
-    const all = S.conversations.filter((c) => match(c.personaName) || match(c.title));
-    const execConvs = all.filter((c) => c.kind === 'exec');
-    const execShut = secMap.exec !== false;
-    const execRow = (c) => `<div class="item ${S.conversation && S.conversation.id === c.id ? 'active' : ''}" data-conv="${c.id}">
-        <div class="avatar exec">工</div>
-        <div class="who">
-          <div class="line1"><b>${esc(c.title)}</b><span>${hhmm(c.updatedAt)}</span></div>
-          <div class="line2"><span class="dot ${esc(c.status)}"></span>${esc(c.personaName || '（员工已删）')} · ${esc(cut(plain(c.lastMessage), 24) || '还没开始')}</div>
-        </div>
-      </div>`;
-    const execBlock = execConvs.length
-      ? `<div class="list-sec ${execShut ? 'shut' : ''}" data-sec="exec" title="${execShut ? '展开' : '收起'}">
-           <i class="sec-arrow"></i>手上的活 <span class="sec-n">${execConvs.length}</span>
-         </div>` + (execShut ? '' : `<div class="sec-body">${execConvs.map(execRow).join('')}</div>`)
-      : '';
-    const rows = all.filter((c) => c.kind !== 'exec');
-    const archRow =
-      S.archivedCount > 0
-        ? `<div class="item" id="openArchived">
-             <div class="avatar arch">档</div>
-             <div class="who">
-               <div class="line1"><b>已移除的会话</b></div>
-               <div class="line2">${S.archivedCount} 个 · 记录都还在，可恢复</div>
-             </div>
-             <span class="chev">›</span>
-           </div>`
-        : '';
-    // 「已移除的会话」入口放**最前面**（置顶），别沉在列表底部
+    // 归档子视图：左栏换一份列表（渲染完全走它自己，别在这儿混分支）
+    if (S.archivedView) return renderArchiveList();
+    /* 工单会话（流程 / 任务卡）**不进消息列表** —— 从工作台 / 任务进去即可。
+       所以这里既不平铺也不分组，直接按 kind 过滤掉。 */
+    /*
+     * **一人一行 / 一群一行**（2026-10-20）：
+     *   · 1:1 → 只留这个人的**当前会话**（updatedAt 最大的那条）；
+     *   · 群   → 一个群下面可以有多段会话（每次「发消息」一段），列表里只占**一行**，
+     *            取这个群最新那段（`groupId` 相同即同一个群）；
+     *   · exec → 不进列表。
+     * 其余的都在「聊天记录」抽屉里，不占列表行。
+     *
+     * 收敛放在**前端**：服务端 listConversations 是 /api/state 的热路径，
+     * 还喂着工作台、通讯录、任务看板，不能为了这个界面的展示口径去改它的 SQL。
+     *
+     * 顺序是「先收敛、再按名字过滤」——反过来的话，搜到一个**历史会话的标题**
+     * 就会把它单独摆成一行，一个人又出现两行。副作用是搜历史标题搜不到左栏，
+     * 可接受：历史归「聊天记录」。
+     *
+     * 不在这层排序：输入的 S.conversations 已由服务端按 updatedAt DESC 排好，
+     * filter 天然保住全局顺序（群与人混在一起按最后活跃时间排，跟以前一样）。
+     */
+    const currentOf = new Map();  // 人 → 他最新那段
+    const groupOf = new Map();    // 群 id → 这个群最新那段
+    for (const c of S.conversations ?? []) {
+      if (c.kind === 'exec') continue;
+      if (c.kind === 'group') {
+        const gid = gidOf(c);
+        if (!groupOf.has(gid)) groupOf.set(gid, c);
+        continue;
+      }
+      if (!currentOf.has(c.personaId)) currentOf.set(c.personaId, c); // 第一条即最新
+    }
+    const rows = (S.conversations ?? [])
+      .filter((c) => {
+        if (c.kind === 'exec') return false;
+        if (c.kind === 'group') return groupOf.get(gidOf(c))?.id === c.id;
+        return currentOf.get(c.personaId)?.id === c.id;
+      })
+      .filter((c) => match(c.personaName) || match(c.title));
     $('listBody').innerHTML =
-      archRow +
-      execBlock +
       (rows.length
         ? rows.map((c) => {
             const isGroup = c.kind === 'group';
             const title = isGroup ? c.title : (c.personaName || c.title || '（员工已删）');
             const avatar = isGroup
               ? `<div class="avatar grp">${esc(initial(c.title))}</div>`
-              : `<div class="avatar">${esc(initial(c.personaName))}</div>`;
-            const preview = esc(cut(plain(c.lastMessage), 34) || '还没聊过');
-            const sub = isGroup ? `${c.memberCount} 人 · ${preview}` : preview;
-            return `<div class="item ${S.conversation && S.conversation.id === c.id ? 'active' : ''}" data-conv="${c.id}">
+              : `<div class="avatar" ${avatarStyle(c.personaName)}>${esc(initial(c.personaName))}</div>`;
+            // 没聊过就**留白**（2026-10-20 用户要求）：不再显示「还没聊过」占位
+            const preview = esc(cut(plain(c.lastMessage), 34));
+            /*
+             * 群已解散（2026-10-20 用户定：解散后消息仍留在列表，只读）：
+             * 行上标「已解散」。人数不写 —— 解散时成员快照已经清了，写出来是 "0 人"。
+             */
+            const sub = isGroup
+              ? c.dissolvedAt
+                ? (preview ? `已解散 · ${preview}` : '已解散')
+                : (preview ? `${c.memberCount} 人 · ${preview}` : `${c.memberCount} 人`)
+              : preview;
+            /*
+             * 高亮按**人 / 群**命中，不只按会话 id：正在看某人的一段历史会话、或某个群的
+             * 一段老会话时，列表里那一行已经是"这个人的当前会话 / 这个群的最新一段"了，
+             * 不亮会显得左栏什么都没选中（跟通讯录 `S.persona.id === p.id` 一个口径）。
+             */
+            const active =
+              (S.conversation && S.conversation.id === c.id) ||
+              (isGroup
+                ? S.conversation?.groupId === gidOf(c)
+                : S.conversation?.kind === 'direct' && S.conversation.personaId === c.personaId);
+            return `<div class="item ${active ? 'active' : ''}" data-conv="${c.id}">
               ${avatar}
               <div class="who">
                 <div class="line1"><b>${esc(title)}</b><span>${hhmm(c.updatedAt)}</span></div>
                 <div class="line2"><span class="dot ${esc(c.status)}"></span>${sub}</div>
               </div>
-              <button class="item-x" data-hide="${c.id}" title="从列表移除（聊天记录保留）">×</button>
             </div>`;
           }).join('')
-        : archRow || execConvs.length
-          ? ''
-          : '<div class="empty" style="padding:36px 12px">还没有消息<br />先去<strong>通讯录</strong>发起群聊或找个人聊</div>');
-
-    $('listBody').querySelectorAll('[data-sec]').forEach((el) => {
-      el.onclick = () => {
-        secMap.exec = !secMap.exec;
-        saveCollapsed();
-        renderList();
-      };
-    });
-    const archEntry = $('openArchived');
-    if (archEntry) {
-      archEntry.onclick = async () => {
-        try {
-          S.archived = (await api('/api/archived')).conversations;
-          S.archivedCount = S.archived.length;
-          S.archivedView = true;
-          $('listTitle').textContent = '已移除的会话';
-          renderList();
-        } catch (err) { toast(err.message, 'error'); }
-      };
-    }
+        : '<div class="empty" style="padding:36px 12px">还没有消息<br />先去<strong>通讯录</strong>发起群聊或找个人聊</div>');
 
     $('listBody').querySelectorAll('[data-conv]').forEach((el) => {
-      el.onclick = () => openConversation(el.dataset.conv).catch((e) => toast(e.message, 'error'));
+      // 走 openConversationSafe：这段可能刚被另一个窗口删掉（E2047 → 说人话 + 收拾界面）
+      el.onclick = () => openConversationSafe(el.dataset.conv);
     });
+    /*
+     * 「已归档 N」挂在**底部固定条**上（2026-10-20 用户定：固定在底部）：
+     * 它是低频收件箱，不该占列表最贵的第一屏；固定条不跟着列表滚，
+     * 会话再多也永远看得见。没有归档时 archivedEntryHTML 返回空串 → 整条不占高度。
+     */
+    if (foot) {
+      foot.innerHTML = archivedEntryHTML();
+      const archEntry = foot.querySelector('#archEntry');
+      if (archEntry) archEntry.onclick = () => enterArchiveView();
+    }
 
-    // 悬停才露出的 ×：**只把它从列表里拿掉，消息一条不删**。
-    // 之后在这里再说一句话，它会自己回到列表（服务端 addMessage 会清掉标记）。
-    $('listBody').querySelectorAll('[data-hide]').forEach((btn) => {
-      btn.onclick = async (e) => {
-        e.stopPropagation(); // 别顺手把会话打开了
-        try {
-          const r = await post(`/api/conversations/${encodeURIComponent(btn.dataset.hide)}/hide`, {});
-          S.conversations = r.conversations;
-          S.archivedCount = (S.archivedCount || 0) + 1;
-          renderList();
-        } catch (err) { toast(err.message, 'error'); }
-      };
-    });
+    /*
+     * 「不显示 / 删除」不在每一行上绑按钮了 —— 2026-10-20 起是**右键菜单**，
+     * 走 `#listBody` 上的 contextmenu 委托（boot 区注册一次，见那儿的长注释）。
+     * 原来这里那段 `[data-hide]` 逐个绑定连同行内的 × 一起删掉了。
+     */
     return;
   }
 
@@ -3374,19 +4213,8 @@ function renderList() {
   }
 
   if (S.nav === 'settings') {
-    const items = [
-      ['prefs', '偏好设置', '主题与外观'],
-      ['quota', '额度', '每个模型每天最多用多少'],
-      ['runtimes', '运行时', 'agent CLI 的路径与开关'],
-      ['plugins', '插件', '扩展点'],
-      // 「技能」原来在左侧一级栏上（2026-10-15 用户要求搬进设置）。
-      // 左栏在这儿**始终是分节列表**，技能列表画在主区（见 renderSkillCards）——
-      // 换一种做法（点技能后左栏变成技能列表）会让分节列表消失，就回不到别的节了。
-      ['skills', '技能', '给数字员工用的能力包'],
-      ['code', '代码托管', '连接 GitHub、接入仓库'],
-      // 「定时任务」不放这儿：它跟项目/看板/流程一样是**干活的地方**，入口在工作台
-      // （2026-10-17 用户要求搬过去）。设置里留着就成了两个门进同一间屋。
-    ];
+    // 分节清单跟左栏面包屑共用 SETTINGS_SECTIONS（见 openSettings）
+    const items = SETTINGS_SECTIONS;
     $('listBody').innerHTML = items
       .map(
         ([key, title, sub]) => `<div class="item ${S.settingsSection === key ? 'active' : ''}" data-set="${key}">
@@ -3414,7 +4242,24 @@ function renderList() {
   }
 
   // 通讯录 = 群聊 + 数字员工 两段（搜的时候空的段不占地方）
-  const groups = S.conversations.filter((c) => c.kind === 'group' && (match(c.title) || match(c.personaName)));
+  // 群聊**包含被「不显示」的**（2026-10-20 用户要求）：
+  // 「不显示」隐藏的是**这行会话消息**，不是群本身 —— 群、成员、群助手都还在，
+  // 所以通讯录里照常列出来（不打任何"已隐藏"标记，那会让人以为群被处理过）。
+  // 消息列表里它仍然不出现，直到群里再来新消息。
+  //
+  // ⚠️ 群的**身份**来自 `S.groups`（groups 表），**不是**从会话推（2026-10-20 用户实报：
+  // 「在通讯录里，群为什么也没了」）。以前是按 conversations 里 kind='group' 去重出来的，
+  // 于是会话一删光（或一段都没留）群就在通讯录消失 —— 但群是容器，容器不该因片段删光而消失。
+  // 会话只用来补"最近说了什么 / 状态"，零段的群照样列出来（副标题写「还没聊过」）。
+  const latestConvOfGroup = new Map(); // 群 id → 这个群最近一段（可见优先，其次被隐藏的）
+  for (const c of [...S.conversations, ...(S.hiddenConversations ?? [])]) {
+    if (c.kind !== 'group') continue;
+    const gid = gidOf(c);
+    if (!latestConvOfGroup.has(gid)) latestConvOfGroup.set(gid, c);
+  }
+  const groups = (S.groups ?? [])
+    .map((g) => ({ ...g, conv: latestConvOfGroup.get(g.id) ?? null }))
+    .filter((g) => match(g.title));
   const people = S.personas.filter((p) => match(p.name));
   /**
    * 分段标题。收起时**整段内容不渲染**（不是单纯 display:none）——
@@ -3433,27 +4278,33 @@ function renderList() {
 
   const groupRows = groups
     .map(
-      (c) => `<div class="item ${S.groupThreadId === c.id || (S.conversation && S.conversation.id === c.id) ? 'active' : ''}" data-group="${c.id}">
-        <div class="avatar grp">${esc(initial(c.title))}</div>
+      // data-group 必须是**群 id**：点它进的是群详情页，走的是 /api/groups/:id
+      (g) => {
+        const c = g.conv;                                  // 零段的群没有 conv，别去读 c.xxx
+        const preview = cut(plain(c?.lastMessage), 22);
+        return `<div class="item ${S.groupThreadId === g.id || S.conversation?.groupId === g.id ? 'active' : ''}" data-group="${esc(g.id)}">
+        <div class="avatar grp">${esc(initial(g.title))}</div>
         <div class="who">
-          <div class="line1"><b>${esc(c.title)}</b></div>
-          <div class="line2"><span class="dot ${esc(c.status)}"></span>${c.memberCount} 人 · ${esc(cut(plain(c.lastMessage), 22) || '还没聊过')}</div>
+          <div class="line1"><b>${esc(g.title)}</b></div>
+          <div class="line2"><span class="dot ${esc(c?.status ?? '待跑')}"></span>${g.memberCount} 人 · ${esc(preview || '还没聊过')}</div>
         </div>
-      </div>`,
+      </div>`;
+      },
     )
     .join('');
 
-  const personRows = people
-    .map(
-      (p) => `<div class="item ${S.persona && S.persona.id === p.id ? 'active' : ''}" data-persona="${p.id}">
-        <div class="avatar">${esc(initial(p.name))}</div>
+  const personRow = (p) => `<div class="item ${S.persona && S.persona.id === p.id ? 'active' : ''}" data-persona="${p.id}">
+        <div class="avatar" ${avatarStyle(p.name)}>${esc(initial(p.name))}</div>
         <div class="who">
           <div class="line1"><b>${esc(p.name)}${p.builtin ? '<i class="b-inline" title="出厂就在的员工，删不掉">内置</i>' : ''}</b></div>
           <div class="line2">${esc(personSubtitle(p))}</div>
         </div>
         <i class="dot ${p.busy ? 'busy' : ''}" title="${p.busy ? '正在干活' : '现在闲着'}"></i>
-      </div>`,
-    )
+      </div>`;
+  /* 数字员工按 A–Z 分组（微信通讯录那种，2026-10-20 用户要求）。
+     搜索时**不插字母头**：结果已经少而散，再按字母切开反而碎；行本身仍是排好序的。 */
+  const personRows = groupPeopleByInitial(people)
+    .map((g) => `${q ? '' : `<div class="list-letter" aria-hidden="true">${g.letter}</div>`}${g.rows.map(personRow).join('')}`)
     .join('');
 
   $('listBody').innerHTML = !groups.length && !people.length
@@ -3639,7 +4490,10 @@ async function openWorkflows(pickId = null) {
   // 从工作台进来时 S.nav 还是 plugins，不先切过来就会画出一片空白（踩过）。
   setNav('workflows', { skipOpen: true });
   document.body.classList.remove('no-list');
-  $('listTitle').textContent = '工作流';
+  // 左栏顶上就是"你在哪儿"：工作台 › 流程编排（面包屑从右页头挪过来，见 setListTitle）
+  // 二级叫「流程编排」而不是「工作流」：这一页是编排模板的地方，跟工作台那颗
+  // 「流程编排」磁贴同名（2026-10-19 用户截图指出）。
+  setListTitle([{ label: '工作台', to: 'workbench' }, { label: '流程编排' }]);
   setRoute('workflows', pickId ? { template: pickId } : {});
   $('listAction').classList.remove('hidden');
   $('listAction').title = '新建流程模板';
@@ -3681,8 +4535,8 @@ function renderFlowList() {
 }
 
 function renderFlowEmpty() {
+  // 没有页头：左栏顶上已经是「工作台 › 流程编排」，右页头再写一遍就是同一件事写两处
   $('flowView').innerHTML = `
-    <div class="detail-head"><b>工作流</b></div>
     <div class="detail-body"><div class="wip">还没有流程模板 —— 点左栏右上角的「＋」新建一个</div></div>`;
   S.view = 'flow';
   showView('flow');
@@ -3713,27 +4567,31 @@ async function newTemplateDialog() {
  * 工作台里的「流程」分组：**只有发布过的才在这儿**。
  * 点进去是**这个流程的发起记录页**，发起是那个页面上的动作（不在工作台直接发起）。
  */
+/* 工作台磁贴的卡片结构（2026-10-20 重设计）：图标 + 名字 + **一句说明**。
+   说明直接把原来 title 里的那句话亮出来 —— 磁贴光秃秃一个名字，用户得悬停才知道去哪儿；
+   一句话摆在卡上，入口页才有"总览"的样子。统一走 wbCard() 拼，三段不各写一遍。 */
+const wbCard = (cls, icon, name, desc, attr, icoStyle = '') => `
+  <button class="wb-tile" ${attr} title="${esc(desc)}">
+    <span class="wb-ico ${cls}" ${icoStyle}>${icon}</span>
+    <span class="wb-tx"><span class="wb-name">${esc(name)}</span><span class="wb-desc">${esc(desc)}</span></span>
+  </button>`;
+
 function workbenchFlowSection() {
   const list = S.flowPublished ?? [];
+  /* ⚠️ 工作台的三段（项目 / 自动化 / 流程）**不再用 `<section class="fx">`**（2026-10-19）：
+     `.fx + .fx` 自带一条横分隔线，几段竖着一叠就是几条横带、每带右侧一场空。
+     统一用 `.wb-sec`（一行小标题）+ `.wb-grid`，跟插件那几段接在同一条流里。 */
   return `
-    <section class="fx">
-      <label>流程 <span class="count">${list.length + 1}</span></label>
-      <div class="wb-grid">
-        <!-- 编排入口：原来在左边 rail 的「工作流」那一项，现在收进工作台 -->
-        <button class="wb-tile" data-flow-design title="画流程：节点、指派、发布">
-          <span class="wb-ico flow">编</span>
-          <span class="wb-name">流程编排</span>
-        </button>
-        ${list
-          .map(
-            (f) => `<button class="wb-tile" data-flow-start="${esc(f.id)}" title="点开看发起记录">
-              <span class="wb-ico flow">流</span>
-              <span class="wb-name">${esc(f.name)}</span>
-            </button>`,
-          )
-          .join('')}
-      </div>
-    </section>`;
+    <div class="wb-sec">流程</div>
+    <div class="wb-grid">
+      <!-- 编排入口：原来在左边 rail 的「工作流」那一项，现在收进工作台 -->
+      ${wbCard('flow', ICON_WB_FLOW, '流程编排', '画流程：节点、指派、发布', 'data-flow-design')}
+      ${list
+        .map(
+          (f) => wbCard('flow', ICON_WB_FLOW, f.name, '点开看这个流程的发起记录', `data-flow-start="${esc(f.id)}"`),
+        )
+        .join('')}
+    </div>`;
 }
 
 /* ---------------------------------------------------------------- 项目 */
@@ -3747,15 +4605,10 @@ function workbenchFlowSection() {
  */
 function workbenchAutoSection() {
   return `
-    <section class="fx">
-      <label>自动化</label>
-      <div class="wb-grid">
-        <button class="wb-tile" data-schedules title="到点自动做一件事：写一句要它干什么、交给谁、多久一次">
-          <span class="wb-ico cron">时</span>
-          <span class="wb-name">定时任务</span>
-        </button>
-      </div>
-    </section>`;
+    <div class="wb-sec">自动化</div>
+    <div class="wb-grid">
+      ${wbCard('cron', ICON_WB_CLOCK, '定时任务', '到点自动做一件事：干什么、交给谁、多久一次', 'data-schedules')}
+    </div>`;
 }
 
 /**
@@ -3770,22 +4623,15 @@ function workbenchAutoSection() {
  * 这里看的是"所有的活"。所以它紧挨着「项目」放 —— 一个是"在哪儿干活"，一个是"都有什么活"。
  */
 function workbenchProjectSection() {
+  /* 分组名后面**不再挂计数**（2026-10-19 去掉）：`.wb-sec` 是一行小标题，
+     上面写"项目 2"会被读成"有 2 个项目"，而它其实说的是"这一格有 2 块磁贴" ——
+     两个意思撞在一个数字上。宫格里的东西一眼数得清，不需要计数。 */
   return `
-    <section class="fx">
-      <!-- 角标是**磁贴个数**（2026-10-17 用户要求）：这一组固定两块（项目、任务看板），
-           原来写的是项目数 —— 项目有 3 个时角标写 3，下面却只有 2 块磁贴，对不上。 -->
-      <label>项目 <span class="count">2</span></label>
-      <div class="wb-grid">
-        <button class="wb-tile" data-projects title="项目的名字、目录、规矩都在这儿管">
-          <span class="wb-ico proj">项</span>
-          <span class="wb-name">项目</span>
-        </button>
-        <button class="wb-tile" data-task-board title="所有项目的活，铺在同一张看板上（站在全局看）">
-          <span class="wb-ico board">板</span>
-          <span class="wb-name">任务看板</span>
-        </button>
-      </div>
-    </section>`;
+    <div class="wb-sec">项目</div>
+    <div class="wb-grid">
+      ${wbCard('proj', ICON_FOLDER, '项目', '名字、目录、规矩都在这儿管', 'data-projects')}
+      ${wbCard('board', ICON_WB_BOARD, '任务看板', '所有项目的活，铺在同一张看板上', 'data-task-board')}
+    </div>`;
 }
 
 /**
@@ -3806,41 +4652,45 @@ async function openProjectsPage(selectId) {
   const sel = S.projects.find((x) => x.id === (selectId ?? S.projSel)) ?? S.projects[0] ?? null;
   S.projSel = sel?.id ?? null;
 
-  // 左栏 = 项目列表（左栏让出来：宫格进项目页时它是收着的）。
-  // 面包屑也搬进左栏：最上面一条「‹ 工作台」管回宫格（消息页「‹ 返回消息」同一个路数），
-  // 主区就只放项目详情，不再占一行面包屑。
+  // 左栏 = 项目列表（左栏让出来：从目录进项目页时它是收着的）。
+  // ⚠️ 原来左栏最上面还有一条「‹ 工作台」（照消息页「‹ 返回消息」那套路数加的），
+  // 2026-10-19 统一子页页头后撤掉了：**返回只留在页头最左边**。
+  // 留着它等于同一件事两个地方能做，而且只有项目页有，别的子页没有 —— 这就是不统一。
   document.body.classList.remove('no-list');
-  $('listTitle').textContent = '项目';
+  /* 左栏顶上**只写到二级**「工作台 › 项目」（2026-10-19 用户：「项目这个只要二级目录就可以了，
+     不需要三级目录。因为右边的详情区有了」）：项目名就在右侧详情区的 p-head 里，
+     面包屑再写一遍是同一件事说两遍；而且左栏列表里当前项目本来就高亮着。
+     ⚠️ 右边再没有这一段了，所以项目改名时**不用**同步标题（名字只在详情里变）。 */
+  setListTitle([{ label: '工作台', to: 'workbench' }, { label: '项目' }]);
   $('listAction').classList.remove('hidden');
   $('listAction').title = '新建项目';
   $('listBody').innerHTML =
-    `<div class="list-sec" id="projBack" title="回工作台宫格" style="cursor:pointer">‹ 工作台</div>` +
     (S.projects.length
       ? S.projects
           .map(
             (p) => `<div class="item${p.id === S.projSel ? ' active' : ''}" data-proj-sel="${esc(p.id)}">
               <div class="who">
-                <div class="line1"><b>${esc(p.name)}</b>${
-                  p.builtIn ? '<span class="pill" style="margin-left:6px">内置</span>' : ''
-                }</div>
+                <!-- 「内置」角标用通讯录同款 .b-inline 塞进 <b> 里 —— line1 是 space-between，
+                     挂在外面会被推到行最右，看着像个时间戳（2026-10-20 收口）。 -->
+                <div class="line1"><b>${esc(p.name)}${
+                  p.builtIn ? '<i class="b-inline">内置</i>' : ''
+                }</b></div>
                 <div class="line2" title="AI 会在这个目录里干活">${esc(p.root)}</div>
               </div>
             </div>`,
           )
           .join('')
       : '<div class="empty" style="padding:36px 12px">还没有项目<br />点右上角 ＋ 新建一个</div>');
-  $('listBody').querySelector('#projBack')?.addEventListener('click', () => {
-    openPlugins().catch((e) => toast(e.message, 'error'));
-  });
   // 左栏选谁，右边看谁（就地换详情，不整页跳）
   $('listBody').querySelectorAll('[data-proj-sel]').forEach((el) => {
     el.onclick = () => openProjectsPage(el.dataset.projSel).catch((e) => toast(e.message, 'error'));
   });
 
-  // 主区照**员工详情页**的骨架（2026-10-18 用户定的）：
-  // detail-head 页题 → p-head（概览信息 + 按钮一行）→ tabs（基础信息 / 项目规章）→ 内容
+  /* 右页头**去掉了**（2026-10-19 用户：「面包屑应该是在左边的列表上，右边的不用」）：
+     原来这里只有一段「工作台 › 项目 › 名字」，现在整段挪到了左栏顶上；右侧直接是详情，
+     名字/目录/动作都在详情自己的 p-head 里，页头再写一遍纯属重复。
+     （左栏顶上那条「‹ 工作台」也不加回来：面包屑的「工作台」段就是回宫格的入口。） */
   view.innerHTML = `
-    <div class="detail-head"><b>项目详情</b></div>
     <div class="detail-body" id="projDetail">${
       sel ? '<div class="dim">加载中…</div>' : '<div class="empty" style="padding:36px 12px">左边选一个项目</div>'
     }</div>`;
@@ -3851,7 +4701,10 @@ async function openProjectsPage(selectId) {
 
 /**
  * 右侧详情 = 照**员工详情页**的骨架改（2026-10-18 用户定的）：
- * 顶部 p-head 一行 = 项目概览信息（头像 + 名字 + pill，第二行元信息）+ 右侧动作按钮；
+ * 顶部 p-head 一行 = 项目概览信息（名字 + 目录 pill）+ 右侧动作按钮；
+ * ⚠️ 2026-10-19 用户截图圈掉左侧那枚蓝色「班」字方块（`.avatar.proj`）：去掉，
+ *    项目名本身就是页面标题，头像那个色块在这儿只是多一块颜色，没有"这是谁"的信息量
+ *    （员工头像不一样——它是"人"，项目是"地方"）。
  * 下面 tabs 两页：**基础信息**（名称/目录/附加目录/说明 + 任务统计）、**项目规章**（＝宪法）。
  * 字段仍是常驻输入区（没有"点编辑"那步）；tabs 一次渲染、切显隐 ——
  * 在基础信息改了一半去规章再回来，改动还在（同员工详情页的做法）。
@@ -3872,7 +4725,6 @@ async function renderProjDetail(p) {
   const stat = (label, n) => `<span class="kb-stat">${esc(label)} <b>${n ?? 0}</b></span>`;
   box.innerHTML = `
     <div class="p-head">
-      <div class="avatar proj">${esc(initial(p.name))}</div>
       <div class="p-head-main">
         <h2>${esc(p.name)}${p.builtIn ? '<span class="pill role">内置</span>' : ''}</h2>
         <div class="p-meta">
@@ -3880,7 +4732,12 @@ async function renderProjDetail(p) {
         </div>
       </div>
       <div class="hero-actions">
-        <button id="pjSave">保存</button>
+        <!-- 保存状态：改了就自动存，这里是唯一的回执（跟员工详情同一条 .save-state 样式）。
+             原来这儿是一颗「保存」按钮 —— 四个字段都要点一次，忘了点就白改。
+             ⚠️ 它**不占位**：宽度 0 + 往左溢出，所以"改成已保存"时不推按钮；
+                 靠 text-align:right 让它从按钮左边往回长，永远不会被右边界截掉。
+                 （样式在 style.css 的 .pj-save） -->
+        <span class="save-state pj-save" id="pjSaveState"></span>
         <button class="primary" id="pjTasks">任务</button>
         ${p.builtIn ? '' : '<button class="danger" id="pjDel">删除</button>'}
       </div>
@@ -3895,7 +4752,10 @@ async function renderProjDetail(p) {
       <div class="group">
         <div class="form-row">
           <div class="row-label">项目名称</div>
-          <input id="pjName" value="${esc(p.name ?? '')}" placeholder="例如：班底" />
+          <div>
+            <input id="pjName" value="${esc(p.name ?? '')}" placeholder="例如：班底" />
+            <!-- （2026-10-20 用户："这些文案去掉"）原「改了自动保存，不用点按钮。」删 -->
+          </div>
         </div>
         <div class="form-row">
           <div class="row-label">工作目录</div>
@@ -3904,7 +4764,7 @@ async function renderProjDetail(p) {
               <input id="pjRoot" value="${esc(p.root ?? '')}" placeholder="例如：E:\\02CodeSpace\\bandi" />
               <button type="button" id="pjPick" title="选一个本机目录（AI 会在这里干活）">选择</button>
             </div>
-            <div class="counter left">AI 就在这个目录里干活。</div>
+            <!-- （2026-10-20 用户："这些文案去掉"）原「AI 就在这个目录里干活。」删 -->
           </div>
         </div>
         <div class="form-row top">
@@ -3918,7 +4778,7 @@ async function renderProjDetail(p) {
           <div class="row-label">项目说明</div>
           <div>
             <textarea id="pjNote" style="height:72px" placeholder="构建命令、备注……">${esc(p.note ?? '')}</textarea>
-            <div class="counter">只给人看，AI 看不到。</div>
+            <!-- （2026-10-20 用户："这些文案去掉"）原「只给人看，AI 看不到。」删 -->
           </div>
         </div>
       </div>
@@ -3949,41 +4809,125 @@ async function renderProjDetail(p) {
     </section>`;
 
   // 标签：一次渲染、切显隐 —— 不重建 DOM，所以在「基础信息」改了一半去「规章」再回来，改动还在
+  // （切之前先 flush：刚敲完就切走，防抖那 700ms 不该把改动吞掉）
   const tabs = box.querySelectorAll('[data-tab]');
   const panels = box.querySelectorAll('[data-panel]');
   const showTab = (key) => {
     tabs.forEach((t) => t.classList.toggle('on', t.dataset.tab === key));
     panels.forEach((sec) => { sec.hidden = sec.dataset.panel !== key; });
   };
-  tabs.forEach((t) => { t.onclick = () => showTab(t.dataset.tab); });
+  tabs.forEach((t) => { t.onclick = () => { pjSaveNow(); showTab(t.dataset.tab); }; });
   showTab('basics');
 
   $('pjPick').onclick = () => pickProjectDir('pjPick', 'pjRoot');
-  $('pjSave').addEventListener('click', async () => {
-    const name = $('pjName').value.trim();
-    const root = $('pjRoot').value.trim();
-    if (!name) return toast('给项目起个名字');
-    if (!root) return toast('工作目录不能空 —— AI 要在这儿干活');
-    const extraRoots = $('pjExtra').value.split('\n').map((s) => s.trim()).filter(Boolean);
-    const note = $('pjNote').value.trim();
-    const constitution = $('projConstInput').value.trim();
+
+  /* ---------------- 自动保存（2026-10-19 用户要求：去掉「保存」按钮） ----------------
+   * 分寸跟员工详情、任务卡那条一样：
+   *   · 输入框防抖 700ms；失焦立刻存；切标签 / 离开页面先 flush。
+   *   · **不重画整页**：重画会丢焦点、把标签弹回"基础信息"；
+   *     只有名字变了才同步左栏那一行（那是另一个容器，跟焦点无关）。
+   *   · 名字 / 目录空着不提交（服务端会拒）：状态直接写清楚，人知道自己少填了什么。
+   *   · 保存中又来改动 → 存完补一次（串行；同时打两个 PUT 会互相覆盖）。 */
+  const pjState = $('pjSaveState');
+  const setPjState = (text, kind = '') => {
+    if (!pjState) return;
+    pjState.textContent = text;
+    pjState.className = 'save-state' + (kind ? ' ' + kind : '');
+  };
+  const collect = () => ({
+    name: $('pjName').value.trim(),
+    root: $('pjRoot').value.trim(),
+    extraRoots: $('pjExtra').value.split('\n').map((s) => s.trim()).filter(Boolean),
+    note: $('pjNote').value.trim(),
+    constitution: $('projConstInput').value.trim(),
+  });
+  let lastSaved = JSON.stringify(collect());
+  let pjTimer = null;
+  let pjSaving = false;
+  let pjQueued = false;
+
+  const pjSaveNow = async ({ keepalive = false } = {}) => {
+    if (pjTimer) { clearTimeout(pjTimer); pjTimer = null; }
+    if (!box.isConnected) return false; // 页面已经换了，别再往旧项目上写
+    const payload = collect();
+    if (!payload.name) { setPjState('名字不能空 · 未保存', 'bad'); return false; }
+    if (!payload.root) { setPjState('工作目录不能空 · 未保存', 'bad'); return false; }
+    const json = JSON.stringify(payload);
+    if (json === lastSaved) { setPjState('已保存', 'ok'); return true; }
+    if (pjSaving) { pjQueued = true; return false; }
+    pjSaving = true;
+    setPjState('保存中…', 'wait');
     try {
-      await api('/api/projects/' + encodeURIComponent(p.id), {
+      const d = await api('/api/projects/' + encodeURIComponent(p.id), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, root, extraRoots, note, constitution }),
+        body: json,
+        ...(keepalive ? { keepalive: true } : {}),
       });
-      // 整页重画：左栏清单的名字/目录跟着刷新，详情用服务端归一后的值
-      await openProjectsPage(p.id);
+      lastSaved = JSON.stringify(payload);
+      // 服务端会归一（比如目录去尾斜杠）：把返回值写回内存，左栏和下次进入都用它
+      const saved = d?.project;
+      if (saved) {
+        const i = (S.projects ?? []).findIndex((x) => x.id === saved.id);
+        if (i >= 0) S.projects[i] = { ...S.projects[i], ...saved };
+      }
+      // 名字 / 目录改了才动左栏那一行 —— 那是另一个容器，重画它不影响输入框焦点
+      const items = $('listBody')?.querySelectorAll('[data-proj-sel]') ?? [];
+      items.forEach((el) => {
+        if (el.dataset.projSel !== p.id) return;
+        const b = el.querySelector('.line1 b');
+        const sub = el.querySelector('.line2');
+        if (b) b.textContent = payload.name;
+        if (sub) sub.textContent = payload.root;
+      });
+      /* 改名同步的是**详情区自己**（p-head 的 h2 / 目录 pill），不碰左栏标题 ——
+         左栏面包屑只到「工作台 › 项目」二级，项目名不写在里面（见 openProjectsPage）。
+         项目头像 2026-10-19 已按用户要求去掉（.avatar.proj 没有宿主了），这里不用再同步它。 */
+      const paintName = (name) => {
+        const h2 = box.querySelector('.p-head h2');
+        if (h2) {
+          h2.firstChild.nodeType === 3
+            ? (h2.firstChild.nodeValue = name)
+            : h2.insertBefore(document.createTextNode(name), h2.firstChild);
+        }
+        const rootPill = box.querySelector('.p-meta .pill');
+        if (rootPill) rootPill.textContent = $('pjRoot').value.trim();
+      };
+      paintName(payload.name);
+      setPjState('已保存', 'ok');
+      return true;
     } catch (e) {
-      toast(e.message, 'error');
+      setPjState('保存失败：' + (e?.message ?? '服务异常'), 'bad');
+      console.error('[班底] 项目自动保存失败', e?.detail ?? e);
+      return false;
+    } finally {
+      pjSaving = false;
+      if (pjQueued) { pjQueued = false; pjSaveNow(); }
     }
-  });
-  $('pjTasks').addEventListener('click', () => {
+  };
+  const schedulePjSave = (ms = 700) => {
+    setPjState('未保存…', 'wait');
+    if (pjTimer) clearTimeout(pjTimer);
+    pjTimer = setTimeout(() => { pjTimer = null; pjSaveNow(); }, ms);
+  };
+  // 离开这一页（切标签页 / 回列表 / 关窗口）前兜底存一次 —— 走的是全局那条 flush 口子
+  const stopFlush = () => { flushDetailSave = null; };
+  flushDetailSave = (opts) => { pjSaveNow(opts); };
+
+  for (const id of ['pjName', 'pjRoot', 'pjExtra', 'pjNote', 'projConstInput']) {
+    $(id)?.addEventListener('input', () => schedulePjSave(700));
+    $(id)?.addEventListener('blur', () => pjSaveNow());
+  }
+
+  $('pjTasks').addEventListener('click', async () => {
+    // 先落盘再走：不然刚改的目录/名字带不进看板（看板是另一个页面）
+    await pjSaveNow();
+    stopFlush();
     openProjectDetail(p.id).catch((e) => toast(e.message, 'error'));
   });
   $('pjDel')?.addEventListener('click', async () => {
     if (!(await confirmDo(`删掉项目「${p.name}」？\n\n绑在它上面的会话会自动解绑（回到员工默认工作目录），会话本身不删。`))) return;
+    stopFlush();
     try {
       await api('/api/projects/' + encodeURIComponent(p.id), { method: 'DELETE' });
       S.projSel = null;
@@ -4054,18 +4998,18 @@ async function openBoardPage({ project = null } = {}) {
     }
   }
 
-  const crumbs = isAll
-    ? breadcrumb([{ label: '工作台', to: 'workbench' }, { label: '任务看板' }])
-    : breadcrumb([{ label: '项目', to: 'projects' }, { label: project.name }]);
-
   view.innerHTML = `
-    <div class="detail-head">${crumbs}
-      <div class="head-actions" style="margin-left:auto">
-        ${err ? '' : kbFilterBar(data)}
-        ${err ? '' : kbPrRefreshHtml(data)}
-        <button data-kb-refresh>刷新</button>
-      </div>
-    </div>
+    ${headRow(isAll
+      ? breadcrumb([{ label: '工作台', to: 'workbench' }, { label: '任务看板' }])
+      : breadcrumb([
+          { label: '工作台', to: 'workbench' },
+          { label: '项目', to: 'projects' },
+          { label: project.name, to: 'projects', arg: project.id },
+          { label: '任务看板' },
+        ]),
+      `${
+      err ? '' : kbFilterBar(data) + kbPrRefreshHtml(data)
+    }<button data-kb-refresh>刷新</button>`)}
     <div class="detail-body run-wrap">
       ${
         err
@@ -4080,12 +5024,7 @@ async function openBoardPage({ project = null } = {}) {
 
   S.view = 'plugin';
   showView('plugin');
-  view.querySelector('[data-crumb-to="workbench"]')?.addEventListener('click', () => {
-    openPlugins().catch((e) => toast(e.message, 'error'));
-  });
-  view.querySelector('[data-crumb-to="projects"]')?.addEventListener('click', () => {
-    openProjectsPage().catch((e) => toast(e.message, 'error'));
-  });
+  // 页头不放开返回按钮（统一去掉）：回到别处靠左栏点那一行
   view.querySelector('[data-kb-refresh]')?.addEventListener('click', () => {
     (isAll ? openTaskBoard() : openProjectDetail(project.id)).catch((e) => toast(e.message, 'error'));
   });
@@ -4781,10 +5720,27 @@ function wireBoard(view, { refresh, taskProject = () => null }) {
  */
 let taskCardFromAll = false;
 
+/**
+ * 这张卡是**从流程的某一步**点进来的吗（2026-10-19）：`{ runId, taskId, runTitle, nodeName }`，否则 null。
+ *
+ * 跟上面那个 `taskCardFromAll` 不是一回事，两个都留着：
+ *   · `taskCardFromAll` 决定**离开时回哪**（看板 / 项目 / 流程）；
+ *   · 这个只决定**页头写不写那行来路**。
+ * 合在一起会逼着做二选一 —— 从流程进来的卡，回程本来就该是流程，不冲突。
+ */
+let taskCardFromFlow = null;
+
 async function openTaskCardPage(taskId, opts = {}) {
   // 来源定死：恢复位置时从 route 里带回来（刷新也还记得），否则看当前的 S.boardAll
   taskCardFromAll = opts.fromAll ?? !!S.boardAll; // 必须在 S.boardAll = false 之前读
-  setRoute('taskCard', { id: taskId, fromAll: taskCardFromAll });
+  /*
+   * 从流程那一步点进来的（2026-10-19）：记下"这条卡是哪条流程、哪个节点"。
+   * 只为了在页头写一行来路 —— 人刚在流程页看着「写代码」这一步，点进来要还认得出是它。
+   * 传 null 就是"不是从流程来的"（从看板点进来的），页头不写那行。
+   * ⚠️ 路由里必须带上它：不带的话刷新一下页头那行就没了，看着像"进错页面"。
+   */
+  taskCardFromFlow = opts.fromFlow ?? null;
+  setRoute('taskCard', { id: taskId, fromAll: taskCardFromAll, fromFlow: taskCardFromFlow });
   const view = $('pluginView');
   view.classList.add('kb-page'); // 这一页要满屏（见 style.css 的 #pluginView.kb-page）
   S.view = 'plugin';
@@ -4796,13 +5752,110 @@ async function openTaskCardPage(taskId, opts = {}) {
   await paintTaskCardPage(taskId);
 }
 
-async function paintTaskCardPage(taskId) {
-  const view = $('pluginView');
+/** 弹窗里那张卡接着的实时流（关弹窗时要掐掉 —— 见 openTaskCardDialog） */
+let tcDlgStream = null;
+
+/** 关掉任务卡弹窗（同一时刻只该有一个；开新的之前先收掉旧的） */
+function closeTaskCardDialog() {
+  document.getElementById('tcDlg')?.close?.();
+}
+
+/**
+ * 在**弹窗**里打开一张任务卡（2026-10-19）。
+ *
+ * 为什么不是整页跳转：人在流程时间轴上看着「写代码」这一步，点「任务」是想看/改这一步的
+ * 细节 —— 整页换掉等于把他从那条流程里拽走，改完还得自己找回去（用户原话："操作体验不好"）。
+ * 弹窗盖在时间轴上，关掉就还在刚才那一步，顺手把这一页重新拉一遍
+ * （这一步刚建出来的卡要认上、经办人/会话跟着刷新）。
+ *
+ * 形态照定时任务那个两栏大弹窗（`.sch-dlg`）：定高、里面自己滚、右上角有全屏。
+ * ⚠️ 不用 `<form>`：任务卡里那些按钮（关联 PR / 刷新 / 取消关联）没标 type，
+ *    进 form 就成了提交按钮，一点就把弹窗关了（隐式提交这个坑在别处踩过一次）。
+ */
+async function openTaskCardDialog(taskId, opts = {}) {
+  closeTaskCardDialog(); // 只留一个
+  const dlg = document.createElement('dialog');
+  dlg.id = 'tcDlg';
+  dlg.className = 'tc-dlg';
+  dlg.setAttribute('data-max', ''); // 讨论区一长，占满屏舒服（wireDialogHead 认这个属性）
+  // 「删除」先放在这儿，建完头部再搬进去（头部是 wireDialogHead 现建的）
+  dlg.innerHTML = `
+    <div class="tc-dlg-wrap">
+      <b>任务卡</b>
+      <button type="button" class="tc-dlg-del" id="tcDlgDel" title="删掉这张卡（＝忽略它，以后不再提）">删除</button>
+      <div id="tcDlgBody"></div>
+    </div>`;
+  document.body.append(dlg);
+  wireDialogHead(dlg.querySelector('.tc-dlg-wrap'));
+  const head = dlg.querySelector('.dlg-head');
+  // 「删除」排到 × 左边（头部第一个 button 会被 CSS 推到右边，见 .dlg-head）
+  head?.insertBefore($('tcDlgDel'), head.querySelector('.dlg-close:not(.dlg-max)') ?? null);
+  // 标题带上节点名：不写的话，一张「测试2 · 写代码」摆在弹窗里，得自己回想是哪一步
+  const titleEl = head?.querySelector('b');
+  if (titleEl && opts.fromFlow?.nodeName) titleEl.textContent = `任务卡 · ${opts.fromFlow.nodeName}`;
+
+  const cleanups = [];
+  dlg.addEventListener('close', () => {
+    for (const fn of cleanups) { try { fn(); } catch { /* 摘不掉也不影响 */ } }
+    tcDlgStream?.close?.();
+    tcDlgStream = null;
+    dlg.remove();
+    /*
+     * 刷回流程时间轴（2026-10-19）。
+     *
+     * 为什么要刷、为什么"看起来没变化"是正常的：
+     *   时间轴那一行显示的是 `workflow_tasks` 自己的状态（已阻塞 / 已完成…），
+     *   而卡上那个「状态」是 `project_tasks` 的 —— **两份数据，同一个词的两种含义**
+     *   （早先定过：流程那一套状态在 workflow_tasks，卡上不改它，两处各记各的）。
+     *   所以改卡的状态不会让那一行变字；这里刷的是**别的**：这一步现在有没有卡
+     *   （`projectTaskId` 是刚建出来的话要认上）、经办人、以及刚聊出来的会话。
+     *   ⚠️ 别为了"看着有变化"去把卡状态反写进 workflow_tasks —— 那会让流程状态机
+     *      跟着人改卡而乱走（卡上点「已完成」＝悄悄把流程那一步也办了）。
+     *
+     * 只在这条流程还开着的时候刷 —— 人已经切走就别抢他的页面。
+     */
+    const runId = opts.fromFlow?.runId;
+    if (runId && S.view === 'flow' && S.flowRunId === runId) paintRun(runId).catch(() => {});
+  });
+
+  taskCardFromFlow = opts.fromFlow ?? null; // 删完卡之后 backTo 用得上
+  dlg.showModal();
+  await paintTaskCardPage(taskId, { dlg, cleanups });
+  return dlg;
+}
+
+/**
+ * 画一张任务卡。**画在哪**由 `opts.dlg` 决定（2026-10-19）：
+ *   · 不传 —— 画进 `#pluginView`（整页，看板 / 项目点进来那条路）；
+ *   · 传了 dialog —— 画进弹窗里（**流程的某一步**点进来那条路）。
+ *
+ * 为什么分两条路而不是统一成一种：从**列表**点进详情，换页是自然的（列表就在左栏，
+ * 换页只是把主区占满）；从**流程时间轴**点「任务」是"看一眼这一步的细节"，
+ * 整页换掉等于把他从那条流程里拽走 —— 那种该弹窗（见 openTaskCardDialog）。
+ *
+ * 两条路共用这一份内容与这一套接线（全部按 id 取元素，id 在同一时刻只存在于一处），
+ * 差别只有：页头那行（弹窗用自己的头部）、「来自流程」那行（弹窗不写）、离开时去哪。
+ */
+async function paintTaskCardPage(taskId, opts = {}) {
+  const dlg = opts.dlg ?? null;
+  const host = dlg ? $('tcDlgBody') : $('pluginView');
+  /*
+   * 挂在 document 上的那两个"点别处收起"：
+   *   · 整页走 `window.__pageCleanups`（换页时统一摘，见 setRoute）；
+   *   · 弹窗没有换页这一说，走弹窗自己那一份 —— 关的时候摘。
+   *     不分开的话，每开一次弹窗就往 document 上多叠一层监听。
+   */
+  const cleanups = opts.cleanups ?? (window.__pageCleanups ??= []);
   let task;
   try {
     task = (await api(`/api/projects/tasks/${encodeURIComponent(taskId)}`)).task;
   } catch (e) {
-    view.innerHTML = `<div class="detail-head">${breadcrumb([{ label: '项目', to: 'projects' }, { label: '任务卡' }])}</div>
+    // 整页那条路还带页头（左栏点别的就走了）；弹窗里就一句话 + 右上角的 ×
+    host.innerHTML = `${dlg ? '' : headRow(breadcrumb([
+      { label: '工作台', to: 'workbench' },
+      { label: '任务看板', to: 'board' },
+      { label: '任务卡' },
+    ]))}
       <div class="empty" style="padding:24px 4px">任务取不到：${esc(e.message)}</div>`;
     return;
   }
@@ -4838,7 +5891,7 @@ async function paintTaskCardPage(taskId) {
   const cmtItem = (m) => {
     const mine = m.role === 'user';
     return `<div class="tc-cmt${mine ? ' mine' : ''}">
-      <div class="avatar sm">${esc(mine ? '我' : initial(whoName))}</div>
+      ${mine ? smAvatar('我', 'me') : smAvatar(whoName)}
       <div class="tc-cmt-main">
         <div class="tc-cmt-meta">${mine ? '' : `<b>${esc(whoName)}</b>`}<time>${esc(cmtTime(m.createdAt))}</time></div>
         <div class="tc-cmt-text">${renderMarkdown(m.text)}</div>
@@ -4912,7 +5965,7 @@ async function paintTaskCardPage(taskId) {
         // 作者行在**正文上面**（跟普通评论一致）：头像旁边第一行就是"我 + 时间"，
         // 再往下才是内容 —— 反过来会让人以为下面又开了一条评论（2026-10-18 用户指出）
         return `<article class="tc-topic${t.head ? '' : ' pre'}" data-topic="${esc(t.id)}">
-          ${t.head && !startNote ? `<div class="avatar sm">${esc(t.head.role === 'user' ? '我' : initial(whoName))}</div>` : ''}
+          ${t.head && !startNote ? (t.head.role === 'user' ? smAvatar('我', 'me') : smAvatar(whoName)) : ''}
           <div class="tc-topic-body">
             ${meta}${head}
             ${replies}
@@ -4935,26 +5988,45 @@ async function paintTaskCardPage(taskId) {
    * 页面形态照 Multica 的任务详情（2026-10-18 用户要求"简洁一些"）：
    *   · 主区从上到下就是这件事本身：大标题 → 描述 → 讨论，别的一概不摆；
    *   · 属性全收进右栏三段：属性（状态/执行人/项目/来源）、Pull Request、详情（创建/更新时间）；
-   *   · 页头只留面包屑 + 两颗小动作（返回/删除），大按钮、来源 pill、执行人重复展示都撤掉。
+   *   · 页头只有「任务卡 + 删除」（原来的三级面包屑 `工作台 › 任务看板 › 任务卡`
+   *     统一去掉返回后一并撤了；回看板靠左栏点那一行 —— 左栏本来就是看板那一列）。
    */
-  view.innerHTML = `
-    <div class="detail-head">
-      ${taskCardFromAll
-        ? breadcrumb([{ label: '工作台', to: 'workbench' }, { label: '任务看板', to: 'taskBoard' }, { label: '任务卡' }])
+  /*
+   * 页头：**从流程进来的，标题下面补一行来路**（2026-10-19）。
+   * 人刚才在流程时间轴上看着「写代码」这一步，点进来要还认得出是它 ——
+   * 不然一张「测试2-不指定 · 写代码」的卡摆在眼前，得自己回想"这是哪条流程第几步"。
+   * 那行**可以点**：直接回那条流程（跟删完卡之后回的是同一个地方）。
+   * 从看板进来的没有这一行 —— 来源本来就在左栏上写着，再写一遍是噪音。
+   */
+  /*
+   * 弹窗里**不写**那行来路：流程时间轴就在弹窗背后露着，弹窗自己的标题也已经写了
+   * 「任务卡 · 节点名」——再把"你从哪来"写一遍是噪音。整页那条路照旧要写（那边没有上下文）。
+   */
+  const fromFlowBar = !dlg && taskCardFromFlow?.runId
+    ? `<button type="button" class="tc-from" id="tcFromFlow"
+         title="回到这条流程的时间轴">
+         <span class="tc-from-k">来自流程</span>
+         <b>${esc(taskCardFromFlow.runTitle ?? '')}</b>
+         ${taskCardFromFlow.nodeName ? `<span class="tc-from-sep">›</span> <span>${esc(taskCardFromFlow.nodeName)}</span>` : ''}
+       </button>`
+    : '';
+  host.innerHTML = `
+    ${dlg ? '' : headRow(
+      taskCardFromAll || !proj
+        ? breadcrumb([{ label: '工作台', to: 'workbench' }, { label: '任务看板', to: 'board' }, { label: '任务卡' }])
         : breadcrumb([
+            { label: '工作台', to: 'workbench' },
             { label: '项目', to: 'projects' },
-            // 项目名可点：回这个项目的看板（`project:<id>` 由下面的监听解析）
-            { label: proj?.name ?? '（项目已不在）', to: proj ? `project:${proj.id}` : undefined },
+            { label: proj.name, to: 'projects', arg: proj.id },
             { label: '任务卡' },
-          ])}
-      <div class="head-actions" style="margin-left:auto">
-        <button class="tc-del" id="tcDel" title="删掉这张卡（＝忽略它）">删除</button>
-      </div>
-    </div>
-    <div class="detail-body tc-page">
+          ]),
+      '<button class="tc-del" id="tcDel" title="删掉这张卡（＝忽略它）">删除</button>',
+    )}
+    <div class="detail-body tc-page${dlg ? ' in-dlg' : ''}">
       <div class="tc-main">
         <div class="tc-main-scroll">
           <div class="tc-headblock">
+            ${fromFlowBar}
             <h1 class="tc-title" id="tcTitleText" contenteditable="plaintext-only" spellcheck="false">${esc(task.title)}</h1>
             <div class="tc-desc${task.description ? '' : ' empty'}" id="tcDescView">${task.description ? renderMarkdown(task.description) : '<span class="dim">添加描述…</span>'}</div>
           </div>
@@ -5037,22 +6109,25 @@ async function paintTaskCardPage(taskId) {
       </aside>
     </div>`;
 
-  // 从哪来回哪去：全局看板点进来的回全局看板，项目看板点进来的回那个项目
-  const backTo = taskCardFromAll
-    ? () => openTaskBoard()
-    : proj ? () => openProjectDetail(proj.id) : () => openProjectsPage();
+  /*
+   * 从哪来回哪去：**从流程那一步进来的就回那条流程**（2026-10-19）。
+   * 这是这轮改造的重点之一 —— 人是在流程时间轴上点「任务」过来的，
+   * 删完卡 / 干完事却落回看板，等于把他从上下文里拽走了，还得自己找回去。
+   * 其余照旧：全局看板 → 全局看板，项目看板 → 那个项目。
+   */
+  const backTo = dlg
+    ? () => { dlg.close('done'); } // 弹窗这条路：**关掉就是回去**（流程页一直在底下，没走过）
+    : taskCardFromFlow?.runId
+      ? () => openFlowRun(taskCardFromFlow.templateId ?? null, taskCardFromFlow.runId)
+      : taskCardFromAll
+        ? () => openTaskBoard()
+        : proj ? () => openProjectDetail(proj.id) : () => openProjectsPage();
   // 离开这张卡就把位置记忆清掉：否则下一次刷新又会被拽回这张卡
   const leaveTo = async () => { await backTo(); };
-  view.querySelector('[data-crumb-to="projects"]')?.addEventListener('click', () => openProjectsPage().catch((e) => toast(e.message, 'error')));
-  // 项目名（`project:<id>`）→ 回这个项目的看板
-  view.querySelectorAll('[data-crumb-to^="project:"]').forEach((el) => {
-    el.addEventListener('click', () => {
-      const id = el.dataset.crumbTo.slice('project:'.length);
-      openProjectDetail(id).catch((e) => toast(e.message, 'error'));
-    });
-  });
-  view.querySelector('[data-crumb-to="workbench"]')?.addEventListener('click', () => openPlugins().catch((e) => toast(e.message, 'error')));
-  view.querySelector('[data-crumb-to="taskBoard"]')?.addEventListener('click', () => openTaskBoard().catch((e) => toast(e.message, 'error')));
+  // （页头不再有返回按钮；backTo 只剩 leaveTo 和下面那行「来自流程」在用）
+
+  // 「来自流程」那行：点一下回那条流程的时间轴（跟删完卡之后回的是同一个地方）
+  $('tcFromFlow')?.addEventListener('click', () => { backTo().catch((e) => toast(e.message, 'error')); });
 
   /* ---------------- 标题 / 描述：就地编辑（2026-10-18 用户要求：没有编辑按钮，点了就改，改完自动存）
      做法跟 Multica 一致：标题、描述平时就是"读"的样子，点上去原地变成输入框；
@@ -5199,7 +6274,7 @@ async function paintTaskCardPage(taskId) {
   const repaintKeepingDraft = async () => {
     const draft = $('tcInput')?.value ?? '';
     const topicId = replyTo;
-    await paintTaskCardPage(taskId);
+    await paintTaskCardPage(taskId, opts);
     if (draft) {
       const el = $('tcInput');
       if (el) el.value = draft;
@@ -5248,13 +6323,28 @@ async function paintTaskCardPage(taskId) {
     }
   };
 
-  $('tcDel').onclick = async () => {
-    if (!(await confirmDo('删掉这张任务卡？（＝忽略它，以后不再提）'))) return;
-    try {
-      await api(`/api/projects/tasks/${encodeURIComponent(taskId)}`, { method: 'DELETE' });
-      await leaveTo();
-    } catch (e) { toast(e.message, 'error'); }
-  };
+  /*
+   * 关弹窗 / 换页之前，**先把没落库的改动存掉**（2026-10-19）。
+   * 原来的排版是"敲完字马上失焦（弹窗里就关掉）"，靠 blur 触发存；现在改完状态可能
+   * 直接按 Esc —— 不补这一下，那一下改动就没了，人还以为存上了。
+   * 放在这里（PR 那几块上面）：下面所有交互都可能在存完之前关窗。
+   */
+  cleanups.push(() => {
+    if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+    if (JSON.stringify(snapshot()) !== lastSaved) saveNow?.({ keepalive: true });
+  });
+
+  // 弹窗那条路的「删除」在弹窗自己头上（静态的 #tcDlgDel），整页那条路在页头
+  const delEl = dlg ? $('tcDlgDel') : $('tcDel');
+  if (delEl) {
+    delEl.onclick = async () => {
+      if (!(await confirmDo('删掉这张任务卡？（＝忽略它，以后不再提）'))) return;
+      try {
+        await api(`/api/projects/tasks/${encodeURIComponent(taskId)}`, { method: 'DELETE' });
+        await leaveTo();
+      } catch (e) { toast(e.message, 'error'); }
+    };
+  }
 
   /* ---------------- PR 联动（卡片 ↔ GitHub PR） ---------------- */
   const prStateText = (state) => (state === 'merged' ? '已合并' : state === 'closed' ? '已关闭' : state === 'open' ? '开着' : '未知');
@@ -5272,7 +6362,7 @@ async function paintTaskCardPage(taskId) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url }),
       });
-      await paintTaskCardPage(taskId);
+      await paintTaskCardPage(taskId, opts);
       toast(`已关联：${r.pr.repo}#${r.pr.number} —— ${prStateText(r.pr.state)}`);
     } catch (err) {
       btn.disabled = false;
@@ -5287,7 +6377,7 @@ async function paintTaskCardPage(taskId) {
     btn.textContent = '查询中…';
     try {
       const r = await api(`/api/projects/tasks/${encodeURIComponent(taskId)}/pr/refresh`, { method: 'POST' });
-      await paintTaskCardPage(taskId);
+      await paintTaskCardPage(taskId, opts);
       toast(`PR 现在：${prStateText(r.pr.state)}${r.task?.status === '待确认' ? '（卡已转到「待确认」）' : ''}`);
     } catch (err) {
       btn.disabled = false;
@@ -5300,7 +6390,7 @@ async function paintTaskCardPage(taskId) {
     if (!(await confirmDo('取消这张卡和 PR 的关联？（不会动 GitHub 上的 PR）'))) return;
     try {
       await api(`/api/projects/tasks/${encodeURIComponent(taskId)}/pr`, { method: 'DELETE' });
-      await paintTaskCardPage(taskId);
+      await paintTaskCardPage(taskId, opts);
     } catch (err) {
       toast(err.message, 'error');
     }
@@ -5425,7 +6515,7 @@ async function paintTaskCardPage(taskId) {
     if (!e.target.closest?.('.tc-reply-pick')) closeReplyMenu();
   };
   document.addEventListener('click', onReplyPickOutside);
-  (window.__pageCleanups ??= []).push(() => {
+  cleanups.push(() => {
     document.removeEventListener('click', onReplyPickOutside);
   });
 
@@ -5527,7 +6617,7 @@ async function paintTaskCardPage(taskId) {
     host?.insertAdjacentHTML(
       'beforeend',
       `<div class="tc-cmt live" id="${id}">
-        <div class="avatar sm">${esc(initial(whoName))}</div>
+        ${smAvatar(whoName)}
         <div class="tc-cmt-main"><div class="tc-cmt-meta"><b>${esc(whoName)}</b><span class="dim">正在说…</span></div>
         <div class="tc-cmt-text"><div class="typing"><i></i><i></i><i></i></div></div></div></div>`,
     );
@@ -5557,6 +6647,9 @@ async function paintTaskCardPage(taskId) {
       },
       onReconnect: () => refreshThread(),
     });
+    // 弹窗那条路：记到模块级，openTaskCardDialog 关弹窗时掐掉
+    // （不掐的话它还在后台收消息，往一个已经从文档里摘掉的 DOM 里写）
+    if (dlg) tcDlgStream = stream;
   };
   if (runningRun) attach(runningRun.id, null); // 打开时正好在跑 → 接上，不等刷新
 
@@ -5606,8 +6699,8 @@ async function paintTaskCardPage(taskId) {
   };
   $('tcSend').onclick = sendText;
 
-  // 页面要被换掉时，把挂在 document 上的收起监听摘掉（否则会一层层堆起来，见 setRoute）
-  (window.__pageCleanups ??= []).push(() => document.removeEventListener('click', onDocClick));
+  // 页面要被换掉 / 弹窗要关时，把挂在 document 上的收起监听摘掉（否则会一层层堆起来，见 setRoute）
+  cleanups.push(() => document.removeEventListener('click', onDocClick));
 }
 
 /**
@@ -6087,6 +7180,59 @@ async function doStartFlow() {
   }
 }
 
+/**
+ * 左栏顶上的标题：`setListTitle('工作台')` 写名字，
+ * `setListTitle([{label:'工作台',to:'workbench'}, {label:'流程编排'}])` 写面包屑。
+ *
+ * 为什么做成两个入口而不是让调用处拼 HTML（2026-10-19 用户截图：「改成面包屑」）：
+ *   · 左栏 `#listTitle` 原来是个 `<b>`，十几处直接写 `textContent`；
+ *   · 面包屑是"你在哪儿"，它该长在**左栏列表顶上**（2026-10-19 用户第二次截图：
+ *     「面包屑应该是在左边的列表上，右边的不用」）—— 于是右页头那条面包屑全撤了，
+ *     统一挪到这儿；页头只留当前这一项的名字 / 操作。
+ *
+ * 数组的每一段可以是字符串（= 当前这一层，不可点）或 `{label, to, arg?}`：
+ *   · 最后一段**永远不可点**（当前位置）；中间段必须给 `to`（`CRUMB_GO` 的键）；
+ *   · 点击走全站那一个 document 事件委托（`data-crumb-to`），页面里不写 onclick ——
+ *     左栏标题会随页面重画，逐个绑必漏。`to` 用 key 而不是函数，跟页头面包屑同一套。
+ *
+ * 传数组时全部用 `textContent` 写（流程名/项目名/员工名都来自用户输入，不能进 innerHTML）。
+ */
+function setListTitle(t) {
+  const el = $('listTitle');
+  if (!el) return;
+  if (!Array.isArray(t)) {
+    el.innerHTML = `<b title="${esc(t)}">${esc(t)}</b>`;
+    return;
+  }
+  el.innerHTML = '';
+  t.forEach((part, i) => {
+    const it = typeof part === 'string' ? { label: part } : part;
+    if (i) {
+      const sep = document.createElement('span');
+      sep.className = 'crumb-sep';
+      sep.textContent = '›';
+      el.append(sep);
+    }
+    if (i === t.length - 1) {
+      const b = document.createElement('b');
+      b.textContent = it.label;
+      b.title = it.label; // 名字长时会被省略号截掉，悬停能看全
+      el.append(b);
+      return;
+    }
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'crumb-btn';
+    btn.textContent = it.label;
+    btn.title = `回${it.label}`;
+    if (it.to) {
+      btn.dataset.crumbTo = it.to;
+      if (it.arg != null) btn.dataset.crumbArg = String(it.arg);
+    }
+    el.append(btn);
+  });
+}
+
 /* -------------------------------------------------- 流程实例页（流转记录） */
 
 /**
@@ -6101,7 +7247,11 @@ async function openFlowRun(templateId, pickRunId) {
   // 一刷新就被恢复到工作台去了（踩过）
   setNav('workflows', { skipOpen: true });
   document.body.classList.remove('no-list');
-  $('listTitle').textContent = '发起记录';
+  // 左栏这一栏是「发起记录」：面包屑只到**二级**——工作台 › 流程名。
+  // 中间不能插「流程编排」（2026-10-19 用户截图：「这个只是个二级标题，没有流程编排」）：
+  // 发布过的流程是工作台上的**一级磁贴**，点它直接到这页，并不经过「流程编排」那一层；
+  // 而「流程编排」是"画流程"的那一页，两者的上一级都只是工作台。
+  setListTitle([{ label: '工作台', to: 'workbench' }, { label: '发起记录' }]);
   setRoute('flowRun', { template: templateId ?? null, run: pickRunId ?? S.flowRunId ?? null });
   // 左栏顶上的「＋」在这儿是**发起一条**（不是新建模板）
   $('listAction').classList.remove('hidden');
@@ -6114,7 +7264,7 @@ async function openFlowRun(templateId, pickRunId) {
   } catch { /* 拿不到就当空的 */ }
   S.flowTemplates = data.templates ?? [];
   const tpl = (data.templates ?? []).find((t) => t.id === templateId) ?? null;
-  if (tpl) $('listTitle').textContent = tpl.name;
+  if (tpl) setListTitle([{ label: '工作台', to: 'workbench' }, { label: tpl.name }]);
 
   S.flowRuns = (data.runs ?? []).filter((r) => !templateId || r.templateId === templateId);
   if (pickRunId) S.flowRunId = pickRunId;
@@ -6167,9 +7317,9 @@ function renderRunList() {
 }
 
 function renderRunEmpty() {
-  // 还没发起过：说清楚下一步点哪儿，别给个死页
+  // 还没发起过：说清楚下一步点哪儿，别给个死页。
+  // 没有页头：左栏顶上已经是「工作台 › 模板名」，右页头再写一遍就是重复。
   $('flowView').innerHTML = `
-    <div class="detail-head"><b>${esc(S.flowTemplate ? '' : '发起记录')}</b></div>
     <div class="detail-body run-wrap">
       <div class="wip">这个流程还没有发起过
         <div style="margin-top:14px"><button class="primary" data-run-new>发起一条</button></div>
@@ -6192,6 +7342,11 @@ async function paintRun(id) {
   S.flowRunId = id;
   S.flowRun = v;
   S.flowTemplate = v.templateId ?? S.flowTemplate;
+  // 左栏面包屑第二段是**模板名**（这一栏就是模板下的发起记录）；换 run 时也刷一遍，
+  // 万一这条 run 属于别的模板（理论上不会，但数据是老的时候可能），标题别停在上一份。
+  // 只到二级：工作台 › 模板名（中间没有「流程编排」，见 openFlowRun 的注释）。
+  const tplNow = (S.flowTemplates ?? []).find((t) => t.id === S.flowTemplate);
+  setListTitle([{ label: '工作台', to: 'workbench' }, { label: tplNow?.name ?? '发起记录' }]);
   /*
    * **左栏那一行也要跟着换成这份新的。**
    *
@@ -6453,6 +7608,8 @@ function runHTML(v) {
       // 这样对话被锚定在这一个节点上，时间轴也不会被长对话淹掉。
       const n = (t.messages ?? []).length;
       const canTalk = !!t.conversationId && t.status !== '待办';
+      // 能不能通到任务卡：服务端给了「已有卡」或「能现开」之一就行（见 viewTask 的说明）
+      const canOpenCard = !!t.projectTaskId || t.canOpenTaskCard === true;
       // 这一步的记录（状态 / 经办人 / 第几次 / 时间 / 耗时）现在全在这一行的属性行里，
       // 不用再开一个面板 —— 任务卡就是为此撤掉的。
       const isCur = t.id === lastTaskId;
@@ -6501,14 +7658,25 @@ function runHTML(v) {
             canAssign ? '<span class="run-pick" id="runAssigneeMount"></span>' : esc(t.assigneeName ?? '没人')
           }${t.visit > 1 ? ` · 第 ${t.visit} 次` : ''}${
             /*
-             * 人名后面那颗对话图标：**跟下面那排的「对话」按钮是同一个动作** ——
-             * 都打开这一步的会话面板（那也就是跟经办人的往来，见 viewTask 的说明）。
-             * 放在人名后面，是因为"我想找他说句话"的时候，眼睛就在人名上。
-             * 两步用同一个 `data-run-chat` 接线，不另开一条路。
+             * 人名后面那颗按钮 —— **2026-10-19 起它开的是"这一步的任务卡"，不再开对话栏**。
+             *
+             * 用户的判断（"流程这个对话改成跳转到任务卡是不是更好"）对的地方在于：
+             * 这一步的往来记录、干成什么样、状态、换个经办人 —— 本来就是一张卡要回答的事，
+             * 对话栏只回答了其中一问，还挤在窄栏里。所以让它通到卡上去。
+             *
+             * 这里**不直接把 wt2- 当卡 id**：流程步骤和任务卡在库里是两张表
+             * （`workflow_tasks` / `project_tasks`），拿 `wt2-` 去查卡会 404（试过）。
+             * 服务端在每一步上给了 `projectTaskId`（已有卡）和 `canOpenTaskCard`（能现开），
+             * 两者都没有（流程没挂项目）时才退回老的对话栏 —— 那条路没删，还能用。
+             *
+             * 图标仍是"对话气泡"而不是"卡片"：对人来说这一下就是"去看看他在说什么/干了啥"，
+             * 文案也跟着变（title 写清楚去哪儿），别让人点了才知道。
              */
-            `<button class="icon-btn run-chat" type="button" data-run-chat data-task="${esc(t.id)}"${
-              canTalk ? '' : ' disabled'
-            } title="${canTalk ? '跟经办人对话' : '先派活才能对话'}">${ICON_CHAT}</button>`
+            `<button class="icon-btn run-chat" type="button" data-run-card data-task="${esc(t.id)}"${
+              canOpenCard || canTalk ? '' : ' disabled'
+            } title="${canOpenCard
+              ? (t.projectTaskId ? '打开这一步的任务卡（不离开这条流程）' : '打开任务卡（第一次点会建一张）')
+              : canTalk ? '跟经办人对话' : '先派活才能对话'}">${ICON_CHAT}</button>`
           }</span>
           <span><i>经办时间</i>${
             t.startedAt ? esc(new Date(t.startedAt).toLocaleString('zh-CN')) : '—'
@@ -6589,18 +7757,19 @@ function runHTML(v) {
   return `
     <div class="run-page">
       <div class="run-left">
-        <div class="detail-head">
-          <!-- 推拉列表面板：放<b>顶栏</b>里 —— 列表面板收起后这块还在，按钮不会跟着消失 -->
-          <button class="icon-btn run-toggle" type="button" data-run-toggle title="收起列表面板"
-                  aria-label="收起列表面板">
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"
-                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M11 6l-5 6 5 6" /><path d="M18 6l-5 6 5 6" />
-            </svg>
-          </button>
-          <b>${esc(v.title)}</b>
-          <span class="flow-badge ${b.cls}">${esc(b.text)}</span>
-          <div class="head-actions" style="margin-left:auto">${acts.join('')}</div>
+        <!-- 顶栏：只属于左边这一栏（右边对话栏自带一条头，两栏等高，见 .run-head 那条规则）。
+             左边是推拉列表面板的按钮 + 标题 + 状态徽标，右边是动作。
+             返回按钮统一去掉了：回工作台 / 换一条记录都点左栏那一行。 -->
+        <div class="detail-head run-head">
+          <!-- ⚠️ 顶栏最左边原来有一枚「«」推拉按钮（收起/放出最左侧的列表面板）。
+               2026-10-19 用户要求去掉这一页的收缩展开：这一页的左栏是**发起记录**，
+               换一条记录全靠点它 —— 收起来等于把自己唯一的路收掉，而省下的那点宽度
+               换不来什么（右边还有一整栏对话）。整页统一：**左栏常驻，不推拉**。
+               所以这里不再有前置按钮，页头最左边就是标题（跟其它子页一个规矩）。
+               面包屑（工作台 › 模板名）在左栏顶上，这里只写**这一条 run 的标题**。 -->
+          <div class="head-title"><b>${esc(v.title)}</b>
+            <span class="flow-badge ${b.cls}">${esc(b.text)}</span></div>
+          <div class="head-actions">${acts.join('')}</div>
         </div>
         <div class="detail-body run-wrap">
 
@@ -6706,9 +7875,46 @@ function wireRun(v) {
   // ⚠️ 按**按钮自己的状态**判断走哪条路，别依赖 ncCtx（那是右侧对话栏的东西，
   //    没开栏时它是 null，点击会掉进 sendNodeChat —— 空输入，看着像"点了没反应"）
   if (send) send.onclick = () => (send.classList.contains('stopping') ? stopNodeRun() : sendNodeChat());
-  // 节点上的「对话」→ 右边多出一栏
-  view.querySelectorAll('[data-run-chat]').forEach((el) => {
-    el.onclick = () => openNodeChat(v.id, el.dataset.task).catch((e) => toast(e.message, 'error'));
+  /*
+   * 节点上那颗按钮 → **这一步的任务卡**（2026-10-19）；没有卡、也不能开卡时退回对话栏。
+   *
+   * 三条路，顺序不能反：
+   *   ① 服务端说"已经有卡" → 直接开弹窗（不写库）；
+   *   ② 说"能开" → 让服务端现开一张再开（`POST .../card` 是幂等的，点两次不会两张）；
+   *   ③ 都没有（流程没挂项目）→ 退回原来的对话栏 —— 那条路还在，只是不再是首选。
+   * 一次点击只该发生一件事，所以用 if/else 串起来而不是各挂各的。
+   *
+   * ⚠️ ①②落在**弹窗**里（`openTaskCardDialog`），不换页（2026-10-19）：
+   *    换页会把人从这条流程里带走，改完还得自己找回来 —— 换来的只是一个"整页"的壳。
+   */
+  view.querySelectorAll('[data-run-card]').forEach((el) => {
+    el.onclick = async () => {
+      const taskId = el.dataset.task;
+      const step = (v.tasks ?? []).find((x) => x.id === taskId) ?? null;
+      if (!step) return;
+      // 来路：让弹窗标题写得出「任务卡 · 节点名」，关掉之后也知道该刷哪条流程
+      const fromFlow = { runId: v.id, templateId: v.templateId ?? null, runTitle: v.title, nodeName: step.nodeName };
+      if (step.projectTaskId) {
+        return openTaskCardDialog(step.projectTaskId, { fromFlow }).catch((e) => toast(e.message, 'error'));
+      }
+      if (step.canOpenTaskCard) {
+        el.disabled = true;
+        try {
+          const d = await api(
+            `/api/workflows/runs/${encodeURIComponent(v.id)}/tasks/${encodeURIComponent(taskId)}/card`,
+            { method: 'POST' },
+          );
+          if (d?.task?.id) return await openTaskCardDialog(d.task.id, { fromFlow });
+          throw new Error('没拿到卡');
+        } catch (e) {
+          toast(`开不了卡：${e.message}`, 'error');
+        } finally {
+          el.disabled = false;
+        }
+        return;
+      }
+      openNodeChat(v.id, taskId).catch((e) => toast(e.message, 'error'));
+    };
   });
   /*
    * 产物：文件 → 复制路径（贴进编辑器或终端就是"打开"）；链接 → 新窗口。
@@ -6855,21 +8061,7 @@ function wireRun(v) {
       toast(e.message, 'error');
     }
   };
-  // 推拉：收起/放出**最左侧的列表面板**（用 app 现成的 no-list 机制，工作台也是它）
-  const toggle = view.querySelector('[data-run-toggle]');
-  if (toggle) toggle.onclick = (e) => {
-    const btn = e.currentTarget;
-    const off = document.body.classList.toggle('no-list');
-    btn.title = off ? '展开列表面板' : '收起列表面板';
-    btn.setAttribute('aria-label', btn.title);
-    // 箭头方向跟着状态：收起时朝左（面板往左退），展开时朝右（拉出来）
-    btn.innerHTML = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"
-      stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${
-        off
-          ? '<path d="M6 6l5 6-5 6"/><path d="M13 6l5 6-5 6"/>'
-          : '<path d="M11 6l-5 6 5 6"/><path d="M18 6l-5 6 5 6"/>'
-      }</svg>`;
-  };
+  // （那枚推拉列表面板的按钮 2026-10-19 撤了 —— 接线跟着删，见 runHTML 里的说明）
   // 「指派」「改状态」现在都长在时间轴"当前这一步"那一行里 —— 任务卡已撤；
   // 「重跑」也删了（改状态成「待办」就是重跑）。行内只剩：通过 / 驳回（快乐路径）。
   view.querySelectorAll('[data-run-decide]').forEach((el) => {
@@ -7163,7 +8355,8 @@ async function openDesigner(templateId = null) {
     clearDraft(); // 和模板一样 → 留着没意义，还会下次误报
   }
 
-  $('listTitle').textContent = '工作流';
+  // 左栏顶上：工作台 › 流程编排（当前流程名在页头那个输入框里，不再往面包屑里塞第三段）
+  setListTitle([{ label: '工作台', to: 'workbench' }, { label: '流程编排' }]);
   renderFlowList();
   paintDesigner();
 }
@@ -7320,14 +8513,14 @@ function paintDesigner() {
     .join('');
 
   $('flowView').innerHTML = `
-    <div class="detail-head">
-      <b>流程设计</b>
-      <input id="dzName" value="${esc(S.designerName ?? '')}" placeholder="流程名字" style="max-width:220px" />
-      <div class="head-actions" style="margin-left:auto">
-        <button data-vd-publish>${S.designerPublished ? '已发布 · 下架' : '发布到工作台'}</button>
-        <button class="primary" data-vd-save>保存</button>
-      </div>
-    </div>
+    ${headRow(
+      // 面包屑「工作台 › 流程编排」在**左栏顶上**（2026-10-19 用户要求挪过去），页头这边
+      // 只留当前这一项：流程名。**看上去是标题、点上去能改**（不要输入框的样子，见 #dzName 的样式），
+      // 再写一遍名字等于同一个东西三处各写一次。
+      `<input id="dzName" value="${esc(S.designerName ?? '')}" placeholder="流程名字" spellcheck="false" title="点一下改流程名" />`,
+      `<button data-vd-publish>${S.designerPublished ? '已发布 · 下架' : '发布到工作台'}</button>
+       <button class="primary" data-vd-save>保存</button>`,
+    )}
     <div class="detail-body dz-wrap">
       ${
         S.designerRestored
@@ -7355,7 +8548,11 @@ function paintDesigner() {
                  <label>谁来办</label>
                  <div data-vd-pick-mount></div>
                  <label>这一步要干什么</label>
-                 <textarea data-vd-f="detail" style="height:80px">${esc(sel.detail ?? '')}</textarea>
+                 ${/* 高度 80 → 150（2026-10-19 用户截图要求）：这段是**干活的要求**，
+                       正常要写五六行（目标/边界/验收/产出），80px 只露三行，写的时候一大半在框外面，
+                       得一边写一边滚。150 约八行，一个节点写清楚不用滚。
+                       仍然可拖（resize 是 textarea 默认行为，没关掉）。 */ ''}
+                 <textarea data-vd-f="detail" style="height:150px">${esc(sel.detail ?? '')}</textarea>
                  <label>不通过时去哪</label>
                  <select data-vd-f="reject">${rejectOpts(sel.reject)}</select>
                  <!-- 流转开关：默认"做完自动往下走"；打开则停在这儿等人表态 -->
@@ -7382,6 +8579,23 @@ function paintDesigner() {
 
 function wireDesigner() {
   const view = $('flowView');
+
+  /* 流程名：**看上去是标题、点上去就能改**（输入框的边框/底色在 #dzName 里抹掉了）。
+     宽度跟着字数走 —— 它是个标题，不该有一块固定宽的透明点击区伸到右边空白里。
+     汉字约 1em 宽：最短 6em（够放 placeholder），最长 26em（再长就省略/滚动，别把页头顶爆）。 */
+  const dz = view.querySelector('#dzName');
+  if (dz) {
+    const fitDz = () => {
+      const n = Math.min(26, Math.max(6, [...(dz.value || dz.placeholder)].length + 1));
+      dz.style.width = n + 'em';
+    };
+    dz.addEventListener('input', () => {
+      fitDz();
+      S.designerName = dz.value;
+      scheduleDraftSave();
+    });
+    fitDz();
+  }
 
   view.querySelectorAll('[data-vd-add]').forEach((el) => {
     el.onclick = () => {
@@ -7945,9 +9159,7 @@ async function renderGitRepos() {
     </div>`;
 
   view.innerHTML = `
-    <div class="detail-head"><b>代码托管</b>
-      <span class="dim" style="font-size:12.5px;margin-left:8px">连接 GitHub、把仓库接进来给数字员工用</span>
-    </div>
+    ${headRow('<b>代码托管</b>')}
     <div class="detail-body">
       <div class="group-title">GitHub 连接<button type="button" class="help-btn" id="gitTokenHelp"
               title="怎么拿到这个令牌？">${ICON_HELP}</button></div>
@@ -8150,8 +9362,8 @@ async function renderSchedules() {
     return `<span style="color:var(--bad)">✗</span> ${esc(j.lastError || '失败了（没有原因）')}`;
   };
 
-  const row = (j) => {
-    // 「交给数字员工」这类任务，一行里最该看到的是**它到底要干什么**，不是动作名 ——
+  const card = (j) => {
+    // 「交给数字员工」这类任务，卡上最该看到的是**它到底要干什么**，不是动作名 ——
     // 五条任务都写着「交给数字员工」等于没写。所以把那句话（和交给谁、在哪个项目里）提到描述行最前面。
     const instr = String(j.config?.instruction ?? '').replace(/\s+/g, ' ').trim();
     const who = j.config?.personaId ? (S.personas ?? []).find((p) => p.id === j.config.personaId)?.name : null;
@@ -8160,59 +9372,82 @@ async function renderSchedules() {
     const lead = instr
       ? `交给${who ? `「${who}」` : '员工'}${proj ? `（在「${proj}」）` : ''}：${instr.length > 44 ? instr.slice(0, 43) + '…' : instr}`
       : '';
+    /* 卡片形态（2026-10-20 用户要求"做成卡片"）：整行横条改成一格一格的卡。
+       结构：第一行 名字+状态 → 第二行 要干什么+节拍 → 第三行 上次结果（原话）→ 底部动作。
+       margin-top:auto 把动作压到卡底，多张卡并排时按钮齐平。 */
     return `
-    <div class="sk-row">
-      <div class="sk-main">
+    <article class="sch-card">
+      <div class="sch-card-top">
         <b>${esc(j.name)}</b>
         <span class="pill">${esc(actionOf(j.action)?.label ?? j.action)}</span>
-        ${j.enabled ? '' : '<span class="pill">已停用</span>'}
         ${(j.repeat === 'once' && j.lastStatus === 'ok') ? '<span class="pill" style="color:var(--ok)">已完成</span>' : ''}
         ${j.running ? '<span class="pill" style="color:var(--warn)">在跑</span>' : ''}
-        <div class="sk-desc">${lead ? `${esc(lead)} · ` : ''}${esc(j.text ?? `每 ${j.everyMinutes} 分钟`)} · 上次 ${esc(when(j.lastRunAt))} · ${resultOf(j)}</div>
+        <!-- 动作在**右上角**（2026-10-20 用户照参考截图要求）：启停开关在最右，跟名字同一行。
+             三颗动作是**图标按钮**（同日用户："这三个改成图标按钮"）：文字版三块边框比任务名还重，
+             图标 + 提示就够；删除那颗常态红，危险操作不用 hover 才认得出。
+             提示走自建 data-tip（2026-10-20 用户："提示框改成圆角"）：原生 title 的方角改不了，
+             aria-label 留着给读屏 —— 两个一起写会冒双重提示 -->
+        <div class="sch-acts">
+          <button class="sch-ic" data-sch-run="${esc(j.id)}" data-tip="立即执行" aria-label="立即执行">${ICON_PLAY}</button>
+          <button class="sch-ic" data-sch-edit="${esc(j.id)}" data-tip="编辑" aria-label="编辑">${ICON_EDIT}</button>
+          <button class="sch-ic danger" data-sch-del="${esc(j.id)}" data-tip="删除" aria-label="删除">${ICON_TRASH}</button>
+          <!-- 启停是**开关**不是按钮：开关本身就是状态，卡上不再多挂「已停用」胶囊。
+               提示**只说当前状态**（2026-10-20 用户定）：写成「点击后怎样」会被读成现状，
+               状态 + 动作混在一起也嫌长。点了会怎样，开关本身就是答案 -->
+          <label class="switch sm" data-tip="${j.enabled ? '已启用（到点就跑）' : '已停用（到点也不跑）'}">
+            <input type="checkbox" data-sch-toggle="${esc(j.id)}" ${j.enabled ? 'checked' : ''} /><span></span>
+          </label>
+        </div>
       </div>
-      <button class="mini auto" data-sch-run="${esc(j.id)}" title="现在就跑一次（不等到点）">立即跑</button>
-      <button class="mini auto" data-sch-edit="${esc(j.id)}">编辑</button>
-      <button class="mini auto" data-sch-toggle="${esc(j.id)}" title="${j.enabled ? '停用：到点也不跑' : '启用：到点就跑'}">${j.enabled ? '停用' : '启用'}</button>
-      <button class="mini auto" data-sch-del="${esc(j.id)}">删除</button>
-    </div>`;
+      ${lead ? `<div class="sch-desc">${esc(lead)}</div>` : ''}
+      ${
+        /* 结果原话独占一行（2026-10-20 用户："上次执行时间放右下角"）：
+           原来时间和结果拼在底行右侧，结果一长整行被占满、时间就吊在中间。
+           拆开后底行只剩「节拍（左）+ 上次时间（右）」，两个都短，一行放得下 */
+        j.lastStatus ? `<div class="sch-result">${resultOf(j)}</div>` : ''
+      }
+      <!-- 底行：定时方式在左下角，上次执行时间在**右下角** -->
+      <div class="sch-foot">
+        <span class="sch-when">${esc(j.text ?? `每 ${j.everyMinutes} 分钟`)}</span>
+        <span class="sch-last">${j.lastRunAt ? `上次 ${esc(when(j.lastRunAt))}` : '还没跑过'}</span>
+      </div>
+    </article>`;
   };
 
   view.innerHTML = `
-    <div class="detail-head">${breadcrumb([{ label: '工作台', to: 'workbench' }, { label: '定时任务' }])}
-      <div class="head-actions" style="margin-left:auto"><button class="primary" id="schNew">＋ 新建任务</button></div>
-    </div>
+    ${headRow(
+      breadcrumb([{ label: '工作台', to: 'workbench' }, { label: '定时任务' }]),
+      '<button class="primary" id="schNew">＋ 新建任务</button>',
+    )}
     <div class="detail-body">
       <div class="group-title">任务 <span class="dim" style="font-weight:400">${jobs.length} 个</span></div>
-      <div class="group">
-        ${
-          jobs.length
-            ? jobs.map(row).join('')
-            : `<div class="sk-blank">还没有定时任务。最常用的做法是「交给数字员工」：写一句要它干什么、选一个人，
-               到点这句话就发进它自己的一条会话里（标题写着任务名，结果在那儿看）。
-               另外两个内置动作：「PR / Issue 巡检」—— 去 GitHub 看有没有人提 PR / issue，写成看板上的卡，
-               顺手把已合并的收成「待确认」；「数据库备份」—— 把 bandi.db 导出一份到数据目录的 backups/，
-               只留最近 N 份。动作是可插拔的，以后加新动作不用改调度核心。</div>`
-        }
-      </div>
+      ${
+        jobs.length
+          ? `<div class="sch-grid">${jobs.map(card).join('')}</div>`
+          : `<div class="sk-blank">还没有定时任务。最常用的做法是「交给数字员工」：写一句要它干什么、选一个人，
+             到点这句话就发进它自己的一条会话里（标题写着任务名，结果在那儿看）。
+             另外两个内置动作：「PR / Issue 巡检」—— 去 GitHub 看有没有人提 PR / issue，写成看板上的卡，
+             顺手把已合并的收成「待确认」；「数据库备份」—— 把 bandi.db 导出一份到数据目录的 backups/，
+             只留最近 N 份。动作是可插拔的，以后加新动作不用改调度核心。</div>`
+      }
     </div>`;
 
   $('schNew')?.addEventListener('click', () => scheduleDialog(null));
-  // 面包屑「工作台」：回到宫格首页（跟任务看板那条一样）
-  view.querySelector('[data-crumb-to="workbench"]')?.addEventListener('click', () => {
-    openPlugins().catch((e) => toast(e.message, 'error'));
-  });
   view.querySelectorAll('[data-sch-run]').forEach((el) => {
     el.onclick = async () => {
       const id = el.dataset.schRun;
+      if (el.disabled) return; // 按钮变图标后没有「跑中…」文案了，连点两下要自己挡
       el.disabled = true;
-      el.textContent = '跑中…';
+      /* 图标按钮没有字可改：在跑的时候让三角换成一圈转的环（.busy 那条 CSS），
+         这是「点了、在跑、别急」的唯一可见反馈 —— 少了它，慢任务点下去像没反应 */
+      el.classList.add('busy');
       try {
         const r = await api(`/api/schedules/${encodeURIComponent(id)}/run`, { method: 'POST' });
-        await renderSchedules();
+        await renderSchedules(); // 成功就整页重画，busy 态跟着节点一起没了
         toast(r.ok ? `跑完了：${r.summary ?? '完成'}` : `这次没跑成：${r.error ?? '没有原因'}`);
       } catch (e) {
         el.disabled = false;
-        el.textContent = '立即跑';
+        el.classList.remove('busy');
         toast(e.message, 'error');
       }
     };
@@ -8220,18 +9455,20 @@ async function renderSchedules() {
   view.querySelectorAll('[data-sch-edit]').forEach((el) => {
     el.onclick = () => scheduleDialog(jobs.find((j) => j.id === el.dataset.schEdit) ?? null);
   });
+  /* 启停开关：点下去就存（不确认），失败要把开关拨回去 —— 否则界面说的和库里存的是两回事 */
   view.querySelectorAll('[data-sch-toggle]').forEach((el) => {
-    el.onclick = async () => {
+    el.onchange = async () => {
       const j = jobs.find((x) => x.id === el.dataset.schToggle);
       if (!j) return;
       try {
         await api(`/api/schedules/${encodeURIComponent(j.id)}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ enabled: !j.enabled }),
+          body: JSON.stringify({ enabled: el.checked }),
         });
         await renderSchedules();
       } catch (e) {
+        el.checked = !el.checked; // 拨回去
         toast(e.message, 'error');
       }
     };
@@ -8275,7 +9512,10 @@ function schRepeatBody(mode, job, min) {
       const p = (n) => String(n).padStart(2, '0');
       v = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
     }
-    return box('时间：', `<input id="schRunAt" type="datetime-local" value="${esc(v)}" />`);
+    /* 原生 datetime-local 换成自建选择器（2026-10-20 用户："跑到弹窗外面了"）：
+       那个日历是浏览器画的、位置改不了。值仍走同名 hidden input ——
+       保存那段代码（$('schRunAt').value）一行都不用动，取值格式也一样。 */
+    return box('时间：', `<input id="schRunAt" type="hidden" value="${esc(v)}" /><span class="dlg-combo" id="schDtMount"></span>`);
   }
   if (mode === 'daily') return timeBox;
   const wd = Number.isInteger(job?.weekday) ? job.weekday : 1;
@@ -8299,6 +9539,7 @@ function schRepeatBody(mode, job, min) {
 function mountSchRepeatCombos(mode, job) {
   const wdMount = $('schWdMount');
   const moMount = $('schMoMount');
+  const dtMount = $('schDtMount'); // 「单次」的日期时间（自建选择器，见 createDateTimePick）
   const out = { wd: null, mo: null };
   if (wdMount) {
     const cur = String(Number.isInteger(job?.weekday) ? job.weekday : 1);
@@ -8317,6 +9558,19 @@ function mountSchRepeatCombos(mode, job) {
       value: cur,
     });
     out.mo.el.classList.add('up');
+  }
+  if (dtMount) {
+    const dt = createDateTimePick({
+      mount: dtMount,
+      value: $('schRunAt')?.value ?? '',
+      // 值写回同名 hidden input —— 保存那段照旧读 $('schRunAt').value，一行不用改
+      onChange: (v) => {
+        const h = $('schRunAt');
+        if (h) h.value = v;
+      },
+    });
+    // 这颗在弹窗右下角：往下开会顶出底边（.up 往上弹）、往左对齐会探出右边（.right 右缘对齐）
+    dt.el.classList.add('up', 'right');
   }
   return out;
 }
@@ -8597,10 +9851,7 @@ function renderSkillCards() {
   showView('settings');
   const rows = S.skills ?? [];
   $('settingsView').innerHTML = `
-    <div class="detail-head">
-      <b>技能</b>
-      <span class="dim" style="font-size:12px">${esc(S.skillsRoot || 'skills')}</span>
-    </div>
+    ${headRow('<b>技能</b>')}
     <div class="detail-body">
       <section class="fx">
         <div class="fx-head">
@@ -8624,7 +9875,6 @@ function renderSkillCards() {
         }
       </section>
     </div>`;
-  wireBreadcrumb();
   $('skNew').onclick = (e) => openAddMenu(skillAddItems(), e.currentTarget);
   $('settingsView').querySelectorAll('[data-sk]').forEach((el) => {
     el.onclick = () => openSkill(el.dataset.sk).catch((e) => toast(e.message, 'error'));
@@ -8731,13 +9981,12 @@ $('nSkillOk').onclick = async (e) => {
 
 function renderSkillEditor(skill, isNew, linkedPersonas) {
   const filePath = `${S.skillsRoot || 'skills'}\\${skill.name}\\SKILL.md`;
+  // 左栏只写「设置」；页头是面包屑「设置 › 技能 › 名字」（2026-10-20 用户要求：
+  // 点进详情页后顶部要面包屑），名字/描述/文件路径都在正文 hero 里，页头不重复。
   // 布局照**员工详情页**：hero（头像 + 名字 + 一句话 + 操作按钮）+ 分组卡片 + 左标签右内容。
   // 保存/删除从底部搬到了 hero 右侧的 .hero-actions —— 跟员工详情同一个位置（用户要求）。
   $('settingsView').innerHTML = `
-    <div class="detail-head">
-      ${breadcrumb([{ label: '技能', to: 'skills' }, { label: skill.name }])}
-      <span class="dim" style="font-size:12px">${esc(filePath)}</span>
-    </div>
+    ${headRow(breadcrumb([{ label: '技能', to: 'skills' }, { label: skill.name }]))}
     <div class="detail-body">
       <div class="p-head">
         <div class="avatar">${esc(initial(skill.name))}</div>
@@ -8749,6 +9998,7 @@ function renderSkillEditor(skill, isNew, linkedPersonas) {
               linkedPersonas.length ? `${linkedPersonas.length} 个员工在用` : '还没挂给任何人'
             }</span>
           </div>
+          <div class="dim" style="font-size:11.5px;margin-top:2px">${esc(filePath)}</div>
         </div>
         <div class="hero-actions">
           <button id="sSave">保存</button>
@@ -8818,7 +10068,6 @@ function renderSkillEditor(skill, isNew, linkedPersonas) {
     } catch (err) { toast(err.message, 'error'); }
   };
 
-  wireBreadcrumb(); // 顶部那条「技能 › xxx」：点「技能」回卡片列表
 
   $('sAssign').onclick = () => openSkillAssignDialog(skill.name, linkedPersonas.map((p) => p.id));
 }
@@ -9188,6 +10437,42 @@ function setComposer(on) {
   }
 }
 
+/**
+ * 只读输入区（2026-10-20）：**员工已删** 或 **群已解散** 的会话只能看历史、不能再聊。
+ *
+ * 为什么不是"藏起输入区"：藏了之后用户只会以为界面出问题了，还得自己猜为什么发不了。
+ * 置灰 + 一句说明最直接。同时把权限/模型那几个工具收起 —— 人都没了，那些设置没有意义。
+ *
+ * `reason` 决定那句说明：`'gone'`（默认，员工已删）/ `'dissolved'`（群已解散）。
+ * 两句话都只说明"为什么发不出去"，不复述记录还在不在 —— 记录就在上面看得见。
+ */
+const READONLY_WHY = {
+  gone: '这个员工已删除，只能查看聊天记录',
+  dissolved: '这个群已解散，只能查看聊天记录',
+};
+function setComposerReadonly(on, reason = 'gone') {
+  const box = document.querySelector('.composer');
+  const input = $('input');
+  const send = $('send');
+  const h = $('hint');
+  if (box) box.classList.toggle('is-readonly', on);
+  if (input) {
+    input.disabled = on;
+    input.placeholder = on ? READONLY_WHY[reason] ?? READONLY_WHY.gone : '说点什么…（Enter 发送，Shift+Enter 换行）';
+  }
+  if (send) send.disabled = on;
+  if (h) {
+    if (on) {
+      h.classList.remove('is-hidden');
+      h.textContent = READONLY_WHY[reason] ?? READONLY_WHY.gone;
+    } else if (Object.values(READONLY_WHY).includes(h.textContent)) {
+      // 换到一段能聊的会话：把上一次的只读说明擦掉（不然它会一直挂在那儿）。
+      // 只认这两句文案 —— hint 还兼职"几秒后自己消失"的临时提示，别把人家的字擦了
+      h.textContent = '';
+    }
+  }
+}
+
 async function openConversation(id) {
   setRoute('conversation', { id });
   // 换会话/刷新视图时，先把上一次的事件流停掉
@@ -9197,11 +10482,29 @@ async function openConversation(id) {
 
   const d = await api('/api/conversations/' + encodeURIComponent(id));
   S.conversation = d.conversation;
+  // 这段会话是不是**一个字都没说过**（详情页「发消息」连点复用它，见 toMessages）。
+  // 依据是服务端刚给的 messages，不是本地猜测 —— 零额外请求、刷新后结论一致。
+  S.convEmpty = (d.messages || []).length === 0;
   savePlace();         // 记下正在看哪个会话，刷新后回到这儿
   setComposer(true);   // 有会话了，输入区才出来
   S.persona = S.personas.find((p) => p.id === d.conversation.personaId) || S.persona;
-  // 换到别的会话时，抽屉里那套群成员设置就不再适用了
-  if (S.drawerOpen && S.drawerThreadId !== id) closeDrawer();
+  /*
+   * 员工已删的会话：**只能看、不能聊**（2026-10-20 用户要求）。
+   * 这类会话不再归档、就留在消息列表里，点进来是只读的历史记录 —— 人没了，
+   * 发出去也没人接，所以输入框置灰 + 一句说明，而不是让人敲完才发现发不出去。
+   */
+  const personaGone =
+    d.conversation.kind !== 'group' && !(S.personas ?? []).some((p) => p.id === d.conversation.personaId);
+  /*
+   * 群已解散（2026-10-20 用户定）：**历史照旧留在消息列表里，点进来只读**。
+   * 解散时成员关系与群助手都清了，发出去也没人能接 —— 跟"员工已删"同一个处理：
+   * 输入框置灰 + 一句说明，而不是让人敲完才撞 409（E2049）。
+   */
+  const dissolved = d.conversation.kind === 'group' && !!d.conversation.dissolvedAt;
+  setComposerReadonly(personaGone || dissolved, dissolved ? 'dissolved' : 'gone');
+  // 换到别的会话时，抽屉里那套群成员设置就不再适用了。
+  // 但**同一个群换一段会话**不该关：群设置是群级的，抽屉里看的就是这个群。
+  if (S.drawerOpen && S.drawerThreadId !== id && S.drawerThreadId !== d.conversation.groupId) closeDrawer();
   // 进了对话就不算"在看群详情页"了（左侧列表高亮要跟着走）
   S.groupThreadId = null;
 
@@ -9210,27 +10513,50 @@ async function openConversation(id) {
   const badge = `<span class="badge ${esc(d.conversation.status)}">${esc(running ? TYPING : d.conversation.status)}</span>`;
 
   if (isGroup) {
+    /*
+     * 解散的群：成员名单已经清空（`members` 是空数组），再写 "0 人" 就是噪音；
+     * 改标「已解散」，并且**不给群设置入口** —— 成员/群名/助手都没了，点开只能是空抽屉。
+     * 「聊天记录」照旧留着：解散后它可能就是唯一能翻历史的入口（列表里只显示这一行）。
+     */
+    const metaSub = dissolved
+      ? '<span class="dim" style="font-size:12px">已解散</span>'
+      : `<span class="dim" style="font-size:12px">${d.conversation.members.length} 人</span>`;
     $('chatHead').innerHTML = `
       <div class="avatar grp sm">${esc(initial(d.conversation.title))}</div>
       <div class="meta">
-        <div><b>${esc(d.conversation.title)}</b> ${badge}
-          <span class="dim" style="font-size:12px">${d.conversation.members.length} 人</span></div>
+        <div><b>${esc(d.conversation.title)}</b> ${dissolved ? '' : badge} ${metaSub}</div>
       </div>
-      <button class="icon-btn" id="toSettings" title="群设置">
+      <button class="icon-btn" id="toChatLog" title="聊天记录">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
+             stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3.6 12a8.4 8.4 0 1 0 2.6-6.1" />
+          <path d="M3.6 4.6V10H9" />
+          <path d="M12 8v4.4l3 1.8" />
+        </svg>
+      </button>
+      ${dissolved ? '' : `<button class="icon-btn" id="toSettings" title="群设置">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
           <circle cx="12" cy="12" r="3" />
           <path d="M12 2.6v2.1M12 19.3v2.1M2.6 12h2.1M19.3 12h2.1M5.4 5.4l1.5 1.5M17.1 17.1l1.5 1.5M18.6 5.4l-1.5 1.5M6.9 17.1l-1.5 1.5" />
         </svg>
-      </button>`;
-    $('toSettings').onclick = () => openGroupDrawer(d.conversation);
+      </button>`}`;
+    if (!dissolved) $('toSettings').onclick = () => openGroupDrawer(d.conversation);
+    // 群聊天记录（2026-10-20 用户要求）：抽屉列出这个群的会话（含被「不显示」的那条）
+    $('toChatLog').onclick = () => openChatLogDrawer(d.conversation);
   } else {
-    const name = d.conversation.personaName || S.persona?.name || '数字员工';
+    /*
+     * 名字取法：员工还在 → 用他现在的名字（可能改过，personaName 来自 JOIN）；
+     * 员工已删 → personaName 是 NULL，**不能回落到 S.persona**（那是上一个人的名字，
+     * 会张冠李戴），退回这段会话自己的标题；连标题都没有才写「员工已删」。
+     * 头像同理：员工没了就别给「点进员工详情」的入口（点开是 404）。
+     */
+    const name = d.conversation.personaName || d.conversation.title || '（员工已删）';
     $('chatHead').innerHTML = `
-      <div class="avatar sm clickable" data-detail="${esc(d.conversation.personaId)}" title="配置他的 agent CLI">${esc(initial(name))}</div>
+      ${smAvatar(name, personaGone ? '' : `clickable" data-detail="${esc(d.conversation.personaId)}" title="配置他的 agent CLI`)}
       <div class="meta">
         <div><b>${esc(name)}</b> ${badge}</div>
       </div>
-      <button class="icon-btn" id="toChatLog" title="聊天记录（还没做，点了会说一声）">
+      <button class="icon-btn" id="toChatLog" title="聊天记录">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
              stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
           <path d="M3.6 12a8.4 8.4 0 1 0 2.6-6.1" />
@@ -9239,14 +10565,10 @@ async function openConversation(id) {
         </svg>
       </button>`;
     // 点头像进员工详情（原来那个「员工详情」按钮去掉了，省地方）
-    $('chatHead').querySelector('[data-detail]').onclick = () => openDetail(d.conversation.personaId);
-    // 占位按钮：还没实现的功能，点了明说 —— 不做成"点不动的空壳"
-    $('toChatLog').onclick = () => {
-      $('hint').textContent = '聊天记录还没做 —— 这里先占个位，后面实现';
-      setTimeout(() => {
-        if ($('hint').textContent.indexOf('聊天记录') === 0) $('hint').textContent = '';
-      }, 4000);
-    };
+    const detail = $('chatHead').querySelector('[data-detail]');
+    if (detail) detail.onclick = () => openDetail(d.conversation.personaId);
+    // 聊天记录（2026-10-20 落地）：右侧抽屉列出这个人的全部会话，点一条就回看/续聊
+    $('toChatLog').onclick = () => openChatLogDrawer(d.conversation);
   }
 
   renderComposerPerm(d);
@@ -9276,8 +10598,8 @@ function bubble(role, text, name, who, showName = false, at = '') {
   const label = mine ? '我' : (who || name || '数字员工');
   // 时间放在气泡**外面**的下方（2026-10-19 用户要求，别塞在气泡里）：绝对定位，不占布局
   const t = at ? stampOf(at) : '';
-  return `<div class="row ${mine ? 'me' : ''}">
-    <div class="avatar sm">${esc(mine ? '我' : initial(label))}</div>
+    return `<div class="row ${mine ? 'me' : ''}">
+    ${mine ? smAvatar('我', 'me') : smAvatar(label)}
     <div class="bubble">${showName && !mine ? `<div class="who-line">${esc(label)}</div>` : ''}${renderMarkdown(text)}</div>
     ${t ? `<div class="btime">${esc(t)}</div>` : ''}
   </div>`;
@@ -9335,13 +10657,17 @@ function failBlock(r) {
       ? `<details class="fail-more"><summary>完整报错</summary><pre>${esc(full)}</pre></details>`
       : '';
   return `<div class="row">
-    <div class="avatar sm">!</div>
+    <div class="avatar sm" data-tone="a">!</div>
     <div class="bubble"><div class="step bad">没跑成：${esc(why)}${esc(code)}</div>${more}</div>
   </div>`;
 }
 
 function drawMessages(msgs, name, isGroup = false, runs = []) {
   const items = timelineOf(msgs, runs);
+  /*
+   * 空会话**什么都不画**（2026-10-20 用户要求）：「和 X 还没有对话 / 在下面说第一句吧」
+   * 这两行提示去掉了 —— 输入框就在下面，不需要再教一遍。
+   */
   $('chat').innerHTML = items.length
     ? items
         .map((it) =>
@@ -9350,7 +10676,7 @@ function drawMessages(msgs, name, isGroup = false, runs = []) {
             : failBlock(it.r),
         )
         .join('')
-    : `<div class="empty">${isGroup ? '这个群' : '和 <b>' + esc(name) + '</b>'}还没有对话<br />在下面说第一句吧</div>`;
+    : '';
   scrollDown();
 }
 const scrollDown = () => { $('chat').scrollTop = $('chat').scrollHeight; };
@@ -9360,6 +10686,8 @@ const scrollDown = () => { $('chat').scrollTop = $('chat').scrollHeight; };
 async function send() {
   const text = $('input').value.trim();
   if (!text || !S.conversation || S.running) return;
+  // 说出第一句就不再是"空会话"了 —— 详情页「发消息」的连点复用靠它判断
+  S.convEmpty = false;
   $('input').value = '';
   closeMentionPop();
   const name = S.conversation.personaName || S.persona?.name || '数字员工';
@@ -9424,7 +10752,7 @@ function attachStream(runId) {
   const id = 'live-' + runId;
   $('chat').insertAdjacentHTML('beforeend',
     `<div class="row" id="${id}">
-       <div class="avatar sm">${esc(initial(name))}</div>
+       ${smAvatar(name)}
        <div class="bubble"><div class="typing"><i></i><i></i><i></i></div></div>
      </div>`);
   scrollDown();
@@ -9751,6 +11079,11 @@ function wirePersonaTaskLinks() {
 
 
 function renderDetail({ persona, runtimes, runs, platformRoot, skills: personaSkills = [], allSkills = [] }, taskBoard = null) {
+  // 左栏顶上写「通讯录」（右页头已去掉；名字/岗位/头像/动作都在正文的 p-head 里）。
+  // 只在"左栏就是通讯录"时写 —— 从聊天页头点「查看资料」进来时 S.nav 还是 messages，
+  // 那一栏里是会话，标题写上「通讯录」会跟下面的列表对不上。
+  // 2026-10-20 用户要求：通讯录详情**不做面包屑**，标题就固定「通讯录」。
+  if (S.nav === 'contacts') setListTitle('通讯录');
   const rt = runtimes.find((r) => r.id === persona.runtime);
   let extraRoots = [];
   try { extraRoots = JSON.parse(persona.rootDirs || '[]'); } catch { extraRoots = []; }
@@ -9766,10 +11099,9 @@ function renderDetail({ persona, runtimes, runs, platformRoot, skills: personaSk
     : '<tr><td colspan="6" class="dim" style="padding-top:8px">还没有运行记录</td></tr>';
 
     $('detailView').innerHTML = `
-    <div class="detail-head"><b>员工详情</b></div>
     <div class="detail-body">
       <div class="p-head">
-        <div class="avatar">${esc(initial(persona.name))}</div>
+        <div class="avatar" ${avatarStyle(persona.name)}>${esc(initial(persona.name))}</div>
         <div class="p-head-main">
           <h2><span id="dNameText">${esc(persona.name)}</span>${persona.builtin ? '<span class="pill builtin" title="出厂就在的员工：不能删，可以改名和改职责">内置</span>' : ''}<span class="pill role" id="dRolePill"${persona.role ? '' : ' style="display:none"'}>${esc(persona.role || '')}</span>${
             persona.busy
@@ -9794,7 +11126,7 @@ function renderDetail({ persona, runtimes, runs, platformRoot, skills: personaSk
             <div class="hero-more-menu" id="dMoreMenu" hidden>
               ${persona.builtin
                 ? '<button class="danger" id="dDelete" disabled title="内置员工不能删（可以改名、改职责）">内置 · 不可删</button>'
-                : '<button class="danger" id="dDelete">🗑 删除这个数字员工</button>'}
+                : '<button class="danger" id="dDelete">删除这个数字员工</button>'}
             </div>
           </div>
         </div>
@@ -9824,7 +11156,6 @@ function renderDetail({ persona, runtimes, runs, platformRoot, skills: personaSk
                   <div class="row-label">岗位</div>
                   <div>
                     <input id="dRole" list="roleSuggest" placeholder="比如：研发（留空也行）" value="${esc(persona.role || '')}" />
-                    <div class="counter left">他在团队里是干什么的（一个值）。技能是"他会干什么"，可以挂很多个；引擎派活只认流程节点上点的名，不看岗位。</div>
                   </div>
                 </div>
                 <div class="form-row top">
@@ -9870,8 +11201,11 @@ function renderDetail({ persona, runtimes, runs, platformRoot, skills: personaSk
                 </div>
                 <div class="form-row">
                   <div class="row-label">思考过程</div>
-                  <label class="check"><input type="checkbox" id="dThink" ${persona.showThinking ? 'checked' : ''} />
-                    <span>显示<em>——关掉只是界面不渲染；runtime 该发的照发，token 照花</em></span></label>
+                  <!-- 开关（2026-10-20 用户："改成开关，文案不要"；"鼠标悬停提示去掉"）：
+                       开关本身就是状态，卡面与悬停都不留说明文字 -->
+                  <label class="switch sm">
+                    <input type="checkbox" id="dThink" ${persona.showThinking ? 'checked' : ''} /><span></span>
+                  </label>
                 </div>
               </div>
             </section>
@@ -9882,7 +11216,8 @@ function renderDetail({ persona, runtimes, runs, platformRoot, skills: personaSk
       <section class="tab-panel" data-panel="tasks" hidden>
         <div class="pt-head">
           <span class="pt-sum" id="dTasksSum"></span>
-          <button class="mini" id="dTasksRefresh" title="重新取一次 —— 任务在别处变了（派了活、跑完一步）就点它">刷新</button>
+          <!-- 不用 .mini：那是 26×26 的单字方钮（测/改/停/卸），两个字放进去必折行（2026-10-20 截图） -->
+          <button id="dTasksRefresh" title="重新取一次 —— 任务在别处变了（派了活、跑完一步）就点它">刷新</button>
         </div>
         <div id="dTasksBody"></div>
       </section>
@@ -9916,16 +11251,23 @@ function renderDetail({ persona, runtimes, runs, platformRoot, skills: personaSk
               : '<div class="sk-blank">' + SKILL_ICON + ' 还没分配技能。点右上角「＋ 添加技能」从库里挑。</div>'
           }
         </div>
-        <div class="counter" style="text-align:left">清单在会话的<strong>第一句</strong>交给它，正文它自己按需读 —— 挂完（或改了启停）要新开会话才生效。</div>
 
-        <div class="sk-head" style="margin-top:26px">
-          <div>
-            <b>从运行时继承</b>
-            <div class="sk-hint">自动从 <strong>${esc(rt ? rt.label : persona.runtime)}</strong> 发现；只要该智能体在这个运行时执行，就可以直接使用。</div>
+        <!-- 从运行时继承：可折叠面板（默认折叠）。折叠时不扫描，展开第一次才去要列表，
+             省得每个员工详情都白跑一遍 runtime-skills。状态记在 data-open 上，不进持久化 ——
+             这种"列表长又低频看"的区块不值得占路由。 -->
+        <div class="sk-fold" id="dInheritFold" data-open="0" style="margin-top:26px">
+          <div class="sk-fold-head" id="dInheritHead" role="button" tabindex="0">
+            <span class="fold-arrow" aria-hidden="true">▸</span>
+            <span class="fold-title">
+              <b>从运行时继承</b>
+              <div class="sk-hint">自动从 <strong>${esc(rt ? rt.label : persona.runtime)}</strong> 发现；只要该智能体在这个运行时执行，就可以直接使用。</div>
+            </span>
+            <button class="mini auto" id="skRefresh" title="重新扫描运行时的技能目录">刷新</button>
           </div>
-          <button class="mini auto" id="skRefresh" title="重新扫描运行时的技能目录">刷新</button>
+          <div class="sk-fold-body" id="dInheritBody" hidden>
+            <div class="sk-list" id="dInherit"></div>
+          </div>
         </div>
-        <div class="sk-list" id="dInherit"><div class="sk-empty" style="border-style:solid">正在扫描…</div></div>
         ${
           personaSkills.length > 8
             ? '<div class="rm-hint">挂了 8 个以上：首轮清单会变长，模型「选得准」也会下降。建议改成"换"而不是"堆"。</div>'
@@ -10136,19 +11478,44 @@ function renderDetail({ persona, runtimes, runs, platformRoot, skills: personaSk
   $('dInstr').addEventListener('input', syncCount);
   syncCount();
 
-  // 「发消息」：不管从哪来，都落到消息页，并且是这个人的对话，光标已经就位
+  /*
+   * 「发消息」= **开一段新的 1:1 会话**（2026-10-20，PRD P0-4）。
+   * 一次任务一段，上下文不串味 —— 不再复用这个人最近那段（那是 `POST /api/personas/:id/open`
+   * 的语义，服务端实现保留不动，只是详情页不再走它）。
+   *
+   * 连点保护（P1-2，主理人已拍板"复用"）：当前就停在这个人一段**一条消息都没有**的会话上
+   * → 直接复用它，不再堆空壳。判断依据是 openConversation 本来就取到的 `d.messages`
+   * （见 S.convEmpty）—— 零额外请求、零新字段。
+   */
   const toMessages = async () => {
     try {
-      const convId =
-        S.conversation && S.conversation.personaId === persona.id
-          ? S.conversation.id
-          : (await post('/api/personas/' + encodeURIComponent(persona.id) + '/open')).conversation.id;
+      /*
+       * 复用判据末尾多一个"这段还在列表里"：被「不显示」收着的空会话**不复用** ——
+       * 复用既不新建也不发消息，这段就永远没有回列表的机会（用户实报，
+       * 群那侧先踩到：发起会话后列表里一直不出现，见 toGroupMessages）。
+       * 不复用就会走下面的新建，新会话不带 hiddenAt，行自然回来。
+       */
+      const reuse =
+        !!S.conversation &&
+        S.conversation.kind === 'direct' &&
+        S.conversation.personaId === persona.id &&
+        S.convEmpty &&
+        (S.conversations ?? []).some((c) => c.id === S.conversation.id);
+      const convId = reuse
+        ? S.conversation.id
+        : (await post('/api/conversations', { personaId: persona.id, title: `和 ${persona.name}` })).conversation.id;
       setNav('messages');
       showView('chat');
-      await openConversation(convId);
+      /*
+       * 走 `openConversationSafe`：复用分支打开的那段，可能刚好被**另一个窗口**删掉了
+       * （E2047）—— 那里会关抽屉、清右栏、刷列表，还会说人话。
+       * 之后要按"真的打开了没"决定收尾：没打开就别把光标扔进一个已经收起的输入区。
+       */
+      await openConversationSafe(convId);
+      if (S.conversation?.id !== convId) return;
       await load();
       $('input').focus();
-    } catch (err) { toast(err.message, 'error'); }
+    } catch (err) { toastConvErr(err); }   // 建会话（POST）失败也走同一张人话表
   };
   $('dMsg').onclick = async () => { await saveNow?.(); toMessages(); };
 
@@ -10206,7 +11573,11 @@ function renderDetail({ persona, runtimes, runs, platformRoot, skills: personaSk
         // 左栏 / 会话里的名字也跟着变（只跟内存和左栏打交道，不重画详情页）
         (S.conversations || []).forEach((c) => { if (c.personaId === p.id) c.personaName = p.name; });
         if (S.conversation?.personaId === p.id) S.conversation.personaName = p.name;
-        if (S.nav === 'contacts' || S.nav === 'messages') renderList();
+        if (S.nav === 'contacts' || S.nav === 'messages') {
+          // 左栏标题固定「通讯录」（不做面包屑，2026-10-20）—— 改名不用再同步标题，
+          // 只有左栏真是通讯录时才要管；在消息页那一栏是会话（从聊天页头点进资料会停在这条路）。
+          renderList();
+        }
       }
       setSaveState('已保存', 'ok');
       return true;
@@ -10256,14 +11627,19 @@ function renderDetail({ persona, runtimes, runs, platformRoot, skills: personaSk
   /**
    * 删员工。**破坏性**，所以先把要发生的事说清楚，再问。
    * 服务端还会拦一道：他是某个群的群助手就删不掉（得先换人）。
+   *
+   * 正文三行是 2026-10-20 用户逐字定稿的（原话「整段改成：…」），别再自己加/减：
+   *   · 只说结果，不罗列"他的 N 段对话"—— 段数会变，数字一变文案就显得在哄人；
+   *   · 第三行带括号，是"可能删不掉"的前置条件，语气上是备注而不是步骤。
+   * 「删掉数字员工「X」？」从正文提到了**标题**：正文被定稿成三行后，
+   * 不点明删谁的破坏性弹窗只剩一句「该操作」，用户得自己回想刚才点了什么。
    */
   $('dDelete').onclick = async () => {
-    const convs = S.conversations.filter((c) => c.kind === 'direct' && c.personaId === persona.id);
     const ok = await confirmDo(
-      `删掉数字员工「${persona.name}」？\n\n` +
-        `· 他的配置、技能挂载、群成员关系会一并清掉\n` +
-        `· ${convs.length ? `和他的 ${convs.length} 段对话` : '和他的对话'}会移到「已移除的会话」，聊天记录保留\n\n` +
-        `如果他是某个群的群助手，删不掉 —— 要先把群助手换成别人。`,
+      `该操作将清空其配置、技能、群关联。\n` +
+        `已有对话仅可读，不能继续聊天；会话可后续删除或归档。\n` +
+        `（当其作为群助手时无法直接删除，需先更换群助手。）`,
+      { title: `删掉数字员工「${persona.name}」？` },
     );
     if (!ok) return;
     try {
@@ -10312,7 +11688,11 @@ function renderDetail({ persona, runtimes, runs, platformRoot, skills: personaSk
   const linkBtn = $('linkSkill');
   if (linkBtn) linkBtn.onclick = () => openLinkSkillDialog(persona, allSkills, personaSkills.map((l) => l.name));
 
-  // 从运行时继承：只发现、不改 CLI 的文件；"导入"才是把它拷进班底的库
+  // 从运行时继承：只发现、不改 CLI 的文件；"导入"才是把它拷进班底的库。
+  // 折叠面板默认收起 —— 展开那一刻才扫描（懒加载），折叠状态下不发请求；
+  // 「刷新」只在面板已展开时触发扫描，收起状态点它先展开再扫。
+  const fold = $('dInheritFold');
+  const body = $('dInheritBody');
   const loadInherited = async () => {
     const box = $('dInherit');
     if (!box) return;
@@ -10352,9 +11732,28 @@ function renderDetail({ persona, runtimes, runs, platformRoot, skills: personaSk
       box.innerHTML = '<div class="sk-empty">扫描失败：' + failHtml(err) + '</div>';
     }
   };
-  loadInherited();
+  const setFold = (open) => {
+    fold.dataset.open = open ? '1' : '0';
+    body.hidden = !open;
+    $('dInheritHead').querySelector('.fold-arrow').textContent = open ? '▾' : '▸';
+    if (open && !body.dataset.loaded) {
+      body.dataset.loaded = '1';
+      loadInherited();
+    }
+  };
+  $('dInheritHead').onclick = (e) => {
+    if (e.target.closest('#skRefresh')) return; // 刷新是独立动作，别顺带折叠
+    setFold(fold.dataset.open !== '1');
+  };
+  $('dInheritHead').onkeydown = (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setFold(fold.dataset.open !== '1'); }
+  };
   const refresh = $('skRefresh');
-  if (refresh) refresh.onclick = loadInherited;
+  if (refresh)
+    refresh.onclick = () => {
+      setFold(true); // 收着就点刷新 = 展开并重扫
+      loadInherited();
+    };
 }
 
 
@@ -10455,9 +11854,11 @@ function memberGridHTML(thread) {
 
 /** root：在哪个容器里找成员宫格（抽屉 或 群详情页）；repaint：改完重画哪一块 */
 function wireMemberGrid(thread, repaint = paintDrawer, root = null) {
-  const add = $('drawerAdd');
+  // 这份 HTML 抽屉/详情页各一份，id 全文档重复 —— 一律在 root 里找（见 wireGroupSettings 注释）
+  const scope = root ?? document;
+  const add = scope.querySelector('#drawerAdd');
   if (add) add.onclick = () => openMemberDialog(thread);
-  const rm = $('drawerRemove');
+  const rm = scope.querySelector('#drawerRemove');
   if (rm) rm.onclick = () => { S.removeMode = !S.removeMode; repaint(); };
   (root ?? document).querySelectorAll('[data-kick]').forEach((el) => {
     el.onclick = () => kickMember(thread, el.dataset.kick, el.dataset.name);
@@ -10468,23 +11869,62 @@ function wireMemberGrid(thread, repaint = paintDrawer, root = null) {
 
 const MEMBER_TILE_LIMIT = 12;
 
+/**
+ * 群的身份。
+ *
+ * 群和群会话是**两张表**（2026-10-20 拆开：一个群可以有多段会话）：
+ *   · 群对象（通讯录详情 / 群设置）→ `id` 就是群 id
+ *   · 群会话（消息列表右键 / 聊天头部）→ `id` 是会话 id，群 id 在 `groupId` 上
+ * 所有 `/api/groups/...` 都是群级接口，一律从这里取，**别直接写 thread.id**。
+ */
+const gidOf = (t) => t?.groupId || t?.id;
+
+/**
+ * 开「群设置」抽屉。
+ *
+ * 入参可以是**群对象**（通讯录群详情）、也可以是**一段群会话**（聊天头部那个齿轮）——
+ * 两者形状不同：会话上没有群级真源，只有建会话那一刻的成员快照。
+ * 这里统一换成 `groupId` 作为抽屉的身份（`S.drawerThreadId`），再用群级接口取一次真源：
+ * 设置改的是**群**，不是某一段会话，身份必须是群 id，否则"改完只影响这一段"。
+ *
+ * 先用手上有的数据画一版（避免空抽屉闪一下），拉到群详情再重画一次。
+ */
 function openGroupDrawer(thread) {
+  const groupId = gidOf(thread);
+  S.drawerKind = 'group';   // 同一个 #drawer 两种内容，靠它分流（见 paintDrawer 首行）
   S.drawerOpen = true;
-  S.drawerThreadId = thread.id;
-  S.drawerThread = thread;
+  S.drawerThreadId = groupId;
+  S.drawerThread = {
+    id: groupId,
+    title: thread.title,
+    assistantPersonaId: thread.assistantPersonaId,
+    members: thread.members ?? [],
+  };
   S.removeMode = false;
   S.membersExpanded = false;
   S.memberQuery = '';
   paintDrawer();
   $('drawer').classList.add('open');
   $('scrim').classList.add('open');
+  // 群级真源（成员名单可能在别处改过：通讯录加的、另一个窗口踢的）
+  api('/api/groups/' + encodeURIComponent(groupId))
+    .then((d) => {
+      if (S.drawerKind !== 'group' || S.drawerThreadId !== groupId) return; // 已经关了/换了
+      S.drawerThread = d.group;
+      paintDrawer();
+    })
+    .catch(toastConvErr);
 }
 
 /**
  * 群设置的正文（成员宫格 + 信息行）。
  * **抽屉和群详情页共用这一份** —— 写两份迟早走样：改了抽屉忘了页面，两边行为就不一致了。
+ *
+ * `opts.noDissolve`：群详情页**不画**底部「解散群聊」区（2026-10-20 用户要求：
+ * 那边改用页头「⋯」里的解散入口，破坏性动作别平铺在页面上）。抽屉照旧保留 ——
+ * 聊天头部齿轮开出来的抽屉没有「⋯」，这儿是它唯一的解散入口。
  */
-function groupSettingsHTML(thread) {
+function groupSettingsHTML(thread, opts = {}) {
   const assistant = thread.members.find((m) => m.personaId === thread.assistantPersonaId);
   const q = S.memberQuery.trim().toLowerCase();
   const visible = q ? thread.members.filter((m) => m.name.toLowerCase().includes(q)) : thread.members;
@@ -10516,41 +11956,55 @@ function groupSettingsHTML(thread) {
       <div class="info-row"><span>成员数</span><b>${thread.members.length} 人</b></div>
     </div>
 
+    ${opts.noDissolve ? '' : `
     <div class="dcard">
       <div class="info-row clickable danger" id="rowDissolve">
         <span>解散群聊</span><b>聊天记录会保留</b><span class="chev">›</span>
       </div>
-    </div>`;
+    </div>`}`;
 }
 
-/** 抽屉和群详情页共用的接线。repaint 决定"改完之后重画哪一块" */
-function wireGroupSettings(thread, repaint) {
-  const rn = $('rowRename');
+/**
+ * 抽屉和群详情页共用的接线。repaint 决定"改完之后重画哪一块"。
+ *
+ * ⚠️ `root` 必传：这段 HTML **抽屉和群详情页各画一份**，id（rowRename / drawerAdd / …）在
+ * 文档里是重复的 —— 用全局 `$('id')` 永远绑到 DOM 顺序靠前的那份（`<main>` 里的群详情页
+ * 排在 `#drawer` 前面）。2026-10-20 用户实报：开过一次群详情后，群设置**抽屉**里点
+ * 「群名称」没反应 —— 行的 onclick 绑在隐藏的详情页那份上了。所以一切查找都限定在
+ * 自己的容器里（id 在各自容器内仍然唯一）。
+ */
+function wireGroupSettings(thread, repaint, root) {
+  const q = (sel) => root.querySelector(sel);
+  const rn = q('#rowRename');
   if (rn) rn.onclick = () => renameGroup(thread);
-  const ra = $('rowAssistant');
+  const ra = q('#rowAssistant');
   if (ra) ra.onclick = () => openAssistantDialog(thread);
-  const rd = $('rowDissolve');
+  const rd = q('#rowDissolve');
   if (rd) rd.onclick = () => dissolveGroup(thread);
-  wireMemberGrid(thread, repaint);
+  wireMemberGrid(thread, repaint, root);
 
   // 搜索只重画宫格 —— 整块重画会把光标从搜索框里踢出去
-  const search = $('drawerSearch');
+  const search = q('#drawerSearch');
   if (search) {
     search.oninput = (e) => {
       S.memberQuery = e.target.value;
-      const grid = $('mgrid');
+      const grid = q('#mgrid');
       if (grid) grid.outerHTML = memberGridHTML(thread);
-      wireMemberGrid(thread, repaint);
+      wireMemberGrid(thread, repaint, root);
     };
   }
 
-  const more = $('drawerMore');
+  const more = q('#drawerMore');
   if (more) more.onclick = () => { S.membersExpanded = true; repaint(); };
-  const less = $('drawerLess');
+  const less = q('#drawerLess');
   if (less) less.onclick = () => { S.membersExpanded = false; repaint(); };
 }
 
 function paintDrawer() {
+  // 「聊天记录」和「群设置」共用这一个抽屉容器 —— 分流只在这一行。
+  // 群那套（membersExpanded / memberQuery / removeMode）一个字都没动，
+  // 所以从群设置里进来的路径跟以前完全一样。
+  if (S.drawerKind === 'log') return paintChatLogDrawer();
   const thread = S.drawerThread;
   if (!thread) return;
 
@@ -10573,45 +12027,395 @@ function paintDrawer() {
     </div>`;
 
   $('drawerClose').onclick = closeDrawer;
-  wireGroupSettings(thread, paintDrawer);
+  wireGroupSettings(thread, paintDrawer, $('drawer'));
+}
+
+/* ---------------------------------------------------------- 聊天记录抽屉 */
+
+/**
+ * 一条会话落在哪个日期桶（今天 / 昨天 / 更早）。
+ *
+ * 按**本地日期**算，不是按时差算：昨天 23:50 和今天 00:10 只差 20 分钟，
+ * 但它们是两天的事，硬按 24 小时分桶会把"昨天"的东西说成今天。
+ */
+function dayBucket(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const now = new Date();
+  const startOf = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.round((startOf(now) - startOf(d)) / 86400000);
+  if (diff <= 0) return '今天';
+  if (diff === 1) return '昨天';
+  return '更早';
+}
+
+/** 今天的会话显示 `hh:mm`（跟左栏一个口径），更早的显示 `MM-DD` */
+function logTime(iso) {
+  if (dayBucket(iso) === '今天') return hhmm(iso);
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const p = (n) => String(n).padStart(2, '0');
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/**
+ * 打开「聊天记录」抽屉：这个人的**全部未隐藏 1:1 会话**（含当前这条），新的在前。
+ *
+ * 入口在聊天头部（右侧），打开**不打断当前对话**；
+ * 而 `#drawer` + `#scrim` 已经把动画、Esc、点遮罩关闭都做好了，白拿。
+ *
+ * 数据**不新增接口**（PRD v1.1）：直接过滤 `/api/state` 的 `S.conversations` +
+ * `S.hiddenConversations` —— 后者是被「不显示」收走的（2026-10-20 去掉归档后，
+ * 「不显示」只是不在列表占行，聊天记录里必须还看得到）。
+ * （`listConversations` 是热路径兼工作台数据源，不为一处展示改它的契约）。
+ * 但打开前**先 `load()` 一次** —— 否则看到的是轮询间隔内的旧快照，用户刚在别的窗口
+ * 删掉的会话还会挂在这儿。也不缓存列表副本（缓存就是"看到旧数据"的病根）。
+ *
+ * @param {{id: string, kind?: string, personaId?: string, personaName?: string}} conv 当前正在看的会话
+ */
+async function openChatLogDrawer(conv) {
+  /*
+   * 群也能开这个抽屉（2026-10-20 用户要求：「群聊天记录」）—— 群与单聊的差别只在**取数口径**：
+   *   · 单聊 → 这个人的全部 direct 会话（含被「不显示」的）
+   *   · 群   → 这个群自己的全部会话（一个群可以有多段，新的在前；含被「不显示」的那几段）
+   * 群的这条链路顺便补上"藏起来之后还能找回来"：抽屉里点它就能重新打开。
+   *
+   * ⚠️ 群 id ≠ 会话 id（2026-10-20 拆表之后）。传进来的可能是**某一段群会话**，
+   * 所以要拿 `groupId` 去筛；老群（迁移时把会话 id 复用成了群 id）两者相同，也照样成立。
+   */
+  const isGroup = conv?.kind === 'group';
+  if (!conv?.id || (!isGroup && !conv.personaId)) return;
+  S.drawerKind = 'log';       // 先分流，再画 —— paintDrawer 首行就看它
+  S.drawerOpen = true;
+  S.drawerThreadId = conv.id; // 沿用"换会话就关抽屉"的判断，同时用来标「当前」
+  S.logPersonaId = isGroup ? null : conv.personaId;
+  S.logGroupId = isGroup ? conv.groupId || conv.id : null;
+  S.logGroupTitle = isGroup ? conv.title ?? null : null;
+  S.logLoading = true;
+  paintDrawer();              // 先画「正在拉…」
+  $('drawer').classList.add('open');
+  $('scrim').classList.add('open');
+  try {
+    await load();             // 只刷 /api/state（含 conversations），成本远低于一条新接口
+    S.logLoading = false;
+    // 拉的过程里用户可能已经关了抽屉 / 换成群设置 —— 只在这条路上重画
+    if (S.drawerKind === 'log') paintDrawer();
+  } catch (err) {
+    S.logLoading = false;
+    // 严格说这不是「会话域」错误（是 /api/state 失败）：映射表里查不到 → 原样回落
+    toastConvErr(err);
+    closeDrawer();
+  }
+}
+
+/**
+ * 这段会话里**有没有过一条消息**。
+ *
+ * 用途：只点开、一个字没发的会话**不进聊天记录**（2026-10-20 用户要求）——
+ * 「发消息」建出来的空壳、点错又退出的空壳，都不该占历史列表的位置。
+ *
+ * 判据优先级：`messageCount`（服务端现算，准确）→ 回落到 `lastMessage`
+ * （老版本服务端没有这个字段时不能让抽屉整片空掉）。`0` 与缺失要区分开：
+ * `0` 是"确实没有消息"，不能用 `?? lastMessage` 那套把 0 当缺失。
+ */
+function hasAnyMessage(c) {
+  if (typeof c?.messageCount === 'number') return c.messageCount > 0;
+  return !!c?.lastMessage;
+}
+
+/**
+ * 聊天记录抽屉的正文。分流由 `paintDrawer()` 首行负责，这里只管画。
+ *
+ * 行数据**每次现算**（`S.conversations` 过滤），不缓存副本；**不排序** ——
+ * `listConversations` 已经 `ORDER BY updatedAt DESC`。**不显示条数**（PRD v1.1 砍掉了）。
+ */
+function paintChatLogDrawer() {
+  /*
+   * 数据来源两处（2026-10-20 去掉会话归档之后）：
+   *   · `S.conversations`        —— 列表里的（含当前这段）
+   *   · `S.hiddenConversations`  —— 被「不显示」收走的
+   * 两者都是"这个人的历史"，所以合并后按 updatedAt 倒序；不合并的话，
+   * 「不显示」就等于永久消失，与用户要的"列表不显示、聊天记录还能看到"相反。
+   *
+   * 群走另一套口径（`S.logGroupId`）：取**这个群自己**的全部会话（含被「不显示」的），
+   * 一个群可以有多段（每次「发消息」一段）。只取一条的话，群藏起来之后剩下的入口
+   * 就只能看到"最近那一段"，更早的全看不见了。
+   *
+   * **零消息的会话两边都不进抽屉**（2026-10-20 用户要求：群跟单聊同一条业务口径）——
+   * 只点开、一个字没发的空壳（每次「发消息」都会建一段）不该占历史列表的位置。
+   * 判据统一走 `hasAnyMessage()`，群不再有例外。
+   */
+  const isGroupTarget = !!S.logGroupId;
+  const rows0 = [...(S.conversations ?? []), ...(S.hiddenConversations ?? [])]
+    .filter((c) =>
+      (isGroupTarget
+        ? (c.groupId || c.id) === S.logGroupId && c.kind === 'group'
+        : c.kind === 'direct' && c.personaId === S.logPersonaId) && hasAnyMessage(c),
+    )
+    .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+  /*
+   * 抽屉标题里那个人/群的名字：
+   *   · 群 → `S.logGroupTitle`（不依赖 rows，空抽屉也知道在看哪个群）
+   *   · 单聊 → 员工现在的名字（可能改过）
+   *   · 员工已删的归档会话 → S.personas 里查不到，退回这段会话自己的标题，
+   *     否则标题只剩「聊天记录」四个字，看不出是谁的
+   */
+  const name = isGroupTarget
+    ? S.logGroupTitle || rows0[0]?.title || ''
+    : S.personas.find((p) => p.id === S.logPersonaId)?.name ||
+      (S.conversation?.personaId === S.logPersonaId ? S.conversation.title : '') ||
+      '';
+  /*
+   * 标题里那个「和 X」只用在**员工还在**的时候；员工已删的归档会话用的是会话标题
+   * （「王鹏，你结婚了吗」），再拼个「和」就成了「和 王鹏，你结婚了吗」——不像话。
+   */
+  const personaAlive = !isGroupTarget && (S.personas ?? []).some((p) => p.id === S.logPersonaId);
+  const nameLabel = name ? (isGroupTarget || !personaAlive ? esc(name) : '和 ' + esc(name)) : '';
+
+  let lastSec = '';
+  const rows = [];
+  for (const c of rows0) {
+    const sec = dayBucket(c.updatedAt);
+    // 分组标题只在**跨桶**时画一次（同一桶连着几条不重复）
+    if (sec && sec !== lastSec) {
+      rows.push(`<div class="chatlog-sec">${esc(sec)}</div>`);
+      lastSec = sec;
+    }
+    /*
+     * 预览粗体；空会话在单聊里**回落标题**（列表里要靠标题才认得出是跟谁的）。
+     * 群的空会话进不了抽屉（上面已按 `hasAnyMessage` 滤掉），这里只是防御性兜底
+     * —— 万一将来放开，也不会让几行群会话长得一模一样（每段 title 都是群名）。
+     */
+    const preview = isGroupTarget
+      ? cut(plain(c.lastMessage), 28) || '（这段还没说话）'
+      : cut(plain(c.lastMessage), 28) || c.title || '还没聊过';
+    // 「当前」标的是"你正在看的那一段"：抽屉从聊天头部打开时它就是当前会话；
+    // 从历史会话再打开一次，标记跟着你走（比固定标最新那条更符合直觉）
+    const cur = c.id === S.drawerThreadId ? '<i class="chatlog-cur">当前</i>' : '';
+    rows.push(`<div class="chatlog-row" data-log="${esc(c.id)}">
+      <div class="t"><b>${esc(preview)}${cur}</b><span>${esc(logTime(c.updatedAt))}</span></div>
+    </div>`);
+  }
+
+  let body;
+  if (S.logLoading) {
+    body = '<div class="empty" style="padding:32px 12px">正在拉…</div>';
+  } else {
+    /*
+     * 只有当前这一段时**不画任何提示**（2026-10-20 用户要求去掉
+     * 「还没有更早的会话 / 每次点『发消息』都会开一段新的」两行文案）：
+     * 抽屉里只有一条就是事实本身，画一句解释反而像在说"功能只有这些"。
+     * 一条都没有（会话一个字都没说）时也只留空白 —— 空就是空。
+     */
+    body = rows.join('');
+  }
+
+  $('drawer').innerHTML = `
+    <div class="drawer-head">
+      <b>聊天记录${nameLabel ? ` <span class="dim" style="font-weight:400;font-size:12px">${nameLabel}</span>` : ''}</b>
+      <button class="mini" id="drawerClose" title="关闭">×</button>
+    </div>
+    <div class="drawer-body">${body}</div>`;
+
+  $('drawerClose').onclick = closeDrawer;
+  $('drawer').querySelectorAll('[data-log]').forEach((el) => {
+    el.onclick = () => {
+      // **先关抽屉再开会话**：openConversation 里有"换了会话就关抽屉"的判断，
+      // 顺序反过来两边会抢状态（设计 §5.4）。用 openConversationSafe 是因为
+      // 这段可能刚被另一个窗口删掉（E2047 → 说人话 + 关抽屉 + 刷列表）
+      closeDrawer();
+      openConversationSafe(el.dataset.log);
+    };
+  });
+}
+
+/**
+ * 聊天记录抽屉里右键「删除」的那一段（2026-10-20 用户要求：单聊与群的聊天记录都能删）。
+ *
+ * 跟左栏右键「删除」是**同一件事、同一个接口**：物理删、不可恢复、确认框同一句话
+ * （文案口径见 `removeConversationForever`）。差别只在删完重画哪儿：
+ *   · 左栏 → 重画列表；
+ *   · 这里 → 还要把抽屉自己刷新一次（删的正是抽屉里的那一行），
+ *     一条都不剩就直接关掉（空抽屉只剩个标题，看着像出错了）；
+ *   · 删的正好是**正在看的那段** → 右边复位（不留一具尸体让人继续打字）。
+ *
+ * 跑的中的段不删：服务端回 409 + E4002，`toastConvErr` 会说清"等它跑完或先终止"。
+ */
+async function deleteSessionFromLog(c) {
+  // 整档清空（已解散的群 / 员工已删的单聊）：确认框必须说"全部聊天记录"（与后端分派一致）
+  const wipe = wipeScopeOf(c);
+  const ok = await confirmDo(
+    wipe === 'group'
+      ? '这个群已解散。删除后会清空它的全部聊天记录，不可恢复。请确认是否操作？'
+      : wipe === 'persona'
+        ? '这个员工已删除。删除后会清空他的全部聊天记录，不可恢复。请确认是否操作？'
+        : '本次会话删除后，消息内容不可恢复。请确认是否操作？',
+    {
+      title: wipe ? '删除并清空聊天记录' : '永久删除这段会话',
+      ok: '永久删除',
+      danger: true,
+    },
+  );
+  if (!ok) return;
+  try {
+    const r = await api(`/api/conversations/${encodeURIComponent(c.id)}`, { method: 'DELETE' });
+    S.conversations = r.conversations ?? (S.conversations ?? []).filter((x) => x.id !== c.id);
+    if (r.hiddenConversations) S.hiddenConversations = r.hiddenConversations;
+    // 清档：右边停在**这一档里的任何一段**都得复位（全没了）
+    const hitting =
+      wipe === 'group'
+        ? S.conversation?.groupId === gidOf(c)
+        : wipe === 'persona'
+          ? S.conversation?.kind === 'direct' && S.conversation?.personaId === c.personaId
+          : S.conversation?.id === c.id;
+    if (hitting) resetChatPane();
+    if (S.drawerKind === 'log') {
+      // 抽屉当前盯着谁（人 / 群），看它还剩不剩段 —— 剩就重画，不剩就关
+      const all = [...(S.conversations ?? []), ...(S.hiddenConversations ?? [])].filter(hasAnyMessage);
+      const left = S.logGroupId
+        ? all.filter((x) => x.kind === 'group' && (x.groupId || x.id) === S.logGroupId)
+        : all.filter((x) => x.kind === 'direct' && x.personaId === S.logPersonaId);
+      if (left.length) paintDrawer();
+      else closeDrawer();
+    }
+    renderList();
+    toast(
+      wipe === 'group'
+        ? '已删除。这个群的聊天记录都清掉了'
+        : wipe === 'persona'
+          ? '已删除。他的聊天记录都清掉了'
+          : '已删除这段会话',
+    );
+  } catch (err) {
+    /*
+     * E2047 = 另一个窗口刚把它删了：抽屉里那行已经不存在，**列表和抽屉都得刷**，
+     * 否则用户对着死行再点一次又撞同一个错（跟 openConversationSafe 一个套路）。
+     */
+    if (err?.code === 'E2047') {
+      if (S.conversation?.id === c.id) resetChatPane();
+      await load().catch(() => {});
+      if (S.drawerKind === 'log') paintDrawer();
+      renderList();
+    }
+    toastConvErr(err);
+  }
 }
 
 /* -------------------------------------------------------------- 群详情页 */
 
-/** 通讯录里点群聊进来的页面：跟员工详情一个套路，要聊再点「发消息」 */
-function paintGroupDetail(thread) {
-  S.groupThread = thread;
-  S.groupThreadId = thread.id;
-  const assistant = thread.members.find((m) => m.personaId === thread.assistantPersonaId);
+/**
+ * 通讯录里点群聊进来的页面：跟员工详情一个套路，要聊再点「发消息」。
+ *
+ * 入参是**群**（groups 表那一行：id / title / assistantPersonaId / members），
+ * 不是会话 —— 一个群下面有多段会话，群名、群助手、成员都属于群本身。
+ */
+function paintGroupDetail(group) {
+  S.groupThread = group;
+  S.groupThreadId = group.id;
+  // 左栏标题固定「通讯录」（不做面包屑，2026-10-20；右页头已去掉，名字/群助手/人数都在正文的 hero 里）
+  setListTitle('通讯录');
+  const assistant = group.members.find((m) => m.personaId === group.assistantPersonaId);
 
   $('groupView').innerHTML = `
-    <div class="detail-head"><b>群聊详情</b></div>
     <div class="detail-body">
       <div class="hero">
-        <div class="avatar grp big">${esc(initial(thread.title))}</div>
+        <div class="avatar grp big">${esc(initial(group.title))}</div>
         <div>
-          <h2>${esc(thread.title)}</h2>
-          <div class="sub">群助手：${esc(assistant?.name ?? '—')} · ${thread.members.length} 人</div>
+          <h2>${esc(group.title)}</h2>
+          <div class="sub">群助手：${esc(assistant?.name ?? '—')} · ${group.members.length} 人</div>
         </div>
-        <button class="primary hero-actions" id="gMsg">发消息</button>
+        <!-- 「⋯」收解散入口（2026-10-20 用户要求）：破坏性动作别跟「发消息」平起平坐，
+             也别平铺在页面底部 —— 收进菜单，点开才露。样式/交互照抄员工详情那套 hero-more -->
+        <div class="hero-actions">
+          <button class="primary" id="gMsg">发消息</button>
+          <div class="hero-more">
+            <button type="button" class="hero-more-btn" id="gMore" title="更多操作">⋯</button>
+            <div class="hero-more-menu" id="gMoreMenu" hidden>
+              <button class="danger" id="gDissolve">解散群聊</button>
+            </div>
+          </div>
+        </div>
       </div>
-      ${groupSettingsHTML(thread)}
+      ${groupSettingsHTML(group, { noDissolve: true })}
     </div>`;
 
-  $('gMsg').onclick = async () => {
-    try {
-      setNav('messages');
-      await openConversation(thread.id);
-      $('input').focus();
-    } catch (err) { toast(err.message, 'error'); }
-  };
+  $('gMsg').onclick = () => toGroupMessages(group);
 
-  wireGroupSettings(thread, () => paintGroupDetail(thread));
+  /* 「⋯」开合 + 点外面收。菜单本身在 .hero-more 里，外点收起的判据靠它 */
+  const closeMore = () => { const m = $('gMoreMenu'); if (m) m.hidden = true; };
+  $('gMore').addEventListener('click', (e) => {
+    e.stopPropagation();
+    const m = $('gMoreMenu');
+    if (m) m.hidden = !m.hidden;
+  });
+  const gMoreOutside = (e) => {
+    if (!e.target.closest?.('.hero-more')) closeMore();
+  };
+  document.addEventListener('click', gMoreOutside);
+  (window.__pageCleanups ??= []).push(() => document.removeEventListener('click', gMoreOutside));
+  $('gDissolve').onclick = () => { closeMore(); dissolveGroup(group); };
+
+  wireGroupSettings(group, () => paintGroupDetail(group), $('groupView'));
 }
 
-async function openGroupDetail(threadId) {
-  setRoute('group', { id: threadId });
-  const d = await api('/api/conversations/' + encodeURIComponent(threadId));
+/**
+ * 群详情「发消息」= **开一段新的群会话**（2026-10-20 用户要求：群也像单聊那样一次任务一段）。
+ *
+ * 为什么不能直接 `openConversation(groupId)`：群 id 和会话 id 是两套 id，
+ * 拿群 id 去开会话是 404（拆表前它们恰好相同，所以这条错误很隐蔽）。
+ * 所以要么复用当前空会话，要么让服务端落一段新的（`POST /api/groups/:id/sessions`）。
+ *
+ * 连点保护跟单聊（toMessages）同一个口径：当前就停在这个群一段**一条消息都没有**的会话上
+ * → 直接复用，别堆空壳。判据是 `S.convEmpty`，由 openConversation 按服务端 messages 写。
+ */
+/**
+ * 群详情「发消息」= **开一段新的群会话**（2026-10-20 用户要求：群也像单聊那样一次任务一段）。
+ *
+ * 为什么不能直接 `openConversation(groupId)`：群 id 和会话 id 是两套 id，
+ * 拿群 id 去开会话是 404（拆表前它们恰好相同，所以这条错误很隐蔽）。
+ * 所以要么复用当前空会话，要么让服务端落一段新的（`POST /api/groups/:id/sessions`，
+ * 服务端顺手把整群的「不显示」撤掉 —— 发起 = 明确要用这个群，列表得回来）。
+ *
+ * 连点保护跟单聊（toMessages）同一个口径：当前就停在这个群一段**一条消息都没有**的会话上
+ * → 直接复用，别堆空壳。判据是 `S.convEmpty`，由 openConversation 按服务端 messages 写。
+ *
+ * ⚠️ 复用有个例外（用户实报「发起群聊会话列表里没有」）：那段空会话**正被「不显示」收着**
+ * 的时候不能复用 —— 复用既不建新段也不发消息，群就永远没有回列表的机会。
+ * 所以被收着的空会话一律走新建，让服务端的"发起即回列表"接手。
+ */
+async function toGroupMessages(group) {
+  const cur = S.conversation;
+  const reuse =
+    !!cur &&
+    cur.kind === 'group' &&
+    cur.groupId === group.id &&
+    S.convEmpty &&
+    // 正被「不显示」收着的空会话不复用（visible = 这段还在消息列表的数据源里）
+    (S.conversations ?? []).some((c) => c.id === cur.id);
+  try {
+    const convId = reuse
+      ? cur.id
+      : (await post(`/api/groups/${encodeURIComponent(group.id)}/sessions`)).conversation.id;
+    setNav('messages');
+    showView('chat');
+    await openConversationSafe(convId);
+    if (S.conversation?.id !== convId) return;
+    await load();
+    $('input').focus();
+  } catch (err) { toastConvErr(err); }
+}
+
+async function openGroupDetail(groupId) {
+  setRoute('group', { id: groupId });
+  let d;
+  try {
+    d = await api('/api/groups/' + encodeURIComponent(groupId));
+  } catch (err) {
+    // 刷新后残留的旧路由 / 另一个窗口刚解散的群：别卡在一个空白详情页上
+    toastConvErr(err);
+    setNav('messages');
+    return;
+  }
   // 先把抽屉清空：两边都渲染同一批 id（drawerSearch 等），同时存在必然打架
   closeDrawer();
   S.memberQuery = '';
@@ -10619,7 +12423,7 @@ async function openGroupDetail(threadId) {
   S.membersExpanded = false;
   showView('group');
   renderList();
-  paintGroupDetail(d.conversation);
+  paintGroupDetail(d.group);
 }
 
 /* -------------------------------------------------------------- 界面插件 */
@@ -10667,6 +12471,49 @@ const PLUGIN_BADGE_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentCo
   <path d="M6.5 9h11v3.2a5.5 5.5 0 0 1-11 0z" />
   <path d="M12 17.7V22" />
 </svg>`;
+
+/**
+ * 插件磁贴的图标配色（v1.0.1 第 3 步）。
+ *
+ * 为什么是"按分组顺序发色"，而不是按分组名哈希：
+ * 哈希看上去更"稳定"（同一个分类永远同色），但**碰撞是随机的** —— 实测哈希把
+ * 「研发」和「运维」撞成同一个紫、「开发」和「生产力」撞成同一个青，一眼就看得出。
+ * 而实际工作台上同时存在的分组只有 2~4 个（项目面板 / ssh 各自一个分类），
+ * 按**首次出现的顺序**发色，同屏的几组必然不同色 —— 这才是这一格要的效果。
+ * 代价：新装一个分类可能让后面几组的颜色挪位（分组重排时本来就会重排），可以接受。
+ *
+ * 色相只在 190°~330° 之间循环（青 → 蓝 → 紫 → 品红）：这一圈里**没有黄**。
+ * 白字压在色块上要 ≥ 4.5:1，黄/橙在同样明度上对比度掉得最快（实测 #a86400 只有 4.68，
+ * 再亮一点就破线）。绕开这一段，白字就稳。
+ * 饱和度 46%、明度 44%/28%：不是没颜色，是"分得开但压得住" ——
+ * 主屏上一排高饱和色块会抢注意力，而这些只是入口。
+ * ⚠️ **青/绿这一族要单独压暗**：同样的明度下，青绿在 WCAG 的亮度公式里权重大
+ * （G 的系数 0.7152），hsl(192 46% 44%) 白字只有 3.70、hsl(172 46% 44%) 只有 3.03 —— 破线。
+ * 所以 192 / 172 这两位的起点明度降到 36%（对应 4.9~5.1），其余保持 44%。
+ * 改任何一个色位都要重算："相对亮度 → 1.05/(L+0.05)"，白字 ≥ 4.5。
+ */
+const PLUGIN_HUES = [262, 192, 322, 214, 292, 172];
+/** 少数色位需要不同的明度（见上面的注释）。没列出的走默认 44%/28% */
+const PLUGIN_LIGHT = { 192: 36, 172: 34 };
+/** 一次渲染内：分组名 → 色位（每次重画重新发，顺序稳定则颜色稳定） */
+let wbHueTick = 0;
+let wbHueMap = new Map();
+const resetWbHues = () => { wbHueTick = 0; wbHueMap = new Map(); };
+function pluginHue(cat) {
+  const key = String(cat || '应用');
+  if (!wbHueMap.has(key)) {
+    wbHueMap.set(key, PLUGIN_HUES[wbHueTick % PLUGIN_HUES.length]);
+    wbHueTick++;
+  }
+  return wbHueMap.get(key);
+}
+/** 一个分组一种颜色的内联样式（起点亮、终点暗，同一档的渐变） */
+const wbIcoStyle = (cat) => {
+  const h = pluginHue(cat);
+  const l1 = PLUGIN_LIGHT[h] ?? 44;
+  const l2 = l1 - 16; // 终点固定比起点暗 16 个明度：同一色相的两档，渐变不会脏
+  return `style="--wb-1:hsl(${h} 46% ${l1}%);--wb-2:hsl(${h} 52% ${l2}%)"`;
+};
 
 /** 从接口返回里取数组：可以是数组本身，也可以 pick 某个键 */
 function pickItems(body, pick) {
@@ -10731,23 +12578,39 @@ async function openPlugins() {
   if (S.nav !== 'plugins' || S.plugin || S.projectList || S.projectId || S.boardAll) return;
   renderList();
   renderWorkbench();
+  // 显式「回工作台」时把**选择也复位**：否则下次重进工作台，renderList 会把上次那个
+  // 插件 / 项目看板的位置又画回去（用户在子页里点了返回，结果一刷新又跳回去过 —— 踩过）
+  delete S.plugin;
+  delete S.pluginRow;
 }
 
-/** 工作台：没选应用就是宫格，选了就是那个应用的页面 */
+/** 工作台：没选应用就是目录，选了就是那个应用的页面 */
 function renderWorkbench() {
   if (S.plugin) return renderPluginPanel();
   renderWorkbenchGrid();
 }
 
-/** 工作台首页：按 manifest 里的 category 分组的应用宫格 */
+/**
+ * 工作台首页 = **整页宫格**（2026-10-19 用户明确要求保留：「这个是整体的入口页，不能变」）。
+ *
+ * ⚠️ 中途我把它改成过"左栏目录 + 右栏空态"，理由是"工作台的子页全是左栏列表 + 右侧内容，
+ * 首页也该一样"。那是**从形式倒推**的，回来一看明显不对：
+ *   · 首页的职责是**总览**（一屏扫完所有入口、看得见分组），不是"再往里走一层"；
+ *   · 换成目录后主区是一大块空白，等于把整个页面浪费掉；
+ *   · 入口还被塞进常态收起的左栏 —— 打开 app 第一眼反而什么都看不见。
+ * 所以定下来：**首页宫格（左栏收起）、子页才走「标题 + 动作」的页头。**
+ * 这是有意的分野：入口页长得像入口，工作页长得像工作页。
+ * （页头前面不放按钮 —— 当天加过一枚「← 工作台」，用户说"统一去掉"，见 headRow 的注释。）
+ */
 function renderWorkbenchGrid() {
+  resetWbHues(); // 每次重画从头发色：分组顺序不变 → 颜色不变；顺序变了 → 颜色跟着重排（不追求跨次稳定）
   const list = usablePlugins();
   // 宫格是整页布局：把左栏收掉（进插件后会由 renderPluginMaster 放回来）
   document.body.classList.add('no-list');
-  $('listTitle').textContent = '工作台';
+  setListTitle('工作台');
   $('listBody').innerHTML = '';
   $('listAction').classList.add('hidden');
-  // 装上了但 manifest 有问题的：原来提示在左栏，左栏收掉后挪到这里，
+  // 装上了但 manifest 有问题的：提示放在宫格最下面，
   // 否则插件作者只会看到"我装的插件不见了"，不知道哪里错了
   const broken = S.plugins.filter((p) => p.panel?.slot === 'plugins' && p.installed && !p.valid);
   const groups = new Map();
@@ -10757,42 +12620,46 @@ function renderWorkbenchGrid() {
     groups.get(key).push(p);
   }
 
+  /* 所有分组**共用一个宫格容器**，分组名退化成一行小标题（`.wb-sec`）。
+     原来每个分组是 `<section class="fx">`，`.fx + .fx` 自带横分隔线 —— 5 个小组竖着叠成
+     5 条横带，每条右侧一片空白，分隔线反而比内容显眼。现在一屏铺不下就换行，不会"一带一块"。 */
+  const pluginSections = [...groups]
+    .map(
+      ([cat, items]) => `<div class="wb-sec">${esc(cat)}</div>
+        <div class="wb-grid">
+          ${items
+            .map(
+              (p) => wbCard(
+                'has-plug',
+                `<i class="wb-badge" title="插件" aria-label="插件">${PLUGIN_BADGE_SVG}</i>${esc(initial(p.label))}`,
+                p.label,
+                p.description || p.label,
+                `data-wb-open="${esc(p.id)}"`,
+                wbIcoStyle(cat),
+              ),
+            )
+            .join('')}
+        </div>`,
+    )
+    .join('');
+
   $('pluginView').classList.remove('kb-page'); // 宫格是长页面，按普通滚动
   $('pluginView').innerHTML = `
-    <div class="detail-head"><b>工作台</b></div>
-    <div class="detail-body">${
-      list.length
-        ? [...groups]
-            .map(
-              ([cat, items]) => `<section class="fx">
-                <label>${esc(cat)} <span class="count">${items.length}</span></label>
-                <div class="wb-grid">
-                  ${items
-                    .map(
-                      (p) => `<button class="wb-tile" data-wb-open="${esc(p.id)}" title="${esc(p.description || p.label)}">
-                        <span class="wb-ico has-plug"><i class="wb-badge" title="插件" aria-label="插件">${PLUGIN_BADGE_SVG}</i>${esc(initial(p.label))}</span>
-                        <span class="wb-name">${esc(p.label)}</span>
-                      </button>`,
-                    )
-                    .join('')}
-                </div>
-              </section>`,
-            )
-            .join('')
-        : '' // 没装应用就不渲染这个区：空态横幅没人需要（装第一个应用时自然会知道去哪装）
+    <div class="detail-head head-row"><div class="head-title"><b>工作台</b></div></div>
+    <div class="detail-body wb-page">${
+      list.length ? pluginSections : '' // 没装应用就不渲染这个区：空态横幅没人需要
     }${workbenchProjectSection()}${workbenchAutoSection()}${workbenchFlowSection()}${
       broken.length
-        ? `<section class="fx">
-             <label>装不上台面 <span class="count">${broken.length}</span></label>
-             ${broken
-               .map((p) => `<div class="plg-err">${esc(p.id)}：${esc(p.errors.join('；'))}</div>`)
-               .join('')}
-           </section>`
+        ? `<div class="wb-sec">装不上台面</div>
+           ${broken
+             .map((p) => `<div class="plg-err">${esc(p.id)}：${esc(p.errors.join('；'))}</div>`)
+             .join('')}`
         : ''
     }</div>`;
   showView('plugin');
 
-  $('pluginView').querySelectorAll('[data-wb-open]').forEach((el) => {
+  const view = $('pluginView');
+  view.querySelectorAll('[data-wb-open]').forEach((el) => {
     el.onclick = () => {
       S.plugin = el.dataset.wbOpen;
       setRoute('plugin', { id: S.plugin });
@@ -10806,23 +12673,23 @@ function renderWorkbenchGrid() {
     };
   });
   // 流程编排：画节点、指派、发布（入口原来在 rail 的「工作流」，现在收进工作台）
-  $('pluginView').querySelector('[data-flow-design]')?.addEventListener('click', () => {
+  view.querySelector('[data-flow-design]')?.addEventListener('click', () => {
     openWorkflows().catch((e) => toast(e.message, 'error'));
   });
   // 流程：点一下先看**这个流程的发起记录**；发起是那个页面上的动作（＋）
-  $('pluginView').querySelectorAll('[data-flow-start]').forEach((el) => {
+  view.querySelectorAll('[data-flow-start]').forEach((el) => {
     el.onclick = () => openFlowRun(el.dataset.flowStart);
   });
   // 项目：点一下进项目列表（增删改查都在那儿）
-  $('pluginView').querySelector('[data-projects]')?.addEventListener('click', () => {
+  view.querySelector('[data-projects]')?.addEventListener('click', () => {
     openProjectsPage().catch((e) => toast(e.message, 'error'));
   });
-  // 任务看板：项目旁边那个入口 —— 同一张看板，范围是**所有项目**（站在全局看）
-  $('pluginView').querySelector('[data-task-board]')?.addEventListener('click', () => {
+  // 任务看板：同一张看板，范围是**所有项目**（站在全局看）
+  view.querySelector('[data-task-board]')?.addEventListener('click', () => {
     openTaskBoard().catch((e) => toast(e.message, 'error'));
   });
   // 定时任务：入口原来在「设置」里，搬到工作台（2026-10-17 用户要求）
-  $('pluginView').querySelector('[data-schedules]')?.addEventListener('click', () => {
+  view.querySelector('[data-schedules]')?.addEventListener('click', () => {
     openSchedules().catch((e) => toast(e.message, 'error'));
   });
 }
@@ -11117,8 +12984,9 @@ async function renderPluginMaster(plugin, split) {
   if (!rows.some((r) => keyOf(r) === String(S.pluginRow))) S.pluginRow = rows.length ? keyOf(rows[0]) : null;
   const sel = rows.find((r) => keyOf(r) === String(S.pluginRow)) ?? null;
 
-  // 标题借用全局那一套；「＋」的 onclick 在全局按 S.nav 派发（别在这里覆盖）
-  $('listTitle').textContent = m.heading || plugin.label;
+  // 左栏顶上：工作台 › 插件名（面包屑从右页头挪过来；页头整条已去掉）
+  // 不用 m.heading（「项目」「登记表」）—— 那是"这一列是什么"，面包屑要回答的是"你在哪儿"。
+  setListTitle([{ label: '工作台', to: 'workbench' }, { label: plugin.label }]);
   $('listAction').classList.toggle('hidden', !m.add);
   $('listAction').title = m.add?.label || '';
   $('listBody').innerHTML = rows.length
@@ -11126,8 +12994,10 @@ async function renderPluginMaster(plugin, split) {
         .map(
           (r) => `<div class="item${sel && keyOf(r) === keyOf(sel) ? ' active' : ''}" data-master="${esc(keyOf(r))}">
             <div class="who">
-              <b>${esc(tpl(m.title, r))}</b>
-              ${m.subtitle ? `<div class="sub">${esc(tpl(m.subtitle, r))}</div>` : ''}
+              <!-- 2026-10-20 收口：原来直接 b + div.sub（没有规则，标题 16px 粗体、副标题全色折行），
+                   跟「项目」页的 .line1/.line2 长得不是一套。现在所有主从列表都用标准行结构。 -->
+              <div class="line1"><b>${esc(tpl(m.title, r))}</b></div>
+              ${m.subtitle ? `<div class="line2" title="${esc(tpl(m.subtitle, r))}">${esc(tpl(m.subtitle, r))}</div>` : ''}
             </div>
           </div>`,
         )
@@ -11208,32 +13078,26 @@ async function renderPluginPanel() {
     return;
   }
 
+  // 有主从布局 → 用**全局左栏**放列表（和消息/通讯录同一位置）；
+  // 没有 → 整页布局，把左栏收掉（见 CSS 的 body.no-list）。
+  // ⚠️ 2026-10-19 用户：「面包屑应该是在左边的列表上，右边的不用」——
+  //    有左栏时面包屑画在左栏顶上（renderPluginMaster 里），页头整条不要；
+  //    没左栏时（整页插件面板）页头仍是面包屑，否则页面上没有任何"你在哪"。
+  const split = plugin.panel.split ?? null;
   $('pluginView').classList.remove('kb-page'); // 插件面板是长页面（块会很长），按普通滚动
   // 进插件面板 = 离开项目页（两条路都写在 pluginView 里，位置记忆得分清是谁）
   S.projectList = false;
   S.projectId = null;
   $('pluginView').innerHTML = `
-    <div class="detail-head">
-      ${breadcrumb([{ label: '工作台', to: 'workbench' }, { label: plugin.label }])}
-    </div>
+    ${split ? '' : headRow(breadcrumb([{ label: '工作台', to: 'workbench' }, { label: plugin.label }]))}
     <div class="detail-body" id="plgPanel"><div class="dim">加载中…</div></div>`;
   showView('plugin');
-
-  const back = $('pluginView').querySelector('[data-crumb-to]');
-  if (back) {
-    back.onclick = () => {
-      S.plugin = null;
-      renderList();
-      renderWorkbenchGrid();
-    };
-  }
 
   S.pluginData = {};
   pluginRows = {};
   pluginCopy = {};
 
   // 顶部块 + 详情动作 + 详情块合成一张表：下标统一，按钮回查才不会串
-  const split = plugin.panel.split ?? null;
   const allBlocks = [
     ...(plugin.panel.blocks ?? []),
     ...(split?.detail?.actions ?? []),
@@ -11257,7 +13121,7 @@ async function renderPluginPanel() {
   let sel = null;
   if (split) sel = await renderPluginMaster(plugin, split);
   else {
-    $('listTitle').textContent = plugin.label;
+    setListTitle(plugin.label);
     $('listBody').innerHTML = '';
   }
 
@@ -11495,81 +13359,104 @@ function closeDrawer() {
   S.drawerThreadId = null;
   S.drawerThread = null;
   S.removeMode = false;
+  // 分流状态也要清：不清的话下次开群设置会被当成"上次是聊天记录"，
+  // 画出的是别人的会话列表（同一个 DOM 两种内容的代价，必须成对清）
+  S.drawerKind = null;
+  S.logPersonaId = null;
+  S.logGroupId = null;
+  S.logGroupTitle = null;
+  S.logLoading = false;
   $('drawer').classList.remove('open');
   // 清空：抽屉和群详情页渲染的是同一批 id（drawerSearch/mgrid…），留着旧 DOM 会打架
   $('drawer').innerHTML = '';
   $('scrim').classList.remove('open');
 }
 
-/** 拉取最新会话数据，重画头部、消息区与抽屉 */
-async function refreshThread(threadId) {
+/**
+ * 群设置改完之后刷新（改名 / 换群助手 / 加人 / 踢人）。
+ *
+ * 群的数据在**三个地方**同时显示，改一处三处都得跟上，否则会出现
+ * "详情里叫 A、聊天头部还叫 B"：
+ *   ① 通讯录的群详情页（`S.groupThreadId === groupId`）
+ *   ② 群设置抽屉（`S.drawerKind === 'group' && S.drawerThreadId === groupId`）
+ *   ③ 正在聊的这段群会话（`S.conversation.groupId === groupId`）—— 标题/群助手在会话上是镜像字段
+ *
+ * 用 `openConversationSafe` 重开 ③ 而不是就地改字段：头部、成员数、消息区是一起画的，
+ * 拼字段迟早漏一处；重开一次的数据来自服务端，天然一致。
+ */
+async function refreshGroup(groupId) {
   await load();
-  const d = await api('/api/conversations/' + encodeURIComponent(threadId));
-  const thread = d.conversation;
+  const d = await api('/api/groups/' + encodeURIComponent(groupId));
+  const group = d.group;
 
-  // 正在看群详情页：就地重画，别把人踢去聊天
-  if (S.groupThreadId === threadId) {
-    paintGroupDetail(thread);
-    renderList();
-    return;
+  if (S.groupThreadId === groupId) paintGroupDetail(group);
+  if (S.drawerOpen && S.drawerKind === 'group' && S.drawerThreadId === groupId) {
+    S.drawerThread = group;
+    paintDrawer();
   }
-
-  S.drawerThread = thread;
-  await openConversation(threadId);
-  if (S.drawerOpen) paintDrawer();
+  if (S.groupThreadId === groupId) { renderList(); return; }
+  if (S.conversation?.groupId === groupId) { await openConversationSafe(S.conversation.id); return; }
+  renderList();
 }
 
 async function kickMember(thread, personaId, name) {
   if (!(await confirmDo(`把 ${name || '他'} 移出群？\n他之前说过的话会留着；再拉回来是干净的开始。`))) return;
   try {
-    await api(`/api/groups/${encodeURIComponent(thread.id)}/members/${encodeURIComponent(personaId)}`, {
+    await api(`/api/groups/${encodeURIComponent(gidOf(thread))}/members/${encodeURIComponent(personaId)}`, {
       method: 'DELETE',
     });
-    await refreshThread(thread.id);
+    await refreshGroup(gidOf(thread));
   } catch (err) { toast(err.message, 'error'); }
 }
 
 /**
  * 解散群聊。
  *
- * **不抹聊天记录** —— 服务端只做三件事：解除成员关系、清掉各成员在这个群里的会话状态、归档
- * （见 store.dissolveGroup）。记录留在库里，去「已移除的会话」照样能查。
+ * **不抹聊天记录** —— 服务端只做三件事：解除成员关系、清掉各成员在这个群里的会话状态、
+ * 给群和每段会话打 `dissolvedAt`（见 store.dissolveGroup）。
  *
- * 为什么解散后必须**把当前会话也复位**：群没人了就不能再 @ 人派活，
- * 但如果界面还停在这个会话上，输入框还在 —— 一发言就出问题。
- * 所以跟"删员工"一个处理：会话、光标、输入区全部复位（复用同一套）。
+ * 2026-10-20 用户定：解散后**消息仍留在消息列表里、只读**（以前是整群连着记录一起从界面收走，
+ * 记录在库里却没有入口 = 等于删档）。所以解散完不把用户踢回空态：停在原地重画成只读，
+ * 列表里那行的副标题变成「已解散」；通讯录里的群则消失（那边只列还能用的群）。
+ * 发消息由后端兜底拒绝（E2049）—— 成员关系已清，不拦的话就是"点了没反应"。
  */
 async function dissolveGroup(thread) {
-  const n = thread.members.length;
+  /*
+   * 成员数两种来源：群详情 / 群设置抽屉给的是 `members` 数组；
+   * **消息列表右键**给的是 `S.conversations` 里那一行（只有 `memberCount`）。
+   * 别写成 `thread.members.length` —— 从列表进来时那是 undefined，直接抛错。
+   */
+  const n = thread.members?.length ?? thread.memberCount ?? 0;
+  // 消息列表右键给的是**群会话**（id 是会话 id），群详情/群设置给的是**群**。
+  // 解散的永远是群，所以一律换算成 groupId —— 否则会拿着会话 id 去解散，404。
+  const groupId = gidOf(thread);
   const ok = await confirmDo(
     `解散「${thread.title}」？\n\n` +
       `· ${n} 位成员的群关系会解除，这个群不能再 @ 人派活\n` +
-      `· 群从消息列表消失\n` +
-      `· 聊天记录**保留**，去「已移除的会话」还能查到\n\n` +
+      `· 群从通讯录移除；**聊天记录仍留在消息列表里**（只读，翻得到）\n\n` +
       `解散后恢复不了，确定吗？`,
   );
   if (!ok) return;
   try {
-    const r = await api(`/api/groups/${encodeURIComponent(thread.id)}`, { method: 'DELETE' });
+    const r = await api(`/api/groups/${encodeURIComponent(groupId)}`, { method: 'DELETE' });
     S.conversations = r.conversations;
-    S.archivedCount = (S.archivedCount || 0) + 1;
+    if (r.hiddenConversations) S.hiddenConversations = r.hiddenConversations;
+    // 通讯录的群行读 S.groups（groups 表）：解散 = dissolvedAt 打上，本地先摘掉再重画
+    S.groups = (S.groups ?? []).filter((g) => g.id !== groupId);
     closeDrawer();
-    // 两个入口都可能是"正在看这个群"：抽屉开在会话里 / 通讯录里的群详情页。
-    // 解散之后两边都不能停在那儿 —— 抽屉得关，主视图得退回消息页。
-    const wasLooking = S.groupThreadId === thread.id || S.conversation?.id === thread.id;
-    if (S.groupThreadId === thread.id) {
+    // 抽屉得关（成员都没了，那套设置已经没有意义）；群详情页也不能停在那儿
+    if (S.groupThreadId === groupId) {
       S.groupThread = null;
       S.groupThreadId = null;
     }
-    if (S.conversation?.id === thread.id) S.conversation = null;
-    if (wasLooking) {
-      // 别留一个指向"已经解散的群"的面板：光标、输入区、主视图全部复位（跟删员工同一套）
-      $('chat').innerHTML = '<div class="empty">还没有对话</div>';
-      $('chatHead').innerHTML = '<span class="dim" style="padding:6px 0">左边选一个人，开始说话</span>';
-      setComposer(false);
-      showView('chat');
-    }
-    setNav('messages'); // 内部会重画左栏列表
+    /*
+     * 2026-10-20 用户定：解散后**消息仍留在列表里、只读**。
+     * 所以"正在看这个群的一段会话"不该被踢回空态 —— 留在原地重画一次（输入框会自动置灰），
+     * 用户刚才读到哪儿还在哪儿。只有从通讯录群详情页解散、手上没有这段会话时，才回消息列表。
+     */
+    const stillHere = S.conversation?.groupId === groupId ? S.conversation.id : null;
+    setNav('messages'); // 内部会重画左栏列表（群行还在，副标题变成「已解散」）
+    if (stillHere) await openConversationSafe(stillHere); // 重画成只读
   } catch (err) {
     toast(err.message, 'error');
   }
@@ -11579,12 +13466,12 @@ async function renameGroup(thread) {
   const title = await askText({ title: '新的群名称', value: thread.title });
   if (title === null || !title.trim() || title === thread.title) return;
   try {
-    await api('/api/groups/' + encodeURIComponent(thread.id), {
+    await api('/api/groups/' + encodeURIComponent(gidOf(thread)), {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title: title.trim() }),
     });
-    await refreshThread(thread.id);
+    await refreshGroup(gidOf(thread));
   } catch (err) { toast(err.message, 'error'); }
 }
 
@@ -11619,7 +13506,7 @@ function openMemberDialog(thread) {
   memberPicked.clear();
   $('mSearch').value = '';
   renderMemberCandidates();
-  $('memberDlg').dataset.thread = thread.id;
+  $('memberDlg').dataset.thread = gidOf(thread);
   $('memberDlg').showModal();
 }
 
@@ -11633,7 +13520,7 @@ $('mOk').onclick = async (e) => {
   try {
     await post(`/api/groups/${encodeURIComponent(threadId)}/members`, { personaIds });
     $('memberDlg').close();
-    await refreshThread(threadId);
+    await refreshGroup(threadId);
   } catch (err) { toast(err.message, 'error'); }
 };
 
@@ -11723,8 +13610,19 @@ $('gOk').onclick = async (e) => {
   e.preventDefault();
   const assistantPersonaId = gAssistantCombo.value();
   const memberIds = [...$('gMembers').querySelectorAll('input:checked')].map((i) => i.value);
+  /*
+   * 群名**本地先拦**（2026-10-20 用户截图：空名点创建，弹「E1006：服务异常」）。
+   * 空名根本不用发请求 —— 服务端对空标题回的是通用错误码，界面上就成了
+   * "服务异常"，人只会以为系统坏了。这里是单纯的表单没填完。
+   */
+  const title = $('gTitle').value.trim();
+  if (!title) {
+    toast('先给群起个名字');
+    $('gTitle').focus();
+    return;
+  }
   try {
-    const d = await post('/api/groups', { title: $('gTitle').value, assistantPersonaId, memberIds });
+    const d = await post('/api/groups', { title, assistantPersonaId, memberIds });
     $('groupDlg').close();
     await load();
     setNav('messages');
@@ -11760,7 +13658,7 @@ $('aOk').onclick = async (e) => {
       body: JSON.stringify({ assistantPersonaId: picked.value }),
     });
     $('assistantDlg').close();
-    await refreshThread(threadId);
+    await refreshGroup(threadId);
   } catch (err) { toast(err.message, 'error'); }
 };
 
@@ -11768,6 +13666,154 @@ $('aOk').onclick = async (e) => {
 
 document.querySelectorAll('.nav-btn').forEach((b) => { b.onclick = () => setNav(b.dataset.nav); });
 $('scrim').onclick = closeDrawer;
+
+/* ------------------------------------------------ 列表项右键菜单（绑定） */
+/*
+ * ⚠️ 这一段**必须放在 boot 区**，不许写进 `renderList()`：列表每次 `innerHTML` 重建，
+ *    写进去就会重复绑一次监听 —— 轻则同一个动作执行两遍，重则"删除"被执行两次。
+ *
+ * 为什么走**事件委托**：`#listBody` 是 index.html 里的常驻节点，行是每次重画的。
+ * 右键只认带 `data-conv` 的行；空白处不命中 → 保留浏览器原生菜单（右键复制文字这类操作还得能用）。
+ * 右键某行**不会**打开该会话：`contextmenu` 不触发 `click`，无需额外阻止。
+ */
+$('listBody').addEventListener('contextmenu', (e) => {
+  const row = e.target.closest?.('[data-conv]');
+  if (!row) return;
+  const c =
+    (S.conversations ?? []).find((x) => x.id === row.dataset.conv) ??
+    (S.hiddenConversations ?? []).find((x) => x.id === row.dataset.conv);
+  if (!c) return; // 列表刚重画、数据还没跟上：宁可弹原生菜单，也不要弹一个空菜单
+  /*
+   * 群也给菜单（2026-10-20 用户要求，跟单聊同一套）：删除 / 不显示。
+   * 但群这两项的含义比 1:1 重（群没有聊天记录入口、历史是所有成员共享的），
+   * 所以两个动作都带二次确认，文案单独写 —— 见 `dissolveGroup` / `removeConversationForever`。
+   */
+  e.preventDefault();
+  const running = c.status === '跑中';
+  /*
+   * 「已归档」列表里的行（只在 hiddenConversations 里）：它本来就被收着，
+   * 再给「不显示/归档」是废话，所以只留「删除」。
+   */
+  const alreadyHidden = !(S.conversations ?? []).some((x) => x.id === c.id);
+  if (alreadyHidden) {
+    /*
+     * 「已归档」里只会有两种行（见 `archivedConvs`）：已解散的群、员工已删的单聊 ——
+     * 都代表"一整档历史"，删下去是全清，菜单得说实话（`wipeScopeOf` 统一判）。
+     */
+    const wipe = wipeScopeOf(c);
+    openCtxMenu(e.clientX, e.clientY, [
+      {
+        label: wipe ? '删除并清空聊天记录' : '删除',
+        danger: true,
+        disabled: running,
+        why: running ? '这段还在跑，等它跑完或先终止再删' : '',
+        run: () => removeConversationForever(c),
+      },
+    ]);
+    return;
+  }
+  if (c.kind === 'group') {
+    /*
+     * 解散的群（2026-10-20 用户定稿）：这一行代表的是"这个群的**全部历史**"，
+     * 所以第一项是「删除并清空聊天记录」—— 整群连记录一起清（后端按 dissolvedAt 分派）；
+     * 第二项「归档」= 收进「已归档」留着（群都没了，"不显示"的语义不成立）。
+     * 没解散的群照旧：「删除」删的是**最新这一段**（群和别的段不动），「不显示」整群暂收。
+     */
+    const dissolved = !!c.dissolvedAt;
+    openCtxMenu(e.clientX, e.clientY, [
+      {
+        label: dissolved ? '删除并清空聊天记录' : '删除',
+        danger: true,
+        disabled: running,
+        why: running ? '这个群还有一段在跑，等它跑完或先终止再删' : '',
+        run: () => removeConversationForever(c),
+      },
+      dissolved
+        ? { label: '归档', run: () => hideConversationRow(c, 'archive') }
+        : // 群的「不显示」与单聊**同一个动作、同一个接口**：只写 hiddenAt，
+          // 成员关系、群助手、记录全都不动（用户 2026-10-20 明确：不显示≠解散）。
+          { label: '不显示', run: () => hideConversationRow(c) },
+    ]);
+    return;
+  }
+  /*
+   * 单聊两项：
+   *   · 员工还在 → 「删除」（删这一段）+「不显示」（不占行，聊天记录里照样看得到）
+   *   · 员工已删 → 「删除并清空聊天记录」（这一行 = 这个人的全部历史，只删一段就会
+   *                留下"看不见的冗余"：剩下的段还在「已归档」里，而他已经没有任何入口了）
+   *               +「归档」（从界面彻底收走，数据留库）
+   * 两个动作走同一个接口（`/api/conversations/:id`），后端按"人还在不在"分派。
+   */
+  const personaGone = !(S.personas ?? []).some((p) => p.id === c.personaId);
+  const wipe = wipeScopeOf(c);
+  openCtxMenu(e.clientX, e.clientY, [
+    {
+      label: wipe ? '删除并清空聊天记录' : '删除',
+      danger: true,
+      disabled: running,
+      why: running
+        ? wipe === 'persona' ? '他还有一段在跑，等它跑完或先终止再删' : '这段还在跑，等它跑完或先终止再删'
+        : '',
+      run: () => removeConversationForever(c),
+    },
+    personaGone
+      ? { label: '归档', run: () => hideConversationRow(c, 'archive') }
+      : { label: '不显示', run: () => hideConversationRow(c) },
+  ]);
+});
+
+/*
+ * 聊天记录抽屉里的行也能右键「删除」（2026-10-20 用户要求，单聊与群同一套）。
+ *
+ * 为什么也走**委托**：抽屉每次 `paintChatLogDrawer` 都会 `innerHTML` 重建，
+ * 逐个绑定必然漏（跟左栏同一课）。`#drawer` 是常驻节点，挂在它上面一劳永逸。
+ * 只认 `[data-log]` 行、且抽屉此时确实是「聊天记录」（群设置里没有这种行，双保险）。
+ */
+$('drawer').addEventListener('contextmenu', (e) => {
+  const row = e.target.closest?.('[data-log]');
+  if (!row || S.drawerKind !== 'log') return;
+  const c = [...(S.conversations ?? []), ...(S.hiddenConversations ?? [])]
+    .find((x) => x.id === row.dataset.log);
+  if (!c) return;                       // 数据还没跟上：宁可弹原生菜单，也别弹空菜单
+  e.preventDefault();
+  const running = c.status === '跑中';
+  // 整档清空（已解散的群 / 员工已删的单聊）：抽屉里删任何一段 = 全档清掉，菜单得说实话
+  const wipe = wipeScopeOf(c);
+  openCtxMenu(e.clientX, e.clientY, [
+    {
+      label: wipe ? '删除并清空聊天记录' : '删除',
+      danger: true,
+      disabled: running,
+      why: running
+        ? wipe === 'persona' ? '他还有一段在跑，等它跑完或先终止再删' : '这段还在跑，等它跑完或先终止再删'
+        : '',
+      run: () => deleteSessionFromLog(c),
+    },
+  ]);
+});
+
+// 点菜单外面收起。用 `mousedown` 而不是 `click`：项自己的 click 里已经先关了，
+// 用 click 会跟它抢顺序（有时先关、有时后关，表现为"点了一下什么都没发生"）
+document.addEventListener('mousedown', (e) => {
+  if (!e.target.closest?.('#ctxMenu')) closeCtxMenu();
+});
+// 滚动必须**capture**：列表在 #listBody 内滚，scroll 不冒泡到 window，
+// 不 capture 的话菜单会钉在原地、跟着列表"到处跑"
+window.addEventListener('scroll', closeCtxMenu, true);
+window.addEventListener('blur', closeCtxMenu);
+window.addEventListener('resize', closeCtxMenu);
+// 键盘可达（P1-4）：上下键在**可用**项之间轮转；Esc 收起；
+// Enter / Space 由 <button> 原生负责，不用自己接
+$('ctxMenu').addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { e.preventDefault(); closeCtxMenu(); return; }
+  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+  e.preventDefault();
+  const items = [...$('ctxMenu').querySelectorAll('.ctx-item:not([disabled])')];
+  if (!items.length) return;
+  const at = items.indexOf(document.activeElement);
+  const next = e.key === 'ArrowDown' ? (at + 1) % items.length : (at - 1 + items.length) % items.length;
+  items[at === -1 ? 0 : next]?.focus();
+});
 
 /**
  * 发起流程弹窗的确认。
@@ -11788,7 +13834,10 @@ $('fsTitle').addEventListener('input', () => {
 });
 
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && S.drawerOpen) closeDrawer();
+  if (e.key !== 'Escape') return;
+  // 右键菜单优先：它压在最上面，Esc 先收它（抽屉开着时两层一起收也无害）
+  closeCtxMenu();
+  if (S.drawerOpen) closeDrawer();
 });
 // （下拉的"点别处收起"由公共组件的 click 监听统一处理）
 $('search').addEventListener('input', (e) => { S.filter = e.target.value; renderList(); });

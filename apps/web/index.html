@@ -19,7 +19,17 @@
 
 <!-- 一级：图标栏 -->
 <nav class="rail">
-  <div class="rail-logo">班</div>
+  <!-- 应用标（2026-10-20 定稿「列队」：三柱一底座，一班人 + 底）。
+       与 apps/desktop/icons/icon.svg 同一套几何 —— 改形状两处要一起改，
+       数值表在 make-icon.py 的 MARK。 -->
+  <div class="rail-logo" aria-label="班底">
+    <svg viewBox="0 0 512 512" width="20" height="20" aria-hidden="true">
+      <rect x="148" y="238" width="62" height="122" rx="31" fill="#fff" opacity=".82"/>
+      <rect x="225" y="182" width="62" height="178" rx="31" fill="#fff"/>
+      <rect x="302" y="238" width="62" height="122" rx="31" fill="#fff" opacity=".82"/>
+      <rect x="132" y="372" width="248" height="22" rx="11" fill="#fff" opacity=".5"/>
+    </svg>
+  </div>
   <button class="nav-btn active" data-nav="messages">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round">
       <path d="M4 5.5h16v10H9l-5 4z" />
@@ -45,9 +55,11 @@
     <span>工作台</span>
   </button>
   <button class="nav-btn rail-bottom" data-nav="settings">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
-      <circle cx="12" cy="12" r="3" />
-      <path d="M12 2.6v2.1M12 19.3v2.1M2.6 12h2.1M19.3 12h2.1M5.4 5.4l1.5 1.5M17.1 17.1l1.5 1.5M18.6 5.4l-1.5 1.5M6.9 17.1l-1.5 1.5" />
+    <!-- 2026-10-20 用户反馈旧图标（圆 + 8 条放射线）看着像太阳，换成圆齿轮。
+         候选对比稿在 WorkBuddy 会话的 settings-icons\，选了 F。 -->
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
+      <circle cx="12" cy="12" r="3"/>
     </svg>
     <span>设置</span>
   </button>
@@ -56,11 +68,14 @@
 <!-- 二级：列表 -->
 <div class="list-panel">
   <div class="list-head">
-    <b id="listTitle">消息</b>
+    <!-- 左栏顶上的标题：**在流程页这一栏里是面包屑**（「工作流 › 小鸡小鸡」，见 openFlowRun）。
+         内容由 JS 填（setListTitle），默认这行是当前一级栏的名字。 -->
+    <div class="list-title" id="listTitle"><b>消息</b></div>
     <button id="listAction" class="mini" title="新建数字员工">＋</button>
   </div>
   <div class="list-search"><input id="search" placeholder="搜索" /></div>
   <div class="list-body" id="listBody"></div>
+  <div class="list-foot" id="listFoot"></div>
 </div>
 
 <!-- 三级：内容 -->
@@ -142,6 +157,15 @@
 <!-- 群设置抽屉 -->
 <div id="scrim"></div>
 <aside id="drawer"></aside>
+
+<!-- 列表项的右键菜单（删除 / 不显示）。单例：内容与位置每次换，节点本身不动，
+     所以挂在它上面的 click / keydown 只需在 boot 时注册一次（见 app.js 的 openCtxMenu） -->
+<div id="ctxMenu" class="ctx-menu" role="menu" hidden></div>
+
+<!-- 悬浮提示（自建，替原生 title）。原生 title 的框是系统画的：方角、灰底、悬停一秒才出，
+     要圆角只能自己画一个。用法：元素上写 data-tip="文案"，读屏仍走 aria-label。
+     单例节点，位置每次现算（见 app.js 的 wireTip） -->
+<div id="tipPop" class="tip-pop" role="tooltip" hidden></div>
 
 <dialog id="memberDlg">
   <form method="dialog">

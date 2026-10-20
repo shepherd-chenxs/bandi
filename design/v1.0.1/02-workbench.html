@@ -1,0 +1,596 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>班底 v1.0.1 设计稿 · 工作台 / 看板</title>
+<style>
+/* ═══════════════════════════════════════════════════════════════
+   班底 v1.0.1 · 第二稿：工作台与任务看板
+   与第一稿同一套 token。改动点集中在"信息密度"和"卡片层次"：
+     · 工作台原来是"色块图标 + 大片空白" → 改成行式条目 + 分组
+     · 看板原来是"彩色列头" → 列头去色，状态只留 6px 圆点
+     · 卡片去阴影，用 1px 边框 + 悬停时边框提亮来分层
+   ═══════════════════════════════════════════════════════════════ */
+
+:root {
+  color-scheme: dark;
+  --g0: #08090a; --g1: #0d0e10; --g2: #111214; --g3: #16171a;
+  --g4: #1c1e21; --g5: #242629;
+  --line-1: #1a1b1e; --line-2: #202225; --line-3: #2a2c30;
+  --text: #e8e9ea; --text-2: #9b9ea3; --text-3: #6b6e73; --text-4: #4a4d51;
+  --accent: #5e6ad2; --accent-hi: #6e79dd;
+  --accent-lo: rgba(94,106,210,.14); --accent-ring: rgba(94,106,210,.38);
+  /* 浅色里这几个必须换值：淡紫/淡红字在白底上会直接消失 */
+  --accent-text: #c3c9f0;
+  --hot-bg: rgba(201,99,107,.13); --hot-fg: #d18d93;
+  --ok-bg:  rgba(74,158,127,.13);  --ok-fg:  #79b99e;
+  --ok: #4a9e7f; --bad: #c9636b; --warn: #b8874a;
+  --r-sm: 5px; --r-md: 7px; --r-lg: 10px;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Hiragino Sans GB", "Microsoft YaHei", "Source Han Sans SC", sans-serif;
+  --mono: "SF Mono", "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+}
+/* ═══════════════════════════════════════════════════════════════
+   浅色：不是"把深色反过来"，是重新排一遍层次。
+
+   深色里层次是"越往上越亮"（g0 最暗 → g5 最亮，卡片比底亮一档）。
+   浅色里要反过来：**底是浅灰，卡片是纯白** —— 白卡片浮在浅灰底上。
+   所以 g3（卡片）在浅色下反而是最亮的 #fff，而 g0（应用底）是 #f7f8f9。
+
+   另一个关键：**浅色只留 6 档灰，不用深色那 10 档**。
+   白底上相邻两档灰的差别小得多，档位太密会显得脏。
+   三档线也跟着收：线要更淡，否则浅色下线条会"割"屏幕。
+   ═══════════════════════════════════════════════════════════════ */
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --g0: #f7f8f9;   /* 应用底 / 内容区底 */
+  --g1: #fcfcfd;   /* 图标栏 */
+  --g2: #f2f3f5;   /* 列表栏 / 看板列底 */
+  --g3: #ffffff;   /* 卡片 / 输入框：纯白 */
+  --g4: #eef0f2;   /* 悬停 / 选中 */
+  --g5: #e4e7ea;   /* 图标底 / 标签底 */
+
+  --line-1: #eaeaec;
+  --line-2: #e0e2e5;
+  --line-3: #ced1d6;
+
+  --text:   #1a1c1f;
+  --text-2: #5f646c;
+  /* #868b93 在浅色列表底 #eceef1 上只有 2.95:1，不到 AA 的 3:1。
+     降到 #7e838b 后三处底分别是 3.28 / 3.59 / 3.81 —— 都过线，且跟深色一侧的 3.5~3.9 同一量级。 */
+  --text-3: #7e838b;
+  --text-4: #a9aeb5;
+
+  --accent: #5e6ad2;
+  --accent-hi: #5563cc;
+  --accent-lo: rgba(94, 106, 210, .10);
+  --accent-ring: rgba(94, 106, 210, .30);
+  --accent-text: #4c56b8;        /* 选中的胶囊文字：浅色里要加深才读得清 */
+
+  --ok: #2f7a5e;
+  --bad: #b4474f;
+  --warn: #96683a;
+  --hot-bg: rgba(180, 71, 79, .09);  --hot-fg: #97404a;
+  --ok-bg:  rgba(47, 122, 94, .10);  --ok-fg:  #2c7259;
+
+  --shadow-pop: 0 8px 24px rgba(16,18,22,.10), 0 0 0 1px rgba(16,18,22,.05);
+}
+
+/* 主题切换：仅设计稿用，不属于产品 UI。
+   试过右上（压筛选条）、右下（压发送按钮）、左上（压 logo），
+   最后落左下**图标栏右边**——那块永远是空的。 */
+.theme-toggle {
+  position: fixed; left: 76px; bottom: 14px; z-index: 99;
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 28px; padding: 0 11px;
+  border-radius: 999px;
+  border: 1px solid var(--line-3);
+  background: var(--g3);
+  color: var(--text-2);
+  font: inherit; font-size: 11.5px; cursor: pointer;
+  box-shadow: var(--shadow-pop);
+  transition: background-color .12s, color .12s;
+}
+.theme-toggle:hover { background: var(--g4); color: var(--text); }
+.theme-toggle svg { width: 13px; height: 13px; }
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  font-family: var(--font); background: var(--g0); color: var(--text);
+  font-size: 13px; line-height: 1.55; overflow: hidden;
+  -webkit-font-smoothing: antialiased; font-variant-numeric: tabular-nums;
+}
+
+.app { display: grid; grid-template-columns: 64px minmax(0, 1fr); height: 100vh; }
+
+/* ── 图标栏（与第一稿一致） ── */
+.rail {
+  background: var(--g1); border-right: 1px solid var(--line-1);
+  display: flex; flex-direction: column; align-items: center;
+  padding: 14px 0 12px; gap: 2px;
+}
+.logo {
+  width: 30px; height: 30px; border-radius: 8px; background: var(--text);
+  color: var(--g0); display: grid; place-items: center;
+  font-size: 14px; font-weight: 700; margin-bottom: 18px; flex: 0 0 auto;
+}
+.nav-btn {
+  width: 42px; height: 46px; border: 0; background: none; border-radius: var(--r-md);
+  color: var(--text-3); display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 4px; cursor: pointer; font-family: inherit;
+  font-size: 10px; transition: color .12s, background-color .12s; position: relative;
+}
+.nav-btn svg { width: 17px; height: 17px; }
+.nav-btn:hover { color: var(--text-2); background: var(--g3); }
+.nav-btn.active { color: var(--text); background: var(--g3); }
+.nav-btn.active::before {
+  content: ""; position: absolute; left: -11px; top: 50%; transform: translateY(-50%);
+  width: 2px; height: 16px; border-radius: 0 2px 2px 0; background: var(--accent);
+}
+.rail-spacer { flex: 1; }
+
+/* ══════════════════ 主区 ══════════════════ */
+.main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+
+.head {
+  height: 46px; flex: 0 0 auto; display: flex; align-items: center; gap: 8px;
+  padding: 0 20px; border-bottom: 1px solid var(--line-1);
+}
+/* 面包屑：三级之间用 / 分隔，当前项不变色（Linear 的做法：靠位置表示层级，不靠颜色） */
+.crumb { display: flex; align-items: center; gap: 2px; font-size: 13px; }
+.crumb a {
+  color: var(--text-2); text-decoration: none; padding: 3px 4px;
+  border-radius: var(--r-sm); transition: color .12s, background-color .12s;
+}
+.crumb a:hover { color: var(--text); background: var(--g4); }
+.crumb .sep { color: var(--text-4); font-size: 11px; margin: 0 3px; user-select: none; }
+.crumb .cur { color: var(--text); font-weight: 500; padding: 3px 4px; }
+.head .gap { flex: 1; }
+
+.icon-btn {
+  width: 26px; height: 26px; display: grid; place-items: center;
+  border: 0; background: none; border-radius: var(--r-sm); color: var(--text-3);
+  cursor: pointer; transition: background-color .12s, color .12s;
+}
+.icon-btn:hover { background: var(--g4); color: var(--text); }
+.icon-btn svg { width: 14px; height: 14px; }
+
+.btn {
+  height: 27px; padding: 0 11px; border-radius: var(--r-sm);
+  border: 1px solid var(--line-2); background: transparent; color: var(--text-2);
+  font: inherit; font-size: 12px; cursor: pointer; display: inline-flex;
+  align-items: center; gap: 5px; transition: background-color .12s, color .12s, border-color .12s;
+}
+.btn:hover { background: var(--g4); color: var(--text); border-color: var(--line-3); }
+.btn svg { width: 13px; height: 13px; }
+.btn.solid { background: var(--accent); border-color: transparent; color: #fff; }
+.btn.solid:hover { background: var(--accent-hi); }
+
+.scroll { flex: 1; min-height: 0; overflow-y: auto; }
+
+/* ══════════════════ 一、工作台 ══════════════════
+   设计判断：原来每个入口是一块"色块图标 + 标签"的磁贴，
+   在宽屏上极其稀疏，且颜色过多（蓝/青/橙/紫四色）。
+   改成**行式条目**：图标退成单色线框，名称与描述左右排布，
+   信息密度接近 Linear 的 Command Menu，一眼能扫完。
+   ═══════════════════════════════════════════════ */
+.wb-page { padding: 26px 32px 40px; max-width: 940px; }
+
+.wb-title { margin-bottom: 22px; }
+.wb-title h1 {
+  margin: 0 0 4px; font-size: 17px; font-weight: 600; letter-spacing: -.015em;
+}
+.wb-title p { margin: 0; font-size: 12.5px; color: var(--text-3); }
+
+.sect { margin-top: 26px; }
+.sect:first-of-type { margin-top: 0; }
+.sect > .label {
+  display: flex; align-items: center; gap: 7px; margin-bottom: 8px;
+  font-size: 10.5px; font-weight: 600; letter-spacing: .07em;
+  text-transform: uppercase; color: var(--text-3); user-select: none;
+}
+.sect > .label .cnt { color: var(--text-4); font-weight: 500; letter-spacing: 0; }
+
+/* 条目：一行一条，左图标 / 中文字 / 右箭头 */
+.ent {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+  padding: 9px 10px;
+  border-radius: var(--r-md);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background-color .1s ease, border-color .1s ease;
+  text-align: left;
+  background: none;
+  font: inherit;
+  color: inherit;
+  width: 100%;
+  /* 不要撑满整行 —— 撑满后右侧元信息会漂到很远的地方，跟左边的名称失去联系。
+     640 是"名称 + 一句描述"读起来最舒服的上限。 */
+  max-width: 640px;
+}
+.ent:hover { background: var(--g3); border-color: var(--line-1); }
+.ent:hover .ent-arrow { opacity: 1; transform: translateX(0); }
+
+/* 图标：单色线框，悬停变亮 —— 不再用大面积色块 */
+.ent-ico {
+  width: 26px; height: 26px; border-radius: 6px;
+  display: grid; place-items: center;
+  background: var(--g5); color: var(--text-2);
+  flex: 0 0 auto;
+}
+.ent-ico svg { width: 14px; height: 14px; }
+.ent:hover .ent-ico { background: var(--accent-lo); color: var(--accent-hi); }
+
+.ent-main { min-width: 0; display: block; }
+.ent-name {
+  display: block; font-size: 13px; font-weight: 500; color: var(--text);
+}
+.ent-desc {
+  display: block; font-size: 11.5px; color: var(--text-3); margin-top: 2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ent-arrow {
+  opacity: 0; transform: translateX(-3px); color: var(--text-3);
+  transition: opacity .12s ease, transform .12s ease;
+}
+.ent-arrow svg { width: 13px; height: 13px; display: block; }
+
+/* 项目条目右侧带一个"进行中"计数 —— 比列在描述里更醒目 */
+.ent-meta {
+  font-size: 11px; color: var(--text-3); display: flex; align-items: center; gap: 5px;
+  flex: 0 0 auto; padding-left: 10px; margin-left: 2px;
+  border-left: 1px solid var(--line-1);
+  min-height: 18px;
+}
+.ent-meta .n { color: var(--text-2); font-variant-numeric: tabular-nums; }
+
+/* ══════════════════ 二、任务看板 ══════════════════ */
+.board-head {
+  height: 46px; flex: 0 0 auto; display: flex; align-items: center; gap: 8px;
+  padding: 0 20px; border-bottom: 1px solid var(--line-1);
+}
+/* 筛选胶囊：选中用极浅的 accent 底 + 边框，不用实心 */
+.chip {
+  height: 24px; padding: 0 9px; border-radius: 999px;
+  border: 1px solid var(--line-2); background: none; color: var(--text-2);
+  font: inherit; font-size: 11.5px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 5px;
+  transition: background-color .12s, color .12s, border-color .12s;
+}
+.chip:hover { background: var(--g4); color: var(--text); }
+.chip.on {
+  background: var(--accent-lo); border-color: rgba(94,106,210,.3); color: var(--accent-text);
+}
+.chip .n { font-variant-numeric: tabular-nums; opacity: .65; }
+
+/* 看板：横向滚动，列宽 260 */
+.board {
+  flex: 1; min-height: 0; overflow: auto;
+  display: flex; gap: 10px; padding: 16px 20px 22px;
+  align-items: flex-start;
+}
+.col {
+  flex: 0 0 260px; width: 260px;
+  border-radius: var(--r-lg);
+  background: var(--g2);
+  border: 1px solid var(--line-1);
+  padding: 9px;
+  display: flex; flex-direction: column; gap: 7px;
+  min-height: 90px;
+  /* 列本身不滚动 —— 整块板一起滚，避免"板里有板"的滚动套娃 */
+}
+.col-head {
+  display: flex; align-items: center; gap: 7px; padding: 2px 3px 5px;
+  /* 列头不再用彩色底 —— 状态只靠这个 6px 的点和文字本身表达 */
+}
+.col-dot {
+  width: 6px; height: 6px; border-radius: 50%; flex: 0 0 auto;
+  background: var(--c, var(--text-3));
+}
+.col-name {
+  font-size: 11.5px; font-weight: 600; color: var(--text-2);
+  letter-spacing: .01em;
+}
+.col-n {
+  margin-left: auto; font-size: 10.5px; color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 卡片：1px 边框分层，无阴影。悬停时边框亮一档 + 微抬 1px */
+.card {
+  background: var(--g3);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  padding: 9px 11px;
+  cursor: pointer;
+  transition: border-color .14s ease, background-color .14s ease, transform .14s ease;
+}
+.card:hover {
+  border-color: var(--line-3);
+  background: var(--g4);
+  transform: translateY(-1px);
+}
+.card-t {
+  font-size: 12.5px; line-height: 1.45; color: var(--text);
+  margin-bottom: 7px;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.card-foot { display: flex; align-items: center; gap: 6px; }
+.card-id {
+  font-family: var(--mono); font-size: 10px; color: var(--text-4);
+  letter-spacing: -.01em;
+}
+.card-foot .gap { flex: 1; }
+/* 执行人：只有首字的小方块，比头像堆叠干净 */
+.mini-ava {
+  width: 17px; height: 17px; border-radius: 4px; display: grid; place-items: center;
+  font-size: 9.5px; font-weight: 600; color: var(--text-2); background: var(--g5);
+  flex: 0 0 auto;
+}
+/* 标签：极淡，只在需要时出现 */
+.tag {
+  font-size: 10px; padding: 0 5px; line-height: 15px; border-radius: 3px;
+  background: var(--g5); color: var(--text-3); flex: 0 0 auto;
+}
+.tag.hot { background: var(--hot-bg); color: var(--hot-fg); }
+
+/* 空列：虚线只用一层极淡的，不抢视线 */
+.col-empty {
+  border: 1px dashed var(--line-2); border-radius: var(--r-md);
+  padding: 16px 0; text-align: center;
+  font-size: 11px; color: var(--text-4);
+}
+
+/* 滚动条 */
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: transparent; border-radius: 5px;
+  border: 2px solid transparent; background-clip: content-box;
+}
+*:hover::-webkit-scrollbar-thumb { background: #2c2e32; background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: #3d4045; background-clip: content-box; }
+
+/* 分节小标题（仅用于设计稿说明，不属于产品 UI） */
+.note {
+  margin: 30px 0 6px; padding: 9px 12px; border-radius: var(--r-md);
+  background: var(--g2); border: 1px solid var(--line-1);
+  font-size: 11.5px; color: var(--text-3); line-height: 1.7;
+}
+.note b { color: var(--text-2); font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <nav class="rail">
+    <div class="logo">班</div>
+
+    <button class="nav-btn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round">
+        <path d="M4.5 5.8h15v9.4H9.2l-4.7 3.8z"/>
+      </svg>
+      <span>消息</span>
+    </button>
+    <button class="nav-btn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+        <circle cx="9.2" cy="8.4" r="3.2"/>
+        <path d="M3.6 19c0-2.9 2.4-5 5.6-5s5.6 2.1 5.6 5"/>
+        <circle cx="17.3" cy="9.6" r="2.3"/>
+        <path d="M16 19c0-2.1.9-3.6 2.7-4.1"/>
+      </svg>
+      <span>通讯录</span>
+    </button>
+    <button class="nav-btn active">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round">
+        <rect x="3.4" y="3.4" width="7.2" height="7.2" rx="1.8"/>
+        <rect x="13.4" y="3.4" width="7.2" height="7.2" rx="1.8"/>
+        <rect x="3.4" y="13.4" width="7.2" height="7.2" rx="1.8"/>
+        <rect x="13.4" y="13.4" width="7.2" height="7.2" rx="1.8"/>
+      </svg>
+      <span>工作台</span>
+    </button>
+    <div class="rail-spacer"></div>
+    <button class="nav-btn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M12 2.8v2M12 19.2v2M2.8 12h2M19.2 12h2M5.5 5.5l1.4 1.4M17.1 17.1l1.4 1.4M18.5 5.5l-1.4 1.4M6.9 17.1l-1.4 1.4"/>
+      </svg>
+      <span>设置</span>
+    </button>
+  </nav>
+
+  <main class="main">
+    <div class="head">
+      <div class="crumb">
+        <a href="#">工作台</a>
+      </div>
+      <span class="gap"></span>
+      <button class="icon-btn" title="刷新">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+          <path d="M20 12a8 8 0 1 1-2.6-5.9"/><path d="M20 4.5V9h-4.5"/>
+        </svg>
+      </button>
+    </div>
+
+    <div class="scroll">
+      <div class="wb-page">
+
+        <div class="wb-title">
+          <h1>工作台</h1>
+          <p>所有能干活的地方都在这里。项目管"在哪儿干"，看板管"都有什么活"。</p>
+        </div>
+
+        <div class="sect">
+          <div class="label">研发 <span class="cnt">1</span></div>
+
+          <button class="ent">
+            <span class="ent-ico">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round">
+                <path d="M3.5 7.2l8.5-4 8.5 4v9.6l-8.5 4-8.5-4z"/>
+                <path d="M3.5 7.2L12 11.2l8.5-4M12 11.2v9.6" stroke-width="1.4"/>
+              </svg>
+            </span>
+            <span class="ent-main">
+              <span class="ent-name">项目面板</span>
+              <span class="ent-desc">项目的名字、目录、规矩都在这儿管</span>
+            </span>
+            <span class="ent-arrow">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                <path d="M9 5l7 7-7 7"/>
+              </svg>
+            </span>
+          </button>
+        </div>
+
+        <div class="sect">
+          <div class="label">运维 <span class="cnt">1</span></div>
+          <button class="ent">
+            <span class="ent-ico">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round">
+                <rect x="3.4" y="4.2" width="17.2" height="6.2" rx="2"/>
+                <rect x="3.4" y="13.6" width="17.2" height="6.2" rx="2"/>
+                <path d="M7 7.3h.01M7 16.7h.01" stroke-linecap="round" stroke-width="2.2"/>
+              </svg>
+            </span>
+            <span class="ent-main">
+              <span class="ent-name">服务器与密钥</span>
+              <span class="ent-desc">2 台机器 · 3 把密钥，连过去跑命令</span>
+            </span>
+            <span class="ent-meta"><span class="n">2</span></span>
+          </button>
+        </div>
+
+        <div class="sect">
+          <div class="label">项目 <span class="cnt">2</span></div>
+
+          <button class="ent">
+            <span class="ent-ico">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round">
+                <path d="M3.5 7.2l8.5-4 8.5 4v9.6l-8.5 4-8.5-4z"/>
+              </svg>
+            </span>
+            <span class="ent-main">
+              <span class="ent-name">项目</span>
+              <span class="ent-desc">3 个项目 · 2 个有正在进行的活</span>
+            </span>
+            <span class="ent-meta">进行中 <span class="n">7</span></span>
+          </button>
+
+          <button class="ent">
+            <span class="ent-ico">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round">
+                <rect x="3.4" y="4.2" width="5" height="15.6" rx="1.6"/>
+                <rect x="10.5" y="4.2" width="5" height="10.4" rx="1.6"/>
+                <rect x="17.6" y="4.2" width="3" height="13" rx="1.5"/>
+              </svg>
+            </span>
+            <span class="ent-main">
+              <span class="ent-name">任务看板</span>
+              <span class="ent-desc">所有项目的活，铺在同一张看板上</span>
+            </span>
+            <span class="ent-meta">18 张卡</span>
+          </button>
+        </div>
+
+        <div class="sect">
+          <div class="label">自动化 <span class="cnt">1</span></div>
+          <button class="ent">
+            <span class="ent-ico">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+                <circle cx="12" cy="12" r="8.2"/><path d="M12 7.6V12l3 1.8"/>
+              </svg>
+            </span>
+            <span class="ent-main">
+              <span class="ent-name">定时任务</span>
+              <span class="ent-desc">到点自动做一件事：写一句要它干什么、交给谁、多久一次</span>
+            </span>
+            <span class="ent-meta">1 个在跑</span>
+          </button>
+        </div>
+
+        <div class="sect">
+          <div class="label">流程 <span class="cnt">2</span></div>
+          <button class="ent">
+            <span class="ent-ico">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round">
+                <circle cx="6" cy="7" r="2.4"/><circle cx="18" cy="7" r="2.4"/>
+                <circle cx="12" cy="17.5" r="2.4"/>
+                <path d="M8.3 8.6L10.6 15M15.7 8.6L13.4 15M8.4 7h7.2" stroke-width="1.4"/>
+              </svg>
+            </span>
+            <span class="ent-main">
+              <span class="ent-name">画流程</span>
+              <span class="ent-desc">节点、指派、发布，把一串活编排起来</span>
+            </span>
+            <span class="ent-arrow">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                <path d="M9 5l7 7-7 7"/>
+              </svg>
+            </span>
+          </button>
+
+          <button class="ent">
+            <span class="ent-ico">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+                <path d="M4.5 6.5h15M4.5 12h15M4.5 17.5h9"/>
+              </svg>
+            </span>
+            <span class="ent-main">
+              <span class="ent-name">发起记录</span>
+              <span class="ent-desc">每次流程跑成什么样，都在这儿</span>
+            </span>
+            <span class="ent-arrow">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                <path d="M9 5l7 7-7 7"/>
+              </svg>
+            </span>
+          </button>
+        </div>
+
+        <div class="note">
+          <b>对比要点：</b>原稿每个入口是 64×64 的彩色磁贴，六个入口铺满一屏还有大片空白；
+          现在改成行式条目后，全部内容能在一屏内看完，且去掉了四种互相打架的颜色。
+          图标只在悬停时染上靛蓝紫 —— <b>颜色成为"交互反馈"而不是"装饰"</b>。
+        </div>
+
+      </div>
+    </div>
+  </main>
+</div>
+<!-- 主题切换（仅设计稿用，不属于产品 UI） -->
+<button class="theme-toggle" id="tt">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+    <circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M18.7 5.3l-1.4 1.4M6.7 17.3l-1.4 1.4"/>
+  </svg>
+  <span id="ttLabel">浅色</span>
+</button>
+<script>
+(function () {
+  var k = 'bandi.design.theme';
+  var cur = 'dark';
+  try { cur = localStorage.getItem(k) || 'dark'; } catch (e) {}
+  var btn = document.getElementById('tt');
+  var lab = document.getElementById('ttLabel');
+  function apply(t) {
+    document.documentElement.setAttribute('data-theme', t);
+    lab.textContent = t === 'dark' ? '浅色' : '深色';
+    try { localStorage.setItem(k, t); } catch (e) {}
+  }
+  apply(cur);
+  btn.addEventListener('click', function () {
+    var next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+    apply(next);
+  });
+})();
+</script>
+
+</body>
+</html>

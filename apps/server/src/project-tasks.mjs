@@ -40,6 +40,21 @@ import { dispatchToThread, projectConstitutionBlock } from './dispatch.mjs';
 
 /** 排序权重：越小越"要人管"（平表用它；看板按列站队，不看这个） */
 const FLOW_RANK = { 已阻塞: 0, 失败: 1, 待确认: 2, 进行中: 3, 待办: 4, 待开始: 4, 已完成: 5, 想法: 6 };
+
+/**
+ * 看板上**不要**把「流程的一步」开出来的那张卡再算一行（2026-10-19）。
+ *
+ * 为什么：流程页那枚「任务」会在第一次点时给这一步建一张 `project_tasks` 的卡
+ * （见 `ensureTaskCardForStep`）。那张卡带 `sourceKey = flow:...`。
+ * 而看板的流程行本来就是**按 `workflow_tasks` 一行一次办理**算的 ——
+ * 两张表都数一遍，同一件事就会在看板上出现两行（实测过：`flow` 一行 + `manual` 一行，
+ * 标题一模一样，人看了只会以为"重复建了两张卡"）。
+ *
+ * 所以：带 `sourceKey` 的卡**不进看板**，它的身份永远由流程那一行代表；
+ * 卡本身照常能用（能拖能改、能派活），只是不在看板上再占一格。
+ * ⚠️ 只认 `sourceKey`，**不按标题猜** —— 人手建一张正好重名的卡是合法的，不能吞掉。
+ */
+const notFlowCard = (t) => !t.sourceKey;
 const CHAT_RANK = { 失败: 1, 已停止: 2, 跑中: 3, 完成: 5 };
 const RANK_OTHER = 8;
 
@@ -304,7 +319,7 @@ export function projectTasks(project) {
     // 聊天行天生带 project_id / project_name（全局那边要用）—— 这一页整页就是它，
     // 摘掉再画，卡片上才不会每张都挂一枚"本项目"的标签
     ...chatRows([project], project.id).map(({ project_id, project_name, ...r }) => r),
-    ...store.listProjectTasks(project.id).map(manualRows),
+    ...store.listProjectTasks(project.id).filter(notFlowCard).map(manualRows),
   ];
 
   return {
@@ -331,7 +346,7 @@ function allRows(projects, byId, runs) {
   return [
     ...runs.flatMap((run) => flowRows(run).map((r) => tag(r, byId.get(run.projectId)))),
     ...chatRows(projects, null), // 自己就带好了 project_id / project_name
-    ...projects.flatMap((p) => store.listProjectTasks(p.id).map((t) => tag(manualRows(t), p))),
+    ...projects.flatMap((p) => store.listProjectTasks(p.id).filter(notFlowCard).map((t) => tag(manualRows(t), p))),
   ];
 }
 
@@ -485,7 +500,7 @@ export function startProjectTask(id, { allowIdea = false } = {}) {
   /*
    * **这张卡自己的工单会话**（2026-10-18）：一条卡一条，返工续它。
    * 原来派进执行人的 1:1 —— 卡越干越多，聊天上下文被撑爆，而且一个员工同一时刻
-   * 只能干一件活。现在卡的往来只落在这条会话里，消息模块归到「手上的活」。
+   * 只能干一件活。现在卡的往来只落在这条会话里，不进消息列表（从工作台 / 任务进去）。
    */
   const conv = store.ensureExecConversation({
     personaId: persona.id,
@@ -713,4 +728,83 @@ export function updateProjectTask(id, fields = {}, { autoStart = true } = {}) {
     }
   }
   return store.updateProjectTask(id, patch);
+}
+
+/* ------------------------------------------ 流程的一步 → 一张任务卡（2026-10-19） */
+
+/**
+ * 这一步**对应的那张卡**：有就返回它，没有就**现开一张**并把它认下来。
+ *
+ * 为什么要这个口子：
+ *   流程页那枚「对话」原来只弹一条窄栏，人想看的却是"这一步的活干成什么样、能不能改状态"。
+ *   那正好是任务卡的形状 —— 但两边**在库里是两张表**：
+ *     · 流程步骤 `workflow_tasks`（`wt2-xxx`，一笔办理一条）
+ *     · 任务卡 `project_tasks`（`pt-xxx`，能拖能改能派活）
+ *   拿 `wt2-` 去查任务卡直接 404。所以这里是那座桥：拿"某条流程的某一步"换一张卡。
+ *
+ * 怎么避免重复开卡（返回的时候进来两次就会开两张）——两道:
+ *   ① `sourceKey = 'flow:<runId>:<nodeId>:<visit>'`，跟着卡一起存；
+ *      **靠它找回已有的那张**（老卡没有这个字段，也能按标题兜一次，见 ②）；
+ *   ② 老卡兜底：项目里已有一张「标题 = `<流程名> · <节点名>`」的卡就是它 ——
+ *      那正是看板上流程行的写法（见 flowRows），人看着就是同一件事，不该再开一张。
+ *
+ * 卡上记 `sourceKey` / `sourceRunId`：**只用来认身份，不改它的脾气** ——
+ * 它照样能拖、能改状态、能派活（跟手建的卡一样）。流程自己那套状态（`workflow_tasks`）
+ * 不受这张卡影响：一个说"流程走到哪一步了"，一个说"这件事我知道不知道、
+ * 要不要人盯着" —— 两件事，两个地方记，不强行同步（同步了反而会互相覆盖）。
+ */
+export function ensureTaskCardForStep(run, task) {
+  if (!run || !task) throw new Error('找不到这一步');
+  if (!run.projectId) throw new Error('这条流程没挂项目 —— 卡必须有地方放');
+  const project = store.getProject(run.projectId);
+  if (!project) throw new Error('这条流程挂的项目已经不在了');
+
+  const sourceKey = `flow:${run.id}:${task.nodeId}:${task.visit ?? 1}`;
+  const existing = store.listProjectTasks(project.id).find((t) => t.sourceKey === sourceKey)
+    // 老卡（这一步之前被当成手工卡建过）：标题对得上就算 —— 只在没有 sourceKey 的记录里找
+    ?? store.listProjectTasks(project.id).find(
+      (t) => !t.sourceKey && String(t.title ?? '') === stepCardTitle(run, task),
+    );
+  if (existing) {
+    // 认下来，下次就走 ① 那条快路
+    if (!existing.sourceKey || !existing.sourceRunId) {
+      return store.updateProjectTask(existing.id, { sourceKey, sourceRunId: run.id });
+    }
+    return existing;
+  }
+
+  /**
+   * 状态**照这一步当下的状态**起（看板上就落在原来那列），不一律写成「待办」——
+   * 写「待办」会让一张"其实已经办完了"的卡在看板上跑到最前面去，还平白多一件待办。
+   * 「待办」+ 已指派人会自动开工（见 updateProjectTask 的口径），所以这里**不走那条路**：
+   * 用 `createProjectTask` 建完直接补字段，不触发派活 —— 卡是"这一笔办理的档案"，
+   * 不是新派出去的活。
+   */
+  return store.createProjectTask({
+    projectId: project.id,
+    title: stepCardTitle(run, task),
+    description: stepCardDescription(run, task),
+    status: MANUAL_STATUSES.has(task.status) ? task.status : '待办',
+    assigneePersonaId: task.assigneePersonaId ?? null,
+    // ⚠️ sourceKey 必须**跟建卡同一条 INSERT**，不能建完再 update：
+    //    中间崩一下就会留一张没有身份的卡，下次点进来又建一张（node:sqlite 没有
+    //    better-sqlite3 的 db.transaction() 助手，两句话不在一个事务里）
+    sourceKey,
+    sourceRunId: run.id,
+  });
+}
+
+/** 卡标题：跟看板流程行同一个写法（`流程名 · 节点名`），带第几次办理 */
+function stepCardTitle(run, task) {
+  const visit = task.visit > 1 ? `（第 ${task.visit} 次办理）` : '';
+  return clip(`${run.title} · ${task.nodeName}${visit}`, TASK_LIMIT);
+}
+
+/** 卡描述：把这一步的起因写清楚 —— 打开卡的人（哪怕是几天后的自己）得知道它在哪条流程上 */
+function stepCardDescription(run, task) {
+  return [
+    `流程：${run.title}（${run.status}）`,
+    `这一步：${task.nodeName}${task.visit > 1 ? `（第 ${task.visit} 次办理）` : ''}`,
+    run.intent ? `\n起因：${run.intent}` : '',
+  ].join('\n').trim();
 }

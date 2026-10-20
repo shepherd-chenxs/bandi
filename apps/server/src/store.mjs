@@ -249,6 +249,76 @@ ensureColumn('conversations', 'hiddenAt', 'hiddenAt TEXT');
 // hiddenAt 是"先收起来，还能恢复"，dissolvedAt 是"这个群结束了"。
 ensureColumn('conversations', 'dissolvedAt', 'dissolvedAt TEXT');
 
+/*
+ * 群 = **容器**，会话 = 容器里的一段（2026-10-20 用户要求「群也要能每次开新会话」）。
+ *
+ * 为什么要单独一张表：以前「一个群」就是 `conversations` 里的一行，群名/群助手/成员都挂在那行上；
+ * 一旦允许一个群有多段会话，这些**群级**的属性就不能再挂在某一段会话上了（删掉那段，群就没了）。
+ * 所以：
+ *   · `groups`          —— 群的身份证：名字、群助手、解散时间（**不属于任何一段会话**）
+ *   · `group_members`   —— 群的成员名单（群级，改一次对所有会话生效）
+ *   · `conversations.groupId` —— 这段会话属于哪个群（NULL = 单聊 / 工单）
+ * `thread_members` 仍然保留，作为**每段会话**的成员快照（dispatch 的 @ 人、没 @ 找群助手都读它）——
+ * 建会话时从 group_members 拷一份，群改成员时同步到所有未解散的会话。
+ */
+db.exec(`
+  CREATE TABLE IF NOT EXISTS groups (
+    id                TEXT PRIMARY KEY,
+    title             TEXT NOT NULL,
+    assistantPersonaId TEXT,
+    createdAt         TEXT NOT NULL,
+    updatedAt         TEXT NOT NULL,
+    dissolvedAt       TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS group_members (
+    groupId   TEXT NOT NULL,
+    personaId TEXT NOT NULL,
+    joinedAt  TEXT NOT NULL,
+    PRIMARY KEY (groupId, personaId)
+  );
+`);
+
+// `conversations.groupId`：这段会话属于哪个群。空 = 不是群会话。
+ensureColumn('conversations', 'groupId', 'groupId TEXT');
+
+/*
+ * 迁移老数据（幂等）：以前「群 = 一行 conversations」。
+ * 对每个还没有 groupId 的群会话：
+ *   ① 用它的 id 建一条 groups（群身份沿用原来的 id，所有已有引用都不变）；
+ *   ② 把它的 thread_members 拷成 group_members（那是当时唯一的成员名单）；
+ *   ③ 自己成为这个群的第一段会话（groupId = 自己的 id）。
+ */
+{
+  const legacy = db
+    .prepare("SELECT id, title, assistantPersonaId, createdAt, updatedAt, dissolvedAt FROM conversations WHERE kind = 'group' AND (groupId IS NULL OR groupId = '')")
+    .all();
+  if (legacy.length) {
+    const insGroup = db.prepare(
+      `INSERT OR IGNORE INTO groups (id, title, assistantPersonaId, createdAt, updatedAt, dissolvedAt)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+    const copyMembers = db.prepare(
+      `INSERT OR IGNORE INTO group_members (groupId, personaId, joinedAt)
+       SELECT ?, personaId, joinedAt FROM thread_members WHERE threadId = ?`,
+    );
+    const setGid = db.prepare('UPDATE conversations SET groupId = ? WHERE id = ?');
+    db.exec('BEGIN');
+    try {
+      for (const c of legacy) {
+        insGroup.run(c.id, c.title, c.assistantPersonaId ?? null, c.createdAt, c.updatedAt, c.dissolvedAt ?? null);
+        copyMembers.run(c.id, c.id);
+        setGid.run(c.id, c.id);
+      }
+      db.exec('COMMIT');
+      console.log(`[迁移] 群改成"群 + 多段会话"：处理了 ${legacy.length} 个老群`);
+    } catch (e) {
+      db.exec('ROLLBACK');
+      throw e;
+    }
+  }
+}
+
 // 迁移老群：原来的 agent 群主 → 群助手；群主置为创建人
 db.exec(`UPDATE conversations SET assistantPersonaId = ownerPersonaId
           WHERE kind = 'group' AND assistantPersonaId IS NULL AND ownerPersonaId IS NOT NULL`);
@@ -690,6 +760,17 @@ ensureColumn('project_tasks', 'externalKey', 'externalKey TEXT');
 // 排队标记：派活撞上"人满了 / 项目正忙"时落一个时间，30 秒节拍重试（见 schedules.mjs）。
 // ⚠️ 必须放在 project_tasks 建表**之后**（放前面会在新库上 no such table）
 ensureColumn('project_tasks', 'queuedAt', 'queuedAt TEXT');
+/*
+ * 流程的一步 ↔ 一张卡（2026-10-19）：`sourceKey` = `flow:<runId>:<nodeId>:<visit>`，
+ * `sourceRunId` 单独存一份只是为了以后按流程反查不用解字符串。
+ *
+ * ⚠️ 这两列**只用来认身份**，不改卡的脾气 —— 它照样能拖、能改状态、能派活。
+ *    流程自己的状态在 `workflow_tasks`，两处各记各的、不强行同步
+ *    （同步了会互相覆盖：流程说"这一步办完了"，卡可能是人后来手动标了新状态）。
+ * 老卡这两列是 null —— `ensureTaskCardForStep` 会按标题把它们认下来并补上。
+ */
+ensureColumn('project_tasks', 'sourceKey', 'sourceKey TEXT');
+ensureColumn('project_tasks', 'sourceRunId', 'sourceRunId TEXT');
 
 /**
  * 内置的默认项目：`<文档>\bandi\default-workspace`。
@@ -818,6 +899,8 @@ export function createProjectTask({
   runId = null,
   source = 'manual',
   externalKey = null,
+  sourceKey = null,
+  sourceRunId = null,
 }) {
   const ts = nowIso();
   const row = {
@@ -831,13 +914,16 @@ export function createProjectTask({
     runId,
     source,
     externalKey,
+    // 流程的一步开出来的卡：'flow:<runId>:<nodeId>:<visit>'；手建的卡是 null
+    sourceKey,
+    sourceRunId,
     createdAt: ts,
     updatedAt: ts,
   };
   db.prepare(
     `INSERT INTO project_tasks
-       (id, projectId, title, description, status, assigneePersonaId, conversationId, runId, source, externalKey, createdAt, updatedAt)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, projectId, title, description, status, assigneePersonaId, conversationId, runId, source, externalKey, sourceKey, sourceRunId, createdAt, updatedAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     row.id,
     row.projectId,
@@ -849,6 +935,8 @@ export function createProjectTask({
     row.runId,
     row.source,
     row.externalKey,
+    row.sourceKey,
+    row.sourceRunId,
     row.createdAt,
     row.updatedAt,
   );
@@ -870,6 +958,15 @@ export function getProjectTaskByExternalKey(projectId, externalKey) {
 export function getProjectTaskByRunId(runId) {
   if (!runId) return null;
   return db.prepare('SELECT * FROM project_tasks WHERE runId = ? ORDER BY updatedAt DESC LIMIT 1').get(runId) ?? null;
+}
+
+/**
+ * 按「流程的一步」找它那张卡（`sourceKey = flow:<runId>:<nodeId>:<visit>`，见 ensureTaskCardForStep）。
+ * 有索引不需要（这张表最多几百行，走主键扫描也就一瞬）；真要慢了再加。
+ */
+export function getProjectTaskBySourceKey(sourceKey) {
+  if (!sourceKey) return null;
+  return db.prepare('SELECT * FROM project_tasks WHERE sourceKey = ? LIMIT 1').get(sourceKey) ?? null;
 }
 
 export function listProjectTasks(projectId) {
@@ -902,7 +999,7 @@ export function updateProjectTask(id, fields) {
     `UPDATE project_tasks
         SET title = ?, description = ?, status = ?, assigneePersonaId = ?,
             conversationId = ?, runId = ?, prRepo = ?, prNumber = ?, prState = ?, prTitle = ?,
-            prCheckedAt = ?, queuedAt = ?, updatedAt = ?
+            prCheckedAt = ?, queuedAt = ?, sourceKey = ?, sourceRunId = ?, updatedAt = ?
       WHERE id = ?`,
   ).run(
     next.title,
@@ -917,6 +1014,9 @@ export function updateProjectTask(id, fields) {
     next.prTitle ?? null,
     next.prCheckedAt ?? null,
     next.queuedAt ?? null,
+    // `?? null` 而不是直接取：老库里这两列刚 ALTER 出来，历史行是 NULL —— 写回 null 是幂等的
+    next.sourceKey ?? null,
+    next.sourceRunId ?? null,
     nowIso(),
     id,
   );
@@ -1021,8 +1121,10 @@ export function createPersona({ id = null, name, role = null, instructions = '',
 
 /** 这个人是不是某些群的群助手 —— 删之前必须查，删了「没 @ 就找群助手」那条规则就断了 */
 export function groupsWhereAssistant(personaId) {
+  // 群助手是**群级**属性（2026-10-20 起 groups 表）—— 别再按 conversations 查，
+  // 一个群现在有多段会话，按会话查会返回一排重复的"群"。
   return db
-    .prepare("SELECT id, title FROM conversations WHERE kind = 'group' AND assistantPersonaId = ?")
+    .prepare("SELECT id, title FROM groups WHERE assistantPersonaId = ? AND dissolvedAt IS NULL")
     .all(personaId);
 }
 
@@ -1042,8 +1144,10 @@ export function markPersonaBuiltin(id) {
  * 为什么要级联：`listMembers` 是 INNER JOIN personas，关系表里留悬空行不会报错，
  * 只会让群成员**静默消失**；而 `assistantPersonaId` 悬空则更糟 —— 群里没人接话了。
  *
- * 会话**不删**（聊天记录留着），改成**归档**：消息列表保持干净，历史还能从
- * 「已移除的会话」里找回来。留成"（员工已删）"的死条目反而更差：点进去发不了消息。
+ * 会话**不删**（聊天记录留着），也**不再归档**（2026-10-20 去掉归档功能）：
+ * 它们留在消息列表里，点进去**只读**（人没了，不能再聊），名字落到标题里方便分辨。
+ * 用户想清走，右键「删除并清空聊天记录」（`purgePersonaHistory`，他的全部历史一起清）
+ * 或「归档」（收起来、数据留库）。
  */
 export function deletePersona(id) {
   /*
@@ -1065,21 +1169,27 @@ export function deletePersona(id) {
     db.prepare('DELETE FROM persona_skills WHERE personaId = ?').run(id);
     db.prepare('DELETE FROM thread_members WHERE personaId = ?').run(id);
     db.prepare('DELETE FROM member_sessions WHERE personaId = ?').run(id);
+    // 群成员名单也要清（2026-10-20 起成员真源在 group_members，不清就是一排"查无此人"）
+    db.prepare('DELETE FROM group_members WHERE personaId = ?').run(id);
 
     const convs = db.prepare("SELECT id, title FROM conversations WHERE kind = 'direct' AND personaId = ?").all(id);
-    const ts = nowIso();
     for (const c of convs) {
-      // 人一删，**再没有别的地方记得"这段对话是谁的"** —— personaName 的 JOIN 会变 null，
-      // 归档列表就会剩一排分不清的「（员工已删）」。所以把名字落到标题里。
-      // 标题已有名字（正常是「和 X」）就不动它，别覆盖用户自己起过的名字。
+      /*
+       * 人一删，**再没有别的地方记得"这段对话是谁的"** —— personaName 的 JOIN 会变 null，
+       * 列表就会剩一排分不清的「（员工已删）」。所以把名字落到标题里。
+       * 标题已有名字（正常是「和 X」）就不动它，别覆盖用户自己起过的名字。
+       *
+       * **不再归档**（2026-10-20 用户要求）：归档功能已去掉，这些会话**留在消息列表里**，
+       * 点进去只读（不能继续聊，因为那个人已经没了）。用户可右键「删除」或「归档」自行收走。
+       */
       const named = persona?.name && c.title && c.title.includes(persona.name);
       const title = named ? c.title : `和 ${persona?.name ?? '已删除的员工'}`;
-      db.prepare('UPDATE conversations SET hiddenAt = ?, title = ? WHERE id = ?').run(ts, title, c.id);
+      db.prepare('UPDATE conversations SET title = ? WHERE id = ?').run(title, c.id);
     }
 
     const removed = db.prepare('DELETE FROM personas WHERE id = ?').run(id).changes > 0;
     db.exec('COMMIT');
-    return { removed, archivedConversations: convs.length };
+    return { removed, keptConversations: convs.length };
   } catch (e) {
     db.exec('ROLLBACK');
     throw e;
@@ -1134,6 +1244,7 @@ export function listConversations() {
     .prepare(
       `SELECT c.*, p.name AS personaName, p.runtime AS runtime,
               (SELECT COUNT(*) FROM thread_members tm WHERE tm.threadId = c.id) AS memberCount,
+              (SELECT COUNT(*) FROM messages m WHERE m.conversationId = c.id) AS messageCount,
               (SELECT m.text FROM messages m WHERE m.conversationId = c.id
                 ORDER BY m.createdAt DESC, m.rowid DESC LIMIT 1) AS lastMessage
          FROM conversations c LEFT JOIN personas p ON p.id = c.personaId
@@ -1173,44 +1284,189 @@ export const LOCAL_USER = { id: 'local-user', name: '我' };
  * - personaId 写空串：**群不该带 personaId**。以前写成群助手，导致
  *   「点员工开对话」把群查了出来（已修，见 ensureConversationForPersona）。
  */
-export function createGroup({ title, assistantPersonaId, memberIds = [], ownerUserId = LOCAL_USER.id }) {
+export function createGroup({ title, assistantPersonaId, memberIds = [] }) {
   const ts = nowIso();
-  const row = {
-    id: newId('g'),
-    title,
-    personaId: '',
-    ownerPersonaId: assistantPersonaId, // 历史列，仅作镜像
-    ownerUserId,
-    assistantPersonaId,
-    kind: 'group',
-    status: '待跑',
-    createdAt: ts,
-    updatedAt: ts,
-  };
-  db.prepare(
-    `INSERT INTO conversations
-       (id, title, personaId, ownerPersonaId, ownerUserId, assistantPersonaId, kind, sessionId, status, createdAt, updatedAt)
-     VALUES (?, ?, ?, ?, ?, ?, 'group', NULL, ?, ?, ?)`,
-  ).run(
-    row.id,
-    row.title,
-    row.personaId,
-    row.ownerPersonaId,
-    row.ownerUserId,
-    row.assistantPersonaId,
-    row.status,
-    row.createdAt,
-    row.updatedAt,
-  );
+  const groupId = newId('g');
+  db.exec('BEGIN');
+  try {
+    db.prepare('INSERT INTO groups (id, title, assistantPersonaId, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?)')
+      .run(groupId, title, assistantPersonaId, ts, ts);
+    const ins = db.prepare('INSERT OR IGNORE INTO group_members (groupId, personaId, joinedAt) VALUES (?, ?, ?)');
+    for (const pid of new Set([assistantPersonaId, ...memberIds].filter(Boolean))) ins.run(groupId, pid, ts);
+    const conv = insertGroupSession(groupId, { title, assistantPersonaId });
+    db.exec('COMMIT');
+    // 返回第一段会话：前端拿到它直接打开（跟以前"建群就进群会话"的体感一致）
+    return conv;
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+}
 
-  for (const pid of new Set([assistantPersonaId, ...memberIds].filter(Boolean))) addMember(row.id, pid);
-  return row;
+/** 群的身份行（groups）+ 成员名单。群名/群助手都在这一行上，不属于任何一段会话。 */
+export function getGroup(id) {
+  const g = db.prepare('SELECT * FROM groups WHERE id = ?').get(id) ?? null;
+  if (!g) return null;
+  g.members = listGroupMembers(id);
+  return g;
+}
+
+/** 群成员（群级真源；会话里的 thread_members 是建会话那一刻的快照） */
+export function listGroupMembers(groupId) {
+  return db
+    .prepare(
+      `SELECT gm.personaId, gm.joinedAt, p.name, p.runtime, p.sandbox, p.cwd, p.model, p.instructions, p.rootDirs,
+              p.builtin
+         FROM group_members gm JOIN personas p ON p.id = gm.personaId
+        WHERE gm.groupId = ? ORDER BY gm.joinedAt, p.name`,
+    )
+    .all(groupId);
+}
+
+/** 这个群下的所有会话（新的在前）—— 聊天记录抽屉用它 */
+export function listGroupSessions(groupId) {
+  return db
+    .prepare('SELECT * FROM conversations WHERE groupId = ? ORDER BY updatedAt DESC')
+    .all(groupId);
 }
 
 /**
- * 拉人进群。
+ * 通讯录的群列表：**读 `groups` 表本身**，不从会话推（2026-10-20 用户报「通讯录里群也没了」）。
+ *
+ * 以前通讯录是按 `conversations` 里 `kind='group'` 的行去重出来的，于是
+ * 「这个群的会话被删光」= 群在通讯录里凭空消失 —— 而群是**容器**（有名字、成员、群助手），
+ * 容器不该因为片段删光就没了。现在零段的群照样在通讯录里，点进去「发消息」就开新的一段。
+ *
+ * `memberCount` 取 `group_members`（群级真源），不是某段会话的 `thread_members` 快照 ——
+ * 快照可能停在当时的成员名单，跟群详情对不上。
+ * `lastActiveAt` 给前端排序用：有会话就看最近一段，没会话（零段）就看群自己的 updatedAt。
+ */
+export function listGroups() {
+  return db
+    .prepare(
+      `SELECT g.id, g.title, g.assistantPersonaId, g.createdAt, g.updatedAt,
+              (SELECT COUNT(*) FROM group_members m WHERE m.groupId = g.id) AS memberCount,
+              (SELECT MAX(c.updatedAt) FROM conversations c WHERE c.groupId = g.id) AS lastActiveAt
+         FROM groups g
+        WHERE g.dissolvedAt IS NULL
+        ORDER BY COALESCE((SELECT MAX(c.updatedAt) FROM conversations c WHERE c.groupId = g.id), g.updatedAt) DESC`,
+    )
+    .all();
+}
+
+/**
+ * 落一段群会话：标题/群助手从群上取，成员从 group_members **拷一份快照**进 thread_members。
+ *
+ * 快照是必须的：`dispatch` 的「@ 谁 / 没 @ 找群助手」读的是**会话的** thread_members，
+ * 而群成员以后可能变 —— 老会话该保持它当时的成员，新会话才拿新名单。
+ */
+function insertGroupSession(groupId, { title, assistantPersonaId }) {
+  const ts = nowIso();
+  const id = newId('c');
+  /*
+   * 参数顺序必须与列顺序逐位对齐，这里最容易错位：
+   *   id, title, personaId=''(字面量，群不带 personaId), ownerPersonaId, ownerUserId,
+   *   assistantPersonaId, kind='group'(字面量), sessionId=NULL, status='待跑', createdAt, updatedAt, groupId
+   * 曾经把 ownerUserId 和 assistantPersonaId 写反过一次 —— 后果是每段群会话的群助手
+   * 变成 `local-user`，一发言就报「群里没有群助手」，而且建群那一刻看不出来。
+   */
+  db.prepare(
+    `INSERT INTO conversations
+       (id, title, personaId, ownerPersonaId, ownerUserId, assistantPersonaId, kind, sessionId, status, createdAt, updatedAt, groupId)
+     VALUES (?, ?, '', ?, ?, ?, 'group', NULL, '待跑', ?, ?, ?)`,
+  ).run(id, title, assistantPersonaId, LOCAL_USER.id, assistantPersonaId, ts, ts, groupId);
+  const members = db.prepare('SELECT personaId FROM group_members WHERE groupId = ? ORDER BY joinedAt').all(groupId);
+  for (const m of members) addMember(id, m.personaId);
+  return getConversation(id);
+}
+
+/**
+ * 给群开一段新会话（群详情页「发消息」走这里）。群不存在或已解散 → null。
+ *
+ * **发起新会话 = 明确要用这个群**，所以顺手把整群的「不显示」撤掉
+ * （2026-10-20 用户实报：群被不显示后再点「发消息」，列表里一直不出现）。
+ * 与 hideConversation 的群级隐藏对称：藏是一起藏，回是一起回；
+ * 新会话本身 hiddenAt 本来就是 NULL，但只回一段的话，万一列表收敛取到的
+ * 是另一段被藏的，看上去还是"发起没反应"。
+ */
+export function createGroupSession(groupId) {
+  const g = db.prepare('SELECT * FROM groups WHERE id = ?').get(groupId);
+  if (!g || g.dissolvedAt) return null;
+  const conv = insertGroupSession(groupId, { title: g.title, assistantPersonaId: g.assistantPersonaId });
+  db.prepare('UPDATE conversations SET hiddenAt = NULL WHERE groupId = ? AND kind = ?').run(groupId, 'group');
+  return getConversation(conv.id);
+}
+
+/**
+ * 改群名 / 换群助手。**群级改完再同步到每一段会话**：
+ * 消息列表、聊天头部、抽屉读的都是会话上的镜像字段，不同步就会出现"群里叫 A、列表还叫 B"。
+ */
+export function updateGroup(groupId, { title, assistantPersonaId } = {}) {
+  const ts = nowIso();
+  db.exec('BEGIN');
+  try {
+    if (title) db.prepare('UPDATE groups SET title = ?, updatedAt = ? WHERE id = ?').run(title, ts, groupId);
+    if (assistantPersonaId) {
+      db.prepare('UPDATE groups SET assistantPersonaId = ?, updatedAt = ? WHERE id = ?')
+        .run(assistantPersonaId, ts, groupId);
+    }
+    if (title) {
+      db.prepare('UPDATE conversations SET title = ?, updatedAt = ? WHERE groupId = ?').run(title, ts, groupId);
+    }
+    if (assistantPersonaId) {
+      db.prepare('UPDATE conversations SET assistantPersonaId = ?, updatedAt = ? WHERE groupId = ?')
+        .run(assistantPersonaId, ts, groupId);
+    }
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+  return getGroup(groupId);
+}
+
+/** 群级加人：先落群名单，再给**每一段会话**补 thread_members（各自按自己的历史算水位线） */
+export function addGroupMembers(groupId, personaIds = []) {
+  const ts = nowIso();
+  const sessions = db.prepare('SELECT id FROM conversations WHERE groupId = ?').all(groupId);
+  db.exec('BEGIN');
+  try {
+    const ins = db.prepare('INSERT OR IGNORE INTO group_members (groupId, personaId, joinedAt) VALUES (?, ?, ?)');
+    for (const pid of personaIds) ins.run(groupId, pid, ts);
+    for (const s of sessions) for (const pid of personaIds) addMember(s.id, pid);
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+  return listGroupMembers(groupId);
+}
+
+/** 群级踢人：群名单 + 每段会话的成员/会话状态一起清（再拉回来是干净的开始） */
+export function removeGroupMember(groupId, personaId) {
+  const sessions = db.prepare('SELECT id FROM conversations WHERE groupId = ?').all(groupId);
+  db.exec('BEGIN');
+  try {
+    db.prepare('DELETE FROM group_members WHERE groupId = ? AND personaId = ?').run(groupId, personaId);
+    for (const s of sessions) removeMember(s.id, personaId);
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+}
+
+/* --------------------------------------- 会话成员（每段会话的成员快照） */
+
+/**
+ * 往**一段会话**里加人（thread_members = 这段会话的成员快照）。
+ *
+ * ⚠️ 这是会话级的底层动作：群的成员真源在 `group_members`（见 addGroupMembers），
+ * 两者分工是「群管名单、会话管当时是谁」—— dispatch 的 @ 人 / 没 @ 找群助手
+ * 读的是**会话的** thread_members，这样老会话保持它当时的成员，新会话才拿新名单。
+ *
  * 水位线不是从 0 开始：让新人能读到"最近 backfill 条"作为背景，
- * 但不会把整段群历史灌进他的 prompt。群刚建时没有消息，自然就是 0。
+ * 但不会把整段历史灌进他的 prompt。刚建的会话没有消息，自然就是 0。
  */
 export function addMember(threadId, personaId, { backfill = 20 } = {}) {
   db.prepare('INSERT OR IGNORE INTO thread_members (threadId, personaId, joinedAt) VALUES (?, ?, ?)').run(
@@ -1229,12 +1485,13 @@ export function addMember(threadId, personaId, { backfill = 20 } = {}) {
   return true;
 }
 
-/** 踢人。顺手删掉他的会话与水位线：再拉回来就是干净的开始，不会带着旧记忆。 */
+/** 从**一段会话**里踢人。顺手删掉他的会话与水位线：再拉回来就是干净的开始，不会带着旧记忆。 */
 export function removeMember(threadId, personaId) {
   db.prepare('DELETE FROM thread_members WHERE threadId = ? AND personaId = ?').run(threadId, personaId);
   db.prepare('DELETE FROM member_sessions WHERE threadId = ? AND personaId = ?').run(threadId, personaId);
 }
 
+/** 一段会话的成员（含 persona 配置：dispatch 要用 runtime / 沙箱 / 技能）。 */
 export function listMembers(threadId) {
   return db
     .prepare(
@@ -1253,8 +1510,20 @@ export function getAssistantPersona(threadId) {
   return getPersona(t.assistantPersonaId);
 }
 
-/** 把群助手换人（必须是群里已有的成员） */
+/**
+ * 换群助手。
+ *
+ * 群有自己的 `groups.assistantPersonaId`（2026-10-20 拆表之后），所以**群会话要往群上写**，
+ * 再让 updateGroup 把镜像字段同步到每一段会话 —— 只改这一段的话，
+ * 下一段新会话又拿回老助手。会话级的调用（历史遗留）保持原样。
+ */
 export function setAssistantPersona(threadId, personaId) {
+  const conv = db.prepare('SELECT id, kind, groupId FROM conversations WHERE id = ?').get(threadId) ?? null;
+  if (conv?.kind === 'group') {
+    const gid = conv.groupId || conv.id;
+    updateGroup(gid, { assistantPersonaId: personaId });
+    return;
+  }
   db.prepare('UPDATE conversations SET assistantPersonaId = ?, personaId = ?, updatedAt = ? WHERE id = ?').run(
     personaId,
     personaId,
@@ -1345,76 +1614,310 @@ export function addMessage({ conversationId, runId = null, role, text, personaId
   );
   // 说话就把它从"已从列表移除"里恢复 —— 否则会出现"我发了消息，列表里却没有"
   db.prepare('UPDATE conversations SET updatedAt = ?, hiddenAt = NULL WHERE id = ?').run(row.createdAt, conversationId);
+  /*
+   * 首条用户消息顺手把默认标题「和 XX」换成这句话的前 20 字（2026-10-20）。
+   *
+   * 为什么要动标题：一段会话就是一段活，而「聊天记录」里如果全是清一色的
+   * 「和 张三」，用户根本分不清哪段是哪段（PRD P1-1）。
+   *
+   * 三个条件缺一不可：
+   *   ① role === 'user' —— 助手说的话不能拿来当标题；
+   *   ② 这条是该会话的**第一条**用户消息（count === 1，插入已在上方完成）——
+   *      否则每说一句标题就变一次，列表会跟着跳；
+   *   ③ 现有标题仍以「和 」开头（= 还是 `createConversation` 给的默认值）——
+   *      exec / 群 / 定时任务那种**有正经名字**的会话不许被覆盖。
+   */
+  if (role === 'user') {
+    const isFirst = db
+      .prepare("SELECT COUNT(*) AS c FROM messages WHERE conversationId = ? AND role = 'user'")
+      .get(conversationId).c === 1;
+    if (isFirst) {
+      const conv = db.prepare('SELECT title FROM conversations WHERE id = ?').get(conversationId);
+      const title = String(conv?.title ?? '');
+      if (title.startsWith('和 ')) {
+        const brief = String(text ?? '').replace(/\s+/g, ' ').trim().slice(0, 20);
+        // 空消息（纯空白）不改：改了就是个空标题，比「和 张三」还糟
+        if (brief) db.prepare('UPDATE conversations SET title = ? WHERE id = ?').run(brief, conversationId);
+      }
+    }
+  }
   row.rowid = db.prepare('SELECT rowid AS rid FROM messages WHERE id = ?').get(row.id).rid;
   return row;
 }
 
 /**
- * 从消息列表里移除（归档）。
- * **不删消息、不删会话** —— 只是让它不在列表里显示；
- * 之后在这里再说一句话，它会自己回来（见 addMessage）。
+ * 「不显示」：从消息列表收起来，**但不删任何东西**。
+ *
+ * 2026-10-20 改了语义（用户要求去掉会话归档）：
+ *   · 正常员工的会话 → 只是不在列表占行，**聊天记录里照样看得到**（走 `listHiddenConversations`）；
+ *   · 已删除员工的会话 → 右键菜单上叫「归档」，同样只写这个字段，但那个人已经没有聊天记录入口了，
+ *     所以界面上等于彻底收走（数据仍留在库里）。
+ * 之后在这里再说一句话，它会自己回到列表（见 addMessage 里清 hiddenAt 那一行）。
  */
 export function hideConversation(id) {
-  return db.prepare('UPDATE conversations SET hiddenAt = ? WHERE id = ?').run(nowIso(), id).changes > 0;
-}
-
-/** 从"已归档"里捞回来 */
-export function unhideConversation(id) {
-  return (
-    db.prepare('UPDATE conversations SET hiddenAt = NULL, updatedAt = ? WHERE id = ?').run(nowIso(), id).changes > 0
-  );
+  const conv = db.prepare('SELECT id, kind, groupId FROM conversations WHERE id = ?').get(id) ?? null;
+  if (!conv) return false;
+  /*
+   * 群会话「不显示」= **把这个群的所有会话一起收起来**（2026-10-20 拆表后必须这样）。
+   *
+   * 只写这一段的话，消息列表（一个群一行、取这个群最新那段）会立刻把上一段顶上来 ——
+   * 用户看到的是"点了不显示，群还在列表里"，像是没生效。
+   * 而群的语义本来就是"这个群先别占我的列表位置"，不是"藏掉某一次对话"。
+   *
+   * 之后群里再来新消息 → addMessage 清掉那一段的 hiddenAt → 整行自己回来。
+   */
+  const ts = nowIso();
+  if (conv.kind === 'group') {
+    const gid = conv.groupId || conv.id;
+    return db.prepare("UPDATE conversations SET hiddenAt = ? WHERE groupId = ? AND kind = 'group'").run(ts, gid)
+      .changes > 0;
+  }
+  return db.prepare('UPDATE conversations SET hiddenAt = ? WHERE id = ?').run(ts, id).changes > 0;
 }
 
 /**
- * 解散一个群。
+ * 物理抹掉**一段**会话（连同消息、成员快照、运行记录、外部引用）。
  *
- * **不抹聊天记录** —— 跟这个仓库里其它破坏性操作同一个原则（删员工、删流程都不动别人的记录）。
- * 只做三件事：解除成员关系、清掉各成员在这个群里的会话状态、把它归档。
- * 记录留在库里，去「已移除的会话」照样能查到。
+ * **不管事务** —— 调用方负责 BEGIN/COMMIT：删群要在一个事务里抹掉好几段，
+ * 每次进来各开一个事务的话，中间失败就会留下"删了一半"的群。
  *
- * 为什么成员关系必须清（不是只藏起来）：
- *   · 「没 @ 就找群助手」这条规则靠 thread_members 撑着，人都不在了这规则就该失效；
- *   · 不清的话，从归档点进去还能 @ 人派活 —— 那是个已经解散的群。
- *   · 群助手一并置空：否则删那个数字员工时会被一句"他是群「X」的群助手"挡住，
- *     而那个群已经不存在了（groupsWhereAssistant 是按 assistantPersonaId 查的）。
+ * 为什么先摘引用再删：`workflow_steps` / `workflow_tasks` / `workflow_runs` / `project_tasks`
+ * 引了这段会话，但**那些行必须留着**（流程办理的结论、看板上的卡都还要看），
+ * 只是不该再指向一段已经不存在的会话。硬删它们就是"删别人的东西"。
+ *
+ * ⚠️ 顺序陷阱：`run_events` 只能靠 `runId IN (SELECT … FROM runs …)` 定位，
+ *    所以**必须排在删 `runs` 之前**。写反了 `run_events` 一行都删不掉，而且**不报错** ——
+ *    这是整套 SQL 里最容易漏测的一条。
  */
-export function dissolveGroup(id) {
-  const t = getConversation(id);
-  if (!t || t.kind !== 'group') return null;
-  const ts = nowIso();
+function purgeConversation(id) {
+  // ① 先摘外部引用：这些行要留着，只是别再指向一段不存在的会话
+  db.prepare('UPDATE workflow_steps SET conversationId = NULL WHERE conversationId = ?').run(id);
+  db.prepare('UPDATE workflow_tasks SET conversationId = NULL WHERE conversationId = ?').run(id);
+  // 实测恒为 NULL（createWorkflowRun 从不传 threadId），仍然写一条防御
+  db.prepare('UPDATE workflow_runs SET threadId = NULL WHERE threadId = ?').run(id);
+  db.prepare('UPDATE project_tasks SET conversationId = NULL WHERE conversationId = ?').run(id);
+
+  // ② 运行侧：run_events 靠 runId 子查询，**必须在删 runs 之前**
+  db.prepare('DELETE FROM run_events WHERE runId IN (SELECT id FROM runs WHERE conversationId = ?)').run(id);
+  db.prepare('DELETE FROM runs WHERE conversationId = ?').run(id);
+
+  // ③ 会话自己的从属行
+  db.prepare('DELETE FROM messages WHERE conversationId = ?').run(id);
+  db.prepare('DELETE FROM member_sessions WHERE threadId = ?').run(id);
+  db.prepare('DELETE FROM thread_members WHERE threadId = ?').run(id);
+
+  // ④ 最后删会话本身
+  return db.prepare('DELETE FROM conversations WHERE id = ?').run(id).changes;
+}
+
+/**
+ * 清掉一个**已解散**的群：所有段的消息、群行、成员名单一起抹（不可恢复）。
+ *
+ * 2026-10-20 用户定的收尾设计：解散后的群行代表的是"这个群的**全部历史**"，
+ * 右键「删除并清空聊天记录」删的就是这一坨 —— 一段一段删没有意义（不会再有新段，
+ * 群也不在通讯录里，删到最后一段留下的空群没有任何入口）。
+ *
+ * 只接受 `dissolvedAt` 非空的群（活群从 `deleteConversation` 的"删一段"路子走）；
+ * 有任何一段还在跑就拒绝（父级还在干活就先别拆房子）。
+ */
+function purgeDissolvedGroup(groupId) {
+  const g = db.prepare('SELECT id, dissolvedAt FROM groups WHERE id = ?').get(groupId) ?? null;
+  if (!g) return { ok: false, why: 'not-found', runId: null, changes: 0 };
+  if (!g.dissolvedAt) return { ok: false, why: 'not-dissolved', runId: null, changes: 0 };
+
+  const sessions = db.prepare('SELECT id FROM conversations WHERE groupId = ?').all(groupId);
+  for (const s of sessions) {
+    const running = activeRun(s.id);
+    if (running) return { ok: false, why: 'running', runId: running.id, changes: 0 };
+  }
+
+  let changes = 0;
   db.exec('BEGIN');
   try {
-    db.prepare('DELETE FROM thread_members WHERE threadId = ?').run(id);
-    db.prepare('DELETE FROM member_sessions WHERE threadId = ?').run(id);
-    db.prepare(
-      `UPDATE conversations
-          SET dissolvedAt = ?, hiddenAt = ?, assistantPersonaId = NULL, status = '待跑', updatedAt = ?
-        WHERE id = ?`,
-    ).run(ts, ts, ts, id);
+    for (const s of sessions) changes += purgeConversation(s.id);
+    db.prepare('DELETE FROM group_members WHERE groupId = ?').run(groupId);
+    db.prepare('DELETE FROM groups WHERE id = ?').run(groupId);
     db.exec('COMMIT');
   } catch (e) {
     db.exec('ROLLBACK');
     throw e;
   }
-  return getConversation(id);
+  return { ok: true, why: null, runId: null, changes };
+}
+
+/**
+ * 清掉一个**已删除员工**的全部单聊历史：他名下每一段 direct 会话连消息、运行记录一起抹。
+ *
+ * 2026-10-20 用户定的第二档"清档"（第一档是 `purgeDissolvedGroup`）。
+ * 场景：`deletePersona` **不删会话**（记录可能有用），那些行留在消息列表里，点进去只读。
+ * 于是列表里那行「和 张三」代表的是**这个人的全部历史** —— 他可能有好几段会话
+ * （换过 runtime、被「不显示」过又翻出来…）。只删一段的话，剩下的段还在「已归档」里躺着，
+ * 可那个人的入口已经彻底没了，没人会想起来去点它 —— 这就是"看不见的冗余数据"。
+ * 所以员工已删的单聊，删除 = **全清**（用户原话：改成「删除并清空聊天记录」）。
+ *
+ * 只接受"人已经不在 `personas` 里"的 personaId：人还在就是正常单聊，走"删这一段"。
+ * 判据放在 store 这层（不止路由）—— 接口能被直接调，同 `deletePersona` 的两道关。
+ */
+function purgePersonaHistory(personaId) {
+  // 人还在 → 不是清档场景（这段只是普通单聊的一段）
+  if (db.prepare('SELECT id FROM personas WHERE id = ?').get(personaId)) {
+    return { ok: false, why: 'not-deletable', runId: null, changes: 0 };
+  }
+
+  const convs = db.prepare("SELECT id FROM conversations WHERE kind = 'direct' AND personaId = ?").all(personaId);
+  if (!convs.length) return { ok: true, why: null, runId: null, changes: 0 };
+
+  // 任何一段还在跑就整体拒绝：父级还在干活就先别拆房子（同 purgeDissolvedGroup）
+  for (const c of convs) {
+    const running = activeRun(c.id);
+    if (running) return { ok: false, why: 'running', runId: running.id, changes: 0 };
+  }
+
+  let changes = 0;
+  db.exec('BEGIN');
+  try {
+    for (const c of convs) changes += purgeConversation(c.id);
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+  return { ok: true, why: null, runId: null, changes };
+}
+
+/**
+ * **永久删除会话** —— 不可恢复、不进「已移除的会话」。
+ *
+ * 按 kind 分派：
+ *   · `direct`    → 抹掉这一段（消息、运行记录、成员状态全没）
+ *                   例外：**员工已删**的单聊 → 这个人的全部历史一起清（`purgePersonaHistory`，
+ *                   同日用户定：那行代表的是"这个人的全部历史"，只删一段会留下看不到的冗余）
+ *   · `group`     → **只删这一段会话**（2026-10-20 用户定：「删除不是删除群，是删除这次会话」
+ *                   —— 列表里那行虽是"群"，但它代表的是这个群**最新的一段**；
+ *                   删它不动群本身、成员名单、这个群的其他段）。
+ *                   例外：**已解散的群** → 整群清档（`purgeDissolvedGroup`，同日用户定的
+ *                   收尾设计：解散后行代表"全部历史"，删除 = 删除并清空聊天记录；
+ *                   群已不在通讯录、也开不出新段，留着零散的段没有意义）。
+ *                   整个群不要了（还没解散）走「解散」（`dissolveGroup`）。
+ *   · `exec`      → 拒绝（`not-deletable`）：它是流程 / 任务卡的载体，删它等于抽掉办过的痕迹，
+ *                   该由卡片自己的流程管。
+ *
+ * 三重校验（存在 / 可删 / 没在跑）全在事务**外**：拒绝路径零写入，不留半拉状态。
+ * store 层再判一遍（不止路由层判），因为接口可以被直接调 —— 同 `deletePersona` 的两道关。
+ *
+ * @param {string} id 会话 id
+ * @returns {{ok: boolean, why: string|null, runId: string|null, changes: number}}
+ *          `why`：`not-found` | `not-deletable` | `running`；成功时 `changes` = 删掉的会话行数
+ */
+export function deleteConversation(id) {
+  // ⚠️ dissolvedAt / personaId 必须一起取：它们决定"删这一段"还是"整档清空"（2026-10-20 真踩过：
+  //    SELECT 里漏了 dissolvedAt → 分派分支永远不生效，"群行还在"的锅查了好一阵）
+  const conv = db.prepare('SELECT id, kind, groupId, personaId, dissolvedAt FROM conversations WHERE id = ?').get(id) ?? null;
+  if (!conv) return { ok: false, why: 'not-found', runId: null, changes: 0 };
+  /*
+   * 2026-10-20 用户要求：**群聊也能删**（和单聊同一套右键菜单）。
+   * 仍然拒绝工单会话（`exec`）：那是流程 / 任务卡自动建的记录，
+   * 从"消息"里删掉会让流程那头的追溯断线 —— 要清理请去流程/任务卡里删任务。
+   */
+  if (conv.kind !== 'direct' && conv.kind !== 'group') {
+    return { ok: false, why: 'not-deletable', runId: null, changes: 0 };
+  }
+  // 已解散的群：删的是"这个群的全部历史"（见 purgeDissolvedGroup 的注释）
+  if (conv.kind === 'group' && conv.dissolvedAt) {
+    return purgeDissolvedGroup(conv.groupId || conv.id);
+  }
+  // 员工已删的单聊：删的是"这个人的全部历史"（见 purgePersonaHistory 的注释）
+  if (conv.kind === 'direct' && conv.personaId && !db.prepare('SELECT id FROM personas WHERE id = ?').get(conv.personaId)) {
+    return purgePersonaHistory(conv.personaId);
+  }
+
+  // 还在跑的不能删：静默终止一个正在干活的 agent 比让用户多点一步更糟（PRD 规则 7）
+  const running = activeRun(id);
+  if (running) return { ok: false, why: 'running', runId: running.id, changes: 0 };
+
+  // `node:sqlite` 的 DatabaseSync **没有** db.transaction()，所以手写 BEGIN/COMMIT
+  let changes = 0;
+  db.exec('BEGIN');
+  try {
+    changes = purgeConversation(id);
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+  return { ok: true, why: null, runId: null, changes };
+}
+
+/**
+ * 解散一个群（2026-10-20 起按**群**解散，参数是 groupId）。
+ *
+ * **不抹聊天记录** —— 跟这个仓库里其它破坏性操作同一个原则（删员工、删流程都不动别人的记录）。
+ * 做的事：删群成员名单、给**每一段会话**清掉成员快照与会话状态、群本身打上 dissolvedAt。
+ *
+ * ⚠️ **不再把会话设成「不显示」**（2026-10-20 用户定：解散后消息仍然留在消息列表里，只读）。
+ * 以前这里写 `hiddenAt = ts`，解散即从所有界面消失 —— 记录在库里却没有任何入口，
+ * 等于"解散 = 删档"。现在会话留在原处（原本就被「不显示」的也不去动它），
+ * 前端按 `dissolvedAt` 画成只读：输入框置灰、头部标「已解散」。
+ * 通讯录的群列表（`listGroups`）仍然只看未解散的群 —— 那边是"还能用的群"，解散的不该占位。
+ *
+ * 为什么成员关系必须清（不是只藏起来）：
+ *   · 「没 @ 就找群助手」这条规则靠 thread_members 撑着，人都不在了这规则就该失效；
+ *   · 不清的话，点进老会话还能 @ 人派活 —— 那是个已经解散的群。
+ *   · 群助手一并置空：否则删那个数字员工时会被一句"他是群「X」的群助手"挡住。
+ *   · 后端的发消息接口也据此拒绝（路由层看 `dissolvedAt` 回 E2049）。
+ */
+export function dissolveGroup(groupId) {
+  const g = db.prepare('SELECT * FROM groups WHERE id = ?').get(groupId);
+  if (!g) return null;
+  const ts = nowIso();
+  const sessions = db.prepare('SELECT id FROM conversations WHERE groupId = ?').all(groupId);
+  db.exec('BEGIN');
+  try {
+    db.prepare('DELETE FROM group_members WHERE groupId = ?').run(groupId);
+    for (const s of sessions) {
+      db.prepare('DELETE FROM thread_members WHERE threadId = ?').run(s.id);
+      db.prepare('DELETE FROM member_sessions WHERE threadId = ?').run(s.id);
+      // 只打 dissolvedAt；hiddenAt **不动**（原来被「不显示」的保持隐藏，可见的保持可见）
+      db.prepare(
+        `UPDATE conversations
+            SET dissolvedAt = ?, assistantPersonaId = NULL, status = '待跑', updatedAt = ?
+          WHERE id = ?`,
+      ).run(ts, ts, s.id);
+    }
+    db.prepare('UPDATE groups SET dissolvedAt = ?, assistantPersonaId = NULL, updatedAt = ? WHERE id = ?')
+      .run(ts, ts, groupId);
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+  return getGroup(groupId);
 }
 
 /** 已归档的会话（给「已归档」入口用） */
-export function listArchivedConversations() {
+/**
+ * 被「不显示」收走的会话 —— **只给「聊天记录」用**（2026-10-20 去掉会话归档之后）。
+ *
+ * 为什么不并进 `listConversations`：那是 `/api/state` 的热路径，还喂着工作台、
+ * 通讯录、任务看板；把隐藏的混进去，别的地方会凭空多出"看不见的会话"。
+ * 这里单独给一份、带 `hidden: true`，前端只在聊天记录抽屉里用。
+ */
+export function listHiddenConversations() {
   return db
     .prepare(
+      // 跟 listConversations 一样带上最后一句：聊天记录抽屉要靠它做预览，
+      // 少了它隐藏会话在抽屉里就只剩"标题 / 还没聊过"，跟列表里的样子对不上
       `SELECT c.*, p.name AS personaName,
               (SELECT COUNT(*) FROM messages m WHERE m.conversationId = c.id) AS messageCount,
-              (SELECT COUNT(*) FROM thread_members tm WHERE tm.threadId = c.id) AS memberCount
+              (SELECT COUNT(*) FROM thread_members tm WHERE tm.threadId = c.id) AS memberCount,
+              (SELECT m.text FROM messages m WHERE m.conversationId = c.id
+                ORDER BY m.createdAt DESC, m.rowid DESC LIMIT 1) AS lastMessage
          FROM conversations c LEFT JOIN personas p ON p.id = c.personaId
         WHERE c.hiddenAt IS NOT NULL
-        ORDER BY c.hiddenAt DESC`,
+        ORDER BY c.updatedAt DESC`,
     )
-    .all();
-}
-
-export function countArchived() {
-  return db.prepare('SELECT COUNT(*) c FROM conversations WHERE hiddenAt IS NOT NULL').get().c;
+    .all()
+    .map((c) => ({ ...c, hidden: true }));
 }
 
 /* ------------------------------------------------- 每个成员自己的会话状态 */
