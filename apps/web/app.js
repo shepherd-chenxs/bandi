@@ -1793,10 +1793,11 @@ function wireBackWb(root, back = () => openPlugins()) {
  *
  * 值收一个 arg（比如「项目清单里选中它」）。指向的必须是**上一层**，不是"往回退一步"。
  *
- * ⚠️ 2026-10-19 设置 / 流程模块的面包屑撤掉之后，`settings` / `skills` / `devices` / `device` /
- *    `flows` 五个键没有宿主了，已删（设置模块现在是"左栏分节列表 + 右页标题"，不走面包屑）。
- *    以后要在别处用，照原样加回来即可：settings→openSettings('prefs')、skills→openSettings('skills')、
- *    devices/device→摆 S.rtLevel 后 renderRuntimes()、flows→openWorkflows()。
+ * ⚠️ 2026-10-19 设置 / 流程模块的面包屑撤掉之后，`settings` / `skills` / `flows`
+ *    三个键没有宿主了，已删。`devices` / `device` 2026-10-20 又加回来了：
+ *    运行时是多层页面（运行时 › 设备 › CLI），页头要用面包屑导航。
+ *    以后要在别处用，照原样加回来即可：settings→openSettings('prefs')、
+ *    skills→openSettings('skills')、flows→openWorkflows()。
  */
 const CRUMB_GO = {
   workbench: () => setNav('plugins'),   // 工作台宫格首页（点一级栏那条路，顺带收左栏）
@@ -1805,6 +1806,9 @@ const CRUMB_GO = {
   // 带 arg 就是"项目清单里选中它"（面包屑里点某个项目的名字回到它的详情页）
   projects: (id) => openProjectsPage(id ?? undefined),
   board: () => openTaskBoard(),
+  // 运行时那两级：不是"分节"而是状态 —— 得先把 S.rtLevel 摆好，renderRuntimes 按它分发
+  devices: () => { S.rtLevel = 'devices'; S.rtDevice = null; S.rtRuntime = null; return renderRuntimes(); },
+  device: () => { S.rtLevel = 'device'; S.rtRuntime = null; return renderRuntimes(); },
 };
 
 // 一次委托，管全站所有面包屑。页面重建不用重新绑。
@@ -2573,6 +2577,7 @@ async function renderNodeDetail(dev) {
   };
 
   $('settingsView').innerHTML = `
+    ${headRow(breadcrumb([{ label: '运行时', to: 'devices' }, { label: dev.label }]))}
     <div class="detail-body">
       ${devHeadHtml(dev, {
         badges: `<span class="${dev.online ? 'pill-ok' : 'pill'}">${dev.online ? '在线' : '离线'}</span><span class="pill">远程节点</span>`,
@@ -2884,7 +2889,7 @@ function wireInstallRuntime(dev) {
  * 「安装」弹窗是唯一还可能出现手填的入口（"我装了、但你没认出来"），正常流程碰不到。
  */
 async function renderDeviceDetail() {
-  $('settingsView').innerHTML = rtLoading('设备');
+  $('settingsView').innerHTML = rtLoading('运行时');
 
   let dev;
   let families;
@@ -2900,8 +2905,9 @@ async function renderDeviceDetail() {
     return;
   }
 
-  // 左栏只写「设置」（在 openSettings 里）；设备名/状态/动作都在正文的 devHeadHtml 里，
-  // 右页头不再重复 —— 跟员工详情、项目详情同一个规矩。
+  /* 运行时是**多层**的（运行时 › 设备 › CLI）：页头用面包屑，上级能直接点回去
+     （2026-10-20 用户截图：「运行时这个功能，下面有多层页面，应该改成面包屑模式」）。
+     左栏仍是「设置」的分节列表，所以面包屑从「运行时」这一层起 —— 不再写成"设置 › 运行时 › …"。 */
 
   // 远程节点：这一版只报到，它的运行时是只读的 —— 别让它掉进下面那套"改本机"的交互里
   // 远程节点：交给它自己那页（那边要拉族清单，所以是异步的）
@@ -2981,6 +2987,7 @@ async function renderDeviceDetail() {
   };
 
   $('settingsView').innerHTML = `
+    ${headRow(breadcrumb([{ label: '运行时', to: 'devices' }, { label: dev.label }]))}
     <div class="detail-body">
       ${devHeadHtml(dev, {
         badges: '<span class="pill-ok">在线</span><span class="pill">本机</span>',
@@ -3242,10 +3249,14 @@ async function renderCliDetail() {
     return;
   }
 
-  // 左栏只写「设置」；这一页的标题在右页头：CLI 名 + 它属于哪台设备（正文里没有名字可重复）。
-  // 不用面包屑：层级（设置 › 运行时 › 设备）已经在左栏的分节列表里高亮着了。
+  /* 运行时是**多层**的（运行时 › 设备 › 这个 CLI）：页头用面包屑，两级上级都能点回去。
+     左栏仍是「设置」的分节列表，所以面包屑从「运行时」这一层起。 */
   $('settingsView').innerHTML = `
-    ${headRow(`<b>${esc(rt.label)}</b><span class="dim" style="font-size:12px">${esc(S.rtDevice === 'local' ? '本机' : dev.label)}</span>`)}
+    ${headRow(breadcrumb([
+      { label: '运行时', to: 'devices' },
+      { label: dev.label, to: 'device' },
+      { label: rt.label },
+    ]))}
     <div class="detail-body">
       <!--
         这里原来有个「启用」勾选框。删掉了 —— 列表页那一行已经有开关（点一下立刻生效），
