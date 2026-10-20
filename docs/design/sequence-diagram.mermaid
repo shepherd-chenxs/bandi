@@ -1,0 +1,53 @@
+%% 会话改造 · 主链路：右键「删除」= 物理删除（对应设计文档 §7.1）
+%% 另两条时序图（发消息新建 / 聊天记录抽屉）见 docs/design/2026-10-20-会话改造-设计.md 的 §7.2、§7.3
+sequenceDiagram
+  autonumber
+  actor U as 用户
+  participant L as listBody(app.js)
+  participant M as ctxMenu(app.js)
+  participant C as confirmDo(app.js)
+  participant A as api()(app.js)
+  participant H as handleConversation(server.mjs)
+  participant S as store(store.mjs)
+  participant DB as SQLite
+
+  U->>L: 右键某行
+  L->>L: contextmenu 委托命中 [data-conv]
+  L->>M: openCtxMenu(clientX, clientY, items)
+  M-->>U: 弹出「删除 / 不显示」（跑中则「删除」置灰+title）
+  U->>M: 点「删除」
+  M->>M: closeCtxMenu()
+  M->>C: removeConversationForever(c) → confirmDo(文案, "永久删除")
+  C-->>U: 模态确认（danger）
+  U->>C: 确认
+  C->>A: DELETE /api/conversations/:id
+  A->>H: fetch（带 X-Bandi）
+  H->>S: deleteConversation(id)
+  S->>DB: SELECT conversations WHERE id=?
+  alt 会话不存在
+    S-->>H: {ok:false, why:'not-found'}
+    H-->>A: 404 {code:'E2012'}
+  else kind 不是 direct
+    S-->>H: {ok:false, why:'not-direct'}
+    H-->>A: 400 {code:'E1050'}
+  else 存在 status='跑中' 的 run
+    S->>DB: SELECT runs WHERE conversationId=? AND status='跑中'
+    S-->>H: {ok:false, why:'running', runId}
+    H-->>A: 409 {code:'E4002'}
+  else 可以删
+    S->>DB: BEGIN
+    S->>DB: UPDATE workflow_steps/workflow_tasks/workflow_runs/project_tasks SET …=NULL
+    S->>DB: DELETE run_events (runId IN 该会话的 runs)
+    S->>DB: DELETE runs
+    S->>DB: DELETE messages / member_sessions / thread_members
+    S->>DB: DELETE conversations
+    S->>DB: COMMIT
+    S-->>H: {ok:true}
+    H->>S: listConversations() + countArchived()
+    H-->>A: 200 {deleted:true, id, conversations, archivedCount}
+  end
+  A-->>M: 结果
+  M->>M: S.conversations=r.conversations; S.archivedCount=r.archivedCount
+  M->>M: 正在看的就是它 → resetChatPane()
+  M->>M: renderList()（首行 closeCtxMenu）
+  M-->>U: toast「已删除。不在「已移除的会话」里」

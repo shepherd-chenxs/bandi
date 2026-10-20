@@ -1,0 +1,80 @@
+%% 会话改造 · 模块/函数视图（对应设计文档 §8）
+%% 本项目不用 class（原生 JS + 模块函数），此图用 classDiagram 表达模块、导出函数与全局状态的关系
+classDiagram
+  direction LR
+
+  class store {
+    <<module store.mjs>>
+    +listConversations() Conversation[]
+    +getConversation(id) Conversation
+    +createConversation({title, personaId}) Conversation
+    +deleteConversation(id) DeleteResult
+    +hideConversation(id) bool
+    +unhideConversation(id) bool
+    +addMessage({conversationId, role, text}) Message
+    +activeRun(conversationId) Run
+    +countArchived() int
+    +ensureConversationForPersona(personaId) Conversation
+  }
+
+  class DeleteResult {
+    +bool ok
+    +string why
+    +string runId
+  }
+
+  class server {
+    <<module server.mjs>>
+    +fail(res, status, code, error, extra)
+    -handleConversation(req, res, url)
+    -handlePersona(req, res, url)
+  }
+
+  class app {
+    <<module app.js>>
+    +S
+    +api(path, opts)
+    +post(path, body)
+    +toast(msg, kind)
+    +confirmDo(text, opts)
+    +renderList()
+    +openConversation(id)
+    +paintDrawer()
+    +closeDrawer()
+    -openCtxMenu(x, y, items)
+    -closeCtxMenu()
+    -removeConversationForever(c)
+    -hideConversationRow(c)
+    -openChatLogDrawer(conv)
+    -paintChatLogDrawer()
+    -resetChatPane()
+    -toMessages(persona)
+    -send()
+  }
+
+  class S {
+    +string nav
+    +Conversation[] conversations
+    +Conversation conversation
+    +int archivedCount
+    +bool archivedView
+    +string drawerKind
+    +bool drawerOpen
+    +string drawerThreadId
+    +string logPersonaId
+    +bool logLoading
+    +bool convEmpty
+  }
+
+  class ctxMenu {
+    <<DOM #ctxMenu>>
+    +render(items)
+    +open(x, y)
+    +close()
+  }
+
+  app --> S : 读写全局状态
+  app --> ctxMenu : openCtxMenu / closeCtxMenu
+  app --> server : HTTP（api / post）
+  server --> store : 调用
+  store --> DeleteResult : 返回

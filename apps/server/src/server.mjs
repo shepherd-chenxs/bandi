@@ -212,14 +212,17 @@ const routes = {
         return { ...p, busy: !!ar, busyLabel, busySince: ar?.startedAt ?? null };
       }),
       conversations: store.listConversations(),
-      // 「已归档」入口要靠它决定显不显示；会话明细等真的点进去再拉
-      archivedCount: store.countArchived(),
+      /*
+       * 群列表**单独给**（2026-10-20 用户报「通讯录里群也没了」）：
+       * 通讯录的群行以前是从 conversations 里去重推出来的 —— 会话删光，群就凭空消失。
+       * 群是容器，容器列表得有自己的来源，所以这里直接给 groups 表（零段的群也在）。
+       * 消息列表照旧只看 conversations（没会话就没消息，不该占行），两者互不干扰。
+       */
+      groups: store.listGroups(),
+      // 被「不显示」收走的会话：**只给聊天记录抽屉用**（2026-10-20 去掉会话归档后）。
+      // 不并进 conversations —— 那条是热路径，工作台/通讯录都在吃，混进隐藏的会凭空多出行。
+      hiddenConversations: store.listHiddenConversations(),
     });
-  },
-
-  /** 从列表移除的那些（归档）。只看不删 —— 真删功能还没做 */
-  'GET /api/archived': async (req, res) => {
-    sendJson(res, 200, { conversations: store.listArchivedConversations() });
   },
 
   /** 插件市场：可装的 ＋ 已装的，每条带 installed/enabled —— 界面据此显示"安装"还是"停用/卸载" */
@@ -359,7 +362,8 @@ const routes = {
     const valid = memberIds.filter((id) => store.getPersona(id));
 
     const group = store.createGroup({ title, assistantPersonaId, memberIds: valid });
-    sendJson(res, 201, { conversation: store.getConversation(group.id) });
+    // 同时给 group 和第一段会话：前端要 session id 才能直接进聊天，要 group id 才能开下一段
+    sendJson(res, 201, { group: store.getGroup(group.groupId), conversation: store.getConversation(group.id) });
   },
 
   /*
@@ -398,20 +402,62 @@ async function handleConversation(req, res, url) {
   const detail = /^\/api\/conversations\/([^/]+)$/.exec(url.pathname);
   const send = /^\/api\/conversations\/([^/]+)\/messages$/.exec(url.pathname);
   const hide = /^\/api\/conversations\/([^/]+)\/hide$/.exec(url.pathname);
-  const unhide = /^\/api\/conversations\/([^/]+)\/unhide$/.exec(url.pathname);
 
-  // 从消息列表移除：只动列表显示，**不删消息**
+  /**
+   * 「不显示」/「归档」：只动列表显示，**不删任何消息**（2026-10-20）。
+   *
+   * 两个菜单项走同一个接口，区别只在前端文案：
+   *   · 正常员工 → 「不显示」，之后仍能在**聊天记录**里找到（返回体里带 hiddenConversations）；
+   *   · 已删除员工 → 「归档」，那个人已经没有聊天记录入口了，所以界面上等于彻底收走。
+   * 恢复入口已随归档功能一起去掉；想在列表里再看到它，只能等它再说一句话（见 addMessage）。
+   */
   if (req.method === 'POST' && hide) {
     const id = decodeURIComponent(hide[1]);
     if (!store.hideConversation(id)) return fail(res, 404, 'E2001', '会话不存在');
-    return sendJson(res, 200, { hidden: true, conversations: store.listConversations() });
+    return sendJson(res, 200, {
+      hidden: true,
+      conversations: store.listConversations(),
+      hiddenConversations: store.listHiddenConversations(),
+    });
   }
 
-  // 从「已归档」里捞回来
-  if (req.method === 'POST' && unhide) {
-    const id = decodeURIComponent(unhide[1]);
-    if (!store.unhideConversation(id)) return fail(res, 404, 'E2002', '会话不存在');
-    return sendJson(res, 200, { unhidden: true, conversations: store.listConversations() });
+  /**
+   * **永久删除**一段会话（右键菜单 →「删除」，2026-10-20）。
+   *
+   * 接受 `direct` / `group`，另外一种有它自己的出口，**不从这儿删**：
+   *   · 群 → 2026-10-20 用户定：「删除不是删除群，是删除**这次会话**」——
+   *     列表里那行代表的是这个群最新的一段，删它只抹这一段；
+   *     群本身、成员名单、其他段都不动（删到零段时群行一并收掉，见 store）；
+   *     整个群不要了走「解散」（记录留着、成员关系解除）。
+   *   · exec（工单会话）→ 它是任务卡 / 流程的载体，删它等于抽掉办过的痕迹。
+   *
+   * 三道校验（存在 / 是 direct / 没有跑中的 run）都在 `store.deleteConversation` 里做，
+   * 这里只负责**映射成对的状态码与错误码** —— 前端可以被绕过、接口也能被直接调，
+   * 所以「store 里再判一遍」是底线，不是重复（同 DELETE /api/personas/:id 的两道关）。
+   *
+   * 回整份 `conversations` 是跟 hide 保持一致：同一个界面、同一套前端流程，
+   * 前端一行 `S.conversations = r.conversations` 就够，不用再 load() 一次。
+   * `hiddenConversations` 一起回，是因为聊天记录抽屉可能正列着它（删完要立刻消失）。
+   */
+  if (req.method === 'DELETE' && detail) {
+    const id = decodeURIComponent(detail[1]);
+    const r = store.deleteConversation(id);
+    if (!r.ok) {
+      if (r.why === 'not-found') {
+        return fail(res, 404, 'E2047', '这段会话已经不在了（可能刚被删过）');
+      }
+      if (r.why === 'not-deletable') {
+        return fail(res, 400, 'E1050', '工单会话不能这样删 —— 它属于任务卡 / 流程，请去那边删任务');
+      }
+      // 「这段正在跑」是**当前状态冲突**，不是请求格式错 —— 所以 409（E4xxx 段），不是 400
+      return fail(res, 409, 'E4002', '这段还在跑，等它跑完或先终止再删', r.runId ? { runId: r.runId } : null);
+    }
+    return sendJson(res, 200, {
+      deleted: true,
+      id,
+      conversations: store.listConversations(),
+      hiddenConversations: store.listHiddenConversations(),
+    });
   }
 
   /**
@@ -430,7 +476,19 @@ async function handleConversation(req, res, url) {
       return fail(res, 400, 'E1037', '这次请求没说改哪一项 —— 这个接口只能改「权限」(sandbox) 或「模型」(model)');
     }
     let conversation = store.getConversation(id);
-    if (!conversation) return fail(res, 404, 'E2003', '会话不存在');
+    /*
+     * 404 的码同样是 `E2047`（2026-10-20，设计 §4.1.1 统一；原 `E2003`）。
+     *
+     * 理由与下面 GET 那段一样：**「会话不存在」是一个概念，就该只有一个码**。
+     * 三个 404 入口（GET / PUT / DELETE）里留一个不一样的，就是给下一个人挖坑 ——
+     * 何况 `E2047` 的定义本来就是「会话不存在」，给它加个"仅限删除"的隐含限定没有道理。
+     * 码与文案一起对齐：**状态码仍是 404**；文案改成与 GET 逐字相同的那句 ——
+     * 「同一个概念在两个接口上说两种话」只会让用户以为是两个不同的问题（一个说"不存在"、
+     * 一个说"已经不在了"，其实都是"这段没了"）。
+     * 这个接口的前端 catch 仍不接 `toastConvErr`（那是「改权限 / 模型」的界面，不在本次范围，
+     * 失败提示行为保持原样，只是里面那句中文跟着变了）。
+     */
+    if (!conversation) return fail(res, 404, 'E2047', '这段会话已经不在了（可能刚被删过）');
     if (wantsSandbox) conversation = store.setConversationSandbox(id, body.sandbox ? String(body.sandbox) : null);
     if (wantsModel) conversation = store.setConversationModel(id, body.model ? String(body.model) : null);
     return sendJson(res, 200, { conversation });
@@ -439,7 +497,19 @@ async function handleConversation(req, res, url) {
   if (req.method === 'GET' && detail) {
     const id = decodeURIComponent(detail[1]);
     const conversation = store.getConversation(id);
-    if (!conversation) return fail(res, 404, 'E2004', '会话不存在');
+    /*
+     * 404 的码从 `E2004` 改成了 `E2047`（2026-10-20，会话改造 v1.1 收口）。
+     *
+     * 为什么改：`E2047` 的定义就是「**会话不存在**」，而「这段被另一个窗口删了」这件事
+     * 在**回看**（这个 GET）和**删除**（下面的 DELETE）两个入口上必须给同一个码 ——
+     * 前端 `openConversationSafe` 就是靠 `err.code === 'E2047'` 认出"这段没了"，
+     * 好把右栏收拾干净并说人话（设计 §5.6.1 路径 2/3 明确写的是「GET 返回 E2047」）。
+     * 两个码表示同一件事，只会让人多写一条映射，还容易漏。
+     * 上面 PUT 那段同理（原 `E2003`）—— 三个 404 入口统一口径，见设计 §4.1.1。
+     *
+     * `E2004` / `E2003` 全仓没有第二处引用（前端也不解析它们），换掉不影响任何调用方。
+     */
+    if (!conversation) return fail(res, 404, 'E2047', '这段会话已经不在了（可能刚被删过）');
     return sendJson(res, 200, {
       conversation,
       messages: store.listMessages(id),
@@ -452,6 +522,17 @@ async function handleConversation(req, res, url) {
     const body = await readBody(req);
     const text = String(body.text ?? '').trim();
     if (!text) return fail(res, 400, 'E1010', '说点什么');
+
+    /*
+     * 已解散的群：**只读**（2026-10-20 用户定：解散后消息留在消息列表里，但不能再聊）。
+     * 前端已经把输入框置灰了，这里再拦一次 —— 接口能被直接调，而且"解散后 thread_members 空了"
+     * 会让 dispatcher 找不到人、表现成"点了没反应"（比报错更难查）。
+     * 用 E2049（与「群已解散，不能再开会话」同一个概念：这个群结束了）。
+     */
+    const conv0 = store.getConversation(id);
+    if (conv0?.dissolvedAt) {
+      return fail(res, 409, 'E2049', '这个群已经解散了，只能查看聊天记录');
+    }
 
     // 校验、派活全在 dispatchToThread 里（工作流引擎也走它）—— 这里只管 HTTP 状态码
     try {
@@ -513,7 +594,7 @@ async function handlePersona(req, res, url) {
 
     const r = store.deletePersona(id);
     // 只回结果。别再塞整份员工/会话列表 —— 前端会 load() 重拉，塞了就是白传几 KB
-    return sendJson(res, 200, { ...r, archivedCount: store.countArchived() });
+    return sendJson(res, 200, { ...r });
   }
 
   // 关联技能（多选）
@@ -636,95 +717,129 @@ async function handlePersona(req, res, url) {
   return false;
 }
 
-/** 群的加人 / 踢人 / 改名 */
+/** 群的加人 / 踢人 / 改名 / 新开会话 */
 async function handleGroup(req, res, url) {
-  const rename = /^\/api\/groups\/([^/]+)$/.exec(url.pathname);
+  const one = /^\/api\/groups\/([^/]+)$/.exec(url.pathname);
+  const sessions = /^\/api\/groups\/([^/]+)\/sessions$/.exec(url.pathname);
   const members = /^\/api\/groups\/([^/]+)\/members$/.exec(url.pathname);
-  const one = /^\/api\/groups\/([^/]+)\/members\/([^/]+)$/.exec(url.pathname);
+  const member = /^\/api\/groups\/([^/]+)\/members\/([^/]+)$/.exec(url.pathname);
 
-  if ((req.method === 'PATCH' || req.method === 'PUT') && rename) {
-    const id = decodeURIComponent(rename[1]);
-    const thread = store.getConversation(id);
-    if (!thread || thread.kind !== 'group') return fail(res, 404, 'E2011', '群不存在');
+  /*
+   * 读一个群的详情（名字 / 群助手 / 成员）。**不是会话** —— 2026-10-20 起群有自己的表，
+   * 一个群下面有多段会话。通讯录的群详情页走这条。
+   */
+  if (req.method === 'GET' && one) {
+    const g = store.getGroup(decodeURIComponent(one[1]));
+    if (!g) return fail(res, 404, 'E2011', '群不存在');
+    return sendJson(res, 200, { group: g });
+  }
+
+  if ((req.method === 'PATCH' || req.method === 'PUT') && one) {
+    const id = decodeURIComponent(one[1]);
+    const g = store.getGroup(id);
+    if (!g) return fail(res, 404, 'E2011', '群不存在');
 
     const body = await readBody(req);
     const title = String(body.title ?? '').trim();
     const nextAssistant = body.assistantPersonaId ? String(body.assistantPersonaId) : '';
 
-    // 同上：把"能改什么"一并说清楚，别只留一句"没说要改什么"
     if (!title && !nextAssistant) {
       return fail(res, 400, 'E1039', '这次请求没说改哪一项 —— 这个接口只能改「群名称」(title) 或「群助手」(assistantPersonaId)');
     }
-
     if (nextAssistant) {
       if (!store.getPersona(nextAssistant)) return fail(res, 400, 'E1012', '这个数字员工不存在');
-      if (!thread.members.some((m) => m.personaId === nextAssistant)) {
+      if (!g.members.some((m) => m.personaId === nextAssistant)) {
         return fail(res, 400, 'E1013', '群助手得先是群里的人');
       }
-      store.setAssistantPersona(id, nextAssistant);
     }
-    if (title) store.renameConversation(id, title);
-
-    return sendJson(res, 200, { conversation: store.getConversation(id) });
+    // 群级改 + 同步到每一段会话（列表/聊天头部读的是会话上的镜像字段）
+    const next = store.updateGroup(id, { title: title || '', assistantPersonaId: nextAssistant || '' });
+    return sendJson(res, 200, { group: next });
   }
 
-  // 解散群：**不抹聊天记录**，只解除成员关系 + 归档（见 store.dissolveGroup）。
-  // 还在跑就先掐掉 —— 别让一个已经解散的群还在后台说话。
-  if (req.method === 'DELETE' && rename) {
-    const id = decodeURIComponent(rename[1]);
-    const thread = store.getConversation(id);
-    if (!thread || thread.kind !== 'group') return fail(res, 404, 'E2012', '群不存在');
+  // 解散群：**不抹聊天记录**，只解除成员关系 + 把各段会话收起来（见 store.dissolveGroup）。
+  if (req.method === 'DELETE' && one) {
+    const id = decodeURIComponent(one[1]);
+    const g = store.getGroup(id);
+    if (!g) return fail(res, 404, 'E2012', '群不存在');
 
-    const running = store.activeRun(id);
-    if (running) runs.getRun(running.id)?.abortController?.abort();
+    // 还在跑就先掐掉 —— 别让一个已经解散的群还在后台说话
+    let stopped = null;
+    for (const s of store.listGroupSessions(id)) {
+      const running = store.activeRun(s.id);
+      if (running) {
+        runs.getRun(running.id)?.abortController?.abort();
+        stopped = running.id;
+        break;
+      }
+    }
 
     const conv = store.dissolveGroup(id);
     return sendJson(res, 200, {
       dissolved: true,
-      stoppedRunId: running?.id ?? null,
-      conversation: conv,
-      // 跟 /hide 一样回一份新列表：前端直接换掉，不用再拉一次
+      stoppedRunId: stopped,
+      group: conv,
       conversations: store.listConversations(),
+      hiddenConversations: store.listHiddenConversations(),
     });
+  }
+
+  /*
+   * 给群**开一段新会话**（群详情页「发消息」）。
+   * 跟单聊的 `POST /api/conversations` 对称：一次任务一段，上下文不串味。
+   */
+  if (req.method === 'POST' && sessions) {
+    const id = decodeURIComponent(sessions[1]);
+    const g = store.getGroup(id);
+    /*
+     * 码段不跟别的域抢：E2016 / E2017 已经归「技能」用了（见 handleSkill），
+     * 群会话这两条从 E2048 往后排（E2047 是会话 404 统一下来的最后一个）。
+     */
+    if (!g) return fail(res, 404, 'E2048', '群不存在');
+    if (g.dissolvedAt) return fail(res, 400, 'E2049', '这个群已经解散了，不能再开会话');
+    const conv = store.createGroupSession(id);
+    if (!conv) return fail(res, 400, 'E2049', '这个群已经解散了，不能再开会话');
+    return sendJson(res, 201, { conversation: conv, conversations: store.listConversations() });
   }
 
   if (req.method === 'POST' && members) {
     const id = decodeURIComponent(members[1]);
-    const thread = store.getConversation(id);
-    if (!thread || thread.kind !== 'group') return fail(res, 404, 'E2013', '群不存在');
+    const g = store.getGroup(id);
+    if (!g) return fail(res, 404, 'E2013', '群不存在');
 
     const body = await readBody(req);
     const ids = (Array.isArray(body.personaIds) ? body.personaIds : []).map(String);
     if (!ids.length) return fail(res, 400, 'E1014', '没选人');
 
-    const already = new Set(thread.members.map((m) => m.personaId));
+    const already = new Set(g.members.map((m) => m.personaId));
     const added = [];
     const skipped = [];
     for (const pid of ids) {
       if (!store.getPersona(pid)) { skipped.push(pid); continue; }
       if (already.has(pid)) { skipped.push(pid); continue; }
-      store.addMember(id, pid);
       added.push(pid);
     }
-    return sendJson(res, 200, { added, skipped, conversation: store.getConversation(id) });
+    // 群级加人（每段会话都会补上成员快照），不是只加当前这段
+    if (added.length) store.addGroupMembers(id, added);
+    return sendJson(res, 200, { added, skipped, group: store.getGroup(id) });
   }
 
-  if (req.method === 'DELETE' && one) {
-    const id = decodeURIComponent(one[1]);
-    const personaId = decodeURIComponent(one[2]);
-    const thread = store.getConversation(id);
-    if (!thread || thread.kind !== 'group') return fail(res, 404, 'E2014', '群不存在');
+  if (req.method === 'DELETE' && member) {
+    const id = decodeURIComponent(member[1]);
+    const personaId = decodeURIComponent(member[2]);
+    const g = store.getGroup(id);
+    if (!g) return fail(res, 404, 'E2014', '群不存在');
 
     // 群助手不能被移出：移了「没 @ 就找群助手」这条规则就断了
-    if (personaId === thread.assistantPersonaId) {
+    if (personaId === g.assistantPersonaId) {
       return fail(res, 400, 'E1015', '群助手不能被移出群。先把群助手换成别人，再移出他。');
     }
-    if (!thread.members.some((m) => m.personaId === personaId)) {
+    if (!g.members.some((m) => m.personaId === personaId)) {
       return fail(res, 404, 'E2015', '他不在这个群里');
     }
 
-    store.removeMember(id, personaId);
-    return sendJson(res, 200, { removed: personaId, conversation: store.getConversation(id) });
+    store.removeGroupMember(id, personaId);
+    return sendJson(res, 200, { removed: personaId, group: store.getGroup(id) });
   }
 
   return false;

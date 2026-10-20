@@ -60,6 +60,9 @@ const HOST_ALLOW = [
   'usemagpie.ai',
   '127.0.0.1',
   'localhost',
+  // SVG 的命名空间标识符（`xmlns="http://www.w3.org/2000/svg"`）不是网络请求，
+  // 浏览器/编辑器不会去 GET 它；2026-10-20 新增独立图标母版 icons/icon.svg 时被误判成"外部地址"。
+  'www.w3.org',
 ];
 
 /** 改了这些 = 需要人看一眼（提示，不拦） */

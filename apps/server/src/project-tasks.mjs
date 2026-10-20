@@ -500,7 +500,7 @@ export function startProjectTask(id, { allowIdea = false } = {}) {
   /*
    * **这张卡自己的工单会话**（2026-10-18）：一条卡一条，返工续它。
    * 原来派进执行人的 1:1 —— 卡越干越多，聊天上下文被撑爆，而且一个员工同一时刻
-   * 只能干一件活。现在卡的往来只落在这条会话里，消息模块归到「手上的活」。
+   * 只能干一件活。现在卡的往来只落在这条会话里，不进消息列表（从工作台 / 任务进去）。
    */
   const conv = store.ensureExecConversation({
     personaId: persona.id,

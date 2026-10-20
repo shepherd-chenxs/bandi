@@ -1,1 +1,1 @@
-{"default":{"identifier":"default","description":"空壳最小权限：只开主窗口，不给文件系统、shell、网络权限。","local":true,"windows":["main"],"permissions":["core:default"]}}
+{"default":{"identifier":"default","description":"空壳最小权限：只开主窗口，不给文件系统、shell、网络权限。唯一的例外是 setTheme —— 页面切深浅色时要同步到原生标题栏（2026-10-20 用户报「深色模式顶栏没变化」）。","remote":{"urls":["http://127.0.0.1:8787","http://localhost:8787"]},"local":true,"windows":["main"],"permissions":["core:default","core:window:allow-set-theme"]}}

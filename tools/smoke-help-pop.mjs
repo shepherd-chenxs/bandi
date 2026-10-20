@@ -197,7 +197,9 @@ function grab(re) {
   return m[0];
 }
 const code = [
-  grab(/let helpPop = null;[\s\S]*?\n}\n(?=\n\/\* -+ 自建下拉)/),
+  /* 抠到 `wireHelpPop` 结尾为止；后面的段落标记 2026-10-20 从「自建下拉」换成了「悬浮提示（自建 data-tip）」
+     —— 这里只是"截到哪儿"的界标，别把它当成被测功能的断言。 */
+  grab(/let helpPop = null;[\s\S]*?\n}\n(?=\n\/\* -+ 悬浮提示)/),
 ].join('\n');
 const run = new Function('document', 'window', `${code}\nreturn { wireHelpPop, closeHelpPop };`);
 const { wireHelpPop, closeHelpPop } = run(sandbox.document, sandbox.window);

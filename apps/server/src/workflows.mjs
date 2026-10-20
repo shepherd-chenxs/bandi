@@ -394,7 +394,7 @@ export function startCurrentStep(runId, { force = false } = {}) {
    * **这条流程自己的工单会话**（2026-10-18）。
    * 原来派进经办人唯一那条 1:1 —— 于是流程消息和聊天混在一起，而且一个员工同一时刻
    * 只能干一件活（忙判定按会话算）。现在一条流程一套会话：上下文连续、执行槽独立，
-   * 消息模块里也归到「手上的活」那一组，不再淹没人和员工的对话。
+   * 消息列表里不出现（从工作台 / 流程页进去），不再淹没人和员工的对话。
    */
   const conv = runConversation(run, task.assigneePersonaId);
   store.setWorkflowRunThread(runId, conv); // 记下"这一步在哪个会话"，实例页和会话卡片要用

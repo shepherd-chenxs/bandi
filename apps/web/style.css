@@ -88,8 +88,12 @@
   --scroll: #2c2e32;         /* 滚动条滑块：Linear 那种"几乎看不见"，悬停才显形 */
   --scroll-hover: #3d4045;
   /* 看板列的"凹槽底"。**不能用 --panel / --side**（浅色下它们都是纯白）——
-     白列配白卡片就分不出层了。深色取在页面底与卡片之间。 */
-  --well: #0b0c0e;
+     白列配白卡片就分不出层了。深色取在页面底与卡片之间。
+     ⚠️ 深色原来取 #0b0c0e —— 跟 --bg #08090a 只差 3/255，看板上七列整个"隐身"
+     （2026-10-20 用户深色截图实报）。提到 #0f1013：比 bg 亮出可见的一档，
+     又仍比卡片底 --panel #111214 暗，"卡浮在槽里"的层次不变；
+     浅色 #eceef1 对 #f7f8f9 差 9 档，深色 7 档正对应（深色下小差更显眼，不必等量）。 */
+  --well: #0f1013;
 
   /* ── 品牌与标识色（原来 27 处写死在各个 class 里，浅色主题根本覆盖不到）──
      两个约束：① **白字压在渐变起点上必须 ≥ 4.5:1**（图标里只有一个字，14~19px，
@@ -101,8 +105,20 @@
   --ico-flow: #4b6cb7; --ico-flow-2: #2b3f7a;  /* 流程（5.09）—— 跟 proj 同色系但更深，分成两档 */
   --ico-board: #0d7d70; --ico-board-2: #08423b; /* 看板（5.02） */
   --ico-cron: #a86400; --ico-cron-2: #5c3600;   /* 定时（4.68） */
-  --av-cli: #3a5a8c; --av-cli-2: #16233a;      /* 运行时 / 流程（6.95） */
-  --av-skill: #6d4fc4; --av-skill-2: #2b1d52;  /* 技能（5.89） */
+  /* ── 图标块（字母块 / 品牌图形块）的**成对** token（2026-10-20 收口）──
+     为什么要成对：一天里连着四次「看不清」（运行时图标 / 技能块 / 群头像 / 折叠卡），
+     病根全一样 —— 底色和字色分开定义，改一个忘一个，最后绿底压灰字、深蓝底压小字母。
+     规矩：**凡是要在方框里放字母或图形的，只准用下面这几对**，
+     不准再在 class 或内联样式里就地写 background + color。
+     ⚠️ 深色是默认值（本块），浅色在 `:root[data-theme='light']` 覆盖 ——
+     新增一个品牌时**两套都要给**，只给一套就是"浅色能看、深色刺眼"，今天修的那批就是这么埋下的。
+     括号里是实测对比度（相对亮度 → (L1+.05)/(L2+.05)，统一按 4.5 收）。 */
+  --tile-cli-bg: #1e2227;    --tile-cli-fg: #d3d9e2;      /* 认不出的 CLI（11.26） */
+  --tile-skill-bg: #241f33;  --tile-skill-fg: #c3b3f0;    /* 技能（8.36） */
+  --tile-codex-bg: #23262b;  --tile-codex-fg: #e8e9ea;    /* Codex / OpenAI（12.49） */
+  --tile-claude-bg: #2b211d; --tile-claude-fg: #e79a7a;   /* Claude / Anthropic（6.95） */
+  --tile-dsh-bg: #1c2038;    --tile-dsh-fg: #8fa3ff;      /* DeepSeek（6.74） */
+  --tile-magpie-bg: #16292d; --tile-magpie-fg: #5cc7d8;   /* magpie（7.64） */
   --av-grp: #2b7062; --av-grp-2: #123028;      /* 群（5.84） */
   --av-dim: #2b3a55; --av-dim-2: #1a2233;      /* 旧小号头像底色（已弃用，见 .avatar.sm） */
   /* 四档底色：中性灰蓝 / 偏蓝 / 偏紫 / 偏青。
@@ -178,8 +194,13 @@
   --ico-flow: #4b6cb7; --ico-flow-2: #33509c;
   --ico-board: #0d7d70; --ico-board-2: #0a6659;
   --ico-cron: #a86400; --ico-cron-2: #8a5200;
-  --av-cli: #3a5a8c; --av-cli-2: #2a4468;
-  --av-skill: #6d4fc4; --av-skill-2: #5a3fae;
+  /* 图标块 token 的浅色档（深色档在 :root，见那儿的规矩说明） */
+  --tile-cli-bg: #eef2f8;    --tile-cli-fg: #2f4a72;      /* 7.98 */
+  --tile-skill-bg: #efeafc;  --tile-skill-fg: #4a3390;    /* 8.23 */
+  --tile-codex-bg: #f3f4f6;  --tile-codex-fg: #111827;    /* 16.12 */
+  --tile-claude-bg: #fdf1ec; --tile-claude-fg: #b04e2e;   /* 4.77 */
+  --tile-dsh-bg: #eef1ff;    --tile-dsh-fg: #3f5ae0;      /* 4.98 */
+  --tile-magpie-bg: #e8f5f7; --tile-magpie-fg: #0e7490;   /* 4.81 */
   --av-grp: #2b7062; --av-grp-2: #1f5a4e;
   --av-dim: #52688c; --av-dim-2: #3d4f6e;
   /* 浅色小头像：四档都要**压得住白字**（实测 7.75 / 7.79 / 8.06 / 7.9:1）。
@@ -255,7 +276,8 @@ body.no-list .list-panel { display: none; }
    它跟页面是一体的，靠右边那条 1px 竖线分开。
    `--card`（iOS 的浮起次级面）在全局统一 Linear 之后不再用于结构面。 */
 .list-panel { background: var(--side); border-right: 1px solid var(--line);
-              display: grid; grid-template-rows: auto auto 1fr; min-height: 0; }
+              /* 四行：标题 / 搜索 / 列表（吃掉剩余高度）/ **底部固定条**（「已归档」） */
+              display: grid; grid-template-rows: auto auto 1fr auto; min-height: 0; }
 .list-head { position: relative; padding: 14px 16px 8px; display: flex; align-items: center; justify-content: space-between;
              /* 面包屑变长（三四段）时会超出 300px 的左栏：grid 子项默认 min-width:auto 会按
                 max-content 撑开（实测 list-head 宽 353、盖到主区上），必须显式 min-width:0，
@@ -400,26 +422,78 @@ body.no-list .list-panel { display: none; }
       颜色会静默不生效（原来那个 .flow-t-bad 连规则都没有，所以"卡住"一直是灰的）。 */
 .item .line1 .flow-t.ok { color: var(--ok); }
 .item .line1 .flow-t.bad { color: var(--bad); }
-/* × 是透明底、浮在时间上面 —— 悬浮那一刻把时间淡掉，免得两层字叠一起 */
-.item:hover .line1 span { opacity: 0; }
 .item .line2 { font-size: 12px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 兜底：左栏行只认两种写法 —— 标准的 .line1/.line2，或简写的直接 b/.sub。
+   简写也必须长得跟标准一模一样（2026-10-20 收口：「服务器与密钥 / 项目面板」的行
+   原来没有任何规则 —— 标题是浏览器默认的 16px 加粗、副标题全色还折行，
+   跟「项目」页一对比就是两套界面）。判据：副标题是路径 / 地址 / 状态这种次要信息。 */
+.item .who > b { font-weight: 500; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.item .who > .sub { font-size: 12px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* 忙/闲的小圆点（通讯录里一眼看出谁能马上接活）：闲=灰，忙=绿并轻微呼吸 */
 .dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: var(--line); }
 .dot.busy { background: var(--ok); animation: dot-pulse 1.6s ease-in-out infinite; }
 @keyframes dot-pulse { 50% { opacity: .35; } }
 
-/* 悬停才露出的「从列表移除」×：平时不占视觉，鼠标上来才出现 */
-.item-x { position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
-          opacity: 0; width: 22px; height: 22px; padding: 0;
-          border: 1px solid var(--line); border-radius: 6px;
-          font-size: 15px; line-height: 1; cursor: pointer;
-          /* 背景透明、只留描边；悬浮时下面的时间会淡出（见 .item:hover .line1 span） */
-          background: transparent; color: var(--dim); transition: opacity .12s;
-          /* 看不见的时候也不能点 —— 否则点时间那一片会误删会话 */
-          pointer-events: none; }
-.item:hover .item-x { opacity: 1; pointer-events: auto; }
-.item-x:hover { background: var(--chip-x-hover); border-color: var(--bad); color: var(--bad); }
+/* 悬停只做背景高亮 —— 列表项上不再有「×」按钮（2026-10-20 改右键菜单）：
+   原来那个 × 是透明底浮在时间上，所以要配一条「.item:hover .line1 span { opacity: 0 }」
+   把时间淡掉。× 没了以后那条规则也必须一起删 —— 否则悬停时时间戳会**凭空消失**。 */
+
+/* 列表项右键菜单（删除 / 不显示）。单例浮层，position:fixed 跟光标走。
+   z-index 60 > #drawer(41) > #scrim(40)：抽屉开着也压得住。 */
+.ctx-menu { position: fixed; z-index: 60; min-width: 148px; padding: 4px;
+            background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+            box-shadow: 0 8px 24px var(--shadow); }
+.ctx-menu[hidden] { display: none; }
+.ctx-item { display: block; width: 100%; text-align: left; padding: 7px 10px; border: 0;
+            background: none; color: var(--text); font-size: 13px; border-radius: 6px;
+            font-family: inherit; cursor: pointer; }
+.ctx-item:hover:not([disabled]), .ctx-item:focus-visible { background: var(--hover); outline: none; }
+.ctx-item.danger { color: var(--bad); }
+.ctx-item[disabled] { color: var(--dim); opacity: .55; cursor: default; }
+
+/* 悬浮提示（自建，替原生 title）。原生那个框是 Chromium/系统画的，改不了圆角 ——
+   用户要圆角只能自己画。底色取 --text / 字色取 --panel 是"反相"写法：
+   浅色主题下黑底白字、深色主题下白底黑字，两套主题都不用另配变量。
+   position:fixed + 由 JS 现算坐标（贴边时往回收），所以 z-index 要压过 ctx-menu(60)。
+   pointer-events:none —— 提示不能挡住它自己底下的按钮。 */
+.tip-pop { position: fixed; z-index: 80; max-width: 260px; padding: 5px 9px; border-radius: 8px;
+           background: var(--text); color: var(--panel); font-size: 12px; line-height: 1.5;
+           box-shadow: 0 6px 18px var(--shadow); pointer-events: none;
+           opacity: 0; transition: opacity .12s ease; }
+.tip-pop.on { opacity: 1; }
+.tip-pop[hidden] { display: none; }
+
+/* 「聊天记录」抽屉（复用 #drawer 这一个容器，S.drawerKind 分流内容） */
+.chatlog-sec { padding: 10px 2px 4px; font-size: 11.5px; color: var(--dim); letter-spacing: .02em; }
+.chatlog-row { padding: 9px 10px; border-radius: 8px; cursor: pointer; }
+.chatlog-row:hover { background: var(--hover); }
+.chatlog-row .t { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.chatlog-row .t b { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden;
+                    text-overflow: ellipsis; }
+.chatlog-row .t span { font-size: 11.5px; color: var(--dim); flex: 0 0 auto; }
+.chatlog-row .s { margin-top: 2px; font-size: 12px; color: var(--dim); white-space: nowrap;
+                  overflow: hidden; text-overflow: ellipsis; }
+.chatlog-cur { margin-left: 6px; font-style: normal; font-size: 10.5px; color: var(--accent);
+               border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+
+/*
+ * 「已归档」入口（消息列表最底部那行）。
+ *
+ * 为什么压这么轻：它是低频收件箱，天天在眼前但不能抢列表的注意力 ——
+ * 只用一条细分隔线 + 小图标 + 灰字，hover 才亮起来。
+ */
+/* 底部固定条：它**不在** .list-body 里（那里会跟着滚），而是列表栏的最后一行格子 ——
+   会话再多也永远挂在最下面。没内容时整条不占高度。 */
+.list-foot:empty { display: none; }
+.list-foot { border-top: 1px solid var(--line); padding: 6px 8px 8px; }
+.arch-entry { display: flex; align-items: center; gap: 6px; padding: 6px 10px;
+              border-radius: 6px; font-size: 12.5px; color: var(--dim);
+              cursor: pointer; user-select: none; }
+.arch-entry:hover { color: var(--text); background: var(--hover); }
+.arch-entry svg { flex: 0 0 auto; opacity: .8; }
+.arch-n { margin-left: 2px; font-size: 11px; color: var(--dim); background: var(--chip);
+          border-radius: 999px; padding: 0 6px; line-height: 16px; }
 
 /* 「已移除的会话」入口的图标 */
 .avatar.arch { background: var(--chip); color: var(--dim); font-size: 13px; }
@@ -504,31 +578,44 @@ main { min-height: 0; }
    `1fr` 会把 4 块磁贴摊到 1000px 宽里，每块 250px —— 图标还是 40px，
    于是每块磁贴的左右各空 100px，整排看着像"四个孤零零的点撒在左边缘"。
    定宽之后磁贴挨在一起成组，右边留白变成一整块（这是对的：留白成块才像呼吸，撒开就像漏排）。 */
-.wb-grid { display: grid; grid-template-columns: repeat(auto-fill, 96px); gap: 4px;
-           justify-content: start; }
-.wb-tile { display: flex; flex-direction: column; align-items: center; gap: 8px;
-           padding: 14px 6px 12px; border: 1px solid transparent; border-radius: 10px;
-           background: transparent; cursor: pointer; -webkit-tap-highlight-color: transparent; }
-.wb-tile:hover { background: var(--hover); }
-.wb-tile:active { background: var(--active); }
-.wb-ico { width: 40px; height: 40px; border-radius: 12px; display: flex;
+/* 工作台磁贴（2026-10-20 重设计）：**横向卡片**，图标在左、名字 + 一句说明在右。
+   原来是 96px 定宽的"图标 + 名字"小磁贴竖着一列列排 —— 入口少时整页右半全空，
+   而且光秃秃一个名字，用户得悬停才知道去哪儿。卡片化之后：
+   · 自适配列宽（minmax 240px），宽屏一行摆得下更多、窄屏自动换行，不再大片留白；
+   · 说明直接亮在卡上，入口页才有"总览"的样子。
+   左栏收起（.no-list）之后内容区很宽，240px 一张卡一行能放 3~4 张，不挤。 */
+.wb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+           gap: 12px; justify-content: start; }
+.wb-tile { display: flex; align-items: center; gap: 12px; padding: 14px; text-align: left;
+           border: 1px solid var(--line); border-radius: 10px; background: var(--panel);
+           cursor: pointer; -webkit-tap-highlight-color: transparent;
+           transition: border-color .12s, box-shadow .12s, transform .12s; }
+.wb-tile:hover { border-color: var(--accent); box-shadow: 0 4px 14px var(--shadow);
+                 transform: translateY(-1px); }
+.wb-tile:active { transform: translateY(0); box-shadow: none; }
+.wb-ico { width: 40px; height: 40px; border-radius: 11px; display: flex; flex: 0 0 auto;
           align-items: center; justify-content: center; color: var(--on-solid);
-          font-size: 17px; font-weight: 600; flex: 0 0 auto;
+          font-size: 16px; font-weight: 600;   /* 插件磁贴仍是首字母兜底，SVG 不受这行影响 */
           /* 一档极淡的高光，让色块有"实体"感而不是一块平涂。
              用 --on-solid（就是白色）而不是写死 #fff：这样"色块上的白"只有一个来源。 */
           box-shadow: inset 0 1px 0 color-mix(in srgb, var(--on-solid) 16%, transparent);
           background: linear-gradient(135deg, var(--logo-1), var(--logo-2)); }
-/* 名字**限宽居中** —— 中文名能撑到两行的就两行（"流程编排"），再长才省略 */
-.wb-name { font-size: 12.5px; color: var(--text); text-align: center; line-height: 1.3;
-           max-width: 100%; overflow-wrap: anywhere;
-           display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+/* 线性 SVG 图标（2026-10-20 换掉"单字色块"）：占色块一半，笔画呼吸感跟全站图标一致 */
+.wb-ico svg { width: 20px; height: 20px; display: block; }
+/* 名字 + 说明两行：说明 12px 弱色、单行省略 —— 卡片高度被图标钉死，说明再长也不换行 */
+.wb-tx { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.wb-name { font-size: 13.5px; font-weight: 500; color: var(--text); line-height: 1.3;
+           overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wb-desc { font-size: 12px; color: var(--dim); line-height: 1.4;
+           overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 插件磁贴：**按分组取色**（颜色由 app.js 的 wbIcoStyle 内联给出，见那里的注释）。
    兜底是品牌蓝 —— 万一哪天没带 --wb-1/--wb-2，磁贴也不会变成透明色块。 */
 .wb-ico.has-plug { background: linear-gradient(135deg,
                       var(--wb-1, var(--logo-1)), var(--wb-2, var(--logo-2))); }
-/* 分组小标题：它是分组唯一还剩下的"分" —— **不带分隔线、不占一条横带**，只占一行字。
-   靠"离上远（20px）、离下近（8px）"表达从属关系，比画一条线轻。
-   `:first-child` 去掉上边距：整页第一组不该顶着页头往下缩。 */
+/* 分组小标题：一行字，**组与组之间加一条分隔线**（2026-10-20 用户："加分隔线"）。
+   卡片化之后一组能撑满好几行，光靠 20px 上边距已经分不清"这是新一组还是上一组的第二行" ——
+   一条 1px 细线把组切开，比加大留白省地方、也比给每组套一个色块框轻。
+   第一组不画线（它顶着页头，再画一道就成了"页头和内容之间莫名有条杠"）。 */
 /* 字号 / 字重 / 字距**跟左栏 `.list-sec` 对齐**（11.5px / 600 / .3px）：
    两边是同一个语义（分组），同一个 app 里不该有两种分组标题。
    ⚠️ **别去掉字距**：.3px 是给中文分组名留的呼吸，去掉之后"研发""运维"会贴成一坨，
@@ -536,6 +623,7 @@ main { min-height: 0; }
 .wb-sec { font-size: 11.5px; font-weight: 600; letter-spacing: .3px; color: var(--dim);
           margin: 20px 0 8px; padding-left: 2px; }
 .wb-sec:first-child { margin-top: 0; }
+.wb-sec:not(:first-child) { margin-top: 26px; padding-top: 16px; border-top: 1px solid var(--line); }
 /* **插件**的图标角上挂一个小角标：工作台里混着平台自带的入口（项目 / 任务看板 / 流程），
    只靠磁贴样子分不出哪个是装进来的插件。
    位置是**骑在图标左上那个圆角上** —— 一多半压在色块上、一少半探出去。
@@ -1069,10 +1157,30 @@ main { min-height: 0; }
 /* 描述最多三行 —— 长了会把卡片撑得高低不齐，宫格就歪了 */
 .sk-card .sub { color: var(--dim); font-size: 12px; line-height: 1.5; margin-top: 4px;
                 display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.avatar.cli { background: linear-gradient(135deg, var(--av-cli), var(--av-cli-2)); border-radius: 10px; }
+/* ── 头像只有**两类**，别再加第三类（2026-10-20 收口）──
+   ① 身份类（人 / 群）：**深底白字**。颜色承担"这是谁"，色相要能区分，字必须近白
+      （人＝avatarStyle() 按名字哈希发色，群＝.avatar.grp 固定深绿）。
+   ② 物品类（CLI / 技能）：**淡底深字**。它们是"东西"不是"人"，颜色只是标识，
+      不该抢行的注意力，所以反过来用浅底 + 品牌色字形（token 见文件头的 --tile-*）。
+   一句话判断：**能聊天的走①，不能聊天的走②**。
+   两类的说明文字都在本段与 app.js 的 cliAvatar / avatarStyle 上，改之前先看这里。 */
+
+/* 运行时 / 外部件的图标块：颜色全部来自 --tile-* 一对 token（浅深两套主题都在文件头定义），
+   JS 只负责给 data-brand —— **不再内联写颜色**（2026-10-20 收口的重点：
+   昨天那版把浅色调写进了 app.js，切深色主题就成了一排亮块）。 */
+.avatar.cli { background: var(--tile-cli-bg); color: var(--tile-cli-fg);
+              border-color: transparent; font-size: 15px; font-weight: 600; border-radius: 10px; }
+.avatar.cli svg { width: 21px; height: 21px; display: block; }
+.avatar.cli[data-brand='codex']  { background: var(--tile-codex-bg);  color: var(--tile-codex-fg); }
+.avatar.cli[data-brand='claude'] { background: var(--tile-claude-bg); color: var(--tile-claude-fg); }
+.avatar.cli[data-brand='dsh']    { background: var(--tile-dsh-bg);    color: var(--tile-dsh-fg); }
+.avatar.cli[data-brand='magpie'] { background: var(--tile-magpie-bg); color: var(--tile-magpie-fg); }
 /* 💤 `.avatar.proj`（项目详情那枚蓝色「班」字方块）2026-10-19 用户要求去掉，已删 ——
    项目名本身就是标题，色块没有信息量；别再加回来。员工头像那枚 `.avatar` 仍在用。 */
-.avatar.skill { background: linear-gradient(135deg, var(--av-skill), var(--av-skill-2)); border-radius: 8px; }
+/* 技能图标块：同属"物品类"（淡底深字），颜色走 --tile-skill-* 一对 token，
+   深色主题自动跟着换 —— 不要再往这里写死颜色。 */
+.avatar.skill { background: var(--tile-skill-bg); color: var(--tile-skill-fg); border-color: transparent;
+                font-size: 15px; font-weight: 600; border-radius: 8px; }
 
 /* 技能编辑页 / 员工详情：朴素表单分节，不用卡片 */
 .fx { padding-bottom: 24px; }
@@ -1139,12 +1247,14 @@ main { min-height: 0; }
    不铺六列是因为这一页是主区的一栏，放不下；堆的**顺序**照看板的生命周期走。 */
 .pt-head { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
 .pt-head button { margin-left: auto; flex: 0 0 auto; }
+/* 任务页的「刷新」点下去会把文案换成「刷新中…」：它是右对齐的，宽度一变左边缘就跟着跳，
+   看着就像按钮在抖（2026-10-20 用户反馈）。钉死最小宽度，两个文案都塞得下，按钮本身不动。 */
+.pt-head #dTasksRefresh { min-width: 88px; }
 .pt-sum { font-size: 12.5px; color: var(--dim); }
 .pt-sum b { color: var(--text); font-size: 13.5px; }
 .pt-num { font-size: 11px; font-weight: 400; color: var(--dim); background: var(--chip);
           border-radius: 99px; padding: 2px 7px; margin-left: 7px; }
 .pt-hint { font-weight: 400; font-size: 11.5px; color: var(--dim); margin-left: 8px; }
-.pt-group { padding: 12px 16px; }
 .pt-cards { display: flex; flex-direction: column; gap: 8px; }
 .pt-note { font-size: 12px; color: var(--dim); line-height: 1.8; }
 .pt-note b { color: var(--text); font-weight: 500; }
@@ -1154,6 +1264,10 @@ main { min-height: 0; }
    默认的"最小内容宽"会让里面那句不换行的长文**把整块撑出容器**（实测浅色下右边被截掉半句）。 */
 .group { border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
          padding: 2px 16px; margin-bottom: 22px; min-width: 0; }
+/* 员工任务页的分堆**不再套外面这层卡片**：里面装的本来就是一张张 .kb-card，
+   外面再包一个带边框底色的盒子就成了"卡中卡"（2026-10-20 用户截图：去掉外面这个卡片）。
+   写成 .group.pt-group 压在上面的 .group 之后，且只影响这一页（.group 别处在用，不能动）。 */
+.group.pt-group { border: 0; background: none; border-radius: 0; padding: 0; }
 .form-row { display: grid; grid-template-columns: 132px minmax(0, 1fr);
             gap: 16px; align-items: center; padding: 13px 0; border-top: 1px solid var(--line); }
 .form-row:first-child { border-top: 0; }
@@ -1255,11 +1369,17 @@ input.locked:focus { outline: none; border-color: var(--line); }
 /* 「从运行时继承」折叠面板（2026-10-19）：默认收起，整块可点展开。
    head 是行内布局，箭头随 data-open 转（JS 里切 ▸/▾）；
    body 收起时 hidden，展开才挂列表（懒加载，见 app.js 的 setFold）。 */
-.sk-fold { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
-.sk-fold[data-open='1'] { padding-bottom: 12px; }
-.sk-fold-head { display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 12px 14px; cursor: pointer; border: 0; background: none; text-align: left; }
-.sk-fold-head:hover { background: color-mix(in srgb, var(--dim) 6%, transparent); }
-.fold-arrow { flex: 0 0 auto; color: var(--dim); font-size: 12px; margin-top: 2px; }
+/* 折叠面板（员工详情「从运行时继承」）2026-10-20 用户截图要求去掉外面那层卡片：
+   外壳自己一圈边框，展开后里面的 .sk-list 又是一圈 —— 双层卡套着，外壳还是空的。
+   现在外壳只留结构（无边框无底色），卡片感交给内层列表；标题行悬停自己带圆角底色。 */
+.sk-fold-head { border-radius: 8px; }
+.sk-fold[data-open='1'] { padding-bottom: 2px; }
+.sk-fold-head { display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 12px 14px 12px 0; cursor: pointer; border: 0; background: none; text-align: left; position: relative; }
+/* hover 不再铺灰底：用户反馈"鼠标放上去不要显示阴影"（2026-10-20）。
+   可点性由 cursor:pointer + 折叠箭头表达就够了。 */
+/* 箭头挪出文字流、挂到内容区左边的空档里：折叠标题才能跟上面「分配给智能体」
+   左对齐（2026-10-20 用户截图：两个标题没对齐）。原先箭头占一格 + gap，标题被顶进去 ~18px。 */
+.sk-fold-head .fold-arrow { position: absolute; left: -18px; top: 15px; width: 14px; text-align: right; margin-top: 0; }
 .fold-title { flex: 1; min-width: 0; }
 .fold-title b { font-size: var(--t-sec); font-weight: var(--w-title); }
 .sk-fold-head .sk-hint { margin-top: 3px; }
@@ -1277,6 +1397,11 @@ input.locked:focus { outline: none; border-color: var(--line); }
    按"第一颗 button/label"找动作区，四种行都对。 */
 .sk-row > button:first-of-type,
 .sk-row > label:first-of-type { margin-left: auto; }
+/* 技能行有两个动作（开关 + 「解绑」）：auto 若被两份平分，开关的横坐标就会跟着
+   .sk-main 文字宽度漂 —— 每行开关不在一条竖线上（2026-10-20 截图）。
+   规矩改成：**第一个动作**拿 auto 靠右，后面的动作只留固定行距跟着排。
+   （label 在前 → 开关拿 auto；没有开关的行不受影响，第一条规则照旧兜底。） */
+.sk-row > .switch + button { margin-left: 0; }
 .sk-ico { flex: 0 0 auto; width: 34px; height: 34px; border-radius: 9px; background: var(--hover);
           color: var(--dim); display: grid; place-items: center; }
 /* 文字区给个上限，别一直顶到按钮跟前；同时给个下限（14em ≈ 四五个汉字宽×若干），
@@ -1324,6 +1449,60 @@ input.locked:focus { outline: none; border-color: var(--line); }
 .switch.sm { width: 32px; height: 18px; }
 .switch.sm > span::after { width: 12px; height: 12px; top: 3px; left: 3px; }
 .switch.sm input:checked + span::after { transform: translateX(14px); }
+
+/* 定时任务卡片（2026-10-20 用户要求"做成卡片"）：原来整页就一条横幅，
+   任务一多各贴各的、右边的按钮离名字十万八千里。改成自适配卡网格，
+   一张卡 = 一个任务：名字+状态 → 要干什么+节拍 → 上次结果（原话）→ 底部动作。 */
+.sch-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 12px; }
+.sch-card { display: flex; flex-direction: column; gap: 7px; min-width: 0;
+            border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 14px; }
+.sch-card:hover { border-color: var(--accent); }
+.sch-card-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sch-card-top b { font-size: 14px; font-weight: 500; }
+/* 动作在右上角（2026-10-20 用户照参考截图要求）：启停开关收在最右。
+   卡窄到放不下时整组换行、仍靠右 —— flex-wrap 兜着。
+   三颗动作是**图标按钮**（同日："这三个改成图标按钮"）：无边框幽灵按钮，
+   gap 收到 4px —— 26px 的按钮还按 8px 排，整组会比任务名宽出去一大截。 */
+.sch-acts { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+.sch-acts .switch { margin-left: 8px; }
+/*
+ * 卡片动作的图标按钮（立即跑 / 编辑 / 删除）。
+ * 为什么不直接复用 `.icon-btn`：那颗给的是页头「返回」，自带 1px 边框和 --btn 底色，
+ * 摆在卡片右上角三颗并排就成了三个小方块，比原来的文字按钮更吵。这里做成幽灵态：
+ * 常态只有图标，鼠标移上去才浮出底色；尺寸固定 26×26，跟旁边的开关（32×18）视觉齐高。
+ * `button.danger` 那条只给了 --bad 的字色，这里显式再写一遍 —— 免得将来有人调 .sch-ic 的 color
+ * 把危险语义顺手盖掉。
+ *
+ * 悬浮才显形（2026-10-20 用户："鼠标悬浮在卡片上时，再显示这三个按钮"）：
+ * 常态透明 + pointer-events:none（藏了就别接点击，免得看不见还点得着）；
+ * 悬浮 / 键盘聚焦卡内任一控件时显出来 —— 纯键盘用户也得够得着这三个动作。
+ * 「在跑」那颗例外：转环本身就是唯一反馈，不悬浮也得看得见。
+ */
+.sch-acts .sch-ic { width: 26px; height: 26px; padding: 0; border: 0; background: transparent;
+                    border-radius: 7px; display: grid; place-items: center;
+                    color: var(--dim); transition: background .12s, color .12s, opacity .15s;
+                    opacity: 0; pointer-events: none; }
+.sch-card:hover .sch-ic, .sch-card:focus-within .sch-ic, .sch-acts .sch-ic.busy { opacity: 1; pointer-events: auto; }
+.sch-acts .sch-ic svg { width: 15px; height: 15px; display: block; }
+/* hover 底用中性 --hover，**不用 --chip-x-hover**：那只是"删掉的淡红"，挂在「立即跑」「编辑」
+   上语义就错了。危险那颗单独用红底 */
+.sch-acts .sch-ic:hover { background: var(--hover); color: var(--text); }
+.sch-acts .sch-ic.danger { color: var(--bad); }
+.sch-acts .sch-ic.danger:hover { background: var(--chip-x-hover); color: var(--bad); }
+/* 「在跑」态：三角换成转的环。没有文案可换，这是唯一的"点了、在跑"反馈 */
+.sch-acts .sch-ic.busy svg { display: none; }
+.sch-acts .sch-ic.busy::after { content: ''; width: 12px; height: 12px; border-radius: 50%;
+                                border: 1.6px solid currentColor; border-top-color: transparent;
+                                animation: sch-spin .7s linear infinite; }
+@keyframes sch-spin { to { transform: rotate(360deg); } }
+.sch-desc { color: var(--text); font-size: 12.5px; line-height: 1.6; overflow-wrap: anywhere; }
+/* 结果原话独占一行（2026-10-20 用户："上次执行时间放右下角"）：原来「上次+结果」
+   拼在底行右侧，结果一长 margin-left:auto 就失效、时间吊在卡中间。拆行后各归各位 */
+.sch-result { color: var(--dim); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+/* 卡底一行两极：「每 30 分钟」左下角，上次执行时间**右下角**。两个都短，不折行 */
+.sch-foot { margin-top: auto; padding-top: 4px; display: flex; align-items: baseline; gap: 12px; }
+.sch-when { color: var(--text); font-size: 12.5px; white-space: nowrap; }
+.sch-last { margin-left: auto; color: var(--dim); font-size: 12px; white-space: nowrap; }
 .counter code { background: var(--input); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
 .form-row .check, .form-row .chips { margin-top: 0; }
 .group .runs { margin: 4px 0 10px; }
@@ -1427,6 +1606,12 @@ input.locked:focus { outline: none; border-color: var(--line); }
    iOS 的做法是"环境色统一，只让输入框自己浮起来"。 */
 /* 输入条：跟对话区同底（Linear 不搞"浮起的输入框"那层） */
 .composer { background: var(--bg); padding: 12px 20px 4px; }
+/* 只读输入区（2026-10-20）：员工已删除的会话只能看历史、不能再聊。
+   输入框置灰、工具条（权限/模型/发送）收起 —— 摆着能点却发不出去才是误导。
+   原因写在 #hint 那一行（setComposerReadonly 负责填字）。 */
+.composer.is-readonly .input-wrap { background: var(--hover); }
+.composer.is-readonly .input-wrap textarea { color: var(--dim); cursor: not-allowed; }
+.composer.is-readonly .input-tools { display: none; }
 /* 输入框（Linear 语汇）：圆角 16 → 8、**去掉投影**（Linear 的输入面是平的），
    聚焦时只把边框换成 accent —— 不靠阴影"浮起来"。
    底色用 --input 而不是 --card：--card 是 iOS 那套"浮起的次级面"，这里不需要。 */
@@ -1502,11 +1687,22 @@ button.primary { background: var(--btn-solid); border-color: var(--btn-solid); c
 /* 破坏性操作：红字。原来 .danger 压根没有样式，「删除这个技能/运行时」一直是普通按钮的样子 */
 button.danger { color: var(--bad); }
 button.danger:hover { border-color: var(--bad); background: var(--chip-x-hover); }
+/* 主按钮 + danger（确认弹窗的「确定」）：整颗换红底白字。
+   上面 button.danger 只压 color，特异性同级又写在后面，红字落在 primary 的蓝底上，
+   字就看不见了（2026-10-20 用户截图）。hover 也一并压掉，别让 chip-x-hover 盖在红底上。 */
+button.primary.danger { background: var(--bad); border-color: var(--bad); color: var(--on-solid); }
+button.primary.danger:hover { background: var(--bad); border-color: var(--bad); filter: brightness(.92); }
 button.wide { width: 100%; }
 button:disabled { opacity: .45; cursor: not-allowed; }
 
 /* ---------- 详情页 ---------- */
-.detail-head { padding: 15px 20px; border-bottom: 1px solid var(--line); background: var(--side);
+/* 页头**定高 50px**（2026-10-20 用户三张截图："这些导航栏的高度不统一，设计一下"）：
+   原来 padding 15px 上下 + 内容自然高 —— 标题 15px 的页和面包屑 13px 的页一高一矮
+   （实测 ~51px vs ~48px），标题的纵向位置也各不相同。现在高度写死、内容垂直居中：
+   不管里面装的是单标题、面包屑还是流程名输入框，整站页头一条线。
+   50px 不是新发的明：流程记录页两栏顶栏（.run-left > .detail-head / .nc-head）
+   2026-10-19 就定过 50px —— 这次是把**其余所有页**对齐到它，而不是再立一个新数。 */
+.detail-head { height: 50px; padding: 0 20px; border-bottom: 1px solid var(--line); background: var(--side);
                display: flex; align-items: center; gap: 12px; position: sticky; top: 0; z-index: 2; }
 /* 页头里的裸 `<b>`（比如"开发中"占位页）：也是单标题档 */
 .detail-head > b { font-size: var(--t-page); font-weight: var(--w-title); }
@@ -1584,11 +1780,16 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .hero-more-btn { width: 34px; height: 34px; padding: 0; font-size: 18px; line-height: 1;
                  letter-spacing: 1px; color: var(--dim); }
 .hero-more-btn:hover { color: var(--text); border-color: var(--line); }
-.hero-more-menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 40; min-width: 190px;
+.hero-more-menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 40; min-width: 176px;
                   background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
-                  box-shadow: 0 8px 24px var(--shadow); padding: 4px; }
+                  box-shadow: 0 8px 24px var(--shadow); padding: 5px; }
 .hero-more-menu[hidden] { display: none; }
-.hero-more-menu .danger { display: block; width: 100%; text-align: left; border: 0; background: none; }
+/* 菜单条目照 .ctx-item 的轻量做法：平时透明底红字，悬停才浮一层淡红 ——
+   2026-10-20 用户嫌原来的"整块粉底 + emoji 图标"丑：那版条目继承了普通按钮的
+   大 padding 和色块底，看着像一颗嵌在菜单里的按钮。菜单项就该是菜单项的样子。 */
+.hero-more-menu .danger { display: block; width: 100%; text-align: left; border: 0; background: none;
+                          color: var(--bad); font-size: 13px; padding: 8px 10px; border-radius: 7px; }
+.hero-more-menu .danger:hover { background: var(--chip-x-hover); border: 0; }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
         padding: 16px 18px; margin-top: 18px; }
 .card > h4 { margin: 0 0 4px; font-size: 13px; }
@@ -1640,6 +1841,33 @@ input, select, textarea { width: 100%; background: var(--input); color: var(--te
 .combo-item:hover, .combo-item.hi { background: var(--hover); }
 .combo-check { flex: 0 0 auto; color: var(--accent); font-size: 12px; line-height: 1; }
 .combo-empty { padding: 8px 9px; font-size: 12.5px; color: var(--dim); }
+
+/* 自建日期时间选择（定时任务「单次」）—— 原生 datetime-local 的日历是浏览器画的，
+   位置改不了、会跑出弹窗（2026-10-20 用户实报）。浮层宽 252px：
+   日历 7 列 × 32px + 两侧内边距 8px，跟 .combo-pop 一样不留 padding 直接给内容。 */
+.dt-pop { width: 252px; padding: 8px; }
+.dt-head { display: flex; align-items: center; gap: 4px; margin-bottom: 2px; }
+.dt-title { flex: 1; text-align: center; font-size: 12.5px; font-weight: 600; }
+.dt-nav { width: 24px; height: 24px; padding: 0; border: 0; background: none; border-radius: 6px;
+          color: var(--dim); font-size: 14px; line-height: 1; cursor: pointer; }
+.dt-nav:hover { background: var(--hover); color: var(--text); }
+.dt-week, .dt-grid { display: grid; grid-template-columns: repeat(7, 1fr); }
+.dt-week span { text-align: center; font-size: 11px; color: var(--dim); padding: 3px 0 1px; }
+.dt-day { aspect-ratio: 1; display: grid; place-items: center; border: 0; background: none;
+          font: inherit; font-size: 12.5px; color: var(--text); border-radius: 6px; cursor: pointer; }
+.dt-day:hover { background: var(--hover); }
+.dt-day.out { color: var(--dim); opacity: .55; cursor: default; }     /* 前后月补位：不可点 */
+.dt-day.on { background: var(--btn-solid); color: var(--on-solid); }  /* 已选：白字压实色走成对 token —— 深色 --accent #0a84ff 配白字只有 3.65 */
+.dt-day.today:not(.on) { box-shadow: inset 0 0 0 1px var(--accent); } /* 今天：描一圈，跟已选分得开 */
+/* 时/分：全局 select 在表单里是 width:100%，这里两个并排、各占一半 */
+.dt-time { display: flex; align-items: center; gap: 6px; margin-top: 6px; padding-top: 8px;
+           border-top: 1px solid var(--line); }
+.dt-time select { flex: 1 1 0; width: auto; min-width: 0; }
+.dt-colon { flex: 0 0 auto; color: var(--dim); }
+.dt-foot { display: flex; justify-content: space-between; margin-top: 4px; }
+.dt-foot button { border: 0; background: none; padding: 3px 6px; border-radius: 6px;
+                  color: var(--accent); font-size: 12px; cursor: pointer; font-family: inherit; }
+.dt-foot button:hover { background: var(--hover); }
 textarea { resize: vertical; }
 input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -1882,7 +2110,11 @@ dialog.sch-dlg > form { flex: 1 1 auto; min-height: 0; display: flex; flex-direc
 /* ---------- 群 ---------- */
 /* 群聊头像。类名用 grp 而不是 group：后者是表单卡片的类，
    撞上会吃到"margin-bottom: 22px + padding + border"，把列表项撑高、头像贴顶 */
-.avatar.grp { background: linear-gradient(135deg, var(--av-grp), var(--av-grp-2)); border-radius: 8px; }
+/* 群头像（2026-10-20 用户截图报「看不清」）：字色原来没设，继承了 .avatar 的 --dim
+   灰蓝 —— 深绿底压灰蓝字，糊成一团（单聊那条路是 avatarStyle 内联给了白字，所以没事）。
+   补近白字 + 加粗，跟早上修 .avatar.sm 的思路一致。 */
+.avatar.grp { background: linear-gradient(135deg, var(--av-grp), var(--av-grp-2)); border-radius: 8px;
+              color: var(--av-sm-fg); font-weight: 600; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
 .chip { display: inline-flex; align-items: center; gap: 2px; padding: 1px 4px 1px 9px;
         border-radius: 99px; font-size: 12px; background: var(--chip);
