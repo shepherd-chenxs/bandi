@@ -3344,6 +3344,75 @@ async function renderCliDetail() {
 
 /* -------------------------------------------------------------- 二级列表 */
 
+/* ---------------------------------------------------- 通讯录：A–Z 分组 */
+
+/**
+ * 名字首字母（通讯录「数字员工」按 A–Z 分组，2026-10-20 用户要求：像微信通讯录）。
+ *
+ * 中文不能直接取首字 —— 要转拼音首字母。项目零依赖、不引 pinyin 库，
+ * 这里用 `Intl.Collator('zh-Hans-u-co-pinyin')` 的拼音排序能力：
+ * 给每个字母一个"该字母拼音区的最小字"当边界，最后一个 ≤ 名字首字的边界就是它的分组。
+ *   · 英文名直接取首字母；数字/符号/认不出的 → '#'（排最后，跟微信一样）
+ *   · 边界字选的是该声母下拼音最小的常见字（阿 a、八 ba、擦 ca…）；i/u/v 没有拼音音节，跳过
+ * 只依赖浏览器 ICU，不写死"姓氏表" —— 生僻姓也能分对（只要 ICU 认识这个字）。
+ */
+const PINYIN_BOUNDS = [
+  ['A', '阿'], ['B', '八'], ['C', '擦'], ['D', '搭'], ['E', '蛾'], ['F', '发'], ['G', '噶'], ['H', '哈'],
+  ['J', '击'], ['K', '喀'], ['L', '拉'], ['M', '妈'], ['N', '拿'], ['O', '哦'], ['P', '啪'], ['Q', '七'],
+  ['R', '燃'], ['S', '撒'], ['T', '塌'], ['W', '挖'], ['X', '夕'], ['Y', '压'], ['Z', '匝'],
+];
+const HAN_RE = /^[\u3400-\u9fff\uf900-\ufaff]/;
+let pinyinCollator = null;
+const zhNameCollator = () => {
+  if (!pinyinCollator) {
+    try {
+      pinyinCollator = new Intl.Collator('zh-Hans-u-co-pinyin');
+    } catch {
+      // 理论上不会（Chromium/WebView2 都带 ICU）；真不支持就退回中文默认排序，分组仍按边界字试
+      pinyinCollator = new Intl.Collator('zh-Hans');
+    }
+  }
+  return pinyinCollator;
+};
+
+/** 名字 → 分组字母（A–Z / '#'）。 */
+function nameInitial(name) {
+  const first = String(name ?? '').trim().charAt(0);
+  if (!first) return '#';
+  if (/[A-Za-z]/.test(first)) return first.toUpperCase();
+  if (!HAN_RE.test(first)) return '#';
+  const col = zhNameCollator();
+  let letter = '#';
+  for (const [L, bound] of PINYIN_BOUNDS) {
+    if (col.compare(first, bound) >= 0) letter = L;
+    else break;
+  }
+  return letter;
+}
+
+/** 通讯录「数字员工」排序 + 按首字母分组：[{ letter, rows }]，'#' 永远排最后。 */
+function groupPeopleByInitial(people) {
+  const col = zhNameCollator();
+  const sorted = [...people].sort((a, b) => {
+    const ia = nameInitial(a.name);
+    const ib = nameInitial(b.name);
+    if (ia !== ib) {
+      if (ia === '#') return 1;
+      if (ib === '#') return -1;
+      return ia < ib ? -1 : 1;
+    }
+    return col.compare(a.name ?? '', b.name ?? '');
+  });
+  const out = [];
+  for (const p of sorted) {
+    const letter = nameInitial(p.name);
+    const last = out.at(-1);
+    if (last && last.letter === letter) last.rows.push(p);
+    else out.push({ letter, rows: [p] });
+  }
+  return out;
+}
+
 function renderList() {
   const q = S.filter.trim().toLowerCase();
   const match = (name) => !q || String(name || '').toLowerCase().includes(q);
@@ -3560,17 +3629,18 @@ function renderList() {
     )
     .join('');
 
-  const personRows = people
-    .map(
-      (p) => `<div class="item ${S.persona && S.persona.id === p.id ? 'active' : ''}" data-persona="${p.id}">
+  const personRow = (p) => `<div class="item ${S.persona && S.persona.id === p.id ? 'active' : ''}" data-persona="${p.id}">
         <div class="avatar" ${avatarStyle(p.name)}>${esc(initial(p.name))}</div>
         <div class="who">
           <div class="line1"><b>${esc(p.name)}${p.builtin ? '<i class="b-inline" title="出厂就在的员工，删不掉">内置</i>' : ''}</b></div>
           <div class="line2">${esc(personSubtitle(p))}</div>
         </div>
         <i class="dot ${p.busy ? 'busy' : ''}" title="${p.busy ? '正在干活' : '现在闲着'}"></i>
-      </div>`,
-    )
+      </div>`;
+  /* 数字员工按 A–Z 分组（微信通讯录那种，2026-10-20 用户要求）。
+     搜索时**不插字母头**：结果已经少而散，再按字母切开反而碎；行本身仍是排好序的。 */
+  const personRows = groupPeopleByInitial(people)
+    .map((g) => `${q ? '' : `<div class="list-letter" aria-hidden="true">${g.letter}</div>`}${g.rows.map(personRow).join('')}`)
     .join('');
 
   $('listBody').innerHTML = !groups.length && !people.length
