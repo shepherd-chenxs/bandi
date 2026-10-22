@@ -1,6 +1,13 @@
 /* 班底 · 前端。三级结构：图标栏 → 列表 → 内容 */
 const $ = (id) => document.getElementById(id);
 
+/*
+ * 本机身份（2026-10-21 拍板：**节点只当算力，不做「看总机面板」**）。
+ * 旧的反代注入（`__BANDI_CLIENT__`）已随 client-proxy 移除 —— 加入状态不再从 HTML 里来，
+ * 统一读 `/api/local/status`（服务端答案， boot 处判一次；「这台机器」分区也读它）。
+ */
+const LOCAL_BASE = '/api/local';
+
 const S = {
   nav: 'messages',          // messages | contacts | skills | settings
   /*
@@ -58,6 +65,13 @@ const S = {
    * 通讯录里不该凭空消失（用户实报过）。消息列表则继续只看 conversations。
    */
   groups: [],
+  /*
+   * 专家库（2026-10-23 改版）：左侧一级栏「专家库」，整页分区卡片墙（GET /api/experts）。
+   * null = 还没拉过 —— 第一次进专家库时补拉（openExperts 里触发），雇佣/解聘后整体重拉。
+   * 目录是服务端常量，本端只缓存不推算：**雇没雇以 hired 字段为准**，别在本地比对 personas
+   * （两份数据到达时间不同，比出中间态就闪错标记）。
+   */
+  experts: null,
   /*
    * 右侧抽屉只有一个 DOM（#drawer），两种内容共用，靠 drawerKind 分流（2026-10-20）：
    *   nil     = 没开
@@ -219,6 +233,14 @@ const ROUTES = {
     setNav('contacts', { skipOpen: true });
     return openGroupDetail(id);
   },
+  // 专家库：一级栏整页（分区卡片墙）
+  experts: () => {
+    setNav('experts', { skipOpen: true });
+    return openExperts();
+  },
+  // 旧位置兼容：改版前存的是通讯录里的专家详情页（{ view:'expert', key }），
+  // 详情视图已拆 —— 拿到旧位置就转去新的一级栏（同 settings/schedules 的先例）
+  expert: () => openRoute({ view: 'experts' }),
   workflows: ({ template } = {}) => {
     setNav('workflows', { skipOpen: true });
     return openWorkflows(template ?? null);
@@ -344,6 +366,68 @@ window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', ()
 
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+/**
+ * 轻量 markdown 渲染（2026-10-21，员工详情「职责与身份设定」预览用，站内可复用）。
+ *
+ * 防注入口径：**先对原文整体 esc 再解析标记** —— 生成的所有标签都是自己拼的，
+ * 原文里夹带的 <script> 之类已变成字面量，不存在绕路的口子。
+ * 支持子集：围栏代码块、行内代码、标题（#~####）、无序/有序列表（含**松散列表**：项间空行
+ * 仍接着编号；含**缩进续行**：列表项第二行顶格缩进，归上一项）、引用、加粗、斜体。
+ * 不认识的东西原样显示：不报错、不吞字（写人设/职责说明够用，不求全）。
+ */
+const mdRender = (src) => {
+  const lines = esc(src).replace(/\r\n/g, '\n').split('\n');
+  const out = [];
+  let para = [], list = null, quote = null, code = null;
+  const flushPara = () => { if (para.length) { out.push('<p>' + para.join('<br>') + '</p>'); para = []; } };
+  const flushList = () => { if (list) { out.push(`<${list.tag}>` + list.items.map((i) => `<li>${i}</li>`).join('') + `</${list.tag}>`); list = null; } };
+  const flushQuote = () => { if (quote) { out.push('<blockquote>' + quote.map((q) => `<p>${q}</p>`).join('') + '</blockquote>'); quote = null; } };
+  const flushAll = () => { flushPara(); flushList(); flushQuote(); };
+  const inline = (t) => t
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+  for (const raw of lines) {
+    if (code !== null) {                       // 围栏内：原样收（已 esc 过），直到闭合
+      if (/^```/.test(raw.trim())) { out.push(`<pre><code>${code.join('\n')}</code></pre>`); code = null; }
+      else code.push(raw);
+      continue;
+    }
+    const line = raw.trim();
+    const mUl = line.match(/^[-*]\s+(.+)$/);
+    const mOl = line.match(/^\d+[.、]\s+(.+)$/);
+    const mH = line.match(/^(#{1,4})\s+(.+)$/);
+    const mQ = line.match(/^&gt;\s?(.*)$/);   // 行首 ">" 已被 esc 成 &gt;，引用判定跟着用转义后的形态
+    if (/^```/.test(line)) { flushAll(); code = []; }
+    else if (mH) { flushAll(); out.push(`<h${mH[1].length}>${inline(mH[2])}</h${mH[1].length}>`); }
+    else if (mUl || mOl) {
+      flushPara(); flushQuote();
+      const tag = mUl ? 'ul' : 'ol';
+      if (!list || list.tag !== tag) { flushList(); list = { tag, items: [] }; }
+      list.items.push(inline((mUl || mOl)[1]));
+    }
+    else if (mQ) { flushPara(); flushList(); quote ??= []; quote.push(inline(mQ[1])); }
+    /*
+     * 空行（2026-10-22 改）：**只断段落和引用，不断列表** —— 松散列表（项与项之间空一行，
+     * 喜儿的出厂人设就是这么写的）要接着编号，不然 1/2/3 会被切成三个各自从 1 开始的 <ol>。
+     */
+    else if (!line) { flushPara(); flushQuote(); }
+    /*
+     * 缩进续行（2026-10-22）：列表项的第二行顶两格写（`   看出问题就直说…`），
+     * 属于**上一项的内容**，不是新段落 —— 以前会先 flushList 把它甩成孤零零一段，
+     * 顺带把列表切断，编号跟着乱。现在并回上一项，换行用 <br> 保留作者的分行。
+     */
+    else if (list && /^[ \t]/.test(raw)) {
+      list.items[list.items.length - 1] += '<br>' + inline(line);
+    }
+    else { flushList(); flushQuote(); para.push(inline(line)); }
+  }
+  if (code !== null) out.push(`<pre><code>${code.join('\n')}</code></pre>`);  // 没闭合的围栏也照画
+  flushAll();
+  // 松散列表：列表项之间隔了空行的，同类型相邻列表合并回一个（不然 1/2/3 会变成三个"1."）
+  return out.join('').replace(/<\/(ol|ul)><\1>/g, '');
+};
 
 /**
  * 应用内轻提示，**替代 `alert`**（2026-10-18 用户要求：不要浏览器自带弹窗）。
@@ -1139,16 +1223,54 @@ function avatarStyle(name) {
  * 我自己那行（me）走灰底 + --text 字，靠气泡右侧对齐和位置区分，不额外上色。
  */
 const AV_TONES = [1, 2, 3, 4];
-function smAvatar(name, extra = '') {
+function smAvatar(name, extra = '', persona = null) {
   const s = String(name || '?');
   let h = 0;
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 9973;
   const tone = AV_TONES[h % AV_TONES.length];
-  return `<div class="avatar sm${extra ? ' ' + extra : ''}" data-tone="${tone}">${esc(initial(s))}</div>`;
+  const file = persona?.avatar;
+  const img = file && AVATAR_FILE.test(String(file))
+    ? `<img class="av-img" src="/avatars/${encodeURIComponent(String(file))}" alt="" onerror="this.remove()">`
+    : '';
+  return `<div class="avatar sm${extra ? ' ' + extra : ''}" data-tone="${tone}">${esc(initial(s))}${img}</div>`;
+}
+
+/*
+ * 带图片的员工头像（2026-10-22）：personas.avatar 存**文件名**（图片在 apps/web/avatars/，
+ * 现成静态路由服务）。图绝对定位铺在字母头像**上面**，加载失败 `this.remove()` 露出底下的
+ * 字母 —— 文件丢了/删了永远不破相，也不用在 JS 里绑 onerror（模板里内联，页面随便重建）。
+ * 没配头像的人直接走字母，跟以前一模一样。
+ */
+const AVATAR_FILE = /^[A-Za-z0-9._-]+\.(png|jpe?g|webp)$/i;
+/** 按名字找员工（消息气泡/评论这些只有名字的场景）：找不到返回 null，走字母头像 */
+function personaByName(n) {
+  const s = String(n ?? '');
+  return S.personas.find((p) => p.name === s) ?? null;
+}
+function personaAvatar(p, extra = '', fallbackName = '') {
+  const name = p?.name ?? fallbackName ?? '?';
+  const file = p?.avatar;
+  const core = `<div class="avatar${extra ? ' ' + extra : ''}" ${avatarStyle(name)}>${esc(initial(name))}`;
+  if (file && AVATAR_FILE.test(String(file))) {
+    return `${core}<img class="av-img" src="/avatars/${encodeURIComponent(String(file))}" alt="" onerror="this.remove()"></div>`;
+  }
+  return `${core}</div>`;
 }
 const hhmm = (iso) => { try { return new Date(iso).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }); } catch { return ''; } };
 const dt = (iso) => { try { return new Date(iso).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch { return ''; } };
 const cut = (s, n = 34) => (String(s ?? '').replace(/\s+/g, ' ').slice(0, n));
+
+/**
+ * 服务端说明压成界面上能看的一行：合并空白、超长截断（带省略号）。
+ *
+ * 为什么不直接用 `cut`：那个按"列表预览"设计的（34 字、不带省略号），
+ * 错误原因往往是一整句（「别名要用汉字、字母或数字开头，可以带点…」），34 字会把关键处切掉。
+ * 160 字 ≈ toast 里三行的量，再长就该去控制台看了。
+ */
+const clipLine = (s, n = 160) => {
+  const t = String(s ?? '').replace(/\s+/g, ' ').trim();
+  return t.length > n ? `${t.slice(0, n)}…` : t;
+};
 
 /**
  * 纯文本场景（列表预览这类）把 Markdown 标记去掉 —— 那儿不渲染 HTML，
@@ -1189,23 +1311,31 @@ async function api(path, opts) {
   const body = await r.json().catch(() => ({}));
   if (!r.ok) {
     /*
-     * 界面上**只印「编码：服务异常」**（如 `E1037：服务异常`），技术细节一律不印 ——
-     * 用户看不懂那些话，看到了也只会截图来问（用户明确要求）。
+     * 错误提示的统一规则（2026-10-21 重设计，取代"一律 E码：服务异常"）。
      *
-     * 细节走两处，排查够用：
-     *   · 浏览器控制台：完整的一句 + 方法 + 路径 + HTTP 状态
-     *   · `err.detail`：给"设置页那种给人看的提示"用（那里的人是想看到原因的）
-     * 编码在服务端源码里 `grep E1043` 直接命中出错那一行。
+     * 旧规则本来是不想让用户看技术细节，副作用却是**把能看懂的原因一起藏了**：
+     * 别名带空格、地址带了端口，界面只给一句「E1001：服务异常」——
+     * 人不知道改哪儿，只能截图来问（用户 2026-10-21 的截图就是这个）。
+     *
+     * 新规则按 HTTP 状态码分两类，判据明确、不靠解析文案：
+     *   · **4xx = 用户/调用方能改的**：服务端的 `error` 字段本来就是写给用户看的中文
+     *     （「地址不要带端口，端口填在下面那一格。」），直接拼进界面。
+     *   · **5xx / 没有说明 = 系统内部出错**：用户改不了，只说「编码：服务异常」，
+     *     原文只进 `err.detail` 与控制台。
+     * 两类都保留**未截断**的 `err.detail`（console 与悬停用），界面上那份由 `clipLine` 截到 160 字。
      */
     const code = body.code || `E${r.status}`;
-    const detail = body.error || '';
+    const detail = String(body.error || '').trim();
+    const explained = r.status >= 400 && r.status < 500 && !!detail;
     console.error(
-      `[班底] ${code}：服务异常 · ${opts?.method ?? 'GET'} ${path} → HTTP ${r.status}\n  ${detail || '(服务端没给说明)'}`,
+      `[班底] ${code}：${explained ? detail : '服务异常'} · ${opts?.method ?? 'GET'} ${path} → HTTP ${r.status}`,
     );
-    const err = new Error(`${code}：服务异常`);
+    const err = new Error(explained ? `${code}：${clipLine(detail)}` : `${code}：服务异常`);
     err.code = code;
     err.detail = detail;
     err.status = r.status;
+    // 给界面用：这条原因是否已经拼进 message（showFail 据此决定 title 要不要再给一遍）
+    err.explained = explained;
     throw err;
   }
   return body;
@@ -1217,19 +1347,19 @@ const post = (p, d) => api(p, {
 /**
  * 把一次失败写进某个**常驻**的元素（提示行、结果框那种，不是弹窗）。
  *
- * 可见部分只留「编码：服务异常」（如 `E5004：服务异常`）—— 界面上不铺技术细节。
- * 完整原因挂 `title`：悬停就能看到，排查时不用去翻控制台。
+ * `err.message` 现在自带原因（4xx 是服务端原文，5xx 只有「服务异常」），直接印就行。
+ * `title` 只在**原因没进正文**（5xx / 网络层）时补一句原文 —— 4xx 已经在正文里，重复给悬停没意义。
  * （弹窗那种一闪而过的提示用 `toast(err.message, 'error')` 就够，控制台里也有全文。）
  */
 function showFail(el, err) {
   if (!el) return;
   el.textContent = err?.message ?? '服务异常';
-  el.title = err?.detail || '';
+  el.title = err?.explained ? '' : (err?.detail || '');
 }
 
 /** 同 `showFail`，但要拼进 HTML 的那种（页面级失败的整块提示） */
 const failHtml = (err) =>
-  `<span title="${esc(err?.detail || '')}">${esc(err?.message ?? '服务异常')}</span>`;
+  `<span title="${esc(err?.explained ? '' : (err?.detail || ''))}">${esc(err?.message ?? '服务异常')}</span>`;
 
 /* ------------------------------------------------------------------ 状态 */
 
@@ -1322,6 +1452,7 @@ function setNav(nav, opts = {}) {
     : nav === 'contacts' ? '通讯录'
     : nav === 'workflows' ? '流程编排'
     : nav === 'plugins' ? '工作台'
+    : nav === 'experts' ? '专家库'
     : '设置',
   );
   $('listAction').textContent = '＋';
@@ -1330,13 +1461,14 @@ function setNav(nav, opts = {}) {
   // 消息页没有"新建"：发起群聊的入口在通讯录（那里能一次选"群聊 or 员工"）
   $('listAction').classList.toggle(
     'hidden',
-    nav === 'settings' || nav === 'workflows' || nav === 'messages' || nav === 'plugins',
+    nav === 'settings' || nav === 'workflows' || nav === 'messages' || nav === 'plugins' || nav === 'experts',
   );
-  // 工作台：宫格首页左栏整个收掉；进插件后左栏让位给插件自己的列表（搜索框对插件没用）
-  $('search').closest('.list-search')?.classList.toggle('hidden', nav === 'plugins');
+  // 工作台：宫格首页左栏整个收掉；进插件后左栏让位给插件自己的列表（搜索框对插件没用）。
+  // 专家库是整页卡片墙，搜索框同样没用 —— 一起收掉。
+  $('search').closest('.list-search')?.classList.toggle('hidden', nav === 'plugins' || nav === 'experts');
   closeAddMenu();
-  // 工作台是整页宫格，二级列表栏在那儿没用 —— 整列收掉（见 CSS 的 body.no-list）
-  document.body.classList.toggle('no-list', nav === 'plugins');
+  // 工作台是整页宫格，二级列表栏在那儿没用 —— 整列收掉（见 CSS 的 body.no-list）。专家库同理。
+  document.body.classList.toggle('no-list', nav === 'plugins' || nav === 'experts');
   renderList();
   savePlace();   // 换了位置就记下来，刷新后能回来
   // 通讯录要看实时忙/闲 → 开着这一页时轮询；离开自动停
@@ -1352,6 +1484,7 @@ function setNav(nav, opts = {}) {
   if (nav === 'settings') openSettings(S.settingsSection);
   else if (nav === 'workflows') openWorkflows().catch((e) => toast(e.message, 'error'));
   else if (nav === 'plugins') openPlugins().catch((e) => toast(e.message, 'error'));
+  else if (nav === 'experts') openExperts().catch((e) => toast(e.message, 'error'));
   else showView('chat');
 }
 
@@ -1364,14 +1497,21 @@ function setNav(nav, opts = {}) {
  */
 const SETTINGS_SECTIONS = [
   ['prefs', '偏好设置', '主题与外观'],
+  /* 「这台机器」= 模式页（2026-10-21 用户拍板：与「运行时」合并成一页；同日三改：两档 + 动作按钮）——
+     分段控件只有 单机 / 总机；「接入总机…」是动作不是第三档，点了只会展开加入面板。
+     「局域网」就是单机⇄总机的切换本体，不再是独立开关；备份独立成「数据管理」分节。 */
+  ['runtimes', '这台机器', '模式 · 设备'],
+  ['backup', '数据管理', '导入 / 导出本机数据'],
   ['quota', '额度', '每个模型每天最多用多少'],
-  ['runtimes', '运行时', 'agent CLI 的路径与开关'],
   ['plugins', '插件', '扩展点'],
   ['skills', '技能', '给数字员工用的能力包'],
   ['code', '代码托管', '连接 GitHub、接入仓库'],
+  ['about', '关于', '版本与说明'],
 ];
 
 function openSettings(section) {
+  /* 旧路由兼容：合并前「这台机器」是独立分节 'machine'（保存的位置可能还指着它） */
+  if (section === 'machine') section = 'runtimes';
   setRoute('settings', { section: section || S.settingsSection || 'prefs' });
   S.settingsSection = section || 'prefs';
   showView('settings');
@@ -1381,10 +1521,12 @@ function openSettings(section) {
   setListTitle('设置');
   renderList();
   if (S.settingsSection === 'runtimes') return renderRuntimes();
+  if (S.settingsSection === 'backup') return renderBackup();
   if (S.settingsSection === 'plugins') return renderPlugins();
   if (S.settingsSection === 'quota') return renderQuota();
   if (S.settingsSection === 'skills') return renderSkillCards();
   if (S.settingsSection === 'code') return renderGitRepos();
+  if (S.settingsSection === 'about') return renderAbout();
   if (S.settingsSection !== 'prefs') return;
 
   const opts = [
@@ -1416,6 +1558,50 @@ function openSettings(section) {
   $('themeSeg').querySelectorAll('[data-theme-opt]').forEach((el) => {
     el.onclick = () => setTheme(el.dataset.themeOpt);
   });
+}
+
+/* ---------------------------------------------------------------- 关于 */
+
+/**
+ * 「关于」页（2026-10-22 用户要求加进设置菜单）：只回答"这是什么、什么版本、跑在哪"。
+ *
+ * 数据口径：版本 / 实例 / 机器名全部来自 `/api/hello` —— 它是服务端自己的答案，
+ * 界面不写死版本字面量（写死一份，升级时就出现"页面 1.1.0、服务 1.2.0"这种自相矛盾）。
+ */
+async function renderAbout() {
+  $('settingsView').innerHTML = rtLoading('关于');
+  let h = null;
+  try {
+    h = await api('/api/hello');
+  } catch { /* 拉不到照常渲染：版本显示 —，别白屏 */ }
+  $('settingsView').innerHTML = `
+    ${headRow('<b>关于</b>')}
+    <div class="detail-body">
+      <section class="set-sec">
+        <div class="set-box">
+          <div class="set-row">
+            <span class="set-label">产品</span>
+            <div class="machine-data">班底 <span class="sub">自托管的多 agent 协作平台</span></div>
+          </div>
+          <div class="set-row">
+            <span class="set-label">版本</span>
+            <div class="machine-data">${h?.version ? esc(`v${h.version}`) : '—'}</div>
+          </div>
+          <div class="set-row">
+            <span class="set-label">这台机器</span>
+            <div class="machine-data">${esc(h?.hostname ?? '—')}</div>
+          </div>
+          <div class="set-row">
+            <span class="set-label">实例标识</span>
+            <div class="machine-data machine-addr">${esc(h?.instanceId ?? '—')}</div>
+          </div>
+          <div class="set-row">
+            <span class="set-label">服务地址</span>
+            <div class="machine-data machine-addr">${esc(location.origin)}</div>
+          </div>
+        </div>
+      </section>
+    </div>`;
 }
 
 /* ---------------------------------------------------------------- 额度 */
@@ -2165,141 +2351,192 @@ async function renderRuntimes() {
   return renderDeviceList();
 }
 
-/* ① 设备列表 */
+/* ① 模式页 —— **2026-10-21 五改：模式卡收成一行**（用户："上面那一块可以简化。
+   一个开关，一个重启按钮就可以了"）——
+   单机/总机分段 + 说明行 + 连接行全部收掉，只剩「总机」开关（开=总机、关=单机）+ 常显重启按钮。
+   真加入成功之后整站换成节点页（renderNodeMode），那台机器上这页都进不去了，没有"模式"可切。
+   「接入总机」是页面最底一节（只在单机档出现，常开、无标题，面板自己带「可用总机」）；
+   备份挪去独立的「数据备份」分节，这页不再摆本机数据和导出。 */
+
+/* 设备行（总机的设备区）：远程节点多一枚「在线/离线」+ 排队数 —— 行的骨架与本地完全一致 */
+const deviceRowHtml = (dev) => {
+  const isNode = dev.kind === 'node';
+  /* 「本机」身份标签（2026-10-21 用户：节标题固定叫「设备」，本机这条用标签标出来 ——
+     开关总机不再牵动标题）。颜色中性：它不是状态，只是身份。 */
+  const self = dev.kind === 'local' ? '<em class="tag-dim">本机</em>' : '';
+  const flag = isNode
+    ? `<em class="${dev.online ? 'tag-ok' : 'tag-warn'}">${dev.online ? '在线' : '离线'}</em>`
+    : '';
+  // 队列里压着几个活 —— 节点离线时这个数会一直涨，那就是"离线排队"看得见的样子
+  const queued = isNode && dev.pendingJobs ? ` · 排队 <b>${dev.pendingJobs}</b>` : '';
+  const tail = isNode ? '（远程节点）' : '';
+  return `<div class="row-item" data-open-device="${esc(dev.id)}">
+    <div class="avatar">${esc(initial(dev.label))}</div>
+    <div class="who">
+      <b>${esc(dev.label)}${self}${flag}</b>
+      <div class="sub">${esc(dev.platform)} · ${dev.runtimeCount} 个 agent CLI${queued}${tail}</div>
+    </div>
+    <span class="chev">›</span>
+  </div>`;
+};
+
 async function renderDeviceList() {
   S.rtLevel = 'devices';
   S.rtDevice = null;
   S.rtRuntime = null;
-  // 左栏只写「设置」（在 openSettings 里），这一页的标题「运行时」在右页头
-  $('settingsView').innerHTML = rtLoading('运行时');
+  // 左栏只写「设置」（在 openSettings 里），这一页的标题「这台机器」在右页头
+  $('settingsView').innerHTML = rtLoading('这台机器');
 
   let list = [];
   try {
     list = (await api('/api/devices')).devices;
   } catch (err) {
-    $('settingsView').innerHTML = `${headRow('<b>运行时</b>')}<div class="empty">${failHtml(err)}</div>`;
+    $('settingsView').innerHTML = `${headRow('<b>这台机器</b>')}<div class="empty">${failHtml(err)}</div>`;
     return;
   }
-  // 局域网开关的现状（旧后端没这条路由 → 按默认画，页面不能因此白屏 ✗）
-  let lan = { allowLan: false, boundLan: false, restartNeeded: false, urls: [] };
+  // 网络现状（旧后端没这条路由 → 按默认画，页面不能因此白屏 ✗）
+  let lan = { allowLan: false, boundLan: false, restartNeeded: false, urls: [], explicit: false };
   try {
     lan = await api('/api/lan');
   } catch { /* 忽略：按默认画 */ }
+  // 模式卡附带的预警（如「另一个数据目录里也有节点常驻」）：拉不到不挡模式卡
+  let local = null;
+  try {
+    local = await api(`${LOCAL_BASE}/status`);
+  } catch { local = null; }
 
   /*
-   * 「局域网」那一段 —— **只有桌面版那种总机才显示**（2026-10-16 用户定的）。
-   *
-   * 判据就是 `explicit`：监听地址是**人用命令行指定**的（`BANDI_HOST`）⇒ 那个开关对它无效
-   * ⇒ 干脆**不显示** ✓。服务端的总机就是这种（`BANDI_HOST=0.0.0.0`），
-   * 它本来就必须对外听、也根本没有"只本机"这个选项 —— 摆一个按不动的旋钮只会让人琢磨 ✗。
+   * 模式只有一个事实源：netmode.allowLan（+ 启动参数 explicit）。
+   * 「总机」不是又一个开关 —— 允许局域网连入 = 当总机，关掉 = 回单机
+   * （用户 2026-10-21：「被局域网探测这个说法不对，开了之后也不是总机，不开是单机模式」）。
+   * 收过的设备不算模式：单机也可能留着设备记录（重开总机就回来）。
+   * explicit（BANDI_HOST 指定监听）的服务端总机：模式锁死，不给切。
    */
-  const lanSection = lan.explicit
-    ? ''
-    : `<section class="fx" style="margin-top:26px">
-        <label>局域网</label>
-        <div class="hint">
-          修改状态后，点击重启按钮生效
-        </div>
-        <div class="row-item">
-          <div class="avatar">网</div>
-          <div class="who">
-            <b>允许局域网内的机器加入</b>
-            ${lan.boundLan && lan.urls?.length ? `<div class="sub">连接地址：${lan.urls.map((u) => `<code>${esc(u)}</code>`).join(' ')}</div>` : ''}
-          </div>
-          ${
-            /* 「重启」**常显**（2026-10-20 用户："重启按钮要一直显示"）：原来只在
-               "改了还没生效"时冒出来，用户找不到它。摆在**右侧**、开关左边（同日："按钮放右边"） */
-            `<button class="btn-sm primary" id="lanRestart">重启</button>`
-          }
-          <!-- 开关不带悬停提示（2026-10-20 用户："悬停提示去掉"）：状态由开关和上面那句说明承担 -->
-          <label class="switch">
-            <input type="checkbox" id="lanToggle" ${lan.allowLan ? 'checked' : ''} /><span></span>
-          </label>
-        </div>
-      </section>`;
+  /* 总机不接入别的总机（2026-10-21 截图反馈）：「接入总机」整条路只在**单机档**存在 ——
+     收设备的机器不该同时摆着"去给别人当算力"的面板。分节只在单机档渲染，无需手动收。 */
+
+  /*
+   * 只有两档：单机 / 总机，开关就是切换本体（开=总机、关=单机 —— 2026-10-21 五改收成一行）。
+   * 「接入总机」不是第三档模式，是页面最底一节（六改：常开不折叠；七改：连节标题也去掉）。
+   * 真加入成功后整站换成节点页，那时这台已经没有"模式"可切了。
+   */
+
+  /*
+   * 设备区**单机/总机都显示**（2026-10-21 用户：单机也要能进本机管运行时），
+   * 但只有总机态给「添加设备」—— 单机不收设备，不派活给别人。
+   * 单机态只列本机：手上留着的远程节点记录这时候连不上，摆出来反而误导。
+   * （节点态走的是另一套整页 renderNodeMode，压根不渲染这页。）
+   */
 
   $('settingsView').innerHTML = `
-    ${headRow('<b>运行时</b>')}
+    ${headRow('<b>这台机器</b>')}
     <div class="detail-body">
-      <section class="fx">
-        <!-- 标题右边右对齐：跟「识别本机运行时」同一个做法（.fx-head 就是 flex + space-between） -->
-        <div class="fx-head">
-          <label>设备 <span class="count">${list.length}</span></label>
-          <button class="btn-sm primary" id="joinNode">添加设备</button>
-        </div>
-        ${list
-          .map((dev) => {
-            /*
-             * 远程节点多一枚「在线/离线」—— 这是它跟本机唯一要区别对待的地方，
-             * 也是"掉线看得见"的落点。行的骨架跟本机完全一样
-             * （同 id/label/platform/runtimeCount），所以只多这一个标记，
-             * 不为节点分叉出一套渲染。
-             */
-            const isNode = dev.kind === 'node';
-            const flag = isNode
-              ? `<em class="${dev.online ? 'tag-ok' : 'tag-warn'}">${dev.online ? '在线' : '离线'}</em>`
-              : '';
-            // 队列里压着几个活 —— 节点离线时这个数会一直涨，那就是"离线排队"看得见的样子
-            const queued = isNode && dev.pendingJobs ? ` · 排队 <b>${dev.pendingJobs}</b>` : '';
-            const tail = isNode ? '（远程节点）' : '';
-            return `<div class="row-item" data-open-device="${esc(dev.id)}">
-              <div class="avatar">${esc(initial(dev.label))}</div>
-              <div class="who">
-                <b>${esc(dev.label)}${flag}</b>
-                <div class="sub">${esc(dev.platform)} · ${dev.runtimeCount} 个 agent CLI${queued}${tail}</div>
-              </div>
-              <span class="chev">›</span>
-            </div>`;
-          })
-          .join('')}
-      </section>
-
-      ${lanSection}
+      <!-- 模式节走 renderMode() 单独渲染（2026-10-21 十改，用户："切换的时候画面有点闪"）：
+           切换只重画这一小块，设备/可用总机列表原地不动，不再整页 innerHTML 重写闪一下。
+           （十一改：设备节 + 接入总机节也抽成 renderBody() —— 它们的显隐/过滤跟着模式走，
+           切换**成功**后要连着重画，否则页面纹丝不动 —— 十改只顾模式卡，漏了下面。 -->
+      <div id="modeMount"></div>
+      <div id="devMount"></div>
+      <div id="joinSlot"></div>
     </div>`;
 
-  $('joinNode').onclick = () => openJoinDialog(lan);
-  /*
-   * ⚠️ 开关**可能不在**（服务端那种总机整段都不显示 ✓）—— 不判空就是 null 上挂事件 ✗，
-   * 那一页的后半段（设备行的点击）会跟着一起废掉。
-   */
-  const lt = $('lanToggle');
-  if (lt) {
-    lt.onchange = async (e) => {
-      const allow = e.target.checked;
-      try {
-        /*
-         * ⚠️ 必须走 `post()`（它会 `JSON.stringify` + 带 `Content-Type`）——
-         * 第一版这里写成 `api('/api/lan', { method:'POST', body:{…} })` ✗：
-         * `api()` 把 opts 原样交给 fetch，而 fetch 收到对象会变成字符串 `"[object Object]"` ✗，
-         * 也没有 Content-Type → 服务端解析不出来 → **400** → 开关一点就回弹（用户报的"打不开"）。
-         * 旁边的 `post()` 就是为这个存在的。
-         *
-         * 成功后**什么都不用改**（2026-10-20）—— 状态话术整行已删（用户圈掉「已经开着 ✓」），
-         * 「重启」按钮常显。别再 `renderRuntimes()` 整页重画：DOM 全换一遍就是用户报过的"闪一下"。
-         */
-        await post('/api/lan', { allowLan: allow });
-      } catch {
-        e.target.checked = !allow; // api() 已经提示过了，把开关拨回去
-        return;
-      }
-    };
-  }
+  /* 模式节单独渲染：只重画 #modeMount 这一小块（整页重写是切换闪烁的根源）。
+     lan 是闭包里的活对象 —— 切换成功后改它再重画，高亮/待重启标记/状态行都跟着走 */
+  const modeNow = () => (lan.explicit || lan.allowLan ? 'host' : 'standalone');
+  const renderMode = () => {
+    const m = modeNow();
+    const pd = !!lan.restartNeeded || (m === 'host' && !lan.boundLan);
+    const mount = $('modeMount');
+    if (!mount) return;
+    /* 服务端总机（BANDI_HOST 指定监听，2026-10-21 截图反馈）：没有"模式"可言 ——
+       这台锁死当总机，单机/总机切换、待重启标记、重启按钮全是摆设。
+       整张模式卡不画，只留预警（如有）。 */
+    if (lan.explicit) {
+      mount.innerHTML = (local?.warnings ?? []).length
+        ? `<section class="set-sec mode-sec">${(local?.warnings ?? []).map((w) => `<div class="machine-warn">${esc(w)}</div>`).join('')}</section>`
+        : '';
+      return;
+    }
+    mount.innerHTML = `
+      <section class="set-sec mode-sec">
+        <div class="set-head">
+          <b>模式</b>${pd ? '<span class="set-tag">改了还没生效 —— 点「重启」生效</span>' : ''}
+          <div class="mode-ctl">
+            <div class="seg" id="modeSeg">
+              <button data-mode="standalone" class="${m === 'standalone' ? 'on' : ''}">单机</button>
+              <button data-mode="host" class="${m === 'host' ? 'on' : ''}" ${
+                lan.explicit ? 'disabled title="监听地址由启动参数指定（BANDI_HOST），这台常驻当总机"' : ''
+              }>总机</button>
+            </div>
+            <button class="btn-sm ${pd ? 'primary' : ''}" id="lanRestart">重启</button>
+          </div>
+        </div>
+        <div class="mode-state">${
+          m === 'host'
+            ? '总机 —— 同一网络里的设备可以连到这台、领活干'
+            : '单机 —— 只在这台电脑上用；切到「总机」，同一网络里的设备就能连进来领活'
+        }</div>
+        ${(local?.warnings ?? []).map((w) => `<div class="machine-warn">${esc(w)}</div>`).join('')}
+      </section>`;
+    wireModeCard({ lan, mode: m, refresh });
+  };
 
-  /*
-   * 「重启」：让控制面**原地换监听**（进程不退出 ✓），等它回来再刷这一页 ✓。
-   * 按钮文案就叫「重启」（2026-10-20 用户定的）：短，动作清楚；"生效"那层意思
-   * 由下面那句「等重启生效」的说明承担，不重复写在按钮上。
-   */
-  const lr = $('lanRestart');
-  if (lr) {
-    lr.onclick = async () => {
-      lr.disabled = true;
-      lr.textContent = '重启中…';
+  /* 模式之下的一切（设备节 + 接入总机节，2026-10-21 十一改）：显隐与过滤都跟着模式走 ——
+     切换**成功**后跟着 renderMode 一起重画（十改只重画模式卡，下面纹丝不动是 bug）。
+     「接入总机」节不要标题（用户连着两次删）——面板自己带「可用总机 + 发现/添加」。 */
+  const renderBody = () => {
+    const m = modeNow();
+    const rows = m === 'host' ? list : list.filter((d) => d.kind !== 'node');
+    const dev = $('devMount');
+    const slot = $('joinSlot');
+    if (!dev || !slot) return;
+    dev.innerHTML = `
+      <section class="fx">
+        <div class="fx-head">
+          <label>设备 <span class="count">${rows.length}</span></label>
+          ${m === 'host' ? '<button class="btn-sm primary" id="joinNode">添加设备</button>' : ''}
+        </div>
+        ${rows.map(deviceRowHtml).join('')}
+      </section>`;
+    slot.innerHTML = m === 'standalone' ? '<section class="fx"><div id="joinMount"></div></section>' : '';
+    const jn = $('joinNode');
+    if (jn) jn.onclick = () => openJoinDialog(lan);
+    if (m === 'standalone') mountJoinPanel($('joinMount'));
+    /* 设备行点进去（本机 / 远程节点同一个入口，详情页自己分叉） */
+    dev.querySelectorAll('[data-open-device]').forEach((el) => {
+      el.onclick = () => {
+        S.rtLevel = 'device';
+        S.rtDevice = el.dataset.openDevice;
+        renderRuntimes();
+      };
+    });
+  };
+
+  /* refresh(deep)：确认取消/请求失败只回拨模式卡高亮；切换**成功**传 deep=true，
+     连着重画设备节与接入总机节（它们的显隐跟模式走） */
+  const refresh = (deep) => {
+    renderMode();
+    if (deep) renderBody();
+  };
+  renderMode();
+  renderBody();
+}
+
+/**
+ * 模式卡的接线：单机⇄总机 = 改 allowLan + 重启生效（确认框把后果说全）。
+ * 「接入总机」那节没有折叠态（面板常挂），这里不再管它；真加入成功后整站变节点页。
+ */
+function wireModeCard({ lan, mode, refresh }) {
+  const restart = $('lanRestart');
+  if (restart) {
+    restart.onclick = async () => {
+      restart.disabled = true;
+      restart.textContent = '重启中…';
       try {
         await post('/api/restart', {});
       } catch {
-        lr.disabled = false;
-        lr.textContent = '重启';
+        restart.disabled = false;
+        restart.textContent = '重启';
         return; // api() 已经提示过了
       }
       const t0 = Date.now();
@@ -2311,8 +2548,8 @@ async function renderDeviceList() {
           if (r.ok || r.status === 401) break;
         } catch { /* 还没回来 */ }
         if (Date.now() - t0 > 20000) {
-          lr.disabled = false;
-          lr.textContent = '重启后没连上，刷新看看';
+          restart.disabled = false;
+          restart.textContent = '重启后没连上，刷新看看';
           return;
         }
       }
@@ -2320,13 +2557,29 @@ async function renderDeviceList() {
     };
   }
 
-  $('settingsView').querySelectorAll('[data-open-device]').forEach((el) => {
-    el.onclick = () => {
-      S.rtLevel = 'device';
-      S.rtDevice = el.dataset.openDevice;
-      renderRuntimes();
-    };
-  });
+  /* 选项卡即模式：点哪档切哪档，**不弹确认**（2026-10-21 用户："切换不要弹窗"）——
+     切换本来就可逆（再点一下切回来），后果由状态行 + 「重启」按钮承担，不用对话框拦一道。
+     请求失败 refresh() 把高亮拨回真实模式 —— 否则界面说的和库里存的是两回事。
+     成功后改闭包里的 lan（allowLan + restartNeeded）再 refresh(true) ——
+     deep=true 连着重画设备节/接入总机节（显隐跟模式走），模式卡本身原地重画不闪整页 */
+  const modeSeg = $('modeSeg');
+  if (modeSeg) {
+    modeSeg.querySelectorAll('[data-mode]').forEach((btn) => {
+      btn.onclick = async () => {
+        const toHost = btn.dataset.mode === 'host';
+        if (toHost === (mode === 'host')) return;
+        try {
+          await post('/api/lan', { allowLan: toHost });
+        } catch {
+          refresh();
+          return; // api() 已经提示过了
+        }
+        lan.allowLan = toHost;
+        lan.restartNeeded = true;
+        refresh(true);
+      };
+    });
+  }
 }
 
 /**
@@ -2383,6 +2636,534 @@ async function openJoinDialog(lan = null) {
       toast('复制不了，手动选中吧：\n\n' + cmd);
     }
   };
+}
+
+/* --------------------------------------------------------------- 这台机器 */
+
+/**
+ * 字节数 → 人话。只在展示层用；**大小一律以服务端 `GET /api/local/status` 报的为准**，
+ * 前端不自己 stat（避免"看着 42MB、导出 38MB"这种两套数字）。
+ */
+const fmtMb = (bytes) => {
+  const n = Number(bytes);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  const mb = n / 1048576;
+  // 太小就别写 "0.0 MB" 了 —— 看着像坏了；刚建的库就一两页
+  if (mb < 0.1) return '< 0.1 MB';
+  return `${mb >= 100 ? String(Math.round(mb)) : mb.toFixed(1)} MB`;
+};
+
+/* 「数据管理」分节（2026-10-21 独立成菜单「数据备份」，2026-10-22 改名「数据管理」并补导入）——
+   导出 = VACUUM INTO 出一份完整快照，导出时不用停班底。
+   导入 = 选一份班底导出的 .db 快照覆盖本机数据：服务端先校验（头 / 完整性 / 班底的表），
+   写成待用文件，**重启班底才换库**（换的时候现库自动备份进 backups/导入前-*.db）。
+   恢复从此有两条路：直接导入快照，或照老办法手动覆盖 bandi.db。 */
+async function renderBackup() {
+  $('settingsView').innerHTML = rtLoading('数据管理');
+  let st = null;
+  try {
+    st = await api(`${LOCAL_BASE}/status`);
+  } catch { /* 拉不到也照常渲染：路径/大小显示 —，点导出会拿到真实报错 */ }
+  const local = st?.local ?? {};
+  const counts = local.counts ?? {};
+  const size = fmtMb(local.dbSize);
+  const mtime = local.dbMtime ? dt(local.dbMtime) : '';
+  $('settingsView').innerHTML = `
+    ${headRow('<b>数据管理</b>')}
+    <div class="detail-body">
+      <section class="set-sec machine-card">
+        <div class="set-box">
+          <div class="set-row">
+            <span class="set-label">本机数据</span>
+            <div class="machine-data">
+              <div class="machine-path" title="${esc(local.dbPath ?? '')}">${esc(local.dbPath ?? '—')}${size ? ` · ${esc(size)}` : ''}</div>
+              <div class="sub">${Number(counts.personas ?? 0)} 个员工 · ${Number(counts.conversations ?? 0)} 段会话 · ${Number(counts.projects ?? 0)} 个项目${mtime ? `　最后修改 ${esc(mtime)}` : ''}</div>
+            </div>
+          </div>
+          <div class="set-row">
+            <span class="set-label">怎么用</span>
+            <div class="machine-data">
+              <div class="sub">「导出」生成这份库的完整快照（一个 .db 文件），导出时班底照常用。「导入」选一份快照覆盖本机数据：会先校验文件，当前数据自动备份进数据目录的 backups/，<b>重启班底后生效</b>。</div>
+            </div>
+          </div>
+        </div>
+        <div class="machine-actions">
+          <button class="btn-sm" id="backupImport">导入</button>
+          <button class="btn-sm primary" id="backupExport">导出</button>
+        </div>
+      </section>
+    </div>
+    <input type="file" id="backupImportFile" accept=".db,.sqlite,.sqlite3" hidden />`;
+  const btn = $('backupExport');
+  btn.onclick = async () => {
+    btn.disabled = true;
+    try {
+      const r = await post(`${LOCAL_BASE}/export`, {});
+      toast(`已导出：${r.file}`, 'ok'); // 完整路径 toast 出去，用户去那个目录拿
+    } catch (err) {
+      toast(err.message, 'error');
+    } finally {
+      btn.disabled = false;
+    }
+  };
+
+  /* 导入：选文件 → 确认（说清"覆盖本机数据 + 重启生效 + 自动备份"）→ 原始字节上传。
+     服务端校验失败会回 E1099 的人话；成功也只是"待生效"，别把话说成"已完成"。 */
+  const impBtn = $('backupImport');
+  const fileInput = $('backupImportFile');
+  impBtn.onclick = () => fileInput.click();
+  fileInput.onchange = async () => {
+    const f = fileInput.files?.[0];
+    fileInput.value = ''; // 允许同一文件选第二次（onchange 只在变化时触发）
+    if (!f) return;
+    if (!/\.(db|sqlite|sqlite3)$/i.test(f.name)) {
+      toast('请选择班底导出的 .db 快照文件', 'error');
+      return;
+    }
+    const ok = await confirmDo(
+      `导入会用「${f.name}」覆盖本机数据（${fmtMb(f.size) || '大小未知'}）。\n` +
+        `服务端会先校验文件，并把当前数据自动备份到数据目录的 backups/ 里。\n` +
+        `导入完成后需要重启班底才生效。`,
+      { title: `导入「${f.name}」？` },
+    );
+    if (!ok) return;
+    impBtn.disabled = true;
+    try {
+      const buf = await f.arrayBuffer();
+      const r = await fetch(`${LOCAL_BASE}/import`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: buf,
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || `导入失败（HTTP ${r.status}）`);
+      toast('已导入，重启班底后生效', 'ok');
+      await renderBackup(); // 重画一遍：状态行还是现库的数字，别让人误以为已经换了
+    } catch (err) {
+      toast(err.message, 'error');
+    } finally {
+      impBtn.disabled = false;
+    }
+  };
+}
+
+/**
+ * 「加入总机」面板（2026-10-20 设计 §9.4，2026-10-21 从弹窗改成**页面内嵌**）：
+ * list（主机列表）→ explain（会改变什么 + 邀请码）→ joining → done。
+ *
+ * 2026-10-21 拍板：**节点只当算力，不做「看总机面板」** —— 原 scope 三选一步骤删除，
+ * 加入一律拿 compute 令牌（服务端也写死，不信任前端）。
+ *
+ * 为什么不再用 dialog：用户实报"弹窗的方式操作有点不舒服"—— 主机列表是这页的主体内容，
+ * 塞进 520px 的小弹窗里又要滚动又要等扫描，不如直接长在页面上（跟设置页其它分区同一种列表式）。
+ * 与 `openJoinDialog` 语义不同：那个是**总机**发码给别人，这个是**本机**去加入别人。
+ *
+ * 状态机全部在这个局部对象里（重进设置页 = 整个重来，不往 S 里塞）。
+ * 列表页：**不自动扫**（2026-10-21 用户：去掉自动探测，改手动）+ 「发现」按钮扫
+ *        + 「添加」（填了就入列）+ 已存的先测试、通过才出「加入」。
+ */
+function mountJoinPanel(root) {
+
+  /* 状态机的全部状态都在这个局部对象里 —— 切走设置分区就整个忘掉，不往 S 里塞。
+     2026-10-21：scan/pick/manual 三步合并成「主机列表」一页（用户拍板的列表模型）；
+     探测改成**纯手动**（进页不扫，点「发现」才扫）+ 添加填了就入列。
+     同日再改（用户："加入按钮一直显示，点击加入，打开弹窗"）：加入不再换页 ——
+     原来那套 explain/joining/done 步骤机（wiz.step）整个撤掉，改成**一个弹窗**装下
+     「会改变什么 + 邀请码 + 加入 + 结果」，列表页永远留在原地。 */
+  const wiz = {
+    hosts: [],            // 通讯录（/status 透传 + add/remove 的返回刷新）
+    candidates: [],       // 本次扫描结果（不入列，刷新会重扫）
+    tested: new Map(),    // url → {state:'testing'|'ok'|'fail', host?, code?, msg?}
+    scanning: false,
+    url: '',              // 上一次点「加入」的目标（弹窗默认值）
+    code: '',             // 邀请码：弹窗关掉再开还留着上次填的
+    err: '',
+    status: null,         // 本机读数：本机员工/会话/项目数（status 透传）
+    secs: 0,
+    tick: null,
+  };
+
+  // 本机读数拉一次就够（弹窗里的本机数据 + 通讯录初值）；拉不到不挡路 —— 列表按空画，扫描照常
+  api(`${LOCAL_BASE}/status`).then((st) => {
+    wiz.status = st;
+    wiz.hosts = Array.isArray(st?.hosts) ? st.hosts : [];
+    render(); // 通讯录行补上（列表页是唯一的一页，直接重画）
+  }).catch(() => {});
+
+  // 离开这页（设置切到别的分区，root 被整个换掉）就停表 —— 定时器别挂在看不见的节点上空转
+  const tickGuard = setInterval(() => {
+    if (!root.isConnected) {
+      clearInterval(wiz.tick);
+      clearInterval(tickGuard);
+    }
+  }, 1000);
+
+  const errLine = () => (wiz.err ? `<div class="joinwiz-err">${esc(wiz.err)}</div>` : '');
+
+  /* ---------------------------------------------------- 步骤 1 · 主机列表 */
+  /* 扫描不再切步骤：原地转圈，结果合并进列表。空结果不是错误 —— 通讯录和「添加」仍在。 */
+  const runScan = () => {
+    if (wiz.scanning) return;
+    wiz.scanning = true;
+    wiz.secs = 0;
+    clearInterval(wiz.tick);
+    // 「已经找了 N 秒」：本地计时（服务端最多 4 秒返回）
+    wiz.tick = setInterval(() => {
+      wiz.secs += 1;
+      const el = root.querySelector('[data-sec]');
+      if (el) el.textContent = `已经找了 ${wiz.secs} 秒 · 同一网络里的班底会自动应答`;
+    }, 1000);
+    render();
+    post(`${LOCAL_BASE}/discover`, {})
+      .then((r) => {
+        clearInterval(wiz.tick);
+        wiz.candidates = r?.candidates ?? [];
+        wiz.scanning = false;
+        render();
+      })
+      .catch((err) => {
+        clearInterval(wiz.tick);
+        wiz.scanning = false;
+        toast(err.message, 'error'); // 扫描这条路废了也不挡路：通讯录与「添加」必须还能走通
+        render();
+      });
+  };
+
+  /* 通讯录在前（用户明确记住的），扫描结果在后；同一台总机（instanceId 或 url 撞上）
+     合并成一行 —— 扫描带来的 joinable/caps 是刚出炉的，盖到通讯录行上刷新状态。 */
+  const mergeRows = () => {
+    const keyOf = (x) => (x.instanceId ? `i:${x.instanceId}` : `u:${x.url}`);
+    const rows = [];
+    const seen = new Set();
+    for (const h of wiz.hosts) {
+      const k = keyOf(h);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      rows.push({ ...h, persisted: true });
+    }
+    for (const c of wiz.candidates) {
+      const k = keyOf(c);
+      const exist = rows.find((r) => keyOf(r) === k);
+      if (exist) {
+        exist.joinable = c.joinable;
+        exist.caps = c.caps;
+        continue;
+      }
+      seen.add(k);
+      rows.push({ ...c, persisted: false });
+    }
+    return rows;
+  };
+
+  const drawList = (box) => {
+    const rowsHtml = mergeRows()
+      .map((h) => {
+        const t = wiz.tested.get(h.url);
+        const stale = Array.isArray(h.caps) && !h.caps.includes('scope');
+        let tag = '';
+        let sub = '';
+        let action = '';
+        if (t?.state === 'testing') {
+          tag = '<em class="tag-ok">（测试中…）</em>';
+        } else if (t?.state === 'ok') {
+          // 测试通过 → 只把标签说清楚；「加入」本来就一直在，不用等测试
+          tag = '<em class="tag-ok">（可加入）</em>';
+          action = `<button type="button" class="mini auto dim" data-test="${esc(h.url)}">测试</button>`;
+        } else if (t?.state === 'fail') {
+          tag = `<em class="tag-warn">（${esc(t.code ?? 'E1092')}）</em>`;
+          sub = `<div class="sub">${esc(t.msg ?? '')}</div>`;
+          action = `<button type="button" class="mini auto" data-test="${esc(h.url)}">重试</button>`;
+        } else if (!h.persisted) {
+          // 扫描来的行：UDP 应答本身就是"活着"的证明，直接可选
+          if (h.joinable) {
+            tag = '<em class="tag-ok">（可加入）</em>';
+          } else if (stale) {
+            tag = '<em class="tag-warn">（版本太旧）</em>';
+            sub = '<div class="sub">那台班底版本太旧，先升级它再加入</div>';
+          } else {
+            tag = '<em class="tag-warn">（未开放加入）</em>';
+            sub = '<div class="sub">这台班底没有对外开放加入（可能只在本机使用）。去那台机器上打开『允许局域网内的机器加入』→ 点重启</div>';
+          }
+        } else {
+          // 通讯录里还没测过的行（刚「添加」的也在这档）：可以点「测试」验连接，
+          // 也可以直接点「加入」—— 行上没说"可加入"不代表点不得，弹窗会把真实原因说清楚
+          tag = '<em class="tag-warn">（未测试）</em>';
+          action = `<button type="button" class="mini auto" data-test="${esc(h.url)}">测试</button>`;
+        }
+        /* 「加入」**一直显示**（2026-10-21 用户："加入按钮一直显示，点击加入，打开弹窗"）——
+           以前它只在"测试通过/可加入"时才冒出来，用户得先猜哪行能点。现在每行都有，
+           能不能加由弹窗里的第一次请求回答（连不上/没开放/版本旧都会把原因写回弹窗） */
+        const joinBtn = `<button type="button" class="mini auto primary" data-join="${esc(h.url)}" data-label="${esc(h.label ?? '')}">加入</button>`;
+        /* 点行仍可加入，但只对"扫描到且开放加入"的行开放 —— 其余行点一下就是加入弹窗，
+           容易误触；行上的「加入」按钮已经够显眼 */
+        const clickable = !h.persisted && h.joinable;
+        return `<div class="row-item joinwiz-cand ${clickable || t?.state === 'ok' ? '' : 'off'}" ${clickable ? `data-pick="${esc(h.url)}" data-label="${esc(h.label ?? '')}" style="cursor:pointer"` : ''}>
+          <div class="avatar">${esc(initial(h.label))}</div>
+          <div class="who">
+            <b>${esc(h.label)}${tag}</b>
+            <div class="sub">${esc(h.hostname ?? '')}${h.hostname ? ' · ' : ''}${esc(h.url)}</div>
+            ${sub}
+          </div>
+          <div class="row-acts">
+            ${h.persisted ? `<button type="button" class="mini auto dim" data-remove="${esc(h.url)}">移除</button>` : ''}
+            ${action}
+            ${joinBtn}
+            ${clickable ? '<span class="chev">›</span>' : ''}
+          </div>
+        </div>`;
+      })
+      .join('');
+    box.innerHTML = `
+      <div class="machine-join-head">
+        <div class="machine-join-title">可用总机</div>
+        <div class="machine-join-actions">
+          <button type="button" class="btn-sm" data-w="refresh" ${wiz.scanning ? 'disabled' : ''}>发现</button>
+          <button type="button" class="btn-sm primary" data-w="add">添加</button>
+        </div>
+      </div>
+      <div class="joinwiz-cands">${
+        rowsHtml ||
+        '<div class="dim joinwiz-note">列表还是空的 —— 点「发现」找同一网络里的班底，或点「添加」直接填地址（云端也行）。</div>'
+      }</div>
+      ${
+        wiz.scanning
+          ? `<div class="joinwiz-scan">
+              <div class="joinwiz-spin"></div>
+              <div>正在找同一网络里的班底总机…</div>
+              <div class="dim" data-sec>已经找了 0 秒 · 同一网络里的班底会自动应答</div>
+              <div class="dim">总机在云端、或不在同一个网络时不会出现在这里 —— 点「添加」直接填它的地址</div>
+            </div>`
+          : ''
+      }
+      ${errLine()}`;
+  };
+
+  /* 列表页是**唯一的一页**：加入的「会改变什么 / 邀请码 / 加入中 / 成功」全都进了弹窗
+     （2026-10-21 用户："加入按钮一直显示，点击加入，打开弹窗"），页面不再被步骤机换来换去。 */
+  const render = () => {
+    const box = document.createElement('div');
+    box.className = 'joinwiz page';
+    drawList(box);
+    // 只重画内容层：面板挂载点（#joinMount）是常驻元素
+    root.querySelector('.joinwiz')?.remove();
+    root.appendChild(box);
+
+    /* 统一接线：`data-w` 对到列表页自己的动作（发现 / 添加）。
+       行内按钮（data-test / data-join / data-remove / data-pick）走各自的直接接线 ——
+       「加入」现在只负责开弹窗，加入本体在弹窗里。 */
+    const handlers = {
+      refresh: () => { wiz.err = ''; runScan(); },
+      add: openAddHostDlg,
+    };
+    box.querySelectorAll('[data-w]').forEach((el) => {
+      const fn = handlers[el.dataset.w];
+      if (fn) el.onclick = () => fn();
+    });
+    // 行内按钮：点行 = 加入弹窗（只对扫描到的、开放加入的行）；「加入」按钮每行都有
+    box.querySelectorAll('[data-pick]').forEach((el) => {
+      el.onclick = () => openJoinDlg(el.dataset.pick, el.dataset.label);
+    });
+    box.querySelectorAll('[data-join]').forEach((el) => {
+      el.onclick = () => openJoinDlg(el.dataset.join, el.dataset.label);
+    });
+    box.querySelectorAll('[data-test]').forEach((el) => {
+      el.onclick = () => doTest(el.dataset.test, el);
+    });
+    box.querySelectorAll('[data-remove]').forEach((el) => {
+      el.onclick = () => doRemove(el.dataset.remove);
+    });
+  };
+
+  /* 「测试」一行（通讯录里的行）：原地转圈 → 通过标「可加入」/ 失败显示原因 + 重试。
+     它只回答"连得上吗"，【不代表】按钮才出现 —— 「加入」每行常显
+     （2026-10-21 用户："加入按钮一直显示"）。 */
+  async function doTest(url) {
+    wiz.tested.set(url, { state: 'testing' });
+    render();
+    try {
+      const r = await post(`${LOCAL_BASE}/hosts/test`, { url });
+      wiz.tested.set(url, { state: 'ok', host: r?.host ?? null });
+      render();
+    } catch (err) {
+      wiz.tested.set(url, { state: 'fail', code: err.code ?? 'E1092', msg: err.message });
+      toast(err.message, 'error');
+      render();
+    }
+  }
+
+  /**
+   * 「添加」= 一个**小弹窗**（2026-10-21 用户："点击添加，打开弹窗，填写之后，完成添加"）。
+   * 为什么这里又用弹窗：它不是页面的主体内容，只是"补一条地址"的一次性输入 ——
+   * 填地址 + 两个按钮塞进一行会把列表页撑乱；而加入流程（列表/说明/用途）仍留在页面上。
+   *
+   * 服务端 `hosts/add` 现在**填了就入列**（不拦探测），所以这里成功后不预设"可加入"：
+   * 行按「未测试」画，用户点行上的「测试」验连接 —— 这正是用户要的操作顺序。
+   */
+  function openAddHostDlg() {
+    const dlg = document.createElement('dialog');
+    dlg.className = 'joinwiz-dlg';
+    const form = document.createElement('form');
+    form.method = 'dialog';
+    form.innerHTML = `
+      <b>添加总机</b>
+      <div class="joinwiz">
+        <label for="joinAddUrl">总机地址</label>
+        <input id="joinAddUrl" spellcheck="false" autocomplete="off" placeholder="http://192.168.1.9:8787 或 https://bandi.example.com" />
+        <div class="dim joinwiz-note">局域网或云端都行。添加后用它那行的「测试」验连接。</div>
+        <div class="joinwiz-err" id="joinAddErr" hidden></div>
+        <div class="dlg-actions">
+          <button type="button" value="cancel">取消</button>
+          <button type="button" class="primary" id="joinAddOk">完成添加</button>
+        </div>
+      </div>`;
+    dlg.append(form);
+    document.body.append(dlg);
+    wireDialogHead(form); // 动态建的弹窗自己包一次吸顶头（标题 + ×）
+    const input = form.querySelector('#joinAddUrl');
+    const errEl = form.querySelector('#joinAddErr');
+    const okBtn = form.querySelector('#joinAddOk');
+
+    const submit = async () => {
+      const url = input.value.trim();
+      if (!url) {
+        errEl.hidden = false;
+        errEl.textContent = '先填一个地址，例如 http://192.168.1.9:8787';
+        input.focus();
+        return;
+      }
+      okBtn.disabled = true;
+      errEl.hidden = true;
+      try {
+        const r = await post(`${LOCAL_BASE}/hosts/add`, { url });
+        wiz.hosts = Array.isArray(r?.hosts) ? r.hosts : wiz.hosts;
+        wiz.tested.delete(r?.host?.url ?? url); // 入列但没测过 → 行上出「测试」
+        dlg.close();
+        render();
+      } catch (err) {
+        errEl.hidden = false;
+        errEl.textContent = err.message;
+        okBtn.disabled = false;
+      }
+    };
+    okBtn.onclick = submit;
+    // 回车 = 完成添加（method=dialog 的默认提交会直接关窗丢输入，必须自己拦）
+    form.addEventListener('submit', (e) => { e.preventDefault(); submit(); });
+    dlg.addEventListener('close', () => dlg.remove());
+    dlg.showModal();
+    input.focus();
+  }
+
+  /* 从通讯录移除一台（扫描来的临时行没有这个按钮 —— 它们本来就不落盘）。 */
+  async function doRemove(url) {
+    try {
+      const r = await post(`${LOCAL_BASE}/hosts/remove`, { url });
+      wiz.hosts = Array.isArray(r?.hosts) ? r.hosts : wiz.hosts.filter((h) => h.url !== url);
+      wiz.tested.delete(url);
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+    render();
+  }
+
+  /* 从列表选中一台（扫描行点选 / 通讯录行「加入」）→ 先探再进 explain。
+     这次探测就是加入前的最后一道闸：列表状态和真实状态之间有时间差
+     （刚关了开关 / 那台刚关机），在这里被拦下比走到一半失败好。 */
+  /**
+   * 「加入」= 弹窗（2026-10-21 用户："加入按钮一直显示，点击加入，打开弹窗"）。
+   * 为什么进弹窗：加入前得先讲清"会改变什么"、再填邀请码，这是**一次性的确认**；
+   * 塞在列表里会把"找哪台机器"这件事挤走，所以整块挪进 dialog，列表页永远原地不动。
+   *
+   * 为什么不先 probe：能不能加由服务端 `/join` 直接回答（连不上 E1092 / 未开放 E1091 /
+   * 版本太旧 E2050 / 邀请码不对 E4011），失败原因写在弹窗里、码留着改就行 ——
+   * 多探一次只是多等一次，判定标准却是同一个。名字从行上带过来，不必等 probe 才知道是谁。
+   */
+  function openJoinDlg(url, label) {
+    wiz.url = url;
+    const host = label || '那台班底';
+    const dlg = document.createElement('dialog');
+    dlg.className = 'joinwiz-dlg';
+    const form = document.createElement('form');
+    form.method = 'dialog';
+    form.innerHTML = `
+      <b>邀请码（10 分钟内有效，只能用一次）</b>
+      <div class="joinwiz">
+        <input id="joinCode" spellcheck="false" autocomplete="off" aria-label="邀请码" placeholder="bj_" value="${esc(wiz.code)}" />
+        <div class="joinwiz-hint">加入后，这台电脑就是「${esc(host)}」的算力节点：总机把活派过来，在这台电脑上跑。</div>
+        <div class="joinwiz-err" id="joinErr" hidden></div>
+        <div class="dlg-actions">
+          <button type="button" value="cancel">取消</button>
+          <button type="button" class="primary" id="joinOk">加入</button>
+        </div>
+      </div>`;
+    dlg.append(form);
+    document.body.append(dlg);
+    wireDialogHead(form); // 动态建的弹窗自己包一次吸顶头（标题 + ×）
+
+    const codeEl = form.querySelector('#joinCode');
+    const errEl = form.querySelector('#joinErr');
+    const okBtn = form.querySelector('#joinOk');
+    const showErr = (msg) => { errEl.hidden = false; errEl.textContent = msg; };
+
+    okBtn.onclick = async () => {
+      wiz.code = codeEl.value;
+      if (!wiz.code.trim()) {
+        showErr(`先填邀请码 —— 在「${host}」上：设置 → 这台机器 → 添加设备`);
+        codeEl.focus();
+        return;
+      }
+      errEl.hidden = true;
+      okBtn.disabled = true;
+      okBtn.textContent = '加入中…';
+      try {
+        const r = await post(`${LOCAL_BASE}/join`, { url, code: wiz.code.trim() });
+        drawJoined(form, r?.hostLabel || host);
+      } catch (err) {
+        showErr(err.message); // E4011 码不对 → 就地改码再点，不用关弹窗
+        okBtn.disabled = false;
+        okBtn.textContent = '加入';
+      }
+    };
+
+    dlg.addEventListener('close', () => dlg.remove());
+    dlg.showModal();
+    codeEl.focus();
+  }
+
+  /* 加入成功：同一个弹窗换成"落地说明 + 完成"（点完成等它重绑完再刷，别撞上白屏断口） */
+  function drawJoined(form, host) {
+    const n = Number(wiz.status?.local?.counts?.personas ?? 0);
+    form.innerHTML = `
+      <b>加入成功</b>
+      <div class="joinwiz">
+        <div class="joinwiz-text joinwiz-ok">✓ 这台电脑现在是「${esc(host)}」的算力节点了</div>
+        <ul class="joinwiz-list">
+          <li>总机把活派过来，在这台电脑上跑（节点已在后台常驻）</li>
+          <li>这台电脑的班底界面从此只显示节点状态，不显示面板</li>
+          <li>本机原来的 ${n} 个员工还在本机，没动过</li>
+        </ul>
+        <div class="dlg-actions">
+          <button type="button" class="primary" id="joinDone">完成</button>
+        </div>
+      </div>`;
+    form.querySelector('#joinDone').onclick = async () => {
+      /*
+       * 加入成功那一刻服务端会把监听**收回环**（见 `/api/local/join`），重绑有几毫秒断口。
+       * 点「完成」先等它答话再刷，别让人正好撞上重绑白屏。
+       */
+      for (let i = 0; i < 40; i++) {
+        try {
+          if ((await fetch(`${LOCAL_BASE}/status`, { cache: 'no-store' })).ok) break;
+        } catch {
+          /* 重绑中 */
+        }
+        await new Promise((done) => setTimeout(done, 100));
+      }
+      location.reload();
+    };
+  }
+
+  render(); // 不自动扫（2026-10-21 用户："去掉自动刷新探测，手动探测"）——
+  // 进页只画「通讯录 + 空列表提示」，扫描由「发现」按钮触发，用户点一次才发一次 UDP。
 }
 
 /**
@@ -2555,7 +3336,8 @@ function wireCopyButtons() {
  * 一个运行时的**健康度** —— Multica 那张表叫「健康度」，这里按机器诚实分：
  *
  *   · **本机**运行时：健康 = **这个 CLI 现在能不能起**（文件在、班底起得来、已接入）。
- *     本机没有"在线"这回事 —— 控制面就在这台机器上跑着，它永远"在线"，说在线等于没说。
+ *     标签统一走「在线/离线」一套词（2026-10-21 用户："可用改成在线，不可用改成离线"）——
+ *     原先"本机没有在线这回事"的讲究让位给词汇一致：状态列只有一套语言最好读。
  *   · **远程**运行时：健康 = **那台机器在不在线**（心跳新鲜）＋ 它自报这个 CLI 能不能用。
  *     这个才是用户真正要看的：选了一个离线节点的运行时，活不会立刻跑，而是排进队列等它回来。
  *
@@ -2589,7 +3371,7 @@ function runtimeHealth(r) {
       ? { text: '离线', cls: 'tag-warn', why: '那台机器没有心跳 —— 派给它的活会排队等它回来，不会立刻跑' }
       : { text: '在线', cls: 'tag-ok', why: '那台机器在心跳，派活会立刻被它领走' };
   }
-  return { text: '可用', cls: 'tag-ok', why: '文件在、班底起得来 —— 本机没有"在线"这回事，控制面就在这台机器上' };
+  return { text: '在线', cls: 'tag-ok', why: '文件在、班底起得来 —— 控制面就在这台机器上，本机运行时只有"离线"的反面' };
 }
 
 /** 健康度那枚小标（跟在名称后面） */
@@ -2711,7 +3493,7 @@ function externalsHtml(dev) {
       const p = probed.get(c.id) ?? { installed: false, gateway: null, panel: null };
       // 装了但网关没起，是最坑的状态：被它接管的 agent 会全线 502
       const health = !p.installed
-        ? { text: '没装', cls: 'tag-warn', why: '这台机器上还没装上它' }
+        ? { text: '未安装', cls: 'tag-warn', why: '这台机器上还没装上它' }
         : c.gatewayPort && p.gateway === false
           ? { text: `网关没起（${c.gatewayPort}）`, cls: 'tag-warn', why: '装了但网关没在跑 —— 被它接管的 agent 会连不上，报 502' }
           : c.gatewayPort
@@ -2840,6 +3622,29 @@ async function renderNodeDetail(dev) {
   const missing = families.filter((f) => !haveFamily.has(f.id));
   const isWin = /win/i.test(dev.platform ?? '');
 
+  // 工作空间映射清单（2026-10-22）：拉不到就不显示已有条目，表单照常给
+  let wsPaths = [];
+  try {
+    wsPaths = (await api(`/api/nodes/${encodeURIComponent(dev.id)}/paths`)).paths ?? [];
+  } catch {
+    /* 忽略：老版本服务没有这条路由 */
+  }
+  /** 映射列表的行（添加/删除后重画用同一份；⚠️ 必须声明在 innerHTML 那句之前 —— 模板串要用它） */
+  const wsRowsHtml = (paths) =>
+    paths.length
+      ? paths
+          .map(
+            (p) => `<div class="row-item">
+              <div class="who">
+                <b style="font-family:ui-monospace,monospace;font-size:11.5px">${esc(p.remotePath)}</b>
+                <div class="sub" style="font-family:ui-monospace,monospace;font-size:11.5px">→ ${esc(p.localPath)}</div>
+              </div>
+              <button class="mini auto txt" data-ws-del="${esc(p.remotePath)}">删除</button>
+            </div>`,
+          )
+          .join('')
+      : '<div class="empty">还没配映射 —— 需要在这台机器上干非 git 项目时再配</div>';
+
   const rowOfMissing = (f) => {
     /*
      * dsh 是 Windows 桌面端自带的，Linux/macOS 上根本没有那个形态 ——
@@ -2888,7 +3693,7 @@ async function renderNodeDetail(dev) {
   };
 
   $('settingsView').innerHTML = `
-    ${headRow(breadcrumb([{ label: '运行时', to: 'devices' }, { label: dev.label }]))}
+    ${headRow(breadcrumb([{ label: '这台机器', to: 'devices' }, { label: dev.label }]))}
     <div class="detail-body">
       ${devHeadHtml(dev, {
         badges: `<span class="${dev.online ? 'pill-ok' : 'pill'}">${dev.online ? '在线' : '离线'}</span><span class="pill">远程节点</span>`,
@@ -2907,6 +3712,17 @@ async function renderNodeDetail(dev) {
         心跳间隔、判离线的周期数、连出方向都是实现细节。
         （真要看这些的场合是排查故障 —— 后端日志和 /api/devices 里照样有 ✓。）
       -->
+      ${
+        /* 权限与「最近使用」（2026-10-20，P1-3 的一半）：两个字段都来自 GET /api/devices
+           （runtimes.publicDevice 的节点分支），**没有就不渲染这一行** —— 别给用户看 "undefined"。 */
+        dev.scope
+          ? `<div class="sub machine-scope-line">${
+              String(dev.scope).includes('panel')
+                ? '这台能看到面板'
+                : '这台看不到面板（总机没给面板权限）'
+            }${dev.lastUsedAt ? ` · 最近使用 ${esc(dt(dev.lastUsedAt))}` : ''}</div>`
+          : ''
+      }
 
       <section class="fx">
         <!-- 跟本机那页一个词（「已安装」）—— 用户不关心"自报"这套机制 -->
@@ -2946,10 +3762,27 @@ async function renderNodeDetail(dev) {
                  这里原来还有一段说明（"有「在这台机器上安装」的点一下就行……控制面只把族名递过去，
                  所以这条通道递不出任意命令" ＋ "装完不用重启节点：每次心跳都会把清单报上来"）。
                  2026-10-16 用户让删掉 ✓ —— 半句是**我们内部的安全边界**，半句是**实现细节**，
-                 用户要的只是"这颗按钮能装、那台机器的清单会自己更新"（前者按钮上写着、后者看得见）✓。
-               -->
+          用户要的只是"这颗按钮能装、那台机器的清单会自己更新"（前者按钮上写着、后者看得见）✓。
+                -->
              </section>`
           : ''
+      }
+
+      ${
+        /* 工作空间（2026-10-22）：派到这台机器的活在它那儿落脚的两条路 ——
+           git 仓库自动 clone/pull（不用配）；普通文件夹项目用这张映射表。
+           列表拉不到就只显示表单（对面是老版本服务时也不至于白屏）。 */
+        `<section class="fx" style="margin-top:26px">
+          <label>工作空间${wsPaths.length ? ` <span class="count">${wsPaths.length}</span>` : ''}</label>
+          <div class="sub" style="margin-bottom:10px">派到这台机器的活在这儿干活：git 仓库会自动克隆、拉最新（私有仓库在这台机器上 git 登录一次即可）；普通文件夹项目在下面配一条「总机目录 → 这台机器目录」。</div>
+          <div id="wsRows">${wsRowsHtml(wsPaths)}</div>
+          <div class="row-item" style="gap:8px;align-items:center">
+            <input id="wsRemote" placeholder="总机上的目录，如 E:\\02CodeSpace\\proj" style="flex:1;min-width:0" />
+            <span style="color:var(--dim)">→</span>
+            <input id="wsLocal" placeholder="这台机器上的目录，如 D:\\work\\proj" style="flex:1;min-width:0" />
+            <button class="mini auto primary" id="wsAdd">添加映射</button>
+          </div>
+        </section>`
       }
 
       ${externalsHtml(dev)}
@@ -2967,14 +3800,56 @@ async function renderNodeDetail(dev) {
    * 只有**名字**会丢（名字存在控制面这一侧）。会"得到新身份"的只有一种情况：
    * 那台机器上的数据目录被清掉/换了（身份文件没了）。
    */
+  /* ---- 工作空间映射（2026-10-22）：增删走同一份行渲染，页面随时重画也不怕 ---- */
+  const paintWs = (paths) => {
+    const box = $('wsRows');
+    if (box) box.innerHTML = wsRowsHtml(paths);
+  };
+  const wsAdd = $('wsAdd');
+  if (wsAdd) {
+    wsAdd.onclick = async () => {
+      const remotePath = $('wsRemote').value.trim();
+      const localPath = $('wsLocal').value.trim();
+      if (!remotePath || !localPath) return toast('两边路径都要填：总机上的目录 + 这台机器上的目录', 'error');
+      try {
+        const r = await api(`/api/nodes/${encodeURIComponent(dev.id)}/paths`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ remotePath, localPath }),
+        });
+        wsPaths = r.paths ?? [];
+        $('wsRemote').value = '';
+        $('wsLocal').value = '';
+        paintWs(wsPaths);
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    };
+  }
+  const wsRows = $('wsRows');
+  if (wsRows) {
+    wsRows.addEventListener('click', async (e) => {
+      const btn = e.target.closest('[data-ws-del]');
+      if (!btn) return;
+      try {
+        const r = await api(`/api/nodes/${encodeURIComponent(dev.id)}/paths`, {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ remotePath: btn.dataset.wsDel }),
+        });
+        wsPaths = r.paths ?? [];
+        paintWs(wsPaths);
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    });
+  }
+
   $('forgetNode').onclick = async () => {
     const urge = dev.pendingJobs ? `\n\n⚠️ 它身上还压着 ${dev.pendingJobs} 个活，会一并收掉。` : '';
     const ok = await askConfirm({
       title: `忘掉「${dev.label}」？`,
-      body:
-        `控制面上这一条记录会被删掉，它身上压着的活一并收掉。那台机器<b>什么都不受影响</b> ——\n` +
-        `它下一次心跳（15 秒内）就会自己重新报到，身份和运行时都在，只有你给它起的名字会丢。${urge}\n\n` +
-        `所以只有"它永远不会再回来了"（清掉了那台机器的数据目录、或换了一台机器）才需要忘掉它。`,
+      body: `只删控制面上的这条记录。那台机器不受影响，15 秒内会自己重新报到，只有你给它起的名字会丢。${urge}`,
       ok: '忘掉',
       danger: true,
     });
@@ -3070,6 +3945,7 @@ function wireExternalActions(dev) {
         log.textContent = keep ? (log.textContent + text).slice(-600) : text;
       };
 
+      const extLabel = catalog.label ?? extId; // 目录里的名字（原来这里引用了外层 map 的 c，点击必抛 ReferenceError）
       const needDownload = steps.some((s) => s.kind === 'external-install');
       let mirror = '';
       if (needDownload) {
@@ -3081,7 +3957,7 @@ function wireExternalActions(dev) {
         const mirrors = catalog.mirrors ?? [];
         const r = await askCheckbox({
           title: kind === 'external-setup' && probed.installed ? '重装？' : '安装？',
-          body: `会在「${dev.label}」上安装 ${c.label}。`,
+          body: `会在「${dev.label}」上安装 ${extLabel}。`,
           check: mirrors.length
             ? { label: '走国内镜像下载', checked: true } // 默认勾上：直连在国内基本是等它超时
             : null,
@@ -3092,7 +3968,7 @@ function wireExternalActions(dev) {
       } else {
         const ok = await askConfirm({
           title: '重启？',
-          body: `会把「${dev.label}」上的 ${c.label} 拉起来。`,
+          body: `会把「${dev.label}」上的 ${extLabel} 拉起来。`,
           ok: '重启',
         });
         if (!ok) return;
@@ -3200,7 +4076,7 @@ function wireInstallRuntime(dev) {
  * 「安装」弹窗是唯一还可能出现手填的入口（"我装了、但你没认出来"），正常流程碰不到。
  */
 async function renderDeviceDetail() {
-  $('settingsView').innerHTML = rtLoading('运行时');
+  $('settingsView').innerHTML = rtLoading('这台机器');
 
   let dev;
   let families;
@@ -3212,7 +4088,7 @@ async function renderDeviceDetail() {
       api('/api/runtime-families').then((f) => f.families),
     ]);
   } catch (err) {
-    $('settingsView').innerHTML = `${headRow('<b>运行时</b>')}<div class="empty">${failHtml(err)}</div>`;
+    $('settingsView').innerHTML = `${headRow('<b>这台机器</b>')}<div class="empty">${failHtml(err)}</div>`;
     return;
   }
 
@@ -3278,27 +4154,57 @@ async function renderDeviceDetail() {
     </div>`;
   };
 
-  // 这台机器上没有 —— 给一条能直接粘的命令，别让他自己去找安装包
+  /*
+   * 这台机器上没有 —— **跟远程节点那一行完全一致**（2026-10-21 用户提的）：
+   * 一颗「在这台机器上安装」（点了当场装，进度就地写），外加「复制命令」「按路径接入」。
+   * 原来这里只给「复制安装命令」—— 可节点页早就能一键装了，本机反而要人开终端，
+   * 两台机器两套动作，没有道理（本机就是控制面自己，更没理由绕不开）。
+   * 判据逐条对齐节点页的 rowOfMissing：dsh 是 Windows 桌面端自带的，别处不给那条"命令"。
+   */
+  const isWinLocal = /win/i.test(dev.platform ?? '');
   const rowOfAbsent = (f) => {
-    const inst = f.install;
-    // 拿不到 install 时别写"没有可用的安装方式" —— 那读起来像个结论，
-    // 而其实可能只是后端版本旧了没这个字段（同 rowOfRuntime 那段注释）
-    const sub = inst?.cmd
-      ? `<div class="sub" style="font-family:ui-monospace,monospace;font-size:11.5px">${esc(inst.cmd)}</div>`
-      : '<div class="sub">这台机器上没探测到</div>';
+    const cmd = f.install?.kind === 'app' && !isWinLocal ? null : (f.install?.cmd ?? null);
+    // 只有 npm 那种能一键装（同节点页：dsh 要靠装桌面端，不是一条命令能解决的事，不给按钮）
+    const oneClick = f.install?.kind === 'npm' && !!cmd;
+    const busy = runningTaskFor(dev, f.id);
+    // 上次没成的那件也摆出来（同节点页：失败是做过的事，就该留在那儿，悬停看完整输出）
+    const lastFail = !busy && dev.task?.done && dev.task.status !== '完成' && dev.task.family === f.id ? dev.task : null;
+    const sub = cmd
+      ? `<div class="sub" style="font-family:ui-monospace,monospace;font-size:11.5px">${esc(cmd)}</div>`
+      : '<div class="sub">这台机器上装不了（它是 Windows 桌面端自带的）</div>';
     return `<div class="row-item off">
       ${cliAvatar(f.id, f.label)}
       <div class="who">
         <b>${esc(f.label)}</b>
         ${sub}
+        <!-- 安装进度就写在这儿（点击之后才出现），不另开弹窗 -->
+        <div class="sub install-log" style="display:none;font-family:ui-monospace,monospace;font-size:11.5px"></div>
+        ${
+          busy
+            ? `<div class="sub" data-task-line="${esc(busy.id)}" style="display:block;font-family:ui-monospace,monospace;font-size:11.5px">${
+                busy.running ? '进行中… ' : '排队中… '
+              }${esc(taskTail(busy) || '（马上开始）')}</div>`
+            : lastFail
+              ? `<div class="sub" title="${esc(lastFail.output)}" style="color:var(--bad);font-size:11.5px">上次没成（${esc(
+                  failAt(lastFail),
+                )}）：${esc(taskFailLine(lastFail) || '（没输出）')}（悬停看全部）</div>`
+              : ''
+        }
       </div>
-      ${inst?.kind === 'npm' ? `<button class="mini auto" data-copy="${esc(inst.cmd)}">复制安装命令</button>` : ''}
+      ${
+        busy
+          ? '<span class="dim" style="font-size:11.5px">进行中…</span>'
+          : oneClick
+            ? `<button class="mini auto primary" data-install-rt="${esc(f.id)}" data-cmd="${esc(cmd)}">在这台机器上安装</button>`
+            : ''
+      }
+      ${cmd ? `<button class="mini auto" data-copy="${esc(cmd)}">复制命令</button>` : ''}
       <button class="mini auto" data-rt-manual="${esc(f.id)}">按路径接入</button>
     </div>`;
   };
 
   $('settingsView').innerHTML = `
-    ${headRow(breadcrumb([{ label: '运行时', to: 'devices' }, { label: dev.label }]))}
+    ${headRow(breadcrumb([{ label: '这台机器', to: 'devices' }, { label: dev.label }]))}
     <div class="detail-body">
       ${devHeadHtml(dev, {
         badges: '<span class="pill-ok">在线</span><span class="pill">本机</span>',
@@ -3341,6 +4247,8 @@ async function renderDeviceDetail() {
 
   wireRenameDevice(dev);
   wireCopyButtons(); // 外部件那段的「复制安装命令」（本机不给一键：控制面直接跑 curl|sh 不合适，用户在终端里粘一下更清楚）
+  wireInstallRuntime(dev); // 未安装那段的「在这台机器上安装」—— 本机由控制面当场执行（见 server.mjs 的 local 分支）
+  scheduleTaskPoll(dev); // 有装在跑就接着盯（刷新页面之后进度也能从服务端读回来）
 
   // 扫描：点了才跑（要 spawn 进程拿版本号，约半秒）
   $('detectRuntime').onclick = async () => {
@@ -3547,7 +4455,7 @@ $('addRtOk').onclick = async (e) => {
 
 /* ③ CLI 详情 */
 async function renderCliDetail() {
-  $('settingsView').innerHTML = rtLoading('运行时');
+  $('settingsView').innerHTML = rtLoading('这台机器');
 
   let dev;
   let rt;
@@ -3556,7 +4464,7 @@ async function renderCliDetail() {
     rt = dev.runtimes.find((r) => r.id === S.rtRuntime);
     if (!rt) throw new Error('这台设备上没有这个 CLI');
   } catch (err) {
-    $('settingsView').innerHTML = `${headRow('<b>运行时</b>')}<div class="empty">${failHtml(err)}</div>`;
+    $('settingsView').innerHTML = `${headRow('<b>这台机器</b>')}<div class="empty">${failHtml(err)}</div>`;
     return;
   }
 
@@ -3564,7 +4472,7 @@ async function renderCliDetail() {
      左栏仍是「设置」的分节列表，所以面包屑从「运行时」这一层起。 */
   $('settingsView').innerHTML = `
     ${headRow(breadcrumb([
-      { label: '运行时', to: 'devices' },
+      { label: '这台机器', to: 'devices' },
       { label: dev.label, to: 'device' },
       { label: rt.label },
     ]))}
@@ -3642,8 +4550,8 @@ async function renderCliDetail() {
       await api(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload()) });
       const r = await post(url + '/probe', {});
       $('rtResult').innerHTML = r.ok
-        ? `路径可用，版本：<code>${esc(r.version || '(没报版本号)')}</code>`
-        : `不可用 —— ${esc(r.error || '未知原因')}`;
+        ? `在线，版本：<code>${esc(r.version || '(没报版本号)')}</code>`
+        : `离线 —— ${esc(r.error || '未知原因')}`;
       $('rtResult').style.color = r.ok ? 'var(--ok)' : 'var(--bad)';
       await load();
     } catch (err) {
@@ -3715,15 +4623,15 @@ function closeCtxMenu() {
 /**
  * 会话操作的错误人话（PRD v1.1，产品口径）。
  *
- * 为什么要有：`api()`（app.js:874）把所有 HTTP 错误统一成「E码：服务异常」，原因只进
- * `err.detail` 和 console。而 `E2047 / E1050 / E4002` 恰恰是用户**卡住时最需要知道原因**
- * 的三个场景 —— 只弹"服务异常"，人会以为出 bug 了、来截图。
+ * 这张表**不是**"把原因藏起来"的补丁，而是"把原因说得更像人话"的覆盖层：
+ * `api()`（2026-10-21 起）对 4xx 已经会直接显示服务端原文，但服务端那句是**面向操作**的
+ * （「这段会话不存在」），而人会卡住的场景需要一句**面向结果**的话
+ * （「这段会话已经不在了，列表已刷新」—— 告诉他接下来该怎么办）。
  *
  * 三条纪律：
- *  ① 用 `err.code` 映射，**不解析 `err.message`**（message 里只有"服务异常"，解析不出来）；
- *  ② **不改全局 `api()`** —— 那会改掉全站每一处错误提示（工作台 / 插件 / 流程 / 设置），超范围；
- *  ③ 表里没有的码**自动回落 `err.message`**，所以 hide 的 `E2001`、`/api/state` 的 `E5xxx`
- *     行为与今天完全一致。
+ *  ① 用 `err.code` 映射，**不解析 `err.message`**（文案随时会改，解析它等于把两个文件焊死）；
+ *  ② **不往 `api()` 里塞业务判断** —— 错误码到人话的映射属于各自领域，全局那层只负责"能不能显示原文"；
+ *  ③ 表里没有的码**自动回落 `err.message`**（现在已带服务端原因），不会退回"只有服务异常"。
  *
  * **全仓只留这一份**：将来别的功能（比如群删除）要用人话，往这张表里加一行，别再抄一份。
  */
@@ -3800,6 +4708,20 @@ function enterArchiveView() {
 }
 
 /**
+ * 会话的**显示名**（2026-10-21 修"解聘后头像变 ? / 名字变「和 大梁」"）：
+ *   · 员工还在 → personaName（他现在可能改过名，JOIN 现值）；
+ *   · 员工没了（解聘/删除）→ personaName 是 NULL，回落到会话自己的标题，
+ *     但 1:1 会话的 title 存的是「和 张三」（见 toMessages 的 `和 ${persona.name}`），
+ *     直接当名字用会带出「和」前缀 —— 这里剥掉；连标题都没有才写「员工已删」。
+ * 头像的首字与底色也用这同一个返回值，别一处用 personaName 一处用 title
+ * （之前列表头像只认 personaName，人一没了就画出「?」—— 用户实报）。
+ */
+function convDisplayName(c) {
+  if (c.personaName) return c.personaName;
+  return String(c.title || '').replace(/^和\s*/, '') || '（员工已删）';
+}
+
+/**
  * 左栏的归档列表。行与消息列表同一套 `.item` 样式（用户要的就是"像张三、李四那样列出来"），
  * 只是副标题换成条数与"员工已删除"，右键菜单只给「删除」。
  */
@@ -3812,7 +4734,8 @@ function renderArchiveList() {
 
   const items = rows0
     .map((c) => {
-      const title = c.title || '（没有标题）';
+      // 归档里 direct 会话的员工都已经没了：convDisplayName 剥「和 」前缀（跟消息列表同一来源）
+      const title = c.kind === 'group' ? (c.title || '（没有标题）') : convDisplayName(c);
       const active = S.conversation?.id === c.id;
       return `<div class="item ${active ? 'active' : ''}" data-conv="${esc(c.id)}">
         <div class="avatar" ${avatarStyle(title)}>${esc(initial(title))}</div>
@@ -4122,16 +5045,22 @@ function renderList() {
      * 不在这层排序：输入的 S.conversations 已由服务端按 updatedAt DESC 排好，
      * filter 天然保住全局顺序（群与人混在一起按最后活跃时间排，跟以前一样）。
      */
-    const currentOf = new Map();  // 人 → 他最新那段
-    const groupOf = new Map();    // 群 id → 这个群最新那段
+    const currentOf = new Map();  // 人 → 他的代表会话（最新那段；正在看的那段优先，见下）
+    const groupOf = new Map();    // 群 id → 这个群的代表会话（同上）
     for (const c of S.conversations ?? []) {
       if (c.kind === 'exec') continue;
       if (c.kind === 'group') {
         const gid = gidOf(c);
-        if (!groupOf.has(gid)) groupOf.set(gid, c);
+        if (!groupOf.has(gid) || S.conversation?.id === c.id) groupOf.set(gid, c);
         continue;
       }
-      if (!currentOf.has(c.personaId)) currentOf.set(c.personaId, c); // 第一条即最新
+      /*
+       * 代表会话 = 最新那段；但你**正在看**的那段优先（2026-10-22 用户实报）：
+       * 从「聊天记录」抽屉点开一段老会话，左栏这一行也应该是它 —— 预览、时间
+       * 跟着走，高亮才真的对得上行。不然行还停在最新那段上，看着选中了，
+       * 其实是按"人"命中的假高亮（预览根本不是你点开的那条）。
+       */
+      if (!currentOf.has(c.personaId) || S.conversation?.id === c.id) currentOf.set(c.personaId, c);
     }
     const rows = (S.conversations ?? [])
       .filter((c) => {
@@ -4140,14 +5069,15 @@ function renderList() {
         return currentOf.get(c.personaId)?.id === c.id;
       })
       .filter((c) => match(c.personaName) || match(c.title));
+    const pById = new Map((S.personas ?? []).map((p) => [p.id, p]));   // 消息行头像要用
     $('listBody').innerHTML =
       (rows.length
         ? rows.map((c) => {
             const isGroup = c.kind === 'group';
-            const title = isGroup ? c.title : (c.personaName || c.title || '（员工已删）');
+            const title = isGroup ? c.title : convDisplayName(c);
             const avatar = isGroup
               ? `<div class="avatar grp">${esc(initial(c.title))}</div>`
-              : `<div class="avatar" ${avatarStyle(c.personaName)}>${esc(initial(c.personaName))}</div>`;
+              : personaAvatar(pById.get(c.personaId), '', c.personaName ?? title);
             // 没聊过就**留白**（2026-10-20 用户要求）：不再显示「还没聊过」占位
             const preview = esc(cut(plain(c.lastMessage), 34));
             /*
@@ -4241,6 +5171,13 @@ function renderList() {
     return;
   }
 
+  // 专家库是整页卡片墙（左栏被 CSS 收掉）：左栏谁都不画，清空兜底。
+  // 不显式接管的话会落到下面的通讯录分支，把会话列表画进一面看不见的栏里（白画还留隐患）。
+  if (S.nav === 'experts') {
+    $('listBody').innerHTML = '';
+    return;
+  }
+
   // 通讯录 = 群聊 + 数字员工 两段（搜的时候空的段不占地方）
   // 群聊**包含被「不显示」的**（2026-10-20 用户要求）：
   // 「不显示」隐藏的是**这行会话消息**，不是群本身 —— 群、成员、群助手都还在，
@@ -4294,9 +5231,9 @@ function renderList() {
     .join('');
 
   const personRow = (p) => `<div class="item ${S.persona && S.persona.id === p.id ? 'active' : ''}" data-persona="${p.id}">
-        <div class="avatar" ${avatarStyle(p.name)}>${esc(initial(p.name))}</div>
+        ${personaAvatar(p)}
         <div class="who">
-          <div class="line1"><b>${esc(p.name)}${p.builtin ? '<i class="b-inline" title="出厂就在的员工，删不掉">内置</i>' : ''}</b></div>
+          <div class="line1"><b>${esc(p.name)}${p.builtin ? '<i class="b-inline" title="出厂就在的员工：名字、职责与技能随平台固定，删不掉">内置</i>' : ''}</b></div>
           <div class="line2">${esc(personSubtitle(p))}</div>
         </div>
         <i class="dot ${p.busy ? 'busy' : ''}" title="${p.busy ? '正在干活' : '现在闲着'}"></i>
@@ -4459,13 +5396,17 @@ window.addEventListener('pagehide', () => { if (flushDetailSave) flushDetailSave
 
 function showView(which) {
   if (which !== 'detail' && flushDetailSave) flushDetailSave(); // 离开详情前先落盘（自动保存的兜底）
-  $('chatView').classList.toggle('hidden', which !== 'chat');
-  $('detailView').classList.toggle('shown', which === 'detail');
-  $('settingsView').classList.toggle('shown', which === 'settings');
-  $('groupView').classList.toggle('shown', which === 'group');
-  $('pluginView').classList.toggle('shown', which === 'plugin');
-  $('flowView').classList.toggle('shown', which === 'flow');
-  $('placeholderView').classList.toggle('shown', which === 'placeholder');
+  const on = (id, cond) => $(id)?.classList.toggle('shown', cond);
+  $('chatView')?.classList.toggle('hidden', which !== 'chat');
+  // 2026-10-22：全部改可选链 —— 某个 view 容器万一缺了（expertsView 就漏建过），
+  // 只损失那一页，不该把整个 showView 炸掉连累所有页面白屏
+  on('detailView', which === 'detail');
+  on('settingsView', which === 'settings');
+  on('groupView', which === 'group');
+  on('expertsView', which === 'experts');
+  on('pluginView', which === 'plugin');
+  on('flowView', which === 'flow');
+  on('placeholderView', which === 'placeholder');
 }
 
 /** 还没做的东西：先说好是"开发中"，别做成点不动的空壳 */
@@ -5891,7 +6832,7 @@ async function paintTaskCardPage(taskId, opts = {}) {
   const cmtItem = (m) => {
     const mine = m.role === 'user';
     return `<div class="tc-cmt${mine ? ' mine' : ''}">
-      ${mine ? smAvatar('我', 'me') : smAvatar(whoName)}
+      ${mine ? smAvatar('我', 'me') : smAvatar(whoName, '', personaByName(whoName))}
       <div class="tc-cmt-main">
         <div class="tc-cmt-meta">${mine ? '' : `<b>${esc(whoName)}</b>`}<time>${esc(cmtTime(m.createdAt))}</time></div>
         <div class="tc-cmt-text">${renderMarkdown(m.text)}</div>
@@ -5965,7 +6906,7 @@ async function paintTaskCardPage(taskId, opts = {}) {
         // 作者行在**正文上面**（跟普通评论一致）：头像旁边第一行就是"我 + 时间"，
         // 再往下才是内容 —— 反过来会让人以为下面又开了一条评论（2026-10-18 用户指出）
         return `<article class="tc-topic${t.head ? '' : ' pre'}" data-topic="${esc(t.id)}">
-          ${t.head && !startNote ? (t.head.role === 'user' ? smAvatar('我', 'me') : smAvatar(whoName)) : ''}
+          ${t.head && !startNote ? (t.head.role === 'user' ? smAvatar('我', 'me') : smAvatar(whoName, '', personaByName(whoName))) : ''}
           <div class="tc-topic-body">
             ${meta}${head}
             ${replies}
@@ -6308,7 +7249,9 @@ async function paintTaskCardPage(taskId, opts = {}) {
       }
       return true;
     } catch (err) {
-      const why = String(err?.detail || err?.message || '服务异常').split('\n')[0];
+      // `err.message` 自带「码：原因」（4xx 是服务端原文，5xx 是「服务异常」）。
+      // 不能再用 `err.detail || err.message` —— 那会在 5xx 时把内部原文顶到界面上。
+      const why = String(err?.message || '服务异常').split('\n')[0];
       setSaveState('没开工：' + why, 'bad');
       // 状态可能已经改成「待办」但没派出去（忙/运行时不可用）：重取一次，让界面说实话
       try {
@@ -6617,7 +7560,7 @@ async function paintTaskCardPage(taskId, opts = {}) {
     host?.insertAdjacentHTML(
       'beforeend',
       `<div class="tc-cmt live" id="${id}">
-        ${smAvatar(whoName)}
+        ${smAvatar(whoName, '', personaByName(whoName))}
         <div class="tc-cmt-main"><div class="tc-cmt-meta"><b>${esc(whoName)}</b><span class="dim">正在说…</span></div>
         <div class="tc-cmt-text"><div class="typing"><i></i><i></i><i></i></div></div></div></div>`,
     );
@@ -6951,86 +7894,147 @@ function taskDialog(project, colKey) {
 }
 
 /**
- * 选目录：走**服务端**列子目录。
+ * 页内浏览目录（浏览器那条路的兜底）：走**服务端**列子目录。
  *
  * 浏览器出于安全不给绝对路径（`webkitdirectory` 只给假路径），
- * 所以只能这样点着往下走，选完把绝对路径回填给调用方。
+ * 所以只能这样点着往下走；路径也可以直接粘进来（2026-10-22 加，深目录不用一路点）。
+ * 返回选中的绝对路径；取消返回 null。
  */
-async function pickDirectory(startPath, onPick) {
-  const dlg = document.createElement('dialog');
-  dlg.id = 'dirDlg';
-  dlg.innerHTML = `
-    <form method="dialog">
-      <b>选目录</b>
-      <div class="dir-path" id="dirPath">读取中…</div>
-      <div class="dir-list" id="dirList"></div>
-      <div class="dlg-actions">
-        <button type="button" value="cancel">取消</button>
-        <button class="primary" id="dirOk" value="ok">就选这个目录</button>
-      </div>
-    </form>`;
-  document.body.append(dlg);
-  // 动态建的对话框**得自己包一次头部** —— 页面加载时那一遍它还不存在（见 wireDialogHead）
-  wireDialogHead(dlg.querySelector('form'));
-  dlg.addEventListener('close', () => dlg.remove());
-  let cur = startPath || '';
+function browseDirectory(startPath) {
+  return new Promise((resolve) => {
+    const dlg = document.createElement('dialog');
+    dlg.id = 'dirDlg';
+    dlg.innerHTML = `
+      <form method="dialog">
+        <b>选目录</b>
+        <div class="row-inline">
+          <input id="dirPath" spellcheck="false" placeholder="路径（可以直接粘贴，回车前往）" />
+          <button type="button" id="dirGo">前往</button>
+        </div>
+        <div class="dir-list" id="dirList"></div>
+        <div class="dlg-actions">
+          <button type="button" value="cancel">取消</button>
+          <button class="primary" id="dirOk" value="ok">就选这个目录</button>
+        </div>
+      </form>`;
+    document.body.append(dlg);
+    // 动态建的对话框**得自己包一次头部** —— 页面加载时那一遍它还不存在（见 wireDialogHead）
+    wireDialogHead(dlg.querySelector('form'));
+    let cur = startPath || '';
+    let settled = false;
+    const settle = (v) => {
+      if (settled) return;
+      settled = true;
+      resolve(v);
+      dlg.close();
+    };
+    dlg.addEventListener('close', () => {
+      if (!settled) {
+        settled = true;
+        resolve(null);
+      }
+      dlg.remove();
+    });
 
-  const paint = async () => {
-    try {
-      const d = await api('/api/fs/dirs' + (cur ? '?path=' + encodeURIComponent(cur) : ''));
-      cur = d.path;
-      $('dirPath').textContent = d.path;
-      $('dirList').innerHTML =
-        (d.parent ? `<div class="dir-row up" data-go="${esc(d.parent)}">↰ 上一层</div>` : '') +
-        (d.dirs.length
-          ? d.dirs.map((x) => `<div class="dir-row" data-go="${esc(x.path)}">${esc(x.name)}</div>`).join('')
-          : '<div class="dir-row none">（没有子目录）</div>');
-      $('dirList').querySelectorAll('[data-go]').forEach((el) => {
-        el.onclick = () => {
-          cur = el.dataset.go;
-          paint();
-        };
-      });
-    } catch (e) {
-      $('dirPath').textContent = cur || '（默认）';
-      $('dirList').innerHTML = `<div class="dir-row none">${esc(e.message)}</div>`;
-    }
-  };
+    const paint = async () => {
+      try {
+        const d = await api('/api/fs/dirs' + (cur ? '?path=' + encodeURIComponent(cur) : ''));
+        cur = d.path;
+        $('dirPath').value = d.path;
+        $('dirList').innerHTML =
+          (d.parent ? `<div class="dir-row up" data-go="${esc(d.parent)}">↰ 上一层</div>` : '') +
+          (d.dirs.length
+            ? d.dirs.map((x) => `<div class="dir-row" data-go="${esc(x.path)}">${esc(x.name)}</div>`).join('')
+            : '<div class="dir-row none">（没有子目录）</div>');
+        $('dirList').querySelectorAll('[data-go]').forEach((el) => {
+          el.onclick = () => {
+            cur = el.dataset.go;
+            paint();
+          };
+        });
+      } catch (e) {
+        $('dirList').innerHTML = `<div class="dir-row none">${esc(e.message)}</div>`;
+      }
+    };
+    const go = () => {
+      const v = $('dirPath').value.trim();
+      if (!v) return;
+      cur = v;
+      paint();
+    };
 
-  $('dirOk').onclick = (e) => {
-    e.preventDefault();
-    if (!cur) return;
-    onPick(cur);
-    dlg.close();
-  };
-  dlg.showModal();
-  await paint();
+    $('dirGo').onclick = (e) => {
+      e.preventDefault();
+      go();
+    };
+    $('dirPath').addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      go();
+    });
+    $('dirOk').onclick = (e) => {
+      e.preventDefault();
+      if (!cur) return;
+      settle(cur);
+    };
+    dlg.showModal();
+    paint();
+  });
 }
 
 /**
- * 「选择」目录按钮的公共逻辑（新建弹窗和详情就地编辑共用）：
- * **本机原生选择框优先**（像 DSH 那样），弹不出来就退回页内浏览。
- * 原生那条只能由服务端做 —— 浏览器禁止读绝对路径。
+ * 选**本机**目录的统一入口（项目「工作目录」、仓库本地目录等处共用）。
+ *
+ * 桌面壳里优先走**壳的原生目录框**：`pick_directory` 命令用 `IFileOpenDialog`，
+ * 带主窗口当 owner —— 对话框一定压在这个窗口上、系统标准样式、能一路点到任意盘。
+ * 浏览器（`start.cmd` 那条）没有原生框，退回页内浏览（服务端列目录）。
+ *
+ * ⚠️ 2026-10-22 用户实报「点选择没反应」的根因就是原来那条「服务端弹原生框」：
+ * 服务端是没有窗口的后台进程，它 spawn 的 PowerShell 弹的框没有属主，
+ * 实测窗口 `IsWindowVisible=false` —— 被最大化的壳窗口整个盖住，按钮一直转「…」。
+ * 原生框归壳管，服务端那条已经删掉（见 apps/server/src/server.mjs 的说明）。
+ *
+ * 返回选中的绝对路径；取消返回 null（不会抛，最差也是页内浏览）。
+ */
+async function pickLocalDir({ title = '选择本机目录', startPath = '' } = {}) {
+  const invoke = window.__TAURI_INTERNALS__?.invoke || window.__TAURI__?.core?.invoke;
+  if (typeof invoke === 'function') {
+    try {
+      const picked = await invoke('pick_directory', { title, defaultPath: startPath || null });
+      return picked || null;
+    } catch (e) {
+      // 壳里命令不在 / 权限没给 / 系统不支持 —— 退回页内浏览，别让人卡在按钮上
+      console.warn('[选目录] 原生目录框不可用，退回页内浏览：', e);
+    }
+  }
+  return browseDirectory(startPath);
+}
+
+/**
+ * 「选择」目录按钮的公共逻辑（新建弹窗和详情就地编辑共用）。
  */
 async function pickProjectDir(btnId, inputId) {
   // ⚠️ id 必须成对传入：详情表单和新建弹窗**同时在线**，两边若用同名 id，
   // `$('pjName')` 会取到文档里前一个 —— 踩过：新建弹窗实际创建出了
   // "当前选中项目的复制品"（2026-10-18 实测）。
   const btn = $(btnId);
+  const el = $(inputId);
+  /* 填值必须补发一次 `input`（2026-10-22 修"选择没生效"）：详情页的自动保存只认
+     input/blur 事件，代码直接赋 value 什么都不触发 —— 目录看着填上了，其实从没存过。 */
+  const apply = (v) => {
+    el.value = v;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  };
   btn.disabled = true;
   btn.textContent = '…';
   try {
-    const r = await api('/api/fs/pick-dir', { method: 'POST' });
-    if (r?.path) {
-      $(inputId).value = r.path;
-      return;
-    }
-    // canceled：用户自己点了取消，什么都不做
-  } catch {
-    // 原生弹不出来（没有桌面 / COM 被禁）→ 退回页内浏览
-    await pickDirectory($(inputId).value.trim(), (dir) => {
-      $(inputId).value = dir;
+    const picked = await pickLocalDir({
+      title: '选择项目目录（AI 会在这里干活）',
+      startPath: el.value.trim(),
     });
+    if (picked) apply(picked);
+  } catch (e) {
+    toast(e.message, 'error');
   } finally {
     btn.disabled = false;
     btn.textContent = '选择';
@@ -7613,13 +8617,20 @@ function runHTML(v) {
       // 这一步的记录（状态 / 经办人 / 第几次 / 时间 / 耗时）现在全在这一行的属性行里，
       // 不用再开一个面板 —— 任务卡就是为此撤掉的。
       const isCur = t.id === lastTaskId;
-      // 「对话」那颗文字按钮**已删** —— 对话图标现在就在「经办人」后面
-      //（同一个动作、同一个 data-run-chat 接线），一件事不留两个入口。
-      // **任务卡也撤了**：改状态 / 改指派就是上面那两行本身（点状态、点经办人）。
-      // 这一行只剩"往来多少条"。
-      const talk = `<div class="run-talk">
-          <span class="dim">${canTalk ? (n ? `已往来 ${n} 条` : '还没聊过') : '先派活才能对话'}</span>
-        </div>`;
+      // 改状态 / 改指派就是上面那两行本身（点状态、点经办人），这里不再摆第二套。
+      // **任务卡入口长在这儿**（2026-10-21 用户拍板）：原来是经办人后面那颗对话气泡，
+      // 但它 2026-10-19 起开的已经是任务卡，气泡图标语义错位。现在收进这行字 ——
+      // 「已往来 N 条 / 还没聊过」本身就是入口说明，点它开任务卡；
+      // 流程没挂项目（开不了卡）时退回对话栏（三条路的接线共用，见下方 data-run-card）。
+      const talkable = canOpenCard || canTalk;
+      const talkText = canTalk ? (n ? `已往来 ${n} 条` : '还没聊过') : '还没聊过';
+      const talk = `<div class="run-talk">${
+        talkable
+          ? `<button type="button" class="run-card-link" data-run-card data-task="${esc(t.id)}" title="${canOpenCard
+              ? (t.projectTaskId ? '打开这一步的任务卡' : '打开任务卡（第一次点会建一张）')
+              : '打开对话'}">${talkText}</button>`
+          : '<span class="dim">先派活才能对话</span>'
+        }</div>`;
       // 行内**只放快乐路径**（派活 / 通过 / 驳回）；重跑已删 —— 改状态成「待办」就是重跑。
       // 「没人可派」那种不在这儿再摆一颗"指派给谁" —— 上一行「经办人」本身就是入口，
       // 摆两颗是同一个动作两个按钮。
@@ -7653,31 +8664,12 @@ function runHTML(v) {
       const alive = v.status === '进行中';
       const canStatus = isCur && alive && (v.statusChoices ?? []).length > 0;
       const canAssign = isCur && alive && (S.personas ?? []).length > 0;
+      // 经办人后面**不再摆按钮**（2026-10-21）：那颗气泡 2026-10-19 起开的是任务卡，
+      // 气泡图标语义错位 —— 入口挪到了下面「已往来 N 条」那行字上（见 talk）。
       const who = `<div class="run-who">
           <span><i>经办人</i>${
             canAssign ? '<span class="run-pick" id="runAssigneeMount"></span>' : esc(t.assigneeName ?? '没人')
-          }${t.visit > 1 ? ` · 第 ${t.visit} 次` : ''}${
-            /*
-             * 人名后面那颗按钮 —— **2026-10-19 起它开的是"这一步的任务卡"，不再开对话栏**。
-             *
-             * 用户的判断（"流程这个对话改成跳转到任务卡是不是更好"）对的地方在于：
-             * 这一步的往来记录、干成什么样、状态、换个经办人 —— 本来就是一张卡要回答的事，
-             * 对话栏只回答了其中一问，还挤在窄栏里。所以让它通到卡上去。
-             *
-             * 这里**不直接把 wt2- 当卡 id**：流程步骤和任务卡在库里是两张表
-             * （`workflow_tasks` / `project_tasks`），拿 `wt2-` 去查卡会 404（试过）。
-             * 服务端在每一步上给了 `projectTaskId`（已有卡）和 `canOpenTaskCard`（能现开），
-             * 两者都没有（流程没挂项目）时才退回老的对话栏 —— 那条路没删，还能用。
-             *
-             * 图标仍是"对话气泡"而不是"卡片"：对人来说这一下就是"去看看他在说什么/干了啥"，
-             * 文案也跟着变（title 写清楚去哪儿），别让人点了才知道。
-             */
-            `<button class="icon-btn run-chat" type="button" data-run-card data-task="${esc(t.id)}"${
-              canOpenCard || canTalk ? '' : ' disabled'
-            } title="${canOpenCard
-              ? (t.projectTaskId ? '打开这一步的任务卡（不离开这条流程）' : '打开任务卡（第一次点会建一张）')
-              : canTalk ? '跟经办人对话' : '先派活才能对话'}">${ICON_CHAT}</button>`
-          }</span>
+          }${t.visit > 1 ? ` · 第 ${t.visit} 次` : ''}</span>
           <span><i>经办时间</i>${
             t.startedAt ? esc(new Date(t.startedAt).toLocaleString('zh-CN')) : '—'
           }</span>
@@ -7876,7 +8868,8 @@ function wireRun(v) {
   //    没开栏时它是 null，点击会掉进 sendNodeChat —— 空输入，看着像"点了没反应"）
   if (send) send.onclick = () => (send.classList.contains('stopping') ? stopNodeRun() : sendNodeChat());
   /*
-   * 节点上那颗按钮 → **这一步的任务卡**（2026-10-19）；没有卡、也不能开卡时退回对话栏。
+   * 节点上「已往来 N 条」那行字 → **这一步的任务卡**（2026-10-21 起；再往前是经办人后面的
+   * 对话气泡图标，气泡语义错位被挪走了）；没有卡、也不能开卡时退回对话栏。
    *
    * 三条路，顺序不能反：
    *   ① 服务端说"已经有卡" → 直接开弹窗（不写库）；
@@ -8811,11 +9804,21 @@ function openGitManualDialog(onDone) {
   dlg.addEventListener('close', () => dlg.remove());
 
   $('gitManualPick').onclick = async () => {
+    const input = $('gitManualPath');
+    const btn = $('gitManualPick');
+    btn.disabled = true;
+    btn.textContent = '…';
     try {
-      const r = await api('/api/fs/pick-dir', { method: 'POST' });
-      if (r?.path) $('gitManualPath').value = r.path;
+      const picked = await pickLocalDir({
+        title: '选择这个仓库的本地目录',
+        startPath: input.value.trim(),
+      });
+      if (picked) input.value = picked;
     } catch (e) {
       toast(e.message, 'error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '选择';
     }
   };
   $('gitManualOk').onclick = async (e) => {
@@ -8888,11 +9891,21 @@ function openGitAddDialog(fullName, onDone) {
   syncMode();
 
   $('gitLocalPick').onclick = async () => {
+    const input = $('gitLocalPath');
+    const btn = $('gitLocalPick');
+    btn.disabled = true;
+    btn.textContent = '…';
     try {
-      const r = await api('/api/fs/pick-dir', { method: 'POST' });
-      if (r?.path) $('gitLocalPath').value = r.path;
+      const picked = await pickLocalDir({
+        title: '选择这个仓库已存在的克隆目录',
+        startPath: input.value.trim(),
+      });
+      if (picked) input.value = picked;
     } catch (e) {
       toast(e.message, 'error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '选择';
     }
   };
 
@@ -9862,10 +10875,10 @@ function renderSkillCards() {
           rows.length
             ? `<div class="sk-grid">${rows
                 .map(
-                  (s) => `<div class="sk-card" data-sk="${esc(s.name)}">
+                  (s) => `<div class="sk-card${s.builtin ? ' builtin' : ''}" data-sk="${esc(s.name)}">
                     <div class="avatar skill">${esc(initial(s.name))}</div>
                     <div class="who">
-                      <b>${esc(s.name)}</b>
+                      <b>${esc(s.name)}${s.builtin ? '<em class="tag-dim" title="内置技能：只允许用，不许改（不能编辑、不能删、不能覆盖导入）">内置</em>' : ''}</b>
                       <div class="sub">${esc((s.description || '').trim() || '（还没写描述 —— 模型靠这一句决定什么时候用它）')}</div>
                     </div>
                   </div>`,
@@ -9981,6 +10994,9 @@ $('nSkillOk').onclick = async (e) => {
 
 function renderSkillEditor(skill, isNew, linkedPersonas) {
   const filePath = `${S.skillsRoot || 'skills'}\\${skill.name}\\SKILL.md`;
+  /* 内置技能 = 只读态（2026-10-22 用户拍板）：字段照常看得全，但改不了、删不了。
+     闸真正在服务端（PUT/DELETE/覆盖导入都会 403），这里只是不摆按钮 —— 两边都要有。 */
+  const ro = !!skill.builtin;
   // 左栏只写「设置」；页头是面包屑「设置 › 技能 › 名字」（2026-10-20 用户要求：
   // 点进详情页后顶部要面包屑），名字/描述/文件路径都在正文 hero 里，页头不重复。
   // 布局照**员工详情页**：hero（头像 + 名字 + 一句话 + 操作按钮）+ 分组卡片 + 左标签右内容。
@@ -9997,12 +11013,16 @@ function renderSkillEditor(skill, isNew, linkedPersonas) {
             <span class="pill">${
               linkedPersonas.length ? `${linkedPersonas.length} 个员工在用` : '还没挂给任何人'
             }</span>
+            ${ro ? '<span class="pill builtin">内置 · 只读</span>' : ''}
           </div>
           <div class="dim" style="font-size:11.5px;margin-top:2px">${esc(filePath)}</div>
         </div>
         <div class="hero-actions">
-          <button id="sSave">保存</button>
-          <button class="danger" id="sDelete">删除</button>
+          ${
+            ro
+              ? /* 只读态不摆「保存 / 删除」—— 闸在服务端，这里只是别给按不动的按钮 */ ''
+              : '<button id="sSave">保存</button>\n          <button class="danger" id="sDelete">删除</button>'
+          }
         </div>
       </div>
 
@@ -10015,7 +11035,7 @@ function renderSkillEditor(skill, isNew, linkedPersonas) {
         <div class="form-row top">
           <div class="row-label" title="决定「什么时候该用它」—— 模型先看这一句">描述</div>
           <div>
-            <textarea id="sDesc" style="height:76px">${esc(skill.description)}</textarea>
+            <textarea id="sDesc" style="height:76px" ${ro ? 'readonly' : ''}>${esc(skill.description)}</textarea>
             <div class="dim" style="font-size:11.5px;margin-top:6px">
               只存一行：敲了回车会被并成空格（它要进 SKILL.md 的 description 字段，也要在列表里显示成一行）。
             </div>
@@ -10024,7 +11044,20 @@ function renderSkillEditor(skill, isNew, linkedPersonas) {
         <div class="form-row top">
           <div class="row-label" title="什么时候用、做什么、做完长什么样。别写长 —— 贵在少而准">正文（Markdown）</div>
           <div>
-            <textarea id="sBody" style="height:340px">${esc(skill.body)}</textarea>
+            <!-- 预览/编辑（2026-10-22 用户实报："这里还是 markdown 格式"）：跟人物详情页
+                 「职责与身份设定」同一套框 —— markdown 写少读多，默认预览；编辑才出源码。
+                 只读技能（内置）不给切段，只预览（textarea 也 readonly）。 -->
+            <div class="instr-wrap">
+              <div class="instr-head">
+                <div class="counter" id="sBodyCount"></div>
+                ${ro ? '' : `<div class="seg seg-sm" id="sBodySeg">
+                  <button type="button" data-m="view" class="on">预览</button>
+                  <button type="button" data-m="edit">编辑</button>
+                </div>`}
+              </div>
+              <div id="sBodyView" class="md-view"></div>
+              <textarea id="sBody" hidden ${ro ? 'readonly' : ''}>${esc(skill.body)}</textarea>
+            </div>
           </div>
         </div>
       </div>
@@ -10047,7 +11080,52 @@ function renderSkillEditor(skill, isNew, linkedPersonas) {
       </div>
     </div>`;
 
-  $('sSave').onclick = async () => {
+  /*
+   * 正文预览/编辑（2026-10-22）：跟人物详情页「职责与身份设定」同一套做法。
+   *   · 预览渲染的是 textarea **现值**（当前草稿）—— 编辑一半切过去看到的就是刚写的，
+   *     切回编辑一个字不少；
+   *   · 编辑态随内容撑高（fitSBody），内层不出滚动条，滚动只留外层页面一条；
+   *   · 只读技能（内置）：没有 #sBodySeg，监听带 ?. 兜底，停在预览。
+   */
+  const sBodyEl = $('sBody');
+  const sBodyViewEl = $('sBodyView');
+  const fitSBody = () => {
+    if (!sBodyEl || sBodyEl.hidden) return;
+    sBodyEl.style.height = 'auto';
+    sBodyEl.style.height = `${sBodyEl.scrollHeight}px`;
+  };
+  const syncSBodyCount = () => {
+    const c = $('sBodyCount');
+    if (c) c.textContent = (sBodyEl?.value ?? '').trim().length + ' 字';
+  };
+  const renderSBodyView = () => {
+    const val = sBodyEl?.value ?? '';
+    sBodyViewEl.innerHTML = val.trim() ? mdRender(val) : '<div class="md-empty">还没写正文。</div>';
+  };
+  const setSBodyMode = (m) => {
+    if (m === 'edit' && ro) return; // 内置技能只读，切不过去
+    sBodyViewEl.hidden = m === 'edit';
+    sBodyEl.hidden = m !== 'edit';
+    if (m === 'edit') {
+      fitSBody();
+      sBodyEl.focus();
+    } else {
+      renderSBodyView();
+    }
+    $('sBodySeg')?.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.m === m));
+  };
+  $('sBodySeg')?.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-m]');
+    if (b) setSBodyMode(b.dataset.m);
+  });
+  sBodyEl?.addEventListener('input', () => {
+    syncSBodyCount();
+    fitSBody();
+  });
+  syncSBodyCount();
+  renderSBodyView();
+
+  if ($('sSave')) $('sSave').onclick = async () => {
     try {
       await api('/api/skills/' + encodeURIComponent(skill.name), {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
@@ -10058,7 +11136,7 @@ function renderSkillEditor(skill, isNew, linkedPersonas) {
     } catch (err) { toast(err.message, 'error'); }
   };
 
-  $('sDelete').onclick = async () => {
+  if ($('sDelete')) $('sDelete').onclick = async () => {
     if (!(await confirmDo(`删掉技能「${skill.name}」？\n文件会被删除，所有挂载一并解除。`))) return;
     try {
       await api('/api/skills/' + encodeURIComponent(skill.name), { method: 'DELETE' });
@@ -10092,7 +11170,11 @@ const skAssignPicked = new Set();
 
 function renderSkAssignList() {
   const q = ($('skAssignSearch').value || '').trim().toLowerCase();
-  const rows = (S.personas ?? []).filter((p) => !q || p.name.toLowerCase().includes(q));
+  // 被锁员工不进名单（2026-10-23；2026-10-22 扩到内置员工）：专家包雇来的 + 出厂的喜儿，
+  // 技能都随出厂定义固定，这里列出来也点不了（服务端同判据：experts.lockKindOf）
+  const rows = (S.personas ?? [])
+    .filter((p) => !String(p.id || '').startsWith('p-expert-') && !p.builtin)
+    .filter((p) => !q || p.name.toLowerCase().includes(q));
   $('skAssignList').innerHTML = rows.length
     ? rows
         .map((p) => {
@@ -10547,12 +11629,14 @@ async function openConversation(id) {
     /*
      * 名字取法：员工还在 → 用他现在的名字（可能改过，personaName 来自 JOIN）；
      * 员工已删 → personaName 是 NULL，**不能回落到 S.persona**（那是上一个人的名字，
-     * 会张冠李戴），退回这段会话自己的标题；连标题都没有才写「员工已删」。
+     * 会张冠李戴），退回这段会话自己的标题（convDisplayName 会剥掉「和 」前缀，
+     * 不然页头会出现「和 和大梁」这种叠字）；连标题都没有才写「员工已删」。
      * 头像同理：员工没了就别给「点进员工详情」的入口（点开是 404）。
      */
-    const name = d.conversation.personaName || d.conversation.title || '（员工已删）';
+    const name = convDisplayName(d.conversation);
+    const pHere = personaGone ? null : ((S.personas ?? []).find((x) => x.id === d.conversation.personaId) ?? null);
     $('chatHead').innerHTML = `
-      ${smAvatar(name, personaGone ? '' : `clickable" data-detail="${esc(d.conversation.personaId)}" title="配置他的 agent CLI`)}
+      ${smAvatar(name, personaGone ? '' : `clickable" data-detail="${esc(d.conversation.personaId)}" title="配置他的 agent CLI`, pHere)}
       <div class="meta">
         <div><b>${esc(name)}</b> ${badge}</div>
       </div>
@@ -10596,10 +11680,15 @@ function stampOf(iso) {
 function bubble(role, text, name, who, showName = false, at = '') {
   const mine = role === 'user';
   const label = mine ? '我' : (who || name || '数字员工');
+  // 头像带图（2026-10-22）：优先按名字找员工；群聊消息有 personaName 直接命中，
+  // 1:1 改过名时名字可能对不上，再兜一层会话的 personaId
+  const p = mine ? null
+    : (personaByName(label)
+      ?? (S.conversation?.personaId ? S.personas.find((x) => x.id === S.conversation.personaId) ?? null : null));
   // 时间放在气泡**外面**的下方（2026-10-19 用户要求，别塞在气泡里）：绝对定位，不占布局
   const t = at ? stampOf(at) : '';
     return `<div class="row ${mine ? 'me' : ''}">
-    ${mine ? smAvatar('我', 'me') : smAvatar(label)}
+    ${mine ? smAvatar('我', 'me') : smAvatar(label, '', p)}
     <div class="bubble">${showName && !mine ? `<div class="who-line">${esc(label)}</div>` : ''}${renderMarkdown(text)}</div>
     ${t ? `<div class="btime">${esc(t)}</div>` : ''}
   </div>`;
@@ -10752,7 +11841,7 @@ function attachStream(runId) {
   const id = 'live-' + runId;
   $('chat').insertAdjacentHTML('beforeend',
     `<div class="row" id="${id}">
-       ${smAvatar(name)}
+       ${smAvatar(name, '', personaByName(name))}
        <div class="bubble"><div class="typing"><i></i><i></i><i></i></div></div>
      </div>`);
   scrollDown();
@@ -11085,6 +12174,17 @@ function renderDetail({ persona, runtimes, runs, platformRoot, skills: personaSk
   // 2026-10-20 用户要求：通讯录详情**不做面包屑**，标题就固定「通讯录」。
   if (S.nav === 'contacts') setListTitle('通讯录');
   const rt = runtimes.find((r) => r.id === persona.runtime);
+  // 身份/技能锁定（2026-10-23；2026-10-22 用户定：内置员工喜儿按专家团那个模式收编）
+  // 两种来源同一套语义，判据与服务端 experts.lockKindOf 对齐：
+  //   expert  = 专家库雇来的（固定 id 前缀 p-expert-），随专家包固定，出路是解聘后自建；
+  //   builtin = 出厂的（喜儿），随平台固定，出路是另建一个员工。
+  // 锁的只是「他是谁 + 他会什么」；运行时/沙箱/工作目录/模型/头像仍旧可改。
+  const expertLocked = String(persona.id || '').startsWith('p-expert-');
+  const builtinLocked = !expertLocked && !!persona.builtin;
+  const identityLocked = expertLocked || builtinLocked;
+  const lockHint = expertLocked
+    ? '雇佣员工的名字、岗位与职责身份随专家包固定，不能修改 —— 想定制就解聘后自建一个员工。'
+    : '喜儿是内置员工，名字、岗位与职责身份随平台固定，不能修改 —— 想按自己的需要定制，就另建一个员工。';
   let extraRoots = [];
   try { extraRoots = JSON.parse(persona.rootDirs || '[]'); } catch { extraRoots = []; }
   const runRows = runs.length
@@ -11101,9 +12201,9 @@ function renderDetail({ persona, runtimes, runs, platformRoot, skills: personaSk
     $('detailView').innerHTML = `
     <div class="detail-body">
       <div class="p-head">
-        <div class="avatar" ${avatarStyle(persona.name)}>${esc(initial(persona.name))}</div>
+        ${personaAvatar(persona)}
         <div class="p-head-main">
-          <h2><span id="dNameText">${esc(persona.name)}</span>${persona.builtin ? '<span class="pill builtin" title="出厂就在的员工：不能删，可以改名和改职责">内置</span>' : ''}<span class="pill role" id="dRolePill"${persona.role ? '' : ' style="display:none"'}>${esc(persona.role || '')}</span>${
+          <h2><span id="dNameText">${esc(persona.name)}</span>${persona.builtin ? '<span class="pill builtin" title="出厂就在的员工：名字、岗位与职责身份随平台固定，不能删">内置</span>' : ''}<span class="pill role" id="dRolePill"${persona.role ? '' : ' style="display:none"'}>${esc(persona.role || '')}</span>${
             persona.busy
               ? `<span class="pill busy" id="dBusy" title="${esc(persona.busyLabel ?? '正在干活')}">${
                   persona.busyLabel ? '工作中·' + esc(persona.busyLabel) : '工作中'
@@ -11125,8 +12225,12 @@ function renderDetail({ persona, runtimes, runs, platformRoot, skills: personaSk
             <button type="button" class="hero-more-btn" id="dMore" title="更多操作">⋯</button>
             <div class="hero-more-menu" id="dMoreMenu" hidden>
               ${persona.builtin
-                ? '<button class="danger" id="dDelete" disabled title="内置员工不能删（可以改名、改职责）">内置 · 不可删</button>'
-                : '<button class="danger" id="dDelete">删除这个数字员工</button>'}
+                ? '<button class="danger" id="dDelete" disabled title="内置员工不能删（名字/职责/技能随平台固定）">内置 · 不可删</button>'
+                : persona.id.startsWith('p-expert-')
+                  ? // 专家库雇来的（固定 id p-expert-<key>）：走「解聘」—— 服务端同一条
+                    // fire 路由（群助手占用会给 409 人话），再雇佣同一个 id 接上旧会话
+                    '<button class="danger" id="dFire">解聘这个数字员工</button>'
+                  : '<button class="danger" id="dDelete">删除这个数字员工</button>'}
             </div>
           </div>
         </div>
@@ -11148,21 +12252,45 @@ function renderDetail({ persona, runtimes, runs, platformRoot, skills: personaSk
           <div class="ov-body">
             <section class="ov-panel" data-ov-panel="profile">
               <div class="group">
+                ${
+                  identityLocked
+                    ? `<div class="hint-line">${lockHint}</div>`
+                    : ''
+                }
                 <div class="form-row">
                   <div class="row-label">名字</div>
-                  <input id="dName" value="${esc(persona.name)}" />
+                  <input id="dName" value="${esc(persona.name)}" ${identityLocked ? `readonly title="${expertLocked ? '雇佣员工的名字随专家包固定' : '喜儿的名字随平台固定'}"` : ''} />
                 </div>
                 <div class="form-row">
                   <div class="row-label">岗位</div>
                   <div>
-                    <input id="dRole" list="roleSuggest" placeholder="比如：研发（留空也行）" value="${esc(persona.role || '')}" />
+                    <input id="dRole" list="roleSuggest" placeholder="比如：研发（留空也行）" value="${esc(persona.role || '')}" ${identityLocked ? `readonly title="${expertLocked ? '雇佣员工的岗位随专家包固定' : '喜儿的岗位随平台固定'}"` : ''} />
                   </div>
                 </div>
                 <div class="form-row top">
                   <div class="row-label">职责与身份设定</div>
                   <div>
-                    <textarea id="dInstr" style="height:clamp(260px,46vh,560px)">${esc(persona.instructions)}</textarea>
-                    <div class="counter" id="dInstrCount"></div>
+                    <!-- 预览/编辑（2026-10-21）：这个字段写少读多，默认预览。
+                         预览渲染的是 textarea 现值（当前草稿），不是存库值 —— 编辑一半切过去不丢字 -->
+                    <!-- 框头合成（2026-10-22 用户定稿）：字数 + 预览/编辑切段贴在框上沿当"框头"，
+                         不再悬空一行 —— 右边不孤零零飘按钮，左边由字数补位不显空 -->
+                    <div class="instr-wrap">
+                      <div class="instr-head">
+                        <div class="counter" id="dInstrCount"></div>
+                        ${
+                          /* 身份锁定：被锁员工（雇佣专家 / 内置喜儿）不画预览/编辑切换 —— 只读预览，下面的监听都带 ?. 兜底 */
+                          identityLocked
+                            ? ''
+                            : `<div class="seg seg-sm" id="dInstrSeg">
+                                <button type="button" data-m="view" class="on">预览</button>
+                                <button type="button" data-m="edit">编辑</button>
+                              </div>`
+                        }
+                      </div>
+                      <div id="dInstrView" class="md-view"></div>
+                      <!-- 高度不写死（2026-10-21）：随内容撑开（fitInstr），滚动只留外层页面 -->
+                      <textarea id="dInstr" hidden ${identityLocked ? 'readonly' : ''}>${esc(persona.instructions)}</textarea>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -11226,9 +12354,15 @@ function renderDetail({ persona, runtimes, runs, platformRoot, skills: personaSk
         <div class="sk-head">
           <div>
             <b>分配给智能体</b>
-            <div class="sk-hint">关闭＝暂停使用（仍保留分配）；解绑＝取消分配（技能还在库里）。</div>
+            <div class="sk-hint">${
+              expertLocked
+                ? '雇佣员工的技能随专家包固定，不能添加、解绑或停用；不合适就解聘换人，想定制就自建一个员工。'
+                : builtinLocked
+                  ? '喜儿的技能随平台固定，不能添加、解绑或停用；想挂别的技能就另建一个员工。'
+                  : '关闭＝暂停使用（仍保留分配）；解绑＝取消分配（技能还在库里）。'
+            }</div>
           </div>
-          <button class="mini auto" id="linkSkill">＋ 添加技能</button>
+          ${identityLocked ? '' : '<button class="mini auto" id="linkSkill">＋ 添加技能</button>'}
         </div>
         <div class="sk-list" id="dSkills">
           ${
@@ -11241,14 +12375,27 @@ function renderDetail({ persona, runtimes, runs, platformRoot, skills: personaSk
                         <b>${esc(l.name)}</b>
                         <div class="sk-desc">${esc(descOf(l.name) || '（技能库里已经没有这个文件了）')}</div>
                       </div>
-                      <label class="switch sm" title="${l.enabled ? '暂停使用（保留分配）' : '恢复使用'}">
-                        <input type="checkbox" data-skill-toggle="${esc(l.name)}" ${l.enabled ? 'checked' : ''} /><span></span>
-                      </label>
-                      <button class="mini sm txt" data-unlink="${esc(l.name)}" title="解绑：只是不再分配给他，技能本身还在库里">解绑</button>
+                      ${
+                        /* 2026-10-22 用户要求去掉「随平台固定/随专家包固定」标签：锁定这件事
+                           sk-head 的提示语已经说清楚了，每行再挂一个标签是重复 —— 锁定的行
+                           什么都不挂（没有开关/解绑按钮，本身就是"动不了"的意思） */
+                        identityLocked
+                          ? ''
+                          : `<label class="switch sm" title="${l.enabled ? '暂停使用（保留分配）' : '恢复使用'}">
+                              <input type="checkbox" data-skill-toggle="${esc(l.name)}" ${l.enabled ? 'checked' : ''} /><span></span>
+                            </label>
+                            <button class="mini sm txt" data-unlink="${esc(l.name)}" title="解绑：只是不再分配给他，技能本身还在库里">解绑</button>`
+                      }
                     </div>`,
                   )
                   .join('')
-              : '<div class="sk-blank">' + SKILL_ICON + ' 还没分配技能。点右上角「＋ 添加技能」从库里挑。</div>'
+              : `<div class="sk-blank">${SKILL_ICON} ${
+                  expertLocked
+                    ? '专家包清单里的技能都被删了才会空 —— 解聘再雇佣会重新挂上。'
+                    : builtinLocked
+                      ? '内置技能目录丢了才会空 —— 技能库恢复后重启服务会重新挂上。'
+                      : '还没分配技能。点右上角「＋ 添加技能」从库里挑。'
+                }</div>`
           }
         </div>
 
@@ -11413,7 +12560,7 @@ function renderDetail({ persona, runtimes, runs, platformRoot, skills: personaSk
       // 读不到就降级：别清空下拉，让人至少还能看见当前值、还能手工填
       if (note) {
         note.textContent = `取不到模型列表（${err.message}）—— 模型名可以手工填`;
-        note.title = err.detail || '';
+        note.title = err.explained ? '' : (err.detail || '');
       }
     }
   };
@@ -11474,9 +12621,64 @@ function renderDetail({ persona, runtimes, runs, platformRoot, skills: personaSk
   });
 
   const instrCount = $('dInstrCount');
-  const syncCount = () => { if (instrCount) instrCount.textContent = $('dInstr').value.trim().length + ' 字'; };
-  $('dInstr').addEventListener('input', syncCount);
+  const dInstrTA = $('dInstr');
+  /*
+   * 自增高（2026-10-21 用户要求）：textarea 有多高显示多高，不给自己滚 ——
+   * 滚动条只留外层页面一条。hidden 时 scrollHeight 是 0，跳过（切进编辑态时会再算）。
+   */
+  const fitInstr = () => {
+    if (dInstrTA.hidden) return;
+    dInstrTA.style.height = 'auto';
+    dInstrTA.style.height = `${dInstrTA.scrollHeight}px`;
+  };
+  const syncCount = () => { if (instrCount) instrCount.textContent = dInstrTA.value.trim().length + ' 字'; };
+  dInstrTA.addEventListener('input', () => { syncCount(); fitInstr(); });
   syncCount();
+
+  /*
+   * 「职责与身份设定」预览/编辑（2026-10-21）：人设这类 markdown **写少读多**，默认预览。
+   *   · 预览渲染的是 textarea **现值**（当前草稿）—— 编辑一半切过去看到的就是刚写的，
+   *     切回编辑一个字不少；不读存库值，就不存在"预览回滚"的坑。
+   *   · 切回预览顺手 saveNow 一次：自动保存靠失焦/防抖，切换这个动作兜个底。
+   *   · 空内容给占位 +「写一段」直达编辑，不留一块白板让人猜。
+   */
+  const dInstrEl = $('dInstr');
+  const dInstrViewEl = $('dInstrView');
+  let instrMode = 'view';
+  const renderInstrView = () => {
+    const val = dInstrEl.value;
+    dInstrViewEl.innerHTML = val.trim()
+      ? mdRender(val)
+      : /* 身份锁定：雇佣员工不给「写一段」入口（本来也不该走到空值这一支） */
+        expertLocked
+        ? '<div class="md-empty">暂无设定。</div>'
+        : '<div class="md-empty">暂无设定。<button type="button" class="linkish" data-edit-instr>写一段</button></div>';
+  };
+  const setInstrMode = (m) => {
+    if (m === instrMode) return;
+    instrMode = m;
+    if (m === 'view') {
+      renderInstrView();
+      dInstrEl.hidden = true;
+      dInstrViewEl.hidden = false;
+      saveNow?.();
+    } else {
+      dInstrViewEl.hidden = true;
+      dInstrEl.hidden = false;
+      fitInstr();
+      dInstrEl.focus();
+    }
+    $('dInstrSeg').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.m === m));
+  };
+  // 身份锁定：雇佣员工没有 #dInstrSeg（上面不画），监听挂不上就跳过
+  $('dInstrSeg')?.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-m]');
+    if (b) setInstrMode(b.dataset.m);
+  });
+  dInstrViewEl.addEventListener('click', (e) => {
+    if (e.target.closest('[data-edit-instr]')) setInstrMode('edit');
+  });
+  renderInstrView();
 
   /*
    * 「发消息」= **开一段新的 1:1 会话**（2026-10-20，PRD P0-4）。
@@ -11634,7 +12836,18 @@ function renderDetail({ persona, runtimes, runs, platformRoot, skills: personaSk
    * 「删掉数字员工「X」？」从正文提到了**标题**：正文被定稿成三行后，
    * 不点明删谁的破坏性弹窗只剩一句「该操作」，用户得自己回想刚才点了什么。
    */
-  $('dDelete').onclick = async () => {
+  /**
+   * 解聘（专家库雇来的员工，⋯菜单里那项）。走专家域的 fire 路由（群助手占用、
+   * 固定 id 再雇佣接旧会话都是它管），收尾跟删除一样：别留指向已解聘员工的面板。
+   */
+  $('dFire')?.addEventListener('click', async () => {
+    const key = String(persona.id).slice('p-expert-'.length);
+    const ok = await fireExpert(key, { stayContacts: true, name: persona.name });
+    if (ok === false) return;
+    setNav('contacts');
+  });
+
+  $('dDelete') && ($('dDelete').onclick = async () => {
     const ok = await confirmDo(
       `该操作将清空其配置、技能、群关联。\n` +
         `已有对话仅可读，不能继续聊天；会话可后续删除或归档。\n` +
@@ -11653,7 +12866,7 @@ function renderDetail({ persona, runtimes, runs, platformRoot, skills: personaSk
       setComposer(false);
       setNav('contacts');
     } catch (err) { toast(err.message, 'error'); }
-  };
+  });
 
   /** 技能说明：从库里查（挂在员工上的可能已经不在库里了）。
    *  写成函数声明：上面的模板就会用到它，const 会有 TDZ 问题 */
@@ -12424,6 +13637,162 @@ async function openGroupDetail(groupId) {
   showView('group');
   renderList();
   paintGroupDetail(d.group);
+}
+
+/* -------------------------------------------------------------- 专家库 */
+
+/**
+ * 专家库（2026-10-23 改版：左侧一级栏，整页分区卡片墙）：出厂写死的岗位专家（跟随
+ * 服务端目录走，当前八位 —— 前端不写死数量和 key），
+ * 点「雇佣」就是造一个现成的数字员工（职责、技能、运行时全都配好），解聘即删。
+ *
+ * 数据口径：
+ *   · 目录从 `GET /api/experts` 拉一次缓存进 `S.experts`（null = 没拉过**或上一次没拉到**），
+ *     雇佣/解聘后**整体重拉** —— hired 标记是服务端按库里有没有这个人算的，本地不推算；
+ *   · 拉不到**不许装成空目录**（2026-10-21 用户截图实报：旧后端没有这个接口时，
+ *     页面把错误画成"两段全空"，看着像专家库被清空了）。目录出厂恒有八位，
+ *     null 一律按「加载失败」渲染错误卡 + 重试，让用户知道是出错了、不是没人。
+ *   · 雇佣后他就是个**普通数字员工**（改名/改指令/摘技能都走员工详情那套既有接口），
+ *     专家域只管雇与解，别在专家页重做一套员工编辑。
+ */
+async function loadExperts() {
+  try {
+    S.experts = (await api('/api/experts')).experts ?? [];
+  } catch {
+    S.experts = null; // 拉不到保持 null：paintExperts 按「加载失败」画，不冒充空目录
+  }
+}
+
+/**
+ * 专家库整页（#expertsView）：跟工作台宫格同一个整页形态 —— 左栏收掉（body.no-list），
+ * 页头只放标题，无下钻。拉目录这段时间人可能已经点去别的栏了，回来先看 S.nav 再画。
+ */
+async function openExperts() {
+  setRoute('experts');
+  if (S.es) { S.es.close(); S.es = null; S.running = false; setBusy(false); }
+  setListTitle('专家库');
+  // 兜底：从路由直达（刷新恢复）时 setNav 可能没跑过，整页形态自己摆好
+  document.body.classList.add('no-list');
+  $('listAction').classList.add('hidden');
+  $('search').closest('.list-search')?.classList.add('hidden');
+  $('listBody').innerHTML = '';
+  savePlace();
+  if (S.experts === null) await loadExperts();
+  if (S.nav !== 'experts') return; // 拉目录时人走了，别抢别人的主区
+  paintExperts();
+}
+
+/** 一张专家卡：头像（沿用 avatarStyle 配色）+ 名字/岗位 + 一句话 + 技能 chips + 动作 */
+function expertCard(x) {
+  const hired = !!x.hired;
+  const name = x.hiredPersona?.name || x.name;
+  // 头像（2026-10-22）：已雇佣 → 员工自己的头像（用户可换）；未雇佣 → 目录头像
+  // （apps/web/avatars/expert-<key>.png，跟着专家包走）；图 404 时 onerror 退字母，不破相
+  const avatar = hired
+    ? personaAvatar(x.hiredPersona, '', x.name)
+    : personaAvatar({ name: x.name, avatar: `expert-${x.key}.png` }, '', x.name);
+  return `<div class="expert-card">
+    <div class="expert-top">
+      ${avatar}
+      <div class="expert-who">
+        <div class="expert-name"><b>${esc(name)}</b></div>
+        <div class="expert-role">${esc(x.role || '')}</div>
+      </div>
+    </div>
+    <div class="expert-intro">${esc(x.intro || '')}</div>
+    ${x.skills?.length
+      ? `<div class="expert-skills">${x.skills
+          .map((s) => `<span class="x-chip" title="${esc(s.description || s.name)}">${esc(s.name)}</span>`)
+          .join('')}</div>`
+      : ''}
+    ${hired
+      // 已雇佣（2026-10-21 用户要求）：卡上不再摆发消息/解聘 —— 要聊去员工详情，解聘收进
+      // 详情的「⋯」菜单；雇佣状态只留右上角一枚胶囊，卡片在墙上的位置不动。
+      ? '<span class="pill expert-hired" title="已雇佣 —— 他在通讯录的「数字员工」里">已雇佣</span>'
+      // 未雇佣：右上角同一位置的「雇佣」胶囊（2026-10-21 用户要求：跟已雇佣胶囊一样大）
+      : '<button type="button" class="pill expert-hired expert-hire" data-expert-hire="' + esc(x.key) + '">雇佣</button>'}
+  </div>`;
+}
+
+/** 卡片墙本体：读 S.experts 现画。null = 目录没拉到 —— 画错误卡 + 重试，不冒充两段空态 */
+/**
+ * 卡片墙本体：读 S.experts 现画。
+ * **一张完整卡片墙、按目录顺序排，不按雇佣状态分段**（2026-10-21 用户拍板：
+ * 「不要单独列出来，只要把雇佣按钮改成已雇佣就可以了」）—— 雇佣状态长在卡片上：
+ * 右上角一枚「已雇佣」胶囊（2026-10-21 二改：发消息/解聘两颗按钮撤掉，解聘收进
+ * 员工详情的「⋯」菜单），未雇佣的保留「雇佣」按钮，卡片在墙上的位置不动。
+ */
+function paintExperts() {
+  if (S.experts === null) {
+    $('expertsView').innerHTML = `
+      <div class="detail-head head-row"><div class="head-title"><b>专家库</b></div></div>
+      <div class="detail-body">
+        <div class="empty" style="padding:36px 12px">
+          专家目录没拉到 —— 多半是班底服务还没带上这个接口（旧进程没重启）。<br />
+          重启服务或点下面的按钮再试。
+        </div>
+        <div style="text-align:center"><button class="primary" data-expert-retry="1">重试</button></div>
+      </div>`;
+    showView('experts');
+    $('expertsView').querySelector('[data-expert-retry]').onclick = () => openExperts().catch((e) => toast(e.message, 'error'));
+    return;
+  }
+  const list = S.experts;
+
+  $('expertsView').innerHTML = `
+    <div class="detail-head head-row"><div class="head-title"><b>专家库</b></div></div>
+    <div class="detail-body">
+      <div class="expert-grid">${list.map(expertCard).join('')}</div>
+    </div>`;
+  showView('experts');
+
+  const view = $('expertsView');
+  view.querySelectorAll('[data-expert-hire]').forEach((el) => {
+    el.onclick = () => hireExpert(el.dataset.expertHire).catch((e) => toast(e.message, 'error'));
+  });
+}
+
+/** 雇佣一位专家：成功后目录 + 人员两边重拉，本页重画（卡片原地变「已雇佣」，墙上的位置不动） */
+async function hireExpert(key) {
+  const x = (S.experts ?? []).find((e) => e.key === key);
+  await post(`/api/experts/${encodeURIComponent(key)}/hire`);
+  toast(`已雇佣 ${x?.name ?? key}`);
+  await afterExpertAction();
+}
+
+/**
+ * 解聘一位专家：破坏性动作，先走全站统一的确认弹窗（confirmDo）。
+ * 入口在员工详情的「⋯」菜单（2026-10-21 用户要求：卡片上不再摆解聘），
+ * 专家库页只管雇佣；解聘完回到通讯录空态，目录重拉让卡片退回「雇佣」。
+ */
+async function fireExpert(key, { stayContacts = false, name = null } = {}) {
+  const x = (S.experts ?? []).find((e) => e.key === key);
+  const nm = x?.hiredPersona?.name || x?.name || name || key;
+  const ok = await confirmDo(
+    `解聘「${nm}」？\n他会从通讯录移除，聊天记录保留；再雇佣会接上旧会话。`,
+    { title: '解聘专家', ok: '解聘' },
+  );
+  if (!ok) return false;
+  await post(`/api/experts/${encodeURIComponent(key)}/fire`);
+  toast(`已解聘 ${nm}`);
+  await afterExpertAction();
+  if (stayContacts) {
+    // 从详情页解聘的：别留一个指向已解聘员工的面板（同 dDelete 的收尾）
+    S.persona = null;
+    S.conversation = null;
+    $('chat').innerHTML = '<div class="empty">还没有对话</div>';
+    $('chatHead').innerHTML = '<span class="dim" style="padding:6px 0">左边选一个人，开始说话</span>';
+    setComposer(false);
+  }
+}
+
+/**
+ * 雇佣/解聘之后的收尾：目录（hired 标记）与通讯录人员两边都要重拉；
+ * 专家库还开着就按新数据重画（卡片在两段之间挪）。
+ */
+async function afterExpertAction() {
+  await Promise.all([loadExperts(), load()]); // load() 刷 personas（通讯录「数字员工」段跟着变）
+  if (S.nav === 'experts') paintExperts();
 }
 
 /* -------------------------------------------------------------- 界面插件 */
@@ -13348,6 +14717,12 @@ $('plgFormOk').onclick = async (e) => {
     S.pluginFormDlg = null;
     await renderPluginPanel();
   } catch (err) {
+    /*
+     * 直接用 `err.message`：`api()`（2026-10-21 重设计）对 4xx 已经把服务端原文拼进去了
+     * （「E1051：地址不要带端口，端口填在下面那一格。」），5xx 才是「E5005：服务异常」。
+     * 这里**不再自己拼一遍 detail** —— 拼了会绕开 `clipLine` 的 160 字截断，
+     * 一整段 fs 报错能把 toast 撑爆。完整原文在 err.detail 和控制台里。
+     */
     toast(err.message, 'error');
   } finally {
     $('plgFormOk').disabled = false;
@@ -13907,10 +15282,172 @@ try { S.theme = localStorage.getItem(THEME_KEY) || 'system'; } catch { S.theme =
 S.secCollapsed = readCollapsed();
 setComposer(false);   // 还没选会话，输入区先收起
 applyTheme();
-// 回到上次的位置（以前是写死 setNav('messages')：在哪个页面按 F5 都会被弹回消息页）
-load()
-  .then(() => restorePlace())
-  .catch((e) => { $('chat').innerHTML = '<div class="empty">' + esc(e.message) + '</div>'; });
+
+/**
+ * 节点模式页（2026-10-21 拍板：**加入后这台机器只当算力，不做「看总机面板」**）。
+ *
+ * 已加入总机的机器打开班底，看到的就是这一页 —— 左栏与正常面板整体收起
+ * （`body.node-mode` 的 CSS 负责藏，`#nodeView` 长在 `main` 里）。
+ * 为什么不是"看自己的面板"：节点不写本机库，"自己的面板"没有内容；
+ * 而派给这台机器的活，记录全在总机 —— 本地面板反而看不到自己正在干的活。
+ * 所以这里只回答两件事：连着哪台总机、节点进程在不在跑（本机数据/导出在「数据备份」分节，2026-10-21 用户拍板撤掉这一行）。
+ *
+ * 弹窗（confirmDo 的 #askDlg）是 body 下的常驻节点，没被藏 —— 「退出总机」的确认照常可用。
+ */
+function renderNodeMode(st) {
+  document.body.classList.add('node-mode');
+  const main = document.querySelector('main');
+  let view = $('nodeView');
+  if (!view) {
+    view = document.createElement('div');
+    view.id = 'nodeView';
+    main.appendChild(view);
+  }
+
+  /*
+   * 本机叫什么、跑的是哪个版本 —— 从 `/api/hello` 拿（它不带秘密，节点身份/版本就是它的内容）。
+   * 不等它：先画，回来再重画一次。拉不到就名字位显示"这台电脑"，页面照常。
+   */
+  let selfName = '';
+  let selfVersion = '';
+  let lastSt = null;
+  api('/api/hello')
+    .then((h) => {
+      selfName = String(h?.hostname || h?.label || '');
+      selfVersion = String(h?.version ?? '');
+      if (lastSt) draw(lastSt);
+    })
+    .catch(() => { /* 拿不到就不显示机器名，别白屏 */ });
+
+  const draw = (s) => {
+    lastSt = s;
+    const c = s?.client ?? {};
+    const local = s?.local ?? {};
+    const counts = local.counts ?? {};
+    const host = c.hostLabel || c.hostHostname || c.controlPlane || '总机';
+    const since = c.since ? dt(c.since) : '';
+    const running = !!c.node?.running;
+    const external = !!c.node?.external; // autostart 拉起的常驻（退出时要连自启一起收）
+    const warnings = (s?.warnings ?? []).map((w) => `<div class="machine-warn">${esc(w)}</div>`).join('');
+    /* 明细行的小图标（14px 线性，颜色随 --dim）：给四行明细一点可扫读的锚点 */
+    const ICO = {
+      hub: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="7" rx="2"></rect><rect x="3" y="13" width="18" height="7" rx="2"></rect><path d="M7 7.5h.01"></path><path d="M7 16.5h.01"></path></svg>',
+      link: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"></path><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"></path></svg>',
+      pulse: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"></path></svg>',
+      clock: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>',
+    };
+    view.innerHTML = `
+      <div class="nodepage">
+        <section class="node-hero">
+          <div class="node-hero-head">
+            <div class="node-hero-ico">
+              <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="3" y="4.5" width="18" height="12" rx="2"></rect>
+                <path d="M8.5 20h7"></path><path d="M12 16.5V20"></path>
+              </svg>
+            </div>
+            <div class="node-hero-id">
+              <div class="node-hero-name" title="${esc(selfName)}">${esc(selfName || '这台电脑')}</div>
+              <div class="node-hero-sub">${selfVersion ? `班底 v${esc(selfVersion)} · ` : ''}算力节点</div>
+            </div>
+            <span class="node-state${running ? ' on' : ''}">${running ? '在线' : '离线'}</span>
+          </div>
+          <div class="node-linkviz" data-on="${running ? '1' : '0'}" aria-hidden="true">
+            <span class="node-link-end"><span class="node-link-dot"></span>这台电脑</span>
+            <span class="node-link-line"></span>
+            <span class="node-link-end host"><span class="node-link-dot"></span>${esc(host)}</span>
+          </div>
+          <div class="node-hero-line">这台电脑是「<b>${esc(host)}</b>」的算力节点 —— 总机把活派过来，在这台电脑上跑。班底的面板（员工、会话、项目）只在总机上。</div>
+        </section>
+        <section class="set-sec machine-card">
+          <div class="set-box">
+            <div class="set-row">
+              <span class="set-label">${ICO.hub}总机</span>
+              <div class="machine-data">${esc(host)}</div>
+            </div>
+            ${c.controlPlane ? `<div class="set-row"><span class="set-label">${ICO.link}地址</span><div class="machine-data machine-addr">${esc(c.controlPlane)}</div></div>` : ''}
+            <div class="set-row">
+              <span class="set-label">${ICO.pulse}节点进程</span>
+              <div class="machine-data">${
+                running
+                  ? `<span class="machine-dot"></span><span class="machine-ok">在线，等着接活</span>${
+                      external ? '<span class="sub">（开机自启）</span>' : ''
+                    }`
+                  : '<span class="machine-dot off"></span><span class="sub">没在跑 —— 重启这台电脑上的班底试试</span>'
+              }</div>
+            </div>
+            ${since ? `<div class="set-row"><span class="set-label">${ICO.clock}加入时间</span><div class="machine-data">${esc(since)}</div></div>` : ''}
+          </div>
+          ${warnings}
+          <div class="machine-actions">
+            <button class="btn-sm danger" id="nodeLeave">退出总机</button>
+          </div>
+        </section>
+        <footer class="node-foot">${selfVersion ? `班底 v${esc(selfVersion)}` : '班底'} · 节点模式</footer>
+      </div>`;
+
+    $('nodeLeave').onclick = async () => {
+      /* 三句后果 + 建议（PRD §6.4 原文）：破坏性操作走 confirmDo，不用原生 confirm */
+      const n = Number(counts.personas ?? 0);
+      const ok = await confirmDo(
+        `① 这台电脑不再给「${host}」干活；\n` +
+          `② 打开班底看到的是这台电脑原来的数据（${n} 个员工，一个没少）；\n` +
+          `③ 退出后回到单机；要再加入需要一个新的邀请码。\n` +
+          (external ? '④ 它是开机自启拉起的，退出会一并移除自启并停掉节点进程。\n' : '') +
+          `建议先在「${host}」的设备页把它「忘掉」，否则那边会留一行永远离线的设备。`,
+        { title: `退出「${host}」？`, ok: '退出', danger: true },
+      );
+      if (!ok) return;
+      $('nodeLeave').disabled = true;
+      try {
+        const r = await post(`${LOCAL_BASE}/leave`, {});
+        /*
+         * 自启没移除成功 / 进程没停掉时服务端会回 note —— 别装作成功直接刷新，
+         * 先让人看见那句话（刷新会把 toast 冲掉）。
+         */
+        if (r?.note) {
+          toast(r.note, 'error');
+          await new Promise((done) => setTimeout(done, 2500));
+        }
+        location.reload(); // 回到单机：本机库原样（加入期间从没写过它）
+      } catch (err) {
+        $('nodeLeave').disabled = false;
+        toast(err.message, 'error');
+      }
+    };
+  };
+  draw(st);
+
+  // 5 秒一刷"节点进程在不在"：autostart 拉起的常驻也是 status 里那个开关说了算。
+  // 页面被换掉（退出后 reload）就停表 —— 定时器别挂在看不见的节点上空转。
+  const guard = setInterval(() => {
+    if (!view.isConnected) { clearInterval(guard); return; }
+    api(`${LOCAL_BASE}/status`).then(draw).catch(() => {});
+  }, 5000);
+}
+
+/**
+ * 启动分岔（2026-10-21）：已加入总机 → 节点状态页（不加载面板数据）；
+ * 未加入 → 正常面板。判据是 `/api/local/status` —— 服务端的答案，本机答、必然可达。
+ */
+async function boot() {
+  try {
+    const st = await api(`${LOCAL_BASE}/status`);
+    if (st?.client?.joined) {
+      renderNodeMode(st);
+      startVersionWatch();
+      return;
+    }
+  } catch {
+    /* status 拉不到不当"没加入" —— 往下走，load() 自己会把连不上的错报出来 */
+  }
+  // 回到上次的位置（以前是写死 setNav('messages')：在哪个页面按 F5 都会被弹回消息页）
+  load()
+    .then(() => restorePlace())
+    .catch((e) => { $('chat').innerHTML = '<div class="empty">' + esc(e.message) + '</div>'; });
+  startVersionWatch();
+}
+boot();
 
 /* ---------------------------------------------------------------- 版本提醒 */
 

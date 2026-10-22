@@ -2,6 +2,7 @@ import * as store from './store.mjs';
 import * as runtimes from './runtimes.mjs';
 import * as cliModels from './cli-models.mjs';
 import * as connectors from './connectors.mjs';
+import * as gitRepos from './git-repos.mjs';
 import { normalizeSandbox } from './sandbox.mjs';
 import { ADAPTERS } from './adapters.mjs';
 
@@ -420,6 +421,26 @@ function queueRemoteRun(run, { thread, rt, task, member }) {
   const ms = store.getMemberSession(thread.id, run.personaId, run.sessionScope);
   // 同上：那个 sessionId 是**记录里那个族**的，由别的族来 resume 必然找不到
   const remoteSession = ms?.sessionId && (!ms.family || ms.family === rt.family) ? ms.sessionId : null;
+
+  /*
+   * 工作空间（2026-10-22）：`member.cwd` 是**这台机器**的路径，节点那台未必有。
+   * 两步收敛，都是同步的（查库 / 读 .git/HEAD），不拖慢派活：
+   *   ① cwd 落在某个**已接入仓库**里 → 记下 `{fullName, branch}`，节点自己 clone/pull
+   *      到它数据目录的 repos/ 里干 —— 文件内容跟着仓库走，这是"算力总有地方干活"的正解；
+   *   ② 不是 git 仓库 → 查这台设备的**路径映射表**，把 cwd 换成那台机器上的本地路径；
+   *   ③ 两样都没有 → 原样传过去，节点发现目录不存在会报人话（"要么两边路径弄成一样…"）。
+   * 员工没绑目录（纯聊天）→ cwd 为 null，节点会落到它自己的 scratch 目录。
+   */
+  let cwd = member.cwd ?? null;
+  let repo = null;
+  if (cwd) {
+    repo = gitRepos.repoForCwd(cwd);
+    if (!repo) {
+      const mapped = store.lookupNodePath(rt.deviceId, cwd);
+      if (mapped) cwd = mapped.localPath;
+    }
+  }
+
   const job = store.enqueueNodeJob({
     runId: run.id,
     nodeId: rt.deviceId,
@@ -427,7 +448,8 @@ function queueRemoteRun(run, { thread, rt, task, member }) {
     model: run.model,
     // 权限模式同样要换成那台机器上那个 CLI 认得的写法
     sandbox: normalizeSandbox(rt.family, member.sandbox),
-    cwd: member.cwd ?? null,
+    cwd,
+    repo,
     task,
     // 续接用：**那台机器上**那个 CLI 的会话 id（空 = 让它在那边新开一条）
     sessionId: remoteSession,

@@ -280,6 +280,44 @@ const isGitRepo = (dir) => {
 };
 
 /**
+ * 这个目录在哪个**已接入仓库**里？（2026-10-22，节点工作空间）
+ *
+ * 派活给节点时，控制面用它判断"这个 cwd 能不能让节点自己 clone"：
+ * 命中就把 `{fullName, branch}` 记进活里，节点照着在自己那台机器上 clone/pull。
+ * 分支读 `.git/HEAD`（一次同步文件读，不 spawn git）—— 那是总机现在停在的分支，
+ * 节点对齐它，干完的改动才落在同一条线上。
+ *
+ * 只认已接入清单里的仓库（localPath 是它们 clone 的落点）—— 用户随便指的一个
+ * 目录里哪怕真有 .git，总机也不知道它的 remote，冒然发给节点去 clone 是猜。
+ * 不在仓库里返回 null，调用方去走路径映射那一路。
+ */
+export function repoForCwd(cwd) {
+  if (!cwd) return null;
+  const canon = (p) => String(p ?? '').trim().replace(/[\\/]+/g, '/');
+  const cw = canon(cwd);
+  if (!cw) return null;
+  const win = process.platform === 'win32';
+  for (const r of store.listGitRepos()) {
+    const lp = canon(r.localPath);
+    if (!lp) continue;
+    const inside = win
+      ? cw.toLowerCase() === lp.toLowerCase() || cw.toLowerCase().startsWith(lp.toLowerCase() + '/')
+      : cw === lp || cw.startsWith(lp + '/');
+    if (!inside) continue;
+    let branch = null;
+    try {
+      const head = fs.readFileSync(path.join(lp, '.git', 'HEAD'), 'utf8').trim();
+      const m = /^ref: refs\/heads\/(.+)$/.exec(head);
+      if (m) branch = m[1];
+    } catch {
+      /* HEAD 读不到（裸仓库/异常克隆）就不带分支 —— 节点按默认分支处理 */
+    }
+    return { fullName: r.fullName, branch };
+  }
+  return null;
+}
+
+/**
  * 接入一个仓库：克隆到本地（已经克隆过的就拉一下），并记进表。
  * 返回表里的那一行。
  */

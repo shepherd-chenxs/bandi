@@ -405,3 +405,35 @@ curl -s -o /dev/null -w 'with_token=%{http_code}\n' -H "X-Bandi-Token: $T" http:
 | 启动就退出，日志说 `EACCES` | `/var/lib/bandi` 属主不对（要 `bandi:bandi`） |
 | 数据"不见了" | 多半在看另一个数据目录。**启动日志第二行就写着它在哪** |
 | 节点报到失败 404 | 控制面换过库（节点记录没了）—— 节点会自己重新报到，等一个心搏周期 |
+
+---
+
+## 八、局域网加入总机：Windows 防火墙放行（R1）
+
+一台总机要被局域网里的机器「加入」，除了在 班底 → 设置 → 运行时 → 局域网 里打开开关并点重启，
+Windows 自带的防火墙还拦着两个端口：
+
+| 端口 | 协议 | 干什么用 |
+| --- | --- | --- |
+| 8787 | TCP | 控制面本身（页面、接口、SSE） |
+| 8788 | UDP | 局域网自动发现（总机的应答器听在这里） |
+
+**需要管理员手动执行，程序不会自动改防火墙**（静默改系统安全设置比功能不灵更糟）。
+在总机那台 Windows 机器上，用**管理员身份**打开 PowerShell 或 CMD，执行：
+
+```bat
+netsh advfirewall firewall add rule name="bandi control plane 8787" dir=in action=allow protocol=TCP localport=8787
+netsh advfirewall firewall add rule name="bandi lan discover 8788" dir=in action=allow protocol=UDP localport=8788
+```
+
+撤掉时（比如不再当总机了）：
+
+```bat
+netsh advfirewall firewall delete rule name="bandi control plane 8787"
+netsh advfirewall firewall delete rule name="bandi lan discover 8788"
+```
+
+> - 只在**内网环境**当总机时才需要这两条；只自己一台机器用（只听回环）不用管。
+> - 发现被防火墙拦住时**手填地址这条路不受影响**（加入向导第 3 步的兜底），但自动扫描会扫不到。
+> - 加完之后不用重启班底：向导里点「重新扫描」即可。
+

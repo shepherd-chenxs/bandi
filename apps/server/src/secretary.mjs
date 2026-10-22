@@ -8,9 +8,13 @@
  * 于是**出厂就该有一个能说话的人**，她先帮你把机器看明白，再帮你建别人。
  *
  * 她和其他员工的差别只有三条，都在这份文件里：
- *   ① `builtin = 1`：不可删（`store.deletePersona` 里拦），但可以改名、改指令
+ *   ① `builtin = 1`：**技能与身份锁死**（2026-10-22 用户定：按专家团那个模式收编）——
+ *      技能清单固定为 `bandi-secretary`、名字/岗位/指令固定为出厂值，路由层拒改（E2054/E2055），
+ *      启动时 `syncSecretary` 把存量改动拉回出厂；同时她不可删（`store.deletePersona` 里拦）
  *   ② `runtime = 'auto'`：不写死用哪个 CLI —— 换台机器、换个 CLI 都不用改她
  *   ③ 首轮注入里多一段「这台机器现在什么样」（`secretaryBrief`），现取的，不靠她猜
+ *
+ * 锁的只是「她是谁、她会什么」；运行时/沙箱/工作目录/模型/头像这些「在哪儿干活、长什么样」仍可改。
  *
  * 不给她的：任何特权接口。**她不靠权限做事，靠知道在哪儿看**（见 skills/bandi-secretary）。
  */
@@ -24,6 +28,9 @@ export const SECRETARY_ID = 'p-xier';
 
 /** seed 会把她建成这个名字；之后用户改名，我们**不覆盖** */
 export const SECRETARY_NAME = '喜儿';
+
+/** 出厂岗位（身份三件之一；`syncSecretary` 与建号共用同一个值） */
+export const SECRETARY_ROLE = '秘书 · 看家与搭手';
 
 /** 挂在她的技能（目录：`skills/bandi-secretary/`） */
 export const SECRETARY_SKILL = 'bandi-secretary';
@@ -79,11 +86,22 @@ export function secretaryBrief() {
 }
 
 /**
- * 幂等 seed：启动时调，已有就不动。
+ * 出厂身份三件：锁定后这就是唯一合法值（改名 / 改岗位 / 改指令一律 E2055）。
+ * 放在 SECRETARY_INSTRUCTIONS 之后定义 —— 常量间有依赖，别往上挪。
+ */
+export const SECRETARY_IDENTITY = {
+  name: SECRETARY_NAME,
+  role: SECRETARY_ROLE,
+  instructions: SECRETARY_INSTRUCTIONS,
+};
+
+/**
+ * 幂等 seed：启动时调，已有就不动（身份/技能由 `syncSecretary` 统一拉回出厂）。
  *
- * 「不动」包括**不改名、不改指令** —— 用户把她改成「小秘」或者重写职责，是他的权利；
- * 每次启动都刷回默认值，等于他改了个寂寞。
- * 唯一会强补的是 `builtin` 本身（早期版本可能建过一条没有标记的同 id 记录）。
+ * 历史说明：2026-10-18 这一版刻意「不动包括不改名、不改指令」——那时她是可定制的秘书。
+ * 2026-10-22 用户改了口径：**按专家团那个模式收编，技能锁死、信息锁死**。所以现在
+ * 用户改过的东西不再被尊重，启动时会被 syncSecretary 拉回出厂值（改也改不动了，路由层 E2055）。
+ * 唯一仍会强补的是 `builtin` 本身（早期版本可能建过一条没有标记的同 id 记录）。
  */
 export function ensureSecretary() {
   const existing = store.getPersona(SECRETARY_ID);
@@ -94,9 +112,7 @@ export function ensureSecretary() {
 
   const persona = store.createPersona({
     id: SECRETARY_ID,
-    name: SECRETARY_NAME,
-    role: '秘书 · 看家与搭手',
-    instructions: SECRETARY_INSTRUCTIONS,
+    ...SECRETARY_IDENTITY,
     // auto：按「谁现在能用」挑 CLI。换机器、换 CLI 都不用回来改她
     runtime: 'auto',
     sandbox: 'danger-full-access',
@@ -105,10 +121,39 @@ export function ensureSecretary() {
     builtin: 1,
   });
 
-  // 技能只在**新建那一次**挂 —— 用户后来把它摘掉，是他的选择，不许每次启动又挂回去
+  // 技能只在**新建那一次**挂；之后由 syncSecretary 保持与出厂清单一致
   if (skills.getSkill(SECRETARY_SKILL)) store.linkPersonaSkill(SECRETARY_ID, SECRETARY_SKILL);
 
   return { created: true, persona };
+}
+
+/**
+ * 把喜儿**拉回出厂态**（技能锁定时同步侧，2026-10-22）。
+ *
+ * 跟 `syncHiredExpert` 同一个思路：不管库里现在是什么样，跑完之后 = 出厂 ——
+ * 身份三件回 `SECRETARY_IDENTITY`，技能挂载收成 `[bandi-secretary]` 且强制启用
+ * （以前加过的、解绑剩下的、停用的一律归位）。幂等：已是出厂态就什么都不动。
+ *
+ * 返回动过的字段名列表（含 `'skills'`）；没这个人 → null。
+ */
+export function syncSecretary() {
+  const p = store.getPersona(SECRETARY_ID);
+  if (!p) return null;
+  const changed = [];
+  if (p.name !== SECRETARY_IDENTITY.name) changed.push('name');
+  if ((p.role ?? null) !== (SECRETARY_IDENTITY.role ?? null)) changed.push('role');
+  if (p.instructions !== SECRETARY_IDENTITY.instructions) changed.push('instructions');
+  if (changed.length) store.updatePersona(SECRETARY_ID, { ...SECRETARY_IDENTITY });
+
+  const pkg = skills.getSkill(SECRETARY_SKILL) ? [SECRETARY_SKILL] : [];
+  const before = store.listPersonaSkillLinks(SECRETARY_ID);
+  for (const l of before) if (!pkg.includes(l.name)) store.unlinkPersonaSkill(SECRETARY_ID, l.name);
+  for (const n of pkg) {
+    store.linkPersonaSkill(SECRETARY_ID, n);
+    store.setPersonaSkillEnabled(SECRETARY_ID, n, true);
+  }
+  if (JSON.stringify(before) !== JSON.stringify(store.listPersonaSkillLinks(SECRETARY_ID))) changed.push('skills');
+  return changed;
 }
 
 /** 界面上要显示「内置」：判断放一处，别前端各写一份字符串比较 */

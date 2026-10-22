@@ -1,0 +1,190 @@
+%% 局域网加入总机 · 类图（2026-10-20）
+%% 说明：只画本次新增/改动的类型与它们的依赖；既有 store/auth 只列新增成员。
+classDiagram
+  direction LR
+
+  class LocalMode {
+    <<module apps/server/src/local-mode.mjs>>
+    +SCOPE: {COMPUTE:'compute', PANEL:'panel'}
+    +readClientConfig() ClientConfig
+    +writeClientConfig(patch) ClientConfig
+    +clearClientConfig() void
+    +isJoined() boolean
+    +instanceId() string
+    +ensureNodeId() string
+    +nodeIdentity() NodeIdentity
+    +probe(url, timeoutMs) HostInfo
+    +join(url, code, scopes) JoinResult
+    +leave() LeaveResult
+    +status() LocalStatus
+  }
+
+  class ClientConfig {
+    +controlPlane: string
+    +token: string
+    +scope: string
+    +joinedAt: string
+    +hostLabel: string
+    +hostHostname: string
+    +hostInstanceId: string
+  }
+
+  class HostInfo {
+    +label: string
+    +hostname: string
+    +instanceId: string
+    +version: string
+    +httpPort: int
+    +allowLan: boolean
+    +caps: string[]
+  }
+
+  class NodeIdentity {
+    +id: string
+    +label: string
+    +hostname: string
+    +platform: string
+  }
+
+  class LocalStatus {
+    +client: ClientView
+    +local: LocalDbInfo
+    +instanceId: string
+    +nodeId: string
+    +warnings: string[]
+  }
+
+  class LocalDbInfo {
+    +dataDir: string
+    +dbPath: string
+    +dbSize: int
+    +dbMtime: string
+    +counts: counts
+  }
+
+  class ClientProxy {
+    <<module apps/server/src/client-proxy.mjs>>
+    +forward(req, res, url, cfg) void
+    +injectClientConfig(html, cfg) string
+    +offlinePage(cfg, err) string
+    -rewriteHeaders(req, cfg) headers
+    -rewriteResponseHeaders(h, cfg) headers
+    -onUpstreamDown(req, res, cfg, err) void
+  }
+
+  class NodeSupervisor {
+    <<module apps/server/src/node-supervisor.mjs>>
+    +acquireLock() Release
+    +readLock() LockInfo
+    +start() Supervised
+    +stop() void
+    +status() Supervised
+  }
+
+  class LockInfo {
+    +pid: int
+    +startedAt: string
+    +controlPlane: string
+  }
+
+  class Supervised {
+    +running: boolean
+    +pid: int
+    +external: boolean
+    +why: string
+  }
+
+  class Discover {
+    <<module apps/server/src/discover.mjs>>
+    +DISCOVERY_PORT: int
+    +discover(opts) Candidate[]
+    +broadcastTargets() string[]
+  }
+
+  class Candidate {
+    +instanceId: string
+    +label: string
+    +hostname: string
+    +address: string
+    +port: int
+    +url: string
+    +joinable: boolean
+    +version: string
+    +caps: string[]
+  }
+
+  class LanAnnounce {
+    <<module apps/server/src/lan-announce.mjs>>
+    +sync(opts) void
+    +stop() void
+    +state() AnnounceState
+    -payload(nonce) object
+  }
+
+  class AuthGuard {
+    <<module apps/server/src/auth.mjs>>
+    +identify(auth, token) Who
+    +guard(auth, req, res, url) boolean
+    +mayManage(req) boolean
+    -decide(who, method, pathname) Decision
+    -nodeMayReach(nodeId, method, pathname) boolean
+    -runMayReach(nodeId, method, pathname) boolean
+    -panelMayReach(method, pathname) boolean
+    -isPanelForbidden(method, pathname) boolean
+  }
+
+  class Who {
+    <<union>>
+    +kind: 'operator'|'node'
+    +nodeId: string
+    +scope: Set
+  }
+
+  class StoreNodeTokens {
+    <<apps/server/src/store.mjs（新增成员）>>
+    +issueNodeToken(nodeId, scope) string
+    +nodeAuthByToken(token) NodeAuth
+    +setNodeScope(nodeId, scope) string
+    +scopeOfNode(nodeId) string
+    +touchNodeUsed(nodeId) void
+    +revokeNodeTokens(nodeId) int
+    +getNodeJobByRun(runId) NodeJob
+    +backupTo(file) string
+  }
+
+  class NodeTokenRow {
+    +tokenHash: string
+    +nodeId: string
+    +createdAt: string
+    +scope: string
+  }
+
+  class NodeRow {
+    +id: string
+    +label: string
+    +hostname: string
+    +platform: string
+    +lastSeenAt: string
+    +lastUsedAt: string
+  }
+
+  class DesktopShell {
+    <<apps/desktop（零改动）>>
+    +windowUrl() string
+    +pickPort() int
+  }
+
+  LocalMode --> ClientConfig : 读写 config.json
+  LocalMode --> HostInfo : probe 产出
+  LocalMode --> NodeIdentity : node.json
+  LocalMode --> Discover : 不直接调用（前端调 /api/local/discover）
+  LocalMode ..> StoreNodeTokens : 不 import（避免节点进程打开 SQLite）
+  NodeSupervisor --> LockInfo : node.lock
+  NodeSupervisor --> Supervised : 状态
+  AuthGuard --> StoreNodeTokens : nodeAuthByToken / touchNodeUsed
+  StoreNodeTokens --> NodeTokenRow
+  StoreNodeTokens --> NodeRow
+  ClientProxy ..> LocalMode : 读 ClientConfig 作为 cfg
+  ClientProxy ..> AuthGuard : 上游总机的闸
+  DesktopShell ..> ClientProxy : 窗口指向本机端口（反代）
+  LanAnnounce ..> Candidate : 应答字段同源

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { dataDir } from './config.mjs';
-import { listNodes, countNodeJobs, getNode, renameNode } from './store.mjs';
+import { listNodes, countNodeJobs, getNode, renameNode, scopeOfNode } from './store.mjs';
 import * as codex from './codex.mjs';
 import * as claude from './claude.mjs';
 import * as dsh from './dsh.mjs';
@@ -296,6 +296,14 @@ function nodeAsDevice(n) {
     note: '远程节点（主动连出）',
     online,
     lastSeenAt: n.lastSeenAt,
+    /*
+     * **权限 scope**（2026-10-20，决策 A / P1-3）：设备详情那一行「这台能看到面板」用它。
+     * 来源是**令牌**（`node_tokens.scope`），不是 nodes 表 —— 多枚令牌取并集；
+     * `null` = 一枚有效令牌都没有（被「忘掉」过），那时它什么也做不了。
+     */
+    scope: scopeOfNode(n.id),
+    // 「最近使用」= 真的用面板的时间（心跳是 lastSeenAt，两件事别混）
+    lastUsedAt: n.lastUsedAt ?? null,
     heartbeatSeconds: NODE_HEARTBEAT_SEC,
     // 队列里还压着多少活 —— 节点离线时这个数会一直涨，那就是"离线排队"看得见的样子
     pendingJobs: countNodeJobs(n.id),
@@ -606,6 +614,12 @@ function publicDevice(d, { withRuntimes = true } = {}) {
       ? {
           online: d.online,
           lastSeenAt: d.lastSeenAt,
+          /*
+           * 权限与"最近使用"（2026-10-20）：设备详情那一行「这台能看到面板 · 最近使用 …」。
+           * `scope` 是规范串（`'compute panel'` / `'compute'` / `'panel'`），`null` = 没有有效令牌。
+           */
+          scope: d.scope ?? null,
+          lastUsedAt: d.lastUsedAt ?? null,
           heartbeatSeconds: d.heartbeatSeconds,
           pendingJobs: d.pendingJobs,
           // 它自报的「外部件」现状 —— server 层会配上说明表一起发（见 withExternals）

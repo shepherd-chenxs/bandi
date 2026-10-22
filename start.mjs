@@ -10,9 +10,8 @@
  * 各写一份必然两边跑偏（就像前端当初那两套）。这里只负责"说人话 + 开浏览器"。
  */
 import path from 'node:path';
-import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { ensureRunning, urlOf } from './apps/server/src/lifecycle.mjs';
+import { ensureRunning, urlOf, openUrl } from './apps/server/src/lifecycle.mjs';
 import { userDataDir } from './apps/server/src/data-dir.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)));
@@ -30,24 +29,19 @@ const NO_BROWSER = process.env.BANDI_NO_BROWSER === '1'; // 测试时别真开�
 
 const say = (s) => console.log(s);
 
+/* 「部署即装」的回话（2026-10-22）：装上了 / 为什么没装成，一句话说清楚，不影响起停 */
+function sayCliNote(note) {
+  if (!note) return;
+  for (const line of note.split('\n')) say(`  ${line}`);
+  say('');
+}
+
 function openBrowser() {
   if (NO_BROWSER) {
     say('  （BANDI_NO_BROWSER=1，跳过打开浏览器）');
     return;
   }
-  try {
-    if (process.platform === 'win32') {
-      spawn('powershell', ['-NoProfile', '-Command', `Start-Process '${HOME}'`], {
-        detached: true, stdio: 'ignore', windowsHide: true,
-      }).unref();
-    } else if (process.platform === 'darwin') {
-      spawn('open', [HOME], { detached: true, stdio: 'ignore' }).unref();
-    } else {
-      spawn('xdg-open', [HOME], { detached: true, stdio: 'ignore' }).unref();
-    }
-  } catch {
-    say(`  （没能自动打开浏览器，手动访问 ${HOME}）`);
-  }
+  if (!openUrl(HOME)) say(`  （没能自动打开浏览器，手动访问 ${HOME}）`);
 }
 
 /* ------------------------------------------------------------------ 主流程 */
@@ -62,6 +56,7 @@ const r = await ensureRunning({ port: PORT, dataDir: DATA, logFile: LOG, force: 
 if (r.action === 'already') {
   say(`\n已经在运行（PID ${(r.pids ?? []).join(', ') || '?'}）—— 不重启，直接开页面。`);
   say('要强制重启用 restart.cmd（会打断正在跑的任务）。');
+  sayCliNote(r.cliNote);
   openBrowser();
   process.exit(0);
 }
@@ -90,4 +85,5 @@ if (r.replaced?.length) {
   );
 }
 say(`\n✓ 就绪 ${HOME}`);
+sayCliNote(r.cliNote);
 openBrowser();

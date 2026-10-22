@@ -35,6 +35,25 @@ node start.mjs        # 起控制面 + 开浏览器；Windows 也可以直接双
 
 零依赖：没有 `npm install` 这一步，也没有打包器。
 
+### C. 用命令管它（`bandi`）
+
+装完桌面版就在 PATH 上有了 `bandi`（源码检出直接用仓库里的 `bandi.cmd`）。不带参数敲一下，
+是**状态一屏 + 编号菜单**；带参数就是给脚本用的那句命令：
+
+```sh
+bandi                     # 版本 / 运行状态 / 端口 / 访问地址 / 模式 / 节点 / 数据目录 / 日志路径
+                          # （终端里接着给 1..8 的菜单；管道里只出这一屏）
+bandi status --json       # 给脚本读；退出码 3 = 没在跑（0 = 在跑）
+bandi start|stop|restart  # 起停；restart 会打断正在跑的活，非交互要加 -y
+bandi url --open          # 访问地址 / 直接开浏览器
+bandi logs -n 50 -f       # 日志（-f 跟着走）
+bandi node | bandi mode   # 执行节点状态、这台机器的身份（都只读）
+bandi install-cli         # 重新注册全局命令（[--dir] [--path] [--remove] [--dry-run]）
+```
+
+**改模式不在命令行里做**：切单机/总机去页面「设置 → 这台机器」——那里会把"要重启才生效"和
+"切过去之后怎么连"一起说清楚。在终端里改监听地址，一断就没人救得回来。
+
 ### 两条路都要的前置条件
 
 - **agent CLI 自己装、凭据自备**：Codex（`codex`）或 DeepSeek Harness（`dsh`）—— 班底只负责调用，

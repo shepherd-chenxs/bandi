@@ -177,6 +177,12 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "允许页面弹出壳的原生目录选择框（pick_directory）。项目「工作目录」、仓库本地目录等处的「选择」按钮都用它 —— 带主窗口做 owner 的 IFileOpenDialog，而不是被窗口盖住的后台对话框。",
+          "type": "string",
+          "const": "allow-pick-directory",
+          "markdownDescription": "允许页面弹出壳的原生目录选择框（pick_directory）。项目「工作目录」、仓库本地目录等处的「选择」按钮都用它 —— 带主窗口做 owner 的 IFileOpenDialog，而不是被窗口盖住的后台对话框。"
+        },
+        {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",
           "type": "string",
           "const": "core:default",

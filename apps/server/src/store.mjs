@@ -13,10 +13,44 @@ fs.mkdirSync(dataDir, { recursive: true });
  * 规矩：**SQL 只出现在这个文件里**（见 docs/形态决策.md §十二 第 2 条）；
  * 外面要什么，就在这儿加一个函数。
  */
+/*
+ * 导入的落库时刻（2026-10-22，数据管理）：`/api/local/import` 把快照校验后写成
+ * `<dbPath>.importing`，**真正换库在这里做** —— 模块加载、连接还没打开，换文件零并发风险。
+ * 现库三件套（.db / -wal / -shm）整体改名进 backups/（保留 wal 配对，原样可回滚），
+ * 再把快照扶正。别的进程还占着库时 rename 会失败（Windows 上必如此）—— 不崩，留着下次启动再换。
+ */
+{
+  const pending = `${dbPath}.importing`;
+  if (fs.existsSync(pending)) {
+    const ok = fs.readFileSync(pending).subarray(0, 16).toString('latin1') === 'SQLite format 3\x00';
+    if (!ok) {
+      fs.rmSync(pending, { force: true });
+      console.log('[数据管理] 待导入的文件不是 SQLite 库，已丢弃（本机数据原样）');
+    } else {
+      const d = new Date();
+      const p = (n, w = 2) => String(n).padStart(w, '0');
+      const stamp = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+      try {
+        const backups = path.join(dataDir, 'backups');
+        fs.mkdirSync(backups, { recursive: true });
+        for (const suf of ['', '-wal', '-shm']) {
+          const src = `${dbPath}${suf}`;
+          if (fs.existsSync(src)) {
+            fs.renameSync(src, path.join(backups, `导入前-${stamp}${suf ? `${suf}` : '.db'}`));
+          }
+        }
+        fs.renameSync(pending, dbPath);
+        console.log(`[数据管理] 已应用导入的数据快照，原库备份在 backups/导入前-${stamp}.db`);
+      } catch (e) {
+        console.log(`[数据管理] 换库没成功（${e?.message ?? e}），下次启动再试；本次仍用现有数据`);
+      }
+    }
+  }
+}
+
 const db = new DatabaseSync(dbPath);
 
 db.exec(`PRAGMA journal_mode = WAL;`);
-
 db.exec(`
   CREATE TABLE IF NOT EXISTS personas (
     id            TEXT PRIMARY KEY,
@@ -202,6 +236,14 @@ ensureColumn('personas', 'role', 'role TEXT');
  * 允许改指令/改权限 —— 她是用户的员工，不是平台的广告位；只是**不许丢**。
  */
 ensureColumn('personas', 'builtin', 'builtin INTEGER NOT NULL DEFAULT 0');
+
+/*
+ * **头像**（2026-10-22）：存的是**文件名**，不是图片二进制 —— 图片放 apps/web/avatars/ 里，
+ * 由现成的静态路由服务。为什么坚决不存 base64/二进制进库：库和 WAL 会跟着图片膨胀，
+ * 备份变慢、读写变毛；文件名（expert-pm.png 这种）几字节就够。
+ * 路由层只放行白名单后缀的纯文件名，防止借这个字段写路径。
+ */
+ensureColumn('personas', 'avatar', 'avatar TEXT');
 
 /*
  * 这次运行**实际用的模型**。
@@ -1099,7 +1141,7 @@ export function getPersona(id) {
   return db.prepare('SELECT * FROM personas WHERE id = ?').get(id) ?? null;
 }
 
-export function createPersona({ id = null, name, role = null, instructions = '', runtime = 'codex', sandbox = 'danger-full-access', cwd = null, model = null, showThinking = 0, rootDirs = [], builtin = 0 }) {
+export function createPersona({ id = null, name, role = null, instructions = '', runtime = 'codex', sandbox = 'danger-full-access', cwd = null, model = null, showThinking = 0, rootDirs = [], builtin = 0, avatar = null }) {
   const row = {
     // 内置员工要**固定 id**（seed 幂等靠它）；普通员工仍自动生成
     id: id || newId('p'),
@@ -1107,14 +1149,15 @@ export function createPersona({ id = null, name, role = null, instructions = '',
     showThinking: showThinking ? 1 : 0,
     rootDirs: Array.isArray(rootDirs) && rootDirs.length ? JSON.stringify(rootDirs) : null,
     builtin: builtin ? 1 : 0,
+    avatar: avatar || null,
     createdAt: nowIso(),
   };
   db.prepare(
-    `INSERT INTO personas (id, name, role, instructions, runtime, sandbox, cwd, model, showThinking, rootDirs, builtin, createdAt)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO personas (id, name, role, instructions, runtime, sandbox, cwd, model, showThinking, rootDirs, builtin, avatar, createdAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     row.id, row.name, row.role, row.instructions, row.runtime, row.sandbox, row.cwd, row.model,
-    row.showThinking, row.rootDirs, row.builtin, row.createdAt,
+    row.showThinking, row.rootDirs, row.builtin, row.avatar, row.createdAt,
   );
   return row;
 }
@@ -1215,13 +1258,15 @@ export function updatePersona(id, fields) {
       fields.rootDirs === undefined
         ? current.rootDirs
         : (Array.isArray(fields.rootDirs) && fields.rootDirs.length ? JSON.stringify(fields.rootDirs) : null),
+    // 头像：undefined = 没提供；null/空串 = 显式清掉（退回字母头像）
+    avatar: fields.avatar === undefined ? current.avatar : (fields.avatar ? String(fields.avatar) : null),
   };
   db.prepare(
-    `UPDATE personas SET name = ?, role = ?, instructions = ?, runtime = ?, sandbox = ?, cwd = ?, model = ?, showThinking = ?, rootDirs = ?
+    `UPDATE personas SET name = ?, role = ?, instructions = ?, runtime = ?, sandbox = ?, cwd = ?, model = ?, showThinking = ?, rootDirs = ?, avatar = ?
       WHERE id = ?`,
   ).run(
     next.name, next.role, next.instructions, next.runtime, next.sandbox, next.cwd, next.model,
-    next.showThinking, next.rootDirs, id,
+    next.showThinking, next.rootDirs, next.avatar, id,
   );
   return { ...current, ...next };
 }
@@ -2286,6 +2331,14 @@ ensureColumn('nodes', 'renamed', 'renamed INTEGER NOT NULL DEFAULT 0');
  * 跟 `runtimes` 一样**节点自己报** —— 那台机器上的事实，控制面判不了。
  */
 ensureColumn('nodes', 'externals', 'externals TEXT');
+/*
+ * `lastUsedAt` ＝ 这台机器**最近一次真的用面板**是什么时候（2026-10-20，P1-3「最近使用」）。
+ *
+ * 为什么不用 `lastSeenAt`：那是**心跳**时间（15 秒一跳，只能说明进程活着）。
+ * 「最近使用」问的是"人什么时候在这台机器上动过面板"，所以写点只有一个：
+ * 一个 `panel` scope 的请求被放行时，**节流**写一次（`auth.decide` → 本文件 `touchNodeUsed`）。
+ */
+ensureColumn('nodes', 'lastUsedAt', 'lastUsedAt TEXT');
 
 export function upsertNode({ id, label, platform = null, runtimes = [], externals = null, hostname = null }) {
   const ts = nowIso();
@@ -2397,6 +2450,73 @@ db.exec(`
 ensureColumn('node_jobs', 'progressAt', 'progressAt TEXT');
 
 /*
+ * 工作空间（2026-10-22）：这个活要用的 git 仓库，JSON `{fullName, branch}`。
+ * 控制面发现 cwd 在某个已接入仓库里就把它记上 —— 节点拿到后**自己** clone/pull 到
+ * 它数据目录的 repos/ 里干活。只发仓库全名与分支名，**不发总机的令牌、不发路径**：
+ * 凭据各机各配（跟"连接器不下发"同一条安全线）。
+ */
+ensureColumn('node_jobs', 'repo', 'repo TEXT');
+
+/*
+ * 「这台机器上，总机的那个目录对应我哪儿的目录」——**非 git 项目**的工作空间映射表。
+ * git 项目不用配（节点自动 clone）；普通文件夹项目（D 盘上随手建的一个目录）两边
+ * 路径对不上，派活前控制面按这张表把 cwd 换成那台机器上的本地路径。
+ * 映射存在**总机的库里**（nodeId 维度）：配置动作发生在控制面面板上，节点是只报事实的。
+ */
+db.exec(`
+  CREATE TABLE IF NOT EXISTS node_paths (
+    nodeId     TEXT NOT NULL,
+    remotePath TEXT NOT NULL,
+    localPath  TEXT NOT NULL,
+    createdAt  TEXT NOT NULL,
+    PRIMARY KEY (nodeId, remotePath)
+  );
+`);
+
+export function listNodePaths(nodeId) {
+  return db.prepare('SELECT * FROM node_paths WHERE nodeId = ? ORDER BY remotePath').all(nodeId);
+}
+
+export function setNodePath(nodeId, remotePath, localPath) {
+  db.prepare(
+    `INSERT INTO node_paths (nodeId, remotePath, localPath, createdAt) VALUES (?, ?, ?, ?)
+     ON CONFLICT (nodeId, remotePath) DO UPDATE SET localPath = excluded.localPath`,
+  ).run(nodeId, remotePath, localPath, nowIso());
+}
+
+export function deleteNodePath(nodeId, remotePath) {
+  return db.prepare('DELETE FROM node_paths WHERE nodeId = ? AND remotePath = ?').run(nodeId, remotePath).changes;
+}
+
+/**
+ * 查映射：cwd 等于某条 remotePath 或在其下面 → 返回换算后的本机路径。
+ * 命中**最深**的一条（映射可以嵌套：整盘映射一层、单个项目再映射一层）。
+ *
+ * 比较前先**规范化**：`\` 与 `/` 一律折成 `/`（UNC 的开头两个也是，两边同样折，
+ * 不影响相等性），Windows 上再忽略大小写 —— `E:\proj`、`E:/proj`、`e:\proj` 是同一个地方。
+ * 这不是洁癖：真实库里就见过混着存的（工具各写各的）。
+ */
+export function lookupNodePath(nodeId, cwd) {
+  if (!cwd) return null;
+  const canon = (p) => String(p ?? '').trim().replace(/[\\/]+/g, '/');
+  if (!canon(cwd)) return null;
+  const win = process.platform === 'win32';
+  const same = (a, b) => (win ? a.toLowerCase() === b.toLowerCase() : a === b);
+  const under = (a, b) => (win ? a.toLowerCase().startsWith(b.toLowerCase() + '/') : a.startsWith(b + '/'));
+  let best = null;
+  for (const r of listNodePaths(nodeId)) {
+    const rp = canon(r.remotePath);
+    if (!rp) continue;
+    if ((same(canon(cwd), rp) || under(canon(cwd), rp)) && (!best || rp.length > best.len)) {
+      best = { ...r, len: rp.length };
+    }
+  }
+  if (!best) return null;
+  const rest = canon(cwd).slice(best.len).replace(/^\//, '');
+  return { remotePath: best.remotePath, localPath: rest ? path.join(best.localPath, rest) : best.localPath };
+}
+
+/*
  * 「让那台机器做一件小事」——目前只有一种：一键安装运行时（2026-10-16）。
  *
  * 为什么不复用 node_jobs：那张表的 `runId` 是**必填**的，它服务的是"一次对话运行"（有会话、
@@ -2454,6 +2574,18 @@ export function claimNodeTask(nodeId) {
 }
 
 /**
+ * **按 id** 原子领一件"待领"（本机安装用：排完就地执行，不走"谁先来领"的队列序）。
+ * 已经开跑 / 已结束的返回 null —— 调用方据此不重复执行。
+ */
+export function claimNodeTaskById(id) {
+  const up = db
+    .prepare("UPDATE node_tasks SET status = '执行中', claimedAt = ? WHERE id = ? AND status = '待领'")
+    .run(nowIso(), id);
+  if (!up.changes) return null;
+  return getNodeTask(id);
+}
+
+/**
  * 追加输出。**留最后 8000 字**：npm 装一次能刷几百行，全留着没意义，
  * 而人真正要看的是**末尾**（错在哪、装完没有）。
  */
@@ -2494,12 +2626,12 @@ export function publicNodeTask(t) {
   };
 }
 
-export function enqueueNodeJob({ runId, nodeId, family, model = null, sandbox = null, cwd = null, task, sessionId = null }) {
+export function enqueueNodeJob({ runId, nodeId, family, model = null, sandbox = null, cwd = null, repo = null, task, sessionId = null }) {
   const id = newId('nj');
   db.prepare(
-    `INSERT INTO node_jobs (id, runId, nodeId, family, model, sandbox, cwd, task, sessionId, status, createdAt)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '待领', ?)`,
-  ).run(id, runId, nodeId, family, model, sandbox, cwd, task, sessionId, nowIso());
+    `INSERT INTO node_jobs (id, runId, nodeId, family, model, sandbox, cwd, repo, task, sessionId, status, createdAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '待领', ?)`,
+  ).run(id, runId, nodeId, family, model, sandbox, cwd, repo ? JSON.stringify(repo) : null, task, sessionId, nowIso());
   return getNodeJob(id);
 }
 
@@ -2601,20 +2733,167 @@ db.exec(`
   );
 `);
 
+/*
+ * 令牌 scope（2026-10-20，设计 §4.1）。
+ *
+ *   · 存在**令牌**上、不存在 `nodes` 上 —— 令牌才是身份载体，吊销/重发都是令牌级操作；
+ *     放 nodes 会出现"新令牌继承旧令牌的权限"（旧令牌本该是只能干活的 compute）。
+ *   · 老令牌一律 `compute`：老节点只干"报到/心跳/领活/回传/回执"那五条活，
+ *     行为与改前**完全一致**（这是 T01 的验收项）。
+ *   · 存成"排序后空格分隔"的规范串（`compute` / `panel` / `compute panel`），不用 JSON：
+ *     SQL 里能直接 LIKE，人翻库也能一眼读懂。
+ *
+ * ⚠️ 复用上面那个 `ensureColumn`（`PRAGMA table_info` + `ALTER`）—— SQLite **不支持**
+ * `ADD COLUMN IF NOT EXISTS`，别自己写一套。
+ */
+ensureColumn('node_tokens', 'scope', "scope TEXT NOT NULL DEFAULT 'compute'");
+
 const hashOf = (s) => crypto.createHash('sha256').update(String(s)).digest('hex');
 
-/** 颁发一枚**只属于这个节点**的令牌。明文**只在这里回一次**，库里只留哈希 */
-export function issueNodeToken(nodeId) {
+/*
+ * scope 的两个值（设计 §13.1）：
+ *   compute —— 接活/心跳/回传自己那次运行；
+ *   panel   —— 看面板 + 用（员工/会话/任务/工作流/定时），减五类管理动作（见 auth.mjs 那张表）。
+ *
+ * ⚠️ 这里与 `local-mode.mjs` **各存一份字面量**，值相同 —— 因为本文件一 import 就开
+ * SQLite 跑迁移，节点进程绝不能把它带进来（见设计 §3.1）。
+ */
+export const SCOPE_COMPUTE = 'compute';
+export const SCOPE_PANEL = 'panel';
+
+const SCOPE_KNOWN = [SCOPE_COMPUTE, SCOPE_PANEL];
+
+/**
+ * 把"库里那串 / 请求体里那个"拆成 Set。
+ *
+ * 宽松解析：字符串按空白（和逗号）拆、数组逐项、其余当空。
+ * **空结果回退 `compute`** —— 老令牌、缺字段、写了不认识的值，语义都是"只能干活"，
+ * 这样老节点一个字节不改也不会被挡在门外。
+ */
+export function parseScope(input) {
+  const out = new Set();
+  const items = Array.isArray(input)
+    ? input
+    : typeof input === 'string'
+      ? input.split(/[\s,]+/)
+      : [];
+  for (const raw of items) {
+    const s = String(raw ?? '').trim().toLowerCase();
+    if (SCOPE_KNOWN.includes(s)) out.add(s);
+  }
+  if (!out.size) out.add(SCOPE_COMPUTE);
+  return out;
+}
+
+/** 规范串：去重 → 字典序 → 空格分隔（`'compute panel'`） */
+export function normScope(input) {
+  return [...parseScope(input)].sort().join(' ');
+}
+
+/**
+ * 请求体里那个 scope **合不合法**（只认 `compute` / `panel` 的组合）。
+ *
+ * 与 `normScope` 的分工：`normScope` 是**宽松**的（不认识的值丢掉、空则回退 compute），
+ * 用在"库里的值 / 已经过审的入参"；这个是**严格**的，用在接口入口 ——
+ * 出现别的值就 400 `E1047`（设计 §5.8，与"加入要带 id"同码，别新增）。
+ */
+export function scopeIsValid(input) {
+  if (input === undefined || input === null) return true; // 缺省 = compute
+  const items = Array.isArray(input)
+    ? input
+    : typeof input === 'string'
+      ? input.split(/[\s,]+/)
+      : null;
+  if (!items) return false;
+  return items
+    .map((s) => String(s ?? '').trim().toLowerCase())
+    .filter(Boolean)
+    .every((s) => SCOPE_KNOWN.includes(s));
+}
+
+/**
+ * 颁发一枚**只属于这个节点**的令牌。明文**只在这里回一次**，库里只留哈希。
+ *
+ * `scope` 缺省 `compute` —— 老的 `node.mjs --join`（它不带这个字段）行为完全不变。
+ */
+export function issueNodeToken(nodeId, scope = SCOPE_COMPUTE) {
   const token = `bn_${crypto.randomBytes(24).toString('base64url')}`;
-  db.prepare('INSERT INTO node_tokens (tokenHash, nodeId, createdAt) VALUES (?, ?, ?)').run(hashOf(token), nodeId, nowIso());
+  db.prepare('INSERT INTO node_tokens (tokenHash, nodeId, scope, createdAt) VALUES (?, ?, ?, ?)').run(
+    hashOf(token),
+    nodeId,
+    normScope(scope),
+    nowIso(),
+  );
   return token;
 }
 
-/** 这枚令牌属于哪个节点（不认识就 null）。给认证层用 */
-export function nodeByToken(token) {
+/**
+ * 这枚令牌**是谁的、能干什么**（不认识就 null）。给认证层用。
+ *
+ * 返回 `{ nodeId, scope: Set }` —— 注意 `scope` 是 Set，判定那边只做 `has()`，
+ * 不解析字符串（"判定只有一处"那条）。
+ */
+export function nodeAuthByToken(token) {
   if (!token) return null;
-  const row = db.prepare('SELECT nodeId FROM node_tokens WHERE tokenHash = ?').get(hashOf(token));
-  return row?.nodeId ?? null;
+  const row = db.prepare('SELECT nodeId, scope FROM node_tokens WHERE tokenHash = ?').get(hashOf(token));
+  if (!row) return null;
+  return { nodeId: row.nodeId, scope: parseScope(row.scope) };
+}
+
+/**
+ * 这枚令牌属于哪个节点（不认识就 null）。
+ *
+ * ⚠️ 认证层已经改用 `nodeAuthByToken`（它还要 scope）。这个保留是**兼容壳**：
+ * 语义与改前逐字相同（只回 nodeId），别再往里加东西。
+ */
+export function nodeByToken(token) {
+  return nodeAuthByToken(token)?.nodeId ?? null;
+}
+
+/**
+ * 改一台机器的权限（**只有总机侧能做**，设计 §5.9）。
+ *
+ * 落点是**它名下所有令牌**：同一 nodeId 历史上可能有多枚（重装、重新加入过），
+ * 只改最新那枚就会出现"旧令牌还是老权限"—— 而权限边界最怕的就是这种半改状态。
+ * 返回改了几行，调用方据此判"这台机器还认不认得出"。
+ */
+export function setNodeScope(nodeId, scope) {
+  const next = normScope(scope);
+  const r = db.prepare('UPDATE node_tokens SET scope = ? WHERE nodeId = ?').run(next, nodeId);
+  return { nodeId, scope: next, tokens: r.changes };
+}
+
+/**
+ * 这台机器**现在**能干什么（设备详情页那一行「这台能看到面板」用它）。
+ *
+ * 多枚令牌取**并集**：只要还有一枚能看面板，这台机器就是能看。
+ * 一枚有效令牌都没有（被「忘掉」过）→ `null` —— 那不是 compute，是**没有身份**。
+ */
+export function scopeOfNode(nodeId) {
+  const rows = db.prepare('SELECT scope FROM node_tokens WHERE nodeId = ?').all(nodeId);
+  if (!rows.length) return null;
+  const set = new Set();
+  for (const r of rows) for (const s of parseScope(r.scope)) set.add(s);
+  return [...set].sort().join(' ');
+}
+
+/**
+ * 「最近使用」＝ 这台机器上有人动了面板（`nodes.lastUsedAt`）。
+ *
+ * **60 秒节流**：一次panel请求写一次库，一个页面刷新就是十几条 —— 那不是"使用记录"，
+ * 那是拿库当日志写。节流只影响**写库频率**，不影响判定（判定永远按令牌实时算）。
+ * 表是进程内的：重启后第一笔请求会再写一次，无害。
+ */
+const touchedAt = new Map();
+const TOUCH_NODE_USED_MS = 60 * 1000;
+
+export function touchNodeUsed(nodeId) {
+  if (!nodeId) return false;
+  const now = Date.now();
+  if (now - (touchedAt.get(nodeId) ?? 0) < TOUCH_NODE_USED_MS) return false;
+  touchedAt.set(nodeId, now);
+  const r = db.prepare('UPDATE nodes SET lastUsedAt = ? WHERE id = ?').run(nowIso(), nodeId);
+  return r.changes > 0;
 }
 
 /** 吊销一台机器的全部令牌 —— 「忘掉」它就是**真的**把它踢出去（而不是删了记录等它回来） */

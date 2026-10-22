@@ -106,18 +106,27 @@ export function tokenOf(req, url) {
 }
 
 /**
- * 这枚令牌**是谁的**（2026-10-16 加的）。
+ * 这枚令牌**是谁的**（2026-10-16 加的，2026-10-20 带上 scope）。
  *
  * 原来是"一枚令牌走天下"：节点手上的就是总机那枚 master ✗ —— 一台节点被翻 = 整套被翻，
- * 而且「忘掉」踢不掉它（令牌还有效）。现在分两种身份：
+ * 而且「忘掉」踢不掉它（令牌还有效）。现在分三种身份：
  *   · `operator` —— 总机那枚（浏览器登录、脚本、运维）；
- *   · `node`     —— 每台机器**自己那枚**（邀请码换来的，见 store.issueNodeToken）。
+ *   · `node`     —— 每台机器**自己那枚**（邀请码换来的，见 store.issueNodeToken），
+ *                  带 `scope: Set`（`compute` / `panel`）；
+ *   · `revoked`  —— **曾经是节点令牌、现在库里没有这行哈希**（唯一会删它的是
+ *                  `store.revokeNodeTokens`，也就是总机上的「忘掉」）。
+ *
+ * ⚠️ `revoked` 只在令牌以 `bn_` 开头时才判（设计 §5.10）：那个前缀是节点令牌自己带的，
+ * 于是"查不到"能确定是**被吊销**而不是"抄错了/操作员令牌删了"——
+ * 后者必须还是 `E4010`（需要令牌），不能骗人说"你被撤销了"。
  */
 export function identify(auth, token) {
   if (!token) return null;
   if (auth.token && timingSafeEqual(token, auth.token)) return { kind: 'operator' };
-  const nodeId = store.nodeByToken(token);
-  return nodeId ? { kind: 'node', nodeId } : null;
+  const hit = store.nodeAuthByToken(token);
+  if (hit) return { kind: 'node', nodeId: hit.nodeId, scope: hit.scope };
+  if (String(token).startsWith('bn_')) return { kind: 'revoked' };
+  return null;
 }
 
 /**
@@ -149,6 +158,132 @@ function nodeMayReach(nodeId, method, pathname) {
 }
 
 /**
+ * **修正 2（设计 §2）：节点干活还会打这两条，今天在局域网总机上必然 403。**
+ *
+ * `POST /api/runs/:runId/events`（`node.mjs:199`，过程回传）与
+ * `POST /api/runs/:runId/finish`（`node.mjs:332`，回执）**不在** `nodeMayReach` 的白名单里 ✗。
+ * 今天没暴露，只是因为回环形态下 `auth.required === false`、整套节点越权检查根本不执行；
+ * 而唯一的节点用例恰好是回环形态。**一旦总机开了局域网（鉴权开），远端节点的"过程回传"
+ * 和"回执"全部 403** —— 而本需求的主场景正是"局域网总机 + 远端节点"。
+ *
+ * 判据是**这次运行是谁的活**：`store.getNodeJobByRun(runId).nodeId === who.nodeId`。
+ * 协议一个字节不改，只补判定。
+ */
+function runMayReach(nodeId, method, pathname) {
+  if (method !== 'POST') return false;
+  const m = /^\/api\/runs\/([^/]+)\/(?:events|finish)$/.exec(pathname);
+  if (!m) return false;
+  let runId = m[1];
+  try {
+    runId = decodeURIComponent(runId);
+  } catch { /* 编码坏了就按原样查，查不到自然拒绝 */ }
+  const job = store.getNodeJobByRun(runId);
+  return !!job && job.nodeId === nodeId;
+}
+
+/**
+ * **`panel` 禁止清单**（设计 §6.3 那张表，逐条翻译成精确正则）。
+ *
+ * 口径：`panel` = 「看 + 用」；下列五类**管理动作**只有握着总机 `token` 文件的那台
+ * （`operator`）能做。理由：一台被翻的瘦客户端不该能再拉别的机器进来、
+ * 也不该能把别人家的连接器密钥翻出来。
+ *
+ * ⚠️ 一条不许漏（漏了等于给管理权），一条不许扩（扩了会把"用"也挡掉）。
+ * 下面这张"明确允许"的单子跟禁止清单是**一对**，改任何一边都要回头看一眼另一边：
+ *   员工增删改（下表中 model/runtime **字段级**那条除外，它落在 server.mjs 的 handler 里）、
+ *   会话/消息、群、任务/项目、工作流、定时任务、技能、额度**读**、连接器**读**、
+ *   设备**读**、`GET /api/lan`、`GET /api/state`、`/api/runs/<id>/stream`（SSE）。
+ */
+const PANEL_FORBIDDEN = [
+  // 1 发邀请码                                        server.mjs:1188
+  { method: /^POST$/, path: /^\/api\/nodes\/invites$/ },
+  // 2 删 / 改设备
+  { method: /^DELETE$/, path: /^\/api\/nodes\/[^/]+$/ }, // 忘掉 = 吊销   server.mjs:1017
+  { method: /^POST$/, path: /^\/api\/devices\/[^/]+\/rename$/ }, //             server.mjs:1496
+  { method: /^POST$/, path: /^\/api\/devices\/[^/]+\/runtimes$/ }, //            server.mjs:1525
+  { method: /^(PUT|PATCH)$/, path: /^\/api\/devices\/[^/]+\/runtimes\/[^/]+$/ }, // server.mjs:1534
+  { method: /^DELETE$/, path: /^\/api\/devices\/[^/]+\/runtimes\/[^/]+$/ }, //    server.mjs:1546
+  //   让**别的机器**装东西（在别人机器上落代码，与"改设备"同级）   server.mjs:1117
+  { method: /^POST$/, path: /^\/api\/nodes\/[^/]+\/tasks$/ },
+  // 3 改连接器与凭据
+  { method: /^POST$/, path: /^\/api\/connectors$/ }, //                          server.mjs:939
+  { method: /^(PUT|PATCH)$/, path: /^\/api\/connectors\/[^/]+$/ }, //            server.mjs:973
+  { method: /^DELETE$/, path: /^\/api\/connectors\/[^/]+$/ }, //                 server.mjs:980
+  { method: /^POST$/, path: /^\/api\/ssh\/servers$/ }, //（含私钥路径）           server.mjs:258
+  { method: /^POST$/, path: /^\/api\/git\/token$/ }, //                          server.mjs:2208
+  { method: /^DELETE$/, path: /^\/api\/git\/token$/ }, //                        server.mjs:2223
+  // 4 改模型路由（每模型限额就是路由约束）                                     server.mjs:392
+  { method: /^POST$/, path: /^\/api\/quota$/ },
+  //   第 15 条 `PUT|PATCH /api/personas/:id` **且 body 带 model 或 runtime**
+  //   是**字段级**的（readBody 只有 handler 里有）→ 落在 server.mjs 的 handler（用 mayManage）
+  // 5 重启与局域网开关
+  { method: /^POST$/, path: /^\/api\/restart$/ }, //                             server.mjs:1425
+  { method: /^POST$/, path: /^\/api\/lan$/ }, //（GET 允许 —— 只读）              server.mjs:1452
+  // — 权限本身：scope 只能总机侧改（决策 A 规则 2）                             本次新增
+  { method: /^POST$/, path: /^\/api\/nodes\/[^/]+\/scope$/ },
+  /*
+   * — **架构补充**：插件装卸 = 在总机上落代码，风险与"改连接器"同级
+   *   （设计 §6.3 最后一行，别漏）                          server.mjs:1565 / 1578
+   */
+  { method: /^POST$/, path: /^\/api\/plugins\/[^/]+\/(?:install|enable|disable)$/ },
+  { method: /^DELETE$/, path: /^\/api\/plugins\/[^/]+$/ },
+];
+
+/** 这个动作算不算"管理动作"（`panel` 令牌碰不得） */
+export function isPanelForbidden(method, pathname) {
+  const m = String(method ?? '').toUpperCase();
+  const p = String(pathname ?? '');
+  return PANEL_FORBIDDEN.some((r) => r.method.test(m) && r.path.test(p));
+}
+
+/**
+ * **判定只有一处**（设计 §6.1）。`guard()` 里只调这一个函数，别的什么都不判。
+ *
+ * 三种令牌携带方式（Cookie / `X-Bandi-Token` / `?token=`）走的**都是这里** ——
+ * `tokenOf()` 先统一取出令牌，`identify()` 再统一认出"是谁"。
+ * 所以"面板令牌换个 Cookie 就变成操作员"这种事不会发生。
+ *
+ * 返回 `'allow' | 'E4012' | 'E4031' | 'E4032'`，规则按序：
+ *   1. `operator` → 放行；
+ *   2. 有 `compute` 且是"节点自己的活"（`nodeMayReach` + `runMayReach`）→ 放行；
+ *   3. 有 `panel` 且**不在**禁止清单里 → 放行（并节流记一次"最近使用"）；
+ *   4. 有 `panel` 但命中禁止清单 → `E4032`；其余（只有 compute）→ `E4031`。
+ *
+ * **不缓存**（决策 A 规则 2）：每次请求现算，总机那边改完对下一次请求立即生效。
+ */
+export function decide(who, method, pathname) {
+  if (!who) return 'allow'; // 不该发生：guard 只在 identify 到身份之后才问
+  if (who.kind === 'operator') return 'allow';
+  if (who.kind === 'revoked') return 'E4012';
+
+  const scope = who.scope instanceof Set ? who.scope : new Set([store.SCOPE_COMPUTE]);
+  if (scope.has(store.SCOPE_COMPUTE) && (nodeMayReach(who.nodeId, method, pathname) || runMayReach(who.nodeId, method, pathname))) {
+    return 'allow';
+  }
+  if (scope.has(store.SCOPE_PANEL)) {
+    if (isPanelForbidden(method, pathname)) return 'E4032';
+    // 「最近使用」= 真的用了面板（60 秒节流，见 store.touchNodeUsed 的注释）
+    store.touchNodeUsed(who.nodeId);
+    return 'allow';
+  }
+  return 'E4031';
+}
+
+/**
+ * 这次请求是不是**这台机器的操作员**在做（handler 判字段级权限用）。
+ *
+ * 存在的理由：`PUT /api/personas/:id` 里"body 带 model / runtime"这件事
+ * `auth.mjs` 看不见（要 `readBody`），所以那一条必须落在 handler 里，一行判断即可。
+ *
+ * ⚠️ 回环形态（单机 / 桌面版）下 `guard` 会把身份标成 operator（见下面那段），
+ * 否则单机上点「改模型」会被自己的闸挡掉。
+ */
+export function mayManage(req) {
+  return req?.bandiAuth?.kind === 'operator';
+}
+
+
+/**
  * 闸。返回 `true` = 放行；`false` = **已经回过响应了**，调用方直接 return。
  *
  * 未授权时给什么，看它要什么：
@@ -158,33 +293,84 @@ function nodeMayReach(nodeId, method, pathname) {
  */
 export function guard(auth, req, res, url) {
   /*
-   * 加入：这台机器**还没有令牌**，凭一次性的邀请码进来（邀请码就是它的凭据，见 /api/nodes/join）。
-   * 这条必须在令牌检查之前放行，否则新机器永远进不来。
+   * 免令牌的两条：
+   *   · 加入：这台机器**还没有令牌**，凭一次性的邀请码进来（邀请码就是它的凭据，见 /api/nodes/join）。
+   *   · `GET /api/hello`（2026-10-20）：加入向导"探这个地址"打的就是它。
+   *     它**故意不带任何秘密** —— 披露的字段与 UDP 应答完全同源（设计 §5.4）。
+   * 这两条必须在令牌检查之前放行，否则新机器永远进不来 / 永远探不到。
    */
   if (req.method === 'POST' && url.pathname === '/api/nodes/join') return true;
+  if (req.method === 'GET' && url.pathname === '/api/hello') return true;
 
-  if (!auth.required) return true;
+  if (!auth.required) {
+    /*
+     * 回环形态（桌面版 / 单机）免鉴权 —— 但**身份要标出来**。
+     *
+     * 为什么（2026-10-20）：下游用 `mayManage(req)` 判"这次能不能做管理动作"
+     * （改 scope、改员工的 model/runtime），而那个函数只看 `req.bandiAuth`。
+     * 不标的话，单机上自己点「改模型」会被自己的字段闸挡成 403 `E4032` ✗。
+     * 回环 = 就是这台机器的操作员，这与"闸只看监听地址"那条规则是同一个口径。
+     */
+    req.bandiAuth = { kind: 'operator', via: 'loopback' };
+    return true;
+  }
 
   const got = tokenOf(req, url);
   const who = identify(auth, got);
   if (who) {
-    // 节点令牌的权限边界：只管它自己那台的四条路，别的 403
-    if (who.kind === 'node' && !nodeMayReach(who.nodeId, req.method, url.pathname)) {
-      res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+    /*
+     * **判定只有一处**：Cookie / 头 / 查询参数三路都走到同一个 `decide()`，
+     * 于是"同一个身份换个携带方式就换出一套权限"不可能发生（决策 A 规则 3）。
+     */
+    const decision = decide(who, req.method, url.pathname);
+
+    if (decision === 'E4012') {
+      res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
       res.end(
         JSON.stringify({
-          error: '这枚是**节点**令牌，只能干节点自己的事（报到/心跳/领活/回执）',
-          code: 'E4030',
+          error: '这台机器的授权已被总机撤销（面板上「忘掉」了），退出总机后重新加入',
+          code: 'E4012',
           platform: 'bandi',
-          hint: '要看设备、对话、员工，请用操作员令牌（总机数据目录 token 文件里那枚）。',
+          hint: '在总机上重新发一个邀请码；在这台机器上：设置 →「这台机器」→ 退出总机 → 再加入。',
         }),
       );
       return false;
     }
+
+    if (decision === 'E4031') {
+      res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(
+        JSON.stringify({
+          error: '这台机器只有算力权限，看不了面板',
+          code: 'E4031',
+          platform: 'bandi',
+          hint: '要看设备、对话、员工，请用操作员令牌（总机数据目录 token 文件里那枚），或让总机在设备详情里给这台机器开面板权限。',
+        }),
+      );
+      return false;
+    }
+
+    if (decision === 'E4032') {
+      res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(
+        JSON.stringify({
+          error: '面板权限不能做管理动作（发邀请码 / 删改设备 / 改连接器与凭据 / 改模型路由 / 重启与局域网开关）',
+          code: 'E4032',
+          platform: 'bandi',
+          hint: '这些要在总机那台机器上做（它握着 token 文件里的那枚操作员令牌）。',
+        }),
+      );
+      return false;
+    }
+
     /*
      * 从地址栏进来的令牌：换成 Cookie 并**重定向掉**，免得它留在历史/Referer 里。
      * ⚠️ 只对**操作员**令牌做这件事：节点令牌要是也能换成 Cookie，就等于把 master 发给了浏览器 ✗
      * （那条是提权，正是这次改动要堵的东西）。
+     *
+     * `panel` 令牌**刻意不开这条路**（设计 §6.2）：瘦客户端走反代，浏览器根本拿不到令牌
+     * （令牌在反代的头里）；而一旦给 panel 开 Cookie，总机令牌就落进了那台机器的浏览器
+     * Cookie 里 —— 比 URL 更长寿、更容易被同机进程读走，正好和决策 A 想收的口子相反。
      */
     if (who.kind === 'operator' && url.searchParams.get('token')) {
       res.writeHead(302, {
@@ -195,7 +381,7 @@ export function guard(auth, req, res, url) {
       res.end();
       return false;
     }
-    req.bandiAuth = who; // 下游（比如"忘掉"）据此知道这枚令牌是谁
+    req.bandiAuth = who; // 下游（比如"忘掉"、员工编辑的字段闸）据此知道这枚令牌是谁
     return true;
   }
 
@@ -281,5 +467,11 @@ ${wrong ? '<p class="bad">令牌不对，再试一次。</p>' : ''}
   -->
   填对之后会记在 Cookie 里，不用每次填。
 </p>
+<!--
+  P1-6（2026-10-20）：瘦客户端那条路走的是**反代**（本机 127.0.0.1:端口 上那台服务），
+  目标是"浏览器直连总机地址"—— 那样既进不去（没有令牌），也解释不清为什么。
+  这一句就是给那个人看的：双击班底，不要在这个地址上折腾。
+-->
+<p class="hint">这台机器如果已经加入过某台班底，请<strong>双击班底</strong>打开，不要用浏览器直接开这个地址。</p>
 `;
 }

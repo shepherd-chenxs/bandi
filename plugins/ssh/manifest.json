@@ -14,11 +14,11 @@
         "formId": "server",
         "heading": "登记一台机器",
         "fields": [
-          { "key": "alias", "label": "别名", "required": true, "hint": "唯一标识，例如 bandi-hs4g。改这一项等于新建一台。" },
+          { "key": "alias", "label": "别名", "required": true, "hint": "唯一标识，可以用中文，例如 火山引擎服务器。改这一项等于新建一台。" },
           { "key": "host", "label": "地址", "required": true, "hint": "IPv4 或域名，不要带端口和路径。" },
           { "key": "user", "label": "登录用户", "required": true },
           { "key": "port", "label": "端口", "value": "22" },
-          { "key": "key_path", "label": "私钥路径", "hint": "留空则用 ~/.ssh/<别名>。" },
+          { "key": "key_path", "label": "私钥路径", "hint": "留空自动放在 ~/.ssh/ 下（中文别名会自动取一个英文文件名）。" },
           { "key": "purpose", "label": "备注", "type": "textarea" }
         ],
         "submit": { "method": "POST", "api": "/api/ssh/servers", "label": "保存" }

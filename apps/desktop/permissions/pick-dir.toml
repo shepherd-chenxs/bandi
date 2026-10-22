@@ -1,0 +1,11 @@
+# 页面能调壳的自定义命令，必须显式给权限（Tauri v2 的 ACL）。
+#
+# 为什么需要这个文件：页面是从 http://127.0.0.1:<port> 加载的「远程」来源，
+# Tauri 对远程来源的自定义命令一律先过 ACL —— 没有这条会直接报
+# `Command pick_directory not allowed by ACL`（2026-10-22 实测踩到）。
+# 命令本体和用途见 apps/desktop/src/lib.rs 的 pick_directory。
+
+[[permission]]
+identifier = "allow-pick-directory"
+description = "允许页面弹出壳的原生目录选择框（pick_directory）。项目「工作目录」、仓库本地目录等处的「选择」按钮都用它 —— 带主窗口做 owner 的 IFileOpenDialog，而不是被窗口盖住的后台对话框。"
+commands.allow = ["pick_directory"]

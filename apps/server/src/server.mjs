@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { DatabaseSync } from 'node:sqlite';
 import { port, repoRoot, host, dataDir, dbPath, extraOrigins } from './config.mjs';
 import * as netmode from './netmode.mjs';
 import * as store from './store.mjs';
@@ -18,6 +19,7 @@ import * as connectors from './connectors.mjs';
 import * as catalog from './catalog.mjs';
 import * as cliModels from './cli-models.mjs';
 import { dispatchToThread, personaRoots } from './dispatch.mjs';
+import { ensureCliInstalled } from './cli-install.mjs';
 import * as workflows from './workflows.mjs';
 import * as quota from './quota.mjs';
 import * as status from './status.mjs';
@@ -25,6 +27,10 @@ import { projectTasks, allTasks, personaTasks, createProjectTask, updateProjectT
 import * as git from './git-repos.mjs';
 import * as schedules from './schedules.mjs';
 import * as secretary from './secretary.mjs';
+import * as experts from './experts.mjs';
+import * as localMode from './local-mode.mjs';
+import * as discover from './discover.mjs';
+import * as lanAnnounce from './lan-announce.mjs';
 
 const webDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'web');
 
@@ -58,6 +64,40 @@ function runtimesOk(id) {
   return id === 'auto' || runtimeOptions().some((r) => r.id === id);
 }
 
+/* --------------------------------------------------- 局域网发现与"自报家门" */
+
+/*
+ * 这台总机对局域网**自报家门**的那一份数据（2026-10-20，设计 §5.4）。
+ *
+ * 两个出口共用同一份口径：`GET /api/hello`（HTTP，加入向导"探地址"用它）与
+ * UDP 8788 的应答（见 lan-announce.mjs）。**故意不带任何秘密** —— 这些字段
+ * PRD P0-1 已经定成"局域网可见"（机器名、主机名、端口、能不能加入、版本）。
+ *
+ * ⚠️ `allowLan` 取的是**开关值**（`netmode.readNetMode().allowLan`），不是"现在听没听 0.0.0.0"：
+ * 它仍是开关值的广播（`/api/lan` 页口径不动）。而**能不能加入**由 `netmode.isJoinable()`
+ * 判（2026-10-20 增量 1，设计 §1.1/§1.2）：云端总机（`BANDI_HOST=0.0.0.0` 显式监听、开关值
+ * 恒为 false）在这里必须回 `joinable:true` —— 否则节点探测会把它误报成"没开局域网开关"（E1091）。
+ * 判定与 UDP 应答包共用同一函数，杜绝两份逻辑漂移。
+ */
+function helloPayload() {
+  const me = localMode.nodeIdentity();
+  const nm = netmode.readNetMode();
+  return {
+    platform: 'bandi',
+    proto: 1,
+    // 版本读 apps/desktop/version.json（运行期读一次缓存；读不到给 null，不编一个）
+    version: localMode.platformVersion(),
+    instanceId: localMode.instanceId(),
+    label: me.label,
+    hostname: me.hostname,
+    httpPort: port,
+    allowLan: nm.allowLan,
+    joinable: netmode.isJoinable({ allowLan: nm.allowLan, explicit: !!process.env.BANDI_HOST, boundHost }),
+    // 能力声明：有这个才认得出 `scope` 字段（旧总机没有 → 加入方回 E2050，不静默降级）
+    caps: ['scope'],
+  };
+}
+
 /**
  * 给一台设备补上「外部件」（班底之外还要有的东西，现在只有 magpie）。
  *
@@ -68,23 +108,26 @@ async function withExternals(dev) {
   if (!dev) return dev;
   // 说明表按**那台机器**的平台算（控制面在 Linux、节点是 Windows 时，命令不是同一条）
   const catalog = externals.publicExternals(dev.platform);
+  /*
+   * 顺手把**最近那件小事**带上（装运行时 / 装外部件）。
+   *
+   * 为什么要有这一条（2026-10-16 用户报的"刷新页面，看不到安装进度了"）：
+   * 进度原来只活在**浏览器**里（写在点击处理器的轮询里）—— 一刷新就没了，
+   * 而那件事其实**还在那台机器上跑着**。按这条架构一贯的原则（**状态在服务端**），
+   * 进度也该从服务端读回来：刷新、换台电脑、明天再看，都还是它。
+   *
+   * 2026-10-21：本机也带上 —— 本机那颗「在这台机器上安装」和节点共用这一套
+   * （任务表按设备 id 存，本机那条的 nodeId 就是 `local`）。
+   */
+  const [task] = store.listNodeTasks(dev.id, 1);
   if (dev.kind === 'node') {
-    /*
-     * 顺手把**最近那件小事**带上（装运行时 / 装外部件）。
-     *
-     * 为什么要有这一条（2026-10-16 用户报的"刷新页面，看不到安装进度了"）：
-     * 进度原来只活在**浏览器**里（写在点击处理器的轮询里）—— 一刷新就没了，
-     * 而那件事其实**还在那台机器上跑着**。按这条架构一贯的原则（**状态在服务端**），
-     * 进度也该从服务端读回来：刷新、换台电脑、明天再看，都还是它。
-     */
-    const [task] = store.listNodeTasks(dev.id, 1);
     return {
       ...dev,
       task: store.publicNodeTask(task),
       externals: { probed: dev.externalsProbed ?? [], catalog },
     };
   }
-  return { ...dev, externals: { probed: await externals.declared(), catalog } };
+  return { ...dev, task: store.publicNodeTask(task), externals: { probed: await externals.declared(), catalog } };
 }
 
 /** 这个模型名账本里有没有（空值永远合法＝用 CLI 默认） */
@@ -177,7 +220,39 @@ function readBody(req) {
   });
 }
 
+/**
+ * 收一个**原始二进制**请求体（2026-10-22 数据管理：导入整个 .db 快照用）。
+ * readBody 是 JSON 且 1MB 就掐 —— 快照通常好几 MB 还是二进制，走不了它。
+ * 上限照着"库再大也就几十 MB"给 200MB，超了直接掐（E1099）。
+ */
+function readRawBody(req, maxBytes = 200 * 1048576) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > maxBytes) {
+        reject(new BadRequest('文件太大（上限 200MB）', 'E1099'));
+        req.destroy();
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+
 const routes = {
+  /**
+   * **免令牌**（见 auth.mjs 里 guard 顶部那条放行）：加入向导"探这个地址"打的就是它。
+   *
+   * 披露的东西与 UDP 应答同源 —— 机器名 / 主机名 / 端口 / 能不能加入 / 版本 / 能力。
+   * 故意不带任何秘密（设计 §5.4），所以它不需要令牌也不会漏东西。
+   */
+  'GET /api/hello': async (req, res) => {
+    sendJson(res, 200, helloPayload());
+  },
   // 前端是长活 SPA：磁盘上的 app.js 换了，开着的页面不会自己换 —— 「点了没反应」多半是它。
   // 前端每 60 秒来对一次指纹（mtime+size），变了就亮「刷新」提示条。只 stat 一个文件，几乎零成本。
   'GET /api/web-version': async (req, res) => {
@@ -261,7 +336,21 @@ const routes = {
       const r = sshRegistry.upsertServer(body);
       sendJson(res, 200, { ...sshRegistry.publicServers(), created: r.created, alias: r.alias });
     } catch (e) {
-      fail(res, 400, 'E1001', String(e?.message ?? e));
+      /*
+       * 2026-10-21 重设计：这里原来一律 `400 E1001`，把三件不同的事混成一个码 ——
+       *   ① 输入没过校验（别名带空格、地址带了端口…）→ 用户改一下就能过
+       *   ② 请求体本身坏了（不是合法 JSON / 过大）→ 调用方写错了
+       *   ③ 登记表写不进去（权限、磁盘满）→ 真的是服务器的问题
+       * 混一起的后果：前端只能显示「E1001：服务异常」，人看不到哪个字段错了（用户截图）。
+       * 现在按 `status` 分流：4xx 的 message 本来就是写给用户的，照原文回；5xx 只回码。
+       */
+      if (e instanceof BadRequest) return fail(res, 400, e.code, String(e.message));
+      const status = Number(e?.status) || 500;
+      if (status >= 500) {
+        console.error('[班底] 服务器登记表写入失败', e);
+        return fail(res, 500, 'E5005', `写不进服务器登记表（${sshRegistry.REGISTRY_PATH}），磁盘满或没有写权限`);
+      }
+      return fail(res, status, e?.code || 'E1051', String(e?.message ?? e));
     }
   },
 
@@ -285,6 +374,15 @@ const routes = {
       rootDirs: Array.isArray(body.rootDirs) ? body.rootDirs.map(String).filter((s) => s.trim()) : [],
     });
     sendJson(res, 201, { persona });
+  },
+
+  /*
+   * 专家库目录（2026-10-22 建库，2026-11 扩到八位）：出厂的岗位专家 + 各自的雇佣状态。
+   * 目录是代码里的常量（experts.mjs），这里只做读出口 —— 雇佣/解聘走下面的 handleExpert
+   * （带 :key 的动态路径，静态路由表按 `方法 + 全路径` 匹配，吃不了它）。
+   */
+  'GET /api/experts': async (req, res) => {
+    sendJson(res, 200, { experts: experts.listExperts() });
   },
 
   'POST /api/conversations': async (req, res) => {
@@ -322,11 +420,13 @@ const routes = {
     const body = await readBody(req);
     const dirs = Array.isArray(body.dirs) ? body.dirs.map(String) : [];
     if (!dirs.length) return fail(res, 400, 'E1005', '没选要导入的');
+    // 内置技能只读 —— 覆盖导入是编辑闸之外的第二条改法，一并堵死（不覆盖，报"跳过"）
+    const overwrite = !!body.overwrite;
     const imported = [];
     const skipped = [];
     for (const d of dirs) {
       try {
-        const r = skills.importSkill(d, { overwrite: !!body.overwrite });
+        const r = skills.importSkill(d, { overwrite });
         if (r.skipped) skipped.push({ dir: d, name: r.name, reason: r.reason });
         else imported.push({ dir: d, name: r.name });
       } catch (e) {
@@ -557,6 +657,32 @@ async function handleConversation(req, res, url) {
   return false;
 }
 
+/** 头像字段只收纯文件名（图片本体在 apps/web/avatars/，由静态路由服务）—— 防借字段写路径 */
+const AVATAR_FILE = /^[A-Za-z0-9._-]+\.(png|jpe?g|webp)$/i;
+
+/**
+ * 锁定话术（2026-10-22 收编喜儿时统一）。
+ *
+ * 同一组闸口，两种来源：
+ *   - expert ：专家库雇来的（p-expert-<key>），随**专家包**固定，出路是解聘后自建；
+ *   - builtin：出厂的（喜儿），随**平台**固定，出路是另建一个员工。
+ * 判据只有 experts.lockKindOf 一处；这里只负责"怎么说人话"。
+ */
+const LOCK_MSG = {
+  expert: {
+    who: '雇佣员工',
+    skills: '雇佣员工的技能随专家包固定',
+    identity: '雇佣员工的名字与职责身份随专家包固定',
+    hint: '想定制就解聘后自建一个员工',
+  },
+  builtin: {
+    who: '内置员工',
+    skills: '内置员工（喜儿）的技能随平台固定',
+    identity: '内置员工（喜儿）的名字与职责身份随平台固定',
+    hint: '想按自己的需要定制，就另建一个员工',
+  },
+};
+
 /** 员工详情与配置 */
 async function handlePersona(req, res, url) {
   const one = /^\/api\/personas\/([^/]+)$/.exec(url.pathname);
@@ -601,6 +727,11 @@ async function handlePersona(req, res, url) {
   if (req.method === 'POST' && skillsAll) {
     const id = decodeURIComponent(skillsAll[1]);
     if (!store.getPersona(id)) return fail(res, 404, 'E2006', '员工不存在');
+    // 技能锁定（2026-10-23，2026-10-22 扩到内置员工）：被锁员工的技能不能增加 —— 想定制就另建
+    const lockKind = experts.lockKindOf(id);
+    if (lockKind) {
+      return fail(res, 403, 'E2054', `${LOCK_MSG[lockKind].skills}，不能添加 —— ${LOCK_MSG[lockKind].hint}`);
+    }
     const body = await readBody(req);
     const names = (Array.isArray(body.names) ? body.names : []).map(String);
     const known = new Set(skills.listSkills().map((s) => s.name));
@@ -618,6 +749,12 @@ async function handlePersona(req, res, url) {
   if (req.method === 'DELETE' && skillOne) {
     const id = decodeURIComponent(skillOne[1]);
     const name = decodeURIComponent(skillOne[2]);
+    if (!store.getPersona(id)) return fail(res, 404, 'E2006', '员工不存在');
+    // 技能锁定（2026-10-23，2026-10-22 扩到内置员工）：被锁员工的技能不能解绑 —— 组合是出厂定义的一部分
+    const lockKind = experts.lockKindOf(id);
+    if (lockKind) {
+      return fail(res, 403, 'E2054', `${LOCK_MSG[lockKind].skills}，不能解绑「${name}」—— ${LOCK_MSG[lockKind].hint}`);
+    }
     const removed = store.unlinkPersonaSkill(id, name);
     return sendJson(res, 200, { removed: removed > 0, skills: store.listPersonaSkillLinks(id) });
   }
@@ -626,6 +763,12 @@ async function handlePersona(req, res, url) {
   if (req.method === 'PATCH' && skillOne) {
     const id = decodeURIComponent(skillOne[1]);
     const name = decodeURIComponent(skillOne[2]);
+    if (!store.getPersona(id)) return fail(res, 404, 'E2006', '员工不存在');
+    // 技能锁定（2026-10-23，2026-10-22 扩到内置员工）：被锁员工的技能不能停用 —— 半残的出厂员工比没有更难排查
+    const lockKind = experts.lockKindOf(id);
+    if (lockKind) {
+      return fail(res, 403, 'E2054', `${LOCK_MSG[lockKind].skills}，不能停用「${name}」`);
+    }
     const body = await readBody(req);
     const changed = store.setPersonaSkillEnabled(id, name, body.enabled !== false);
     return sendJson(res, 200, { changed: changed > 0, skills: store.listPersonaSkillLinks(id) });
@@ -684,8 +827,54 @@ async function handlePersona(req, res, url) {
     const before = store.getPersona(id);
     if (!before) return fail(res, 404, 'E2009', '员工不存在');
     const body = await readBody(req);
+    /*
+     * **字段级闸**：改员工的「模型」或「运行时」= 改**模型路由**，那是五类管理动作之一
+     * （设计 §6.3 第 15 条 / 决策 A 规则 1）。面板令牌能改名字、职责、技能、权限，
+     * 但**改不了这两项** —— 否则一台被翻的瘦客户端能把活悄悄导到别的机器/别的模型上。
+     *
+     * 为什么落在这里而不是 auth.mjs 那张表里：要判的是 **body 里的字段**，而 `readBody`
+     * 只有 handler 里有（`auth.mjs` 只看得到方法与路径）。
+     *
+     * ⚠️ 判的是"**值真的变了**"，不是"body 里带了这个键"：界面保存时会把整份表单发上来
+     * （名字、职责、技能……带着没改过的 model），只按键存在就拦会把"改名字"也挡掉 ✗。
+     */
+    if (
+      !auth.mayManage(req) &&
+      (('model' in body && String(body.model ?? '') !== String(before.model ?? '')) ||
+        ('runtime' in body && String(body.runtime ?? '') !== String(before.runtime ?? '')))
+    ) {
+      return fail(res, 403, 'E4032', '面板权限不能改员工的「模型」与「运行时」—— 那是总机上的模型路由，请到总机上改');
+    }
+    /*
+     * 技能锁定的兜底（2026-10-23，2026-10-22 扩到内置员工）：员工编辑表单本身不带 skills
+     * （挂载是独立动作），这个键只可能来自绕过界面的直接调用 —— 被锁员工一律拒掉，
+     * 别让 setPersonaSkills 从这条缝里把出厂清单整表换掉。判"带了这个键"就行：正常流量根本不发它。
+     */
+    const lockKind = experts.lockKindOf(id);
+    if (lockKind && Array.isArray(body.skills)) {
+      return fail(res, 403, 'E2054', `${LOCK_MSG[lockKind].skills}，不能改 —— ${LOCK_MSG[lockKind].hint}`);
+    }
+    /*
+     * 身份锁定（2026-10-23，2026-10-22 扩到内置员工）：被锁员工的**名字 / 岗位 / 职责与身份设定**
+     * 只读（E2055）。⚠️ 照上面 E4032 的先例判"**值真的变了**"，不是键存在 —— 详情页自动保存会把
+     * 整份表单发上来，只看键会把"改个运行时"也拦掉。岗位按服务端同一套归一（trim / 空即 null）
+     * 再比，不然"没改岗位"也会因为归一差异误判成变了。
+     */
+    if (lockKind) {
+      const role = body.role === undefined ? before.role : String(body.role ?? '').trim() || null;
+      if (
+        String(body.name ?? '').trim() !== String(before.name ?? '') ||
+        (role ?? null) !== (before.role ?? null) ||
+        String(body.instructions ?? '') !== String(before.instructions ?? '')
+      ) {
+        return fail(res, 403, 'E2055', `${LOCK_MSG[lockKind].identity}，不能改 —— ${LOCK_MSG[lockKind].hint}`);
+      }
+    }
     const name = String(body.name ?? '').trim();
     if (!name) return fail(res, 400, 'E1011', '名字不能空');
+    if (body.avatar !== undefined && body.avatar !== null && body.avatar !== '' && !AVATAR_FILE.test(String(body.avatar))) {
+      return fail(res, 400, 'E1013', '头像只能是 png/jpg/webp 文件名，不接受路径或其它格式');
+    }
     const runtime = runtimesOk(body.runtime) ? body.runtime : undefined;
     // 模型名不再对着账本校验（账本已下架）；见 POST /api/personas 那段说明
 
@@ -700,6 +889,7 @@ async function handlePersona(req, res, url) {
       model: body.model === undefined ? undefined : String(body.model || '') || null,
       showThinking: body.showThinking === undefined ? undefined : (body.showThinking ? 1 : 0),
       rootDirs: Array.isArray(body.rootDirs) ? body.rootDirs.map(String).filter((s) => s.trim()) : undefined,
+      avatar: body.avatar === undefined ? undefined : (body.avatar ? String(body.avatar) : null),
     });
 
     if (Array.isArray(body.skills)) store.setPersonaSkills(id, body.skills);
@@ -846,6 +1036,54 @@ async function handleGroup(req, res, url) {
 }
 
 /** 单个 skill 的读/改/删 */
+/**
+ * 专家库的雇佣 / 解聘（2026-10-22）。
+ *
+ * 路径带 `:key`（`/api/experts/<key>/hire|fire`），静态路由表匹配不了，照 handleSkill
+ * 的路子单开一个处理器挂进分发链。错误码用专家域自己的 **E2051**（404 没这位专家）——
+ * E2051 往前整段空闲（群域停在 E2050），往后别的域随时会接，先占先得。
+ *
+ * 挂载点有意放在 handlePersona **之后**：`/api/personas/:id` 那些员工路由谁也不许被抢
+ * （专家雇佣后就是个普通 persona，员工详情/改配置都走既有接口，专家域只管雇与解）。
+ */
+async function handleExpert(req, res, url) {
+  const hire = /^\/api\/experts\/([^/]+)\/hire$/.exec(url.pathname);
+  const fire = /^\/api\/experts\/([^/]+)\/fire$/.exec(url.pathname);
+  if (!hire && !fire) return false;
+  if (req.method !== 'POST') {
+    return fail(res, 405, 'E2052', '雇佣/解聘只认 POST');
+  }
+
+  const key = decodeURIComponent((hire ?? fire)[1]);
+  if (!experts.getExpert(key)) {
+    return fail(res, 404, 'E2051', `专家库里没有「${key}」这一位 —— 目录就那八位，看看是不是拼错了`);
+  }
+
+  if (hire) {
+    // 幂等：已经雇着 → 直接返回现有的，200（新雇才 201）。重按雇佣按钮不该变成报错
+    const r = experts.hireExpert(key);
+    return sendJson(res, r.created ? 201 : 200, { persona: r.persona });
+  }
+
+  /*
+   * 解聘。群助手先拦（2026-10-22）：普通员工删除的 E1038 拦在 handlePersona 里，
+   * 专家这条直调的路要在自己这里补上同一道 —— 否则群里会剩一个悬空的"没 @ 就找群助手"。
+   * 错误码 **E2053**（409 专家还是群助手，E2051/E2052 之后顺位，grep 确认全仓无撞号）；
+   * 群名单附在 detail 给控制台，界面只显示码 + 中文。
+   */
+  const r = experts.fireExpert(key);
+  if (r.blocked) {
+    return fail(
+      res,
+      409,
+      'E2053',
+      `「${experts.getExpert(key).name}」还是 ${r.groups.length} 个群的群助手，先在群设置里把群助手换成别人，再解聘。`,
+      { groups: r.groups },
+    );
+  }
+  return sendJson(res, 200, r);
+}
+
 async function handleSkill(req, res, url) {
   /*
    * 技能这一侧的挂载：把一个技能**发给若干个数字员工**（技能页那个「添加到数字员工」）。
@@ -870,6 +1108,12 @@ async function handleSkill(req, res, url) {
     const skipped = [];
     for (const pid of ids) {
       if (!store.getPersona(pid)) { skipped.push(pid); continue; }
+      // 技能锁定的反方向闸（2026-10-23，2026-10-22 扩到内置员工）：技能页"发给数字员工"也发不到被锁员工头上
+      const pidLock = experts.lockKindOf(pid);
+      if (pidLock) {
+        const who = store.getPersona(pid);
+        return fail(res, 403, 'E2054', `「${who?.name ?? pid}」是${LOCK_MSG[pidLock].who}，技能${pidLock === 'expert' ? '随专家包' : '随平台'}固定，不能添加`);
+      }
       if (store.listPersonaSkills(pid).includes(skillName)) { skipped.push(pid); continue; }
       store.linkPersonaSkill(pid, skillName);
       added.push(pid);
@@ -895,7 +1139,12 @@ async function handleSkill(req, res, url) {
   }
 
   if (req.method === 'PUT' || req.method === 'PATCH') {
-    if (!skills.getSkill(name)) return fail(res, 404, 'E2018', '没有这个 skill');
+    const cur = skills.getSkill(name);
+    if (!cur) return fail(res, 404, 'E2018', '没有这个 skill');
+    // 内置技能只读（2026-10-22 用户拍板：出厂技能只允许用，不允许改）
+    if (skills.isBuiltin(cur.dirName)) {
+      return fail(res, 403, 'E4033', `「${name}」是内置技能，只读 —— 想定制就复制一个改名字新建`);
+    }
     const body = await readBody(req);
     try {
       return sendJson(res, 200, { skill: skills.writeSkill(name, { description: body.description, body: body.body }) });
@@ -905,6 +1154,11 @@ async function handleSkill(req, res, url) {
   }
 
   if (req.method === 'DELETE') {
+    const cur = skills.getSkill(name);
+    // 内置技能不许删（闸在写入侧，界面只是不摆按钮 —— 两边都拦，绕不过去）
+    if (cur && skills.isBuiltin(cur.dirName)) {
+      return fail(res, 403, 'E4033', `「${name}」是内置技能，不能删 —— 不想让某个员工用它，去他的详情页解除挂载就行`);
+    }
     const removed = skills.removeSkill(name);
     const unlinked = store.forgetSkillEverywhere(name); // 文件没了，挂载关系一并清掉
     return sendJson(res, 200, { removed, unlinked });
@@ -999,6 +1253,41 @@ async function handleNode(req, res, url) {
   const heartbeat = /^\/api\/nodes\/([^/]+)\/heartbeat$/.exec(url.pathname);
   const list = /^\/api\/nodes$/.exec(url.pathname);
   const one = /^\/api\/nodes\/([^/]+)$/.exec(url.pathname);
+  const scopeOf = /^\/api\/nodes\/([^/]+)\/scope$/.exec(url.pathname);
+  const pathsOf = /^\/api\/nodes\/([^/]+)\/paths$/.exec(url.pathname);
+
+  /**
+   * **改一台机器的权限**（2026-10-20，设计 §5.9 / 决策 A 规则 2）。
+   *
+   * 决策 A 规则 2：**scope 只能由总机侧改，节点侧只读** —— 能自升级的权限等于没有权限边界。
+   * 所以这里除了 `auth.decide`（`panel` 令牌在禁止清单里已经被 403 `E4032` 拦掉）之外
+   * **再判一次** `mayManage`：compute-only 的令牌根本走不到这里（会被 decide 判成 `E4031`），
+   * 但这条判断是"这条接口只有操作员能碰"的**明文表达**，不该只依赖那张表。
+   *
+   * 改完**不缓存**：下一次请求按新 scope 立刻生效（`store.setNodeScope` 改的是令牌行）。
+   */
+  if (req.method === 'POST' && scopeOf) {
+    if (!auth.mayManage(req)) {
+      return fail(res, 403, 'E4032', '改权限只能由总机上做（这台机器拿着面板/算力令牌，改不了自己的权限）');
+    }
+    const nodeId = decodeURIComponent(scopeOf[1]);
+    if (!store.getNode(nodeId)) return fail(res, 404, 'E2040', '这个节点没登记过');
+    const body = await readBody(req);
+    if (!store.scopeIsValid(body?.scope)) {
+      return fail(res, 400, 'E1047', '这台机器的用途只认「算力」(compute) 与「面板」(panel) 的组合');
+    }
+    if (store.countNodeTokens(nodeId) === 0) {
+      /*
+       * 一台被「忘掉」过的机器：**没有令牌可改**。如实说，别回一个假的"改好了"——
+       * 它下次来是一枚被吊销的令牌（401 `E4012`），权限改了也用不上。
+       */
+      return fail(res, 409, 'E4003', '这台机器已经没有有效令牌了（被「忘掉」过）—— 让它用新的邀请码重新加入');
+    }
+    const r = store.setNodeScope(nodeId, body?.scope);
+    const n = store.getNode(nodeId);
+    console.log(`[节点] ${n?.label ?? nodeId} 的权限改成「${r.scope}」（${r.tokens} 枚令牌，下一次请求立即生效）`);
+    return sendJson(res, 200, { nodeId, scope: r.scope, tokens: r.tokens });
+  }
 
   if (req.method === 'GET' && list) {
     return sendJson(res, 200, {
@@ -1006,6 +1295,36 @@ async function handleNode(req, res, url) {
       offlineAfterSeconds: runtimes.NODE_OFFLINE_AFTER_MS / 1000,
       nodes: runtimes.publicNodes(),
     });
+  }
+
+  /*
+   * 工作空间映射（2026-10-22）：给**非 git 项目**配"总机的这个目录 = 那台机器的哪个目录"。
+   * git 项目不用配 —— 派活时控制面记下仓库全名，节点自己 clone/pull（见 runs.queueRemoteRun）。
+   */
+  if (req.method === 'GET' && pathsOf) {
+    const nodeId = decodeURIComponent(pathsOf[1]);
+    if (!store.getNode(nodeId)) return fail(res, 404, 'E2040', '这个节点没登记过');
+    return sendJson(res, 200, { paths: store.listNodePaths(nodeId) });
+  }
+  if (req.method === 'PUT' && pathsOf) {
+    const nodeId = decodeURIComponent(pathsOf[1]);
+    if (!store.getNode(nodeId)) return fail(res, 404, 'E2040', '这个节点没登记过');
+    const body = await readBody(req);
+    const remotePath = String(body?.remotePath ?? '').trim();
+    const localPath = String(body?.localPath ?? '').trim();
+    if (!remotePath || !localPath) return fail(res, 400, 'E1046', '两边路径都要给：总机上的目录 + 那台机器上的目录');
+    store.setNodePath(nodeId, remotePath, localPath);
+    console.log(`[节点] ${store.getNode(nodeId)?.label ?? nodeId} 的工作空间映射：${remotePath} → ${localPath}`);
+    return sendJson(res, 200, { paths: store.listNodePaths(nodeId) });
+  }
+  if (req.method === 'DELETE' && pathsOf) {
+    const nodeId = decodeURIComponent(pathsOf[1]);
+    if (!store.getNode(nodeId)) return fail(res, 404, 'E2040', '这个节点没登记过');
+    const body = await readBody(req);
+    const remotePath = String(body?.remotePath ?? '').trim();
+    if (!remotePath) return fail(res, 400, 'E1046', '要删哪条映射，把总机上的那个目录发来');
+    const n = store.deleteNodePath(nodeId, remotePath);
+    return sendJson(res, 200, { removed: n > 0, paths: store.listNodePaths(nodeId) });
   }
 
   /**
@@ -1093,6 +1412,90 @@ const CLAIM_MAX_WAIT_MS = 45000;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
+ * **本机就地执行**一件安装任务（2026-10-21）：「设置 → 这台机器 → 未安装 → 在这台机器上安装」。
+ *
+ * 为什么要有这一条：远程节点那侧是"控制面排任务 → 节点领走 → 节点自己查表跑"；
+ * 而单机形态下本机（id=`local`）没有节点进程来领活，任务会永远"待领"。
+ * 本机就是控制面自己，所以排完任务由本进程直接跑。
+ *
+ * ⚠️ **安全边界和节点那条完全一样**：调用方只能发**族名**，命令永远来自
+ * `runtimes.installCommandFor` 这张写死在代码里的表 —— 这里没有"传什么跑什么"的口子。
+ *
+ * Windows 上 `npm` 是 .cmd 垫片：Node 22 直接 spawn 它会 EINVAL（实测，见 connectors.mjs
+ * 的 launcher 注释），所以过一层 `cmd /c` —— 拼进去的仍是表里的固定字符串，没有用户输入。
+ * 输出节流写回任务行（界面每 1.5 秒读回来），装完的清单本机是**现探**的，不用额外上报。
+ */
+async function runLocalInstall(taskId) {
+  const task = store.claimNodeTaskById(taskId);
+  if (!task) return; // 已经被领走 / 已经结束：不重复执行
+  const spec = runtimes.installCommandFor(task.family);
+  if (!spec) {
+    store.appendNodeTaskOutput(task.id, '这台机器上的班底不认识这个族，或者它不是一条命令能装的\n');
+    return store.finishNodeTask(task.id, '失败');
+  }
+  const isWin = process.platform === 'win32';
+  const file = isWin ? process.env.ComSpec || 'cmd.exe' : spec.bin;
+  const args = isWin ? ['/c', spec.bin, ...spec.args] : spec.args;
+
+  let buf = '';
+  let lastAt = 0;
+  const flush = (force = false) => {
+    if (!buf) return;
+    const now = Date.now();
+    if (!force && now - lastAt < 400) return;
+    lastAt = now;
+    const chunk = buf;
+    buf = '';
+    store.appendNodeTaskOutput(task.id, chunk);
+  };
+
+  console.log(`[本机] 开始安装 ${task.family}：${spec.cmd}`);
+  let child;
+  try {
+    const { spawn } = await import('node:child_process');
+    child = spawn(file, args, { cwd: os.homedir(), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (e) {
+    store.appendNodeTaskOutput(task.id, `起不来：${[e?.code, e?.message].filter(Boolean).join(' ')}\n`);
+    return store.finishNodeTask(task.id, '失败');
+  }
+  const onData = (c) => {
+    buf += String(c);
+    flush();
+  };
+  child.stdout?.on('data', onData);
+  child.stderr?.on('data', onData);
+  let settled = false; // 'error' 与 'close' 只许收尾一次，别把任务判两遍
+  const finish = (status, extra = '') => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(killer);
+    if (extra) {
+      buf += extra;
+      flush(true);
+    }
+    store.finishNodeTask(task.id, status);
+  };
+  // 兜底超时：npm 卡死（网络挂起）不该让这一行永远"执行中"
+  const killer = setTimeout(() => {
+    try {
+      child.kill();
+    } catch {
+      /* 已经退了 */
+    }
+  }, 15 * 60 * 1000);
+  killer.unref();
+  child.on('error', (e) => {
+    finish('失败', `起不来：${e?.message ?? e}\n`);
+    console.log(`[本机] 安装 ${task.family} 失败：${e?.message ?? e}`);
+  });
+  child.on('close', (code) => {
+    const ok = code === 0;
+    finish(ok ? '完成' : '失败', ok ? '\n装完了。\n' : `\n（${spec.bin} 退出码 ${code}）\n`);
+    console.log(`[本机] 安装 ${task.family}${ok ? '装好了' : `失败了（退出码 ${code}）`}`);
+  });
+}
+
+/**
  * 领活三件事：**领**（长轮询）/ **回传事件** / **报回执**。
  *
  * 为什么不是"控制面推给节点"：出站连接是多机方案里唯一不用开端口、不用打洞的形态，
@@ -1114,10 +1517,15 @@ async function handleNodeWork(req, res, url) {
    *
    * ⚠️ 只接受**族名**：命令表在节点那侧（`runtimes.installCommandFor`），控制面发不出命令。
    * 谁拿着令牌就能在每台节点上装软件，所以这条边界是这件事成立的前提，不是"顺手的设计"。
+   *
+   * 本机（id=`local`）2026-10-21 起也走这里：单机形态下没有节点进程来领活，
+   * 所以排完任务由**控制面自己执行**（见 runLocalInstall）—— 边界不变，
+   * 命令还是那张固定表里的，前端照样只能发族名。
    */
   if (req.method === 'POST' && tasks) {
     const nodeId = decodeURIComponent(tasks[1]);
-    if (!store.getNode(nodeId)) return fail(res, 404, 'E2041', '这个节点没登记过');
+    const isLocal = nodeId === runtimes.LOCAL_ID;
+    if (!isLocal && !store.getNode(nodeId)) return fail(res, 404, 'E2041', '这个节点没登记过');
     const body = await readBody(req);
     const kind = String(body?.kind ?? '');
     const target = String(body?.family ?? body?.id ?? '');
@@ -1132,7 +1540,16 @@ async function handleNodeWork(req, res, url) {
       if (!spec) {
         return fail(res, 400, 'E1044', `「${target || '(没给族名)'}」没法一键安装 —— 它要么不是这三个族之一，要么形态上就不是 npm 装的（比如 dsh 是 Windows 桌面端自带的）。去那台机器上手工装。`);
       }
+      const task = store.enqueueNodeTask({ nodeId, kind, family: target });
+      console.log(`[节点] 给 ${nodeId} 排了个任务：${kind} ${target}`);
+      if (isLocal) void runLocalInstall(task.id); // 本机：控制面当场跑，不等谁来领
+      return sendJson(res, 201, { task: store.publicNodeTask(task), willRun: spec.cmd });
     } else if (kind === 'external-install' || kind === 'external-serve') {
+      // 本机不给外部件一键（2026-10-16 定的边界，别被"本机也能装运行时"带偏）：
+      // 那是 `curl … | sh`，控制面直接跑不合适 —— 界面上给复制命令，用户自己在终端粘。
+      if (isLocal) {
+        return fail(res, 400, 'E1043', '本机不给外部件一键安装 —— 复制那条命令，在终端里粘一下更清楚');
+      }
       const step = kind === 'external-install' ? 'install' : 'serve';
       /*
        * 走镜像装：`mirror` 是个**参数**，不是命令 —— 它会先过 externals.mirrorOk()
@@ -1154,10 +1571,6 @@ async function handleNodeWork(req, res, url) {
     } else {
       return fail(res, 400, 'E1043', '只认这三种小事：install-runtime / external-install / external-serve');
     }
-
-    const task = store.enqueueNodeTask({ nodeId, kind, family: target });
-    console.log(`[节点] 给 ${nodeId} 排了个任务：${kind} ${target}`);
-    return sendJson(res, 201, { task: store.publicNodeTask(task), willRun: spec.cmd });
   }
 
   // 界面轮询"装到哪一步了"
@@ -1205,6 +1618,22 @@ async function handleNodeWork(req, res, url) {
     const code = String(body?.code ?? '').trim();
     const id = String(body?.id ?? '').trim();
     if (!id) return fail(res, 400, 'E1047', '加入要带上你自己的 id');
+    /*
+     * `scope`（2026-10-20，设计 §5.8）：这台机器用来做什么 —— `compute` / `panel` 可同时具备。
+     *
+     * ⚠️ **前端 wire 发 `scopes` 数组**（复数键优先），此处统一归一进 `normScope` ——
+     * 只读单数键的话，前端那份数组会被静默忽略、按缺省落成 `compute`，
+     * "当入口也能干活"的机器就只拿到算力令牌（静默降级，QA 实测堵掉的就是它）。
+     *
+     * **缺省 `compute`**：老的 `node.mjs --join`（它一个字节不改）照旧能用，且行为与改前完全一致。
+     * 校验放在**消耗邀请码之前**：非法值不该把一个一次性邀请码白白烧掉。
+     * 码沿用 `E1047`（与"加入要带 id"同码，不新增）。
+     */
+    const scopeInput = body?.scopes ?? body?.scope;
+    if (!store.scopeIsValid(scopeInput)) {
+      return fail(res, 400, 'E1047', '这台机器的用途只认「算力」(compute) 与「面板」(panel) 的组合');
+    }
+    const scope = store.normScope(scopeInput);
     if (!store.consumeInvite(code, id)) {
       return fail(res, 401, 'E4011', '邀请码不对、已经用过、或者过期了 —— 让控制面上重新生成一个（10 分钟有效、只用一次）');
     }
@@ -1217,12 +1646,14 @@ async function handleNodeWork(req, res, url) {
       runtimes: Array.isArray(body.runtimes) ? body.runtimes : [],
       externals: Array.isArray(body.externals) ? body.externals : null,
     });
-    const token = store.issueNodeToken(id);
-    console.log(`[节点] ${label} 用邀请码加入了（${id}）—— 给了它自己一枚令牌`);
+    const token = store.issueNodeToken(id, scope);
+    console.log(`[节点] ${label} 用邀请码加入了（${id}）—— 给了它自己一枚令牌，权限「${scope}」`);
     return sendJson(res, 201, {
       token,
       node: runtimes.publicDeviceById(id),
       heartbeatSeconds: runtimes.NODE_HEARTBEAT_SEC,
+      // 回显：节点侧据此自检"总机记下的权限"与"我以为的"是不是同一份
+      scope,
     });
   }
 
@@ -1281,6 +1712,13 @@ async function handleNodeWork(req, res, url) {
     }
 
     console.log(`[节点] ${nodeId} 领到活（${job.family}）· 队列里还剩 ${store.countNodeJobs(nodeId)}`);
+    // repo（工作空间，2026-10-22）：存库时是 JSON 字符串，发回对象 —— 解不开就当没有
+    let repo = null;
+    try {
+      repo = job.repo ? JSON.parse(job.repo) : null;
+    } catch {
+      repo = null;
+    }
     return sendJson(res, 200, {
       job: {
         id: job.id,
@@ -1289,6 +1727,7 @@ async function handleNodeWork(req, res, url) {
         model: job.model,
         sandbox: job.sandbox,
         cwd: job.cwd,
+        repo,
         task: job.task,
         sessionId: job.sessionId,
       },
@@ -1454,6 +1893,15 @@ async function handleRuntime(req, res, url) {
       const body = await readBody(req);
       netmode.writeNetMode(body?.allowLan === true);
       console.log(`[网络] 局域网加入：${body?.allowLan === true ? '开' : '关'}（重启后生效）`);
+      /*
+       * **UDP 应答器跟着开关原地启停**（2026-10-20，设计 §5.5 三处同步点之一）。
+       * 开关关掉必须**立刻**停 bind —— 否则"关掉之后不再出现在候选里"这条 PRD 验收项
+       * 就得等重启才成立 ✗。
+       *
+       * 这里用 `boundHost`（这个进程**实际**听着什么），不是配置里想要的：
+       * 开关刚打开、还没点重启时监听仍是回环，那时回应答毫无意义（别人根本连不进来）。
+       */
+      lanAnnounce.sync({ allowLan: body?.allowLan === true, explicit: !!process.env.BANDI_HOST, boundHost, httpPort: port });
     }
     const want = netmode.readNetMode().allowLan;
     const boundLan = !netmode.isLoopback(boundHost); // 这个进程**现在实际**听的是什么（原地重启后会变）
@@ -1473,6 +1921,11 @@ async function handleRuntime(req, res, url) {
       port,
       // 摆给用户看"让别的机器连这个地址"（也是加入命令里该用的地址）
       urls: netmode.lanUrls(port),
+      /*
+       * UDP 应答器**实际**在不在听（2026-10-20 加）：`on` 才是"别的机器能不能发现我"的真相。
+       * 开关开着但还没重启 → `on:false` —— 界面上那句"重启后生效"就有据可依了。
+       */
+      discovery: lanAnnounce.state(),
     });
   }
 
@@ -1847,6 +2300,13 @@ async function handleStatus(req, res, url) {
  *
  * 浏览器出于安全**不给绝对路径**（`webkitdirectory` 只给假路径），
  * 所以目录选择只能走服务端：这里只做**只读列目录**，不读文件内容、不写任何东西。
+ *
+ * ⚠️ **只做"列目录"，不弹原生框**（2026-10-22 改）：原来的 `/api/fs/pick-dir` 由服务端
+ * spawn PowerShell 弹 `Shell.Application.BrowseForFolder` —— 但服务端是没有窗口的后台进程，
+ * 弹出来的框没有属主窗口，实测 `IsWindowVisible=false`（被最大化的桌面壳窗口整个盖住），
+ * 用户只看到按钮一直转「…」。原生目录框现在归**桌面壳**：页面走 Tauri IPC 的
+ * `pick_directory`（`apps/desktop/src/lib.rs`，带 owner 窗口的 IFileOpenDialog）；
+ * 纯浏览器环境（`start.cmd`）退回页内浏览，也就是本接口。
  */
 async function handleFs(req, res, url) {
   if (req.method !== 'GET' || url.pathname !== '/api/fs/dirs') return false;
@@ -1864,56 +2324,6 @@ async function handleFs(req, res, url) {
     .sort((a, b) => a.name.localeCompare(b.name));
   const parent = path.dirname(dir);
   return sendJson(res, 200, { path: dir, parent: parent === dir ? null : parent, dirs });
-}
-
-/**
- * 弹**本机原生的目录选择框**，返回绝对路径。
- *
- * 为什么不能在前端做：界面在浏览器里，浏览器禁止读绝对路径
- * （`<input webkitdirectory>` 只给假路径）。但服务端就在本机，
- * 所以由它调系统对话框 —— 这才是 DSH 那种"新建项目时选目录"的体验。
- *
- * 纯只读：只是让用户选一个目录，不读内容、不写任何东西。
- * 没有桌面（服务跑在无 UI 环境）时返回 500，前端会退回页内浏览。
- */
-async function handlePickDir(req, res) {
-  if (req.method !== 'POST' || req.url !== '/api/fs/pick-dir') return false;
-  if (process.platform !== 'win32') {
-    return fail(res, 500, 'E5001', '这个系统上还没做原生选择框，用页内浏览吧');
-  }
-  // ⚠️ 这段**只能用 ASCII**：中文经 powershell.exe 传参会被编码搞坏，
-  // 直接报 "string is missing the terminator"（实测踩到）。文案留给前端显示。
-  // 用 Shell.Application 的 BrowseForFolder：不必加载 WinForms 程序集，
-  // 在这台机器上 Add-Type System.Windows.Forms 是失败的（实测）。
-  const ps = [
-    '$shell = New-Object -ComObject Shell.Application',
-    '$folder = $shell.BrowseForFolder(0, "Pick the project folder", 0)',
-    'if ($folder) { [Console]::Out.Write($folder.Self.Path) }',
-  ].join('; ');
-  try {
-    // ⚠️ **必须异步 spawn**：spawnSync 会把整个事件循环卡住 ——
-    // 用户在挑目录的那几十秒里，全站请求都不响应（实测把服务端卡死过）。
-    const { spawn } = await import('node:child_process');
-    const picked = await new Promise((resolve) => {
-      const p = spawn('powershell.exe', ['-NoProfile', '-STA', '-Command', ps], { windowsHide: true });
-      let out = '';
-      p.stdout.on('data', (d) => (out += d));
-      p.on('error', () => resolve(null)); // 弹不出来 → 让前端退回页内浏览
-      p.on('close', () => resolve(out.trim()));
-      // 用户可能在挑目录上花很久；给个上限，免得永远挂着
-      setTimeout(() => {
-        try {
-          p.kill();
-        } catch { /* 已经退了 */ }
-        resolve(null);
-      }, 5 * 60 * 1000).unref?.();
-    });
-    if (picked === null) return fail(res, 500, 'E5002', '弹不出原生选择框');
-    if (!picked) return sendJson(res, 200, { canceled: true }); // 用户点了取消
-    return sendJson(res, 200, { path: picked });
-  } catch (e) {
-    return fail(res, 500, 'E5003', String(e?.message ?? e));
-  }
 }
 
 async function handleWorkflow(req, res, url) {
@@ -2606,7 +3016,441 @@ async function handleSchedules(req, res, url) {
   return false;
 }
 
+/* ---------------------------------------------------- 本机专属接口（/api/local/*） */
+
+/**
+ * 这个请求是不是从**本机**发起的（P0-8 的唯一判据）。
+ *
+ * ⚠️ 为什么必须有这条：`/api/local/join` 会写 `config.json`（把"这台机器"变成别人的节点）。
+ * 局域网里任何人只要能 POST 到它，就能让你的机器加入他的总机 = **机器被劫走**。
+ * 所以 6 条 `/api/local/*` 每条**第一件事**都是这个判断。
+ */
+function isLoopbackRemote(address) {
+  const a = String(address ?? '').trim().toLowerCase();
+  if (!a) return false;
+  if (a === '::1' || a === '127.0.0.1' || a === 'localhost') return true;
+  if (a.startsWith('::ffff:127.')) return true; // IPv4-mapped（Node 在双栈 socket 上会这么报）
+  return a.startsWith('127.');
+}
+
+/**
+ * 节点守护进程（T03 的 `node-supervisor.mjs`）：起停与状态。
+ *
+ * 这个模块**还没落地**时返回 `null`，`/api/local/*` 照样能用（只是 `node.running:false`）——
+ * 不让"少一个文件"变成整个本机接口 500。
+ */
+async function supervisorModule() {
+  try {
+    return await import('./node-supervisor.mjs');
+  } catch {
+    return null;
+  }
+}
+
+/** 节点进程现在在不在跑（`external:true` = 是 autostart 拉起的那个，不是我们起的） */
+async function localNodeStatus() {
+  const sup = await supervisorModule();
+  if (!sup) return { running: false, pid: null, external: false };
+  try {
+    return sup.status();
+  } catch (e) {
+    return { running: false, pid: null, external: false, why: String(e?.message ?? e) };
+  }
+}
+
+/**
+ * 这台机器上探到的 agent CLI（加入时随 body 报给总机）。
+ *
+ * 为什么在 server 侧算：`local-mode.mjs` **不许 import runtimes.mjs**（后者 import store，
+ * 节点进程会因此去打开控制面库）。本函数与 `node.mjs` 的 `declared()` 同源、同形状。
+ */
+function localDeclared() {
+  const out = [];
+  for (const fam of runtimes.detectAll()) {
+    const best = fam.candidates?.[0];
+    if (!best) continue;
+    out.push({ family: fam.id, label: fam.label, path: best.path, usable: !!best.usable });
+  }
+  return out;
+}
+
+/** 本机库的"路径 / 大小 / 最后修改 / 各有几条"（PRD P0-5：设置页常显这些东西） */
+function localDataInfo() {
+  let dbSize = null;
+  let dbMtime = null;
+  try {
+    const st = fs.statSync(dbPath);
+    dbSize = st.size;
+    dbMtime = st.mtime.toISOString();
+  } catch {
+    /* 库还没建（理论上不可能，store 一 import 就建） */
+  }
+  return {
+    dataDir,
+    dbPath,
+    dbSize,
+    dbMtime,
+    counts: {
+      personas: store.listPersonas().length,
+      // 「不显示」的会话也是本机数据，一起算 —— 不然用户会觉得"我的会话少了几段"
+      conversations: store.listConversations().length + store.listHiddenConversations().length,
+      projects: store.listProjects().length,
+    },
+  };
+}
+
+/**
+ * 「另一个数据目录里也有节点常驻」这条**预警**（设计 §14 第 1 条，产品已确认只提示不处理）。
+ *
+ * 由来：`autostart` 装的节点用 `%APPDATA%\bandi-node`，而瘦客户端的 `config.json` 在
+ * `%APPDATA%\bandi` —— 两个 `node.json` 不同 → 总机上会出现**两台设备**，单实例锁也管不到
+ * （不同目录，锁是每数据目录一把）。本次处置：**不迁移、不自动卸载**，只说一声。
+ */
+function siblingDataDir() {
+  const guess =
+    process.platform === 'win32'
+      ? path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'bandi-node')
+      : path.join(path.dirname(dataDir), 'bandi-node');
+  return path.resolve(guess) === path.resolve(dataDir) ? null : guess;
+}
+
+function localWarnings() {
+  const out = [];
+  const mine = String(localMode.readClientConfig().controlPlane ?? '').trim();
+  const sibling = siblingDataDir();
+  if (!mine || !sibling) return out;
+  try {
+    const j = JSON.parse(fs.readFileSync(path.join(sibling, 'config.json'), 'utf8'));
+    const other = String(j?.controlPlane ?? '').trim();
+    if (other && other === mine) {
+      out.push(
+        `另一个数据目录（${sibling}）里也有一个节点常驻，它会让总机上多出一台设备。` +
+          '清理：node apps/server/src/autostart.mjs remove node',
+      );
+    }
+  } catch {
+    /* 没那个目录 / 没那个文件 / 坏了 —— 都不算问题 */
+  }
+  return out;
+}
+
+/** 导出落点的三级兜底：桌面 → 下载 → `<数据目录>/exports/`（逐级看是否真存在） */
+function exportDirs() {
+  const home = os.homedir();
+  return [path.join(home, 'Desktop'), path.join(home, 'Downloads'), path.join(dataDir, 'exports')];
+}
+
+/**
+ * 挑一个能写的落点。
+ *
+ * ⚠️ **不弹目录选择框**（设计 §14 第 3 条，产品已确认）：`<input type=file>` 只能选目录、
+ * 不可写，实际还得让用户自己拷 —— 那就等于没做成。落点找不到桌面时退到下载目录，
+ * 再不行退到数据目录下，**把完整路径用 toast 说出来**（前端拿 `file` 字段）。
+ */
+function pickExportDir(want) {
+  const list = exportDirs();
+  const fallback = list[list.length - 1];
+  if (want) {
+    // 只允许显式指到桌面/下载（以及那个兜底目录）—— 别让接口变成"往任意路径写文件"
+    const w = path.resolve(String(want));
+    const hit = list.find((d) => path.resolve(d) === w);
+    if (hit) {
+      fs.mkdirSync(hit, { recursive: true });
+      return hit;
+    }
+  }
+  for (const d of list) {
+    try {
+      if (fs.statSync(d).isDirectory()) return d;
+    } catch {
+      /* 这个平台没有这个目录，看下一个 */
+    }
+  }
+  fs.mkdirSync(fallback, { recursive: true });
+  return fallback;
+}
+
+/** 导出文件名里的时间戳（照 `db-backup.mjs` 的写法，带毫秒 —— `VACUUM INTO` 撞名会直接报错） */
+function exportStamp(d = new Date()) {
+  const p = (n, w = 2) => String(n).padStart(w, '0');
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}${p(d.getMilliseconds(), 3)}`;
+}
+
+/**
+ * 校验一份待导入的 .db 快照（2026-10-22 数据管理）。返回 null = 可导入，否则给一句人话。
+ * 三道：① SQLite 文件头；② `PRAGMA integrity_check`（真开一遍库，比看头严格得多）；
+ * ③ 班底的表在不在（personas / conversations）—— 拿别的 SQLite 文件来导也过不了这关。
+ * 校验在**临时文件**上做，不碰现库也不碰待导入文件本体。
+ */
+function validateSnapshot(buf) {
+  if (!buf || buf.length < 4096) return '文件太小，不像班底的库快照';
+  if (buf.subarray(0, 16).toString('latin1') !== 'SQLite format 3\x00') return '不是 SQLite 数据库文件';
+  const tmp = `${dbPath}.check-${process.pid}-${Date.now()}`;
+  try {
+    fs.writeFileSync(tmp, buf);
+    const probe = new DatabaseSync(tmp);
+    try {
+      const row = probe.prepare('PRAGMA integrity_check').get();
+      if (row?.integrity_check !== 'ok') return `库文件已损坏（${row?.integrity_check ?? 'unknown'}）`;
+      const tables = new Set(
+        probe.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((r) => r.name),
+      );
+      for (const t of ['personas', 'conversations']) {
+        if (!tables.has(t)) return '不是班底的库快照（没有班底的表）';
+      }
+    } finally {
+      probe.close();
+    }
+  } catch (e) {
+    return `打不开这个库（${e?.message ?? e}）`;
+  } finally {
+    try { fs.rmSync(tmp, { force: true }); } catch { /* 删不掉临时文件不算错 */ }
+  }
+  return null;
+}
+
+/**
+ * `/api/local/*` —— **这台机器自己**的接口（2026-10-20，设计 §5.1-§5.7）。
+ *
+ * 为什么由本机处理：它读写的是**本机**的事实（`config.json`、本机库），总机那边没有这些；
+ * 加入/退出两个入口也在它里面（client 形态已随反代移除，本机接口永远是本机答）。
+ *
+ * 七条：`GET status`、`POST discover / probe / join / leave / export / import`。
+ * **每条之前先判回环**（P0-8）—— 见 `isLoopbackRemote` 那段。
+ */
+async function handleLocal(req, res, url) {
+  if (!url.pathname.startsWith('/api/local/')) return false;
+
+  if (!isLoopbackRemote(req.socket?.remoteAddress)) {
+    fail(res, 403, 'E1094', '本机专属接口只能在回环上调用（远程机器不能让你加入它的总机）');
+    return true;
+  }
+
+  try {
+    /* ---------------------------------------------------------------- 本机身份的唯一读数 */
+    if (req.method === 'GET' && url.pathname === '/api/local/status') {
+      const st = localMode.status();
+      st.client.node = await localNodeStatus(); // 真实状态（未加入时永远是"没在跑"）
+      st.local = localDataInfo();
+      st.warnings = localWarnings();
+      return sendJson(res, 200, st), true;
+    }
+
+    /* ------------------------------------------------------------------------ 扫局域网 */
+    if (req.method === 'POST' && url.pathname === '/api/local/discover') {
+      const body = await readBody(req);
+      // 空数组不是错误 —— PRD 步骤 3 的兜底页就是它；最多 4 秒返回
+      const candidates = await discover.discover({ rounds: body?.rounds, port: body?.port });
+      return sendJson(res, 200, { candidates }), true;
+    }
+
+    /* ---------------------------------------------------------------------- 探一个地址 */
+    if (req.method === 'POST' && url.pathname === '/api/local/probe') {
+      const body = await readBody(req);
+      const host = await localMode.probe(body?.url); // 失败抛 LocalError（E1090/E1091/E1092/E2050）
+      return sendJson(res, 200, { host }), true;
+    }
+
+    /* ------------------------------------------- 主机列表（2026-10-21 增量：列表模型）
+     * add = 填了就入列（不拦探测；行上的「测试」负责验连接，2026-10-21 用户定）；
+     * test = 探一次，在列的顺带刷新该行；remove = 从通讯录移除。
+     * 三条都在上面那道回环闸（E1094）之后，局域网里任何人改不了这台机器的通讯录。 */
+    if (req.method === 'POST' && url.pathname === '/api/local/hosts/add') {
+      const body = await readBody(req);
+      return sendJson(res, 201, await localMode.addHost(body?.url)), true;
+    }
+    if (req.method === 'POST' && url.pathname === '/api/local/hosts/test') {
+      const body = await readBody(req);
+      return sendJson(res, 200, await localMode.testHost(body?.url)), true;
+    }
+    if (req.method === 'POST' && url.pathname === '/api/local/hosts/remove') {
+      const body = await readBody(req);
+      return sendJson(res, 200, localMode.removeHost(body?.url)), true;
+    }
+
+    /* -------------------------------------------------------------------------- 加入 */
+    if (req.method === 'POST' && url.pathname === '/api/local/join') {
+      const body = await readBody(req);
+      /*
+       * 2026-10-21 拍板：**节点一律只当算力** —— 不信任前端的 scope，写死 compute。
+       * 总机侧的 scope 机制保留（存量令牌、设备详情还认它），但「加入」这条路不再产生 panel 令牌；
+       * 反代已整体移除，节点机的界面就是本地那份节点状态页。
+       */
+      const scopes = 'compute';
+      /*
+       * 顺序即设计 §5.5：已加入 → E1093；探地址（复用它那四个失败码）；换令牌；
+       * 写 `config.json`（写不进去 = 500 E1097，**此时还没动任何既有状态**）。
+       */
+      const joined = await localMode.join({
+        url: body?.url,
+        code: body?.code,
+        scopes,
+        runtimes: localDeclared(),
+        externals: await externals.declared(),
+      });
+
+      /*
+       * 第 6 步：**只有含 `compute` 才起节点**（写死 compute 后恒真；保留判据是防
+       * 旧配置里存过 panel-only 的 scope —— 那种机器不接活，不该被拉起节点）。
+       * spawn 失败**不回滚**：加入本身已经成功了（令牌拿到了、配置写好了），
+       * 返回 201 + `node:{running:false, why}`，节点下次会自己起。
+       */
+      let node = { running: false, pid: null, external: false };
+      if (joined.scope.includes(store.SCOPE_COMPUTE)) {
+        const sup = await supervisorModule();
+        if (sup) {
+          try {
+            node = sup.start();
+          } catch (e) {
+            node = { running: false, pid: null, external: false, why: String(e?.message ?? e) };
+          }
+        } else {
+          node = { running: false, pid: null, external: false, why: '节点守护还没接上：配置已写，节点不会自己起' };
+        }
+      }
+
+      /*
+       * 2026-10-21 修（三态互斥的两个漏，用户实报）：
+       *   ① 清掉 allowLan —— 加入 = 放弃本机总机角色。不清的话，退出总机后机器会落到
+       *      「总机（等重启）」，而不是回单机。
+       *   ② 把监听收回环 —— 之前是总机的话现在听着 0.0.0.0，加入后到下次重启前一直敞着，
+       *      和"已加入必须只听回环"（restartListening 里那条）直接矛盾。
+       * 先回响应再动监听：同 `/api/lan` 的写法，否则浏览器拿不到这个 201。
+       */
+      try {
+        netmode.writeNetMode(false);
+      } catch (e) {
+        console.warn(`[本机] 加入后清 allowLan 失败：${e?.message ?? e}`);
+      }
+      console.log(`[本机] 加入了「${joined.hostLabel}」（${joined.controlPlane}）· 只当算力（${joined.scope.join('+')}）`);
+      sendJson(res, 201, {
+        ok: true,
+        hostLabel: joined.hostLabel,
+        hostHostname: joined.hostHostname,
+        controlPlane: joined.controlPlane,
+        scope: joined.scope,
+        node,
+      });
+      setTimeout(restartListening, 80); // 让 201 先发出去，再把监听收回环
+      return true;
+    }
+
+    /* ---------------------------------------------------------------------- 退出总机 */
+    if (req.method === 'POST' && url.pathname === '/api/local/leave') {
+      if (!localMode.isJoined()) {
+        return fail(res, 400, 'E1098', '这台机器还没加入任何总机'), true;
+      }
+      /*
+       * **先停节点，再清配置**（顺序不能反）：反过来的话，那个还活着的节点进程会拿着
+       * 刚被清掉的令牌再请求一次（401 `E4012`），日志里就是一堆看不懂的红字。
+       */
+      let killed = false;
+      let note = null;
+      let autoRemoved = false;
+      const sup = await supervisorModule();
+      if (sup) {
+        try {
+          const r = sup.stop();
+          killed = !!(r && (r.killed ?? r.stopped ?? r.ok));
+          if (r?.external && r?.stopped === false) {
+            /*
+             * 2026-10-21 修：开机自启拉起的节点原来只留一句提示 —— 界面照样说"退出成功"，
+             * 节点却拿着刚清掉的令牌空转（用户实报）。「退出总机」就是不再当节点，
+             * 所以这里**连自启一起收掉**：
+             *   · 先移除自启登记（Linux 那套 systemd remove 会顺手 --now 停掉）；
+             *   · 再按锁里的 PID 停进程（Windows 的 remove 只删启动脚本，不停进程）。
+             */
+            try {
+              const auto = await import('./autostart.mjs');
+              auto.remove('node');
+              autoRemoved = true;
+            } catch (e) {
+              note = `开机自启没移除成功：${e?.message ?? e}（手动：node apps/server/src/autostart.mjs remove node）`;
+            }
+            try {
+              const r2 = sup.stopExternal?.();
+              if (r2?.stopped) killed = true;
+              else if (r2?.mismatch) note = (note ? note + '；' : '') + '锁里的进程不是节点，没动它';
+              else if (r2?.running && !note) note = '节点进程没停掉；下次开机不会再自启';
+            } catch (e) {
+              note = (note ? note + '；' : '') + `停自启节点出错：${e?.message ?? e}`;
+            }
+          }
+        } catch (e) {
+          console.warn(`[本机] 停节点时出错（继续退出总机）：${e?.message ?? e}`);
+        }
+      }
+      const out = localMode.leave(); // 只清 config.json 里那七个字段，node.json 保留
+      /*
+       * 退出后**一定回单机**（2026-10-21）：不清 allowLan 的话，之前开过总机的机器会落到
+       * 「总机（等重启）」—— 与「退出总机，回到本机」的文案和"三态互斥"都不符。
+       */
+      try {
+        netmode.writeNetMode(false);
+      } catch (e) {
+        console.warn(`[本机] 退出后清 allowLan 失败：${e?.message ?? e}`);
+      }
+      console.log('[本机] 已退出总机 —— 本机数据原样（从来没被写过）');
+      return sendJson(res, 200, { ok: true, killed, autoRemoved, note, local: localDataInfo(), nodeId: out.nodeId }), true;
+    }
+
+    /* ------------------------------------------------------------------------ 导出 */
+    if (req.method === 'POST' && url.pathname === '/api/local/export') {
+      const body = await readBody(req);
+      let file;
+      try {
+        const dir = pickExportDir(body?.dir);
+        file = path.join(dir, `bandi-备份-${exportStamp()}.db`);
+        store.backupTo(file); // VACUUM INTO：库开着 WAL，直接拷 .db 会漏事务
+      } catch (e) {
+        return fail(res, 500, 'E1096', `导出失败：写不进那个目录（${e?.message ?? e}）`), true;
+      }
+      const size = fs.statSync(file).size;
+      console.log(`[本机] 导出一份：${file}（${(size / 1048576).toFixed(2)} MB）`);
+      return sendJson(res, 200, { file, size }), true;
+    }
+
+    /* ------------------------------------------------------------------------ 导入 */
+    /*
+     * 导入 = 拿一份班底导出的 .db 快照**覆盖本机数据**（2026-10-22 数据管理）。
+     * 分两步走，接口只做第一步：
+     *   ① 这里：校验（SQLite 头 / integrity_check / 班底的表在不在）→ 把快照写成
+     *      `<dbPath>.importing`。当前库**一个字节都不动**，导出照常可用；
+     *   ② 换库在 store.mjs 模块加载（下一次启动、连接打开之前）—— 那时零并发风险，
+     *      现库三件套自动改名进 backups/导入前-<时间戳>.*，坏了可以整体搬回来。
+     * 所以响应里必须把"重启后生效"说明白，前端 toast 也这么说。
+     */
+    if (req.method === 'POST' && url.pathname === '/api/local/import') {
+      const buf = await readRawBody(req);
+      const err = validateSnapshot(buf);
+      if (err) return fail(res, 400, 'E1099', `导入没成功：${err}`), true;
+      fs.writeFileSync(`${dbPath}.importing`, buf);
+      console.log(`[本机] 收到导入快照（${(buf.length / 1048576).toFixed(2)} MB），重启后生效`);
+      return sendJson(res, 200, { ok: true, size: buf.length, note: '重启班底后生效' }), true;
+    }
+  } catch (err) {
+    if (err instanceof localMode.LocalError) {
+      fail(res, err.status, err.code, err.message, err.detail ? { detail: String(err.detail) } : null);
+      return true;
+    }
+    throw err; // 其余交给顶层 catch（500 E5004）
+  }
+
+  fail(res, 404, 'E2036', '没有这个本机接口');
+  return true;
+}
+
 let boundHost = host;
+
+/* ------------------------------------------------- 节点形态（2026-10-21 拍板） */
+
+/*
+ * **节点不做「看总机面板」** —— 瘦客户端反代（client-proxy.mjs）整体移除。
+ * 加入后本机服务照常答自己的 UI 与 API；app.js 读 `/api/local/status` 发现已加入
+ * 就渲染节点状态页（`renderNodeMode`）。总机的面板只存在于总机上。
+ * 总机侧的 scope 机制（`auth.decide` 的 E4031 等）**保留**：存量令牌与设备详情还认它，
+ * 它仍是「compute 令牌摸面板 → 403」的那道闸。
+ */
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
@@ -2617,6 +3461,16 @@ const server = http.createServer(async (req, res) => {
      * 闸开不开只看监听地址（回环免鉴权 / 非回环全要），见 auth.mjs 的长注释。
      */
     if (!auth.guard(AUTH, req, res, url)) return;
+
+    /*
+     * **本机专属接口**（2026-10-20，设计 §1.2 新增 A）。
+     *
+     * 位置在 `auth.guard` **之后**：令牌语义只有一处，别在两处各判一遍。
+     * （回环形态下闸本来就全放行；若有人 `BANDI_HOST=0.0.0.0` 强开，
+     *   `/api/local/*` 仍会被令牌闸保护 **＋** 自己那道回环校验，是双保险 —— P0-8。）
+     */
+    const handledLocal = await handleLocal(req, res, url);
+    if (handledLocal !== false) return;
 
     if (!url.pathname.startsWith('/api/')) {
       if (serveStatic(res, url.pathname)) return;
@@ -2639,6 +3493,9 @@ const server = http.createServer(async (req, res) => {
     const handledPersona = await handlePersona(req, res, url);
     if (handledPersona !== false) return;
 
+    const handledExpert = await handleExpert(req, res, url);
+    if (handledExpert !== false) return;
+
     const handledProject = await handleProject(req, res, url);
     if (handledProject !== false) return;
 
@@ -2647,9 +3504,6 @@ const server = http.createServer(async (req, res) => {
 
     const handledFs = await handleFs(req, res, url);
     if (handledFs !== false) return;
-
-    const handledPick = await handlePickDir(req, res);
-    if (handledPick !== false) return;
 
     const handledGroup = await handleGroup(req, res, url);
     if (handledGroup !== false) return;
@@ -2690,9 +3544,14 @@ const server = http.createServer(async (req, res) => {
 
     fail(res, 404, 'E2036', '没有这个接口');
   } catch (err) {
-    // 请求本身有问题 → 400；其余才是服务端出错 → 500。两边都带上编码
+    // 请求本身有问题 → 400（原文就是写给调用方的）；其余是服务端出错 → 500。
+    // 500 **不回内部原文**：那可能是 SQL/文件路径/栈片段，对用户没用、对旁人有用。
+    // 完整错误进日志（下一条），排查不受影响。
     if (err instanceof BadRequest) fail(res, 400, err.code ?? 'E1044', String(err.message));
-    else fail(res, 500, 'E5004', String(err?.message ?? err));
+    else {
+      console.error('[班底] E5004 · 未捕获的服务端错误', err);
+      fail(res, 500, 'E5004', '服务内部错误，详情看服务端日志');
+    }
   }
 });
 
@@ -2702,12 +3561,36 @@ if (reaped) console.log(`清理了 ${reaped} 条被中断的运行`);
 // 工作流：内建模板保证存在；**把引擎挂在 run 完成点上** —— 推进由平台做，不靠数字员工自觉
 workflows.ensureBuiltInTemplate();
 // 出厂就有一个人能说话：内置秘书「喜儿」（幂等，已有则只补 builtin 标记，不改名不改指令）
+// **部署即装**（2026-10-22）：不管谁部署、用什么方式起（安装包 / 源码 start.cmd /
+// systemd / 开机自启），服务起来那一刻「bandi」全局命令就在。幂等 —— 装好了什么都不写。
+// 闸门与实现见 cli-install.mjs（BANDI_DATA 显式指定 = 测试/沙箱，默认不动真实用户目录）。
+try {
+  const cliNote = await ensureCliInstalled();
+  if (cliNote) console.log(cliNote);
+} catch { /* 上面保证不抛，这里兜一层：装命令失败不能拦启动 */ }
 try {
   const xier = secretary.ensureSecretary();
   if (xier.created) console.log(`新建了内置员工「${xier.persona.name}」`);
 } catch (err) {
   // seed 失败不该拦住整个服务：她能做的事少，服务起不来才是大事
   console.log(`内置员工创建失败（不影响启动）：${err?.message ?? err}`);
+}
+// 锁定同步（2026-10-23）：雇佣员工的技能挂载回专家包清单 + 名字/岗位/指令回出厂值
+// （存量重置 + 日常幂等检查）。路由层从此锁死（E2054 技能 / E2055 身份），
+// 这里负责"上线那一刻库里已有的改动"拉回出厂。
+try {
+  const synced = experts.syncHiredExperts();
+  if (synced.length) console.log(`雇佣员工已重置回专家包出厂（技能挂载 / 名字 / 职责 / 指令）：${synced.join('、')}`);
+} catch (err) {
+  console.log(`雇佣员工同步失败（不影响启动）：${err?.message ?? err}`);
+}
+// 内置员工同理（2026-10-22 用户定：喜儿按专家团模式收编）——技能挂载与身份三件回出厂，
+// 路由层同步锁死（E2054 技能 / E2055 身份）。她比专家早一步 seed，这里紧跟着做增量重置。
+try {
+  const reset = secretary.syncSecretary();
+  if (reset?.length) console.log(`内置员工喜儿已重置回出厂（${reset.join(' / ')}）`);
+} catch (err) {
+  console.log(`内置员工同步失败（不影响启动）：${err?.message ?? err}`);
 }
 runs.onRunFinish(workflows.onAgentRunFinished);
 // 任务卡同理（2026-10-17）：运行跑完/被停/跑挂了，卡不能永远挂在「进行中」——
@@ -2782,6 +3665,35 @@ sweep.unref(); // 别让这个定时器拖着进程不退出
  */
 schedules.start();
 
+/*
+ * **启动即已加入 → 直接进入节点形态**（2026-10-21 拍板：只当算力，无反代无面板）。
+ * 本机 UI/API 照常服务（app.js 会渲染节点状态页）；这里只负责把节点进程拉起来。
+ * supervisor 见到 autostart 的常驻在跑会直接认领（external），不会双起。
+ */
+if (localMode.isJoined()) {
+  const joined = localMode.readClientConfig();
+  console.log(
+    `[本机] 已加入「${joined.hostLabel || joined.hostHostname || joined.controlPlane}」（${joined.controlPlane}）` +
+      ` —— 节点形态：只出算力，本机数据原样（从未被写过）`,
+  );
+  if (String(joined.scope ?? 'compute').split(/[\s,]+/).includes('compute')) {
+    void (async () => {
+      const sup = await supervisorModule();
+      if (!sup) return;
+      try {
+        const r = sup.start();
+        console.log(
+          r.external
+            ? `[本机] 节点已在跑（pid ${r.pid}，外部拉起的常驻）—— 不另起一个`
+            : `[本机] 已拉起节点进程（pid ${r.pid}）`,
+        );
+      } catch (e) {
+        console.warn(`[本机] 节点进程没起来（不影响面板，下次重启会再试）：${e?.message ?? e}`);
+      }
+    })();
+  }
+}
+
 server.listen(port, boundHost, logListen);
 
 /**
@@ -2789,6 +3701,12 @@ server.listen(port, boundHost, logListen);
  * —— 不重打的话，日志里"监听 127.0.0.1"会一直骗着后面看日志的人 ✗。
  */
 function logListen() {
+  /*
+   * **UDP 应答器跟着监听地址原地启停**（2026-10-20，设计 §5.5 之一）：
+   * 启动那一刻、以及每次「重启生效」之后都要对一次 ——
+   * `sync` 的判据是"开关开 且 真的听着非回环"，所以这里传的是 `boundHost`（实际监听）。
+   */
+  lanAnnounce.sync({ allowLan: netmode.readNetMode().allowLan, explicit: !!process.env.BANDI_HOST, boundHost, httpPort: port });
   /*
    * 启动就把**数据落在哪儿**打出来。
    * 部署排查时最费时间的一类问题是"我在看的到底是哪个库"——
@@ -2836,9 +3754,23 @@ function logListen() {
  * 配置从 `netmode.json` + `BANDI_HOST` 重新算 —— 跟启动时**同一套优先级** ✓。
  */
 function restartListening() {
-  const want = process.env.BANDI_HOST ?? (netmode.readNetMode().allowLan ? '0.0.0.0' : '127.0.0.1');
+  /*
+   * ⚠️ **已加入 = 节点形态，必须只听回环**（2026-10-20，设计 §4.4）：
+   * 节点令牌虽已收窄成 compute，但本机服务里还有导出等本机接口 —— 不该敞给网段。
+   * 这里**现读** `localMode.isJoined()`（join/leave 会原地改它，启动时的快照会过期），
+   * 与 `config.mjs` 启动时那份是同一套优先级（`BANDI_HOST` 仍最优先）。
+   */
+  const want = process.env.BANDI_HOST
+    ?? (localMode.isJoined()
+      ? '127.0.0.1'
+      : netmode.readNetMode().allowLan ? '0.0.0.0' : '127.0.0.1');
   if (want === boundHost) {
     console.log(`[网络] 重启监听：本来就是 ${boundHost}，不用动`);
+    /*
+     * 这里也要对一次（设计 §5.5 的三处同步点之一）：开关可能刚变过、而监听地址恰好没变
+     * （比如 `BANDI_HOST` 显式指定着，或者本来就在回环上）—— 应答器该停就得停。
+     */
+    lanAnnounce.sync({ allowLan: netmode.readNetMode().allowLan, explicit: !!process.env.BANDI_HOST, boundHost, httpPort: port });
     return;
   }
   console.log(`[网络] 重启监听：${boundHost} → ${want}`);
@@ -2846,6 +3778,12 @@ function restartListening() {
     boundHost = want;
     // 鉴权要跟着新的监听地址重算（"只看监听地址"那条规则）
     Object.assign(AUTH, auth.setup({ host: want, dataDir, envToken: process.env.BANDI_TOKEN }));
+    /*
+     * UDP 应答器同步（三处同步点之二）：**在 listen 之前**把上一份停掉 ——
+     * 开关是关的时候就这一下就够（`sync` 见到 on=false 直接 stop，不等 listen 回调）。
+     * 开关是开的时候它会重新 bind，`logListen` 里那次是幂等的第二遍。
+     */
+    lanAnnounce.sync({ allowLan: netmode.readNetMode().allowLan, explicit: !!process.env.BANDI_HOST, boundHost, httpPort: port });
     server.listen(port, boundHost, logListen);
   });
   // 挂着的长轮询（领活那种 20 秒的）别挡着 close 回调 —— 节点收到断开自己会重连 ✓
