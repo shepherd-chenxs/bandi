@@ -9,6 +9,29 @@
 
 ---
 
+## 推荐：离线安装包（一条命令装好，2026-10-22 起）
+
+在本机打包（Windows 上也能打，`dist/bandi-linux-x64-v<版本>.tar.gz`，**含随包 node**，目标机不用预装任何东西）：
+
+```sh
+node deploy/pack-linux.mjs
+```
+
+传上去装（有 root/sudo 的机器）：
+
+```sh
+scp dist/bandi-linux-x64-v1.1.0.tar.gz bandi@<ip>:/tmp/
+# 服务器上：
+tar xzf /tmp/bandi-linux-x64-*.tar.gz -C /tmp && cd /tmp/bandi
+sudo sh install.sh                    # 装好即起：systemd + bandi 命令自动注册
+sudo sh install.sh --uninstall        # 卸载（数据保留）；加 --purge 连数据删
+```
+
+改端口/监听：`BANDI_PORT=8899 BANDI_HOST=0.0.0.0 sudo -E sh install.sh`。
+没有 root 就用不了 /opt 落点，继续走下面的 **B：用户态** 路线（拷源码），两条路都通向同一套代码。
+
+---
+
 ## 零、先判断：这台机器有没有 root
 
 ```sh
