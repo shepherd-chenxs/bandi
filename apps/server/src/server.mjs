@@ -92,12 +92,17 @@ const routes = {
   'GET /api/hello': async (req, res) => {
     sendJson(res, 200, helloPayload());
   },
-  // 前端是长活 SPA：磁盘上的 app.js 换了，开着的页面不会自己换 —— 「点了没反应」多半是它。
-  // 前端每 60 秒来对一次指纹（mtime+size），变了就亮「刷新」提示条。只 stat 一个文件，几乎零成本。
+  // 前端是长活 SPA：磁盘上的前端代码换了，开着的页面不会自己换 —— 「点了没反应」多半是它。
+  // 前端每 60 秒来对一次指纹（各模块 mtime+size 之和），变了就亮「刷新」提示条。十几个 stat，几乎零成本。
   'GET /api/web-version': async (req, res) => {
     try {
-      const st = fs.statSync(path.join(webDir, 'app.js'));
-      sendJson(res, 200, { v: `${Math.round(st.mtimeMs)}-${st.size}` });
+      let v = 0;
+      const add = (p) => { const st = fs.statSync(p); v += Math.round(st.mtimeMs) + st.size; };
+      add(path.join(webDir, 'app.mjs'));
+      for (const name of fs.readdirSync(path.join(webDir, 'js'))) {
+        if (name.endsWith('.mjs')) add(path.join(webDir, 'js', name));
+      }
+      sendJson(res, 200, { v: `js-${v}` });
     } catch {
       sendJson(res, 200, { v: null });
     }

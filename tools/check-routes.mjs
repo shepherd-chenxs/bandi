@@ -16,7 +16,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const raw = fs.readFileSync(path.join(repo, 'apps', 'web', 'app.js'), 'utf8');
+// 2026-10-22 前端拆 ESM：ROUTES / openRoute 在 js/shell.mjs，setRoute 的调用方散在各模块 —— 全量拼接后再扫
+const jsDir = path.join(repo, 'apps', 'web', 'js');
+const raw = fs.readdirSync(jsDir).filter((f) => f.endsWith('.mjs'))
+  .map((f) => fs.readFileSync(path.join(jsDir, f), 'utf8')).join('\n');
 // **先去掉注释再扫** —— 否则文档里写的示例（setRoute('xxx')）会被当成真调用（第一次就误报了）
 const src = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
 

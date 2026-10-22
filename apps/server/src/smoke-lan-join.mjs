@@ -162,7 +162,7 @@ try {
   const html = await (await fetch(BASE_NODE + '/')).text();
   const state = await json(BASE_NODE, '/api/state');
   check('本机 UI 还是自己的（无反代注入标记，静态照常出）',
-    !html.includes('__BANDI_CLIENT__') && html.includes('app.js'), `注入=${html.includes('__BANDI_CLIENT__')}`);
+    !html.includes('__BANDI_CLIENT__') && html.includes('app.mjs'), `注入=${html.includes('__BANDI_CLIENT__')}`);
   check('加入后 /api/state 照常答（本机库，未被动过）', state.status === 200, `status=${state.status}`);
   const forbidden = await json(BASE_HOST, '/api/personas', { token: cfg?.token });
   check('节点令牌摸总机面板 → 403 E4031（闸还在，没面板可看）',

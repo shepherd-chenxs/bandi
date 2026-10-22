@@ -12,7 +12,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const src = fs.readFileSync(path.join(repo, 'apps', 'web', 'app.js'), 'utf8');
+const webJs = path.join(repo, 'apps', 'web', 'js');
+const src = ['../app.mjs', 'ui.mjs', 'skills.mjs', ...fs.readdirSync(webJs).filter((f) => f.endsWith('.mjs') && f !== 'ui.mjs' && f !== 'skills.mjs')]
+  .map((f) => fs.readFileSync(path.join(webJs, f), 'utf8')).join('\n'); // 2026-10-22 拆 ESM：扫全部前端模块 + 入口（boot 语句都在入口）
 
 let bad = 0;
 let n = 0;
@@ -194,12 +196,15 @@ const sandbox = {
 function grab(re) {
   const m = src.match(re);
   if (!m) throw new Error(`没抠到：${re}`);
-  return m[0];
+  return m[0].replace(/^export /gm, ''); // 拆 ESM 后模块里的声明带 export，函数替身执行时剥掉
 }
 const code = [
   /* 抠到 `wireHelpPop` 结尾为止；后面的段落标记 2026-10-20 从「自建下拉」换成了「悬浮提示（自建 data-tip）」
      —— 这里只是"截到哪儿"的界标，别把它当成被测功能的断言。 */
-  grab(/let helpPop = null;[\s\S]*?\n}\n(?=\n\/\* -+ 悬浮提示)/),
+  grab(/let helpPop = null;[\s\S]*?\n}\n+(?=\s*\/\* -+ 悬浮提示)/),
+  // 2026-10-22 拆 ESM：「点别处 / Esc 收起」的注册从 help 区的顶层语句挪进了入口 app.mjs —— 这里按入口原文补上
+  `document.addEventListener('click', closeHelpPop);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeHelpPop(); });`,
 ].join('\n');
 const run = new Function('document', 'window', `${code}\nreturn { wireHelpPop, closeHelpPop };`);
 const { wireHelpPop, closeHelpPop } = run(sandbox.document, sandbox.window);
