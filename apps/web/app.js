@@ -2660,38 +2660,82 @@ const fmtMb = (bytes) => {
    恢复从此有两条路：直接导入快照，或照老办法手动覆盖 bandi.db。 */
 async function renderBackup() {
   $('settingsView').innerHTML = rtLoading('数据管理');
-  let st = null;
-  try {
-    st = await api(`${LOCAL_BASE}/status`);
-  } catch { /* 拉不到也照常渲染：路径/大小显示 —，点导出会拿到真实报错 */ }
+  /* 状态和备份列表并行拉；谁挂了都不拦渲染 —— 状态挂了路径显示 —，列表挂了显示空态，
+     点导出/导入都会拿到真实报错。 */
+  const [rStatus, rBackups] = await Promise.allSettled([
+    api(`${LOCAL_BASE}/status`),
+    api(`${LOCAL_BASE}/backups`),
+  ]);
+  const st = rStatus.status === 'fulfilled' ? rStatus.value : null;
+  const bl = rBackups.status === 'fulfilled' ? rBackups.value : null;
   const local = st?.local ?? {};
   const counts = local.counts ?? {};
   const size = fmtMb(local.dbSize);
   const mtime = local.dbMtime ? dt(local.dbMtime) : '';
+  /* 2026-10-22 重设计：原来是「标签左、内容右挤」的表单卡 + 两颗小按钮吊在右下，
+     说明挤成一坨还分家（「怎么用」同时讲导出和导入）。改成——
+     ① 数据总览条：数字大字排一行当主视觉，路径放卡头当副信息；
+     ② 导出/导入两张动作卡：各管各的图标、一句话职责、说明与按钮。
+     说明跟着动作走（谁的事写在谁的卡里），“重启生效”只跟导入有关，也归位了。 */
+  const icoExport =
+    '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/></svg>';
+  const icoImport =
+    '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4"/><path d="m7 9 5-5 5 5"/><path d="M5 20h14"/></svg>';
+  /* 右栏：backups/ 里的快照（定时备份 + 导入前自动备份）。来源标注跟命名规则一一对应。 */
+  const SRC_LABEL = { scheduled: '定时备份', import: '导入前备份', other: '备份' };
+  const bkFiles = Array.isArray(bl?.files) ? bl.files : [];
+  const bkList = bkFiles.length
+    ? bkFiles.map((f) => `
+        <div class="dm-item" title="${esc(`${bl.dir ?? ''}\\${f.name}`)}">
+          <div class="machine-path dm-item-name">${esc(f.name)}</div>
+          <div class="dm-item-sub">${SRC_LABEL[f.src] ?? SRC_LABEL.other} · ${fmtMb(f.size) || '—'} · ${dt(f.mtime)}</div>
+        </div>`).join('')
+    : `<div class="dm-empty">还没有备份。导入快照换库、或开了定时备份之后，会自动存进数据目录的 backups/ 里。</div>`;
   $('settingsView').innerHTML = `
     ${headRow('<b>数据管理</b>')}
     <div class="detail-body">
-      <section class="set-sec machine-card">
-        <div class="set-box">
-          <div class="set-row">
-            <span class="set-label">本机数据</span>
-            <div class="machine-data">
-              <div class="machine-path" title="${esc(local.dbPath ?? '')}">${esc(local.dbPath ?? '—')}${size ? ` · ${esc(size)}` : ''}</div>
-              <div class="sub">${Number(counts.personas ?? 0)} 个员工 · ${Number(counts.conversations ?? 0)} 段会话 · ${Number(counts.projects ?? 0)} 个项目${mtime ? `　最后修改 ${esc(mtime)}` : ''}</div>
-            </div>
+      <div class="dm-cols">
+        <div class="dm-left">
+          <section class="dm-overview">
+          <div class="dm-overview-head">
+            <span class="dm-title">本机数据</span>
+            <span class="machine-path" title="${esc(local.dbPath ?? '')}">${esc(local.dbPath ?? '—')}</span>
           </div>
-          <div class="set-row">
-            <span class="set-label">怎么用</span>
-            <div class="machine-data">
-              <div class="sub">「导出」生成这份库的完整快照（一个 .db 文件），导出时班底照常用。「导入」选一份快照覆盖本机数据：会先校验文件，当前数据自动备份进数据目录的 backups/，<b>重启班底后生效</b>。</div>
+          <div class="dm-stats">
+            <div class="dm-stat"><b>${size ? esc(size) : '—'}</b><span>库大小</span></div>
+            <div class="dm-stat"><b>${Number(counts.personas ?? 0)}</b><span>员工</span></div>
+            <div class="dm-stat"><b>${Number(counts.conversations ?? 0)}</b><span>会话</span></div>
+            <div class="dm-stat"><b>${Number(counts.projects ?? 0)}</b><span>项目</span></div>
+            <div class="dm-stat"><b class="dm-stat-time">${mtime ? esc(mtime) : '—'}</b><span>最后修改</span></div>
+          </div>
+        </section>
+        <div class="dm-cards">
+          <div class="dm-card">
+            <div class="dm-card-head">
+              <span class="dm-ico">${icoExport}</span>
+              <div class="dm-card-name"><b>导出快照</b><span>把整份库存成一个 .db 文件</span></div>
+              <button class="btn-sm primary" id="backupExport">导出</button>
             </div>
+            <div class="dm-card-desc">生成这份库的完整快照（一个 .db 文件），导出时班底照常用，不需要停机。成功后会把文件完整路径告诉你。</div>
+          </div>
+          <div class="dm-card">
+            <div class="dm-card-head">
+              <span class="dm-ico">${icoImport}</span>
+              <div class="dm-card-name"><b>导入快照</b><span>用一份快照覆盖本机数据</span></div>
+              <button class="btn-sm" id="backupImport">导入</button>
+            </div>
+            <div class="dm-card-desc">选一份班底导出的 .db 快照：会先校验文件，当前数据自动备份进数据目录的 backups/。<b>导入完成后重启班底才生效。</b></div>
           </div>
         </div>
-        <div class="machine-actions">
-          <button class="btn-sm" id="backupImport">导入</button>
-          <button class="btn-sm primary" id="backupExport">导出</button>
         </div>
-      </section>
+        <div class="dm-list">
+          <div class="dm-list-head">
+            <span class="dm-title">备份快照</span>
+            <span class="dm-list-count" title="${esc(bl?.dir ?? '')}">${bkFiles.length ? `${bkFiles.length} 份` : ''}</span>
+          </div>
+          <div class="dm-list-body">${bkList}</div>
+        </div>
+      </div>
     </div>
     <input type="file" id="backupImportFile" accept=".db,.sqlite,.sqlite3" hidden />`;
   const btn = $('backupExport');

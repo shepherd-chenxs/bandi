@@ -2719,6 +2719,59 @@ details.tc-replies[open] > .tc-replies-toggle::before { content: '▾ '; }
    长路径才不会把标签挤变形；换行随意断（路径里没有空格）。 */
 .machine-card .machine-data { max-width: 460px; text-align: right; overflow-wrap: anywhere; }
 .machine-path { font-family: ui-monospace, monospace; font-size: 11.5px; overflow-wrap: anywhere; }
+
+/* ===== 设置 → 数据管理（2026-10-22 重设计）=====
+   原来：「标签左、内容右挤」的表单卡 + 两颗小按钮吊在右下，下面大片空白。
+   现在：① 数据总览条 —— 数字大字排一行当主视觉，路径缩回卡头当副信息；
+        ② 导出/导入两张动作卡 —— 图标 + 一句话职责 + 说明 + 按钮，说明跟着动作走。
+   颜色/圆角/分层全走全站 tokens（--panel/--line/--dim/--rail/--accent，
+   1px 细线分层、面 10px 圆角），深浅色主题自动跟随，没有硬编码色。 */
+/* 两栏：左边主内容限 720px（跟其他设置页同节奏），右边 backups/ 快照列表吃掉剩余宽度。
+   窄窗落回单列（列表排在下面）。 */
+.dm-cols { display: grid; grid-template-columns: minmax(0, 720px) minmax(280px, 1fr); gap: 14px; align-items: start; }
+.dm-left { min-width: 0; }
+.dm-overview { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); overflow: hidden; }
+.dm-overview-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 12px 16px 11px; }
+.dm-title { font-size: 13px; font-weight: 600; flex: none; }
+.dm-overview-head .machine-path { color: var(--dim); text-align: right; }
+.dm-stats { display: flex; }
+.dm-stat { flex: 1; min-width: 0; padding: 11px 16px 13px; border-top: 1px solid var(--line); }
+.dm-stat + .dm-stat { border-left: 1px solid var(--line); }
+.dm-stat b { display: block; font-size: 17px; font-weight: 600; line-height: 1.25;
+             font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dm-stat span { display: block; margin-top: 3px; font-size: 12px; color: var(--dim); }
+/* 日期值别跟数字一样大（19px 的 "10/22 19:21" 在 1/5 宽里站不住），小两档 */
+.dm-stat-time { font-size: 14px !important; padding-top: 3px !important; }
+.dm-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px; }
+.dm-card { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); padding: 14px 16px; }
+.dm-card-head { display: flex; align-items: center; gap: 10px; }
+.dm-ico { width: 34px; height: 34px; border-radius: 8px; background: var(--rail); color: var(--accent);
+         display: flex; align-items: center; justify-content: center; flex: none; }
+.dm-card-name { min-width: 0; }
+.dm-card-name b { display: block; font-size: 13px; }
+.dm-card-name span { display: block; margin-top: 1px; font-size: 12px; color: var(--dim);
+                    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dm-card-head .btn-sm { margin-left: auto; flex: none; }
+.dm-card-desc { margin-top: 10px; font-size: 12.5px; line-height: 1.75; color: var(--dim); }
+.dm-card-desc b { color: var(--text); }
+/* —— 右栏：备份快照列表（只读，GET /api/local/backups）—— */
+.dm-list { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); overflow: hidden; }
+.dm-list-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+                padding: 12px 16px 11px; border-bottom: 1px solid var(--line); }
+.dm-list-count { font-size: 12px; color: var(--dim); }
+.dm-list-body { max-height: 440px; overflow: auto; }
+.dm-item { padding: 9px 16px 10px; min-width: 0; }
+.dm-item + .dm-item { border-top: 1px solid var(--line); }
+.dm-item-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.dm-item-sub { margin-top: 2px; font-size: 12px; color: var(--dim); }
+.dm-empty { padding: 16px; font-size: 12.5px; color: var(--dim); line-height: 1.75; }
+/* 窄窗兜底（壳窗口被拖小）：整个页面落回单列、动作卡也是、统计项换行 */
+@media (max-width: 1100px) {
+  .dm-cols { grid-template-columns: 1fr; }
+  .dm-cards { grid-template-columns: 1fr; }
+  .dm-stats { flex-wrap: wrap; }
+  .dm-stat { flex: 1 1 30%; }
+}
 /* 模式标题行（2026-10-21 八改）：不再挂 machine-card —— 那个类带 max-width:720px，
    是给「数据备份/节点页」那种长表单卡用的，放在这只会让开关顶不到页面右边。
    「模式」标题在左，开关 + 重启顶到最右；标题行下是一行随开关走的状态说明 */

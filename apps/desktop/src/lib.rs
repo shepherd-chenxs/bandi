@@ -144,9 +144,9 @@ pub fn run() {
             let app_url: tauri::Url = url.clone();
 
             let title = if ready {
-                format!("班底 {APP_VERSION}")
+                "班底".to_string()
             } else {
-                format!("班底 {APP_VERSION} · 没起来")
+                "班底 · 没起来".to_string()
             };
 
             let win = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
@@ -654,7 +654,7 @@ fn watch_service(win: tauri::WebviewWindow, app_url: tauri::Url, port: u16) {
                     match win.navigate(app_url.clone()) {
                         Ok(()) => {
                             offline = false;
-                            let _ = win.set_title(&format!("班底 {APP_VERSION}"));
+                            let _ = win.set_title("班底");
                         }
                         Err(e) => eprintln!("[壳] 导航回控制面失败：{e} —— 巡检下一轮再试"),
                     }
@@ -686,7 +686,7 @@ fn watch_service(win: tauri::WebviewWindow, app_url: tauri::Url, port: u16) {
             match win.navigate(url) {
                 Ok(()) => {
                     offline = true;
-                    let _ = win.set_title(&format!("班底 {APP_VERSION} · 正在恢复连接"));
+                    let _ = win.set_title("班底 · 正在恢复连接");
                     eprintln!("[壳] 已切到兜底页，等服务恢复（巡检每 {}s 一次）", HEALTH_INTERVAL_OFFLINE.as_secs());
                 }
                 // **不翻状态**：没导航成功就当没发生，下一轮重来（旧版在这里把用户永久卡在错误页）
