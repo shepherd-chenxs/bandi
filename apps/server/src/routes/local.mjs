@@ -28,8 +28,10 @@ function isLoopbackRemote(address) {
  *
  * 这个模块**还没落地**时返回 `null`，`/api/local/*` 照样能用（只是 `node.running:false`）——
  * 不让"少一个文件"变成整个本机接口 500。
+ *
+ * **导出**：server.mjs 的启动段（已加入 → 直接进节点形态）也要用它，别再复制一份。
  */
-async function supervisorModule() {
+export async function supervisorModule() {
   try {
     return await import('./node-supervisor.mjs');
   } catch {

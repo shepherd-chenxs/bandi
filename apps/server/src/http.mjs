@@ -7,7 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { port, extraOrigins } from './config.mjs';
 
 // 静态文件根：apps/web（serveStatic 用；路径深度与 server.mjs 同层）
-const webDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'web');
+// **导出**：/api/web-version 的指纹也要 stat 这里的文件（server.mjs 引它），别再各算一份。
+export const webDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'web');
 
 export function sendJson(res, code, body) {
   const text = JSON.stringify(body);

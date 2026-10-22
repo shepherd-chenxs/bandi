@@ -49,8 +49,8 @@ import { handleSsh } from './routes/ssh.mjs';
 import { handleGit } from './routes/git.mjs';
 import { handleRun } from './routes/run.mjs';
 import { handleSchedules } from './routes/schedules.mjs';
-import { handleLocal } from './routes/local.mjs';
-import { sendJson, fail, readBody, guardWrite, serveStatic, BadRequest, allowedOrigins } from './http.mjs';
+import { handleLocal, supervisorModule } from './routes/local.mjs';
+import { sendJson, fail, readBody, guardWrite, serveStatic, BadRequest, allowedOrigins, webDir } from './http.mjs';
 import { SERVER } from './server-state.mjs';
 import { runtimeOptions, runtimesOk, withExternals } from './runtime-view.mjs';
 
