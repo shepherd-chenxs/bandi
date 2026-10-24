@@ -17,6 +17,10 @@
  * 环境开关：
  *   `BANDI_FAKE_FAIL=1`      演一次"跑挂"（error + turn.failed，退出码 1）
  *   `BANDI_FAKE_SLEEP_MS`    开工前先睡一会儿（用来验"一声不吭时也能被掐掉"）
+ *   `BANDI_FAKE_CREATE_CARD=1`：任务文本里带 `【建卡】{...请求体JSON...}`（单行）时，
+ *                            真调一次"工作证"建卡接口，结果回进 agent_message ——
+ *                            验冒名/权限/建卡全链路用。没有标记就不建 —— 防"建卡 →
+ *                            指派 → 下一环又建卡"滚雪球。
  */
 const argv = process.argv.slice(2);
 
@@ -51,8 +55,33 @@ async function main() {
     process.exit(1);
   }
 
+  // BANDI_FAKE_ECHO=full：把**整个任务**回显出来（任务卡锚点断言用）——默认只回前 60 字，
+  // 别处只认 /FAKE-OK/ 正则，加长不影响，但回显全文会让回复很长，还是用开关圈死在需要的冒烟里。
   const head = task.replace(/\s+/g, ' ').trim().slice(0, 60);
-  out({ type: 'item.completed', item: { type: 'agent_message', text: `FAKE-OK：${head}` } });
+  const echo = process.env.BANDI_FAKE_ECHO === 'full' ? task.replace(/\s+/g, ' ').trim() : head;
+
+  // 「工作证」建卡（见上面的开关说明）：真的去调控制面，结果回进回复文本里给冒烟断言
+  let cardNote = '';
+  const cardBody = process.env.BANDI_FAKE_CREATE_CARD === '1' ? (task.match(/【建卡】(\{[^\n]*\})/) ?? [])[1] : null;
+  if (cardBody) {
+    try {
+      const r = await fetch(process.env.BANDI_CONTROL_URL + '/api/agent/cards', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Bandi': '1',
+          'X-Bandi-Run-Token': process.env.BANDI_RUN_TOKEN ?? '',
+        },
+        body: cardBody,
+      });
+      const b = await r.json().catch(() => ({}));
+      cardNote = ` FAKE-CARD:${r.status}:${b.task?.id ?? b.code ?? '?'}${b.task ? ':' + b.task.status : ''}${b.error ? ':' + String(b.error).slice(0, 100) : ''}`;
+    } catch (e) {
+      cardNote = ` FAKE-CARD:ERR:${String(e.message ?? e).slice(0, 80)}`;
+    }
+  }
+
+  out({ type: 'item.completed', item: { type: 'agent_message', text: `FAKE-OK：${echo}${cardNote}` } });
   out({ type: 'turn.completed', usage: { input_tokens: 11, output_tokens: 22, cached_input_tokens: 3 } });
   process.exit(0);
 }

@@ -4,8 +4,9 @@
  * 它与 Rust 那半之间只有三行协议，所以必须钉死。验八件事：
  *   ① 没有控制面时：起一个，报 `READY <url> 1`（1 = 是我们起的）；
  *   ② 已经有控制面时：复用，报 `READY <url> 0`；
- *   ③ 收到 STOP 时，**不是自己起的就不停** —— 这条最容易做错：
- *      壳一退，把用户用命令行开着的控制面也杀了；
+ *   ③ 收到 STOP 时，**还有别的窗口在用就不停** —— 这条最容易做错：
+ *      壳一退，把另一个还开着的窗口的服务杀了（2026-10-22 实报的
+ *      `ERR_CONNECTION_REFUSED` 就是它）—— 也可能反过来把用户命令行的实例杀掉；
  *   ④ **壳直接没了（stdin 关闭）**，自己起的那个也要收掉 —— 这是壳崩溃时的安全网；
  *   ⑤ 不指定端口时**自己挑**一个，并记进数据目录（桌面版没人关心端口，但不能撞别人）；
  *   ⑥ 探测起点被**别人的程序**占着时：跳过它换一个，而且**不碰人家**；
@@ -92,7 +93,7 @@ try {
   if (!(await waitFor(b, (s) => !!readyOf(s)))) throw new Error('壳 B 没报 READY：' + b.err.slice(-400));
   const rb = readyOf(b);
   check('末尾标记 = 0（本来就在跑，退出不许停）', rb.endsWith(' 0'), rb);
-  check('日志说了"退出时不停它"', /退出时\*\*不停它\*\*/.test(b.err), b.err.split('\n').find((l) => l.includes('已经在跑')) ?? '');
+  check('日志说清了"我是第 2 个窗口"，且收不收按"还有谁在用"算', /第 2 个窗口/.test(b.err), (b.err.match(/\[壳\].*已经在跑.*/) ?? [''])[0]);
 
   console.log('\n③ 给 B 发 STOP：**不许停**别人起的控制面');
   b.child.stdin.write('STOP\n');
@@ -156,7 +157,7 @@ try {
   const g = startShell(noPort);
   if (!(await waitFor(g, (s) => !!readyOf(s)))) throw new Error('壳 G 没报 READY：' + g.err.slice(-400));
   check('复用了同一个端口', onPort(readyOf(g), BASE + 1), readyOf(g));
-  check('标明"不是我们起的"（退出不许停）', readyOf(g).endsWith(' 0'), readyOf(g));
+  check('标明"复用了已有的"（READY … 0）', readyOf(g).endsWith(' 0'), readyOf(g));
   g.child.stdin.write('STOP\n');
   await Promise.race([g.exited, sleep(8000)]);
   await sleep(800);

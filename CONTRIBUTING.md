@@ -11,7 +11,7 @@
 - `apps/server/src/node.mjs` —— `runTask` / `spawn` / `binSearchDirs`（节点在本机起进程）
 - `apps/server/src/runtimes.mjs` —— `installCommandFor`（一键安装跑的那条命令）
 - `apps/server/src/externals.mjs` —— `commandFor` / `mirrors`（外部件的命令与镜像）
-- `apps/web/app.js` —— 任何把字符串拼进 `data-*` 再执行的写法
+- `apps/web/js/*.mjs` —— 任何把字符串拼进 `data-*` 再执行的写法（前端已拆原生 ESM，无打包器）
 
 ### 2. 有一条架构红线，别为了"方便"拆掉
 

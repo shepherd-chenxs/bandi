@@ -15,6 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, execFileSync } from 'node:child_process';
 import { repoRoot } from './config.mjs';
+import { ensureCliInstalled } from './cli-install.mjs';
 
 export const SERVER_ENTRY = path.join(repoRoot, 'apps', 'server', 'src', 'server.mjs');
 
@@ -35,15 +36,19 @@ export const urlOf = (port) => `http://127.0.0.1:${port}`;
  * 只看 200 的话，任何别的 HTTP 服务都会被误判成"平台已经在跑"。
  *
  * ⚠️ 这里问的是"**端口上坐着一个班底控制面吗**"，不是"我们能不能读它的状态"。
- * 所以 **401 也算"是"**：开了鉴权的控制面会把 `/api/state` 挡成 401，但它确实在那儿。
- * 不认这一条，启动器就会把它当成"没起来"（于是再起一个）或"僵死的自己人"（于是杀掉重启）——
- * 那是真会把现场搞乱的。服务端在 401 的正文里带了 `platform: 'bandi'`，就是给这里认的。
+ * 所以 **401 / 403 也都算"是"**：
+ *   · 401 = 开了鉴权的控制面，把 `/api/state` 挡成要令牌；
+ *   · 403 = 这台机器已经是某台总机的**算力节点**（`scope` 只有 compute），
+ *     总机按令牌权限把面板请求挡成 `403 E4031`。服务还活得好好的 —— 只是不给看面板。
+ * 不认这两条，启动器就会把它当成"没起来"（于是再起一个）或"僵死的自己人"（于是杀掉重启）——
+ * 那是真会把现场搞乱的。服务端两种正文里都带 `platform: 'bandi'`，就是给这里认的。
+ * （2026-10-21 实报：桌面壳在"只当算力"的节点上反复报「30 秒内没起来」，就是漏了 403。）
  */
 export async function isUp(port, timeoutMs = 1500) {
   try {
     const r = await fetch(urlOf(port) + '/api/state', { signal: AbortSignal.timeout(timeoutMs) });
     const j = await r.json().catch(() => null);
-    if (r.status === 401) return j?.platform === 'bandi';
+    if (r.status === 401 || r.status === 403) return j?.platform === 'bandi';
     if (!r.ok) return false;
     return Array.isArray(j?.personas);
   } catch {
@@ -96,6 +101,30 @@ export function listeners(port) {
   } catch { /* 没装 ss */ }
 
   return [...pids];
+}
+
+/**
+ * 用系统默认浏览器打开一个网址。返回 true = 已经把话递出去了。
+ *
+ * 为什么放在这儿：`start.mjs`（开页面）和 `cli.mjs`（菜单第 1 项）都要做这件事，
+ * 各写一份必然有一天一边漏了 `windowsHide` 或 `detached`，然后某个场景弹个黑框。
+ * 「交给系统了」不等于「打开成功了」—— 系统可能压根没浏览器，所以只回报递没递出去。
+ */
+export function openUrl(url) {
+  try {
+    if (process.platform === 'win32') {
+      spawn('powershell', ['-NoProfile', '-Command', `Start-Process '${url}'`], {
+        detached: true, stdio: 'ignore', windowsHide: true,
+      }).unref();
+    } else if (process.platform === 'darwin') {
+      spawn('open', [url], { detached: true, stdio: 'ignore' }).unref();
+    } else {
+      spawn('xdg-open', [url], { detached: true, stdio: 'ignore' }).unref();
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** 这个 PID 是什么进程。取不到就返回空 cmd —— 上层会当成"不是我们的" */
@@ -193,13 +222,30 @@ export function startDetached({ port, dataDir, logFile, extraEnv = {} }) {
  *
  * `force` = 强制重启：即便是我们自己的、正在跑的，也先收掉再起
  * （会打断正在跑的活 —— 见 docs/形态决策.md「重启的代价」）。
+ *
+ * `onSpawn(pid)` = **刚 spawn 出来、还没等它健康**时的一次回调（可选）。
+ * 为什么要它（2026-10-22 实报）：桌面壳需要"这个服务是我起的"这份记录才能收摊，
+ * 而记录原先是在本函数**返回之后**才写的 —— spawn 与写记录之间隔着最长 30 秒的健康等待。
+ * 壳恰好在这段时间被强杀（任务管理器 / 崩溃）时，服务已经起来了、却**没有任何记录**，
+ * 于是后面每一个壳都认为"这服务不是我起的"→ 谁都不收 → 永久孤儿。
+ * 有了这次回调，壳能在拿到 PID 的那一刻就落一条 pending 记录。
  */
-export async function ensureRunning({ port, dataDir, logFile, force = false, extraEnv = {} }) {
+export async function ensureRunning({ port, dataDir, logFile, force = false, extraEnv = {}, onSpawn }) {
   const url = urlOf(port);
+  /*
+   * **部署即装**（2026-10-22）：起服务的每个入口（start.cmd / 桌面壳 / bandi start）
+   * 都经过这里 —— 顺手保证「bandi」全局命令在，装没装成一句话说给调用方，
+   * 调用方（start.mjs）当场打给用户看。幂等；失败只带回说明，绝不拦启动。
+   * （server.mjs 启动段还有一道同款：盖住 systemd / 自启那些不经过这里的老路径。）
+   */
+  let cliNote = null;
+  try {
+    cliNote = await ensureCliInstalled();
+  } catch { /* 不抛，兜一层 */ }
   const held = listeners(port);
   const up = await isUp(port);
 
-  if (up && !force) return { action: 'already', url, pids: held };
+  if (up && !force) return { action: 'already', url, pids: held, cliNote };
 
   let replaced = [];
   // 端口上是**我们自己的**、而且它还响应 → 那是"强制重启"；不响应 → 判"僵死"。
@@ -209,24 +255,38 @@ export async function ensureRunning({ port, dataDir, logFile, force = false, ext
     const infos = held.map(processInfo);
     const ours = infos.filter(isOurs);
     const alien = infos.filter((i) => !isOurs(i));
-    if (alien.length) return { action: 'alien', url, alien, ours };
+    if (alien.length) return { action: 'alien', url, alien, ours, cliNote };
     replaced = ours.map((o) => o.pid);
     forced = up;
     for (const o of ours) killPid(o.pid);
     if (!(await waitPortFree(port))) {
-      return { action: 'failed', url, reason: `端口没释放，占用者：${listeners(port).join(', ') || '(读不到)'}` };
+      return { action: 'failed', url, reason: `端口没释放，占用者：${listeners(port).join(', ') || '(读不到)'}`, cliNote };
     }
   }
 
   const pid = startDetached({ port, dataDir, logFile, extraEnv });
+  /*
+   * **一拿到 PID 就先告诉调用方一声**，然后才去等它健康（见函数头 `onSpawn` 那段）。
+   * 顺序不能反：健康等待最长 30 秒，而"这个服务是我起的"这份记录必须现在就落 ——
+   * 落晚了，壳在这 30 秒里被强杀，磁盘上就什么凭据都没有了（永久孤儿）。
+   *
+   * 回调**同步**调用、并裹 try/catch：回调里只是"写一个小文件"，它出问题（磁盘满 / 目录被锁）
+   * 不该让"起服务"这件事跟着失败 —— 服务已经在跑了，起不来的代价是用户直接看到故障。
+   * 回调失败只是退化成旧行为（成功后再记，见下面的 `started` 分支），不影响本次启动。
+   */
+  if (typeof onSpawn === 'function') {
+    try {
+      onSpawn(pid);
+    } catch { /* 记不下来 ≠ 起不来：继续等健康，调用方成功后会再记一次 */ }
+  }
   if (!(await waitHealthy(port))) {
     let logTail = '';
     try {
       logTail = fs.readFileSync(logFile, 'utf8').trim().split(/\r?\n/).slice(-15).join('\n');
     } catch { /* 没日志就算了 */ }
-    return { action: 'failed', url, pid, reason: '30 秒内没起来', logTail };
+    return { action: 'failed', url, pid, reason: '30 秒内没起来', logTail, cliNote };
   }
-  return { action: 'started', url, pid, replaced, forced };
+  return { action: 'started', url, pid, replaced, forced, cliNote };
 }
 
 /**

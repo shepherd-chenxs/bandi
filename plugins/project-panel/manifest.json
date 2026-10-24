@@ -1,8 +1,8 @@
 {
   "id": "project-panel",
-  "label": "项目面板",
-  "version": "0.1.0",
-  "description": "把平台项目账本里各项目的 .bandi/status.yaml 汇到一页看：有几个版本、每版要做什么、发布记录在哪。只读，不改任何项目文件。（任务看板不在这儿——那是平台「项目」页的一等功能。）",
+  "label": "研发面板",
+  "version": "0.2.0",
+  "description": "软件研发项目专属：把所有项目的进度、发布与负责人汇到一屏概览——几个项目、各自进度到哪、谁负责、最近动了什么。只读，不改任何项目文件。（项目档案与任务看板都不在这儿——那是平台「项目」页的一等功能。）",
   "category": "研发",
   "panel": {
     "slot": "plugins",
@@ -10,56 +10,97 @@
     "blocks": [
       {
         "type": "text",
-        "heading": "这是什么",
-        "text": "只读看板：项目清单来自平台的「项目」账本，版本记录现读各项目根下的 .bandi/status.yaml。它不改任何项目文件，也没有写接口 —— 部署、发布这类要动手的事交给数字员工在会话里做，这里只留记录。读不到进度文件的项目标「未纳管」，记录不会自动删。**任务看板不在这儿**：平台「项目」页点进任何一个项目就能看到（流程的每一次办理 + 聊天派活）。"
-      }
-    ],
-    "split": {
-      "master": {
-        "heading": "项目",
-        "keyField": "id",
-        "source": { "api": "/api/status/projects", "pick": "projects" },
-        "title": "{name}",
-        "subtitle": "{subtitle}",
-        "empty": "项目账本里还没有项目 —— 先去「项目」加一个"
+        "text": "所有项目的进度、发布与负责人，一眼看全；点进某个项目再看版本明细。只读看板，不改任何项目文件。"
       },
-      "detail": {
-        "title": "{name}",
-        "subtitle": "{root}",
-        "empty": "左边选一个项目",
-        "blocks": [
+      {
+        "type": "stats",
+        "source": { "api": "/api/status/projects", "pick": "projects" },
+        "items": [
           {
-            "type": "keyvalue",
-            "heading": "纳管情况",
-            "source": { "api": "/api/status/projects/{id}" },
-            "rows": [
-              { "label": "项目名", "value": "{project}" },
-              { "label": "目录", "value": "{root}" },
-              { "label": "进度文件", "value": "{status_file}" },
-              { "label": "纳管状态", "value": "{state_text}" },
-              { "label": "进度文件更新", "value": "{updated}" },
-              { "label": "版本", "value": "{version_count}" },
-              { "label": "已发布版本", "value": "{released_count}" }
-            ]
+            "label": "项目总数",
+            "value": "{all}",
+            "unit": "个",
+            "foot": "来自「项目」账本",
+            "calc": { "all": "count" }
           },
           {
-            "type": "table",
-            "heading": "版本",
-            "source": { "api": "/api/status/projects/{id}", "pick": "versions" },
-            "columns": [
-              { "label": "版本", "key": "version_shown", "width": "66px" },
-              { "label": "主题", "key": "title" },
-              { "label": "发布", "key": "released_note", "width": "70px" },
-              { "label": "发布记录", "key": "released_path", "width": "180px" },
-              { "label": "这一版要做什么（摘自版本文档）", "key": "points_text", "width": "380px" }
-            ]
+            "label": "已纳管",
+            "value": "{managed}",
+            "unit": "个",
+            "foot": "能读到进度文件",
+            "tone": "ok",
+            "calc": { "managed": { "countIf": "ok" } }
+          },
+          {
+            "label": "未纳管 · 需处理",
+            "value": "{pending}",
+            "unit": "个",
+            "foot": "找不到 .bandi/status.yaml",
+            "tone": "warn",
+            "calc": { "pending": { "countIf": { "field": "ok", "is": false } } }
+          },
+          {
+            "label": "已发布版本",
+            "value": "{released}",
+            "unit": "个",
+            "foot": "只算已纳管项目里的发布记录",
+            "tone": "accent",
+            "calc": { "released": { "sumIf": { "field": "released_count", "where": "ok" } } }
           }
         ]
+      },
+      {
+        "type": "cards",
+        "heading": "项目进度",
+        "subheading": "已纳管 {shown_count} 个 · 点卡进详情",
+        "source": { "api": "/api/status/projects", "pick": "projects", "filter": { "field": "ok", "is": true } },
+        "columns": 3,
+        "card": {
+          "title": "{name}",
+          "subtitle": "{summary_text}",
+          "badge": "{status_text}",
+          "badgeTone": "ok",
+          "members": "{pm_name} · 起于 {started_text}",
+          "lines": [
+            { "label": "版本", "value": "{version_count} 个 · 已发布 {released_count} 个" }
+          ],
+          "foot": [
+            {
+              "label": "最新发布",
+              "value": "{latest_released_version} · {latest_released_path}",
+              "fallback": "还没有已发布的版本"
+            }
+          ],
+          "href": "#/project/{id}"
+        },
+        "empty": "还没有已纳管的项目 —— 项目根下放一份 .bandi/status.yaml 就会出现在这里"
+      },
+      {
+        "type": "cards",
+        "aside": true,
+        "heading": "需要处理",
+        "subheading": "{shown_count}",
+        "source": { "api": "/api/status/projects", "pick": "projects", "filter": { "field": "ok", "is": false } },
+        "columns": 1,
+        "card": {
+          "title": "{name}",
+          "subtitle": "{error}",
+          "badge": "需处理",
+          "badgeTone": "warn",
+          "href": "#/project/{id}"
+        },
+        "empty": "都纳管了，没有待处理的"
+      },
+      {
+        "type": "list",
+        "aside": true,
+        "heading": "最近动态",
+        "source": { "api": "/api/status/projects", "pick": "projects", "sort": { "by": "updated", "dir": "desc" }, "limit": 6 },
+        "title": "{name} · {status_text}",
+        "subtitle": "{updated}",
+        "empty": "还没有更新记录"
       }
-    }
+    ]
   },
-  "permissions": [
-    "GET:/api/status/projects",
-    "GET:/api/status/projects/{id}"
-  ]
+  "permissions": ["GET:/api/status/projects"]
 }

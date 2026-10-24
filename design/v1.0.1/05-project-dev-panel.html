@@ -1,0 +1,1018 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>班底 · 项目模块 / 研发面板改造 v0.2 设计稿</title>
+<style>
+/* ═══════════════════════════════════════════════════════════════
+   项目模块 与 研发面板 分工改造（PRD v0.2 · 2026-10-23）
+
+   设计决策：
+   · 档案只留四项（干什么 / 项目经理 / 成员 / 开始时间），把「迭代版本数」整行撤掉，
+     不是因为那行难看，是因为它属于软件研发概念 —— 通用工作区里不该出现。
+   · 「研发面板」定位文案写清「软件研发项目专属」，工作台磁贴与插件详情同名同文案，
+     不在两处说两遍。
+   · 研发面板只读：只摆「纳管情况 + 版本清单」，没有写接口、没有动作按钮。
+
+   这份稿只画本次三处改动涉及的面，不重画全站。
+   配色 / 字号 / 圆角沿用 apps/web/style.css 的 v1.0.1 token。
+   ═══════════════════════════════════════════════════════════════ */
+
+:root {
+  color-scheme: dark;
+  --bg: #08090a;
+  --rail: #0b0b0d;
+  --side: #0d0e10;
+  --panel: #111214;
+  --line: #202225;
+  --line-soft: #1a1b1e;
+  --text: #e8e9ea;
+  --dim: #9b9ea3;
+  --dim-2: #6b6e73;
+  --label: #9b9ea3;          /* 档案行标签：深色下与 --dim 同档 */
+  --accent: #0a84ff;
+  --ok: #3fb950;
+  --bad: #f85149;
+  --warn: #d29922;
+  --chip: #1a1b1e;
+  --hover: #16171a;
+  --input: #0d0e10;
+  --well: #0f1013;
+  --r-row: 6px;
+  --r-panel: 8px;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Microsoft YaHei", "Source Han Sans SC", sans-serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: #f7f8f9;
+  --rail: #f0f1f3;
+  --side: #fcfcfd;
+  --panel: #ffffff;
+  --line: #e4e6e9;
+  --line-soft: #eaeaec;
+  --text: #1a1c1f;
+  --dim: #5f646c;
+  --dim-2: #7e838b;
+  --label: #545860;          /* 浅色次级灰：比旧 --dim 深一档，去掉过浅的 --dim-2 这一档 */
+  --accent: #0066cc;
+  --ok: #12813c;
+  --bad: #cf222e;
+  --warn: #8a5b00;
+  --chip: #f2f4f6;
+  --hover: #f2f3f5;
+  --input: #ffffff;
+  --well: #eceef1;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: #0b0c0e;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── 文档页头（只属于这份稿，不属产品 UI） ── */
+.doc {
+  max-width: 1600px;
+  margin: 0 auto;
+  padding: 34px 30px 90px;
+}
+.doc-head { margin-bottom: 28px; }
+.doc-eyebrow {
+  font-size: 11px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase;
+  color: var(--accent); margin-bottom: 10px;
+}
+.doc-head h1 { margin: 0 0 12px; font-size: 30px; line-height: 1.2; font-weight: 600; letter-spacing: -.02em; }
+.doc-head p { margin: 0 0 18px; max-width: 860px; color: var(--dim); font-size: 13.5px; }
+.doc-decision {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;
+  margin-top: 20px;
+}
+.decision {
+  border: 1px solid var(--line); border-radius: var(--r-panel);
+  background: #101113; padding: 13px 15px;
+}
+:root[data-theme='light'] .decision { background: #fff; }
+.decision b { display: block; font-size: 12px; color: var(--text); margin-bottom: 4px; }
+.decision span { font-size: 12px; color: var(--dim); line-height: 1.6; display: block; }
+.decision .n { font-family: var(--mono); color: var(--dim-2); font-size: 11px; margin-right: 6px; }
+
+/* 主题切换（仅设计稿用） */
+.theme-toggle {
+  position: fixed; right: 22px; top: 22px; z-index: 99;
+  height: 30px; padding: 0 13px; border-radius: 99px;
+  border: 1px solid var(--line); background: var(--panel); color: var(--dim);
+  font: inherit; font-size: 12px; cursor: pointer;
+}
+.theme-toggle:hover { color: var(--text); border-color: var(--accent); }
+
+/* ── 画板容器：多屏横向并排 ── */
+.canvas {
+  display: flex; flex-wrap: wrap; gap: 26px; align-items: flex-start;
+}
+.artboard { margin: 0; flex: 0 0 auto; }
+.artboard figcaption {
+  display: flex; align-items: baseline; gap: 10px;
+  margin: 0 0 8px; font-size: 12.5px;
+}
+.artboard figcaption .k { font-weight: 600; color: var(--text); }
+.artboard figcaption .m { color: var(--dim-2); font-size: 11.5px; }
+
+.screen {
+  position: relative; overflow: hidden; background: var(--bg);
+  border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: 0 14px 40px rgba(0,0,0,.35);
+}
+:root[data-theme='light'] .screen { box-shadow: 0 14px 40px rgba(20,24,40,.12); }
+
+.notes {
+  list-style: none; margin: 10px 0 0; padding: 10px 12px;
+  border-left: 2px solid var(--accent);
+  background: #101113; border-radius: 0 var(--r-panel) var(--r-panel) 0;
+  max-width: 1440px;
+}
+:root[data-theme='light'] .notes { background: #fff; }
+.notes li { font-size: 11.5px; color: var(--dim); margin: 2px 0; line-height: 1.6; }
+.notes b { color: var(--text); font-weight: 600; }
+.notes .go { color: var(--accent); }
+
+/* ── 应用骨架（按真实三栏复刻） ── */
+.app { display: grid; height: 100%; }
+.app.three { grid-template-columns: 68px 300px minmax(0,1fr); }
+.app.two { grid-template-columns: 68px minmax(0,1fr); }
+
+.rail {
+  background: var(--rail); border-right: 1px solid var(--line);
+  display: flex; flex-direction: column; align-items: center; padding: 12px 0; gap: 6px;
+}
+.rail-logo {
+  width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center;
+  font-weight: 700; color: #fff; background: linear-gradient(135deg, #4b6cb7, #182848);
+  margin-bottom: 10px;
+}
+.nav-btn {
+  width: 56px; border: 0; background: transparent; color: var(--dim); cursor: pointer;
+  display: grid; justify-items: center; gap: 3px; padding: 8px 0; border-radius: 10px;
+  font: inherit; font-size: 11px;
+}
+.nav-btn:hover { background: #131416; color: var(--text); }
+:root[data-theme='light'] .nav-btn:hover { background: #e6e8ec; }
+.nav-btn.active { color: var(--accent); background: #17233f; }
+:root[data-theme='light'] .nav-btn.active { background: #e9f0fd; }
+.nav-btn svg { width: 21px; height: 21px; }
+.rail .spacer { flex: 1; }
+
+/* 左栏 */
+.list-panel {
+  background: var(--side); border-right: 1px solid var(--line);
+  display: grid; grid-template-rows: auto auto 1fr auto; min-height: 0;
+}
+.list-head { padding: 13px 16px 8px; display: flex; align-items: center; gap: 8px; min-width: 0; }
+.list-title { display: flex; align-items: center; gap: 0; min-width: 0; flex: 1; overflow: hidden; }
+.list-title > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.crumb { color: var(--dim); font-size: 13px; font-weight: 600; cursor: pointer; }
+.crumb:hover { color: var(--text); }
+.crumb.cur { color: var(--text); }
+.crumb-sep { color: var(--dim-2); flex: 0 0 auto; margin: 0 3px; }
+.list-add {
+  flex: 0 0 auto; width: 24px; height: 24px; border: 0; border-radius: 6px;
+  background: transparent; color: var(--dim); cursor: pointer; font-size: 17px; line-height: 1;
+}
+.list-add:hover { background: var(--hover); color: var(--text); }
+.list-search { padding: 0 12px 8px; }
+.search-box {
+  width: 100%; height: 28px; padding: 0 10px; border-radius: var(--r-row);
+  border: 1px solid var(--line); background: var(--input); color: var(--text);
+  font: inherit; font-size: 12.5px; outline: none;
+}
+.search-box::placeholder { color: var(--dim-2); }
+.list-body { min-height: 0; overflow: auto; padding: 0 8px; }
+.item {
+  display: flex; align-items: center; gap: 9px; padding: 7px 8px;
+  border-radius: var(--r-row); cursor: pointer;
+}
+.item:hover { background: var(--hover); }
+.item.active { background: var(--hover); }
+.item .who { min-width: 0; flex: 1; }
+.line1 { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.line1 b { font-size: 13.5px; font-weight: 500; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.line2 { font-size: 12px; color: var(--dim); margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); }
+.badge {
+  flex: 0 0 auto; font-size: 10.5px; color: var(--dim); border: 1px solid var(--line);
+  border-radius: 6px; padding: 0 5px; line-height: 16px; white-space: nowrap;
+}
+.badge.built { color: var(--accent); border-color: rgba(10,132,255,.4); }
+.list-foot { padding: 9px 16px; border-top: 1px solid var(--line-soft); font-size: 11.5px; color: var(--dim-2); }
+
+/* 主区 */
+.main { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
+.detail { min-height: 0; overflow: auto; padding: 20px 26px 44px; }
+.detail-body { max-width: 980px; margin: 0 auto; }
+
+/* p-head */
+.p-head { display: flex; align-items: flex-start; gap: 14px; }
+.p-head-main { flex: 1; min-width: 0; }
+.p-head h2 { margin: 0; font-size: 20px; font-weight: 600; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.p-meta { margin-top: 5px; display: flex; align-items: center; gap: 6px; }
+.pill {
+  display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 99px;
+  border: 1px solid var(--line); background: var(--chip); color: var(--dim); font-size: 11.5px;
+  font-family: var(--mono);
+}
+.pill.role { color: var(--accent); border-color: rgba(10,132,255,.35); background: rgba(10,132,255,.1); }
+/* 目录 pill：整颗可点复制路径。hover 给边框回音，复制成功给「已复制」回执。 */
+.pill.copy-pill { cursor: pointer; user-select: none; }
+.pill.copy-pill:hover { color: var(--text); border-color: var(--accent); }
+.pill.copy-pill:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pill.copy-pill[aria-pressed='true'] {
+  color: var(--ok);
+  border-color: rgba(63,185,80,.5);
+  background: rgba(63,185,80,.12);
+}
+.hero-actions { display: flex; gap: 8px; align-items: center; }
+.btn {
+  height: 28px; padding: 0 12px; border-radius: var(--r-row);
+  border: 1px solid var(--line); background: var(--panel); color: var(--dim);
+  font: inherit; font-size: 12.5px; cursor: pointer; white-space: nowrap;
+}
+.btn:hover { border-color: var(--accent); color: var(--text); }
+.btn.primary { background: #0071e3; border-color: transparent; color: #fff; }
+:root[data-theme='light'] .btn.primary { background: #0066cc; }
+.btn.danger { color: var(--bad); border-color: rgba(248,81,73,.35); }
+
+/* 档案区 */
+.group { border: 1px solid var(--line); border-radius: var(--r-panel); background: var(--panel); overflow: hidden; }
+.group + .group { margin-top: 14px; }
+.group-title { font-size: 13px; font-weight: 600; padding: 11px 14px; border-bottom: 1px solid var(--line); }
+.form-row {
+  display: grid; grid-template-columns: 132px minmax(0,1fr); gap: 12px;
+  padding: 11px 14px; align-items: center;
+}
+.form-row + .form-row { border-top: 1px solid var(--line-soft); }
+.form-row.top { align-items: start; }
+.form-row.top > .row-label { padding-top: 8px; }
+.row-label { font-size: 13px; color: var(--label); }
+.row-label .hint { display: block; font-size: 11px; color: var(--label); font-weight: 400; margin-top: 2px; }
+.form-row .field, .form-row .field-box, .form-row input.field {
+  color: var(--text);
+}
+.form-row .field-box.placeholder,
+.form-row .field.placeholder,
+.form-row input.field.placeholder {
+  color: var(--dim-2);
+}
+.field, textarea.field, input.field {
+  width: 100%; border: 1px solid transparent; background: transparent; color: var(--text);
+  font: inherit; font-size: 13px; padding: 0; outline: none; resize: none;
+}
+.field:hover { border-color: transparent; }
+.field.placeholder { color: var(--dim-2); }
+.field-box {
+  border: 1px solid var(--line); background: var(--input); border-radius: var(--r-row);
+  padding: 7px 10px; min-height: 32px;
+}
+textarea.field-box { min-height: 56px; line-height: 1.55; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 7px 0 9px;
+  border-radius: 99px; border: 1px solid var(--line); background: var(--chip); color: var(--dim); font-size: 12px;
+}
+.chip.gone { color: var(--dim-2); }
+.chip.gone .chip-label { text-decoration: line-through; }
+.chip-x { color: var(--dim-2); cursor: pointer; padding: 0 2px; }
+.chip-x:hover { color: var(--bad); }
+.dim { color: var(--dim); }
+.dim-2 { color: var(--dim-2); }
+.counter { font-size: 11px; color: var(--dim-2); margin-top: 7px; }
+.date-row { display: flex; align-items: center; gap: 8px; }
+.date-row .sep { color: var(--dim-2); font-size: 12px; }
+.date-note { font-size: 11.5px; color: var(--dim-2); margin-top: 6px; }
+
+/* tabs */
+.tabs { display: flex; gap: 22px; border-bottom: 1px solid var(--line); margin: 20px 0 16px; }
+.tab { border: 0; background: transparent; color: var(--dim); cursor: pointer; font: inherit; font-size: 13px; padding: 0 2px 10px; }
+.tab.on { color: var(--text); font-weight: 500; box-shadow: inset 0 -2px 0 var(--accent); }
+.stats { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.stat { font-size: 12px; color: var(--dim); border: 1px solid var(--line); border-radius: var(--r-panel); padding: 4px 8px; }
+.stat b { color: var(--text); font-size: 13px; margin-left: 3px; font-weight: 600; }
+.tip { font-size: 12px; color: var(--dim); margin-top: 10px; line-height: 1.6; }
+
+/* ── 研发面板 ── */
+.plg-intro {
+  border: 1px solid var(--line); border-radius: var(--r-panel); background: var(--panel);
+  padding: 14px 16px; font-size: 12.5px; color: var(--dim); line-height: 1.7;
+}
+.plg-intro b { color: var(--text); }
+.kv { border: 1px solid var(--line); border-radius: var(--r-panel); background: var(--panel); overflow: hidden; }
+.kv-row { display: flex; gap: 12px; padding: 10px 14px; align-items: baseline; }
+.kv-row + .kv-row { border-top: 1px solid var(--line-soft); }
+.kv-row > span { flex: 0 0 110px; color: var(--dim); font-size: 12.5px; }
+.kv-row > b { flex: 1; min-width: 0; font-weight: 400; color: var(--text); font-size: 12.5px; overflow-wrap: anywhere; text-align: right; }
+.kv-row > b.mono { font-family: var(--mono); font-size: 12px; }
+.kv-row > b.ok { color: var(--ok); }
+.kv-row > b.warn { color: var(--warn); }
+.tbl-wrap { border: 1px solid var(--line); border-radius: var(--r-panel); background: var(--panel); overflow: hidden; }
+.tbl { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 12.5px; }
+.tbl th {
+  text-align: left; font-weight: 500; color: var(--dim); font-size: 11.5px;
+  padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; background: var(--side);
+}
+.tbl td { padding: 10px; border-bottom: 1px solid var(--line-soft); vertical-align: top; min-width: 0; overflow-wrap: anywhere; }
+.tbl tr:last-child td { border-bottom: 0; }
+.tbl td.mono { font-family: var(--mono); font-size: 11.5px; }
+.rel-tag {
+  display: inline-block; font-size: 10.5px; padding: 0 6px; line-height: 17px; border-radius: 99px;
+  border: 1px solid var(--line); color: var(--dim); white-space: nowrap;
+}
+.rel-tag.done { color: var(--ok); border-color: rgba(63,185,80,.4); }
+.rel-tag.no { color: var(--dim-2); }
+.empty-cell { color: var(--dim-2); font-size: 12px; }
+.no-versions {
+  padding: 22px 14px; text-align: center; color: var(--dim-2); font-size: 12px;
+  border: 1px dashed var(--line); border-radius: var(--r-panel); margin-top: 12px;
+}
+
+/* ── 移动 375 骨架 ── */
+.m-app { display: flex; flex-direction: column; height: 100%; background: var(--bg); }
+.m-top {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 8px; height: 44px; padding: 0 12px;
+  border-bottom: 1px solid var(--line); background: var(--side);
+}
+.m-back { border: 0; background: transparent; color: var(--accent); font: inherit; font-size: 12.5px; cursor: pointer; padding: 4px 6px; border-radius: 6px; }
+.m-back:hover { background: var(--hover); }
+.m-title { flex: 1; min-width: 0; font-size: 14px; font-weight: 600; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-act { flex: 0 0 auto; color: var(--dim); font-size: 12.5px; }
+.m-body { flex: 1; min-height: 0; overflow: auto; padding: 14px 14px 24px; }
+.m-h { font-size: 19px; font-weight: 600; margin: 0 0 4px; }
+.m-sub { font-size: 11.5px; color: var(--dim-2); font-family: var(--mono); margin-bottom: 14px; overflow-wrap: anywhere; }
+.m-group { border: 1px solid var(--line); border-radius: var(--r-panel); background: var(--panel); overflow: hidden; margin-bottom: 14px; }
+.m-row { padding: 10px 12px; }
+.m-row + .m-row { border-top: 1px solid var(--line-soft); }
+.m-row .k { display: block; font-size: 11px; color: var(--dim); margin-bottom: 3px; }
+.m-row .v { font-size: 13px; color: var(--text); overflow-wrap: anywhere; }
+.m-row .v.mono { font-family: var(--mono); font-size: 11.5px; }
+.m-list { display: flex; flex-direction: column; gap: 2px; }
+.m-item { padding: 10px 12px; border-radius: var(--r-row); }
+.m-item.active { background: var(--hover); }
+.m-item b { display: block; font-size: 13.5px; font-weight: 500; color: var(--text); }
+.m-item .sub { font-size: 11.5px; color: var(--dim); margin-top: 2px; overflow-wrap: anywhere; }
+
+/* 图例 */
+.legend { display: flex; gap: 16px; flex-wrap: wrap; margin: 22px 0 4px; font-size: 11.5px; color: var(--dim); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+.lg-change { background: var(--accent); }
+.lg-readonly { background: var(--dim-2); }
+
+@media (max-width: 900px) {
+  .doc { padding: 24px 16px 60px; }
+  .doc-decision { grid-template-columns: 1fr; }
+  .screen { transform-origin: top left; }
+}
+</style>
+</head>
+<body>
+<div class="doc">
+
+  <header class="doc-head">
+    <div class="doc-eyebrow">班底 · UI 设计稿 · 2026-10-23</div>
+    <h1>项目模块 与 研发面板 分工改造（PRD v0.2）</h1>
+    <p>三处改动：档案撤掉「迭代版本数」；插件展示名统一「研发面板」；研发面板只保留只读的版本清单。下面每张画板注明每个区域是什么、点了去哪儿。</p>
+    <div class="doc-decision">
+      <div class="decision">
+        <b><span class="n">01</span>档案只留四项</b>
+        <span>「迭代版本数」是软件研发概念，放进通用工作区会让非研发项目多一行看不懂的数字。整行撤掉，后端字段保留给研发面板。</span>
+      </div>
+      <div class="decision">
+        <b><span class="n">02</span>「研发面板」只在一处说清</b>
+        <span>工作台磁贴与插件详情同名、同定位文案「软件研发项目专属」，避免两处各说一遍、说成两个意思。</span>
+      </div>
+      <div class="decision">
+        <b><span class="n">03</span>研发面板 = 只读看板</b>
+        <span>只有「纳管情况 + 版本清单」，没有写接口与动作按钮；读不到 status.yaml 的项目标「未纳管」。</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="legend">
+    <span><i class="lg-change"></i>本次改动 / 交互去向</span>
+    <span><i class="lg-readonly"></i>只读区域</span>
+  </div>
+
+  <div class="canvas">
+
+    <!-- ══════════ 01 · 项目详情（桌面） ══════════ -->
+    <figure class="artboard" style="width:1440px">
+      <figcaption><span class="k">01 · 项目详情</span><span class="m">桌面 1440 × 900 · 档案四项，无「迭代版本数」</span></figcaption>
+      <div class="screen" style="width:1440px;height:900px">
+        <div class="app three" style="height:900px">
+
+          <nav class="rail">
+            <div class="rail-logo">班</div>
+            <button class="nav-btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M4.5 5.8h15v9.4H9.2l-4.7 3.8z"/></svg>
+              <span>消息</span>
+            </button>
+            <button class="nav-btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="9.2" cy="8.4" r="3.2"/><path d="M3.6 19c0-2.9 2.4-5 5.6-5s5.6 2.1 5.6 5"/><circle cx="17.3" cy="9.6" r="2.3"/><path d="M16 19c0-2.1.9-3.6 2.7-4.1"/></svg>
+              <span>通讯录</span>
+            </button>
+            <button class="nav-btn active">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="3.4" y="3.4" width="7.2" height="7.2" rx="1.8"/><rect x="13.4" y="3.4" width="7.2" height="7.2" rx="1.8"/><rect x="3.4" y="13.4" width="7.2" height="7.2" rx="1.8"/><rect x="13.4" y="13.4" width="7.2" height="7.2" rx="1.8"/></svg>
+              <span>工作台</span>
+            </button>
+            <div class="spacer"></div>
+            <button class="nav-btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M12 2.8v2M12 19.2v2M2.8 12h2M19.2 12h2M5.5 5.5l1.4 1.4M17.1 17.1l1.4 1.4M18.5 5.5l-1.4 1.4M6.9 17.1l-1.4 1.4"/></svg>
+              <span>设置</span>
+            </button>
+          </nav>
+
+          <aside class="list-panel">
+            <div class="list-head">
+              <div class="list-title">
+                <span class="crumb">工作台</span><span class="crumb-sep">›</span><span class="crumb cur">项目</span>
+              </div>
+              <button class="list-add" title="新建项目">＋</button>
+            </div>
+            <div class="list-search"><input class="search-box" placeholder="搜项目…" /></div>
+            <div class="list-body">
+              <div class="item active">
+                <div class="who">
+                  <div class="line1"><b>班底</b><span class="badge built">内置</span></div>
+                  <div class="line2">E:\02CodeSpace\github\bandi</div>
+                </div>
+              </div>
+              <div class="item">
+                <div class="who">
+                  <div class="line1"><b>喜儿</b></div>
+                  <div class="line2">E:\work\喜儿</div>
+                </div>
+              </div>
+              <div class="item">
+                <div class="who">
+                  <div class="line1"><b>运维手册</b></div>
+                  <div class="line2">E:\ops\runbook</div>
+                </div>
+              </div>
+              <div class="item">
+                <div class="who">
+                  <div class="line1"><b>装修 · 新家</b></div>
+                  <div class="line2">D:\home\renovation</div>
+                </div>
+              </div>
+            </div>
+            <div class="list-foot">已归档（3）</div>
+          </aside>
+
+          <main class="main">
+            <div class="detail">
+              <div class="detail-body">
+                <div class="p-head">
+                  <div class="p-head-main">
+                    <h2>班底 <span class="pill role">内置</span></h2>
+                    <div class="p-meta">
+                      <button type="button" class="pill copy-pill" data-path="E:\02CodeSpace\github\bandi" title="点击复制路径">E:\02CodeSpace\github\bandi</button>
+                    </div>
+                  </div>
+                  <div class="hero-actions">
+                    <button class="btn primary">任务</button>
+                    <button class="btn danger">删除</button>
+                  </div>
+                </div>
+
+                <!-- 档案：只有四项。改动 2 在这里 —— 不出现「迭代版本数」 -->
+                <div class="group" style="margin-top:18px">
+                  <div class="group-title">项目档案 · 改了自动存</div>
+                  <div class="form-row top">
+                    <div class="row-label">干什么<span class="hint">一句话说清用途</span></div>
+                    <textarea class="field-box">班底：给 AI 员工派活的协同工作台。</textarea>
+                  </div>
+                  <div class="form-row">
+                    <div class="row-label">项目经理</div>
+                    <div class="field">马超</div>
+                  </div>
+                  <div class="form-row top">
+                    <div class="row-label">成员</div>
+                    <div>
+                      <div class="chips">
+                        <span class="chip">马超<button class="chip-x" title="移出成员">×</button></span>
+                        <span class="chip">星宇<button class="chip-x" title="移出成员">×</button></span>
+                        <span class="chip">我<button class="chip-x" title="移出成员">×</button></span>
+                        <span class="chip" style="color:var(--dim-2)">＋ 添加</span>
+                      </div>
+                      <div class="counter">成员按点选的先后排；一个人只能占一格。</div>
+                    </div>
+                  </div>
+                  <div class="form-row">
+                    <div class="row-label">开始 / 结束</div>
+                    <div>
+                      <div class="date-row">
+                        <span class="field-box" style="flex:0 0 130px">2026-10-01</span>
+                        <span class="sep">至</span>
+                        <span class="field-box" style="flex:0 0 130px">进行中</span>
+                      </div>
+                      <div class="date-note">结束日期没填＝进行中</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="tabs">
+                  <button class="tab on">基础信息</button>
+                  <button class="tab">项目规章</button>
+                </div>
+
+                <div class="group">
+                  <div class="group-title">基础信息</div>
+                  <div class="form-row"><div class="row-label">项目名称</div><div class="field">班底</div></div>
+                  <div class="form-row"><div class="row-label">工作目录</div><div class="field" style="font-family:var(--mono)">E:\02CodeSpace\github\bandi</div></div>
+                  <div class="form-row"><div class="row-label">项目说明</div><div class="field">构建命令、备注…</div></div>
+                </div>
+
+                <div class="stats">
+                  <span class="stat">任务共 <b>18</b></span>
+                  <span class="stat">待人确认 <b>2</b></span>
+                  <span class="stat">停下等人 <b>1</b></span>
+                  <span class="stat">失败 <b>0</b></span>
+                  <span class="stat">流程实例 <b>7</b></span>
+                  <span class="stat">聊天派活 <b>11</b></span>
+                </div>
+                <div class="tip">点右上角「任务」进这个项目的看板。版本记录不在这儿 —— 去工作台的「研发面板」看。</div>
+              </div>
+            </div>
+          </main>
+        </div>
+      </div>
+      <ul class="notes">
+        <li><b>档案区</b>只保留四项，「迭代版本数」整行已撤 —— 通用工作区不出现软件研发概念。</li>
+        <li><b>档案四行</b>都改了自动存；成员 chip 的 × 移出，＋ 添加打开选人。</li>
+        <li><b>目录 pill</b>整颗可点：点击复制路径，成功显示「已复制」并 2 秒后还原。</li>
+        <li><b>起止时间</b>不加「跨年」标记；开始填了就原样显示，结束没填显示「进行中」。</li>
+        <li><b>右上「任务」</b>进项目看板；<b>「删除」</b>只在非内置项目显示（内置项目无此按钮）。</li>
+        <li><b>未画</b>：项目为空的左栏空态、名称/目录超长态（基础信息仍按现有省略号兜底）。</li>
+      </ul>
+    </figure>
+
+    <!-- ══════════ 02 · 研发面板（桌面） ══════════ -->
+    <figure class="artboard" style="width:1440px">
+      <figcaption><span class="k">02 · 研发面板</span><span class="m">桌面 1440 × 900 · 已纳管 · 只读版本清单</span></figcaption>
+      <div class="screen" style="width:1440px;height:900px">
+        <div class="app three" style="height:900px">
+
+          <nav class="rail">
+            <div class="rail-logo">班</div>
+            <button class="nav-btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M4.5 5.8h15v9.4H9.2l-4.7 3.8z"/></svg>
+              <span>消息</span>
+            </button>
+            <button class="nav-btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="9.2" cy="8.4" r="3.2"/><path d="M3.6 19c0-2.9 2.4-5 5.6-5s5.6 2.1 5.6 5"/><circle cx="17.3" cy="9.6" r="2.3"/><path d="M16 19c0-2.1.9-3.6 2.7-4.1"/></svg>
+              <span>通讯录</span>
+            </button>
+            <button class="nav-btn active">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="3.4" y="3.4" width="7.2" height="7.2" rx="1.8"/><rect x="13.4" y="3.4" width="7.2" height="7.2" rx="1.8"/><rect x="3.4" y="13.4" width="7.2" height="7.2" rx="1.8"/><rect x="13.4" y="13.4" width="7.2" height="7.2" rx="1.8"/></svg>
+              <span>工作台</span>
+            </button>
+            <div class="spacer"></div>
+            <button class="nav-btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M12 2.8v2M12 19.2v2M2.8 12h2M19.2 12h2M5.5 5.5l1.4 1.4M17.1 17.1l1.4 1.4M18.5 5.5l-1.4 1.4M6.9 17.1l-1.4 1.4"/></svg>
+              <span>设置</span>
+            </button>
+          </nav>
+
+          <aside class="list-panel">
+            <div class="list-head">
+              <div class="list-title">
+                <span class="crumb">工作台</span><span class="crumb-sep">›</span><span class="crumb cur">研发面板</span>
+              </div>
+            </div>
+            <div class="list-body" style="padding-top:8px">
+              <div class="item active">
+                <div class="who">
+                  <div class="line1"><b>班底</b></div>
+                  <div class="line2">已纳管 · 3 个版本</div>
+                </div>
+              </div>
+              <div class="item">
+                <div class="who">
+                  <div class="line1"><b>运维手册</b></div>
+                  <div class="line2">已纳管 · 1 个版本</div>
+                </div>
+              </div>
+              <div class="item">
+                <div class="who">
+                  <div class="line1"><b>喜儿</b></div>
+                  <div class="line2" style="color:var(--warn)">未纳管 · 找不到进度文件</div>
+                </div>
+              </div>
+            </div>
+            <div class="list-foot">只读看板 · 没有写接口</div>
+          </aside>
+
+          <main class="main">
+            <div class="detail">
+              <div class="detail-body">
+                <div class="p-head">
+                  <div class="p-head-main">
+                    <h2>班底</h2>
+                    <div class="p-meta">
+                      <button type="button" class="pill copy-pill" data-path="E:\02CodeSpace\github\bandi" title="点击复制路径">E:\02CodeSpace\github\bandi</button>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="plg-intro" style="margin-top:18px">
+                  <b>软件研发项目专属。</b>只读看板：项目清单来自「项目」账本，版本记录现读各项目根下的
+                  <span style="font-family:var(--mono)">.bandi/status.yaml</span>。它不改项目文件，也没有写接口 —— 部署、发布交给数字员工在会话里做，这里只留记录。
+                </div>
+
+                <div class="group" style="margin-top:14px">
+                  <div class="group-title">纳管情况</div>
+                  <div class="kv-row"><span>项目名</span><b>班底</b></div>
+                  <div class="kv-row"><span>目录</span><b class="mono">E:\02CodeSpace\github\bandi</b></div>
+                  <div class="kv-row"><span>进度文件</span><b class="mono">.bandi/status.yaml</b></div>
+                  <div class="kv-row"><span>纳管状态</span><b class="ok">已纳管</b></div>
+                  <div class="kv-row"><span>进度文件更新</span><b>2026-10-23 14:20</b></div>
+                  <div class="kv-row"><span>版本</span><b>3</b></div>
+                  <div class="kv-row"><span>已发布版本</span><b>2</b></div>
+                </div>
+
+                <div class="tbl-wrap" style="margin-top:14px">
+                  <div class="group-title" style="border-bottom:1px solid var(--line)">版本</div>
+                  <table class="tbl">
+                    <colgroup>
+                      <col style="width:66px" /><col /><col style="width:70px" /><col style="width:180px" /><col style="width:380px" />
+                    </colgroup>
+                    <thead>
+                      <tr><th>版本</th><th>主题</th><th>发布</th><th>发布记录</th><th>这一版要做什么（摘自版本文档）</th></tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td class="mono">v1.0.1</td>
+                        <td>全站 Linear · 会话改造</td>
+                        <td><span class="rel-tag done">已发布</span></td>
+                        <td class="mono">docs/releases/v1.0.1.md</td>
+                        <td>消息页去气泡尾巴；工作台磁贴改行式；看板列头只留一个状态点。</td>
+                      </tr>
+                      <tr>
+                        <td class="mono">v1.0.0</td>
+                        <td>项目模块与研发面板分工</td>
+                        <td><span class="rel-tag no">未发布</span></td>
+                        <td class="empty-cell">—</td>
+                        <td>项目档案回归四项；「项目面板」改名「研发面板」，范围收敛为只读版本清单。</td>
+                      </tr>
+                      <tr>
+                        <td class="mono">v0.9.0</td>
+                        <td>局域网加入总机</td>
+                        <td><span class="rel-tag done">已发布</span></td>
+                        <td class="mono">docs/releases/v0.9.0.md</td>
+                        <td>总机接入、桌面壳探测、密钥托管。发布记录路径过长时靠省略号收尾，悬停看全文。</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                <div class="tip">版本清单只读，没有任何动作按钮。左边选中「喜儿」这类未纳管项目时，右侧换成「未纳管」说明。</div>
+              </div>
+            </div>
+          </main>
+        </div>
+      </div>
+      <ul class="notes">
+        <li><b>左栏</b>是平台「项目」账本里的项目；<b>点某一行</b>就地换右侧详情，不整页跳。</li>
+        <li><b>纳管情况 / 版本</b>全部只读，没有「新增、编辑、删除、发布」按钮 —— 写操作不在这里。</li>
+        <li><b>发布记录</b>是等宽长字符串，列宽固定，超长省略号收尾、悬停看全文，绝不顶列。</li>
+        <li><b>未画</b>：进度文件更新的加载态、接口报错态（整块显示错误，不白屏）。</li>
+      </ul>
+    </figure>
+
+    <!-- ══════════ 03 · 项目详情 · 空态 / 异常态（桌面） ══════════ -->
+    <figure class="artboard" style="width:1440px">
+      <figcaption><span class="k">03 · 项目详情 · 空态 / 异常态</span><span class="m">桌面 1440 × 900 · 未填写 / 成员已不在 / 开始时间未填</span></figcaption>
+      <div class="screen" style="width:1440px;height:900px">
+        <div class="app three" style="height:900px">
+
+          <nav class="rail">
+            <div class="rail-logo">班</div>
+            <button class="nav-btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M4.5 5.8h15v9.4H9.2l-4.7 3.8z"/></svg><span>消息</span>
+            </button>
+            <button class="nav-btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="9.2" cy="8.4" r="3.2"/><path d="M3.6 19c0-2.9 2.4-5 5.6-5s5.6 2.1 5.6 5"/><circle cx="17.3" cy="9.6" r="2.3"/><path d="M16 19c0-2.1.9-3.6 2.7-4.1"/></svg><span>通讯录</span>
+            </button>
+            <button class="nav-btn active">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="3.4" y="3.4" width="7.2" height="7.2" rx="1.8"/><rect x="13.4" y="3.4" width="7.2" height="7.2" rx="1.8"/><rect x="3.4" y="13.4" width="7.2" height="7.2" rx="1.8"/><rect x="13.4" y="13.4" width="7.2" height="7.2" rx="1.8"/></svg><span>工作台</span>
+            </button>
+            <div class="spacer"></div>
+            <button class="nav-btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M12 2.8v2M12 19.2v2M2.8 12h2M19.2 12h2M5.5 5.5l1.4 1.4M17.1 17.1l1.4 1.4M18.5 5.5l-1.4 1.4M6.9 17.1l-1.4 1.4"/></svg><span>设置</span>
+            </button>
+          </nav>
+
+          <aside class="list-panel">
+            <div class="list-head">
+              <div class="list-title"><span class="crumb">工作台</span><span class="crumb-sep">›</span><span class="crumb cur">项目</span></div>
+              <button class="list-add" title="新建项目">＋</button>
+            </div>
+            <div class="list-body" style="padding-top:8px">
+              <div class="item">
+                <div class="who"><div class="line1"><b>班底</b><span class="badge built">内置</span></div><div class="line2">E:\02CodeSpace\github\bandi</div></div>
+              </div>
+              <div class="item active">
+                <div class="who"><div class="line1"><b>装修 · 新家</b></div><div class="line2">D:\home\renovation</div></div>
+              </div>
+              <div class="item">
+                <div class="who"><div class="line1"><b>运维手册</b></div><div class="line2">E:\ops\runbook</div></div>
+              </div>
+            </div>
+            <div class="list-foot">已归档（3）</div>
+          </aside>
+
+          <main class="main">
+            <div class="detail">
+              <div class="detail-body">
+                <div class="p-head">
+                  <div class="p-head-main">
+                    <h2>装修 · 新家</h2>
+                    <div class="p-meta">
+                      <button type="button" class="pill copy-pill" data-path="D:\home\renovation" title="点击复制路径">D:\home\renovation</button>
+                    </div>
+                  </div>
+                  <div class="hero-actions"><button class="btn primary">任务</button><button class="btn danger">删除</button></div>
+                </div>
+
+                <div class="group" style="margin-top:18px">
+                  <div class="group-title">项目档案 · 改了自动存</div>
+                  <div class="form-row top">
+                    <div class="row-label">干什么</div>
+                    <div class="field-box placeholder">一句话说清这个项目是做什么的</div>
+                  </div>
+                  <div class="form-row">
+                    <div class="row-label">项目经理</div>
+                    <div class="dim-2" style="font-size:12px">未填写</div>
+                  </div>
+                  <div class="form-row top">
+                    <div class="row-label">成员</div>
+                    <div>
+                      <div class="chips">
+                        <span class="chip gone"><span class="chip-label">那个人已经不在了</span><button class="chip-x" title="移出成员">×</button></span>
+                        <span class="chip" style="color:var(--dim-2)">＋ 添加</span>
+                      </div>
+                      <div class="counter">填过但那个人被删了，就压灰划掉 —— 名单是「当时有谁」的事实。</div>
+                    </div>
+                  </div>
+                  <div class="form-row">
+                    <div class="row-label">开始 / 结束</div>
+                    <div>
+                      <div class="date-row">
+                        <span class="field-box placeholder" style="flex:0 0 130px">未填</span>
+                        <span class="sep">至</span>
+                        <span class="field-box placeholder" style="flex:0 0 130px">未填</span>
+                      </div>
+                      <div class="date-note">开始时间未填，按建档时间 2026-10-23 算</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="tabs"><button class="tab on">基础信息</button><button class="tab">项目规章</button></div>
+                <div class="group">
+                  <div class="group-title">基础信息</div>
+                  <div class="form-row"><div class="row-label">项目名称</div><div class="field">装修 · 新家</div></div>
+                  <div class="form-row"><div class="row-label">工作目录</div><div class="field" style="font-family:var(--mono)">D:\home\renovation</div></div>
+                </div>
+                <div class="stats">
+                  <span class="stat">任务共 <b>0</b></span>
+                  <span class="stat">流程实例 <b>0</b></span>
+                </div>
+              </div>
+            </div>
+          </main>
+        </div>
+      </div>
+      <ul class="notes">
+        <li><b>未填写</b>：读不到就说「未填写」，不猜、不留空。</li>
+        <li><b>那个人已经不在了</b>：填过但员工被删，保留灰名并划掉，标清不是「没配项目经理」。</li>
+        <li><b>开始时间未填</b>：退回建档时间并标出处，两者可能差很远，不能混成一个数字。</li>
+        <li><b>浅色灰阶</b>：档案行标签收成次级灰（label 用 --label，值用主文本色），去掉过浅的 --dim-2 这一档。</li>
+      </ul>
+    </figure>
+
+    <!-- ══════════ 04 · 研发面板 · 未纳管（桌面） ══════════ -->
+    <figure class="artboard" style="width:1440px">
+      <figcaption><span class="k">04 · 研发面板 · 未纳管 / 无版本</span><span class="m">桌面 1440 × 900 · 读不到 status.yaml</span></figcaption>
+      <div class="screen" style="width:1440px;height:900px">
+        <div class="app three" style="height:900px">
+
+          <nav class="rail">
+            <div class="rail-logo">班</div>
+            <button class="nav-btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M4.5 5.8h15v9.4H9.2l-4.7 3.8z"/></svg><span>消息</span>
+            </button>
+            <button class="nav-btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="9.2" cy="8.4" r="3.2"/><path d="M3.6 19c0-2.9 2.4-5 5.6-5s5.6 2.1 5.6 5"/><circle cx="17.3" cy="9.6" r="2.3"/><path d="M16 19c0-2.1.9-3.6 2.7-4.1"/></svg><span>通讯录</span>
+            </button>
+            <button class="nav-btn active">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="3.4" y="3.4" width="7.2" height="7.2" rx="1.8"/><rect x="13.4" y="3.4" width="7.2" height="7.2" rx="1.8"/><rect x="3.4" y="13.4" width="7.2" height="7.2" rx="1.8"/><rect x="13.4" y="13.4" width="7.2" height="7.2" rx="1.8"/></svg><span>工作台</span>
+            </button>
+            <div class="spacer"></div>
+            <button class="nav-btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M12 2.8v2M12 19.2v2M2.8 12h2M19.2 12h2M5.5 5.5l1.4 1.4M17.1 17.1l1.4 1.4M18.5 5.5l-1.4 1.4M6.9 17.1l-1.4 1.4"/></svg><span>设置</span>
+            </button>
+          </nav>
+
+          <aside class="list-panel">
+            <div class="list-head">
+              <div class="list-title"><span class="crumb">工作台</span><span class="crumb-sep">›</span><span class="crumb cur">研发面板</span></div>
+            </div>
+            <div class="list-body" style="padding-top:8px">
+              <div class="item"><div class="who"><div class="line1"><b>班底</b></div><div class="line2">已纳管 · 3 个版本</div></div></div>
+              <div class="item"><div class="who"><div class="line1"><b>运维手册</b></div><div class="line2">已纳管 · 1 个版本</div></div></div>
+              <div class="item active"><div class="who"><div class="line1"><b>喜儿</b></div><div class="line2" style="color:var(--warn)">未纳管 · 找不到进度文件</div></div></div>
+              <div class="item"><div class="who"><div class="line1"><b>装修 · 新家</b></div><div class="line2" style="color:var(--warn)">未纳管 · 找不到进度文件</div></div></div>
+            </div>
+            <div class="list-foot">只读看板 · 没有写接口</div>
+          </aside>
+
+          <main class="main">
+            <div class="detail">
+              <div class="detail-body">
+                <div class="p-head">
+                  <div class="p-head-main">
+                    <h2>喜儿</h2>
+                    <div class="p-meta"><span class="pill">E:\work\喜儿</span></div>
+                  </div>
+                </div>
+
+                <div class="plg-intro" style="margin-top:18px">
+                  <b>软件研发项目专属。</b>只读看板：项目清单来自「项目」账本，版本记录现读各项目根下的
+                  <span style="font-family:var(--mono)">.bandi/status.yaml</span>。读不到进度文件的项目标「未纳管」。
+                </div>
+
+                <div class="group" style="margin-top:14px">
+                  <div class="group-title">纳管情况</div>
+                  <div class="kv-row"><span>项目名</span><b>喜儿</b></div>
+                  <div class="kv-row"><span>目录</span><b class="mono">E:\work\喜儿</b></div>
+                  <div class="kv-row"><span>进度文件</span><b class="mono">.bandi/status.yaml</b></div>
+                  <div class="kv-row"><span>纳管状态</span><b class="warn">未纳管 · 找不到进度文件</b></div>
+                  <div class="kv-row"><span>进度文件更新</span><b class="dim-2">—</b></div>
+                  <div class="kv-row"><span>版本</span><b class="dim-2">未纳管</b></div>
+                  <div class="kv-row"><span>已发布版本</span><b class="dim-2">—</b></div>
+                </div>
+
+                <div class="no-versions">没有版本记录 —— 在项目根放一个 .bandi/status.yaml 后，这里会自己读出来。</div>
+              </div>
+            </div>
+          </main>
+        </div>
+      </div>
+      <ul class="notes">
+        <li><b>未纳管</b>时版本数字显示「未纳管」而不是「0」—— 0 个版本和读不到是两件事，不能混。</li>
+        <li><b>不自动删</b>：读不到只是标出来，记录不会被清掉。</li>
+      </ul>
+    </figure>
+
+    <!-- ══════════ 05 · 移动 375 · 项目详情 ══════════ -->
+    <figure class="artboard" style="width:375px">
+      <figcaption><span class="k">05 · 项目详情（移动）</span><span class="m">375 × 812 · 单列 · 档案四项</span></figcaption>
+      <div class="screen" style="width:375px;height:812px">
+        <div class="m-app" style="height:812px">
+          <div class="m-top">
+            <button class="m-back">‹ 项目</button>
+            <span class="m-title">项目详情</span>
+            <span class="m-act">任务</span>
+          </div>
+          <div class="m-body">
+            <div class="m-h">班底</div>
+            <div class="m-sub">E:\02CodeSpace\github\bandi</div>
+
+            <div class="m-group">
+              <div class="group-title" style="border:0;border-bottom:1px solid var(--line)">项目档案 · 改了自动存</div>
+              <div class="m-row"><span class="k">干什么</span><span class="v">班底：给 AI 员工派活的协同工作台。</span></div>
+              <div class="m-row"><span class="k">项目经理</span><span class="v">马超</span></div>
+              <div class="m-row"><span class="k">成员</span><span class="v">马超 · 星宇 · 我</span></div>
+              <div class="m-row"><span class="k">开始 / 结束</span><span class="v">2026-10-01 至 进行中</span></div>
+            </div>
+
+            <div class="m-group">
+              <div class="group-title" style="border:0;border-bottom:1px solid var(--line)">任务统计</div>
+              <div class="m-row"><span class="k">任务</span><span class="v">共 18 · 待人确认 2 · 停下等人 1</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <ul class="notes" style="max-width:375px">
+        <li>档案在窄屏仍只有四项，逐项纵排；「迭代版本数」不出现。</li>
+        <li>「任务」回到该项目的看板；「‹ 项目」回项目列表。</li>
+      </ul>
+    </figure>
+
+    <!-- ══════════ 06 · 移动 375 · 研发面板 ══════════ -->
+    <figure class="artboard" style="width:375px">
+      <figcaption><span class="k">06 · 研发面板（移动）</span><span class="m">375 × 812 · 主从纵向 · 只读</span></figcaption>
+      <div class="screen" style="width:375px;height:812px">
+        <div class="m-app" style="height:812px">
+          <div class="m-top">
+            <button class="m-back">‹ 工作台</button>
+            <span class="m-title">研发面板</span>
+            <span class="m-act"></span>
+          </div>
+          <div class="m-body">
+            <div class="m-list m-group" style="border:0;padding:4px">
+              <div class="m-item active"><b>班底</b><span class="sub">已纳管 · 3 个版本</span></div>
+              <div class="m-item"><b>运维手册</b><span class="sub">已纳管 · 1 个版本</span></div>
+              <div class="m-item"><b>喜儿</b><span class="sub" style="color:var(--warn)">未纳管 · 找不到进度文件</span></div>
+            </div>
+
+            <div class="m-h" style="margin-top:6px">班底</div>
+            <div class="m-sub">E:\02CodeSpace\github\bandi</div>
+
+            <div class="plg-intro" style="margin-bottom:12px">软件研发项目专属。只读看板，版本记录现读 .bandi/status.yaml，不改文件、没有写接口。</div>
+
+            <div class="m-group">
+              <div class="group-title" style="border:0;border-bottom:1px solid var(--line)">纳管情况</div>
+              <div class="m-row"><span class="k">纳管状态</span><span class="v" style="color:var(--ok)">已纳管</span></div>
+              <div class="m-row"><span class="k">进度文件</span><span class="v mono">.bandi/status.yaml</span></div>
+              <div class="m-row"><span class="k">版本</span><span class="v">3</span></div>
+              <div class="m-row"><span class="k">已发布版本</span><span class="v">2</span></div>
+            </div>
+
+            <div class="m-group" style="border:0">
+              <div class="group-title" style="border:0;border-bottom:1px solid var(--line)">版本</div>
+              <div class="m-row"><span class="k">v1.0.1 · 已发布</span><span class="v">全站 Linear · 会话改造</span></div>
+              <div class="m-row"><span class="k">v1.0.0 · 未发布</span><span class="v">项目模块与研发面板分工</span></div>
+              <div class="m-row"><span class="k">v0.9.0 · 已发布</span><span class="v">局域网加入总机</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <ul class="notes" style="max-width:375px">
+        <li>桌面主从变窄屏纵向：先项目列表，再当前项目详情。</li>
+        <li>版本行只读，无任何操作按钮。</li>
+      </ul>
+    </figure>
+
+  </div>
+</div>
+
+<button class="theme-toggle" id="tt">浅色</button>
+<script>
+// 目录 pill 复制：点整颗 pill 复制路径，成功给「已复制」回执（2 秒后还原）。
+(function () {
+  var clip = navigator.clipboard;
+  document.querySelectorAll('.copy-pill').forEach(function (el) {
+    var path = el.getAttribute('data-path') || '';
+    var label = el.textContent;
+    el.addEventListener('click', function () {
+      var done = function () {
+        el.textContent = '已复制';
+        el.setAttribute('aria-pressed', 'true');
+        clearTimeout(el.__t);
+        el.__t = setTimeout(function () {
+          el.textContent = label;
+          el.removeAttribute('aria-pressed');
+        }, 2000);
+      };
+      if (clip && clip.writeText) {
+        clip.writeText(path).then(done, done);
+      } else {
+        var ta = document.createElement('textarea');
+        ta.value = path;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand('copy'); } catch (e) {}
+        document.body.removeChild(ta);
+        done();
+      }
+    });
+  });
+})();
+
+(function () {
+  var k = 'bandi.design.theme';
+  var cur = 'dark';
+  try { cur = localStorage.getItem(k) || 'dark'; } catch (e) {}
+  var btn = document.getElementById('tt');
+  function apply(t) {
+    document.documentElement.setAttribute('data-theme', t);
+    btn.textContent = t === 'dark' ? '浅色' : '深色';
+    try { localStorage.setItem(k, t); } catch (e) {}
+  }
+  apply(cur);
+  btn.addEventListener('click', function () {
+    apply(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
+  });
+})();
+</script>
+</body>
+</html>

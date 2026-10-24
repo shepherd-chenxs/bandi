@@ -1,0 +1,183 @@
+<!doctype html>
+<!--
+  桌面壳的**离线兜底页**（2026-10-22）。
+
+  它什么时候出现：窗口还开着，但本地控制面没了（服务被误杀 / 崩了 / 端口上没人回话）。
+  以前这个时候 WebView2 会直接渲染 Edge 原生的「无法访问此页面」——
+  用户看到的是一张浏览器错误页，既不知道发生了什么、也不知道该怎么办。
+
+  谁把它塞进窗口：`src/lib.rs` 的 `watch_service`（后台线程每 1~2 秒探一次 `/api/state`），
+  失败就把 WebView 导航到本文件（经 `include_str!` 编进 exe，**不依赖任何磁盘文件**）。
+  恢复也由那条巡检负责：探通了就导航回控制面，本页不需要做任何事。
+
+  两处 `__BANDI_*__` 占位符由 `lib.rs` 的 `offline_page()` 在运行期替换，**别改名**：
+  target（要跳回去的完整地址，局域网模式下还带着 `?token=…`）、version（版本号）。
+
+  ⚠️ **这一页没有「重试」按钮，是有意为之**（2026-10-22 QA 实测后删掉的）：
+  本页是 `data:` URL，origin 是 opaque（`null`），从它发起的一切网络请求都被浏览器拒掉 ——
+  `fetch('http://127.0.0.1:<port>/api/state', {mode:'no-cors'})` 实测被 Chromium 的
+  本地网络访问（Local Network Access）策略**直接拒绝**（请求 4ms 就失败，端口上的服务好好的
+  也没用）。于是"点了没反应"或"服务其实已经好了、按钮还说没起来"—— 那是在骗用户。
+  同理，`invoke` 也走不通：capability 的 `remote.urls` 匹配不了 `null` origin。
+  所以这一页只做两件事：**把状态说清楚**、**让用户知道不用做什么**；恢复 100% 由 Rust 巡检完成。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="light dark">
+<title>班底 · 正在恢复连接</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    /* 与 lib.rs 里 align_background_with_theme 的两个底色严格一致：换主题时不许有跳色 */
+    --bg: #f7f8f9;
+    --fg: #1f2328;
+    --fg-dim: #6b7280;
+    --card: #ffffff;
+    --line: #e6e8eb;
+    --warn: #b45309;
+    --chip: rgba(31, 35, 40, .06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #08090a;
+      --fg: #e8e8e8;
+      --fg-dim: #9aa0a6;
+      --card: #111214;
+      --line: #26282c;
+      --warn: #f0b429;
+      --chip: rgba(232, 232, 232, .09);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    display: grid;
+    place-items: center;
+    background: var(--bg);
+    color: var(--fg);
+    font: 14px/1.75 system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .card {
+    width: min(560px, calc(100vw - 64px));
+    padding: 40px 44px 32px;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+  }
+  .eyebrow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    letter-spacing: .06em;
+    color: var(--fg-dim);
+  }
+  .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--warn);
+    animation: pulse 1.8s ease-out infinite;
+  }
+  @keyframes pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(240, 180, 41, .45); }
+    70%  { box-shadow: 0 0 0 9px rgba(240, 180, 41, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(240, 180, 41, 0); }
+  }
+  h1 {
+    margin: 14px 0 10px;
+    font-size: 21px;
+    font-weight: 600;
+    letter-spacing: .01em;
+  }
+  p { margin: 0 0 12px; color: var(--fg-dim); }
+  strong { color: var(--fg); font-weight: 600; }
+  .addr {
+    font-family: ui-monospace, SFMono-Regular, Consolas, "Cascadia Mono", monospace;
+    font-size: 12.5px;
+    color: var(--fg);
+    background: var(--chip);
+    border-radius: 6px;
+    padding: 1px 6px;
+  }
+  .status {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin-top: 24px;
+    font-size: 13.5px;
+    color: var(--fg);
+  }
+  .status .quiet { font-size: 12.5px; color: var(--fg-dim); }
+  .hint {
+    margin-top: 24px;
+    padding-top: 16px;
+    border-top: 1px solid var(--line);
+    font-size: 12.5px;
+    color: var(--fg-dim);
+  }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Consolas, "Cascadia Mono", monospace;
+    font-size: 12px;
+  }
+  .foot {
+    margin-top: 10px;
+    font-size: 11.5px;
+    color: var(--fg-dim);
+    opacity: .75;
+  }
+</style>
+</head>
+<body>
+  <main class="card">
+    <div class="eyebrow"><span class="dot"></span><span>本地控制面未连接</span></div>
+    <h1>班底正在重新连接</h1>
+    <p>
+      窗口还开着，但本机的班底服务刚才断开了（<span class="addr" id="addr">127.0.0.1</span>）。
+      <strong>正在自动恢复</strong>，恢复后会自己回到界面 —— 不用关掉这个窗口重开。
+    </p>
+    <p>你看到的这一页是程序自带的兜底页，不是浏览器报错：服务一回来，它就会被替换掉。</p>
+    <div class="status">
+      <span id="status">正在自动恢复…</span>
+      <span class="quiet">无需操作</span>
+    </div>
+    <div class="hint">
+      如果超过一分钟还没恢复：关掉这个窗口，再双击桌面图标重新打开一次即可。<br>
+      想找原因可以看这两个日志：<br>
+      <code>%APPDATA%\bandi\server.log</code>（服务自己说了什么）<br>
+      <code>%APPDATA%\bandi\shell.log</code>（桌面壳挑端口、收摊时的决策）
+    </div>
+    <div class="foot">班底 <span id="ver"></span></div>
+  </main>
+<script>
+(function () {
+  'use strict';
+
+  /* 由 lib.rs 在运行期替换（见文件头那段） */
+  var TARGET = '__BANDI_TARGET__';
+  var VERSION = '__BANDI_VERSION__';
+
+  var statusEl = document.getElementById('status');
+  var addrEl = document.getElementById('addr');
+  document.getElementById('ver').textContent = VERSION;
+
+  /* 只显示 host:port —— 局域网模式下 TARGET 还带着 ?token=…，那个不该摆给人看 */
+  try {
+    addrEl.textContent = new URL(TARGET).host;
+  } catch (e) {
+    addrEl.textContent = TARGET;
+  }
+
+  /* 唯一的动态内容：让用户看到"还在等"是活的，而不是卡死了 */
+  var started = Date.now();
+  setInterval(function () {
+    var s = Math.round((Date.now() - started) / 1000);
+    statusEl.textContent = '正在自动恢复…（已等待 ' + s + ' 秒）';
+  }, 1000);
+})();
+</script>
+</body>
+</html>

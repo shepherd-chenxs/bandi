@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
 
 /**
  * 服务器登记表（~/.bandi/servers.yaml）的读写。
@@ -15,6 +16,18 @@ export const expandHome = (p) =>
   String(p).startsWith('~/') || String(p).startsWith('~\\') ? path.join(os.homedir(), String(p).slice(2)) : String(p);
 
 export const REGISTRY_PATH = expandHome(process.env.BANDI_SSH_REGISTRY || '~/.bandi/servers.yaml');
+
+/**
+ * 用户输入不合法（**这条 message 是写给用户看的**，如「地址不要带协议头。」）。
+ *
+ * 为什么要带 `status`/`code`：以前这类 throw 到 HTTP 层被统一包成 `400 E1001`，
+ * 前端只显示「E1001：服务异常」—— 人看不出是哪个字段写错了（2026-10-21 用户截图）。
+ * 带上状态码后，HTTP 层才能区分「校验失败（可以照原文提示）」和「写盘失败（内部错）」。
+ * MCP 侧只读 `message`，行为不变。
+ */
+function badInput(message) {
+  return Object.assign(new Error(message), { code: 'E1051', status: 400 });
+}
 
 export const KEYS = [
   'alias', 'host', 'port', 'user', 'key_path', 'key_algorithm', 'key_fingerprint',
@@ -67,12 +80,12 @@ export function readRegistry(file = REGISTRY_PATH) {
       assign(cur, kv[1], kv[2]);
       continue;
     }
-    if (raw.trim() !== '' && !/^\s/.test(raw)) throw new Error(`登记表里有认不出的顶层内容：${raw.slice(0, 40)}`);
+    if (raw.trim() !== '' && !/^\s/.test(raw)) throw badInput(`登记表 ${file} 里有认不出的内容：${raw.slice(0, 40)}（手工改过这个文件？把那一行改回 \`键: 值\` 或者删掉）`);
   }
   flush();
 
   for (const s of servers) {
-    if (typeof s.alias !== 'string' || !s.alias) throw new Error('登记表里有条目缺少 alias');
+    if (typeof s.alias !== 'string' || !s.alias) throw badInput(`登记表 ${file} 里有条目缺少 alias —— 每条都要有一个别名`);
     s.port = Number(s.port) || 22;
     s.host_fingerprint_verified = s.host_fingerprint_verified === true || s.host_fingerprint_verified === 'true';
   }
@@ -113,13 +126,13 @@ export function writeRegistry(reg, file = REGISTRY_PATH) {
 
 /** 地址校验：只收 IPv4 或域名。逐字从 mcp/bandi-ssh.mjs 搬来，两边共用一套规则 */
 export function validateHost(host) {
-  if (host.includes('://')) throw new Error('地址不要带协议头。');
-  if (host.includes('/') || host.includes('\\')) throw new Error('地址不要带路径。');
-  if (host.includes(':')) throw new Error('地址不要带端口（端口单独填）。');
-  if (/\s/.test(host)) throw new Error('地址不能含空格。');
+  if (host.includes('://')) throw badInput('地址不要带协议头（https:// 那种前缀去掉，只填主机名或 IP）。');
+  if (host.includes('/') || host.includes('\\')) throw badInput('地址不要带路径（只填主机名或 IP，路径单独在命令里给）。');
+  if (host.includes(':')) throw badInput('地址不要带端口，端口填在下面那一格。');
+  if (/\s/.test(host)) throw badInput('地址不能含空格。');
   const ipv4 = /^(\d{1,3})(\.\d{1,3}){3}$/.test(host) && host.split('.').every((n) => Number(n) <= 255);
   const domain = /^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*$/.test(host) && host.length <= 253;
-  if (!ipv4 && !domain) throw new Error('地址要写成 IPv4 或域名。');
+  if (!ipv4 && !domain) throw badInput('地址要写成 IPv4（如 10.0.0.8）或域名（如 example.com）。');
 }
 
 export function getServer(alias) {
@@ -135,17 +148,30 @@ export function getServer(alias) {
  * 否则"界面上能加、agent 加不了"这种不一致迟早出现。
  * 校验失败一律 throw（错误信息直接给用户看）。
  */
+/**
+ * 别名当**文件名**用是否安全（`~/.ssh/<别名>` 是 key_path 的老默认）。
+ * 只认 ASCII —— ssh-keygen / ssh -i 的参数在 Windows 上过 cmd/GBK，中文名就是
+ * `.cmd 必须GBK+CRLF` 同一类编码坑。**显示名放开中文，文件名另取**，见 upsertServer。
+ */
+const keyFileSafe = (alias) => /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(alias);
+
+/** 非 ASCII 别名 → 稳定的英文密钥文件名（同一别名永远同一个名字，重存不漂移） */
+const derivedKeyPath = (alias) =>
+  `~/.ssh/bandi-${crypto.createHash('sha256').update(alias).digest('hex').slice(0, 8)}`;
+
 export function upsertServer(input = {}) {
   const alias = String(input.alias ?? '').trim();
   const host = String(input.host ?? '').trim();
   const user = String(input.user ?? '').trim();
-  if (!alias || !host || !user) throw new Error('别名、地址、登录用户都得填。');
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(alias)) {
-    throw new Error('别名只能用字母数字点下划线连字符，且以字母数字开头。');
+  if (!alias || !host || !user) throw badInput('别名、地址、登录用户三格都得填。');
+  // 别名是**显示名**，用户自然会用中文（服务器就叫"火山引擎服务器"）—— 放开 Unicode，
+  // 只挡文件名/URL/这份简易 YAML 里会出问题的字符（空格、冒号、引号、#/斜杠都不在允许集里）。
+  if (!/^[\p{L}\p{N}][\p{L}\p{N}._-]{0,63}$/u.test(alias)) {
+    throw badInput('别名要用汉字、字母或数字开头，可以带点、下划线、连字符，最长 64 个字符（不能有空格）。');
   }
   validateHost(host);
   const port = Number(input.port ?? 22) || 22;
-  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('端口要是 1–65535 的整数。');
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw badInput('端口要填 1–65535 之间的整数，SSH 默认是 22。');
 
   const reg = readRegistry();
   const existing = reg.servers.find((s) => String(s.alias).toLowerCase() === alias.toLowerCase());
@@ -154,7 +180,9 @@ export function upsertServer(input = {}) {
     host,
     port,
     user,
-    key_path: String(input.key_path ?? existing?.key_path ?? `~/.ssh/${alias}`),
+    // key_path 一旦定下就随条目存住（existing 优先），改名重存不会换文件；
+    // 非 ASCII 别名用哈希名 —— 别名是给人看的，密钥文件名是给 ssh-keygen 用的，两回事。
+    key_path: String(input.key_path ?? existing?.key_path ?? (keyFileSafe(alias) ? `~/.ssh/${alias}` : derivedKeyPath(alias))),
     key_algorithm: existing?.key_algorithm ?? 'ed25519',
     key_fingerprint: existing?.key_fingerprint ?? '',
     host_fingerprint: existing?.host_fingerprint ?? '待确认（尚未连接）',

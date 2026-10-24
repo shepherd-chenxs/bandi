@@ -15,10 +15,18 @@ use std::time::{Duration, Instant};
 
 /// 与 `shell.mjs` 约定的协议前缀
 const PREFIX: &str = "BANDI_SHELL ";
-/// 等就绪的宽限。Node 那半自己会等 30 秒健康检查，这里再宽一点。
+/// 等于就绪的宽限。Node 那半自己会等 30 秒健康检查，这里再宽一点。
 const READY_TIMEOUT: Duration = Duration::from_secs(45);
-/// 退出时留给 Node 收摊的时间（关掉 stdin 之后）
-const STOP_GRACE: Duration = Duration::from_secs(3);
+/// 退出时留给 Node 收摊的时间（关掉 stdin 之后）。
+///
+/// ⚠️ **别按"旧版同步收摊"来估**（2026-10-22 第三轮）：`shell.mjs` 的 `shutdown` 现在是异步的 ——
+/// 撤登记 → 抢 `start.lock`（最多 800ms，等不到就保守留着服务）→ 核对 `service.json` →
+/// `stopPid`（Windows 要起 PowerShell 读命令行，0.5~2s）→ 兜底路径可能再 `stopRunning` +
+/// `waitPortFree`。3 秒会把 Node 掐在收摊中途：服务没停干净、记录停在半路。
+/// 8 秒覆盖正常路径 + 一次兜底；**正常退出时 `try_wait` 立刻返回，不会真等这么久**，
+/// 只有 Node 真卡死时才付出这 8 秒。
+const STOP_GRACE: Duration = Duration::from_secs(8);
+
 
 static CHILD: OnceLock<Mutex<Option<Child>>> = OnceLock::new();
 

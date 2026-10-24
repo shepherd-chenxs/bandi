@@ -32,11 +32,25 @@ ORIGINS="${BANDI_ORIGINS:-}"
 running() { pgrep -f "$PAT" >/dev/null 2>&1; }
 pids() { pgrep -f "$PAT" | tr '\n' ' '; }
 
+# 「部署即装」：把 `bandi` 装成一个全局命令（幂等 —— 装好了什么都不动）。
+# 逻辑只在 cli-install.mjs 一份（写 ~/.local/bin/bandi 启动器）；这里显式调一次，
+# 盖住 systemd 起法之外的部署；systemd 那条路由服务端启动段自己装。
+# ⚠️ 脚本显式设了 BANDI_DATA（真实部署），所以要带 BANDI_INSTALL_CLI=1 放行自动闸门
+#    —— 但这里走的是显式 install-cli 子命令，本来就不受闸门管。
+install_cli() {
+  "$NODE" "$HOME/bandi/apps/server/src/cli.mjs" install-cli >/dev/null 2>&1 || return 0
+  case ":$PATH:" in
+    *":$HOME/.local/bin:"*) ;;
+    *) echo "（bandi 命令已装到 ~/.local/bin —— 不在 PATH 的话把这行加进 shell 配置：export PATH=\"\$HOME/.local/bin:\$PATH\"）" ;;
+  esac
+}
+
 case "${1:-start}" in
   start)
     if running; then
       echo "已经在跑了（PID $(pids)）—— 不重复起"
       echo "要换监听地址/来源，先 stop 再带环境变量 start。"
+      install_cli
       exit 0
     fi
     mkdir -p "$DATA"
@@ -46,6 +60,7 @@ case "${1:-start}" in
     sleep 3
     if running; then
       echo "起来了（PID $(pids)）· 监听 $HOST:$PORT · 日志 $LOG"
+      install_cli
       if [ "$HOST" = "127.0.0.1" ]; then
         echo "远程访问走 SSH 隧道：  ssh -N -L 8787:127.0.0.1:$PORT <你的账号>@<这台机器>"
       else

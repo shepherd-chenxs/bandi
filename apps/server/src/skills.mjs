@@ -9,6 +9,41 @@ export const skillsRoot = path.join(repoRoot, 'skills');
 /** 目录名要当路径用，必须收紧：字母数字开头，后接字母数字/点/下划线/连字符 */
 const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
+/**
+ * 内置技能（2026-10-22 用户拍板："这些技能只允许用，不许改，只有你自己添加的可以改"）。
+ *
+ * 登记的是**随仓库走的出厂技能** —— 数字员工的行为挂在它们正文上，改了会直接影响线上跑法。
+ * 清单写死在代码里（不是 skills/ 下的文件）：往 skills/ 里加新技能 = 可改；
+ * 想让某个新技能也变只读，要走一次代码变更 —— 这正是"不许改"该有的门槛。
+ * 判定按**目录名**（frontmatter 的 name 可以跟目录不一致，但落盘位置只有一个）。
+ */
+const BUILTIN = new Set([
+  'bandi-avatar',
+  'bandi-expert-architect',
+  'bandi-expert-dev',
+  'bandi-expert-ops',
+  'bandi-expert-pm',
+  'bandi-expert-product',
+  'bandi-expert-qa',
+  'bandi-expert-secretary',
+  'bandi-expert-test',
+  'bandi-expert-ui',
+  'bandi-secretary',
+  'brainstorming',
+  'doc-coauthoring',
+  'receiving-code-review',
+  'requesting-code-review',
+  'skill-creator',
+  'systematic-debugging',
+  'test-driven-development',
+  'verification-before-completion',
+  'webapp-testing',
+]);
+
+export function isBuiltin(name) {
+  return BUILTIN.has(String(name ?? ''));
+}
+
 export function isValidSkillName(name) {
   return SAFE_NAME.test(String(name ?? ''));
 }
@@ -34,6 +69,7 @@ function readFromDir(dir) {
   return {
     name: meta.name && isValidSkillName(meta.name) ? meta.name : name,
     dirName: name,
+    builtin: isBuiltin(name),
     title: meta.name || name,
     description: meta.description || '',
     body,
@@ -73,6 +109,7 @@ function readMetaFromDir(dir) {
   return {
     name: meta.name && isValidSkillName(meta.name) ? meta.name : dirName,
     dirName,
+    builtin: isBuiltin(dirName),
     title: meta.name || dirName,
     description: meta.description || '',
     dir,
@@ -144,6 +181,9 @@ export function discoverSkills(root, { maxDepth = 6 } = {}) {
 /**
  * 把一个 skill 目录整个搬进库里（含 references/ scripts/ 等附件）。
  * 名字冲突时不覆盖，报回来让用户决定。
+ *
+ * ⚠️ 覆盖导入也要过内置闸（2026-10-22）：库里那条是内置技能时**永不覆盖** ——
+ * 它是编辑/删除之外的第三条改法（拿一个同名目录导进来顶掉），不能留活口。
  */
 export function importSkill(srcDir, { overwrite = false } = {}) {
   const src = path.resolve(srcDir);
@@ -154,8 +194,11 @@ export function importSkill(srcDir, { overwrite = false } = {}) {
   if (!isValidSkillName(name)) name = name.replace(/[^A-Za-z0-9._-]/g, '-');
 
   const dest = path.join(skillsRoot, name);
-  if (fs.existsSync(dest) && !overwrite) {
-    return { skipped: true, name, reason: '库里已经有同名 skill' };
+  if (fs.existsSync(dest)) {
+    if (isBuiltin(path.basename(dest))) {
+      return { skipped: true, name, reason: '内置技能是只读的，不能覆盖导入 —— 想定制就换个名字导入' };
+    }
+    if (!overwrite) return { skipped: true, name, reason: '库里已经有同名 skill' };
   }
 
   fs.mkdirSync(skillsRoot, { recursive: true });

@@ -1,7 +1,7 @@
 /**
  * PR 联动的离线验收（2026-10-17）。
  *
- * 这轮打通的链路：卡片关联 GitHub PR → 平台去 GitHub 查状态 → 存库里 → **合并后转「待确认」**。
+ * 这轮打通的链路：卡片关联 GitHub PR → 平台去 GitHub 查状态 → 存库里 → **合并后转「待验收」**。
  * 需要网络的那半截（真查 GitHub）不在这里跑；这里验的是**解析 / 存 / 状态机**这三件不联网的事，
  * 它们恰恰是最容易写错、也最容易被忽略的。
  *
@@ -49,9 +49,9 @@ check('prState/prTitle 存住了', a2.prState === 'open' && a2.prTitle === '改�
 check('批量捞得到它', store.listProjectTasksWithPr().some((t) => t.id === a.id));
 check('没 PR 的卡不在批量清单里', store.listProjectTasksWithPr().every((t) => t.prRepo), String(store.listProjectTasksWithPr().length));
 
-console.log('\n③ 合并后：**进行中 → 待确认**，别的一律不动（卡的状态是人的指令）');
+console.log('\n③ 合并后：**进行中 → 待验收**，别的一律不动（卡的状态是人的指令）');
 const b = mkCard('进行中 + PR 已合并', { prState: 'merged' });
-check('进行中 → 待确认', pt.afterMerged(b).status === '待确认', pt.afterMerged(b).status);
+check('进行中 → 待验收', pt.afterMerged(b).status === '待验收', pt.afterMerged(b).status);
 
 const c = mkCard('已完成 + PR 已合并', { prState: 'merged' });
 store.updateProjectTask(c.id, { status: '已完成' });

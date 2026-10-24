@@ -61,7 +61,39 @@ const netMode = (() => {
 
 export const lanAllowed = netMode?.allowLan === true;
 
-export const host = process.env.BANDI_HOST ?? (lanAllowed ? '0.0.0.0' : '127.0.0.1');
+/*
+ * **这台机器已经加入某台总机了吗**（2026-10-20，设计 §4.4）。
+ *
+ * 判据就是 `node.mjs` 读的那份 `<数据目录>/config.json` 里有没有 `controlPlane` ——
+ * 有 = 它是某台总机的节点（也就是"瘦客户端"）。
+ *
+ * 为什么**就地读 JSON、不 import `local-mode`**：
+ *   · `store.mjs` import 了本文件，而 `local-mode` 若要 import `store`（它不 import，但这条链很容易被
+ *     后来的人接上）就成环 —— 启动时就炸；
+ *   · 而且本文件在**任何模块之前**被求值，import 一个会读配置的模块只会把初始化顺序搞乱。
+ * 读失败（没有文件 / 坏了 / 不是 JSON 对象）一律当"没加入" —— 那是最保守的形态（只听回环）。
+ */
+const clientCfg = (() => {
+  try {
+    const j = JSON.parse(fs.readFileSync(path.join(dataDir, 'config.json'), 'utf8'));
+    return j && typeof j === 'object' && !Array.isArray(j) ? j : {};
+  } catch {
+    return {};
+  }
+})();
+
+export const clientJoined = typeof clientCfg.controlPlane === 'string' && clientCfg.controlPlane.trim() !== '';
+
+/**
+ * 监听地址。
+ *
+ * ⚠️ **已加入 = 瘦客户端，必须只监听回环**（2026-10-20，设计 §4.4）：
+ * 否则一台昨天开过局域网的机器（`netmode.json` 里 `allowLan:true`）今天变成瘦客户端，
+ * 会以 `0.0.0.0` + **强制鉴权**起来 —— 等于把**总机的面板令牌**敞给整个网段。
+ *
+ * `BANDI_HOST` 仍然最优先（部署 / 调试要能压过去）。
+ */
+export const host = process.env.BANDI_HOST ?? (clientJoined ? '127.0.0.1' : lanAllowed ? '0.0.0.0' : '127.0.0.1');
 
 /**
  * 允许的**来源**（写请求的来源白名单，CSRF 那道闸）。

@@ -60,3 +60,26 @@ export function isLoopback(host) {
   const h = String(host ?? '').trim().toLowerCase();
   return h === '127.0.0.1' || h === 'localhost' || h === '::1';
 }
+
+/**
+ * 这台总机**能不能被别的机器加入**（2026-10-20 增量 1，设计 §1.1/§1.2 —— 唯一判定）。
+ *
+ * `joinable = !isLoopback(boundHost) && (allowLan === true || explicit === true)`
+ *   · 监听在回环上 → 别人根本连不进来，永远 false；
+ *   · 开关开着 → true（桌面版正常路径）；
+ *   · `BANDI_HOST` 显式指定（云端部署 `BANDI_HOST=0.0.0.0`，开关在云端页根本不显示）→ true
+ *     —— 这正是本次修的 E1091 误报：云端总机明明开放，节点探测却报"没开局域网开关"；
+ *   · 显式指定回环（`BANDI_HOST=127.0.0.1`）→ false：它只在本机可达，宣布 joinable=true 是说谎。
+ *
+ * 两个出口共用本函数、**不许各自再写一份**：`GET /api/hello`（server.mjs）与
+ * UDP 应答包（lan-announce.mjs）。`explicit` 由调用方传（恒等 `!!process.env.BANDI_HOST`，
+ * 与 `/api/lan` 那处同口径；env 运行期不变，无需缓存）。
+ *
+ * @param {object} o
+ * @param {boolean} o.allowLan   「允许局域网加入」开关值（`netmode.readNetMode().allowLan`）
+ * @param {boolean} o.explicit   监听地址是否被 `BANDI_HOST` 显式指定
+ * @param {string}  o.boundHost  进程**现在实际**监听的地址（模块级 `boundHost`，现读）
+ */
+export function isJoinable({ allowLan, explicit, boundHost } = {}) {
+  return !isLoopback(boundHost) && (allowLan === true || explicit === true);
+}

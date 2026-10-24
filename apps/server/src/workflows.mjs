@@ -26,6 +26,29 @@ const STUCK_MS = 10 * 60 * 1000;
 const MAX_VISITS = 20;
 /** 连线的终点：走完就结束 */
 const END = 'end';
+
+/*
+ * **动作节点**（2026-10-23，PR 审阅与授权合并）。
+ *
+ * 原来**每个节点都是"派给一个数字员工去聊"** —— 因为引擎里只有一条执行链路（dispatch）。
+ * 但有一类步骤天然不是聊天：调 GitHub 合并 API、发一封邮件…… 干活的是**平台自己**，
+ * 派给谁都等于让 agent 转述一遍、还把凭据问题搅进来（agent 环境是清过 GIT_* 的，
+ * 它根本合不了并，也不该能）。
+ *
+ * 所以给引擎补第二类节点：`node.action` 声明动作种类，handler 由业务模块注册进来
+ * （pr-review.mjs 注册 'pr-merge'）。引擎只管三件事：
+ *   · 到站执行：startCurrentStep 碰到动作节点 → 调 handler.run（异步，不挡调用方）；
+ *   · 等人拍板：handler 自己把任务标「待验收」就是等人（与 manual 节点同一语义），
+ *     人点「通过」→ decide 钩子 handler.onDecide → 它决定是执行还是收尾；
+ *   · 收尾走老路：finishActionTask 复用 goto/decide 同一条推进单行道 ——
+ *     **动作节点不发明第二套流转逻辑**，这是它和"在巡检里私接一套状态机"的本质区别。
+ */
+const ACTION_NODES = {};
+
+/** 业务模块注册动作节点 handler：`{ run(ctx), onDecide?(ctx) }`，ctx = { runId, task, node } */
+export function registerActionNode(kind, handler) {
+  ACTION_NODES[kind] = handler;
+}
 /**
  * 内建模板**改名前**的 id（2026-10-16 之前叫这个）。
  * 它跟技能名 `bandi-flow` 撞了 —— 老库里的模板 id 靠 ensureBuiltInTemplate 迁过来。
@@ -228,7 +251,7 @@ export function publishedFlows() {
  * **没有"场地"这回事**：流程不建群，也不挂在某个会话上 ——
  * 派给谁就发到谁那儿（见 startCurrentStep）。谁也不用先选地方。
  */
-export function startWorkflow({ templateId, title, intent, projectId = null, autoStart = true }) {
+export function startWorkflow({ templateId, title, intent, projectId = null, autoStart = true, pr = null }) {
   const tpl = store.getWorkflowTemplate(templateId);
   if (!tpl) throw new Error('模板不存在');
   const nodes = nodesOf(tpl);
@@ -238,7 +261,15 @@ export function startWorkflow({ templateId, title, intent, projectId = null, aut
   // 名字不用单独填：**从想法里取第一行**，发起时少一个字段
   const name = (title ?? '').trim() || firstLine(want) || tpl.name;
 
-  const run = store.createWorkflowRun({ templateId, title: name, intent: want || null, projectId });
+  // pr = { repo, number }：PR 审阅流程专用（写回值班卡、执行合并都靠它定位，见 db.mjs prRepo）
+  const run = store.createWorkflowRun({
+    templateId,
+    title: name,
+    intent: want || null,
+    projectId,
+    prRepo: pr?.repo ?? null,
+    prNumber: pr?.number ?? null,
+  });
   const startId = startOf(tpl);
   const first = nodeById(tpl, startId) ?? nodes[0];
   store.setWorkflowCurrentNode(run.id, first.id);
@@ -288,7 +319,8 @@ function createTask(runId, node, visit) {
   // **到站即知**：这一步没点名的话，立刻标「已阻塞」，别让它显示成"待办"等人点一下派活
   // 才发现（用户实报："这种没人的情况应该是阻塞状态"）。
   // 之前只在"点派活"那一步才发现没人，于是节点到站时看着像随时会开跑 —— 但它永远不会自己动。
-  if (!task.assigneePersonaId) {
+  // ⚠️ **动作节点没有经办人是正常的**（干活的是平台自己），不适用这条 —— 见 ACTION_NODES。
+  if (!task.assigneePersonaId && !node.action) {
     store.updateWorkflowTask(task.id, {
       status: '已阻塞',
       note: `${noAssigneeWhy(node, node.name)}。点上面「经办人」那儿选一个人就能接着办`,
@@ -331,6 +363,48 @@ export function startCurrentStep(runId, { force = false } = {}) {
   const task = currentTask(run);
   if (!task) throw new Error('找不到当前任务');
   if (task.status === '进行中') throw new Error('这一步已经在跑了');
+
+  const stepNode = nodeById(store.getWorkflowTemplate(run.templateId), task.nodeId);
+
+  /*
+   * **动作节点**（见 ACTION_NODES 顶部注释）：干活的是平台自己，不派给人、不查额度。
+   * handler.run 是异步的（要调 GitHub），这里标「进行中」后立刻返回 ——
+   * 跟派活给 agent 的返回时机一致，调用方（到站自动派活/人点重跑）不用等结果。
+   * 跑挂了 handler 那边兜底标「失败」，不会永远停在「进行中」。
+   */
+  if (stepNode?.action) {
+    const handler = ACTION_NODES[stepNode.action];
+    if (!handler?.run) {
+      store.updateWorkflowTask(task.id, {
+        status: '失败',
+        note: `不认识的动作节点：${stepNode.action}（平台版本没跟上模板？）`,
+        endedAt: store.nowIso(),
+      });
+      store.touchWorkflowRun(runId);
+      return viewRun(store.getWorkflowRun(runId));
+    }
+    store.updateWorkflowTask(task.id, {
+      status: '进行中',
+      startedAt: store.nowIso(),
+      endedAt: null,
+      note: null,
+      result: null,
+      decision: null,
+    });
+    store.touchWorkflowRun(runId);
+    Promise.resolve()
+      .then(() => handler.run({ runId, task, node: stepNode }))
+      .catch((e) => {
+        store.updateWorkflowTask(task.id, {
+          status: '失败',
+          note: String(e?.message ?? e).slice(0, 300),
+          endedAt: store.nowIso(),
+        });
+        store.touchWorkflowRun(runId);
+        console.warn(`动作节点「${stepNode.name}」执行失败：${e?.message ?? e}`);
+      });
+    return viewRun(store.getWorkflowRun(runId));
+  }
   /*
    * **额度闸**：派活之前拦一道。
    *
@@ -409,6 +483,11 @@ export function startCurrentStep(runId, { force = false } = {}) {
     task.detail,
     '',
     '做完直接说明结果即可；流程的推进由平台负责，你不用去开下一步。',
+    // **受阻协议**（2026-10-23）：硬阻碍必须亮牌，不许拿"说明一下"蒙混成办完。
+    // 平台认「[受阻]」开头的第一行 → 这一步转已阻塞等人，用户拍板后能接着办。
+    '遇到干不下去的硬阻碍（权限被拒 / 文件写不进去 / 缺必要决策 / 依赖缺失），'
+      + '回话第一行写「[受阻] 一句话原因」，然后说清卡在哪、需要什么（比如申请可写某个目录）；'
+      + '能干的部分照常说明、产物照常列。不许硬编一个结果交差。',
   ]
     .filter((x) => x !== '')
     .join('\n');
@@ -527,7 +606,7 @@ function runConversation(run, personaId) {
 
 /**
  * 挂在 run 完成点上（runs.onRunFinish 注册）。
- * 数字员工干完了 → 这条任务变成「待确认」，**等人在界面上点通过/驳回**。
+ * 数字员工干完了 → 这条任务变成「待验收」，**等人在界面上点通过/驳回**。
  * 推进由平台做，不靠数字员工自觉。
  */
 export function onAgentRunFinished(run) {
@@ -557,12 +636,29 @@ export function onAgentRunFinished(run) {
       result: JSON.stringify(resultOf({ status: '失败', error: run.error })),
       endedAt: store.nowIso(),
     });
+  } else if (blockedMark(run.finalText)) {
+    /*
+     * **员工自报受阻**（2026-10-23，起因：项目面板改造那条流程 —
+     *   员工遇到 docs/ 写权限被拒，只能把这事写在小结的散文里，流程照样绿灯走完，
+     *   用户全程无感知 —— 「干了一半但报完成」比「失败」更危险，失败会停，这种不会）。
+     * 协议：回话**第一行**以 `[受阻]` 开头 = 这一步没干成，原因跟在后面。
+     * 引擎认到标记：这一步转「已阻塞」（等人处理，不自动流转、不重试），
+     * 全文照存 —— 用户在实例页看到红标 + 原因，拍板后再派。
+     */
+    store.updateWorkflowTask(task.id, {
+      status: '已阻塞',
+      note: summarize(run.finalText),
+      result: JSON.stringify(resultOf({ status: '受阻', finalText: run.finalText })),
+      endedAt: store.nowIso(),
+    });
+    store.touchWorkflowRun(task.runId);
+    return;
   } else {
     // 干完了。**停不停，看节点上的开关**：
-    //   · manual = true  → 待确认，等用户拍板（需求那种"聊明白了我才放行"）
+    //   · manual = true  → 待验收，等用户拍板（需求那种"聊明白了我才放行"）
     //   · 否则           → 干完自动往下走（默认）
     store.updateWorkflowTask(task.id, {
-      status: '待确认',
+      status: '待验收',
       note: summarize(run.finalText),
       result: JSON.stringify(resultOf({ status: run.status, finalText: run.finalText })),
     });
@@ -575,7 +671,7 @@ export function onAgentRunFinished(run) {
         //    于是每一步都得人再点一次「派活」。现在才真的含。
         decide(task.runId, '通过');
       } catch (e) {
-        // 自动流转失败不该把这一步弄坏：留在「待确认」，用户可以自己点通过
+        // 自动流转失败不该把这一步弄坏：留在「待验收」，用户可以自己点通过
         console.warn(`「${task.nodeName}」自动流转没成功：${e.message}`);
       }
     }
@@ -616,6 +712,20 @@ export function decide(runId, decision) {
 
   const tpl = store.getWorkflowTemplate(run.templateId);
   const node = nodeById(tpl, task.nodeId);
+
+  /*
+   * **动作节点的拍板钩子**（见 ACTION_NODES 顶部注释）。
+   * 人点「通过」对动作节点不是"放行去下一步"，而是"**授权执行**"——
+   * 合并这类事必须在拍板之后才真的发生。handler 说它接手了（返回 true），
+   * 推进就由它负责（干完调 finishActionTask）；驳回之类引擎照常走出口。
+   */
+  if (node?.action && decision !== '终止') {
+    const handler = ACTION_NODES[node.action];
+    if (handler?.onDecide?.({ runId, task, node, decision })) {
+      return viewRun(store.getWorkflowRun(runId));
+    }
+  }
+
   const target = decision === '通过' ? node?.approve : node?.reject;
 
   /*
@@ -655,8 +765,39 @@ export function decide(runId, decision) {
   return goto(runId, target, `${decision}「${task.nodeName}」`);
 }
 
-/** 重跑当前这一步（失败后，或人想重来） */
-export function retryCurrentStep(runId) {
+/**
+ * 动作节点干完活了，**收尾走老路**（成功 → 按节点出口推进；失败 → 标「失败」等人重跑）。
+ *
+ * ⚠️ 只挂这一条推进路径：动作节点不许自己 updateWorkflowTask 后直接把流程挪走 ——
+ * 流转的单行道仍然是 decide/goto，谁绕开谁就是第二份引擎（那种不一致最难查）。
+ * 流程已经不在「进行中」（比如人中途终止了）就什么都不做：终止的流程不该被后台动作救活。
+ */
+export function finishActionTask(runId, task, { ok, result = null, note = null }) {
+  const run = store.getWorkflowRun(runId);
+  if (!run || run.status !== '进行中') return null;
+  const tpl = store.getWorkflowTemplate(run.templateId);
+  const node = nodeById(tpl, task.nodeId);
+  if (ok) {
+    store.updateWorkflowTask(task.id, {
+      status: '已完成',
+      decision: '通过',
+      result: result ? JSON.stringify(result) : null,
+      note,
+      endedAt: store.nowIso(),
+    });
+    return goto(runId, node?.approve ?? END, `「${task.nodeName}」完成`);
+  }
+  store.updateWorkflowTask(task.id, {
+    status: '失败',
+    result: result ? JSON.stringify(result) : null,
+    note,
+    endedAt: store.nowIso(),
+  });
+  store.touchWorkflowRun(runId);
+  return viewRun(store.getWorkflowRun(runId));
+}
+
+/** 重跑当前这一步（失败后，或人想重来） */export function retryCurrentStep(runId) {
   const run = store.getWorkflowRun(runId);
   if (!run) throw new Error('流程不存在');
   if (run.status !== '进行中') throw new Error(`流程已经「${run.status}」了`);
@@ -730,7 +871,7 @@ function goto(runId, target, why) {
  * 卡住判断（和 v1 一样，但这版要按"任务"算）：
  *   · 进行中超过 STUCK_MS      → 真卡住了
  *   · 失败没人管               → 也是卡住
- *   · 待确认 / 待办            → **不算卡住**，是"在等你"（待办马上会被自动派活）
+ *   · 待验收 / 待办            → **不算卡住**，是"在等你"（待办马上会被自动派活）
  */
 export function viewRun(run, { withTasks = false } = {}) {
   if (!run) return null;
@@ -758,7 +899,7 @@ export function viewRun(run, { withTasks = false } = {}) {
     else if (cur.status === '失败') stuck = '等人处理';
     else if (cur.status === '进行中' && elapsed > STUCK_MS) {
       stuck = `超过 ${Math.round(STUCK_MS / 60000)} 分钟没结果`;
-    }     else if (cur.status === '待确认') waiting = '等你确认';
+    }     else if (cur.status === '待验收') waiting = '等你验收';
     else if (cur.status === '待办') waiting = '马上自动派活（30 秒内）';
     else if (cur.status === '进行中') waiting = '正在跑';
   }
@@ -873,7 +1014,7 @@ function viewTask(t, withMessages = false, isLast = false, run = null) {
   const conv = t.conversationId ? store.getConversation(t.conversationId) : null;
   const from = t.startedAt ? Date.parse(t.startedAt) : null;
   // ⚠️ 上界：**最后一步永远到"现在"**。
-  //   它可能停在「待确认」，而人是可以继续跟经办人谈的（一步多轮）——
+  //   它可能停在「待验收」，而人是可以继续跟经办人谈的（一步多轮）——
   //   若卡在 endedAt，之后发的消息全落在窗口外，界面上永远不出现，
   //   看着就像"发送不出去"（踩过）。
   const to = isLast ? Date.now() : t.endedAt ? Date.parse(t.endedAt) : Date.now();
@@ -895,7 +1036,7 @@ function viewTask(t, withMessages = false, isLast = false, run = null) {
     runtime: conv?.runtime ?? persona?.runtime ?? null,
     // 这一步的会话**此刻有没有在跑**（以及是哪次）——
     // 前端据此亮"正在输入中"、并订阅那条实时流。
-    // ⚠️ 不能用任务状态判断：李俊回复时任务还是「待确认」，状态不会变（踩过）。
+    // ⚠️ 不能用任务状态判断：李俊回复时任务还是「待验收」，状态不会变（踩过）。
     runningRunId: conv ? (store.activeRun(conv.id)?.id ?? null) : null,
     note: t.note,
     // 执行结果（产物 / 一句话 / 报错）—— 界面照这三样渲染，不再整段贴 note。
@@ -1102,12 +1243,24 @@ export function resultOf({ status, finalText = '', error = null } = {}) {
     return { state: 'error', summary: null, artifacts: [], error: clipError(error || '执行失败') };
   }
   const stopped = status === '已停止';
+  const blocked = status === '受阻';
   return {
-    state: stopped ? 'stopped' : 'done',
-    summary: summaryOf(finalText),
+    state: stopped ? 'stopped' : blocked ? 'blocked' : 'done',
+    // 受阻的标记前缀在落库时剥掉 —— 界面上由 state 决定怎么标（红字"受阻："），
+    // 原文再带一个 [受阻] 就成 "[受阻] 受阻：[受阻]…" 的叠词了
+    summary: summaryOf(blocked ? String(finalText).replace(/^\s*\[受阻\]\s*/, '') : finalText),
     artifacts: artifactsOf(finalText),
     error: null,
   };
+}
+
+/**
+ * 员工自报受阻的标记（2026-10-23）：回话**第一个非空行**以 `[受阻]` 开头。
+ * 只认行首、只认第一行 —— 正文里提到"受阻"两个字不算（那可能是在转述别的事）。
+ */
+export function blockedMark(finalText) {
+  const first = String(finalText ?? '').split('\n').find((l) => l.trim() !== '') ?? '';
+  return first.trimStart().startsWith('[受阻]');
 }
 
 /** 读库里的 result；老数据没这一列 → 拿 note 兜底（至少还能显示一句话/报错） */
@@ -1143,7 +1296,7 @@ function parseResult(row) {
  * 语义（这是唯一的定义处，界面只按它渲染）：
  *   待办   → **直接派活**（2026-10-17 用户定：改成待办就执行，不再需要人点「派活」）；
  *            派不出去（他正忙）就留在待办，重试节拍会再派；把上一轮的执行痕迹清干净
- *   已阻塞 → 停下等人处理，不派活
+ *   已阻塞 → 出问题等人拍板，不派活
  *   已完成 → **就是"通过"**，走 decide 那条路，不另写一套推进逻辑
  *
  * ⚠️ 调用方（路由）**必须先把在跑的那次运行掐掉**再做这里的事 ——
@@ -1190,7 +1343,7 @@ export function setStepStatus(runId, wanted) {
 
   if (wanted === '已完成') {
     store.updateWorkflowTask(task.id, {
-      status: '待确认',
+      status: '待验收',
       endedAt: task.endedAt ?? store.nowIso(),
       note: task.note ?? '人工标为已完成',
     });

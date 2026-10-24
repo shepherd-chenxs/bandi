@@ -169,6 +169,7 @@ export function runTask({
   model = null,
   cliPath = null,
   connectorArgs = [],
+  env = {},
   onEvent = () => {},
   signal = null,
 }) {
@@ -179,7 +180,7 @@ export function runTask({
     const child = spawn(launch.file, [...launch.args, ...args], {
       cwd,
       windowsHide: true,
-      env: { ...agentEnv(), ...launch.env },
+      env: { ...agentEnv(), ...launch.env, ...env },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
@@ -259,7 +260,15 @@ export function runTask({
       settle(code); // 已经因 turn_end 收尾过的话，这里是空操作
     });
 
-    if (signal) signal.addEventListener('abort', () => child.kill(), { once: true });
+    if (signal) {
+      signal.addEventListener('abort', () => {
+        try { child.kill(); } catch { /* ignore */ }
+        // 只杀直接子进程不够：孙进程占着 stdout 管道会让 'close' 永远不来（见 dsh.mjs 同款注释）
+        if (process.platform === 'win32' && child.pid) {
+          try { spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }); } catch { /* ignore */ }
+        }
+      }, { once: true });
+    }
 
     child.stdin.end(task);
   });

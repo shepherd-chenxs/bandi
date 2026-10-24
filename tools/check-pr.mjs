@@ -65,6 +65,19 @@ const HOST_ALLOW = [
   'www.w3.org',
 ];
 
+/*
+ * 「本地地址」类直接放行（2026-10-22 用户拍板：192.168.1.9 这种本地地址可以放进白名单）。
+ *
+ * 为什么可以不逐个登记：这两类地址**不可能指向真实的外部服务** ——
+ *   · RFC 1918 私有网段 / 169.254 链路本地：只在局域网内可达，公网路由不到；
+ *   · RFC 2606 保留域（example.com / .example / .test / .invalid）：IANA 留给文档示例，永不解析。
+ * 它们出现在加入向导的 placeholder、报错文案、设计图里，只是"地址长这样"的示例，
+ * 不是又接了一个中转站/网关 —— 白名单要拦的是后者。
+ */
+const PRIVATE_HOST_RE =
+  /^(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|169\.254\.\d{1,3}\.\d{1,3})$/;
+const RESERVED_DOMAIN_RE = /(^|\.)(example\.(com|net|org)|example|test|invalid)$/;
+
 /** 改了这些 = 需要人看一眼（提示，不拦） */
 const NEEDS_EYE = [
   /^\.github\/workflows\//,
@@ -142,7 +155,11 @@ for (const { status, file } of nameStatus) {
 /* -------------------------------------------------------- ② 地址白名单 */
 
 const URL_RE = /https?:\/\/([A-Za-z0-9.-]+)/g;
-const hostAllowed = (h) => HOST_ALLOW.includes(h) || h.endsWith('.usemagpie.ai');
+const hostAllowed = (h) =>
+  HOST_ALLOW.includes(h) ||
+  h.endsWith('.usemagpie.ai') ||
+  PRIVATE_HOST_RE.test(h) ||
+  RESERVED_DOMAIN_RE.test(h);
 
 /*
  * 第三方 skill 的资产目录：`skills/**` 是原样收录的上游 skill（Apache-2.0，

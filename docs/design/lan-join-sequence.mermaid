@@ -1,0 +1,111 @@
+%% 局域网加入总机 · 时序图（2026-10-20）
+
+## 一、加入流程
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor U as 用户（新机器）
+  participant W as 前端 app.js
+  participant L as 本机服务 server.mjs
+  participant LM as local-mode.mjs
+  participant D as discover.mjs
+  participant SUP as node-supervisor.mjs
+  participant M as 总机 server.mjs
+  participant S as 总机 store.mjs
+
+  U->>W: 设置 → 这台机器 → 加入总机
+  W->>L: POST /api/local/discover
+  L->>D: discover({rounds:3, roundMs:1200})
+  D->>D: 广播 UDP 8788（255.255.255.255 + 各网卡定向广播）
+  Note over D: 最多 4 秒；按 instanceId 去重
+  D-->>L: candidates[]
+  L-->>W: {candidates}
+  U->>W: 选中「办公机」
+  W->>L: POST /api/local/probe {url}
+  L->>M: GET /api/hello（免令牌）
+  M-->>L: {platform:'bandi', allowLan:true, caps:['scope'], instanceId, version}
+  L-->>W: {host}
+  W->>L: POST /api/local/export（可选，「先导出一份」）
+  L->>L: store.backupTo(桌面)
+  W->>U: 这一步会改变什么 + 输邀请码 + 选 scope
+  U->>W: 提交（code + scopes）
+  W->>L: POST /api/local/join {url, code, scopes}
+  L->>L: readClientConfig().controlPlane ? 409 E1093
+  L->>M: GET /api/hello（复核 caps）
+  L->>M: POST /api/nodes/join {code, id:node-7f3c9a21, scope:'compute panel'}
+  M->>S: consumeInvite → upsertNode → issueNodeToken(id, scope)
+  S-->>M: token（只回一次，库里只存哈希）
+  M-->>L: 201 {token, node, heartbeatSeconds, scope}
+  L->>LM: writeClientConfig({controlPlane, token, scope, joinedAt, hostLabel…})
+  L->>SUP: start()
+  SUP->>SUP: acquireLock(<数据目录>/node.lock)
+  SUP->>SUP: spawn node.mjs（BANDI_DATA=同一数据目录）
+  Note over SUP: scope 只有 panel 时不 spawn
+  L-->>W: 201 {ok, hostLabel, scope, node}
+  W->>W: 关对话框；提示「重新打开窗口」
+  U->>U: 重开壳 → 本机服务进入 client 模式 → 看到总机面板
+```
+
+## 二、瘦客户端一次带 SSE 的请求
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant B as 浏览器（127.0.0.1:8791）
+  participant P as client-proxy.mjs
+  participant M as 总机 server.mjs
+  participant A as 总机 auth.mjs
+  participant S as 总机 store.mjs
+
+  B->>P: GET /api/state（Origin: http://127.0.0.1:8791）
+  P->>P: host=总机, origin=总机origin, cookie 去 bandi_token, x-bandi-token=bn_…
+  P->>M: GET /api/state
+  M->>A: guard(AUTH, req)
+  A->>S: nodeAuthByToken(bn_…) → {nodeId, scope:{compute,panel}}
+  A->>A: decide(node, GET, /api/state) → allow
+  A->>S: touchNodeUsed(nodeId)（60 秒节流）
+  M-->>P: 200 JSON
+  P-->>B: 200 JSON（头透传，Set-Cookie 去 bandi_token）
+
+  B->>P: POST /api/conversations（Origin: 127.0.0.1:8791, X-Bandi:1）
+  P->>P: origin→总机 origin，x-bandi:1 补齐
+  P->>M: POST /api/conversations
+  M->>A: guardWrite → Origin 是总机自己的 → 放行（否则 403 E3001）
+  M-->>P: 201
+  P-->>B: 201
+
+  B->>P: GET /api/runs/run-1/stream（EventSource）
+  P->>M: GET（同上改写）
+  M->>M: runs.subscribe() → writeHead(text/event-stream, X-Accel-Buffering:no)
+  M-->>P: chunked 事件流
+  P-->>B: r.pipe(res) —— 不缓冲、不设 content-length
+  M-->>P: data: {...}
+  P-->>B: data: {...}（实时转发）
+```
+
+## 三、退出流程
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor U as 用户
+  participant W as 前端 app.js
+  participant L as 本机服务
+  participant SUP as node-supervisor.mjs
+  participant N as node.mjs 子进程
+  participant M as 总机
+
+  U->>W: 设置 → 这台机器 → 退出总机
+  W->>U: confirmDo（三条后果 + 建议先在总机「忘掉」）
+  U->>W: 确认
+  W->>L: POST /api/local/leave
+  L->>SUP: stop()
+  SUP->>N: SIGTERM → 等 3 秒 → SIGKILL
+  N->>N: 释放 node.lock
+  L->>L: clearClientConfig()（保留 node.json 的 id）
+  L-->>W: 200 {ok, local}
+  W->>W: location.reload()
+  Note over L,M: 不通知总机 —— 那边会留一行离线设备，提示里已写明
+  L-->>W: 页面回到本机控制面（本机库原样，从未被写过）
+```

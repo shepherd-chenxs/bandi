@@ -44,6 +44,38 @@ import { dataDir, repoRoot } from './config.mjs';
  * { "type":"form",     "formId":"server", "heading":"登记一台",
  *                      "fields":[{"key":"alias","label":"别名","required":true}],
  *                      "submit":{"method":"POST","api":"/api/x","label":"保存"} }
+ * { "type":"stats",    "source":{...}, "items":[
+ *                      {"label":"项目总数","value":"{count}","unit":"个","foot":"来自账本",
+ *                       "tone":"ok|warn|accent",             // 可选，只影响数字颜色
+ *                       "calc":"count"} ] }                  // 聚合规则见下
+ * { "type":"cards",    "heading":"项目进度", "subheading":"已纳管 {shown_count} 个",
+ *                      "more":{"label":"全部项目 ›"},        // 标题行右侧一行小字（本版不导航）
+ *                      "source":{"api":"/api/x","pick":"rows",
+ *                                "filter":{"field":"ok","is":true}},   // 筛行；is 省略 = 取真值
+ *                      "columns":3,
+ *                      "card":{"title":"{name}","subtitle":"{summary}","badge":"{status}",
+ *                              "badgeTone":"ok|warn|neutral","members":"{pm} · {started}",
+ *                              "lines":[{"label":"版本","value":"{n} 个版本"}],
+ *                              "foot":[{"label":"最新发布","value":"{v} {path}"}],
+ *                              "href":"#/project/{id}"},   // 只挂 data-card-href，本版不导航
+ *                      "empty":"没有项目" }
+ *
+ * **aside**（可选，加在 cards / list 上）：这块挂到主列右边的 `.plg-aside` 栏，
+ * 整页变成「主列 1fr + 右栏 340px」两列栅格。只有单页面板（没有 split）才生效。
+ *
+ * **source 上的三个通用修饰**（filter / sort / limit，都是可选）：
+ *   "filter":{"field":"ok","is":true}   按字段筛行（is 省略＝取真值；数组＝逐条与）
+ *   "sort":{"by":"updated","dir":"desc"} 排序（空值恒排最后，不因 dir 翻面）
+ *   "limit":5                           取前 N 行
+ * 模板里另有内置变量：`{shown_count}`（筛完剩几行）/ `{total_count}`（筛前）/ `{count}`（行数）。
+ *
+ * **stats 的 calc**（聚合规则写在 manifest 里，宿主只认这几种算子）：
+ *   "calc":"count"                              行数
+ *   "calc":{"countIf":"ok"}                     字段为真的行数（也接受 {"field":"ok","is":false}）
+ *   "calc":{"sum":"released_count"}             字段求和
+ *   "calc":{"sumIf":{"field":"released_count","where":"ok"}}   满足 where 的行求和
+ *   多算几个：值写对象、键当变量名 ——
+ *   "calc":{"sum":{"sumIf":{...}},"managed":{"countIf":"ok"}} → 模板里可用 {sum} 与 {managed}
  *
  * 表单的两种形态**不用额外声明**：被 list 的 `add` 或行内 `edit` 引用到 → 作为弹窗
  * （按钮画在被引用那张表的标题行右侧）；没人引用 → 就内嵌在面板里。
@@ -62,14 +94,58 @@ export const KNOWN_SLOTS = ['plugins', 'persona.section', 'settings.section'];
 export const IMPLEMENTED_SLOTS = ['plugins'];
 export const KNOWN_MODES = ['declarative', 'iframe'];
 export const IMPLEMENTED_MODES = ['declarative'];
-const BLOCK_TYPES = ['text', 'list', 'table', 'keyvalue', 'button', 'form', 'code', 'steps'];
+const BLOCK_TYPES = ['text', 'list', 'table', 'keyvalue', 'button', 'form', 'code', 'steps', 'tabs', 'stats', 'cards'];
 const ROW_ACTION_KINDS = ['edit', 'call', 'delete'];
+const TONES = ['ok', 'warn', 'accent'];
+const BADGE_TONES = ['ok', 'warn', 'neutral'];
+/** calc 的算子：写死在宿主，**用哪种在这里声明**（见文件头的 stats 说明） */
+const CALC_OPS = ['count', 'countIf', 'sum', 'sumIf'];
+/** 允许放进 aside 右栏的块类型（顺序按稿件：需要处理 = cards，最近动态 = list） */
+const ASIDE_TYPES = ['cards', 'list'];
 
 const ID_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 // 路径里允许 {占位}：行内操作要按行取值（例如 DELETE:/api/ssh/servers/{alias}）
 const PERM_RE = /^(GET|POST|PUT|PATCH|DELETE):\/api\/[A-Za-z0-9._~{}%\-/]*$/;
 
 const str = (v) => (typeof v === 'string' ? v.trim() : '');
+
+/**
+ * 校验一个 `calc` 声明。三种写法：
+ *   "count" / "countIf" 这类**裸算子名**
+ *   { "<算子>": "<字段名>" }           例如 { "countIf": "ok" }
+ *   { "<变量名>": <算子声明>, ... }     一次算多个，键就是模板里的变量名
+ * sumIf 的取值是对象形状，单独认。
+ */
+function calcErrors(calc, at, errors) {
+  if (typeof calc === 'string') {
+    if (!CALC_OPS.includes(calc)) errors.push(`${at} 算子不认识：${calc}（可用：${CALC_OPS.join(' / ')}）`);
+    return;
+  }
+  if (!calc || typeof calc !== 'object' || Array.isArray(calc)) {
+    errors.push(`${at} 要是算子名或对象`);
+    return;
+  }
+  for (const [key, val] of Object.entries(calc)) {
+    // 算子名当键、值是字符串 → 这是「算子 + 字段」；值是对象 → 键当变量名（见下）
+    if (CALC_OPS.includes(key) && typeof val === 'string') {
+      if (!str(val)) errors.push(`${at}.${key} 要写字段名`);
+      continue;
+    }
+    if (CALC_OPS.includes(key) && val === true) continue; // {"count": true} 也认
+    // countIf / sum 的条件可以写成对象 {field, is}
+    if ((key === 'countIf' || key === 'sum') && val && typeof val === 'object') {
+      if (!str(val.field)) errors.push(`${at}.${key} 缺 field`);
+      continue;
+    }
+    if (key === 'sumIf' && typeof val === 'object') {
+      if (!str(val?.field)) errors.push(`${at}.sumIf 缺 field`);
+      if (val?.where === undefined) errors.push(`${at}.sumIf 缺 where`);
+      continue;
+    }
+    // 键是变量名 → 值再当一条 calc 声明递归校验
+    calcErrors(val, `${at}.${key}`, errors);
+  }
+}
 
 /* ------------------------------------------------------------------ 校验 */
 
@@ -135,11 +211,81 @@ export function validateManifest(m, dirName) {
         const at = `${name}[${i}]`;
         if (!b || typeof b !== 'object') return errors.push(`${at} 不是对象`);
         if (!BLOCK_TYPES.includes(b.type)) errors.push(`${at} 类型不认识：${b.type}`);
+        // tabs：把子块并进同一套校验（白名单 / source 权限 / 表单引用）—— 塞进页签不能绕过检查
+        if (b.type === 'tabs') {
+          if (!Array.isArray(b.tabs) || !b.tabs.length) errors.push(`${at}（tabs）要写 tabs 页签列表`);
+          for (const [ti, t] of (b.tabs ?? []).entries()) {
+            if (!str(t.label)) errors.push(`${at}.tabs[${ti}] 缺 label`);
+            lists.push({ name: `${at}.tabs[${ti}].blocks`, list: Array.isArray(t.blocks) ? t.blocks : [] });
+          }
+        }
         if (b.source) {
           const api = str(b.source.api);
           if (!api) errors.push(`${at}.source 缺 api`);
           else if (!m.permissions?.some((p) => p.endsWith(':' + api))) {
             errors.push(`${at} 取了 ${api}，但 permissions 里没声明`);
+          }
+          // 筛 / 排 / 截：写错了不会报错、只会静默不生效（画出来少几行没人知道为什么），所以这里钉住形状
+          const f = b.source.filter;
+          if (f !== undefined) {
+            if (!f || typeof f !== 'object' || Array.isArray(f)) errors.push(`${at}.source.filter 要是对象`);
+            else if (!str(f.field)) errors.push(`${at}.source.filter 缺 field`);
+          }
+          const so = b.source.sort;
+          if (so !== undefined) {
+            if (!so || typeof so !== 'object' || Array.isArray(so)) errors.push(`${at}.source.sort 要是对象`);
+            else {
+              if (!str(so.by)) errors.push(`${at}.source.sort 缺 by`);
+              if (so.dir !== undefined && !['asc', 'desc'].includes(str(so.dir))) {
+                errors.push(`${at}.source.sort.dir 只能是 asc / desc：${so.dir}`);
+              }
+            }
+          }
+          if (b.source.limit !== undefined && !(Number.isInteger(b.source.limit) && b.source.limit > 0)) {
+            errors.push(`${at}.source.limit 要是正整数：${b.source.limit}`);
+          }
+        }
+        if (b.aside !== undefined) {
+          if (typeof b.aside !== 'boolean') errors.push(`${at}.aside 只接受 true / false`);
+          else if (b.aside && !ASIDE_TYPES.includes(b.type)) {
+            errors.push(`${at}.aside 只支持 ${ASIDE_TYPES.join(' / ')}（${b.type} 放到右栏没样式）`);
+          }
+        }
+        // stats：一行数字卡。值可以写死，也可以靠 calc 现算 —— 算子集合在宿主，用哪个写在这里
+        if (b.type === 'stats') {
+          if (!Array.isArray(b.items) || !b.items.length) errors.push(`${at}（stats）要有 items`);
+          else {
+            b.items.forEach((it, ii) => {
+              if (!it || typeof it !== 'object') return errors.push(`${at}.items[${ii}] 不是对象`);
+              if (!str(it.label)) errors.push(`${at}.items[${ii}] 缺 label`);
+              if (it.value === undefined && it.calc === undefined) errors.push(`${at}.items[${ii}] 要写 value 或 calc`);
+              if (it.tone !== undefined && !TONES.includes(str(it.tone))) {
+                errors.push(`${at}.items[${ii}].tone 只能是 ${TONES.join(' / ')}：${it.tone}`);
+              }
+              if (it.calc !== undefined) calcErrors(it.calc, `${at}.items[${ii}].calc`, errors);
+            });
+          }
+        }
+        // cards：卡片网格
+        if (b.type === 'cards') {
+          if (!b.card || typeof b.card !== 'object' || Array.isArray(b.card)) errors.push(`${at}（cards）要有 card`);
+          else {
+            if (!str(b.card.title)) errors.push(`${at}.card 缺 title`);
+            if (b.card.badgeTone !== undefined && !BADGE_TONES.includes(str(b.card.badgeTone))) {
+              errors.push(`${at}.card.badgeTone 只能是 ${BADGE_TONES.join(' / ')}：${b.card.badgeTone}`);
+            }
+            for (const key of ['lines', 'foot']) {
+              if (b.card[key] === undefined) continue;
+              if (!Array.isArray(b.card[key])) errors.push(`${at}.card.${key} 要是数组`);
+              else {
+                b.card[key].forEach((r, ri) => {
+                  if (!str(r?.label)) errors.push(`${at}.card.${key}[${ri}] 缺 label`);
+                });
+              }
+            }
+          }
+          if (b.columns !== undefined && !(Number.isInteger(b.columns) && b.columns >= 1 && b.columns <= 6)) {
+            errors.push(`${at}.columns 要是 1~6 的整数：${b.columns}`);
           }
         }
         if (b.type === 'button') {

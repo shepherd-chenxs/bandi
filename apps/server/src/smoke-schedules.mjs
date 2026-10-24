@@ -211,13 +211,13 @@ try {
   const out2 = await prWatch.prScan({ config: {} });
   check('再巡检一次：不重复建卡、也不算更新', out2.created === 0 && out2.updated === 0, out2.summary);
 
-  // 人把卡拖到「进行中」→ PR 被合并 → 巡检应该把它收成「待确认」
+  // 人把卡拖到「进行中」→ PR 被合并 → 巡检应该把它收成「待验收」
   store.updateProjectTask(pr11.id, { status: '进行中' });
   merged = true;
   const out3 = await prWatch.prScan({ config: {} });
   const after = store.getProjectTask(pr11.id);
   check('合并后 prState 变 merged', after.prState === 'merged', String(after.prState));
-  check('「进行中」→「待确认」（不直接已完成）', after.status === '待确认', after.status);
+  check('「进行中」→「待验收」（不直接已完成）', after.status === '待验收', after.status);
   check('结论里报了状态变化', /PR 状态变化 1 张/.test(out3.summary), out3.summary);
   check('已合并的 PR 不会因为不在 open 列表里就被删卡', !!store.getProjectTask(pr11.id));
 

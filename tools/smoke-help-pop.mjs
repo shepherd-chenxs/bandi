@@ -12,7 +12,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const src = fs.readFileSync(path.join(repo, 'apps', 'web', 'app.js'), 'utf8');
+const webJs = path.join(repo, 'apps', 'web', 'js');
+const src = ['../app.mjs', 'ui.mjs', 'skills.mjs', ...fs.readdirSync(webJs).filter((f) => f.endsWith('.mjs') && f !== 'ui.mjs' && f !== 'skills.mjs')]
+  .map((f) => fs.readFileSync(path.join(webJs, f), 'utf8')).join('\n'); // 2026-10-22 拆 ESM：扫全部前端模块 + 入口（boot 语句都在入口）
 
 let bad = 0;
 let n = 0;
@@ -34,7 +36,9 @@ const usesInTpl = (src.match(/class="counter left">\$\{GIT_TOKEN_HELP\}/g) ?? []
 const usesAsArg = (src.match(/wireHelpPop\([^)]*GIT_TOKEN_HELP/g) ?? []).length;
 check(usesInTpl === 0, '令牌输入框下面不再贴同一段说明');
 check(usesAsArg === 1, '「?」弹出层用的是这份 GIT_TOKEN_HELP');
-check(/class="row-with-btn">[\s\S]*?id="gitConnect"[\s\S]*?<\/div>\s*<\/div>\s*<\/div>`/.test(src), '令牌表单只剩输入框 + 连接按钮');
+// 这一条原来用 `class="row-with-btn">…id="gitConnect"…` 整段正则匹配 —— 2026-10-23 令牌表单
+// 换成 .gr-conn 后那段 row-with-btn 最先出现在**手动接入弹窗**里，正则从那儿一路吃到 gitConnect，
+// 跨了 4 万多字符，等于什么都没钉住。改到下面 tokenForm 块内按"输入框 + 按钮各一个"来数。
 // 「?」要挂在 GitHub 连接那个标题上，不是别的分组
 check(
   /class="group-title">GitHub 连接<button[^>]*id="gitTokenHelp"/.test(src),
@@ -47,7 +51,9 @@ check(/document\.addEventListener\('click', closeHelpPop\)/.test(src), 'document
 /* ------------------------------- 连上之后：同一行、只换"能不能编辑"和按钮文案 */
 // 用户说的是"连接之后这个区域的变化不要太大" —— 所以两个状态必须是**同一个骨架**，
 // 不许再换成「状态：已连接 + 断开连接」那种另一套行。
-const formRe = /const (tokenForm|connectedForm) = `\s*<div class="form-row top">\s*<div class="row-label">令牌<\/div>/g;
+// 2026-10-23 改居中紧凑簇：骨架从「form-row top + row-label 块」换成
+// `.gr-conn > .gr-conn-row > [标签 | 输入框 | 按钮]`，两个状态仍然共用同一套。
+const formRe = /const (tokenForm|connectedForm) = `\s*<div class="gr-conn">\s*<div class="gr-conn-row">\s*<span class="row-label">令牌<\/span>/g;
 const sameShape = [...src.matchAll(formRe)].map((m) => m[1]);
 check(sameShape.length === 2, `两个状态都是「令牌」那一行（实际 ${sameShape.join('、') || '没有'}）`);
 
@@ -59,8 +65,9 @@ const conn = block('connectedForm');
 check(/<input[^>]*readonly/.test(conn), '连上后输入框是只读的');
 check(/<input[^>]*class="locked"/.test(conn), '只读框带 .locked（看得见、点得出来不能改）');
 check(/id="gitDisconnect"/.test(conn), '按钮换成「断开连接」');
+// 状态行是同一条 .gr-conn-row 的第 2 列（grid-column: 2），压着输入框正下方居中。
 check(
-  /class="counter left"><b style="color:var\(--ok\)">已连接<\/b>/.test(conn),
+  /<div class="gr-conn-status"><b style="color:var\(--ok\)">已连接<\/b>/.test(conn),
   '「已连接」状态写在输入框下面',
 );
 // 只读框里放的是后 4 位，不是令牌本身
@@ -74,6 +81,12 @@ check(/placeholder="[^"]*掩码/.test(unconn), '输入框提示语跟着改成"�
 check(!/后 4 位/.test(unconn), '输入框提示里不再写"后 4 位"（已过时）');
 check(/id="gitConnect"/.test(unconn), '没连上时按钮是「连接 GitHub」');
 check(!/class="counter/.test(unconn), '没连上时输入框下面没有多余说明（那段在「?」里）');
+// 令牌表单只剩「令牌标签 + 输入框 + 连接按钮」（原先在页面级靠 row-with-btn 正则钉住，
+// 拆成 .gr-conn 后那条正则实际会跨块误匹配，挪到这里按块内计数）。
+check((unconn.match(/<input/g) ?? []).length === 1 && (unconn.match(/<button/g) ?? []).length === 1,
+  '令牌表单只有输入框 + 连接按钮（各一个，没有多余控件）');
+check((conn.match(/<input/g) ?? []).length === 1 && (conn.match(/<button/g) ?? []).length === 1,
+  '已连接态同样只有输入框 + 按钮（各一个）');
 
 /* ---------------------------------- 加仓库：一个入口「＋ 添加仓库」→ 菜单 → 弹窗 */
 // 2026-10-17：原来是「＋ 手动接入」在标题上 + 页面底部常驻一整块「从 GitHub 添加」。
@@ -194,12 +207,15 @@ const sandbox = {
 function grab(re) {
   const m = src.match(re);
   if (!m) throw new Error(`没抠到：${re}`);
-  return m[0];
+  return m[0].replace(/^export /gm, ''); // 拆 ESM 后模块里的声明带 export，函数替身执行时剥掉
 }
 const code = [
   /* 抠到 `wireHelpPop` 结尾为止；后面的段落标记 2026-10-20 从「自建下拉」换成了「悬浮提示（自建 data-tip）」
      —— 这里只是"截到哪儿"的界标，别把它当成被测功能的断言。 */
-  grab(/let helpPop = null;[\s\S]*?\n}\n(?=\n\/\* -+ 悬浮提示)/),
+  grab(/let helpPop = null;[\s\S]*?\n}\n+(?=\s*\/\* -+ 悬浮提示)/),
+  // 2026-10-22 拆 ESM：「点别处 / Esc 收起」的注册从 help 区的顶层语句挪进了入口 app.mjs —— 这里按入口原文补上
+  `document.addEventListener('click', closeHelpPop);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeHelpPop(); });`,
 ].join('\n');
 const run = new Function('document', 'window', `${code}\nreturn { wireHelpPop, closeHelpPop };`);
 const { wireHelpPop, closeHelpPop } = run(sandbox.document, sandbox.window);

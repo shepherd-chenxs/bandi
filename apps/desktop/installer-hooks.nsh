@@ -18,6 +18,11 @@
   ; 否则 $APPDATA / $SMSTARTUP 会指到管理员的目录，等于删错地方、又没删干净。
   SetShellVarContext current
 
+  ; 撤掉「bandi」这个全局命令（shim + 用户 PATH 里那一项）。
+  ; 放在下面那个 MessageBox **之前**：用户选"保留数据"也是在卸载程序，命令不该留着。
+  nsExec::ExecToLog '"$INSTDIR\node.exe" "$INSTDIR\apps\server\src\cli.mjs" install-cli --remove'
+  Pop $0
+
   ; 静默卸载不给删数据的机会（没人能回答这个问句）——直接跳过，保住数据。
   IfSilent bandi_keep_data
 
@@ -53,4 +58,18 @@
   Delete "$SMSTARTUP\bandi-node.vbs"
 
   bandi_keep_data:
+!macroend
+
+; ─────────────────────────────────────────────────────────────────────────────
+; 装完：把 `bandi` 注册成一个全局命令（状态一屏 / 起停 / 日志 / 节点状态）。
+;
+; 逻辑**只在 cli.mjs 里一份** —— 写 shim、读改写用户 PATH（连 REG_SZ / REG_EXPAND_SZ 一起认）
+; 都在那儿。NSIS 里再抄一遍 PATH 处理，两边必然跑偏；而 PATH 写坏是"当天看不出、第二天
+; 一堆命令找不到"那类事故，所以宁可只留一个实现。
+;
+; 静默安装（/S）也照样注册：这是功能，不是可选项。注册失败不拦安装（Pop 掉返回值就继续），
+; 用户还能从开始菜单进 —— 少一条命令不该让整个安装失败。
+!macro NSIS_HOOK_POSTINSTALL
+  nsExec::ExecToLog '"$INSTDIR\node.exe" "$INSTDIR\apps\server\src\cli.mjs" install-cli --path'
+  Pop $0
 !macroend

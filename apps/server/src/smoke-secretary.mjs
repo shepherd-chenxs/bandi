@@ -1,9 +1,10 @@
 /**
- * 内置秘书「喜儿」的离线验收（2026-10-18）。
+ * 内置员工（系统管家「崔老三」，2026-10-23 前是秘书「喜儿」）的离线验收（2026-10-18 建，2026-10-23 随名额换人更新）。
  *
  * 分两段：
- *   ① 直接 import —— seed 幂等、内置不可删、`auto` 运行时、首轮注入那段「机器现状」；
- *   ② 真起一个控制面（临时数据目录）—— 接口层：她出厂就在、删她回 403、改她不会被吃掉。
+ *   ① 直接 import —— seed 幂等、内置不可删、`auto` 运行时、首轮注入那段「机器现状」、
+ *      `syncSecretary` 把存量身份拉回出厂（2026-10-22 收编 + 2026-10-23 换人都靠它迁移）；
+ *   ② 真起一个控制面（临时数据目录）—— 接口层：出厂就在、删他 403、身份锁死（E2055）但部署配置可改。
  *
  * 为什么 ② 非跑不可：①验的是函数，而人踩的是**接口**。删不掉这条曾经靠前端藏按钮，
  * 接口照删 —— 现在两道都得有，那就两道都得测。
@@ -52,14 +53,53 @@ const second = secretary.ensureSecretary();
 check('再调一次 → 不新建', second.created === false);
 check('人数没变（幂等）', store.listPersonas().length === n1, `${n1} → ${store.listPersonas().length}`);
 
-/* 用户改名/改职责之后，启动不许刷回默认值 —— 那等于他改了个寂寞 */
+/* 用户改名/改职责之后，ensureSecretary 不动它（seed 只管建；刷回出厂是 syncSecretary 的事） */
 store.updatePersona(secretary.SECRETARY_ID, { name: '小秘', instructions: '我自己的设定' });
 secretary.ensureSecretary();
 const after = store.getPersona(secretary.SECRETARY_ID);
-check('改名后再启动 → 名字保住', after.name === '小秘', after.name);
+check('ensureSecretary 不刷用户改动（职责分离：刷回是 sync 的活）', after.name === '小秘', after.name);
 check('改指令后再启动 → 指令保住', after.instructions === '我自己的设定');
 check('内置标记也还在', after.builtin === 1);
+
+/* syncSecretary：不管库里什么样，跑完 = 出厂 —— 2026-10-23 喜儿→崔老三的存量迁移就走的这条路 */
+const synced = secretary.syncSecretary();
+const back = store.getPersona(secretary.SECRETARY_ID);
+check('syncSecretary 把改过的名字刷回出厂', back.name === secretary.SECRETARY_NAME && back.name === '崔老三', back.name);
+check('指令也回到出厂', back.instructions === secretary.SECRETARY_INSTRUCTIONS);
+check('返回了动过的字段清单（给启动日志用）', Array.isArray(synced) && synced.includes('name') && synced.includes('instructions'), JSON.stringify(synced));
+const synced2 = secretary.syncSecretary();
+check('再跑一遍 → 幂等（空数组）', Array.isArray(synced2) && synced2.length === 0, JSON.stringify(synced2));
 store.updatePersona(secretary.SECRETARY_ID, { name: secretary.SECRETARY_NAME, instructions: secretary.SECRETARY_INSTRUCTIONS });
+
+/* ---- ①a 存量 id 迁移（2026-10-23）：旧库的 p-xier 整行搬到 p-cuilaosan，引用跟着走 ---- */
+console.log('\n①a id 迁移：p-xier → p-cuilaosan，十几张表的引用一次搬齐');
+{
+  const { db } = await import('./store/db.mjs');
+  // 把内置名额撤回旧 id（喜儿时代的样子），再摆两条会被迁移波及的引用
+  db.prepare(`DELETE FROM persona_skills WHERE personaId = ?`).run(secretary.SECRETARY_ID);
+  db.prepare(`UPDATE personas SET id = 'p-xier', name = '喜儿', avatar = 'p-xier.png' WHERE id = ?`).run(secretary.SECRETARY_ID);
+  db.prepare(`INSERT INTO conversations (id, title, personaId, createdAt, updatedAt)
+              VALUES ('c-mig-test', '迁移测试会话', 'p-xier', '2026-10-23T00:00:00Z', '2026-10-23T00:00:00Z')`).run();
+  db.prepare(`INSERT INTO persona_skills (personaId, skillName, addedAt)
+              VALUES ('p-xier', 'bandi-secretary', '2026-10-23T00:00:00Z')`).run();
+  db.prepare(`INSERT INTO groups (id, title, assistantPersonaId, createdAt, updatedAt)
+              VALUES ('g-mig-test', '迁移测试群', 'p-xier', '2026-10-23T00:00:00Z', '2026-10-23T00:00:00Z')`).run();
+
+  check('迁移跑一次 → 报告真的迁了', secretary.migrateSecretaryId() === true);
+  const moved = store.getPersona(secretary.SECRETARY_ID);
+  check('旧行整行搬到新 id（名字原样带走）', !!moved && moved.name === '喜儿', moved?.name);
+  check('avatar 文件名跟着换（图片文件已同步改名）', moved?.avatar === 'p-cuilaosan.png', moved?.avatar);
+  check('旧 id 不再有行', !store.getPersona('p-xier'));
+  check('会话归属跟着走', db.prepare(`SELECT personaId FROM conversations WHERE id = 'c-mig-test'`).get()?.personaId === secretary.SECRETARY_ID);
+  check('群助手指向跟着走', db.prepare(`SELECT assistantPersonaId FROM groups WHERE id = 'g-mig-test'`).get()?.assistantPersonaId === secretary.SECRETARY_ID);
+  check('技能挂载跟着走', db.prepare(`SELECT COUNT(*) AS n FROM persona_skills WHERE personaId = ?`).get(secretary.SECRETARY_ID)?.n >= 1);
+
+  check('再跑一次 → 幂等（无事发生）', secretary.migrateSecretaryId() === false);
+  secretary.ensureSecretary(); // 补回 builtin 标记等（迁移不改这些）
+  // 清场：别让测试数据留在后面几段的视野里
+  db.prepare(`DELETE FROM conversations WHERE id = 'c-mig-test'`).run();
+  db.prepare(`DELETE FROM groups WHERE id = 'g-mig-test'`).run();
+}
 
 /* 技能：只在新建那次挂，之后用户摘掉就摘掉了 */
 const linked = store.listPersonaSkillLinks(secretary.SECRETARY_ID).map((l) => l.name);
@@ -170,33 +210,32 @@ try {
   if (!up) console.log(serverLog.split('\n').slice(-15).join('\n'));
 
   if (up) {
-    console.log('\n② 接口层：出厂就有、删不掉、改得动');
+    console.log('\n② 接口层：出厂就有、删不掉、身份锁死但部署配置可改');
     const st = await req('/api/state');
-    const xier = (st.b?.personas ?? []).find((p) => p.id === secretary.SECRETARY_ID);
-    check('全新一套库里，她一装好就在', !!xier, JSON.stringify((st.b?.personas ?? []).map((p) => p.name)));
-    check('/api/state 带出 builtin（前端徽标靠它）', xier?.builtin === 1);
+    const steward = (st.b?.personas ?? []).find((p) => p.id === secretary.SECRETARY_ID);
+    check('全新一套库里，他一装好就在', !!steward, JSON.stringify((st.b?.personas ?? []).map((p) => p.name)));
+    check('出厂就是崔老三（2026-10-23 名额换人，seed/sync 负责刷）', steward?.name === '崔老三', steward?.name);
+    check('/api/state 带出 builtin（前端徽标靠它）', steward?.builtin === 1);
     check('人的总数就是 1（没多建几个）', (st.b?.personas ?? []).length === 1);
 
     const del = await req(`/api/personas/${secretary.SECRETARY_ID}`, { method: 'DELETE' });
-    check('删她 → 403（不是 500）', del.status === 403, `${del.status} ${del.b?.code ?? ''}`);
+    check('删他 → 403（不是 500）', del.status === 403, `${del.status} ${del.b?.code ?? ''}`);
     check('给了错误码，界面能照着说人话', del.b?.code === 'E1075', del.b?.code);
-    check('提示里说了"可以改名"', String(del.b?.error ?? '').includes('改名'), del.b?.error);
-    check('删完她还在', (await req('/api/state')).b.personas.some((p) => p.id === secretary.SECRETARY_ID));
+    check('提示给了出路（另建员工）', String(del.b?.error ?? '').includes('另建'), del.b?.error);
+    check('删完他还在', (await req('/api/state')).b.personas.some((p) => p.id === secretary.SECRETARY_ID));
 
+    /* 身份锁（2026-10-23 E2055）：名字/岗位/指令一律拒改 —— 改身份只能改 secretary.mjs 出厂值 */
     const ren = await req(`/api/personas/${secretary.SECRETARY_ID}`, {
       method: 'PUT',
-      body: JSON.stringify({ name: '喜儿（改过）', instructions: '自定义' }),
+      body: JSON.stringify({ name: '老崔（改过）', instructions: '自定义' }),
     });
-    check('改名/改指令 → 200', ren.status === 200, JSON.stringify(ren.b?.code));
-    check('名字改了', ren.b?.persona?.name === '喜儿（改过）', ren.b?.persona?.name);
-    check('builtin 不会被改没', ren.b?.persona?.builtin === 1);
-
-    const keepAuto = await req(`/api/personas/${secretary.SECRETARY_ID}`, {
+    check('改名/改指令 → 403 E2055（身份锁死，不是 200）', ren.status === 403 && ren.b?.code === 'E2055', `${ren.status} ${ren.b?.code ?? ''}`);
+    const ren2 = await req(`/api/personas/${secretary.SECRETARY_ID}`, {
       method: 'PUT',
-      body: JSON.stringify({ name: '喜儿', runtime: 'auto' }),
+      body: JSON.stringify({ name: '崔老三', instructions: secretary.SECRETARY_INSTRUCTIONS, runtime: 'auto' }),
     });
-    check('显式把 runtime 存成 auto → 200（接口认这个值）', keepAuto.status === 200, JSON.stringify(keepAuto.b?.code));
-    check('存完还是 auto', keepAuto.b?.persona?.runtime === 'auto', keepAuto.b?.persona?.runtime);
+    check('身份没变、只顺手带 runtime → 200（锁判的是"值真的变了"）', ren2.status === 200, `${ren2.status} ${ren2.b?.code ?? ''}`);
+    check('存完还是 auto', ren2.b?.persona?.runtime === 'auto', ren2.b?.persona?.runtime);
 
     // 普通员工：照常能建能删，别被内置那套规则带上
     const made = await req('/api/personas', { method: 'POST', body: JSON.stringify({ name: '临时员工' }) });
@@ -204,7 +243,7 @@ try {
     check('普通员工不是内置', made.b?.persona?.builtin === 0);
     const delPlain = await req(`/api/personas/${encodeURIComponent(made.b?.persona?.id ?? '')}`, { method: 'DELETE' });
     check('普通员工能删', delPlain.status === 200, String(delPlain.status));
-    check('删完只剩喜儿一个人', (await req('/api/state')).b.personas.map((p) => p.id).join(',') === secretary.SECRETARY_ID);
+    check('删完只剩内置管家一个人', (await req('/api/state')).b.personas.map((p) => p.id).join(',') === secretary.SECRETARY_ID);
   }
 } finally {
   child.kill();

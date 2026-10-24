@@ -9,7 +9,7 @@
  *   ① **评论不改卡状态**（想法还是想法），也不登记 runId —— 评论是讨论，不是开工；
  *   ② 一条顶层评论 = 一个议题；他的回话挂到**触发它的那条评论**的议题下（不是"最后一条"）；
  *   ③ 隔了别的议题再回旧议题，回复也挂旧的（parentId 认议题，不认时序）；
- *   ④ **「待办」+ 已指定执行人 = 自动开工**；想法阶段/没指定人都不跑；跑完照样收成「待确认」。
+ *   ④ **「待办」+ 已指定执行人 = 自动开工**；想法阶段/没指定人都不跑；跑完照样收成「待验收」。
  *
  * 用 fixtures/fake-agent.js 当运行时（不烧 token、不依赖真 CLI）。
  * 隔离：临时数据目录、临时端口、临时项目目录。
@@ -46,6 +46,7 @@ const server = spawn(process.execPath, [path.join(here, 'server.mjs')], {
     BANDI_DB: path.join(tmp, 'bandi.db'),
     BANDI_PORT: String(PORT),
     BANDI_HOST: '127.0.0.1',
+    BANDI_FAKE_ECHO: 'full', // 假 CLI 回显整个任务 —— ⑪ 节断言任务卡锚点要看到全文
   },
   stdio: ['ignore', 'pipe', 'pipe'],
   windowsHide: true,
@@ -78,6 +79,17 @@ async function req(method, p, body) {
 
 const getTask = async (id) => (await req('GET', `/api/projects/tasks/${id}`)).body.task;
 const getConv = async (id) => (await req('GET', `/api/conversations/${id}`)).body;
+
+/** 上传任务卡附件（原始二进制，一次一个文件），返回 { status, body } */
+async function uploadTaskFile(taskId, name, content, mime = 'application/octet-stream') {
+  const r = await fetch(`${BASE}/api/projects/tasks/${encodeURIComponent(taskId)}/files?name=${encodeURIComponent(name)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': mime, 'X-Bandi': '1' },
+    body: content,
+    signal: AbortSignal.timeout(10000),
+  });
+  return { status: r.status, body: await r.json().catch(() => ({})) };
+}
 
 /** 等这次 run 跑完（fake-agent 很快；上限 20 秒），返回 run 行 */
 async function waitRunDone(convId, runId, ms = 20000) {
@@ -165,7 +177,7 @@ try {
   const execRun = await waitRunDone(toTodo.body.task.conversationId, toTodo.body.task.runId);
   check('执行 run 跑完', execRun?.status === '完成', String(execRun?.status));
   t = await getTask(task.id);
-  check('跑完收成「待确认」', t.status === '待确认', t.status);
+  check('跑完收成「待验收」', t.status === '待验收', t.status);
   check('执行收尾写进描述（[运行结束]）', String(t.description || '').includes('[运行结束]'), JSON.stringify(t.description));
 
   console.log('\n⑥ 没指定人时改「待办」：只停车不跑；事后补上执行人 → 自动开工');
@@ -177,7 +189,7 @@ try {
   check('补上执行人 → 自动开工', assign.status === 200 && assign.body.started === true && assign.body.task?.status === '进行中',
     `${assign.status} ${JSON.stringify(assign.body.task && { s: assign.body.task.status, r: assign.body.task.runId })}`);
   await waitRunDone(assign.body.task.conversationId, assign.body.task.runId);
-  check('第二张卡跑完也收成「待确认」', (await getTask(t2.id)).status === '待确认', (await getTask(t2.id)).status);
+  check('第二张卡跑完也收成「待验收」', (await getTask(t2.id)).status === '待验收', (await getTask(t2.id)).status);
 
   console.log('\n⑦ 「想法」+ 指定执行人：不跑（还没决定要不要做）');
   const t3 = (await req('POST', `/api/projects/${project.id}/tasks`, { title: '第三个想法', status: '想法' })).body.task;
@@ -217,6 +229,54 @@ try {
   check('讨论 plan → claude plan（本族原样）', normalizeSandbox('claude', 'plan') === 'plan', normalizeSandbox('claude', 'plan'));
   check('执行不传 sandbox 不动员工默认', normalizeSandbox('codex', 'danger-full-access') === 'danger-full-access',
     normalizeSandbox('codex', 'danger-full-access'));
+
+  console.log('\n⑩ 评论附件：上传 + 随评论回显（2026-10-23 用户要求「像聊天面板那样带文件/贴图」）');
+  const t5 = (await req('POST', `/api/projects/${project.id}/tasks`, { title: '带附件的卡', status: '想法' })).body.task;
+  await req('PATCH', `/api/projects/tasks/${t5.id}`, { personaId: persona.id });
+
+  // 第一次上传会懒建工单会话，返回会话 id 与落盘文件
+  const up = await uploadTaskFile(t5.id, 'screenshot.png', Buffer.from('PNGDATA'), 'image/png');
+  check('上传接口 201 且给出会话与文件', up.status === 201 && !!up.body.conversationId && !!up.body.file?.stored && !!up.body.file?.url,
+    JSON.stringify(up.body));
+  const convId5 = up.body.conversationId;
+  check('文件真的落在临时 uploads 下', !!convId5 && typeof up.body.file?.path === 'string' && fs.existsSync(up.body.file.path),
+    up.body.file?.path ?? '');
+  const atts = [{ name: up.body.file.name, stored: up.body.file.stored, size: up.body.file.size, mime: up.body.file.mime }];
+
+  // 讨论（起 run）+ 附件：评论消息要带附件清单
+  const discAtt = await req('POST', `/api/projects/tasks/${t5.id}/comments`, { text: '看这张图', mode: 'discuss', atts });
+  check('带附件的讨论起 run', discAtt.status === 202 && !!discAtt.body.runId, String(discAtt.status));
+  await waitRunDone(convId5, discAtt.body.runId); // 等它跑完再开下一节 —— 项目同时只跑一件，不等会撞闸 409
+  const userMsg = (await getConv(convId5)).messages.find((m) => m.role === 'user' && m.text === '看这张图');
+  check('评论消息带附件清单', Array.isArray(userMsg?.atts) && userMsg.atts.length === 1 && userMsg.atts[0].name === 'screenshot.png',
+    JSON.stringify(userMsg?.atts));
+
+  // 便签（不起 run）+ 纯附件：文本可空，附件照常落库
+  const noteAtt = await req('POST', `/api/projects/tasks/${t5.id}/comments`, { text: '', mode: 'note', atts });
+  check('纯附件便签也能发且没起 run', noteAtt.status === 201 && !noteAtt.body.runId, `${noteAtt.status}/${noteAtt.body.runId}`);
+  const noteMsg = (await getConv(convId5)).messages.find((m) => m.note && Array.isArray(m.atts) && m.atts.length);
+  check('便签也带附件清单', !!noteMsg, JSON.stringify(noteMsg?.atts));
+
+  // 非法路径：不信任前端，乱传路径必须 400
+  const bad = await req('POST', `/api/projects/tasks/${t5.id}/comments`, {
+    text: '坏附件', mode: 'note', atts: [{ name: '../../x', stored: '../../x', size: 1, mime: 'text/plain' }],
+  });
+  check('非法附件路径被拒（400）', bad.status === 400, String(bad.status));
+
+  console.log('\n⑪ 任务卡锚点：评论区派活必须带上"你在办哪张卡"（2026-10-23 事故：问进度答成了别的任务的 PRD）');
+  const t6 = (await req('POST', `/api/projects/${project.id}/tasks`, {
+    title: '锚点验证卡', description: '把归档按钮挪到列表右上角', status: '想法',
+  })).body.task;
+  await req('PATCH', `/api/projects/tasks/${t6.id}`, { personaId: persona.id });
+  const anchor = await comment(t6.id, '任务执行到什么进度了？');
+  check('锚点卡的讨论跑完', anchor.res.status === 202 && anchor.run?.status === '完成', `${anchor.res.status}/${anchor.run?.status}`);
+  const anchorEcho = anchor.messages.find((m) => m.role === 'assistant' && m.runId === anchor.res.body.runId)?.text ?? '';
+  check('prompt 里有卡片标题锚点', anchorEcho.includes('锚点验证卡'), anchorEcho.slice(0, 160));
+  check('prompt 里有任务描述', anchorEcho.includes('把归档按钮挪到列表右上角'));
+  check('prompt 里有所属项目', anchorEcho.includes('测试项目'));
+  check('prompt 里有卡片状态', anchorEcho.includes('卡片状态'));
+  check('锚点声明"用户问的是这张卡"', anchorEcho.includes('问的都是**这张卡**'));
+  check('用户原话还在任务里', anchorEcho.includes('任务执行到什么进度了？'));
 } catch (err) {
   console.log('\n跑挂了：' + String(err?.message ?? err) + '\n' + slog.slice(-800));
   failed += 1;

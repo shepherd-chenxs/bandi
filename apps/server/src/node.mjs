@@ -20,15 +20,20 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { dataDir } from './config.mjs';
 import * as runtimes from './runtimes.mjs';
 import * as externals from './externals.mjs';
 import { normalizeSandbox } from './sandbox.mjs';
 import { adapterFor } from './adapters.mjs';
+import * as localMode from './local-mode.mjs';
+import { acquireLock, releaseLock } from './node-supervisor.mjs';
 
-const STATE = process.env.BANDI_NODE_STATE ?? path.join(dataDir, 'node.json');
+/*
+ * 原来这里的 `STATE`（node.json 路径）挪走了（2026-10-20，T03）：身份文件只由
+ * `local-mode.ensureNodeId()` 一处读写（它同样认 `BANDI_NODE_STATE`）—— 两份路径常量
+ * 就是"将来各改各的"的开始。
+ */
 const CONFIG = path.join(dataDir, 'config.json');
 const ONCE = process.argv.includes('--once');
 /** 每次长轮询挂多久。太长会让"停止"这类反向指令送得慢，太短就是空转 */
@@ -87,16 +92,14 @@ let TOKEN = readToken();
 /**
  * 自己的身份。**认文件、不认主机名** —— 主机名会被改、也可能两台重名，
  * 而"这台机器还是那台机器"必须跨重启稳定，否则控制面上会攒出一排僵尸设备。
+ *
+ * 2026-10-20（T03）：换成 `local-mode.ensureNodeId()` 这**同一份**实现（设计 §3.2）。
+ * 算法与原来一字不差（读 `node.json` 的 `id`，没有就 `'node-' + randomUUID().slice(0,8)`
+ * 写盘、带 `createdAt`；同样认 `BANDI_NODE_STATE`）—— 但只剩一份，"加入向导生成的 id"
+ * 与"节点报到时报的 id" 从此不可能再分叉（分叉 = 总机上多一台永远离线的僵尸）。
  */
 function ensureId() {
-  try {
-    const j = JSON.parse(fs.readFileSync(STATE, 'utf8'));
-    if (j?.id) return j.id;
-  } catch { /* 没有或坏了：重新生成一个 */ }
-  const id = 'node-' + crypto.randomUUID().slice(0, 8);
-  fs.mkdirSync(path.dirname(STATE), { recursive: true });
-  fs.writeFileSync(STATE, JSON.stringify({ id, createdAt: new Date().toISOString() }, null, 2), 'utf8');
-  return id;
+  return localMode.ensureNodeId();
 }
 
 /**
@@ -112,6 +115,119 @@ function declared() {
     out.push({ family: fam.id, label: fam.label, path: best.path, usable: !!best.usable });
   }
   return out;
+}
+
+/**
+ * 工作目录从哪来（2026-10-22 定稿，三层）：
+ *
+ *   ① 活里带 `repo`（控制面发现 cwd 在某个已接入的 git 仓库里）→ `ensureRepo`：
+ *      本机数据目录的 repos/ 里没有就 clone、有就 fetch + 对齐分支 ——
+ *      **文件内容跟着仓库走**，这是"算力总有地方干活"的正解；
+ *   ② 活里只带 `cwd`（非 git 项目）→ 控制面已按映射表换成本机路径，直接用；
+ *   ③ 什么都没有（纯聊天）→ 自己数据目录下的 `scratch/`：
+ *      聊天不需要项目目录，但 CLI 总要个落脚的 cwd —— 以前这种情况直接报错，
+ *      纯聊天根本派不到节点上（本机那条路反而是宽松的）。
+ */
+function scratchDir() {
+  const d = path.join(dataDir, 'scratch');
+  fs.mkdirSync(d, { recursive: true });
+  return d;
+}
+
+function cwdOf(want) {
+  if (!want) return scratchDir();
+  if (!fs.existsSync(want)) {
+    throw new Error(
+      `这台机器上没有这个目录：${want}\n` +
+        '  git 项目：确认总机上它已接入仓库（节点会自己 clone，凭据用这台机器自己的 git 登录）；\n' +
+        '  普通文件夹：到总机的设备页给这台机器配一条工作空间映射（总机目录 → 本机目录）。',
+    );
+  }
+  return want;
+}
+
+/** git 命令的小包装：超时、不交互、PATH 补上用户态 bin（systemd 起的节点 PATH 很瘦） */
+function runGit(args, cwd, timeoutMs = 120000) {
+  return new Promise((resolve) => {
+    let child;
+    let out = '';
+    try {
+      child = spawn('git', args, {
+        cwd,
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', PATH: binSearchDirs().join(path.delimiter) },
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } catch (e) {
+      return resolve({ code: -1, out: String(e?.message ?? e) });
+    }
+    const timer = setTimeout(() => {
+      try { child.kill(); } catch { /* 已经退了 */ }
+    }, timeoutMs);
+    const onData = (c) => { out += String(c); };
+    child.stdout?.on('data', onData);
+    child.stderr?.on('data', onData);
+    child.on('error', (e) => {
+      clearTimeout(timer);
+      resolve({ code: -1, out: out + String(e?.message ?? e) });
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      resolve({ code: code ?? -1, out: out.trim() });
+    });
+  });
+}
+
+/**
+ * 把控制面指名的仓库在这台机器上备好，返回本机路径。
+ *
+ * 凭据：**用这台机器自己的 git 登录态**（凭据管理器 / 已配好的 remote），总机的令牌
+ * 不下发 —— 跟"连接器不下发"同一条线。私有库 clone 失败的报错里把这话说明白。
+ *
+ * 拉取失败**不拦活**：仓库目录已经在就用本地副本继续干（面板上有 status 事件交代），
+ * 只有"目录都建不出来"才算这个活干不了。
+ */
+async function ensureRepo(repo) {
+  const fullName = String(repo?.fullName ?? '');
+  if (!/^[\w.-]+\/[\w.-]+$/.test(fullName)) throw new Error(`控制面给的仓库名不合法：${fullName}`);
+  const [owner, name] = fullName.split('/');
+  const dir = path.join(dataDir, 'repos', `${owner}__${name}`);
+  const branch = repo.branch ? String(repo.branch) : null;
+
+  if (!fs.existsSync(path.join(dir, '.git'))) {
+    say(`仓库 ${fullName} 本机没有 —— clone 一份${branch ? `（${branch} 分支）` : ''}`);
+    const url = `https://github.com/${fullName}.git`;
+    const args = ['clone', ...(branch ? ['--branch', branch] : []), url, dir];
+    const r = await runGit(args, os.homedir(), 300000); // 大仓库给足五分钟
+    if (r.code !== 0 || !fs.existsSync(path.join(dir, '.git'))) {
+      throw new Error(
+        `clone ${fullName} 没成：${r.out || `退出码 ${r.code}`}\n` +
+          '  私有仓库的话，先在这台机器上 git 登录一次（凭据管理器），班底不用也不该拿到总机的令牌。',
+      );
+    }
+    return dir;
+  }
+
+  // 已有副本：对齐分支 + 拉最新。失败只交代、不拦 —— 干活的材料以本地为准总比不干强。
+  if (branch) {
+    const cur = await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], dir, 15000);
+    if (cur.out.trim() !== branch) {
+      const co = await runGit(['checkout', branch], dir, 30000);
+      if (co.code !== 0) {
+        // 本地没这个分支 → 建一份跟踪远端的（--track -b 不吃"已存在"的情况，分开走）
+        const co2 = await runGit(['checkout', '-b', branch, '--track', `origin/${branch}`], dir, 30000);
+        if (co2.code !== 0) say(`对不上 ${branch} 分支（${co2.out || co.out}）—— 用本地现状继续`);
+      }
+    }
+  }
+  const fetch = await runGit(['fetch', 'origin'], dir, 120000);
+  if (fetch.code === 0) {
+    const pull = await runGit(['pull', '--ff-only'], dir, 120000);
+    if (pull.code !== 0) say(`拉最新没成（${pull.out}）—— 用本地副本继续`);
+  } else {
+    say(`fetch 没成（${fetch.out}）—— 用本地副本继续`);
+  }
+  return dir;
 }
 
 const id = ensureId();
@@ -257,19 +373,6 @@ function resolveLocal(family) {
   return { adapter, cliPath: null, why: `这台机器上没有可用的「${family}」` };
 }
 
-/** 工作目录是**那台机器上的事实**：控制面给的是它那台的路径，这边可能压根没有 */
-function cwdOf(want) {
-  if (!want) throw new Error('控制面没给工作目录');
-  if (!fs.existsSync(want)) {
-    throw new Error(
-      `这台机器上没有这个目录：${want}\n` +
-        '  控制面传的是**它那台机器**的路径。同一个项目在两台机器上路径不同时该配什么，还没做 —— ' +
-        '现在要么把两边路径弄成一样，要么换一台机器干这个活。',
-    );
-  }
-  return want;
-}
-
 async function runJob(job) {
   say(`领到活：${job.family}（运行 ${job.runId}）`);
   const ctl = new AbortController();
@@ -288,7 +391,8 @@ async function runJob(job) {
   try {
     const { adapter, cliPath, why } = resolveLocal(job.family);
     if (!adapter || !cliPath) throw new Error(why ?? `这台机器上跑不了「${job.family}」`);
-    const cwd = cwdOf(job.cwd);
+    // 工作空间三层（见上面的注释）：git 仓库自己备好 → 映射过的路径直接用 → 什么都没有落 scratch
+    const cwd = job.repo ? await ensureRepo(job.repo) : cwdOf(job.cwd);
     say(`在 ${cwd} 里干活，用 ${cliPath}`);
 
     const res = await adapter({
@@ -668,6 +772,35 @@ async function main() {
     say(`数据目录 ${dataDir}（服务必须用同一个）`);
     if (!(await join(joinTo, joinCode))) return; // 写入成功也**不再接着跑**（它是条一次性命令）
   }
+
+  /*
+   * 单实例锁（2026-10-20，T03-3 / 设计 §4.5）：**与 node-supervisor 共用同一把**
+   * （`<数据目录>/node.lock`）。autostart 装的常驻、瘦客户端 spawn 的、手动敲的这条命令
+   * —— 谁后到谁退，绝不允许两个节点进程对着同一枚令牌心跳。
+   *
+   * ⚠️ 放在 `--join` 分支**之后**：加入是条一次性命令，不该被常驻挡住。
+   * ⚠️ 拿不到就**退出码 0**（不要非零）：autostart 的重启探测会把非零当成"起失败"
+   *    而反复拉起 —— 撞锁退出是**正常情形**，不是故障。
+   */
+  const lock = acquireLock({ controlPlane: CONTROL });
+  if (!lock.locked) {
+    /*
+     * ⚠️ 走 **stderr** 并带错误码 `E1095`：错误码必须能在日志里 grep 检索，
+     * 而 stdout 混在"报到/心跳"这些正常输出里，"有没有撞锁"不可靠（QA 实测要求）。
+     * **退出码仍是 0**（上面的裁决：autostart 的 Restart=on-failure 不能把它当故障反复拉起）。
+     */
+    console.error(`[E1095] 已经有一个节点在跑（pid ${lock.pid ?? '?'}），这个进程退出`);
+    process.exit(0);
+  }
+  // 退出时放锁：正常结束走 'exit'；Ctrl-C / kill 走信号处理器（放了锁再退，姿态一致）。
+  // 只删自己 pid 的那份是 releaseLock 内部的事，这里不用操心。
+  process.on('exit', () => releaseLock());
+  const releaseAndExit = () => {
+    releaseLock();
+    process.exit(0);
+  };
+  process.on('SIGINT', releaseAndExit);
+  process.on('SIGTERM', releaseAndExit);
 
   say(`控制面 ${CONTROL}`);
   say(`我是 ${label}（${id}）· ${platform}`);

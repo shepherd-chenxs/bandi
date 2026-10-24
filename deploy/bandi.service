@@ -28,6 +28,9 @@ WorkingDirectory=/opt/bandi
 # 一起冲掉，而且服务用户也未必写得进去。参见 docs/形态决策.md §十二 第 1 条。
 Environment=BANDI_DATA=/var/lib/bandi
 Environment=BANDI_PORT=8787
+# 部署即装：服务起来那一刻把 `bandi` 装进 bandi 用户的 ~/.local/bin（幂等）。
+# BANDI_DATA 显式指定时自动安装默认闸住（那是测试/沙箱的口径）—— 真部署在这里明说放行。
+Environment=BANDI_INSTALL_CLI=1
 # 只听本机。远程访问走 SSH 隧道（不用开端口，也不用碰下面这两行之外的配置）。
 # 真要开内网/公网，才需要 BANDI_HOST=0.0.0.0 ＋ BANDI_ORIGINS=<访问来源>，
 # 而且**不配 BANDI_ORIGINS 的话远端浏览器能看不能动**（写请求全 403）。
