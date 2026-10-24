@@ -16,11 +16,11 @@ import * as experts from '../experts.mjs';
 const AVATAR_FILE = /^[A-Za-z0-9._-]+\.(png|jpe?g|webp)$/i;
 
 /**
- * 锁定话术（2026-10-22 收编喜儿时统一）。
+ * 锁定话术（2026-10-22 收编内置员工时统一；2026-10-23 名额上是崔老三，话术跟着名额走、不带人名）。
  *
  * 同一组闸口，两种来源：
  *   - expert ：专家库雇来的（p-expert-<key>），随**专家包**固定，出路是解聘后自建；
- *   - builtin：出厂的（喜儿），随**平台**固定，出路是另建一个员工。
+ *   - builtin：出厂的（崔老三），随**平台**固定，出路是另建一个员工。
  * 判据只有 experts.lockKindOf 一处；这里只负责"怎么说人话"。
  */
 const LOCK_MSG = {
@@ -32,8 +32,8 @@ const LOCK_MSG = {
   },
   builtin: {
     who: '内置员工',
-    skills: '内置员工（喜儿）的技能随平台固定',
-    identity: '内置员工（喜儿）的名字与职责身份随平台固定',
+    skills: '内置员工的技能随平台固定',
+    identity: '内置员工的名字与职责身份随平台固定',
     hint: '想按自己的需要定制，就另建一个员工',
   },
 };
@@ -60,7 +60,7 @@ export async function handlePersona(req, res, url) {
      * 到 store 里抛出来只会变成 500，前端弹一句"服务端出错"，人会以为是 bug。
      */
     if (persona.builtin) {
-      return fail(res, 403, 'E1075', `「${persona.name}」是内置员工，不能删 —— 可以改名，也可以改她的岗位指令。`);
+      return fail(res, 403, 'E1075', `「${persona.name}」是内置员工，不能删 —— 名字与职责身份随平台固定，想按自己的需要定制就另建一个员工。`);
     }
 
     const asAssistant = store.groupsWhereAssistant(id);
@@ -245,6 +245,8 @@ export async function handlePersona(req, res, url) {
       showThinking: body.showThinking === undefined ? undefined : (body.showThinking ? 1 : 0),
       rootDirs: Array.isArray(body.rootDirs) ? body.rootDirs.map(String).filter((s) => s.trim()) : undefined,
       avatar: body.avatar === undefined ? undefined : (body.avatar ? String(body.avatar) : null),
+      // 并发数（2026-10-24）：不传不动；传数字由 store 钳到 [1, 20]；传 null/空 = 恢复默认（6）
+      maxParallel: body.maxParallel === undefined ? undefined : (body.maxParallel === null ? null : Number(body.maxParallel)),
     });
 
     if (Array.isArray(body.skills)) store.setPersonaSkills(id, body.skills);

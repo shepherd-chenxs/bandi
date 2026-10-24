@@ -13,6 +13,7 @@ import './js/projects.mjs';
 import './js/flowpages.mjs';
 import './js/skills.mjs';
 import './js/chat.mjs';
+import './js/events.mjs';
 import './js/groups.mjs';
 import './js/experts.mjs';
 import './js/core.mjs';
@@ -30,9 +31,10 @@ import { newTemplateDialog } from './js/workflows.mjs';
 import { kbRepaint, kbRepaintRows, projectDialog } from './js/projects.mjs';
 import { doStartFlow, flowStart, openFlowStart, syncFlowTitle } from './js/flowpages.mjs';
 import { importPicked, openSkill, renderSkAssignList, scanImport, skAssignPicked, skAssignSkill } from './js/skills.mjs';
-import { closeMentionPop, insertMention, linkPersonaId, linkPicked, mentionPop, openConversation, openDetail, renderLinkList, searchRefreshDetail, send, setBusy, setComposer, stopChatRun, updateMentionPop } from './js/chat.mjs';
+import { addAtts, closeMentionPop, insertMention, linkPersonaId, linkPicked, makeConversationCard, mentionPop, openConversation, openDetail, renderLinkList, searchRefreshDetail, send, setBusy, setComposer, stopChatRun, updateMentionPop } from './js/chat.mjs';
 import { deleteSessionFromLog, memberPicked, renderMemberCandidates } from './js/groups.mjs';
 import { closeDrawer, pluginMust, refreshGroup, renderPluginPanel } from './js/experts.mjs';
+import { startEvents } from './js/events.mjs';
 import { $, S } from './js/core.mjs';
 import { boot, gAssistantCombo, openGroupDialog, openPluginAdd, pRuntimeCombo, pSandboxCombo, startVersionWatch } from './js/misc.mjs';
 
@@ -701,6 +703,32 @@ $('input').addEventListener('click', updateMentionPop);
 $('input').addEventListener('blur', () => setTimeout(closeMentionPop, 150));
 
 
+/* 「＋」的两项菜单（2026-10-24）：上传文件走原路；任务卡 = 原页头「立成卡」搬进来的，
+   逻辑在 chat.mjs 的 makeConversationCard。菜单朝上弹（输入区贴着屏幕底）。 */
+$('attach').onclick = (e) => {
+  e.stopPropagation();
+  const m = $('attachMenu');
+  m.querySelector('#attCard').hidden = S.conversation?.kind === 'exec';
+  m.hidden = !m.hidden;
+};
+$('attFile').onclick = () => { $('attachMenu').hidden = true; $('filePick').click(); };
+$('attCard').onclick = () => { $('attachMenu').hidden = true; if (S.conversation) makeConversationCard(S.conversation); };
+document.addEventListener('click', (e) => {
+  if (!e.target.closest?.('.att-wrap')) { const m = $('attachMenu'); if (m) m.hidden = true; }
+});
+
+/* 附件（2026-10-23）：菜单里选文件、Ctrl+V 直接贴图 —— 都是 addAtts 的两个入口 */
+$('filePick').addEventListener('change', () => { addAtts($('filePick').files); $('filePick').value = ''; });
+$('input').addEventListener('paste', (e) => {
+  const files = [...(e.clipboardData?.files ?? [])];
+  if (files.length) {
+    // 贴的是文件（截图、复制的图片文件）就收下来，别让 <img> 的二进制糊进文本框
+    e.preventDefault();
+    addAtts(files);
+  }
+});
+
+
 $('input').addEventListener('keydown', (e) => {
   // 选人列表开着的时候，上下键和回车归它用
   if (mentionPop.open) {
@@ -734,4 +762,11 @@ applyTheme();
 boot();
 
 
+// 全局事件流（SSE）：后台有人往任何会话说话，开着的窗口和左栏立刻跟上（见 js/events.mjs）
+startEvents();
+
+
 startVersionWatch();
+
+// 启动完成的路标：index.html 里的看门狗拿它判"这张模块图活着"（见那里的注释）
+window.__appBooted = true;

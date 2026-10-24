@@ -14,6 +14,7 @@ import { openSchedules } from './skills.mjs';
 import { setBusy, setComposer } from './chat.mjs';
 import { gidOf, paintDrawer, paintGroupDetail } from './groups.mjs';
 import { $, S } from './core.mjs';
+import { applySource, calcVars } from './plugin-data.mjs';
 
 
 
@@ -21,14 +22,14 @@ import { $, S } from './core.mjs';
 
 /**
  * 专家库（2026-10-23 改版：左侧一级栏，整页分区卡片墙）：出厂写死的岗位专家（跟随
- * 服务端目录走，当前八位 —— 前端不写死数量和 key），
+ * 服务端目录走，当前十四位 —— 前端不写死数量和 key），
  * 点「雇佣」就是造一个现成的数字员工（职责、技能、运行时全都配好），解聘即删。
  *
  * 数据口径：
  *   · 目录从 `GET /api/experts` 拉一次缓存进 `S.experts`（null = 没拉过**或上一次没拉到**），
  *     雇佣/解聘后**整体重拉** —— hired 标记是服务端按库里有没有这个人算的，本地不推算；
  *   · 拉不到**不许装成空目录**（2026-10-21 用户截图实报：旧后端没有这个接口时，
- *     页面把错误画成"两段全空"，看着像专家库被清空了）。目录出厂恒有八位，
+ *     页面把错误画成"两段全空"，看着像专家库被清空了）。目录出厂恒有十四位，
  *     null 一律按「加载失败」渲染错误卡 + 重试，让用户知道是出错了、不是没人。
  *   · 雇佣后他就是个**普通数字员工**（改名/改指令/摘技能都走员工详情那套既有接口），
  *     专家域只管雇与解，别在专家页重做一套员工编辑。
@@ -44,8 +45,23 @@ export async function loadExperts() {
 
 
 /**
+ * 专家库页的搜索词（本会话内记忆：切走再回来还在；刷新即清 —— 目录是每次现拉的，
+ * 搜索词没有跨会话保值的必要，不为它动存储）。
+ */
+let expertQ = '';
+
+/** 专家卡按搜索词过滤：命中**花名 / 岗位 / 一句话介绍 / 技能名**任一处即留（不区分大小写）。
+ * 已雇佣的按**他现在的名字**匹配（用户改过名的话，搜新名要能搜到）。 */
+function expertMatches(x, q) {
+  const name = x.hiredPersona?.name || x.name || '';
+  const hay = [name, x.role, x.intro, ...(x.skills ?? []).map((s) => s.name)].join('\n').toLowerCase();
+  return hay.includes(q);
+}
+
+/**
  * 专家库整页（#expertsView）：跟工作台宫格同一个整页形态 —— 左栏收掉（body.no-list），
- * 页头只放标题，无下钻。拉目录这段时间人可能已经点去别的栏了，回来先看 S.nav 再画。
+ * 页头放标题 + 搜索框（2026-10-23 加：目录十四位了，翻卡片找人不如下一关键字），
+ * 无下钻。拉目录这段时间人可能已经点去别的栏了，回来先看 S.nav 再画。
  */
 export async function openExperts() {
   setRoute('experts');
@@ -88,9 +104,10 @@ export function expertCard(x) {
           .join('')}</div>`
       : ''}
     ${hired
-      // 已雇佣（2026-10-21 用户要求）：卡上不再摆发消息/解聘 —— 要聊去员工详情，解聘收进
-      // 详情的「⋯」菜单；雇佣状态只留右上角一枚胶囊，卡片在墙上的位置不动。
-      ? '<span class="pill expert-hired" title="已雇佣 —— 他在通讯录的「数字员工」里">已雇佣</span>'
+      // 已雇佣（2026-10-23 三改）：胶囊本身可点 = 解聘入口（用户要求"再点击一下解聘，
+      // 显示雇佣"）—— 点了先过 confirmDo 确认，解聘完原地退回「雇佣」。
+      // 员工详情「⋯」菜单里的解聘入口保留，两处等价。
+      ? '<button type="button" class="pill expert-hired expert-fire" data-expert-fire="' + esc(x.key) + '" title="已雇佣 —— 点击解聘">已雇佣</button>'
       // 未雇佣：右上角同一位置的「雇佣」胶囊（2026-10-21 用户要求：跟已雇佣胶囊一样大）
       : '<button type="button" class="pill expert-hired expert-hire" data-expert-hire="' + esc(x.key) + '">雇佣</button>'}
   </div>`;
@@ -121,19 +138,38 @@ export function paintExperts() {
     $('expertsView').querySelector('[data-expert-retry]').onclick = () => openExperts().catch((e) => toast(e.message, 'error'));
     return;
   }
-  const list = S.experts;
 
   $('expertsView').innerHTML = `
-    <div class="detail-head head-row"><div class="head-title"><b>专家库</b></div></div>
-    <div class="detail-body">
-      <div class="expert-grid">${list.map(expertCard).join('')}</div>
-    </div>`;
+    <div class="detail-head head-row"><div class="head-title"><b>专家库</b></div>
+      <div class="expert-search"><input id="expertSearch" placeholder="搜花名 / 岗位 / 技能" value="${esc(expertQ)}" /></div>
+    </div>
+    <div class="detail-body"><div id="expertGrid"></div></div>`;
   showView('experts');
 
-  const view = $('expertsView');
-  view.querySelectorAll('[data-expert-hire]').forEach((el) => {
-    el.onclick = () => hireExpert(el.dataset.expertHire).catch((e) => toast(e.message, 'error'));
-  });
+  // 搜索：**只重画卡片墙**（#expertGrid），不整页 innerHTML —— 整页重画会丢输入框焦点，
+  // 打一个字框就瞎了，没法连着输入。输入词记进 expertQ，雇佣/解聘后重画也还在。
+  const paintGrid = () => {
+    const q = expertQ.trim().toLowerCase();
+    const list = q ? S.experts.filter((x) => expertMatches(x, q)) : S.experts;
+    $('expertGrid').innerHTML = `<div class="expert-grid">${list.map(expertCard).join('')}</div>${
+      list.length
+        ? ''
+        : `<div class="empty" style="padding:36px 12px">没有匹配「${esc(expertQ.trim())}」的专家 —— 试试花名（顾仓）、岗位（运维）或技能名。</div>`
+    }`;
+    $('expertGrid').querySelectorAll('[data-expert-hire]').forEach((el) => {
+      el.onclick = () => hireExpert(el.dataset.expertHire).catch((e) => toast(e.message, 'error'));
+    });
+    // 已雇佣胶囊可点 = 解聘（2026-10-23）：走 fireExpert 的确认弹窗，解聘完原地退回「雇佣」
+    $('expertGrid').querySelectorAll('[data-expert-fire]').forEach((el) => {
+      el.onclick = () => fireExpert(el.dataset.expertFire).catch((e) => toast(e.message, 'error'));
+    });
+  };
+  paintGrid();
+
+  $('expertSearch').oninput = (e) => {
+    expertQ = e.target.value;
+    paintGrid();
+  };
 }
 
 
@@ -222,7 +258,7 @@ export function tplUrl(s, ctx) {
  * 工作台磁贴左上角那个**插件角标**：插接口（插头 + 插座）。
  *
  * 为什么要标：工作台是混排的 —— 「项目 / 任务看板 / 流程」是平台自带的，
- * 「服务器与密钥 / 项目面板」是装进来的插件。光看磁贴长得一样，分不出哪个是一等功能、
+ * 「服务器与密钥 / 研发面板」是装进来的插件。光看磁贴长得一样，分不出哪个是一等功能、
  * 哪个是插件。所以插件磁贴的图标左上角挂这个小图（平台自带的那几块不挂）。
  *
  * 为什么是"插接口"而不是四个方块：平台里"装进来的外部能力"就叫**连接器**（connector），
@@ -245,7 +281,7 @@ export const PLUGIN_BADGE_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="cu
  * 为什么是"按分组顺序发色"，而不是按分组名哈希：
  * 哈希看上去更"稳定"（同一个分类永远同色），但**碰撞是随机的** —— 实测哈希把
  * 「研发」和「运维」撞成同一个紫、「开发」和「生产力」撞成同一个青，一眼就看得出。
- * 而实际工作台上同时存在的分组只有 2~4 个（项目面板 / ssh 各自一个分类），
+ * 而实际工作台上同时存在的分组只有 2~4 个（研发面板 / ssh 各自一个分类），
  * 按**首次出现的顺序**发色，同屏的几组必然不同色 —— 这才是这一格要的效果。
  * 代价：新装一个分类可能让后面几组的颜色挪位（分组重排时本来就会重排），可以接受。
  *
@@ -678,6 +714,29 @@ export async function renderBlock(plugin, b, row = {}) {
   }
 
   /**
+   * tabs 块（2026-10-24）：把几组块收进页签（服务器详情：基本信息 / 操作引导）。
+   * 子块照常递归 renderBlock —— 取数、复制、兜底一个不少。页签切换走 #plgPanel 上
+   * 那一个委托监听（见 renderPluginPanel 尾部），这里只出 HTML。
+   */
+  if (b.type === 'tabs') {
+    const tabs = [];
+    const panels = [];
+    for (const [ti, t] of (b.tabs ?? []).entries()) {
+      const inner = [];
+      for (const sub of t.blocks ?? []) {
+        try {
+          inner.push(await renderBlock(plugin, sub, row));
+        } catch (err) {
+          inner.push(`<section class="fx"><div class="plg-err">${esc(sub.type)} 块出错：${failHtml(err)}</div></section>`);
+        }
+      }
+      tabs.push(`<button type="button" class="tab${ti === 0 ? ' on' : ''}" data-plg-tab="${ti}">${esc(t.label)}</button>`);
+      panels.push(`<div class="tab-panel" data-plg-tab-panel="${ti}"${ti === 0 ? '' : ' hidden'}>${inner.join('')}</div>`);
+    }
+    return `<div class="plg-tabs"><div class="tabs">${tabs.join('')}</div>${panels.join('')}</div>`;
+  }
+
+  /**
    * code 块：把一段文本（公钥、命令、测试输出）摊出来，可整段复制。
    * `plain: true` → **不要框、不要滚动条**，直接铺开（长指引塞进小框里要一直滚，很憋屈）；
    * 默认仍然用带框的 .plg-code（公钥那种一行长文本，有框才好选中）。
@@ -711,9 +770,109 @@ export async function renderBlock(plugin, b, row = {}) {
     return sec(head, pluginFormHTML(b, fid, S.pluginForm[fid]));
   }
 
+  /**
+   * cards 块（2026-10-24，概览页要的卡片网格）：一行行数据 → 一张张卡。
+   * 和 list 的区别只在版式：list 是单列行、cards 是网格（`columns` 列）。
+   * `card.href` 只挂 `data-card-href` + 可点样式，**本版不导航**（接进平台是下一步）。
+   */
+  if (b.type === 'cards') {
+    const src = await pluginApi(plugin, apiOf(b.source));
+    const { rows, total } = applySource(pickItems(src, b.source.pick), b.source);
+    const card = b.card ?? {};
+    const builtin = { shown_count: rows.length, total_count: total, count: rows.length };
+    const ctxOf = (it) => ({ ...(src ?? {}), ...builtin, ...it });
+    /**
+     * 一行的值：模板里的**占位符全都取不到**、且写了 `fallback` → 用 fallback。
+     * 「还没有已发布的版本」这类**空态文案属于内容**，写在 manifest 里，宿主不替它编。
+     * ⚠️ 判"空"看的是**占位符有没有值**，不是渲染结果是不是空串：
+     * `"{a} · {b}"` 两边都空时算出来的是 `" · "`，按结果判会当成"有值"
+     * （截图里表现为只有标签、右边一个孤零零的圆点，fallback 永远不出现）。
+     */
+    const lineVal = (r, c) => {
+      const raw = String(r.value ?? '');
+      const keys = [...raw.matchAll(/\{([A-Za-z0-9_.]+)\}/g)].map((m) => m[1]);
+      const empty =
+        keys.length > 0 &&
+        keys.every((k) => {
+          const v = k.split('.').reduce((o, kk) => (o == null ? undefined : o[kk]), c);
+          return v == null || String(v).trim() === '';
+        });
+      if (empty && r.fallback) return tpl(r.fallback, c);
+      return tpl(raw, c);
+    };
+    const lineOf = (r, it) =>
+      `<div class="plg-card-line"><span>${esc(tpl(r.label, ctxOf(it)))}</span><b>${esc(lineVal(r, ctxOf(it)))}</b></div>`;
+    const body = rows.length
+      ? `<div class="plg-cards" style="--plg-cols:${Number(b.columns) || 3}">${rows
+          .map((it) => {
+            const c = ctxOf(it);
+            const href = card.href ? tpl(card.href, c) : '';
+            const badge = card.badge ? tpl(card.badge, c) : '';
+            const members = card.members ? tpl(card.members, c) : '';
+            const lines = (card.lines ?? []).filter((r) => tpl(r.value, c) !== '' || r.label);
+            const foot = (card.foot ?? []).filter((r) => tpl(r.value, c) !== '');
+            return `<div class="plg-card${href ? ' has-href' : ''}"${href ? ` data-card-href="${esc(href)}"` : ''}${
+              href ? ` title="${esc(href)}"` : ''
+            }>
+              <div class="plg-card-top">
+                <div class="plg-card-who">
+                  <div class="plg-card-title">${esc(tpl(card.title, c))}</div>
+                  ${card.subtitle ? `<div class="plg-card-sub">${esc(tpl(card.subtitle, c))}</div>` : ''}
+                </div>
+                ${badge ? `<span class="plg-badge ${esc(card.badgeTone || 'neutral')}">${esc(badge)}</span>` : ''}
+              </div>
+              ${members ? `<div class="plg-card-meta">${esc(members)}</div>` : ''}
+              ${lines.length ? `<div class="plg-card-lines">${lines.map((r) => lineOf(r, it)).join('')}</div>` : ''}
+              ${foot.length
+                ? `<div class="plg-card-foot">${foot
+                    .map(
+                      (r) =>
+                        `<div class="plg-card-line"><span>${esc(tpl(r.label, c))}</span><b>${esc(lineVal(r, c))}</b></div>`,
+                    )
+                    .join('')}</div>`
+                : ''}
+            </div>`;
+          })
+          .join('')}</div>`
+      : `<div class="hint">${esc(b.empty || '没有数据')}</div>`;
+    /** 标题行：heading 在左，`subheading` 跟着，`more` 贴右（都走模板，`{shown_count}` 可用） */
+    const sub = b.subheading ? `<span class="plg-sec-sub">${esc(tpl(b.subheading, builtin))}</span>` : '';
+    const more = b.more?.label ? `<span class="plg-sec-more">${esc(tpl(b.more.label, builtin))}</span>` : '';
+    const titleBar =
+      titleOf({}) || sub || more
+        ? `<div class="plg-block-head">${titleOf({}) ? `<b class="plg-block-title">${esc(titleOf({}))}</b>` : ''}${sub}${more}</div>`
+        : '';
+    return `<div class="plg-block">${titleBar}${body}</div>`;
+  }
+
+  /**
+   * stats 块（2026-10-24，概览页顶上一行数字）：一项一格，数字大、标签上、脚注下。
+   * 每项的取值：先算 `calc`（得到若干变量）→ 再拿它 + 行数据根对象跑 `{字段}` 模板。
+   * 所以「项目总数」写 `"value":"{count}"` + `"calc":"count"` 就够了，
+   * 宿主里**没有**任何"项目""纳管"这类业务字眼。
+   */
+  if (b.type === 'stats') {
+    const src = b.source ? await pluginApi(plugin, apiOf(b.source)) : {};
+    const { rows } = b.source ? applySource(pickItems(src, b.source.pick), b.source) : { rows: [] };
+    const items = (b.items ?? []).map((it) => {
+      const c = { ...(src ?? {}), ...calcVars(it.calc, rows) };
+      return `<div class="plg-stat ${esc(it.tone || '')}">
+        <div class="plg-stat-lab">${esc(tpl(it.label, c))}</div>
+        <div class="plg-stat-num">${esc(tpl(it.value ?? '{value}', c))}${
+          it.unit ? `<small>${esc(tpl(it.unit, c))}</small>` : ''
+        }</div>
+        ${it.foot ? `<div class="plg-stat-foot">${esc(tpl(it.foot, c))}</div>` : ''}
+      </div>`;
+    });
+    // 列数按项数走（4 项就是 4 列）：声明里没写 columns，稿子也没要 —— 别让作者再写一遍
+    return `<div class="plg-block">${
+      titleOf({}) ? `<div class="plg-block-head"><b class="plg-block-title">${esc(titleOf({}))}</b></div>` : ''
+    }<div class="plg-stats" style="--plg-cols:${items.length || 1}">${items.join('')}</div></div>`;
+  }
+
   if (b.type === 'list') {
     const src = await pluginApi(plugin, apiOf(b.source));
-    const items = pickItems(src, b.source.pick);
+    const items = applySource(pickItems(src, b.source.pick), b.source).rows;
     // 行数据记在内存里，点击时按「块:行」回查 —— 免得把 JSON 塞进 DOM 属性里做转义
     items.forEach((it, ri) => { pluginRows[`${b.__i}:${ri}`] = it; });
     const acts = b.actions ?? [];
@@ -929,6 +1088,10 @@ export async function renderPluginPanel() {
     ...(split?.detail?.blocks ?? []),
   ];
   allBlocks.forEach((b, i) => { b.__i = i; });
+  // tabs 块里的子块也要有下标 —— 复制按钮按 `__i` 回查正文，缺了就复制不到东西
+  for (const b of allBlocks) {
+    (b.tabs ?? []).forEach((t, ti) => (t.blocks ?? []).forEach((sub, si) => { sub.__i = `${b.__i}.${ti}.${si}`; }));
+  }
 
   // 先扫一遍：哪些表单被 add / 行内 edit 引用了 —— 被引用的走弹窗形态
   pluginDialogForms = new Set();
@@ -950,20 +1113,73 @@ export async function renderPluginPanel() {
     $('listBody').innerHTML = '';
   }
 
-  const parts = [];
-  for (const b of plugin.panel.blocks ?? []) {
+  const blocks = plugin.panel.blocks ?? [];
+  /**
+   * `aside: true` 的块（cards / list）挂到右栏 `.plg-aside`，其余挂主列，整页两列栅格
+   * （主列 1fr + 右栏 340px，照概览稿）。**只在单页面板生效**：主从布局的主列已经是
+   * 全局左栏了，再切两列会挤成三条。
+   *
+   * 分区规则：开头**连续**的 `text` / `stats` 块（页头说明、KPI 行）通栏铺满整页，
+   * 其余块进两列栅格（`aside: true` → 右栏，其它 → 主列）。照稿就是这样：
+   * KPI 横跨整页，下面才分主列 / 右栏。不这么分的话 KPI 会被关进主列，
+   * 右边 340px 那一溜从顶上就空着。
+   * 判据是「开头连续」而不是「第一个 aside 之前」：主列的卡片网格也在 aside 之前，
+   * 按后者它会被顶到通栏去（实现时踩过，主列只剩一条空线）。
+   */
+  const BANNER_TYPES = ['text', 'stats'];
+  const bannerLen = split
+    ? 0
+    : (() => {
+        let n = 0;
+        while (n < blocks.length && BANNER_TYPES.includes(blocks[n].type) && !blocks[n].aside) n++;
+        return n;
+      })();
+  const asideOn = !split && blocks.some((b) => b.aside);
+  const render = async (b) => {
     // 逐块兜底：一块取数失败，别把整个面板拖成白屏
     try {
-      parts.push(await renderBlock(plugin, b));
+      return await renderBlock(plugin, b);
     } catch (err) {
-      parts.push(`<section class="fx"><div class="plg-err">${esc(b.type)} 块出错：${failHtml(err)}</div></section>`);
+      return `<section class="fx"><div class="plg-err">${esc(b.type)} 块出错：${failHtml(err)}</div></section>`;
     }
+  };
+
+  const above = [];    // 通栏（开头连续的 text / stats）
+  const mainCol = [];  // 两列里的主列
+  const asideCol = []; // 两列里的右栏
+  for (const [i, b] of blocks.entries()) {
+    const html = await render(b);
+    if (asideOn && i >= bannerLen) (b.aside ? asideCol : mainCol).push(html);
+    else above.push(html);
   }
+  // 没有 aside 块、也没通栏块时，上面这个循环会把所有东西都塞进 above —— 那是老行为（顺排），对的
 
   // 详情画在主区（选中项的字段、公钥、交付指引、连通性结果都在这里）
-  if (split) parts.push(await renderSplitDetail(plugin, split, split.master ?? {}, sel));
+  if (split) mainCol.push(await renderSplitDetail(plugin, split, split.master ?? {}, sel));
 
-  $('plgPanel').innerHTML = parts.join('');
+  $('plgPanel').innerHTML = asideOn
+    ? `${above.join('')}<div class="plg-layout"><div class="plg-main-col">${mainCol.join(
+        '',
+      )}</div><aside class="plg-aside">${asideCol.join('')}</aside></div>`
+    : [...above, ...mainCol].join('');
+  return finishPluginPanel(plugin, allBlocks);
+}
+
+/**
+ * 面板 DOM 铺好之后的接线（页签切换 / 表单 / 复制 / 行内动作…）。
+ * 从 `renderPluginPanel` 尾部原样抽出来：两列版式那条路要提前 return，抽出来才不会漏接线。
+ */
+function finishPluginPanel(plugin, allBlocks) {
+  // tabs 块的页签切换：委托在 #plgPanel 上一个监听管全部（面板重建时这里也重建，不会叠）
+  $('plgPanel').addEventListener('click', (e) => {
+    const t = e.target.closest('[data-plg-tab]');
+    if (!t) return;
+    const wrap = t.closest('.plg-tabs');
+    if (!wrap) return;
+    const i = t.dataset.plgTab;
+    wrap.querySelectorAll('.tab').forEach((b) => b.classList.toggle('on', b.dataset.plgTab === i));
+    wrap.querySelectorAll('[data-plg-tab-panel]').forEach((p) => p.toggleAttribute('hidden', p.dataset.plgTabPanel !== i));
+  });
 
   // 标题行右侧的「添加」按钮（以及任何 data-form-open）→ 开表单弹窗
   $('plgPanel').querySelectorAll('[data-form-open]').forEach((el) => {

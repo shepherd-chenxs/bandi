@@ -88,6 +88,27 @@ export async function handleGit(req, res, url) {
     }
   }
 
+  /*
+   * 仓库的值班设置（2026-10-23，PR 审阅与授权合并）：绑定管理员 + 授权自动合并。
+   * 两件事是一张设置单（PATCH 语义：不传的字段不动）；管理员必须是真人（数字员工），
+   * 别等巡检到点才发现绑的是个已经删掉的人。
+   */
+  const repoSettings = /^\/api\/git\/repos\/([^/]+)\/settings$/.exec(url.pathname);
+  if (repoSettings && req.method === 'POST') {
+    const body = await readBody(req);
+    const id = decodeURIComponent(repoSettings[1]);
+    if (!store.getGitRepo(id)) return fail(res, 404, 'E1076', '仓库不在清单里'), true;
+    const keeper = body.keeperPersonaId;
+    if (keeper !== undefined && keeper && !store.getPersona(keeper)) {
+      return fail(res, 400, 'E1077', '选的那个管理员已经不在了，换一个'), true;
+    }
+    const row = store.updateGitRepoSettings(id, {
+      keeperPersonaId: keeper,
+      autoMerge: body.autoMerge === undefined ? undefined : !!body.autoMerge,
+    });
+    return sendJson(res, 200, { repo: row }), true;
+  }
+
   /* ---- PR 联动：卡片 ↔ GitHub PR ------------------------------------- */
 
   const prOf = /^\/api\/projects\/tasks\/([^/]+)\/pr(\/refresh)?$/.exec(url.pathname);

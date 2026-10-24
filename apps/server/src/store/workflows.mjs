@@ -69,13 +69,15 @@ export function createWorkflowRun({
   threadId = null,
   intent = null,
   projectId = null, // 这条流程在哪个**项目**里干活（派活时用它当 cwd）
+  prRepo = null, // 这条流程在审哪个 PR（PR 审阅流程专用；写回值班卡、执行合并都靠它）
+  prNumber = null,
 }) {
   const now = nowIso();
   const id = newId('wf');
   db.prepare(
-    `INSERT INTO workflow_runs (id, templateId, title, status, currentStep, threadId, intent, note, projectId, createdAt, updatedAt)
-     VALUES (?, ?, ?, '进行中', 0, ?, ?, ?, ?, ?, ?)`,
-  ).run(id, templateId, title, threadId, intent, note, projectId, now, now);
+    `INSERT INTO workflow_runs (id, templateId, title, status, currentStep, threadId, intent, note, projectId, prRepo, prNumber, createdAt, updatedAt)
+     VALUES (?, ?, ?, '进行中', 0, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(id, templateId, title, threadId, intent, note, projectId, prRepo, prNumber, now, now);
   return getWorkflowRun(id);
 }
 /** 发布 / 下架。**草稿能编，发布的才能在工作台点开起流程** */

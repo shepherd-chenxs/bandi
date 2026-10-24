@@ -124,7 +124,7 @@ tplLive([
   { id: 'n1', name: '第一步', personaId: qa.id, approve: 'n2', reject: 'end' }, // 出口 end → n2
   { id: 'n2', name: '第二步', approve: 'end', reject: 'end' },
 ]);
-store.updateWorkflowTask(step1.id, { status: '待确认' });
+store.updateWorkflowTask(step1.id, { status: '待验收' });
 const after = workflows.decide(liveRun.id, '通过');
 check('改模板的出口 → 老实例立刻走到新节点', after?.currentNodeId === 'n2' && after?.status === '进行中', `${after?.currentNodeId} / ${after?.status}`);
 
@@ -225,7 +225,7 @@ const finishWith = (templateId, agentRunId) => {
 };
 oneNode('t-pause', true);
 const paused = finishWith('t-pause', 'ar-pause');
-check('manual：停在「待确认」，流程还卡在这一步', paused.task?.status === '待确认' && paused.run?.status === '进行中', `${paused.task?.status} / ${paused.run?.status}`);
+check('manual：停在「待验收」，流程还卡在这一步', paused.task?.status === '待验收' && paused.run?.status === '进行中', `${paused.task?.status} / ${paused.run?.status}`);
 oneNode('t-auto', false);
 const auto = finishWith('t-auto', 'ar-auto');
 check('非 manual：自动往下走，approve=end → 流程收尾', auto.run?.status === '已完成', `${auto.task?.status} / ${auto.run?.status}`);
@@ -295,6 +295,36 @@ check('视图：一句话取第一行有内容的（不拼列表）', resOut.sum
 store.updateWorkflowTask(resTask.id, { result: null, note: '已把 `docs/需求.md` 写完' });
 const legacyRes = (workflows.getWorkflowView(resRun.id).tasks ?? [])[0]?.result ?? {};
 check('老数据：用 note 兜底出产物', (legacyRes.artifacts ?? []).some((a) => a.target === 'docs/需求.md'), JSON.stringify(legacyRes));
+
+/*
+ * ⑬ 员工自报受阻（2026-10-23）：回话第一行 `[受阻]` = 这一步没干成。
+ * 引擎必须把这一步转「已阻塞」（等人），**不能**当"干完了"放行 ——
+ * 起因：项目面板改造那条流程，员工写文件被权限挡了只在散文里提了一句，
+ * 流程照样绿灯走完，用户全程无感知。
+ */
+console.log('\n⑬ 受阻协议：[受阻] 开头 → 已阻塞，不放行');
+check('blockedMark：第一行 [受阻] 认', workflows.blockedMark('[受阻] docs/ 写权限被拒\n\n能干的部分…') === true);
+check('blockedMark：正文里提受阻不算', workflows.blockedMark('干完了，中间有个文件一度受阻，已解决') === false);
+check('blockedMark：第二行的 [受阻] 不算（只认第一行）', workflows.blockedMark('干完了\n[受阻] 伪标记') === false);
+check('resultOf：受阻 → state = blocked', workflows.resultOf({ status: '受阻', finalText: '[受阻] 原因' }).state === 'blocked');
+
+oneNode('t-blocked', false); // 故意非 manual：受阻必须比"自动流转"优先，否则又绿灯走完
+const blkRun = workflows.startWorkflow({ templateId: 't-blocked', title: '受阻用例', autoStart: false });
+const blkTask = store.listWorkflowTasks(blkRun.id)[0];
+store.updateWorkflowTask(blkTask.id, { status: '进行中', agentRunId: 'ar-blocked' });
+workflows.onAgentRunFinished({
+  id: 'ar-blocked',
+  status: '已完成', // 员工进程本身是"正常结束"的 —— 受阻信息全靠回话里的标记
+  finalText: '[受阻] docs/项目文档 的写权限没批，需求文档没落盘。\n\n已起草好要点，等你批了写权限我就写入。',
+});
+const blkOut = store.getWorkflowTask(blkRun.id, 'n1', 1);
+check('受阻：任务转「已阻塞」而不是「待验收」', blkOut?.status === '已阻塞', String(blkOut?.status));
+check('受阻：流程不自动流转（还停在这一步）', store.getWorkflowRun(blkRun.id)?.status === '进行中', String(store.getWorkflowRun(blkRun.id)?.status));
+const blkRes = JSON.parse(blkOut?.result ?? '{}');
+check('受阻：result.state = blocked', blkRes.state === 'blocked', blkOut?.result);
+check('受阻：原因在小结里（界面上要显）', /写权限没批/.test(blkRes.summary ?? ''), blkRes.summary);
+const blkView = workflows.getWorkflowView(blkRun.id);
+check('受阻：视图 stuck（列表红标「已阻塞」）', blkView.stuck != null, JSON.stringify(blkView.stuck));
 
 try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* 临时目录，删不掉就算了 */ }
 console.log(`\n结论：${failed ? '有 ' + failed + ' 项没通过' : '全通过'}`);

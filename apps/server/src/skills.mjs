@@ -18,12 +18,14 @@ const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
  * 判定按**目录名**（frontmatter 的 name 可以跟目录不一致，但落盘位置只有一个）。
  */
 const BUILTIN = new Set([
+  'bandi-avatar',
   'bandi-expert-architect',
   'bandi-expert-dev',
   'bandi-expert-ops',
   'bandi-expert-pm',
   'bandi-expert-product',
   'bandi-expert-qa',
+  'bandi-expert-secretary',
   'bandi-expert-test',
   'bandi-expert-ui',
   'bandi-secretary',

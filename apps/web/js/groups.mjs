@@ -1,7 +1,7 @@
 /* groups.mjs —— 群成员宫格、群设置抽屉、聊天记录抽屉、群详情页、群加人。
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
 import { esc, setRoute, toast } from './shell.mjs';
-import { api, cut, hhmm, initial, plain, post } from './ui.mjs';
+import { api, cut, hhmm, initial, plain, post, AVATAR_FILE } from './ui.mjs';
 import { load, setNav } from './state.mjs';
 import { confirmDo } from './machine.mjs';
 import { openConversationSafe, resetChatPane, toastConvErr, wipeScopeOf } from './listmenu.mjs';
@@ -23,15 +23,27 @@ export function memberGridHTML(thread) {
   // 有溢出且没展开时，留两个位置给「添加 / 移除」磁贴
   const shown = overflow && !S.membersExpanded ? list.slice(0, MEMBER_TILE_LIMIT - 2) : list;
 
+  /*
+   * 成员头像（2026-10-23 用户实报「群里面还没有头像」）：按 personaId 从 S.personas
+   * 查头像文件，有图就把图铺在字母上面（personaAvatar 同一套哲学：图盖字母、
+   * 加载失败 onerror 自删露字母，永远不破相）。找不到人/没配头像走纯字母。
+   */
+  const pById = new Map((S.personas ?? []).map((p) => [p.id, p]));
   const tiles = shown
     .map((m) => {
       const isAssistant = m.personaId === thread.assistantPersonaId;
       const removable = S.removeMode && !isAssistant;
+      const p = pById.get(m.personaId);
+      const img =
+        p?.avatar && AVATAR_FILE.test(String(p.avatar))
+          ? `<img class="av-img" src="/avatars/${encodeURIComponent(String(p.avatar))}" alt="" onerror="this.remove()">`
+          : '';
       return `<div class="mtile${removable ? ' removable' : ''}"
-                   title="${esc(m.name)} · ${esc(m.runtime)} · ${esc(m.sandbox)}"
+                   title="${esc(m.name)}${p?.role ? ` · ${esc(String(p.role).split(' · ')[0])}` : ''}"
                    ${removable ? `data-kick="${esc(m.personaId)}" data-name="${esc(m.name)}"` : ''}>
         <div class="mavatar">
           ${esc(initial(m.name))}
+          ${img}
           ${isAssistant ? '<span class="mbadge">群助手</span>' : ''}
           ${removable ? '<span class="mx">×</span>' : ''}
         </div>
@@ -676,7 +688,7 @@ export function renderMemberCandidates() {
         .map(
           (p) => `<label class="member">
             <input type="checkbox" value="${p.id}" ${memberPicked.has(p.id) ? 'checked' : ''} />
-            <span>${esc(p.name)}</span><em>${esc(p.runtime)} · ${esc(p.sandbox)}</em>
+            <span>${esc(p.name)}</span><em>${esc(String(p.role ?? '').split(' · ')[0].trim() || '—')}</em>
           </label>`,
         )
         .join('')

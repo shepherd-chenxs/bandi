@@ -39,14 +39,15 @@ export function readToken() {
 }
 
 /**
- * 给界面看的一小截（**绝不回显完整令牌**）：头 2 位 + 6 个星号 + 尾 4 位。
+ * 给界面看的一小截（**绝不回显完整令牌**）：头 2 位 + 18 个星号 + 尾 4 位。
  *
  * 为什么是这个形状（2026-10-17）：原来只有尾 4 位 —— 认不出是哪一个。
  * 一个 GitHub 账号下往往建了好几个 fine-grained PAT（不同仓库、不同权限），
  * 90 天到期要换的时候，**"当前挂着的是哪一个"才是真正要回答的问题**，
- * 尾 4 位区分不开。头 2 位 + 尾 4 位足够认出来，中间那 6 个星号是明说的"这里还有，但不给你看"。
+ * 尾 4 位区分不开。头 2 位 + 尾 4 位足够认出来，中间那片星号是明说的"这里还有，但不给你看"。
+ * 星号数 2026-10-23 由 6 改 18（用户要求）：掩码看着更像"一长串被盖住了"，不像只空了几格。
  *
- * 星号**固定 6 个**（不按令牌真实长度变）：长度本身是信息 —— 变长变短等于在
+ * 星号**固定 18 个**（不按令牌真实长度变）：长度本身是信息 —— 变长变短等于在
  * "报出令牌有多长"，而且每次换令牌界面都会抖一下。
  *
  * 短到头尾就快露完的那种（< 10 位）一个字都不给 —— 那已经不是"掩码"，等于把令牌摊开。
@@ -55,7 +56,7 @@ export function tokenHint() {
   const t = readToken();
   if (!t) return null;
   if (t.length < 10) return '******';
-  return `${t.slice(0, 2)}******${t.slice(-4)}`;
+  return `${t.slice(0, 2)}${'*'.repeat(18)}${t.slice(-4)}`;
 }
 
 export function saveToken(token) {
@@ -504,6 +505,9 @@ export async function listOpenPulls(repo) {
     url: p.html_url ?? `https://github.com/${repo}/pull/${p.number}`,
     author: p.user?.login ?? '',
     draft: !!p.draft,
+    // head.sha：这次改动**最新的提交号**。「新 PR」的判定就靠它 —— PR 改描述不算新，
+    // 推了新提交（sha 变了）才算新改动、才值得再烧一次模型去审。
+    headSha: p.head?.sha ?? null,
   }));
 }
 
@@ -532,5 +536,87 @@ export async function fetchPull(repo, number) {
     mergedAt: pr.merged_at ?? null,
     url: pr.html_url ?? `https://github.com/${repo}/pull/${number}`,
     headRef: pr.head?.ref ?? null,
+    // —— 审阅与合并闸需要的（2026-10-23，PRD 第五节/第六节）——
+    headSha: pr.head?.sha ?? null,
+    author: pr.user?.login ?? '',
+    body: pr.body ?? '',
+    additions: Number(pr.additions ?? 0),
+    deletions: Number(pr.deletions ?? 0),
+    changedFiles: Number(pr.changed_files ?? 0),
+    draft: !!pr.draft,
+    mergeableState: pr.mergeable_state ?? null,
   };
+}
+
+/**
+ * 列出一个 PR 的**改动文件**（审阅的素材，不是给人看的 diff —— 人看 diff 去 GitHub）。
+ *
+ * 每个文件带上 GitHub 返回的 patch（超过一定大小的文件 GitHub 不给 patch，那就只报文件名）。
+ * patch 在这里**截短**：给模型的是判断素材不是全文，单文件 1200 字、总量 24000 字封顶，
+ * 再大的 PR 说明它本来就该人多花时间看，而不是让模型硬吞。
+ */
+export async function listPullFiles(repo, number) {
+  const list = await ghFetch(`/repos/${repo}/pulls/${number}/files?per_page=50`);
+  let budget = 24000;
+  return (Array.isArray(list) ? list : []).map((f) => {
+    let patch = typeof f.patch === 'string' ? f.patch : null;
+    if (patch && patch.length > 1200) patch = patch.slice(0, 1199) + '…（截短）';
+    if (patch && patch.length > budget) {
+      patch = null;
+    } else if (patch) {
+      budget -= patch.length;
+    }
+    return {
+      filename: f.filename ?? '',
+      status: f.status ?? 'modified',
+      additions: Number(f.additions ?? 0),
+      deletions: Number(f.deletions ?? 0),
+      patch,
+    };
+  });
+}
+
+/**
+ * 这个提交上 CI 跑得怎么样（合并闸第 2 条的判据来源）。
+ *
+ * 归一成三档：success（全绿）/ failure（有红的）/ none（**什么检查都没配**）。
+ * ⚠️ 「跑着呢」(pending) 也归进 failure 档的语义 —— 闸的规矩是"没有绿就不算过"，
+ * 引用 PRD 第六节：没有 CI 状态不算过，不然绕过安检门的合并就成了常态。
+ */
+export async function getChecks(repo, sha) {
+  if (!sha) return { state: 'none' };
+  let runs = [];
+  try {
+    const data = await ghFetch(`/repos/${repo}/commits/${sha}/check-runs?per_page=100`);
+    runs = Array.isArray(data?.check_runs) ? data.check_runs : [];
+  } catch {
+    /* check-runs 拿不到（老令牌/仓库禁用 Actions）就按"没有 CI"算，别让闸卡死 */
+    return { state: 'none' };
+  }
+  if (!runs.length) return { state: 'none' };
+  if (runs.some((r) => r.conclusion === 'failure' || r.conclusion === 'timed_out' || r.conclusion === 'cancelled' || r.status !== 'completed')) {
+    return { state: 'failure', failed: runs.filter((r) => r.conclusion && r.conclusion !== 'success').map((r) => r.name).slice(0, 3) };
+  }
+  return { state: 'success' };
+}
+
+/**
+ * 合并一个 PR（**整个平台唯一会写 GitHub 的地方**，2026-10-23）。
+ *
+ * 谁能走到这儿由调用方管（流程合并节点的判据表），这里只管把 API 调了、把结果说人话：
+ *   · 405「not mergeable」多半是冲突或分支保护 —— 原样带回，别翻译成"系统错误"；
+ *   · 403 是令牌没有 contents:write —— 那是**该等人换令牌**的明确信号，带上原话。
+ */
+export async function mergePull(repo, number, { commitTitle = null, mergeMethod = 'merge' } = {}) {
+  const body = { merge_method: mergeMethod };
+  if (commitTitle) body.commit_title = commitTitle;
+  try {
+    const data = await ghFetch(`/repos/${repo}/pulls/${number}/merge`, { method: 'PUT', body });
+    return { merged: !!data.merged, message: data.message ?? '' };
+  } catch (e) {
+    const msg = String(e?.message ?? e);
+    if (msg.includes('405') || /not mergeable/i.test(msg)) throw new Error(`GitHub 拒绝合并（405）：${msg}`);
+    if (msg.includes('403')) throw new Error(`令牌没有合并权限（403）：${msg}——去 GitHub 给这个 PAT 勾上 contents:write 再换一次`);
+    throw e;
+  }
 }

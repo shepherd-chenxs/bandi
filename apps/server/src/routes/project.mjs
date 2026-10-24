@@ -1,12 +1,16 @@
 /* routes/project.mjs —— 2026-10-22 由 server.mjs 按域拆出，handler 逻辑原样搬运。
  * 主分发顺序（先匹配先赢）见 ../server.mjs 的 CHAIN。 */
 
-import { sendJson, fail, readBody } from '../http.mjs';
+import fs from 'node:fs';
+import path from 'node:path';
+import { sendJson, fail, readBody, readRawBody } from '../http.mjs';
 import * as store from '../store.mjs';
 import { dispatchToThread } from '../dispatch.mjs';
 import * as status from '../status.mjs';
 import { projectTasks, allTasks, createProjectTask, updateProjectTask, startProjectTask, afterMerged, upsertRepoCard } from '../project-tasks.mjs';
 import * as git from '../git-repos.mjs';
+import { verifyRunCredential } from '../agent-auth.mjs';
+import { ATT_MAX, safeName, validateAtts, uploadsRoot } from './conversation.mjs';
 
 export async function handleProject(req, res, url) {
   const detail = /^\/api\/projects\/([^/]+)$/.exec(url.pathname);
@@ -43,6 +47,14 @@ export async function handleProject(req, res, url) {
     const p = store.getProject(decodeURIComponent(tasksOf[1]));
     if (!p) return fail(res, 404, 'E2024', '项目不存在');
     const body = await readBody(req);
+    /*
+     * 数字员工经**通用接口**建卡时也把身份记下来（2026-10-24）：有的员工不走"工作证"专用口
+     * （routes/agent-cards.mjs），直接调这个口 —— 带了运行钥匙（进程环境变量 BANDI_RUN_TOKEN）
+     * 就认下他是谁、记下他建卡时所在的会话，卡片回执（notifyCardOwner）才有"该通知谁"的依据。
+     * 人从浏览器建卡没有钥匙 → 两列留空，行为与从前一字不差。
+     */
+    const cred = verifyRunCredential(req.headers['x-bandi-run-token']);
+    const originRun = cred ? store.getRunRow(cred.runId) : null;
     try {
       const task = createProjectTask(p, {
         title: body.title,
@@ -50,6 +62,8 @@ export async function handleProject(req, res, url) {
         status: body.status,
         personaId: body.personaId ?? null,
         startNow: body.startNow === true,
+        createdBy: cred?.personaId ?? null,
+        creatorConvId: originRun?.conversationId ?? null,
       });
       return sendJson(res, 201, { task });
     } catch (e) {
@@ -118,13 +132,54 @@ export async function handleProject(req, res, url) {
    *   ③ `parentId` = 这条回复挂在哪个**顶层议题**下（只一层）。
    */
   const taskComments = /^\/api\/projects\/tasks\/([^/]+)\/comments$/.exec(url.pathname);
+  const taskFiles = /^\/api\/projects\/tasks\/([^/]+)\/files$/.exec(url.pathname);
+
+  /*
+   * 任务卡附件上传（2026-10-23 用户要求「像聊天面板那样带文件/贴图」）。
+   * 与 /api/conversations/:id/files 同一套落盘规则：懒建工单会话，再存二进制。
+   */
+  if (req.method === 'POST' && taskFiles) {
+    const id = decodeURIComponent(taskFiles[1]);
+    const task = store.getProjectTask(id);
+    if (!task) return fail(res, 404, 'E2039', '任务不存在');
+    if (!task.assigneePersonaId) return fail(res, 400, 'E1061', '先指定执行人 —— 评论区是跟他讨论的');
+    const persona = store.getPersona(task.assigneePersonaId);
+    if (!persona) return fail(res, 400, 'E1062', '指定的执行人不在了');
+    const conv = store.ensureExecConversation({
+      personaId: persona.id,
+      scope: `task:${task.id}`,
+      title: `任务 · ${task.title}`,
+      projectId: task.projectId ?? null,
+    });
+    if (!conv) return fail(res, 400, 'E1063', '这个执行人已经不在了');
+    if (task.conversationId !== conv.id) store.updateProjectTask(task.id, { conversationId: conv.id });
+
+    const name = safeName(url.searchParams.get('name'));
+    const dir = path.join(uploadsRoot, conv.id);
+    fs.mkdirSync(dir, { recursive: true });
+    const stored = `${Date.now()}-${name}`;
+    const buf = await readRawBody(req, ATT_MAX, '文件太大（上限 50MB）—— 大文件请放到工作目录里再让员工去读');
+    if (!buf.length) return fail(res, 400, 'E1048', '文件是空的');
+    fs.writeFileSync(path.join(dir, stored), buf);
+    return sendJson(res, 201, {
+      conversationId: conv.id,
+      file: {
+        name,
+        stored,
+        size: buf.length,
+        mime: String(req.headers['content-type'] ?? ''),
+        path: path.join(dir, stored),
+        url: `/api/files/${encodeURIComponent(conv.id)}/${encodeURIComponent(stored)}`,
+      },
+    });
+  }
+
   if (req.method === 'POST' && taskComments) {
     const id = decodeURIComponent(taskComments[1]);
     const task = store.getProjectTask(id);
     if (!task) return fail(res, 404, 'E2039', '任务不存在');
     const body = await readBody(req);
     const text = String(body.text ?? '').trim();
-    if (!text) return fail(res, 400, 'E1010', '说点什么');
     if (!task.assigneePersonaId) return fail(res, 400, 'E1061', '先指定执行人 —— 评论区是跟他讨论的');
     const persona = store.getPersona(task.assigneePersonaId);
     if (!persona) return fail(res, 400, 'E1062', '指定的执行人不在了');
@@ -137,6 +192,14 @@ export async function handleProject(req, res, url) {
     });
     if (!conv) return fail(res, 400, 'E1063', '这个执行人已经不在了');
     if (task.conversationId !== conv.id) store.updateProjectTask(task.id, { conversationId: conv.id });
+
+    let atts = null;
+    try {
+      atts = validateAtts(conv.id, body.atts);
+    } catch (e) {
+      return fail(res, 400, e.code ?? 'E1046', e.message);
+    }
+    if (!text && !atts) return fail(res, 400, 'E1010', '说点什么');
 
     // 只认这条会话里的**顶层**消息当议题：传了个回复的 id 或者别的会话的 id，就当没传（挂回顶层）
     let parentId = String(body.parentId ?? '').trim() || null;
@@ -153,15 +216,25 @@ export async function handleProject(req, res, url) {
 
     if (mode === 'note') {
       // 便签：只落一条消息、不派活、不叫醒。**它是给人看的**，不补投给 agent。
-      const message = store.addMessage({ conversationId: conv.id, role: 'user', text, parentId, note: true });
+      const message = store.addMessage({ conversationId: conv.id, role: 'user', text, parentId, note: true, atts });
       return sendJson(res, 201, { note: true, mode, message, conversationId: conv.id });
     }
     try {
       // 讨论 = 只读（plan）；执行 = 员工默认沙箱。不传 sandbox 就用默认。
+      // card（2026-10-23）：卡评论区的派活必须锚定"你在办哪张卡"——
+      // 否则"问进度"员工只能去仓库里猜，翻到别的任务的文档就答偏（真实事故）。
+      const project = task.projectId ? store.getProject(task.projectId) : null;
       const { run } = dispatchToThread(conv.id, text, {
         projectId: task.projectId ?? null,
         parentId,
         sandbox: mode === 'discuss' ? 'plan' : undefined,
+        atts,
+        card: {
+          title: task.title,
+          description: task.description,
+          status: task.status,
+          projectName: project?.name ?? null,
+        },
       });
       return sendJson(res, 202, { runId: run.id, mode, conversationId: conv.id });
     } catch (e) {
@@ -182,7 +255,7 @@ export async function handleProject(req, res, url) {
    * `pr` 是 2026-10-17 补的：**PR 卡也要带上 PR 字段**（`git.prFieldsOf` 归一）。
    * 不带的话巡检扫进来的卡既没有看板上那枚「PR #n 开着」标签，也进不了「刷新 PR」的批量清单 ——
    * 同一个 PR，手动贴链接的卡能看见状态、机器扫进来的看不见，说不过去。
-   * `pr` 归状态走同一套 `afterMerged`：巡检报上来是 merged、卡在「进行中」，就收成「待确认」。
+   * `pr` 归状态走同一套 `afterMerged`：巡检报上来是 merged、卡在「进行中」，就收成「待验收」。
    * 状态仍然只在这一个条件下动，别的列（人拖到「已完成」的）一律不碰。
    */
   const repoCards = /^\/api\/projects\/([^/]+)\/repo-cards$/.exec(url.pathname);
@@ -210,19 +283,53 @@ export async function handleProject(req, res, url) {
     if (!name) return fail(res, 400, 'E1025', '给项目起个名字');
     if (!root) return fail(res, 400, 'E1026', '项目目录不能空 —— AI 要在这儿干活');
     return sendJson(res, 201, { project: store.createProject({
-      name, root, extraRoots: body.extraRoots ?? [], note: body.note ?? null,
+      name, root, extraRoots: body.extraRoots ?? [],
     }) });
   }
 
+  /*
+   * 改项目。**档案五列跟名字/目录走同一张单**（界面上是一起自动存的）：
+   * 校验摆在这里而不是 store —— store 只管落库，能不能落是接口的事。
+   * 三类错分开报码，人一眼知道是哪一格错了：
+   *   · 项目经理绑了个不存在的人 → E1080（别等打开面板才发现是空的）
+   *   · 成员里有不存在的人 → E1081（整单拒掉，不写半截名单）
+   *   · 日期不是 YYYY-MM-DD → E1082（"10月10日"这种存进去，界面没法排序也没法算）
+   */
   if (req.method === 'PUT' && detail) {
     const id = decodeURIComponent(detail[1]);
     const body = await readBody(req);
+    if (body.pmPersonaId && !store.getPersona(String(body.pmPersonaId))) {
+      return fail(res, 400, 'E1080', '选的项目经理已经不在了，换一个');
+    }
+    if (body.memberPersonaIds !== undefined) {
+      if (!Array.isArray(body.memberPersonaIds)) return fail(res, 400, 'E1081', '成员要传一个员工 id 数组');
+      const missing = body.memberPersonaIds.map(String).filter((x) => x && !store.getPersona(x));
+      if (missing.length) return fail(res, 400, 'E1081', `名单里有人已经不在了：${missing.join('、')}`);
+    }
+    for (const key of ['startedAt', 'endedAt']) {
+      const v = String(body[key] ?? '').trim();
+      // 空 = 清掉，允许；非空就必须是 YYYY-MM-DD。
+      // ⚠️ 只看正则不够：`Date.parse('2026-02-30')` 会**滚到 3 月 2 日**（不报错），
+      //    所以还要回读一遍日期，跟写的那串逐字对上才算数。
+      const okDate = /^\d{4}-\d{2}-\d{2}$/.test(v)
+        && (() => {
+          const d = new Date(`${v}T00:00:00Z`);
+          return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v;
+        })();
+      if (v && !okDate) {
+        return fail(res, 400, 'E1082', `${key === 'startedAt' ? '开始' : '结束'}时间写成 YYYY-MM-DD，例如 2026-10-23`);
+      }
+    }
     const p = store.updateProject(id, {
       name: body.name === undefined ? undefined : String(body.name).trim(),
       root: body.root === undefined ? undefined : String(body.root).trim(),
       extraRoots: body.extraRoots,
-      note: body.note,
       constitution: body.constitution,
+      summary: body.summary,
+      pmPersonaId: body.pmPersonaId,
+      memberPersonaIds: body.memberPersonaIds,
+      startedAt: body.startedAt,
+      endedAt: body.endedAt,
     });
     if (!p) return fail(res, 404, 'E2025', '项目不存在');
     return sendJson(res, 200, { project: p });

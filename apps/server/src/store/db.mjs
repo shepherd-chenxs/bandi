@@ -249,11 +249,12 @@ ensureColumn('personas', 'rootDirs', 'rootDirs TEXT');
 ensureColumn('personas', 'role', 'role TEXT');
 
 /*
- * **内置员工**（2026-10-18）：出厂自带、删不掉的那种（第一个是「喜儿」，平台的秘书）。
+ * **内置员工**（2026-10-18）：出厂自带、删不掉的那种（第一个名额现在是系统管家「崔老三」，
+ * 2026-10-23 前是秘书「喜儿」—— 名额换了人，机制没换）。
  *
- * 为什么用标记而不是"按名字认"：名字是给人看的，用户随时能改（"喜儿"改成"小秘"很正常）。
+ * 为什么用标记而不是"按名字认"：名字是给人看的，历史上有段时期用户还能改（"喜儿"改成"小秘"很正常）。
  * 系统要认的是"这一个"，所以认 id + 这个标记；改名不影响身份（跟 Multica 的 system_key 同一个道理）。
- * 允许改指令/改权限 —— 她是用户的员工，不是平台的广告位；只是**不许丢**。
+ * （2026-10-22 收编后名字/岗位/指令也锁死了，路由层 E2055；store 层拦的只有"删"，语义同前：**不许丢**。）
  */
 
 ensureColumn('personas', 'builtin', 'builtin INTEGER NOT NULL DEFAULT 0');
@@ -266,6 +267,14 @@ ensureColumn('personas', 'builtin', 'builtin INTEGER NOT NULL DEFAULT 0');
  */
 
 ensureColumn('personas', 'avatar', 'avatar TEXT');
+
+/*
+ * 并发数（2026-10-24，对标 Multica 的"每个虚拟员工可配并行任务数"）：
+ * 这个人名下同时最多几个 run 在跑。null = 没配过，用默认值（见 store/personas.mjs
+ * 的 PERSONA_DEFAULT_MAX_PARALLEL）；配了就按它，最高 PERSONA_MAX_PARALLEL。
+ * 是**资源属性**不是身份属性 —— 派活那一刻现查员工记录取值，不进会话快照。
+ */
+ensureColumn('personas', 'maxParallel', 'maxParallel INTEGER');
 
 /*
  * 这次运行**实际用的模型**。
@@ -293,6 +302,17 @@ ensureColumn('conversations', 'kind', "kind TEXT NOT NULL DEFAULT 'direct'");
 ensureColumn('conversations', 'ownerPersonaId', 'ownerPersonaId TEXT');
 
 ensureColumn('messages', 'personaId', 'personaId TEXT');
+
+/* 附件清单（2026-10-23）：JSON 数组 [{name,size,mime,path,url}]，null = 没带附件。
+   文件本体在 <dataDir>/uploads/<conversationId>/ 下，path 是给员工读的绝对路径，
+   url 是界面回显用的 /api/files/... 地址。 */
+ensureColumn('messages', 'atts', 'atts TEXT');
+
+/* 结构化元数据（2026-10-24 卡票消息）：JSON 对象，null = 普通文本消息。
+   现在只有一种：{type:'card', cardId} —— PM 建卡、卡片回执这类消息带上它，
+   界面在气泡里画一张**卡票**（状态点 + 标题 + 执行人），点它直达任务卡详情页。
+   text 照常写一句人话兜底：老视图 / 纯文本上下文（喂给 agent 的历史）不认 meta 也不丢信息。 */
+ensureColumn('messages', 'meta', 'meta TEXT');
 
 ensureColumn('runs', 'personaId', 'personaId TEXT');
 /*
@@ -558,6 +578,19 @@ for (const t of ['workflow_tasks', 'workflow_steps']) {
   db.prepare(`UPDATE ${t} SET status = '待办' WHERE status = '待开始'`).run();
 }
 
+/*
+ * 任务状态更名（2026-10-24 状态体系重设计）：「待确认」→「待验收」。
+ * 为什么改：看板上「待人确认」和「停下等人」两列名字都带"等人"，谁也说不清差在哪。
+ * 两者其实是两类等待 —— **干完了等验收**（正向，点个头就完成）和**出问题了等人拍板**
+ * （异常，不给输入就永远停着）。名字把"等什么"说出来，两列才分得开：
+ * 待验收 / 已阻塞（列名同步改，见 project-tasks.mjs 的 COLUMNS）。
+ * 老库存量行一次性改过来；project_tasks 那张表的迁移在 store/projects.mjs（表在那边建）。
+ */
+
+for (const t of ['workflow_tasks', 'workflow_steps']) {
+  db.prepare(`UPDATE ${t} SET status = '待验收' WHERE status = '待确认'`).run();
+}
+
 
 ensureColumn('workflow_templates', 'nodes', 'nodes TEXT');
 
@@ -582,6 +615,16 @@ ensureColumn('workflow_runs', 'currentNodeId', 'currentNodeId TEXT');
  */
 
 ensureColumn('workflow_tasks', 'result', 'result TEXT');
+
+/*
+ * PR 审阅与授权合并（2026-10-23，docs/PRD-2026-10-23-PR审阅与授权合并.md）：
+ *   · workflow_runs 记 prRepo/prNumber —— 实例要拿它写回值班卡、执行合并。
+ *     放在 runs 上而不是重新建关联表：一条审阅实例就是一个 PR，1:1 的东西不配多一张表。
+ *   · git_repos 的两列（绑定管理员 + 授权开关）在**建表之后**补，见下面 git_repos 那段 ——
+ *     建表语句在本文件靠后，提前 ALTER 会「no such table」（第一次就踩了）。
+ */
+ensureColumn('workflow_runs', 'prRepo', 'prRepo TEXT');
+ensureColumn('workflow_runs', 'prNumber', 'prNumber INTEGER');
 
 /**
  * 补「开始节点」这个显式概念。
@@ -670,20 +713,22 @@ function migrateAddConversationSandbox() {
 migrateAddConversationSandbox();
 
 /**
- * 状态名归到「确认族」：`待审批` → `待确认`。
+ * 状态名归到「确认族」：`待审批` → `待确认`（2026-10-24 状态重设计后最终名是「待验收」，
+ * 这条迁移直接写最终名 —— 中间那句「待确认」在同一个启动里已被更早的更名迁移收走了，
+ * 绕一道会在这两条之间留下一批错的「待确认」）。
  *
  * 为什么改：同一个东西界面上有四个说法 —— 节点开关（人工干预）、状态（待审批）、
  * 按钮（确认这一步完成）、提示（等你拍板）。节点开关现在统一叫「需要人工确认完成」，
- * 状态就跟着叫「待确认」，按钮和提示本来就是"确认"。
+ * 状态就跟着叫（现名「待验收」），按钮和提示本来就是"确认"。
  *
  * ⚠️ 有意思的是：库里**本来就有一条老数据叫「待确认」** —— 更早的版本用的就是这个名，
- *    后来被改成「待审批」。所以这次是**改回去**，那条老数据反而变成合法值了，
- *    不用动它；要订正的是中间那批「待审批」。
+ *    后来被改成「待审批」。所以这次是**改回去**，那条老数据反而变成合法值了
+ *    （之后又被上面那条更名迁移收成「待验收」）；要订正的是中间那批「待审批」。
  */
 
 function migrateTaskStatusToConfirm() {
-  const n = db.prepare("UPDATE workflow_tasks SET status = '待确认' WHERE status = '待审批'").run();
-  if (n.changes) console.log(`[迁移] ${n.changes} 条任务状态：待审批 → 待确认`);
+  const n = db.prepare("UPDATE workflow_tasks SET status = '待验收' WHERE status = '待审批'").run();
+  if (n.changes) console.log(`[迁移] ${n.changes} 条任务状态：待审批 → 待验收`);
 }
 
 migrateTaskStatusToConfirm();
@@ -874,6 +919,15 @@ db.exec(`
     lastSyncAt    TEXT
   );
 `);
+
+/*
+ * 仓库的**值班设置**（2026-10-23，PR 审阅与授权合并）——绑在仓库上不绑在人身上：
+ * 巡检 / 审阅 / 合并都是按仓库发起的，「这个仓库的 PR 找谁看」自然长在仓库这一行上。
+ *   · keeperPersonaId：值班管理员（数字员工）。空 = 没绑，行为与 2026-10-17 的巡检完全一致；
+ *   · autoMerge：授权自动合并。**默认关** —— 不可逆操作的开头必须是"人来开"。
+ */
+ensureColumn('git_repos', 'keeperPersonaId', 'keeperPersonaId TEXT');
+ensureColumn('git_repos', 'autoMerge', 'autoMerge INTEGER NOT NULL DEFAULT 0');
 
 
 export function getMetaValue(key) {

@@ -115,7 +115,19 @@
       <div class="input-wrap">
         <div class="mention-pop" id="mentionPop"></div>
         <textarea id="input" placeholder="说点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
+        <div class="att-strip is-hidden" id="attStrip"></div>
         <div class="input-tools">
+          <div class="att-wrap">
+            <button class="ghost att-add" id="attach" title="上传文件 / 把这轮活立成任务卡">＋</button>
+            <!-- 两项菜单（2026-10-24）：上传文件走原路；任务卡 = 原页头「立成卡」搬进来的。
+                 工单会话（kind='exec'）自己就是任务卡，开菜单时 app.mjs 按 kind 收掉这项。 -->
+            <div class="attach-menu" id="attachMenu" hidden>
+              <button type="button" class="item" id="attFile">上传文件</button>
+              <button type="button" class="item" id="attCard"
+                      title="把这场会话最近一轮派的活立成任务卡 —— 看板上好管状态、加描述、关联 PR；聊天派的活只有立成卡才进看板">任务卡</button>
+            </div>
+          </div>
+          <input type="file" id="filePick" multiple hidden />
           <div id="dPermMount"></div>
           <div id="dModelMount"></div>
           <button class="primary" id="send">发送</button>
@@ -207,6 +219,20 @@
     <div class="dlg-actions">
       <button type="button" value="cancel">取消</button>
       <button class="primary" id="mOk" value="ok">拉进来</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- 仓库管理员选择（代码托管页）。单例：点哪行选哪行、选完即关，不用确认按钮。
+     人多时靠搜索过滤，交互跟「拉人进群」同一套 -->
+<dialog id="keeperDlg">
+  <form method="dialog">
+    <b>选择管理员</b>
+    <div class="dim" style="font-size:12px;margin-top:2px">别人提了 PR，由他替你审阅；「不值班」则只巡检、不审阅。</div>
+    <input id="kSearch" placeholder="搜索数字员工" style="margin-top:12px" />
+    <div id="kList" class="members" style="margin-top:10px"></div>
+    <div class="dlg-actions">
+      <button type="button" value="cancel">取消</button>
     </div>
   </form>
 </dialog>
@@ -438,6 +464,35 @@
 <!-- 岗位的建议列表：内容由 js/misc.mjs 从 ROLE_SUGGEST 填（一处定义，别在 HTML 里再抄一份） -->
 <datalist id="roleSuggest"></datalist>
 
+<script>
+  /*
+   * 启动看门狗（2026-10-24）：app.mjs 是一整张 ESM 模块图 —— 其中任何一个模块恰好
+   * 没拉下来（服务正忙着跑 agent 时的一次网络抖动就够），整张图就死了：界面只剩骨架、
+   * 输入框点不了、侧边栏点不了，而且**没有任何报错会冒到用户眼前**，只能重启应用。
+   * 这里的兜底：4 秒内 app.mjs 没把 __appBooted 立起来，就先静默自动重载一次
+   * （sessionStorage 标记防死循环），还不行就摆一个能点的「重试」。
+   * 模块脚本的加载失败不会冒泡到 window.onerror，所以只能在时间轴上兜，别处拦不着。
+   */
+  (function () {
+    setTimeout(function () {
+      if (window.__appBooted) return;
+      if (!sessionStorage.__bootRetried) {
+        sessionStorage.__bootRetried = '1';
+        location.reload();
+        return;
+      }
+      var d = document.createElement('div');
+      d.innerHTML = '<div style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:var(--side,#f4f4f4);z-index:9999;font-size:14px">'
+        + '<div style="text-align:center"><div style="margin-bottom:14px">页面没加载完整 —— 通常是刚才服务正忙</div>'
+        + '<button id="bootRetry" style="padding:8px 24px;cursor:pointer">重试加载</button></div></div>';
+      document.body.appendChild(d.firstChild);
+      document.getElementById('bootRetry').onclick = function () {
+        sessionStorage.removeItem('__bootRetried');
+        location.reload();
+      };
+    }, 4000);
+  })();
+</script>
 <script type="module" src="/app.mjs"></script>
 </body>
 </html>

@@ -136,22 +136,33 @@ export function renderList() {
      * 不在这层排序：输入的 S.conversations 已由服务端按 updatedAt DESC 排好，
      * filter 天然保住全局顺序（群与人混在一起按最后活跃时间排，跟以前一样）。
      */
-    const currentOf = new Map();  // 人 → 他的代表会话（最新那段；正在看的那段优先，见下）
+    const currentOf = new Map();  // 人 → 他的代表会话（挑选规则见 prefer）
     const groupOf = new Map();    // 群 id → 这个群的代表会话（同上）
+    /*
+     * 代表会话怎么挑（2026-10-24）：
+     *   ① 你**正在看**的那段永远优先（2026-10-22 用户实报：从聊天记录点开老会话，
+     *      行要跟着走，预览和高亮才对得上）；
+     *   ② 其次**有消息的**压过空壳 —— 「新会话」开了还没发过字的空壳不该把行抢走，
+     *      不然预览没了、点进去是空面板，看着就像聊天记录丢了；
+     *   ③ 同档取更新的一段。
+     */
+    const prefer = (a, b) => {
+      if (!a) return b;
+      if (!b) return a;
+      if (S.conversation?.id === a.id) return a;
+      if (S.conversation?.id === b.id) return b;
+      const aEmpty = !(a.messageCount > 0);
+      const bEmpty = !(b.messageCount > 0);
+      if (aEmpty !== bEmpty) return aEmpty ? b : a;
+      return String(a.updatedAt) >= String(b.updatedAt) ? a : b;
+    };
     for (const c of S.conversations ?? []) {
       if (c.kind === 'exec') continue;
       if (c.kind === 'group') {
-        const gid = gidOf(c);
-        if (!groupOf.has(gid) || S.conversation?.id === c.id) groupOf.set(gid, c);
+        groupOf.set(gidOf(c), prefer(groupOf.get(gidOf(c)), c));
         continue;
       }
-      /*
-       * 代表会话 = 最新那段；但你**正在看**的那段优先（2026-10-22 用户实报）：
-       * 从「聊天记录」抽屉点开一段老会话，左栏这一行也应该是它 —— 预览、时间
-       * 跟着走，高亮才真的对得上行。不然行还停在最新那段上，看着选中了，
-       * 其实是按"人"命中的假高亮（预览根本不是你点开的那条）。
-       */
-      if (!currentOf.has(c.personaId) || S.conversation?.id === c.id) currentOf.set(c.personaId, c);
+      currentOf.set(c.personaId, prefer(currentOf.get(c.personaId), c));
     }
     const rows = (S.conversations ?? [])
       .filter((c) => {
@@ -527,5 +538,22 @@ export function showView(which) {
 export function showPlaceholder(title) {  $('placeholderView').innerHTML = `
     <div class="detail-head"><b>${esc(title)}</b></div>
     <div class="detail-body"><div class="wip">开发中</div></div>`;
+  showView('placeholder');
+}
+
+/**
+ * 通讯录的主区空态（2026-10-24 对齐微信）：切到通讯录但还没选人时，
+ * 右边不残留上一段聊天 —— 摆一个安静的占位。点左栏的群/员工才进详情。
+ */
+export function showContactsHome() {
+  $('placeholderView').innerHTML = `
+    <div class="contacts-home">
+      <div>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="8" r="3.6"/><path d="M4.5 20c1.2-3.6 4.1-5.6 7.5-5.6s6.3 2 7.5 5.6"/>
+        </svg>
+        <div class="hint">在左侧选一个群或数字员工，看Ta的资料</div>
+      </div>
+    </div>`;
   showView('placeholder');
 }

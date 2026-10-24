@@ -182,6 +182,7 @@ export function runDsh({
   connectorArgs = [],
   model = null,
   provider = null,
+  env = {},
   onEvent = () => {},
   signal = null,
 }) {
@@ -202,7 +203,7 @@ export function runDsh({
     const child = spawn(l.file, [...l.args, ...args], {
       cwd,
       windowsHide: true,
-      env: { ...agentEnv(), ...l.env },
+      env: { ...agentEnv(), ...l.env, ...env },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     if (routeNote) console.log(`[模型] dsh 这一步用覆盖层 ${routeNote}`);
@@ -253,7 +254,17 @@ export function runDsh({
       resolve({ sessionId: resolvedSessionId, finalText, exitCode: code, events, usage, turnReason, stderr });
     });
 
-    if (signal) signal.addEventListener('abort', () => child.kill(), { once: true });
+    if (signal) {
+      signal.addEventListener('abort', () => {
+        try { child.kill(); } catch { /* ignore */ }
+        // 只杀直接子进程不够：CLI 自己起的命令子进程（powershell/cmd/构建脚本）活着的话
+        // 会占着 stdout 管道的写端，这边的 'close' 永远不来（2026-10-23 实报，会话被
+        // "他还在跑上一条"闸死）。Windows 上用 taskkill /T 连树一起拔。
+        if (process.platform === 'win32' && child.pid) {
+          try { spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }); } catch { /* ignore */ }
+        }
+      }, { once: true });
+    }
 
     child.stdin.end(task);
   });

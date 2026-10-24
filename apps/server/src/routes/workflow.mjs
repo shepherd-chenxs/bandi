@@ -159,7 +159,8 @@ export async function handleWorkflow(req, res, url) {
       // 跑完又把状态写回去，两边打架（用户实报："状态进行中、备注却写着被中断"）。
       if (act[2] === 'abort' || act[2] === 'status') {
         const task = store.listWorkflowTasks(id).at(-1);
-        if (task?.agentRunId) runs.getRun(task.agentRunId)?.abortController?.abort();
+        // requestStop 而不是裸 abort：带"是人停的"标记（落成已停止而不是失败）+ 停止看门狗
+        if (task?.agentRunId) runs.requestStop(task.agentRunId);
       }
       const r =
         act[2] === 'start' ? workflows.startCurrentStep(id, { force: body.force === true })

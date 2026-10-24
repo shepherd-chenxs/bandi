@@ -27,7 +27,7 @@
  *   · **手工任务**：看板上直接建的卡（`project_tasks`），一行 = 一张卡。
  *
  * 三张表都只读（除了下面那两个建/改手工卡的口子）。排序按「要不要人管」：
- * 已阻塞 → 失败 → 待人确认 → 进行中/没开跑 → 已完成。
+ * 已阻塞 → 失败 → 待验收 → 进行中/没开跑 → 已完成 → 已取消 → 想法。
  *
  * ── 历史数据的一处已知不准 ───────────────────────────────────────
  * "这次执行是不是流程的一步"靠五条线索判（见 `store.runBelongsToWorkflow`）。
@@ -36,10 +36,10 @@
  */
 import path from 'node:path';
 import * as store from './store.mjs';
-import { dispatchToThread, projectConstitutionBlock } from './dispatch.mjs';
+import { dispatchToThread, dispatchEventToThread, projectConstitutionBlock } from './dispatch.mjs';
 
 /** 排序权重：越小越"要人管"（平表用它；看板按列站队，不看这个） */
-const FLOW_RANK = { 已阻塞: 0, 失败: 1, 待确认: 2, 进行中: 3, 待办: 4, 待开始: 4, 已完成: 5, 想法: 6 };
+const FLOW_RANK = { 已阻塞: 0, 失败: 1, 待验收: 2, 进行中: 3, 待办: 4, 已完成: 5, 已取消: 6, 想法: 7 };
 
 /**
  * 看板上**不要**把「流程的一步」开出来的那张卡再算一行（2026-10-19）。
@@ -59,10 +59,21 @@ const CHAT_RANK = { 失败: 1, 已停止: 2, 跑中: 3, 完成: 5 };
 const RANK_OTHER = 8;
 
 /**
- * 看板列：**从左到右按生命周期**（用户 2026-10-14 参照 Multica 的看板定的形状）。
- * 「停下等人」一格收两种状态：流程的 `已阻塞` 与聊天的 `已停止` ——
- * 平台语义上它们同类（都停下来等人处理，见契约「三、进度与状态」），
- * 但**卡片上显示各自的原话**，不把状态名洗掉。
+ * 看板列：**从左到右按生命周期**（用户 2026-10-14 参照 Multica 的看板定的形状；
+ * 2026-10-24 状态体系重设计，八态定稿）。
+ *
+ * 两列"等待"的分工（重设计的关键，别再搅回去）：
+ *   · **待验收** = 干完了等验收 —— 正向等待，人点个头就完成；
+ *   · **已阻塞** = 出问题了等人拍板/给输入 —— 异常等待，不处理就永远停着。
+ *   原来分别叫「待人确认」「停下等人」，名字都带"等人"分不开；现在列名 = 状态名，
+ *   一列一个词。「已阻塞」那列还收聊天的 `已停止`（人停掉运行 = 这活要人决定下一步，
+ *   语义同类），但卡片上显示各自的原话，不把状态名洗掉。
+ *
+ * 「失败」单独立列（不并进已阻塞）：失败是**技术上跑挂了**（重跑就可能过），
+ * 已阻塞是**事本身就办不动**（要人给输入）—— 处置动作不同，混一列会丢信号。
+ *
+ * 「已取消」（2026-10-24 补的缺口）：决定不做 ≠ 删卡 —— 留着卡片就是留痕，
+ * "当初为什么放弃"以后还查得到。它排在「已完成」后面：都是终态，只是收场方式不同。
  *
  * 最左边那列「想法」是**还没成形的念头**（2026-10-15 加）：它排在「待办」之前，
  * 因为生命周期上它更早——想法是"还没决定要不要做"，待办是"决定要做了"。
@@ -72,21 +83,22 @@ const COLUMNS = [
   { key: 'idea', label: '想法', hint: '还没决定要不要做' },
   { key: 'todo', label: '待办' },
   { key: 'doing', label: '进行中' },
-  { key: 'confirm', label: '待人确认' },
-  { key: 'blocked', label: '停下等人', hint: '已阻塞 · 已停止' },
+  { key: 'review', label: '待验收', hint: '干完了，等你点头' },
+  { key: 'blocked', label: '已阻塞', hint: '出了问题等人拍板' },
   { key: 'failed', label: '失败' },
   { key: 'done', label: '已完成' },
+  { key: 'cancelled', label: '已取消', hint: '决定不做，留个痕' },
   { key: 'other', label: '其他' },
 ];
-const COL_OF_FLOW = { 待办: 'todo', 待开始: 'todo', 进行中: 'doing', 待确认: 'confirm', 已阻塞: 'blocked', 失败: 'failed', 已完成: 'done' };
+const COL_OF_FLOW = { 待办: 'todo', 进行中: 'doing', 待验收: 'review', 已阻塞: 'blocked', 失败: 'failed', 已完成: 'done' };
 const COL_OF_CHAT = { 进行中: 'doing', 已完成: 'done', 失败: 'failed', 已停止: 'blocked' };
-/** 手工任务：状态直接用流程那套词，站列一一对应（加「想法」—— 它只可能手工来） */
-const COL_OF_MANUAL = { 想法: 'idea', 待办: 'todo', 进行中: 'doing', 待确认: 'confirm', 已阻塞: 'blocked', 已完成: 'done' };
+/** 手工任务：状态直接用统一那套词，站列一一对应（「想法」「已取消」只可能手工来） */
+const COL_OF_MANUAL = { 想法: 'idea', 待办: 'todo', 进行中: 'doing', 待验收: 'review', 已阻塞: 'blocked', 失败: 'failed', 已完成: 'done', 已取消: 'cancelled' };
 
 /** 看板列 → 新建任务时的默认状态（点哪一列的「＋」就默认落在哪一列） */
-export const STATUS_OF_COL = { idea: '想法', todo: '待办', doing: '进行中', confirm: '待确认', blocked: '已阻塞', done: '已完成' };
+export const STATUS_OF_COL = { idea: '想法', todo: '待办', doing: '进行中', review: '待验收', blocked: '已阻塞', failed: '失败', done: '已完成', cancelled: '已取消' };
 
-/** 聊天运行态 → 人看的说法（流程那套用平台自己的六态，不翻译） */
+/** 聊天运行态 → 人看的说法（流程/手工卡那套用统一任务八态，不翻译） */
 const CHAT_STATUS_TEXT = { 跑中: '进行中', 完成: '已完成', 失败: '失败', 已停止: '已停止' };
 
 /** 一行备注的长度上限；行数上限（面板是给人看的，不是导出全量） */
@@ -223,15 +235,23 @@ function chatOwnership(conv, chatRun, projects) {
  * 聊天：一个会话的**最近一轮聊天 = 一行**；全被流程占用的会话不算。
  *
  * `scope` = 只看某个项目的 id（项目看板）或 null（全局面板：所有会话都收）。
- * 行上**总是**带 `project_id` / `project_name`（没人认领就是 `NO_PROJECT`）——
- * 项目看板那边调用方会把这两个字段摘掉（它整页就是这一个项目，标了反而乱）。
+ * 行上**总是**带 `project_id` / `project_name`（没人认领就是 `NO_PROJECT`）。
+ *
+ * **聊天行只进员工详情，不进看板**（2026-10-24 用户定的，先做过会话级「上板」开关后否掉）：
+ * 看板收的是正式的活 —— 流程、手工卡、仓库值班、PM 建的卡；聊天派的活想进看板，
+ * 走「立成卡」转正。所以看板那些调用方（projectTasks / allTasks）根本不调这里，
+ * 只有 personaTasks（"他手上有什么"）要它 —— 那页按人筛过，不算噪音。
  */
 function chatRows(projects, scope) {
   const rows = [];
+  // 已经**立成卡**的会话不再投影：卡进员工详情代表这件事，再投一张「聊天派活」是重复。
+  // 这是上面 exec 会话那条规则的推广 —— 工单会话"自己就是卡"，这里是"被立了卡的聊天"。
+  const withCards = store.conversationIdsWithCards();
   for (const conv of store.listConversations()) {
     // 任务卡的工单会话（kind='exec'）**不算「聊天派活」**：它自己就是那张任务卡，
     // 评论派活 / 开工都归在卡下，再投影一张「聊天派活」卡就是同一件事重复出现（2026-10-19）。
     if (conv.kind === 'exec') continue;
+    if (withCards.has(conv.id)) continue;
     const runs = store.listRuns(conv.id); // 已按开始时间倒序
     if (!runs.length) continue; // 建了会话没派过活，不算任务
     const chatRun = runs.find((r) => !store.runBelongsToWorkflow(r));
@@ -296,12 +316,12 @@ function board(rows, extra = {}) {
     chat_count: count((r) => r.source === 'chat'),
     manual_count: count((r) => r.source === 'manual'),
     repo_count: count((r) => r.source === 'repo'),
-    // 跟看板「停下等人」那一列**同一个口径**：那一列收流程的「已阻塞」和聊天的「已停止」
+    // 跟看板「已阻塞」那一列**同一个口径**：那一列收流程的「已阻塞」和聊天的「已停止」
     // （平台语义上它们同类，见上面 COLUMNS 的注释）。口径不一致的话，
     // 概览写 1、列里站着 1 张却是"已停止"，人就会怀疑哪边错了
     blocked_count: count((r) => r.status === '已阻塞' || r.status === '已停止'),
     failed_count: count((r) => r.status === '失败'),
-    waiting_count: count((r) => r.status === '待确认'),
+    waiting_count: count((r) => r.status === '待验收'),
     columns,
     rows: sorted,
   };
@@ -316,9 +336,7 @@ export function projectTasks(project) {
   const runs = store.listWorkflowRuns({ limit: 500 }).filter((r) => r.projectId === project.id);
   const rows = [
     ...runs.flatMap(flowRows),
-    // 聊天行天生带 project_id / project_name（全局那边要用）—— 这一页整页就是它，
-    // 摘掉再画，卡片上才不会每张都挂一枚"本项目"的标签
-    ...chatRows([project], project.id).map(({ project_id, project_name, ...r }) => r),
+    // 聊天派活不进看板（2026-10-24 用户定的）—— 项目看板只收流程、手工卡、仓库值班
     ...store.listProjectTasks(project.id).filter(notFlowCard).map(manualRows),
   ];
 
@@ -338,14 +356,16 @@ export function projectTasks(project) {
  * 「全部」面板（`allTasks`）与「某个人的任务」（`personaTasks`）**共用这一处** ——
  * 两页说的是同一批事，只是筛的范围不同；各写一遍的话，一边多收一类活、另一页看不见，
  * 就成了"看板上 3 件、他详情里 2 件"这种没人说得清的分歧。
+ * 唯一的分歧是**聊天行**：看板不收（2026-10-24，见 chatRows 的注释），员工详情收 ——
+ * `opts.withChat` 就是这道岔口，默认不收。
  *
  * `runs` 由调用方传：两个调用方都要拿它数 `flow_count`，别为了这点事再查一遍库。
  */
-function allRows(projects, byId, runs) {
+function allRows(projects, byId, runs, { withChat = false } = {}) {
   const tag = (r, p) => ({ ...r, project_id: p?.id ?? null, project_name: p?.name ?? NO_PROJECT });
   return [
     ...runs.flatMap((run) => flowRows(run).map((r) => tag(r, byId.get(run.projectId)))),
-    ...chatRows(projects, null), // 自己就带好了 project_id / project_name
+    ...(withChat ? chatRows(projects, null) : []), // 自己就带好了 project_id / project_name
     ...projects.flatMap((p) => store.listProjectTasks(p.id).filter(notFlowCard).map((t) => tag(manualRows(t), p))),
   ];
 }
@@ -359,14 +379,18 @@ function allRows(projects, byId, runs) {
  *     项目看板看不见它们，而这里是"所有的活"；漏掉反而怪。
  *     流程实例没挂项目的那几个同理（项目删了以后 `projectId` 会被置空）。
  *
- * 每行只算一次：聊天行按会话算（不按项目），流程行按实例算，手工卡按卡算 ——
+ * 每行只算一次：流程行按实例算，手工卡按卡算 ——
  * 所以全局的 total 不会因为"归属算了两遍"而虚高。
+ *
+ * **聊天派活不进看板**（2026-10-24 用户定的）：看板收正式的活，聊天派的想进来就立成卡。
+ * 员工详情（personaTasks）才收聊天行 —— 那页按人筛过。
  */
 export function allTasks() {
   const projects = store.listProjects();
   const byId = new Map(projects.map((p) => [p.id, p]));
   const runs = store.listWorkflowRuns({ limit: 500 });
 
+  // 看板视图：不收聊天行（2026-10-24，见 chatRows 的注释）
   const rows = allRows(projects, byId, runs);
   const boarded = board(rows, {
     scope: 'all',
@@ -386,9 +410,9 @@ export function allTasks() {
       project_id: id,
       project_name: name,
       total: mine.length,
-      // 跟概览的 blocked_count / 看板「停下等人」那一列同一个口径
+      // 跟概览的 blocked_count / 看板「已阻塞」那一列同一个口径
       blocked: mine.filter((r) => r.status === '已阻塞' || r.status === '已停止').length,
-      waiting: mine.filter((r) => r.status === '待确认').length,
+      waiting: mine.filter((r) => r.status === '待验收').length,
       failed: mine.filter((r) => r.status === '失败').length,
     };
   };
@@ -417,7 +441,8 @@ export function personaTasks(persona) {
   const projects = store.listProjects();
   const byId = new Map(projects.map((p) => [p.id, p]));
   const runs = store.listWorkflowRuns({ limit: 500 });
-  const rows = allRows(projects, byId, runs).filter((r) => r.assignee_id === persona.id);
+  // 员工详情是聊天行唯一的宿主（看板不收，见 chatRows 的注释）—— "他手上有什么"要连聊天接的活一起看见
+  const rows = allRows(projects, byId, runs, { withChat: true }).filter((r) => r.assignee_id === persona.id);
 
   return board(rows, {
     scope: 'persona',
@@ -432,8 +457,14 @@ export function personaTasks(persona) {
 
 /* ------------------------------------------------------------ 建一张手工卡 */
 
-/** 手工卡允许的状态。`想法` 也在内 —— 那一列只能手工建（流程/聊天跑起来时早过了这个阶段） */
-const MANUAL_STATUSES = new Set(['想法', '待办', '进行中', '待确认', '已阻塞', '已完成']);
+/**
+ * 手工卡允许的状态 —— 就是统一那套任务八态（2026-10-24 起「失败」「已取消」也在内）：
+ *   · 「失败」补进来对齐落点规则：手工卡跑挂了以前被归「已阻塞」，流程跑挂却是「失败」——
+ *     同类事件两种落点。现在统一：跑挂（技术上失败）→ 失败；出问题等人（受阻/被停）→ 已阻塞。
+ *   · 「想法」「已取消」只可能手工来（流程/聊天跑起来时早过了"想法"阶段，
+ *     而机器不会替人决定"这事不做了"）。
+ */
+const MANUAL_STATUSES = new Set(['想法', '待办', '进行中', '待验收', '已阻塞', '失败', '已完成', '已取消']);
 
 /**
  * 在项目看板上**手工建一个任务**（用户 2026-10-14，参照 Multica 的「＋」）。
@@ -448,7 +479,7 @@ const MANUAL_STATUSES = new Set(['想法', '待办', '进行中', '待确认', '
  * ⚠️ 手工卡**必须挂在某个项目下**（表里 projectId 非空、没有它看板也不认）——
  * 全局面板里点某一列的「＋」时，弹窗会让人先选一个项目，就是为这个。
  */
-export function createProjectTask(project, { title, description = '', status = '待办', personaId = null, startNow = false } = {}) {
+export function createProjectTask(project, { title, description = '', status = '待办', personaId = null, startNow = false, createdBy = null, creatorConvId = null } = {}) {
   const name = String(title ?? '').trim();
   if (!name) throw new Error('任务得有标题');
   const st = MANUAL_STATUSES.has(status) ? status : '待办';
@@ -461,6 +492,10 @@ export function createProjectTask(project, { title, description = '', status = '
     description: String(description ?? '').trim(),
     status: st,
     assigneePersonaId: persona?.id ?? null,
+    // 项目经理经"工作证"接口建卡时带的身份（人手建是 null）
+    createdBy,
+    // 建卡那次运行所在的会话（PM 在哪个群里建的卡，回执就送回哪儿；人手建是 null）
+    creatorConvId,
   });
 
   // 「想法」不该被立刻派活 —— 它是"还没决定要不要做"，谈不上开始；
@@ -526,6 +561,7 @@ export function startProjectTask(id, { allowIdea = false } = {}) {
       conversationId: conv,
       runId: run.id,
       queuedAt: null,
+      notifiedFor: null, // 重新开跑 = 会有新产出：上一轮的回执标记清掉，跑完要重新报
     });
   } catch (e) {
     /*
@@ -541,10 +577,79 @@ export function startProjectTask(id, { allowIdea = false } = {}) {
   }
 }
 
+/* ------------------------------------------------------------ 把会话立成卡 */
+
+/**
+ * 把一场聊天会话**立成任务卡**（2026-10-24，聊天页头的「立成卡」按钮）。
+ *
+ * 背景：聊天派活**不进看板**（2026-10-24 用户定的）—— 闲聊一句就派活，每场会话都
+ * 自动投影一张「聊天派活」，看板很快糊掉。用户想把某轮活转正时点这颗按钮：
+ * 真卡进看板管起来（状态、描述、PR、讨论区都是一等公民），员工详情里聊天投影让位（chatRows 去重）。
+ *
+ * 口径：
+ *   · **幂等** —— 已立过就原样带回（`created: false`），不报错、不建第二张；
+ *   · 项目照 `chatOwnership` 的归属规则认（会话挂了项目就是它；没挂就看执行人的
+ *     目录落在哪个项目下）—— 手工卡必须挂项目，这条硬规矩不为立卡开口子；
+ *   · 标题取最近一条用户消息（就是"派的活"），没有就退回会话标题；
+ *   · 状态照最近一轮跑实的状态折成卡的状态：跑中→进行中、完成→**待验收**
+ *     （等人验收，别替用户宣布"已完成"）、失败→失败、停止→已阻塞
+ *     （跟 onTaskRunFinished 同一套落点规则，同一件事别两处两种落法）；
+ *   · **不派活**（`startNow` 恒 false）：活已经在会话里跑着或跑完了，再派一次
+ *     等于同一件事两份执行。之后要返工，走卡详情页那条路（会另开工单会话）。
+ */
+export function promoteConversationToCard(convId) {
+  const conv = store.getConversation(convId);
+  if (!conv) {
+    const e = new Error('这段会话已经不在了（可能刚被删过）');
+    e.code = 'E2047';
+    throw e;
+  }
+  if (conv.kind === 'exec') {
+    const e = new Error('工单会话本身就是任务卡，不用再立');
+    e.code = 'E2047';
+    throw e;
+  }
+  const existing = store.getProjectTaskByConversation(convId);
+  if (existing) return { task: existing, created: false };
+
+  const runs = store.listRuns(convId); // 已按开始时间倒序
+  const chatRun = runs.find((r) => !store.runBelongsToWorkflow(r));
+  if (!chatRun) {
+    const e = new Error('这场会话还没派过活，没东西可立');
+    e.code = 'E2059';
+    throw e;
+  }
+
+  const projects = store.listProjects();
+  const own = chatOwnership(conv, chatRun, projects);
+  const project = own?.project ?? null;
+  if (!project) {
+    const e = new Error(
+      '这场会话没挂项目，执行人的工作目录也没落在任何项目下 —— 先给会话或员工配上项目，再立卡',
+    );
+    e.code = 'E2059';
+    throw e;
+  }
+
+  const persona = chatRun.personaId ? store.getPersona(chatRun.personaId) : null;
+  const lastUser = store.lastUserMessage(convId);
+  const status = chatRun.status === '跑中' ? '进行中' : chatRun.status === '完成' ? '待验收' : chatRun.status === '失败' ? '失败' : '已停止' ? '已阻塞' : '待办';
+  const task = createProjectTask(project, {
+    title: clip(lastUser || conv.title || '（没说做什么）', TASK_LIMIT),
+    status,
+    personaId: persona?.id ?? null,
+    startNow: false,
+    createdBy: null, // 人点的按钮，不是 agent 建的（agent 建卡走 agent-cards 那条口）
+  });
+  // createProjectTask 不收 conversationId/runId（那两个字段归派活链路写）—— 这里指向这场会话本身
+  const linked = store.updateProjectTask(task.id, { conversationId: convId, runId: chatRun.id });
+  return { task: linked ?? task, created: true };
+}
+
 /**
  * 排队中的卡：30 秒节拍试着重派（撞忙时登记的 queuedAt，见 startProjectTask）。
  *
- * 为什么必须有：拆出工单会话之后，并发靠「每人上限 + 项目互斥」封 —— 派活会撞'忙'。
+ * 为什么必须有：并发闸（每人的 maxParallel + 项目安全网）拦下来的派活会撞'忙'。
  * 撞上就退回「待办」等人点，等于把人变成了重试按钮；这条让它自己等一会儿再来。
  * 顺序先进先出；还忙就跳过等下一拍，真失败（运行时不可用…）才清掉标记。
  */
@@ -572,10 +677,12 @@ export function retryQueuedTasks() {
  * 为什么必须有这一步：原来卡片派活后状态永远停在「进行中」—— 人把运行停掉了，卡还写着「进行中」，
  * 看板上看不出"这活已经停了、在等人处理"。
  *
- * 落点（用户定的口径，别改）：
- *   · 跑完了（`完成`）        → **待确认**：等经办人确认结果；
- *   · 人停的 / 跑挂了（`已停止` / `失败`） → **已阻塞**：进「停下等人」，管理员看到再处理。
- *     ⚠️ **绝不回「待办」**：有些待办会被自动重新派活，失败一次就再派一次 —— 死循环。
+ * 落点（2026-10-24 状态重设计定稿，全套口径见 COLUMNS 的注释）：
+ *   · 跑完了（`完成`）        → **待验收**：等经办人验收结果；
+ *   · 人停的（`已停止`）      → **已阻塞**：进「已阻塞」，等人决定下一步；
+ *   · 跑挂了（`失败`）        → **失败**：跟流程步骤同一落点（以前手工卡归「已阻塞」，
+ *     两套来源两种落法）。它**不会**被自动重派 —— 重派只认「待办」+ queuedAt，
+ *     所以这里不存在"失败一次再派一次"的死循环（那才是当初不敢用这态的原因）。
  *
  * 只动"当前还是进行中"的卡：人已经手动改过状态（比如直接拖到已完成）就不覆盖 —— **卡的状态是人的指令**。
  */
@@ -584,23 +691,24 @@ export function onTaskRunFinished(run) {
   const task = store.getProjectTaskByRunId(run.id);
   if (!task || task.status !== '进行中') return;
   const next =
-    run.status === '完成' ? '待确认' : run.status === '已停止' || run.status === '失败' ? '已阻塞' : null;
+    run.status === '完成' ? '待验收' : run.status === '已停止' ? '已阻塞' : run.status === '失败' ? '失败' : null;
   if (!next) return;
   const why =
     run.status === '完成'
-      ? '跑完了，等你确认'
+      ? '跑完了，等你验收'
       : run.status === '已停止'
         ? '被人停掉了，等你处理'
         : `跑挂了${run.error ? `：${String(run.error).split('\n')[0].slice(0, 200)}` : ''}`;
   const descr = `${task.description ?? ''}`.trim();
-  store.updateProjectTask(task.id, {
+  const updated = store.updateProjectTask(task.id, {
     status: next,
     description: `${descr}${descr ? '\n\n' : ''}---\n[运行结束] ${why}`,
   });
+  notifyCardOwner(updated, why);
 }
 
 /**
- * PR 合并后把卡收一下（2026-10-17）：**只把「进行中」改成「待确认」**。
+ * PR 合并后把卡收一下（2026-10-17）：**只把「进行中」改成「待验收」**。
  *
  * 为什么不直接「已完成」：卡的状态是**人给的指令**（合并 ≠ 验收通过）。
  * 其他状态一律不动 —— 人已经拖到「已完成」的，别覆盖。
@@ -608,9 +716,93 @@ export function onTaskRunFinished(run) {
 export function afterMerged(task) {
   if (!task) return task;
   if (task.prState === 'merged' && task.status === '进行中') {
-    return store.updateProjectTask(task.id, { status: '待确认' });
+    const updated = store.updateProjectTask(task.id, { status: '待验收' });
+    notifyCardOwner(updated, 'PR 合并了，产出在卡上等你验收');
+    return updated;
   }
   return task;
+}
+
+/**
+ * 卡片回执（2026-10-24）：卡到了"要人拍板"的状态（待验收 / 已阻塞 / 失败），告诉**该知道的人**。
+ *
+ * 通知对象两级：**建卡人**优先（PM 建卡时记了身份，他答应雇主"有产出我再回你"，
+ * 不推一把这句承诺就是空话）；建卡时没带身份的卡（有的员工不走"工作证"专用口，
+ * 直接调通用接口），退**项目档案里绑的项目经理** —— 分派、验收、把关本来就是他的本分，
+ * 项目档案里绑了谁，谁就是这里该被叫醒的人。
+ *
+ * 落两条消息（2026-10-24 用户定口径：**回执是执行者的汇报，不是"我"说的话**）：
+ *   ① **执行人汇报**（可见）：assistant 名义、执行人的身份，带卡票 —— 人看到的是
+ *      "嘉辉说这活到「待验收」了"，而不是右边冒出一条"我"发的系统话；
+ *   ② **唤醒触发**（不可见）：`meta.silent` 的 user 触发给建卡人，让他跟进 ——
+ *      这条是给 agent 看的指令（"按你对雇主的承诺跟进"），不是给人看的对话，
+ *      界面上不画（chat.mjs 的 drawMessages 按 silent 过滤）。
+ *
+ * 会话定位三级：建卡会话（`creatorConvId`，他当时说话的地方）→ 他在的**群**（雇主看得到
+ * 他的汇报）→ 他的 1:1。都找不到就放弃 —— 回执是尽力而为，卡的状态本身已经落库。
+ *
+ * 护栏：通知对象 = 执行人自己跳过（自己的活自己知道）；`notifiedFor` 按状态去重
+ * （同一张卡收成同一状态只报一次；重新开跑会清掉，见 startProjectTask）。
+ * 唤醒走讨论档（只读）：他要的是派 QA 验收、汇报、安排下一步 —— 动手活他会再派，这是 PM 的本分。
+ */
+function conversationOfPersona(personaId) {
+  // 群优先：他在哪个群里说话，回执就落哪个群（雇主看得到）；没有群退他的 1:1
+  const groups = store.listConversations().filter((c) => c.kind === 'group');
+  for (const g of groups) {
+    const thread = store.getConversation(g.id);
+    if ((thread?.members ?? []).some((m) => m.personaId === personaId)) return thread.id;
+  }
+  const direct = store.listConversations().find((c) => c.kind !== 'group' && c.personaId === personaId);
+  return direct?.id ?? null;
+}
+
+function notifyCardOwner(task, why) {
+  if (task.notifiedFor === task.status) return; // 这个状态已经报过
+  if (task.createdBy === task.assigneePersonaId) return; // 自己派的活自己干，不用自己通知自己
+  const project = store.getProject(task.projectId);
+  const targetId = task.createdBy || project?.pmPersonaId || null;
+  if (!targetId || targetId === task.assigneePersonaId) return;
+  const persona = store.getPersona(targetId);
+  if (!persona) return;
+  const convId = task.creatorConvId || conversationOfPersona(targetId);
+  if (!convId) {
+    console.warn(`[卡片回执] ${task.id} 找不到「${persona.name}」的会话，没报成`);
+    return;
+  }
+  // ① 执行人汇报（可见）：他干的活，由他说"到什么状态了"。带卡票，点进去验收。
+  //    执行人查不到（被删了）也照样发 —— personaId 落 null，界面用默认头像名，话还是那句。
+  const assignee = task.assigneePersonaId ? store.getPersona(task.assigneePersonaId) : null;
+  store.addMessage({
+    conversationId: convId,
+    role: 'assistant',
+    personaId: assignee?.id ?? null,
+    text: `【卡片回执】「${task.title}」（${task.id}）到「${task.status}」了 —— ${why}`,
+    meta: {
+      type: 'card',
+      cardId: task.id,
+      title: task.title,
+      status: task.status,
+      assignee: assignee?.name ?? null,
+    },
+  });
+
+  // ② 唤醒建卡人（不可见触发）：上面那条是给人的，这条是给他的指令。
+  //    文案跟他的职责对齐（2026-10-24 定口径：PM 的本分是调度）—— 写"验收产出"他会真的
+  //    去翻产出找证据，思考巨长还没干本职；写成"派 QA 验收"，他的动作就是转交 + 收结论。
+  const text =
+    `@${persona.name} 【卡片回执】你建的卡「${task.title}」（${task.id}）到「${task.status}」了 —— ${why}。` +
+    '请按你对雇主的承诺跟进：派 QA 验收、汇报进展、或安排下一步。';
+  const res = dispatchEventToThread(convId, text, {
+    personaId: persona.id,
+    projectId: task.projectId,
+    sandbox: 'plan',
+    // silent：这条是平台给 agent 的唤醒指令，不是人说的话 —— 界面上不画（见上面的注释）
+    meta: { silent: true },
+  });
+  if (res?.run || res?.queuedLater) {
+    store.updateProjectTask(task.id, { notifiedFor: task.status });
+    console.log(`[卡片回执] ${task.id} 「${task.status}」已通知 ${persona.name}${res.queuedLater ? '（他正忙，进了队列）' : ''}`);
+  }
 }
 
 /**
@@ -621,7 +813,7 @@ export function afterMerged(task) {
  *   · **保护人的指令** —— 重复巡检只更新标题与描述，**状态一律不动**（拖到「已完成」＝ 批准，删掉 ＝ 忽略）。
  *
  * `pr` 由 `git-repos.prFieldsOf()` 归一；只有真变了才写 —— 每次巡检都报"更新"，
- * 那个 ↻ 符号就没人信了。报上来是 merged 且卡在「进行中」，照样收成「待确认」（`afterMerged`）。
+ * 那个 ↻ 符号就没人信了。报上来是 merged 且卡在「进行中」，照样收成「待验收」（`afterMerged`）。
  *
  * 抽成函数是因为**两个调用方**：HTTP 的 `/api/projects/:id/repo-cards`（本机脚本用）
  * 与平台内的「PR 巡检」定时动作（直接调）。两处各写一遍迟早会跑偏。

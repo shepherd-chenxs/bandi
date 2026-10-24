@@ -302,6 +302,17 @@ export function guard(auth, req, res, url) {
   if (req.method === 'POST' && url.pathname === '/api/nodes/join') return true;
   if (req.method === 'GET' && url.pathname === '/api/hello') return true;
 
+  /*
+   * 数字员工的本机 AI 通道（2026-10-23，skills/bandi-avatar）：回环发起的 /api/ai/* 免令牌。
+   * 员工跑在 CLI 里，拿不到平台令牌，让技能教它 curl 时无凭据可用 —— 通道自身有
+   * 回环来源校验 + CSRF 闸双保险（routes/imageai.mjs），就算 BANDI_HOST=0.0.0.0
+   * 强开监听，局域网机器也摸不到。回环判据与 routes/local.mjs 的 isLoopbackRemote 一致。
+   */
+  if (url.pathname.startsWith('/api/ai/')) {
+    const a = String(req.socket?.remoteAddress ?? '').trim().toLowerCase();
+    if (a === '::1' || a === 'localhost' || a === '127.0.0.1' || a.startsWith('::ffff:127.') || a.startsWith('127.')) return true;
+  }
+
   if (!auth.required) {
     /*
      * 回环形态（桌面版 / 单机）免鉴权 —— 但**身份要标出来**。

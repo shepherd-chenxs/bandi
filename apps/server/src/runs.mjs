@@ -5,6 +5,7 @@ import * as connectors from './connectors.mjs';
 import * as gitRepos from './git-repos.mjs';
 import { normalizeSandbox } from './sandbox.mjs';
 import { ADAPTERS } from './adapters.mjs';
+import { controlUrl, issueRunCredential, revokeRunCredential } from './agent-auth.mjs';
 
 /**
  * 「这条会话在对面那个 CLI 里不存在」的报错特征。
@@ -138,7 +139,7 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
     model: eff.id,
     // 是流程的一步就记下那一步（下面 reply 消息也要带同一个标记）
     taskId: workflowTaskId,
-    // 在哪个项目里干活 —— 项目互斥（同一目录同时只跑一个）按它判
+    // 在哪个项目里干活 —— 项目安全网（同一目录并发堆积上限）按它判
     projectId,
   });
 
@@ -195,6 +196,12 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
   if (rt.remote) {
     return queueRemoteRun(run, { thread, rt, task, member });
   }
+
+  // **工作证**（agent-auth，2026-10-24）：本地跑的运行发一把一次性钥匙，agent 凭它
+  // 调专用接口（现在是建卡，见 routes/agent-cards.mjs）。钥匙在 run 收尾时吊销。
+  // 远端节点的活不发 —— agent 不在本机，控制面的回环地址对它没意义。
+  const cred = issueRunCredential(run.id, personaId, { local: true });
+  run.agentEnv = cred ? { BANDI_CONTROL_URL: controlUrl, BANDI_RUN_TOKEN: cred.token } : {};
 
   // 按**协议族**选适配器：同一族下可以有多个实例，它们共用一套事件解析
   const adapter = ADAPTERS[rt.adapter];
@@ -279,6 +286,7 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
       provider,
       cliPath: rt.path,
       connectorArgs: wiring.args,
+      env: run.agentEnv ?? {},
       signal: ctl.signal,
       onEvent: (evt) => {
         if (sid && evt.type === 'error') {
@@ -530,8 +538,47 @@ export function abortRemote(runId) {
   if (job && job.status === '待领') {
     store.finishNodeJob(job.id, '已取消');
     finish(run, { status: '已停止', exitCode: null, error: null });
+    return true;
   }
+  // 活已经发到节点上了：把停止的话带给节点（下一个事件批次的响应里带回 stop），
+  // 同时**上看门狗** —— 节点要是永远不回执（下线了、崩了），这边也不能永远挂在「跑中」
+  armStopWatchdog(run);
   return true;
+}
+
+/**
+ * 停止看门狗：人明确说了停，abort 也发了，但**子进程的退出通知可能永远等不来**——
+ *   · 员工的 CLI 自己又起了命令子进程（powershell / cmd / 构建脚本），父进程被杀后
+ *     孙进程继承了 stdout 管道的写端，服务这边的 'close' 事件就永远不来；
+ *   · kill 因任何原因没杀死（句柄失效、Electron 壳的特殊性）。
+ * 后果实测过（2026-10-23）：运行永远停在「跑中」，会话被"他还在跑上一条"闸死，
+ * 只能重启服务解围。所以：**5 秒还没收尾就强制收尾** —— 人要的是停，状态就得停。
+ * 迟到的正常收尾由 finish() 的防重入挡掉，不会两头写。
+ */
+export const STOP_WATCHDOG_MS = 5000;
+
+function armStopWatchdog(run) {
+  if (run.finished || run.stopWatchdog) return;
+  run.stopWatchdog = setTimeout(() => {
+    run.stopWatchdog = null;
+    if (run.finished) return;
+    finish(run, { status: '已停止', exitCode: null, error: null, elapsedMs: null });
+  }, STOP_WATCHDOG_MS);
+  // 别让这颗定时器拖着进程不退
+  run.stopWatchdog.unref?.();
+}
+
+/**
+ * 人点了「停止」：置标记 → 掐子进程 → 上看门狗。
+ * 路由（routes/run.mjs）和界面所有停止入口都走这里，别再各自拼一遍。
+ */
+export function requestStop(runId) {
+  const run = runs.get(runId);
+  if (!run) return null;
+  run.stoppedByUser = true;
+  run.abortController?.abort();
+  armStopWatchdog(run);
+  return run;
 }
 
 /**
@@ -547,6 +594,14 @@ export function onRunFinish(fn) {
 }
 
 function finish(run, { status, exitCode = null, error = null, usage = null, elapsedMs = null }) {
+  // **只收一次尾**：看门狗强制收尾之后，迟到的正常收尾（或反过来）一律忽略 ——
+  // 不设防的话两边会各写一遍状态，后到的把先到的盖掉
+  if (run.finished) return;
+  run.finished = true;
+  if (run.stopWatchdog) {
+    clearTimeout(run.stopWatchdog);
+    run.stopWatchdog = null;
+  }
   run.status = status;
   run.exitCode = exitCode;
   run.error = error;
@@ -554,6 +609,7 @@ function finish(run, { status, exitCode = null, error = null, usage = null, elap
 
   store.finishRun(run.id, { status, exitCode, error, usage });
   store.setConversationStatus(run.conversationId, status);
+  revokeRunCredential(run.id); // 钥匙跟活走：run 收尾就作废，agent 不能在活干完之后再建卡
 
   // 钩子出错不能影响执行本身的收尾 —— 否则一条流程的推进逻辑会把发言也搞挂
   for (const fn of finishHooks) {

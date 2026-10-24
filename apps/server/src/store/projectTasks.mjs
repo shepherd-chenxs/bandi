@@ -14,6 +14,8 @@ export function createProjectTask({
   externalKey = null,
   sourceKey = null,
   sourceRunId = null,
+  createdBy = null,
+  creatorConvId = null,
 }) {
   const ts = nowIso();
   const row = {
@@ -30,13 +32,17 @@ export function createProjectTask({
     // 流程的一步开出来的卡：'flow:<runId>:<nodeId>:<visit>'；手建的卡是 null
     sourceKey,
     sourceRunId,
+    // 项目经理经"工作证"接口建的卡记他（人手建的卡是 null，见 routes/agent-cards.mjs）
+    createdBy,
+    // 建卡那次运行所在的会话（PM 在哪个群里建的卡，回执就送回哪儿；人手建是 null）
+    creatorConvId,
     createdAt: ts,
     updatedAt: ts,
   };
   db.prepare(
     `INSERT INTO project_tasks
-       (id, projectId, title, description, status, assigneePersonaId, conversationId, runId, source, externalKey, sourceKey, sourceRunId, createdAt, updatedAt)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, projectId, title, description, status, assigneePersonaId, conversationId, runId, source, externalKey, sourceKey, sourceRunId, createdBy, creatorConvId, createdAt, updatedAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     row.id,
     row.projectId,
@@ -50,6 +56,8 @@ export function createProjectTask({
     row.externalKey,
     row.sourceKey,
     row.sourceRunId,
+    row.createdBy,
+    row.creatorConvId,
     row.createdAt,
     row.updatedAt,
   );
@@ -66,7 +74,7 @@ export function getProjectTaskByExternalKey(projectId, externalKey) {
 /**
  * 这次运行是哪张卡的（2026-10-17）。
  *
- * 用途：运行跑完时把卡的状态收一下（完成 → 待确认；人停的/跑挂的 → 已阻塞）。
+ * 用途：运行跑完时把卡的状态收一下（完成 → 待验收；人停的 → 已阻塞；跑挂的 → 失败）。
  * **回到「待办」是错的** —— 有些待办会被自动重新派活，失败一次就再派一次，等于死循环。
  */
 
@@ -83,6 +91,29 @@ export function getProjectTaskByRunId(runId) {
 export function getProjectTaskBySourceKey(sourceKey) {
   if (!sourceKey) return null;
   return db.prepare('SELECT * FROM project_tasks WHERE sourceKey = ? LIMIT 1').get(sourceKey) ?? null;
+}
+
+/**
+ * 这场会话立过卡没有（2026-10-24「立成卡」用）。
+ *
+ * 一场会话最多立一张卡：立了卡之后聊天投影就该让位（不然看板上一件事两张卡），
+ * 判据就是它 —— chatRows 拿它做去重，「再立一次」也靠它做幂等。
+ */
+export function getProjectTaskByConversation(conversationId) {
+  if (!conversationId) return null;
+  return db
+    .prepare('SELECT * FROM project_tasks WHERE conversationId = ? ORDER BY createdAt DESC LIMIT 1')
+    .get(conversationId) ?? null;
+}
+
+/** 这批会话里哪些已经立过卡（chatRows 去重用，一趟查完省得逐会话问） */
+export function conversationIdsWithCards() {
+  return new Set(
+    db
+      .prepare('SELECT DISTINCT conversationId FROM project_tasks WHERE conversationId IS NOT NULL')
+      .all()
+      .map((r) => r.conversationId),
+  );
 }
 
 
@@ -119,7 +150,8 @@ export function updateProjectTask(id, fields) {
     `UPDATE project_tasks
         SET title = ?, description = ?, status = ?, assigneePersonaId = ?,
             conversationId = ?, runId = ?, prRepo = ?, prNumber = ?, prState = ?, prTitle = ?,
-            prCheckedAt = ?, queuedAt = ?, sourceKey = ?, sourceRunId = ?, updatedAt = ?
+            prCheckedAt = ?, queuedAt = ?, sourceKey = ?, sourceRunId = ?,
+            creatorConvId = ?, notifiedFor = ?, updatedAt = ?
       WHERE id = ?`,
   ).run(
     next.title,
@@ -137,6 +169,8 @@ export function updateProjectTask(id, fields) {
     // `?? null` 而不是直接取：老库里这两列刚 ALTER 出来，历史行是 NULL —— 写回 null 是幂等的
     next.sourceKey ?? null,
     next.sourceRunId ?? null,
+    next.creatorConvId ?? null,
+    next.notifiedFor ?? null,
     nowIso(),
     id,
   );

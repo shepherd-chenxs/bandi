@@ -45,7 +45,9 @@ export async function handleRun(req, res, url) {
       runs.abortRemote(runId);
       return sendJson(res, 200, { ok: true, note: '这次跑在远端节点上，已告诉它停下' });
     }
-    run.abortController?.abort();
+    // requestStop = 掐子进程 + **上看门狗**：退出通知等不来（孙进程占着管道、kill 失效）
+    // 就 5 秒后强制收尾，别让会话被"他还在跑上一条"永远闸死（2026-10-23 实报）
+    runs.requestStop(runId);
     return sendJson(res, 200, { ok: true });
   }
 

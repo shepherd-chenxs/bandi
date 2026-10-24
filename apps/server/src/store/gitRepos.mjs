@@ -53,6 +53,25 @@ export function deleteGitRepo(id) {
 }
 
 /*
+ * 仓库的**值班设置**（2026-10-23，PR 审阅与授权合并）。
+ *
+ * 两个字段一起收：绑定管理员（keeperPersonaId）和授权合并（autoMerge）是一张
+ * 设置单上的两行，界面上也是一起存的 —— 分两个接口只会让人问"为什么改一个要发两次"。
+ * 传 null / 不传 = 不动那一个字段（PATCH 语义）；传空字符串 = 明确解绑管理员。
+ */
+export function updateGitRepoSettings(id, { keeperPersonaId, autoMerge } = {}) {
+  const cur = getGitRepo(id);
+  if (!cur) throw new Error('仓库不在清单里');
+  if (keeperPersonaId !== undefined) {
+    db.prepare('UPDATE git_repos SET keeperPersonaId = ? WHERE id = ?').run(keeperPersonaId || null, id);
+  }
+  if (autoMerge !== undefined) {
+    db.prepare('UPDATE git_repos SET autoMerge = ? WHERE id = ?').run(autoMerge ? 1 : 0, id);
+  }
+  return getGitRepo(id);
+}
+
+/*
  * 一小块"任意 key/value"（复用迁移标记位那张 `meta` 表）。
  *
  * 目前只放一件跟代码托管有关的东西：**上次验到的 GitHub 账号**。

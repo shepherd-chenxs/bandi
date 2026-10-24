@@ -1,16 +1,159 @@
 /* routes/conversation.mjs —— 2026-10-22 由 server.mjs 按域拆出，handler 逻辑原样搬运。
  * 主分发顺序（先匹配先赢）见 ../server.mjs 的 CHAIN。 */
 
-import { sendJson, fail, readBody } from '../http.mjs';
+import fs from 'node:fs';
+import path from 'node:path';
+import { sendJson, fail, readBody, readRawBody, BadRequest } from '../http.mjs';
+import { dataDir } from '../config.mjs';
 import * as store from '../store.mjs';
 import * as runs from '../runs.mjs';
 import { dispatchToThread } from '../dispatch.mjs';
 import * as workflows from '../workflows.mjs';
+import { promoteConversationToCard } from '../project-tasks.mjs';
+
+/* --------------------------------------------------- 附件（2026-10-23） */
+
+/** 附件根：<dataDir>/uploads/<会话id>/ —— 文件跟着数据走，备份/搬迁一体 */
+export const uploadsRoot = path.join(dataDir, 'uploads');
+
+/** 上限给 50MB：聊天附件不是网盘，再大该走工作目录 */
+export const ATT_MAX = 50 * 1048576;
+const ATT_MAX_COUNT = 8;
+
+/** 文件名清洗：只留_basename，剥掉路径分隔符与控制字符 —— 防借 name 写到别处 */
+export function safeName(name) {
+  const base = path.basename(String(name ?? 'file')).replace(/[\x00-\x1f]/g, '').trim();
+  return (base || 'file').slice(0, 120);
+}
+
+/** 会话 id 闸：ids 都是自己生成的 `c-xxxx`，不带它认不出的字符 —— 防借 convId 穿目录 */
+export function safeConv(id) {
+  const s = String(id ?? '');
+  return /^[A-Za-z0-9_-]+$/.test(s) ? s : null;
+}
+
+const ATT_MIME = {
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
+  '.webp': 'image/webp', '.svg': 'image/svg+xml', '.bmp': 'image/bmp',
+  '.pdf': 'application/pdf', '.txt': 'text/plain; charset=utf-8', '.md': 'text/markdown; charset=utf-8',
+  '.csv': 'text/csv; charset=utf-8', '.json': 'application/json; charset=utf-8',
+  '.zip': 'application/zip', '.doc': 'application/msword',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xls': 'application/vnd.ms-excel',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  '.html': 'text/html; charset=utf-8', '.htm': 'text/html; charset=utf-8',
+};
+
+/**
+ * 校验前端传回的附件清单：每一份都必须真的落在**这个会话**的 uploads/ 里。
+ * 为什么不信前端：接口能被直接调，乱传 path 就成了"任读任传任意文件"。
+ * 返回清洗后的数组；不合法抛 BadRequest（外层映射成 400）。
+ */
+export function validateAtts(convId, raw) {
+  if (raw == null) return null;
+  if (!Array.isArray(raw) || !raw.length) throw new BadRequest('附件清单不合法');
+  if (raw.length > ATT_MAX_COUNT) throw new BadRequest(`附件最多 ${ATT_MAX_COUNT} 个`);
+  const dir = path.join(uploadsRoot, convId);
+  const out = [];
+  for (const a of raw) {
+    const stored = safeName(a?.stored ?? a?.name);
+    const abs = path.resolve(dir, stored);
+    if (!abs.startsWith(path.resolve(dir) + path.sep)) throw new BadRequest('附件路径不合法');
+    if (!fs.existsSync(abs)) throw new BadRequest(`附件不存在或已过期：${stored}`);
+    out.push({
+      name: safeName(a?.name) || stored,
+      stored,
+      size: Number(a?.size) || fs.statSync(abs).size,
+      mime: String(a?.mime ?? ''),
+      path: abs,
+      url: `/api/files/${encodeURIComponent(convId)}/${encodeURIComponent(stored)}`,
+    });
+  }
+  return out;
+}
+
+/** 服务一份附件（GET /api/files/<convId>/<文件名>）：先过路径闸，再按扩展名给 MIME */
+function serveAttachment(res, convId, name) {
+  const dir = path.resolve(uploadsRoot, convId);
+  // URL 段是 percent-encoded 的（中文文件名），先解码再清洗
+  let decoded = name;
+  try { decoded = decodeURIComponent(name); } catch { /* 解不开就按原样试 */ }
+  const file = path.resolve(dir, safeName(decoded));
+  if (!file.startsWith(dir + path.sep)) {
+    res.writeHead(403).end('forbidden');
+    return true;
+  }
+  try {
+    const buf = fs.readFileSync(file);
+    const mime = ATT_MIME[path.extname(file).toLowerCase()] ?? 'application/octet-stream';
+    const headers = {
+      'Content-Type': mime,
+      'Cache-Control': 'private, max-age=31536000, immutable', // 文件名带时间戳，内容不可变
+      'Content-Disposition': 'inline',
+    };
+    // HTML/SVG 是能在浏览器里跑脚本的文档（2026-10-24，设计稿走 HTML 交付的前提）：
+    // 直接 inline 回显就是同源 XSS 通道 —— 加 CSP sandbox 关进不透明源，脚本碰不到班底本体。
+    if (['.html', '.htm', '.svg'].includes(path.extname(file).toLowerCase())) {
+      headers['Content-Security-Policy'] = 'sandbox allow-scripts';
+    }
+    res.writeHead(200, headers);
+    res.end(buf);
+    return true;
+  } catch {
+    return false; // 没这个文件 → 走外层 404
+  }
+}
 
 export async function handleConversation(req, res, url) {
   const detail = /^\/api\/conversations\/([^/]+)$/.exec(url.pathname);
   const send = /^\/api\/conversations\/([^/]+)\/messages$/.exec(url.pathname);
   const hide = /^\/api\/conversations\/([^/]+)\/hide$/.exec(url.pathname);
+  // 立成任务卡（2026-10-24）：把这场会话最近一轮派的活转正成看板上的真卡
+  const card = /^\/api\/conversations\/([^/]+)\/card$/.exec(url.pathname);
+  // 附件：上传（原始二进制，一次一个文件）与回显（GET /api/files/...）
+  const upload = /^\/api\/conversations\/([^/]+)\/files$/.exec(url.pathname);
+  const fileGet = /^\/api\/files\/([^/]+)\/([^/]+)$/.exec(url.pathname);
+
+  /*
+   * 附件回显（2026-10-23）：聊天里画的图片 / 可点的文件都走这儿。
+   * auth.guard 在外层已经把非本机来源挡了，这里只管路径不穿出 uploads/。
+   */
+  if (req.method === 'GET' && fileGet) {
+    const convId = safeConv(decodeURIComponent(fileGet[1]));
+    if (!convId) return fail(res, 400, 'E1046', '会话 id 不合法');
+    if (serveAttachment(res, convId, fileGet[2])) return;
+    return fail(res, 404, 'E2036', '没有这个文件');
+  }
+
+  /*
+   * 附件上传（2026-10-23）：前端用「+」选文件 / 粘贴图片后，先把文件本体 POST 上来
+   * （原始二进制，一次一个，名字走 query），拿到清单再随消息一起发。
+   */
+  if (req.method === 'POST' && upload) {
+    const convId = safeConv(decodeURIComponent(upload[1]));
+    if (!convId) return fail(res, 400, 'E1046', '会话 id 不合法');
+    if (!store.getConversation(convId)) return fail(res, 404, 'E2047', '这段会话已经不在了（可能刚被删过）');
+    const name = safeName(url.searchParams.get('name'));
+    const dir = path.join(uploadsRoot, convId);
+    fs.mkdirSync(dir, { recursive: true });
+    // 同名不覆盖：文件名前缀毫秒时间戳（回显那边 immutable 缓存也靠它保证内容不可变）
+    const stored = `${Date.now()}-${name}`;
+    const buf = await readRawBody(req, ATT_MAX, '文件太大（上限 50MB）—— 大文件请放到工作目录里再让员工去读');
+    if (!buf.length) return fail(res, 400, 'E1048', '文件是空的');
+    fs.writeFileSync(path.join(dir, stored), buf);
+    const abs = path.join(dir, stored);
+    return sendJson(res, 201, {
+      file: {
+        name,               // 界面上显示的原始文件名
+        stored,             // 落盘名（回显 URL 用）
+        size: buf.length,
+        mime: String(req.headers['content-type'] ?? ''),
+        path: abs,          // 员工读文件用的绝对路径
+        url: `/api/files/${encodeURIComponent(convId)}/${encodeURIComponent(stored)}`,
+      },
+    });
+  }
 
   /**
    * 「不显示」/「归档」：只动列表显示，**不删任何消息**（2026-10-20）。
@@ -103,6 +246,22 @@ export async function handleConversation(req, res, url) {
     return sendJson(res, 200, { conversation });
   }
 
+  /*
+   * 立成任务卡（2026-10-24）：把这场会话最近一轮派的活转正成看板上的真卡。
+   * 逻辑都在 project-tasks.promoteConversationToCard（幂等、归属、状态折算看那边的注释）；
+   * 这里只管 404 与把错误翻译成带码的 400。立过卡不算错 —— 原样带回，前端好提示"已经立过"。
+   */
+  if (req.method === 'POST' && card) {
+    const id = decodeURIComponent(card[1]);
+    if (!store.getConversation(id)) return fail(res, 404, 'E2047', '这段会话已经不在了（可能刚被删过）');
+    try {
+      const out = promoteConversationToCard(id);
+      return sendJson(res, out.created ? 201 : 200, out);
+    } catch (e) {
+      return fail(res, e.code === 'E2047' ? 404 : 400, e.code ?? 'E2059', e.message);
+    }
+  }
+
   if (req.method === 'GET' && detail) {
     const id = decodeURIComponent(detail[1]);
     const conversation = store.getConversation(id);
@@ -130,7 +289,15 @@ export async function handleConversation(req, res, url) {
     const id = decodeURIComponent(send[1]);
     const body = await readBody(req);
     const text = String(body.text ?? '').trim();
-    if (!text) return fail(res, 400, 'E1010', '说点什么');
+    // 附件（2026-10-23）：文件本体已由 /files 上传，这里只带清单。
+    // 光发图不说话也行（IM 常识）；文本附件两空才拦。
+    let atts = null;
+    try {
+      atts = validateAtts(id, body.atts);
+    } catch (e) {
+      return fail(res, 400, e.code ?? 'E1046', e.message);
+    }
+    if (!text && !atts) return fail(res, 400, 'E1010', '说点什么');
 
     /*
      * 已解散的群：**只读**（2026-10-20 用户定：解散后消息留在消息列表里，但不能再聊）。
@@ -147,9 +314,10 @@ export async function handleConversation(req, res, url) {
     try {
       // body.runId = 在流程卡片上「回复」时带上的：这条消息属于哪条流程。
       // 群里有好几条流程在跑时就靠它归属，不靠猜。
-      const { run, member, mentions } = dispatchToThread(id, text, {
+      const { run, member, mentions, queued } = dispatchToThread(id, text, {
         runId: body.runId ?? null,
         taskId: body.taskId ?? null, // 从流程面板发的话：标给那一步
+        atts,                        // 随消息上传的附件（已校验都在这个会话的 uploads/ 里）
       });
       if (body.runId) workflows.attachRound(String(body.runId), run.id);
       return sendJson(res, 202, {
@@ -157,6 +325,8 @@ export async function handleConversation(req, res, url) {
         personaId: member.personaId,
         personaName: member.name,
         mentions: mentions.map((m) => m.name),
+        // 群里 @ 多人（2026-10-24）：第一个当场派，其余在队里等前一个跑完
+        queued: (queued ?? []).map((q) => q.name),
       });
     } catch (e) {
       return sendJson(res, e.code === 'busy' ? 409 : 400, { error: e.message });

@@ -3,7 +3,7 @@
 import { savePlace, toast } from './shell.mjs';
 import { api } from './ui.mjs';
 import { openSettings } from './settings.mjs';
-import { closeAddMenu, renderList, showView } from './contacts.mjs';
+import { closeAddMenu, renderList, showContactsHome, showView } from './contacts.mjs';
 import { openWorkflows } from './workflows.mjs';
 import { closeRunStream, setListTitle } from './flowpages.mjs';
 import { openExperts, openPlugins } from './experts.mjs';
@@ -141,5 +141,8 @@ export function setNav(nav, opts = {}) {
   else if (nav === 'workflows') openWorkflows().catch((e) => toast(e.message, 'error'));
   else if (nav === 'plugins') openPlugins().catch((e) => toast(e.message, 'error'));
   else if (nav === 'experts') openExperts().catch((e) => toast(e.message, 'error'));
+  // 通讯录（2026-10-24 对齐微信）：切过来先落在空态上，不残留上一段聊天 ——
+  // 点左栏的群/员工才进详情。聊天归消息页，这两个模块的主区不共用了。
+  else if (nav === 'contacts') showContactsHome();
   else showView('chat');
 }

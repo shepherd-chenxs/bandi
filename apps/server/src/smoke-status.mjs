@@ -1,5 +1,5 @@
 /**
- * 「项目面板」插件的验收：接口读得对、读不通的照样列出来、只读是真的只读。
+ * 「研发面板」（插件 id 仍是 project-panel）的验收：接口读得对、读不通的照样列出来、只读是真的只读。
  *
  * 隔离：临时数据库、临时端口、临时项目目录 —— 不碰 data/ 里的真账。
  * 2026-10-15 起 `BANDI_DATA` 也能指了，于是 **plugins 目录与账本也进隔离范围**：
@@ -99,6 +99,28 @@ fs.writeFileSync(
   'utf8',
 );
 
+/* 「最新发布」用：多版已发布，且最后一个版本未发布 —— 取的是最后一个 released 非空的项。
+ * 版本号故意写 2.9.0 / 2.10.0：按字符串排序会把 2.9.0 排到最后，正好验出"不排序"。 */
+const multiRoot = path.join(tmp, 'multi-release-project');
+fs.mkdirSync(path.join(multiRoot, '.bandi'), { recursive: true });
+fs.writeFileSync(
+  path.join(multiRoot, '.bandi', 'status.yaml'),
+  `updated: 2026-10-24 10:00
+project: 多版发布项目
+versions:
+  - version: 2.9.0
+    title: 九
+    released: docs/发布/v2.9.0.md
+  - version: 2.10.0
+    title: 十
+    released: docs/发布/v2.10.0.md
+  - version: 2.11.0
+    title: 十一
+    released:
+`,
+  'utf8',
+);
+
 /* 一个"读不通"的项目：没有 .bandi/status.yaml */
 const offlineRoot = path.join(tmp, 'offline-project');
 fs.mkdirSync(offlineRoot, { recursive: true });
@@ -169,7 +191,8 @@ try {
   const good = await post('/api/projects', { name: '假项目', root: goodRoot });
   const offline = await post('/api/projects', { name: '读不通的项目', root: offlineRoot });
   const escaping = await post('/api/projects', { name: '越权项目', root: escapingRoot });
-  check('三个项目都登记上了', [good, offline, escaping].every((r) => r.status === 201));
+  const multi = await post('/api/projects', { name: '多版发布项目', root: multiRoot });
+  check('四个项目都登记上了', [good, offline, escaping, multi].every((r) => r.status === 201));
 
   const list = await api('/api/status/projects');
   check('总览接口 200', list.status === 200);
@@ -182,6 +205,36 @@ try {
   check('总览里没有卡片数了（task_count 已删）', !('task_count' in (goodCard ?? {})), Object.keys(goodCard ?? {}).join(','));
   check('已发布版本算得对', goodCard?.released_count === 1, String(goodCard?.released_count));
   check('读不通的项目照样列出来且标「未纳管」', !!offlineCard && offlineCard.ok === false && /未纳管/.test(offlineCard.subtitle), offlineCard?.subtitle);
+
+  console.log('\n②-1 总览：最新发布字段');
+  check(
+    '多版发布：取最后一个 released 非空的（跳过末尾未发布的 2.11.0，也不按字符串排）',
+    cardOf(multi.body.project.id)?.latest_released_version === '2.10.0',
+    JSON.stringify(cardOf(multi.body.project.id)?.latest_released_version),
+  );
+  check(
+    '多版发布：发布记录路径跟着那一版走',
+    cardOf(multi.body.project.id)?.latest_released_path === 'docs/发布/v2.10.0.md',
+    JSON.stringify(cardOf(multi.body.project.id)?.latest_released_path),
+  );
+  check(
+    '末版未发布时仍取前一版（不是空串）',
+    goodCard?.latest_released_version === '2.2.0' && goodCard?.latest_released_path === 'docs/发布/v2.2.0.md',
+    JSON.stringify([goodCard?.latest_released_version, goodCard?.latest_released_path]),
+  );
+  const escCard = cardOf(escaping.body.project.id);
+  check(
+    '全未发布：两个字段都是空串（不是 null）',
+    escCard?.latest_released_version === '' && escCard?.latest_released_path === '',
+    JSON.stringify([escCard?.latest_released_version, escCard?.latest_released_path]),
+  );
+  check(
+    '未纳管项目也出这两个字段且为空串',
+    'latest_released_version' in (offlineCard ?? {})
+      && offlineCard?.latest_released_version === ''
+      && offlineCard?.latest_released_path === '',
+    JSON.stringify([offlineCard?.latest_released_version, offlineCard?.latest_released_path]),
+  );
 
   console.log('\n③ 详情：版本 / 要点');
   const detail = await api(`/api/status/projects/${encodeURIComponent(good.body.project.id)}`);

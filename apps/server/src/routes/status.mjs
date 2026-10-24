@@ -6,6 +6,12 @@ import { sendJson, fail } from '../http.mjs';
 import * as store from '../store.mjs';
 import * as status from '../status.mjs';
 
+/**
+ * 档案里的人名由这里查：`status.mjs` 只读文件、**不碰库**（它的用例会单独 import 它验解析器，
+ * 直接引 store 会在那儿把真库打开）。查不到就是"那个人已经不在了"，由 status 那边说清楚。
+ */
+const nameOf = (id) => store.getPersona(id);
+
 export async function handleStatus(req, res, url) {
   if (req.method !== 'GET') return false;
   const one = /^\/api\/status\/projects\/([^/]+)$/.exec(url.pathname);
@@ -13,7 +19,7 @@ export async function handleStatus(req, res, url) {
 
   const p = store.getProject(decodeURIComponent(one[1]));
   if (!p) return fail(res, 404, 'E2027', '项目不存在');
-  return sendJson(res, 200, status.projectDetail(p));
+  return sendJson(res, 200, status.projectDetail(p, nameOf));
 }
 
 /**

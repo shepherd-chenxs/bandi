@@ -24,6 +24,7 @@ import { backupDb } from './db-backup.mjs';
 import { runPersonaTask, validatePersonaTask } from './persona-task.mjs';
 import { retryPendingSteps } from './workflows.mjs';
 import { retryQueuedTasks } from './project-tasks.mjs';
+import { drainAllGroupQueues } from './dispatch.mjs';
 
 /** 间隔下限：再密就是拿 GitHub 的速率上限换"更实时"，而 PR 从来不是秒级的事 */
 export const MIN_MINUTES = 5;
@@ -89,7 +90,7 @@ export const ACTIONS = {
   'pr-scan': {
     id: 'pr-scan',
     label: 'PR / Issue 巡检',
-    hint: '拉已接入仓库的 open PR / issue 写成值班卡，并刷新已关联卡上的 PR 状态（合并 → 待确认）',
+    hint: '拉已接入仓库的 open PR / issue 写成值班卡，并刷新已关联卡上的 PR 状态（合并 → 待验收）',
     defaultName: 'PR 巡检',
     fields: [
       { key: 'repo', label: '管哪些仓库', type: 'repo', empty: '所有已接入的仓库' },
@@ -305,6 +306,13 @@ export async function tick({ now = Date.now(), actions = ACTIONS } = {}) {
     retryQueuedTasks();
   } catch (e) {
     console.warn('[看板] 排队中的卡没能重派：', e?.message ?? e);
+  }
+  // 群里 @ 多人的排队（2026-10-24）：run 收尾钩子是主流，这里兜住撞了
+  // 项目互斥/个人并发而退回的 —— 跟上面两条一个待遇，出错不外抛。
+  try {
+    drainAllGroupQueues();
+  } catch (e) {
+    console.warn('[群聊] 排队补派没跑成：', e?.message ?? e);
   }
   return ran;
 }

@@ -408,11 +408,87 @@ function aggregate(root, info, memo) {
 
 /* ------------------------------------------------------- 对外：两个形状 */
 
+/**
+ * 项目档案的四个事实（2026-10-23，PRD「项目面板改造」v0.2：干什么 / 项目经理 / 成员 / 起止）。
+ * 版本数是**研发面板**的事（读 `status.yaml` 才有），不在这里 —— 见 `projectCard` / `projectDetail`。
+ *
+ * 口径就一条：**读不到就说「未填写」，不猜、不写空**。所以这里出的全是可以直接画的
+ * **文本**（`*_text`），原始值另给一份让界面要别的形态时不用再拼。
+ *
+ * 开始时间的出处单独标：项目表里**没填**就退回建档时间，并写明「建档时间」——
+ * 两者可能差很远（仓库很早就有了、最近才登记进来），混成一个数字等于骗人。
+ *
+ * `nameOf` 由调用方（routes/status.mjs）注入：status.mjs 只读文件、**不碰库**，
+ * 直接 import store 会在"只验解析器"的用例里把真库打开。
+ */
+export function projectProfile(project, nameOf = () => null) {
+  const summary = String(project?.summary ?? '').trim();
+  const members = (() => {
+    try {
+      const list = JSON.parse(project?.memberPersonaIds || '[]');
+      return Array.isArray(list) ? list.map(String).filter(Boolean) : [];
+    } catch {
+      return [];
+    }
+  })();
+
+  const pmId = String(project?.pmPersonaId ?? '').trim() || null;
+  const pm = pmId ? nameOf(pmId) : null;
+
+  const started = String(project?.startedAt ?? '').trim();
+  const createdDay = String(project?.createdAt ?? '').slice(0, 10);
+  const ended = String(project?.endedAt ?? '').trim();
+
+  return {
+    summary: summary || null,
+    summary_text: summary || '未填写',
+    pm_persona_id: pmId,
+    // 人还在 → 姓名；绑过但人没了 → 说清楚（不是"没配项目经理"，是"配的那个人没了"）
+    pm_name: !pmId ? '未填写' : pm ? String(pm.name ?? '') || '未填写' : '未填写（那个人已经不在了）',
+    members: members.map((id) => {
+      const p = nameOf(id);
+      return { id, name: p ? String(p.name ?? '') : null, missing: !p };
+    }),
+    members_text: members.length
+      ? members
+          .map((id) => nameOf(id)?.name ?? '（已不在）')
+          .join('、')
+      : '未填写',
+    started_at: started || null,
+    started_text: started ? `${started}（填写）` : createdDay ? `${createdDay}（建档时间）` : '未填写',
+    ended_at: ended || null,
+    ended_text: ended || '未填写（进行中）',
+  };
+}
+
+/**
+ * 最新一个已发布版本的版本号与发布记录路径（2026-10-24，概览页要显示「最新发布」）。
+ *
+ * **「最新」= versions 数组里最后一个 `released` 非空的项**：status.yaml 里的顺序就是
+ * 版本顺序，不排序、不按字符串比版本号（`2.10.0` 比 `2.9.0` 大这种比较会出错）。
+ * 一个都没有（或没纳管）时两个字段都给**空串**不給 null —— 前端直接判空串。
+ */
+function latestReleased(info) {
+  let latest = null;
+  for (const v of info.versions) {
+    if (String(v.released || '')) latest = v;
+  }
+  if (!latest) return { latest_released_version: '', latest_released_path: '' };
+  return {
+    latest_released_version: String(latest.version || ''),
+    latest_released_path: String(latest.released || ''),
+  };
+}
+
 /** 左栏主列表的一行：平台项目账本 × 各自的进度文件。 */
-export function projectCard(project) {
+export function projectCard(project, nameOf = () => null) {
   const root = String(project.root ?? '');
   const info = readProject(root);
   const name = String(project.name || '') || info.project || root;
+  const profile = projectProfile(project, nameOf);
+
+  // 未纳管也出这两个字段（空串）：所有项目卡片字段形状一致，前端不用判两种形状。
+  const latest = latestReleased(info);
 
   if (!info.ok) {
     return {
@@ -425,7 +501,11 @@ export function projectCard(project) {
       project: info.project,
       updated: '',
       version_count: 0,
+      version_count_text: '未纳管',
       released_count: 0,
+      ...latest,
+      status_text: `未纳管 · ${info.error}`,
+      ...profile,
       subtitle: `未纳管 · ${info.error}`,
     };
   }
@@ -443,7 +523,11 @@ export function projectCard(project) {
     project: info.project,
     updated: info.updated,
     version_count: info.versions.length,
+    version_count_text: String(info.versions.length),
     released_count: releasedCount,
+    ...latest,
+    status_text: '已纳管',
+    ...profile,
     subtitle: [
       '已纳管',
       `${info.versions.length} 个版本`,
@@ -455,15 +539,21 @@ export function projectCard(project) {
   };
 }
 
-export function listProjectCards(projects) {
-  return (projects ?? []).map((p) => projectCard(p));
+export function listProjectCards(projects, nameOf = () => null) {
+  return (projects ?? []).map((p) => projectCard(p, nameOf));
 }
 
-/** 右侧详情：一个项目的版本清单（平铺，够声明式两级布局用）。 */
-export function projectDetail(project) {
+/**
+ * 右侧详情：一个项目的档案 + 版本清单（平铺，够声明式两级布局用）。
+ *
+ * 档案那几项（干什么 / 项目经理 / 成员 / 起止）见 `projectProfile`；版本数多给一份
+ * `version_count_text`：**未纳管时说「未纳管」，不说 0** —— 0 个版本和读不到是两件事。
+ */
+export function projectDetail(project, nameOf = () => null) {
   const root = String(project.root ?? '');
   const info = readProject(root);
   const name = String(project.name || '') || info.project || root;
+  const profile = projectProfile(project, nameOf);
 
   const base = {
     id: project.id,
@@ -477,7 +567,9 @@ export function projectDetail(project) {
     updated: info.updated,
     state_text: info.ok ? '已纳管' : `未纳管：${info.error}`,
     version_count: 0,
+    version_count_text: '未纳管',
     released_count: 0,
+    ...profile,
     versions: [],
   };
   if (!info.ok) return base;
@@ -486,6 +578,7 @@ export function projectDetail(project) {
   return {
     ...base,
     version_count: info.versions.length,
+    version_count_text: String(info.versions.length),
     released_count: agg.versions.filter((v) => v.released).length,
     versions: agg.versions,
   };

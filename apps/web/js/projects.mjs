@@ -1,14 +1,14 @@
 /* projects.mjs —— 项目。
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
-import { esc, personLabel, savePlace, setRoute, toast } from './shell.mjs';
-import { ICON_FOLDER, ICON_WB_BOARD, ICON_WB_CLOCK, api, createCombo, personaByName, renderMarkdown, smAvatar, wireDialogHead } from './ui.mjs';
+import { esc, mdRender, personLabel, runtimeLabel, savePlace, setRoute, toast } from './shell.mjs';
+import { ICON_FOLDER, ICON_WB_BOARD, ICON_WB_CLOCK, api, createCombo, handleCopyPaths, personaAvatar, personaByName, renderMarkdown, smAvatar, wireDialogHead } from './ui.mjs';
 import { setNav } from './state.mjs';
 import { breadcrumb, headRow } from './connectors.mjs';
 import { confirmDo } from './machine.mjs';
 import { detailSave, showView } from './contacts.mjs';
 import { wbCard } from './workflows.mjs';
 import { hint, openFlowRun, paintRun, setListTitle } from './flowpages.mjs';
-import { firstMeaningfulLine, openConversation, streamRun } from './chat.mjs';
+import { attsHtmlOf, firstMeaningfulLine, openConversation, openDetail, streamRun } from './chat.mjs';
 import { $, S } from './core.mjs';
 
 
@@ -124,6 +124,191 @@ export async function openProjectsPage(selectId) {
 
 
 
+/* ------------------------------------------------------------ 项目档案 */
+/**
+ * **项目档案**（2026-10-23，用户：「研发面板要展示这项目是干什么的、什么时候开始结束、
+ * 成员有哪些、项目经理是谁」；2026-10-23 v0.2 收回到**四项**：迭代版本数是软件研发专属概念，
+ * 以仓库 `status.yaml` 为前提，按判据归研发面板，通用工作区不展示 —— 见 PRD v0.2 改动 2）。
+ *
+ * 摆的位置：tabs **上面**、常驻。2026-10-24 用户定的改动：「干什么」（summary）挪进
+ * **基础信息** tab（原来「项目说明」的位置，那格是死字段已删）——这卡只剩项目经理 + 起止。
+ *
+ * 口径跟 PRD 一致：**读不到就说「未填写」**，不猜、不写空。两项分得清：
+ *   · `未填写` —— 人没填；
+ *   · `未填写（那个人已经不在了）` —— 填过，但那个员工被删了（服务端判，见 status.projectProfile）。
+ * 开始时间没填时退回**建档时间**并标出处：两者可能差很远，混成一个数字等于骗人。
+ */
+function pjPersona(id) {
+  return (S.personas ?? []).find((x) => x.id === id) ?? null;
+}
+
+/** 项目的成员 id 名单（库里的 JSON 坏了就当没填 —— 跟服务端 status.projectProfile 一个口径） */
+function pjMembers(p) {
+  try {
+    const list = JSON.parse(p?.memberPersonaIds || '[]');
+    return Array.isArray(list) ? list.map(String).filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 「项目成员」tab 里的一行（2026-10-24 设计稿 v1.0.1）：
+ * 头像 + 姓名 + 岗位 pill + 忙闲点 + 运行时；整行可点、右侧「看详情」都进员工详情。
+ *
+ * 两种行分得清：
+ *   · 正常：人还在员工表里 —— 可点；
+ *   · 异常：填过、但那个员工已经被删了 —— 灰名「那个人已经不在了」，**整行不可点、没有「看详情」**
+ *     （这不是"没配成员"，是"配的那个人没了"，两种意思不能混）。
+ *
+ * 运行时那格**只认 auto**（`runtimeLabel`）：rt-id / codex / claude 都是技术细节，不上列表 ——
+ * 2026-10-23 已拍板的口径，别照设计稿抄回去。
+ */
+function memberRowHtml(id) {
+  const who = pjPersona(id);
+  if (!who) {
+    return `<div class="mbr-row gone">
+      <span class="avatar gone">×</span>
+      <div class="mbr-main">
+        <span class="mbr-name">那个人已经不在了</span>
+        <span class="gone-tag">员工已删除 · 保留当时记录</span>
+      </div>
+    </div>`;
+  }
+  const rt = runtimeLabel(who);
+  return `<div class="mbr-row" data-pj-open="${esc(who.id)}" title="进员工详情">
+    ${personaAvatar(who)}
+    <div class="mbr-main">
+      <span class="mbr-name">${esc(who.name)}</span>
+      <span class="pill role">${esc(String(who.role ?? '').split(' · ')[0].trim() || '—')}</span>
+      <span class="dot${who.busy ? ' busy' : ''}" title="${who.busy ? '正在干活' : '现在闲着'}"></span>
+      ${rt ? `<span class="pill mbr-runtime">${esc(rt)}</span>` : ''}
+    </div>
+    <button type="button" class="mbr-act">看详情 ›</button>
+  </div>`;
+}
+
+/** 起止那行的说明：开始没填先说建档时间兜底，填了再看结束没填＝进行中（设计稿 v1.0.1 口径）。
+ *  （2026-10-24：项目经理和起止从顶部档案卡搬进「基础信息」tab —— 档案卡整个撤掉。） */
+function pjDatesNote(p) {
+  const createdDay = String(p.createdAt ?? '').slice(0, 10);
+  return !p.startedAt
+    ? `开始时间未填，按建档时间 ${createdDay} 算`
+    : p.endedAt
+      ? ''
+      : '结束日期没填＝进行中';
+}
+
+
+
+/* ------------------------------------------------ 自绘日历（项目起止日期，2026-10-24） */
+
+const PJ_WEEK = ['一', '二', '三', '四', '五', '六', '日'];
+let pjCal = null; // 开着的日历弹层：{ el, input, onDoc }
+
+/** 日期按钮的文案：有值显示 YYYY/MM/DD；结束框没填且已经开始了 → 「进行中」（灰字） */
+function pjDateLabel(v, isEnded) {
+  if (v) return v.replaceAll('-', '/');
+  const started = document.getElementById('pjStarted')?.value;
+  return isEnded && started ? '进行中' : 'yyyy/mm/dd';
+}
+
+/** 按钮文案跟着真值走 —— 真输入框藏在按钮后面（hidden），只存值、发 input 事件给自动存 */
+function paintPjDates() {
+  const s = document.getElementById('pjStarted')?.value ?? '';
+  const e = document.getElementById('pjEnded')?.value ?? '';
+  const sb = document.getElementById('pjStartedBtn');
+  const eb = document.getElementById('pjEndedBtn');
+  if (sb) sb.textContent = pjDateLabel(s, false);
+  if (eb) {
+    const live = !!s && !e;
+    eb.textContent = pjDateLabel(e, true);
+    eb.classList.toggle('is-live', live);
+  }
+}
+
+function closePjCal() {
+  if (!pjCal) return;
+  pjCal.el.remove();
+  document.removeEventListener('mousedown', pjCal.onDoc, true);
+  window.removeEventListener('scroll', closePjCal, true);
+  window.removeEventListener('resize', closePjCal);
+  pjCal = null;
+}
+
+/** 点日期按钮：弹一个**页面里的**日历（原生弹层在 WebView2 里是透明的，CSS 够不着） */
+function openPjCal(btn, input) {
+  closePjCal();
+  const today = new Date();
+  const init = input.value ? input.value.split('-').map(Number) : [today.getFullYear(), today.getMonth() + 1];
+  let y = init[0];
+  let m = init[1] - 1; // 月按 0 计
+  const el = document.createElement('div');
+  el.className = 'pj-cal';
+
+  const set = (v) => {
+    input.value = v;
+    input.dispatchEvent(new Event('input', { bubbles: true })); // 自动存的监听挂在这个事件上
+    paintPjDates();
+    closePjCal();
+  };
+  const paint = () => {
+    const lead = (new Date(y, m, 1).getDay() + 6) % 7;           // 周一开头
+    const days = new Date(y, m + 1, 0).getDate();
+    const cells = [];
+    for (let i = 0; i < lead; i++) cells.push('<i></i>');
+    for (let d = 1; d <= days; d++) {
+      const iso = `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      cells.push(`<button type="button" data-day="${iso}" class="${iso === input.value ? 'on' : ''}">${d}</button>`);
+    }
+    el.innerHTML = `
+      <div class="pj-cal-head">
+        <button type="button" class="pj-cal-nav" data-nav="-1" aria-label="上个月">‹</button>
+        <b>${y}年${m + 1}月</b>
+        <button type="button" class="pj-cal-nav" data-nav="1" aria-label="下个月">›</button>
+      </div>
+      <div class="pj-cal-grid">
+        ${PJ_WEEK.map((w) => `<i class="pj-cal-w">${w}</i>`).join('')}${cells.join('')}
+      </div>
+      <div class="pj-cal-foot">
+        <button type="button" data-act="clear">清除</button>
+        <button type="button" data-act="today">今天</button>
+      </div>`;
+  };
+  el.addEventListener('click', (e) => {
+    const t = e.target.closest('[data-day], [data-nav], [data-act]');
+    if (!t) return;
+    if (t.dataset.day) return set(t.dataset.day);
+    if (t.dataset.act === 'clear') return set('');
+    if (t.dataset.act === 'today') {
+      const d = new Date();
+      return set(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`);
+    }
+    m += Number(t.dataset.nav);
+    if (m < 0) { m = 11; y -= 1; }
+    if (m > 11) { m = 0; y += 1; }
+    paint();
+  });
+
+  pjCal = {
+    el, input,
+    // 点外面 / 滚动 / 改窗口尺寸都收起（跟原生弹层同一套礼节）
+    onDoc: (e) => { if (!el.contains(e.target) && !btn.contains(e.target)) closePjCal(); },
+  };
+  document.addEventListener('mousedown', pjCal.onDoc, true);
+  window.addEventListener('scroll', closePjCal, true);
+  window.addEventListener('resize', closePjCal);
+  document.body.append(el);
+  paint(); // 先画内容才有高度
+  const r = btn.getBoundingClientRect();
+  const h = el.offsetHeight || 330;
+  // 默认朝下弹；下面放不下（或会被钳到贴底盖住自己那行）就**朝上弹**（2026-10-24 用户：往上一些）
+  let top = r.bottom + 6;
+  if (top + h > window.innerHeight - 8) top = r.top - h - 6;
+  el.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 264)) + 'px';
+  el.style.top = Math.max(8, top) + 'px';
+}
+
 /**
  * 右侧详情 = 照**员工详情页**的骨架改（2026-10-18 用户定的）：
  * 顶部 p-head 一行 = 项目概览信息（名字 + 目录 pill）+ 右侧动作按钮；
@@ -137,6 +322,11 @@ export async function openProjectsPage(selectId) {
 export async function renderProjDetail(p) {
   const box = $('projDetail');
   if (!box) return;
+  /*
+   * 只取任务统计（/tasks）。**不再取 /api/status 的版本数**（2026-10-23 v0.2）：
+   * 档案回到四项，版本数归研发面板；接口字段 `version_count` 本身保留，
+   * 那是插件的数据源，后端不动。
+   */
   let data = null;
   let err = '';
   try {
@@ -153,7 +343,10 @@ export async function renderProjDetail(p) {
       <div class="p-head-main">
         <h2>${esc(p.name)}${p.builtIn ? '<span class="pill role">内置</span>' : ''}</h2>
         <div class="p-meta">
-          <span class="pill" title="AI 会在这个目录里干活">${esc(p.root ?? '')}</span>
+          <!-- 目录 pill 整颗可点：点一下复制路径（设计稿 v1.0.1）。
+               data-label 记着原始路径 —— 回执把字换成「已复制」之后，2 秒还得能换回来。 -->
+          <button type="button" class="pill copy-pill" data-path="${esc(p.root ?? '')}"
+                  data-label="${esc(p.root ?? '')}" title="点击复制路径">${esc(p.root ?? '')}</button>
         </div>
       </div>
       <div class="hero-actions">
@@ -168,11 +361,23 @@ export async function renderProjDetail(p) {
       </div>
     </div>
 
+    <!-- 任务统计挪到页头正下方（2026-10-24 用户：把任务标签提上去）—— 基础信息 tab 里不再放 -->
+    ${err
+      ? `<div class="dim" style="margin-top:14px">任务统计取不到：${esc(err)}</div>`
+      : `<div class="kb-stats" style="margin-top:14px">
+          ${stat('任务共', data?.total)}
+          ${stat('待验收', data?.waiting_count)}
+          ${stat('已阻塞', data?.blocked_count)}
+          ${stat('失败', data?.failed_count)}
+          ${stat('流程实例', data?.flow_count)}
+          ${stat('聊天派活', data?.chat_count)}
+        </div>`}
+
     <div class="tabs">
       <button class="tab on" data-tab="basics">基础信息</button>
+      <button class="tab" data-tab="members">项目成员<span class="tab-n" id="pjMemberCount">${pjMembers(p).length}</span></button>
       <button class="tab" data-tab="rules">项目规章</button>
     </div>
-
     <section class="tab-panel" data-panel="basics">
       <div class="group">
         <div class="form-row">
@@ -200,25 +405,48 @@ export async function renderProjDetail(p) {
           </div>
         </div>
         <div class="form-row top">
-          <div class="row-label">项目说明</div>
+          <div class="row-label">项目简介</div>
           <div>
-            <textarea id="pjNote" style="height:72px" placeholder="构建命令、备注……">${esc(p.note ?? '')}</textarea>
-            <!-- （2026-10-20 用户："这些文案去掉"）原「只给人看，AI 看不到。」删 -->
+            <textarea id="pjSummary" style="height:56px" placeholder="一句话说清这个项目是做什么的">${esc(p.summary ?? '')}</textarea>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="row-label">项目负责人</div>
+          <div id="pjPmMount"></div>
+        </div>
+        <div class="form-row">
+          <div class="row-label">开始 / 结束</div>
+          <div class="pj-dates">
+            <!-- 自绘日历（2026-10-24）：原生 <input type=date> 的弹层是浏览器自己画的窗口，
+                 页面 CSS 够不着，桌面壳的 WebView2 把它画成了透明（用户截图：日历底下能看见表单）。
+                 改成：真输入框藏起来只存值，按钮显示日期、点开**页面里的**日历弹层（见 openPjCal）。 -->
+            <span class="pj-date-field">
+              <button type="button" class="pj-date-btn" id="pjStartedBtn" title="项目开始日期；不填就按建档时间算"></button>
+              <input type="date" id="pjStarted" value="${esc(p.startedAt ?? '')}" hidden />
+            </span>
+            <span class="pj-dates-sep">至</span>
+            <span class="pj-date-field">
+              <button type="button" class="pj-date-btn" id="pjEndedBtn" title="结束日期；没填就当作还在进行"></button>
+              <input type="date" id="pjEnded" value="${esc(p.endedAt ?? '')}" hidden />
+            </span>
+            ${pjDatesNote(p) ? `<span class="pj-dates-note">${esc(pjDatesNote(p))}</span>` : ''}
           </div>
         </div>
       </div>
 
-      ${err
-        ? `<div class="dim" style="margin-top:10px">任务统计取不到：${esc(err)}</div>`
-        : `<div class="kb-stats" style="margin-top:14px">
-            ${stat('任务共', data?.total)}
-            ${stat('待人确认', data?.waiting_count)}
-            ${stat('停下等人', data?.blocked_count)}
-            ${stat('失败', data?.failed_count)}
-            ${stat('流程实例', data?.flow_count)}
-            ${stat('聊天派活', data?.chat_count)}
-          </div>`}
       <div class="kb-tip" style="margin-top:10px">点右上角「任务」进这个项目的看板：流程的每次办理和聊天派活都在那儿，卡片能拖、能点进源头。</div>
+    </section>
+
+    <section class="tab-panel" data-panel="members" hidden>
+      <div class="group pj-members">
+        <div class="pj-members-head">
+          <span class="pj-members-title">成员<span class="cnt" id="pjMemberCnt"></span></span>
+          <!-- 「＋ 添加成员」（2026-10-24）：点开**弹窗**选人 —— 可搜索、可勾选多人、统一确认。
+               原来是 createCombo 下拉（选一个加一个，手一抖就多加了人还没法反悔）。 -->
+          <button type="button" class="pj-members-add" id="pjMemberAdd">＋ 添加成员</button>
+        </div>
+        <div id="pjMemberRows"></div>
+      </div>
     </section>
 
     <section class="tab-panel" data-panel="rules" hidden>
@@ -226,7 +454,19 @@ export async function renderProjDetail(p) {
         <div class="form-row top">
           <div class="row-label">宪法（本项目特有的硬约束）</div>
           <div>
-            <textarea id="projConstInput" style="height:180px" placeholder="只写本项目特有的（共通规矩契约已经管了）：&#10;例如：零依赖，不许引入 npm 包；端口固定 8787；改 store.mjs 的 SQL 必须先问人">${esc(p.constitution ?? '')}</textarea>
+            <!-- 预览/编辑（2026-10-24）：照「职责与身份设定」那套 —— 规章是 markdown，写少读多，默认预览；
+                 预览渲染的是 textarea 现值（当前草稿），切来切去不丢字。自增高：多高内容多高框。 -->
+            <div class="instr-wrap">
+              <div class="instr-head">
+                <div class="counter" id="pjConstCount"></div>
+                <div class="seg seg-sm" id="pjConstSeg">
+                  <button type="button" data-m="view" class="on">预览</button>
+                  <button type="button" data-m="edit">编辑</button>
+                </div>
+              </div>
+              <div id="pjConstView" class="md-view"></div>
+              <textarea id="projConstInput" hidden placeholder="只写本项目特有的（共通规矩契约已经管了）：&#10;例如：零依赖，不许引入 npm 包；端口固定 8787；改 store.mjs 的 SQL 必须先问人">${esc(p.constitution ?? '')}</textarea>
+            </div>
             <div class="counter">派活时会全文带给 AI，并注明「只许加码，与契约冲突以契约为准」。</div>
           </div>
         </div>
@@ -245,6 +485,7 @@ export async function renderProjDetail(p) {
   showTab('basics');
 
   $('pjPick').onclick = () => pickProjectDir('pjPick', 'pjRoot');
+  handleCopyPaths(box); // 目录 pill 可点复制（整颗按钮，见 ui.mjs 的 handleCopyPaths）
 
   /* ---------------- 自动保存（2026-10-19 用户要求：去掉「保存」按钮） ----------------
    * 分寸跟员工详情、任务卡那条一样：
@@ -259,12 +500,24 @@ export async function renderProjDetail(p) {
     pjState.textContent = text;
     pjState.className = 'save-state' + (kind ? ' ' + kind : '');
   };
+  /* 档案那几格（简介 / 项目经理 / 成员 / 起止）也是**改了自动存** —— 跟名字目录同一张单。
+   * 项目经理和成员是下拉选的，当前值记在 `pjPeople` 里（下拉本身不知道"清空"这个状态：
+   * 空串在 createCombo 里是一个普通条目，取值还是得我们自己记一份）。 */
+  let pjPeople = {
+    pm: p.pmPersonaId || '',
+    members: pjMembers(p),
+  };
   const collect = () => ({
     name: $('pjName').value.trim(),
     root: $('pjRoot').value.trim(),
     extraRoots: $('pjExtra').value.split('\n').map((s) => s.trim()).filter(Boolean),
-    note: $('pjNote').value.trim(),
     constitution: $('projConstInput').value.trim(),
+    summary: $('pjSummary').value.trim(),
+    pmPersonaId: pjPeople.pm,
+    memberPersonaIds: pjPeople.members,
+    // `type=date` 的值本身就是 YYYY-MM-DD；没选是空串 → 服务端清掉
+    startedAt: $('pjStarted').value,
+    endedAt: $('pjEnded').value,
   });
   let lastSaved = JSON.stringify(collect());
   let pjTimer = null;
@@ -278,7 +531,7 @@ export async function renderProjDetail(p) {
     if (!payload.name) { setPjState('名字不能空 · 未保存', 'bad'); return false; }
     if (!payload.root) { setPjState('工作目录不能空 · 未保存', 'bad'); return false; }
     const json = JSON.stringify(payload);
-    if (json === lastSaved) { setPjState('已保存', 'ok'); return true; }
+    if (json === lastSaved) { setPjState(''); return true; }
     if (pjSaving) { pjQueued = true; return false; }
     pjSaving = true;
     setPjState('保存中…', 'wait');
@@ -315,11 +568,17 @@ export async function renderProjDetail(p) {
             ? (h2.firstChild.nodeValue = name)
             : h2.insertBefore(document.createTextNode(name), h2.firstChild);
         }
+        // 目录 pill 不只改字：data-path / data-label 也得跟着走，否则复制的是旧路径、还原也会还原成旧值
         const rootPill = box.querySelector('.p-meta .pill');
-        if (rootPill) rootPill.textContent = $('pjRoot').value.trim();
+        if (rootPill) {
+          const root = $('pjRoot').value.trim();
+          rootPill.textContent = root;
+          rootPill.dataset.path = root;
+          rootPill.dataset.label = root;
+        }
       };
       paintName(payload.name);
-      setPjState('已保存', 'ok');
+      setPjState(''); // 存成功不出声（2026-10-24 用户："已保存"提示不要了）—— 保存失败才说话
       return true;
     } catch (e) {
       setPjState('保存失败：' + (e?.message ?? '服务异常'), 'bad');
@@ -339,9 +598,196 @@ export async function renderProjDetail(p) {
   const stopFlush = () => { detailSave.flush = null; };
   detailSave.flush = (opts) => { pjSaveNow(opts); };
 
-  for (const id of ['pjName', 'pjRoot', 'pjExtra', 'pjNote', 'projConstInput']) {
+  for (const id of ['pjName', 'pjRoot', 'pjExtra', 'projConstInput', 'pjSummary', 'pjStarted', 'pjEnded']) {
     $(id)?.addEventListener('input', () => schedulePjSave(700));
     $(id)?.addEventListener('blur', () => pjSaveNow());
+  }
+
+  /* 项目规章 预览/编辑（2026-10-24）：照「职责与身份设定」那套 —— markdown 写少读多，默认预览。
+     预览渲染的是 textarea **现值**（当前草稿），切来切去不丢字，也不存在"预览回滚"；
+     切回预览顺手 pjSaveNow 一次，给自动保存兜底。自增高：多高内容多高框，滚动只留外层页面。 */
+  const pjConstEl = $('projConstInput');
+  const pjConstView = $('pjConstView');
+  let pjConstMode = 'view';
+  const pjConstFit = () => {
+    if (pjConstEl.hidden) return;
+    pjConstEl.style.height = 'auto';
+    pjConstEl.style.height = `${pjConstEl.scrollHeight}px`;
+  };
+  const pjConstSyncCount = () => { $('pjConstCount').textContent = `${pjConstEl.value.trim().length} 字`; };
+  const pjConstRenderView = () => {
+    const val = pjConstEl.value;
+    pjConstView.innerHTML = val.trim()
+      ? mdRender(val)
+      : '<div class="md-empty">还没写。写本项目特有的硬约束 —— 共通规矩契约已经管了。<button type="button" class="linkish" data-pj-const-edit>写一段</button></div>';
+  };
+  const pjConstSetMode = (m) => {
+    if (m === pjConstMode) return;
+    pjConstMode = m;
+    if (m === 'view') {
+      pjConstRenderView();
+      pjConstEl.hidden = true;
+      pjConstView.hidden = false;
+      pjSaveNow?.(); // 切回预览兜一次保存
+    } else {
+      pjConstView.hidden = true;
+      pjConstEl.hidden = false;
+      pjConstFit();
+      pjConstEl.focus();
+    }
+    $('pjConstSeg').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.m === m));
+  };
+  $('pjConstSeg')?.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-m]');
+    if (b) pjConstSetMode(b.dataset.m);
+  });
+  pjConstView.addEventListener('click', (e) => {
+    if (e.target.closest('[data-pj-const-edit]')) pjConstSetMode('edit');
+  });
+  pjConstEl.addEventListener('input', () => { pjConstSyncCount(); pjConstFit(); });
+  pjConstRenderView();
+  pjConstSyncCount();
+
+  /* 项目经理：**从项目成员里选**（2026-10-24 用户定的口径）—— 全站公共的可搜索下拉。
+     成员加了人要重建下拉（createCombo 是一次性挂载），所以包成 paintPmCombo：
+     渲染时调一次，「添加成员」确认后再调一次。
+     选完**立刻存**（下拉不是打字，没有"打了一半"的中间态，不必等防抖）。 */
+  const paintPmCombo = () => {
+    const mount = $('pjPmMount');
+    if (!mount) return;
+    mount.innerHTML = '';
+    // 读**活数据** pjPeople.members，别读渲染时的快照 p —— 加成员后要重建下拉，
+    // 快照里还是旧名单，新加的人就"看不到"（2026-10-24 用户踩过：加了喜儿，下拉里没有）
+    const memberIds = pjPeople.members;
+    const pmList = [
+      { id: '', label: '不设' },
+      ...(S.personas ?? []).filter((x) => memberIds.includes(x.id)).map((x) => ({ id: x.id, label: personLabel(x) })),
+    ];
+    // 兜底：现任项目经理不在成员里（老数据）也让他显示出来，别把现任抹成"未填写"
+    if (pjPeople.pm && !pmList.some((x) => x.id === pjPeople.pm)) {
+      const cur = (S.personas ?? []).find((x) => x.id === pjPeople.pm);
+      if (cur) pmList.push({ id: cur.id, label: personLabel(cur) });
+    }
+    createCombo({
+      mount,
+      items: pmList,
+      value: pjPeople.pm,
+      search: true,
+      placeholder: '搜数字员工…',
+      empty: '没有匹配的人',
+      /* 按钮上不写「不设」写「未填写」：清单里那个「不设」是一颗**动作**（点了等于清掉），
+         按钮上要显示的是**现状**（现在没有项目经理）。跟 PRD「读不到就写未填写」同口径。
+         （光给 `blank` 不管用 —— 清单里有一项 id 是空串，组件会拿它的 label 当按钮文案。） */
+      buttonText: (id) => (id ? pmList.find((x) => x.id === id)?.label ?? '未填写（那个人已经不在了）' : '未填写'),
+      onChange: (id) => {
+        pjPeople.pm = id ?? '';
+        schedulePjSave(0);
+      },
+    });
+  };
+  paintPmCombo();
+
+  /* 成员（2026-10-24 设计稿 v1.0.1）：从档案那排 chip 改成「项目成员」tab 里一行一个人。
+   * 加人走**弹窗**（openAddMembersDialog）：可搜索、可勾选多人、统一确认。
+   * 点行 / 「看详情」= 进员工详情（`openDetail`），**不做就地展开**。
+   * 重画只换这两块，不重画整页（重画会丢焦点、把标签弹回基础信息）。 */
+  const paintMemberRows = () => {
+    const host = $('pjMemberRows');
+    if (!host) return;
+    host.innerHTML = pjPeople.members.length
+      ? pjPeople.members.map(memberRowHtml).join('')
+      : `<div class="pj-members-empty">
+           <div class="big">还没有成员</div>
+           <div class="sub">点右上「＋ 添加成员」，从员工里挑人加进来</div>
+         </div>`;
+    // 只有"人还在"的行带 data-pj-open；已删的那行压根没有这个属性 → 整行不可点
+    host.querySelectorAll('[data-pj-open]').forEach((el) => {
+      el.onclick = () => openDetail(el.dataset.pjOpen).catch((e) => toast(e.message, 'error'));
+    });
+    const cnt = $('pjMemberCnt');
+    if (cnt) cnt.textContent = `${pjPeople.members.length} 人`;
+    const tabN = $('pjMemberCount');
+    if (tabN) tabN.textContent = String(pjPeople.members.length);
+  };
+
+  /**
+   * 「添加成员」弹窗（2026-10-24）：搜索 → 勾选多人 → 「添加」统一入队。
+   * 行的样式与交互照**新建项目群**那张弹窗（.members/.member 勾选列表，2026-10-24 用户点名）——
+   * 同一个产品里两种选人长相，人会觉得是两套系统。
+   * 候选只列**还不在成员里**的人（跟「拉人进群」一个路数：列出来也点不动，不如不列）。
+   * 确认才落库 —— 勾错了点「取消」就完了，选人阶段零成本。
+   */
+  const openAddMembersDialog = () => {
+    const candidates = (S.personas ?? []).filter((x) => !pjPeople.members.includes(x.id));
+    const picked = new Set();
+    const dlg = document.createElement('dialog');
+    dlg.className = 'pj-add-dlg';
+    dlg.innerHTML = `
+      <form method="dialog">
+        <b>添加成员</b>
+        <label>从员工里挑（可多选）</label>
+        <input class="pj-add-search" placeholder="搜数字员工…" />
+        <div class="members pj-add-members"></div>
+        <div class="dlg-actions">
+          <span class="pj-add-count"></span>
+          <button type="button" class="pj-add-cancel">取消</button>
+          <button class="primary pj-add-ok" disabled>添加</button>
+        </div>
+      </form>`;
+    document.body.append(dlg);
+    wireDialogHead(dlg.querySelector('form'));
+    const list = dlg.querySelector('.pj-add-members');
+    const search = dlg.querySelector('.pj-add-search');
+    const count = dlg.querySelector('.pj-add-count');
+    const ok = dlg.querySelector('.pj-add-ok');
+
+    const sync = () => {
+      count.textContent = `已选 ${picked.size} 人`;
+      ok.disabled = !picked.size;
+    };
+    const paint = () => {
+      const q = (search.value || '').trim().toLowerCase();
+      const hit = candidates.filter((x) => !q || `${x.name}${x.role ?? ''}`.toLowerCase().includes(q));
+      list.innerHTML = hit.length
+        ? hit.map((x) => `
+            <label class="member">
+              <input type="checkbox" value="${esc(x.id)}" ${picked.has(x.id) ? 'checked' : ''} />
+              <span>${esc(x.name)}</span>
+              <em>${esc(String(x.role ?? '').split(' · ')[0].trim() || '—')}</em>
+            </label>`).join('')
+        : `<div class="pj-add-empty">${candidates.length ? '没有匹配的人' : '没有可以加的人 —— 员工都在成员里了'}</div>`;
+    };
+    list.addEventListener('change', (e) => {
+      const input = e.target.closest('input[type="checkbox"]');
+      if (!input) return;
+      if (input.checked) picked.add(input.value); else picked.delete(input.value);
+      sync();
+    });
+    search.addEventListener('input', paint);
+    paint();
+    sync();
+    dlg.querySelector('.pj-add-cancel').onclick = () => dlg.close();
+    ok.onclick = () => {
+      for (const id of picked) if (!pjPeople.members.includes(id)) pjPeople.members.push(id);
+      paintMemberRows();
+      paintPmCombo(); // 项目经理从成员里选 —— 成员变了，下拉跟着收敛
+      setPjState('未保存…', 'wait');
+      schedulePjSave(0); // 成员在档案单里，走同一条自动保存链路
+    }; // 提交按钮自己会关掉 method="dialog" 的弹窗，不用再调 dlg.close()
+    dlg.addEventListener('close', () => dlg.remove());
+    dlg.showModal();
+    setTimeout(() => search.focus(), 30);
+  };
+  $('pjMemberAdd')?.addEventListener('click', openAddMembersDialog);
+  paintMemberRows();
+
+  // 起止日期：按钮文案对齐真值 + 点开自绘日历（见 openPjCal）
+  paintPjDates();
+  for (const [btnId, inpId] of [['pjStartedBtn', 'pjStarted'], ['pjEndedBtn', 'pjEnded']]) {
+    $(btnId)?.addEventListener('click', () => {
+      if (pjCal?.input?.id === inpId) return closePjCal(); // 再点一下 = 收起
+      openPjCal($(btnId), $(inpId));
+    });
   }
 
   $('pjTasks').addEventListener('click', async () => {
@@ -473,7 +919,7 @@ export async function openBoardPage({ project = null } = {}) {
 
 
 /** 看板列 → 新建任务时的默认状态（点哪一列的「＋」就默认落在哪一列；拖列也用它换算） */
-export const COL_STATUS = { idea: '想法', todo: '待办', doing: '进行中', confirm: '待确认', blocked: '已阻塞', done: '已完成' };
+export const COL_STATUS = { idea: '想法', todo: '待办', doing: '进行中', review: '待验收', blocked: '已阻塞', failed: '失败', done: '已完成', cancelled: '已取消' };
 
 
 
@@ -650,7 +1096,7 @@ export function kbFilterCols(data) {
  * 看板工具栏上的「刷新 PR」（2026-10-17）。两块看板共用。
  *
  * 为什么需要这颗按钮：PR 在 GitHub 上被合并，**平台不会自己知道** —— 没人点，
- * 卡片上的「PR #n 开着」就一直开着，也永远不会转「待确认」。
+ * 卡片上的「PR #n 开着」就一直开着，也永远不会转「待验收」。
  * 之前只有"点进某张卡的详情 → 刷新状态"这一条路，一次一张；卡一多就没人愿意点。
  *
  * 一张都没关联时按钮留着、禁用：**没有它，人根本不知道有这回事**（"为什么我的卡不动？"）。
@@ -1075,7 +1521,7 @@ export function wireBoard(view, { refresh, taskProject = () => null }) {
         // 不吭声的话人会以为已经在跑了。
         const started = !!res?.started;
         // 拖完这张卡可能就不在当前筛选里了：看板一列混两个状态词
-        //（「停下等人」= 已阻塞 · 已停止；「待办」列收流程的「待办」），拖进去落的是**这一列的默认状态**。
+        //（「已阻塞」列收已阻塞 · 已停止；「待办」列收流程的「待办」），拖进去落的是**这一列的默认状态**。
         // 不吭声的话卡片会"当场消失"，看着像拖丢了 —— 所以直说一句。
         // 只看**状态**那一维：这张卡原来是看得见的，说明负责人/项目两维它本来就过，
         // 而拖拽只改状态，别把别的维度也算一遍（算错了会误报）。
@@ -1126,7 +1572,7 @@ export function wireBoard(view, { refresh, taskProject = () => null }) {
   });
   /*
    * 「刷新 PR」：一次把所有关联了 PR 的卡查一遍（服务端 `POST /api/git/prs/refresh`）。
-   * 服务端顺手跑 `afterMerged` —— 合并了的「进行中」会变成「待确认」，所以必须 **await refresh()** 重画，
+   * 服务端顺手跑 `afterMerged` —— 合并了的「进行中」会变成「待验收」，所以必须 **await refresh()** 重画，
    * 不能只把按钮改回来：卡片列变了人得当场看见。
    * 失败清单不整段吞掉：第一张的原因写出来（多半是令牌过期 / 令牌没那个仓库的权限），
    * 剩下的只报个数 —— 那种情况十有八九是同一个原因，刷十行同样的字只会把人埋了。
@@ -1174,6 +1620,13 @@ export function wireBoard(view, { refresh, taskProject = () => null }) {
  */
 export let taskCardFromAll = false;
 
+/**
+ * 这张卡是从**哪场会话**点进来的（2026-10-24 卡票）：会话 id，否则 null。
+ * 聊天气泡里的卡票点进来时记下 —— 离开卡页回那场会话，跟"从流程来回流程"同一个道理：
+ * 人是在跟 PM 聊着天点过来的，回去落回看板等于把他从上下文里拽走了。
+ */
+export let taskCardFromConv = null;
+
 
 
 /**
@@ -1191,6 +1644,8 @@ export let taskCardFromFlow = null;
 export async function openTaskCardPage(taskId, opts = {}) {
   // 来源定死：恢复位置时从 route 里带回来（刷新也还记得），否则看当前的 S.boardAll
   taskCardFromAll = opts.fromAll ?? !!S.boardAll; // 必须在 S.boardAll = false 之前读
+  // 从聊天气泡的卡票点进来的（2026-10-24）：记下那场会话，离开时回去
+  taskCardFromConv = opts.fromConv ?? null;
   /*
    * 从流程那一步点进来的（2026-10-19）：记下"这条卡是哪条流程、哪个节点"。
    * 只为了在页头写一行来路 —— 人刚在流程页看着「写代码」这一步，点进来要还认得出是它。
@@ -1198,7 +1653,7 @@ export async function openTaskCardPage(taskId, opts = {}) {
    * ⚠️ 路由里必须带上它：不带的话刷新一下页头那行就没了，看着像"进错页面"。
    */
   taskCardFromFlow = opts.fromFlow ?? null;
-  setRoute('taskCard', { id: taskId, fromAll: taskCardFromAll, fromFlow: taskCardFromFlow });
+  setRoute('taskCard', { id: taskId, fromAll: taskCardFromAll, fromFlow: taskCardFromFlow, fromConv: taskCardFromConv });
   const view = $('pluginView');
   view.classList.add('kb-page'); // 这一页要满屏（见 style.css 的 #pluginView.kb-page）
   S.view = 'plugin';
@@ -1327,6 +1782,9 @@ export async function paintTaskCardPage(taskId, opts = {}) {
   }
   const proj = (S.projects ?? []).find((p) => p.id === task.projectId) ?? null;
   const isRepo = task.source === 'repo';
+  // 流程派生的卡（sourceKey = flow:<runId>:<nodeId>:<visit>，2026-10-19）：身份由流程那一行代表，
+  // 删了没意义——看板流程行照旧、下次点流程那步的「任务」还会再建一张。删除键不给它。
+  const isFlowCard = !!task.sourceKey;
   const assignee = S.personas.find((p) => p.id === task.assigneePersonaId) ?? null;
 
   // 往来：派过活才有会话
@@ -1354,13 +1812,13 @@ export async function paintTaskCardPage(taskId, opts = {}) {
   const isStartNote = (m) => m.role === 'user' && String(m.text ?? '').includes('【任务 · ');
 
   // 我自己的评论不再重复写名字 —— 头像上那个「我」就是名字，写两遍是噪声（他的回话仍然带名字）
-  const cmtItem = (m) => {
+  const cmtItem = (m, isNew = false) => {
     const mine = m.role === 'user';
-    return `<div class="tc-cmt${mine ? ' mine' : ''}">
+    return `<div class="tc-cmt${mine ? ' mine' : ''}${isNew ? ' is-new' : ''}">
       ${mine ? smAvatar('我', 'me') : smAvatar(whoName, '', personaByName(whoName))}
       <div class="tc-cmt-main">
         <div class="tc-cmt-meta">${mine ? '' : `<b>${esc(whoName)}</b>`}<time>${esc(cmtTime(m.createdAt))}</time></div>
-        <div class="tc-cmt-text">${renderMarkdown(m.text)}</div>
+        <div class="tc-cmt-text">${renderMarkdown(m.text)}${attsHtmlOf(m.atts)}</div>
       </div>
     </div>`;
   };
@@ -1389,25 +1847,41 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     return topics;
   };
 
-  // 用户手动展开过的议题 id：重画（refreshThread 整块重建 innerHTML）后要还原，
-  // 否则一轮 run 结束一重画，正在看的议题又被折回去，很烦。
+  // 折叠状态（2026-10-24 重做可见性）：折叠为了整齐，但不能把他的回话藏起来。
+  //   · openTopics / collapsedTopics —— 用户手动展开/收起过的议题 id，重画（refreshThread
+  //     整块重建 innerHTML）后要还原；手动操作优先于一切自动行为；
+  //   · seenReplies —— 画过一遍的回复 id。重画时不在里面的就是**这轮新到的**：
+  //     所在议题自动展开、回复本身高亮（Reddit 新评论那套）。首屏全部记"见过"，不乱弹。
   const openTopics = new Set();
+  const collapsedTopics = new Set();
+  const seenReplies = new Set();
+
+  // 折叠条上露的那一眼：最新回复去 markdown 记号、压成一行（B站/微博的"共 N 条回复"带预览的套路）
+  const replySnippet = (m) =>
+    String(m.text ?? '').replace(/[#*`>~[\]]/g, '').replace(/\s+/g, ' ').trim().slice(0, 60)
+      || (m.atts?.length ? '（附件）' : '…');
 
   const threadsHtml = (d) => {
     const msgs = d?.messages ?? [];
     if (!msgs.length) {
       return `<div class="nc-empty">还没有评论。</div>`;
     }
-    return topicsOf(msgs)
+    const topics = topicsOf(msgs);
+    // 首屏先把库里已有的都记"见过"：高亮只给**这一页打开之后**新到的回话，
+    // 不然每次进卡满屏蓝，跟没折一样。
+    if (seenReplies.size === 0) {
+      for (const t of topics) for (const m of t.items) seenReplies.add(m.id);
+    }
+    const html = topics
       .map((t) => {
         const startNote = t.head && isStartNote(t.head);
         const head = !t.head
           ? ''
           : startNote
             ? `<details class="tc-event"><summary>开工说明 · ${esc(cmtTime(t.head.createdAt))}</summary>
-                 <div class="tc-cmt-text">${renderMarkdown(t.head.text)}</div>
+                 <div class="tc-cmt-text">${renderMarkdown(t.head.text)}${attsHtmlOf(t.head.atts)}</div>
                </details>`
-            : `<div class="tc-topic-title">${renderMarkdown(t.head.text)}</div>`;
+            : `<div class="tc-topic-title">${renderMarkdown(t.head.text)}${attsHtmlOf(t.head.atts)}</div>`;
         // 「开工说明」不是人写的评论：不出头像、不出作者行，只留一条可展开的流水
         // 「只留言」的便签给一枚小标记：不然它和普通评论长得一模一样，看不出这条没叫醒他
         const noteTag = t.head?.note
@@ -1421,13 +1895,25 @@ export async function paintTaskCardPage(taskId, opts = {}) {
                <button type="button" class="tc-reply" data-reply="${esc(t.head.id)}">回复</button>
              </div>`
           : '';
-        // 有回复就折叠：默认收起，点开关展开（十几条全铺开会很臃肿）。无回复保持空容器接 live 气泡。
-        const replies = t.items.length
-          ? `<details class="tc-replies" data-replies="${esc(t.id)}"${openTopics.has(t.id) ? ' open' : ''}>
-               <summary class="tc-replies-toggle">${t.items.length} 条回复</summary>
-               <div class="tc-replies-body">${t.items.map(cmtItem).join('')}</div>
-             </details>`
-          : `<div class="tc-replies" data-replies="${esc(t.id)}"></div>`;
+        // 折叠照旧（全铺开确实杂），但他的回话不再被藏住：
+        //   1. 折叠条露最新一条回复的作者+摘要，收着也能扫到他说了什么；
+        //   2. 这轮新到的回复让议题自动展开、回复本身高亮 ——
+        //      除非用户手动收起过这条（collapsedTopics），手动操作优先。
+        const hasNew = t.items.some((m) => !seenReplies.has(m.id));
+        const isOpen = openTopics.has(t.id) || (hasNew && !collapsedTopics.has(t.id));
+        let replies = `<div class="tc-replies" data-replies="${esc(t.id)}"></div>`;
+        if (t.items.length) {
+          const last = t.items[t.items.length - 1];
+          const author = last.role === 'user' ? '我' : whoName;
+          const items = t.items.map((m) => cmtItem(m, !seenReplies.has(m.id))).join('');
+          replies = `<details class="tc-replies" data-replies="${esc(t.id)}"${isOpen ? ' open' : ''}>
+               <summary class="tc-replies-toggle">
+                 <span class="tc-replies-fold">${t.items.length} 条回复 · <i>${esc(author)}</i>：${esc(replySnippet(last))}</span>
+                 <span class="tc-replies-unfold">收起回复</span>
+               </summary>
+               <div class="tc-replies-body">${items}</div>
+             </details>`;
+        }
         // 作者行在**正文上面**（跟普通评论一致）：头像旁边第一行就是"我 + 时间"，
         // 再往下才是内容 —— 反过来会让人以为下面又开了一条评论（2026-10-18 用户指出）
         return `<article class="tc-topic${t.head ? '' : ' pre'}" data-topic="${esc(t.id)}">
@@ -1439,15 +1925,19 @@ export async function paintTaskCardPage(taskId, opts = {}) {
         </article>`;
       })
       .join('');
+    // 画完统一记"见过"：下次重画时不在 seenReplies 里的才是新到的
+    for (const t of topics) for (const m of t.items) seenReplies.add(m.id);
+    return html;
   };
 
-  // 折叠开关：点击 summary 后 details.open 已被浏览器切换，这里同步记下"用户展开过哪些议题"，
-  // 供下一次重画还原。用 click 委托（details 的 toggle 事件不冒泡，得靠 click）。
+  // 折叠开关：点击 summary 后 details.open 已被浏览器切换，这里同步记下"用户展开/收起过哪些议题"，
+  // 供下一次重画还原（收起过的不再被自动展开抢回去）。用 click 委托（details 的 toggle 事件不冒泡，得靠 click）。
   $('tcThreads')?.addEventListener('click', (e) => {
     const d = e.target.closest?.('details.tc-replies');
     if (!d) return;
     const id = d.dataset.replies;
-    if (d.open) openTopics.add(id); else openTopics.delete(id);
+    if (d.open) { openTopics.add(id); collapsedTopics.delete(id); }
+    else { openTopics.delete(id); collapsedTopics.add(id); }
   });
 
   /**
@@ -1476,6 +1966,10 @@ export async function paintTaskCardPage(taskId, opts = {}) {
          ${taskCardFromFlow.nodeName ? `<span class="tc-from-sep">›</span> <span>${esc(taskCardFromFlow.nodeName)}</span>` : ''}
        </button>`
     : '';
+  /* 页头右侧那颗「删除」：流程派生的卡不摆（身份由流程行代表，删了没意义 —— 2026-10-23 用户拍板）。
+     ⚠️ 先算成常量再插值：这里是**外层模板里再嵌一层模板**，直接写 `${isFlowCard ? '' : '…'}`
+        会被外层先吃掉，整段 `headRow(...)` 的调用就被切断了（多行再嵌引号尤其容易踩）。 */
+  const delBtn = isFlowCard ? '' : '<button class="tc-del" id="tcDel" title="删掉这张卡（＝忽略它）">删除</button>';
   host.innerHTML = `
     ${dlg ? '' : headRow(
       taskCardFromAll || !proj
@@ -1486,7 +1980,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
             { label: proj.name, to: 'projects', arg: proj.id },
             { label: '任务卡' },
           ]),
-      '<button class="tc-del" id="tcDel" title="删掉这张卡（＝忽略它）">删除</button>',
+      delBtn,
     )}
     <div class="detail-body tc-page${dlg ? ' in-dlg' : ''}">
       <div class="tc-main">
@@ -1503,14 +1997,18 @@ export async function paintTaskCardPage(taskId, opts = {}) {
           </section>
         </div>
 
-        <div class="tc-composer">
-          <div class="tc-reply-pick">
-            <button type="button" class="tc-reply-pick-btn" id="tcReplyPick" title="选择要回复哪条议题（不用滚上去点）">回复到：新议题 ▾</button>
-            <div class="tc-reply-pick-menu" id="tcReplyPickMenu" hidden></div>
+        <div class="tc-composer" id="tcComposer">
+          <!-- 回复横幅：输入框停靠到某条议题下面时亮出来，一句话说清"在回哪条"，✕ 取消（2026-10-24 重做） -->
+          <div class="tc-reply-banner" id="tcReplyBanner" hidden>
+            <span class="tc-reply-banner-text" id="tcReplyBannerText"></span>
+            <button type="button" class="tc-reply-undock" id="tcReplyUndock" title="取消回复，回到新议题">✕</button>
           </div>
           <div class="tc-input-box">
             <textarea id="tcInput" rows="3" placeholder="留下评论…（回车换行）"></textarea>
-            <div class="tc-sendbar">
+            <div class="att-strip is-hidden" id="tcAttStrip"></div>
+            <div class="tc-sendbar"><!-- 工具栏走文档流（2026-10-23）：原来绝对定位浮在 textarea 上，文字一滚动就从按钮后面穿过去 -->
+              <button type="button" class="att-add" id="tcAttach" title="上传文件（也可直接粘贴图片）">＋</button>
+              <input type="file" id="tcFilePick" multiple hidden />
               <div class="tc-mode-wrap">
                 <button type="button" class="tc-mode" id="tcMode" data-mode="discuss"
                         title="这条发出去之后他要怎么处理">
@@ -1537,6 +2035,9 @@ export async function paintTaskCardPage(taskId, opts = {}) {
             <div class="counter left" id="tcHint2"></div>
           </div>
         </div>
+        <!-- 输入框停靠到议题下面期间，底部这颗幽灵按钮就是"开新话题"的回路（2026-10-24） -->
+        <button type="button" class="tc-new-topic" id="tcNewTopic" hidden
+                title="不回复谁，开一条新议题（输入框回到底部）">＋ 新议题</button>
       </div>
 
       <aside class="tc-side">
@@ -1544,7 +2045,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
         <div class="tc-prop"><span class="tc-prop-k">状态</span><div id="tcStatusMount"></div></div>
         <div class="tc-prop"><span class="tc-prop-k">执行人</span><div id="tcWhoMount"></div></div>
         <div class="tc-prop"><span class="tc-prop-k">项目</span><span class="tc-prop-v">${esc(proj?.name ?? '（项目已不在）')}</span></div>
-        <div class="tc-prop"><span class="tc-prop-k">来源</span><span class="tc-prop-v">${isRepo ? '仓库值班' : '手动建卡'}</span></div>
+        <div class="tc-prop"><span class="tc-prop-k">来源</span><span class="tc-prop-v">${isFlowCard ? '流程' : isRepo ? '仓库值班' : '手动建卡'}</span></div>
 
         <h3>Pull Request</h3>
         ${
@@ -1566,10 +2067,11 @@ export async function paintTaskCardPage(taskId, opts = {}) {
                  <input id="tcPrUrl" placeholder="PR 链接 或 owner/name#123" />
                  <button class="primary" id="tcPrLink">关联</button>
                </div>
-               <div class="counter left">合并后这张卡会转到「待确认」——不自动「已完成」，等你点头。</div>`
+               <div class="counter left">合并后这张卡会转到「待验收」——不自动「已完成」，等你点头。</div>`
         }
 
         <h3>详情</h3>
+        ${task.createdBy ? `<div class="tc-prop"><span class="tc-prop-k">创建人</span><span class="tc-prop-v">${esc(pjPersona(task.createdBy)?.name ?? '那个人已经不在了')}（员工建卡）</span></div>` : ''}
         <div class="tc-prop"><span class="tc-prop-k">创建时间</span><span class="tc-prop-v">${esc(String(task.createdAt ?? '').replace('T', ' ').slice(0, 16))}</span></div>
         <div class="tc-prop"><span class="tc-prop-k">更新时间</span><span class="tc-prop-v" id="tcAt">${esc(String(task.updatedAt ?? '').replace('T', ' ').slice(0, 16))}</span></div>
       </aside>
@@ -1585,9 +2087,11 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     ? () => { dlg.close('done'); } // 弹窗这条路：**关掉就是回去**（流程页一直在底下，没走过）
     : taskCardFromFlow?.runId
       ? () => openFlowRun(taskCardFromFlow.templateId ?? null, taskCardFromFlow.runId)
-      : taskCardFromAll
-        ? () => openTaskBoard()
-        : proj ? () => openProjectDetail(proj.id) : () => openProjectsPage();
+      : taskCardFromConv
+        ? () => openConversation(taskCardFromConv) // 从聊天气泡的卡票进来的：回那场会话
+        : taskCardFromAll
+          ? () => openTaskBoard()
+          : proj ? () => openProjectDetail(proj.id) : () => openProjectsPage();
   // 离开这张卡就把位置记忆清掉：否则下一次刷新又会被拽回这张卡
   const leaveTo = async () => { await backTo(); };
   // （页头不再有返回按钮；backTo 只剩 leaveTo 和下面那行「来自流程」在用）
@@ -1682,7 +2186,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
 
   const statusCombo = createCombo({
     mount: $('tcStatusMount'),
-    items: ['想法', '待办', '进行中', '待确认', '已阻塞', '已完成'].map((s) => ({ id: s, label: s })),
+    items: ['想法', '待办', '进行中', '待验收', '已阻塞', '失败', '已完成', '已取消'].map((s) => ({ id: s, label: s })),
     value: task.status,
     onChange: () => scheduleSave(0), // 改状态立刻存：待办+人 = 开工（服务端负责）
   });
@@ -1802,8 +2306,10 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     if (JSON.stringify(snapshot()) !== lastSaved) saveNow?.({ keepalive: true });
   });
 
-  // 弹窗那条路的「删除」在弹窗自己头上（静态的 #tcDlgDel），整页那条路在页头
+  // 弹窗那条路的「删除」在弹窗自己头上（静态的 #tcDlgDel），整页那条路在页头；
+  // 流程派生的卡不摆删除（身份由流程行代表，删了没意义 —— 2026-10-23 用户拍板）
   const delEl = dlg ? $('tcDlgDel') : $('tcDel');
+  if (delEl && isFlowCard) delEl.remove();
   if (delEl) {
     delEl.onclick = async () => {
       if (!(await confirmDo('删掉这张任务卡？（＝忽略它，以后不再提）'))) return;
@@ -1846,7 +2352,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     try {
       const r = await api(`/api/projects/tasks/${encodeURIComponent(taskId)}/pr/refresh`, { method: 'POST' });
       await paintTaskCardPage(taskId, opts);
-      toast(`PR 现在：${prStateText(r.pr.state)}${r.task?.status === '待确认' ? '（卡已转到「待确认」）' : ''}`);
+      toast(`PR 现在：${prStateText(r.pr.state)}${r.task?.status === '待验收' ? '（卡已转到「待验收」）' : ''}`);
     } catch (err) {
       btn.disabled = false;
       btn.textContent = '刷新状态';
@@ -1869,6 +2375,56 @@ export async function paintTaskCardPage(taskId, opts = {}) {
   let convId = task.conversationId ?? null;
   let stream = null;
   let replyTo = null; // 正在回复哪个议题（null = 新开一条）
+  let pendingAtts = []; // 还没发出的附件 { file, name, size, mime, localUrl }
+  let attSending = false;
+
+  const paintTcAtts = () => {
+    const strip = $('tcAttStrip');
+    if (!strip) return;
+    strip.classList.toggle('is-hidden', !pendingAtts.length);
+    strip.innerHTML = pendingAtts
+      .map((a, i) => {
+        const kb = a.size >= 1048576 ? `${(a.size / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(a.size / 1024))} KB`;
+        const img = (a.mime || '').startsWith('image/')
+          ? `<img class="att-thumb" src="${esc(a.localUrl)}" alt="">`
+          : '';
+        return `<span class="att-chip" title="${esc(a.name)}">${img}<span class="att-name">${esc(a.name)}</span><span class="att-size">${kb}</span><button type="button" class="att-x" data-tc-att-x="${i}" title="移除">×</button></span>`;
+      })
+      .join('');
+    strip.querySelectorAll('[data-tc-att-x]').forEach((b) => {
+      b.onclick = () => {
+        const [gone] = pendingAtts.splice(Number(b.dataset.tcAttX), 1);
+        try { URL.revokeObjectURL(gone?.localUrl); } catch { /* 已失效 */ }
+        paintTcAtts();
+      };
+    });
+  };
+
+  const addTcAtts = (fileList) => {
+    const files = [...(fileList ?? [])];
+    if (!files.length) return;
+    for (const f of files) {
+      if (pendingAtts.length >= 8) { toast('一次最多带 8 个附件', 'error'); break; }
+      pendingAtts.push({ file: f, name: f.name || '图片.png', size: f.size, mime: f.type || '', localUrl: URL.createObjectURL(f) });
+    }
+    paintTcAtts();
+  };
+
+  const clearTcAtts = () => {
+    for (const a of pendingAtts) { try { URL.revokeObjectURL(a.localUrl); } catch { /* 已失效 */ } }
+    pendingAtts = [];
+    paintTcAtts();
+  };
+
+  $('tcAttach')?.addEventListener('click', () => $('tcFilePick').click());
+  $('tcFilePick')?.addEventListener('change', () => { addTcAtts($('tcFilePick').files); $('tcFilePick').value = ''; });
+  $('tcInput')?.addEventListener('paste', (e) => {
+    const files = [...(e.clipboardData?.files ?? [])];
+    if (files.length) {
+      e.preventDefault();
+      addTcAtts(files);
+    }
+  });
 
   /**
    * 这条发出去之后他要怎么处理（2026-10-19 用户定，三档）：
@@ -1932,71 +2488,75 @@ export async function paintTaskCardPage(taskId, opts = {}) {
   paintMode();
 
   /**
-   * 「回复到」选择器（2026-10-19）：评论区一长，想回复某条旧议题就得滚上去点它的「回复」，
-   * 很别扭。所以把"回给谁"搬到输入框上方：点开下拉直接选，不用滚动。
+   * 回复 = **输入框原地停靠**（2026-10-24 重做，照 GitHub 会话 / YouTube / Discord 的规矩）：
+   * 点哪条议题的「回复」，整个输入框（附件、档位、发送一起）就搬进那条议题下面 ——
+   * 在哪回复就在哪输入，"在回哪条"这件事靠位置本身表达。
+   * 原来的「回复到」下拉整个废了：议题一多，条目全是"时间 + 截断的一行字"，认不出哪条是哪条（用户实测）。
+   * 停靠期间底部留一颗「＋ 新议题」幽灵按钮当回路；横幅上的 ✕ 或 Esc 取消回复，输入框回到底部。
    */
   const topicTitleOf = (id) => {
     const m = (conv?.messages ?? []).find((x) => x.id === id);
-    return String(m?.text ?? '').replace(/\s+/g, ' ').trim().slice(0, 28);
+    return String(m?.text ?? '').replace(/\s+/g, ' ').trim().slice(0, 60);
   };
-  const paintReplyPick = () => {
-    const btn = $('tcReplyPick');
-    if (!btn) return;
-    const t = replyTo ? topicTitleOf(replyTo) : '';
-    btn.textContent = replyTo ? `回复：${t || '这个议题'} ▾` : '回复到：新议题 ▾';
-    btn.classList.toggle('on', !!replyTo);
+
+  // 输入框回到底部（"新议题"位）：搬回 .tc-main 末尾（幽灵按钮之前），摘掉停靠样式与高亮
+  const homeComposer = () => {
+    const composer = $('tcComposer');
+    const ghost = $('tcNewTopic');
+    if (!composer) return;
+    const main = composer.closest('.tc-main');
+    if (main && ghost && composer.parentElement !== main) main.insertBefore(composer, ghost);
+    composer.classList.remove('inline');
+    if (ghost) ghost.hidden = true;
+    const banner = $('tcReplyBanner');
+    if (banner) banner.hidden = true;
+    $('tcThreads')?.querySelectorAll('.tc-topic.is-replying').forEach((el) => el.classList.remove('is-replying'));
   };
-  const closeReplyMenu = () => { const m = $('tcReplyPickMenu'); if (m) m.hidden = true; };
-  const openReplyMenu = () => {
-    const menu = $('tcReplyPickMenu');
-    if (!menu) return;
-    const topics = topicsOf(conv?.messages ?? []).filter((t) => t.head);
-    const items = [{ id: '', title: '新议题（不挂在别的评论下）' }]
-      .concat(topics.map((t) => ({ id: t.head.id, title: `${cmtTime(t.head.createdAt)} · ${topicTitleOf(t.head.id).slice(0, 22) || '（空评论）'}` })));
-    menu.innerHTML = items
-      .map((x) => `<button type="button" data-pick-reply="${esc(x.id)}"${x.id === (replyTo ?? '') ? ' class="on"' : ''}>${esc(x.title)}</button>`)
-      .join('');
-    menu.querySelectorAll('[data-pick-reply]').forEach((b) => {
-      b.onclick = (e) => {
-        e.stopPropagation();
-        replyTo = b.dataset.pickReply || null;
-        closeReplyMenu();
-        paintReplyPick();
-        setReplyPlaceholder();
-        $('tcInput')?.focus();
-      };
-    });
-    menu.hidden = false;
+
+  // 输入框停靠到正在回复的议题下面：回复区先展开、搬家、亮横幅、把目标滚进视野
+  const dockComposer = () => {
+    const composer = $('tcComposer');
+    if (!composer) return;
+    const threads = $('tcThreads');
+    const topicEl = replyTo ? threads?.querySelector(`[data-topic="${CSS.escape(replyTo)}"]`) : null;
+    if (!replyTo || !topicEl) { homeComposer(); return; }
+    // 点了「回复」就是想接着聊这条：手动收起过的也弹开，并记住展开态（重画后还原靠 openTopics）
+    openTopics.add(replyTo);
+    collapsedTopics.delete(replyTo);
+    const det = topicEl.querySelector('details.tc-replies');
+    if (det) det.open = true;
+    const body = topicEl.querySelector('.tc-topic-body');
+    if (body && composer.parentElement !== body) body.appendChild(composer);
+    composer.classList.add('inline');
+    const ghost = $('tcNewTopic');
+    if (ghost) ghost.hidden = false;
+    const banner = $('tcReplyBanner');
+    if (banner) {
+      banner.hidden = false;
+      const t = $('tcReplyBannerText');
+      if (t) t.textContent = `回复：${topicTitleOf(replyTo) || '这个议题'}`;
+    }
+    threads?.querySelectorAll('.tc-topic.is-replying').forEach((el) => el.classList.remove('is-replying'));
+    topicEl.classList.add('is-replying');
+    topicEl.scrollIntoView({ block: 'nearest' }); // 已在视野内就不动
   };
-  const setReplyPlaceholder = () => {
-    const input = $('tcInput');
-    if (input) input.placeholder = placeholderText();
-  };
-  $('tcReplyPick')?.addEventListener('click', (e) => {
-    e.stopPropagation();
-    const m = $('tcReplyPickMenu');
-    if (m?.hidden === false) { closeReplyMenu(); return; }
-    openReplyMenu();
-  });
-  // 点别处收起（页面级监听，换页时要摘，走 __pageCleanups）
-  const onReplyPickOutside = (e) => {
-    if (!e.target.closest?.('.tc-reply-pick')) closeReplyMenu();
-  };
-  document.addEventListener('click', onReplyPickOutside);
-  cleanups.push(() => {
-    document.removeEventListener('click', onReplyPickOutside);
-  });
+  const syncReplyDock = () => { replyTo ? dockComposer() : homeComposer(); };
 
   const scrollThreads = () => {
     const box = $('tcThreads');
     if (box) box.scrollTop = box.scrollHeight;
   };
 
+  const setReplyPlaceholder = () => {
+    const input = $('tcInput');
+    if (input) input.placeholder = placeholderText();
+  };
+
   const wireReplyButtons = () => {
     $('tcThreads')?.querySelectorAll('[data-reply]').forEach((btn) => {
       btn.onclick = () => {
         replyTo = btn.dataset.reply;
-        paintReplyPick();
+        syncReplyDock();
         setReplyPlaceholder();
         $('tcInput')?.focus();
       };
@@ -2005,10 +2565,22 @@ export async function paintTaskCardPage(taskId, opts = {}) {
 
   const clearReply = () => {
     replyTo = null;
-    paintReplyPick();
+    syncReplyDock();
     setReplyPlaceholder();
   };
-  paintReplyPick();
+  $('tcReplyUndock')?.addEventListener('click', () => {
+    clearReply();
+    $('tcInput')?.focus();
+  });
+  // Esc 取消回复（Discord 那套）：草稿留着，只是不再挂在哪条议题下
+  $('tcInput')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && replyTo) { e.stopPropagation(); clearReply(); }
+  });
+  $('tcNewTopic')?.addEventListener('click', () => {
+    clearReply();
+    $('tcInput')?.focus();
+  });
+  syncReplyDock();
   wireReplyButtons(); // 首屏那批「回复」按钮也要接上 —— 漏了这行，点了没反应（2026-10-18 实测踩过）
 
   const refreshThread = async () => {
@@ -2018,8 +2590,11 @@ export async function paintTaskCardPage(taskId, opts = {}) {
       conv = d;
       const box = $('tcThreads');
       if (!box) return;
+      // 输入框若停靠在议题里，先搬回底部 —— 不然下面的 innerHTML 重建会把它连草稿一起销毁
+      homeComposer();
       box.innerHTML = threadsHtml(d);
       wireReplyButtons();
+      syncReplyDock(); // 再停靠回去（回复横幅、议题高亮一起补上）
     } catch { /* 拉不到就保持原样，别把页面弄炸 */ }
   };
 
@@ -2034,7 +2609,8 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     const btn = $('tcStop');
     if (btn) btn.hidden = !liveRunId;
     const hint = $('tcHint2');
-    if (hint && liveRunId) hint.textContent = '随时可以掐掉这一轮 —— 说过的话留着。';
+    // 跑着才说"随时可以掐掉"；跑完必须收回 —— 不然这句话一直挂着，人以为还在跑（2026-10-24 用户实感）
+    if (hint) hint.textContent = liveRunId ? '随时可以掐掉这一轮 —— 说过的话留着。' : '';
   };
   const abortRun = async () => {
     const rid = liveRunId;
@@ -2051,7 +2627,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
       toast(e.message, 'error');
     }
     await refreshThread();
-    // 收尾后卡片状态会落到「停下等人」那一档 —— 右栏和页头跟着刷一次
+    // 收尾后卡片状态会落到「已阻塞」那一档 —— 右栏和页头跟着刷一次
     api(`/api/projects/tasks/${encodeURIComponent(taskId)}`)
       .then((d) => { if (d?.task) { task = d.task; refreshHeader(); } })
       .catch(() => { /* 取不到就等下次刷新 */ });
@@ -2086,7 +2662,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
       'beforeend',
       `<div class="tc-cmt live" id="${id}">
         ${smAvatar(whoName, '', personaByName(whoName))}
-        <div class="tc-cmt-main"><div class="tc-cmt-meta"><b>${esc(whoName)}</b><span class="dim">正在说…</span></div>
+        <div class="tc-cmt-main"><div class="tc-cmt-meta"><b>${esc(whoName)}</b><span class="dim">工作中…</span></div>
         <div class="tc-cmt-text"><div class="typing"><i></i><i></i><i></i></div></div></div></div>`,
     );
     scrollThreads();
@@ -2108,7 +2684,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
         liveRunId = null; // 这一轮结束了 → 收起「停止生成」
         syncStop();
         refreshThread();
-        // 跑完卡片状态会收成「待确认」—— 页头那颗 pill 跟着刷一下（不重画整页，评论草稿不丢）
+        // 跑完卡片状态会收成「待验收」—— 页头那颗 pill 跟着刷一下（不重画整页，评论草稿不丢）
         api(`/api/projects/tasks/${encodeURIComponent(taskId)}`)
           .then((d) => { if (d?.task) { task = d.task; refreshHeader(); } })
           .catch(() => { /* 取不到就等下次刷新 */ });
@@ -2123,7 +2699,8 @@ export async function paintTaskCardPage(taskId, opts = {}) {
 
   const sendText = async () => {
     const text = $('tcInput').value.trim();
-    if (!text) return;
+    if (!text && !pendingAtts.length) return;
+    if (attSending) return;
     if (!whoCombo.value()) { toast('先在右边选一个执行人 —— 评论区是跟他讨论的'); return; }
     const mode = sendMode; // note | discuss | execute
     const parentId = replyTo;
@@ -2139,13 +2716,40 @@ export async function paintTaskCardPage(taskId, opts = {}) {
         });
         task.assigneePersonaId = saved?.task?.assigneePersonaId ?? whoCombo.value();
       }
+      // 附件先逐个上传：第一次会懒建工单会话，返回的 conversationId 之后直接复用
+      let atts = null;
+      const pending = pendingAtts;
+      if (pending.length) {
+        attSending = true;
+        try {
+          atts = [];
+          for (const a of pending) {
+            const d = await api(`/api/projects/tasks/${encodeURIComponent(taskId)}/files?name=${encodeURIComponent(a.name)}`, {
+              method: 'POST',
+              headers: { 'Content-Type': a.mime || 'application/octet-stream' },
+              body: a.file,
+            });
+            convId = d.conversationId ?? convId;
+            atts.push({ name: d.file.name, stored: d.file.stored, size: d.file.size, mime: d.file.mime });
+          }
+        } catch (err) {
+          toast(`附件没传上去：${err.message}`, 'error');
+          return;
+        } finally {
+          attSending = false;
+        }
+      }
       const r = await api(`/api/projects/tasks/${encodeURIComponent(taskId)}/comments`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, parentId, mode }),
+        body: JSON.stringify({ text, parentId, mode, atts }),
       });
       convId = r.conversationId ?? convId;
       $('tcInput').value = '';
+      clearTcAtts();
+      // 发完就退出回复态、回到底部（2026-10-24 用户拍板：发完还挂着"回复：xxx"看着像出了问题；
+      // X / YouTube / Reddit / Discord 发完回复也都回到默认态）。想接着聊就再点那条的「回复」——
+      // 折叠条带着最新回复预览、点开自动展开，回去的成本很低。
       clearReply();
       await refreshThread();
       // 新开的议题：他这次的回复要落进**我刚发的那条**下面（服务端也是这么挂 parentId 的），
@@ -2320,7 +2924,7 @@ export function taskDialog(project, colKey) {
   // 状态那格：只有 6 个固定值，**不传 search**（组件的约定是选项多的才给搜索）
   const statusCombo = createCombo({
     mount: $('tkStatusMount'),
-    items: ['想法', '待办', '进行中', '待确认', '已阻塞', '已完成'].map((s) => ({ id: s, label: s })),
+    items: ['想法', '待办', '进行中', '待验收', '已阻塞', '失败', '已完成', '已取消'].map((s) => ({ id: s, label: s })),
     value: status,
     // 这两件事都定义在下面 —— 点选时才跑，那时它们早就绪了（顺序是有意的）
     onChange: () => {
@@ -2566,8 +3170,9 @@ export async function pickProjectDir(btnId, inputId) {
     el.value = v;
     el.dispatchEvent(new Event('input', { bubbles: true }));
   };
+  // 目录框开着时按钮只禁用、**不改字**（2026-10-24 用户：选择按钮不要变成"…"）——
+  // 原生框本来就把主窗口压在后面，闪省略号只会让人以为按钮坏了
   btn.disabled = true;
-  btn.textContent = '…';
   try {
     const picked = await pickLocalDir({
       title: '选择项目目录（AI 会在这里干活）',
@@ -2577,8 +3182,7 @@ export async function pickProjectDir(btnId, inputId) {
   } catch (e) {
     toast(e.message, 'error');
   } finally {
-    btn.disabled = false;
-    btn.textContent = '选择';
+    btn.disabled = false; // 字没动过，不用恢复
   }
 }
 
@@ -2623,10 +3227,10 @@ export function projectDialog() {
       const saved = await api('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, root, extraRoots: [], note: '' }),
+        body: JSON.stringify({ name, root, extraRoots: [] }),
       });
       dlg.close();
-      // 存完回项目页并选中刚那个：附加根/说明/宪法都在详情里补
+      // 存完回项目页并选中刚那个：附加根/干什么/宪法都在详情里补
       await openProjectsPage(saved?.project?.id);
     } catch (err) {
       toast(err.message, 'error');

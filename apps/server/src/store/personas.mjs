@@ -5,6 +5,20 @@ import { purgeConversation } from './conversations.mjs';
 import { activeRun } from './runs.mjs';
 import { dissolveGroup, listMembers, purgeDissolvedGroup } from './groups.mjs';
 
+/**
+ * 并发数的**默认值 / 最高值**（2026-10-24 用户定，对标 Multica 的"每个虚拟员工可配并行数"）：
+ * 默认 6、最高 20。派活闸（dispatch.ensureDispatchable）和保存钳位都用这两个常量，
+ * 别处再写一个 6/20 就是第二份真相。
+ */
+export const PERSONA_DEFAULT_MAX_PARALLEL = 6;
+export const PERSONA_MAX_PARALLEL = 20;
+
+/** 这个人此刻生效的并发上限：没配/配坏了退默认（派活闸用，别自己再判一遍） */
+export function effectiveMaxParallel(persona) {
+  const n = Number(persona?.maxParallel);
+  return Number.isFinite(n) && n >= 1 ? Math.min(PERSONA_MAX_PARALLEL, Math.floor(n)) : PERSONA_DEFAULT_MAX_PARALLEL;
+}
+
 export function listPersonas() {
   return db
     .prepare(
@@ -39,7 +53,7 @@ export function getPersona(id) {
 }
 
 
-export function createPersona({ id = null, name, role = null, instructions = '', runtime = 'codex', sandbox = 'danger-full-access', cwd = null, model = null, showThinking = 0, rootDirs = [], builtin = 0, avatar = null }) {
+export function createPersona({ id = null, name, role = null, instructions = '', runtime = 'codex', sandbox = 'danger-full-access', cwd = null, model = null, showThinking = 0, rootDirs = [], builtin = 0, avatar = null, maxParallel = null }) {
   const row = {
     // 内置员工要**固定 id**（seed 幂等靠它）；普通员工仍自动生成
     id: id || newId('p'),
@@ -48,14 +62,15 @@ export function createPersona({ id = null, name, role = null, instructions = '',
     rootDirs: Array.isArray(rootDirs) && rootDirs.length ? JSON.stringify(rootDirs) : null,
     builtin: builtin ? 1 : 0,
     avatar: avatar || null,
+    maxParallel: maxParallel ?? null,
     createdAt: nowIso(),
   };
   db.prepare(
-    `INSERT INTO personas (id, name, role, instructions, runtime, sandbox, cwd, model, showThinking, rootDirs, builtin, avatar, createdAt)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO personas (id, name, role, instructions, runtime, sandbox, cwd, model, showThinking, rootDirs, builtin, avatar, maxParallel, createdAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     row.id, row.name, row.role, row.instructions, row.runtime, row.sandbox, row.cwd, row.model,
-    row.showThinking, row.rootDirs, row.builtin, row.avatar, row.createdAt,
+    row.showThinking, row.rootDirs, row.builtin, row.avatar, row.maxParallel, row.createdAt,
   );
   return row;
 }
@@ -147,13 +162,21 @@ export function updatePersona(id, fields) {
         : (Array.isArray(fields.rootDirs) && fields.rootDirs.length ? JSON.stringify(fields.rootDirs) : null),
     // 头像：undefined = 没提供；null/空串 = 显式清掉（退回字母头像）
     avatar: fields.avatar === undefined ? current.avatar : (fields.avatar ? String(fields.avatar) : null),
+    // 并发上限：undefined = 没提供；null = 显式恢复默认；数字就钳到 [1, PERSONA_MAX_PARALLEL]
+    //（钳位不报错 —— 界面是个数字框，手滑填 0 或 999 都不该把保存打断）
+    maxParallel:
+      fields.maxParallel === undefined
+        ? current.maxParallel
+        : (Number.isFinite(Number(fields.maxParallel)) && Number(fields.maxParallel) > 0
+            ? Math.min(PERSONA_MAX_PARALLEL, Math.floor(Number(fields.maxParallel)))
+            : null),
   };
   db.prepare(
-    `UPDATE personas SET name = ?, role = ?, instructions = ?, runtime = ?, sandbox = ?, cwd = ?, model = ?, showThinking = ?, rootDirs = ?, avatar = ?
+    `UPDATE personas SET name = ?, role = ?, instructions = ?, runtime = ?, sandbox = ?, cwd = ?, model = ?, showThinking = ?, rootDirs = ?, avatar = ?, maxParallel = ?
       WHERE id = ?`,
   ).run(
     next.name, next.role, next.instructions, next.runtime, next.sandbox, next.cwd, next.model,
-    next.showThinking, next.rootDirs, next.avatar, id,
+    next.showThinking, next.rootDirs, next.avatar, next.maxParallel, id,
   );
   return { ...current, ...next };
 }
@@ -211,3 +234,50 @@ export function purgePersonaHistory(personaId) {
  * @returns {{ok: boolean, why: string|null, runId: string|null, changes: number}}
  *          `why`：`not-found` | `not-deletable` | `running`；成功时 `changes` = 删掉的会话行数
  */
+
+/*
+ * **换 id（存量迁移）** —— 2026-10-23 起「内置/专家的 id 跟人走」之后需要的能力。
+ *
+ * personaId 在十几张表里被引用（会话归属、消息、运行、群成员、群助手、成员会话水位线、
+ * 技能挂载、流程步骤/任务经办人、项目任务指派、仓库守门人），换 id 不能只改 personas 一行 ——
+ * 漏一张就把那部分历史挂成孤儿。这里一次性全搬：
+ *
+ *   ① 所有引用 personaId 的列：`UPDATE … SET col = 新 WHERE col = 旧`（表查 sqlite_master 再动，
+ *      极旧的库可能还没建那张表）；
+ *   ② personas 本行：id 换新；avatar 若指着旧头像文件名一并换成新文件名
+ *      （`avatarFrom/avatarTo` 不传时按 `<id>.png` 惯例推导）；
+ *   ③ 幂等：旧 id 不存在、新 id 已存在、或两个 id 相同 → 不动，返回 null。
+ *
+ * 返回搬走的引用行数（给启动日志一句话）；没动 → null。
+ */
+const PERSONA_ID_REFS = [
+  ['conversations', 'personaId'],
+  ['messages', 'personaId'],
+  ['runs', 'personaId'],
+  ['thread_members', 'personaId'],
+  ['member_sessions', 'personaId'],
+  ['persona_skills', 'personaId'],
+  ['groups', 'assistantPersonaId'],
+  ['group_members', 'personaId'],
+  ['workflow_steps', 'assigneePersonaId'],
+  ['workflow_tasks', 'assigneePersonaId'],
+  ['project_tasks', 'assigneePersonaId'],
+  ['git_repos', 'keeperPersonaId'],
+];
+
+export function renamePersonaId(oldId, newId, { avatarFrom, avatarTo } = {}) {
+  if (oldId === newId) return null;
+  if (!getPersona(oldId) || getPersona(newId)) return null;
+
+  const tables = new Set(db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table'`).all().map((r) => r.name));
+  let refs = 0;
+  for (const [t, c] of PERSONA_ID_REFS) {
+    if (!tables.has(t)) continue;
+    refs += db.prepare(`UPDATE ${t} SET ${c} = ? WHERE ${c} = ?`).run(newId, oldId).changes;
+  }
+  const from = avatarFrom ?? `${oldId}.png`;
+  const to = avatarTo ?? `${newId}.png`;
+  db.prepare(`UPDATE personas SET id = ?, avatar = CASE WHEN avatar = ? THEN ? ELSE avatar END WHERE id = ?`)
+    .run(newId, from, to, oldId);
+  return refs;
+}

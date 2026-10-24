@@ -174,11 +174,12 @@ export const ROUTES = {
     setNav('plugins', { skipOpen: true });
     return openTaskBoard();
   },
-  taskCard: ({ id, fromAll, fromFlow } = {}) => {
+  taskCard: ({ id, fromAll, fromFlow, fromConv } = {}) => {
     setNav('plugins', { skipOpen: true });
     // fromFlow：这张卡是从流程的某一步点进来的（`{ runId, taskId, runTitle, nodeName }`）。
     // 只用来在页头写清"你从哪来" —— 卡本身不因为来路不同而长得不一样（见 openTaskCardPage）。
-    return openTaskCardPage(id, { fromAll, fromFlow });
+    // fromConv（2026-10-24）：从聊天气泡的卡票点进来的那场会话 —— 离开卡页回它。
+    return openTaskCardPage(id, { fromAll, fromFlow, fromConv });
   },
   // 定时任务：工作台里的一页（2026-10-17 从设置搬过来）
   schedules: () => {
@@ -281,7 +282,8 @@ export const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
  * 防注入口径：**先对原文整体 esc 再解析标记** —— 生成的所有标签都是自己拼的，
  * 原文里夹带的 <script> 之类已变成字面量，不存在绕路的口子。
  * 支持子集：围栏代码块、行内代码、标题（#~####）、无序/有序列表（含**松散列表**：项间空行
- * 仍接着编号；含**缩进续行**：列表项第二行顶格缩进，归上一项）、引用、加粗、斜体。
+ * 仍接着编号；含**缩进续行**：列表项第二行顶格缩进，归上一项）、引用、加粗、斜体、
+ * **GFM 表格**（2026-10-23：员工回活爱用表格汇报，不渲染就是一屏竖线）。
  * 不认识的东西原样显示：不报错、不吞字（写人设/职责说明够用，不求全）。
  */
 export const mdRender = (src) => {
@@ -296,13 +298,35 @@ export const mdRender = (src) => {
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
-  for (const raw of lines) {
+  // 表格行：内容里 \| 是转义的竖线（GFM），拆单元格前先换成占位符，拆完换回来
+  const splitRow = (l) => l
+    .replace(/\\\|/g, '\u0001')
+    .replace(/^\|/, '').replace(/\|$/, '')
+    .split('|')
+    .map((c) => inline(c.trim().replace(/\u0001/g, '|')));
+  const isRow = (l) => /^\|.*\|$/.test(l);
+  const isSep = (l) => /^\|[\s:|-]+\|$/.test(l) && l.includes('-');
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i];
     if (code !== null) {                       // 围栏内：原样收（已 esc 过），直到闭合
       if (/^```/.test(raw.trim())) { out.push(`<pre><code>${code.join('\n')}</code></pre>`); code = null; }
       else code.push(raw);
       continue;
     }
     const line = raw.trim();
+    // 表格（2026-10-23）：当前行是 |…| 且下一行是 |---|---| 分隔行 → 整表收进来。
+    // 判定带 lookahead（要看下一行），所以放在最前面；收完把 i 拨到表尾。
+    if (isRow(line) && i + 1 < lines.length && isSep(lines[i + 1].trim())) {
+      flushAll();
+      const ths = splitRow(line);
+      i += 2; // 跳过表头行与分隔行
+      const rows = [];
+      while (i < lines.length && isRow(lines[i].trim())) { rows.push(splitRow(lines[i].trim())); i++; }
+      i -= 1; // 外层 for 还会 ++，回退一条
+      out.push('<table class="md-t"><thead><tr>' + ths.map((c) => `<th>${c}</th>`).join('') + '</tr></thead><tbody>'
+        + rows.map((r) => '<tr>' + r.map((c) => `<td>${c}</td>`).join('') + '</tr>').join('') + '</tbody></table>');
+      continue;
+    }
     const mUl = line.match(/^[-*]\s+(.+)$/);
     const mOl = line.match(/^\d+[.、]\s+(.+)$/);
     const mH = line.match(/^(#{1,4})\s+(.+)$/);
@@ -411,14 +435,25 @@ export const ROLE_SUGGEST = ['产品', '研发', '测试', '运维', '架构', '
 
 
 
-/** 人员下拉里的标签：有岗位就 `研发 · 波哥`，没岗位就只有名字 */
-export const personLabel = (p) => (p.role ? `${p.role} · ${p.name}` : p.name);
-
-
-
-/** 通讯录那一行的副标题：有岗位显示岗位，没岗位退回运行时（sandbox 是技术细节，只在详情里） */
-// auto（内置秘书在用）是人类不该背的词，翻成「自动」；别处的 runtime id 照原样显示
-export const personSubtitle = (p) => {
-  const rt = p.runtime === 'auto' ? '自动' : String(p.runtime ?? '');
-  return p.role ? `${p.role} · ${rt}` : rt;
+/** 人员下拉里的标签（2026-10-23 用户拍板）：`李俊（产品经理）` —— 姓名在前，括号里只留岗位。
+ *  岗位字段本身是「岗位 · 职责」两段（如「产品经理 · 理需求与写文档」），职责不上标签；
+ *  没岗位的人只有名字。 */
+export const personLabel = (p) => {
+  const role = String(p.role ?? '').split(' · ')[0].trim();
+  return role ? `${p.name}（${role}）` : p.name;
 };
+
+
+
+/** 通讯录那一行的副标题：只显示岗位（sandbox/运行时是技术细节，只在详情页看） */
+// 2026-10-23 用户拍板：运行时 id（rt-xxx）对人没有意义，不再上列表；
+// 没岗位的人退回「自动」——只保留这一个人类能读懂的运行时值，其余一律不显示
+export const personSubtitle = (p) => {
+  if (p.role) return String(p.role);
+  return p.runtime === 'auto' ? '自动' : '';
+};
+
+/** 列表里单独摆一格「运行时」时的文案（项目成员 tab，2026-10-24）：
+ *  口径跟 personSubtitle 后半截是同一条 —— **只有 auto 能上列表**，显示「自动」；
+ *  其余一律返回空串，调用方就不摆那一格（rt-id / codex / claude 都是技术细节）。 */
+export const runtimeLabel = (p) => (p?.runtime === 'auto' ? '自动' : '');

@@ -1,6 +1,6 @@
 /* ui.mjs —— 对话框通用件、标题旁的「?」说明（2026-10-17）、悬浮提示（自建 data-tip）、自建下拉（全站公共组件）。
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
-import { esc } from './shell.mjs';
+import { esc, toast } from './shell.mjs';
 import { $, S } from './core.mjs';
 
 
@@ -373,6 +373,26 @@ export function createCombo({
     hi = -1; // 打开时不停靠任何项：底色只留给"鼠标悬停 / 按方向键"，选中由右侧 ✓ 表示
     paint('');
     pop.classList.remove('is-hidden');
+    /*
+     * 竖向**自动翻转**（2026-10-24 用户报：项目详情那颗负责人下拉在页面下半截，
+     * 往下开整个探出视口底）。往下放不下、且上方空间更大 → 根节点挂 `.up`
+     * （样式 `.combo.up .combo-pop` 早就有；聊天输入区那几颗是手动挂的 —— 它们钉死在
+     * 屏幕底部，挂一次就够。页面中间的下拉跟着滚动变，挂一次管不住，只能每次打开现算）。
+     *
+     * ⚠️ 量之前先把 `.up` **摘掉**、按默认（向下）摆好 —— 拿着上一次的方向量会来回荡：
+     *    第一次向上关掉后 `.up` 还在，第二次打开弹层先摆在了上面，一量"下面空间足够"
+     *    又翻回向下，第三次再翻上去（2026-10-24 用户实报"点一下往上再点一下向下"）。
+     *    摘类 → 量 → 定方向都在同一次同步布局里完成，画不出来中间帧。
+     */
+    root.classList.remove('up');
+    {
+      const pr = pop.getBoundingClientRect();
+      const rr = root.getBoundingClientRect();
+      root.classList.toggle(
+        'up',
+        pr.bottom > window.innerHeight - 8 && rr.top > window.innerHeight - rr.bottom,
+      );
+    }
     // 右缘对齐到指定元素：在按钮自身右缘（.right）的基础上再往外挪 —— 挪多少每次
     // 打开都现算（发送/停止按钮会换字，宽度不稳）。同时别探出视口。
     if (alignRightTo) {
@@ -578,7 +598,7 @@ export function setHeaderBadge(status, label) {
  * 极简 Markdown 渲染（零依赖）。
  * 顺序很重要：**先整段转义**，再在已转义文本上做变换 —— 这样注入的 HTML 活不下来。
  * 支持：围栏代码块、标题、粗体/斜体、行内代码、链接（只放 http/https）、
- *       有序/无序列表、引用、分割线。
+ *       有序/无序列表、引用、分割线、GFM 表格。
  */
 export function renderMarkdown(src) {
   let s = esc(src).replace(/\r\n?/g, '\n');
@@ -597,17 +617,43 @@ export function renderMarkdown(src) {
     .replace(/(^|[^*\w])\*([^*\n]+)\*/g, '$1<em>$2</em>')
     .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
 
+  /*
+   * GFM 表格（2026-10-23）：员工回活爱用表格汇报（| a | b | 加一行 |---| 分隔行），
+   * 不渲染就是一屏竖线。判定要 lookahead 下一行是不是分隔行，所以表格分支放在最前；
+   * 行内 \| 是转义竖线，拆单元格前先换成占位符，拆完换回来。
+   */
+  const ls = s.split('\n');
+  const isRow = (l) => /^\|.*\|$/.test(l);
+  const isSep = (l) => /^\|[\s:|-]+\|$/.test(l) && l.includes('-');
+  const splitRow = (l) => l
+    .replace(/\\\|/g, '\u0001')
+    .replace(/^\|/, '').replace(/\|$/, '')
+    .split('|')
+    .map((c) => inline(c.trim().replace(/\u0001/g, '|')));
+
   const out = [];
   let list = null;
   let para = [];
   const closeList = () => { if (list) { out.push(`</${list}>`); list = null; } };
   const flushPara = () => { if (para.length) { out.push(`<p>${inline(para.join('<br>'))}</p>`); para = []; } };
 
-  for (const raw of s.split('\n')) {
-    const t = raw.trim();
+  for (let i = 0; i < ls.length; i++) {
+    const t = ls[i].trim();
 
     if (/^\u0000\d+\u0000$/.test(t)) { flushPara(); closeList(); out.push(t); continue; }
     if (!t) { flushPara(); closeList(); continue; }
+
+    if (isRow(t) && i + 1 < ls.length && isSep(ls[i + 1].trim())) {
+      flushPara(); closeList();
+      const ths = splitRow(t);
+      i += 2; // 跳过表头行与分隔行
+      const rows = [];
+      while (i < ls.length && isRow(ls[i].trim())) { rows.push(splitRow(ls[i].trim())); i++; }
+      i -= 1; // 外层 for 还会 ++，回退一条
+      out.push('<table class="md-t"><thead><tr>' + ths.map((c) => `<th>${c}</th>`).join('') + '</tr></thead><tbody>'
+        + rows.map((r) => '<tr>' + r.map((c) => `<td>${c}</td>`).join('') + '</tr>').join('') + '</tbody></table>');
+      continue;
+    }
 
     const h = /^(#{1,6})\s+(.*)$/.exec(t);
     if (h) { flushPara(); closeList(); out.push(`<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`); continue; }
@@ -758,7 +804,7 @@ export function personaAvatar(p, extra = '', fallbackName = '') {
 export const hhmm = (iso) => { try { return new Date(iso).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }); } catch { return ''; } };
 
 
-export const dt = (iso) => { try { return new Date(iso).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch { return ''; } };
+export const dt = (iso) => { try { return new Date(iso).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch { return ''; } }; // 带年（2026-10-24 用户：运行记录只有月日看不出跨年）
 
 
 export const cut = (s, n = 34) => (String(s ?? '').replace(/\s+/g, ' ').slice(0, n));
@@ -856,6 +902,65 @@ export const post = (p, d) => api(p, {
 });
 
 
+
+/**
+ * 把文本复制进剪贴板：优先用异步 Clipboard API，不行就退回隐藏 textarea + execCommand。
+ * 只返回 true/false —— 成功之后怎么回执是调用方的事。
+ */
+export async function copyPlainText(text) {
+  const s = String(text ?? '');
+  if (!s) return false;
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(s);
+      return true;
+    }
+  } catch { /* 权限被拒 / 非安全上下文 —— 走下面的兜底 */ }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = s;
+    ta.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;padding:0;border:0;opacity:0';
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, s.length);
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 把页面里的 `[data-path]` 接上「整颗可点复制」。
+ * 为什么抽到这里：项目详情现在要用，以后员工、仓库大概率也要（都是"这串路径拿去用"）——
+ * 各写一遍必然跑偏。用 `data-path` 不用 class：class 是长相，data 是行为。
+ *
+ * 回执直接换按钮上的字（设计稿 v1.0.1：成功显示「已复制」，2 秒后还原），
+ * 同时置 `aria-pressed` —— 读屏和样式（成功态变绿）都认它。
+ * ⚠️ 原文案从 `data-label` 取，取不到才用 textContent：重进详情页时按钮可能还停在
+ *    「已复制」上（DOM 留着的），用 data-label 记一次原文就不会把「已复制」当原文存下来。
+ */
+export function handleCopyPaths(root = document) {
+  root.querySelectorAll('[data-path]').forEach((el) => {
+    if (el.dataset.copyWired) return; // 同一颗按钮别包两遍（会叠加 setTimeout）
+    el.dataset.copyWired = '1';
+    const path = el.dataset.path || '';
+    const label = el.dataset.label || el.textContent;
+    let timer = 0;
+    const done = (ok) => {
+      if (!ok) { toast('复制不了，手动选中吧：\n\n' + path); return; }
+      el.textContent = '已复制';
+      el.setAttribute('aria-pressed', 'true');
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        el.textContent = label;
+        el.removeAttribute('aria-pressed');
+      }, 2000);
+    };
+    el.addEventListener('click', async () => { done(await copyPlainText(path)); });
+  });
+}
 
 /**
  * 把一次失败写进某个**常驻**的元素（提示行、结果框那种，不是弹窗）。

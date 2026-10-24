@@ -243,7 +243,7 @@ export function removeMember(threadId, personaId) {
 export function listMembers(threadId) {
   return db
     .prepare(
-      `SELECT tm.personaId, tm.joinedAt, p.name, p.runtime, p.sandbox, p.cwd, p.model, p.instructions, p.rootDirs,
+      `SELECT tm.personaId, tm.joinedAt, p.name, p.role, p.runtime, p.sandbox, p.cwd, p.model, p.instructions, p.rootDirs,
               p.builtin
          FROM thread_members tm JOIN personas p ON p.id = tm.personaId
         WHERE tm.threadId = ? ORDER BY tm.joinedAt, p.name`,

@@ -18,6 +18,18 @@ export function activeRunForProject(projectId) {
   );
 }
 
+/**
+ * 这个项目里正有几个活在跑（2026-10-24）：项目闸从"只许一件"放开成**安全网**
+ *（真正的并发限制在每个人身上，见 personas.maxParallel）—— 这里只挡病态堆积
+ *（一群人把同一个目录塞满几十个进程），不做日常限流。
+ */
+export function countActiveRunsForProject(projectId) {
+  if (!projectId) return 0;
+  return (
+    db.prepare("SELECT COUNT(*) AS n FROM runs WHERE projectId = ? AND status = '跑中'").get(projectId)?.n ?? 0
+  );
+}
+
 
 /** 把会话的模型覆盖设成某个值；传 null / 空 = 收回，跟随员工默认 */
 
@@ -130,8 +142,12 @@ export function maxRunSeq(runId) {
 
 
 export function listRuns(conversationId) {
+  /* 带上执行者名字（2026-10-23）：群聊"对方正在输入"的气泡要按名字找头像，
+     runs 表只有 personaId，前端拿到名字才能命中 personas 的 avatar。 */
   return db
-    .prepare('SELECT * FROM runs WHERE conversationId = ? ORDER BY startedAt DESC')
+    .prepare(`SELECT r.*, p.name AS personaName
+                FROM runs r LEFT JOIN personas p ON p.id = r.personaId
+               WHERE r.conversationId = ? ORDER BY r.startedAt DESC`)
     .all(conversationId);
 }
 
@@ -277,6 +293,11 @@ export function listRunUsageSince(sinceIso) {
 
 export function getRunStatus(runId) {
   return db.prepare('SELECT status FROM runs WHERE id = ?').get(runId) ?? null;
+}
+
+/** 单次运行整行（含 conversationId —— 卡片回执要送回建卡那次运行所在的会话） */
+export function getRunRow(runId) {
+  return db.prepare('SELECT * FROM runs WHERE id = ?').get(runId) ?? null;
 }
 
 /* ------------------------------------------------- 工作流：模板 */

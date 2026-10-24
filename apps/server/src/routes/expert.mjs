@@ -14,7 +14,7 @@ export async function handleExpert(req, res, url) {
 
   const key = decodeURIComponent((hire ?? fire)[1]);
   if (!experts.getExpert(key)) {
-    return fail(res, 404, 'E2051', `专家库里没有「${key}」这一位 —— 目录就那八位，看看是不是拼错了`);
+    return fail(res, 404, 'E2051', `专家库里没有「${key}」这一位 —— 目录就那十四位（技术轨八 + 内容轨六），看看是不是拼错了`);
   }
 
   if (hire) {

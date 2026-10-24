@@ -115,7 +115,7 @@ export function openAssistantDialog(thread) {
       (m) => `<label class="member">
         <input type="radio" name="assistant" value="${m.personaId}"
                ${m.personaId === thread.assistantPersonaId ? 'checked' : ''} />
-        <span>${esc(m.name)}</span><em>${esc(m.runtime)} · ${esc(m.sandbox)}</em>
+        <span>${esc(m.name)}</span><em>${esc(String(m.role ?? '').split(' · ')[0].trim() || '—')}</em>
       </label>`,
     )
     .join('');

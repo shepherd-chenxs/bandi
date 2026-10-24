@@ -215,7 +215,7 @@ export function openGitAddDialog(fullName, onDone) {
  * 加仓库只有一个入口：清单标题上的「＋ 添加仓库」→ 选「从 GitHub 添加」或「手动接入」
  * → 各自开弹窗操作（2026-10-17）。
  *
- * 安全：只回显令牌掩码（头 2 + ****** + 尾 4）；克隆/拉取走请求头带令牌
+ * 安全：只回显令牌掩码（头 2 + 18 个星号 + 尾 4）；克隆/拉取走请求头带令牌
  * （`.git/config` 里不留带令牌的 URL）。
  */
 /* --------------------------------------------- 从 GitHub 挑仓库（放进弹窗里） */
@@ -408,43 +408,77 @@ export async function renderGitRepos() {
    * 「状态：已连接 + 断开连接按钮」两行，整块的高度和样子都变了 —— 用户说的是
    * "连接之后这个区域的变化不要太大"。现在前后只差：输入框能不能编辑、按钮写什么。
    */
+  /*
+   * 连上之后的这一块（2026-10-23 二次改版，用户圈红输入框）：**居中的紧凑簇**。
+   * 原来输入框 flex:1 撑满整行、按钮吊在最右 —— 令牌掩码就十来个字符，框却六百多像素，
+   * 中间大片空白反而显得空。现在标签 + 输入框(≤420px) + 按钮收成一行居中，
+   * 状态行居中压在输入框正下方。
+   * 连上/没连上仍同一套结构同一位置（状态切换只有输入框可编辑与否、按钮文案变化）。
+   */
   const connectedForm = `
-    <div class="form-row top">
-      <div class="row-label">令牌</div>
-      <div>
-        <div class="row-with-btn">
-          <input class="locked" value="${esc(st.hint || '******')}" readonly
-                 aria-label="已保存的令牌，只显示头 2 位和尾 4 位" />
-          <button id="gitDisconnect">断开连接</button>
-        </div>
-        <div class="counter left"><b style="color:var(--ok)">已连接</b><span id="gitWho">${
+    <div class="gr-conn">
+      <div class="gr-conn-row">
+        <span class="row-label">令牌</span>
+        <input class="locked" value="${esc(st.hint || '******')}" readonly
+               aria-label="已保存的令牌，只显示头 2 位和尾 4 位" />
+        <button id="gitDisconnect">断开连接</button>
+        <div class="gr-conn-status"><b style="color:var(--ok)">已连接</b><span id="gitWho">${
           st.login ? ` —— @${esc(st.login)}` : ''
         }</span></div>
       </div>
     </div>`;
 
   const tokenForm = `
-    <div class="form-row top">
-      <div class="row-label">令牌</div>
-      <div>
-        <div class="row-with-btn">
-          <input id="gitToken" type="password" placeholder="粘贴 fine-grained PAT（只填一次，之后只显示掩码）" autocomplete="off" />
-          <button class="primary" id="gitConnect">连接 GitHub</button>
-        </div>
+    <div class="gr-conn">
+      <div class="gr-conn-row">
+        <span class="row-label">令牌</span>
+        <input id="gitToken" type="password" placeholder="粘贴 fine-grained PAT（只填一次，之后只显示掩码）" autocomplete="off" />
+        <button class="primary" id="gitConnect">连接 GitHub</button>
       </div>
     </div>`;
 
+  /*
+   * 仓库表（2026-10-23 改表格版，用户问「表格形式好不好看」后试做）：
+   * 每个语义一列（仓库 / 管理员 / 自动合并 / 操作），列头只写一次、值上下对齐 ——
+   * 「谁在值班、哪台开了自动合并」竖着扫一列就能看完，比藏在每行第二行里好找。
+   * 仓库名和路径仍挤在同一格（路径是等宽长串，单独成列会把别的列挤扁）。
+   * 列宽写死在 colgroup：表切 table-layout:fixed，长的路径靠省略号收，不顶列。
+   */
+  /*
+   * 管理员格（2026-10-23 用户拍板）：不放下拉了 —— 格子里**直接显示员工姓名**，
+   * 点一下开「keeperDlg」弹窗：搜索过滤、点哪行选哪行、选完即关。
+   * 为什么不用 select：员工一多原生下拉又长又不能搜；弹窗跟「拉人进群」同一套交互。
+   * 没设管理员时显示灰的「未设置」，弹窗里首行「不值班（不审阅）」负责清掉。
+   */
+  const keeperName = (id) => (S.personas ?? []).find((p) => p.id === id)?.name ?? '';
   const repoRow = (r) => `
-    <div class="sk-row">
-      <div class="sk-main">
-        <b>${esc(r.fullName)}</b>
-        ${r.isPrivate ? '<span class="pill">私有</span>' : ''}
-        <div class="sk-desc">${esc(r.localPath)}${r.lastSyncAt ? ` · 上次同步 ${esc(String(r.lastSyncAt).replace('T', ' ').slice(0, 16))}` : ''}</div>
-      </div>
-      <button class="mini auto" data-git-project="${esc(r.id)}" title="用这个仓库建一个项目（工作目录就是克隆目录）">建成项目</button>
-      <button class="mini auto" data-git-sync="${esc(r.id)}" title="git pull --ff-only">同步</button>
-      <button class="mini auto" data-git-remove="${esc(r.id)}" title="只移除记录，本地目录保留">移除</button>
-    </div>`;
+    <tr>
+      <td class="gr-cell-repo">
+        <div class="gr-name"><b>${esc(r.fullName)}</b>${r.isPrivate ? '<span class="pill">私有</span>' : ''}</div>
+        <div class="gr-meta" title="${esc(r.localPath)}">${esc(r.localPath)}${r.lastSyncAt ? ` · 上次同步 ${esc(String(r.lastSyncAt).replace('T', ' ').slice(0, 16))}` : ''}</div>
+      </td>
+      <td class="gr-keeper-cell"><button type="button" class="gr-keeper-btn" data-git-keeper-pick="${esc(r.id)}" data-k-cur="${esc(r.keeperPersonaId ?? '')}"
+                  title="别人提了 PR，替你审的那个人。点击选择">${r.keeperPersonaId ? esc(keeperName(r.keeperPersonaId) || '未设置') : '<span class="dim">未设置</span>'}</button></td>
+      <td class="gr-cell-am"><label class="switch sm" title="开：审阅通过且闸门全过的 PR 自动合并；关：停在「待验收」等你点">
+            <input type="checkbox" data-git-automerge="${esc(r.id)}" ${r.autoMerge ? 'checked' : ''} aria-label="自动合并" /><span></span>
+          </label></td>
+      <td class="gr-cell-ops">
+        <button class="mini auto" data-git-project="${esc(r.id)}" title="用这个仓库建一个项目（工作目录就是克隆目录）">建成项目</button>
+        <button class="mini auto" data-git-sync="${esc(r.id)}" title="git pull --ff-only">同步</button>
+        <button class="mini auto" data-git-remove="${esc(r.id)}" title="只移除记录，本地目录保留">移除</button>
+      </td>
+    </tr>`;
+  const repoTable = (list) => `
+    <table class="gr-tbl">
+      <colgroup><col /><col style="width:196px" /><col style="width:88px" /><col style="width:216px" /></colgroup>
+      <thead><tr>
+        <th>仓库</th>
+        <th title="别人提了 PR，替你审的那个人">管理员</th>
+        <th title="审阅通过且闸门全过时自动合并">自动合并</th>
+        <th>操作</th>
+      </tr></thead>
+      <tbody>${list.map(repoRow).join('')}</tbody>
+    </table>`;
 
   view.innerHTML = `
     ${headRow('<b>代码托管</b>')}
@@ -455,12 +489,12 @@ export async function renderGitRepos() {
         ${st.connected ? connectedForm : tokenForm}
       </div>
 
-      <div class="group-title">代码仓库 <span class="dim" style="font-weight:400">${repos.length} 个</span>
-        <button class="mini auto" id="gitAddRepo" style="float:right;margin-top:-2px"
+      <div class="group-title gr-title"><span>代码仓库 <span class="dim">${repos.length} 个</span></span>
+        <button class="mini auto" id="gitAddRepo"
                 title="从 GitHub 挑一个，或手动接一个本地已有的克隆">＋ 添加仓库</button>
       </div>
       <div class="group">
-        ${repos.length ? repos.map(repoRow).join('') : '<div class="sk-blank">还没有仓库。点右上角「＋ 添加仓库」：连了 GitHub 就从账号里挑，没连就手动接一个本地已有的克隆。</div>'}
+        ${repos.length ? repoTable(repos) : '<div class="sk-blank">还没有仓库。点右上角「＋ 添加仓库」：连了 GitHub 就从账号里挑，没连就手动接一个本地已有的克隆。</div>'}
       </div>
     </div>`;
 
@@ -539,9 +573,65 @@ export async function renderGitRepos() {
     }
   });
 
+  /*
+   * 值班设置：**改了就存**，不弹确认（可逆、影响面单仓库）。
+   * 存失败才整页重绘 —— 成功时重绘会把刚选的项闪一下，人以为没存上。
+   */
+  const saveRepoSettings = async (id, patch) => {
+    try {
+      await post(`/api/git/repos/${encodeURIComponent(id)}/settings`, patch);
+      toast('已保存');
+    } catch (err) {
+      toast(err.message, 'error');
+      await refresh(); // 失败要把界面拉回真实值，别让假状态留在屏幕上
+    }
+  };
+  view.querySelectorAll('[data-git-automerge]').forEach((el) => {
+    el.onchange = () => saveRepoSettings(el.dataset.gitAutomerge, { autoMerge: el.checked });
+  });
+
+  /*
+   * 管理员弹窗（keeperDlg，2026-10-23）：搜索过滤、**点哪行选哪行、选完即关**——
+   * 没有确认按钮，选错再点一次就行，比「选中 + 确定」少一步。
+   * 「不值班（不审阅）」只在没搜索时出现在首行（它是清空入口，不是搜索结果）。
+   */
+  let keeperRepoId = null;
+  let keeperCur = '';
+  const renderKeeperList = () => {
+    const q = ($('kSearch').value || '').trim().toLowerCase();
+    const rows = (S.personas ?? []).filter((p) => !q || p.name.toLowerCase().includes(q));
+    const row = (kid, name, em, picked) => `
+      <button type="button" class="k-row${picked ? ' on' : ''}" data-kid="${esc(kid)}">
+        <span>${esc(name)}</span>${em ? `<em>${esc(em)}</em>` : ''}${picked ? '<span class="k-ok">✓</span>' : ''}
+      </button>`;
+    $('kList').innerHTML = [
+      q ? '' : row('', '不值班（不审阅）', '', !keeperCur),
+      ...rows.map((p) => row(p.id, p.name, `${p.runtime ?? ''}${p.sandbox ? ` · ${p.sandbox}` : ''}`, keeperCur === p.id)),
+    ].filter(Boolean).join('') || '<div class="dim" style="padding:10px 2px">没找到</div>';
+    $('kList').querySelectorAll('.k-row').forEach((b) => {
+      b.onclick = async () => {
+        $('keeperDlg').close();
+        if (b.dataset.kid !== keeperCur) {
+          await saveRepoSettings(keeperRepoId, { keeperPersonaId: b.dataset.kid });
+          await refresh();
+        }
+      };
+    });
+  };
+  const openKeeperDlg = (repoId, curId) => {
+    keeperRepoId = repoId;
+    keeperCur = curId ?? '';
+    $('kSearch').value = '';
+    renderKeeperList();
+    $('kSearch').oninput = renderKeeperList;
+    $('keeperDlg').showModal();
+  };
+  view.querySelectorAll('[data-git-keeper-pick]').forEach((el) => {
+    el.onclick = () => openKeeperDlg(el.dataset.gitKeeperPick, el.dataset.kCur ?? '');
+  });
+
   // 已接入仓库的三个动作
-  view.querySelectorAll('[data-git-sync]').forEach((el) => {
-    el.onclick = async (e) => {
+  view.querySelectorAll('[data-git-sync]').forEach((el) => {    el.onclick = async (e) => {
       e.preventDefault();
       el.disabled = true;
       el.textContent = '同步中…';
@@ -719,7 +809,7 @@ export async function renderSchedules() {
           : `<div class="sk-blank">还没有定时任务。最常用的做法是「交给数字员工」：写一句要它干什么、选一个人，
              到点这句话就发进它自己的一条会话里（标题写着任务名，结果在那儿看）。
              另外两个内置动作：「PR / Issue 巡检」—— 去 GitHub 看有没有人提 PR / issue，写成看板上的卡，
-             顺手把已合并的收成「待确认」；「数据库备份」—— 把 bandi.db 导出一份到数据目录的 backups/，
+             顺手把已合并的收成「待验收」；「数据库备份」—— 把 bandi.db 导出一份到数据目录的 backups/，
              只留最近 N 份。动作是可插拔的，以后加新动作不用改调度核心。</div>`
       }
     </div>`;

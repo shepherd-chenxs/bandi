@@ -91,11 +91,11 @@ try {
   check('令牌文件写出来了', fs.existsSync(tokenFile));
   check('readToken 读得到', git.readToken() === 'ghp_smoke1234abcd');
   // 头 2 + 6 个星号 + 尾 4：认得出是哪一个，但中间那段还是没露
-  check('tokenHint 是 头2+******+尾4', git.tokenHint() === 'gh******abcd', String(git.tokenHint()));
+  check('tokenHint 是 头2+18个*+尾4', git.tokenHint() === 'gh******************abcd', String(git.tokenHint()));
   check('hint 里没有令牌中段', !git.tokenHint().includes('smoke1234'));
   check('令牌没进数据库（表里没有 token 列）', !fs.readFileSync(path.join(tmp, 'bandi.db')).includes('ghp_smoke1234abcd'));
   const st2 = await req('/api/git/status');
-  check('再查 status：connected=true、hint 是掩码', st2.b.connected === true && st2.b.hint === 'gh******abcd', JSON.stringify(st2.b?.hint));
+  check('再查 status：connected=true、hint 是掩码', st2.b.connected === true && st2.b.hint === 'gh******************abcd', JSON.stringify(st2.b?.hint));
   check('status 里绝不出现完整令牌', !JSON.stringify(st2.b).includes('ghp_smoke1234abcd'));
   // 短令牌：头尾加起来就快露完了，一个字都不给
   git.saveToken('gh1234');

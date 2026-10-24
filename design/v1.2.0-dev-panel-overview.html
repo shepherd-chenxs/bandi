@@ -1,0 +1,448 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>研发面板 · 概览页 · 结构方向稿</title>
+<style>
+/* 2026-10-24 · 概览页结构方向稿
+   目标：不用「左列表 + 右详情」，一屏回答：
+   1) 手上有几个项目 2) 各自进度/发布到哪 3) 谁负责 4) 最近动了什么。
+   数据源：GET /api/status/projects（列表）+ /:id（versions 明细，进详情再用）。*/
+
+:root {
+  color-scheme: dark;
+  --bg: #0c0e11;
+  --bg-2: #0f1216;
+  --panel: #14181e;
+  --panel-2: #181d24;
+  --line: #262c34;
+  --line-soft: #1e242c;
+  --text: #edf1f6;
+  --dim: #98a2ad;
+  --dim-2: #66707b;
+  --accent: #5b9cf6;
+  --accent-soft: rgba(91,156,246,.14);
+  --ok: #3ecf8e;
+  --ok-soft: rgba(62,207,142,.13);
+  --warn: #e2a73f;
+  --warn-soft: rgba(226,167,63,.14);
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Microsoft YaHei", "Source Han Sans SC", sans-serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: #080a0d; color: var(--text); font-family: var(--font);
+  font-size: 13px; line-height: 1.5; -webkit-font-smoothing: antialiased;
+  font-variant-numeric: tabular-nums;
+}
+.doc { max-width: 1560px; margin: 0 auto; padding: 22px 24px 70px; }
+.doc-head { margin-bottom: 18px; }
+.doc-head h1 { margin: 0 0 4px; font-size: 21px; font-weight: 650; letter-spacing: -.01em; }
+.doc-head p { margin: 0; color: var(--dim); font-size: 12.5px; max-width: 900px; }
+.doc-head b { color: var(--text); font-weight: 600; }
+.canvas { display: flex; flex-wrap: wrap; gap: 22px; align-items: flex-start; }
+.artboard { margin: 0; flex: 0 0 auto; }
+.artboard figcaption { margin: 0 0 7px; font-size: 12px; color: var(--dim-2); }
+.artboard figcaption .k { font-weight: 600; color: var(--text); margin-right: 8px; }
+.screen {
+  overflow: hidden; background: var(--bg); border: 1px solid var(--line);
+  border-radius: 12px; box-shadow: 0 16px 44px rgba(0,0,0,.38);
+}
+.notes {
+  list-style: none; margin: 12px 0 0; padding: 11px 14px; max-width: 1440px;
+  border-left: 3px solid var(--accent); background: #101318; border-radius: 0 8px 8px 0;
+}
+.notes li { font-size: 11.5px; color: var(--dim); margin: 3px 0; line-height: 1.65; }
+.notes b { color: var(--text); font-weight: 600; }
+.notes .cut { color: var(--dim-2); }
+
+/* ---------- 应用框 ---------- */
+.app { width: 1440px; height: 940px; display: flex; flex-direction: column; position: relative; }
+.app::before {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background:
+    radial-gradient(620px 300px at 16% -8%, rgba(91,156,246,.10), transparent 70%),
+    linear-gradient(rgba(255,255,255,.015) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.015) 1px, transparent 1px);
+  background-size: auto, 32px 32px, 32px 32px;
+}
+.topbar {
+  position: relative; height: 54px; flex: 0 0 auto; display: flex; align-items: center;
+  gap: 18px; padding: 0 22px; border-bottom: 1px solid var(--line); background: rgba(12,14,17,.86);
+}
+.brand { display: flex; align-items: center; gap: 9px; }
+.brand .logo {
+  width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center;
+  font-weight: 700; color: #fff; background: linear-gradient(135deg, #4b6cb7, #182848);
+}
+.brand .name { font-weight: 650; font-size: 14px; }
+.topnav { display: flex; gap: 2px; }
+.topnav button {
+  border: 0; background: transparent; color: var(--dim); cursor: pointer;
+  font: inherit; font-size: 13px; padding: 7px 12px; border-radius: 7px;
+}
+.topnav button:hover { color: var(--text); background: var(--panel); }
+.topnav button.active { color: var(--text); background: var(--panel-2); }
+.topbar .spacer { flex: 1; }
+.readonly {
+  display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px;
+  border: 1px solid var(--line); border-radius: 999px; color: var(--dim); font-size: 11.5px;
+  background: rgba(255,255,255,.02);
+}
+.readonly::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--dim-2); }
+.icon-btn {
+  border: 1px solid var(--line); background: var(--panel); color: var(--text);
+  width: 30px; height: 30px; border-radius: 8px; cursor: pointer; display: grid; place-items: center;
+}
+.icon-btn:hover { border-color: var(--accent); color: var(--accent); }
+.icon-btn svg { width: 15px; height: 15px; }
+
+/* ---------- 内容 ---------- */
+.content { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 20px 22px 22px; gap: 18px; }
+.pagehead { display: flex; align-items: flex-end; gap: 14px; }
+.pagehead .ttl { flex: 1; min-width: 0; }
+.pagehead h2 { margin: 0; font-size: 19px; font-weight: 650; letter-spacing: -.01em; display: flex; align-items: center; gap: 9px; }
+.pagehead .sub { margin: 4px 0 0; color: var(--dim); font-size: 12.5px; }
+.asof { font-size: 11.5px; color: var(--dim-2); white-space: nowrap; }
+
+.kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.kpi {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  padding: 13px 15px 12px; min-width: 0; cursor: pointer; transition: border-color .15s, transform .15s;
+}
+.kpi:hover { border-color: var(--accent); transform: translateY(-1px); }
+.kpi .lab { font-size: 11.5px; color: var(--dim); display: flex; align-items: center; gap: 7px; }
+.kpi .num { font-size: 26px; font-weight: 680; letter-spacing: -.02em; margin-top: 2px; }
+.kpi .num small { font-size: 12px; color: var(--dim-2); font-weight: 500; margin-left: 4px; }
+.kpi .foot { margin-top: 7px; font-size: 11px; color: var(--dim-2); }
+.kpi.warn .num { color: var(--warn); }
+.kpi.ok .num { color: var(--ok); }
+.kpi.accent .num { color: var(--accent); }
+
+.layout { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0,1fr) 336px; gap: 16px; }
+.main-col { min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 12px; }
+.side-col { min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 12px; overflow: auto; padding-right: 2px; }
+
+.section-head { display: flex; align-items: center; gap: 8px; padding: 2px 2px 0; }
+.section-head h3 { margin: 0; font-size: 13px; font-weight: 650; }
+.section-head .count { color: var(--dim-2); font-size: 11.5px; }
+.section-head .spacer { flex: 1; }
+.ghost-link { border: 0; background: transparent; color: var(--accent); cursor: pointer; font: inherit; font-size: 12px; }
+.ghost-link:hover { text-decoration: underline; }
+
+.cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.pcard {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  padding: 14px; display: flex; flex-direction: column; gap: 12px; min-width: 0; cursor: pointer;
+  transition: border-color .15s, transform .15s;
+}
+.pcard:hover { border-color: var(--accent); transform: translateY(-1px); }
+.pcard-top { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+.pcard-top .who { flex: 1; min-width: 0; }
+.pname { font-size: 14.5px; font-weight: 650; letter-spacing: -.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.psummary { margin-top: 3px; color: var(--dim); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.badge {
+  display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 8px;
+  border-radius: 999px; font-size: 11px; white-space: nowrap; flex: 0 0 auto;
+}
+.badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.badge.ok { color: var(--ok); background: var(--ok-soft); }
+.badge.warn { color: var(--warn); background: var(--warn-soft); }
+.badge.neutral { color: var(--dim); background: rgba(255,255,255,.05); }
+
+.meta-line { display: flex; align-items: center; gap: 8px; color: var(--dim); font-size: 12px; min-width: 0; }
+.meta-line .sep { color: var(--dim-2); }
+.meta-line .trunc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.avatars { display: inline-flex; margin-left: auto; }
+.avatars span {
+  width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--panel);
+  display: grid; place-items: center; font-size: 10px; color: #fff; margin-left: -5px;
+}
+.avatars span:first-child { margin-left: 0; }
+.avatars .more { background: var(--panel-2); color: var(--dim); }
+.av1 { background: #4a7dbf; } .av2 { background: #7a5fb0; } .av3 { background: #3f8f7d; }
+.av4 { background: #b0744b; }
+
+.progress-block { display: flex; flex-direction: column; gap: 6px; }
+.progress-meta { display: flex; align-items: baseline; justify-content: space-between; font-size: 11.5px; color: var(--dim); }
+.progress-meta b { color: var(--text); font-size: 12.5px; font-weight: 600; }
+.bar { height: 6px; border-radius: 999px; background: var(--line-soft); overflow: hidden; }
+.bar > i { display: block; height: 100%; border-radius: 999px; background: var(--ok); }
+
+.release { border-top: 1px solid var(--line-soft); padding-top: 10px; display: flex; flex-direction: column; gap: 3px; }
+.release .lab { font-size: 11px; color: var(--dim-2); }
+.release .v { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.release .v b { font-family: var(--mono); font-size: 12.5px; color: var(--ok); font-weight: 600; }
+.release .path { font-family: var(--mono); font-size: 11px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.release .path:hover { color: var(--accent); text-decoration: underline; }
+.release .none { color: var(--dim-2); font-size: 12px; }
+
+/* 未纳管 / 需处理 */
+.warn-list { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.warn-row { display: flex; align-items: flex-start; gap: 10px; padding: 11px 13px; cursor: pointer; }
+.warn-row:hover { background: var(--panel-2); }
+.warn-row + .warn-row { border-top: 1px solid var(--line-soft); }
+.warn-row .who { flex: 1; min-width: 0; }
+.warn-row .nm { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.warn-row .why { font-size: 11.5px; color: var(--dim); margin-top: 2px; }
+.warn-row .go { border: 0; background: transparent; color: var(--accent); font: inherit; font-size: 12px; white-space: nowrap; cursor: pointer; padding-top: 1px; }
+.warn-row .go:hover { text-decoration: underline; }
+
+/* 最近动态 */
+.feed { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 4px 13px 8px; }
+.feed-item { display: grid; grid-template-columns: 9px 1fr; gap: 10px; padding: 9px 0; }
+.feed-item + .feed-item { border-top: 1px solid var(--line-soft); }
+.feed-dot { width: 7px; height: 7px; border-radius: 50%; margin-top: 6px; background: var(--accent); }
+.feed-item.warn .feed-dot { background: var(--warn); }
+.feed-item .tx { font-size: 12px; color: var(--text); line-height: 1.45; }
+.feed-item .tm { font-size: 11px; color: var(--dim-2); margin-top: 2px; }
+
+.mini { font-size: 11.5px; color: var(--dim); margin-top: 2px; }
+
+/* 状态条（方向稿顺带示意） */
+.state-strip { display: flex; gap: 12px; }
+.state-box {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  padding: 13px 14px; width: 300px; min-height: 130px;
+}
+.state-box .lbl { font-size: 11.5px; color: var(--dim); margin-bottom: 8px; display: flex; align-items: center; gap: 7px; }
+.sk { border-radius: 5px; background: linear-gradient(90deg, #1b2027 25%, #22282f 45%, #1b2027 65%); background-size: 200% 100%; animation: shine 1.2s infinite; }
+.sk.t { height: 12px; width: 42%; margin-bottom: 9px; }
+.sk.r { height: 10px; margin-bottom: 7px; }
+.sk.w70 { width: 70%; } .sk.w55 { width: 55%; } .sk.w85 { width: 85%; }
+@keyframes shine { to { background-position: -200% 0; } }
+.empty-txt { text-align: center; color: var(--dim-2); font-size: 12px; padding: 14px 4px; line-height: 1.7; }
+.empty-txt b { display: block; color: var(--dim); font-size: 13px; margin-bottom: 4px; }
+.err-txt { color: var(--warn); font-size: 12px; line-height: 1.6; }
+.err-txt .retry { color: var(--accent); cursor: pointer; }
+</style>
+</head>
+<body>
+<div class="doc">
+  <header class="doc-head">
+    <h1>研发面板 · 概览页 · 结构方向稿</h1>
+    <p>否掉上一稿的「左列表 + 右详情」，改成<b>一屏概览</b>：先回答四个问题（几个项目 / 各自进度到哪、哪版已发布 / 谁负责 / 最近动了什么），再按重要性摆。桌面 1440。</p>
+  </header>
+
+  <div class="canvas">
+    <figure class="artboard">
+      <figcaption><span class="k">01 · 概览页</span>桌面 1440 × 940 · 主稿</figcaption>
+      <div class="screen">
+        <div class="app">
+          <header class="topbar">
+            <div class="brand"><span class="logo">班</span><span class="name">班底</span></div>
+            <nav class="topnav">
+              <button>消息</button>
+              <button>通讯录</button>
+              <button class="active">工作台</button>
+              <button>设置</button>
+            </nav>
+            <div class="spacer"></div>
+            <span class="readonly">只读看板 · 无写接口</span>
+            <button class="icon-btn" title="刷新"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg></button>
+          </header>
+
+          <div class="content">
+            <div class="pagehead">
+              <div class="ttl">
+                <h2>研发面板</h2>
+                <p class="sub">所有项目的进度、发布与负责人，一眼看全；点进某个项目再看版本明细。</p>
+              </div>
+              <span class="asof">数据更新于 2026-10-23 14:20</span>
+            </div>
+
+            <div class="kpis">
+              <div class="kpi">
+                <div class="lab">项目总数</div>
+                <div class="num">5<small>个</small></div>
+                <div class="foot">来自「项目」账本</div>
+              </div>
+              <div class="kpi ok">
+                <div class="lab">已纳管</div>
+                <div class="num">3<small>个</small></div>
+                <div class="foot">能读到进度文件</div>
+              </div>
+              <div class="kpi warn">
+                <div class="lab">未纳管 · 需处理</div>
+                <div class="num">2<small>个</small></div>
+                <div class="foot">找不到 .bandi/status.yaml</div>
+              </div>
+              <div class="kpi accent">
+                <div class="lab">已发布版本</div>
+                <div class="num">4<small>个</small></div>
+                <div class="foot">分布在 3 个已纳管项目</div>
+              </div>
+            </div>
+
+            <div class="layout">
+              <div class="main-col">
+                <div class="section-head">
+                  <h3>项目进度</h3>
+                  <span class="count">已纳管 3 个 · 点卡进详情</span>
+                  <span class="spacer"></span>
+                  <button class="ghost-link">全部项目 ›</button>
+                </div>
+                <div class="cards">
+                  <div class="pcard">
+                    <div class="pcard-top">
+                      <div class="who">
+                        <div class="pname">班底（仓库）</div>
+                        <div class="psummary">把平台做成一个能自己干活的班底</div>
+                      </div>
+                      <span class="badge ok">已纳管</span>
+                    </div>
+                    <div class="meta-line">
+                      <span>沈丹青</span><span class="sep">·</span>
+                      <span class="trunc">2026-09-01 起 · 进行中</span>
+                      <span class="avatars"><span class="av1">沈</span><span class="av2">林</span><span class="av3">周</span><span class="more">+2</span></span>
+                    </div>
+                    <div class="progress-block">
+                      <div class="progress-meta"><span><b>11</b> 个版本</span><span><b>3</b> 已发布</span></div>
+                      <div class="bar"><i style="width:27%"></i></div>
+                    </div>
+                    <div class="release">
+                      <span class="lab">最新发布</span>
+                      <div class="v"><b>v1.1.0</b><span class="path">.bandi/发布记录/v1.1.0.md</span></div>
+                    </div>
+                  </div>
+
+                  <div class="pcard">
+                    <div class="pcard-top">
+                      <div class="who">
+                        <div class="pname">shepherd-chenxs/baoluo</div>
+                        <div class="psummary">仓库存量迁移与落地</div>
+                      </div>
+                      <span class="badge ok">已纳管</span>
+                    </div>
+                    <div class="meta-line">
+                      <span>林晓</span><span class="sep">·</span>
+                      <span class="trunc">2026-10-01 起 · 进行中</span>
+                      <span class="avatars"><span class="av2">林</span><span class="av4">王</span></span>
+                    </div>
+                    <div class="progress-block">
+                      <div class="progress-meta"><span><b>2</b> 个版本</span><span><b>0</b> 已发布</span></div>
+                      <div class="bar"><i style="width:0%"></i></div>
+                    </div>
+                    <div class="release">
+                      <span class="lab">最新发布</span>
+                      <div class="none">还没有已发布的版本</div>
+                    </div>
+                  </div>
+
+                  <div class="pcard">
+                    <div class="pcard-top">
+                      <div class="who">
+                        <div class="pname">班底官网</div>
+                        <div class="psummary">官网站点与内容维护</div>
+                      </div>
+                      <span class="badge ok">已纳管</span>
+                    </div>
+                    <div class="meta-line">
+                      <span>周凯</span><span class="sep">·</span>
+                      <span class="trunc">2026-08-15 起 · 进行中</span>
+                      <span class="avatars"><span class="av3">周</span><span class="av1">沈</span><span class="more">+1</span></span>
+                    </div>
+                    <div class="progress-block">
+                      <div class="progress-meta"><span><b>5</b> 个版本</span><span><b>1</b> 已发布</span></div>
+                      <div class="bar"><i style="width:20%"></i></div>
+                    </div>
+                    <div class="release">
+                      <span class="lab">最新发布</span>
+                      <div class="v"><b>v0.9.0</b><span class="path">docs/发布记录/v0.9.0.md</span></div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="mini">版本进度 = 已发布 ÷ 版本总数；「最新发布」只放最近一条，超长路径省略、悬停看全文。起止、项目经理、成员并在同一行，不各自开一列。</div>
+              </div>
+
+              <aside class="side-col">
+                <div class="section-head">
+                  <h3>需要处理</h3>
+                  <span class="count">2</span>
+                </div>
+                <div class="warn-list">
+                  <div class="warn-row">
+                    <div class="who">
+                      <div class="nm">流程测试区</div>
+                      <div class="why">找不到 .bandi/status.yaml</div>
+                    </div>
+                    <button class="go">去项目页</button>
+                  </div>
+                  <div class="warn-row">
+                    <div class="who">
+                      <div class="nm">默认项目</div>
+                      <div class="why">内置 · 找不到 .bandi/status.yaml</div>
+                    </div>
+                    <button class="go">去项目页</button>
+                  </div>
+                </div>
+
+                <div class="section-head">
+                  <h3>最近动态</h3>
+                  <span class="count">按项目更新时间倒序</span>
+                </div>
+                <div class="feed">
+                  <div class="feed-item">
+                    <span class="feed-dot"></span>
+                    <div><div class="tx">班底（仓库）· v1.1.0 已发布</div><div class="tm">2026-10-23 14:20</div></div>
+                  </div>
+                  <div class="feed-item">
+                    <span class="feed-dot"></span>
+                    <div><div class="tx">班底官网 · 进度文件更新</div><div class="tm">2026-10-22 09:41</div></div>
+                  </div>
+                  <div class="feed-item warn">
+                    <span class="feed-dot"></span>
+                    <div><div class="tx">shepherd/baoluo · 新增 v0.2.0（未发布）</div><div class="tm">2026-10-21 16:03</div></div>
+                  </div>
+                  <div class="feed-item warn">
+                    <span class="feed-dot"></span>
+                    <div><div class="tx">流程测试区 · 已建档案，尚未纳管</div><div class="tm">2026-10-20 11:27</div></div>
+                  </div>
+                </div>
+              </aside>
+            </div>
+          </div>
+        </div>
+      </div>
+      <ul class="notes">
+        <li><b>信息层级</b>：顶部 KPI（几个项目、纳管健康度）→ 中间项目进度卡（谁负责、版本/发布到哪）→ 右侧「需要处理」和「最近动态」。先给答案，再给明细。</li>
+        <li><b>每块点哪儿</b>：项目卡整卡点 → 该项目详情（含 versions 明细，本稿先不画）；最新发布路径点 → 打开发布记录；未纳管行点「去项目页」→ 平台「项目」页；顶部刷新 → 重新 GET /api/status/projects；KPI 卡可点做分组筛选（可选）。</li>
+        <li><b>合并</b>：原「纳管情况 7 行」并进项目卡（徽标=纳管、进度条=版本数/已发布数、同一行=项目经理/成员/起止）。</li>
+        <li><b>砍掉</b>：<span class="cut">原版本表 5 列不进首屏（概览只保留「最新发布」一条，明细点进详情）；路径 pill 复制、纳管 7 行、目录/进度文件字段都下放到详情。</span></li>
+        <li><b>待定</b>：「最新发布版本号」需在概览聚合时带上（列表接口目前只有 released_count，没有最新版本号/路径；确认是否由列表接口补，或前端对 3 个项目并发拉详情）。</li>
+      </ul>
+    </figure>
+
+    <figure class="artboard">
+      <figcaption><span class="k">02 · 状态示意</span>加载 / 报错 / 空态 · 概览页同构，先摆方向</figcaption>
+      <div class="screen" style="width:936px;height:172px">
+        <div class="state-strip" style="padding:20px">
+          <div class="state-box">
+            <div class="lbl">加载中 · 项目进度卡骨架</div>
+            <div class="sk t"></div>
+            <div class="sk r w70"></div>
+            <div class="sk r w85"></div>
+            <div class="sk r w55"></div>
+          </div>
+          <div class="state-box">
+            <div class="lbl">读取失败 · 单卡报错</div>
+            <div class="err-txt">读不到 .bandi/status.yaml，已有记录保留，不自动删。<span class="retry">重试</span></div>
+          </div>
+          <div class="state-box">
+            <div class="lbl">空态 · 项目账本还没有项目</div>
+            <div class="empty-txt"><b>还没有项目</b>先去「项目」页加一个，这里会自动列出来。</div>
+          </div>
+        </div>
+      </div>
+      <ul class="notes">
+        <li><b>状态同构</b>：整页加载=KPI 与卡片骨架；单项目读不到=该卡标「未纳管」；全局失败=页内报错条；空账本=居中空态。方向定了，下一步把这三态补成整页。</li>
+      </ul>
+    </figure>
+  </div>
+</div>
+</body>
+</html>

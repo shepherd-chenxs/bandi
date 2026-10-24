@@ -2,6 +2,7 @@
 
 import { db, newId, nowIso } from './db.mjs';
 import { createConversation, listHiddenConversations } from './conversations.mjs';
+import { emitConv } from '../events.mjs';
 
 export function getMessageByRowid(conversationId, rowid) {
   if (!rowid) return null;
@@ -19,7 +20,8 @@ export function listMessages(conversationId) {  return db
          FROM messages m LEFT JOIN personas p ON p.id = m.personaId
         WHERE m.conversationId = ? ORDER BY m.createdAt, m.rowid`,
     )
-    .all(conversationId);
+    .all(conversationId)
+    .map(parseAtts);
 }
 
 /**
@@ -35,14 +37,26 @@ export function listMessagesSince(conversationId, afterRowid, excludeMessageId =
         WHERE m.conversationId = ? AND m.rowid > ? ORDER BY m.rowid`,
     )
     .all(conversationId, afterRowid)
+    .map(parseAtts)
     .filter((m) => m.id !== excludeMessageId);
 }
 
+/** 库里的 atts / meta 是 JSON 字符串，出来给调用方的是对象（坏数据当没有，别炸整页） */
+function parseAtts(m) {
+  if (m.atts) {
+    try { m.atts = JSON.parse(m.atts); } catch { m.atts = null; }
+  }
+  if (m.meta) {
+    try { m.meta = JSON.parse(m.meta); } catch { m.meta = null; }
+  }
+  return m;
+}
 
-export function addMessage({ conversationId, runId = null, role, text, personaId = null, taskId = null, parentId = null, note = false }) {
-  const row = { id: newId('m'), conversationId, runId, role, text, personaId, taskId, parentId, note: note ? 1 : 0, createdAt: nowIso() };
+
+export function addMessage({ conversationId, runId = null, role, text, personaId = null, taskId = null, parentId = null, note = false, atts = null, meta = null }) {
+  const row = { id: newId('m'), conversationId, runId, role, text, personaId, taskId, parentId, note: note ? 1 : 0, createdAt: nowIso(), atts: atts?.length ? JSON.stringify(atts) : null, meta: meta ? JSON.stringify(meta) : null };
   db.prepare(
-    'INSERT INTO messages (id, conversationId, runId, role, text, personaId, taskId, parentId, note, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    'INSERT INTO messages (id, conversationId, runId, role, text, personaId, taskId, parentId, note, atts, meta, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
   ).run(
     row.id,
     row.conversationId,
@@ -53,6 +67,8 @@ export function addMessage({ conversationId, runId = null, role, text, personaId
     row.taskId,
     row.parentId,
     row.note,
+    row.atts,
+    row.meta,
     row.createdAt,
   );
   // 说话就把它从"已从列表移除"里恢复 —— 否则会出现"我发了消息，列表里却没有"
@@ -85,6 +101,8 @@ export function addMessage({ conversationId, runId = null, role, text, personaId
     }
   }
   row.rowid = db.prepare('SELECT rowid AS rid FROM messages WHERE id = ?').get(row.id).rid;
+  // 消息落库是**必经点**：谁往哪个会话说了话，挂着的浏览器立刻知道（见 events.mjs）
+  emitConv(conversationId);
   return row;
 }
 

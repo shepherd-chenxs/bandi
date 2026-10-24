@@ -1,12 +1,12 @@
 /* chat.mjs —— 进对话、发消息、输入框里的 @ 选人、员工详情、员工详情 →「任务」、关联技能。
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
 import { esc, mdRender, savePlace, setRoute, toast } from './shell.mjs';
-import { TYPING, api, createCombo, cut, dt, failHtml, initial, personaAvatar, personaByName, post, renderMarkdown, setHeaderBadge, smAvatar } from './ui.mjs';
+import { TYPING, AVATAR_FILE, api, createCombo, cut, dt, failHtml, initial, personaAvatar, personaByName, post, renderMarkdown, setHeaderBadge, smAvatar } from './ui.mjs';
 import { load, setNav } from './state.mjs';
 import { confirmDo } from './machine.mjs';
 import { convDisplayName, openConversationSafe, toastConvErr } from './listmenu.mjs';
 import { detailSave, renderList, showView } from './contacts.mjs';
-import { openProjectDetail, prPillOf } from './projects.mjs';
+import { COL_STATUS, openProjectDetail, openTaskBoard, openTaskCardPage, prPillOf } from './projects.mjs';
 import { openFlowRun, setListTitle } from './flowpages.mjs';
 import { openChatLogDrawer, openGroupDrawer } from './groups.mjs';
 import { closeDrawer, fireExpert } from './experts.mjs';
@@ -371,6 +371,9 @@ export async function openConversation(id) {
   closeMentionPop();
   if (S.es) { S.es.close(); S.es = null; }
   S.running = false;
+  // 换会话清空没发出去的文字草稿 —— 别把 A 会话说了一半的话带到 B 会话（附件同理，见 resetAtts）。
+  // 只在**真换了**会话时才清：同一段会话跑完的自动重开（收尾 300ms 后）不能把人正打着的字抹掉。
+  if (S.conversation?.id !== id) $('input').value = '';
 
   const d = await api('/api/conversations/' + encodeURIComponent(id));
   S.conversation = d.conversation;
@@ -379,6 +382,7 @@ export async function openConversation(id) {
   S.convEmpty = (d.messages || []).length === 0;
   savePlace();         // 记下正在看哪个会话，刷新后回到这儿
   setComposer(true);   // 有会话了，输入区才出来
+  resetAtts();         // 换会话清掉没发出去的附件 —— 别把 A 会话的图带到 B 会话
   S.persona = S.personas.find((p) => p.id === d.conversation.personaId) || S.persona;
   /*
    * 员工已删的会话：**只能看、不能聊**（2026-10-20 用户要求）。
@@ -418,6 +422,13 @@ export async function openConversation(id) {
       <div class="meta">
         <div><b>${esc(d.conversation.title)}</b> ${dissolved ? '' : badge} ${metaSub}</div>
       </div>
+      <button class="icon-btn" id="toNewConv" title="给这个群开一段新会话（一次任务一段；旧段留在聊天记录里）">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
+             stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M20 11.5c0 3.3-3.6 6-8 6-1.2 0-2.3-.2-3.3-.6L4 19l1.2-3.4C4.4 14.6 4 13.1 4 11.5c0-3.3 3.6-6 8-6s8 2.7 8 6z" />
+          <path d="M12 9v5M9.5 11.5h5" />
+        </svg>
+      </button>
       <button class="icon-btn" id="toChatLog" title="聊天记录">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
              stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -427,14 +438,18 @@ export async function openConversation(id) {
         </svg>
       </button>
       ${dissolved ? '' : `<button class="icon-btn" id="toSettings" title="群设置">
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
-          <circle cx="12" cy="12" r="3" />
-          <path d="M12 2.6v2.1M12 19.3v2.1M2.6 12h2.1M19.3 12h2.1M5.4 5.4l1.5 1.5M17.1 17.1l1.5 1.5M18.6 5.4l-1.5 1.5M6.9 17.1l-1.5 1.5" />
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <!-- 跟左栏「设置」同一版圆齿轮（index.html，2026-10-20 用户从候选稿里选的 F）。
+               别再用"圆 + 八根短射线"那版 —— 看着就是个太阳（2026-10-24 用户实报）。 -->
+          <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
+          <circle cx="12" cy="12" r="3"/>
         </svg>
       </button>`}`;
     if (!dissolved) $('toSettings').onclick = () => openGroupDrawer(d.conversation);
     // 群聊天记录（2026-10-20 用户要求）：抽屉列出这个群的会话（含被「不显示」的那条）
     $('toChatLog').onclick = () => openChatLogDrawer(d.conversation);
+    // 新会话（2026-10-24）：解散的群开不了（服务端 E2049），按钮也不给
+    if (!dissolved) $('toNewConv').onclick = () => startFreshConversation(d.conversation);
   } else {
     /*
      * 名字取法：员工还在 → 用他现在的名字（可能改过，personaName 来自 JOIN）；
@@ -450,6 +465,13 @@ export async function openConversation(id) {
       <div class="meta">
         <div><b>${esc(name)}</b> ${badge}</div>
       </div>
+      ${personaGone ? '' : `<button class="icon-btn" id="toNewConv" title="和TA另起一段全新会话 —— 不带之前的上下文；旧会话留在聊天记录里">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
+             stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M20 11.5c0 3.3-3.6 6-8 6-1.2 0-2.3-.2-3.3-.6L4 19l1.2-3.4C4.4 14.6 4 13.1 4 11.5c0-3.3 3.6-6 8-6s8 2.7 8 6z" />
+          <path d="M12 9v5M9.5 11.5h5" />
+        </svg>
+      </button>`}
       <button class="icon-btn" id="toChatLog" title="聊天记录">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
              stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -463,6 +485,8 @@ export async function openConversation(id) {
     if (detail) detail.onclick = () => openDetail(d.conversation.personaId);
     // 聊天记录（2026-10-20 落地）：右侧抽屉列出这个人的全部会话，点一条就回看/续聊
     $('toChatLog').onclick = () => openChatLogDrawer(d.conversation);
+    // 新会话（2026-10-24）：员工都没了，开了也没人接 —— 不给按钮
+    if (!personaGone) $('toNewConv').onclick = () => startFreshConversation(d.conversation);
   }
 
   renderComposerPerm(d);
@@ -471,9 +495,115 @@ export async function openConversation(id) {
   // 把 `runs` 一起给它：失败的运行在库里**没有消息**，只画 messages 就会"说了句话然后没了"
   drawMessages(d.messages, d.conversation.personaName || '', isGroup, d.runs);
   const last = d.runs[0];
-  if (last && last.status === '跑中') attachStream(last.id);
+  if (last && last.status === '跑中') attachStream(last.id, last.personaName);
   renderList();
 }
+
+/**
+ * 聊天页头「新会话」（2026-10-24）：另起一段全新的，旧段留在聊天记录里不删。
+ *   · 单聊 → POST /api/conversations（服务端对单聊**总是新建**，复用是前端「回到聊天」自己的逻辑）；
+ *   · 群   → POST /api/groups/:id/sessions（群本来就是"一次任务一段"）。
+ * 新段对员工是全新上下文：身份与技能会重新注入，他不记得上一段聊过什么 —— 这正是"新会话"的意义。
+ * 口径：点列表/回到聊天 = 续旧；这颗按钮 = 起新。
+ */
+async function startFreshConversation(c) {
+  try {
+    const conv = c.kind === 'group'
+      ? (await post('/api/groups/' + encodeURIComponent(c.groupId) + '/sessions', {})).conversation
+      : (await post('/api/conversations', {
+          personaId: c.personaId,
+          title: '和 ' + ((S.personas ?? []).find((p) => p.id === c.personaId)?.name ?? convDisplayName(c)),
+        })).conversation;
+    // openConversationSafe：这段可能刚被另一个窗口删掉（E2047）—— 那边会说人话并收拾界面
+    await openConversationSafe(conv.id);
+    if (S.conversation?.id !== conv.id) return;
+    await load();
+    $('input').focus();
+  } catch (err) { toastConvErr(err); }
+}
+
+/* ------------------------------------------------ 立成卡（2026-10-24） */
+
+/*
+ * 聊天派活**不进任务看板**（用户定的：不然闲聊一句就派活，看板很快糊掉）。
+ * 立卡的唯一转正口在**输入区「＋」菜单的「任务卡」**（2026-10-24 从页头搬过去的）：
+ * 把最近一轮活立成一张**真卡**（手工卡）—— 看板上好改状态、加描述、关联 PR，
+ * 卡详情页里还能就地讨论；员工详情里聊天投影自动让位（服务端去重），同一件事只出现一次。
+ * 工单会话（kind='exec'）自己就是任务卡，入口那层就不给（app.mjs 开菜单时按 kind 收掉这项）。
+ */
+export async function makeConversationCard(conv) {
+  try {
+    const out = await post('/api/conversations/' + encodeURIComponent(conv.id) + '/card');
+    toast(out?.created ? '已立成任务卡 —— 到项目看板看它（讨论区就接着这场会话）' : '这场会话已经立过卡了');
+  } catch (err) {
+    toastConvErr(err);
+  }
+}
+
+
+
+/* ------------------------------------------------ 员工报的产出路径 → 可点 */
+
+/*
+ * 员工在聊天里报产出只给相对路径（"你打开 design/v1.0.1/06-project-members.html 看一眼"），
+ * 人得自己去目录里翻 —— 主理人 2026-10-24 原话："这个很难受"。
+ * 这里把消息里**真实存在**的文件路径点亮成可点：点击用系统浏览器打开（本机模式走
+ * /api/open；局域网模式服务在别的机器，直接新标签 —— 见 routes/workspace.mjs）。
+ *
+ * 侦测规则（宁缺毋滥，代码 pill 满天飞）：行内代码（非代码块）、无空格、以扩展名结尾，
+ * 且含 / 或属于常见文档扩展名。存在性由服务端裁决（probe=1 只探不拉），结果按
+ * (会话, 路径) 缓存 —— 同一路径不反复探。
+ */
+const FILE_PILL_CACHE = new Map();   // `${convId}|${path}` → true/false
+const FILE_EXT_RE = /\.(html?|png|jpe?g|gif|webp|svg|pdf|md|txt|log|csv|xml|ya?ml|css|mjs|js|json)$/i;
+
+function looksLikeFilePath(t) {
+  if (!t || t.length > 200 || /\s/.test(t)) return false;
+  if (!/\.[A-Za-z0-9]{1,6}$/.test(t)) return false;
+  return t.includes('/') || FILE_EXT_RE.test(t);
+}
+
+/** 点亮一个 pill：挂点击 + 可点样式 */
+function markFilePill(el) {
+  el.dataset.file = '1';
+  el.title = '点开看（系统浏览器）';
+  el.onclick = () => openFilePath(el.textContent.trim());
+}
+
+/** 打开：本机模式让服务端拉系统浏览器；局域网模式自己开新标签 */
+async function openFilePath(p) {
+  const convId = S.conversation?.id;
+  const url = location.origin + '/api/workspace/file?path=' + encodeURIComponent(p)
+    + (convId ? '&conv=' + encodeURIComponent(convId) : '');
+  const local = location.hostname === '127.0.0.1' || location.hostname === 'localhost';
+  try {
+    if (local) await post('/api/open', { url });
+    else window.open(url, '_blank', 'noopener');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+/** 扫一遍聊天里还没检查过的行内代码，把真实文件路径点亮 */
+function linkifyFilePaths() {
+  const convId = S.conversation?.id;
+  if (!convId) return;
+  for (const el of document.querySelectorAll('#chat code:not([data-file-checked])')) {
+    el.dataset.fileChecked = '1';
+    if (el.closest('pre')) continue;                       // 代码块里的不是路径
+    const text = el.textContent.trim();
+    if (!looksLikeFilePath(text)) continue;
+    const key = convId + '|' + text;
+    if (FILE_PILL_CACHE.get(key)) { markFilePill(el); continue; }
+    if (FILE_PILL_CACHE.has(key)) continue;                // 已探过：不存在
+    api(`/api/workspace/file?path=${encodeURIComponent(text)}&conv=${encodeURIComponent(convId)}&probe=1`)
+      .then(() => { FILE_PILL_CACHE.set(key, true); markFilePill(el); })
+      .catch(() => FILE_PILL_CACHE.set(key, false));
+  }
+}
+
+// 消息一动就扫一遍：发消息插入、重画、流式收尾全走 #chat 的 childList —— 一个观察者全兜住。
+// 只挂 childList（markFilePill 改的是属性），扫描自身不会触发自己。
+new MutationObserver(() => linkifyFilePaths())
+  .observe(document.getElementById('chat'), { childList: true, subtree: true });
 
 
 
@@ -491,7 +621,7 @@ export function stampOf(iso) {
 
 
 
-export function bubble(role, text, name, who, showName = false, at = '') {
+export function bubble(role, text, name, who, showName = false, at = '', atts = null, meta = null) {
   const mine = role === 'user';
   const label = mine ? '我' : (who || name || '数字员工');
   // 头像带图（2026-10-22）：优先按名字找员工；群聊消息有 personaName 直接命中，
@@ -501,11 +631,85 @@ export function bubble(role, text, name, who, showName = false, at = '') {
       ?? (S.conversation?.personaId ? S.personas.find((x) => x.id === S.conversation.personaId) ?? null : null));
   // 时间放在气泡**外面**的下方（2026-10-19 用户要求，别塞在气泡里）：绝对定位，不占布局
   const t = at ? stampOf(at) : '';
+  // 群聊显示名字时，名字放气泡**上面**（2026-10-23 用户要求，别挤在气泡里）：
+  // 名字行 + 气泡包进一个纵向列，其余消息保持原结构不动
+  const nameLine = showName && !mine ? `<div class="who-line">${esc(label)}</div>` : '';
+  // 附件（2026-10-23）：图片直接画缩略图，其余文件给一颗可点的 chip（新标签页打开）
+  const attsHtml = attsHtmlOf(atts);
+  // 卡票（2026-10-24）：PM 建卡 / 卡片回执这类消息带 meta，气泡顶上画一张可点的票
+  const ticket = cardTicketHtml(meta);
     return `<div class="row ${mine ? 'me' : ''}">
     ${mine ? smAvatar('我', 'me') : smAvatar(label, '', p)}
-    <div class="bubble">${showName && !mine ? `<div class="who-line">${esc(label)}</div>` : ''}${renderMarkdown(text)}</div>
+    ${nameLine
+      ? `<div class="msg-main">${nameLine}<div class="bubble">${ticket}${renderMarkdown(text)}${attsHtml}</div></div>`
+      : `<div class="bubble">${ticket}${renderMarkdown(text)}${attsHtml}</div>`}
     ${t ? `<div class="btime">${esc(t)}</div>` : ''}
   </div>`;
+}
+
+/*
+ * 卡票（2026-10-24）：`meta = {type:'card', cardId, title, status, assignee}` 的消息，
+ * 气泡顶上画一张票 —— 状态色点 + 标题 + 执行人，点它直达任务卡详情页；
+ * 角落那颗「看板」小按钮去任务看板（次入口，别抢主点击）。
+ *
+ * 票上的字段是**消息时刻的快照**（服务端落 meta 时写死的），不回查实时状态：
+ * 聊天一屏可能好几张票，逐张回查太贵；点进详情页看的是实时的。
+ * 状态色复用看板那套 --st-* 变量（COL_STATUS 反查列 key，class 同名）。
+ *
+ * ⚠️ 反查表必须**惰性建**：chat.mjs 和 projects.mjs 互相 import（循环依赖），
+ * app.mjs 先加载 projects —— 它回头拉 chat 时 COL_STATUS 还在 TDZ 里，
+ * 顶层一取整个模块图就炸（2026-10-24 实测：侧边栏全灭）。别的引用都在函数体内，
+ * 求值晚于两个模块初始化完，没事；只有"模块顶层就要值"的写法会踩。
+ */
+let _colOfStatus = null;
+const colOfStatus = () => (_colOfStatus ??= Object.fromEntries(Object.entries(COL_STATUS).map(([k, v]) => [v, k])));
+
+export function cardTicketHtml(meta) {
+  if (!meta || meta.type !== 'card' || !meta.cardId) return '';
+  const col = colOfStatus()[meta.status] ?? 'other';
+  return `<div class="card-ticket" data-card-ticket="${esc(meta.cardId)}" title="打开任务卡详情">
+    <i class="ct-dot ${esc(col)}"></i>
+    <b class="ct-title">${esc(meta.title || '任务卡')}</b>
+    <span class="ct-status">${esc(meta.status || '')}</span>
+    ${meta.assignee ? `<span class="ct-assignee">@${esc(meta.assignee)}</span>` : ''}
+    <span class="ct-open">查看 →</span>
+    <button type="button" class="ct-board" data-card-board="${esc(meta.cardId)}" title="在任务看板里看它">看板</button>
+  </div>`;
+}
+
+/** 给画出来的卡票接上点击：主点击进卡详情（回程回这场会话），「看板」进任务看板 */
+export function wireCardTickets(root) {
+  (root ?? $('chat')).querySelectorAll('[data-card-ticket]').forEach((el) => {
+    el.onclick = () => {
+      openTaskCardPage(el.dataset.cardTicket, { fromConv: S.conversation?.id ?? null })
+        .catch((e) => toast(e.message, 'error'));
+    };
+  });
+  (root ?? $('chat')).querySelectorAll('[data-card-board]').forEach((el) => {
+    el.onclick = (e) => {
+      e.stopPropagation();
+      openTaskBoard().catch((err) => toast(err.message, 'error'));
+    };
+  });
+}
+
+/** 气泡里的附件区：图片铺缩略图，文件给 chip。空 = 什么也不画。 */
+export function attsHtmlOf(atts) {
+  if (!Array.isArray(atts) || !atts.length) return '';
+  const isImg = (a) => (a.mime || '').startsWith('image/') || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(a.name || '');
+  const imgs = atts.filter(isImg);
+  const files = atts.filter((a) => !isImg(a));
+  const imgHtml = imgs.length
+    ? `<div class="att-imgs">${imgs
+        .map((a) => `<a href="${esc(a.url)}" target="_blank" rel="noopener"><img class="att-img" src="${esc(a.url)}" alt="${esc(a.name)}" title="${esc(a.name)}" loading="lazy"></a>`)
+        .join('')}</div>`
+    : '';
+  const fileHtml = files.length
+    ? `<div class="att-files">${files
+        .map((a) => `<a class="att-file" href="${esc(a.url)}" target="_blank" rel="noopener" title="${esc(a.name)}">📄 ${esc(a.name)}</a>`)
+        .join('')}</div>`
+    : '';
+  return imgHtml + fileHtml;
 }
 
 
@@ -574,7 +778,13 @@ export function failBlock(r) {
 
 
 export function drawMessages(msgs, name, isGroup = false, runs = []) {
-  const items = timelineOf(msgs, runs);
+  /*
+   * `meta.silent` 的消息**不画**（2026-10-24）：那是平台给 agent 的唤醒指令
+   * （卡片回执里 @建卡人"去跟进"那条）—— 它是 run 的触发器，得落库、agent 得读到，
+   * 但它不是人说的话，摊在对话里就成了右边一条"我"没说过的系统话。
+   * 给人看的回执是另一条：执行人名义的汇报，带卡票（见 notifyCardOwner 的注释）。
+   */
+  const items = timelineOf(msgs, runs).filter((it) => it.kind !== 'msg' || !it.m.meta?.silent);
   /*
    * 空会话**什么都不画**（2026-10-20 用户要求）：「和 X 还没有对话 / 在下面说第一句吧」
    * 这两行提示去掉了 —— 输入框就在下面，不需要再教一遍。
@@ -583,11 +793,12 @@ export function drawMessages(msgs, name, isGroup = false, runs = []) {
     ? items
         .map((it) =>
           it.kind === 'msg'
-            ? bubble(it.m.role, it.m.text, name, it.m.personaName, isGroup, it.m.createdAt)
+            ? bubble(it.m.role, it.m.text, name, it.m.personaName, isGroup, it.m.createdAt, it.m.atts, it.m.meta)
             : failBlock(it.r),
         )
         .join('')
     : '';
+  wireCardTickets(); // 画完顺手接上卡票的点击（票是 innerHTML 画出来的，得逐张绑）
   scrollDown();
 }
 
@@ -598,23 +809,110 @@ export const scrollDown = () => { $('chat').scrollTop = $('chat').scrollHeight; 
 
 /* ---------------------------------------------------------------- 发消息 */
 
+/* ------------------------------------------------------- 附件（2026-10-23） */
+
+/** 还没发出去的附件：{file, name, size, mime}。换会话就清空 —— 别把 A 会话的图带到 B 会话 */
+let pendingAtts = [];
+let attSending = false;
+
+const MAX_ATTS = 8;
+
+export function addAtts(fileList) {
+  const files = [...fileList ?? []];
+  if (!files.length) return;
+  for (const f of files) {
+    if (pendingAtts.length >= MAX_ATTS) { toast(`一次最多带 ${MAX_ATTS} 个附件`, 'error'); break; }
+    pendingAtts.push({ file: f, name: f.name || '图片.png', size: f.size, mime: f.type || '', localUrl: URL.createObjectURL(f) });
+  }
+  paintAtts();
+}
+
+export function clearAtts() {
+  for (const a of pendingAtts) { try { URL.revokeObjectURL(a.localUrl); } catch { /* 已失效 */ } }
+  pendingAtts = [];
+  paintAtts();
+}
+
+/** 输入框上方的附件条：文件名 + 大小 + ✕。图片顺便给个小缩略图，让人知道贴了哪张 */
+export function paintAtts() {
+  const strip = $('attStrip');
+  if (!strip) return;
+  strip.classList.toggle('is-hidden', !pendingAtts.length);
+  strip.innerHTML = pendingAtts
+    .map((a, i) => {
+      const kb = a.size >= 1048576 ? `${(a.size / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(a.size / 1024))} KB`;
+      const img = (a.mime || '').startsWith('image/')
+        ? `<img class="att-thumb" src="${esc(a.localUrl)}" alt="">`
+        : '';
+      return `<span class="att-chip" title="${esc(a.name)}">${img}<span class="att-name">${esc(a.name)}</span><span class="att-size">${kb}</span><button type="button" class="att-x" data-att-x="${i}" title="移除">×</button></span>`;
+    })
+    .join('');
+  strip.querySelectorAll('[data-att-x]').forEach((b) => {
+    b.onclick = () => {
+      const [gone] = pendingAtts.splice(Number(b.dataset.attX), 1);
+      try { URL.revokeObjectURL(gone?.localUrl); } catch { /* 已失效 */ }
+      paintAtts();
+    };
+  });
+}
+
+/** 选文件 / 粘贴的公共入口。换会话时清空（openConversation 里调） */
+export function resetAtts() {
+  clearAtts();
+}
+
 export async function send() {
   const text = $('input').value.trim();
-  if (!text || !S.conversation || S.running) return;
+  // 光贴图不说话也能发（IM 的常识）；两者都没有才不动作
+  if ((!text && !pendingAtts.length) || !S.conversation || S.running) return;
+  // 附件还在上传中就别重复触发（上传是 send 里顺序做的，SENDING 只是防抖）
+  if (attSending) return;
   // 说出第一句就不再是"空会话"了 —— 详情页「发消息」的连点复用靠它判断
   S.convEmpty = false;
   $('input').value = '';
   closeMentionPop();
   const name = S.conversation.personaName || S.persona?.name || '数字员工';
+  const convId = S.conversation.id;
+
+  // 附件先传（2026-10-23）：一次一个文件 POST 原始二进制，全成清单才发消息。
+  // 失败就把原话放回输入框 —— 别让人打了半天字因为一张图传挂了全丢。
+  let atts = null;
+  const pending = pendingAtts;
+  if (pending.length) {
+    attSending = true;
+    try {
+      atts = [];
+      for (const a of pending) {
+        const d = await api(`/api/conversations/${encodeURIComponent(convId)}/files?name=${encodeURIComponent(a.name)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': a.mime || 'application/octet-stream' },
+          body: a.file,
+        });
+        atts.push({ name: d.file.name, stored: d.file.stored, size: d.file.size, mime: d.file.mime, url: d.file.url });
+      }
+    } catch (err) {
+      toast(`附件没传上去：${err.message}`, 'error');
+      $('input').value = text;
+      return;
+    } finally {
+      attSending = false;
+    }
+  }
 
   $('chat').querySelector('.empty')?.remove();
-  $('chat').insertAdjacentHTML('beforeend', bubble('user', text, name, undefined, false, new Date().toISOString()));
+  $('chat').insertAdjacentHTML('beforeend', bubble('user', text, name, undefined, false, new Date().toISOString(), atts));
   scrollDown();
+  clearAtts();
 
   try {
     // 流程走的是 issue：在实例页里说话，不在这儿。这里就是普通聊天
-    const d = await post('/api/conversations/' + encodeURIComponent(S.conversation.id) + '/messages', { text });
-    attachStream(d.runId);
+    const d = await post('/api/conversations/' + encodeURIComponent(convId) + '/messages', { text, atts });
+    attachStream(d.runId, d.personaName);
+    // 群里 @ 多人（2026-10-24）：只有第一个当场开跑，其余排队 —— 说一声，别让人以为漏派了。
+    // 前一个跑完服务端自动补派下一个，聊天页重开会话时会自己接上那条 run 的实时流。
+    if (Array.isArray(d.queued) && d.queued.length) {
+      toast(`已派给 ${d.personaName}；排队中：${d.queued.join('、')}（前一个跑完自动接上）`);
+    }
     // 立刻刷一次左侧列表。
     // 服务端在写入这条消息时就会把它从"已从列表移除"里恢复（钉钉也是这个语义：
     // 删掉会话后只要有新消息，会话就回到列表）。但列表数据是前端缓存的，
@@ -661,14 +959,17 @@ export async function stopChatRun() {
 
 
 
-export function attachStream(runId) {
+export function attachStream(runId, whoName = '') {
   if (S.es) S.es.close();
   S.running = true;
   chatRunningId = runId;
   setBusy(true);
   setHeaderBadge('跑中', TYPING);
 
-  const name = S.conversation.personaName || S.persona?.name || '数字员工';
+  // 打字气泡的头像按名字找人（2026-10-23 修正）：群聊会话上没有 personaName，
+  // 得用这次运行自己的执行者（POST 回体 / 运行记录 join 出来的 personaName），
+  // 否则兜底成「数字员工」→ 头像显示成「数」字块
+  const name = whoName || S.conversation.personaName || S.persona?.name || '数字员工';
   const convId = S.conversation.id;
   const id = 'live-' + runId;
   $('chat').insertAdjacentHTML('beforeend',
@@ -679,7 +980,11 @@ export function attachStream(runId) {
   scrollDown();
 
   const body = document.querySelector('#' + id + ' .bubble');
-  const showThinking = S.conversation?.showThinking === 1;
+  // 思考过程开关跟随**这轮的执行者**（2026-10-24 修群聊失效）：
+  // 会话上的 showThinking 是拿 conversations.personaId JOIN 员工表带出来的 ——
+  // 单聊有值；群建会话时 personaId 故意置空（见 store/conversations.mjs），JOIN 出来是
+  // NULL，以前这里就恒为 false，群里永远不显示。现在 NULL 时按正在干活的那个人的开关来。
+  const showThinking = (S.conversation?.showThinking ?? personaByName(name)?.showThinking) === 1;
   const add = (cls, text, asHtml = false) => {
     body.querySelector('.typing')?.remove();
     const d = document.createElement('div');
@@ -851,9 +1156,20 @@ export function updateMentionPop() {
     <div class="mp-list">${matches
       .map((m, i) => {
         const isAssistant = S.conversation?.assistantPersonaId === m.personaId;
+        /*
+         * 头像（2026-10-23 用户实报「@ 选人弹层还是字母头像」）：按 personaId 从
+         * S.personas 查头像文件，有图就把图铺在字母上面 —— 跟群成员磁贴（groups.mjs）
+         * 同一套哲学：图盖字母、加载失败 onerror 自删露字母，永远不破相。
+         * mp-avatar 需要相对定位才能铺 img，CSS 里单独补了这条。
+         */
+        const p = (S.personas ?? []).find((x) => x.id === m.personaId);
+        const img =
+          p?.avatar && AVATAR_FILE.test(String(p.avatar))
+            ? `<img class="av-img" src="/avatars/${encodeURIComponent(String(p.avatar))}" alt="" onerror="this.remove()">`
+            : '';
         return `<div class="mp-item${i === mentionPop.index ? ' active' : ''}" data-i="${i}">
-          <div class="mp-avatar">${esc(initial(m.name))}</div>
-          <div class="mp-name">${esc(m.name)}</div>
+          <div class="mp-avatar">${esc(initial(m.name))}${img}</div>
+          <div class="mp-name">${esc(m.name)}${p?.role ? `<span class="mp-role">${esc(String(p.role).split(' · ')[0].trim())}</span>` : ''}</div>
           ${isAssistant ? '<span class="mp-tag">群助手</span>' : ''}
         </div>`;
       })
@@ -901,6 +1217,9 @@ export async function openDetail(personaId) {
     detailSave.flush = null;
     try { await f(); } catch { /* 存不上也别挡着开页面 */ }
   }
+  // 从哪儿进的详情（2026-10-24）：消息页进来按钮叫「回到聊天」，通讯录进来叫「发消息」——
+  // 行为相同（都接着最近那段聊），文案按用户的心智分开说。
+  S.detailFrom = S.nav;
   setRoute('persona', { id: personaId });
   if (S.es) { S.es.close(); S.es = null; S.running = false; setBusy(false); }
   /*
@@ -936,10 +1255,10 @@ export const SKILL_ICON = '<svg viewBox="0 0 24 24" width="15" height="15" fill=
  * 人在这页要回答的问题就一句："他现在手上有什么、哪件卡着"。
  */
 export const PERSONA_TASK_GROUPS = [
-  { label: '要人管', hint: '停下等人 · 失败 · 待人确认', cols: ['blocked', 'failed', 'confirm'] },
+  { label: '要人管', hint: '已阻塞 · 失败 · 待验收', cols: ['blocked', 'failed', 'review'] },
   { label: '进行中', cols: ['doing'] },
   { label: '还没开跑', hint: '待办 · 想法', cols: ['todo', 'idea'] },
-  { label: '已完成', cols: ['done'] },
+  { label: '收场', hint: '已完成 · 已取消', cols: ['done', 'cancelled'] },
   { label: '其他', cols: ['other'] },
 ];
 
@@ -1000,6 +1319,7 @@ export function personaTasksHtml(b) {
   }).join('');
   return `${blocks}
     <div class="pt-note">跟任务看板同源：<b>流程的每次办理</b> + <b>聊天最近一轮</b> + <b>一张手工卡</b>，各算一件。
+      聊天派活不进看板 —— 想让某轮活进看板，在聊天页头把它<b>立成卡</b>（这一页照收）。
       点卡片能跳到它本身（流程实例 / 会话 / 项目看板）。</div>`;
 }
 
@@ -1034,17 +1354,17 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
   // 2026-10-20 用户要求：通讯录详情**不做面包屑**，标题就固定「通讯录」。
   if (S.nav === 'contacts') setListTitle('通讯录');
   const rt = runtimes.find((r) => r.id === persona.runtime);
-  // 身份/技能锁定（2026-10-23；2026-10-22 用户定：内置员工喜儿按专家团那个模式收编）
+  // 身份/技能锁定（2026-10-23；2026-10-22 用户定：内置员工按专家团那个模式收编）
   // 两种来源同一套语义，判据与服务端 experts.lockKindOf 对齐：
   //   expert  = 专家库雇来的（固定 id 前缀 p-expert-），随专家包固定，出路是解聘后自建；
-  //   builtin = 出厂的（喜儿），随平台固定，出路是另建一个员工。
+  //   builtin = 出厂的（现在是崔老三），随平台固定，出路是另建一个员工。
   // 锁的只是「他是谁 + 他会什么」；运行时/沙箱/工作目录/模型/头像仍旧可改。
   const expertLocked = String(persona.id || '').startsWith('p-expert-');
   const builtinLocked = !expertLocked && !!persona.builtin;
   const identityLocked = expertLocked || builtinLocked;
   const lockHint = expertLocked
     ? '雇佣员工的名字、岗位与职责身份随专家包固定，不能修改 —— 想定制就解聘后自建一个员工。'
-    : '喜儿是内置员工，名字、岗位与职责身份随平台固定，不能修改 —— 想按自己的需要定制，就另建一个员工。';
+    : '内置员工的名字、岗位与职责身份随平台固定，不能修改 —— 想按自己的需要定制，就另建一个员工。';
   let extraRoots = [];
   try { extraRoots = JSON.parse(persona.rootDirs || '[]'); } catch { extraRoots = []; }
   const runRows = runs.length
@@ -1080,7 +1400,7 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
           </div>
         </div>
         <div class="hero-actions">
-          <button class="primary" id="dMsg">发消息</button>
+          <button class="primary" id="dMsg" title="打开和TA的聊天 —— 有会话就接着最近那段聊，不会另开新会话">${S.detailFrom === 'messages' && (S.conversations ?? []).some((c) => c.kind === 'direct' && c.personaId === persona.id) ? '回到聊天' : '发消息'}</button>
           <div class="hero-more">
             <button type="button" class="hero-more-btn" id="dMore" title="更多操作">⋯</button>
             <div class="hero-more-menu" id="dMoreMenu" hidden>
@@ -1119,12 +1439,12 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
                 }
                 <div class="form-row">
                   <div class="row-label">名字</div>
-                  <input id="dName" value="${esc(persona.name)}" ${identityLocked ? `readonly title="${expertLocked ? '雇佣员工的名字随专家包固定' : '喜儿的名字随平台固定'}"` : ''} />
+                  <input id="dName" value="${esc(persona.name)}" ${identityLocked ? `readonly title="${expertLocked ? '雇佣员工的名字随专家包固定' : '内置员工的名字随平台固定'}"` : ''} />
                 </div>
                 <div class="form-row">
                   <div class="row-label">岗位</div>
                   <div>
-                    <input id="dRole" list="roleSuggest" placeholder="比如：研发（留空也行）" value="${esc(persona.role || '')}" ${identityLocked ? `readonly title="${expertLocked ? '雇佣员工的岗位随专家包固定' : '喜儿的岗位随平台固定'}"` : ''} />
+                    <input id="dRole" list="roleSuggest" placeholder="比如：研发（留空也行）" value="${esc(persona.role || '')}" ${identityLocked ? `readonly title="${expertLocked ? '雇佣员工的岗位随专家包固定' : '内置员工的岗位随平台固定'}"` : ''} />
                   </div>
                 </div>
                 <div class="form-row top">
@@ -1138,7 +1458,7 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
                       <div class="instr-head">
                         <div class="counter" id="dInstrCount"></div>
                         ${
-                          /* 身份锁定：被锁员工（雇佣专家 / 内置喜儿）不画预览/编辑切换 —— 只读预览，下面的监听都带 ?. 兜底 */
+                          /* 身份锁定：被锁员工（雇佣专家 / 内置员工）不画预览/编辑切换 —— 只读预览，下面的监听都带 ?. 兜底 */
                           identityLocked
                             ? ''
                             : `<div class="seg seg-sm" id="dInstrSeg">
@@ -1188,6 +1508,14 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
                   </div>
                 </div>
                 <div class="form-row">
+                  <div class="row-label">并发数</div>
+                  <!-- 并发数（2026-10-24，对标 Multica）：这一个人名下同时最多几个活在跑。
+                       空着 = 默认 6；服务端钳到 [1, 20]，手滑填坏也不会打断保存。 -->
+                  <input id="dMaxParallel" type="number" min="1" max="20" step="1"
+                         style="width:120px;text-align:center" value="${persona.maxParallel ?? ''}"
+                         placeholder="6" />
+                </div>
+                <div class="form-row">
                   <div class="row-label">思考过程</div>
                   <!-- 开关（2026-10-20 用户："改成开关，文案不要"；"鼠标悬停提示去掉"）：
                        开关本身就是状态，卡面与悬停都不留说明文字 -->
@@ -1218,7 +1546,7 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
               expertLocked
                 ? '雇佣员工的技能随专家包固定，不能添加、解绑或停用；不合适就解聘换人，想定制就自建一个员工。'
                 : builtinLocked
-                  ? '喜儿的技能随平台固定，不能添加、解绑或停用；想挂别的技能就另建一个员工。'
+                  ? '内置员工的技能随平台固定，不能添加、解绑或停用；想挂别的技能就另建一个员工。'
                   : '关闭＝暂停使用（仍保留分配）；解绑＝取消分配（技能还在库里）。'
             }</div>
           </div>
@@ -1541,30 +1869,30 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
   renderInstrView();
 
   /*
-   * 「发消息」= **开一段新的 1:1 会话**（2026-10-20，PRD P0-4）。
-   * 一次任务一段，上下文不串味 —— 不再复用这个人最近那段（那是 `POST /api/personas/:id/open`
-   * 的语义，服务端实现保留不动，只是详情页不再走它）。
-   *
-   * 连点保护（P1-2，主理人已拍板"复用"）：当前就停在这个人一段**一条消息都没有**的会话上
-   * → 直接复用它，不再堆空壳。判断依据是 openConversation 本来就取到的 `d.messages`
-   * （见 S.convEmpty）—— 零额外请求、零新字段。
+   * 「回到聊天 / 发消息」= **接着最近那段继续聊**（2026-10-24 用户拍板，改掉 2026-10-20
+   * "每次新开一段"的旧口径 —— 那个决定的动机是"想另起一段没入口"，现在聊天页头有
+   * 「新会话」按钮专管另起，这里的口径随之归位，跟微信一致：名片「发消息」进的就是
+   * 现有聊天）。有这个人的会话 → 打开**最近那段**（服务端按 updatedAt DESC 排好）；
+   * 一段都没有（第一次找TA，或只剩被「不显示」收着的）→ 新建第一段。
+   * 按钮文案跟着入口走：消息页点进详情 = 「回到聊天」，通讯录进来 = 「发消息」，行为相同。
    */
   const toMessages = async () => {
     try {
-      /*
-       * 复用判据末尾多一个"这段还在列表里"：被「不显示」收着的空会话**不复用** ——
-       * 复用既不新建也不发消息，这段就永远没有回列表的机会（用户实报，
-       * 群那侧先踩到：发起会话后列表里一直不出现，见 toGroupMessages）。
-       * 不复用就会走下面的新建，新会话不带 hiddenAt，行自然回来。
-       */
-      const reuse =
-        !!S.conversation &&
-        S.conversation.kind === 'direct' &&
-        S.conversation.personaId === persona.id &&
-        S.convEmpty &&
-        (S.conversations ?? []).some((c) => c.id === S.conversation.id);
-      const convId = reuse
-        ? S.conversation.id
+      // 回到哪段（2026-10-24 用户实报：聊天中途进详情再回来，落到了后来留下的空壳上）：
+      //   ① 你**正在聊的那段**最优先 —— "回到"就是回到刚才那儿；
+      //   ② 否则最近**真聊过**的一段（空壳让位，和左栏代表会话同一个口径）；
+      //   ③ 一段都没有（第一次找TA，或只剩被「不显示」收着的）→ 新建第一段。
+      const mine = (S.conversations ?? []).filter((c) => c.kind === 'direct' && c.personaId === persona.id);
+      const current = S.conversation?.kind === 'direct' && S.conversation.personaId === persona.id ? S.conversation : null;
+      const target = current
+        ?? [...mine].sort((a, b) => {
+          const ae = !(a.messageCount > 0);
+          const be = !(b.messageCount > 0);
+          if (ae !== be) return ae ? 1 : -1;
+          return String(b.updatedAt).localeCompare(String(a.updatedAt));
+        })[0];
+      const convId = target
+        ? target.id
         : (await post('/api/conversations', { personaId: persona.id, title: `和 ${persona.name}` })).conversation.id;
       setNav('messages');
       showView('chat');
@@ -1601,6 +1929,8 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
     cwd: $('dCwd').value,
     rootDirs: $('dRoots').value.split('\n').map((s) => s.trim()).filter(Boolean),
     showThinking: $('dThink').checked,
+    // 空着 = 恢复默认（null）；数字服务端会钳位，这里只管传
+    maxParallel: $('dMaxParallel').value.trim() === '' ? null : Number($('dMaxParallel').value),
   });
   let lastSaved = JSON.stringify(collect());
   let saving = false;
@@ -1610,7 +1940,7 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
     const payload = collect();
     if (!payload.name.trim()) { setSaveState('名字不能空 · 未保存', 'bad'); return false; }
     const json = JSON.stringify(payload);
-    if (json === lastSaved) { setSaveState('已保存', 'ok'); return true; }
+    if (json === lastSaved) { setSaveState(''); return true; }
     if (saving) { saveQueued = true; return false; }
     saving = true;
     setSaveState('保存中…', 'wait');
@@ -1631,7 +1961,10 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
         const roleEl = $('dRolePill');
         if (roleEl) { roleEl.textContent = p.role || ''; roleEl.style.display = p.role ? '' : 'none'; }
         const av = $('detailView')?.querySelector('.p-head .avatar');
-        if (av) av.textContent = initial(p.name);
+        // 整体重建而不是改 textContent：头像里除了字母还有**图片层**（<img class="av-img">，
+        // 2026-10-22 加），`textContent =` 会把子节点全清掉 —— 切运行时触发自动保存，
+        // 保存一下头像图片就没了（2026-10-24 实报）。重建顺带把色系（名字哈希）一起刷新。
+        if (av) av.outerHTML = personaAvatar(p);
         // 左栏 / 会话里的名字也跟着变（只跟内存和左栏打交道，不重画详情页）
         (S.conversations || []).forEach((c) => { if (c.personaId === p.id) c.personaName = p.name; });
         if (S.conversation?.personaId === p.id) S.conversation.personaName = p.name;
@@ -1641,7 +1974,7 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
           renderList();
         }
       }
-      setSaveState('已保存', 'ok');
+      setSaveState(''); // 存成功不出声（2026-10-24 用户："已保存"提示不要了）—— 保存失败才说话
       return true;
     } catch (err) {
       setSaveState('保存失败：' + (err?.message ?? '服务异常'), 'bad');
@@ -1656,7 +1989,7 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
   detailSave.flush = (opts) => saveNow(opts);
 
   // 输入框：敲字防抖；失焦立刻存（没改动时 saveNow 按 lastSaved 直接跳过）
-  for (const id of ['dName', 'dRole', 'dInstr', 'dCwd', 'dRoots']) {
+  for (const id of ['dName', 'dRole', 'dInstr', 'dCwd', 'dRoots', 'dMaxParallel']) {
     $(id)?.addEventListener('input', () => scheduleSave(700));
     $(id)?.addEventListener('blur', () => saveNow?.());
   }

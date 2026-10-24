@@ -10,17 +10,18 @@
  *      同一张卡重复巡检只更新标题描述，**绝不覆盖人拖过的状态**）；
  *   ② **收旧状态** —— 已经关联了 PR 的卡，逐张再查一次。PR 在 GitHub 上被合并后不会再出现在
  *      "open" 列表里（①永远发现不了），只有这一半能把卡从「开着」改成「已合并」，
- *      并把「进行中」收成「待确认」。
+ *      并把「进行中」收成「待验收」。
  *
  * 边界（都写死在这里，不改）：
  *   · **只读** GitHub，不评论、不合、不改分支；
- *   · 卡片状态只按 `afterMerged` 那条规则动（进行中 → 待确认），别的列一律不碰；
+ *   · 卡片状态只按 `afterMerged` 那条规则动（进行中 → 待验收），别的列一律不碰；
  *   · 一次最多查 30 条 open（列表接口的分页上限），卡上关联的 PR 逐张查没有上限但有速率约束 ——
  *     所以节拍默认 30 分钟，别调太密。
  */
 import * as store from './store.mjs';
 import * as git from './git-repos.mjs';
 import { upsertRepoCard, afterMerged } from './project-tasks.mjs';
+import { startPrReview, REVIEW_MARK } from './pr-review.mjs';
 
 const clip = (s, n) => {
   const t = String(s ?? '').replace(/\s+/g, ' ').trim();
@@ -102,6 +103,7 @@ export async function prScan({ config = {} } = {}) {
   let created = 0;
   let updated = 0;
   let refreshed = 0;
+  let reviewed = 0;
   const failed = [];
 
   for (const repo of repos) {
@@ -110,6 +112,8 @@ export async function prScan({ config = {} } = {}) {
       failed.push(`${repo.fullName}：找不到落到哪个项目`);
       continue;
     }
+    // 仓库绑了管理员（且人在）才走"审阅"这条路；没绑就完全是 2026-10-17 的老行为
+    const keeperOk = !!(repo.keeperPersonaId && store.getPersona(repo.keeperPersonaId));
 
     let pulls = [];
     try {
@@ -119,8 +123,38 @@ export async function prScan({ config = {} } = {}) {
       continue; // 这个仓库连 PR 都拉不到，issue 也没必要试（多半是同一个原因：令牌/权限）
     }
     for (const pr of pulls) {
-      const out = upsertRepoCard({ projectId: project.id, ...prCardOf(repo.fullName, pr) });
+      const card = prCardOf(repo.fullName, pr);
+      /*
+       * **别冲掉管理员写过的结论**（2026-10-23，FR-10）：这张卡上已经有「管理员审阅」
+       * 段落的话，描述原样保住 —— 巡检的模板文本（"结论：待审"）只该管还没审过的卡。
+       * 没这条，审完的卡下个节拍就被打回"待审"，管理员等于白审。
+       */
+      const existing = store.getProjectTaskByExternalKey(project.id, card.key);
+      if (existing?.description?.includes(REVIEW_MARK)) card.description = existing.description;
+      const out = upsertRepoCard({ projectId: project.id, ...card });
       out.created ? created++ : out.changed && updated++;
+
+      /*
+       * **新改动才审**（PRD 第七节：巡检便宜、审阅才花钱，两者频率解耦）：
+       * 以 head.sha 为准 —— PR 改描述不算新，推了新提交才算。seen 记在 meta 表
+       * （`prseen:{repo}#{n}`），跨重启。
+       *   · 派审失败不记 seen：下个节拍重试（busy/网络抖动都是暂时的）；
+       *   · 草稿、没绑管理员：记 seen 但不审 —— 别每个节拍都惦记同一件事。
+       */
+      const seenKey = `prseen:${repo.fullName}#${pr.number}`;
+      if (pr.headSha && store.getMetaValue(seenKey) !== pr.headSha) {
+        if (keeperOk && !pr.draft) {
+          try {
+            await startPrReview({ repo: repo.fullName, pr, projectId: project.id });
+            store.setMetaValue(seenKey, pr.headSha);
+            reviewed++;
+          } catch (e) {
+            failed.push(`PR #${pr.number} 审阅没派出去：${errMsg(e)}`);
+          }
+        } else {
+          store.setMetaValue(seenKey, pr.headSha);
+        }
+      }
     }
 
     try {
@@ -158,7 +192,13 @@ export async function prScan({ config = {} } = {}) {
   // 一条都没成 = 这次巡检是失败的（别用"成功"把真实原因盖掉）；部分失败只写在结论里
   if (failed.length === repos.length) throw new Error(failed[0]);
 
-  const parts = [`新建 ${created} 张`, `更新 ${updated} 张`, `PR 状态变化 ${refreshed} 张`, `共查 ${repos.length} 个仓库`];
+  const parts = [
+    `新建 ${created} 张`,
+    `更新 ${updated} 张`,
+    `PR 状态变化 ${refreshed} 张`,
+    reviewed ? `新派出审阅 ${reviewed} 个` : null,
+    `共查 ${repos.length} 个仓库`,
+  ].filter(Boolean);
   if (failed.length) parts.push(`${failed.length} 处没查成：${failed[0]}`);
-  return { summary: parts.join('，'), created, updated, refreshed, failed };
+  return { summary: parts.join('，'), created, updated, refreshed, reviewed, failed };
 }

@@ -56,7 +56,8 @@ export async function handleGroup(req, res, url) {
     for (const s of store.listGroupSessions(id)) {
       const running = store.activeRun(s.id);
       if (running) {
-        runs.getRun(running.id)?.abortController?.abort();
+        // requestStop：掐进程 + 看门狗（裸 abort 等不来退出通知会把运行永远挂在「跑中」）
+        runs.requestStop(running.id);
         stopped = running.id;
         break;
       }

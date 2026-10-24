@@ -1,6 +1,6 @@
 /* settings.mjs —— 设置、关于、额度。
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
-import { esc, setRoute, setTheme } from './shell.mjs';
+import { esc, setRoute, setTheme, toast } from './shell.mjs';
 import { api, failHtml, post, showFail } from './ui.mjs';
 import { headRow, renderPlugins, renderRuntimes, rtLoading } from './connectors.mjs';
 import { renderBackup } from './machine.mjs';
@@ -29,6 +29,7 @@ export const SETTINGS_SECTIONS = [
   ['plugins', '插件', '扩展点'],
   ['skills', '技能', '给数字员工用的能力包'],
   ['code', '代码托管', '连接 GitHub、接入仓库'],
+  ['aiimage', '生图服务', '数字员工生成图片的通道'],
   ['about', '关于', '版本与说明'],
 ];
 
@@ -51,6 +52,7 @@ export function openSettings(section) {
   if (S.settingsSection === 'quota') return renderQuota();
   if (S.settingsSection === 'skills') return renderSkillCards();
   if (S.settingsSection === 'code') return renderGitRepos();
+  if (S.settingsSection === 'aiimage') return renderImageAi();
   if (S.settingsSection === 'about') return renderAbout();
   if (S.settingsSection !== 'prefs') return;
 
@@ -82,6 +84,121 @@ export function openSettings(section) {
 
   $('themeSeg').querySelectorAll('[data-theme-opt]').forEach((el) => {
     el.onclick = () => setTheme(el.dataset.themeOpt);
+  });
+}
+
+
+
+/* ---------------------------------------------------------------- 生图服务 */
+
+/**
+ * 生图服务（2026-10-23）：数字员工生成图片的通道，技能「班底 · 头像生成手册」教员工 curl 它。
+ *
+ * 形态照抄代码托管的「居中紧凑簇」（.gr-conn）：标签 | 输入框(≤520px) | 按钮位，
+ * 状态行压在输入框正下方 —— 这里是三行（地址 / Key / 模型），所以加了 .stack 修饰类拉开行距。
+ * Key 的口径与 GitHub 令牌一致：保存后只回显掩码，点「修改」才解锁重填；
+ * 保存时 Key 留空 = 保留原值（服务端 writeConfig 的语义），改个模型名不用重贴 Key。
+ */
+export async function renderImageAi() {
+  S.settingsSection = 'aiimage';
+  const view = $('settingsView');
+  view.innerHTML = rtLoading('生图服务');
+  let cfg = null;
+  try {
+    cfg = await api('/api/ai/image-config');
+  } catch (e) {
+    view.innerHTML = `${headRow('<b>生图服务</b>')}<div class="empty">${failHtml(e)}</div>`;
+    return;
+  }
+  const configured = !!cfg?.configured;
+
+  view.innerHTML = `
+    ${headRow('<b>生图服务</b>')}
+    <div class="detail-body">
+      <section class="set-sec">
+        <div class="set-head"><b>生图通道</b><span class="set-tag">OpenAI 兼容 images API</span></div>
+        <div class="set-box">
+          <div class="gr-conn stack">
+            <div class="gr-conn-row">
+              <span class="row-label">接口地址</span>
+              <input id="aiBase" value="${esc(cfg?.baseUrl ?? '')}" autocomplete="off" spellcheck="false"
+                     placeholder="https://api.siliconflow.cn/v1（填到 /v1 这级）" />
+              <span></span>
+            </div>
+            <div class="gr-conn-row">
+              <span class="row-label">API Key</span>
+              ${
+                configured
+                  ? `<input id="aiKey" class="locked" type="password" value="${esc(cfg?.keyHint ?? '')}" readonly data-locked="1"
+                          aria-label="已保存的 Key，只显示掩码" autocomplete="off" />
+                     <button id="aiKeyEdit">修改</button>`
+                  : `<input id="aiKey" type="password" placeholder="粘贴 API Key（保存后只显示掩码）" autocomplete="off" />
+                     <span></span>`
+              }
+            </div>
+            <div class="gr-conn-row">
+              <span class="row-label">模型</span>
+              <input id="aiModel" value="${esc(cfg?.model ?? '')}" autocomplete="off" spellcheck="false"
+                     placeholder="如 Kwai-Kolors/Kolors" />
+              <span></span>
+            </div>
+            <div class="gr-conn-actions">
+              <button class="primary" id="aiSave">保存配置</button>
+              <button id="aiTest">测试连接</button>
+            </div>
+            <div class="gr-conn-status" id="aiStatus">${
+              configured
+                ? `<b style="color:var(--ok)">已配置</b> —— 数字员工可生成图片，点「测试连接」验证`
+                : '未配置 —— 数字员工生成图片会失败（技能会提示用户来填）'
+            }</div>
+          </div>
+          <p class="set-hint">填任意 OpenAI 兼容的生图服务（SiliconFlow / 火山方舟 / 混元 / 自建中转）。
+          Key 存在本机数据目录，不上传、不进日志；数字员工通过技能「班底 · 头像生成手册」调用它生成头像等图片。</p>
+        </div>
+      </section>
+    </div>`;
+
+  const status = (html) => { $('aiStatus').innerHTML = html; };
+  const keyInput = () => $('aiKey');
+
+  /* 「修改」解锁 Key 框：清掉掩码变可编辑，语义是"这次保存会覆盖旧 Key" */
+  $('aiKeyEdit')?.addEventListener('click', () => {
+    const k = keyInput();
+    k.readOnly = false;
+    k.classList.remove('locked');
+    k.removeAttribute('data-locked');
+    k.value = '';
+    k.placeholder = '重新粘贴 API Key（留空则保留原值）';
+    k.focus();
+    $('aiKeyEdit').textContent = '已解锁';
+    $('aiKeyEdit').disabled = true;
+  });
+
+  $('aiSave')?.addEventListener('click', async () => {
+    const body = { baseUrl: $('aiBase').value.trim(), model: $('aiModel').value.trim() };
+    const k = keyInput();
+    /* 掩码态（data-locked=1）说明用户没动 Key —— 不传，服务端保留原值 */
+    if (!k.dataset.locked) body.apiKey = k.value.trim();
+    try {
+      await api('/api/ai/image-config', { method: 'PUT', body: JSON.stringify(body) });
+      toast('已保存', 'ok');
+      renderImageAi();
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  });
+
+  $('aiTest')?.addEventListener('click', async () => {
+    status('<span style="color:var(--dim)">测试中…</span>');
+    try {
+      const r = await api('/api/ai/image-test', { method: 'POST', body: '{}' });
+      status(
+        `<b style="color:var(--ok)">连接正常</b>` +
+          (r.modelListed === null ? '（服务未提供模型清单）' : r.modelListed ? ` —— 模型在服务清单里（共 ${r.models} 个）` : ` —— <b style="color:var(--warn,#c77d2e)">注意：模型「${esc(cfg?.model ?? '')}」不在服务清单（${r.models} 个）里，请核对拼写</b>`),
+      );
+    } catch (e) {
+      status(`<b style="color:var(--bad,#c0504d)">连不上</b> —— ${esc(e.message)}`);
+    }
   });
 }
 

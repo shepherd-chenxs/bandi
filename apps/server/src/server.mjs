@@ -18,9 +18,10 @@ import * as sshExec from './ssh-exec.mjs';
 import * as connectors from './connectors.mjs';
 import * as catalog from './catalog.mjs';
 import * as cliModels from './cli-models.mjs';
-import { dispatchToThread, personaRoots } from './dispatch.mjs';
+import { dispatchToThread, drainGroupQueue, personaRoots } from './dispatch.mjs';
 import { ensureCliInstalled } from './cli-install.mjs';
 import * as workflows from './workflows.mjs';
+import * as prReview from './pr-review.mjs';
 import * as quota from './quota.mjs';
 import * as status from './status.mjs';
 import { projectTasks, allTasks, personaTasks, createProjectTask, updateProjectTask, startProjectTask, onTaskRunFinished, afterMerged, upsertRepoCard, ensureTaskCardForStep } from './project-tasks.mjs';
@@ -32,7 +33,9 @@ import * as localMode from './local-mode.mjs';
 import * as discover from './discover.mjs';
 import * as lanAnnounce from './lan-announce.mjs';
 import { handleConversation } from './routes/conversation.mjs';
+import { handleEvents } from './routes/events.mjs';
 import { handlePersona } from './routes/persona.mjs';
+import { handleAgentCards } from './routes/agent-cards.mjs';
 import { handleGroup } from './routes/group.mjs';
 import { handleExpert } from './routes/expert.mjs';
 import { handleSkill } from './routes/skill.mjs';
@@ -42,11 +45,13 @@ import { handleNodeWork } from './routes/nodeWork.mjs';
 import { handleRuntime } from './routes/runtime.mjs';
 import { handlePluginAction } from './routes/plugin.mjs';
 import { handleProject } from './routes/project.mjs';
+import { handleWorkspace } from './routes/workspace.mjs';
 import { handleStatus } from './routes/status.mjs';
 import { handleFs } from './routes/fs.mjs';
 import { handleWorkflow } from './routes/workflow.mjs';
 import { handleSsh } from './routes/ssh.mjs';
 import { handleGit } from './routes/git.mjs';
+import { handleImageAi } from './routes/imageai.mjs';
 import { handleRun } from './routes/run.mjs';
 import { handleSchedules } from './routes/schedules.mjs';
 import { handleLocal, supervisorModule } from './routes/local.mjs';
@@ -155,13 +160,14 @@ const routes = {
   },
 
   /**
-   * 项目进度总览 —— 「项目面板」插件的数据源（只读）。
+   * 项目进度总览 —— 「研发面板」（插件 project-panel）的数据源（只读）。
    *
    * 项目清单来自平台自己的项目账本；进度现读各项目根下的 `.bandi/status.yaml`。
    * 读不到的项目**照样列出来**（标「未纳管」），不自动删、不猜。
    */
   'GET /api/status/projects': async (req, res) => {
-    sendJson(res, 200, { projects: status.listProjectCards(store.listProjects()) });
+    // 人名由这一层查（status.mjs 只读文件、不碰库；见 routes/status.mjs 的说明）
+    sendJson(res, 200, { projects: status.listProjectCards(store.listProjects(), (id) => store.getPersona(id)) });
   },
 
   /** 服务器登记总览 —— 只出安全字段（不出私钥路径）。界面插件的数据源 */
@@ -411,17 +417,29 @@ const server = http.createServer(async (req, res) => {
 
     if (routes[key]) return await routes[key](req, res);
 
+    // 全局 SSE（/api/events）：挂在链头 —— 长命连接，别让它在别的 handler 里排队
+    const handledEvents = await handleEvents(req, res, url);
+    if (handledEvents !== false) return;
+
     const handledConversation = await handleConversation(req, res, url);
     if (handledConversation !== false) return;
 
     const handledPersona = await handlePersona(req, res, url);
     if (handledPersona !== false) return;
 
+    // 员工的"工作证"接口（建卡）：挂在 persona 之后，身份/权限自成一处（见 agent-auth）
+    const handledAgentCards = await handleAgentCards(req, res, url);
+    if (handledAgentCards !== false) return;
+
     const handledExpert = await handleExpert(req, res, url);
     if (handledExpert !== false) return;
 
     const handledProject = await handleProject(req, res, url);
     if (handledProject !== false) return;
+
+    // 工作区文件口 + 系统浏览器打开（2026-10-24）：员工报的产出路径，点一下就能看
+    const handledWorkspace = await handleWorkspace(req, res, url);
+    if (handledWorkspace !== false) return;
 
     const handledStatus = await handleStatus(req, res, url);
     if (handledStatus !== false) return;
@@ -466,6 +484,9 @@ const server = http.createServer(async (req, res) => {
     const handledSchedules = await handleSchedules(req, res, url);
     if (handledSchedules !== false) return;
 
+    const handledImageAi = await handleImageAi(req, res, url);
+    if (handledImageAi !== false) return;
+
     fail(res, 404, 'E2036', '没有这个接口');
   } catch (err) {
     // 请求本身有问题 → 400（原文就是写给调用方的）；其余是服务端出错 → 500。
@@ -485,7 +506,9 @@ if (reaped) console.log(`清理了 ${reaped} 条被中断的运行`);
 
 // 工作流：内建模板保证存在；**把引擎挂在 run 完成点上** —— 推进由平台做，不靠数字员工自觉
 workflows.ensureBuiltInTemplate();
-// 出厂就有一个人能说话：内置秘书「喜儿」（幂等，已有则只补 builtin 标记，不改名不改指令）
+// PR 审阅与合并（2026-10-23）：pr-review.mjs 在 import 时注册动作节点（pr-merge），这里保证内建模板在
+prReview.ensurePrReviewTemplate();
+// 出厂就有一个人能说话：内置系统管家「崔老三」（2026-10-23 前是秘书「喜儿」；幂等，已有则只补 builtin 标记）
 // **部署即装**（2026-10-22）：不管谁部署、用什么方式起（安装包 / 源码 start.cmd /
 // systemd / 开机自启），服务起来那一刻「bandi」全局命令就在。幂等 —— 装好了什么都不写。
 // 闸门与实现见 cli-install.mjs（BANDI_DATA 显式指定 = 测试/沙箱，默认不动真实用户目录）。
@@ -509,18 +532,28 @@ try {
 } catch (err) {
   console.log(`雇佣员工同步失败（不影响启动）：${err?.message ?? err}`);
 }
-// 内置员工同理（2026-10-22 用户定：喜儿按专家团模式收编）——技能挂载与身份三件回出厂，
-// 路由层同步锁死（E2054 技能 / E2055 身份）。她比专家早一步 seed，这里紧跟着做增量重置。
+// 内置员工同理（2026-10-22 用户定：按专家团模式收编）——技能挂载与身份三件回出厂，
+// 路由层同步锁死（E2054 技能 / E2055 身份）。他比专家早一步 seed，这里紧跟着做增量重置。
+// 2026-10-23 名额换人（喜儿→崔老三）的存量迁移也走的这段：启动即把库里的旧身份刷成新出厂值。
 try {
   const reset = secretary.syncSecretary();
-  if (reset?.length) console.log(`内置员工喜儿已重置回出厂（${reset.join(' / ')}）`);
+  if (reset?.length) console.log(`内置员工已重置回出厂（${reset.join(' / ')}）`);
 } catch (err) {
   console.log(`内置员工同步失败（不影响启动）：${err?.message ?? err}`);
 }
 runs.onRunFinish(workflows.onAgentRunFinished);
 // 任务卡同理（2026-10-17）：运行跑完/被停/跑挂了，卡不能永远挂在「进行中」——
-// 完成 → 待确认；人停的 / 跑挂的 → 已阻塞（**不回待办**，否则会被自动重新派活 → 死循环）
+// 完成 → 待验收；人停的 → 已阻塞、跑挂的 → 失败（都不回「待办」，否则会被自动重新派活 → 死循环）
 runs.onRunFinish(onTaskRunFinished);
+// 群里 @ 多人的排队（2026-10-24）：会话一次只跑一个 —— 前一个收尾，队里下一个立刻补上。
+// 挂在流程/任务卡钩子之后：它们推进的是各自 exec 会话的活，跟群排队互不挡道。
+runs.onRunFinish((run) => {
+  try {
+    drainGroupQueue(run.conversationId);
+  } catch (e) {
+    console.error('[群聊] 排队补派失败：', e?.message ?? e);
+  }
+});
 // 进程重启会把在跑的执行判死（reapStaleRuns），可工作流的任务还写着「进行中」——
 // 那条任务就永远卡住了。所以启动时把这类任务也收尾，别让人对着一个假"进行中"等。
 const stuckTasks = store

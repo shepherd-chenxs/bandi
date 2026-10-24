@@ -214,8 +214,8 @@ export async function openFlowRun(templateId, pickRunId) {
 
 
 export function runBadge(r) {
-  // **先看流程本身结束了没有**：已终止/已完成的任务可能停在「待确认」，
-  // 那不代表在等你 —— 之前顺序反了，终止的流程还写着"等你确认"（误导过）
+  // **先看流程本身结束了没有**：已终止/已完成的任务可能停在「待验收」，
+  // 那不代表在等你 —— 之前顺序反了，终止的流程还写着"等你验收"（误导过）
   //
   // 颜色：完成=绿、阻塞=红、终止=灰（灰就是列表里状态字的默认色，见 .item .line1 span；
   // 这里明写一个 gray 只是让读代码的人知道"这个不是漏了"，CSS 里不必再写一条同色规则）。
@@ -224,7 +224,7 @@ export function runBadge(r) {
   // 叫「已阻塞」而不是「卡住」：服务端给的 stuck 理由本来就写着「部署」已阻塞，等人处理，
   // 同一个状态在列表上却叫另一个名字。措辞跟服务端对齐。
   if (r.stuck) return { text: '已阻塞', cls: 'bad' };
-  if (r.taskStatus === '待确认') return { text: '等你确认', cls: '' };
+  if (r.taskStatus === '待验收') return { text: '等你验收', cls: '' };
   return { text: r.taskStatus ?? r.status, cls: '' };
 }
 
@@ -468,7 +468,7 @@ export function runHTML(v) {
     // 停在待办的步骤会被调度节拍自动派出（他正忙就 30 秒后再试），人没什么可点的。
     // 留一行说明代替按钮：不解释的话，"这步怎么不动"又得靠猜。
     if (v.taskStatus === '待办') inlineActs.push('<span class="dim">待办 —— 马上自动派活，不用点任何东西（他正忙就 30 秒内再试）</span>');
-    if (v.taskStatus === '待确认') {
+    if (v.taskStatus === '待验收') {
       if (v.outlets?.approve) {
         inlineActs.push(`<button class="primary" data-run-decide="通过">确认这一步完成 → ${esc(v.outlets.approveTo ?? '')}</button>`);
       }
@@ -557,7 +557,7 @@ export function runHTML(v) {
         ? 'gone'
         : t.status === '已完成' ? 'done'
         : (t.status === '失败' || t.status === '已阻塞') ? 'fail'
-        : t.status === '待确认' ? 'wait'
+        : t.status === '待验收' ? 'wait'
         : 'run';
       const meta = [t.assigneeName ?? '没人', t.visit > 1 ? `第 ${t.visit} 次` : '', durText(t.elapsedMs)]
         .filter(Boolean)
@@ -643,7 +643,13 @@ export function runHTML(v) {
        */
       const r = t.result ?? null;
       const arts = (r?.artifacts ?? []).filter((a) => a?.target);
-      const err = r?.state === 'error' ? r.error || '执行失败' : '';
+      // error = 执行失败原文；blocked = 员工自报受阻（2026-10-23）—— 原因必显，
+      // 哪怕同时列了产物（"能干的部分干了，卡在 XX" 是两句话都要看的）
+      const err = r?.state === 'error'
+        ? r.error || '执行失败'
+        : r?.state === 'blocked'
+          ? `受阻：${r.summary || '经办人报告干不下去，原因没写清'}`
+          : '';
       // 有产物就不再补一句话：用户要"有产物展示产物"，两样并排等于又说一遍
       const line = !err && !arts.length ? (r?.summary ?? '') : '';
       const result =
@@ -948,7 +954,7 @@ export function wireRun(v) {
         if (!picked) return;
         const hint = {
           待办: '回到「待办」：这一步的往来和执行痕迹会清掉，之后可以重新派活。确定吗？',
-          已阻塞: '标成「已阻塞」：停下等人处理，不会再派活。确定吗？',
+          已阻塞: '标成「已阻塞」：出了问题等人拍板，不会再派活。确定吗？',
           已完成: '标成「已完成」：等于「通过」，会按通过出口走到下一步。确定吗？',
         }[picked];
         if (hint && !(await confirmDo(hint))) return statusCombo.setValue(cur.status);
@@ -1122,7 +1128,7 @@ export function closeNodeStream() {
  * 订阅这一步的实时输出 —— **复用 app.js 里的 streamRun**，
  * 跟消息模块是同一套（同一个端点、同一份收尾逻辑）。
  *
- * 为什么不能靠轮询：李俊回复时流程里的任务状态还是「待确认」（状态只在推进时变），
+ * 为什么不能靠轮询：李俊回复时流程里的任务状态还是「待验收」（状态只在推进时变），
  * 按任务状态决定要不要轮询的话根本不会轮询，于是"要刷新页面才看到回复"（踩过）。
  */
 export function openNodeStream(runId) {

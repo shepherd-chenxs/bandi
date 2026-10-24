@@ -6,6 +6,7 @@ import { getPersona, purgePersonaHistory } from './personas.mjs';
 import { listGroups, listMembers, purgeDissolvedGroup } from './groups.mjs';
 import { addMessage } from './messages.mjs';
 import { createWorkflowRun } from './workflows.mjs';
+import { emitConv } from '../events.mjs';
 
 export function setConversationSandbox(id, sandbox) {
   db.prepare('UPDATE conversations SET sandbox = ? WHERE id = ?').run(sandbox || null, id);
@@ -152,11 +153,13 @@ export function setConversationSession(id, sessionId) {
 
 export function setConversationStatus(id, status) {
   db.prepare('UPDATE conversations SET status = ?, updatedAt = ? WHERE id = ?').run(status, nowIso(), id);
+  emitConv(id); // 起跑/收尾的状态变化也要推 —— 前端凭它把后台起的 run 接上实时流
 }
 
 
 export function renameConversation(id, title) {
   db.prepare('UPDATE conversations SET title = ?, updatedAt = ? WHERE id = ?').run(title, nowIso(), id);
+  emitConv(id); // 改名只动左栏，但走同一条事件省一个口径
 }
 
 /* --------------------------------------------------------------- messages */
@@ -268,6 +271,21 @@ export function deleteConversation(id) {
   db.exec('BEGIN');
   try {
     changes = purgeConversation(id);
+    /*
+     * 活群删一段后，**把这个群其余段一起收起来**（2026-10-23 用户拍板）。
+     *
+     * 群是「一次任务一段」：删掉当前段后群里往往还有更早的段，消息列表（一个群一行、
+     * 取最新段）会把上一段顶上来 —— 用户看到的是"点了删除，行还在"，得一段段删完
+     * 入口才消失，跟直觉拧着。删除的语义就该是"这个群从我列表里走"，跟「不显示」
+     * 同一个口径：其余段打 hiddenAt（物理删除的只有当前这一段），聊天记录抽屉仍能
+     * 找回；群里再来新消息（新段 hiddenAt 为空）入口自己回来 —— 和 hideConversation
+     * 的"新消息顶回来"是同一条路。
+     */
+    if (conv.kind === 'group') {
+      const gid = conv.groupId || conv.id;
+      db.prepare("UPDATE conversations SET hiddenAt = ? WHERE groupId = ? AND kind = 'group' AND id != ?")
+        .run(nowIso(), gid, id);
+    }
     db.exec('COMMIT');
   } catch (e) {
     db.exec('ROLLBACK');

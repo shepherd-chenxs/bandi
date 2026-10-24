@@ -308,8 +308,13 @@ check('那段的运行清零', countOf(dbG2, 'SELECT COUNT(*) c FROM runs WHERE 
 check('那段的运行事件清零', countOf(dbG2, 'SELECT COUNT(*) c FROM run_events WHERE runId = ?', groupRun.id) === 0);
 check('**群还在**（groups 行没动）', countOf(dbG2, 'SELECT COUNT(*) c FROM groups WHERE id = ?', gid) === 1);
 check('**成员名单还在**（group_members 没动：群助手+群员甲 = 2 行）', countOf(dbG2, 'SELECT COUNT(*) c FROM group_members WHERE groupId = ?', gid) === 2);
-check('**第二段还在**，消息原样', countOf(dbG2, 'SELECT COUNT(*) c FROM conversations WHERE groupId = ?', gid) === 1 &&
+check('**第二段还在**（物理），消息原样', countOf(dbG2, 'SELECT COUNT(*) c FROM conversations WHERE groupId = ?', gid) === 1 &&
   countOf(dbG2, 'SELECT COUNT(*) c FROM messages WHERE conversationId = ?', groupSeg2.id) === 1);
+// 2026-10-23 新口径：删一段后**其余段一起「不显示」**——入口立刻消失（用户拍板方案 A）。
+// 物理还在（聊天记录抽屉能找回），只是 hiddenAt 打上了、消息列表不再出现。
+check('第二段已被收起（hiddenAt 非空）', countOf(dbG2, 'SELECT COUNT(*) c FROM conversations WHERE id = ? AND hiddenAt IS NOT NULL', groupSeg2.id) === 1);
+check('消息列表里这个群的入口消失', countOf(dbG2, "SELECT COUNT(*) c FROM conversations WHERE groupId = ? AND kind = 'group' AND hiddenAt IS NULL", gid) === 0);
+check('聊天记录抽屉里第二段还在（listHiddenConversations 能找回）', store.listHiddenConversations().some((c) => c.id === groupSeg2.id));
 check('别的群不受影响', countOf(dbG2, 'SELECT COUNT(*) c FROM conversations WHERE id = ?', groupConv.id) === 1);
 dbG2.close();
 
@@ -325,6 +330,10 @@ dbG3.close();
 // 零段的群照样能继续用（通讯录 → 群详情 → 发消息 = 开新的一段）
 const reopened = store.createGroupSession(gid);
 check('零段群还能开新一段（容器还在就能继续用）', !!reopened && reopened.groupId === gid, String(reopened?.id));
+// 新段没有 hiddenAt → 消息列表入口自己回来（和「不显示」的"新消息顶回来"同一条路）
+const dbG4 = await openDb();
+check('开新段后入口自己回来（新段 hiddenAt 为空）', countOf(dbG4, "SELECT COUNT(*) c FROM conversations WHERE id = ? AND hiddenAt IS NULL", reopened.id) === 1);
+dbG4.close();
 
 /* ------------------------------------------------------------- ⑦ 走接口 */
 console.log("\n⑧ 接口（真起一次服务端）");

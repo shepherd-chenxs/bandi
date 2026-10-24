@@ -14,7 +14,6 @@ function ensureProjects() {
       name        TEXT NOT NULL,
       root        TEXT NOT NULL,
       extraRoots  TEXT,
-      note        TEXT,
       createdAt   TEXT NOT NULL,
       updatedAt   TEXT NOT NULL
     );
@@ -25,6 +24,21 @@ function ensureProjects() {
   // 项目宪法：本项目特有的硬约束，派活时注入首轮 prompt（见 dispatch.projectConstitutionBlock）。
   // 存平台不落项目仓库 —— 可空 = 没写宪法，派活时什么都不注。
   ensureColumn('projects', 'constitution', 'constitution TEXT');
+  /*
+   * **项目档案**（2026-10-23，PRD「项目面板改造」）：打开项目先要知道它是干什么的、谁在管。
+   * 各列都**存平台**、可空；可空 = 没填，界面明说「未填写」，不猜也不写空串。
+   *   · summary          一句话简介（「干什么」，2026-10-24 起在「基础信息」里编辑）；
+   *   · pmPersonaId      项目经理，绑一个员工（单选，人可以换）；
+   *   · memberPersonaIds 成员，员工 id 的 JSON 数组（多选，按点选顺序显示）；
+   *   · startedAt / endedAt  项目起止（`YYYY-MM-DD`）。不填开始时间就退回 `createdAt`
+   *     并**标明出处**（见 status.projectDetail）—— 建档时间和真正开工可能差很远，混成一个数等于骗人。
+   * 员工被删**不级联清空**：这里留的是"当时是谁"的事实，读的时候标「那个人已经不在了」。
+   */
+  ensureColumn('projects', 'summary', 'summary TEXT');
+  ensureColumn('projects', 'pmPersonaId', 'pmPersonaId TEXT');
+  ensureColumn('projects', 'memberPersonaIds', 'memberPersonaIds TEXT');
+  ensureColumn('projects', 'startedAt', 'startedAt TEXT');
+  ensureColumn('projects', 'endedAt', 'endedAt TEXT');
   // 消息归属哪一步：**按标记取，不再靠时间窗口切**
   // （1:1 会话被多条流程共用，按时间切会把别的流程的派活也捞进来，用户实报）
   ensureColumn('messages', 'taskId', 'taskId TEXT');
@@ -46,7 +60,8 @@ function ensureProjects() {
    * **手工任务**（用户 2026-10-14，参照 Multica 的看板）：在项目的某一列点「＋」直接建的任务。
    * 跟流程/聊天那两种来源并列，是"这个项目里有哪些活"的第三种来源。
    *
-   *   · status 用流程那套词（待办 / 进行中 / 待确认 / 已阻塞 / 已完成）—— 看板按它站列；
+   *   · status 用全平台统一的那套任务状态（想法 / 待办 / 进行中 / 待验收 / 已阻塞 /
+   *     失败 / 已完成 / 已取消，见 project-tasks.mjs）—— 看板按它站列；
    *   · assigneePersonaId 空 = 还没派人（只挂在看板上，不起进程）；
    *   · conversationId / runId：选了执行人并"立即开始工作"时，派到谁的会话里、跑的是哪一次。
    */
@@ -83,6 +98,25 @@ ensureColumn('project_tasks', 'externalKey', 'externalKey TEXT');
 // ⚠️ 必须放在 project_tasks 建表**之后**（放前面会在新库上 no such table）
 
 ensureColumn('project_tasks', 'queuedAt', 'queuedAt TEXT');
+
+// 创建人是哪位员工（2026-10-24）：项目经理经"工作证"接口建的卡带这个（routes/agent-cards.mjs），
+// 人手建的卡是 null。只用来在详情页标「创建人」，不改卡的脾气 —— 照样能拖、能改、能派活。
+ensureColumn('project_tasks', 'createdBy', 'createdBy TEXT');
+
+// 卡片回执（2026-10-24）：`creatorConvId` = 建卡那次运行所在的会话（PM 在哪个会话里建的卡，
+// 回执就送回哪个会话）；`notifiedFor` = 已经给建卡人回执过的状态（同一张卡收成同一状态只报一次）。
+// run 收尾 / PR 合并把卡收成「待验收」「已阻塞」「失败」时，往这个会话投一条回执并唤醒建卡人 ——
+// 他答应雇主"有产出我回话"，不投这句话就是空话（见 project-tasks.mjs notifyCardOwner）。
+ensureColumn('project_tasks', 'creatorConvId', 'creatorConvId TEXT');
+
+ensureColumn('project_tasks', 'notifiedFor', 'notifiedFor TEXT');
+
+/*
+ * 任务状态更名（2026-10-24 状态体系重设计）：「待确认」→「待验收」，workflow_tasks
+ * 那张表的同一条迁移在 store/db.mjs（来龙去脉写在那边）。幂等：改过之后匹配不到，重启不再动。
+ */
+db.prepare(`UPDATE project_tasks SET status = '待验收' WHERE status = '待确认'`).run();
+
 /*
  * 流程的一步 ↔ 一张卡（2026-10-19）：`sourceKey` = `flow:<runId>:<nodeId>:<visit>`，
  * `sourceRunId` 单独存一份只是为了以后按流程反查不用解字符串。
@@ -143,13 +177,12 @@ function ensureDefaultWorkspace() {
   }
   const t = nowIso();
   db.prepare(
-    'INSERT INTO projects (id, name, root, extraRoots, note, builtIn, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, 1, ?, ?)',
+    'INSERT INTO projects (id, name, root, extraRoots, builtIn, createdAt, updatedAt) VALUES (?, ?, ?, ?, 1, ?, ?)',
   ).run(
     newId('pj'),
     DEFAULT_PROJECT_NAME,
     root,
     '[]',
-    '内置：还没建项目时，AI 先在这儿干活',
     t,
     t,
   );
@@ -170,15 +203,44 @@ export function getProject(id) {
   return db.prepare('SELECT * FROM projects WHERE id = ?').get(id) ?? null;
 }
 
-export function createProject({ name, root, extraRoots = [], note = null }) {
+export function createProject({ name, root, extraRoots = [], summary = null }) {
   const id = newId('pj');
   const t = nowIso();
   db.prepare(
-    'INSERT INTO projects (id, name, root, extraRoots, note, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)',
-  ).run(id, name, root, JSON.stringify(extraRoots ?? []), note, t, t);
+    'INSERT INTO projects (id, name, root, extraRoots, summary, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)',
+  ).run(id, name, root, JSON.stringify(extraRoots ?? []), summary, t, t);
   return getProject(id);
 }
 
+/**
+ * 空串归一成 NULL —— 「没填」和「填了个空」在库里是同一件事，存两副样子迟早要分叉。
+ * `memberPersonaIds` 落库是 JSON 数组串：空数组 / 没传都归成 `'[]'`，读的地方不用判 null。
+ */
+function emptyToNull(v) {
+  const s = String(v ?? '').trim();
+  return s || null;
+}
+
+function membersToJson(v) {
+  if (v === undefined) return undefined;
+  if (v === null) return '[]';
+  const list = Array.isArray(v) ? v : [];
+  // 去重、保序、剔空 —— 同一个人点两次不该在成员里占两格
+  const seen = new Set();
+  const out = [];
+  for (const x of list) {
+    const s = String(x ?? '').trim();
+    if (!s || seen.has(s)) continue;
+    seen.add(s);
+    out.push(s);
+  }
+  return JSON.stringify(out);
+}
+
+/**
+ * 改项目。**PATCH 语义**：字段不传 = 不动；传空串 / null = 明确清掉。
+ * （档案那几个字段和名字/目录走同一张单，界面上也是一起自动存的。）
+ */
 export function updateProject(id, fields) {
   const cur = getProject(id);
   if (!cur) return null;
@@ -186,16 +248,26 @@ export function updateProject(id, fields) {
     name: fields.name ?? cur.name,
     root: fields.root ?? cur.root,
     extraRoots: fields.extraRoots === undefined ? cur.extraRoots : JSON.stringify(fields.extraRoots ?? []),
-    note: fields.note === undefined ? cur.note : fields.note,
     // 宪法：空串归一成 NULL（没写就是没写，别存一条 ''）
     constitution:
       fields.constitution === undefined
         ? cur.constitution
         : String(fields.constitution ?? '').trim() || null,
+    // 档案五列：同样"不传不动、传空清掉"
+    summary: fields.summary === undefined ? cur.summary : emptyToNull(fields.summary),
+    pmPersonaId: fields.pmPersonaId === undefined ? cur.pmPersonaId : emptyToNull(fields.pmPersonaId),
+    memberPersonaIds: membersToJson(fields.memberPersonaIds) ?? cur.memberPersonaIds,
+    startedAt: fields.startedAt === undefined ? cur.startedAt : emptyToNull(fields.startedAt),
+    endedAt: fields.endedAt === undefined ? cur.endedAt : emptyToNull(fields.endedAt),
   };
   db.prepare(
-    'UPDATE projects SET name = ?, root = ?, extraRoots = ?, note = ?, constitution = ?, updatedAt = ? WHERE id = ?',
-  ).run(next.name, next.root, next.extraRoots, next.note, next.constitution, nowIso(), id);
+    `UPDATE projects SET name = ?, root = ?, extraRoots = ?, constitution = ?,
+       summary = ?, pmPersonaId = ?, memberPersonaIds = ?, startedAt = ?, endedAt = ?, updatedAt = ?
+     WHERE id = ?`,
+  ).run(
+    next.name, next.root, next.extraRoots, next.constitution,
+    next.summary, next.pmPersonaId, next.memberPersonaIds, next.startedAt, next.endedAt, nowIso(), id,
+  );
   return getProject(id);
 }
 /** 删项目**不动会话**：把绑在它上面的会话解绑（回到员工默认工作目录） */

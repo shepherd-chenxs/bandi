@@ -82,12 +82,20 @@ export class BadRequest extends Error {
 
 export function readBody(req) {
   return new Promise((resolve, reject) => {
-    let raw = '';
+    const chunks = [];
+    let size = 0;
     req.on('data', (c) => {
-      raw += c;
-      if (raw.length > 1e6) reject(new BadRequest('请求体过大', 'E1045'));
+      size += c.length;
+      if (size > 1e6) {
+        reject(new BadRequest('请求体过大', 'E1045'));
+        req.destroy();
+        return;
+      }
+      chunks.push(c);
     });
     req.on('end', () => {
+      // 攒够 Buffer 一次性按 UTF-8 解码 —— 逐块 toString 会把跨块的多字节字符（中文）解碎成 �
+      const raw = Buffer.concat(chunks).toString('utf8');
       if (!raw.trim()) return resolve({});
       try {
         resolve(JSON.parse(raw));
@@ -104,14 +112,14 @@ export function readBody(req) {
  * readBody 是 JSON 且 1MB 就掐 —— 快照通常好几 MB 还是二进制，走不了它。
  * 上限照着"库再大也就几十 MB"给 200MB，超了直接掐（E1099）。
  */
-export function readRawBody(req, maxBytes = 200 * 1048576) {
+export function readRawBody(req, maxBytes = 200 * 1048576, tooBigMsg = '文件太大（上限 200MB）') {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let size = 0;
     req.on('data', (c) => {
       size += c.length;
       if (size > maxBytes) {
-        reject(new BadRequest('文件太大（上限 200MB）', 'E1099'));
+        reject(new BadRequest(tooBigMsg, 'E1099'));
         req.destroy();
         return;
       }
@@ -131,7 +139,23 @@ const MIME = {
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
   '.json': 'application/json; charset=utf-8',
+  // 员工产出常给的类型（2026-10-24，/api/workspace/file 按它回 Content-Type）
+  '.md': 'text/markdown; charset=utf-8',
+  '.txt': 'text/plain; charset=utf-8',
+  '.log': 'text/plain; charset=utf-8',
+  '.csv': 'text/csv; charset=utf-8',
+  '.xml': 'application/xml; charset=utf-8',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.pdf': 'application/pdf',
 };
+
+/** 按文件扩展名给 Content-Type（工作区文件口用；认识的类型都带 charset） */
+export function mimeOf(file) {
+  return MIME[path.extname(String(file)).toLowerCase()] ?? 'application/octet-stream';
+}
 
 /** 只服务 apps/web 下的静态文件；路径解析后必须仍在 webDir 里 */
 export function serveStatic(res, pathname) {
