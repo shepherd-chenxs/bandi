@@ -687,7 +687,22 @@ export function syncHiredExperts() {
     const after = syncExpertSkills(x.id);
     const identity = syncExpertIdentity(x.id);
     const avatar = syncExpertAvatar(x);
-    if (avatar || identity?.length || (after && JSON.stringify(before) !== JSON.stringify(after))) done.push(x.id);
+    if (avatar || identity?.length || (after && JSON.stringify(before) !== JSON.stringify(after))) {
+      done.push(x.id);
+      /*
+       * 身份（指令）或技能**真的变了** → 作废这个人全部成员会话（2026-10-24）。
+       *
+       * 为什么必须做：身份和技能只在成员会话**第一次建立**时注入（dispatch 的
+       * `firstTime = !ms?.sessionId`），之后靠 CLI 的持久会话 —— 会话里烙的是改之前的
+       * 旧指令，库里改得再新他也带着旧身份干活（实踩：大梁改了"不超过 5 行"照旧话痨）。
+       * 清了 member_sessions，下次派活按 firstTime 走，用新指令重新开一节会话。
+       * 代价是那个人的会话上下文从零开始 —— 身份都换了，旧上下文本就不该留。
+       */
+      if (identity?.length || (after && JSON.stringify(before) !== JSON.stringify(after))) {
+        const n = store.resetPersonaSessions(x.id);
+        if (n) console.log(`[专家同步] ${x.name} 的身份/技能变了，已作废 ${n} 节成员会话（下次派活按新身份重开）`);
+      }
+    }
   }
   return done;
 }

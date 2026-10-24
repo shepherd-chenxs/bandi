@@ -1,6 +1,7 @@
 /* store/personaSkills.mjs —— 2026-10-22 由 store.mjs 按域拆出。SQL 只在 store/ 目录内。 */
 
 import { db, nowIso } from './db.mjs';
+import { resetPersonaSessions } from './personas.mjs';
 
 const SKILL_REMAP = {
   'bandi-pm': ['doc-coauthoring', 'brainstorming'],
@@ -61,6 +62,10 @@ export function setPersonaSkills(personaId, names) {
   const have = new Set(listPersonaSkillLinks(personaId).map((l) => l.name));
   for (const n of wanted) if (!have.has(n)) linkPersonaSkill(personaId, n);
   for (const n of have) if (!wanted.includes(n)) unlinkPersonaSkill(personaId, n);
+  // 挂载真变了 → 作废成员会话（技能跟指令一样，只在会话第一次建立时注入；
+  // 不清的话新挂的技能他要到下一节会话才认识 —— 见 personas.resetPersonaSessions）
+  const changed = wanted.some((n) => !have.has(n)) || [...have].some((n) => !wanted.includes(n));
+  if (changed) resetPersonaSessions(personaId);
   return wanted;
 }
 
