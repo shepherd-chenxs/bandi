@@ -122,7 +122,7 @@ export async function renderImageAi() {
             <div class="gr-conn-row">
               <span class="row-label">接口地址</span>
               <input id="aiBase" value="${esc(cfg?.baseUrl ?? '')}" autocomplete="off" spellcheck="false"
-                     placeholder="https://api.siliconflow.cn/v1（填到 /v1 这级）" />
+                     placeholder="https://api.example.com/v1（填到 /v1 这级）" />
               <span></span>
             </div>
             <div class="gr-conn-row">
