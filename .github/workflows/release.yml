@@ -4,7 +4,8 @@
 # GitHub 的 windows runner 三步直接跑通，而且谁都能复现同一份产物。
 #
 # 触发：
-#   · push tag（形如 v0.9.0）—— **tag 必须与 apps/desktop/version.json 相同**（版本真源唯一），
+#   · push tag（形如 v1.2.0，只是格式示例 —— 号本身永远以 apps/desktop/version.json 为准）
+#     **tag 必须与 apps/desktop/version.json 相同**（版本真源唯一），
 #     不一致直接失败，免得发出去的包和仓库里的号对不上；
 #   · 手动（workflow_dispatch）—— 用 version.json 当 tag 名，方便补发已经打过的版本。
 #
