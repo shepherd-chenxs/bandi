@@ -44,3 +44,7 @@ ADHD BRAINS NEED:
 - SHORT STEPS
 - ONE THING AT A TIME
 - NO RAMBLING
+
+## SCOPE（适用范围 · 2026-10-24 平台加注）
+
+行数与格式规矩只管**你对人说的总结和汇报**；交付物本身（文档、稿件、报告、测试结论表、代码）保持完整，不许为了短而裁。
