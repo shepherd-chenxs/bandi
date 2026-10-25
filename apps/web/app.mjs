@@ -673,11 +673,11 @@ $('pOk').onclick = async (e) => {
   e.preventDefault();
   try {
     const d = await post('/api/personas', {
-      name: $('pName').value, role: $('pRole').value, instructions: $('pInstr').value,
+      name: $('pName').value, role: $('pRole').value, department: $('pDept').value, instructions: $('pInstr').value,
       runtime: pRuntimeCombo.value(), sandbox: pSandboxCombo.value(), cwd: $('pCwd').value,
     });
     $('personaDlg').close();
-    $('pName').value = ''; $('pRole').value = ''; $('pInstr').value = '';
+    $('pName').value = ''; $('pRole').value = ''; $('pDept').value = ''; $('pInstr').value = '';
     await load();
     // 建完停在详情，好让人接着配他（要聊再点「发消息」）
     await openDetail(d.persona.id);

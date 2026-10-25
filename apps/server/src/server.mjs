@@ -22,6 +22,7 @@ import { dispatchToThread, drainGroupQueue, personaRoots } from './dispatch.mjs'
 import { ensureCliInstalled } from './cli-install.mjs';
 import * as workflows from './workflows.mjs';
 import * as prReview from './pr-review.mjs';
+import * as prCreate from './pr-create.mjs';
 import * as quota from './quota.mjs';
 import * as status from './status.mjs';
 import { projectTasks, allTasks, personaTasks, createProjectTask, updateProjectTask, startProjectTask, onTaskRunFinished, afterMerged, upsertRepoCard, ensureTaskCardForStep } from './project-tasks.mjs';
@@ -216,6 +217,8 @@ const routes = {
       name,
       // 岗位：自由文本、可空。**只用于看人/辨认，不参与派活**（引擎只认节点上点的名）
       role: String(body.role ?? '').trim() || null,
+      // 部门：跟岗位一个口径 —— 自由文本、可空，只用于通讯录按部门分组
+      department: String(body.department ?? '').trim() || null,
       instructions: String(body.instructions ?? ''),
       runtime,
       sandbox: String(body.sandbox ?? 'danger-full-access'),
@@ -512,6 +515,8 @@ if (reaped) console.log(`清理了 ${reaped} 条被中断的运行`);
 workflows.ensureBuiltInTemplate();
 // PR 审阅与合并（2026-10-23）：pr-review.mjs 在 import 时注册动作节点（pr-merge），这里保证内建模板在
 prReview.ensurePrReviewTemplate();
+// PR 交付流程（2026-10-25）：pr-create.mjs 在 import 时注册动作节点（pr-create），这里保证模板在
+prCreate.ensurePrDeliveryTemplate();
 // 出厂就有一个人能说话：内置系统管家「崔老三」（2026-10-23 前是秘书「喜儿」；幂等，已有则只补 builtin 标记）
 // **部署即装**（2026-10-22）：不管谁部署、用什么方式起（安装包 / 源码 start.cmd /
 // systemd / 开机自启），服务起来那一刻「bandi」全局命令就在。幂等 —— 装好了什么都不写。

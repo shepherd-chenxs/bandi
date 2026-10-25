@@ -4,7 +4,7 @@ import { esc, mdRender, personLabel, runtimeLabel, savePlace, setRoute, toast } 
 import { ICON_FOLDER, ICON_WB_BOARD, ICON_WB_CLOCK, api, createCombo, handleCopyPaths, personaAvatar, personaByName, renderMarkdown, smAvatar, wireDialogHead } from './ui.mjs';
 import { setNav } from './state.mjs';
 import { breadcrumb, headRow } from './connectors.mjs';
-import { confirmDo } from './machine.mjs';
+import { confirmDo, askText } from './machine.mjs';
 import { detailSave, showView } from './contacts.mjs';
 import { wbCard } from './workflows.mjs';
 import { hint, openFlowRun, paintRun, setListTitle } from './flowpages.mjs';
@@ -2061,11 +2061,13 @@ export async function paintTaskCardPage(taskId, opts = {}) {
                </div></div>
                <div class="dlg-actions">
                  <button id="tcPrRefresh">刷新状态</button>
+                 ${task.prState === 'open' ? '<button id="tcPrMerge">合并</button>' : ''}
                  <button id="tcPrUnlink">取消关联</button>
                </div>`
             : `<div class="tc-pr-add">
                  <input id="tcPrUrl" placeholder="PR 链接 或 owner/name#123" />
                  <button class="primary" id="tcPrLink">关联</button>
+                  <button id="tcPrCreate" title="把项目目录里的改动提交成新分支并开 PR（前提：这个目录是已接入仓库的克隆）">建 PR</button>
                </div>
                <div class="counter left">合并后这张卡会转到「待验收」——不自动「已完成」，等你点头。</div>`
         }
@@ -2366,6 +2368,72 @@ export async function paintTaskCardPage(taskId, opts = {}) {
       await api(`/api/projects/tasks/${encodeURIComponent(taskId)}/pr`, { method: 'DELETE' });
       await paintTaskCardPage(taskId, opts);
     } catch (err) {
+      toast(err.message, 'error');
+    }
+  });
+
+  /*
+   * 卡上「建 PR」（2026-10-25）：只问一句标题，剩下的交给服务端 ——
+   * 项目目录 → 已接入仓库 → 提交、推分支、开 PR、挂回这张卡，一条链在服务端跑完
+   * （`routes/git.mjs` 的 `/pr/create`，冒烟 ⑦ 钉的就是这条路）。
+   *
+   * ⚠️ 这里**故意不做**"看到改动再提交"那一屏：卡上没有仓库上下文，摆一半功能
+   * 比不摆更容易让人以为已经看过了。要看改动、挑文件、处理凭据那类拦截，
+   * 用「设置 → 代码托管」里那颗「建 PR」（完整弹窗）。撞到凭据拦截时下面会把这条指出来。
+   */
+  $('tcPrCreate')?.addEventListener('click', async (e) => {
+    e.preventDefault();
+    const title = await askText({
+      title: `给这张卡建一个 PR`,
+      body: `项目目录里的改动会被收成一个提交、推到一条新分支，并开成 PR。base 用仓库的默认分支。\n\n（要挑文件、看改动、处理"看着像凭据的文件"，去「设置 → 代码托管」那一行的「建 PR」。）`,
+      value: task.title,
+      placeholder: 'PR 标题：一句话说清这个 PR 干了什么',
+      ok: '提交并建 PR',
+    });
+    if (title === null) return;
+    if (!title.trim()) return toast('标题不能是空的');
+    const btn = $('tcPrCreate');
+    btn.disabled = true;
+    btn.textContent = '提交中…';
+    try {
+      const r = await api(`/api/projects/tasks/${encodeURIComponent(taskId)}/pr/create`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: title.trim(), body: `来自班底任务卡：${task.title}\n\n${task.description ?? ''}`.trim() }),
+      });
+      await paintTaskCardPage(taskId, opts);
+      toast(r.created ? `PR #${r.pr.number} 已建好（分支 ${r.branch}）` : `这个分支已经有 open PR：#${r.pr.number}，已挂回这张卡`);
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = '建 PR';
+      const m = String(err.message ?? err);
+      toast(/凭据|就是要提交/.test(m) ? `${m}\n\n要强行提交这些文件：去「设置 → 代码托管」那一行的「建 PR」，那里有勾选。` : m, 'error');
+    }
+  });
+
+  /*
+   * 卡上「合并」（2026-10-25）：人在这儿点一下就是授权合这个 PR。
+   * 与流程里那颗的差别只在**谁放行**：这条是人在场、当场点的，所以不锁 SHA
+   * （锁了会把人锁死：失败→重试→拿的还是那次审阅的旧 sha→永远 409）。
+   * 合完服务端会把「进行中」转成「待验收」——合并 ≠ 验收通过，这条规矩没变。
+   */
+  $('tcPrMerge')?.addEventListener('click', async (e) => {
+    e.preventDefault();
+    if (!(await confirmDo(`合并 ${task.prRepo}#${task.prNumber}？\n\n这一步会在 GitHub 上真的合进去，合完不能撤销。`))) return;
+    const btn = $('tcPrMerge');
+    btn.disabled = true;
+    btn.textContent = '合并中…';
+    try {
+      const r = await api(`/api/projects/tasks/${encodeURIComponent(taskId)}/pr/merge`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      await paintTaskCardPage(taskId, opts);
+      toast(r.merged ? `PR #${task.prNumber} 已合并${r.note ? `\n${r.note}` : ''}` : r.note ?? '没合');
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = '合并';
       toast(err.message, 'error');
     }
   });

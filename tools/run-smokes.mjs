@@ -38,6 +38,7 @@ const RUN = [
   'apps/server/src/smoke-node-task.mjs',
   'apps/server/src/smoke-personas.mjs',
   'apps/server/src/smoke-plugin-blocks.mjs',
+  'apps/server/src/smoke-pr-create.mjs',
   'apps/server/src/smoke-pr-link.mjs',
   'apps/server/src/smoke-pr-review.mjs',
   'apps/server/src/smoke-project-profile.mjs',

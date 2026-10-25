@@ -5,7 +5,7 @@ import { ICON_EDIT, ICON_HELP, ICON_PLAY, ICON_TRASH, api, createCombo, createDa
 import { load } from './state.mjs';
 import { openSettings } from './settings.mjs';
 import { breadcrumb, headRow } from './connectors.mjs';
-import { confirmDo } from './machine.mjs';
+import { confirmDo, askCheckbox } from './machine.mjs';
 import { gitAddRepoItems, openAddMenu, renderList, showView, skillAddItems } from './contacts.mjs';
 import { openProjectDetail, pickLocalDir } from './projects.mjs';
 import { $, S } from './core.mjs';
@@ -377,7 +377,10 @@ export async function openGitPickDialog(onDone) {
  * 恰恰是**连着的时候**才要照着做，所以放在「?」里是覆盖面更全的那一处。 */
 export const GIT_TOKEN_HELP = `
   在 GitHub 建：Settings → Developer settings → Personal access tokens → <b>Fine-grained tokens</b>；
-  权限勾 <b>Contents: Read and write</b>（要开 PR 再加 <b>Pull requests: Read and write</b>）；
+  权限勾两样：<b>Contents: Read and write</b>（克隆/推分支/合并都要它）、
+  <b>Pull requests: Read and write</b>（在平台里建 PR 要它）——<b>两个是独立权限</b>：
+  只勾 Contents 能在网页上手动建 PR、但 API 建会 403；只勾 Pull requests 能建 PR 但推不上分支。
+  只想读别人提的 PR（审阅）不勾也能跑。
   Repository access 选你要接入的那几个仓库。令牌只存在本机数据目录，不进日志。
   <a class="help-link" href="https://github.com/settings/personal-access-tokens"
      target="_blank" rel="noreferrer">去 GitHub 建一个 →</a>`;
@@ -463,6 +466,7 @@ export async function renderGitRepos() {
             <input type="checkbox" data-git-automerge="${esc(r.id)}" ${r.autoMerge ? 'checked' : ''} aria-label="自动合并" /><span></span>
           </label></td>
       <td class="gr-cell-ops">
+        <button class="mini auto" data-git-pr="${esc(r.id)}" title="把本地改动提交成一个 PR；这里也能合并开着的 PR">建 PR</button>
         <button class="mini auto" data-git-project="${esc(r.id)}" title="用这个仓库建一个项目（工作目录就是克隆目录）">建成项目</button>
         <button class="mini auto" data-git-sync="${esc(r.id)}" title="git pull --ff-only">同步</button>
         <button class="mini auto" data-git-remove="${esc(r.id)}" title="只移除记录，本地目录保留">移除</button>
@@ -470,7 +474,7 @@ export async function renderGitRepos() {
     </tr>`;
   const repoTable = (list) => `
     <table class="gr-tbl">
-      <colgroup><col /><col style="width:196px" /><col style="width:88px" /><col style="width:216px" /></colgroup>
+      <colgroup><col /><col style="width:196px" /><col style="width:88px" /><col style="width:284px" /></colgroup>
       <thead><tr>
         <th>仓库</th>
         <th title="别人提了 PR，替你审的那个人">管理员</th>
@@ -630,7 +634,14 @@ export async function renderGitRepos() {
     el.onclick = () => openKeeperDlg(el.dataset.gitKeeperPick, el.dataset.kCur ?? '');
   });
 
-  // 已接入仓库的三个动作
+  // 已接入仓库的四个动作
+  view.querySelectorAll('[data-git-pr]').forEach((el) => {
+    el.onclick = (e) => {
+      e.preventDefault();
+      const repo = repos.find((r) => r.id === el.dataset.gitPr);
+      if (repo) openRepoPrDialog(repo, refresh);
+    };
+  });
   view.querySelectorAll('[data-git-sync]').forEach((el) => {    el.onclick = async (e) => {
       e.preventDefault();
       el.disabled = true;
@@ -683,6 +694,264 @@ export async function renderGitRepos() {
   });
 
   // 「从 GitHub 添加」那张清单已经收进弹窗了（openGitPickDialog），页面上不再常驻一块。
+}
+
+
+
+/* ---------------------------------------------------------------- 建 PR / 合并 PR（2026-10-25） */
+
+/**
+ * 仓库行上的「建 PR」弹窗：把本地改动收成一个提交、推一条新分支、开一个 PR；
+ * 顺带列这个仓库开着的 PR，让人在这儿直接点合并。
+ *
+ * 为什么一个弹窗装两件事：这两件事是**同一条动作的两端**（"我这边的改动出去了"和
+ * "别人/我出去的改动进来了"）。分成两处就会变成"我建完 PR，还得去别处找它、才能合"。
+ *
+ * 为什么提交这一步必须由平台做、不给员工挂个"会建 PR 的技能"（2026-10-25 用户问过有没有现成的）：
+ *   · 令牌只在服务端 —— `agentEnv()` 把 `GIT_*`/`GH_TOKEN` 全清了（2026-10-17 事故后的规矩），
+ *     让员工拿 `gh`/MCP 建 PR 等于把凭据发回去，还绕开合并四闸与 `tools/check-pr.mjs`；
+ *   · 推上去收不回来 —— 所以这里三道闸摆在界面上：只往**新分支**提（不碰 base）、
+ *     看着像凭据的文件先拦一次（`.env` / 私钥 / `*token*`，`.env.example` 那类放过）、
+ *     推不上去**绝不强推**（远端同名分支多半是别人的活）。
+ *   抄的是上游技能的**交互**（收尾分支先确认 base、别默认强推），不是它的实现。
+ *
+ * 状态显示只读本地 git（`/changes` 不联网），所以上面那一屏点下去就出来；
+ * 开着的 PR 那一屏要等 GitHub —— 分开画，别为了下半屏把上半屏挂住。
+ */
+export function openRepoPrDialog(repo, onDone) {
+  /*
+   * 这颗弹窗里的控件全靠 id 定位（`$('prTitle')` 这种）。同一个仓库连点两次「建 PR」
+   * 会留下面板里第一颗还没关的弹窗，那份 id 也还在 DOM 里 —— id 查询只回第一个，
+   * 人就会在**看不见的那一份**上敲字。所以开窗前先把旧的收掉。
+   */
+  document.getElementById('repoPrDlg')?.close();
+  const dlg = document.createElement('dialog');
+  dlg.id = 'repoPrDlg';
+  dlg.style.width = '620px';
+  dlg.innerHTML = `
+    <form method="dialog">
+      <b>建 PR · ${esc(repo.fullName)}</b>
+      <div class="gr-meta" style="margin:6px 0 10px">${esc(repo.localPath)}</div>
+
+      <div id="prState"><div class="sk-blank">读工作区…</div></div>
+
+      <div id="prForm" hidden>
+        <label>PR 标题（一句话说清这个 PR 干了什么）</label>
+        <input id="prTitle" placeholder="例如：代码托管：加建 PR 与手动合并" autocomplete="off" />
+        <label>新分支名（改动只会落到这条新分支，base 不动）</label>
+        <div class="row-with-btn">
+          <input id="prBranch" autocomplete="off" />
+          <button type="button" id="prBranchAgain" title="换一个带时间戳的名字（撞名时用）">换一个</button>
+        </div>
+        <label>合进哪个分支（base）</label>
+        <input id="prBase" autocomplete="off" />
+        <label>PR 描述</label>
+        <textarea id="prBody" rows="3" placeholder="改了什么 + 怎么验的。没跑过验证就写「未验证」—— 别写「安全」「已修复」。"></textarea>
+        <label class="check"><input type="checkbox" id="prDraft" />
+          <span>先建成草稿<em>——草稿不会被自动合并，等你在 GitHub 上标为可审阅</em></span></label>
+        <label class="check" id="prSecretWrap" hidden><input type="checkbox" id="prAllowSecrets" />
+          <span>就是要提交这些文件<em>——推上去收不回来（git 历史里的凭据只能强推抹，公开仓库抹不掉）</em></span></label>
+      </div>
+
+      <div class="group-title" style="margin-top:16px">开着的 PR</div>
+      <div id="prOpenList"><div class="sk-blank">取清单…（要连 GitHub）</div></div>
+
+      <div class="dlg-actions">
+        <button type="button" value="cancel">关闭</button>
+        <button class="primary" id="prSubmit" disabled>提交并建 PR</button>
+      </div>
+    </form>`;
+  document.body.append(dlg);
+  wireDialogHead(dlg.querySelector('form'));
+  dlg.addEventListener('close', () => dlg.remove());
+  dlg.showModal();
+
+  /*
+   * 「提交并建 PR」是这颗弹窗里唯一的提交按钮（不标 type="button"）：
+   * 人敲完标题按回车就该走提交 —— 这是 `app.mjs:115-130` 那套约定的另一半，
+   * 也是为什么「换一个」「合并」这些**必须**标 type="button"（否则回车会点到它们身上）。
+   * handler 里 preventDefault，不然 `method="dialog"` 会把窗关掉、失败后就看不到原因了。
+   */
+  const setErr = (msg) => {
+    const box = $('prErrPop');
+    if (box) box.textContent = msg;
+  };
+
+  /* ---------------- 上半屏：本地工作区（不联网，点下去就该有反应） ---------------- */
+  let state = null;
+  const paintState = () => {
+    const box = $('prState');
+    // 异步回来时弹窗可能已经被关掉（节点都没了）—— 摸下去只会抛一个和真实问题无关的错
+    if (!box || !state) return;
+    if (!state.hasRemote) {
+      box.innerHTML = `<div class="sk-blank">这个目录没有 origin —— 手动接入的本地克隆要先把 origin 指回 GitHub，不然推不上去。</div>`;
+      $('prSubmit').disabled = true;
+      return;
+    }
+    if (state.detached) {
+      box.innerHTML = `<div class="sk-blank">当前不在任何分支上（detached HEAD）—— 先在那个目录 <code>git checkout</code> 回一个分支再来。</div>`;
+      $('prSubmit').disabled = true;
+      return;
+    }
+    const dirty = state.dirtyCount;
+    /* base 没记录时不能说 "origin/null"（那是假话，也看不出该做什么） */
+    const ahead = !state.base
+      ? '不知道（没记录 base 分支）'
+      : state.ahead === null
+        ? `不知道（本地还没有 origin/${state.base}，先点「同步」）`
+        : `${state.ahead} 个提交`;
+    box.innerHTML = `
+      <div class="gr-meta" style="margin:0 0 4px">
+        当前分支 <b>${esc(state.branch)}</b> ｜ base <b>${esc(state.base || '未记录')}</b>
+        ｜ 未提交 <b>${dirty}</b> 个文件 ｜ 领先 base <b>${esc(String(ahead))}</b>
+      </div>
+      ${
+        dirty
+          ? `<div class="counter left">要提交的 ${dirty} 个文件（含未跟踪的）：${esc(state.dirty.slice(0, 12).map((f) => f.path).join('、'))}${dirty > 12 ? ` 等 ${dirty} 个` : ''}</div>`
+          : `<div class="counter left">工作区是干净的 —— 那就用当前分支上已提交、还没推的那些提交${state.aheadCommits?.length ? `：${esc(state.aheadCommits.slice(0, 5).map((c) => c.subject).join('；'))}` : ''}</div>`
+      }
+      ${
+        state.secrets.length
+          ? `<div class="counter left" style="color:var(--bad)">看着像凭据的文件：${esc(state.secrets.slice(0, 4).join('、'))}${state.secrets.length > 4 ? ` 等 ${state.secrets.length} 个` : ''}</div>`
+          : ''
+      }
+      ${state.canShip ? '' : '<div class="counter left" style="color:var(--warn)">没有可提交的东西：工作区干净、当前分支也不领先 base。</div>'}`;
+    $('prSecretWrap').hidden = !state.secrets.length;
+    const form = $('prForm');
+    form.hidden = !state.canShip;
+    $('prSubmit').disabled = !state.canShip;
+    if (!$('prBranch').value) $('prBranch').value = state.suggest ?? '';
+    if (!$('prBase').value) $('prBase').value = state.base ?? '';
+  };
+
+  api(`/api/git/repos/${encodeURIComponent(repo.id)}/changes`)
+    .then((d) => {
+      state = d.state;
+      paintState();
+    })
+    .catch((e) => {
+      const box = $('prState');
+      if (!box) return; // 弹窗已关
+      box.innerHTML = `<div class="sk-blank">读不到工作区：${esc(e.message)}</div>`;
+    });
+
+  $('prBranchAgain')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    const stamp = Date.now().toString(36).slice(-5);
+    $('prBranch').value = `bandi/${String(repo.name ?? 'pr').replace(/[^\w.-]+/g, '-')}-${stamp}`;
+  });
+
+  /* ---------------- 下半屏：开着的 PR（要连 GitHub） ---------------- */
+  let prs = [];
+  const paintPrs = () => {
+    const box = $('prOpenList');
+    if (!box) return; // 弹窗已关（异步回来时常见）
+    if (!prs.length) {
+      box.innerHTML = '<div class="sk-blank">这个仓库现在没有开着的 PR。</div>';
+      return;
+    }
+    box.innerHTML = prs
+      .map(
+        (p) => `
+      <div class="sk-row">
+        <div class="sk-main">
+          <b>PR #${p.number} ${esc(p.title)}</b>
+          ${p.draft ? '<span class="pill">草稿</span>' : ''}
+          ${p.taskId ? '<span class="pill" title="已经挂在一张任务卡上">已关联卡</span>' : ''}
+          <div class="sk-desc">${esc(p.author || '?')} ｜ ${esc(p.headSha ? String(p.headSha).slice(0, 7) : '')}
+            ｜ <a href="${esc(p.url)}" target="_blank" rel="noreferrer">去 GitHub 看</a></div>
+        </div>
+        <div class="gr-cell-ops">
+          <button type="button" class="mini auto" data-pr-merge="${p.number}" title="合并进 base（走平台令牌；分支保护没过会原话告诉你）">合并</button>
+        </div>
+      </div>`,
+      )
+      .join('');
+    box.querySelectorAll('[data-pr-merge]').forEach((b) => {
+      b.onclick = async (e) => {
+        e.preventDefault();
+        const n = Number(b.dataset.prMerge);
+        const one = prs.find((x) => x.number === n);
+        if (one?.draft) return toast('草稿不能被合并 —— 先去 GitHub 上把它标为可审阅');
+        /*
+         * 「合完删源分支」做成一个勾，不默认勾上：分支是别人可能还在用的东西。
+         * 而且服务端只删 `bandi/` 开头的（见 routes/git.mjs 的 mergeOne）——
+         * 所以勾上也不会误删人自己开的分支，这个勾的代价是有上限的。
+         */
+        const ask = await askCheckbox({
+          title: `合并 PR #${n}？`,
+          body: `${one?.title ?? ''}\n\n这一步会在 GitHub 上真的合进去，合完不能撤销。`,
+          check: { label: '合完删掉源分支（只删平台建的 bandi/ 分支，别的删不动）', checked: false },
+          ok: '合并',
+        });
+        if (!ask.ok) return;
+        b.disabled = true;
+        b.textContent = '合并中…';
+        try {
+          const r = await post(`/api/git/repos/${encodeURIComponent(repo.id)}/prs/${n}/merge`, { method: 'merge', deleteBranch: ask.checked });
+          toast(r.merged ? `PR #${n} 已合并${r.branchDeleted ? `，源分支 ${r.branchDeleted} 也删了` : ''}${r.note ? `\n${r.note}` : ''}` : r.note ?? '没合');
+          await loadPrs();
+        } catch (err) {
+          b.disabled = false;
+          b.textContent = '合并';
+          toast(err.message, 'error');
+        }
+      };
+    });
+  };
+  const loadPrs = async () => {
+    try {
+      prs = (await api(`/api/git/repos/${encodeURIComponent(repo.id)}/prs`)).prs ?? [];
+    } catch (e) {
+      const box = $('prOpenList');
+      if (!box) return; // 弹窗已关
+      box.innerHTML = `<div class="sk-blank">取不到：${esc(e.message)}</div>`;
+      return;
+    }
+    paintPrs();
+  };
+  loadPrs();
+
+  /* ---------------- 提交 ---------------- */
+  $('prSubmit')?.addEventListener('click', async (e) => {
+    e.preventDefault();
+    const title = $('prTitle').value.trim();
+    if (!title) return toast('标题写一句 —— PR 标题是别人（和三个月后的你）唯一会看到的那句话');
+    const btn = $('prSubmit');
+    btn.disabled = true;
+    btn.textContent = '提交推送中…';
+    try {
+      const r = await api(`/api/git/repos/${encodeURIComponent(repo.id)}/prs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title,
+          body: $('prBody').value,
+          branch: $('prBranch').value.trim() || null,
+          base: $('prBase').value.trim() || null,
+          draft: $('prDraft').checked,
+          allowSecrets: $('prAllowSecrets')?.checked === true,
+        }),
+      });
+      await loadPrs();
+      toast(r.created ? `PR #${r.pr.number} 建好了：${r.pr.url}` : `这个分支已经有一个 open PR：#${r.pr.number}（没新建）`);
+      setErr('');
+      if (onDone) await onDone();
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = '提交并建 PR';
+      // 失败原话摆在这一屏上（不弹走了事）：这一步多半是"权限没勾"或"分支撞名"，人要照着改
+      setErr(String(err.message ?? err));
+      toast(err.message, 'error');
+    }
+  });
+
+  // 失败原因就近显示（不在页面上乱弹）：在提交按钮上面补一小段红字
+  const errWrap = document.createElement('div');
+  errWrap.id = 'prErrPop';
+  errWrap.className = 'counter left';
+  errWrap.style.color = 'var(--bad)';
+  dlg.querySelector('.dlg-actions')?.before(errWrap);
 }
 
 

@@ -262,11 +262,20 @@ ensureColumn('personas', 'builtin', 'builtin INTEGER NOT NULL DEFAULT 0');
 /*
  * **头像**（2026-10-22）：存的是**文件名**，不是图片二进制 —— 图片放 apps/web/avatars/ 里，
  * 由现成的静态路由服务。为什么坚决不存 base64/二进制进库：库和 WAL 会跟着图片膨胀，
- * 备份变慢、读写变毛；文件名（expert-pm.png 这种）几字节就够。
+ * 备份变慢、读写变毛；文件名（expert-hetao.png 这种）几字节就够。
  * 路由层只放行白名单后缀的纯文件名，防止借这个字段写路径。
  */
 
 ensureColumn('personas', 'avatar', 'avatar TEXT');
+
+/*
+ * **部门**（2026-10-25）：组织架构里他属于哪个部门。跟岗位同一个口径：
+ * 一个值、可空、自由文本（界面给建议列表），**只用于看人**（通讯录按部门分组），
+ * 引擎不读它、派活也不读它。不建部门表、不做层级 —— 用户拍板的口径：
+ * 「部门是给人看的，把人按部门分组」。
+ */
+
+ensureColumn('personas', 'department', 'department TEXT');
 
 /*
  * 并发数（2026-10-24，对标 Multica 的"每个虚拟员工可配并行任务数"）：

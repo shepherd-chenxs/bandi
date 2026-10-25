@@ -159,6 +159,24 @@ export function setWorkflowRunThread(id, threadId) {
   db.prepare('UPDATE workflow_runs SET threadId = ?, updatedAt = ? WHERE id = ?').run(threadId, nowIso(), id);
 }
 
+/**
+ * 这条流程在办哪个 PR（2026-10-25，PR 交付流程）。
+ *
+ * 两个写点共用这一条：
+ *   · `startPrReview`（巡检发现新 PR）在 createWorkflowRun 时就带上；
+ *   · 流程里的 `pr-create` 动作节点是**建完才知道编号**，所以中途补写。
+ * 合并节点只认 run 上这两个字段，不认"模板里第几个节点" —— 模板被改过也不会合错 PR。
+ */
+export function setWorkflowRunPr(id, { repo, number }) {
+  db.prepare('UPDATE workflow_runs SET prRepo = ?, prNumber = ?, updatedAt = ? WHERE id = ?').run(
+    repo ?? null,
+    number ?? null,
+    nowIso(),
+    id,
+  );
+  return getWorkflowRun(id);
+}
+
 export function touchWorkflowRun(id) {
   db.prepare('UPDATE workflow_runs SET updatedAt = ? WHERE id = ?').run(nowIso(), id);
 }
@@ -216,13 +234,14 @@ export function updateWorkflowTask(id, fields) {
   for (const [k, v] of Object.entries(fields)) if (v !== undefined) next[k] = v;
   db.prepare(
     `UPDATE workflow_tasks
-        SET status = ?, decision = ?, note = ?, result = ?, conversationId = ?, agentRunId = ?,
+        SET status = ?, decision = ?, note = ?, detail = ?, result = ?, conversationId = ?, agentRunId = ?,
             assigneePersonaId = ?, startedAt = ?, endedAt = ?
       WHERE id = ?`,
   ).run(
     next.status,
     next.decision,
     next.note,
+    next.detail,
     next.result,
     next.conversationId,
     next.agentRunId,

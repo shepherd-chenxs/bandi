@@ -154,6 +154,7 @@
     <b>新建数字员工</b>
     <label>名字</label><input id="pName" placeholder="例如：老周" />
     <label>岗位</label><input id="pRole" list="roleSuggest" placeholder="比如：研发（留空也行）" />
+    <label>部门</label><input id="pDept" list="deptSuggest" placeholder="比如：技术部（留空 = 未分配）" />
     <label>职责与身份设定（作为这段对话的设定带进去）</label>
     <textarea id="pInstr" style="height:92px" placeholder="你是这个项目的研发。一次只推进一步，做完汇报。"></textarea>
     <div class="grid2">
@@ -472,6 +473,9 @@
 
 <!-- 岗位的建议列表：内容由 js/misc.mjs 从 ROLE_SUGGEST 填（一处定义，别在 HTML 里再抄一份） -->
 <datalist id="roleSuggest"></datalist>
+<!-- 部门的建议列表（2026-10-25）：没有出厂清单 —— 由 js/contacts.mjs 的 refreshDeptSuggest
+     按库里已用的部门名现填（自由文本字段，靠建议列表防止同一个部门写出两个名字） -->
+<datalist id="deptSuggest"></datalist>
 
 <script>
   /*

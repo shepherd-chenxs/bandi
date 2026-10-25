@@ -1,5 +1,6 @@
-/* contacts.mjs —— 二级列表、通讯录：A–Z 分组、新建选择器、视图切换。
- * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
+/* contacts.mjs —— 二级列表、通讯录：按部门分组、新建选择器、视图切换。
+ * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。
+ * 2026-10-25 起「数字员工」从 A–Z 字母头改为按部门分组（用户口径：部门是给人看的分组）。 */
 import { esc, personSubtitle, saveCollapsed, toast } from './shell.mjs';
 import { ICON_CLOUD, ICON_FOLDER, cut, hhmm, initial, personaAvatar, plain } from './ui.mjs';
 import { SETTINGS_SECTIONS, openSettings } from './settings.mjs';
@@ -16,28 +17,14 @@ import { openGroupDialog, openPersonaDialog } from './misc.mjs';
 
 /* -------------------------------------------------------------- 二级列表 */
 
-/* ---------------------------------------------------- 通讯录：A–Z 分组 */
+/* ---------------------------------------------------- 通讯录：按部门分组 */
 
 /**
- * 名字首字母（通讯录「数字员工」按 A–Z 分组，2026-10-20 用户要求：像微信通讯录）。
- *
- * 中文不能直接取首字 —— 要转拼音首字母。项目零依赖、不引 pinyin 库，
- * 这里用 `Intl.Collator('zh-Hans-u-co-pinyin')` 的拼音排序能力：
- * 给每个字母一个"该字母拼音区的最小字"当边界，最后一个 ≤ 名字首字的边界就是它的分组。
- *   · 英文名直接取首字母；数字/符号/认不出的 → '#'（排最后，跟微信一样）
- *   · 边界字选的是该声母下拼音最小的常见字（阿 a、八 ba、擦 ca…）；i/u/v 没有拼音音节，跳过
- * 只依赖浏览器 ICU，不写死"姓氏表" —— 生僻姓也能分对（只要 ICU 认识这个字）。
+ * 中文排序器：拼音序（`zh-Hans-u-co-pinyin`），只依赖浏览器 ICU，不写死"姓氏表"。
+ * 2026-10-25 起通讯录「数字员工」**按部门分组**（用户拍板：「部门是给人看的，
+ * 把人按部门分组」），替代原 A–Z 字母头 —— 组间按部门名拼音排，组内按人名拼音排，
+ * 都走这一个排序器。
  */
-export const PINYIN_BOUNDS = [
-  ['A', '阿'], ['B', '八'], ['C', '擦'], ['D', '搭'], ['E', '蛾'], ['F', '发'], ['G', '噶'], ['H', '哈'],
-  ['J', '击'], ['K', '喀'], ['L', '拉'], ['M', '妈'], ['N', '拿'], ['O', '哦'], ['P', '啪'], ['Q', '七'],
-  ['R', '燃'], ['S', '撒'], ['T', '塌'], ['W', '挖'], ['X', '夕'], ['Y', '压'], ['Z', '匝'],
-];
-
-
-export const HAN_RE = /^[\u3400-\u9fff\uf900-\ufaff]/;
-
-
 export let pinyinCollator = null;
 
 
@@ -46,7 +33,7 @@ export const zhNameCollator = () => {
     try {
       pinyinCollator = new Intl.Collator('zh-Hans-u-co-pinyin');
     } catch {
-      // 理论上不会（Chromium/WebView2 都带 ICU）；真不支持就退回中文默认排序，分组仍按边界字试
+      // 理论上不会（Chromium/WebView2 都带 ICU）；真不支持就退回中文默认排序，顺序差点但不断页
       pinyinCollator = new Intl.Collator('zh-Hans');
     }
   }
@@ -55,44 +42,46 @@ export const zhNameCollator = () => {
 
 
 
-/** 名字 → 分组字母（A–Z / '#'）。 */
-export function nameInitial(name) {
-  const first = String(name ?? '').trim().charAt(0);
-  if (!first) return '#';
-  if (/[A-Za-z]/.test(first)) return first.toUpperCase();
-  if (!HAN_RE.test(first)) return '#';
+/**
+ * 通讯录「数字员工」按部门分组：[{ dept, rows }]。
+ *
+ * 部门是 `personas.department` 上的**自由文本**（2026-10-25，跟岗位同待遇 —— 可空、
+ * 只用于看人）：有部门的按部门名分组（组间按拼音排），没部门的落「未分配」殿后；
+ * 组内按人名拼音排。
+ */
+export function groupPeopleByDepartment(people) {
   const col = zhNameCollator();
-  let letter = '#';
-  for (const [L, bound] of PINYIN_BOUNDS) {
-    if (col.compare(first, bound) >= 0) letter = L;
-    else break;
+  const UNASSIGNED = '未分配';
+  const byDept = new Map();
+  for (const p of people) {
+    const dept = String(p.department ?? '').trim() || UNASSIGNED;
+    if (!byDept.has(dept)) byDept.set(dept, []);
+    byDept.get(dept).push(p);
   }
-  return letter;
+  const groups = [...byDept.entries()].map(([dept, rows]) => ({
+    dept,
+    unassigned: dept === UNASSIGNED,
+    rows: rows.sort((a, b) => col.compare(a.name ?? '', b.name ?? '')),
+  }));
+  groups.sort((a, b) => (a.unassigned !== b.unassigned ? (a.unassigned ? 1 : -1) : col.compare(a.dept, b.dept)));
+  return groups;
 }
 
 
 
-/** 通讯录「数字员工」排序 + 按首字母分组：[{ letter, rows }]，'#' 永远排最后。 */
-export function groupPeopleByInitial(people) {
+/**
+ * 部门建议列表（#deptSuggest，新建对话框与员工详情共用一个 datalist）：
+ * 库里已有哪些部门就建议哪些，按拼音排。
+ * 自由文本字段最怕「技术部 / 技术 部」散成两个组 —— 建议列表是唯一的防手滑手段，
+ * 每次开对话框 / 开详情前刷一遍（新建员工之后列表就多一个可选项）。
+ */
+export function refreshDeptSuggest() {
+  const dl = $('deptSuggest');
+  if (!dl) return;
   const col = zhNameCollator();
-  const sorted = [...people].sort((a, b) => {
-    const ia = nameInitial(a.name);
-    const ib = nameInitial(b.name);
-    if (ia !== ib) {
-      if (ia === '#') return 1;
-      if (ib === '#') return -1;
-      return ia < ib ? -1 : 1;
-    }
-    return col.compare(a.name ?? '', b.name ?? '');
-  });
-  const out = [];
-  for (const p of sorted) {
-    const letter = nameInitial(p.name);
-    const last = out.at(-1);
-    if (last && last.letter === letter) last.rows.push(p);
-    else out.push({ letter, rows: [p] });
-  }
-  return out;
+  const depts = [...new Set(S.personas.map((p) => String(p.department ?? '').trim()).filter(Boolean))];
+  depts.sort((a, b) => col.compare(a, b));
+  dl.innerHTML = depts.map((d) => `<option value="${esc(d)}"></option>`).join('');
 }
 
 
@@ -299,7 +288,7 @@ export function renderList() {
   const groups = (S.groups ?? [])
     .map((g) => ({ ...g, conv: latestConvOfGroup.get(g.id) ?? null }))
     .filter((g) => match(g.title));
-  const people = S.personas.filter((p) => match(p.name));
+  const people = S.personas.filter((p) => match(p.name) || match(p.department));
   /**
    * 分段标题。收起时**整段内容不渲染**（不是单纯 display:none）——
    * 收起就没有它的 DOM，点了也不会先闪一下再消失。
@@ -340,10 +329,15 @@ export function renderList() {
         </div>
         <i class="dot ${p.busy ? 'busy' : ''}" title="${p.busy ? '正在干活' : '现在闲着'}"></i>
       </div>`;
-  /* 数字员工按 A–Z 分组（微信通讯录那种，2026-10-20 用户要求）。
-     搜索时**不插字母头**：结果已经少而散，再按字母切开反而碎；行本身仍是排好序的。 */
-  const personRows = groupPeopleByInitial(people)
-    .map((g) => `${q ? '' : `<div class="list-letter" aria-hidden="true">${g.letter}</div>`}${g.rows.map(personRow).join('')}`)
+  /* 数字员工按部门分组（2026-10-25 用户拍板：部门是给人看的分组，替代原 A–Z 字母头）。
+     部门头是**可折叠的子段**（复用 sec 机制，各自的收起状态记住）：人多时把不关心的
+     部门收起来，找部门就不用滚长列表；搜索框也匹配部门名（上面 match 那行）——
+     搜「技术部」直接出这个部门的人，比滚着找更快。搜索时不画部门头：结果少而散，
+     再切开反而碎；且 sec 搜索时强制展开。 */
+  const personRows = groupPeopleByDepartment(people)
+    .map((g) => (q
+      ? g.rows.map(personRow).join('')
+      : sec(`dept:${g.dept}`, esc(g.dept), g.rows.length, g.rows.map(personRow).join(''))))
     .join('');
 
   $('listBody').innerHTML = !groups.length && !people.length

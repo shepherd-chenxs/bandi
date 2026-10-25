@@ -71,7 +71,7 @@ try {
     check('GET /api/experts → 200', d0.status === 200, String(d0.status));
     const list0 = d0.b?.experts ?? [];
     check('目录就是 14 位', list0.length === 14, list0.map((x) => x.key).join(','));
-    check('技术轨八位排最前（按用户口径排）', ['pm', 'lijun', 'architect', 'ui', 'jiahui', 'test', 'machao', 'qa'].every((k, i) => list0[i]?.key === k), list0.map((x) => x.key).join(','));
+    check('技术轨八位排最前（按用户口径排）', ['hetao', 'lijun', 'architect', 'ui', 'jiahui', 'guoshuai', 'machao', 'qa'].every((k, i) => list0[i]?.key === k), list0.map((x) => x.key).join(','));
     check('喜儿跟在杜衡后面（2026-10-25 挪位）', list0[8]?.key === 'xier', list0.map((x) => x.key).join(','));
     check('账号运营（季风）已撤出目录（改派系统管家）', !list0.some((x) => x.key === 'operator'), list0.map((x) => x.key).join(','));
     check('全都是未雇佣', list0.every((x) => x.hired === false && x.hiredPersona === null));
@@ -87,9 +87,22 @@ try {
     check('id 是固定那个', h.b?.persona?.id === 'p-expert-jiahui', h.b?.persona?.id);
     check('builtin = 0（解聘要删得掉）', h.b?.persona?.builtin === 0);
     check('岗位写上了', !!h.b?.persona?.role, h.b?.persona?.role);
+    check('出厂默认部门写上了（技术轨 → 技术部）', h.b?.persona?.department === '技术部', String(h.b?.persona?.department));
     check('职责指令不是空壳', String(h.b?.persona?.instructions ?? '').length > 100);
     check('runtime = auto', h.b?.persona?.runtime === 'auto', h.b?.persona?.runtime);
     check('cwd = 平台根', h.b?.persona?.cwd === repoRoot, h.b?.persona?.cwd);
+
+    /* 部门不进 E2055 身份锁（2026-10-25 用户口径：部门是给人看的分组，组织归属是用户的权）：
+       改部门畅通、清空落「未分配」，但名字照旧锁死 —— 锁的是"他是谁"，不是"他在哪个部门"。 */
+    const pj = await req('/api/personas/p-expert-jiahui');
+    const base = pj.b?.persona ?? {};
+    const same = (over) => JSON.stringify({ name: base.name, role: base.role, instructions: base.instructions, ...over });
+    const dep = await req('/api/personas/p-expert-jiahui', { method: 'PUT', body: same({ department: '项目一组' }) });
+    check('雇佣专家改部门 → 200', dep.status === 200 && dep.b?.persona?.department === '项目一组', `${dep.status} ${dep.b?.persona?.department}`);
+    const depClear = await req('/api/personas/p-expert-jiahui', { method: 'PUT', body: same({ department: '' }) });
+    check('清空部门 → null（界面落「未分配」）', depClear.status === 200 && depClear.b?.persona?.department === null, String(depClear.b?.persona?.department));
+    const badName = await req('/api/personas/p-expert-jiahui', { method: 'PUT', body: same({ name: base.name + '2' }) });
+    check('名字仍锁死（E2055 不放行）', badName.status === 403 && badName.b?.code === 'E2055', `${badName.status} ${badName.b?.code}`);
 
     const st = await req('/api/state');
     check('他进了通讯录', (st.b?.personas ?? []).some((p) => p.id === 'p-expert-jiahui'));
@@ -153,20 +166,23 @@ try {
 
     /* ------------------------------- ⑦ 解聘没雇佣的：不炸 */
     console.log('\n⑦ 解聘没雇佣的：removed:false，不报错');
-    const f2 = await req('/api/experts/test/fire', { method: 'POST' });
+    const f2 = await req('/api/experts/guoshuai/fire', { method: 'POST' });
     check('没雇佣就解聘 → 200 {removed:false}', f2.status === 200 && f2.b?.removed === false, JSON.stringify(f2.b));
-    const f3 = await req('/api/experts/test/fire', { method: 'POST' });
+    const f3 = await req('/api/experts/guoshuai/fire', { method: 'POST' });
     check('连解两次也一样', f3.status === 200 && f3.b?.removed === false);
 
     /* ------------------------------- ⑧ 全家桶：十四位都能雇能解 */
     console.log('\n⑧ 十四位各雇一轮再全解：目录行为一致');
-    const ALL_KEYS = ['pm', 'lijun', 'architect', 'ui', 'jiahui', 'test', 'machao', 'qa', 'xier', 'keeper', 'editor', 'copywriter', 'analyst', 'director'];
+    const ALL_KEYS = ['hetao', 'lijun', 'architect', 'ui', 'jiahui', 'guoshuai', 'machao', 'qa', 'xier', 'zhangkun', 'editor', 'copywriter', 'analyst', 'director'];
     for (const k of ALL_KEYS) {
       const r = await req(`/api/experts/${k}/hire`, { method: 'POST' });
       check(`雇佣 ${k} → 201`, r.status === 201 && r.b?.persona?.id === `p-expert-${k}`, `${r.status}`);
     }
-    const nAfter = (await req('/api/state')).b.personas.filter((p) => p.id.startsWith('p-expert-')).length;
-    check('十四位都在通讯录', nAfter === 14, String(nAfter));
+    const nAfter = (await req('/api/state')).b.personas.filter((p) => p.id.startsWith('p-expert-'));
+    check('十四位都在通讯录', nAfter.length === 14, String(nAfter.length));
+    // 出厂部门三档：技术轨八位 → 技术部，秘书 → 秘书处，内容轨五位 → 内容部
+    const deptOf = (d) => nAfter.filter((p) => p.department === d).length;
+    check('出厂部门齐：技术部 8 / 秘书处 1 / 内容部 5', deptOf('技术部') === 8 && deptOf('秘书处') === 1 && deptOf('内容部') === 5, JSON.stringify(nAfter.map((p) => `${p.id}:${p.department}`)));
     for (const k of ALL_KEYS) {
       const r = await req(`/api/experts/${k}/fire`, { method: 'POST' });
       check(`解聘 ${k} → removed:true`, r.status === 200 && r.b?.removed === true);

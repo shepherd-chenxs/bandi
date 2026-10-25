@@ -237,6 +237,9 @@ export async function handlePersona(req, res, url) {
       name,
       // undefined = 这次没带这个字段；空串 = 显式清掉岗位
       role: body.role === undefined ? undefined : String(body.role ?? '').trim() || null,
+      // 部门：同岗位口径。**不进 E2055 身份锁** —— 组织归属是用户的权，
+      // 专家包只给出厂默认（雇佣时写入），之后用户随便调（见 experts.mjs 的回填说明）
+      department: body.department === undefined ? undefined : String(body.department ?? '').trim() || null,
       instructions: String(body.instructions ?? ''),
       runtime,
       sandbox: body.sandbox ? String(body.sandbox) : undefined,

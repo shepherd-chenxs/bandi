@@ -53,11 +53,11 @@ export function getPersona(id) {
 }
 
 
-export function createPersona({ id = null, name, role = null, instructions = '', runtime = 'codex', sandbox = 'danger-full-access', cwd = null, model = null, showThinking = 0, rootDirs = [], builtin = 0, avatar = null, maxParallel = null }) {
+export function createPersona({ id = null, name, role = null, department = null, instructions = '', runtime = 'codex', sandbox = 'danger-full-access', cwd = null, model = null, showThinking = 0, rootDirs = [], builtin = 0, avatar = null, maxParallel = null }) {
   const row = {
     // 内置员工要**固定 id**（seed 幂等靠它）；普通员工仍自动生成
     id: id || newId('p'),
-    name, role, instructions, runtime, sandbox, cwd, model,
+    name, role, department, instructions, runtime, sandbox, cwd, model,
     showThinking: showThinking ? 1 : 0,
     rootDirs: Array.isArray(rootDirs) && rootDirs.length ? JSON.stringify(rootDirs) : null,
     builtin: builtin ? 1 : 0,
@@ -66,10 +66,10 @@ export function createPersona({ id = null, name, role = null, instructions = '',
     createdAt: nowIso(),
   };
   db.prepare(
-    `INSERT INTO personas (id, name, role, instructions, runtime, sandbox, cwd, model, showThinking, rootDirs, builtin, avatar, maxParallel, createdAt)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO personas (id, name, role, department, instructions, runtime, sandbox, cwd, model, showThinking, rootDirs, builtin, avatar, maxParallel, createdAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
-    row.id, row.name, row.role, row.instructions, row.runtime, row.sandbox, row.cwd, row.model,
+    row.id, row.name, row.role, row.department, row.instructions, row.runtime, row.sandbox, row.cwd, row.model,
     row.showThinking, row.rootDirs, row.builtin, row.avatar, row.maxParallel, row.createdAt,
   );
   return row;
@@ -149,6 +149,8 @@ export function updatePersona(id, fields) {
     name: fields.name ?? current.name,
     // 岗位：跟 model 一个口径 —— undefined = 没提供；空串/null = 显式清掉
     role: fields.role === undefined ? current.role : (String(fields.role ?? '').trim() || null),
+    // 部门：同岗位的口径（undefined = 没提供；空白 = 显式清掉，清掉就落「未分配」）
+    department: fields.department === undefined ? current.department : (String(fields.department ?? '').trim() || null),
     instructions: fields.instructions ?? current.instructions,
     runtime: fields.runtime ?? current.runtime,
     sandbox: fields.sandbox ?? current.sandbox,
@@ -172,10 +174,10 @@ export function updatePersona(id, fields) {
             : null),
   };
   db.prepare(
-    `UPDATE personas SET name = ?, role = ?, instructions = ?, runtime = ?, sandbox = ?, cwd = ?, model = ?, showThinking = ?, rootDirs = ?, avatar = ?, maxParallel = ?
+    `UPDATE personas SET name = ?, role = ?, department = ?, instructions = ?, runtime = ?, sandbox = ?, cwd = ?, model = ?, showThinking = ?, rootDirs = ?, avatar = ?, maxParallel = ?
       WHERE id = ?`,
   ).run(
-    next.name, next.role, next.instructions, next.runtime, next.sandbox, next.cwd, next.model,
+    next.name, next.role, next.department, next.instructions, next.runtime, next.sandbox, next.cwd, next.model,
     next.showThinking, next.rootDirs, next.avatar, next.maxParallel, id,
   );
   // 指令真的改了 → 作废他的成员会话：身份只在会话第一次建立时注入，

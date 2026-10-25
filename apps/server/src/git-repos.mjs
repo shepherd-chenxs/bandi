@@ -161,6 +161,26 @@ export async function whoami({ fresh = false, timeoutMs } = {}) {
  */
 const GH_TIMEOUT_MS = Number(process.env.BANDI_GH_TIMEOUT_MS ?? 8000);
 
+/**
+ * GitHub API 的**根地址**（2026-10-25，`BANDI_GH_API`）。默认 `api.github.com`，指不了别的就没法测。
+ *
+ * 为什么要留这个口子（两件事都靠它）：
+ *   · **验收**：「建 PR」这条链每一步都在打 GitHub，而班底的冒烟铁律是不联网、不要令牌。
+ *     光测纯函数等于没测 —— 请求体写错、422 认不出来、拿旧 sha 去合，全都跑不掉。
+ *     有了可指的地址，冒烟能在本机起一个假 GitHub（`fixtures/gh-mock.mjs`）把整条链**真跑一遍**。
+ *     ⚠️ 不用「覆盖 `globalThis.fetch`」那招（`smoke-schedules.mjs:179`）：本域的 server 是子进程
+ *     起的，父进程换掉的 fetch 影响不到它。
+ *   · GitHub Enterprise / 自建镜像的用户 —— 班底不该假定全世界只有 github.com。
+ *
+ * 只接受 http(s)，且只在**明确设了**的时候才偏离默认：不设 = 行为与今天完全一致。
+ */
+const GH_API = (() => {
+  const raw = String(process.env.BANDI_GH_API ?? '').trim().replace(/\/+$/, '');
+  if (!raw) return 'https://api.github.com';
+  if (!/^https?:\/\//i.test(raw)) throw new Error(`BANDI_GH_API 要写成 http(s):// 开头的地址：${raw}`);
+  return raw;
+})();
+
 const ghFetch = async (pathname, { token, method = 'GET', body, timeoutMs = GH_TIMEOUT_MS } = {}) => {
   const t = token ?? readToken();
   if (!t) throw new Error('还没连接 GitHub（先去「设置 → 代码托管」填一个 fine-grained PAT）');
@@ -169,7 +189,7 @@ const ghFetch = async (pathname, { token, method = 'GET', body, timeoutMs = GH_T
   let r;
   let text;
   try {
-    r = await fetch(`https://api.github.com${pathname}`, {
+    r = await fetch(`${GH_API}${pathname}`, {
       method,
       headers: {
         Authorization: `Bearer ${t}`,
@@ -195,10 +215,22 @@ const ghFetch = async (pathname, { token, method = 'GET', body, timeoutMs = GH_T
   }
   if (!r.ok) {
     const msg = data?.message ?? text.slice(0, 200);
-    if (r.status === 401) throw new Error('令牌无效或已过期（401）');
-    if (r.status === 403) throw new Error(`这个令牌没有权限做这件事（403）：${msg}`);
-    if (r.status === 404) throw new Error(`没找到（404）：${msg}`);
-    throw new Error(`GitHub ${r.status}：${msg}`);
+    // **状态码挂在错误上**（2026-10-25）：建/合的分支处理要靠它。
+    // 原来调用方用「消息里有没有 '403' 这几个字符」判 —— 那太脆：GitHub 的 404 消息里
+    // 完全可能出现一串数字（sha、限额、issue 号），误判就会把"没权限"这种要人换令牌的信号
+    // 报成别的原因。文案照旧给人看，`status` 给代码看。
+    const err = new Error(
+      r.status === 401
+        ? '令牌无效或已过期（401）'
+        : r.status === 403
+          ? `这个令牌没有权限做这件事（403）：${msg}`
+          : r.status === 404
+            ? `没找到（404）：${msg}`
+            : `GitHub ${r.status}：${msg}`,
+    );
+    err.status = r.status;
+    err.githubMessage = String(msg ?? '');
+    throw err;
   }
   return data;
 };
@@ -231,8 +263,11 @@ export async function listAvailableRepos() {
 
 /* ---------------------------------------------------------------- git 子进程 */
 
-/** 异步跑一个命令（别用 spawnSync 卡住整个控制面） */
-function run(file, args, { cwd, env, timeoutMs = 300000 } = {}) {
+/** 异步跑一个命令（别用 spawnSync 卡住整个控制面）
+ *
+ * `trim: false` 给**机器格式**的输出用（`git status -z`）：它第一条记录可能以空格开头
+ * （` M path`），默认 trim 会把那个空格吃掉、整条记录错位。人看的输出才该 trim。 */
+function run(file, args, { cwd, env, timeoutMs = 300000, trim = true } = {}) {
   return new Promise((resolve) => {
     const c = spawn(file, args, { cwd, env: { ...process.env, ...env }, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
@@ -247,7 +282,7 @@ function run(file, args, { cwd, env, timeoutMs = 300000 } = {}) {
     }, timeoutMs);
     c.on('exit', (code) => {
       clearTimeout(timer);
-      resolve({ code, out: out.trim() });
+      resolve({ code, out: trim ? out.trim() : out });
     });
     c.on('error', (e) => {
       clearTimeout(timer);
@@ -601,22 +636,410 @@ export async function getChecks(repo, sha) {
 }
 
 /**
- * 合并一个 PR（**整个平台唯一会写 GitHub 的地方**，2026-10-23）。
+ * 合并一个 PR（2026-10-23；2026-10-25 起与 `createPull` 并列为平台两处写 GitHub 的地方）。
  *
- * 谁能走到这儿由调用方管（流程合并节点的判据表），这里只管把 API 调了、把结果说人话：
+ * 谁能走到这儿由调用方管（流程合并节点的判据表 / 「设置 → 代码托管」上的人点按钮），
+ * 这里只管把 API 调了、把结果说人话：
  *   · 405「not mergeable」多半是冲突或分支保护 —— 原样带回，别翻译成"系统错误"；
- *   · 403 是令牌没有 contents:write —— 那是**该等人换令牌**的明确信号，带上原话。
+ *   · 403 是令牌没有 contents:write —— 那是**该等人换令牌**的明确信号，带上原话；
+ *   · 409 是给了 `sha` 但 head 期间变了（有人推了新提交）—— 必须让人重看，别盲重试。
  */
-export async function mergePull(repo, number, { commitTitle = null, mergeMethod = 'merge' } = {}) {
+export async function mergePull(repo, number, { commitTitle = null, mergeMethod = 'merge', sha = null } = {}) {
   const body = { merge_method: mergeMethod };
   if (commitTitle) body.commit_title = commitTitle;
+  // 乐观锁：拿闸判据看下的那个 head SHA 去合，期间有人推提交就撞 409，而不是合掉一份没看过的改动
+  if (sha) body.sha = sha;
   try {
     const data = await ghFetch(`/repos/${repo}/pulls/${number}/merge`, { method: 'PUT', body });
-    return { merged: !!data.merged, message: data.message ?? '' };
+    return { merged: !!data.merged, message: data.message ?? '', sha: data.sha ?? null };
   } catch (e) {
-    const msg = String(e?.message ?? e);
-    if (msg.includes('405') || /not mergeable/i.test(msg)) throw new Error(`GitHub 拒绝合并（405）：${msg}`);
-    if (msg.includes('403')) throw new Error(`令牌没有合并权限（403）：${msg}——去 GitHub 给这个 PAT 勾上 contents:write 再换一次`);
+    if (e?.status === 409) throw new Error('这个 PR 在你看的这段时间里被人推了新提交（409）：刷新后重看再合');
+    if (e?.status === 405 || /not mergeable/i.test(String(e?.githubMessage ?? ''))) throw new Error(`GitHub 拒绝合并（405）：${e?.githubMessage ?? e?.message ?? e} —— 多半是有冲突、或分支保护（必需检查/必需审阅）没过`);
+    if (e?.status === 403) throw new Error(`令牌没有合并权限（403）：${e?.githubMessage ?? e.message}——去 GitHub 给这个 PAT 勾上 contents:write 再换一次（现在挂的是 ${tokenHint() ?? '没令牌'}）`);
     throw e;
   }
+}
+
+/* ---------------------------------------------------------------- 建 PR（写侧，2026-10-25） */
+
+/**
+ * 「员工在克隆目录里改完 → 平台上点一下出 PR」缺的那半截。
+ *
+ * 为什么做在服务端、而不是给员工装一个会建 PR 的技能（2026-10-25 用户问"github 上有没有现成的"）：
+ *   · 令牌只在这侧 —— `agentEnv()` 把 `GIT_*`/`GH_TOKEN`/`GITHUB_TOKEN` 全删了（2026-10-17 事故后的规矩），
+ *     让员工拿 `gh` 建 PR 等于把凭据发回去，还绕开 `tools/check-pr.mjs` 与合并四闸；
+ *   · 建/合是**外部可见且难收回**的动作，账要落在平台（卡上五个字段 + 流程实例），不能只留在会话里；
+ *   · 零依赖：用已有的 `fetch` + `spawn git`，不引 octokit、不要求装 gh。
+ *
+ * 抄的是**交互**不是实现：收尾分支的"先确认 base、别默认强推、没测绿不结"来自
+ * obra/superpowers 的 `finishing-a-development-branch`（MIT）；PR 正文该带"改了什么 + 怎么验的"
+ * 来自 create-pr-with-evidence 那条契约。
+ */
+
+/** 只读本地 git 的命令上限（一次状态查询不该把人挂在网络/磁盘上） */
+const GIT_FAST_MS = 20000;
+/** push 的上限：大仓库第一次推一个分支，比一次状态查询慢得多 */
+const GIT_PUSH_MS = 180000;
+
+/**
+ * 分支名的规矩（git 的 ref 规则里最容易撞的那几条，先在服务端挡一道）。
+ * 挡住比让 push 报一堆英文强。
+ */
+export function assertBranchName(name) {
+  const b = String(name ?? '').trim();
+  if (!b) throw new Error('分支名是空的');
+  if (b.length > 100) throw new Error(`分支名太长（${b.length} 个字符，上限 100）`);
+  if (/[\s~^:?*[\\\u0000-\u001f\u007f]/.test(b)) throw new Error('分支名不能有空格和 ~ ^ : ? * [ ] \\ 这些字符');
+  if (b.startsWith('/') || b.endsWith('/') || b.includes('//')) throw new Error('分支名不能以 / 开头或结尾，也不能有连续的 //');
+  if (b.startsWith('.') || b.endsWith('.') || b.includes('..')) throw new Error('分支名不能以 . 开头/结尾，也不能有 ..');
+  if (b.includes('@{')) throw new Error('分支名不能含 @{（git 保留）');
+  if (b.endsWith('.lock')) throw new Error('分支名不能以 .lock 结尾（git 保留）');
+  if (/^(HEAD|FETCH_HEAD|ORIG_HEAD|MERGE_HEAD|refs)$/i.test(b)) throw new Error(`分支名不能叫 ${b}（git 保留）`);
+  return b;
+}
+
+/**
+ * 建议分支名：`bandi/<标题的 ASCII 短串>-<时间戳>`。
+ * 中文标题进不了分支名（会被折空），那就只剩时间戳 —— 时间戳保证两次建 PR 不撞名。
+ */
+export function suggestBranchName(title, at = new Date()) {
+  const p = (n) => String(n).padStart(2, '0');
+  const slug = String(title ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 32);
+  const stamp = `${at.getFullYear()}${p(at.getMonth() + 1)}${p(at.getDate())}-${p(at.getHours())}${p(at.getMinutes())}${p(at.getSeconds())}`;
+  return `bandi/${slug ? slug + '-' : ''}${stamp}`;
+}
+
+/**
+ * **凭据闸**（推上去就收不回来：git 历史里的 secret 只能靠强推抹，公开仓库抹不掉）。
+ *
+ * 与 `pr-review.mjs` 的 `SENSITIVE_RE` 不是一回事：那条管"自动合并要严"（CI 配置也算敏感），
+ * 这条管"别把私钥推到公开仓库"。`.github/workflows/` 在这条里**不算**凭据 —— 那是正常改动。
+ */
+const SECRET_PATH_RE =
+  /(^|\/)\.env(\.|$)|\.(pem|p12|pfx|key|kdbx|keystore)$|(^|\/)(id_rsa|id_ecdsa|id_ed25519|\.npmrc|\.netrc)(\.|$)|[\w.-]*(token|secret|credential|passwd|password)[\w.-]*$/i;
+/** 模板类放过：`.env.example` 是要提交的东西，拦它等于逼人绕开平台 */
+const SECRET_EXEMPT_RE = /\.(example|sample|template|dist|txt|md)$/i;
+
+/** 这批路径里哪些像凭据（返回路径清单；空数组 = 干净） */
+export function findSecretPaths(paths) {
+  return (paths ?? []).map((p) => String(p ?? '')).filter((p) => p && SECRET_PATH_RE.test(p) && !SECRET_EXEMPT_RE.test(p));
+}
+
+/**
+ * 解析 `git status --porcelain -z`。
+ *
+ * 为什么用 `-z`：文件名里可以有空格、中文、引号，按行切会把一个路径切成两半；
+ * 重命名/复制的记录在 `-z` 下是**两条** NUL 结尾的字段（新路径在前、原路径在后），必须连着读，
+ * 否则下一行会被当成一条独立记录、路径错位。
+ */
+export function parseStatusZ(raw) {
+  const parts = String(raw ?? '').split('\0').filter((s) => s !== '');
+  const out = [];
+  for (let i = 0; i < parts.length; i++) {
+    let rec = parts[i];
+    /*
+     * 防御（2026-10-25 实报）：调用方如果对 -z 输出做了 trim，第一条记录会从 `" M apps/…"`
+     * 变成 `"M apps/…"` —— 第三位不再是分隔空格，slice(3) 会吃掉路径首字母
+     * （弹窗把 apps/… 显示成 pps/…，提交时 git add 报 pathspec 不存在）。
+     * 正常记录的第 3 位**一定**是空格；不是就补回来（第 2 位是空格的才可能是被 trim 的）。
+     */
+    if (i === 0 && rec.length > 2 && rec[1] === ' ' && rec[2] !== ' ') rec = ` ${rec}`;
+    const xy = rec.slice(0, 2);
+    const path = rec.slice(3);
+    const entry = { status: xy, path };
+    // 重命名/复制：X（index）或 Y（worktree）任一列是 R/C 都要把下一条源路径读掉
+    // （`R ` 已暂存重命名、` R` 未暂存重命名都是这个形状；只认 X 列会把源路径错当成一条独立记录）
+    if (/[RC]/.test(xy)) entry.from = parts[++i];
+    out.push(entry);
+  }
+  return out;
+}
+
+/** 跑一次 git（合并 stdout/stderr；超时后由 run() 掐掉）。`trim` 只有机器格式（-z）才关 */
+const gitIn = async (cwd, args, { timeoutMs = GIT_FAST_MS, env = GIT_ENV, trim = true } = {}) => run('git', args, { cwd, env, timeoutMs, trim });
+
+/**
+ * 提交身份：仓库（含全局）配了就用配好的，**没配才兜底**。
+ * 兜底用 GitHub 的 noreply 邮箱，这样提交能归到账号上、又不用把真实邮箱写进代码里。
+ */
+async function commitIdentityArgs(cwd) {
+  const args = [];
+  const name = await gitIn(cwd, ['config', 'user.name']);
+  if (name.code !== 0 || !name.out) args.push('-c', `user.name=${cachedLogin() || 'bandi'}`);
+  const email = await gitIn(cwd, ['config', 'user.email']);
+  if (email.code !== 0 || !email.out) {
+    const login = cachedLogin();
+    args.push('-c', `user.email=${login ? `${login}@users.noreply.github.com` : 'bandi@localhost'}`);
+  }
+  return args;
+}
+
+/** base 分支：库里的 defaultBranch → origin/HEAD → main（都拿不到就说清楚，不猜） */
+async function resolveBase(row, askedBase) {
+  if (askedBase) return assertBranchName(askedBase);
+  if (row.defaultBranch) return row.defaultBranch;
+  const head = await gitIn(row.localPath, ['symbolic-ref', '--short', '-q', 'refs/remotes/origin/HEAD']);
+  if (head.code === 0 && head.out) return head.out.replace(/^origin\//, '');
+  throw new Error('不知道要合进哪个分支（仓库没记默认分支、本地也没有 origin/HEAD）——在弹窗里填一个 base');
+}
+
+/**
+ * 本地工作区状态（**不联网**：全读本地 git，界面上那颗按钮点下去要立刻有反应）。
+ *
+ * `ahead` 可能为 null —— 本地还没有 `origin/<base>` 这个引用（刚接入没同步过），
+ * 这时候不能报"0 个提交领先"（那是假话），要报"不知道"并让人先点同步。
+ */
+export async function workState(row) {
+  const cwd = row.localPath;
+  if (!isGitRepo(cwd)) throw new Error(`本地目录不是 git 仓库（没有 .git）：${cwd}`);
+  const origin = await gitIn(cwd, ['remote', 'get-url', 'origin']);
+  const hasRemote = origin.code === 0 && !!origin.out;
+  const headRef = await gitIn(cwd, ['symbolic-ref', '--short', '-q', 'HEAD']);
+  const branch = headRef.code === 0 ? headRef.out : null;
+  const base = row.defaultBranch || null;
+
+  /*
+   * ⚠️ **trim:false**：`-z` 的第一条记录可以以空格开头（" M path"）。run() 默认 trim 会
+   * 吃掉那个空格，记录整体错位、路径首字母被 slice(3) 切掉 —— 2026-10-25 实报：
+   * 弹窗把 `apps/...` 显示成 `pps/...`，提交时 `git add` 报 pathspec 不存在。
+   */
+  const st = await gitIn(cwd, ['status', '--porcelain', '--untracked-files=all', '-z'], { trim: false });
+  if (st.code !== 0) throw new Error(`读工作区状态失败：${st.out.split('\n').slice(-3).join(' ')}`);
+  const dirty = parseStatusZ(st.out);
+
+  let ahead = null;
+  let aheadCommits = [];
+  let behind = null;
+  let baseKnown = false;
+  if (base && branch) {
+    const verify = await gitIn(cwd, ['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${base}`]);
+    baseKnown = verify.code === 0 && verify.out !== '';
+    if (baseKnown) {
+      const count = await gitIn(cwd, ['rev-list', '--count', `origin/${base}..HEAD`]);
+      if (count.code === 0) ahead = Number(count.out) || 0;
+      const log = await gitIn(cwd, ['log', '--format=%h %s', `origin/${base}..HEAD`, '-n', '20']);
+      if (log.code === 0) aheadCommits = log.out.split('\n').filter(Boolean).map((l) => ({ sha: l.slice(0, 7), subject: l.slice(8) }));
+      const back = await gitIn(cwd, ['rev-list', '--count', `HEAD..origin/${base}`]);
+      if (back.code === 0) behind = Number(back.out) || 0;
+    }
+  }
+
+  return {
+    fullName: row.fullName,
+    localPath: cwd,
+    branch,
+    detached: !branch,
+    hasRemote,
+    originUrl: hasRemote ? origin.out : null,
+    base,
+    baseKnown,
+    ahead,
+    aheadCommits,
+    behind,
+    dirty,
+    dirtyCount: dirty.length,
+    secrets: findSecretPaths(dirty.map((f) => f.path)),
+    // 默认分支名由服务端给（`bandi/<名>-<时间戳>`）：规则只留一处，界面和人敲的是同一套
+    suggest: suggestBranchName(row.name),
+    canShip: dirty.length > 0 || (ahead ?? 0) > 0,
+  };
+}
+
+/**
+ * 把工作区条目变成 `git add -A --` 的 pathspec（2026-10-25）。
+ *
+ * 不能无脑把 `path` 和 `from` 都塞进去 —— 用户实报过一次：
+ *   · `R `（**已暂存**的重命名）：旧路径已经不在工作区，index 里已经是删除，
+ *     传它会 fatal `pathspec ... did not match any files`；只加新路径即可（index 仍会认成 rename）。
+ *   · `D `（已暂存的删除）：同理，index 已经是删除，传它也会 fatal；跳过。
+ *   · ` R`（工作区侧重命名、还没暂存，如 `git add -N` 之后）：旧路径**必须**一起带上，
+ *     否则提交出来是"新增一份 + 旧文件还在"。
+ *   · ` D`（未暂存删除）：传路径是对的（`git add -A` 认 index 里的旧记录，把删除记下）。
+ */
+function addTargetsOf(entries) {
+  const targets = [];
+  for (const f of entries) {
+    const xy = String(f.status ?? '');
+    if (xy === 'D ') continue; // 已暂存的删除：index 已经记着，不需要再 add
+    if (xy[0] === 'R' || xy[0] === 'C') {
+      targets.push(f.path); // 已暂存的重命名/复制：只加新路径，旧路径的删除已在 index
+      continue;
+    }
+    if (f.from) targets.push(f.path, f.from);
+    else targets.push(f.path);
+  }
+  return targets;
+}
+
+/**
+ * 把工作区改动收成一个提交并推上去（**建 PR 的前半截**，不碰 GitHub API）。
+ *
+ * 三条硬规矩（都是"推上去收不回来"那一类）：
+ *   · 只在新分支上提交，绝不往 base 上提交（`assertBranchName` + base 同名直接拒）；
+ *   · 推不上去就**说清楚**，绝不 `--force`（远端同名分支不是你的，多半是别人的活）；
+ *   · 看着像凭据的文件先挡住，除非调用方明说 `allowSecrets`（界面上那颗"就是要提交"）。
+ */
+export async function commitAndPush(row, { branch = null, message = null, paths = null, allowSecrets = false, base = null } = {}) {
+  const st = await workState(row);
+  if (!st.hasRemote) throw new Error('这个目录没有 origin（手动接入的本地克隆要先把 origin 指回 GitHub）—— 没有 origin 就推不上去');
+  if (st.detached) throw new Error('当前不在任何分支上（detached HEAD）—— 先在那个目录 checkout 回一个分支');
+
+  const picked = Array.isArray(paths) && paths.length ? st.dirty.filter((f) => paths.includes(f.path)) : st.dirty;
+  if (Array.isArray(paths) && paths.length && picked.length !== paths.length) {
+    throw new Error('选中的文件和工作区对不上了（期间有人动过）—— 重新看一次改动再提交');
+  }
+  const secrets = findSecretPaths(picked.map((f) => f.path));
+  if (secrets.length && !allowSecrets) {
+    throw new Error(`改动里有看着像凭据的文件：${secrets.slice(0, 4).join('、')}${secrets.length > 4 ? ` 等 ${secrets.length} 个` : ''} —— 推上去就收不回来。确认那是可以公开的（例如 .env.example），再带上"就是要提交"`);
+  }
+
+  const targetBase = await resolveBase(row, base);
+  let branchName = branch ? assertBranchName(branch) : null;
+  let committed = null;
+
+  if (picked.length) {
+    if (!branchName) branchName = suggestBranchName(message || row.name);
+    if (branchName === targetBase) throw new Error(`新分支不能和 base 同名（${branchName}）—— 换个名字，不然没有可比的东西`);
+    if (branchName !== st.branch) {
+      const create = await gitIn(row.localPath, ['checkout', '-b', branchName]);
+      if (create.code !== 0) {
+        // 分支已经存在就切过去继续用（同一个分支上补一次提交是常态），但**不动它的历史**
+        const reuse = await gitIn(row.localPath, ['checkout', branchName]);
+        if (reuse.code !== 0) throw new Error(`切到分支 ${branchName} 没成：${(create.out || reuse.out).split('\n').slice(-3).join(' ')}`);
+      }
+    }
+    const idArgs = await commitIdentityArgs(row.localPath);
+    const addTargets = addTargetsOf(picked);
+    const add = await gitIn(row.localPath, ['add', '-A', '--', ...addTargets], { timeoutMs: GIT_PUSH_MS });
+    if (add.code !== 0) throw new Error(`git add 没成：${add.out.split('\n').slice(-3).join(' ')}`);
+    const msg = String(message ?? branchName).trim() || branchName;
+    const commit = await gitIn(row.localPath, [...idArgs, 'commit', '-m', msg]);
+    if (commit.code !== 0) throw new Error(`提交没成：${commit.out.split('\n').slice(-4).join(' ')}`);
+    const sha = await gitIn(row.localPath, ['rev-parse', 'HEAD']);
+    committed = { sha: sha.code === 0 ? sha.out : null, subject: msg };
+  } else {
+    // 工作区是干净的：那就用当前分支上**已经提交但没推**的东西
+    if (!branchName) branchName = st.branch;
+    if (branchName === targetBase) throw new Error(`你现在就在 base（${targetBase}）上，工作区又是干净的 —— 没东西可提，先切个分支或改点东西`);
+    if (!st.ahead) throw new Error(st.baseKnown ? '工作区是干净的，当前分支也没有领先 base 的提交 —— 没东西可推' : `工作区是干净的，而且本地还没有 origin/${targetBase} 这个引用 —— 先点「同步」拉一次再说`);
+    if (branchName !== st.branch) {
+      // 换了个名字：从当前 HEAD 拉出来（不动原来的分支指针），否则 push 会报"src refspec 不存在"
+      const create = await gitIn(row.localPath, ['branch', branchName, st.branch || 'HEAD']);
+      if (create.code !== 0) throw new Error(`建分支 ${branchName} 没成：${create.out.split('\n').slice(-3).join(' ')}`);
+    }
+  }
+
+  const push = await gitIn(row.localPath, [...gitAuthArgs(), 'push', '--set-upstream', 'origin', `refs/heads/${branchName}:refs/heads/${branchName}`], { timeoutMs: GIT_PUSH_MS });
+  if (push.code !== 0) {
+    const out = String(push.out ?? '');
+    if (/rejected|non-fast-forward/i.test(out)) {
+      throw new Error(`远端已经有一个不同的 ${branchName} 分支（推送被拒）。平台**不会强推** —— 换一个分支名，或先在那个目录把分支理干净。原始信息：${out.split('\n').slice(-3).join(' ')}`);
+    }
+    if (/Permission denied|403|Authentication failed|invalid credentials|Write access/i.test(out)) {
+      throw new Error(`推不上去：这个令牌对 ${row.fullName} 没有 Contents: write（或在 Repository access 里没选中它）。原始信息：${out.split('\n').slice(-3).join(' ')}`);
+    }
+    throw new Error(`推送失败：${out.split('\n').slice(-4).join(' ') || 'git 没给原因'}`);
+  }
+
+  return { branch: branchName, base: targetBase, committed, files: picked };
+}
+
+/**
+ * 建 PR 前**先查重**（同一个 head 分支再点一次不该撞 422，也不该建出两个 PR）。
+ * `head` 过滤的格式是 `owner:branch`（GitHub 文档口径）。
+ */
+export async function findOpenPullForHead(repo, branch, owner = null) {
+  const who = owner || String(repo).split('/')[0];
+  const list = await ghFetch(`/repos/${repo}/pulls?state=open&head=${encodeURIComponent(`${who}:${branch}`)}`);
+  const hit = (Array.isArray(list) ? list : [])[0];
+  if (!hit) return null;
+  return normalizePull(repo, hit);
+}
+
+/** 把 GitHub 的 PR 形状归成平台内部那一份（`fetchPull` 同族，字段少几个不影响显示） */
+function normalizePull(repo, pr) {
+  return {
+    repo,
+    number: Number(pr.number),
+    title: pr.title ?? '',
+    state: pr.merged ? 'merged' : pr.state === 'open' ? 'open' : 'closed',
+    url: pr.html_url ?? `https://github.com/${repo}/pull/${pr.number}`,
+    headRef: pr.head?.ref ?? null,
+    headSha: pr.head?.sha ?? null,
+    baseRef: pr.base?.ref ?? null,
+    author: pr.user?.login ?? '',
+    draft: !!pr.draft,
+  };
+}
+
+/**
+ * 建 PR（`POST /repos/{owner}/{repo}/pulls`）。
+ *
+ * 422 是这个接口最常撞的，分三档翻译成人话（逐字文案社区常见、官方文档未列，按语义判）：
+ *   · head 与 base 之间没有提交 —— 多半是选错 base；
+ *   · 同 head 已有 open PR —— 那就该走「查重」那条路，撞上了说明是并发；
+ *   · 别的 422（base 不存在等）原样带回。
+ * 403 是**权限没勾**，与合并的 403 不是同一个：这里要说 `Pull requests: Read and write`。
+ */
+export async function createPull(repo, { head, base, title, body = '', draft = false }) {
+  const t = String(title ?? '').trim();
+  if (!t) throw new Error('PR 标题不能是空的');
+  if (!head || !base) throw new Error('要说清源分支和 base');
+  if (head === base) throw new Error(`源分支和 base 是同一个（${base}）—— GitHub 没有可比的东西`);
+  try {
+    const pr = await ghFetch(`/repos/${repo}/pulls`, { method: 'POST', body: { title: t, head, base, body: String(body ?? ''), draft: !!draft } });
+    return { pr: normalizePull(repo, pr), created: true };
+  } catch (e) {
+    const m = String(e?.githubMessage ?? e?.message ?? e);
+    // 422 在这个接口最常撞，分三档翻译成人话（逐字文案是社区常见、官方文档只列 422，
+    // 所以按**语义**判、并且把原话带回 —— 认不出来时人说得出到底撞了哪个）
+    if (e?.status === 422 && /No commits between/i.test(m)) {
+      throw new Error(`这两个分支之间没有提交（${base} … ${head}）—— 要么改动没提交，要么 base 选错了：${m}`);
+    }
+    if (e?.status === 422 && /already exists/i.test(m)) {
+      const existing = await findOpenPullForHead(repo, head).catch(() => null);
+      if (existing) return { pr: existing, created: false };
+      throw new Error(`这个分支已经有一个 open PR 了：${m}`);
+    }
+    if (e?.status === 403) throw new Error(`令牌没有建 PR 的权限（403）：${m} —— 这个 PAT 要勾上 Pull requests: Read and write（现在挂的是 ${tokenHint() ?? '没令牌'}）`);
+    throw e;
+  }
+}
+
+/** 列一个仓库开着的 PR（建 PR 弹窗与合并入口共用；上限 30 条，走的是 `listOpenPulls`） */
+export async function listPullsForRepo(repo) {
+  return listOpenPulls(repo);
+}
+
+/** 合完删源分支（可选，对应 `gh pr merge --delete-branch`）；失败不谎报成功 */
+export async function deleteRemoteBranch(repo, branch) {
+  const b = assertBranchName(branch);
+  await ghFetch(`/repos/${repo}/git/refs/heads/${b}`, { method: 'DELETE' });
+  return { deleted: b };
+}
+
+/**
+ * 一句话跑完整条「本地改动 → 分支 → 推送 → PR」，建出来的 PR 立刻写进任务卡。
+ *
+ * 编排放在这里（不是放在 routes 里）有两个理由：
+ *   · 以后流程引擎的动作节点（`pr-create`）要复用同一条路，不能出现第二份"怎么建 PR"；
+ *   · 顺序是有讲究的：推送成功才建 PR、建之前必查重、建完第一件事是把 URL 落到卡上
+ *     （网络在中间断了，人至少知道这个 PR 可能已经存在）。
+ */
+export async function openPr(row, { title, body, base, branch, message, draft, paths, allowSecrets } = {}) {
+  const pushed = await commitAndPush(row, { branch, message: message ?? title, paths, allowSecrets, base });
+  const existing = await findOpenPullForHead(row.fullName, pushed.branch, row.owner);
+  if (existing) return { pr: existing, created: false, ...pushed };
+  const out = await createPull(row.fullName, {
+    head: pushed.branch,
+    base: pushed.base,
+    title: title || pushed.branch,
+    body: body ?? '',
+    draft: !!draft,
+  });
+  return { ...out, ...pushed };
 }

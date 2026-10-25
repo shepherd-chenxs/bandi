@@ -5,6 +5,7 @@ import { api, createCombo, dt, post } from './ui.mjs';
 import { load } from './state.mjs';
 import { confirmDo } from './machine.mjs';
 import { openPluginForm, pluginFormId } from './experts.mjs';
+import { refreshDeptSuggest } from './contacts.mjs';
 import { $, LOCAL_BASE, S } from './core.mjs';
 
 
@@ -61,6 +62,8 @@ export function openPersonaDialog() {
   pRuntimeCombo.setItems(S.runtimes.map((r) => ({ id: r.id, label: r.label })), false);
   pRuntimeCombo.setValue(S.runtimes[0]?.id ?? '');
   $('pCwd').value = S.repoRoot || '';
+  $('pDept').value = '';
+  refreshDeptSuggest(); // 建议列表跟着库里已用的部门走（contacts.mjs 填的 #deptSuggest）
   syncSandboxes();
   $('personaDlg').showModal();
 }
