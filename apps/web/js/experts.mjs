@@ -240,7 +240,7 @@ export function paintExperts() {
     $('expertGrid').innerHTML = `<div class="expert-grid">${list.map(expertCard).join('')}</div>${
       list.length
         ? ''
-        : `<div class="empty" style="padding:36px 12px">没有匹配「${esc(expertQ.trim())}」的专家 —— 试试花名（顾仓）、岗位（运维）或技能名。</div>`
+        : `<div class="empty" style="padding:36px 12px">没有匹配「${esc(expertQ.trim())}」的专家 —— 试试花名（张坤）、岗位（运维）或技能名。</div>`
     }`;
     $('expertGrid').querySelectorAll('[data-expert-hire]').forEach((el) => {
       el.onclick = () => hireExpert(el.dataset.expertHire).catch((e) => toast(e.message, 'error'));

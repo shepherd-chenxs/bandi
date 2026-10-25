@@ -44,11 +44,24 @@ check('传空白 = 清掉', store.getPersona(dev.id)?.role === null, String(stor
 store.updatePersona(dev.id, { role: '研发' });
 check('只传 name 时岗位不动', (store.updatePersona(dev.id, { name: '波哥2' }).role) === '研发', String(store.getPersona(dev.id)?.role));
 
+console.log('\n②′ 部门：跟岗位同一套口径（存、改、清、可空）');
+// 部门（2026-10-25）：组织架构里他属于哪儿 —— 自由文本、只用于通讯录按部门分组，
+// 引擎不读它（派活只认节点上点的名，同岗位那条铁律）。
+const bai = store.createPersona({ name: '老白', role: '运维', department: '技术部', runtime: 'codex', cwd: tmp, instructions: '' });
+check('department 存下来了', bai.department === '技术部', String(bai.department));
+store.updatePersona(bai.id, { department: '运维部' });
+check('能改', store.getPersona(bai.id)?.department === '运维部', String(store.getPersona(bai.id)?.department));
+store.updatePersona(bai.id, { department: '  ' });
+check('传空白 = 清掉（界面落「未分配」）', store.getPersona(bai.id)?.department === null, String(store.getPersona(bai.id)?.department));
+store.updatePersona(bai.id, { department: '技术部' });
+check('只传 name 时部门不动', (store.updatePersona(bai.id, { name: '老白2' }).department) === '技术部', String(store.getPersona(bai.id)?.department));
+
 console.log('\n③ 老库也能补上这一列');
 const db = new (await import('node:sqlite')).DatabaseSync(process.env.BANDI_DB, { readOnly: true });
 const cols = db.prepare("PRAGMA table_info('personas')").all().map((c) => c.name);
 db.close();
 check('personas 有 role 列', cols.includes('role'), cols.join(','));
+check('personas 有 department 列', cols.includes('department'), cols.join(','));
 
 console.log('\n④ 重点：**岗位不参与派活** —— 引擎只认节点上点的名');
 const qa = store.createPersona({ name: '星宇', role: '测试', runtime: 'codex', cwd: tmp, instructions: '' });
@@ -59,12 +72,14 @@ store.upsertWorkflowTemplate({
   nodes: [
     { id: 'n1', name: '测试', personaId: qa.id, approve: 'end', reject: 'end' }, // 点名了"测试"那个
     { id: 'n2', name: '没人', approve: 'end', reject: 'end' }, // 故意留空
+    { id: 'n3', name: '技术部', approve: 'end', reject: 'end' }, // 名字像部门 —— 部门也不许参与派活
   ],
 });
 const tpl = store.getWorkflowTemplate('t-role');
 const nodeOf = (id) => workflows.nodesOf(tpl).find((n) => n.id === id);
 check('点名谁就是谁（哪怕岗位不对口）', workflows.assigneeFor(nodeOf('n1')) === qa.id, String(workflows.assigneeFor(nodeOf('n1'))));
 check('没点名 → 解析不出人（不会按岗位顶一个人上来）', workflows.assigneeFor(nodeOf('n2')) === null, String(workflows.assigneeFor(nodeOf('n2'))));
+check('节点叫「技术部」也不会按部门顶人上来', workflows.assigneeFor(nodeOf('n3')) === null, String(workflows.assigneeFor(nodeOf('n3'))));
 
 const run = workflows.startWorkflow({ templateId: 't-role', title: '岗位用例', autoStart: false });
 const task = store.listWorkflowTasks(run.id)[0];

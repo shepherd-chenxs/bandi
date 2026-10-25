@@ -174,7 +174,7 @@ export function enterArchiveView() {
 
 
 /**
- * 会话的**显示名**（2026-10-21 修"解聘后头像变 ? / 名字变「和 大梁」"）：
+ * 会话的**显示名**（2026-10-21 修"解聘后头像变 ? / 名字变「和 贺韬」"）：
  *   · 员工还在 → personaName（他现在可能改过名，JOIN 现值）；
  *   · 员工没了（解聘/删除）→ personaName 是 NULL，回落到会话自己的标题，
  *     但 1:1 会话的 title 存的是「和 张三」（见 toMessages 的 `和 ${persona.name}`），

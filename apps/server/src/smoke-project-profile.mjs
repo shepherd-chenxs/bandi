@@ -100,7 +100,7 @@ if (!up) {
 
 try {
   const proj = (await post('/api/projects', { name: '档案项目', root: projRoot })).b?.project;
-  const pm = (await post('/api/personas', { name: '大梁', role: '项目经理' })).b?.persona;
+  const pm = (await post('/api/personas', { name: '贺韬', role: '项目经理' })).b?.persona;
   const dev = (await post('/api/personas', { name: '嘉辉', role: '研发' })).b?.persona;
   const qa = (await post('/api/personas', { name: '杜衡', role: '测试' })).b?.persona;
   check('造数：项目 + 三个人', !!proj && !!pm && !!dev && !!qa);
@@ -132,7 +132,7 @@ try {
 
   const after = (await req(`/api/status/projects/${encodeURIComponent(proj.id)}`)).b ?? {};
   check('干什么原文出来', after.summary_text === '把平台做成一个能自己干活的班底', String(after.summary_text));
-  check('项目经理显示姓名', after.pm_name === '大梁', String(after.pm_name));
+  check('项目经理显示姓名', after.pm_name === '贺韬', String(after.pm_name));
   check('成员显示姓名（按填的顺序）', after.members_text === '嘉辉、杜衡', String(after.members_text));
   check('成员明细带 id（界面画头像用）', (after.members ?? []).map((m) => m.id).join() === `${dev.id},${qa.id}`);
   check('开始时间标「填写」', after.started_text === '2026-10-10（填写）', String(after.started_text));
@@ -156,7 +156,7 @@ try {
   const badDate = await put(`/api/projects/${encodeURIComponent(proj.id)}`, { startedAt: '2026/10/10' });
   check('日期格式不对 → 400 E1082', badDate.status === 400 && badDate.b?.code === 'E1082', `${badDate.status} ${badDate.b?.code}`);
   const still = (await req(`/api/status/projects/${encodeURIComponent(proj.id)}`)).b ?? {};
-  check('被拒的三次都没动数据', still.pm_name === '大梁' && still.summary_text === '改了一句话', `${still.pm_name} / ${still.summary_text}`);
+  check('被拒的三次都没动数据', still.pm_name === '贺韬' && still.summary_text === '改了一句话', `${still.pm_name} / ${still.summary_text}`);
 
   console.log('\n⑤ 清空：传空串 / 空数组就是真的清掉');
   const cleared = await put(`/api/projects/${encodeURIComponent(proj.id)}`, {

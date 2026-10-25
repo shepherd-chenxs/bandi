@@ -19,6 +19,7 @@ process.env.BANDI_DB = path.join(tmp, 'bandi.db');
 const store = await import('./store.mjs');
 const pr = await import('./pr-review.mjs');
 const wf = await import('./workflows.mjs');
+const prCreate = await import('./pr-create.mjs');
 
 let failed = 0;
 const check = (label, ok, detail = '') => {
@@ -123,6 +124,82 @@ console.log('\n⑧ 卡片回写用到的两个抓手：meta（判新）与按键
 store.setMetaValue('prseen:a/b#1', 'sha-1');
 check('head.sha 记在 meta 里，重启不丢', store.getMetaValue('prseen:a/b#1') === 'sha-1');
 check('按 externalKey 查得到卡', typeof store.getProjectTaskByExternalKey === 'function');
+
+console.log('\n⑨ 合并的 SHA 锁：自动锁在看过的那份上，人拍板不锁（2026-10-25）');
+check('自动合并带上判据看下的那个 head SHA', pr.mergeShaFor({ byHuman: false, headSha: 'sha-A' }) === 'sha-A');
+check('人点「通过」不带锁：重试不该被陈旧 SHA 永久挡死', pr.mergeShaFor({ byHuman: true, headSha: 'sha-A' }) === null);
+check('自动那路拿不到 SHA → 明确失败（不许静默降级成不校验地合）', (() => {
+  try {
+    pr.mergeShaFor({ byHuman: false, headSha: null });
+    return false;
+  } catch (e) {
+    return /head SHA|停下等人/.test(e.message);
+  }
+})());
+pr.rememberReviewedSha('wf-sha-case', 'sha-REVIEWED');
+check('记住的是审阅时的 head（不是合并那一刻重新 fetch 到的）', pr.reviewedShaOf('wf-sha-case') === 'sha-REVIEWED');
+check('没记过的实例 → null（自动合并会停下等人，不瞎合）', pr.reviewedShaOf('wf-sha-never') === null);
+
+console.log('\n⑩ PR 交付流程：模板形状 + 动作节点到站真的会跑（2026-10-25）');
+prCreate.ensurePrDeliveryTemplate();
+const delivery = store.getWorkflowTemplate(prCreate.PR_DELIVERY_TEMPLATE_ID);
+const deliveryNodes = JSON.parse(delivery?.nodes ?? '[]');
+check('模板建出来了', !!delivery);
+check(
+  '四个节点：开发完成 / 建 PR / 审阅 / 合并',
+  deliveryNodes.map((n) => n.name).join('/') === '开发完成/建 PR/审阅/合并',
+  deliveryNodes.map((n) => n.name).join('/'),
+);
+check(
+  '建 PR 与合并都是平台动作（不是聊天任务）',
+  deliveryNodes.find((n) => n.id === 'n2')?.action === 'pr-create' &&
+    deliveryNodes.find((n) => n.id === 'n4')?.action === 'pr-merge',
+);
+check('审阅节点**不点名**（派给仓库绑的管理员）', deliveryNodes.find((n) => n.id === 'n3')?.personaId === undefined);
+check('审阅节点与「PR 审阅」模板共用同一份提示词', deliveryNodes.find((n) => n.id === 'n3')?.detail === pr.REVIEW_DETAIL);
+check('第一次建出来就发布（工作台里点得开）', !!delivery.publishedAt, String(delivery.publishedAt));
+check(
+  '幂等：再 ensure 一次还是四个节点',
+  (prCreate.ensurePrDeliveryTemplate(), JSON.parse(store.getWorkflowTemplate(prCreate.PR_DELIVERY_TEMPLATE_ID).nodes).length === 4),
+);
+
+/*
+ * 引擎回归：**中间的动作节点过去永远停在「待办」**。
+ * 原来 goto 只看 `assigneePersonaId`，而动作节点故意没有经办人；`retryPendingSteps`
+ * 也只捞"有经办人"的。于是真实全自动在"审阅 → 合并"这一步断路，只有人点/用例手动 start 才动。
+ * 这两条用例就是钉住 2026-10-25 的修复。
+ */
+store.upsertWorkflowTemplate({
+  id: 'smoke-auto-tpl',
+  name: '到站自动开跑',
+  start: 'a1',
+  nodes: [
+    { id: 'a1', name: '聊天', approve: 'a2', reject: 'end' },
+    { id: 'a2', name: '平台动作', action: 'smoke-auto', approve: 'end', reject: 'end' },
+  ],
+});
+let autoRuns = 0;
+wf.registerActionNode('smoke-auto', { run: async () => { autoRuns += 1; } });
+const autoRun = wf.startWorkflow({ templateId: 'smoke-auto-tpl', title: '到站自动开跑', autoStart: false });
+const autoFirst = store.listWorkflowTasks(autoRun.id)[0];
+store.updateWorkflowTask(autoFirst.id, { status: '待验收' });
+wf.decide(autoRun.id, '通过');
+await new Promise((r) => setTimeout(r, 50));
+check('流程走到动作节点 → 自己开跑（不再永远停在待办）', autoRuns === 1, `runs=${autoRuns}`);
+check('动作节点任务进入「进行中」', store.listWorkflowTasks(autoRun.id).at(-1)?.status === '进行中');
+
+// 节拍那一路：起始就是动作节点、autoStart=false 时，仍要能补跑
+store.upsertWorkflowTemplate({
+  id: 'smoke-pending-tpl',
+  name: '待办动作',
+  start: 'a1',
+  nodes: [{ id: 'a1', name: '平台动作', action: 'smoke-auto', approve: 'end', reject: 'end' }],
+});
+const pendingRun = wf.startWorkflow({ templateId: 'smoke-pending-tpl', title: '待办动作', autoStart: false });
+const picked = wf.retryPendingSteps();
+await new Promise((r) => setTimeout(r, 50)); // handler 是异步调的（见 startCurrentStep 的动作节点分支）
+check('30 秒节拍也会捡起没有经办人的动作节点', picked.includes('平台动作') && autoRuns === 2, JSON.stringify({ picked, runs: autoRuns }));
+check('那个动作任务已经进入「进行中」', store.listWorkflowTasks(pendingRun.id).at(-1)?.status === '进行中');
 
 console.log(`\n${failed ? `✗ ${failed} 项没过` : '✓ 全部通过'}`);
 process.exit(failed ? 1 : 0);

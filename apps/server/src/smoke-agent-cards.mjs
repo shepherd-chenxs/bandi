@@ -10,7 +10,7 @@
  *   ⑤ 建卡走的是与人手建卡同一条链路（startProjectTask → dispatchToThread），
  *      所以 ③ 的执行痕迹、状态机与人建的卡一模一样；
  *   ⑥ 卡片回执（2026-10-24）：③ 的执行人跑完、卡收「待验收」时，建卡会话收到【卡片回执】
- *      且大梁被唤醒 —— "有产出我再回你"的承诺有通道兑现。
+ *      且贺韬被唤醒 —— "有产出我再回你"的承诺有通道兑现。
  *
  * 用 fixtures/fake-agent.js 当运行时（BANDI_FAKE_CREATE_CARD=1 时遇【建卡】标记真调接口）。
  * 隔离：临时数据目录 + 临时端口 + 临时项目目录。
@@ -116,7 +116,7 @@ try {
   const mk = async (name, role) => (await req('POST', '/api/personas', {
     name, runtime: rtId, sandbox: 'danger-full-access', cwd: projRoot, role, instructions: `你是${name}。`,
   })).body.persona;
-  const pm = await mk('大梁', '项目经理 · 拆活盯落实');
+  const pm = await mk('贺韬', '项目经理 · 拆活盯落实');
   const dev = await mk('嘉辉', '研发工程师 · 写代码与修 Bug');
 
   const pmConv = (await req('POST', '/api/conversations', { personaId: pm.id })).body.conversation.id;
@@ -134,7 +134,7 @@ try {
   const ideaId = idea.reply.match(/FAKE-CARD:201:(pt-[a-z0-9]+)/)?.[1];
   const ideaCard = ideaId ? await getTask(ideaId) : null;
   check('卡真的在看板上', !!ideaCard, ideaId ?? '没拿到卡 id');
-  check('创建人记的是大梁', ideaCard?.createdBy === pm.id, String(ideaCard?.createdBy));
+  check('创建人记的是贺韬', ideaCard?.createdBy === pm.id, String(ideaCard?.createdBy));
   check('想法不派活（没 run）', !!ideaCard && !ideaCard.runId && ideaCard.status === '想法', `${ideaCard?.status}/${ideaCard?.runId}`);
 
   console.log('\n③ 项目经理建「待办」+ 执行人：建成并自动派活，跑完收「待验收」');
@@ -163,14 +163,14 @@ try {
   const cardOccurrences = (boardJson.match(new RegExp(`"manual_id":"${workId}"`, 'g')) ?? []).length;
   check('派活带出来的下一环没有再建卡（不滚雪球）', cardOccurrences === 2, `看板上这张卡出现 ${cardOccurrences} 次（1 张卡 = 2 次）`);
 
-  console.log('\n③+ 卡片回执：执行人跑完 → 建卡人（大梁）在他的会话里被唤醒');
+  console.log('\n③+ 卡片回执：执行人跑完 → 建卡人（贺韬）在他的会话里被唤醒');
   // 他答应雇主"有产出我再回你" —— 现在这句承诺有通道兑现了：卡收「待验收」的同时，
-  // 平台往建卡会话（pmConv）投一条【卡片回执】并唤醒大梁。派发发生在收尾钩子里，
+  // 平台往建卡会话（pmConv）投一条【卡片回执】并唤醒贺韬。派发发生在收尾钩子里，
   // 比轮询看到"跑完"晚一拍，所以轮着等（上限 6 秒）。
   /*
    * 回执的新口径（2026-10-24 用户定）：**执行者汇报，不是"我"说的话** ——
    * 可见的那条是嘉辉（执行人）名义的 assistant 消息、带卡票；
-   * 唤醒大梁的触发是 meta.silent 的 user 消息，agent 读得到、界面上不画。
+   * 唤醒贺韬的触发是 meta.silent 的 user 消息，agent 读得到、界面上不画。
    */
   let receipt = null;
   for (let i = 0; i < 40 && !receipt; i++) {
@@ -184,7 +184,7 @@ try {
   const pmAfter = await getConv(pmConv);
   const wake = (pmAfter.messages ?? []).find((m) => m.role === 'user' && m.meta?.silent && m.text.includes('【卡片回执】'));
   check('唤醒触发落了（silent，界面不画）', !!wake, wake?.text?.slice(0, 60) ?? '没找到');
-  check('大梁被回执唤醒（他多跑了一轮）', (pmAfter.runs ?? []).length >= 3, `pmConv 共 ${(pmAfter.runs ?? []).length} 轮（②③各一 + 回执）`);
+  check('贺韬被回执唤醒（他多跑了一轮）', (pmAfter.runs ?? []).length >= 3, `pmConv 共 ${(pmAfter.runs ?? []).length} 轮（②③各一 + 回执）`);
   check('卡记下已回执状态（去重标记）', (await getTask(workId))?.notifiedFor === '待验收', String((await getTask(workId))?.notifiedFor));
 
   /*

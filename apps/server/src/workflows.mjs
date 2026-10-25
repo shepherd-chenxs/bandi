@@ -855,7 +855,16 @@ function goto(runId, target, why) {
    * 没人的不在这儿派：createTask 已经把它标成「已阻塞」了（到站即知），
    * 硬调 startCurrentStep 会抛。
    */
-  if (task?.assigneePersonaId) {
+  /*
+   * **动作节点也要到站即跑**（2026-10-25 修）。
+   *
+   * 原来这里只看 `assigneePersonaId` —— 动作节点**故意没有经办人**（干活的是平台），
+   * 于是流程走到中间的动作节点就永远停在「待办」：`retryPendingSteps` 同样只捞"有经办人"的，
+   * 30 秒节拍也不会补。2026-10-23 动作节点上线时没露出来，是因为 `pr-review` 那条流程
+   * 的审阅节点跑完到合并节点，要么有人点、要么用例自己手动 start —— 一到真实全自动就断路。
+   * 判据用 `node.action`（与 createTask 里"动作节点不标阻塞"同一条），不再另立一套。
+   */
+  if (task?.assigneePersonaId || node.action) {
     try {
       startCurrentStep(runId);
     } catch (e) {
@@ -1382,7 +1391,13 @@ export function retryPendingSteps() {
   for (const run of store.listWorkflowRuns()) {
     if (run.status !== '进行中') continue;
     const task = currentTask(run);
-    if (!task || task.status !== '待办' || !task.assigneePersonaId) continue;
+    if (!task || task.status !== '待办') continue;
+    /*
+     * **动作节点没有经办人是正常的**（干活的是平台自己，见 ACTION_NODES）：
+     * 只认"有经办人"会把中间的动作节点永远漏掉 —— 与 goto 里那条到站即跑同一条判据。
+     */
+    const node = nodeById(store.getWorkflowTemplate(run.templateId), task.nodeId);
+    if (!task.assigneePersonaId && !node?.action) continue;
     try {
       startCurrentStep(run.id);
       started.push(task.nodeName);

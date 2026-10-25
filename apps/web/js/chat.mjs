@@ -5,7 +5,7 @@ import { TYPING, AVATAR_FILE, api, createCombo, cut, dt, failHtml, initial, pers
 import { load, setNav } from './state.mjs';
 import { confirmDo } from './machine.mjs';
 import { convDisplayName, openConversationSafe, toastConvErr } from './listmenu.mjs';
-import { detailSave, renderList, showView } from './contacts.mjs';
+import { detailSave, refreshDeptSuggest, renderList, showView } from './contacts.mjs';
 import { COL_STATUS, openProjectDetail, openTaskBoard, openTaskCardPage, prPillOf } from './projects.mjs';
 import { openFlowRun, setListTitle } from './flowpages.mjs';
 import { openChatLogDrawer, openGroupDrawer } from './groups.mjs';
@@ -455,7 +455,7 @@ export async function openConversation(id) {
      * 名字取法：员工还在 → 用他现在的名字（可能改过，personaName 来自 JOIN）；
      * 员工已删 → personaName 是 NULL，**不能回落到 S.persona**（那是上一个人的名字，
      * 会张冠李戴），退回这段会话自己的标题（convDisplayName 会剥掉「和 」前缀，
-     * 不然页头会出现「和 和大梁」这种叠字）；连标题都没有才写「员工已删」。
+     * 不然页头会出现「和 和贺韬」这种叠字）；连标题都没有才写「员工已删」。
      * 头像同理：员工没了就别给「点进员工详情」的入口（点开是 404）。
      */
     const name = convDisplayName(d.conversation);
@@ -1356,6 +1356,7 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
   // 那一栏里是会话，标题写上「通讯录」会跟下面的列表对不上。
   // 2026-10-20 用户要求：通讯录详情**不做面包屑**，标题就固定「通讯录」。
   if (S.nav === 'contacts') setListTitle('通讯录');
+  refreshDeptSuggest(); // 部门建议列表跟着库里已用的部门走（#deptSuggest，下面 dDept 用）
   const rt = runtimes.find((r) => r.id === persona.runtime);
   // 身份/技能锁定（2026-10-23；2026-10-22 用户定：内置员工按专家团那个模式收编）
   // 两种来源同一套语义，判据与服务端 experts.lockKindOf 对齐：
@@ -1448,6 +1449,14 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
                   <div class="row-label">岗位</div>
                   <div>
                     <input id="dRole" list="roleSuggest" placeholder="比如：研发（留空也行）" value="${esc(persona.role || '')}" ${identityLocked ? `readonly title="${expertLocked ? '雇佣员工的岗位随专家包固定' : '内置员工的岗位随平台固定'}"` : ''} />
+                  </div>
+                </div>
+                <div class="form-row">
+                  <div class="row-label">部门</div>
+                  <div>
+                    <!-- 部门**不进身份锁**（2026-10-25）：锁的是"他是谁/他会什么"，组织归属是用户的权 ——
+                         雇佣专家只带出厂默认（技术部/内容部/秘书处），之后随便调、也能清空落「未分配」 -->
+                    <input id="dDept" list="deptSuggest" placeholder="比如：技术部（留空 = 未分配）" value="${esc(persona.department || '')}" />
                   </div>
                 </div>
                 <div class="form-row top">
@@ -1925,6 +1934,7 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
   const collect = () => ({
     name: $('dName').value,
     role: $('dRole').value,
+    department: $('dDept').value,
     instructions: $('dInstr').value,
     runtime: rtCombo.value(),
     sandbox: sbCombo.value(),
@@ -1958,6 +1968,10 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
       const p = d?.persona;
       if (p) {
         S.persona = { ...(S.persona || {}), ...p };
+        // 左栏那份也要合回去（S.persona 是独立对象）：改部门后通讯录分组要**立刻**跟着挪，
+        // 改名字同理 —— 只重画不合并的话，画出来的还是旧值。
+        const row = (S.personas || []).find((x) => x.id === p.id);
+        if (row) Object.assign(row, p);
         // 页头（名字 / 岗位 / 头像）与左栏名字同步 —— 不重画整页
         const nameEl = $('dNameText');
         if (nameEl) nameEl.textContent = p.name;
@@ -1992,7 +2006,7 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
   detailSave.flush = (opts) => saveNow(opts);
 
   // 输入框：敲字防抖；失焦立刻存（没改动时 saveNow 按 lastSaved 直接跳过）
-  for (const id of ['dName', 'dRole', 'dInstr', 'dCwd', 'dRoots', 'dMaxParallel']) {
+  for (const id of ['dName', 'dRole', 'dDept', 'dInstr', 'dCwd', 'dRoots', 'dMaxParallel']) {
     $(id)?.addEventListener('input', () => scheduleSave(700));
     $(id)?.addEventListener('blur', () => saveNow?.());
   }

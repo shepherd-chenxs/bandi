@@ -111,7 +111,7 @@ try {
   const mk = async (name) => (await req('POST', '/api/personas', {
     name, runtime: addRt.body.runtime.id, sandbox: 'danger-full-access', cwd: workDir, instructions: `你是${name}。`,
   })).body.persona;
-  const daliang = await mk('大梁');
+  const daliang = await mk('贺韬');
   const shen = await mk('沈丹青');
   const jia = await mk('嘉辉');
 
@@ -169,7 +169,7 @@ try {
     `${single.status} ${JSON.stringify(single.body.queued)}`);
   await waitAllDone(convId);
   const noAt = await req('POST', `/api/conversations/${convId}/messages`, { text: '在吗' });
-  check('没 @ → 群助手（大梁）接', noAt.status === 202 && noAt.body.personaName === '大梁',
+  check('没 @ → 群助手（贺韬）接', noAt.status === 202 && noAt.body.personaName === '贺韬',
     `${noAt.status} ${noAt.body.personaName}`);
   await waitAllDone(convId);
 } catch (err) {

@@ -34,7 +34,7 @@ import * as skills from './skills.mjs';
  *
  * 技能包的选法（为什么是这几个）：
  *   · 项目经理：只挂自己的岗位技能 —— 他的本分是**调度**（拆活、转交、收结论、汇报），
- *     验收转给 QA（2026-10-24 用户定："大梁的主要任务是调度，不是他自己干"），
+ *     验收转给 QA（2026-10-24 用户定："项目经理的主要任务是调度，不是他自己干"），
  *     verification-before-completion 挂了他反而会自己去翻产出验证，越界还费思考；
  *   · 产品：brainstorming（先发散再收敛）+ doc-coauthoring（需求文档是和用户一起写出来的）；
  *   · 架构师：brainstorming（方案先发散再收敛，不许一上来一个独门方案）+
@@ -66,20 +66,22 @@ import * as skills from './skills.mjs';
  */
 export const EXPERTS = [
   {
-    key: 'pm',
-    id: 'p-expert-pm',
-    name: '大梁',
+    key: 'hetao',
+    id: 'p-expert-hetao',
+    name: '贺韬',
     role: '项目经理',
+    // 出厂默认部门（2026-10-25）：雇佣那一刻写快照 + 存量为空时回填，之后归用户调（不进 E2055 身份锁）
+    department: '技术部',
     intro: '把一句话拆成能派出去的活，谁在干什么、卡在哪，随时说得清。',
     cwd: repoRoot,
     // 回复风格走「偏好设置」全员注入（2026-10-24 用户定的机制，见 config.REPLY_STYLES /
     // dispatch.stylePrefBlock），不再按人挂 my-adhd-caveman —— 挂了会和偏好注入重复。
     // verification-before-completion（2026-10-25）：项目经理是**全队数字的转述者** ——
-    // 嘉辉跑的、顾仓核的、QA 验的，最后都由他写进方案派活。他一旦凭印象转述，错一个 base
+    // 嘉辉跑的、张坤核的、QA 验的，最后都由他写进方案派活。他一旦凭印象转述，错一个 base
     // 整队人就在错方向上干一天（实踩：他把 C 段 base 写成 c6039d1，143 文件看成 4 文件，
     // 据此定的"拆三段"整个走不通）。这条铁律是给转述者上的闸，不是让他自己下场验证。
     skills: ['bandi-expert-pm', 'verification-before-completion'],
-    instructions: `你是「大梁」，项目经理 —— 活是把事情拆开、盯到落地，别的不要揽。
+    instructions: `你是「贺韬」，项目经理 —— 活是把事情拆开、盯到落地，别的不要揽。
 
 你只管三件事：
 
@@ -87,7 +89,7 @@ export const EXPERTS = [
 
 2. **盯进度**。谁在干什么、卡在哪、下一步是什么 —— 随时问随时答得清，拿库里的任务和会话说，不凭印象。卡住的活给出路：等谁、缺什么、能不能先绕。
 
-3. **验收把关**。你的验收动作是**转交**：卡到「待验收」就派给 QA（杜衡 / 火眼）验 —— 建一张验收卡或 @ 他，说清验什么、按什么标准；你收 QA 的证据结论、汇报雇主一句（结论 + 证据在哪）。你不自己验证产出，也不让雇主替你验证 —— 验证是 QA 的活，雇主只看结论拍板。
+3. **验收把关**。你的验收动作是**转交**：卡到「待验收」就派给 QA（杜衡 / 郭帅）验 —— 建一张验收卡或 @ 他，说清验什么、按什么标准；你收 QA 的证据结论、汇报雇主一句（结论 + 证据在哪）。你不自己验证产出，也不让雇主替你验证 —— 验证是 QA 的活，雇主只看结论拍板。
 
 数字红线（写进方案的每个数都要过这一关）：
 
@@ -116,6 +118,8 @@ export const EXPERTS = [
     id: 'p-expert-lijun',
     name: '李俊',
     role: '产品经理',
+    // 出厂默认部门（2026-10-25）：雇佣那一刻写快照 + 存量为空时回填，之后归用户调（不进 E2055 身份锁）
+    department: '技术部',
     intro: '把"我想要个东西"问成能动手的需求，先发散再收敛，文档和用户一起写。',
     cwd: repoRoot,
     skills: ['bandi-expert-product', 'brainstorming', 'doc-coauthoring'],
@@ -141,6 +145,8 @@ export const EXPERTS = [
     id: 'p-expert-architect',
     name: '高进',
     role: '架构师',
+    // 出厂默认部门（2026-10-25）：雇佣那一刻写快照 + 存量为空时回填，之后归用户调（不进 E2055 身份锁）
+    department: '技术部',
     intro: '把需求翻成能落地的技术方案，模块怎么分、接口怎么定、风险在哪，先画清楚再动工。',
     cwd: repoRoot,
     // brainstorming：方案先发散再收敛；requesting-code-review：设计要被评审过才算落定
@@ -167,6 +173,8 @@ export const EXPERTS = [
     id: 'p-expert-ui',
     name: '沈丹青',
     role: 'UI 设计师',
+    // 出厂默认部门（2026-10-25）：雇佣那一刻写快照 + 存量为空时回填，之后归用户调（不进 E2055 身份锁）
+    department: '技术部',
     intro: '把需求画成能直接开发的界面稿，状态画全、规范定死，再谈好看不好看。',
     cwd: repoRoot,
     // 通用技能库里没有设计类方法论，挂不相干的反而误导 —— 宁缺毋滥，只挂岗位技能
@@ -193,6 +201,8 @@ export const EXPERTS = [
     id: 'p-expert-jiahui',
     name: '嘉辉',
     role: '研发工程师',
+    // 出厂默认部门（2026-10-25）：雇佣那一刻写快照 + 存量为空时回填，之后归用户调（不进 E2055 身份锁）
+    department: '技术部',
     intro: '接需求先问清验收标准，先写测试再动手，交付前自己跑过一遍。',
     cwd: repoRoot,
     skills: ['bandi-expert-dev', 'test-driven-development', 'systematic-debugging', 'verification-before-completion'],
@@ -214,14 +224,16 @@ export const EXPERTS = [
 说话习惯：短。先结论，再给关键改动点，最多四句。不复述需求原文，不写客套话。`,
   },
   {
-    key: 'test',
-    id: 'p-expert-test',
-    name: '火眼',
+    key: 'guoshuai',
+    id: 'p-expert-guoshuai',
+    name: '郭帅',
     role: '测试工程师',
+    // 出厂默认部门（2026-10-25）：雇佣那一刻写快照 + 存量为空时回填，之后归用户调（不进 E2055 身份锁）
+    department: '技术部',
     intro: '真开页面真点真跑，按验收标准逐条过，问题给复现步骤不给形容词。',
     cwd: repoRoot,
     skills: ['bandi-expert-test', 'webapp-testing', 'systematic-debugging'],
-    instructions: `你是「火眼」，测试工程师 —— 活是找问题、验标准，别的不要揽。
+    instructions: `你是「郭帅」，测试工程师 —— 活是找问题、验标准，别的不要揽。
 
 你只管三件事：
 
@@ -243,6 +255,8 @@ export const EXPERTS = [
     id: 'p-expert-machao',
     name: '马超',
     role: '运维工程师',
+    // 出厂默认部门（2026-10-25）：雇佣那一刻写快照 + 存量为空时回填，之后归用户调（不进 E2055 身份锁）
+    department: '技术部',
     intro: '服务起没起、日志里有什么、哪儿坏了怎么修 —— 先定位再动手，动前先备份。',
     cwd: repoRoot,
     skills: ['bandi-expert-ops', 'systematic-debugging', 'verification-before-completion'],
@@ -268,13 +282,15 @@ export const EXPERTS = [
     id: 'p-expert-qa',
     name: '杜衡',
     role: 'QA 工程师',
+    // 出厂默认部门（2026-10-25）：雇佣那一刻写快照 + 存量为空时回填，之后归用户调（不进 E2055 身份锁）
+    department: '技术部',
     intro: '立验收标准、定回归口径、守发布关口 —— 质量不靠个人自觉，靠体系兜底。',
     cwd: repoRoot,
     // verification-before-completion：放行前必须有证据；webapp-testing：抽查验真时能自己真跑一把
     skills: ['bandi-expert-qa', 'verification-before-completion', 'webapp-testing'],
     instructions: `你是「杜衡」，QA 工程师 —— 活是守住质量体系和发布关口，别的不要揽。
 
-你和测试工程师（火眼）分工不同，别抢他的活：火眼管"把东西测出来"——对着标准逐条执行、找 Bug、给复现步骤，他是执行层；你管"把质量体系守出来"——标准立没立、口径全不全、关口放不放，你是把关层。他测完了你才出手；他产出问题清单，你产出"能不能发布"的结论。
+你和测试工程师（郭帅）分工不同，别抢他的活：郭帅管"把东西测出来"——对着标准逐条执行、找 Bug、给复现步骤，他是执行层；你管"把质量体系守出来"——标准立没立、口径全不全、关口放不放，你是把关层。他测完了你才出手；他产出问题清单，你产出"能不能发布"的结论。
 
 你只管三件事：
 
@@ -307,9 +323,11 @@ export const EXPERTS = [
     id: 'p-expert-xier',
     name: '喜儿',
     role: '秘书',
+    // 出厂默认部门（2026-10-25）：雇佣那一刻写快照 + 存量为空时回填，之后归用户调（不进 E2055 身份锁）
+    department: '秘书处',
     intro: '盯全队的活儿：几件在跑、几件卡着、几件等你拍板；汇总、催办、提醒，替你管住每天的节奏。',
     cwd: repoRoot,
-    // 回复风格走「偏好设置」全员注入（同大梁那条注释）
+    // 回复风格走「偏好设置」全员注入（同贺韬那条注释）
     skills: ['bandi-expert-secretary'],
     instructions: `你是「喜儿」，雇主的秘书 —— 他雇你，是要有人替他盯着团队的活儿、管着他每天的节奏。机器归崔老三管，人和活儿归你。
 
@@ -343,14 +361,16 @@ export const EXPERTS = [
    * 注意：这三样进门即锁死（E2054/E2055），改指令只能改这里再靠 syncHiredExperts 拉回。
    * ─────────────────────────────────────────────────────── */
   {
-    key: 'keeper',
-    id: 'p-expert-keeper',
-    name: '顾仓',
+    key: 'zhangkun',
+    id: 'p-expert-zhangkun',
+    name: '张坤',
     role: '仓库管家',
+    // 出厂默认部门（2026-10-25）：雇佣那一刻写快照 + 存量为空时回填，之后归用户调（不进 E2055 身份锁）
+    department: '内容部',
     intro: '仓库接进来、PR 有人盯：新改动他先读一遍，干了什么、有没有风险、是不是垃圾，给你个结论。',
     cwd: repoRoot,
     skills: ['bandi-expert-keeper', 'verification-before-completion'],
-    instructions: `你是「顾仓」，仓库管家 —— 活是守好接入的仓库：接仓库、盯 PR、给结论，别的不要揽。
+    instructions: `你是「张坤」，仓库管家 —— 活是守好接入的仓库：接仓库、盯 PR、给结论，别的不要揽。
 
 你只管三件事：
 
@@ -372,6 +392,8 @@ export const EXPERTS = [
     id: 'p-expert-editor',
     name: '秦简',
     role: '内容主编',
+    // 出厂默认部门（2026-10-25）：雇佣那一刻写快照 + 存量为空时回填，之后归用户调（不进 E2055 身份锁）
+    department: '内容部',
     intro: '选题方向他定、内容标准他立，稿子过不过他一句话说清为什么。',
     cwd: repoRoot,
     skills: ['bandi-expert-editor', 'brainstorming'],
@@ -397,6 +419,8 @@ export const EXPERTS = [
     id: 'p-expert-copywriter',
     name: '陆言',
     role: '文案策划',
+    // 出厂默认部门（2026-10-25）：雇佣那一刻写快照 + 存量为空时回填，之后归用户调（不进 E2055 身份锁）
+    department: '内容部',
     intro: '图文和口播稿交稿就能用，标题一次给一排备选，各自注明路数。',
     cwd: repoRoot,
     skills: ['bandi-expert-copywriter', 'doc-coauthoring'],
@@ -422,6 +446,8 @@ export const EXPERTS = [
     id: 'p-expert-analyst',
     name: '钱进',
     role: '数据运营',
+    // 出厂默认部门（2026-10-25）：雇佣那一刻写快照 + 存量为空时回填，之后归用户调（不进 E2055 身份锁）
+    department: '内容部',
     intro: '数据他来算、结论他来证：哪类内容值得加码，给依据不给玄学。',
     cwd: repoRoot,
     // verification-before-completion：数据结论必须带证据口径，与这位的本分同一条铁律
@@ -448,6 +474,8 @@ export const EXPERTS = [
     id: 'p-expert-director',
     name: '高帧',
     role: '短视频编导',
+    // 出厂默认部门（2026-10-25）：雇佣那一刻写快照 + 存量为空时回填，之后归用户调（不进 E2055 身份锁）
+    department: '内容部',
     intro: '从选题到分镜一条龙，脚本写到开机就能拍，关键结构给两个方向让他挑。',
     cwd: repoRoot,
     skills: ['bandi-expert-director', 'brainstorming'],
@@ -491,6 +519,8 @@ export function listExperts() {
       id: x.id,
       name: x.name,
       role: x.role,
+      // 出厂默认部门 + 雇着的话他**实际**的部门（用户可能改过，界面要显示改后的）
+      department: x.department ?? '',
       intro: x.intro,
       // 岗位说明全文（2026-10-25）：卡片墙上只有一句话 intro，前端点人物卡弹的
       // 详情卡要给全文 —— 指令本来就跟代码一起审，给前端看不算泄密。
@@ -500,7 +530,7 @@ export function listExperts() {
         return { name: n, description: s?.description ?? '' };
       }),
       hired: !!p,
-      hiredPersona: p ? { id: p.id, name: p.name, role: p.role, avatar: p.avatar ?? null } : null,
+      hiredPersona: p ? { id: p.id, name: p.name, role: p.role, department: p.department ?? null, avatar: p.avatar ?? null } : null,
     };
   });
 }
@@ -538,6 +568,10 @@ export function hireExpert(key) {
     id: x.id,
     name: x.name,
     role: x.role,
+    // 出厂默认部门（快照）：跟 role 同待遇 —— 雇佣那一刻写进去，之后归用户调。
+    // **不进 E2055 身份锁、也不进 syncExpertIdentity**：部门是用户的组织权，
+    // 把贺韬调去「项目一组」是正常操作，不该被启动同步刷回出厂。
+    department: x.department ?? null,
     instructions: x.instructions,
     // auto / 全权限 / 平台根 —— 与内置系统管家同一个口径：换机器、换 CLI 都不用回来改
     runtime: 'auto',
@@ -701,19 +735,28 @@ export function syncHiredExperts() {
   migrateRenamedExperts(); // 必须在同步循环前跑：旧 id 的雇佣员工先搬进新 id，才能被下面的目录匹配上
   const done = [];
   for (const x of EXPERTS) {
-    if (!store.getPersona(x.id)) continue;
+    const hired = store.getPersona(x.id);
+    if (!hired) continue;
+    /*
+     * 部门回填（2026-10-25）：**只在还是空的时候**补出厂默认 —— 部门上线前雇佣的老员工
+     * 逐位落「未分配」很难看，补上默认分组。空 = 用户从没动过（界面此前没有这个字段）；
+     * 用户设过的、或显式清空的，永远不刷回 —— 部门不进身份锁，同 syncExpertAvatar 的分寸。
+     * 也不作废会话：部门只影响通讯录分组，跟「他是谁/他会什么」无关。
+     */
+    const deptBackfilled = !hired.department && !!x.department;
+    if (deptBackfilled) store.updatePersona(x.id, { department: x.department });
     const before = store.listPersonaSkillLinks(x.id);
     const after = syncExpertSkills(x.id);
     const identity = syncExpertIdentity(x.id);
     const avatar = syncExpertAvatar(x);
-    if (avatar || identity?.length || (after && JSON.stringify(before) !== JSON.stringify(after))) {
+    if (deptBackfilled || avatar || identity?.length || (after && JSON.stringify(before) !== JSON.stringify(after))) {
       done.push(x.id);
       /*
        * 身份（指令）或技能**真的变了** → 作废这个人全部成员会话（2026-10-24）。
        *
        * 为什么必须做：身份和技能只在成员会话**第一次建立**时注入（dispatch 的
        * `firstTime = !ms?.sessionId`），之后靠 CLI 的持久会话 —— 会话里烙的是改之前的
-       * 旧指令，库里改得再新他也带着旧身份干活（实踩：大梁改了"不超过 5 行"照旧话痨）。
+       * 旧指令，库里改得再新他也带着旧身份干活（实踩：贺韬改了"不超过 5 行"照旧话痨）。
        * 清了 member_sessions，下次派活按 firstTime 走，用新指令重新开一节会话。
        * 代价是那个人的会话上下文从零开始 —— 身份都换了，旧上下文本就不该留。
        */
@@ -735,6 +778,9 @@ export function syncHiredExperts() {
  * 幂等：旧 id 不在（全新库 / 已迁过）就不动。新条目加进来时往 RENAMED_EXPERTS 补一行即可。
  */
 const RENAMED_EXPERTS = [
+  { legacyId: 'p-expert-pm', id: 'p-expert-hetao', avatarFrom: 'expert-pm.png', avatarTo: 'expert-hetao.png' }, // 大梁 → 贺韬（2026-10-25）
+  { legacyId: 'p-expert-keeper', id: 'p-expert-zhangkun', avatarFrom: 'expert-keeper.png', avatarTo: 'expert-zhangkun.png' }, // 顾仓 → 张坤（2026-10-25）
+  { legacyId: 'p-expert-test', id: 'p-expert-guoshuai', avatarFrom: 'expert-test.png', avatarTo: 'expert-guoshuai.png' }, // 火眼 → 郭帅（2026-10-25）
   { legacyId: 'p-expert-ops', id: 'p-expert-machao', avatarFrom: 'expert-ops.png', avatarTo: 'expert-machao.png' },
   { legacyId: 'p-expert-dev', id: 'p-expert-jiahui', avatarFrom: 'expert-dev.png', avatarTo: 'expert-jiahui.png' },
   { legacyId: 'p-expert-product', id: 'p-expert-lijun', avatarFrom: 'expert-product.png', avatarTo: 'expert-lijun.png' },

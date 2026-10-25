@@ -33,8 +33,10 @@ export const REVIEW_MARK = '【管理员审阅】';
 
 export const PR_REVIEW_TEMPLATE_ID = 'pr-review';
 
-/** 审阅节点给管理员的指令（模板 detail = 平台写的提示词，随内建模板更新） */
-const REVIEW_DETAIL = [
+/** 审阅节点给管理员的指令（模板 detail = 平台写的提示词，随内建模板更新）。
+ *  **导出**是因为「开发完成 → 建 PR → 审阅 → 合并」那条内建流程也用它（pr-create.mjs）——
+ *  提示词只能有一份，两处各写一份迟早说两种话。 */
+export const REVIEW_DETAIL = [
   '你是这个仓库的值班管理员。根据下面的材料审这个 PR：它干了什么、有没有风险、是不是垃圾。',
   '你不需要看 diff 全文 —— 材料里的文件清单和 patch 足够判断；想看原文就报链接，让人自己去 GitHub。',
   '',
@@ -150,6 +152,19 @@ export function buildMaterial({ pull, files }) {
   ].join('\n');
 }
 
+/**
+ * 取一份 PR 的审阅材料（2026-10-25 抽出来给第二个调用方用）。
+ *
+ * 两个调用方：巡检发现新 PR（startPrReview）、流程里刚建完 PR（pr-create 动作节点）。
+ * 材料怎么取、怎么截短只在 buildMaterial 一处 —— 两边各拼一遍的话，审阅结论的依据
+ * 就会随"从哪条路进来的"而变。
+ */
+export async function pullReviewMaterial(repo, number) {
+  const pull = await git.fetchPull(repo, number);
+  const files = await git.listPullFiles(repo, number);
+  return { pull, files, material: buildMaterial({ pull, files }) };
+}
+
 /* ---------------------------------------------------------- 发起审阅 */
 
 /**
@@ -162,9 +177,7 @@ export async function startPrReview({ repo, pr, projectId }) {
   if (!keeperId || !store.getPersona(keeperId)) throw new Error(`仓库 ${repo} 没绑管理员（或绑的人已删）`);
 
   // 材料现在取：审的是这一刻的 PR；推了新提交 sha 会变，自然走"新改动"重新审
-  const pull = await git.fetchPull(repo, pr.number);
-  const files = await git.listPullFiles(repo, pr.number);
-  const material = buildMaterial({ pull, files });
+  const { pull, material } = await pullReviewMaterial(repo, pr.number);
 
   const run = startWorkflow({
     templateId: PR_REVIEW_TEMPLATE_ID,
@@ -174,22 +187,37 @@ export async function startPrReview({ repo, pr, projectId }) {
     autoStart: false, // 第一步还没点名，硬起会标「已阻塞」——下面指派完马上就派
     pr: { repo, number: pr.number },
   });
+  // 判据看的是这一份：自动合并只认这个 sha（见 rememberReviewedSha 的说明）
+  rememberReviewedSha(run.id, pull.headSha);
   assignCurrentStep(run.id, keeperId); // 指派即派活（引擎既有语义）
   return run;
 }
 
 /* ---------------------------------------------------------- 合并动作节点 */
 
-/** 从审阅任务的结果里拿管理员全文（result 是 resultOf 的 JSON，见 workflows.resultOf） */
+/**
+ * 从**这一步之前最近一次有产出的办理**里拿管理员全文（result 是 resultOf 的 JSON，见 workflows.resultOf）。
+ *
+ * 原来写死 `nodeId === 'n1'`（只认「PR 审阅」模板）。2026-10-25 加了第二条内建流程
+ * 「开发完成 → 建 PR → 审阅 → 合并」：那条流程的审阅节点叫 n3，合并节点还是这一颗 ——
+ * 合并逻辑凭什么要认识别人的节点 id？所以改成**按时间倒着找最近一份带 result 的办理**：
+ * 合并节点自己是"当前这一步"，没有 result；再往前就是刚刚办完的审阅。
+ * 这样模板怎么改名/换 id，合并都只认"上一个办完的人说了什么"。
+ */
 function reviewTextOf(runId) {
-  const tasks = store.listWorkflowTasks(runId).filter((t) => t.nodeId === 'n1');
-  const last = tasks[tasks.length - 1];
-  if (!last?.result) return '';
-  try {
-    return JSON.parse(last.result)?.finalText ?? '';
-  } catch {
-    return '';
+  const tasks = store.listWorkflowTasks(runId);
+  for (let i = tasks.length - 1; i >= 0; i -= 1) {
+    const raw = tasks[i]?.result;
+    if (!raw) continue;
+    try {
+      // 找到最近一份就停（哪怕 finalText 是空）—— 不能退到更早的「开发完成」，
+      // 那是研发的自述，不是管理员结论；把它当结论解析只会得到「拿不准」。
+      return String(JSON.parse(raw)?.finalText ?? '');
+    } catch {
+      return '';
+    }
   }
+  return '';
 }
 
 /** 把管理员结论写回值班卡（upsert 去重、不碰人拖过的状态 —— 复用值班卡的全部规矩）。
@@ -286,8 +314,10 @@ async function runMergeNode({ runId, task }) {
     return;
   }
 
-  // 全过 + 已授权：自动合。人不用在场，但账（任务记录）照样一笔不少
-  await doMerge({ runId, task, repo, number, byHuman: false });
+  // 全过 + 已授权：自动合。人不用在场，但账（任务记录）照样一笔不少。
+  // 锁在**审阅时**看下的那个 head 上（不是此刻重新 fetch 到的那个）：
+  // 期间有人推新提交就撞 409、这次停在失败等人重看，而不是把一份没人看过的改动合进去。
+  await doMerge({ runId, task, repo, number, byHuman: false, headSha: reviewedShaOf(runId) });
 }
 
 /** 拿结论段落：管理员全文 + 解析出的档位（写卡用，人先看结论再看分析） */
@@ -297,9 +327,48 @@ function verdictConclusionText(text, verdict, suffix) {
   return `${label}${suffix ? ` —— ${suffix}` : ''}\n${body}`;
 }
 
-/** 真正调合并 API 的一段（自动与人点「通过」共用这一条路 —— 授权的差别在**谁放行**，不在执行） */
-async function doMerge({ runId, task, repo, number, byHuman }) {
-  const out = await git.mergePull(repo, number, { commitTitle: null });
+/**
+ * 合并要不要带 sha 这把锁（2026-10-25，纯函数 —— 冒烟直接钉）。
+ *
+ * 规则的根据是 PRD 那句「授权的差别在**谁放行**」：
+ *   · **自动合并**（人不在场）：平台唯一能说出口的话是"我看过**这一份**改动、四条闸都过了"。
+ *     所以必须拿判据看下的那个 head SHA 去合 —— 期间有人推新提交，GitHub 回 409，
+ *     这次合并就停下来等人重看，**不许把一份没人看过的改动合进去**；
+ *   · **人点「通过」**：这一下给的是"按现在这样合"的授权，人自己负这个责。
+ *     这里也锁的话会把人锁死：失败 → 重试 → 拿的还是那次审阅的旧 sha → 永远 409，
+ *     而"重跑一次审阅"要烧模型额度 —— 等于把人的按钮变成摆设。
+ *   · 自动那一路拿不到 SHA 就**明确失败**（宁可少合一次，也不静默降级成"不校验地合"）。
+ */
+export function mergeShaFor({ byHuman = false, headSha = null } = {}) {
+  if (byHuman) return null;
+  if (!headSha) throw new Error('没拿到这个 PR 的 head SHA —— 自动合并没法校验"合的就是看过的那份"，停下等人');
+  return headSha;
+}
+
+/**
+ * 记住"管理员看的是哪个 head"（2026-10-25）。
+ *
+ * 自动合并的 SHA 锁必须锁**审阅那一刻**的提交，而不是合并那一刻重新 fetch 到的提交 ——
+ * 否则审阅期间有人推了新提交，`runMergeNode` 拿到的新 sha 既"对得上"又"没人看过"，
+ * 锁就成了摆设。每条 run 一个 key（同一个 PR 可以有多条审阅实例）。
+ * `mergeShaFor` 那边拿不到 sha 会**明确失败**，不会静默降级成"不校验地合"。
+ */
+export function rememberReviewedSha(runId, sha) {
+  if (!runId || !sha) return;
+  store.setMetaValue(`prreview:${runId}`, String(sha));
+}
+
+/** 这条实例审阅时的 head sha（老实例没有 → null，自动合并会停下等人） */
+export function reviewedShaOf(runId) {
+  return store.getMetaValue(`prreview:${runId}`) || null;
+}
+
+/**
+ * 真正调合并 API 的一段（自动与人点「通过」共用这一条路 —— 授权的差别在**谁放行**，不在执行）。
+ * 锁不锁 SHA 由 `mergeShaFor` 定，规则只在那一处。
+ */
+async function doMerge({ runId, task, repo, number, byHuman, headSha = null }) {
+  const out = await git.mergePull(repo, number, { commitTitle: null, sha: mergeShaFor({ byHuman, headSha }) });
   if (!out.merged) throw new Error(out.message || 'GitHub 没说合上了，也没报错 —— 当没合处理');
   updateCardWithReview({ projectId: store.getWorkflowRun(runId)?.projectId, repo, number, prState: 'merged', conclusion: '' });
   return finishActionTask(runId, task, {
