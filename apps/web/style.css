@@ -2328,18 +2328,49 @@ dialog.sch-dlg > form { flex: 1 1 auto; min-height: 0; display: flex; flex-direc
 /* ---------- 插件（设置 → 插件） ---------- */
 .plg-hidden { display: none; }
 .plg-tabs { margin-bottom: 18px; }
-.plg-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 10px; }
+/* 2026-10-25 二轮：卡改小（minmax 330→236），一屏能看更多；详情挪进点击弹窗 */
+.plg-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(236px, 1fr)); gap: 8px; }
 /* 插件卡片（Linear 语汇）：圆角 12 → 8、内边距收一档；
    悬停**不再把边框点亮成 accent**（跟看板卡片的改法一致：accent 边框一多，
-   一页十几张卡全是蓝框，等于没有强调）。改成一档极淡的提亮。 */
-.plg-card { display: flex; gap: 11px; align-items: flex-start; padding: 10px 12px;
-            border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
-.plg-card:hover { border-color: color-mix(in srgb, var(--dim) 55%, transparent); }
+   一页十几张卡全是蓝框，等于没有强调）。改成一档极淡的提亮。
+   ⚠️ 必须带 .plg-grid 前缀：下面 3400+ 行插件面板的卡墙（experts.mjs 的 plg-cards）
+   也叫 .plg-card 且是 column 布局、定义在后面 —— 不加权前缀，这里的横排会被它盖掉
+   （2026-10-25 实踩：设置页的卡全变成"图标一行、文字一行"的纵排）。 */
+.plg-grid .plg-card { display: flex; flex-direction: row; gap: 9px; align-items: flex-start; padding: 9px 11px;
+            border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
+            /* 全部卡定高 104（2026-10-25 用户："卡片大小要一样"）：界面插件卡带标签行天生 104、
+               连接器卡没有标签行只有 82，混着看高矮不齐。按高的一路统一，矮的留白；
+               desc 有两行截断兜底，内容超了就裁（overflow hidden）。 */
+            height: 104px; overflow: hidden; }
+.plg-grid .plg-card:hover { border-color: color-mix(in srgb, var(--dim) 55%, transparent); }
+/* 可点的详情卡：指针 + 悬停一档提亮（区别于不可点的行） */
+.plg-card-click { cursor: pointer; }
+/* 卡上简介只留两行，全文进详情弹窗 */
+.plg-desc-clamp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+/*
+ * 卡上「安装」图标钮（2026-10-25 用户："安装这个按钮太大了，改成图标按钮"）：
+ * 文字胶囊换 26×26 幽灵小方钮，口径跟定时任务卡的 .sch-ic 一致 ——
+ * 常态只有图标（--dim 字色），悬停浮出 --hover 底。图标 15px 与 .sch-ic 同规格。
+ * ⚠️ 必须 .plg-grid 前缀：3400+ 行的插件面板卡墙同名 .plg-card，别让它沾上。
+ */
+.plg-grid .plg-card .plg-ibtn { flex: 0 0 auto; width: 26px; height: 26px; padding: 0;
+             display: grid; place-items: center; border: 0; border-radius: 7px;
+             background: transparent; color: var(--dim);
+             transition: background .12s, color .12s, opacity .15s; }
+.plg-grid .plg-card .plg-ibtn svg { width: 15px; height: 15px; display: block; }
+.plg-grid .plg-card .plg-ibtn:hover { background: var(--hover); color: var(--accent); }
+.plg-grid .plg-card .plg-ibtn:disabled { opacity: .45; }
 .plg-card-main { flex: 1; min-width: 0; }
 .plg-ico { flex: 0 0 auto; width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center;
            background: var(--chip); border: 1px solid var(--line); font-size: 14px; font-weight: 600; }
+/* 头像图形（2026-10-25 起 .plg-ico 里放的是描边 SVG，不再是首字）：
+   17px 在 32px 方块里留白合适，描边粗细跟左侧导航一个观感 */
+.plg-ico svg { width: 17px; height: 17px; }
 .plg-title { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
 .plg-title b { font-size: var(--t-sec); font-weight: var(--w-title); }
+/* 界面插件卡的标签行（2026-10-25 用户定稿）：标签在**名称下面**单独一行（仍在图标右侧），
+   不再跟名称挤同一行 —— 名称长短不影响标签起点，一列卡看下来更齐 */
+.plg-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
 .plg-desc { margin-top: 3px; font-size: 12.5px; color: var(--dim); line-height: 1.5; }
 .plg-meta { margin-top: 3px; font-size: 11.5px; color: var(--dim); word-break: break-all; }
 .plg-req, .plg-warn { margin-top: 4px; font-size: 11.5px; color: var(--warn); }
@@ -2347,6 +2378,10 @@ dialog.sch-dlg > form { flex: 1 1 auto; min-height: 0; display: flex; flex-direc
 .plg-main { flex: 1; min-width: 0; }
 .plg-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 5px; }
 .plg-actions .mini { font-size: 12px; }
+/* 界面插件卡的按钮落在**卡底一行**（不占卡头右侧）：名称和「界面/已安装/启用中」
+   那排标签才有整行宽度待在图标右边，不会挤到换行掉到图标下面去（2026-10-25 用户要求） */
+.plg-card-main .plg-actions { justify-content: flex-end; margin-top: 8px; }
+.plg-card-main .plg-actions button { padding: 4px 12px; font-size: 12.5px; }
 .plg-probe { margin-top: 5px; font-size: 11.5px; color: var(--dim); }
 .plg-probe.ok { color: var(--ok); }
 .plg-probe.bad { color: var(--bad); }
@@ -3335,6 +3370,30 @@ button.expert-fire:hover { color: var(--bad); border-color: var(--bad);
 .exd-name-row { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .exd-name { font-size: 16px; font-weight: var(--w-title); color: var(--text); }
 .exd-role { font-size: 12.5px; color: var(--dim); }
+
+/* —— 插件/连接器详情弹窗（#plgDlg，点市场小卡弹出，2026-10-25）——
+   同 #expertDlg 的教训：布局规则必须挂 [open] —— 静态 dialog 节点一旦被作者样式
+   写了 display，会压过 UA 的 dialog:not([open]){display:none}，关着的弹窗变成
+   盖在页面上的空盒、还关不掉。 */
+/* 定高 460（2026-10-25 用户："详情卡大小要一致"）：装没装、插件/连接器内容长短差得多，
+   随内容伸缩就一张一个样。定高后 form 拆 flex 列 —— 头条钉住、正文自己滚、动作条吸底。 */
+#plgDlg[open] { width: 560px; height: 460px; max-height: 86vh; }
+/* 标题条（.dlg-head）自带 padding-bottom 6px，form 顶部不再加 —— 不然 6+16+14 三层叠下来，
+   卡标题离弹窗头上 36px，一大块空（2026-10-25 用户："详情卡标题和上面的间隙很大"） */
+#plgDlg > form { padding-top: 0; height: 100%; display: flex; flex-direction: column; }
+#plgDlg > form > .dlg-head { position: static; flex: 0 0 auto; }
+#plgDlgBody { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+#plgDlgTitle { font-size: 15px; }
+.plg-d-head { display: flex; gap: 12px; align-items: flex-start; margin: 8px 0 2px; }
+.plg-d-head .plg-ico { width: 38px; height: 38px; border-radius: 10px; }
+.plg-d-head .plg-ico svg { width: 20px; height: 20px; }
+.plg-d-who { flex: 1; min-width: 0; }
+#plgDlg .plg-desc { margin-top: 10px; }
+#plgDlg .plg-meta { margin-top: 5px; }
+#plgDlg .plg-req { margin-top: 8px; }
+/* 动作条吸底（margin-top:auto）：内容短的也不悬在半空，长的被正文滚动区顶住不越界 */
+#plgDlg .dlg-actions { margin: 12px -20px -20px; margin-top: auto; padding: 13px 20px;
+  background: var(--panel); border-top: 1px solid var(--line); justify-content: flex-end; }
 .exd-role .exd-on { color: var(--ok); }
 /* 简介跟在姓名下面（头像右侧那块），与页签上方留出间距 */
 .exd-intro { margin-top: 6px; font-size: 13px; line-height: 1.7; color: var(--text); }

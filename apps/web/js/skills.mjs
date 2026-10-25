@@ -468,13 +468,14 @@ export async function renderGitRepos() {
       <td class="gr-cell-ops">
         <button class="mini auto" data-git-pr="${esc(r.id)}" title="把本地改动提交成一个 PR；这里也能合并开着的 PR">建 PR</button>
         <button class="mini auto" data-git-project="${esc(r.id)}" title="用这个仓库建一个项目（工作目录就是克隆目录）">建成项目</button>
-        <button class="mini auto" data-git-sync="${esc(r.id)}" title="git pull --ff-only">同步</button>
+        <button class="mini auto" data-git-back="${esc(r.id)}" data-git-base="${esc(r.defaultBranch ?? '')}" title="把本地切回默认分支并拉最新（合并后 / 在 GitHub 网页上合了 PR 后用）">回 ${esc(r.defaultBranch || 'base')}</button>
+        <button class="mini auto" data-git-sync="${esc(r.id)}" title="git pull --ff-only（在当前分支上）">同步</button>
         <button class="mini auto" data-git-remove="${esc(r.id)}" title="只移除记录，本地目录保留">移除</button>
       </td>
     </tr>`;
   const repoTable = (list) => `
     <table class="gr-tbl">
-      <colgroup><col /><col style="width:196px" /><col style="width:88px" /><col style="width:284px" /></colgroup>
+      <colgroup><col /><col style="width:196px" /><col style="width:88px" /><col style="width:344px" /></colgroup>
       <thead><tr>
         <th>仓库</th>
         <th title="别人提了 PR，替你审的那个人">管理员</th>
@@ -652,6 +653,30 @@ export async function renderGitRepos() {
       } catch (err) {
         el.disabled = false;
         el.textContent = '同步';
+        toast(err.message, 'error');
+      }
+    };
+  });
+
+  /*
+   * 「回 main」：合并后 / 在 GitHub 网页上合了 PR 之后的兜底。
+   * 与合并自动收尾同一个服务端函数：工作区不干净就不动，只把原因带回来。
+   */
+  view.querySelectorAll('[data-git-back]').forEach((el) => {
+    el.onclick = async (e) => {
+      e.preventDefault();
+      const base = el.dataset.gitBase || 'base';
+      if (!(await confirmDo(`把本地切回 ${base} 并拉最新？\n工作区有未提交改动时不会动。`, { ok: '切换', danger: false }))) return;
+      el.disabled = true;
+      const old = el.textContent;
+      el.textContent = '切换中…';
+      try {
+        const r = await api(`/api/git/repos/${encodeURIComponent(el.dataset.gitBack)}/back`, { method: 'POST' });
+        toast(r.local?.note || `已回到 ${base}`, r.local?.settled ? 'ok' : 'error');
+        await refresh();
+      } catch (err) {
+        el.disabled = false;
+        el.textContent = old;
         toast(err.message, 'error');
       }
     };
@@ -937,6 +962,18 @@ export function openRepoPrDialog(repo, onDone) {
       toast(r.created ? `PR #${r.pr.number} 建好了：${r.pr.url}` : `这个分支已经有一个 open PR：#${r.pr.number}（没新建）`);
       setErr('');
       if (onDone) await onDone();
+      /*
+       * 成功之后**必须复位**（2026-10-25 实报）：原来只刷新了下面「开着的 PR」，
+       * 按钮永远停在「提交推送中…」、上面那屏还写着旧的未提交文件数，看着像卡死。
+       * 工作区此刻已经干净，重读一次状态把它画成"已提交"。
+       */
+      btn.textContent = '提交并建 PR';
+      try {
+        state = (await api(`/api/git/repos/${encodeURIComponent(repo.id)}/changes`)).state;
+        paintState();
+      } catch {
+        btn.disabled = false; // 读不到状态也别把按钮锁死（再点一次只会拿回同一个 PR，不会重复建）
+      }
     } catch (err) {
       btn.disabled = false;
       btn.textContent = '提交并建 PR';

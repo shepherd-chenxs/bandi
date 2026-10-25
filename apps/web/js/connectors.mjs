@@ -15,16 +15,16 @@ import { $, LOCAL_BASE, S } from './core.mjs';
 /* ---------------------------------------------------------------- 插件 */
 
 /**
- * 三个页签：
- * · 公开 —— 随仓库走的推荐清单（apps/server/catalog/connectors.json）。不是市场，是一份"能装什么"的清单；
- * · 已安装 —— 账本（data/connectors.json）：启停、实探、改、卸载；
+ * 三个页签（2026-10-25 收成三个：界面插件不再单独一页，用户口径「在插件卡上加个
+ * 标签就行」—— 卡上的「界面」标签（plgPanelCardHTML）负责认，列表负责放）：
+ * · 公开 —— 能装什么：界面插件市场（catalog/plugins/&lt;id&gt;/）+ 连接器推荐清单（apps/server/catalog/connectors.json，不是市场，是一份"能装什么"的清单）；
+ * · 已安装 —— 装了的：界面插件（启用/停用/卸载）+ 连接器账本（data/connectors.json：启停、实探、改、卸载）；
  * · 个人 —— 本机来源的（source.kind === 'local'）+ 手工粘一条。
  *
  * 装一条 = 把清单条目落成账本里的一行，班底只**接线**：代码在 codex / dsh 自己的进程里跑。
  */
 export const PLG_TABS = [
   ['installed', '已安装'],
-  ['panels', '界面插件'],
   ['catalog', '公开'],
   ['personal', '个人'],
 ];
@@ -44,6 +44,77 @@ export const localConnectors = () => S.connectors.filter((c) => c.source?.kind =
 
 
 export const connectorById = (id) => S.connectors.find((c) => c.id === id) ?? null;
+
+
+
+/*
+ * 插件/连接器卡的头像图形（2026-10-25 用户要求：文字方块换图形；同日二改：按 17px 重设计）。
+ * 描边风格跟左侧导航、contacts 那套 ICON_* 一致（viewBox 24 / stroke 1.7 / round），
+ * 颜色继承 .plg-ico 的字色（currentColor），不另配色。
+ *
+ * 设计约束：.plg-ico svg 最终只有 17px —— 一颗图标**一个主形、最多一处细节**，
+ * 笔画再多就糊。六个类别的取舍：
+ *   · 开发 = 合体 </>（斜杠把两个括号缝起来，主形完整，不再两笔分离）；
+ *   · 生产力 = 闪电修形（下笔更宽、收笔更尖，重心居中）；
+ *   · 运维 = 单机柜两层（一个矩形里的层级，替代两个分离矩形的"_eq_"感）；
+ *   · 个人 = 钥匙（原人形与左栏通讯录撞形，钥匙的"私人"语义也更准）；
+ *   · panel / connector 兜底微调（窗口加内容线，插头出线弯钩代替直垂线）。
+ * 连接器按 catalog 的 category 配形，认不出的落「插头」兜底 —— 图形只认**类别**，
+ * 不按名字猜（起名千变万化）。
+ *
+ * 2026-10-25 二轮补充：用户真正要的是「每个连接器自己的品牌图标」，
+ * 故新增 CONN_ICONS（按产品 id 认），plgIconFor 优先 id → 类别 → 插头。
+ * 类别形保留：给 catalog 之外的自定义连接器兜底。
+ */
+const IC = (inner) =>
+  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`;
+
+export const PLG_ICONS = {
+  // 界面插件：浏览器窗口（框 + 顶栏 + 两颗窗钮 + 内容区一条线）
+  panel: IC('<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M3.5 9.2h17"/><path d="M6.2 7h.01M8.7 7h.01"/><path d="M6.5 13h7"/>'),
+  // 连接器兜底：插头（两脚留出气口 + 半圆罩 + 出线弯钩）
+  connector: IC('<path d="M9 7.2V4.6M15 7.2V4.6"/><path d="M6.8 7.2h10.4v3.4a5.2 5.2 0 0 1-10.4 0z"/><path d="M12 16v1.9c0 1.1.9 2 2 2h1.6"/>'),
+  开发: IC('<path d="M8.6 7.6 4.4 12l4.2 4.4"/><path d="M15.4 7.6l4.2 4.4-4.2 4.4"/><path d="M13.4 6 10.6 18"/>'),
+  生产力: IC('<path d="M13.4 3 6.4 13.2h4.4L10.6 21l7-10.2h-4.4z"/>'),
+  运维: IC('<rect x="4.5" y="3.2" width="15" height="6.9" rx="1.6"/><rect x="4.5" y="13.9" width="15" height="6.9" rx="1.6"/><path d="M7.5 6.6h.01M7.5 17.3h.01"/><path d="M13 6.6h3.3M13 17.3h3.3"/>'),
+  个人: IC('<circle cx="7.9" cy="8.3" r="3.9"/><path d="M10.7 11.1l8.1 8.2"/><path d="M15.6 16.9l2.1-2.1M17.9 19.2l2.1-2.1"/>'),
+};
+
+/** 连接器卡用哪个图形：先按产品 id 认（品牌形），认不出按类别，再兜底插头 */
+export const plgIconFor = (c) => CONN_ICONS[c?.id] ?? PLG_ICONS[c?.category] ?? PLG_ICONS.connector;
+
+/*
+ * 每个连接器自己的品牌形（2026-10-25 二轮：用户要的是「产品自己的图标」，
+ * 不是类别通配）。仍然 17px 一个主形最多一处细节，描边语言与全局一致。
+ */
+export const CONN_ICONS = {
+  // 浏览器操作 → Chrome 环：外环 + 内环 + 三根辐条（120° 均分）
+  'chrome-devtools': IC('<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="3.2"/><path d="M12 8.8V3.5M9.2 13.6l-4.6 2.7M14.8 13.6l4.6 2.7"/>'),
+  // GitHub → git 分支：主线两节点 + 分叉线并入
+  github: IC('<circle cx="6.5" cy="6" r="2.1"/><circle cx="6.5" cy="18" r="2.1"/><circle cx="17.5" cy="8.5" r="2.1"/><path d="M6.5 8.1v7.8"/><path d="M17.5 10.6c0 3.3-3.3 4.3-8.6 4.6"/>'),
+  // 分步思考 → 上台阶 + 前进箭头
+  'sequential-thinking': IC('<path d="M3.5 19.5h4.7v-4.7h4.7v-4.7h4.7V5.4h2.9"/><path d="M17.9 3.5l2.6 1.9-2.6 1.9"/>'),
+  // 全能测试服务器 → 仪表盘：半弧 + 指针 + 轴心
+  everything: IC('<path d="M4.2 15.8a7.8 7.8 0 1 1 15.6 0"/><path d="M12 15.8l3.3-4.3"/><circle cx="12" cy="15.8" r="1.1"/>'),
+  // 文件系统 → 文件夹
+  filesystem: IC('<path d="M3.5 6.8A1.8 1.8 0 0 1 5.3 5h4.1l2.1 2.4h7.2a1.8 1.8 0 0 1 1.8 1.8v8a1.8 1.8 0 0 1-1.8 1.8H5.3a1.8 1.8 0 0 1-1.8-1.8z"/>'),
+  // 长期记忆 → 数据库圆柱（顶面 + 一道中箍 + 底收）
+  memory: IC('<ellipse cx="12" cy="6.2" rx="7.5" ry="2.9"/><path d="M4.5 6.2v11.6c0 1.6 3.4 2.9 7.5 2.9s7.5-1.3 7.5-2.9V6.2"/><path d="M4.5 12c0 1.6 3.4 2.9 7.5 2.9s7.5-1.3 7.5-2.9"/>'),
+  // SSH → 终端窗口：无标题栏的框 + 提示符 >_
+  ssh: IC('<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M7 9.6l3.3 2.9L7 15.4"/><path d="M12.6 15.6H17"/>'),
+  // 回声（本机示例）→ 声呐：源点 + 两道外扩波
+  'echo-local': IC('<path d="M8.6 12h.01"/><path d="M11.7 8.6a4.8 4.8 0 0 1 0 6.8M14.6 6a9 9 0 0 1 0 12"/>'),
+};
+
+/*
+ * 卡上「安装」钮的图标形（2026-10-25 三轮：文字钮太大，改成图标小方钮）：
+ * 下载-入托盘（箭头落下 + 接物的托），描边语言与上面一致。
+ */
+export const ICO_INSTALL = IC('<path d="M12 4.2v9.4"/><path d="M8.4 10.2l3.6 3.6 3.6-3.6"/><path d="M4.8 15.4v2.4c0 1 .8 1.8 1.8 1.8h10.8c1 0 1.8-.8 1.8-1.8v-2.4"/>');
+
+/* 卡上「安装」图标钮（两路卡共用）：只换壳不换语义，data-plg-act / data-install 照旧走原 handler */
+const ibtn = (attrs) =>
+  `<button class="plg-ibtn" title="安装" aria-label="安装" ${attrs}>${ICO_INSTALL}</button>`;
 
 
 
@@ -70,9 +141,13 @@ export async function renderPlugins() {
   S.catalogError = cat.error ?? null;
   S.runtimeFamilies = (fam.families ?? []).map((f) => ({ id: f.id, label: f.label }));
 
+  // 旧会话可能还停在已撤掉的「界面插件」页签上 —— 归一到「已安装」（装了的界面插件就在那）
+  if (S.pluginTab === 'panels') S.pluginTab = 'installed';
+  const panelsInstalled = S.plugins.filter((p) => p.installed).length;
+
   const counts = {
-    installed: S.connectors.length,
-    catalog: publicCatalog().length,
+    installed: S.connectors.length + panelsInstalled,
+    catalog: publicCatalog().length + S.plugins.length,
     personal: personalCatalog().length + localConnectors().length,
   };
 
@@ -93,7 +168,6 @@ export async function renderPlugins() {
   $('plgBody').innerHTML =
     S.pluginTab === 'catalog' ? plgCatalogHTML()
     : S.pluginTab === 'personal' ? plgPersonalHTML()
-    : S.pluginTab === 'panels' ? plgPanelsHTML()
     : plgInstalledHTML();
   wirePlugins();
   wirePanelMarket();
@@ -101,55 +175,52 @@ export async function renderPlugins() {
 
 
 
-/* ------------------------------------------------- 界面插件（市场那部分）*/
+/* ------------------------------------------------- 界面插件（卡片 + 「界面」标签）*/
 
 /**
- * 市场行：安装 / 停用 / 启用 / 卸载。
+ * 市场卡：安装 / 停用 / 启用 / 卸载。
  * 和连接器的语义对齐 —— **停用**只是不生效（文件留着），**卸载**是把目录删掉。
+ *
+ * 2026-10-25 用户拍板的两条口径：
+ *   · 不单独占页签 —— 混在「已安装」/「公开」里，靠卡上的**「界面」标签**认；
+ *   · **用连接器那种网格卡片**（.plg-grid + .plg-card），跟「公开」里的连接器卡同一个样子，
+ *     不再是行式条目。
  */
-export function plgPanelRowHTML(p) {
+/**
+ * 市场卡（2026-10-25 二轮：卡片改小，点击弹详情）：
+ * 卡上只留 名称 / 标签 / 两行简介 +（未装时的）安装钮；
+ * 全文、版本、配置错误、启停卸载都在 plgDlg 弹窗里 —— 点卡即出。
+ * 和连接器的语义对齐 —— **停用**只是不生效（文件留着），**卸载**是把目录删掉。
+ * 不单独占页签，混在「已安装」/「公开」里，靠卡上的**「界面」标签**认。
+ */
+export function plgPanelCardHTML(p) {
   const tags = [
+    '<span class="set-tag">界面</span>',
     p.installed ? '<span class="set-tag">已安装</span>' : '',
     p.installed && p.enabled ? '<span class="set-tag">启用中</span>' : '',
     p.installed && !p.enabled ? '<span class="set-tag">已停用</span>' : '',
     p.connector ? `<span class="set-tag">工具：${esc(p.connector)}</span>` : '',
-    p.valid ? '' : '<span class="set-tag" style="color:var(--bad);border-color:var(--bad)">配置有问题</span>',
   ]
     .filter(Boolean)
     .join('');
 
-  let actions;
-  if (!p.valid) {
-    actions = `<span class="plg-warn">${esc(p.errors[0])}</span>`;
-  } else if (!p.installed) {
-    actions = `<button class="primary" data-plg-act="install" data-plg-id="${esc(p.id)}">安装</button>`;
-  } else {
-    actions =
-      `<button data-plg-act="${p.enabled ? 'disable' : 'enable'}" data-plg-id="${esc(p.id)}">${p.enabled ? '停用' : '启用'}</button>` +
-      `<button class="danger" data-plg-act="uninstall" data-plg-id="${esc(p.id)}">卸载</button>`;
-  }
+  const act = !p.valid
+    ? ''
+    : p.installed
+      ? ''
+      : ibtn(`data-plg-act="install" data-plg-id="${esc(p.id)}"`);
 
-  return `<div class="set-row plg-row">
-    <div class="plg-ico">${esc(initial(p.label))}</div>
+  return `<div class="plg-card plg-card-click" data-plgview="panel:${esc(p.id)}" title="点击看详情">
+    <div class="plg-ico">${PLG_ICONS.panel}</div>
     <div class="plg-card-main">
-      <div class="plg-title"><b>${esc(p.label)}</b>${tags}</div>
-      <div class="plg-desc">${esc(p.description || '')}</div>
-      <div class="plg-meta">${esc(p.id)} · v${esc(p.version || '—')}</div>
+      <div class="plg-title"><b>${esc(p.label)}</b>${p.valid ? '' : '<span class="set-tag" style="color:var(--bad);border-color:var(--bad)">配置有问题</span>'}</div>
+      <div class="plg-tags">${tags}</div>
+      <div class="plg-desc plg-desc-clamp">${esc(p.description || '')}</div>
     </div>
-    <div class="plg-row-actions">${actions}</div>
+    ${act}
   </div>`;
 }
 
-
-
-export function plgPanelsHTML() {
-  if (!S.plugins.length) {
-    return '<div class="empty">市场里还没有界面插件<br />把插件放进 catalog/plugins/&lt;id&gt;/ 就会出现</div>';
-  }
-  return `<div class="set-box">${S.plugins.map(plgPanelRowHTML).join('')}</div>
-    <div class="hint-line">「安装」把它拷进 plugins/；「停用」只是不生效，文件留着；「卸载」会把那个目录删掉。</div>
-    <div class="hint-line">停用或卸载后，左边一级栏的「插件」入口里就不再有它。</div>`;
-}
 
 
 
@@ -191,73 +262,248 @@ export function plgCredentials(c) {
 
 
 
-export function plgRowHTML(c) {
+/**
+ * 已装连接器卡（2026-10-25 用户：「这个也做成卡片，测和改不要了，改太复杂了，用户操作不了」）：
+ * 跟市场小卡同款 —— 图标 / 名称 / 标签 / 两行截断说明，卡上**没有任何按钮**；
+ * 停用/启用、卸载都进详情弹窗（点卡即出）。测/改整个撤掉 —— 实探和手编 JSON 是排障用的，
+ * 日常用户用不上，编辑需求走配置文件。
+ * 说明文字优先借 catalog 同款连接器的简介（装的时候本来就从那来），借不到退启动命令行。
+ */
+export function plgConnCardHTML(c) {
   const where = c.command ? `${c.command} ${(c.args ?? []).join(' ')}`.trim() : c.url;
+  const desc = publicCatalog().find((x) => x.id === c.id)?.description ?? where ?? '';
+  const tags = [
+    `<span class="set-tag">${c.transport === 'stdio' ? '本地进程' : '远端服务'}</span>`,
+    `<span class="set-tag">${esc(c.source?.kind ?? '手工')}</span>`,
+    c.enabled ? '' : '<span class="set-tag">已停用</span>',
+  ].filter(Boolean).join('');
   const warn = (c.warnings ?? []).map((w) => `<div class="plg-warn">${esc(w)}</div>`).join('');
-  return `<div class="set-row plg-row">
-    <div class="plg-main">
-      <div class="plg-title">
-        <b>${esc(c.label)}</b>
-        <span class="badge">${c.transport === 'stdio' ? '本地进程' : '远端服务'}</span>
-        <span class="badge">${esc(c.source?.kind ?? '手工')}</span>
-        ${c.enabled ? '' : '<span class="badge">已停用</span>'}
-      </div>
-      <div class="plg-meta">${esc(where || '（没写启动方式）')}</div>
-      <div class="plg-meta">给：${c.runtimes?.length ? c.runtimes.map(esc).join('、') : '全部运行时'}</div>
-      ${plgCredentials(c)}
+  return `<div class="plg-card plg-card-click" data-plgview="conn:${esc(c.id)}" title="点击看详情">
+    <div class="plg-ico">${plgIconFor(c)}</div>
+    <div class="plg-card-main">
+      <div class="plg-title"><b>${esc(c.label)}</b></div>
+      <div class="plg-tags">${tags}</div>
+      <div class="plg-desc plg-desc-clamp">${esc(desc)}</div>
       ${warn}
-      <div class="plg-probe" data-probe-out="${esc(c.id)}"></div>
-    </div>
-    <div class="plg-actions">
-      <button class="mini" data-probe="${esc(c.id)}" title="实探：真把它拉起来，看能不能用">测</button>
-      <button class="mini" data-edit="${esc(c.id)}" title="改">改</button>
-      <button class="mini" data-toggle="${esc(c.id)}" title="${c.enabled ? '停用' : '启用'}">${c.enabled ? '停' : '启'}</button>
-      <button class="mini" data-del="${esc(c.id)}" title="卸载">卸</button>
     </div>
   </div>`;
 }
 
 
 
+/**
+ * 「已安装」：装了的都在这 —— 界面插件（启用/停用/卸载）+ 连接器（测/改/停/卸）。
+ * 界面插件和连接器各一段（段头说清是什么），卡上的「界面」标签负责逐卡认。
+ */
 export function plgInstalledHTML() {
-  if (!S.connectors.length) {
+  const panels = S.plugins.filter((p) => p.installed);
+  if (!panels.length && !S.connectors.length) {
     return '<div class="empty">还没装任何东西<br />去「公开」挑一个，或在「个人」里手工粘一条</div>';
   }
-  return `<div class="set-box">${S.connectors.map(plgRowHTML).join('')}</div>
-    <div class="hint-line">「测」是真的把它拉起来走一遍 MCP 握手：能不能用、有哪些工具，点一下就知道。</div>
-    <div class="hint-line">走 npm 的那种第一次会下载包，慢一点；之后就有缓存了。</div>
-    <div class="hint-line">Codex 把外部工具放在「工具搜索」后面 —— 要让数字员工用上，提示词里先让它 tool_search 找一下（班底随后会把这句写进首轮注入）。</div>`;
+  const panelsSec = panels.length
+    ? `<section class="set-sec">
+        <div class="set-head"><b>界面插件</b><span class="set-tag">带界面的扩展</span></div>
+        <div class="plg-grid">${panels.map(plgPanelCardHTML).join('')}</div>
+        <div class="hint-line">停用只是不生效（文件留着）；卸载会删掉 plugins/&lt;id&gt;/，市场源还在，可以再装回来。</div>
+      </section>`
+    : '';
+  const connSec = S.connectors.length
+    ? `<section class="set-sec">
+        <div class="set-head"><b>连接器</b><span class="set-tag">接进运行时的外部工具</span></div>
+        <div class="plg-grid">${S.connectors.map(plgConnCardHTML).join('')}</div>
+        <div class="hint-line">点卡看详情：来源、启动方式、给哪些运行时，停用和卸载也在里面。</div>
+        <div class="hint-line">走 npm 的那种第一次会下载包，慢一点；之后就有缓存了。</div>
+        <div class="hint-line">Codex 把外部工具放在「工具搜索」后面 —— 要让数字员工用上，提示词里先让它 tool_search 找一下（班底随后会把这句写进首轮注入）。</div>
+      </section>`
+    : '';
+  return panelsSec + connSec;
 }
 
 
 
 export function plgCardHTML(c) {
+  return `<div class="plg-card plg-card-click" data-plgview="conn:${esc(c.id)}" title="点击看详情">
+    <div class="plg-ico">${plgIconFor(c)}</div>
+    <div class="plg-card-main">
+      <div class="plg-title"><b>${esc(c.label)}</b></div>
+      <div class="plg-tags"><span class="set-tag">${esc(c.category)}</span>${c.installed ? '<span class="set-tag">已安装</span>' : ''}</div>
+      <div class="plg-desc plg-desc-clamp">${esc(c.description)}</div>
+    </div>
+    ${c.installed ? '' : ibtn(`data-install="${esc(c.id)}"`)}
+  </div>`;
+}
+
+/**
+ * 插件/连接器详情弹窗（2026-10-25）：卡改小后全文都搬到这里。
+ * kind: 'panel' 界面插件 / 'conn' 连接器。动作做完关弹窗、重画列表。
+ */
+export function openPlgDetail(kind, id) {
+  const dlg = $('plgDlg'), body = $('plgDlgBody');
+  /* 定高弹窗（2026-10-25 "详情卡大小要一致"）：form 是 flex 列 —— 头条钉住、正文自己滚、
+     动作条吸底。动作条因此必须在 form 层（正文外），每次打开先清掉上回搬上去的。 */
+  const form = dlg.querySelector('form');
+  form.querySelector(':scope > .dlg-actions')?.remove();
+
+  if (kind === 'panel') {
+    const p = S.plugins.find((x) => x.id === id);
+    if (!p) return;
+    $('plgDlgTitle').textContent = '界面插件详情';
+    const tags = [
+      '<span class="set-tag">界面</span>',
+      p.installed ? '<span class="set-tag">已安装</span>' : '',
+      p.installed && p.enabled ? '<span class="set-tag">启用中</span>' : '',
+      p.installed && !p.enabled ? '<span class="set-tag">已停用</span>' : '',
+      p.connector ? `<span class="set-tag">工具：${esc(p.connector)}</span>` : '',
+    ].filter(Boolean).join('');
+    let acts = '';
+    if (p.valid && !p.installed) acts = `<button class="primary" data-dlg-act="install">安装</button>`;
+    else if (p.valid && p.installed) {
+      acts =
+        `<button data-dlg-act="${p.enabled ? 'disable' : 'enable'}">${p.enabled ? '停用' : '启用'}</button>` +
+        `<button class="danger" data-dlg-act="uninstall">卸载</button>`;
+    }
+    body.innerHTML = `
+      <div class="plg-d-head">
+        <div class="plg-ico">${PLG_ICONS.panel}</div>
+        <div class="plg-d-who">
+          <div class="plg-title"><b>${esc(p.label)}</b></div>
+          <div class="plg-tags">${tags}</div>
+        </div>
+      </div>
+      <div class="plg-desc">${esc(p.description || '（没有说明）')}</div>
+      <div class="plg-meta">${esc(p.id)} · v${esc(p.version || '—')}</div>
+      ${p.connector ? `<div class="plg-meta">给数字员工带的连接器：${esc(p.connector)}</div>` : ''}
+      ${p.valid ? '' : (p.errors ?? []).map((e) => `<div class="plg-warn">${esc(e)}</div>`).join('')}
+      ${acts ? `<div class="dlg-actions">${acts}</div>` : ''}
+    `;
+    body.querySelector('.dlg-actions') && form.appendChild(body.querySelector('.dlg-actions'));
+    body.querySelectorAll('[data-dlg-act]').forEach((el) => {
+      el.onclick = async () => {
+        const act = el.dataset.dlgAct;
+        if (act === 'uninstall') {
+          if (!(await confirmDo(`卸载「${p.label}」？\n\n这会删掉 plugins/${p.id}/ 整个目录（市场源还在，可以再装回来）。`))) return;
+        }
+        el.disabled = true;
+        try {
+          if (act === 'uninstall') await api(`/api/plugins/${encodeURIComponent(p.id)}`, { method: 'DELETE' });
+          else await post(`/api/plugins/${encodeURIComponent(p.id)}/${act}`, {});
+          dlg.close();
+          await renderPlugins();
+          renderList();
+        } catch (err) {
+          el.disabled = false;
+          toast(err.message, 'error');
+        }
+      };
+    });
+    dlg.showModal();
+    return;
+  }
+
+  /* 先认账本（装了的），再退市场/本机清单（没装的）—— 同一 id 两边都有时以账本为准 */
+  const led = S.connectors.find((x) => x.id === id) ?? null;
+  const c = led ?? publicCatalog().find((x) => x.id === id) ?? localConnectors().find((x) => x.id === id);
+  if (!c) return;
+  $('plgDlgTitle').textContent = '连接器详情';
   const req = (c.requires ?? []).length
     ? `<div class="plg-req">需要：${c.requires
         .map((r) => `${esc(r.key)}${r.present ? '' : '（当前环境里没有）'}`)
         .join('、')}</div>`
     : '';
-  return `<div class="plg-card">
-    <div class="plg-ico">${esc((c.label || c.id).trim().slice(0, 1) || '?')}</div>
-    <div class="plg-card-main">
-      <div class="plg-title"><b>${esc(c.label)}</b><span class="set-tag">${esc(c.category)}</span></div>
-      <div class="plg-desc">${esc(c.description)}</div>
-      <div class="plg-meta">${esc(c.source.kind)} · ${esc(c.source.ref)}</div>
-      ${req}
-      ${c.note ? `<div class="plg-meta">${esc(c.note)}</div>` : ''}
+  const where = c.command ? `${c.command} ${(c.args ?? []).join(' ')}`.trim() : c.url;
+  const desc = (led ? publicCatalog().find((x) => x.id === c.id)?.description : c.description) ?? '';
+  let acts = '';
+  let ledgerBits = '';
+  if (led) {
+    /* 装了的：停用/启用 + 卸载都收进弹窗（卡上无钮，测/改已撤 —— 2026-10-25 用户口径） */
+    acts =
+      `<button data-dlg-act="toggle">${led.enabled ? '停用' : '启用'}</button>` +
+      `<button class="danger" data-dlg-act="uninstall">卸载</button>`;
+    ledgerBits = `
+      <div class="plg-meta">${esc(where || '（没写启动方式）')}</div>
+      <div class="plg-meta">给：${led.runtimes?.length ? led.runtimes.map(esc).join('、') : '全部运行时'}</div>
+      ${plgCredentials(led)}
+      ${(led.warnings ?? []).map((w) => `<div class="plg-warn">${esc(w)}</div>`).join('')}
+      ${led.enabled ? '' : '<div class="plg-warn">已停用 —— 只是没接进运行时，文件还在；启用即恢复。</div>'}`;
+  } else {
+    acts = `<button class="primary" data-dlg-act="install">安装</button>`;
+  }
+  body.innerHTML = `
+    <div class="plg-d-head">
+      <div class="plg-ico">${plgIconFor(c)}</div>
+      <div class="plg-d-who">
+        <div class="plg-title"><b>${esc(c.label)}</b></div>
+        <div class="plg-tags">${led && !led.enabled ? '<span class="set-tag">已停用</span>' : ''}<span class="set-tag">${c.transport === 'stdio' ? '本地进程' : '远端服务'}</span><span class="set-tag">${esc(c.source?.kind ?? '手工')}</span></div>
+      </div>
     </div>
-    ${c.installed ? '<span class="badge">已安装</span>' : `<button class="primary" data-install="${esc(c.id)}">安装</button>`}
-  </div>`;
+    ${desc ? `<div class="plg-desc">${esc(desc)}</div>` : ''}
+    <div class="plg-meta">${esc(c.source?.kind ?? '')}${c.source?.ref ? ' · ' + esc(c.source.ref) : ''}</div>
+    ${req}
+    ${c.note ? `<div class="plg-meta">${esc(c.note)}</div>` : ''}
+    ${ledgerBits}
+    ${led ? '' : (c.warnings ?? []).map((w) => `<div class="plg-warn">${esc(w)}</div>`).join('')}
+    <div class="dlg-actions">${acts}</div>
+  `;
+  form.appendChild(body.querySelector('.dlg-actions'));
+  body.querySelectorAll('[data-dlg-act]').forEach((el) => {
+    el.onclick = async () => {
+      const act = el.dataset.dlgAct;
+      if (act === 'uninstall') {
+        if (!(await confirmDo(`卸载「${c.label}」？数字员工下次运行就用不到它了。`))) return;
+      }
+      el.disabled = true;
+      try {
+        if (act === 'install') {
+          const r = await post('/api/connectors', { from: c.id });
+          dlg.close();
+          S.pluginTab = 'installed';
+          await renderPlugins();
+          const needs = (r.needs ?? []).filter((k) => k);
+          if (needs.length) {
+            toast(`装好了。它要用环境变量：${needs.join('、')}\n班底进程里没有的话，运行时会明确报出来。`);
+          }
+          return;
+        }
+        if (act === 'toggle') {
+          await api(`/api/connectors/${encodeURIComponent(c.id)}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled: !led.enabled }),
+          });
+        } else if (act === 'uninstall') {
+          await api(`/api/connectors/${encodeURIComponent(c.id)}`, { method: 'DELETE' });
+        }
+        dlg.close();
+        await renderPlugins();
+      } catch (err) {
+        el.disabled = false;
+        toast(err.message, 'error');
+      }
+    };
+  });
+  dlg.showModal();
 }
 
 
 
 export function plgCatalogHTML() {
-  const list = publicCatalog();
   const err = S.catalogError ? `<div class="plg-warn">${esc(S.catalogError)}</div>` : '';
-  if (!list.length) return `${err}<div class="empty">清单是空的</div>`;
-  return `${err}<div class="plg-grid">${list.map(plgCardHTML).join('')}</div>
-    <div class="hint-line">这份清单随仓库走（apps/server/catalog/connectors.json），不是市场：一条条写清来源和启动方式，装之前你看得见它要什么。</div>`;
+  const list = publicCatalog();
+  const panelsSec = S.plugins.length
+    ? `<section class="set-sec">
+        <div class="set-head"><b>界面插件</b><span class="set-tag">带界面的扩展</span></div>
+        <div class="plg-grid">${S.plugins.map(plgPanelCardHTML).join('')}</div>
+        <div class="hint-line">「安装」把它拷进 plugins/；停用或卸载后，左边一级栏的「插件」入口里就不再有它。</div>
+      </section>`
+    : '';
+  const connSec = list.length
+    ? `<section class="set-sec">
+        <div class="set-head"><b>连接器</b><span class="set-tag">随仓库走的清单</span></div>
+        <div class="plg-grid">${list.map(plgCardHTML).join('')}</div>
+        <div class="hint-line">这份清单随仓库走（apps/server/catalog/connectors.json），不是市场：一条条写清来源和启动方式，装之前你看得见它要什么。</div>
+      </section>`
+    : (!S.plugins.length ? '<div class="empty">清单是空的</div>' : '');
+  return `${err}${panelsSec}${connSec}`;
 }
 
 
@@ -268,13 +514,11 @@ export function plgPersonalHTML() {
   return `
     <section class="set-sec">
       <div class="set-head"><b>本机来源</b><span class="set-tag">装的路径在本机</span></div>
-      <div class="set-box">
-        ${
-          mine.length
-            ? mine.map(plgRowHTML).join('')
-            : '<div class="set-row"><span class="dim">还没有本机来源的连接器</span></div>'
-        }
-      </div>
+      ${
+        mine.length
+          ? `<div class="plg-grid">${mine.map(plgConnCardHTML).join('')}</div>`
+          : '<div class="empty">还没有本机来源的连接器</div>'
+      }
     </section>
     ${sample.length ? `<section class="set-sec">
       <div class="set-head"><b>本机示例</b><span class="set-tag">拿来验证链路</span></div>
@@ -286,7 +530,7 @@ export function plgPersonalHTML() {
         <div class="set-row">
           <div>
             <div class="set-label">粘一条 MCP 配置</div>
-            <div class="dim" style="font-size:12px">本地进程（stdio）或远端服务（http）；装完建议点一次「测」。</div>
+            <div class="dim" style="font-size:12px">本地进程（stdio）或远端服务（http）；装完在「已安装」里点卡看详情。</div>
           </div>
           <button data-manual="1">添加…</button>
         </div>
@@ -303,6 +547,15 @@ export function wirePlugins() {
     el.onclick = () => {
       S.pluginTab = el.dataset.plgtab;
       renderPlugins();
+    };
+  });
+
+  /* 小卡点开详情；卡内按钮（安装）自己有 handler，不冒泡成「看详情」 */
+  root.querySelectorAll('[data-plgview]').forEach((el) => {
+    el.onclick = (ev) => {
+      if (ev.target.closest('button')) return;
+      const [kind, id] = el.dataset.plgview.split(':');
+      openPlgDetail(kind, id);
     };
   });
 
@@ -324,61 +577,8 @@ export function wirePlugins() {
     };
   });
 
-  root.querySelectorAll('[data-probe]').forEach((el) => {
-    el.onclick = async () => {
-      const out = root.querySelector(`[data-probe-out="${el.dataset.probe}"]`);
-      const show = (text, cls) => {
-        if (!out) return;
-        out.textContent = text;
-        out.className = 'plg-probe' + (cls ? ' ' + cls : '');
-      };
-      el.disabled = true;
-      show('探测中…（真起进程，慢的话十几秒）');
-      try {
-        const r = await post(`/api/connectors/${encodeURIComponent(el.dataset.probe)}/probe`);
-        show(r.ok ? `可以用了。工具：${(r.tools ?? []).join('、') || '（它没报工具）'}` : `用不了：${r.error ?? '未知原因'}`, r.ok ? 'ok' : 'bad');
-      } catch (err) {
-        show('探测失败：' + err.message, 'bad');
-      } finally {
-        el.disabled = false;
-      }
-    };
-  });
-
-  root.querySelectorAll('[data-toggle]').forEach((el) => {
-    el.onclick = async () => {
-      const c = connectorById(el.dataset.toggle);
-      if (!c) return;
-      try {
-        await api(`/api/connectors/${encodeURIComponent(c.id)}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ enabled: !c.enabled }),
-        });
-        await renderPlugins();
-      } catch (err) {
-        toast(err.message, 'error');
-      }
-    };
-  });
-
-  root.querySelectorAll('[data-edit]').forEach((el) => {
-    el.onclick = () => openConnDialog(connectorById(el.dataset.edit));
-  });
-
-  root.querySelectorAll('[data-del]').forEach((el) => {
-    el.onclick = async () => {
-      const c = connectorById(el.dataset.del);
-      if (!c) return;
-      if (!(await confirmDo(`卸载「${c.label}」？数字员工下次运行就用不到它了。`))) return;
-      try {
-        await api(`/api/connectors/${encodeURIComponent(c.id)}`, { method: 'DELETE' });
-        await renderPlugins();
-      } catch (err) {
-        toast(err.message, 'error');
-      }
-    };
-  });
+  /* 2026-10-25 用户口径：测/改撤掉、停/卸进详情弹窗 —— 行式条目的 data-probe/
+     data-toggle/data-edit/data-del 接线随之移除（弹窗里自己绑 data-dlg-act）。 */
 
   root.querySelectorAll('[data-manual]').forEach((el) => {
     el.onclick = () => openConnDialog(null);

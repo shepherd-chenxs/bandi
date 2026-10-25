@@ -462,6 +462,104 @@ export async function syncRepo(id) {
   return store.touchGitRepoSync(row.id);
 }
 
+/**
+ * **合并之后的本地收尾**（2026-10-25）：切回 base、拉最新、删掉本地源分支。
+ *
+ * 为什么必须做：PR 是在 GitHub 上合的，本地克隆不会自己变 —— 不收尾，人还停在源分支上，
+ * 本地 main 也是旧的，下一个任务从旧代码开始（用户实问「合并完还要自己切回 main、拉更新，
+ * 能不能集成到平台」）。自动合并（pr-review.doMerge）与手动合并（routes/git.mjs mergeOne）
+ * 共用这一处，不再各写一份。
+ *
+ * 保守边界（宁可不收，也不把人正在干的活搅了）：
+ *   · 工作区有未提交改动 → 不动，只说明（正在写代码的树基本都不干净，这一条就是护栏）；
+ *   · 当前分支既不是 PR 源分支、也不是 base → 不动（人在别的分支上干活）；
+ *   · `pull --ff-only` 分叉就失败，不硬合；
+ *   · 删本地分支：只删 `bandi/` 开头、且本地 HEAD 与 PR 的 headSha 完全一致的（没有本地独有提交）；
+ *     对不上就留着并说明 —— 删分支可以，删掉没推过的提交不行。
+ *
+ * @param {string} repo fullName
+ * @param {{base?: string, head?: string|null, headSha?: string|null, deleteLocal?: boolean}} opts
+ *        base 缺省用仓库记录的默认分支；head 为空 = 「当前分支就是要收的那条」（手动「回 base」按钮）
+ */
+export async function settleAfterMerge(repo, { base = null, head = null, headSha = null, deleteLocal = true } = {}) {
+  const row = store.getGitRepoByFullName(repo);
+  if (!row?.localPath || !isGitRepo(row.localPath)) {
+    return { settled: false, skipped: 'no-local', note: '本地没有这个仓库的克隆，没动本地' };
+  }
+
+  let st;
+  try {
+    st = await workState(row);
+  } catch (e) {
+    return { settled: false, skipped: 'status-failed', note: `读不到本地状态，没动：${String(e?.message ?? e).slice(0, 120)}` };
+  }
+  if (st.detached) return { settled: false, skipped: 'detached', note: '本地不在任何分支上（detached HEAD），没动' };
+  if (st.dirtyCount) {
+    return { settled: false, skipped: 'dirty', note: `本地还有 ${st.dirtyCount} 个未提交改动，没替你切分支（先自己处理掉再来）` };
+  }
+
+  const baseName = String(base || row.defaultBranch || '').trim();
+  if (!baseName) return { settled: false, skipped: 'no-base', note: '不知道 base 是哪个分支，没动本地' };
+
+  // 手动「回 base」：head 空 = 当前这条分支就是要离开的那条；自动合并：只认 PR 的源分支
+  const from = head || st.branch;
+  if (st.branch !== baseName && st.branch !== from) {
+    return { settled: false, skipped: 'other-branch', note: `本地当前在 ${st.branch}，不是这条 PR 的分支，没动` };
+  }
+
+  let switched = false;
+  if (st.branch !== baseName) {
+    const co = await gitIn(row.localPath, ['checkout', baseName], { timeoutMs: GIT_FAST_MS });
+    if (co.code !== 0) {
+      return { settled: false, skipped: 'checkout-failed', note: `切回 ${baseName} 没成：${co.out.split('\n').slice(-3).join(' ')}` };
+    }
+    switched = true;
+  }
+
+  /*
+   * 显式写 `origin <base>`：本地 main 不一定设置过 upstream（手动接入的克隆、测试仓库都常见），
+   * 裸 `git pull` 会在这种仓库上直接失败（"There is no tracking information"）。
+   * 目标分支已经明确了，就不该再依赖 upstream 配置。
+   */
+  const pull = await gitIn(row.localPath, ['pull', '--ff-only', 'origin', baseName], { timeoutMs: GIT_PUSH_MS });
+  const pulled = pull.code === 0;
+  const upToDate = pulled && /Already up[- ]to[- ]date/i.test(pull.out);
+  let pullNote = null;
+  if (!pulled) pullNote = `拉取没成功：${pull.out.split('\n').slice(-3).join(' ')}`;
+
+  let deleted = null;
+  let deleteNote = null;
+  const branchToDelete = from && from !== baseName && /^bandi\//.test(from) ? from : null;
+  if (deleteLocal && branchToDelete) {
+    let okToDelete = false;
+    if (headSha) {
+      // 自动合并：本地这条分支的 HEAD 必须**正好**是 PR 的 head —— 有本地独有提交就别删
+      const sha = await gitIn(row.localPath, ['rev-parse', branchToDelete], { timeoutMs: GIT_FAST_MS });
+      okToDelete = sha.code === 0 && sha.out === headSha;
+      if (!okToDelete) deleteNote = `本地分支 ${branchToDelete} 上有没推过的提交，没删`;
+    } else {
+      // 手动「回 base」：pull 成功后 main 已包含它，`-D` 后再交给 git 的合并检查兜底
+      okToDelete = pulled;
+    }
+    if (okToDelete) {
+      // 自动合并传了 headSha（已核对过提交就是 PR 的那个）→ 可以 -D；
+      // 手动「回 base」没有 PR sha → 用 -d，让 git 自己检查"已合并"再删，避免误删没推过的提交
+      const del = await gitIn(row.localPath, ['branch', headSha ? '-D' : '-d', branchToDelete], { timeoutMs: GIT_FAST_MS });
+      if (del.code === 0) deleted = branchToDelete;
+      else deleteNote = `本地分支 ${branchToDelete} 没删掉：${del.out.split('\n').slice(-2).join(' ')}`;
+    } else if (!deleteNote) {
+      deleteNote = `本地分支 ${branchToDelete} 没删（本地 ${baseName} 还没包含它）`;
+    }
+  }
+
+  const bits = [switched ? `已切回 ${baseName}` : `已在 ${baseName}`];
+  if (pulled) bits.push(upToDate ? '本地是最新的' : '已拉取最新');
+  if (pullNote) bits.push(pullNote);
+  if (deleted) bits.push(`删了本地分支 ${deleted}`);
+  if (deleteNote) bits.push(deleteNote);
+  return { settled: true, base: baseName, switched, pulled, deleted, note: bits.join('，') };
+}
+
 /** 从清单移除（**不删本地目录** —— 里面可能有你没推的东西） */
 export function removeRepo(id) {
   const row = store.getGitRepo(id);
