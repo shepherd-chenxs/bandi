@@ -641,7 +641,18 @@ export function renderMarkdown(src) {
     const t = ls[i].trim();
 
     if (/^\u0000\d+\u0000$/.test(t)) { flushPara(); closeList(); out.push(t); continue; }
-    if (!t) { flushPara(); closeList(); continue; }
+    if (!t) {
+      flushPara();
+      /* 松散列表（条目间夹空行，GFM 合法）：往下找到下一条非空行，还是同类列表项就
+         别把列表合上 —— 合上就成了每项一个 <ol>/<ul>，有序列表序号全从 1 起
+         （专家岗位说明实测三条要点全渲染成 "1."）。非同类（段落/别的块）才正常收口。 */
+      let j = i + 1;
+      while (j < ls.length && !ls[j].trim()) j++;
+      const nx = ls[j]?.trim() ?? '';
+      const nxKind = /^[-*+]\s+/.test(nx) ? 'ul' : /^\d+[.)]\s+/.test(nx) ? 'ol' : null;
+      if (!list || nxKind !== list) closeList();
+      continue;
+    }
 
     if (isRow(t) && i + 1 < ls.length && isSep(ls[i + 1].trim())) {
       flushPara(); closeList();

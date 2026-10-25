@@ -52,6 +52,7 @@ import { handleWorkflow } from './routes/workflow.mjs';
 import { handleSsh } from './routes/ssh.mjs';
 import { handleGit } from './routes/git.mjs';
 import { handleImageAi } from './routes/imageai.mjs';
+import { handlePrefs } from './routes/prefs.mjs';
 import { handleRun } from './routes/run.mjs';
 import { handleSchedules } from './routes/schedules.mjs';
 import { handleLocal, supervisorModule } from './routes/local.mjs';
@@ -486,6 +487,9 @@ const server = http.createServer(async (req, res) => {
 
     const handledImageAi = await handleImageAi(req, res, url);
     if (handledImageAi !== false) return;
+
+    const handledPrefs = await handlePrefs(req, res, url);
+    if (handledPrefs !== false) return;
 
     fail(res, 404, 'E2036', '没有这个接口');
   } catch (err) {

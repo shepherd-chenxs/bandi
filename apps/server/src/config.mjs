@@ -84,6 +84,43 @@ const clientCfg = (() => {
 
 export const clientJoined = typeof clientCfg.controlPlane === 'string' && clientCfg.controlPlane.trim() !== '';
 
+/*
+ * 回复风格（2026-10-24 用户的设计：偏好设置里一项，改了**全体数字员工**生效）。
+ *
+ *   · 'default' 默认 —— 不加任何约束；
+ *   · 其他风格 = 注册表里登记的一个**技能**，派活时把技能正文追加进任务
+ *     （见 dispatch.stylePrefBlock —— 每轮都带、不走 firstTime，切换立即生效）。
+ * 注册表写死在代码（同专家目录的口径：跟代码一起审）；存在 config.json 的
+ * `replyStyle` 键里，跟控制面/生图那套共用一个文件。
+ */
+export const REPLY_STYLES = [
+  { id: 'default', label: '默认', skill: null },
+  { id: 'concise', label: '言简意赅', skill: 'my-adhd-caveman' },
+];
+
+export function replyStyle() {
+  try {
+    const j = JSON.parse(fs.readFileSync(path.join(dataDir, 'config.json'), 'utf8'));
+    return REPLY_STYLES.some((x) => x.id === j.replyStyle) ? j.replyStyle : 'default';
+  } catch {
+    return 'default';
+  }
+}
+
+export function writeReplyStyle(id) {
+  const hit = REPLY_STYLES.find((x) => x.id === id);
+  if (!hit) throw new Error(`不认识的回复风格：${id}`);
+  const cfgPath = path.join(dataDir, 'config.json');
+  let cur = {};
+  try { cur = JSON.parse(fs.readFileSync(cfgPath, 'utf8')); } catch { /* 还没有这个文件 */ }
+  if (!cur || typeof cur !== 'object' || Array.isArray(cur)) cur = {};
+  cur.replyStyle = hit.id;
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.writeFileSync(cfgPath, JSON.stringify(cur, null, 2), 'utf8');
+  return hit.id;
+}
+
+
 /**
  * 监听地址。
  *

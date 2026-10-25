@@ -668,12 +668,15 @@ export function cardTicketHtml(meta) {
   if (!meta || meta.type !== 'card' || !meta.cardId) return '';
   const col = colOfStatus()[meta.status] ?? 'other';
   return `<div class="card-ticket" data-card-ticket="${esc(meta.cardId)}" title="打开任务卡详情">
-    <i class="ct-dot ${esc(col)}"></i>
-    <b class="ct-title">${esc(meta.title || '任务卡')}</b>
-    <span class="ct-status">${esc(meta.status || '')}</span>
-    ${meta.assignee ? `<span class="ct-assignee">@${esc(meta.assignee)}</span>` : ''}
-    <span class="ct-open">查看 →</span>
-    <button type="button" class="ct-board" data-card-board="${esc(meta.cardId)}" title="在任务看板里看它">看板</button>
+    <i class="ct-spine ${esc(col)}"></i>
+    <div class="ct-head">
+      <span class="ct-ico">📋</span><span class="ct-kind">任务卡</span><span class="ct-sep">·</span><span class="ct-status ${esc(col)}">${esc(meta.status || '')}</span>${meta.assignee ? `<span class="ct-sep">·</span><span class="ct-assignee">@${esc(meta.assignee)}</span>` : ''}
+      <button type="button" class="ct-board" data-card-board="${esc(meta.cardId)}" title="在任务看板里看它">看板 ↗</button>
+    </div>
+    <div class="ct-row">
+      <div class="ct-title">${esc(meta.title || '任务卡')}</div>
+      <span class="ct-open">打开 →</span>
+    </div>
   </div>`;
 }
 

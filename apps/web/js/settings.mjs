@@ -80,10 +80,59 @@ export function openSettings(section) {
           </div>
         </div>
       </section>
+      <div id="styleSecHost"></div>
     </div>`;
 
   $('themeSeg').querySelectorAll('[data-theme-opt]').forEach((el) => {
     el.onclick = () => setTheme(el.dataset.themeOpt);
+  });
+  loadReplyStyle().catch(() => {}); // 偏好里唯一要问服务端的一项（存在 config.json，跟设备走）
+}
+
+/*
+ * 回复风格（2026-10-24 用户设计）：**雇主的沟通偏好**，一处设置、全体数字员工生效 ——
+ * 跟上面那个「仅本设备」的主题是两码事，所以单独一节、标清"全体数字员工"。
+ * 「言简意赅」= 派活时全员注入 my-adhd-caveman 技能（每轮都带，切换立即生效）。
+ */
+async function loadReplyStyle() {
+  const host = $('styleSecHost');
+  if (!host) return;
+  let data = null;
+  try {
+    data = await api('/api/prefs');
+  } catch (e) {
+    host.innerHTML = `<section class="set-sec"><div class="set-head"><b>对话</b><span class="set-tag">全体数字员工</span></div>
+      <div class="set-box"><div class="empty">${failHtml(e)}</div></div></section>`;
+    return;
+  }
+  const styles = Array.isArray(data?.styles) && data.styles.length ? data.styles : [{ id: 'default', label: '默认' }];
+  const cur = data?.replyStyle ?? 'default';
+  host.innerHTML = `
+    <section class="set-sec">
+      <div class="set-head"><b>对话</b><span class="set-tag">全体数字员工</span></div>
+      <div class="set-box">
+        <div class="set-row">
+          <span class="set-label">回复风格</span>
+          <div class="seg" id="styleSeg">
+            ${styles.map((s) => `<button data-style-opt="${esc(s.id)}" class="${s.id === cur ? 'on' : ''}">${esc(s.label)}</button>`).join('')}
+          </div>
+        </div>
+        <div class="set-row">
+          <p class="hint">「言简意赅」：动作先行、最多五步、一次只问一件事 —— 只管对话里的汇报，文档/稿子/结论表这些交付物不受影响。切换后下一轮对话就生效。</p>
+        </div>
+      </div>
+    </section>`;
+  $('styleSeg')?.querySelectorAll('[data-style-opt]').forEach((el) => {
+    el.onclick = async () => {
+      const id = el.dataset.styleOpt;
+      try {
+        await api('/api/prefs', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ replyStyle: id }) });
+        $('styleSeg').querySelectorAll('[data-style-opt]').forEach((b) => b.classList.toggle('on', b.dataset.styleOpt === id));
+        toast('已对全体数字员工生效');
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    };
   });
 }
 

@@ -7,7 +7,7 @@
  *
  * 这里只负责"派出去"，不负责 HTTP：状态码由调用方按 err.code 映射。
  */
-import { repoRoot } from './config.mjs';
+import { repoRoot, replyStyle, REPLY_STYLES } from './config.mjs';
 import * as store from './store.mjs';
 import * as runs from './runs.mjs';
 import * as skills from './skills.mjs';
@@ -290,6 +290,20 @@ export function queuedCountOf(threadId) {
  */
 const PROJECT_RUN_CAP = 20;
 
+/*
+ * 回复风格块（2026-10-24 雇主偏好，设置 → 偏好 → 回复风格）：选了非默认风格，
+ * **每轮派活**都把对应技能的正文追加进任务 —— 不走 firstTime（那是会话第一节的事，
+ * 走它的话切换要等会话重开才生效）；正文直接内联而不是给指针，省一次读文件、
+ * 当轮就生效。默认风格返回空串，任务一个字都不多。
+ */
+export function stylePrefBlock() {
+  const hit = REPLY_STYLES.find((x) => x.id === replyStyle());
+  if (!hit?.skill) return '';
+  const s = skills.getSkill(hit.skill);
+  if (!s) return ''; // 技能文件被删了：宁可没风格，不让派活挂掉
+  return `【回复风格 · 雇主设定】按下面的口径说话：\n\n${String(s.body).trim()}`;
+}
+
 function ensureDispatchable(member, opts = {}) {
   const cap = store.effectiveMaxParallel(store.getPersona(member.personaId));
   const running = store.countActiveRunsForPersona(member.personaId);
@@ -377,7 +391,7 @@ function startMemberRun(thread, member, opts, trigger) {
   const attBlock = attsBlock(opts.atts);
   // 任务卡锚点（2026-10-23）：卡评论区派活必须带上"你在办哪张卡"，问进度才不会答偏。
   const cardBlock = opts.card ? taskCardBlock(opts.card) : '';
-  const fullTask = [cardBlock, task, attBlock].filter(Boolean).join('\n\n');
+  const fullTask = [cardBlock, task, attBlock, stylePrefBlock()].filter(Boolean).join('\n\n');
 
   return runs.startRun({
     thread,

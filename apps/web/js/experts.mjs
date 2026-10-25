@@ -1,7 +1,7 @@
 /* experts.mjs —— 专家库、界面插件。
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
 import { esc, savePlace, setRoute, toast } from './shell.mjs';
-import { api, failHtml, initial, personaAvatar, post } from './ui.mjs';
+import { api, failHtml, initial, personaAvatar, post, renderMarkdown } from './ui.mjs';
 import { load, setNav } from './state.mjs';
 import { breadcrumb, headRow } from './connectors.mjs';
 import { askText, confirmDo } from './machine.mjs';
@@ -89,7 +89,7 @@ export function expertCard(x) {
   const avatar = hired
     ? personaAvatar(x.hiredPersona, '', x.name)
     : personaAvatar({ name: x.name, avatar: `expert-${x.key}.png` }, '', x.name);
-  return `<div class="expert-card">
+  return `<div class="expert-card" data-expert-key="${esc(x.key)}">
     <div class="expert-top">
       ${avatar}
       <div class="expert-who">
@@ -111,6 +111,92 @@ export function expertCard(x) {
       // 未雇佣：右上角同一位置的「雇佣」胶囊（2026-10-21 用户要求：跟已雇佣胶囊一样大）
       : '<button type="button" class="pill expert-hired expert-hire" data-expert-hire="' + esc(x.key) + '">雇佣</button>'}
   </div>`;
+}
+
+
+
+/**
+ * 人物详情弹窗（2026-10-25 用户要求：点人物卡，弹出人物详情卡）。
+ * 版式（2026-10-25 二改：简介上移常驻、首个页签改名「技能」）：
+ *   · 头部＝大头像、花名/岗位/雇佣状态；
+ *   · **简介放页签上方**，两个页签都看得见；
+ *   · 页签「技能」＝技能清单（名 + 一句话描述）；「岗位说明」＝instructions 全文自然排版
+ *     （本来就是 markdown，走 renderMarkdown）。
+ * 雇佣/解聘按钮与卡片右上角那枚胶囊**等价**（同一个 hireExpert / fireExpert），
+ * 动作完不关弹窗：afterExpertAction 刷新的是墙和 S.experts，这里按新数据原地重画。
+ */
+function paintExpertDetail(x) {
+  const hired = !!x.hired;
+  const name = x.hiredPersona?.name || x.name;
+  const avatar = hired
+    ? personaAvatar(x.hiredPersona, 'big', x.name)
+    : personaAvatar({ name: x.name, avatar: `expert-${x.key}.png` }, 'big', x.name);
+  $('exdBody').innerHTML = `
+    <div class="exd-top">
+      ${avatar}
+      <div class="exd-who">
+        <div class="exd-name-row">
+          <span class="exd-name">${esc(name)}</span>
+          <span class="exd-role">${esc(x.role || '')} · ${hired ? '<span class="exd-on">已雇佣</span>' : '待雇佣'}</span>
+        </div>
+        ${x.intro ? `<div class="exd-intro">${esc(x.intro)}</div>` : ''}
+      </div>
+    </div>
+    <div class="tabs exd-tabs">
+      <button type="button" class="tab on" data-exd-tab="d">技能</button>
+      ${x.instructions ? '<button type="button" class="tab" data-exd-tab="i">岗位说明</button>' : ''}
+    </div>
+    <div data-exd-panel="d">
+      ${x.skills?.length
+        ? `<div class="exd-sec"><div class="exd-skills">${x.skills
+            .map((s) => `<div class="exd-skill"><b>${esc(s.name)}</b>${s.description ? `<span>${esc(s.description)}</span>` : ''}</div>`)
+            .join('')}</div></div>`
+        : '<div class="exd-sec"><div class="hint">没有挂技能</div></div>'}
+    </div>
+    ${x.instructions ? `<div data-exd-panel="i" hidden><div class="md-view exd-instr">${renderMarkdown(x.instructions)}</div></div>` : ''}
+    <div class="dlg-actions">
+      <button type="button" class="${hired ? 'danger' : 'primary'}" id="exdAct">${hired ? '解聘' : '雇佣'}</button>
+      <button type="button" value="cancel">关闭</button>
+    </div>`;
+  // 页签切换（样式复用设置页/插件面板那套 .tabs）
+  $('exdBody').querySelectorAll('[data-exd-tab]').forEach((t) => {
+    t.onclick = () => {
+      $('exdBody').querySelectorAll('[data-exd-tab]').forEach((b) => b.classList.toggle('on', b === t));
+      $('exdBody').querySelectorAll('[data-exd-panel]').forEach((p) => {
+        if (p.dataset.exdPanel === t.dataset.exdTab) p.removeAttribute('hidden');
+        else p.setAttribute('hidden', '');
+      });
+    };
+  });
+  $('exdAct').onclick = async (e) => {
+    e.preventDefault();
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    try {
+      // fireExpert 的返回值：确认框点了取消是 false，成功是 undefined（不是 true！）
+      // 所以只能按「 === false」认取消，写成 !ok 会把成功也当成取消、弹窗不重画（实测踩过）
+      if (hired) {
+        if ((await fireExpert(x.key)) === false) { btn.disabled = false; return; }
+      } else {
+        await hireExpert(x.key);
+      }
+      const fresh = (S.experts ?? []).find((it) => it.key === x.key);
+      if (fresh) paintExpertDetail(fresh); // S.experts 已被 afterExpertAction 重拉，按新状态原地重画
+    } catch (err) {
+      toast(err.message, 'error');
+      btn.disabled = false;
+    }
+  };
+}
+
+
+
+/** 打开人物详情弹窗。S.experts 里找不到（目录刚好被重拉）就不开，别弹一扇空窗 */
+export function openExpertDetail(key) {
+  const x = (S.experts ?? []).find((e) => e.key === key);
+  if (!x) return;
+  paintExpertDetail(x);
+  $('expertDlg').showModal();
 }
 
 
@@ -162,6 +248,14 @@ export function paintExperts() {
     // 已雇佣胶囊可点 = 解聘（2026-10-23）：走 fireExpert 的确认弹窗，解聘完原地退回「雇佣」
     $('expertGrid').querySelectorAll('[data-expert-fire]').forEach((el) => {
       el.onclick = () => fireExpert(el.dataset.expertFire).catch((e) => toast(e.message, 'error'));
+    });
+    // 点卡片本体 = 弹人物详情卡（2026-10-25）。卡上那两枚胶囊（雇佣 / 已雇佣）各有自己的
+    // onclick，先拦一道 closest('button')，点胶囊不弹详情。
+    $('expertGrid').querySelectorAll('[data-expert-key]').forEach((el) => {
+      el.onclick = (e) => {
+        if (e.target.closest('button')) return;
+        openExpertDetail(el.dataset.expertKey);
+      };
     });
   };
   paintGrid();
