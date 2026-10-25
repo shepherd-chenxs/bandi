@@ -20,7 +20,8 @@ node deploy/pack-linux.mjs
 传上去装（有 root/sudo 的机器）：
 
 ```sh
-scp dist/bandi-linux-x64-v1.1.0.tar.gz bandi@<ip>:/tmp/
+scp dist/bandi-linux-x64-v<版本>.tar.gz bandi@<ip>:/tmp/
+# 版本号由 pack-linux 从 apps/desktop/version.json 读，别在文档里写死当前号
 # 服务器上：
 tar xzf /tmp/bandi-linux-x64-*.tar.gz -C /tmp && cd /tmp/bandi
 sudo sh install.sh                    # 装好即起：systemd + bandi 命令自动注册

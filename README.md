@@ -113,8 +113,8 @@ bandi install-cli         # 重新注册全局命令（[--dir] [--path] [--remov
 
 ## 版本
 
-当前 **0.9.0**，真源唯一：[apps/desktop/version.json](apps/desktop/version.json)
+当前 **1.2.0**，真源唯一：[apps/desktop/version.json](apps/desktop/version.json)
 （`build.rs` 读它编译进程序，并同步安装包名 —— **别在别处记第二个号**）。
-`0.y.z` = 初始开发期、**不承诺兼容**：插件格式、流程模板、`status.yaml` 契约都还在动。
+未及 `1.0.0` 之前的兼容承诺仍然有效：**不承诺兼容**，插件格式、流程模板、`status.yaml` 契约都还在动。
 发版：改 `version.json` → 提交 → 打 `v<版本>` tag 推上去，CI 自动出安装包并挂 Release。
-为什么不是 `1.0.0`、插件 / MCP 的另一套号，见 [docs/现状.md](docs/现状.md)「版本与台账」。
+`1.0.0` 那次形变的来历、插件 / MCP 的另一套号，见 [docs/现状.md](docs/现状.md)「版本与台账」。
