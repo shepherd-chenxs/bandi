@@ -1912,9 +1912,16 @@ input.locked:focus { outline: none; border-color: var(--line); }
 .rp-err { flex: 1 1 100%; color: var(--bad); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rp-step.done .rp-ic { color: var(--ok); }
 .rp-step.error, .rp-step.error .rp-ic { color: var(--bad); }
+/* waiting = 整条运行卡住了，这一步在等回执（不是"工具还在跑"） */
+.rp-step.waiting { color: var(--warn); }
+.rp-step.waiting .rp-ic { color: var(--warn); }
 .rp-step.running .rp-ic { color: var(--accent); animation: rp-pulse 1.25s infinite ease-in-out; }
 .rp.warn .rp-dot { background: var(--warn); animation: none; }
 .rp.done .rp-dot { background: var(--ok); animation: none; }
+/* 卡住行里的「停止生成」：跟底部按钮同一个动作，省得人滚下去找 */
+.rp-stop { border: 1px solid var(--line); background: var(--input); color: var(--text);
+           font-size: 11.5px; line-height: 1.4; padding: 1px 7px; border-radius: 5px; cursor: pointer; }
+.rp-stop:hover { border-color: var(--warn); color: var(--warn); }
 @keyframes rp-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 
 /* Markdown 渲染结果的排版 */

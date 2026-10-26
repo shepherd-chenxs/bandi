@@ -120,6 +120,16 @@ console.log('\n④ 卡住判定：5 分钟没有新事件');
   check('满 5 分钟没动静：卡住', progressView(st, STALL_MS).stalled === true);
   check('卡住文案里的"多久以前"可读', fmtAgo(STALL_MS) === '5 分钟前', fmtAgo(STALL_MS));
 
+  // 2026-10-26 实报：卡在 Write 上 20 分钟，卡片同时写"可能卡住了"和"进行中 1237s"。
+  // 现在卡住时把最后一步降级成「等结果」，不再假装工具还在跑。
+  const st2 = createRunProgress({ startedAt: 0, now: 0 });
+  applyRunEvent(st2, { type: 'tool', name: 'Write', input: { file_path: 'C:/Temp/pr-body.md' } }, 0);
+  const v2 = progressView(st2, STALL_MS);
+  check('卡住时最后一步降级成「等结果」', v2.steps[0]?.status === 'waiting', v2.steps[0]?.status);
+  check('卡住时不再有"进行中"步骤', v2.currentStep === null, String(v2.currentStep));
+  check('卡住时仍说得出最后动作', /改文件/.test(v2.lastAction), v2.lastAction);
+  check('"已等多久"还在（供卡片显示）', v2.steps[0]?.durMs === STALL_MS, String(v2.steps[0]?.durMs));
+
   applyRunEvent(st, { type: '__done', status: '完成' }, STALL_MS + 1);
   check('跑完以后不再报卡住', progressView(st, STALL_MS * 10).stalled === false);
 }
@@ -152,6 +162,8 @@ console.log('\n⑥ 聊天页接线（静态断言，防"归约器写了没人用
   check('attachStream 接收 startAt 并按真实开始时间计时', /attachStream\(runId, whoName = '', startedAt = null\)/.test(chatSrc));
   check('重进会话时把 run.startedAt 带过去', /attachStream\(last\.id, last\.personaName, last\.startedAt\)/.test(chatSrc));
   check('不再用三个点占位', !/class="typing"><i><\/i><i><\/i><i><\/i>/.test(chatSrc));
+  check('卡住行里直接给「停止生成」按钮', /class="rp-stop">停止生成/.test(chatSrc));
+  check('卡住的步骤有「等结果」状态（不再假装进行中）', /waiting/.test(chatSrc) && /已等/.test(chatSrc));
 }
 
 console.log(`\n结论：${failed ? `${failed} 项没过` : '全通过'}`);

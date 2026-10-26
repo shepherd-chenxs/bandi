@@ -1047,10 +1047,14 @@ export function attachStream(runId, whoName = '', startedAt = null) {
 
   /** 一张工具卡片：第几步、干了什么、多久/成败 */
   const stepHtml = (s) => {
-    const ic = s.status === 'done' ? '✓' : s.status === 'error' ? '✗' : s.status === 'running' ? '◌' : '·';
+    const ic = s.status === 'done' ? '✓' : s.status === 'error' ? '✗' : s.status === 'running' ? '◌' : s.status === 'waiting' ? '◌' : '·';
+    // waiting = 整条运行已经卡住了：不再写"进行中 1237s"，改成"已等 N 分钟"（配合头顶的"可能卡住了"）
+    const fmtWait = (ms) => (ms >= 60000 ? `${Math.floor(ms / 60000)} 分钟` : `${Math.max(1, Math.round(ms / 1000))} 秒`);
     const dur = s.durMs == null
       ? ''
-      : `<span class="rp-dur">${s.status === 'running' ? '进行中 ' : ''}${fmtStepDur(s.durMs)}</span>`;
+      : s.status === 'running' ? `<span class="rp-dur">进行中 ${fmtStepDur(s.durMs)}</span>`
+      : s.status === 'waiting' ? `<span class="rp-dur">已等 ${fmtWait(s.durMs)}</span>`
+      : `<span class="rp-dur">${fmtStepDur(s.durMs)}</span>`;
     const err = s.error ? `<span class="rp-err">${esc(s.error)}</span>` : '';
     // 卡片里那行会被截断（长命令），title 留全量 —— 悬停能看全，不占版面
     const act = `${s.verb}${s.target ? ` ${s.target}` : ''}`;
@@ -1078,19 +1082,20 @@ export function attachStream(runId, whoName = '', startedAt = null) {
     const lastEl = rp.querySelector('.rp-last');
     let lastText = '';
     if (v.stalled && !v.done) {
-      lastText = `可能卡住了：最后动静 ${fmtAgo(v.idleMs)}${v.lastAction ? `（${v.lastAction}）` : ''} —— 可以再等等，或点「停止生成」`;
+      // 卡住时把"停止生成"直接摆在眼前（顶部提示 + 底部按钮都要滚才能看到，人第一反应找不到）
+      lastText = `可能卡住了：最后动静 ${fmtAgo(v.idleMs)}${v.lastAction ? `（${v.lastAction}）` : ''} —— 可以再等等，或 <button type="button" class="rp-stop">停止生成</button>`;
     } else if (v.error) {
-      lastText = v.error;
+      lastText = esc(v.error);
     } else if (v.lastAction) {
-      lastText = `最近动作：${v.lastAction}（${fmtAgo(v.lastAgoMs)}）`;
+      lastText = esc(`最近动作：${v.lastAction}（${fmtAgo(v.lastAgoMs)}）`);
     } else if (v.info) {
-      lastText = v.info;
+      lastText = esc(v.info);
     } else if (!v.done && v.elapsedMs > 60000) {
       // 一分多钟还没任何输出：模型首包本来就慢，但得让人知道不是界面坏了
       lastText = '还没有任何输出（模型还在想，或者运行时在排队）';
     }
     lastEl.hidden = !lastText;
-    lastEl.textContent = lastText;
+    lastEl.innerHTML = lastText;
     lastEl.classList.toggle('warn', v.stalled && !v.done);
 
     const stepsEl = rp.querySelector('.rp-steps');
@@ -1100,6 +1105,13 @@ export function attachStream(runId, whoName = '', startedAt = null) {
       shown.map(stepHtml).join('');
   };
   paint();
+
+  // 卡住行里那颗「停止生成」：走的是和底部按钮同一个接口（stopChatRun）
+  rp.addEventListener('click', (e) => {
+    if (!e.target.closest('.rp-stop')) return;
+    e.preventDefault();
+    stopChatRun().catch(() => {});
+  });
 
   let stopped = false;
   const tick = setInterval(() => { if (!stopped) paint(); }, 1000);
