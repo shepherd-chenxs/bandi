@@ -45,6 +45,52 @@ export function getRun(runId) {
   return runs.get(runId) ?? null;
 }
 
+
+/**
+ * 把一条**已经落库的**失败运行补成"能看懂的那句话"（2026-10-26）。
+ *
+ * 为什么读的时候还要补一次：上面已经改成结算时记住 error 事件了，但**历史行改不回来**
+ * （那次 WorkBuddy 401 的 `runs.error` 就是四个字的「退出码 1」，真因躺在 run_events 里）。
+ * 改数据要迁移，读时补一句更便宜，也不动任何已存的账。
+ *
+ * 只对"error 就是退出码"或空的失败行查事件表：正常失败一次都不查，代价只在出问题的那几条上。
+ */
+export function errorForDisplay(run) {
+  const raw = String(run?.error ?? '').trim();
+  /*
+   * 什么算"没说出真因"的废话：
+   *   · 空 / 只有退出码 —— 最常见的两种；
+   *   · `success` —— 2026-10-26 实踩：Claude Code 未登录时 result 里 subtype 是 "success"
+   *     而 is_error 是 true，适配器把 subtype 当原因存了下来，界面上就是「没跑成：success」。
+   *     这种值有字面内容但零信息，同样得回查事件表。
+   */
+  const noise = /^(success|ok|error|运行出错)$/i;
+  const bare = !raw || /^退出码\s*-?\d+$/.test(raw) || noise.test(raw);
+  if (!bare || run?.status !== '失败') return raw;
+  const rows = store.listRunEvents(run.id, 0);
+  let lastLineOfFinal = '';
+  for (let i = rows.length - 1; i >= 0; i--) {
+    let evt = null;
+    try {
+      evt = JSON.parse(rows[i].evt);
+    } catch {
+      continue; // 坏行跳过，别为了补一句话把整页拖炸
+    }
+    const m = String(evt?.message ?? '').trim();
+    if (evt?.type === 'error' && m && !noise.test(m)) return m;
+    /*
+     * error 事件本身也是废话时，退而取 final 的**最后一行**：那是 CLI 真正说出口的话
+     * （未登录那次的 final.text 是「（会话切换提示）\n\nNot logged in · Please run /login」，
+     *  末行才是能照做的信息）。只取末行，不整段搬正文。
+     */
+    if (!lastLineOfFinal && evt?.type === 'final' && typeof evt.text === 'string') {
+      lastLineOfFinal = evt.text.trim().split(/\r?\n/).filter(Boolean).pop() ?? '';
+    }
+  }
+  if (lastLineOfFinal) return lastLineOfFinal.slice(0, 160);
+  return raw;
+}
+
 /**
  * 落一条事件，再推给所有订阅者。
  *
@@ -177,10 +223,15 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
 
   // 运行时被停用就别硬跑 —— 报清楚，别让人对着空白发呆
   if (!rt || !rt.enabled) {
+    /* auto 挑不到时说人话：不是"auto 不存在"，是这台机器上还没有一个能用的运行时
+       （用户看到的旧文案是「运行时「auto」不存在」，对着设置页根本找不到叫 auto 的东西） */
+    const err = !rt && runtime === 'auto'
+      ? '自动：这台机器上还没有能用的运行时 —— 去「设置 → 运行时」接一个（本机或节点都行）'
+      : `运行时「${runtime}」${rt ? '已被停用' : '不存在'} —— 去「设置 → 运行时」看看`;
     finish(run, {
       status: '失败',
       exitCode: null,
-      error: `运行时「${runtime}」${rt ? '已被停用' : '不存在'} —— 去「设置 → 运行时」看看`,
+      error: err,
     });
     return run;
   }
@@ -263,6 +314,20 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
   run.stoppedByUser = false;
 
   /**
+   * 最近一条 error 事件的原文（2026-10-26 补）。
+   *
+   * 为什么需要它：有些 CLI 失败时**stderr 是空的**，真因只从事件流里吐过一遍 ——
+   * 2026-10-26 实报的那次（WorkBuddy 账号 401）就是：9 条 error 事件写着
+   * 「WorkBuddy refused this account's sign-in (401)…」，stderr 一个字没有，
+   * 结算时 `res.error`/`res.stderr` 全空 → 落库只剩兜底的「退出码 1」，
+   * 用户看到的就是一句读了等于没读的话（截图里「退出码 1（退出码 1）」）。
+   *
+   * 只当**兜底**用：`res.error` / `stderr` 有值时仍以它们为准（它们更具体、更常在终端里）。
+   * 取**最后一条**：重连 1/5…5/5 那种噪音在前，最后那条才是"为什么真的挂了"。
+   */
+  let lastErrMsg = '';
+
+  /**
    * 起一次。`sid` 非空时把 `error` 事件**先扣住** ——
    * 万一只是"这条会话在对面那个 CLI 里不存在"，我们马上会重开一条重跑，
    * 那个必然失败的报错不该先闪到人眼前（其它事件照常实时推，不耽误看进度）。
@@ -289,6 +354,12 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
       env: run.agentEnv ?? {},
       signal: ctl.signal,
       onEvent: (evt) => {
+        // 先留一份真因，再走"扣住/推出去"那一套 —— 扣住的那几个也一样要记，
+        // 否则续会话失败又重开也失败时，最后只剩退出码（见 lastErrMsg 的注释）
+        if (evt.type === 'error') {
+          const m = String(evt.message ?? '').trim();
+          if (m) lastErrMsg = m;
+        }
         if (sid && evt.type === 'error') {
           held.push(evt);
           return;
@@ -386,7 +457,7 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
           ? null
           : ok
             ? null
-            : res.error?.message || res.error || res.stderr?.trim() || res.turnReason?.error?.message || `退出码 ${res.exitCode}`,
+            : res.error?.message || res.error || res.stderr?.trim() || res.turnReason?.error?.message || lastErrMsg || `退出码 ${res.exitCode}`,
         usage: res.usage ?? null,
         elapsedMs: Date.now() - startedAt,
       });

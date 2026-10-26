@@ -674,6 +674,15 @@ main { min-height: 0; }
 /* 插件表单（L1 声明式渲染出来的） */
 .plg-form { max-width: 560px; }
 .plg-field { margin-bottom: 14px; }
+/* side-label 版式（2026-10-26 用户：添加和修改弹窗改成左边标签、右边内容框）——
+   标签右对齐进左列，输入框和提示占右列；声明式：manifest 表单块写 layout:"side-label"。
+   这种表单也要宽一档：#plgFormDlg 默认 480 装不下（:has 由表单内容挑弹窗宽，别的插件表单不受影响） */
+.plg-form.plg-side { max-width: 760px; }
+#plgFormDlg:has(.plg-form.plg-side) { width: 760px; }
+.plg-form.plg-side .plg-field { display: grid; grid-template-columns: 84px minmax(0, 1fr);
+                                column-gap: 14px; row-gap: 3px; align-items: center; }
+.plg-form.plg-side .plg-field-label { margin-bottom: 0; text-align: right; line-height: 1.5; }
+.plg-form.plg-side .plg-field-hint { grid-column: 2; margin-top: 0; }
 .plg-field-label { font-size: 12.5px; color: var(--text); margin-bottom: 5px; }
 .plg-field-label em { color: var(--bad); font-style: normal; margin-left: 3px; }
 .plg-field-hint { font-size: 11.5px; color: var(--dim); margin-top: 4px; }
@@ -698,6 +707,36 @@ main { min-height: 0; }
 .plg-detail-head .dim { font-size: 12px; }
 /* 动作按钮（测试/编辑/删除）贴标题行右侧 */
 .plg-detail-head .head-actions { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+
+/* ---------- 插件面板搬进设置页（远程连接，2026-10-26） ----------
+   设置页的左栏是分节列表，借不了全局左栏当主从列表。版式（同日二改，用户拍板）：
+   登记做成整宽列表、详情/引导进弹窗 —— 页面上只剩一张登记表，点行开详情弹窗。 */
+.remote-list { display: flex; flex-direction: column; gap: 8px; }
+.remote-row { display: flex; align-items: center; gap: 12px; padding: 10px 14px;
+              border: 1px solid var(--line); border-radius: 10px; background: var(--panel);
+              cursor: pointer; }
+.remote-row:hover { border-color: color-mix(in srgb, var(--dim) 45%, var(--line)); }
+.remote-row .who { min-width: 0; }
+.remote-row .line1 b { font-weight: 500; font-size: 13.5px; }
+.remote-row .line2 { font-size: 12px; color: var(--dim); }
+.remote-row .line2 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.remote-row-side { margin-left: auto; display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+.remote-row-status { font-size: 11.5px; color: var(--dim); margin-right: 4px; }
+/* 「＋ 添加」贴标题行右侧（2026-10-26 用户拍板） */
+#plgRemoteHost .set-head [data-form-open] { margin-left: auto; }
+/* 表单弹窗里的勾选框行（如「生成密钥对」） */
+.plg-check { display: flex; align-items: center; gap: 7px; font-size: 13px; cursor: pointer; user-select: none; }
+.plg-check input { width: 15px; height: 15px; margin: 0; accent-color: var(--accent); }
+/* 详情/引导弹窗（单例 #remoteDlg）：比默认宽一档 —— 公钥、步骤命令都是长行；
+   头部钉住、正文自己滚。内容包在 #remoteDlgInner 里，监听随内容一起换不叠。 */
+#remoteDlg { width: 640px; }
+#remoteDlg #remoteDlgBody { padding: 0 20px 20px; max-height: 74vh; overflow: auto; }
+.remote-dlg-head { display: flex; align-items: center; gap: 8px; padding: 16px 20px 10px; }
+.remote-dlg-head b { font-size: var(--t-sec, 14px); }
+.remote-dlg-head #remoteDlgX { margin-left: auto; }
+#remoteDlg .plg-detail-head { display: flex; align-items: center; gap: 10px;
+                              flex-wrap: wrap; padding-bottom: 10px; }
+#remoteDlg .plg-detail-head .dim { font-size: 12px; min-width: 0; }
 
 /* 代码块：公钥、交付指引、测试输出 —— 可滚、可选中、可复制 */
 .plg-code { margin: 0; padding: 12px; max-height: 340px; overflow: auto;
@@ -1221,6 +1260,15 @@ button.pill.copy-pill[aria-pressed='true'] { color: var(--ok); border-color: var
 /* 描述最多三行 —— 长了会把卡片撑得高低不齐，宫格就歪了 */
 .sk-card .sub { color: var(--dim); font-size: 12px; line-height: 1.5; margin-top: 4px;
                 display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+/* 技能卡片墙的搜索框（2026-10-26 用户要求："加个搜索"）：28 个技能靠滚找不着。
+   放**页头右上角**，跟专家库那张卡片墙同一个位置（.expert-search 先例）——
+   卡片墙是全页铺开的，搜索归页头管；塞进「全部技能」那行会把标题和新建按钮挤成两行。
+   样式抄 .expert-search input（同款输入面），不另造一套视觉。 */
+.sk-search { margin-left: auto; width: 240px; }
+.sk-search input { width: 100%; background: var(--input); color: var(--text);
+                   border: 1px solid var(--line); border-radius: 6px;
+                   padding: 6px 10px; font: inherit; font-size: 13px; }
+.sk-search input:focus { border-color: var(--accent); outline: none; }
 /* ── 头像只有**两类**，别再加第三类（2026-10-20 收口）──
    ① 身份类（人 / 群）：**深底白字**。颜色承担"这是谁"，色相要能区分，字必须近白
       （人＝avatarStyle() 按名字哈希发色，群＝.avatar.grp 固定深绿）。
@@ -1641,6 +1689,8 @@ input.locked:focus { outline: none; border-color: var(--line); }
 .gr-conn-actions { display: flex; gap: 12px; justify-content: center; margin-top: 18px; }
 .set-hint { margin: 14px 0 0; font-size: 12px; color: var(--dim); line-height: 1.7;
             max-width: 560px; margin-left: auto; margin-right: auto; text-align: center; }
+/* 远程连接页的说明横贯整页宽（不是紧凑簇里的短提示），居中会悬在半空 —— 靠左铺开 */
+#settingsView > .detail-body > .set-hint { max-width: none; margin-left: 0; margin-right: 0; text-align: left; }
 /* 表头文字居中（2026-10-23 用户）：管理员/自动合并/操作三列的表头压在内容正上方 ——
    内容也跟着居中（管理员按钮、开关本来就居中，操作按钮近似满列、居中≈右对齐）。
    仓库列是长文本，保持左对齐别动。 */
@@ -2154,8 +2204,35 @@ dialog > form { padding: 0 20px 20px; }
    教训：对话框里放下拉，别把它放在最后一个字段，否则得单独开这个口子。 */
 #flowStartDlg { width: 520px; overflow: visible; }
 /* 新建任务：项目 / 执行人两个下拉在弹窗里，展开时会超出底边 ——
-   dialog 默认的滚动区会把它直接裁掉（同 flowStartDlg，撞过）。 */
-#taskDlg { overflow: visible; }
+   dialog 默认的滚动区会把它直接裁掉（同 flowStartDlg，撞过）。
+   宽度比默认 480 宽一档（2026-10-26 用户："这个框宽一些"）：标题、描述、状态/执行方式两列、
+   执行人/流程都是整行控件，480 的时候两列下拉和描述框都挤成窄条。 */
+#taskDlg { width: 640px; overflow: visible; }
+/* 轻快风（2026-10-26 用户给了截图「我想要这种效果」）：大标题、无边框描述、
+   字段收成底部一排胶囊、动作条（继续创建 / 创建任务 Ctrl↵）压底。 */
+#taskDlg .tk-crumb { font-size: 12px; font-weight: 400; color: var(--dim); }
+#taskDlg #tkTitle { font-size: 17px; font-weight: 700; border: none; background: none; padding: 0; }
+#taskDlg #tkDesc { border: none; background: none; padding: 0; resize: vertical;
+  min-height: 110px; line-height: 1.6; }
+/* 胶囊：圆边框包住 combo 按钮；按钮自己不再带边框底色 —— 一颗胶囊 = 一个字段值。
+   胶囊里只有值没有字段名（状态/执行方式/人名/项目名各自能看懂自己是谁）。 */
+#taskDlg .tk-meta-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+#taskDlg .tk-chip { border: 1px solid var(--line); border-radius: 999px; }
+#taskDlg .tk-chip .combo-btn { width: auto; border: none; background: none; border-radius: 999px;
+  padding: 5px 9px 5px 12px; font-size: 12px; gap: 6px; }
+/* 底部动作条：左边「立即开始」的长说明自己换行，右边继续创建 + 创建任务压住不动 */
+#taskDlg .tk-foot { display: flex; align-items: flex-start; gap: 12px; margin-top: 12px;
+  border-top: 1px solid var(--line); padding-top: 12px; }
+#taskDlg .tk-foot .kb-check { margin-top: 0; flex: 1 1 auto; min-width: 0; }
+#taskDlg .tk-foot-actions { display: flex; align-items: center; gap: 14px; flex: 0 0 auto; }
+#taskDlg #tkOk kbd { font-size: 11px; font-weight: 400; border: 1px solid var(--line);
+  border-radius: 4px; padding: 1px 5px; opacity: .8; margin-left: 2px; }
+/* 「放大成抽屉」（2026-10-26 用户点了 ⤢ 后效果不对）：通用的 dialog.full 只有 0-1-1 权重，
+   宽度被 #taskDlg（1-0-0）压住 —— 结果宽没变、高却撑到 94vh，内容全挤在顶上。
+   这里用同权重的 #taskDlg.full 才打得开；form 转列布局让描述吃掉中间空档、动作条钉底。 */
+#taskDlg.full { width: 96vw; max-width: 96vw; height: 94vh; max-height: 94vh; }
+#taskDlg.full > form { display: flex; flex-direction: column; height: 100%; }
+#taskDlg.full #tkDesc { flex: 1 1 auto; min-height: 110px; }
 dialog::backdrop { background: var(--scrim); }
 /* 加入总机 / 添加总机两个弹窗（2026-10-21）：正文是两段说明 + 邀请码，比默认 480 宽一档好读 */
 dialog.joinwiz-dlg { width: 520px; }
@@ -2176,10 +2253,6 @@ dialog.tc-dlg { width: 1000px; max-width: 94vw; height: min(720px, 90vh);
 /* 弹窗里的卡铺满弹窗剩余高度（整页那条路它吃的是 #pluginView 的高度，已经在 .tc-page 的 flex:1 上）。
    左右内边距交给外层：这里再给 18px 的话，正文会被推到离弹窗边 58px，太松。 */
 .tc-page.in-dlg { padding: 6px 0 0; }
-/* 头部那颗「删除」：跟整页页头那颗一个气质 —— 平时灰字不吭声，悬停才示警 */
-.tc-dlg-del { flex: 0 0 auto; background: none; border: 0; cursor: pointer; color: var(--dim);
-              font-size: 12.5px; padding: 5px 8px; border-radius: 8px; }
-.tc-dlg-del:hover { color: var(--bad); background: color-mix(in srgb, var(--bad) 10%, transparent); }
 /* 「展开成抽屉」（带 data-max 的弹窗才有这颗按钮）：看长讨论时用。
    ⚠️ 这条规则是通用的 —— 之前只有 JS 在切 .full，CSS 空着，点了没反应。 */
 dialog.full { width: 96vw; max-width: 96vw; height: 94vh; max-height: 94vh; }
@@ -3015,6 +3088,11 @@ details.tc-replies[open] > .tc-replies-toggle .tc-replies-unfold { display: inli
 /* 停靠时的回复横幅：一句话说清在回哪条，✕ 取消（Discord 的 replying-to 条） */
 .tc-reply-banner { display: flex; align-items: center; gap: 8px; margin: 0 0 6px;
                    font-size: 12px; color: var(--dim); }
+/* 平时它必须真的不占位：`display:flex` 会盖掉浏览器自带的 `[hidden]{display:none}`，
+   不补这一条，没有停靠时那行就一直在 —— 文字是空的，只剩最右边一颗 ✕ 孤零零挂在
+   输入框上方，谁也不知道它是什么（2026-10-26 用户截图问"这个按钮是干嘛的"）。
+   同一个坑在本文件里出现过两次（.tc-stop[hidden] 也是这么补的）。 */
+.tc-reply-banner[hidden] { display: none; }
 .tc-reply-banner-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
                         white-space: nowrap; color: var(--text); }
 .tc-reply-undock { flex: 0 0 auto; width: 20px; height: 20px; padding: 0; line-height: 1;

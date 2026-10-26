@@ -37,6 +37,9 @@
 import path from 'node:path';
 import * as store from './store.mjs';
 import { dispatchToThread, dispatchEventToThread, projectConstitutionBlock } from './dispatch.mjs';
+// 「卡由流程执行」那条路要真的起一条实例 —— 跟工作台点流程走的是同一个引擎入口，
+// 不另造"从看板起流程"的第二套（引擎的口径只该有一处）
+import { startWorkflow, nodesOf } from './workflows.mjs';
 
 /** 排序权重：越小越"要人管"（平表用它；看板按列站队，不看这个） */
 const FLOW_RANK = { 已阻塞: 0, 失败: 1, 待验收: 2, 进行中: 3, 待办: 4, 已完成: 5, 已取消: 6, 想法: 7 };
@@ -173,6 +176,87 @@ function flowRows(run) {
 }
 
 /**
+ * **卡由流程执行**（用户 2026-10-26）：建卡时执行方式可以选一条流程，而不是只点名一个人。
+ *
+ * 跟上面 `flowRows` 是**同一件事的两个方向**，别混：
+ *   · `flowRows`：先在流程页起了实例 → 每一步办理在看板上各占一行（流程是主语）；
+ *   · 这里：先在看板上建了卡 → 卡发起一条实例，**卡是主语**，实例是它的执行过程。
+ *     所以这一种**不再把分步行摊到看板上**（那样一件事会出现 N+1 行），
+ *     整条流程只在看板上占这张卡一个格子，状态/经办人从当前办理派生。
+ */
+
+/** 这条实例**现在**停在哪个办理上（口径跟 workflows.currentTask 一致：当前节点 + 最近一次访问） */
+function currentFlowTask(run) {
+  if (!run?.currentNodeId) return null;
+  const tasks = store.listWorkflowTasks(run.id);
+  const hit = tasks.filter((t) => t.nodeId === run.currentNodeId);
+  return hit[hit.length - 1] ?? tasks[tasks.length - 1] ?? null;
+}
+
+/**
+ * 卡上的状态从流程派生 —— **唯一一处映射**，看板、员工详情共用。
+ *
+ *   · 实例走完 → 「已完成」（流程的终态就是这件事的结论）；
+ *   · 实例终止 → 「已取消」（人决定不做了、留个痕；它不是跑挂，别写成失败）；
+ *   · 还在跑   → **当前这一步的状态**（待办 / 进行中 / 待验收 / 已阻塞 / 失败）。
+ *
+ * 只读派生、**不往卡上写**：卡的 `status` 列只在发起那一刻落个初值。
+ * 两边都写会互相覆盖（流程说"待验收"、人转头又改卡），跟 `sourceKey` 那张卡
+ * 定过的规矩一致：两个账本，各记各的；但"这件事现在什么状态"只有一个答案。
+ */
+function flowCardStatus(run, task) {
+  if (!run) return '待办';
+  if (run.status === '已完成') return '已完成';
+  if (run.status === '已终止') return '已取消';
+  return task?.status ?? '待办';
+}
+
+/** 卡上那行备注：这条流程走到第几步、当前节点叫什么（模板被删了就只说实例名） */
+function flowCardNote(run, task) {
+  const tpl = store.getWorkflowTemplate(run.templateId);
+  const nodes = tpl ? nodesOf(tpl) : [];
+  const idx = task ? nodes.findIndex((n) => n.id === task.nodeId) : -1;
+  const at = idx >= 0 ? `第 ${idx + 1}/${nodes.length} 步 · ${task.nodeName}` : (task?.nodeName ?? '');
+  return [tpl?.name ? `流程「${tpl.name}」` : '流程', at].filter(Boolean).join(' · ');
+}
+
+/**
+ * 流程执行的卡 → 看板一行。
+ * 长得像流程行（`source/flow_id` 一样，点进去都是实例页），但**身份是卡**：
+ * 标题用卡自己的、状态和经办人从当前那一步派生 —— 一件活只占一个格子。
+ */
+function flowCardRow(run, card) {
+  const task = currentFlowTask(run);
+  const status = flowCardStatus(run, task);
+  const persona = task?.assigneePersonaId ? store.getPersona(task.assigneePersonaId) : null;
+  const note = flowCardNote(run, task);
+  return {
+    source: 'flow',
+    source_text: '流程',
+    // 看板行与任务卡是两个东西（流程行没有卡），这枚 id 让以后的入口能认回卡
+    card_id: card.id,
+    task: clip(card.title, TASK_LIMIT),
+    status,
+    col: COL_OF_MANUAL[status] ?? 'other',
+    rank: FLOW_RANK[status] ?? RANK_OTHER,
+    // 「没点名」是流程自己的事实（节点故意留空），别写成"没人干"
+    assignee: persona?.name ?? (task ? '（没点名）' : '（流程没起跑）'),
+    assignee_id: task?.assigneePersonaId ?? null,
+    at: stamp(run.updatedAt ?? card.updatedAt),
+    note: task?.note ? clip(`${note} · ${task.note}`, NOTE_LIMIT) : clip(note, NOTE_LIMIT),
+    flow_id: run.id,
+    flow_title: run.title,
+    template_id: run.templateId,
+    flow_status: run.status,
+    node_id: task?.nodeId ?? null,
+    node_name: task?.nodeName ?? null,
+    visit: task?.visit ?? null,
+    // 卡自己的更新时间（流程行的 at 是实例的动静时间，两者不是一回事）
+    card_at: stamp(card.updatedAt),
+  };
+}
+
+/**
  * 本地卡（存在 `project_tasks` 里的）：人在列头「＋」建的手工卡，与**仓库值班**写进来的卡。
  * 同一族、同一张表 —— 都能拖（**卡的状态就是人给它的指令**）、都能删。
  */
@@ -181,6 +265,15 @@ const SOURCE_TEXT = { manual: '手动', repo: '仓库值班' };
 function manualRows(t) {
   const persona = t.assigneePersonaId ? store.getPersona(t.assigneePersonaId) : null;
   const source = t.source ?? 'manual';
+  /*
+   * 「选了流程、还没发起」的卡（「想法」列建的那种）与"实例已经不在了"的孤儿卡，
+   * 都在这一行里说清楚 —— 人得知道它下一步会发生什么、或者它为什么看着没动。
+   */
+  const flowWhy = t.flowRunId
+    ? '流程实例已经不在了（这条流程被删了）'
+    : t.flowTemplateId
+      ? `将按流程「${store.getWorkflowTemplate(t.flowTemplateId)?.name ?? t.flowTemplateId}」执行 —— 拖到「进行中」就发起`
+      : '';
   return {
     source,
     source_text: SOURCE_TEXT[source] ?? '手动',
@@ -188,12 +281,15 @@ function manualRows(t) {
     status: t.status,
     col: COL_OF_MANUAL[t.status] ?? 'other',
     rank: FLOW_RANK[t.status] ?? RANK_OTHER,
-    assignee: persona?.name ?? '（没派活）',
+    assignee: persona?.name ?? (t.flowTemplateId && !t.flowRunId ? '（还没发起）' : '（没派活）'),
     assignee_id: t.assigneePersonaId ?? null,
     at: stamp(t.updatedAt),
-    note: t.description ? clip(t.description, NOTE_LIMIT) : '手工建的任务',
+    note: clip([t.description ? clip(t.description, NOTE_LIMIT) : '手工建的任务', flowWhy].filter(Boolean).join(' · '), NOTE_LIMIT),
     // 行 id：拖拽 / 改状态 / 删卡都走它（手工卡与仓库值班卡共用这一套）
     manual_id: t.id,
+    // 选了流程的卡：前端据此把"拖到进行中=发起流程"这件事说清楚（看板弹窗之外的地方也用得上）
+    flow_template_id: t.flowTemplateId ?? null,
+    flow_run_id: t.flowRunId ?? null,
     external_key: t.externalKey ?? null,
     // PR 联动（2026-10-17）：看板卡片上一眼看到"这个 PR 开着还是合了"
     pr: t.prRepo && t.prNumber ? { repo: t.prRepo, number: t.prNumber, state: t.prState ?? null, title: t.prTitle ?? null } : null,
@@ -334,10 +430,17 @@ function board(rows, extra = {}) {
 export function projectTasks(project) {
   if (!project?.id) return null;
   const runs = store.listWorkflowRuns({ limit: 500 }).filter((r) => r.projectId === project.id);
+  const cards = store.listProjectTasks(project.id);
+  /*
+   * 卡 ↔ 实例：一条实例只会被一张卡认领（`flowRunId` 是发起那一刻写的，之后不再改）。
+   * 认领了的实例**由卡那一行代表**，分步行不再摊开 —— 否则一件事在看板上 N+1 行。
+   * 反过来，这张卡也不再按手工卡画第二遍（下面那个 filter）。
+   */
+  const cardByRun = new Map(cards.filter((c) => c.flowRunId).map((c) => [c.flowRunId, c]));
   const rows = [
-    ...runs.flatMap(flowRows),
+    ...runs.flatMap((r) => (cardByRun.has(r.id) ? [flowCardRow(r, cardByRun.get(r.id))] : flowRows(r))),
     // 聊天派活不进看板（2026-10-24 用户定的）—— 项目看板只收流程、手工卡、仓库值班
-    ...store.listProjectTasks(project.id).filter(notFlowCard).map(manualRows),
+    ...cards.filter(notFlowCard).filter((c) => !cardByRun.has(c.flowRunId)).map(manualRows),
   ];
 
   return {
@@ -363,10 +466,27 @@ export function projectTasks(project) {
  */
 function allRows(projects, byId, runs, { withChat = false } = {}) {
   const tag = (r, p) => ({ ...r, project_id: p?.id ?? null, project_name: p?.name ?? NO_PROJECT });
+  // 每个项目的卡取一次（下面既要按实例认领判重，也要摊出真正的手工卡）
+  const cardsByProject = new Map(projects.map((p) => [p.id, store.listProjectTasks(p.id)]));
+  const runIds = new Set(runs.map((r) => r.id));
+  const cardByRun = new Map();
+  for (const cards of cardsByProject.values()) {
+    for (const c of cards) if (c.flowRunId && runIds.has(c.flowRunId)) cardByRun.set(c.flowRunId, c);
+  }
   return [
-    ...runs.flatMap((run) => flowRows(run).map((r) => tag(r, byId.get(run.projectId)))),
+    ...runs.flatMap((run) => {
+      const card = cardByRun.get(run.id);
+      return (card ? [flowCardRow(run, card)] : flowRows(run)).map((r) => tag(r, byId.get(run.projectId)));
+    }),
     ...(withChat ? chatRows(projects, null) : []), // 自己就带好了 project_id / project_name
-    ...projects.flatMap((p) => store.listProjectTasks(p.id).filter(notFlowCard).map((t) => tag(manualRows(t), p))),
+    ...projects.flatMap((p) =>
+      cardsByProject
+        .get(p.id)
+        .filter(notFlowCard)
+        // 已经由流程行认领的卡不再画一遍（同一件事两行，用户看着就是"建重了"）
+        .filter((c) => !cardByRun.has(c.flowRunId))
+        .map((t) => tag(manualRows(t), p)),
+    ),
   ];
 }
 
@@ -467,24 +587,83 @@ export function personaTasks(persona) {
 const MANUAL_STATUSES = new Set(['想法', '待办', '进行中', '待验收', '已阻塞', '失败', '已完成', '已取消']);
 
 /**
+ * 建卡时选的那条流程得**真能起**：存在、已发布、有节点。
+ * 界面只列已发布的，但接口谁都能直接调 —— 判据在服务端也要写一遍（跟「想法不派活」同一个道理）。
+ */
+function assertRunnableFlow(flowTemplateId) {
+  const tpl = store.getWorkflowTemplate(String(flowTemplateId));
+  if (!tpl) throw new Error('选的这条流程不在了');
+  if (!tpl.publishedAt) throw new Error(`流程「${tpl.name}」还没发布 —— 发布之后才能在任务里用`);
+  if (!nodesOf(tpl).length) throw new Error(`流程「${tpl.name}」还没有节点，起不了`);
+  return tpl;
+}
+
+/**
+ * 让这张卡**发起一条流程实例**（2026-10-26，用户定的新执行方式）。
+ *
+ * 跟派给人那条的区别只有"执行者"：一个是被点名的人，一条是按节点点名的流水线。
+ * 所以这里不复制派活逻辑，直接调引擎的 `startWorkflow` —— 起实例、起第一步、
+ * 忙了由 30 秒节拍补派，都是引擎自己的事（连"第一步没点名 = 已阻塞等人"也是它定的）。
+ *
+ * 卡上只记 `flowRunId`（身份）+ 发起那一刻的状态/经办人初值；之后看板按实例**当前那一步**
+ * 实时派生（见 `flowCardRow`），不往卡上同步状态 —— 两个账本互相写，迟早一个盖掉另一个。
+ */
+function startCardFlow(cardId) {
+  const row = store.getProjectTask(cardId);
+  if (!row) throw new Error('任务不存在');
+  if (row.flowRunId) throw new Error('这张卡已经有一条流程在跑了');
+  const project = store.getProject(row.projectId);
+  if (!project) throw new Error('这张卡挂的项目已经不在了');
+  const tpl = assertRunnableFlow(row.flowTemplateId);
+  /*
+   * 「想法」= 卡的标题 + 描述。流程页发起时人填的那句"要干什么"就是它 ——
+   * 从卡起流程不用再让人重填一遍：卡的正文本来就是这件事的来龙去脉。
+   */
+  const intent = [row.title, String(row.description ?? '').trim()].filter(Boolean).join('\n\n');
+  const started = startWorkflow({ templateId: tpl.id, title: row.title, intent, projectId: project.id });
+  const run = store.getWorkflowRun(started.id);
+  const task = currentFlowTask(run);
+  return store.updateProjectTask(row.id, {
+    flowRunId: run.id,
+    status: flowCardStatus(run, task),
+    // 只是"发起时这一步是谁在办"的初值；之后谁在办从实例那一步派生
+    assigneePersonaId: task?.assigneePersonaId ?? null,
+    queuedAt: null,
+  });
+}
+
+/**
  * 在项目看板上**手工建一个任务**（用户 2026-10-14，参照 Multica 的「＋」）。
  *
  *   · 只填标题 = 一张挂在看板上的卡（不起进程、不派活）；
  *   · 选了执行人 + `startNow` → **立刻派活**（跟 Multica 那句"创建后 X 会立即开始工作"一致）：
- *     发到那个人的 1:1 会话里，工作目录就是这个项目，状态转「进行中」。
+ *     发到那个人的 1:1 会话里，工作目录就是这个项目，状态转「进行中」；
+ *   · 选了流程 + `startNow`（2026-10-26）→ **立刻发起一条流程实例**，卡绑住它（见 startCardFlow）。
+ *     执行方式二选一：人 或 流程，不能同时给。
  *
- * 派活走的是和聊天完全相同的那条链路（dispatchToThread），不另造执行方式；
- * 失败不吞：卡照建，但状态留在「待办」并把原因抛出去，让人知道没跑起来。
+ * 派活走的是和聊天完全相同的那条链路（dispatchToThread）/ 起流程走的是工作台那条引擎入口，
+ * 不另造执行方式；失败不吞：卡照建，但状态留在原地并把原因抛出去，让人知道没跑起来。
  *
  * ⚠️ 手工卡**必须挂在某个项目下**（表里 projectId 非空、没有它看板也不认）——
  * 全局面板里点某一列的「＋」时，弹窗会让人先选一个项目，就是为这个。
  */
-export function createProjectTask(project, { title, description = '', status = '待办', personaId = null, startNow = false, createdBy = null, creatorConvId = null } = {}) {
+export function createProjectTask(project, {
+  title,
+  description = '',
+  status = '待办',
+  personaId = null,
+  flowTemplateId = null,
+  startNow = false,
+  createdBy = null,
+  creatorConvId = null,
+} = {}) {
   const name = String(title ?? '').trim();
   if (!name) throw new Error('任务得有标题');
   const st = MANUAL_STATUSES.has(status) ? status : '待办';
+  if (personaId && flowTemplateId) throw new Error('执行方式只能选一个：派给人，或者由流程执行');
   const persona = personaId ? store.getPersona(personaId) : null;
   if (personaId && !persona) throw new Error('选的这个人不在了');
+  const flowTpl = flowTemplateId ? assertRunnableFlow(flowTemplateId) : null;
 
   const row = store.createProjectTask({
     projectId: project.id,
@@ -492,22 +671,27 @@ export function createProjectTask(project, { title, description = '', status = '
     description: String(description ?? '').trim(),
     status: st,
     assigneePersonaId: persona?.id ?? null,
+    // 选了流程：先把模板记在卡上；发起成功再写 flowRunId（见 startCardFlow）
+    flowTemplateId: flowTpl?.id ?? null,
     // 项目经理经"工作证"接口建卡时带的身份（人手建是 null）
     createdBy,
     // 建卡那次运行所在的会话（PM 在哪个群里建的卡，回执就送回哪儿；人手建是 null）
     creatorConvId,
   });
 
-  // 「想法」不该被立刻派活 —— 它是"还没决定要不要做"，谈不上开始；
+  // 「想法」不该被立刻派活/起流程 —— 它是"还没决定要不要做"，谈不上开始；
   // 真派了的话卡刚建完就被转成「进行中」，那一列等于白建。
   // 前端也会把那个勾选框灰掉，但**判据放服务端**才作数（接口谁都能直接调）。
-  if (!persona || !startNow || st === '想法') return store.getProjectTask(row.id);
+  if ((!persona && !flowTpl) || !startNow || st === '想法') return store.getProjectTask(row.id);
 
   try {
     return startProjectTask(row.id);
   } catch (e) {
-    // 没派出去也要说清楚：卡建了、状态没动
-    throw Object.assign(new Error(`任务建好了，但没派出去：${e.message}`), { taskId: row.id });
+    // 没派出去也要说清楚：卡建了、状态没动（流程那条同样适用：实例没起就还是原来的状态）
+    throw Object.assign(
+      new Error(`任务建好了，但${flowTpl ? '流程没起来' : '没派出去'}：${e.message}`),
+      { taskId: row.id },
+    );
   }
 }
 
@@ -517,6 +701,8 @@ export function createProjectTask(project, { title, description = '', status = '
  * 为什么抽：建卡时那个「立即开始」、卡片详情里点「保存并开始工作」、以及**把卡拖进「进行中」**
  * 必须是**同一条链路** —— 各写一份迟早走样（跟流程引擎复用 `dispatchToThread` 同一个道理）。
  * 派到执行人的 1:1 会话，工作目录就是这个卡挂的项目。
+ * 执行方式选的是流程时（2026-10-26），这里换乘 `startCardFlow` —— 对外仍是"把这张卡开起来"
+ * 同一个动作，调用方（建卡 / 拖进进行中 / 保存并开始）不用知道底下是哪种执行者。
  *
  * `allowIdea`：建卡时「想法」不该被 startNow 带去开工（那列刚建完就被转走，等于白建）；
  * 但人**亲手把卡从「想法」拖进「进行中」**是明确的指令，那时要放行（2026-10-17）。
@@ -526,6 +712,16 @@ export function startProjectTask(id, { allowIdea = false } = {}) {
   if (!row) throw new Error('任务不存在');
   const project = store.getProject(row.projectId);
   if (!project) throw new Error('这张卡挂的项目已经不在了');
+  /*
+   * **执行方式是「流程」的卡**（2026-10-26）：不派人，起一条实例。
+   * · 已经绑了实例的：推进/终止都归流程引擎，这里不许再"派"一次；
+   * · 还没发起的（「想法」列建的那种）：拖着挪出「想法」= 明确要做了，放行。
+   */
+  if (row.flowRunId) throw new Error('这张卡由流程执行 —— 推进/终止去流程实例里，这里不用再派');
+  if (row.flowTemplateId) {
+    if (!allowIdea && row.status === '想法') throw new Error('「想法」还没决定要不要做，先挪到「待办」再发起');
+    return startCardFlow(row.id);
+  }
   if (!row.assigneePersonaId) throw new Error('先指定执行人，再开始');
   const persona = store.getPersona(row.assigneePersonaId);
   if (!persona) throw new Error('指定的执行人不在了');
@@ -879,6 +1075,34 @@ export function updateProjectTask(id, fields = {}, { autoStart = true } = {}) {
   if (fields.personaId !== undefined) {
     if (fields.personaId && !store.getPersona(fields.personaId)) throw new Error('选的这个人不在了');
     patch.assigneePersonaId = fields.personaId || null;
+  }
+
+  /*
+   * **由流程执行的卡**（2026-10-26）：状态/执行人是流程引擎的，不是人能改的字段。
+   * 推进去实例页点通过/驳回/终止；看板上这张卡也不给拖 —— 两本账各写一份就会互相覆盖。
+   * 卡本身还是"这件事的说明"：标题、描述照常能改。
+   */
+  if (cur.flowRunId && (patch.status !== undefined || fields.personaId !== undefined)) {
+    throw new Error('这张卡由流程执行 —— 状态/执行人跟着流程走，去流程实例里推进或终止');
+  }
+  // 已经选了流程、还没发起的卡也不能改派给人：执行方式在建卡时就定了，要换就删了重建
+  if (cur.flowTemplateId && !cur.flowRunId && fields.personaId !== undefined) {
+    throw new Error('这张卡已经选了由流程执行 —— 要改回派人，删掉这张卡重新建');
+  }
+
+  /*
+   * **还没发起的流程卡：状态改成「进行中」＝ 发起那条流程**（2026-10-26）。
+   * 跟"待办 + 人 = 自动开工"同一个手感：状态就是指令。
+   * 发起失败就不写状态（catch 里抛）—— 卡要是留在「进行中」却没起流程，看板上就是一句假话。
+   */
+  if (cur.flowTemplateId && !cur.flowRunId && patch.status === '进行中' && autoStart) {
+    delete patch.status; // 状态交给 startCardFlow 落初值
+    const saved = store.updateProjectTask(id, patch);
+    try {
+      return startProjectTask(saved.id, { allowIdea: true });
+    } catch (e) {
+      throw Object.assign(new Error(`没发起：${e.message}`), { taskId: id, statusUnchanged: true });
+    }
   }
 
   // 「拖进进行中」这一下要不要顺便开工 —— 看**改完之后**有没有执行人（本次改的优先）

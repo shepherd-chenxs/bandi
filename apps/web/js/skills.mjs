@@ -1550,37 +1550,68 @@ export async function scheduleDialog(job) {
 
 
 
+/* 技能卡片墙的搜索词（2026-10-26 用户要求："加个搜索" —— 28 个技能靠滚找不着）。
+   **不放进 S**：它只对这一页有意义，重进就清空；放全局状态里会被位置记忆之类的序列化
+   顺手带走，也没人需要它跨页活着。 */
+let skQ = '';
+
+/**
+ * 技能按搜索词过滤：命中**技能名 / 描述**任一处即留（不区分大小写）。
+ * 正文（SKILL.md 的 Markdown）**不参与** —— 28 份方法论里"流程""代码"遍地都是，
+ * 搜出来一大片命中，那不叫搜索。要翻正文就在详情页里找。
+ */
+function skillMatches(s, q) {
+  return `${s.name}\n${s.description ?? ''}`.toLowerCase().includes(q);
+}
+
 export function renderSkillCards() {
   S.skill = null;
+  skQ = ''; // 每次进这一页都从"看全部"开始，别把上次的词带进来
   showView('settings');
   const rows = S.skills ?? [];
   $('settingsView').innerHTML = `
-    ${headRow('<b>技能</b>')}
+    ${headRow('<b>技能</b>', `<div class="sk-search"><input id="skSearch" type="search" autocomplete="off" spellcheck="false" placeholder="搜技能名 / 描述" /></div>`)}
     <div class="detail-body">
       <section class="fx">
         <div class="fx-head">
-          <label>全部技能 <span class="count">${rows.length}</span></label>
+          <label>全部技能 <span class="count" id="skCount">${rows.length}</span></label>
           <button class="btn-sm" id="skNew">＋ 新建技能</button>
         </div>
-        ${
-          rows.length
-            ? `<div class="sk-grid">${rows
-                .map(
-                  (s) => `<div class="sk-card${s.builtin ? ' builtin' : ''}" data-sk="${esc(s.name)}">
+        <div id="skGrid"></div>
+      </section>
+    </div>`;
+  $('skNew').onclick = (e) => openAddMenu(skillAddItems(), e.currentTarget);
+  // 搜索：**只重画卡片墙**（#skGrid 与计数），不整页 innerHTML —— 整页重画输入框会失焦，
+  // 打一个字框就瞎了、没法连着输（专家库那条踩过同一个坑）。
+  $('skSearch').oninput = () => {
+    skQ = $('skSearch').value;
+    paintSkillGrid();
+  };
+  paintSkillGrid();
+}
+
+/** 技能卡片墙本体：读 S.skills 现画（首屏和搜索共用这一份）。筛选时计数显示「命中 / 总数」。 */
+function paintSkillGrid() {
+  const rows = S.skills ?? [];
+  const q = skQ.trim().toLowerCase();
+  const list = q ? rows.filter((s) => skillMatches(s, q)) : rows;
+  $('skCount').textContent = q ? `${list.length} / ${rows.length}` : String(rows.length);
+  $('skGrid').innerHTML = !rows.length
+    ? '<div class="dim" style="padding:14px 16px">还没有技能 —— 点右上角「＋ 新建技能」，或从本地导入一个 SKILL.md。</div>'
+    : list.length
+      ? `<div class="sk-grid">${list
+          .map(
+            (s) => `<div class="sk-card${s.builtin ? ' builtin' : ''}" data-sk="${esc(s.name)}">
                     <div class="avatar skill">${esc(initial(s.name))}</div>
                     <div class="who">
                       <b>${esc(s.name)}${s.builtin ? '<em class="tag-dim" title="内置技能：只允许用，不许改（不能编辑、不能删、不能覆盖导入）">内置</em>' : ''}</b>
                       <div class="sub">${esc((s.description || '').trim() || '（还没写描述 —— 模型靠这一句决定什么时候用它）')}</div>
                     </div>
                   </div>`,
-                )
-                .join('')}</div>`
-            : '<div class="dim" style="padding:14px 16px">还没有技能 —— 点右上角「＋ 新建技能」，或从本地导入一个 SKILL.md。</div>'
-        }
-      </section>
-    </div>`;
-  $('skNew').onclick = (e) => openAddMenu(skillAddItems(), e.currentTarget);
-  $('settingsView').querySelectorAll('[data-sk]').forEach((el) => {
+          )
+          .join('')}</div>`
+      : `<div class="empty" style="padding:36px 12px">没有匹配「${esc(skQ.trim())}」的技能 —— 试试技能名或描述里的词。</div>`;
+  $('skGrid').querySelectorAll('[data-sk]').forEach((el) => {
     el.onclick = () => openSkill(el.dataset.sk).catch((e) => toast(e.message, 'error'));
   });
 }

@@ -4,6 +4,7 @@ import { esc, setRoute, setTheme, toast } from './shell.mjs';
 import { api, failHtml, post, showFail } from './ui.mjs';
 import { headRow, renderPlugins, renderRuntimes, rtLoading } from './connectors.mjs';
 import { renderBackup } from './machine.mjs';
+import { renderRemoteConnection, setPluginRerender } from './experts.mjs';
 import { renderList, showView } from './contacts.mjs';
 import { setListTitle } from './flowpages.mjs';
 import { renderGitRepos, renderSkillCards } from './skills.mjs';
@@ -29,6 +30,9 @@ export const SETTINGS_SECTIONS = [
   ['plugins', '插件', '扩展点'],
   ['skills', '技能', '给数字员工用的能力包'],
   ['code', '代码托管', '连接 GitHub、接入仓库'],
+  /* 远程连接（2026-10-26）：原「服务器与密钥」界面插件收编为内置分节（slot=settings.section），
+     数字员工的 SSH 工具随它出厂自带 —— 登记表、密钥、员工工具读的是同一本 ~/.bandi/servers.yaml。 */
+  ['remote', '远程连接', 'SSH 服务器与密钥'],
   ['aiimage', '生图服务', '数字员工生成图片的通道'],
   ['about', '关于', '版本与说明'],
 ];
@@ -40,6 +44,7 @@ export function openSettings(section) {
   if (section === 'machine') section = 'runtimes';
   setRoute('settings', { section: section || S.settingsSection || 'prefs' });
   S.settingsSection = section || 'prefs';
+  setPluginRerender(null);   // 换分节 = 换宿主：面板表单提交后的重画别再指回上一页
   showView('settings');
   /* 左栏顶上只写「设置」：这一列本身就是设置的分节列表，当前分节是右边的页面标题。
      2026-10-19 用户截图：「这个二级标题应该放在右边」—— 之前写成「设置 › 偏好设置」，
@@ -52,6 +57,7 @@ export function openSettings(section) {
   if (S.settingsSection === 'quota') return renderQuota();
   if (S.settingsSection === 'skills') return renderSkillCards();
   if (S.settingsSection === 'code') return renderGitRepos();
+  if (S.settingsSection === 'remote') return renderRemoteConnection();
   if (S.settingsSection === 'aiimage') return renderImageAi();
   if (S.settingsSection === 'about') return renderAbout();
   if (S.settingsSection !== 'prefs') return;

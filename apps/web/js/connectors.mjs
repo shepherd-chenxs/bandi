@@ -143,12 +143,16 @@ export async function renderPlugins() {
 
   // 旧会话可能还停在已撤掉的「界面插件」页签上 —— 归一到「已安装」（装了的界面插件就在那）
   if (S.pluginTab === 'panels') S.pluginTab = 'installed';
-  const panelsInstalled = S.plugins.filter((p) => p.installed).length;
+  /* 市场卡墙只认 slot='plugins' 的：settings.section 的（远程连接）是内置设置分节，不在这儿摆摊
+     （2026-10-26 收编）；内置连接器（builtin）同理 —— 随功能出厂，不进卡墙。 */
+  const marketPanels = S.plugins.filter((p) => p.panel?.slot === 'plugins');
+  const panelsInstalled = marketPanels.filter((p) => p.installed).length;
+  const userConns = S.connectors.filter((c) => !c.builtin);
 
   const counts = {
-    installed: S.connectors.length + panelsInstalled,
-    catalog: publicCatalog().length + S.plugins.length,
-    personal: personalCatalog().length + localConnectors().length,
+    installed: userConns.length + panelsInstalled,
+    catalog: publicCatalog().length + marketPanels.length,
+    personal: personalCatalog().length + localConnectors().filter((c) => !c.builtin).length,
   };
 
   $('settingsView').innerHTML = `
@@ -296,8 +300,9 @@ export function plgConnCardHTML(c) {
  * 界面插件和连接器各一段（段头说清是什么），卡上的「界面」标签负责逐卡认。
  */
 export function plgInstalledHTML() {
-  const panels = S.plugins.filter((p) => p.installed);
-  if (!panels.length && !S.connectors.length) {
+  const panels = S.plugins.filter((p) => p.installed && p.panel?.slot === 'plugins');
+  const conns = S.connectors.filter((c) => !c.builtin);
+  if (!panels.length && !conns.length) {
     return '<div class="empty">还没装任何东西<br />去「公开」挑一个，或在「个人」里手工粘一条</div>';
   }
   const panelsSec = panels.length
@@ -307,10 +312,10 @@ export function plgInstalledHTML() {
         <div class="hint-line">停用只是不生效（文件留着）；卸载会删掉 plugins/&lt;id&gt;/，市场源还在，可以再装回来。</div>
       </section>`
     : '';
-  const connSec = S.connectors.length
+  const connSec = conns.length
     ? `<section class="set-sec">
         <div class="set-head"><b>连接器</b><span class="set-tag">接进运行时的外部工具</span></div>
-        <div class="plg-grid">${S.connectors.map(plgConnCardHTML).join('')}</div>
+        <div class="plg-grid">${conns.map(plgConnCardHTML).join('')}</div>
         <div class="hint-line">点卡看详情：来源、启动方式、给哪些运行时，停用和卸载也在里面。</div>
         <div class="hint-line">走 npm 的那种第一次会下载包，慢一点；之后就有缓存了。</div>
         <div class="hint-line">Codex 把外部工具放在「工具搜索」后面 —— 要让数字员工用上，提示词里先让它 tool_search 找一下（班底随后会把这句写进首轮注入）。</div>
@@ -489,10 +494,11 @@ export function openPlgDetail(kind, id) {
 export function plgCatalogHTML() {
   const err = S.catalogError ? `<div class="plg-warn">${esc(S.catalogError)}</div>` : '';
   const list = publicCatalog();
-  const panelsSec = S.plugins.length
+  const panels = S.plugins.filter((p) => p.panel?.slot === 'plugins');   // settings.section 的不进市场（内置设置分节）
+  const panelsSec = panels.length
     ? `<section class="set-sec">
         <div class="set-head"><b>界面插件</b><span class="set-tag">带界面的扩展</span></div>
-        <div class="plg-grid">${S.plugins.map(plgPanelCardHTML).join('')}</div>
+        <div class="plg-grid">${panels.map(plgPanelCardHTML).join('')}</div>
         <div class="hint-line">「安装」把它拷进 plugins/；停用或卸载后，左边一级栏的「插件」入口里就不再有它。</div>
       </section>`
     : '';
@@ -502,14 +508,14 @@ export function plgCatalogHTML() {
         <div class="plg-grid">${list.map(plgCardHTML).join('')}</div>
         <div class="hint-line">这份清单随仓库走（apps/server/catalog/connectors.json），不是市场：一条条写清来源和启动方式，装之前你看得见它要什么。</div>
       </section>`
-    : (!S.plugins.length ? '<div class="empty">清单是空的</div>' : '');
+    : (!panels.length ? '<div class="empty">清单是空的</div>' : '');
   return `${err}${panelsSec}${connSec}`;
 }
 
 
 
 export function plgPersonalHTML() {
-  const mine = localConnectors();
+  const mine = localConnectors().filter((c) => !c.builtin);   // 内置的不算"个人"（远程连接 SSH 随功能出厂）
   const sample = personalCatalog();
   return `
     <section class="set-sec">

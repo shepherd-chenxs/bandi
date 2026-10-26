@@ -174,12 +174,12 @@ export const ROUTES = {
     setNav('plugins', { skipOpen: true });
     return openTaskBoard();
   },
-  taskCard: ({ id, fromAll, fromFlow, fromConv } = {}) => {
+  taskCard: ({ id, fromAll, fromFlow } = {}) => {
     setNav('plugins', { skipOpen: true });
     // fromFlow：这张卡是从流程的某一步点进来的（`{ runId, taskId, runTitle, nodeName }`）。
     // 只用来在页头写清"你从哪来" —— 卡本身不因为来路不同而长得不一样（见 openTaskCardPage）。
-    // fromConv（2026-10-24）：从聊天气泡的卡票点进来的那场会话 —— 离开卡页回它。
-    return openTaskCardPage(id, { fromAll, fromFlow, fromConv });
+    // 从会话卡票 / 流程步骤点开的是弹窗，不进这条路由（2026-10-26）。
+    return openTaskCardPage(id, { fromAll, fromFlow });
   },
   // 定时任务：工作台里的一页（2026-10-17 从设置搬过来）
   schedules: () => {

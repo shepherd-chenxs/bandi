@@ -41,17 +41,6 @@
     "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
   },
   {
-    "id": "ssh",
-    "label": "服务器与密钥（SSH）",
-    "category": "运维",
-    "description": "把 ~/.bandi/servers.yaml 里登记的机器交给数字员工：列登记、取公钥、生成上公钥指引，并直接连上去执行命令。",
-    "source": { "kind": "local", "ref": "apps/server/mcp/bandi-ssh.mjs" },
-    "transport": "stdio",
-    "command": "node",
-    "args": ["${repo}/apps/server/mcp/bandi-ssh.mjs"],
-    "note": "登记表默认只读；要让它自己登记/删除机器，在「已安装」里给这条加环境变量 BANDI_SSH_ALLOW_WRITE=1。执行默认开着，BANDI_SSH_ALLOW_EXEC=0 可关。"
-  },
-  {
     "id": "github",
     "label": "GitHub",
     "category": "开发",

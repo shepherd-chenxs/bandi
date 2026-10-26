@@ -6,7 +6,7 @@ import { load, setNav } from './state.mjs';
 import { confirmDo } from './machine.mjs';
 import { convDisplayName, openConversationSafe, toastConvErr } from './listmenu.mjs';
 import { detailSave, refreshDeptSuggest, renderList, showView } from './contacts.mjs';
-import { COL_STATUS, openProjectDetail, openTaskBoard, openTaskCardPage, prPillOf } from './projects.mjs';
+import { COL_STATUS, openProjectDetail, openTaskBoard, openTaskCardDialog, prPillOf } from './projects.mjs';
 import { openFlowRun, setListTitle } from './flowpages.mjs';
 import { openChatLogDrawer, openGroupDrawer } from './groups.mjs';
 import { closeDrawer, fireExpert } from './experts.mjs';
@@ -649,7 +649,7 @@ export function bubble(role, text, name, who, showName = false, at = '', atts = 
 
 /*
  * 卡票（2026-10-24）：`meta = {type:'card', cardId, title, status, assignee}` 的消息，
- * 气泡顶上画一张票 —— 状态色点 + 标题 + 执行人，点它直达任务卡详情页；
+ * 气泡顶上画一张票 —— 状态色点 + 标题 + 执行人，点它在**弹窗里**看卡（不离开这段对话）；
  * 角落那颗「看板」小按钮去任务看板（次入口，别抢主点击）。
  *
  * 票上的字段是**消息时刻的快照**（服务端落 meta 时写死的），不回查实时状态：
@@ -680,12 +680,18 @@ export function cardTicketHtml(meta) {
   </div>`;
 }
 
-/** 给画出来的卡票接上点击：主点击进卡详情（回程回这场会话），「看板」进任务看板 */
+/** 给画出来的卡票接上点击：主点击**在弹窗里**打开卡，「看板」进任务看板 */
 export function wireCardTickets(root) {
   (root ?? $('chat')).querySelectorAll('[data-card-ticket]').forEach((el) => {
+    /*
+     * 弹窗而不是整页（2026-10-26 用户拍板"不要嵌在这里"）：
+     * 人在跟某人聊着，看见气泡顶上这张票，点它是"就手看一眼 / 补一句"。
+     * 整页换掉等于把他从这段对话里拽走 —— 跟流程时间轴点「任务」是同一种处境，
+     * 那边 2026-10-19 已经定成弹窗了（见 openTaskCardDialog 的说明），这里对齐。
+     * 弹窗有全屏按钮（data-max），要看长描述/长讨论可以放大，不算憋。
+     */
     el.onclick = () => {
-      openTaskCardPage(el.dataset.cardTicket, { fromConv: S.conversation?.id ?? null })
-        .catch((e) => toast(e.message, 'error'));
+      openTaskCardDialog(el.dataset.cardTicket).catch((e) => toast(e.message, 'error'));
     };
   });
   (root ?? $('chat')).querySelectorAll('[data-card-board]').forEach((el) => {
@@ -762,19 +768,38 @@ export function firstMeaningfulLine(text) {
 
 
 
-/** 没跑成那一块。复用 `.step.bad` —— 跟实时气泡里那行是同一个样式 */
-export function failBlock(r) {
+/**
+ * 没跑成那一块。复用 `.step.bad` —— 跟实时气泡里那行是同一个样式。
+ *
+ * 头像（2026-10-26 修）：原来这里写死一个「!」方块，用户截图报「失败的时候员工头像没了」。
+ * 一屏里全是同一个人的头像，突然换成符号，看着像另起一个系统号在说话，认不出是谁的活失败了。
+ * 现在跟正常气泡走**同一个** `smAvatar` —— 头像图/配色都跟着人走；
+ * 谁是执行者用 `r.personaName`（`listRuns` 已经 JOIN 出名字），1:1 老库兜会话那个人。
+ * 「失败」这件事由气泡里的红字和页头徽标说，不需要头像再喊一遍。
+ */
+export function failBlock(r, showName = false) {
   const full = String(r.error ?? '').trim();
   const why = firstMeaningfulLine(full) || '运行失败（这次没留下原因）';
-  const code = r.exitCode == null ? '' : `（退出码 ${r.exitCode}）`;
+  // 原因本身就是退出码时**别再补一句**「（退出码 1）」—— 2026-10-26 用户截图里看到的是
+  // 「没跑成：退出码 1（退出码 1）」，同一件事说了两遍，还是最没信息量的那件事。
+  const code = r.exitCode == null || /退出码/.test(why) ? '' : `（退出码 ${r.exitCode}）`;
   // 只有"藏着更多东西"时才给折叠入口：短报错摊开就好，别多一颗要点开的东西
   const more =
     full.length > why.length + 20
       ? `<details class="fail-more"><summary>完整报错</summary><pre>${esc(full)}</pre></details>`
       : '';
+  // 干活的那个人：群聊靠 run 自己的 personaName（一场里可能有几个人先后跑），1:1 兜会话的人
+  const label = r?.personaName || S.conversation?.personaName || '数字员工';
+  const p =
+    personaByName(r?.personaName) ??
+    (S.conversation?.personaId ? S.personas.find((x) => x.id === S.conversation.personaId) ?? null : null);
+  // 群聊里的失败也要认得出是谁（跟气泡的 who-line 同一个位置、同一套样式）
+  const nameLine = showName ? `<div class="who-line">${esc(label)}</div>` : '';
   return `<div class="row">
-    <div class="avatar sm" data-tone="a">!</div>
-    <div class="bubble"><div class="step bad">没跑成：${esc(why)}${esc(code)}</div>${more}</div>
+    ${smAvatar(label, '', p)}
+    ${nameLine
+      ? `<div class="msg-main">${nameLine}<div class="bubble"><div class="step bad">没跑成：${esc(why)}${esc(code)}</div>${more}</div></div>`
+      : `<div class="bubble"><div class="step bad">没跑成：${esc(why)}${esc(code)}</div>${more}</div>`}
   </div>`;
 }
 
@@ -797,7 +822,7 @@ export function drawMessages(msgs, name, isGroup = false, runs = []) {
         .map((it) =>
           it.kind === 'msg'
             ? bubble(it.m.role, it.m.text, name, it.m.personaName, isGroup, it.m.createdAt, it.m.atts, it.m.meta)
-            : failBlock(it.r),
+            : failBlock(it.r, isGroup),
         )
         .join('')
     : '';
@@ -1455,7 +1480,7 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
                   <div class="row-label">部门</div>
                   <div>
                     <!-- 部门**不进身份锁**（2026-10-25）：锁的是"他是谁/他会什么"，组织归属是用户的权 ——
-                         雇佣专家只带出厂默认（技术部/内容部/秘书处），之后随便调、也能清空落「未分配」 -->
+                         雇佣专家只带出厂默认（技术部/内容部/行政部），之后随便调、也能清空落「未分配」 -->
                     <input id="dDept" list="deptSuggest" placeholder="比如：技术部（留空 = 未分配）" value="${esc(persona.department || '')}" />
                   </div>
                 </div>
@@ -1773,12 +1798,15 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
     onChange: () => scheduleSave(300),
   });
   /*
-   * 运行时清单。内置员工多一条「自动」—— 她的 runtime 是 'auto'（换机器、换 CLI 都不用改她），
-   * 不给这一条，下拉里就没有当前值，看着像"没配"，一保存还会落到第一个运行时上。
-   * 普通员工不给：对他们来说"用哪个引擎"是要自己决定的，不该有个含糊的自动选项。
+   * 运行时清单。内置员工与**专家库雇来的员工**（p-expert-*）都多一条「自动」——
+   * 他们出厂 runtime 就是 'auto'（换机器、换 CLI 都不用改），下拉里必须有当前值：
+   * 缺了它按钮会退化成显示原始 id（用户实报：专家详情里赫然一个 "auto"），清单里也没有 ✓，
+   * 而且一旦改成具体运行时就**再也选不回「自动」**。
+   * 普通员工仍不给：对他们来说"用哪个引擎"是要自己决定的，不该有个含糊的自动选项。
    */
   const rtItems = runtimes.map((r) => ({ id: r.id, label: r.label }));
-  if (persona.builtin) rtItems.unshift({ id: 'auto', label: '自动（挑一个能用的）' });
+  if (persona.builtin || String(persona.id ?? '').startsWith('p-expert-'))
+    rtItems.unshift({ id: 'auto', label: '自动（挑一个能用的）' });
 
   const rtCombo = createCombo({
     mount: $('dRuntimeMount'),

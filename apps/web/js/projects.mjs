@@ -1527,7 +1527,11 @@ export function wireBoard(view, { refresh, taskProject = () => null }) {
         // 而拖拽只改状态，别把别的维度也算一遍（算错了会误报）。
         const hidden = (S.kbFilter?.statuses?.length ?? 0) > 0 && !S.kbFilter.statuses.includes(toStatus);
         await refresh();
-        if (started) {
+        // 由流程执行的卡（2026-10-26）：拖进「进行中」不是派人，是**发起那条流程实例**——
+        // 响应里 `started` 照样是 true，但派给谁由流程当前节点决定，说"派给执行人"会指错地方。
+        if (started && res.task?.flowRunId) {
+          hint('流程已经起来了 —— 到流程实例里看每一步');
+        } else if (started) {
           const who = (S.personas ?? []).find((p) => p.id === res.task?.assigneePersonaId)?.name;
           hint(`已经派给${who ? `「${who}」` : '执行人'}开跑了 —— 进展在他那条会话里看`);
         } else if (toStatus === '进行中') {
@@ -1620,13 +1624,6 @@ export function wireBoard(view, { refresh, taskProject = () => null }) {
  */
 export let taskCardFromAll = false;
 
-/**
- * 这张卡是从**哪场会话**点进来的（2026-10-24 卡票）：会话 id，否则 null。
- * 聊天气泡里的卡票点进来时记下 —— 离开卡页回那场会话，跟"从流程来回流程"同一个道理：
- * 人是在跟 PM 聊着天点过来的，回去落回看板等于把他从上下文里拽走了。
- */
-export let taskCardFromConv = null;
-
 
 
 /**
@@ -1644,8 +1641,11 @@ export let taskCardFromFlow = null;
 export async function openTaskCardPage(taskId, opts = {}) {
   // 来源定死：恢复位置时从 route 里带回来（刷新也还记得），否则看当前的 S.boardAll
   taskCardFromAll = opts.fromAll ?? !!S.boardAll; // 必须在 S.boardAll = false 之前读
-  // 从聊天气泡的卡票点进来的（2026-10-24）：记下那场会话，离开时回去
-  taskCardFromConv = opts.fromConv ?? null;
+  /*
+   * ⚠️ 这张卡**只从列表（看板）进整页**（2026-10-26 定）：从会话的卡票、从流程的某一步
+   *    点开走的是弹窗（`openTaskCardDialog`）—— 那两种都是"人本来在别处，就手看一眼"。
+   *    所以这里没有"从哪场会话来"这种来路了，回程只有看板 / 项目两条。
+   */
   /*
    * 从流程那一步点进来的（2026-10-19）：记下"这条卡是哪条流程、哪个节点"。
    * 只为了在页头写一行来路 —— 人刚在流程页看着「写代码」这一步，点进来要还认得出是它。
@@ -1653,7 +1653,7 @@ export async function openTaskCardPage(taskId, opts = {}) {
    * ⚠️ 路由里必须带上它：不带的话刷新一下页头那行就没了，看着像"进错页面"。
    */
   taskCardFromFlow = opts.fromFlow ?? null;
-  setRoute('taskCard', { id: taskId, fromAll: taskCardFromAll, fromFlow: taskCardFromFlow, fromConv: taskCardFromConv });
+  setRoute('taskCard', { id: taskId, fromAll: taskCardFromAll, fromFlow: taskCardFromFlow });
   const view = $('pluginView');
   view.classList.add('kb-page'); // 这一页要满屏（见 style.css 的 #pluginView.kb-page）
   S.view = 'plugin';
@@ -1697,18 +1697,19 @@ export async function openTaskCardDialog(taskId, opts = {}) {
   dlg.id = 'tcDlg';
   dlg.className = 'tc-dlg';
   dlg.setAttribute('data-max', ''); // 讨论区一长，占满屏舒服（wireDialogHead 认这个属性）
-  // 「删除」先放在这儿，建完头部再搬进去（头部是 wireDialogHead 现建的）
+  /*
+   * 弹窗头里**没有「删除」**（2026-10-26 用户截图要求删掉这颗）。
+   * 理由是这颗按钮放错了地方：弹窗是"人在别处、就手看一眼、补一句话"的轻界面，
+   * 删卡是不可逆动作，只留在整页详情页的页头 —— 那里才是专门处理这张卡的地方。
+   */
   dlg.innerHTML = `
     <div class="tc-dlg-wrap">
       <b>任务卡</b>
-      <button type="button" class="tc-dlg-del" id="tcDlgDel" title="删掉这张卡（＝忽略它，以后不再提）">删除</button>
       <div id="tcDlgBody"></div>
     </div>`;
   document.body.append(dlg);
   wireDialogHead(dlg.querySelector('.tc-dlg-wrap'));
   const head = dlg.querySelector('.dlg-head');
-  // 「删除」排到 × 左边（头部第一个 button 会被 CSS 推到右边，见 .dlg-head）
-  head?.insertBefore($('tcDlgDel'), head.querySelector('.dlg-close:not(.dlg-max)') ?? null);
   // 标题带上节点名：不写的话，一张「测试2 · 写代码」摆在弹窗里，得自己回想是哪一步
   const titleEl = head?.querySelector('b');
   if (titleEl && opts.fromFlow?.nodeName) titleEl.textContent = `任务卡 · ${opts.fromFlow.nodeName}`;
@@ -1780,6 +1781,35 @@ export async function paintTaskCardPage(taskId, opts = {}) {
       <div class="empty" style="padding:24px 4px">任务取不到：${esc(e.message)}</div>`;
     return;
   }
+  /*
+   * **这张卡由流程执行**（2026-10-26）：卡已经绑上一条流程实例（flowRunId 有值），
+   * 详情就是那条实例页 —— 卡的状态/执行人现在都从流程"当前那一步"派生（看板行也一样），
+   * 再画一份改不动的旧卡页只会让人以为"这儿能改"，服务端那边也会直接 400 挡回来。
+   * 往来同理：发起之后是跟流程当前步骤的经办人进行，卡页这套评论区在这张卡上是空的。
+   * 所以先把它带到实例页，后面那套卡页一个字都不画。
+   */
+  if (task.flowRunId) {
+    // 弹窗那条路只从流程时间轴进来，正常情况下不会有"由流程执行"的卡；真撞上先把弹窗收起，
+    // 别让实例页被压在一个空弹窗底下（右上角 × 看着像没反应）。
+    if (dlg) dlg.close('done');
+    try {
+      await openFlowRun(task.flowTemplateId ?? null, task.flowRunId);
+    } catch (e) {
+      // 实例页取不到（网络 / 服务端）也要说一声：不然人点开这张卡只会看到"什么也没发生"
+      toast(`这张卡由流程执行，但流程实例没打开：${e.message}`, 'error');
+    }
+    return;
+  }
+  /*
+   * 还没发起的流程卡（建卡时选了流程、但状态是「想法」→ 先挂着不发起）：
+   * 执行人这一格归流程，人不能选；页面上要把"改成进行中就发起"说清楚，
+   * 否则这张卡看起来跟普通手工卡一模一样，人不知道它其实绑着一条流程。
+   */
+  const flowOnly = !!task.flowTemplateId;
+  // 模板名从已发布清单里找；找不到（模板后来被删/下架）就退回写 id，总比什么都不写强
+  const flowName = flowOnly
+    ? ((S.flowPublished ?? []).find((f) => f.id === task.flowTemplateId)?.name ?? task.flowTemplateId)
+    : '';
   const proj = (S.projects ?? []).find((p) => p.id === task.projectId) ?? null;
   const isRepo = task.source === 'repo';
   // 流程派生的卡（sourceKey = flow:<runId>:<nodeId>:<visit>，2026-10-19）：身份由流程那一行代表，
@@ -1988,6 +2018,9 @@ export async function paintTaskCardPage(taskId, opts = {}) {
           <div class="tc-headblock">
             ${fromFlowBar}
             <h1 class="tc-title" id="tcTitleText" contenteditable="plaintext-only" spellcheck="false">${esc(task.title)}</h1>
+            ${flowOnly
+              ? `<div class="dim" style="font-size:12.5px;margin:-6px 0 12px">由流程「${esc(flowName)}」执行 —— 把状态改成「进行中」（或拖到「进行中」）就发起；发起后往来在流程实例里看。</div>`
+              : ''}
             <div class="tc-desc${task.description ? '' : ' empty'}" id="tcDescView">${task.description ? renderMarkdown(task.description) : '<span class="dim">添加描述…</span>'}</div>
           </div>
 
@@ -2044,6 +2077,9 @@ export async function paintTaskCardPage(taskId, opts = {}) {
         <h3>属性</h3>
         <div class="tc-prop"><span class="tc-prop-k">状态</span><div id="tcStatusMount"></div></div>
         <div class="tc-prop"><span class="tc-prop-k">执行人</span><div id="tcWhoMount"></div></div>
+        ${flowOnly
+          ? `<div class="tc-prop"><span class="tc-prop-k">流程</span><span class="tc-prop-v">${esc(flowName)} <span class="dim">· 还没发起</span></span></div>`
+          : ''}
         <div class="tc-prop"><span class="tc-prop-k">项目</span><span class="tc-prop-v">${esc(proj?.name ?? '（项目已不在）')}</span></div>
         <div class="tc-prop"><span class="tc-prop-k">来源</span><span class="tc-prop-v">${isFlowCard ? '流程' : isRepo ? '仓库值班' : '手动建卡'}</span></div>
 
@@ -2084,16 +2120,15 @@ export async function paintTaskCardPage(taskId, opts = {}) {
    * 这是这轮改造的重点之一 —— 人是在流程时间轴上点「任务」过来的，
    * 删完卡 / 干完事却落回看板，等于把他从上下文里拽走了，还得自己找回去。
    * 其余照旧：全局看板 → 全局看板，项目看板 → 那个项目。
+   * （从会话卡票进来的那条已经改走弹窗了，弹窗这一路的 backTo 就是 close —— 见 2026-10-26。）
    */
   const backTo = dlg
-    ? () => { dlg.close('done'); } // 弹窗这条路：**关掉就是回去**（流程页一直在底下，没走过）
+    ? () => { dlg.close('done'); } // 弹窗这条路：**关掉就是回去**（底下的页面一直在，没走过）
     : taskCardFromFlow?.runId
       ? () => openFlowRun(taskCardFromFlow.templateId ?? null, taskCardFromFlow.runId)
-      : taskCardFromConv
-        ? () => openConversation(taskCardFromConv) // 从聊天气泡的卡票进来的：回那场会话
-        : taskCardFromAll
-          ? () => openTaskBoard()
-          : proj ? () => openProjectDetail(proj.id) : () => openProjectsPage();
+      : taskCardFromAll
+        ? () => openTaskBoard()
+        : proj ? () => openProjectDetail(proj.id) : () => openProjectsPage();
   // 离开这张卡就把位置记忆清掉：否则下一次刷新又会被拽回这张卡
   const leaveTo = async () => { await backTo(); };
   // （页头不再有返回按钮；backTo 只剩 leaveTo 和下面那行「来自流程」在用）
@@ -2183,7 +2218,13 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     if (!hint2) return;
     // 选完人就把常驻提示撤掉（那句"发送＝叫醒他讨论…"是废话，2026-10-19 用户要去掉）；
     // 只有还没选执行人时才留一句必要的引导。
-    hint2.textContent = whoCombo.value() ? '' : '先在右边选执行人，再发送。';
+    // 还没发起的流程卡没有"选人"这回事（执行人由流程当前步骤定），提示得换说法，
+    // 不然右边明明只有「（由流程执行）」、底下却叫着"快选执行人"，两句话打架。
+    hint2.textContent = whoCombo.value()
+      ? ''
+      : flowOnly
+        ? `这张卡由流程「${flowName}」执行 —— 发起后在流程实例里跟当前经办人往来。`
+        : '先在右边选执行人，再发送。';
   };
 
   const statusCombo = createCombo({
@@ -2192,30 +2233,44 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     value: task.status,
     onChange: () => scheduleSave(0), // 改状态立刻存：待办+人 = 开工（服务端负责）
   });
-  const whoCombo = createCombo({
-    mount: $('tcWhoMount'),
-    items: [{ id: '', label: '（不指定）' }, ...(S.personas ?? []).map((p) => ({ id: p.id, label: personLabel(p) }))],
-    value: task.assigneePersonaId || '',
-    search: true,
-    placeholder: '搜名字或岗位…',
-    empty: '没有匹配的人',
-    onChange: (id) => {
-      // 选人**立刻**反映到评论区与页头（原来要点了「保存」重画才生效，看着就像"输入框点不动"）
-      const p = (S.personas ?? []).find((x) => x.id === id) ?? null;
-      if (p) whoName = p.name;
-      const whoText = $('tcWhoText');
-      if (whoText) whoText.textContent = p?.name ?? '（没派活）';
-      syncComposer();
-      scheduleSave(0); // 指定人立刻存：卡在「待办」时这一下就会自动开工
-    },
-  });
+  /*
+   * 执行人那一格：还没发起的流程卡**只留「（由流程执行）」一项**。
+   * 为什么不是藏掉、而是留一个不能选的项：藏掉的话右栏这一行会凭空消失，
+   * 人只会觉得"执行人怎么没了"；留一项写着「由流程执行」，等于把这张卡的执行方式摆明。
+   * 也**不能**让人选：服务端明确拒绝改派（见 project-tasks.mjs 的 400），选了也存不上。
+   */
+  const whoCombo = flowOnly
+    ? createCombo({
+        mount: $('tcWhoMount'),
+        items: [{ id: '', label: '（由流程执行）' }],
+        value: '',
+      })
+    : createCombo({
+        mount: $('tcWhoMount'),
+        items: [{ id: '', label: '（不指定）' }, ...(S.personas ?? []).map((p) => ({ id: p.id, label: personLabel(p) }))],
+        value: task.assigneePersonaId || '',
+        search: true,
+        placeholder: '搜名字或岗位…',
+        empty: '没有匹配的人',
+        onChange: (id) => {
+          // 选人**立刻**反映到评论区与页头（原来要点了「保存」重画才生效，看着就像"输入框点不动"）
+          const p = (S.personas ?? []).find((x) => x.id === id) ?? null;
+          if (p) whoName = p.name;
+          const whoText = $('tcWhoText');
+          if (whoText) whoText.textContent = p?.name ?? '（没派活）';
+          syncComposer();
+          scheduleSave(0); // 指定人立刻存：卡在「待办」时这一下就会自动开工
+        },
+      });
   syncComposer();
 
   const snapshot = () => ({
     title: titleVal,
     description: descVal,
     status: statusCombo.value(),
-    personaId: whoCombo.value(),
+    // 还没发起的流程卡**不能带 personaId**：服务端看到"流程卡改执行人"会把整个 PATCH 400 掉
+    // （连改标题/描述都一起被挡），而这张卡本来就没有人选。
+    ...(flowOnly ? {} : { personaId: whoCombo.value() }),
   });
   let lastSaved = JSON.stringify(snapshot());
   let saving = false;
@@ -2275,7 +2330,13 @@ export async function paintTaskCardPage(taskId, opts = {}) {
       setSaveState('已保存', 'ok');
       // 真的派活了（待办+人 / 状态改成进行中）→ 重画，把「进行中」和往来区摆出来
       if (res.started) {
-        toast('已自动开工：派给他跑这一条去了');
+        // 由流程执行的卡：这一下"开工"其实是**把流程发起起来**（服务端建完实例把 flowRunId 写回卡），
+        // 派给谁由流程当前节点决定，所以不能说"派给他跑去了"。重画时页面会直接带去实例页。
+        if (res.task?.flowRunId) {
+          toast('流程已经起来了 —— 到流程实例里看每一步');
+        } else {
+          toast('已自动开工：派给他跑这一条去了');
+        }
         await repaintKeepingDraft();
       }
       return true;
@@ -2308,9 +2369,9 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     if (JSON.stringify(snapshot()) !== lastSaved) saveNow?.({ keepalive: true });
   });
 
-  // 弹窗那条路的「删除」在弹窗自己头上（静态的 #tcDlgDel），整页那条路在页头；
-  // 流程派生的卡不摆删除（身份由流程行代表，删了没意义 —— 2026-10-23 用户拍板）
-  const delEl = dlg ? $('tcDlgDel') : $('tcDel');
+  // 弹窗这条路**不摆「删除」**（2026-10-26 用户截图要求）：轻界面不承载不可逆动作；
+  // 整页那条路在页头；流程派生的卡也不摆（身份由流程行代表，删了没意义 —— 2026-10-23 用户拍板）
+  const delEl = dlg ? null : $('tcDel');
   if (delEl && isFlowCard) delEl.remove();
   if (delEl) {
     delEl.onclick = async () => {
@@ -2769,7 +2830,14 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     const text = $('tcInput').value.trim();
     if (!text && !pendingAtts.length) return;
     if (attSending) return;
-    if (!whoCombo.value()) { toast('先在右边选一个执行人 —— 评论区是跟他讨论的'); return; }
+    if (!whoCombo.value()) {
+      // 还没发起的流程卡没有执行人可讨论（右边只有「（由流程执行）」一项）——
+      // 照着老文案叫他"选执行人"等于指路指到死胡同。
+      toast(flowOnly
+        ? `这张卡由流程「${flowName}」执行 —— 等它发起后，去流程实例里跟当前经办人往来`
+        : '先在右边选一个执行人 —— 评论区是跟他讨论的');
+      return;
+    }
     const mode = sendMode; // note | discuss | execute
     const parentId = replyTo;
     $('tcInput').disabled = true;
@@ -2938,8 +3006,11 @@ export function kbCard(r) {
 /**
  * 新建手工任务的弹窗（参照 Multica 的「＋」那个框）。
  *
- * 只有标题是必填。选了执行人就能勾「创建后立即开始工作」——那会**真的派活**
- * （发到他的 1:1 会话，工作目录是这个项目），所以框里明写出来，别让人意外。
+ * 只有标题是必填。执行方式二选一（2026-10-26）：
+ *   · 派给人：选了执行人就能勾「创建后立即开始工作」——那会**真的派活**
+ *     （发到他的 1:1 会话，工作目录是这个项目），所以框里明写出来，别让人意外；
+ *   · 由流程执行：选一条**已发布**的流程，卡建完立刻发起一条实例、卡绑住它（flowRunId）。
+ *     这种情况下状态不是「想法」就一定会发起，所以那个勾是锁死的（见 syncStart 的注释）。
  *
  * `project` 为 null = **从全局面板点的「＋」**：那一页没有"当前项目"，
  * 手工卡又必须挂在某个项目下（服务端 `createProjectTask` 要 project），
@@ -2955,36 +3026,41 @@ export function taskDialog(project, colKey) {
    * 项目一多、数字员工一多，原生 select 只能一格一格翻，搜不了。
    * 状态那格只有 6 个固定值，继续用原生 select。
    */
-  const pick = !project
-    ? `<label>项目（这张卡挂在哪个项目下）</label><div id="tkProjMount"></div>`
-    : '';
+  /*
+   * 轻快风（2026-10-26 用户给了截图「我想要这种效果」）：左上角一条小面包屑，
+   * 下面直接就是大标题输入框和描述（都没有边框），所有字段收成底部一排胶囊，
+   * 动作条（继续创建 / 创建任务 Ctrl+Enter）压在最底下。
+   * 胶囊里只有值没有字段名 —— 状态/执行方式/人名/项目名各自能看懂自己是谁。
+   */
+  const pick = !project ? '<span class="tk-chip" id="tkProjMount"></span>' : '';
   dlg.innerHTML = `
     <form method="dialog">
-      <b>新建任务</b>
-      ${pick}
-      <label>标题</label>
-      <input id="tkTitle" placeholder="一句话说清要做什么" />
-      <label>描述（可留空）</label>
-      <textarea id="tkDesc" rows="3" placeholder="边界、验收标准、参照哪个文件…"></textarea>
-      <div class="grid2">
-        <div>
-          <label>放到哪一列</label>
-          <div id="tkStatusMount"></div>
-        </div>
-        <div>
-          <label>执行人（可留空 = 先挂着）</label>
-          <div id="tkWhoMount"></div>
-        </div>
+      <b class="tk-crumb">${project ? `${esc(project.name)} › ` : ''}手动创建</b>
+      <input id="tkTitle" placeholder="任务标题" />
+      <textarea id="tkDesc" rows="7" placeholder="添加描述..."></textarea>
+      <!-- 执行人 / 流程**二选一显示**（服务端也是二选一，见 routes/project.mjs 的 400）：
+           两个都摆出来会让人以为"人再挂条流程"也能行。 -->
+      <div class="tk-meta-row">
+        <span class="tk-chip" id="tkStatusMount"></span>
+        <span class="tk-chip" id="tkModeMount"></span>
+        <span class="tk-chip" id="tkWhoMount"></span>
+        <span class="tk-chip" id="tkFlowMount" hidden></span>
+        ${pick}
       </div>
-      <label class="kb-check"><input type="checkbox" id="tkStart" checked /> 创建后立即开始工作（派到他的会话，工作目录就是这个项目）</label>
-      <div class="dim" id="tkFilterHint" style="font-size:12px;margin-top:8px" hidden></div>
-      ${project ? `<div class="kb-proj-hint">项目：${esc(project.name)} · ${esc(project.root)}</div>` : ''}
-      <div class="dlg-actions">
-        <button type="button" value="cancel">取消</button>
-        <button class="primary" id="tkOk" value="ok">创建任务</button>
+      <div class="dim" id="tkFlowEmpty" style="font-size:12px" hidden>还没有已发布的流程 —— 先去工作台 → 流程 里发布一条</div>
+      <div class="dim" id="tkFilterHint" style="font-size:12px" hidden></div>
+      <div class="tk-foot">
+        <label class="kb-check"><input type="checkbox" id="tkStart" checked /> <span id="tkStartText">创建后立即开始工作</span></label>
+        <div class="tk-foot-actions">
+          <!-- 继续创建：建完不关弹窗，清空标题描述接着建下一张（看板在后台刷新） -->
+          <label class="kb-check"><input type="checkbox" id="tkAgain" /> <span>继续创建</span></label>
+          <button class="primary" id="tkOk" value="ok">创建任务 <kbd>Ctrl ↵</kbd></button>
+        </div>
       </div>
     </form>`;
   document.body.append(dlg);
+  // 轻快风截图右上角有「放大成抽屉」的角 —— data-max 让 wireDialogHead 顺手补上那颗按钮
+  dlg.setAttribute('data-max', '');
   // 动态建的对话框**得自己包一次头部** —— 页面加载时那一遍它还不存在（见 wireDialogHead）
   wireDialogHead(dlg.querySelector('form'));
   dlg.addEventListener('close', () => dlg.remove());
@@ -3010,6 +3086,9 @@ export function taskDialog(project, colKey) {
         search: true,
         placeholder: '搜项目名或目录…',
         empty: '没有匹配的项目',
+        // 胶囊上只放项目名（`名字 · 路径` 太长会把胶囊撑爆）；清单里照旧带路径
+        buttonText: (id) => projects.find((x) => x.id === id)?.name ?? '选项目',
+        blank: '选项目',
         // 换项目 = 可能换成"筛选之外的项目"，那句提醒要跟着重算
         onChange: () => syncFilterHint(),
       });
@@ -3028,23 +3107,75 @@ export function taskDialog(project, colKey) {
   });
 
   /*
-   * 「立即开始」什么时候不该给勾：
-   *   · 没选执行人 —— 勾了也没人可派
-   *   · 状态是「想法」—— 那是"还没决定要不要做"，谈不上开始；勾了的话卡刚建完就
-   *     被转到「进行中」，那一列等于白建（服务端也拦了这一条，见 project-tasks.mjs）
-   * 这里是让人**别以为勾了个空**：不可用时灰掉、取消勾选、并说明原因。
+   * 执行方式：**派给人 / 由流程执行**（2026-10-26 用户定）。
+   * 为什么做成显式的两选一、而不是"执行人下拉里多一项流程"：
+   * 这两条路后面发生的事完全不同（一个是派活到会话，一个是发起一整条流程、卡跟着流程走），
+   * 塞进同一个下拉里，人选完才知道"哦这不是一个人"。
+   * 选项只有两个 → 不传 search（组件的约定：选项多的才给搜索）。
+   */
+  const modeCombo = createCombo({
+    mount: $('tkModeMount'),
+    items: [{ id: 'person', label: '派给人' }, { id: 'flow', label: '由流程执行' }],
+    value: 'person',
+    onChange: () => syncMode(),
+  });
+  const flowMode = () => modeCombo.value() === 'flow';
+  /*
+   * 流程那格只列**已发布**的（`S.flowPublished`，项目启动时 load() 就取回来了）：
+   * 草稿态的流程发不起来，列出来只会让人选了再吃一个 400（服务端 `assertRunnableFlow` 也这么挡）。
+   */
+  const published = S.flowPublished ?? [];
+  const flowCombo = createCombo({
+    mount: $('tkFlowMount'),
+    items: published.map((f) => ({ id: f.id, label: f.name })),
+    value: published[0]?.id ?? '',
+    blank: '选流程',
+    empty: '还没有已发布的流程 —— 先去工作台 → 流程 里发布一条',
+    onChange: () => {
+      syncStart();
+      syncFilterHint();
+    },
+  });
+
+  /*
+   * 「立即开始」什么时候不该给勾 / 什么时候不给改：
+   *   · 派给人：没选执行人 = 勾了也没人可派；状态是「想法」= 还没决定要不要做，谈不上开始。
+   *   · 由流程执行：选了流程、状态又不是「想法」，建卡就**一定**发起（见下面 POST 的 startNow）——
+   *     所以这个勾在流程模式下是**锁死的**：它不是给人改的，只用来表示"会发生什么"。
+   *     想先挂着就放到「想法」列（那一列不发起，之后拖进「进行中」再发起）。
+   * 不可用时灰掉、把原因写在文案和 title 上 —— 让人**别以为勾了个空**。
    */
   const syncStart = () => {
-    const has = !!whoCombo.value();
+    const box = $('tkStart');
+    const wrap = box.closest('.kb-check');
+    const text = $('tkStartText');
     const idea = statusCombo.value() === '想法';
+    if (flowMode()) {
+      const picked = !!flowCombo.value();
+      const on = picked && !idea; // 定了流程且不是「想法」→ 锁在勾上；否则锁在取消
+      box.disabled = !on;
+      box.checked = on;
+      wrap.style.opacity = on ? '1' : '.5';
+      text.textContent = !picked
+        ? '创建后立即发起流程（先选一条流程）'
+        : idea
+          ? '先不发起 —— 状态是「想法」；拖到「进行中」才发起流程'
+          : '创建后立即发起流程 —— 选了流程就立即发起；想先挂着就放到「想法」';
+      wrap.title = !picked
+        ? '先选一条流程'
+        : idea
+          ? '「想法」列先挂着，等拖到「进行中」再发起流程'
+          : '选了流程就立即发起；想先挂着就放到「想法」';
+      return;
+    }
+    const has = !!whoCombo.value();
     const on = has && !idea;
-    const box = $('tkStart').closest('.kb-check');
-    $('tkStart').disabled = !on;
-    if (!on) $('tkStart').checked = false;
-    box.style.opacity = on ? '1' : '.5';
-    box.title = idea ? '「想法」是还没决定要不要做，先不派活' : has ? '' : '先选一个执行人';
+    box.disabled = !on;
+    if (!on) box.checked = false;
+    wrap.style.opacity = on ? '1' : '.5';
+    text.textContent = '创建后立即开始工作（派到他的会话，工作目录就是这个项目）';
+    wrap.title = idea ? '「想法」是还没决定要不要做，先不派活' : has ? '' : '先选一个执行人';
   };
-  syncStart();
   /*
    * 看板上有筛选时，先说清楚"这张卡建完会不会被挡住"：
    * 挡在筛外的东西不止状态了（还有负责人、项目），所以要把**是哪一维**说出来 ——
@@ -3055,11 +3186,18 @@ export function taskDialog(project, colKey) {
     const el = $('tkFilterHint');
     if (!el) return;
     const st = statusCombo.value();
-    // 拿一张"将要建出来的卡"去试：状态是选的那个，人是选的那个人，项目是这一页定的那个
-    const why = kbWhyHidden(
-      { status: st, assignee_id: whoCombo.value() || '', project_id: project?.id ?? projCombo?.value() ?? '' },
-      S.boardAll ? 'all' : undefined,
-    );
+    /*
+     * 流程模式只判**状态**那一维（这是任务上定下的口径）：这张卡派给谁，是流程发起后
+     * "当前那一步的经办人"定的，建卡这一刻根本不知道（流程模式也没有选人这一步）——
+     * 拿 who 去判必然是误报，而状态是建卡时人自己就能定、也最容易被筛掉的那一维。
+     */
+    const why = flowMode()
+      ? ((S.kbFilter?.statuses?.length ?? 0) > 0 && !S.kbFilter.statuses.includes(st) ? 'status' : '')
+      // 派给人：拿一张"将要建出来的卡"去试 —— 状态是选的那个，人是选的那个人，项目是这一页定的那个
+      : kbWhyHidden(
+          { status: st, assignee_id: whoCombo.value() || '', project_id: project?.id ?? projCombo?.value() ?? '' },
+          S.boardAll ? 'all' : undefined,
+        );
     el.hidden = !why;
     el.textContent = !why
       ? ''
@@ -3069,33 +3207,71 @@ export function taskDialog(project, colKey) {
           ? '注意：当前筛选只看别人 —— 这张卡派给他之后会留在看板外面（点「清除」能看到）。'
           : '注意：当前筛选只看别的项目 —— 这张卡建完会留在看板外面（点「清除」能看到）。';
   };
-  // 状态变了这两件事都要跟着算 —— 挂在 statusCombo 的 onChange 上（见上面创建处）
-  syncFilterHint();
+  /*
+   * 切执行方式只换**显示**：两边已经选好的值（人 / 流程）都留着 ——
+   * 来回切多半是"看看有没有能用的流程"，切回来还得重选一遍人就很烦。
+   */
+  const syncMode = () => {
+    const flow = flowMode();
+    // 轻快风：执行人 / 流程是两颗胶囊，切显隐（两边选好的值都留着 —— 来回切不用重选）
+    $('tkWhoMount').hidden = flow;
+    $('tkFlowMount').hidden = !flow;
+    $('tkFlowEmpty').hidden = !flow || published.length > 0;
+    syncStart();
+    syncFilterHint();
+  };
+  // 状态 / 执行方式 / 流程变了，这几件事都要跟着算 —— 挂在各自 combo 的 onChange 上（见上面创建处）
+  syncMode();
   $('tkOk').onclick = async (e) => {
     e.preventDefault();
     const title = $('tkTitle').value.trim();
     if (!title) return toast('任务得有标题');
     const chosen = project ?? projects.find((x) => x.id === projCombo?.value());
     if (!chosen) return toast('先建一个项目，任务才有地方挂');
+    const flow = flowMode();
+    const flowId = flow ? flowCombo.value() : '';
+    if (flow && !flowId) {
+      return toast('先选一条流程 —— 还没有已发布的流程就去工作台 → 流程 里发布一条');
+    }
+    const st = statusCombo.value();
     try {
-      await api(`/api/projects/${encodeURIComponent(chosen.id)}/tasks`, {
+      const res = await api(`/api/projects/${encodeURIComponent(chosen.id)}/tasks`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           title,
           description: $('tkDesc').value.trim(),
-          status: statusCombo.value(),
-          personaId: whoCombo.value() || null,
-          startNow: !!whoCombo.value() && $('tkStart').checked,
+          status: st,
+          // 执行方式二选一：流程模式**不带 personaId**（服务端把"两个都给"当 400 挡，见 routes/project.mjs）
+          ...(flow ? { flowTemplateId: flowId } : { personaId: whoCombo.value() || null }),
+          // 流程模式：状态不是「想法」就发起（跟 syncStart 锁死的那个勾是同一份口径）
+          startNow: flow ? st !== '想法' : (!!whoCombo.value() && $('tkStart').checked),
         }),
       });
-      dlg.close();
+      const again = $('tkAgain').checked;
+      if (!again) dlg.close();
+      else {
+        // 继续创建：弹窗留着、清掉标题描述接着建；其余选择（状态/执行人/项目）原样保留
+        $('tkTitle').value = '';
+        $('tkDesc').value = '';
+        $('tkTitle').focus();
+      }
+      // 建完就有实例了 → 明说一句：不然人看着建卡弹窗关掉、看板上一张卡，会以为"流程还没开始"
+      if (res?.task?.flowRunId) toast('流程已经起来了 —— 到流程实例里看每一步');
+      else if (again) toast('建好了，接着建下一张');
       // 在哪儿建的就在哪儿重画：全局面板回全局面板（刚建的卡会带项目标签出现在那一列）
       await (S.boardAll ? openTaskBoard() : openProjectDetail(chosen.id));
     } catch (err) {
       toast(err.message, 'error');
     }
   };
+  // Ctrl（⌘）+ Enter 直接创建 —— 轻快风截图右下角那个 Ctrl↵ 角标就是这个
+  dlg.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault();
+      $('tkOk').click();
+    }
+  });
   dlg.showModal();
   setTimeout(() => $('tkTitle')?.focus(), 50);
 }

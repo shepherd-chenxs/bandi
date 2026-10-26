@@ -48,6 +48,32 @@ export function buildArgs({ sessionId = null, model = null, sandbox = null, root
   return args;
 }
 
+/** 错误原因只留一句能读完的：CLI 的 result 有时是整段输出 */
+const clip = (s, n = 160) => (s.length > n ? `${s.slice(0, n)}…` : s);
+
+/**
+ * 失败原因取"人话"，别拿 subtype 顶（2026-10-26 实踩）。
+ *
+ * 未登录时 CLI 回的是 `{ is_error: true, subtype: "success", result: "Not logged in · Please run /login" }`
+ * —— 原来的 `api_error_status || subtype` 就把 "success" 当成了原因，界面上显示
+ * 「没跑成：success」：一句把"成功"和"没跑成"焊在一起的话，用户拿着它什么也做不了。
+ *
+ * 取值顺序：认证错误（最常见，翻成能照做的中文）→ 接口状态码 → CLI 给的 result 原文
+ * → terminal_reason → 非 success 的 subtype → stderr 尾行。
+ */
+function explainError({ result, cliError, apiErrorStatus, terminalReason, subtype, stderr }) {
+  const said = typeof result === 'string' ? result.trim() : '';
+  if (cliError === 'authentication_failed' || /not logged in|please run \/login|invalid api key|unauthorized/i.test(said)) {
+    return 'Claude Code 没登录 —— 在终端跑 `claude`，输入 /login 登录后再试';
+  }
+  if (apiErrorStatus) return `接口报错 ${apiErrorStatus}${said ? `：${clip(said)}` : ''}`;
+  if (said) return clip(said);
+  if (terminalReason && terminalReason !== 'success') return terminalReason;
+  if (subtype && subtype !== 'success') return subtype;
+  const tail = String(stderr ?? '').trim().split(/\r?\n/).filter(Boolean).slice(-1)[0];
+  return tail ? clip(tail) : '运行出错';
+}
+
 export function probe(pathOverride) {
   const p = pathOverride || DEFAULT_PATH;
   if (!p) return Promise.resolve({ ok: false, error: '没有可执行路径' });
@@ -110,6 +136,11 @@ export function runTask({
     let thinkingTicks = 0;
     let stderr = '';
     let sawError = null;
+    /*
+     * CLI 在 assistant 消息上标出的错误类别（2026-10-26）：未登录时是 "authentication_failed"，
+     * 比 result 里的字段精确得多 —— 那种情况下 result 的 subtype 还写着 "success"。
+     */
+    let cliError = null;
 
     const emit = (ev) => {
       events.push(ev);
@@ -137,6 +168,7 @@ export function runTask({
       }
 
       if (j.type === 'assistant') {
+        if (j.error) cliError = j.error; // 例：authentication_failed
         for (const block of j.message?.content ?? []) {
           if (block.type === 'thinking' && block.thinking) {
             emit({ type: 'thinking', text: block.thinking });
@@ -167,7 +199,14 @@ export function runTask({
         };
         if (typeof j.result === 'string' && j.result) text = j.result;
         if (j.is_error) {
-          sawError = j.api_error_status || j.subtype || '运行出错';
+          sawError = explainError({
+            result: j.result,
+            cliError,
+            apiErrorStatus: j.api_error_status,
+            terminalReason: j.terminal_reason,
+            subtype: j.subtype,
+            stderr,
+          });
           emit({ type: 'error', text: String(sawError) });
         }
         emit({ type: 'final', text, usage });

@@ -33,7 +33,7 @@ import { doStartFlow, flowStart, openFlowStart, syncFlowTitle } from './js/flowp
 import { importPicked, openSkill, renderSkAssignList, scanImport, skAssignPicked, skAssignSkill } from './js/skills.mjs';
 import { addAtts, closeMentionPop, insertMention, linkPersonaId, linkPicked, makeConversationCard, mentionPop, openConversation, openDetail, renderLinkList, searchRefreshDetail, send, setBusy, setComposer, stopChatRun, updateMentionPop } from './js/chat.mjs';
 import { deleteSessionFromLog, memberPicked, renderMemberCandidates } from './js/groups.mjs';
-import { closeDrawer, pluginMust, refreshGroup, renderPluginPanel } from './js/experts.mjs';
+import { closeDrawer, pluginMust, refreshGroup, rerenderPanel, tplUrl } from './js/experts.mjs';
 import { startEvents } from './js/events.mjs';
 import { $, S } from './js/core.mjs';
 import { boot, gAssistantCombo, openGroupDialog, openPluginAdd, pRuntimeCombo, pSandboxCombo, startVersionWatch } from './js/misc.mjs';
@@ -354,7 +354,9 @@ $('plgFormOk').onclick = async (e) => {
   if (!d) return;
 
   const values = {};
-  $('plgFormBody').querySelectorAll('[data-field]').forEach((inp) => { values[inp.dataset.field] = inp.value.trim(); });
+  $('plgFormBody').querySelectorAll('[data-field]').forEach((inp) => {
+    values[inp.dataset.field] = inp.type === 'checkbox' ? (inp.checked ? '1' : '') : inp.value.trim();
+  });
   const missing = (d.block.fields ?? []).filter((f) => f.required && !values[f.key]);
   if (missing.length) return toast('这几项得填：' + missing.map((f) => f.label).join('、'));
 
@@ -366,12 +368,29 @@ $('plgFormOk').onclick = async (e) => {
     const opts = { method };
     if (method !== 'GET') {
       opts.headers = { 'Content-Type': 'application/json' };
-      opts.body = JSON.stringify(values);
+      // clientOnly 字段（勾选框等）是纯前端意图，不给服务端添乱
+      const bodyValues = { ...values };
+      (d.block.fields ?? []).forEach((f) => { if (f.clientOnly) delete bodyValues[f.key]; });
+      opts.body = JSON.stringify(bodyValues);
     }
     await api(sub.api, opts);
+    // followUp：clientOnly 字段带的"保存后追加动作"（如勾了「生成密钥对」→ POST key）。
+    // 放在主提交成功之后、关弹窗之前 —— 失败只提示这一步，登记本身已经存进去了。
+    for (const f of d.block.fields ?? []) {
+      if (!f.followUp || !values[f.key]) continue;
+      try {
+        const m = (f.followUp.method || 'POST').toUpperCase();
+        const target = tplUrl(f.followUp.api, values);
+        pluginMust(d.plugin, m, target);
+        await api(target, { method: m });
+      } catch (err) {
+        toast(err.message, 'error');
+        break;
+      }
+    }
     $('plgFormDlg').close();
     S.pluginFormDlg = null;
-    await renderPluginPanel();
+    await rerenderPanel();   // 宿主可能是工作台面板，也可能是设置页里的「远程连接」
   } catch (err) {
     /*
      * 直接用 `err.message`：`api()`（2026-10-21 重设计）对 4xx 已经把服务端原文拼进去了

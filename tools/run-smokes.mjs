@@ -53,6 +53,7 @@ const RUN = [
   'apps/server/src/smoke-status.mjs',
   'apps/server/src/smoke-stop-watchdog.mjs',
   'apps/server/src/smoke-task-comments.mjs',
+  'apps/server/src/smoke-task-flow.mjs',
   'apps/server/src/smoke-task-run-sync.mjs',
   'apps/server/src/smoke-workflows.mjs',
   'apps/desktop/smoke-shell.mjs',
