@@ -550,6 +550,13 @@ try {
 } catch (err) {
   console.log(`内置员工同步失败（不影响启动）：${err?.message ?? err}`);
 }
+// 内置连接器（2026-10-26）：SSH 工具随「设置 → 远程连接」出厂自带（幂等，已有只补 builtin 标记）
+try {
+  const seeded = connectors.ensureBuiltinConnectors();
+  if (seeded.length) console.log(`内置连接器已就位：${seeded.join('、')}`);
+} catch (err) {
+  console.log(`内置连接器 seed 失败（不影响启动）：${err?.message ?? err}`);
+}
 runs.onRunFinish(workflows.onAgentRunFinished);
 // 任务卡同理（2026-10-17）：运行跑完/被停/跑挂了，卡不能永远挂在「进行中」——
 // 完成 → 待验收；人停的 → 已阻塞、跑挂的 → 失败（都不回「待办」，否则会被自动重新派活 → 死循环）

@@ -180,9 +180,9 @@ try {
     }
     const nAfter = (await req('/api/state')).b.personas.filter((p) => p.id.startsWith('p-expert-'));
     check('十四位都在通讯录', nAfter.length === 14, String(nAfter.length));
-    // 出厂部门三档：技术轨八位 → 技术部，秘书 → 秘书处，内容轨五位 → 内容部
+    // 出厂部门三档：技术轨八位 → 技术部，助理（喜儿）→ 行政部，内容轨五位 → 内容部
     const deptOf = (d) => nAfter.filter((p) => p.department === d).length;
-    check('出厂部门齐：技术部 8 / 秘书处 1 / 内容部 5', deptOf('技术部') === 8 && deptOf('秘书处') === 1 && deptOf('内容部') === 5, JSON.stringify(nAfter.map((p) => `${p.id}:${p.department}`)));
+    check('出厂部门齐：技术部 8 / 行政部 1 / 内容部 5', deptOf('技术部') === 8 && deptOf('行政部') === 1 && deptOf('内容部') === 5, JSON.stringify(nAfter.map((p) => `${p.id}:${p.department}`)));
     for (const k of ALL_KEYS) {
       const r = await req(`/api/experts/${k}/fire`, { method: 'POST' });
       check(`解聘 ${k} → removed:true`, r.status === 200 && r.b?.removed === true);

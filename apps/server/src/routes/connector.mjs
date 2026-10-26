@@ -65,7 +65,10 @@ export async function handleConnector(req, res, url) {
   }
 
   if (req.method === 'DELETE' && one) {
-    return sendJson(res, 200, { ...connectors.removeEntry(decodeURIComponent(one[1])) });
+    // 内置连接器（远程连接 SSH）不可卸载 —— 路由层也拦一道，绕过界面直接 DELETE 一样没门
+    const r = connectors.removeEntry(decodeURIComponent(one[1]));
+    if (r.error) return fail(res, 403, 'E2060', r.message ?? '内置连接器不能卸载');
+    return sendJson(res, 200, { ...r });
   }
 
   return false;

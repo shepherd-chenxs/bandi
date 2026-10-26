@@ -424,6 +424,16 @@
   </form>
 </dialog>
 
+<!-- 远程连接：机器详情 / 装公钥引导 共用的弹窗（设置 → 远程连接，列表点开即出；
+     内容每次现画进 remoteDlgInner —— 接线挂在它身上，随内容一起换，不会叠监听） -->
+<dialog id="remoteDlg">
+  <div class="remote-dlg-head">
+    <b id="remoteDlgTitle">详情</b>
+    <button type="button" id="remoteDlgX" class="mini sm" title="关闭（Esc）">×</button>
+  </div>
+  <div id="remoteDlgBody"></div>
+</dialog>
+
 <!--
   通用的「问一句 / 确认一下」。
 

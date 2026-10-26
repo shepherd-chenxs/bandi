@@ -1,12 +1,11 @@
 {
   "id": "ssh",
-  "label": "服务器与密钥",
-  "version": "0.1.0",
-  "description": "看 ~/.bandi/servers.yaml 里登记了哪些机器。和数字员工用的是同一本账。",
+  "label": "远程连接",
+  "version": "0.3.1",
+  "description": "登记 SSH 服务器、生成与核对密钥、测连通性。登记表就是 ~/.bandi/servers.yaml —— 数字员工带的内置 SSH 工具读的也是它。",
   "category": "运维",
-  "connector": "ssh",
   "panel": {
-    "slot": "plugins",
+    "slot": "settings.section",
     "mode": "declarative",
     "blocks": [
       {
@@ -45,13 +44,26 @@
             "key": "purpose",
             "label": "备注",
             "type": "textarea"
+          },
+          {
+            "key": "gen_key",
+            "label": "生成密钥对",
+            "type": "checkbox",
+            "value": true,
+            "hint": "保存后在本机生成一对 ed25519 密钥（私钥 ~/.ssh/<别名>，公钥同名 .pub）。已有同名文件会拒绝生成，绝不覆盖。",
+            "clientOnly": true,
+            "followUp": {
+              "method": "POST",
+              "api": "/api/ssh/servers/{alias}/key"
+            }
           }
         ],
         "submit": {
           "method": "POST",
           "api": "/api/ssh/servers",
           "label": "保存"
-        }
+        },
+        "layout": "side-label"
       }
     ],
     "split": {
@@ -70,116 +82,67 @@
         },
         "empty": "一台都没登记"
       },
-      "detail": {
-        "title": "{alias}",
-        "subtitle": "{user}@{host}:{port} · {status} · {key_state}",
-        "empty": "左边选一台机器",
-        "actions": [
-          {
-            "type": "button",
-            "label": "测",
-            "title": "测试连通性（顺带核对服务器上的公钥指纹）",
-            "resultTitle": "连通性 · {alias}",
-            "primary": true,
-            "action": {
-              "method": "POST",
-              "api": "/api/ssh/servers/{alias}/test"
-            },
-            "resultField": "detail"
-          },
-          {
-            "type": "button",
-            "label": "改",
-            "title": "编辑这台机器的登记信息",
-            "edit": "server"
-          },
-          {
-            "type": "button",
-            "label": "删",
-            "title": "从登记表删掉这台机器（只删这一行，服务器和密钥文件都不动）",
-            "action": {
-              "method": "DELETE",
-              "api": "/api/ssh/servers/{alias}"
-            },
-            "confirm": "从登记表删掉「{alias}」？\n\n只删这一行，服务器和密钥文件都不动。"
-          }
-        ],
+      "guide": {
+        "label": "引导",
+        "title": "把公钥装到服务器 · {alias}",
         "blocks": [
           {
-            "type": "tabs",
-            "tabs": [
-              {
-                "label": "基本信息",
-                "blocks": [
-                  {
-                    "type": "keyvalue",
-                    "rows": [
-                      {
-                        "label": "别名",
-                        "value": "{alias}"
-                      },
-                      {
-                        "label": "地址",
-                        "value": "{host}"
-                      },
-                      {
-                        "label": "端口",
-                        "value": "{port}"
-                      },
-                      {
-                        "label": "登录用户",
-                        "value": "{user}"
-                      },
-                      {
-                        "label": "私钥路径",
-                        "value": "{key_path}"
-                      },
-                      {
-                        "label": "备注",
-                        "value": "{purpose}"
-                      },
-                      {
-                        "label": "最近核对",
-                        "value": "{last_checked}"
-                      }
-                    ]
-                  },
-                  {
-                    "type": "code",
-                    "heading": "公钥",
-                    "copyLabel": "复制公钥",
-                    "source": {
-                      "api": "/api/ssh/servers/{alias}/key",
-                      "pick": "public_key"
-                    },
-                    "hint": "{message}",
-                    "emptyAction": {
-                      "label": "生成密钥对",
-                      "method": "POST",
-                      "api": "/api/ssh/servers/{alias}/key",
-                      "confirm": "为「{alias}」生成一对 ed25519 密钥？\n\n私钥写到 ~/.ssh/{alias}，公钥写到同名 .pub。\n已有同名文件时会拒绝生成，绝不覆盖。"
-                    }
-                  }
-                ]
-              },
-              {
-                "label": "操作引导",
-                "blocks": [
-                  {
-                    "type": "steps",
-                    "heading": "把公钥装到服务器",
-                    "source": {
-                      "api": "/api/ssh/servers/{alias}/key",
-                      "pick": "guide_steps"
-                    },
-                    "empty": "这台机器还没生成密钥，先生成再按步骤装。"
-                  }
-                ]
-              }
-            ]
+            "type": "code",
+            "heading": "公钥",
+            "copyLabel": "复制公钥",
+            "source": {
+              "api": "/api/ssh/servers/{alias}/key",
+              "pick": "public_key"
+            },
+            "hint": "{message}",
+            "emptyAction": {
+              "label": "生成密钥对",
+              "method": "POST",
+              "api": "/api/ssh/servers/{alias}/key",
+              "confirm": "为「{alias}」生成一对 ed25519 密钥？\n\n私钥写到 ~/.ssh/{alias}，公钥写到同名 .pub。\n已有同名文件时会拒绝生成，绝不覆盖。"
+            }
+          },
+          {
+            "type": "steps",
+            "heading": "把公钥装到服务器",
+            "source": {
+              "api": "/api/ssh/servers/{alias}/key",
+              "pick": "guide_steps"
+            },
+            "empty": "这台机器还没生成密钥，先生成再按步骤装。"
           }
         ]
-      }
+      },
+      "rowActions": [
+        {
+          "type": "button",
+          "label": "测",
+          "title": "测试连通性（顺带核对服务器上的公钥指纹）",
+          "resultTitle": "连通性 · {alias}",
+          "primary": true,
+          "action": {
+            "method": "POST",
+            "api": "/api/ssh/servers/{alias}/test"
+          },
+          "resultField": "detail"
+        },
+        {
+          "type": "button",
+          "label": "改",
+          "title": "编辑这台机器的登记信息",
+          "edit": "server"
+        },
+        {
+          "type": "button",
+          "label": "删",
+          "title": "从登记表删掉这台机器（只删这一行，服务器和密钥文件都不动）",
+          "action": {
+            "method": "DELETE",
+            "api": "/api/ssh/servers/{alias}"
+          },
+          "confirm": "从登记表删掉「{alias}」？\n\n只删这一行，服务器和密钥文件都不动。"
+        }
+      ]
     }
   },
   "permissions": [

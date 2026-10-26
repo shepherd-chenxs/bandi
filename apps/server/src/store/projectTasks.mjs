@@ -14,6 +14,9 @@ export function createProjectTask({
   externalKey = null,
   sourceKey = null,
   sourceRunId = null,
+  // **卡由流程执行**（2026-10-26）：选了哪条模板；发起后挂在哪条实例上（见 store/projects.mjs 的注释）
+  flowTemplateId = null,
+  flowRunId = null,
   createdBy = null,
   creatorConvId = null,
 }) {
@@ -32,6 +35,9 @@ export function createProjectTask({
     // 流程的一步开出来的卡：'flow:<runId>:<nodeId>:<visit>'；手建的卡是 null
     sourceKey,
     sourceRunId,
+    // 反向的一条边：这张卡自己选了一条流程来执行（见 store/projects.mjs 的 flowTemplateId 注释）
+    flowTemplateId,
+    flowRunId,
     // 项目经理经"工作证"接口建的卡记他（人手建的卡是 null，见 routes/agent-cards.mjs）
     createdBy,
     // 建卡那次运行所在的会话（PM 在哪个群里建的卡，回执就送回哪儿；人手建是 null）
@@ -41,8 +47,8 @@ export function createProjectTask({
   };
   db.prepare(
     `INSERT INTO project_tasks
-       (id, projectId, title, description, status, assigneePersonaId, conversationId, runId, source, externalKey, sourceKey, sourceRunId, createdBy, creatorConvId, createdAt, updatedAt)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, projectId, title, description, status, assigneePersonaId, conversationId, runId, source, externalKey, sourceKey, sourceRunId, flowTemplateId, flowRunId, createdBy, creatorConvId, createdAt, updatedAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     row.id,
     row.projectId,
@@ -56,6 +62,8 @@ export function createProjectTask({
     row.externalKey,
     row.sourceKey,
     row.sourceRunId,
+    row.flowTemplateId,
+    row.flowRunId,
     row.createdBy,
     row.creatorConvId,
     row.createdAt,
@@ -151,6 +159,7 @@ export function updateProjectTask(id, fields) {
         SET title = ?, description = ?, status = ?, assigneePersonaId = ?,
             conversationId = ?, runId = ?, prRepo = ?, prNumber = ?, prState = ?, prTitle = ?,
             prCheckedAt = ?, queuedAt = ?, sourceKey = ?, sourceRunId = ?,
+            flowTemplateId = ?, flowRunId = ?,
             creatorConvId = ?, notifiedFor = ?, updatedAt = ?
       WHERE id = ?`,
   ).run(
@@ -169,6 +178,8 @@ export function updateProjectTask(id, fields) {
     // `?? null` 而不是直接取：老库里这两列刚 ALTER 出来，历史行是 NULL —— 写回 null 是幂等的
     next.sourceKey ?? null,
     next.sourceRunId ?? null,
+    next.flowTemplateId ?? null,
+    next.flowRunId ?? null,
     next.creatorConvId ?? null,
     next.notifiedFor ?? null,
     nowIso(),

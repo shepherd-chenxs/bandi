@@ -131,6 +131,25 @@ ensureColumn('project_tasks', 'sourceKey', 'sourceKey TEXT');
 
 ensureColumn('project_tasks', 'sourceRunId', 'sourceRunId TEXT');
 
+/*
+ * **任务卡由流程执行**（用户 2026-10-26 定的新执行方式：建卡时不再只能选人，也能选一条流程）。
+ *
+ *   · `flowTemplateId`：这张卡选了哪条流程模板（建卡时就有）；
+ *   · `flowRunId`：真正发起后的那条实例（「想法」列建卡时先挂着，之后拖进「进行中」才发起）。
+ *
+ * 口径跟 `sourceKey`/`sourceRunId`（流程的一步 → 一张卡）**反过来**：
+ *   那两列是"流程生卡"，卡是这一步的档案；这两列是"卡起流程"，卡是这件事本身，
+ *   流程实例是它的执行过程。所以看板/员工详情里**以卡为一行**，状态/经办人从
+ *   实例当前那一步派生（见 project-tasks.mjs 的 flowCardRow），该实例的分步行不再单独出现 ——
+ *   同一件事在两个地方各记一行，看板上就是重影。
+ *
+ * ⚠️ 它们**只由平台派活链路写**（createProjectTask / startProjectTask），不接受前端 PATCH：
+ *    发不发流程、发哪条，是"开始工作"那一下决定的，不是改字段改出来的。
+ */
+ensureColumn('project_tasks', 'flowTemplateId', 'flowTemplateId TEXT');
+
+ensureColumn('project_tasks', 'flowRunId', 'flowRunId TEXT');
+
 /**
  * 内置的默认项目：`<文档>\bandi\default-workspace`。
  *

@@ -24,7 +24,8 @@ export async function load() {
   S.skillsRoot = sk.skillsRoot;
   S.hiddenConversations = s.hiddenConversations ?? [];
   S.groups = s.groups ?? [];
-  // 已发布的流程（工作台要显示）。拿不到就当没有，别让整个 load 挂掉
+  // 已发布的流程（建任务时「执行方式 = 由流程执行」的下拉要用；工作台不再摆它们的磁贴）。
+  // 拿不到就当没有，别让整个 load 挂掉
   try {
     S.flowPublished = (await api('/api/workflows')).published ?? [];
   } catch {

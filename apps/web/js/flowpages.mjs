@@ -179,14 +179,14 @@ export async function openFlowRun(templateId, pickRunId) {
   S.flowMode = 'run';
   S.flowTemplate = templateId ?? null;
   if (pickRunId) S.flowRunId = pickRunId;
-  // **先把一级栏和"当前位置"落定** —— 从工作台点进来的，不设的话 S.nav 还是"工作台"，
-  // 一刷新就被恢复到工作台去了（踩过）
+  // **先把一级栏和"当前位置"落定** —— 从任务卡（看板的流程行）点进来的，不设的话 S.nav 还是
+  // "工作台"/"看板"那条路，一刷新就回不去（踩过）
   setNav('workflows', { skipOpen: true });
   document.body.classList.remove('no-list');
   // 左栏这一栏是「发起记录」：面包屑只到**二级**——工作台 › 流程名。
   // 中间不能插「流程编排」（2026-10-19 用户截图：「这个只是个二级标题，没有流程编排」）：
-  // 发布过的流程是工作台上的**一级磁贴**，点它直接到这页，并不经过「流程编排」那一层；
-  // 而「流程编排」是"画流程"的那一页，两者的上一级都只是工作台。
+  // 发起记录不是编排页的子页，两者的上一级都只是工作台。
+  // 2026-10-26 起工作台上的已发布流程磁贴去掉了，这页主要从任务卡（流程执行的卡）点进来。
   setListTitle([{ label: '工作台', to: 'workbench' }, { label: '发起记录' }]);
   setRoute('flowRun', { template: templateId ?? null, run: pickRunId ?? S.flowRunId ?? null });
   // 左栏顶上的「＋」在这儿是**发起一条**（不是新建模板）

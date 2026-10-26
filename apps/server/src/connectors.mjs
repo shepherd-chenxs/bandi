@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { dataDir } from './config.mjs';
+import { dataDir, repoRoot } from './config.mjs';
 
 /**
  * 连接器（connector）——「外面来的能力」在班底里的登记与接线。
@@ -96,6 +96,9 @@ function normalize(id, raw = {}) {
     runtimes: Array.isArray(raw.runtimes) ? raw.runtimes.map(String).filter(Boolean) : [],
     failOnStartup: raw.failOnStartup === true,
     note: String(raw.note ?? ''),
+    /* 内置（2026-10-26）：出厂自带的连接器 —— 不进推荐清单、卸不掉（403）。
+       走 normalize 是为了 saveEntry 合并时把标记保住（current 里带着就丢不了）。 */
+    builtin: raw.builtin === true,
   };
 }
 
@@ -165,6 +168,9 @@ export function setEnabled(id, enabled) {
 export function removeEntry(id) {
   const saved = readSaved();
   if (!(id in saved)) return { removed: false };
+  if (saved[id]?.builtin === true) {
+    return { error: 'builtin', message: '内置连接器不能卸载（随「设置 → 远程连接」出厂自带）' };
+  }
   delete saved[id];
   writeSaved(saved);
   return { removed: true };
@@ -188,11 +194,63 @@ export function publicList() {
     bearerTokenEnv: e.bearerTokenEnv,
     runtimes: e.runtimes,
     failOnStartup: e.failOnStartup,
+    builtin: !!e.builtin,
     warnings: warnings(e),
   }));
 }
 
 /* -------------------------------------------------------- 怎么起这个进程 */
+
+/* ---------------------------------------------------------------- 内置 */
+
+/**
+ * 内置连接器（2026-10-26）：随「设置 → 远程连接」出厂自带，**不进推荐清单**。
+ *
+ * 为什么内置：SSH 工具（列登记 / 取公钥 / 执行命令）和登记页面是一体的 ——
+ * 登记表就是 ~/.bandi/servers.yaml，工具读的也是它。拆成"可装的扩展"只会
+ * 出现"页面在、工具没装"（清单条目没人装）这种半吊子状态。
+ *
+ * 口径镜像内置员工（secretary.ensureSecretary）：启动时幂等 seed ——
+ * 没有就落一条，有了只补 `builtin: true` 标记，**不改用户改过的其它字段**。
+ * 卸载在 removeEntry / DELETE 路由两道闸拦死（403）。
+ */
+const BUILTIN_CONNECTORS = [
+  {
+    id: 'ssh',
+    label: '远程连接（SSH）',
+    source: { kind: 'local', ref: 'apps/server/mcp/bandi-ssh.mjs' },
+    transport: 'stdio',
+    command: 'node',
+    args: [path.join(repoRoot, 'apps', 'server', 'mcp', 'bandi-ssh.mjs')],
+    enabled: true,
+    note: '登记表默认只读；要让它自己登记/删除机器，给班底进程加环境变量 BANDI_SSH_ALLOW_WRITE=1。执行默认开着，BANDI_SSH_ALLOW_EXEC=0 可关。',
+  },
+];
+
+/** 启动时调一次。返回这次动了哪些 id（幂等：都齐了就返回空数组） */
+export function ensureBuiltinConnectors() {
+  const saved = readSaved();
+  const touched = [];
+  for (const def of BUILTIN_CONNECTORS) {
+    const cur = saved[def.id];
+    if (!cur || typeof cur !== 'object') {
+      const merged = normalize(def.id, def);
+      const err = validate(merged);
+      if (err) {
+        // 定义是自己写的，写错了是我们的事 —— 说出来但别拦启动
+        console.log(`内置连接器 ${def.id} 定义有问题（不影响启动）：${err}`);
+        continue;
+      }
+      saved[def.id] = merged;
+      touched.push(def.id);
+    } else if (cur.builtin !== true) {
+      saved[def.id] = { ...cur, builtin: true };
+      touched.push(def.id);
+    }
+  }
+  if (touched.length) writeSaved(saved);
+  return touched;
+}
 
 /**
  * Windows 上 `npx` / `npm` 是 .cmd 垫片：直接起会 ENOENT —— Node 和 CLI 的 MCP 客户端

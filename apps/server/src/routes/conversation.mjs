@@ -281,7 +281,13 @@ export async function handleConversation(req, res, url) {
     return sendJson(res, 200, {
       conversation,
       messages: store.listMessages(id),
-      runs: store.listRuns(id).map((r) => ({ ...r, usage: r.usage ? JSON.parse(r.usage) : null })),
+      runs: store.listRuns(id).map((r) => ({
+        ...r,
+        // 失败原因补真因（2026-10-26）：有些 CLI 失败时 stderr 是空的，落库只剩「退出码 1」，
+        // 真因在 run_events 里 —— 见 runs.errorForDisplay 的注释
+        error: runs.errorForDisplay(r),
+        usage: r.usage ? JSON.parse(r.usage) : null,
+      })),
     });
   }
 

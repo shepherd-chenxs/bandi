@@ -91,7 +91,9 @@ export const catalogRoot = path.join(repoRoot, 'apps', 'server', 'catalog', 'plu
 const LEDGER = path.join(dataDir, 'plugins.json');
 
 export const KNOWN_SLOTS = ['plugins', 'persona.section', 'settings.section'];
-export const IMPLEMENTED_SLOTS = ['plugins'];
+/* settings.section（2026-10-26）：设置页分节面板 —— 前端用同一套声明式渲染画进
+   settingsView（experts.mjs 的 renderRemoteConnection），算已实现。 */
+export const IMPLEMENTED_SLOTS = ['plugins', 'settings.section'];
 export const KNOWN_MODES = ['declarative', 'iframe'];
 export const IMPLEMENTED_MODES = ['declarative'];
 const BLOCK_TYPES = ['text', 'list', 'table', 'keyvalue', 'button', 'form', 'code', 'steps', 'tabs', 'stats', 'cards'];

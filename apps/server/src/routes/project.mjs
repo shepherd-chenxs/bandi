@@ -61,6 +61,12 @@ export async function handleProject(req, res, url) {
         description: body.description,
         status: body.status,
         personaId: body.personaId ?? null,
+        /*
+         * 执行方式二选一（2026-10-26）：要么派给一个人，要么由一条流程执行。
+         * `flowTemplateId` 由界面在选择「由流程执行」时带上；服务端在 createProjectTask 里
+         * 校验"模板存在 + 已发布 + 没同时给人"，不靠前端自觉（接口谁都能直接调）。
+         */
+        flowTemplateId: body.flowTemplateId ?? null,
         startNow: body.startNow === true,
         createdBy: cred?.personaId ?? null,
         creatorConvId: originRun?.conversationId ?? null,
@@ -99,8 +105,12 @@ export async function handleProject(req, res, url) {
           return fail(res, 400, 'E1048', `存了，但没派出去：${e.message}`, { taskId: id, task });
         }
       }
-      // runId 变了 = 这一下真的派出去了（不是"改了个状态"），界面据此提示"已开跑"
-      const started = !!(before && task.runId && task.runId !== before.runId);
+      // runId 变了 = 这一下真的派出去了（不是"改了个状态"），界面据此提示"已开跑"；
+      // 流程执行的卡同理：flowRunId 从无到有 = 这一下把流程发起起来了（2026-10-26）
+      const started = !!(before && (
+        (task.runId && task.runId !== before.runId) ||
+        (task.flowRunId && task.flowRunId !== before.flowRunId)
+      ));
       return sendJson(res, 200, { task, started });
     } catch (e) {
       const missing = /不存在/.test(String(e.message));
