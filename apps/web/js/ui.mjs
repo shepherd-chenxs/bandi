@@ -124,6 +124,16 @@ export const ICON_WB_FLOW =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4" width="5.4" height="5.4" rx="1.4"/><rect x="15.1" y="4" width="5.4" height="5.4" rx="1.4"/><rect x="9.3" y="14.6" width="5.4" height="5.4" rx="1.4"/><path d="M6.2 9.4v2.1h11.6V9.4M12 11.5v3.1"/></svg>';
 
 
+/* 工作台「研发」区的两个内置入口（2026-10-26 用户：远程连接 / 代码托管放这儿更合适）。
+   画法跟上面那批一致：线性 SVG，颜色由 .wb-ico 的渐变底给。 */
+export const ICON_WB_CODE =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m8.6 7.6-4.6 4.4 4.6 4.4M15.4 7.6l4.6 4.4-4.6 4.4M13.4 5.4l-2.8 13.2"/></svg>';
+
+
+export const ICON_WB_SSH =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4" width="17" height="7" rx="1.8"/><rect x="3.5" y="13" width="17" height="7" rx="1.8"/><path d="M6.8 7.5h.01M6.8 16.5h.01"/></svg>';
+
+
 
 /**
  * 给一颗「?」按钮挂一段说明：点开，再点 / 点别处 / Esc 收起。

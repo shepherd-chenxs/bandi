@@ -640,6 +640,12 @@ main { min-height: 0; }
    兜底是品牌蓝 —— 万一哪天没带 --wb-1/--wb-2，磁贴也不会变成透明色块。 */
 .wb-ico.has-plug { background: linear-gradient(135deg,
                       var(--wb-1, var(--logo-1)), var(--wb-2, var(--logo-2))); }
+/* 内置磁贴也跟**分组**取色（2026-10-26：研发区加了代码托管 / 远程连接）——
+   跟插件磁贴同一个色相来源，但**不挂插件角标**，所以不复用 .has-plug 那个类名。
+   ⚠️ 类名别叫 `.group`：全站 `.group` 是"分组卡"（border/padding/background 一整套），
+      撞上去会把 40px 图标块压扁（实测图标只剩 6px 宽，磁贴上看着是空的）。 */
+.wb-ico.wb-tint { background: linear-gradient(135deg,
+                      var(--wb-1, var(--logo-1)), var(--wb-2, var(--logo-2))); }
 /* 分组小标题：一行字，**组与组之间加一条分隔线**（2026-10-20 用户："加分隔线"）。
    卡片化之后一组能撑满好几行，光靠 20px 上边距已经分不清"这是新一组还是上一组的第二行" ——
    一条 1px 细线把组切开，比加大留白省地方、也比给每组套一个色块框轻。

@@ -1,7 +1,7 @@
 /* experts.mjs —— 专家库、界面插件。
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
 import { esc, savePlace, setRoute, toast } from './shell.mjs';
-import { api, failHtml, initial, personaAvatar, post, renderMarkdown } from './ui.mjs';
+import { ICON_WB_CODE, ICON_WB_SSH, api, failHtml, initial, personaAvatar, post, renderMarkdown } from './ui.mjs';
 import { load, setNav } from './state.mjs';
 import { breadcrumb, headRow } from './connectors.mjs';
 import { askText, confirmDo } from './machine.mjs';
@@ -580,13 +580,32 @@ export function renderWorkbenchGrid() {
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(p);
   }
+  /*
+   * **「研发」组常驻**（2026-10-26 用户：远程连接 / 代码托管放到工作台研发区更合适）。
+   * 为什么不是只挂在插件分类上：这两个是**平台内置入口**（设置里的配置页），
+   * 研发面板插件没装的时候它们也该在 —— 有仓库、有机器是干活的前提，不是插件的附属品。
+   * 没有研发类插件时补一个空组，位置仍在最前（跟有研发面板时一致）。
+   */
+  const groupList = [...groups];
+  if (!groups.has('研发')) groupList.unshift(['研发', []]);
+
+  /**
+   * 研发区的两个内置磁贴。点开的是「设置 → 代码托管 / 远程连接」那两页 ——
+   * 这里只是**常用入口**，配置仍然在设置里做（不把设置搬过来，免得两处各写一套渲染）。
+   */
+  const DEV_TILES = [
+    ['代码托管', '连接 GitHub、接入仓库', 'code', ICON_WB_CODE],
+    ['远程连接', 'SSH 服务器与密钥', 'remote', ICON_WB_SSH],
+  ];
 
   /* 所有分组**共用一个宫格容器**，分组名退化成一行小标题（`.wb-sec`）。
      原来每个分组是 `<section class="fx">`，`.fx + .fx` 自带横分隔线 —— 5 个小组竖着叠成
      5 条横带，每条右侧一片空白，分隔线反而比内容显眼。现在一屏铺不下就换行，不会"一带一块"。 */
-  const pluginSections = [...groups]
-    .map(
-      ([cat, items]) => `<div class="wb-sec">${esc(cat)}</div>
+  const pluginSections = groupList
+    .map(([cat, items]) => {
+      // 一组一个色（内联渐变），组里的插件和内置磁贴共用这一种颜色 —— 一眼看出是同一区
+      const icoStyle = wbIcoStyle(cat);
+      return `<div class="wb-sec">${esc(cat)}</div>
         <div class="wb-grid">
           ${items
             .map(
@@ -596,20 +615,23 @@ export function renderWorkbenchGrid() {
                 p.label,
                 p.description || p.label,
                 `data-wb-open="${esc(p.id)}"`,
-                wbIcoStyle(cat),
+                icoStyle,
               ),
             )
             .join('')}
-        </div>`,
-    )
+          ${cat === '研发'
+            ? DEV_TILES.map(([name, desc, key, icon]) =>
+                wbCard('wb-tint', icon, name, desc, `data-wb-settings="${key}"`, icoStyle),
+              ).join('')
+            : ''}
+        </div>`;
+    })
     .join('');
 
   $('pluginView').classList.remove('kb-page'); // 宫格是长页面，按普通滚动
   $('pluginView').innerHTML = `
     <div class="detail-head head-row"><div class="head-title"><b>工作台</b></div></div>
-    <div class="detail-body wb-page">${
-      list.length ? pluginSections : '' // 没装应用就不渲染这个区：空态横幅没人需要
-    }${workbenchProjectSection()}${workbenchAutoSection()}${workbenchFlowSection()}${
+    <div class="detail-body wb-page">${pluginSections}${workbenchProjectSection()}${workbenchAutoSection()}${workbenchFlowSection()}${
       broken.length
         ? `<div class="wb-sec">装不上台面</div>
            ${broken
@@ -650,6 +672,18 @@ export function renderWorkbenchGrid() {
   // 定时任务：入口原来在「设置」里，搬到工作台（2026-10-17 用户要求）
   view.querySelector('[data-schedules]')?.addEventListener('click', () => {
     openSchedules().catch((e) => toast(e.message, 'error'));
+  });
+  /*
+   * 研发区的两个内置入口（代码托管 / 远程连接）→ 设置里对应的配置页。
+   * 这里用**动态 import**：settings.mjs 本身 import 了本模块的 renderRemoteConnection，
+   * 两边静态互引会绕成环；点了才加载，也顺带省掉工作台首屏解析设置页的成本。
+   */
+  view.querySelectorAll('[data-wb-settings]').forEach((el) => {
+    el.onclick = () => {
+      import('./settings.mjs')
+        .then((m) => m.openSettings(el.dataset.wbSettings))
+        .catch((e) => toast(e.message, 'error'));
+    };
   });
 }
 
