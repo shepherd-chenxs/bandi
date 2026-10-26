@@ -183,7 +183,7 @@ const GH_API = (() => {
 
 const ghFetch = async (pathname, { token, method = 'GET', body, timeoutMs = GH_TIMEOUT_MS } = {}) => {
   const t = token ?? readToken();
-  if (!t) throw new Error('还没连接 GitHub（先去「设置 → 代码托管」填一个 fine-grained PAT）');
+  if (!t) throw new Error('还没连接 GitHub（先去「工作台 → 研发 → 代码托管」填一个 fine-grained PAT）');
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
   let r;
@@ -736,7 +736,7 @@ export async function getChecks(repo, sha) {
 /**
  * 合并一个 PR（2026-10-23；2026-10-25 起与 `createPull` 并列为平台两处写 GitHub 的地方）。
  *
- * 谁能走到这儿由调用方管（流程合并节点的判据表 / 「设置 → 代码托管」上的人点按钮），
+ * 谁能走到这儿由调用方管（流程合并节点的判据表 / 「工作台 → 研发 → 代码托管」上的人点按钮），
  * 这里只管把 API 调了、把结果说人话：
  *   · 405「not mergeable」多半是冲突或分支保护 —— 原样带回，别翻译成"系统错误"；
  *   · 403 是令牌没有 contents:write —— 那是**该等人换令牌**的明确信号，带上原话；

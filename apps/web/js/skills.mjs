@@ -206,7 +206,7 @@ export function openGitAddDialog(fullName, onDone) {
 
 
 /**
- * 「设置 → 代码托管」（2026-10-17）。
+ * 「工作台 → 研发 → 代码托管」（2026-10-17）。
  *
  * 用户：我有很多个 git 仓库 —— 所以这里是一张**仓库清单**：
  *   连接 GitHub（fine-grained PAT）→ 从账号里挑仓库接入（克隆到数据目录）→ 数字员工在那个目录里干活。

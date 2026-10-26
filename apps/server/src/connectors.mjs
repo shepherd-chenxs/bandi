@@ -169,7 +169,7 @@ export function removeEntry(id) {
   const saved = readSaved();
   if (!(id in saved)) return { removed: false };
   if (saved[id]?.builtin === true) {
-    return { error: 'builtin', message: '内置连接器不能卸载（随「设置 → 远程连接」出厂自带）' };
+    return { error: 'builtin', message: '内置连接器不能卸载（随「工作台 → 研发 → 远程连接」出厂自带）' };
   }
   delete saved[id];
   writeSaved(saved);
@@ -204,7 +204,7 @@ export function publicList() {
 /* ---------------------------------------------------------------- 内置 */
 
 /**
- * 内置连接器（2026-10-26）：随「设置 → 远程连接」出厂自带，**不进推荐清单**。
+ * 内置连接器（2026-10-26）：随「工作台 → 研发 → 远程连接」出厂自带，**不进推荐清单**。
  *
  * 为什么内置：SSH 工具（列登记 / 取公钥 / 执行命令）和登记页面是一体的 ——
  * 登记表就是 ~/.bandi/servers.yaml，工具读的也是它。拆成"可装的扩展"只会

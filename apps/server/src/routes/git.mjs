@@ -233,7 +233,7 @@ export async function handleGit(req, res, url) {
   if (repoPrs) {
     const row = store.getGitRepo(decodeURIComponent(repoPrs[1]));
     if (!row) return fail(res, 404, 'E1076', '仓库不在清单里'), true;
-    if (!git.readToken()) return fail(res, 400, 'E1070', '先连接 GitHub（设置 → 代码托管）'), true;
+    if (!git.readToken()) return fail(res, 400, 'E1070', '先连接 GitHub（工作台 → 研发 → 代码托管）'), true;
     if (req.method === 'GET') {
       try {
         const prs = await git.listPullsForRepo(row.fullName);
@@ -259,7 +259,7 @@ export async function handleGit(req, res, url) {
   if (repoMergePr && req.method === 'POST') {
     const row = store.getGitRepo(decodeURIComponent(repoMergePr[1]));
     if (!row) return fail(res, 404, 'E1076', '仓库不在清单里'), true;
-    if (!git.readToken()) return fail(res, 400, 'E1070', '先连接 GitHub（设置 → 代码托管）'), true;
+    if (!git.readToken()) return fail(res, 400, 'E1070', '先连接 GitHub（工作台 → 研发 → 代码托管）'), true;
     const body = await readBody(req);
     try {
       return sendJson(res, 200, await mergeOne(row.fullName, Number(repoMergePr[2]), body)), true;
@@ -284,10 +284,10 @@ export async function handleGit(req, res, url) {
     if (req.method === 'POST' && prOf[2] === '/create') {
       const body = await readBody(req);
       const project = task.projectId ? store.getProject(task.projectId) : null;
-      if (!project) return fail(res, 400, 'E1079', '这张卡没挂项目 —— 不知道在哪个目录里提交。先在「设置 → 代码托管」上那个仓库行里点「建 PR」'), true;
+      if (!project) return fail(res, 400, 'E1079', '这张卡没挂项目 —— 不知道在哪个目录里提交。先在「工作台 → 研发 → 代码托管」上那个仓库行里点「建 PR」'), true;
       const row = git.repoForCwd(project.root);
-      if (!row) return fail(res, 400, 'E1079', `项目目录不在任何已接入的仓库里：${project.root} —— 去「设置 → 代码托管」把它接进来`), true;
-      if (!git.readToken()) return fail(res, 400, 'E1070', '先连接 GitHub（设置 → 代码托管）'), true;
+      if (!row) return fail(res, 400, 'E1079', `项目目录不在任何已接入的仓库里：${project.root} —— 去「工作台 → 研发 → 代码托管」把它接进来`), true;
+      if (!git.readToken()) return fail(res, 400, 'E1070', '先连接 GitHub（工作台 → 研发 → 代码托管）'), true;
       const repoRow = store.getGitRepoByFullName(row.fullName);
       try {
         const out = await git.openPr(repoRow, prRequestOf(body, task));
@@ -307,7 +307,7 @@ export async function handleGit(req, res, url) {
     // 从这张卡合并它关联的 PR（人不走流程、直接在卡上点一下的那条路）
     if (req.method === 'POST' && prOf[2] === '/merge') {
       if (!task.prRepo || !task.prNumber) return fail(res, 400, 'E1072', '这张卡还没关联 PR'), true;
-      if (!git.readToken()) return fail(res, 400, 'E1070', '先连接 GitHub（设置 → 代码托管）'), true;
+      if (!git.readToken()) return fail(res, 400, 'E1070', '先连接 GitHub（工作台 → 研发 → 代码托管）'), true;
       const body = await readBody(req);
       try {
         return sendJson(res, 200, await mergeOne(task.prRepo, task.prNumber, body, taskId)), true;
@@ -321,7 +321,7 @@ export async function handleGit(req, res, url) {
       const body = await readBody(req);
       const ref = git.parsePrRef(body.url ?? body.pr ?? '');
       if (!ref) return fail(res, 400, 'E1069', '看不懂这个 PR：贴链接，或写成 owner/name#123'), true;
-      if (!git.readToken()) return fail(res, 400, 'E1070', '先连接 GitHub（设置 → 代码托管）'), true;
+      if (!git.readToken()) return fail(res, 400, 'E1070', '先连接 GitHub（工作台 → 研发 → 代码托管）'), true;
       let snap;
       try {
         snap = await git.fetchPull(ref.repo, ref.number);
@@ -376,7 +376,7 @@ export async function handleGit(req, res, url) {
    * 上限 50 张：一次点下去串行查 GitHub，几百张会卡到人以为点了没反应。
    */
   if (req.method === 'POST' && url.pathname === '/api/git/prs/refresh') {
-    if (!git.readToken()) return fail(res, 400, 'E1074', '先连接 GitHub（设置 → 代码托管）'), true;
+    if (!git.readToken()) return fail(res, 400, 'E1074', '先连接 GitHub（工作台 → 研发 → 代码托管）'), true;
     const only = url.searchParams.get('projectId');
     let updated = 0;
     const failed = [];
