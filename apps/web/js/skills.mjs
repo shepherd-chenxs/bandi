@@ -468,7 +468,7 @@ export async function renderGitRepos() {
       <td class="gr-cell-ops">
         <button class="mini auto" data-git-pr="${esc(r.id)}" title="把本地改动提交成一个 PR；这里也能合并开着的 PR">建 PR</button>
         <button class="mini auto" data-git-project="${esc(r.id)}" title="用这个仓库建一个项目（工作目录就是克隆目录）">建成项目</button>
-        <button class="mini auto" data-git-back="${esc(r.id)}" data-git-base="${esc(r.defaultBranch ?? '')}" title="把本地切回默认分支并拉最新（合并后 / 在 GitHub 网页上合了 PR 后用）">回 ${esc(r.defaultBranch || 'base')}</button>
+        <button class="mini auto" data-git-back="${esc(r.id)}" data-git-base="${esc(r.defaultBranch ?? '')}" title="把本地切回默认分支并拉最新（合并后 / 在 GitHub 网页上合了 PR 后用）—— ⚠️ 会把工作区从当前分支切走">回 ${esc(r.defaultBranch || 'base')}</button>
         <button class="mini auto" data-git-sync="${esc(r.id)}" title="git pull --ff-only（在当前分支上）">同步</button>
         <button class="mini auto" data-git-remove="${esc(r.id)}" title="只移除记录，本地目录保留">移除</button>
       </td>
@@ -661,17 +661,49 @@ export async function renderGitRepos() {
   /*
    * 「回 main」：合并后 / 在 GitHub 网页上合了 PR 之后的兜底。
    * 与合并自动收尾同一个服务端函数：工作区不干净就不动，只把原因带回来。
+   *
+   * ⚠️ 2026-10-26 用户实报：这颗按钮**会把整个工作区从开发分支切到 main** ——
+   *    点了之后界面上的功能"像没了"（其实提交都在分支上）。原来的确认只说"切回 main"，
+   *    没写"你现在在哪"。现在点下去先读一次**本地**工作区状态（`/changes`，不联网），
+   *    把「当前分支 → 目标分支」、以及"当前分支有多少提交没在 main 上 / 有多少未提交改动"
+   *    摆进确认框；`ahead > 0` 时确认按钮用危险色。
    */
   view.querySelectorAll('[data-git-back]').forEach((el) => {
     el.onclick = async (e) => {
       e.preventDefault();
+      if (el.disabled) return;
+      const repoId = el.dataset.gitBack;
       const base = el.dataset.gitBase || 'base';
-      if (!(await confirmDo(`把本地切回 ${base} 并拉最新？\n工作区有未提交改动时不会动。`, { ok: '切换', danger: false }))) return;
+      el.disabled = true;
+      let st = null;
+      try {
+        // 本地 git，快且不联网；读不到（目录没了/不是 git）就退回朴素文案
+        st = (await api(`/api/git/repos/${encodeURIComponent(repoId)}/changes`)).state ?? null;
+      } catch { /* fallback 下面的文案 */ }
+      el.disabled = false;
+
+      const cur = st?.branch || '';
+      const dirty = Number(st?.dirtyCount ?? 0);
+      const ahead = Number(st?.ahead ?? 0);
+      const lines = [];
+      if (cur && cur === base) {
+        lines.push(`当前已经在 ${base} 上。`);
+        lines.push('这一步只会拉最新（有未提交改动时不会动）。');
+      } else {
+        lines.push(`当前分支：${cur || '游离 HEAD（不在任何分支上）'}`);
+        lines.push(`会切到：${base}（并拉最新）`);
+        lines.push('');
+        lines.push(`⚠️ 工作区会从「${cur || '游离 HEAD'}」切到「${base}」。`);
+        if (ahead > 0) lines.push(`当前分支比本地记录的 origin/${base} 多 ${ahead} 个提交 —— 提交不会丢，但切走后工作区里看不到它们。`);
+        if (dirty > 0) lines.push(`本地有 ${dirty} 个未提交改动：服务端不会动工作区（会跳过并原样说明）。`);
+      }
+      if (!(await confirmDo(lines.join('\n'), { ok: '切换', danger: ahead > 0 }))) return;
+
       el.disabled = true;
       const old = el.textContent;
       el.textContent = '切换中…';
       try {
-        const r = await api(`/api/git/repos/${encodeURIComponent(el.dataset.gitBack)}/back`, { method: 'POST' });
+        const r = await api(`/api/git/repos/${encodeURIComponent(repoId)}/back`, { method: 'POST' });
         toast(r.local?.note || `已回到 ${base}`, r.local?.settled ? 'ok' : 'error');
         await refresh();
       } catch (err) {
