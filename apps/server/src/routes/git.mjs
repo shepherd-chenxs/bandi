@@ -73,6 +73,19 @@ async function mergeOne(repo, number, body = {}, taskId = null) {
     }
   }
 
+  /*
+   * **本地收尾**（2026-10-25）：切回 base、拉最新、删本地源分支。
+   * PR 是在 GitHub 上合的，本地克隆不会自己变 —— 不做的话人还停在已合并的旧分支上。
+   * 收尾失败**不影响合并结论**（GitHub 上已经合了），只把原因带回界面。
+   */
+  let local = null;
+  try {
+    local = await git.settleAfterMerge(repo, { base: pull.baseRef, head: pull.headRef, headSha: pull.headSha });
+  } catch (e) {
+    local = { settled: false, skipped: 'error', note: `合并成功，但本地收尾没成：${String(e?.message ?? e).slice(0, 160)}` };
+    console.warn(`[代码托管] 合并后本地收尾没成：${e?.message ?? e}`);
+  }
+
   const touched = [];
   for (const t of store.listProjectTasksWithPr()) {
     if (t.prRepo !== repo || Number(t.prNumber) !== number) continue;
@@ -81,7 +94,17 @@ async function mergeOne(repo, number, body = {}, taskId = null) {
     touched.push(t.id);
   }
   const task = taskId ? store.getProjectTask(taskId) : null;
-  return { merged: true, pr: { ...pull, state: 'merged' }, method, branchDeleted, note: branchNote, task, touchedTasks: touched };
+  const notes = [branchNote, local?.note].filter(Boolean);
+  return {
+    merged: true,
+    pr: { ...pull, state: 'merged' },
+    method,
+    branchDeleted,
+    local,
+    note: notes.length ? notes.join('；') : null,
+    task,
+    touchedTasks: touched,
+  };
 }
 
 export async function handleGit(req, res, url) {
@@ -383,6 +406,23 @@ export async function handleGit(req, res, url) {
       return sendJson(res, 200, { repo: await git.syncRepo(decodeURIComponent(syncOne[1])) }), true;
     } catch (e) {
       return fail(res, 400, 'E1065', String(e.message ?? e)), true;
+    }
+  }
+
+  /*
+   * 「回 base / 回 main」那颗按钮（2026-10-25）：给"在 GitHub 网页上直接合了 PR"兜底。
+   * 与合并后的自动收尾走同一个 `settleAfterMerge`：切回默认分支 → pull --ff-only → 删本地 bandi/ 分支。
+   * 工作区不干净 / 当前在别的分支 → 400 原话带回，界面 toast 显示（不当成"成功"）。
+   */
+  const backOne = /^\/api\/git\/repos\/([^/]+)\/back$/.exec(url.pathname);
+  if (req.method === 'POST' && backOne) {
+    const row = store.getGitRepo(decodeURIComponent(backOne[1]));
+    if (!row) return fail(res, 404, 'E1076', '仓库不在清单里'), true;
+    try {
+      const local = await git.settleAfterMerge(row.fullName, { base: row.defaultBranch });
+      return sendJson(res, 200, { repo: row, local }), true;
+    } catch (e) {
+      return fail(res, 400, 'E1100', String(e.message ?? e)), true;
     }
   }
 

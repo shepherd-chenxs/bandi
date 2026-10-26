@@ -368,13 +368,39 @@ export function reviewedShaOf(runId) {
  * 锁不锁 SHA 由 `mergeShaFor` 定，规则只在那一处。
  */
 async function doMerge({ runId, task, repo, number, byHuman, headSha = null }) {
+  /*
+   * 合之前先抓一眼 PR：合完之后要用它的 base / head 把本地收尾
+   * （切回 base、拉最新、删本地源分支）。抓不到就跳过收尾 —— 不能因为收尾失败把合并报成没合。
+   */
+  let pr = null;
+  try {
+    pr = await git.fetchPull(repo, number);
+  } catch {
+    /* 收尾降级：合并本身照走 */
+  }
+
   const out = await git.mergePull(repo, number, { commitTitle: null, sha: mergeShaFor({ byHuman, headSha }) });
   if (!out.merged) throw new Error(out.message || 'GitHub 没说合上了，也没报错 —— 当没合处理');
   updateCardWithReview({ projectId: store.getWorkflowRun(runId)?.projectId, repo, number, prState: 'merged', conclusion: '' });
+
+  /*
+   * 本地收尾（2026-10-25）：与手动合并走同一个 `git.settleAfterMerge`。
+   * 这一步会切本地分支，所以它自己带"工作区必须干净 / 人得正好停在源分支"的护栏。
+   */
+  let local = null;
+  if (pr) {
+    try {
+      local = await git.settleAfterMerge(repo, { base: pr.baseRef, head: pr.headRef, headSha: pr.headSha });
+    } catch (e) {
+      local = { settled: false, skipped: 'error', note: `本地收尾没成：${String(e?.message ?? e).slice(0, 160)}` };
+      console.warn(`[PR 合并] PR #${number} 本地收尾没成：${e?.message ?? e}`);
+    }
+  }
+
   return finishActionTask(runId, task, {
     ok: true,
     result: { state: '已合并', summary: `PR #${number} 已${byHuman ? '（人拍板）' : '（授权自动）'}合并`, artifacts: [`https://github.com/${repo}/pull/${number}`] },
-    note: `已合并 PR #${number}${byHuman ? '（人拍板）' : '（授权自动）'}`,
+    note: `已合并 PR #${number}${byHuman ? '（人拍板）' : '（授权自动）'}${local?.note ? `；本地：${local.note}` : ''}`,
   });
 }
 

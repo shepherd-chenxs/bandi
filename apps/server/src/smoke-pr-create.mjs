@@ -265,6 +265,48 @@ await git.commitAndPush(unRow, { branch: 'bandi/unstaged-rename-case', message: 
 const unShow = g(['--git-dir', un.bare, 'show', '--name-status', '-M', '--format=', 'refs/heads/bandi/unstaged-rename-case'], repoRoot);
 check('未暂存的重命名提交后仍是 rename（不是"多一份 + 旧的还在"）', /^R100\s+a\.txt\s+b\.txt/m.test(unShow), unShow.replace(/\n/g, ' | '));
 
+/*
+ * **合并后的本地收尾**（2026-10-25，用户要求集成到平台）：
+ * 切回 base → pull --ff-only → 删本地 `bandi/` 源分支；工作区脏就不动。
+ * 这一段单独用两个小仓库钉，不依赖假 GitHub 的合并动作。
+ */
+const stl = makeRepo('settle');
+fs.writeFileSync(path.join(stl.work, 'a.txt'), 'a\n');
+g(['-C', stl.work, 'add', 'a.txt'], stl.work);
+g(['-C', stl.work, '-c', 'user.name=s', '-c', 'user.email=s@example.invalid', 'commit', '-q', '-m', 'a'], stl.work);
+g(['-C', stl.work, 'push', '-q', 'origin', 'main'], stl.work);
+g(['-C', stl.work, 'checkout', '-q', '-b', 'bandi/settle-case'], stl.work);
+fs.writeFileSync(path.join(stl.work, 'a.txt'), 'a2\n');
+g(['-C', stl.work, '-c', 'user.name=s', '-c', 'user.email=s@example.invalid', 'commit', '-q', '-am', 'a2'], stl.work);
+g(['-C', stl.work, 'push', '-q', '-u', 'origin', 'bandi/settle-case'], stl.work);
+const stlSha = g(['-C', stl.work, 'rev-parse', 'HEAD'], stl.work);
+await git.connectRepo('smoke/settle', null, stl.work);
+const settled = await git.settleAfterMerge('smoke/settle', { base: 'main', head: 'bandi/settle-case', headSha: stlSha });
+check(
+  '合并后收尾：切回 main + 拉最新 + 删本地源分支',
+  settled.settled === true && settled.switched === true && settled.pulled === true && settled.deleted === 'bandi/settle-case',
+  JSON.stringify(settled),
+);
+check('本地当前分支真的回到 main', g(['-C', stl.work, 'branch', '--show-current'], stl.work) === 'main');
+check(
+  '本地源分支真没了',
+  !g(['-C', stl.work, 'branch', '--format=%(refname:short)'], stl.work).split('\n').includes('bandi/settle-case'),
+);
+
+const stlDirty = makeRepo('settle-dirty');
+fs.writeFileSync(path.join(stlDirty.work, 'a.txt'), 'a\n');
+g(['-C', stlDirty.work, 'add', 'a.txt'], stlDirty.work);
+g(['-C', stlDirty.work, '-c', 'user.name=s', '-c', 'user.email=s@example.invalid', 'commit', '-q', '-m', 'a'], stlDirty.work);
+g(['-C', stlDirty.work, 'push', '-q', 'origin', 'main'], stlDirty.work);
+g(['-C', stlDirty.work, 'checkout', '-q', '-b', 'bandi/dirty-case'], stlDirty.work);
+fs.writeFileSync(path.join(stlDirty.work, 'a.txt'), 'a2\n');
+g(['-C', stlDirty.work, '-c', 'user.name=s', '-c', 'user.email=s@example.invalid', 'commit', '-q', '-am', 'a2'], stlDirty.work);
+fs.writeFileSync(path.join(stlDirty.work, 'keep.txt'), '没提交的东西\n');
+await git.connectRepo('smoke/settle-dirty', null, stlDirty.work);
+const dirtySettle = await git.settleAfterMerge('smoke/settle-dirty', { base: 'main', head: 'bandi/dirty-case', headSha: g(['-C', stlDirty.work, 'rev-parse', 'HEAD'], stlDirty.work) });
+check('工作区有未提交改动 → 不切分支，只说明原因', dirtySettle.settled === false && dirtySettle.skipped === 'dirty' && /未提交/.test(dirtySettle.note), JSON.stringify(dirtySettle));
+check('脏工作区下仍停在原分支、分支没被删', g(['-C', stlDirty.work, 'branch', '--show-current'], stlDirty.work) === 'bandi/dirty-case' && g(['-C', stlDirty.work, 'branch', '--format=%(refname:short)'], stlDirty.work).split('\n').includes('bandi/dirty-case'));
+
 /* --------------------------------------------------- ④ createPull：形状与坏脾气 */
 console.log('\n④ 建 PR：请求形状、查重、422 分档、403 指明缺哪个权限');
 
@@ -416,6 +458,11 @@ try {
     const after = store.getProjectTask(card.id);
     check('卡上 prState=merged', after.prState === 'merged', String(after.prState));
     check('「进行中」→「待验收」（不自动已完成）', after.status === '待验收', after.status);
+    check(
+      '卡上合并后本地也收尾了（切回 main，不再停在 PR 分支）',
+      merged.b.local?.settled === true && g(['-C', work, 'branch', '--show-current'], work) === 'main',
+      JSON.stringify(merged.b.local),
+    );
 
     const again2 = await req(`/api/projects/tasks/${cid}/pr/merge`, { method: 'POST', body: JSON.stringify({}) });
     check('已经合过的再点 → already=true + 说"已经合过了"，不当失败', again2.status === 200 && again2.b.already === true && /合过/.test(String(again2.b.note ?? '')), JSON.stringify({ a: again2.b?.already, n: again2.b?.note }));
@@ -478,6 +525,11 @@ try {
     const rMerge = await req(`/api/git/repos/${id}/prs/${n1}/merge`, { method: 'POST', body: JSON.stringify({ method: 'squash', deleteBranch: true }) });
     check('合并 200', rMerge.status === 200 && rMerge.b.merged === true, JSON.stringify({ s: rMerge.status, m: rMerge.b?.merged }));
     check('勾了删分支 → bandi/ 那条真的删了（DELETE ref 打到 GitHub）', rMerge.b.branchDeleted === rCreate.b.branch && gh.deletedRefs.includes(rCreate.b.branch), JSON.stringify(gh.deletedRefs));
+    check(
+      '仓库行合并后本地也收尾了（回到 main）',
+      rMerge.b.local?.settled === true && g(['-C', work, 'branch', '--show-current'], work) === 'main',
+      JSON.stringify(rMerge.b.local),
+    );
     // 断言打在**打到 GitHub 的那一发**上（假件记的是 `/repos/.../pulls/{n}/merge`，不是班底自己的 `/prs/` 路径）
     const ghMerge = gh.lastHit(new RegExp(`PUT /repos/smoke/demo/pulls/${n1}/merge$`));
     check('合并方式按人给的传下去（squash）', ghMerge?.body?.merge_method === 'squash', JSON.stringify(ghMerge?.body));
@@ -491,6 +543,13 @@ try {
 
     const rMerge3 = await req(`/api/git/repos/${id}/prs/${human.number}/merge`, { method: 'POST', body: JSON.stringify({}) });
     check('仓库行上重复合并 → already=true（不当失败）', rMerge3.status === 200 && rMerge3.b.already === true, JSON.stringify({ s: rMerge3.status, a: rMerge3.b?.already }));
+
+    const backRes = await req(`/api/git/repos/${id}/back`, { method: 'POST' });
+    check(
+      'POST /back 可用（已在 base 时只拉最新，返回收尾说明）',
+      backRes.status === 200 && backRes.b.local?.settled === true && backRes.b.local?.switched === false,
+      JSON.stringify(backRes.b?.local),
+    );
 
     /* ---------------- ⑪ 流程：开发完成 → 建 PR → 审阅 → 合并（2026-10-25） ---------------- */
     /*
@@ -568,6 +627,9 @@ try {
     check('自动合并带上了审阅时的 head sha（乐观锁）', flowMergeCall?.body?.sha === flowPr.headSha, JSON.stringify(flowMergeCall?.body));
     check('PR 在假 GitHub 上真的合了', gh.pulls.get('smoke/demo')?.find((p) => p.number === Number(flowRow.prNumber))?.state === 'merged');
     check('值班卡跟着变成 merged', store.getProjectTask(flowCard.id)?.prState === 'merged', String(store.getProjectTask(flowCard.id)?.prState));
+    check('自动合并后本地也切回 base 了', g(['-C', work, 'branch', '--show-current'], work) === 'main', g(['-C', work, 'branch', '--show-current'], work));
+    const mergeNodeTask = store.listWorkflowTasks(flowRun.id).at(-1);
+    check('合并节点备注带本地收尾说明', /本地：/.test(mergeNodeTask?.note ?? ''), String(mergeNodeTask?.note));
 
     /*
      * 反证：**审阅之后又有人推了新提交** —— 自动合并不许合"没看过的那一份"。
