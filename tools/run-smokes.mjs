@@ -46,6 +46,7 @@ const RUN = [
   'apps/server/src/smoke-quota.mjs',
   'apps/server/src/smoke-repo-cards.mjs',
   'apps/server/src/smoke-run-events.mjs',
+  'apps/server/src/smoke-run-progress.mjs',
   'apps/server/src/smoke-runtime-heal.mjs',
   'apps/server/src/smoke-schedules.mjs',
   'apps/server/src/smoke-secretary.mjs',

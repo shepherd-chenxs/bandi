@@ -12,6 +12,8 @@ import { openChatLogDrawer, openGroupDrawer } from './groups.mjs';
 import { closeDrawer, fireExpert } from './experts.mjs';
 import { $, S } from './core.mjs';
 import { SANDBOX_LABEL, sandboxItems } from './misc.mjs';
+// 运行进度：把事件流翻译成"走到哪一步"（纯逻辑，不碰 DOM；dsh/codex/claude 的事件都吃）
+import { applyRunEvent, createRunProgress, fmtAgo, fmtElapsed, fmtStepDur, progressView } from './run-progress.mjs';
 
 
 
@@ -495,7 +497,9 @@ export async function openConversation(id) {
   // 把 `runs` 一起给它：失败的运行在库里**没有消息**，只画 messages 就会"说了句话然后没了"
   drawMessages(d.messages, d.conversation.personaName || '', isGroup, d.runs);
   const last = d.runs[0];
-  if (last && last.status === '跑中') attachStream(last.id, last.personaName);
+  // 把这次运行的**开始时间**一起带过去：刷新/重进会话时，"已跑多久"要按真实起点算，
+  // 不能从"我打开这一页"开始算（用户 2026-10-26 要看的就是"跑了多久、到哪一步"）
+  if (last && last.status === '跑中') attachStream(last.id, last.personaName, last.startedAt);
   renderList();
 }
 
@@ -987,7 +991,7 @@ export async function stopChatRun() {
 
 
 
-export function attachStream(runId, whoName = '') {
+export function attachStream(runId, whoName = '', startedAt = null) {
   if (S.es) S.es.close();
   S.running = true;
   chatRunningId = runId;
@@ -1000,21 +1004,40 @@ export function attachStream(runId, whoName = '') {
   const name = whoName || S.conversation.personaName || S.persona?.name || '数字员工';
   const convId = S.conversation.id;
   const id = 'live-' + runId;
+  /*
+   * 运行进度（2026-10-26）：原来这里只有一个"三个点"的 typing 气泡，人只能看出
+   * "他在动"，看不出走到哪、是不是卡住了。现在换成一块状态卡：
+   *   · 头一行：阶段 + 第几步 + 总用时（每秒走）；
+   *   · 第二行：最近一次工具动作 + 多久以前；无动静超过 5 分钟就变"可能卡住了"；
+   *   · 下面是工具卡片（第 N 步 · 动词 · 目标 · 耗时/成败）。
+   * 数据全部来自事件流（跟 `run_events` 同一份），刷新/重连时服务端会重放，不用另存。
+   */
+  const begun = typeof startedAt === 'string' ? Date.parse(startedAt) : startedAt;
+  const progress = createRunProgress({ startedAt: Number.isFinite(begun) ? begun : Date.now() });
   $('chat').insertAdjacentHTML('beforeend',
     `<div class="row" id="${id}">
        ${smAvatar(name, '', personaByName(name))}
-       <div class="bubble"><div class="typing"><i></i><i></i><i></i></div></div>
+       <div class="bubble">
+         <div class="rp" data-rp>
+           <div class="rp-head">
+             <span class="rp-dot"></span><span class="rp-phase">准备中</span>
+             <span class="rp-meta"></span><span class="rp-time">00:00</span>
+           </div>
+           <div class="rp-last" hidden></div>
+           <div class="rp-steps"></div>
+         </div>
+       </div>
      </div>`);
   scrollDown();
 
   const body = document.querySelector('#' + id + ' .bubble');
+  const rp = body.querySelector('[data-rp]');
   // 思考过程开关跟随**这轮的执行者**（2026-10-24 修群聊失效）：
   // 会话上的 showThinking 是拿 conversations.personaId JOIN 员工表带出来的 ——
   // 单聊有值；群建会话时 personaId 故意置空（见 store/conversations.mjs），JOIN 出来是
   // NULL，以前这里就恒为 false，群里永远不显示。现在 NULL 时按正在干活的那个人的开关来。
   const showThinking = (S.conversation?.showThinking ?? personaByName(name)?.showThinking) === 1;
   const add = (cls, text, asHtml = false) => {
-    body.querySelector('.typing')?.remove();
     const d = document.createElement('div');
     d.className = 'step ' + cls;
     if (asHtml) d.innerHTML = text; else d.textContent = text;
@@ -1022,7 +1045,65 @@ export function attachStream(runId, whoName = '') {
     scrollDown();
   };
 
+  /** 一张工具卡片：第几步、干了什么、多久/成败 */
+  const stepHtml = (s) => {
+    const ic = s.status === 'done' ? '✓' : s.status === 'error' ? '✗' : s.status === 'running' ? '◌' : '·';
+    const dur = s.durMs == null
+      ? ''
+      : `<span class="rp-dur">${s.status === 'running' ? '进行中 ' : ''}${fmtStepDur(s.durMs)}</span>`;
+    const err = s.error ? `<span class="rp-err">${esc(s.error)}</span>` : '';
+    // 卡片里那行会被截断（长命令），title 留全量 —— 悬停能看全，不占版面
+    const act = `${s.verb}${s.target ? ` ${s.target}` : ''}`;
+    return `<div class="rp-step ${esc(s.status)}">
+      <span class="rp-ic">${ic}</span>
+      <span class="rp-n">第 ${s.n} 步</span>
+      <span class="rp-act" title="${esc(act)}">${esc(s.verb)}${s.target ? ` <code>${esc(s.target)}</code>` : ''}</span>
+      ${dur}${err}
+    </div>`;
+  };
+  /** 画一帧进度（每秒也走一次：总用时、单步耗时、"多久没动静"都靠它） */
+  const paint = () => {
+    const v = progressView(progress, Date.now());
+    rp.classList.toggle('warn', v.stalled);
+    rp.classList.toggle('done', v.done);
+    rp.querySelector('.rp-phase').textContent =
+      v.stalled ? '可能卡住了' : v.done ? (v.status || '已结束') : v.phaseText;
+    rp.querySelector('.rp-time').textContent = fmtElapsed(v.elapsedMs);
+    const meta = [];
+    if (v.stepCount) meta.push(`${v.stepCount} 步`);
+    if (v.stalled && !v.done) meta.push(`最后动静 ${fmtAgo(v.idleMs)}`);
+    else if (v.currentStep) meta.push('进行中');
+    rp.querySelector('.rp-meta').textContent = meta.join(' · ');
+
+    const lastEl = rp.querySelector('.rp-last');
+    let lastText = '';
+    if (v.stalled && !v.done) {
+      lastText = `可能卡住了：最后动静 ${fmtAgo(v.idleMs)}${v.lastAction ? `（${v.lastAction}）` : ''} —— 可以再等等，或点「停止生成」`;
+    } else if (v.error) {
+      lastText = v.error;
+    } else if (v.lastAction) {
+      lastText = `最近动作：${v.lastAction}（${fmtAgo(v.lastAgoMs)}）`;
+    } else if (v.info) {
+      lastText = v.info;
+    } else if (!v.done && v.elapsedMs > 60000) {
+      // 一分多钟还没任何输出：模型首包本来就慢，但得让人知道不是界面坏了
+      lastText = '还没有任何输出（模型还在想，或者运行时在排队）';
+    }
+    lastEl.hidden = !lastText;
+    lastEl.textContent = lastText;
+    lastEl.classList.toggle('warn', v.stalled && !v.done);
+
+    const stepsEl = rp.querySelector('.rp-steps');
+    const shown = v.steps.slice(-8);
+    stepsEl.innerHTML =
+      (v.steps.length > 8 ? `<div class="rp-more">…前 ${v.steps.length - 8} 步已折叠</div>` : '') +
+      shown.map(stepHtml).join('');
+  };
+  paint();
+
   let stopped = false;
+  const tick = setInterval(() => { if (!stopped) paint(); }, 1000);
+
   /**
    * 收尾唯一出口。
    * 状态永远以**服务端**为准，不靠客户端自己猜。
@@ -1030,20 +1111,28 @@ export function attachStream(runId, whoName = '') {
   const stop = (status) => {
     if (stopped) return;
     stopped = true;
+    clearInterval(tick);
     if (S.es) { S.es.close(); S.es = null; }
     S.running = false;
     chatRunningId = null;
     setBusy(false);
     setHeaderBadge(status);
+    // 先把"完成/停止/失败 + 总用时 + N 步"留一帧，再由 300ms 后的整页重画接手
+    progress.done = true;
+    progress.status = status;
+    progress.phase = status === '失败' ? 'error' : 'done';
+    paint();
     setTimeout(() => openConversation(convId).then(load).catch(() => {}), 300);
   };
 
   // 实时输出走**共用**的 streamRun（流程实例页的节点对话也是它）
   S.es = streamRun(runId, {
+    // 每个原始事件都喂给进度归约器：dsh 的 tool_call/tool_result、codex 的 tool、
+    // claude 的 status 都靠它 —— 旧的 onText/onTool 只覆盖了其中一部分。
+    onEvent: (evt) => { applyRunEvent(progress, evt); paint(); },
     onText: (chunk) => add('text', renderMarkdown(chunk), true),
-    onRunError: (msg) => add('bad', '· ' + firstMeaningfulLine(msg)),
-    onThinking: (t) => showThinking && add('', '· 思考：' + t),
-    onTool: (name) => showThinking && add('', '· 工具：' + name),
+    onRunError: (msg) => { add('bad', '· ' + firstMeaningfulLine(msg)); paint(); },
+    onThinking: (t) => { if (showThinking) add('', '· 思考：' + t); paint(); },
     onDone: (evt) => {
       // 这一行只是"立刻给你一句"；跑完 300ms 后整页从库里重画，
       // 那时由 failBlock 把它**留在回话里**（见 timelineOf 的注释）
@@ -1079,6 +1168,8 @@ export function attachStream(runId, whoName = '') {
  *
  * @param {string} runId
  * @param {object} h
+ *   onEvent(evt)         **每一个原始事件**（dsh 的 tool_call/tool_result/status 也走这儿；
+ *                        运行进度归约器用它，别的调用方可以不理）
  *   onText(chunk)        他的回话（追加）
  *   onRunError(message)  运行报错
  *   onThinking(text)     思考（调用方自己决定显不显示）
@@ -1102,12 +1193,18 @@ export function streamRun(runId, h = {}) {
     } catch {
       return;
     }
+    /*
+     * 先把**原始事件**交给 onEvent（运行进度用它）。归约器出错不该拖垮整条流 ——
+     * 它只负责"画进度"，画不出来也得让回话继续显示。
+     */
+    try { h.onEvent?.(evt); } catch { /* ignore */ }
     if (evt.type === '__done') {
       close();
       return h.onDone?.(evt);
     }
     if (evt.type === 'text') return h.onText?.(evt.text);
-    if (evt.type === 'error') return h.onRunError?.(evt.message);
+    // claude 的 error 事件字段是 `text`，dsh/codex 是 `message` —— 两个都认
+    if (evt.type === 'error') return h.onRunError?.(evt.message ?? evt.text);
     if (evt.type === 'thinking') return h.onThinking?.(evt.text);
     if (evt.type === 'tool') return h.onTool?.(evt.name);
   };

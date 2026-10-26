@@ -1886,6 +1886,37 @@ input.locked:focus { outline: none; border-color: var(--line); }
   40%           { opacity: 1;  transform: translateY(-3px); }
 }
 
+/* ---------- 运行进度（2026-10-26） ----------
+   正在跑的那条回话不再只有三个点：头一行写"阶段 + 第几步 + 用时"，
+   第二行写"最近动作 / 可能卡住了"，下面是工具卡片。
+   起因：用户实问"他在执行，我不知道他进行到了哪一步"（见 docs/现状.md 同日那条）。
+   颜色沿用语义色：运行中 accent、完成 ok、失败 bad、卡住 warn —— 不新造色。
+   离线的数据来自事件流（run-progress.mjs 归约），刷新/重连服务端会重放。 */
+.rp { display: flex; flex-direction: column; gap: 5px; min-width: 240px; }
+.rp-head { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--dim); }
+.rp-dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--accent);
+          animation: rp-pulse 1.25s infinite ease-in-out; }
+.rp-phase { color: var(--text); font-weight: 600; }
+.rp-meta { font-variant-numeric: tabular-nums; }
+.rp-time { margin-left: auto; font-variant-numeric: tabular-nums; }
+.rp-last { font-size: 12px; line-height: 1.45; color: var(--dim); }
+.rp-last.warn { color: var(--warn); }
+.rp-steps { display: flex; flex-direction: column; gap: 3px; margin-top: 1px; }
+.rp-more { font-size: 11.5px; color: var(--dim); }
+.rp-step { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; font-size: 12px; color: var(--dim); min-width: 0; }
+.rp-ic { width: 11px; flex: 0 0 auto; text-align: center; }
+.rp-n { flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+.rp-act { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rp-act code { font-size: 11.5px; background: var(--well); padding: 1px 4px; border-radius: 4px; }
+.rp-dur { flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+.rp-err { flex: 1 1 100%; color: var(--bad); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rp-step.done .rp-ic { color: var(--ok); }
+.rp-step.error, .rp-step.error .rp-ic { color: var(--bad); }
+.rp-step.running .rp-ic { color: var(--accent); animation: rp-pulse 1.25s infinite ease-in-out; }
+.rp.warn .rp-dot { background: var(--warn); animation: none; }
+.rp.done .rp-dot { background: var(--ok); animation: none; }
+@keyframes rp-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+
 /* Markdown 渲染结果的排版 */
 .bubble p { margin: 0 0 8px; }
 .bubble > p:last-child, .bubble .step:last-child p:last-child { margin-bottom: 0; }
