@@ -382,6 +382,19 @@ try {
   const up3 = await git.workState(upRow);
   check('新分支没上游 → upstream/unpushed 都是 null（界面："还没推到远端"）', up3.upstream === null && up3.unpushed === null, `${up3.upstream}/${up3.unpushed}`);
 
+  console.log('\n⑩ 合并被拒的翻译（gate 还在跑 ≠ 有冲突）');
+  const emr = git.explainMergeRejection;
+  const inProgress = 'Repository rule violations found\n\nRequired status check "gate" is in progress.';
+  const m1 = emr(inProgress);
+  check('gate 没跑完 → 说"等 gate 绿"，不叫人去解冲突', /等 gate 绿/.test(m1) && !/有冲突|不可合并/.test(m1), m1.slice(0, 140));
+  check('把 GitHub 的原话带上', /in progress/i.test(m1), m1.slice(0, 160));
+  const m2 = emr('Pull request is not mergeable: the merge commit cannot be cleanly created');
+  check('真冲突 → 说冲突', /冲突/.test(m2), m2.slice(0, 120));
+  const m3 = emr('Required status check "gate" is expected.');
+  check('检查没跑过 → 说"先让检查跑绿"', /检查/.test(m3) && /跑绿/.test(m3), m3.slice(0, 120));
+  const m4 = emr('At least 1 approving review is required by reviewers with write access.');
+  check('需要审阅 → 指向去 GitHub 过审', /审阅/.test(m4), m4.slice(0, 120));
+
 } finally {
   child.kill();
   await new Promise((r) => setTimeout(r, 300));
