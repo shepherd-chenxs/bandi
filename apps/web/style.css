@@ -1824,6 +1824,9 @@ input.locked:focus { outline: none; border-color: var(--line); }
 .gr-branch .combo-item { padding: 8px 10px; }
 .gr-branch .combo-item-label { font-size: 13px; }
 .gr-branch .combo-group { font-size: 11.5px; padding-top: 10px; }
+/* 2026-10-27 用户："字体不要加粗"：分支弹窗整包常规字重 —— 组标题靠强调色 + 小字号区分层级，
+   不吃全局 combo 的 700；子文件夹标题的 500 也压平。只限分支弹窗，模型下拉等别处不动。 */
+.gr-branch .combo-group, .gr-branch .combo-group.combo-sub { font-weight: 400; }
 /* 改动卡（2026-10-27 改分栏，用户："左边文件，右边输入区和提交"；标题同日改「提交」）：
    左 = 文件清单（diff 展开跟文件行走），右 = 提交说明 + 提交按钮，中间一条分隔线。
    区域高度固定（460px），文件多了在左栏里滚 —— 卡片不再跟着 62 个文件无限撑高。 */
@@ -2373,6 +2376,9 @@ input, select, textarea { width: 100%; background: var(--input); color: var(--te
              border-radius: 8px; padding: 7px 9px; font: inherit; cursor: pointer; }
 .combo-btn:hover { border-color: var(--accent); }
 .combo-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 按钮上紧跟文案的小角标（2026-10-27 分支 pill 的「↑」/「↓」）：绿色、不带数字。
+   单独一个 span 才能上色 —— buttonText 是纯文本。 */
+.combo-btn-badge { flex: 0 0 auto; color: var(--ok); font-size: 12px; line-height: 1; }
 .combo-chev { flex: 0 0 auto; width: 7px; height: 7px; margin-right: 2px;
               border-right: 1.6px solid var(--dim); border-bottom: 1.6px solid var(--dim);
               transform: rotate(45deg) translate(-1px, -1px); }

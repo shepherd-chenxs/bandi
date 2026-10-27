@@ -1053,7 +1053,9 @@ export async function renderGitRepos(root = $('pluginView')) {
   const branchMeta = (b, name) => {
     const u = b.localUpstreams?.[name];
     if (!u?.upstream) return {};
-    const arrows = `${u.ahead ? ` ↑${u.ahead}` : ''}${u.behind ? ` ↓${u.behind}` : ''}`.trim();
+    // 2026-10-27 用户："不要数字，箭头颜色使用绿色"——只留箭头（↑/↓），个数不写在这里
+    //（个数在提交卡「N 个提交还没推送」里已经有了；多写一遍反而吵）。
+    const arrows = `${u.ahead ? '↑' : ''}${u.behind ? '↓' : ''}`;
     return { ...(arrows ? { badge: arrows } : {}), hint: `${u.upstream}${u.gone ? '（gone）' : ''}` };
   };
   const branchItems = (b) => [
@@ -1105,15 +1107,16 @@ export async function renderGitRepos(root = $('pluginView')) {
       // "本地、远程、标签改成默认折叠"）—— 分支多的时候展开着会一屏铺满，还得先滚。
       defaultFolded: ['本地分支', '远程分支', '标签'],
       /*
-       * 按钮上带"已提交没推送"的角标（2026-10-27 用户："已提交，但是没有推送，是不是应该显示一下"）：
-       * ↑N = 本地有 N 个提交还没推到上游；↓N = 上游有 N 个新提交还没拉下来（跟 IDEA 分支按钮同款）。
-       * 数据来自 /changes 的 unpushed / unpulled（`@{u}` 对比，**不是** ahead —— 推过的分支照样算 ahead）。
+       * 按钮上的角标（2026-10-27 用户："已提交，但是没有推送，是不是应该显示一下"）：
+       * ↑ = 本地有提交还没推到上游；↓ = 上游有新的还没拉下来。
+       * 同日二调（用户："不要数字，箭头颜色使用绿色"）：只画箭头、不带个数（个数在提交卡里），
+       * 单独一个绿 span —— buttonText 是纯文本，上不了色。
        */
-      buttonText: (v) => {
-        const name = v || '游离 HEAD';
+      buttonText: (v) => v || '游离 HEAD',
+      buttonBadge: () => {
         const up = Number(state.unpushed ?? 0);
         const down = Number(state.unpulled ?? 0);
-        return name + (up > 0 ? ` ↑${up}` : '') + (down > 0 ? ` ↓${down}` : '');
+        return `${up > 0 ? '↑' : ''}${down > 0 ? '↓' : ''}`;
       },
       onChange: (id) => onBranchPick(repo, id, state.branch ?? '', combo),
       onOpen: async () => {
