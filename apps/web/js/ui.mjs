@@ -440,9 +440,16 @@ export function createCombo({
               return `<div class="combo-group combo-sub foldable${f ? ' is-folded' : ''}" data-fold="${esc(key)}">${ICON_FOLDER}${esc(it.folder)}</div>`;
             }
             pi += 1;
+            /*
+             * 条目右侧信息（2026-10-27，IDEA 分支弹窗同款）：
+             *   · `badge`（↑1/↓2）跟在名字后面 —— 分支领先/落后上游几个提交；
+             *   · `hint`（origin/main）靠右、降灰 —— 这一行分支跟踪的是哪个远程分支。
+             * 两者都是可选的，别的下拉不传 = 跟以前逐字一样。
+             */
             return `<div class="combo-item ${it.cls ?? ''} ${it.sub ? 'sub ' : ''}${pi === hi ? 'hi' : ''}" data-pick="${esc(it.id)}">
                  ${it.icon ? `<span class="combo-ic">${it.icon}</span>` : ''}
-                 <span class="combo-item-label">${esc(it.label)}</span>
+                 <span class="combo-item-label">${esc(it.label)}${it.badge ? `<span class="combo-badge">${esc(it.badge)}</span>` : ''}</span>
+                 ${it.hint ? `<span class="combo-hint" title="${esc(it.hint)}">${esc(it.hint)}</span>` : ''}
                  ${it.id === current ? '<span class="combo-check">✓</span>' : ''}
                </div>`;
           })

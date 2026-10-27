@@ -605,14 +605,37 @@ export async function listBranches(row) {
   const tags = await gitIn(cwd, ['for-each-ref', 'refs/tags', '--format=%(refname:short)', '--sort=-creatordate']);
   const current = headRef.code === 0 ? headRef.out : null;
   const localNames = local.out.split('\n').map((s) => s.trim()).filter(Boolean);
+  /*
+   * 每个本地分支的上游 + 领先/落后（2026-10-27，对齐 IDEA 分支弹窗）：
+   * IDEA 在「最近 / 本地分支」每行右边写 `origin/main`，分支名后面带 `↗1 / ↘2`。
+   * 一个 for-each-ref 就够（`%(upstream:short)` + `%(upstream:track)` 是 git 自己算好的），
+   * 不用逐分支 rev-list —— 分支多了也不会把下拉拖慢。
+   */
+  const ups = await gitIn(cwd, ['for-each-ref', 'refs/heads', '--format=%(refname:short)\t%(upstream:short)\t%(upstream:track)']);
+  const localUpstreams = {};
+  if (ups.code === 0) {
+    for (const line of ups.out.split('\n')) {
+      if (!line.trim()) continue;
+      const [name, upstream, track] = line.split('\t');
+      if (!name) continue;
+      const inner = /^\[(.+)\]$/.exec(String(track ?? '').trim())?.[1] ?? '';
+      localUpstreams[name] = {
+        upstream: upstream || null,
+        ahead: Number(/ahead (\d+)/.exec(inner)?.[1] ?? 0) || 0,
+        behind: Number(/behind (\d+)/.exec(inner)?.[1] ?? 0) || 0,
+        gone: /gone/i.test(inner),
+      };
+    }
+  }
   const rl = await gitIn(cwd, ['reflog', '--format=%gs', '-n', '80']);
-  const recent = [];
+  // 「最近」= 当前分支打头（IDEA 也把它列在最近里，带 ✓），后面按 reflog 的切出顺序
+  const recent = current ? [current] : [];
   if (rl.code === 0) {
     for (const line of rl.out.split('\n')) {
       const m = /^checkout: moving from .+ to (.+)$/.exec(String(line).trim());
       if (!m) continue;
       const to = m[1];
-      if (to === current || recent.includes(to) || !localNames.includes(to)) continue;
+      if (recent.includes(to) || !localNames.includes(to)) continue;
       recent.push(to);
       if (recent.length >= 6) break;
     }
@@ -620,6 +643,7 @@ export async function listBranches(row) {
   return {
     current,
     local: localNames,
+    localUpstreams,
     // `origin/HEAD` 是"默认分支指向哪"的别名，不是真分支 —— `refname:short` 下它输出裸
     // `origin`（不带 /HEAD 后缀），所以还要排除不含 `/` 的条目（远程分支短名必有 远程名/分支）
     remote: remote.code === 0

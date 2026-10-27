@@ -977,19 +977,53 @@ export async function renderGitRepos(root = $('pluginView')) {
    * 文件夹的折叠键带 keyPrefix，本地/远程同名前缀（都有 bandi/）互不串门。
    * 排序：文件夹在前（按名），无前缀的在后（按名）。
    * 每片叶子（含无前缀的）都带分支图标 —— IDEA 里文件夹装的是分支，不是普通条目。
+   *
+   * `keep: true` 时不排序、按传入顺序输出（「最近」用：IDEA 的最近是"当前分支打头 + 最近切过的顺序"，
+   * 排序会把这个含义弄丢）。叶子上的 badge（↑1/↓2）和 hint（origin/main）原样带过去。
    */
-  const folderize = (items, keyPrefix) => {
+  const folderize = (items, keyPrefix, { keep = false } = {}) => {
+    const leafOf = (it, label, sub = false) => ({
+      id: it.id,
+      label,
+      ...(sub ? { sub: true } : {}),
+      icon: ICON_BRANCH,
+      cls: 'br',
+      ...(it.badge ? { badge: it.badge } : {}),
+      ...(it.hint ? { hint: it.hint } : {}),
+    });
     const folders = new Map();
     const plain = [];
+    const seen = []; // 首见顺序：'f:<folder>' 或 'p:<id>'
     for (const it of items) {
       const i = it.name.indexOf('/');
       if (i > 0 && i < it.name.length - 1) {
         const k = it.name.slice(0, i);
-        if (!folders.has(k)) folders.set(k, []);
-        folders.get(k).push({ id: it.id, label: it.name.slice(i + 1), sub: true, icon: ICON_BRANCH, cls: 'br' });
+        if (!folders.has(k)) {
+          folders.set(k, []);
+          seen.push(`f:${k}`);
+        }
+        folders.get(k).push(leafOf(it, it.name.slice(i + 1), true));
       } else {
-        plain.push({ id: it.id, label: it.name, icon: ICON_BRANCH, cls: 'br' });
+        plain.push(leafOf(it, it.name));
+        seen.push(`p:${it.id}`);
       }
+    }
+    if (keep) {
+      const out = [];
+      const emitted = new Set();
+      for (const key of seen) {
+        if (key.startsWith('f:')) {
+          const k = key.slice(2);
+          if (emitted.has(k)) continue;
+          emitted.add(k);
+          out.push({ folder: k, foldKey: `${keyPrefix}/${k}` });
+          out.push(...folders.get(k));
+        } else {
+          const id = key.slice(2);
+          out.push(plain.find((p) => p.id === id));
+        }
+      }
+      return out;
     }
     const out = [];
     for (const [k, list] of [...folders.entries()].sort(([a], [b]) => a.localeCompare(b))) {
@@ -1003,22 +1037,43 @@ export async function renderGitRepos(root = $('pluginView')) {
   /*
    * 分支清单 → 下拉条目（2026-10-27，参照 IDE 的分支弹窗）：
    * 顶部是常用操作（更新项目=同步、提交、推送、新建分支 —— 搜索框搜"推"也能命中操作），
-   * 下面分组：最近（reflog 派生）/ 本地 / 远程 / 标签，本地/远程里再按 `/` 前缀分文件夹。
+   * 下面分组：最近（当前分支打头 + reflog 派生）/ 本地 / 远程 / 标签，三组都按 `/` 前缀分文件夹。
+   *
+   * 2026-10-27 二改（用户指 IDEA 截图："改成 idea 这种"）：
+   *   · 每行右边写**上游**（`origin/main`）—— 吃服务端 listBranches 的 localUpstreams；
+   *   · 分支名后面跟 **↑N / ↓N**（git 的 upstream track，当前分支的 ↑1 就是"未推送"）；
+   *   · 「最近」也分文件夹（feat → frontend-esm-split），顺序按"当前分支打头、然后最近切过的顺序"。
+   *
    * 十三改（用户指 IDEA 截图："补充图标和缩进"）：操作条目各配语义图标
    * （同步/提交/推送/分支），分支叶子统一分支图标，标签用标签图标 —— 图标是灰的，
    * 名字才是主角；文件夹叶子的缩进由 sub: true（folderize）+ .combo-item.sub 管。
    * 标签 id 带 `tag:` 前缀，防止和同名分支混淆；切标签会进游离 HEAD，确认框里说清。
    * 旧的「拉取更新」（纯 fetch）被「更新项目」（pull）取代 —— 两个"拉"并存只会让人选错。
    */
+  const branchMeta = (b, name) => {
+    const u = b.localUpstreams?.[name];
+    if (!u?.upstream) return {};
+    const arrows = `${u.ahead ? ` ↑${u.ahead}` : ''}${u.behind ? ` ↓${u.behind}` : ''}`.trim();
+    return { ...(arrows ? { badge: arrows } : {}), hint: `${u.upstream}${u.gone ? '（gone）' : ''}` };
+  };
   const branchItems = (b) => [
     { id: '__op-sync__', label: '更新项目', icon: ICON_SYNC },
     { id: '__op-commit__', label: '提交…', icon: ICON_COMMIT },
     { id: '__op-push__', label: '推送…', icon: ICON_PUSH },
     { id: '__op-new__', label: '新建分支…', icon: ICON_BRANCH },
     { id: '__op-manage__', label: '分支管理…', icon: ICON_BRANCH },
-    ...(b.recent?.length ? [{ header: '最近', foldable: true }, ...b.recent.map((n) => ({ id: n, label: n, icon: ICON_BRANCH, cls: 'br' }))] : []),
+    ...(b.recent?.length
+      ? [
+          { header: '最近', foldable: true },
+          ...folderize(
+            b.recent.map((n) => ({ id: n, name: n, ...branchMeta(b, n) })),
+            '最近',
+            { keep: true },
+          ),
+        ]
+      : []),
     { header: '本地分支', foldable: true },
-    ...folderize((b.local ?? []).map((n) => ({ id: n, name: n })), '本地'),
+    ...folderize((b.local ?? []).map((n) => ({ id: n, name: n, ...branchMeta(b, n) })), '本地'),
     ...(b.remote?.length ? [{ header: '远程分支', foldable: true }, ...folderize((b.remote ?? []).map((n) => ({ id: n, name: n.replace(/^origin\//, '') })), '远程')] : []),
     ...(b.tags?.length ? [{ header: '标签', foldable: true }, ...b.tags.map((n) => ({ id: `tag:${n}`, label: n, icon: ICON_TAG, cls: 'br' }))] : []),
   ];
