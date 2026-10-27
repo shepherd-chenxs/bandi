@@ -1,7 +1,7 @@
 /* flowpages.mjs —— 起流程、流程实例页（流转记录）、节点栏（页面里的第二栏）、流程设计器（纵向）、设计器草稿（防意外关闭）。
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
 import { esc, personLabel, savePlace, setRoute, toast } from './shell.mjs';
-import { api, createCombo, renderMarkdown } from './ui.mjs';
+import { api, createCombo, renderMarkdown, wireDialogHead } from './ui.mjs';
 import { load, setNav } from './state.mjs';
 import { headRow } from './connectors.mjs';
 import { confirmDo } from './machine.mjs';
@@ -1292,6 +1292,77 @@ export function hint(text) {
 }
 
 
+/* -------------------------------------------------- 模板的历史记录（弹窗） */
+
+/**
+ * 这个模板跑过多少条、都是些什么（2026-10-27）。
+ *
+ * 为什么不直接跳到「发起记录」页：那页会把左栏整栏换成"这个模板下的记录"，
+ * 看一眼数字再回编排就得多走两趟（工作台 › 工作流 › 再点回模板）。
+ * 设计器里弹一层，看完关掉就回画布。
+ *
+ * 数字走 `GET /api/workflows/templates/:id/runs` —— **总数由服务端 COUNT(*) 算**，
+ * 不拿前端那 100 条去数（跑过 300 次的模板会数成 100）。
+ */
+export async function openFlowHistory(templateId = null) {
+  const id = templateId ?? S.designerId;
+  if (!id) return toast('还不知道是哪个模板');
+  let data;
+  try {
+    data = await api(`/api/workflows/templates/${encodeURIComponent(id)}/runs?limit=200`);
+  } catch (e) {
+    return toast(e.message, 'error');
+  }
+  const total = data.total ?? 0;
+  const runs = data.runs ?? [];
+  const name = (S.flowTemplates ?? []).find((t) => t.id === id)?.name ?? S.designerName ?? '这个模板';
+
+  const dlg = document.createElement('dialog');
+  dlg.className = 'mg-dlg';
+  dlg.innerHTML = `
+    <div class="mg-wrap">
+      <b>「${esc(name)}」的历史记录</b>
+      <p class="mg-hint">${
+        total
+          ? `一共跑过 ${total} 次${data.lastAt ? `，最近一次 ${esc(whenText(data.lastAt))}` : ''}。点一条看它当时走到哪了。`
+          : '这个模板还没跑过 —— 发布之后在任务卡上起一条就有了。'
+      }</p>
+      ${
+        runs.length
+          ? `<div class="mg-list">${runs
+              .map((r) => {
+                const b = runBadge(r);
+                const sub = [r.nodeName, r.assigneeName, whenText(r.createdAt)].filter(Boolean).join(' · ');
+                return `<div class="mg-item" data-fh-run="${esc(r.id)}" title="打开这条流程">
+                  <span class="mg-who">
+                    <span class="mg-name">${esc(r.title)}<span class="flow-t ${b.cls}">${esc(b.text)}</span></span>
+                    <span class="mg-sub">${esc(sub || '还没开始')}</span>
+                  </span>
+                </div>`;
+              })
+              .join('')}</div>`
+          : ''
+      }
+      <div class="mg-actions">
+        <span class="mg-count">${total > runs.length ? `显示最近 ${runs.length} 条 / 共 ${total} 条` : ''}</span>
+        <button type="button" id="fhClose">关闭</button>
+      </div>
+    </div>`;
+  document.body.append(dlg);
+  wireDialogHead(dlg.querySelector('.mg-wrap'));
+  dlg.addEventListener('close', () => dlg.remove());
+  dlg.querySelector('#fhClose').onclick = () => dlg.close();
+  dlg.querySelectorAll('[data-fh-run]').forEach((el) => {
+    el.onclick = () => {
+      dlg.close();
+      // 跳实例页：模板 id 照给，左栏那一列就是"这个模板的发起记录"
+      openFlowRun(id, el.dataset.fhRun).catch((e) => toast(e.message, 'error'));
+    };
+  });
+  dlg.showModal();
+}
+
+
 /* ---------------------------------------------------------- 流程设计器（纵向） */
 
 /**
@@ -1320,6 +1391,7 @@ export async function openDesigner(templateId = null) {
   S.designerOpen = id;
   S.designerName = tpl.name;
   S.designerPublished = !!tpl.publishedAt; // 发布状态：按钮上要显示"发布"还是"下架"
+  S.designerRunCount = tpl.runCount ?? 0;  // 这个模板跑过多少次（「历史记录」按钮上的数字）
   S.designerDraft = tpl.nodes.map((n) => ({ ...n }));
   S.designerSel = S.designerDraft[0]?.id ?? null;
   S.designerRestored = false;
@@ -1529,7 +1601,8 @@ export function paintDesigner() {
       // 只留当前这一项：流程名。**看上去是标题、点上去能改**（不要输入框的样子，见 #dzName 的样式），
       // 再写一遍名字等于同一个东西三处各写一次。
       `<input id="dzName" value="${esc(S.designerName ?? '')}" placeholder="流程名字" spellcheck="false" title="点一下改流程名" />`,
-      `<button data-vd-publish>${S.designerPublished ? '已发布 · 下架' : '发布到工作台'}</button>
+      `<button data-vd-history title="这个模板跑过的记录">历史记录${S.designerRunCount ? ` ${S.designerRunCount}` : ''}</button>
+       <button data-vd-publish>${S.designerPublished ? '已发布 · 下架' : '发布到工作台'}</button>
        <button class="primary" data-vd-save>保存</button>`,
     )}
     <div class="detail-body dz-wrap">
@@ -1664,6 +1737,10 @@ export function wireDesigner() {
     clearDraft();
     S.designerRestored = false;
     openDesigner(S.designerId);
+  });
+  // 「历史记录」：这个模板跑过多少条（只读弹窗，不动草稿、不发请求写库）
+  view.querySelector('[data-vd-history]')?.addEventListener('click', () => {
+    openFlowHistory(S.designerId).catch((e) => toast(e.message, 'error'));
   });
   view.querySelector('[data-vd-publish]')?.addEventListener('click', async () => {
     collectDesigner();

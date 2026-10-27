@@ -59,7 +59,14 @@ export function renderFlowList() {
           (t) => `<div class="item ${t.id === S.designerId ? 'active' : ''}" data-tpl="${esc(t.id)}">
             <div class="who">
               <div class="line1"><b>${esc(t.name)}</b>${t.builtIn ? '<span>内置</span>' : ''}</div>
-              <div class="line2">${(t.nodes ?? []).length} 个节点${t.builtIn ? '' : ' · 自建'}</div>
+              <div class="line2">${[
+                `${(t.nodes ?? []).length} 个节点`,
+                t.builtIn ? null : '自建',
+                // 跑过几次：数字由服务端 GROUP BY 算出（数列表会少，列表有上限）
+                t.runCount ? `跑过 ${t.runCount} 次` : null,
+              ]
+                .filter(Boolean)
+                .join(' · ')}</div>
             </div>
           </div>`,
         )

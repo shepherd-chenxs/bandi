@@ -45,7 +45,7 @@ const req = async (p, opt = {}) => {
 const put = (p, body) => req(p, { method: 'PUT', body: JSON.stringify(body) });
 const post = (p, body) => req(p, { method: 'POST', body: JSON.stringify(body ?? {}) });
 
-/* 一个"已纳管"的项目根：两份版本记录，版本数应为 2 */
+/* 一个"有进度文件"的项目根：两份版本记录，版本数应为 2 */
 const projRoot = path.join(tmp, 'proj');
 fs.mkdirSync(path.join(projRoot, '.bandi'), { recursive: true });
 fs.writeFileSync(
@@ -104,6 +104,9 @@ try {
   const dev = (await post('/api/personas', { name: '嘉辉', role: '研发' })).b?.persona;
   const qa = (await post('/api/personas', { name: '杜衡', role: '测试' })).b?.persona;
   check('造数：项目 + 三个人', !!proj && !!pm && !!dev && !!qa);
+  /* 2026-10-27：新建项目默认**不**进研发面板（纳管是用户选的），
+     这个用例要验总览卡上的字段，所以先把它纳管进来。 */
+  check('造数：把项目纳管进面板', (await post('/api/status/managed', { ids: [proj.id] })).status === 200);
 
   console.log('\n① 没填时：四项都给出处，不猜');
   const blank = (await req(`/api/status/projects/${encodeURIComponent(proj.id)}`)).b ?? {};
@@ -181,12 +184,12 @@ try {
   check('项目经理标「那个人已经不在了」', gone.pm_name === '未填写（那个人已经不在了）', String(gone.pm_name));
   check('成员还在（只删了 PM）', gone.members_text === '嘉辉', String(gone.members_text));
 
-  console.log('\n⑦ 未纳管的项目：版本数不装成 0（字段留着给研发面板，档案不展示它）');
+  console.log('\n⑦ 读不到进度文件的项目：版本数不装成 0（字段留着给研发面板，档案不展示它）');
   const offlineRoot = path.join(tmp, 'offline');
   fs.mkdirSync(offlineRoot, { recursive: true });
   const offline = (await post('/api/projects', { name: '没进度文件', root: offlineRoot })).b?.project;
   const offlineView = (await req(`/api/status/projects/${encodeURIComponent(offline.id)}`)).b ?? {};
-  check('版本数显示「未纳管」而不是 0', offlineView.version_count_text === '未纳管', String(offlineView.version_count_text));
+  check('版本数显示「缺进度文件」而不是 0', offlineView.version_count_text === '缺进度文件', String(offlineView.version_count_text));
 } catch (err) {
   console.log('\n跑挂了：' + String(err?.message ?? err));
   failed += 1;

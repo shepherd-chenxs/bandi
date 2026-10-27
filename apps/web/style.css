@@ -3851,6 +3851,43 @@ table.md-t code { font-size: 11.5px; }
 /* 「全部项目 ›」这类入口：本版只占位（不导航），所以做成一行弱色小字而不是按钮 */
 .plg-sec-more { margin-left: auto; flex: 0 0 auto; font-size: 12px; color: var(--accent); cursor: pointer; }
 .plg-sec-more:hover { text-decoration: underline; }
+/* 分节标题行右侧的**动作**按钮（2026-10-27，研发面板「选择项目」）：
+   跟 .plg-sec-more 同一个位置，区别是它能点出结果 —— more 只是给人看的一句说明。
+   ⚠️ 标题行是 baseline 对齐的，按钮得自己定高，否则会跟 11.5px 的副标题错开半行。 */
+.plg-sec-act { margin-left: auto; flex: 0 0 auto; height: 26px; padding: 0 10px;
+               font-size: 12px; line-height: 24px; border-radius: 6px;
+               border: 1px solid var(--line); background: var(--panel);
+               color: var(--text); cursor: pointer; }
+.plg-sec-act:hover { border-color: var(--accent); color: var(--accent); }
+.plg-sec-more + .plg-sec-act { margin-left: 10px; }   /* 两个都在时别挤成一块 */
+
+/* ── 多选纳管弹窗（插件 cards.manage，2026-10-27）──
+   动态建的 <dialog>：外面只有一层 .mg-wrap 负责左右 20px，.dlg-head 靠它的负边距铺满。 */
+dialog.mg-dlg { width: 520px; }
+.mg-wrap { padding: 0 20px 20px; }
+.mg-hint { margin: 8px 0 0; font-size: 12px; color: var(--dim); line-height: 1.65; }
+.mg-list { margin-top: 12px; max-height: min(52vh, 420px); overflow: auto;
+           border: 1px solid var(--line); border-radius: 8px; }
+.mg-item { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px;
+           border-bottom: 1px solid var(--line); cursor: pointer; }
+.mg-item:last-child { border-bottom: 0; }
+.mg-item:hover { background: var(--hover); }
+/* ⚠️ 全局 input 是 width:100% —— 不压回去的话勾选框占满整行，文字被挤成 0 宽竖条（实测踩过） */
+.mg-item input { margin: 3px 0 0; flex: 0 0 auto; width: auto; }
+.mg-who { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.mg-name { font-size: 13px; color: var(--text); }
+.mg-sub { font-size: 12px; color: var(--dim); }
+/* 路径这种长串要能断：不断的话一条长路径会把弹窗顶宽，勾选框被挤出屏幕 */
+.mg-note { font-size: 11.5px; color: var(--dim); opacity: .85; word-break: break-all; }
+.mg-actions { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
+.mg-count { margin-right: auto; font-size: 12px; color: var(--dim); }
+/* 历史记录弹窗那一排状态字（2026-10-27）：跟左栏实例列表同一个语义色。
+   ⚠️ `.flow-t.ok/.bad` 只认 `.item .line1` 那套选择器，弹窗里不在 .item 内，
+   不补这几条的话"已终止 / 等你验收"会全是一个灰。 */
+.mg-name .flow-t { margin-left: 6px; font-size: 11.5px; color: var(--dim); }
+.mg-name .flow-t.ok { color: var(--ok); }
+.mg-name .flow-t.bad { color: var(--bad); }
+.mg-name .flow-t.gray { color: var(--dim); }
 
 /* ── stats：一行数字卡 ── */
 /* 列数由块里的 `--plg-cols` 给（= items 的条数），宿主不猜。 */

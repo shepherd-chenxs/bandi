@@ -1,7 +1,7 @@
 /* experts.mjs —— 专家库、界面插件。
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
 import { esc, savePlace, setRoute, toast } from './shell.mjs';
-import { ICON_WB_CODE, ICON_WB_SSH, api, failHtml, initial, personaAvatar, post, renderMarkdown } from './ui.mjs';
+import { ICON_WB_CODE, ICON_WB_SSH, api, failHtml, initial, personaAvatar, post, renderMarkdown, wireDialogHead } from './ui.mjs';
 import { load, setNav } from './state.mjs';
 import { breadcrumb, headRow } from './connectors.mjs';
 import { askText, confirmDo } from './machine.mjs';
@@ -826,6 +826,101 @@ export function openPluginForm(plugin, block, state = {}) {
 
 
 
+/* ------------------------------------------------ 多选纳管弹窗（2026-10-27） */
+
+/**
+ * `cards.manage` 的弹窗：把一个账本里的条目全列出来，勾「要不要它」。
+ *
+ * 为什么不是每条一个「纳管 / 移出」按钮：这类条目动辄七八个，逐条点等于点七次、
+ * 刷新七次；而且「取消」和「这次没动」在接口上分不开。一次勾完、一次保存，
+ * 跟额度页那张表同一个口径（**整表提交**）。
+ *
+ * 形态照 `openTaskCardDialog`：动态建 `<dialog>` + `wireDialogHead` + close 即 remove
+ * （静态 `<dialog>` 只有插件表单那一个，再给它塞一套勾选逻辑会让那份 HTML 越来越杂）。
+ * ⚠️ 不用 `<form>` 包：里面的按钮没标 type 就成提交按钮，一点就把弹窗关了。
+ */
+export async function openManageDialog(plugin, block, rerender) {
+  const m = block.manage ?? {};
+  const src = m.source ?? {};
+  let data;
+  try {
+    pluginMust(plugin, 'GET', src.api);
+    data = await api(src.api);
+  } catch (err) {
+    return toast(err.message, 'error');
+  }
+  const rows = pickItems(data, src.pick) ?? [];
+  const keyOf = (r) => String(r[m.keyField || 'id'] ?? '');
+  const on = new Set(rows.filter((r) => !!r[m.flagField || 'selected']).map(keyOf));
+
+  const dlg = document.createElement('dialog');
+  dlg.className = 'mg-dlg';
+  dlg.innerHTML = `
+    <div class="mg-wrap">
+      <b>${esc(m.title || block.heading || '选择')}</b>
+      ${m.hint ? `<p class="mg-hint">${esc(m.hint)}</p>` : ''}
+      ${
+        rows.length
+          ? `<div class="mg-list">${rows
+              .map(
+                (r) => `<label class="mg-item">
+                <input type="checkbox" data-mg-key="${esc(keyOf(r))}"${on.has(keyOf(r)) ? ' checked' : ''} />
+                <span class="mg-who">
+                  <span class="mg-name">${esc(String(r[m.titleField || 'name'] ?? keyOf(r)))}</span>
+                  ${m.subtitleField ? `<span class="mg-sub">${esc(String(r[m.subtitleField] ?? ''))}</span>` : ''}
+                  ${m.noteField ? `<span class="mg-note">${esc(String(r[m.noteField] ?? ''))}</span>` : ''}
+                </span>
+              </label>`,
+              )
+              .join('')}</div>`
+          : `<div class="empty" style="padding:24px 0">${esc(m.empty || '没有可选的条目')}</div>`
+      }
+      <div class="mg-actions">
+        <span class="mg-count" id="mgCount"></span>
+        <button type="button" id="mgCancel">取消</button>
+        <button type="button" class="primary" id="mgSave"${rows.length ? '' : ' disabled'}>保存</button>
+      </div>
+    </div>`;
+  document.body.append(dlg);
+  wireDialogHead(dlg.querySelector('.mg-wrap'));
+
+  const boxes = [...dlg.querySelectorAll('[data-mg-key]')];
+  const count = () => {
+    const el = dlg.querySelector('#mgCount');
+    if (el) el.textContent = `已选 ${boxes.filter((b) => b.checked).length} 个 / 共 ${boxes.length} 个`;
+  };
+  boxes.forEach((b) => { b.onchange = count; });
+  count();
+
+  dlg.addEventListener('close', () => dlg.remove());
+  dlg.querySelector('#mgCancel').onclick = () => dlg.close();
+  dlg.querySelector('#mgSave').onclick = async () => {
+    const ids = boxes.filter((b) => b.checked).map((b) => b.dataset.mgKey);
+    const save = m.save ?? {};
+    const method = String(save.method || 'POST').toUpperCase();
+    const btn = dlg.querySelector('#mgSave');
+    btn.disabled = true;
+    try {
+      pluginMust(plugin, method, save.api);
+      await api(save.api, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [save.field || 'ids']: ids }),
+      });
+      S.pluginData = {};   // 面板数据变了，缓存作废
+      dlg.close();
+      toast(ids.length ? `已纳入 ${ids.length} 个项目` : '已全部移出面板', 'ok');
+      await rerender();
+    } catch (err) {
+      toast(err.message, 'error');
+      btn.disabled = false;
+    }
+  };
+  dlg.showModal();
+}
+
+
+
 /** 取单个字段（code 块的 pick 用）；没有 pick 就返回整个对象 */
 export function pickOne(body, key) {
   if (!key) return body;
@@ -1061,12 +1156,21 @@ export async function renderBlock(plugin, b, row = {}) {
           })
           .join('')}</div>`
       : `<div class="hint">${esc(b.empty || '没有数据')}</div>`;
-    /** 标题行：heading 在左，`subheading` 跟着，`more` 贴右（都走模板，`{shown_count}` 可用） */
+    /** 标题行：heading 在左，`subheading` 跟着，`more` / `manage` 贴右（都走模板，`{shown_count}` 可用） */
     const sub = b.subheading ? `<span class="plg-sec-sub">${esc(tpl(b.subheading, builtin))}</span>` : '';
     const more = b.more?.label ? `<span class="plg-sec-more">${esc(tpl(b.more.label, builtin))}</span>` : '';
+    /*
+     * `manage`（2026-10-27）：「挑几个进来」这类**改动范围**的动作，按钮挂在分节标题行右侧。
+     * 为什么不做成一个独立的块：它是这一组卡片的范围控制，摆成独立一节会读成
+     * 「另一个板块」，而且卡片墙页面上多一节就把首屏挤掉了。
+     * 动作本身由字符串 `data-plg-manage` 指回块下标（同 [data-plg-act] 那套，见 finishPluginPanel）。
+     */
+    const manage = b.manage?.label
+      ? `<button type="button" class="plg-sec-act" data-plg-manage="${esc(b.__i)}">${esc(tpl(b.manage.label, builtin))}</button>`
+      : '';
     const titleBar =
-      titleOf({}) || sub || more
-        ? `<div class="plg-block-head">${titleOf({}) ? `<b class="plg-block-title">${esc(titleOf({}))}</b>` : ''}${sub}${more}</div>`
+      titleOf({}) || sub || more || manage
+        ? `<div class="plg-block-head">${titleOf({}) ? `<b class="plg-block-title">${esc(titleOf({}))}</b>` : ''}${sub}${more}${manage}</div>`
         : '';
     return `<div class="plg-block">${titleBar}${body}</div>`;
   }
@@ -1470,6 +1574,20 @@ function finishPluginPanel(plugin, allBlocks, root = $('plgPanel'), rerender = r
         toast(err.message, 'error');
         el.disabled = false;
       }
+    };
+  });
+
+  /*
+   * `cards.manage` 的入口（2026-10-27）：标题行那颗「选择项目」。
+   *
+   * 为什么走 `blockByI` 回查而不是把配置塞进 data 属性：整张选项目录在 manifest 里，
+   * 属性只能塞字符串 —— 塞 JSON 进 DOM 迟早撞引号。块对象本来就有一张索引表，直接查它。
+   */
+  root.querySelectorAll('[data-plg-manage]').forEach((el) => {
+    el.onclick = () => {
+      const b = blockByI.get(String(el.dataset.plgManage));
+      if (!b?.manage) return;
+      openManageDialog(plugin, b, rerender).catch((e) => toast(e.message, 'error'));
     };
   });
 

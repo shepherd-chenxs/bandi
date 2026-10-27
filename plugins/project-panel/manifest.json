@@ -10,32 +10,32 @@
     "blocks": [
       {
         "type": "text",
-        "text": "所有项目的进度、发布与负责人，一眼看全；点进某个项目再看版本明细。只读看板，不改任何项目文件。"
+        "text": "纳入面板的这些项目，进度、发布与负责人一眼看全；点进某个项目再看版本明细。只读看板，不改任何项目文件。"
       },
       {
         "type": "stats",
         "source": { "api": "/api/status/projects", "pick": "projects" },
         "items": [
           {
-            "label": "项目总数",
+            "label": "已纳入面板",
             "value": "{all}",
             "unit": "个",
-            "foot": "来自「项目」账本",
+            "foot": "从「项目」账本里挑的",
             "calc": { "all": "count" }
           },
           {
-            "label": "已纳管",
+            "label": "有进度文件",
             "value": "{managed}",
             "unit": "个",
-            "foot": "能读到进度文件",
+            "foot": "能读到 .bandi/status.yaml",
             "tone": "ok",
             "calc": { "managed": { "countIf": "ok" } }
           },
           {
-            "label": "未纳管 · 需处理",
+            "label": "缺进度文件",
             "value": "{pending}",
             "unit": "个",
-            "foot": "找不到 .bandi/status.yaml",
+            "foot": "该去补一份，见右侧",
             "tone": "warn",
             "calc": { "pending": { "countIf": { "field": "ok", "is": false } } }
           },
@@ -43,7 +43,7 @@
             "label": "已发布版本",
             "value": "{released}",
             "unit": "个",
-            "foot": "只算已纳管项目里的发布记录",
+            "foot": "只算有进度文件的项目",
             "tone": "accent",
             "calc": { "released": { "sumIf": { "field": "released_count", "where": "ok" } } }
           }
@@ -52,9 +52,22 @@
       {
         "type": "cards",
         "heading": "项目进度",
-        "subheading": "已纳管 {shown_count} 个 · 点卡进详情",
+        "subheading": "有进度文件 {shown_count} 个 · 点卡进详情",
         "source": { "api": "/api/status/projects", "pick": "projects", "filter": { "field": "ok", "is": true } },
         "columns": 3,
+        "manage": {
+          "label": "选择项目",
+          "title": "选择要纳入面板的项目",
+          "hint": "只勾你真正在跟的项目。没勾的不会出现在面板上，也不会被当成「待处理」。列表来自「项目」账本里已登记的全部项目。",
+          "source": { "api": "/api/status/ledger", "pick": "projects" },
+          "keyField": "id",
+          "flagField": "panel_managed",
+          "titleField": "name",
+          "subtitleField": "status_text",
+          "noteField": "root",
+          "save": { "api": "/api/status/managed", "field": "ids" },
+          "empty": "「项目」账本里还没有项目 —— 先去「项目」页登记一个"
+        },
         "card": {
           "title": "{name}",
           "subtitle": "{summary_text}",
@@ -73,7 +86,7 @@
           ],
           "href": "#/project/{id}"
         },
-        "empty": "还没有已纳管的项目 —— 项目根下放一份 .bandi/status.yaml 就会出现在这里"
+        "empty": "还没有纳入的项目 —— 点「选择项目」从「项目」账本里挑几个进来；挑进来的项目要有 .bandi/status.yaml 才显示进度"
       },
       {
         "type": "cards",
@@ -102,5 +115,5 @@
       }
     ]
   },
-  "permissions": ["GET:/api/status/projects"]
+  "permissions": ["GET:/api/status/projects", "GET:/api/status/ledger", "POST:/api/status/managed"]
 }

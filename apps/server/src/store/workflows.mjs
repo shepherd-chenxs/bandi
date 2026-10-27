@@ -102,6 +102,30 @@ export function getWorkflowRun(id) {
   return db.prepare('SELECT * FROM workflow_runs WHERE id = ?').get(id) ?? null;
 }
 
+/**
+ * 每个模板跑过多少条（2026-10-27，设计器的「历史记录」）。
+ *
+ * 一次 `GROUP BY` 算总数，**不靠 `listWorkflowRuns()` 那 100 条去数** ——
+ * 那个列表有 limit，跑过 300 次的模板会被数成 100 次。
+ * `lastAt` 顺手带出来：模板列表上「最近一次什么时候跑的」不用再查一遍。
+ */
+export function countWorkflowRunsByTemplate() {
+  const map = {};
+  for (const r of db
+    .prepare('SELECT templateId, COUNT(*) n, MAX(updatedAt) lastAt FROM workflow_runs GROUP BY templateId')
+    .all()) {
+    map[r.templateId] = { n: r.n, lastAt: r.lastAt ?? null };
+  }
+  return map;
+}
+
+/** 某个模板的发起记录（新的在前）。`limit` 只防着"跑了几千次"把一屏撑爆 */
+export function listWorkflowRunsByTemplate(templateId, { limit = 200 } = {}) {
+  return db
+    .prepare('SELECT * FROM workflow_runs WHERE templateId = ? ORDER BY createdAt DESC LIMIT ?')
+    .all(templateId, limit);
+}
+
 export function listWorkflowRuns({ limit = 100 } = {}) {
   // 进行中的排前面：看板首先要看的是"还在跑的"
   return db
