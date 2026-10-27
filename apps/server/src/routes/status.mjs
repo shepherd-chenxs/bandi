@@ -2,7 +2,7 @@
  * 主分发顺序（先匹配先赢）见 ../server.mjs 的 CHAIN。 */
 
 import fs from 'node:fs';
-import { sendJson, fail } from '../http.mjs';
+import { readBody, sendJson, fail } from '../http.mjs';
 import * as store from '../store.mjs';
 import * as status from '../status.mjs';
 
@@ -13,6 +13,48 @@ import * as status from '../status.mjs';
 const nameOf = (id) => store.getPersona(id);
 
 export async function handleStatus(req, res, url) {
+  /*
+   * 「选择纳管哪些项目」的两个口（2026-10-27）。
+   *
+   * 为什么不在 `routes['GET /api/status/projects']` 上加 `?scope=all`：
+   * 那张表的分发是 `routes[key](req, res)` —— **拿不到 query**，要读只能自己解 `req.url`，
+   * 而且插件权限白名单是按 method+path 校验的，一个地址两种语义迟早出岔子。
+   * 分开成两条路径，权限也是分开声明的：面板数据源只给「已纳管」，账本全量只给选择弹窗。
+   */
+  if (req.method === 'GET' && url.pathname === '/api/status/ledger') {
+    const projects = store.listProjects().map((p) => {
+      const card = status.projectCard(p, nameOf);
+      return {
+        id: card.id,
+        name: card.name,
+        root: card.root,
+        builtIn: !!card.builtIn,
+        ok: card.ok,
+        status_text: card.status_text,
+        panel_managed: Number(p.panelManaged) === 1,
+      };
+    });
+    return sendJson(res, 200, { projects });
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/status/managed') {
+    let body;
+    try {
+      body = await readBody(req);
+    } catch (e) {
+      return fail(res, 400, 'E2031', `请求体读不出来：${e?.message ?? e}`);
+    }
+    if (!body || !Array.isArray(body.ids)) {
+      return fail(res, 400, 'E2032', 'ids 必须是项目 id 的数组（整表提交，空数组 = 全部取消纳管）');
+    }
+    try {
+      const kept = store.setManagedProjects(body.ids);
+      return sendJson(res, 200, { ids: kept, projects: status.listProjectCards(store.listManagedProjects(), nameOf) });
+    } catch (e) {
+      return fail(res, 500, 'E2033', `保存失败：${e?.message ?? e}`);
+    }
+  }
+
   if (req.method !== 'GET') return false;
   const one = /^\/api\/status\/projects\/([^/]+)$/.exec(url.pathname);
   if (!one) return false;

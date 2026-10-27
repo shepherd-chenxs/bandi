@@ -158,10 +158,22 @@ console.log('\n④ 两份 manifest 逐字节一致、结构照稿');
     types.join(',') === 'text,stats,cards,cards,list', types.join(','));
   const aside = m.panel.blocks.filter((b) => b.aside).map((b) => b.heading ?? b.type);
   check('右栏两块（需要处理 / 最近动态）', aside.join(',') === '需要处理,最近动态', aside.join(','));
-  check('权限只剩只读的列表接口', m.permissions.join(',') === 'GET:/api/status/projects', m.permissions.join(','));
+  /*
+   * 2026-10-27 起面板要能「选择纳管哪些项目」，于是多两个口：账本全量（只读）+ 整表提交。
+   * 断言收紧成**穷举**而不是"含这三个" —— 插件一旦多申一个写权限，这里就该红。
+   */
+  check('权限只有三条（面板数据 + 账本 + 纳管保存）',
+    m.permissions.join(',') === 'GET:/api/status/projects,GET:/api/status/ledger,POST:/api/status/managed',
+    m.permissions.join(','));
+  const manage = m.panel.blocks.find((b) => b.manage)?.manage;
+  check('「选择项目」挂在项目进度那张卡的标题行（不是独立一节）',
+    !!manage && m.panel.blocks.find((b) => b.manage)?.heading === '项目进度', JSON.stringify(manage?.label));
+  check('选择弹窗的数据源是账本全量、保存走整表提交',
+    manage?.source?.api === '/api/status/ledger' && manage?.save?.api === '/api/status/managed' && manage?.save?.field === 'ids',
+    JSON.stringify([manage?.source?.api, manage?.save]));
   check('首屏没有版本明细表', !m.panel.blocks.some((b) => b.type === 'table'));
   const stats = m.panel.blocks.find((b) => b.type === 'stats');
-  check('KPI 四项（总数 / 已纳管 / 未纳管 / 已发布）', stats.items.length === 4, stats.items.map((i) => i.label).join(' | '));
+  check('KPI 四项（已纳入 / 有进度 / 缺进度 / 已发布）', stats.items.length === 4, stats.items.map((i) => i.label).join(' | '));
   check('KPI 的聚合是写在 manifest 里的 calc（宿主没有业务字眼）',
     stats.items.every((i) => i.calc !== undefined), JSON.stringify(stats.items.map((i) => i.calc)));
   const main = m.panel.blocks.filter((b) => b.type === 'cards' && !b.aside)[0];

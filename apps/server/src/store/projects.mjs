@@ -39,6 +39,33 @@ function ensureProjects() {
   ensureColumn('projects', 'memberPersonaIds', 'memberPersonaIds TEXT');
   ensureColumn('projects', 'startedAt', 'startedAt TEXT');
   ensureColumn('projects', 'endedAt', 'endedAt TEXT');
+  /*
+   * **纳管选择**（2026-10-27，用户：「要能选择把哪些项目纳管进来」）。
+   *
+   * 研发面板原来把整个项目账本摊到一屏：读不到 `.bandi/status.yaml` 的一律标成
+   * 「未纳管 · 需处理」。于是「默认项目」「顺手登记进来试一下的仓库」全挤在待处理里，
+   * 那一栏越用越吵，真正要看的进度反被淹掉。
+   *
+   * 现在「纳管」是一个**显式选择**：只有选中的项目才进研发面板。
+   * 首次加这一列时做一次性回填 —— 已经能读到进度文件的项目自动算已纳管
+   * （升级前后的视图一致，不会突然变空），其余的留给用户自己挑。
+   * 回填补完就不再跑：用户手动取消纳管的项目，不能因为一次重启又被塞回来。
+   */
+  {
+    const cols = db.prepare('PRAGMA table_info(projects)').all().map((c) => c.name);
+    const firstTime = !cols.includes('panelManaged');
+    ensureColumn('projects', 'panelManaged', 'panelManaged INTEGER NOT NULL DEFAULT 0');
+    if (firstTime) {
+      const on = db.prepare('UPDATE projects SET panelManaged = 1 WHERE id = ?');
+      for (const row of db.prepare('SELECT id, root FROM projects').all()) {
+        try {
+          if (fs.existsSync(path.join(String(row.root ?? ''), '.bandi', 'status.yaml'))) on.run(row.id);
+        } catch {
+          /* 目录都没了 = 读不到进度文件 = 不纳管 */
+        }
+      }
+    }
+  }
   // 消息归属哪一步：**按标记取，不再靠时间窗口切**
   // （1:1 会话被多条流程共用，按时间切会把别的流程的派活也捞进来，用户实报）
   ensureColumn('messages', 'taskId', 'taskId TEXT');
@@ -216,6 +243,41 @@ export function listProjects() {
   return db
     .prepare('SELECT * FROM projects ORDER BY builtIn ASC, updatedAt DESC')
     .all();
+}
+
+/**
+ * 研发面板的数据源：**只要被选中纳管的项目**（2026-10-27）。
+ *
+ * 排序跟 `listProjects` 一致 —— 同一份账本换个筛选条件，别在两处排出两种顺序。
+ */
+export function listManagedProjects() {
+  return db
+    .prepare('SELECT * FROM projects WHERE panelManaged = 1 ORDER BY builtIn ASC, updatedAt DESC')
+    .all();
+}
+
+/**
+ * 整表提交「哪些项目纳管」。
+ *
+ * 为什么是整表、不是逐条开关：跟额度页同一个道理 —— 只发这一次变动的那几个，
+ * 「取消纳管」和「这次没动它」在接口上长得一模一样，取消了也说不清。
+ * 传进来的 id 不存在的直接忽略（列表是点出来的，不是手输的；对不上说明列表过期了）。
+ */
+export function setManagedProjects(ids) {
+  const list = (Array.isArray(ids) ? ids : []).map((x) => String(x ?? '').trim()).filter(Boolean);
+  const exists = db.prepare('SELECT 1 FROM projects WHERE id = ?');
+  const keep = list.filter((id) => exists.get(id));
+  db.exec('BEGIN');
+  try {
+    db.prepare('UPDATE projects SET panelManaged = 0').run();
+    const on = db.prepare('UPDATE projects SET panelManaged = 1 WHERE id = ?');
+    for (const id of keep) on.run(id);
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+  return keep;
 }
 
 export function getProject(id) {

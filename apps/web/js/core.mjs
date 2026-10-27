@@ -122,6 +122,7 @@ export const S = {
   designerDraftAt: null,    // 草稿是什么时候存的（提示里说"3 分钟前"）
   dzPanelCollapsed: false,  // 属性面板收起来了（记在本地，下次进来还是收着的）
   designerPublished: false, // 这个模板发布没有（按钮上显示"发布"还是"下架"）
+  designerRunCount: 0,      // 这个模板跑过多少次（页头「历史记录」按钮上的数字）
   designerName: '',
   // 流程运行态：工作台可点的已发布流程 / 单子 / 当前回复的是哪条
   flowPublished: [],

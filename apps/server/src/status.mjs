@@ -501,12 +501,12 @@ export function projectCard(project, nameOf = () => null) {
       project: info.project,
       updated: '',
       version_count: 0,
-      version_count_text: '未纳管',
+      version_count_text: '缺进度文件',
       released_count: 0,
       ...latest,
-      status_text: `未纳管 · ${info.error}`,
+      status_text: `缺进度文件 · ${info.error}`,
       ...profile,
-      subtitle: `未纳管 · ${info.error}`,
+      subtitle: `缺进度文件 · ${info.error}`,
     };
   }
 
@@ -526,10 +526,10 @@ export function projectCard(project, nameOf = () => null) {
     version_count_text: String(info.versions.length),
     released_count: releasedCount,
     ...latest,
-    status_text: '已纳管',
+    status_text: '有进度文件',
     ...profile,
     subtitle: [
-      '已纳管',
+      '有进度文件',
       `${info.versions.length} 个版本`,
       releasedCount ? `${releasedCount} 个已发布` : '还没有已发布的版本',
       info.updated ? `更新 ${info.updated}` : '',
@@ -547,7 +547,9 @@ export function listProjectCards(projects, nameOf = () => null) {
  * 右侧详情：一个项目的档案 + 版本清单（平铺，够声明式两级布局用）。
  *
  * 档案那几项（干什么 / 项目经理 / 成员 / 起止）见 `projectProfile`；版本数多给一份
- * `version_count_text`：**未纳管时说「未纳管」，不说 0** —— 0 个版本和读不到是两件事。
+ * `version_count_text`：**读不到进度文件时说「缺进度文件」，不说 0** —— 0 个版本和读不到是两件事。
+ * （2026-10-27 起「纳管」是用户在面板里**选**的，不是读不读得到进度文件；所以这里
+ *  只说文件在不在，不再拿"纳管"两个字当状态 —— 纳管了但没进度文件是最常见的待办。）
  */
 export function projectDetail(project, nameOf = () => null) {
   const root = String(project.root ?? '');
@@ -565,9 +567,9 @@ export function projectDetail(project, nameOf = () => null) {
     status_file: STATUS_REL,
     project: info.project,
     updated: info.updated,
-    state_text: info.ok ? '已纳管' : `未纳管：${info.error}`,
+    state_text: info.ok ? '有进度文件' : `缺进度文件：${info.error}`,
     version_count: 0,
-    version_count_text: '未纳管',
+    version_count_text: '缺进度文件',
     released_count: 0,
     ...profile,
     versions: [],

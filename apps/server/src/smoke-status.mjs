@@ -194,17 +194,26 @@ try {
   const multi = await post('/api/projects', { name: '多版发布项目', root: multiRoot });
   check('四个项目都登记上了', [good, offline, escaping, multi].every((r) => r.status === 201));
 
+  /*
+   * 2026-10-27 起「纳管」是用户**选**的，新建项目默认不进面板（见 store 的 panelManaged）。
+   * 这一段先把它们都纳管进来，后面那些"总览里有什么"的断言才检查的是同一件事；
+   * 筛选本身单独验在后面（⑧）。
+   */
+  const ids = [good, offline, escaping, multi].map((r) => r.body?.project?.id).filter(Boolean);
+  const managed = await post('/api/status/managed', { ids });
+  check('整表纳管成功', managed.status === 200 && managed.body?.ids?.length === ids.length, JSON.stringify(managed.body?.ids));
+
   const list = await api('/api/status/projects');
   check('总览接口 200', list.status === 200);
   const cards = list.body?.projects ?? [];
   const cardOf = (id) => cards.find((c) => c.id === id);
   const goodCard = cardOf(good.body.project.id);
   const offlineCard = cardOf(offline.body.project.id);
-  check('能读通的项目标「已纳管」', !!goodCard?.ok, goodCard?.subtitle);
+  check('能读通的项目标「有进度文件」', !!goodCard?.ok && /有进度文件/.test(goodCard.subtitle), goodCard?.subtitle);
   check('版本数按 status.yaml 算', goodCard?.version_count === 2, String(goodCard?.version_count));
   check('总览里没有卡片数了（task_count 已删）', !('task_count' in (goodCard ?? {})), Object.keys(goodCard ?? {}).join(','));
   check('已发布版本算得对', goodCard?.released_count === 1, String(goodCard?.released_count));
-  check('读不通的项目照样列出来且标「未纳管」', !!offlineCard && offlineCard.ok === false && /未纳管/.test(offlineCard.subtitle), offlineCard?.subtitle);
+  check('读不通的项目照样列出来且标「缺进度文件」', !!offlineCard && offlineCard.ok === false && /缺进度文件/.test(offlineCard.subtitle), offlineCard?.subtitle);
 
   console.log('\n②-1 总览：最新发布字段');
   check(
@@ -229,7 +238,7 @@ try {
     JSON.stringify([escCard?.latest_released_version, escCard?.latest_released_path]),
   );
   check(
-    '未纳管项目也出这两个字段且为空串',
+    '读不通进度的项目也出这两个字段且为空串',
     'latest_released_version' in (offlineCard ?? {})
       && offlineCard?.latest_released_version === ''
       && offlineCard?.latest_released_path === '',
@@ -259,6 +268,33 @@ try {
   const write = await api('/api/status/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
   check('没有写接口（POST 落到 404）', write.status === 404, String(write.status));
   check('冒烟跑完临时项目根里的文件没被动过', fs.readFileSync(path.join(goodRoot, '.bandi', 'status.yaml'), 'utf8').includes('live_version: 2.10.0'));
+
+  console.log('\n⑤ 纳管选择（2026-10-27）：面板只出选中的，账本照旧全量');
+  const ledger = await api('/api/status/ledger');
+  check('账本接口 200', ledger.status === 200);
+  const all = ledger.body?.projects ?? [];
+  check('账本出全部项目（含内置默认项目）', all.length >= 5, String(all.length));
+  const flagOf = (id) => all.find((p) => p.id === id)?.panel_managed;
+  check('刚才纳管的四个都是 true', ids.every((id) => flagOf(id) === true), JSON.stringify(ids.map(flagOf)));
+  check('内置默认项目没纳管（回填只认「当时读得到进度文件」的）', all.filter((p) => p.builtIn).every((p) => p.panel_managed === false));
+  check('账本每条都带 ok / status_text（弹窗要标进度文件在不在）', all.every((p) => typeof p.ok === 'boolean' && !!p.status_text));
+
+  const onlyTwo = await post('/api/status/managed', { ids: [good.body.project.id, offline.body.project.id] });
+  check('只留两个：200', onlyTwo.status === 200);
+  const afterTwo = await api('/api/status/projects');
+  check('总览只剩这两个', afterTwo.body?.projects?.length === 2, String(afterTwo.body?.projects?.length));
+  check('这两个里一个能读通、一个读不通（读不通的留在面板里当待办）',
+    afterTwo.body?.projects?.some((p) => p.ok) && afterTwo.body?.projects?.some((p) => !p.ok));
+
+  const cleared = await post('/api/status/managed', { ids: [] });
+  const afterClear = await api('/api/status/projects');
+  check('空数组 = 全部移出（不是「这次没动」）', cleared.status === 200 && afterClear.body?.projects?.length === 0, String(afterClear.body?.projects?.length));
+
+  const bad = await post('/api/status/managed', { nope: 1 });
+  check('ids 不是数组时 400（不静默当空表清掉）', bad.status === 400, `${bad.status} ${bad.body?.error?.code ?? ''}`);
+  const ghost = await post('/api/status/managed', { ids: ['pj-不存在', good.body.project.id] });
+  check('不存在的 id 被忽略、不报错（列表过期也不该炸）',
+    ghost.status === 200 && ghost.body?.ids?.length === 1, JSON.stringify(ghost.body?.ids));
 } catch (err) {
   console.log('\n跑挂了：' + String(err?.message ?? err));
   failed += 1;

@@ -12,6 +12,7 @@ export async function handleWorkflow(req, res, url) {
   const one = /^\/api\/workflows\/runs\/([^/]+)$/.exec(url.pathname);
   const act = /^\/api\/workflows\/runs\/([^/]+)\/(start|decide|retry|assign|status|abort)$/.exec(url.pathname);
   const tplOne = /^\/api\/workflows\/templates\/([^/]+)$/.exec(url.pathname);
+  const tplRuns = /^\/api\/workflows\/templates\/([^/]+)\/runs$/.exec(url.pathname);
   const tplPub = /^\/api\/workflows\/templates\/([^/]+)\/publish$/.exec(url.pathname);
 
   // 某个会话里挂着的流程（会话里画流程卡片用；一个项目群可以挂好几条）
@@ -23,6 +24,8 @@ export async function handleWorkflow(req, res, url) {
 
   // 列表 + 模板（左栏要的都在这一口里，少一次往返）
   if (req.method === 'GET' && url.pathname === '/api/workflows') {
+    // 跑过多少次：一次 GROUP BY 拿全，**不能拿下面那个 runs 去数**（它有 100 条上限）
+    const counts = store.countWorkflowRunsByTemplate();
     return sendJson(res, 200, {
       templates: store.listWorkflowTemplates().map((t) => ({
         id: t.id,
@@ -31,11 +34,22 @@ export async function handleWorkflow(req, res, url) {
         publishedAt: t.publishedAt ?? null,
         start: workflows.startOf(t),
         nodes: workflows.nodesOf(t),
+        // 左栏模板行上的「跑过 N 次」——数字来自库里，不是数列表
+        runCount: counts[t.id]?.n ?? 0,
+        lastRunAt: counts[t.id]?.lastAt ?? null,
       })),
       runs: workflows.listWorkflowViews(),
       // 工作台要的：已发布的流程（点一下就能起一条）
       published: workflows.publishedFlows(),
     });
+  }
+
+  // 一个模板的历史记录：跑过多少条 + 最近的那些（设计器页头的「历史记录」）
+  if (req.method === 'GET' && tplRuns) {
+    const id = decodeURIComponent(tplRuns[1]);
+    if (!store.getWorkflowTemplate(id)) return fail(res, 404, 'E2028', '模板不存在');
+    const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 200, 1), 500);
+    return sendJson(res, 200, workflows.runsOfTemplate(id, { limit }));
   }
 
   // 发布 / 下架：发布了的才在工作台里能点开
@@ -60,6 +74,8 @@ export async function handleWorkflow(req, res, url) {
       publishedAt: t.publishedAt ?? null,
       start: workflows.startOf(t),
       nodes: workflows.nodesOf(t),
+      // 设计器页头「历史记录」按钮上那个数字
+      runCount: store.countWorkflowRunsByTemplate()[t.id]?.n ?? 0,
     });
   }
   if ((req.method === 'PUT' || req.method === 'POST') && tplOne) {

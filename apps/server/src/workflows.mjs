@@ -576,12 +576,24 @@ export function assignCurrentStep(runId, personaId) {
   return startCurrentStep(runId);
 }
 
-/** 某个模板的实例（发起记录） */
-export function runsOfTemplate(templateId) {
-  return store
-    .listWorkflowRuns()
-    .filter((r) => r.templateId === templateId)
-    .map((r) => viewRun(r));
+/**
+ * 某个模板的「历史记录」：**跑过多少条 + 最近的那些**（2026-10-27 重写）。
+ *
+ * 原来这函数是"把 `listWorkflowRuns()` 那 100 条过滤一遍"——跑过 300 次的模板
+ * 只能数出 100 条，而且还要把别的模板的记录全查一遍。现在总数走 SQL `COUNT(*)`，
+ * 列表按 templateId 直查。
+ *
+ * 每条仍是 `viewRun` 的形状（跟实例页同一个读法）——历史记录弹窗里点一条就能直接
+ * 跳实例页，不用为它另造一套字段。
+ */
+export function runsOfTemplate(templateId, { limit = 200 } = {}) {
+  const stat = store.countWorkflowRunsByTemplate()[templateId] ?? { n: 0, lastAt: null };
+  return {
+    templateId,
+    total: stat.n,
+    lastAt: stat.lastAt,
+    runs: store.listWorkflowRunsByTemplate(templateId, { limit }).map((r) => viewRun(r)),
+  };
 }
 
 /** 这个会话里挂着的流程（一个项目群可以挂好几条） */
