@@ -307,7 +307,7 @@ async function runMergeNode({ runId, task }) {
   if (!repoRow?.autoMerge) {
     store.updateWorkflowTask(task.id, {
       status: '待验收',
-      note: '审阅通过、四条闸全过。点「通过」就合并；想全自动，去「设置 → 代码托管」给这个仓库勾上「自动合并」',
+      note: '审阅通过、四条闸全过。点「通过」就合并；想全自动，去「工作台 → 研发 → 代码托管」给这个仓库勾上「自动合并」',
       endedAt: null,
     });
     store.touchWorkflowRun(runId);

@@ -422,8 +422,17 @@ export function openAddMenu(items, anchor = null) {
       </button>`,
     )
     .join('');
+  /*
+   * 挂哪儿：左栏**真的显示着**才挂 `.list-head`，否则挂 body。
+   *
+   * 2026-10-26 用户报「＋ 添加仓库 打不开」：代码托管是工作台下的整页，`body.no-list`
+   * 把整个 `.list-panel` 设成 `display:none` —— 菜单 append 进去了，元素在、事件也绑上了，
+   * 但量出来 0×0、坐标 0,0，永远看不见（不是"没反应"，是"渲染在一个不显示的地方"）。
+   * 挂 body 时改用 `position:fixed` 直接按按钮的视口坐标摆，不再需要左栏当坐标原点。
+   */
   const head = document.querySelector('.list-head');
-  head.append(box);
+  const inList = !!head && head.getClientRects().length > 0;
+  (inList ? head : document.body).append(box);
   /*
    * 让「＋」落在菜单的中线上：按**打开它的那颗按钮**算，不写死像素。
    *
@@ -433,22 +442,30 @@ export function openAddMenu(items, anchor = null) {
    */
   const anchorEl = anchor ?? document.querySelector('#listAction');
   const btn = anchorEl.getBoundingClientRect();
-  const hb = head.getBoundingClientRect();
-  const w = box.getBoundingClientRect().width;
+  const w = box.getBoundingClientRect().width || 268; // 刚 append 就量，宽度可能还是 0（样式没落地）
   let left = btn.left + btn.width / 2 - w / 2;
   left = Math.min(Math.max(left, 8), window.innerWidth - w - 8); // 别探出视口
-  box.style.left = Math.round(left - hb.left) + 'px';
-  box.style.right = 'auto';
-  /*
-   * 竖直位置：**打开菜单的那颗按钮不在左栏头部里**时（主区那颗「＋」，
-   * 比如「代码仓库 → ＋ 添加仓库」），菜单得跟着按钮走。
-   *
-   * CSS 里写的是 `top: calc(100% - 4px)` —— 那是"紧贴左栏页头下面"，
-   * 对页头里那颗 ＋ 正好；但主区那颗 ＋ 在页面几十到几百像素以下，
-   * 菜单会**浮在按钮上方老远**，看着像从别处冒出来的。
-   */
-  if (!head.contains(anchorEl)) {
-    box.style.top = Math.round(btn.bottom - hb.top + 6) + 'px';
+  if (inList) {
+    const hb = head.getBoundingClientRect();
+    box.style.left = Math.round(left - hb.left) + 'px';
+    box.style.right = 'auto';
+    /*
+     * 竖直位置：**打开菜单的那颗按钮不在左栏头部里**时（主区那颗「＋」，
+     * 比如「代码仓库 → ＋ 添加仓库」），菜单得跟着按钮走。
+     *
+     * CSS 里写的是 `top: calc(100% - 4px)` —— 那是"紧贴左栏页头下面"，
+     * 对页头里那颗 ＋ 正好；但主区那颗 ＋ 在页面几十到几百像素以下，
+     * 菜单会**浮在按钮上方老远**，看着像从别处冒出来的。
+     */
+    if (!head.contains(anchorEl)) {
+      box.style.top = Math.round(btn.bottom - hb.top + 6) + 'px';
+    }
+  } else {
+    // 挂在 body 上：没有左栏可以当坐标原点，直接固定在按钮正下方
+    box.style.position = 'fixed';
+    box.style.left = Math.round(left) + 'px';
+    box.style.right = 'auto';
+    box.style.top = Math.round(btn.bottom + 6) + 'px';
   }
   box.querySelectorAll('[data-add]').forEach((b) => {
     b.onclick = () => { closeAddMenu(); items[Number(b.dataset.add)].run(); };

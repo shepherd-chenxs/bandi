@@ -139,7 +139,7 @@ body {
   height: 46px; flex: 0 0 auto; display: flex; align-items: center; gap: 8px;
   padding: 0 20px; border-bottom: 1px solid var(--line-1);
 }
-/* 面包屑：三级之间用 / 分隔，当前项不变色（Linear 的做法：靠位置表示层级，不靠颜色） */
+/* 面包屑：三级之间用 / 分隔，当前项不变色（密排风格的做法：靠位置表示层级，不靠颜色） */
 .crumb { display: flex; align-items: center; gap: 2px; font-size: 13px; }
 .crumb a {
   color: var(--text-2); text-decoration: none; padding: 3px 4px;
@@ -175,7 +175,7 @@ body {
    设计判断：原来每个入口是一块"色块图标 + 标签"的磁贴，
    在宽屏上极其稀疏，且颜色过多（蓝/青/橙/紫四色）。
    改成**行式条目**：图标退成单色线框，名称与描述左右排布，
-   信息密度接近 Linear 的 Command Menu，一眼能扫完。
+   信息密度接近密排风格的 Command Menu，一眼能扫完。
    ═══════════════════════════════════════════════ */
 .wb-page { padding: 26px 32px 40px; max-width: 940px; }
 

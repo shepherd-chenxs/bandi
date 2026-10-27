@@ -37,7 +37,10 @@ export const isPersonalCat = (c) => c.category === '个人';
 export const publicCatalog = () => S.catalog.filter((c) => !isPersonalCat(c));
 
 
-export const personalCatalog = () => S.catalog.filter(isPersonalCat);
+/* 「个人」页签只画**账本里的**（本机来源 + 手工添加）——
+   catalog 里 category='个人' 的那条（回声）**不再上界面**（2026-10-26 用户："把这个例子去掉"）。
+   为什么条目本身还留在 catalog：`smoke-connectors` / `smoke-plugin-e2e` 拿它当零依赖 fixture，
+   验证「装 → 探 → 停 → 卸」整条链路，删了冒烟就没东西可测了。 */
 
 
 export const localConnectors = () => S.connectors.filter((c) => c.source?.kind === 'local');
@@ -102,7 +105,7 @@ export const CONN_ICONS = {
   memory: IC('<ellipse cx="12" cy="6.2" rx="7.5" ry="2.9"/><path d="M4.5 6.2v11.6c0 1.6 3.4 2.9 7.5 2.9s7.5-1.3 7.5-2.9V6.2"/><path d="M4.5 12c0 1.6 3.4 2.9 7.5 2.9s7.5-1.3 7.5-2.9"/>'),
   // SSH → 终端窗口：无标题栏的框 + 提示符 >_
   ssh: IC('<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M7 9.6l3.3 2.9L7 15.4"/><path d="M12.6 15.6H17"/>'),
-  // 回声（本机示例）→ 声呐：源点 + 两道外扩波
+  // 回声 → 声呐：源点 + 两道外扩波（界面不再摆这张示例卡，但手工装过的人还得有图标）
   'echo-local': IC('<path d="M8.6 12h.01"/><path d="M11.7 8.6a4.8 4.8 0 0 1 0 6.8M14.6 6a9 9 0 0 1 0 12"/>'),
 };
 
@@ -152,11 +155,18 @@ export async function renderPlugins() {
   const counts = {
     installed: userConns.length + panelsInstalled,
     catalog: publicCatalog().length + marketPanels.length,
-    personal: personalCatalog().length + localConnectors().filter((c) => !c.builtin).length,
+    personal: localConnectors().filter((c) => !c.builtin).length,   // 「个人」＝你自己的本机来源（示例已不再摆）
   };
 
   $('settingsView').innerHTML = `
-    ${headRow('<b>插件</b>')}
+    ${headRow(
+      '<b>插件</b>',
+      /* 「添加连接器」从「个人」页里那块「手工添加」搬到了页头右上（2026-10-26 用户：
+         "添加按钮单独提出来，手工添加这个区没啥用"）。放在页头是因为它是**全局动作**
+         —— 在哪个页签都能粘一条 MCP 配置，不必先切到「个人」。
+         位置照卡片墙页的老规矩：动作/搜索一律页头右上（.expert-search / .sk-search 同款位置）。 */
+      `<button class="btn-sm" data-manual="1">＋ 添加连接器</button>`,
+    )}
     <div class="detail-body">
       <div class="seg plg-tabs">
         ${PLG_TABS.map(
@@ -309,7 +319,6 @@ export function plgInstalledHTML() {
     ? `<section class="set-sec">
         <div class="set-head"><b>界面插件</b><span class="set-tag">带界面的扩展</span></div>
         <div class="plg-grid">${panels.map(plgPanelCardHTML).join('')}</div>
-        <div class="hint-line">停用只是不生效（文件留着）；卸载会删掉 plugins/&lt;id&gt;/，市场源还在，可以再装回来。</div>
       </section>`
     : '';
   const connSec = conns.length
@@ -381,8 +390,12 @@ export function openPlgDetail(kind, id) {
       ${p.valid ? '' : (p.errors ?? []).map((e) => `<div class="plg-warn">${esc(e)}</div>`).join('')}
       ${acts ? `<div class="dlg-actions">${acts}</div>` : ''}
     `;
-    body.querySelector('.dlg-actions') && form.appendChild(body.querySelector('.dlg-actions'));
-    body.querySelectorAll('[data-dlg-act]').forEach((el) => {
+    /* 动作条一旦搬进 form，就不再是 body 的后代了 —— 事件必须挂到**搬走后的那个节点**上。
+       2026-10-26 用户报「点击停用和卸载没有效果」：原按 body 查，一个按钮也查不到，
+       onclick 全没绑上，按钮看着能点、点了什么也不发生（不报错、不请求、不关窗）。 */
+    const bar = body.querySelector('.dlg-actions');
+    if (bar) form.appendChild(bar);
+    bar?.querySelectorAll('[data-dlg-act]').forEach((el) => {
       el.onclick = async () => {
         const act = el.dataset.dlgAct;
         if (act === 'uninstall') {
@@ -449,8 +462,10 @@ export function openPlgDetail(kind, id) {
     ${led ? '' : (c.warnings ?? []).map((w) => `<div class="plg-warn">${esc(w)}</div>`).join('')}
     <div class="dlg-actions">${acts}</div>
   `;
-  form.appendChild(body.querySelector('.dlg-actions'));
-  body.querySelectorAll('[data-dlg-act]').forEach((el) => {
+  /* 同上：动作条搬进 form 后要在 bar 上查，不能在 body 上查（否则按钮没监听） */
+  const bar = body.querySelector('.dlg-actions');
+  if (bar) form.appendChild(bar);
+  bar?.querySelectorAll('[data-dlg-act]').forEach((el) => {
     el.onclick = async () => {
       const act = el.dataset.dlgAct;
       if (act === 'uninstall') {
@@ -499,14 +514,12 @@ export function plgCatalogHTML() {
     ? `<section class="set-sec">
         <div class="set-head"><b>界面插件</b><span class="set-tag">带界面的扩展</span></div>
         <div class="plg-grid">${panels.map(plgPanelCardHTML).join('')}</div>
-        <div class="hint-line">「安装」把它拷进 plugins/；停用或卸载后，左边一级栏的「插件」入口里就不再有它。</div>
       </section>`
     : '';
   const connSec = list.length
     ? `<section class="set-sec">
         <div class="set-head"><b>连接器</b><span class="set-tag">随仓库走的清单</span></div>
         <div class="plg-grid">${list.map(plgCardHTML).join('')}</div>
-        <div class="hint-line">这份清单随仓库走（apps/server/catalog/connectors.json），不是市场：一条条写清来源和启动方式，装之前你看得见它要什么。</div>
       </section>`
     : (!panels.length ? '<div class="empty">清单是空的</div>' : '');
   return `${err}${panelsSec}${connSec}`;
@@ -516,32 +529,17 @@ export function plgCatalogHTML() {
 
 export function plgPersonalHTML() {
   const mine = localConnectors().filter((c) => !c.builtin);   // 内置的不算"个人"（远程连接 SSH 随功能出厂）
-  const sample = personalCatalog();
   return `
     <section class="set-sec">
       <div class="set-head"><b>本机来源</b><span class="set-tag">装的路径在本机</span></div>
       ${
         mine.length
           ? `<div class="plg-grid">${mine.map(plgConnCardHTML).join('')}</div>`
-          : '<div class="empty">还没有本机来源的连接器</div>'
+          /* 空态自己承担引导（原来的「手工添加」区块已经撤掉，按钮在页头右上）：
+             全局 `.empty` 是 60px 上下内边距，整页只剩这一段时中间空一大块，
+             所以这里用虚线框 ——「这里还没有东西，加上就在右上」比一句话更像个位置。 */
+          : `<div class="plg-empty">还没有本机来源的连接器<br /><span class="dim">点右上角「＋ 添加连接器」，粘一条 MCP 配置就能装。</span></div>`
       }
-    </section>
-    ${sample.length ? `<section class="set-sec">
-      <div class="set-head"><b>本机示例</b><span class="set-tag">拿来验证链路</span></div>
-      <div class="plg-grid">${sample.map(plgCardHTML).join('')}</div>
-    </section>` : ''}
-    <section class="set-sec">
-      <div class="set-head"><b>手工添加</b><span class="set-tag">知道来源就能装</span></div>
-      <div class="set-box">
-        <div class="set-row">
-          <div>
-            <div class="set-label">粘一条 MCP 配置</div>
-            <div class="dim" style="font-size:12px">本地进程（stdio）或远端服务（http）；装完在「已安装」里点卡看详情。</div>
-          </div>
-          <button data-manual="1">添加…</button>
-        </div>
-      </div>
-      <div class="hint-line">技能包（SKILL.md）是另一类个人扩展，在左边「技能」里管。</div>
     </section>`;
 }
 
@@ -694,7 +692,7 @@ export function backToWorkbench(label = '工作台') {
  * **不要返回按钮**（2026-10-19 用户第二次指着它说「统一去掉这个按钮」）。
  * 理由跟项目页那次一样，只是现在推广到全部子页：**每一页的左栏都已经写着"上一级"**
  *   · 项目 / 看板 —— 左栏是项目清单
- *   · 流程编排 / 流程记录 —— 左栏是流程模板 / 发起记录清单
+ *   · 工作流 / 流程记录 —— 左栏是流程模板 / 发起记录清单
  *   · 定时任务 / 插件面板 —— 左栏是工具清单
  * 想回哪儿都能直接点那一行，页头再放一枚「← 工作台」就是同一件事的第二个入口，
  * 还白占页头最左边、把标题推得比别处靠右。

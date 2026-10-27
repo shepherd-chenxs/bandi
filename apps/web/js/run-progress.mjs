@@ -212,15 +212,27 @@ export function applyRunEvent(state, evt, now = Date.now()) {
  * `now` 由调用方传（每秒重画时用它算用时，不要在纯函数里摸 Date.now 再测不过）。
  */
 export function progressView(state, now = Date.now()) {
+  const idleMs = Math.max(0, now - state.lastEventAt);
+  /*
+   * **卡住以后，把"进行中"降级成"等结果"**（2026-10-26 实报：一次运行卡在 Write 上 20 分钟，
+   * 卡片同时写着"可能卡住了"和"进行中 1237s"，自相矛盾）。
+   * 没有结果事件的 runtime（codex/claude 的 `tool`）本来就有这个歧义 —— 到底是工具还在跑、
+   * 还是上游模型请求挂了，客户端分不出来；既然整条运行已经 5 分钟没动静，就当"等结果"，
+   * "可能卡住"的判断交给头顶那行，别在步骤上再假装它还在动。
+   */
+  const stalled = !state.done && idleMs >= STALL_MS;
   const steps = state.steps.map((s, i) => {
     const { verb, target } = toolSummary(s.name, s.input, s.detail);
+    const running = s.status === 'running' && !stalled;
+    const waiting = s.status === 'running' && stalled;
     const durMs =
       s.endedAt != null ? s.endedAt - s.at
-      : s.status === 'running' ? Math.max(0, now - s.at)
+      : running || waiting ? Math.max(0, now - s.at)
       : null;
     return {
       n: i + 1,
-      status: s.status, // running | called | done | error
+      // running | waiting（卡住了，等回执）| called | done | error
+      status: stalled && s.status === 'running' ? 'waiting' : s.status,
       name: s.name,
       verb,
       target,
@@ -228,7 +240,6 @@ export function progressView(state, now = Date.now()) {
       error: s.error,
     };
   });
-  const idleMs = Math.max(0, now - state.lastEventAt);
   const lastRaw = state.steps[state.steps.length - 1] ?? null;
   const current = [...steps].reverse().find((s) => s.status === 'running') ?? null;
   const last = steps[steps.length - 1] ?? null;
@@ -237,7 +248,7 @@ export function progressView(state, now = Date.now()) {
     phaseText: PHASE_TEXT[state.phase] ?? '进行中',
     elapsedMs: Math.max(0, now - state.startedAt),
     idleMs,
-    stalled: !state.done && idleMs >= STALL_MS,
+    stalled,
     done: state.done,
     status: state.status,
     error: state.error,

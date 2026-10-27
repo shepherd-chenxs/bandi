@@ -69,7 +69,7 @@ try {
   check('列出了刚装的那条', wiring.promptLines('codex').some((l) => l.includes('echo-local')));
   check('codex 的提示词里有 tool_search 的引导', wiring.promptLines('codex').some((l) => l.includes('tool_search')));
   await api('/api/connectors/echo-local', { method: 'DELETE' });
-  /* 2026-10-26 起口径变了：SSH 连接器随「设置 → 远程连接」**内置**（ensureBuiltinConnectors
+  /* 2026-10-26 起口径变了：SSH 连接器随「工作台 → 研发 → 远程连接」**内置**（ensureBuiltinConnectors
      启动即 seed，卸不掉）—— 卸完用户连接器后，注入里恒有内置那一条，不会再是空段。 */
   check('没有用户连接器时，注入里只剩内置远程连接（不塞第三方噪音）',
     wiring.promptLines('codex').some((l) => l.startsWith('- ssh：'))

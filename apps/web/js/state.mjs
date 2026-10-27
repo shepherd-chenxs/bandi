@@ -107,7 +107,7 @@ export function setNav(nav, opts = {}) {
   setListTitle(
     nav === 'messages' ? '消息'
     : nav === 'contacts' ? '通讯录'
-    : nav === 'workflows' ? '流程编排'
+    : nav === 'workflows' ? '工作流'
     : nav === 'plugins' ? '工作台'
     : nav === 'experts' ? '专家库'
     : '设置',

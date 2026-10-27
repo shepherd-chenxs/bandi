@@ -302,7 +302,12 @@ export function validateManifest(m, dirName) {
           }
         }
         // code：取一段文本摊出来（公钥、指引、命令输出）
+        //   `onlyWhenEmpty: true` → **有内容就整块不画**，只留空态的 emptyAction。
+        //   ssh 用它：连接信息里不想摊公钥正文，但"还没密钥"时要留一个生成入口。
         if (b.type === 'code') {
+          if (b.onlyWhenEmpty !== undefined && typeof b.onlyWhenEmpty !== 'boolean') {
+            errors.push(`${at}.onlyWhenEmpty 只接受 true / false`);
+          }
           if (!b.source?.api) errors.push(`${at}（code）要有 source.api`);
           if (!str(b.source?.pick)) errors.push(`${at}（code）要写 source.pick: <取哪个字段>`);
           const ea = b.emptyAction;

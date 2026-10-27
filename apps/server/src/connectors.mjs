@@ -169,7 +169,7 @@ export function removeEntry(id) {
   const saved = readSaved();
   if (!(id in saved)) return { removed: false };
   if (saved[id]?.builtin === true) {
-    return { error: 'builtin', message: '内置连接器不能卸载（随「设置 → 远程连接」出厂自带）' };
+    return { error: 'builtin', message: '内置连接器不能卸载（随「工作台 → 研发 → 远程连接」出厂自带）' };
   }
   delete saved[id];
   writeSaved(saved);
@@ -204,7 +204,7 @@ export function publicList() {
 /* ---------------------------------------------------------------- 内置 */
 
 /**
- * 内置连接器（2026-10-26）：随「设置 → 远程连接」出厂自带，**不进推荐清单**。
+ * 内置连接器（2026-10-26）：随「工作台 → 研发 → 远程连接」出厂自带，**不进推荐清单**。
  *
  * 为什么内置：SSH 工具（列登记 / 取公钥 / 执行命令）和登记页面是一体的 ——
  * 登记表就是 ~/.bandi/servers.yaml，工具读的也是它。拆成"可装的扩展"只会
@@ -217,6 +217,14 @@ export function publicList() {
 const BUILTIN_CONNECTORS = [
   {
     id: 'ssh',
+    /*
+     * `builtin: true` 必须写在定义里，不能只靠下面 ensure 的"补标记"分支兜
+     * （2026-10-26 实踩）：全新数据目录第一次启动时走的是 `!cur` 那一支，
+     * normalize 只看 def 有没有带这个字段 —— 没带就落到 false，于是 SSH 会以
+     * "个人连接器"的身份出现在「设置 → 插件 → 个人 → 本机来源」里，
+     * 要等**第二次**启动才被补成内置（用户真库因为重启过多次所以看不出来）。
+     */
+    builtin: true,
     label: '远程连接（SSH）',
     source: { kind: 'local', ref: 'apps/server/mcp/bandi-ssh.mjs' },
     transport: 'stdio',
@@ -241,7 +249,8 @@ export function ensureBuiltinConnectors() {
         console.log(`内置连接器 ${def.id} 定义有问题（不影响启动）：${err}`);
         continue;
       }
-      saved[def.id] = merged;
+      // 双保险：定义里忘写 builtin 也照样落成内置（首次启动就该是对的，别指望下一次）
+      saved[def.id] = { ...merged, builtin: true };
       touched.push(def.id);
     } else if (cur.builtin !== true) {
       saved[def.id] = { ...cur, builtin: true };

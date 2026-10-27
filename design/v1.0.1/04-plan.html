@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>班底 v1.0.1 · 改造建议（已作废：最终全站 Linear）</title>
+<title>班底 v1.0.1 · 改造建议（已作废：最终全站密排风格）</title>
 <style>
 :root {
   color-scheme: dark;
@@ -193,16 +193,16 @@ footer { color: var(--text-4); font-size: 12px; margin-top: 46px; }
 <div class="page">
 
   <div class="eyebrow">班底 v1.0.1 · UI 改造 · 历史方案</div>
-  <h1>哪部分用 iOS，<br />哪部分用 Linear <span style="font-size:.5em;color:#b4232a">（已作废）</span></h1>
+  <h1>哪部分用 iOS，<br />哪部分用密排风格 <span style="font-size:.5em;color:#b4232a">（已作废）</span></h1>
   <p class="lede">
     上一页留下的那句「最好的答案不是二选一」，这里把它落到每个页面。
-    当时的结论是：<b>人和人说话的地方用 iOS，人和系统打交道的地方用 Linear。</b>
+    当时的结论是：<b>人和人说话的地方用 iOS，人和系统打交道的地方用密排风格。</b>
   </p>
   <div class="tip" style="margin-top:14px;background:#fff4f4;border-color:#e5b4b4">
     <b>本文 2026-10-19 作废。</b>
     混用方案做出来（第 3 步：消息 / 通讯录 / 工作台）之后，用户看截图否掉了它 ——
     同一个软件里两套圆角、两套分层方式，切页面要重新认一遍“这是什么”，比风格单调更糟。
-    最终决定：<b>全站统一 Linear</b>。iOS 语汇已全部撤回（彩色气泡 → 无气泡、
+    最终决定：<b>全站统一密排风格</b>。iOS 语汇已全部撤回（彩色气泡 → 无气泡、
     浮起卡片 → 同底 + 1px 细线、工作台宫格 → 行式列表）。
     下面保留原始论证，只作决策记录，不要照它实现。
   </div>
@@ -214,7 +214,7 @@ footer { color: var(--text-4); font-size: 12px; margin-top: 46px; }
       气泡、头像、时间、输入条。这块照 iOS 做，用户第一天就觉得「顺手」。
     </p>
     <p>
-      <span class="k">所有"干活的地面"走 Linear</span> —— 看板、列表、设置、运行日志、流程编排。
+      <span class="k">所有"干活的地面"走密排风格</span> —— 看板、列表、设置、运行日志、流程编排。
       这些页面要在一屏里塞几十条信息，iOS 那种大留白会把密度吃掉。
     </p>
     <p>
@@ -234,11 +234,11 @@ footer { color: var(--text-4); font-size: 12px; margin-top: 46px; }
           <li>气泡是最省脑的对话形式：一眼看出谁说的、说到哪儿了</li>
           <li>大留白 + 少分割线 → 注意力集中在内容本身</li>
           <li>圆角、软色块 → 降低长期停留的压迫感</li>
-          <li><b>代价</b>：同样一屏，能摆的信息不到 Linear 的一半</li>
+          <li><b>代价</b>：同样一屏，能摆的信息不到密排风格的一半</li>
         </ul>
       </div>
       <div class="comp">
-        <h3><span class="tag lin">Linear</span> 被优化的是「扫得快」</h3>
+        <h3><span class="tag lin">密排风格</span> 被优化的是「扫得快」</h3>
         <ul>
           <li>10 档灰阶把层级压平，眼睛靠明度而不是框线定位</li>
           <li>1px 细线、几乎无阴影 → 一屏能摆 30 个条目还不乱</li>
@@ -279,7 +279,7 @@ footer { color: var(--text-4); font-size: 12px; margin-top: 46px; }
     <div class="caps">
       <div class="cap">
         <b>图标栏</b>
-        <span>iOS 彩色方块 / Linear 单色线稿</span>
+        <span>iOS 彩色方块 / 密排风格单色线稿</span>
       </div>
       <div class="cap">
         <b>列表栏 · iOS</b>
@@ -287,12 +287,12 @@ footer { color: var(--text-4); font-size: 12px; margin-top: 46px; }
       </div>
       <div class="cap">
         <b>内容区</b>
-        <span>对话走 iOS 气泡，其它页走 Linear 密排</span>
+        <span>对话走 iOS 气泡，其它页走密排风格</span>
       </div>
     </div>
     <div class="legend">
       <span><i class="ios"></i>iOS 语汇</span>
-      <span><i class="lin"></i>Linear 语汇</span>
+      <span><i class="lin"></i>密排语汇</span>
     </div>
 
     <table class="tbl">
@@ -313,40 +313,40 @@ footer { color: var(--text-4); font-size: 12px; margin-top: 46px; }
           <td>人 + 群，本质是"挑一个人说话"。行式列表正是 iOS 最强的形态。</td>
         </tr>
         <tr>
-          <td>员工详情</td><td><span class="tag mix">iOS 骨架 + Linear 数据</span></td>
-          <td>头像是 iOS（大、圆、彩色）；下面「任务 / 会话 / 技能」标签页里的表格用 Linear 密度。</td>
+          <td>员工详情</td><td><span class="tag mix">iOS 骨架 + 密排风格数据</span></td>
+          <td>头像是 iOS（大、圆、彩色）；下面「任务 / 会话 / 技能」标签页里的表格用密排风格密度。</td>
         </tr>
         <tr>
           <td>工作台首页</td><td><span class="tag ios">iOS</span></td>
           <td>它是"应用抽屉"：几个大图标点进去。iOS 主屏逻辑天然对应，不需要密度。</td>
         </tr>
         <tr>
-          <td>项目列表 / 项目详情</td><td><span class="tag lin">Linear</span></td>
+          <td>项目列表 / 项目详情</td><td><span class="tag lin">密排风格</span></td>
           <td>多项目横向比较，要一行看到版本、负责人、进度。</td>
         </tr>
         <tr>
-          <td>任务看板（项目 / 全局）</td><td><span class="tag lin">Linear</span></td>
-          <td>班底最像 Linear 的地方。卡片密度、列头状态点、筛选弹层直接照搬。</td>
+          <td>任务看板（项目 / 全局）</td><td><span class="tag lin">密排风格</span></td>
+          <td>班底最接近密排风格的地方。卡片密度、列头状态点、筛选弹层沿用同一套做法。</td>
         </tr>
         <tr>
-          <td>任务卡详情（评论区）</td><td><span class="tag mix">Linear 骨架 + iOS 评论</span></td>
+          <td>任务卡详情（评论区）</td><td><span class="tag mix">密排风格骨架 + iOS 评论</span></td>
           <td>左评论右设置的骨架不动；评论气泡按 iOS 做 —— 那里确实是在"对话"。</td>
         </tr>
         <tr>
-          <td>流程编排 / 实例</td><td><span class="tag lin">Linear</span></td>
+          <td>流程编排 / 实例</td><td><span class="tag lin">密排风格</span></td>
           <td>节点、连线、状态机，是图不是内容。细线 + 灰阶比圆角软色块清楚得多。</td>
         </tr>
         <tr>
-          <td>设置（全部）</td><td><span class="tag lin">Linear</span></td>
+          <td>设置（全部）</td><td><span class="tag lin">密排风格</span></td>
           <td>表单为主，要在一屏看完所有项。inset grouped 会让设置页长得像手机。</td>
         </tr>
         <tr>
-          <td>运行日志 / 事件流</td><td><span class="tag lin">Linear</span></td>
+          <td>运行日志 / 事件流</td><td><span class="tag lin">密排风格</span></td>
           <td>等宽、紧凑、整屏滚动。iOS 那套留白在这儿是灾难。</td>
         </tr>
         <tr>
           <td>登录页 / 空状态</td><td><span class="tag mix">中性</span></td>
-          <td>两套都能做。建议用 Linear 的近黑 + 一行居中标题，克制。</td>
+          <td>两套都能做。建议用密排风格的近黑 + 一行居中标题，克制。</td>
         </tr>
       </tbody>
     </table>
@@ -374,10 +374,10 @@ footer { color: var(--text-4); font-size: 12px; margin-top: 46px; }
         </ul>
       </div>
       <div class="comp note">
-        <h3>第 2 层 · 组件（最终只有 Linear 一套）</h3>
+        <h3>第 2 层 · 组件（最终只有密排风格一套）</h3>
         <ul>
           <li><del>iOS 一套：<code>.ios-row</code> <code>.ios-card</code> <code>.ios-bubble</code> <code>.ios-nav</code></del>（已撤回）</li>
-          <li>Linear 一套：<code>.ln-row</code> <code>.ln-card</code> <code>.ln-col</code> <code>.ln-field</code></li>
+          <li>密排风格一套：<code>.ln-row</code> <code>.ln-card</code> <code>.ln-col</code> <code>.ln-field</code></li>
           <li><del>页面 div 上挂 <code>data-skin="ios"</code> / <code>data-skin="linear"</code></del>（未落地）</li>
           <li>只覆盖 <b>圆角 / 间距 / 阴影 / 分隔线样式</b> 四样，不覆盖颜色</li>
         </ul>
@@ -385,9 +385,9 @@ footer { color: var(--text-4); font-size: 12px; margin-top: 46px; }
     </div>
 
     <div class="tip" style="margin-top:16px">
-      <b>⚠️ 这一节作废（2026-10-19 用户拍板「全部 Linear」）</b>
+      <b>⚠️ 这一节作废（2026-10-19 用户拍板「全部密排风格」）</b>
       下面说的“按页面分皮肤”最终<b>没有落地</b>：先把 iOS 那套做出来（第 3 步）之后，
-      用户看截图否掉了混用方案，改为全站统一 Linear。实际做法是直接改各组件、
+      用户看截图否掉了混用方案，改为全站统一密排风格。实际做法是直接改各组件、
       一个组件一个提交（好 revert），并没有 <code>data-skin</code> 这层机制。
       iOS 语汇（彩色气泡、浮起卡片、18px 气泡圆角、工作台宫格）已全部撤回。
     </div>
@@ -416,7 +416,7 @@ footer { color: var(--text-4); font-size: 12px; margin-top: 46px; }
         <div class="n done">已完成</div>
         <div>
           <h3>第 0 步 · 设计稿</h3>
-          <p>Linear 三张（深 + 浅）+ iOS 两张 + 两张对照页。颜色、间距、组件形态都已定。</p>
+          <p>密排风格三张（深 + 浅）+ iOS 两张 + 两张对照页。颜色、间距、组件形态都已定。</p>
           <p class="files">design/v1.0.1/*.html</p>
         </div>
       </div>
@@ -443,7 +443,7 @@ footer { color: var(--text-4); font-size: 12px; margin-top: 46px; }
       <div class="step">
         <div class="n todo">然后</div>
         <div>
-          <h3>第 3 步 · 消息 / 通讯录 / 工作台 → <del>iOS 语汇</del> <span style="color:#b4232a">已做成 iOS，后按用户要求全部改回 Linear</span></h3>
+          <h3>第 3 步 · 消息 / 通讯录 / 工作台 → <del>iOS 语汇</del> <span style="color:#b4232a">已做成 iOS，后按用户要求全部改回密排风格</span></h3>
           <p>三处是同一族（列表行 + 大标题 + 彩色图标），一次改完。改的是<b>组件类</b>，
              JS 里那 166 处 <code>toast()</code> 和弹窗逻辑都不动。提交 <code>36bf9d9</code>。</p>
           <p><b>⚠️ 这一步的产物已被覆盖</b>：气泡/浮起卡片/宫格全部撤回，见 <code>style.css</code> 顶部注释。</p>
@@ -455,8 +455,8 @@ footer { color: var(--text-4); font-size: 12px; margin-top: 46px; }
       <div class="step">
         <div class="n todo">最后</div>
         <div>
-          <h3>第 4 步 · 看板 / 设置 / 流程 → Linear 语汇</h3>
-          <p>这块最费工（看板有拖拽、筛选两级弹层、幽灵项）。但风险低 —— 结构本来就已经很像 Linear 了，
+          <h3>第 4 步 · 看板 / 设置 / 流程 → 密排语汇</h3>
+          <p>这块最费工（看板有拖拽、筛选两级弹层、幽灵项）。但风险低 —— 结构本来就已经很像密排风格了，
              主要是色阶和线宽。</p>
           <p><b>验收</b>：<code>node tools/run-smokes.mjs</code> 仍全过；
              <code>node tools/smoke-help-pop.mjs</code>（55 项，专盯连接器那块表单）单跑一遍。</p>
@@ -471,8 +471,8 @@ footer { color: var(--text-4); font-size: 12px; margin-top: 46px; }
     <h2><span class="num">05</span> 只剩三件事要你定</h2>
     <p>其余我都按上面的切法往下推。这三件会明显改变观感，不替你决定。</p>
     <div class="tip" style="margin-bottom:14px">
-      <b>实际结论（2026-10-19）：</b>三件都定了 —— 强调色留 <b>iOS 蓝</b>（不是 Linear 靛蓝，蓝压深底更清晰）；
-      深色底<b>全部用 <code>#08090a</code></b>（消息页也放弃了纯黑，纯黑上分层只能靠阴影，而 Linear 不靠阴影）；
+      <b>实际结论（2026-10-19）：</b>三件都定了 —— 强调色留 <b>iOS 蓝</b>（不是密排风格那种靛蓝，蓝压深底更清晰）；
+      深色底<b>全部用 <code>#08090a</code></b>（消息页也放弃了纯黑，纯黑上分层只能靠阴影，而密排风格不靠阴影）；
       侧栏<b>留</b>。下面这表只作决策记录。
     </div>
 
@@ -483,11 +483,11 @@ footer { color: var(--text-4); font-size: 12px; margin-top: 46px; }
           <td>强调色用哪个？</td>
           <td><b>iOS 蓝</b>。浅色用 <code>#0071E3</code>（白字 4.70:1，过 AA），深色用 <code>#0A84FF</code>。
             苹果原色 <code>#007AFF</code> 实测只有 <b>4.02:1</b>，白字不够。</td>
-          <td>Linear 靛蓝 <code>#5E6AD2</code> —— 更"工具"，但浅色消息页里偏暗，气泡会显旧。</td>
+          <td>密排风格靛蓝 <code>#5E6AD2</code> —— 更"工具"，但浅色消息页里偏暗，气泡会显旧。</td>
         </tr>
         <tr>
           <td>深色底用哪个？</td>
-          <td><b>消息页纯黑 <code>#000</code></b>（iOS 深色），<b>其它页 <code>#08090a</code></b>（Linear）。</td>
+          <td><b>消息页纯黑 <code>#000</code></b>（iOS 深色），<b>其它页 <code>#08090a</code></b>（密排风格）。</td>
           <td>全部纯黑 —— 最像手机，但看板在纯黑上卡片分层几乎看不出来。</td>
         </tr>
         <tr>
@@ -514,7 +514,7 @@ footer { color: var(--text-4); font-size: 12px; margin-top: 46px; }
 
   <footer>
     班底 v1.0.1 · 改造建议 · 2026-10-19　→　<a href="index.html">回总览</a> ·
-    <a href="ios-compare.html">Linear vs iOS 对比</a> ·
+    <a href="ios-compare.html">密排风格 vs iOS 对比</a> ·
     <a href="compare.html">深 / 浅对照</a>
   </footer>
 

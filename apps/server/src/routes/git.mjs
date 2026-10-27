@@ -233,7 +233,7 @@ export async function handleGit(req, res, url) {
   if (repoPrs) {
     const row = store.getGitRepo(decodeURIComponent(repoPrs[1]));
     if (!row) return fail(res, 404, 'E1076', '仓库不在清单里'), true;
-    if (!git.readToken()) return fail(res, 400, 'E1070', '先连接 GitHub（设置 → 代码托管）'), true;
+    if (!git.readToken()) return fail(res, 400, 'E1070', '先连接 GitHub（工作台 → 研发 → 代码托管）'), true;
     if (req.method === 'GET') {
       try {
         const prs = await git.listPullsForRepo(row.fullName);
@@ -259,7 +259,7 @@ export async function handleGit(req, res, url) {
   if (repoMergePr && req.method === 'POST') {
     const row = store.getGitRepo(decodeURIComponent(repoMergePr[1]));
     if (!row) return fail(res, 404, 'E1076', '仓库不在清单里'), true;
-    if (!git.readToken()) return fail(res, 400, 'E1070', '先连接 GitHub（设置 → 代码托管）'), true;
+    if (!git.readToken()) return fail(res, 400, 'E1070', '先连接 GitHub（工作台 → 研发 → 代码托管）'), true;
     const body = await readBody(req);
     try {
       return sendJson(res, 200, await mergeOne(row.fullName, Number(repoMergePr[2]), body)), true;
@@ -284,10 +284,10 @@ export async function handleGit(req, res, url) {
     if (req.method === 'POST' && prOf[2] === '/create') {
       const body = await readBody(req);
       const project = task.projectId ? store.getProject(task.projectId) : null;
-      if (!project) return fail(res, 400, 'E1079', '这张卡没挂项目 —— 不知道在哪个目录里提交。先在「设置 → 代码托管」上那个仓库行里点「建 PR」'), true;
+      if (!project) return fail(res, 400, 'E1079', '这张卡没挂项目 —— 不知道在哪个目录里提交。先在「工作台 → 研发 → 代码托管」上那个仓库行里点「建 PR」'), true;
       const row = git.repoForCwd(project.root);
-      if (!row) return fail(res, 400, 'E1079', `项目目录不在任何已接入的仓库里：${project.root} —— 去「设置 → 代码托管」把它接进来`), true;
-      if (!git.readToken()) return fail(res, 400, 'E1070', '先连接 GitHub（设置 → 代码托管）'), true;
+      if (!row) return fail(res, 400, 'E1079', `项目目录不在任何已接入的仓库里：${project.root} —— 去「工作台 → 研发 → 代码托管」把它接进来`), true;
+      if (!git.readToken()) return fail(res, 400, 'E1070', '先连接 GitHub（工作台 → 研发 → 代码托管）'), true;
       const repoRow = store.getGitRepoByFullName(row.fullName);
       try {
         const out = await git.openPr(repoRow, prRequestOf(body, task));
@@ -307,7 +307,7 @@ export async function handleGit(req, res, url) {
     // 从这张卡合并它关联的 PR（人不走流程、直接在卡上点一下的那条路）
     if (req.method === 'POST' && prOf[2] === '/merge') {
       if (!task.prRepo || !task.prNumber) return fail(res, 400, 'E1072', '这张卡还没关联 PR'), true;
-      if (!git.readToken()) return fail(res, 400, 'E1070', '先连接 GitHub（设置 → 代码托管）'), true;
+      if (!git.readToken()) return fail(res, 400, 'E1070', '先连接 GitHub（工作台 → 研发 → 代码托管）'), true;
       const body = await readBody(req);
       try {
         return sendJson(res, 200, await mergeOne(task.prRepo, task.prNumber, body, taskId)), true;
@@ -321,7 +321,7 @@ export async function handleGit(req, res, url) {
       const body = await readBody(req);
       const ref = git.parsePrRef(body.url ?? body.pr ?? '');
       if (!ref) return fail(res, 400, 'E1069', '看不懂这个 PR：贴链接，或写成 owner/name#123'), true;
-      if (!git.readToken()) return fail(res, 400, 'E1070', '先连接 GitHub（设置 → 代码托管）'), true;
+      if (!git.readToken()) return fail(res, 400, 'E1070', '先连接 GitHub（工作台 → 研发 → 代码托管）'), true;
       let snap;
       try {
         snap = await git.fetchPull(ref.repo, ref.number);
@@ -376,7 +376,7 @@ export async function handleGit(req, res, url) {
    * 上限 50 张：一次点下去串行查 GitHub，几百张会卡到人以为点了没反应。
    */
   if (req.method === 'POST' && url.pathname === '/api/git/prs/refresh') {
-    if (!git.readToken()) return fail(res, 400, 'E1074', '先连接 GitHub（设置 → 代码托管）'), true;
+    if (!git.readToken()) return fail(res, 400, 'E1074', '先连接 GitHub（工作台 → 研发 → 代码托管）'), true;
     const only = url.searchParams.get('projectId');
     let updated = 0;
     const failed = [];
@@ -423,6 +423,119 @@ export async function handleGit(req, res, url) {
       return sendJson(res, 200, { repo: row, local }), true;
     } catch (e) {
       return fail(res, 400, 'E1100', String(e.message ?? e)), true;
+    }
+  }
+
+  /*
+   * ---- IDE 式一站式（2026-10-27）：分支弹窗 / 改动管理 / 历史 ----
+   * 编排本体在 ../git-repos.mjs 的「分支 / 改动 / 历史」段（全本地 git，除 fetch/push），
+   * 这里照旧只做"取那一条记录 + 把错误说人话"。错误码从 E1101 起（E1061-E1100 已占）。
+   */
+  const repoBranches = /^\/api\/git\/repos\/([^/]+)\/branches$/.exec(url.pathname);
+  if (req.method === 'GET' && repoBranches) {
+    const row = store.getGitRepo(decodeURIComponent(repoBranches[1]));
+    if (!row) return fail(res, 404, 'E1076', '仓库不在清单里'), true;
+    try {
+      return sendJson(res, 200, await git.listBranches(row)), true;
+    } catch (e) {
+      return fail(res, 400, 'E1101', String(e.message ?? e)), true;
+    }
+  }
+
+  const repoCheckout = /^\/api\/git\/repos\/([^/]+)\/checkout$/.exec(url.pathname);
+  if (req.method === 'POST' && repoCheckout) {
+    const row = store.getGitRepo(decodeURIComponent(repoCheckout[1]));
+    if (!row) return fail(res, 404, 'E1076', '仓库不在清单里'), true;
+    const body = await readBody(req);
+    try {
+      return sendJson(res, 200, await git.checkoutBranch(row, String(body.branch ?? ''))), true;
+    } catch (e) {
+      return fail(res, 400, 'E1102', String(e.message ?? e)), true;
+    }
+  }
+
+  // 新建分支并切过去（分支弹窗「新建分支」）；从当前 HEAD 拉出，脏工作区不管（checkout -b 不动文件）
+  const repoBranchNew = /^\/api\/git\/repos\/([^/]+)\/branch$/.exec(url.pathname);
+  if (req.method === 'POST' && repoBranchNew) {
+    const row = store.getGitRepo(decodeURIComponent(repoBranchNew[1]));
+    if (!row) return fail(res, 404, 'E1076', '仓库不在清单里'), true;
+    const body = await readBody(req);
+    try {
+      return sendJson(res, 200, await git.createBranch(row, String(body.name ?? ''))), true;
+    } catch (e) {
+      return fail(res, 400, 'E1109', String(e.message ?? e)), true;
+    }
+  }
+
+  const repoCommit = /^\/api\/git\/repos\/([^/]+)\/commit$/.exec(url.pathname);
+  if (req.method === 'POST' && repoCommit) {
+    const row = store.getGitRepo(decodeURIComponent(repoCommit[1]));
+    if (!row) return fail(res, 404, 'E1076', '仓库不在清单里'), true;
+    const body = await readBody(req);
+    try {
+      return sendJson(res, 200, await git.commitAll(row, {
+        message: String(body.message ?? ''),
+        allowSecrets: !!body.allowSecrets,
+        paths: Array.isArray(body.paths) ? body.paths.map(String) : null,
+      })), true;
+    } catch (e) {
+      return fail(res, 400, 'E1103', String(e.message ?? e)), true;
+    }
+  }
+
+  const repoPush = /^\/api\/git\/repos\/([^/]+)\/push$/.exec(url.pathname);
+  if (req.method === 'POST' && repoPush) {
+    const row = store.getGitRepo(decodeURIComponent(repoPush[1]));
+    if (!row) return fail(res, 404, 'E1076', '仓库不在清单里'), true;
+    try {
+      return sendJson(res, 200, await git.pushCurrent(row)), true;
+    } catch (e) {
+      return fail(res, 400, 'E1104', String(e.message ?? e)), true;
+    }
+  }
+
+  const repoFetch = /^\/api\/git\/repos\/([^/]+)\/fetch$/.exec(url.pathname);
+  if (req.method === 'POST' && repoFetch) {
+    const row = store.getGitRepo(decodeURIComponent(repoFetch[1]));
+    if (!row) return fail(res, 404, 'E1076', '仓库不在清单里'), true;
+    try {
+      return sendJson(res, 200, await git.fetchRepo(row)), true;
+    } catch (e) {
+      return fail(res, 400, 'E1105', String(e.message ?? e)), true;
+    }
+  }
+
+  const repoLog = /^\/api\/git\/repos\/([^/]+)\/log$/.exec(url.pathname);
+  if (req.method === 'GET' && repoLog) {
+    const row = store.getGitRepo(decodeURIComponent(repoLog[1]));
+    if (!row) return fail(res, 404, 'E1076', '仓库不在清单里'), true;
+    try {
+      return sendJson(res, 200, await git.recentLog(row)), true;
+    } catch (e) {
+      return fail(res, 400, 'E1106', String(e.message ?? e)), true;
+    }
+  }
+
+  const repoDiff = /^\/api\/git\/repos\/([^/]+)\/diff$/.exec(url.pathname);
+  if (req.method === 'GET' && repoDiff) {
+    const row = store.getGitRepo(decodeURIComponent(repoDiff[1]));
+    if (!row) return fail(res, 404, 'E1076', '仓库不在清单里'), true;
+    try {
+      return sendJson(res, 200, await git.fileDiff(row, url.searchParams.get('path'))), true;
+    } catch (e) {
+      return fail(res, 400, 'E1107', String(e.message ?? e)), true;
+    }
+  }
+
+  const repoDiscard = /^\/api\/git\/repos\/([^/]+)\/discard$/.exec(url.pathname);
+  if (req.method === 'POST' && repoDiscard) {
+    const row = store.getGitRepo(decodeURIComponent(repoDiscard[1]));
+    if (!row) return fail(res, 404, 'E1076', '仓库不在清单里'), true;
+    const body = await readBody(req);
+    try {
+      return sendJson(res, 200, await git.discardPaths(row, body.paths)), true;
+    } catch (e) {
+      return fail(res, 400, 'E1108', String(e.message ?? e)), true;
     }
   }
 

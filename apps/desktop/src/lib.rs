@@ -228,6 +228,16 @@ pub fn run() {
                 .background_color(tauri::webview::Color(8, 9, 10, 255))
                 .inner_size(1024.0, 688.0)
                 .min_inner_size(880.0, 600.0)
+                /*
+                 * 外链兜底（2026-10-26，用户实报「去 GitHub 建一个 →」点了没反应）：
+                 * 页面里的外链全是 target="_blank"，WebView2 的 NewWindowRequested
+                 * 默认被 wry 静默吞掉 —— 壳里点任何外链都没反应。根因修法：
+                 * 拦下来交系统默认浏览器开，壳自己永远不冒子窗口。
+                 */
+                .on_new_window(|url, _features| {
+                    open_in_system_browser(url.as_str());
+                    tauri::webview::NewWindowResponse::Deny
+                })
                 .build()?;
 
             align_background_with_theme(&win);
@@ -467,6 +477,33 @@ fn fix_restore_size(win: &tauri::WebviewWindow) {
 /// 用户只看到按钮一直转「…」。壳手里有 HWND，`IFileOpenDialog` 带着 owner 弹，
 /// 就是系统标准的那个「选择文件夹」对话框。
 ///
+/// 用**系统默认浏览器**打开外链（`on_new_window` 的落点）。
+///
+/// 只放行 `http(s)` —— 别的 scheme（`file:` / 自定义协议）一律不碰，
+/// 壳不该成为任意协议的发射器。Windows 走 `ShellExecuteW`（shell32 自带，不引进程依赖）；
+/// 其余平台走 `open` / `xdg-open`。
+fn open_in_system_browser(url: &str) {
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return;
+    }
+    #[cfg(windows)]
+    {
+        use windows::core::{HSTRING, PCWSTR};
+        use windows::Win32::UI::Shell::ShellExecuteW;
+        use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+        let op = HSTRING::from("open");
+        let file = HSTRING::from(url);
+        unsafe {
+            ShellExecuteW(None, &op, &file, PCWSTR::null(), PCWSTR::null(), SW_SHOWNORMAL);
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+        let _ = std::process::Command::new(opener).arg(url).spawn();
+    }
+}
+
 /// 返回：选中的绝对路径；用户取消返回 `None`；出问题返回 `Err`（前端会退回页内浏览）。
 #[tauri::command]
 async fn pick_directory(

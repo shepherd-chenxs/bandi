@@ -106,6 +106,32 @@ export const ICON_TRASH =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4.6 7h14.8"/><path d="M9.6 7V5.3A1.3 1.3 0 0 1 10.9 4h2.2a1.3 1.3 0 0 1 1.3 1.3V7"/><path d="M6.7 7l.7 11.2A1.7 1.7 0 0 0 9.1 20h5.8a1.7 1.7 0 0 0 1.7-1.8L17.3 7"/><path d="M10.4 10.8v5.4M13.6 10.8v5.4"/></svg>';
 
 
+/**
+ * git 语义的五个小图标（2026-10-27，用户指着 IDEA 的分支弹窗要"补图标和缩进"）：
+ * 更新项目 / 提交 / 推送 / 分支 / 标签。画法跟上面同一套 —— 只填路径、描边 currentColor，
+ * 颜色交给 .combo-ic（弱灰），不在这几条里写死。
+ */
+/* 「更新项目」= 拉取（pull）—— 下载语义：向下箭头 + 底部托盘（IDEA 的更新项目同款方向） */
+export const ICON_SYNC =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v10.2"/><path d="M7.6 10.2 12 14.6l4.4-4.4"/><path d="M4.6 19h14.8"/></svg>';
+
+
+export const ICON_COMMIT =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.1"/><path d="M3.5 12h5.4M15.1 12h5.4"/></svg>';
+
+
+export const ICON_PUSH =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15.5V4.5M7.5 9 12 4.5 16.5 9"/><path d="M5 19.5h14"/></svg>';
+
+
+export const ICON_BRANCH =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 8.4v7.2"/><circle cx="6.5" cy="5.7" r="2.4"/><circle cx="6.5" cy="18.3" r="2.4"/><circle cx="17.5" cy="5.7" r="2.4"/><path d="M17.5 8.1c0 4.4-4.4 5.4-8 5.7"/></svg>';
+
+
+export const ICON_TAG =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12.4 3.5H19a1.5 1.5 0 0 1 1.5 1.5v6.6a1.5 1.5 0 0 1-.44 1.06l-7.4 7.4a1.5 1.5 0 0 1-2.12 0l-6.6-6.6a1.5 1.5 0 0 1-.44-1.06V5A1.5 1.5 0 0 1 5 3.5z"/><circle cx="8" cy="8" r="1.3"/></svg>';
+
+
 
 /**
  * 工作台磁贴的图标（2026-10-20 重设计）：原来磁贴上是一个"单字色块"（项/板/时/编/流），
@@ -122,6 +148,16 @@ export const ICON_WB_CLOCK =
 
 export const ICON_WB_FLOW =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4" width="5.4" height="5.4" rx="1.4"/><rect x="15.1" y="4" width="5.4" height="5.4" rx="1.4"/><rect x="9.3" y="14.6" width="5.4" height="5.4" rx="1.4"/><path d="M6.2 9.4v2.1h11.6V9.4M12 11.5v3.1"/></svg>';
+
+
+/* 工作台「研发」区的两个内置入口（2026-10-26 用户：远程连接 / 代码托管放这儿更合适）。
+   画法跟上面那批一致：线性 SVG，颜色由 .wb-ico 的渐变底给。 */
+export const ICON_WB_CODE =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m8.6 7.6-4.6 4.4 4.6 4.4M15.4 7.6l4.6 4.4-4.6 4.4M13.4 5.4l-2.8 13.2"/></svg>';
+
+
+export const ICON_WB_SSH =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4" width="17" height="7" rx="1.8"/><rect x="3.5" y="13" width="17" height="7" rx="1.8"/><path d="M6.8 7.5h.01M6.8 16.5h.01"/></svg>';
 
 
 
@@ -316,6 +352,8 @@ export function createCombo({
   let all = items;
   let current = value;
   let hi = 0;
+  // 可折叠分组的收起状态（按标题文本记，实例级：关了弹层再开还记着）
+  const folded = new Set();
 
   const labelOf = (id) => (all.find((it) => it.id === id) ?? {}).label ?? String(id ?? '');
   const shown = () =>
@@ -338,11 +376,41 @@ export function createCombo({
     let hits = all.filter(hit);
     /*
      * 小标题（`{ header: 'xxx' }`：没有 id、不可选）只在**没搜索**时显示。
-     * 搜索时留着会把结果切成一堆空标题，反而更难读。
+     * 搜索时留着会把结果切成一堆空标题，反而更难读。文件夹（`{ folder }`，分支树第二层）同理。
      */
-    if (q) hits = hits.filter((it) => it.header === undefined);
-    // hi 只数**可选项** —— 键盘上下不能停在标题上（那是死路）
-    const pickable = hits.filter((it) => it.header === undefined);
+    if (q) {
+      hits = hits.filter((it) => it.header === undefined && it.folder === undefined);
+    } else {
+      /*
+       * 可折叠分组（`{ header, foldable: true }`）与前缀文件夹（`{ folder }`，分支弹窗用）：
+       * 点标题把该组收到下一个标题/文件夹前。折叠状态按 `foldKey ?? 标题/文件夹名` 记在实例上，
+       * 关了弹层再开还记着。**搜索时一律当全展开** —— 搜索本来就把标题藏了，折叠着搜等于"搜到了却看不见"。
+       */
+      let hiding = false; // 组标题收起中：它管到下一个标题为止
+      let folderHiding = false; // 当前文件夹收起中：只管**自己的叶子**（带 sub 的条目）
+      hits = hits.filter((it) => {
+        if (it.header !== undefined) {
+          // 顶层分组标题：重置两层藏匿态 —— 它自己（foldable）决定后面到下一个标题前藏不藏
+          hiding = !!it.foldable && folded.has(it.foldKey ?? it.header);
+          folderHiding = false;
+          return true;
+        }
+        // 父组收起中：文件夹和它的叶子一起藏（⚠️ 文件夹自己的开合只在父组展开时生效，
+        // 不能在这儿用文件夹的状态覆盖父组的藏匿态 —— 2026-10-27 用户实报"本地/远程折不动"：
+        // 组标题折了，下面的文件夹又立刻把藏匿态顶回去，看着就像没反应）
+        if (hiding) return false;
+        if (it.folder !== undefined) {
+          // 文件夹行自己永远显示（它是开合开关）；它的藏匿态只管到**下一个文件夹/平级条目**为止
+          // —— 2026-10-27 用户实报"点折叠会把下面的都折叠起来"：原来 hiding 一路带下去，
+          // 折 bandi 连 feat、fix 和 main 全带走。叶子有 sub 标记，平级分支（main）没有，正好分工。
+          folderHiding = folded.has(it.foldKey ?? it.folder);
+          return true;
+        }
+        return it.sub ? !folderHiding : true;
+      });
+    }
+    // hi 只数**可选项** —— 键盘上下不能停在标题/文件夹上（那是死路）
+    const pickable = hits.filter((it) => it.header === undefined && it.folder === undefined);
     if (hi >= pickable.length) hi = Math.max(0, pickable.length - 1);
 
     let pi = -1;
@@ -350,9 +418,20 @@ export function createCombo({
     list.innerHTML = hits.length
       ? hits
           .map((it) => {
-            if (it.header !== undefined) return `<div class="combo-group">${esc(it.header)}</div>`;
+            if (it.header !== undefined) {
+              // 不带 foldable 的标题输出跟以前逐字相同（别的下拉不该有任何变化）
+              if (!it.foldable) return `<div class="combo-group">${esc(it.header)}</div>`;
+              const f = folded.has(it.foldKey ?? it.header);
+              return `<div class="combo-group foldable${f ? ' is-folded' : ''}" data-fold="${esc(it.foldKey ?? it.header)}">${esc(it.header)}</div>`;
+            }
+            if (it.folder !== undefined) {
+              const key = it.foldKey ?? it.folder;
+              const f = folded.has(key);
+              return `<div class="combo-group combo-sub foldable${f ? ' is-folded' : ''}" data-fold="${esc(key)}">${ICON_FOLDER}${esc(it.folder)}</div>`;
+            }
             pi += 1;
-            return `<div class="combo-item ${pi === hi ? 'hi' : ''}" data-pick="${esc(it.id)}">
+            return `<div class="combo-item ${it.cls ?? ''} ${it.sub ? 'sub ' : ''}${pi === hi ? 'hi' : ''}" data-pick="${esc(it.id)}">
+                 ${it.icon ? `<span class="combo-ic">${it.icon}</span>` : ''}
                  <span class="combo-item-label">${esc(it.label)}</span>
                  ${it.id === current ? '<span class="combo-check">✓</span>' : ''}
                </div>`;
@@ -360,6 +439,13 @@ export function createCombo({
           .join('')
       : `<div class="combo-empty">${esc(empty)}</div>`;
     list.querySelectorAll('[data-pick]').forEach((el) => { el.onclick = () => pick(el.dataset.pick); });
+    list.querySelectorAll('[data-fold]').forEach((el) => {
+      el.onclick = () => {
+        const k = el.dataset.fold;
+        folded.has(k) ? folded.delete(k) : folded.add(k);
+        paint(input ? input.value : '');
+      };
+    });
   };
 
   const close = () => {
@@ -735,11 +821,11 @@ export function cliAvatar(kind, label) {
 
 
 /**
- * 头像的内联配色（Linear 语汇，2026-10-19）。
+ * 头像的内联配色（2026-10-19）。
  *
- * 为什么不再"所有人同一个灰"：Linear 的注释头像会用一小组固定的低饱和色按人分配。
+ * 为什么不再"所有人同一个灰"：同类产品的注释头像会用一小组固定的低饱和色按人分配。
  * 一开始我把它统一成 `--chip` 灰底，截图一看通讯录里 7 行头像**全一样**，
- * 眼睛完全没有落点、认人只能逐行读字 —— 这是把 Linear 的"克制"做成了"无信息"。
+ * 眼睛完全没有落点、认人只能逐行读字 —— 这是把克制做成了"无信息"。
  *
  * 做法：一组**低饱和**色相（不是高饱和的彩色圆），按名字哈希稳定分配 ——
  * 同一个人永远同色，换机器/刷新也不变（跟工作台磁贴的"顺序发色"不同：

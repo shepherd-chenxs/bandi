@@ -255,7 +255,7 @@ try {
   check('接口带按项目概览（只有真有活的甲项目）', Array.isArray(g.body?.by_project) && g.body.by_project.length === 1, String(g.body?.by_project?.length));
   check('接口也带同一套看板列', g.body?.columns?.map((c) => c.key).join('>') === data.columns.map((c) => c.key).join('>'));
 
-  console.log('\n⑧ 手工建任务（看板列头的「＋」，参照 Multica）');
+  console.log('\n⑧ 手工建任务（看板列头的「＋」，参照同类产品）');
   const mk = (body) => api(`/api/projects/${encodeURIComponent(proj.id)}/tasks`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   });
@@ -305,7 +305,7 @@ try {
   check('乱改状态 400', badStatus.status === 400, String(badStatus.status));
 
   /*
-   * 拖进「进行中」＝开工（2026-10-17 对齐 Multica：状态到位 + 有执行人才触发）。
+   * 拖进「进行中」＝开工（2026-10-17 对齐同类产品：状态到位 + 有执行人才触发）。
    *
    * 真派活会去起一次 agent CLI —— 冒烟里绝不能真跑（烧 token、还要连网）。
    * 所以这里造一个**"他手上正有活跑"**的现场，派活就会被并发闸挡住。验的正是最关键的三条：

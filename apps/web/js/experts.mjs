@@ -1,16 +1,16 @@
 /* experts.mjs —— 专家库、界面插件。
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
 import { esc, savePlace, setRoute, toast } from './shell.mjs';
-import { api, failHtml, initial, personaAvatar, post, renderMarkdown } from './ui.mjs';
+import { ICON_WB_CODE, ICON_WB_SSH, api, failHtml, initial, personaAvatar, post, renderMarkdown } from './ui.mjs';
 import { load, setNav } from './state.mjs';
 import { breadcrumb, headRow } from './connectors.mjs';
 import { askText, confirmDo } from './machine.mjs';
 import { openConversationSafe } from './listmenu.mjs';
 import { renderList, showView } from './contacts.mjs';
-import { openWorkflows, wbCard, workbenchFlowSection } from './workflows.mjs';
+import { openWorkflows, wbCard } from './workflows.mjs';
 import { openProjectsPage, openTaskBoard, workbenchAutoSection, workbenchProjectSection } from './projects.mjs';
 import { setListTitle } from './flowpages.mjs';
-import { openSchedules } from './skills.mjs';
+import { openCodeRepoPage, openSchedules } from './skills.mjs';
 import { setBusy, setComposer } from './chat.mjs';
 import { gidOf, paintDrawer, paintGroupDetail } from './groups.mjs';
 import { $, S } from './core.mjs';
@@ -453,10 +453,27 @@ export const settingsPanels = () =>
   S.plugins.filter((p) => p.valid && p.panel?.slot === 'settings.section');
 
 
+/**
+ * 能交给 `renderPluginPanel` 渲染的面板：工作台插件（已装＋启用）＋ 设置分节面板。
+ *
+ * 两者渲染路径完全一样（声明式 blocks / 主从 split），区别只在**入口**：
+ * 工作台插件从宫格进，设置分节面板从设置左栏或工作台子页进（远程连接就是这么用的）。
+ * 校验只看"这块面板能不能画"，别写成 `usablePlugins()` —— 那只认工作台那一档，
+ * 拿它校验会把 settings.section 的面板当成"被卸载了"，直接踢回宫格。
+ */
+export const panelPlugins = () =>
+  S.plugins.filter(
+    (p) =>
+      p.valid &&
+      p.panel &&
+      (p.panel.slot === 'plugins' ? p.installed && p.enabled : p.panel.slot === 'settings.section'),
+  );
+
+
 
 /**
  * 面板宿主的重画入口（2026-10-26）：默认 null = 工作台面板（renderPluginPanel 自己）。
- * 「设置 → 远程连接」这类**借用面板机制**的宿主，渲染时把自己的重画函数挂进来 ——
+ * 「工作台 → 研发 → 远程连接」这类**借用面板机制**的宿主，渲染时把自己的重画函数挂进来 ——
  * 表单弹窗提交（app.mjs 的 plgFormOk）和面板内的动作完成后才知道该重画谁。
  * ⚠️ 换宿主必须成对：每个宿主渲染前先挂自己，离开时（renderPluginPanel / openSettings 别的分节）清回 null。
  */
@@ -483,7 +500,7 @@ export let pluginRows = {};
 export let pluginDialogForms = new Set();
 
 /** 扫一遍块清单，把被引用的表单记进 pluginDialogForms（渲染任何块**之前**调 —— 2026-10-26 抽出，设置页宿主也要用） */
-export function preparePluginForms(allBlocks) {
+export function preparePluginForms(allBlocks, split = null) {
   pluginDialogForms = new Set();
   for (const b of allBlocks) {
     if (b.type === 'list') {
@@ -492,12 +509,28 @@ export function preparePluginForms(allBlocks) {
     }
     if (b.type === 'button' && b.edit) pluginDialogForms.add(b.edit);
   }
+  /* 主从布局的两处引用也要登记（2026-10-26）：
+     · 左栏「＋ 添加」→ `split.master.add.form`
+     · 详情标题行的「改」→ `split.detail.actions[].edit`
+     不登记的话 renderBlock 会把那张表单**内嵌**画出来 —— 表现是一进页面，
+     右栏详情顶上多一张空白登记表，还得手动往下滚才看得到真正的内容。 */
+  if (split?.master?.add?.form) pluginDialogForms.add(split.master.add.form);
+  for (const a of split?.detail?.actions ?? []) if (a.edit) pluginDialogForms.add(a.edit);
 }
 
 
 
 /** code 块要复制的文本，按块下标存（点击时回查，不把长文本塞进 DOM 属性） */
 export let pluginCopy = {};
+
+/**
+ * tabs 块的页签选择（键：`插件id:块__i`）。
+ *
+ * 为什么要记：面板的重画是**整页**重画（`S.pluginData = {}` + 重新拉取），不记的话
+ * 每次动作之后都弹回第一个页签 —— 在「引导」里点了「生成密钥对」，回来看到的还是
+ * 「连接信息」，人得重新点一遍。（2026-10-26 远程连接改成两个页签后暴露。）
+ */
+export const pluginTabPick = new Map();
 
 
 
@@ -520,6 +553,7 @@ export let pluginResult = {};
  */
 export async function openPlugins() {
   setRoute('plugins');
+  setPluginRerender(null);   // 回宫格 = 离开所有面板宿主（远程连接也借这套机制，别让它的表单提交把你拽回去）
   S.plugin = null;
   S.projectList = false;   // 回宫格 = 离开项目页
   S.projectId = null;
@@ -580,13 +614,32 @@ export function renderWorkbenchGrid() {
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(p);
   }
+  /*
+   * **「研发」组常驻**（2026-10-26 用户：远程连接 / 代码托管放到工作台研发区更合适）。
+   * 为什么不是只挂在插件分类上：这两个是**平台内置入口**（设置里的配置页），
+   * 研发面板插件没装的时候它们也该在 —— 有仓库、有机器是干活的前提，不是插件的附属品。
+   * 没有研发类插件时补一个空组，位置仍在最前（跟有研发面板时一致）。
+   */
+  const groupList = [...groups];
+  if (!groups.has('研发')) groupList.unshift(['研发', []]);
+
+  /**
+   * 研发区的两个内置磁贴。点开的是「工作台 → 研发 → 代码托管 / 远程连接」那两页 ——
+   * 这里只是**常用入口**，配置仍然在设置里做（不把设置搬过来，免得两处各写一套渲染）。
+   */
+  const DEV_TILES = [
+    ['代码托管', '连接 GitHub、接入仓库', 'code', ICON_WB_CODE],
+    ['远程连接', 'SSH 服务器与密钥', 'remote', ICON_WB_SSH],
+  ];
 
   /* 所有分组**共用一个宫格容器**，分组名退化成一行小标题（`.wb-sec`）。
      原来每个分组是 `<section class="fx">`，`.fx + .fx` 自带横分隔线 —— 5 个小组竖着叠成
      5 条横带，每条右侧一片空白，分隔线反而比内容显眼。现在一屏铺不下就换行，不会"一带一块"。 */
-  const pluginSections = [...groups]
-    .map(
-      ([cat, items]) => `<div class="wb-sec">${esc(cat)}</div>
+  const pluginSections = groupList
+    .map(([cat, items]) => {
+      // 一组一个色（内联渐变），组里的插件和内置磁贴共用这一种颜色 —— 一眼看出是同一区
+      const icoStyle = wbIcoStyle(cat);
+      return `<div class="wb-sec">${esc(cat)}</div>
         <div class="wb-grid">
           ${items
             .map(
@@ -596,20 +649,23 @@ export function renderWorkbenchGrid() {
                 p.label,
                 p.description || p.label,
                 `data-wb-open="${esc(p.id)}"`,
-                wbIcoStyle(cat),
+                icoStyle,
               ),
             )
             .join('')}
-        </div>`,
-    )
+          ${cat === '研发'
+            ? DEV_TILES.map(([name, desc, key, icon]) =>
+                wbCard('wb-tint', icon, name, desc, `data-wb-settings="${key}"`, icoStyle),
+              ).join('')
+            : ''}
+        </div>`;
+    })
     .join('');
 
   $('pluginView').classList.remove('kb-page'); // 宫格是长页面，按普通滚动
   $('pluginView').innerHTML = `
     <div class="detail-head head-row"><div class="head-title"><b>工作台</b></div></div>
-    <div class="detail-body wb-page">${
-      list.length ? pluginSections : '' // 没装应用就不渲染这个区：空态横幅没人需要
-    }${workbenchProjectSection()}${workbenchAutoSection()}${workbenchFlowSection()}${
+    <div class="detail-body wb-page">${pluginSections}${workbenchProjectSection()}${workbenchAutoSection()}${
       broken.length
         ? `<div class="wb-sec">装不上台面</div>
            ${broken
@@ -633,7 +689,7 @@ export function renderWorkbenchGrid() {
       renderPluginPanel().catch((e) => toast(e.message, 'error'));
     };
   });
-  // 流程编排：画节点、指派、发布（入口原来在 rail 的「工作流」，现在收进工作台）。
+  // 工作流：画节点、指派、发布（入口原来在 rail 的「工作流」，现在收进工作台）。
   // 发布过的流程**不再有工作台磁贴**（2026-10-26 用户："这些入口去掉，现在直接在任务面板就可以建了"）——
   // 发起统一走任务看板（建卡时执行方式选「由流程执行」），这里只剩"画流程"这一个入口。
   view.querySelector('[data-flow-design]')?.addEventListener('click', () => {
@@ -650,6 +706,20 @@ export function renderWorkbenchGrid() {
   // 定时任务：入口原来在「设置」里，搬到工作台（2026-10-17 用户要求）
   view.querySelector('[data-schedules]')?.addEventListener('click', () => {
     openSchedules().catch((e) => toast(e.message, 'error'));
+  });
+  /*
+   * 研发区的两个内置入口（代码托管 / 远程连接）→ 各自的工作台子页。
+   *
+   * 2026-10-26 二改：原来这俩**借设置页的壳**（`setNav('settings')` + `S.settingsSection`），
+   * 点磁贴的观感是"整页跳进设置"——左栏一列设置分节、当前页在左栏没有对应项（设置里
+   * 已经按用户要求不列表了），所以看着像点错了地方。现在跟项目/看板一样是工作台子页：
+   * 左栏收起、页头面包屑写「工作台 › X」。
+   */
+  view.querySelectorAll('[data-wb-settings]').forEach((el) => {
+    el.onclick = () => {
+      const open = el.dataset.wbSettings === 'remote' ? openRemotePage() : openCodeRepoPage();
+      open.catch((e) => toast(e.message, 'error'));
+    };
   });
 }
 
@@ -832,7 +902,11 @@ export async function renderBlock(plugin, b, row = {}) {
     const src = b.source ? await pluginApi(plugin, apiOf(b.source)) : {};
     const list = pickOne(src, b.source?.pick);
     const steps = Array.isArray(list) ? list : [];
+    b.__row = row;   // emptyAction 拼 URL 时要 `{alias}` 这类占位符的值（和 code 块同理）
     steps.forEach((s, si) => { pluginCopy[`${b.__i}:${si}`] = String(s.command ?? ''); });
+    // 没有步骤时也能给一个出口（如「先生成密钥」），否则这一档就是死路：
+    // 提示写着"先生成密钥"，按钮却在另一个页签里（2026-10-26 引导页签）
+    const empty = !steps.length && b.emptyAction ? b.emptyAction : null;
     return sec(
       titleOf(src),
       steps.length
@@ -851,17 +925,25 @@ export async function renderBlock(plugin, b, row = {}) {
             )
             .join('')}</div>`
         : `<div class="hint">${esc(b.empty || '没有步骤')}</div>`,
+      empty ? `<button class="primary btn-sm" style="margin-left:auto" data-plg-empty="${b.__i}">${esc(empty.label)}</button>` : '',
     );
   }
 
   /**
-   * tabs 块（2026-10-24）：把几组块收进页签（服务器详情：基本信息 / 操作引导）。
-   * 子块照常递归 renderBlock —— 取数、复制、兜底一个不少。页签切换走 #plgPanel 上
-   * 那一个委托监听（见 renderPluginPanel 尾部），这里只出 HTML。
+   * tabs 块（2026-10-24）：把几组块收进页签（服务器详情：连接信息 / 引导）。
+   * 子块照常递归 renderBlock —— 取数、复制、兜底一个不少。页签切换走宿主上
+   * 那一个委托监听（见 finishPluginPanel），这里只出 HTML。
+   *
+   * 选中项记在 `pluginTabPick`（按插件 + 块位置）：面板整页重画后回到原来那个页签 ——
+   * 否则"在引导页点生成密钥 → 重画 → 弹回连接信息"，人每次都得重新点。
    */
   if (b.type === 'tabs') {
     const tabs = [];
     const panels = [];
+    // 取记忆时要夹紧：manifest 改过（页签变少）时旧值会越界，越界就会「一个都不选中、一个都不显示」
+    const pages = b.tabs?.length ?? 0;
+    const remembered = Number(pluginTabPick.get(`${plugin.id}:${b.__i}`) ?? 0);
+    const pick = Number.isInteger(remembered) && remembered >= 0 && remembered < pages ? remembered : 0;
     for (const [ti, t] of (b.tabs ?? []).entries()) {
       const inner = [];
       for (const sub of t.blocks ?? []) {
@@ -871,10 +953,10 @@ export async function renderBlock(plugin, b, row = {}) {
           inner.push(`<section class="fx"><div class="plg-err">${esc(sub.type)} 块出错：${failHtml(err)}</div></section>`);
         }
       }
-      tabs.push(`<button type="button" class="tab${ti === 0 ? ' on' : ''}" data-plg-tab="${ti}">${esc(t.label)}</button>`);
-      panels.push(`<div class="tab-panel" data-plg-tab-panel="${ti}"${ti === 0 ? '' : ' hidden'}>${inner.join('')}</div>`);
+      tabs.push(`<button type="button" class="tab${ti === pick ? ' on' : ''}" data-plg-tab="${ti}">${esc(t.label)}</button>`);
+      panels.push(`<div class="tab-panel" data-plg-tab-panel="${ti}"${ti === pick ? '' : ' hidden'}>${inner.join('')}</div>`);
     }
-    return `<div class="plg-tabs"><div class="tabs">${tabs.join('')}</div>${panels.join('')}</div>`;
+    return `<div class="plg-tabs" data-plg-tabs="${b.__i}"><div class="tabs">${tabs.join('')}</div>${panels.join('')}</div>`;
   }
 
   /**
@@ -885,6 +967,9 @@ export async function renderBlock(plugin, b, row = {}) {
   if (b.type === 'code') {
     const src = b.source ? await pluginApi(plugin, apiOf(b.source)) : {};
     const text = String(pickOne(src, b.source?.pick) ?? '');
+    /* `onlyWhenEmpty`：**有内容就整块不画**（2026-10-26 用户：「连接信息里面不要显示公钥」）。
+       公钥正文不想摊在页面上，但"这台还没密钥"时要留一个生成入口 —— 于是只留空态。 */
+    if (b.onlyWhenEmpty && text) return '';
     pluginCopy[b.__i] = text;
     b.__row = row;
     const hint = b.hint ? tpl(b.hint, ctx(src)) : '';
@@ -1197,8 +1282,8 @@ export async function renderPluginPanel() {
   pluginRerender = null;   // 回到工作台宿主：别的宿主挂进来的重画入口作废
   const plugin = S.plugins.find((p) => p.id === S.plugin);
 
-  // 没选应用（或选的那个被卸掉了）→ 回工作台首页
-  if (!plugin || !usablePlugins().some((p) => p.id === plugin.id)) {
+  // 没选应用（或选的那个被卸掉了 / 面板坏了）→ 回工作台首页
+  if (!plugin || !panelPlugins().some((p) => p.id === plugin.id)) {
     S.plugin = null;
     renderWorkbenchGrid();
     return;
@@ -1236,7 +1321,7 @@ export async function renderPluginPanel() {
   }
 
   // 先扫一遍：哪些表单被 add / 行内 edit 引用了 —— 被引用的走弹窗形态
-  preparePluginForms(allBlocks);
+  preparePluginForms(allBlocks, split);
 
   // 有主从布局 → 用**全局左栏**放列表（和消息/通讯录同一位置）；
   // 没有 → 整页布局，把左栏收掉（见 CSS 的 body.no-list）
@@ -1307,16 +1392,34 @@ export async function renderPluginPanel() {
  * 传自己的容器和重画函数 —— 接线逻辑一份，两个宿主共用。
  */
 function finishPluginPanel(plugin, allBlocks, root = $('plgPanel'), rerender = rerenderPanel) {
-  // tabs 块的页签切换：委托在宿主上一个监听管全部（面板重建时这里也重建，不会叠）
-  root.addEventListener('click', (e) => {
-    const t = e.target.closest('[data-plg-tab]');
-    if (!t) return;
-    const wrap = t.closest('.plg-tabs');
-    if (!wrap) return;
-    const i = t.dataset.plgTab;
-    wrap.querySelectorAll('.tab').forEach((b) => b.classList.toggle('on', b.dataset.plgTab === i));
-    wrap.querySelectorAll('[data-plg-tab-panel]').forEach((p) => p.toggleAttribute('hidden', p.dataset.plgTabPanel !== i));
-  });
+  /* 块的 `__i` 在 tab 子块里是 `"1.0.0"` 这种字符串 —— 早先按 `Number()` 当数组下标取，
+     NaN 一取就是 undefined，于是「生成密钥对」「行内动作」点了没反应且不报错。
+     （2026-10-26 把公钥块挪进页签时才撞出来。）统一建一张字符串索引表来查。 */
+  const blockByI = new Map();
+  const indexBlocks = (list) => {
+    for (const b of list ?? []) {
+      if (b && b.__i !== undefined) blockByI.set(String(b.__i), b);
+      for (const t of b?.tabs ?? []) indexBlocks(t.blocks);
+    }
+  };
+  indexBlocks(allBlocks);
+
+  /* tabs 块的页签切换：委托在宿主上一个监听管全部。
+     标记防重复挂 —— `#plgPanel` 里换的是 innerHTML，元素本身不变，不加标记会一次进页面叠一个监听。 */
+  if (root.dataset.plgTabWired !== '1') {
+    root.dataset.plgTabWired = '1';
+    root.addEventListener('click', (e) => {
+      const t = e.target.closest('[data-plg-tab]');
+      if (!t) return;
+      const wrap = t.closest('.plg-tabs');
+      if (!wrap) return;
+      const i = t.dataset.plgTab;
+      // 记住选中的页签：面板下次整页重画时回到这里（见 pluginTabPick 的注释）
+      if (wrap.dataset.plgTabs !== undefined) pluginTabPick.set(`${plugin.id}:${wrap.dataset.plgTabs}`, Number(i));
+      wrap.querySelectorAll('.tab').forEach((b) => b.classList.toggle('on', b.dataset.plgTab === i));
+      wrap.querySelectorAll('[data-plg-tab-panel]').forEach((p) => p.toggleAttribute('hidden', p.dataset.plgTabPanel !== i));
+    });
+  }
 
   // 标题行右侧的「添加」按钮（以及任何 data-form-open）→ 开表单弹窗
   root.querySelectorAll('[data-form-open]').forEach((el) => {
@@ -1342,9 +1445,9 @@ function finishPluginPanel(plugin, allBlocks, root = $('plgPanel'), rerender = r
       );
   });
 
-  // code 块：内容为空时的那个按钮（「还没生成密钥 → 生成密钥对」）
+  // code / steps 块：内容为空时的那个按钮（「还没生成密钥 → 生成密钥对」）
   root.querySelectorAll('[data-plg-empty]').forEach((el) => {
-    const b = allBlocks[Number(el.dataset.plgEmpty)];
+    const b = blockByI.get(String(el.dataset.plgEmpty));
     const act = b?.emptyAction;
     if (!act) return;
     el.onclick = async () => {
@@ -1372,7 +1475,7 @@ function finishPluginPanel(plugin, allBlocks, root = $('plgPanel'), rerender = r
 
   root.querySelectorAll('[data-plg-act]').forEach((el) => {
     el.onclick = async () => {
-      const b = allBlocks[Number(el.dataset.plgAct)];
+      const b = blockByI.get(String(el.dataset.plgAct));
       if (!b) return;
 
       // button.edit：打开表单弹窗，先把这一行灌进去
@@ -1507,237 +1610,36 @@ export async function copyText(btn, text, bodyEl) {
 /* ------------------------------------------------------------ 远程连接 */
 
 /**
- * 「设置 → 远程连接」（2026-10-26）：原「服务器与密钥」界面插件收编为内置设置分节。
+ * 「工作台 → 研发 → 远程连接」。
  *
- * 借插件的现成机制，不在设置里重写一遍：数据与动作照走 manifest 的声明
- * （renderBlock / buttonHTML / finishPluginPanel），表单弹窗、复制、确认框全套白拿。
+ * 它就是一个**普通插件面板**：manifest 里 `panel.slot = 'settings.section'`，带 `split` 主从布局。
+ *   左栏 `#listBody` = 登记表（`renderPluginMaster` 画，选中项记 `S.pluginRow`）；
+ *   主区 = 选中那台的详情（`renderSplitDetail`：状态/公钥/装公钥步骤，动作在详情标题行右侧）。
+ * 所以这一页的渲染只需要"把 S.plugin 指到 ssh 再交给 renderPluginPanel"，没有自己的一套。
  *
- * 版式（2026-10-26 二/三/五改，用户逐条拍板）：**登记列表化、动作上行、详情删除** ——
- * 页面一张整宽登记表，每行：名字 / 地址 / 状态 + 测/改/删/引导；详情弹窗已删，
- * 公钥（复制 / 生成密钥对）并进了引导弹窗 —— 「引导」是唯一弹窗入口。
- * 弹窗是单例 `#remoteDlg`，内容每次现画；行键记在 `S.pluginRow` —— 动作做完
- * rerender 重画页面时把弹窗内容一并画回去（同一个 dialog 元素开着不关），不闪。
- *
- * ⚠️ 宿主登记要成对：进本页先 setPluginRerender(自己)，openSettings 其它分节 / openPlugins
- * 会清回 null —— 否则表单弹窗提交后会把你拽回这一页。
+ * 为什么回到通用路径（2026-10-26 六改，用户截图：「做成左边列表右边详情」）：
+ * 〇 之前为了"动作长在行上"，这页自己画了一张整宽列表、行上塞 测/改/删/引导 四个按钮，
+ *    详情压成弹窗 —— 等于把**已经有的主从机制重写了一遍**（通用那份在 renderPluginMaster /
+ *    renderSplitDetail 里，manifest 的 detail 段成了没人读的死配置）。
+ * 〇 现在两边合一：加载、选中、动作、结果浮层、表单弹窗、确认框全走现成机制；
+ *    以后改主从布局（比如换行结构、加搜索），这一页自动跟着变。
  */
-let remoteDlgWired = false;
-/**
- * 弹窗骨架正常在 index.html 里；但旧缓存的页面可能没有这个节点 —— 那样点「详情」
- * 会在 `$('remoteDlg')` 上炸出一个被 toast 吞掉的 TypeError，用户看到的就是"没反应"。
- * 这里自愈：没有就现造一个（和 index.html 里那份同构）。
- */
-function ensureRemoteDlg() {
-  let dlg = $('remoteDlg');
-  if (dlg) return dlg;
-  dlg = document.createElement('dialog');
-  dlg.id = 'remoteDlg';
-  dlg.innerHTML = `<div class="remote-dlg-head">
-      <b id="remoteDlgTitle">详情</b>
-      <button type="button" id="remoteDlgX" class="mini sm" title="关闭（Esc）">×</button>
-    </div>
-    <div id="remoteDlgBody"></div>`;
-  document.body.appendChild(dlg);
-  return dlg;
+export async function openRemotePage() {
+  setRoute('remote');
+  /* 离开设置的分节状态：不然下次点一级栏「设置」，setNav 还会照着 S.settingsSection
+     把你送回这一页（渲染换了宿主，这个残留值就成了陷阱）。 */
+  S.settingsSection = 'prefs';
+  S.projectList = false;   // 工作台子页：别让项目 / 看板那两条路把左栏抢走
+  S.projectId = null;
+  S.boardAll = false;
+  /* 插件清单：`/api/state` 不带它（工作台是点进去才拉）。刷新直接落在这一页时 S.plugins 是空的，
+     不拉就会渲染成"面板读不到"。拉失败就用缓存里那份，让面板自己去报错。 */
+  try {
+    S.plugins = (await api('/api/plugins')).plugins;
+  } catch { /* 拉不到：缓存里有什么用什么 */ }
+  S.plugin = 'ssh';
+  await renderPluginPanel();
 }
-
-/* 本页上下文（插件/manifest/行数据/块表）：openRow 只画弹窗、不重入整页渲染，全靠它 */
-let remoteCtx = null;
-
-/**
- * 画 `#remoteDlg` 的当前内容（照 `S.remoteDlg` + `S.pluginRow` 选块）。
- * 点「详情」/「引导」、动作做完 rerender、rerender 重画列表 —— 都汇到这一个口子：
- * dialog 元素开着不动，只换 body；页面（列表）不重画，这就是"点了不闪"的关键。
- */
-async function paintRemoteDlg() {
-  const ctx = remoteCtx;
-  if (!ctx) return;
-  const dlg = ensureRemoteDlg();
-  if (!remoteDlgWired) {
-    remoteDlgWired = true;
-    dlg.addEventListener('close', () => { S.remoteDlg = null; });   // × / Esc 都走这
-    $('remoteDlgX').onclick = () => dlg.close();
-  }
-  const kind = S.remoteDlg;
-  if (!kind) { if (dlg.open) dlg.close(); return; }
-  const sel = ctx.rows.find((r) => ctx.keyOf(r) === String(S.pluginRow)) ?? null;
-  if (!sel) { S.remoteDlg = null; if (dlg.open) dlg.close(); return; }
-
-  // 四改后弹窗只剩引导一种（详情已删，公钥/生成密钥对并进了引导）
-  $('remoteDlgTitle').textContent = tpl(ctx.split.guide?.title || '操作引导 · {alias}', sel);
-  const dlgBlocks = ctx.split.guide?.blocks ?? [];
-  let html = '';
-  for (const b of dlgBlocks) {
-    try {
-      html += await renderBlock(ctx.plugin, b, sel);
-    } catch (err) {
-      html += `<section class="fx"><div class="plg-err">${esc(b.type)} 块出错：${failHtml(err)}</div></section>`;
-    }
-  }
-  // 内容包一层一次性容器：finishPluginPanel 的监听挂在容器上，随内容一起换，不会叠
-  $('remoteDlgBody').innerHTML = `<div id="remoteDlgInner">${html}</div>`;
-  finishPluginPanel(ctx.plugin, ctx.allBlocks, $('remoteDlgInner'));
-  if (!dlg.open) dlg.showModal();
-}
-
-export async function renderRemoteConnection() {
-  const view = $('settingsView');
-  /* 插件清单只在第一次进页面拉（rerender 重画列表时不重复拉 —— "闪"的一半就来自
-     这两个串行 await 之后的整页重建）。S.plugins 只在工作台/插件页才拉，直接进
-     设置时可能是空的 */
-  if (!remoteCtx) {
-    try {
-      S.plugins = (await api('/api/plugins')).plugins;
-    } catch { /* 拉不到就用缓存里可能有的那份；再不行下面按读不到渲染 */ }
-  }
-  const plugin = S.plugins.find((p) => p.id === 'ssh' && p.valid && p.panel?.slot === 'settings.section')
-    ?? settingsPanels()[0]
-    ?? null;
-  setPluginRerender(() => renderRemoteConnection());
-  if (!plugin) {
-    remoteCtx = null;   // 下次进页面重新拉清单
-    view.innerHTML = `${headRow('<b>远程连接</b>')}<div class="empty">内置面板读不到（catalog/plugins/ssh/manifest.json）—— 看服务端日志</div>`;
-    return;
-  }
-
-  const split = plugin.panel.split ?? null;
-
-  /* 骨架（页头/说明/宿主容器）只在第一次进页面（或从别的分节切回来）时建 ——
-     rerender 只换 #plgRemoteHost 里面的内容，整个设置页不动，这是"不闪"的另一半 */
-  if (!$('plgRemoteHost') || $('plgRemoteHost').dataset.pid !== plugin.id) {
-    view.innerHTML = `
-      ${headRow('<b>远程连接</b>')}
-      <div class="detail-body">
-        <div id="plgRemoteHost" data-pid="${esc(plugin.id)}"><div class="dim" style="padding:16px">加载中…</div></div>
-      </div>`;
-  }
-
-  /* 没有主从布局的面板（当前 manifest 有 split，这是兜底）：块顺排铺满 */
-  if (!split) {
-    remoteCtx = null;
-    const blocks = plugin.panel.blocks ?? [];
-    blocks.forEach((b, i) => { b.__i = i; });
-    preparePluginForms(blocks);
-    const h = $('plgRemoteHost');
-    let html = '';
-    for (const b of blocks) {
-      try {
-        html += await renderBlock(plugin, b);
-      } catch (err) {
-        html += `<section class="fx"><div class="plg-err">${esc(b.type)} 块出错：${failHtml(err)}</div></section>`;
-      }
-    }
-    h.innerHTML = `<div id="plgRemoteInner">${html}</div>`;   // 监听挂内层容器，随内容换不叠
-    finishPluginPanel(plugin, blocks, $('plgRemoteInner'));
-    return;
-  }
-
-  const m = split.master ?? {};
-  const keyField = m.keyField || 'id';
-  S.pluginData = {};   // 每次重画都重取：测/改/删之后数据要新鲜（弹窗里的公钥等也一样）
-  const src = await pluginApi(plugin, m.source.api);
-  const rows = pickItems(src, m.source.pick);
-  const keyOf = (r) => String(r[keyField] ?? '');
-
-  // 块编号：表单 + 引导块合成一张表 —— 和工作台面板同一套下标，接线才不会串
-  const allBlocks = [
-    ...(plugin.panel.blocks ?? []),
-    ...(split.guide?.blocks ?? []),
-  ];
-  allBlocks.forEach((b, i) => { b.__i = i; });
-
-  /* 测/改/删 直接长在**每一行**上（2026-10-26 三改，用户拍板：从详情弹窗里拿出来）。
-     同一份动作配置要渲染 N 行，而 buttonHTML 会把行数据写进块对象（b.__row）——
-     共用一个对象会互相覆盖（点哪行都是最后一行的数据），所以**每行克隆一份**，
-     下标接在 allBlocks 尾部：接线、确认框、编辑回填全走现成机制。 */
-  const rowActs = new Map();   // 行键 → 该行的动作克隆（测的结果提示按这套下标记账）
-  let nextI = allBlocks.length;
-  for (const r of rows) {
-    rowActs.set(
-      keyOf(r),
-      (split.rowActions ?? []).map((b) => {
-        const c = { ...b, __i: nextI++ };
-        allBlocks.push(c);
-        return c;
-      }),
-    );
-  }
-  preparePluginForms(allBlocks);
-  remoteCtx = { plugin, split, m, rows, keyOf, allBlocks };
-
-  const host = $('plgRemoteHost');   // 骨架刚（重）建过，这时取才是最新的
-  /* 列表重画只换 #plgRemoteInner（一次性容器，每次现建 —— 复用旧容器会让
-     finishPluginPanel 的监听叠挂）：页头/说明纹丝不动 */
-  host.innerHTML = `<div id="plgRemoteInner">
-    <section class="set-sec">
-      <div class="set-head">
-        <b>${esc(m.heading || plugin.label)}</b>
-        ${m.add ? `<button data-form-open="${esc(m.add.form)}">${esc(m.add.label || '＋ 添加')}</button>` : ''}
-      </div>
-      <div class="remote-list">${
-        rows.length
-          ? rows
-              .map(
-                (r) => `<div class="remote-row" data-remote-key="${esc(keyOf(r))}">
-            <div class="who">
-              <div class="line1"><b>${esc(tpl(m.title, r))}</b></div>
-              ${m.subtitle ? `<div class="line2">${esc(tpl(m.subtitle, r))}</div>` : ''}
-            </div>
-            <div class="remote-row-side">
-              ${r.status ? `<span class="remote-row-status">${esc(String(r.status))}${r.key_state ? ` · ${esc(String(r.key_state))}` : ''}</span>` : ''}
-              ${(rowActs.get(keyOf(r)) ?? []).map((b) => buttonHTML(b, r)).join('')}
-              ${split.guide ? `<button data-remote-guide="${esc(keyOf(r))}">${esc(split.guide.label || '引导')}</button>` : ''}
-            </div>
-          </div>`,
-              )
-              .join('')
-          : `<div class="empty" style="padding:24px 10px">${esc(m.empty || '还没有数据')}</div>`
-      }</div>
-      ${
-        /* 测的结果（resultField）记在 pluginResult 里，跟在列表下面展示 —— 动作在行上，
-           结果就不能再放弹窗里了；一次测一台，按行键取各自的份 */
-        rows
-          .flatMap((r) =>
-            (rowActs.get(keyOf(r)) ?? [])
-              .filter((c) => c.resultField)
-              .map((c) => {
-                const key = `${c.__i}:${keyOf(r)}`;
-                const out = pluginResult[key] ?? '';
-                if (!out) return '';
-                return `<div class="plg-toast">
-                  <div class="plg-toast-head">
-                    <b>${esc(tpl(c.resultTitle || c.label, r))}</b>
-                    <button class="mini sm" data-toast-x="${esc(key)}" title="关闭">×</button>
-                  </div>
-                  <pre class="plg-code">${esc(out)}</pre>
-                </div>`;
-              }),
-          )
-          .join('')
-      }
-    </section>`;
-  const inner = host.firstElementChild;
-  // 行级动作的结果按行记账：捕获阶段把 S.pluginRow 指到点的那行（generic 接线按它存结果）
-  inner.querySelector('.remote-list')?.addEventListener('click', (e) => {
-    const row = e.target.closest?.('.remote-row');
-    if (row?.dataset.remoteKey) S.pluginRow = row.dataset.remoteKey;
-  }, true);
-  // 空态清理：行都没了的话，遗留的测试结果别再挂着
-  if (!rows.length) for (const k of Object.keys(pluginResult)) delete pluginResult[k];
-  // 五改：详情弹窗删了 —— 行不再可点，「引导」是唯一入口；只画弹窗不重入整页渲染
-  inner.querySelectorAll('[data-remote-guide]').forEach((el) => {
-    el.onclick = () => {
-      S.pluginRow = el.dataset.remoteGuide;
-      S.pluginData = {};   // 弹窗里的取数（公钥等）不能吃上一台的缓存
-      S.remoteDlg = 'guide';
-      paintRemoteDlg().catch((err) => toast(err.message, 'error'));
-    };
-  });
-  finishPluginPanel(plugin, allBlocks, inner);   // 「添加」钮的 data-form-open 在这层接上
-
-  await paintRemoteDlg();   // 弹窗开着（测/改/删做完 rerender 回来）就照旧画回去
-}
-
 
 
 export function closeDrawer() {

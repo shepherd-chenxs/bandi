@@ -93,11 +93,11 @@ function issueCardOf(fullName, issue) {
  * 返回一句话结论（存进任务的 `lastSummary`，界面上直接显示）。
  */
 export async function prScan({ config = {} } = {}) {
-  if (!git.readToken()) throw new Error('还没连接 GitHub（设置 → 代码托管）');
+  if (!git.readToken()) throw new Error('还没连接 GitHub（工作台 → 研发 → 代码托管）');
   let repos = store.listGitRepos();
   if (config?.repo) repos = repos.filter((r) => r.fullName === config.repo);
   if (!repos.length) {
-    throw new Error(config?.repo ? `没有接入仓库 ${config.repo}（设置 → 代码托管）` : '还没有接入任何仓库（设置 → 代码托管）');
+    throw new Error(config?.repo ? `没有接入仓库 ${config.repo}（工作台 → 研发 → 代码托管）` : '还没有接入任何仓库（工作台 → 研发 → 代码托管）');
   }
 
   let created = 0;

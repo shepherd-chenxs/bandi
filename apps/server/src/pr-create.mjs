@@ -165,11 +165,11 @@ async function runCreateNode({ runId, task }) {
 
   const found = git.repoForCwd(project.root);
   if (!found) {
-    throw new Error(`项目目录不在任何已接入的仓库里：${project.root} —— 去「设置 → 代码托管」把它接进来`);
+    throw new Error(`项目目录不在任何已接入的仓库里：${project.root} —— 去「工作台 → 研发 → 代码托管」把它接进来`);
   }
   const row = store.getGitRepoByFullName(found.fullName);
-  if (!row) throw new Error(`仓库 ${found.fullName} 已经不在清单里了 —— 去「设置 → 代码托管」重新接一次`);
-  if (!git.readToken()) throw new Error('还没连接 GitHub（设置 → 代码托管）—— 建 PR 要用令牌');
+  if (!row) throw new Error(`仓库 ${found.fullName} 已经不在清单里了 —— 去「工作台 → 研发 → 代码托管」重新接一次`);
+  if (!git.readToken()) throw new Error('还没连接 GitHub（工作台 → 研发 → 代码托管）—— 建 PR 要用令牌');
   if (!row.localPath) throw new Error(`仓库 ${row.fullName} 没有本地目录 —— 先接入/克隆一份再跑`);
 
   /*
@@ -271,7 +271,7 @@ async function runCreateNode({ runId, task }) {
       }
     } else {
       store.updateWorkflowTask(reviewTask.id, {
-        note: `PR #${pr.number} 已建好。这个仓库没绑管理员 —— 去「设置 → 代码托管」给它选一个，回来在这步点指派；也可以直接指派个人`,
+        note: `PR #${pr.number} 已建好。这个仓库没绑管理员 —— 去「工作台 → 研发 → 代码托管」给它选一个，回来在这步点指派；也可以直接指派个人`,
       });
     }
   } catch (e) {

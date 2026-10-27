@@ -8,11 +8,11 @@
 /* ═══════════════════════════════════════════════════════════════
    iOS 风（Apple HIG）· 桌面版
 
-   和 Linear 最大的区别不是"圆角更大"，而是**分组的物理模型**：
-     Linear：所有东西在同一张平面上，用 1px 线切分
+   和密排风格最大的区别不是"圆角更大"，而是**分组的物理模型**：
+     密排风格：所有东西在同一张平面上，用 1px 线切分
      iOS   ：一张灰色桌面上，摞着若干张白色圆角卡片（inset grouped list）
 
-   搬到桌面上要做的三处调整（照抄手机会很怪）：
+   搬到桌面上要做的三处调整（直接搬手机会很怪）：
      ① 触控 44pt → 桌面 36px。手指需要的余量鼠标不需要，
         44 会让 12 行的列表变成 18 行高，一屏放不下
      ② 阴影极淡。iOS 的卡片在手机上几乎无阴影（靠底色差），
@@ -145,7 +145,7 @@ body {
 }
 
 /* iOS 的导航项：**胶囊圆角** + 选中时浅蓝底。
-   注意不是"左侧竖条"——竖条是 Linear/Material 的语汇 */
+   注意不是"左侧竖条"——竖条是密排风格/Material 的语汇 */
 .nav { padding: 0 10px; }
 .nav-item {
   display: flex; align-items: center; gap: 9px;
@@ -189,7 +189,7 @@ body {
 
 /* 顶部：iOS 的大标题导航（large title）。
    这是 iOS 最有辨识度的东西，桌面版保留它 —— 
-   它给了界面一个"从容的起点"，正是 Linear 缺的 */
+   它给了界面一个"从容的起点"，正是密排风格缺的 */
 .topbar {
   flex: 0 0 auto;
   padding: 16px 24px 12px;
@@ -301,7 +301,7 @@ body {
    这样底部输入条的左缘跟第一条消息的左缘在一条线上 */
 .chat-inner { width: 100%; max-width: 820px; }
 
-/* iOS 信息的日期分隔：居中灰色小字，两边不画线（跟 Linear 不同） */
+/* iOS 信息的日期分隔：居中灰色小字，两边不画线（跟密排风格不同） */
 .date {
   text-align: center; font-size: 11.5px; font-weight: 600;
   color: var(--t3); margin: 6px 0 16px; user-select: none;
@@ -320,7 +320,7 @@ body {
 }
 
 /* iOS 气泡：**大圆角 + 无边框 + 无尾巴**
-   而且整体圆角比 Linear 更大（18px），接近 iMessage 的形态 */
+   而且整体圆角比密排风格更大（18px），接近 iMessage 的形态 */
 .bubble {
   border-radius: var(--r-xl);
   padding: 9px 14px;
@@ -330,8 +330,8 @@ body {
   box-shadow: var(--shadow-card);
   word-break: break-word; overflow-wrap: anywhere; min-width: 0;
 }
-/* 我的消息：iOS 系统蓝实心 —— 这跟 Linear 的决定完全相反。
-   Linear 怕"实心蓝太吵"，iOS 恰恰用它来区分你我。 */
+/* 我的消息：iOS 系统蓝实心 —— 这跟密排风格的决定完全相反。
+   密排风格怕"实心蓝太吵"，iOS 恰恰用它来区分你我。 */
 .msg.me .bubble {
   background: var(--blue);
   color: #fff;

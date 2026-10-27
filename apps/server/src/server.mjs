@@ -550,7 +550,7 @@ try {
 } catch (err) {
   console.log(`内置员工同步失败（不影响启动）：${err?.message ?? err}`);
 }
-// 内置连接器（2026-10-26）：SSH 工具随「设置 → 远程连接」出厂自带（幂等，已有只补 builtin 标记）
+// 内置连接器（2026-10-26）：SSH 工具随「工作台 → 研发 → 远程连接」出厂自带（幂等，已有只补 builtin 标记）
 try {
   const seeded = connectors.ensureBuiltinConnectors();
   if (seeded.length) console.log(`内置连接器已就位：${seeded.join('、')}`);

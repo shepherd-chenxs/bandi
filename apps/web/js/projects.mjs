@@ -1,7 +1,7 @@
 /* projects.mjs —— 项目。
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
 import { esc, mdRender, personLabel, runtimeLabel, savePlace, setRoute, toast } from './shell.mjs';
-import { ICON_FOLDER, ICON_WB_BOARD, ICON_WB_CLOCK, api, createCombo, handleCopyPaths, personaAvatar, personaByName, renderMarkdown, smAvatar, wireDialogHead } from './ui.mjs';
+import { ICON_FOLDER, ICON_WB_BOARD, ICON_WB_CLOCK, ICON_WB_FLOW, api, createCombo, handleCopyPaths, personaAvatar, personaByName, renderMarkdown, smAvatar, wireDialogHead } from './ui.mjs';
 import { setNav } from './state.mjs';
 import { breadcrumb, headRow } from './connectors.mjs';
 import { confirmDo, askText } from './machine.mjs';
@@ -16,17 +16,22 @@ import { $, S } from './core.mjs';
 /* ---------------------------------------------------------------- 项目 */
 
 /**
- * 工作台里的「自动化」——现在只有**定时任务**这一项。
+ * 工作台里的「自动化」—— **定时任务 + 工作流**（2026-10-26 用户拍板）。
  *
  * 为什么单开一组、不塞进「项目」：项目是"在哪儿干活"，定时任务是"到点谁去干活"，
- * 两类东西混在一格宫格里，人会以为定时任务是某个项目的附属品（它其实可以不关联项目）。
- * 以后再加触发器、监控之类的，也落这一组。
+ * 工作流是"活儿按什么顺序走" —— 三件事的共同点是**让活自己动起来**，混进项目宫格里
+ * 人会以为是某个项目的附属品（定时任务其实可以不关联项目）。以后再加触发器、监控之类，
+ * 也落这一组。
+ *
+ * 「工作流」这颗磁贴原先单列一组（组名叫「工作流」、卡名叫「流程编排」），用户 2026-10-26
+ * 截图拍板：**卡名改「工作流」，并进自动化这一组** —— 少一段标题，多一个同类邻居。
  */
 export function workbenchAutoSection() {
   return `
     <div class="wb-sec">自动化</div>
     <div class="wb-grid">
       ${wbCard('cron', ICON_WB_CLOCK, '定时任务', '到点自动做一件事：干什么、交给谁、多久一次', 'data-schedules')}
+      ${wbCard('flow', ICON_WB_FLOW, '工作流', '画流程：节点、指派、发布', 'data-flow-design')}
     </div>`;
 }
 
@@ -930,8 +935,8 @@ export const NO_PROJECT_LABEL = '（未归属）';
 
 /* kb-filter:pure:start */
 /**
- * 看板的**筛选**（2026-10-15 起是"状态"一维，形状参照用户给的 Linear 那张：头上一枚「筛选」+ 弹出的多选层；
- * 2026-10-18 加了"负责人"和"项目"两维，参照 Multica —— 看板一旦有过几十张卡，
+ * 看板的**筛选**（2026-10-15 起是"状态"一维，形状参照同类产品的看板筛选：头上一枚「筛选」+ 弹出的多选层；
+ * 2026-10-18 加了"负责人"和"项目"两维，参照同类产品 —— 看板一旦有过几十张卡，
  * "只看某人的"和"只看某个项目的"就是最常用的两个动作，比按状态筛还常用）。
  *
  * 下面这一段**不碰 DOM**（只读 `S.kbFilter`、只把传进来的数据算一遍，外加拼一段字符串），
@@ -940,7 +945,7 @@ export const NO_PROJECT_LABEL = '（未归属）';
  * 选项**从当前这批行现取**，不写死表：平台有两套状态词（流程六态 / 聊天四态），
  * 人和项目更是随数据长，写死了迟早漏。状态的顺序跟着看板从左到右的列走。
  *
- * 三个维度的语义（跟 Multica / Linear 一致，别自创）：
+ * 三个维度的语义（跟同类产品一致，别自创）：
  *   · **同一维里选多个 = 任选其一**（"张三 或 李四"）；
  *   · **不同维之间 = 同时满足**（"张三的 + 这个项目的"）；
  *   · 某一维一个都不勾 = 这一维不设限（不是"什么都不匹配"）。
@@ -1478,7 +1483,7 @@ export function wireBoard(view, { refresh, taskProject = () => null }) {
       openConversation(el.dataset.kbConv).catch((e) => toast(e.message, 'error'));
     };
   });
-  // 列头「＋」：在那一列新建任务（参照 Multica：建在哪一列就落在哪一列）
+  // 列头「＋」：在那一列新建任务（参照同类产品：建在哪一列就落在哪一列）
   view.querySelectorAll('[data-kb-add]').forEach((el) => {
     el.onclick = (e) => {
       e.stopPropagation();
@@ -1516,7 +1521,7 @@ export function wireBoard(view, { refresh, taskProject = () => null }) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ status: toStatus }),
         });
-        // 拖进「进行中」＝开工（跟 Multica 一样：状态到位 + 有执行人就派活）。
+        // 拖进「进行中」＝开工（跟同类产品一样：状态到位 + 有执行人就派活）。
         // 派没派出去要说一声：两种结果在看板上一模一样（卡都在「进行中」列），
         // 不吭声的话人会以为已经在跑了。
         const started = !!res?.started;
@@ -1971,7 +1976,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
   });
 
   /**
-   * 页面形态照 Multica 的任务详情（2026-10-18 用户要求"简洁一些"）：
+   * 页面形态参照同类产品的任务详情（2026-10-18 用户要求"简洁一些"）：
    *   · 主区从上到下就是这件事本身：大标题 → 描述 → 讨论，别的一概不摆；
    *   · 属性全收进右栏三段：属性（状态/执行人/项目/来源）、Pull Request、详情（创建/更新时间）；
    *   · 页头只有「任务卡 + 删除」（原来的三级面包屑 `工作台 › 任务看板 › 任务卡`
@@ -2137,7 +2142,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
   $('tcFromFlow')?.addEventListener('click', () => { backTo().catch((e) => toast(e.message, 'error')); });
 
   /* ---------------- 标题 / 描述：就地编辑（2026-10-18 用户要求：没有编辑按钮，点了就改，改完自动存）
-     做法跟 Multica 一致：标题、描述平时就是"读"的样子，点上去原地变成输入框；
+     做法跟同类产品一致：标题、描述平时就是"读"的样子，点上去原地变成输入框；
      敲字防抖自动存，失焦立刻存；Enter 提交，Escape 放弃本次改动。 ---------------- */
   let titleVal = task.title;
   let descVal = task.description || '';
@@ -2276,7 +2281,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
   let saving = false;
 
   /** 存完只更新页头/描述，不重画整页（免得丢正在写的评论）。
-   *  状态/执行人的实时展示在右栏 combo 上（页头不再摆 pill，照 Multica 收进属性栏）。 */
+   *  状态/执行人的实时展示在右栏 combo 上（页头不再摆 pill，参照同类产品收进属性栏）。 */
   const refreshHeader = () => {
     if (document.activeElement !== titleEl) {
       titleVal = task.title;
@@ -2440,13 +2445,13 @@ export async function paintTaskCardPage(taskId, opts = {}) {
    *
    * ⚠️ 这里**故意不做**"看到改动再提交"那一屏：卡上没有仓库上下文，摆一半功能
    * 比不摆更容易让人以为已经看过了。要看改动、挑文件、处理凭据那类拦截，
-   * 用「设置 → 代码托管」里那颗「建 PR」（完整弹窗）。撞到凭据拦截时下面会把这条指出来。
+   * 用「工作台 → 研发 → 代码托管」里那颗「建 PR」（完整弹窗）。撞到凭据拦截时下面会把这条指出来。
    */
   $('tcPrCreate')?.addEventListener('click', async (e) => {
     e.preventDefault();
     const title = await askText({
       title: `给这张卡建一个 PR`,
-      body: `项目目录里的改动会被收成一个提交、推到一条新分支，并开成 PR。base 用仓库的默认分支。\n\n（要挑文件、看改动、处理"看着像凭据的文件"，去「设置 → 代码托管」那一行的「建 PR」。）`,
+      body: `项目目录里的改动会被收成一个提交、推到一条新分支，并开成 PR。base 用仓库的默认分支。\n\n（要挑文件、看改动、处理"看着像凭据的文件"，去「工作台 → 研发 → 代码托管」那一行的「建 PR」。）`,
       value: task.title,
       placeholder: 'PR 标题：一句话说清这个 PR 干了什么',
       ok: '提交并建 PR',
@@ -2468,7 +2473,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
       btn.disabled = false;
       btn.textContent = '建 PR';
       const m = String(err.message ?? err);
-      toast(/凭据|就是要提交/.test(m) ? `${m}\n\n要强行提交这些文件：去「设置 → 代码托管」那一行的「建 PR」，那里有勾选。` : m, 'error');
+      toast(/凭据|就是要提交/.test(m) ? `${m}\n\n要强行提交这些文件：去「工作台 → 研发 → 代码托管」那一行的「建 PR」，那里有勾选。` : m, 'error');
     }
   });
 
@@ -2956,7 +2961,7 @@ export function kbColumn(col) {
 /**
  * 一张任务卡：来源标出来、执行人写清楚。
  *   · 流程卡 → 那条实例；聊天卡 → 那个会话；手工卡 → 那个会话（没派活就没地方可去）
- *   · **手工卡可以拖到别的列**（改状态）—— 看板上最自然的手势，跟 Multica 一致
+ *   · **手工卡可以拖到别的列**（改状态）—— 看板上最自然的手势，跟同类产品一致
  */
 /** PR 联动（2026-10-17）：卡片上那枚「PR #n 开着/已合并」小标签；没关联 PR 就什么都不画 */
 export function prPillOf(r) {
@@ -3004,7 +3009,7 @@ export function kbCard(r) {
 
 
 /**
- * 新建手工任务的弹窗（参照 Multica 的「＋」那个框）。
+ * 新建手工任务的弹窗（参照同类产品 的「＋」那个框）。
  *
  * 只有标题是必填。执行方式二选一（2026-10-26）：
  *   · 派给人：选了执行人就能勾「创建后立即开始工作」——那会**真的派活**

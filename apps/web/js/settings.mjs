@@ -4,10 +4,10 @@ import { esc, setRoute, setTheme, toast } from './shell.mjs';
 import { api, failHtml, post, showFail } from './ui.mjs';
 import { headRow, renderPlugins, renderRuntimes, rtLoading } from './connectors.mjs';
 import { renderBackup } from './machine.mjs';
-import { renderRemoteConnection, setPluginRerender } from './experts.mjs';
+import { openRemotePage, setPluginRerender } from './experts.mjs';
 import { renderList, showView } from './contacts.mjs';
 import { setListTitle } from './flowpages.mjs';
-import { renderGitRepos, renderSkillCards } from './skills.mjs';
+import { openCodeRepoPage, renderSkillCards } from './skills.mjs';
 import { $, S } from './core.mjs';
 
 
@@ -29,10 +29,13 @@ export const SETTINGS_SECTIONS = [
   ['quota', '额度', '每个模型每天最多用多少'],
   ['plugins', '插件', '扩展点'],
   ['skills', '技能', '给数字员工用的能力包'],
-  ['code', '代码托管', '连接 GitHub、接入仓库'],
-  /* 远程连接（2026-10-26）：原「服务器与密钥」界面插件收编为内置分节（slot=settings.section），
-     数字员工的 SSH 工具随它出厂自带 —— 登记表、密钥、员工工具读的是同一本 ~/.bandi/servers.yaml。 */
-  ['remote', '远程连接', 'SSH 服务器与密钥'],
+  /*
+   * 「代码托管」「远程连接」**不再列在设置左栏**（2026-10-26 用户："设置里的代码托管和远程连接入口去掉"），
+   * 入口统一在「工作台 → 研发」区（见 experts.mjs 的 DEV_TILES）。
+   * ⚠️ 同日二改：它们**连渲染也搬走了**（各自成了工作台的整页，`openRemotePage` /
+   *    `openCodeRepoPage`），这里只是"不再列出"—— 老位置 `openSettings('code' / 'remote')`
+   *    在函数开头一律转发，别在这儿再加渲染分支（会画出第二个宿主）。
+   */
   ['aiimage', '生图服务', '数字员工生成图片的通道'],
   ['about', '关于', '版本与说明'],
 ];
@@ -42,6 +45,14 @@ export const SETTINGS_SECTIONS = [
 export function openSettings(section) {
   /* 旧路由兼容：合并前「这台机器」是独立分节 'machine'（保存的位置可能还指着它） */
   if (section === 'machine') section = 'runtimes';
+  /*
+   * 「代码托管」「远程连接」已经搬成**工作台研发区的独立整页**（2026-10-26 二改）：
+   * 它们不再是设置的分节，直接转发过去。
+   * 这里必须**在切设置页之前**拦：老位置（历史深链接、刷新恢复存下的 section、
+   * 别处残留的 openSettings('remote')）先画一遍设置页再跳，会闪一下、且左栏乱。
+   */
+  if (section === 'code') return openCodeRepoPage();
+  if (section === 'remote') return openRemotePage();
   setRoute('settings', { section: section || S.settingsSection || 'prefs' });
   S.settingsSection = section || 'prefs';
   setPluginRerender(null);   // 换分节 = 换宿主：面板表单提交后的重画别再指回上一页
@@ -56,8 +67,6 @@ export function openSettings(section) {
   if (S.settingsSection === 'plugins') return renderPlugins();
   if (S.settingsSection === 'quota') return renderQuota();
   if (S.settingsSection === 'skills') return renderSkillCards();
-  if (S.settingsSection === 'code') return renderGitRepos();
-  if (S.settingsSection === 'remote') return renderRemoteConnection();
   if (S.settingsSection === 'aiimage') return renderImageAi();
   if (S.settingsSection === 'about') return renderAbout();
   if (S.settingsSection !== 'prefs') return;
@@ -149,7 +158,7 @@ async function loadReplyStyle() {
 /**
  * 生图服务（2026-10-23）：数字员工生成图片的通道，技能「班底 · 头像生成手册」教员工 curl 它。
  *
- * 形态照抄代码托管的「居中紧凑簇」（.gr-conn）：标签 | 输入框(≤520px) | 按钮位，
+ * 形态沿用代码托管的「居中紧凑簇」（.gr-conn）：标签 | 输入框(≤520px) | 按钮位，
  * 状态行压在输入框正下方 —— 这里是三行（地址 / Key / 模型），所以加了 .stack 修饰类拉开行距。
  * Key 的口径与 GitHub 令牌一致：保存后只回显掩码，点「修改」才解锁重填；
  * 保存时 Key 留空 = 保留原值（服务端 writeConfig 的语义），改个模型名不用重贴 Key。
