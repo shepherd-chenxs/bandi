@@ -1267,7 +1267,7 @@ export async function renderSplitDetail(plugin, split, m, sel) {
 
   return `<div class="plg-detail">${
     sel
-      ? `<div class="plg-detail-head">
+      ? `<div class="plg-detail-head fixed-head">
            <b>${esc(tpl(split.detail?.title || m.title, sel))}</b>
            ${split.detail?.subtitle ? `<span class="dim">${esc(tpl(split.detail.subtitle, sel))}</span>` : ''}
            ${acts ? `<div class="head-actions">${acts}</div>` : ''}

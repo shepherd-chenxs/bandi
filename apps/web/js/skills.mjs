@@ -1,14 +1,14 @@
 /* skills.mjs —— 技能、从 GitHub 挑仓库（放进弹窗里）、定时任务、从本地导入、技能 → 发给数字员工（反方向挂载）。
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
 import { esc, mdRender, savePlace, setRoute, toast } from './shell.mjs';
-import { ICON_BRANCH, ICON_COMMIT, ICON_EDIT, ICON_PLAY, ICON_PUSH, ICON_SYNC, ICON_TAG, ICON_TRASH, api, createCombo, createDateTimePick, cut, failHtml, initial, post, wireDialogHead } from './ui.mjs';
+import { ICON_BRANCH, ICON_COMMIT, ICON_EDIT, ICON_GEAR, ICON_PLAY, ICON_PUSH, ICON_SYNC, ICON_TAG, ICON_TRASH, api, createCombo, createDateTimePick, cut, failHtml, initial, post, wireDialogHead } from './ui.mjs';
 import { load } from './state.mjs';
 import { openSettings } from './settings.mjs';
 import { setListTitle } from './flowpages.mjs';
 import { breadcrumb, headRow } from './connectors.mjs';
 import { confirmDo, askCheckbox } from './machine.mjs';
 import { openAddMenu, renderList, showView, skillAddItems } from './contacts.mjs';
-import { openProjectDetail, pickLocalDir } from './projects.mjs';
+import { pickLocalDir } from './projects.mjs';
 import { $, S } from './core.mjs';
 
 /* 提交卡两组文件的折叠态（模块级 —— renderGitRepos 每次刷新重建 fillChanges，
@@ -509,35 +509,21 @@ export async function renderGitRepos(root = $('pluginView')) {
   const syncAt = (t) => (t ? esc(String(t).replace('T', ' ').slice(0, 16)) : '从未');
 
   /*
-   * 选中仓库的详情：动作在标题行右侧（同 renderSplitDetail），信息一行一条。
-   * 管理员格还是 2026-10-23 拍板的按钮形态 —— 点开 keeperDlg 搜索选人。
+   * 选中仓库的详情：动作在标题行右侧（同 renderSplitDetail）。
+   * 仓库设置（管理员 / 自动合并 / 默认分支 / 上次同步 / 本地目录）2026-10-27 收进右上角齿轮弹窗 ——
+   * 用户："这个区域太占地方，换成右上角设置按钮点开"。详情里只剩 提交 + 历史 两块。
    */
   const repoDetail = sel
-    ? `<div class="plg-detail-head">
+    ? `<div class="plg-detail-head fixed-head">
          <b>${esc(sel.fullName)}</b>${sel.isPrivate ? '<span class="pill">私有</span>' : ''}
          <span class="gr-branch" id="grBranchMount"></span>
          <span class="dim" title="${esc(sel.localPath)}">${esc(sel.localPath)}</span>
          <div class="head-actions">
            <button class="mini auto" data-git-pr="${esc(sel.id)}" title="把本地改动提交成一个 PR；这里也能合并开着的 PR">建 PR</button>
-           <button class="mini auto" data-git-project="${esc(sel.id)}" title="用这个仓库建一个项目（工作目录就是克隆目录）">建成项目</button>
            <button class="mini auto" data-git-remove="${esc(sel.id)}" title="只移除记录，本地目录保留">移除</button>
+           <button class="mini gr-set-btn" data-git-settings="${esc(sel.id)}"
+                   title="仓库设置：管理员 / 自动合并 / 默认分支 / 上次同步" aria-label="仓库设置">${ICON_GEAR}</button>
          </div>
-       </div>
-       <div class="plg-sec">
-         <div class="plg-sec-head"><label class="plg-sec-title">仓库设置</label></div>
-         <section class="fx">
-           <div class="info-row"><span>管理员</span><b>
-             <button type="button" class="gr-keeper-btn" data-git-keeper-pick="${esc(sel.id)}" data-k-cur="${esc(sel.keeperPersonaId ?? '')}"
-                     title="别人提了 PR，替你审的那个人。点击选择">${sel.keeperPersonaId ? esc(keeperName(sel.keeperPersonaId) || '未设置') : '<span class="dim">未设置</span>'}</button>
-           </b></div>
-           <div class="info-row"><span>自动合并</span><b>
-             <label class="switch sm" title="开：审阅通过且闸门全过的 PR 自动合并；关：停在「待验收」等你点">
-               <input type="checkbox" data-git-automerge="${esc(sel.id)}" ${sel.autoMerge ? 'checked' : ''} aria-label="自动合并" /><span></span>
-             </label>
-           </b></div>
-           <div class="info-row"><span>默认分支</span><b>${esc(sel.defaultBranch || '—')}</b></div>
-           <div class="info-row"><span>上次同步</span><b>${syncAt(sel.lastSyncAt)}</b></div>
-         </section>
        </div>
        <div class="plg-sec">
          <div class="plg-sec-head"><label class="plg-sec-title">提交</label><span class="dim" id="grChgHead"></span></div>
@@ -669,8 +655,60 @@ export async function renderGitRepos(root = $('pluginView')) {
       await refresh(); // 失败要把界面拉回真实值，别让假状态留在屏幕上
     }
   };
-  view.querySelectorAll('[data-git-automerge]').forEach((el) => {
-    el.onchange = () => saveRepoSettings(el.dataset.gitAutomerge, { autoMerge: el.checked });
+  /*
+   * 仓库设置弹窗（2026-10-27，用户："仓库设置区太占地方 → 右上角设置按钮，点开展示"）：
+   * 原来占详情一整块卡的信息（管理员 / 自动合并 / 默认分支 / 上次同步 / 本地目录）收进这里。
+   * 动态建 dialog（openGitConnDlg 同款），close 即 remove；改动即时保存、弹窗不关。
+   */
+  const paintKeeperBtns = (repoId, kid) => {
+    document.querySelectorAll('.gr-keeper-btn[data-k-cur]').forEach((b) => {
+      b.dataset.kCur = kid ?? '';
+      b.innerHTML = kid ? esc(keeperName(kid) || '未设置') : '<span class="dim">未设置</span>';
+    });
+    const repo = repos.find((r) => r.id === repoId);
+    if (repo) repo.keeperPersonaId = kid || null;
+  };
+  const openGitSettingsDlg = (repo) => {
+    const dlg = document.createElement('dialog');
+    dlg.className = 'gr-set-dlg';
+    const form = document.createElement('form');
+    form.method = 'dialog';
+    form.innerHTML = `
+      <b>仓库设置</b>
+      <div class="gr-dlg-body gr-set-body">
+        <div class="info-row"><span>管理员</span><b>
+          <button type="button" class="gr-keeper-btn" data-k-cur="${esc(repo.keeperPersonaId ?? '')}"
+                  title="别人提了 PR，替你审的那个人。点击选择">${
+                    repo.keeperPersonaId ? esc(keeperName(repo.keeperPersonaId) || '未设置') : '<span class="dim">未设置</span>'
+                  }</button>
+        </b></div>
+        <div class="info-row"><span>自动合并</span><b>
+          <label class="switch sm" title="开：审阅通过且闸门全过的 PR 自动合并；关：停在「待验收」等你点">
+            <input type="checkbox" data-automerge ${repo.autoMerge ? 'checked' : ''} aria-label="自动合并" /><span></span>
+          </label>
+        </b></div>
+        <div class="info-row"><span>默认分支</span><b>${esc(repo.defaultBranch || '—')}</b></div>
+        <div class="info-row"><span>上次同步</span><b>${syncAt(repo.lastSyncAt)}</b></div>
+        <div class="info-row"><span>本地目录</span><b class="gr-set-path" title="${esc(repo.localPath)}">${esc(repo.localPath)}</b></div>
+      </div>`;
+    dlg.append(form);
+    document.body.append(dlg);
+    wireDialogHead(form);
+    dlg.addEventListener('close', () => dlg.remove());
+
+    form.querySelector('.gr-keeper-btn').onclick = (e) => openKeeperDlg(repo.id, e.currentTarget.dataset.kCur ?? '');
+    form.querySelector('[data-automerge]').onchange = (e) => {
+      repo.autoMerge = e.currentTarget.checked ? 1 : 0;
+      saveRepoSettings(repo.id, { autoMerge: e.currentTarget.checked });
+    };
+    dlg.showModal();
+  };
+  view.querySelectorAll('[data-git-settings]').forEach((el) => {
+    el.onclick = (e) => {
+      e.preventDefault();
+      const repo = repos.find((r) => r.id === el.dataset.gitSettings);
+      if (repo) openGitSettingsDlg(repo);
+    };
   });
 
   /*
@@ -695,6 +733,9 @@ export async function renderGitRepos(root = $('pluginView')) {
       b.onclick = async () => {
         $('keeperDlg').close();
         if (b.dataset.kid !== keeperCur) {
+          keeperCur = b.dataset.kid;
+          // 设置弹窗还开着的话就地改标签（refresh 只重画页面，弹窗是挂在 body 上的）
+          paintKeeperBtns(keeperRepoId, keeperCur);
           await saveRepoSettings(keeperRepoId, { keeperPersonaId: b.dataset.kid });
           await refresh();
         }
@@ -709,6 +750,8 @@ export async function renderGitRepos(root = $('pluginView')) {
     $('kSearch').oninput = renderKeeperList;
     $('keeperDlg').showModal();
   };
+  // 页面里的入口没了（2026-10-27 收进齿轮弹窗），弹窗自己绑 —— 这里只留一个兜底，
+  // 万一以后又往页面上放 keeper 按钮，照旧能用。
   view.querySelectorAll('[data-git-keeper-pick]').forEach((el) => {
     el.onclick = () => openKeeperDlg(el.dataset.gitKeeperPick, el.dataset.kCur ?? '');
   });
@@ -734,30 +777,6 @@ export async function renderGitRepos(root = $('pluginView')) {
       }
     };
   });
-  view.querySelectorAll('[data-git-project]').forEach((el) => {
-    el.onclick = async (e) => {
-      e.preventDefault();
-      const repo = repos.find((r) => r.id === el.dataset.gitProject);
-      if (!repo) return;
-      // 同一个目录已经有项目了就别再建一个（看板上会出现两个一模一样的项目）
-      const exist = (S.projects ?? []).find((p) => p.root === repo.localPath);
-      if (exist) return toast(`已经有一个项目用这个目录了：「${exist.name}」`);
-      // 项目名用 owner/name，免得两个仓库同名
-      try {
-        const d = await api('/api/projects', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: repo.fullName, root: repo.localPath }),
-        });
-        await load();
-        toast(`项目已建好：${repo.fullName}`);
-        if (d.project?.id) await openProjectDetail(d.project.id);
-      } catch (err) {
-        toast(err.message, 'error');
-      }
-    };
-  });
-
   /*
    * IDE 式一站式（2026-10-27）：分支 pill +「改动」卡 +「历史」卡。
    * 三块吃的全是**本地 git**（/changes /branches /log /diff 不联网），点下去就该有反应，

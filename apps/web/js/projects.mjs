@@ -315,11 +315,11 @@ function openPjCal(btn, input) {
 }
 
 /**
- * 右侧详情 = 照**员工详情页**的骨架改（2026-10-18 用户定的）：
- * 顶部 p-head 一行 = 项目概览信息（名字 + 目录 pill）+ 右侧动作按钮；
- * ⚠️ 2026-10-19 用户截图圈掉左侧那枚蓝色「班」字方块（`.avatar.proj`）：去掉，
- *    项目名本身就是页面标题，头像那个色块在这儿只是多一块颜色，没有"这是谁"的信息量
- *    （员工头像不一样——它是"人"，项目是"地方"）。
+ * 右侧详情：
+ * 顶部一行 = **固定导航条**（2026-10-27 用户："这个顶部改成同样导航风格"）——
+ * 换成 `.detail-head.fixed-head`（同代码托管 / 远程连接的吸顶头：50px 定高 + --side 底 +
+ * 底部分隔线），名字 + 内置 pill + 目录 pill 在左、保存回执 + 任务/删除在右。
+ * 原来是员工详情那套两行的 .p-head（2026-10-18 骨架），不吸顶。
  * 下面 tabs 两页：**基础信息**（名称/目录/附加目录/说明 + 任务统计）、**项目规章**（＝宪法）。
  * 字段仍是常驻输入区（没有"点编辑"那步）；tabs 一次渲染、切显隐 ——
  * 在基础信息改了一半去规章再回来，改动还在（同员工详情页的做法）。
@@ -344,32 +344,32 @@ export async function renderProjDetail(p) {
   })();
   const stat = (label, n) => `<span class="kb-stat">${esc(label)} <b>${n ?? 0}</b></span>`;
   box.innerHTML = `
-    <div class="p-head">
-      <div class="p-head-main">
-        <h2>${esc(p.name)}${p.builtIn ? '<span class="pill role">内置</span>' : ''}</h2>
-        <div class="p-meta">
-          <!-- 目录 pill 整颗可点：点一下复制路径（设计稿 v1.0.1）。
-               data-label 记着原始路径 —— 回执把字换成「已复制」之后，2 秒还得能换回来。 -->
-          <button type="button" class="pill copy-pill" data-path="${esc(p.root ?? '')}"
-                  data-label="${esc(p.root ?? '')}" title="点击复制路径">${esc(p.root ?? '')}</button>
-        </div>
+    <div class="detail-head head-row fixed-head">
+      <div class="head-title">
+        <b>${esc(p.name)}${p.builtIn ? '<span class="pill role">内置</span>' : ''}</b>
+        <!-- 目录 pill 整颗可点：点一下复制路径（设计稿 v1.0.1）。
+             data-label 记着原始路径 —— 回执把字换成「已复制」之后，2 秒还得能换回来。 -->
+        <button type="button" class="pill copy-pill" data-path="${esc(p.root ?? '')}"
+                data-label="${esc(p.root ?? '')}" title="点击复制路径">${esc(p.root ?? '')}</button>
       </div>
-      <div class="hero-actions">
+      <div class="head-actions">
         <!-- 保存状态：改了就自动存，这里是唯一的回执（跟员工详情同一条 .save-state 样式）。
              原来这儿是一颗「保存」按钮 —— 四个字段都要点一次，忘了点就白改。
              ⚠️ 它**不占位**：宽度 0 + 往左溢出，所以"改成已保存"时不推按钮；
                  靠 text-align:right 让它从按钮左边往回长，永远不会被右边界截掉。
                  （样式在 style.css 的 .pj-save） -->
         <span class="save-state pj-save" id="pjSaveState"></span>
-        <button class="primary" id="pjTasks">任务</button>
-        ${p.builtIn ? '' : '<button class="danger" id="pjDel">删除</button>'}
+        <!-- 2026-10-27 用户："任务和删除按钮改成这种风格" —— 导航条里统一用
+             .mini.auto 描边钮（同代码托管的 建 PR / 移除），不再用蓝底/红底大按钮 -->
+        <button class="mini auto" id="pjTasks">任务</button>
+        ${p.builtIn ? '' : '<button class="mini auto" id="pjDel">删除</button>'}
       </div>
     </div>
 
     <!-- 任务统计挪到页头正下方（2026-10-24 用户：把任务标签提上去）—— 基础信息 tab 里不再放 -->
     ${err
       ? `<div class="dim" style="margin-top:14px">任务统计取不到：${esc(err)}</div>`
-      : `<div class="kb-stats" style="margin-top:14px">
+      : `<div class="kb-stats">
           ${stat('任务共', data?.total)}
           ${stat('待验收', data?.waiting_count)}
           ${stat('已阻塞', data?.blocked_count)}
@@ -563,18 +563,18 @@ export async function renderProjDetail(p) {
         if (b) b.textContent = payload.name;
         if (sub) sub.textContent = payload.root;
       });
-      /* 改名同步的是**详情区自己**（p-head 的 h2 / 目录 pill），不碰左栏标题 ——
+      /* 改名同步的是**详情区自己**（固定导航条的标题 / 目录 pill），不碰左栏标题 ——
          左栏面包屑只到「工作台 › 项目」二级，项目名不写在里面（见 openProjectsPage）。
          项目头像 2026-10-19 已按用户要求去掉（.avatar.proj 没有宿主了），这里不用再同步它。 */
       const paintName = (name) => {
-        const h2 = box.querySelector('.p-head h2');
-        if (h2) {
-          h2.firstChild.nodeType === 3
-            ? (h2.firstChild.nodeValue = name)
-            : h2.insertBefore(document.createTextNode(name), h2.firstChild);
+        const b = box.querySelector('.fixed-head .head-title > b');
+        if (b) {
+          b.firstChild.nodeType === 3
+            ? (b.firstChild.nodeValue = name)
+            : b.insertBefore(document.createTextNode(name), b.firstChild);
         }
         // 目录 pill 不只改字：data-path / data-label 也得跟着走，否则复制的是旧路径、还原也会还原成旧值
-        const rootPill = box.querySelector('.p-meta .pill');
+        const rootPill = box.querySelector('.fixed-head .copy-pill');
         if (rootPill) {
           const root = $('pjRoot').value.trim();
           rootPill.textContent = root;
