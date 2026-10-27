@@ -309,7 +309,7 @@ export function createCombo({
   // 给"按钮要写实际生效的值，清单里另有条目名分"的场景用（如权限下拉：按钮写实际的
   // 权限名，清单里「跟随员工默认」当收回提权的入口）。
   buttonText = null,
-  // 按钮上跟在文案后面的小角标（2026-10-27 分支 pill："main ↑"，箭头绿、不带数字）。
+  // 按钮上跟在文案后面的小角标（2026-10-27 分支 pill："main ↗"，双色箭头带个数（规格沿革见 skills.mjs））。
   // 给函数就按当前值现算（返回空串 = 不显示）；给字符串就是固定的。
   // 单独一个 span 是为了**上色**：buttonText 是纯文本，塞不进颜色。
   buttonBadge = null,
@@ -375,11 +375,13 @@ export function createCombo({
   const labelOf = (id) => (all.find((it) => it.id === id) ?? {}).label ?? String(id ?? '');
   const shown = () =>
     buttonText ? buttonText(current) : labelOf(current) || String(current ?? '') || blank;
-  /* 按钮文案 + 角标一起画（角标是上色的 span，buttonText 只给纯文本） */
+  /* 按钮文案 + 角标一起画（角标是上色的 span，buttonText 只给纯文本）。
+     2026-10-27 三调：badge 改 innerHTML —— 分支 pill 要画双色箭头（↑ 绿 / ↓ 蓝），
+     纯 textContent 上不了色；内容只来自班底自己的代码，无注入面。 */
   const paintButton = () => {
     text.textContent = shown();
     const b = String((typeof buttonBadge === 'function' ? buttonBadge(current) : buttonBadge) ?? '');
-    badge.textContent = b;
+    badge.innerHTML = b;
     badge.hidden = !b;
   };
 
@@ -456,13 +458,16 @@ export function createCombo({
             pi += 1;
             /*
              * 条目右侧信息（2026-10-27，IDEA 分支弹窗同款）：
-             *   · `badge`（↑1/↓2）跟在名字后面 —— 分支领先/落后上游几个提交；
+             *   · `badge`（纯文本）/ `badgeHtml`（带色 HTML，双色箭头用）跟在名字后面；
              *   · `hint`（origin/main）靠右、降灰 —— 这一行分支跟踪的是哪个远程分支。
              * 两者都是可选的，别的下拉不传 = 跟以前逐字一样。
              */
+            const badgeIn = it.badgeHtml
+              ? `<span class="combo-badge">${it.badgeHtml}</span>`
+              : it.badge ? `<span class="combo-badge">${esc(it.badge)}</span>` : '';
             return `<div class="combo-item ${it.cls ?? ''} ${it.sub ? 'sub ' : ''}${pi === hi ? 'hi' : ''}" data-pick="${esc(it.id)}">
                  ${it.icon ? `<span class="combo-ic">${it.icon}</span>` : ''}
-                 <span class="combo-item-label">${esc(it.label)}${it.badge ? `<span class="combo-badge">${esc(it.badge)}</span>` : ''}</span>
+                 <span class="combo-item-label">${esc(it.label)}${badgeIn}</span>
                  ${it.hint ? `<span class="combo-hint" title="${esc(it.hint)}">${esc(it.hint)}</span>` : ''}
                  ${it.id === current ? '<span class="combo-check">✓</span>' : ''}
                </div>`;
