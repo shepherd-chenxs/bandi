@@ -1822,10 +1822,18 @@ input.locked:focus { outline: none; border-color: var(--line); }
 .gr-branch .combo-pop input { font-size: 13px; padding: 8px 10px; }
 .gr-branch .combo-list { height: min(420px, 62vh); max-height: none; }
 .gr-branch .combo-item { padding: 8px 10px; }
-.gr-branch .combo-item-label { font-size: 13px; }
-.gr-branch .combo-group { font-size: 11.5px; padding-top: 10px; }
-/* 2026-10-27 用户："字体不要加粗"：分支弹窗整包常规字重 —— 组标题靠强调色 + 小字号区分层级，
-   不吃全局 combo 的 700；子文件夹标题的 500 也压平。只限分支弹窗，模型下拉等别处不动。 */
+/* 左名右源截断规则（2026-10-27 二调，用户："左边的要显示全，右边的可以加..."）：
+   左边本地名 flex-shrink:0 —— 按内容走全宽，永不截断；
+   右边远程名 margin-left:auto 顶到行右 + 允许收缩（min-width:0 是省略号生效的前提），
+   空间不够时先压右边、它先变 ...，右边顶不住了行才溢出（等宽小字，可接受）。 */
+.gr-branch .combo-item-label { font-size: 13px; flex: 0 0 auto; }
+.gr-branch .combo-hint { flex: 0 1 auto; min-width: 0; max-width: none; margin-left: auto; padding-left: 10px; }
+/* 分组标题与动作项同规格（2026-10-27 二调，用户："下面的字体、大小要和上面一致，
+   鼠标放上去再显示蓝色"）：13px 正文色，不吃全局 combo 的 11px + 常驻强调色；
+   悬停才变强调色（覆盖 .combo-group.foldable:hover 的"悬停变正文色"）。
+   层级不再靠字号/颜色硬分，靠缩进（28px 折角列）+ 可折叠箭头。 */
+.gr-branch .combo-group { font-size: 13px; padding-top: 10px; color: var(--text); }
+.gr-branch .combo-group.foldable:hover { color: var(--accent); }
 .gr-branch .combo-group, .gr-branch .combo-group.combo-sub { font-weight: 400; }
 /* 改动卡（2026-10-27 改分栏，用户："左边文件，右边输入区和提交"；标题同日改「提交」）：
    左 = 文件清单（diff 展开跟文件行走），右 = 提交说明 + 提交按钮，中间一条分隔线。
