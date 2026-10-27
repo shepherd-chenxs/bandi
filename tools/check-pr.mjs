@@ -99,7 +99,29 @@ const note = (file, msg) => notices.push({ file, msg });
 
 /* ------------------------------------------------------------ 收集 diff */
 
-const nameStatus = git(['diff', '--name-status', ...range, '--'])
+/*
+ * diff 里的路径有两种写法：`b/docs/形态决策.md`，以及 git 认为"特殊"时加引号 + 八进制转义的
+ * `"b/docs/\345\275\242..."` —— **非 ASCII 文件名默认就是后者**（core.quotepath 默认 true）。
+ *
+ * 2026-10-27 实报：原来只认裸 `b/`，引号路径一个都认不出，于是中文名文件的所有改动行
+ * 都被算到**上一个文件**头上 —— `docs/形态决策.md` 里那条早就在的第三方链接，被报成
+ * `design/v1.0.1/ios-workbench.html:10` 的"新增白名单外地址"硬违规（文档本该只提示）。
+ *
+ * 修法两层，缺一不可：
+ *   · 两处 `git diff` 都带 `-c core.quotepath=false`（路径原样输出 UTF-8，还能让上方
+ *     `--name-status` 的 NEEDS_EYE / 依赖面判断也对得上中文名文件）；
+ *   · 这里再兜一层引号解包 —— 文件名里带引号/制表符时 git 仍会加引号，只关 quotepath 不够。
+ */
+const unquoteDiffPath = (raw) => {
+  const quoted = raw.startsWith('"');
+  const p = quoted ? raw.slice(1, raw.lastIndexOf('"')) : raw;
+  const unescaped = p
+    .replace(/\\([0-7]{3})/g, (_, oct) => String.fromCharCode(parseInt(oct, 8)))
+    .replace(/\\(.)/g, '$1');
+  return unescaped.replace(/^[ab]\//, '');
+};
+
+const nameStatus = git(['-c', 'core.quotepath=false', 'diff', '--name-status', ...range, '--'])
   .split('\n')
   .map((l) => l.trim())
   .filter(Boolean)
@@ -114,12 +136,14 @@ const changedFiles = nameStatus.map((x) => x.file);
 const added = new Map(); // file → [{ line, text }]
 const removed = new Map();
 {
-  const diff = git(['diff', '-U0', ...range, '--']);
+  const diff = git(['-c', 'core.quotepath=false', 'diff', '-U0', ...range, '--']);
   let file = null;
   let newLine = 0;
   for (const raw of diff.split('\n')) {
-    if (raw.startsWith('+++ b/')) {
-      file = raw.slice(6);
+    if (raw.startsWith('+++ ')) {
+      const p = raw.slice(4);
+      if (p === '/dev/null') continue; // 删除文件：没有"新增行"可归
+      file = unquoteDiffPath(p);
       if (!added.has(file)) added.set(file, []);
       if (!removed.has(file)) removed.set(file, []);
       continue;
