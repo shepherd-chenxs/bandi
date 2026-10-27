@@ -829,7 +829,6 @@ export async function renderGitRepos(root = $('pluginView')) {
       /* 读不到本地状态就不画 CTA，PR 列表照常显示 */
     }
     if (!box.isConnected) return;
-    if (head?.isConnected) head.textContent = prs.length ? `${prs.length} 条待合并` : '';
 
     const base = state?.base || repo.defaultBranch || 'main';
     const cur = state?.branch || '';
@@ -857,11 +856,10 @@ export async function renderGitRepos(root = $('pluginView')) {
       return null;
     };
 
-    const rows = prs
-      .map((p) => {
-        const why = blockReason(p);
-        const isMine = p.headRef && p.headRef === cur;
-        return `<div class="gr-pr-row">
+    const rowHtml = (p) => {
+      const why = blockReason(p);
+      const isMine = p.headRef && p.headRef === cur;
+      return `<div class="gr-pr-row">
           <div class="gr-pr-main">
             <div class="gr-pr-title"><b>#${p.number}</b> ${esc(p.title)}
               ${p.draft ? '<span class="pill">草稿</span>' : ''}
@@ -881,8 +879,25 @@ export async function renderGitRepos(root = $('pluginView')) {
                     ${why ? `disabled title="${esc(why)}"` : 'title="合并进 base（走平台令牌；本地会自动收尾）"'}>合并</button>
           </div>
         </div>`;
-      })
-      .join('');
+    };
+
+    /*
+     * PR 分三组（2026-10-27 用户："需要建 PR、审核中的、等待合并的分开一下"）：
+     *   待建 PR   —— 当前分支还没有 open PR（CTA 行；脏工作区 / 没差异时也在这组里说清下一步）；
+     *   审核中     —— 有 PR 但还合不了：gate 跑着 / 草稿 / 冲突 / 检查红；
+     *   等待合并   —— gate ✓、mergeable，右边按钮能直接点。
+     * 组序按"离合并还差几步"排；空组不画，三组都空才给一行空态（不再用"没有待合并的 PR"糊住）。
+     */
+    const ready = (p) => blockReason(p) === null;
+    const reviewPrs = prs.filter((p) => !ready(p));
+    const mergePrs = prs.filter(ready);
+    const groupHtml = (title, inner, count) =>
+      count
+        ? `<div class="gr-pr-group">
+        <div class="gr-pr-group-head">${esc(title)}<span class="gr-pr-group-count">${count}</span></div>
+        ${inner}
+      </div>`
+        : '';
 
     /*
      * 当前分支还没有 PR 时给一行 CTA：这是「建 PR」按钮的新家（导航条那颗去掉了）。
@@ -906,8 +921,16 @@ export async function renderGitRepos(root = $('pluginView')) {
       }
     }
 
+    const ctaGroup = cta ? groupHtml('待建 PR', cta, 1) : '';
+    const reviewGroup = groupHtml('审核中', reviewPrs.map(rowHtml).join(''), reviewPrs.length);
+    const mergeGroup = groupHtml('等待合并', mergePrs.map(rowHtml).join(''), mergePrs.length);
+    if (head?.isConnected) {
+      head.textContent = prs.length ? `${prs.length} 条 PR${mergePrs.length ? ` · ${mergePrs.length} 条可合并` : ''}` : '';
+    }
+
     box.innerHTML =
-      (rows || `<div class="sk-blank">没有待合并的 PR${cur && cur !== base ? '' : ''}</div>`) + cta;
+      ctaGroup + reviewGroup + mergeGroup ||
+      `<div class="sk-blank">没有进行中的 PR —— 建 PR 后会出现在这里</div>`;
 
     $('grPrCreate')?.addEventListener('click', () => openRepoPrDialog(repo, refresh));
     box.querySelectorAll('[data-pr-merge]').forEach((b) => {
