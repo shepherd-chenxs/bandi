@@ -351,6 +351,29 @@ try {
   const permMsg = tpf('remote: Permission denied\nfatal: unable to access', { branch: 'x' });
   check('权限不够 → 指向 Contents: write', /Contents: write/.test(permMsg), permMsg.slice(0, 100));
 
+  console.log('\n⑨ 已提交没推送：workState 的上游 / unpushed（分支按钮上的 ↑N 吃它）');
+  const upBare = path.join(tmp, 'up-bare.git');
+  execFileSync('git', ['init', '-q', '--bare', upBare]);
+  const upDir = path.join(tmp, 'upwork');
+  execFileSync('git', ['init', '-q', '-b', 'main', upDir]);
+  fs.writeFileSync(path.join(upDir, 'a.txt'), '1\n');
+  g(['add', '-A'], upDir);
+  g(['commit', '-q', '-m', 'c1'], upDir);
+  g(['remote', 'add', 'origin', upBare], upDir);
+  g(['push', '-q', '-u', 'origin', 'main'], upDir);
+  const upRow = (await git.connectRepo('smoke/up', info('upstream'), upDir)).repo;
+  const up1 = await git.workState(upRow);
+  check('上游识别成 origin/main', up1.upstream === 'origin/main', String(up1.upstream));
+  check('刚推完 → 未推送 0、未拉取 0', up1.unpushed === 0 && up1.unpulled === 0, `${up1.unpushed}/${up1.unpulled}`);
+  fs.writeFileSync(path.join(upDir, 'a.txt'), '2\n');
+  g(['commit', '-q', '-am', 'c2'], upDir);
+  const up2 = await git.workState(upRow);
+  check('再提交一个 → unpushed=1（界面："有 1 个提交还没推送"）', up2.unpushed === 1, String(up2.unpushed));
+  check('「领先 base」与「未推送」是两个口径（这里都是 1）', up2.ahead === 1, String(up2.ahead));
+  g(['checkout', '-q', '-b', 'wip'], upDir);
+  const up3 = await git.workState(upRow);
+  check('新分支没上游 → upstream/unpushed 都是 null（界面："还没推到远端"）', up3.upstream === null && up3.unpushed === null, `${up3.upstream}/${up3.unpushed}`);
+
 } finally {
   child.kill();
   await new Promise((r) => setTimeout(r, 300));
