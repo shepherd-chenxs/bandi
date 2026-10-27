@@ -1760,10 +1760,13 @@ input.locked:focus { outline: none; border-color: var(--line); }
 .gr-branch .combo-text { font-family: ui-monospace, monospace; font-size: 11.5px; }
 .gr-branch .combo-chev { width: 5px; height: 5px; margin-right: 0; }
 /* 分支弹窗比通用下拉大一档（2026-10-27 用户："大一些"）：分支名长（bandi/xxx-时间戳）、
-   条目多（操作 + 最近/本地/远程/标签），360px 宽 232px 高太挤；高度上限跟视口走，小屏不探出。 */
-.gr-branch .combo-pop { min-width: 360px; max-width: min(560px, 92vw); }
+   条目多（操作 + 最近/本地/远程/标签），360px 宽 232px 高太挤。
+   尺寸**固定**（2026-10-27 二调，用户："这个框要固定大小，不要自动变高"）：
+   宽高都写死（高度只跟视口走一个上限），搜索过滤 / 分支列表异步回来 / 分组折叠时
+   框子都不跳；列表内部滚。 */
+.gr-branch .combo-pop { width: 440px; min-width: 0; max-width: min(440px, 92vw); }
 .gr-branch .combo-pop input { font-size: 13px; padding: 8px 10px; }
-.gr-branch .combo-list { max-height: min(520px, 62vh); }
+.gr-branch .combo-list { height: min(420px, 62vh); max-height: none; }
 .gr-branch .combo-item { padding: 8px 10px; }
 .gr-branch .combo-item-label { font-size: 13px; }
 .gr-branch .combo-group { font-size: 11.5px; padding-top: 10px; }
