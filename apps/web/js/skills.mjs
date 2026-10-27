@@ -1326,7 +1326,7 @@ export async function renderGitRepos(root = $('pluginView')) {
    * 每片叶子（含无前缀的）都带分支图标 —— IDEA 里文件夹装的是分支，不是普通条目。
    *
    * `keep: true` 时不排序、按传入顺序输出（「最近」用：IDEA 的最近是"当前分支打头 + 最近切过的顺序"，
-   * 排序会把这个含义弄丢）。叶子上的 badge（↑1/↓2）和 hint（origin/main）原样带过去。
+   * 排序会把这个含义弄丢）。叶子上的 badge（↗1/↙2）和 hint（origin/main）原样带过去。
    */
   const folderize = (items, keyPrefix, { keep = false } = {}) => {
     const leafOf = (it, label, sub = false) => ({
@@ -1336,6 +1336,7 @@ export async function renderGitRepos(root = $('pluginView')) {
       icon: ICON_BRANCH,
       cls: 'br',
       ...(it.badge ? { badge: it.badge } : {}),
+      ...(it.badgeHtml ? { badgeHtml: it.badgeHtml } : {}),
       ...(it.hint ? { hint: it.hint } : {}),
     });
     const folders = new Map();
@@ -1400,10 +1401,13 @@ export async function renderGitRepos(root = $('pluginView')) {
   const branchMeta = (b, name) => {
     const u = b.localUpstreams?.[name];
     if (!u?.upstream) return {};
-    // 2026-10-27 用户："不要数字，箭头颜色使用绿色"——只留箭头（↑/↓），个数不写在这里
-    //（个数在提交卡「N 个提交还没推送」里已经有了；多写一遍反而吵）。
-    const arrows = `${u.ahead ? '↑' : ''}${u.behind ? '↓' : ''}`;
-    return { ...(arrows ? { badge: arrows } : {}), hint: `${u.upstream}${u.gone ? '（gone）' : ''}` };
+    // 2026-10-27 三调（用户："加上数字，更新和提交箭头颜色区分开"）：改回 IDEA 同款
+    // 「↙N 蓝要拉 / ↗N 绿要推」—— 个数照写，颜色区分方向（此前"不要数字只留绿箭头"作废）。
+    // badge 用 badgeHtml 传色（combo 支持后纯文本 badge 仍兼容）。
+    const up = Number(u.ahead ?? 0);
+    const down = Number(u.behind ?? 0);
+    const badgeHtml = `${down ? `<span class="down">↙${down}</span>` : ''}${up ? `<span class="up">↗${up}</span>` : ''}`;
+    return { ...(badgeHtml ? { badgeHtml } : {}), hint: `${u.upstream}${u.gone ? '（gone）' : ''}` };
   };
   const branchItems = (b) => [
     { id: '__op-sync__', label: '更新项目', icon: ICON_SYNC },
@@ -1455,15 +1459,15 @@ export async function renderGitRepos(root = $('pluginView')) {
       defaultFolded: ['本地分支', '远程分支', '标签'],
       /*
        * 按钮上的角标（2026-10-27 用户："已提交，但是没有推送，是不是应该显示一下"）：
-       * ↑ = 本地有提交还没推到上游；↓ = 上游有新的还没拉下来。
-       * 同日二调（用户："不要数字，箭头颜色使用绿色"）：只画箭头、不带个数（个数在提交卡里），
-       * 单独一个绿 span —— buttonText 是纯文本，上不了色。
+       * ↙ = 上游有新的还没拉下来（蓝，斜向）；↗ = 本地有提交还没推上去（绿，斜向）。
+       * 同日三调（用户："加上数字，更新和提交箭头颜色区分开"）：改回 IDEA 同款带个数，
+       * badge 走 innerHTML 上双色（ui.mjs paintButton 已支持）。
        */
       buttonText: (v) => v || '游离 HEAD',
       buttonBadge: () => {
         const up = Number(state.unpushed ?? 0);
         const down = Number(state.unpulled ?? 0);
-        return `${up > 0 ? '↑' : ''}${down > 0 ? '↓' : ''}`;
+        return `${down ? `<span class="down">↙${down}</span>` : ''}${up ? `<span class="up">↗${up}</span>` : ''}`;
       },
       onChange: (id) => onBranchPick(repo, id, state.branch ?? '', combo),
       onOpen: async () => {

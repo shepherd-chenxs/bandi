@@ -2649,7 +2649,13 @@ input, select, textarea { width: 100%; background: var(--input); color: var(--te
 .combo-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 按钮上紧跟文案的小角标（2026-10-27 分支 pill 的「↑」/「↓」）：绿色、不带数字。
    单独一个 span 才能上色 —— buttonText 是纯文本。 */
-.combo-btn-badge { flex: 0 0 auto; color: var(--ok); font-size: 12px; line-height: 1; }
+.combo-badge { margin-left: 5px; font-size: 11px; font-family: ui-monospace, monospace; }
+.combo-btn-badge { flex: 0 0 auto; font-size: 12px; line-height: 1; }
+/* 双色箭头（2026-10-27 用户："加上数字，更新和提交箭头颜色区分开"，IDEA 同款）：
+   ↓N 蓝 = 上游有新的要拉（更新项目）；↑N 绿 = 本地有提交要推（推送）。容器不再定色。 */
+.combo-badge .down, .combo-btn-badge .down { color: var(--accent); }
+.combo-badge .up, .combo-btn-badge .up { color: var(--ok); }
+.combo-badge span + span, .combo-btn-badge span + span { margin-left: 3px; }
 .combo-chev { flex: 0 0 auto; width: 7px; height: 7px; margin-right: 2px;
               border-right: 1.6px solid var(--dim); border-bottom: 1.6px solid var(--dim);
               transform: rotate(45deg) translate(-1px, -1px); }
@@ -2679,9 +2685,8 @@ input, select, textarea { width: 100%; background: var(--input); color: var(--te
 .combo-item { display: flex; align-items: center; gap: 8px; padding: 6px 9px; border-radius: 7px;
               font-size: 13px; cursor: pointer; }
 .combo-item-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* 分支条目的两处右侧信息（2026-10-27，IDEA 分支弹窗同款）：名字后面的 ↑1 / ↓2（绿），
+/* 分支条目的两处右侧信息（2026-10-27，IDEA 分支弹窗同款）：名字后面的 ↑N / ↓N（双色，见下行），
    以及最右的远程分支名 origin/main（灰、等宽、过长省略）。别的下拉不传这些字段 = 不出现。 */
-.combo-badge { margin-left: 5px; font-size: 11px; color: var(--ok); font-family: ui-monospace, monospace; }
 .combo-hint { flex: 0 0 auto; max-width: 46%; overflow: hidden; text-overflow: ellipsis;
               white-space: nowrap; margin-left: 8px; font-size: 11px; color: var(--dim);
               font-family: ui-monospace, monospace; }
