@@ -316,6 +316,21 @@ check('201 回来的是平台内部那一份形状（number/url/headRef/state）
 const createCall = gh.lastHit(/^POST \/repos\/smoke\/demo\/pulls$/);
 check('请求体用 GitHub 的字段名（head/base/title/body/draft）', createCall?.body?.head === 'bandi/feat-demo' && createCall?.body?.base === 'main' && createCall?.body?.draft === false, JSON.stringify(createCall?.body));
 
+/*
+ * 2026-10-27「PR 区域」：列表项要把"从哪来 / 能不能合 / CI 什么状态"一起带出来
+ * （原来只有编号/标题/作者/headSha，界面画不出 `head → base`、也说不出合并按钮为什么按不了）。
+ */
+const listed = await git.listOpenPulls('smoke/demo');
+const listedRow = listed.find((p) => p.headRef === 'bandi/feat-demo');
+check(
+  'PR 列表项带 baseRef / headRef / mergeable / mergeableState',
+  listedRow?.baseRef === 'main' && listedRow?.headRef === 'bandi/feat-demo' && listedRow?.mergeable === true && listedRow?.mergeableState === 'clean',
+  JSON.stringify(listedRow),
+);
+gh.seedChecks('smoke/demo', listedRow.headSha, 'success');
+const listedChecks = await git.pullChecks('smoke/demo', listedRow.headSha);
+check('pullChecks 把 check-runs 归约成 success（PR 行的 gate ✓ 就吃它）', listedChecks.state === 'success' && listedChecks.total === 1, JSON.stringify(listedChecks));
+
 const again = await git.createPull('smoke/demo', { head: 'bandi/feat-demo', base: 'main', title: '又点了一次' });
 check('同一个 head 再建 → 认成"已存在"，把那个 PR 交回来（不报错、不建第二个）', again.created === false && again.pr.number === made.pr.number, JSON.stringify({ c: again.created, n: again.pr.number }));
 
