@@ -869,6 +869,9 @@ export async function renderGitRepos(root = $('pluginView')) {
       value: state.branch ?? '',
       search: true,
       placeholder: '搜索分支和操作',
+      // 一打开先看操作项 +「最近」：本地 / 远程 / 标签三组默认收起（2026-10-27 用户：
+      // "本地、远程、标签改成默认折叠"）—— 分支多的时候展开着会一屏铺满，还得先滚。
+      defaultFolded: ['本地分支', '远程分支', '标签'],
       buttonText: (v) => v || '游离 HEAD',
       onChange: (id) => onBranchPick(repo, id, state.branch ?? '', combo),
       onOpen: async () => {

@@ -279,6 +279,7 @@ export function showTip(el) {
  *     items: [{ id, label }],                  选项
  *     value: '',                               当前值
  *     search: false,                           要不要搜索框
+ *     defaultFolded: ['本地分支'],             可折叠分组里默认收起的那些（按标题/foldKey）
  *     empty: '没有可选项',                     无匹配时的文案
  *     onChange: (id) => {},                    选中时回调
  *   });
@@ -316,6 +317,10 @@ export function createCombo({
   // 给"按钮本身就在页面右边"的下拉用（流程实例页那枚状态下拉：原来左对齐展开会顶出视口，
   // 用户 2026-10-17 实报）。等价于手动给根节点加 `.right`，这里做成选项免得每处都记得加。
   right = false,
+  // 哪些可折叠分组**默认收起**（按 header / folder 的 foldKey 名字，没 foldKey 就用标题文本）。
+  // 给"一打开先看操作项，分支清单收着"这种场景用（2026-10-27 用户："本地、远程、标签改成默认折叠"）。
+  // 只是**初始值**：用户点开之后就按他点的那份状态记（同一个实例内关了弹层再开还记着）。
+  defaultFolded = [],
 }) {
   const root = document.createElement('div');
   root.className = 'combo';
@@ -352,8 +357,9 @@ export function createCombo({
   let all = items;
   let current = value;
   let hi = 0;
-  // 可折叠分组的收起状态（按标题文本记，实例级：关了弹层再开还记着）
-  const folded = new Set();
+  // 可折叠分组的收起状态（按标题文本记，实例级：关了弹层再开还记着）。
+  // 带 defaultFolded 的从"收起"开始（2026-10-27：分支弹窗的本地/远程/标签默认折叠）。
+  const folded = new Set((defaultFolded ?? []).map(String));
 
   const labelOf = (id) => (all.find((it) => it.id === id) ?? {}).label ?? String(id ?? '');
   const shown = () =>
