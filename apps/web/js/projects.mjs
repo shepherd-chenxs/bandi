@@ -1483,7 +1483,7 @@ export function wireBoard(view, { refresh, taskProject = () => null }) {
       openConversation(el.dataset.kbConv).catch((e) => toast(e.message, 'error'));
     };
   });
-  // 列头「＋」：在那一列新建任务（参照同类产品：建在哪一列就落在哪一列）
+  // 列头「＋」：在那一列新建任务（只有「想法」「待办」两列有这个入口，见 kbColumn 的注释）
   view.querySelectorAll('[data-kb-add]').forEach((el) => {
     el.onclick = (e) => {
       e.stopPropagation();
@@ -2943,12 +2943,22 @@ export async function openTaskBoard() {
 
 /** 看板的一列：列头（名字 + 张数 + ＋）+ 卡片；空列也画出来，写「无任务」 */
 export function kbColumn(col) {
+  /*
+   * 只有「想法」「待办」两列的列头给「＋」建卡（2026-10-27 用户："每个面板都能创建任务，
+   * 是不是改成只有想法能创建任务更好一些" → 定成想法 + 待办）：
+   *   · 想法 = 收集箱（默认落点，不派活）；
+   *   · 待办 = 决定做了的排队区（指派人就开跑，所以要人明确选这一列）；
+   *   · 进行中及之后的列（进行中 / 待验收 / 已阻塞 / 失败 / 已完成 / 已取消）里的卡都是
+   *     **状态流转的产物**，直接在那儿建卡没有语义，还容易建出"已完成"的新卡。
+   * 流程卡、仓库值班卡、员工建的卡不走这个入口，照常生成。
+   */
+  const canAdd = col.key === 'idea' || col.key === 'todo';
   return `<section class="kb-col ${esc(col.key)}" data-kb-col="${esc(col.key)}">
     <header class="kb-col-head">
       <span class="kb-dot"></span><b>${esc(col.label)}</b>
       <span class="kb-count">${col.count}</span>
       ${col.hint ? `<span class="kb-hint">${esc(col.hint)}</span>` : ''}
-      <button class="kb-add" type="button" data-kb-add="${esc(col.key)}" title="在这一列新建任务">＋</button>
+      ${canAdd ? `<button class="kb-add" type="button" data-kb-add="${esc(col.key)}" title="在这一列新建任务">＋</button>` : ''}
     </header>
     <div class="kb-cards">
       ${col.cards.length ? col.cards.map(kbCard).join('') : '<div class="kb-empty">无任务</div>'}
