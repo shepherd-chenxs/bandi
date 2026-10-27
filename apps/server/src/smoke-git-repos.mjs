@@ -221,6 +221,99 @@ try {
   const row = (board.b?.columns ?? []).flatMap((c) => c.cards ?? []).find((r) => r.source === 'repo' && r.pr);
   check('看板行里带 pr（标签才画得出来）', !!row && row.pr.number === 42, JSON.stringify(row?.pr));
 
+  /*
+   * ⑥ 分支管理（2026-10-27）：与 base 比较 / 删分支。
+   * 只验**不联网**的本地那一半；"删远端分支"要 GitHub 令牌，那一步只钉护栏（前缀 + 没连令牌），
+   * 真删的路径留给手工验收 —— CI 不该有令牌。
+   */
+  console.log('\n⑥ 分支管理：与 base 比较 / 删分支（本地护栏）');
+  const brDir = path.join(tmp, 'brrepo');
+  execFileSync('git', ['init', '-q', '-b', 'main', brDir]);
+  const g = (args, cwd = brDir) =>
+    execFileSync('git', ['-C', cwd, '-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { encoding: 'utf8' });
+  const write = (name, text) => fs.writeFileSync(path.join(brDir, name), text);
+  write('a.txt', 'one\n');
+  g(['add', '-A']);
+  g(['commit', '-q', '-m', 'c1']);
+  g(['checkout', '-q', '-b', 'feature']);
+  write('a.txt', 'one\ntwo\n');
+  write('b.txt', 'new\n');
+  g(['add', '-A']);
+  g(['commit', '-q', '-m', 'c2 on feature']);
+  g(['checkout', '-q', 'main']);
+  const brRepo = (await git.connectRepo('smoke/branches', info('branches'), brDir)).repo;
+
+  const cmp = await git.compareBranch(brRepo, { branch: 'feature' });
+  check('比较：base=main、branch=feature', cmp.base === 'main' && cmp.branch === 'feature', `${cmp.base}/${cmp.branch}`);
+  check('比较：列出 2 个改动文件', cmp.files.length === 2, JSON.stringify(cmp.files.map((f) => `${f.status}:${f.path}`)));
+  check('比较：a.txt 是改（M）', cmp.files.find((f) => f.path === 'a.txt')?.status === 'M');
+  check('比较：b.txt 是增（A）', cmp.files.find((f) => f.path === 'b.txt')?.status === 'A');
+  check('比较：带 shortstat', /insertion/.test(cmp.shortstat ?? ''), String(cmp.shortstat));
+  const bfd = await git.branchFileDiff(brRepo, { branch: 'feature', path: 'a.txt' });
+  check('单文件 diff 带新增行（+two）', /\+two/.test(bfd.diff), bfd.diff.slice(0, 80).replace(/\n/g, '⏎'));
+  let badPath = '';
+  try {
+    await git.branchFileDiff(brRepo, { branch: 'feature', path: '../etc/passwd' });
+  } catch (e) {
+    badPath = e.message;
+  }
+  check('不在对比清单里的 path 一律拒', /不在对比清单/.test(badPath), badPath);
+  let sameBranch = '';
+  try {
+    await git.compareBranch(brRepo, { branch: 'main' });
+  } catch (e) {
+    sameBranch = e.message;
+  }
+  check('与 base 同一个分支 → 拒绝（没得比）', /同一个分支/.test(sameBranch), sameBranch);
+
+  let baseDel = '';
+  try {
+    await git.deleteBranch(brRepo, { branch: 'main' });
+  } catch (e) {
+    baseDel = e.message;
+  }
+  check('不能删 base 分支', /不能删 base/.test(baseDel), baseDel);
+
+  g(['checkout', '-q', 'feature']);
+  let curDel = '';
+  try {
+    await git.deleteBranch(brRepo, { branch: 'feature' });
+  } catch (e) {
+    curDel = e.message;
+  }
+  check('不能删当前所在的分支', /当前所在的分支/.test(curDel), curDel);
+  g(['checkout', '-q', 'main']);
+
+  let unmerged = '';
+  try {
+    await git.deleteBranch(brRepo, { branch: 'feature' });
+  } catch (e) {
+    unmerged = e.message;
+  }
+  check('没合并进 base 的分支删不掉（不靠删分支丢代码）', /没合并进 main/.test(unmerged), unmerged);
+  check('拒绝之后分支还在', g(['branch', '--list', 'feature']).includes('feature'));
+
+  g(['branch', 'done', 'main']); // done 指向 main 已有提交：已合并
+  const delLocal = await git.deleteBranch(brRepo, { branch: 'done' });
+  check('已合并的本地分支能删', delLocal.deleted === 'done' && delLocal.remote === false, JSON.stringify(delLocal));
+  check('删完本地真的没了', !g(['branch', '--list', 'done']).trim());
+
+  let remotePrefix = '';
+  try {
+    await git.deleteBranch(brRepo, { branch: 'fix/x', remote: true });
+  } catch (e) {
+    remotePrefix = e.message;
+  }
+  check('远端只删 bandi/ 前缀（fix/x 被拒）', /bandi\//.test(remotePrefix), remotePrefix);
+  let remoteNoToken = '';
+  try {
+    await git.deleteBranch(brRepo, { branch: 'bandi/demo', remote: true });
+  } catch (e) {
+    remoteNoToken = e.message;
+  }
+  check('删远端分支要先连 GitHub（没令牌就拒）', /先连接 GitHub/.test(remoteNoToken), remoteNoToken);
+  check('删完工作区没被搅（干净）', g(['status', '--porcelain']).trim() === '');
+
 } finally {
   child.kill();
   await new Promise((r) => setTimeout(r, 300));

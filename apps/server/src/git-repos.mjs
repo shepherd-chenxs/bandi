@@ -812,6 +812,150 @@ export async function fileDiff(row, path) {
   return { path: f.path, status: xy, diff: d.out };
 }
 
+/* ---------------------------------------------------------------- 分支管理（2026-10-27） */
+
+/**
+ * 分支名 → 本地 / 远端**已存在**的那个 ref（口径与 `listBranches` 一致）。
+ *
+ * 名字先过 `assertBranchName`，再由这里拼成 `refs/heads/…` / `refs/remotes/origin/…` ——
+ * 绝不把调用方给的字符串直接当 git 参数或路径。远端只认 `origin/` 一种写法
+ * （界面「远程分支」那一组给的就是 `origin/x`）。
+ */
+async function branchRefOf(cwd, rawName) {
+  const n = String(rawName ?? '').trim();
+  if (!n) throw new Error('没说哪个分支');
+  if (n.startsWith('origin/')) {
+    const short = assertBranchName(n.slice('origin/'.length));
+    const ref = `refs/remotes/origin/${short}`;
+    const r = await gitIn(cwd, ['rev-parse', '--verify', '--quiet', ref], { timeoutMs: GIT_FAST_MS });
+    if (r.code !== 0 || !r.out) throw new Error(`找不到远端分支 origin/${short}（先点「更新项目」拉一次）`);
+    return { ref, name: `origin/${short}` };
+  }
+  const short = assertBranchName(n);
+  const ref = `refs/heads/${short}`;
+  const r = await gitIn(cwd, ['rev-parse', '--verify', '--quiet', ref], { timeoutMs: GIT_FAST_MS });
+  if (r.code !== 0 || !r.out) throw new Error(`本地没有分支 ${short}（先点「更新项目」拉一次，或看远端分支列表）`);
+  return { ref, name: short };
+}
+
+/** 远端合并判断的基准：`origin/<base>` 在就用它（远端为准），否则退回本地 base */
+async function remoteBaseRef(cwd, baseName) {
+  const ob = await gitIn(cwd, ['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${baseName}`], { timeoutMs: GIT_FAST_MS });
+  if (ob.code === 0 && ob.out) return `refs/remotes/origin/${baseName}`;
+  return (await branchRefOf(cwd, baseName)).ref;
+}
+
+/**
+ * **与 base 比较**（只读，IDE 的 Compare with Branch 同款）。
+ *
+ * 用三点 diff `base...branch`：从两条分支**分叉点**算到 branch 的改动 —— 这才是
+ * "这条分支相对 base 改了什么"，两点 diff 会把 base 后来的提交也倒着显示成改动。
+ *
+ * 返回里带中括号 ref（`baseRef` / `targetRef`），逐文件 diff 复用同一个基准，
+ * 不再让前端传 ref 进来（那是把 git 参数交给浏览器）。
+ */
+export async function compareBranch(row, { branch = null, base = null } = {}) {
+  const cwd = row.localPath;
+  if (!isGitRepo(cwd)) throw new Error(`本地目录不是 git 仓库（没有 .git）：${cwd}`);
+  const baseName = String(base || row.defaultBranch || '').trim();
+  if (!baseName) throw new Error('仓库没记默认分支（base）—— 先在仓库设置里填一个');
+  const st = await workState(row);
+  const target = await branchRefOf(cwd, branch || st.branch || '');
+  const baseRef = await branchRefOf(cwd, baseName);
+  if (target.ref === baseRef.ref) throw new Error(`和 base（${baseName}）是同一个分支 —— 没有可比的改动`);
+  const ns = await gitIn(
+    cwd,
+    ['-c', 'core.quotepath=false', 'diff', '--name-status', '--no-color', `${baseRef.ref}...${target.ref}`],
+    { timeoutMs: GIT_FAST_MS },
+  );
+  if (ns.code !== 0) throw new Error(`读对比清单没成：${ns.out.split('\n').slice(-2).join(' ')}`);
+  const files = ns.out
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => {
+      const [code, a, b] = line.split('\t');
+      const kind = String(code ?? '');
+      const moved = kind.startsWith('R') || kind.startsWith('C');
+      return { code: kind, status: kind[0] || 'M', path: moved ? b : a, from: moved ? a : null };
+    });
+  const short = await gitIn(cwd, ['diff', '--shortstat', `${baseRef.ref}...${target.ref}`], { timeoutMs: GIT_FAST_MS });
+  return {
+    base: baseName,
+    branch: target.name,
+    baseRef: baseRef.ref,
+    targetRef: target.ref,
+    files,
+    shortstat: String(short.out ?? '').trim() || null,
+  };
+}
+
+/** 对比里单个文件的 diff（path 必须**当下**还在对比清单里 —— 拿旧清单来查一律拒） */
+export async function branchFileDiff(row, { branch = null, base = null, path } = {}) {
+  const p = String(path ?? '');
+  if (!p) throw new Error('要指定文件');
+  const cmp = await compareBranch(row, { branch, base });
+  const f = cmp.files.find((x) => x.path === p || x.from === p);
+  if (!f) throw new Error('这个文件不在对比清单里（可能刚变过，刷新一下再试）');
+  const paths = f.from && f.from !== f.path ? [f.path, f.from] : [f.path];
+  const d = await gitIn(row.localPath, ['diff', '--no-color', `${cmp.baseRef}...${cmp.targetRef}`, '--', ...paths], {
+    timeoutMs: GIT_FAST_MS,
+  });
+  if (d.code !== 0) throw new Error(`读 diff 没成：${d.out.split('\n').slice(-2).join(' ')}`);
+  return { path: f.path, status: f.code, diff: d.out };
+}
+
+/**
+ * **删分支**（本地 / 远端）。删分支 = 扔提交的最后一道口子，所以护栏比别的动作更紧：
+ *
+ *   · 不能删 base 分支；
+ *   · 本地不能删**当前所在**的分支（要先切走 —— 和 checkout 的脏工作区护栏同一个出发点）；
+ *   · 必须**已合并进 base**（`merge-base --is-ancestor` 先挡一道，`git branch -d` 再兜一道）——
+ *     没合并的分支一律不删，"删分支把活扔了"不在平台的能力范围内；
+ *   · 远端只删 `bandi/` 开头的（平台自己拉的）；还得先确认**没有开着的 PR** ——
+ *     删掉 PR 的 head 分支等于把那个 PR 弄成"无从查看"，先合/关再删；
+ *   · 删远端前先 fetch，合并判断用的是**刚拉到的** origin/<base>，不吃过期引用。
+ */
+export async function deleteBranch(row, { branch, remote = false, base = null } = {}) {
+  const cwd = row.localPath;
+  if (!isGitRepo(cwd)) throw new Error(`本地目录不是 git 仓库（没有 .git）：${cwd}`);
+  const raw = String(branch ?? '').trim();
+  const askRemote = !!remote || raw.startsWith('origin/');
+  const name = assertBranchName(raw.replace(/^origin\//, ''));
+  const baseName = String(base || row.defaultBranch || '').trim();
+  if (!baseName) throw new Error('仓库没记默认分支（base）—— 先在仓库设置里填一个');
+  if (name === baseName) throw new Error(`不能删 base 分支（${baseName}）`);
+
+  if (askRemote) {
+    if (!/^bandi\//.test(name)) throw new Error(`远端只删平台自己建的分支（bandi/ 开头）；${name} 不是，要删请去 GitHub 上删`);
+    if (!readToken()) throw new Error('先连接 GitHub 才能删远端分支（令牌只存本机）');
+    const open = await findOpenPullForHead(row.fullName, name, row.owner).catch(() => null);
+    if (open) throw new Error(`这条分支上还有开着的 PR #${open.number} —— 先把它合掉或关掉，再删分支`);
+    const f = await gitIn(cwd, [...gitAuthArgs(), 'fetch', '--prune', 'origin'], { timeoutMs: GIT_PUSH_MS });
+    if (f.code !== 0) throw new Error(`拉远端分支状态没成（查网络 / 令牌）：${f.out.split('\n').slice(-2).join(' ')}`);
+    const rref = `refs/remotes/origin/${name}`;
+    const exist = await gitIn(cwd, ['rev-parse', '--verify', '--quiet', rref], { timeoutMs: GIT_FAST_MS });
+    if (exist.code !== 0 || !exist.out) throw new Error(`远端已经没有 ${name} 了（可能刚被人删掉）—— 刷新一下`);
+    const merged = await gitIn(cwd, ['merge-base', '--is-ancestor', rref, await remoteBaseRef(cwd, baseName)], {
+      timeoutMs: GIT_FAST_MS,
+    });
+    if (merged.code !== 0) throw new Error(`${name} 还有没合并进 ${baseName} 的提交 —— 先合并（建 PR）再删，别用删分支丢代码`);
+    await deleteRemoteBranch(row.fullName, name);
+    return { deleted: name, remote: true };
+  }
+
+  const st = await workState(row);
+  if (st.branch === name) throw new Error(`不能删当前所在的分支（${name}）—— 先切到别的分支`);
+  const ref = `refs/heads/${name}`;
+  const exist = await gitIn(cwd, ['rev-parse', '--verify', '--quiet', ref], { timeoutMs: GIT_FAST_MS });
+  if (exist.code !== 0 || !exist.out) throw new Error(`本地没有分支 ${name}（可能刚删过）—— 刷新一下`);
+  const baseRef = await branchRefOf(cwd, baseName);
+  const merged = await gitIn(cwd, ['merge-base', '--is-ancestor', ref, baseRef.ref], { timeoutMs: GIT_FAST_MS });
+  if (merged.code !== 0) throw new Error(`${name} 还有没合并进 ${baseName} 的提交 —— 先合并（建 PR）再删，别用删分支丢代码`);
+  const del = await gitIn(cwd, ['branch', '-d', name], { timeoutMs: GIT_FAST_MS });
+  if (del.code !== 0) throw new Error(`删分支没成：${del.out.split('\n').slice(-2).join(' ')}`);
+  return { deleted: name, remote: false };
+}
+
 /* ---------------------------------------------------------------- agent 的环境 */
 
 /**

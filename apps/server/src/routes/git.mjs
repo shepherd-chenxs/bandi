@@ -539,6 +539,59 @@ export async function handleGit(req, res, url) {
     }
   }
 
+  /*
+   * ---- 分支管理（2026-10-27）：与 base 比较 / 删分支 ----
+   * 两个「读」不联网（删远端那一下要 fetch + GitHub，失败原话带回）。
+   * 路径用连字符而不是 /branch/delete：跟上面新建分支的 `/branch` 分得开，
+   * 也和 `branch-diff` 这一组读起来一致。
+   * 逐文件 diff 的 path 由服务端按**当下**对比清单校验（拿旧清单来查一律拒），
+   * 前端永远不把 git ref 传进来。
+   */
+  const repoBranchDiff = /^\/api\/git\/repos\/([^/]+)\/branch-diff$/.exec(url.pathname);
+  if (req.method === 'GET' && repoBranchDiff) {
+    const row = store.getGitRepo(decodeURIComponent(repoBranchDiff[1]));
+    if (!row) return fail(res, 404, 'E1076', '仓库不在清单里'), true;
+    try {
+      return sendJson(res, 200, await git.compareBranch(row, {
+        branch: url.searchParams.get('branch'),
+        base: url.searchParams.get('base'),
+      })), true;
+    } catch (e) {
+      return fail(res, 400, 'E1110', String(e.message ?? e)), true;
+    }
+  }
+
+  const repoBranchDiffFile = /^\/api\/git\/repos\/([^/]+)\/branch-diff\/file$/.exec(url.pathname);
+  if (req.method === 'GET' && repoBranchDiffFile) {
+    const row = store.getGitRepo(decodeURIComponent(repoBranchDiffFile[1]));
+    if (!row) return fail(res, 404, 'E1076', '仓库不在清单里'), true;
+    try {
+      return sendJson(res, 200, await git.branchFileDiff(row, {
+        branch: url.searchParams.get('branch'),
+        base: url.searchParams.get('base'),
+        path: url.searchParams.get('path'),
+      })), true;
+    } catch (e) {
+      return fail(res, 400, 'E1111', String(e.message ?? e)), true;
+    }
+  }
+
+  const repoBranchDelete = /^\/api\/git\/repos\/([^/]+)\/branch-delete$/.exec(url.pathname);
+  if (req.method === 'POST' && repoBranchDelete) {
+    const row = store.getGitRepo(decodeURIComponent(repoBranchDelete[1]));
+    if (!row) return fail(res, 404, 'E1076', '仓库不在清单里'), true;
+    const body = await readBody(req);
+    try {
+      return sendJson(res, 200, await git.deleteBranch(row, {
+        branch: String(body.branch ?? ''),
+        remote: !!body.remote,
+        base: body.base ?? null,
+      })), true;
+    } catch (e) {
+      return fail(res, 400, 'E1112', String(e.message ?? e)), true;
+    }
+  }
+
   const one = /^\/api\/git\/repos\/([^/]+)$/.exec(url.pathname);
   if (req.method === 'DELETE' && one) {
     try {
