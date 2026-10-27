@@ -1399,6 +1399,27 @@ export async function workState(row) {
     }
   }
 
+  /*
+   * 上游（`@{u}`）与"已提交、还没推送"的计数（2026-10-27 用户实报：提交完没推，界面看不出来）。
+   *
+   * 和上面的 `ahead` **不是一回事**：ahead 是"领先 base 几条"，已经推过的分支照样算领先；
+   * 这里要的是"本地有多少提交到不了上游" —— 只有 `@{u}..HEAD` 才是真没推的。
+   * `upstream` 为 null = 没设上游（新分支还没推过，或远端分支被删了）；界面据此说"还没推到远端"。
+   */
+  let upstream = null;
+  let unpushed = null;
+  let unpulled = null;
+  if (branch) {
+    const up = await gitIn(cwd, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
+    if (up.code === 0 && up.out) {
+      upstream = up.out;
+      const a = await gitIn(cwd, ['rev-list', '--count', '@{u}..HEAD']);
+      if (a.code === 0) unpushed = Number(a.out) || 0;
+      const b = await gitIn(cwd, ['rev-list', '--count', 'HEAD..@{u}']);
+      if (b.code === 0) unpulled = Number(b.out) || 0;
+    }
+  }
+
   return {
     fullName: row.fullName,
     localPath: cwd,
@@ -1411,6 +1432,9 @@ export async function workState(row) {
     ahead,
     aheadCommits,
     behind,
+    upstream,
+    unpushed,
+    unpulled,
     dirty,
     dirtyCount: dirty.length,
     secrets: findSecretPaths(dirty.map((f) => f.path)),

@@ -1049,7 +1049,17 @@ export async function renderGitRepos(root = $('pluginView')) {
       // 一打开先看操作项 +「最近」：本地 / 远程 / 标签三组默认收起（2026-10-27 用户：
       // "本地、远程、标签改成默认折叠"）—— 分支多的时候展开着会一屏铺满，还得先滚。
       defaultFolded: ['本地分支', '远程分支', '标签'],
-      buttonText: (v) => v || '游离 HEAD',
+      /*
+       * 按钮上带"已提交没推送"的角标（2026-10-27 用户："已提交，但是没有推送，是不是应该显示一下"）：
+       * ↑N = 本地有 N 个提交还没推到上游；↓N = 上游有 N 个新提交还没拉下来（跟 IDEA 分支按钮同款）。
+       * 数据来自 /changes 的 unpushed / unpulled（`@{u}` 对比，**不是** ahead —— 推过的分支照样算 ahead）。
+       */
+      buttonText: (v) => {
+        const name = v || '游离 HEAD';
+        const up = Number(state.unpushed ?? 0);
+        const down = Number(state.unpulled ?? 0);
+        return name + (up > 0 ? ` ↑${up}` : '') + (down > 0 ? ` ↓${down}` : '');
+      },
       onChange: (id) => onBranchPick(repo, id, state.branch ?? '', combo),
       onOpen: async () => {
         try {
@@ -1062,9 +1072,48 @@ export async function renderGitRepos(root = $('pluginView')) {
 
     const dirty = state.dirty ?? [];
     const head = $('grChgHead');
-    if (head?.isConnected) head.textContent = dirty.length ? `${dirty.length} 个未提交` : '';
+    if (head?.isConnected) {
+      head.textContent = dirty.length ? `${dirty.length} 个未提交` : Number(state.unpushed ?? 0) > 0 ? `${state.unpushed} 个未推送` : '';
+    }
     if (!dirty.length) {
-      box.innerHTML = '<div class="sk-blank">工作区是干净的 —— 没有未提交的改动</div>';
+      /*
+       * 工作区干净时也要把"已提交、还没推送"说出来（2026-10-27 用户实报：提交完没推，
+       * 界面只写"没有未提交的改动"，人以为一切同步完了）。三种情况分开说：
+       *   有上游 + 领先  → 「N 个提交还没推送」+ 推送按钮；
+       *   没上游          → 「这条分支还没推到远端」+ 推送按钮（首次推会设上游）；
+       *   有上游且齐平    → 「本地和上游一致」。
+       * 上游有新的（unpulled）单独提示一句，动作在分支下拉的「更新项目」里。
+       */
+      const up = state.upstream;
+      const n = Number(state.unpushed ?? 0);
+      const down = Number(state.unpulled ?? 0);
+      let tip;
+      let btn = '';
+      if (n > 0) {
+        tip = `工作区是干净的 —— 但当前分支有 <b>${n}</b> 个提交还没推送`;
+        btn = '<button type="button" class="mini auto" id="grPushNow">推送</button>';
+      } else if (!up) {
+        tip = '工作区是干净的 —— 这条分支还没有上游（还没推过，或远端分支已删）';
+        btn = '<button type="button" class="mini auto" id="grPushNow">推送</button>';
+      } else {
+        tip = `工作区是干净的 —— 本地和上游 <b>${esc(up)}</b> 一致`;
+      }
+      const behindTip = down > 0 ? `<span class="dim">上游还有 ${down} 个新提交（分支下拉里点「更新项目」）</span>` : '';
+      box.innerHTML = `<div class="sk-blank">${tip}${behindTip}${btn ? '<span style="flex:1"></span>' + btn : ''}</div>`;
+      $('grPushNow')?.addEventListener('click', async (e) => {
+        const b = e.currentTarget;
+        b.disabled = true;
+        b.textContent = '推送中…';
+        try {
+          const r = await post(`/api/git/repos/${encodeURIComponent(repo.id)}/push`, {});
+          toast(`已推送 ${r.pushed}`);
+          await refresh();
+        } catch (err) {
+          b.disabled = false;
+          b.textContent = '推送';
+          toast(err.message, 'error');
+        }
+      });
       return;
     }
     /* 两组折叠（2026-10-27，用户指 VS Code 源代码管理截图："加两个可以折叠的标题"）：
