@@ -708,9 +708,56 @@ export async function commitAll(row, { message, allowSecrets = false, paths = nu
 }
 
 /**
+ * 把 `git push` 的失败输出翻译成人话（**纯函数**，冒烟直接钉）。
+ *
+ * 2026-10-27 实报：人往 `main` 直接推，被 GitHub 规则集拒了，应用却按"非快进"那档说
+ * 「远端有本地没有的提交 —— 先点同步」，完全反了（本地其实是领先的）。原始输出长这样：
+ *
+ *   remote: - Changes must be made through a pull request.
+ *   remote: - Required status check "gate" is expected.
+ *   ! [remote rejected] main -> main (push declined due to repository rule violations)
+ *
+ * 所以**先认"保护规则"这一档**（它同样带 `[remote rejected]`，必须先于非快进判断），
+ * 并把 `remote:` 里的规则原话带上 —— 人得知道挡他的是"必须走 PR"还是"gate 没过"。
+ *
+ * @param {string} out  git push 的输出（stdout + stderr）
+ * @param {{branch?: string|null, remote?: string, base?: string|null, rejectedHint?: 'sync'|'rename'}} opts
+ */
+export function translatePushFailure(out, { branch = null, remote = 'origin', base = null, rejectedHint = 'sync' } = {}) {
+  const text = String(out ?? '');
+  const raw = text.split('\n').map((l) => l.trim()).filter(Boolean).slice(-4).join(' ');
+  const ruleLines = text
+    .split('\n')
+    .map((l) => l.replace(/^remote:\s*/, '').trim())
+    .filter((l) => l && /\b(pull request|required status check|repository rule|protected branch)\b/i.test(l))
+    .slice(0, 3);
+  const rules = ruleLines.length ? `（${ruleLines.join('；')}）` : '';
+
+  // ① 分支保护 / ruleset —— 不是"你落后了"，是"这个分支不许直接推"
+  if (/push declined due to repository rule|must be made through a pull request|protected branch|required status check|GH006/i.test(text)) {
+    const who = `${remote}${branch ? ` 的 ${branch}` : ''}`;
+    return base && branch === base
+      ? `推不上去：${who} 是 base 分支、有保护规则${rules} —— 不能直接推。改成切一条新分支推上去、建 PR，等 gate 检查绿了再合并。平台**不会强推**，也绕不过保护。原始信息：${raw}`
+      : `推不上去：${who} 分支有保护规则${rules} —— 不能直接推。改成推一条新分支、建 PR（平台不会强推，也绕不过保护）。原始信息：${raw}`;
+  }
+  // ② 快进不了：远端有你本地没有的提交（这才是"先同步"那种）
+  if (/rejected|non-fast-forward/i.test(text)) {
+    return rejectedHint === 'rename'
+      ? `远端已经有一个不同的 ${branch ?? '同名'} 分支（推送被拒）。平台**不会强推** —— 换一个分支名，或先在那个目录把分支理干净。原始信息：${raw}`
+      : `远端有本地没有的提交（推送被拒）—— 先点「同步」拉一次；分叉了同步不动就去那个目录理历史。平台**不会强推**。原始信息：${raw}`;
+  }
+  // ③ 权限
+  if (/Permission denied|403|Authentication failed|invalid credentials|Write access/i.test(text)) {
+    return `推不上去：这个令牌对 ${remote} 没有 Contents: write（或在 Repository access 里没选中它）。原始信息：${raw}`;
+  }
+  return `推送失败：${text.trim() || 'git 没给原因'}`;
+}
+
+/**
  * 推送当前分支（普通 push，**绝不强推**）。
  * 与 commitAndPush 只有一处不同：建 PR 只往新分支推，这里推的就是人现在站的分支 ——
- * 这是人自己的明确动作，平台不替他挑分支，也不拦"直接推 main"（单人仓库这是常态）。
+ * 这是人自己的明确动作，平台不替他挑分支，也不拦"直接推 main"（单人仓库这是常态）；
+ * 但**仓库自己的规则**（分支保护）会拒，拒了就说清楚是规则挡的（2026-10-27）。
  */
 export async function pushCurrent(row) {
   const st = await workState(row);
@@ -718,14 +765,9 @@ export async function pushCurrent(row) {
   if (st.detached) throw new Error('当前不在任何分支上（detached HEAD）—— 先 checkout 回一个分支再推');
   const push = await gitIn(row.localPath, [...gitAuthArgs(), 'push', '--set-upstream', 'origin', `refs/heads/${st.branch}:refs/heads/${st.branch}`], { timeoutMs: GIT_PUSH_MS });
   if (push.code !== 0) {
-    const out = String(push.out ?? '');
-    if (/rejected|non-fast-forward/i.test(out)) {
-      throw new Error(`远端有本地没有的提交（推送被拒）—— 先点「同步」拉一次；分叉了同步不动就去那个目录理历史。平台**不会强推**。原始信息：${out.split('\n').slice(-3).join(' ')}`);
-    }
-    if (/Permission denied|403|Authentication failed|invalid credentials|Write access/i.test(out)) {
-      throw new Error(`推不上去：这个令牌对 ${row.fullName} 没有 Contents: write（或在 Repository access 里没选中它）。原始信息：${out.split('\n').slice(-3).join(' ')}`);
-    }
-    throw new Error(`推送失败：${out.split('\n').slice(-4).join(' ') || 'git 没给原因'}`);
+    throw new Error(
+      translatePushFailure(String(push.out ?? ''), { branch: st.branch, base: row.defaultBranch ?? null }),
+    );
   }
   return { pushed: st.branch };
 }
@@ -1464,14 +1506,13 @@ export async function commitAndPush(row, { branch = null, message = null, paths 
 
   const push = await gitIn(row.localPath, [...gitAuthArgs(), 'push', '--set-upstream', 'origin', `refs/heads/${branchName}:refs/heads/${branchName}`], { timeoutMs: GIT_PUSH_MS });
   if (push.code !== 0) {
-    const out = String(push.out ?? '');
-    if (/rejected|non-fast-forward/i.test(out)) {
-      throw new Error(`远端已经有一个不同的 ${branchName} 分支（推送被拒）。平台**不会强推** —— 换一个分支名，或先在那个目录把分支理干净。原始信息：${out.split('\n').slice(-3).join(' ')}`);
-    }
-    if (/Permission denied|403|Authentication failed|invalid credentials|Write access/i.test(out)) {
-      throw new Error(`推不上去：这个令牌对 ${row.fullName} 没有 Contents: write（或在 Repository access 里没选中它）。原始信息：${out.split('\n').slice(-3).join(' ')}`);
-    }
-    throw new Error(`推送失败：${out.split('\n').slice(-4).join(' ') || 'git 没给原因'}`);
+    throw new Error(
+      translatePushFailure(String(push.out ?? ''), {
+        branch: branchName,
+        base: targetBase,
+        rejectedHint: 'rename',
+      }),
+    );
   }
 
   return { branch: branchName, base: targetBase, committed, files: picked };
