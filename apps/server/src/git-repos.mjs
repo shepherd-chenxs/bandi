@@ -1231,11 +1231,41 @@ export async function getChecks(repo, sha) {
 }
 
 /**
+ * 合并被 GitHub 拒（405 / not mergeable）时的"为什么"翻译（**纯函数**，冒烟直接钉）。
+ *
+ * 2026-10-27 实报：`gate` 还在跑时点「合并」→ 405，界面却说「多半是有冲突、或分支保护
+ * （必需检查/必需审阅）没过」，人以为代码有问题。GitHub 的原话其实分得很清，按原话分档：
+ *   · 「Required status check "gate" is in progress.」→ 检查没跑完，等绿了再合，**不是冲突**；
+ *   · 「…is expected.」/没过 → 检查没跑/没通过；
+ *   · review / approve → 需要审阅；
+ *   · conflict / not mergeable → 真冲突；
+ *   · 其它 → 原话带回。
+ */
+export function explainMergeRejection(message) {
+  const m = String(message ?? '');
+  const rules = m
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .join('；');
+  if (/required status check|required checks?/i.test(m)) {
+    const running = /in progress/i.test(m);
+    return `合并被拒（405）：必需的检查${running ? '还在跑' : '没跑过/没通过'}（${rules}）—— ${running ? '等 gate 绿了再合，这不是冲突' : '先让检查跑绿再合'}。`;
+  }
+  if (/\b(review|approv)/i.test(m)) return `合并被拒（405）：还需要审阅通过（${rules}）—— 去 GitHub 上过审再合。`;
+  if (/conflict|not mergeable|cleanly/i.test(m)) {
+    return `合并被拒（405）：分支有冲突、当前不可合并（${rules}）—— 先把 base 合进分支、解决冲突再合。`;
+  }
+  return `合并被拒（405）：${rules || 'GitHub 没给原因'}`;
+}
+
+/**
  * 合并一个 PR（2026-10-23；2026-10-25 起与 `createPull` 并列为平台两处写 GitHub 的地方）。
  *
  * 谁能走到这儿由调用方管（流程合并节点的判据表 / 「工作台 → 研发 → 代码托管」上的人点按钮），
  * 这里只管把 API 调了、把结果说人话：
- *   · 405「not mergeable」多半是冲突或分支保护 —— 原样带回，别翻译成"系统错误"；
+ *   · 405「not mergeable」按 GitHub 的原话分档（检查没跑完 / 需要审阅 / 有冲突 ——
+ *     见 explainMergeRejection），别一律说成"多半有冲突"；
  *   · 403 是令牌没有 contents:write —— 那是**该等人换令牌**的明确信号，带上原话；
  *   · 409 是给了 `sha` 但 head 期间变了（有人推了新提交）—— 必须让人重看，别盲重试。
  */
@@ -1249,7 +1279,7 @@ export async function mergePull(repo, number, { commitTitle = null, mergeMethod 
     return { merged: !!data.merged, message: data.message ?? '', sha: data.sha ?? null };
   } catch (e) {
     if (e?.status === 409) throw new Error('这个 PR 在你看的这段时间里被人推了新提交（409）：刷新后重看再合');
-    if (e?.status === 405 || /not mergeable/i.test(String(e?.githubMessage ?? ''))) throw new Error(`GitHub 拒绝合并（405）：${e?.githubMessage ?? e?.message ?? e} —— 多半是有冲突、或分支保护（必需检查/必需审阅）没过`);
+    if (e?.status === 405 || /not mergeable/i.test(String(e?.githubMessage ?? ''))) throw new Error(explainMergeRejection(e?.githubMessage ?? e?.message ?? String(e)));
     if (e?.status === 403) throw new Error(`令牌没有合并权限（403）：${e?.githubMessage ?? e.message}——去 GitHub 给这个 PAT 勾上 contents:write 再换一次（现在挂的是 ${tokenHint() ?? '没令牌'}）`);
     throw e;
   }
