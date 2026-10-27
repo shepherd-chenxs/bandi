@@ -239,7 +239,24 @@ export async function handleGit(req, res, url) {
         const prs = await git.listPullsForRepo(row.fullName);
         // 已经挂在某张卡上的 PR 标出来：界面上"这张卡有 PR 了"和"这个 PR 没人管"是两件事
         const linked = new Map(store.listProjectTasksWithPr().filter((t) => t.prRepo === row.fullName).map((t) => [Number(t.prNumber), t.id]));
-        return sendJson(res, 200, { prs: prs.map((p) => ({ ...p, taskId: linked.get(p.number) ?? null })) }), true;
+        /*
+         * 2026-10-27「PR 区域」：每个 PR 再附一个 checks 汇总，界面才说得清"这条能不能合"
+         * （我们的 main 有分支保护，`gate` 不绿合不了）。
+         * 逐条查 check-runs 是 N 次请求 —— 开着的 PR 通常 0~2 条，可以接受；
+         * 万一某一条查失败，只把那一条降级成 unknown，不让整个列表挂掉。
+         */
+        const enriched = await Promise.all(
+          prs.map(async (p) => {
+            let checks = { state: 'unknown', total: 0, failed: [], pending: [] };
+            try {
+              checks = await git.pullChecks(row.fullName, p.headSha);
+            } catch {
+              /* 查不到就 unknown（界面显示"检查未知"），不挡合并按钮之外的别的事 */
+            }
+            return { ...p, taskId: linked.get(p.number) ?? null, checks };
+          }),
+        );
+        return sendJson(res, 200, { prs: enriched, base: row.defaultBranch ?? null }), true;
       } catch (e) {
         return fail(res, 400, 'E1079', String(e.message ?? e)), true;
       }

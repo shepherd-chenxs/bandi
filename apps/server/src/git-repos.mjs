@@ -1029,7 +1029,50 @@ export async function listOpenPulls(repo) {
     // head.sha：这次改动**最新的提交号**。「新 PR」的判定就靠它 —— PR 改描述不算新，
     // 推了新提交（sha 变了）才算新改动、才值得再烧一次模型去审。
     headSha: p.head?.sha ?? null,
+    /*
+     * 2026-10-27「PR 区域」：把"这条 PR 从哪来、能不能合"摆到行上（原来只有编号/标题/作者）。
+     *   · baseRef / headRef → 行上写 `head → base`；
+     *   · mergeable / mergeableState → 合并按钮能不能按（conflict / behind / blocked / draft）；
+     *   · mergeable 是 GitHub 懒计算的：刚建/刚推可能先回 null，界面按"未知"处理，别当成"能合"。
+     */
+    baseRef: p.base?.ref ?? null,
+    headRef: p.head?.ref ?? null,
+    mergeable: typeof p.mergeable === 'boolean' ? p.mergeable : null,
+    mergeableState: p.mergeable_state ?? null,
+    updatedAt: p.updated_at ?? null,
   }));
+}
+
+/**
+ * GitHub 的 check-runs → 一个能放在 PR 行上的结论（**纯函数**，冒烟直接钉）。
+ *
+ * 为什么归约成一句话就够：界面只需要回答"现在能不能合" —— gate 绿了没、是不是还在跑、
+ * 红了是哪条。逐条 check 的细节去 GitHub 看，不在这个列表里摊。
+ *
+ * 优先级：有任何失败结论 → failure；还有没跑完的 → pending；一条都没有 → none；全绿 → success。
+ */
+export function summarizeChecks(runs) {
+  const list = Array.isArray(runs) ? runs : [];
+  if (!list.length) return { state: 'none', total: 0, failed: [], pending: [] };
+  const failed = list
+    .filter((r) => ['failure', 'timed_out', 'cancelled', 'action_required', 'startup_failure'].includes(r.conclusion))
+    .map((r) => r.name)
+    .filter(Boolean);
+  const pending = list
+    .filter((r) => r.conclusion === null || r.conclusion === undefined)
+    .map((r) => r.name)
+    .filter(Boolean);
+  const total = list.length;
+  if (failed.length) return { state: 'failure', total, failed, pending };
+  if (pending.length) return { state: 'pending', total, failed: [], pending };
+  return { state: 'success', total, failed: [], pending: [] };
+}
+
+/** 查一条提交的 checks 汇总（PR 区每行用；失败降级成 unknown，不挡别的 PR 显示） */
+export async function pullChecks(repo, sha) {
+  if (!sha) return { state: 'unknown', total: 0, failed: [], pending: [] };
+  const data = await ghFetch(`/repos/${repo}/commits/${sha}/check-runs?per_page=100`);
+  return summarizeChecks(data?.check_runs);
 }
 
 /** 列出开着的 issue（剔除 PR —— GitHub 的 issues 接口把 PR 也当 issue 返回） */

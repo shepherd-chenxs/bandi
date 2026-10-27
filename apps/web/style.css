@@ -1897,6 +1897,35 @@ input.locked:focus { outline: none; border-color: var(--line); }
 .gr-log-sub { flex: 1; min-width: 0; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gr-log-who { flex: 0 0 auto; font-size: 11.5px; color: var(--dim); }
 
+/* 代码托管：拉取请求区（2026-10-27，PR 从「建 PR 弹窗下半屏」搬成常驻区域）。
+   每行 = 标题(+徽标) / `head → base` + 作者 + gate + 去 GitHub / 右侧合并按钮；
+   没有 PR 时要么一行空态，要么「当前分支还没有 PR」的 CTA。 */
+.gr-pulls-refresh { margin-left: auto; white-space: nowrap; flex: 0 0 auto; }
+.gr-pr-row { display: flex; align-items: flex-start; gap: 12px; padding: 10px 12px; min-width: 0; }
+.gr-pr-row + .gr-pr-row { border-top: 1px dashed var(--line); }
+.gr-pr-main { flex: 1; min-width: 0; }
+.gr-pr-title { font-size: 13.5px; font-weight: 500; min-width: 0;
+              overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gr-pr-title b { font-family: ui-monospace, monospace; font-size: 12.5px; color: var(--accent); margin-right: 2px; }
+.gr-pr-title .pill { margin-left: 6px; }
+.gr-pr-title .pill.bad { color: var(--bad); }
+.gr-pr-sub { display: flex; align-items: center; gap: 8px; margin-top: 4px;
+             font-size: 12px; min-width: 0; flex-wrap: wrap; }
+.gr-pr-refs { font-family: ui-monospace, monospace; font-size: 11.5px; color: var(--dim); }
+.gr-pr-sub a { color: var(--accent); text-decoration: none; }
+.gr-pr-sub a:hover { text-decoration: underline; }
+.gr-pr-check { font-size: 11px; padding: 1px 7px; border-radius: 99px;
+               border: 1px solid var(--line); white-space: nowrap; }
+.gr-pr-check.ok { color: var(--ok); border-color: var(--ok); }
+.gr-pr-check.bad { color: var(--bad); border-color: var(--bad); }
+.gr-pr-check.wait { color: var(--warn); border-color: var(--warn); }
+.gr-pr-check.none { color: var(--dim); }
+.gr-pr-cta { display: flex; align-items: center; gap: 12px; padding: 10px 12px; font-size: 12.5px; }
+.gr-pr-cta.dim { color: var(--dim); }
+.gr-pr-cta .mini { margin-left: auto; }
+.gr-cell-ops .mini[disabled] { opacity: .45; cursor: not-allowed; }
+.gr-set-remove { color: var(--bad); }
+
 /* 分支管理弹窗（2026-10-27）：列表行两个动作 + 「与 base 比较」的文件清单。
    行结构借用 .sk-row（主从页的清单行），这里只压一下间距、把分支名换成等宽。 */
 #grBrmBody { max-height: 58vh; overflow: auto; }

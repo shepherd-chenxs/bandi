@@ -314,6 +314,22 @@ try {
   check('删远端分支要先连 GitHub（没令牌就拒）', /先连接 GitHub/.test(remoteNoToken), remoteNoToken);
   check('删完工作区没被搅（干净）', g(['status', '--porcelain']).trim() === '');
 
+  console.log('\n⑦ check-runs 归约（PR 区的 gate 状态是纯逻辑，直接钉）');
+  const sc = git.summarizeChecks;
+  check('没有 check-run → none', sc([]).state === 'none' && sc([]).total === 0);
+  check('全绿 → success', sc([{ name: 'gate', status: 'completed', conclusion: 'success' }]).state === 'success');
+  check('还在跑 → pending', sc([{ name: 'gate', status: 'in_progress', conclusion: null }]).state === 'pending');
+  const failedSum = sc([{ name: 'gate', status: 'completed', conclusion: 'failure' }]);
+  check('红了 → failure，并说清是哪条', failedSum.state === 'failure' && failedSum.failed.includes('gate'), JSON.stringify(failedSum));
+  check(
+    'failure 优先于 pending（有红就不该显示"还在跑"）',
+    sc([
+      { name: 'a', status: 'completed', conclusion: 'failure' },
+      { name: 'b', status: 'in_progress', conclusion: null },
+    ]).state === 'failure',
+  );
+  check('null / undefined 容错 → none', sc(null).state === 'none' && sc(undefined).state === 'none');
+
 } finally {
   child.kill();
   await new Promise((r) => setTimeout(r, 300));
