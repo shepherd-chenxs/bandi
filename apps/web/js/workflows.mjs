@@ -1,7 +1,7 @@
 /* workflows.mjs —— 工作流、流程：发布 / 发起 / 实例页。
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
 import { esc, setRoute, toast } from './shell.mjs';
-import { ICON_WB_FLOW, api } from './ui.mjs';
+import { api } from './ui.mjs';
 import { setNav } from './state.mjs';
 import { askText } from './machine.mjs';
 import { showView } from './contacts.mjs';
@@ -25,10 +25,10 @@ export async function openWorkflows(pickId = null) {
   // 从工作台进来时 S.nav 还是 plugins，不先切过来就会画出一片空白（踩过）。
   setNav('workflows', { skipOpen: true });
   document.body.classList.remove('no-list');
-  // 左栏顶上就是"你在哪儿"：工作台 › 流程编排（面包屑从右页头挪过来，见 setListTitle）
-  // 二级叫「流程编排」而不是「工作流」：这一页是编排模板的地方，跟工作台那颗
-  // 「流程编排」磁贴同名（2026-10-19 用户截图指出）。
-  setListTitle([{ label: '工作台', to: 'workbench' }, { label: '流程编排' }]);
+  // 左栏顶上就是"你在哪儿"：工作台 › 工作流（面包屑从右页头挪过来，见 setListTitle）
+  // 2026-10-26 用户拍板：这东西统一叫「工作流」—— 磁贴、面包屑、标题一处不落，
+  // 原来磁贴叫「流程编排」、页名也叫「流程编排」，跟"工作流"三个字来回换着说，人才会绕晕。
+  setListTitle([{ label: '工作台', to: 'workbench' }, { label: '工作流' }]);
   setRoute('workflows', pickId ? { template: pickId } : {});
   $('listAction').classList.remove('hidden');
   $('listAction').title = '新建流程模板';
@@ -74,7 +74,7 @@ export function renderFlowList() {
 
 
 export function renderFlowEmpty() {
-  // 没有页头：左栏顶上已经是「工作台 › 流程编排」，右页头再写一遍就是同一件事写两处
+  // 没有页头：左栏顶上已经是「工作台 › 工作流」，右页头再写一遍就是同一件事写两处
   $('flowView').innerHTML = `
     <div class="detail-body"><div class="wip">还没有流程模板 —— 点左栏右上角的「＋」新建一个</div></div>`;
   S.view = 'flow';
@@ -118,25 +118,9 @@ export const wbCard = (cls, icon, name, desc, attr, icoStyle = '') => `
 
 
 /**
- * 工作台里的「工作流」分组（2026-10-26 改）：**只留「流程编排」**。
- * （2026-10-26 用户截图拍板：分组标题原叫「流程」，改成「工作流」；卡片与页面名仍叫「流程编排」。）
- *
- * 发布过的流程**不再在工作台摆磁贴**了（用户原话："这些入口去掉，现在直接在任务面板就可以建了"）：
- *   · 发起流程的入口已经收进任务看板 —— 建卡时「执行方式」选「由流程执行」，发布过的流程就在下拉里；
- *   · 工作台上再摆一排"点开看发起记录"的磁贴，等于同一件事两个入口，还容易让人以为
- *     "发起流程"和"建任务"是两回事；
- *   · **编排入口必须留**：发布 / 下架是在设计器里做的，而"发布之后才能在任务里选、下架就选不到"
- *     这条口径正是从这里生效的（见 `taskDialog` 取 `S.flowPublished`）。
- * 历史实例从它那张任务卡（看板行）点进去看，不再从工作台进。
+ * 工作台磁贴的入口**已经不在这个文件**（2026-10-26 用户拍板）：
+ * 「流程编排」改名「工作流」并进「自动化」那一组，磁贴由 `projects.mjs` 的
+ * `workbenchAutoSection()` 一起画 —— 它本来就该跟定时任务做邻居（都是"让活自己动起来"）。
+ * 原来这里有个 `workbenchFlowSection()` 单列一段，删掉时连 `<div class="wb-sec">工作流</div>`
+ * 一起没了，工作台少一段标题。
  */
-export function workbenchFlowSection() {
-  /* ⚠️ 工作台的三段（项目 / 自动化 / 流程）**不再用 `<section class="fx">`**（2026-10-19）：
-     `.fx + .fx` 自带一条横分隔线，几段竖着一叠就是几条横带、每带右侧一场空。
-     统一用 `.wb-sec`（一行小标题）+ `.wb-grid`，跟插件那几段接在同一条流里。 */
-  return `
-    <div class="wb-sec">工作流</div>
-    <div class="wb-grid">
-      <!-- 编排入口：原来在左边 rail 的「工作流」那一项，现在收进工作台 -->
-      ${wbCard('flow', ICON_WB_FLOW, '流程编排', '画流程：节点、指派、发布', 'data-flow-design')}
-    </div>`;
-}

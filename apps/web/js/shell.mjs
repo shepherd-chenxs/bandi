@@ -5,10 +5,10 @@ import { openSettings } from './settings.mjs';
 import { openWorkflows } from './workflows.mjs';
 import { openProjectDetail, openProjectsPage, openTaskBoard, openTaskCardPage } from './projects.mjs';
 import { openDesigner, openFlowRun } from './flowpages.mjs';
-import { openSchedules, openSkill } from './skills.mjs';
+import { openSchedules, openSkill, openCodeRepoPage } from './skills.mjs';
 import { openConversation, openDetail } from './chat.mjs';
 import { openGroupDetail } from './groups.mjs';
-import { openExperts, openPlugins, renderPluginPanel } from './experts.mjs';
+import { openExperts, openPlugins, openRemotePage, renderPluginPanel } from './experts.mjs';
 import { S } from './core.mjs';
 
 
@@ -115,6 +115,10 @@ export const ROUTES = {
     // 定时任务已搬去工作台（2026-10-17）：存着的旧位置（settings/schedules）还认，
     // 但直接转过去 —— 设置里已经没这一节了，留着会画出个空白页。
     if (section === 'schedules') return openRoute({ view: 'schedules' });
+    /* 代码托管 / 远程连接已搬成工作台研发区的整页（2026-10-26 二改）：老位置直接转发，
+       不然会先画一遍设置页再跳（左栏清单闪一下）。 */
+    if (section === 'remote') return openRoute({ view: 'remote' });
+    if (section === 'code') return openRoute({ view: 'codeRepos' });
     S.settingsSection = section || 'prefs';
     return setNav('settings');
   },
@@ -155,6 +159,17 @@ export const ROUTES = {
   plugins: () => {
     setNav('plugins', { skipOpen: true });
     return openPlugins();
+  },
+  /* 「工作台 → 研发」下的两页（2026-10-26 二改）：它们原来是设置的两个分节，借设置页当宿主，
+     点进去整页切到「设置」——左栏一列设置分节、当前页没有对应项，用户看着像点错了。
+     现在跟项目/看板一样是工作台子页（左栏收起、页头面包屑「工作台 › X」）。 */
+  remote: () => {
+    setNav('plugins', { skipOpen: true });
+    return openRemotePage();
+  },
+  codeRepos: () => {
+    setNav('plugins', { skipOpen: true });
+    return openCodeRepoPage();
   },
   plugin: ({ id, row } = {}) => {
     setNav('plugins', { skipOpen: true });

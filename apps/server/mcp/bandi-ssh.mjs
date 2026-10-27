@@ -200,7 +200,7 @@ async function callTool(name, args = {}) {
     case 'ssh_guide': {
       const s = findServer(String(args.alias ?? ''));
       // **引导文案别再手写一份**：步骤在 src/ssh-exec.mjs 的 buildGuide 里，
-      // 界面上那个"把公钥装到服务器"用的是同一份。这里原来自己抄了一套，
+      // 界面上那个"把公钥装到服务器"用的是同一份。这里原来自己另写了一套，
       // 结果同一处顺序错误存了两份（第 1 步写成 ssh 运维账号 —— 账号还没建，必然失败）。
       // 注意共享的只是**文案**：sshRun 两边仍旧各写各的（见两个文件顶部的定位说明）。
       return buildGuide(s, publicKeyOf(s));

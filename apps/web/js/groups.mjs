@@ -563,7 +563,7 @@ export function paintGroupDetail(group) {
           <div class="sub">群助手：${esc(assistant?.name ?? '—')} · ${group.members.length} 人</div>
         </div>
         <!-- 「⋯」收解散入口（2026-10-20 用户要求）：破坏性动作别跟「发消息」平起平坐，
-             也别平铺在页面底部 —— 收进菜单，点开才露。样式/交互照抄员工详情那套 hero-more -->
+             也别平铺在页面底部 —— 收进菜单，点开才露。样式/交互沿用员工详情那套 hero-more -->
         <div class="hero-actions">
           <button class="primary" id="gMsg">发消息</button>
           <div class="hero-more">

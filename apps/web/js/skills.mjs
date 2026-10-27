@@ -1,14 +1,23 @@
 /* skills.mjs —— 技能、从 GitHub 挑仓库（放进弹窗里）、定时任务、从本地导入、技能 → 发给数字员工（反方向挂载）。
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
 import { esc, mdRender, savePlace, setRoute, toast } from './shell.mjs';
-import { ICON_EDIT, ICON_HELP, ICON_PLAY, ICON_TRASH, api, createCombo, createDateTimePick, cut, failHtml, initial, post, wireDialogHead, wireHelpPop } from './ui.mjs';
+import { ICON_BRANCH, ICON_COMMIT, ICON_EDIT, ICON_PLAY, ICON_PUSH, ICON_SYNC, ICON_TAG, ICON_TRASH, api, createCombo, createDateTimePick, cut, failHtml, initial, post, wireDialogHead } from './ui.mjs';
 import { load } from './state.mjs';
 import { openSettings } from './settings.mjs';
+import { setListTitle } from './flowpages.mjs';
 import { breadcrumb, headRow } from './connectors.mjs';
 import { confirmDo, askCheckbox } from './machine.mjs';
-import { gitAddRepoItems, openAddMenu, renderList, showView, skillAddItems } from './contacts.mjs';
+import { openAddMenu, renderList, showView, skillAddItems } from './contacts.mjs';
 import { openProjectDetail, pickLocalDir } from './projects.mjs';
 import { $, S } from './core.mjs';
+
+/* 提交卡两组文件的折叠态（模块级 —— renderGitRepos 每次刷新重建 fillChanges，
+ * 状态放这儿才能跨刷新保留；false = 展开，默认全展开） */
+const chgFold = { chg: false, untr: false };
+/* 勾选提交（2026-10-27，用户："加选择框允许选择提交"）：记**没勾**的路径（缺省全选，
+ * 新出现的文件天然勾上）；chgSelRepo 认仓库 —— 换仓库清空。 */
+const chgUnsel = new Set();
+let chgSelRepo = null;
 
 
 
@@ -376,21 +385,63 @@ export async function openGitPickDialog(onDone) {
  * 「?」在**连上与没连上时都在** —— 而"给下一个仓库补授权""令牌 90 天到期要换"
  * 恰恰是**连着的时候**才要照着做，所以放在「?」里是覆盖面更全的那一处。 */
 export const GIT_TOKEN_HELP = `
-  在 GitHub 建：Settings → Developer settings → Personal access tokens → <b>Fine-grained tokens</b>；
-  权限勾两样：<b>Contents: Read and write</b>（克隆/推分支/合并都要它）、
-  <b>Pull requests: Read and write</b>（在平台里建 PR 要它）——<b>两个是独立权限</b>：
-  只勾 Contents 能在网页上手动建 PR、但 API 建会 403；只勾 Pull requests 能建 PR 但推不上分支。
-  只想读别人提的 PR（审阅）不勾也能跑。
-  Repository access 选你要接入的那几个仓库。令牌只存在本机数据目录，不进日志。
+  <div class="gr-help-title">怎么拿令牌</div>
+  <ol class="gr-help-steps">
+    <li>在 GitHub 建：Settings → Developer settings → Personal access tokens → <b>Fine-grained tokens</b></li>
+    <li>权限勾两样 —— <b>两个是独立权限，缺一个就少一块功能</b>：
+      <ul class="gr-help-perms">
+        <li><b>Contents: Read and write</b><span>克隆、推分支、合并都要它</span></li>
+        <li><b>Pull requests: Read and write</b><span>在平台里建 PR 要它</span></li>
+      </ul>
+      <span class="gr-help-note">只勾 Contents：网页上能手动建 PR，但平台里建会 403；
+      只勾 Pull requests：能建 PR 但推不上分支。只想读别人提的 PR（审阅）不勾也能跑。</span>
+    </li>
+    <li>Repository access：选你要接入的那几个仓库</li>
+  </ol>
+  <p class="gr-help-foot">令牌只存在本机数据目录，不进日志。
   <a class="help-link" href="https://github.com/settings/personal-access-tokens"
-     target="_blank" rel="noreferrer">去 GitHub 建一个 →</a>`;
+     target="_blank" rel="noreferrer">去 GitHub 建一个 →</a></p>`;
 
 
 
-export async function renderGitRepos() {
-  const view = $('settingsView');
-  showView('settings');
-  renderList();
+/**
+ * 「工作台 → 研发 → 代码托管」整页（2026-10-26 二改）。
+ *
+ * 为什么要有这个入口函数：这页原来**借设置页的壳**（渲染进 settingsView、走 openSettings('code')），
+ * 点工作台磁贴的结果是整页切到「设置」，左栏一列设置分节、当前页在左栏没有对应项 ——
+ * 用户看到的第一反应就是"我点错了吗"。现在它跟项目/看板一样是**工作台下的整页**：
+ * 左栏收起（整页版式），页头面包屑写「工作台 › 代码托管」。
+ */
+export async function openCodeRepoPage() {
+  setRoute('codeRepos');
+  /* 离开设置的分节状态（同 openRemotePage）：不然再点「设置」会被 S.settingsSection 送回这页 */
+  S.settingsSection = 'prefs';
+  S.plugin = null;          // 离开插件面板（三者共用 #pluginView，位置记忆得分清是谁）
+  S.projectList = false;
+  S.projectId = null;
+  S.boardAll = false;
+  showView('plugin');
+  /* 主从版式（2026-10-26 三改）：跟「远程连接」同一套 —— 左栏放仓库列表。
+     setNav('plugins') 会把 no-list 打开（宫格是整页），这里摘掉，
+     列表由 renderGitRepos 画（面包屑、左栏「＋」也在那儿摆）。 */
+  document.body.classList.remove('no-list');
+  await renderGitRepos($('pluginView'));
+}
+
+
+
+/**
+ * 代码托管页。
+ *
+ * 2026-10-26 二改：**参数化 root，宿主从设置页换成工作台**。
+ * 原来它借设置页的壳（`settingsView`），点工作台的「代码托管」磁贴整页切到「设置」——
+ * 左栏变成设置分节列表、当前页在左栏没有对应项，用户看着像"点错了地方"
+ * （用户原话："点击远程连接怎么跑到这里来了"，远程连接同病同修）。
+ * 现在它是**工作台下的整页**：左栏收起、页头面包屑写「工作台 › 代码托管」。
+ * 传入 root 的调用方负责 showView / 左栏，这里只管画。
+ */
+export async function renderGitRepos(root = $('pluginView')) {
+  const view = root;
   view.innerHTML = '<div class="empty" style="padding:24px 4px">取代码托管状态…</div>';
 
   let st;
@@ -403,180 +454,207 @@ export async function renderGitRepos() {
   const repos = st.repos ?? [];
 
   /*
-   * 连上之后的这一块：跟下面 `tokenForm` **同一行、同一个位置**（左「令牌」标签、
-   * 右「输入框 + 按钮」），只是输入框变成只读（只回显后 4 位）、按钮换成「断开连接」、
-   * 状态写在输入框下面。
-   *
-   * 为什么不做成"另一套行"：连上 GitHub 是这块最常见的状态切换，原来换成
-   * 「状态：已连接 + 断开连接按钮」两行，整块的高度和样子都变了 —— 用户说的是
-   * "连接之后这个区域的变化不要太大"。现在前后只差：输入框能不能编辑、按钮写什么。
+   * 主从版式（2026-10-26 三改，跟「远程连接」同一天定成一套）：
+   * 左栏 = 仓库登记表（标准行结构，选中记 `S.gitSel`），右栏 = GitHub 连接 + 选中仓库的详情。
+   * 原来的整页表格版（两段白卡 + 横向大表）是借设置页当宿主那阵子的旧观感 ——
+   * 跟工作台其它子页（项目 / 远程连接）不是一个版式，5 颗行内按钮挤一列也重。
+   * 现在动作收进详情标题行右侧（同 ssh 详情），仓库信息一行一条（.info-row）。
    */
+  if (!repos.some((r) => r.id === S.gitSel)) S.gitSel = repos.length ? repos[0].id : null;
+  const sel = repos.find((r) => r.id === S.gitSel) ?? null;
+
   /*
-   * 连上之后的这一块（2026-10-23 二次改版，用户圈红输入框）：**居中的紧凑簇**。
-   * 原来输入框 flex:1 撑满整行、按钮吊在最右 —— 令牌掩码就十来个字符，框却六百多像素，
-   * 中间大片空白反而显得空。现在标签 + 输入框(≤420px) + 按钮收成一行居中，
-   * 状态行居中压在输入框正下方。
-   * 连上/没连上仍同一套结构同一位置（状态切换只有输入框可编辑与否、按钮文案变化）。
+   * GitHub 连接：左栏只留**一个状态按钮**（2026-10-26 五改，用户："做成一个按钮区就行，
+   * 点击打开弹窗，不要展示这么多"）。点开 openGitConnDlg 弹窗里才见令牌表单 / 断开。
+   * 按钮跟着 listBody 一起重画，离开页面自动消失，不用挂清理钩子。
    */
-  const connectedForm = `
-    <div class="gr-conn">
-      <div class="gr-conn-row">
-        <span class="row-label">令牌</span>
-        <input class="locked" value="${esc(st.hint || '******')}" readonly
-               aria-label="已保存的令牌，只显示头 2 位和尾 4 位" />
-        <button id="gitDisconnect">断开连接</button>
-        <div class="gr-conn-status"><b style="color:var(--ok)">已连接</b><span id="gitWho">${
-          st.login ? ` —— @${esc(st.login)}` : ''
-        }</span></div>
-      </div>
+  const connSide = `
+    <div class="gr-side">
+      <button type="button" class="gr-side-btn" id="gitConnOpen"
+              title="${st.connected ? 'GitHub 连接设置：令牌、断开' : '连接 GitHub（令牌只存本机）'}">
+        <span class="gr-dot${st.connected ? ' ok' : ''}"></span>
+        <span class="gr-side-btn-label">${
+          st.connected ? `GitHub 已连接${st.login ? ` · @${esc(st.login)}` : ''}` : 'GitHub 未连接 · 点击连接'
+        }</span>
+      </button>
     </div>`;
 
-  const tokenForm = `
-    <div class="gr-conn">
-      <div class="gr-conn-row">
-        <span class="row-label">令牌</span>
-        <input id="gitToken" type="password" placeholder="粘贴 fine-grained PAT（只填一次，之后只显示掩码）" autocomplete="off" />
-        <button class="primary" id="gitConnect">连接 GitHub</button>
-      </div>
-    </div>`;
-
-  /*
-   * 仓库表（2026-10-23 改表格版，用户问「表格形式好不好看」后试做）：
-   * 每个语义一列（仓库 / 管理员 / 自动合并 / 操作），列头只写一次、值上下对齐 ——
-   * 「谁在值班、哪台开了自动合并」竖着扫一列就能看完，比藏在每行第二行里好找。
-   * 仓库名和路径仍挤在同一格（路径是等宽长串，单独成列会把别的列挤扁）。
-   * 列宽写死在 colgroup：表切 table-layout:fixed，长的路径靠省略号收，不顶列。
-   */
-  /*
-   * 管理员格（2026-10-23 用户拍板）：不放下拉了 —— 格子里**直接显示员工姓名**，
-   * 点一下开「keeperDlg」弹窗：搜索过滤、点哪行选哪行、选完即关。
-   * 为什么不用 select：员工一多原生下拉又长又不能搜；弹窗跟「拉人进群」同一套交互。
-   * 没设管理员时显示灰的「未设置」，弹窗里首行「不值班（不审阅）」负责清掉。
-   */
-  const keeperName = (id) => (S.personas ?? []).find((p) => p.id === id)?.name ?? '';
-  const repoRow = (r) => `
-    <tr>
-      <td class="gr-cell-repo">
-        <div class="gr-name"><b>${esc(r.fullName)}</b>${r.isPrivate ? '<span class="pill">私有</span>' : ''}</div>
-        <div class="gr-meta" title="${esc(r.localPath)}">${esc(r.localPath)}${r.lastSyncAt ? ` · 上次同步 ${esc(String(r.lastSyncAt).replace('T', ' ').slice(0, 16))}` : ''}</div>
-      </td>
-      <td class="gr-keeper-cell"><button type="button" class="gr-keeper-btn" data-git-keeper-pick="${esc(r.id)}" data-k-cur="${esc(r.keeperPersonaId ?? '')}"
-                  title="别人提了 PR，替你审的那个人。点击选择">${r.keeperPersonaId ? esc(keeperName(r.keeperPersonaId) || '未设置') : '<span class="dim">未设置</span>'}</button></td>
-      <td class="gr-cell-am"><label class="switch sm" title="开：审阅通过且闸门全过的 PR 自动合并；关：停在「待验收」等你点">
-            <input type="checkbox" data-git-automerge="${esc(r.id)}" ${r.autoMerge ? 'checked' : ''} aria-label="自动合并" /><span></span>
-          </label></td>
-      <td class="gr-cell-ops">
-        <button class="mini auto" data-git-pr="${esc(r.id)}" title="把本地改动提交成一个 PR；这里也能合并开着的 PR">建 PR</button>
-        <button class="mini auto" data-git-project="${esc(r.id)}" title="用这个仓库建一个项目（工作目录就是克隆目录）">建成项目</button>
-        <button class="mini auto" data-git-back="${esc(r.id)}" data-git-base="${esc(r.defaultBranch ?? '')}" title="把本地切回默认分支并拉最新（合并后 / 在 GitHub 网页上合了 PR 后用）—— ⚠️ 会把工作区从当前分支切走">回 ${esc(r.defaultBranch || 'base')}</button>
-        <button class="mini auto" data-git-sync="${esc(r.id)}" title="git pull --ff-only（在当前分支上）">同步</button>
-        <button class="mini auto" data-git-remove="${esc(r.id)}" title="只移除记录，本地目录保留">移除</button>
-      </td>
-    </tr>`;
-  const repoTable = (list) => `
-    <table class="gr-tbl">
-      <colgroup><col /><col style="width:196px" /><col style="width:88px" /><col style="width:344px" /></colgroup>
-      <thead><tr>
-        <th>仓库</th>
-        <th title="别人提了 PR，替你审的那个人">管理员</th>
-        <th title="审阅通过且闸门全过时自动合并">自动合并</th>
-        <th>操作</th>
-      </tr></thead>
-      <tbody>${list.map(repoRow).join('')}</tbody>
-    </table>`;
-
-  view.innerHTML = `
-    ${headRow('<b>代码托管</b>')}
-    <div class="detail-body">
-      <div class="group-title">GitHub 连接<button type="button" class="help-btn" id="gitTokenHelp"
-              title="怎么拿到这个令牌？">${ICON_HELP}</button></div>
-      <div class="group">
-        ${st.connected ? connectedForm : tokenForm}
-      </div>
-
-      <div class="group-title gr-title"><span>代码仓库 <span class="dim">${repos.length} 个</span></span>
-        <button class="mini auto" id="gitAddRepo"
-                title="从 GitHub 挑一个，或手动接一个本地已有的克隆">＋ 添加仓库</button>
-      </div>
-      <div class="group">
-        ${repos.length ? repoTable(repos) : '<div class="sk-blank">还没有仓库。点右上角「＋ 添加仓库」：连了 GitHub 就从账号里挑，没连就手动接一个本地已有的克隆。</div>'}
-      </div>
-    </div>`;
-
-  const refresh = () => renderGitRepos();
-
-  /*
-   * 身份**等页面画完再去问**（2026-10-17）。
-   *
-   * 上面整块已经用本机状态画出来了（令牌掩码、仓库清单、上次记住的账号）——
-   * 这里只是把「@login」补上，**不挡任何东西**。
-   *
-   * 为什么不能挪回 `/api/git/status`：那等于"打开页面 = 等一次 GitHub 响应"，
-   * 国内网络下就是用户看到的那几秒空白（用户原话："估计是连 github 的原因，但这个是局部的"）。
-   * 所以延迟只留在这一小块里：它回来就补字，回不来也只是少一行字。
-   *
-   * 只改 `#gitWho` 那一小段文本、**不整个重绘**：重绘会把用户正在粘的令牌冲掉。
-   */
-  if (st.connected) {
-    const paintWho = (text) => {
-      const el = $('gitWho');
-      if (el?.isConnected) el.textContent = text; // 已经离开这个页面就别再摸它
+  // 左栏：面包屑照主从页的规矩画在列表顶上（renderPluginMaster 同款）
+  setListTitle([{ label: '工作台', to: 'workbench' }, { label: '代码托管' }]);
+  $('listAction').classList.remove('hidden');
+  $('listAction').title = '添加仓库';
+  $('listBody').innerHTML =
+    connSide +
+    (repos.length
+      ? repos
+          .map(
+            (r) => `<div class="item${sel && r.id === sel.id ? ' active' : ''}" data-git-sel="${esc(r.id)}">
+            <div class="who">
+              <div class="line1"><b>${esc(r.fullName)}</b></div>
+              <div class="line2" title="${esc(r.localPath)}">${esc(r.localPath)}</div>
+            </div>
+          </div>`,
+          )
+          .join('')
+      : '<div class="empty" style="padding:32px 12px">还没有仓库，点左上角「＋」添加</div>');
+  $('listBody').querySelectorAll('[data-git-sel]').forEach((el) => {
+    el.onclick = () => {
+      S.gitSel = el.dataset.gitSel;
+      renderGitRepos(root).catch((e) => toast(e.message, 'error'));
     };
-    api('/api/git/whoami')
-      .then((w) => {
-        if (w?.login) paintWho(` —— @${w.login}`);
-        else if (w?.error) paintWho(' · 连接状态没验上（网络没通）');
-      })
-      .catch(() => paintWho(' · 连接状态没验上（网络没通）'));
+  });
+  $('gitConnOpen')?.addEventListener('click', openGitConnDlg);
+
+  const keeperName = (id) => (S.personas ?? []).find((p) => p.id === id)?.name ?? '';
+  const syncAt = (t) => (t ? esc(String(t).replace('T', ' ').slice(0, 16)) : '从未');
+
+  /*
+   * 选中仓库的详情：动作在标题行右侧（同 renderSplitDetail），信息一行一条。
+   * 管理员格还是 2026-10-23 拍板的按钮形态 —— 点开 keeperDlg 搜索选人。
+   */
+  const repoDetail = sel
+    ? `<div class="plg-detail-head">
+         <b>${esc(sel.fullName)}</b>${sel.isPrivate ? '<span class="pill">私有</span>' : ''}
+         <span class="gr-branch" id="grBranchMount"></span>
+         <span class="dim" title="${esc(sel.localPath)}">${esc(sel.localPath)}</span>
+         <div class="head-actions">
+           <button class="mini auto" data-git-pr="${esc(sel.id)}" title="把本地改动提交成一个 PR；这里也能合并开着的 PR">建 PR</button>
+           <button class="mini auto" data-git-project="${esc(sel.id)}" title="用这个仓库建一个项目（工作目录就是克隆目录）">建成项目</button>
+           <button class="mini auto" data-git-remove="${esc(sel.id)}" title="只移除记录，本地目录保留">移除</button>
+         </div>
+       </div>
+       <div class="plg-sec">
+         <div class="plg-sec-head"><label class="plg-sec-title">仓库设置</label></div>
+         <section class="fx">
+           <div class="info-row"><span>管理员</span><b>
+             <button type="button" class="gr-keeper-btn" data-git-keeper-pick="${esc(sel.id)}" data-k-cur="${esc(sel.keeperPersonaId ?? '')}"
+                     title="别人提了 PR，替你审的那个人。点击选择">${sel.keeperPersonaId ? esc(keeperName(sel.keeperPersonaId) || '未设置') : '<span class="dim">未设置</span>'}</button>
+           </b></div>
+           <div class="info-row"><span>自动合并</span><b>
+             <label class="switch sm" title="开：审阅通过且闸门全过的 PR 自动合并；关：停在「待验收」等你点">
+               <input type="checkbox" data-git-automerge="${esc(sel.id)}" ${sel.autoMerge ? 'checked' : ''} aria-label="自动合并" /><span></span>
+             </label>
+           </b></div>
+           <div class="info-row"><span>默认分支</span><b>${esc(sel.defaultBranch || '—')}</b></div>
+           <div class="info-row"><span>上次同步</span><b>${syncAt(sel.lastSyncAt)}</b></div>
+         </section>
+       </div>
+       <div class="plg-sec">
+         <div class="plg-sec-head"><label class="plg-sec-title">提交</label><span class="dim" id="grChgHead"></span></div>
+         <section class="fx"><div id="grChanges"><div class="sk-blank">读工作区…</div></div></section>
+       </div>
+       <div class="plg-sec">
+         <div class="plg-sec-head"><label class="plg-sec-title">历史</label></div>
+         <section class="fx"><div id="grLog"><div class="sk-blank">读提交记录…</div></div></section>
+       </div>`
+    : `<div class="wip">${
+        repos.length
+          ? '左边选一个仓库'
+          : '还没有仓库。点左上角「＋」添加：连了 GitHub 就从账号里挑，没连就手动接一个本地已有的克隆。'
+      }</div>`;
+
+  view.innerHTML = `<div class="detail-body"><div class="plg-detail">${repoDetail}</div></div>`;
+
+  const refresh = () => renderGitRepos(root);   // 重画回**同一个宿主**（设置页 / 工作台各画各的）
+
+  /*
+   * GitHub 连接弹窗（2026-10-26 五改）：连接相关的所有东西都收进来 —— 令牌表单 /
+   * 掩码 + 状态 + 断开、「?」帮助、whoami 补字。左栏只剩那颗状态按钮。
+   * 动态建 dialog（machine.mjs openAddHostDlg 同款）：建完 wireDialogHead 包吸顶头，
+   * close 即 remove —— 控件 id 每开一次都是新的，不存在重画冲绑定的老问题。
+   * whoami 仍然**开了弹窗再问**：不挡渲染，回来只补「@login」一小段。
+   */
+  function openGitConnDlg() {
+    const dlg = document.createElement('dialog');
+    dlg.className = 'gr-conn-dlg';
+    const form = document.createElement('form');
+    form.method = 'dialog';
+    form.innerHTML = `
+      <b>GitHub 连接</b>
+      <div class="gr-dlg-body">
+        ${
+          st.connected
+            ? `<div class="gr-dlg-row">
+                 <span class="row-label">令牌</span>
+                 <input class="locked" value="${esc(st.hint || '******')}" readonly
+                        aria-label="已保存的令牌，只显示头 2 位和尾 4 位" />
+                 <button type="button" class="mini auto" id="gitDisconnect"
+                         title="断开 GitHub（已接入的仓库记录和本地克隆都保留）">断开连接</button>
+               </div>
+               <div class="gr-dlg-row">
+                 <span class="row-label gr-dlg-pad" aria-hidden="true">令牌</span>
+                 <span class="gr-dlg-status"><b style="color:var(--ok)">已连接</b><span id="gitWho">${
+                   st.login ? ` —— @${esc(st.login)}` : ''
+                 }</span></span>
+               </div>`
+            : `<div class="gr-dlg-row">
+                 <span class="row-label">令牌</span>
+                 <input id="gitToken" type="password" placeholder="粘贴 fine-grained PAT" autocomplete="off" />
+                 <button type="button" class="primary" id="gitConnect">连接 GitHub</button>
+               </div>`
+        }
+        ${/* 怎么拿令牌直接铺开（2026-10-26 六改，用户："把怎么拿令牌显示出来"），不再藏帮助按钮里 */ ''}
+        <div class="gr-dlg-help">${GIT_TOKEN_HELP}</div>
+      </div>`;
+    dlg.append(form);
+    document.body.append(dlg);
+    wireDialogHead(form); // 动态建的弹窗自己包一次吸顶头（标题 + ×）
+    dlg.addEventListener('close', () => dlg.remove());
+
+    if (st.connected) {
+      api('/api/git/whoami')
+        .then((w) => {
+          const el = form.querySelector('#gitWho');
+          if (!el) return;
+          if (w?.login) el.textContent = ` —— @${w.login}`;
+          else if (w?.error) el.textContent = ' · 连接状态没验上（网络没通）';
+        })
+        .catch(() => {
+          const el = form.querySelector('#gitWho');
+          if (el) el.textContent = ' · 连接状态没验上（网络没通）';
+        });
+    }
+
+    form.querySelector('#gitConnect')?.addEventListener('click', async () => {
+      const token = form.querySelector('#gitToken').value.trim();
+      if (!token) return toast('先把令牌粘进来');
+      const btn = form.querySelector('#gitConnect');
+      btn.disabled = true;
+      btn.textContent = '验证中…';
+      try {
+        const r = await api('/api/git/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token }),
+        });
+        toast(`已连接：@${r.login}`);
+        dlg.close();
+        await refresh();
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = '连接 GitHub';
+        toast(err.message, 'error');
+      }
+    });
+    form.querySelector('#gitDisconnect')?.addEventListener('click', async () => {
+      if (!(await confirmDo('断开 GitHub？已接入的仓库记录和本地克隆都保留。'))) return;
+      try {
+        await api('/api/git/token', { method: 'DELETE' });
+        dlg.close();
+        await refresh();
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    });
+    dlg.showModal();
   }
 
-  // 标题旁那颗「?」：点开是"怎么拿令牌"。连上 GitHub 之后表单没了，就靠它看。
-  const helpBtn = $('gitTokenHelp');
-  if (helpBtn) wireHelpPop(helpBtn, GIT_TOKEN_HELP);
-
   /*
-   * 「＋ 添加仓库」：一个入口，两条路。
-   *
-   * 为什么合成一个（2026-10-17）：原来是「＋ 手动接入」在清单标题上、
-   * 「从 GitHub 添加」是页面底部**另一整块**。两条路分在两处，人得先想
-   * "我现在该点哪个"；而那条从 GitHub 挑的清单常驻在底部，只在要加仓库那一刻才用得上。
-   * 现在：点＋ → 选「手动接入」或「从 GitHub 添加」→ 各自开一个弹窗操作。
+   * 「添加仓库」：入口在**左栏顶上的「＋」**（主从页的规矩，同 renderPluginMaster 的
+   * add 表单）。一个入口两条路：点＋ → 选「手动接入」或「从 GitHub 添加」→ 各自开弹窗。
+   * 点击处理在 app.mjs 的 listAction 全局分发里（按 S.route?.view === 'codeRepos' 认）——
+   * 不能绑在页面元素上：页面重画会把它冲掉，而全局那颗「＋」一直在左栏。
    */
-  $('gitAddRepo')?.addEventListener('click', (e) => {
-    e.preventDefault();
-    openAddMenu(gitAddRepoItems(refresh), e.currentTarget);
-  });
-  $('gitConnect')?.addEventListener('click', async (e) => {
-    e.preventDefault();
-    const token = $('gitToken').value.trim();
-    if (!token) return toast('先把令牌粘进来');
-    const btn = $('gitConnect');
-    btn.disabled = true;
-    btn.textContent = '验证中…';
-    try {
-      const r = await api('/api/git/token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token }),
-      });
-      toast(`已连接：@${r.login}`);
-      await refresh();
-    } catch (err) {
-      btn.disabled = false;
-      btn.textContent = '连接 GitHub';
-      toast(err.message, 'error');
-    }
-  });
-  $('gitDisconnect')?.addEventListener('click', async (e) => {
-    e.preventDefault();
-    if (!(await confirmDo('断开 GitHub？已接入的仓库记录和本地克隆都保留。'))) return;
-    try {
-      await api('/api/git/token', { method: 'DELETE' });
-      await refresh();
-    } catch (err) {
-      toast(err.message, 'error');
-    }
-  });
 
   /*
    * 值班设置：**改了就存**，不弹确认（可逆、影响面单仓库）。
@@ -643,76 +721,6 @@ export async function renderGitRepos() {
       if (repo) openRepoPrDialog(repo, refresh);
     };
   });
-  view.querySelectorAll('[data-git-sync]').forEach((el) => {    el.onclick = async (e) => {
-      e.preventDefault();
-      el.disabled = true;
-      el.textContent = '同步中…';
-      try {
-        await api(`/api/git/repos/${encodeURIComponent(el.dataset.gitSync)}/sync`, { method: 'POST' });
-        await refresh();
-      } catch (err) {
-        el.disabled = false;
-        el.textContent = '同步';
-        toast(err.message, 'error');
-      }
-    };
-  });
-
-  /*
-   * 「回 main」：合并后 / 在 GitHub 网页上合了 PR 之后的兜底。
-   * 与合并自动收尾同一个服务端函数：工作区不干净就不动，只把原因带回来。
-   *
-   * ⚠️ 2026-10-26 用户实报：这颗按钮**会把整个工作区从开发分支切到 main** ——
-   *    点了之后界面上的功能"像没了"（其实提交都在分支上）。原来的确认只说"切回 main"，
-   *    没写"你现在在哪"。现在点下去先读一次**本地**工作区状态（`/changes`，不联网），
-   *    把「当前分支 → 目标分支」、以及"当前分支有多少提交没在 main 上 / 有多少未提交改动"
-   *    摆进确认框；`ahead > 0` 时确认按钮用危险色。
-   */
-  view.querySelectorAll('[data-git-back]').forEach((el) => {
-    el.onclick = async (e) => {
-      e.preventDefault();
-      if (el.disabled) return;
-      const repoId = el.dataset.gitBack;
-      const base = el.dataset.gitBase || 'base';
-      el.disabled = true;
-      let st = null;
-      try {
-        // 本地 git，快且不联网；读不到（目录没了/不是 git）就退回朴素文案
-        st = (await api(`/api/git/repos/${encodeURIComponent(repoId)}/changes`)).state ?? null;
-      } catch { /* fallback 下面的文案 */ }
-      el.disabled = false;
-
-      const cur = st?.branch || '';
-      const dirty = Number(st?.dirtyCount ?? 0);
-      const ahead = Number(st?.ahead ?? 0);
-      const lines = [];
-      if (cur && cur === base) {
-        lines.push(`当前已经在 ${base} 上。`);
-        lines.push('这一步只会拉最新（有未提交改动时不会动）。');
-      } else {
-        lines.push(`当前分支：${cur || '游离 HEAD（不在任何分支上）'}`);
-        lines.push(`会切到：${base}（并拉最新）`);
-        lines.push('');
-        lines.push(`⚠️ 工作区会从「${cur || '游离 HEAD'}」切到「${base}」。`);
-        if (ahead > 0) lines.push(`当前分支比本地记录的 origin/${base} 多 ${ahead} 个提交 —— 提交不会丢，但切走后工作区里看不到它们。`);
-        if (dirty > 0) lines.push(`本地有 ${dirty} 个未提交改动：服务端不会动工作区（会跳过并原样说明）。`);
-      }
-      if (!(await confirmDo(lines.join('\n'), { ok: '切换', danger: ahead > 0 }))) return;
-
-      el.disabled = true;
-      const old = el.textContent;
-      el.textContent = '切换中…';
-      try {
-        const r = await api(`/api/git/repos/${encodeURIComponent(repoId)}/back`, { method: 'POST' });
-        toast(r.local?.note || `已回到 ${base}`, r.local?.settled ? 'ok' : 'error');
-        await refresh();
-      } catch (err) {
-        el.disabled = false;
-        el.textContent = old;
-        toast(err.message, 'error');
-      }
-    };
-  });
   view.querySelectorAll('[data-git-remove]').forEach((el) => {
     el.onclick = async (e) => {
       e.preventDefault();
@@ -750,6 +758,426 @@ export async function renderGitRepos() {
     };
   });
 
+  /*
+   * IDE 式一站式（2026-10-27）：分支 pill +「改动」卡 +「历史」卡。
+   * 三块吃的全是**本地 git**（/changes /branches /log /diff 不联网），点下去就该有反应，
+   * 所以详情画完就后台去取、谁先回来谁先补上。异步回来时页面可能已经切走或重画 ——
+   * 一律先看节点还连不连着 DOM（建 PR 弹窗 paintState 同款防抖）。
+   */
+  if (sel) {
+    fillChanges(sel);
+    fillLog(sel);
+  }
+
+  /* porcelain 的 X 列 → 展示用的一类：增 / 删 / 改 / 移（未跟踪算增） */
+  const chgKind = (xy) => {
+    const s = String(xy ?? '');
+    if (s === '??') return 'add';
+    if (s[0] === 'R' || s[1] === 'R' || s[0] === 'C' || s[1] === 'C') return 'ren';
+    if (s[0] === 'A' || s[1] === 'A') return 'add';
+    if (s[0] === 'D' || s[1] === 'D') return 'del';
+    return 'mod';
+  };
+  const chgBadge = (xy) => ({ add: '增', del: '删', ren: '移', mod: '改' })[chgKind(xy)];
+
+  /* unified diff 上色：+/− 行与 @@ 行各给一色，文件头降灰；超长截短（人看个大概，全文去 git） */
+  const diffHtml = (text) => {
+    const lines = String(text ?? '').split('\n');
+    const MAX = 1200;
+    const body = lines
+      .slice(0, MAX)
+      .map((ln) => {
+        const cls = /^@@/.test(ln) ? 'hunk' : /^\+/.test(ln) ? 'add' : /^-/.test(ln) ? 'del' : /^(diff |index |--- |\+\+\+ )/.test(ln) ? 'meta' : '';
+        return `<span class="${cls}">${esc(ln) || ' '}</span>`;
+      })
+      .join('\n');
+    return `<pre class="gr-diff-pre">${body}${lines.length > MAX ? `\n…（后面还有 ${lines.length - MAX} 行）` : ''}</pre>`;
+  };
+
+  /*
+   * 把 `前缀/名字` 的分支收进「前缀」文件夹（IDE 分支树同款，2026-10-27 用户指着截图要的）：
+   * bandi/x、bandi/y → 可折叠文件夹「bandi」装着 x、y；无前缀的（main）直接排在组里。
+   * 文件夹的折叠键带 keyPrefix，本地/远程同名前缀（都有 bandi/）互不串门。
+   * 排序：文件夹在前（按名），无前缀的在后（按名）。
+   * 每片叶子（含无前缀的）都带分支图标 —— IDEA 里文件夹装的是分支，不是普通条目。
+   */
+  const folderize = (items, keyPrefix) => {
+    const folders = new Map();
+    const plain = [];
+    for (const it of items) {
+      const i = it.name.indexOf('/');
+      if (i > 0 && i < it.name.length - 1) {
+        const k = it.name.slice(0, i);
+        if (!folders.has(k)) folders.set(k, []);
+        folders.get(k).push({ id: it.id, label: it.name.slice(i + 1), sub: true, icon: ICON_BRANCH, cls: 'br' });
+      } else {
+        plain.push({ id: it.id, label: it.name, icon: ICON_BRANCH, cls: 'br' });
+      }
+    }
+    const out = [];
+    for (const [k, list] of [...folders.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+      out.push({ folder: k, foldKey: `${keyPrefix}/${k}` });
+      out.push(...list.sort((a, b) => a.label.localeCompare(b.label)));
+    }
+    out.push(...plain.sort((a, b) => a.label.localeCompare(b.label)));
+    return out;
+  };
+
+  /*
+   * 分支清单 → 下拉条目（2026-10-27，参照 IDE 的分支弹窗）：
+   * 顶部是常用操作（更新项目=同步、提交、推送、新建分支 —— 搜索框搜"推"也能命中操作），
+   * 下面分组：最近（reflog 派生）/ 本地 / 远程 / 标签，本地/远程里再按 `/` 前缀分文件夹。
+   * 十三改（用户指 IDEA 截图："补充图标和缩进"）：操作条目各配语义图标
+   * （同步/提交/推送/分支），分支叶子统一分支图标，标签用标签图标 —— 图标是灰的，
+   * 名字才是主角；文件夹叶子的缩进由 sub: true（folderize）+ .combo-item.sub 管。
+   * 标签 id 带 `tag:` 前缀，防止和同名分支混淆；切标签会进游离 HEAD，确认框里说清。
+   * 旧的「拉取更新」（纯 fetch）被「更新项目」（pull）取代 —— 两个"拉"并存只会让人选错。
+   */
+  const branchItems = (b) => [
+    { id: '__op-sync__', label: '更新项目', icon: ICON_SYNC },
+    { id: '__op-commit__', label: '提交…', icon: ICON_COMMIT },
+    { id: '__op-push__', label: '推送…', icon: ICON_PUSH },
+    { id: '__op-new__', label: '新建分支…', icon: ICON_BRANCH },
+    ...(b.recent?.length ? [{ header: '最近', foldable: true }, ...b.recent.map((n) => ({ id: n, label: n, icon: ICON_BRANCH, cls: 'br' }))] : []),
+    { header: '本地分支', foldable: true },
+    ...folderize((b.local ?? []).map((n) => ({ id: n, name: n })), '本地'),
+    ...(b.remote?.length ? [{ header: '远程分支', foldable: true }, ...folderize((b.remote ?? []).map((n) => ({ id: n, name: n.replace(/^origin\//, '') })), '远程')] : []),
+    ...(b.tags?.length ? [{ header: '标签', foldable: true }, ...b.tags.map((n) => ({ id: `tag:${n}`, label: n, icon: ICON_TAG, cls: 'br' }))] : []),
+  ];
+
+  async function fillChanges(repo) {
+    const box = $('grChanges');
+    const pillMount = $('grBranchMount');
+    let state = null;
+    try {
+      state = (await api(`/api/git/repos/${encodeURIComponent(repo.id)}/changes`)).state;
+    } catch (e) {
+      if (box?.isConnected) box.innerHTML = `<div class="sk-blank">读不到工作区：${esc(e.message)}</div>`;
+      return;
+    }
+    if (!box?.isConnected || !pillMount?.isConnected) return;
+
+    /*
+     * 分支 pill（2026-10-27，样式参照同类编辑器的分支切换器、条目参参照 IDE 的分支弹窗）：
+     * 按钮上写当前分支，点开才取清单（onOpen），当前分支由 ✓ 表示；切分支的确认
+     * 先读一次本地状态，把「当前 → 目标」和 ahead / 脏工作区摆进确认框。
+     */
+    const combo = createCombo({
+      mount: pillMount,
+      items: branchItems({ local: [state.branch ?? '游离 HEAD'], remote: [] }),
+      value: state.branch ?? '',
+      search: true,
+      placeholder: '搜索分支和操作',
+      buttonText: (v) => v || '游离 HEAD',
+      onChange: (id) => onBranchPick(repo, id, state.branch ?? '', combo),
+      onOpen: async () => {
+        try {
+          combo.setItems(branchItems(await api(`/api/git/repos/${encodeURIComponent(repo.id)}/branches`)));
+        } catch (e) {
+          toast(e.message, 'error');
+        }
+      },
+    });
+
+    const dirty = state.dirty ?? [];
+    const head = $('grChgHead');
+    if (head?.isConnected) head.textContent = dirty.length ? `${dirty.length} 个未提交` : '';
+    if (!dirty.length) {
+      box.innerHTML = '<div class="sk-blank">工作区是干净的 —— 没有未提交的改动</div>';
+      return;
+    }
+    /* 两组折叠（2026-10-27，用户指 VS Code 源代码管理截图："加两个可以折叠的标题"）：
+       「更改」= 已跟踪文件的改动；「未版本管理的文件」= porcelain 的 ?? 。空组不画。 */
+    if (chgSelRepo !== repo.id) { chgSelRepo = repo.id; chgUnsel.clear(); }   // 换仓库：勾选态清零
+    const tracked = dirty.filter((f) => String(f.status) !== '??');
+    const untracked = dirty.filter((f) => String(f.status) === '??');
+    const rowHtml = (f) => `<div class="gr-chg-row" data-chg-path="${esc(f.path)}">
+          <input type="checkbox" class="gr-chg-sel" data-chg-sel="${esc(f.path)}" ${chgUnsel.has(f.path) ? '' : 'checked'} aria-label="选择 ${esc(f.path)}" />
+          <span class="gr-chg-x gr-x-${chgKind(f.status)}">${esc(chgBadge(f.status))}</span>
+          <span class="gr-chg-path" title="${esc(f.path)}">${esc(f.path)}</span>
+        </div>
+        <div class="gr-diff" hidden></div>`;
+    const groupHtml = (key, label, items) =>
+      items.length
+        ? `<div class="gr-chg-group${chgFold[key] ? ' folded' : ''}">
+        <div class="gr-chg-group-head" data-fold-head="${key}">
+          <button type="button" class="gr-chg-fold-btn" tabindex="-1" aria-label="折叠/展开">
+            <span class="gr-chev" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 6.5 8 10l3.5-3.5"/></svg></span>
+          </button>
+          <input type="checkbox" class="gr-chg-all" data-chg-all="${key}" aria-label="全选${esc(label)}" />
+          <span class="gr-chg-label">${esc(label)}</span>
+          <span class="gr-chg-cnt">${items.length} 个文件</span>
+        </div>
+        <div class="gr-chg-group-body"${chgFold[key] ? ' hidden' : ''}>${items.map(rowHtml).join('')}</div>
+      </div>`
+        : '';
+    box.innerHTML = `
+      <div class="gr-chg-split">
+        <div class="gr-chg-list">${groupHtml('chg', '更改', tracked) + groupHtml('untr', '未版本管理的文件', untracked)}</div>
+        <div class="gr-commit-side">
+          <textarea id="grCommitMsg" placeholder="提交说明（Ctrl+Enter 提交）" rows="4"></textarea>
+          <button type="button" class="primary" id="grCommitBtn">提交</button>
+        </div>
+      </div>`;
+
+    /* 组头选择框 = 三态全选（全勾 / 全不勾 / 半选）；行选择框记进 chgUnsel。
+       状态以 DOM 为准算，别自己记账 —— 刷新后重画，勾选只存「没勾」的那一半。 */
+    const syncGroupBox = (key) => {
+      const g = box.querySelector(`[data-chg-all="${key}"]`)?.closest('.gr-chg-group');
+      if (!g) return;
+      const boxes = [...g.querySelectorAll('.gr-chg-sel')];
+      const cb = g.querySelector('.gr-chg-all');
+      const off = boxes.filter((b) => !b.checked).length;
+      cb.checked = off === 0;
+      cb.indeterminate = off > 0 && off < boxes.length;
+    };
+    box.querySelectorAll('.gr-chg-group').forEach((g) => {
+      const key = g.querySelector('[data-chg-all]')?.dataset.chgAll;
+      if (key) syncGroupBox(key);
+    });
+    box.addEventListener('change', (e) => {
+      const sel = e.target.closest('.gr-chg-sel');
+      if (sel) {
+        if (sel.checked) chgUnsel.delete(sel.dataset.chgSel);
+        else chgUnsel.add(sel.dataset.chgSel);
+        syncGroupBox(sel.closest('.gr-chg-group')?.querySelector('[data-chg-all]')?.dataset.chgAll);
+        return;
+      }
+      const all = e.target.closest('.gr-chg-all');
+      if (all) {
+        const g = all.closest('.gr-chg-group');
+        g.querySelectorAll('.gr-chg-sel').forEach((b) => {
+          b.checked = all.checked;
+          if (all.checked) chgUnsel.delete(b.dataset.chgSel);
+          else chgUnsel.add(b.dataset.chgSel);
+        });
+        all.indeterminate = false;
+      }
+    });
+
+    /* 组标题折叠/展开：状态写回模块级 chgFold，刷新后不丢；点选择框不算折叠 */
+    box.querySelectorAll('[data-fold-head]').forEach((h) => {
+      h.onclick = (e) => {
+        if (e.target.closest('input')) return;
+        const key = h.dataset.foldHead;
+        chgFold[key] = !chgFold[key];
+        const g = h.closest('.gr-chg-group');
+        g.classList.toggle('folded', chgFold[key]);
+        g.querySelector('.gr-chg-group-body').hidden = chgFold[key];
+      };
+    });
+
+    /* 行点击开/收 diff：diff 懒取（点开才拉一次），收起不销毁、再点不再拉 */
+    box.querySelectorAll('.gr-chg-row').forEach((row) => {
+      row.onclick = async (e) => {
+        if (e.target.closest('.gr-chg-sel')) return;   // 勾选框自己管自己，别顺手把 diff 拉开
+        const dbox = row.nextElementSibling;
+        if (!dbox) return;
+        if (!dbox.hidden) {
+          dbox.hidden = true;
+          return;
+        }
+        dbox.hidden = false;
+        dbox.innerHTML = '<div class="sk-blank">读 diff…</div>';
+        try {
+          const d = await api(`/api/git/repos/${encodeURIComponent(repo.id)}/diff?path=${encodeURIComponent(row.dataset.chgPath)}`);
+          if (dbox.isConnected && !dbox.hidden) dbox.innerHTML = diffHtml(d.diff);
+        } catch (err) {
+          if (dbox.isConnected) dbox.innerHTML = `<div class="sk-blank">${esc(err.message)}</div>`;
+        }
+      };
+    });
+
+    /* 提交（不建 PR）：回车或按钮都行；服务端拦疑似凭据时弹一次危险确认，带 allowSecrets 重发。
+       推送在分支下拉的「推送…」里 —— 提交和推送分两步，跟 git 的语义一致（IDE 也分开）。 */
+    const commitBtn = $('grCommitBtn');
+    const msgInput = $('grCommitMsg');
+    const doCommit = async (allowSecrets = false) => {
+      const msg = (msgInput?.value ?? '').trim();
+      if (!msg) return toast('先写一句提交说明', 'error');
+      // 勾选提交：没勾的不带；全勾就不传 paths（整提，服务端原路径）
+      const rows = [...($('grChanges')?.querySelectorAll('.gr-chg-row') ?? [])];
+      const checked = rows.map((r) => r.dataset.chgPath).filter((p) => !chgUnsel.has(p));
+      if (rows.length && !checked.length) return toast('先勾选要提交的文件', 'error');
+      const payload = { message: msg, allowSecrets };
+      if (rows.length && checked.length < rows.length) payload.paths = checked;
+      commitBtn.disabled = true;
+      try {
+        const r = await post(`/api/git/repos/${encodeURIComponent(repo.id)}/commit`, payload);
+        toast(`已提交 ${(r.committed?.sha ?? '').slice(0, 7)} 到 ${r.branch}（${r.files} 个文件）`);
+        await refresh();
+      } catch (e) {
+        commitBtn.disabled = false;
+        if (!allowSecrets && /凭据/.test(String(e.message ?? e))) {
+          if (await confirmDo(String(e.message ?? e), { ok: '就是要提交', danger: true })) await doCommit(true);
+        } else {
+          toast(e.message, 'error');
+        }
+      }
+    };
+    if (commitBtn && msgInput) {
+      commitBtn.onclick = () => doCommit();
+      msgInput.onkeydown = (e) => {
+        // textarea：Enter 换行，Ctrl/⌘+Enter 才提交
+        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+          e.preventDefault();
+          doCommit();
+        }
+      };
+    }
+  }
+
+  async function onBranchPick(repo, id, fallbackBranch, combo) {
+    const apiRepo = (p) => `/api/git/repos/${encodeURIComponent(repo.id)}${p}`;
+
+    /* ---- 顶部操作区（IDE 式：更新项目 / 提交 / 推送 / 新建分支）---- */
+    if (id === '__op-sync__') {
+      try {
+        await api(apiRepo('/sync'), { method: 'POST' });
+        toast('已拉取最新');
+        await refresh();
+      } catch (e) {
+        toast(e.message, 'error');
+        combo.setValue(fallbackBranch);
+      }
+      return;
+    }
+    if (id === '__op-push__') {
+      try {
+        toast('推送中…');
+        const r = await post(apiRepo('/push'), {});
+        toast(`已推送 ${r.pushed}`);
+        await refresh();
+      } catch (e) {
+        toast(e.message, 'error');
+        combo.setValue(fallbackBranch);
+      }
+      return;
+    }
+    if (id === '__op-commit__') {
+      combo.setValue(fallbackBranch);
+      let st = null;
+      try {
+        st = (await api(apiRepo('/changes'))).state;
+      } catch { /* 读不到按干净处理 */ }
+      if (!st?.dirtyCount) {
+        return toast(st?.canShip ? '工作区是干净的 —— 有没推的提交用分支下拉的「推送…」' : '工作区是干净的，没有可提交的改动');
+      }
+      const inp = document.getElementById('grCommitMsg');
+      if (!inp?.isConnected) return toast('改动卡不在页面上（工作区刚变干净？）');
+      inp.scrollIntoView({ block: 'center' });
+      inp.focus();
+      return;
+    }
+    if (id === '__op-new__') {
+      combo.setValue(fallbackBranch);
+      openBranchNewDlg(repo);
+      return;
+    }
+
+    /* ---- 切分支 / 标签 ---- */
+    const isTag = String(id).startsWith('tag:');
+    const target = isTag ? String(id).slice(4) : String(id).replace(/^origin\//, '');
+    if (!target) return;
+    // 确认前现读一次本地状态（不联网、秒回）—— pill 上那份可能已经旧了
+    let st = null;
+    try {
+      st = (await api(apiRepo('/changes'))).state;
+    } catch { /* 读不到就按没有状态处理，下面的文案照走 */ }
+    const cur = st?.branch ?? fallbackBranch ?? '';
+    if (!isTag && target === cur) {
+      combo.setValue(cur);
+      return;
+    }
+    const dirty = Number(st?.dirtyCount ?? 0);
+    const ahead = Number(st?.ahead ?? 0);
+    const isRemote = !isTag && String(id).startsWith('origin/');
+    const lines = [
+      `当前分支：${cur || '游离 HEAD（不在任何分支上）'}`,
+      isTag
+        ? `会切到标签：${target}（游离 HEAD —— 不在任何分支上，提交/推送会停用，切回任意分支即恢复）`
+        : `会切到：${target}${isRemote ? '（远程分支 —— 本地没有时会在本地建一条同名分支并跟踪它）' : ''}`,
+      '',
+    ];
+    if (ahead > 0) lines.push(`⚠️ 当前分支有 ${ahead} 个提交还没在 base 上 —— 提交不会丢，但切走后工作区里看不到它们。`);
+    if (dirty > 0) lines.push(`本地有 ${dirty} 个未提交改动：服务端不会动工作区（会拒绝切换）。`);
+    if (!(await confirmDo(lines.join('\n'), { ok: '切换', danger: ahead > 0 }))) {
+      combo.setValue(cur);
+      return;
+    }
+    try {
+      const r = await post(apiRepo('/checkout'), { branch: target });
+      toast(r.switched === false ? r.note || `已在 ${r.branch}` : `已切到 ${r.branch}`);
+      await refresh();
+    } catch (e) {
+      toast(e.message, 'error');
+      combo.setValue(cur);
+    }
+  }
+
+  /* 新建分支小弹窗（IDE「新建分支」）：从当前 HEAD 拉出并切过去；脏工作区不拦（checkout -b 不动文件） */
+  function openBranchNewDlg(repo) {
+    document.getElementById('grBranchNewDlg')?.close();
+    const dlg = document.createElement('dialog');
+    dlg.id = 'grBranchNewDlg';
+    dlg.innerHTML = `
+      <form method="dialog">
+        <b>新建分支</b>
+        <label>分支名（从当前所在位置拉出）</label>
+        <input id="grNewBranchName" placeholder="例如：feat/search" autocomplete="off" />
+        <div class="dlg-actions">
+          <button type="button" value="cancel">取消</button>
+          <button class="primary" id="grNewBranchGo">建并切过去</button>
+        </div>
+      </form>`;
+    document.body.append(dlg);
+    wireDialogHead(dlg.querySelector('form'));
+    dlg.addEventListener('close', () => dlg.remove());
+    dlg.showModal();
+    const inp = $('grNewBranchName');
+    inp.focus();
+    const go = $('grNewBranchGo');
+    go.onclick = async (e) => {
+      e.preventDefault();
+      const name = (inp.value ?? '').trim();
+      if (!name) return toast('先起个分支名', 'error');
+      go.disabled = true;
+      try {
+        const r = await post(`/api/git/repos/${encodeURIComponent(repo.id)}/branch`, { name });
+        toast(`已建并切到 ${r.created}`);
+        dlg.close();
+        await refresh();
+      } catch (err) {
+        go.disabled = false;
+        toast(err.message, 'error');
+      }
+    };
+  }
+
+  async function fillLog(repo) {
+    const box = $('grLog');
+    if (!box) return;
+    try {
+      const d = await api(`/api/git/repos/${encodeURIComponent(repo.id)}/log`);
+      if (!box.isConnected) return;
+      if (!d.commits?.length) {
+        box.innerHTML = `<div class="sk-blank">${esc(d.note || '还没有提交')}</div>`;
+        return;
+      }
+      box.innerHTML = d.commits
+        .map(
+          (c) => `<div class="gr-log-row" title="${esc(c.sha)} ${esc(c.subject)}">
+            <span class="gr-log-sha">${esc(c.sha)}</span>
+            <span class="gr-log-sub">${esc(c.subject)}</span>
+            <span class="gr-log-who">${esc(c.author)} · ${esc(String(c.date ?? '').slice(5, 16))}</span>
+          </div>`,
+        )
+        .join('');
+    } catch (e) {
+      if (box.isConnected) box.innerHTML = `<div class="sk-blank">读不到提交记录：${esc(e.message)}</div>`;
+    }
+  }
+
   // 「从 GitHub 添加」那张清单已经收进弹窗了（openGitPickDialog），页面上不再常驻一块。
 }
 
@@ -770,7 +1198,7 @@ export async function renderGitRepos() {
  *   · 推上去收不回来 —— 所以这里三道闸摆在界面上：只往**新分支**提（不碰 base）、
  *     看着像凭据的文件先拦一次（`.env` / 私钥 / `*token*`，`.env.example` 那类放过）、
  *     推不上去**绝不强推**（远端同名分支多半是别人的活）。
- *   抄的是上游技能的**交互**（收尾分支先确认 base、别默认强推），不是它的实现。
+ *   沿用上游技能的**交互**（收尾分支先确认 base、别默认强推），不是它的实现。
  *
  * 状态显示只读本地 git（`/changes` 不联网），所以上面那一屏点下去就出来；
  * 开着的 PR 那一屏要等 GitHub —— 分开画，别为了下半屏把上半屏挂住。

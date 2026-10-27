@@ -6,8 +6,8 @@
 <title>班底 v1.0.1 设计稿 · 消息</title>
 <style>
 /* ═══════════════════════════════════════════════════════════════
-   班底 v1.0.1 · Linear / Vercel 极简
-   参考：Linear 的密度与灰阶、Vercel Geist 的边框与排版
+   班底 v1.0.1 · 密排 / Vercel 极简
+   参考：密排风格的密度与灰阶、Vercel Geist 的边框与排版
    原则：颜色几乎全部让给灰阶，靛蓝紫 #5E6AD2 只出现在
         "当前选中 / 主按钮 / 焦点环" 三个地方，别处一律不用。
    ═══════════════════════════════════════════════════════════════ */
@@ -48,7 +48,7 @@
   --r-md: 7px;
   --r-lg: 10px;
 
-  /* Linear 的阴影几乎不可见 —— 层次靠边框和底色，不靠阴影 */
+  /* 密排风格的阴影几乎不可见 —— 层次靠边框和底色，不靠阴影 */
   --shadow-pop: 0 8px 24px rgba(0,0,0,.45), 0 0 0 1px rgba(255,255,255,.04);
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
           "Hiragino Sans GB", "Microsoft YaHei", "Source Han Sans SC", sans-serif;
@@ -136,7 +136,7 @@ body {
 }
 
 /* ─────────────────────────── 布局骨架 ───────────────────────────
-   Linear 的骨架是"面与面之间只差一阶灰 + 一条 1px 线"，不用阴影。
+   密排风格的骨架是"面与面之间只差一阶灰 + 一条 1px 线"，不用阴影。
    rail 64 / list 268 / main 自适应
    ────────────────────────────────────────────────────────────── */
 .app {
@@ -231,7 +231,7 @@ body {
   letter-spacing: -.005em;
 }
 
-/* 图标按钮：无边框，悬停才显形 —— 这是 Linear 的一个签名式的克制 */
+/* 图标按钮：无边框，悬停才显形 —— 这是密排风格的一个签名式的克制 */
 .icon-btn {
   width: 24px; height: 24px;
   display: grid; place-items: center;
@@ -493,7 +493,7 @@ body {
 .msg-meta .when { font-size: 10.5px; color: var(--text-3); }
 
 /* 气泡：**没有尾巴**、圆角统一 10px，靠底色区分而不是靠形状
-   —— 有尾巴的气泡是很"微信"的语汇，Linear/Notion 都不用 */
+   —— 有尾巴的气泡是很"微信"的语汇，密排风格 / Notion 都不用 */
 .bubble {
   background: var(--g3);
   border: 1px solid var(--line-1);

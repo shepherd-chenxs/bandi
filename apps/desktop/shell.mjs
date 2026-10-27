@@ -1077,7 +1077,7 @@ if (r.action === 'already') {
    * 复用的那个壳不写 —— 它没资格声称服务是自己的（那正是 2026-10-15 误杀的近亲）。
    *
    * 写之前过一道**核对**（`recordVerifiedService`）：只记端口上真在听的那个 PID。
-   * 并发启动时"我刚起的那个"可能已经 EADDRINUSE 崩了，照抄会给收摊留下一条死记录。
+   * 并发启动时"我刚起的那个"可能已经 EADDRINUSE 崩了，沿用会给收摊留下一条死记录。
    */
   const recorded = recordVerifiedService(r.pid, PORT);
   const alive = aliveClients();
@@ -1344,7 +1344,7 @@ async function shutdown(why) {
     } else {
       /*
        * **收摊兜底**（QA 打回的第 ① 层）：记录里的 PID 可能是个**已经崩掉的** PID ——
-       * 并发启动时"我起的那个"抢端口失败 EADDRINUSE 就没了，而记录要是（旧版本）照抄了它，
+       * 并发启动时"我起的那个"抢端口失败 EADDRINUSE 就没了，而记录要是（旧版本）沿用了它，
        * 按 PID 收就只能空手，服务变成孤儿。
        *
        * 这时按**端口**再收一次，但只收**我们自己的**（`stopRunning` 内部就是 `isOurs`

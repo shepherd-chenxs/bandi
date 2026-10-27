@@ -253,7 +253,7 @@ ensureColumn('personas', 'role', 'role TEXT');
  * 2026-10-23 前是秘书「喜儿」—— 名额换了人，机制没换）。
  *
  * 为什么用标记而不是"按名字认"：名字是给人看的，历史上有段时期用户还能改（"喜儿"改成"小秘"很正常）。
- * 系统要认的是"这一个"，所以认 id + 这个标记；改名不影响身份（跟 Multica 的 system_key 同一个道理）。
+ * 系统要认的是"这一个"，所以认 id + 这个标记；改名不影响身份（跟参考产品的 system_key 同一个道理）。
  * （2026-10-22 收编后名字/岗位/指令也锁死了，路由层 E2055；store 层拦的只有"删"，语义同前：**不许丢**。）
  */
 
@@ -278,7 +278,7 @@ ensureColumn('personas', 'avatar', 'avatar TEXT');
 ensureColumn('personas', 'department', 'department TEXT');
 
 /*
- * 并发数（2026-10-24，对标 Multica 的"每个虚拟员工可配并行任务数"）：
+ * 并发数（2026-10-24，参照同类产品的"每个虚拟员工可配并行任务数"）：
  * 这个人名下同时最多几个 run 在跑。null = 没配过，用默认值（见 store/personas.mjs
  * 的 PERSONA_DEFAULT_MAX_PARALLEL）；配了就按它，最高 PERSONA_MAX_PARALLEL。
  * 是**资源属性**不是身份属性 —— 派活那一刻现查员工记录取值，不进会话快照。

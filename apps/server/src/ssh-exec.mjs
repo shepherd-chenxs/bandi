@@ -15,7 +15,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { expandHome } from './ssh-registry.mjs';
+import { defaultKeyPath, expandHome } from './ssh-registry.mjs';
 
 export const TIMEOUT_MS = Number(process.env.BANDI_SSH_TIMEOUT_MS) || 30000;
 const STRICT = process.env.BANDI_SSH_STRICT || 'accept-new';
@@ -45,7 +45,8 @@ export function sshKeygenBin() {
   return fs.existsSync(beside) ? beside : 'ssh-keygen';
 }
 
-export const keyPathOf = (entry) => expandHome(entry.key_path || `~/.ssh/${entry.alias}`);
+/** 私钥落在哪：登记表写了就用它，留空落到默认 `~/.ssh/<别名>`（默认值与界面同源：registry.defaultKeyPath） */
+export const keyPathOf = (entry) => expandHome(entry.key_path || defaultKeyPath(entry.alias));
 
 /** 公钥文件在不在（登记表里没写 key_path 也能判断） */
 export function keyExists(entry) {
@@ -229,12 +230,12 @@ export function fingerprintOfPublicFile(pubPath) {
 }
 
 /**
- * 公钥交付指引的**结构化步骤**（从桌面版 `guide.rs` 移植，拆成步骤给界面用）。
+ * 公钥交付指引的**结构化步骤**（从桌面版 `guide.rs` 迁移，拆成步骤给界面用）。
  *
  * 这是**唯一的事实来源**：纯文本版 `buildGuide()` 由它拼出来 ——
  * 两处各写一遍文案，改了一边忘了另一边，用户就会照着一份过时的说明操作。
  *
- * 规矩（照抄桌面版，这三条是有意的约束，不是文案风格）：
+ * 规矩（沿用桌面版，这三条是有意的约束，不是文案风格）：
  *   · 程序**不自己连服务器写公钥、不收服务器口令**，界面上没有口令输入框；
  *   · 占位符（账号、公钥）**生成时就替换成这台服务器的真实值**，复制下来不用改；
  *   · 指引里**不含任何凭据**：没有私钥、没有口令、没有 PEM 段落。公钥是公开信息，可以出现。
@@ -317,7 +318,7 @@ export function buildGuide(entry, publicKey) {
 }
 
 /**
- * 指引生成后自检一遍（防回归）—— 桌面版就有这道检查，一并移植。
+ * 指引生成后自检一遍（防回归）—— 桌面版就有这道检查，一并迁移。
  * 查的是**凭据正文**，不是"口令"这两个字：说明文案里写「不收口令」是正常的。
  */
 export function assertNoCredentials(text) {

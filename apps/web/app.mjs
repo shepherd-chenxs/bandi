@@ -26,14 +26,14 @@ import { openSettings } from './js/settings.mjs';
 import { CRUMB_GO, connEditing, connSetTransport, connTransport, parseKeyValues, renderPlugins, renderRuntimes } from './js/connectors.mjs';
 import { addRtFamily, testAddRuntimePath } from './js/machine.mjs';
 import { closeCtxMenu, hideConversationRow, openCtxMenu, removeConversationForever, wipeScopeOf } from './js/listmenu.mjs';
-import { addMenu, addMenuAnchor, closeAddMenu, contactAddItems, detailSave, openAddMenu, renderList } from './js/contacts.mjs';
+import { addMenu, addMenuAnchor, closeAddMenu, contactAddItems, detailSave, gitAddRepoItems, openAddMenu, renderList } from './js/contacts.mjs';
 import { newTemplateDialog } from './js/workflows.mjs';
 import { kbRepaint, kbRepaintRows, projectDialog } from './js/projects.mjs';
 import { doStartFlow, flowStart, openFlowStart, syncFlowTitle } from './js/flowpages.mjs';
-import { importPicked, openSkill, renderSkAssignList, scanImport, skAssignPicked, skAssignSkill } from './js/skills.mjs';
+import { importPicked, openSkill, renderSkAssignList, renderGitRepos, scanImport, skAssignPicked, skAssignSkill } from './js/skills.mjs';
 import { addAtts, closeMentionPop, insertMention, linkPersonaId, linkPicked, makeConversationCard, mentionPop, openConversation, openDetail, renderLinkList, searchRefreshDetail, send, setBusy, setComposer, stopChatRun, updateMentionPop } from './js/chat.mjs';
 import { deleteSessionFromLog, memberPicked, renderMemberCandidates } from './js/groups.mjs';
-import { closeDrawer, pluginMust, refreshGroup, rerenderPanel, tplUrl } from './js/experts.mjs';
+import { closeDrawer, pluginMust, refreshGroup, rerenderPanel } from './js/experts.mjs';
 import { startEvents } from './js/events.mjs';
 import { $, S } from './js/core.mjs';
 import { boot, gAssistantCombo, openGroupDialog, openPluginAdd, pRuntimeCombo, pSandboxCombo, startVersionWatch } from './js/misc.mjs';
@@ -131,9 +131,12 @@ document.addEventListener('click', (e) => {
 
 
 
-// 点组件外面收起（只挂一次，组件本身是随时重建的）
+// 点组件外面收起（只挂一次，组件本身是随时重建的）。
+// ⚠️ `e.target.isConnected`：combo 内部的点击若恰好把所点的元素重画掉了（折叠标题就是这样
+//    —— onclick 里 paint() 换掉 innerHTML），事件冒到这儿时 target 已经离场，
+//    closest('.combo') 找不到祖先，会被误判成"点外面"把弹层关掉（2026-10-27 用户实报）。
 document.addEventListener('click', (e) => {
-  if (openCombo && !e.target.closest('.combo')) openCombo.close();
+  if (openCombo && e.target.isConnected && !e.target.closest('.combo')) openCombo.close();
 });
 
 
@@ -368,26 +371,9 @@ $('plgFormOk').onclick = async (e) => {
     const opts = { method };
     if (method !== 'GET') {
       opts.headers = { 'Content-Type': 'application/json' };
-      // clientOnly 字段（勾选框等）是纯前端意图，不给服务端添乱
-      const bodyValues = { ...values };
-      (d.block.fields ?? []).forEach((f) => { if (f.clientOnly) delete bodyValues[f.key]; });
-      opts.body = JSON.stringify(bodyValues);
+      opts.body = JSON.stringify(values);
     }
     await api(sub.api, opts);
-    // followUp：clientOnly 字段带的"保存后追加动作"（如勾了「生成密钥对」→ POST key）。
-    // 放在主提交成功之后、关弹窗之前 —— 失败只提示这一步，登记本身已经存进去了。
-    for (const f of d.block.fields ?? []) {
-      if (!f.followUp || !values[f.key]) continue;
-      try {
-        const m = (f.followUp.method || 'POST').toUpperCase();
-        const target = tplUrl(f.followUp.api, values);
-        pluginMust(d.plugin, m, target);
-        await api(target, { method: m });
-      } catch (err) {
-        toast(err.message, 'error');
-        break;
-      }
-    }
     $('plgFormDlg').close();
     S.pluginFormDlg = null;
     await rerenderPanel();   // 宿主可能是工作台面板，也可能是设置页里的「远程连接」
@@ -679,6 +665,9 @@ $('search').addEventListener('input', (e) => { S.filter = e.target.value; render
 
 $('listAction').onclick = () =>
   S.nav === 'contacts' ? openAddMenu(contactAddItems())
+  // 代码托管（2026-10-26 三改主从版式）：＋ = 添加仓库（从 GitHub 挑 / 手动接入）。
+  // 必须按 route 认，抢在 plugins 分支前面 —— 否则会掉进 openPluginAdd()（那是插件 manifest 的添加表单）。
+  : S.route?.view === 'codeRepos' ? openAddMenu(gitAddRepoItems(() => renderGitRepos($('pluginView'))))
   // 工作台：项目页的 ＋ = 新建项目；插件页的 ＋ = 插件 manifest 里的添加表单
   : S.nav === 'plugins' ? (S.projectList ? projectDialog() : openPluginAdd())
   // 工作流两种模式：编排模板（＋ = 新建模板）/ 看发起记录（＋ = 发起一条）

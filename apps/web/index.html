@@ -34,15 +34,24 @@
 
 <!-- 一级：图标栏 -->
 <nav class="rail">
-  <!-- 应用标（2026-10-20 定稿「列队」：三柱一底座，一班人 + 底）。
+  <!-- 应用标（2026-10-26 定稿「B 字母标」：bandi 的 B，主干+上下鼓包+左下圆顶）。
        与 apps/desktop/icons/icon.svg 同一套几何 —— 改形状两处要一起改，
-       数值表在 make-icon.py 的 MARK。 -->
+       贝塞尔控制点在 make-icon.py 的 UPPER/LOWER。两个负形孔用 mask 镂空，透出下方渐变。 -->
   <div class="rail-logo" aria-label="班底">
-    <svg viewBox="0 0 512 512" width="20" height="20" aria-hidden="true">
-      <rect x="148" y="238" width="62" height="122" rx="31" fill="#fff" opacity=".82"/>
-      <rect x="225" y="182" width="62" height="178" rx="31" fill="#fff"/>
-      <rect x="302" y="238" width="62" height="122" rx="31" fill="#fff" opacity=".82"/>
-      <rect x="132" y="372" width="248" height="22" rx="11" fill="#fff" opacity=".5"/>
+    <svg viewBox="0 0 512 512" width="22" height="22" aria-hidden="true">
+      <defs>
+        <mask id="bandi-b-hole">
+          <rect width="512" height="512" fill="#fff"/>
+          <ellipse cx="268" cy="206" rx="36" ry="29" fill="#000"/>
+          <ellipse cx="274" cy="340" rx="40" ry="31" fill="#000"/>
+        </mask>
+      </defs>
+      <g mask="url(#bandi-b-hole)" fill="#fff">
+        <rect x="154" y="138" width="72" height="236" rx="34"/>
+        <path d="M194,156 C272,142 338,168 338,208 C338,248 288,268 194,264 Z"/>
+        <path d="M194,282 C284,276 348,306 348,340 C348,372 288,388 194,382 Z"/>
+        <rect x="172" y="336" width="70" height="52" rx="26"/>
+      </g>
     </svg>
   </div>
   <button class="nav-btn active" data-nav="messages">
@@ -422,16 +431,6 @@
       <button class="primary" id="plgFormOk" value="ok">保存</button>
     </div>
   </form>
-</dialog>
-
-<!-- 远程连接：机器详情 / 装公钥引导 共用的弹窗（工作台 → 研发 → 远程连接，列表点开即出；
-     内容每次现画进 remoteDlgInner —— 接线挂在它身上，随内容一起换，不会叠监听） -->
-<dialog id="remoteDlg">
-  <div class="remote-dlg-head">
-    <b id="remoteDlgTitle">详情</b>
-    <button type="button" id="remoteDlgX" class="mini sm" title="关闭（Esc）">×</button>
-  </div>
-  <div id="remoteDlgBody"></div>
 </dialog>
 
 <!--

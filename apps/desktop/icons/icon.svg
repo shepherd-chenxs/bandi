@@ -1,6 +1,14 @@
-<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="g" x1="0" y1="0" x2="0.55" y2="1">
-<stop offset="0" stop-color="#4b6cb7"/><stop offset="1" stop-color="#2b4a8f"/></linearGradient></defs><rect width="512" height="512" rx="96" fill="url(#g)"/>
-<rect x="148" y="238" width="62" height="122" rx="31" fill="#fff" opacity=".82"/>
-<rect x="225" y="182" width="62" height="178" rx="31" fill="#fff"/>
-<rect x="302" y="238" width="62" height="122" rx="31" fill="#fff" opacity=".82"/>
-<rect x="132" y="372" width="248" height="22" rx="11" fill="#fff" opacity=".5"/></svg>
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <rect width="512" height="512" rx="96" fill="#4F46E5"/>
+  <!-- 主干 -->
+  <rect x="154" y="138" width="72" height="236" rx="34" fill="#fff"/>
+  <!-- 上鼓包（左端深入主干，底边下沉覆盖腰部） -->
+  <path d="M194,156 C272,142 338,168 338,208 C338,248 288,268 194,264 Z" fill="#fff"/>
+  <!-- 下鼓包（顶部上提与上鼓包重叠） -->
+  <path d="M194,282 C284,276 348,306 348,340 C348,372 288,388 194,382 Z" fill="#fff"/>
+  <!-- 左下圆顶凸起 -->
+  <rect x="172" y="336" width="70" height="52" rx="26" fill="#fff"/>
+  <!-- 靛紫负形孔 -->
+  <ellipse cx="268" cy="206" rx="36" ry="29" fill="#4F46E5"/>
+  <ellipse cx="274" cy="340" rx="40" ry="31" fill="#4F46E5"/>
+</svg>

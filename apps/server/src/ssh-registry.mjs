@@ -18,6 +18,12 @@ export const expandHome = (p) =>
 export const REGISTRY_PATH = expandHome(process.env.BANDI_SSH_REGISTRY || '~/.bandi/servers.yaml');
 
 /**
+ * 没填 key_path 时的默认私钥路径 —— **单一来源**：界面展示、key_state 判断、
+ * ssh-keygen 落盘（ssh-exec.keyPathOf）都走它，谁也别自己再拼一遍。
+ */
+export const defaultKeyPath = (alias) => `~/.ssh/${alias}`;
+
+/**
  * 用户输入不合法（**这条 message 是写给用户看的**，如「地址不要带协议头。」）。
  *
  * 为什么要带 `status`/`code`：以前这类 throw 到 HTTP 层被统一包成 `400 E1001`，
@@ -211,7 +217,12 @@ export function removeServer(alias) {
 
 /**
  * 给界面看的清单：**只出安全字段**。
- * 私钥路径不出（那是本机信息），指纹只给"验没验过"这个布尔。
+ * 私钥路径不出（那是本机信息）—— 例外见下面 key_path 那条注释。
+ *
+ * `status` / `last_checked` / `host_fingerprint_verified` **不再回传**（2026-10-26）：
+ * 这三个字段从首个提交起就没有任何写入点（`testConnection` 只把结果给弹窗，不落盘），
+ * 界面上那个「状态」永远停在登记时的「待确认」——一个假状态比没有状态更误导。yaml 里
+ * 老数据仍原样保留（serialize 会写回去），将来真要做「上次核对」再从这里接出来。
  */
 export function publicServers() {
   let reg;
@@ -225,23 +236,25 @@ export function publicServers() {
     path: REGISTRY_PATH,
     updated: reg.updated,
     servers: reg.servers.map((s) => {
-      const kp = s.key_path ? expandHome(s.key_path) : '';
-      const hasKey = !!kp && [kp, `${kp}.pub`].some((p) => fs.existsSync(p));
+      /* key_path 留空 = 用默认的 `~/.ssh/<别名>`（跟 ssh-exec 的 keyPathOf 同一条规矩）。
+       * 早先这里只认**显式**写下的 key_path，留空的一律算"未生成密钥" —— 可公钥块
+       * （GET /key 走 tryPublicKeyOf → keyPathOf）又读得到内容，同一页上自相矛盾：
+       * 上面写"未生成密钥"，下面却把公钥整行贴出来了（2026-10-26 用户截图）。 */
+      const kp = expandHome(s.key_path || defaultKeyPath(s.alias));
+      const hasKey = [kp, `${kp}.pub`].some((p) => fs.existsSync(p));
       return {
         alias: s.alias,
         host: s.host ?? '',
         port: s.port ?? 22,
         user: s.user ?? '',
-        status: s.status ?? '',
         purpose: s.purpose ?? '',
-        last_checked: s.last_checked ?? '',
-        fingerprint_verified: s.host_fingerprint_verified === true,
         // 有没有密钥 —— 只给"有/没有"，不出**内容**
         has_key: hasKey,
         key_state: hasKey ? '密钥已就绪' : '未生成密钥',
         // 私钥**路径**要给：界面上"改"的表单里能填它，不回传就成了只能写不能读的黑洞。
         // 给的是路径不是内容 —— 私钥正文永不读、永不回显。
-        key_path: s.key_path ?? '',
+        // 登记时没填的，这里补上默认路径（否则界面那行是空白，用户不知道密钥落在哪）。
+        key_path: s.key_path || defaultKeyPath(s.alias),
       };
     }),
   };

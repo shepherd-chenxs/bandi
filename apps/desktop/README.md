@@ -108,15 +108,14 @@ Azure Trusted Signing），再在 workflow 里加一步 signtool。Release 正�
 （多尺寸 16…256，Windows 用）。**两份都由脚本生成**，别手工替换 —— 换字是常事，得有唯一入口：
 
 ```sh
-python apps/desktop/make-icon.py             # 出「班」
-python apps/desktop/make-icon.py --glyph 本   # 换字
+python apps/desktop/make-icon.py             # 出「B 字母标」（默认）
+python apps/desktop/make-icon.py --glyph 班  # 旧的汉字字标（v1.0.1 及以前），留着备用
 python apps/desktop/make-icon.py --preview    # 额外出 16/32/64 预览，看小尺寸糊不糊
 ```
 
-**为什么是 Python**：把一个汉字画进位图要**字体光栅化**（Pillow，平台自带）。Node 那边手写 PNG/ICO 容易，
-但把字形轮廓栅格化不是几百行的事。风格值（底色 `#202228`、字色 `#6EA8FE`、字形墨迹高度 256px）
-**冻在脚本里**，量自 `v1.0.0` 那个图标 —— `--sample <旧图标.png>` 可以复核这几个数从哪来。
-（第一版是每次去"读当前图标"再推尺寸的，于是基准变成自己的上次输出、跑一次漂一两像素；冻住才对。）
+**为什么是 Python**：标是纯几何（主干 + 贝塞尔上下鼓包 + 左下圆顶），Pillow 采样多边形填充即可，
+不需要字体光栅化、不需要浏览器。矢量母版在 `icons/icon.svg`，贝塞尔控制点冻在 `make-icon.py`
+的 `UPPER` / `LOWER`，两处必须一致（脚本不解析 SVG）。底色靛紫 `#4F46E5` 平涂，图形白色。
 
 ⚠️ **改完图标要重跑一遍 build，而且光换文件不够**：Windows 上 exe 的图标是 `build.rs`
 （`tauri_build::build()`）跑的时候生成 `resource.rc` 再嵌进去的，而它的 `rerun-if-changed`

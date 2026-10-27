@@ -1655,7 +1655,7 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
                 </div>
                 <div class="form-row">
                   <div class="row-label">并发数</div>
-                  <!-- 并发数（2026-10-24，对标 Multica）：这一个人名下同时最多几个活在跑。
+                  <!-- 并发数（2026-10-24，参照同类产品）：这一个人名下同时最多几个活在跑。
                        空着 = 默认 6；服务端钳到 [1, 20]，手滑填坏也不会打断保存。 -->
                   <input id="dMaxParallel" type="number" min="1" max="20" step="1"
                          style="width:120px;text-align:center" value="${persona.maxParallel ?? ''}"

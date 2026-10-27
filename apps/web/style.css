@@ -1,8 +1,8 @@
 /* ══════════════════════════════════════════════════════════════════════
    设计变量（v1.0.1 · 2026-10-19）
    ─────────────────────────────────────────────────────────────────────
-   方向（2026-10-19 用户拍板）：**全站统一 Linear**。
-     早先我提过"人和人说话用 iOS、人和系统打交道用 Linear"的混用方案，
+   方向（2026-10-19 用户拍板）：**全站统一密排风格**。
+     早先我提过"人和人说话用 iOS、人和系统打交道用密排风格"的混用方案，
      用户看过截图后否掉了 —— 混合的结果是同一个软件里两套圆角、两套分层方式，
      切换页面时要重新认一遍"这是什么"，比风格单调更糟。
    于是第 3 步那些 iOS 语汇（彩色气泡、浮起卡片 --chat-bg/--card、18px 气泡圆角、
@@ -55,17 +55,17 @@
   --link: #6ea8ff;           /* 正文里的链接：比 accent 亮，压在气泡灰底上才够（8.26:1） */
 
   /* ── 表面色 ──
-     v1.0.1 收口（2026-10-19 用户要求"全部 Linear"）：原来这里有一组 iOS 的"浮起次级面"
+     v1.0.1 收口（2026-10-19 用户要求"全部密排风格"）：原来这里有一组 iOS 的"浮起次级面"
      （--chat-bg 纯黑底 + --card 浮起卡片），现在**整页统一用 --bg / --side / --panel 三档灰阶**，
-     分层靠 1px 细线，不靠底色差 —— 这是 Linear 的做法。 */
+     分层靠 1px 细线，不靠底色差 —— 这是密排风格的做法。 */
   --bg: #08090a;             /* 应用底 / 内容区底。消息区也用它，不再另起一层暗底 */
 
   /* ── 形状与节奏 ──
      组件规则只读这些变量，不写死数值。以后想整体再软一点/紧一点，只改这里。
      ⚠️ 全站只有**两档圆角**：6px 给行和输入控件、10px 给"面"（卡片 / 列 / 板块）。
      超过 10px 的圆角（气泡 18、卡片 12、磁贴 18）都是 iOS 残留，已逐个清掉。 */
-  --r-row: 6px;              /* 列表行 / 输入框 / 按钮 —— Linear 的克制小圆角 */
-  --gap-row: 2px;            /* 相邻两行之间的缝。2px = Linear 的密排 */
+  --r-row: 6px;              /* 列表行 / 输入框 / 按钮 —— 密排风格的克制小圆角 */
+  --gap-row: 2px;            /* 相邻两行之间的缝。2px = 密排风格的行距 */
   --pad-row: 7px 8px;        /* 行内边距 */
   --touch: 36px;             /* 可点区域下限。桌面端 36 既够点又不显笨 */
 
@@ -88,7 +88,7 @@
 
   --scrim: rgba(0, 0, 0, .5);
   --shadow: rgba(0, 0, 0, .45);
-  --scroll: #2c2e32;         /* 滚动条滑块：Linear 那种"几乎看不见"，悬停才显形 */
+  --scroll: #2c2e32;         /* 滚动条滑块：密排风格那种"几乎看不见"，悬停才显形 */
   --scroll-hover: #3d4045;
   /* 看板列的"凹槽底"。**不能用 --panel / --side**（浅色下它们都是纯白）——
      白列配白卡片就分不出层了。深色取在页面底与卡片之间。
@@ -292,9 +292,9 @@ body.no-list .list-panel { display: none; }
 /* ---------- 二级：列表 ---------- */
 /* 列表栏底色用 --card 而不是 --side：iOS 里"列表"是浮在页面底上的那张卡，
    深色 #1c1c1e 比对话区纯黑亮一档，一眼分得出"这是导航、那是内容"。 */
-/* 列表栏（Linear 语汇）：底色 **--card → --side**，跟顶栏同色 —— Linear 的侧栏不"浮起"，
+/* 列表栏（密排风格）：底色 **--card → --side**，跟顶栏同色 —— 密排风格的侧栏不"浮起"，
    它跟页面是一体的，靠右边那条 1px 竖线分开。
-   `--card`（iOS 的浮起次级面）在全局统一 Linear 之后不再用于结构面。 */
+   `--card`（iOS 的浮起次级面）在全局统一密排风格之后不再用于结构面。 */
 .list-panel { background: var(--side); border-right: 1px solid var(--line);
               /* 四行：标题 / 搜索 / 列表（吃掉剩余高度）/ **底部固定条**（「已归档」） */
               display: grid; grid-template-rows: auto auto 1fr auto; min-height: 0; }
@@ -335,8 +335,14 @@ body.no-list .list-panel { display: none; }
 .mini { width: 26px; height: 26px; padding: 0; border-radius: 7px; font-size: 15px; line-height: 1; }
 .mini.hidden { display: none; }
 .list-search { padding: 0 12px 8px; }
-/* 搜索框（Linear）：圆角 10 → 6（胶囊感去掉，跟输入框/按钮同档）；
-   常态就画 1px 边框 —— Linear 的输入面是"看得见的框"，不靠"凹进去"暗示。 */
+/* 搜索框的显隐（2026-10-26）：`setNav` 会给 `.list-search` 挂 `hidden`，
+   但 `.hidden` 在这里**没有对应的 display 规则**（全站只有 `.mini.hidden` 有）——
+   于是工作台插件页/专家库看着"没搜索框"，只是因为整列被 `body.no-list` 收掉了。
+   远程连接这类**有左栏**的面板一露面就把它露出来了，而且输字也不过滤（左栏归面板自己画）。
+   补上这一条，让 hidden 真的隐藏。 */
+.list-search.hidden { display: none; }
+/* 搜索框（密排风格）：圆角 10 → 6（胶囊感去掉，跟输入框/按钮同档）；
+   常态就画 1px 边框 —— 密排风格的输入面是"看得见的框"，不靠"凹进去"暗示。 */
 .list-search input { width: 100%; background: var(--input); color: var(--text);
                      border: 1px solid var(--line); border-radius: 6px;
                      padding: 6px 10px; font: inherit; font-size: 13px; }
@@ -397,12 +403,12 @@ body.no-list .list-panel { display: none; }
 .item:has(> .who > .line2) { min-height: 0; }
 .item:hover { background: var(--hover); }
 .item.active { background: var(--sel); }
-/* 头像（Linear 语汇）：**不再是圆形彩色块**。
-   iOS 的头像是"彩色圆 + 白色字"，一团高饱和色在列表里非常跳；Linear 的头像是一个
+/* 头像（密排风格）：**不再是圆形彩色块**。
+   iOS 的头像是"彩色圆 + 白色字"，一团高饱和色在列表里非常跳；密排风格的头像是一个
    **淡底小方块 + 深色字**（6px 圆角、1px 描边），颜色只表达"是谁"，不争视线。
    改成 hsl 底色需要按名字取色 —— 那样每个人都不一样、一屏几十个又成了调色盘；
    这里统一用 --chip 淡底 + --dim 字：名单靠"字 + 副标题"辨认已经够了，
-   头像的作用只是让眼睛有个落点（Linear 自己也是这么做的）。 */
+   头像的作用只是让眼睛有个落点（密排风格自己也是这么做的）。 */
 /* 头像三种量级
    ① `.avatar` 38px —— 列表行（通讯录 / 会话列表），配色由 app.js 的 `avatarStyle()` 内联给出
       （按名字哈希取低饱和色，同一个人永远同色）。
@@ -412,7 +418,7 @@ body.no-list .list-panel { display: none; }
    **用户截图报"看不清字"就是这个**：颜色本身就是用来区分的，但底色和字都是蓝灰，
    字在里面糊成一片。现在单独定三档配色（灰 / 偏蓝 / 偏暖），字一律近白。
    `.me`（我自己）用同一档灰，只把字换成 --text，跟对方头像靠位置 + 右侧对齐区分，
-   不额外加色（Linear 里自己的评论也不换个颜色）。 */
+   不额外加色（密排风格里自己的评论也不换个颜色）。 */
 .avatar { width: 38px; height: 38px; border-radius: 6px; flex: 0 0 38px; display: grid; place-items: center;
           font-weight: 500; color: var(--dim); background: var(--chip);
           border: 1px solid var(--line); font-size: 13px; }
@@ -714,35 +720,20 @@ main { min-height: 0; }
 /* 动作按钮（测试/编辑/删除）贴标题行右侧 */
 .plg-detail-head .head-actions { margin-left: auto; display: flex; gap: 8px; align-items: center; }
 
-/* ---------- 插件面板搬进设置页（远程连接，2026-10-26） ----------
-   设置页的左栏是分节列表，借不了全局左栏当主从列表。版式（同日二改，用户拍板）：
-   登记做成整宽列表、详情/引导进弹窗 —— 页面上只剩一张登记表，点行开详情弹窗。 */
-.remote-list { display: flex; flex-direction: column; gap: 8px; }
-.remote-row { display: flex; align-items: center; gap: 12px; padding: 10px 14px;
-              border: 1px solid var(--line); border-radius: 10px; background: var(--panel);
-              cursor: pointer; }
-.remote-row:hover { border-color: color-mix(in srgb, var(--dim) 45%, var(--line)); }
-.remote-row .who { min-width: 0; }
-.remote-row .line1 b { font-weight: 500; font-size: 13.5px; }
-.remote-row .line2 { font-size: 12px; color: var(--dim); }
-.remote-row .line2 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.remote-row-side { margin-left: auto; display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
-.remote-row-status { font-size: 11.5px; color: var(--dim); margin-right: 4px; }
-/* 「＋ 添加」贴标题行右侧（2026-10-26 用户拍板） */
-#plgRemoteHost .set-head [data-form-open] { margin-left: auto; }
+/* 详情页签的内容**整体装进一张卡**（2026-10-26 用户：「外面加一个卡片，不是拆成很多卡片」）：
+   卡里还是原来的一行一条（`.info-row`），只是外面有了边框和底色这块"面"，
+   不再是一堆裸行浮在页面上。卡内各块（基本信息 / 公钥 / 步骤）自己不再各成一张卡，
+   否则就是卡套卡 —— 层次反而乱。 */
+.plg-detail .tab-panel { border: 1px solid var(--line); border-radius: 10px; background: var(--panel);
+                         padding: 4px 16px 16px; }
+.plg-detail .tab-panel > .plg-sec > .fx { border: 0; background: transparent; padding: 0; }
+/* 卡内分块之间留一口气（公钥那块自带标题行，不用再画线） */
+.plg-detail .tab-panel > .plg-sec + .plg-sec { margin-top: 16px; }
+
+/* ---------- 插件面板的通用零件 ---------- */
 /* 表单弹窗里的勾选框行（如「生成密钥对」） */
 .plg-check { display: flex; align-items: center; gap: 7px; font-size: 13px; cursor: pointer; user-select: none; }
 .plg-check input { width: 15px; height: 15px; margin: 0; accent-color: var(--accent); }
-/* 详情/引导弹窗（单例 #remoteDlg）：比默认宽一档 —— 公钥、步骤命令都是长行；
-   头部钉住、正文自己滚。内容包在 #remoteDlgInner 里，监听随内容一起换不叠。 */
-#remoteDlg { width: 640px; }
-#remoteDlg #remoteDlgBody { padding: 0 20px 20px; max-height: 74vh; overflow: auto; }
-.remote-dlg-head { display: flex; align-items: center; gap: 8px; padding: 16px 20px 10px; }
-.remote-dlg-head b { font-size: var(--t-sec, 14px); }
-.remote-dlg-head #remoteDlgX { margin-left: auto; }
-#remoteDlg .plg-detail-head { display: flex; align-items: center; gap: 10px;
-                              flex-wrap: wrap; padding-bottom: 10px; }
-#remoteDlg .plg-detail-head .dim { font-size: 12px; min-width: 0; }
 
 /* 代码块：公钥、交付指引、测试输出 —— 可滚、可选中、可复制 */
 .plg-code { margin: 0; padding: 12px; max-height: 340px; overflow: auto;
@@ -782,7 +773,7 @@ main { min-height: 0; }
 .run-left > .detail-head,
 .run-page .nc-head { height: 50px; padding-top: 0; padding-bottom: 0;
                      display: flex; align-items: center; }
-/* 运行日志区（Linear 语汇）：内边距 26/30 → 18/20。
+/* 运行日志区（密排风格）：内边距 26/30 → 18/20。
    日志是"一眼扫很多行"的东西，宽松的边距会让可视行数白白少掉四五行。 */
 .run-wrap { flex: 1; min-height: 0; padding: 18px 20px; overflow: auto;
             scrollbar-width: none; -ms-overflow-style: none; }
@@ -1038,7 +1029,7 @@ main { min-height: 0; }
            border: 1px solid var(--line); background: var(--panel); cursor: pointer; }
 .vd-plus:hover { border-color: var(--accent); background: var(--locked); }
 /* 节点本身是一小块（不是大卡片）：编号 + 名字 + 说明。
-   v1.0.1 第 4 步：圆角 10→8、选中环 2px→1.5px —— 编排页是 Linear 语汇的主场，
+   v1.0.1 第 4 步：圆角 10→8、选中环 2px→1.5px —— 编排页是密排风格的主场，
    环太粗会变成"描了个框"，1.5px 才像"这一格被点亮"。 */
 .vd-node { position: relative; flex: 0 0 auto; width: 300px; padding: 8px 12px;
            border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
@@ -1106,8 +1097,8 @@ main { min-height: 0; }
 .seg button:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* 设置页的卡片式分节：标题在框上方，行内「左标签 + 右控件」
-   v1.0.1 第 4 步（Linear 语汇）：**行更密、圆角更小**。
-   Linear 的设置页是"一屏能看到十行"，行高 14px→9px、内边距 14/18→9/14；
+   v1.0.1 第 4 步（密排风格）：**行更密、圆角更小**。
+   密排风格的设置页是"一屏能看到十行"，行高 14px→9px、内边距 14/18→9/14；
    圆角 12→10 跟看板列对齐（整页只有两档圆角：10 给面和行，18 留给对话）。 */
 .set-sec { margin-bottom: 22px; }
 .set-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
@@ -1428,7 +1419,7 @@ dialog.pj-add-dlg .dlg-head { margin: 0 -20px; padding: 14px 12px 6px 20px; }
 .mbr-row.gone { cursor: default; }
 .mbr-row.gone:hover { background: transparent; }
 /* 灰名走 --label（跟档案行标签同一档次级灰；设计稿的 --dim-2 在本站没有这一档，
-   别为了照抄凭空加一个变量）。 */
+   别为了对齐设计稿凭空加一个变量）。 */
 .mbr-row.gone .mbr-name { color: var(--label); font-weight: 400; }
 .avatar.gone { background: var(--chip); color: var(--label); }
 .gone-tag { font-size: 11px; color: var(--label); }
@@ -1671,18 +1662,12 @@ input.locked:focus { outline: none; border-color: var(--line); }
 /* 定时任务 / 仓库那几行：`.group` 里装的是 flex 行，行本身也要能被压窄 */
 .sk-row { min-width: 0; }
 
-/* ===== 工作台 → 研发 → 代码托管 · 仓库表（2026-10-23）=====
-   行版 → 表格版（用户问「表格形式好不好看」，做出来对比）：每个语义独占一列，列头只写一次、
-   值上下对齐 —— 「谁在值班、哪台开了自动合并」竖着扫一列就看完了，不用逐行读第二行。
-   仓库名与路径仍挤在同一格：路径是等宽长串，单独成列会把别的列挤扁。
-   列宽写死在 colgroup + table-layout:fixed，长路径靠省略号收，绝不顶列。 */
-.gr-title { display: flex; align-items: center; justify-content: space-between; }
-.gr-title .dim { font-weight: 400; }
-/* GitHub 连接块（2026-10-23 三轮）：居中紧凑簇。第一轮输入框收短、第二轮字居中，
-   第三轮用户圈红状态行「错开很难受」—— flex 布局里状态行按整卡居中，而簇是
-   「标签+框+按钮」整体居中，两个中心差了半颗按钮宽。改**三列网格**：
-   [标签 | 输入框 | 按钮]，状态行显式放进第 2 列（输入框那列）正下方居中 ——
-   中心天然重合，按钮宽窄变化也不影响。minmax 让窄窗时框能缩，宽时正好 520。 */
+/* ===== 工作台 → 研发 → 代码托管 =====
+   2026-10-26 三改成主从版式（左栏仓库列表 + 右栏详情，跟「远程连接」同一套）：
+   表格版（.gr-tbl）和居中簇在页面上的用法已经拆了 —— 表格样式删掉；
+   .gr-meta / .gr-cell-ops 还被「建 PR」弹窗用着，留下。 */
+/* GitHub 连接块的基础形态是**居中紧凑簇**（[标签 | 输入框 | 按钮] 三列网格）——
+   设置页的生图服务（.gr-conn.stack）还在用，不能动。 */
 .gr-conn { padding: 18px 0 16px; }
 .gr-conn-row { display: grid; grid-template-columns: max-content minmax(160px, 520px) max-content;
                justify-content: center; align-items: center; column-gap: 22px; min-width: 0; }
@@ -1697,38 +1682,146 @@ input.locked:focus { outline: none; border-color: var(--line); }
             max-width: 560px; margin-left: auto; margin-right: auto; text-align: center; }
 /* 远程连接页的说明横贯整页宽（不是紧凑簇里的短提示），居中会悬在半空 —— 靠左铺开 */
 #settingsView > .detail-body > .set-hint { max-width: none; margin-left: 0; margin-right: 0; text-align: left; }
-/* 表头文字居中（2026-10-23 用户）：管理员/自动合并/操作三列的表头压在内容正上方 ——
-   内容也跟着居中（管理员按钮、开关本来就居中，操作按钮近似满列、居中≈右对齐）。
-   仓库列是长文本，保持左对齐别动。 */
-.gr-tbl th:not(:first-child) { text-align: center; }
-.gr-keeper-cell { text-align: center; }
-.gr-tbl { width: 100%; border-collapse: collapse; table-layout: fixed; }
-.gr-tbl th { text-align: left; font-weight: 500; color: var(--dim); font-size: 11.5px;
-             padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
-.gr-tbl td { padding: 10px; border-bottom: 1px solid var(--line); vertical-align: middle; min-width: 0; }
-.gr-tbl th:first-child, .gr-tbl td:first-child { padding-left: 14px; }
-.gr-tbl th:last-child, .gr-tbl td:last-child { padding-right: 14px; }
-.gr-tbl tbody tr:last-child td { border-bottom: 0; }
-/* 悬停只做很淡的一层底：行里全是控件，对比太强会像选中态 */
-.gr-tbl tbody tr:hover td { background: var(--side); }
-.gr-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.gr-name b { font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* 路径 + 同步时间：等宽字小一档，单行省略（悬停看全文），跟 machine-path 同一套 */
+/* 代码托管页的 GitHub 连接 2026-10-26 五改：左栏只剩**一颗状态按钮**（用户：
+   "做成一个按钮区就行，点击打开弹窗，不要展示这么多"）。点开 gr-conn-dlg 才见表单。
+   按钮做成列表行同款高度，绿点表示已连、灰点未连，跟列表行视觉上接得住。 */
+.gr-side { margin: 2px 0 8px; min-width: 0; }
+.gr-side-btn { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px;
+               border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
+               color: var(--text); font: inherit; font-size: 12.5px; cursor: pointer; text-align: left; }
+.gr-side-btn:hover { border-color: var(--accent); }
+.gr-dot { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; background: var(--dim); opacity: .55; }
+.gr-dot.ok { background: var(--ok); opacity: 1; }
+.gr-side-btn-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 连接弹窗：动态 dialog，行式表单（标签左、控件右） */
+.gr-conn-dlg { width: 600px; max-width: 92vw; }
+.gr-conn-dlg .gr-dlg-body { display: flex; flex-direction: column; gap: 12px; padding: 14px 0 4px; }
+.gr-dlg-row { display: flex; align-items: center; gap: 10px; }
+.gr-dlg-row input { flex: 1; min-width: 0; }
+.gr-dlg-row > button { flex: 0 0 auto; }
+/* 状态行跟输入框左缘对齐（2026-10-26 九改，用户："连接状态放到输入框下面"）：
+   行首放一个看不见的「令牌」占位（visibility 不占视觉、宽度与真标签同款），状态文本自然贴到输入框起点。 */
+.gr-dlg-row .gr-dlg-pad { visibility: hidden; flex: 0 0 auto; }
+.gr-dlg-status { flex: 1; min-width: 0; font-size: 12.5px; color: var(--dim); overflow: hidden;
+                 text-overflow: ellipsis; white-space: nowrap; }
+.gr-dlg-status b { font-weight: 500; }
+.gr-dlg-row .mini { margin-left: auto; flex: 0 0 auto; }
+/* 「断开连接」跟输入框同高同圆角（2026-10-26 八改）：.mini 基础是 26px 图标钮，
+   在弹窗里压回普通文本钮的个头（输入框 = padding 7px 9px + font 13px）。 */
+.gr-dlg-row .mini.auto { height: auto; padding: 9.5px 14px; font-size: 12.5px; line-height: 1.4; }
+/* 「连接 GitHub」跟输入框同一行、贴在行尾（2026-10-26 七改，用户："按钮放到输入框后面"）；
+   输入框 flex:1 吃掉剩余宽度，按钮不缩。 */
+.gr-dlg-row .primary { padding: 0 18px; }
+/* 弹窗里的只读令牌框（2026-10-26 十二改，用户："凸显输入框，弱化提示"）：
+   input.locked 公共类是"灰底灰字"的禁用相（设置页 AI Key 也在用，不动公共类），
+   本弹窗覆盖成白底 + 正文色 + 等宽字 —— 掩码值读起来像真实令牌，是这块的主角。 */
+.gr-conn-dlg input.locked { color: var(--text); background: var(--panel);
+                           font-family: ui-monospace, monospace; font-size: 12.5px; }
+/* 「怎么拿令牌」直接铺开（2026-10-26 六改）：浅底说明块；八改补了结构化列表 ——
+   一坨长段落没人读，拆成编号步骤 + 两条权限各占一行 + 小字例外说明。
+   十二改（用户："凸显输入框，弱化提示"）：填充底撤掉，改一条上分隔线的纯文字区，
+   编号/标题/权限卡全降灰 —— 帮助是背景信息，不再跟令牌框抢视线。 */
+.gr-dlg-help { margin-top: 0; padding: 12px 0 0; border-top: 1px solid var(--line);
+               font-size: 12px; color: var(--dim); line-height: 1.7; }
+.gr-dlg-help b { color: var(--text); font-weight: 500; }
+/* 说明区小标题（2026-10-26 十改，用户要"描述区加一个标题：怎么拿令牌"） */
+.gr-help-title { margin-bottom: 8px; font-size: 12px; font-weight: 500; color: var(--dim); }
+.gr-help-steps { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 8px; }
+.gr-help-steps li::marker { color: var(--dim); font-weight: 500; }
+.gr-help-perms { margin: 6px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 5px; }
+.gr-help-perms li { display: flex; flex-direction: column; gap: 1px; padding: 6px 10px;
+                    border: 0; border-radius: 7px; background: var(--side); }
+.gr-help-perms b { font-size: 12px; }
+.gr-help-perms span { font-size: 11.5px; }
+.gr-help-note { display: block; margin-top: 6px; font-size: 11.5px; color: var(--dim); }
+.gr-help-foot { margin: 10px 0 0; }
+.gr-help-foot .help-link { margin-top: 0; }
+/* 路径 + 同步时间：等宽字小一档，单行省略（悬停看全文），跟 machine-path 同一套。
+   「建 PR」弹窗头上的路径行也在用。 */
 .gr-meta { margin-top: 3px; font-family: ui-monospace, monospace; font-size: 11.5px;
            color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* 格子里的控件撑满/居中，鼠标好点 */
-/* 管理员格（2026-10-23 用户拍板）：不放 select 了 —— 直接显示员工姓名的按钮，
-   点开 keeperDlg 弹窗搜索选人（人多时原生下拉又长又不能搜） */
+/* 管理员（2026-10-23 用户拍板）：不放 select —— 直接显示员工姓名的按钮，
+   点开 keeperDlg 弹窗搜索选人（人多时原生下拉又长又不能搜）。现在住在详情的 .info-row 里 */
 .gr-keeper-btn { max-width: 100%; height: 30px; padding: 0 12px; border-radius: 7px;
                  border: 1px solid var(--line); background: var(--input); color: var(--text);
                  font: inherit; font-size: 12.5px; cursor: pointer;
                  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gr-keeper-btn:hover { border-color: var(--accent); }
-.gr-cell-am { text-align: center; }
 .gr-cell-ops { text-align: right; white-space: nowrap; }
-/* 表里按钮比别处收窄一档：.mini.auto 默认左右各 16px，三个并排会顶出列宽 8px（实测） */
 .gr-cell-ops .mini.auto { padding: 0 12px; white-space: nowrap; }
 .gr-cell-ops .mini + .mini { margin-left: 6px; }
+
+/* ===== 代码托管：IDE 式一站式（2026-10-27）=====
+   分支 pill / 改动卡（单文件 diff + 丢弃 + 提交）/ 历史卡。
+   pill 是 createCombo（全站公共下拉）套了个胶囊皮：搜索、分组、✓ 全是现成的。 */
+.gr-branch { display: inline-flex; max-width: 300px; vertical-align: middle; }
+.gr-branch .combo-btn { width: auto; height: 26px; padding: 0 10px; gap: 6px;
+                        border-radius: 999px; background: var(--side); font-size: 12px; }
+.gr-branch .combo-text { font-family: ui-monospace, monospace; font-size: 11.5px; }
+.gr-branch .combo-chev { width: 5px; height: 5px; margin-right: 0; }
+/* 分支弹窗比通用下拉大一档（2026-10-27 用户："大一些"）：分支名长（bandi/xxx-时间戳）、
+   条目多（操作 + 最近/本地/远程/标签），360px 宽 232px 高太挤；高度上限跟视口走，小屏不探出。 */
+.gr-branch .combo-pop { min-width: 360px; max-width: min(560px, 92vw); }
+.gr-branch .combo-pop input { font-size: 13px; padding: 8px 10px; }
+.gr-branch .combo-list { max-height: min(520px, 62vh); }
+.gr-branch .combo-item { padding: 8px 10px; }
+.gr-branch .combo-item-label { font-size: 13px; }
+.gr-branch .combo-group { font-size: 11.5px; padding-top: 10px; }
+/* 改动卡（2026-10-27 改分栏，用户："左边文件，右边输入区和提交"；标题同日改「提交」）：
+   左 = 文件清单（diff 展开跟文件行走），右 = 提交说明 + 提交按钮，中间一条分隔线。
+   区域高度固定（460px），文件多了在左栏里滚 —— 卡片不再跟着 62 个文件无限撑高。 */
+.gr-chg-split { display: flex; align-items: stretch; gap: 0; height: 460px; }
+.gr-chg-split .gr-chg-list { flex: 1; min-width: 0; overflow-y: auto; }
+.gr-commit-side { flex: 0 0 320px; display: flex; flex-direction: column; gap: 10px;
+                  padding: 12px 0 12px 14px; margin-left: 12px; border-left: 1px solid var(--line); }
+.gr-commit-side textarea { width: 100%; min-height: 88px; resize: vertical; }
+.gr-commit-side .primary { align-self: flex-end; padding: 0 22px; }
+/* 行右缩进（2026-10-27 二调：用户"折叠区的条目再往右缩进"）：文件行比组标题深两级 ——
+   组头内容从 12px 起，行内容从 52px 起；悬停底色仍铺满整行。 */
+.gr-chg-row { display: flex; align-items: center; gap: 8px; padding: 6px 12px 6px 52px; cursor: pointer; min-width: 0; }
+/* 折叠组标题（2026-10-27，用户指 VS Code 源代码管理："加两个可以折叠的标题"；
+   二调：折叠钮挪到选择框左边、chevron 去掉方框边）。
+   顺序 = 折叠钮 → 全选框 → 组名 → 计数；组头自带 12px 内边距，选择框不再另补 margin。 */
+.gr-chg-group-head { display: flex; align-items: center; gap: 8px; width: 100%;
+                     padding: 7px 12px; border: 0; background: none; text-align: left; cursor: pointer; }
+.gr-chg-group-head:hover { background: var(--hover); }
+.gr-chg-fold-btn { display: flex; align-items: center; justify-content: center;
+                   flex: 0 0 auto; width: 16px; height: 16px; margin: 0; padding: 0;
+                   border: 0; background: none; cursor: pointer; color: var(--dim); }
+.gr-chg-label { font-size: 12.5px; font-weight: 600; color: var(--text); }
+/* 选择框（2026-10-27，用户："加选择框允许选择提交"）：行 + 组头三态全选。
+   全局 input 是 width:100% 的表单规格，这里必须压回小方块。 */
+.gr-chg-sel, .gr-chg-all { flex: 0 0 auto; width: 14px; height: 14px; margin: 0; padding: 0;
+                           accent-color: var(--accent); cursor: pointer; }
+/* 折叠按钮图标：裸 chevron —— 默认朝下（展开），折叠时转成朝右。 */
+.gr-chev { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+           width: 12px; height: 12px; color: var(--dim); transition: transform .15s; }
+.gr-chev svg { width: 100%; height: 100%; }
+.gr-chg-group.folded .gr-chev { transform: rotate(-90deg); }
+.gr-chg-cnt { color: var(--dim); font-weight: 400; }
+.gr-chg-row:hover { background: var(--hover); }
+.gr-chg-x { flex: 0 0 auto; width: 20px; text-align: center; font-size: 11px; font-weight: 600; }
+.gr-x-add { color: var(--ok); }
+.gr-x-del { color: var(--bad); }
+.gr-x-ren { color: var(--warn); }
+.gr-x-mod { color: var(--accent); }
+.gr-chg-path { flex: 1; min-width: 0; font-family: ui-monospace, monospace; font-size: 12px;
+               overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 只读 diff：+/− 行与 @@ 行各一色（文本色，不铺底 —— 铺底要成对 token，第一版从简） */
+.gr-diff { border-top: 1px dashed var(--line); }
+.gr-diff-pre { margin: 0; padding: 8px 12px; max-height: 320px; overflow: auto;
+               background: var(--side); font-family: ui-monospace, monospace; font-size: 11.5px;
+               line-height: 1.55; white-space: pre; }
+.gr-diff-pre .add { color: var(--ok); }
+.gr-diff-pre .del { color: var(--bad); }
+.gr-diff-pre .hunk { color: var(--accent); }
+.gr-diff-pre .meta { color: var(--dim); }
+/* 历史卡：sha 等宽、主题吃满、作者/时间靠右降灰 */
+.gr-log-row { display: flex; align-items: baseline; gap: 10px; padding: 6px 12px; min-width: 0; }
+.gr-log-row + .gr-log-row { border-top: 1px solid var(--line); }
+.gr-log-sha { flex: 0 0 auto; font-family: ui-monospace, monospace; font-size: 11.5px; color: var(--accent); }
+.gr-log-sub { flex: 1; min-width: 0; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gr-log-who { flex: 0 0 auto; font-size: 11.5px; color: var(--dim); }
 
 /* keeperDlg 候选行：跟 .member（拉人进群）同一套节奏，但这是单选 —— 点行即选即关 */
 .k-row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px;
@@ -1834,7 +1927,7 @@ input.locked:focus { outline: none; border-color: var(--line); }
 .badge.完成 { color: var(--ok); border-color: var(--ok); }
 .badge.失败 { color: var(--bad); border-color: var(--bad); }
 
-/* Linear 语汇（v1.0.1 收口，2026-10-19 用户要求"全部 Linear"）：
+/* 密排风格（v1.0.1 收口，2026-10-19 用户要求"全部密排风格"）：
    对话区**跟页面同一个底色**，不另造一层暗底 —— 分层靠 1px 细线和间距，不靠底色差。
    iOS 那套"对话区最暗、卡片浮起"在这里整体去掉了。 */
 .chat { overflow-y: auto; overflow-x: hidden; padding: 20px 24px; background: var(--bg); }
@@ -1848,9 +1941,9 @@ input.locked:focus { outline: none; border-color: var(--line); }
 /* 气泡上限 = 走廊的 90%（2026-10-19）：固定 460 在宽窗口下太窄（长回复换行碎、代码块露不全），
    改百分比后跟着窗口走；两侧各留 10% 走廊，所以左右边界仍不会贴成两个对齐的框。
    走廊本身 = 聊天区宽 - 两侧各 42（头像位），我的气泡左缘永远迈不进对方头像区。 */
-/* 消息正文（**Linear 语汇的气泡**，2026-10-19 用户要求"加气泡"）。
+/* 消息正文（**密排风格的气泡**，2026-10-19 用户要求"加气泡"）。
    要气泡，但不要 iOS 那三个东西：**18px 大圆角 / 投影 / 高饱和实心块**。
-   Linear 一族里有"块"（评论、卡片、输入框），只是块是方的、平的、靠 1px 细线立住 ——
+   密排风格里也有"块"（评论、卡片、输入框），只是块是方的、平的、靠 1px 细线立住 ——
    于是气泡就照"块"做：
      · 圆角 8px（跟卡片同档，不是气泡专用的 18）
      · 1px --line 描边，无投影 —— 块是"画出来的"，不是"浮起来的"
@@ -1958,7 +2051,7 @@ input.locked:focus { outline: none; border-color: var(--line); }
 /* 输入条（iOS）：底色跟对话区一致、输入盒是**浮在上面的圆角卡片**。
    原来 composer 用 --side、输入盒用 --panel，两个都跟对话区不同色，三层色块叠着很碎；
    iOS 的做法是"环境色统一，只让输入框自己浮起来"。 */
-/* 输入条：跟对话区同底（Linear 不搞"浮起的输入框"那层） */
+/* 输入条：跟对话区同底（密排风格不搞"浮起的输入框"那层） */
 .composer { background: var(--bg); padding: 12px 20px 4px; }
 /* 只读输入区（2026-10-20）：员工已删除的会话只能看历史、不能再聊。
    输入框置灰、工具条（权限/模型/发送）收起 —— 摆着能点却发不出去才是误导。
@@ -1966,7 +2059,7 @@ input.locked:focus { outline: none; border-color: var(--line); }
 .composer.is-readonly .input-wrap { background: var(--hover); }
 .composer.is-readonly .input-wrap textarea { color: var(--dim); cursor: not-allowed; }
 .composer.is-readonly .input-tools { display: none; }
-/* 输入框（Linear 语汇）：圆角 16 → 8、**去掉投影**（Linear 的输入面是平的），
+/* 输入框（密排风格）：圆角 16 → 8、**去掉投影**（密排风格的输入面是平的），
    聚焦时只把边框换成 accent —— 不靠阴影"浮起来"。
    底色用 --input 而不是 --card：--card 是 iOS 那套"浮起的次级面"，这里不需要。 */
 .input-wrap { position: relative; background: var(--input); border: 1px solid var(--line);
@@ -1981,7 +2074,7 @@ input.locked:focus { outline: none; border-color: var(--line); }
 /* 输入框底部那一排：左边权限，右边发送 */
 .input-tools { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .input-tools .combo-btn { width: auto; padding: 4px 10px; font-size: 12px; }
-/* 发送键（Linear）：**方角小按钮**，不再是 iOS 那颗蓝色胶囊。
+/* 发送键（密排风格）：**方角小按钮**，不再是 iOS 那颗蓝色胶囊。
    圆角 99px → 6px（跟输入框、看板卡片同一档）；底色仍用 --btn-solid 不用 --accent
    —— accent 深色下是 #0a84ff，白字只有 3.65；#0071e3 才是 4.70。 */
 .input-tools #send { padding: 5px 14px; border-radius: 6px; background: var(--btn-solid);
@@ -2124,9 +2217,9 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .run-head .head-title { flex: 1; min-width: 0; }
 .run-left > .detail-head .head-actions { display: flex; align-items: center; gap: 16px; margin-left: auto; }
 .run-left > .detail-head .head-actions button { font-size: 12px; padding: 3px 10px; }
-/* 详情区（Linear 语汇）：26/30 → 20/24。
+/* 详情区（密排风格）：26/30 → 20/24。
    原来那组值偏 iOS 的"大留白"，铺在桌面端一屏能少看两三行；
-   Linear 的做法是把边距让给内容，靠 1px 细线维持"分区感"而不是靠空白。 */
+   密排风格的做法是把边距让给内容，靠 1px 细线维持"分区感"而不是靠空白。 */
 .detail-body { padding: 20px 24px; max-width: 1400px; }
 .hero { display: flex; align-items: center; gap: 14px; }
 .hero .avatar { width: 58px; height: 58px; flex-basis: 58px; font-size: 22px; }
@@ -2199,6 +2292,37 @@ input, select, textarea { width: 100%; background: var(--input); color: var(--te
 .combo-item:hover, .combo-item.hi { background: var(--hover); }
 .combo-check { flex: 0 0 auto; color: var(--accent); font-size: 12px; line-height: 1; }
 .combo-empty { padding: 8px 9px; font-size: 12.5px; color: var(--dim); }
+/* 可折叠分组标题（分支弹窗用，item 带 foldable 才有）：IDE 同款描边 chevron，收起转 90°。
+   用 mask + currentColor 而不是文字符号 ▾/▸（2026-10-27 用户："原来的那个太小了"）：
+   文字三角受字号与字体渲染影响、大小形状都不听使唤；mask 的描边 SVG 跟随标题自己的颜色，
+   深浅主题都不用另画。 */
+.combo-group.foldable { cursor: pointer; user-select: none; }
+.combo-group.foldable::before {
+  content: ''; display: inline-block; width: 14px; height: 14px; margin-right: 5px;
+  vertical-align: -3px; background: currentColor;
+  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M5.5 9.25 12 15.75l6.5-6.5' fill='none' stroke='%23000' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/></svg>") center / contain no-repeat;
+          mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M5.5 9.25 12 15.75l6.5-6.5' fill='none' stroke='%23000' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/></svg>") center / contain no-repeat;
+  transition: transform .12s ease;
+}
+.combo-group.foldable.is-folded::before { transform: rotate(-90deg); }
+.combo-group.foldable:hover { color: var(--text); }
+/* 分组里的前缀文件夹（分支树第二层，IDE 同款）：文件夹图标 + 正文色。
+   2026-10-27 三调（用户："这些应当右缩进"）：文件夹是「本地分支」的**子层**，整行右缩进一级 ——
+   折角从组标题文字的 28px 竖线起（9+14+5），图标落到 47px；叶子跟文件夹图标同列（47px），
+   文字列随之对齐。平级分支（main，无折角）不缩，图标留在 28px 跟标题文字对齐。 */
+.combo-group.combo-sub { padding: 5px 9px 3px 28px; font-size: 12.5px; font-weight: 500; color: var(--text); }
+.combo-group.combo-sub::before { margin-right: 5px; }
+.combo-group.combo-sub svg { width: 15px; height: 15px; margin: 0 8px 0 0; vertical-align: -3px; }
+/* 分支/标签条目（cls:'br'，分支弹窗专用）：图标列对齐到组标题文字的 28px 竖线，
+   跟文件夹图标同列同高 —— 同一层级的条目一眼排齐。顶部四条操作不带 br，留在最左。 */
+.gr-branch .combo-item.br { padding-left: 28px; }
+/* 文件夹叶子比平级分支再深一层（47 = 28 折角起 + 14 + 5，图标与父文件夹图标同列）。
+   ⚠️ 放在 .br 之后且带 .gr-branch 前缀 —— 叶子同时挂 br+sub，不加特异性会被 br 的 28px 压住。 */
+.gr-branch .combo-item.sub { padding-left: 47px; }
+/* 条目图标（2026-10-27，用户指 IDEA 截图"补充图标"）：统一弱灰 —— 图标是辅助语义，
+   名字才是主角；尺寸跟文件夹图标同一个规格（15px），同一列里大小不跳。 */
+.combo-ic { flex: 0 0 auto; display: inline-flex; width: 15px; height: 15px; color: var(--dim); }
+.combo-ic svg { width: 100%; height: 100%; }
 
 /* 自建日期时间选择（定时任务「单次」）—— 原生 datetime-local 的日历是浏览器画的，
    位置改不了、会跑出弹窗（2026-10-20 用户实报）。浮层宽 252px：
@@ -2445,9 +2569,19 @@ dialog.sch-dlg > form { flex: 1 1 auto; min-height: 0; display: flex; flex-direc
 /* ---------- 插件（设置 → 插件） ---------- */
 .plg-hidden { display: none; }
 .plg-tabs { margin-bottom: 18px; }
+/* 主从详情里的页签（远程连接：连接信息 / 引导，2026-10-26 用户："做成 tab"）：
+   紧跟标题行，上下边距比整页页签收一档 —— `.tabs` 自带 18/22px，在详情里会顶出一道空档。 */
+.plg-detail .plg-tabs { margin-bottom: 0; }
+.plg-detail .plg-tabs .tabs { margin: 2px 0 14px; }
 /* 2026-10-25 二轮：卡改小（minmax 330→236），一屏能看更多；详情挪进点击弹窗 */
 .plg-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(236px, 1fr)); gap: 8px; }
-/* 插件卡片（Linear 语汇）：圆角 12 → 8、内边距收一档；
+/* 空态（2026-10-26）：撤掉「个人」页那块「手工添加」之后，页面常常只剩这一段。
+   全局 `.empty` 是 60px 上下内边距、纯文字居中 —— 整页看上去是一片空。
+   这里改成虚线框：**框本身就在说"这格还空着"**，文案只负责指路上哪儿加。 */
+.plg-empty { padding: 22px 20px; border: 1px dashed var(--line); border-radius: 10px;
+             color: var(--dim); text-align: center; font-size: 13px; line-height: 1.9; }
+.plg-empty .dim { font-size: 12px; }
+/* 插件卡片（密排风格）：圆角 12 → 8、内边距收一档；
    悬停**不再把边框点亮成 accent**（跟看板卡片的改法一致：accent 边框一多，
    一页十几张卡全是蓝框，等于没有强调）。改成一档极淡的提亮。
    ⚠️ 必须带 .plg-grid 前缀：下面 3400+ 行插件面板的卡墙（experts.mjs 的 plg-cards）
@@ -2689,18 +2823,18 @@ button.att-add:hover { color: var(--text); border: 0; background: var(--panel); 
 /* 项目详情：任务看板（列 = 状态，从左到右按生命周期；卡片点得进实例/会话） */
 .kb-wrap { display: flex; gap: 12px; align-items: flex-start; }
 .kb { flex: 1; min-width: 0; display: flex; gap: 12px; align-items: flex-start; overflow-x: auto; padding-bottom: 8px; }
-/* 看板（Linear 语汇）：**列是一块浅凹槽，卡片才是实面** —— 跟 iOS 那边"卡片浮在底上"正好相反。
+/* 看板（密排风格）：**列是一块浅凹槽，卡片才是实面** —— 跟 iOS 那边"卡片浮在底上"正好相反。
    v1.0.1 第 4 步改的三处：
    ① 去掉列的 1px 边框（7 列并排时边框会画出 14 条竖线，像表格）；
    ② 列底从"淡线混 8%"改成实色 `--well`（它是专门给凹槽定的，比混出来的更稳、深浅两边都不发花）；
-   ③ 列头改成"小号灰字 + 状态点"，不用 600 黑体 —— Linear 的列头是标签，不是标题。
+   ③ 列头改成"小号灰字 + 状态点"，不用 600 黑体 —— 密排风格的列头是标签，不是标题。
    颜色只留在列头那个圆点上（7 列各一块色会像调色盘）。 */
 .kb-col { --kb-c: var(--st-other); flex: 0 0 300px; border-radius: 10px; padding: 8px 8px 10px;
           background: var(--well); }
 .kb-col + .kb-col { margin-left: 0; }
 .kb-col-head { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500;
                color: var(--dim); margin-bottom: 8px; padding: 0 2px; }
-/* 状态点：Linear 的点是**实心小圆、不带光晕**。原来那圈 3px 淡色外圈（box-shadow）
+/* 状态点：密排风格的点是**实心小圆、不带光晕**。原来那圈 3px 淡色外圈（box-shadow）
    会把 7 个点都放大成"发光豆"，一排看过去比列头字还抢眼。 */
 .kb-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--kb-c); flex: 0 0 auto; }
 /* 每列一个色。相邻两列尽量换色系（蓝 → 黄 → 橙 → 红 → 绿），
@@ -2714,10 +2848,10 @@ button.att-add:hover { color: var(--text); border: 0; background: var(--panel); 
 .kb-col.done      { --kb-c: var(--st-done); }      /* 已完成：绿 */
 .kb-col.cancelled { --kb-c: var(--st-cancelled); } /* 已取消：灰，决定不做留个痕 */
 .kb-col.other     { --kb-c: var(--st-other); }     /* 其他：灰，杂项 */
-/* 列头计数：Linear 里就是一个灰数字，不加胶囊底 —— 列头已经够轻了，再加个底会浮出来 */
+/* 列头计数：密排风格里就是一个灰数字，不加胶囊底 —— 列头已经够轻了，再加个底会浮出来 */
 .kb-count { color: var(--dim); font-size: 11px; line-height: 16px; padding: 0; }
 .kb-hint { color: var(--dim); font-size: 11px; margin-left: auto; }
-/* 列头的「＋」：在那一列建任务（参照 Multica）
+/* 列头的「＋」：在那一列建任务（参照同类产品）
    图标要**几何居中**：定宽定高 + inline-flex 居中，别靠 line-height/字体基线去凑
    （全角「＋」的基线偏上，只给 line-height 会看着往左上飘 —— 用户 2026-10-14 实报） */
 .kb-add { margin-left: auto; border: 1px solid transparent; background: transparent; color: var(--dim);
@@ -2729,7 +2863,7 @@ button.att-add:hover { color: var(--text); border: 0; background: var(--panel); 
 .kb-col.drop-hot { background: color-mix(in srgb, var(--accent) 10%, var(--well));
                    box-shadow: inset 0 0 0 1.5px var(--accent); }
 .kb-card.dragging { opacity: .45; }
-/* 手工建的卡：**左边一条 2px 竖条**在 Linear 里就是"这是人加的"的标记，保留 */
+/* 手工建的卡：**左边一条 2px 竖条**在密排风格里就是"这是人加的"的标记，保留 */
 .kb-card.manual { border-left: 2px solid var(--accent); }
 .kb-tag.manual { color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, transparent); }
 .kb-del { margin-left: 4px; border: none; background: none; color: var(--dim); cursor: pointer; font-size: 13px; }
@@ -2760,7 +2894,7 @@ button.att-add:hover { color: var(--text); border: 0; background: var(--panel); 
 #pluginView.kb-page .kb-side { overflow-y: auto; }
 /* 空列：不画虚线框（7 列各一个虚线框就是 7 个"破洞"），只留一行灰字 */
 .kb-empty { color: var(--dim); font-size: 12px; text-align: center; padding: 14px 0; margin-top: 2px; }
-/* 卡片：**平的**。Linear 的卡片是"纸片贴在凹槽里"——
+/* 卡片：**平的**。密排风格的卡片是"纸片贴在凹槽里"——
    白/深灰实底 + 1px 边线，没有投影、悬停也不上浮。
    原来悬停时 translateY(-1px) + 阴影放大，在 7 列并排的看板上会让整排"呼吸"，很吵。 */
 .kb-card { background: var(--panel); border: 1px solid var(--line); border-radius: 7px;
@@ -2768,7 +2902,7 @@ button.att-add:hover { color: var(--text); border: 0; background: var(--panel); 
            transition: border-color .12s ease; }
 .kb-card:hover { border-color: color-mix(in srgb, var(--dim) 55%, transparent); }
 .kb-card-top { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; }
-/* 标签：Linear 的标签是**小方角 + 极淡底**，不是胶囊。
+/* 标签：密排风格的标签是**小方角 + 极淡底**，不是胶囊。
    淡底浓度 9%（不是 12%）：12% 在深色下够清楚但**饱和太重** —— 卡片上一枚亮绿标签会跳出来，
    比标题还显眼。9% 时白/深两边对比仍 ≥ 4.71（实测最低 accent 深色 4.71），观感却收住了。
    胶囊（border-radius: 20px）在磁贴/气泡那族里是对的，放到列表和卡片上就显得圆滚滚。 */
@@ -2815,7 +2949,7 @@ button.att-add:hover { color: var(--text); border: 0; background: var(--panel); 
 .kb-proj-flags i.bad { color: var(--bad); }
 
 /*
- * 看板的「筛选」（2026-10-15，形状参照 Linear 那张：头上一枚按钮 + 弹出的多选层）。
+ * 看板的「筛选」（2026-10-15，形状参照同类产品的看板筛选：头上一枚按钮 + 弹出的多选层）。
  * 两块看板共用。弹层**绝对定位挂在按钮下面**：`.detail-head` 是 sticky + z-index:2，
  * 弹层跟着它一起盖在内容上，页头没有 overflow，所以正常高度切不到它。
  * 但 `#pluginView.kb-page.shown` 是 overflow:hidden 且页头不可滚 —— 窗口很矮时
@@ -2938,7 +3072,7 @@ button.att-add:hover { color: var(--text); border: 0; background: var(--panel); 
 .nc-say .nc-send.stopping:hover { background: var(--accent); }
 .nc-say .nc-send.stopping svg { fill: #ffffff; }   /* 图标，不跟主题走 */
 
-/* ===== 任务卡详情页（2026-10-18 二改：照 Multica 的任务详情，简洁一些） =====
+/* ===== 任务卡详情页（2026-10-18 二改：参照同类产品的任务详情，简洁一些） =====
    形态：主区从上到下就是这件事本身 —— 大标题（点了就编辑）→ 描述 → 讨论；
    属性全收右栏三段（属性 / Pull Request / 详情），页头不摆 pill 和大按钮。 */
 /* 底部内边距给足（22）：讨论区滚到底时，最后一行字别贴着那条横线
@@ -3003,12 +3137,12 @@ button.att-add:hover { color: var(--text); border: 0; background: var(--panel); 
 .tc-pr-add { display: flex; gap: 6px; }
 .tc-pr-add input { flex: 1; min-width: 0; }
 
-/* 页头那颗删除：平时不吭声（灰字），悬停才示警（照 Multica：页面里没有大红按钮） */
+/* 页头那颗删除：平时不吭声（灰字），悬停才示警（参照同类产品：页面里没有大红按钮） */
 .detail-head .tc-del { background: none; border: 0; cursor: pointer; color: var(--dim);
                        font-size: 12.5px; padding: 4px 8px; border-radius: 8px; }
 .detail-head .tc-del:hover { color: var(--bad); background: color-mix(in srgb, var(--bad) 10%, transparent); }
 
-/* 讨论区：照 Multica 不套卡片框 —— 主区从上到下就是一条线性的东西，
+/* 讨论区：参照同类产品不套卡片框 —— 主区从上到下就是一条线性的东西，
    一圈一圈的框会把"标题-描述-讨论"的层次压没。
    分隔线放在**区块顶上**（description 与讨论之间），"讨论"两个字压在线的下面。 */
 .tc-main .tc-comments.group { border: 0; background: none; border-radius: 0; padding: 14px 0 0;
@@ -3022,7 +3156,7 @@ button.att-add:hover { color: var(--text); border: 0; background: var(--panel); 
 .tc-topic.is-replying { background: color-mix(in srgb, var(--accent) 7%, transparent);
                         border-radius: 8px; padding: 6px 8px; margin: 0 -8px; }
 /* "还没展开"的那条议题：原来是**虚线框**（iOS 那种"这里可以填"的暗示）。
-   Linear 没有虚线框 —— 虚线在 Linear 里只表示"拖放目标"，不表示占位。
+   密排风格没有虚线框 —— 虚线在密排风格里只表示"拖放目标"，不表示占位。
    改成浅实线 + --side 淡底：它像一条"还没成型"的条目，不像一个空槽。 */
 .tc-topic.pre { border: 1px solid var(--line); border-radius: 6px; background: var(--side);
                 padding: 10px 12px 8px; }
@@ -3143,7 +3277,7 @@ details.tc-replies[open] > .tc-replies-toggle .tc-replies-unfold { display: inli
                    border: 0; border-radius: 50%; background: var(--chip); color: var(--dim);
                    cursor: pointer; font-size: 11px; }
 .tc-reply-undock:hover { color: var(--bad); background: color-mix(in srgb, var(--bad) 12%, transparent); }
-/* 输入框停靠期间，底部这颗虚线幽灵按钮就是"开新话题"的回路（Linear 的 new-issue 行那个味道） */
+/* 输入框停靠期间，底部这颗虚线幽灵按钮就是"开新话题"的回路（开新条目那一行那个味道） */
 .tc-new-topic { width: 100%; text-align: left; font-size: 12.5px; color: var(--dim);
                 padding: 10px 12px; border: 1px dashed var(--line); border-radius: 8px;
                 background: none; cursor: pointer; }

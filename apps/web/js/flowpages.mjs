@@ -116,7 +116,7 @@ export async function doStartFlow() {
 
 /**
  * 左栏顶上的标题：`setListTitle('工作台')` 写名字，
- * `setListTitle([{label:'工作台',to:'workbench'}, {label:'流程编排'}])` 写面包屑。
+ * `setListTitle([{label:'工作台',to:'workbench'}, {label:'工作流'}])` 写面包屑。
  *
  * 为什么做成两个入口而不是让调用处拼 HTML（2026-10-19 用户截图：「改成面包屑」）：
  *   · 左栏 `#listTitle` 原来是个 `<b>`，十几处直接写 `textContent`；
@@ -464,7 +464,7 @@ export function runHTML(v) {
    */
   const inlineActs = [];
   if (v.status === '进行中' && !blocked) {
-    // 「派活，开始这一步」这颗按钮去掉了（2026-10-17 对齐 Multica：待办即执行）——
+    // 「派活，开始这一步」这颗按钮去掉了（2026-10-17 对齐同类产品：待办即执行）——
     // 停在待办的步骤会被调度节拍自动派出（他正忙就 30 秒后再试），人没什么可点的。
     // 留一行说明代替按钮：不解释的话，"这步怎么不动"又得靠猜。
     if (v.taskStatus === '待办') inlineActs.push('<span class="dim">待办 —— 马上自动派活，不用点任何东西（他正忙就 30 秒内再试）</span>');
@@ -516,7 +516,7 @@ export function runHTML(v) {
   const orphan =
     v.status === '进行中' && !curNode
       ? `「${curNodeName}」这一步在流程模板里已经没有了 —— 指派也没用。` +
-        '把状态改成「已完成」可以直接收尾（流程完成）；要接着往下走，就去「流程编排」把它补回模板。'
+        '把状态改成「已完成」可以直接收尾（流程完成）；要接着往下走，就去「工作流」把它补回模板。'
       : '';
   // 终态：它是"到此结束"的结论，属于时间轴尾部，不属于开篇。
   const endedHint =
@@ -1340,8 +1340,8 @@ export async function openDesigner(templateId = null) {
     clearDraft(); // 和模板一样 → 留着没意义，还会下次误报
   }
 
-  // 左栏顶上：工作台 › 流程编排（当前流程名在页头那个输入框里，不再往面包屑里塞第三段）
-  setListTitle([{ label: '工作台', to: 'workbench' }, { label: '流程编排' }]);
+  // 左栏顶上：工作台 › 工作流（当前流程名在页头那个输入框里，不再往面包屑里塞第三段）
+  setListTitle([{ label: '工作台', to: 'workbench' }, { label: '工作流' }]);
   renderFlowList();
   paintDesigner();
 }

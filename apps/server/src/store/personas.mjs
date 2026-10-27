@@ -6,7 +6,7 @@ import { activeRun } from './runs.mjs';
 import { dissolveGroup, listMembers, purgeDissolvedGroup } from './groups.mjs';
 
 /**
- * 并发数的**默认值 / 最高值**（2026-10-24 用户定，对标 Multica 的"每个虚拟员工可配并行数"）：
+ * 并发数的**默认值 / 最高值**（2026-10-24 用户定，参照同类产品的"每个虚拟员工可配并行数"）：
  * 默认 6、最高 20。派活闸（dispatch.ensureDispatchable）和保存钳位都用这两个常量，
  * 别处再写一个 6/20 就是第二份真相。
  */

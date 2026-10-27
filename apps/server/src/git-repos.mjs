@@ -458,7 +458,18 @@ export async function syncRepo(id) {
   const row = store.getGitRepo(id);
   if (!row) throw new Error('仓库不在清单里');
   const r = await run('git', [...gitAuthArgs(), 'pull', '--ff-only'], { cwd: row.localPath, env: GIT_ENV });
-  if (r.code !== 0) throw new Error(`拉取没成功：${r.out.split('\n').slice(-4).join(' ')}`);
+  if (r.code !== 0) {
+    const out = String(r.out ?? '');
+    // 两种最常见的失败先翻译成人话（2026-10-27，分支弹窗「更新项目」实测撞上）：
+    // 新建的本地分支还没推过、没有 upstream；本地和远端各有各的提交。
+    if (/no tracking information/i.test(out)) {
+      throw new Error('当前分支还没推上去过、没有上游 —— 先推一次（「推送」或建 PR），之后就能拉了');
+    }
+    if (/not possible to fast-forward|divergent/i.test(out)) {
+      throw new Error('本地和远端分叉了（各有各的提交），拉不动 —— 先把你的提交推出去，或去那个目录把历史理一下');
+    }
+    throw new Error(`拉取没成功：${out.split('\n').slice(-4).join(' ')}`);
+  }
   return store.touchGitRepoSync(row.id);
 }
 
@@ -566,6 +577,239 @@ export function removeRepo(id) {
   if (!row) throw new Error('仓库不在清单里');
   store.deleteGitRepo(id);
   return { removed: row, keptPath: row.localPath };
+}
+
+/* ---------------------------------------------------------------- 分支 / 改动 / 历史（2026-10-27） */
+
+/**
+ * **IDE 式一站式**的本地 git 操作：分支弹窗（列分支/切分支/拉取更新）、
+ * 改动管理（单文件 diff / 单文件丢弃 / 普通提交 / 推送）、最近提交历史。
+ *
+ * 与建 PR 那套的关系：凭据闸（`findSecretPaths`）、提交身份（`commitIdentityArgs`）、
+ * 推送翻译（拒收/没权限）**同一套**，不另写一份 —— 两处话说得不一样，人才会疑惑哪边是真的。
+ * 全部**只读本地 git**（除了 fetch/push 要联网），界面上点下去就该有反应。
+ */
+
+/**
+ * 列出本地分支、远程跟踪分支、最近切过的分支、标签（不联网；分支弹窗点开才调）。
+ * 「最近」从 HEAD reflog 的 checkout 记录派生（IDE 分支弹窗同款），只留本地分支、去重、限 6 条；
+ * 标签按创建时间倒序、限 30 条（清单是给人挑的，不是全量导出）。
+ */
+export async function listBranches(row) {
+  const cwd = row.localPath;
+  if (!isGitRepo(cwd)) throw new Error(`本地目录不是 git 仓库（没有 .git）：${cwd}`);
+  const headRef = await gitIn(cwd, ['symbolic-ref', '--short', '-q', 'HEAD']);
+  const local = await gitIn(cwd, ['for-each-ref', 'refs/heads', '--format=%(refname:short)']);
+  if (local.code !== 0) throw new Error(`读本地分支失败：${local.out.split('\n').slice(-3).join(' ')}`);
+  const remote = await gitIn(cwd, ['for-each-ref', 'refs/remotes', '--format=%(refname:short)']);
+  const tags = await gitIn(cwd, ['for-each-ref', 'refs/tags', '--format=%(refname:short)', '--sort=-creatordate']);
+  const current = headRef.code === 0 ? headRef.out : null;
+  const localNames = local.out.split('\n').map((s) => s.trim()).filter(Boolean);
+  const rl = await gitIn(cwd, ['reflog', '--format=%gs', '-n', '80']);
+  const recent = [];
+  if (rl.code === 0) {
+    for (const line of rl.out.split('\n')) {
+      const m = /^checkout: moving from .+ to (.+)$/.exec(String(line).trim());
+      if (!m) continue;
+      const to = m[1];
+      if (to === current || recent.includes(to) || !localNames.includes(to)) continue;
+      recent.push(to);
+      if (recent.length >= 6) break;
+    }
+  }
+  return {
+    current,
+    local: localNames,
+    // `origin/HEAD` 是"默认分支指向哪"的别名，不是真分支 —— `refname:short` 下它输出裸
+    // `origin`（不带 /HEAD 后缀），所以还要排除不含 `/` 的条目（远程分支短名必有 远程名/分支）
+    remote: remote.code === 0
+      ? remote.out.split('\n').map((s) => s.trim()).filter((s) => s && s.includes('/') && !/\/HEAD$/.test(s))
+      : [],
+    recent,
+    tags: tags.code === 0 ? tags.out.split('\n').map((s) => s.trim()).filter(Boolean).slice(0, 30) : [],
+  };
+}
+
+/**
+ * 新建分支并切过去（IDE 的「新建分支」）：从**当前 HEAD**拉出。
+ * 故意**不做脏工作区闸**：`checkout -b` 不动任何文件，把没提交的改动顺手带到新分支上
+ * 正是"干到一半想开新线"的用法（IDE 也这样）；真正会动文件的 checkout（切已有分支）
+ * 才在 checkoutBranch 里拦。detached HEAD 也能建（从当前那个 commit 拉出，是 recovery 正路）。
+ */
+export async function createBranch(row, name) {
+  const cwd = row.localPath;
+  if (!isGitRepo(cwd)) throw new Error(`本地目录不是 git 仓库（没有 .git）：${cwd}`);
+  const b = assertBranchName(name);
+  const co = await gitIn(cwd, ['checkout', '-b', b], { timeoutMs: GIT_FAST_MS });
+  if (co.code !== 0) {
+    const out = String(co.out ?? '');
+    if (/already exists/i.test(out)) throw new Error(`本地已经有分支 ${b} 了 —— 换个名字，或直接在清单里切过去`);
+    throw new Error(`建分支没成：${out.split('\n').slice(-3).join(' ')}`);
+  }
+  return { created: b };
+}
+
+/**
+ * 切分支（分支弹窗点某一条；标签也走这里 —— `git checkout <tag>` 会进游离 HEAD，
+ * 由界面的确认框提前说清，提交/推送在 detached 下各自有明确报错）。
+ *
+ * 护栏与 `settleAfterMerge` 同一套：脏工作区**不动**、原话带回；git 失败原话带回。
+ * 远程分支（`origin/x`）剥掉前缀交给裸 `git checkout` —— git 自己会 dwim 出本地跟踪分支；
+ * 本地已有同名分支时就是普通切换，两种情况一条命令都覆盖。
+ */
+export async function checkoutBranch(row, name) {
+  const cwd = row.localPath;
+  if (!isGitRepo(cwd)) throw new Error(`本地目录不是 git 仓库（没有 .git）：${cwd}`);
+  const target = assertBranchName(String(name ?? '').trim().replace(/^origin\//, ''));
+  const st = await workState(row);
+  if (st.branch === target) return { switched: false, branch: target, note: `已经在这个分支上了` };
+  if (st.dirtyCount) {
+    throw new Error(`本地还有 ${st.dirtyCount} 个未提交改动，没替你切分支（先提交或丢弃，再切）`);
+  }
+  const co = await gitIn(cwd, ['checkout', target], { timeoutMs: GIT_FAST_MS });
+  if (co.code !== 0) throw new Error(`切到 ${target} 没成：${co.out.split('\n').slice(-3).join(' ')}`);
+  return { switched: true, branch: target };
+}
+
+/**
+ * 普通提交（**不建 PR、不推送**）：把工作区全部改动收到当前分支上。
+ * 与建 PR 共用凭据闸 —— 界面上"就是要提交"和建 PR 弹窗里那颗是一个意思。
+ */
+export async function commitAll(row, { message, allowSecrets = false, paths = null } = {}) {
+  const msg = String(message ?? '').trim();
+  if (!msg) throw new Error('提交说明是空的 —— 一句话说清这次改了什么');
+  const st = await workState(row);
+  if (st.detached) throw new Error('当前不在任何分支上（detached HEAD）—— 先在那个目录 checkout 回一个分支再提交');
+  if (!st.dirtyCount) throw new Error('工作区是干净的，没有可提交的改动');
+  /* 勾选提交（2026-10-27，用户："加选择框允许选择提交"）：paths 给了就只收勾选的，
+     模式与 commitAndPush 同款 —— 对不上（期间文件变了）直接拒，别静默改提交内容。 */
+  const subset = Array.isArray(paths) && paths.length > 0;
+  const picked = subset ? st.dirty.filter((f) => paths.includes(f.path)) : st.dirty;
+  if (subset && picked.length !== paths.length) {
+    throw new Error('选中的文件和工作区对不上了（期间有人动过）—— 重新看一次改动再提交');
+  }
+  const secrets = findSecretPaths(picked.map((f) => f.path));
+  if (secrets.length && !allowSecrets) {
+    throw new Error(`改动里有看着像凭据的文件：${secrets.slice(0, 4).join('、')}${secrets.length > 4 ? ` 等 ${secrets.length} 个` : ''} —— 一旦提交就进历史了。确认可以提交，再带上"就是要提交"`);
+  }
+  const idArgs = await commitIdentityArgs(row.localPath);
+  const addTargets = addTargetsOf(picked);
+  // 全是"已暂存的删除"时 targets 为空：整提（非子集）补一把 -A 兜底；子集时什么都不 add
+  //（勾的都在 index 里了，再 -A 会把没勾的也带上）
+  const addArgs = addTargets.length ? ['add', '-A', '--', ...addTargets] : subset ? null : ['add', '-A'];
+  if (addArgs) {
+    const add = await gitIn(row.localPath, addArgs, { timeoutMs: GIT_FAST_MS });
+    if (add.code !== 0) throw new Error(`git add 没成：${add.out.split('\n').slice(-3).join(' ')}`);
+  }
+  const commit = await gitIn(row.localPath, [...idArgs, 'commit', '-m', msg]);
+  if (commit.code !== 0) throw new Error(`提交没成：${commit.out.split('\n').slice(-4).join(' ')}`);
+  const sha = await gitIn(row.localPath, ['rev-parse', 'HEAD']);
+  return { committed: { sha: sha.code === 0 ? sha.out : null, subject: msg }, branch: st.branch, files: picked.length };
+}
+
+/**
+ * 推送当前分支（普通 push，**绝不强推**）。
+ * 与 commitAndPush 只有一处不同：建 PR 只往新分支推，这里推的就是人现在站的分支 ——
+ * 这是人自己的明确动作，平台不替他挑分支，也不拦"直接推 main"（单人仓库这是常态）。
+ */
+export async function pushCurrent(row) {
+  const st = await workState(row);
+  if (!st.hasRemote) throw new Error('这个目录没有 origin（手动接入的本地克隆要先把 origin 指回 GitHub）—— 没有 origin 就推不上去');
+  if (st.detached) throw new Error('当前不在任何分支上（detached HEAD）—— 先 checkout 回一个分支再推');
+  const push = await gitIn(row.localPath, [...gitAuthArgs(), 'push', '--set-upstream', 'origin', `refs/heads/${st.branch}:refs/heads/${st.branch}`], { timeoutMs: GIT_PUSH_MS });
+  if (push.code !== 0) {
+    const out = String(push.out ?? '');
+    if (/rejected|non-fast-forward/i.test(out)) {
+      throw new Error(`远端有本地没有的提交（推送被拒）—— 先点「同步」拉一次；分叉了同步不动就去那个目录理历史。平台**不会强推**。原始信息：${out.split('\n').slice(-3).join(' ')}`);
+    }
+    if (/Permission denied|403|Authentication failed|invalid credentials|Write access/i.test(out)) {
+      throw new Error(`推不上去：这个令牌对 ${row.fullName} 没有 Contents: write（或在 Repository access 里没选中它）。原始信息：${out.split('\n').slice(-3).join(' ')}`);
+    }
+    throw new Error(`推送失败：${out.split('\n').slice(-4).join(' ') || 'git 没给原因'}`);
+  }
+  return { pushed: st.branch };
+}
+
+/** `fetch --prune origin`：给分支弹窗的「拉取更新」用 —— 刷新远程分支清单，不动工作区 */
+export async function fetchRepo(row) {
+  if (!isGitRepo(row.localPath)) throw new Error(`本地目录不是 git 仓库（没有 .git）：${row.localPath}`);
+  const r = await gitIn(row.localPath, [...gitAuthArgs(), 'fetch', '--prune', 'origin'], { timeoutMs: GIT_PUSH_MS });
+  if (r.code !== 0) throw new Error(`拉取没成功：${r.out.split('\n').slice(-3).join(' ')}`);
+  return { fetched: true };
+}
+
+/** HEAD 最近 N 条提交（不联网）。空仓库（一条提交都没有）不算错，回空清单 */
+export async function recentLog(row, limit = 50) {
+  const cwd = row.localPath;
+  if (!isGitRepo(cwd)) throw new Error(`本地目录不是 git 仓库（没有 .git）：${cwd}`);
+  const n = Math.max(1, Math.min(Number(limit) || 50, 200));
+  const log = await gitIn(cwd, ['log', `--max-count=${n}`, '--date=iso-local', '--pretty=format:%h%x09%an%x09%ad%x09%s']);
+  if (log.code !== 0) return { commits: [], note: log.out.split('\n').filter(Boolean).slice(-1)[0] ?? null };
+  const commits = log.out.split('\n').filter(Boolean).map((line) => {
+    const [sha, author, date, ...rest] = line.split('\t');
+    return { sha, author, date, subject: rest.join('\t') };
+  });
+  return { commits };
+}
+
+/**
+ * 丢弃指定文件的未提交改动（IDE 的 Rollback）。
+ *
+ * path 必须在**当下**的工作区清单里 —— 拿着旧清单来丢，要么文件刚被提交/丢弃过，
+ * 要么是乱传的路径，都拒。处置按 porcelain 的 X 列分派（Y 列只是工作区态，restore 全兜住）：
+ *   · `??` 未跟踪 → `git clean -f`（"丢弃"一个新文件 = 删掉它）；
+ *   · `A` 新增（已暂存、HEAD 里没有）→ `git rm -f`（index + 工作区一起清）；
+ *   · `R`/`C` 重命名/复制 → 新路径同上，旧路径 `checkout HEAD --` 恢复；
+ *   · 其余（M/D/T 或仅工作区态）→ `checkout HEAD --`（index 和工作区一起回到 HEAD）。
+ */
+export async function discardPaths(row, paths) {
+  const list = (Array.isArray(paths) ? paths : [paths]).map((p) => String(p ?? '').trim()).filter(Boolean);
+  if (!list.length) throw new Error('没有要丢弃的文件');
+  const st = await workState(row);
+  if (!st.dirtyCount) throw new Error('工作区是干净的，没有可丢弃的改动');
+  const known = new Map(st.dirty.map((f) => [f.path, f]));
+  const unknown = list.filter((p) => !known.has(p));
+  if (unknown.length) throw new Error(`这些文件不在当前改动清单里（可能刚被提交/丢弃过，刷新一下）：${unknown.slice(0, 3).join('、')}`);
+  const discarded = [];
+  for (const p of list) {
+    const f = known.get(p);
+    const xy = String(f.status ?? '');
+    const steps = [];
+    if (xy === '??') steps.push([['clean', '-f', '--', p]]);
+    else if (xy[0] === 'R' || xy[0] === 'C') {
+      steps.push([['rm', '-f', '-q', '--', p]], [['checkout', 'HEAD', '--', f.from]]);
+    } else if (xy[0] === 'A') steps.push([['rm', '-f', '-q', '--', p]]);
+    else steps.push([['checkout', 'HEAD', '--', p]]);
+    for (const [args] of steps) {
+      const r = await gitIn(row.localPath, args, { timeoutMs: GIT_FAST_MS });
+      if (r.code !== 0) throw new Error(`丢弃 ${p} 没成：${r.out.split('\n').slice(-2).join(' ')}`);
+    }
+    discarded.push(p);
+  }
+  return { discarded };
+}
+
+/**
+ * 单个未提交文件的 diff（人看的 unified diff，只读）。
+ *
+ * 统一用 `git diff HEAD`：把已暂存和未暂存合成"相对 HEAD"的一份，跟 IDE 的 Local Changes
+ * 一个口径 —— 分开看 staged/unstaged 对这个界面太细了。未跟踪的文件 diff HEAD 看不见，
+ * 先 `add -N`（intent-to-add，轻量登记、不算真暂存，提交时 `add -A` 照样收编）再看。
+ */
+export async function fileDiff(row, path) {
+  const p = String(path ?? '');
+  const st = await workState(row);
+  const f = st.dirty.find((x) => x.path === p || x.from === p);
+  if (!f) throw new Error('这个文件不在当前改动清单里（可能刚被提交/丢弃过，刷新一下）');
+  const xy = String(f.status ?? '');
+  if (xy === '??') {
+    const n = await gitIn(row.localPath, ['add', '-N', '--', f.path], { timeoutMs: GIT_FAST_MS });
+    if (n.code !== 0) throw new Error(`登记新文件没成：${n.out.split('\n').slice(-2).join(' ')}`);
+  }
+  const paths = f.from ? [f.path, f.from] : [f.path];
+  const d = await gitIn(row.localPath, ['diff', 'HEAD', '--no-color', '--', ...paths], { timeoutMs: GIT_FAST_MS });
+  if (d.code !== 0) throw new Error(`读 diff 没成：${d.out.split('\n').slice(-2).join(' ')}`);
+  return { path: f.path, status: xy, diff: d.out };
 }
 
 /* ---------------------------------------------------------------- agent 的环境 */
@@ -769,7 +1013,7 @@ export async function mergePull(repo, number, { commitTitle = null, mergeMethod 
  *   · 建/合是**外部可见且难收回**的动作，账要落在平台（卡上五个字段 + 流程实例），不能只留在会话里；
  *   · 零依赖：用已有的 `fetch` + `spawn git`，不引 octokit、不要求装 gh。
  *
- * 抄的是**交互**不是实现：收尾分支的"先确认 base、别默认强推、没测绿不结"来自
+ * 沿用其**交互**约定，实现全部自研：收尾分支的"先确认 base、别默认强推、没测绿不结"来自
  * obra/superpowers 的 `finishing-a-development-branch`（MIT）；PR 正文该带"改了什么 + 怎么验的"
  * 来自 create-pr-with-evidence 那条契约。
  */
