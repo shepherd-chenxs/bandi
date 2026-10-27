@@ -562,8 +562,11 @@ main { min-height: 0; }
 
 /* 主区的滚动容器都留出滚动条槽位（scrollbar-gutter: stable，2026-10-18 用户反馈）：
    内容一长一短时滚动条出现/消失，原来会把整块内容左右挤一下 —— 看着就是"页面抖动"。
-   把槽位常驻预留出来，滚不滚动宽度都不变。 */
-#detailView, #settingsView, #groupView, #placeholderView, #pluginView { scrollbar-gutter: stable; }
+   把槽位常驻预留出来，滚不滚动宽度都不变。
+   ⚠️ #pluginView 2026-10-27 摘出来（用户实报"导航条右边空一块"）：fixed-head 导航条的
+   负 margin 只能铺到 .detail-body 边缘，够不着 gutter —— 槽位常驻 = 条右边永远一条空。
+   插件系页面切页都是整页重画，滚动条出现/消失的 11px 位移只发生在切换瞬间，可接受。 */
+#detailView, #settingsView, #groupView, #placeholderView { scrollbar-gutter: stable; }
 #pluginView.shown { display: block; }
 #pluginView .detail-body { max-width: 1400px; }
 /* ⚠️ 新加视图**必须**在这里登记：没有 height:100%，高内容会把整页撑开
@@ -717,8 +720,48 @@ main { min-height: 0; }
 .plg-detail-head { display: flex; align-items: center; gap: 10px; margin: 0 0 14px; flex-wrap: wrap; }
 .plg-detail-head b { font-size: var(--t-page); font-weight: var(--w-title); }
 .plg-detail-head .dim { font-size: 12px; }
-/* 动作按钮（测试/编辑/删除）贴标题行右侧 */
-.plg-detail-head .head-actions { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+/* 主从布局详情的固定导航条（2026-10-27，用户红框："顶部做成固定的导航栏，参照代码托管的右边导航"）：
+   代码托管（skills.mjs）和远程连接等所有 renderSplitDetail 详情共用 —— sticky 吸顶 +
+   定高 50px + 底部分隔线 + --side 底色。负 margin 反吃 .detail-body 的 20/24 内边距铺满整行；
+   副标题/路径长时省略号，不许换行破导航。
+   ⚠️ 项目详情的宿主是 `.detail-head`（headRow 同款）不是 `.plg-detail-head` —— 两个都要认，
+   漏了哪个哪页就四周漏缝（2026-10-27 用户实报"左、上、右有间隙"就是这个漏的）。 */
+.plg-detail-head.fixed-head, .detail-head.fixed-head {
+  position: sticky; top: 0; z-index: 5; height: 50px; flex-wrap: nowrap;
+  margin: -20px -24px 14px; padding: 0 24px;
+  background: var(--side); border-bottom: 1px solid var(--line); }
+/* 导航条要**盖在滚动条上层**（2026-10-27 用户："导航栏放在滚动条上层"）。
+   根因：fixed-head 在滚动容器内部，容器自己的滚动条会沿着它右边一路画到顶 —— 悬停出
+   thumb 时直接在导航条右端画一条竖杠，看着像把导航条切掉一块；#pluginView 又不预留
+   gutter（切页要避免 11px 抖动），滚动条一出现还会把内容挤窄 11px。
+   修法：在**视口右上角**固定一块 20×50 的"盖片"（导航条同色 + 1px 底部分隔线），
+   只在"当前显示的是带 fixed-head 的 #pluginView 页"时出现：
+   · position: fixed（视口坐标）→ 一定画在容器滚动条**之上**（滚动条只在本容器层里画）；
+     pointer-events: none 不挡滚动条拖动；
+   · 宽 20px 盖住 11px 滚动条槽位留点余量；压在导航条自己身上时同色，看不出来；
+   · 高 50px 必须跟上面 `.fixed-head` 的定高一致（两处要一起改）；
+   · 用 :has 认"当前页有固定导航条"——别的页面、以及隐藏着的旧页面 DOM 都不受影响；
+     老 WebView 不认 :has 时只是不生效，不会坏。 */
+body:has(#pluginView.shown .fixed-head)::after {
+  content: '';
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: 20px;
+  height: 50px;
+  background: var(--side);
+  border-bottom: 1px solid var(--line);
+  pointer-events: none;
+  z-index: 60;
+}
+.fixed-head .dim { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 项目详情（projects.mjs）把目录 copy-pill 收进固定导航条：路径长时要能缩成省略号，
+   不许把 50px 的条撑破（pill 本体是 inline 的，得给它块级收缩行为） */
+.fixed-head .copy-pill { min-width: 0; flex: 0 1 auto; overflow: hidden;
+                         text-overflow: ellipsis; white-space: nowrap; }
+/* 动作按钮（测试/编辑/删除）贴标题行右侧 —— renderSplitDetail 和项目详情（.detail-head）两个宿主共用 */
+.plg-detail-head .head-actions, .detail-head.fixed-head .head-actions {
+  margin-left: auto; display: flex; gap: 8px; align-items: center; }
 
 /* 详情页签的内容**整体装进一张卡**（2026-10-26 用户：「外面加一个卡片，不是拆成很多卡片」）：
    卡里还是原来的一行一条（`.info-row`），只是外面有了边框和底色这块"面"，
@@ -1337,7 +1380,8 @@ button.pill.copy-pill[aria-pressed='true'] { color: var(--ok); border-color: var
 .save-state.wait { color: var(--warn); }
 .save-state.ok { color: var(--ok); }
 .save-state.bad { color: var(--bad); }
-/* 项目页那颗回执：`.hero-actions` 是 `margin-left:auto` 顶到右沿的 flex，
+/* 项目页那颗回执：所在的动作区（原 .hero-actions，2026-10-27 起是固定导航条的 .head-actions）
+   都是 `margin-left:auto` 顶到右沿的 flex，
    状态字一出现就会**把「任务」「删除」往左推**（四个字能推 40px，页面会"抖一下"）。
    所以让它撑 0 宽、往左溢出，并且右对齐 —— 字从按钮左边往回长，永远挨着按钮、也永远不被截。 */
 .pj-save { width: 0; margin-right: 0; text-align: right; justify-self: end;
@@ -1695,6 +1739,16 @@ input.locked:focus { outline: none; border-color: var(--line); }
 .gr-side-btn-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 连接弹窗：动态 dialog，行式表单（标签左、控件右） */
 .gr-conn-dlg { width: 600px; max-width: 92vw; }
+/* 仓库设置弹窗（2026-10-27，用户："仓库设置区太占地方 → 右上角设置按钮点开"）：
+   窄一点的纯信息弹窗，行沿用详情页的 .info-row（一行一条、上下细线）。 */
+.gr-set-dlg { width: 460px; max-width: 92vw; }
+.gr-set-body { padding: 4px 0 2px; }
+.gr-set-dlg .info-row > b { text-align: right; min-width: 0; }
+.gr-set-path { font-family: ui-monospace, monospace; font-size: 11.5px;
+               overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 导航条上的齿轮钮：图标本身 15px，别让 .mini 的写法把它挤小 */
+.gr-set-btn { display: inline-flex; align-items: center; justify-content: center; }
+.gr-set-btn svg { width: 15px; height: 15px; }
 .gr-conn-dlg .gr-dlg-body { display: flex; flex-direction: column; gap: 12px; padding: 14px 0 4px; }
 .gr-dlg-row { display: flex; align-items: center; gap: 10px; }
 .gr-dlg-row input { flex: 1; min-width: 0; }
@@ -1776,7 +1830,9 @@ input.locked:focus { outline: none; border-color: var(--line); }
 .gr-chg-split { display: flex; align-items: stretch; gap: 0; height: 460px; }
 .gr-chg-split .gr-chg-list { flex: 1; min-width: 0; overflow-y: auto; }
 .gr-commit-side { flex: 0 0 320px; display: flex; flex-direction: column; gap: 10px;
-                  padding: 12px 0 12px 14px; margin-left: 12px; border-left: 1px solid var(--line); }
+                  padding: 12px 0 12px 14px; margin-left: 3px; border-left: 1px solid var(--line); }
+                  /* margin-left 12→3（2026-10-27 用户："滚动条跟右边的间隙减小"）：
+                     左栏滚动条槽已占住列表右缘，分隔线再退 12px 就是一段死空 —— 贴近它。 */
 .gr-commit-side textarea { width: 100%; min-height: 88px; resize: vertical; }
 .gr-commit-side .primary { align-self: flex-end; padding: 0 22px; }
 /* 行右缩进（2026-10-27 二调：用户"折叠区的条目再往右缩进"）：文件行比组标题深两级 ——
@@ -1794,8 +1850,19 @@ input.locked:focus { outline: none; border-color: var(--line); }
 .gr-chg-label { font-size: 12.5px; font-weight: 600; color: var(--text); }
 /* 选择框（2026-10-27，用户："加选择框允许选择提交"）：行 + 组头三态全选。
    全局 input 是 width:100% 的表单规格，这里必须压回小方块。 */
-.gr-chg-sel, .gr-chg-all { flex: 0 0 auto; width: 14px; height: 14px; margin: 0; padding: 0;
-                           accent-color: var(--accent); cursor: pointer; }
+/* 选择框（2026-10-27 用户："选择框去掉蓝色背景"）：accent-color 的原生勾选框选中是一块
+   蓝底，跟提交卡的素净版式不搭 —— 换自绘：描边空框 + 深色对勾（勾选）/ 短横（半选），
+   亮暗主题都走 --text/--dim/--panel，不再依赖系统蓝。 */
+.gr-chg-sel, .gr-chg-all { appearance: none; -webkit-appearance: none;
+                           flex: 0 0 auto; width: 14px; height: 14px; margin: 0; padding: 0;
+                           border: 1px solid var(--line); border-radius: 3.5px; background: var(--panel);
+                           cursor: pointer; display: inline-grid; place-items: center; vertical-align: middle; }
+.gr-chg-sel:hover, .gr-chg-all:hover { border-color: var(--dim); }
+.gr-chg-sel:checked::after, .gr-chg-all:checked::after {
+  content: ''; width: 8px; height: 8px; background: var(--text);
+  clip-path: polygon(14% 44%, 0 58%, 40% 98%, 100% 14%, 86% 0, 39% 70%); }
+.gr-chg-sel:indeterminate::after, .gr-chg-all:indeterminate::after {
+  content: ''; width: 8px; height: 2px; background: var(--dim); }
 /* 折叠按钮图标：裸 chevron —— 默认朝下（展开），折叠时转成朝右。 */
 .gr-chev { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
            width: 12px; height: 12px; color: var(--dim); transition: transform .15s; }
@@ -1812,6 +1879,8 @@ input.locked:focus { outline: none; border-color: var(--line); }
                overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 只读 diff：+/− 行与 @@ 行各一色（文本色，不铺底 —— 铺底要成对 token，第一版从简） */
 .gr-diff { border-top: 1px dashed var(--line); }
+/* diff 预览随文件行缩进（2026-10-27，用户："这个向右缩进"）：左对齐文件行 52px，右侧留出分隔线距离。 */
+.gr-chg-split .gr-diff { margin: 0 12px 6px 52px; }
 .gr-diff-pre { margin: 0; padding: 8px 12px; max-height: 320px; overflow: auto;
                background: var(--side); font-family: ui-monospace, monospace; font-size: 11.5px;
                line-height: 1.55; white-space: pre; }
@@ -1820,6 +1889,8 @@ input.locked:focus { outline: none; border-color: var(--line); }
 .gr-diff-pre .hunk { color: var(--accent); }
 .gr-diff-pre .meta { color: var(--dim); }
 /* 历史卡：sha 等宽、主题吃满、作者/时间靠右降灰 */
+/* 历史卡固定高度（2026-10-27，用户："历史卡片固定高度"）：提交多了卡内滚，不再撑长整页。 */
+#grLog { height: 380px; overflow-y: auto; }
 .gr-log-row { display: flex; align-items: baseline; gap: 10px; padding: 6px 12px; min-width: 0; }
 .gr-log-row + .gr-log-row { border-top: 1px solid var(--line); }
 .gr-log-sha { flex: 0 0 auto; font-family: ui-monospace, monospace; font-size: 11.5px; color: var(--accent); }
