@@ -330,6 +330,27 @@ try {
   );
   check('null / undefined 容错 → none', sc(null).state === 'none' && sc(undefined).state === 'none');
 
+  console.log('\n⑧ push 失败翻译（规则集 / 保护分支 → 说"走 PR"，而不是"先同步"）');
+  const tpf = git.translatePushFailure;
+  const protOut = [
+    'remote: ',
+    'remote: - Changes must be made through a pull request.',
+    'remote: - Required status check "gate" is expected.',
+    'To https://github.com/shepherd-chenxs/bandi.git',
+    ' ! [remote rejected] main -> main (push declined due to repository rule violations)',
+    'error: failed to push some refs to https://github.com/shepherd-chenxs/bandi.git',
+  ].join('\n');
+  const protMsg = tpf(protOut, { branch: 'main', base: 'main' });
+  check('规则集拒推 → 说"有保护规则、走 PR"（不再叫人去同步）', /保护规则/.test(protMsg) && /PR/.test(protMsg) && !/先点「同步」/.test(protMsg), protMsg.slice(0, 140));
+  check('把 remote: 里的规则原话带上（PR / gate）', /pull request/i.test(protMsg) && /required status check/i.test(protMsg), protMsg.slice(0, 220));
+  check('base 分支被拒时明确"切一条新分支"', /新分支/.test(protMsg), protMsg.slice(0, 220));
+  const ffMsg = tpf(' ! [rejected] main -> main (non-fast-forward)\nerror: failed to push some refs', { branch: 'main' });
+  check('普通非快进仍然说"先同步"', /先点「同步」/.test(ffMsg), ffMsg.slice(0, 100));
+  const renameMsg = tpf(' ! [rejected] bandi/x -> bandi/x (non-fast-forward)', { branch: 'bandi/x', rejectedHint: 'rename' });
+  check('建 PR 的新分支撞名 → 说"换个分支名、不强推"', /换一个分支名/.test(renameMsg) && /强推/.test(renameMsg), renameMsg.slice(0, 100));
+  const permMsg = tpf('remote: Permission denied\nfatal: unable to access', { branch: 'x' });
+  check('权限不够 → 指向 Contents: write', /Contents: write/.test(permMsg), permMsg.slice(0, 100));
+
 } finally {
   child.kill();
   await new Promise((r) => setTimeout(r, 300));
