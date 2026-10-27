@@ -370,6 +370,14 @@ try {
   const up2 = await git.workState(upRow);
   check('再提交一个 → unpushed=1（界面："有 1 个提交还没推送"）', up2.unpushed === 1, String(up2.unpushed));
   check('「领先 base」与「未推送」是两个口径（这里都是 1）', up2.ahead === 1, String(up2.ahead));
+  // 分支下拉每行的「↑1 + origin/main」（2026-10-27，对齐 IDEA）—— 一个 for-each-ref 拿全
+  const lb = await git.listBranches(upRow);
+  check(
+    'listBranches 带每个本地分支的上游与领先数（↑1 / origin/main）',
+    lb.localUpstreams?.main?.upstream === 'origin/main' && lb.localUpstreams.main.ahead === 1,
+    JSON.stringify(lb.localUpstreams?.main),
+  );
+  check('「最近」以当前分支打头（IDEA 同款）', lb.recent?.[0] === 'main', JSON.stringify(lb.recent));
   g(['checkout', '-q', '-b', 'wip'], upDir);
   const up3 = await git.workState(upRow);
   check('新分支没上游 → upstream/unpushed 都是 null（界面："还没推到远端"）', up3.upstream === null && up3.unpushed === null, `${up3.upstream}/${up3.unpushed}`);
