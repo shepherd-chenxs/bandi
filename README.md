@@ -118,3 +118,6 @@ bandi install-cli         # 重新注册全局命令（[--dir] [--path] [--remov
 未及 `1.0.0` 之前的兼容承诺仍然有效：**不承诺兼容**，插件格式、流程模板、`status.yaml` 契约都还在动。
 发版：改 `version.json` → 提交 → 打 `v<版本>` tag 推上去，CI 自动出安装包并挂 Release。
 `1.0.0` 那次形变的来历、插件 / MCP 的另一套号，见 [docs/现状.md](docs/现状.md)「版本与台账」。
+
+1
+
