@@ -1931,6 +1931,12 @@ input.locked:focus { outline: none; border-color: var(--line); }
 .gr-pr-check.bad { color: var(--bad); border-color: var(--bad); }
 .gr-pr-check.wait { color: var(--warn); border-color: var(--warn); }
 .gr-pr-check.none { color: var(--dim); }
+/* PR 按阶段分组（2026-10-27 用户："需要建 PR、审核中、等待合并的分开一下"）：
+   每组一个低饱和组头（标题 + 等宽条数），组间一条实线分隔；空组不画（HTML 里就不存在）。 */
+.gr-pr-group + .gr-pr-group { border-top: 1px solid var(--line); }
+.gr-pr-group-head { display: flex; align-items: baseline; gap: 6px; padding: 9px 12px 0;
+                    font-size: 11.5px; color: var(--dim); letter-spacing: .02em; }
+.gr-pr-group-count { font-family: ui-monospace, monospace; color: var(--accent); }
 .gr-pr-cta { display: flex; align-items: center; gap: 12px; padding: 10px 12px; font-size: 12.5px; }
 .gr-pr-cta.dim { color: var(--dim); }
 .gr-pr-cta .mini { margin-left: auto; }
