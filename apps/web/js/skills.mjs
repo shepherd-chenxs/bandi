@@ -520,7 +520,7 @@ export async function renderGitRepos(root = $('pluginView')) {
     ? `<div class="plg-detail-head fixed-head">
          <b>${esc(sel.fullName)}</b>${sel.isPrivate ? '<span class="pill">私有</span>' : ''}
          <span class="gr-branch" id="grBranchMount"></span>
-         <span class="dim" title="${esc(sel.localPath)}">${esc(sel.localPath)}</span>
+         <!-- 本地路径 2026-10-27 应用户要求从导航条摘掉 —— 左栏列表和齿轮弹窗里都还有，不丢信息 -->
          <div class="head-actions">
            <button class="mini gr-set-btn" data-git-settings="${esc(sel.id)}"
                    title="仓库设置：管理员 / 自动合并 / 默认分支 / 上次同步" aria-label="仓库设置">${ICON_GEAR}</button>
