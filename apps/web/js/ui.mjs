@@ -309,6 +309,10 @@ export function createCombo({
   // 给"按钮要写实际生效的值，清单里另有条目名分"的场景用（如权限下拉：按钮写实际的
   // 权限名，清单里「跟随员工默认」当收回提权的入口）。
   buttonText = null,
+  // 按钮上跟在文案后面的小角标（2026-10-27 分支 pill："main ↑"，箭头绿、不带数字）。
+  // 给函数就按当前值现算（返回空串 = 不显示）；给字符串就是固定的。
+  // 单独一个 span 是为了**上色**：buttonText 是纯文本，塞不进颜色。
+  buttonBadge = null,
   onChange = () => {},
   // 展开下拉时的回调 —— 给"点开才去取清单"用。
   // 比如模型列表要读运行时的配置（dsh 那条是一次 HTTP），不适合在打开页面时就拉。
@@ -334,9 +338,12 @@ export function createCombo({
   btn.className = 'combo-btn';
   const text = document.createElement('span');
   text.className = 'combo-text';
+  const badge = document.createElement('span');
+  badge.className = 'combo-btn-badge';
+  badge.hidden = true;
   const chev = document.createElement('i');
   chev.className = 'combo-chev';
-  btn.append(text, chev);
+  btn.append(text, badge, chev);
 
   const pop = document.createElement('div');
   pop.className = 'combo-pop is-hidden';
@@ -368,10 +375,17 @@ export function createCombo({
   const labelOf = (id) => (all.find((it) => it.id === id) ?? {}).label ?? String(id ?? '');
   const shown = () =>
     buttonText ? buttonText(current) : labelOf(current) || String(current ?? '') || blank;
+  /* 按钮文案 + 角标一起画（角标是上色的 span，buttonText 只给纯文本） */
+  const paintButton = () => {
+    text.textContent = shown();
+    const b = String((typeof buttonBadge === 'function' ? buttonBadge(current) : buttonBadge) ?? '');
+    badge.textContent = b;
+    badge.hidden = !b;
+  };
 
   const pick = (id) => {
     current = id;
-    text.textContent = shown();
+    paintButton();
     close();
     onChange(id);
   };
@@ -536,16 +550,16 @@ export function createCombo({
   const api = {
     el: root,
     value: () => current,
-    setValue(id) { current = id; text.textContent = shown(); },
+    setValue(id) { current = id; paintButton(); },
     setItems(next, keepValue = true) {
       all = next;
       if (!keepValue) current = '';
-      text.textContent = shown();
+      paintButton();
       if (!pop.classList.contains('is-hidden')) paint(input ? input.value : '');
     },
     close,
   };
-  text.textContent = shown();
+  paintButton();
   return api;
 }
 
