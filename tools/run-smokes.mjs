@@ -37,6 +37,7 @@ const RUN = [
   'apps/server/src/smoke-lifecycle.mjs',
   'apps/server/src/smoke-node.mjs',
   'apps/server/src/smoke-node-jobs.mjs',
+  'apps/server/src/smoke-node-panel.mjs',
   'apps/server/src/smoke-node-task.mjs',
   'apps/server/src/smoke-pair.mjs',
   'apps/server/src/smoke-personas.mjs',

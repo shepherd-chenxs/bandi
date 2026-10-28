@@ -80,6 +80,16 @@ function helloPayload() {
     httpPort: port,
     allowLan: nm.allowLan,
     joinable: netmode.isJoinable({ allowLan: nm.allowLan, explicit: !!process.env.BANDI_HOST, boundHost: SERVER.boundHost }),
+    /*
+     * **机器角色**（2026-10-28 节点配置面）：`node` = 这台机器已加入某台总机；
+     * `operator` = 未加入（本机单机版）。前端的菜单矩阵要它，跟"打开页面的人是谁"
+     * （`/api/pair/me` 的 operator/device）是**两个概念**，别混。
+     *
+     * ⚠️ 必须 `isJoined()` **每次现读 config.json**，不能用 `config.clientJoined` ——
+     * 那是**模块求值时**拍下的快照，运行期"加入 / 退出总机"之后它就过期了
+     * （同一类坑见 `config.mjs` 里 `lanOrigins()` 的注释）。本字段免令牌、不带秘密。
+     */
+    role: localMode.isJoined() ? 'node' : 'operator',
     // 能力声明：有这个才认得出 `scope` 字段（旧总机没有 → 加入方回 E2050，不静默降级）
     caps: ['scope'],
   };
