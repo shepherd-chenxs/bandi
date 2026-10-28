@@ -302,6 +302,8 @@ function nodeAsDevice(n) {
      * `null` = 一枚有效令牌都没有（被「忘掉」过），那时它什么也做不了。
      */
     scope: scopeOfNode(n.id),
+    // 总机给这台机器指定的面板角色（空 = 用默认 node-ops）；设备详情那个下拉框要靠它回显
+    roleId: n.roleId ?? null,
     // 「最近使用」= 真的用面板的时间（心跳是 lastSeenAt，两件事别混）
     lastUsedAt: n.lastUsedAt ?? null,
     heartbeatSeconds: NODE_HEARTBEAT_SEC,
@@ -619,6 +621,8 @@ function publicDevice(d, { withRuntimes = true } = {}) {
            * `scope` 是规范串（`'compute panel'` / `'compute'` / `'panel'`），`null` = 没有有效令牌。
            */
           scope: d.scope ?? null,
+          // 面板角色（2026-10-28 第四刀）：显示在设备详情那一行的下拉框里（`null` = 默认）
+          roleId: d.roleId ?? null,
           lastUsedAt: d.lastUsedAt ?? null,
           heartbeatSeconds: d.heartbeatSeconds,
           pendingJobs: d.pendingJobs,

@@ -35,6 +35,13 @@ import { acquireLock, releaseLock } from './node-supervisor.mjs';
  * 就是"将来各改各的"的开始。
  */
 const CONFIG = path.join(dataDir, 'config.json');
+
+/**
+ * 总机下发的**面板角色**缓存（2026-10-28 第四刀）—— 心跳响应里的 `panelRole` 落到这儿，
+ * 本地面板经 `/api/local/status` 读它（`local-mode.readPanelRole`）。
+ * 只影响**本地面板显示哪几节**，不参与任何接口权限判定。
+ */
+const PANEL_FILE = path.join(dataDir, 'node-panel.json');
 const ONCE = process.argv.includes('--once');
 /** 每次长轮询挂多久。太长会让"停止"这类反向指令送得慢，太短就是空转 */
 const CLAIM_WAIT_MS = 20000;
@@ -268,6 +275,62 @@ async function post(p, body) {
   return { status: r.status, body: await r.json().catch(() => null) };
 }
 
+/** 本地缓存的那份面板角色（读不到 / 坏了 → null，当作"还没下发过"） */
+function readPanelCache() {
+  try {
+    const j = JSON.parse(fs.readFileSync(PANEL_FILE, 'utf8'));
+    return j && typeof j === 'object' && !Array.isArray(j) ? j : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 把心跳带回来的 `panelRole` 落到本机（2026-10-28 第四刀）。
+ *
+ * 三条口径：
+ *   · **内容没变就不写** —— 心跳 15 秒一次，每拍写一个文件是拿磁盘当日志写；
+ *     比较只看 `roleId` + `menuKeys`（`at` 每次都不同，不能拿它比）。
+ *   · **原子替换**：临时文件 + rename —— 本地面板随时可能在读这个文件，
+ *     读到一半的 JSON 等于"角色没了"（会静默放大权限）。
+ *   · **写失败只 warn**：一个缓存文件写不进去，不该让节点停止心跳/领活。
+ *
+ * `panelRole === undefined`（老总机不认识这个字段）→ **一个字节都不动**，
+ * 老缓存继续用 —— 老节点照样能跑，新节点也不会因为对面旧了就把已有的菜单弄丢。
+ */
+function syncPanelRole(panelRole) {
+  if (panelRole === undefined) return false;
+  const stamp = new Date().toISOString();
+  const next =
+    panelRole && typeof panelRole === 'object'
+      ? {
+          roleId: panelRole.id ?? null,
+          name: panelRole.name ?? null,
+          menuKeys: Array.isArray(panelRole.menuKeys) ? panelRole.menuKeys.map(String) : null,
+          at: stamp,
+        }
+      : { roleId: null, name: null, menuKeys: null, at: stamp };
+  const cur = readPanelCache();
+  if (cur && cur.roleId === next.roleId && JSON.stringify(cur.menuKeys ?? null) === JSON.stringify(next.menuKeys ?? null)) {
+    return false;
+  }
+  try {
+    fs.mkdirSync(dataDir, { recursive: true });
+    const tmp = `${PANEL_FILE}.tmp-${process.pid}`;
+    fs.writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
+    fs.renameSync(tmp, PANEL_FILE);
+    say(
+      next.menuKeys
+        ? `面板角色：${next.name ?? next.roleId ?? '默认'}（${next.menuKeys.length} 个菜单）`
+        : '面板角色：默认（不限制菜单）',
+    );
+    return true;
+  } catch (e) {
+    say(`面板角色没写进 ${PANEL_FILE}：${e?.message ?? e}（不影响心跳）`);
+    return false;
+  }
+}
+
 /**
  * 心跳：只告诉控制面"我还在"。
  * 控制面没在跑**也不退出** —— 它回来之后，下一次心跳自己就接上了。
@@ -289,6 +352,9 @@ async function heartbeatLoop(everySec) {
         say('心跳被拒：控制面要求访问令牌 —— 设 BANDI_NODE_TOKEN 再起');
       } else if (hb.status !== 200) {
         say(`心跳异常（${hb.status}）：${hb.body?.error ?? ''}`);
+      } else {
+        // 面板角色（2026-10-28 第四刀）：总机分配的角色就搭这趟车下来
+        syncPanelRole(hb.body?.panelRole);
       }
     } catch (e) {
       say(`心跳没送到：${e?.message ?? e}`);
@@ -841,6 +907,8 @@ async function main() {
   if (ONCE) {
     const hb = await post(`/api/nodes/${encodeURIComponent(id)}/heartbeat`, { runtimes: declared() });
     say(hb.status === 200 ? '心跳一次，--once 收工' : `心跳失败（${hb.status}）：${hb.body?.error ?? ''}`);
+    // 一次性的那条路也要把角色存下来（验收 --once 之后本地面板就该按新角色画）
+    if (hb.status === 200) syncPanelRole(hb.body?.panelRole);
     return;
   }
 

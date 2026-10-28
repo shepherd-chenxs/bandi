@@ -209,6 +209,11 @@ export async function handleUsers(req, res, url) {
         return sendJson(res, 200, {
           kind: 'device',
           device: d ? { id: d.id, name: d.name, pairedAt: d.pairedAt } : null,
+          /*
+           * 手机的面板角色（2026-10-28 第四刀）：未分配 = 默认 `mobile`（底部四个 tab），
+           * 与今天完全一样。前端 `S.menuKeys` 直接吃它的 menuKeys。
+           */
+          role: store.roleOrDefault(d?.roleId, store.DEFAULT_PHONE_ROLE),
         }), true;
       }
       throw new UserError(401, 'E3810', '还没登录');

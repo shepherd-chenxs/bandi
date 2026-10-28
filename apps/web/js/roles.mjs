@@ -110,3 +110,18 @@ export function resolveRole({ isDevice = false, machineRole = null } = {}) {
 export function canSee(role, key) {
   return (MENUS_BY_ROLE[role] ?? []).includes(key);
 }
+
+/**
+ * **按总机下发的菜单清单**判一个 key 能不能看（2026-10-28 第四刀）。
+ *
+ * 与 `canSee` 的分工：`canSee` 吃的是**前端矩阵里那一列**（代码常量，节点/手机的身份列）；
+ * 这个吃的是**总机分配的角色**（`panelRole.menuKeys` / `/api/me` 的 `role.menuKeys`）。
+ * 有了它，节点页与手机端就不再依赖"列里写了什么"，而是听总机的。
+ *
+ * `menuKeys == null / undefined` = **没下发**（老总机 / 还没心跳回来）→ 一律放行。
+ * 这条兜底很重要：读不到角色时宁可多显示，也不能把管理员关在那台机器外面。
+ */
+export function canSeeKeys(menuKeys, key) {
+  if (!Array.isArray(menuKeys)) return true;
+  return menuKeys.includes(key);
+}

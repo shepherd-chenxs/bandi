@@ -7,7 +7,7 @@ import { confirmDo } from './machine.mjs';
 import { openPluginForm, pluginFormId } from './experts.mjs';
 import { refreshDeptSuggest } from './contacts.mjs';
 import { $, LOCAL_BASE, S } from './core.mjs';
-import { MENU_KEYS, canSee, resolveRole } from './roles.mjs';
+import { MENU_KEYS, canSee, canSeeKeys, resolveRole } from './roles.mjs';
 
 
 
@@ -227,6 +227,16 @@ export function renderNodeMode(st) {
      */
     const machineRole = self.role === 'node' || c.joined ? 'node' : 'operator';
     const role = resolveRole({ isDevice: !!S.isDevice, machineRole });
+    /*
+     * **菜单以总机下发的为准**（2026-10-28 第四刀）：`panelRole` 由心跳写进本机
+     * `node-panel.json`，`/api/local/status` 读出来给我们。没下发（`null`）= 不限制，
+     * 六节全显示 —— 与改之前一模一样。
+     *
+     * `role` 那一列现在只是**兜底口径**（总机还没下发过、或老总机）：它仍然是
+     * `roles.mjs` 里 node 那六个 key，所以两种来源画出来是同一个页面。
+     */
+    const panelKeys = Array.isArray(s?.panelRole?.menuKeys) ? s.panelRole.menuKeys : null;
+    const roleName = String(s?.panelRole?.name ?? '').trim();
     /* 明细行的小图标（14px 线性，颜色随 --dim）：给每行一点可扫读的锚点 */
     const ICO = {
       hub: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="7" rx="2"></rect><rect x="3" y="13" width="18" height="7" rx="2"></rect><path d="M7 7.5h.01"></path><path d="M7 16.5h.01"></path></svg>',
@@ -247,9 +257,17 @@ export function renderNodeMode(st) {
     /**
      * 一个分节。`key` 就是 roles.mjs 的菜单 key —— 准入检查**放在这里**，
      * 六个分节都从这一条路出去，不会有哪一节忘了过门。
+     *
+     * **「连接」这一节永远显示**（2026-10-28 第四刀，安全阀）：它身上挂着「打开总机面板」
+     * 与「退出总机」两个逃生口 —— 管理员一旦在某台机器上勾错了角色，那是唯一能把
+     * 那台机器救回来的路。其余五节照总机下发的 `menuKeys` 收敛。
      */
+    const allowed = (key) => {
+      if (key === MENU_KEYS.NODE_CONNECTION) return true;
+      return panelKeys ? canSeeKeys(panelKeys, key) : canSee(role, key);
+    };
     const sec = (key, title, tag, inner, extra = '') =>
-      canSee(role, key)
+      allowed(key)
         ? `<section class="set-sec machine-card">
              <div class="set-head"><b>${esc(title)}</b>${tag ? `<span class="set-tag">${esc(tag)}</span>` : ''}</div>
              <div class="set-box">${inner}</div>
@@ -303,6 +321,9 @@ export function renderNodeMode(st) {
             <span class="node-link-end host"><span class="node-link-dot"></span>${esc(host)}</span>
           </div>
           <div class="node-hero-line">这台电脑是「<b>${esc(host)}</b>」的算力节点 —— 总机把活派过来，在这台电脑上跑。班底的面板（员工、会话、项目）只在总机上；这台机器只负责<b>配置</b>和<b>干活</b>。</div>
+          <div class="node-hero-line sub">本页显示哪几节由<b>总机分配</b>${
+            roleName ? `（当前角色：${esc(roleName)}）` : '（还没分配，用默认）'
+          }。</div>
         </section>
 
         ${sec(
@@ -337,6 +358,13 @@ export function renderNodeMode(st) {
                 ? '节点 <span class="sub">已加入总机，只当算力</span>'
                 : '单机 <span class="sub">未加入任何总机</span>',
               ICO.hub,
+            ) +
+            row(
+              '面板角色',
+              roleName
+                ? `${esc(roleName)} <span class="sub">总机分配 · ${panelKeys ? `${panelKeys.length} 个菜单` : '不限菜单'}</span>`
+                : '默认 <span class="sub">总机还没分配</span>',
+              ICO.shield,
             ),
         )}
 

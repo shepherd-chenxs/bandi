@@ -24,6 +24,15 @@ const CONFIG_FILE = path.join(dataDir, 'config.json');
 const INSTANCE_FILE = path.join(dataDir, 'instance.json');
 
 /**
+ * 总机下发的**面板角色**缓存（2026-10-28 第四刀）。写它的是 `node.mjs`（心跳响应里带回来），
+ * 读它的是本地面板（`status().panelRole` → `misc.mjs` 的 `renderNodeMode`）。
+ *
+ * 为什么走文件：本文件**不许 import store**（见文件头那段），而这台机器上根本没有
+ * 总机那套角色表 —— 它只能记住"总机说我是哪个角色、能看哪几节"。
+ */
+const PANEL_FILE = path.join(dataDir, 'node-panel.json');
+
+/**
  * scope 的两个值。
  *
  * 与 `store.mjs` 里那份**各存一份字面量**（值相同）：本文件不许 import store，
@@ -574,6 +583,25 @@ export function leave() {
 }
 
 /**
+ * 总机下发的面板角色（`{ id, name, menuKeys }`）；没有 / 坏了 / 老总机没下发过 → `null`。
+ *
+ * `null` 的语义是**不限制**（本地面板六个分节全显示）—— 这是安全的方向：
+ * 一个读不出来的文件不该把管理员关在那台机器外面。
+ * 只读不写：唯一写点是 `node.mjs` 的心跳处理（临时文件 + rename 原子替换）。
+ */
+export function readPanelRole() {
+  try {
+    const j = JSON.parse(fs.readFileSync(PANEL_FILE, 'utf8'));
+    if (!j || typeof j !== 'object' || Array.isArray(j)) return null;
+    const menuKeys = Array.isArray(j.menuKeys) ? j.menuKeys.map(String) : null;
+    if (!menuKeys) return null; // 没有菜单清单 = 等于没下发（别拿一个空对象去限制菜单）
+    return { id: j.roleId ?? null, name: j.name ?? null, menuKeys };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * 本机身份的**唯一读数**（设计 §5.1 的 `client` + `instanceId` + `nodeId` 三块）。
  *
  * 本机库那部分（大小 / mtime / 计数）**不在这里** —— 那需要 `store`，由 `server.mjs`
@@ -604,5 +632,11 @@ export function status() {
         : null,
     // 「总机通讯录」（2026-10-21 增量）：向导列表页的数据源，与加入状态无关（未加入也有）
     hosts: readHosts(),
+    /*
+     * 总机给这台机器指定的**面板角色**（2026-10-28 第四刀）：
+     * `{ id, name, menuKeys }` 或 `null`（没下发 / 读不到 = 不限制，六节全显示）。
+     * 由 `node.mjs` 的心跳写进 `node-panel.json`，这里只读。
+     */
+    panelRole: readPanelRole(),
   };
 }

@@ -156,11 +156,20 @@ async function openQrDialog() {
 
 /* ---------------------------------------------------------------- 设备列表 */
 
-/** 已配对设备：名字 / 配对时间 / 最近活跃 + 踢出。踢出前 askConfirm（不可逆动作） */
+/** 已配对设备：名字 / 配对时间 / 最近活跃 / 面板角色 + 踢出。踢出前 askConfirm（不可逆动作） */
 export async function renderDeviceList() {
   const box = $('pairDevices');
   if (!box) return;
-  const { devices = [] } = await api('/api/pair/devices');
+  /*
+   * 角色清单（2026-10-28 第四刀）：给每行的「面板角色」下拉用。
+   * 读不到（非操作员 / 老服务）就只画设备行 —— 别让一个附加控件把整段弄挂。
+   */
+  const [devicesRes, rolesRes] = await Promise.all([
+    api('/api/pair/devices'),
+    api('/api/roles').catch(() => ({ roles: [] })),
+  ]);
+  const { devices = [] } = devicesRes;
+  const roles = rolesRes?.roles ?? [];
   /*
    * 踢出只删令牌、设备行留着当记录（store/devices.mjs）。所以这里必须看 `tokenCount`：
    * 0 = 已经踢掉或令牌过期 —— 显示成「已踢出」并撤掉按钮，否则用户踢完看到它原样
@@ -181,11 +190,42 @@ export async function renderDeviceList() {
         <div class="mb-pair-dev-main">
           <b>${esc(d.name)}</b>
           <div class="dim" style="font-size:12px">配对于 ${esc(dt(d.pairedAt))} · 最近活跃 ${esc(dt(d.lastSeenAt))}${d.lastIp ? ` · ${esc(d.lastIp)}` : ''}</div>
+          ${
+            /* 面板角色：这台手机下一次打开班底就按它画底部导航；未分配 = 默认「手机」 */
+            roles.length
+              ? `<select class="mb-pair-role" data-dev-role="${esc(d.id)}"${off ? ' disabled' : ''}>
+                   <option value=""${d.roleId ? '' : ' selected'}>默认（手机）</option>
+                   ${roles
+                     .map(
+                       (r) =>
+                         `<option value="${esc(r.id)}"${d.roleId === r.id ? ' selected' : ''}>${esc(r.name)}${
+                           r.builtin ? '' : '（自建）'
+                         }</option>`,
+                     )
+                     .join('')}
+                 </select>`
+              : ''
+          }
         </div>
         ${off ? '<span class="mb-pair-off">已踢出</span>' : `<button type="button" class="mb-pair-kick" data-kick="${esc(d.id)}" data-name="${esc(d.name)}">踢出</button>`}
       </div>`;
     })
     .join('');
+  box.querySelectorAll('[data-dev-role]').forEach((sel) => {
+    sel.onchange = async () => {
+      sel.disabled = true;
+      try {
+        await post(`/api/pair/devices/${encodeURIComponent(sel.dataset.devRole)}/role`, { roleId: sel.value || null });
+        toast(sel.value ? '已分配 —— 那台手机下一次打开班底就按新角色显示' : '已改回默认 —— 那台手机下一次打开班底就是四个 tab', 'ok');
+      } catch (e) {
+        toast(e.message, 'error');
+        const d = devices.find((x) => x.id === sel.dataset.devRole);
+        sel.value = d?.roleId ?? ''; // 回滚到改动前的选择
+      } finally {
+        sel.disabled = false;
+      }
+    };
+  });
   box.querySelectorAll('[data-kick]').forEach((b) => {
     b.onclick = async () => {
       const ok = await askConfirm({

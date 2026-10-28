@@ -30,7 +30,7 @@ const NAV_KEY = {
 /** 一级导航的固定顺序（"当前这栏被藏了"时按它挑第一个能看的） */
 const NAV_ORDER = ['messages', 'contacts', 'experts', 'plugins', 'settings'];
 
-/** 这个账号能不能看见某个菜单（`S.menuKeys === null` = 不限制，operator / 设备都是） */
+/** 这个身份能不能看见某个菜单（`S.menuKeys === null` = 不限制：operator，或角色没拿到） */
 export function canSeeMenu(key) {
   if (!S.menuKeys) return true;
   return S.menuKeys.includes(key);
@@ -95,7 +95,8 @@ export async function load() {
    * 三种答案一次拿全，前端不用再猜：
    *   · `operator` —— 回环 / 共享令牌 / 回环桌面壳：**全部菜单**（`menuKeys = null` 表示不限制）；
    *   · `user`     —— 登录的浏览器：`role.menuKeys` 决定看得见哪些菜单；
-   *   · `device`   —— 手机：沿用老逻辑（`isDevice`，菜单照旧不收敛，第四刀才下发）。
+   *   · `device`   —— 手机：**也吃总机分配的 `role.menuKeys`**（2026-10-28 第四刀，
+   *                   未分配时是默认的「手机」角色 = 底部那四个 tab，与从前一致）。
    *
    * 为什么不用 `/api/pair/me` 了：那条路对登录用户会回 `kind:'operator'`（历史口径），
    * 一个普通村民会被判成"操作员"，菜单收敛就全失效了。
@@ -108,8 +109,12 @@ export async function load() {
       S.device = me?.device ?? null;
       S.isUser = me?.kind === 'user';
       S.isAdmin = S.isDevice ? true : me?.kind === 'operator' ? true : me?.role?.id === 'admin';
-      // null = 不限制（operator / device）；数组 = 这个账号看得见的菜单 key（见 roles.mjs 的 MENU_KEYS）
-      S.menuKeys = me?.kind === 'user' ? (me?.role?.menuKeys ?? []) : null;
+      /*
+       * null = 不限制（只有 operator，以及"角色没拿到"这种异常）；数组 = 看得见的菜单 key。
+       * **只有真拿到一份数组才收敛** —— 设备那条路万一没回 role，宁可全显示，也别把界面清空。
+       */
+      const keys = me?.role?.menuKeys;
+      S.menuKeys = (me?.kind === 'user' || me?.kind === 'device') && Array.isArray(keys) ? keys : null;
     } catch {
       S.auth = null;
       S.isDevice = false;

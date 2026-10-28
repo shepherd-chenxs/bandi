@@ -1644,6 +1644,9 @@ input.locked:focus { outline: none; border-color: var(--line); }
    复选框例外 —— 它是 .plg-check 里的方框，不是输入框。 */
 .users-form .set-row input:not([type='checkbox']),
 .users-form .set-row select { width: 240px; flex: 0 0 auto; }
+/* 设备详情 › 面板角色（2026-10-28 第四刀）：同一个 width:100% 的坑，
+   这里靠类名定宽，别写内联（.row-item 里已经有一堆内联样式，够了）。 */
+.node-panel-role { width: 220px; flex: 0 0 auto; }
 @media (max-width: 860px) {
   .ms-split { grid-template-columns: 1fr; }
   .ms-side { border-right: 0; border-bottom: 1px solid var(--line); }

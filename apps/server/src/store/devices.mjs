@@ -16,7 +16,7 @@
  */
 
 import crypto from 'node:crypto';
-import { db, newId, nowIso } from './db.mjs';
+import { db, ensureColumn, newId, nowIso } from './db.mjs';
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS mobile_devices (
@@ -45,6 +45,29 @@ db.exec(`
 `);
 
 const hashOf = (s) => crypto.createHash('sha256').update(String(s)).digest('hex');
+
+/* ------------------------------------------------- 面板角色（2026-10-28 第四刀） */
+
+/*
+ * `mobile_devices.roleId`：总机给这部手机指定的面板角色（`roles.id`），空 = 默认（`mobile`）。
+ * `ensureColumn` 让老库平滑升级；这一列只影响**手机端的菜单显示**（底部 tab 与页面），
+ * 不参与 `deviceMayReach` 那套白名单判定。
+ */
+ensureColumn('mobile_devices', 'roleId', 'roleId TEXT');
+
+/** 给一部手机指定面板角色（`null` = 恢复默认）。设备不存在返回 null */
+export function setDeviceRole(deviceId, roleId) {
+  const d = getDevice(deviceId);
+  if (!d) return null;
+  const next = String(roleId ?? '').trim() || null;
+  db.prepare('UPDATE mobile_devices SET roleId = ? WHERE id = ?').run(next, deviceId);
+  return getDevice(deviceId);
+}
+
+/** 有多少部手机绑着这个角色（删角色前要问，见 routes/roles.mjs 的 E2071） */
+export function countPhonesByRole(roleId) {
+  return db.prepare('SELECT COUNT(*) AS n FROM mobile_devices WHERE roleId = ?').get(String(roleId ?? '')).n;
+}
 
 /** 配对令牌默认时效（PRD P0-2：短时效，5 分钟、单次使用） */
 export const PAIR_TOKEN_TTL_MS = 5 * 60 * 1000;

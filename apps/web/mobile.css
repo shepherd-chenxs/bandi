@@ -235,6 +235,21 @@
 .mb-pair-kick:hover { background: color-mix(in srgb, var(--bad, #c0504d) 12%, transparent); }
 /* 已踢出/令牌已失效的设备（2026-10-28）：行留着当记录，靠这个标记和「已踢出」胶囊区分 */
 .mb-pair-dev.off .mb-pair-dev-main { opacity: .55; }
+/*
+ * 面板角色下拉（2026-10-28 第四刀）：手机底部导航由总机分配的角色决定。
+ * 全局 `input,select` 是 width:100%（style.css），这里要按内容定宽，不然它会撑满整行、
+ * 把「踢出」挤出屏幕。高度压到 30px —— 跟旁边那颗小按钮一个视觉重量。
+ */
+.mb-pair-role {
+  width: 150px;
+  height: 30px;
+  flex: 0 0 auto;
+  margin-top: 8px;
+  font-size: 12.5px;
+  padding: 0 8px;
+  border-radius: 8px;
+}
+.mb-pair-dev.off .mb-pair-role { opacity: .6; }
 .mb-pair-off {
   flex: none;
   font-size: 12px;

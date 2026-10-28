@@ -10,12 +10,23 @@ import * as externals from '../externals.mjs';
 import * as status from '../status.mjs';
 import * as git from '../git-repos.mjs';
 
+/**
+ * 这台机器该用的**面板角色**（2026-10-28 第四刀）。
+ *
+ * 「没分配 = 用默认」「分配了但角色被删了 → 也回落默认」这两条口径只在
+ * `store.roleOrDefault` 里判一次 —— 心跳与 `/api/me` 拿到的是同一个答案。
+ */
+function panelRoleOf(node) {
+  return store.roleOrDefault(node?.roleId, store.DEFAULT_NODE_ROLE);
+}
+
 export async function handleNode(req, res, url) {
   const register = /^\/api\/nodes\/register$/.exec(url.pathname);
   const heartbeat = /^\/api\/nodes\/([^/]+)\/heartbeat$/.exec(url.pathname);
   const list = /^\/api\/nodes$/.exec(url.pathname);
   const one = /^\/api\/nodes\/([^/]+)$/.exec(url.pathname);
   const scopeOf = /^\/api\/nodes\/([^/]+)\/scope$/.exec(url.pathname);
+  const roleOf = /^\/api\/nodes\/([^/]+)\/role$/.exec(url.pathname);
   const pathsOf = /^\/api\/nodes\/([^/]+)\/paths$/.exec(url.pathname);
 
   /**
@@ -57,6 +68,35 @@ export async function handleNode(req, res, url) {
       offlineAfterSeconds: runtimes.NODE_OFFLINE_AFTER_MS / 1000,
       nodes: runtimes.publicNodes(),
     });
+  }
+
+  /**
+   * **给一台机器指定面板角色**（2026-10-28 第四刀）。
+   *
+   * 这是总机侧的动作（`mayManage`）—— 节点自己不能改自己的菜单，跟 scope 同一条道理：
+   * 能自己升级的权限等于没有权限边界。
+   *
+   * 下发走**心跳**（不是这里）：改完这一行，那台机器下一次心跳（15 秒内）就会在响应里
+   * 拿到新的 `panelRole`，写进它自己的 `node-panel.json`。所以这里只回"存好了"，
+   * 不假装"已经生效"—— 前端文案也说"下一次心跳生效"。
+   *
+   * `roleId: null / ''` = 恢复默认（节点运维）。
+   */
+  if (req.method === 'POST' && roleOf) {
+    if (!auth.mayManage(req)) {
+      return fail(res, 403, 'E3703', '只有操作员能分配面板角色');
+    }
+    const nodeId = decodeURIComponent(roleOf[1]);
+    const node = store.getNode(nodeId);
+    if (!node) return fail(res, 404, 'E2040', '这个节点没登记过');
+    const body = await readBody(req);
+    const want = body?.roleId === undefined || body?.roleId === null ? '' : String(body.roleId).trim();
+    if (want && !store.getRole(want)) {
+      return fail(res, 400, 'E2072', `没有这个角色：${want}`);
+    }
+    const next = store.setNodeRole(nodeId, want || null);
+    console.log(`[节点] ${node.label} 的面板角色改成 ${want || `默认（${store.DEFAULT_NODE_ROLE}）`}`);
+    return sendJson(res, 200, { nodeId, roleId: next?.roleId ?? null, panelRole: panelRoleOf(next) });
   }
 
   /*
@@ -160,6 +200,12 @@ export async function handleNode(req, res, url) {
     return sendJson(res, 200, {
       node: runtimes.publicDeviceById(node.id),
       heartbeatSeconds: runtimes.NODE_HEARTBEAT_SEC,
+      /*
+       * **面板角色下发**（2026-10-28 第四刀）：只加字段，老节点忽略即可。
+       * 那台机器收到后写进自己的 `node-panel.json`，本地面板（misc.mjs 的 renderNodeMode）
+       * 经 `/api/local/status` 读它决定显示哪几节。
+       */
+      panelRole: panelRoleOf(node),
     });
   }
 
