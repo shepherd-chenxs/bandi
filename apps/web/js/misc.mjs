@@ -332,7 +332,7 @@ export function renderNodeMode(st) {
             row('版本', self.version ? esc(`v${self.version}`) : '—', ICO.info) +
             row('实例标识', `<span class="machine-addr">${esc(self.instanceId || s?.instanceId || '—')}</span>`, ICO.shield) +
             row(
-              '机器角色',
+              '角色',
               machineRole === 'node'
                 ? '节点 <span class="sub">已加入总机，只当算力</span>'
                 : '单机 <span class="sub">未加入任何总机</span>',

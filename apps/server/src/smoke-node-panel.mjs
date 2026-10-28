@@ -141,16 +141,28 @@ try {
   const ver = await get('/api/web-version');
   check('GET /api/web-version → 200', ver.status === 200, String(ver.status));
 
-  /* ============ ④ 清掉 controlPlane 再起：回到 operator ============ */
-  console.log('\n④ 清掉 controlPlane 再起一个 —— 同一份代码要报 operator');
-  await stopAll();
+  /* ============ ④ **运行期**改 config.json：不重开进程，role 要跟着变 ============ */
+  /*
+   * 这一条钉的是「现读」而不是「启动快照」：服务**不重启**，只改磁盘上的 config.json，
+   * 再打同一个 `/api/hello`。如果实现里用了 `config.clientJoined`（模块求值时拍下的快照），
+   * 这里会一直是 node —— 那就该红。这也正是 `lanOrigins()` 那次的坑。
+   */
+  console.log('\n④ 运行期改 config.json（不重开进程）—— role 必须跟着变');
+  await sleep(100);
   fs.writeFileSync(CONFIG, '{}\n', 'utf8');
-  start();
-  if (!(await waitUp())) throw new Error('第二个实例没起来：' + log.slice(-500));
-  const hello2 = await get('/api/hello');
-  check('role === "operator"（未加入）', hello2.body?.role === 'operator', String(hello2.body?.role));
-  const st2 = await get('/api/local/status');
-  check('client.joined === false', st2.body?.client?.joined === false, String(st2.body?.client?.joined));
+  const helloLive = await get('/api/hello');
+  check('同一进程里清掉 controlPlane → role=operator（现读，不是启动快照）', helloLive.body?.role === 'operator', String(helloLive.body?.role));
+  const stLive = await get('/api/local/status');
+  check('同一进程里 client.joined 变 false', stLive.body?.client?.joined === false, String(stLive.body?.client?.joined));
+
+  // 再写回去：同一个进程要能回到 node（两个方向都验，免得"只认第一次"的缓存假通过）
+  fs.writeFileSync(
+    CONFIG,
+    `${JSON.stringify({ controlPlane: 'http://127.0.0.1:1', token: 'x', scope: 'compute' }, null, 2)}\n`,
+    'utf8',
+  );
+  const helloBack = await get('/api/hello');
+  check('同一进程里写回 controlPlane → role=node', helloBack.body?.role === 'node', String(helloBack.body?.role));
 
   /* ============ ⑤ 反向断言：节点页不许"为它开新接口" ============ */
   /*
