@@ -156,6 +156,18 @@ try {
   check('PATCH → 200 且回新的三项目录', patched.status === 200 &&
     JSON.stringify(patched.body?.role?.menuKeys) === JSON.stringify(['messages', 'contacts', 'experts']),
     `${patched.status} ${JSON.stringify(patched.body?.role?.menuKeys)}`);
+
+  /*
+   * 三个边界，一个码一件事（别让 E1116 同时表示"不是数组/空 PATCH/方法不对"）：
+   * 空 PATCH = 没东西可改；显式 null 菜单 = 用户可能想清空，但清空要传 []；
+   * 不支持的方法 = 405。
+   */
+  const emptyPatch = await call('PATCH', `/api/roles/${encodeURIComponent(customId)}`, {});
+  check('PATCH 空 body → 400 E1117', emptyPatch.status === 400 && emptyPatch.body?.code === 'E1117', `${emptyPatch.status} ${emptyPatch.body?.code ?? ''}`);
+  const nullMenus = await call('PATCH', `/api/roles/${encodeURIComponent(customId)}`, { menuKeys: null });
+  check('menuKeys: null → 400 E1116（清空要传 []）', nullMenus.status === 400 && nullMenus.body?.code === 'E1116', `${nullMenus.status} ${nullMenus.body?.code ?? ''}`);
+  const badMethod = await call('PUT', `/api/roles/${encodeURIComponent(customId)}`, {});
+  check('PUT 角色 → 405 E1118', badMethod.status === 405 && badMethod.body?.code === 'E1118', `${badMethod.status} ${badMethod.body?.code ?? ''}`);
   await stopAll();
   start();
   if (!(await waitUp())) throw new Error('重启后实例没起来：' + log.slice(-500));

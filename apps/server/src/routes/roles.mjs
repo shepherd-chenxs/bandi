@@ -15,11 +15,16 @@
  *   E1113 角色名不能为空 / 超过 30 字        （400）
  *   E1114 菜单项不认识                       （400）
  *   E1115 角色名重复                         （409）
- *   E1116 menuKeys 不是数组                  （400）
+ *   E1116 menuKeys 不是数组 / 显式传了 null   （400）
+ *   E1117 PATCH 里没有任何可改字段            （400）
+ *   E1118 这个路径不支持该请求方法            （405）
  *   E2068 角色不存在                         （404）
  *   E2069 内置角色不能删                     （403）
  *   E2070 内置「管理员」不可改               （403）
  *   E3703 不是操作员                         （403）
+ *
+ * ⚠️ 一个码只表达一件事（仓库口径）：上面 E1116 / E1117 / E1118 原本挤在一起过，
+ * 分开之后前端和文档才能靠码判断，不用解析文案。
  */
 
 import { sendJson, fail, readBody } from '../http.mjs';
@@ -52,7 +57,9 @@ function normName(input) {
  * 空数组合法（= 这个角色什么都看不到）。
  */
 function normMenuKeys(input) {
-  if (input === null || input === undefined) return null; // 调用方判"没传"
+  if (input === undefined) return null; // 调用方判"没传"
+  // 显式 null 不等于"没传"：它在 PATCH 里会被读成"清空全部菜单"，那是另一个意思，必须拒绝
+  if (input === null) throw new RoleError(400, 'E1116', 'menuKeys 必须是数组（清空就传 []）');
   if (!Array.isArray(input)) throw new RoleError(400, 'E1116', 'menuKeys 必须是数组（比如 ["messages","contacts"]）');
   const out = [];
   for (const raw of input) {
@@ -109,7 +116,7 @@ export async function handleRoles(req, res, url) {
           next.name = name;
         }
         if (body?.menuKeys !== undefined) next.menuKeys = normMenuKeys(body.menuKeys);
-        if (!Object.keys(next).length) throw new RoleError(400, 'E1116', 'PATCH 里既没有 name 也没有 menuKeys，没什么可改的');
+        if (!Object.keys(next).length) throw new RoleError(400, 'E1117', 'PATCH 里既没有 name 也没有 menuKeys，没什么可改的');
         const role = store.updateRole(id, next);
         return sendJson(res, 200, { role }), true;
       }
@@ -124,7 +131,7 @@ export async function handleRoles(req, res, url) {
         throw new RoleError(404, 'E2068', `没有这个角色：${id}`);
       }
 
-      return fail(res, 405, 'E1116', `角色接口不支持 ${method}`), true;
+      return fail(res, 405, 'E1118', `角色接口不支持 ${method}`), true;
     }
 
     return fail(res, 404, 'E2068', `没有这个角色接口：${p}`), true;
