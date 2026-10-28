@@ -10,9 +10,9 @@
  * 他和其他员工的差别只有三条，都在这份文件里：
  *   ① `builtin = 1`：**技能与身份锁死**（2026-10-22 用户定：按专家团那个模式收编）——
  *      技能清单固定为 `bandi-secretary`、名字/岗位/指令固定为出厂值，路由层拒改（E2054/E2055），
- *      启动时 `syncSecretary` 把存量改动拉回出厂；同时他不可删（`store.deletePersona` 里拦）
+ *      启动时 `syncSteward` 把存量改动拉回出厂；同时他不可删（`store.deletePersona` 里拦）
  *   ② `runtime = 'auto'`：不写死用哪个 CLI —— 换台机器、换个 CLI 都不用改他
- *   ③ 首轮注入里多一段「这台机器现在什么样」（`secretaryBrief`），现取的，不靠他猜
+ *   ③ 首轮注入里多一段「这台机器现在什么样」（`stewardBrief`），现取的，不靠他猜
  *
  * 锁的只是「他是谁、他会什么」；运行时/沙箱/工作目录/模型/头像这些「在哪儿干活、长什么样」仍可改。
  *
@@ -27,22 +27,22 @@ import * as skills from './skills.mjs';
  * 固定 id：seed 幂等就靠它（`personas.id` 是主键）。
  *
  * id 跟人走（2026-10-23 用户定）：这个名额现在是「崔老三」，id 就叫 `p-cuilaosan`。
- * 之前顶着「喜儿」时用过 `p-xier` —— 存量库由 `migrateSecretaryId()` 在 seed 前一次性
+ * 之前顶着「喜儿」时用过 `p-xier` —— 存量库由 `migrateStewardId()` 在 seed 前一次性
  * 搬到新 id（连同 13 张表里的引用），见下面那个函数。
  */
-export const SECRETARY_ID = 'p-cuilaosan';
+export const STEWARD_ID = 'p-cuilaosan';
 
-/** 旧库里内置名额的 id（喜儿时代的遗产）。只给 `migrateSecretaryId()` 用，别处别引。 */
-export const LEGACY_SECRETARY_ID = 'p-xier';
+/** 旧库里内置名额的 id（喜儿时代的遗产）。只给 `migrateStewardId()` 用，别处别引。 */
+export const LEGACY_STEWARD_ID = 'p-xier';
 
 /** seed 会把他建成这个名字；之后用户改名，我们**不覆盖** */
-export const SECRETARY_NAME = '崔老三';
+export const STEWARD_NAME = '崔老三';
 
-/** 出厂岗位（身份三件之一；`syncSecretary` 与建号共用同一个值） */
-export const SECRETARY_ROLE = '系统管家';
+/** 出厂岗位（身份三件之一；`syncSteward` 与建号共用同一个值） */
+export const STEWARD_ROLE = '系统管家';
 
 /** 挂在他的技能（目录：`skills/bandi-secretary/`） */
-export const SECRETARY_SKILL = 'bandi-secretary';
+export const STEWARD_SKILL = 'bandi-secretary';
 
 /**
  * 岗位指令。
@@ -50,7 +50,7 @@ export const SECRETARY_SKILL = 'bandi-secretary';
  * 写法上刻意「窄」：只给两件事 + 一条边界。给管家列十条职责，他会什么都做一点、
  * 什么都不做透 —— 而用户真正要的是「机器坏了有人管、要建人有人教」。
  */
-export const SECRETARY_INSTRUCTIONS = `你是「崔老三」，这台机器上的系统管家 —— 服务一装好，你就是他第一个能说话的人。
+export const STEWARD_INSTRUCTIONS = `你是「崔老三」，这台机器上的系统管家 —— 服务一装好，你就是他第一个能说话的人。
 
 你只管两件事，别的不要揽：
 
@@ -74,7 +74,7 @@ export const SECRETARY_INSTRUCTIONS = `你是「崔老三」，这台机器上�
  * （`BANDI_DATA` / `BANDI_PORT` 一改就全变），写死一份等于教她说错话。
  * 也要在她第一次开口时就在手上 —— 否则她的第一句永远是「让我先查一下」，很蠢。
  */
-export function secretaryBrief() {
+export function stewardBrief() {
   const personas = store.listPersonas();
   const runs = store.listWorkflowRuns();
   const running = runs.filter((r) => r.status === '进行中').length;
@@ -96,12 +96,12 @@ export function secretaryBrief() {
 
 /**
  * 出厂身份三件：锁定后这就是唯一合法值（改名 / 改岗位 / 改指令一律 E2055）。
- * 放在 SECRETARY_INSTRUCTIONS 之后定义 —— 常量间有依赖，别往上挪。
+ * 放在 STEWARD_INSTRUCTIONS 之后定义 —— 常量间有依赖，别往上挪。
  */
-export const SECRETARY_IDENTITY = {
-  name: SECRETARY_NAME,
-  role: SECRETARY_ROLE,
-  instructions: SECRETARY_INSTRUCTIONS,
+export const STEWARD_IDENTITY = {
+  name: STEWARD_NAME,
+  role: STEWARD_ROLE,
+  instructions: STEWARD_INSTRUCTIONS,
 };
 
 /*
@@ -111,41 +111,60 @@ export const SECRETARY_IDENTITY = {
  * personaId 在十几张表里被引用，漏一张就把那部分历史挂成孤儿（搬运逻辑在
  * `store.renamePersonaId`，与专家改名共用一份）。幂等：旧 id 不存在就什么都不做。
  *
- * 为什么焊死在 `ensureSecretary()` 里而不是让 server.mjs 单独调：迁移必须发生在 seed
+ * 为什么焊死在 `ensureSteward()` 里而不是让 server.mjs 单独调：迁移必须发生在 seed
  * **之前**（否则旧 id 还在，seed 会按新 id 再建一个，一台上出现两个「内置管家」）。
  * 把调用顺序锁进同一个函数，调用方想弄错都难。
  */
 
 /** 返回是否真迁了（true 才在启动日志里说一句话）；没这个人 / 已迁过 → false */
-export function migrateSecretaryId() {
-  if (!store.getPersona(LEGACY_SECRETARY_ID) || store.getPersona(SECRETARY_ID)) return false;
-  const refs = store.renamePersonaId(LEGACY_SECRETARY_ID, SECRETARY_ID, {
+export function migrateStewardId() {
+  if (!store.getPersona(LEGACY_STEWARD_ID) || store.getPersona(STEWARD_ID)) return false;
+  const refs = store.renamePersonaId(LEGACY_STEWARD_ID, STEWARD_ID, {
     avatarFrom: 'p-xier.png',
     avatarTo: 'p-cuilaosan.png',
   });
-  console.log(`内置员工 id 已迁移：${LEGACY_SECRETARY_ID} → ${SECRETARY_ID}（引用 ${refs} 处一并搬走，会话与群关系全部保留）`);
+  console.log(`内置员工 id 已迁移：${LEGACY_STEWARD_ID} → ${STEWARD_ID}（引用 ${refs} 处一并搬走，会话与群关系全部保留）`);
   return true;
 }
 
 /**
- * 幂等 seed：启动时调，已有就不动（身份/技能由 `syncSecretary` 统一拉回出厂）。
+ * **复活清理**（2026-10-28）：现任在、旧 id 也在这 —— 旧 id 只能是**旧版程序重新 seed 出来的**。
+ *
+ * 事故：桌面版 `target/release` 里捆的服务端快照落后于改名（10-22 打的包，内置还叫喜儿）。
+ * 10-27 用户双击桌面版，那份旧 `ensureSteward()` 按 `p-xier` 找人没找到（早迁走了），就照旧
+ * 身份重新建了一个 —— 库里从此两个喜儿。新代码的迁移看到崔老三已在会跳过，管不了这种复活；
+ * 唯一根治位是**新代码启动时把复活的并回来**：引用归崔老三（`store.mergePersonaId`，共用
+ * `renamePersonaId` 的引用清单），复活的行删掉。顺序焊在 seed 前，与迁移同一条链。
+ *
+ * 幂等：没有旧 id 就什么都不做。返回是否真清了（true 才在启动日志里说一句话）。
+ */
+export function removeResurrectedSteward() {
+  if (!store.getPersona(STEWARD_ID) || !store.getPersona(LEGACY_STEWARD_ID)) return false;
+  const refs = store.mergePersonaId(LEGACY_STEWARD_ID, STEWARD_ID);
+  console.log(`内置员工「喜儿」被旧版程序复活（${LEGACY_STEWARD_ID}），已并回「崔老三」（引用 ${refs} 处一并搬走）`);
+  return true;
+}
+
+/**
+ * 幂等 seed：启动时调，已有就不动（身份/技能由 `syncSteward` 统一拉回出厂）。
  *
  * 历史说明：2026-10-18 这一版刻意「不动包括不改名、不改指令」——那时她是可定制的秘书。
  * 2026-10-22 用户改了口径：**按专家团那个模式收编，技能锁死、信息锁死**。所以现在
- * 用户改过的东西不再被尊重，启动时会被 syncSecretary 拉回出厂值（改也改不动了，路由层 E2055）。
+ * 用户改过的东西不再被尊重，启动时会被 syncSteward 拉回出厂值（改也改不动了，路由层 E2055）。
  * 唯一仍会强补的是 `builtin` 本身（早期版本可能建过一条没有标记的同 id 记录）。
  */
-export function ensureSecretary() {
-  migrateSecretaryId(); // 必须 seed 前跑（见函数注释）——顺序焊死在这里
-  const existing = store.getPersona(SECRETARY_ID);
+export function ensureSteward() {
+  migrateStewardId(); // 必须 seed 前跑（见函数注释）——顺序焊死在这里
+  removeResurrectedSteward(); // 同一条链：旧版程序复活出来的旧 id，seed 前并回（见函数注释）
+  const existing = store.getPersona(STEWARD_ID);
   if (existing) {
-    if (!existing.builtin) store.markPersonaBuiltin(SECRETARY_ID);
+    if (!existing.builtin) store.markPersonaBuiltin(STEWARD_ID);
     return { created: false, persona: { ...existing, builtin: 1 } };
   }
 
   const persona = store.createPersona({
-    id: SECRETARY_ID,
-    ...SECRETARY_IDENTITY,
+    id: STEWARD_ID,
+    ...STEWARD_IDENTITY,
     // auto：按「谁现在能用」挑 CLI。换机器、换 CLI 都不用回来改她
     runtime: 'auto',
     sandbox: 'danger-full-access',
@@ -154,8 +173,8 @@ export function ensureSecretary() {
     builtin: 1,
   });
 
-  // 技能只在**新建那一次**挂；之后由 syncSecretary 保持与出厂清单一致
-  if (skills.getSkill(SECRETARY_SKILL)) store.linkPersonaSkill(SECRETARY_ID, SECRETARY_SKILL);
+  // 技能只在**新建那一次**挂；之后由 syncSteward 保持与出厂清单一致
+  if (skills.getSkill(STEWARD_SKILL)) store.linkPersonaSkill(STEWARD_ID, STEWARD_SKILL);
 
   return { created: true, persona };
 }
@@ -165,28 +184,28 @@ export function ensureSecretary() {
  * 库里的旧身份（喜儿）刷成崔老三 —— 用户不用手工迁移，启动即归位）。
  *
  * 跟 `syncHiredExpert` 同一个思路：不管库里现在是什么样，跑完之后 = 出厂 ——
- * 身份三件回 `SECRETARY_IDENTITY`，技能挂载收成 `[bandi-secretary]` 且强制启用
+ * 身份三件回 `STEWARD_IDENTITY`，技能挂载收成 `[bandi-secretary]` 且强制启用
  * （以前加过的、解绑剩下的、停用的一律归位）。幂等：已是出厂态就什么都不动。
  *
  * 返回动过的字段名列表（含 `'skills'`）；没这个人 → null。
  */
-export function syncSecretary() {
-  const p = store.getPersona(SECRETARY_ID);
+export function syncSteward() {
+  const p = store.getPersona(STEWARD_ID);
   if (!p) return null;
   const changed = [];
-  if (p.name !== SECRETARY_IDENTITY.name) changed.push('name');
-  if ((p.role ?? null) !== (SECRETARY_IDENTITY.role ?? null)) changed.push('role');
-  if (p.instructions !== SECRETARY_IDENTITY.instructions) changed.push('instructions');
-  if (changed.length) store.updatePersona(SECRETARY_ID, { ...SECRETARY_IDENTITY });
+  if (p.name !== STEWARD_IDENTITY.name) changed.push('name');
+  if ((p.role ?? null) !== (STEWARD_IDENTITY.role ?? null)) changed.push('role');
+  if (p.instructions !== STEWARD_IDENTITY.instructions) changed.push('instructions');
+  if (changed.length) store.updatePersona(STEWARD_ID, { ...STEWARD_IDENTITY });
 
-  const pkg = skills.getSkill(SECRETARY_SKILL) ? [SECRETARY_SKILL] : [];
-  const before = store.listPersonaSkillLinks(SECRETARY_ID);
-  for (const l of before) if (!pkg.includes(l.name)) store.unlinkPersonaSkill(SECRETARY_ID, l.name);
+  const pkg = skills.getSkill(STEWARD_SKILL) ? [STEWARD_SKILL] : [];
+  const before = store.listPersonaSkillLinks(STEWARD_ID);
+  for (const l of before) if (!pkg.includes(l.name)) store.unlinkPersonaSkill(STEWARD_ID, l.name);
   for (const n of pkg) {
-    store.linkPersonaSkill(SECRETARY_ID, n);
-    store.setPersonaSkillEnabled(SECRETARY_ID, n, true);
+    store.linkPersonaSkill(STEWARD_ID, n);
+    store.setPersonaSkillEnabled(STEWARD_ID, n, true);
   }
-  if (JSON.stringify(before) !== JSON.stringify(store.listPersonaSkillLinks(SECRETARY_ID))) changed.push('skills');
+  if (JSON.stringify(before) !== JSON.stringify(store.listPersonaSkillLinks(STEWARD_ID))) changed.push('skills');
   return changed;
 }
 

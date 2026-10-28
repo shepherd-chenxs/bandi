@@ -28,7 +28,7 @@ import * as status from './status.mjs';
 import { projectTasks, allTasks, personaTasks, createProjectTask, updateProjectTask, startProjectTask, onTaskRunFinished, afterMerged, upsertRepoCard, ensureTaskCardForStep } from './project-tasks.mjs';
 import * as git from './git-repos.mjs';
 import * as schedules from './schedules.mjs';
-import * as secretary from './secretary.mjs';
+import * as steward from './steward.mjs';
 import * as experts from './experts.mjs';
 import * as localMode from './local-mode.mjs';
 import * as discover from './discover.mjs';
@@ -54,10 +54,12 @@ import { handleSsh } from './routes/ssh.mjs';
 import { handleGit } from './routes/git.mjs';
 import { handleImageAi } from './routes/imageai.mjs';
 import { handlePrefs } from './routes/prefs.mjs';
+import { handleFeishu } from './routes/feishu.mjs';
+import * as feishu from './feishu.mjs';
 import { handleRun } from './routes/run.mjs';
 import { handleSchedules } from './routes/schedules.mjs';
 import { handleLocal, supervisorModule } from './routes/local.mjs';
-import { sendJson, fail, readBody, guardWrite, serveStatic, BadRequest, allowedOrigins, webDir } from './http.mjs';
+import { sendJson, fail, readBody, guardWrite, guardHost, serveStatic, BadRequest, allowedOrigins, webDir } from './http.mjs';
 import { SERVER } from './server-state.mjs';
 import { runtimeOptions, runtimesOk, withExternals } from './runtime-view.mjs';
 
@@ -392,6 +394,13 @@ SERVER.AUTH = auth.setup({ host, dataDir, envToken: process.env.BANDI_TOKEN });
  */
 
 const server = http.createServer(async (req, res) => {
+  /*
+   * Host 守卫排在一切之前（含令牌闸）：rebind 页面的请求 Host 是攻击者域名，
+   * 连"来源对不对"都不该让它摸到面板数据（http.mjs 的 guardHost 注释）。
+   */
+  const badHost = guardHost(req);
+  if (badHost) return fail(res, 403, 'E3002', badHost);
+
   const url = new URL(req.url, `http://${req.headers.host}`);
 
   try {
@@ -499,6 +508,9 @@ const server = http.createServer(async (req, res) => {
     const handledPrefs = await handlePrefs(req, res, url);
     if (handledPrefs !== false) return;
 
+    const handledFeishu = await handleFeishu(req, res, url);
+    if (handledFeishu !== false) return;
+
     fail(res, 404, 'E2036', '没有这个接口');
   } catch (err) {
     // 请求本身有问题 → 400（原文就是写给调用方的）；其余是服务端出错 → 500。
@@ -531,8 +543,8 @@ try {
   if (cliNote) console.log(cliNote);
 } catch { /* 上面保证不抛，这里兜一层：装命令失败不能拦启动 */ }
 try {
-  const xier = secretary.ensureSecretary();
-  if (xier.created) console.log(`新建了内置员工「${xier.persona.name}」`);
+  const seeded = steward.ensureSteward();
+  if (seeded.created) console.log(`新建了内置员工「${seeded.persona.name}」`);
 } catch (err) {
   // seed 失败不该拦住整个服务：她能做的事少，服务起不来才是大事
   console.log(`内置员工创建失败（不影响启动）：${err?.message ?? err}`);
@@ -550,7 +562,7 @@ try {
 // 路由层同步锁死（E2054 技能 / E2055 身份）。他比专家早一步 seed，这里紧跟着做增量重置。
 // 2026-10-23 名额换人（喜儿→崔老三）的存量迁移也走的这段：启动即把库里的旧身份刷成新出厂值。
 try {
-  const reset = secretary.syncSecretary();
+  const reset = steward.syncSteward();
   if (reset?.length) console.log(`内置员工已重置回出厂（${reset.join(' / ')}）`);
 } catch (err) {
   console.log(`内置员工同步失败（不影响启动）：${err?.message ?? err}`);
@@ -643,6 +655,12 @@ sweep.unref(); // 别让这个定时器拖着进程不退出
  * 错了就记进任务的 `lastStatus/lastError`，在「设置 → 定时任务」那一行如实显示。
  */
 schedules.start();
+
+/*
+ * 飞书通道（2026-10-27）：配置里开着「开机自启」且凭据齐，就自己把长连接拉起来。
+ * 起不来只 warn 不拦启动 —— 通道是外部的，班底该照常开张。
+ */
+feishu.bootSync();
 
 /*
  * **启动即已加入 → 直接进入节点形态**（2026-10-21 拍板：只当算力，无反代无面板）。

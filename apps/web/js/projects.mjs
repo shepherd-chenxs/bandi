@@ -888,7 +888,7 @@ export async function openBoardPage({ project = null } = {}) {
           { label: '任务看板' },
         ]),
       `${
-      err ? '' : kbFilterBar(data) + kbPrRefreshHtml(data)
+      err ? '' : kbFilterBar(data) + kbColsSettingHtml(data) + kbPrRefreshHtml(data)
     }<button data-kb-refresh>刷新</button>`)}
     <div class="detail-body run-wrap">
       ${
@@ -919,6 +919,7 @@ export async function openBoardPage({ project = null } = {}) {
   };
   wireBoard(view, S.kbLast.wire);
   wireKbFilter();
+  wireKbColsSetting();
 }
 
 
@@ -945,7 +946,7 @@ export const NO_PROJECT_LABEL = '（未归属）';
  * 选项**从当前这批行现取**，不写死表：平台有两套状态词（流程六态 / 聊天四态），
  * 人和项目更是随数据长，写死了迟早漏。状态的顺序跟着看板从左到右的列走。
  *
- * 三个维度的语义（跟同类产品一致，别自创）：
+ * 各个维度的语义（跟同类产品一致，别自创）：
  *   · **同一维里选多个 = 任选其一**（"张三 或 李四"）；
  *   · **不同维之间 = 同时满足**（"张三的 + 这个项目的"）；
  *   · 某一维一个都不勾 = 这一维不设限（不是"什么都不匹配"）。
@@ -1001,6 +1002,24 @@ export function kbProjectOptions(data) {
 
 
 /**
+ * 「来源」的选项（2026-10-28）：卡是手动建的、仓库值班写的、流程派生的还是聊天派活的，
+ * 名字就是卡上那枚 pill（`source_text`，服务端给的口径，别在前端另写一份）。
+ * 来源就那四个固定值，**不带搜索**（跟状态同理）。
+ */
+export function kbSourceOptions(data) {
+  const seen = new Map();
+  for (const r of kbRows(data)) {
+    const id = r.source ?? '';
+    const cur = seen.get(id) ?? { id, name: String(r.source_text ?? '') || '手动', count: 0 };
+    cur.count += 1;
+    seen.set(id, cur);
+  }
+  return withGhosts(seen, S.kbFilter?.sources, () => '（已不在本板）');
+}
+
+
+
+/**
  * 补上"记着、但这批行里没有"的那些（张数 0）。
  *
  * 少了这一截就会出现：角标写着 1、弹层里一个勾都没有、脚注还说"不勾 = 看全部" ——
@@ -1022,13 +1041,14 @@ export function withGhosts(seen, remembered, nameOf, byName = true) {
 
 
 
-/** 三个维度各自勾了几个（角标上的数字；项目那一维只在全局面板算数） */
+/** 四个维度各自勾了几个（角标上的数字；项目那一维只在全局面板算数） */
 export function kbFilterCount(scope) {
   const f = S.kbFilter ?? {};
   const statuses = f.statuses?.length ?? 0;
   const assignees = f.assignees?.length ?? 0;
   const projects = scope === 'all' ? (f.projects?.length ?? 0) : 0;
-  return statuses + assignees + projects;
+  const sources = f.sources?.length ?? 0;
+  return statuses + assignees + projects + sources;
 }
 
 
@@ -1055,6 +1075,7 @@ export function kbWhyHidden(card, scope) {
   if (f.statuses?.length && !f.statuses.includes(card?.status)) return 'status';
   if (f.assignees?.length && !f.assignees.includes(card?.assignee_id ?? '')) return 'who';
   if (scope === 'all' && f.projects?.length && !f.projects.includes(card?.project_id ?? '')) return 'proj';
+  if (f.sources?.length && !f.sources.includes(card?.source ?? '')) return 'src';
   return '';
 }
 
@@ -1085,10 +1106,15 @@ export function kbFilterOptions(data) {
  */
 export function kbFilterCols(data) {
   const scope = data?.scope;
-  const cols = (data?.columns ?? []).map((c) => {
-    const cards = c.cards.filter((x) => kbMatch(x, scope));
-    return { ...c, cards, count: cards.length };
-  });
+  // 「列设置」整列藏掉的先摘掉（跟筛选无关，勾没勾筛都藏）；
+  // 存的是列 key，服务端哪天加了新列，默认显示，不会被旧名单悄悄吞掉
+  const hidden = new Set(S.kbHiddenCols ?? []);
+  const cols = (data?.columns ?? [])
+    .filter((c) => !hidden.has(c.key))
+    .map((c) => {
+      const cards = c.cards.filter((x) => kbMatch(x, scope));
+      return { ...c, cards, count: cards.length };
+    });
   // "真筛掉了东西"：有卡没通过 = 要裁空列。拿**卡**判而不是拿选项判 ——
   // 加了负责人/项目之后，选项里可能全是张数 0 的幽灵，按选项判会误以为筛掉了
   const narrows = kbFilterActive(scope) && kbRows(data).some((x) => !kbMatch(x, scope));
@@ -1118,13 +1144,14 @@ export function kbPrRefreshHtml(data) {
 
 
 /**
- * 三个维度 = 一级菜单的三行。顺序就是弹层里的顺序（状态最常用，排头）。
+ * 四个维度 = 一级菜单的四行。顺序就是弹层里的顺序（状态最常用，排头）。
  * `field` 是它在 `S.kbFilter` 里对应的那个数组 —— 两处别各写各的。
  */
 export const KB_DIMS = [
   { key: 'status', field: 'statuses', label: '状态' },
   { key: 'who', field: 'assignees', label: '负责人', search: true },
   { key: 'proj', field: 'projects', label: '项目', search: true },
+  { key: 'src', field: 'sources', label: '来源' },
 ];
 
 
@@ -1133,6 +1160,7 @@ export const KB_DIMS = [
 export function kbDimOptions(data, key) {
   if (key === 'status') return kbFilterOptions(data);
   if (key === 'who') return kbAssigneeOptions(data);
+  if (key === 'src') return kbSourceOptions(data);
   return kbProjectOptions(data);
 }
 
@@ -1179,7 +1207,7 @@ export function kbDimRowsHtml(data, dim) {
 
 
 /**
- * 一级菜单的数据：三个维度各一行，带「勾了几项」和已选名字的摘要。
+ * 一级菜单的数据：四个维度各一行，带「勾了几项」和已选名字的摘要。
  *
  * 为什么收成两级（用户 2026-10-18 提的，之前的做法是把三组平铺在一层里）：
  * 人和项目一多，单层弹层要滚很久才够得到「项目」那组；而且"我到底按什么在筛"
@@ -1196,7 +1224,7 @@ export function kbDimList(data) {
       ...d,
       count: chosen.length,
       total: opts.length,
-      // 名字最多摆两个，再多就「+N」：一行摆不下会折成两行，三个维度就不齐了
+      // 名字最多摆两个，再多就「+N」：一行摆不下会折成两行，四个维度就不齐了
       summary: names.length > 2 ? `${names.slice(0, 2).join('、')} +${names.length - 2}` : names.join('、'),
     };
   });
@@ -1208,7 +1236,7 @@ export function kbDimList(data) {
  * 看板的「筛选」那一块（按钮 + **两级**弹层）。两块看板共用。
  * 里面只有字符串拼接（不碰 DOM），所以也圈进这一段：能跟上面几条一起在 node 里验。
  *
- * 一级 = 维度（状态 / 负责人 / 项目），二级 = 那一维的选项多选。
+ * 一级 = 维度（状态 / 负责人 / 项目 / 来源），二级 = 那一维的选项多选。
  * 停在哪一级存在 `S.kbPane`（空串 = 一级），**不进 localStorage** ——
  * 下次点开筛选，人想的是"换一维看看"，不是回到上次那一维。
  *
@@ -1256,7 +1284,7 @@ export function kbFilterBar(data) {
 
   return `<div class="kbf" id="kbFilter">
     <span class="kbf-info">${n ? `显示 ${kbFilterCols(data).reduce((a, c) => a + c.count, 0)} / 共 ${data?.total ?? 0}` : ''}</span>
-    <button type="button" class="kbf-btn${n ? ' on' : ''}" id="kbFilterBtn" title="按状态 / 负责人 / 项目筛选">
+    <button type="button" class="kbf-btn${n ? ' on' : ''}" id="kbFilterBtn" title="按状态 / 负责人 / 项目 / 来源筛选">
       <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round">
         <path d="M4 6.5h16M7 12h10M10 17.5h4" />
       </svg>
@@ -1270,6 +1298,36 @@ export function kbFilterBar(data) {
 }
 
 
+/**
+ * 「列设置」（2026-10-28）：挑看板上显示哪几列。两块看板共用。
+ *
+ * 跟「筛选」是两件事：筛选是"这批卡里看哪些"（随点随变），这里是
+ * "这块板本来就有哪几列"（用不到的状态整列藏掉，存下来一直生效）。
+ * 选项就是服务端给的固定列（`data.columns`），里面只有字符串拼接，跟筛选一块圈进纯段验。
+ */
+export function kbColsSettingHtml(data) {
+  const hidden = new Set(S.kbHiddenCols ?? []);
+  return `<div class="kbf">
+    <button type="button" class="kbf-btn" id="kbColsSetBtn" title="挑看板上显示哪几列">
+      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round">
+        <path d="M4 6.5h9.5M17.5 6.5H20M4 12h2.5M10.5 12H20M4 17.5h11M19 17.5h1" />
+        <circle cx="15.5" cy="6.5" r="2" /><circle cx="8.5" cy="12" r="2" /><circle cx="17" cy="17.5" r="2" />
+      </svg>
+      列设置
+    </button>
+    <div class="kbf-pop" id="kbColsSetPop" hidden>
+      ${(data?.columns ?? [])
+        .map(
+          (c) => `<label class="kbf-row">
+        <input type="checkbox" data-kb-col-key="${esc(c.key)}"${hidden.has(c.key) ? '' : ' checked'} />
+        <span class="kbf-name">${esc(c.label)}</span>
+      </label>`,
+        )
+        .join('')}
+    </div>
+  </div>`;
+}
+
 /* kb-filter:pure:end */
 
 /**
@@ -1280,8 +1338,12 @@ export function kbFilterBar(data) {
 export function kbColsHtml(data) {
   const cols = kbFilterCols(data);
   if (cols.length) return cols.map(kbColumn).join('');
-  // 「还没任务」和「筛没了」是两件事：说错了人会以为看板坏了
-  return `<div class="kb-none">${kbFilterActive(data?.scope) ? '没有符合筛选的任务' : '还没有任务'}</div>`;
+  // 「还没任务」「筛没了」「列被藏光了」是三件事：说错了人会以为看板坏了
+  const allCols = data?.columns ?? [];
+  const allHidden = allCols.length > 0 && allCols.every((c) => (S.kbHiddenCols ?? []).includes(c.key));
+  return `<div class="kb-none">${
+    allHidden ? '状态列都藏起来了 —— 「列设置」里可以再打开' : kbFilterActive(data?.scope) ? '没有符合筛选的任务' : '还没有任务'
+  }</div>`;
 }
 
 
@@ -1297,7 +1359,7 @@ export function wireKbChecks(root) {
       const at = key.indexOf(':');
       const dim = at < 0 ? key : key.slice(0, at);
       const id = at < 0 ? '' : key.slice(at + 1);
-      const field = dim === 'status' ? 'statuses' : dim === 'who' ? 'assignees' : 'projects';
+      const field = dim === 'status' ? 'statuses' : dim === 'who' ? 'assignees' : dim === 'src' ? 'sources' : 'projects';
       const set = new Set(S.kbFilter[field] ?? []);
       box.checked ? set.add(id) : set.delete(id);
       S.kbFilter[field] = [...set];
@@ -1348,6 +1410,8 @@ export function wireKbFilter() {
         S.kbSearch = '';
         kbRepaint();
       }
+      const setPop = $('kbColsSetPop');
+      if (setPop) setPop.hidden = true; // 两层不同时开
       $('kbFilterPop').hidden = false;
     } else {
       pop.hidden = true;
@@ -1396,12 +1460,13 @@ export function wireKbFilter() {
       }
     };
   }
-  // 「清除」= 三个维度一起清（分成三个清除按钮只会让人多点两下）
+  // 「清除」= 各个维度一起清（分成四个清除按钮只会让人多点三下）
   $('kbFilterClear')?.addEventListener('click', (e) => {
     e.stopPropagation();
     S.kbFilter.statuses = [];
     S.kbFilter.assignees = [];
     S.kbFilter.projects = [];
+    S.kbFilter.sources = [];
     kbRepaint();
   });
   // 「清除本组」= 只清二级这一维（在二级里清完留在二级，方便接着改）
@@ -1410,6 +1475,39 @@ export function wireKbFilter() {
     const field = KB_DIMS.find((d) => d.key === S.kbPane)?.field;
     if (field) S.kbFilter[field] = [];
     kbRepaint();
+  });
+}
+
+/**
+ * 「列设置」的接线：按钮开合 + 勾选框落 `S.kbHiddenCols`（勾上 = 显示）。
+ *
+ * 勾一下走 `kbRepaint()`：列原地重画（藏掉的列当场消失/回来），筛选弹层跟着对一遍数；
+ * 这个弹层不在 `#kbFilter`、`#kbCols` 里，重画碰不到它 —— 勾选框还在原地，
+ * 可以连着勾（跟筛选弹层"勾着不关层"同一个道理）。
+ */
+export function wireKbColsSetting() {
+  const btn = $('kbColsSetBtn');
+  const pop = $('kbColsSetPop');
+  if (!btn || !pop) return;
+  btn.onclick = (e) => {
+    e.stopPropagation(); // 别让"点别处收起"的全局监听当场把它关掉
+    if (pop.hidden) {
+      const f = $('kbFilterPop');
+      if (f) f.hidden = true; // 两层不同时开
+      pop.hidden = false;
+    } else {
+      pop.hidden = true;
+    }
+  };
+  pop.querySelectorAll('input[data-kb-col-key]').forEach((box) => {
+    box.onchange = () => {
+      const key = box.dataset.kbColKey ?? '';
+      const set = new Set(S.kbHiddenCols ?? []);
+      box.checked ? set.delete(key) : set.add(key);
+      S.kbHiddenCols = [...set];
+      savePlace(); // 跟筛选同一本账：刷新回来还是这套列
+      kbRepaint();
+    };
   });
 }
 
@@ -3208,9 +3306,10 @@ export function taskDialog(project, colKey) {
      */
     const why = flowMode()
       ? ((S.kbFilter?.statuses?.length ?? 0) > 0 && !S.kbFilter.statuses.includes(st) ? 'status' : '')
-      // 派给人：拿一张"将要建出来的卡"去试 —— 状态是选的那个，人是选的那个人，项目是这一页定的那个
+      // 派给人：拿一张"将要建出来的卡"去试 —— 状态是选的那个，人是选的那个人，项目是这一页定的那个；
+      // 来历就是"手动建卡"（这个弹窗只能建出这种卡）
       : kbWhyHidden(
-          { status: st, assignee_id: whoCombo.value() || '', project_id: project?.id ?? projCombo?.value() ?? '' },
+          { status: st, assignee_id: whoCombo.value() || '', project_id: project?.id ?? projCombo?.value() ?? '', source: 'manual' },
           S.boardAll ? 'all' : undefined,
         );
     el.hidden = !why;
@@ -3220,7 +3319,9 @@ export function taskDialog(project, colKey) {
         ? `注意：当前筛选不含「${st}」，建完这张卡会留在看板外面（点「清除」能看到）。`
         : why === 'who'
           ? '注意：当前筛选只看别人 —— 这张卡派给他之后会留在看板外面（点「清除」能看到）。'
-          : '注意：当前筛选只看别的项目 —— 这张卡建完会留在看板外面（点「清除」能看到）。';
+          : why === 'src'
+            ? '注意：当前筛选不含手动建的卡 —— 这张卡建完会留在看板外面（点「清除」能看到）。'
+            : '注意：当前筛选只看别的项目 —— 这张卡建完会留在看板外面（点「清除」能看到）。';
   };
   /*
    * 切执行方式只换**显示**：两边已经选好的值（人 / 流程）都留着 ——

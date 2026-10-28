@@ -227,6 +227,18 @@ const PANEL_FORBIDDEN = [
    */
   { method: /^POST$/, path: /^\/api\/plugins\/[^/]+\/(?:install|enable|disable)$/ },
   { method: /^DELETE$/, path: /^\/api\/plugins\/[^/]+$/ },
+  /*
+   * — panel 只许「看 + 用」，这两条 GET 越界（设计口径：panel 的 SSE 只许
+   *   `/api/runs/<id>/stream`，不许订阅全局事件流；全盘目录列举更是越权读）
+   */
+  { method: /^GET$/, path: /^\/api\/events$/ }, // 全局 SSE：所有会话的运行事件
+  { method: /^GET$/, path: /^\/api\/fs\/dirs$/ }, // 任意目录列举：等于摸操作员整块磁盘
+  /*
+   * — 技能 discover/import：body 里 root/dirs/srcDir 是**任意本机路径**，导入的
+   *   SKILL.md 会整篇注入数字员工的首轮 prompt —— 与"插件装卸 = 落代码"同风险级
+   *   （供应链投毒面，panel 收）                                 server.mjs:273 / 280
+   */
+  { method: /^POST$/, path: /^\/api\/skills\/(?:discover|import)$/ },
 ];
 
 /** 这个动作算不算"管理动作"（`panel` 令牌碰不得） */

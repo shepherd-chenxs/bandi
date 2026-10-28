@@ -93,8 +93,17 @@ export async function generate({ prompt, size = '1024x1024', image }) {
 
   let r;
   if (image) {
+    /*
+     * 参考图只认图片扩展名（2026-10-28 安全收口）：images/edits 本来就只吃图片，
+     * 这个白名单不砍任何合法用途，但把"传个路径读任意文件再 POST 出去"的
+     * 原语（读 token/数据库/密钥文件）收窄成只可能外发图片格式的文件。
+     */
+    const p = String(image);
+    if (!/\.(png|jpe?g|webp|gif|bmp)$/i.test(p)) {
+      throw Object.assign(new Error(`参考图必须是图片文件（png/jpg/webp/gif/bmp）：${p}`), { code: 'E2603' });
+    }
     let ref;
-    try { ref = fs.readFileSync(String(image)); } catch {
+    try { ref = fs.readFileSync(p); } catch {
       throw Object.assign(new Error(`参考图读不到：${image}`), { code: 'E2603' });
     }
     const fd = new FormData();

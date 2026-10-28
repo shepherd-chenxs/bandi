@@ -210,7 +210,7 @@ export function publicList() {
  * 登记表就是 ~/.bandi/servers.yaml，工具读的也是它。拆成"可装的扩展"只会
  * 出现"页面在、工具没装"（清单条目没人装）这种半吊子状态。
  *
- * 口径镜像内置员工（secretary.ensureSecretary）：启动时幂等 seed ——
+ * 口径镜像内置员工（steward.ensureSteward）：启动时幂等 seed ——
  * 没有就落一条，有了只补 `builtin: true` 标记，**不改用户改过的其它字段**。
  * 卸载在 removeEntry / DELETE 路由两道闸拦死（403）。
  */

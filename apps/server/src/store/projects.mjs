@@ -159,6 +159,19 @@ ensureColumn('project_tasks', 'sourceKey', 'sourceKey TEXT');
 ensureColumn('project_tasks', 'sourceRunId', 'sourceRunId TEXT');
 
 /*
+ * 热路径索引（2026-10-28 性能审查）：收尾钩子按 runId 反查卡、PR 巡检按
+ * (projectId, externalKey) 去重、流程步骤按 sourceKey 认卡、流程实例页按
+ * taskId 取每步往来 —— 都是无索引点查。
+ * ⚠️ 必须放在建表与 ensureColumn 之后（同上"no such table"的老坑）。
+ */
+db.exec(`
+  CREATE INDEX IF NOT EXISTS idx_project_tasks_run  ON project_tasks (runId);
+  CREATE INDEX IF NOT EXISTS idx_project_tasks_src  ON project_tasks (sourceKey);
+  CREATE INDEX IF NOT EXISTS idx_project_tasks_ext  ON project_tasks (projectId, externalKey);
+  CREATE INDEX IF NOT EXISTS idx_messages_task      ON messages (taskId);
+`);
+
+/*
  * **任务卡由流程执行**（用户 2026-10-26 定的新执行方式：建卡时不再只能选人，也能选一条流程）。
  *
  *   · `flowTemplateId`：这张卡选了哪条流程模板（建卡时就有）；

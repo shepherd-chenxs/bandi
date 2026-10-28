@@ -145,6 +145,15 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages (conversationId, createdAt);
   CREATE INDEX IF NOT EXISTS idx_runs_conv ON runs (conversationId, startedAt);
+  /*
+   * 热路径索引（2026-10-28 性能审查）：
+   *   · runs.startedAt —— 额度闸 listRunUsageSince 每次"startedAt >= ?"全表扫（runs 只增不删）；
+   *   · messages.runId —— runBelongsToWorkflow / 按 run 反查消息。
+   *   ⚠️ 只放**主 schema 里已建**的表 —— workflow_tasks / project_tasks 的索引
+   *      在各自的建表块后面（放这里新库上会 no such table，整个模块加载失败）。
+   */
+  CREATE INDEX IF NOT EXISTS idx_runs_started ON runs (startedAt);
+  CREATE INDEX IF NOT EXISTS idx_messages_run ON messages (runId);
 
   /*
    * 运行的**事件流落库**（2026-10-15）。
@@ -545,6 +554,9 @@ db.exec(`
     endedAt            TEXT,
     UNIQUE (runId, nodeId, visit)
   );
+
+  -- 每次 agent run 收尾 onAgentRunFinished 都按 agentRunId 反查这一条（无索引 = 全表扫）
+  CREATE INDEX IF NOT EXISTS idx_workflow_tasks_agentrun ON workflow_tasks (agentRunId);
 `);
 
 /*

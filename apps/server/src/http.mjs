@@ -3,6 +3,7 @@
 
 import path from 'node:path';
 import fs from 'node:fs';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { port, extraOrigins } from './config.mjs';
 
@@ -59,6 +60,50 @@ export function guardWrite(req) {
   const clean = origin.replace(/\/$/, '');
   if (!allowedOrigins().has(clean)) return `来源不被允许：${origin}`;
   if (req.headers['x-bandi'] !== '1') return '缺少 X-Bandi 请求头';
+  return null;
+}
+
+/*
+ * Host 头守卫（DNS Rebinding 防护）。
+ *
+ * 为什么需要：回环形态免鉴权，而 `guardWrite` 的 Origin 检查只管写。
+ * 一个攻击页把自己的域名 rebind 到 127.0.0.1 后，跨站 GET 在浏览器看来是同源的，
+ * 可以静默读走 /api/state、/api/fs/dirs 等全部面板数据 —— 但 Host 头仍是它的域名。
+ * 所以：Host 的主机名必须是回环地址或本机网卡上的地址，否则 403。
+ * （LAN 模式下按 IP 访问的节点不受影响；按主机名访问的需是本机别名。）
+ *
+ * 网卡列表缓存 60 秒：DHCP 换 IP 后至多一分钟自愈，省掉每请求的系统调用。
+ */
+let localAddrs = null;
+let localAddrsAt = 0;
+function localAddresses() {
+  const now = Date.now();
+  if (!localAddrs || now - localAddrsAt > 60_000) {
+    localAddrs = new Set(['127.0.0.1', '::1', 'localhost']);
+    for (const list of Object.values(os.networkInterfaces())) {
+      for (const ni of list ?? []) if (ni?.address) localAddrs.add(String(ni.address).toLowerCase());
+    }
+    localAddrsAt = now;
+  }
+  return localAddrs;
+}
+
+/** 从 Host 头里剥出主机名（去掉端口；IPv6 去方括号） */
+function hostnameOf(raw) {
+  const h = String(raw ?? '').trim().toLowerCase();
+  if (h.startsWith('[')) {
+    const end = h.indexOf(']');
+    return end === -1 ? h.slice(1) : h.slice(1, end);
+  }
+  const i = h.lastIndexOf(':');
+  return i === -1 ? h : h.slice(0, i);
+}
+
+/** 返回 null 表示放行；否则给出拒绝原因 */
+export function guardHost(req) {
+  const raw = String(req.headers.host ?? '');
+  if (!raw) return '缺少 Host 头';
+  if (!localAddresses().has(hostnameOf(raw))) return `Host 头不是本机地址：${raw}`;
   return null;
 }
 
@@ -161,7 +206,7 @@ export function mimeOf(file) {
 export function serveStatic(res, pathname) {
   const rel = pathname === '/' ? 'index.html' : decodeURIComponent(pathname).replace(/^\/+/, '');
   const file = path.resolve(webDir, rel);
-  if (!file.startsWith(webDir)) {
+  if (!file.startsWith(webDir + path.sep)) {
     res.writeHead(403).end('forbidden');
     return true;
   }

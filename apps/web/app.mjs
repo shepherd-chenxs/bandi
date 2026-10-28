@@ -240,11 +240,13 @@ window.addEventListener('pagehide', () => { if (detailSave.flush) detailSave.flu
 
 
 
-/* 点别处就把筛选弹层收起来（点层内不关：多选得能连着点） */
+/* 点别处就把筛选/列设置弹层收起来（点层内不关：多选得能连着点） */
 document.addEventListener('click', (e) => {
   if (e.target?.closest?.('.kbf')) return;
   const pop = $('kbFilterPop');
   if (pop && !pop.hidden) pop.hidden = true;
+  const setPop = $('kbColsSetPop');
+  if (setPop && !setPop.hidden) setPop.hidden = true;
 });
 
 
@@ -255,6 +257,13 @@ document.addEventListener('click', (e) => {
  */
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
+  const setPop = $('kbColsSetPop');
+  if (setPop && !setPop.hidden) {
+    e.stopPropagation();
+    setPop.hidden = true;
+    $('kbColsSetBtn')?.focus();
+    return;
+  }
   const pop = $('kbFilterPop');
   if (!pop || pop.hidden) return;
   e.stopPropagation();

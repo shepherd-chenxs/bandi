@@ -1,7 +1,7 @@
 /* settings.mjs —— 设置、关于、额度。
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
-import { esc, setRoute, setTheme, toast } from './shell.mjs';
-import { api, failHtml, post, showFail } from './ui.mjs';
+import { esc, personLabel, setRoute, setTheme, toast } from './shell.mjs';
+import { api, createCombo, failHtml, post, showFail } from './ui.mjs';
 import { headRow, renderPlugins, renderRuntimes, rtLoading } from './connectors.mjs';
 import { renderBackup } from './machine.mjs';
 import { openRemotePage, setPluginRerender } from './experts.mjs';
@@ -37,6 +37,7 @@ export const SETTINGS_SECTIONS = [
    *    在函数开头一律转发，别在这儿再加渲染分支（会画出第二个宿主）。
    */
   ['aiimage', '生图服务', '数字员工生成图片的通道'],
+  ['feishu', '飞书', '在飞书里给数字员工派活'],
   ['about', '关于', '版本与说明'],
 ];
 
@@ -68,6 +69,7 @@ export function openSettings(section) {
   if (S.settingsSection === 'quota') return renderQuota();
   if (S.settingsSection === 'skills') return renderSkillCards();
   if (S.settingsSection === 'aiimage') return renderImageAi();
+  if (S.settingsSection === 'feishu') return renderFeishu();
   if (S.settingsSection === 'about') return renderAbout();
   if (S.settingsSection !== 'prefs') return;
 
@@ -225,17 +227,27 @@ export async function renderImageAi() {
   const status = (html) => { $('aiStatus').innerHTML = html; };
   const keyInput = () => $('aiKey');
 
-  /* 「修改」解锁 Key 框：清掉掩码变可编辑，语义是"这次保存会覆盖旧 Key" */
+  /* 「修改」解锁 Key 框：清掉掩码变可编辑，语义是"这次保存会覆盖旧 Key"；
+     解锁后按钮变「取消」，点它退回掩码锁定态（飞书 Secret 同款） */
+  const aiKeyHint = cfg?.keyHint ?? '';
   $('aiKeyEdit')?.addEventListener('click', () => {
     const k = keyInput();
+    if (!k.dataset.locked) {
+      k.readOnly = true;
+      k.classList.add('locked');
+      k.dataset.locked = '1';
+      k.value = aiKeyHint;
+      k.placeholder = '';
+      $('aiKeyEdit').textContent = '修改';
+      return;
+    }
     k.readOnly = false;
     k.classList.remove('locked');
     k.removeAttribute('data-locked');
     k.value = '';
     k.placeholder = '重新粘贴 API Key（留空则保留原值）';
     k.focus();
-    $('aiKeyEdit').textContent = '已解锁';
-    $('aiKeyEdit').disabled = true;
+    $('aiKeyEdit').textContent = '取消';
   });
 
   $('aiSave')?.addEventListener('click', async () => {
@@ -267,6 +279,212 @@ export async function renderImageAi() {
 }
 
 
+
+/* ---------------------------------------------------------------- 飞书 */
+
+/**
+ * 飞书通道（2026-10-27）：一条平台级通道 —— 私聊机器人 = 找绑定的员工（下拉里挑，
+ * 服务端把没绑/绑的没了都解析成生效值，缺省落在秘书）；群里 `@员工名 做某事` = 派给那个员工；
+ * 每条指令回一张随 run 推进的进度卡。
+ * 形态照抄生图服务页：secret 掩码 + 「修改」解锁、留空保留原值、状态行压在输入区下。
+ * 通道状态每 5 秒轮询一次（只在分节开着时轮，换分节即停 —— 计数器守卫）。
+ */
+let feishuRenderSeq = 0;
+const FEISHU_STATE_TEXT = {
+  connected: '已连接',
+  connecting: '连接中…',
+  reconnecting: '重连中…',
+  stopped: '已停止',
+  failed: '失败',
+};
+
+export async function renderFeishu() {
+  S.settingsSection = 'feishu';
+  const view = $('settingsView');
+  view.innerHTML = rtLoading('飞书');
+  let cfg = null;
+  try {
+    cfg = await api('/api/feishu/config');
+  } catch (e) {
+    view.innerHTML = `${headRow('<b>飞书</b>')}<div class="empty">${failHtml(e)}</div>`;
+    return;
+  }
+  const configured = !!cfg?.configured;
+  const seq = ++feishuRenderSeq;
+  const running = ['connected', 'connecting', 'reconnecting'].includes(cfg?.status?.state);
+
+  view.innerHTML = `
+    ${headRow('<b>飞书</b>')}
+    <div class="detail-body">
+      <section class="set-sec">
+        <div class="set-head"><b>第一次接</b><span class="set-tag">一次性 · 约 10 分钟</span></div>
+        <div class="set-box">
+          <div class="set-note">
+            ① <a href="https://open.feishu.cn/app" target="_blank" rel="noreferrer">去飞书开放平台建一个「企业自建应用」</a>；<br />
+            ② 「事件与回调」：订阅方式选<b>长连接</b>（选成请求地址会永远收不到消息），添加事件 <code>im.message.receive_v1</code>；<br />
+            ③ 「权限管理」：开「获取与发送单聊、群组消息」和「更新应用发送的消息卡片」，发布应用版本；<br />
+            ④ 回来把 App ID / App Secret 填在下面，点「启动通道」。
+          </div>
+        </div>
+      </section>
+      <section class="set-sec">
+        <div class="set-head"><b>飞书通道</b><span class="set-tag" id="fsStateTag">…</span></div>
+        <div class="set-box open-combo">
+          <div class="gr-conn stack">
+            <div class="gr-conn-row">
+              <span class="row-label">App ID</span>
+              <input id="fsAppId" value="${esc(cfg?.appId ?? '')}" autocomplete="off" spellcheck="false"
+                     placeholder="cli_…" />
+              <span></span>
+            </div>
+            <div class="gr-conn-row">
+              <span class="row-label">App Secret</span>
+              ${
+                configured
+                  ? `<input id="fsSecret" class="locked" type="password" value="${esc(cfg?.appSecretHint ?? '')}" readonly data-locked="1"
+                          aria-label="已保存的 Secret，只显示掩码" autocomplete="off" />
+                     <button id="fsSecretEdit">修改</button>`
+                  : `<input id="fsSecret" type="password" placeholder="粘贴 App Secret（保存后只显示掩码）" autocomplete="off" />
+                     <span></span>`
+              }
+            </div>
+            <div class="gr-conn-row">
+              <span class="row-label">私聊绑定</span>
+              <div id="fsP2p"></div>
+              <span></span>
+            </div>
+            <div class="gr-conn-row">
+              <span class="row-label">允许的人</span>
+              <input id="fsAllow" value="${esc((cfg?.allowOpenIds ?? []).join(', '))}" autocomplete="off" spellcheck="false"
+                     placeholder="open_id，逗号分隔；留空不限制" />
+              <span></span>
+            </div>
+            <div class="gr-conn-row">
+              <span class="row-label">开机自启</span>
+              <div class="seg" id="fsEnabled">
+                <button data-v="1" class="${cfg?.enabled ? 'on' : ''}">开</button>
+                <button data-v="0" class="${cfg?.enabled ? '' : 'on'}">关</button>
+              </div>
+              <span></span>
+            </div>
+            <div class="gr-conn-actions">
+              <button class="primary" id="fsSave">保存配置</button>
+              <button id="fsTest">测试连接</button>
+              <button id="fsToggle">${running ? '停止通道' : '启动通道'}</button>
+            </div>
+            <div class="gr-conn-status" id="fsStatus"></div>
+          </div>
+        </div>
+      </section>
+    </div>`;
+
+  const status = (html) => { $('fsStatus').innerHTML = html; };
+  const paintStatus = (st) => {
+    const s = st?.status ?? {};
+    const word = FEISHU_STATE_TEXT[s.state] ?? '已停止';
+    const tag = $('fsStateTag');
+    if (tag) tag.textContent = word;
+    const bad = s.state === 'failed';
+    status(
+      `<b style="color:${bad ? 'var(--bad,#c0504d)' : s.state === 'connected' ? 'var(--ok)' : 'var(--dim)'}">${word}</b>` +
+        `${bad && s.lastError ? ` —— ${esc(s.lastError)}` : ''}`,
+    );
+  };
+  paintStatus(cfg);
+
+  /* 私聊绑定：全站公共下拉（员工多，带搜索）；只持值，等「保存配置」统一提交。
+     标签走 personLabel 全站口径 —— 名字后面带上岗位「崔老三（项目经理）」 */
+  const p2pCombo = createCombo({
+    mount: $('fsP2p'),
+    items: (S.personas ?? []).map((p) => ({ id: p.id, label: personLabel(p) })),
+    value: cfg?.p2pPersonaId ?? '',
+    search: true,
+  });
+
+  /* 「修改」解锁 Secret 框：清掉掩码变可编辑，语义是"这次保存会覆盖旧 Secret"；
+     解锁后按钮变「取消」，点它退回掩码锁定态（输入了一半的值直接丢弃，保存仍走"保留原值"） */
+  const fsSecretHint = cfg?.appSecretHint ?? '';
+  $('fsSecretEdit')?.addEventListener('click', () => {
+    const k = $('fsSecret');
+    if (!k.dataset.locked) {
+      k.readOnly = true;
+      k.classList.add('locked');
+      k.dataset.locked = '1';
+      k.value = fsSecretHint;
+      k.placeholder = '';
+      $('fsSecretEdit').textContent = '修改';
+      return;
+    }
+    k.readOnly = false;
+    k.classList.remove('locked');
+    k.removeAttribute('data-locked');
+    k.value = '';
+    k.placeholder = '重新粘贴 App Secret（留空则保留原值）';
+    k.focus();
+    $('fsSecretEdit').textContent = '取消';
+  });
+
+  $('fsSave')?.addEventListener('click', async () => {
+    const body = {
+      appId: $('fsAppId').value.trim(),
+      allowOpenIds: $('fsAllow').value.split(/[,，\s]+/).map((s) => s.trim()).filter(Boolean),
+      enabled: $('fsEnabled')?.querySelector('.on')?.dataset.v === '1',
+      p2pPersonaId: p2pCombo?.value() ?? '',
+    };
+    const k = $('fsSecret');
+    if (!k?.dataset.locked) body.appSecret = k?.value ?? '';
+    try {
+      await api('/api/feishu/config', { method: 'PUT', body: JSON.stringify(body) });
+      toast('已保存', 'ok');
+      renderFeishu();
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  });
+
+  $('fsEnabled')?.querySelectorAll('button').forEach((b) => {
+    b.onclick = () => {
+      $('fsEnabled').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
+    };
+  });
+
+  $('fsTest')?.addEventListener('click', async () => {
+    status('<span style="color:var(--dim)">测试中…</span>');
+    try {
+      await api('/api/feishu/test', { method: 'POST', body: '{}' });
+      status('<b style="color:var(--ok)">凭据有效</b> —— 飞书认这套 App ID / App Secret');
+    } catch (e) {
+      status(`<b style="color:var(--bad,#c0504d)">凭据不对</b> —— ${esc(e.message)}`);
+    }
+  });
+
+  $('fsToggle')?.addEventListener('click', async () => {
+    const btn = $('fsToggle');
+    btn.disabled = true;
+    try {
+      await api('/api/feishu/' + (btn.textContent === '停止通道' ? 'stop' : 'start'), { method: 'POST', body: '{}' });
+      renderFeishu();
+    } catch (e) {
+      toast(e.message, 'error');
+      btn.disabled = false;
+    }
+  });
+
+  /* 通道状态轮询：只在分节开着时轮，换分节（seq 变了）即停 */
+  const guard = setInterval(async () => {
+    if (seq !== feishuRenderSeq) {
+      clearInterval(guard);
+      return;
+    }
+    try {
+      const st = await api('/api/feishu/config');
+      paintStatus(st);
+      const nowRunning = ['connected', 'connecting', 'reconnecting'].includes(st?.status?.state);
+      const btn = $('fsToggle');
+      if (btn && !btn.disabled) btn.textContent = nowRunning ? '停止通道' : '启动通道';
+    } catch { /* 拉不到就等下一拍 */ }
+  }, 5000);
+}
 
 /* ---------------------------------------------------------------- 关于 */
 
