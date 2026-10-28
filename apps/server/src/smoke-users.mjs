@@ -261,6 +261,27 @@ try {
   check('连打 6 次至少出现一次 429（E3806）', saw429 && last?.body?.code === 'E3806',
     `${last?.status} ${last?.body?.code ?? ''}`);
 
+  /* ============ ⑩.5 删角色前要问「还有没有账号在用」 ============ */
+  /*
+   * 悬空 roleId 的后果：`/api/me` 回 role=null → 前端拿不到 menuKeys → 菜单全消失，
+   * 人只会觉得"我被降权了"。所以角色被账号绑着时必须拦住，先把账号换走。
+   */
+  console.log('\n⑩.5 删角色前要问「还有没有账号在用」');
+  const tmpRole = await call('POST', '/api/roles', { token: TOKEN, body: { name: '临时角色', menuKeys: ['messages'] } });
+  const tmpRoleId = tmpRole.body?.role?.id;
+  check('建一个临时角色 → 201', tmpRole.status === 201 && !!tmpRoleId, `${tmpRole.status}`);
+  const tmpUser = await call('POST', '/api/users', {
+    token: TOKEN,
+    body: { name: '临时工', password: 'temp-pass-01', roleId: tmpRoleId },
+  });
+  check('建一个用它的账号 → 201', tmpUser.status === 201, String(tmpUser.status));
+  const delUsed = await call('DELETE', `/api/roles/${encodeURIComponent(tmpRoleId)}`, { token: TOKEN });
+  check('删还有账号在用的角色 → 409 E2071', delUsed.status === 409 && delUsed.body?.code === 'E2071',
+    `${delUsed.status} ${delUsed.body?.code ?? ''}`);
+  await call('DELETE', `/api/users/${encodeURIComponent(tmpUser.body?.user?.id)}`, { token: TOKEN });
+  const delFree = await call('DELETE', `/api/roles/${encodeURIComponent(tmpRoleId)}`, { token: TOKEN });
+  check('账号删掉后可以删角色 → 200', delFree.status === 200, String(delFree.status));
+
   /* ============ ⑪ 不回归：回环形态 ============ */
   /*
    * 任务书 §三 第一条硬约束：`operator` / `device` / `node` 的行为**一个字节都不许变**。

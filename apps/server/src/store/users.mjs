@@ -69,9 +69,16 @@ function hashPassword(password, saltHex) {
  * 在响应时间上尽量一致 —— 时间侧信道比文案泄漏更难防，能做的就做。
  */
 const DUMMY_SALT = '00'.repeat(16);
+/**
+ * 假 hash **预计算一次**：用不存在的用户名登录时，`want` 直接取它，
+ * 这样"用户存在 / 不存在"两条路都只跑**一次** scrypt。
+ * （2026-10-28 修：原来在函数里现算，等于不存在时跑两次 scrypt —— 既慢一倍，
+ *   又把"用户是否存在"从响应时间上漏出去，方向还正好反了。）
+ */
+const DUMMY_HASH = crypto.scryptSync('x', Buffer.from(DUMMY_SALT, 'hex'), 64).toString('hex');
 export function checkPassword(user, password) {
   const salt = user?.salt || DUMMY_SALT;
-  const want = user?.hash || crypto.scryptSync('x', Buffer.from(DUMMY_SALT, 'hex'), 64).toString('hex');
+  const want = user?.hash || DUMMY_HASH;
   const got = hashPassword(password, salt);
   const A = Buffer.from(got, 'hex');
   const B = Buffer.from(want, 'hex');
@@ -138,6 +145,15 @@ export function countAdmins(exceptId = null) {
     .prepare("SELECT id FROM users WHERE roleId = 'admin' AND disabled = 0")
     .all()
     .filter((r) => r.id !== exceptId).length;
+}
+
+/**
+ * 有多少账号绑在这个角色上（2026-10-28 第三刀补）—— 删角色前必须问它。
+ * 不查的话，删完角色那些账号的 roleId 就成了悬空引用：`/api/me` 回 role=null，
+ * 前端拿不到 menuKeys，菜单整个消失，人还以为自己"被降权"了。
+ */
+export function countUsersByRole(roleId) {
+  return db.prepare('SELECT COUNT(*) AS n FROM users WHERE roleId = ?').get(String(roleId ?? '')).n;
 }
 
 /** 第一个用户是谁（null = 还没人建过） */

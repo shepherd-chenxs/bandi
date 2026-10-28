@@ -21,6 +21,7 @@
  *   E2068 角色不存在                         （404）
  *   E2069 内置角色不能删                     （403）
  *   E2070 内置「管理员」不可改               （403）
+ *   E2071 角色还有账号在用，不能删            （409）
  *   E3703 不是操作员                         （403）
  *
  * ⚠️ 一个码只表达一件事（仓库口径）：上面 E1116 / E1117 / E1118 原本挤在一起过，
@@ -122,6 +123,15 @@ export async function handleRoles(req, res, url) {
       }
 
       if (method === 'DELETE') {
+        /*
+         * 先问「有没有账号还绑着它」（2026-10-28 第三刀补）：删了会留下悬空 roleId，
+         * 那些账号的 `/api/me` 会回 role=null、菜单全没 —— 人只会觉得"我被降权了"。
+         * 要删就先把账号换到别的角色（或删掉账号）。
+         */
+        const inUse = store.countUsersByRole(id);
+        if (inUse > 0) {
+          throw new RoleError(409, 'E2071', `这个角色还有 ${inUse} 个账号在用，先把他们换到别的角色`);
+        }
         const out = store.deleteRole(id);
         if (out.ok) {
           console.log(`[角色] 删除 ${id}`);
