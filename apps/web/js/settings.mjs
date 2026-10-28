@@ -1,13 +1,14 @@
 /* settings.mjs —— 设置、关于、额度。
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
 import { esc, personLabel, setRoute, setTheme, toast } from './shell.mjs';
-import { api, createCombo, failHtml, post, showFail } from './ui.mjs';
+import { api, createCombo, dt, failHtml, post, showFail } from './ui.mjs';
 import { headRow, renderPlugins, renderRuntimes, rtLoading } from './connectors.mjs';
 import { renderBackup } from './machine.mjs';
 import { openRemotePage, setPluginRerender } from './experts.mjs';
 import { renderList, showView } from './contacts.mjs';
 import { setListTitle } from './flowpages.mjs';
 import { openCodeRepoPage, renderSkillCards } from './skills.mjs';
+import { renderPairing } from './pairing.mjs';
 import { $, S } from './core.mjs';
 
 
@@ -25,6 +26,9 @@ export const SETTINGS_SECTIONS = [
      分段控件只有 单机 / 总机；「接入总机…」是动作不是第三档，点了只会展开加入面板。
      「局域网」就是单机⇄总机的切换本体，不再是独立开关；备份独立成「数据管理」分节。 */
   ['runtimes', '这台机器', '模式 · 设备'],
+  /* 「手机配对」（2026-11 手机端增量）：扫码连接手机 —— 局域网形态才有意义，
+     未监听局域网时分节里给引导（见 pairing.mjs renderPairing 的 boundLan 分支） */
+  ['pairing', '手机配对', '扫码连接手机'],
   ['backup', '数据管理', '导入 / 导出本机数据'],
   ['quota', '额度', '每个模型每天最多用多少'],
   ['plugins', '插件', '扩展点'],
@@ -41,6 +45,25 @@ export const SETTINGS_SECTIONS = [
   ['about', '关于', '版本与说明'],
 ];
 
+/*
+ * 手机设备（受限视图）的「我的」= 设备信息 + 可用设置（2026-10-28，设计 T04 第 1 条）。
+ *
+ * 为什么单独一份而不是在渲染里逐条 `if`：服务端白名单已经决定设备碰不到
+ * 技能/连接器/插件/飞书/额度/数据管理/这台机器/手机配对 —— 左栏还把它们列出来，
+ * 用户点一个吃一个 E4033 toast，等于把「没权限」包装成「这东西坏了」。
+ * 设备端只留**真能用**的三节；`/api/pair/me` 就是「这台手机」那节的数据源。
+ */
+export const DEVICE_SETTINGS_SECTIONS = [
+  ['device', '这台手机', '配对与连接'],
+  ['prefs', '偏好设置', '主题与外观'],
+  ['about', '关于', '版本与说明'],
+];
+
+/** 当前身份能看到的设置分节（左栏列表与 openSettings 的兜底共用这一份） */
+export function settingsSections() {
+  return S.isDevice ? DEVICE_SETTINGS_SECTIONS : SETTINGS_SECTIONS;
+}
+
 
 
 export function openSettings(section) {
@@ -54,8 +77,16 @@ export function openSettings(section) {
    */
   if (section === 'code') return openCodeRepoPage();
   if (section === 'remote') return openRemotePage();
-  setRoute('settings', { section: section || S.settingsSection || 'prefs' });
-  S.settingsSection = section || 'prefs';
+  /*
+   * 分节收敛（2026-10-28）：深链接、刷新恢复存下的 `S.settingsSection`、或别处残留的
+   * openSettings('skills') 都可能指到**当前身份碰不到**的分节。设备形态不收敛的话，
+   * 会画出一个每行都 403 的设置页 —— 所以按 `settingsSections()` 兜到第一个可用分节。
+   */
+  const allowed = settingsSections();
+  const want = section || S.settingsSection || 'prefs';
+  section = allowed.some(([k]) => k === want) ? want : allowed[0][0];
+  setRoute('settings', { section });
+  S.settingsSection = section;
   setPluginRerender(null);   // 换分节 = 换宿主：面板表单提交后的重画别再指回上一页
   showView('settings');
   /* 左栏顶上只写「设置」：这一列本身就是设置的分节列表，当前分节是右边的页面标题。
@@ -63,7 +94,9 @@ export function openSettings(section) {
      等于把右边页面的标题挂在左边的列表头上，切换分节时左栏标题跟着跳，列表反而不像导航了。 */
   setListTitle('设置');
   renderList();
+  if (S.settingsSection === 'device') return renderDeviceInfo();
   if (S.settingsSection === 'runtimes') return renderRuntimes();
+  if (S.settingsSection === 'pairing') return renderPairing();
   if (S.settingsSection === 'backup') return renderBackup();
   if (S.settingsSection === 'plugins') return renderPlugins();
   if (S.settingsSection === 'quota') return renderQuota();
@@ -103,7 +136,8 @@ export function openSettings(section) {
   $('themeSeg').querySelectorAll('[data-theme-opt]').forEach((el) => {
     el.onclick = () => setTheme(el.dataset.themeOpt);
   });
-  loadReplyStyle().catch(() => {}); // 偏好里唯一要问服务端的一项（存在 config.json，跟设备走）
+  // 回复风格是「全体数字员工」的写设置（PUT 对设备 403）—— 设备形态不渲染那一节
+  if (!S.isDevice) loadReplyStyle().catch(() => {}); // 偏好里唯一要问服务端的一项（存在 config.json，跟设备走）
 }
 
 /*
@@ -494,6 +528,40 @@ export async function renderFeishu() {
  * 数据口径：版本 / 实例 / 机器名全部来自 `/api/hello` —— 它是服务端自己的答案，
  * 界面不写死版本字面量（写死一份，升级时就出现"页面 1.1.0、服务 1.2.0"这种自相矛盾）。
  */
+/* ---------------------------------------------------------------- 这台手机（设备形态） */
+
+/**
+ * 手机设备的「我的」页首节（2026-10-28）：配对信息只读。
+ *
+ * 数据来自 `/api/pair/me`（`load()` 里取过一次，存在 `S.device`）—— 不再打
+ * `/api/pair/devices`：那是**操作员**的设备清单（含别的手机），设备令牌碰它 403。
+ * 「解除配对」只给指路：踢出是电脑端动作（白名单里没有 revoke，也不该有）。
+ */
+export function renderDeviceInfo() {
+  const d = S.device ?? {};
+  $('settingsView').innerHTML = `
+    ${headRow('<b>这台手机</b>')}
+    <div class="detail-body">
+      <section class="set-sec">
+        <div class="set-head"><b>配对信息</b><span class="set-tag">设备令牌</span></div>
+        <div class="set-box">
+          <div class="set-row">
+            <span class="set-label">名称</span>
+            <div class="machine-data">${esc(d.name ?? '手机设备')}</div>
+          </div>
+          <div class="set-row">
+            <span class="set-label">配对于</span>
+            <div class="machine-data">${esc(d.pairedAt ? dt(d.pairedAt) : '—')}</div>
+          </div>
+          <div class="set-row">
+            <span class="set-label">解除配对</span>
+            <div class="machine-data">在电脑上打开「设置 → 手机配对」，把这台设备踢出即可；踢出后本机下一次操作会提示重新扫码。</div>
+          </div>
+        </div>
+      </section>
+    </div>`;
+}
+
 export async function renderAbout() {
   $('settingsView').innerHTML = rtLoading('关于');
   let h = null;

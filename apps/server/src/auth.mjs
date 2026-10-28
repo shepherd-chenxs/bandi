@@ -125,6 +125,14 @@ export function identify(auth, token) {
   if (auth.token && timingSafeEqual(token, auth.token)) return { kind: 'operator' };
   const hit = store.nodeAuthByToken(token);
   if (hit) return { kind: 'node', nodeId: hit.nodeId, scope: hit.scope };
+  /*
+   * 第四类身份：手机设备令牌（`bd_` 前缀，2026-11 手机端增量）。
+   * 走 store.deviceAuthByToken（只存哈希的那张表）；不认识/已过期/被踢出都返回 null，
+   * 走下面的 401 E4010 —— **不学节点造 `revoked` 类**：设备被踢出的引导是"重新扫码"，
+   * 与"需要令牌"在前端是同一条提示，不值得多一个身份类。
+   */
+  const dev = store.deviceAuthByToken(token);
+  if (dev) return { kind: 'device', deviceId: dev.deviceId };
   if (String(token).startsWith('bn_')) return { kind: 'revoked' };
   return null;
 }
@@ -249,17 +257,101 @@ export function isPanelForbidden(method, pathname) {
 }
 
 /**
+ * **设备令牌的权限边界**（2026-11 手机端增量，设计 §3.3 + **§3.3.1 增量修订优先**）：
+ * /api 走**白名单制**（不在名单 = `E4033`），**同源静态无条件放行**。
+ *
+ * 口径（用户已确认）：手机端写操作只有"审卡票 + 给员工发消息"两类，其余只读 ——
+ *   · 看：状态 / 技能 / 流程 / 项目与看板 / 卡详情与评论 / 会话 / 员工与群信息 / 我是谁 / 版本指纹；
+ *   · 写：发消息（POST 会话消息）、留便签（POST 卡评论，仅 mode:'note' —— body 只有
+ *     handler 看得见，字段级闸落在 routes/project.mjs）、审批（PATCH 卡，仅 {status, note}，
+ *     字段级闸同样落在 routes/project.mjs）。
+ *
+ * 往里加路径之前先回答一句：手机**凭什么**需要它？白名单外的都是操作员的事 ——
+ * 删任务、改员工、动连接器、踢设备，一台被翻的手机不该碰得到。
+ */
+function deviceMayReach(method, pathname) {
+  /*
+   * 规则一（设计 §3.3.1.1）：白名单**只管 /api** —— 同源静态（HTML/JS/CSS/manifest/图标/SW，
+   * 也就是 server.mjs 里 serveStatic 覆盖的那些非 /api 路径）与 panel 同权、无条件放行。
+   * 理由：静态资源是公开代码，白名单管的是**数据**不是代码；把代码也管起来只会造成
+   * "扫上码但页面加载不出来"（QA 第 1 轮 P0 白屏）。GET/HEAD 之外的非 /api 请求仍被闸住
+   * （serveStatic 本身也只吃 GET，双保险）。
+   */
+  if (!pathname.startsWith('/api/')) return method === 'GET' || method === 'HEAD';
+
+  if (method === 'GET') {
+    /*
+     * 规则二（设计 §3.3.1.2）：受限视图**浏览**口径的完整 GET 表。
+     * 加一条之前先回答：手机**凭什么**需要它？表外的都是操作员的事（§3.3.1.2 的 403 清单）。
+     */
+    if (
+      [
+        '/api/state', // 工作台/会话/通讯录总览（启动必需）
+        '/api/skills', // 启动 load() 的 Promise.all 另一半 —— 缺了整页挂
+        '/api/workflows', // 工作台流程磁贴
+        '/api/projects', // 项目列表
+        '/api/tasks', // 全局任务 / 看板
+        '/api/pair/me', // 我是谁（设备名）
+        '/api/web-version', // 60 秒版本指纹轮询（只回 mtime，零敏感）
+        '/api/prefs', // 「我的」页回复风格**读**（PUT 仍 403：那是改全体员工的沟通偏好）
+        /*
+         * 全局 SSE（2026-10-28 修）：`app.mjs` 的 `startEvents()` 是**每个页面**都会开的
+         * 一条订阅，它推的只是「哪个会话动了」的 `{type:'conv', id}`；设备已经能读全部
+         * 会话正文（`/api/conversations/:id`），这条通知不超出同一个读范围。
+         * 不放行的话手机端每页都挂一条 403 订阅，后台刷新也是死的。
+         */
+        '/api/events',
+      ].includes(pathname)
+    ) {
+      return true;
+    }
+    /*
+     * ⚠️ 这几条必须**按路径段精确匹配**，不能用前缀匹配：
+     * `/api/personas/:id` 前缀式会把 `/api/personas/:id/runtime-skills`（技能**编辑**视图）
+     * 一起放行 —— 那是 §3.3.1.2 明确要保持 403 的脸。
+     */
+    return (
+      /^\/api\/projects\/tasks\/[^/]+(\/comments)?$/.test(pathname) // 卡详情 / 卡评论
+      || /^\/api\/projects\/[^/]+\/tasks$/.test(pathname) // 项目看板
+      || /^\/api\/conversations\/[^/]+$/.test(pathname) // 会话详情 / 消息
+      || /^\/api\/personas\/[^/]+$/.test(pathname) // 员工详情（浏览口径）
+      || /^\/api\/personas\/[^/]+\/tasks$/.test(pathname) // 员工详情里的任务页签
+      || /^\/api\/groups\/[^/]+$/.test(pathname) // 群信息（成员列表）
+      /*
+       * 单运行的实时事件流（2026-10-28 修）：前端 `streamRun()` 靠它把「边跑边看」
+       * 画出来。设备既然能读这条会话（上一条 `/api/conversations/:id`）并能派活
+       * （POST messages），这条流的**内容就是那条会话的正文**，不额外扩读范围。
+       * 不放行的话：发完消息界面一直停在「正在输入」，回复要刷新才看得到。
+       */
+      || /^\/api\/runs\/[^/]+\/stream$/.test(pathname)
+    );
+  }
+  if (method === 'POST') {
+    return /^\/api\/conversations\/[^/]+\/messages$/.test(pathname)
+      || /^\/api\/projects\/tasks\/[^/]+\/comments$/.test(pathname)
+      /*
+       * 停止生成（2026-10-28 修）：与「发消息」是一对 —— 能派不能停，手机上那轮
+       * 会话就永远挂着「正在输入」（`chat.mjs` 的停止按钮走的就是这条）。
+       */
+      || /^\/api\/runs\/[^/]+\/abort$/.test(pathname);
+  }
+  if (method === 'PATCH') return /^\/api\/projects\/tasks\/[^/]+$/.test(pathname);
+  return false;
+}
+
+/**
  * **判定只有一处**（设计 §6.1）。`guard()` 里只调这一个函数，别的什么都不判。
  *
  * 三种令牌携带方式（Cookie / `X-Bandi-Token` / `?token=`）走的**都是这里** ——
  * `tokenOf()` 先统一取出令牌，`identify()` 再统一认出"是谁"。
  * 所以"面板令牌换个 Cookie 就变成操作员"这种事不会发生。
  *
- * 返回 `'allow' | 'E4012' | 'E4031' | 'E4032'`，规则按序：
+ * 返回 `'allow' | 'E4012' | 'E4031' | 'E4032' | 'E4033'`，规则按序：
  *   1. `operator` → 放行；
  *   2. 有 `compute` 且是"节点自己的活"（`nodeMayReach` + `runMayReach`）→ 放行；
  *   3. 有 `panel` 且**不在**禁止清单里 → 放行（并节流记一次"最近使用"）；
- *   4. 有 `panel` 但命中禁止清单 → `E4032`；其余（只有 compute）→ `E4031`。
+ *   4. 有 `panel` 但命中禁止清单 → `E4032`；其余（只有 compute）→ `E4031`；
+ *   5. `device` 且在白名单里 → 放行（并节流记一次"最近活跃"）；白名单外 → `E4033`。
  *
  * **不缓存**（决策 A 规则 2）：每次请求现算，总机那边改完对下一次请求立即生效。
  */
@@ -267,6 +359,10 @@ export function decide(who, method, pathname) {
   if (!who) return 'allow'; // 不该发生：guard 只在 identify 到身份之后才问
   if (who.kind === 'operator') return 'allow';
   if (who.kind === 'revoked') return 'E4012';
+  // 手机设备：白名单制（判定只有一处，touchDevice 的节流写库也只在这一条路上发生）
+  if (who.kind === 'device') {
+    return deviceMayReach(method, pathname) ? 'allow' : 'E4033';
+  }
 
   const scope = who.scope instanceof Set ? who.scope : new Set([store.SCOPE_COMPUTE]);
   if (scope.has(store.SCOPE_COMPUTE) && (nodeMayReach(who.nodeId, method, pathname) || runMayReach(who.nodeId, method, pathname))) {
@@ -313,6 +409,23 @@ export function guard(auth, req, res, url) {
    */
   if (req.method === 'POST' && url.pathname === '/api/nodes/join') return true;
   if (req.method === 'GET' && url.pathname === '/api/hello') return true;
+
+  /*
+   * 手机配对（2026-11 手机端增量，设计 §2）：落地页与换码接口必须免令牌 ——
+   * 手机此刻还**没有任何凭据**，配对码本身就是它的凭据（对齐上面 /api/nodes/join 的既有写法）。
+   * · `GET /pair`（及 `/pair.html`）＝ 扫码落地页：服务端不校验 token，校验在 claim；
+   * · `POST /api/pair/claim` ＝ 凭一次性码换长期设备令牌（guardWrite 的 CSRF 闸照常生效，
+   *   落地页的 fetch 自己带 X-Bandi: 1）。
+   */
+  if (req.method === 'GET' && (url.pathname === '/pair' || url.pathname === '/pair.html')) return true;
+  if (req.method === 'POST' && url.pathname === '/api/pair/claim') return true;
+  /*
+   * 落地页的**静态依赖**也要免令牌（2026-10-28 修）：手机此刻没有任何凭据，
+   * `/js/pair-claim.mjs` 和图标走的是非 /api GET —— 不豁免时 guard 会回**登录页 HTML**
+   * （`Content-Type: text/html`），浏览器按 module 执行必然失败，页面就永远停在
+   * 「正在配对…」那一屏（实测复现）。这些是公开代码，不含任何数据或凭据。
+   */
+  if (req.method === 'GET' && (url.pathname === '/js/pair-claim.mjs' || url.pathname.startsWith('/icons/'))) return true;
 
   /*
    * 数字员工的本机 AI 通道（2026-10-23，skills/bandi-avatar）：回环发起的 /api/ai/* 免令牌。
@@ -384,6 +497,24 @@ export function guard(auth, req, res, url) {
         }),
       );
       return false;
+    }
+
+    if (decision === 'E4033') {
+      res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(
+        JSON.stringify({
+          error: '手机端只开放看状态、审卡票和给员工发消息，这个操作在手机上做不了',
+          code: 'E4033',
+          platform: 'bandi',
+          hint: '请在桌面端操作。',
+        }),
+      );
+      return false;
+    }
+
+    // 手机设备放行了才记"最近活跃"（60 秒节流，见 store.touchDevice 的注释）
+    if (who.kind === 'device') {
+      store.touchDevice(who.deviceId, req.socket?.remoteAddress ?? null);
     }
 
     /*

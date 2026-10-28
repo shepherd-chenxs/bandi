@@ -94,6 +94,15 @@ export async function handleProject(req, res, url) {
   if (req.method === 'PATCH' && taskOne) {
     const id = decodeURIComponent(taskOne[1]);
     const body = await readBody(req);
+    /*
+     * 手机设备令牌的**字段级闸**（2026-11 手机端增量，设计 §3.3）：body 只有 handler 看得见
+     * （auth.mjs 判不了），与 `PUT /api/personas/:id` 的 model/runtime 字段闸同一模式。
+     * 手机审批 = 只允许 {status, note} 两个键，多一个键就拒 —— 改标题/执行人是桌面端的事。
+     */
+    if (req.bandiAuth?.kind === 'device') {
+      const extra = Object.keys(body ?? {}).filter((k) => k !== 'status' && k !== 'note');
+      if (extra.length) return fail(res, 403, 'E3702', `手机端只能改卡票状态（多传了：${extra.join('、')}）`);
+    }
     try {
       const before = store.getProjectTask(id);
       const task = updateProjectTask(id, body, { autoStart: body.startNow !== true });
@@ -189,6 +198,14 @@ export async function handleProject(req, res, url) {
     const task = store.getProjectTask(id);
     if (!task) return fail(res, 404, 'E2039', '任务不存在');
     const body = await readBody(req);
+    /*
+     * 手机设备令牌只许留**便签**（2026-11 手机端增量，设计 §3.3）：驳回附一句理由就是 note；
+     * 讨论（discuss）/执行（execute）会真的派活，是桌面端动作 —— 白名单放行了这条 POST，
+     * 但档位必须收在 note，两层缺一不可。
+     */
+    if (req.bandiAuth?.kind === 'device' && body.mode !== 'note' && body.note !== true) {
+      return fail(res, 403, 'E3702', '手机端只能留便签（note）—— 讨论/执行请在桌面端发起');
+    }
     const text = String(body.text ?? '').trim();
     if (!task.assigneePersonaId) return fail(res, 400, 'E1061', '先指定执行人 —— 评论区是跟他讨论的');
     const persona = store.getPersona(task.assigneePersonaId);

@@ -559,10 +559,18 @@ export async function openPlugins() {
   S.projectId = null;
   S.boardAll = false;      // 也离开全局面板
   savePlace();             // 点一级栏 = 回宫格首页，这个位置也要记
-  try {
-    S.plugins = (await api('/api/plugins')).plugins;
-  } catch {
+  /*
+   * 设备形态（2026-10-28）：`/api/plugins` 不在白名单（插件目录含磁盘路径），
+   * 硬拉只会吃一条 403。设备端宫格由「项目 / 任务看板」两格组成（见 renderWorkbenchGrid）。
+   */
+  if (S.isDevice) {
     S.plugins = [];
+  } else {
+    try {
+      S.plugins = (await api('/api/plugins')).plugins;
+    } catch {
+      S.plugins = [];
+    }
   }
   // 拿清单这段时间里页面可能已经被接管了（刷新恢复看板就是这种），或者人已经点去别的栏了
   // —— 那就别抢渲染（`S.nav` 也得看：点了一级栏「消息」就说明宫格不再是当前页面）
@@ -600,6 +608,12 @@ export function renderWorkbench() {
 export function renderWorkbenchGrid() {
   resetWbHues(); // 每次重画从头发色：分组顺序不变 → 颜色不变；顺序变了 → 颜色跟着重排（不追求跨次稳定）
   const list = usablePlugins();
+  /*
+   * 设备形态（2026-10-28）：手机白名单里没有 `/api/plugins`，也没有代码托管/远程连接/
+   * 定时任务/工作流设计那几个口（全部 403）。宫格只留**真能用**的项目与任务看板两格，
+   * 否则用户点一个吃一个 E4033 —— 「没权限」看起来就像「坏了」。
+   */
+  const devMode = !!S.isDevice;
   // 宫格是整页布局：把左栏收掉（进插件后会由 renderPluginMaster 放回来）
   document.body.classList.add('no-list');
   setListTitle('工作台');
@@ -635,7 +649,7 @@ export function renderWorkbenchGrid() {
   /* 所有分组**共用一个宫格容器**，分组名退化成一行小标题（`.wb-sec`）。
      原来每个分组是 `<section class="fx">`，`.fx + .fx` 自带横分隔线 —— 5 个小组竖着叠成
      5 条横带，每条右侧一片空白，分隔线反而比内容显眼。现在一屏铺不下就换行，不会"一带一块"。 */
-  const pluginSections = groupList
+  const pluginSections = devMode ? '' : groupList
     .map(([cat, items]) => {
       // 一组一个色（内联渐变），组里的插件和内置磁贴共用这一种颜色 —— 一眼看出是同一区
       const icoStyle = wbIcoStyle(cat);
@@ -653,7 +667,7 @@ export function renderWorkbenchGrid() {
               ),
             )
             .join('')}
-          ${cat === '研发'
+          ${cat === '研发' && !devMode
             ? DEV_TILES.map(([name, desc, key, icon]) =>
                 wbCard('wb-tint', icon, name, desc, `data-wb-settings="${key}"`, icoStyle),
               ).join('')
@@ -665,7 +679,7 @@ export function renderWorkbenchGrid() {
   $('pluginView').classList.remove('kb-page'); // 宫格是长页面，按普通滚动
   $('pluginView').innerHTML = `
     <div class="detail-head head-row"><div class="head-title"><b>工作台</b></div></div>
-    <div class="detail-body wb-page">${pluginSections}${workbenchProjectSection()}${workbenchAutoSection()}${
+    <div class="detail-body wb-page">${pluginSections}${workbenchProjectSection()}${devMode ? '' : workbenchAutoSection()}${
       broken.length
         ? `<div class="wb-sec">装不上台面</div>
            ${broken

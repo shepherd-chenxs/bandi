@@ -34,6 +34,7 @@ import * as localMode from './local-mode.mjs';
 import * as discover from './discover.mjs';
 import * as lanAnnounce from './lan-announce.mjs';
 import { handleConversation } from './routes/conversation.mjs';
+import { handlePair } from './routes/pair.mjs';
 import { handleEvents } from './routes/events.mjs';
 import { handlePersona } from './routes/persona.mjs';
 import { handleAgentCards } from './routes/agent-cards.mjs';
@@ -421,6 +422,22 @@ const server = http.createServer(async (req, res) => {
     if (handledLocal !== false) return;
 
     if (!url.pathname.startsWith('/api/')) {
+      /*
+       * 扫码落地页（2026-11 手机端增量）：`GET /pair?token=…` → apps/web/pair.html。
+       * 不能走 serveStatic('/pair') —— 它按路径找文件会 404；这里显式映射。
+       * 页面校验不做在这里：guard 已豁免这条路（免令牌），token 的校验在 claim 接口。
+       */
+      if (url.pathname === '/pair' || url.pathname === '/pair.html') {
+        try {
+          const buf = fs.readFileSync(path.join(webDir, 'pair.html'));
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+          res.end(buf);
+        } catch {
+          res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end('配对页还没就绪（apps/web/pair.html 不存在）');
+        }
+        return;
+      }
       if (serveStatic(res, url.pathname)) return;
       res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
       res.end('没有这个文件');
@@ -438,6 +455,10 @@ const server = http.createServer(async (req, res) => {
     // 全局 SSE（/api/events）：挂在链头 —— 长命连接，别让它在别的 handler 里排队
     const handledEvents = await handleEvents(req, res, url);
     if (handledEvents !== false) return;
+
+    // 手机配对与设备管理（2026-11 手机端增量）：自己判路径，放在会话链之前（设计 §2）
+    const handledPair = await handlePair(req, res, url);
+    if (handledPair !== false) return;
 
     const handledConversation = await handleConversation(req, res, url);
     if (handledConversation !== false) return;

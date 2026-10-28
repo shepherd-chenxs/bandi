@@ -2,7 +2,7 @@
 
 **把活派给 AI 数字员工，看它干，随时接管。**
 
-自托管的多 agent 协作平台：控制面 ＋ 出站节点，算力在你自己机器上。
+自托管的多 agent 协作平台：每台机器跑一个完整实例，算力在你自己机器上；也可把多台机器连起来协作（**实验特性**，见 [deploy/README.md](deploy/README.md)）。
 一个**数字员工** = 名字 ＋ 职责指令 ＋ 绑定的 agent CLI（Codex / DeepSeek Harness）＋ 权限 ＋ 工作目录；
 派给他的活落在会话里，事件流（思考 / 工具 / 回复）实时可见，随时能掐。
 2026-10-14 起还有**流程引擎**：模板（节点 ＋ 连线 ＋ 出口）＋ 实例，谁上场、下一步去哪、干完停不停由引擎管。
@@ -58,7 +58,7 @@ bandi install-cli         # 重新注册全局命令（[--dir] [--path] [--remov
 
 - **agent CLI 自己装、凭据自备**：Codex（`codex`）或 DeepSeek Harness（`dsh`）—— 班底只负责调用，
   **不分发**它们（见 [许可](#许可与署名)）。
-- **想多台机器一起干活**：那台机器上装班底节点，见 [deploy/README.md](deploy/README.md)。
+- **多台机器一起干活（可选 / 实验）**：2026-10-28 起多机协同降为实验特性 —— 每台机器跑一个完整班底、各自一份数据；真要跨机协作，项目走 git 仓库 ＋ PR，或参考 [deploy/README.md](deploy/README.md)（多机与隧道）。
 
 ## 三步用起来
 
@@ -113,7 +113,7 @@ bandi install-cli         # 重新注册全局命令（[--dir] [--path] [--remov
 
 ## 版本
 
-当前 **1.2.0**，真源唯一：[apps/desktop/version.json](apps/desktop/version.json)
+当前 **1.3.0**，真源唯一：[apps/desktop/version.json](apps/desktop/version.json)
 （`build.rs` 读它编译进程序，并同步安装包名 —— **别在别处记第二个号**）。
 未及 `1.0.0` 之前的兼容承诺仍然有效：**不承诺兼容**，插件格式、流程模板、`status.yaml` 契约都还在动。
 发版：改 `version.json` → 提交 → 打 `v<版本>` tag 推上去，CI 自动出安装包并挂 Release。

@@ -37,6 +37,22 @@ export async function load() {
   } catch {
     S.projects = [];
   }
+  /*
+   * 我是谁（2026-10-28）：设备令牌 → **受限视图**。只问一次 —— `load()` 会被
+   * 通讯录轮询、下拉刷新反复调，每拍都问一遍没有意义（身份在配对期间不变）。
+   * `/api/pair/me` 对操作员/回环形态回 `{kind:'operator'}`，所以桌面端也是同一条路。
+   */
+  if (S.isDevice === undefined) {
+    try {
+      const me = await api('/api/pair/me');
+      S.isDevice = me?.kind === 'device';
+      S.device = me?.device ?? null;
+    } catch {
+      S.isDevice = false;
+      S.device = null;
+    }
+    document.body?.classList.toggle('mb-device', !!S.isDevice);
+  }
   renderList();
   // 详情页开着时，那枚忙/闲徽标也要跟着变（轮询只重画了列表，没重画详情）
   const open = S.persona ? S.personas.find((x) => x.id === S.persona.id) : null;

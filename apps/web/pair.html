@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<!-- viewport-fit=cover：刘海屏/手势条下不留白边（与主应用 index.html 同口径） -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>班底 · 配对中</title>
+<meta name="theme-color" content="#08090a" />
+<link rel="icon" href="/icons/icon-192.png" />
+<!--
+  手机扫码落地页（PRD §4 极简线框）：校验中 → 成功进工作台 / 失败给一行人话。
+  **独立页面、不加载整个 SPA** —— 手机首屏只拉几 KB（设计 §2）。
+  主验证平台是 Android Chrome；iOS Safari 的差异只在"添加到主屏幕"体验上，
+  这页本身不依赖任何 PWA 能力，纯 fetch + location 跳转，两端行为一致。
+-->
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    font: 15px/1.8 system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+    margin: 0; min-height: 100vh; background: #08090a; color: #e7e7e7;
+    display: flex; align-items: center; justify-content: center; padding: 24px;
+  }
+  .card { max-width: 420px; width: 100%; text-align: center; }
+  .logo {
+    width: 56px; height: 56px; border-radius: 14px; margin: 0 auto 18px;
+    background: linear-gradient(135deg, #3b6ef5, #7b4df0);
+    display: grid; place-items: center; font-size: 26px; font-weight: 700; color: #fff;
+  }
+  h1 { font-size: 19px; margin: 0 0 10px; }
+  p { color: #9aa0a6; margin: 0; font-size: 13.5px; }
+  .state-err h1 { color: #ff8a80; }
+  .spin {
+    width: 26px; height: 26px; margin: 0 auto 14px; border-radius: 50%;
+    border: 3px solid #2a2d33; border-top-color: #3b6ef5;
+    animation: mb-spin .9s linear infinite;
+  }
+  @keyframes mb-spin { to { transform: rotate(360deg); } }
+  code { background: #17181b; padding: 1px 6px; border-radius: 4px; font-size: 12.5px; }
+  .hint { margin-top: 16px; font-size: 12.5px; color: #7c8288; }
+  .err-code { margin-top: 6px; font-size: 12px; color: #6b7280; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">B</div>
+  <div id="pairState">
+    <div class="spin"></div>
+    <h1>正在配对…</h1>
+    <p>正在向电脑上的班底核验这个二维码</p>
+  </div>
+  <p class="hint">配对之后这台手机就可以直接打开 <code>/</code> 进入工作台，不用再输地址和令牌。</p>
+</div>
+<script type="module" src="/js/pair-claim.mjs"></script>
+</body>
+</html>

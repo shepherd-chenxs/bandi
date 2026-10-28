@@ -59,6 +59,11 @@ const netMode = (() => {
   }
 })();
 
+/**
+ * 启动那一刻的开关值（`host` 的默认值、cli.mjs 的形态标签用它）。
+ * ⚠️ 只代表**进程启动时**的状态 —— 运行期别拿它做判断，用 `lanOrigins()` /
+ * `netmode.readNetMode().allowLan`（那次修复的教训就在这儿）。
+ */
 export const lanAllowed = netMode?.allowLan === true;
 
 /*
@@ -140,35 +145,72 @@ export const host = process.env.BANDI_HOST ?? (clientJoined ? '127.0.0.1' : lanA
  * ⚠️ 不配这个、只改 `BANDI_HOST`，远端浏览器打开页面会**能看不能动**（写请求全 403）。
  * 节点不受影响：它用脚本调接口，浏览器不带 Origin，走的是放行那条路。
  *
- * 开了「允许局域网加入」时，**本机的局域网地址自动放行** ✓ —— 不然用户还以为开关坏了
+ * 开了「允许局域网加入」时，本机的局域网地址自动放行 ✓ —— 不然用户还以为开关坏了
  * （页面在 `http://192.168.x.x:8787` 上打得开、却什么都改不了 ✗）。
+ * 但这份"自动放行"**不能在导入时算一次冻结** —— 见下面 `lanOrigins()` 的注释。
  */
-function selfLanOrigins() {
-  if (!lanAllowed) return [];
-  /*
-   * ⚠️ 这里**不能**用下面那个 `port`：它是 `const`，在这个位置还在 TDZ 里 ✗
-   * （第一次写就是这么炸的）。自己算一遍就好 —— 它们读的是同一个环境变量。
-   */
-  const p = Number(process.env.BANDI_PORT ?? 8787);
-  const out = [];
+
+/*
+ * 「允许局域网加入」开关是**运行期**可变的（`POST /api/lan` 写 netmode.json +
+ * `POST /api/restart` 原地重听 —— 不重载模块）。2026-11 修的"手机扫码卡正在配对"
+ * 就是栽在这儿：局域网来源在导入时算了一次冻结进 `extraOrigins`，用户切完开关，
+ * 监听已经变 0.0.0.0、页面打得开，Origin 白名单却还是空的 → 局域网写请求全 403 E3001。
+ *
+ * 所以动态部分拆成 `lanOrigins()`，`http.allowedOrigins()` **每次现算**：
+ *   · 开关值：mtime 缓存 —— 文件没动就不重读（不是每请求读盘 ✗），
+ *     `POST /api/lan` 写完文件 mtime 一变自动失效，不需要谁手工通知 ✓；
+ *   · 网卡列表：缓存 60 秒（对齐 http.mjs `localAddresses()` 的口径，DHCP 换 IP 一分钟内自愈）。
+ */
+
+let netModeCache = null; // { mtimeMs, allowLan }
+function lanAllowedNow() {
+  const file = path.join(dataDir, 'netmode.json');
   try {
-    for (const list of Object.values(os.networkInterfaces())) {
-      for (const ni of list ?? []) {
-        if (ni.family !== 'IPv4' || ni.internal) continue;
-        out.push(`http://${ni.address}:${p}`);
-      }
-    }
-  } catch { /* 拿不到就算了 */ }
-  return out;
+    const st = fs.statSync(file);
+    if (netModeCache && netModeCache.mtimeMs === st.mtimeMs) return netModeCache.allowLan;
+    const j = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const allowLan = j?.allowLan === true;
+    netModeCache = { mtimeMs: st.mtimeMs, allowLan };
+    return allowLan;
+  } catch {
+    return false; // 没这个文件 / 坏了 = 默认（不开局域网），与启动时 netMode 的口径一致
+  }
 }
 
-export const extraOrigins = [
-  ...(process.env.BANDI_ORIGINS ?? '')
-    .split(',')
-    .map((s) => s.trim().replace(/\/+$/, ''))
-    .filter(Boolean),
-  ...selfLanOrigins(),
-];
+let lanNicsAt = 0;
+let lanNics = [];
+export function lanOrigins() {
+  if (!lanAllowedNow()) return [];
+  const now = Date.now();
+  if (now - lanNicsAt > 60_000) {
+    lanNics = [];
+    try {
+      for (const list of Object.values(os.networkInterfaces())) {
+        for (const ni of list ?? []) {
+          if (ni.family !== 'IPv4' || ni.internal) continue;
+          lanNics.push(ni.address);
+        }
+      }
+    } catch { /* 拿不到就算了 */ }
+    lanNicsAt = now;
+  }
+  /*
+   * ⚠️ 这里**不能**用下面那个 `port`：它是 `const`，在这个位置还在 TDZ 里 ✗
+   * （第一次写就是这么炸的）。自己读一遍环境变量就好 —— 它们读的是同一个。
+   */
+  const p = Number(process.env.BANDI_PORT ?? 8787);
+  return lanNics.map((ip) => `http://${ip}:${p}`);
+}
+
+/**
+ * 来源白名单里**固定**的那部分：`BANDI_ORIGINS` 声明的（服务器部署时明确给出来的）。
+ * 局域网本机地址**不在这里** —— 那是动态的，由 `http.allowedOrigins()` 每次调
+ * `lanOrigins()` 现算，别再塞回来（塞回来就又变回"导入时冻结"的老毛病 ✗）。
+ */
+export const extraOrigins = (process.env.BANDI_ORIGINS ?? '')
+  .split(',')
+  .map((s) => s.trim().replace(/\/+$/, ''))
+  .filter(Boolean);
 
 /**
  * 这里原来有个 `dshCli`（`BANDI_DSH_CLI ?? 'D:\AppData\Local\Programs\...\dsh.cmd'`）。

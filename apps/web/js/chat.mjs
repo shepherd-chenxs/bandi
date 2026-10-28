@@ -379,7 +379,7 @@ export async function openConversation(id) {
 
   const d = await api('/api/conversations/' + encodeURIComponent(id));
   S.conversation = d.conversation;
-  // 这段会话是不是**一个字都没说过**（详情页「发消息」连点复用它，见 toMessages）。
+  // 这段会话是不是**一个字都没说过**（详情页「发消息」连点复用它，见 openDirectChat）。
   // 依据是服务端刚给的 messages，不是本地猜测 —— 零额外请求、刷新后结论一致。
   S.convEmpty = (d.messages || []).length === 0;
   savePlace();         // 记下正在看哪个会话，刷新后回到这儿
@@ -671,7 +671,7 @@ const colOfStatus = () => (_colOfStatus ??= Object.fromEntries(Object.entries(CO
 export function cardTicketHtml(meta) {
   if (!meta || meta.type !== 'card' || !meta.cardId) return '';
   const col = colOfStatus()[meta.status] ?? 'other';
-  return `<div class="card-ticket" data-card-ticket="${esc(meta.cardId)}" title="打开任务卡详情">
+  const inner = `<div class="card-ticket" data-card-ticket="${esc(meta.cardId)}" title="打开任务卡详情">
     <i class="ct-spine ${esc(col)}"></i>
     <div class="ct-head">
       <span class="ct-ico">📋</span><span class="ct-kind">任务卡</span><span class="ct-sep">·</span><span class="ct-status ${esc(col)}">${esc(meta.status || '')}</span>${meta.assignee ? `<span class="ct-sep">·</span><span class="ct-assignee">@${esc(meta.assignee)}</span>` : ''}
@@ -682,10 +682,32 @@ export function cardTicketHtml(meta) {
       <span class="ct-open">打开 →</span>
     </div>
   </div>`;
+  /*
+   * 窄屏降级（2026-11 手机端增量，PRD P1-4）：body.mb-narrow（js/mobile.mjs 维护）时
+   * 默认只出一行摘要条，点击内联展开 —— "降级而非删减"：卡片在，只是先收着。
+   * 这是飞书接入的教训：不能把富工作台硬塞进聊天窗口。展开/收起的接线在 wireCardTickets。
+   */
+  if (document.body.classList.contains('mb-narrow')) {
+    return `<div class="mb-fold" data-mb-fold>📋 任务卡：${esc(meta.title || '任务卡')}<span class="dim" data-mb-fold-hint> · 点击展开</span></div><div class="mb-fold-body" hidden>${inner}</div>`;
+  }
+  return inner;
 }
 
-/** 给画出来的卡票接上点击：主点击**在弹窗里**打开卡，「看板」进任务看板 */
+/** 给画出来的卡票接上点击：主点击**在弹窗里**打开卡，「看板」进任务看板；窄屏摘要条管展开 */
 export function wireCardTickets(root) {
+  /*
+   * 窄屏折叠摘要条（P1-4）：点摘要 → 内联展开/收起正文（就是下面那张完整的卡票，
+   * 展开后卡票自己的点击照常由下面两条委托接管）。只改 hidden 和提示词，不重画消息。
+   */
+  (root ?? $('chat')).querySelectorAll('[data-mb-fold]').forEach((f) => {
+    f.onclick = () => {
+      const bodyEl = f.nextElementSibling;
+      if (!bodyEl) return;
+      bodyEl.hidden = !bodyEl.hidden;
+      const hint = f.querySelector('[data-mb-fold-hint]');
+      if (hint) hint.textContent = bodyEl.hidden ? ' · 点击展开' : ' · 收起';
+    };
+  });
   (root ?? $('chat')).querySelectorAll('[data-card-ticket]').forEach((el) => {
     /*
      * 弹窗而不是整页（2026-10-26 用户拍板"不要嵌在这里"）：
@@ -1483,6 +1505,220 @@ export function wirePersonaTaskLinks() {
 
 
 
+/**
+ * 「接着最近那段继续聊」——详情页「发消息 / 回到聊天」与通讯录窄屏点员工行共用的那一条路。
+ *
+ * 2026-11 移动端增量从 renderDetail 里提出来成了**模块级导出**：通讯录在手机上点
+ * 「数字员工」行不再进详情页而是直接开聊，那里没有 renderDetail 的闭包（persona、
+ * toastConvErr 都是闭包里的东西），函数化后从入参拿，桌面行为一个字没变。
+ *
+ * 口径（2026-10-24 用户拍板，改掉"每次新开一段"的旧口径 —— 想另起一段去聊天页头的
+ * 「新会话」按钮，跟微信一致：名片「发消息」进的就是现有聊天）：
+ *   ① 你**正在聊的那段**最优先 —— "回到"就是回到刚才那儿；
+ *   ② 否则最近**真聊过**的一段（空壳让位，和左栏代表会话同一个口径）；
+ *   ③ 一段都没有（第一次找TA，或只剩被「不显示」收着的）→ 新建第一段。
+ */
+/**
+ * 在途守卫：同一个人正在"开聊"时再点一次直接忽略（2026-11-28 QA P2）。
+ *
+ * 为什么必须挡：手机上连点是高频手势，两次调用都发生在 `S.conversations` 刷新前，
+ * 会**各自**命中下面的 `post('/api/conversations')` 新建分支 —— 给同一个从未聊过的
+ * 员工建出两段空会话，「会话」列表多出空壳行。只对**同一个**人挡（换个人点该放行），
+ * 整个函数（含建段 + 打开 + 刷新）走完才清，`finally` 保证报错也不漏。
+ */
+let directChatOpening = null;
+
+export async function openDirectChat(persona) {
+  if (directChatOpening === persona.id) return;   // 双击第二下：第一次还在路上，直接吞掉
+  directChatOpening = persona.id;
+  try {
+    const mine = (S.conversations ?? []).filter((c) => c.kind === 'direct' && c.personaId === persona.id);
+    const current = S.conversation?.kind === 'direct' && S.conversation.personaId === persona.id ? S.conversation : null;
+    const target = current
+      ?? [...mine].sort((a, b) => {
+        const ae = !(a.messageCount > 0);
+        const be = !(b.messageCount > 0);
+        if (ae !== be) return ae ? 1 : -1;
+        return String(b.updatedAt).localeCompare(String(a.updatedAt));
+      })[0];
+    const convId = target
+      ? target.id
+      : (await post('/api/conversations', { personaId: persona.id, title: `和 ${persona.name}` })).conversation.id;
+    setNav('messages');
+    showView('chat');
+    /*
+     * 走 `openConversationSafe`：复用分支打开的那段，可能刚好被**另一个窗口**删掉了
+     * （E2047）—— 那里会关抽屉、清右栏、刷列表，还会说人话。
+     * 之后要按"真的打开了没"决定收尾：没打开就别把光标扔进一个已经收起的输入区。
+     */
+    await openConversationSafe(convId);
+    if (S.conversation?.id !== convId) return;
+    await load();
+    $('input').focus();
+  } catch (err) {
+    toastConvErr(err);   // 建会话（POST）失败也走同一张人话表
+  } finally {
+    // 守卫只罩"这一次开聊"：成功 / 失败 / 中途早退都放开，别把这个人锁死在「点不动」的状态
+    directChatOpening = null;
+  }
+}
+
+
+
+/**
+ * 手机窄屏的员工详情（2026-11 移动端增量）：只保留「执行配置」三件 ——
+ * 运行时 / 并发数 / 思考过程（用户口径：其他的暂时都不需要）。
+ *
+ * 复用桌面的类名（.detail-body/.p-head/.group/.form-row/.row-label/.switch.sm），
+ * 样式天然继承，mobile.css 不用为这页新写规则；监听也只挂精简版用得上的那几个。
+ * 保存走自己的 collect —— 桌面版 collect 会读 #dName 等手机上不存在的输入框，直接照搬会炸。
+ */
+function renderDetailMobile(persona, runtimes) {
+  const rt = runtimes.find((r) => r.id === persona.runtime);
+  // 按钮文案跟着入口走（与桌面同一口径）：消息页点进详情 = 「回到聊天」，其余 = 「发消息」
+  const backToChat =
+    S.detailFrom === 'messages' &&
+    (S.conversations ?? []).some((c) => c.kind === 'direct' && c.personaId === persona.id);
+
+  $('detailView').innerHTML = `
+    <div class="detail-body">
+      <div class="p-head">
+        ${personaAvatar(persona)}
+        <div class="p-head-main">
+          <h2><span id="dNameText">${esc(persona.name)}</span>${persona.builtin ? '<span class="pill builtin" title="出厂就在的员工：名字、岗位与职责身份随平台固定，不能删">内置</span>' : ''}<span class="pill role" id="dRolePill"${persona.role ? '' : ' style="display:none"'}>${esc(persona.role || '')}</span>${
+            persona.busy
+              ? `<span class="pill busy" id="dBusy" title="${esc(persona.busyLabel ?? '正在干活')}">${
+                  persona.busyLabel ? '工作中·' + esc(persona.busyLabel) : '工作中'
+                }</span>`
+              : '<span class="pill" id="dBusy">空闲</span>'
+          }</h2>
+          <div class="p-meta">
+            <span class="pill">${esc(rt ? rt.label : persona.runtime === 'auto' ? '自动' : persona.runtime)}</span>
+          </div>
+        </div>
+        <div class="hero-actions">
+          <!-- 「⋯ 更多」菜单手机上不画（用户口径：其他的暂时都不需要） -->
+          <button class="primary" id="dMsg" title="打开和TA的聊天 —— 有会话就接着最近那段聊，不会另开新会话">${backToChat ? '回到聊天' : '发消息'}</button>
+        </div>
+      </div>
+
+      <!-- 精简正文：只有执行配置三件。类名照搬桌面执行配置分区，样式自动继承 -->
+      <div class="group">
+        <div class="form-row">
+          <div class="row-label">运行时</div>
+          <div id="dRuntimeMount"></div>
+        </div>
+        <div class="form-row">
+          <div class="row-label">并发数</div>
+          <!-- 并发数口径同桌面：空着 = 默认 6；服务端钳到 [1, 20]，手滑填坏也不打断保存 -->
+          <input id="dMaxParallel" type="number" min="1" max="20" step="1"
+                 style="width:120px;text-align:center" value="${persona.maxParallel ?? ''}"
+                 placeholder="6" />
+        </div>
+        <div class="form-row">
+          <div class="row-label">思考过程</div>
+          <label class="switch sm">
+            <input type="checkbox" id="dThink" ${persona.showThinking ? 'checked' : ''} /><span></span>
+          </label>
+        </div>
+      </div>
+    </div>`;
+
+  /* 防抖节奏与桌面版一致：输入 700ms / 下拉 300ms / 开关 200ms / 失焦立刻；串行保存不并发打 PUT */
+  let saveTimer = null;
+  let saving = false;
+  let saveQueued = false;
+  const scheduleSave = (ms = 700) => {
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => { saveTimer = null; saveNow(); }, ms);
+  };
+
+  /*
+   * 运行时下拉与桌面同一套挂载组件（createCombo）。内置员工与雇佣员工多一条「自动」——
+   * 他们出厂 runtime 就是 'auto'，清单缺当前值按钮会退化成裸 id（桌面踩过的坑，口径照搬）。
+   * 手机版不画沙箱/模型，onChange 不需要做联动对齐，选完直接进防抖保存。
+   */
+  const rtItems = runtimes.map((r) => ({ id: r.id, label: r.label }));
+  if (persona.builtin || String(persona.id ?? '').startsWith('p-expert-'))
+    rtItems.unshift({ id: 'auto', label: '自动（挑一个能用的）' });
+  const rtCombo = createCombo({
+    mount: $('dRuntimeMount'),
+    items: rtItems,
+    value: persona.runtime,
+    search: false,
+    onChange: () => scheduleSave(300),
+  });
+
+  /**
+   * 精简版收集器。服务端 PUT /api/personas/:id 是**字段级更新**（store.updatePersona
+   * 只覆盖传入的字段），但有两个例外不能省：
+   *   · name 必填（缺了直接 E1011 拒掉）；
+   *   · instructions 在路由里是无条件 `String(body.instructions ?? '')` —— 缺省会被兜成
+   *     空串**清空职责设定**。
+   * 所以身份资料必须从现值原样带回；runtime / showThinking / maxParallel 三个才是
+   * 精简表单真正能改的字段。
+   */
+  const collect = () => ({
+    name: persona.name,
+    role: persona.role ?? null,
+    department: persona.department ?? null,
+    instructions: persona.instructions ?? '',
+    runtime: rtCombo.value(),
+    showThinking: $('dThink').checked,
+    // 空着 = 恢复默认（null）；数字服务端会钳位，这里只管传
+    maxParallel: $('dMaxParallel').value.trim() === '' ? null : Number($('dMaxParallel').value),
+  });
+  let lastSaved = JSON.stringify(collect());
+
+  const saveNow = async ({ keepalive = false } = {}) => {
+    if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+    const payload = collect();
+    const json = JSON.stringify(payload);
+    if (json === lastSaved) return true;
+    if (saving) { saveQueued = true; return false; }
+    saving = true;
+    try {
+      const d = await api('/api/personas/' + encodeURIComponent(persona.id), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: json,
+        ...(keepalive ? { keepalive: true } : {}),
+      });
+      lastSaved = json;
+      const p = d?.persona;
+      if (p) {
+        // 与桌面版同一套内存同步：S.persona / 左栏那份 / 页头头像都合回服务端返回值
+        //（头像整体重建是因为里面有 <img> 图片层，textContent 会剥掉 —— 见桌面版注释）
+        S.persona = { ...(S.persona || {}), ...p };
+        const row = (S.personas || []).find((x) => x.id === p.id);
+        if (row) Object.assign(row, p);
+        const av = $('detailView')?.querySelector('.p-head .avatar');
+        if (av) av.outerHTML = personaAvatar(p);
+        if (S.nav === 'contacts' || S.nav === 'messages') renderList();
+      }
+      return true;
+    } catch (err) {
+      toast('保存失败：' + (err?.message ?? '服务异常'), 'error');
+      console.error('[班底] 员工自动保存失败', err?.detail ?? err);
+      return false;
+    } finally {
+      saving = false;
+      if (saveQueued) { saveQueued = false; saveNow(); }
+    }
+  };
+  // 离开这一页（切视图 / 打开别的员工 / 关窗口）前兜底存一次 —— showView / openDetail 依赖它 flush
+  detailSave.flush = (opts) => saveNow(opts);
+
+  $('dMaxParallel')?.addEventListener('input', () => scheduleSave(700));
+  $('dMaxParallel')?.addEventListener('blur', () => saveNow());
+  $('dThink')?.addEventListener('change', () => scheduleSave(200));
+
+  // 「发消息 / 回到聊天」：先落盘再跳（通讯录进来没有未保存表单，saveNow 按 lastSaved 直接跳过）
+  $('dMsg').onclick = async () => { await saveNow(); openDirectChat(persona); };
+}
+
+
+
 
 export function renderDetail({ persona, runtimes, runs, platformRoot, skills: personaSkills = [], allSkills = [] }, taskBoard = null) {
   // 左栏顶上写「通讯录」（右页头已去掉；名字/岗位/头像/动作都在正文的 p-head 里）。
@@ -1491,6 +1727,18 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
   // 2026-10-20 用户要求：通讯录详情**不做面包屑**，标题就固定「通讯录」。
   if (S.nav === 'contacts') setListTitle('通讯录');
   refreshDeptSuggest(); // 部门建议列表跟着库里已用的部门走（#deptSuggest，下面 dDept 用）
+
+  /*
+   * 手机窄屏（2026-11 移动端增量）：详情页精简成「执行配置」三件，走独立的渲染与
+   * 保存收集器（renderDetailMobile，见上面）。桌面整页实现（tabs / 资料 / 沙箱 / 模型 /
+   * 技能 / 运行记录）原样留在下面，一行不动 —— isMobile 判 body 状态类（mobile.mjs
+   * 维护），>900px 恒为假，桌面行为与改动前完全一致。
+   */
+  if (document.body.classList.contains('mb-narrow')) {
+    renderDetailMobile(persona, runtimes);
+    return;
+  }
+
   const rt = runtimes.find((r) => r.id === persona.runtime);
   // 身份/技能锁定（2026-10-23；2026-10-22 用户定：内置员工按专家团那个模式收编）
   // 两种来源同一套语义，判据与服务端 experts.lockKindOf 对齐：
@@ -2018,45 +2266,12 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
   renderInstrView();
 
   /*
-   * 「回到聊天 / 发消息」= **接着最近那段继续聊**（2026-10-24 用户拍板，改掉 2026-10-20
-   * "每次新开一段"的旧口径 —— 那个决定的动机是"想另起一段没入口"，现在聊天页头有
-   * 「新会话」按钮专管另起，这里的口径随之归位，跟微信一致：名片「发消息」进的就是
-   * 现有聊天）。有这个人的会话 → 打开**最近那段**（服务端按 updatedAt DESC 排好）；
-   * 一段都没有（第一次找TA，或只剩被「不显示」收着的）→ 新建第一段。
-   * 按钮文案跟着入口走：消息页点进详情 = 「回到聊天」，通讯录进来 = 「发消息」，行为相同。
+   * 「回到聊天 / 发消息」= **接着最近那段继续聊**（2026-10-24 口径，与微信一致）。
+   * 具体逻辑（当前会话优先 → 最近非空会话 → 新建）已提到模块级 `openDirectChat`
+   * （2026-11 移动端增量：通讯录窄屏点员工行也走同一条路，那边没有 renderDetail
+   * 的闭包可借）—— 这里只管先落盘再跳。
    */
-  const toMessages = async () => {
-    try {
-      // 回到哪段（2026-10-24 用户实报：聊天中途进详情再回来，落到了后来留下的空壳上）：
-      //   ① 你**正在聊的那段**最优先 —— "回到"就是回到刚才那儿；
-      //   ② 否则最近**真聊过**的一段（空壳让位，和左栏代表会话同一个口径）；
-      //   ③ 一段都没有（第一次找TA，或只剩被「不显示」收着的）→ 新建第一段。
-      const mine = (S.conversations ?? []).filter((c) => c.kind === 'direct' && c.personaId === persona.id);
-      const current = S.conversation?.kind === 'direct' && S.conversation.personaId === persona.id ? S.conversation : null;
-      const target = current
-        ?? [...mine].sort((a, b) => {
-          const ae = !(a.messageCount > 0);
-          const be = !(b.messageCount > 0);
-          if (ae !== be) return ae ? 1 : -1;
-          return String(b.updatedAt).localeCompare(String(a.updatedAt));
-        })[0];
-      const convId = target
-        ? target.id
-        : (await post('/api/conversations', { personaId: persona.id, title: `和 ${persona.name}` })).conversation.id;
-      setNav('messages');
-      showView('chat');
-      /*
-       * 走 `openConversationSafe`：复用分支打开的那段，可能刚好被**另一个窗口**删掉了
-       * （E2047）—— 那里会关抽屉、清右栏、刷列表，还会说人话。
-       * 之后要按"真的打开了没"决定收尾：没打开就别把光标扔进一个已经收起的输入区。
-       */
-      await openConversationSafe(convId);
-      if (S.conversation?.id !== convId) return;
-      await load();
-      $('input').focus();
-    } catch (err) { toastConvErr(err); }   // 建会话（POST）失败也走同一张人话表
-  };
-  $('dMsg').onclick = async () => { await saveNow?.(); toMessages(); };
+  $('dMsg').onclick = async () => { await saveNow?.(); openDirectChat(persona); };
 
   /**
    * 自动保存：**改了就算保存**，不再有「保存」按钮（2026-10-18 用户要求）。

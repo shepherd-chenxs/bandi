@@ -324,7 +324,7 @@ sequenceDiagram
 
 - **涉及文件**：`js/mobile.mjs`（改）、`js/pairing.mjs`（改）、`routes/pair.mjs`（改，`/api/pair/me`）、`js/chat.mjs`（改，P1-4 降级）、`mobile.css`（改）、`index.html`（改，底部导航 DOM）
 - **做什么**：
-  1. 底部导航（PRD P1-1）：≤600px 显示「工作台 / 会话 / 我的」三 tab（映射 `setNav('plugins'|'messages'|'settings')`），列表一级页自动隐藏；「我的」= 设备信息 + 设置只读视图。
+  1. 底部导航（PRD P1-1）：**≤900px 显示**「工作台 / 会话 / 我的」三 tab（映射 `setNav('plugins'|'messages'|'settings')`），列表一级页自动隐藏；「我的」= 设备信息 + 设置只读视图。（**2026-10-28 修**：原定 ≤600，但 `.rail` 在 ≤900 已收掉，601–900 会一个一级导航都没有 —— iPad/手机横屏/桌面半屏窗口切不了栏。）
   2. 设备管理（PRD P1-2）：`pairing.mjs` 渲染已配对设备列表（设备名/配对时间/最近活跃）+ 踢出（确认后 `POST /api/pair/devices/:id/revoke`）。
   3. 401 引导：`mb-tiny` 下 `E4010/E4012` 换"重新扫码配对"全屏提示。
   4. 关键弹窗底部抽屉化（P1-1）、下拉刷新手势（对消息/看板列表，节流拉 `load()`）。
@@ -382,3 +382,100 @@ sequenceDiagram
 6. **请求纪律**：所有前端写请求带 `X-Bandi: 1`（`ui.mjs api()` 已统一；`pair-claim.mjs` 独立实现时必须自己带）；手机页面 Origin 依赖 `config.mjs selfLanOrigins()` 自动放行，勿在配对链路上绕过 `guardWrite`。
 7. **时间/ID**：一律 `store/db.mjs` 的 `nowIso()`（ISO 8601 UTC）与 `newId('md'|'mp')`。
 8. **验证**：见 §5 顶部的两条验证注意事项（前端热更 / 后端换进程 / 隔离实例跑法）。
+
+---
+
+## 3.3.1 增量修订：设备访问口径（QA 第 1 轮后裁定，2026-11）
+
+QA 第 1 轮实测抓出两个 P0：① 设备令牌访问**非 /api 的静态 GET** 全部 403 E4033（`/`、`/app.mjs`、`/style.css`、`/js/mobile.mjs`、`/manifest.webmanifest` 都进不来，扫码成功但永远白屏）；② SPA 启动必需的 `GET /api/skills`（`state.mjs load()` 的 Promise.all 一半，挂了整页不加载）等不在白名单。本节裁定修正口径，**§3.3 原表中与本节冲突的行以本节为准**。
+
+### 3.3.1.1 规则一：静态资源无条件放行（与 panel 对齐）
+
+设备身份对**同源静态 GET**（HTML/JS/CSS/manifest/图标/SW，即 `server.mjs` 里 `serveStatic` 覆盖的非 `/api` 路径）**无条件放行**，不再套白名单。理由：静态资源是公开代码（panel 身份本就默认可读），白名单管的是**数据**不是代码；把代码也管起来只会造成"扫上码但页面加载不出来"这种纯损害。
+
+**白名单只应作用于 `/api` 前缀**，实现落点：**改 `deviceMayReach()`（`auth.mjs:271`），不动 `decide()`** —— 函数体第一行加前缀短路：
+
+```js
+function deviceMayReach(method, pathname) {
+  // 白名单只管 /api：同源静态（HTML/JS/CSS/manifest/图标/SW）与 panel 同权，无条件放行
+  if (!pathname.startsWith('/api/')) return method === 'GET' || method === 'HEAD';
+  …原有白名单不变…
+}
+```
+
+选 `deviceMayReach` 而不是 `decide()` 的理由：① "判定只有一处"（§6.1）—— `decide()` 是分发器，设备策略全部收在 `deviceMayReach` 里，改它=单点改动、`decide()` 的 device 分支一个字节不用动；② 节点/panel 走各自独立的 `nodeMayReach` / `PANEL_FORBIDDEN`，天然不受影响；③ 不放 `guard()` —— 回环形态（`auth.required === false`）根本不走到白名单，放 guard 会制造第二条判定路径。GET/HEAD 之外的非 /api 请求仍被闸住（serveStatic 本身也只吃 GET，双保险）。
+
+### 3.3.1.2 规则二：设备可达的 `/api` GET 白名单（完整表）
+
+按 PRD 受限视图口径（**浏览：工作台/项目/看板/卡详情/员工信息/会话 + 审批：PATCH 任务 {status,note} + 对话：发消息、note 评论**）逐项核对前端实际请求（`state.mjs load()`、`projects.mjs`、`chat.mjs`、`groups.mjs`、`settings.mjs`、`misc.mjs`）后修订。**允许**：
+
+| # | 端点 | 手机场景 | 备注 |
+|---|---|---|---|
+| 1 | `GET /api/state` | 工作台/会话/通讯录总览（runtimes、personas、conversations、groups） | 启动必需，§3.3 已有 |
+| 2 | `GET /api/skills` | 启动 `load()` 的 Promise.all 另一半，**缺了整页挂**（Bug #2 主因） | 新增 |
+| 3 | `GET /api/workflows` | 启动拉已发布流程（工作台入口） | 新增；`load()` 里虽 catch 兜底，但工作台磁贴靠它 |
+| 4 | `GET /api/projects` | 项目列表 | §3.3 已有 |
+| 5 | `GET /api/tasks` | 全局任务 / 看板 | §3.3 已有 |
+| 6 | `GET /api/projects/:id/tasks` | 项目看板 | 新增（看板页实际拉的是它） |
+| 7 | `GET /api/projects/tasks/:id` | 卡详情 | §3.3 已有 |
+| 8 | `GET /api/projects/tasks/:id/comments` | 卡评论 | §3.3 已有 |
+| 9 | `GET /api/conversations/:id` | 会话详情 / 消息 | §3.3 已有 |
+| 10 | `GET /api/personas/:id` | 员工详情（通讯录点人） | 新增（员工信息属浏览口径） |
+| 11 | `GET /api/personas/:id/tasks` | 员工详情的任务页签 | 新增 |
+| 12 | `GET /api/groups/:id` | 群信息（成员列表） | 新增（群属会话浏览） |
+| 13 | `GET /api/pair/me` | 我是谁（设备名） | §3.3 已有 |
+| 14 | `GET /api/web-version` | 60 秒版本指纹轮询（更新提醒条） | 新增；只回 mtime 指纹，零敏感 |
+| 15 | `GET /api/prefs` | 「我的」页回复风格读取 | 新增；GET 无敏感字段，**PUT 保持 403**（那是改全体员工的沟通偏好） |
+| 16 | `GET /api/runs/:id/stream` | 单运行实时事件流（对话「边跑边看」） | **2026-10-28 修**：前端 `streamRun()` 默认就订阅它；不放行会一直停在「正在输入」。内容即该会话正文，不超出第 9 条的读范围 |
+| 17 | `GET /api/events` | 全局「哪个会话动了」通知 | **2026-10-28 修**：`startEvents()` 每页都开，不放行手机端每页一条 403；只推 `{type:'conv', id}`，不超出读范围 |
+
+写操作：`POST /api/conversations/:id/messages`、`POST /api/projects/tasks/:id/comments`（仅 note）、`PATCH /api/projects/tasks/:id`（字段闸在 `routes/project.mjs`）、`POST /api/runs/:id/abort`（**2026-10-28 修**：与发消息成对，能派不能停会一直卡在「正在输入」）。
+
+**必须保持 403（E4033）**（QA 已验证有效的面不要放开）：
+
+| 端点（及同类） | 理由一句话 |
+|---|---|
+| `GET /api/pair/devices`、`POST /api/pair/tokens`、`POST /api/pair/devices/:id/revoke` | 设备管理是操作员专属：设备清单含 IP/最近活跃，发码=发钥匙 |
+| ~~`GET /api/events`、`GET /api/runs/:id/stream`~~ | **2026-10-28 移出**：手机端「边跑边看 / 后台刷新」必需，内容不超出会话读范围（见上表 16/17） |
+| `GET /api/fs/dirs`、`GET /api/workspace/file` | 任意目录列举与任意文件读 = 摸操作员整块磁盘 |
+| `GET /api/ssh/servers`、`GET /api/ssh/servers/:id/key` | 服务器登记与私钥路径/私钥本体 |
+| `GET /api/connectors`、`GET /api/connectors/catalog` | 连接器凭据信息 |
+| `GET /api/devices`、`GET /api/lan`、`GET /api/nodes/*` | 设备/网络/节点配置，操作员专属 |
+| `GET /api/git/*` | 仓库、令牌与代码变更面 |
+| `GET /api/schedules`、`GET /api/status/ledger`、`GET /api/quota` | 定时任务/账本/模型路由，非浏览必需 |
+| `GET /api/experts`、`GET /api/plugins` | 专家库与插件目录（含磁盘路径），非受限视图内容 |
+| `GET /api/feishu/config`、`GET /api/ai/image-config` | 通道凭据配置 |
+| `GET /api/personas/:id/runtime-skills` | 员工技能**编辑**视图，非浏览必需（手机上该页签报错可容忍，后续 P2 在手机形态隐藏入口） |
+| 其余一切非白名单写（POST/PUT/PATCH/DELETE） | 受限视图无任何其他写 |
+
+两个说明：① `GET /api/conversations`、`GET /api/personas`（**列表**）这两个端点**不存在**（QA 打它们 403 是 `decide()` 在路由匹配前拦的）——列表数据本来就在 `/api/state` 里，**不要**为它们加白名单，加了反而是给不存在的路由开洞；② `GET /api/hello` 在 `guard()` 里本就免鉴权，不属本表范围。
+
+**`/api/state` 字段裁剪判断：保持原样（本期）**。state 里确有 `repoRoot`/`platformRoot`（本机路径）和员工完整配置（`instructions`/`model`/`sandbox`/`cwd`），但：手机是已配对的可信端（§7 待明确 #7 已确认"与操作员同视野"口径），浏览口径本就含员工信息与会话正文（后者敏感度远高于路径）；裁剪会牵动桌面 SPA 的渲染路径（同一份 `/api/state` 两端吃）。若后续要收紧，在 `server.mjs` 的 state handler 里按 `req.bandiAuth.kind === 'device'` 裁 `cwd/sandbox/rootDirs/repoRoot` 即可，列为 P2。
+
+### 3.3.1.3 次要两项裁定
+
+1. **sw.js 预缓存补 `/js/**`**：**补**。T05 设计原列了 `/js/**`，实现时漏了（CORE 只有 7 项）。运行期 stale-while-revalidate 虽会把访问过的文件入库，但首次弱网打开仍逐个回源。`js/*.mjs` 约 20+ 个、全在局域网一次拉完，代价小。无构建步骤 → 在 `sw.js` 的 `CORE` 里**手工列清单**（SW 无法 glob），并约定：新增 js 模块时同步清单 + `VERSION` +1。
+2. **`.pair-dev` / `.pair-kick` 补 `mb-` 前缀**：**改**。§8 共享知识第 3 条是自定硬约定（"移动端新组件类名一律 `mb-` 前缀，全部规则只写进 mobile.css"），这两个类是手机端新组件却破了纪律。改动面极小：`mobile.css:207-227` 两个选择器改名 + `pairing.mjs:173-178` 模板字符串同步（`mb-pair-dev` / `mb-pair-dev-main` / `mb-pair-kick`）。
+
+### 3.3.1.4 2026-10-28 修订（首轮实测后）
+
+服务端白名单修了三条（`GET /api/events`、`GET /api/runs/:id/stream`、`POST /api/runs/:id/abort`，理由见 §3.3.1.2 表 16/17），前端配套把「受限视图」真正画出来：
+
+1. **身份进前端**：`state.mjs load()` 只问一次 `/api/pair/me`，存 `S.isDevice` / `S.device`。
+   设置左栏与工作台宫格按身份收敛：
+   - 「我的」= **这台手机 / 偏好设置 / 关于**（`DEVICE_SETTINGS_SECTIONS`）；设备身份下
+     `openSettings` 会把任何越界分节兜到第一个可用项，不再画出"每行都 403"的设置页。
+   - 工作台只留 **项目 / 任务看板**；插件宫格、研发区（代码托管/远程连接）、自动化
+     （定时任务/工作流）在设备形态下不渲染 —— 它们的接口全在 403 清单里。
+2. **踢出后设备列表不再"原地复活"**：`store.listDevices()` 带 `tokenCount`；0 = 已踢出/已失效，
+   界面显示「已踢出」并撤掉按钮（设备行保留当记录）。
+3. **SW 只在移动端注册**：触屏 + ≤900px 才 `register('/sw.js')`；桌面端（含 Tauri 壳）
+   注销旧注册并清 `bandi-static-*` 缓存 —— 保留"每请求现读 + 版本指纹"的一次刷新即生效。
+4. **主从折叠只压一格历史**：详情已展开时不再 `pushState`，手机手势返回一次即回列表。
+5. **扫码卡在「正在配对」**（2026-10-28 修）：`/pair` 本身免令牌，但它引的 `/js/pair-claim.mjs`
+   和图标走**非 /api GET** —— 鉴权开着时 `guard()` 把它们当"没令牌的页面"回了**登录页 HTML**
+   （`Content-Type: text/html`），浏览器按 module 执行失败，页面永远停在静态那屏。现在
+   `guard()` 对这两个静态依赖免令牌（公开代码，不含数据）；`smoke-lan-origin` ③ 钉住
+   `/pair` 是 HTML、模块是 JS MIME、图标 200、`/api/state` 仍 401。
+6. **未做（产品决策/后续）**：设备令牌仍是"永久 + 手动踢出"（§7-3 已确认）；丢手机的
+   风险面不变，要加 TTL 是产品拍板；`sw.js` 预缓存清单仍手工维护（新增模块时同步）。

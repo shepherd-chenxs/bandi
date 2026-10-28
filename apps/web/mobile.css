@@ -1,0 +1,298 @@
+/*
+ * mobile.css —— 全部移动端样式（2026-11 手机端增量）。
+ *
+ * 铁律（设计 §8）：
+ *   · 新增的移动规则**只写在本文件**，style.css 不加移动规则；
+ *   · 新组件类名一律 `mb-` 前缀（mb-tabbar / mb-backbar / mb-sheet …）；
+ *   · 断点两档：900px（主从折叠）与 600px（底部导航 + 紧凑档）；
+ *   · 纯样式走 @media（不依赖 JS）；行为相关折叠（进详情/返回）走 body 状态类，
+ *     状态类由 js/mobile.mjs 统一维护 —— **双轨并用**。
+ *
+ * 覆盖顺序：index.html 里本文件排在 style.css 之后，同特异性规则这里赢。
+ */
+
+/* ============================================================ 900px 档：主从折叠 */
+
+/*
+ * 骨架（index.html）是 body 网格：68px 图标栏 + 300px 列表 + 主区。
+ * ≤900px：图标栏收掉（取简，底部导航在 600 档接管一级切换）、单列铺满；
+ * 列表与主区互斥铺满，谁在场由 body.mb-detail-open 说了算（手机上的两级导航）。
+ * 例外三处要在窄屏下照常整页显示：
+ *   body.no-list    —— 工作台宫格 / 专家库（整页视图，本就没有左栏）；
+ *   body.node-mode  —— 节点形态页（自有单列布局）；
+ *   配对落地页      —— 独立 pair.html，根本不引本文件。
+ */
+@media (max-width: 900px) {
+  body,
+  body.no-list,
+  body.node-mode {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .rail { display: none; }
+
+  main { grid-row: 1; }
+
+  /* 详情展开 = 列表让位（列表 DOM 常驻，只是不显示 —— 返回时滚动位置还在） */
+  body.mb-detail-open .list-panel { display: none; }
+  body.mb-detail-open { grid-template-rows: 44px minmax(0, 1fr); }
+  body.mb-detail-open main { grid-row: 2; }
+
+  /* 没进详情时主区藏掉 —— 否则消息空态会和列表抢一层 */
+  body:not(.mb-detail-open):not(.no-list):not(.node-mode) main { display: none; }
+
+  /*
+   * 底部三 tab 在 **900 档**就接管一级导航（2026-10-28 修 P0）。
+   *
+   * 原来 tabbar 只在 600 档出现，而 `.rail` 在 900 档就收掉了 —— 于是 601–900
+   * （iPad 竖屏 768、手机横屏 844/932、桌面半屏窗口）这一段**一个一级导航都没有**，
+   * 切不了「工作台 / 会话 / 我的」。设计里"桌面窄窗口体验同步改善"在这段是反的。
+   *
+   * 600 档只负责紧凑化（键盘、抽屉、气泡宽度），不再决定 tabbar 出不出现。
+   */
+  body:not(.mb-detail-open) { grid-template-rows: minmax(0, 1fr) auto; }
+  body:not(.mb-detail-open) main { grid-row: 1; }
+  body:not(.mb-detail-open) .mb-tabbar { display: flex; grid-row: 2; }
+
+  /* 列表行加大触控行高（PRD P0-1：≥48px） */
+  .list-body .item { min-height: 48px; }
+  .list-head { padding: 12px 14px 8px; }
+  .list-search input { height: 40px; }
+
+  /* 「← 返回」栏（单例 DOM 在 body 上，网格第一行） */
+  body.mb-detail-open .mb-backbar { display: flex; grid-row: 1; }
+
+  /* 看板：列改单列纵向堆叠（PRD 主方案），列头吸顶、卡片满宽 */
+  .kb-wrap,
+  #pluginView.kb-page .kb-wrap {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .kb-col,
+  #pluginView.kb-page .kb-col {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  #pluginView.kb-page .kb-cards { max-height: none; overflow-y: visible; }
+}
+
+/* 「← 返回」栏的常态（窄屏外永远不出现） */
+.mb-backbar {
+  display: none;
+  align-items: center;
+  padding: 0 10px;
+  padding-top: env(safe-area-inset-top, 0px);
+  background: var(--side, #17181b);
+  border-bottom: 1px solid var(--line, #26282c);
+  z-index: 60;
+}
+.mb-back {
+  border: 0;
+  background: transparent;
+  color: var(--accent, #3b6ef5);
+  font: inherit;
+  font-size: 15px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+
+/* ============================================================ 600px 档：底部导航 + 紧凑 */
+
+@media (max-width: 600px) {
+  /*
+   * 底部三 tab 的**显示**已上移到 900 档（见上面那条 P0 修复注释）；
+   * 这一档只做紧凑化。详情页照旧自动隐藏（mb-detail-open 的行模板里没有它）。
+   */
+
+  /*
+   * 键盘适配：布局视口不随键盘缩（Android Chrome 默认），用 mobile.mjs 喂的
+   * --mb-vh（visualViewport.height）当整页高度 —— 输入栏贴着键盘上方，不被盖住。
+   */
+  html, body { height: var(--mb-vh, 100%); }
+
+  /* 对话页：输入栏吸底 + 手势条安全区 */
+  .composer {
+    padding: 10px 12px;
+    padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+  }
+  .chat { padding: 14px 12px; }
+  .chat-head { padding: 8px 12px; }
+
+  /* 消息气泡别铺满全宽（拇指看着累）：最宽 84% */
+  .chat .row { padding-right: 0; }
+  .chat .bubble { max-width: 84%; }
+
+  /* 弹窗 → 底部抽屉（P1-1，PRD"关键弹窗改为底部抽屉"）：全宽贴底，圆角只留上面 */
+  dialog[open] {
+    position: fixed;
+    inset: auto 0 0 0;
+    top: auto;
+    transform: none;
+    margin: 0;
+    width: 100%;
+    max-width: none;
+    max-height: 82vh;
+    border-radius: 14px 14px 0 0;
+    border-bottom: 0;
+  }
+  dialog[open]::backdrop { background: rgba(0, 0, 0, 0.45); }
+
+  /* 下拉刷新指示条 */
+  .mb-ptr.show, body.mb-tiny .mb-ptr { will-change: transform; }
+}
+
+/* 底部导航条（常态隐藏，600 档由上面的规则打开） */
+.mb-tabbar {
+  display: none;
+  align-items: stretch;
+  justify-content: space-around;
+  background: var(--side, #17181b);
+  border-top: 1px solid var(--line, #26282c);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  z-index: 60;
+}
+.mb-tab {
+  flex: 1;
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 2px;
+  min-height: 52px;
+  border: 0;
+  background: transparent;
+  color: var(--dim, #8a9096);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 6px 0;
+}
+.mb-tab svg { width: 22px; height: 22px; }
+.mb-tab.active { color: var(--accent, #3b6ef5); }
+
+/* 下拉刷新指示条：常态藏在屏顶之上，touchmove 时由 JS 顶下来 */
+.mb-ptr {
+  position: fixed;
+  top: 0;
+  left: 50%;
+  transform: translateY(-100%);
+  transform-origin: center;
+  margin-left: -40px;
+  width: 80px;
+  text-align: center;
+  padding: 6px 0;
+  border-radius: 0 0 10px 10px;
+  background: var(--panel, #1d1f23);
+  color: var(--dim, #8a9096);
+  font-size: 12px;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 55;
+  transition: opacity 0.15s;
+}
+
+/* ============================================================ 配对弹窗（桌面 + 手机共用） */
+
+/* 二维码弹窗里的图：scalable SVG，交给容器定宽（桌面上别超过 240px） */
+.mb-qr-wrap { margin-top: 12px; text-align: center; }
+.mb-qr { display: inline-grid; place-items: center; }
+.mb-qr svg { width: 220px; height: 220px; max-width: 100%; border-radius: 10px; }
+.mb-urls { display: grid; gap: 6px; margin-top: 8px; }
+.mb-url {
+  border: 1px solid var(--line, #26282c);
+  background: var(--input, #17181b);
+  color: var(--text, #e7e7e7);
+  font: inherit;
+  font-size: 12.5px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  word-break: break-all;
+}
+.mb-url.primary { border-color: var(--accent, #3b6ef5); }
+
+/* 设置分节里的设备行（.members 容器沿用既有样式，行本体按 mb- 命名空间） */
+.mb-pair-dev {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--line, #26282c);
+}
+.mb-pair-dev:last-child { border-bottom: 0; }
+.mb-pair-dev-main { flex: 1; min-width: 0; }
+.mb-pair-kick {
+  border: 1px solid var(--line, #26282c);
+  background: transparent;
+  color: var(--bad, #c0504d);
+  font: inherit;
+  font-size: 12.5px;
+  padding: 5px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  flex: none;
+}
+.mb-pair-kick:hover { background: color-mix(in srgb, var(--bad, #c0504d) 12%, transparent); }
+/* 已踢出/令牌已失效的设备（2026-10-28）：行留着当记录，靠这个标记和「已踢出」胶囊区分 */
+.mb-pair-dev.off .mb-pair-dev-main { opacity: .55; }
+.mb-pair-off {
+  flex: none;
+  font-size: 12px;
+  color: var(--dim, #7c8288);
+  border: 1px solid var(--line, #26282c);
+  border-radius: 999px;
+  padding: 3px 10px;
+}
+
+/* ============================================================ 对话富内容降级（P1-4） */
+
+/*
+ * 窄屏折叠摘要条：chat.mjs 在 body.mb-narrow 时把卡票包进这组结构 ——
+ * 一行摘要 + 可展开正文（"降级而非删减"，PRD P1-4）。
+ */
+.mb-fold {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent, #3b6ef5) 35%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--accent, #3b6ef5) 8%, transparent);
+  color: var(--text, #e7e7e7);
+  font-size: 13px;
+  cursor: pointer;
+  user-select: none;
+}
+.mb-fold:active { background: color-mix(in srgb, var(--accent, #3b6ef5) 16%, transparent); }
+.mb-fold-body { margin-top: 6px; }
+.mb-fold-body[hidden] { display: none; }
+
+/* ============================================================ 401 全屏引导 */
+
+/* 手机形态下配对失效的全屏提示（js/mobile.mjs showRelpair）。覆盖一切，直到刷新。 */
+.mb-relpair {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 28px;
+  background: var(--bg, #08090a);
+  text-align: center;
+}
+.mb-relpair-card { max-width: 340px; }
+.mb-relpair-logo {
+  width: 52px;
+  height: 52px;
+  border-radius: 13px;
+  margin: 0 auto 16px;
+  display: grid;
+  place-items: center;
+  font-size: 24px;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(135deg, #3b6ef5, #7b4df0);
+}
+.mb-relpair-card h2 { font-size: 18px; margin: 0 0 10px; color: var(--text, #e7e7e7); }
+.mb-relpair-card p { font-size: 13.5px; line-height: 1.8; color: var(--dim, #9aa0a6); margin: 0; }

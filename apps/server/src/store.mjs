@@ -24,6 +24,8 @@ export * from './store/runs.mjs';
 export * from './store/projects.mjs';
 export * from './store/projectTasks.mjs';
 export * from './store/nodes.mjs';
+// 手机配对与设备域（2026-11 手机端增量）：mobile_devices / mobile_device_tokens / mobile_pair_tokens
+export * from './store/devices.mjs';
 export * from './store/workflows.mjs';
 export * from './store/quota.mjs';
 export * from './store/gitRepos.mjs';

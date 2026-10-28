@@ -5,7 +5,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { port, extraOrigins } from './config.mjs';
+import { port, extraOrigins, lanOrigins } from './config.mjs';
 
 // 静态文件根：apps/web（serveStatic 用；路径深度与 server.mjs 同层）
 // **导出**：/api/web-version 的指纹也要 stat 这里的文件（server.mjs 引它），别再各算一份。
@@ -83,6 +83,18 @@ function localAddresses() {
     for (const list of Object.values(os.networkInterfaces())) {
       for (const ni of list ?? []) if (ni?.address) localAddrs.add(String(ni.address).toLowerCase());
     }
+    /*
+     * 云端公网 IP 往往不在网卡上（NAT / EIP），但部署时已经通过 BANDI_ORIGINS
+     * 明确声明了访问来源。把这些来源的主机名一并放行，否则公网页面会先被
+     * Host 守卫挡成 403 E3002，连令牌闸都到不了。
+     */
+    for (const origin of extraOrigins) {
+      try {
+        localAddrs.add(new URL(origin).hostname.toLowerCase());
+      } catch {
+        /* 非法来源在 config 解析时已有自己的校验，这里不重复报错 */
+      }
+    }
     localAddrsAt = now;
   }
   return localAddrs;
@@ -108,8 +120,16 @@ export function guardHost(req) {
 }
 
 export function allowedOrigins() {
-  // 本机自己（界面就是这个源）+ 部署时另外声明的来源（见 config.extraOrigins）
-  return new Set([`http://127.0.0.1:${port}`, `http://localhost:${port}`, ...extraOrigins]);
+  // 本机自己（界面就是这个源）+ 部署时另外声明的来源（见 config.extraOrigins）+
+  // 「允许局域网加入」时本机的局域网地址 —— 这份是**动态**的（config.lanOrigins 每次
+  // 按当前 netmode 现算，mtime 缓存）：运行期切开关 + 原地重启后立刻生效，
+  // 不用整个进程重开（2026-11 修"手机扫码卡正在配对"：导入时冻结 → 局域网写请求全 403 E3001）。
+  return new Set([
+    `http://127.0.0.1:${port}`,
+    `http://localhost:${port}`,
+    ...extraOrigins,
+    ...lanOrigins(),
+  ]);
 }
 
 /**

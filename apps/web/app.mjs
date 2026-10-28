@@ -18,6 +18,11 @@ import './js/groups.mjs';
 import './js/experts.mjs';
 import './js/core.mjs';
 import './js/misc.mjs';
+// 手机端（2026-11 增量）：响应式壳（断点状态类 / 主从折叠 / 底部导航）与配对分节。
+// 它们放拓扑序列末尾 —— mobile.mjs 的顶层就装监听，得等 DOM 骨架（index.html 常驻节点）就绪，
+// 而脚本是 defer 的 module，此刻 body 已经解析完，安全。
+import './js/mobile.mjs';
+import './js/pairing.mjs';
 
 import { ROLE_SUGGEST, THEME_KEY, applyTheme, esc, readCollapsed, toast } from './js/shell.mjs';
 import { api, closeHelpPop, hideTip, openCombo, post, showTip, tipAnchor, tipTimer, wireDialogHead } from './js/ui.mjs';
