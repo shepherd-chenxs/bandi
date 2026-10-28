@@ -14,7 +14,7 @@
  * 骨架既有规矩的遵守：列表/详情 DOM 常驻，这里只切 body 状态类，不改任何渲染函数
  * 的输出结构；不动 #listBody 的 innerHTML；搜索/筛选照旧只重画结果块。
  */
-import { load, setNav } from './state.mjs';
+import { applyMenuGating, load, setNav } from './state.mjs';
 import { $ } from './core.mjs';
 
 /* ---------------------------------------------------------------- ① 断点 */
@@ -149,6 +149,11 @@ tabbar.querySelectorAll('.mb-tab').forEach((b) => {
   });
 });
 document.body.append(tabbar);
+/*
+ * 底部导航按角色收敛（2026-10-28 第三刀）：tabbar 是**运行时创建**的，
+ * `load()` 里那次 applyMenuGating 跑得比它早，抓不到这几个按钮 —— 建完再补一次。
+ */
+applyMenuGating();
 
 function syncTabs() {
   // 高亮以左栏 .nav-btn.active 为准（state.mjs setNav 维护的那份，含"工作流 → 工作台"映射）

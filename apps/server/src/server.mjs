@@ -52,6 +52,8 @@ import { handleProject } from './routes/project.mjs';
  * handler 自己判路径，所以链里位置只影响"谁先匹配"——放在 project 之前是按任务书口径。
  */
 import { handleRoles } from './routes/roles.mjs';
+// 账号与登录（2026-10-28 第三刀）：/api/login、/api/logout、/api/me、/api/users*
+import { handleUsers } from './routes/users.mjs';
 import { handleWorkspace } from './routes/workspace.mjs';
 import { handleStatus } from './routes/status.mjs';
 import { handleFs } from './routes/fs.mjs';
@@ -488,6 +490,11 @@ const server = http.createServer(async (req, res) => {
     const handledExpert = await handleExpert(req, res, url);
     if (handledExpert !== false) return;
 
+    // 账号与登录（2026-10-28 第三刀）：放在角色之前 —— 它自己的路径集合（login/logout/me/users）
+    // 与别处不重叠，但 /api/me 是"每个页面启动都会问一次"的接口，能早一步就早一步
+    const handledUsers = await handleUsers(req, res, url);
+    if (handledUsers !== false) return;
+
     const handledRoles = await handleRoles(req, res, url);
     if (handledRoles !== false) return;
 
@@ -612,6 +619,14 @@ try {
   if (seeded.length) console.log(`内置连接器已就位：${seeded.join('、')}`);
 } catch (err) {
   console.log(`内置连接器 seed 失败（不影响启动）：${err?.message ?? err}`);
+}
+// 过期登录会话（2026-10-28 第三刀）：30 天前发的票，启动时扫一次就够 —— 不需要定时器
+// （平时 `userBySession` 撞到过期的也会顺手删，这里只是把"没人再来的"批量收掉）
+try {
+  const pruned = store.pruneSessions();
+  if (pruned) console.log(`清掉 ${pruned} 条过期登录会话`);
+} catch (err) {
+  console.log(`清理过期登录会话失败（不影响启动）：${err?.message ?? err}`);
 }
 runs.onRunFinish(workflows.onAgentRunFinished);
 // 任务卡同理（2026-10-17）：运行跑完/被停/跑挂了，卡不能永远挂在「进行中」——

@@ -11,6 +11,57 @@ import { $, S } from './core.mjs';
 
 
 
+/* ------------------------------------------------------------------ 菜单收敛 */
+
+/**
+ * 一级导航的 `data-nav` → 菜单 key 的对照表（唯一一处）。
+ *
+ * ⚠️ 两套命名不一样，别想当然：导航按钮叫 `plugins`（工作台），菜单 key 叫 `workbench`
+ * （见 roles.mjs 的 MENU_KEYS）。左边的值是 DOM 里的，右边是目录里的，改任何一边都要改这里。
+ */
+const NAV_KEY = {
+  messages: 'messages',
+  contacts: 'contacts',
+  experts: 'experts',
+  plugins: 'workbench',
+  settings: 'settings',
+};
+
+/** 一级导航的固定顺序（"当前这栏被藏了"时按它挑第一个能看的） */
+const NAV_ORDER = ['messages', 'contacts', 'experts', 'plugins', 'settings'];
+
+/** 这个账号能不能看见某个菜单（`S.menuKeys === null` = 不限制，operator / 设备都是） */
+export function canSeeMenu(key) {
+  if (!S.menuKeys) return true;
+  return S.menuKeys.includes(key);
+}
+
+/** 第一个能看的一级栏 */
+export function firstVisibleNav() {
+  return NAV_ORDER.find((n) => canSeeMenu(NAV_KEY[n])) ?? 'messages';
+}
+
+/**
+ * 按角色收敛导航（2026-10-28 第三刀，**本刀唯一的渲染改动**）。
+ *
+ * 为什么用 `style.display` 而不是 `.hidden`：全站 `.hidden` 只有 `.mini` / `.list-search` /
+ * `#chatView` 三条具体的 display 规则，给 `.nav-btn` 加 class 根本不会藏（这是个老坑）。
+ * 设空串就回到 CSS 原本的 display，不用猜它是 flex 还是 grid。
+ *
+ * 手机底部导航（`.mb-tab`）一起处理：任务书 §六 要求"底部导航同上"。
+ * 幂等 —— 每次 `load()` 都调，重复调用没有副作用。
+ */
+export function applyMenuGating() {
+  document.querySelectorAll('.nav-btn[data-nav]').forEach((b) => {
+    const key = NAV_KEY[b.dataset.nav];
+    b.style.display = key && !canSeeMenu(key) ? 'none' : '';
+  });
+  document.querySelectorAll('.mb-tab[data-tab]').forEach((b) => {
+    const key = NAV_KEY[b.dataset.tab];
+    b.style.display = key && !canSeeMenu(key) ? 'none' : '';
+  });
+}
+
 /* ------------------------------------------------------------------ 状态 */
 
 export async function load() {
@@ -38,20 +89,46 @@ export async function load() {
     S.projects = [];
   }
   /*
-   * 我是谁（2026-10-28）：设备令牌 → **受限视图**。只问一次 —— `load()` 会被
-   * 通讯录轮询、下拉刷新反复调，每拍都问一遍没有意义（身份在配对期间不变）。
-   * `/api/pair/me` 对操作员/回环形态回 `{kind:'operator'}`，所以桌面端也是同一条路。
+   * 我是谁（2026-10-28 第三刀改成 `/api/me`）。只问一次 —— `load()` 会被通讯录轮询、
+   * 下拉刷新反复调，每拍都问一遍没有意义（身份在会话期间不变）。
+   *
+   * 三种答案一次拿全，前端不用再猜：
+   *   · `operator` —— 回环 / 共享令牌 / 回环桌面壳：**全部菜单**（`menuKeys = null` 表示不限制）；
+   *   · `user`     —— 登录的浏览器：`role.menuKeys` 决定看得见哪些菜单；
+   *   · `device`   —— 手机：沿用老逻辑（`isDevice`，菜单照旧不收敛，第四刀才下发）。
+   *
+   * 为什么不用 `/api/pair/me` 了：那条路对登录用户会回 `kind:'operator'`（历史口径），
+   * 一个普通村民会被判成"操作员"，菜单收敛就全失效了。
    */
-  if (S.isDevice === undefined) {
+  if (S.isDevice === undefined || S.auth === undefined) {
     try {
-      const me = await api('/api/pair/me');
+      const me = await api('/api/me');
+      S.auth = me ?? null;   // ⚠️ 不能叫 S.me —— 那个字段是「本机用户」(/api/state 的 me)，groups.mjs 在用
       S.isDevice = me?.kind === 'device';
       S.device = me?.device ?? null;
+      S.isUser = me?.kind === 'user';
+      S.isAdmin = S.isDevice ? true : me?.kind === 'operator' ? true : me?.role?.id === 'admin';
+      // null = 不限制（operator / device）；数组 = 这个账号看得见的菜单 key（见 roles.mjs 的 MENU_KEYS）
+      S.menuKeys = me?.kind === 'user' ? (me?.role?.menuKeys ?? []) : null;
     } catch {
+      S.auth = null;
       S.isDevice = false;
       S.device = null;
+      S.isUser = false;
+      S.isAdmin = true;
+      S.menuKeys = null;
     }
     document.body?.classList.toggle('mb-device', !!S.isDevice);
+    applyMenuGating();
+    /*
+     * 落在了一个这个账号看不见的栏上（比如刷新前停在「设置」，但账号只有会话权限）——
+     * 挪到第一个能看的。不挪的话右栏会画出设置页，左边却没有对应按钮，看着像"点了没反应"。
+     */
+    if (S.nav && !canSeeMenu(NAV_KEY[S.nav] ?? 'messages')) {
+      try {
+        setNav(firstVisibleNav());
+      } catch { /* 启动很早的时候 DOM 还没齐：下一拍 load() 会再走一遍 */ }
+    }
   }
   renderList();
   // 详情页开着时，那枚忙/闲徽标也要跟着变（轮询只重画了列表，没重画详情）

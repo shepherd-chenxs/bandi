@@ -614,6 +614,13 @@ export function renderWorkbenchGrid() {
    * 否则用户点一个吃一个 E4033 —— 「没权限」看起来就像「坏了」。
    */
   const devMode = !!S.isDevice;
+  /*
+   * 非管理员的登录账号（2026-10-28 第三刀）：宫格**只留项目与任务看板**。
+   * 研发（代码托管/远程连接）、自动化（定时任务/工作流设计）都是管理动作，
+   * 普通账号点进去只会吃 E4033 —— "没权限"看起来就是"坏了"，干脆不摆出来。
+   * 判据与 mobile 那条同源：`S.isUser && !S.isAdmin`，设备形态仍走 devMode（它另有一套白名单）。
+   */
+  const limitedByRole = !devMode && !!S.isUser && !S.isAdmin;
   // 宫格是整页布局：把左栏收掉（进插件后会由 renderPluginMaster 放回来）
   document.body.classList.add('no-list');
   setListTitle('工作台');
@@ -634,8 +641,8 @@ export function renderWorkbenchGrid() {
    * 研发面板插件没装的时候它们也该在 —— 有仓库、有机器是干活的前提，不是插件的附属品。
    * 没有研发类插件时补一个空组，位置仍在最前（跟有研发面板时一致）。
    */
-  const groupList = [...groups];
-  if (!groups.has('研发')) groupList.unshift(['研发', []]);
+  const groupList = [...groups].filter(([cat]) => !limitedByRole || cat !== '研发');
+  if (!limitedByRole && !groups.has('研发')) groupList.unshift(['研发', []]);
 
   /**
    * 研发区的两个内置磁贴。点开的是「工作台 → 研发 → 代码托管 / 远程连接」那两页 ——
@@ -649,7 +656,7 @@ export function renderWorkbenchGrid() {
   /* 所有分组**共用一个宫格容器**，分组名退化成一行小标题（`.wb-sec`）。
      原来每个分组是 `<section class="fx">`，`.fx + .fx` 自带横分隔线 —— 5 个小组竖着叠成
      5 条横带，每条右侧一片空白，分隔线反而比内容显眼。现在一屏铺不下就换行，不会"一带一块"。 */
-  const pluginSections = devMode ? '' : groupList
+  const pluginSections = devMode || limitedByRole ? '' : groupList
     .map(([cat, items]) => {
       // 一组一个色（内联渐变），组里的插件和内置磁贴共用这一种颜色 —— 一眼看出是同一区
       const icoStyle = wbIcoStyle(cat);
@@ -679,7 +686,7 @@ export function renderWorkbenchGrid() {
   $('pluginView').classList.remove('kb-page'); // 宫格是长页面，按普通滚动
   $('pluginView').innerHTML = `
     <div class="detail-head head-row"><div class="head-title"><b>工作台</b></div></div>
-    <div class="detail-body wb-page">${pluginSections}${workbenchProjectSection()}${devMode ? '' : workbenchAutoSection()}${
+    <div class="detail-body wb-page">${pluginSections}${workbenchProjectSection()}${devMode || limitedByRole ? '' : workbenchAutoSection()}${
       broken.length
         ? `<div class="wb-sec">装不上台面</div>
            ${broken

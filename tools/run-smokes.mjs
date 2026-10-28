@@ -53,6 +53,7 @@ const RUN = [
   'apps/server/src/smoke-run-progress.mjs',
   'apps/server/src/smoke-runtime-heal.mjs',
   'apps/server/src/smoke-roles.mjs',
+  'apps/server/src/smoke-users.mjs',
   'apps/server/src/smoke-schedules.mjs',
   'apps/server/src/smoke-steward.mjs',
   'apps/server/src/smoke-ssh.mjs',

@@ -1639,6 +1639,11 @@ input.locked:focus { outline: none; border-color: var(--line); }
 .roles-menus .members { max-height: none; margin-top: 0; padding: 10px; }
 .roles-menus .member span { flex: 0 0 auto; min-width: 92px; font-weight: 500; }
 .roles-menus .member em { flex: 1; min-width: 0; text-align: left; }
+/* 设置 › 用户（2026-10-28 第三刀）：全局 `input,select,textarea` 是 width:100%，
+   在"左标签右控件"的 .set-row 里会一路顶到标签上（和额度那两个数字框同一个坑）。
+   复选框例外 —— 它是 .plg-check 里的方框，不是输入框。 */
+.users-form .set-row input:not([type='checkbox']),
+.users-form .set-row select { width: 240px; flex: 0 0 auto; }
 @media (max-width: 860px) {
   .ms-split { grid-template-columns: 1fr; }
   .ms-side { border-right: 0; border-bottom: 1px solid var(--line); }

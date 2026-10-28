@@ -84,6 +84,16 @@ export async function handlePair(req, res, url) {
       const d = store.getDevice(a.deviceId);
       return sendJson(res, 200, { kind: 'device', device: d ? { id: d.id, name: d.name, pairedAt: d.pairedAt } : null });
     }
+    /*
+     * 登录用户（2026-10-28 第三刀）：**必须单独认出来**。
+     * 这一句原来只有 device / operator 两种结果 —— 一个普通村民登录后问"我是谁"，
+     * 会被回成 `operator`（"我是这台机器的操作员"），谁拿它判权限谁就错了。
+     * 本刀前端已统一改用 `/api/me`，这里补上是给旧调用方兜底。
+     */
+    if (a?.kind === 'user') {
+      const u = store.getUser(a.userId);
+      return sendJson(res, 200, { kind: 'user', user: u ? { id: u.id, name: u.name } : null, roleId: a.roleId });
+    }
     // operator（含回环免鉴权形态标出来的 operator）
     return sendJson(res, 200, { kind: 'operator' });
   }

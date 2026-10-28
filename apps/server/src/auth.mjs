@@ -44,6 +44,20 @@ import * as store from './store.mjs';
 const COOKIE = 'bandi_token';
 const HEADER = 'x-bandi-token';
 
+/*
+ * **登录会话 Cookie**（2026-10-28 第三刀：账号、登录与角色分配）。
+ *
+ * 与 `bandi_token` 是**两条互不相干的路**：
+ *   · `bandi_token` = 共享令牌（root / 节点 / 手机）—— 本刀一个字节没动；
+ *   · `bandi_sid`   = 某个**人**登录后的会话票，只对非回环浏览器有意义。
+ * 两条同时存在时**令牌优先**（见 guard 里的注释）：一个陈旧的会话 Cookie 不该
+ * 把握着 root 令牌的请求降权成普通用户。
+ */
+const SID_COOKIE = 'bandi_sid';
+/** 会话 Cookie 存活天数 —— 必须与 `store.SESSION_DAYS` 一致（两处一起改） */
+const SID_MAX_AGE = 30 * 86400;
+
+
 /** 这个监听地址算不算"只有本机能访问" */
 export function isLoopbackHost(host) {
   const h = String(host ?? '').trim().toLowerCase();
@@ -104,6 +118,22 @@ export function tokenOf(req, url) {
   const query = url.searchParams.get('token');
   return String(cookie || header || query || '');
 }
+
+/** 这次请求带的**登录会话**票（`bandi_sid`；没有就是空串） */
+export function sessionTokenOf(req) {
+  return String(parseCookies(req.headers.cookie)[SID_COOKIE] || '');
+}
+
+/** 给登录成功用：`Set-Cookie` 的值（HttpOnly：JS 读不到，XSS 偷不走） */
+export function sessionCookie(token) {
+  return `${SID_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SID_MAX_AGE}`;
+}
+
+/** 给退出登录用：让浏览器立刻丢掉这张票（Max-Age=0） */
+export function clearedSessionCookie() {
+  return `${SID_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
+}
+
 
 /**
  * 这枚令牌**是谁的**（2026-10-16 加的，2026-10-20 带上 scope）。
@@ -292,6 +322,12 @@ function deviceMayReach(method, pathname) {
         '/api/projects', // 项目列表
         '/api/tasks', // 全局任务 / 看板
         '/api/pair/me', // 我是谁（设备名）
+        /*
+         * `/api/me`（2026-10-28 第三刀）：前端 `state.mjs` 用它一次问清"我是哪种身份 +
+         * 我该看哪些菜单"。手机也要问 —— 它回 `{kind:'device'}`（只读、零敏感），
+         * 设备端由此可以走同一条前端路径，不必为身份再分一套 if。
+         */
+        '/api/me',
         '/api/web-version', // 60 秒版本指纹轮询（只回 mtime，零敏感）
         '/api/prefs', // 「我的」页回复风格**读**（PUT 仍 403：那是改全体员工的沟通偏好）
         /*
@@ -363,6 +399,25 @@ export function decide(who, method, pathname) {
   if (who.kind === 'device') {
     return deviceMayReach(method, pathname) ? 'allow' : 'E4033';
   }
+  /*
+   * **登录用户**（2026-10-28 第三刀）。
+   *
+   * 只有两种结果，不引入第三套白名单：
+   *   · 角色是 `admin` → 全放行（他就是管理员，没有"管理员做不了"这回事）；
+   *   · 其余角色 → **复用手机的 `deviceMayReach`**（任务书 §三 硬性要求）。
+   *     理由：那张表的口径正好是"看 + 发消息 + 留便签 + 审批 + 停止"，
+   *     和"一个普通员工该能干什么"完全对得上；再抄一份新白名单，两边迟早走偏。
+   */
+  if (who.kind === 'user') {
+    if (who.admin) return 'allow';
+    /*
+     * `/api/me` 必须对**任何已登录账号**成立 —— 它是"我是谁"，登录完第一件事就是问它，
+     * 拿不到就等于"登录成功但界面不知道拿哪个菜单"（前端 `load()` 靠它填 `S.menuKeys`）。
+     * 这不放进 `deviceMayReach`：那张表是手机的边界，动它等于改 device 的行为（§三 第一条）。
+     */
+    if (method === 'GET' && pathname === '/api/me') return 'allow';
+    return deviceMayReach(method, pathname) ? 'allow' : 'E4033';
+  }
 
   const scope = who.scope instanceof Set ? who.scope : new Set([store.SCOPE_COMPUTE]);
   if (scope.has(store.SCOPE_COMPUTE) && (nodeMayReach(who.nodeId, method, pathname) || runMayReach(who.nodeId, method, pathname))) {
@@ -385,9 +440,15 @@ export function decide(who, method, pathname) {
  *
  * ⚠️ 回环形态（单机 / 桌面版）下 `guard` 会把身份标成 operator（见下面那段），
  * 否则单机上点「改模型」会被自己的闸挡掉。
+ *
+ * 2026-10-28 第三刀扩了一条：**登录用户且角色是 admin** 也算。其余角色（哪怕是
+ * 内置的「操作员」角色）一律不算 —— 管理动作只认 `admin`，这是任务书 §三 的口径。
  */
 export function mayManage(req) {
-  return req?.bandiAuth?.kind === 'operator';
+  const a = req?.bandiAuth;
+  if (!a) return false;
+  if (a.kind === 'operator') return true;
+  return a.kind === 'user' && a.admin === true;
 }
 
 
@@ -419,6 +480,14 @@ export function guard(auth, req, res, url) {
    */
   if (req.method === 'GET' && (url.pathname === '/pair' || url.pathname === '/pair.html')) return true;
   if (req.method === 'POST' && url.pathname === '/api/pair/claim') return true;
+  /*
+   * 登录 / 退出（2026-10-28 第三刀）：此刻请求还没带任何凭据（这就是它要干的事），
+   * 所以必须免令牌。**CSRF 闸照过**（server.mjs 里的 guardWrite 在 guard 之后）——
+   * 登录页自己的 fetch 带 `X-Bandi: 1`，别在这条链路上绕开它。
+   * 退出为什么也豁免：它的凭据就是 `bandi_sid` 本身（handler 自己删那张票 + 清 Cookie），
+   * 拿令牌来退一个不存在的登录没有任何意义。
+   */
+  if (req.method === 'POST' && (url.pathname === '/api/login' || url.pathname === '/api/logout')) return true;
   /*
    * 落地页的**静态依赖**也要免令牌（2026-10-28 修）：手机此刻没有任何凭据，
    * `/js/pair-claim.mjs` 和图标走的是非 /api GET —— 不豁免时 guard 会回**登录页 HTML**
@@ -452,7 +521,35 @@ export function guard(auth, req, res, url) {
   }
 
   const got = tokenOf(req, url);
-  const who = identify(auth, got);
+  let who = identify(auth, got);
+
+  /*
+   * **登录会话兜底**（2026-10-28 第三刀）。
+   *
+   * 顺序是**令牌优先、会话兜底**，不是反过来。任务书 §五 写的是"先看 Cookie"，
+   * 但 §三 第一条是硬约束："operator / node / device / revoked 的行为一个字节都不许变"。
+   * 若先看 Cookie，一个浏览器里同时躺着 `bandi_token`（root）和 `bandi_sid`（某次登录）时，
+   * 握 root 令牌的请求会被一个陈旧的会话票**降权**成普通用户 —— 那是行为变更，也是坑。
+   * 两条路都保留、互不覆盖，语义才最不容易出意外。
+   *
+   * 回环分支在更上面已经 return 了，所以桌面端永远走不到这里（免登录，任务书 §二 第 2 条）。
+   */
+  if (!who) {
+    const sid = sessionTokenOf(req);
+    if (sid) {
+      const hit = store.userBySession(sid);
+      if (hit) {
+        who = {
+          kind: 'user',
+          userId: hit.user.id,
+          roleId: hit.user.roleId,
+          admin: hit.user.roleId === 'admin',
+          via: 'session',
+        };
+      }
+    }
+  }
+
   if (who) {
     /*
      * **判定只有一处**：Cookie / 头 / 查询参数三路都走到同一个 `decide()`，
@@ -500,13 +597,22 @@ export function guard(auth, req, res, url) {
     }
 
     if (decision === 'E4033') {
+      /*
+       * 两条不同的路走到同一个码，文案必须分开 —— 手机用户看到"手机端只开放…"
+       * 会莫名其妙，登录用户看到"手机端"更莫名其妙（2026-10-28 第三刀）。
+       */
+      const isUser = who.kind === 'user';
       res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
       res.end(
         JSON.stringify({
-          error: '手机端只开放看状态、审卡票和给员工发消息，这个操作在手机上做不了',
+          error: isUser
+            ? '这个账号没有这个权限（只有管理员能看全部面板与做管理动作）'
+            : '手机端只开放看状态、审卡票和给员工发消息，这个操作在手机上做不了',
           code: 'E4033',
           platform: 'bandi',
-          hint: '请在桌面端操作。',
+          hint: isUser
+            ? '让管理员在「设置 → 用户」里把角色改成「管理员」，或直接在那台机器上用班底（本机免登录、等同操作员）。'
+            : '请在桌面端操作。',
         }),
       );
       return false;
@@ -542,7 +648,7 @@ export function guard(auth, req, res, url) {
   const wantsHtml = req.method === 'GET' && !url.pathname.startsWith('/api/');
   if (wantsHtml) {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
-    res.end(loginPage({ wrong: !!got }));
+    res.end(loginPage({ wrong: !!got, hasUsers: store.hasUsers() }));
     return false;
   }
 
@@ -586,26 +692,41 @@ function timingSafeEqual(a, b) {
   return crypto.timingSafeEqual(A, B);
 }
 
-function loginPage({ wrong }) {
-  return `<!doctype html>
-<meta charset="utf-8" />
-<title>班底 · 需要访问令牌</title>
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<style>
-  body { font: 14px/1.8 system-ui,-apple-system,'Segoe UI',sans-serif; margin: 0; padding: 44px;
-         background: #1b1d21; color: #e7e7e7; }
-  h1 { font-size: 19px; margin: 0 0 8px; }
-  p { color: #9aa0a6; margin: 0 0 18px; }
-  form { display: flex; gap: 8px; max-width: 420px; }
-  input { flex: 1; padding: 9px 11px; border-radius: 7px; border: 1px solid #3a3f45;
-          background: #24272c; color: #e7e7e7; font: inherit; }
-  button { padding: 9px 16px; border-radius: 7px; border: 0; background: #3b6ef5; color: #fff;
-           font: inherit; cursor: pointer; }
-  .bad { color: #ff8a80; margin: 0 0 14px; }
-  code { background: #24272c; padding: 1px 5px; border-radius: 4px; }
-  .hint { margin-top: 20px; font-size: 12.5px; color: #7c8288; }
-</style>
-<h1>班底</h1>
+/**
+ * 登录页（2026-10-28 第三刀改：用户名 + 密码优先，令牌退成兜底入口）。
+ *
+ * 三态，别混：
+ *   · `hasUsers === false` —— **和从前一模一样**：只给令牌表单。此刻还没有任何账号，
+ *     给一个"用户名密码"表单只会让人以为"默认密码是什么"（任务书 §五 第 1 条）。
+ *   · 有用户 —— 用户名 + 密码是主表单；令牌收进 `<details>`，给部署/运维留一条 root 后路。
+ *   · `wrong` —— 令牌填错了（沿用老提示）。
+ *
+ * 为什么表单靠 inline script 提交而不是原生 `<form method=POST>`：`guardWrite` 要求
+ * 写请求带 `X-Bandi: 1` 头，原生表单提交设不了头，必然被 CSRF 闸挡成 403（自己试过）。
+ * 所以走 fetch，并把「码 + 中文」原样显示出来 —— 与全站错误口径一致。
+ */
+function loginPage({ wrong, hasUsers }) {
+  const pwForm = hasUsers
+    ? `
+${wrong ? '<p class="bad">令牌不对，再试一次。</p>' : ''}
+<p class="bad" id="err" hidden></p>
+<form id="pwForm" autocomplete="on">
+  <input id="nm" name="username" placeholder="用户名" autofocus autocomplete="username" spellcheck="false" />
+  <input id="pw" name="password" type="password" placeholder="密码" autocomplete="current-password" />
+  <button type="submit">登录</button>
+</form>
+<details id="tok">
+  <summary>用访问令牌登录（部署 / 运维）</summary>
+  <form method="GET" action="/">
+    <input name="token" placeholder="访问令牌" autocomplete="off" spellcheck="false" />
+    <button>进入</button>
+  </form>
+</details>
+<p class="hint">
+  令牌在控制面数据目录的 <code>token</code> 文件里（那台机器上：<code>type &lt;数据目录&gt;\token</code>
+  或 <code>cat &lt;数据目录&gt;/token</code>）。
+</p>`
+    : `
 <p>这个控制面没有监听回环地址，所以每个请求都要访问令牌。</p>
 ${wrong ? '<p class="bad">令牌不对，再试一次。</p>' : ''}
 <form method="GET" action="/">
@@ -621,11 +742,67 @@ ${wrong ? '<p class="bad">令牌不对，再试一次。</p>' : ''}
   -->
   填对之后会记在 Cookie 里，不用每次填。
 </p>
-<!--
-  P1-6（2026-10-20）：瘦客户端那条路走的是**反代**（本机 127.0.0.1:端口 上那台服务），
-  目标是"浏览器直连总机地址"—— 那样既进不去（没有令牌），也解释不清为什么。
-  这一句就是给那个人看的：双击班底，不要在这个地址上折腾。
--->
-<p class="hint">这台机器如果已经加入过某台班底，请<strong>双击班底</strong>打开，不要用浏览器直接开这个地址。</p>
+<p class="hint">
+  还没有任何账号：先用访问令牌进来，到「设置 → 用户」里创建第一个账号
+  （它会自动成为内置管理员，以后这里就能用用户名密码登录了）。
+</p>`;
+
+  return `<!doctype html>
+<meta charset="utf-8" />
+<title>班底 · ${hasUsers ? '登录' : '需要访问令牌'}</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>
+  body { font: 14px/1.8 system-ui,-apple-system,'Segoe UI',sans-serif; margin: 0; padding: 44px;
+         background: #1b1d21; color: #e7e7e7; }
+  h1 { font-size: 19px; margin: 0 0 8px; }
+  p { color: #9aa0a6; margin: 0 0 18px; }
+  form { display: flex; gap: 8px; max-width: 420px; }
+  #pwForm { flex-direction: column; }
+  input { flex: 1; padding: 9px 11px; border-radius: 7px; border: 1px solid #3a3f45;
+          background: #24272c; color: #e7e7e7; font: inherit; }
+  button { padding: 9px 16px; border-radius: 7px; border: 0; background: #3b6ef5; color: #fff;
+           font: inherit; cursor: pointer; }
+  button[disabled] { opacity: .6; cursor: default; }
+  .bad { color: #ff8a80; margin: 0 0 14px; }
+  code { background: #24272c; padding: 1px 5px; border-radius: 4px; }
+  .hint { margin-top: 20px; font-size: 12.5px; color: #7c8288; }
+  details { max-width: 420px; margin-top: 22px; }
+  summary { color: #9aa0a6; font-size: 12.5px; cursor: pointer; }
+  details form { margin-top: 10px; }
+</style>
+<h1>班底</h1>
+${pwForm}
+<script>
+(() => {
+  const f = document.getElementById('pwForm');
+  if (!f) return;
+  const err = document.getElementById('err');
+  f.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    err.hidden = true;
+    const btn = f.querySelector('button');
+    btn.disabled = true;
+    try {
+      const r = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Bandi': '1' },
+        body: JSON.stringify({
+          name: document.getElementById('nm').value,
+          password: document.getElementById('pw').value,
+        }),
+      });
+      const j = await r.json().catch(() => null);
+      if (r.ok) { location.replace('/'); return; }
+      err.textContent = j ? (j.code ? j.code + '：' + j.error : j.error) : '登录失败，再试一次';
+      err.hidden = false;
+    } catch {
+      err.textContent = '连不上这台机器，检查网络后重试';
+      err.hidden = false;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+})();
+</script>
 `;
 }
