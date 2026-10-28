@@ -216,6 +216,12 @@ export async function renderDeviceList() {
       sel.disabled = true;
       try {
         await post(`/api/pair/devices/${encodeURIComponent(sel.dataset.devRole)}/role`, { roleId: sel.value || null });
+        /*
+         * 成功就把本地这份也更新掉：失败回滚用的是 `d.roleId`，不更新的话
+         * "改 A 成功 → 再改 B 失败"会回滚到最初那个角色，而不是刚存的 A。
+         */
+        const d = devices.find((x) => x.id === sel.dataset.devRole);
+        if (d) d.roleId = sel.value || null;
         toast(sel.value ? '已分配 —— 那台手机下一次打开班底就按新角色显示' : '已改回默认 —— 那台手机下一次打开班底就是四个 tab', 'ok');
       } catch (e) {
         toast(e.message, 'error');

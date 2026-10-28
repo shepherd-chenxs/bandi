@@ -305,6 +305,19 @@ try {
   check('解绑后能删 → 200',
     (await call('DELETE', `/api/roles/${encodeURIComponent(rolePhoneId)}`, { token: TOKEN })).status === 200);
 
+  /*
+   * 被踢出的手机**不再算「在用」**（2026-10-28 修）：
+   * 设备行留着当记录、下拉又被禁用，要是还占着角色，那个角色就永远删不掉。
+   * 判据是"名下有有效令牌"，这条钉住它。
+   */
+  const roleKicked = await call('POST', '/api/roles', { token: TOKEN, body: { name: '被踢手机的角色', menuKeys: ['messages'] } });
+  const roleKickedId = roleKicked.body?.role?.id;
+  await call('POST', `/api/pair/devices/${encodeURIComponent(deviceId)}/role`, { token: TOKEN, body: { roleId: roleKickedId } });
+  await call('POST', `/api/pair/devices/${encodeURIComponent(deviceId)}/revoke`, { token: TOKEN });
+  const delKicked = await call('DELETE', `/api/roles/${encodeURIComponent(roleKickedId)}`, { token: TOKEN });
+  check('手机被踢出后不再算「在用」→ 角色能删 → 200', delKicked.status === 200,
+    `${delKicked.status} ${delKicked.body?.code ?? ''}`);
+
   /* ============ ⑦ 边界 ============ */
   console.log('\n⑦ 边界：坏角色 / 不存在的节点 / 没有操作员身份');
   const badRole = await call('POST', `/api/nodes/${NODE_ID}/role`, { token: TOKEN, body: { roleId: 'role-不存在' } });

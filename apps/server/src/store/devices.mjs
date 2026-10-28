@@ -64,9 +64,24 @@ export function setDeviceRole(deviceId, roleId) {
   return getDevice(deviceId);
 }
 
-/** 有多少部手机绑着这个角色（删角色前要问，见 routes/roles.mjs 的 E2071） */
+/**
+ * 有多少部**还在用**的手机绑着这个角色（删角色前要问，见 routes/roles.mjs 的 E2071）。
+ *
+ * 只数名下有**有效令牌**的设备：被踢出的设备行留着当记录（`tokenCount=0`），
+ * 它已经拿不到任何菜单了。把它也算"在用"会让那个角色**永远删不掉** ——
+ * 而界面上被踢设备的下拉是禁用的，连"解绑"都做不了（2026-10-28 修）。
+ */
 export function countPhonesByRole(roleId) {
-  return db.prepare('SELECT COUNT(*) AS n FROM mobile_devices WHERE roleId = ?').get(String(roleId ?? '')).n;
+  return db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM mobile_devices d
+        WHERE d.roleId = ?
+          AND EXISTS (
+            SELECT 1 FROM mobile_device_tokens t
+             WHERE t.deviceId = d.id AND (t.expiresAt IS NULL OR t.expiresAt > ?)
+          )`,
+    )
+    .get(String(roleId ?? ''), nowIso()).n;
 }
 
 /** 配对令牌默认时效（PRD P0-2：短时效，5 分钟、单次使用） */
