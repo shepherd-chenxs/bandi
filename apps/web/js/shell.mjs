@@ -77,9 +77,12 @@ export function savePlace() {
         version: 2,
         route: S.route ?? { view: S.nav },
         kbStatuses: S.kbFilter?.statuses ?? [],
-        // 负责人 / 项目（2026-10-18）：同样记着，刷新回来还是筛着的
+        // 负责人 / 项目（2026-10-18）/ 来源（2026-10-28）：同样记着，刷新回来还是筛着的
         kbAssignees: S.kbFilter?.assignees ?? [],
         kbProjects: S.kbFilter?.projects ?? [],
+        kbSources: S.kbFilter?.sources ?? [],
+        // 「列设置」藏掉的列（2026-10-28）：也是刷新后该保持的界面状态
+        kbHiddenCols: S.kbHiddenCols ?? [],
       }),
     );
   } catch { /* 隐私模式下写不了就算了，不影响用 */ }
@@ -245,6 +248,8 @@ export async function restorePlace() {
   if (Array.isArray(p?.kbStatuses)) S.kbFilter.statuses = p.kbStatuses.filter((x) => typeof x === 'string');
   if (Array.isArray(p?.kbAssignees)) S.kbFilter.assignees = p.kbAssignees.filter((x) => typeof x === 'string');
   if (Array.isArray(p?.kbProjects)) S.kbFilter.projects = p.kbProjects.filter((x) => typeof x === 'string');
+  if (Array.isArray(p?.kbSources)) S.kbFilter.sources = p.kbSources.filter((x) => typeof x === 'string');
+  if (Array.isArray(p?.kbHiddenCols)) S.kbHiddenCols = p.kbHiddenCols.filter((x) => typeof x === 'string');
   const route = p?.route && typeof p.route.view === 'string' ? p.route : null;
   if (!route) return setNav('messages');
   try {
@@ -286,8 +291,8 @@ export function setTheme(theme) {
 
 
 
-export const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
-  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+export const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 
 

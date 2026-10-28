@@ -43,6 +43,31 @@ export function getNode(id) {
   return db.prepare('SELECT * FROM nodes WHERE id = ?').get(id) ?? null;
 }
 
+/* --------------------------------------------------- 面板角色（2026-10-28 第四刀） */
+
+/*
+ * `nodes.roleId`：总机给这台机器指定的**面板角色**（`roles.id`），空 = 用默认（`node-ops`）。
+ *
+ * 为什么用 `ensureColumn` 而不是重建表：老库平滑升级（`PRAGMA table_info` + `ALTER TABLE
+ * ADD COLUMN`，见 db.mjs）。这一列**只影响界面**（本地面板显示哪几节），
+ * 不参与任何 API 权限判定 —— 服务端权限边界仍然是令牌 scope 那套。
+ */
+ensureColumn('nodes', 'roleId', 'roleId TEXT');
+
+/** 给一台节点指定面板角色（`null` = 恢复默认）。节点不存在返回 null，调用方据此回 404 */
+export function setNodeRole(nodeId, roleId) {
+  const n = getNode(nodeId);
+  if (!n) return null;
+  const next = String(roleId ?? '').trim() || null;
+  db.prepare('UPDATE nodes SET roleId = ? WHERE id = ?').run(next, nodeId);
+  return getNode(nodeId);
+}
+
+/** 有多少台节点绑着这个角色（删角色前要问，见 routes/roles.mjs 的 E2071） */
+export function countNodesByRole(roleId) {
+  return db.prepare('SELECT COUNT(*) AS n FROM nodes WHERE roleId = ?').get(String(roleId ?? '')).n;
+}
+
 
 export function listNodes() {
   return db.prepare('SELECT * FROM nodes ORDER BY registeredAt').all();

@@ -801,7 +801,9 @@ export async function renderRuntimes() {
    一个开关，一个重启按钮就可以了"）——
    单机/总机分段 + 说明行 + 连接行全部收掉，只剩「总机」开关（开=总机、关=单机）+ 常显重启按钮。
    真加入成功之后整站换成节点页（renderNodeMode），那台机器上这页都进不去了，没有"模式"可切。
-   「接入总机」是页面最底一节（只在单机档出现，常开、无标题，面板自己带「可用总机」）；
+   「接入总机」是页面最底一节（只在单机档出现）。**2026-10-28 形态降级**：多机协同不再是产品主线
+   （docs/design/2026-10-28-形态降级-单机加隧道-方案.md），这一节收进默认收起的「多机协同（实验）」
+   分节、标「实验」—— 不删代码，观察期后再决定去留。
    备份挪去独立的「数据备份」分节，这页不再摆本机数据和导出。 */
 
 /* 设备行（总机的设备区）：远程节点多一枚「在线/离线」+ 排队数 —— 行的骨架与本地完全一致 */
@@ -865,7 +867,9 @@ export async function renderDeviceList() {
 
   /*
    * 只有两档：单机 / 总机，开关就是切换本体（开=总机、关=单机 —— 2026-10-21 五改收成一行）。
-   * 「接入总机」不是第三档模式，是页面最底一节（六改：常开不折叠；七改：连节标题也去掉）。
+   * 「接入总机」不是第三档模式，是页面最底一节。2026-10-28 形态降级：收进默认收起的
+   * 「多机协同（实验）」分节（六改/七改的"常开无标题"随之作废 —— 多机已不是主线，
+   * 入口降级为实验但不删，见 docs/design/2026-10-28-形态降级-单机加隧道-方案.md §六）。
    * 真加入成功后整站换成节点页，那时这台已经没有"模式"可切了。
    */
 
@@ -914,15 +918,18 @@ export async function renderDeviceList() {
               <button data-mode="standalone" class="${m === 'standalone' ? 'on' : ''}">单机</button>
               <button data-mode="host" class="${m === 'host' ? 'on' : ''}" ${
                 lan.explicit ? 'disabled title="监听地址由启动参数指定（BANDI_HOST），这台常驻当总机"' : ''
-              }>总机</button>
+              }>总机（实验）</button>
             </div>
             <button class="btn-sm ${pd ? 'primary' : ''}" id="lanRestart">重启</button>
           </div>
         </div>
+        <!-- 2026-10-28 形态降级：两档话术都改成"这是本机"口径 —— 单机是默认形态与主线；
+             总机只是把本机接进多机协同的实验入口（文档见 deploy/README.md 三之二节的隧道）。
+             两句都压短，别把模式卡撑高。 -->
         <div class="mode-state">${
           m === 'host'
-            ? '总机 —— 同一网络里的设备可以连到这台、领活干'
-            : '单机 —— 只在这台电脑上用；切到「总机」，同一网络里的设备就能连进来领活'
+            ? '总机（实验）—— 多机协同是实验特性；同一网络里的设备可以连到这台、领活干'
+            : '单机 —— 这是本机：自己的库、项目、员工、会话都在这台机器上。要从外面访问它，用隧道接出去（见 deploy/README.md）'
         }</div>
         ${(local?.warnings ?? []).map((w) => `<div class="machine-warn">${esc(w)}</div>`).join('')}
       </section>`;
@@ -946,10 +953,41 @@ export async function renderDeviceList() {
         </div>
         ${rows.map(deviceRowHtml).join('')}
       </section>`;
-    slot.innerHTML = m === 'standalone' ? '<section class="fx"><div id="joinMount"></div></section>' : '';
+    /* 2026-10-28 形态降级：「接入总机」不再是常开的裸面板 —— 多机协同降为实验特性
+       （docs/design/2026-10-28-形态降级-单机加隧道-方案.md），所以收进一个默认收起的分节：
+       节头「多机协同」+ 实验标签 + 展开/收起按钮，点开才把 mountJoinPanel 挂进来（不白挂）。
+       面板本身一行没动（mountJoinPanel 的 root.isConnected 守卫会自己收摊），只是入口变了。 */
+    slot.innerHTML = m === 'standalone'
+      ? `<section class="fx">
+          <div class="fx-head">
+            <label>多机协同 <em class="tag-warn">实验</em></label>
+            <button class="btn-sm" id="joinToggle">展开</button>
+          </div>
+          <div class="dim">多机协同（加入别的总机 / 局域网派活）是实验特性：每台机器跑一个完整班底、各自一份数据。跨机协作推荐项目走 git 仓库 + PR。</div>
+          <div id="joinMount" style="display:none"></div>
+        </section>`
+      : '';
     const jn = $('joinNode');
     if (jn) jn.onclick = () => openJoinDialog(lan);
-    if (m === 'standalone') mountJoinPanel($('joinMount'));
+    if (m === 'standalone') {
+      const mount = $('joinMount');
+      const toggle = $('joinToggle');
+      /* 挂载判据写在 mount 节点自己身上：renderBody 每次切换都重建这段 innerHTML，
+         旧节点被换掉时它的 isConnected 守卫会停掉面板里的定时器；dataset 跟着新节点归零，
+         所以"每个新 mount 只挂一次"这个不变式不需要额外的闭包状态去维护。 */
+      if (toggle && mount) {
+        toggle.onclick = () => {
+          const hidden = mount.style.display === 'none';
+          mount.style.display = hidden ? '' : 'none';
+          toggle.textContent = hidden ? '收起' : '展开';
+          // 点开才挂：收起状态下不白挂面板（它自带状态机与轮询，挂着就是白转）
+          if (hidden && !mount.dataset.mounted) {
+            mount.dataset.mounted = '1';
+            mountJoinPanel(mount);
+          }
+        };
+      }
+    }
     /* 设备行点进去（本机 / 远程节点同一个入口，详情页自己分叉） */
     dev.querySelectorAll('[data-open-device]').forEach((el) => {
       el.onclick = () => {
@@ -974,7 +1012,8 @@ export async function renderDeviceList() {
 
 /**
  * 模式卡的接线：单机⇄总机 = 改 allowLan + 重启生效（确认框把后果说全）。
- * 「接入总机」那节没有折叠态（面板常挂），这里不再管它；真加入成功后整站变节点页。
+ * 「接入总机」那节的折叠/挂载在 renderBody 里自己管（2026-10-28 降级后默认收起、点开才挂），
+ * 这里不管它；真加入成功后整站变节点页。
  */
 export function wireModeCard({ lan, mode, refresh }) {
   const restart = $('lanRestart');

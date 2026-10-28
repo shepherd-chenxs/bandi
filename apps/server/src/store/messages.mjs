@@ -25,6 +25,22 @@ export function listMessages(conversationId) {  return db
 }
 
 /**
+ * 某一步流程的往来消息（按 taskId 归属，2026-10-26 起派活都带这个标记）。
+ * 给 `viewTask`（apps/server/src/workflows.mjs）用：一个任务一次点查，
+ * 别把**整个会话**的消息（含正文大字段）捞出来再在 JS 里筛掉 99%。
+ */
+export function listMessagesByTask(taskId) {
+  return db
+    .prepare(
+      `SELECT m.*, p.name AS personaName
+         FROM messages m LEFT JOIN personas p ON p.id = m.personaId
+        WHERE m.taskId = ? ORDER BY m.createdAt, m.rowid`,
+    )
+    .all(taskId)
+    .map(parseAtts);
+}
+
+/**
  * 水位线之后的消息 —— 群聊里给某个成员注入上下文用。
  * rowid 是 SQLite 的隐式列，拿来当游标最省事（不受时间戳并列影响）。
  */

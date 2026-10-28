@@ -58,6 +58,10 @@ const HOST_ALLOW = [
   'schema.tauri.app',
   'tauri.app',
   'usemagpie.ai',
+  // 飞书开放平台（2026-10-28）：用户**自建飞书应用**的官方 API 域名 ——
+  // 不是中转站/网关；飞书通道（apps/server/src/feishu.mjs）按官方协议直连它，
+  // 与 larksuite/node-sdk 用的是同一个 host。见 docs/架构.md「飞书通道」。
+  'open.feishu.cn',
   '127.0.0.1',
   'localhost',
   // SVG 的命名空间标识符（`xmlns="http://www.w3.org/2000/svg"`）不是网络请求，

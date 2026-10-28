@@ -2,8 +2,24 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
+<!-- viewport-fit=cover（2026-11 手机端）：刘海屏/手势条不白边；配合 mobile.css 的 safe-area 内边距 -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>班底</title>
+<!--
+  PWA 壳（2026-11 手机端增量）：添加到主屏幕后以独立窗口打开、带图标。
+  · manifest：名称/图标(192/512)/display:standalone/主题色，见 /manifest.webmanifest；
+  · apple-touch-icon 与 apple-mobile-web-app-*：iOS Safari 的"添加到主屏幕"走 legacy 模式
+    （无安装提示），这三个 meta 是它的全部开关 —— 主验证平台是 Android Chrome（用户已确认），
+    iOS 这几行写上即可，不作为验收项（设计 §7-5）。
+-->
+<meta name="theme-color" content="#08090a" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="班底" />
+<link rel="manifest" href="/manifest.webmanifest" />
+<link rel="apple-touch-icon" href="/icons/icon-192.png" />
+<link rel="icon" href="/icons/icon-192.png" />
 <!--
   启动底色（2026-10-22，治"打开时黑边一闪"）：
   WebView2 在**文档还没画第一帧**之前，窗口里是一片系统默认底色 —— 浅色主题下就是一道
@@ -29,6 +45,9 @@
   } catch (e) { /* 读不了就算了，交给 app.js */ }
 </script>
 <link rel="stylesheet" href="/style.css" />
+<!-- 移动端样式（2026-11 手机端增量）：全部新规则只在这个文件（style.css 不新增移动规则），
+     断点 900px / 600px，类名 mb- 前缀 —— 必须排在 style.css 之后才能覆盖它 -->
+<link rel="stylesheet" href="/mobile.css" />
 </head>
 <body>
 
@@ -522,6 +541,42 @@
         location.reload();
       };
     }, 4000);
+  })();
+</script>
+<!--
+  Service Worker（2026-11 手机端增量，P1-3）：静态资源 stale-while-revalidate，
+  /api/* 一律不缓存（本地优先产品，数据以服务端为准 —— 设计 §8）。
+  注册失败（SW 不存在 / 浏览器不支持）静默忽略 —— 它是地基，不能挡住主应用。
+  为什么等 load 再注册：首屏的网络请求别和 SW 安装抢带宽（弱网局域网下有感）。
+
+  ⚠️ **只在手机/平板上注册**（2026-10-28 修）：桌面壳与桌面浏览器原本走"每请求现读
+  + /api/web-version 版本指纹"那套，刷新一次就拿到新前端；SW 的 stale-while-revalidate
+  会把升级后的首屏压回旧 HTML/JS，要刷两次。触屏 + 窄屏才算移动端（避免触屏笔记本误判）。
+  之前老版本在桌面端注册过 → 这里顺手注销并清掉静态缓存，别让旧缓存一直留着。
+-->
+<script>
+  (function () {
+    if (!('serviceWorker' in navigator)) return;
+    var mobile =
+      window.matchMedia('(pointer: coarse)').matches &&
+      window.matchMedia('(max-width: 900px)').matches;
+    window.addEventListener('load', function () {
+      if (mobile) {
+        navigator.serviceWorker.register('/sw.js').catch(function () { /* 起不来不影响页面 */ });
+        return;
+      }
+      navigator.serviceWorker.getRegistrations()
+        .then(function (rs) { rs.forEach(function (r) { r.unregister(); }); })
+        .catch(function () {});
+      if (window.caches) {
+        caches.keys()
+          .then(function (ks) {
+            ks.filter(function (k) { return k.indexOf('bandi-static-') === 0; })
+              .forEach(function (k) { caches.delete(k); });
+          })
+          .catch(function () {});
+      }
+    });
   })();
 </script>
 <script type="module" src="/app.mjs"></script>

@@ -1085,6 +1085,18 @@ export async function renderNodeDetail(dev) {
   } catch {
     /* 忽略：老版本服务没有这条路由 */
   }
+
+  /*
+   * 角色清单（2026-10-28 第四刀）：给「面板角色」那个下拉用。
+   * `/api/roles` 在 mayManage 后面（只有操作员能读）—— 读不到就**不画那个下拉**，
+   * 这一页照常渲染（别因为一个附加块白屏）。
+   */
+  let roles = [];
+  try {
+    roles = (await api('/api/roles')).roles ?? [];
+  } catch {
+    roles = [];
+  }
   /** 映射列表的行（添加/删除后重画用同一份；⚠️ 必须声明在 innerHTML 那句之前 —— 模板串要用它） */
   const wsRowsHtml = (paths) =>
     paths.length
@@ -1177,6 +1189,40 @@ export async function renderNodeDetail(dev) {
                 ? '这台能看到面板'
                 : '这台看不到面板（总机没给面板权限）'
             }${dev.lastUsedAt ? ` · 最近使用 ${esc(dt(dev.lastUsedAt))}` : ''}</div>`
+          : ''
+      }
+
+      ${
+        /*
+         * 「面板角色」（2026-10-28 第四刀）：这台机器**本地面板**显示哪几节。
+         *
+         * 与上面那行 scope 是两件事，别合并：scope 管"能不能看总机面板"（服务端权限），
+         * 面板角色管"它自己那一页显示哪几节"（纯界面）。所以这里只存总机侧一行，
+         * 下发靠那台机器的下一次心跳（15 秒内）—— 文案必须这么说，不许假装"立刻生效"。
+         *
+         * 角色清单读不到（非操作员 / 老服务）就整段不画。
+         */
+        roles.length
+          ? `<section class="fx" style="margin-top:26px">
+               <label>面板</label>
+               <div class="row-item" style="gap:10px;align-items:flex-start">
+                 <div class="who">
+                   <b>面板角色</b>
+                   <div class="sub">这台机器<b>本地面板</b>显示哪几节，由这里决定；改完它下一次心跳（15 秒内）就按新角色画。未分配 = 默认「节点运维」（六节全看）。「连接」那一节永远显示 —— 免得一次误配把它锁在外面。</div>
+                 </div>
+                 <select class="node-panel-role" id="nodePanelRole" data-node="${esc(dev.id)}">
+                   <option value=""${dev.roleId ? '' : ' selected'}>默认（节点运维）</option>
+                   ${roles
+                     .map(
+                       (r) =>
+                         `<option value="${esc(r.id)}"${dev.roleId === r.id ? ' selected' : ''}>${esc(r.name)}${
+                           r.builtin ? '' : '（自建）'
+                         }</option>`,
+                     )
+                     .join('')}
+                 </select>
+               </div>
+             </section>`
           : ''
       }
 
@@ -1322,8 +1368,37 @@ export async function renderNodeDetail(dev) {
   wireCopyButtons(); // 未安装那段的「复制命令」
   wireInstallRuntime(dev); // 未安装那段的「在这台机器上安装」—— 走节点的领活通道，命令在节点那侧查表
   wireExternalActions(dev); // 外部件那颗按钮：安装 / 重启 / 重装（按状态给，只给一颗）
+  wirePanelRole(dev); // 面板角色下拉（2026-10-28 第四刀）
   // 有活在做就自己刷（进度是服务端的事实，不是点击时记的定时器）
   scheduleTaskPoll(dev);
+}
+
+/**
+ * 「面板角色」下拉（2026-10-28 第四刀）：改完只回一句"下一次心跳生效"。
+ *
+ * 为什么不假装立刻生效：菜单是**那台机器**的心跳带回去写进 `node-panel.json` 的，
+ * 总机这边改的只是"它该用哪个角色"这一行 —— 说"已生效"就是在撒谎（离线机器压根不会变）。
+ */
+function wirePanelRole(dev) {
+  const sel = $('nodePanelRole');
+  if (!sel) return;
+  sel.onchange = async () => {
+    sel.disabled = true;
+    try {
+      await api(`/api/nodes/${encodeURIComponent(dev.id)}/role`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roleId: sel.value || null }),
+      });
+      dev.roleId = sel.value || null;
+      toast(sel.value ? '已分配，等它下一次心跳（15 秒内）就按新角色画' : '已改回默认，等它下一次心跳（15 秒内）生效', 'ok');
+    } catch (err) {
+      toast(err.message, 'error');
+      sel.value = dev.roleId ?? ''; // 回滚到改动前的选择
+    } finally {
+      sel.disabled = false;
+    }
+  };
 }
 
 

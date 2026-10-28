@@ -3,13 +3,13 @@
  *
  * 分两段：
  *   ① 直接 import —— seed 幂等、内置不可删、`auto` 运行时、首轮注入那段「机器现状」、
- *      `syncSecretary` 把存量身份拉回出厂（2026-10-22 收编 + 2026-10-23 换人都靠它迁移）；
+ *      `syncSteward` 把存量身份拉回出厂（2026-10-22 收编 + 2026-10-23 换人都靠它迁移）；
  *   ② 真起一个控制面（临时数据目录）—— 接口层：出厂就在、删他 403、身份锁死（E2055）但部署配置可改。
  *
  * 为什么 ② 非跑不可：①验的是函数，而人踩的是**接口**。删不掉这条曾经靠前端藏按钮，
  * 接口照删 —— 现在两道都得有，那就两道都得测。
  *
- * 跑法：node apps/server/src/smoke-secretary.mjs
+ * 跑法：node apps/server/src/smoke-steward.mjs
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -33,51 +33,51 @@ process.env.BANDI_DATA = tmp;
 process.env.BANDI_DB = path.join(tmp, 'bandi.db');
 
 const store = await import('./store.mjs');
-const secretary = await import('./secretary.mjs');
+const steward = await import('./steward.mjs');
 const skills = await import('./skills.mjs');
 const runtimes = await import('./runtimes.mjs');
 const dispatch = await import('./dispatch.mjs');
 
 /* ------------------------------------------------- ① seed：出厂就在，且只建一次 */
 console.log('① seed：建一次、幂等、不改用户后来的修改');
-const first = secretary.ensureSecretary();
+const first = steward.ensureSteward();
 check('第一次 → 建出来了', first.created === true);
-check('固定 id（幂等靠它）', first.persona.id === secretary.SECRETARY_ID, first.persona.id);
+check('固定 id（幂等靠它）', first.persona.id === steward.STEWARD_ID, first.persona.id);
 check('打上了内置标记', first.persona.builtin === 1);
 check('运行时是 auto（换机器不用改她）', first.persona.runtime === 'auto', first.persona.runtime);
 check('工作目录 = 平台根（她要读 skills/ 与日志）', first.persona.cwd === repoRoot, first.persona.cwd);
 check('有岗位指令（不是个空壳）', String(first.persona.instructions).length > 100);
 
 const n1 = store.listPersonas().length;
-const second = secretary.ensureSecretary();
+const second = steward.ensureSteward();
 check('再调一次 → 不新建', second.created === false);
 check('人数没变（幂等）', store.listPersonas().length === n1, `${n1} → ${store.listPersonas().length}`);
 
-/* 用户改名/改职责之后，ensureSecretary 不动它（seed 只管建；刷回出厂是 syncSecretary 的事） */
-store.updatePersona(secretary.SECRETARY_ID, { name: '小秘', instructions: '我自己的设定' });
-secretary.ensureSecretary();
-const after = store.getPersona(secretary.SECRETARY_ID);
-check('ensureSecretary 不刷用户改动（职责分离：刷回是 sync 的活）', after.name === '小秘', after.name);
+/* 用户改名/改职责之后，ensureSteward 不动它（seed 只管建；刷回出厂是 syncSteward 的事） */
+store.updatePersona(steward.STEWARD_ID, { name: '小秘', instructions: '我自己的设定' });
+steward.ensureSteward();
+const after = store.getPersona(steward.STEWARD_ID);
+check('ensureSteward 不刷用户改动（职责分离：刷回是 sync 的活）', after.name === '小秘', after.name);
 check('改指令后再启动 → 指令保住', after.instructions === '我自己的设定');
 check('内置标记也还在', after.builtin === 1);
 
-/* syncSecretary：不管库里什么样，跑完 = 出厂 —— 2026-10-23 喜儿→崔老三的存量迁移就走的这条路 */
-const synced = secretary.syncSecretary();
-const back = store.getPersona(secretary.SECRETARY_ID);
-check('syncSecretary 把改过的名字刷回出厂', back.name === secretary.SECRETARY_NAME && back.name === '崔老三', back.name);
-check('指令也回到出厂', back.instructions === secretary.SECRETARY_INSTRUCTIONS);
+/* syncSteward：不管库里什么样，跑完 = 出厂 —— 2026-10-23 喜儿→崔老三的存量迁移就走的这条路 */
+const synced = steward.syncSteward();
+const back = store.getPersona(steward.STEWARD_ID);
+check('syncSteward 把改过的名字刷回出厂', back.name === steward.STEWARD_NAME && back.name === '崔老三', back.name);
+check('指令也回到出厂', back.instructions === steward.STEWARD_INSTRUCTIONS);
 check('返回了动过的字段清单（给启动日志用）', Array.isArray(synced) && synced.includes('name') && synced.includes('instructions'), JSON.stringify(synced));
-const synced2 = secretary.syncSecretary();
+const synced2 = steward.syncSteward();
 check('再跑一遍 → 幂等（空数组）', Array.isArray(synced2) && synced2.length === 0, JSON.stringify(synced2));
-store.updatePersona(secretary.SECRETARY_ID, { name: secretary.SECRETARY_NAME, instructions: secretary.SECRETARY_INSTRUCTIONS });
+store.updatePersona(steward.STEWARD_ID, { name: steward.STEWARD_NAME, instructions: steward.STEWARD_INSTRUCTIONS });
 
 /* ---- ①a 存量 id 迁移（2026-10-23）：旧库的 p-xier 整行搬到 p-cuilaosan，引用跟着走 ---- */
 console.log('\n①a id 迁移：p-xier → p-cuilaosan，十几张表的引用一次搬齐');
 {
   const { db } = await import('./store/db.mjs');
   // 把内置名额撤回旧 id（喜儿时代的样子），再摆两条会被迁移波及的引用
-  db.prepare(`DELETE FROM persona_skills WHERE personaId = ?`).run(secretary.SECRETARY_ID);
-  db.prepare(`UPDATE personas SET id = 'p-xier', name = '喜儿', avatar = 'p-xier.png' WHERE id = ?`).run(secretary.SECRETARY_ID);
+  db.prepare(`DELETE FROM persona_skills WHERE personaId = ?`).run(steward.STEWARD_ID);
+  db.prepare(`UPDATE personas SET id = 'p-xier', name = '喜儿', avatar = 'p-xier.png' WHERE id = ?`).run(steward.STEWARD_ID);
   db.prepare(`INSERT INTO conversations (id, title, personaId, createdAt, updatedAt)
               VALUES ('c-mig-test', '迁移测试会话', 'p-xier', '2026-10-23T00:00:00Z', '2026-10-23T00:00:00Z')`).run();
   db.prepare(`INSERT INTO persona_skills (personaId, skillName, addedAt)
@@ -85,42 +85,78 @@ console.log('\n①a id 迁移：p-xier → p-cuilaosan，十几张表的引用�
   db.prepare(`INSERT INTO groups (id, title, assistantPersonaId, createdAt, updatedAt)
               VALUES ('g-mig-test', '迁移测试群', 'p-xier', '2026-10-23T00:00:00Z', '2026-10-23T00:00:00Z')`).run();
 
-  check('迁移跑一次 → 报告真的迁了', secretary.migrateSecretaryId() === true);
-  const moved = store.getPersona(secretary.SECRETARY_ID);
+  check('迁移跑一次 → 报告真的迁了', steward.migrateStewardId() === true);
+  const moved = store.getPersona(steward.STEWARD_ID);
   check('旧行整行搬到新 id（名字原样带走）', !!moved && moved.name === '喜儿', moved?.name);
   check('avatar 文件名跟着换（图片文件已同步改名）', moved?.avatar === 'p-cuilaosan.png', moved?.avatar);
   check('旧 id 不再有行', !store.getPersona('p-xier'));
-  check('会话归属跟着走', db.prepare(`SELECT personaId FROM conversations WHERE id = 'c-mig-test'`).get()?.personaId === secretary.SECRETARY_ID);
-  check('群助手指向跟着走', db.prepare(`SELECT assistantPersonaId FROM groups WHERE id = 'g-mig-test'`).get()?.assistantPersonaId === secretary.SECRETARY_ID);
-  check('技能挂载跟着走', db.prepare(`SELECT COUNT(*) AS n FROM persona_skills WHERE personaId = ?`).get(secretary.SECRETARY_ID)?.n >= 1);
+  check('会话归属跟着走', db.prepare(`SELECT personaId FROM conversations WHERE id = 'c-mig-test'`).get()?.personaId === steward.STEWARD_ID);
+  check('群助手指向跟着走', db.prepare(`SELECT assistantPersonaId FROM groups WHERE id = 'g-mig-test'`).get()?.assistantPersonaId === steward.STEWARD_ID);
+  check('技能挂载跟着走', db.prepare(`SELECT COUNT(*) AS n FROM persona_skills WHERE personaId = ?`).get(steward.STEWARD_ID)?.n >= 1);
 
-  check('再跑一次 → 幂等（无事发生）', secretary.migrateSecretaryId() === false);
-  secretary.ensureSecretary(); // 补回 builtin 标记等（迁移不改这些）
+  check('再跑一次 → 幂等（无事发生）', steward.migrateStewardId() === false);
+  steward.ensureSteward(); // 补回 builtin 标记等（迁移不改这些）
   // 清场：别让测试数据留在后面几段的视野里
   db.prepare(`DELETE FROM conversations WHERE id = 'c-mig-test'`).run();
   db.prepare(`DELETE FROM groups WHERE id = 'g-mig-test'`).run();
 }
 
+/* ---- ①a-2 复活清理（2026-10-28）：旧版程序按旧 id 把喜儿重新 seed 出来 → 并回崔老三 ----
+ * 事故：桌面版 target/release 捆的快照落后于改名，10-27 双击桌面版旧 seed 重建了 p-xier，
+ * 库里两个喜儿。新代码启动时必须把复活的并回 —— 引用归现任，复活行删掉。 */
+console.log('\n①a-2 复活清理：旧版快照 seed 出的 p-xier，启动即并回');
+{
+  const { db } = await import('./store/db.mjs');
+  const stray = store.createPersona({
+    id: 'p-xier',
+    name: '喜儿',
+    role: '秘书 · 看家与搭手',
+    instructions: '你是「喜儿」，这台机器上的秘书。',
+    runtime: 'auto',
+    builtin: 1,
+  });
+  check('摆出复活现场：旧 id 回来了（内置）', !!stray && stray.builtin === 1);
+  db.prepare(`INSERT INTO conversations (id, title, personaId, createdAt, updatedAt)
+              VALUES ('c-res-test', '和 喜儿', 'p-xier', '2026-10-27T09:06:27Z', '2026-10-27T09:06:27Z')`).run();
+  db.prepare(`INSERT INTO persona_skills (personaId, skillName, addedAt)
+              VALUES ('p-xier', 'bandi-secretary', '2026-10-27T09:06:27Z')`).run();
+
+  check('清理跑一次 → 报告真的清了', steward.removeResurrectedSteward() === true);
+  check('复活行删掉了', !store.getPersona('p-xier'));
+  check('现任崔老三没被误伤', !!store.getPersona(steward.STEWARD_ID));
+  check('复活期间的会话并回崔老三', db.prepare(`SELECT personaId FROM conversations WHERE id = 'c-res-test'`).get()?.personaId === steward.STEWARD_ID);
+  check('技能挂载并回崔老三', db.prepare(`SELECT COUNT(*) AS n FROM persona_skills WHERE personaId = ?`).get(steward.STEWARD_ID)?.n >= 1);
+  check('再跑一次 → 幂等（无事发生）', steward.removeResurrectedSteward() === false);
+
+  // 全链路：ensureSteward 自己就该清（这才是真正挡住复活的路径）
+  store.createPersona({ id: 'p-xier', name: '喜儿', instructions: '旧 seed 的手笔', runtime: 'auto', builtin: 1 });
+  const r = steward.ensureSteward();
+  check('ensureSteward 启动即清（不新建、复活行没了）', r.created === false && !store.getPersona('p-xier'));
+
+  // 清场
+  db.prepare(`DELETE FROM conversations WHERE id = 'c-res-test'`).run();
+}
+
 /* 技能：只在新建那次挂，之后用户摘掉就摘掉了 */
-const linked = store.listPersonaSkillLinks(secretary.SECRETARY_ID).map((l) => l.name);
-check('技能库里有 bandi-secretary', !!skills.getSkill(secretary.SECRETARY_SKILL));
-check('她挂上了这个技能', linked.includes(secretary.SECRETARY_SKILL), linked.join(',') || '(空)');
-store.unlinkPersonaSkill(secretary.SECRETARY_ID, secretary.SECRETARY_SKILL);
-secretary.ensureSecretary();
-check('用户把技能摘掉后，启动不会偷偷挂回去', !store.listPersonaSkills(secretary.SECRETARY_ID).includes(secretary.SECRETARY_SKILL));
-store.linkPersonaSkill(secretary.SECRETARY_ID, secretary.SECRETARY_SKILL);
+const linked = store.listPersonaSkillLinks(steward.STEWARD_ID).map((l) => l.name);
+check('技能库里有 bandi-secretary', !!skills.getSkill(steward.STEWARD_SKILL));
+check('她挂上了这个技能', linked.includes(steward.STEWARD_SKILL), linked.join(',') || '(空)');
+store.unlinkPersonaSkill(steward.STEWARD_ID, steward.STEWARD_SKILL);
+steward.ensureSteward();
+check('用户把技能摘掉后，启动不会偷偷挂回去', !store.listPersonaSkills(steward.STEWARD_ID).includes(steward.STEWARD_SKILL));
+store.linkPersonaSkill(steward.STEWARD_ID, steward.STEWARD_SKILL);
 
 /* --------------------------------------------- ①b 不可删（store 是最后一道） */
 console.log('\n①b 不可删：store 层拦截，且只拦她一个');
 let thrown = '';
 try {
-  store.deletePersona(secretary.SECRETARY_ID);
+  store.deletePersona(steward.STEWARD_ID);
 } catch (err) {
   thrown = String(err?.message ?? err);
 }
 check('删她 → 抛错', !!thrown, thrown);
 check('错误里说清了"不能删"', thrown.includes('内置') && thrown.includes('不能删'));
-check('她还在（没删半截）', !!store.getPersona(secretary.SECRETARY_ID));
+check('她还在（没删半截）', !!store.getPersona(steward.STEWARD_ID));
 
 const plain = store.createPersona({ name: '临时工', runtime: 'codex' });
 check('普通员工没被误标内置', plain.builtin === 0);
@@ -151,7 +187,7 @@ check('一个可用的都没有时 → null（不是随便糊一个）', (() => 
 
 /* ------------------------------------------ ①d 首轮注入：那段「机器现状」 */
 console.log('\n①d 首轮注入：机器现状只在首轮、只在有 brief 时出现');
-const brief = secretary.secretaryBrief();
+const brief = steward.stewardBrief();
 check('含服务地址', brief.includes('127.0.0.1') || brief.includes('http://'), brief.split('\n')[1] ?? '');
 check('含数据目录（现取的，不是写死的）', brief.includes(process.env.BANDI_DATA));
 check('含员工数', /现有数字员工\s*\d+\s*个/.test(brief));
@@ -212,27 +248,27 @@ try {
   if (up) {
     console.log('\n② 接口层：出厂就有、删不掉、身份锁死但部署配置可改');
     const st = await req('/api/state');
-    const steward = (st.b?.personas ?? []).find((p) => p.id === secretary.SECRETARY_ID);
-    check('全新一套库里，他一装好就在', !!steward, JSON.stringify((st.b?.personas ?? []).map((p) => p.name)));
-    check('出厂就是崔老三（2026-10-23 名额换人，seed/sync 负责刷）', steward?.name === '崔老三', steward?.name);
-    check('/api/state 带出 builtin（前端徽标靠它）', steward?.builtin === 1);
+    const born = (st.b?.personas ?? []).find((p) => p.id === steward.STEWARD_ID);
+    check('全新一套库里，他一装好就在', !!born, JSON.stringify((st.b?.personas ?? []).map((p) => p.name)));
+    check('出厂就是崔老三（2026-10-23 名额换人，seed/sync 负责刷）', born?.name === '崔老三', born?.name);
+    check('/api/state 带出 builtin（前端徽标靠它）', born?.builtin === 1);
     check('人的总数就是 1（没多建几个）', (st.b?.personas ?? []).length === 1);
 
-    const del = await req(`/api/personas/${secretary.SECRETARY_ID}`, { method: 'DELETE' });
+    const del = await req(`/api/personas/${steward.STEWARD_ID}`, { method: 'DELETE' });
     check('删他 → 403（不是 500）', del.status === 403, `${del.status} ${del.b?.code ?? ''}`);
     check('给了错误码，界面能照着说人话', del.b?.code === 'E1075', del.b?.code);
     check('提示给了出路（另建员工）', String(del.b?.error ?? '').includes('另建'), del.b?.error);
-    check('删完他还在', (await req('/api/state')).b.personas.some((p) => p.id === secretary.SECRETARY_ID));
+    check('删完他还在', (await req('/api/state')).b.personas.some((p) => p.id === steward.STEWARD_ID));
 
-    /* 身份锁（2026-10-23 E2055）：名字/岗位/指令一律拒改 —— 改身份只能改 secretary.mjs 出厂值 */
-    const ren = await req(`/api/personas/${secretary.SECRETARY_ID}`, {
+    /* 身份锁（2026-10-23 E2055）：名字/岗位/指令一律拒改 —— 改身份只能改 steward.mjs 出厂值 */
+    const ren = await req(`/api/personas/${steward.STEWARD_ID}`, {
       method: 'PUT',
       body: JSON.stringify({ name: '老崔（改过）', instructions: '自定义' }),
     });
     check('改名/改指令 → 403 E2055（身份锁死，不是 200）', ren.status === 403 && ren.b?.code === 'E2055', `${ren.status} ${ren.b?.code ?? ''}`);
-    const ren2 = await req(`/api/personas/${secretary.SECRETARY_ID}`, {
+    const ren2 = await req(`/api/personas/${steward.STEWARD_ID}`, {
       method: 'PUT',
-      body: JSON.stringify({ name: '崔老三', instructions: secretary.SECRETARY_INSTRUCTIONS, runtime: 'auto' }),
+      body: JSON.stringify({ name: '崔老三', instructions: steward.STEWARD_INSTRUCTIONS, runtime: 'auto' }),
     });
     check('身份没变、只顺手带 runtime → 200（锁判的是"值真的变了"）', ren2.status === 200, `${ren2.status} ${ren2.b?.code ?? ''}`);
     check('存完还是 auto', ren2.b?.persona?.runtime === 'auto', ren2.b?.persona?.runtime);
@@ -243,7 +279,7 @@ try {
     check('普通员工不是内置', made.b?.persona?.builtin === 0);
     const delPlain = await req(`/api/personas/${encodeURIComponent(made.b?.persona?.id ?? '')}`, { method: 'DELETE' });
     check('普通员工能删', delPlain.status === 200, String(delPlain.status));
-    check('删完只剩内置管家一个人', (await req('/api/state')).b.personas.map((p) => p.id).join(',') === secretary.SECRETARY_ID);
+    check('删完只剩内置管家一个人', (await req('/api/state')).b.personas.map((p) => p.id).join(',') === steward.STEWARD_ID);
   }
 } finally {
   child.kill();

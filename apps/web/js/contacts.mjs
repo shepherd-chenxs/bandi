@@ -3,12 +3,12 @@
  * 2026-10-25 起「数字员工」从 A–Z 字母头改为按部门分组（用户口径：部门是给人看的分组）。 */
 import { esc, personSubtitle, saveCollapsed, toast } from './shell.mjs';
 import { ICON_CLOUD, ICON_FOLDER, cut, hhmm, initial, personaAvatar, plain } from './ui.mjs';
-import { SETTINGS_SECTIONS, openSettings } from './settings.mjs';
+import { openSettings, settingsSections } from './settings.mjs';
 import { archivedEntryHTML, closeCtxMenu, convDisplayName, enterArchiveView, openConversationSafe, renderArchiveList } from './listmenu.mjs';
 import { renderFlowList } from './workflows.mjs';
 import { renderRunList } from './flowpages.mjs';
 import { newSkill, openGitManualDialog, openGitPickDialog, openImportDialog } from './skills.mjs';
-import { openConversation, openDetail } from './chat.mjs';
+import { openConversation, openDetail, openDirectChat } from './chat.mjs';
 import { gidOf, openGroupDetail } from './groups.mjs';
 import { $, S } from './core.mjs';
 import { openGroupDialog, openPersonaDialog } from './misc.mjs';
@@ -234,8 +234,8 @@ export function renderList() {
   }
 
   if (S.nav === 'settings') {
-    // 分节清单跟左栏面包屑共用 SETTINGS_SECTIONS（见 openSettings）
-    const items = SETTINGS_SECTIONS;
+    // 分节清单跟左栏面包屑共用一份（`settingsSections()` 会按设备形态收敛，见 settings.mjs）
+    const items = settingsSections();
     $('listBody').innerHTML = items
       .map(
         ([key, title, sub]) => `<div class="item ${S.settingsSection === key ? 'active' : ''}" data-set="${key}">
@@ -361,10 +361,21 @@ export function renderList() {
   $('listBody').querySelectorAll('[data-group]').forEach((el) => {
     el.onclick = () => openGroupDetail(el.dataset.group).catch((e) => toast(e.message, 'error'));
   });
-  // 通讯录点员工 = **看详情**（右侧），不跳对话。
-  // 要聊，去详情里点「发消息」——那条路会切到消息模块并把光标放好。
+  // 通讯录点员工：
+  //   · 桌面 = **看详情**（右侧），要聊去详情里点「发消息」——那条路会切到消息模块并把光标放好；
+  //   · 手机窄屏 = **直接开聊**（2026-11 移动端增量：手机上多一跳详情反而绕，跟微信一致）。
+  //     窄屏判据用 body.mb-narrow（mobile.mjs 维护的状态类）。群聊行不受影响，仍进群详情。
   $('listBody').querySelectorAll('[data-persona]').forEach((el) => {
-    el.onclick = () => openDetail(el.dataset.persona).catch((e) => toast(e.message, 'error'));
+    if (document.body.classList.contains('mb-narrow')) {
+      el.onclick = () => {
+        // 行和列表是同一批数据画出来的，正常都能找到人；找不到（极端时序）兜底回桌面路径
+        const p = S.personas.find((x) => x.id === el.dataset.persona);
+        if (p) openDirectChat(p);
+        else openDetail(el.dataset.persona).catch((e) => toast(e.message, 'error'));
+      };
+    } else {
+      el.onclick = () => openDetail(el.dataset.persona).catch((e) => toast(e.message, 'error'));
+    }
   });
 }
 

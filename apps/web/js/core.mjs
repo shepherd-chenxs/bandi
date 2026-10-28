@@ -108,9 +108,10 @@ export const S = {
   projectId: null,          // 在看哪个项目的看板
   boardAll: false,          // 在看<b>全局任务看板</b>（所有项目的活，工作台那个入口）
   // 看板的筛选：项目看板与全局面板**共用一套**（它们本来就是同一张看板换个范围）。
-  // 三个维度，空数组 = 那一维不设限：状态 / 负责人（员工 id）/ 项目（项目 id）。
+  // 四个维度，空数组 = 那一维不设限：状态 / 负责人（员工 id）/ 项目（项目 id）/ 来源（manual|repo|flow|chat）。
   // 切页面、刷新重画都不丢 —— 它就存在这儿。
-  kbFilter: { statuses: [], assignees: [], projects: [] },
+  kbFilter: { statuses: [], assignees: [], projects: [], sources: [] },
+  kbHiddenCols: [],         // 「列设置」里整列藏掉的状态列（列 key）。跟筛选一样两块看板共用一套
   kbPane: '',               // 筛选弹层停在哪一维（二级）；空串 = 一级（维度清单）。只在这一次开合里有效
   kbSearch: '',             // 二级里的搜索词（只有负责人/项目有搜索框）；换维、返回、重开都清掉
   kbLast: null,             // 最后一次画出来的看板数据 + 重画回调（筛选变了原地重画用）

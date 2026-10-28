@@ -1592,7 +1592,7 @@ export function paintDesigner() {
 
   // 开始 ─⊕─ 节点1 ─⊕─ 节点2 … ─⊕─ 结束：每两个东西之间都有一段
   const chain = [seg(0, '在最前面插一个节点')]
-    .concat(nodes.map((n, i) => card(n, i) + seg(i + 1, `插到「${n.name || n.id}」后面`)))
+    .concat(nodes.map((n, i) => card(n, i) + seg(i + 1, `插到「${esc(n.name || n.id)}」后面`)))
     .join('');
 
   $('flowView').innerHTML = `
@@ -1602,7 +1602,7 @@ export function paintDesigner() {
       // 再写一遍名字等于同一个东西三处各写一次。
       `<input id="dzName" value="${esc(S.designerName ?? '')}" placeholder="流程名字" spellcheck="false" title="点一下改流程名" />`,
       `<button data-vd-history title="这个模板跑过的记录">历史记录${S.designerRunCount ? ` ${S.designerRunCount}` : ''}</button>
-       <button data-vd-publish>${S.designerPublished ? '已发布 · 下架' : '发布到工作台'}</button>
+       <button data-vd-publish title="${S.designerPublished ? '点击下架' : '点击发布到工作台'}">${S.designerPublished ? '已发布' : '已下架'}</button>
        <button class="primary" data-vd-save>保存</button>`,
     )}
     <div class="detail-body dz-wrap">

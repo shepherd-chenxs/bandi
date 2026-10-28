@@ -1,0 +1,51 @@
+sequenceDiagram
+    participant Op as 桌面浏览器(操作员)
+    participant W as apps/web (pairing.mjs)
+    participant S as server.mjs
+    participant P as routes/pair.mjs
+    participant D as store/devices.mjs
+    participant Ph as 手机浏览器(pair-claim.mjs)
+
+    Op->>W: 设置 → 手机配对
+    W->>S: GET /api/lan
+    S-->>W: { boundLan, urls, port }
+    alt 未开局域网 (boundLan=false)
+        W-->>Op: 提示"切到总机模式并重启"，不出二维码
+    else 已监听局域网
+        W->>S: POST /api/pair/tokens
+        S->>P: handlePair
+        P->>D: createPairToken(5min)  % 只存哈希 bp_…
+        P-->>W: { token, expiresAt, urls }
+        W->>W: qrSvg("http://<lan-ip>:8787/pair?token=bp_xxx")
+        W-->>Op: 弹二维码 + 倒计时 + 刷新按钮
+    end
+
+    Ph->>S: GET /pair?token=bp_xxx   (guard 豁免)
+    S-->>Ph: pair.html
+    Ph->>S: POST /api/pair/claim {token, name} + X-Bandi:1 (guard 豁免)
+    S->>P: handlePair
+    P->>D: consumePairToken  % UPDATE…WHERE usedAt IS NULL AND expiresAt>now，原子
+    alt 核销成功
+        P->>D: createDevice(name) → issueDeviceToken → bd_…
+        P-->>Ph: 200 {ok,deviceId} + Set-Cookie: bandi_token=bd_…(HttpOnly)
+        Ph->>Ph: localStorage 存 deviceId 兜底
+        Ph->>S: location.replace("/") → 带 Cookie 进工作台
+        S->>S: identify(): bd_ 前缀 → deviceAuthByToken → kind='device'
+    else 过期/已用/格式错
+        P-->>Ph: 400 E1702 / 409 E4701 / 400 E1701
+        Ph-->>Ph: 显示"请在桌面端重新生成二维码"
+    end
+
+    %% 手机端请求鉴权（以审批一张卡票为例）
+    Ph->>S: PATCH /api/projects/tasks/t1 {status:"已完成"} (Cookie: bandi_token=bd_…)
+    S->>S: guardHost → auth.guard → tokenOf → identify
+    S->>D: deviceAuthByToken(sha256)
+    alt 命中且未吊销
+        S->>S: deviceMayReach(PATCH, task) → true → touchDevice(md_1, 60s节流)
+        S->>S: project.mjs 字段级闸：body 键 ⊆ {status, note}
+        S-->>Ph: 200 {task}
+    else 白名单外
+        S-->>Ph: 403 E4033 → 前端 toast
+    else 令牌被吊销
+        S-->>Ph: 401 E4010 → 引导"重新扫码配对"
+    end

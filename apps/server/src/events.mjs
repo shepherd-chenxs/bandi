@@ -16,6 +16,14 @@
 const subs = new Set();
 let seq = 0;
 
+/*
+ * 背压（2026-10-28 性能审查）：`res.write` 返回 false 只是"该缓一缓"，
+ * 真正的风险是慢客户端（弱网/挂起的标签页）让 Node 的写缓冲**无界**堆积。
+ * 缓冲超 1MB 就直接断开 —— 这条总线本来就"不回放、重连全量刷"（见上），
+ * EventSource 重连 onopen 之后一次全量刷新，恰好把断开期间漏的补回来。
+ */
+const SSE_MAX_BUFFER = 1 << 20;
+
 /** 哪个会话有动静（新消息 / 状态变了 / 改名）。写失败 = 连接已死，顺手摘掉。 */
 export function emitConv(id) {
   if (!id || subs.size === 0) return;
@@ -23,7 +31,10 @@ export function emitConv(id) {
   const frame = `id: ${seq}\ndata: ${JSON.stringify({ type: 'conv', id })}\n\n`;
   for (const res of subs) {
     try {
-      res.write(frame);
+      if (!res.write(frame) && res.writableLength > SSE_MAX_BUFFER) {
+        subs.delete(res);
+        res.destroy();
+      }
     } catch {
       subs.delete(res);
     }

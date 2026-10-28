@@ -67,9 +67,14 @@ export function errorForDisplay(run) {
   const noise = /^(success|ok|error|运行出错)$/i;
   const bare = !raw || /^退出码\s*-?\d+$/.test(raw) || noise.test(raw);
   if (!bare || run?.status !== '失败') return raw;
-  const rows = store.listRunEvents(run.id, 0);
+  /*
+   * 只读事件流**尾部** 50 条（tailRunEvents，seq 倒序）：error / final 都是终止事件，
+   * 必在末尾 —— 老写法 listRunEvents(id, 0) 是把整段事件流（CLI 输出一行一条，
+   * 长跑能上千行）全读出来逐行 JSON.parse，会话详情里每条失败 run 来一遍，最坏秒级阻塞。
+   */
+  const rows = store.tailRunEvents(run.id, 50);
   let lastLineOfFinal = '';
-  for (let i = rows.length - 1; i >= 0; i--) {
+  for (let i = 0; i < rows.length; i++) { // tailRunEvents 已是 seq 倒序：从最新往回找
     let evt = null;
     try {
       evt = JSON.parse(rows[i].evt);
@@ -103,7 +108,18 @@ export function errorForDisplay(run) {
 function pushEvent(run, evt) {
   run.seq += 1;
   store.appendRunEvent(run.id, run.seq, evt);
-  for (const s of run.subs) sse(s, evt, run.seq);
+  for (const s of run.subs) {
+    sse(s, evt, run.seq);
+    /*
+     * 背压（2026-10-28 性能审查）：write 返回 false 且写缓冲积过 1MB = 客户端
+     * 已经慢到压不动了，断开让它重连 —— 订阅是按 Last-Event-ID 补缺口的，
+     * 断开期间的事件从库里回放，一条不丢。不掐的话缓冲无界涨，内存迟早出事。
+     */
+    if (s.writableLength > (1 << 20)) {
+      run.subs.delete(s);
+      s.destroy();
+    }
+  }
 }
 
 /**

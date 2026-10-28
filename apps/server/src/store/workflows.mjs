@@ -135,6 +135,17 @@ export function listWorkflowRuns({ limit = 100 } = {}) {
     )
     .all(limit);
 }
+
+/**
+ * 只捞「进行中」的实例 —— 给 30 秒节拍的 `retryPendingSteps`（apps/server/src/workflows.mjs）用。
+ * 那里只关心还在跑的：原来全量捞 100 条（绝大多数是已完结）再逐条 `status !== '进行中'` 跳过，
+ * 空闲进程每 30 秒白做一轮。一条 WHERE 的事，别让节拍器付全量价。
+ */
+export function listActiveWorkflowRuns() {
+  return db
+    .prepare("SELECT * FROM workflow_runs WHERE status = '进行中' ORDER BY updatedAt DESC")
+    .all();
+}
 /**
  * 删掉一条流程实例（连同它的步骤记录）。
  *

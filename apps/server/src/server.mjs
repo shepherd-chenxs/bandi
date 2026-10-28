@@ -28,12 +28,13 @@ import * as status from './status.mjs';
 import { projectTasks, allTasks, personaTasks, createProjectTask, updateProjectTask, startProjectTask, onTaskRunFinished, afterMerged, upsertRepoCard, ensureTaskCardForStep } from './project-tasks.mjs';
 import * as git from './git-repos.mjs';
 import * as schedules from './schedules.mjs';
-import * as secretary from './secretary.mjs';
+import * as steward from './steward.mjs';
 import * as experts from './experts.mjs';
 import * as localMode from './local-mode.mjs';
 import * as discover from './discover.mjs';
 import * as lanAnnounce from './lan-announce.mjs';
 import { handleConversation } from './routes/conversation.mjs';
+import { handlePair } from './routes/pair.mjs';
 import { handleEvents } from './routes/events.mjs';
 import { handlePersona } from './routes/persona.mjs';
 import { handleAgentCards } from './routes/agent-cards.mjs';
@@ -46,6 +47,13 @@ import { handleNodeWork } from './routes/nodeWork.mjs';
 import { handleRuntime } from './routes/runtime.mjs';
 import { handlePluginAction } from './routes/plugin.mjs';
 import { handleProject } from './routes/project.mjs';
+/*
+ * 角色与菜单（2026-10-28 第二刀）：/api/menus + /api/roles 的增删改查。
+ * handler 自己判路径，所以链里位置只影响"谁先匹配"——放在 project 之前是按任务书口径。
+ */
+import { handleRoles } from './routes/roles.mjs';
+// 账号与登录（2026-10-28 第三刀）：/api/login、/api/logout、/api/me、/api/users*
+import { handleUsers } from './routes/users.mjs';
 import { handleWorkspace } from './routes/workspace.mjs';
 import { handleStatus } from './routes/status.mjs';
 import { handleFs } from './routes/fs.mjs';
@@ -54,10 +62,12 @@ import { handleSsh } from './routes/ssh.mjs';
 import { handleGit } from './routes/git.mjs';
 import { handleImageAi } from './routes/imageai.mjs';
 import { handlePrefs } from './routes/prefs.mjs';
+import { handleFeishu } from './routes/feishu.mjs';
+import * as feishu from './feishu.mjs';
 import { handleRun } from './routes/run.mjs';
 import { handleSchedules } from './routes/schedules.mjs';
 import { handleLocal, supervisorModule } from './routes/local.mjs';
-import { sendJson, fail, readBody, guardWrite, serveStatic, BadRequest, allowedOrigins, webDir } from './http.mjs';
+import { sendJson, fail, readBody, guardWrite, guardHost, serveStatic, BadRequest, allowedOrigins, webDir } from './http.mjs';
 import { SERVER } from './server-state.mjs';
 import { runtimeOptions, runtimesOk, withExternals } from './runtime-view.mjs';
 
@@ -77,6 +87,16 @@ function helloPayload() {
     httpPort: port,
     allowLan: nm.allowLan,
     joinable: netmode.isJoinable({ allowLan: nm.allowLan, explicit: !!process.env.BANDI_HOST, boundHost: SERVER.boundHost }),
+    /*
+     * **机器角色**（2026-10-28 节点配置面）：`node` = 这台机器已加入某台总机；
+     * `operator` = 未加入（本机单机版）。前端的菜单矩阵要它，跟"打开页面的人是谁"
+     * （`/api/pair/me` 的 operator/device）是**两个概念**，别混。
+     *
+     * ⚠️ 必须 `isJoined()` **每次现读 config.json**，不能用 `config.clientJoined` ——
+     * 那是**模块求值时**拍下的快照，运行期"加入 / 退出总机"之后它就过期了
+     * （同一类坑见 `config.mjs` 里 `lanOrigins()` 的注释）。本字段免令牌、不带秘密。
+     */
+    role: localMode.isJoined() ? 'node' : 'operator',
     // 能力声明：有这个才认得出 `scope` 字段（旧总机没有 → 加入方回 E2050，不静默降级）
     caps: ['scope'],
   };
@@ -392,6 +412,13 @@ SERVER.AUTH = auth.setup({ host, dataDir, envToken: process.env.BANDI_TOKEN });
  */
 
 const server = http.createServer(async (req, res) => {
+  /*
+   * Host 守卫排在一切之前（含令牌闸）：rebind 页面的请求 Host 是攻击者域名，
+   * 连"来源对不对"都不该让它摸到面板数据（http.mjs 的 guardHost 注释）。
+   */
+  const badHost = guardHost(req);
+  if (badHost) return fail(res, 403, 'E3002', badHost);
+
   const url = new URL(req.url, `http://${req.headers.host}`);
 
   try {
@@ -412,6 +439,22 @@ const server = http.createServer(async (req, res) => {
     if (handledLocal !== false) return;
 
     if (!url.pathname.startsWith('/api/')) {
+      /*
+       * 扫码落地页（2026-11 手机端增量）：`GET /pair?token=…` → apps/web/pair.html。
+       * 不能走 serveStatic('/pair') —— 它按路径找文件会 404；这里显式映射。
+       * 页面校验不做在这里：guard 已豁免这条路（免令牌），token 的校验在 claim 接口。
+       */
+      if (url.pathname === '/pair' || url.pathname === '/pair.html') {
+        try {
+          const buf = fs.readFileSync(path.join(webDir, 'pair.html'));
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+          res.end(buf);
+        } catch {
+          res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end('配对页还没就绪（apps/web/pair.html 不存在）');
+        }
+        return;
+      }
       if (serveStatic(res, url.pathname)) return;
       res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
       res.end('没有这个文件');
@@ -430,6 +473,10 @@ const server = http.createServer(async (req, res) => {
     const handledEvents = await handleEvents(req, res, url);
     if (handledEvents !== false) return;
 
+    // 手机配对与设备管理（2026-11 手机端增量）：自己判路径，放在会话链之前（设计 §2）
+    const handledPair = await handlePair(req, res, url);
+    if (handledPair !== false) return;
+
     const handledConversation = await handleConversation(req, res, url);
     if (handledConversation !== false) return;
 
@@ -442,6 +489,14 @@ const server = http.createServer(async (req, res) => {
 
     const handledExpert = await handleExpert(req, res, url);
     if (handledExpert !== false) return;
+
+    // 账号与登录（2026-10-28 第三刀）：放在角色之前 —— 它自己的路径集合（login/logout/me/users）
+    // 与别处不重叠，但 /api/me 是"每个页面启动都会问一次"的接口，能早一步就早一步
+    const handledUsers = await handleUsers(req, res, url);
+    if (handledUsers !== false) return;
+
+    const handledRoles = await handleRoles(req, res, url);
+    if (handledRoles !== false) return;
 
     const handledProject = await handleProject(req, res, url);
     if (handledProject !== false) return;
@@ -499,6 +554,9 @@ const server = http.createServer(async (req, res) => {
     const handledPrefs = await handlePrefs(req, res, url);
     if (handledPrefs !== false) return;
 
+    const handledFeishu = await handleFeishu(req, res, url);
+    if (handledFeishu !== false) return;
+
     fail(res, 404, 'E2036', '没有这个接口');
   } catch (err) {
     // 请求本身有问题 → 400（原文就是写给调用方的）；其余是服务端出错 → 500。
@@ -531,8 +589,8 @@ try {
   if (cliNote) console.log(cliNote);
 } catch { /* 上面保证不抛，这里兜一层：装命令失败不能拦启动 */ }
 try {
-  const xier = secretary.ensureSecretary();
-  if (xier.created) console.log(`新建了内置员工「${xier.persona.name}」`);
+  const seeded = steward.ensureSteward();
+  if (seeded.created) console.log(`新建了内置员工「${seeded.persona.name}」`);
 } catch (err) {
   // seed 失败不该拦住整个服务：她能做的事少，服务起不来才是大事
   console.log(`内置员工创建失败（不影响启动）：${err?.message ?? err}`);
@@ -550,7 +608,7 @@ try {
 // 路由层同步锁死（E2054 技能 / E2055 身份）。他比专家早一步 seed，这里紧跟着做增量重置。
 // 2026-10-23 名额换人（喜儿→崔老三）的存量迁移也走的这段：启动即把库里的旧身份刷成新出厂值。
 try {
-  const reset = secretary.syncSecretary();
+  const reset = steward.syncSteward();
   if (reset?.length) console.log(`内置员工已重置回出厂（${reset.join(' / ')}）`);
 } catch (err) {
   console.log(`内置员工同步失败（不影响启动）：${err?.message ?? err}`);
@@ -561,6 +619,14 @@ try {
   if (seeded.length) console.log(`内置连接器已就位：${seeded.join('、')}`);
 } catch (err) {
   console.log(`内置连接器 seed 失败（不影响启动）：${err?.message ?? err}`);
+}
+// 过期登录会话（2026-10-28 第三刀）：30 天前发的票，启动时扫一次就够 —— 不需要定时器
+// （平时 `userBySession` 撞到过期的也会顺手删，这里只是把"没人再来的"批量收掉）
+try {
+  const pruned = store.pruneSessions();
+  if (pruned) console.log(`清掉 ${pruned} 条过期登录会话`);
+} catch (err) {
+  console.log(`清理过期登录会话失败（不影响启动）：${err?.message ?? err}`);
 }
 runs.onRunFinish(workflows.onAgentRunFinished);
 // 任务卡同理（2026-10-17）：运行跑完/被停/跑挂了，卡不能永远挂在「进行中」——
@@ -643,6 +709,12 @@ sweep.unref(); // 别让这个定时器拖着进程不退出
  * 错了就记进任务的 `lastStatus/lastError`，在「设置 → 定时任务」那一行如实显示。
  */
 schedules.start();
+
+/*
+ * 飞书通道（2026-10-27）：配置里开着「开机自启」且凭据齐，就自己把长连接拉起来。
+ * 起不来只 warn 不拦启动 —— 通道是外部的，班底该照常开张。
+ */
+feishu.bootSync();
 
 /*
  * **启动即已加入 → 直接进入节点形态**（2026-10-21 拍板：只当算力，无反代无面板）。

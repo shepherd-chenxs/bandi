@@ -894,13 +894,35 @@ function goto(runId, target, why) {
  *   · 失败没人管               → 也是卡住
  *   · 待验收 / 待办            → **不算卡住**，是"在等你"（待办马上会被自动派活）
  */
-export function viewRun(run, { withTasks = false } = {}) {
+/**
+ * 请求内共享缓存：`listWorkflowViews` 一次建一个 Map 传下去，
+ * viewRun/viewTask 里反复摸的东西（模板行、节点 JSON、员工、项目、会话）同键只算一次。
+ * 不传 cache（单实例页）就是老样子，各点查一次 —— 别为省 N+1 给单条路径加复杂度。
+ */
+function cget(cache, key, fn) {
+  if (!cache) return fn();
+  if (!cache.has(key)) cache.set(key, fn());
+  return cache.get(key);
+}
+
+/** 连线目标显示成人能看懂的名字：终点叫「结束」（吃现成的节点数组，不重新 JSON.parse） */
+function labelOfNodes(nodes, target) {
+  if (!target) return null;
+  if (target === END) return '结束';
+  return nodes.find((n) => n.id === target)?.name ?? target;
+}
+
+export function viewRun(run, { withTasks = false, cache = null } = {}) {
   if (!run) return null;
   const tasks = store.listWorkflowTasks(run.id);
   const cur = currentTask(run);
-  const tpl = store.getWorkflowTemplate(run.templateId);
-  const node = cur ? nodeById(tpl, cur.nodeId) : null;
-  const persona = cur?.assigneePersonaId ? store.getPersona(cur.assigneePersonaId) : null;
+  const tpl = cget(cache, `tpl:${run.templateId}`, () => store.getWorkflowTemplate(run.templateId));
+  // 节点数组解析一次（原来 nodeById / labelOf 每调一次都 JSON.parse 整个模板）
+  const nodes = cget(cache, `nodes:${run.templateId}`, () => nodesOf(tpl));
+  const node = cur ? (nodes.find((n) => n.id === cur.nodeId) ?? null) : null;
+  const persona = cur?.assigneePersonaId
+    ? cget(cache, `persona:${cur.assigneePersonaId}`, () => store.getPersona(cur.assigneePersonaId))
+    : null;
   const elapsed = cur?.startedAt ? Date.now() - Date.parse(cur.startedAt) : 0;
 
   let stuck = null;
@@ -936,7 +958,9 @@ export function viewRun(run, { withTasks = false } = {}) {
     // 但会让人以为两个值不一样（我上一轮就这么干过：只读到半截就断言"没有这个字段"）。
     // 项目：这条流程在哪个目录里干活（发起时选的）
     projectId: run.projectId ?? null,
-    projectName: run.projectId ? (store.getProject(run.projectId)?.name ?? null) : null,
+    projectName: run.projectId
+      ? (cget(cache, `proj:${run.projectId}`, () => store.getProject(run.projectId))?.name ?? null)
+      : null,
     currentNodeId: run.currentNodeId,
     nodeName: cur?.nodeName ?? null,
     visit: cur?.visit ?? null,
@@ -957,8 +981,8 @@ export function viewRun(run, { withTasks = false } = {}) {
       ? {
           approve: node.approve ?? null,
           reject: node.reject ?? null,
-          approveTo: labelOf(tpl, node.approve),
-          rejectTo: labelOf(tpl, node.reject),
+          approveTo: labelOfNodes(nodes, node.approve),
+          rejectTo: labelOfNodes(nodes, node.reject),
         }
       : null,
     note: run.note,
@@ -995,9 +1019,9 @@ export function viewRun(run, { withTasks = false } = {}) {
           // 办理痕迹：**按创建顺序**，驳回打回会多出几条。
           // 带上每一步跟执行人的往来 —— 实例页是 issue，讨论就在页面里看，不跳会话。
           // 最后一步的往来窗口开到"现在"（见 viewTask 里的说明）
-          tasks: tasks.map((t, i) => viewTask(t, true, i === tasks.length - 1, run)),
+          tasks: tasks.map((t, i) => viewTask(t, true, i === tasks.length - 1, run, cache)),
           // 模板里的节点清单（含点名的人）——界面要拿它画"还没走到的步骤"
-          nodes: nodesOf(tpl).map((n) => ({
+          nodes: nodes.map((n) => ({
             id: n.id,
             name: n.name,
             detail: n.detail ?? '',
@@ -1006,22 +1030,19 @@ export function viewRun(run, { withTasks = false } = {}) {
             reject: n.reject ?? null,
             // 实例页要在节点上标出"这一步干完会停下来等人"——所以把开关带出来
             manual: n.manual === true,
-            assigneeName: assigneeFor(n) ? (store.getPersona(assigneeFor(n))?.name ?? null) : null,
+            assigneeName: assigneeFor(n)
+              ? (cget(cache, `persona:${assigneeFor(n)}`, () => store.getPersona(assigneeFor(n)))?.name ?? null)
+              : null,
           })),
         }
       : {}),
   };
 }
 
-/** 连线目标显示成人能看懂的名字：终点叫「结束」 */
-function labelOf(tpl, target) {
-  if (!target) return null;
-  if (target === END) return '结束';
-  return nodeById(tpl, target)?.name ?? target;
-}
-
-function viewTask(t, withMessages = false, isLast = false, run = null) {
-  const persona = t.assigneePersonaId ? store.getPersona(t.assigneePersonaId) : null;
+function viewTask(t, withMessages = false, isLast = false, run = null, cache = null) {
+  const persona = t.assigneePersonaId
+    ? cget(cache, `persona:${t.assigneePersonaId}`, () => store.getPersona(t.assigneePersonaId))
+    : null;
   /*
    * **这一步实际在哪个目录里干活** —— 判定必须跟 dispatch.mjs 一字不差，
    * 否则界面上写的和真发生的是两回事：
@@ -1029,10 +1050,14 @@ function viewTask(t, withMessages = false, isLast = false, run = null) {
    *   没选             → 退回员工自己配的 cwd。
    * 所以这里不是"展示 run 上那个字段"，而是**把派活时的选择重演一遍**。
    */
-  const proj = run?.projectId ? store.getProject(run.projectId) : null;
+  const proj = run?.projectId
+    ? cget(cache, `proj:${run.projectId}`, () => store.getProject(run.projectId))
+    : null;
   const workspace = proj ? (store.projectRoots(proj)?.[0] ?? null) : (persona?.cwd ?? null);
   // 这一步的会话级权限覆盖（null = 跟随员工默认）—— 前端权限下拉要显示它
-  const conv = t.conversationId ? store.getConversation(t.conversationId) : null;
+  const conv = t.conversationId
+    ? cget(cache, `conv:${t.conversationId}`, () => store.getConversation(t.conversationId))
+    : null;
   const from = t.startedAt ? Date.parse(t.startedAt) : null;
   // ⚠️ 上界：**最后一步永远到"现在"**。
   //   它可能停在「待验收」，而人是可以继续跟经办人谈的（一步多轮）——
@@ -1102,15 +1127,14 @@ function viewTask(t, withMessages = false, isLast = false, run = null) {
     //    注：加这一列之前的旧消息没有标记，不会显示（不做回填，宁可少显示也不能混）。
     ...(withMessages && t.conversationId
       ? {
-          messages: store
-            .listMessages(t.conversationId)
-            .filter((m) => m.taskId === t.id)
-            .map((m) => ({
-              role: m.role,
-              who: m.role === 'user' ? '我' : (m.personaName ?? persona?.name ?? '他'),
-              text: m.text,
-              createdAt: m.createdAt,
-            })),
+          // 按 taskId 点查这一步自己的往来 —— 原来把会话**全部**消息捞出来再
+          // filter(taskId)，长会话等于读一万行丢九千九（2026-10-28 性能审查）。
+          messages: store.listMessagesByTask(t.id).map((m) => ({
+            role: m.role,
+            who: m.role === 'user' ? '我' : (m.personaName ?? persona?.name ?? '他'),
+            text: m.text,
+            createdAt: m.createdAt,
+          })),
         }
       : {}),
   };
@@ -1121,7 +1145,13 @@ export function getWorkflowView(id) {
 }
 
 export function listWorkflowViews() {
-  return store.listWorkflowRuns().map((r) => viewRun(r));
+  /*
+   * 一次请求共享模板/节点/员工/项目/会话缓存：原来每条实例把同一个模板 JSON.parse
+   * 一遍、同一个员工/项目各点查一遍 —— 100 条实例一次请求就是上千次点查
+   * （2026-10-28 性能审查 H2，全服务最重的一条读路径）。
+   */
+  const cache = new Map();
+  return store.listWorkflowRuns().map((r) => viewRun(r, { cache }));
 }
 
 /** 一步的产出摘要：取第一段有内容的话，别把整篇报告塞进列表 */
@@ -1400,8 +1430,8 @@ export function stepStatusChoices(runId) {
  */
 export function retryPendingSteps() {
   const started = [];
-  for (const run of store.listWorkflowRuns()) {
-    if (run.status !== '进行中') continue;
+  // 只捞「进行中」的（SQL 下推）：全量捞再逐条跳过，空闲时每 30 秒白扫一轮完结实例
+  for (const run of store.listActiveWorkflowRuns()) {
     const task = currentTask(run);
     if (!task || task.status !== '待办') continue;
     /*

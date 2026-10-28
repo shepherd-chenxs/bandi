@@ -264,6 +264,10 @@ export function purgePersonaHistory(personaId) {
  */
 const PERSONA_ID_REFS = [
   ['conversations', 'personaId'],
+  // 群会话的助手列（现役）与旧群主列（2026-10-20 起不读，但值还是人）—— 换/并 id 时一并搬，
+  // 不然迁移后的旧列还指着旧 id，下次旧代码按旧 id 找人就能找到影子
+  ['conversations', 'assistantPersonaId'],
+  ['conversations', 'ownerPersonaId'],
   ['messages', 'personaId'],
   ['runs', 'personaId'],
   ['thread_members', 'personaId'],
@@ -291,5 +295,43 @@ export function renamePersonaId(oldId, newId, { avatarFrom, avatarTo } = {}) {
   const to = avatarTo ?? `${newId}.png`;
   db.prepare(`UPDATE personas SET id = ?, avatar = CASE WHEN avatar = ? THEN ? ELSE avatar END WHERE id = ?`)
     .run(newId, from, to, oldId);
+  return refs;
+}
+
+/**
+ * **并 id（复活清理）** —— 与 `renamePersonaId` 共用一份引用清单，场景相反：
+ * rename 是"一个人换证件"；merge 是"同一个身份冒出了两行，留存行把另一行的引用**收编**后
+ * 把那行删掉"。唯一调用方是 `steward.removeResurrectedSteward()`：旧版程序（服务端快照
+ * 落后于改名，见 2026-10-27 桌面版复活喜儿事故）按旧 id 把内置员工重新 seed 出来，新版启动时
+ * 把她的引用并回现任、复活的行删掉。
+ *
+ * 所以这里**绕过 `deletePersona` 的内置拒删** —— 那道闸拦的是用户手滑，不拦迁移；
+ * 也不做"会话标题落名"那些身后事：引用已全部搬走，删完不会有任何孤儿。
+ *
+ * 幂等：旧 id 不存在 / 与新 id 相同 / 新 id 不存在（没得并）→ 不动，返回 null。
+ * 返回并走的引用行数（给启动日志一句话）。
+ */
+export function mergePersonaId(oldId, intoId) {
+  if (oldId === intoId) return null;
+  if (!getPersona(oldId) || !getPersona(intoId)) return null;
+
+  const tables = new Set(db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table'`).all().map((r) => r.name));
+  let refs = 0;
+  db.exec('BEGIN');
+  try {
+    for (const [t, c] of PERSONA_ID_REFS) {
+      if (!tables.has(t)) continue;
+      // 联合主键表（persona_skills、群成员这类）可能撞键：两行都是 (同一处所, 同一个人)。
+      // 撞了说明是重复引用（两边挂了同一个技能、进了同一个群）—— 留存行已有，复活的行
+      // 直接丢弃。所以 UPDATE OR IGNORE 搬不撞的，剩下的重复行删掉。
+      refs += db.prepare(`UPDATE OR IGNORE ${t} SET ${c} = ? WHERE ${c} = ?`).run(intoId, oldId).changes;
+      refs += db.prepare(`DELETE FROM ${t} WHERE ${c} = ?`).run(oldId).changes;
+    }
+    db.prepare('DELETE FROM personas WHERE id = ?').run(oldId);
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
   return refs;
 }

@@ -13,7 +13,7 @@ import * as runs from './runs.mjs';
 import * as skills from './skills.mjs';
 import * as runtimes from './runtimes.mjs';
 import * as connectors from './connectors.mjs';
-import * as secretary from './secretary.mjs';
+import * as steward from './steward.mjs';
 import { controlUrl, isPmRole } from './agent-auth.mjs';
 
 /** 带 code 的错误：路由按它决定 400 还是 409 */
@@ -348,7 +348,7 @@ function startMemberRun(thread, member, opts, trigger) {
    */
   const p = store.getPersona(member.personaId);
   const brief = [
-    p?.builtin ? secretary.secretaryBrief() : '',
+    p?.builtin ? steward.stewardBrief() : '',
     p && isPmRole(p.role) ? pmCardBrief() : '',
   ].filter(Boolean).join('\n\n');
 

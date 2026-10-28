@@ -1150,6 +1150,9 @@ body:has(#pluginView.shown .fixed-head)::after {
            border-radius: 4px; padding: 0 5px; line-height: 16px; }
 .set-box { border: 1px solid var(--line); border-radius: 10px;
            background: var(--panel); overflow: hidden; }
+/* 卡里挂着 combo 下拉的：弹层要探出框外，这张卡的裁边放开（默认 hidden 只为圆角裁子元素；
+   卡自己的底色/圆角画在框上，放开不影响）。飞书通道的「私聊绑定」在用。 */
+.set-box.open-combo { overflow: visible; }
 .set-row { display: flex; align-items: center; justify-content: space-between;
            gap: 16px; padding: 9px 14px; }
 .set-row + .set-row { border-top: 1px solid var(--line); }
@@ -1630,6 +1633,20 @@ input.locked:focus { outline: none; border-color: var(--line); }
 .ms-item-n { font-size: 11.5px; color: var(--dim); }
 .ms-empty-side { font-size: 12px; color: var(--dim); padding: 8px 10px; line-height: 1.6; }
 .ms-main { padding: 16px 18px 20px; min-width: 0; }
+/* 设置 › 角色与菜单（2026-10-28 第二刀）：勾选框直接长在编辑区里，
+   所以要脱掉 `.members` 那份给对话框用的 220px 高度上限（六项就 234px，会平白多一条滚动条）。
+   `.members` / `.member` 本体一行没改 —— 群成员、技能分配还在用同一套。 */
+.roles-menus .members { max-height: none; margin-top: 0; padding: 10px; }
+.roles-menus .member span { flex: 0 0 auto; min-width: 92px; font-weight: 500; }
+.roles-menus .member em { flex: 1; min-width: 0; text-align: left; }
+/* 设置 › 用户（2026-10-28 第三刀）：全局 `input,select,textarea` 是 width:100%，
+   在"左标签右控件"的 .set-row 里会一路顶到标签上（和额度那两个数字框同一个坑）。
+   复选框例外 —— 它是 .plg-check 里的方框，不是输入框。 */
+.users-form .set-row input:not([type='checkbox']),
+.users-form .set-row select { width: 240px; flex: 0 0 auto; }
+/* 设备详情 › 面板角色（2026-10-28 第四刀）：同一个 width:100% 的坑，
+   这里靠类名定宽，别写内联（.row-item 里已经有一堆内联样式，够了）。 */
+.node-panel-role { width: 220px; flex: 0 0 auto; }
 @media (max-width: 860px) {
   .ms-split { grid-template-columns: 1fr; }
   .ms-side { border-right: 0; border-bottom: 1px solid var(--line); }
@@ -1715,12 +1732,19 @@ input.locked:focus { outline: none; border-color: var(--line); }
 .gr-conn { padding: 18px 0 16px; }
 .gr-conn-row { display: grid; grid-template-columns: max-content minmax(160px, 520px) max-content;
                justify-content: center; align-items: center; column-gap: 22px; min-width: 0; }
-.gr-conn-row input { width: 100%; text-align: center; }
+/* 2026-10-28 用户："这些输入框要左对齐" —— 框内文字别居中漂着 */
+.gr-conn-row input { width: 100%; text-align: left; }
 .gr-conn-status { grid-column: 2; margin-top: 9px; text-align: center; font-size: 12px; color: var(--dim); }
-/* 多行簇（生图服务 2026-10-23）：同一套三列网格连排三行，行距 14px 拉开；
-   动作行（保存/测试）在网格外，整行居中；状态行仍在第 2 列正下方。 */
-.gr-conn.stack .gr-conn-row + .gr-conn-row { margin-top: 14px; }
-.gr-conn.stack .gr-conn-status { margin-top: 16px; }
+/* 多行簇（生图服务 2026-10-23）：连排各行共用**一张**三列网格，.gr-conn-row 退成
+   display:contents，行距由 row-gap 出 —— 2026-10-28 用户："左边要对齐"：原先每行各画
+   一张网格，标签宽窄不一、Secret 行又多一颗「修改」按钮，输入框左缘参差；共享网格后
+   标签列取最宽（右对齐贴住输入框）、输入列同宽同位。动作行横跨全宽居中，状态行落第 2 列。 */
+.gr-conn.stack { display: grid; grid-template-columns: max-content minmax(160px, 520px) max-content;
+                 justify-content: center; align-items: center; column-gap: 22px; row-gap: 14px; }
+.gr-conn.stack .gr-conn-row { display: contents; }
+.gr-conn.stack .gr-conn-row .row-label { text-align: right; }
+.gr-conn.stack .gr-conn-actions { grid-column: 1 / -1; margin-top: 0; }
+.gr-conn.stack .gr-conn-status { margin-top: 2px; }
 .gr-conn-actions { display: flex; gap: 12px; justify-content: center; margin-top: 18px; }
 .set-hint { margin: 14px 0 0; font-size: 12px; color: var(--dim); line-height: 1.7;
             max-width: 560px; margin-left: auto; margin-right: auto; text-align: center; }

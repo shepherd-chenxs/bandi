@@ -134,6 +134,17 @@ export function lastRunEvent(runId) {
   return db.prepare('SELECT seq, evt FROM run_events WHERE runId = ? ORDER BY seq DESC LIMIT 1').get(runId) ?? null;
 }
 
+/**
+ * 这次运行**尾部** n 条事件（seq 倒序）。
+ * 给 `errorForDisplay`（apps/server/src/runs.mjs）用：失败原因总在事件流末尾
+ * （error / final 都是终止事件），别为了补一句话把整段事件流（可能上千行）读出来再丢掉 99%。
+ */
+export function tailRunEvents(runId, n = 50) {
+  return db
+    .prepare('SELECT seq, evt FROM run_events WHERE runId = ? ORDER BY seq DESC LIMIT ?')
+    .all(runId, Math.max(1, n));
+}
+
 /** 已经用到第几个号（启动清账时接着往下写；新运行是 0） */
 
 export function maxRunSeq(runId) {

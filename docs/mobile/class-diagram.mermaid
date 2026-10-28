@@ -1,0 +1,57 @@
+classDiagram
+    class StoreDevices["store/devices.mjs"] {
+        +createPairToken(ttlMs) PairToken
+        +consumePairToken(token, deviceId) bool
+        +issueDeviceToken(deviceId, ttlMs) string
+        +deviceAuthByToken(token) DeviceAuth|null
+        +createDevice(name) Device
+        +listDevices() Device[]
+        +revokeDeviceTokens(deviceId) int
+        +touchDevice(deviceId, ip) void
+        -hashOf(s) string
+    }
+    class AuthMjs["auth.mjs"] {
+        +guard(auth, req, res, url) bool
+        +identify(auth, token) Who|null
+        +decide(who, method, path) string
+        -deviceMayReach(method, path) bool
+        +mayManage(req) bool
+    }
+    class HandlePair["routes/pair.mjs"] {
+        +handlePair(req, res, url) Promise~bool|false~
+        -issuePairing(res) void
+        -claim(req, res) void
+        -listDevices(res) void
+        -revokeDevice(req, res, id) void
+    }
+    class ServerMjs["server.mjs"] {
+        +routes
+        -http 请求主链
+    }
+    class PairingUI["js/pairing.mjs"] {
+        +renderPairing() void
+        -openQrDialog() void
+        -renderDeviceList() void
+    }
+    class PairClaim["js/pair-claim.mjs"] {
+        +claimAndEnter(token) Promise~void~
+    }
+    class MobileShell["js/mobile.mjs"] {
+        +isNarrow bool
+        +isTiny bool
+        -watchBreakpoints() void
+        -enterDetail() void
+        -leaveDetail() void
+    }
+    class QrVendor["js/vendor/qrcode.mjs"] {
+        +qrSvg(text, ecc) string
+    }
+
+    ServerMjs --> HandlePair : 请求链挂载
+    ServerMjs --> AuthMjs : guard 前置闸
+    AuthMjs --> StoreDevices : identify/decide 认令牌
+    HandlePair --> StoreDevices : 签发/核销/吊销
+    PairingUI --> QrVendor : 画二维码
+    PairingUI --> HandlePair : POST /api/pair/tokens 等
+    PairClaim --> HandlePair : POST /api/pair/claim
+    MobileShell --> PairingUI : 窄屏布局状态

@@ -16,7 +16,7 @@ export function groupsWhereAssistant(personaId) {
 /**
  * 把某个员工钉成「内置」（不可删）。
  *
- * 只有 seed 用（`secretary.mjs`），**没有对应的 HTTP 接口** —— 内置与否是出厂属性，
+ * 只有 seed 用（`steward.mjs`），**没有对应的 HTTP 接口** —— 内置与否是出厂属性，
  * 不是用户在界面上能拨的开关。
  */
 
