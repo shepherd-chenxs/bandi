@@ -47,6 +47,11 @@ import { handleNodeWork } from './routes/nodeWork.mjs';
 import { handleRuntime } from './routes/runtime.mjs';
 import { handlePluginAction } from './routes/plugin.mjs';
 import { handleProject } from './routes/project.mjs';
+/*
+ * 角色与菜单（2026-10-28 第二刀）：/api/menus + /api/roles 的增删改查。
+ * handler 自己判路径，所以链里位置只影响"谁先匹配"——放在 project 之前是按任务书口径。
+ */
+import { handleRoles } from './routes/roles.mjs';
 import { handleWorkspace } from './routes/workspace.mjs';
 import { handleStatus } from './routes/status.mjs';
 import { handleFs } from './routes/fs.mjs';
@@ -482,6 +487,9 @@ const server = http.createServer(async (req, res) => {
 
     const handledExpert = await handleExpert(req, res, url);
     if (handledExpert !== false) return;
+
+    const handledRoles = await handleRoles(req, res, url);
+    if (handledRoles !== false) return;
 
     const handledProject = await handleProject(req, res, url);
     if (handledProject !== false) return;

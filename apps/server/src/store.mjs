@@ -11,7 +11,7 @@
  * 域地图：db=连接/建表/迁移 · personas=数字员工 · personaSkills=技能挂载 ·
  * conversations/messages/groups=会话与消息 · runs=一次执行及事件流 ·
  * projects/projectTasks=项目与看板卡 · nodes=节点/任务/作业/令牌 · workflows=流程引擎 ·
- * quota=额度 · gitRepos=仓库 · schedules=定时任务。
+ * quota=额度 · gitRepos=仓库 · schedules=定时任务 · roles=角色与角色→菜单（2026-10-28）。
  */
 
 export { newId, nowIso, getMetaValue, setMetaValue, backupTo } from './store/db.mjs';
@@ -30,3 +30,5 @@ export * from './store/workflows.mjs';
 export * from './store/quota.mjs';
 export * from './store/gitRepos.mjs';
 export * from './store/schedules.mjs';
+// 角色与菜单（2026-10-28 第二刀）：roles / role_menus 两张表，模块加载时幂等 seed 三个内置角色
+export * from './store/roles.mjs';

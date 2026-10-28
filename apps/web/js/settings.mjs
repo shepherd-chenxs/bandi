@@ -9,6 +9,7 @@ import { renderList, showView } from './contacts.mjs';
 import { setListTitle } from './flowpages.mjs';
 import { openCodeRepoPage, renderSkillCards } from './skills.mjs';
 import { renderPairing } from './pairing.mjs';
+import { renderRoles } from './roleadmin.mjs';
 import { $, S } from './core.mjs';
 
 
@@ -33,6 +34,12 @@ export const SETTINGS_SECTIONS = [
   ['quota', '额度', '每个模型每天最多用多少'],
   ['plugins', '插件', '扩展点'],
   ['skills', '技能', '给数字员工用的能力包'],
+  /*
+   * 「角色与菜单」（2026-10-28 第二刀）：角色 = 名字 + 一组菜单 key，先只存库。
+   * **设备形态不加进 `DEVICE_SETTINGS_SECTIONS`** —— 服务端五个口都要操作员，
+   * 列出来就是"点一下吃一个 403"（那条规矩见下面 DEVICE_SETTINGS_SECTIONS 的注释）。
+   */
+  ['roles', '角色与菜单', '角色能看见哪些菜单'],
   /*
    * 「代码托管」「远程连接」**不再列在设置左栏**（2026-10-26 用户："设置里的代码托管和远程连接入口去掉"），
    * 入口统一在「工作台 → 研发」区（见 experts.mjs 的 DEV_TILES）。
@@ -101,6 +108,7 @@ export function openSettings(section) {
   if (S.settingsSection === 'plugins') return renderPlugins();
   if (S.settingsSection === 'quota') return renderQuota();
   if (S.settingsSection === 'skills') return renderSkillCards();
+  if (S.settingsSection === 'roles') return renderRoles();
   if (S.settingsSection === 'aiimage') return renderImageAi();
   if (S.settingsSection === 'feishu') return renderFeishu();
   if (S.settingsSection === 'about') return renderAbout();
