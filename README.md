@@ -113,7 +113,7 @@ bandi install-cli         # 重新注册全局命令（[--dir] [--path] [--remov
 
 ## 版本
 
-当前 **1.3.0**，真源唯一：[apps/desktop/version.json](apps/desktop/version.json)
+当前 **1.4.0**，真源唯一：[apps/desktop/version.json](apps/desktop/version.json)
 （`build.rs` 读它编译进程序，并同步安装包名 —— **别在别处记第二个号**）。
 未及 `1.0.0` 之前的兼容承诺仍然有效：**不承诺兼容**，插件格式、流程模板、`status.yaml` 契约都还在动。
 发版：改 `version.json` → 提交 → 打 `v<版本>` tag 推上去，CI 自动出安装包并挂 Release。
