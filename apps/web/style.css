@@ -1930,6 +1930,60 @@ input.locked:focus { outline: none; border-color: var(--line); }
    「建 PR」弹窗头上的路径行也在用。 */
 .gr-meta { margin-top: 3px; font-family: ui-monospace, monospace; font-size: 11.5px;
            color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 建 PR 弹窗里「这条 PR 会装哪些提交」：一条一行（2026-10-29 用户："一坨文字，阅读感极差"）。
+   别再用 `；` 把提交标题串成一行 —— 4 条就成一团，看不出有几条、哪条是哪个。 */
+.pr-commit-list { list-style: none; margin: 4px 0 2px; padding: 0; max-height: 132px; overflow: auto; }
+.pr-commit-list li { display: flex; gap: 8px; align-items: baseline; padding: 2px 0;
+                     font-size: 12px; line-height: 1.45; }
+.pr-commit-list li code { flex: 0 0 auto; font-family: ui-monospace, monospace; font-size: 11px;
+                          color: var(--dim); }
+.pr-commit-list li span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 建 PR 弹窗重设计（2026-10-29）：
+   · 概览三颗 chip（当前分支 / base / 领先）替掉「｜」串成的长句 —— 数字要一眼扫到；
+   · 提交清单收进浅底卡片，跟下面的表单在视觉上分两段；
+   · 标题、描述在前，分支两栏并排在后（都是短输入，竖排浪费半屏）；
+   · 动作条压底 + 上分隔线（同 #expertDlg 那套）。 */
+/* 尺寸**固定**（2026-10-29 用户："窗口固定大小"）：这颗弹窗的内容是异步长出来的
+   （「读工作区…」→ 概览 + 提交卡 → 表单出现），不定高就会从一丁点撑到满屏、位置还往上跳。
+   做法同 dialog.sch-dlg：定高 + form 转 flex 列 —— 概览自己滚（上限 240），
+   描述框吃掉剩余高度，动作条 margin-top:auto 钉底。窗口本身不再随内容变。 */
+dialog#repoPrDlg { width: 660px; height: min(720px, 92vh); max-height: 92vh;
+                   display: flex; flex-direction: column; overflow: hidden; }
+#repoPrDlg > form { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+#repoPrDlg .dlg-head { flex: 0 0 auto; }
+/* 概览区：异步回来前后占的是同一块地方；提交条数多了它自己滚，不推挤下面的表单 */
+#repoPrDlg #prState { flex: 0 0 auto; max-height: 240px; overflow: auto; }
+#repoPrDlg #prForm { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+/* ⚠️ 上面那条把 #prForm 设成了 display:flex —— 作者样式压过 UA 的 `[hidden]{display:none}`，
+   没这一条，「不可建 PR」时表单照样显示（老坑，见 MEMORY「断显隐看 computed display」）。 */
+#repoPrDlg #prForm[hidden] { display: none; }
+#repoPrDlg #prForm > label, #repoPrDlg .pr-fill-row, #repoPrDlg .pr-branch-row { flex: 0 0 auto; }
+/* 描述框是这一屏唯一的"可伸缩项"：窗口高度固定，多出来的空间给它 */
+#repoPrDlg #prBody { flex: 1 1 auto; min-height: 96px; resize: none; }
+/* 提交清单不再自带滚动条（概览区整体滚就够了，套两层滚轮很难受） */
+#repoPrDlg .pr-commit-list { max-height: none; overflow: visible; }
+.pr-path { margin: 6px 0 0; }
+.pr-sum { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.pr-sum-item { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 11px;
+               border: 1px solid var(--line); border-radius: 999px; background: var(--side); font-size: 12px; }
+.pr-sum-k { color: var(--dim); white-space: nowrap; }
+.pr-sum-v { font-family: ui-monospace, monospace; font-size: 11.5px; color: var(--text);
+            max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pr-commits { margin-top: 10px; padding: 9px 12px 7px; border: 1px solid var(--line);
+              border-radius: 8px; background: var(--side); }
+.pr-commits-head { font-size: 12px; color: var(--dim); }
+.pr-commits-head b { color: var(--text); }
+.pr-commits-note { margin-left: 6px; font-size: 11px; }
+.pr-commit-list { margin-top: 2px; }
+.pr-commit-list li.dim { color: var(--dim); }
+.pr-warn { margin-top: 10px; font-size: 12.5px; color: var(--warn); }
+/* 字段 label 的灰色小注（原来塞在括号里，现在挪出来跟在标题后面） */
+#repoPrDlg label em { margin-left: 4px; font-style: normal; }
+#repoPrDlg #prTitle { font-size: 13.5px; }
+.pr-branch-row { display: flex; gap: 14px; }
+.pr-branch-row > div { flex: 1 1 0; min-width: 0; }
+/* 动作条钉底：margin-top:auto 把剩余高度全吃掉（不是固定 16px —— 定高窗口里正文短了会浮在半空） */
+#repoPrDlg .dlg-actions { flex: 0 0 auto; margin: auto -20px -20px; padding: 14px 20px; border-top: 1px solid var(--line); }
 /* 管理员（2026-10-23 用户拍板）：不放 select —— 直接显示员工姓名的按钮，
    点开 keeperDlg 弹窗搜索选人（人多时原生下拉又长又不能搜）。现在住在详情的 .info-row 里 */
 .gr-keeper-btn { max-width: 100%; height: 30px; padding: 0 12px; border-radius: 7px;
@@ -2092,6 +2146,43 @@ input.locked:focus { outline: none; border-color: var(--line); }
 .gr-pr-check.bad { color: var(--bad); border-color: var(--bad); }
 .gr-pr-check.wait { color: var(--warn); border-color: var(--warn); }
 .gr-pr-check.none { color: var(--dim); }
+/* gate ✗ / 检查未知是**按钮**（2026-10-29 用户："界面如果不通过就卡住了，得有个修复功能"）：
+   视觉还是那颗小徽标，但 hover 提示"点得动" —— 点开 gate 明细弹窗。 */
+button.gr-pr-check { cursor: pointer; background: none; font: inherit; }
+button.gr-pr-check:hover { background: var(--side); }
+/* 检查没过的弹窗（2026-10-29 重做，用户："我只要一个按钮，点了 agent 帮我去修"）：
+   主视线 = 一句人话 + 一颗主按钮；技术明细（runs / job / step / 重跑）折进 details，
+   默认不占地方，也不把人往 GitHub 日志上赶。 */
+#repoGateDlg { width: 520px; }
+.gr-gate-refs { margin: 6px 0 0; }
+.gr-gate-lead { margin: 14px 0 0; font-size: 13px; line-height: 1.75; color: var(--text); }
+.gr-gate-fix { margin-top: 16px; padding: 14px 16px; border-radius: 10px;
+               border: 1px solid var(--line); background: var(--side);
+               display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.gr-gate-fix .primary { min-width: 150px; }
+.gr-gate-fix .dim { font-size: 12px; line-height: 1.65; }
+.gr-gate-fix-who { font-size: 13px; }
+.gr-gate-fix-err { margin-top: 8px; font-size: 12px; color: var(--bad); line-height: 1.6; }
+.gr-gate-more { margin-top: 14px; }
+.gr-gate-more > summary { cursor: pointer; font-size: 12px; color: var(--dim); user-select: none; }
+.gr-gate-more[open] > summary { margin-bottom: 8px; }
+.gr-gate-escape { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line);
+                  display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.gr-gate-escape .dim { font-size: 11.5px; }
+.gr-gate-runs { list-style: none; margin: 8px 0 0; padding: 0;
+                display: flex; flex-direction: column; gap: 4px; }
+.gr-gate-runs li { display: flex; align-items: center; gap: 8px; font-size: 12px; min-width: 0; }
+.gr-gate-run-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gr-gate-runs li a { flex: 0 0 auto; margin-left: auto; font-size: 11.5px; }
+.gr-gate-jobs { margin-top: 12px; }
+.gr-gate-sec { font-size: 12px; color: var(--dim); margin-bottom: 6px; }
+.gr-gate-job { padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--side); }
+.gr-gate-job + .gr-gate-job { margin-top: 8px; }
+.gr-gate-job-name { display: flex; align-items: center; gap: 6px; font-size: 12.5px; min-width: 0; }
+.gr-gate-job-name a { flex: 0 0 auto; margin-left: auto; font-size: 11.5px; }
+.gr-gate-job ul { margin: 6px 0 0; padding-left: 18px; font-size: 12px; color: var(--dim);
+                  display: flex; flex-direction: column; gap: 2px; }
+.gr-gate-step-c { font-family: ui-monospace, monospace; font-size: 11px; color: var(--bad); }
 /* PR 按阶段分组（2026-10-27 用户："需要建 PR、审核中、等待合并的分开一下"）：
    每组一个低饱和组头（标题 + 等宽条数），组间一条实线分隔；空组不画（HTML 里就不存在）。 */
 .gr-pr-group + .gr-pr-group { border-top: 1px solid var(--line); }
@@ -3368,6 +3459,9 @@ button.att-add:hover { color: var(--text); border: 0; background: var(--panel); 
 .row-with-btn { display: flex; gap: 8px; align-items: center; }
 .row-with-btn input { flex: 1; min-width: 0; }
 .row-with-btn button { flex: 0 0 auto; white-space: nowrap; }
+/* PR 弹窗的「自动填充」行（2026-10-29）：钮贴在标题 label 右侧，别占一整行 */
+.pr-fill-row { display: flex; align-items: center; gap: 8px; }
+.pr-fill-row button:disabled { opacity: .6; cursor: default; }
 
 /* 节点面板里的「需要我确认才进入下一步」开关 */
 .vd-switch { display: flex; align-items: center; gap: 8px; margin-top: 14px; cursor: pointer; }

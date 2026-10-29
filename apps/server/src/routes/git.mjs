@@ -10,6 +10,7 @@ import { updateProjectTask, afterMerged } from '../project-tasks.mjs';
 import * as git from '../git-repos.mjs';
 import * as commitMsg from '../commit-msg.mjs';
 import * as patrol from '../repo-patrol.mjs';
+import { dispatchToThread } from '../dispatch.mjs';
 
 /**
  * 请求体 → `git.openPr` 的参数（两个入口共用一份：仓库行上直接建、从任务卡上建）。
@@ -32,11 +33,69 @@ function prRequestOf(body = {}, task = null) {
 }
 
 /**
+ * 谁来修 gate（2026-10-29 用户："我要的是一个按钮，点了 agent 帮我去修"）。
+ *
+ * 用户不管这事该谁干，平台自己挑最合适的人：**研发 > 仓库管家 > 测试 / 运维 > 内置助理**。
+ * 最后垫底的助理也得有 —— "一个员工都没雇"这种新装机不该让按钮直接哑掉。
+ * 返回 null 只发生在库里一个员工都没有（正常装机有内置助理，不会走到）。
+ */
+function pickGateFixer(row) {
+  const people = store.listPersonas();
+  if (!people.length) return null;
+  const byRole = (kw) => people.find((p) => String(p.role ?? '').startsWith(kw));
+  return (
+    byRole('研发')
+    ?? people.find((p) => p.id === row?.keeperPersonaId)
+    ?? byRole('测试')
+    ?? byRole('运维')
+    ?? people.find((p) => p.builtin)
+    ?? people[0]
+  );
+}
+
+/**
+ * 给修 gate 的人写的活（brief）。
+ *
+ * 写法上守两条：
+ *   · **说清现场，别说结论** —— 仓库在哪、哪个分支、哪条检查红了、红在哪个 step，让他自己去看；
+ *   · **把人话要求显式写出来** —— 不许改 workflow / 删测试骗绿，修完要自己跑到绿再推，
+ *     回报只要"什么毛病、怎么改的、过没过"，不贴日志（用户不看代码）。
+ * 最后一条"修不动就停下"是防它瞎试：反复乱改比修不好更糟。
+ */
+function gateFixBrief({ repo, row, pull, detail }) {
+  const steps = (detail.jobs ?? []).map(
+    (j) => `- ${j.name || '未命名 job'}：${(j.steps ?? []).map((s) => `${s.name}（${s.conclusion}）`).join('、') || '拿不到 step 明细'}`,
+  );
+  const branch = pull.headRef ?? '当前分支';
+  return [
+    `「${repo}」这个 PR 的自动检查没过，你帮我修到过为止 —— 我是用户，不看代码，也不用跟我解释报错。`,
+    '',
+    `仓库：${repo}（本机目录 ${row.localPath}）`,
+    `PR：#${pull.number}《${pull.title ?? ''}》`,
+    `分支：${branch}（推到这里，它就是这条 PR 的来源）→ ${pull.baseRef ?? '?'}`,
+    `没过的检查：${(detail.failed ?? []).join('、') || '未知检查'}`,
+    ...(steps.length ? ['红在哪：', ...steps] : []),
+    '',
+    '怎么做：',
+    `1. 先看现场：git -C "${row.localPath}" status —— 有未提交改动就先跟我说一声再动；这里要是脏的，别硬切分支。`,
+    `2. 切到 ${branch}、拉最新，在本机把没过的那条检查跑一遍（.github/workflows 里写着它跑什么），先复现同样的失败再动手。`,
+    '3. 修根因。不许为了让检查变绿去删测试、跳过检查、改 workflow 绕过去 —— 那样绿了也是假的，我不收。',
+    '4. 改完把这条检查在本机跑到绿，相关的检查也过一遍。',
+    '5. 提交并推到上面那个分支，gate 会自动重跑。',
+    '6. 回我一句人话：是什么毛病、你怎么改的、现在过没过。别贴日志原文。',
+    '7. 修不动就停下来说清卡在哪、要我做什么决定 —— 不要反复乱试，也别顺手改无关的东西。',
+  ].join('\n');
+}
+
+/** 路径比较：Windows 上大小写与反斜杠都不该让"同一个目录"认不出来（同 pr-watch） */
+const normPath = (p) => String(p ?? '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+
+/**
  * 合并一个 PR（两个入口共用：仓库弹窗里那颗按钮、卡上那颗按钮）。
  *
  * 为什么合并前要先查一次 PR：闸的判据（CI、可合并性、head SHA）都挂在**那一刻的 head** 上 ——
  * 拿着列表里那个 sha 去合，期间有人推了新提交就合掉一份没人看过的改动。
- * `fetchPull` 回来才能判断：已经合过 / 已关闭（不是错误，是"没得合"），草稿（该拦）。
+ * `fetchPull` 回来才能判断：已经合过 / 已关闭（不是错误，是"没得合"）、草稿（该拦）。
  * 合完把挂在它上面的卡统一收一遍（`afterMerged`：只把「进行中」转「待验收」，别的列不碰）。
  */
 async function mergeOne(repo, number, body = {}, taskId = null) {
@@ -315,7 +374,9 @@ export async function handleGit(req, res, url) {
     if (req.method === 'POST') {
       const body = await readBody(req);
       try {
-        return sendJson(res, 201, await git.openPr(row, prRequestOf(body))), true;
+        /* 代码托管页的建 PR：**只推已提交的**（includeDirty:false）—— 提交是「提交」按钮的事。
+           任务卡那条路（下面 /pr/create）保持默认 true，agent 干完活手上是脏文件。 */
+        return sendJson(res, 201, await git.openPr(row, { ...prRequestOf(body), includeDirty: false })), true;
       } catch (e) {
         return fail(res, 400, 'E1078', String(e.message ?? e)), true;
       }
@@ -333,6 +394,74 @@ export async function handleGit(req, res, url) {
       return sendJson(res, 200, await mergeOne(row.fullName, Number(repoMergePr[2]), body)), true;
     } catch (e) {
       return fail(res, 400, 'E1088', String(e.message ?? e)), true;
+    }
+  }
+
+  /* ---- gate 明细 + 重跑（2026-10-29 用户："界面如果不通过就卡住了，得有个修复功能"）----
+     红了不再只有一颗干瞪眼的 ✗：GET 看哪条红了、红在哪个 step；POST /rerun 重跑失败的。
+     两个动作都先取 PR 拿 headSha —— 行上只传编号，服务端自己对 GitHub，不信任前端传 sha。 */
+  const repoPrChecks = /^\/api\/git\/repos\/([^/]+)\/prs\/(\d+)\/checks(\/rerun)?$/.exec(url.pathname);
+  if (repoPrChecks) {
+    const row = store.getGitRepo(decodeURIComponent(repoPrChecks[1]));
+    if (!row) return fail(res, 404, 'E1076', '仓库不在清单里'), true;
+    if (!git.readToken()) return fail(res, 400, 'E1070', '先连接 GitHub（工作台 → 研发 → 代码托管）'), true;
+    try {
+      const pull = await git.fetchPull(row.fullName, Number(repoPrChecks[2]));
+      if (req.method === 'GET') {
+        return sendJson(res, 200, await git.gateDetail(row.fullName, pull.headSha)), true;
+      }
+      if (req.method === 'POST' && repoPrChecks[3]) {
+        return sendJson(res, 200, await git.rerunGate(row.fullName, pull.headSha)), true;
+      }
+    } catch (e) {
+      return fail(res, 400, 'E1079', String(e.message ?? e)), true;
+    }
+    return fail(res, 405, 'E1089', '这个地址只认 GET（gate 明细）和 POST /rerun（重跑失败的检查）'), true;
+  }
+
+  /* ---- 「让 AI 帮我修」（2026-10-29 用户："我要的是一个按钮，点了 agent 帮我去修"）----
+     用户不看代码、也不关心报错：这里不返回"哪红了"给人读，而是**直接派活** ——
+     挑一个研发（pickGateFixer），在他的 1:1 会话里发一段带现场的 brief（gateFixBrief），
+     让他自己复现、改、跑到绿、推上去。界面只负责回"已经交给他了"和一句人去哪看进展。
+     检查已经绿 / 还在跑时不派活（白烧一次 run），明说没什么可修。 */
+  const repoPrFix = /^\/api\/git\/repos\/([^/]+)\/prs\/(\d+)\/fix$/.exec(url.pathname);
+  if (repoPrFix && req.method === 'POST') {
+    const row = store.getGitRepo(decodeURIComponent(repoPrFix[1]));
+    if (!row) return fail(res, 404, 'E1076', '仓库不在清单里'), true;
+    if (!git.readToken()) return fail(res, 400, 'E1070', '先连接 GitHub（工作台 → 研发 → 代码托管）'), true;
+    const number = Number(repoPrFix[2]);
+    try {
+      const pull = await git.fetchPull(row.fullName, number);
+      const detail = await git.gateDetail(row.fullName, pull.headSha);
+      if (detail.state === 'success') return fail(res, 400, 'E1121', '这条 PR 的检查已经全绿了，不用修'), true;
+      if (detail.state === 'pending') return fail(res, 409, 'E1122', '检查还在跑 —— 等它出结果，真红了再让它修'), true;
+      if (detail.state !== 'failure' || !(detail.failed ?? []).length) {
+        return fail(res, 400, 'E1123', '这会儿没查到失败的检查（可能没配置，也可能状态没读），暂时没得修'), true;
+      }
+      const who = pickGateFixer(row);
+      if (!who) return fail(res, 400, 'E1124', '还没有员工能修代码 —— 先去「专家库」雇一位研发'), true;
+      /*
+       * 派活要落在"这个仓库"的目录里。仓库根正好是某个项目的根时带上 projectId
+       * （dispatch 会用它覆盖 cwd + 可写根）；对不上就靠他默认目录 —— 至少能读、能改，
+       * 不硬造项目（同 pr-watch 的规矩：巡检/修复这种动作不该顺手建项目）。
+       */
+      const project = store.listProjects().find((p) => normPath(p.root) === normPath(row.localPath));
+      const conv = store.ensureConversationForPersona(who.id);
+      if (!conv) return fail(res, 400, 'E1125', '找不到这个员工的会话'), true;
+      const { run } = dispatchToThread(conv.id, gateFixBrief({ repo: row.fullName, row, pull, detail }), {
+        projectId: project?.id ?? null,
+      });
+      return sendJson(res, 202, {
+        conversationId: conv.id,
+        runId: run.id,
+        personaId: who.id,
+        personaName: who.name,
+        personaRole: who.role ?? null,
+      }), true;
+    } catch (e) {
+      // busy：他手上有活 —— 409 让界面说"他还在忙"，别当成失败
+      if (e?.code === 'busy') return fail(res, 409, 'E1126', String(e.message ?? e)), true;
+      return fail(res, 400, 'E1127', String(e.message ?? e)), true;
     }
   }
 
@@ -564,6 +693,19 @@ export async function handleGit(req, res, url) {
       })), true;
     } catch (e) {
       return fail(res, 400, 'E1113', String(e.message ?? e)), true;
+    }
+  }
+
+  /* PR 弹窗的「自动填充」（2026-10-29）：没推的提交 + 未提交改动 → 模型拧成标题+描述。
+     同 suggest-commit：只读、不建 run、模型不行退规则，失败只影响这一颗按钮。 */
+  const repoSuggestPr = /^\/api\/git\/repos\/([^/]+)\/suggest-pr$/.exec(url.pathname);
+  if (req.method === 'POST' && repoSuggestPr) {
+    const row = store.getGitRepo(decodeURIComponent(repoSuggestPr[1]));
+    if (!row) return fail(res, 404, 'E1076', '仓库不在清单里'), true;
+    try {
+      return sendJson(res, 200, await commitMsg.suggestPrDraft(row)), true;
+    } catch (e) {
+      return fail(res, 400, 'E1114', String(e.message ?? e)), true;
     }
   }
 

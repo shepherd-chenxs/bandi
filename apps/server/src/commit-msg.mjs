@@ -1,4 +1,4 @@
-import { changeDigest } from './git-repos.mjs';
+import { changeDigest, workState } from './git-repos.mjs';
 import { loadDevices } from './runtimes.mjs';
 import { adapterFor } from './adapters.mjs';
 
@@ -131,6 +131,133 @@ export async function suggestCommitMessage(row, { paths = null, timeoutMs = 1500
   } catch (e) {
     const why = ctl.signal.aborted ? `等了 ${Math.round(timeoutMs / 1000)} 秒没回` : String(e?.message ?? e);
     return { message: md, source: 'rule', note: `模型没跑成：${why}` };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/* ------------------------------------------------------------------ PR 草稿 */
+
+/**
+ * 解析模型给的 PR 草稿（**纯函数**，冒烟直接钉）。
+ *
+ * 约定的输出形状是「标题：…」一行 + 「描述：」后面跟正文；模型不守规矩时按行数猜 ——
+ * 第一行当标题、剩下的当描述。标题压到 80 字、描述压到 600 字，再长弹窗里也放不下。
+ */
+export function parsePrDraft(text) {
+  const lines = String(text ?? '').replace(/\r/g, '').split('\n').map((l) => l.trim());
+  const ti = lines.findIndex((l) => /^标题[:：]/.test(l));
+  const bi = lines.findIndex((l) => /^描述[:：]?\s*$/.test(l));
+  let title = ti >= 0 ? lines[ti].replace(/^标题[:：]\s*/, '') : lines[0] ?? '';
+  let body = '';
+  if (bi >= 0) body = lines.slice(bi + 1).join('\n');
+  else if (ti >= 0) body = lines.filter((l, i) => i !== ti && l).join('\n');
+  else body = lines.slice(1).join('\n');
+  title = title.replace(/^["'「『]|["'」』]$/g, '').trim().slice(0, 80);
+  body = body.trim().slice(0, 600);
+  return { title, body };
+}
+
+/** 兜底：从"没推的提交 + 未提交改动"拼一份不撒谎的草稿，没有素材就回 null（按钮报错） */
+export function fallbackPrDraft(st, digest) {
+  const commits = st.aheadCommits ?? [];
+  const files = digest?.files ?? [];
+  if (commits.length) {
+    /*
+     * 2026-10-29 用户指着弹窗问"这是直接拿来用吗"：上面提交卡已经列过一遍标题，
+     * 描述再原样抄一遍等于复读，一点增量信息都没有。兜底做点轻加工 ——
+     * 剥掉 type: 前缀、截取分号前的第一截、按它去重（"设置左栏分区折叠；A" 和
+     * "设置左栏分区折叠；B" 是同一件事的两次提交，留一条就够）——
+     * 写出来的是"这批提交在做什么"的摘要，不是清单本体。终稿仍该人过一遍。
+     */
+    const seen = new Set();
+    const points = [];
+    for (const c of commits) {
+      const s = String(c.subject ?? '').replace(/^\w+(?:\([^)]*\))?!?:\s*/, '').trim();
+      const head = (s.split(/[；;]/)[0] || s).trim();
+      const key = head.toLowerCase();
+      if (!head || seen.has(key)) continue;
+      seen.add(key);
+      points.push(head);
+      if (points.length >= 6) break;
+    }
+    const body = points.map((p) => `- ${p}`).join('\n')
+      + (commits.length > points.length ? `\n- …等共 ${commits.length} 条提交` : '')
+      + '\n\n未验证';
+    return { title: String(commits[0].subject).slice(0, 80), body };
+  }
+  if (files.length) {
+    // 只剩「没提交的改动」这种素材不再走这里：PR 装不进去（canPr 已经把这条挡在外面了）
+    const msg = fallbackMessage(digest);
+    return { title: msg, body: `改动 ${files.length} 个文件\n\n未验证` };
+  }
+  return null;
+}
+
+const PR_PROMPT_HEAD = `你在给一个 GitHub PR 写标题和描述。只根据下面给出的信息写。
+
+硬性要求：
+- 输出只有两段：第一行以「标题：」开头；随后一行写「描述：」，描述跟在后面 2~4 行。
+- 标题不超过 40 个字，说清这个 PR 干了什么，别写"更新代码"这种空话。
+- 描述写"改了什么 + 怎么验的"；信息里看不出验证就写「未验证」—— 别编造「安全」「已修复」。
+- 不要代码块、不要解释、不要调用任何工具。
+
+`;
+
+export function buildPrPrompt(st, digest) {
+  const parts = [PR_PROMPT_HEAD];
+  if (st.branch) parts.push(`分支 ${st.branch} → 合进 ${st.base ?? '（base 未记录）'}`);
+  if (st.aheadCommits?.length) {
+    parts.push(`这个分支上已提交、还没推的 ${st.aheadCommits.length} 条提交：\n${st.aheadCommits.slice(0, 15).map((c) => `- ${c.subject}`).join('\n')}`);
+  }
+  if (digest?.files?.length) {
+    const shown = digest.files.slice(0, 30);
+    parts.push(`未提交、会一并进这条 PR 的 ${digest.files.length} 个文件：\n${shown.map((f) => `- ${f.status} ${f.path}`).join('\n')}${digest.files.length > shown.length ? `\n- …另有 ${digest.files.length - shown.length} 个` : ''}`);
+  }
+  if (digest?.stat) parts.push(`改动统计：\n${digest.stat}`);
+  return parts.join('\n\n');
+}
+
+/**
+ * PR 弹窗的「自动填充」（2026-10-29，用户："这个加个自动填充功能"）。
+ *
+ * 素材是两块：**没推的提交**（`workState().aheadCommits`，干干净净的标题清单）
+ * 和**未提交改动**（`changeDigest`，只给清单和 --stat，不喂 diff 正文 —— 理由见上）。
+ * 模型只管把这两块拧成「标题 + 描述」；挂了、超时、没运行时 → 规则兜底；
+ * 连兜底素材都没有（工作区干净、分支也不领先）→ 回 null，按钮报"没东西可填"。
+ *
+ * @returns {Promise<{title:string, body:string, source:'model'|'rule', note?:string}|null>}
+ */
+export async function suggestPrDraft(row, { timeoutMs = 15000 } = {}) {
+  const st = await workState(row);
+  /* 素材只有**已提交、还没推**的那些（2026-10-29：建 PR 不再顺手提交，脏文件进不去 PR，
+     拿它当素材写出来的描述就是假话）。没有提交可推 → 没得填。 */
+  if (!st.canPr) return null;
+  const digest = null;
+
+  const fb = fallbackPrDraft(st, digest);
+  const rt = pickRuntime();
+  const adapter = rt ? adapterFor(rt.family) : null;
+  if (!rt || !adapter) {
+    return fb ? { ...fb, source: 'rule', note: rt ? `没有 ${rt.family} 的适配器` : '没有可用的运行时（设置 → 运行时）' } : null;
+  }
+
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), timeoutMs);
+  try {
+    const out = await adapter({
+      task: buildPrPrompt(st, digest),
+      cwd: row.localPath,
+      cliPath: rt.path,
+      ...(rt.family === 'codex' ? { sandbox: 'read-only' } : {}),
+      signal: ctl.signal,
+    });
+    const draft = parsePrDraft(out?.text);
+    if (draft.title) return { ...draft, source: 'model' };
+    return fb ? { ...fb, source: 'rule', note: `${rt.label ?? rt.family} 没给出可用的草稿` } : null;
+  } catch (e) {
+    const why = ctl.signal.aborted ? `等了 ${Math.round(timeoutMs / 1000)} 秒没回` : String(e?.message ?? e);
+    return fb ? { ...fb, source: 'rule', note: `模型没跑成：${why}` } : null;
   } finally {
     clearTimeout(timer);
   }

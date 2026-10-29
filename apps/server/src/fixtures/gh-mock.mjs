@@ -34,7 +34,11 @@ export async function startGitHubMock() {
   const deletedRefs = []; // 被删掉的分支 ref
   /** 某个 commit 的 CI 结果（默认 none —— 现有用例靠"没有 CI"钉住闸的坏脾气） */
   const checks = new Map();
+  /** Actions（2026-10-29 gate 明细 / 重跑用）：`${repo}#${sha}` -> { runs, jobs } */
+  const actions = new Map();
+  const reruns = []; // 被 POST /rerun 过的 run id
   let nextNumber = 100;
+  let nextRunId = 900;
   let forced = null; // { match: RegExp, status: number, message: string } —— 注入一次性的失败
 
   const list = (repo) => {
@@ -218,6 +222,29 @@ export async function startGitHubMock() {
         return send(res, 204, {});
       }
 
+      /* ---- Actions：gate 明细下钻 + 重跑（2026-10-29 "修复功能"）—— 最小实现，够钉契约 ---- */
+      const actList = /^\/repos\/([^/]+\/[^/]+)\/actions\/runs$/.exec(pathname);
+      if (actList && req.method === 'GET') {
+        const repo = decodeURIComponent(actList[1]);
+        const sha = u.searchParams.get('head_sha') ?? '';
+        const row = actions.get(`${repo}#${sha}`);
+        return send(res, 200, { workflow_runs: row ? row.runs.map((r) => ({ ...r, head_sha: sha })) : [] });
+      }
+      const actJobs = /^\/repos\/([^/]+\/[^/]+)\/actions\/runs\/(\d+)\/jobs$/.exec(pathname);
+      if (actJobs && req.method === 'GET') {
+        const found = [...actions.values()].find((x) => x.runs.some((r) => r.id === Number(actJobs[2])));
+        return send(res, 200, { jobs: found ? found.jobs : [] });
+      }
+      const actRerun = /^\/repos\/([^/]+\/[^/]+)\/actions\/runs\/(\d+)\/rerun$/.exec(pathname);
+      if (actRerun && req.method === 'POST') {
+        const runId = Number(actRerun[2]);
+        const found = [...actions.values()].find((x) => x.runs.some((r) => r.id === runId));
+        if (!found) return send(res, 404, { message: 'Not Found' });
+        reruns.push(runId);
+        found.runs.forEach((r) => { if (r.id === runId) r.conclusion = null; }); // 重跑后回到"在跑"
+        return send(res, 201, {});
+      }
+
       return send(res, 404, { message: `假 GitHub 里没有这个地址：${req.method} ${pathname}` });
     });
   });
@@ -232,7 +259,15 @@ export async function startGitHubMock() {
     deletedRefs,
     seed,
     seedChecks,
+    /** 预置 Actions run（gate 明细 / 重跑的用例）：默认一条失败的 run，jobs 可选 */
+    seedActions: (repo, sha, { conclusion = 'failure', jobs = [] } = {}) => {
+      const run = { id: ++nextRunId, conclusion, html_url: 'http://github.test/log' };
+      actions.set(`${repo}#${sha}`, { runs: [run], jobs });
+      return run;
+    },
     failWith,
+    /** 被 POST /rerun 过的 run id（断言"重跑真的打到 GitHub"） */
+    reruns,
     /** 某个正则命中过的请求（断言"建 PR 到底怎么调的"） */
     hits: (re) => calls.filter((c) => re.test(`${c.method} ${c.pathname}`)),
     lastHit: (re) => calls.filter((c) => re.test(`${c.method} ${c.pathname}`)).pop() ?? null,
@@ -241,6 +276,8 @@ export async function startGitHubMock() {
       calls.length = 0;
       deletedRefs.length = 0;
       checks.clear();
+      actions.clear();
+      reruns.length = 0;
       forced = null;
       nextNumber = 100;
     },
