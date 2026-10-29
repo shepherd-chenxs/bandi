@@ -1490,31 +1490,33 @@ export async function renderGitRepos(root = $('pluginView')) {
     if (head?.isConnected) {
       head.textContent = dirty.length ? `${dirty.length} 个未提交` : Number(state.unpushed ?? 0) > 0 ? `${state.unpushed} 个未推送` : '';
     }
-    if (!dirty.length) {
-      /*
-       * 工作区干净时也要把"已提交、还没推送"说出来（2026-10-27 用户实报：提交完没推，
-       * 界面只写"没有未提交的改动"，人以为一切同步完了）。三种情况分开说：
-       *   有上游 + 领先  → 「N 个提交还没推送」+ 推送按钮；
-       *   没上游          → 「这条分支还没推到远端」+ 推送按钮（首次推会设上游）；
-       *   有上游且齐平    → 「本地和上游一致」。
-       * 上游有新的（unpulled）单独提示一句，动作在分支下拉的「更新项目」里。
-       */
-      const up = state.upstream;
-      const n = Number(state.unpushed ?? 0);
-      const down = Number(state.unpulled ?? 0);
-      let tip;
-      let btn = '';
-      if (n > 0) {
-        tip = `工作区是干净的 —— 但当前分支有 <b>${n}</b> 个提交还没推送`;
-        btn = '<button type="button" class="mini auto" id="grPushNow">推送</button>';
-      } else if (!up) {
-        tip = '工作区是干净的 —— 这条分支还没有上游（还没推过，或远端分支已删）';
-        btn = '<button type="button" class="mini auto" id="grPushNow">推送</button>';
-      } else {
-        tip = `工作区是干净的 —— 本地和上游 <b>${esc(up)}</b> 一致`;
+    /*
+     * 推送区（2026-10-29 用户："提交下面加一个推送区，展示没有推送的提交"）：
+     * 光一句"N 个提交还没推送"不够，要把**是哪几个**摆出来（历史卡同款行：sha + 说明 + 作者·时间），
+     * 推送按钮钉在区块标题行右侧。工作区干净 / 有脏文件两种形态下都常驻 —— 未推提交和未提交改动经常同时存在。
+     * 上游有新的（unpulled）单独提示一句，动作在分支下拉的「更新项目」里。
+     */
+    const up = state.upstream;
+    const nUnpushed = Number(state.unpushed ?? 0);
+    const unpushedList = state.unpushedCommits ?? [];
+    const pushRow = (c) => `<div class="gr-log-row" title="${esc(c.sha)} ${esc(c.subject)}">
+        <span class="gr-log-sha">${esc(c.sha)}</span>
+        <span class="gr-log-sub">${esc(c.subject)}</span>
+        <span class="gr-log-who">${esc(c.author)} · ${esc(String(c.date ?? '').slice(5, 16))}</span>
+      </div>`;
+    const pushBtn = '<button type="button" class="mini auto" id="grPushNow">推送</button>';
+    const pushZone = () => {
+      if (nUnpushed > 0 && unpushedList.length) {
+        return `<div class="gr-push-zone">
+          <div class="gr-push-head"><span><b>${nUnpushed}</b> 个提交还没推送</span><span style="flex:1"></span>${pushBtn}</div>
+          <div class="gr-push-list">${unpushedList.map(pushRow).join('')}${nUnpushed > unpushedList.length ? `<div class="gr-log-row"><span class="dim">…另有 ${nUnpushed - unpushedList.length} 个</span></div>` : ''}</div>
+        </div>`;
       }
-      const behindTip = down > 0 ? `<span class="dim">上游还有 ${down} 个新提交（分支下拉里点「更新项目」）</span>` : '';
-      box.innerHTML = `<div class="sk-blank">${tip}${behindTip}${btn ? '<span style="flex:1"></span>' + btn : ''}</div>`;
+      if (nUnpushed > 0) return `<div class="sk-blank">当前分支有 <b>${nUnpushed}</b> 个提交还没推送<span style="flex:1"></span>${pushBtn}</div>`;
+      if (!up) return `<div class="sk-blank">这条分支还没有上游（还没推过，或远端分支已删）<span style="flex:1"></span>${pushBtn}</div>`;
+      return `<div class="sk-blank">本地和上游 <b>${esc(up)}</b> 一致${dirty.length ? '' : ' —— 都同步完了'}</div>`;
+    };
+    const bindPush = () => {
       $('grPushNow')?.addEventListener('click', async (e) => {
         const b = e.currentTarget;
         b.disabled = true;
@@ -1529,6 +1531,12 @@ export async function renderGitRepos(root = $('pluginView')) {
           toast(err.message, 'error');
         }
       });
+    };
+    if (!dirty.length) {
+      const down = Number(state.unpulled ?? 0);
+      const behindTip = down > 0 ? `<div class="sk-blank">上游还有 ${down} 个新提交（分支下拉里点「更新项目」）</div>` : '';
+      box.innerHTML = behindTip + pushZone();
+      bindPush();
       return;
     }
     /* 两组折叠（2026-10-27，用户指 VS Code 源代码管理截图："加两个可以折叠的标题"）：
@@ -1580,7 +1588,8 @@ export async function renderGitRepos(root = $('pluginView')) {
             <button type="button" class="primary" id="grCommitBtn">${onBase ? '建分支并提交' : '提交'}</button>
           </div>
         </div>
-      </div>`;
+      </div>${pushZone()}`;
+    bindPush();
 
     /* 组头选择框 = 三态全选（全勾 / 全不勾 / 半选）；行选择框记进 chgUnsel。
        状态以 DOM 为准算，别自己记账 —— 刷新后重画，勾选只存「没勾」的那一半。 */

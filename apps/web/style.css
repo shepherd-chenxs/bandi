@@ -2126,6 +2126,13 @@ dialog#repoPrDlg { width: 660px; height: min(720px, 92vh); max-height: 92vh;
 /* 历史卡：sha 等宽、主题吃满、作者/时间靠右降灰 */
 /* 历史卡固定高度（2026-10-27，用户："历史卡片固定高度"）：提交多了卡内滚，不再撑长整页。 */
 #grLog { height: 380px; overflow-y: auto; }
+/* 推送区（2026-10-29 用户："提交下面加一个推送区，展示没有推送的提交"）：
+   标题行（个数 + 推送钮钉右）+ 提交清单（复用 .gr-log-row 的行形与分隔线）。 */
+.gr-push-zone { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.gr-push-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+                font-size: 12.5px; color: var(--text); background: var(--side); }
+.gr-push-head b { color: var(--text); }
+.gr-push-list { border-top: 1px solid var(--line); }
 .gr-log-row { display: flex; align-items: baseline; gap: 10px; padding: 6px 12px; min-width: 0; }
 .gr-log-row + .gr-log-row { border-top: 1px solid var(--line); }
 .gr-log-sha { flex: 0 0 auto; font-family: ui-monospace, monospace; font-size: 11.5px; color: var(--accent); }

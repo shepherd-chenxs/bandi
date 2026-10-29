@@ -1610,6 +1610,7 @@ export async function workState(row) {
   let upstream = null;
   let unpushed = null;
   let unpulled = null;
+  let unpushedCommits = [];
   if (branch) {
     const up = await gitIn(cwd, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
     if (up.code === 0 && up.out) {
@@ -1618,6 +1619,15 @@ export async function workState(row) {
       if (a.code === 0) unpushed = Number(a.out) || 0;
       const b = await gitIn(cwd, ['rev-list', '--count', 'HEAD..@{u}']);
       if (b.code === 0) unpulled = Number(b.out) || 0;
+      // 推送区要展示的清单（2026-10-29 用户："提交下面加一个推送区，展示没有推送的提交"）：
+      // 跟「历史」卡同款格式（sha / 作者 / 时间 / 说明），上限 20 条，多出来的只报数
+      const ul = await gitIn(cwd, ['log', '--max-count=20', '--date=iso-local', '--pretty=format:%h%x09%an%x09%ad%x09%s', '@{u}..HEAD']);
+      if (ul.code === 0) {
+        unpushedCommits = ul.out.split('\n').filter(Boolean).map((line) => {
+          const [sha, author, date, ...rest] = line.split('\t');
+          return { sha, author, date, subject: rest.join('\t') };
+        });
+      }
     }
   }
 
@@ -1635,6 +1645,7 @@ export async function workState(row) {
     behind,
     upstream,
     unpushed,
+    unpushedCommits,
     unpulled,
     dirty,
     dirtyCount: dirty.length,
