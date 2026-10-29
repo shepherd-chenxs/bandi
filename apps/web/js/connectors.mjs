@@ -4,7 +4,7 @@ import { esc, toast } from './shell.mjs';
 import { api, failHtml, initial, post } from './ui.mjs';
 import { setNav } from './state.mjs';
 import { openSettings } from './settings.mjs';
-import { confirmDo, mountJoinPanel, renderCliDetail, renderDeviceDetail, rich } from './machine.mjs';
+import { confirmDo, mountJoinPanel, renderBackupSection, renderCliDetail, renderDeviceDetail, rich } from './machine.mjs';
 import { renderList } from './contacts.mjs';
 import { openProjectsPage, openTaskBoard } from './projects.mjs';
 import { openPlugins } from './experts.mjs';
@@ -804,7 +804,7 @@ export async function renderRuntimes() {
    「接入总机」是页面最底一节（只在单机档出现）。**2026-10-28 形态降级**：多机协同不再是产品主线
    （docs/design/2026-10-28-形态降级-单机加隧道-方案.md），这一节收进默认收起的「多机协同（实验）」
    分节、标「实验」—— 不删代码，观察期后再决定去留。
-   备份挪去独立的「数据备份」分节，这页不再摆本机数据和导出。 */
+   备份/导出导入 2026-10-29 起也长回这页底下（「数据管理」区，见 dmMount）。 */
 
 /* 设备行（总机的设备区）：远程节点多一枚「在线/离线」+ 排队数 —— 行的骨架与本地完全一致 */
 export const deviceRowHtml = (dev) => {
@@ -890,6 +890,10 @@ export async function renderDeviceList() {
       <div id="modeMount"></div>
       <div id="devMount"></div>
       <div id="joinSlot"></div>
+      <!-- 「数据管理」区（2026-10-29 从设置独立分节降级成这页的一个区，用户："把数据管理
+           作为这台机器的一个区域"）：不跟模式走 —— 模式切换只重画上面两块，这里原地不动。
+           数据自己拉（状态 + backups 列表），拉完才画，失败各有兜底。 -->
+      <div id="dmMount"></div>
     </div>`;
 
   /* 模式节单独渲染：只重画 #modeMount 这一小块（整页重写是切换闪烁的根源）。
@@ -1006,6 +1010,9 @@ export async function renderDeviceList() {
   };
   renderMode();
   renderBody();
+  /* 数据管理区：进页挂一次（renderBody 换模式重画时不动它 —— 里面的导出/导入
+     按钮和快照列表跟模式无关，重挂反而白拉一遍接口） */
+  renderBackupSection($('dmMount'));
 }
 
 

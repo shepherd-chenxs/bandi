@@ -1,9 +1,11 @@
 /*
- * feishu.mjs —— 飞书通道（2026-10-27）。
+ * feishu.mjs —— 飞书通道，**员工级**（2026-10-29 用户定稿：一个数字员工对应一个飞书自建应用，
+ * 对齐 Multica 的做法；此前的「平台级单通道 + 私聊绑定 p2pPersonaId」形态整体退役）。
  *
- * 干什么：在飞书里给数字员工派活 —— 私聊机器人 = 找**绑定的员工**（设置页可挑，
- * 没挑或挑的人没了就落到系统管家）；群里发 `@员工名 做某事` = 派给那个员工。每条指令回一张**可更新的互动卡片**，
- * 随 run 推进（思考中 / 调工具 / 收尾）刷新，跑完落最终结果。
+ * 干什么：每个员工自己的应用 = 自己的 App ID / App Secret、自己的一条长连接、自己的白名单。
+ * 私聊某个员工的机器人 = 直接找那个员工（不再有"绑定"概念）；群里 **@机器人自己** 才响应，
+ * 剔掉 @自己 后的正文派给自己的员工 —— @别的员工名不归这个 bot 管（那个人有自己的 bot）。
+ * 每条指令回一张**可更新的互动卡片**，随 run 推进（思考中 / 调工具 / 收尾）刷新，跑完落最终结果。
  *
  * 为什么是**出站 WebSocket 客户端**：飞书事件订阅有长连接模式 —— 我们主动连它，
  * 不需要公网回调地址。班底只听 127.0.0.1、自托管无 HTTPS，webhook 根本没法收，
@@ -21,8 +23,11 @@
  *   · 断线重连带随机抖动、按服务端下发的次数上限。
  * WebSocket 客户端用 Node 22 自带的全局 WebSocket。
  *
- * 凭据口径（对齐 imagegen / git-token）：存数据目录 `feishu.json`（0600 尽力），
- * **不进库、不进日志、不回显**，接口只回掩码；保存时 secret 留空 = 保留原值。
+ * 存储口径（对齐 imagegen / git-token）：存数据目录 `feishu-apps.json`（0600 尽力），
+ * 结构 `{ [personaId]: { appId, appSecret, enabled, allowOpenIds } }` —— **不进库、不进日志、
+ * 不回显**，接口只回掩码；保存时 secret 留空 = 保留原值。
+ * 旧的单通道 `feishu.json` 启动时迁移一次（落到 p2pPersonaId 指向的员工，没人就落系统管家），
+ * 迁完改名 `feishu.json.migrated.bak` 留底，见 migrateLegacyConfig()。
  *
  * 派活链路完全复用现成的：`persona-task.mjs` 的形状 —— 建/复用会话 →
  * `dispatchToThread`；撞 busy 换 `dispatchEventToThread` 落库排队等补派。
@@ -33,7 +38,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { dataDir } from './config.mjs';
 import * as store from './store.mjs';
-import { dispatchToThread, dispatchEventToThread, parseMentions } from './dispatch.mjs';
+import { dispatchToThread, dispatchEventToThread } from './dispatch.mjs';
 import { STEWARD_ID } from './steward.mjs';
 import { applyRunEvent, createRunProgress, progressView } from '../../web/js/run-progress.mjs';
 
@@ -46,7 +51,10 @@ const APP_ID_RE = /^cli_[0-9a-fA-F]{16}$/;
 
 const fail = (message, code) => Object.assign(new Error(message), { code });
 
-const cfgFile = () => process.env.BANDI_FEISHU ?? path.join(dataDir, 'feishu.json');
+/** 旧平台级配置（单通道）：只读，迁移完改名留底 */
+const legacyCfgFile = () => process.env.BANDI_FEISHU ?? path.join(dataDir, 'feishu.json');
+/** 员工级配置：personaId → { appId, appSecret, enabled, allowOpenIds } */
+const appsFile = () => process.env.BANDI_FEISHU_APPS ?? path.join(dataDir, 'feishu-apps.json');
 const linksFile = () => process.env.BANDI_FEISHU_LINKS ?? path.join(dataDir, 'feishu-links.json');
 
 function readJson(file) {
@@ -67,15 +75,23 @@ function writeJson(file, obj, secret = false) {
   }
 }
 
-export function readRawConfig() {
-  const raw = readJson(cfgFile());
+function readApps() {
+  return readJson(appsFile());
+}
+
+function writeApps(obj) {
+  writeJson(appsFile(), obj, true);
+}
+
+/** 一个员工的原始配置（原文 secret，只在服务端内部流转，永不回给界面/日志） */
+function readPersonaRawConfig(personaId) {
+  const raw = readApps()[personaId] ?? {};
   const ids = Array.isArray(raw.allowOpenIds) ? raw.allowOpenIds.map(String).filter(Boolean) : [];
   return {
     appId: String(raw.appId ?? '').trim(),
     appSecret: String(raw.appSecret ?? ''),
     enabled: raw.enabled === true,
     allowOpenIds: ids,
-    p2pPersonaId: String(raw.p2pPersonaId ?? '').trim(),
   };
 }
 
@@ -87,31 +103,63 @@ function secretHint(t) {
   return `${s.slice(0, 2)}${'*'.repeat(18)}${s.slice(-4)}`;
 }
 
-/** 给界面/路由看的快照：**永不回显原文**。p2pPersonaId 回的是**生效值**（没绑/绑的没了 → 系统管家） */
-export function configSnapshot() {
-  const cfg = readRawConfig();
+/** 给界面/路由看的快照：**永不回显原文** */
+export function personaConfigSnapshot(personaId) {
+  const cfg = readPersonaRawConfig(personaId);
   return {
     configured: !!(cfg.appId && cfg.appSecret),
     appId: cfg.appId,
     appSecretHint: secretHint(cfg.appSecret),
     enabled: cfg.enabled,
     allowOpenIds: cfg.allowOpenIds,
-    p2pPersonaId: p2pPersona(cfg)?.id ?? '',
   };
 }
 
-/** 私聊绑到谁：配置里挑的人还在就用他，否则落到系统管家 */
-function p2pPersona(cfg) {
-  return (cfg.p2pPersonaId && store.getPersona(cfg.p2pPersonaId)) || store.getPersona(STEWARD_ID) || null;
+/**
+ * 旧配置迁移（2026-10-29 员工级改造）：启动时若旧 `feishu.json` 存在且有 appId+appSecret，
+ * 把它迁到 p2pPersonaId 指向的员工（那人不在就落系统管家），旧文件改名 `.migrated.bak`
+ * 留底不删。**幂等**：.bak 已存在就不再迁 —— 迁移是一次性的事，反复迁会把用户后来
+ * 改的员工级配置用旧值盖掉。
+ */
+export function migrateLegacyConfig() {
+  const bak = `${legacyCfgFile()}.migrated.bak`;
+  if (fs.existsSync(bak)) return null;
+  const legacy = readJson(legacyCfgFile());
+  if (!legacy.appId || !legacy.appSecret) return null; // 没配过或半截配置：没什么可迁的
+  const target =
+    (legacy.p2pPersonaId && store.getPersona(legacy.p2pPersonaId)) || store.getPersona(STEWARD_ID);
+  if (!target) return null; // 连系统管家都不在（几乎不可能）：不动旧文件，下次启动再试
+  const apps = readApps();
+  const ids = Array.isArray(legacy.allowOpenIds) ? legacy.allowOpenIds.map(String).filter(Boolean) : [];
+  apps[target.id] = {
+    appId: String(legacy.appId).trim(),
+    appSecret: String(legacy.appSecret ?? ''),
+    enabled: legacy.enabled === true,
+    allowOpenIds: ids,
+  };
+  writeApps(apps);
+  try {
+    fs.renameSync(legacyCfgFile(), bak);
+  } catch {
+    // rename 失败（跨盘/占用）：退化为"写 .bak + 删旧文件"，同样保证不重复迁
+    writeJson(bak, legacy, true);
+    try {
+      fs.unlinkSync(legacyCfgFile());
+    } catch { /* 删不掉也没关系：.bak 在，幂等闸守得住 */ }
+  }
+  console.log(`[飞书] 旧的平台级配置已迁移给员工「${target.name}」（${target.id}），旧文件留底 ${path.basename(bak)}`);
+  return target.id;
 }
 
 /**
- * 保存。appSecret 语义与 imagegen 一致：**键存在且非空才覆盖**（留空 = 保留原值），
- * 改白名单不用重贴 secret。allowOpenIds 收的是字符串数组或逗号/空白分隔的一段。
- * p2pPersonaId 同一条纪律：键不给 = 保留原值；给了就校验员工在不在（空串 = 回到系统管家）。
+ * 保存一个员工的配置。appSecret 语义与 imagegen 一致：**键存在且非空才覆盖**
+ * （留空 = 保留原值），改白名单不用重贴 secret。allowOpenIds 收字符串数组或
+ * 逗号/空白分隔的一段。员工必须存在（E2067）。
  */
-export function saveConfig({ appId, appSecret, enabled, allowOpenIds, p2pPersonaId } = {}) {
-  const prev = readRawConfig();
+export function savePersonaConfig(personaId, { appId, appSecret, enabled, allowOpenIds } = {}) {
+  if (!store.getPersona(personaId)) throw fail('员工不存在（可能已被删）', 'E2067');
+  const apps = readApps();
+  const prev = readPersonaRawConfig(personaId);
   const next = {
     appId: String(appId ?? prev.appId ?? '').trim(),
     appSecret: appSecret ? String(appSecret) : prev.appSecret,
@@ -119,35 +167,19 @@ export function saveConfig({ appId, appSecret, enabled, allowOpenIds, p2pPersona
     allowOpenIds: Array.isArray(allowOpenIds)
       ? allowOpenIds.map((s) => String(s).trim()).filter(Boolean)
       : prev.allowOpenIds,
-    p2pPersonaId: p2pPersonaId === undefined ? prev.p2pPersonaId : String(p2pPersonaId ?? '').trim(),
   };
   if (!next.appId || !next.appSecret) throw fail('App ID 和 App Secret 都得填', 'E2061');
   if (!APP_ID_RE.test(next.appId)) throw fail('App ID 不对 —— 它长这样：cli_ 加 16 位十六进制', 'E2062');
-  if (next.p2pPersonaId && !store.getPersona(next.p2pPersonaId)) {
-    throw fail('要绑定的员工不存在（可能已被删）', 'E2067');
-  }
-  writeJson(cfgFile(), next, true);
+  const credsChanged = next.appId !== prev.appId || next.appSecret !== prev.appSecret;
+  apps[personaId] = next;
+  writeApps(apps);
+  // 凭据换了而通道还开着：旧连接挂在旧应用上没有任何意义，停掉 ——
+  // 路由层紧接着 enabled ? start : stop，start 会用新凭据重连
+  if (credsChanged && !channels.get(personaId)?.closed) stopPersona(personaId);
   return next;
 }
 
-/** 凭据齐不齐、格式对不对。通过返回 null，不通过返回人话（给路由直接用） */
-export function validateCredentials() {
-  const cfg = readRawConfig();
-  if (!cfg.appId || !cfg.appSecret) return 'App ID 和 App Secret 都得填';
-  if (!APP_ID_RE.test(cfg.appId)) return 'App ID 不对 —— 它长这样：cli_ 加 16 位十六进制';
-  return null;
-}
-
 /* --------------------------------------------------- 飞书 chat ↔ 班底会话 的桥 */
-
-/** 飞书群里的 @员工名 → 哪个员工。匹配逻辑复用 dispatch.parseMentions（按名字长度倒序） */
-function matchPersonaMentions(text) {
-  const personas = store.listPersonas().filter((p) => p?.name);
-  const hits = parseMentions(text, personas);
-  let rest = text;
-  for (const p of hits) rest = rest.split('@' + p.name).join(' ');
-  return { hits, text: rest.replace(/\s+/g, ' ').trim() };
-}
 
 /** 群里 @了人 → 那个人的**专属会话**（一个飞书群 × 一个员工 = 一条，删了自动重建） */
 function ensureGroupConversation(chatId, persona) {
@@ -165,12 +197,12 @@ function ensureGroupConversation(chatId, persona) {
 }
 
 /** 第一次收到某个群的消息时，问飞书要一次群名（之后缓存在 links 里） */
-async function rememberChatName(chatId) {
+async function rememberChatName(ch, chatId) {
   const links = readJson(linksFile());
   const keys = Object.keys(links).filter((k) => k.startsWith(`${chatId}:`));
   if (keys.length && links[keys[0]]?.chatName) return;
   try {
-    const j = await feishuApi('GET', `/im/v1/chats/${encodeURIComponent(chatId)}`);
+    const j = await feishuApi('GET', `/im/v1/chats/${encodeURIComponent(chatId)}`, undefined, ch);
     const name = String(j?.data?.name ?? '').trim();
     if (!name) return;
     const next = { ...links };
@@ -180,11 +212,48 @@ async function rememberChatName(chatId) {
   } catch { /* 要不到名字就用 id 兜底，不拦派活 */ }
 }
 
-/* --------------------------------------------------------------- 连接状态 */
+/* --------------------------------------------------------------- 通道（每员工一份） */
 
-const conn = { state: 'stopped', lastError: '', startedAt: null, lastEventAt: null, connectedAt: null };
-export function channelStatus() {
-  return { ...conn, enabled: readRawConfig().enabled, configured: !validateCredentials() };
+/*
+ * 2026-10-29 员工级改造：此前的模块级单例（ws/closed/generation/timers/…）收进
+ * channel 工厂 —— 一个 personaId 一份互不干扰的连接状态，模块级 Map 管理。
+ * 协议编解码、分片去重（fragments/seenEvents）是**消息内容**的事，跟"哪条通道"无关，保持模块级。
+ */
+const channels = new Map(); // personaId → channel
+
+function makeChannel(personaId) {
+  return {
+    personaId,
+    ws: null,
+    closed: true,
+    generation: 0,
+    pingTimer: null,
+    reconnectTimer: null,
+    wsCfg: { url: '', serviceId: 0, pingInterval: 30000, reconnectCount: -1, reconnectInterval: 5000, reconnectNonce: 0 },
+    conn: { state: 'stopped', lastError: '', startedAt: null, lastEventAt: null, connectedAt: null },
+    tokenCache: { token: '', expiresAt: 0 },
+    botIdCache: null,
+  };
+}
+
+/** 取（或建）一个员工的通道状态包。测试连接也会用到，不必先 start */
+function channelOf(personaId) {
+  let ch = channels.get(personaId);
+  if (!ch) {
+    ch = makeChannel(personaId);
+    channels.set(personaId, ch);
+  }
+  return ch;
+}
+
+export function personaChannelStatus(personaId) {
+  const cfg = readPersonaRawConfig(personaId);
+  const ch = channels.get(personaId);
+  return {
+    ...(ch?.conn ?? { state: 'stopped', lastError: '', startedAt: null, lastEventAt: null, connectedAt: null }),
+    enabled: cfg.enabled,
+    configured: !!(cfg.appId && cfg.appSecret),
+  };
 }
 
 /* --------------------------------------------------------- protobuf 编解码 */
@@ -305,7 +374,8 @@ export function decodeFrame(bytes) {
 
 /** 分片缓存：message_id → {buffer: Array(sum), at}。10 秒没拼齐就丢（与官方 SDK 同口径） */
 const fragments = new Map();
-/** event_id 去重：飞书是 at-least-once，ack 迟了会被重推 */
+/** event_id 去重：飞书是 at-least-once，ack 迟了会被重推。所有通道共用一份 ——
+ *  event_id 是飞书全局的，各应用的事件不会撞号，合着去重不亏 */
 const seenEvents = new Map();
 
 function mergeFragments(headers, payload) {
@@ -333,10 +403,8 @@ function pruneCaches() {
 
 /* ------------------------------------------------------------- 飞书 API 客户端 */
 
-let deps = null; // { fetchImpl, WSCtor } —— start() 时注入，测试换假件
+let deps = null; // { fetchImpl, WSCtor } —— startPersona() 时注入，测试换假件
 const theFetch = (...a) => (deps?.fetchImpl ?? fetch)(...a);
-
-let tokenCache = { token: '', expiresAt: 0 };
 
 /** 凭据被拒时按错误码给一句能照做的话（21001 是实测踩过的：应用没发布上线/被管理后台策略拦） */
 function tokenDenialHint(code) {
@@ -345,11 +413,12 @@ function tokenDenialHint(code) {
   return '';
 }
 
-/** tenant_access_token：自建应用拿应用身份的唯一一步，缓存到过期前 2 分钟 */
-export async function tenantToken() {
-  const cfg = readRawConfig();
+/** tenant_access_token：自建应用拿应用身份的唯一一步，缓存到过期前 2 分钟。
+ *  每次都从盘上重读凭据 —— 保存新 Secret 后旧令牌缓存不该再被复用 */
+async function tenantToken(ch) {
+  const cfg = readPersonaRawConfig(ch.personaId);
   if (!cfg.appId || !cfg.appSecret) throw fail('App ID 和 App Secret 都得填', 'E2061');
-  if (tokenCache.token && Date.now() < tokenCache.expiresAt) return tokenCache.token;
+  if (ch.tokenCache.token && Date.now() < ch.tokenCache.expiresAt) return ch.tokenCache.token;
   const r = await theFetch(`${DOMAIN}/open-apis/auth/v3/tenant_access_token/internal`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -360,16 +429,16 @@ export async function tenantToken() {
   if (j?.code !== 0 || !j?.tenant_access_token) {
     throw fail(`飞书不肯发令牌：code=${j?.code} ${String(j?.msg ?? '').slice(0, 160)}${tokenDenialHint(j?.code)}`, 'E2064');
   }
-  tokenCache = { token: j.tenant_access_token, expiresAt: Date.now() + (Number(j.expire ?? 3600) - 120) * 1000 };
-  return tokenCache.token;
+  ch.tokenCache = { token: j.tenant_access_token, expiresAt: Date.now() + (Number(j.expire ?? 3600) - 120) * 1000 };
+  return ch.tokenCache.token;
 }
 
-/** 带鉴权的飞书 OpenAPI 调用；401 类错误清一次令牌缓存重试。
+/** 带鉴权的飞书 OpenAPI 调用（用 ch 这条通道的凭据）；401 类错误清一次令牌缓存重试。
  *  路径统一从这里补 `/open-apis` 前缀（调用方只写 `/im/v1/...` 这一级）——
  *  2026-10-28 实测踩过：前缀漏了网关回 404 "404 page not found"（非 JSON），令牌却是好的，极具迷惑性。
  *  报错带 HTTP 状态码和原文片段——飞书偶尔回非标准 JSON（HTML 错误页/空体），
  *  不记原文的话日志里只剩一个看不懂的 code=undefined。 */
-async function feishuApi(method, pathWithQuery, body) {
+async function feishuApi(method, pathWithQuery, body, ch) {
   const call = async (token) =>
     theFetch(`${DOMAIN}/open-apis${pathWithQuery}`, {
       method,
@@ -377,15 +446,15 @@ async function feishuApi(method, pathWithQuery, body) {
       body: body == null ? undefined : JSON.stringify(body),
       signal: AbortSignal.timeout(15000),
     });
-  let r = await call(await tenantToken());
+  let r = await call(await tenantToken(ch));
   let text = await r.text().catch(() => '');
   let j = null;
   try {
     j = JSON.parse(text);
   } catch { /* 非 JSON：错误信息里带原文 */ }
   if (j?.code === 99991663 || j?.code === 99991661) {
-    tokenCache = { token: '', expiresAt: 0 };
-    r = await call(await tenantToken());
+    ch.tokenCache = { token: '', expiresAt: 0 };
+    r = await call(await tenantToken(ch));
     text = await r.text().catch(() => '');
     j = null;
     try {
@@ -400,18 +469,18 @@ async function feishuApi(method, pathWithQuery, body) {
 }
 
 /** 给一个飞书会话（chat_id）发一张互动卡片，回 message_id（后面 PATCH 更新它） */
-async function sendCard(chatId, card) {
+async function sendCard(ch, chatId, card) {
   const j = await feishuApi('POST', '/im/v1/messages?receive_id_type=chat_id', {
     receive_id: chatId,
     msg_type: 'interactive',
     content: JSON.stringify(card),
-  });
+  }, ch);
   return j?.data?.message_id ?? null;
 }
 
 /** 更新已发出的卡片内容（飞书允许改卡片，不允许改普通消息） */
-async function updateCard(messageId, card) {
-  await feishuApi('PATCH', `/im/v1/messages/${encodeURIComponent(messageId)}`, { content: JSON.stringify(card) });
+async function updateCard(ch, messageId, card) {
+  await feishuApi('PATCH', `/im/v1/messages/${encodeURIComponent(messageId)}`, { content: JSON.stringify(card) }, ch);
 }
 
 /* --------------------------------------------------------------- 卡片样式 */
@@ -463,13 +532,15 @@ function fmtMs(ms) {
  * 不挂 runs.onRunFinish 钩子是因为轮询自己就能看到终止事件 `__done`，
  * 一个机制管全程，不用两头接。服务重启会丢跟踪（卡片停在最后一次刷新），
  * 与群排队同口径：要"必须不丢"的活走任务卡，不在这儿。
+ * entry 里记下 ch（派活那条通道）：卡片发送要走**对应员工的凭据**（2026-10-29 员工级）。
  */
 const POLL_MS = 4000;
 const tracked = new Map(); // runId → entry
 
-function trackRun({ run, chatId, personaName, instruction }) {
+function trackRun({ ch, run, chatId, personaName, instruction }) {
   if (!run?.id || tracked.size > 200) return;
   const entry = {
+    ch,
     chatId,
     personaName,
     instruction,
@@ -485,7 +556,7 @@ function trackRun({ run, chatId, personaName, instruction }) {
   };
   tracked.set(run.id, entry);
   // 先发初始卡；message_id 回来才开始 PATCH（发失败就只留日志，不拦派活本身）
-  sendCard(chatId, buildCard({ personaName, status: '进行中', detail: progressDetail(instruction, progressView(entry.state)) }))
+  sendCard(ch, chatId, buildCard({ personaName, status: '进行中', detail: progressDetail(instruction, progressView(entry.state)) }))
     .then((id) => {
       entry.messageId = id;
       entry.lastSentAt = Date.now();
@@ -523,7 +594,7 @@ async function pollRun(runId) {
       let detail = `**指令**：${clip(entry.instruction, 200)}\n`;
       if (status === '已完成') detail += `**结果**：\n${clip(entry.finalText, 800) || '（没有正文，到会话里看）'}`;
       else detail += `**原因**：${clip(entry.finalError || entry.finalText || entry.state.error || '到会话里看详情', 400)}`;
-      await updateCard(entry.messageId, buildCard({ personaName: entry.personaName, status, detail }));
+      await updateCard(entry.ch, entry.messageId, buildCard({ personaName: entry.personaName, status, detail }));
       return;
     }
     // 还在跑：状态有变化才刷，且至少隔 3 秒（别追着飞书限频跑）
@@ -534,7 +605,7 @@ async function pollRun(runId) {
     entry.lastSentAt = Date.now();
     entry.sending = true;
     try {
-      await updateCard(entry.messageId, buildCard({ personaName: entry.personaName, status: '进行中', detail: progressDetail(entry.instruction, view) }));
+      await updateCard(entry.ch, entry.messageId, buildCard({ personaName: entry.personaName, status: '进行中', detail: progressDetail(entry.instruction, view) }));
     } finally {
       entry.sending = false;
     }
@@ -545,31 +616,36 @@ async function pollRun(runId) {
 
 /* ------------------------------------------------------------ 消息 → 派活 */
 
-/** 机器人自己的 open_id（/bot/v3/info，问一次缓存一辈子；要不到就空 —— 剔除只是锦上添花） */
-let botIdCache = null;
-async function botOpenId() {
-  if (botIdCache !== null) return botIdCache;
+/** 机器人自己的 open_id（/bot/v3/info，问一次缓存一辈子；要不到就空 —— 剔除只是锦上添花）。
+ *  员工级后每个应用有自己的 bot，缓存挂在各自的 ch 上 */
+async function botOpenId(ch) {
+  if (ch.botIdCache !== null) return ch.botIdCache;
   try {
-    const j = await feishuApi('GET', '/bot/v3/info');
-    botIdCache = String(j?.bot?.open_id ?? '');
+    const j = await feishuApi('GET', '/bot/v3/info', undefined, ch);
+    ch.botIdCache = String(j?.bot?.open_id ?? '');
   } catch (e) {
-    botIdCache = '';
+    ch.botIdCache = '';
     console.warn(`[飞书] 取机器人 open_id 失败：${e?.message ?? e}`);
   }
-  return botIdCache;
+  return ch.botIdCache;
 }
 
-/** 一条飞书消息进班底：路由 → 派活 → 开卡跟踪 */
-async function handleFeishuMessage(event) {
+/** 一条飞书消息进班底：路由 → 派活 → 开卡跟踪。
+ *  路由语义（2026-10-29 员工级定稿）：
+ *    · 私聊 → 直接派给这条通道对应的员工（不再有 p2pPersonaId）；
+ *    · 群聊 → 只在 @机器人自己 时响应（open_id 匹配），@别的员工名不归这个 bot 管 ——
+ *      那个员工有自己的 bot，会由他自己的通道响应；旧"按员工名匹配 @ mention"的群路由删掉。
+ */
+async function handleFeishuMessage(ch, event) {
   const msg = event.message ?? {};
-  console.log(`[飞书] 收到${msg.chat_type === 'p2p' ? '私聊' : '群'}消息（类型 ${msg.message_type}）`);
+  console.log(`[飞书] 收到${msg.chat_type === 'p2p' ? '私聊' : '群'}消息（类型 ${msg.message_type}，员工 ${ch.personaId}）`);
   const sender = event.sender ?? {};
   const chatId = String(msg.chat_id ?? '');
   const chatType = String(msg.chat_type ?? '');
   if (!chatId) return;
 
   // 白名单（open_id 列表）：空 = 不限制。非白名单的人发话一律无视
-  const cfg = readRawConfig();
+  const cfg = readPersonaRawConfig(ch.personaId);
   const openId = String(sender?.sender_id?.open_id ?? '');
   if (cfg.allowOpenIds.length && (!openId || !cfg.allowOpenIds.includes(openId))) {
     console.log(`[飞书] ${openId || '未知用户'} 不在白名单里，忽略`);
@@ -580,7 +656,7 @@ async function handleFeishuMessage(event) {
   if (msg.message_type !== 'text') {
     if (chatType === 'p2p') {
       try {
-        await sendCard(chatId, plainCard('收到的是图片/文件/富文本 —— 派活请发**文字**'));
+        await sendCard(ch, chatId, plainCard('收到的是图片/文件/富文本 —— 派活请发**文字**'));
       } catch { /* 尽力而为 */ }
     }
     return;
@@ -593,32 +669,25 @@ async function handleFeishuMessage(event) {
     return;
   }
   if (!text.trim()) return;
-  // 飞书的 @ 在正文里是 @_user_N 占位符，换成看得懂的名字；**机器人自己的 @ 剔掉**
-  //（群里 "机器人 @大梁 干活" 这句话给员工的正文不该带着 @机器人 的噪音）
-  const botId = await botOpenId();
+  // 飞书的 @ 在正文里是 @_user_N 占位符：@机器人自己 的剔掉（正文不该带这噪音），
+  // 别人的占位符换成看得懂的名字。群里没 @ 到机器人自己 → 这条不归我们，直接无视
+  const botId = await botOpenId(ch);
+  let mentionedBot = false;
   for (const m of Array.isArray(msg.mentions) ? msg.mentions : []) {
     if (!m?.key) continue;
     const isBot = !!botId && String(m?.id?.open_id ?? '') === botId;
+    if (isBot) mentionedBot = true;
     text = text.split(m.key).join(isBot ? ' ' : '@' + String(m.name ?? ''));
   }
   text = text.replace(/[ \t]+/g, ' ').trim();
+  if (chatType !== 'p2p' && !mentionedBot) return; // 群里 @ 的是别人（别的员工的 bot / 真人）→ 不响应
   if (!text) return;
 
-  // 路由：私聊 → 绑定的员工（没绑/绑的没了 → 系统管家）；群 → @了谁谁干活，没 @（或没匹配到员工）不响应
-  let persona = null;
-  if (chatType === 'p2p') {
-    persona = p2pPersona(cfg);
-    if (!persona) {
-      console.warn('[飞书] 私聊找不到要派给的人（系统管家也不在了），派不了活');
-      return;
-    }
-  } else {
-    if (!text.includes('@')) return;
-    const { hits, text: rest } = matchPersonaMentions(text);
-    if (!hits.length) return; // 群里只响应 @员工名
-    persona = hits[0];
-    text = rest || text; // 只 @ 了没说事：把原文给它（至少留个痕）
-    await rememberChatName(chatId); // 第一次见到这个群时问一次群名，之后走缓存
+  // 派给这条通道自己的员工。员工不在了（通道还没来得及被 removePersona 收掉）→ 派不了
+  const persona = store.getPersona(ch.personaId);
+  if (!persona) {
+    console.warn(`[飞书] 员工 ${ch.personaId} 已不存在，消息派不出去`);
+    return;
   }
 
   if (chatType === 'p2p') {
@@ -629,21 +698,23 @@ async function handleFeishuMessage(event) {
     }
     try {
       const { run } = dispatchToThread(conversationId, text, {});
-      trackRun({ run, chatId, personaName: persona.name, instruction: text });
+      trackRun({ ch, run, chatId, personaName: persona.name, instruction: text });
     } catch (e) {
       if (e?.code !== 'busy') throw e;
-      await queueBusyInstruction({ conversationId, persona, text, chatId });
+      await queueBusyInstruction({ ch, conversationId, persona, text, chatId });
     }
   } else {
-    await dispatchGroupInstruction({ persona, text, chatId });
+    await rememberChatName(ch, chatId); // 第一次见到这个群时问一次群名，之后走缓存
+    await dispatchGroupInstruction({ ch, persona, text, chatId });
   }
 }
 
 /** 忙：消息照落库进队，等会话空出来补派（结果在会话里看，这张卡不跟 run 了） */
-async function queueBusyInstruction({ conversationId, persona, text, chatId }) {
+async function queueBusyInstruction({ ch, conversationId, persona, text, chatId }) {
   const r = dispatchEventToThread(conversationId, text, { personaId: persona.id });
   try {
     await sendCard(
+      ch,
       chatId,
       buildCard({
         personaName: persona.name,
@@ -658,9 +729,8 @@ async function queueBusyInstruction({ conversationId, persona, text, chatId }) {
   } catch { /* 尽力而为 */ }
 }
 
-/** 群里派活：员工专属会话 → 派活开卡跟踪；撞 busy 落库排队。正文派活和选人卡点按钮共用 */
-async function dispatchGroupInstruction({ persona, text, chatId }) {
-  await rememberChatName(chatId); // 建会话前把群名拿到，标题才带得上群名（有缓存，基本不耗时）
+/** 群里派活：员工专属会话 → 派活开卡跟踪；撞 busy 落库排队 */
+async function dispatchGroupInstruction({ ch, persona, text, chatId }) {
   const conversationId = ensureGroupConversation(chatId, persona);
   if (!conversationId) {
     console.warn('[飞书] 建不了会话，这条消息派不出去');
@@ -668,31 +738,24 @@ async function dispatchGroupInstruction({ persona, text, chatId }) {
   }
   try {
     const { run } = dispatchToThread(conversationId, text, {});
-    trackRun({ run, chatId, personaName: persona.name, instruction: text });
+    trackRun({ ch, run, chatId, personaName: persona.name, instruction: text });
   } catch (e) {
     if (e?.code !== 'busy') throw e;
-    queueBusyInstruction({ conversationId, persona, text, chatId }).catch(() => {});
+    queueBusyInstruction({ ch, conversationId, persona, text, chatId }).catch(() => {});
   }
 }
 
 /* ------------------------------------------------------------- 长连接循环 */
 
-let ws = null;
-let closed = true;
-let generation = 0;
-let pingTimer = null;
-let reconnectTimer = null;
-let wsCfg = { url: '', serviceId: 0, pingInterval: 30000, reconnectCount: -1, reconnectInterval: 5000, reconnectNonce: 0 };
-
-function clearTimers() {
-  if (pingTimer) clearTimeout(pingTimer);
-  if (reconnectTimer) clearTimeout(reconnectTimer);
-  pingTimer = reconnectTimer = null;
+function clearTimers(ch) {
+  if (ch.pingTimer) clearTimeout(ch.pingTimer);
+  if (ch.reconnectTimer) clearTimeout(ch.reconnectTimer);
+  ch.pingTimer = ch.reconnectTimer = null;
 }
 
 /** 第一步：拿临时接入点（POST /callback/ws/endpoint）。凭据错误不可重试，系统忙可重试 */
-async function pullEndpoint() {
-  const cfg = readRawConfig();
+async function pullEndpoint(ch) {
+  const cfg = readPersonaRawConfig(ch.personaId);
   const r = await theFetch(`${DOMAIN}/callback/ws/endpoint`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', locale: 'zh' },
@@ -709,7 +772,7 @@ async function pullEndpoint() {
   }
   const u = new URL(j.data.URL);
   const cc = j.data.ClientConfig ?? {};
-  wsCfg = {
+  ch.wsCfg = {
     url: j.data.URL,
     serviceId: Number(u.searchParams.get('service_id') ?? 0),
     pingInterval: Number(cc.PingInterval ?? 30) * 1000,
@@ -717,29 +780,29 @@ async function pullEndpoint() {
     reconnectInterval: Number(cc.ReconnectInterval ?? 5) * 1000,
     reconnectNonce: Number(cc.ReconnectNonce ?? 0) * 1000,
   };
-  return wsCfg.url;
+  return ch.wsCfg.url;
 }
 
-/** 连一次：endpoint → WebSocket。成功 true；失败 false（reason 已写进 conn.lastError） */
-function connectOnce(url) {
+/** 连一次：endpoint → WebSocket。成功 true；失败 false（reason 已写进 ch.conn.lastError） */
+function connectOnce(ch, url) {
   return new Promise((resolve) => {
     let settled = false;
     const WSCtor = deps?.WSCtor ?? globalThis.WebSocket;
     if (!WSCtor) {
-      conn.lastError = '这个 Node 没有 WebSocket（要 Node 22+）';
+      ch.conn.lastError = '这个 Node 没有 WebSocket（要 Node 22+）';
       return resolve(false);
     }
     let sock;
     try {
       sock = new WSCtor(url);
     } catch (e) {
-      conn.lastError = `连不上：${e?.message ?? e}`;
+      ch.conn.lastError = `连不上：${e?.message ?? e}`;
       return resolve(false);
     }
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
-      conn.lastError = '握手超时（15 秒没连上）';
+      ch.conn.lastError = '握手超时（15 秒没连上）';
       try { sock.close(); } catch { /* 尽力 */ }
       resolve(false);
     }, 15000);
@@ -749,58 +812,58 @@ function connectOnce(url) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      ws = sock;
+      ch.ws = sock;
       resolve(true);
     });
     sock.addEventListener('error', () => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      conn.lastError = conn.lastError || 'WebSocket 连接失败（凭据不对或网络不通）';
+      ch.conn.lastError = ch.conn.lastError || 'WebSocket 连接失败（凭据不对或网络不通）';
       resolve(false);
     });
   });
 }
 
-function sendFrame(frame) {
-  if (ws?.readyState === 1) {
+function sendFrame(ch, frame) {
+  if (ch.ws?.readyState === 1) {
     try {
-      ws.send(encodeFrame(frame));
+      ch.ws.send(encodeFrame(frame));
     } catch (e) {
       console.warn(`[飞书] 发帧失败：${e?.message ?? e}`);
     }
   }
 }
 
-function pingLoop() {
-  if (closed) return;
-  if (ws?.readyState === 1) {
-    sendFrame({
+function pingLoop(ch) {
+  if (ch.closed) return;
+  if (ch.ws?.readyState === 1) {
+    sendFrame(ch, {
       SeqID: 0,
       LogID: 0,
-      service: wsCfg.serviceId,
+      service: ch.wsCfg.serviceId,
       method: METHOD_CONTROL,
       headers: [{ key: 'type', value: 'ping' }],
     });
   }
-  pingTimer = setTimeout(pingLoop, wsCfg.pingInterval);
-  pingTimer.unref?.();
+  ch.pingTimer = setTimeout(() => pingLoop(ch), ch.wsCfg.pingInterval);
+  ch.pingTimer.unref?.();
 }
 
-function onFrame(frame) {
-  conn.lastEventAt = Date.now();
+function onFrame(ch, frame) {
+  ch.conn.lastEventAt = Date.now();
   const headers = Object.fromEntries((frame.headers ?? []).map((h) => [h.key, h.value]));
 
   if (frame.method === METHOD_CONTROL) {
     if (headers.type !== 'pong' || !frame.payload) return;
     try {
       const pong = JSON.parse(Buffer.from(frame.payload).toString('utf8'));
-      wsCfg = {
-        ...wsCfg,
-        pingInterval: Number(pong.PingInterval ?? wsCfg.pingInterval / 1000) * 1000,
-        reconnectCount: Number(pong.ReconnectCount ?? wsCfg.reconnectCount),
-        reconnectInterval: Number(pong.ReconnectInterval ?? wsCfg.reconnectInterval / 1000) * 1000,
-        reconnectNonce: Number(pong.ReconnectNonce ?? wsCfg.reconnectNonce / 1000) * 1000,
+      ch.wsCfg = {
+        ...ch.wsCfg,
+        pingInterval: Number(pong.PingInterval ?? ch.wsCfg.pingInterval / 1000) * 1000,
+        reconnectCount: Number(pong.ReconnectCount ?? ch.wsCfg.reconnectCount),
+        reconnectInterval: Number(pong.ReconnectInterval ?? ch.wsCfg.reconnectInterval / 1000) * 1000,
+        reconnectNonce: Number(pong.ReconnectNonce ?? ch.wsCfg.reconnectNonce / 1000) * 1000,
       };
     } catch { /* pong 坏了不致命：下一个 ping 还会来 */ }
     return;
@@ -809,7 +872,7 @@ function onFrame(frame) {
   if (frame.method !== METHOD_DATA) return;
 
   // 先 ack 再处理（不管后面认不认这种帧 —— 不回执的帧会被服务端重推个没完）
-  sendFrame({
+  sendFrame(ch, {
     SeqID: frame.SeqID,
     LogID: frame.LogID,
     service: frame.service,
@@ -837,126 +900,160 @@ function onFrame(frame) {
   }
   const evtType = String(envelope?.header?.event_type ?? '');
   if (evtType !== 'im.message.receive_v1') return;
-  handleFeishuMessage(envelope.event ?? {}).catch((e) =>
+  handleFeishuMessage(ch, envelope.event ?? {}).catch((e) =>
     console.error(`[飞书] 处理消息失败：${e?.message ?? e}`),
   );
 }
 
-function communicate() {
-  ws.addEventListener('message', (ev) => {
+function communicate(ch) {
+  ch.ws.addEventListener('message', (ev) => {
     try {
       const data = ev.data instanceof ArrayBuffer ? new Uint8Array(ev.data) : ev.data;
-      onFrame(decodeFrame(data));
+      onFrame(ch, decodeFrame(data));
     } catch (e) {
       console.warn(`[飞书] 坏帧：${e?.message ?? e}`);
     }
   });
-  ws.addEventListener('close', () => {
-    ws = null;
-    if (!closed) {
-      conn.state = 'reconnecting';
-      scheduleReconnect(generation);
+  ch.ws.addEventListener('close', () => {
+    ch.ws = null;
+    if (!ch.closed) {
+      ch.conn.state = 'reconnecting';
+      scheduleReconnect(ch, ch.generation);
     }
   });
-  ws.addEventListener('error', () => { /* close 会跟着来，重连走那条路 */ });
+  ch.ws.addEventListener('error', () => { /* close 会跟着来，重连走那条路 */ });
 }
 
-async function tryConnect(gen) {
-  conn.state = 'connecting';
+async function tryConnect(ch, gen) {
+  ch.conn.state = 'connecting';
   try {
-    await pullEndpoint();
+    await pullEndpoint(ch);
   } catch (e) {
-    conn.lastError = e?.message ?? String(e);
+    ch.conn.lastError = e?.message ?? String(e);
     return { ok: false, retryable: e?.retryable === true };
   }
-  const ok = await connectOnce(wsCfg.url);
+  const ok = await connectOnce(ch, ch.wsCfg.url);
   if (!ok) return { ok: false, retryable: true };
-  conn.state = 'connected';
-  conn.connectedAt = Date.now();
-  conn.lastError = '';
-  communicate();
+  ch.conn.state = 'connected';
+  ch.conn.connectedAt = Date.now();
+  ch.conn.lastError = '';
+  communicate(ch);
   // 旧连接的心跳链还在排着队 —— 不清掉的话每重连一次就多一条链，ping 越发越密
-  if (pingTimer) clearTimeout(pingTimer);
-  pingLoop();
+  if (ch.pingTimer) clearTimeout(ch.pingTimer);
+  pingLoop(ch);
   return { ok: true };
 }
 
-function scheduleReconnect(gen) {
-  if (closed || gen !== generation) return;
-  const jitter = wsCfg.reconnectNonce ? Math.random() * wsCfg.reconnectNonce : 0;
-  reconnectTimer = setTimeout(() => loopReconnect(gen, 0), jitter);
-  reconnectTimer.unref?.();
+function scheduleReconnect(ch, gen) {
+  if (ch.closed || gen !== ch.generation) return;
+  const jitter = ch.wsCfg.reconnectNonce ? Math.random() * ch.wsCfg.reconnectNonce : 0;
+  ch.reconnectTimer = setTimeout(() => loopReconnect(ch, gen, 0), jitter);
+  ch.reconnectTimer.unref?.();
 }
 
-async function loopReconnect(gen, count) {
-  if (closed || gen !== generation) return;
-  const r = await tryConnect(gen);
-  if (closed || gen !== generation) return;
+async function loopReconnect(ch, gen, count) {
+  if (ch.closed || gen !== ch.generation) return;
+  const r = await tryConnect(ch, gen);
+  if (ch.closed || gen !== ch.generation) return;
   if (r.ok) return;
-  if (!r.retryable || (wsCfg.reconnectCount >= 0 && count + 1 >= wsCfg.reconnectCount)) {
-    conn.state = 'failed';
-    conn.lastError = conn.lastError || '重连次数用完了，去设置页手动启动';
+  if (!r.retryable || (ch.wsCfg.reconnectCount >= 0 && count + 1 >= ch.wsCfg.reconnectCount)) {
+    ch.conn.state = 'failed';
+    ch.conn.lastError = ch.conn.lastError || '重连次数用完了，去员工详情页手动启动';
     return;
   }
-  conn.state = 'reconnecting';
-  reconnectTimer = setTimeout(() => loopReconnect(gen, count + 1), wsCfg.reconnectInterval);
-  reconnectTimer.unref?.();
+  ch.conn.state = 'reconnecting';
+  ch.reconnectTimer = setTimeout(() => loopReconnect(ch, gen, count + 1), ch.wsCfg.reconnectInterval);
+  ch.reconnectTimer.unref?.();
 }
 
 /**
- * 启动通道（幂等）。等第一次连接出结果再回来 —— 成功 `{ok:true}`；
+ * 启动一个员工的通道（幂等）。等第一次连接出结果再回来 —— 成功 `{ok:true}`；
  * 可重试的失败不抛错、转入后台重连（`{ok:false, retrying:true}`）；
- * 凭据问题抛 E2061/E2062。
+ * 凭据问题抛 E2061（没填）/E2062（格式）。
  * `deps` 给测试换假件：`{ fetchImpl, WSCtor }`。
  */
-export async function start(d = {}) {
+export async function startPersona(personaId, d = {}) {
   deps = { fetchImpl: d.fetchImpl ?? deps?.fetchImpl ?? fetch, WSCtor: d.WSCtor ?? deps?.WSCtor ?? globalThis.WebSocket };
-  const bad = validateCredentials();
-  if (bad) throw fail(bad, 'E2061');
-  if (!closed) return { ok: conn.state === 'connected', status: channelStatus() };
-  closed = false;
-  conn.startedAt = Date.now();
-  const gen = ++generation;
-  const r = await tryConnect(gen);
-  if (closed) return { ok: false, status: channelStatus() };
+  const cfg = readPersonaRawConfig(personaId);
+  if (!cfg.appId || !cfg.appSecret) throw fail('App ID 和 App Secret 都得填', 'E2061');
+  if (!APP_ID_RE.test(cfg.appId)) throw fail('App ID 不对 —— 它长这样：cli_ 加 16 位十六进制', 'E2062');
+  const ch = channelOf(personaId);
+  if (!ch.closed) return { ok: ch.conn.state === 'connected', status: personaChannelStatus(personaId) };
+  ch.closed = false;
+  ch.conn.startedAt = Date.now();
+  const gen = ++ch.generation;
+  const r = await tryConnect(ch, gen);
+  if (ch.closed) return { ok: false, status: personaChannelStatus(personaId) };
   if (!r.ok) {
     if (!r.retryable) {
-      closed = true;
-      conn.state = 'failed';
-      throw fail(conn.lastError, 'E2066');
+      ch.closed = true;
+      ch.conn.state = 'failed';
+      throw fail(ch.conn.lastError, 'E2066');
     }
-    conn.state = 'reconnecting';
-    scheduleReconnect(gen);
-    return { ok: false, retrying: true, status: channelStatus() };
+    ch.conn.state = 'reconnecting';
+    scheduleReconnect(ch, gen);
+    return { ok: false, retrying: true, status: personaChannelStatus(personaId) };
   }
-  return { ok: true, status: channelStatus() };
+  return { ok: true, status: personaChannelStatus(personaId) };
 }
 
-/** 停通道。closed 标志让在飞的重连循环与迟到的事件处理全部失效 */
-export function stop() {
-  closed = true;
-  generation += 1;
-  clearTimers();
+/** 停一个员工的通道。closed 标志让在飞的重连循环与迟到的事件处理全部失效 */
+export function stopPersona(personaId) {
+  const ch = channels.get(personaId);
+  if (!ch) return;
+  ch.closed = true;
+  ch.generation += 1;
+  clearTimers(ch);
   try {
-    ws?.close();
+    ch.ws?.close();
   } catch { /* 尽力 */ }
-  ws = null;
-  conn.state = 'stopped';
-  conn.lastError = '';
+  ch.ws = null;
+  ch.conn.state = 'stopped';
+  ch.conn.lastError = '';
 }
 
-/** 连通性测试（设置页「测试连接」）：只拿一次令牌，不花生不钱，不动通道状态 */
-export async function testConnection() {
-  const bad = validateCredentials();
-  if (bad) throw fail(bad, 'E2061');
-  tokenCache = { token: '', expiresAt: 0 };
-  await tenantToken();
+/**
+ * 连通性测试（员工详情「测试连接」）：只拿一次令牌，不花生不钱，不动通道状态
+ */
+export async function testPersonaConnection(personaId) {
+  const cfg = readPersonaRawConfig(personaId);
+  if (!cfg.appId || !cfg.appSecret) throw fail('App ID 和 App Secret 都得填', 'E2061');
+  const ch = channelOf(personaId);
+  ch.tokenCache = { token: '', expiresAt: 0 };
+  await tenantToken(ch);
   return { ok: true };
 }
 
-/** 开机同步：配置开着且凭据齐就自启（server.mjs 启动时调一次） */
+/**
+ * 删一个员工的飞书配置并停他的通道（删员工 / 专家解聘时由**路由层**调 ——
+ * feishu 依赖 store，store 不能反向依赖这里（防环），所以清理动作放在路由层）。
+ * 员工本来就没配过 → 幂等，什么都不动。
+ */
+export function removePersona(personaId) {
+  stopPersona(personaId);
+  channels.delete(personaId);
+  const apps = readApps();
+  if (personaId in apps) {
+    delete apps[personaId];
+    writeApps(apps);
+  }
+}
+
+/** 开机同步（server.mjs 启动时调一次）：先做一次性迁移，再把所有开着"自启"的员工逐个拉起。
+ *  起不来只 warn 不拦启动 —— 通道是外部的，班底该照常开张 */
 export function bootSync() {
-  const cfg = readRawConfig();
-  if (!cfg.enabled) return;
-  start().catch((e) => console.warn(`[飞书] 开机自启没成（不影响启动）：${e?.message ?? e}`));
+  migrateLegacyConfig();
+  const apps = readApps();
+  for (const [personaId, cfg] of Object.entries(apps)) {
+    if (cfg?.enabled !== true) continue;
+    if (!store.getPersona(personaId)) continue; // 员工没了：配置等 removePersona 清，通道不起
+    startPersona(personaId).catch((e) =>
+      console.warn(`[飞书] 员工 ${personaId} 开机自启没成（不影响启动）：${e?.message ?? e}`),
+    );
+  }
+}
+
+/** 停机用：把所有还开着的通道全停掉（进程退出前调用，别让 ws 挂着拖退出） */
+export function stopAll() {
+  for (const personaId of [...channels.keys()]) stopPersona(personaId);
 }

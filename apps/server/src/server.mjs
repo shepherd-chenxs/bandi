@@ -62,6 +62,7 @@ import { handleSsh } from './routes/ssh.mjs';
 import { handleGit } from './routes/git.mjs';
 import { handleImageAi } from './routes/imageai.mjs';
 import { handlePrefs } from './routes/prefs.mjs';
+// 飞书通道（2026-10-29 员工级：路由挂在 /api/personas/:id/feishu，设置级的旧路由已删）
 import { handleFeishu } from './routes/feishu.mjs';
 import * as feishu from './feishu.mjs';
 import { handleRun } from './routes/run.mjs';
@@ -711,7 +712,8 @@ sweep.unref(); // 别让这个定时器拖着进程不退出
 schedules.start();
 
 /*
- * 飞书通道（2026-10-27）：配置里开着「开机自启」且凭据齐，就自己把长连接拉起来。
+ * 飞书通道（2026-10-27 建的；2026-10-29 员工级改造）：先把旧 feishu.json 迁给对应员工，
+ * 再把每个开了「开机自启」的员工的通道逐个拉起。
  * 起不来只 warn 不拦启动 —— 通道是外部的，班底该照常开张。
  */
 feishu.bootSync();

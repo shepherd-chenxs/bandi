@@ -354,15 +354,39 @@ body.no-list .list-panel { display: none; }
             font-weight: 600; }
 .list-sec:hover { color: var(--text); }
 .list-sec .sec-n { opacity: .75; }
-/* 折叠箭头：用边框画的三角，跟着文字颜色走 */
-.sec-arrow { width: 0; height: 0; border-left: 4.5px solid currentColor;
-             border-top: 3.5px solid transparent; border-bottom: 3.5px solid transparent;
-             transform: rotate(90deg); transition: transform .12s; }
-.list-sec.shut .sec-arrow { transform: rotate(0deg); }
+/* 折叠箭头：线型 chevron（2026-10-29 用户：不要实心三角）——
+   右 + 下两条 1.5px 细边画个拐角，正转 45° 朝下（展开）、反转 45° 朝右（收起），
+   颜色照样跟 currentColor 走。通讯录的分段与设置的分组共用这一个符号。 */
+.sec-arrow { width: 6px; height: 6px; border-right: 1.5px solid currentColor;
+             border-bottom: 1.5px solid currentColor;
+             transform: rotate(45deg); transition: transform .12s; }
+.list-sec.shut .sec-arrow { transform: rotate(-45deg); }
 /* 分段内容（「群聊」/「数字员工」的行）往右缩进一档（2026-10-20 用户截图：「员工和群聊往右缩进」）。
    原来行的头像贴到栏目左沿（16px），而上面的分段标题文字在 28.5px —— 看着像没对齐；
    微信通讯录的规律也是"行给标题让位"。12px 之后头像≈28、字母头≈30、分段标题≈28.5，同一条左沿。 */
 .sec-body { padding-left: 12px; }
+/* 设置分组的一级菜单头（2026-10-29 用户："一级菜单比二级菜单字体小，别扭，参考 VS Code"）：
+   层级靠字重表达，不靠压小字号；同日三调（用户："一级和二级字体一样大，一级加粗，
+   两个都要再小一些"）：两级统一 12.5px，一级 600 / 二级 500（.item 原字重不动）。
+   二级行标题的 13.5px 是全应用共享样式，只在设置导航树范围内覆写。
+   ⚠️ 只加在设置导航树上（contacts.mjs 画组头时带 .nav）；通讯录的群聊/数字员工
+   分段标题是"分组索引"，不是"菜单层级"，保持小字不动。 */
+/* 设置分组的一级菜单头（2026-10-29 多轮定稿，参照 JetBrains 设置树）：
+   两级**同字号同字重**（12.5px / 500），层级只靠缩进 + 箭头表达 —— JetBrains 的
+   和谐感正来自"没有加粗的头"：五组五个响点反而是噪音。颜色同正文。 */
+.list-sec.nav { font-size: 12.5px; font-weight: 500; color: var(--text); letter-spacing: 0; gap: 10px; }
+.list-sec.nav .sec-arrow { width: 5.5px; height: 5.5px; }
+/* 箭头不跟组头一起"加粗"：边框画线没有字重，粗感来自 currentColor 继承了
+   组头的正文字色（深色）—— 单独压回灰调，文字照旧 600 加粗（2026-10-29 用户）。 */
+.list-sec.nav .sec-arrow { color: var(--dim); }
+#listBody .item[data-set] .line1 b { font-size: 12.5px; }
+/* 二级缩进 = 组头文字起点（JetBrains 同款"二级文字与一级文字对齐"）：
+   组头文字左沿 = 行 padding 10 + 箭头 5.5 + gap 10 = 25.5px；
+   条目文字左沿 = sec-body 缩进 + 行内边距 8 → 缩进 17.5px 正好落在同一条线上。 */
+#listBody .sec-body.nav { padding-left: 17.5px; }
+/* 组收起后，选中分节被一起藏掉 —— 组头右侧补一颗点（accent 色）标记"正看的东西收在这组里"。
+   margin-left:auto 把点推到组头行最右，跟 VS Code 折叠文件夹里的改动点是同一个心智。 */
+.sec-here { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); margin-left: auto; flex: none; }
 /* 通讯录「数字员工」的 A–Z 分组字母（微信式，2026-10-20 用户要求）。
    比上面的 `.list-sec` 轻一档：它是**组内索引**，不是可折叠的分段；
    灰字 + 与分段标题同一条左沿（`.sec-body` 的 12 + 自身 10 ≈ 分段标题的 10+箭头 4.5+gap 6）。
@@ -3096,6 +3120,38 @@ button.att-add:hover { color: var(--text); border: 0; background: var(--panel); 
 .kb-tip { font-size: 11.5px; color: var(--dim); line-height: 1.6; margin-top: 14px;
           border-top: 1px solid var(--line); padding-top: 10px; }
 
+/* ---------------------------------------------------------------- 看板 · 窄屏列表形态（kb-m-*） */
+/*
+ * 手机窄屏看板（2026-11 用户定案）：多列横排 + 拖拽在窄屏没法用 ——
+ * 窄屏（body.mb-narrow，js/mobile.mjs 维护）下看板渲染成「状态 tab + 列表」
+ * （js/projects.mjs renderBoardMobile），桌面看板一行不动。
+ * 节奏对齐 mobile.css 的 mb-tab 那套：小号可横滑 tab 条 + 满宽行卡。
+ * 这些类只出现在窄屏渲染路径的 DOM 里，桌面根本不生成 —— 不用 @media 包。
+ */
+.kb-m-tabs { display: flex; gap: 8px; overflow-x: auto; padding: 10px 14px 4px;
+             scrollbar-width: none; }
+.kb-m-tabs::-webkit-scrollbar { display: none; } /* tab 条自己横滑，滚动条是噪声 */
+.kb-m-tab { flex: none; display: inline-flex; align-items: center; gap: 6px;
+            border: 1px solid var(--line); background: transparent; color: var(--dim);
+            font: inherit; font-size: 12.5px; padding: 6px 12px; border-radius: 999px;
+            cursor: pointer; white-space: nowrap; }
+.kb-m-tab.on { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+               background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.kb-m-n { font-size: 11px; line-height: 15px; background: var(--chip); border-radius: 99px; padding: 0 6px; }
+.kb-m-tab.on .kb-m-n { background: transparent; }
+.kb-m-list { padding: 10px 14px 20px; display: grid; gap: 10px; align-content: start; }
+.kb-m-card { border: 1px solid var(--line); background: var(--panel); border-radius: 10px;
+             padding: 10px 12px; cursor: pointer; display: grid; gap: 6px;
+             transition: border-color .12s ease; }
+.kb-m-card:active { border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+.kb-m-title { font-weight: 600; font-size: 13.5px; line-height: 1.5; word-break: break-word; }
+.kb-m-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 16px; }
+/* 状态 pill 靠右（.kb-state 自带 margin-left:auto，桌面卡片同款口径） */
+.kb-m-foot { display: flex; justify-content: space-between; gap: 10px;
+             font-size: 11.5px; color: var(--dim); }
+.kb-m-foot .kb-who { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kb-m-empty { padding: 40px 0; text-align: center; color: var(--dim); font-size: 13px; }
+
 /* 全局面板右侧：按项目分堆的概览（一行一个项目，点一行钻进那个项目的看板） */
 .kb-sub { font-size: 12px; color: var(--dim); margin: 14px 0 6px; }
 .kb-projects { display: flex; flex-direction: column; gap: 4px; }
@@ -3482,58 +3538,31 @@ details.tc-replies[open] > .tc-replies-toggle .tc-replies-unfold { display: inli
 .machine-card .machine-data { max-width: 460px; text-align: right; overflow-wrap: anywhere; }
 .machine-path { font-family: ui-monospace, monospace; font-size: 11.5px; overflow-wrap: anywhere; }
 
-/* ===== 设置 → 数据管理（2026-10-22 重设计）=====
-   原来：「标签左、内容右挤」的表单卡 + 两颗小按钮吊在右下，下面大片空白。
-   现在：① 数据总览条 —— 数字大字排一行当主视觉，路径缩回卡头当副信息；
-        ② 导出/导入两张动作卡 —— 图标 + 一句话职责 + 说明 + 按钮，说明跟着动作走。
-   颜色/圆角/分层全走全站 tokens（--panel/--line/--dim/--rail/--accent，
-   1px 细线分层、面 10px 圆角），深浅色主题自动跟随，没有硬编码色。 */
-/* 两栏：左边主内容限 720px（跟其他设置页同节奏），右边 backups/ 快照列表吃掉剩余宽度。
-   窄窗落回单列（列表排在下面）。 */
-.dm-cols { display: grid; grid-template-columns: minmax(0, 720px) minmax(280px, 1fr); gap: 14px; align-items: start; }
-.dm-left { min-width: 0; }
-.dm-overview { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); overflow: hidden; }
-.dm-overview-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 12px 16px 11px; }
-.dm-title { font-size: 13px; font-weight: 600; flex: none; }
-.dm-overview-head .machine-path { color: var(--dim); text-align: right; }
-.dm-stats { display: flex; }
-.dm-stat { flex: 1; min-width: 0; padding: 11px 16px 13px; border-top: 1px solid var(--line); }
-.dm-stat + .dm-stat { border-left: 1px solid var(--line); }
-.dm-stat b { display: block; font-size: 17px; font-weight: 600; line-height: 1.25;
-             font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dm-stat span { display: block; margin-top: 3px; font-size: 12px; color: var(--dim); }
-/* 日期值别跟数字一样大（19px 的 "10/22 19:21" 在 1/5 宽里站不住），小两档 */
-.dm-stat-time { font-size: 14px !important; padding-top: 3px !important; }
-.dm-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px; }
-.dm-card { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); padding: 14px 16px; }
-.dm-card-head { display: flex; align-items: center; gap: 10px; }
-.dm-ico { width: 34px; height: 34px; border-radius: 8px; background: var(--rail); color: var(--accent);
-         display: flex; align-items: center; justify-content: center; flex: none; }
-.dm-card-name { min-width: 0; }
-.dm-card-name b { display: block; font-size: 13px; }
-.dm-card-name span { display: block; margin-top: 1px; font-size: 12px; color: var(--dim);
-                    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dm-card-head .btn-sm { margin-left: auto; flex: none; }
-.dm-card-desc { margin-top: 10px; font-size: 12.5px; line-height: 1.75; color: var(--dim); }
-.dm-card-desc b { color: var(--text); }
-/* —— 右栏：备份快照列表（只读，GET /api/local/backups）—— */
-.dm-list { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); overflow: hidden; }
-.dm-list-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
-                padding: 12px 16px 11px; border-bottom: 1px solid var(--line); }
-.dm-list-count { font-size: 12px; color: var(--dim); }
-.dm-list-body { max-height: 440px; overflow: auto; }
-.dm-item { padding: 9px 16px 10px; min-width: 0; }
+/* ===== 数据管理 —— 「这台机器」页底下的一个区（2026-10-29 从设置独立分节降级）=====
+   降成区之后不再摆大字统计条和两张动作卡（用户："导入导出做成按钮就行，
+   没必要占据那么大的位置"）：导出/导入收成节头两颗按钮，状态压成一行小字，
+   备份快照是一个矮列表。颜色/圆角全走全站 tokens，深浅色主题自动跟随。 */
+.dm-sec { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); padding: 12px 16px; }
+.dm-sec .set-head { margin-bottom: 2px; }
+.dm-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; flex: none; min-width: 0; }
+.dm-path { color: var(--dim); max-width: 460px; text-align: right; }
+/* 状态一行：数字加重、项目之间点隔；拉不到的数据显示 — */
+.dm-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 14px;
+           font-size: 12.5px; color: var(--dim); padding: 3px 0 4px; }
+.dm-line b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.dm-sep { color: var(--line); }
+/* —— 备份快照：矮列表（约五行就开始滚），只读 —— */
+.dm-snaps { margin-top: 6px; border-top: 1px solid var(--line); }
+.dm-snaps-head { display: flex; align-items: baseline; gap: 10px; padding: 8px 0 4px;
+                 font-size: 12.5px; font-weight: 600; min-width: 0; }
+.dm-list-count { font-size: 12px; font-weight: 400; color: var(--dim);
+                 overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dm-snaps-body { max-height: 190px; overflow: auto; }
+.dm-item { padding: 6px 0 7px; min-width: 0; }
 .dm-item + .dm-item { border-top: 1px solid var(--line); }
 .dm-item-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
 .dm-item-sub { margin-top: 2px; font-size: 12px; color: var(--dim); }
-.dm-empty { padding: 16px; font-size: 12.5px; color: var(--dim); line-height: 1.75; }
-/* 窄窗兜底（壳窗口被拖小）：整个页面落回单列、动作卡也是、统计项换行 */
-@media (max-width: 1100px) {
-  .dm-cols { grid-template-columns: 1fr; }
-  .dm-cards { grid-template-columns: 1fr; }
-  .dm-stats { flex-wrap: wrap; }
-  .dm-stat { flex: 1 1 30%; }
-}
+.dm-empty { padding: 6px 0 10px; font-size: 12.5px; color: var(--dim); line-height: 1.75; }
 /* 模式标题行（2026-10-21 八改）：不再挂 machine-card —— 那个类带 max-width:720px，
    是给「数据备份/节点页」那种长表单卡用的，放在这只会让开关顶不到页面右边。
    「模式」标题在左，开关 + 重启顶到最右；标题行下是一行随开关走的状态说明 */

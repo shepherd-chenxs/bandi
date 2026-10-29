@@ -12,6 +12,9 @@ import * as runtimes from '../runtimes.mjs';
 import { personaRoots } from '../dispatch.mjs';
 import { personaTasks } from '../project-tasks.mjs';
 import * as experts from '../experts.mjs';
+// 飞书员工级配置（2026-10-29）：删员工要顺手清掉他的飞书配置并停通道。
+// 清理放**路由层**而不进 store.deletePersona —— feishu 依赖 store，store 反向依赖就是环
+import * as feishu from '../feishu.mjs';
 
 const AVATAR_FILE = /^[A-Za-z0-9._-]+\.(png|jpe?g|webp)$/i;
 
@@ -74,6 +77,13 @@ export async function handlePersona(req, res, url) {
     }
 
     const r = store.deletePersona(id);
+    // 人没了，他的飞书应用（专属 bot 的长连接 + 白名单 + 凭据）没有存在的意义 —— 顺手清掉。
+    // removePersona 幂等且不抛：没配过飞书的员工走这里也什么都不动
+    try {
+      feishu.removePersona(id);
+    } catch (e) {
+      console.warn(`[飞书] 清理员工 ${id} 的飞书配置失败（不影响删除）：${e?.message ?? e}`);
+    }
     // 只回结果。别再塞整份员工/会话列表 —— 前端会 load() 重拉，塞了就是白传几 KB
     return sendJson(res, 200, { ...r });
   }

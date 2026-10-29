@@ -1720,6 +1720,212 @@ function renderDetailMobile(persona, runtimes) {
 
 
 
+/* -------------------------------------------- 飞书子页（员工级，2026-10-29） */
+
+/* 状态词 —— 从设置页搬过来的（设置里的飞书分节已删，员工详情是唯一入口） */
+const FEISHU_STATE_TEXT = {
+  connected: '已连接',
+  connecting: '连接中…',
+  reconnecting: '重连中…',
+  stopped: '已停止',
+  failed: '失败',
+};
+
+/* 渲染序号：renderDetail 重建 DOM 会让旧轮询失锚（$ 拿到的是新 DOM 或 null）——
+ * 序号守卫 + document.contains 双保险，对不上立刻停轮，别让旧轮询追着新面板写状态 */
+let feishuPanelSeq = 0;
+
+/** 第一次点到「飞书」子页才调：拉配置并画面板（懒加载） */
+async function mountFeishuPanel(personaId) {
+  const seq = ++feishuPanelSeq;
+  const host = $('dFeishuHost');
+  if (!host) return;
+  let cfg = null;
+  try {
+    cfg = await api('/api/personas/' + encodeURIComponent(personaId) + '/feishu');
+  } catch (e) {
+    if (seq === feishuPanelSeq) host.innerHTML = `<div class="empty">${esc(e?.message ?? String(e))}</div>`;
+    return;
+  }
+  if (seq !== feishuPanelSeq || !document.contains(host)) return;
+  paintFeishuPanel(personaId, cfg, seq);
+}
+
+/** 面板形态照抄原设置页的 renderFeishu（set-sec/set-box/gr-conn 全局类），
+ *  去掉了「私聊绑定」—— 员工级后每个应用就绑定在那一个员工身上，没有再挑一层的概念 */
+function paintFeishuPanel(personaId, cfg, seq) {
+  const host = $('dFeishuHost');
+  if (!host) return;
+  const configured = !!cfg?.configured;
+  const running = ['connected', 'connecting', 'reconnecting'].includes(cfg?.status?.state);
+  const apiBase = '/api/personas/' + encodeURIComponent(personaId) + '/feishu';
+
+  host.innerHTML = `
+    <section class="set-sec">
+      <div class="set-head"><b>第一次接</b><span class="set-tag">一次性 · 约 10 分钟</span></div>
+      <div class="set-box">
+        <div class="set-note">
+          这个应用就是这个员工的<b>专属机器人</b> —— 私聊它 = 直接找他；群里 @它 才响应。四步接上：<br />
+          ① <a href="https://open.feishu.cn/app" target="_blank" rel="noreferrer">去飞书开放平台建一个「企业自建应用」</a>；<br />
+          ② 「事件与回调」：订阅方式选<b>长连接</b>（选成请求地址会永远收不到消息），添加事件 <code>im.message.receive_v1</code>；<br />
+          ③ 「权限管理」：开「获取与发送单聊、群组消息」和「更新应用发送的消息卡片」，发布应用版本；<br />
+          ④ 回来把 App ID / App Secret 填在下面，点「启动通道」。
+        </div>
+      </div>
+    </section>
+    <section class="set-sec">
+      <div class="set-head"><b>飞书通道</b><span class="set-tag" id="fsStateTag">…</span></div>
+      <div class="set-box open-combo">
+        <div class="gr-conn stack">
+          <div class="gr-conn-row">
+            <span class="row-label">App ID</span>
+            <input id="fsAppId" value="${esc(cfg?.appId ?? '')}" autocomplete="off" spellcheck="false"
+                   placeholder="cli_…" />
+            <span></span>
+          </div>
+          <div class="gr-conn-row">
+            <span class="row-label">App Secret</span>
+            ${
+              configured
+                ? `<input id="fsSecret" class="locked" type="password" value="${esc(cfg?.appSecretHint ?? '')}" readonly data-locked="1"
+                        aria-label="已保存的 Secret，只显示掩码" autocomplete="off" />
+                   <button id="fsSecretEdit">修改</button>`
+                : `<input id="fsSecret" type="password" placeholder="粘贴 App Secret（保存后只显示掩码）" autocomplete="off" />
+                   <span></span>`
+            }
+          </div>
+          <div class="gr-conn-row">
+            <span class="row-label">允许的人</span>
+            <input id="fsAllow" value="${esc((cfg?.allowOpenIds ?? []).join(', '))}" autocomplete="off" spellcheck="false"
+                   placeholder="open_id，逗号分隔；留空不限制" />
+            <span></span>
+          </div>
+          <div class="gr-conn-row">
+            <span class="row-label">开机自启</span>
+            <div class="seg" id="fsEnabled">
+              <button data-v="1" class="${cfg?.enabled ? 'on' : ''}">开</button>
+              <button data-v="0" class="${cfg?.enabled ? '' : 'on'}">关</button>
+            </div>
+            <span></span>
+          </div>
+          <div class="gr-conn-actions">
+            <button class="primary" id="fsSave">保存配置</button>
+            <button id="fsTest">测试连接</button>
+            <button id="fsToggle">${running ? '停止通道' : '启动通道'}</button>
+          </div>
+          <div class="gr-conn-status" id="fsStatus"></div>
+        </div>
+      </div>
+    </section>`;
+
+  const status = (html) => {
+    const el = $('fsStatus');
+    if (el) el.innerHTML = html;
+  };
+  const paintStatus = (st) => {
+    const s = st?.status ?? {};
+    const word = FEISHU_STATE_TEXT[s.state] ?? '已停止';
+    const tag = $('fsStateTag');
+    if (tag) tag.textContent = word;
+    const bad = s.state === 'failed';
+    status(
+      `<b style="color:${bad ? 'var(--bad,#c0504d)' : s.state === 'connected' ? 'var(--ok)' : 'var(--dim)'}">${word}</b>` +
+        `${bad && s.lastError ? ` —— ${esc(s.lastError)}` : ''}`,
+    );
+  };
+  paintStatus(cfg);
+
+  /* 「修改」解锁 Secret 框：清掉掩码变可编辑，语义是"这次保存会覆盖旧 Secret"；
+     解锁后按钮变「取消」，点它退回掩码锁定态（输入了一半的值直接丢弃，保存仍走"保留原值"） */
+  const fsSecretHint = cfg?.appSecretHint ?? '';
+  $('fsSecretEdit')?.addEventListener('click', () => {
+    const k = $('fsSecret');
+    if (!k.dataset.locked) {
+      k.readOnly = true;
+      k.classList.add('locked');
+      k.dataset.locked = '1';
+      k.value = fsSecretHint;
+      k.placeholder = '';
+      $('fsSecretEdit').textContent = '修改';
+      return;
+    }
+    k.readOnly = false;
+    k.classList.remove('locked');
+    k.removeAttribute('data-locked');
+    k.value = '';
+    k.placeholder = '重新粘贴 App Secret（留空则保留原值）';
+    k.focus();
+    $('fsSecretEdit').textContent = '取消';
+  });
+
+  $('fsEnabled')?.querySelectorAll('button').forEach((b) => {
+    b.onclick = () => {
+      $('fsEnabled').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
+    };
+  });
+
+  $('fsSave')?.addEventListener('click', async () => {
+    const body = {
+      appId: $('fsAppId').value.trim(),
+      allowOpenIds: $('fsAllow').value.split(/[,，\s]+/).map((s) => s.trim()).filter(Boolean),
+      enabled: $('fsEnabled')?.querySelector('.on')?.dataset.v === '1',
+    };
+    const k = $('fsSecret');
+    if (!k?.dataset.locked) body.appSecret = k?.value ?? '';
+    try {
+      await api(apiBase, { method: 'PUT', body: JSON.stringify(body) });
+      toast('已保存', 'ok');
+      mountFeishuPanel(personaId); // 重拉重画（顺带换一套新的渲染序号，旧轮询作废）
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  });
+
+  $('fsTest')?.addEventListener('click', async () => {
+    status('<span style="color:var(--dim)">测试中…</span>');
+    try {
+      await api(apiBase + '/test', { method: 'POST', body: '{}' });
+      status('<b style="color:var(--ok)">凭据有效</b> —— 飞书认这套 App ID / App Secret');
+    } catch (e) {
+      status(`<b style="color:var(--bad,#c0504d)">凭据不对</b> —— ${esc(e.message)}`);
+    }
+  });
+
+  $('fsToggle')?.addEventListener('click', async () => {
+    const btn = $('fsToggle');
+    btn.disabled = true;
+    try {
+      await api(apiBase + (btn.textContent === '停止通道' ? '/stop' : '/start'), { method: 'POST', body: '{}' });
+      mountFeishuPanel(personaId);
+    } catch (e) {
+      toast(e.message, 'error');
+      btn.disabled = false;
+    }
+  });
+
+  /* 状态轮询：只在面板可见且详情页还开着时轮 ——
+     面板藏了（切了子页/标签）不发请求，详情页关了（DOM 换了）整轮停掉 */
+  const guard = setInterval(async () => {
+    if (seq !== feishuPanelSeq || !document.contains(host)) {
+      clearInterval(guard);
+      return;
+    }
+    const panel = host.closest('[data-ov-panel]');
+    if (!panel || panel.hidden) return;
+    try {
+      const st = await api(apiBase);
+      if (seq !== feishuPanelSeq || !document.contains(host)) {
+        clearInterval(guard);
+        return;
+      }
+      paintStatus(st);
+      const nowRunning = ['connected', 'connecting', 'reconnecting'].includes(st?.status?.state);
+      const btn = $('fsToggle');
+      if (btn && !btn.disabled) btn.textContent = nowRunning ? '停止通道' : '启动通道';
+    } catch { /* 拉不到就等下一拍 */ }
+  }, 5000);
+}
+
 export function renderDetail({ persona, runtimes, runs, platformRoot, skills: personaSkills = [], allSkills = [] }, taskBoard = null) {
   // 左栏顶上写「通讯录」（右页头已去掉；名字/岗位/头像/动作都在正文的 p-head 里）。
   // 只在"左栏就是通讯录"时写 —— 从聊天页头点「查看资料」进来时 S.nav 还是 messages，
@@ -1803,17 +2009,19 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
       </div>
 
       <div class="tabs">
+        <!-- 2026-10-29 用户定稿：顶层只留 概览/任务/能力/配置 —— 运行记录降成概览的子页，
+             执行配置搬进配置（后面集成飞书的入口也挂到配置下） -->
         <button class="tab on" data-tab="overview">概览</button>
         <button class="tab" data-tab="tasks">任务<span class="tab-n" id="dTasksN">${taskBoard?.total ?? 0}</span></button>
         <button class="tab" data-tab="capability">能力<span class="tab-n">${personaSkills.length}</span></button>
-        <button class="tab" data-tab="runs">运行记录<span class="tab-n">${runs.length}</span></button>
+        <button class="tab" data-tab="config">配置</button>
       </div>
 
       <section class="tab-panel" data-panel="overview">
         <div class="ov-layout">
           <nav class="ov-nav" aria-label="概览分区">
             <button type="button" class="on" data-ov="profile">资料</button>
-            <button type="button" data-ov="exec">执行配置</button>
+            <button type="button" data-ov="runs">运行记录<span class="tab-n">${runs.length}</span></button>
           </nav>
           <div class="ov-body">
             <section class="ov-panel" data-ov-panel="profile">
@@ -1870,7 +2078,28 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
               </div>
             </section>
 
-            <section class="ov-panel" data-ov-panel="exec" hidden>
+            <!-- 运行记录（2026-10-29）：从顶层 tab 降成概览的子页，表格原样搬过来 -->
+            <section class="ov-panel" data-ov-panel="runs" hidden>
+              <div class="group">
+                <table class="runs"><thead><tr>
+                  <th>时间</th><th>状态</th><th>退出码</th><th>tokens</th><th>耗时</th><th>错误</th>
+                </tr></thead><tbody>${runRows}</tbody></table>
+              </div>
+            </section>
+          </div>
+        </div>
+      </section>
+
+      <!-- 配置（2026-10-29 新增顶层 tab）：执行配置是第一个子页，后面集成飞书的入口也挂到这里 -->
+      <section class="tab-panel" data-panel="config" hidden>
+        <div class="ov-layout">
+          <nav class="ov-nav" aria-label="配置分区">
+            <button type="button" class="on" data-ov="exec">执行配置</button>
+            <!-- 2026-10-29 用户定稿：飞书从「设置」搬进来，员工级 —— 一个数字员工一个飞书自建应用 -->
+            <button type="button" data-ov="feishu">飞书</button>
+          </nav>
+          <div class="ov-body">
+            <section class="ov-panel" data-ov-panel="exec">
               <div class="group">
                 <div class="form-row">
                   <div class="row-label">Runtime</div>
@@ -1918,6 +2147,12 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
                   </label>
                 </div>
               </div>
+            </section>
+
+            <!-- 飞书（2026-10-29 员工级）：内容懒加载 —— 先给骨架，第一次点到才拉配置
+                 （renderDetail 每次重建 DOM，每次都多发一个请求就太吵了），见 mountFeishuPanel -->
+            <section class="ov-panel" data-ov-panel="feishu" hidden>
+              <div id="dFeishuHost"><div class="empty">加载中…</div></div>
             </section>
           </div>
         </div>
@@ -2004,25 +2239,42 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
         }
       </section>
 
-      <section class="tab-panel" data-panel="runs" hidden>
-        <div class="group-title">最近运行</div>
-        <div class="group">
-          <table class="runs"><thead><tr>
-            <th>时间</th><th>状态</th><th>退出码</th><th>tokens</th><th>耗时</th><th>错误</th>
-          </tr></thead><tbody>${runRows}</tbody></table>
-        </div>
-      </section>
     </div>`;
+  // 子页导航（概览：资料/运行记录；配置：执行配置）。两套 ov-layout 共用一套 data-ov 键
+  // （profile/runs/exec 互不重名），所以一次查询通吃；切之前先落盘 —— 藏起来的那栏改动不能丢
+  const ovBtns = $('detailView').querySelectorAll('[data-ov]');
+  const ovPanels = $('detailView').querySelectorAll('[data-ov-panel]');
+  const showOv = (key) => {
+    ovBtns.forEach((b) => b.classList.toggle('on', b.dataset.ov === key));
+    ovPanels.forEach((p) => { p.hidden = p.dataset.ovPanel !== key; });
+  };
+  // 「飞书」子页懒加载（2026-10-29 员工级）：面板内容先骨架，第一次点到才拉配置。
+  // 只在 renderDetail 建的这份 DOM 上挂一次 —— 重建后 feishuLoaded 归零，新面板重新懒加载
+  let feishuLoaded = false;
+  ovBtns.forEach((b) => {
+    b.onclick = () => {
+      saveNow?.();
+      showOv(b.dataset.ov);
+      if (b.dataset.ov === 'feishu' && !feishuLoaded) {
+        feishuLoaded = true;
+        mountFeishuPanel(persona.id);
+      }
+    };
+  });
+
   // 标签：一次渲染、切显隐 —— 不重建 DOM，所以在「概览」改了一半去「能力」再回来，改动还在
   const tabs = $('detailView').querySelectorAll('[data-tab]');
   const panels = $('detailView').querySelectorAll('[data-panel]');
+  // 每个顶层 tab 有自己的默认子页（2026-10-29 tab 重排）：概览→资料，配置→执行配置
+  const OV_DEFAULT = { overview: 'profile', config: 'exec' };
   const showTab = (key) => {
     tabs.forEach((t) => t.classList.toggle('on', t.dataset.tab === key));
     panels.forEach((p) => { p.hidden = p.dataset.panel !== key; });
+    showOv(OV_DEFAULT[key] ?? 'profile');
   };
   tabs.forEach((t) => {
     t.onclick = () => {
-      if (t.dataset.tab !== 'overview') saveNow?.(); // 去别的标签前先把概览的改动落盘
+      saveNow?.(); // 换页前把表单改动落盘（没改动时 saveNow 按 lastSaved 直接跳过）
       showTab(t.dataset.tab);
     };
   });
@@ -2363,16 +2615,6 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
     $(id)?.addEventListener('blur', () => saveNow?.());
   }
   $('dThink')?.addEventListener('change', () => scheduleSave(200));
-
-  // 概览左侧分区：资料 / 执行配置（切之前先 flush —— 藏起来的那一栏也得先落盘）
-  const ovBtns = $('detailView').querySelectorAll('[data-ov]');
-  const ovPanels = $('detailView').querySelectorAll('[data-ov-panel]');
-  const showOv = (key) => {
-    ovBtns.forEach((b) => b.classList.toggle('on', b.dataset.ov === key));
-    ovPanels.forEach((p) => { p.hidden = p.dataset.ovPanel !== key; });
-  };
-  ovBtns.forEach((b) => { b.onclick = () => { saveNow?.(); showOv(b.dataset.ov); }; });
-  showOv('profile');
 
   /* 更多操作（⋯）：点开才露删除。删除是破坏性动作，平时收起来，别让它跟「发消息」平起平坐 */
   $('dMore')?.addEventListener('click', (e) => {

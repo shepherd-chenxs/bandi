@@ -140,7 +140,11 @@ async function openQrDialog() {
     if (!el) { clearInterval(timer); return; } // 弹窗关了
     el.textContent = left > 0 ? `剩 ${Math.floor(left / 60)} 分 ${left % 60} 秒` : '已过期，请重新生成';
   }, TICK_MS);
-  dlg.addEventListener('close', () => clearInterval(timer), { once: true });
+  /* 关掉 = 摘掉（全站动态 dialog 惯例）：这个弹窗带 #pairQr / #pairLeft / #pairUrls
+     一串全站唯一的 id，留着不 remove 的话，下次再开 `$`（getElementById 只认第一个）
+     会命中旧弹窗里的死节点 —— 新二维码画进看不见的旧节点，用户看到的就是"码不出来"
+     （2026-10-29 用户实报：再次点击生成二维码配对，二维码展示不出来）。 */
+  dlg.addEventListener('close', () => { clearInterval(timer); dlg.remove(); }, { once: true });
 
   $('pairRefresh').onclick = async () => {
     try {

@@ -878,6 +878,18 @@ export async function openBoardPage({ project = null } = {}) {
     }
   }
 
+  /*
+   * 窄屏分支（2026-11 用户定案）：手机上看不了任务看板 —— 多列横排 + 拖拽在窄屏没法用。
+   * 窄屏（body.mb-narrow，js/mobile.mjs 维护）直接渲染成「状态 tab + 列表」，
+   * **不做 web 端形态切换**；桌面（>900px）一行不动。fetch 在上面已经共用完，
+   * 这里只分渲染 —— 与员工详情 renderDetailMobile 同一模式。
+   * 取数失败不分支：错误空态桌面窄屏都认，别为它再抄一份。
+   */
+  if (document.body.classList.contains('mb-narrow') && !err) {
+    renderBoardMobile(view, data, { project, isAll });
+    return;
+  }
+
   view.innerHTML = `
     ${headRow(isAll
       ? breadcrumb([{ label: '工作台', to: 'workbench' }, { label: '任务看板' }])
@@ -920,6 +932,122 @@ export async function openBoardPage({ project = null } = {}) {
   wireBoard(view, S.kbLast.wire);
   wireKbFilter();
   wireKbColsSetting();
+}
+
+
+
+/* ---------------------------------------------------------------- 看板 · 窄屏列表形态 */
+
+/**
+ * 看板的**窄屏形态**（2026-11 用户定案）：手机上看不了多列横排 + 拖拽 ——
+ * 窄屏（body.mb-narrow）直接渲染成「状态 tab + 列表」，桌面看板一行不动。
+ * 数据抓取在 openBoardPage 已共用，这里只管渲染（renderDetailMobile 同一模式）。
+ *
+ * 窄屏**不画**：拖拽、列头「＋」、列宽设置、筛选弹层（现有筛选层没为窄屏适配过）。
+ * 所以这里也**不应用 S.kbFilter**：筛选层画不出来，还悄悄生效的话，列表会
+ * "莫名少任务"且无处可清 —— 宁可全量，也别让看不见的筛选替人做主。
+ *
+ * 页头：面包屑照旧 + 「刷新」+「＋ 新建」（建卡走既有 taskDialog 弹窗，
+ * 项目口径走 wire.taskProject —— 项目看板不选项目，全局面板弹窗里选）。
+ */
+function renderBoardMobile(view, data, { project = null, isAll = false }) {
+  S.view = 'plugin';
+  showView('plugin');
+  view.innerHTML = `
+    ${headRow(isAll
+      ? breadcrumb([{ label: '工作台', to: 'workbench' }, { label: '任务看板' }])
+      : breadcrumb([
+          { label: '工作台', to: 'workbench' },
+          { label: '项目', to: 'projects' },
+          { label: project.name, to: 'projects', arg: project.id },
+          { label: '任务看板' },
+        ]),
+      `<button data-kb-new class="primary">＋ 新建</button><button data-kb-refresh>刷新</button>`)}
+    <div class="detail-body">
+      <nav class="kb-m-tabs" id="kbMTabs" aria-label="任务状态"></nav>
+      <div class="kb-m-list" id="kbMList"></div>
+    </div>`;
+
+  // 与桌面同一个 S.kbLast：卡片详情、建卡弹窗的回调口径一点不变
+  S.kbLast = {
+    data,
+    wire: {
+      refresh: () => (isAll ? openTaskBoard() : openProjectDetail(project.id)),
+      // 项目的看板：建卡不用选项目；全局：null = 弹窗里选
+      taskProject: () => project,
+    },
+  };
+
+  view.querySelector('[data-kb-refresh]')?.addEventListener('click', () => {
+    S.kbLast.wire.refresh().catch((e) => toast(e.message, 'error'));
+  });
+  // 默认落「待办」：全局面板的「＋ 新建」没有列可依，待办 = 决定做了的（想法列是收集箱，
+  // 桌面上列头「＋」也只给 想法/待办 两列 —— 这里收成一个入口，落待办最不意外）
+  view.querySelector('[data-kb-new]')?.addEventListener('click', () => {
+    taskDialog(S.kbLast.wire.taskProject(), 'todo');
+  });
+
+  // 状态 tab：'all' + 数据里**出现了的**状态（不写死全八态，空态不出 tab）；
+  // 顺序跟列序走（COL_STATUS 的键序），与桌面看板从左到右一致。
+  // 当前 tab 记内存态（S.kbMobileTab），不进路由；换板后没这一类就回落「全部」。
+  const tabs = [
+    { key: 'all', label: '全部', count: kbRows(data).length },
+    ...(data?.columns ?? [])
+      .map((c) => ({ key: c.key, label: c.label, count: (c.cards ?? []).length }))
+      .filter((t) => t.count > 0),
+  ];
+  if (!tabs.some((t) => t.key === S.kbMobileTab)) S.kbMobileTab = 'all';
+
+  const paint = () => {
+    const tabsEl = $('kbMTabs');
+    const listEl = $('kbMList');
+    if (!tabsEl || !listEl) return;
+    tabsEl.innerHTML = tabs.map((t) =>
+      `<button type="button" class="kb-m-tab${S.kbMobileTab === t.key ? ' on' : ''}" data-kb-m-tab="${esc(t.key)}">${esc(t.label)}<span class="kb-m-n">${t.count}</span></button>`,
+    ).join('');
+    // 按**列**过滤而不是按状态词：一列可能混两个状态词（「已阻塞」列收已阻塞·已停止、
+    // 「待办」列收流程的「待办」）—— 跟桌面"列 = 类"的口径一致；「全部」不过滤。
+    const rows = S.kbMobileTab === 'all'
+      ? kbRows(data)
+      : ((data?.columns ?? []).find((c) => c.key === S.kbMobileTab)?.cards ?? []);
+    listEl.innerHTML = rows.length
+      ? rows.map((r) => kbMobileRow(r, isAll)).join('')
+      : `<div class="kb-m-empty">${kbRows(data).length ? '这一类没有任务' : '还没有任务'}</div>`;
+    tabsEl.querySelectorAll('[data-kb-m-tab]').forEach((b) => {
+      b.onclick = () => { S.kbMobileTab = b.dataset.kbMTab; paint(); };
+    });
+    // 点卡片 = 桌面看板**同一条路**：行上带与 kbCard 相同的跳转属性
+    // （data-kb-open / data-kb-conv / data-kb-flow），wireBoard 原样认 —— 不另写一份开卡逻辑
+    wireBoard(listEl, S.kbLast.wire);
+  };
+  paint();
+}
+
+
+
+/**
+ * 窄屏列表的一行：标题（粗）、项目名 pill（全局面板才显）、执行人、状态 pill、时间（有就显）。
+ * 跳转属性与 kbCard 完全同款 —— 「本地卡」（手工/仓库值班）带 data-kb-open 进整页详情，
+ * 流程卡带 data-kb-flow、聊天卡带 data-kb-conv，wireBoard 的开卡逻辑原样复用，不复制粘贴。
+ * **不带**拖拽属性与删除按钮：那两个手势是桌面看板的，窄屏的删改在卡片详情页里做。
+ */
+export function kbMobileRow(r, isAll) {
+  const jump = r.source === 'flow'
+    ? `data-kb-flow="${esc(r.flow_id)}" data-kb-tpl="${esc(r.template_id || '')}"`
+    : r.conversation_id
+      ? `data-kb-conv="${esc(r.conversation_id)}"`
+      : '';
+  const open = (r.source === 'manual' || r.source === 'repo') && r.manual_id
+    ? `data-kb-open="${esc(r.manual_id)}" tabindex="0"`
+    : '';
+  const proj = isAll && r.project_name
+    ? `<span class="kb-tag proj" title="属于哪个项目">${esc(r.project_name)}</span>`
+    : '';
+  return `<article class="kb-m-card" ${jump} ${open} title="${esc(r.note || '')}">
+    <div class="kb-m-title">${esc(r.task)}</div>
+    <div class="kb-m-meta">${proj}<span class="kb-state">${esc(r.status)}</span></div>
+    <div class="kb-m-foot"><span class="kb-who">${esc(r.assignee || '未指派')}</span><span>${esc(r.at ?? '')}</span></div>
+  </article>`;
 }
 
 

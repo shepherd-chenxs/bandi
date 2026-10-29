@@ -3,7 +3,7 @@
  * 2026-10-25 起「数字员工」从 A–Z 字母头改为按部门分组（用户口径：部门是给人看的分组）。 */
 import { esc, personSubtitle, saveCollapsed, toast } from './shell.mjs';
 import { ICON_CLOUD, ICON_FOLDER, cut, hhmm, initial, personaAvatar, plain } from './ui.mjs';
-import { openSettings, settingsSections } from './settings.mjs';
+import { openSettings, settingsGroups } from './settings.mjs';
 import { archivedEntryHTML, closeCtxMenu, convDisplayName, enterArchiveView, openConversationSafe, renderArchiveList } from './listmenu.mjs';
 import { renderFlowList } from './workflows.mjs';
 import { renderRunList } from './flowpages.mjs';
@@ -234,18 +234,46 @@ export function renderList() {
   }
 
   if (S.nav === 'settings') {
-    // 分节清单跟左栏面包屑共用一份（`settingsSections()` 会按设备形态收敛，见 settings.mjs）
-    const items = settingsSections();
-    $('listBody').innerHTML = items
-      .map(
-        ([key, title, sub]) => `<div class="item ${S.settingsSection === key ? 'active' : ''}" data-set="${key}">
+    /*
+     * 设置左栏**分区**（2026-10-29 用户定稿："设置页各项乱糟糟的"）：
+     * 桌面管理员 = 五组、每组的节挂灰字组头（复用通讯录 `.list-sec` 那套视觉），
+     * 组头**可折叠**（2026-10-29 用户加的需求）：收起状态记进 `S.secCollapsed`
+     * （key 加 `set:` 前缀，跟通讯录的 group/person/dept 键隔开），saveCollapsed 落 localStorage。
+     * 设备 / 非管理员的清单太短，`title: null` 不画组头，照旧平铺。
+     * 行照通讯录的规律给组头让位（`.sec-body` 缩进 12px）。
+     */
+    const collapsed = S.secCollapsed ?? (S.secCollapsed = {});
+    const groups = settingsGroups();
+    /* 单行（2026-10-29 用户："二级菜单下的说明去掉"）：只画标题，副标题说明不再渲染 ——
+       导航树求短求快，说明是阅读负担；数组里的 sub 留着（title 兜底等别处还用得上）。 */
+    const row = ([key, title]) => `<div class="item ${S.settingsSection === key ? 'active' : ''}" data-set="${key}" title="${title}">
           <div class="who">
             <div class="line1"><b>${title}</b></div>
-            <div class="line2">${sub}</div>
           </div>
-        </div>`,
-      )
+        </div>`;
+    $('listBody').innerHTML = groups
+      .map((g) => {
+        if (!g.title) return g.items.map(row).join('');
+        const key = `set:${g.title}`;
+        /* 随时可收（2026-10-29 用户实报"为什么折叠不了"后去掉强制展开）：
+           当前分节在收起的组里也不拦 —— 右边页头写着它是谁，左栏不欠一份高亮。
+           但收起后选中行跟着消失，"我正看的东西去哪了"没有答案 ——
+           组头右侧补一颗点标记（VS Code 折叠文件夹里有改动文件的同款心智），
+           点开组就能看到高亮行。 */
+        const hasActive = g.items.some(([k]) => k === S.settingsSection);
+        const shut = !!collapsed[key];
+        return `<div class="list-sec nav ${shut ? 'shut' : ''}" data-sec="${key}" title="${shut ? '展开' : '收起'}">
+            <i class="sec-arrow"></i>${esc(g.title)}${shut && hasActive ? '<i class="sec-here" title="当前分节收在这组里"></i>' : ''}
+          </div>` + (shut ? '' : `<div class="sec-body nav">${g.items.map(row).join('')}</div>`);
+      })
       .join('');
+    $('listBody').querySelectorAll('[data-sec]').forEach((el) => {
+      el.onclick = () => {
+        S.secCollapsed[el.dataset.sec] = !S.secCollapsed[el.dataset.sec];
+        saveCollapsed();
+        renderList();
+      };
+    });
     $('listBody').querySelectorAll('[data-set]').forEach((el) => {
       el.onclick = () => openSettings(el.dataset.set);
     });
