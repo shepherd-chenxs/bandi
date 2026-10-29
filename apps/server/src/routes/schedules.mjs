@@ -86,12 +86,24 @@ function assertActionConfig(actionId, config) {
 export async function handleSchedules(req, res, url) {
   if (!url.pathname.startsWith('/api/schedules')) return false;
   const one = /^\/api\/schedules\/([^/]+)(\/run)?$/.exec(url.pathname);
-  const view = (j) => ({
-    ...j,
-    config: schedules.parseConfig(j),
-    text: schedules.describeRepeat(j),
-    running: schedules.runningIds().includes(j.id),
-  });
+  const view = (j) => {
+    const config = schedules.parseConfig(j);
+    return {
+      ...j,
+      config,
+      text: schedules.describeRepeat(j),
+      running: schedules.runningIds().includes(j.id),
+      // 卡片上那一行"它到底要干什么"：由**动作自己**说（见 schedules.ACTIONS 的 describe）。
+      // 以前是前端按字段名拼的 —— 加第二个通用动作时那段 if 就得重写，而卡片不该认识动作。
+      lead: schedules.ACTIONS[j.action]?.describe?.(config) ?? '',
+      /*
+       * 仓库级巡检（2026-10-29）：`pr-scan` 且指定了仓库的任务，**主人是仓库那一行**
+       * （代码托管 › 仓库设置里改节拍）。这里照样列出来 —— 藏起来会让人以为任务丢了 ——
+       * 但界面据此标「随仓库」，并说清改去哪儿改。
+       */
+      ownedByRepo: j.action === 'pr-scan' && config.repo ? String(config.repo) : null,
+    };
+  };
 
   if (req.method === 'GET' && url.pathname === '/api/schedules') {
     return (

@@ -90,6 +90,44 @@ export function setTemplatePublished(id, on = true) {
   );
   return getWorkflowTemplate(id);
 }
+
+/**
+ * 归档 / 取消归档（2026-10-29）。归档**只动模板这一行**：
+ * 模板留着、历史实例一条不碰 —— 收起来的是"以后还要不要看见它"，不是"它存在过吗"。
+ * 归档时发布状态由调用方（workflows.archiveTemplate）清掉：收起来的流程不该还能起单。
+ */
+export function setTemplateArchived(id, on = true) {
+  db.prepare('UPDATE workflow_templates SET archivedAt = ?, updatedAt = ? WHERE id = ?').run(
+    on ? nowIso() : null,
+    nowIso(),
+    id,
+  );
+  return getWorkflowTemplate(id);
+}
+
+/**
+ * 删掉一个模板，**连同它的全部实例**（含 v1 的 workflow_steps、v2 的 workflow_tasks）。
+ * 与 deleteWorkflowRun 同一口径：只删流程自己的表，各经办人的会话与消息一律不动。
+ * 返回删掉的实例条数（界面提示"一起删了多少"用）。模板不存在返回 null。
+ */
+export function deleteWorkflowTemplate(id) {
+  if (!getWorkflowTemplate(id)) return null;
+  const runIds = db.prepare('SELECT id FROM workflow_runs WHERE templateId = ?').all(id).map((r) => r.id);
+  db.exec('BEGIN');
+  try {
+    for (const rid of runIds) {
+      db.prepare('DELETE FROM workflow_tasks WHERE runId = ?').run(rid);
+      db.prepare('DELETE FROM workflow_steps WHERE runId = ?').run(rid);
+    }
+    db.prepare('DELETE FROM workflow_runs WHERE templateId = ?').run(id);
+    db.prepare('DELETE FROM workflow_templates WHERE id = ?').run(id);
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+  return runIds.length;
+}
 /** 某个会话里挂着的流程（一个项目群可以挂多条） */
 
 export function listWorkflowRunsByThread(threadId) {

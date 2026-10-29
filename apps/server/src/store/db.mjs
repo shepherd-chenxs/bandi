@@ -619,6 +619,8 @@ ensureColumn('workflow_templates', 'startNode', 'startNode TEXT');
 // 发布：null = 草稿（只在工作流模块里编）；有值 = 已发布（工作台里能点开起流程）
 
 ensureColumn('workflow_templates', 'publishedAt', 'publishedAt TEXT');
+// 归档：null = 在清单里；有值 = 收起来了（模板不删、历史实例原样留着）
+ensureColumn('workflow_templates', 'archivedAt', 'archivedAt TEXT');
 // 场地：这个单子挂在哪个会话里跑（项目群 / 某个数字员工的会话）
 
 ensureColumn('workflow_runs', 'threadId', 'threadId TEXT');

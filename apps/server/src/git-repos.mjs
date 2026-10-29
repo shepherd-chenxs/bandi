@@ -732,6 +732,48 @@ export async function commitAll(row, { message, allowSecrets = false, paths = nu
 }
 
 /**
+ * 「生成提交说明」要的素材（2026-10-29）。
+ *
+ * 只取**勾选的**那批文件（没勾就是整片工作区），跟 commitAll 的口径保持一致 ——
+ * 说明跟真提交进去的内容对不上，比没有说明更糟。
+ *
+ * 三块信息，都是模型写得准的最小集：
+ *   · `files`  路径 + porcelain 状态（M/A/D/??）
+ *   · `stat`   `git diff --stat` 的原文（行数增减）
+ *   · `diff`   截断到 maxDiffChars 的 diff 正文
+ * 未跟踪文件不在 `git diff` 里，单独给一份清单，让模型知道"这几个是新加的"。
+ */
+export async function changeDigest(row, { paths = null, maxDiffChars = 4000 } = {}) {
+  const st = await workState(row);
+  if (!st.dirtyCount) throw new Error('工作区是干净的，没有可提交的改动');
+  const subset = Array.isArray(paths) && paths.length > 0;
+  const picked = subset ? st.dirty.filter((f) => paths.includes(f.path)) : st.dirty;
+  if (!picked.length) throw new Error('勾选的文件不在改动里了（期间有人动过）—— 重新看一次改动再生成');
+
+  const files = picked.map((f) => ({ path: f.path, status: String(f.status) }));
+  const tracked = files.filter((f) => f.status !== '??').map((f) => f.path);
+  const untracked = files.filter((f) => f.status === '??').map((f) => f.path);
+
+  let stat = '';
+  let diff = '';
+  if (tracked.length) {
+    const s = await gitIn(row.localPath, ['diff', 'HEAD', '--stat', '--', ...tracked], { timeoutMs: GIT_FAST_MS });
+    if (s.code === 0) stat = s.out;
+    const d = await gitIn(row.localPath, ['diff', 'HEAD', '--', ...tracked], { timeoutMs: GIT_FAST_MS });
+    if (d.code === 0) diff = d.out;
+  }
+  return {
+    fullName: row.fullName,
+    branch: st.branch,
+    files,
+    untracked,
+    stat,
+    diff: diff.slice(0, maxDiffChars),
+    diffTruncated: diff.length > maxDiffChars,
+  };
+}
+
+/**
  * 把 `git push` 的失败输出翻译成人话（**纯函数**，冒烟直接钉）。
  *
  * 2026-10-27 实报：人往 `main` 直接推，被 GitHub 规则集拒了，应用却按"非快进"那档说

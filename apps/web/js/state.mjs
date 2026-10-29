@@ -180,6 +180,7 @@ export function syncContactsPoll() {
 
 
 export function setNav(nav, opts = {}) {
+  const prevNav = S.nav;
   S.nav = nav;
   // 一级栏只是兜底：具体页面的入口函数会在摆好后调 setRoute 覆盖成更具体的那个
   S.route = null;
@@ -189,6 +190,13 @@ export function setNav(nav, opts = {}) {
    * 不这样收口的话，从归档视图点去别处再回来，左栏还停在归档列表上。
    */
   if (!opts.keepArchiveView) S.archivedView = false;
+  // 工作流的「已归档」也是子视图（消息模块同款）：离开工作流、或正常进来都退回主清单。
+  // 归档视图里删完模板要留在原地，走 openWorkflows(id, {keepView:true}) 把旗子带上。
+  if (!opts.keepFlowArchiveView) S.flowArchivedView = false;
+  // 左栏底部固定条是**跨列表**的（消息/工作流的「已归档 N」都挂这儿）：
+  // 切栏先清空，谁的入口谁自己再写 —— 不然从工作流切去代码托管，那行「已归档」还赖在页底。
+  const lf = $('listFoot');
+  if (lf) lf.innerHTML = '';
   // 离开工作台那一栏 = 离开项目列表 / 项目看板 / 全局面板 —— 顺手清掉。
   // 不清的话它们会一直挂着：位置记里留着一个"在看板"（刷新时那条路会被优先捡起来），
   // 而从看板点会话卡会切到消息页（那时看板状态就该结束）。这些标志只对工作台那一栏有意义。
@@ -196,6 +204,13 @@ export function setNav(nav, opts = {}) {
     S.projectList = false;
     S.projectId = null;
     S.boardAll = false;
+    // 也意味着离开了插件主从页（远程连接 / 代码托管）：把「上次给哪个插件画过」忘掉，
+    // 下次进来重新清一次搜索词（见 renderPluginMaster / renderGitRepos），
+    // 不然上个栏目的关键词会把左边的机器 / 仓库全滤没，看着像"全丢了"。
+    S.pluginSearchFor = null;
+    // 项目页那个框同理（S.projSearchFor 记「上次是谁在用 #search」）：
+    // 不重置的话，下次进项目页会以为框是自己的、不去清旧关键词。
+    S.projSearchFor = null;
   }
   // 工作流编排的入口搬到**工作台**里了（rail 上不再单列一项）。
   // 它仍是一级栏的一种状态（左栏归属、位置记忆都靠它），所以高亮落在「工作台」上 ——
@@ -221,6 +236,14 @@ export function setNav(nav, opts = {}) {
   // 工作台：宫格首页左栏整个收掉；进插件后左栏让位给插件自己的列表（搜索框对插件没用）。
   // 专家库是整页卡片墙，搜索框同样没用 —— 一起收掉。
   $('search').closest('.list-search')?.classList.toggle('hidden', nav === 'plugins' || nav === 'experts');
+  // 换栏顺手清搜索（2026-10-29）：旧关键词是上一个栏的语境（在代码托管搜仓库名，
+  // 切到消息不该还滤着）。只在**真的换了栏**时清 —— 同栏内点行重摆（通讯录点员工详情
+  // 也是一遍 setNav('contacts')）不能把用户正打着字的搜索框清掉。
+  if (prevNav !== nav && S.filter) {
+    S.filter = '';
+    const si = $('search');
+    if (si) si.value = '';
+  }
   closeAddMenu();
   // 工作台是整页宫格，二级列表栏在那儿没用 —— 整列收掉（见 CSS 的 body.no-list）。专家库同理。
   document.body.classList.toggle('no-list', nav === 'plugins' || nav === 'experts');

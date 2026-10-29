@@ -558,6 +558,18 @@ export async function openPlugins() {
   S.projectList = false;   // 回宫格 = 离开项目页
   S.projectId = null;
   S.boardAll = false;      // 也离开全局面板
+  /*
+   * 回宫格 = 离开所有左栏列表（项目 / 远程连接 / 代码托管都在这儿）。它们是**共用同一个搜索框**的，
+   * 而且都只在「进页那一次」清旧词（靠 pluginSearchFor / projSearchFor 认领）。
+   * 不在这儿收口的话：代码托管里搜「repo」→ 回宫格 → 点项目，左边会被「repo」滤成一片空白。
+   */
+  S.pluginSearchFor = null;
+  S.projSearchFor = null;
+  if (S.filter) {
+    S.filter = '';
+    const si = $('search');
+    if (si) si.value = '';
+  }
   savePlace();             // 点一级栏 = 回宫格首页，这个位置也要记
   /*
    * 设备形态（2026-10-28）：`/api/plugins` 不在白名单（插件目录含磁盘路径），
@@ -1315,15 +1327,40 @@ export async function renderPluginMaster(plugin, split) {
   if (!rows.some((r) => keyOf(r) === String(S.pluginRow))) S.pluginRow = rows.length ? keyOf(rows[0]) : null;
   const sel = rows.find((r) => keyOf(r) === String(S.pluginRow)) ?? null;
 
+  /*
+   * 顶部搜索（2026-10-29 用户："这个页面也加搜索"）：加在**通用的主从这里**，
+   * 远程连接、代码托管以及以后的主从页一起有，不用每页各写一遍。
+   *   · 吃全站共用的 `S.filter`（app.mjs 的全局 input 委托维护）；
+   *   · 只重画 `#listBody` 里的行，输入框在栏外，打一个字不会失焦；
+   *   · **进入哪个插件才清一次旧关键词**（`S.pluginSearchFor` 记着上次是给哪个插件画的）：
+   *     这个函数选中一行 / 刷新详情都会重跑，要是无条件清，选一行搜索词就没了。
+   */
+  const searchBox = $('search').closest('.list-search');
+  searchBox?.classList.remove('hidden');
+  if (searchBox) $('search').placeholder = `搜${plugin.label}`;
+  if (S.pluginSearchFor !== plugin.id) {
+    S.pluginSearchFor = plugin.id;
+    if (S.filter) { S.filter = ''; $('search').value = ''; }
+  }
+
   // 左栏顶上：工作台 › 插件名（面包屑从右页头挪过来；页头整条已去掉）
   // 不用 m.heading（「项目」「登记表」）—— 那是"这一列是什么"，面包屑要回答的是"你在哪儿"。
   setListTitle([{ label: '工作台', to: 'workbench' }, { label: plugin.label }]);
   $('listAction').classList.toggle('hidden', !m.add);
   $('listAction').title = m.add?.label || '';
-  $('listBody').innerHTML = rows.length
-    ? rows
-        .map(
-          (r) => `<div class="item${sel && keyOf(r) === keyOf(sel) ? ' active' : ''}" data-master="${esc(keyOf(r))}">
+
+  const paint = () => {
+    const q = String(S.filter ?? '').trim().toLowerCase();
+    // 标题和副标题都搜：远程连接那页「ThinkPad-P15 / bandi@192.168.5.19」两种都有人记
+    const hit = (r) =>
+      !q ||
+      String(tpl(m.title, r)).toLowerCase().includes(q) ||
+      (m.subtitle ? String(tpl(m.subtitle, r)).toLowerCase().includes(q) : false);
+    const shown = rows.filter(hit);
+    $('listBody').innerHTML = shown.length
+      ? shown
+          .map(
+            (r) => `<div class="item${sel && keyOf(r) === keyOf(sel) ? ' active' : ''}" data-master="${esc(keyOf(r))}">
             <div class="who">
               <!-- 2026-10-20 收口：原来直接 b + div.sub（没有规则，标题 16px 粗体、副标题全色折行），
                    跟「项目」页的 .line1/.line2 长得不是一套。现在所有主从列表都用标准行结构。 -->
@@ -1331,18 +1368,24 @@ export async function renderPluginMaster(plugin, split) {
               ${m.subtitle ? `<div class="line2" title="${esc(tpl(m.subtitle, r))}">${esc(tpl(m.subtitle, r))}</div>` : ''}
             </div>
           </div>`,
-        )
-        .join('')
-    : `<div class="empty" style="padding:32px 12px">${esc(m.empty || '还没有数据')}</div>`;
+          )
+          .join('')
+      : q
+        ? `<div class="empty" style="padding:32px 12px">没有匹配「${esc(S.filter.trim())}」的${esc(plugin.label)}</div>`
+        : `<div class="empty" style="padding:32px 12px">${esc(m.empty || '还没有数据')}</div>`;
 
-  $('listBody').querySelectorAll('[data-master]').forEach((el) => {
-    el.onclick = () => {
-      S.pluginRow = el.dataset.master;
-      S.pluginData = {};   // 换了机器，缓存的数据不能再用
-      savePlace();
-      renderPluginPanel().catch((e) => toast(e.message, 'error'));
-    };
-  });
+    $('listBody').querySelectorAll('[data-master]').forEach((el) => {
+      el.onclick = () => {
+        S.pluginRow = el.dataset.master;
+        S.pluginData = {};   // 换了机器，缓存的数据不能再用
+        savePlace();
+        renderPluginPanel().catch((e) => toast(e.message, 'error'));
+      };
+    });
+  };
+  paint();
+  // oninput 赋值而不是 addEventListener：本函数每次重画都跑，别叠监听
+  if ($('search')) $('search').oninput = paint;
 
   return sel;
 }

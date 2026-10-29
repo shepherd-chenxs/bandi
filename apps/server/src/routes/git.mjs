@@ -8,6 +8,8 @@ import * as store from '../store.mjs';
 import * as status from '../status.mjs';
 import { updateProjectTask, afterMerged } from '../project-tasks.mjs';
 import * as git from '../git-repos.mjs';
+import * as commitMsg from '../commit-msg.mjs';
+import * as patrol from '../repo-patrol.mjs';
 
 /**
  * 请求体 → `git.openPr` 的参数（两个入口共用一份：仓库行上直接建、从任务卡上建）。
@@ -122,7 +124,17 @@ export async function handleGit(req, res, url) {
    */
   if (req.method === 'GET' && url.pathname === '/api/git/status') {
     const connected = !!git.readToken();
-    return sendJson(res, 200, { connected, login: connected ? git.cachedLogin() : null, hint: git.tokenHint(), repos: git.listConnected() }), true;
+    return (
+      sendJson(res, 200, {
+        connected,
+        login: connected ? git.cachedLogin() : null,
+        hint: git.tokenHint(),
+        // 仓库行上那「巡检」一行要的东西（节拍 / 上次结果）一次带齐，弹窗不再单独请求
+        repos: git.listConnected().map((r) => ({ ...r, patrol: patrol.viewOf(r) })),
+        patrolPresets: patrol.PRESETS,
+      }),
+      true
+    );
   }
 
   /*
@@ -175,7 +187,7 @@ export async function handleGit(req, res, url) {
   }
 
   if (req.method === 'GET' && url.pathname === '/api/git/repos') {
-    return sendJson(res, 200, { repos: git.listConnected() }), true;
+    return sendJson(res, 200, { repos: git.listConnected().map((r) => ({ ...r, patrol: patrol.viewOf(r) })) }), true;
   }
 
   if (req.method === 'POST' && url.pathname === '/api/git/repos') {
@@ -207,6 +219,45 @@ export async function handleGit(req, res, url) {
       autoMerge: body.autoMerge === undefined ? undefined : !!body.autoMerge,
     });
     return sendJson(res, 200, { repo: row }), true;
+  }
+
+  /*
+   * ---- 仓库级巡检（2026-10-29）----
+   *
+   * 巡检的配置从「定时任务」页搬回仓库行上（用户："这个功能放到代码托管是不是更好"）：
+   * 谁审 / 自动合并 / 巡检节拍本来都长在同一个仓库上，分两个页面配就是让人对着两个对象各改一半。
+   * **底层仍是 schedule_jobs 里一条 pr-scan 任务**（见 ../repo-patrol.mjs），不另起一套定时。
+   * 节拍只收预设 id，校验在 `setPreset` 一处；不认识的直接 400，别存进去了到点却不跑。
+   */
+  const repoPatrol = /^\/api\/git\/repos\/([^/]+)\/patrol$/.exec(url.pathname);
+  if (repoPatrol && req.method === 'POST') {
+    const row = store.getGitRepo(decodeURIComponent(repoPatrol[1]));
+    if (!row) return fail(res, 404, 'E1076', '仓库不在清单里'), true;
+    const body = await readBody(req);
+    try {
+      const view = patrol.setPreset(row, String(body.preset ?? ''));
+      return sendJson(res, 200, { repo: row, patrol: view }), true;
+    } catch (e) {
+      return fail(res, 400, 'E1119', String(e?.message ?? e)), true;
+    }
+  }
+
+  /*
+   * 立即巡检一次：与定时任务页那颗「立即执行」同一条路（有任务时）；
+   * 还没配过节拍就直接扫一次，**不为了跑一次就建一条任务**。请求成功 ≠ 这次跑成功：
+   * 跑挂了是 200 + ok:false（跟 /api/schedules/:id/run 同一口径），"正在跑"才是 400。
+   */
+  const repoPatrolRun = /^\/api\/git\/repos\/([^/]+)\/patrol\/run$/.exec(url.pathname);
+  if (repoPatrolRun && req.method === 'POST') {
+    const row = store.getGitRepo(decodeURIComponent(repoPatrolRun[1]));
+    if (!row) return fail(res, 404, 'E1076', '仓库不在清单里'), true;
+    let out;
+    try {
+      out = await patrol.runNow(row);
+    } catch (e) {
+      return fail(res, 400, 'E1120', String(e?.message ?? e)), true;
+    }
+    return sendJson(res, 200, out), true;
   }
 
   /*
@@ -500,6 +551,22 @@ export async function handleGit(req, res, url) {
     }
   }
 
+  /* 生成提交说明（2026-10-29）：素材自己从 git 取，模型只负责措辞；模型不行就退规则兜底。
+     只读接口 —— 不动工作区、不建 run，失败也只影响这一个按钮。 */
+  const repoSuggestCommit = /^\/api\/git\/repos\/([^/]+)\/suggest-commit$/.exec(url.pathname);
+  if (req.method === 'POST' && repoSuggestCommit) {
+    const row = store.getGitRepo(decodeURIComponent(repoSuggestCommit[1]));
+    if (!row) return fail(res, 404, 'E1076', '仓库不在清单里'), true;
+    const body = await readBody(req);
+    try {
+      return sendJson(res, 200, await commitMsg.suggestCommitMessage(row, {
+        paths: Array.isArray(body.paths) ? body.paths.map(String) : null,
+      })), true;
+    } catch (e) {
+      return fail(res, 400, 'E1113', String(e.message ?? e)), true;
+    }
+  }
+
   const repoPush = /^\/api\/git\/repos\/([^/]+)\/push$/.exec(url.pathname);
   if (req.method === 'POST' && repoPush) {
     const row = store.getGitRepo(decodeURIComponent(repoPush[1]));
@@ -612,7 +679,11 @@ export async function handleGit(req, res, url) {
   const one = /^\/api\/git\/repos\/([^/]+)$/.exec(url.pathname);
   if (req.method === 'DELETE' && one) {
     try {
-      return sendJson(res, 200, git.removeRepo(decodeURIComponent(one[1]))), true;
+      // 先记下仓库名：移除之后清单里查不到，但它的巡检任务还挂在 schedule_jobs 上
+      const row = store.getGitRepo(decodeURIComponent(one[1]));
+      const out = git.removeRepo(decodeURIComponent(one[1]));
+      const droppedJobs = row ? patrol.forgetRepo(row.fullName) : 0;
+      return sendJson(res, 200, { ...out, droppedJobs }), true;
     } catch (e) {
       return fail(res, 404, 'E1066', String(e.message ?? e)), true;
     }

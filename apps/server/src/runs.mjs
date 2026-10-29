@@ -107,6 +107,17 @@ export function errorForDisplay(run) {
  */
 function pushEvent(run, evt) {
   run.seq += 1;
+  /*
+   * 把**已经说出口的回复**攒一份（2026-10-29，用户实报「点停止生成，对方的消息完全消失」）。
+   *
+   * 为什么要在推给订阅者**之前**就攒：人一点停止，子进程被掐，适配器多半**等不到 final 事件**
+   * （dsh 的 finalText 只来自 final）；收尾时 `run.finalText` 是空的 → 那条回话一个字都没落库，
+   * 界面从库里重画时它整段消失。用户看到的字就在下面这几行里，先留住它们。
+   *
+   * 按**分块**累加：前端的实时气泡也是逐块追加的（chat.mjs 的 onText），
+   * 这样停止时留下的就是"他刚才对我说到哪儿"的原文，不另造一句话。
+   */
+  if (evt.type === 'text' && typeof evt.text === 'string' && evt.text) run.streamedText += evt.text;
   store.appendRunEvent(run.id, run.seq, evt);
   for (const s of run.subs) {
     sse(s, evt, run.seq);
@@ -230,6 +241,10 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
     done: null,
     sessionId: null,
     finalText: '',
+    // 已经流出去的回话（text 事件逐块累加，见 pushEvent）—— 人点停止时靠它把话留住
+    streamedText: '',
+    // 这一轮的回复是不是已经落过库（正常完成会落；收尾时别重复写一条）
+    replyPersisted: false,
     exitCode: null,
     error: null,
     connectors: null,
@@ -426,10 +441,18 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
     })
     .then((res) => {
       run.sessionId = res.sessionId;
+      // **人主动停的**要和"跑挂了"分开：前者没有错，不该记成失败、也不该让流程判失败
+      const stopped = ctl.signal.aborted || run.stoppedByUser;
       // 各家适配器字段名不完全一样（codex/dsh 给 finalText，claude 给 text），这里归一
       const text = res.finalText ?? res.text ?? '';
+      /*
+       * 停止生成（2026-10-29）：CLI 被掐死时往往**来不及发 final**（dsh 的 finalText 只来自
+       * final 事件，见 pushEvent 的注释），这时用已经流出去的 text 事件兜底 ——
+       * 用户屏幕上看到的就是这些字，丢掉它等于"对方刚说的话凭空消失"。
+       */
+      const kept = text || (stopped ? run.streamedText : '');
       // 跨运行时（或自动重开）时，先说一句"上下文带不过来"，再接他的回话
-      run.finalText = text ? memoryNote + text : text;
+      run.finalText = kept ? memoryNote + kept : kept;
       run.exitCode = res.exitCode;
 
       // sessionId 写回**本作用域**那一行；水位线仍写主行（'' ）——
@@ -438,34 +461,12 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
       if (res.sessionId) store.setMemberSession(thread.id, personaId, res.sessionId, sessionScope, rt.family);
       if (watermark) store.setMemberWatermark(thread.id, personaId, watermark);
 
-      if (run.finalText) {
-        /*
-         * 评论区（2026-10-18）：回话挂在**触发他的那条评论所在的议题**下。
-         * 触发消息的 rowid 就是 run.watermark，按它反查最稳 ——
-         * 别拿"最后一条 user 消息"猜，连着回复两个议题时会挂错。
-         *
-         * 顶层评论（parentId 为空）的回复挂到**这条评论自己**：只靠"时序"归组的话，
-         * 过几天回到旧议题补一句、中间又插了新议题时，回复会认到错的议题下。
-         */
-        const trigger = store.getMessageByRowid(thread.id, watermark);
-        store.addMessage({
-          conversationId: thread.id,
-          runId: run.id,
-          role: 'assistant',
-          text: run.finalText,
-          personaId,
-          // ⚠️ 回复也要带上这一步的标记：不带的话，流程面板按 taskId 筛时
-          //    就只剩"我"这侧的消息，他的回话整段看不见（用户实报）
-          taskId: run.workflowTaskId ?? null,
-          parentId: trigger?.parentId ?? trigger?.id ?? null,
-        });
-      }
+      // 回话落库（见 persistReply）。人停的那一轮也要落 —— 带 meta.stopped 给界面标「已停止生成」
+      persistReply(run, run.finalText, stopped ? { stopped: true } : null);
 
       // 成功的判据：没标错，且没有非零退出码。
       // claude 在收到 result 就结算，不给 exitCode —— 所以不能只看 exitCode === 0。
       const ok = !res.isError && (res.exitCode == null || res.exitCode === 0);
-      // **人主动停的**要和"跑挂了"分开：前者没有错，不该记成失败、也不该让流程判失败
-      const stopped = ctl.signal.aborted || run.stoppedByUser;
       finish(run, {
         status: stopped ? '已停止' : ok ? '完成' : '失败',
         exitCode: res.exitCode ?? null,
@@ -605,7 +606,11 @@ export function finishRemote(
       text: finalText,
       personaId: run.personaId,
       taskId: run.workflowTaskId ?? null,
+      // 远端那台机器上被停的也一样：留个标记，界面上认得出「这不是他说完的」
+      // （一个字都没回来的那种由 finish() 用已经流过来的 text 事件兜底）
+      meta: status === '已停止' ? { stopped: true } : null,
     });
+    run.replyPersisted = true;
   }
   if (run.watermark) store.setMemberWatermark(run.conversationId, run.personaId, run.watermark);
   finish(run, { status, exitCode, error, usage });
@@ -680,6 +685,36 @@ export function onRunFinish(fn) {
   finishHooks.push(fn);
 }
 
+/**
+ * 把这一轮的回话落成一条 assistant 消息（**唯一入口**，2026-10-29 收口）。
+ *
+ * 评论区（2026-10-18）：回话挂在**触发他的那条评论所在的议题**下。
+ * 触发消息的 rowid 就是 run.watermark，按它反查最稳 ——
+ * 别拿"最后一条 user 消息"猜，连着回复两个议题时会挂错。
+ * 顶层评论（parentId 为空）的回复挂到**这条评论自己**：只靠"时序"归组的话，
+ * 过几天回到旧议题补一句、中间又插了新议题时，回复会认到错的议题下。
+ *
+ * `meta`：人点停止的那一轮带 `{ stopped: true }`，界面据此在气泡上标「已停止生成」。
+ * 重复调用是安全空操作（`replyPersisted` 记住已经落过的那一次）。
+ */
+function persistReply(run, text, meta = null) {
+  if (!text || run.replyPersisted) return;
+  const trigger = store.getMessageByRowid(run.conversationId, run.watermark);
+  store.addMessage({
+    conversationId: run.conversationId,
+    runId: run.id,
+    role: 'assistant',
+    text,
+    personaId: run.personaId,
+    // ⚠️ 回复也要带上这一步的标记：不带的话，流程面板按 taskId 筛时
+    //    就只剩"我"这侧的消息，他的回话整段看不见（用户实报）
+    taskId: run.workflowTaskId ?? null,
+    parentId: trigger?.parentId ?? trigger?.id ?? null,
+    meta,
+  });
+  run.replyPersisted = true;
+}
+
 function finish(run, { status, exitCode = null, error = null, usage = null, elapsedMs = null }) {
   // **只收一次尾**：看门狗强制收尾之后，迟到的正常收尾（或反过来）一律忽略 ——
   // 不设防的话两边会各写一遍状态，后到的把先到的盖掉
@@ -693,6 +728,20 @@ function finish(run, { status, exitCode = null, error = null, usage = null, elap
   run.exitCode = exitCode;
   run.error = error;
   run.finished = true;
+
+  /*
+   * 人主动停的这一轮：子进程被掐，适配器那条 promise 可能**永远不结算**
+   * （孙进程占着 stdout 管道，'close' 不来 —— 见 armStopWatchdog），
+   * 也可能结算了但没有 final。于是 `.then` 那次落库根本没发生，
+   * 用户点完停止、界面从库里重画时，"他刚才说的话"整段不见了（2026-10-29 实报）。
+   *
+   * 这里是**所有运行的唯一终点**，所以兜底放在这儿：停止的收尾把已经流出去的回话落库，
+   * 一个字都没有的就不硬造消息（界面那边另画一条安静的状态行，见 chat.mjs 的 stopBlock）。
+   */
+  if (status === '已停止' && !run.replyPersisted && run.streamedText) {
+    if (!run.finalText) run.finalText = run.streamedText;
+    persistReply(run, run.streamedText, { stopped: true });
+  }
 
   store.finishRun(run.id, { status, exitCode, error, usage });
   store.setConversationStatus(run.conversationId, status);

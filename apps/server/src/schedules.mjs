@@ -21,7 +21,8 @@
 import * as store from './store.mjs';
 import { prScan } from './pr-watch.mjs';
 import { backupDb } from './db-backup.mjs';
-import { runPersonaTask, validatePersonaTask } from './persona-task.mjs';
+import { runPersonaTask, validatePersonaTask, describePersonaTask } from './persona-task.mjs';
+import { runWorkflowTask, validateWorkflowTask, describeWorkflowTask } from './workflow-task.mjs';
 import { retryPendingSteps } from './workflows.mjs';
 import { retryQueuedTasks } from './project-tasks.mjs';
 import { drainAllGroupQueues } from './dispatch.mjs';
@@ -46,7 +47,11 @@ const clip = (s, n) => {
  *
  * 动作**自己声明参数**（`fields`），界面照声明渲染，不认任何具体动作的字段名 ——
  * 所以 PR 巡检的「仓库 / 项目」只是它自己的参数，不是弹窗里写死的两个下拉。
- * 参数类型：`repo`（已接入仓库）/ `project`（项目）/ `persona`（数字员工）/ `number` / `text` / `textarea`。
+ * 参数类型：`repo`（已接入仓库）/ `project`（项目）/ `persona`（数字员工）/ `flow`（已发布的流程）
+ * / `number` / `text` / `textarea`。
+ *
+ * 动作还可以声明 `describe(config)`：卡片上那一行"它到底要干什么"也归动作自己说
+ * （`lead`，见 routes/schedules.mjs 的 view）—— 否则前端就得按 action 名字写 if。
  */
 export const ACTIONS = {
   /*
@@ -85,7 +90,43 @@ export const ACTIONS = {
       },
     ],
     validate: (config) => validatePersonaTask(config),
+    describe: (config) => describePersonaTask(config),
     run: ({ job, config }) => runPersonaTask({ job, config }),
+  },
+  /*
+   * 「交给流程」：到点**发起一条流程实例**，不是把话发给某个人（2026-10-29）。
+   *
+   * 跟上面那个是同一件事的两种执行者 —— 定时任务最自然的两种样子就是
+   * "到点提醒某个人去做" 和 "到点把流水线跑一遍"（发版检查、周报汇总、依赖巡检）。
+   * 只认**已发布**的流程：发布 = "这条流程可以真跑"，跟看板建卡同一口径。
+   */
+  'run-workflow': {
+    id: 'run-workflow',
+    label: '交给流程',
+    hint: '到点发起一条流程实例，按模板节点自己往下走；只列已发布的流程（去工作台 › 工作流里发布）',
+    defaultName: '定时起流程',
+    fields: [
+      {
+        key: 'intent',
+        label: '做什么',
+        type: 'textarea',
+        rows: 4,
+        required: true,
+        requiredText: '「做什么」还没写 —— 到点了得知道拿什么事去起这条流程',
+        placeholder: '这次要办的那件事。它会发给第一个节点的人，例如：把本周合并的 PR 汇总成一份周报',
+      },
+      { key: 'templateId', label: '哪条流程', type: 'flow', empty: '选一条流程', required: true, requiredText: '还没选「哪条流程」' },
+      {
+        key: 'projectId',
+        label: '关联项目',
+        type: 'project',
+        empty: '不关联项目',
+        hint: '',
+      },
+    ],
+    validate: (config) => validateWorkflowTask(config),
+    describe: (config) => describeWorkflowTask(config),
+    run: ({ job, config }) => runWorkflowTask({ job, config }),
   },
   'pr-scan': {
     id: 'pr-scan',

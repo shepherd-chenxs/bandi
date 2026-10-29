@@ -35,6 +35,15 @@ export function validatePersonaTask(config = {}) {
   return null;
 }
 
+/** 卡片上那一行说明（服务端拼好，前端照抄 —— 卡片本身不该认识每个动作的字段名） */
+export function describePersonaTask(config = {}) {
+  const instr = clip(config.instruction, 44);
+  const who = config.personaId ? store.getPersona(String(config.personaId))?.name : null;
+  const proj = config.projectId ? store.getProject(String(config.projectId))?.name : null;
+  const head = `交给${who ? `「${who}」` : '员工'}${proj ? `（在「${proj}」）` : ''}`;
+  return instr ? `${head}：${instr}` : head;
+}
+
 export function runPersonaTask({ job, config }) {
   const bad = validatePersonaTask(config);
   if (bad) throw new Error(bad);

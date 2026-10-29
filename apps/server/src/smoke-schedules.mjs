@@ -35,6 +35,7 @@ const git = await import('./git-repos.mjs');
 const pt = await import('./project-tasks.mjs');
 const schedules = await import('./schedules.mjs');
 const prWatch = await import('./pr-watch.mjs');
+const wf = await import('./workflows.mjs');
 
 /* ---------------------------------------------------------------- ① 到点判定 */
 console.log('① 到点判定：开关、从没跑过、间隔、下限');
@@ -159,6 +160,47 @@ await schedules.runNow(backupJob.id);
 const files3 = listBak();
 check('保留份数生效：跑了三次只留 2 份', files3.length === 2, String(files3.length));
 check('留下的是最近两份（最旧那份被清掉）', !files3.includes(files1[0]), files3.join(','));
+
+/* ---------------------------- ②c 「交给流程」：只认已发布、真起一条实例、卡住也如实说 */
+console.log('\n②c 「交给流程」：只认已发布、真起一条实例、第一步卡住也如实说');
+store.upsertWorkflowTemplate({
+  id: 't-sch-flow',
+  name: '定时用流程',
+  // 第一步**故意不点名**：这样发起时不会真派活（不烧额度），而且正好验"一发起就卡住"的说法
+  nodes: [{ id: 'n1', name: '收集', detail: '把清单收上来', approve: 'end', reject: 'end' }],
+});
+const flowJob = store.createSchedule({
+  name: '定时起流程',
+  action: 'run-workflow',
+  everyMinutes: 30,
+  config: { intent: '汇总本周合并的 PR', templateId: 't-sch-flow' },
+});
+const draftRun = await schedules.runNow(flowJob.id);
+check('模板没发布 → 跑不起来，且说清是"还没发布"', draftRun.ok === false && /还没发布/.test(draftRun.error ?? ''), draftRun.error);
+check('跑失败也没瞎起实例', wf.runsOfTemplate('t-sch-flow').runs.length === 0);
+
+wf.publishTemplate('t-sch-flow', true);
+const flowRun = await schedules.runNow(flowJob.id);
+check('发布后发起成功', flowRun.ok === true, flowRun.summary ?? flowRun.error);
+check('结论里点了流程名', /定时用流程/.test(flowRun.summary ?? ''), flowRun.summary);
+check('第一步没点名 → 结论如实说"卡住"，不说"已经开始"', /卡住/.test(flowRun.summary ?? '') && !/已经开始/.test(flowRun.summary ?? ''), flowRun.summary);
+check('库里真的多了一条实例（标题是任务名）', (() => {
+  const rs = wf.runsOfTemplate('t-sch-flow').runs;
+  return rs.length === 1 && rs[0].title === '定时起流程';
+})(), JSON.stringify(wf.runsOfTemplate('t-sch-flow').runs.map((r) => r.title)));
+
+const badFlowJob = store.createSchedule({
+  name: '坏配置',
+  action: 'run-workflow',
+  everyMinutes: 30,
+  config: { intent: '随便', templateId: 't-nope' },
+});
+const badRun = await schedules.runNow(badFlowJob.id);
+check('流程不存在 → 跑不起来并说出来', badRun.ok === false && /不在了/.test(badRun.error ?? ''), badRun.error);
+const noIntentJob = store.createSchedule({ name: '没想法', action: 'run-workflow', everyMinutes: 30, config: { templateId: 't-sch-flow' } });
+const noIntentRun = await schedules.runNow(noIntentJob.id);
+check('没写「做什么」→ 跑不起来（发起必须有起因）', noIntentRun.ok === false && /做什么/.test(noIntentRun.error ?? ''), noIntentRun.error);
+for (const j of [flowJob, badFlowJob, noIntentJob]) store.deleteSchedule(j.id);
 
 /* ------------------------------------------- ③ PR 巡检：假 fetch 喂 GitHub，验"卡怎么写、状态怎么收" */
 console.log('\n③ PR 巡检：新 PR → 值班卡；合并 → 卡片跟着收');
@@ -318,6 +360,9 @@ try {
     check('建得出来（201）', made.status === 201, String(made.status));
     const id = made.b?.job?.id;
     check('config 存的是对象（界面上直接改）', made.b?.job?.config?.repo === 'smoke/demo');
+    // 仓库级巡检（2026-10-29）：指定了仓库的 pr-scan 在清单里带 owner 标记，
+    // 界面据此标「随仓库」并指回「代码托管 › 仓库设置」。留空 config.repo 的全局任务没有这个标记。
+    check('指定仓库的巡检带 ownedByRepo（界面标「随仓库」）', made.b?.job?.ownedByRepo === 'smoke/demo', String(made.b?.job?.ownedByRepo));
     check('新建任务没有上次运行记录', !made.b?.job?.lastRunAt && !made.b?.job?.lastStatus);
 
     const patched = await req(`/api/schedules/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ everyMinutes: 15, enabled: true }) });
@@ -438,6 +483,110 @@ try {
     await req(`/api/schedules/${encodeURIComponent(withProj.b?.job?.id)}`, { method: 'DELETE' });
     await req(`/api/projects/${encodeURIComponent(projId)}`, { method: 'DELETE' });
     await req(`/api/schedules/${encodeURIComponent(madePt.b?.job?.id)}`, { method: 'DELETE' });
+
+    /*
+     * 「交给流程」（2026-10-29 用户："定时任务也可以交给流程来执行"）。
+     * 验四件事就够：动作声明对 / 模板清单只列已发布 / 三种配错都 400 且说人话 / 卡片说明带流程名。
+     * **不真跑** —— 同 persona-task：真跑会起实例、真派活，那是「立即跑」按钮的事（store 层已验过）。
+     */
+    const rw = (await req('/api/schedules')).b.actions.find((a) => a.id === 'run-workflow');
+    check('动作清单里有「交给流程」', !!rw, (await req('/api/schedules')).b.actions.map((a) => a.id).join(','));
+    check(
+      '它的参数是「输入区 + 选流程 + 选填的项目」，前两个必填',
+      rw?.fields?.map((f) => f.type).join(',') === 'textarea,flow,project' &&
+        rw?.fields?.[0]?.required === true &&
+        rw?.fields?.[1]?.required === true &&
+        !rw?.fields?.[2]?.required,
+      JSON.stringify(rw?.fields?.map((f) => [f.type, !!f.required])),
+    );
+
+    const tplList0 = await req('/api/workflows/templates?published=1');
+    check('模板清单接口可用', tplList0.status === 200 && Array.isArray(tplList0.b?.templates), String(tplList0.status));
+    const madeTpl = await req('/api/workflows/templates', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'HTTP 定时流程', nodes: [{ id: 'n1', name: '第一步', detail: '', approve: 'end', reject: '' }] }),
+    });
+    const tplId = madeTpl.b?.id;
+    check('建一个草稿模板', !!tplId, String(madeTpl.status));
+    check(
+      '草稿不在「已发布」清单里',
+      !(await req('/api/workflows/templates?published=1')).b.templates.some((t) => t.id === tplId),
+    );
+    const draftTpl = await req('/api/schedules', {
+      method: 'POST',
+      body: JSON.stringify({ name: '起流程', action: 'run-workflow', everyMinutes: 30, config: { intent: '汇总 PR', templateId: tplId } }),
+    });
+    check('草稿模板 → 建任务 400 且说清"还没发布"', draftTpl.status === 400 && /还没发布/.test(draftTpl.b?.error ?? ''), draftTpl.b?.error);
+
+    await req(`/api/workflows/templates/${encodeURIComponent(tplId)}/publish`, { method: 'POST', body: JSON.stringify({ on: true }) });
+    check('发布后出现在「已发布」清单里', (await req('/api/workflows/templates?published=1')).b.templates.some((t) => t.id === tplId));
+    check(
+      '没选流程 → 400',
+      (await req('/api/schedules', { method: 'POST', body: JSON.stringify({ name: '起流程', action: 'run-workflow', everyMinutes: 30, config: { intent: '汇总 PR' } }) })).status === 400,
+    );
+    check(
+      '没写「做什么」→ 400 且说清原因',
+      (await req('/api/schedules', {
+        method: 'POST',
+        body: JSON.stringify({ name: '起流程', action: 'run-workflow', everyMinutes: 30, config: { templateId: tplId } }),
+      })).b?.error?.includes('做什么') === true,
+    );
+
+    const madeFlow = await req('/api/schedules', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: '定时起流程',
+        action: 'run-workflow',
+        everyMinutes: 30,
+        enabled: false,
+        config: { intent: '汇总本周合并的 PR', templateId: tplId },
+      }),
+    });
+    check('填齐了 → 201', madeFlow.status === 201, String(madeFlow.status));
+    check('卡片说明由动作自己拼（带流程名 + 那句话）', /HTTP 定时流程/.test(madeFlow.b?.job?.lead ?? '') && /汇总本周/.test(madeFlow.b?.job?.lead ?? ''), madeFlow.b?.job?.lead);
+    await req(`/api/schedules/${encodeURIComponent(madeFlow.b?.job?.id)}`, { method: 'DELETE' });
+
+    /*
+     * 「归档 / 删除」（2026-10-29 用户："右键流程归档、删除"）。HTTP 层验这些就够：
+     * 归档下架且实例原样留着 / 已发布清单不再出现 / 取消归档回成草稿 / 删除连实例一起清 /
+     * 内置模板删不掉（启动时会被补回来，删除等于白删）。
+     */
+    console.log('\n②d 流程的归档与删除（右键菜单背后那两个接口）');
+    const archTpl = await req('/api/workflows/templates', {
+      method: 'POST',
+      body: JSON.stringify({ name: '归档验证流程', nodes: [{ id: 'n1', name: '第一步', detail: '', approve: 'end', reject: '' }] }),
+    });
+    const archId = archTpl.b?.id;
+    await req(`/api/workflows/templates/${encodeURIComponent(archId)}/publish`, { method: 'POST', body: JSON.stringify({ on: true }) });
+    // 起一条实例（不派活做不到——HTTP 层会 autoStart；这里节点没点名，到站即阻塞，不会真跑 agent）
+    const madeRun = await req('/api/workflows/runs', {
+      method: 'POST',
+      body: JSON.stringify({ templateId: archId, title: '归档前的一条', intent: '看看归档后还在不在' }),
+    });
+    check('实例起出来了', madeRun.status === 201, String(madeRun.status));
+    const archRes = await req(`/api/workflows/templates/${encodeURIComponent(archId)}/archive`, { method: 'POST', body: JSON.stringify({ on: true }) });
+    check('归档 → 200 且带回 archivedAt', archRes.status === 200 && !!archRes.b?.archivedAt, archRes.b?.archivedAt);
+    const archView = (await req('/api/workflows')).b.templates.find((t) => t.id === archId);
+    check('归档后模板还在清单里（带着归档标记）', !!archView && !!archView.archivedAt, JSON.stringify(archView?.archivedAt));
+    check('归档顺带下架（publishedAt 清空）', archView?.publishedAt == null, String(archView?.publishedAt));
+    check('归档的模板不在「已发布」清单里（定时任务/看板都挑不到它）', !(await req('/api/workflows/templates?published=1')).b.templates.some((t) => t.id === archId));
+    const runsAfterArch = (await req(`/api/workflows/templates/${encodeURIComponent(archId)}/runs`)).b;
+    check('归档不动历史实例（还在，标题没变）', runsAfterArch?.total === 1 && runsAfterArch?.runs?.[0]?.title === '归档前的一条', `total=${runsAfterArch?.total}`);
+    check(
+      '归档的模板起不了新单（老实例照跑，新的拦下）',
+      (await req('/api/workflows/runs', { method: 'POST', body: JSON.stringify({ templateId: archId, title: '归档后还想起', intent: '试试' }) })).status === 400,
+    );
+    const unarch = await req(`/api/workflows/templates/${encodeURIComponent(archId)}/archive`, { method: 'POST', body: JSON.stringify({ on: false }) });
+    check('取消归档 → archivedAt 清掉', unarch.status === 200 && unarch.b?.archivedAt == null, JSON.stringify(unarch.b));
+    check('取消归档回成草稿（不会自己变成已发布）', unarch.b?.publishedAt == null, String(unarch.b?.publishedAt));
+
+    const delBuiltIn = await req(`/api/workflows/templates/bandi-delivery`, { method: 'DELETE' });
+    check('内置模板删不掉 → 403 且说清原因', delBuiltIn.status === 403 && /内置模板/.test(delBuiltIn.b?.error ?? ''), delBuiltIn.b?.error);
+    const delRes = await req(`/api/workflows/templates/${encodeURIComponent(archId)}`, { method: 'DELETE' });
+    check('删除 → 200 且报删了几条实例', delRes.status === 200 && delRes.b?.runs === 1, JSON.stringify(delRes.b));
+    check('模板没了', (await req(`/api/workflows/templates/${encodeURIComponent(archId)}`)).status === 404);
+    check('实例跟着没了', (await req(`/api/workflows/runs/${encodeURIComponent(madeRun.b?.id)}`)).status === 404);
+    check('删不存在的 → 404', (await req('/api/workflows/templates/wt-nope', { method: 'DELETE' })).status === 404);
 
     check('删掉 → 200', (await req(`/api/schedules/${encodeURIComponent(id)}`, { method: 'DELETE' })).status === 200);
     check('删完再查 → 清单里没有', (await req('/api/schedules')).b.jobs.length === 0);

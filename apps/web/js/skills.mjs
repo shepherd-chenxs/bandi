@@ -464,11 +464,27 @@ export async function renderGitRepos(root = $('pluginView')) {
   const sel = repos.find((r) => r.id === S.gitSel) ?? null;
 
   /*
-   * GitHub 连接：左栏只留**一个状态按钮**（2026-10-26 五改，用户："做成一个按钮区就行，
-   * 点击打开弹窗，不要展示这么多"）。点开 openGitConnDlg 弹窗里才见令牌表单 / 断开。
-   * 按钮跟着 listBody 一起重画，离开页面自动消失，不用挂清理钩子。
+   * GitHub 连接 + 仓库搜索（2026-10-29 六改，用户："固定在底部，这里换成搜索框"）：
+   *   · 连接状态按钮从清单顶上挪进**底部固定条 #listFoot** —— 跟消息/工作流的「已归档」
+   *     同一个位置语义：低频、跨清单的入口钉在页底永远看得见；
+   *   · 原位换成搜索框（全站共用的 #search，S.filter 已由 app.mjs 的输入委托维护），
+   *     按仓库名 / 本地路径过滤，只重画行、不动输入框。
+   * 注意：renderList 的 plugins 分支对本页整栏让位（见 contacts.mjs）——
+   * 不然键入一次 #search，renderList 就把 #listFoot 清一次，按钮闪没。
    */
-  const connSide = `
+  const searchBox = $('search').closest('.list-search');
+  searchBox?.classList.remove('hidden');
+  if (searchBox) $('search').placeholder = '搜仓库名 / 路径';
+  // 进页清掉上个栏留下的旧关键词 —— **只在进页那一次**清（S.pluginSearchFor 记着上次画的是谁）：
+  // 本函数每次选中仓库 / 刷新状态都会重跑，无条件清的话选个仓库搜索词就没了（原来就是这么丢的）。
+  if (S.pluginSearchFor !== 'codeRepos') {
+    S.pluginSearchFor = 'codeRepos';
+    if (S.filter) { S.filter = ''; $('search').value = ''; }
+  }
+
+  const foot = $('listFoot');
+  if (foot) {
+    foot.innerHTML = `
     <div class="gr-side">
       <button type="button" class="gr-side-btn" id="gitConnOpen"
               title="${st.connected ? 'GitHub 连接设置：令牌、断开' : '连接 GitHub（令牌只存本机）'}">
@@ -478,32 +494,49 @@ export async function renderGitRepos(root = $('pluginView')) {
         }</span>
       </button>
     </div>`;
+    foot.querySelector('#gitConnOpen')?.addEventListener('click', openGitConnDlg);
+  }
 
   // 左栏：面包屑照主从页的规矩画在列表顶上（renderPluginMaster 同款）
   setListTitle([{ label: '工作台', to: 'workbench' }, { label: '代码托管' }]);
   $('listAction').classList.remove('hidden');
   $('listAction').title = '添加仓库';
-  $('listBody').innerHTML =
-    connSide +
-    (repos.length
-      ? repos
-          .map(
-            (r) => `<div class="item${sel && r.id === sel.id ? ' active' : ''}" data-git-sel="${esc(r.id)}">
+  const paintRows = () => {
+    // 已经切走了就别画（#search 的 oninput 还挂着这一页 —— 不加这道闸，去消息页打字
+    // 会把仓库行画进会话列表里）
+    if (S.route?.view !== 'codeRepos') return;
+    const q = String(S.filter ?? '').trim().toLowerCase();
+    const hit = (r) =>
+      !q || String(r.fullName).toLowerCase().includes(q) || String(r.localPath ?? '').toLowerCase().includes(q);
+    const shown = repos.filter(hit);
+    const emptyHTML = repos.length
+      ? (q
+          ? `<div class="empty" style="padding:32px 12px">没有匹配「${esc(S.filter.trim())}」的仓库</div>`
+          : '')
+      : '<div class="empty" style="padding:32px 12px">还没有仓库，点左上角「＋」添加</div>';
+    $('listBody').innerHTML =
+      shown
+        .map(
+          (r) => `<div class="item${sel && r.id === sel.id ? ' active' : ''}" data-git-sel="${esc(r.id)}">
             <div class="who">
               <div class="line1"><b>${esc(r.fullName)}</b></div>
               <div class="line2" title="${esc(r.localPath)}">${esc(r.localPath)}</div>
             </div>
           </div>`,
-          )
-          .join('')
-      : '<div class="empty" style="padding:32px 12px">还没有仓库，点左上角「＋」添加</div>');
-  $('listBody').querySelectorAll('[data-git-sel]').forEach((el) => {
-    el.onclick = () => {
-      S.gitSel = el.dataset.gitSel;
-      renderGitRepos(root).catch((e) => toast(e.message, 'error'));
-    };
-  });
-  $('gitConnOpen')?.addEventListener('click', openGitConnDlg);
+        )
+        .join('') + emptyHTML;
+    $('listBody').querySelectorAll('[data-git-sel]').forEach((el) => {
+      el.onclick = () => {
+        S.gitSel = el.dataset.gitSel;
+        renderGitRepos(root).catch((e) => toast(e.message, 'error'));
+      };
+    });
+  };
+  paintRows();
+  // 搜索框只重画行（输入框在 listBody 外面，怎么画都不失焦）；S.filter 由 app.mjs 的委托维护，
+  // 这里用 oninput 赋值而不是 addEventListener —— renderGitRepos 每次选中仓库都会重跑，别叠监听
+  const sb = $('search');
+  if (sb) sb.oninput = paintRows;
 
   const keeperName = (id) => (S.personas ?? []).find((p) => p.id === id)?.name ?? '';
   const syncAt = (t) => (t ? esc(String(t).replace('T', ' ').slice(0, 16)) : '从未');
@@ -523,7 +556,7 @@ export async function renderGitRepos(root = $('pluginView')) {
          <!-- 本地路径 2026-10-27 应用户要求从导航条摘掉 —— 左栏列表和齿轮弹窗里都还有，不丢信息 -->
          <div class="head-actions">
            <button class="mini gr-set-btn" data-git-settings="${esc(sel.id)}"
-                   title="仓库设置：管理员 / 自动合并 / 默认分支 / 上次同步" aria-label="仓库设置">${ICON_GEAR}</button>
+                   title="仓库设置：管理员 / 自动合并 / 巡检 / 默认分支 / 上次同步" aria-label="仓库设置">${ICON_GEAR}</button>
          </div>
        </div>
        <div class="plg-sec">
@@ -667,6 +700,11 @@ export async function renderGitRepos(root = $('pluginView')) {
    * 仓库设置弹窗（2026-10-27，用户："仓库设置区太占地方 → 右上角设置按钮，点开展示"）：
    * 原来占详情一整块卡的信息（管理员 / 自动合并 / 默认分支 / 上次同步 / 本地目录）收进这里。
    * 动态建 dialog（openGitConnDlg 同款），close 即 remove；改动即时保存、弹窗不关。
+   *
+   * 2026-10-29：**巡检节拍也收进来了**（用户："这个功能放到代码托管是不是更好"）。
+   * 它背后仍是「定时任务」里一条 `pr-scan`（`config.repo` = 这个仓库），不是第二套调度 ——
+   * 仓库行只负责"选一个预设 + 看上次结果 + 现在跑一次"这三件窄事，
+   * 「每周 / 每月 / 单次」那些完整表单仍去「定时任务」页（那边会把它标成「随仓库」）。
    */
   const paintKeeperBtns = (repoId, kid) => {
     document.querySelectorAll('.gr-keeper-btn[data-k-cur]').forEach((b) => {
@@ -676,11 +714,34 @@ export async function renderGitRepos(root = $('pluginView')) {
     const repo = repos.find((r) => r.id === repoId);
     if (repo) repo.keeperPersonaId = kid || null;
   };
+  const patrolPresets = () => (st.patrolPresets?.length ? st.patrolPresets : [{ id: 'off', label: '关闭' }]);
+  const patrolLastText = (p) => {
+    if (!p?.jobId) return '还没配节拍 —— 也可以先点「立即巡检」跑一次';
+    if (!p.lastStatus) return '还没跑过';
+    const body = p.lastStatus === 'ok' ? `✓ ${p.lastSummary || '完成'}` : `✗ ${p.lastError || '失败了（没有原因）'}`;
+    const when = p.lastRunAt ? String(p.lastRunAt).replace('T', ' ').slice(0, 16) : '';
+    return when ? `${when} · ${body}` : body;
+  };
+  const paintPatrolLast = (repo) => {
+    const el = $('grPatrolLast');
+    if (!el) return;
+    const text = patrolLastText(repo.patrol);
+    el.textContent = text;
+    el.title = text;
+  };
   const openGitSettingsDlg = (repo) => {
     const dlg = document.createElement('dialog');
     dlg.className = 'gr-set-dlg';
     const form = document.createElement('form');
     form.method = 'dialog';
+    const p = repo.patrol ?? { preset: 'off' };
+    /*
+     * 巡检节拍用全站 `.combo`（2026-10-29 用户："巡检使用公共组件"）。
+     * 原生 <select> 的弹出层是浏览器画的 —— 高度、配色、圆角跟站内其它下拉是两套东西。
+     * 「自定义（每周一）」不是**可选**的档：它只用来照实显示现状（人手工建过），选它等于什么都没做。
+     */
+    const patrolItems = patrolPresets().map((x) => ({ id: x.id, label: x.label }));
+    if (p.preset === 'custom') patrolItems.push({ id: 'custom', label: `自定义（${p.text || '当前节拍'}）` });
     form.innerHTML = `
       <b>仓库设置</b>
       <div class="gr-dlg-body gr-set-body">
@@ -695,11 +756,18 @@ export async function renderGitRepos(root = $('pluginView')) {
             <input type="checkbox" data-automerge ${repo.autoMerge ? 'checked' : ''} aria-label="自动合并" /><span></span>
           </label>
         </b></div>
+        <div class="info-row"><span>巡检</span><b class="gr-patrol-cell">
+          <div class="gr-patrol-combo" id="grPatrolSel"
+               title="到点自动拉这个仓库的 open PR / issue，写成看板上的值班卡"></div>
+        </b></div>
+        <div class="info-row"><span>上次巡检</span><b id="grPatrolLast" class="gr-patrol-last"></b></div>
         <div class="info-row"><span>默认分支</span><b>${esc(repo.defaultBranch || '—')}</b></div>
         <div class="info-row"><span>上次同步</span><b>${syncAt(repo.lastSyncAt)}</b></div>
         <div class="info-row"><span>本地目录</span><b class="gr-set-path" title="${esc(repo.localPath)}">${esc(repo.localPath)}</b></div>
       </div>
       <div class="dlg-actions">
+        <button type="button" class="mini auto" id="grPatrolRun"
+                title="现在就跑一次这个仓库的巡检（开没开节拍都能跑）">立即巡检</button>
         <button type="button" class="mini auto gr-set-remove" id="grSetRemove"
                 title="只移除记录，本地目录保留（低频、破坏性动作，收在设置里）">从清单移除…</button>
       </div>`;
@@ -707,11 +775,62 @@ export async function renderGitRepos(root = $('pluginView')) {
     document.body.append(dlg);
     wireDialogHead(form);
     dlg.addEventListener('close', () => dlg.remove());
+    paintPatrolLast(repo);
 
     form.querySelector('.gr-keeper-btn').onclick = (e) => openKeeperDlg(repo.id, e.currentTarget.dataset.kCur ?? '');
     form.querySelector('[data-automerge]').onchange = (e) => {
       repo.autoMerge = e.currentTarget.checked ? 1 : 0;
       saveRepoSettings(repo.id, { autoMerge: e.currentTarget.checked });
+    };
+    const patrolMount = form.querySelector('#grPatrolSel');
+    let patrolSaving = false;
+    const patrolCombo = createCombo({
+      mount: patrolMount,
+      items: patrolItems,
+      value: p.preset ?? 'off',
+      onChange: async (preset) => {
+        if (preset === 'custom' || patrolSaving) return; // 「自定义」只是现状展示，不是可选的档
+        patrolSaving = true;
+        patrolMount.classList.add('is-saving');
+        try {
+          const r = await post(`/api/git/repos/${encodeURIComponent(repo.id)}/patrol`, { preset });
+          repo.patrol = r.patrol;
+          // 存成预设之后，「自定义（…）」那条不再代表现状 —— 摘掉，免得还能选回一个不存在的档
+          patrolCombo.setItems(patrolItems.filter((x) => x.id !== 'custom'));
+          patrolCombo.setValue(r.patrol?.preset ?? preset);
+          toast('已保存');
+          paintPatrolLast(repo);
+          await refresh(); // 页面上的状态跟着库走（弹窗挂在 body 上，不受重画影响）
+        } catch (err) {
+          toast(err.message, 'error');
+          // 存失败要把按钮拉回真实值：combo 是"先画选中、再回调"的，不拉回来屏幕上就挂着一条假节拍
+          patrolCombo.setValue(repo.patrol?.preset ?? 'off');
+          await refresh();
+        } finally {
+          patrolSaving = false;
+          patrolMount.classList.remove('is-saving');
+        }
+      },
+    });
+    form.querySelector('#grPatrolRun').onclick = async (e) => {
+      const btn = e.currentTarget;
+      if (btn.disabled) return;
+      btn.disabled = true;
+      btn.classList.add('busy');
+      try {
+        const r = await post(`/api/git/repos/${encodeURIComponent(repo.id)}/patrol/run`, {});
+        toast(r.ok ? `巡检跑完了：${r.summary ?? '完成'}` : `这次没跑成：${r.error ?? '没有原因'}`);
+        // 上一次结果记在对应任务上：重新取一次，弹窗里那行才不是旧的
+        const st2 = await api('/api/git/status');
+        const fresh = (st2.repos ?? []).find((x) => x.id === repo.id);
+        if (fresh) repo.patrol = fresh.patrol;
+        paintPatrolLast(repo);
+      } catch (err) {
+        toast(err.message, 'error');
+      } finally {
+        btn.disabled = false;
+        btn.classList.remove('busy');
+      }
     };
     // 移除入口（2026-10-27 从导航条搬进来）：确认后只删记录，本地克隆目录不动
     form.querySelector('#grSetRemove').onclick = async () => {
@@ -1242,8 +1361,12 @@ export async function renderGitRepos(root = $('pluginView')) {
       <div class="gr-chg-split">
         <div class="gr-chg-list">${groupHtml('chg', '更改', tracked) + groupHtml('untr', '未版本管理的文件', untracked)}</div>
         <div class="gr-commit-side">
-          <textarea id="grCommitMsg" placeholder="提交说明（Ctrl+Enter 提交）" rows="4"></textarea>
-          <button type="button" class="primary" id="grCommitBtn">提交</button>
+          <textarea id="grCommitMsg" placeholder="提交说明（Ctrl+Enter 提交）" rows="9"></textarea>
+          <div class="gr-commit-acts">
+            <button type="button" class="btn-sm gr-suggest" id="grSuggestBtn"
+                    title="按勾选的改动生成一行说明（不满意就改，或再点一次）">生成说明</button>
+            <button type="button" class="primary" id="grCommitBtn">提交</button>
+          </div>
         </div>
       </div>`;
 
@@ -1314,6 +1437,37 @@ export async function renderGitRepos(root = $('pluginView')) {
         }
       };
     });
+
+    /* 生成说明（2026-10-29）：一句话的活不开对话 —— 服务端只读 git、模型只负责措辞，
+       拿回来填进框里，人再改再提。框里已经有字就先问一句，别把人写了一半的话冲掉。 */
+    const suggestBtn = $('grSuggestBtn');
+    // 自己取框（别借下面那个 msgInput）—— 它在后面才声明，这里先用会踩 TDZ
+    const msgBox = $('grCommitMsg');
+    if (suggestBtn && msgBox) {
+      suggestBtn.onclick = async () => {
+        const rows = [...($('grChanges')?.querySelectorAll('.gr-chg-row') ?? [])];
+        if (!rows.length) return toast('没有可提交的改动', 'error');
+        const checked = rows.map((r) => r.dataset.chgPath).filter((p) => !chgUnsel.has(p));
+        if (!checked.length) return toast('先勾选要提交的文件', 'error');
+        if ((msgBox.value ?? '').trim() && !(await confirmDo('框里已经有说明了，用新生成的覆盖掉？', { ok: '覆盖' }))) return;
+        // 跟提交同口径：全勾就不传 paths（服务端按整片工作区算），否则只算勾选的
+        const payload = checked.length < rows.length ? { paths: checked } : {};
+        const label = suggestBtn.textContent;
+        suggestBtn.disabled = true;
+        suggestBtn.textContent = '生成中…';
+        try {
+          const r = await post(`/api/git/repos/${encodeURIComponent(repo.id)}/suggest-commit`, payload);
+          msgBox.value = r.message ?? '';
+          msgBox.focus();
+          if (r.source === 'rule') toast(`模型没参与，这是按改动推的草稿：${r.note ?? ''}`, 'error');
+        } catch (e) {
+          toast(e.message, 'error');
+        } finally {
+          suggestBtn.disabled = false;
+          suggestBtn.textContent = label;
+        }
+      };
+    }
 
     /* 提交（不建 PR）：回车或按钮都行；服务端拦疑似凭据时弹一次危险确认，带 allowSecrets 重发。
        推送在分支下拉的「推送…」里 —— 提交和推送分两步，跟 git 的语义一致（IDE 也分开）。 */
@@ -1913,10 +2067,8 @@ export async function renderSchedules() {
     return;
   }
   const jobs = data.jobs ?? [];
-  // 列表里要写清"在哪个项目里干"，得知道项目名（没加载过就补一次，失败不影响列表）
-  const projects = (S.projects ?? []).length
-    ? S.projects
-    : (S.projects = (await api('/api/projects').catch(() => ({ projects: [] }))).projects ?? []);
+  // 列表里要写清"它到底要干什么、在哪个项目里干" —— 那句话由**动作自己**拼好下发（`lead`），
+  // 卡片不再按字段名猜（加第二个通用动作时那段 if 就得重写）。
   const actionOf = (id) => (data.actions ?? []).find((a) => a.id === id);
   const when = (iso) => (iso ? String(iso).replace('T', ' ').slice(0, 16) : '还没跑过');
 
@@ -1927,15 +2079,10 @@ export async function renderSchedules() {
   };
 
   const card = (j) => {
-    // 「交给数字员工」这类任务，卡上最该看到的是**它到底要干什么**，不是动作名 ——
-    // 五条任务都写着「交给数字员工」等于没写。所以把那句话（和交给谁、在哪个项目里）提到描述行最前面。
-    const instr = String(j.config?.instruction ?? '').replace(/\s+/g, ' ').trim();
-    const who = j.config?.personaId ? (S.personas ?? []).find((p) => p.id === j.config.personaId)?.name : null;
-    // 项目 = 这次派活的工作空间。没选就不写（那时候他用的是自己的默认目录）
-    const proj = j.config?.projectId ? (projects ?? []).find((p) => p.id === j.config.projectId)?.name : null;
-    const lead = instr
-      ? `交给${who ? `「${who}」` : '员工'}${proj ? `（在「${proj}」）` : ''}：${instr.length > 44 ? instr.slice(0, 43) + '…' : instr}`
-      : '';
+    // 「交给数字员工」/「交给流程」这类任务，卡上最该看到的是**它到底要干什么**，不是动作名 ——
+    // 五条任务都写着「交给数字员工」等于没写。所以服务端把这句话拼好（动作自己的 describe），
+    // 这里照抄；老数据没有 lead 就不写这一行。
+    const lead = String(j.lead ?? '').trim();
     /* 卡片形态（2026-10-20 用户要求"做成卡片"）：整行横条改成一格一格的卡。
        结构：第一行 名字+状态 → 第二行 要干什么+节拍 → 第三行 上次结果（原话）→ 底部动作。
        margin-top:auto 把动作压到卡底，多张卡并排时按钮齐平。 */
@@ -1944,6 +2091,7 @@ export async function renderSchedules() {
       <div class="sch-card-top">
         <b>${esc(j.name)}</b>
         <span class="pill">${esc(actionOf(j.action)?.label ?? j.action)}</span>
+        ${j.ownedByRepo ? `<span class="pill" title="节拍跟着仓库走：工作台 › 代码托管 › 仓库设置">随仓库</span>` : ''}
         ${(j.repeat === 'once' && j.lastStatus === 'ok') ? '<span class="pill" style="color:var(--ok)">已完成</span>' : ''}
         ${j.running ? '<span class="pill" style="color:var(--warn)">在跑</span>' : ''}
         <!-- 动作在**右上角**（2026-10-20 用户照参考截图要求）：启停开关在最右，跟名字同一行。
@@ -1964,6 +2112,11 @@ export async function renderSchedules() {
         </div>
       </div>
       ${lead ? `<div class="sch-desc">${esc(lead)}</div>` : ''}
+      ${
+        j.ownedByRepo
+          ? `<div class="sch-desc dim">这条巡检跟着仓库「${esc(j.ownedByRepo)}」走 —— 节拍在「工作台 › 代码托管 › 仓库设置」里改</div>`
+          : ''
+      }
       ${
         /* 结果原话独占一行（2026-10-20 用户："上次执行时间放右下角"）：
            原来时间和结果拼在底行右侧，结果一长整行被占满、时间就吊在中间。
@@ -1990,9 +2143,12 @@ export async function renderSchedules() {
           ? `<div class="sch-grid">${jobs.map(card).join('')}</div>`
           : `<div class="sk-blank">还没有定时任务。最常用的做法是「交给数字员工」：写一句要它干什么、选一个人，
              到点这句话就发进它自己的一条会话里（标题写着任务名，结果在那儿看）。
-             另外两个内置动作：「PR / Issue 巡检」—— 去 GitHub 看有没有人提 PR / issue，写成看板上的卡，
-             顺手把已合并的收成「待验收」；「数据库备份」—— 把 bandi.db 导出一份到数据目录的 backups/，
-             只留最近 N 份。动作是可插拔的，以后加新动作不用改调度核心。</div>`
+             要让流水线自己跑一遍就选「交给流程」—— 写清这次办什么事、挑一条**已发布**的流程，
+             到点发起一条实例，按模板节点往下走（进度去工作台 › 工作流看）。
+             内置动作里还有「数据库备份」—— 把 bandi.db 导出一份到数据目录的 backups/，只留最近 N 份。
+             「PR / Issue 巡检」现在**按仓库配**（2026-10-29）：去「工作台 › 代码托管 › 仓库设置」选节拍，
+             这里照样会列出来、标着「随仓库」（留空仓库的那种是"扫所有仓库"的全局任务）。
+             动作是可插拔的，以后加新动作不用改调度核心。</div>`
       }
     </div>`;
 
@@ -2145,8 +2301,8 @@ export function mountSchRepeatCombos(mode, job) {
 
 
 
-/** 这三种字段是下拉，值由 .combo 组件持有（不是 DOM 里的原生 <select>） */
-export const SCH_COMBO_TYPES = ['repo', 'project', 'persona'];
+/** 这几种字段是下拉，值由 .combo 组件持有（不是 DOM 里的原生 <select>） */
+export const SCH_COMBO_TYPES = ['repo', 'project', 'persona', 'flow'];
 
 
 
@@ -2173,11 +2329,12 @@ export function schConfigFields(action, cfg) {
     if (SCH_COMBO_TYPES.includes(f.type)) {
       // 选人**不给自动兜底**（写「选一个人」再拦必填）：定时派活悄悄落到某个默认员工身上，
       // 比报错难查得多 —— 半夜跑了、那个人不对、结果也没人看。
+      // 必填的下拉（人 / 流程）也不加"（可留空 = …）"：那是句假话。
       // 提示文案动作自己可以改（`hint`）：仓库/项目那种"可留空"的默认说法不一定贴切。
       const hint =
         f.hint != null
           ? esc(f.hint)
-          : f.type === 'persona'
+          : f.required
             ? ''
             : `（可留空 = ${esc(f.empty ?? (f.type === 'repo' ? '全部' : '自动'))}）`;
       right.push(`<label>${esc(f.label)}${hint}</label><div class="sch-cfg" data-cfg="${key}"></div>`);
@@ -2207,8 +2364,10 @@ export function schConfigFields(action, cfg) {
 /**
  * 把参数区里的下拉装成 `.combo`（全站公共组件）。
  * 返回 `Map<字段key, combo>` —— 读值也走这张表：原生控件没了，DOM 上读不到值。
+ *
+ * `flows` 只装**已发布**的流程模板（定时任务只跑已发布的，跟看板建卡同一口径）。
  */
-export function mountSchConfigCombos(action, cfg, repos, projects, personas) {
+export function mountSchConfigCombos(action, cfg, repos, projects, personas, flows) {
   const map = new Map();
   for (const f of action?.fields ?? []) {
     if (!SCH_COMBO_TYPES.includes(f.type)) continue;
@@ -2220,7 +2379,12 @@ export function mountSchConfigCombos(action, cfg, repos, projects, personas) {
         ? [{ id: '', label: f.empty ?? '全部' }, ...(repos ?? []).map((r) => ({ id: r.fullName, label: r.fullName }))]
         : f.type === 'project'
           ? [{ id: '', label: f.empty ?? '自动' }, ...(projects ?? []).map((p) => ({ id: p.id, label: p.name }))]
-          : [{ id: '', label: f.empty ?? '选一个人' }, ...(personas ?? []).map((p) => ({ id: p.id, label: p.name }))];
+          : f.type === 'flow'
+            // 一条都没发布时给一行**说明**（禁用不住的下拉会像"坏了"）：去工作台 › 工作流里发布
+            ? (flows ?? []).length
+              ? [{ id: '', label: f.empty ?? '选一条流程' }, ...(flows ?? []).map((x) => ({ id: x.id, label: x.name }))]
+              : [{ id: '', label: '还没有已发布的流程' }]
+            : [{ id: '', label: f.empty ?? '选一个人' }, ...(personas ?? []).map((p) => ({ id: p.id, label: p.name }))];
     map.set(
       f.key,
       createCombo({
@@ -2278,6 +2442,23 @@ export async function scheduleDialog(job) {
   const repos = (await api('/api/git/repos').catch(() => ({ repos: [] }))).repos ?? [];
   const projects = (S.projects ?? []).length ? S.projects : (S.projects = (await api('/api/projects').catch(() => ({ projects: [] }))).projects ?? []);
   const cfg = job?.config ?? {};
+  /*
+   * 流程模板：只装**已发布**的（定时任务只跑已发布的，跟看板建卡同一口径）。
+   * 走轻量清单而不是 `/api/workflows`：后者连带 100 条实例视图，只为一份名字不值。
+   * 拿不到就当没有（下拉会说"还没有已发布的流程"）。
+   */
+  const allFlows = (await api('/api/workflows/templates').catch(() => ({ templates: [] }))).templates ?? [];
+  const flows = allFlows.filter((t) => t.publishedAt);
+  /*
+   * 编辑老任务时它选的那条**可能已经下架**：照样列出来（名字后面标「未发布」），
+   * 否则下拉会显示一串内部 id —— 人只会以为"坏了"。真去保存时服务端会拦下并说清原因。
+   * 被**归档**的（2026-10-29 起）与下架是两回事：归档顺带清了 publishedAt，但栏上写「已归档」
+   * 才说得清该去哪儿找它（工作台 › 工作流 › 底下那段）。
+   */
+  if (cfg.templateId && !flows.some((t) => t.id === cfg.templateId)) {
+    const stale = allFlows.find((t) => t.id === cfg.templateId);
+    if (stale) flows.push({ ...stale, name: `${stale.name}（${stale.archivedAt ? '已归档' : '未发布'}）` });
+  }
   const min = meta.minMinutes ?? 5;
   const repeat0 = job?.repeat ?? 'interval';
   let curAction = (meta.actions ?? []).find((a) => a.id === (job?.action ?? meta.actions?.[0]?.id)) ?? null;
@@ -2337,8 +2518,8 @@ export async function scheduleDialog(job) {
   wireDialogHead(dlg.querySelector('form'));
   dlg.addEventListener('close', () => dlg.remove());
 
-  // 参数区里的下拉（仓库 / 项目 / 选人）—— 公共组件，值存在 combo 里，读值靠这张表
-  let cfgCombos = mountSchConfigCombos(curAction, cfg, repos, projects, S.personas ?? []);
+  // 参数区里的下拉（仓库 / 项目 / 选人 / 流程）—— 公共组件，值存在 combo 里，读值靠这张表
+  let cfgCombos = mountSchConfigCombos(curAction, cfg, repos, projects, S.personas ?? [], flows);
   let repeatCombos = mountSchRepeatCombos(repeat0, job);
 
   // 「方式」：换动作 → 参数跟着换
@@ -2356,7 +2537,7 @@ export async function scheduleDialog(job) {
       const f1 = schConfigFields(curAction, cfg);
       $('schLeftFields').innerHTML = f1.left;
       $('schRightFields').innerHTML = f1.right;
-      cfgCombos = mountSchConfigCombos(curAction, cfg, repos, projects, S.personas ?? []);
+      cfgCombos = mountSchConfigCombos(curAction, cfg, repos, projects, S.personas ?? [], flows);
     },
   });
   actionCombo.el.classList.add('sch-mode');
