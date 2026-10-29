@@ -2126,11 +2126,10 @@ dialog#repoPrDlg { width: 660px; height: min(720px, 92vh); max-height: 92vh;
 #grLog { height: 380px; overflow-y: auto; }
 /* 推送区（2026-10-29 用户："提交下面加一个推送区，展示没有推送的提交"）：
    标题行（个数 + 推送钮钉右）+ 提交清单（复用 .gr-log-row 的行形与分隔线）。 */
-.gr-push-zone { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
-.gr-push-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px;
-                font-size: 12.5px; color: var(--text); background: var(--side); }
-.gr-push-head b { color: var(--text); }
-.gr-push-list { border-top: 1px solid var(--line); }
+/* 推送卡（2026-10-29 三改，用户："推送单独作为一个卡片"）：
+   已从「提交」卡里拆出来，成为和「拉取请求」「历史」平级的 .plg-sec —— 卡壳走 .fx，
+   行照抄历史卡（.gr-log-row）。这里只把空状态行的内边距压回卡内基线，别再叠一层 16px。 */
+#grPush > .sk-blank { padding: 6px 2px; }
 .gr-log-row { display: flex; align-items: baseline; gap: 10px; padding: 6px 12px; min-width: 0; }
 .gr-log-row + .gr-log-row { border-top: 1px solid var(--line); }
 .gr-log-sha { flex: 0 0 auto; font-family: ui-monospace, monospace; font-size: 11.5px; color: var(--accent); }

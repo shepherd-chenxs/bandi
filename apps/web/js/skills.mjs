@@ -564,6 +564,18 @@ export async function renderGitRepos(root = $('pluginView')) {
          <div class="plg-sec-head"><label class="plg-sec-title">提交</label><span class="dim" id="grChgHead"></span></div>
          <section class="fx"><div id="grChanges"><div class="sk-blank">读工作区…</div></div></section>
        </div>
+       <!--
+         推送独立成一块（2026-10-29 三改，用户："推送单独作为一个卡片"）。
+         推和交是两件事：未推提交挤在「提交」卡里，会让人以为推送要跟着提交走。
+         版式对齐「拉取请求」：动作（推送）钉在分节标题行右侧。
+       -->
+       <div class="plg-sec">
+         <div class="plg-sec-head">
+           <label class="plg-sec-title">推送</label><span class="dim" id="grPushHead"></span>
+           <button type="button" class="mini auto" id="grPushNow">推送</button>
+         </div>
+         <section class="fx"><div id="grPush"><div class="sk-blank">读推送状态…</div></div></section>
+       </div>
        <div class="plg-sec">
          <div class="plg-sec-head">
            <label class="plg-sec-title">拉取请求</label><span class="dim" id="grPullsHead"></span>
@@ -1487,56 +1499,68 @@ export async function renderGitRepos(root = $('pluginView')) {
 
     const dirty = state.dirty ?? [];
     const head = $('grChgHead');
-    if (head?.isConnected) {
-      head.textContent = dirty.length ? `${dirty.length} 个未提交` : Number(state.unpushed ?? 0) > 0 ? `${state.unpushed} 个未推送` : '';
-    }
+    if (head?.isConnected) head.textContent = dirty.length ? `${dirty.length} 个未提交` : '';
+
     /*
-     * 推送区（2026-10-29 用户："提交下面加一个推送区，展示没有推送的提交"）：
-     * 光一句"N 个提交还没推送"不够，要把**是哪几个**摆出来（历史卡同款行：sha + 说明 + 作者·时间），
-     * 推送按钮钉在区块标题行右侧。工作区干净 / 有脏文件两种形态下都常驻 —— 未推提交和未提交改动经常同时存在。
-     * 上游有新的（unpulled）单独提示一句，动作在分支下拉的「更新项目」里。
+     * 推送卡（2026-10-29 三改，用户："推送单独作为一个卡片"）：
+     * 独立成一块，不再长在「提交」卡屁股上 —— 交是交、推是推。
+     * 未推提交逐条摆出来（历史卡同款行：sha + 说明 + 作者·时间），按钮在分节标题行右侧。
+     * 三种形态：有未推 / 没推过（无上游，首次推会设上游）/ 齐平（没得推，按钮收起来）。
+     * 上游有新的（unpulled）单独一行 —— 动作在分支下拉的「更新项目」里。
      */
-    const up = state.upstream;
-    const nUnpushed = Number(state.unpushed ?? 0);
-    const unpushedList = state.unpushedCommits ?? [];
-    const pushRow = (c) => `<div class="gr-log-row" title="${esc(c.sha)} ${esc(c.subject)}">
-        <span class="gr-log-sha">${esc(c.sha)}</span>
-        <span class="gr-log-sub">${esc(c.subject)}</span>
-        <span class="gr-log-who">${esc(c.author)} · ${esc(String(c.date ?? '').slice(5, 16))}</span>
-      </div>`;
-    const pushBtn = '<button type="button" class="mini auto" id="grPushNow">推送</button>';
-    const pushZone = () => {
-      if (nUnpushed > 0 && unpushedList.length) {
-        return `<div class="gr-push-zone">
-          <div class="gr-push-head"><span><b>${nUnpushed}</b> 个提交还没推送</span><span style="flex:1"></span>${pushBtn}</div>
-          <div class="gr-push-list">${unpushedList.map(pushRow).join('')}${nUnpushed > unpushedList.length ? `<div class="gr-log-row"><span class="dim">…另有 ${nUnpushed - unpushedList.length} 个</span></div>` : ''}</div>
-        </div>`;
-      }
-      if (nUnpushed > 0) return `<div class="sk-blank">当前分支有 <b>${nUnpushed}</b> 个提交还没推送<span style="flex:1"></span>${pushBtn}</div>`;
-      if (!up) return `<div class="sk-blank">这条分支还没有上游（还没推过，或远端分支已删）<span style="flex:1"></span>${pushBtn}</div>`;
-      return `<div class="sk-blank">本地和上游 <b>${esc(up)}</b> 一致${dirty.length ? '' : ' —— 都同步完了'}</div>`;
-    };
-    const bindPush = () => {
-      $('grPushNow')?.addEventListener('click', async (e) => {
-        const b = e.currentTarget;
-        b.disabled = true;
-        b.textContent = '推送中…';
-        try {
-          const r = await post(`/api/git/repos/${encodeURIComponent(repo.id)}/push`, {});
-          toast(`已推送 ${r.pushed}`);
-          await refresh();
-        } catch (err) {
-          b.disabled = false;
-          b.textContent = '推送';
-          toast(err.message, 'error');
-        }
-      });
-    };
-    if (!dirty.length) {
+    const fillPushCard = () => {
+      const pbox = $('grPush');
+      if (!pbox?.isConnected) return;
+      const up = state.upstream;
+      const n = Number(state.unpushed ?? 0);
+      const list = state.unpushedCommits ?? [];
       const down = Number(state.unpulled ?? 0);
-      const behindTip = down > 0 ? `<div class="sk-blank">上游还有 ${down} 个新提交（分支下拉里点「更新项目」）</div>` : '';
-      box.innerHTML = behindTip + pushZone();
-      bindPush();
+      const phead = $('grPushHead');
+      const pbtn = $('grPushNow');
+      if (phead) phead.textContent = n > 0 ? `${n} 个提交还没推` : up ? '已同步' : '还没推过';
+      if (pbtn) {
+        pbtn.classList.toggle('hidden', n === 0 && !!up);   // 齐平就没得推（`.mini.hidden` 才有 display:none）
+        pbtn.disabled = false;
+        pbtn.textContent = '推送';
+        pbtn.title = up ? '把本地提交推到上游' : '这条分支还没推过 —— 推送会顺手把上游设成同名分支';
+        /* 用 onclick 赋值而非 addEventListener：这块每次刷新都重画，赋值天然幂等，不会叠绑定 */
+        pbtn.onclick = async () => {
+          pbtn.disabled = true;
+          pbtn.textContent = '推送中…';
+          try {
+            const r = await post(`/api/git/repos/${encodeURIComponent(repo.id)}/push`, {});
+            toast(`已推送 ${r.pushed}`);
+            await refresh();
+          } catch (err) {
+            pbtn.disabled = false;
+            pbtn.textContent = '推送';
+            toast(err.message, 'error');
+          }
+        };
+      }
+      const behind = down > 0
+        ? `<div class="sk-blank">上游还有 ${down} 个新提交 —— 分支下拉里点「更新项目」拉下来</div>`
+        : '';
+      const row = (c) => `<div class="gr-log-row" title="${esc(c.sha)} ${esc(c.subject)}">
+          <span class="gr-log-sha">${esc(c.sha)}</span>
+          <span class="gr-log-sub">${esc(c.subject)}</span>
+          <span class="gr-log-who">${esc(c.author)} · ${esc(String(c.date ?? '').slice(5, 16))}</span>
+        </div>`;
+      if (n > 0 && list.length) {
+        pbox.innerHTML = behind + list.map(row).join('')
+          + (n > list.length ? `<div class="gr-log-row"><span class="dim">…另有 ${n - list.length} 个</span></div>` : '');
+      } else if (n > 0) {
+        pbox.innerHTML = behind + `<div class="sk-blank">当前分支有 <b>${n}</b> 个提交还没推送</div>`;
+      } else if (!up) {
+        pbox.innerHTML = behind + '<div class="sk-blank">这条分支还没有上游（还没推过，或远端分支已删）</div>';
+      } else {
+        pbox.innerHTML = `<div class="sk-blank">本地和上游 <b>${esc(up)}</b> 一致 —— 都同步完了</div>`;
+      }
+    };
+
+    if (!dirty.length) {
+      box.innerHTML = '<div class="sk-blank">工作区是干净的 —— 没有未提交的改动</div>';
+      fillPushCard();
       return;
     }
     /* 两组折叠（2026-10-27，用户指 VS Code 源代码管理截图："加两个可以折叠的标题"）：
@@ -1588,8 +1612,8 @@ export async function renderGitRepos(root = $('pluginView')) {
             <button type="button" class="primary" id="grCommitBtn">${onBase ? '建分支并提交' : '提交'}</button>
           </div>
         </div>
-      </div>${pushZone()}`;
-    bindPush();
+      </div>`;
+    fillPushCard();
 
     /* 组头选择框 = 三态全选（全勾 / 全不勾 / 半选）；行选择框记进 chgUnsel。
        状态以 DOM 为准算，别自己记账 —— 刷新后重画，勾选只存「没勾」的那一半。 */
