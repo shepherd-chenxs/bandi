@@ -1957,7 +1957,7 @@ dialog#repoPrDlg { width: 660px; height: min(720px, 92vh); max-height: 92vh;
 /* ⚠️ 上面那条把 #prForm 设成了 display:flex —— 作者样式压过 UA 的 `[hidden]{display:none}`，
    没这一条，「不可建 PR」时表单照样显示（老坑，见 MEMORY「断显隐看 computed display」）。 */
 #repoPrDlg #prForm[hidden] { display: none; }
-#repoPrDlg #prForm > label, #repoPrDlg .pr-fill-row, #repoPrDlg .pr-branch-row { flex: 0 0 auto; }
+#repoPrDlg #prForm > label, #repoPrDlg .pr-fill-row { flex: 0 0 auto; }
 /* 描述框是这一屏唯一的"可伸缩项"：窗口高度固定，多出来的空间给它 */
 #repoPrDlg #prBody { flex: 1 1 auto; min-height: 96px; resize: none; }
 /* 提交清单不再自带滚动条（概览区整体滚就够了，套两层滚轮很难受） */
@@ -1980,8 +1980,6 @@ dialog#repoPrDlg { width: 660px; height: min(720px, 92vh); max-height: 92vh;
 /* 字段 label 的灰色小注（原来塞在括号里，现在挪出来跟在标题后面） */
 #repoPrDlg label em { margin-left: 4px; font-style: normal; }
 #repoPrDlg #prTitle { font-size: 13.5px; }
-.pr-branch-row { display: flex; gap: 14px; }
-.pr-branch-row > div { flex: 1 1 0; min-width: 0; }
 /* 动作条钉底：margin-top:auto 把剩余高度全吃掉（不是固定 16px —— 定高窗口里正文短了会浮在半空） */
 #repoPrDlg .dlg-actions { flex: 0 0 auto; margin: auto -20px -20px; padding: 14px 20px; border-top: 1px solid var(--line); }
 /* 管理员（2026-10-23 用户拍板）：不放 select —— 直接显示员工姓名的按钮，

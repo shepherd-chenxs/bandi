@@ -1661,6 +1661,8 @@ export async function workState(row) {
      * 只是那些没提交的改动进不去（界面要明说）。
      */
     canPr: (ahead ?? 0) > 0,
+    // 「现在就能建 PR」= 有东西进 PR 且已经推到远端 —— 推送和建 PR 拆开后的闸（2026-10-29）
+    canPrNow: (ahead ?? 0) > 0 && !!upstream && (unpushed ?? 0) === 0,
   };
 }
 
@@ -1864,15 +1866,31 @@ export async function deleteRemoteBranch(repo, branch) {
  *   · 默认 `true` —— 卡上/员工那条路还是"把改动提交上去再建 PR"，agent 干完活手上就是一堆脏文件；
  *   · 代码托管页那颗按钮走 `false` —— **只推已提交的**，提交是「提交」按钮单独一步。
  */
-export async function openPr(row, { title, body, base, branch, message, draft, paths, allowSecrets, includeDirty = true } = {}) {
-  const pushed = await commitAndPush(row, {
-    branch,
-    message: message ?? title,
-    paths: includeDirty ? paths : null,
-    allowSecrets,
-    base,
-    pushOnly: !includeDirty,
-  });
+export async function openPr(row, { title, body, base, branch, message, draft, paths, allowSecrets, includeDirty = true, push = false } = {}) {
+  /*
+   * 推送和建 PR 拆开（2026-10-29 用户："推送和 PR 拆开，这里只是建 PR 就可以，因为前面的推送已经做了"）：
+   *   · push:false（界面那条路，默认）—— 只建 PR：head 就是当前分支，且必须已经推到远端；
+   *     没推完就报错指路推送区，**绝不顺手推** —— 推是「推送」区那颗按钮的事，两件事别混在一颗按钮里。
+   *   · push:true（流程节点那条路）—— 全自动：提交/推送/建 PR 一口气，跟以前一样（人不在场，没有"先推送"可指）。
+   */
+  let pushed;
+  if (push) {
+    pushed = await commitAndPush(row, {
+      branch,
+      message: message ?? title,
+      paths: includeDirty ? paths : null,
+      allowSecrets,
+      base,
+      pushOnly: !includeDirty,
+    });
+  } else {
+    const st = await workState(row);
+    if (st.detached || !st.branch) throw new Error('当前不在任何分支上（detached HEAD）—— 先在那个目录 checkout 回一个分支再建 PR');
+    if (!st.upstream || (st.unpushed ?? 0) > 0) {
+      throw new Error(`这条分支还有 ${st.unpushed ?? '若干'} 个提交没推送 —— 先在「提交」卡的推送区点「推送」，推完再回来建 PR`);
+    }
+    pushed = { branch: st.branch, base: await resolveBase(row, base), committed: null, files: [] };
+  }
   const existing = await findOpenPullForHead(row.fullName, pushed.branch, row.owner);
   if (existing) return { pr: existing, created: false, ...pushed };
   const out = await createPull(row.fullName, {

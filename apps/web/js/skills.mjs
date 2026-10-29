@@ -2096,11 +2096,12 @@ export function openRepoPrDialog(repo, onDone) {
      这里再写 inline 宽高的话会压过那条规则，两边改一处忘一处。 */
   /*
    * 2026-10-29 重设计：
-   *   · 内容按「先写什么 → 再往哪推」排：标题、描述在前，分支两栏在后；
-   *   · 新分支名和 base 并排一行（都是短输入，竖着排浪费半屏）；
+   *   · 内容按「先写什么 → 再往哪推」排：标题、描述在前，base 在后；
+   *   · 推送和建 PR 拆开（用户："这里只是建 PR 就可以，前面的推送已经做了"）：
+   *     没有「新分支名」栏了 —— head 就是当前分支；没推完的提交弹窗建不了，指路推送区。
    *   · 长说明从 placeholder 挪进 label 的 <em> —— 填之前就该看见要求，填完才看得见提示没用。
-   * 控件 id 全数保留（prTitle/prBody/prBranch/prBase/prDraft/prFillBtn/prBranchAgain/prSubmit），
-   * 行为契约不变：「推送并建 PR」不标 type="button"（回车即推送），其余钮必须标。
+   * 控件 id（prTitle/prBody/prBase/prDraft/prFillBtn/prSubmit）不变，
+   * 行为契约不变：「建 PR」不标 type="button"（回车即提交），其余钮必须标。
    */
   dlg.innerHTML = `
     <form method="dialog">
@@ -2112,31 +2113,20 @@ export function openRepoPrDialog(repo, onDone) {
       <div id="prForm" hidden>
         <div class="pr-fill-row">
           <label style="flex:1">PR 标题<em>一句话说清这个 PR 干了什么</em></label>
-          <button type="button" class="btn-sm" id="prFillBtn" title="按没推的提交和未提交改动，自动填标题和描述">自动填充</button>
+          <button type="button" class="btn-sm" id="prFillBtn" title="按这条分支领先 base 的提交，自动填标题和描述">自动填充</button>
         </div>
         <input id="prTitle" placeholder="例如：代码托管：加建 PR 与手动合并" autocomplete="off" />
         <label>PR 描述<em>改了什么 + 怎么验的；没跑过验证就写「未验证」—— 别写「安全」「已修复」</em></label>
         <textarea id="prBody" rows="4" placeholder="改了什么 + 怎么验的。"></textarea>
-        <div class="pr-branch-row">
-          <div>
-            <label>新分支名<em>从当前 HEAD 拉出来推上去</em></label>
-            <div class="row-with-btn">
-              <input id="prBranch" autocomplete="off" />
-              <button type="button" id="prBranchAgain" title="换一个带时间戳的名字（撞名时用）">换一个</button>
-            </div>
-          </div>
-          <div>
-            <label>合进哪个分支（base）<em>base 不动</em></label>
-            <input id="prBase" autocomplete="off" />
-          </div>
-        </div>
+        <label>合进哪个分支（base）<em>base 不动</em></label>
+        <input id="prBase" autocomplete="off" />
         <label class="check"><input type="checkbox" id="prDraft" />
           <span>先建成草稿<em>——草稿不会被自动合并，等你在 GitHub 上标为可审阅</em></span></label>
       </div>
 
       <div class="dlg-actions">
         <button type="button" value="cancel">关闭</button>
-        <button class="primary" id="prSubmit" disabled>推送并建 PR</button>
+        <button class="primary" id="prSubmit" disabled>建 PR</button>
       </div>
     </form>`;
   document.body.append(dlg);
@@ -2178,12 +2168,19 @@ export function openRepoPrDialog(repo, onDone) {
       : state.ahead === null
         ? `不知道（本地还没有 origin/${state.base}，先点「同步」）`
         : `${state.ahead} 个提交`;
+    /* 推送状态（推送和建 PR 拆开后弹窗要管的第一件事）：没推完 = 现在建不了，指路推送区 */
+    const unpushedN = Number(state.unpushed ?? 0);
+    const pushChip = !state.upstream
+      ? '<div class="pr-sum-item"><span class="pr-sum-k">推送</span><span class="pr-sum-v">没推过（还没有上游）</span></div>'
+      : unpushedN > 0
+        ? `<div class="pr-sum-item"><span class="pr-sum-k">推送</span><span class="pr-sum-v">还有 ${unpushedN} 个没推</span></div>`
+        : '<div class="pr-sum-item"><span class="pr-sum-k">推送</span><span class="pr-sum-v">已推到远端</span></div>';
     /*
      * 这个窗只讲**这条 PR 会装什么**（2026-10-29 用户："应该是这个 PR 相关的内容，没推送的讲他干嘛？"）：
      * 已提交、还没推的就是全部内容；没提交的东西跟这颗按钮无关，不摆进来占地方。
      */
     /*
-     * 概览重设计（2026-10-29）：「当前分支 / base / 领先」从竖线串成的长句改成三颗 chip ——
+     * 概览重设计（2026-10-29）：「当前分支 / base / 领先」从竖线串成的长句改成 chip ——
      * 数字和分支名是要被扫到的，不是被读的；提交清单收进浅底卡片，跟下面的表单区分开。
      */
     box.innerHTML = `
@@ -2191,26 +2188,23 @@ export function openRepoPrDialog(repo, onDone) {
         <div class="pr-sum-item"><span class="pr-sum-k">当前分支</span><span class="pr-sum-v" title="${esc(state.branch)}">${esc(state.branch)}</span></div>
         <div class="pr-sum-item"><span class="pr-sum-k">base</span><span class="pr-sum-v" title="${esc(state.base || '未记录')}">${esc(state.base || '未记录')}</span></div>
         <div class="pr-sum-item"><span class="pr-sum-k">领先 base</span><span class="pr-sum-v">${esc(String(ahead))}</span></div>
+        ${pushChip}
       </div>
       ${
         state.aheadCommits?.length
           ? `<div class="pr-commits">
-          <div class="pr-commits-head">这条 PR 会装 <b>${state.aheadCommits.length}</b> 条提交<span class="pr-commits-note">已提交、还没推</span></div>
+          <div class="pr-commits-head">这条 PR 会装 <b>${state.aheadCommits.length}</b> 条提交<span class="pr-commits-note">${unpushedN > 0 ? '已提交、还没推' : '已推到远端'}</span></div>
           <ul class="pr-commit-list">
             ${state.aheadCommits.slice(0, 6).map((c) => `<li><code>${esc(c.sha)}</code><span title="${esc(c.subject)}">${esc(c.subject)}</span></li>`).join('')}
             ${state.aheadCommits.length > 6 ? `<li class="dim">…另有 ${state.aheadCommits.length - 6} 条</li>` : ''}
           </ul></div>`
           : ''
       }
-      ${state.canPr ? '' : '<div class="pr-warn">当前分支没有领先 base 的提交 —— 没有东西可以进 PR：先在「提交」里提交，再来建。</div>'}`;
+      ${state.canPr ? '' : '<div class="pr-warn">当前分支没有领先 base 的提交 —— 没有东西可以进 PR：先在「提交」里提交，再来建。</div>'}
+      ${state.canPr && !state.canPrNow ? '<div class="pr-warn">这条分支还有没推送的提交 —— 建不了 PR。先关掉这个窗，在「提交」卡的推送区点「推送」，推完再回来。</div>' : ''}`;
     const form = $('prForm');
-    form.hidden = !state.canPr;
-    $('prSubmit').disabled = !state.canPr;
-    /* 默认分支名：已经有领先提交、人也不在 base 上 → 直接推当前分支（另起一个名字只会多一条空分支） */
-    if (!$('prBranch').value) {
-      const sameBranch = state.canPr && state.branch && state.branch !== state.base;
-      $('prBranch').value = sameBranch ? state.branch : state.suggest ?? '';
-    }
+    form.hidden = !state.canPrNow;
+    $('prSubmit').disabled = !state.canPrNow;
     if (!$('prBase').value) $('prBase').value = state.base ?? '';
   };
 
@@ -2224,12 +2218,6 @@ export function openRepoPrDialog(repo, onDone) {
       if (!box) return; // 弹窗已关
       box.innerHTML = `<div class="sk-blank">读不到工作区：${esc(e.message)}</div>`;
     });
-
-  $('prBranchAgain')?.addEventListener('click', (e) => {
-    e.preventDefault();
-    const stamp = Date.now().toString(36).slice(-5);
-    $('prBranch').value = `bandi/${String(repo.name ?? 'pr').replace(/[^\w.-]+/g, '-')}-${stamp}`;
-  });
 
   /* 自动填充（2026-10-29）：标题、描述一起填。框里已经有字就先问一句；
      填完焦点落在标题上，人顺着往下检查——自动填的是草稿，不是结论。 */
@@ -2263,7 +2251,7 @@ export function openRepoPrDialog(repo, onDone) {
     if (!title) return toast('标题写一句 —— PR 标题是别人（和三个月后的你）唯一会看到的那句话');
     const btn = $('prSubmit');
     btn.disabled = true;
-    btn.textContent = '推送中…';
+    btn.textContent = '建 PR 中…';
     try {
       const r = await api(`/api/git/repos/${encodeURIComponent(repo.id)}/prs`, {
         method: 'POST',
@@ -2271,7 +2259,6 @@ export function openRepoPrDialog(repo, onDone) {
         body: JSON.stringify({
           title,
           body: $('prBody').value,
-          branch: $('prBranch').value.trim() || null,
           base: $('prBase').value.trim() || null,
           draft: $('prDraft').checked,
         }),
@@ -2279,13 +2266,13 @@ export function openRepoPrDialog(repo, onDone) {
       toast(r.created ? `PR #${r.pr.number} 建好了：${r.pr.url}` : `这个分支已经有一个 open PR：#${r.pr.number}（没新建）`);
       /*
        * 建完就关窗 + 整页重画（2026-10-27）：PR 现在常驻在详情的「拉取请求」区，
-       * 新 PR 应该立刻出现在那张清单上；留着一颗停在「推送中…」的弹窗只会让人以为卡死。
+       * 新 PR 应该立刻出现在那张清单上；留着一颗停在「建 PR 中…」的弹窗只会让人以为卡死。
        */
       dlg.close();
       if (onDone) await onDone();
     } catch (err) {
       btn.disabled = false;
-      btn.textContent = '推送并建 PR';
+      btn.textContent = '建 PR';
       // 失败原话摆在这一屏上（不弹走了事）：这一步多半是"权限没勾"或"分支撞名"，人要照着改
       setErr(String(err.message ?? err));
       toast(err.message, 'error');
