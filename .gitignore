@@ -83,3 +83,10 @@ audit/
 # 入库代码零引用（真正要用的头像是 apps/web/avatars/ 里裁好的那 16 张），
 # 只有 tmp/ 里的裁剪脚本会读这批原图 —— 素材留在本机，随时可重生成，不进版本控制。
 generated-images/
+
+# 本机临时产物（2026-10-29 PR 门禁拦下 codex-platform.html 里的外链后补的）：
+# 这批文件曾被"全选提交"带进 PR 分支，触发地址白名单检查 —— 留在本机，不进版本控制。
+codex-*.html
+headers-platform.txt
+tmp_state.json
+tmp_tasks.json
