@@ -25,35 +25,29 @@ export const fmtMb = (bytes) => {
 
 
 
-/* 「数据管理」分节（2026-10-21 独立成菜单「数据备份」，2026-10-22 改名「数据管理」并补导入）——
+/* 「数据管理」区（2026-10-29 起是「这台机器」页底下的一个区，不再是设置里的独立分节）——
    导出 = VACUUM INTO 出一份完整快照，导出时不用停班底。
    导入 = 选一份班底导出的 .db 快照覆盖本机数据：服务端先校验（头 / 完整性 / 班底的表），
    写成待用文件，**重启班底才换库**（换的时候现库自动备份进 backups/导入前-*.db）。
-   恢复从此有两条路：直接导入快照，或照老办法手动覆盖 bandi.db。 */
-export async function renderBackup() {
-  $('settingsView').innerHTML = rtLoading('数据管理');
-  /* 状态和备份列表并行拉；谁挂了都不拦渲染 —— 状态挂了路径显示 —，列表挂了显示空态，
+   恢复从此有两条路：直接导入快照，或照老办法手动覆盖 bandi.db。
+   降成区之后 UI 跟着收（用户："导入导出做成按钮就行，没必要占据那么大的位置"）——
+   大字统计条、两张动作卡、右栏快照列表全部收掉：导出/导入就是节头两颗按钮，
+   状态压成一行小字，备份快照是一个矮列表。「重启生效」这类后果话术归导入确认框。 */
+export async function renderBackupSection(mount) {
+  /* 状态和备份列表并行拉；谁挂了都不拦渲染 —— 状态挂了数字显示 —，列表挂了显示空态，
      点导出/导入都会拿到真实报错。 */
   const [rStatus, rBackups] = await Promise.allSettled([
     api(`${LOCAL_BASE}/status`),
     api(`${LOCAL_BASE}/backups`),
   ]);
+  if (!mount?.isConnected) return; // 拉数据期间页面被切走了，别往已摘下的节点上画
   const st = rStatus.status === 'fulfilled' ? rStatus.value : null;
   const bl = rBackups.status === 'fulfilled' ? rBackups.value : null;
   const local = st?.local ?? {};
   const counts = local.counts ?? {};
   const size = fmtMb(local.dbSize);
   const mtime = local.dbMtime ? dt(local.dbMtime) : '';
-  /* 2026-10-22 重设计：原来是「标签左、内容右挤」的表单卡 + 两颗小按钮吊在右下，
-     说明挤成一坨还分家（「怎么用」同时讲导出和导入）。改成——
-     ① 数据总览条：数字大字排一行当主视觉，路径放卡头当副信息；
-     ② 导出/导入两张动作卡：各管各的图标、一句话职责、说明与按钮。
-     说明跟着动作走（谁的事写在谁的卡里），“重启生效”只跟导入有关，也归位了。 */
-  const icoExport =
-    '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/></svg>';
-  const icoImport =
-    '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4"/><path d="m7 9 5-5 5 5"/><path d="M5 20h14"/></svg>';
-  /* 右栏：backups/ 里的快照（定时备份 + 导入前自动备份）。来源标注跟命名规则一一对应。 */
+  /* backups/ 里的快照（定时备份 + 导入前自动备份）。来源标注跟命名规则一一对应。 */
   const SRC_LABEL = { scheduled: '定时备份', import: '导入前备份', other: '备份' };
   const bkFiles = Array.isArray(bl?.files) ? bl.files : [];
   const bkList = bkFiles.length
@@ -63,52 +57,29 @@ export async function renderBackup() {
           <div class="dm-item-sub">${SRC_LABEL[f.src] ?? SRC_LABEL.other} · ${fmtMb(f.size) || '—'} · ${dt(f.mtime)}</div>
         </div>`).join('')
     : `<div class="dm-empty">还没有备份。导入快照换库、或开了定时备份之后，会自动存进数据目录的 backups/ 里。</div>`;
-  $('settingsView').innerHTML = `
-    ${headRow('<b>数据管理</b>')}
-    <div class="detail-body">
-      <div class="dm-cols">
-        <div class="dm-left">
-          <section class="dm-overview">
-          <div class="dm-overview-head">
-            <span class="dm-title">本机数据</span>
-            <span class="machine-path" title="${esc(local.dbPath ?? '')}">${esc(local.dbPath ?? '—')}</span>
-          </div>
-          <div class="dm-stats">
-            <div class="dm-stat"><b>${size ? esc(size) : '—'}</b><span>库大小</span></div>
-            <div class="dm-stat"><b>${Number(counts.personas ?? 0)}</b><span>员工</span></div>
-            <div class="dm-stat"><b>${Number(counts.conversations ?? 0)}</b><span>会话</span></div>
-            <div class="dm-stat"><b>${Number(counts.projects ?? 0)}</b><span>项目</span></div>
-            <div class="dm-stat"><b class="dm-stat-time">${mtime ? esc(mtime) : '—'}</b><span>最后修改</span></div>
-          </div>
-        </section>
-        <div class="dm-cards">
-          <div class="dm-card">
-            <div class="dm-card-head">
-              <span class="dm-ico">${icoExport}</span>
-              <div class="dm-card-name"><b>导出快照</b><span>把整份库存成一个 .db 文件</span></div>
-              <button class="btn-sm primary" id="backupExport">导出</button>
-            </div>
-            <div class="dm-card-desc">生成这份库的完整快照（一个 .db 文件），导出时班底照常用，不需要停机。成功后会把文件完整路径告诉你。</div>
-          </div>
-          <div class="dm-card">
-            <div class="dm-card-head">
-              <span class="dm-ico">${icoImport}</span>
-              <div class="dm-card-name"><b>导入快照</b><span>用一份快照覆盖本机数据</span></div>
-              <button class="btn-sm" id="backupImport">导入</button>
-            </div>
-            <div class="dm-card-desc">选一份班底导出的 .db 快照：会先校验文件，当前数据自动备份进数据目录的 backups/。<b>导入完成后重启班底才生效。</b></div>
-          </div>
-        </div>
-        </div>
-        <div class="dm-list">
-          <div class="dm-list-head">
-            <span class="dm-title">备份快照</span>
-            <span class="dm-list-count" title="${esc(bl?.dir ?? '')}">${bkFiles.length ? `${bkFiles.length} 份` : ''}</span>
-          </div>
-          <div class="dm-list-body">${bkList}</div>
+  const stats = [
+    size ? `<b>${esc(size)}</b> 库大小` : '',
+    `<b>${Number(counts.personas ?? 0)}</b> 员工`,
+    `<b>${Number(counts.conversations ?? 0)}</b> 会话`,
+    `<b>${Number(counts.projects ?? 0)}</b> 项目`,
+    mtime ? `<b>${esc(mtime)}</b> 最后修改` : '',
+  ].filter(Boolean).join('<span class="dm-sep">·</span>');
+  mount.innerHTML = `
+    <section class="set-sec dm-sec">
+      <div class="set-head">
+        <b>数据管理</b>
+        <div class="dm-actions">
+          <span class="machine-path dm-path" title="${esc(local.dbPath ?? '')}">${esc(local.dbPath ?? '—')}</span>
+          <button class="btn-sm" id="backupImport">导入快照</button>
+          <button class="btn-sm primary" id="backupExport">导出快照</button>
         </div>
       </div>
-    </div>
+      <div class="dm-line">${stats}</div>
+      <div class="dm-snaps">
+        <div class="dm-snaps-head">备份快照<span class="dm-list-count">${bkFiles.length ? `${bkFiles.length} 份 · 定时备份与导入前自动备份都存在数据目录的 backups/ 里` : ''}</span></div>
+        <div class="dm-snaps-body">${bkList}</div>
+      </div>
+    </section>
     <input type="file" id="backupImportFile" accept=".db,.sqlite,.sqlite3" hidden />`;
   const btn = $('backupExport');
   btn.onclick = async () => {
@@ -154,7 +125,7 @@ export async function renderBackup() {
       const d = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(d.error || `导入失败（HTTP ${r.status}）`);
       toast('已导入，重启班底后生效', 'ok');
-      await renderBackup(); // 重画一遍：状态行还是现库的数字，别让人误以为已经换了
+      await renderBackupSection(mount); // 重画一遍：状态行还是现库的数字，别让人误以为已经换了
     } catch (err) {
       toast(err.message, 'error');
     } finally {

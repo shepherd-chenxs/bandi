@@ -1,9 +1,8 @@
 /* settings.mjs —— 设置、关于、额度。
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
-import { esc, personLabel, setRoute, setTheme, toast } from './shell.mjs';
-import { api, createCombo, dt, failHtml, post, showFail } from './ui.mjs';
+import { esc, setRoute, setTheme, toast } from './shell.mjs';
+import { api, dt, failHtml, post, showFail } from './ui.mjs';
 import { headRow, renderPlugins, renderRuntimes, rtLoading } from './connectors.mjs';
-import { renderBackup } from './machine.mjs';
 import { openRemotePage, setPluginRerender } from './experts.mjs';
 import { renderList, showView } from './contacts.mjs';
 import { setListTitle } from './flowpages.mjs';
@@ -18,42 +17,71 @@ import { $, S } from './core.mjs';
 /* ---------------------------------------------------------------- 设置 */
 
 /**
- * 设置左侧那一列分节：左栏列表用这一份（顺序 + 标题 + 副标题）。
+ * 设置左栏那一列分节：**分组版**（2026-10-29 用户定稿："设置页各项乱糟糟的" → 分区）。
+ * 十个分节收成五组，顺序 = 左栏顺序；组头在左栏画成灰字分段标题（contacts.mjs 渲染），
+ * 每组两件事，扫一眼就知道"哪类东西在哪儿"，不用在一列平铺里从头找到尾。
+ *
  * 左栏顶上**只写模块名「设置」**，当前是哪个分节写在**右边**的页头里 ——
  * 跟消息/通讯录同一个主从布局（左列是导航，右面是当前页）。
  */
-export const SETTINGS_SECTIONS = [
-  ['prefs', '偏好设置', '主题与外观'],
-  /* 「这台机器」= 模式页（2026-10-21 用户拍板：与「运行时」合并成一页；同日三改：两档 + 动作按钮）——
-     分段控件只有 单机 / 总机；「接入总机…」是动作不是第三档，点了只会展开加入面板。
-     「局域网」就是单机⇄总机的切换本体，不再是独立开关；备份独立成「数据管理」分节。 */
-  ['runtimes', '这台机器', '模式 · 设备'],
-  /* 「手机配对」（2026-11 手机端增量）：扫码连接手机 —— 局域网形态才有意义，
-     未监听局域网时分节里给引导（见 pairing.mjs renderPairing 的 boundLan 分支） */
-  ['pairing', '手机配对', '扫码连接手机'],
-  ['backup', '数据管理', '导入 / 导出本机数据'],
-  ['quota', '额度', '每个模型每天最多用多少'],
-  ['plugins', '插件', '扩展点'],
-  ['skills', '技能', '给数字员工用的能力包'],
-  /*
-   * 「角色与菜单」（2026-10-28 第二刀）：角色 = 名字 + 一组菜单 key，先只存库。
-   * **设备形态不加进 `DEVICE_SETTINGS_SECTIONS`** —— 服务端五个口都要操作员，
-   * 列出来就是"点一下吃一个 403"（那条规矩见下面 DEVICE_SETTINGS_SECTIONS 的注释）。
-   */
-  ['roles', '角色与菜单', '角色能看见哪些菜单'],
-  /* 「用户」（2026-10-28 第三刀）：账号 + 登录 + 角色分配。设备形态同样不加 —— 见上面那条。 */
-  ['users', '用户', '账号与角色'],
-  /*
-   * 「代码托管」「远程连接」**不再列在设置左栏**（2026-10-26 用户："设置里的代码托管和远程连接入口去掉"），
-   * 入口统一在「工作台 → 研发」区（见 experts.mjs 的 DEV_TILES）。
-   * ⚠️ 同日二改：它们**连渲染也搬走了**（各自成了工作台的整页，`openRemotePage` /
-   *    `openCodeRepoPage`），这里只是"不再列出"—— 老位置 `openSettings('code' / 'remote')`
-   *    在函数开头一律转发，别在这儿再加渲染分支（会画出第二个宿主）。
-   */
-  ['aiimage', '生图服务', '数字员工生成图片的通道'],
-  ['feishu', '飞书', '在飞书里给数字员工派活'],
-  ['about', '关于', '版本与说明'],
+export const SETTINGS_GROUPS = [
+  {
+    title: '通用',
+    items: [
+      ['prefs', '偏好设置', '主题与外观'],
+      ['about', '关于', '版本与说明'],
+    ],
+  },
+  {
+    /* 「这台机器」= 模式页（2026-10-21 用户拍板：与「运行时」合并成一页；同日三改：两档 + 动作按钮）——
+       分段控件只有 单机 / 总机；「接入总机…」是动作不是第三档，点了只会展开加入面板。
+       「局域网」就是单机⇄总机的切换本体，不再是独立开关；备份独立成「数据管理」分节。 */
+    title: '本机与设备',
+    items: [
+      ['runtimes', '这台机器', '模式 · 设备'],
+      /* 「手机配对」（2026-11 手机端增量）：扫码连接手机 —— 局域网形态才有意义，
+         未监听局域网时分节里给引导（见 pairing.mjs renderPairing 的 boundLan 分支） */
+      ['pairing', '手机配对', '扫码连接手机'],
+    ],
+  },
+  {
+    /* 额度与生图都是"管模型"的事：额度管花销，生图管一条图片通道 —— 放一组。 */
+    title: '模型与 AI',
+    items: [
+      ['quota', '额度', '每个模型每天最多用多少'],
+      ['aiimage', '生图服务', '数字员工生成图片的通道'],
+    ],
+  },
+  {
+    title: '扩展',
+    items: [
+      ['plugins', '插件', '扩展点'],
+      ['skills', '技能', '给数字员工用的能力包'],
+    ],
+  },
+  {
+    /* 「角色与菜单」（2026-10-28 第二刀）：角色 = 名字 + 一组菜单 key，先只存库。
+       **设备形态不加进下面的平铺** —— 服务端五个口都要操作员，
+       列出来就是"点一下吃一个 403"（那条规矩见 settingsSections 的注释）。 */
+    title: '账号与权限',
+    items: [
+      ['roles', '角色与菜单', '角色能看见哪些菜单'],
+      /* 「用户」（2026-10-28 第三刀）：账号 + 登录 + 角色分配。设备形态同样不加 —— 见上面那条。 */
+      ['users', '用户', '账号与角色'],
+    ],
+  },
 ];
+
+/*
+ * 「代码托管」「远程连接」**不再列在设置左栏**（2026-10-26 用户："设置里的代码托管和远程连接入口去掉"），
+ * 入口统一在「工作台 → 研发」区（见 experts.mjs 的 DEV_TILES）。
+ * ⚠️ 同日二改：它们**连渲染也搬走了**（各自成了工作台的整页，`openRemotePage` /
+ *    `openCodeRepoPage`），这里只是"不再列出"—— 老位置 `openSettings('code' / 'remote')`
+ *    在函数开头一律转发，别在这儿再加渲染分支（会画出第二个宿主）。
+ *
+ * 已搬走、不再出现在这里的：数据管理（2026-10-29 起 = 「这台机器」页底部的一个区，machine.mjs
+ * renderBackupSection）、飞书（2026-10-29 起 = 员工详情 › 配置 tab › 「飞书」子页，chat.mjs
+ * mountFeishuPanel）。`openSettings` 里留着对应 section 的旧路由转发，别删。
 
 /*
  * 手机设备（受限视图）的「我的」= 设备信息 + 可用设置（2026-10-28，设计 T04 第 1 条）。
@@ -69,7 +97,10 @@ export const DEVICE_SETTINGS_SECTIONS = [
   ['about', '关于', '版本与说明'],
 ];
 
-/** 当前身份能看到的设置分节（左栏列表与 openSettings 的兜底共用这一份） */
+/**
+ * 当前身份能看到的设置分节（**平铺**）：openSettings 的兜底判断用这一份。
+ * 桌面管理员 = 分组拍平；设备 / 非管理员 = 各自的小清单。
+ */
 export function settingsSections() {
   if (S.isDevice) return DEVICE_SETTINGS_SECTIONS;
   /*
@@ -81,9 +112,22 @@ export function settingsSections() {
    * 本身对这些账号仍然成立 —— 主题、关于是可以看的。
    */
   if (S.isUser && !S.isAdmin) {
-    return SETTINGS_SECTIONS.filter(([k]) => k === 'prefs' || k === 'about');
+    return SETTINGS_GROUPS.flatMap((g) => g.items).filter(([k]) => k === 'prefs' || k === 'about');
   }
-  return SETTINGS_SECTIONS;
+  return SETTINGS_GROUPS.flatMap((g) => g.items);
+}
+
+/**
+ * 左栏分组渲染用（2026-10-29 分区）：`[{title, items}]`。
+ *
+ * **只有桌面管理员画组头** —— 设备形态 3 节、非管理员 2 节，本来就短，
+ * 再切一组反而是给短列表加噪音；这两种形态 `title: null` = 渲染时不画组头。
+ * 组内顺序即左栏顺序，`settingsSections()` 就是把它拍平的，两份永远同源。
+ */
+export function settingsGroups() {
+  if (S.isDevice) return [{ title: null, items: DEVICE_SETTINGS_SECTIONS }];
+  if (S.isUser && !S.isAdmin) return [{ title: null, items: settingsSections() }];
+  return SETTINGS_GROUPS;
 }
 
 
@@ -91,6 +135,8 @@ export function settingsSections() {
 export function openSettings(section) {
   /* 旧路由兼容：合并前「这台机器」是独立分节 'machine'（保存的位置可能还指着它） */
   if (section === 'machine') section = 'runtimes';
+  /* 旧路由兼容：「数据管理」2026-10-29 起是「这台机器」页底部的一个区，不再是分节 */
+  if (section === 'backup') section = 'runtimes';
   /*
    * 「代码托管」「远程连接」已经搬成**工作台研发区的独立整页**（2026-10-26 二改）：
    * 它们不再是设置的分节，直接转发过去。
@@ -119,14 +165,12 @@ export function openSettings(section) {
   if (S.settingsSection === 'device') return renderDeviceInfo();
   if (S.settingsSection === 'runtimes') return renderRuntimes();
   if (S.settingsSection === 'pairing') return renderPairing();
-  if (S.settingsSection === 'backup') return renderBackup();
   if (S.settingsSection === 'plugins') return renderPlugins();
   if (S.settingsSection === 'quota') return renderQuota();
   if (S.settingsSection === 'skills') return renderSkillCards();
   if (S.settingsSection === 'roles') return renderRoles();
   if (S.settingsSection === 'users') return renderUsers();
   if (S.settingsSection === 'aiimage') return renderImageAi();
-  if (S.settingsSection === 'feishu') return renderFeishu();
   if (S.settingsSection === 'about') return renderAbout();
   if (S.settingsSection !== 'prefs') return;
 
@@ -338,211 +382,11 @@ export async function renderImageAi() {
 
 
 
-/* ---------------------------------------------------------------- 飞书 */
+/* ---------------------------------------------------------------- 飞书（已迁走） */
 
-/**
- * 飞书通道（2026-10-27）：一条平台级通道 —— 私聊机器人 = 找绑定的员工（下拉里挑，
- * 服务端把没绑/绑的没了都解析成生效值，缺省落在秘书）；群里 `@员工名 做某事` = 派给那个员工；
- * 每条指令回一张随 run 推进的进度卡。
- * 形态照抄生图服务页：secret 掩码 + 「修改」解锁、留空保留原值、状态行压在输入区下。
- * 通道状态每 5 秒轮询一次（只在分节开着时轮，换分节即停 —— 计数器守卫）。
- */
-let feishuRenderSeq = 0;
-const FEISHU_STATE_TEXT = {
-  connected: '已连接',
-  connecting: '连接中…',
-  reconnecting: '重连中…',
-  stopped: '已停止',
-  failed: '失败',
-};
-
-export async function renderFeishu() {
-  S.settingsSection = 'feishu';
-  const view = $('settingsView');
-  view.innerHTML = rtLoading('飞书');
-  let cfg = null;
-  try {
-    cfg = await api('/api/feishu/config');
-  } catch (e) {
-    view.innerHTML = `${headRow('<b>飞书</b>')}<div class="empty">${failHtml(e)}</div>`;
-    return;
-  }
-  const configured = !!cfg?.configured;
-  const seq = ++feishuRenderSeq;
-  const running = ['connected', 'connecting', 'reconnecting'].includes(cfg?.status?.state);
-
-  view.innerHTML = `
-    ${headRow('<b>飞书</b>')}
-    <div class="detail-body">
-      <section class="set-sec">
-        <div class="set-head"><b>第一次接</b><span class="set-tag">一次性 · 约 10 分钟</span></div>
-        <div class="set-box">
-          <div class="set-note">
-            ① <a href="https://open.feishu.cn/app" target="_blank" rel="noreferrer">去飞书开放平台建一个「企业自建应用」</a>；<br />
-            ② 「事件与回调」：订阅方式选<b>长连接</b>（选成请求地址会永远收不到消息），添加事件 <code>im.message.receive_v1</code>；<br />
-            ③ 「权限管理」：开「获取与发送单聊、群组消息」和「更新应用发送的消息卡片」，发布应用版本；<br />
-            ④ 回来把 App ID / App Secret 填在下面，点「启动通道」。
-          </div>
-        </div>
-      </section>
-      <section class="set-sec">
-        <div class="set-head"><b>飞书通道</b><span class="set-tag" id="fsStateTag">…</span></div>
-        <div class="set-box open-combo">
-          <div class="gr-conn stack">
-            <div class="gr-conn-row">
-              <span class="row-label">App ID</span>
-              <input id="fsAppId" value="${esc(cfg?.appId ?? '')}" autocomplete="off" spellcheck="false"
-                     placeholder="cli_…" />
-              <span></span>
-            </div>
-            <div class="gr-conn-row">
-              <span class="row-label">App Secret</span>
-              ${
-                configured
-                  ? `<input id="fsSecret" class="locked" type="password" value="${esc(cfg?.appSecretHint ?? '')}" readonly data-locked="1"
-                          aria-label="已保存的 Secret，只显示掩码" autocomplete="off" />
-                     <button id="fsSecretEdit">修改</button>`
-                  : `<input id="fsSecret" type="password" placeholder="粘贴 App Secret（保存后只显示掩码）" autocomplete="off" />
-                     <span></span>`
-              }
-            </div>
-            <div class="gr-conn-row">
-              <span class="row-label">私聊绑定</span>
-              <div id="fsP2p"></div>
-              <span></span>
-            </div>
-            <div class="gr-conn-row">
-              <span class="row-label">允许的人</span>
-              <input id="fsAllow" value="${esc((cfg?.allowOpenIds ?? []).join(', '))}" autocomplete="off" spellcheck="false"
-                     placeholder="open_id，逗号分隔；留空不限制" />
-              <span></span>
-            </div>
-            <div class="gr-conn-row">
-              <span class="row-label">开机自启</span>
-              <div class="seg" id="fsEnabled">
-                <button data-v="1" class="${cfg?.enabled ? 'on' : ''}">开</button>
-                <button data-v="0" class="${cfg?.enabled ? '' : 'on'}">关</button>
-              </div>
-              <span></span>
-            </div>
-            <div class="gr-conn-actions">
-              <button class="primary" id="fsSave">保存配置</button>
-              <button id="fsTest">测试连接</button>
-              <button id="fsToggle">${running ? '停止通道' : '启动通道'}</button>
-            </div>
-            <div class="gr-conn-status" id="fsStatus"></div>
-          </div>
-        </div>
-      </section>
-    </div>`;
-
-  const status = (html) => { $('fsStatus').innerHTML = html; };
-  const paintStatus = (st) => {
-    const s = st?.status ?? {};
-    const word = FEISHU_STATE_TEXT[s.state] ?? '已停止';
-    const tag = $('fsStateTag');
-    if (tag) tag.textContent = word;
-    const bad = s.state === 'failed';
-    status(
-      `<b style="color:${bad ? 'var(--bad,#c0504d)' : s.state === 'connected' ? 'var(--ok)' : 'var(--dim)'}">${word}</b>` +
-        `${bad && s.lastError ? ` —— ${esc(s.lastError)}` : ''}`,
-    );
-  };
-  paintStatus(cfg);
-
-  /* 私聊绑定：全站公共下拉（员工多，带搜索）；只持值，等「保存配置」统一提交。
-     标签走 personLabel 全站口径 —— 名字后面带上岗位「崔老三（项目经理）」 */
-  const p2pCombo = createCombo({
-    mount: $('fsP2p'),
-    items: (S.personas ?? []).map((p) => ({ id: p.id, label: personLabel(p) })),
-    value: cfg?.p2pPersonaId ?? '',
-    search: true,
-  });
-
-  /* 「修改」解锁 Secret 框：清掉掩码变可编辑，语义是"这次保存会覆盖旧 Secret"；
-     解锁后按钮变「取消」，点它退回掩码锁定态（输入了一半的值直接丢弃，保存仍走"保留原值"） */
-  const fsSecretHint = cfg?.appSecretHint ?? '';
-  $('fsSecretEdit')?.addEventListener('click', () => {
-    const k = $('fsSecret');
-    if (!k.dataset.locked) {
-      k.readOnly = true;
-      k.classList.add('locked');
-      k.dataset.locked = '1';
-      k.value = fsSecretHint;
-      k.placeholder = '';
-      $('fsSecretEdit').textContent = '修改';
-      return;
-    }
-    k.readOnly = false;
-    k.classList.remove('locked');
-    k.removeAttribute('data-locked');
-    k.value = '';
-    k.placeholder = '重新粘贴 App Secret（留空则保留原值）';
-    k.focus();
-    $('fsSecretEdit').textContent = '取消';
-  });
-
-  $('fsSave')?.addEventListener('click', async () => {
-    const body = {
-      appId: $('fsAppId').value.trim(),
-      allowOpenIds: $('fsAllow').value.split(/[,，\s]+/).map((s) => s.trim()).filter(Boolean),
-      enabled: $('fsEnabled')?.querySelector('.on')?.dataset.v === '1',
-      p2pPersonaId: p2pCombo?.value() ?? '',
-    };
-    const k = $('fsSecret');
-    if (!k?.dataset.locked) body.appSecret = k?.value ?? '';
-    try {
-      await api('/api/feishu/config', { method: 'PUT', body: JSON.stringify(body) });
-      toast('已保存', 'ok');
-      renderFeishu();
-    } catch (e) {
-      toast(e.message, 'error');
-    }
-  });
-
-  $('fsEnabled')?.querySelectorAll('button').forEach((b) => {
-    b.onclick = () => {
-      $('fsEnabled').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
-    };
-  });
-
-  $('fsTest')?.addEventListener('click', async () => {
-    status('<span style="color:var(--dim)">测试中…</span>');
-    try {
-      await api('/api/feishu/test', { method: 'POST', body: '{}' });
-      status('<b style="color:var(--ok)">凭据有效</b> —— 飞书认这套 App ID / App Secret');
-    } catch (e) {
-      status(`<b style="color:var(--bad,#c0504d)">凭据不对</b> —— ${esc(e.message)}`);
-    }
-  });
-
-  $('fsToggle')?.addEventListener('click', async () => {
-    const btn = $('fsToggle');
-    btn.disabled = true;
-    try {
-      await api('/api/feishu/' + (btn.textContent === '停止通道' ? 'stop' : 'start'), { method: 'POST', body: '{}' });
-      renderFeishu();
-    } catch (e) {
-      toast(e.message, 'error');
-      btn.disabled = false;
-    }
-  });
-
-  /* 通道状态轮询：只在分节开着时轮，换分节（seq 变了）即停 */
-  const guard = setInterval(async () => {
-    if (seq !== feishuRenderSeq) {
-      clearInterval(guard);
-      return;
-    }
-    try {
-      const st = await api('/api/feishu/config');
-      paintStatus(st);
-      const nowRunning = ['connected', 'connecting', 'reconnecting'].includes(st?.status?.state);
-      const btn = $('fsToggle');
-      if (btn && !btn.disabled) btn.textContent = nowRunning ? '停止通道' : '启动通道';
-    } catch { /* 拉不到就等下一拍 */ }
-  }, 5000);
-}
+/* 2026-10-29 用户定稿：飞书从「设置」搬进员工详情 › 配置 tab › 「飞书」子页，
+ * 改成员工级 —— 一个数字员工对应一个飞书自建应用（自己的 App ID / Secret、
+ * 自己的长连接通道、自己的白名单）。表单渲染在 chat.mjs 的 mountFeishuPanel。 */
 
 /* ---------------------------------------------------------------- 关于 */
 

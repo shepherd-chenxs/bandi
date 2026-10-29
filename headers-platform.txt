@@ -1,0 +1,19 @@
+HTTP/1.1 403 Forbidden
+Date: Wed, 28 Oct 2026 09:52:15 GMT
+Content-Type: text/html; charset=UTF-8
+Transfer-Encoding: chunked
+Connection: keep-alive
+Cache-Control: private, max-age=0, no-store, no-cache, must-revalidate, post-check=0, pre-check=0
+Expires: Thu, 01 Jan 1970 00:00:01 GMT
+Referrer-Policy: same-origin
+X-Frame-Options: SAMEORIGIN
+Strict-Transport-Security: max-age=31536000; includeSubDomains; preload
+X-Content-Type-Options: nosniff
+set-cookie: __cf_bm=G3_kQ_KJ3B20LowkvlVV86GRZB4D86Agr.Lm0lSRTUw-1793181135.3678372-1.0.1.1-AYVt.BAlWq.RZJnA6brGWqRvxru8Hrvx8QMpsR2tM9ILgS8sQU8DIOjPaqVo9ys65McNd9EG4ECZushG2aDrN3pC5.BirO3NseKqOVtyZ5lcXIT312INcGzHNPZyCvZj; HttpOnly; SameSite=None; Secure; Path=/; Domain=openai.com; Expires=Wed, 28 Oct 2026 10:22:15 GMT
+Report-To: {"group":"cf-nel","max_age":604800,"endpoints":[{"url":"https://a.nel.cloudflare.com/report/v4?s=kAworxD8Xe05A2kPB5hSA0B2Dq%2FjkvaicyxAOkPwWAigrwT52o0l2BN7cC6AgP1pHDKlwaJqMgAQPfJlCvumNzvBmuoqbSJz2hsLf0ZrpBPgng%2BzlW7LSxPxhSAhcOqnWNfxD9g%3D"}]}
+Nel: {"report_to":"cf-nel","success_fraction":0.01,"max_age":604800}
+Content-Encoding: gzip
+Server: cloudflare
+CF-RAY: a5190bf00ac58592-SIN
+alt-svc: h3=":443"; ma=86400
+
