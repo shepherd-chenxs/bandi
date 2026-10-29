@@ -674,6 +674,8 @@ export async function handleGit(req, res, url) {
         message: String(body.message ?? ''),
         allowSecrets: !!body.allowSecrets,
         paths: Array.isArray(body.paths) ? body.paths.map(String) : null,
+        // 站在 main 上提交时界面会带一个分支名（不带就由服务端给默认名）—— 主分支不收本地提交
+        branch: body.branch ? String(body.branch) : null,
       })), true;
     } catch (e) {
       return fail(res, 400, 'E1103', String(e.message ?? e)), true;

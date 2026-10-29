@@ -1556,15 +1556,28 @@ export async function renderGitRepos(root = $('pluginView')) {
         <div class="gr-chg-group-body"${chgFold[key] ? ' hidden' : ''}>${items.map(rowHtml).join('')}</div>
       </div>`
         : '';
+    /*
+     * 主分支提示（2026-10-29 用户："main 不应该直接提交 —— 提交时就该检查，在 main 上就提示新建分支"）。
+     * 站在 base 上时把"会先建一条分支"摆到提交说明上面，名字预填服务端的建议名、可改。
+     * 服务端也挡（不传名字它自己建一条）—— 这里是让"提交到哪儿"显式可见，不是唯一防线。
+     */
+    const onBase = !!state.onBase;
+    const branchRow = onBase
+      ? `<div class="gr-commit-base">
+          <div class="gr-cb-tip">你在主分支 <b>${esc(state.base)}</b> 上 —— <span class="gr-cb-warn">主分支不收本地提交</span>。这次会先建一条分支，改动落在它上面：</div>
+          <input id="grCommitBranch" value="${esc(state.suggest ?? '')}" autocomplete="off" spellcheck="false" aria-label="新分支名" />
+        </div>`
+      : '';
     box.innerHTML = `
       <div class="gr-chg-split">
         <div class="gr-chg-list">${groupHtml('chg', '更改', tracked) + groupHtml('untr', '未版本管理的文件', untracked)}</div>
         <div class="gr-commit-side">
+          ${branchRow}
           <textarea id="grCommitMsg" placeholder="提交说明（Ctrl+Enter 提交）" rows="9"></textarea>
           <div class="gr-commit-acts">
             <button type="button" class="btn-sm gr-suggest" id="grSuggestBtn"
                     title="按勾选的改动生成一行说明（不满意就改，或再点一次）">生成说明</button>
-            <button type="button" class="primary" id="grCommitBtn">提交</button>
+            <button type="button" class="primary" id="grCommitBtn">${onBase ? '建分支并提交' : '提交'}</button>
           </div>
         </div>
       </div>`;
@@ -1681,10 +1694,16 @@ export async function renderGitRepos(root = $('pluginView')) {
       if (rows.length && !checked.length) return toast('先勾选要提交的文件', 'error');
       const payload = { message: msg, allowSecrets };
       if (rows.length && checked.length < rows.length) payload.paths = checked;
+      if (onBase) {
+        const bn = ($('grCommitBranch')?.value ?? '').trim();
+        if (!bn) return toast('给这条分支起个名字 —— 主分支不收本地提交', 'error');
+        payload.branch = bn;
+      }
       commitBtn.disabled = true;
       try {
         const r = await post(`/api/git/repos/${encodeURIComponent(repo.id)}/commit`, payload);
-        toast(`已提交 ${(r.committed?.sha ?? '').slice(0, 7)} 到 ${r.branch}（${r.files} 个文件）`);
+        const moved = r.autoBranch ? `（从 ${r.autoBranch.from} 新建）` : '';
+        toast(`已提交 ${(r.committed?.sha ?? '').slice(0, 7)} 到 ${r.branch}${moved}（${r.files} 个文件）`);
         await refresh();
       } catch (e) {
         commitBtn.disabled = false;

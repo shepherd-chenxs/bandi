@@ -2061,6 +2061,15 @@ dialog#repoPrDlg { width: 660px; height: min(720px, 92vh); max-height: 92vh;
 .gr-commit-acts .gr-suggest { height: 32px; padding: 0 16px; border-radius: 8px;
                               font-size: 12.5px; font-weight: 500; }
 .gr-commit-acts .gr-suggest:disabled { opacity: .6; cursor: default; }
+/* 主分支提示（2026-10-29 用户："main 不应该直接提交，提交时就该检查"）：
+   站在 base 上提交 = 先建一条分支，这一格把"提交到哪儿"摆明（名字可改）。 */
+.gr-commit-base { flex: 0 0 auto; padding: 9px 11px; border-radius: 8px;
+                  background: var(--side); border: 1px solid var(--line);
+                  display: flex; flex-direction: column; gap: 7px; }
+.gr-cb-tip { font-size: 12px; line-height: 1.6; color: var(--dim); }
+.gr-cb-tip b { color: var(--text); font-weight: 600; font-family: ui-monospace, monospace; }
+.gr-cb-warn { color: var(--warn); }
+.gr-commit-base input { width: 100%; font-family: ui-monospace, monospace; font-size: 12px; }
 /* 行右缩进（2026-10-27 二调：用户"折叠区的条目再往右缩进"）：文件行比组标题深两级 ——
    组头内容从 12px 起，行内容从 52px 起；悬停底色仍铺满整行。 */
 .gr-chg-row { display: flex; align-items: center; gap: 8px; padding: 6px 12px 6px 52px; cursor: pointer; min-width: 0; }
