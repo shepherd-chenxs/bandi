@@ -918,6 +918,22 @@ export async function renderGitRepos(root = $('pluginView')) {
             <button type="button" class="mini auto" id="grPrCreate">建 PR</button>
           </div>`;
         }
+      } else if (cur === base && (state?.dirtyCount || (state?.ahead ?? 0) > 0)) {
+        /*
+         * 人在 base 上有了东西（2026-10-29 用户实报："手动提交了但不能推送，没看到建 PR 的按钮"）：
+         * 之前这里直接什么都不画 —— 按钮藏在"非 base 分支"条件后面，人推 main 被保护拒收后就断了。
+         * 后端本来就接得住（commitAndPush 会从当前 HEAD 拉一条新分支推上去），补上入口就行：
+         *   · 有未提交改动 → 弹窗会把改动收进新分支提交；
+         *   · 已提交没推（ahead > 0）→ 弹窗直接用已提交的 HEAD 开新分支。
+         * 干净又不领先（ahead 0）不画 —— 真没东西可建。
+         */
+        const what = state?.dirtyCount
+          ? `有 ${state.dirtyCount} 个未提交改动`
+          : `有 ${state.ahead} 个已提交还没推上去`;
+        cta = `<div class="gr-pr-cta">
+            <span>当前就在 base（<b>${esc(base)}</b>）上${esc(what)}，直接推主干多半会被保护拒收 —— 建 PR 会把它们收进一条新分支</span>
+            <button type="button" class="mini auto" id="grPrCreate">建 PR</button>
+          </div>`;
       }
     }
 
