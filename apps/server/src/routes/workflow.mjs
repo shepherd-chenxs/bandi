@@ -32,6 +32,7 @@ export async function handleWorkflow(req, res, url) {
         name: t.name,
         builtIn: !!t.builtIn,
         publishedAt: t.publishedAt ?? null,
+        archivedAt: t.archivedAt ?? null,
         start: workflows.startOf(t),
         nodes: workflows.nodesOf(t),
         // 左栏模板行上的「跑过 N 次」——数字来自库里，不是数列表
@@ -42,6 +43,59 @@ export async function handleWorkflow(req, res, url) {
       // 工作台要的：已发布的流程（点一下就能起一条）
       published: workflows.publishedFlows(),
     });
+  }
+
+  /*
+   * 模板清单（轻量）：只给 id / name / 发布状态 / 节点数。
+   *
+   * 为什么不能拿上面那口 `/api/workflows` 凑合：它连带 100 条实例视图和全部节点 JSON，
+   * 而这里只是**定时任务弹窗的「哪条流程」下拉**要一份名字 —— 一次弹窗拉几百 KB 不值。
+   * 也只列**已发布**的（`?published=1`）：定时任务只跑已发布的，跟看板建卡同一口径。
+   */
+  if (req.method === 'GET' && url.pathname === '/api/workflows/templates') {
+    const onlyPub = url.searchParams.get('published') === '1';
+    return sendJson(res, 200, {
+      templates: store
+        .listWorkflowTemplates()
+        .filter((t) => !onlyPub || t.publishedAt)
+        .map((t) => ({
+          id: t.id,
+          name: t.name,
+          builtIn: !!t.builtIn,
+          publishedAt: t.publishedAt ?? null,
+          archivedAt: t.archivedAt ?? null,
+          nodeCount: workflows.nodesOf(t).length,
+        })),
+    });
+  }
+
+  /*
+   * 归档 / 取消归档（2026-10-29）。归档 = 从工作流清单收起来，**历史实例一条不动**
+   * （发起记录、设计器的历史记录都还看得到）；顺带下架（见 workflows.archiveTemplate）。
+   */
+  const tplArc = /^\/api\/workflows\/templates\/([^/]+)\/archive$/.exec(url.pathname);
+  if (req.method === 'POST' && tplArc) {
+    const body = await readBody(req).catch(() => ({}));
+    try {
+      const t = workflows.archiveTemplate(decodeURIComponent(tplArc[1]), body.on !== false);
+      return sendJson(res, 200, { id: t.id, archivedAt: t.archivedAt ?? null, publishedAt: t.publishedAt ?? null });
+    } catch (e) {
+      return fail(res, 400, 'E2073', String(e?.message ?? e));
+    }
+  }
+
+  /*
+   * 删模板 = **连同它的全部实例**一起删（用户 2026-10-29："点击删除，流程实例一起删除"）。
+   * 与删单条实例（上面 DELETE /runs/:id）是两件事：那个只删一条，这个清一个模板的全部历史。
+   */
+  if (req.method === 'DELETE' && tplOne) {
+    try {
+      const runs = workflows.deleteTemplate(decodeURIComponent(tplOne[1]));
+      return sendJson(res, 200, { deleted: true, runs });
+    } catch (e) {
+      const notFound = String(e?.message ?? e) === '模板不存在';
+      return fail(res, notFound ? 404 : 403, notFound ? 'E2028' : 'E2074', String(e?.message ?? e));
+    }
   }
 
   // 一个模板的历史记录：跑过多少条 + 最近的那些（设计器页头的「历史记录」）

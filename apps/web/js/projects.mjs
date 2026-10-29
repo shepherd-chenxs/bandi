@@ -63,6 +63,43 @@ export function workbenchProjectSection() {
 
 
 /**
+ * 项目列表（左栏那一列）。**只画左栏**，不碰右侧详情 —— 所以搜索时能只重画它，
+ * 输入框不失焦（跟 renderFlowList / renderPluginMaster 一个路数）。
+ *
+ * 守卫跟别的左栏渲染一样：这一栏此刻不属于项目页就一个字都别画
+ * （`#search` 的输入事件是**挂在全站共用元素上**的，离开这页不会自动摘）。
+ */
+export function renderProjectList() {
+  if (S.nav !== 'plugins' || !S.projectList) return;
+  const raw = String(S.filter ?? '').trim();
+  const q = raw.toLowerCase();
+  // 名字或目录命中都算（目录忽略大小写：Windows 路径本来就不分大小写）
+  const rows = (S.projects ?? []).filter(
+    (p) => !q || `${p.name ?? ''} ${p.root ?? ''}`.toLowerCase().includes(q),
+  );
+  const rowHtml = (p) => `<div class="item${p.id === S.projSel ? ' active' : ''}" data-proj-sel="${esc(p.id)}">
+              <div class="who">
+                <!-- 「内置」角标用通讯录同款 .b-inline 塞进 <b> 里 —— line1 是 space-between，
+                     挂在外面会被推到行最右，看着像个时间戳（2026-10-20 收口）。 -->
+                <div class="line1"><b>${esc(p.name)}${
+                  p.builtIn ? '<i class="b-inline">内置</i>' : ''
+                }</b></div>
+                <div class="line2" title="AI 会在这个目录里干活">${esc(p.root)}</div>
+              </div>
+            </div>`;
+  $('listBody').innerHTML = rows.length
+    ? rows.map(rowHtml).join('')
+    : // 「一个项目都没有」和「有，但没搜到」是两件事，文案别混：一个是去新建，一个是关键词不对
+      (S.projects ?? []).length
+      ? `<div class="empty" style="padding:36px 12px">没有匹配「${esc(raw)}」的项目<br /><span class="dim" style="font-size:12px">也可以试试搜工作目录</span></div>`
+      : '<div class="empty" style="padding:36px 12px">还没有项目<br />点右上角 ＋ 新建一个</div>';
+  // 左栏选谁，右边看谁（就地换详情，不整页跳）
+  $('listBody').querySelectorAll('[data-proj-sel]').forEach((el) => {
+    el.onclick = () => openProjectsPage(el.dataset.projSel).catch((e) => toast(e.message, 'error'));
+  });
+}
+
+/**
  * 项目页：**两个区、中间一条分隔线**（2026-10-18，跟「服务器与密钥」那页同一套布局）：
  * 项目列表住**全局左栏**（跟消息/通讯录同一个位置，主区之间是 app 自带的那条竖分隔线），
  * 右侧主区是选中项目的详情（常驻编辑区 + 任务统计 + 三个动作）。
@@ -92,27 +129,25 @@ export async function openProjectsPage(selectId) {
   setListTitle([{ label: '工作台', to: 'workbench' }, { label: '项目' }]);
   $('listAction').classList.remove('hidden');
   $('listAction').title = '新建项目';
-  $('listBody').innerHTML =
-    (S.projects.length
-      ? S.projects
-          .map(
-            (p) => `<div class="item${p.id === S.projSel ? ' active' : ''}" data-proj-sel="${esc(p.id)}">
-              <div class="who">
-                <!-- 「内置」角标用通讯录同款 .b-inline 塞进 <b> 里 —— line1 是 space-between，
-                     挂在外面会被推到行最右，看着像个时间戳（2026-10-20 收口）。 -->
-                <div class="line1"><b>${esc(p.name)}${
-                  p.builtIn ? '<i class="b-inline">内置</i>' : ''
-                }</b></div>
-                <div class="line2" title="AI 会在这个目录里干活">${esc(p.root)}</div>
-              </div>
-            </div>`,
-          )
-          .join('')
-      : '<div class="empty" style="padding:36px 12px">还没有项目<br />点右上角 ＋ 新建一个</div>');
-  // 左栏选谁，右边看谁（就地换详情，不整页跳）
-  $('listBody').querySelectorAll('[data-proj-sel]').forEach((el) => {
-    el.onclick = () => openProjectsPage(el.dataset.projSel).catch((e) => toast(e.message, 'error'));
-  });
+  /*
+   * 顶部搜索（2026-10-29，用户："这个页面也加个搜索"）：跟消息 / 工作流 / 插件主从页同一个框
+   * （`#search` + `S.filter`），过滤只看**名字和目录** —— 项目最常被记住的就是这两样，
+   * 目录还能粘一段路径进来找（"上次那个 C:\…\docs 的项目叫啥来着"）。
+   *
+   * 清词时机用 `S.projSearchFor` 记「上次是谁在用这个框」：点项目行会**再走一遍** openProjectsPage
+   * （就地换详情），无条件清会把用户正打着的词吞掉。离开工作台那一栏时（setNav）和回宫格时
+   * （openPlugins）把这个标记清掉，下次进来重新清一次上个栏目残留的关键词。
+   */
+  $('search').closest('.list-search')?.classList.remove('hidden');
+  $('search').placeholder = '搜项目名 / 目录';
+  if (S.projSearchFor !== 'projects') {
+    S.projSearchFor = 'projects';
+    if (S.filter) {
+      S.filter = '';
+      $('search').value = '';
+    }
+  }
+  renderProjectList();
 
   /* 右页头**去掉了**（2026-10-19 用户：「面包屑应该是在左边的列表上，右边的不用」）：
      原来这里只有一段「工作台 › 项目 › 名字」，现在整段挪到了左栏顶上；右侧直接是详情，

@@ -32,7 +32,7 @@ import { CRUMB_GO, connEditing, connSetTransport, connTransport, parseKeyValues,
 import { addRtFamily, testAddRuntimePath } from './js/machine.mjs';
 import { closeCtxMenu, hideConversationRow, openCtxMenu, removeConversationForever, wipeScopeOf } from './js/listmenu.mjs';
 import { addMenu, addMenuAnchor, closeAddMenu, contactAddItems, detailSave, gitAddRepoItems, openAddMenu, renderList } from './js/contacts.mjs';
-import { newTemplateDialog } from './js/workflows.mjs';
+import { archiveFlowTemplate, deleteFlowTemplate, newTemplateDialog } from './js/workflows.mjs';
 import { kbRepaint, kbRepaintRows, projectDialog } from './js/projects.mjs';
 import { doStartFlow, flowStart, openFlowStart, syncFlowTitle } from './js/flowpages.mjs';
 import { importPicked, openSkill, renderSkAssignList, renderGitRepos, scanImport, skAssignPicked, skAssignSkill } from './js/skills.mjs';
@@ -489,6 +489,30 @@ $('scrim').onclick = closeDrawer;
  * 右键某行**不会**打开该会话：`contextmenu` 不触发 `click`，无需额外阻止。
  */
 $('listBody').addEventListener('contextmenu', (e) => {
+  /*
+   * 工作流模板行（2026-10-29）：右键给「归档 / 删除」。
+   * 归档收进左栏底下的「已归档」段、历史实例留着；删除是连实例一起清（确认框里写明）。
+   * 跟会话行同一套委托 —— 这里必须留在 boot 区，写进 renderFlowList 会重复绑。
+   */
+  const tplRow = e.target.closest?.('[data-tpl]');
+  if (tplRow) {
+    const t = (S.flowTemplates ?? []).find((x) => x.id === tplRow.dataset.tpl);
+    if (!t) return; // 列表刚重画、数据没跟上：宁可弹原生菜单，也不弹一个空菜单
+    e.preventDefault();
+    openCtxMenu(e.clientX, e.clientY, [
+      t.archivedAt
+        ? { label: '取消归档', run: () => archiveFlowTemplate(t, false) }
+        : { label: '归档', run: () => archiveFlowTemplate(t, true) },
+      {
+        label: '删除',
+        danger: true,
+        disabled: !!t.builtIn,
+        why: t.builtIn ? '内置模板删不掉 —— 不想看到它就归档收起来' : '',
+        run: () => deleteFlowTemplate(t),
+      },
+    ]);
+    return;
+  }
   const row = e.target.closest?.('[data-conv]');
   if (!row) return;
   const c =

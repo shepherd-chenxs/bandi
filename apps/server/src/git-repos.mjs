@@ -732,6 +732,48 @@ export async function commitAll(row, { message, allowSecrets = false, paths = nu
 }
 
 /**
+ * 「生成提交说明」要的素材（2026-10-29）。
+ *
+ * 只取**勾选的**那批文件（没勾就是整片工作区），跟 commitAll 的口径保持一致 ——
+ * 说明跟真提交进去的内容对不上，比没有说明更糟。
+ *
+ * 三块信息，都是模型写得准的最小集：
+ *   · `files`  路径 + porcelain 状态（M/A/D/??）
+ *   · `stat`   `git diff --stat` 的原文（行数增减）
+ *   · `diff`   截断到 maxDiffChars 的 diff 正文
+ * 未跟踪文件不在 `git diff` 里，单独给一份清单，让模型知道"这几个是新加的"。
+ */
+export async function changeDigest(row, { paths = null, maxDiffChars = 4000 } = {}) {
+  const st = await workState(row);
+  if (!st.dirtyCount) throw new Error('工作区是干净的，没有可提交的改动');
+  const subset = Array.isArray(paths) && paths.length > 0;
+  const picked = subset ? st.dirty.filter((f) => paths.includes(f.path)) : st.dirty;
+  if (!picked.length) throw new Error('勾选的文件不在改动里了（期间有人动过）—— 重新看一次改动再生成');
+
+  const files = picked.map((f) => ({ path: f.path, status: String(f.status) }));
+  const tracked = files.filter((f) => f.status !== '??').map((f) => f.path);
+  const untracked = files.filter((f) => f.status === '??').map((f) => f.path);
+
+  let stat = '';
+  let diff = '';
+  if (tracked.length) {
+    const s = await gitIn(row.localPath, ['diff', 'HEAD', '--stat', '--', ...tracked], { timeoutMs: GIT_FAST_MS });
+    if (s.code === 0) stat = s.out;
+    const d = await gitIn(row.localPath, ['diff', 'HEAD', '--', ...tracked], { timeoutMs: GIT_FAST_MS });
+    if (d.code === 0) diff = d.out;
+  }
+  return {
+    fullName: row.fullName,
+    branch: st.branch,
+    files,
+    untracked,
+    stat,
+    diff: diff.slice(0, maxDiffChars),
+    diffTruncated: diff.length > maxDiffChars,
+  };
+}
+
+/**
  * 把 `git push` 的失败输出翻译成人话（**纯函数**，冒烟直接钉）。
  *
  * 2026-10-27 实报：人往 `main` 直接推，被 GitHub 规则集拒了，应用却按"非快进"那档说
@@ -1141,6 +1183,80 @@ export async function pullChecks(repo, sha) {
   return summarizeChecks(data?.check_runs);
 }
 
+/**
+ * gate 明细（2026-10-29 用户："界面如果不通过就卡住了，得有个修复功能"）：
+ * 行上那颗 `gate ✗` 只会说"红了"，人只能跑去 GitHub 翻日志 —— 就地给出**红在哪**：
+ *   · runs：这条 headSha 上每条 check 的结论 / 耗时 / 详情链接；
+ *   · jobs：失败的下钻一层 —— Actions 那边按 head_sha 找最近一条失败的 run，
+ *     带出哪个 job、哪个 step 红的（日志全文不拉，又大又慢，网页上看更舒服）。
+ * Actions 接口拿不到（令牌没勾 Actions 权限 / 仓库禁用）就不下钻，runs 明细照样给。
+ */
+export async function gateDetail(repo, sha) {
+  if (!sha) return { state: 'unknown', total: 0, failed: [], pending: [], runs: [], jobs: [] };
+  const data = await ghFetch(`/repos/${repo}/commits/${sha}/check-runs?per_page=100`);
+  const runs = (Array.isArray(data?.check_runs) ? data.check_runs : []).map((r) => ({
+    name: r.name ?? '',
+    status: r.status ?? '',
+    conclusion: r.conclusion ?? null,
+    seconds: r.started_at && r.completed_at
+      ? Math.max(0, Math.round((Date.parse(r.completed_at) - Date.parse(r.started_at)) / 1000))
+      : null,
+    url: r.html_url ?? null,
+  }));
+  const summary = summarizeChecks(data?.check_runs);
+  let jobs = [];
+  try {
+    const wl = await ghFetch(`/repos/${repo}/actions/runs?head_sha=${sha}&per_page=10`);
+    const bad = (Array.isArray(wl?.workflow_runs) ? wl.workflow_runs : [])
+      .find((w) => ['failure', 'timed_out', 'cancelled', 'action_required'].includes(w.conclusion));
+    if (bad) {
+      const jd = await ghFetch(`/repos/${repo}/actions/runs/${bad.id}/jobs?per_page=20`);
+      jobs = (Array.isArray(jd?.jobs) ? jd.jobs : [])
+        .filter((j) => j.conclusion !== 'success')
+        .map((j) => ({
+          name: j.name ?? '',
+          conclusion: j.conclusion ?? null,
+          url: j.html_url ?? null,
+          steps: (Array.isArray(j.steps) ? j.steps : [])
+            .filter((s) => s.conclusion && !['success', 'skipped'].includes(s.conclusion))
+            .map((s) => ({ name: s.name ?? '', conclusion: s.conclusion ?? null })),
+        }));
+    }
+  } catch {
+    /* 下钻拿不到就算了 —— 明细面板的主菜（runs）已经够指路 */
+  }
+  return { ...summary, runs, jobs };
+}
+
+/**
+ * 重跑失败的检查（2026-10-29）：偶发红（网络抖 / runner 超时）不该逼人改一版假提交。
+ * 只重跑 headSha 上**最近一条失败的 run**；没有失败的可跑就明说，不当成功。
+ * 令牌没勾 Actions 写权限时 GitHub 会 403 —— 原话带回，界面上指去网页点 Re-run。
+ */
+export async function rerunGate(repo, sha) {
+  if (!sha) throw new Error('这个 PR 拿不到 head 提交 —— 重跑不了，去 GitHub 页面上点 Re-run');
+  const wl = await ghFetch(`/repos/${repo}/actions/runs?head_sha=${sha}&per_page=20`);
+  const bad = (Array.isArray(wl?.workflow_runs) ? wl.workflow_runs : [])
+    .find((w) => ['failure', 'timed_out', 'cancelled', 'action_required'].includes(w.conclusion));
+  if (!bad) throw new Error('没有失败的检查可重跑 —— 要么还在跑，要么已经全绿（等一下再刷新看看）');
+  try {
+    await ghFetch(`/repos/${repo}/actions/runs/${bad.id}/rerun`, { method: 'POST' });
+  } catch (e) {
+    /*
+     * 403 最常见：细粒度 PAT 默认「Actions 只读」，重跑要写权限 —— 这得人去改令牌，
+     * 光回一句"没权限"人还是卡着，把两条路都指出来（改令牌 / 去 GitHub 手动点）。
+     */
+    if (e?.status === 403) {
+      throw new Error(
+        '重跑需要令牌有「Actions: 读写」权限 —— 细粒度 PAT 要在仓库权限里勾上 Actions: Read and write，'
+        + '改完在「连接 GitHub」弹窗里重填一次令牌；不想改令牌就直接去 GitHub 上点 Re-run',
+      );
+    }
+    throw e;
+  }
+  return { rerun: true, url: bad.html_url ?? null };
+}
+
 /** 列出开着的 issue（剔除 PR —— GitHub 的 issues 接口把 PR 也当 issue 返回） */
 export async function listOpenIssues(repo) {
   const list = await ghFetch(`/repos/${repo}/issues?state=open&per_page=30&sort=updated&direction=desc`);
@@ -1495,6 +1611,12 @@ export async function workState(row) {
     // 默认分支名由服务端给（`bandi/<名>-<时间戳>`）：规则只留一处，界面和人敲的是同一套
     suggest: suggestBranchName(row.name),
     canShip: dirty.length > 0 || (ahead ?? 0) > 0,
+    /*
+     * 建 PR 的唯一门槛（2026-10-29 用户："提交和建 PR 一起，说不清也不好控制"）：
+     * PR 只装**已提交**的东西 —— 有领先 base 的提交才建得出来。工作区脏不脏不影响能不能建 PR，
+     * 只是那些没提交的改动进不去（界面要明说）。
+     */
+    canPr: (ahead ?? 0) > 0,
   };
 }
 
@@ -1532,13 +1654,15 @@ function addTargetsOf(entries) {
  *   · 推不上去就**说清楚**，绝不 `--force`（远端同名分支不是你的，多半是别人的活）；
  *   · 看着像凭据的文件先挡住，除非调用方明说 `allowSecrets`（界面上那颗"就是要提交"）。
  */
-export async function commitAndPush(row, { branch = null, message = null, paths = null, allowSecrets = false, base = null } = {}) {
+export async function commitAndPush(row, { branch = null, message = null, paths = null, allowSecrets = false, base = null, pushOnly = false } = {}) {
   const st = await workState(row);
   if (!st.hasRemote) throw new Error('这个目录没有 origin（手动接入的本地克隆要先把 origin 指回 GitHub）—— 没有 origin 就推不上去');
   if (st.detached) throw new Error('当前不在任何分支上（detached HEAD）—— 先在那个目录 checkout 回一个分支');
 
-  const picked = Array.isArray(paths) && paths.length ? st.dirty.filter((f) => paths.includes(f.path)) : st.dirty;
-  if (Array.isArray(paths) && paths.length && picked.length !== paths.length) {
+  /* pushOnly（2026-10-29）：只推**已提交**的东西，一个脏文件都不碰 —— 「建 PR」只负责推送 + 建 PR，
+     提交是「提交」那颗按钮的事。两条路各管一件事，出问题也说得清是谁干的。 */
+  const picked = pushOnly ? [] : Array.isArray(paths) && paths.length ? st.dirty.filter((f) => paths.includes(f.path)) : st.dirty;
+  if (!pushOnly && Array.isArray(paths) && paths.length && picked.length !== paths.length) {
     throw new Error('选中的文件和工作区对不上了（期间有人动过）—— 重新看一次改动再提交');
   }
   const secrets = findSecretPaths(picked.map((f) => f.path));
@@ -1571,10 +1695,24 @@ export async function commitAndPush(row, { branch = null, message = null, paths 
     const sha = await gitIn(row.localPath, ['rev-parse', 'HEAD']);
     committed = { sha: sha.code === 0 ? sha.out : null, subject: msg };
   } else {
-    // 工作区是干净的：那就用当前分支上**已经提交但没推**的东西
+    /*
+     * 不提交，只推**已经提交**的东西。两种来源：工作区本来就干净（人自己在外头提交了），
+     * 或者 pushOnly（建 PR 这条路 —— 脏文件一律不碰）。
+     */
     if (!branchName) branchName = st.branch;
-    if (branchName === targetBase) throw new Error(`你现在就在 base（${targetBase}）上，工作区又是干净的 —— 没东西可提，先切个分支或改点东西`);
-    if (!st.ahead) throw new Error(st.baseKnown ? '工作区是干净的，当前分支也没有领先 base 的提交 —— 没东西可推' : `工作区是干净的，而且本地还没有 origin/${targetBase} 这个引用 —— 先点「同步」拉一次再说`);
+    const dirtyNote = st.dirtyCount
+      ? `（另外还有 ${st.dirtyCount} 个未提交改动，不会进这条 PR —— 要带上就先在「提交」里提交）`
+      : '';
+    if (branchName === targetBase) {
+      throw new Error(`你现在就在 base（${targetBase}）上，没有自己的分支可以推${dirtyNote} —— 把「新分支名」换一个，提交会从当前 HEAD 拉一条新分支推上去`);
+    }
+    if (!st.ahead) {
+      throw new Error(
+        st.baseKnown
+          ? `当前分支没有领先 base 的提交 —— 没有东西可以进 PR${dirtyNote || '（工作区也是干净的，先改点东西）'}`
+          : `本地还没有 origin/${targetBase} 这个引用 —— 先点「同步」拉一次再说`,
+      );
+    }
     if (branchName !== st.branch) {
       // 换了个名字：从当前 HEAD 拉出来（不动原来的分支指针），否则 push 会报"src refspec 不存在"
       const create = await gitIn(row.localPath, ['branch', branchName, st.branch || 'HEAD']);
@@ -1671,15 +1809,26 @@ export async function deleteRemoteBranch(repo, branch) {
 }
 
 /**
- * 一句话跑完整条「本地改动 → 分支 → 推送 → PR」，建出来的 PR 立刻写进任务卡。
+ * 一句话跑完「本地改动 → 分支 → 推送 → PR」，建出来的 PR 立刻写进任务卡。
  *
  * 编排放在这里（不是放在 routes 里）有两个理由：
  *   · 以后流程引擎的动作节点（`pr-create`）要复用同一条路，不能出现第二份"怎么建 PR"；
  *   · 顺序是有讲究的：推送成功才建 PR、建之前必查重、建完第一件事是把 URL 落到卡上
  *     （网络在中间断了，人至少知道这个 PR 可能已经存在）。
+ *
+ * `includeDirty`（2026-10-29，用户："提交和建 PR 一起，说不清也不好控制"）：
+ *   · 默认 `true` —— 卡上/员工那条路还是"把改动提交上去再建 PR"，agent 干完活手上就是一堆脏文件；
+ *   · 代码托管页那颗按钮走 `false` —— **只推已提交的**，提交是「提交」按钮单独一步。
  */
-export async function openPr(row, { title, body, base, branch, message, draft, paths, allowSecrets } = {}) {
-  const pushed = await commitAndPush(row, { branch, message: message ?? title, paths, allowSecrets, base });
+export async function openPr(row, { title, body, base, branch, message, draft, paths, allowSecrets, includeDirty = true } = {}) {
+  const pushed = await commitAndPush(row, {
+    branch,
+    message: message ?? title,
+    paths: includeDirty ? paths : null,
+    allowSecrets,
+    base,
+    pushOnly: !includeDirty,
+  });
   const existing = await findOpenPullForHead(row.fullName, pushed.branch, row.owner);
   if (existing) return { pr: existing, created: false, ...pushed };
   const out = await createPull(row.fullName, {

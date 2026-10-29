@@ -14,7 +14,8 @@ import { fileURLToPath } from 'node:url';
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const webJs = path.join(repo, 'apps', 'web', 'js');
 const src = ['../app.mjs', 'ui.mjs', 'skills.mjs', ...fs.readdirSync(webJs).filter((f) => f.endsWith('.mjs') && f !== 'ui.mjs' && f !== 'skills.mjs')]
-  .map((f) => fs.readFileSync(path.join(webJs, f), 'utf8')).join('\n'); // 2026-10-22 拆 ESM：扫全部前端模块 + 入口（boot 语句都在入口）
+  .map((f) => fs.readFileSync(path.join(webJs, f), 'utf8')).join('\n')
+  .replace(/\r\n/g, '\n'); // 工作区可能是 CRLF（autocrlf 各人不同）——先归一，下面 `\n  }\n` 这类切片界标才认得准
 
 let bad = 0;
 let n = 0;
@@ -43,7 +44,10 @@ check(/<div class="gr-dlg-help">\$\{GIT_TOKEN_HELP\}<\/div>/.test(src), '「怎�
 check(/<b>GitHub 连接<\/b>/.test(src), '连接弹窗标题是「GitHub 连接」');
 check(!/id="gitTokenHelp"/.test(src), '老的标题旁「?」按钮不再出现（说明已改成铺开）');
 check(/function openGitConnDlg\(/.test(src), '有 openGitConnDlg（连接弹窗）');
-check(/\$\('gitConnOpen'\)\?\.addEventListener\('click', openGitConnDlg\)/.test(src), '左栏状态按钮打开连接弹窗');
+/* 2026-10-29 六改：状态按钮从左栏中部搬进 `#listFoot` 底栏，绑定从 `$('gitConnOpen')`
+   变成 `foot.querySelector('#gitConnOpen')` —— 正则只钉「#gitConnOpen 的 click 开弹窗」，
+   不钉取元素的写法（不然下次挪位置又得改这里）。 */
+check(/#gitConnOpen'\)\?\.addEventListener\('click', openGitConnDlg\)/.test(src), '左栏状态按钮打开连接弹窗');
 check(/document\.addEventListener\('click', closeHelpPop\)/.test(src), 'document 上装了"点别处收起"');
 
 /* ------------------------------- 连上之后：同一骨架、只换"能不能编辑"和按钮文案 */

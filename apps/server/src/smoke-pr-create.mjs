@@ -525,16 +525,35 @@ try {
      * 前面 ⑦⑧ 走的是**卡**上那两个口；弹窗走的是仓库上那两个口。
      * 两条路共用服务端的 `openPr` / `mergeOne`，但路由是各写一遍的 ——
      * 只测一边就会留一半没人管（台账写的"合完删源分支"这类规则全在这条路上）。
+     *
+     * 2026-10-29 改契约（用户："提交和建 PR 一起，说不清也不好控制"）：这条路 **includeDirty:false** ——
+     * 建 PR 只推**已提交**的东西，一个脏文件都不碰；门槛 = 有领先 base 的提交。
+     * 所以先钉"只有脏文件 → 400 说人话"，再真提交一笔 → 201，且推的就是当前分支（不再另起新名）。
      */
     console.log('\n⑩ HTTP：仓库行上建 PR / 合并（弹窗那两颗按钮）');
     gh.reset();
     fs.writeFileSync(path.join(work, 'extra.js'), 'export const extra = 1;\n');
+    const rGate = await req(`/api/git/repos/${id}/prs`, {
+      method: 'POST',
+      body: JSON.stringify({ title: '只有脏文件就建不了' }),
+    });
+    check(
+      '只有脏文件、没有领先提交 → 400 指路先提交（PR 只装已提交的）',
+      rGate.status === 400 && /领先|提交/.test(rGate.b?.error ?? ''),
+      JSON.stringify({ s: rGate.status, e: rGate.b?.error }),
+    );
+
+    g(['-C', work, 'checkout', '-b', 'bandi/feat-repo-pr'], work); // 脏文件跟着工作区走，不碍事
+    g(['-C', work, 'add', '.'], work);
+    // 直接跑 git 就得自带身份（服务端那条路有 commitIdentityArgs 兜，这里没有）
+    g(['-C', work, '-c', 'user.name=smoke', '-c', 'user.email=smoke@test', 'commit', '-m', 'feat: 仓库行建 PR 的提交'], work);
     const rCreate = await req(`/api/git/repos/${id}/prs`, {
       method: 'POST',
-      body: JSON.stringify({ title: 'repo 级建 PR', body: '来自仓库行', paths: ['extra.js'] }),
+      body: JSON.stringify({ title: 'repo 级建 PR', body: '来自仓库行' }),
     });
-    check('POST /api/git/repos/:id/prs → 201 并返回 pr', rCreate.status === 201 && rCreate.b.created === true && rCreate.b.pr?.number >= 101, JSON.stringify({ s: rCreate.status, n: rCreate.b.pr?.number }));
-    check('返回的分支是 bandi/ 开头（服务端给的默认名）', /^bandi\//.test(rCreate.b.branch ?? ''), String(rCreate.b.branch));
+    check('POST /api/git/repos/:id/prs → 201 并返回 pr', rCreate.status === 201 && rCreate.b.created === true && rCreate.b.pr?.number >= 101, JSON.stringify({ s: rCreate.status, n: rCreate.b.pr?.number, e: rCreate.b?.error }));
+    check('只推已提交：推的就是当前分支（不再另起 bandi/ 新名）', rCreate.b.branch === 'bandi/feat-repo-pr', String(rCreate.b.branch));
+    check('PR 的 head 就是那个分支（查重 / 合并都认它）', rCreate.b.pr?.headRef === 'bandi/feat-repo-pr', String(rCreate.b.pr?.headRef));
 
     const n1 = rCreate.b.pr.number;
     const rMerge = await req(`/api/git/repos/${id}/prs/${n1}/merge`, { method: 'POST', body: JSON.stringify({ method: 'squash', deleteBranch: true }) });
@@ -681,6 +700,80 @@ try {
     check('审阅后被推新提交 → 自动合并撞 409 停下（不合没看过的）', mergeTask2, failedTask?.status);
     check('失败原因说"被人推了新提交"', /新提交/.test(failedTask?.note ?? ''), String(failedTask?.note).slice(0, 80));
     check('PR 没被合掉（假件里还是 open）', gh.pulls.get('smoke/demo')?.find((p) => p.number === Number(row2.prNumber))?.state === 'open');
+
+    /* ---------------- ⑫ gate 明细 + 重跑（2026-10-29 "界面卡住了，得有个修复功能"） ---------------- */
+    /*
+     * PR 行上那颗 `gate ✗` 现在是个入口：点开 → GET /prs/:n/checks 看哪条红了、红在哪个
+     * job / step；偶发红 → POST .../rerun 一键重跑。三段契约在这里钉死：
+     *   · 归约还是 summarizeChecks 那套（failure 优先）；
+     *   · Actions 下钻只报**非 success、非 skipped** 的 step —— 红在哪要一眼看到；
+     *   · 重跑过一次的 run 回到"在跑"（conclusion 清空）→ 再点重跑要说"没有失败的"。
+     */
+    console.log('\n⑫ HTTP：gate 明细 + 重跑（PR 行上那颗 ✗ 的落点）');
+    const gatePr = rCreate.b.pr;
+    gh.seedChecks('smoke/demo', gatePr.headSha, 'failure'); // ⑪ 给同一个 sha 种过"全绿"，这里改回红的
+    const seededRun = gh.seedActions('smoke/demo', gatePr.headSha, {
+      jobs: [{
+        name: 'gate (windows-latest)',
+        conclusion: 'failure',
+        html_url: 'http://github.test/job',
+        steps: [{ name: '策略检查', conclusion: 'success' }, { name: '冒烟', conclusion: 'failure' }, { name: '打包', conclusion: 'skipped' }],
+      }],
+    });
+    const g1 = await req(`/api/git/repos/${id}/prs/${gatePr.number}/checks`);
+    check('GET /prs/:n/checks → 200，归约成 failure', g1.status === 200 && g1.b.state === 'failure', JSON.stringify({ s: g1.status, st: g1.b?.state }));
+    check('runs 明细带名字和结论（假件给的 ci/failure）', g1.b.runs?.[0]?.name === 'ci' && g1.b.runs?.[0]?.conclusion === 'failure', JSON.stringify(g1.b.runs));
+    check(
+      '失败下钻到 step：只报非 success / 非 skipped —— 红在「冒烟」',
+      g1.b.jobs?.length === 1 && g1.b.jobs[0].steps?.length === 1 && g1.b.jobs[0].steps[0].name === '冒烟',
+      JSON.stringify(g1.b.jobs),
+    );
+    check('job 带日志链接（人要的"去哪看全文"就在这）', g1.b.jobs?.[0]?.url === 'http://github.test/job', String(g1.b.jobs?.[0]?.url));
+
+    const rr = await req(`/api/git/repos/${id}/prs/${gatePr.number}/checks/rerun`, { method: 'POST', body: JSON.stringify({}) });
+    check('POST /rerun → 200，重跑真的打到 GitHub', rr.status === 200 && rr.b.rerun === true && gh.reruns.includes(seededRun.id), JSON.stringify({ s: rr.status, r: gh.reruns }));
+    const rr2 = await req(`/api/git/repos/${id}/prs/${gatePr.number}/checks/rerun`, { method: 'POST', body: JSON.stringify({}) });
+    check(
+      '重跑过再点 → 400 说"没有失败的检查可重跑"（不当成又跑了一次）',
+      rr2.status === 400 && /重跑/.test(rr2.b?.error ?? ''),
+      JSON.stringify({ s: rr2.status, e: rr2.b?.error }),
+    );
+
+    /* ---------------- ⑬ 「让 AI 帮我修」：一颗按钮把活派出去（2026-10-29 用户："我只要一个按钮"） ----------------
+     * 用户不看代码、也不关心报错，所以这条接口**不回明细**：服务端自己取 headSha、判断能不能修、
+     * 挑人（研发 → 仓库管家 → 测试/运维 → 内置助理）、把现场写进 brief 直接派活。
+     * 契约三条：
+     *   · 红了就派（202 + 会话里真躺着那段 brief）；
+     *   · 已经全绿不白派人（400 E1121 —— 派一次是要烧一个 run 的）；
+     *   · brief 里必须写死"不许改 workflow / 删测试骗绿"，否则 agent 会去把闸糊绿。
+     */
+    console.log('\n⑬ HTTP：让 AI 帮我修（点一下就把活派出去）');
+    gh.seedChecks('smoke/demo', gatePr.headSha, 'failure'); // ⑫ 重跑过，这里重新种回红的
+    gh.seedActions('smoke/demo', gatePr.headSha, {
+      jobs: [{ name: 'gate', conclusion: 'failure', html_url: 'http://github.test/job', steps: [{ name: '冒烟', conclusion: 'failure' }] }],
+    });
+    const fx = await req(`/api/git/repos/${id}/prs/${gatePr.number}/fix`, { method: 'POST', body: JSON.stringify({}) });
+    check(
+      'POST /fix → 202，回了派给谁 + 哪个会话',
+      fx.status === 202 && !!fx.b?.conversationId && !!fx.b?.personaName,
+      JSON.stringify({ s: fx.status, p: fx.b?.personaName, e: fx.b?.error }),
+    );
+    const conv = fx.b?.conversationId ? await req(`/api/conversations/${encodeURIComponent(fx.b.conversationId)}`) : null;
+    const brief = conv?.b?.messages?.at(-1)?.text ?? '';
+    check(
+      'brief 带现场：仓库本机目录 + PR 号 + 失败的检查',
+      brief.includes('修到过为止') && brief.includes(row.localPath) && brief.includes(`#${gatePr.number}`),
+      brief.slice(0, 90),
+    );
+    check('brief 写死"不许改 workflow / 删测试骗绿"', /不许为了让检查变绿/.test(brief));
+
+    gh.seedChecks('smoke/demo', gatePr.headSha, 'success');
+    const fx2 = await req(`/api/git/repos/${id}/prs/${gatePr.number}/fix`, { method: 'POST', body: JSON.stringify({}) });
+    check(
+      '已经全绿 → 400 E1121，不白烧一次派活',
+      fx2.status === 400 && fx2.b?.code === 'E1121',
+      JSON.stringify({ s: fx2.status, c: fx2.b?.code }),
+    );
   }
 } finally {
   child.kill();

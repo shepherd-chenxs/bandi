@@ -2,7 +2,7 @@
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
 import { esc, mdRender, savePlace, setRoute, toast } from './shell.mjs';
 import { ICON_BRANCH, ICON_COMMIT, ICON_EDIT, ICON_GEAR, ICON_PLAY, ICON_PUSH, ICON_SYNC, ICON_TAG, ICON_TRASH, api, createCombo, createDateTimePick, cut, failHtml, initial, post, wireDialogHead } from './ui.mjs';
-import { load } from './state.mjs';
+import { load, setNav } from './state.mjs';
 import { openSettings } from './settings.mjs';
 import { setListTitle } from './flowpages.mjs';
 import { breadcrumb, headRow } from './connectors.mjs';
@@ -10,6 +10,7 @@ import { confirmDo, askCheckbox } from './machine.mjs';
 import { openAddMenu, renderList, showView, skillAddItems } from './contacts.mjs';
 import { pickLocalDir } from './projects.mjs';
 import { $, S } from './core.mjs';
+import { openConversationSafe } from './listmenu.mjs';
 
 /* 提交卡两组文件的折叠态（模块级 —— renderGitRepos 每次刷新重建 fillChanges，
  * 状态放这儿才能跨刷新保留；false = 展开，默认全展开） */
@@ -464,11 +465,27 @@ export async function renderGitRepos(root = $('pluginView')) {
   const sel = repos.find((r) => r.id === S.gitSel) ?? null;
 
   /*
-   * GitHub 连接：左栏只留**一个状态按钮**（2026-10-26 五改，用户："做成一个按钮区就行，
-   * 点击打开弹窗，不要展示这么多"）。点开 openGitConnDlg 弹窗里才见令牌表单 / 断开。
-   * 按钮跟着 listBody 一起重画，离开页面自动消失，不用挂清理钩子。
+   * GitHub 连接 + 仓库搜索（2026-10-29 六改，用户："固定在底部，这里换成搜索框"）：
+   *   · 连接状态按钮从清单顶上挪进**底部固定条 #listFoot** —— 跟消息/工作流的「已归档」
+   *     同一个位置语义：低频、跨清单的入口钉在页底永远看得见；
+   *   · 原位换成搜索框（全站共用的 #search，S.filter 已由 app.mjs 的输入委托维护），
+   *     按仓库名 / 本地路径过滤，只重画行、不动输入框。
+   * 注意：renderList 的 plugins 分支对本页整栏让位（见 contacts.mjs）——
+   * 不然键入一次 #search，renderList 就把 #listFoot 清一次，按钮闪没。
    */
-  const connSide = `
+  const searchBox = $('search').closest('.list-search');
+  searchBox?.classList.remove('hidden');
+  if (searchBox) $('search').placeholder = '搜仓库名 / 路径';
+  // 进页清掉上个栏留下的旧关键词 —— **只在进页那一次**清（S.pluginSearchFor 记着上次画的是谁）：
+  // 本函数每次选中仓库 / 刷新状态都会重跑，无条件清的话选个仓库搜索词就没了（原来就是这么丢的）。
+  if (S.pluginSearchFor !== 'codeRepos') {
+    S.pluginSearchFor = 'codeRepos';
+    if (S.filter) { S.filter = ''; $('search').value = ''; }
+  }
+
+  const foot = $('listFoot');
+  if (foot) {
+    foot.innerHTML = `
     <div class="gr-side">
       <button type="button" class="gr-side-btn" id="gitConnOpen"
               title="${st.connected ? 'GitHub 连接设置：令牌、断开' : '连接 GitHub（令牌只存本机）'}">
@@ -478,32 +495,49 @@ export async function renderGitRepos(root = $('pluginView')) {
         }</span>
       </button>
     </div>`;
+    foot.querySelector('#gitConnOpen')?.addEventListener('click', openGitConnDlg);
+  }
 
   // 左栏：面包屑照主从页的规矩画在列表顶上（renderPluginMaster 同款）
   setListTitle([{ label: '工作台', to: 'workbench' }, { label: '代码托管' }]);
   $('listAction').classList.remove('hidden');
   $('listAction').title = '添加仓库';
-  $('listBody').innerHTML =
-    connSide +
-    (repos.length
-      ? repos
-          .map(
-            (r) => `<div class="item${sel && r.id === sel.id ? ' active' : ''}" data-git-sel="${esc(r.id)}">
+  const paintRows = () => {
+    // 已经切走了就别画（#search 的 oninput 还挂着这一页 —— 不加这道闸，去消息页打字
+    // 会把仓库行画进会话列表里）
+    if (S.route?.view !== 'codeRepos') return;
+    const q = String(S.filter ?? '').trim().toLowerCase();
+    const hit = (r) =>
+      !q || String(r.fullName).toLowerCase().includes(q) || String(r.localPath ?? '').toLowerCase().includes(q);
+    const shown = repos.filter(hit);
+    const emptyHTML = repos.length
+      ? (q
+          ? `<div class="empty" style="padding:32px 12px">没有匹配「${esc(S.filter.trim())}」的仓库</div>`
+          : '')
+      : '<div class="empty" style="padding:32px 12px">还没有仓库，点左上角「＋」添加</div>';
+    $('listBody').innerHTML =
+      shown
+        .map(
+          (r) => `<div class="item${sel && r.id === sel.id ? ' active' : ''}" data-git-sel="${esc(r.id)}">
             <div class="who">
               <div class="line1"><b>${esc(r.fullName)}</b></div>
               <div class="line2" title="${esc(r.localPath)}">${esc(r.localPath)}</div>
             </div>
           </div>`,
-          )
-          .join('')
-      : '<div class="empty" style="padding:32px 12px">还没有仓库，点左上角「＋」添加</div>');
-  $('listBody').querySelectorAll('[data-git-sel]').forEach((el) => {
-    el.onclick = () => {
-      S.gitSel = el.dataset.gitSel;
-      renderGitRepos(root).catch((e) => toast(e.message, 'error'));
-    };
-  });
-  $('gitConnOpen')?.addEventListener('click', openGitConnDlg);
+        )
+        .join('') + emptyHTML;
+    $('listBody').querySelectorAll('[data-git-sel]').forEach((el) => {
+      el.onclick = () => {
+        S.gitSel = el.dataset.gitSel;
+        renderGitRepos(root).catch((e) => toast(e.message, 'error'));
+      };
+    });
+  };
+  paintRows();
+  // 搜索框只重画行（输入框在 listBody 外面，怎么画都不失焦）；S.filter 由 app.mjs 的委托维护，
+  // 这里用 oninput 赋值而不是 addEventListener —— renderGitRepos 每次选中仓库都会重跑，别叠监听
+  const sb = $('search');
+  if (sb) sb.oninput = paintRows;
 
   const keeperName = (id) => (S.personas ?? []).find((p) => p.id === id)?.name ?? '';
   const syncAt = (t) => (t ? esc(String(t).replace('T', ' ').slice(0, 16)) : '从未');
@@ -523,7 +557,7 @@ export async function renderGitRepos(root = $('pluginView')) {
          <!-- 本地路径 2026-10-27 应用户要求从导航条摘掉 —— 左栏列表和齿轮弹窗里都还有，不丢信息 -->
          <div class="head-actions">
            <button class="mini gr-set-btn" data-git-settings="${esc(sel.id)}"
-                   title="仓库设置：管理员 / 自动合并 / 默认分支 / 上次同步" aria-label="仓库设置">${ICON_GEAR}</button>
+                   title="仓库设置：管理员 / 自动合并 / 巡检 / 默认分支 / 上次同步" aria-label="仓库设置">${ICON_GEAR}</button>
          </div>
        </div>
        <div class="plg-sec">
@@ -667,6 +701,11 @@ export async function renderGitRepos(root = $('pluginView')) {
    * 仓库设置弹窗（2026-10-27，用户："仓库设置区太占地方 → 右上角设置按钮，点开展示"）：
    * 原来占详情一整块卡的信息（管理员 / 自动合并 / 默认分支 / 上次同步 / 本地目录）收进这里。
    * 动态建 dialog（openGitConnDlg 同款），close 即 remove；改动即时保存、弹窗不关。
+   *
+   * 2026-10-29：**巡检节拍也收进来了**（用户："这个功能放到代码托管是不是更好"）。
+   * 它背后仍是「定时任务」里一条 `pr-scan`（`config.repo` = 这个仓库），不是第二套调度 ——
+   * 仓库行只负责"选一个预设 + 看上次结果 + 现在跑一次"这三件窄事，
+   * 「每周 / 每月 / 单次」那些完整表单仍去「定时任务」页（那边会把它标成「随仓库」）。
    */
   const paintKeeperBtns = (repoId, kid) => {
     document.querySelectorAll('.gr-keeper-btn[data-k-cur]').forEach((b) => {
@@ -676,11 +715,34 @@ export async function renderGitRepos(root = $('pluginView')) {
     const repo = repos.find((r) => r.id === repoId);
     if (repo) repo.keeperPersonaId = kid || null;
   };
+  const patrolPresets = () => (st.patrolPresets?.length ? st.patrolPresets : [{ id: 'off', label: '关闭' }]);
+  const patrolLastText = (p) => {
+    if (!p?.jobId) return '还没配节拍 —— 也可以先点「立即巡检」跑一次';
+    if (!p.lastStatus) return '还没跑过';
+    const body = p.lastStatus === 'ok' ? `✓ ${p.lastSummary || '完成'}` : `✗ ${p.lastError || '失败了（没有原因）'}`;
+    const when = p.lastRunAt ? String(p.lastRunAt).replace('T', ' ').slice(0, 16) : '';
+    return when ? `${when} · ${body}` : body;
+  };
+  const paintPatrolLast = (repo) => {
+    const el = $('grPatrolLast');
+    if (!el) return;
+    const text = patrolLastText(repo.patrol);
+    el.textContent = text;
+    el.title = text;
+  };
   const openGitSettingsDlg = (repo) => {
     const dlg = document.createElement('dialog');
     dlg.className = 'gr-set-dlg';
     const form = document.createElement('form');
     form.method = 'dialog';
+    const p = repo.patrol ?? { preset: 'off' };
+    /*
+     * 巡检节拍用全站 `.combo`（2026-10-29 用户："巡检使用公共组件"）。
+     * 原生 <select> 的弹出层是浏览器画的 —— 高度、配色、圆角跟站内其它下拉是两套东西。
+     * 「自定义（每周一）」不是**可选**的档：它只用来照实显示现状（人手工建过），选它等于什么都没做。
+     */
+    const patrolItems = patrolPresets().map((x) => ({ id: x.id, label: x.label }));
+    if (p.preset === 'custom') patrolItems.push({ id: 'custom', label: `自定义（${p.text || '当前节拍'}）` });
     form.innerHTML = `
       <b>仓库设置</b>
       <div class="gr-dlg-body gr-set-body">
@@ -695,11 +757,18 @@ export async function renderGitRepos(root = $('pluginView')) {
             <input type="checkbox" data-automerge ${repo.autoMerge ? 'checked' : ''} aria-label="自动合并" /><span></span>
           </label>
         </b></div>
+        <div class="info-row"><span>巡检</span><b class="gr-patrol-cell">
+          <div class="gr-patrol-combo" id="grPatrolSel"
+               title="到点自动拉这个仓库的 open PR / issue，写成看板上的值班卡"></div>
+        </b></div>
+        <div class="info-row"><span>上次巡检</span><b id="grPatrolLast" class="gr-patrol-last"></b></div>
         <div class="info-row"><span>默认分支</span><b>${esc(repo.defaultBranch || '—')}</b></div>
         <div class="info-row"><span>上次同步</span><b>${syncAt(repo.lastSyncAt)}</b></div>
         <div class="info-row"><span>本地目录</span><b class="gr-set-path" title="${esc(repo.localPath)}">${esc(repo.localPath)}</b></div>
       </div>
       <div class="dlg-actions">
+        <button type="button" class="mini auto" id="grPatrolRun"
+                title="现在就跑一次这个仓库的巡检（开没开节拍都能跑）">立即巡检</button>
         <button type="button" class="mini auto gr-set-remove" id="grSetRemove"
                 title="只移除记录，本地目录保留（低频、破坏性动作，收在设置里）">从清单移除…</button>
       </div>`;
@@ -707,11 +776,62 @@ export async function renderGitRepos(root = $('pluginView')) {
     document.body.append(dlg);
     wireDialogHead(form);
     dlg.addEventListener('close', () => dlg.remove());
+    paintPatrolLast(repo);
 
     form.querySelector('.gr-keeper-btn').onclick = (e) => openKeeperDlg(repo.id, e.currentTarget.dataset.kCur ?? '');
     form.querySelector('[data-automerge]').onchange = (e) => {
       repo.autoMerge = e.currentTarget.checked ? 1 : 0;
       saveRepoSettings(repo.id, { autoMerge: e.currentTarget.checked });
+    };
+    const patrolMount = form.querySelector('#grPatrolSel');
+    let patrolSaving = false;
+    const patrolCombo = createCombo({
+      mount: patrolMount,
+      items: patrolItems,
+      value: p.preset ?? 'off',
+      onChange: async (preset) => {
+        if (preset === 'custom' || patrolSaving) return; // 「自定义」只是现状展示，不是可选的档
+        patrolSaving = true;
+        patrolMount.classList.add('is-saving');
+        try {
+          const r = await post(`/api/git/repos/${encodeURIComponent(repo.id)}/patrol`, { preset });
+          repo.patrol = r.patrol;
+          // 存成预设之后，「自定义（…）」那条不再代表现状 —— 摘掉，免得还能选回一个不存在的档
+          patrolCombo.setItems(patrolItems.filter((x) => x.id !== 'custom'));
+          patrolCombo.setValue(r.patrol?.preset ?? preset);
+          toast('已保存');
+          paintPatrolLast(repo);
+          await refresh(); // 页面上的状态跟着库走（弹窗挂在 body 上，不受重画影响）
+        } catch (err) {
+          toast(err.message, 'error');
+          // 存失败要把按钮拉回真实值：combo 是"先画选中、再回调"的，不拉回来屏幕上就挂着一条假节拍
+          patrolCombo.setValue(repo.patrol?.preset ?? 'off');
+          await refresh();
+        } finally {
+          patrolSaving = false;
+          patrolMount.classList.remove('is-saving');
+        }
+      },
+    });
+    form.querySelector('#grPatrolRun').onclick = async (e) => {
+      const btn = e.currentTarget;
+      if (btn.disabled) return;
+      btn.disabled = true;
+      btn.classList.add('busy');
+      try {
+        const r = await post(`/api/git/repos/${encodeURIComponent(repo.id)}/patrol/run`, {});
+        toast(r.ok ? `巡检跑完了：${r.summary ?? '完成'}` : `这次没跑成：${r.error ?? '没有原因'}`);
+        // 上一次结果记在对应任务上：重新取一次，弹窗里那行才不是旧的
+        const st2 = await api('/api/git/status');
+        const fresh = (st2.repos ?? []).find((x) => x.id === repo.id);
+        if (fresh) repo.patrol = fresh.patrol;
+        paintPatrolLast(repo);
+      } catch (err) {
+        toast(err.message, 'error');
+      } finally {
+        btn.disabled = false;
+        btn.classList.remove('busy');
+      }
     };
     // 移除入口（2026-10-27 从导航条搬进来）：确认后只删记录，本地克隆目录不动
     form.querySelector('#grSetRemove').onclick = async () => {
@@ -834,15 +954,23 @@ export async function renderGitRepos(root = $('pluginView')) {
     const cur = state?.branch || '';
     const mine = prs.find((p) => p.headRef && p.headRef === cur);
 
-    /* gate 一句话：绿/红/跑着/没有/没拿到 —— 合并按钮的可用性主要看它 */
-    const checkPill = (c) => {
+    /*
+     * gate 一句话：绿/红/跑着/没有/没拿到 —— 合并按钮的可用性主要看它。
+     * 红的/没拿到的是**可点的按钮**（2026-10-29 用户："界面如果不通过就卡住了，得有个修复功能"）：
+     * 点开 gate 明细弹窗 —— 哪条红了、红在哪个 step、能不能重跑，就地给答案，不再逼人去 GitHub 翻。
+     */
+    const checkPill = (p) => {
+      const c = p.checks;
       const s = c?.state;
-      if (s === 'success') return '<span class="gr-pr-check ok" title="检查全绿">gate ✓</span>';
+      if (s === 'success') return '<span class="gr-pr-check ok" title="检查全绿">检查通过</span>';
+      // 红的这颗是**入口**，不是结论：点开就一个按钮「让 AI 帮我修」（用户不看报错）
       if (s === 'failure')
-        return `<span class="gr-pr-check bad" title="红的是：${esc((c.failed ?? []).join('、') || '未命名检查')}">gate ✗</span>`;
-      if (s === 'pending') return '<span class="gr-pr-check wait" title="还在跑">gate 运行中</span>';
+        return `<button type="button" class="gr-pr-check bad" data-pr-gate="${p.number}"
+                  title="自动检查没过 —— 点开可以让我去修">检查没过 · 点这修</button>`;
+      if (s === 'pending') return '<span class="gr-pr-check wait" title="还在跑">检查中</span>';
       if (s === 'none') return '<span class="gr-pr-check none" title="这条提交没有检查">无检查</span>';
-      return '<span class="gr-pr-check none" title="没查到检查状态（网络/权限）">检查未知</span>';
+      return `<button type="button" class="gr-pr-check none" data-pr-gate="${p.number}"
+                title="没查到检查状态（网络/权限）—— 点开看明细">检查未知</button>`;
     };
     /* 合并为什么按不了：返回 null = 能合 */
     const blockReason = (p) => {
@@ -870,7 +998,7 @@ export async function renderGitRepos(root = $('pluginView')) {
             <div class="gr-pr-sub">
               <span class="gr-pr-refs">${esc(p.headRef || '?')} → ${esc(p.baseRef || '?')}</span>
               <span class="dim">· ${esc(p.author || '?')}</span>
-              ${checkPill(p.checks)}
+              ${checkPill(p)}
               <a href="${esc(p.url)}" target="_blank" rel="noreferrer">去 GitHub 看</a>
             </div>
           </div>
@@ -901,39 +1029,46 @@ export async function renderGitRepos(root = $('pluginView')) {
 
     /*
      * 当前分支还没有 PR 时给一行 CTA：这是「建 PR」按钮的新家（导航条那颗去掉了）。
-     * 条件都写清楚：在 base 上 / 工作区还脏 / 没有领先提交 → 不摆"建 PR"，只说明下一步。
+     *
+     * 门槛只有一条（2026-10-29 用户："提交和建 PR 一起，说不清也不好控制"）：**有领先 base 的提交**。
+     * 建 PR 只推已提交的东西，不再顺手提交脏文件 —— 提交是「提交」那一栏的事。
+     * 所以：有提交 → 给按钮（脏文件只是明说"不会进这条 PR"）；没提交只有脏文件 → 引导先提交。
      */
     let cta = '';
     if (!mine) {
       if (cur && cur !== base) {
         const ahead = state?.ahead;
-        if (state?.dirtyCount) {
-          cta = `<div class="gr-pr-cta">当前分支 <b>${esc(cur)}</b> 还有 ${state.dirtyCount} 个未提交改动 —— 先在「提交」里提交，再来建 PR。</div>`;
-        } else if (ahead === 0) {
-          cta = `<div class="gr-pr-cta dim">当前分支 <b>${esc(cur)}</b> 和 base（${esc(base)}）没有差异 —— 没有可建的 PR。</div>`;
-        } else {
+        if ((ahead ?? 0) > 0) {
+          /*
+           * 有已提交没推的就给按钮 —— 不管工作区脏不脏（2026-10-29 用户实报："之前提交的还没建 PR，
+           * 现在新改了，之前的就不能建 PR 了？"）。脏文件不会被顺手带走，界面上说清楚就行。
+           */
           const n = ahead === null ? '' : `（领先 ${esc(base)} ${ahead} 个提交）`;
+          const extra = state?.dirtyCount
+            ? `；未提交的 ${state.dirtyCount} 个改动不会进这条 PR`
+            : '';
           cta = `<div class="gr-pr-cta">
-            <span>当前分支 <b>${esc(cur)}</b> 还没有 PR ${n}</span>
+            <span>当前分支 <b>${esc(cur)}</b> 还没有 PR ${n}${extra}</span>
             <button type="button" class="mini auto" id="grPrCreate">建 PR</button>
           </div>`;
+        } else if (state?.dirtyCount) {
+          cta = `<div class="gr-pr-cta">当前分支 <b>${esc(cur)}</b> 有 ${state.dirtyCount} 个未提交改动 —— 先在「提交」里提交，提交完这里就能建 PR。</div>`;
+        } else {
+          cta = `<div class="gr-pr-cta dim">当前分支 <b>${esc(cur)}</b> 和 base（${esc(base)}）没有差异 —— 没有可建的 PR。</div>`;
         }
-      } else if (cur === base && (state?.dirtyCount || (state?.ahead ?? 0) > 0)) {
+      } else if (cur === base && (state?.ahead ?? 0) > 0) {
         /*
-         * 人在 base 上有了东西（2026-10-29 用户实报："手动提交了但不能推送，没看到建 PR 的按钮"）：
-         * 之前这里直接什么都不画 —— 按钮藏在"非 base 分支"条件后面，人推 main 被保护拒收后就断了。
-         * 后端本来就接得住（commitAndPush 会从当前 HEAD 拉一条新分支推上去），补上入口就行：
-         *   · 有未提交改动 → 弹窗会把改动收进新分支提交；
-         *   · 已提交没推（ahead > 0）→ 弹窗直接用已提交的 HEAD 开新分支。
-         * 干净又不领先（ahead 0）不画 —— 真没东西可建。
+         * 人在 base 上提交了但推不上去（2026-10-29 用户实报："手动提交了但不能推送，没看到建 PR 的按钮"）：
+         * 后端接得住 —— 建 PR 会从当前 HEAD 拉一条新分支推上去（base 不动）。
+         * 只在 base 上「有脏改动、没提交」时不给按钮：PR 里没东西可装，先去「提交」。
          */
-        const what = state?.dirtyCount
-          ? `有 ${state.dirtyCount} 个未提交改动`
-          : `有 ${state.ahead} 个已提交还没推上去`;
+        const extra = state?.dirtyCount ? `；未提交的 ${state.dirtyCount} 个改动不会进这条 PR` : '';
         cta = `<div class="gr-pr-cta">
-            <span>当前就在 base（<b>${esc(base)}</b>）上${esc(what)}，直接推主干多半会被保护拒收 —— 建 PR 会把它们收进一条新分支</span>
+            <span>当前就在 base（<b>${esc(base)}</b>）上，有 ${state.ahead} 个已提交还没推上去${extra} —— 直接推主干多半会被保护拒收，建 PR 会从当前 HEAD 拉一条新分支推上去</span>
             <button type="button" class="mini auto" id="grPrCreate">建 PR</button>
           </div>`;
+      } else if (cur === base && state?.dirtyCount) {
+        cta = `<div class="gr-pr-cta">当前就在 base（<b>${esc(base)}</b>）上，有 ${state.dirtyCount} 个未提交改动 —— 先在「提交」里提交，提交完这里就能建 PR。</div>`;
       }
     }
 
@@ -949,6 +1084,12 @@ export async function renderGitRepos(root = $('pluginView')) {
       `<div class="sk-blank">没有进行中的 PR —— 建 PR 后会出现在这里</div>`;
 
     $('grPrCreate')?.addEventListener('click', () => openRepoPrDialog(repo, refresh));
+    box.querySelectorAll('[data-pr-gate]').forEach((b) => {
+      b.onclick = () => {
+        const one = prs.find((x) => x.number === Number(b.dataset.prGate));
+        if (one) openGateDlg(repo, one);
+      };
+    });
     box.querySelectorAll('[data-pr-merge]').forEach((b) => {
       b.onclick = async () => {
         const n = Number(b.dataset.prMerge);
@@ -983,6 +1124,183 @@ export async function renderGitRepos(root = $('pluginView')) {
         }
       };
     });
+  }
+
+  /* ---------------- 检查没过 → 一颗按钮让 AI 去修 ----------------
+   *
+   * 2026-10-29 用户原话："作为用户，代码不是我写的，我根本不知道代码写了什么，我也不关心报错是什么。
+   * 我要的是一个按钮，点击之后 agent 帮我去修复就足够了。"
+   * 所以这扇窗的**主视线只有一句人话 + 一颗按钮**：
+   *   · 说结果不说术语（"自动检查没过，现在合不进去"，不提 gate / check-runs / step）；
+   *   · 主按钮 = 让 AI 帮我修 —— 派给谁、怎么修是平台的事，服务端一把挑人 + 派活（POST …/fix）；
+   *   · 技术明细（哪条红了、红在哪个 step、重跑）折叠在下面，想查的人自己展开。
+   */
+  function openGateDlg(repo, pr) {
+    document.getElementById('repoGateDlg')?.close();
+    const dlg = document.createElement('dialog');
+    dlg.id = 'repoGateDlg';
+    dlg.style.width = '560px';
+    dlg.innerHTML = `
+      <form method="dialog">
+        <b id="gateTitle">检查结果 · #${pr.number}</b>
+        <div class="gr-meta gr-gate-refs">${esc(pr.headRef ?? '?')} → ${esc(pr.baseRef ?? '?')}</div>
+        <div id="gateBody"><div class="sk-blank">看看现在什么情况…</div></div>
+        <div class="dlg-actions">
+          <button type="button" id="gateRefresh">刷新</button>
+          <button type="button" value="cancel">关闭</button>
+        </div>
+      </form>`;
+    document.body.append(dlg);
+    wireDialogHead(dlg.querySelector('form'));
+    dlg.addEventListener('close', () => dlg.remove());
+    dlg.showModal();
+
+    const CONC = { success: ['ok', '✓'], failure: ['bad', '✗'], timed_out: ['bad', '✗'],
+                   cancelled: ['none', '⊘'], action_required: ['bad', '✗'], startup_failure: ['bad', '✗'] };
+    const pill = (c) => {
+      const [cls, mark] = CONC[c] ?? (c ? ['none', '·'] : ['wait', '…']);
+      return `<span class="gr-pr-check ${cls}">${mark}</span>`;
+    };
+    const secs = (n) => (n == null ? '' : ` · ${n >= 60 ? `${Math.floor(n / 60)}m${n % 60 ? `${n % 60}s` : ''}` : `${n}s`}`);
+
+    let last = null;
+    // 派活结果（点过「让 AI 帮我修」才有）—— 放在闭包里，刷新明细不会把它刷掉
+    let handoff = null;
+
+    const paint = () => {
+      const box = $('gateBody');
+      if (!box || !last) return;
+      const s = last.state;
+      const title = $('gateTitle');
+      if (title) {
+        title.textContent = `${
+          s === 'success' ? '检查通过'
+            : s === 'failure' ? '自动检查没过'
+              : s === 'pending' ? '检查还在跑'
+                : '检查情况不明'
+        } · #${pr.number}`;
+      }
+
+      const lead = s === 'failure'
+        ? `<p class="gr-gate-lead">这条 PR 的自动检查没通过，现在合不进去。<br>点下面这颗按钮，我安排人去把原因找出来、改好、重新跑一遍 —— 你不用看代码，也不用管它报什么错。</p>`
+        : s === 'success'
+          ? '<p class="gr-gate-lead">所有自动检查都过了，这条 PR 可以合并。</p>'
+          : s === 'pending'
+            ? '<p class="gr-gate-lead">自动检查还在跑，等几分钟点「刷新」看结果。</p>'
+            : s === 'none'
+              ? '<p class="gr-gate-lead">这个仓库没有配置自动检查 —— 能不能合只能靠人看一眼。</p>'
+              : '<p class="gr-gate-lead">这会儿没读到检查状态（网络或权限的问题），点「刷新」再试一次。</p>';
+
+      const fix = s !== 'failure' ? '' : handoff
+        ? `<div class="gr-gate-fix done">
+            <div class="gr-gate-fix-who">已交给 <b>${esc(handoff.personaName)}</b>${handoff.personaRole ? `<span class="dim">（${esc(handoff.personaRole)}）</span>` : ''}在修</div>
+            <div class="dim">他会在本机复现、改好、推上去，检查自动重跑 —— 修完点「刷新」就是最新结果。</div>
+            <button type="button" class="btn-sm" id="gateFixGo">去看他怎么修</button>
+          </div>`
+        : `<div class="gr-gate-fix">
+            <button type="button" class="primary" id="gateFix">让 AI 帮我修</button>
+            <div class="dim">通常几分钟。它修完会自己把改动推上去，你回来点「刷新」就能看到过没过。</div>
+          </div>`;
+
+      // 技术明细折叠起来：默认看不见，想查的人自己展开（用户不看代码，但排查时有用）
+      const details = (last.runs?.length || last.jobs?.length) ? `<details class="gr-gate-more">
+        <summary>技术细节（不想看可以不理）</summary>
+        ${last.runs?.length ? `<ul class="gr-gate-runs">
+          ${last.runs.map((r) => `<li>${pill(r.conclusion)}<span class="gr-gate-run-name" title="${esc(r.name)}">${esc(r.name)}</span><span class="dim">${secs(r.seconds)}</span>${r.url ? `<a href="${esc(r.url)}" target="_blank" rel="noreferrer">详情</a>` : ''}</li>`).join('')}
+        </ul>` : ''}
+        ${last.jobs?.length ? `<div class="gr-gate-jobs">
+          <div class="gr-gate-sec">红在哪（job → step）</div>
+          ${last.jobs.map((j) => `<div class="gr-gate-job">
+            <div class="gr-gate-job-name">${pill(j.conclusion)}<span>${esc(j.name)}</span>${j.url ? `<a href="${esc(j.url)}" target="_blank" rel="noreferrer">看日志</a>` : ''}</div>
+            ${(j.steps ?? []).length ? `<ul>${j.steps.map((st) => `<li>${esc(st.name)} <span class="gr-gate-step-c">${esc(st.conclusion)}</span></li>`).join('')}</ul>` : '<div class="dim">没拿到 step 明细 —— 去 GitHub 看日志</div>'}
+          </div>`).join('')}
+        </div>` : ''}
+        <div class="gr-gate-escape">
+          <button type="button" id="gateRerun">重跑这次检查</button>
+          <span class="dim">偶发的失败（比如网络抖了一下）重跑一次往往就过了 —— 不用麻烦人。</span>
+        </div>
+      </details>` : '';
+
+      box.innerHTML = `${lead}${fix}${details}`;
+      $('gateFix')?.addEventListener('click', doFix);
+      $('gateFixGo')?.addEventListener('click', goWatch);
+      $('gateRerun')?.addEventListener('click', doRerun);
+    };
+
+    /** 主按钮：把这条 PR 交给一位研发去修（服务端挑人 + 派活，前端只认结果） */
+    async function doFix(e) {
+      e?.preventDefault();
+      const btn = $('gateFix');
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = '正在安排人…';
+      }
+      try {
+        handoff = await post(`/api/git/repos/${encodeURIComponent(repo.id)}/prs/${pr.number}/fix`, {});
+        paint();
+        toast(`已交给 ${handoff.personaName}，他开始看了`);
+        // 行上的徽标随后会被这轮修复改写（推上去 → 检查重跑），刷一次列表让状态跟上
+        renderGitRepos().catch(() => {});
+      } catch (err) {
+        // 失败原因就地说清（toast 会飘走），按钮恢复可再点
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = '让 AI 帮我修';
+        }
+        const box = $('gateBody');
+        box?.querySelector('.gr-gate-fix-err')?.remove();
+        box?.querySelector('.gr-gate-fix')?.insertAdjacentHTML(
+          'beforeend',
+          `<div class="gr-gate-fix-err">没派出去：${esc(err.message)}</div>`,
+        );
+      }
+    }
+
+    /** 「去看他怎么修」：跳到那位员工的会话（消息页），对话框留着会挡视线 */
+    function goWatch(e) {
+      e?.preventDefault();
+      if (!handoff?.conversationId) return;
+      dlg.close();
+      setNav('messages');
+      showView('chat');
+      openConversationSafe(handoff.conversationId).catch((err) => toast(err.message, 'error'));
+    }
+
+    /** 折叠区里的后路：偶发失败重跑一次 */
+    async function doRerun(e) {
+      e?.preventDefault();
+      const btn = $('gateRerun');
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = '重跑中…';
+      }
+      try {
+        await post(`/api/git/repos/${encodeURIComponent(repo.id)}/prs/${pr.number}/checks/rerun`, {});
+        toast('已经让 GitHub 重跑了 —— 过几分钟点「刷新」看结果');
+        load();
+      } catch (err) {
+        toast(err.message, 'error');
+      } finally {
+        if (btn?.isConnected) {
+          btn.disabled = false;
+          btn.textContent = '重跑这次检查';
+        }
+      }
+    }
+
+    const load = async () => {
+      const box = $('gateBody');
+      if (!box) return;
+      box.innerHTML = '<div class="sk-blank">看看现在什么情况…</div>';
+      try {
+        last = await api(`/api/git/repos/${encodeURIComponent(repo.id)}/prs/${pr.number}/checks`);
+        paint();
+      } catch (e) {
+        if (box.isConnected) box.innerHTML = `<div class="sk-blank">这会儿读不到检查结果：${esc(e.message)}</div>`;
+      }
+    };
+    $('gateRefresh')?.addEventListener('click', (e) => { e.preventDefault(); load(); });
+    load();
   }
 
   /* porcelain 的 X 列 → 展示用的一类：增 / 删 / 改 / 移（未跟踪算增） */
@@ -1242,8 +1560,12 @@ export async function renderGitRepos(root = $('pluginView')) {
       <div class="gr-chg-split">
         <div class="gr-chg-list">${groupHtml('chg', '更改', tracked) + groupHtml('untr', '未版本管理的文件', untracked)}</div>
         <div class="gr-commit-side">
-          <textarea id="grCommitMsg" placeholder="提交说明（Ctrl+Enter 提交）" rows="4"></textarea>
-          <button type="button" class="primary" id="grCommitBtn">提交</button>
+          <textarea id="grCommitMsg" placeholder="提交说明（Ctrl+Enter 提交）" rows="9"></textarea>
+          <div class="gr-commit-acts">
+            <button type="button" class="btn-sm gr-suggest" id="grSuggestBtn"
+                    title="按勾选的改动生成一行说明（不满意就改，或再点一次）">生成说明</button>
+            <button type="button" class="primary" id="grCommitBtn">提交</button>
+          </div>
         </div>
       </div>`;
 
@@ -1314,6 +1636,37 @@ export async function renderGitRepos(root = $('pluginView')) {
         }
       };
     });
+
+    /* 生成说明（2026-10-29）：一句话的活不开对话 —— 服务端只读 git、模型只负责措辞，
+       拿回来填进框里，人再改再提。框里已经有字就先问一句，别把人写了一半的话冲掉。 */
+    const suggestBtn = $('grSuggestBtn');
+    // 自己取框（别借下面那个 msgInput）—— 它在后面才声明，这里先用会踩 TDZ
+    const msgBox = $('grCommitMsg');
+    if (suggestBtn && msgBox) {
+      suggestBtn.onclick = async () => {
+        const rows = [...($('grChanges')?.querySelectorAll('.gr-chg-row') ?? [])];
+        if (!rows.length) return toast('没有可提交的改动', 'error');
+        const checked = rows.map((r) => r.dataset.chgPath).filter((p) => !chgUnsel.has(p));
+        if (!checked.length) return toast('先勾选要提交的文件', 'error');
+        if ((msgBox.value ?? '').trim() && !(await confirmDo('框里已经有说明了，用新生成的覆盖掉？', { ok: '覆盖' }))) return;
+        // 跟提交同口径：全勾就不传 paths（服务端按整片工作区算），否则只算勾选的
+        const payload = checked.length < rows.length ? { paths: checked } : {};
+        const label = suggestBtn.textContent;
+        suggestBtn.disabled = true;
+        suggestBtn.textContent = '生成中…';
+        try {
+          const r = await post(`/api/git/repos/${encodeURIComponent(repo.id)}/suggest-commit`, payload);
+          msgBox.value = r.message ?? '';
+          msgBox.focus();
+          if (r.source === 'rule') toast(`模型没参与，这是按改动推的草稿：${r.note ?? ''}`, 'error');
+        } catch (e) {
+          toast(e.message, 'error');
+        } finally {
+          suggestBtn.disabled = false;
+          suggestBtn.textContent = label;
+        }
+      };
+    }
 
     /* 提交（不建 PR）：回车或按钮都行；服务端拦疑似凭据时弹一次危险确认，带 allowSecrets 重发。
        推送在分支下拉的「推送…」里 —— 提交和推送分两步，跟 git 的语义一致（IDE 也分开）。 */
@@ -1711,35 +2064,51 @@ export function openRepoPrDialog(repo, onDone) {
   document.getElementById('repoPrDlg')?.close();
   const dlg = document.createElement('dialog');
   dlg.id = 'repoPrDlg';
-  dlg.style.width = '620px';
+  /* 尺寸全交给 style.css 的 dialog#repoPrDlg（660 × min(720px, 92vh) 定高）：
+     这里再写 inline 宽高的话会压过那条规则，两边改一处忘一处。 */
+  /*
+   * 2026-10-29 重设计：
+   *   · 内容按「先写什么 → 再往哪推」排：标题、描述在前，分支两栏在后；
+   *   · 新分支名和 base 并排一行（都是短输入，竖着排浪费半屏）；
+   *   · 长说明从 placeholder 挪进 label 的 <em> —— 填之前就该看见要求，填完才看得见提示没用。
+   * 控件 id 全数保留（prTitle/prBody/prBranch/prBase/prDraft/prFillBtn/prBranchAgain/prSubmit），
+   * 行为契约不变：「推送并建 PR」不标 type="button"（回车即推送），其余钮必须标。
+   */
   dlg.innerHTML = `
     <form method="dialog">
       <b>建 PR · ${esc(repo.fullName)}</b>
-      <div class="gr-meta" style="margin:6px 0 10px">${esc(repo.localPath)}</div>
+      <div class="gr-meta pr-path">${esc(repo.localPath)}</div>
 
       <div id="prState"><div class="sk-blank">读工作区…</div></div>
 
       <div id="prForm" hidden>
-        <label>PR 标题（一句话说清这个 PR 干了什么）</label>
-        <input id="prTitle" placeholder="例如：代码托管：加建 PR 与手动合并" autocomplete="off" />
-        <label>新分支名（改动只会落到这条新分支，base 不动）</label>
-        <div class="row-with-btn">
-          <input id="prBranch" autocomplete="off" />
-          <button type="button" id="prBranchAgain" title="换一个带时间戳的名字（撞名时用）">换一个</button>
+        <div class="pr-fill-row">
+          <label style="flex:1">PR 标题<em>一句话说清这个 PR 干了什么</em></label>
+          <button type="button" class="btn-sm" id="prFillBtn" title="按没推的提交和未提交改动，自动填标题和描述">自动填充</button>
         </div>
-        <label>合进哪个分支（base）</label>
-        <input id="prBase" autocomplete="off" />
-        <label>PR 描述</label>
-        <textarea id="prBody" rows="3" placeholder="改了什么 + 怎么验的。没跑过验证就写「未验证」—— 别写「安全」「已修复」。"></textarea>
+        <input id="prTitle" placeholder="例如：代码托管：加建 PR 与手动合并" autocomplete="off" />
+        <label>PR 描述<em>改了什么 + 怎么验的；没跑过验证就写「未验证」—— 别写「安全」「已修复」</em></label>
+        <textarea id="prBody" rows="4" placeholder="改了什么 + 怎么验的。"></textarea>
+        <div class="pr-branch-row">
+          <div>
+            <label>新分支名<em>从当前 HEAD 拉出来推上去</em></label>
+            <div class="row-with-btn">
+              <input id="prBranch" autocomplete="off" />
+              <button type="button" id="prBranchAgain" title="换一个带时间戳的名字（撞名时用）">换一个</button>
+            </div>
+          </div>
+          <div>
+            <label>合进哪个分支（base）<em>base 不动</em></label>
+            <input id="prBase" autocomplete="off" />
+          </div>
+        </div>
         <label class="check"><input type="checkbox" id="prDraft" />
           <span>先建成草稿<em>——草稿不会被自动合并，等你在 GitHub 上标为可审阅</em></span></label>
-        <label class="check" id="prSecretWrap" hidden><input type="checkbox" id="prAllowSecrets" />
-          <span>就是要提交这些文件<em>——推上去收不回来（git 历史里的凭据只能强推抹，公开仓库抹不掉）</em></span></label>
       </div>
 
       <div class="dlg-actions">
         <button type="button" value="cancel">关闭</button>
-        <button class="primary" id="prSubmit" disabled>提交并建 PR</button>
+        <button class="primary" id="prSubmit" disabled>推送并建 PR</button>
       </div>
     </form>`;
   document.body.append(dlg);
@@ -1748,9 +2117,9 @@ export function openRepoPrDialog(repo, onDone) {
   dlg.showModal();
 
   /*
-   * 「提交并建 PR」是这颗弹窗里唯一的提交按钮（不标 type="button"）：
-   * 人敲完标题按回车就该走提交 —— 这是 `app.mjs:115-130` 那套约定的另一半，
-   * 也是为什么「换一个」「合并」这些**必须**标 type="button"（否则回车会点到它们身上）。
+   * 「推送并建 PR」是这颗弹窗唯一的动作按钮（不标 type="button"）：
+   * 人敲完标题按回车就该走推送 —— 这是 `app.mjs:115-130` 那套约定的另一半，
+   * 也是为什么「换一个」「自动填充」这些**必须**标 type="button"（否则回车会点到它们身上）。
    * handler 里 preventDefault，不然 `method="dialog"` 会把窗关掉、失败后就看不到原因了。
    */
   const setErr = (msg) => {
@@ -1781,27 +2150,39 @@ export function openRepoPrDialog(repo, onDone) {
       : state.ahead === null
         ? `不知道（本地还没有 origin/${state.base}，先点「同步」）`
         : `${state.ahead} 个提交`;
+    /*
+     * 这个窗只讲**这条 PR 会装什么**（2026-10-29 用户："应该是这个 PR 相关的内容，没推送的讲他干嘛？"）：
+     * 已提交、还没推的就是全部内容；没提交的东西跟这颗按钮无关，不摆进来占地方。
+     */
+    /*
+     * 概览重设计（2026-10-29）：「当前分支 / base / 领先」从竖线串成的长句改成三颗 chip ——
+     * 数字和分支名是要被扫到的，不是被读的；提交清单收进浅底卡片，跟下面的表单区分开。
+     */
     box.innerHTML = `
-      <div class="gr-meta" style="margin:0 0 4px">
-        当前分支 <b>${esc(state.branch)}</b> ｜ base <b>${esc(state.base || '未记录')}</b>
-        ｜ 未提交 <b>${dirty}</b> 个文件 ｜ 领先 base <b>${esc(String(ahead))}</b>
+      <div class="pr-sum">
+        <div class="pr-sum-item"><span class="pr-sum-k">当前分支</span><span class="pr-sum-v" title="${esc(state.branch)}">${esc(state.branch)}</span></div>
+        <div class="pr-sum-item"><span class="pr-sum-k">base</span><span class="pr-sum-v" title="${esc(state.base || '未记录')}">${esc(state.base || '未记录')}</span></div>
+        <div class="pr-sum-item"><span class="pr-sum-k">领先 base</span><span class="pr-sum-v">${esc(String(ahead))}</span></div>
       </div>
       ${
-        dirty
-          ? `<div class="counter left">要提交的 ${dirty} 个文件（含未跟踪的）：${esc(state.dirty.slice(0, 12).map((f) => f.path).join('、'))}${dirty > 12 ? ` 等 ${dirty} 个` : ''}</div>`
-          : `<div class="counter left">工作区是干净的 —— 那就用当前分支上已提交、还没推的那些提交${state.aheadCommits?.length ? `：${esc(state.aheadCommits.slice(0, 5).map((c) => c.subject).join('；'))}` : ''}</div>`
-      }
-      ${
-        state.secrets.length
-          ? `<div class="counter left" style="color:var(--bad)">看着像凭据的文件：${esc(state.secrets.slice(0, 4).join('、'))}${state.secrets.length > 4 ? ` 等 ${state.secrets.length} 个` : ''}</div>`
+        state.aheadCommits?.length
+          ? `<div class="pr-commits">
+          <div class="pr-commits-head">这条 PR 会装 <b>${state.aheadCommits.length}</b> 条提交<span class="pr-commits-note">已提交、还没推</span></div>
+          <ul class="pr-commit-list">
+            ${state.aheadCommits.slice(0, 6).map((c) => `<li><code>${esc(c.sha)}</code><span title="${esc(c.subject)}">${esc(c.subject)}</span></li>`).join('')}
+            ${state.aheadCommits.length > 6 ? `<li class="dim">…另有 ${state.aheadCommits.length - 6} 条</li>` : ''}
+          </ul></div>`
           : ''
       }
-      ${state.canShip ? '' : '<div class="counter left" style="color:var(--warn)">没有可提交的东西：工作区干净、当前分支也不领先 base。</div>'}`;
-    $('prSecretWrap').hidden = !state.secrets.length;
+      ${state.canPr ? '' : '<div class="pr-warn">当前分支没有领先 base 的提交 —— 没有东西可以进 PR：先在「提交」里提交，再来建。</div>'}`;
     const form = $('prForm');
-    form.hidden = !state.canShip;
-    $('prSubmit').disabled = !state.canShip;
-    if (!$('prBranch').value) $('prBranch').value = state.suggest ?? '';
+    form.hidden = !state.canPr;
+    $('prSubmit').disabled = !state.canPr;
+    /* 默认分支名：已经有领先提交、人也不在 base 上 → 直接推当前分支（另起一个名字只会多一条空分支） */
+    if (!$('prBranch').value) {
+      const sameBranch = state.canPr && state.branch && state.branch !== state.base;
+      $('prBranch').value = sameBranch ? state.branch : state.suggest ?? '';
+    }
     if (!$('prBase').value) $('prBase').value = state.base ?? '';
   };
 
@@ -1822,6 +2203,31 @@ export function openRepoPrDialog(repo, onDone) {
     $('prBranch').value = `bandi/${String(repo.name ?? 'pr').replace(/[^\w.-]+/g, '-')}-${stamp}`;
   });
 
+  /* 自动填充（2026-10-29）：标题、描述一起填。框里已经有字就先问一句；
+     填完焦点落在标题上，人顺着往下检查——自动填的是草稿，不是结论。 */
+  $('prFillBtn')?.addEventListener('click', async (e) => {
+    e.preventDefault();
+    const btn = $('prFillBtn');
+    if (!btn || btn.disabled) return;
+    if ((($('prTitle').value ?? '').trim() || ($('prBody').value ?? '').trim())
+      && !(await confirmDo('标题或描述已经有字了，用自动填充的覆盖掉？', { ok: '覆盖' }))) return;
+    const label = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '填充中…';
+    try {
+      const r = await post(`/api/git/repos/${encodeURIComponent(repo.id)}/suggest-pr`, {});
+      if (!r || (!r.title && !r.body)) { toast('没有可填的东西：工作区干净、分支也不领先 base', 'error'); return; }
+      if (r.title) $('prTitle').value = r.title;
+      if (r.body) $('prBody').value = r.body;
+      if (r.source === 'rule') toast(`模型没参与，这是按提交记录推的摘要草稿，发送前过一遍：${r.note ?? ''}`);
+      $('prTitle').focus();
+    } catch (err) {
+      toast(err.message, 'error');
+    } finally {
+      if ($('prFillBtn')) { btn.disabled = false; btn.textContent = label; }
+    }
+  });
+
   /* ---------------- 提交（唯一的提交按钮；下半屏的 PR 列表 2026-10-27 已搬去详情页 PR 区） ---------------- */
   $('prSubmit')?.addEventListener('click', async (e) => {
     e.preventDefault();
@@ -1829,7 +2235,7 @@ export function openRepoPrDialog(repo, onDone) {
     if (!title) return toast('标题写一句 —— PR 标题是别人（和三个月后的你）唯一会看到的那句话');
     const btn = $('prSubmit');
     btn.disabled = true;
-    btn.textContent = '提交推送中…';
+    btn.textContent = '推送中…';
     try {
       const r = await api(`/api/git/repos/${encodeURIComponent(repo.id)}/prs`, {
         method: 'POST',
@@ -1840,19 +2246,18 @@ export function openRepoPrDialog(repo, onDone) {
           branch: $('prBranch').value.trim() || null,
           base: $('prBase').value.trim() || null,
           draft: $('prDraft').checked,
-          allowSecrets: $('prAllowSecrets')?.checked === true,
         }),
       });
       toast(r.created ? `PR #${r.pr.number} 建好了：${r.pr.url}` : `这个分支已经有一个 open PR：#${r.pr.number}（没新建）`);
       /*
        * 建完就关窗 + 整页重画（2026-10-27）：PR 现在常驻在详情的「拉取请求」区，
-       * 新 PR 应该立刻出现在那张清单上；留着一颗停在「提交推送中…」的弹窗只会让人以为卡死。
+       * 新 PR 应该立刻出现在那张清单上；留着一颗停在「推送中…」的弹窗只会让人以为卡死。
        */
       dlg.close();
       if (onDone) await onDone();
     } catch (err) {
       btn.disabled = false;
-      btn.textContent = '提交并建 PR';
+      btn.textContent = '推送并建 PR';
       // 失败原话摆在这一屏上（不弹走了事）：这一步多半是"权限没勾"或"分支撞名"，人要照着改
       setErr(String(err.message ?? err));
       toast(err.message, 'error');
@@ -1913,10 +2318,8 @@ export async function renderSchedules() {
     return;
   }
   const jobs = data.jobs ?? [];
-  // 列表里要写清"在哪个项目里干"，得知道项目名（没加载过就补一次，失败不影响列表）
-  const projects = (S.projects ?? []).length
-    ? S.projects
-    : (S.projects = (await api('/api/projects').catch(() => ({ projects: [] }))).projects ?? []);
+  // 列表里要写清"它到底要干什么、在哪个项目里干" —— 那句话由**动作自己**拼好下发（`lead`），
+  // 卡片不再按字段名猜（加第二个通用动作时那段 if 就得重写）。
   const actionOf = (id) => (data.actions ?? []).find((a) => a.id === id);
   const when = (iso) => (iso ? String(iso).replace('T', ' ').slice(0, 16) : '还没跑过');
 
@@ -1927,15 +2330,10 @@ export async function renderSchedules() {
   };
 
   const card = (j) => {
-    // 「交给数字员工」这类任务，卡上最该看到的是**它到底要干什么**，不是动作名 ——
-    // 五条任务都写着「交给数字员工」等于没写。所以把那句话（和交给谁、在哪个项目里）提到描述行最前面。
-    const instr = String(j.config?.instruction ?? '').replace(/\s+/g, ' ').trim();
-    const who = j.config?.personaId ? (S.personas ?? []).find((p) => p.id === j.config.personaId)?.name : null;
-    // 项目 = 这次派活的工作空间。没选就不写（那时候他用的是自己的默认目录）
-    const proj = j.config?.projectId ? (projects ?? []).find((p) => p.id === j.config.projectId)?.name : null;
-    const lead = instr
-      ? `交给${who ? `「${who}」` : '员工'}${proj ? `（在「${proj}」）` : ''}：${instr.length > 44 ? instr.slice(0, 43) + '…' : instr}`
-      : '';
+    // 「交给数字员工」/「交给流程」这类任务，卡上最该看到的是**它到底要干什么**，不是动作名 ——
+    // 五条任务都写着「交给数字员工」等于没写。所以服务端把这句话拼好（动作自己的 describe），
+    // 这里照抄；老数据没有 lead 就不写这一行。
+    const lead = String(j.lead ?? '').trim();
     /* 卡片形态（2026-10-20 用户要求"做成卡片"）：整行横条改成一格一格的卡。
        结构：第一行 名字+状态 → 第二行 要干什么+节拍 → 第三行 上次结果（原话）→ 底部动作。
        margin-top:auto 把动作压到卡底，多张卡并排时按钮齐平。 */
@@ -1944,6 +2342,7 @@ export async function renderSchedules() {
       <div class="sch-card-top">
         <b>${esc(j.name)}</b>
         <span class="pill">${esc(actionOf(j.action)?.label ?? j.action)}</span>
+        ${j.ownedByRepo ? `<span class="pill" title="节拍跟着仓库走：工作台 › 代码托管 › 仓库设置">随仓库</span>` : ''}
         ${(j.repeat === 'once' && j.lastStatus === 'ok') ? '<span class="pill" style="color:var(--ok)">已完成</span>' : ''}
         ${j.running ? '<span class="pill" style="color:var(--warn)">在跑</span>' : ''}
         <!-- 动作在**右上角**（2026-10-20 用户照参考截图要求）：启停开关在最右，跟名字同一行。
@@ -1964,6 +2363,11 @@ export async function renderSchedules() {
         </div>
       </div>
       ${lead ? `<div class="sch-desc">${esc(lead)}</div>` : ''}
+      ${
+        j.ownedByRepo
+          ? `<div class="sch-desc dim">这条巡检跟着仓库「${esc(j.ownedByRepo)}」走 —— 节拍在「工作台 › 代码托管 › 仓库设置」里改</div>`
+          : ''
+      }
       ${
         /* 结果原话独占一行（2026-10-20 用户："上次执行时间放右下角"）：
            原来时间和结果拼在底行右侧，结果一长整行被占满、时间就吊在中间。
@@ -1990,9 +2394,12 @@ export async function renderSchedules() {
           ? `<div class="sch-grid">${jobs.map(card).join('')}</div>`
           : `<div class="sk-blank">还没有定时任务。最常用的做法是「交给数字员工」：写一句要它干什么、选一个人，
              到点这句话就发进它自己的一条会话里（标题写着任务名，结果在那儿看）。
-             另外两个内置动作：「PR / Issue 巡检」—— 去 GitHub 看有没有人提 PR / issue，写成看板上的卡，
-             顺手把已合并的收成「待验收」；「数据库备份」—— 把 bandi.db 导出一份到数据目录的 backups/，
-             只留最近 N 份。动作是可插拔的，以后加新动作不用改调度核心。</div>`
+             要让流水线自己跑一遍就选「交给流程」—— 写清这次办什么事、挑一条**已发布**的流程，
+             到点发起一条实例，按模板节点往下走（进度去工作台 › 工作流看）。
+             内置动作里还有「数据库备份」—— 把 bandi.db 导出一份到数据目录的 backups/，只留最近 N 份。
+             「PR / Issue 巡检」现在**按仓库配**（2026-10-29）：去「工作台 › 代码托管 › 仓库设置」选节拍，
+             这里照样会列出来、标着「随仓库」（留空仓库的那种是"扫所有仓库"的全局任务）。
+             动作是可插拔的，以后加新动作不用改调度核心。</div>`
       }
     </div>`;
 
@@ -2145,8 +2552,8 @@ export function mountSchRepeatCombos(mode, job) {
 
 
 
-/** 这三种字段是下拉，值由 .combo 组件持有（不是 DOM 里的原生 <select>） */
-export const SCH_COMBO_TYPES = ['repo', 'project', 'persona'];
+/** 这几种字段是下拉，值由 .combo 组件持有（不是 DOM 里的原生 <select>） */
+export const SCH_COMBO_TYPES = ['repo', 'project', 'persona', 'flow'];
 
 
 
@@ -2173,11 +2580,12 @@ export function schConfigFields(action, cfg) {
     if (SCH_COMBO_TYPES.includes(f.type)) {
       // 选人**不给自动兜底**（写「选一个人」再拦必填）：定时派活悄悄落到某个默认员工身上，
       // 比报错难查得多 —— 半夜跑了、那个人不对、结果也没人看。
+      // 必填的下拉（人 / 流程）也不加"（可留空 = …）"：那是句假话。
       // 提示文案动作自己可以改（`hint`）：仓库/项目那种"可留空"的默认说法不一定贴切。
       const hint =
         f.hint != null
           ? esc(f.hint)
-          : f.type === 'persona'
+          : f.required
             ? ''
             : `（可留空 = ${esc(f.empty ?? (f.type === 'repo' ? '全部' : '自动'))}）`;
       right.push(`<label>${esc(f.label)}${hint}</label><div class="sch-cfg" data-cfg="${key}"></div>`);
@@ -2207,8 +2615,10 @@ export function schConfigFields(action, cfg) {
 /**
  * 把参数区里的下拉装成 `.combo`（全站公共组件）。
  * 返回 `Map<字段key, combo>` —— 读值也走这张表：原生控件没了，DOM 上读不到值。
+ *
+ * `flows` 只装**已发布**的流程模板（定时任务只跑已发布的，跟看板建卡同一口径）。
  */
-export function mountSchConfigCombos(action, cfg, repos, projects, personas) {
+export function mountSchConfigCombos(action, cfg, repos, projects, personas, flows) {
   const map = new Map();
   for (const f of action?.fields ?? []) {
     if (!SCH_COMBO_TYPES.includes(f.type)) continue;
@@ -2220,7 +2630,12 @@ export function mountSchConfigCombos(action, cfg, repos, projects, personas) {
         ? [{ id: '', label: f.empty ?? '全部' }, ...(repos ?? []).map((r) => ({ id: r.fullName, label: r.fullName }))]
         : f.type === 'project'
           ? [{ id: '', label: f.empty ?? '自动' }, ...(projects ?? []).map((p) => ({ id: p.id, label: p.name }))]
-          : [{ id: '', label: f.empty ?? '选一个人' }, ...(personas ?? []).map((p) => ({ id: p.id, label: p.name }))];
+          : f.type === 'flow'
+            // 一条都没发布时给一行**说明**（禁用不住的下拉会像"坏了"）：去工作台 › 工作流里发布
+            ? (flows ?? []).length
+              ? [{ id: '', label: f.empty ?? '选一条流程' }, ...(flows ?? []).map((x) => ({ id: x.id, label: x.name }))]
+              : [{ id: '', label: '还没有已发布的流程' }]
+            : [{ id: '', label: f.empty ?? '选一个人' }, ...(personas ?? []).map((p) => ({ id: p.id, label: p.name }))];
     map.set(
       f.key,
       createCombo({
@@ -2278,6 +2693,23 @@ export async function scheduleDialog(job) {
   const repos = (await api('/api/git/repos').catch(() => ({ repos: [] }))).repos ?? [];
   const projects = (S.projects ?? []).length ? S.projects : (S.projects = (await api('/api/projects').catch(() => ({ projects: [] }))).projects ?? []);
   const cfg = job?.config ?? {};
+  /*
+   * 流程模板：只装**已发布**的（定时任务只跑已发布的，跟看板建卡同一口径）。
+   * 走轻量清单而不是 `/api/workflows`：后者连带 100 条实例视图，只为一份名字不值。
+   * 拿不到就当没有（下拉会说"还没有已发布的流程"）。
+   */
+  const allFlows = (await api('/api/workflows/templates').catch(() => ({ templates: [] }))).templates ?? [];
+  const flows = allFlows.filter((t) => t.publishedAt);
+  /*
+   * 编辑老任务时它选的那条**可能已经下架**：照样列出来（名字后面标「未发布」），
+   * 否则下拉会显示一串内部 id —— 人只会以为"坏了"。真去保存时服务端会拦下并说清原因。
+   * 被**归档**的（2026-10-29 起）与下架是两回事：归档顺带清了 publishedAt，但栏上写「已归档」
+   * 才说得清该去哪儿找它（工作台 › 工作流 › 底下那段）。
+   */
+  if (cfg.templateId && !flows.some((t) => t.id === cfg.templateId)) {
+    const stale = allFlows.find((t) => t.id === cfg.templateId);
+    if (stale) flows.push({ ...stale, name: `${stale.name}（${stale.archivedAt ? '已归档' : '未发布'}）` });
+  }
   const min = meta.minMinutes ?? 5;
   const repeat0 = job?.repeat ?? 'interval';
   let curAction = (meta.actions ?? []).find((a) => a.id === (job?.action ?? meta.actions?.[0]?.id)) ?? null;
@@ -2337,8 +2769,8 @@ export async function scheduleDialog(job) {
   wireDialogHead(dlg.querySelector('form'));
   dlg.addEventListener('close', () => dlg.remove());
 
-  // 参数区里的下拉（仓库 / 项目 / 选人）—— 公共组件，值存在 combo 里，读值靠这张表
-  let cfgCombos = mountSchConfigCombos(curAction, cfg, repos, projects, S.personas ?? []);
+  // 参数区里的下拉（仓库 / 项目 / 选人 / 流程）—— 公共组件，值存在 combo 里，读值靠这张表
+  let cfgCombos = mountSchConfigCombos(curAction, cfg, repos, projects, S.personas ?? [], flows);
   let repeatCombos = mountSchRepeatCombos(repeat0, job);
 
   // 「方式」：换动作 → 参数跟着换
@@ -2356,7 +2788,7 @@ export async function scheduleDialog(job) {
       const f1 = schConfigFields(curAction, cfg);
       $('schLeftFields').innerHTML = f1.left;
       $('schRightFields').innerHTML = f1.right;
-      cfgCombos = mountSchConfigCombos(curAction, cfg, repos, projects, S.personas ?? []);
+      cfgCombos = mountSchConfigCombos(curAction, cfg, repos, projects, S.personas ?? [], flows);
     },
   });
   actionCombo.el.classList.add('sch-mode');

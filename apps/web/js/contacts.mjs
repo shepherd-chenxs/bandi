@@ -11,6 +11,7 @@ import { newSkill, openGitManualDialog, openGitPickDialog, openImportDialog } fr
 import { openConversation, openDetail, openDirectChat } from './chat.mjs';
 import { gidOf, openGroupDetail } from './groups.mjs';
 import { $, S } from './core.mjs';
+import { openProjectsPage, renderProjectList } from './projects.mjs';
 import { openGroupDialog, openPersonaDialog } from './misc.mjs';
 
 
@@ -89,6 +90,13 @@ export function refreshDeptSuggest() {
 export function renderList() {
   // 列表一重画，原来右键的那一行可能已经不在了 —— 菜单留着就是"点了个寂寞"
   closeCtxMenu();
+  /*
+   * 代码托管页（工作台 › 代码托管）让位（2026-10-29）：左栏整栏（仓库清单 + 底部的
+   * GitHub 连接条）归 renderGitRepos 管 —— 它还在 #listFoot 上挂了连接按钮。
+   * 这儿连底栏都不能清：搜索键入时 app.mjs 的全局委托每个字都会调到这儿，
+   * 清一下按钮就没一次。别的分支照旧"先清后画"。
+   */
+  if (S.nav === 'plugins' && S.route?.view === 'codeRepos') return;
   /*
    * 左栏底部固定条（#listFoot）每次重画都先清空：它挂的是「已归档」这种**跨列表**的入口，
    * 不该跟着某一份数据残留到通讯录/设置页上。哪个分支需要，自己再往里写。
@@ -226,8 +234,10 @@ export function renderList() {
   if (S.nav === 'plugins') {
     // 工作台首页是整页宫格（左栏被 CSS 收掉）；
     // 进了**有主从布局**的插件，左栏由 renderPluginMaster 负责画 —— 这里别去清它；
-    // 项目页（左栏 = 项目列表）和项目看板同理 —— 左栏归它们自己管，renderList 别抢
-    if (S.projectList || S.projectId) return;
+    // 项目页（左栏 = 项目列表）同理，但那个框现在是**能用的搜索框**：得把输入转发过去，
+    // 只重画左栏那一列（整页重摆会把输入框连人带字一起换掉，打一个字就瞎）。
+    if (S.projectList) return renderProjectList();
+    if (S.projectId) return;
     const p = S.plugins.find((x) => x.id === S.plugin);
     if (!p?.panel?.split) $('listBody').innerHTML = '';
     return;

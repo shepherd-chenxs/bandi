@@ -509,6 +509,52 @@ export function paintQuota(st) {
   const cap = (v) => (v ? String(v) : '');
   const withLimit = rows.filter((r) => r.limitTokens || r.limitRuns).length;
 
+  /*
+   * 分组版式（2026-10-29 用户定稿："左边是组列表，右边是这个组的模型"）：
+   * 组 = 模型 id 里第一个「/」前面那段（auto/…、group/…、opencode-zen-free/…），
+   * 没有斜杠的是别名 / 独立模型（haiku 这类），收进「未分组」垫底。
+   * 组只是**前端看的**：服务端 /api/quota 没有"组"这个概念，额度仍按模型一条条设，
+   * 保存也仍是整表提交（每一组一张表，全部留在 DOM 里，qSave 一把全收）。
+   * 选中组记在 S.quotaGroupPick（'*' = 全部），保存后重画时不丢。
+   */
+  const buckets = new Map();
+  for (const r of rows) {
+    const key = r.id.includes('/') ? r.id.slice(0, r.id.indexOf('/')) : '';
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key).push(r);
+  }
+  const groups = [...buckets.keys()]
+    .sort((a, b) => (a === '') - (b === '') || a.localeCompare(b))
+    .map((key) => ({ key, rows: buckets.get(key) }));
+  const pick = S.quotaGroupPick === '*' || buckets.has(S.quotaGroupPick) ? S.quotaGroupPick : '*';
+
+  const sideItem = (key, label, n, warn) =>
+    `<div class="ms-item${key === pick ? ' on' : ''}" data-qgroup="${esc(key)}">
+      <span class="ms-item-name">${esc(label)}</span>
+      ${warn ? '<span class="ms-dot-bad" title="这一组里有模型超了上限"></span>' : ''}
+      <span class="ms-item-n">${n}</span>
+    </div>`;
+
+  const rowHtml = (r) => `<tr data-model="${esc(r.id)}">
+      <td class="qt-id">
+        ${esc(r.id)}
+        <div class="qt-sub">${
+          r.over
+            ? `<span class="q-over">${esc(r.over)}</span>`
+            : r.available
+              ? esc(r.label)
+              : '<span class="q-warn">现在各运行时里都没有这个模型了（今天还跑过）</span>'
+        }</div>
+      </td>
+      <td class="qt-r ${r.over ? 'q-over' : ''}">${esc(r.usedText)}${
+        r.usedRuns ? `<div class="qt-sub">${r.usedRuns} 次</div>` : ''
+      }</td>
+      <td class="qt-r"><input class="num" data-q="tokens" type="number" min="0"
+        step="1000" placeholder="不限" value="${esc(cap(r.limitTokens))}" /></td>
+      <td class="qt-r"><input class="num" data-q="runs" type="number" min="0"
+        step="1" placeholder="不限" value="${esc(cap(r.limitRuns))}" /></td>
+    </tr>`;
+
   $('settingsView').innerHTML = `
     ${headRow('<b>额度</b>')}
     <div class="detail-body">
@@ -544,51 +590,42 @@ export function paintQuota(st) {
 
       <section class="set-sec">
         <div class="set-head"><b>每个模型每天的上限</b><span class="set-tag">留空＝不限制</span></div>
-        <div class="set-box">
-          <table class="quota-table" id="quotaTable">
-            <thead>
-              <tr>
-                <th>模型</th>
-                <th class="qt-r">今天已用</th>
-                <th class="qt-r">上限 token</th>
-                <th class="qt-r">上限次数</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${
-                rows.length
-                  ? rows
-                      .map(
-                        (r) => `<tr data-model="${esc(r.id)}">
-                          <td class="qt-id">
-                            ${esc(r.id)}
-                            <div class="qt-sub">${
-                              r.over
-                                ? `<span class="q-over">${esc(r.over)}</span>`
-                                : r.available
-                                  ? esc(r.label)
-                                  : '<span class="q-warn">现在各运行时里都没有这个模型了（今天还跑过）</span>'
-                            }</div>
-                          </td>
-                          <td class="qt-r ${r.over ? 'q-over' : ''}">${esc(r.usedText)}${
-                            r.usedRuns ? `<div class="qt-sub">${r.usedRuns} 次</div>` : ''
-                          }</td>
-                          <td class="qt-r"><input class="num" data-q="tokens" type="number" min="0"
-                            step="1000" placeholder="不限" value="${esc(cap(r.limitTokens))}" /></td>
-                          <td class="qt-r"><input class="num" data-q="runs" type="number" min="0"
-                            step="1" placeholder="不限" value="${esc(cap(r.limitRuns))}" /></td>
-                        </tr>`,
-                      )
-                      .join('')
-                  : '<tr><td colspan="4" class="dim" style="padding:16px">没读到任何模型 —— 各运行时的清单可能都没取到（看上面的提示），或者确实一个都没有。</td></tr>'
-              }
-            </tbody>
-          </table>
-          <div class="set-row">
-            <span class="set-label"></span>
-            <button class="primary" id="qSave">保存</button>
-          </div>
-        </div>
+        ${
+          rows.length
+            ? `<div class="ms-split">
+                 <div class="ms-side" id="qtSide">
+                   <div class="ms-side-title">分组</div>
+                   ${sideItem('*', '全部', rows.length, rows.some((r) => r.over))}
+                   ${groups
+                     .map((g) => sideItem(g.key, g.key || '未分组', g.rows.length, g.rows.some((r) => r.over)))
+                     .join('')}
+                 </div>
+                 <div class="ms-main" id="qtTables">
+                   ${groups
+                     .map(
+                       (g) => `<div class="qt-group-head" ${pick === '*' ? '' : 'hidden'}>${esc(g.key || '未分组')}</div>
+                     <table class="quota-table" data-gtable="${esc(g.key)}" ${
+                       pick === '*' || pick === g.key ? '' : 'hidden'
+                     }>
+                       <thead>
+                         <tr>
+                           <th>模型</th>
+                           <th class="qt-r">今天已用</th>
+                           <th class="qt-r">上限 token</th>
+                           <th class="qt-r">上限次数</th>
+                         </tr>
+                       </thead>
+                       <tbody>
+                         ${g.rows.map(rowHtml).join('')}
+                       </tbody>
+                     </table>`,
+                     )
+                     .join('')}
+                   <div class="qt-save"><button class="primary" id="qSave">保存</button></div>
+                 </div>
+               </div>`
+            : `<div class="set-box"><div class="set-note">没读到任何模型 —— 各运行时的清单可能都没取到（看上面的提示），或者确实一个都没有。</div></div>`
+        }
         <div class="hint-line" id="qMsg"></div>
       </section>
 
@@ -611,13 +648,31 @@ export function paintQuota(st) {
       </section>
     </div>`;
 
+  /* 切组：只翻各表的 hidden / 左栏 .on，**不重画** —— 重画会把没保存的输入冲掉。
+     「全部」= 每张表都露出来（组名小标题跟着露），选某一组就只留那一组。 */
+  document.querySelectorAll('#qtSide .ms-item').forEach((el) => {
+    el.onclick = () => {
+      const key = el.dataset.qgroup ?? '*';
+      S.quotaGroupPick = key;
+      document.querySelectorAll('#qtSide .ms-item').forEach((x) => x.classList.toggle('on', x === el));
+      document.querySelectorAll('#qtTables [data-gtable]').forEach((t) => {
+        t.hidden = key !== '*' && t.dataset.gtable !== key;
+      });
+      document.querySelectorAll('#qtTables .qt-group-head').forEach((h) => {
+        h.hidden = key !== '*';
+      });
+    };
+  });
+
   $('qSave').onclick = async () => {
     /*
      * **整表提交**：页面上每一行都发出去，留空 = null = 不限制。
      * 只发填了的那些是不行的 —— 那样"把一个上限清空"跟"这次没动它"长得一样，删不掉。
+     * 分组版式下当前组之外的表是 hidden 的，但**都还在 DOM 里**，
+     * 所以照旧一表不落全收（这也正是"每组一张表都留在 DOM"的原因）。
      */
     const limits = {};
-    document.querySelectorAll('#quotaTable tr[data-model]').forEach((tr) => {
+    document.querySelectorAll('.quota-table tr[data-model]').forEach((tr) => {
       const num = (k) => {
         const raw = tr.querySelector(`[data-q="${k}"]`)?.value.trim() ?? '';
         return raw === '' ? null : Number(raw);

@@ -243,6 +243,29 @@ export function publishedFlows() {
     }));
 }
 
+/**
+ * 归档 / 取消归档（2026-10-29，用户："点击归档之后进行归档，相关的历史流程实例保存"）。
+ *
+ * 归档时**顺带下架**：收起来的流程不该还能从工作台起单、定时任务也不该还挑它 ——
+ * 而那些入口全部只认 `publishedAt`，清掉它一处管所有路。取消归档回成草稿，要再发布重新点。
+ */
+export function archiveTemplate(id, on = true) {
+  if (!store.getWorkflowTemplate(id)) throw new Error('模板不存在');
+  if (on) store.setTemplatePublished(id, false);
+  return store.setTemplateArchived(id, on);
+}
+
+/**
+ * 删模板（**连同全部实例**）。内置模板拦下：删了它启动时还会被 ensureBuiltInTemplate
+ * 原样补回来 —— 用户看到的就是"删了又回来了"，这种灵异现象宁可一开始就不给删。
+ */
+export function deleteTemplate(id) {
+  const t = store.getWorkflowTemplate(id);
+  if (!t) throw new Error('模板不存在');
+  if (t.builtIn) throw new Error('内置模板删不掉 —— 不想看到它就归档收起来');
+  return store.deleteWorkflowTemplate(id);
+}
+
 /* ------------------------------------------------------------------ 实例 */
 
 /**
@@ -254,6 +277,9 @@ export function publishedFlows() {
 export function startWorkflow({ templateId, title, intent, projectId = null, autoStart = true, pr = null }) {
   const tpl = store.getWorkflowTemplate(templateId);
   if (!tpl) throw new Error('模板不存在');
+  // 归档 = "不再用它起新单"（2026-10-29）。老实例照跑，但新的一律拦下 ——
+  // 否则一张旧卡/一条旧链接还能绕过清单偷偷起一条，而人在清单里根本看不见它。
+  if (tpl.archivedAt) throw new Error('这条流程已归档 —— 想再跑就到「工作台 › 工作流」把它取消归档并重新发布');
   const nodes = nodesOf(tpl);
   if (!nodes.length) throw new Error('这个模板没有节点');
 

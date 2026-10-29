@@ -642,11 +642,17 @@ export function bubble(role, text, name, who, showName = false, at = '', atts = 
   const attsHtml = attsHtmlOf(atts);
   // 卡票（2026-10-24）：PM 建卡 / 卡片回执这类消息带 meta，气泡顶上画一张可点的票
   const ticket = cardTicketHtml(meta);
+  /*
+   * 停止生成（2026-10-29 用户实报「点停止生成，对方的消息完全消失」）：
+   * 人停的那一轮，回话是**掐在半句上**的（服务端带 meta.stopped 落库，见 runs.mjs 的 persistReply）。
+   * 不标一下，隔天翻记录的人会以为他就说了这么多 —— 标在气泡底部，比在时间线里另起一行轻。
+   */
+  const stoppedNote = meta?.stopped ? '<div class="bubble-note">已停止生成</div>' : '';
     return `<div class="row ${mine ? 'me' : ''}">
     ${mine ? smAvatar('我', 'me') : smAvatar(label, '', p)}
     ${nameLine
-      ? `<div class="msg-main">${nameLine}<div class="bubble">${ticket}${renderMarkdown(text)}${attsHtml}</div></div>`
-      : `<div class="bubble">${ticket}${renderMarkdown(text)}${attsHtml}</div>`}
+      ? `<div class="msg-main">${nameLine}<div class="bubble">${ticket}${renderMarkdown(text)}${attsHtml}${stoppedNote}</div></div>`
+      : `<div class="bubble">${ticket}${renderMarkdown(text)}${attsHtml}${stoppedNote}</div>`}
     ${t ? `<div class="btime">${esc(t)}</div>` : ''}
   </div>`;
 }
@@ -761,11 +767,27 @@ export function attsHtmlOf(atts) {
  */
 export function timelineOf(msgs, runs) {
   const items = [];
+  // 哪些运行**已经有回话**落库（停止的那一轮服务端会把掐在半句上的话留下，见 runs.mjs）。
+  // 有回话就不再另画一条状态行 —— 同一件事说两遍是噪音。
+  const repliedRuns = new Set(
+    (msgs ?? []).filter((m) => m.role === 'assistant' && m.runId).map((m) => m.runId),
+  );
   for (const m of msgs) items.push({ at: String(m.createdAt ?? ''), kind: 'msg', m });
   for (const r of runs ?? []) {
-    // 只有**不是人主动停的**才值得留一条：点了停止是有意为之，不必在记录里再喊一声
-    if (r.status !== '失败' && r.status !== '中断') continue;
-    items.push({ at: String(r.endedAt ?? r.startedAt ?? ''), kind: 'fail', r });
+    if (r.status === '失败' || r.status === '中断') {
+      items.push({ at: String(r.endedAt ?? r.startedAt ?? ''), kind: 'fail', r });
+      continue;
+    }
+    /*
+     * 停止生成（2026-10-29）：以前"人停的"一条都不留 —— 理由是"点了停止是有意为之，
+     * 不必在记录里再喊一声"。但它连带把**正在说的那条**也一起抹掉了：停止时若一个字都没
+     * 流出来（常见：跑了十几分钟只调了工具），界面上就只剩我那句问话，对方的活像没发生过。
+     * 现在：有回话的靠气泡上的「已停止生成」标记；一个字都没有的，留一条安静的状态行说明
+     * 「这一轮确实跑了 N 分钟、是被掐掉的」，别让人对着空白猜。
+     */
+    if (r.status === '已停止' && !repliedRuns.has(r.id)) {
+      items.push({ at: String(r.endedAt ?? r.startedAt ?? ''), kind: 'stop', r });
+    }
   }
   // 同一时刻（同一毫秒落库）时消息排前面：失败是"那条消息之后"发生的事
   items.sort((a, b) => (a.at === b.at ? (a.kind === 'msg' ? -1 : 1) : a.at < b.at ? -1 : 1));
@@ -831,6 +853,39 @@ export function failBlock(r, showName = false) {
 
 
 
+/**
+ * 「已停止」那一块（2026-10-29，用户实报「点停止生成，对方的消息完全消失」）。
+ *
+ * 跟 failBlock 同一个骨架、同一套头像 —— 只是**不红**：停止不是失败，是人自己掐的，
+ * 别用报错的颜色吓人。但也不能像以前那样一个字都不留：那一轮跑了多久得写出来，
+ * 否则点完停止，屏幕上"对方的活"就像凭空没发生过。
+ *
+ * 只画"一个字都没说过"的那种。已经流出来的回话服务端会落成消息、由气泡上的
+ * 「已停止生成」标记说明（见 bubble 的 stoppedNote）；两样都画就是同一件事说两遍。
+ */
+export function stopBlock(r, showName = false) {
+  // 跑了多久：以服务端记的起止时间为准（刷新/重进会话也是同一个数，不是"我打开这页以来"）
+  const began = Date.parse(String(r?.startedAt ?? ''));
+  const ended = Date.parse(String(r?.endedAt ?? ''));
+  const ran = Number.isFinite(began) && Number.isFinite(ended) && ended >= began ? ended - began : null;
+  // 几秒钟就停掉的别写"跑了 00:00"—— 那不是信息，是噪音；上了 5 秒才值得说
+  const dur = ran == null || ran < 5000 ? '' : ` · 跑了 ${fmtElapsed(ran)}`;
+  const label = r?.personaName || S.conversation?.personaName || '数字员工';
+  const p =
+    personaByName(r?.personaName) ??
+    (S.conversation?.personaId ? S.personas.find((x) => x.id === S.conversation.personaId) ?? null : null);
+  const nameLine = showName ? `<div class="who-line">${esc(label)}</div>` : '';
+  const body = `<div class="step stop">已停止生成${esc(dur)}（这一轮没有回话）</div>`;
+  return `<div class="row">
+    ${smAvatar(label, '', p)}
+    ${nameLine
+      ? `<div class="msg-main">${nameLine}<div class="bubble">${body}</div></div>`
+      : `<div class="bubble">${body}</div>`}
+  </div>`;
+}
+
+
+
 export function drawMessages(msgs, name, isGroup = false, runs = []) {
   /*
    * `meta.silent` 的消息**不画**（2026-10-24）：那是平台给 agent 的唤醒指令
@@ -848,7 +903,7 @@ export function drawMessages(msgs, name, isGroup = false, runs = []) {
         .map((it) =>
           it.kind === 'msg'
             ? bubble(it.m.role, it.m.text, name, it.m.personaName, isGroup, it.m.createdAt, it.m.atts, it.m.meta)
-            : failBlock(it.r, isGroup),
+            : it.kind === 'stop' ? stopBlock(it.r, isGroup) : failBlock(it.r, isGroup),
         )
         .join('')
     : '';
@@ -982,6 +1037,11 @@ export async function send() {
 // 点不到具体哪一条运行 —— 光有布尔量是停不掉的。
 export let chatRunningId = null;
 
+// 「这一轮实时流已经收尾」的信号。停止生成点完要**等它**再重画（见 stopChatRun 里那段说明）：
+// 每接一次流换一个新 Promise；这一轮收尾（attachStream 的 stop）或下一轮接上时把它放掉。
+let chatSettle = null;
+let chatSettleResolve = null;
+
 
 
 /**
@@ -997,6 +1057,8 @@ export let chatRunningId = null;
 export async function stopChatRun() {
   const id = chatRunningId;
   if (!id) return;
+  const convId = S.conversation?.id ?? null;
+  const settled = chatSettle;
   // 先让界面立刻停下来（点完就见效，不等后端回调）—— 跟节点对话栏一个做法
   S.running = false;
   chatRunningId = null;
@@ -1007,14 +1069,37 @@ export async function stopChatRun() {
   } catch (e) {
     toast(e.message, 'error');
   }
-  // 再按真实状态刷一次：收尾的钩子会把这次运行的产出/状态落库
-  if (S.conversation) await openConversation(S.conversation.id).catch(() => {});
+  /*
+   * ⚠️ **别在这里立刻从库里重画**（2026-10-29 用户实报「点停止生成，对方的消息完全消失」）。
+   *
+   * abort 接口只负责"发停止信号"：子进程被杀、收尾钩子把这一轮的话与状态落库，都在它之后。
+   * 抢在那个瞬间 openConversation，画出来的是"库里还没有"的那一版 ——
+   * 实时气泡被抹掉、库里又空着，屏幕上就空了一块（等收尾钩子晚一点落库，也不会自己再画回来）。
+   *
+   * 所以改成**等这次运行真的收尾**（SSE 的 __done → attachStream 的 stop()，那边 300ms 后重画）；
+   * 兜底等 6 秒（看门狗 5 秒 + 余量）还没收到就自己补画一次，且只在**还停在这个会话**时补
+   * （等待期间人可能已经点去别的会话了，别把人拽回来）。
+   */
+  const done = await Promise.race([
+    Promise.resolve(settled).then(() => true),
+    new Promise((resolve) => setTimeout(() => resolve(false), 6500)),
+  ]);
+  if (!done && convId && S.conversation?.id === convId) {
+    await openConversation(convId).catch(() => {});
+  }
 }
 
 
 
 export function attachStream(runId, whoName = '', startedAt = null) {
   if (S.es) S.es.close();
+  // 这一轮的「收尾了」信号（停止生成会等它再重画，见 stopChatRun）。
+  // 先把上一轮还在等的放掉，再挂新的一轮 —— 否则换会话/重连时旧 Promise 会一直吊着。
+  chatSettleResolve?.();
+  chatSettleResolve = null;
+  let settleMe = null;
+  chatSettle = new Promise((resolve) => { settleMe = resolve; });
+  chatSettleResolve = () => settleMe();
   S.running = true;
   chatRunningId = runId;
   setBusy(true);
@@ -1157,6 +1242,8 @@ export function attachStream(runId, whoName = '', startedAt = null) {
     progress.phase = status === '失败' ? 'error' : 'done';
     paint();
     setTimeout(() => openConversation(convId).then(load).catch(() => {}), 300);
+    // 告诉「停止生成」：这一轮真的收尾了（它会等这个信号再决定要不要自己补画）
+    settleMe();
   };
 
   // 实时输出走**共用**的 streamRun（流程实例页的节点对话也是它）
@@ -1751,7 +1838,11 @@ async function mountFeishuPanel(personaId) {
   paintFeishuPanel(personaId, cfg, seq);
 }
 
-/** 面板形态照抄原设置页的 renderFeishu（set-sec/set-box/gr-conn 全局类），
+/** 面板结构（2026-10-29 重排）：
+ *  ① 通道卡打头 —— 顶部一条状态横幅（色点 + 状态词 + 一句话说明 + 启停按钮），
+ *     下面接表单（标签左列 / 输入居中 / 行尾动作），动作条右对齐收底；
+ *  ② 「第一次接」四步指引收进 <details>：没配过凭据默认展开，配过默认收起，
+ *     想再看随时点开 —— 不再让一段四行小字常驻占半屏。
  *  去掉了「私聊绑定」—— 员工级后每个应用就绑定在那一个员工身上，没有再挑一层的概念 */
 function paintFeishuPanel(personaId, cfg, seq) {
   const host = $('dFeishuHost');
@@ -1761,77 +1852,101 @@ function paintFeishuPanel(personaId, cfg, seq) {
   const apiBase = '/api/personas/' + encodeURIComponent(personaId) + '/feishu';
 
   host.innerHTML = `
-    <section class="set-sec">
-      <div class="set-head"><b>第一次接</b><span class="set-tag">一次性 · 约 10 分钟</span></div>
-      <div class="set-box">
-        <div class="set-note">
-          这个应用就是这个员工的<b>专属机器人</b> —— 私聊它 = 直接找他；群里 @它 才响应。四步接上：<br />
-          ① <a href="https://open.feishu.cn/app" target="_blank" rel="noreferrer">去飞书开放平台建一个「企业自建应用」</a>；<br />
-          ② 「事件与回调」：订阅方式选<b>长连接</b>（选成请求地址会永远收不到消息），添加事件 <code>im.message.receive_v1</code>；<br />
-          ③ 「权限管理」：开「获取与发送单聊、群组消息」和「更新应用发送的消息卡片」，发布应用版本；<br />
-          ④ 回来把 App ID / App Secret 填在下面，点「启动通道」。
+    <section class="fs-sec">
+      <div class="fs-hero" id="fsHero" data-st="stopped">
+        <span class="fs-dot" aria-hidden="true"></span>
+        <div class="fs-hero-main">
+          <div class="fs-hero-title"><b>飞书通道</b><span class="fs-state" id="fsStateTag">…</span></div>
+          <div class="fs-hero-sub" id="fsStatus"></div>
+        </div>
+        <div class="fs-hero-side">
+          <!-- 开机自启（2026-10-29 用户要求：做成开关放右上角）—— 拨一下立刻存，
+               不跟着「保存配置」走：它是个"常驻策略"，跟改凭据不是一类动作 -->
+          <label class="fs-auto" title="开机自启：应用启动时自动拉起这个通道（拨动即刻保存）">
+            <span>开机自启</span>
+            <span class="switch sm"><input type="checkbox" id="fsEnabled" ${cfg?.enabled ? 'checked' : ''} /><span></span></span>
+          </label>
+          <button id="fsToggle">${running ? '停止通道' : '启动通道'}</button>
+        </div>
+      </div>
+      <div class="fs-card">
+        <div class="fs-row">
+          <span class="row-label">App ID</span>
+          <input id="fsAppId" value="${esc(cfg?.appId ?? '')}" autocomplete="off" spellcheck="false"
+                 placeholder="cli_…" />
+          <span></span>
+        </div>
+        <div class="fs-row">
+          <span class="row-label">App Secret</span>
+          ${
+            configured
+              ? `<input id="fsSecret" class="locked" type="password" value="${esc(cfg?.appSecretHint ?? '')}" readonly data-locked="1"
+                      aria-label="已保存的 Secret，只显示掩码" autocomplete="off" />
+                 <button id="fsSecretEdit">修改</button>`
+              : `<input id="fsSecret" type="password" placeholder="粘贴 App Secret（保存后只显示掩码）" autocomplete="off" />
+                 <span></span>`
+          }
+        </div>
+        <div class="fs-row">
+          <span class="row-label">允许的人</span>
+          <input id="fsAllow" value="${esc((cfg?.allowOpenIds ?? []).join(', '))}" autocomplete="off" spellcheck="false"
+                 placeholder="open_id，逗号分隔；留空不限制" />
+          <span></span>
+        </div>
+        <div class="fs-actions">
+          <!-- 自动保存（2026-10-29 用户要求）：「保存配置」按钮已去掉，这一行左边只留状态
+               —— 改动即存，人不用再惦记"有没有保存" -->
+          <span class="fs-save" id="fsSaveHint" data-st="idle">${configured ? '改动自动保存' : '填好凭据后自动保存'}</span>
+          <button id="fsTest">测试连接</button>
         </div>
       </div>
     </section>
-    <section class="set-sec">
-      <div class="set-head"><b>飞书通道</b><span class="set-tag" id="fsStateTag">…</span></div>
-      <div class="set-box open-combo">
-        <div class="gr-conn stack">
-          <div class="gr-conn-row">
-            <span class="row-label">App ID</span>
-            <input id="fsAppId" value="${esc(cfg?.appId ?? '')}" autocomplete="off" spellcheck="false"
-                   placeholder="cli_…" />
-            <span></span>
-          </div>
-          <div class="gr-conn-row">
-            <span class="row-label">App Secret</span>
-            ${
-              configured
-                ? `<input id="fsSecret" class="locked" type="password" value="${esc(cfg?.appSecretHint ?? '')}" readonly data-locked="1"
-                        aria-label="已保存的 Secret，只显示掩码" autocomplete="off" />
-                   <button id="fsSecretEdit">修改</button>`
-                : `<input id="fsSecret" type="password" placeholder="粘贴 App Secret（保存后只显示掩码）" autocomplete="off" />
-                   <span></span>`
-            }
-          </div>
-          <div class="gr-conn-row">
-            <span class="row-label">允许的人</span>
-            <input id="fsAllow" value="${esc((cfg?.allowOpenIds ?? []).join(', '))}" autocomplete="off" spellcheck="false"
-                   placeholder="open_id，逗号分隔；留空不限制" />
-            <span></span>
-          </div>
-          <div class="gr-conn-row">
-            <span class="row-label">开机自启</span>
-            <div class="seg" id="fsEnabled">
-              <button data-v="1" class="${cfg?.enabled ? 'on' : ''}">开</button>
-              <button data-v="0" class="${cfg?.enabled ? '' : 'on'}">关</button>
-            </div>
-            <span></span>
-          </div>
-          <div class="gr-conn-actions">
-            <button class="primary" id="fsSave">保存配置</button>
-            <button id="fsTest">测试连接</button>
-            <button id="fsToggle">${running ? '停止通道' : '启动通道'}</button>
-          </div>
-          <div class="gr-conn-status" id="fsStatus"></div>
-        </div>
-      </div>
-    </section>`;
+    <details class="fs-sec fs-guide" ${configured ? '' : 'open'}>
+      <summary>
+        <b>第一次接？四步接上</b>
+        <span class="set-tag">一次性 · 约 10 分钟</span>
+        <span class="fs-guide-chev" aria-hidden="true">▾</span>
+      </summary>
+      <ol class="fs-steps">
+        <li><span class="fs-step-n">1</span>
+          <div>这个应用就是这个员工的<b>专属机器人</b> —— 私聊它 = 直接找他；群里 @它 才响应。</div></li>
+        <li><span class="fs-step-n">2</span>
+          <div><a href="https://open.feishu.cn/app" target="_blank" rel="noreferrer">去飞书开放平台建一个「企业自建应用」</a>。</div></li>
+        <li><span class="fs-step-n">3</span>
+          <div>「事件与回调」：订阅方式选<b>长连接</b>（选成请求地址会永远收不到消息），添加事件 <code>im.message.receive_v1</code>。</div></li>
+        <li><span class="fs-step-n">4</span>
+          <div>「权限管理」：开「获取与发送单聊、群组消息」和「更新应用发送的消息卡片」，发布应用版本。</div></li>
+        <li><span class="fs-step-n">5</span>
+          <div>回来把 App ID / App Secret 填在上面，点<b>「启动通道」</b>。</div></li>
+      </ol>
+    </details>`;
 
   const status = (html) => {
     const el = $('fsStatus');
     if (el) el.innerHTML = html;
   };
+  /* 各状态的横幅副标题：色点与状态词只说"什么状态"，这句话说"意味着什么 / 下一步干嘛" */
+  const FS_STATE_SUB = {
+    connected: '长连接已建立 —— 私聊它、或在群里 @它 都能叫到这个员工',
+    connecting: '正在与飞书建立长连接…',
+    reconnecting: '连接断开了，正在自动重连…',
+    stopped: '通道未运行 —— 凭据填好后点「启动通道」',
+    failed: '',
+  };
   const paintStatus = (st) => {
     const s = st?.status ?? {};
-    const word = FEISHU_STATE_TEXT[s.state] ?? '已停止';
+    const state = s.state ?? 'stopped';
+    const word = FEISHU_STATE_TEXT[state] ?? '已停止';
     const tag = $('fsStateTag');
     if (tag) tag.textContent = word;
-    const bad = s.state === 'failed';
-    status(
-      `<b style="color:${bad ? 'var(--bad,#c0504d)' : s.state === 'connected' ? 'var(--ok)' : 'var(--dim)'}">${word}</b>` +
-        `${bad && s.lastError ? ` —— ${esc(s.lastError)}` : ''}`,
-    );
+    const hero = $('fsHero');
+    if (hero) hero.dataset.st = state;
+    const sub = $('fsStatus');
+    if (!sub) return;
+    sub.innerHTML =
+      state === 'failed'
+        ? esc(s.lastError || '启动失败，看看服务日志里飞书那几行')
+        : (FS_STATE_SUB[state] ?? FS_STATE_SUB.stopped);
   };
   paintStatus(cfg);
 
@@ -1858,27 +1973,106 @@ function paintFeishuPanel(personaId, cfg, seq) {
     $('fsSecretEdit').textContent = '取消';
   });
 
-  $('fsEnabled')?.querySelectorAll('button').forEach((b) => {
-    b.onclick = () => {
-      $('fsEnabled').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
-    };
-  });
-
-  $('fsSave')?.addEventListener('click', async () => {
+  /* 开机自启开关（2026-10-29）：拨动即刻 PUT —— 它是个常驻策略，不该等人再点一次
+     「保存配置」。服务端 PUT 里 enabled 为真会顺手拉起通道、为假会停掉，语义正好。
+     保存失败（比如凭据还没填齐 → E2061）就把开关拨回去，别让界面显示一个没存下的状态。 */
+  $('fsEnabled')?.addEventListener('change', async (ev) => {
+    const cb = ev.target;
+    const want = cb.checked;
+    const k = $('fsSecret');
     const body = {
       appId: $('fsAppId').value.trim(),
       allowOpenIds: $('fsAllow').value.split(/[,，\s]+/).map((s) => s.trim()).filter(Boolean),
-      enabled: $('fsEnabled')?.querySelector('.on')?.dataset.v === '1',
+      enabled: want,
     };
-    const k = $('fsSecret');
-    if (!k?.dataset.locked) body.appSecret = k?.value ?? '';
+    // 只把"这次真的改过"的 secret 带上；锁着的掩码绝不能当新值提交
+    if (k && !k.dataset.locked && k.value) body.appSecret = k.value;
+    cb.disabled = true;
     try {
       await api(apiBase, { method: 'PUT', body: JSON.stringify(body) });
-      toast('已保存', 'ok');
-      mountFeishuPanel(personaId); // 重拉重画（顺带换一套新的渲染序号，旧轮询作废）
+      toast(want ? '开机自启已开 —— 应用启动时自动拉起通道' : '开机自启已关 —— 启动时不再拉起通道', 'ok');
+      mountFeishuPanel(personaId);
     } catch (e) {
+      cb.checked = !want;
+      cb.disabled = false;
       toast(e.message, 'error');
     }
+  });
+
+  /* 自动保存（2026-10-29 用户要求：去掉「保存配置」按钮）——
+     三个输入框改动即存：打字时 900ms 防抖，失焦（change）立刻存。
+     本地先按服务端同一套规矩预检（App ID 形状 / 凭据齐不齐），不合格只提示不发请求 ——
+     自动保存绝不能出现"边打字边弹报错"。 */
+  const APP_ID_RE = /^cli_[0-9a-f]{16}$/i;
+  const saveHint = (text, st = 'idle') => {
+    const el = $('fsSaveHint');
+    if (!el) return;
+    el.textContent = text;
+    el.dataset.st = st;
+  };
+  const savedAt = () => new Date().toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' });
+  let saveTimer = 0;
+  let saving = false;
+  let saveQueued = false;
+
+  const collectConfig = () => {
+    const k = $('fsSecret');
+    return {
+      body: {
+        appId: ($('fsAppId')?.value ?? '').trim(),
+        allowOpenIds: ($('fsAllow')?.value ?? '').split(/[,，\s]+/).map((s) => s.trim()).filter(Boolean),
+        enabled: !!$('fsEnabled')?.checked,
+      },
+      newSecret: k && !k.dataset.locked ? k.value.trim() : '',
+    };
+  };
+
+  const saveNow = async () => {
+    clearTimeout(saveTimer);
+    if (saving) { saveQueued = true; return; }
+    const { body, newSecret } = collectConfig();
+    if (!body.appId) return saveHint('填上 App ID 和 App Secret 就会自动保存');
+    if (!APP_ID_RE.test(body.appId)) return saveHint('App ID 还没填完 —— 它长这样：cli_ 加 16 位十六进制');
+    if (!newSecret && !configured) return saveHint('再填上 App Secret 就会自动保存');
+    if (newSecret) body.appSecret = newSecret;
+    saving = true;
+    saveHint('保存中…', 'busy');
+    try {
+      await api(apiBase, { method: 'PUT', body: JSON.stringify(body) });
+      saving = false;
+      if (newSecret) {
+        // 新 Secret 存下了：换回掩码锁定态。整页重画最省事 —— 此刻焦点本来也不在框里；
+        // 重画会把这行状态复位，所以等它画完再补一次"已保存"，别让人以为没存
+        toast('App Secret 已保存', 'ok');
+        await mountFeishuPanel(personaId);
+        // 不复用外层 seq 判等 —— mountFeishuPanel 自己会 ++feishuPanelSeq，比完永远不等
+        saveHint('已保存 · ' + savedAt(), 'ok');
+        return;
+      }
+      saveHint('已保存 · ' + savedAt(), 'ok');
+      if (saveQueued) { saveQueued = false; saveNow(); }
+    } catch (e) {
+      saving = false;
+      saveQueued = false;
+      saveHint(e.message, 'err');
+    }
+  };
+
+  for (const id of ['fsAppId', 'fsAllow']) {
+    const el = $(id);
+    if (!el) continue;
+    el.addEventListener('input', () => { saveHint('未保存…', 'busy'); clearTimeout(saveTimer); saveTimer = setTimeout(saveNow, 900); });
+    el.addEventListener('change', saveNow);
+  }
+  // Secret 只在失焦/回车时存：边打字边存会在 900ms 的停顿处把输入框换成掩码，太打断
+  $('fsSecret')?.addEventListener('change', () => {
+    const k = $('fsSecret');
+    if (!k || k.dataset.locked) return;
+    if (!k.value.trim()) {
+      saveHint(configured ? '留空 = 保留原来的 Secret' : '再填上 App Secret 就会自动保存');
+      return;
+    }
+    saveNow();
   });
 
   $('fsTest')?.addEventListener('click', async () => {
