@@ -1346,7 +1346,8 @@ export async function renderGitRepos(root = $('pluginView')) {
    * 每片叶子（含无前缀的）都带分支图标 —— IDEA 里文件夹装的是分支，不是普通条目。
    *
    * `keep: true` 时不排序、按传入顺序输出（「最近」用：IDEA 的最近是"当前分支打头 + 最近切过的顺序"，
-   * 排序会把这个含义弄丢）。叶子上的 badge（↑1/↓2）和 hint（origin/main）原样带过去。
+   * 排序会把这个含义弄丢）。叶子上的 badge（↗1/↙2）、hint（origin/main）和 menu（行尾那颗 `›`）
+   * 都要原样带过去 —— 漏一个，下拉里就少一样东西，而且不报错。
    */
   const folderize = (items, keyPrefix, { keep = false } = {}) => {
     const leafOf = (it, label, sub = false) => ({
@@ -1357,6 +1358,8 @@ export async function renderGitRepos(root = $('pluginView')) {
       cls: 'br',
       ...(it.badge ? { badge: it.badge } : {}),
       ...(it.hint ? { hint: it.hint } : {}),
+      // 2026-10-30：行尾的二级菜单箭头。这里不带上，分支行就只剩名字 —— 箭头会静默消失。
+      ...(it.menu ? { menu: true } : {}),
     });
     const folders = new Map();
     const plain = [];
