@@ -250,10 +250,18 @@ export async function handleGit(req, res, url) {
     return sendJson(res, 200, { repos: git.listConnected().map((r) => ({ ...r, patrol: patrol.viewOf(r) })) }), true;
   }
 
+  /* 默认克隆基目录（2026-10-30，IDEA 同款）：弹窗「目录」格显示它，URL 认出项目名再拼上去 */
+  if (req.method === 'GET' && url.pathname === '/api/git/repos-dir') {
+    return sendJson(res, 200, { dir: git.defaultReposDir() }), true;
+  }
+
   if (req.method === 'POST' && url.pathname === '/api/git/repos') {
     const body = await readBody(req);
     try {
-      const out = await git.connectRepo(String(body.fullName ?? ''), null, body.localPath ? String(body.localPath) : null);
+      /* remoteUrl = 弹窗「仓库 URL」来源（2026-10-30）：给地址直接克隆，名字服务端从 URL 反推 */
+      const out = body.remoteUrl
+        ? await git.connectByRemoteUrl(String(body.remoteUrl), body.localPath ? String(body.localPath) : null)
+        : await git.connectRepo(String(body.fullName ?? ''), null, body.localPath ? String(body.localPath) : null);
       return sendJson(res, 201, out), true;
     } catch (e) {
       return fail(res, 400, 'E1064', String(e.message ?? e)), true;

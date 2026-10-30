@@ -7,7 +7,7 @@ import { openSettings, settingsGroups } from './settings.mjs';
 import { archivedEntryHTML, closeCtxMenu, convDisplayName, enterArchiveView, openConversationSafe, renderArchiveList } from './listmenu.mjs';
 import { renderFlowList } from './workflows.mjs';
 import { renderRunList } from './flowpages.mjs';
-import { newSkill, openGitManualDialog, openGitPickDialog, openImportDialog } from './skills.mjs';
+import { newSkill, openGitPickDialog, openImportDialog } from './skills.mjs';
 import { openConversation, openDetail, openDirectChat } from './chat.mjs';
 import { gidOf, openGroupDetail } from './groups.mjs';
 import { $, S } from './core.mjs';
@@ -548,18 +548,16 @@ export const skillAddItems = () => [
  * 没连就让它点下去，弹窗里会把"拉不到清单"的原因说出来，那比"这个入口不存在"清楚。
  * 顺序上把「从 GitHub 添加」放前面：连了 GitHub 的话它是主路。
  */
+/**
+ * 「代码仓库」的「＋ 添加仓库」：一条路（2026-10-30 用户："这个界面改成参考图这种"）——
+ * 弹窗里左边挑来源（GitHub / 本地代码托管），不再让用户在菜单里先选一次。
+ */
 export const gitAddRepoItems = (onDone) => [
   {
-    label: '从 GitHub 添加',
-    hint: '从账号里挑一个仓库，克隆进来',
+    label: '添加仓库…',
+    hint: '从 GitHub 挑一个，或把本地代码托管进来',
     icon: ICON_CLOUD,
     run: () => openGitPickDialog(onDone),
-  },
-  {
-    label: '手动接入',
-    hint: '本地已有克隆 / 私有仓库 / 离线：只记路径，不联网',
-    icon: ICON_FOLDER,
-    run: () => openGitManualDialog(onDone),
   },
 ];
 

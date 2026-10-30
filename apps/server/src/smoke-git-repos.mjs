@@ -149,6 +149,8 @@ try {
   }
   check('同一个目录不许接给两个仓库', /已经接给/.test(dupErr), dupErr);
   const notGit = fs.mkdtempSync(path.join(tmp, 'notgit-'));
+  /* 2026-10-30 空目录语义变更：空目录 = 克隆目标（IDEA 同款），只有**非空**的非 git 目录才拒 */
+  fs.writeFileSync(path.join(notGit, 'a.txt'), 'x');
   let notGitErr = '';
   try {
     await git.connectRepo('smoke/demo3', info('demo3'), notGit);

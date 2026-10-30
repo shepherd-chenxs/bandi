@@ -107,17 +107,17 @@ check(
 check(/\.title = '添加仓库'/.test(src), '左栏「＋」的 tooltip 写「添加仓库」');
 check(!/id="gitAddRepo"/.test(src), '页面里不再有旧的「＋ 添加仓库」按钮');
 check(!/id="gitManualAdd"/.test(src), '不再有单独的「手动接入」按钮');
-check(/const gitAddRepoItems = /.test(src), '有「从 GitHub 添加 / 手动接入」两个菜单项');
-// 菜单两项都要开弹窗，不能还是直接跳页面上的某一块
+check(/const gitAddRepoItems = /.test(src), '有「添加仓库」菜单项');
+// 菜单收敛成一条（2026-10-30 用户："这个界面改成参考图（IDEA 克隆仓库）这种"——来源挪进弹窗左侧）
 const menuBlock = (() => {
   const i = src.indexOf('const gitAddRepoItems =');
   return src.slice(i, src.indexOf('];', i));
 })();
-check(/label: '从 GitHub 添加'/.test(menuBlock), '菜单里有「从 GitHub 添加」');
-check(/label: '手动接入'/.test(menuBlock), '菜单里有「手动接入」');
-check(/run: \(\) => openGitPickDialog\(/.test(menuBlock), '「从 GitHub 添加」→ 开弹窗');
-check(/run: \(\) => openGitManualDialog\(/.test(menuBlock), '「手动接入」→ 开弹窗');
+check(/label: '添加仓库…'/.test(menuBlock), '菜单里是「添加仓库…」');
+check(/run: \(\) => openGitPickDialog\(/.test(menuBlock), '「添加仓库…」→ 开弹窗');
 check(/function openGitPickDialog\(/.test(src), '有 openGitPickDialog（从 GitHub 挑）');
+check(/data-src="gh"/.test(src) && /data-src="local"/.test(src), '弹窗左侧两块来源：GitHub / 本地代码托管（手动接入收进来了）');
+check(!/function openGitManualDialog\(/.test(src), '独立的 openGitManualDialog 删了（并入弹窗本地来源）');
 check(/async function mountGitAvailPicker\(/.test(src), '挑仓库那段抽成了可复用的 mountGitAvailPicker');
 // 底部那整块要真的没了（不再挂在 st.connected 上常驻）
 check(
@@ -154,7 +154,7 @@ const dlgBlock = (() => {
 })();
 check(/class="dlg-actions">\s*<button type="button" value="cancel">取消<\/button>\s*<button class="primary" type="button" id="gitPickOk" disabled>接入<\/button>/.test(dlgBlock), '「接入」在「取消」旁边（同一个动作栏）');
 check(/id="gitPickOk" disabled/.test(dlgBlock), '没选中时「接入」是禁用的');
-check(/okBtn\.disabled = !fullName/.test(dlgBlock), '选中后才放开「接入」');
+check(/okBtn\.disabled = !picked;/.test(dlgBlock), '选中后才放开「接入」');
 
 check(!/drawAvail/.test(src), '旧的那份 drawAvail 已经删掉（没有第二份清单逻辑）');
 

@@ -484,9 +484,14 @@ export function createCombo({
      * 带 menu 的行（分支行，2026-10-30 用户："点击选项就打开，改成二级窗口的一个选项，放在第一位"）：
      * 点**整行**都不再直接选中 —— 跟行尾 `›` 一样只开这条分支的二级菜单（签出收进菜单第一位）。
      * 没带 menu 的行（标签、别的下拉）照旧点行即选。
+     * 行上同时挂 `menu-open`（2026-10-30 用户："选中要加效果"）：二级菜单开着的时候这一行
+     * 保持高亮 —— 鼠标一移去菜单上 hover 就没了，不补这个高亮就像"没选中"。
      */
-    const fireItemMenu = (row) =>
+    const fireItemMenu = (row) => {
+      closeCtxMenu();   // 先摘掉旧的 menu-open，再给新行挂 —— 一次只亮一行
+      row.classList.add('menu-open');
       root.dispatchEvent(new CustomEvent('combo-menu', { detail: { id: row.dataset.pick ?? '', el: row } }));
+    };
     list.querySelectorAll('[data-pick]').forEach((el) => {
       el.onclick = () => (el.dataset.menu ? fireItemMenu(el) : pick(el.dataset.pick));
     });
@@ -670,6 +675,8 @@ export function closeCtxMenu() {
   if (!menu || menu.hidden) return;
   menu.hidden = true;
   menu.innerHTML = '';
+  // 触发行的高亮一并摘掉（combo 行开二级菜单时挂的 menu-open，见 fireItemMenu）
+  document.querySelectorAll('.combo-item.menu-open').forEach((el) => el.classList.remove('menu-open'));
 }
 
 export function createDateTimePick({ mount, value = '', onChange = () => {} }) {
