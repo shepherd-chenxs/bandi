@@ -103,26 +103,30 @@ check('空格 / .. / 首尾点 / 保留名 / 空段都挡下来', rejected(['a b
 check('正常分支名放行', git.assertBranchName('feature/ok-2026') === 'feature/ok-2026');
 
 /*
- * 分支命名规范（2026-10-30）：`<type>/<短描述>`。
+ * 分支命名规范（2026-10-30）：`<type>/v<版本>-<短描述>`。
  * 老默认名是 `bandi/<标题短串>-<时间戳>`，而"标题"常常是仓库名或纯中文 —— 软件自己生成
  * `bandi/bandi-20261029-125019`（前缀重复、没类型、没语义），历史里 4 次合并都叫这个。
+ * 版本段是**发布线**（同公司 Gitlab 规范里 `hotfix-v1.12.5` 的思路），不是每条分支自己升一版。
  */
+const V = '1.4.0';
 const rejectedNew = (list) =>
   list.filter((b) => {
     try {
-      git.assertNewBranchName(b, { repoName: 'bandi' });
+      git.assertNewBranchName(b, { repoName: 'bandi', version: V });
       return false;
     } catch {
       return true;
     }
   });
-check('建议名 = <type>/<短描述>（英文标题）', git.suggestBranchName('给班底补建 PR v2', new Date('2026-10-25T17:22:03'), { repoName: 'bandi' }) === 'chore/pr-v2', git.suggestBranchName('给班底补建 PR v2', new Date('2026-10-25T17:22:03'), { repoName: 'bandi' }));
-check('中文标题折不出短描述 → <type>/<时间戳>（不是空分支名）', /^fix\/20261025-090500$/.test(git.suggestBranchName('修复错字', new Date('2026-10-25T09:05:00'))), git.suggestBranchName('修复错字', new Date('2026-10-25T09:05:00')));
-check('Conventional 前缀直接决定类型', git.suggestBranchName('fix(server): pr gate smoke') === 'fix/pr-gate-smoke', git.suggestBranchName('fix(server): pr gate smoke'));
-check('短描述不许就是仓库名（老 bandi/bandi-<戳> 的病根）', /^chore\/\d{8}-\d{6}$/.test(git.suggestBranchName('bandi', new Date('2026-10-25T17:22:03'), { repoName: 'bandi' })), git.suggestBranchName('bandi', new Date('2026-10-25T17:22:03'), { repoName: 'bandi' }));
-check('新分支名必须 <type>/<短描述>：老前缀 / 错拼 / 没类型 / 大写都拒', rejectedNew(['bandi/old-style', 'andi/x', 'test', '123', 'feat/', 'feat/Bad', 'feature/x']).length === 7);
-check('合规的新分支名放行', ['fix/pr-gate-smoke', 'feat/a1', 'chore/20261030-125019', 'docs/readme', 'test/smoke'].every((b) => git.assertNewBranchName(b, { repoName: 'bandi' }) === b));
-check('短描述等于仓库名 → 拒', rejectedNew(['chore/bandi']).length === 1);
+const suggestWith = (t, at) => git.suggestBranchName(t, at, { repoName: 'bandi', version: V });
+check('建议名 = <type>/v<版本>-<短描述>（英文标题）', suggestWith('给班底补建 PR v2', new Date('2026-10-25T17:22:03')) === 'chore/v1.4.0-pr-v2', suggestWith('给班底补建 PR v2', new Date('2026-10-25T17:22:03')));
+check('中文标题折不出短描述 → <type>/v<版本>-<时间戳>（不是空分支名）', /^fix\/v1\.4\.0-20261025-090500$/.test(suggestWith('修复错字', new Date('2026-10-25T09:05:00'))), suggestWith('修复错字', new Date('2026-10-25T09:05:00')));
+check('Conventional 前缀直接决定类型', suggestWith('fix(server): pr gate smoke') === 'fix/v1.4.0-pr-gate-smoke', suggestWith('fix(server): pr gate smoke'));
+check('短描述不许就是仓库名（老 bandi/bandi-<戳> 的病根）', /^chore\/v1\.4\.0-\d{8}-\d{6}$/.test(suggestWith('bandi', new Date('2026-10-25T17:22:03'))), suggestWith('bandi', new Date('2026-10-25T17:22:03')));
+check('仓库没有版本号时不带版本段（别的仓库接进来也能建分支）', /^fix\/pr-gate-smoke$/.test(git.suggestBranchName('fix(server): pr gate smoke', new Date(), { version: '' })));
+check('新分支名必须 <type>/v<版本>-<短描述>：老前缀 / 错拼 / 没类型 / 没版本 / 大写都拒', rejectedNew(['bandi/old-style', 'andi/x', 'test', '123', 'feat/pr-x', 'feat/Bad', 'feature/x', 'feat/v1.4-pr-x', 'feat/v1.4.0/x']).length === 9);
+check('合规的新分支名放行', ['fix/v1.4.1-pr-gate-smoke', 'feat/v1.5.0-a1', 'chore/v1.4.0-20261030-125019', 'docs/v1.4.1-readme', 'test/v1.4.0-smoke'].every((b) => git.assertNewBranchName(b, { repoName: 'bandi', version: V }) === b));
+check('短描述等于仓库名 → 拒', rejectedNew(['chore/v1.4.0-bandi']).length === 1);
 check('「平台建的分支」= 老 bandi/ 或新 <type>/x（feature/x 是人的分支）', git.isPlatformBranchName('bandi/old') && git.isPlatformBranchName('fix/demo') && !git.isPlatformBranchName('feature/human') && !git.isPlatformBranchName('main'));
 check('凭据闸抓住 .env / 私钥 / token 文件', JSON.stringify(git.findSecretPaths(['.env', 'id_rsa', 'a/b/token.json', 'k.pem'])) === '[".env","id_rsa","a/b/token.json","k.pem"]');
 check('模板类放过（.env.example 本来就该提交）', JSON.stringify(git.findSecretPaths(['.env.example', 'config.sample.ts', 'README.md'])) === '[]');
@@ -142,7 +146,7 @@ check('默认分支从元数据来（假 GitHub 给 main）', row.defaultBranch 
 let st = await git.workState(row);
 check('干净工作区：dirtyCount 0、ahead 0、canShip=false', st.dirtyCount === 0 && st.ahead === 0 && st.canShip === false, JSON.stringify({ d: st.dirtyCount, a: st.ahead, c: st.canShip }));
 check('报告当前分支与 base', st.branch === 'main' && st.base === 'main', `${st.branch}/${st.base}`);
-check('给出建议分支名（`<type>/<短描述>`，规则只留服务端一处）', /^chore\/\d{8}-\d{6}$/.test(st.suggest), String(st.suggest));
+check('给出建议分支名（`<type>/v<版本>-<短描述>`，规则只留服务端一处）', /^chore\/v1\.4\.0-\d{8}-\d{6}$/.test(st.suggest), String(st.suggest));
 
 fs.writeFileSync(path.join(work, 'feature.js'), 'export const x = 1;\n');
 fs.writeFileSync(path.join(work, '.env'), 'API_KEY=***\n');
@@ -195,11 +199,11 @@ check('被拦下时没有产生提交（工作树还是那三个文件）', g(['
 
 const pushed = await git.commitAndPush(row, {
   message: 'feat: 加一个功能',
-  branch: 'fix/feat-demo',
+  branch: 'fix/v1.4.0-feat-demo',
   paths: ['feature.js', 'new dir/note file.md'], // 不含 .env：只提挑中的那两个
 });
-check('推上去了：返回分支与 base', pushed.branch === 'fix/feat-demo' && pushed.base === 'main', JSON.stringify({ b: pushed.branch, base: pushed.base }));
-check('裸仓库里真有了这条分支（推送确实发生）', g(['--git-dir', bare, 'rev-parse', '--verify', 'refs/heads/fix/feat-demo'], repoRoot).length === 40);
+check('推上去了：返回分支与 base', pushed.branch === 'fix/v1.4.0-feat-demo' && pushed.base === 'main', JSON.stringify({ b: pushed.branch, base: pushed.base }));
+check('裸仓库里真有了这条分支（推送确实发生）', g(['--git-dir', bare, 'rev-parse', '--verify', 'refs/heads/fix/v1.4.0-feat-demo'], repoRoot).length === 40);
 check('提交只含挑中的两个文件', g(['-C', work, 'show', '--name-only', '--format=', 'HEAD'], work).split('\n').filter(Boolean).length === 2, g(['-C', work, 'show', '--name-only', '--format=', 'HEAD'], work).replace(/\n/g, ' | '));
 check('.env 还在工作区（没被 add -A 顺手带走）', (await git.workState(row)).dirty.some((f) => f.path === '.env'));
 check('base 分支 main 没被动（改动只落在新分支上）', g(['--git-dir', bare, 'rev-list', '--count', 'refs/heads/main'], repoRoot) === '1');
@@ -213,20 +217,20 @@ check('令牌没写进 .git/config（origin 仍是本地路径）', !fs.readFile
 /* 撞名那一档单独用**第二个仓库**测：不污染上面那棵工作树 */
 const two = makeRepo('clash');
 const row2 = (await git.connectRepo('smoke/clash', null, two.work)).repo;
-g(['-C', two.work, 'checkout', '-q', '-b', 'chore/dup'], two.work);
+g(['-C', two.work, 'checkout', '-q', '-b', 'chore/v1.4.0-dup'], two.work);
 g(['-C', two.work, '-c', 'user.name=a', '-c', 'user.email=a@example.invalid', 'commit', '-q', '--allow-empty', '-m', 'remote-side'], two.work);
-g(['-C', two.work, 'push', '-q', '-u', 'origin', 'chore/dup'], two.work);
+g(['-C', two.work, 'push', '-q', '-u', 'origin', 'chore/v1.4.0-dup'], two.work);
 /* 本地这条改成"不含远端那次提交"的历史 → 再推就是 non-fast-forward */
-g(['-C', two.work, 'checkout', '-q', '-B', 'chore/dup', 'main'], two.work);
+g(['-C', two.work, 'checkout', '-q', '-B', 'chore/v1.4.0-dup', 'main'], two.work);
 g(['-C', two.work, '-c', 'user.name=b', '-c', 'user.email=b@example.invalid', 'commit', '-q', '--allow-empty', '-m', 'local-side'], two.work);
 let clashErr = '';
 try {
-  await git.commitAndPush(row2, { branch: 'chore/dup', message: '撞名' });
+  await git.commitAndPush(row2, { branch: 'chore/v1.4.0-dup', message: '撞名' });
 } catch (e) {
   clashErr = e.message;
 }
 check('远端同名分支历史不同 → 拒绝强推并把原因原样带回', /不会强推|换一个分支名/.test(clashErr), clashErr.slice(0, 90));
-check('被拒时没有强推痕迹（远端那条还是 remote-side）', /remote-side/.test(g(['--git-dir', two.bare, 'log', '-1', '--format=%s', 'refs/heads/chore/dup'], repoRoot)));
+check('被拒时没有强推痕迹（远端那条还是 remote-side）', /remote-side/.test(g(['--git-dir', two.bare, 'log', '-1', '--format=%s', 'refs/heads/chore/v1.4.0-dup'], repoRoot)));
 
 /*
  * **回归（2026-10-25 用户实报）**：工作区里有**已暂存的重命名**（`git mv`）时，
@@ -251,13 +255,13 @@ check(
 );
 let rnErr = '';
 try {
-  await git.commitAndPush(rnRow, { branch: 'fix/rename-case', message: 'rename+delete' });
+  await git.commitAndPush(rnRow, { branch: 'fix/v1.4.0-rename-case', message: 'rename+delete' });
 } catch (e) {
   rnErr = e.message;
 }
 check('已暂存的重命名/删除 + 普通改动能一起提交（不再报 pathspec）', !rnErr, rnErr.slice(0, 100));
 check('提交后工作区干净', g(['-C', rn.work, 'status', '--porcelain'], rn.work) === '');
-const rnShow = g(['--git-dir', rn.bare, 'show', '--name-status', '-M', '--format=', 'refs/heads/fix/rename-case'], repoRoot);
+const rnShow = g(['--git-dir', rn.bare, 'show', '--name-status', '-M', '--format=', 'refs/heads/fix/v1.4.0-rename-case'], repoRoot);
 check(
   '远端那条分支里真是 R + D + M 三笔（没有把重命名拆成"新增一份"）',
   /^R100\s+a\.txt\s+b\.txt/m.test(rnShow) && /^D\s+c\.txt/m.test(rnShow) && /^M\s+d\.txt/m.test(rnShow),
@@ -282,8 +286,8 @@ check(
   (await git.workState(unRow)).dirty.some((f) => f.path === 'b.txt' && f.from === 'a.txt'),
   JSON.stringify((await git.workState(unRow)).dirty),
 );
-await git.commitAndPush(unRow, { branch: 'fix/unstaged-rename-case', message: 'unstaged rename' });
-const unShow = g(['--git-dir', un.bare, 'show', '--name-status', '-M', '--format=', 'refs/heads/fix/unstaged-rename-case'], repoRoot);
+await git.commitAndPush(unRow, { branch: 'fix/v1.4.0-unstaged-rename-case', message: 'unstaged rename' });
+const unShow = g(['--git-dir', un.bare, 'show', '--name-status', '-M', '--format=', 'refs/heads/fix/v1.4.0-unstaged-rename-case'], repoRoot);
 check('未暂存的重命名提交后仍是 rename（不是"多一份 + 旧的还在"）', /^R100\s+a\.txt\s+b\.txt/m.test(unShow), unShow.replace(/\n/g, ' | '));
 
 /*
@@ -332,27 +336,27 @@ check('脏工作区下仍停在原分支、分支没被删', g(['-C', stlDirty.w
 console.log('\n④ 建 PR：请求形状、查重、422 分档、403 指明缺哪个权限');
 
 gh.reset();
-const made = await git.createPull('smoke/demo', { head: 'fix/feat-demo', base: 'main', title: '加一个功能', body: '验证：跑了冒烟' });
-check('201 回来的是平台内部那一份形状（number/url/headRef/state）', made.created === true && made.pr.number >= 101 && /\/pull\//.test(made.pr.url) && made.pr.headRef === 'fix/feat-demo' && made.pr.state === 'open', JSON.stringify(made.pr));
+const made = await git.createPull('smoke/demo', { head: 'fix/v1.4.0-feat-demo', base: 'main', title: '加一个功能', body: '验证：跑了冒烟' });
+check('201 回来的是平台内部那一份形状（number/url/headRef/state）', made.created === true && made.pr.number >= 101 && /\/pull\//.test(made.pr.url) && made.pr.headRef === 'fix/v1.4.0-feat-demo' && made.pr.state === 'open', JSON.stringify(made.pr));
 const createCall = gh.lastHit(/^POST \/repos\/smoke\/demo\/pulls$/);
-check('请求体用 GitHub 的字段名（head/base/title/body/draft）', createCall?.body?.head === 'fix/feat-demo' && createCall?.body?.base === 'main' && createCall?.body?.draft === false, JSON.stringify(createCall?.body));
+check('请求体用 GitHub 的字段名（head/base/title/body/draft）', createCall?.body?.head === 'fix/v1.4.0-feat-demo' && createCall?.body?.base === 'main' && createCall?.body?.draft === false, JSON.stringify(createCall?.body));
 
 /*
  * 2026-10-27「PR 区域」：列表项要把"从哪来 / 能不能合 / CI 什么状态"一起带出来
  * （原来只有编号/标题/作者/headSha，界面画不出 `head → base`、也说不出合并按钮为什么按不了）。
  */
 const listed = await git.listOpenPulls('smoke/demo');
-const listedRow = listed.find((p) => p.headRef === 'fix/feat-demo');
+const listedRow = listed.find((p) => p.headRef === 'fix/v1.4.0-feat-demo');
 check(
   'PR 列表项带 baseRef / headRef / mergeable / mergeableState',
-  listedRow?.baseRef === 'main' && listedRow?.headRef === 'fix/feat-demo' && listedRow?.mergeable === true && listedRow?.mergeableState === 'clean',
+  listedRow?.baseRef === 'main' && listedRow?.headRef === 'fix/v1.4.0-feat-demo' && listedRow?.mergeable === true && listedRow?.mergeableState === 'clean',
   JSON.stringify(listedRow),
 );
 gh.seedChecks('smoke/demo', listedRow.headSha, 'success');
 const listedChecks = await git.pullChecks('smoke/demo', listedRow.headSha);
 check('pullChecks 把 check-runs 归约成 success（PR 行的 gate ✓ 就吃它）', listedChecks.state === 'success' && listedChecks.total === 1, JSON.stringify(listedChecks));
 
-const again = await git.createPull('smoke/demo', { head: 'fix/feat-demo', base: 'main', title: '又点了一次' });
+const again = await git.createPull('smoke/demo', { head: 'fix/v1.4.0-feat-demo', base: 'main', title: '又点了一次' });
 check('同一个 head 再建 → 认成"已存在"，把那个 PR 交回来（不报错、不建第二个）', again.created === false && again.pr.number === made.pr.number, JSON.stringify({ c: again.created, n: again.pr.number }));
 
 let sameRef = '';

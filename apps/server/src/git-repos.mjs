@@ -16,7 +16,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { dataDir } from './config.mjs';
+import { dataDir, repoRoot } from './config.mjs';
 import * as store from './store.mjs';
 
 const TOKEN_FILE = path.join(dataDir, 'github-token');
@@ -1495,14 +1495,31 @@ export function assertBranchName(name) {
 }
 
 /**
- * 分支名的规矩（2026-10-30）：`<type>/<短描述>`。
+ * 分支名的规矩（2026-10-30）：`<type>/v<版本>-<短描述>`，例 `fix/v1.4.1-pr-gate-smoke`。
  *
  * 老默认名是 `bandi/<标题的 ASCII 短串>-<时间戳>`，而"标题"常常是仓库名或纯中文 ——
  * 软件自己生成 `bandi/bandi-20261029-125019`：前缀重复、没类型、没语义，两个 PR 只差一串数字。
- * 类型只有下面这七个；写不出短描述就用时间戳兜重名。
+ *
+ * 版本段是**发布线**（和公司 Gitlab 规范里 `hotfix-v1.12.5` 同一个思路），不是每条分支自己升一版；
+ * 同一版本里有好几条分支靠短描述区分。仓库里没有 version.json 时不带版本段（老办法兜住）。
  */
 export const BRANCH_TYPES = ['feat', 'fix', 'chore', 'docs', 'refactor', 'test', 'perf'];
 const BRANCH_TYPE_ALT = BRANCH_TYPES.join('|');
+const SEMVER = 'v\\d+\\.\\d+\\.\\d+';
+
+/** 当前版本（`apps/desktop/version.json` / 根目录 version.json）：分支名里的版本段用它，读不到就不带 */
+function currentVersion() {
+  for (const p of [path.join(repoRoot, 'apps', 'desktop', 'version.json'), path.join(repoRoot, 'version.json')]) {
+    try {
+      const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+      const v = String(j?.version ?? '').trim();
+      if (/^\d+\.\d+\.\d+$/.test(v)) return v;
+    } catch {
+      /* 换下一个位置 */
+    }
+  }
+  return null;
+}
 
 /** 类型从哪来：先认 Conventional 前缀（`fix(server): …`），再认中文关键词，都不像就 chore */
 export function branchTypeOf(text) {
@@ -1529,27 +1546,35 @@ export function branchSlugOf(text) {
     .replace(/-+$/, '');
 }
 
-/** 建议分支名：`<type>/<短描述>`；短描述折不出来、或只剩仓库名时，用时间戳兜底 */
-export function suggestBranchName(title, at = new Date(), { repoName = '' } = {}) {
+/**
+ * 建议分支名：`<type>/v<版本>-<短描述>`；短描述折不出来、或只剩仓库名时，用时间戳兜底。
+ * 版本读不到（仓库里没有 version.json）就不带版本段。
+ */
+export function suggestBranchName(title, at = new Date(), { repoName = '', version = null } = {}) {
   const p = (n) => String(n).padStart(2, '0');
   const type = branchTypeOf(title);
   const stamp = `${at.getFullYear()}${p(at.getMonth() + 1)}${p(at.getDate())}-${p(at.getHours())}${p(at.getMinutes())}${p(at.getSeconds())}`;
   let slug = branchSlugOf(title);
   const repoSlug = branchSlugOf(repoName);
   if (slug && repoSlug && slug === repoSlug) slug = '';
-  return `${type}/${slug || stamp}`;
+  const ver = String(version ?? currentVersion() ?? '').trim();
+  const verSeg = /^\d+\.\d+\.\d+$/.test(ver) ? `v${ver}-` : '';
+  return `${type}/${verSeg}${slug || stamp}`;
 }
 
 /**
- * 新建分支时的名字闸：必须 `<type>/<短描述>`。
+ * 新建分支时的名字闸：必须 `<type>/v<版本>-<短描述>`（仓库没有版本文件时允许省掉版本段）。
  * 只对新名字生效（既有分支走 `assertBranchName` 的语法检查就够）—— 老分支只读不拦，否则连切过去都做不了。
  */
-export function assertNewBranchName(name, { repoName = '' } = {}) {
+export function assertNewBranchName(name, { repoName = '', version = null } = {}) {
   const b = assertBranchName(name);
-  const m = new RegExp(`^(${BRANCH_TYPE_ALT})/([a-z0-9][a-z0-9.-]{0,63})$`).exec(b);
+  const ver = String(version ?? currentVersion() ?? '').trim();
+  // 仓库有版本号 → 版本段必写；没有（别的仓库接进来但没 version.json）→ 允许省掉，不然没法建分支
+  const verSeg = /^\d+\.\d+\.\d+$/.test(ver) ? `${SEMVER}-` : `(?:${SEMVER}-)?`;
+  const m = new RegExp(`^(${BRANCH_TYPE_ALT})/${verSeg}([a-z0-9][a-z0-9.-]{0,63})$`).exec(b);
   if (!m) {
     throw new Error(
-      `分支名要写成 <type>/<短描述>：type 只能是 ${BRANCH_TYPES.join(' / ')}，短描述用小写英文、数字、点或横线（例：fix/pr-gate-smoke）。现在给的是「${b}」`,
+      `分支名要写成 <type>/v<版本>-<短描述>（例：fix/v1.4.1-pr-gate-smoke）：type 只能是 ${BRANCH_TYPES.join(' / ')}，版本是 x.y.z，短描述用小写英文、数字、点或横线。现在给的是「${b}」`,
     );
   }
   const repoSlug = branchSlugOf(repoName);
@@ -1571,7 +1596,6 @@ async function assertNameForCreate(cwd, name, { repoName = '' } = {}) {
   if (await branchExists(cwd, b)) return b;
   return assertNewBranchName(b, { repoName });
 }
-
 /**
  * **凭据闸**（推上去就收不回来：git 历史里的 secret 只能靠强推抹，公开仓库抹不掉）。
  *

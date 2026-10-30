@@ -5,20 +5,23 @@ description: 本仓库分支怎么起名、提交怎么写。建分支或写提�
 
 # 分支与提交：两条规则
 
-## 一、分支名：`<type>/<短描述>`
+## 一、分支名：`<type>/v<版本>-<短描述>`
 
 `type` 只能是这七个：`feat` `fix` `chore` `docs` `refactor` `test` `perf`
+
+`版本` 写 `x.y.z`，取当前发布版本（`apps/desktop/version.json`）。**它是发布线，不是每条分支自己升一版** ——
+同一版本里有多条分支，靠短描述区分。
 
 `短描述`：小写英文、数字、`.`、`-`，最长 64。全是中文写不出短描述时，用时间戳 `YYYYMMDD-HHmmss`。
 
 ```
-fix/pr-gate-smoke
-feat/branch-badge
-docs/gitlab-rule
-chore/20261030-125019
+fix/v1.4.1-pr-gate-smoke
+feat/v1.5.0-branch-badge
+docs/v1.4.1-gitlab-rule
+chore/v1.4.1-20261030-125019
 ```
 
-不许：`bandi/…`（老前缀）、`feature/x`、`test`、`123`、带大写字母。**短描述不许就是仓库名**。
+不许：`bandi/…`（老前缀）、`feature/x`、`test`、`123`、不带版本、带大写字母。**短描述不许就是仓库名**。
 
 ## 二、提交信息：`<type>(<scope>): <subject>`
 
