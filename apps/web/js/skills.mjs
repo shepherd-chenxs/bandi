@@ -1018,7 +1018,11 @@ export async function renderGitRepos(root = $('pluginView')) {
         return `<button type="button" class="gr-pr-check bad" data-pr-gate="${p.number}"
                   title="自动检查没过 —— 点开可以让我去修">检查没过 · 点这修</button>`;
       if (s === 'pending') return '<span class="gr-pr-check wait" title="还在跑">检查中</span>';
-      if (s === 'none') return '<span class="gr-pr-check none" title="这条提交没有检查">无检查</span>';
+      /*
+       * `none` = 这条 head 上**还没有任何检查结果**（刚建 PR、workflow 还没起，或仓库没配 CI）。
+       * 不能当"可以合"：main 有分支保护，没检查一样会被 GitHub 拒 —— 见 blockReason。
+       */
+      if (s === 'none') return '<span class="gr-pr-check none" title="这条提交上还没有检查结果 —— 刚建的 PR 等 gate 起来">检查未开始</span>';
       return `<button type="button" class="gr-pr-check none" data-pr-gate="${p.number}"
                 title="没查到检查状态（网络/权限）—— 点开看明细">检查未知</button>`;
     };
@@ -1030,6 +1034,12 @@ export async function renderGitRepos(root = $('pluginView')) {
       if (p.mergeableState === 'blocked') return '被分支保护规则挡着';
       if (p.checks?.state === 'pending') return '检查还在跑，等 gate 绿了再合';
       if (p.checks?.state === 'failure') return '检查没过（gate 红了），合并会被 GitHub 拒绝';
+      /*
+       * 2026-10-30 用户实报（#48 刚建完就出现在「合并」区）：`none` 不是"能合"，是"检查还没起来"。
+       * 刚建的 PR 会先落在这一档（gate 起跑前有几秒到几十秒），归进「审核」等它；
+       * 没配 CI 的仓库同理 —— 那本来就该去 GitHub 上看着合，不该在「可以合」里假装就绪。
+       */
+      if (p.checks?.state === 'none') return '这条提交上还没有检查结果 —— 等 gate 起来（刚建的 PR 一般几十秒）';
       if (p.checks?.state === 'unknown') return null; // 没拿到检查状态不拦 —— 由 GitHub 自己判，失败原话带回
       return null;
     };
@@ -1155,7 +1165,7 @@ export async function renderGitRepos(root = $('pluginView')) {
     if (reviewBox?.isConnected) {
       reviewBox.innerHTML = listHtml(
         reviewPrs,
-        prs.length ? '没有审核中的 PR —— 检查在跑 / 红了 / 有冲突的会出现在这里' : '还没有 PR',
+        prs.length ? '没有审核中的 PR —— 检查还没起来 / 在跑 / 红了 / 有冲突的会出现在这里' : '还没有 PR',
       );
     }
     if (mergeBox?.isConnected) {
