@@ -2001,8 +2001,14 @@ dialog#repoPrDlg { width: 660px; height: min(720px, 92vh); max-height: 92vh;
    分支 pill / 改动卡（单文件 diff + 丢弃 + 提交）/ 历史卡。
    pill 是 createCombo（全站公共下拉）套了个胶囊皮：搜索、分组、✓ 全是现成的。 */
 .gr-branch { display: inline-flex; max-width: 300px; vertical-align: middle; }
+/* 分支 pill（2026-10-30 用户："把边框去掉，左边加图标，像是idea那样"）：
+   无边框无底色、悬停只浮一层淡底 —— 跟 VS Code / IDEA 的分支切换器一个气质；
+   图标（.combo-btn-ic）降灰，让分支名当主角。 */
 .gr-branch .combo-btn { width: auto; height: 26px; padding: 0 10px; gap: 6px;
-                        border-radius: 999px; background: var(--side); font-size: 12px; }
+                        border-color: transparent; background: transparent; }
+.gr-branch .combo-btn:hover { border-color: transparent; background: var(--hover); }
+.gr-branch .combo-btn-ic { flex: 0 0 auto; display: inline-flex; color: var(--dim); }
+.gr-branch .combo-btn-ic svg { width: 14px; height: 14px; }
 .gr-branch .combo-text { font-family: ui-monospace, monospace; font-size: 11.5px; }
 .gr-branch .combo-chev { width: 5px; height: 5px; margin-right: 0; }
 /* 分支弹窗比通用下拉大一档（2026-10-27 用户："大一些"）：分支名长（bandi/xxx-时间戳）、
@@ -2013,7 +2019,8 @@ dialog#repoPrDlg { width: 660px; height: min(720px, 92vh); max-height: 92vh;
 .gr-branch .combo-pop { width: 440px; min-width: 0; max-width: min(440px, 92vw); }
 .gr-branch .combo-pop input { font-size: 13px; padding: 8px 10px; }
 .gr-branch .combo-list { height: min(420px, 62vh); max-height: none; }
-.gr-branch .combo-item { padding: 8px 10px; }
+/* 分支行右内边距收窄（2026-10-30 用户："箭头与右边界的间隙减小"）：只收右侧，左对齐不动 */
+.gr-branch .combo-item { padding: 8px 4px 8px 10px; }
 /* 左名右源截断规则（2026-10-27 二调，用户："左边的要显示全，右边的可以加..."）：
    左边本地名 flex-shrink:0 —— 按内容走全宽，永不截断；
    右边远程名 margin-left:auto 顶到行右 + 允许收缩（min-width:0 是省略号生效的前提），
@@ -2148,7 +2155,7 @@ dialog#repoPrDlg { width: 660px; height: min(720px, 92vh); max-height: 92vh;
    表头吸顶、条数多了表内滚动，列宽固定好对齐着比。 */
 .gr-pulls-refresh { margin-left: auto; white-space: nowrap; flex: 0 0 auto; }
 .gr-pr-table { border: 1px solid var(--line); border-radius: 9px; overflow: auto; max-height: 420px; }
-.gr-pr-tr { display: grid; grid-template-columns: minmax(0, 1fr) 176px 84px 124px 76px;
+.gr-pr-tr { display: grid; grid-template-columns: minmax(0, 1fr) 232px 120px 124px 76px;
             align-items: center; gap: 10px; padding: 7px 10px; min-width: 660px; }
 .gr-pr-tr + .gr-pr-tr { border-top: 1px solid var(--line); }
 .gr-pr-th { position: sticky; top: 0; z-index: 1; background: var(--side);
@@ -2164,9 +2171,16 @@ dialog#repoPrDlg { width: 660px; height: min(720px, 92vh); max-height: 92vh;
               overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gr-pr-who { font-size: 12px; color: var(--dim);
              overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.gr-pr-link { display: inline-block; margin-top: 2px; font-size: 11px; color: var(--accent); text-decoration: none; }
-.gr-pr-link:hover { text-decoration: underline; }
-.gr-pr-c5 { text-align: right; }
+/* PR 标题本体就是 GitHub 链接（2026-10-30 用户："要么把 PR 标题做成可点击"；原「去 GitHub 看」小链接删了） */
+.gr-pr-title-link { color: inherit; text-decoration: none; }
+.gr-pr-title-link:hover { color: var(--accent); text-decoration: underline; }
+/* 末列（2026-10-30 用户："未通过时加处理按钮"）：处理 + 合并并排、贴右 */
+.gr-pr-c5 { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+/* 表头最后一列「操作」居中（2026-10-30 用户："这个是标题啊，居中"） */
+.gr-pr-th span:last-child { text-align: center; }
+/* 表格末列的「合并」钮：显式钉死"宽随文字 + 不折行"（2026-10-30 用户截图：两个汉字竖排折行）——
+   .mini.auto 的 width:auto 在这一列没顶住 .mini 的 26px 定宽时就会一字一行，这里用更高优先级压回去 */
+.gr-pr-c5 .mini.auto { width: auto; padding: 0 12px; font-size: 12.5px; line-height: 1; white-space: nowrap; }
 .gr-pr-check { font-size: 11px; padding: 1px 7px; border-radius: 99px;
                border: 1px solid var(--line); white-space: nowrap; }
 .gr-pr-check.ok { color: var(--ok); border-color: var(--ok); }
@@ -2201,15 +2215,14 @@ button.gr-pr-check:hover { background: var(--side); }
 .gr-cell-ops .mini[disabled] { opacity: .45; cursor: not-allowed; }
 .gr-set-remove { color: var(--bad); }
 
-/* 分支管理弹窗（2026-10-27）：列表行两个动作 + 「与 base 比较」的文件清单。
-   行结构借用 .sk-row（主从页的清单行），这里只压一下间距、把分支名换成等宽。 */
-#grBrmBody { max-height: 58vh; overflow: auto; }
-.gr-br-row { padding: 7px 10px; align-items: center; }
-.gr-br-row .gr-cell-ops { margin-left: auto; }
-.gr-br-row .sk-main b { font-family: ui-monospace, monospace; font-size: 12.5px; }
+/* 「与 base 比较」弹窗（2026-10-30：从「分支管理」里抽出来，右键分支 → 比较）：
+   文件清单点一行懒取该文件 diff。 */
+#grBrCmpBody { max-height: 58vh; overflow: auto; }
 .gr-br-cmp { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .gr-br-file { padding-left: 12px; }
 .gr-br-file:hover { background: var(--hover); }
+
+/* 分支右键菜单复用全站那一套（#ctxMenu，见 listmenu.mjs）：样式在「列表项右键菜单」那段，不另起一份 */
 
 /* keeperDlg 候选行：跟 .member（拉人进群）同一套节奏，但这是单选 —— 点行即选即关 */
 .k-row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px;
@@ -2695,6 +2708,13 @@ input, select, textarea { width: 100%; background: var(--input); color: var(--te
               font-family: ui-monospace, monospace; }
 .combo-item:hover, .combo-item.hi { background: var(--hover); }
 .combo-check { flex: 0 0 auto; color: var(--accent); font-size: 12px; line-height: 1; }
+/* 分支行尾的二级菜单箭头（2026-10-30 用户："加个小箭头，点击展示二级菜单，就是 IDEA 的这种效果"）：
+   点它只开这条分支的菜单，不选分支（ui.mjs 里把选中事件 stopPropagation 掉了）。 */
+.combo-more { flex: 0 0 auto; width: 16px; height: 16px; padding: 0; border: 0; border-radius: 4px;
+              background: none; color: var(--dim); font: inherit; font-size: 13px; line-height: 1;
+              cursor: pointer; opacity: .55; transition: opacity .12s, background .12s; }
+.combo-item:hover .combo-more, .combo-item.hi .combo-more { opacity: 1; }
+.combo-more:hover { background: var(--line); color: var(--text); }
 .combo-empty { padding: 8px 9px; font-size: 12.5px; color: var(--dim); }
 /* 可折叠分组标题（分支弹窗用，item 带 foldable 才有）：IDE 同款描边 chevron，收起转 90°。
    用 mask + currentColor 而不是文字符号 ▾/▸（2026-10-27 用户："原来的那个太小了"）：
