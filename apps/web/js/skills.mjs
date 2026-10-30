@@ -1018,7 +1018,11 @@ export async function renderGitRepos(root = $('pluginView')) {
         return `<button type="button" class="gr-pr-check bad" data-pr-gate="${p.number}"
                   title="自动检查没过 —— 点开可以让我去修">检查没过 · 点这修</button>`;
       if (s === 'pending') return '<span class="gr-pr-check wait" title="还在跑">检查中</span>';
-      if (s === 'none') return '<span class="gr-pr-check none" title="这条提交没有检查">无检查</span>';
+      /*
+       * `none` = 这条 head 上**还没有任何检查结果**（刚建 PR、workflow 还没起，或仓库没配 CI）。
+       * 不能当"可以合"：main 有分支保护，没检查一样会被 GitHub 拒 —— 见 blockReason。
+       */
+      if (s === 'none') return '<span class="gr-pr-check none" title="这条提交上还没有检查结果 —— 刚建的 PR 等 gate 起来">检查未开始</span>';
       return `<button type="button" class="gr-pr-check none" data-pr-gate="${p.number}"
                 title="没查到检查状态（网络/权限）—— 点开看明细">检查未知</button>`;
     };
@@ -1030,15 +1034,26 @@ export async function renderGitRepos(root = $('pluginView')) {
       if (p.mergeableState === 'blocked') return '被分支保护规则挡着';
       if (p.checks?.state === 'pending') return '检查还在跑，等 gate 绿了再合';
       if (p.checks?.state === 'failure') return '检查没过（gate 红了），合并会被 GitHub 拒绝';
+      /*
+       * 2026-10-30 用户实报（#48 刚建完就出现在「合并」区）：`none` 不是"能合"，是"检查还没起来"。
+       * 刚建的 PR 会先落在这一档（gate 起跑前有几秒到几十秒），归进「审核」等它；
+       * 没配 CI 的仓库同理 —— 那本来就该去 GitHub 上看着合，不该在「可以合」里假装就绪。
+       */
+      if (p.checks?.state === 'none') return '这条提交上还没有检查结果 —— 等 gate 起来（刚建的 PR 一般几十秒）';
       if (p.checks?.state === 'unknown') return null; // 没拿到检查状态不拦 —— 由 GitHub 自己判，失败原话带回
       return null;
     };
 
+    /*
+     * PR 清单用**表格**（2026-10-30 用户："做成表格的方式，人多了会有很多个 PR"）。
+     * 一行一条、五列（PR / 分支 / 作者 / 检查 / 合并），表头吸顶、条数多了表内滚动 ——
+     * 不再一条一张卡把页面撑得老长；列宽固定，扫一眼就能对齐着比。
+     */
     const rowHtml = (p) => {
       const why = blockReason(p);
       const isMine = p.headRef && p.headRef === cur;
-      return `<div class="gr-pr-row">
-          <div class="gr-pr-main">
+      return `<div class="gr-pr-tr">
+          <div class="gr-pr-c1">
             <div class="gr-pr-title"><b>#${p.number}</b> ${esc(p.title)}
               ${p.draft ? '<span class="pill">草稿</span>' : ''}
               ${isMine ? '<span class="pill">当前分支</span>' : ''}
@@ -1047,21 +1062,21 @@ export async function renderGitRepos(root = $('pluginView')) {
                     title="打开关联的任务卡">已关联卡</button>` : ''}
               ${p.mergeableState === 'dirty' ? '<span class="pill bad">有冲突</span>' : ''}
             </div>
-            <div class="gr-pr-sub">
-              <span class="gr-pr-refs">${esc(p.headRef || '?')} → ${esc(p.baseRef || '?')}</span>
-              <span class="dim">· ${esc(p.author || '?')}</span>
-              <a href="${esc(p.url)}" target="_blank" rel="noreferrer">去 GitHub 看</a>
-            </div>
+            <a class="gr-pr-link" href="${esc(p.url)}" target="_blank" rel="noreferrer">去 GitHub 看</a>
           </div>
-          <div class="gr-cell-ops">
-            <!-- 检查徽标（含「检查没过 · 点这修」按钮）2026-10-29 用户："按钮放右边"：
-                 从副行文字中间挪进右侧操作列，竖排在「合并」上面 —— 副行只留信息，动作都靠右 -->
-            <div class="gr-ops-check">${checkPill(p)}</div>
+          <div class="gr-pr-refs">${esc(p.headRef || '?')} → ${esc(p.baseRef || '?')}</div>
+          <div class="gr-pr-who">${esc(p.author || '?')}</div>
+          <div class="gr-pr-c4">${checkPill(p)}</div>
+          <div class="gr-pr-c5">
+            <!-- 合并按钮钉在最后一列（2026-10-29 用户："按钮放右边"） -->
             <button type="button" class="mini auto" data-pr-merge="${p.number}"
                     ${why ? `disabled title="${esc(why)}"` : 'title="合并进 base（走平台令牌；本地会自动收尾）"'}>合并</button>
           </div>
         </div>`;
     };
+    const tableHead = `<div class="gr-pr-tr gr-pr-th">
+        <span>PR</span><span>分支</span><span>作者</span><span>检查</span><span></span>
+      </div>`;
 
     /*
      * PR 分三组（2026-10-27 用户："需要建 PR、审核中的、等待合并的分开一下"）：
@@ -1133,26 +1148,31 @@ export async function renderGitRepos(root = $('pluginView')) {
     }
 
     const ctaGroup = cta ? groupHtml('待建 PR', cta, 1) : '';
-    const reviewGroup = groupHtml('审核中', reviewPrs.map(rowHtml).join(''), reviewPrs.length);
-    const mergeGroup = groupHtml('等待合并', mergePrs.map(rowHtml).join(''), mergePrs.length);
+    /* 两块 PR 清单都套上同一份表头；空态给一句话（不再是"一个 PR 一张卡"） */
+    const listHtml = (prsIn, emptyText) =>
+      prsIn.length
+        ? `<div class="gr-pr-table">${tableHead}${prsIn.map(rowHtml).join('')}</div>`
+        : `<div class="sk-blank">${emptyText}</div>`;
     if (head?.isConnected) head.textContent = prs.length ? `${prs.length} 条 PR` : '';
     if (reviewHead?.isConnected) reviewHead.textContent = reviewPrs.length ? `${reviewPrs.length} 条审核中` : '暂无';
     if (mergeHead?.isConnected) mergeHead.textContent = mergePrs.length ? `${mergePrs.length} 条可以合` : '暂无';
 
     /* 三张卡各管一段（2026-10-29 五改）：拉取请求 = 待建 CTA；审核 = 还合不了的；合并 = 能合的。
-       卡标题已经说了是哪一段，里面不再套「审核中 / 等待合并」分组头 —— 一层就够了。 */
+       卡标题已经说了是哪一段，里面不再套分组头 —— 一层就够了。 */
     box.innerHTML =
       ctaGroup ||
       `<div class="sk-blank">${prs.length ? '当前分支没有待建的 PR —— 有新提交时这里会出现「建 PR」' : '没有进行中的 PR —— 建 PR 后会出现在这里'}</div>`;
     if (reviewBox?.isConnected) {
-      reviewBox.innerHTML =
-        reviewPrs.map(rowHtml).join('') ||
-        `<div class="sk-blank">${prs.length ? '没有审核中的 PR —— 检查在跑 / 红了 / 有冲突的会出现在这里' : '还没有 PR'}</div>`;
+      reviewBox.innerHTML = listHtml(
+        reviewPrs,
+        prs.length ? '没有审核中的 PR —— 检查还没起来 / 在跑 / 红了 / 有冲突的会出现在这里' : '还没有 PR',
+      );
     }
     if (mergeBox?.isConnected) {
-      mergeBox.innerHTML =
-        mergePrs.map(rowHtml).join('') ||
-        `<div class="sk-blank">${prs.length ? '没有等待合并的 PR —— 检查通过、没有冲突的才会出现在这里' : '还没有 PR'}</div>`;
+      mergeBox.innerHTML = listHtml(
+        mergePrs,
+        prs.length ? '没有等待合并的 PR —— 检查通过、没有冲突的才会出现在这里' : '还没有 PR',
+      );
     }
 
     /*

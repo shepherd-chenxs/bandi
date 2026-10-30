@@ -2144,22 +2144,29 @@ dialog#repoPrDlg { width: 660px; height: min(720px, 92vh); max-height: 92vh;
 .gr-log-who { flex: 0 0 auto; font-size: 11.5px; color: var(--dim); }
 
 /* 代码托管：拉取请求区（2026-10-27，PR 从「建 PR 弹窗下半屏」搬成常驻区域）。
-   每行 = 标题(+徽标) / `head → base` + 作者 + gate + 去 GitHub / 右侧合并按钮；
-   没有 PR 时要么一行空态，要么「当前分支还没有 PR」的 CTA。 */
+   2026-10-30 用户："做成表格的方式，人多了会有很多个 PR" —— 一条一张卡改成五列表格：
+   表头吸顶、条数多了表内滚动，列宽固定好对齐着比。 */
 .gr-pulls-refresh { margin-left: auto; white-space: nowrap; flex: 0 0 auto; }
-.gr-pr-row { display: flex; align-items: flex-start; gap: 12px; padding: 10px 12px; min-width: 0; }
-.gr-pr-row + .gr-pr-row { border-top: 1px dashed var(--line); }
-.gr-pr-main { flex: 1; min-width: 0; }
+.gr-pr-table { border: 1px solid var(--line); border-radius: 9px; overflow: auto; max-height: 420px; }
+.gr-pr-tr { display: grid; grid-template-columns: minmax(0, 1fr) 176px 84px 124px 76px;
+            align-items: center; gap: 10px; padding: 7px 10px; min-width: 660px; }
+.gr-pr-tr + .gr-pr-tr { border-top: 1px solid var(--line); }
+.gr-pr-th { position: sticky; top: 0; z-index: 1; background: var(--side);
+            font-size: 11px; color: var(--dim); letter-spacing: .02em; padding: 6px 10px; border-top: 0; }
+.gr-pr-tr:not(.gr-pr-th):hover { background: var(--side); }
+.gr-pr-c1 { min-width: 0; }
 .gr-pr-title { font-size: 13.5px; font-weight: 500; min-width: 0;
               overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gr-pr-title b { font-family: ui-monospace, monospace; font-size: 12.5px; color: var(--accent); margin-right: 2px; }
 .gr-pr-title .pill { margin-left: 6px; }
 .gr-pr-title .pill.bad { color: var(--bad); }
-.gr-pr-sub { display: flex; align-items: center; gap: 8px; margin-top: 4px;
-             font-size: 12px; min-width: 0; flex-wrap: wrap; }
-.gr-pr-refs { font-family: ui-monospace, monospace; font-size: 11.5px; color: var(--dim); }
-.gr-pr-sub a { color: var(--accent); text-decoration: none; }
-.gr-pr-sub a:hover { text-decoration: underline; }
+.gr-pr-refs { font-family: ui-monospace, monospace; font-size: 11.5px; color: var(--dim);
+              overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gr-pr-who { font-size: 12px; color: var(--dim);
+             overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gr-pr-link { display: inline-block; margin-top: 2px; font-size: 11px; color: var(--accent); text-decoration: none; }
+.gr-pr-link:hover { text-decoration: underline; }
+.gr-pr-c5 { text-align: right; }
 .gr-pr-check { font-size: 11px; padding: 1px 7px; border-radius: 99px;
                border: 1px solid var(--line); white-space: nowrap; }
 .gr-pr-check.ok { color: var(--ok); border-color: var(--ok); }
@@ -2170,9 +2177,7 @@ dialog#repoPrDlg { width: 660px; height: min(720px, 92vh); max-height: 92vh;
    视觉还是那颗小徽标，但 hover 提示"点得动" —— 点开 gate 明细弹窗。 */
 button.gr-pr-check { cursor: pointer; background: none; font: inherit; }
 button.gr-pr-check:hover { background: var(--side); }
-/* 检查徽标挪进右侧操作列（2026-10-29 用户："按钮放右边"）：竖排在「合并」上面，右对齐 */
-.gr-ops-check { margin-bottom: 6px; }
-.gr-ops-check .gr-pr-check { display: inline-block; vertical-align: middle; }
+/* 检查徽标在表格的第 4 列（2026-10-30 改表格后不再竖排） */
 /* 检查没过的弹窗（2026-10-29 七改，用户："这些去掉……这里放一个处理人，选择之后点击确定，就开始修复"）：
    弹窗只剩三样 —— 结果标题 / 处理人下拉 / 确定。技术细节与修复指引全撤（那些不是用户关心的）。
    确定 = 服务端建一张任务卡派给这个人。 */
