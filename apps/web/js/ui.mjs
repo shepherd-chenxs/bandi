@@ -456,20 +456,34 @@ export function createCombo({
             pi += 1;
             /*
              * 条目右侧信息（2026-10-27，IDEA 分支弹窗同款）：
-             *   · `badge`（↑1/↓2）跟在名字后面 —— 分支领先/落后上游几个提交；
-             *   · `hint`（origin/main）靠右、降灰 —— 这一行分支跟踪的是哪个远程分支。
-             * 两者都是可选的，别的下拉不传 = 跟以前逐字一样。
+             *   · `badge`（↗1/↙2）跟在名字后面 —— 分支领先/落后上游几个提交；
+             *   · `hint`（origin/main）靠右、降灰 —— 这一行分支跟踪的是哪个远程分支；
+             *   · `menu`（2026-10-30，IDEA 那种小箭头）—— 行尾一颗 `›`，点开是这条分支的二级菜单。
+             * 都是可选的，别的下拉不传 = 跟以前逐字一样。
              */
             return `<div class="combo-item ${it.cls ?? ''} ${it.sub ? 'sub ' : ''}${pi === hi ? 'hi' : ''}" data-pick="${esc(it.id)}">
                  ${it.icon ? `<span class="combo-ic">${it.icon}</span>` : ''}
                  <span class="combo-item-label">${esc(it.label)}${it.badge ? `<span class="combo-badge">${esc(it.badge)}</span>` : ''}</span>
                  ${it.hint ? `<span class="combo-hint" title="${esc(it.hint)}">${esc(it.hint)}</span>` : ''}
                  ${it.id === current ? '<span class="combo-check">✓</span>' : ''}
+                 ${it.menu ? '<button type="button" class="combo-more" aria-label="更多操作" title="这条分支的更多操作">›</button>' : ''}
                </div>`;
           })
           .join('')
       : `<div class="combo-empty">${esc(empty)}</div>`;
     list.querySelectorAll('[data-pick]').forEach((el) => { el.onclick = () => pick(el.dataset.pick); });
+    /*
+     * 行尾那颗 `›`（2026-10-30，IDEA 分支弹窗同款）：点它**不是**选这条分支，是开这条分支的二级菜单。
+     * 所以这里 stopPropagation 掉"选中"，再用一个自定义事件交给页面处理（页面只认"给我一个 id 和位置"）。
+     */
+    list.querySelectorAll('.combo-more').forEach((b) => {
+      b.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const item = b.closest('.combo-item');
+        root.dispatchEvent(new CustomEvent('combo-menu', { detail: { id: item?.dataset.pick ?? '', el: b } }));
+      });
+    });
     list.querySelectorAll('[data-fold]').forEach((el) => {
       el.onclick = () => {
         const k = el.dataset.fold;

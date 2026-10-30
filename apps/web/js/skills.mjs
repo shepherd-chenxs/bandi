@@ -1434,15 +1434,15 @@ export async function renderGitRepos(root = $('pluginView')) {
       ? [
           { header: '最近', foldable: true },
           ...folderize(
-            b.recent.map((n) => ({ id: n, name: n, ...branchMeta(b, n) })),
+            b.recent.map((n) => ({ id: n, name: n, menu: true, ...branchMeta(b, n) })),
             '最近',
             { keep: true },
           ),
         ]
       : []),
     { header: '本地分支', foldable: true },
-    ...folderize((b.local ?? []).map((n) => ({ id: n, name: n, ...branchMeta(b, n) })), '本地'),
-    ...(b.remote?.length ? [{ header: '远程分支', foldable: true }, ...folderize((b.remote ?? []).map((n) => ({ id: n, name: n.replace(/^origin\//, '') })), '远程')] : []),
+    ...folderize((b.local ?? []).map((n) => ({ id: n, name: n, menu: true, ...branchMeta(b, n) })), '本地'),
+    ...(b.remote?.length ? [{ header: '远程分支', foldable: true }, ...folderize((b.remote ?? []).map((n) => ({ id: n, name: n.replace(/^origin\//, ''), menu: true })), '远程')] : []),
     ...(b.tags?.length ? [{ header: '标签', foldable: true }, ...b.tags.map((n) => ({ id: `tag:${n}`, label: n, icon: ICON_TAG, cls: 'br' }))] : []),
   ];
 
@@ -1495,19 +1495,21 @@ export async function renderGitRepos(root = $('pluginView')) {
     });
 
     /*
-     * 分支行右键菜单（2026-10-30 用户："分支管理这个功能没有必要，要删除的话改成右键分支显示删除选项"）：
-     * 「分支管理」那个弹窗撤了，比较 / 删除直接长在分支自己身上 —— 对着哪条分支点右键，就是哪条分支的动作。
-     * 左键照旧是切分支（会先弹确认，不是点一下就切走）。
+     * 分支行的二级菜单（2026-10-30 用户："不使用右键了，直接加小箭头，点击展示二级菜单，就是 IDEA 的这种效果"）：
+     * 行尾那颗 `›` 由 combo 自己画（item.menu），点了只开菜单，不选分支 —— 事件从 ui.mjs 的
+     * `combo-menu` 事件过来，这里只管"哪条分支、开在哪儿"。
      */
-    combo.el.addEventListener('contextmenu', (ev) => {
-      const rowEl = ev.target.closest?.('.combo-item[data-pick]');
-      if (!rowEl) return;
-      const id = rowEl.dataset.pick ?? '';
-      if (!id || id.startsWith('__op-') || id.startsWith('tag:')) return; // 操作项与标签没有分支菜单
-      ev.preventDefault();
+    combo.el.addEventListener('combo-menu', (ev) => {
+      const id = ev.detail?.id ?? '';
+      if (!id) return;
       const remote = id.startsWith('origin/');
       const name = remote ? id.slice('origin/'.length) : id;
-      openBranchMenu(repo, ev, { name, remote, cur: state.branch ?? '' });
+      const rect = ev.detail?.el?.getBoundingClientRect?.();
+      openBranchMenu(
+        repo,
+        { x: rect ? rect.left : 0, y: rect ? rect.bottom + 2 : 0 },
+        { name, remote, cur: state.branch ?? '' },
+      );
     });
 
     const dirty = state.dirty ?? [];
@@ -1902,19 +1904,7 @@ export async function renderGitRepos(root = $('pluginView')) {
   }
 
   /**
-   * 分支管理弹窗（2026-10-27）：把 IDEA 右击菜单里**对班底真有价值的两条**单独放一处 ——
-   * 「与 base 比较」（只读）和「删分支」（本地 / 远端）。
-   *
-   * 为什么不做右击菜单：Web 里右击是浏览器/系统的（复制、检查…），抢它要拦 contextmenu，
-   * 还跟"文本可选中"打架；也不把「删」塞进分支下拉的每一行 —— 那里点一下就是切分支，
-   * 误点的代价完全不对称。所以收进一颗「分支管理…」：列表 → 每条两个动作，删除单独二次确认。
-   *
-   * 两条动作的护栏都在服务端（这里只是把话说清楚）：
-   *   · 比较：三点 diff（base...分支），只读；
-   *   · 删除：不能删 base / 当前分支；必须已合并进 base；远端只删 bandi/ 开头且没有开着的 PR。
-   */
-  /**
-   * 与 base 比较（2026-10-30 从「分支管理」弹窗里抽出来）：右键分支 → 比较。
+   * 与 base 比较：从分支行尾那颗 `›` 的二级菜单进来。
    * 文件清单点一行懒取该文件 diff，收起不销毁、再点不再拉。
    */
   function openBranchCompareDlg(repo, branch) {
@@ -1992,7 +1982,7 @@ export async function renderGitRepos(root = $('pluginView')) {
     })();
   }
 
-  /** 删一条分支（右键菜单的动作）：确认里把"为什么可能被拒"说清，失败原话带回 */
+  /** 删一条分支（分支行尾 `›` 菜单里的动作）：确认里把"为什么可能被拒"说清，失败原话带回 */
   async function deleteBranchByMenu(repo, name, remote) {
     const base = repos.find((r) => r.id === repo.id)?.defaultBranch || 'main';
     const ok = await confirmDo(
@@ -2013,11 +2003,11 @@ export async function renderGitRepos(root = $('pluginView')) {
   }
 
   /**
-   * 分支右键菜单（2026-10-30 用户："分支管理这个功能没有必要，要删除的话改成右键分支显示删除选项"）。
+   * 分支的二级菜单（2026-10-30 用户："加个小箭头，点击展示二级菜单，就是 IDEA 的这种效果"）。
    * 里面只放"对这条分支做的事"：比较（base 自己不用比）、删除（当前 / base 不给；远端只给平台建的分支）。
    * 一个能点的都没有就不弹 —— 空白菜单比没有菜单更让人困惑。
    */
-  function openBranchMenu(repo, ev, { name, remote, cur }) {
+  function openBranchMenu(repo, pos, { name, remote, cur }) {
     const base = repos.find((r) => r.id === repo.id)?.defaultBranch || 'main';
     const isBase = name === base;
     const isCur = !remote && name === cur;
@@ -2033,7 +2023,7 @@ export async function renderGitRepos(root = $('pluginView')) {
       items.push({ label: '删除远端分支…', danger: true, run: () => deleteBranchByMenu(repo, name, true) });
     }
     if (!items.length) return; // 一个动作都没有就不弹 —— 空白菜单更让人困惑
-    openCtxMenu(ev.clientX, ev.clientY, items);
+    openCtxMenu(pos.x, pos.y, items);
   }
 
   async function fillLog(repo) {
