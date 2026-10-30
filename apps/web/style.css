@@ -2079,7 +2079,10 @@ dialog#repoPrDlg { width: 660px; height: min(720px, 92vh); max-height: 92vh;
 .gr-cb-tip b { color: var(--text); font-weight: 600; font-family: ui-monospace, monospace; }
 .gr-cb-warn { color: var(--warn); }
 /* 分支命名规矩那一行提示：`<type>/<短描述>` —— 只提示，不拦输入，挡在服务端 */
-.gr-cb-hint { font-size: 11px; line-height: 1.5; color: var(--dim); }
+/* 只占一行、超出省略（2026-10-30 用户："你那个提示会把原来的样式挤压变形"）：
+   完整规则在 title 里，悬停能看全 —— 提示不该把提交卡撑高、把输入框挤窄。 */
+.gr-cb-hint { font-size: 11px; line-height: 1.4; color: var(--dim);
+              max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .gr-cb-hint code { font-family: ui-monospace, monospace; color: var(--text); }
 .gr-commit-base input { width: 100%; font-family: ui-monospace, monospace; font-size: 12px; }
 /* 行右缩进（2026-10-27 二调：用户"折叠区的条目再往右缩进"）：文件行比组标题深两级 ——

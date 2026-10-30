@@ -1598,9 +1598,9 @@ export async function renderGitRepos(root = $('pluginView')) {
     const onBase = !!state.onBase;
     const branchRow = onBase
       ? `<div class="gr-commit-base">
-          <div class="gr-cb-tip">你在主分支 <b>${esc(state.base)}</b> 上 —— <span class="gr-cb-warn">主分支不收本地提交</span>。这次会先建一条分支，改动落在它上面：</div>
+          <div class="gr-cb-tip">你在默认分支 <b>${esc(state.base)}</b> 上 —— <span class="gr-cb-warn">默认分支不收本地提交</span>。这次会先建一条分支，改动落在它上面：</div>
           <input id="grCommitBranch" value="${esc(state.suggest ?? '')}" autocomplete="off" spellcheck="false" aria-label="新分支名" placeholder="例如：fix/v1.4.1-pr-gate-smoke" />
-          <div class="gr-cb-hint">命名：<code>&lt;type&gt;/v&lt;版本&gt;-&lt;短描述&gt;</code>，type 用 feat / fix / chore / docs / refactor / test / perf；版本取当前版本（服务端按这条校验）</div>
+          <div class="gr-cb-hint" title="分支名 = &lt;type&gt;/v&lt;版本&gt;-&lt;短描述&gt;。type 只能是 feat / fix / chore / docs / refactor / test / perf；版本取该仓库的 version.json（没有就不带版本段）">命名：<code>&lt;type&gt;/v&lt;版本&gt;-&lt;短描述&gt;</code>（服务端按这条校验）</div>
         </div>`
       : '';
     box.innerHTML = `
@@ -1860,7 +1860,7 @@ export async function renderGitRepos(root = $('pluginView')) {
         <b>新建分支</b>
         <label>分支名（从当前所在位置拉出）：<code>&lt;type&gt;/v&lt;版本&gt;-&lt;短描述&gt;</code></label>
         <input id="grNewBranchName" placeholder="例如：feat/v1.5.0-search、fix/v1.4.1-pr-gate-smoke" autocomplete="off" />
-        <div class="gr-cb-hint">type 只能是 feat / fix / chore / docs / refactor / test / perf；版本写 x.y.z；短描述用小写英文、数字、点或横线。</div>
+        <div class="gr-cb-hint" title="type 只能是 feat / fix / chore / docs / refactor / test / perf；版本写 x.y.z（取该仓库的版本）；短描述用小写英文、数字、点或横线。">type 限 feat / fix / chore / docs / refactor / test / perf，短描述用小写英文</div>
         <div class="dlg-actions">
           <button type="button" value="cancel">取消</button>
           <button class="primary" id="grNewBranchGo">建并切过去</button>

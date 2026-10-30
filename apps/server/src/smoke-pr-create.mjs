@@ -126,6 +126,18 @@ check('短描述不许就是仓库名（老 bandi/bandi-<戳> 的病根）', /^c
 check('仓库没有版本号时不带版本段（别的仓库接进来也能建分支）', /^fix\/pr-gate-smoke$/.test(git.suggestBranchName('fix(server): pr gate smoke', new Date(), { version: '' })));
 check('新分支名必须 <type>/v<版本>-<短描述>：老前缀 / 错拼 / 没类型 / 没版本 / 大写都拒', rejectedNew(['bandi/old-style', 'andi/x', 'test', '123', 'feat/pr-x', 'feat/Bad', 'feature/x', 'feat/v1.4-pr-x', 'feat/v1.4.0/x']).length === 9);
 check('合规的新分支名放行', ['fix/v1.4.1-pr-gate-smoke', 'feat/v1.5.0-a1', 'chore/v1.4.0-20261030-125019', 'docs/v1.4.1-readme', 'test/v1.4.0-smoke'].every((b) => git.assertNewBranchName(b, { repoName: 'bandi', version: V }) === b));
+/*
+ * 2026-10-30 实报：托管进来的「交鉴」被建议成 docs/v1.4.0-v1-9-0 —— v1.4.0 是**班底自己**的版本。
+ * 版本段只能来自**目标仓库**；读不到就不带，绝不拿平台的顶替。
+ */
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bandi-ver-'));
+  fs.writeFileSync(path.join(dir, 'version.json'), JSON.stringify({ version: '9.8.7' }));
+  const got = git.repoVersion(dir);
+  fs.rmSync(dir, { recursive: true, force: true });
+  check('版本段取目标仓库自己的 version.json', got === '9.8.7', String(got));
+}
+check('目标仓库没有版本文件 → 不带版本段（不拿平台版本顶替）', git.suggestBranchName('fix(server): pr gate smoke') === 'fix/pr-gate-smoke', git.suggestBranchName('fix(server): pr gate smoke'));
 check('短描述等于仓库名 → 拒', rejectedNew(['chore/v1.4.0-bandi']).length === 1);
 check('「平台建的分支」= 老 bandi/ 或新 <type>/x（feature/x 是人的分支）', git.isPlatformBranchName('bandi/old') && git.isPlatformBranchName('fix/demo') && !git.isPlatformBranchName('feature/human') && !git.isPlatformBranchName('main'));
 check('凭据闸抓住 .env / 私钥 / token 文件', JSON.stringify(git.findSecretPaths(['.env', 'id_rsa', 'a/b/token.json', 'k.pem'])) === '[".env","id_rsa","a/b/token.json","k.pem"]');
@@ -146,7 +158,7 @@ check('默认分支从元数据来（假 GitHub 给 main）', row.defaultBranch 
 let st = await git.workState(row);
 check('干净工作区：dirtyCount 0、ahead 0、canShip=false', st.dirtyCount === 0 && st.ahead === 0 && st.canShip === false, JSON.stringify({ d: st.dirtyCount, a: st.ahead, c: st.canShip }));
 check('报告当前分支与 base', st.branch === 'main' && st.base === 'main', `${st.branch}/${st.base}`);
-check('给出建议分支名（`<type>/v<版本>-<短描述>`，规则只留服务端一处）', /^chore\/v1\.4\.0-\d{8}-\d{6}$/.test(st.suggest), String(st.suggest));
+check('给出建议分支名（`<type>/v<版本>-<短描述>`；这个夹具仓库没有版本文件，就不带版本段）', /^chore\/(v\d+\.\d+\.\d+-)?\d{8}-\d{6}$/.test(st.suggest), String(st.suggest));
 
 fs.writeFileSync(path.join(work, 'feature.js'), 'export const x = 1;\n');
 fs.writeFileSync(path.join(work, '.env'), 'API_KEY=***\n');

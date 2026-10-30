@@ -758,7 +758,7 @@ export async function commitAll(row, { message, allowSecrets = false, paths = nu
   const branchName = branch ? await assertNameForCreate(row.localPath, branch, { repoName: row.name }) : null;
   let autoBranch = null;
   if (base && st.branch === base) {
-    const target = branchName ?? suggestBranchName(msg, new Date(), { repoName: row.name });
+    const target = branchName ?? suggestBranchName(msg, new Date(), { repoName: row.name, version: repoVersion(row.localPath) });
     if (target === base) throw new Error(`不能直接提交到 ${base}（主分支）—— 给这条改动起个分支名`);
     const create = await gitIn(row.localPath, ['checkout', '-b', target], { timeoutMs: GIT_FAST_MS });
     if (create.code !== 0) {
@@ -1507,11 +1507,17 @@ export const BRANCH_TYPES = ['feat', 'fix', 'chore', 'docs', 'refactor', 'test',
 const BRANCH_TYPE_ALT = BRANCH_TYPES.join('|');
 const SEMVER = 'v\\d+\\.\\d+\\.\\d+';
 
-/** 当前版本（`apps/desktop/version.json` / 根目录 version.json）：分支名里的版本段用它，读不到就不带 */
-function currentVersion() {
-  for (const p of [path.join(repoRoot, 'apps', 'desktop', 'version.json'), path.join(repoRoot, 'version.json')]) {
+/**
+ * **目标仓库自己**的版本号（分支名里的版本段）：`version.json` → `package.json`。
+ *
+ * 这里不能读平台的版本 —— 2026-10-30 实报：托管进来的「交鉴」仓库被建议成了
+ * `docs/v1.4.0-v1-9-0`（v1.4.0 是班底自己的版本），而它是 v1.9.0。
+ * 读不到就不带版本段，宁可短一点，也不写一个不属于这个仓库的版本。
+ */
+export function repoVersion(cwd) {
+  for (const f of ['version.json', 'package.json']) {
     try {
-      const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+      const j = JSON.parse(fs.readFileSync(path.join(cwd, f), 'utf8'));
       const v = String(j?.version ?? '').trim();
       if (/^\d+\.\d+\.\d+$/.test(v)) return v;
     } catch {
@@ -1557,7 +1563,7 @@ export function suggestBranchName(title, at = new Date(), { repoName = '', versi
   let slug = branchSlugOf(title);
   const repoSlug = branchSlugOf(repoName);
   if (slug && repoSlug && slug === repoSlug) slug = '';
-  const ver = String(version ?? currentVersion() ?? '').trim();
+  const ver = String(version ?? '').trim();
   const verSeg = /^\d+\.\d+\.\d+$/.test(ver) ? `v${ver}-` : '';
   return `${type}/${verSeg}${slug || stamp}`;
 }
@@ -1568,7 +1574,7 @@ export function suggestBranchName(title, at = new Date(), { repoName = '', versi
  */
 export function assertNewBranchName(name, { repoName = '', version = null } = {}) {
   const b = assertBranchName(name);
-  const ver = String(version ?? currentVersion() ?? '').trim();
+  const ver = String(version ?? '').trim();
   // 仓库有版本号 → 版本段必写；没有（别的仓库接进来但没 version.json）→ 允许省掉，不然没法建分支
   const verSeg = /^\d+\.\d+\.\d+$/.test(ver) ? `${SEMVER}-` : `(?:${SEMVER}-)?`;
   const m = new RegExp(`^(${BRANCH_TYPE_ALT})/${verSeg}([a-z0-9][a-z0-9.-]{0,63})$`).exec(b);
@@ -1594,7 +1600,7 @@ async function branchExists(cwd, name) {
 async function assertNameForCreate(cwd, name, { repoName = '' } = {}) {
   const b = assertBranchName(name);
   if (await branchExists(cwd, b)) return b;
-  return assertNewBranchName(b, { repoName });
+  return assertNewBranchName(b, { repoName, version: repoVersion(cwd) });
 }
 /**
  * **凭据闸**（推上去就收不回来：git 历史里的 secret 只能靠强推抹，公开仓库抹不掉）。
@@ -1765,7 +1771,7 @@ export async function workState(row) {
      * 默认分支名由服务端给（`<type>/<短描述>`，规则只留一处，界面和人敲的是同一套）。
      * 类型取这条分支上**已提交的第一个主题**（`fix(server): …` 直接取 fix；中文按关键词猜），不再是仓库名。
      */
-    suggest: suggestBranchName(aheadCommits?.[0]?.subject ?? '', new Date(), { repoName: row.name }),
+    suggest: suggestBranchName(aheadCommits?.[0]?.subject ?? '', new Date(), { repoName: row.name, version: repoVersion(row.localPath) }),
     // 站在 base（main）上：界面据此把提交卡换成"建分支并提交"（主分支不收本地提交）
     onBase: !!base && branch === base,
     canShip: dirty.length > 0 || (ahead ?? 0) > 0,
@@ -1835,7 +1841,7 @@ export async function commitAndPush(row, { branch = null, message = null, paths 
   let committed = null;
 
   if (picked.length) {
-    if (!branchName) branchName = suggestBranchName(message, new Date(), { repoName: row.name });
+    if (!branchName) branchName = suggestBranchName(message, new Date(), { repoName: row.name, version: repoVersion(row.localPath) });
     if (branchName === targetBase) throw new Error(`新分支不能和 base 同名（${branchName}）—— 换个名字，不然没有可比的东西`);
     if (branchName !== st.branch) {
       const create = await gitIn(row.localPath, ['checkout', '-b', branchName]);
