@@ -75,6 +75,9 @@ const RUN = [
   'apps/server/src/smoke-workflows.mjs',
   'apps/desktop/smoke-shell.mjs',
   'tools/smoke-help-pop.mjs',
+  // 2026-10-30：分支行尾那颗 `›` 的链路（menu → folderize → combo → combo-menu → 菜单）。
+  // 这条链任何一手漏了都不报错、只是箭头不见了，所以必须钉住。
+  'tools/smoke-branch-menu.mjs',
 ];
 
 /** 不跑的：写明原因（要真实 CLI / 模型，会烧 token） */

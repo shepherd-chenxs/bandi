@@ -13,66 +13,8 @@ import { $, S } from './core.mjs';
 
 
 
-/* -------------------------------------------------------- 列表项右键菜单 */
-
-/**
- * 打开右键菜单（单例 `#ctxMenu`，挂在 body 下、`position:fixed` 跟光标走）。
- *
- * 为什么只有这一个单例：每次右键只换内容与位置，**节点本身不动** ——
- * 挂在它上面的监听在 boot 时注册一次就永远有效。列表是每次 `innerHTML` 重建的，
- * 逐个绑事件在这个仓库里踩过多轮（见 `renderList` 那段注释），所以
- * `contextmenu` 走 `#listBody` 上的**委托**，绝不写进 `renderList`。
- *
- * @param {number} x 视口坐标（事件里的 clientX）
- * @param {number} y 视口坐标（事件里的 clientY）
- * @param {Array<{label: string, danger?: boolean, disabled?: boolean, why?: string, run: Function}>} items
- */
-export function openCtxMenu(x, y, items) {
-  const menu = $('ctxMenu');
-  if (!menu || !items?.length) return;
-  menu.innerHTML = items
-    .map(
-      (it, i) =>
-        `<button class="ctx-item${it.danger ? ' danger' : ''}" role="menuitem" data-idx="${i}"` +
-        `${it.disabled ? ' disabled' : ''}${it.why ? ` title="${esc(it.why)}"` : ''}>${esc(it.label)}</button>`,
-    )
-    .join('');
-
-  // 项自己的点击：**先关菜单再做事** —— 反过来的话，await 期间菜单还挂在屏幕上，
-  // 用户会以为没点着，再点一下就又执行一遍。
-  // 兜底也用 toastConvErr：菜单里的项都是会话域动作（删除 / 不显示），三码要能说人话
-  menu.querySelectorAll('.ctx-item').forEach((btn) => {
-    btn.onclick = async () => {
-      const it = items[Number(btn.dataset.idx)];
-      if (!it || it.disabled) return;
-      closeCtxMenu();
-      try { await it.run(); } catch (err) { toastConvErr(err); }
-    };
-  });
-
-  menu.hidden = false;
-  // 先按光标摆，再量**真实尺寸**：菜单高度取决于有几项，不能预先算
-  menu.style.left = `${x}px`;
-  menu.style.top = `${y}px`;
-  const r = menu.getBoundingClientRect();
-  // 右/下越界就翻转（贴边留 8px，别正好压在屏幕边上）
-  if (x + r.width > window.innerWidth - 8) menu.style.left = `${Math.max(8, x - r.width)}px`;
-  if (y + r.height > window.innerHeight - 8) menu.style.top = `${Math.max(8, y - r.height)}px`;
-  // 焦点落到第一个**可用**项：键盘能直接上下选（P1-4），Enter/Space 由 <button> 原生负责
-  menu.querySelector('.ctx-item:not([disabled])')?.focus();
-}
-
-
-
-/** 收起右键菜单。可以随便多调 —— 已经收起时直接返回（滚动/失焦/重画都会调到它） */
-export function closeCtxMenu() {
-  const menu = $('ctxMenu');
-  if (!menu || menu.hidden) return;
-  menu.hidden = true;
-  menu.innerHTML = '';
-}
-
-
+/* 右键菜单的实现在 ui.mjs（2026-10-30 挪过去，分支下拉也要用）；这里保持老名字导出，调用点不动 */
+export { closeCtxMenu, openCtxMenu } from './ui.mjs';
 
 /* --------------------------------------------------- 会话域的错误人话 */
 

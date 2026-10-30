@@ -313,6 +313,9 @@ export function createCombo({
   // 给函数就按当前值现算（返回空串 = 不显示）；给字符串就是固定的。
   // 单独一个 span 是为了**上色**：buttonText 是纯文本，塞不进颜色。
   buttonBadge = null,
+  // 按钮上文案**前面**的图标（SVG 字符串，2026-10-30 分支 pill："左边加图标，像是idea那样"）。
+  // 可选；不传 = 跟以前一样没有图标。
+  buttonIcon = null,
   onChange = () => {},
   // 展开下拉时的回调 —— 给"点开才去取清单"用。
   // 比如模型列表要读运行时的配置（dsh 那条是一次 HTTP），不适合在打开页面时就拉。
@@ -344,6 +347,12 @@ export function createCombo({
   const chev = document.createElement('i');
   chev.className = 'combo-chev';
   btn.append(text, badge, chev);
+  if (buttonIcon) {
+    const ic = document.createElement('span');
+    ic.className = 'combo-btn-ic';
+    ic.innerHTML = buttonIcon;
+    btn.prepend(ic);
+  }
 
   const pop = document.createElement('div');
   pop.className = 'combo-pop is-hidden';
@@ -456,20 +465,40 @@ export function createCombo({
             pi += 1;
             /*
              * 条目右侧信息（2026-10-27，IDEA 分支弹窗同款）：
-             *   · `badge`（↑1/↓2）跟在名字后面 —— 分支领先/落后上游几个提交；
-             *   · `hint`（origin/main）靠右、降灰 —— 这一行分支跟踪的是哪个远程分支。
-             * 两者都是可选的，别的下拉不传 = 跟以前逐字一样。
+             *   · `badge`（↗1/↙2）跟在名字后面 —— 分支领先/落后上游几个提交；
+             *   · `hint`（origin/main）靠右、降灰 —— 这一行分支跟踪的是哪个远程分支；
+             *   · `menu`（2026-10-30，IDEA 那种小箭头）—— 行尾一颗 `›`，点开是这条分支的二级菜单。
+             * 都是可选的，别的下拉不传 = 跟以前逐字一样。
              */
-            return `<div class="combo-item ${it.cls ?? ''} ${it.sub ? 'sub ' : ''}${pi === hi ? 'hi' : ''}" data-pick="${esc(it.id)}">
+            return `<div class="combo-item ${it.cls ?? ''} ${it.sub ? 'sub ' : ''}${pi === hi ? 'hi' : ''}" data-pick="${esc(it.id)}"${it.menu ? ' data-menu="1"' : ''}>
                  ${it.icon ? `<span class="combo-ic">${it.icon}</span>` : ''}
                  <span class="combo-item-label">${esc(it.label)}${it.badge ? `<span class="combo-badge">${esc(it.badge)}</span>` : ''}</span>
                  ${it.hint ? `<span class="combo-hint" title="${esc(it.hint)}">${esc(it.hint)}</span>` : ''}
                  ${it.id === current ? '<span class="combo-check">✓</span>' : ''}
+                 ${it.menu ? '<button type="button" class="combo-more" aria-label="更多操作" title="这条分支的更多操作">›</button>' : ''}
                </div>`;
           })
           .join('')
       : `<div class="combo-empty">${esc(empty)}</div>`;
-    list.querySelectorAll('[data-pick]').forEach((el) => { el.onclick = () => pick(el.dataset.pick); });
+    /*
+     * 带 menu 的行（分支行，2026-10-30 用户："点击选项就打开，改成二级窗口的一个选项，放在第一位"）：
+     * 点**整行**都不再直接选中 —— 跟行尾 `›` 一样只开这条分支的二级菜单（签出收进菜单第一位）。
+     * 没带 menu 的行（标签、别的下拉）照旧点行即选。
+     */
+    const fireItemMenu = (row) =>
+      root.dispatchEvent(new CustomEvent('combo-menu', { detail: { id: row.dataset.pick ?? '', el: row } }));
+    list.querySelectorAll('[data-pick]').forEach((el) => {
+      el.onclick = () => (el.dataset.menu ? fireItemMenu(el) : pick(el.dataset.pick));
+    });
+    /* 行尾 `›`：开二级菜单（stopPropagation 掉"选中"；现在整行都开菜单，它只是个显眼的抓手） */
+    list.querySelectorAll('.combo-more').forEach((b) => {
+      b.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const item = b.closest('.combo-item');
+        if (item) fireItemMenu(item);
+      });
+    });
     list.querySelectorAll('[data-fold]').forEach((el) => {
       el.onclick = () => {
         const k = el.dataset.fold;
@@ -542,7 +571,12 @@ export function createCombo({
       } else if (e.key === 'Enter') {
         e.preventDefault();
         const hit = list.querySelector('.hi') ?? hits[0];
-        if (hit) pick(hit.dataset.pick);
+        if (!hit) return;
+        // 带菜单的行（分支行）回车同样开二级菜单，跟点行一致
+        if (hit.dataset.menu) {
+          hit.scrollIntoView({ block: 'nearest' });
+          fireItemMenu(hit);
+        } else pick(hit.dataset.pick);
       }
     });
   }
@@ -579,6 +613,65 @@ export function createCombo({
  * 用法：createDateTimePick({ mount, value, onChange })
  *   value() 返回 `YYYY-MM-DDTHH:MM`（没选就是 ''）—— 跟 datetime-local 的取值同格式。
  */
+/* -------------------------------------------------------- 列表项右键菜单 */
+
+/**
+ * 打开右键菜单（单例 `#ctxMenu`，挂在 body 下、`position:fixed` 跟光标走）。
+ *
+ * 2026-10-30 从 listmenu.mjs 挪到这儿：分支下拉也要用它，而 skills ↔ listmenu
+ * 走的是同一个模块环（skills → contacts → listmenu → skills），环路里再挂一次导入不值得 ——
+ * 这个组件本来就不认"会话域"，它只认"给我一组 items"。listmenu 继续 re-export，老调用点不动。
+ *
+ * @param {number} x 视口坐标（事件里的 clientX）
+ * @param {number} y 视口坐标（事件里的 clientY）
+ * @param {Array<{label: string, danger?: boolean, disabled?: boolean, why?: string, run: Function}>} items
+ */
+export function openCtxMenu(x, y, items) {
+  const menu = $('ctxMenu');
+  if (!menu || !items?.length) return;
+  menu.innerHTML = items
+    .map(
+      (it, i) =>
+        `<button class="ctx-item${it.danger ? ' danger' : ''}" role="menuitem" data-idx="${i}"` +
+        `${it.disabled ? ' disabled' : ''}${it.why ? ` title="${esc(it.why)}"` : ''}>${esc(it.label)}</button>`,
+    )
+    .join('');
+
+  // 项自己的点击：**先关菜单再做事** —— 反过来的话，await 期间菜单还挂在屏幕上，
+  // 用户会以为没点着，再点一下就又执行一遍。
+  menu.querySelectorAll('.ctx-item').forEach((btn) => {
+    btn.onclick = async () => {
+      const it = items[Number(btn.dataset.idx)];
+      if (!it || it.disabled) return;
+      closeCtxMenu();
+      try {
+        await it.run();
+      } catch (err) {
+        toast(String(err?.message ?? err), 'error');
+      }
+    };
+  });
+
+  menu.hidden = false;
+  // 先按光标摆，再量**真实尺寸**：菜单高度取决于有几项，不能预先算
+  menu.style.left = `${x}px`;
+  menu.style.top = `${y}px`;
+  const r = menu.getBoundingClientRect();
+  // 右/下越界就翻转（贴边留 8px，别正好压在屏幕边上）
+  if (x + r.width > window.innerWidth - 8) menu.style.left = `${Math.max(8, x - r.width)}px`;
+  if (y + r.height > window.innerHeight - 8) menu.style.top = `${Math.max(8, y - r.height)}px`;
+  // 焦点落到第一个**可用**项：键盘能直接上下选，Enter/Space 由 <button> 原生负责
+  menu.querySelector('.ctx-item:not([disabled])')?.focus();
+}
+
+/** 收起右键菜单。可以随便多调 —— 已经收起时直接返回（滚动/失焦/重画都会调到它） */
+export function closeCtxMenu() {
+  const menu = $('ctxMenu');
+  if (!menu || menu.hidden) return;
+  menu.hidden = true;
+  menu.innerHTML = '';
+}
+
 export function createDateTimePick({ mount, value = '', onChange = () => {} }) {
   const root = document.createElement('div');
   root.className = 'combo dt';
