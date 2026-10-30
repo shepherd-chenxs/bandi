@@ -480,6 +480,23 @@ export async function syncRepo(id) {
 }
 
 /**
+ * 「主干」= 平台永远不删、也不许直接提交的那几条（2026-10-30）。
+ * 删之前另有"已合并 + 无开着的 PR"兜底。
+ */
+function isTrunkBranch(name) {
+  return /^(main|master|develop|trunk)$/i.test(String(name ?? '').trim());
+}
+
+/**
+ * 「平台建的分支」= 合完可以顺手删的那些：老前缀 `bandi/…`（存量）或新规范 `<type>/<短描述>`。
+ * 人自己起的 `feature/foo` 不在其中 —— 删了是砸人正在干的活，界面上勾了也不删，只把"没删"说出来。
+ */
+export function isPlatformBranchName(name) {
+  const n = String(name ?? '').trim();
+  return /^bandi\//.test(n) || new RegExp(`^(${BRANCH_TYPE_ALT})/[a-z0-9][a-z0-9.-]*$`).test(n);
+}
+
+/**
  * **合并之后的本地收尾**（2026-10-25）：切回 base、拉最新、删掉本地源分支。
  *
  * 为什么必须做：PR 是在 GitHub 上合的，本地克隆不会自己变 —— 不收尾，人还停在源分支上，
@@ -491,7 +508,7 @@ export async function syncRepo(id) {
  *   · 工作区有未提交改动 → 不动，只说明（正在写代码的树基本都不干净，这一条就是护栏）；
  *   · 当前分支既不是 PR 源分支、也不是 base → 不动（人在别的分支上干活）；
  *   · `pull --ff-only` 分叉就失败，不硬合；
- *   · 删本地分支：只删 `bandi/` 开头、且本地 HEAD 与 PR 的 headSha 完全一致的（没有本地独有提交）；
+ *   · 删本地分支：只删**功能分支**（不是 base、也不是主干）、且本地 HEAD 与 PR 的 headSha 完全一致的（没有本地独有提交）；
  *     对不上就留着并说明 —— 删分支可以，删掉没推过的提交不行。
  *
  * @param {string} repo fullName
@@ -546,7 +563,7 @@ export async function settleAfterMerge(repo, { base = null, head = null, headSha
 
   let deleted = null;
   let deleteNote = null;
-  const branchToDelete = from && from !== baseName && /^bandi\//.test(from) ? from : null;
+  const branchToDelete = from && from !== baseName && !isTrunkBranch(from) ? from : null;
   if (deleteLocal && branchToDelete) {
     let okToDelete = false;
     if (headSha) {
@@ -669,7 +686,8 @@ export async function listBranches(row) {
 export async function createBranch(row, name) {
   const cwd = row.localPath;
   if (!isGitRepo(cwd)) throw new Error(`本地目录不是 git 仓库（没有 .git）：${cwd}`);
-  const b = assertBranchName(name);
+  // 新分支按新规矩命名（`<type>/<短描述>`）；老分支照用不追溯，见 assertNewBranchName
+  const b = await assertNameForCreate(cwd, name, { repoName: row.name });
   const co = await gitIn(cwd, ['checkout', '-b', b], { timeoutMs: GIT_FAST_MS });
   if (co.code !== 0) {
     const out = String(co.out ?? '');
@@ -737,10 +755,10 @@ export async function commitAll(row, { message, allowSecrets = false, paths = nu
    * 默认名由服务端给（`suggestBranchName`，界面上那张卡里看得见、能改）。
    */
   const base = row.defaultBranch || null;
-  const branchName = branch ? assertBranchName(branch) : null;
+  const branchName = branch ? await assertNameForCreate(row.localPath, branch, { repoName: row.name }) : null;
   let autoBranch = null;
   if (base && st.branch === base) {
-    const target = branchName ?? suggestBranchName(msg || row.name);
+    const target = branchName ?? suggestBranchName(msg, new Date(), { repoName: row.name });
     if (target === base) throw new Error(`不能直接提交到 ${base}（主分支）—— 给这条改动起个分支名`);
     const create = await gitIn(row.localPath, ['checkout', '-b', target], { timeoutMs: GIT_FAST_MS });
     if (create.code !== 0) {
@@ -1056,7 +1074,7 @@ export async function branchFileDiff(row, { branch = null, base = null, path } =
  *   · 本地不能删**当前所在**的分支（要先切走 —— 和 checkout 的脏工作区护栏同一个出发点）；
  *   · 必须**已合并进 base**（`merge-base --is-ancestor` 先挡一道，`git branch -d` 再兜一道）——
  *     没合并的分支一律不删，"删分支把活扔了"不在平台的能力范围内；
- *   · 远端只删 `bandi/` 开头的（平台自己拉的）；还得先确认**没有开着的 PR** ——
+ *   · 远端只删**功能分支**（不是 base / main / master / develop）；还得先确认**没有开着的 PR** ——
  *     删掉 PR 的 head 分支等于把那个 PR 弄成"无从查看"，先合/关再删；
  *   · 删远端前先 fetch，合并判断用的是**刚拉到的** origin/<base>，不吃过期引用。
  */
@@ -1071,7 +1089,7 @@ export async function deleteBranch(row, { branch, remote = false, base = null } 
   if (name === baseName) throw new Error(`不能删 base 分支（${baseName}）`);
 
   if (askRemote) {
-    if (!/^bandi\//.test(name)) throw new Error(`远端只删平台自己建的分支（bandi/ 开头）；${name} 不是，要删请去 GitHub 上删`);
+    if (!isPlatformBranchName(name)) throw new Error(`远端只删平台建的分支（<type>/<短描述> 或老的 bandi/…）；${name} 不是，要删请去 GitHub 上删`);
     if (!readToken()) throw new Error('先连接 GitHub 才能删远端分支（令牌只存本机）');
     const open = await findOpenPullForHead(row.fullName, name, row.owner).catch(() => null);
     if (open) throw new Error(`这条分支上还有开着的 PR #${open.number} —— 先把它合掉或关掉，再删分支`);
@@ -1477,18 +1495,81 @@ export function assertBranchName(name) {
 }
 
 /**
- * 建议分支名：`bandi/<标题的 ASCII 短串>-<时间戳>`。
- * 中文标题进不了分支名（会被折空），那就只剩时间戳 —— 时间戳保证两次建 PR 不撞名。
+ * 分支名的规矩（2026-10-30）：`<type>/<短描述>`。
+ *
+ * 老默认名是 `bandi/<标题的 ASCII 短串>-<时间戳>`，而"标题"常常是仓库名或纯中文 ——
+ * 软件自己生成 `bandi/bandi-20261029-125019`：前缀重复、没类型、没语义，两个 PR 只差一串数字。
+ * 类型只有下面这七个；写不出短描述就用时间戳兜重名。
  */
-export function suggestBranchName(title, at = new Date()) {
-  const p = (n) => String(n).padStart(2, '0');
-  const slug = String(title ?? '')
+export const BRANCH_TYPES = ['feat', 'fix', 'chore', 'docs', 'refactor', 'test', 'perf'];
+const BRANCH_TYPE_ALT = BRANCH_TYPES.join('|');
+
+/** 类型从哪来：先认 Conventional 前缀（`fix(server): …`），再认中文关键词，都不像就 chore */
+export function branchTypeOf(text) {
+  const t = String(text ?? '').trim();
+  const head = new RegExp(`^\\s*(${BRANCH_TYPE_ALT})\\b`, 'i').exec(t);
+  if (head) return head[1].toLowerCase();
+  if (/修复|修好|修掉|改正|回滚|bug|hotfix|revert/i.test(t)) return 'fix';
+  if (/新增|添加|加上|补上|实现|支持|引入/i.test(t)) return 'feat';
+  if (/文档|注释|README|CHANGELOG|docs/i.test(t)) return 'docs';
+  if (/重构|拆分|整理|抽成|refactor/i.test(t)) return 'refactor';
+  if (/测试|冒烟|用例|smoke|test/i.test(t)) return 'test';
+  if (/优化|性能|提速|perf/i.test(t)) return 'perf';
+  return 'chore';
+}
+
+/** 标题 → 短描述：去掉类型前缀，只留小写 ASCII，符号折成 `-`（中文会被折空，交给时间戳兜底） */
+export function branchSlugOf(text) {
+  return String(text ?? '')
+    .replace(new RegExp(`^\\s*(${BRANCH_TYPE_ALT})(\\([^)]*\\))?:?\\s*`, 'i'), '')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
-    .slice(0, 32);
+    .slice(0, 40)
+    .replace(/-+$/, '');
+}
+
+/** 建议分支名：`<type>/<短描述>`；短描述折不出来、或只剩仓库名时，用时间戳兜底 */
+export function suggestBranchName(title, at = new Date(), { repoName = '' } = {}) {
+  const p = (n) => String(n).padStart(2, '0');
+  const type = branchTypeOf(title);
   const stamp = `${at.getFullYear()}${p(at.getMonth() + 1)}${p(at.getDate())}-${p(at.getHours())}${p(at.getMinutes())}${p(at.getSeconds())}`;
-  return `bandi/${slug ? slug + '-' : ''}${stamp}`;
+  let slug = branchSlugOf(title);
+  const repoSlug = branchSlugOf(repoName);
+  if (slug && repoSlug && slug === repoSlug) slug = '';
+  return `${type}/${slug || stamp}`;
+}
+
+/**
+ * 新建分支时的名字闸：必须 `<type>/<短描述>`。
+ * 只对新名字生效（既有分支走 `assertBranchName` 的语法检查就够）—— 老分支只读不拦，否则连切过去都做不了。
+ */
+export function assertNewBranchName(name, { repoName = '' } = {}) {
+  const b = assertBranchName(name);
+  const m = new RegExp(`^(${BRANCH_TYPE_ALT})/([a-z0-9][a-z0-9.-]{0,63})$`).exec(b);
+  if (!m) {
+    throw new Error(
+      `分支名要写成 <type>/<短描述>：type 只能是 ${BRANCH_TYPES.join(' / ')}，短描述用小写英文、数字、点或横线（例：fix/pr-gate-smoke）。现在给的是「${b}」`,
+    );
+  }
+  const repoSlug = branchSlugOf(repoName);
+  if (repoSlug && m[2] === repoSlug) {
+    throw new Error(`短描述不能就是仓库名（${m[2]}）—— 换成"这次改了什么"，或者留空让它自动带时间戳`);
+  }
+  return b;
+}
+
+/** 建新分支前先确认它不存在：存在就是"接着用老分支"，不按新规矩要求它 */
+async function branchExists(cwd, name) {
+  const r = await gitIn(cwd, ['rev-parse', '--verify', '--quiet', `refs/heads/${name}`], { timeoutMs: GIT_FAST_MS });
+  return r.code === 0 && String(r.out ?? '') !== '';
+}
+
+/** 名字闸的统一入口：已有的分支照用，新分支必须符合新规矩 */
+async function assertNameForCreate(cwd, name, { repoName = '' } = {}) {
+  const b = assertBranchName(name);
+  if (await branchExists(cwd, b)) return b;
+  return assertNewBranchName(b, { repoName });
 }
 
 /**
@@ -1656,8 +1737,11 @@ export async function workState(row) {
     dirty,
     dirtyCount: dirty.length,
     secrets: findSecretPaths(dirty.map((f) => f.path)),
-    // 默认分支名由服务端给（`bandi/<名>-<时间戳>`）：规则只留一处，界面和人敲的是同一套
-    suggest: suggestBranchName(row.name),
+    /*
+     * 默认分支名由服务端给（`<type>/<短描述>`，规则只留一处，界面和人敲的是同一套）。
+     * 类型取这条分支上**已提交的第一个主题**（`fix(server): …` 直接取 fix；中文按关键词猜），不再是仓库名。
+     */
+    suggest: suggestBranchName(aheadCommits?.[0]?.subject ?? '', new Date(), { repoName: row.name }),
     // 站在 base（main）上：界面据此把提交卡换成"建分支并提交"（主分支不收本地提交）
     onBase: !!base && branch === base,
     canShip: dirty.length > 0 || (ahead ?? 0) > 0,
@@ -1723,11 +1807,11 @@ export async function commitAndPush(row, { branch = null, message = null, paths 
   }
 
   const targetBase = await resolveBase(row, base);
-  let branchName = branch ? assertBranchName(branch) : null;
+  let branchName = branch ? await assertNameForCreate(row.localPath, branch, { repoName: row.name }) : null;
   let committed = null;
 
   if (picked.length) {
-    if (!branchName) branchName = suggestBranchName(message || row.name);
+    if (!branchName) branchName = suggestBranchName(message, new Date(), { repoName: row.name });
     if (branchName === targetBase) throw new Error(`新分支不能和 base 同名（${branchName}）—— 换个名字，不然没有可比的东西`);
     if (branchName !== st.branch) {
       const create = await gitIn(row.localPath, ['checkout', '-b', branchName]);

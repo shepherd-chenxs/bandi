@@ -120,9 +120,9 @@ async function mergeOne(repo, number, body = {}, taskId = null) {
   let branchDeleted = null;
   let branchNote = null;
   if (body.deleteBranch && pull.headRef) {
-    // 只删平台自己拉出来的分支：`feature/foo` 那种是人的分支，删了是砸人正在干的活
-    if (!/^bandi\//.test(pull.headRef)) {
-      branchNote = `没删源分支 ${pull.headRef}：那不是平台建的分支（只删 bandi/ 开头的）`;
+    // 只删平台自己拉出来的分支（`<type>/<短描述>` 或老前缀 `bandi/…`）：`feature/foo` 那种是人的分支，删了是砸人正在干的活
+    if (!git.isPlatformBranchName(pull.headRef)) {
+      branchNote = `没删源分支 ${pull.headRef}：那不是平台建的分支（只删 <type>/<短描述> 或 bandi/ 开头的）`;
     } else {
       try {
         await git.deleteRemoteBranch(repo, pull.headRef);

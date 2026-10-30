@@ -1575,7 +1575,8 @@ export async function renderGitRepos(root = $('pluginView')) {
     const branchRow = onBase
       ? `<div class="gr-commit-base">
           <div class="gr-cb-tip">你在主分支 <b>${esc(state.base)}</b> 上 —— <span class="gr-cb-warn">主分支不收本地提交</span>。这次会先建一条分支，改动落在它上面：</div>
-          <input id="grCommitBranch" value="${esc(state.suggest ?? '')}" autocomplete="off" spellcheck="false" aria-label="新分支名" />
+          <input id="grCommitBranch" value="${esc(state.suggest ?? '')}" autocomplete="off" spellcheck="false" aria-label="新分支名" placeholder="例如：fix/pr-gate-smoke" />
+          <div class="gr-cb-hint">命名：<code>&lt;type&gt;/&lt;短描述&gt;</code>，type 用 feat / fix / chore / docs / refactor / test / perf（服务端按这条校验）</div>
         </div>`
       : '';
     box.innerHTML = `
@@ -1838,8 +1839,9 @@ export async function renderGitRepos(root = $('pluginView')) {
     dlg.innerHTML = `
       <form method="dialog">
         <b>新建分支</b>
-        <label>分支名（从当前所在位置拉出）</label>
-        <input id="grNewBranchName" placeholder="例如：feat/search" autocomplete="off" />
+        <label>分支名（从当前所在位置拉出）：<code>&lt;type&gt;/&lt;短描述&gt;</code></label>
+        <input id="grNewBranchName" placeholder="例如：feat/search、fix/pr-gate-smoke" autocomplete="off" />
+        <div class="gr-cb-hint">type 只能是 feat / fix / chore / docs / refactor / test / perf；短描述用小写英文、数字、点或横线。</div>
         <div class="dlg-actions">
           <button type="button" value="cancel">取消</button>
           <button class="primary" id="grNewBranchGo">建并切过去</button>

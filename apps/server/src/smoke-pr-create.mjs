@@ -101,8 +101,29 @@ const rejected = (list) =>
 /* `a/b` 是**合法**分支名（feature/ok 就是这么写的），不能混进坏例子当反证 */
 check('空格 / .. / 首尾点 / 保留名 / 空段都挡下来', rejected(['a b', 'a..b', '.x', 'x.', 'HEAD', 'x.lock', '/a', 'a/', 'a//b']).length === 9);
 check('正常分支名放行', git.assertBranchName('feature/ok-2026') === 'feature/ok-2026');
-check('建议名 = bandi/<ASCII 短串>-<时间戳>', /^bandi\/pr-v2-\d{8}-\d{6}$/.test(git.suggestBranchName('给班底补建 PR v2', new Date('2026-10-25T17:22:03'))), git.suggestBranchName('给班底补建 PR v2', new Date('2026-10-25T17:22:03')));
-check('中文标题折不出字时只剩时间戳（不是空分支名）', /^bandi\/\d{8}-\d{6}$/.test(git.suggestBranchName('修个错字', new Date('2026-10-25T09:05:00'))));
+
+/*
+ * 分支命名规范（2026-10-30）：`<type>/<短描述>`。
+ * 老默认名是 `bandi/<标题短串>-<时间戳>`，而"标题"常常是仓库名或纯中文 —— 软件自己生成
+ * `bandi/bandi-20261029-125019`（前缀重复、没类型、没语义），历史里 4 次合并都叫这个。
+ */
+const rejectedNew = (list) =>
+  list.filter((b) => {
+    try {
+      git.assertNewBranchName(b, { repoName: 'bandi' });
+      return false;
+    } catch {
+      return true;
+    }
+  });
+check('建议名 = <type>/<短描述>（英文标题）', git.suggestBranchName('给班底补建 PR v2', new Date('2026-10-25T17:22:03'), { repoName: 'bandi' }) === 'chore/pr-v2', git.suggestBranchName('给班底补建 PR v2', new Date('2026-10-25T17:22:03'), { repoName: 'bandi' }));
+check('中文标题折不出短描述 → <type>/<时间戳>（不是空分支名）', /^fix\/20261025-090500$/.test(git.suggestBranchName('修复错字', new Date('2026-10-25T09:05:00'))), git.suggestBranchName('修复错字', new Date('2026-10-25T09:05:00')));
+check('Conventional 前缀直接决定类型', git.suggestBranchName('fix(server): pr gate smoke') === 'fix/pr-gate-smoke', git.suggestBranchName('fix(server): pr gate smoke'));
+check('短描述不许就是仓库名（老 bandi/bandi-<戳> 的病根）', /^chore\/\d{8}-\d{6}$/.test(git.suggestBranchName('bandi', new Date('2026-10-25T17:22:03'), { repoName: 'bandi' })), git.suggestBranchName('bandi', new Date('2026-10-25T17:22:03'), { repoName: 'bandi' }));
+check('新分支名必须 <type>/<短描述>：老前缀 / 错拼 / 没类型 / 大写都拒', rejectedNew(['bandi/old-style', 'andi/x', 'test', '123', 'feat/', 'feat/Bad', 'feature/x']).length === 7);
+check('合规的新分支名放行', ['fix/pr-gate-smoke', 'feat/a1', 'chore/20261030-125019', 'docs/readme', 'test/smoke'].every((b) => git.assertNewBranchName(b, { repoName: 'bandi' }) === b));
+check('短描述等于仓库名 → 拒', rejectedNew(['chore/bandi']).length === 1);
+check('「平台建的分支」= 老 bandi/ 或新 <type>/x（feature/x 是人的分支）', git.isPlatformBranchName('bandi/old') && git.isPlatformBranchName('fix/demo') && !git.isPlatformBranchName('feature/human') && !git.isPlatformBranchName('main'));
 check('凭据闸抓住 .env / 私钥 / token 文件', JSON.stringify(git.findSecretPaths(['.env', 'id_rsa', 'a/b/token.json', 'k.pem'])) === '[".env","id_rsa","a/b/token.json","k.pem"]');
 check('模板类放过（.env.example 本来就该提交）', JSON.stringify(git.findSecretPaths(['.env.example', 'config.sample.ts', 'README.md'])) === '[]');
 check('status -z：带空格的路径不被切两半', JSON.stringify(git.parseStatusZ(' M src/a b.ts\0')) === '[{"status":" M","path":"src/a b.ts"}]');
@@ -121,7 +142,7 @@ check('默认分支从元数据来（假 GitHub 给 main）', row.defaultBranch 
 let st = await git.workState(row);
 check('干净工作区：dirtyCount 0、ahead 0、canShip=false', st.dirtyCount === 0 && st.ahead === 0 && st.canShip === false, JSON.stringify({ d: st.dirtyCount, a: st.ahead, c: st.canShip }));
 check('报告当前分支与 base', st.branch === 'main' && st.base === 'main', `${st.branch}/${st.base}`);
-check('给出建议分支名（命名规则只留服务端一处）', /^bandi\/demo-\d{8}-\d{6}$/.test(st.suggest), String(st.suggest));
+check('给出建议分支名（`<type>/<短描述>`，规则只留服务端一处）', /^chore\/\d{8}-\d{6}$/.test(st.suggest), String(st.suggest));
 
 fs.writeFileSync(path.join(work, 'feature.js'), 'export const x = 1;\n');
 fs.writeFileSync(path.join(work, '.env'), 'API_KEY=***\n');
@@ -174,11 +195,11 @@ check('被拦下时没有产生提交（工作树还是那三个文件）', g(['
 
 const pushed = await git.commitAndPush(row, {
   message: 'feat: 加一个功能',
-  branch: 'bandi/feat-demo',
+  branch: 'fix/feat-demo',
   paths: ['feature.js', 'new dir/note file.md'], // 不含 .env：只提挑中的那两个
 });
-check('推上去了：返回分支与 base', pushed.branch === 'bandi/feat-demo' && pushed.base === 'main', JSON.stringify({ b: pushed.branch, base: pushed.base }));
-check('裸仓库里真有了这条分支（推送确实发生）', g(['--git-dir', bare, 'rev-parse', '--verify', 'refs/heads/bandi/feat-demo'], repoRoot).length === 40);
+check('推上去了：返回分支与 base', pushed.branch === 'fix/feat-demo' && pushed.base === 'main', JSON.stringify({ b: pushed.branch, base: pushed.base }));
+check('裸仓库里真有了这条分支（推送确实发生）', g(['--git-dir', bare, 'rev-parse', '--verify', 'refs/heads/fix/feat-demo'], repoRoot).length === 40);
 check('提交只含挑中的两个文件', g(['-C', work, 'show', '--name-only', '--format=', 'HEAD'], work).split('\n').filter(Boolean).length === 2, g(['-C', work, 'show', '--name-only', '--format=', 'HEAD'], work).replace(/\n/g, ' | '));
 check('.env 还在工作区（没被 add -A 顺手带走）', (await git.workState(row)).dirty.some((f) => f.path === '.env'));
 check('base 分支 main 没被动（改动只落在新分支上）', g(['--git-dir', bare, 'rev-list', '--count', 'refs/heads/main'], repoRoot) === '1');
@@ -192,20 +213,20 @@ check('令牌没写进 .git/config（origin 仍是本地路径）', !fs.readFile
 /* 撞名那一档单独用**第二个仓库**测：不污染上面那棵工作树 */
 const two = makeRepo('clash');
 const row2 = (await git.connectRepo('smoke/clash', null, two.work)).repo;
-g(['-C', two.work, 'checkout', '-q', '-b', 'bandi/dup'], two.work);
+g(['-C', two.work, 'checkout', '-q', '-b', 'chore/dup'], two.work);
 g(['-C', two.work, '-c', 'user.name=a', '-c', 'user.email=a@example.invalid', 'commit', '-q', '--allow-empty', '-m', 'remote-side'], two.work);
-g(['-C', two.work, 'push', '-q', '-u', 'origin', 'bandi/dup'], two.work);
+g(['-C', two.work, 'push', '-q', '-u', 'origin', 'chore/dup'], two.work);
 /* 本地这条改成"不含远端那次提交"的历史 → 再推就是 non-fast-forward */
-g(['-C', two.work, 'checkout', '-q', '-B', 'bandi/dup', 'main'], two.work);
+g(['-C', two.work, 'checkout', '-q', '-B', 'chore/dup', 'main'], two.work);
 g(['-C', two.work, '-c', 'user.name=b', '-c', 'user.email=b@example.invalid', 'commit', '-q', '--allow-empty', '-m', 'local-side'], two.work);
 let clashErr = '';
 try {
-  await git.commitAndPush(row2, { branch: 'bandi/dup', message: '撞名' });
+  await git.commitAndPush(row2, { branch: 'chore/dup', message: '撞名' });
 } catch (e) {
   clashErr = e.message;
 }
 check('远端同名分支历史不同 → 拒绝强推并把原因原样带回', /不会强推|换一个分支名/.test(clashErr), clashErr.slice(0, 90));
-check('被拒时没有强推痕迹（远端那条还是 remote-side）', /remote-side/.test(g(['--git-dir', two.bare, 'log', '-1', '--format=%s', 'refs/heads/bandi/dup'], repoRoot)));
+check('被拒时没有强推痕迹（远端那条还是 remote-side）', /remote-side/.test(g(['--git-dir', two.bare, 'log', '-1', '--format=%s', 'refs/heads/chore/dup'], repoRoot)));
 
 /*
  * **回归（2026-10-25 用户实报）**：工作区里有**已暂存的重命名**（`git mv`）时，
@@ -230,13 +251,13 @@ check(
 );
 let rnErr = '';
 try {
-  await git.commitAndPush(rnRow, { branch: 'bandi/rename-case', message: 'rename+delete' });
+  await git.commitAndPush(rnRow, { branch: 'fix/rename-case', message: 'rename+delete' });
 } catch (e) {
   rnErr = e.message;
 }
 check('已暂存的重命名/删除 + 普通改动能一起提交（不再报 pathspec）', !rnErr, rnErr.slice(0, 100));
 check('提交后工作区干净', g(['-C', rn.work, 'status', '--porcelain'], rn.work) === '');
-const rnShow = g(['--git-dir', rn.bare, 'show', '--name-status', '-M', '--format=', 'refs/heads/bandi/rename-case'], repoRoot);
+const rnShow = g(['--git-dir', rn.bare, 'show', '--name-status', '-M', '--format=', 'refs/heads/fix/rename-case'], repoRoot);
 check(
   '远端那条分支里真是 R + D + M 三笔（没有把重命名拆成"新增一份"）',
   /^R100\s+a\.txt\s+b\.txt/m.test(rnShow) && /^D\s+c\.txt/m.test(rnShow) && /^M\s+d\.txt/m.test(rnShow),
@@ -261,8 +282,8 @@ check(
   (await git.workState(unRow)).dirty.some((f) => f.path === 'b.txt' && f.from === 'a.txt'),
   JSON.stringify((await git.workState(unRow)).dirty),
 );
-await git.commitAndPush(unRow, { branch: 'bandi/unstaged-rename-case', message: 'unstaged rename' });
-const unShow = g(['--git-dir', un.bare, 'show', '--name-status', '-M', '--format=', 'refs/heads/bandi/unstaged-rename-case'], repoRoot);
+await git.commitAndPush(unRow, { branch: 'fix/unstaged-rename-case', message: 'unstaged rename' });
+const unShow = g(['--git-dir', un.bare, 'show', '--name-status', '-M', '--format=', 'refs/heads/fix/unstaged-rename-case'], repoRoot);
 check('未暂存的重命名提交后仍是 rename（不是"多一份 + 旧的还在"）', /^R100\s+a\.txt\s+b\.txt/m.test(unShow), unShow.replace(/\n/g, ' | '));
 
 /*
@@ -311,27 +332,27 @@ check('脏工作区下仍停在原分支、分支没被删', g(['-C', stlDirty.w
 console.log('\n④ 建 PR：请求形状、查重、422 分档、403 指明缺哪个权限');
 
 gh.reset();
-const made = await git.createPull('smoke/demo', { head: 'bandi/feat-demo', base: 'main', title: '加一个功能', body: '验证：跑了冒烟' });
-check('201 回来的是平台内部那一份形状（number/url/headRef/state）', made.created === true && made.pr.number >= 101 && /\/pull\//.test(made.pr.url) && made.pr.headRef === 'bandi/feat-demo' && made.pr.state === 'open', JSON.stringify(made.pr));
+const made = await git.createPull('smoke/demo', { head: 'fix/feat-demo', base: 'main', title: '加一个功能', body: '验证：跑了冒烟' });
+check('201 回来的是平台内部那一份形状（number/url/headRef/state）', made.created === true && made.pr.number >= 101 && /\/pull\//.test(made.pr.url) && made.pr.headRef === 'fix/feat-demo' && made.pr.state === 'open', JSON.stringify(made.pr));
 const createCall = gh.lastHit(/^POST \/repos\/smoke\/demo\/pulls$/);
-check('请求体用 GitHub 的字段名（head/base/title/body/draft）', createCall?.body?.head === 'bandi/feat-demo' && createCall?.body?.base === 'main' && createCall?.body?.draft === false, JSON.stringify(createCall?.body));
+check('请求体用 GitHub 的字段名（head/base/title/body/draft）', createCall?.body?.head === 'fix/feat-demo' && createCall?.body?.base === 'main' && createCall?.body?.draft === false, JSON.stringify(createCall?.body));
 
 /*
  * 2026-10-27「PR 区域」：列表项要把"从哪来 / 能不能合 / CI 什么状态"一起带出来
  * （原来只有编号/标题/作者/headSha，界面画不出 `head → base`、也说不出合并按钮为什么按不了）。
  */
 const listed = await git.listOpenPulls('smoke/demo');
-const listedRow = listed.find((p) => p.headRef === 'bandi/feat-demo');
+const listedRow = listed.find((p) => p.headRef === 'fix/feat-demo');
 check(
   'PR 列表项带 baseRef / headRef / mergeable / mergeableState',
-  listedRow?.baseRef === 'main' && listedRow?.headRef === 'bandi/feat-demo' && listedRow?.mergeable === true && listedRow?.mergeableState === 'clean',
+  listedRow?.baseRef === 'main' && listedRow?.headRef === 'fix/feat-demo' && listedRow?.mergeable === true && listedRow?.mergeableState === 'clean',
   JSON.stringify(listedRow),
 );
 gh.seedChecks('smoke/demo', listedRow.headSha, 'success');
 const listedChecks = await git.pullChecks('smoke/demo', listedRow.headSha);
 check('pullChecks 把 check-runs 归约成 success（PR 行的 gate ✓ 就吃它）', listedChecks.state === 'success' && listedChecks.total === 1, JSON.stringify(listedChecks));
 
-const again = await git.createPull('smoke/demo', { head: 'bandi/feat-demo', base: 'main', title: '又点了一次' });
+const again = await git.createPull('smoke/demo', { head: 'fix/feat-demo', base: 'main', title: '又点了一次' });
 check('同一个 head 再建 → 认成"已存在"，把那个 PR 交回来（不报错、不建第二个）', again.created === false && again.pr.number === made.pr.number, JSON.stringify({ c: again.created, n: again.pr.number }));
 
 let sameRef = '';
@@ -426,7 +447,7 @@ try {
     /*
      * 没连 GitHub 也能读工作区状态 —— 这一条**必须在没令牌的时刻测**（原来先取令牌再取状态，
      * 那条"没令牌也不报错"就成了永远为真的空话，2026-10-25 自查时抓到）。
-     * 分支不写死 main：③ 的推送已经把当前分支切到 bandi/feat-demo 了，
+     * 分支不写死 main：③ 的推送已经把当前分支切到 fix/feat-demo 了，
      * 这里要验的是"读到的是**此刻的本地事实**"，不是某个特定名字。
      */
     check('没连 GitHub 也读得到本地状态（/changes 不碰网络，点下去就该有反应）', c1.status === 200 && c1.b.state?.branch === pushed.branch, JSON.stringify({ s: c1.status, b: c1.b.state?.branch }));
@@ -452,7 +473,7 @@ try {
       method: 'POST',
       body: JSON.stringify({ title: 'feat: 把建 PR 接上界面', body: '验证：smoke-pr-create', paths: ['ship.js'] }),
     });
-    check('201：返回 pr / branch / base / created', created.status === 201 && created.b.pr?.number >= 101 && /^bandi\//.test(created.b.branch) && created.b.base === 'main' && created.b.created === true, JSON.stringify({ s: created.status, br: created.b.branch, n: created.b.pr?.number }));
+    check('201：返回 pr / branch / base / created', created.status === 201 && created.b.pr?.number >= 101 && /^(feat|fix|chore|docs|refactor|test|perf)\//.test(created.b.branch) && created.b.base === 'main' && created.b.created === true, JSON.stringify({ s: created.status, br: created.b.branch, n: created.b.pr?.number }));
     check('卡自动挂上这个 PR（五个字段落库）', created.b.task?.prRepo === 'smoke/demo' && created.b.task?.prNumber === created.b.pr?.number && created.b.task?.prState === 'open' && !!created.b.task?.prCheckedAt, JSON.stringify(created.b.task?.prRepo));
     check('GitHub 那边真有了这个 PR（假件内存里查得到）', gh.pulls.get('smoke/demo')?.some((p) => p.number === created.b.pr.number && p.head === created.b.branch));
     check('只提交挑中的文件（.env 仍没进去）', g(['-C', work, 'status', '--porcelain'], work).includes('.env'), g(['-C', work, 'status', '--porcelain'], work).replace(/\n/g, ' | '));
@@ -553,13 +574,13 @@ try {
       body: JSON.stringify({ title: 'repo 级建 PR', body: '来自仓库行' }),
     });
     check('POST /api/git/repos/:id/prs → 201 并返回 pr', rCreate.status === 201 && rCreate.b.created === true && rCreate.b.pr?.number >= 101, JSON.stringify({ s: rCreate.status, n: rCreate.b.pr?.number, e: rCreate.b?.error }));
-    check('只推已提交：推的就是当前分支（不再另起 bandi/ 新名）', rCreate.b.branch === 'bandi/feat-repo-pr', String(rCreate.b.branch));
+    check('只推已提交：推的就是当前分支（不再另起新名字）', rCreate.b.branch === 'bandi/feat-repo-pr', String(rCreate.b.branch));
     check('PR 的 head 就是那个分支（查重 / 合并都认它）', rCreate.b.pr?.headRef === 'bandi/feat-repo-pr', String(rCreate.b.pr?.headRef));
 
     const n1 = rCreate.b.pr.number;
     const rMerge = await req(`/api/git/repos/${id}/prs/${n1}/merge`, { method: 'POST', body: JSON.stringify({ method: 'squash', deleteBranch: true }) });
     check('合并 200', rMerge.status === 200 && rMerge.b.merged === true, JSON.stringify({ s: rMerge.status, m: rMerge.b?.merged }));
-    check('勾了删分支 → bandi/ 那条真的删了（DELETE ref 打到 GitHub）', rMerge.b.branchDeleted === rCreate.b.branch && gh.deletedRefs.includes(rCreate.b.branch), JSON.stringify(gh.deletedRefs));
+    check('勾了删分支 → 平台那条真的删了（DELETE ref 打到 GitHub）', rMerge.b.branchDeleted === rCreate.b.branch && gh.deletedRefs.includes(rCreate.b.branch), JSON.stringify(gh.deletedRefs));
     check(
       '仓库行合并后本地也收尾了（回到 main）',
       rMerge.b.local?.settled === true && g(['-C', work, 'branch', '--show-current'], work) === 'main',
@@ -572,7 +593,7 @@ try {
     // 人自己开的分支删不得：勾了也不动，只把"没删"这件事说出来（合并本身已经成了）
     const human = gh.seed('smoke/demo', { number: 91, title: '人开的分支', head: 'feature/human', base: 'main', headSha: 'sha-H' });
     const rMerge2 = await req(`/api/git/repos/${id}/prs/${human.number}/merge`, { method: 'POST', body: JSON.stringify({ deleteBranch: true }) });
-    check('非 bandi/ 分支：照样合并成功，但不删（那是人正在用的分支）', rMerge2.status === 200 && rMerge2.b.merged === true && rMerge2.b.branchDeleted === null, JSON.stringify({ d: rMerge2.b?.branchDeleted }));
+    check('人开的分支（feature/human）：照样合并成功，但不删（删了是砸人正在干的活）', rMerge2.status === 200 && rMerge2.b.merged === true && rMerge2.b.branchDeleted === null, JSON.stringify({ d: rMerge2.b?.branchDeleted }));
     check('并且把"没删"说出来（不当成删了，也不报成失败）', /没删源分支/.test(String(rMerge2.b.note ?? '')), String(rMerge2.b.note));
     check('feature/human 没被发过 DELETE', !gh.deletedRefs.includes('feature/human'));
 
@@ -634,7 +655,7 @@ try {
     const flowPr = gh.pulls.get('smoke/demo')?.find((p) => p.number === Number(flowRow.prNumber));
     check('假 GitHub 真收到了建 PR 请求（标题来自流程）', !!flowPr && flowPr.title === '流程建 PR', flowPr?.title);
     check('PR 正文带上了流程的起因', /flow\.js/.test(flowPr?.body ?? ''), flowPr?.body);
-    check('新分支是 bandi/ 开头（不往 base 上提）', /^bandi\//.test(flowPr?.head ?? ''), flowPr?.head);
+    check('新分支是 <type>/ 开头（不往 base 上提）', /^(feat|fix|chore|docs|refactor|test|perf)\//.test(flowPr?.head ?? ''), flowPr?.head);
     check(
       '流程记住管理员看的是哪个 head（自动合并只认它）',
       prReview.reviewedShaOf(flowRun.id) === flowPr.headSha,
