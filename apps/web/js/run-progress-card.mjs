@@ -26,13 +26,22 @@ export function createProgressCard({ startedAt = Date.now(), onStop = null } = {
   const el = document.createElement('div');
   el.className = 'rp';
   el.dataset.rp = '';
+  /*
+   * 版式（2026-10-30 用户："这个我想改成 dsh 回复时候那种模式"）：
+   * 工具调用**默认折叠成一行**（`› 工具调用 · 5 步`），点开才展开逐条命令 ——
+   * 讨论区里一屏本来就没多少地方，五条长命令铺开之后，人话全被压到看不见了。
+   * 卡片骨架与状态机没变，只是把 `.rp-steps` 收进一层 fold。
+   */
   el.innerHTML = `
     <div class="rp-head">
       <span class="rp-dot"></span><span class="rp-phase">准备中</span>
       <span class="rp-meta"></span><span class="rp-time">00:00</span>
     </div>
     <div class="rp-last" hidden></div>
-    <div class="rp-steps"></div>`;
+    <button type="button" class="rp-fold" aria-expanded="false" hidden>
+      <span class="rp-chev">›</span><span class="rp-fold-txt">工具调用</span>
+    </button>
+    <div class="rp-steps" hidden></div>`;
 
   /** 一张工具卡片：第几步、干了什么、多久/成败 */
   const stepHtml = (s) => {
@@ -54,6 +63,9 @@ export function createProgressCard({ startedAt = Date.now(), onStop = null } = {
       ${dur}${err}
     </div>`;
   };
+
+  /** 工具明细是否展开（2026-10-30 起默认收起 —— 讨论区先看人话，命令要看再点） */
+  let open = false;
 
   /** 画一帧（调用方每秒也走一次：总用时、单步耗时、"多久没动静"都靠它） */
   const paint = () => {
@@ -89,11 +101,29 @@ export function createProgressCard({ startedAt = Date.now(), onStop = null } = {
     lastEl.classList.toggle('warn', v.stalled && !v.done);
 
     const stepsEl = el.querySelector('.rp-steps');
+    const foldEl = el.querySelector('.rp-fold');
     const shown = v.steps.slice(-8);
+    /* 有红了的步骤就自动展开一次 —— 出错还让人再点一下找红字，等于没说 */
+    if (v.steps.some((s) => s.error)) open = true;
     stepsEl.innerHTML =
       (v.steps.length > 8 ? `<div class="rp-more">…前 ${v.steps.length - 8} 步已折叠</div>` : '') +
       shown.map(stepHtml).join('');
+    // 折叠行：没有步骤就整行不出现；有步骤时写清"几条、点开看什么"
+    foldEl.hidden = !v.steps.length;
+    foldEl.setAttribute('aria-expanded', open ? 'true' : 'false');
+    foldEl.querySelector('.rp-fold-txt').textContent = open
+      ? `工具调用 · ${v.steps.length} 步（点收起）`
+      : `工具调用 · ${v.steps.length} 步（点开看明细）`;
+    el.classList.toggle('open', open);
+    stepsEl.hidden = !open;
   };
+
+  /* 折叠行的点击：只是展开/收起，不碰运行本身 */
+  el.querySelector('.rp-fold').addEventListener('click', (e) => {
+    e.preventDefault();
+    open = !open;
+    paint();
+  });
 
   // 卡住行里那颗「停止生成」：调用方传 onStop，这颗钮就走哪个接口
   el.addEventListener('click', (e) => {

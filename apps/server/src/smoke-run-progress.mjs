@@ -168,6 +168,12 @@ console.log('\n⑥ 聊天页接线（静态断言，防"归约器写了没人用
   check('不再用三个点占位', !/class="typing"><i><\/i><i><\/i><i><\/i>/.test(chatSrc));
   check('卡住行里直接给「停止生成」按钮', /class="rp-stop">停止生成/.test(cardSrc) && /createProgressCard\(\{[\s\S]*?onStop/.test(chatSrc));
   check('卡住的步骤有「等结果」状态（不再假装进行中）', /waiting/.test(cardSrc) && /已等/.test(cardSrc));
+  /*
+   * 2026-10-30 用户："这个我想改成 dsh 回复时候那种模式" —— 工具明细默认折叠成一行，
+   * 点开才铺命令。断言钉两头：折叠行存在、明细则默认 hidden（否则等于没折叠）。
+   */
+  check('工具明细默认折叠成一行', /class="rp-fold"/.test(cardSrc) && /<div class="rp-steps" hidden>/.test(cardSrc));
+  check('折叠行点得开（点了只是展开/收起，不碰运行）', /\.rp-fold'\)\.addEventListener\('click'/.test(cardSrc) || /querySelector\('\.rp-fold'\)\.addEventListener/.test(cardSrc));
 }
 
 console.log(`\n结论：${failed ? `${failed} 项没过` : '全通过'}`);
