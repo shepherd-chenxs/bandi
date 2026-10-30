@@ -1094,17 +1094,23 @@ export async function renderGitRepos(root = $('pluginView')) {
         const ahead = state?.ahead;
         if ((ahead ?? 0) > 0) {
           /*
-           * 有已提交没推的就给按钮 —— 不管工作区脏不脏（2026-10-29 用户实报："之前提交的还没建 PR，
-           * 现在新改了，之前的就不能建 PR 了？"）。脏文件不会被顺手带走，界面上说清楚就行。
+           * 没推送时不给按钮（2026-10-30 用户："还没有推送，要这个建PR按钮干啥？"）——
+           * 建出来也是被服务端"先推送"顶回来，白点一下。推送是「推送」卡的事，推完这里再亮。
+           * 文案只说一件事（2026-10-30 用户："去掉这两条，没有啥用"）：去推送，推完能建。
            */
-          const n = ahead === null ? '' : `（领先 ${esc(base)} ${ahead} 个提交）`;
-          const extra = state?.dirtyCount
-            ? `；未提交的 ${state.dirtyCount} 个改动不会进这条 PR`
-            : '';
-          cta = `<div class="gr-pr-cta">
-            <span>当前分支 <b>${esc(cur)}</b> 还没有 PR ${n}${extra}</span>
-            <button type="button" class="mini auto" id="grPrCreate">建 PR</button>
-          </div>`;
+          const unpushed = Number(state?.unpushed ?? 0);
+          if (unpushed > 0 || !state?.upstream) {
+            cta = `<div class="gr-pr-cta">当前分支 <b>${esc(cur)}</b> 还没有 PR —— 先去上面「推送」卡推送，推完这里就能建 PR。</div>`;
+          } else {
+            const n = ahead === null ? '' : `（领先 ${esc(base)} ${ahead} 个提交）`;
+            const extra = state?.dirtyCount
+              ? `；未提交的 ${state.dirtyCount} 个改动不会进这条 PR`
+              : '';
+            cta = `<div class="gr-pr-cta">
+              <span>当前分支 <b>${esc(cur)}</b> 还没有 PR ${n}${extra}</span>
+              <button type="button" class="mini auto" id="grPrCreate">建 PR</button>
+            </div>`;
+          }
         } else if (state?.dirtyCount) {
           cta = `<div class="gr-pr-cta">当前分支 <b>${esc(cur)}</b> 有 ${state.dirtyCount} 个未提交改动 —— 先在「提交」里提交，提交完这里就能建 PR。</div>`;
         } else {

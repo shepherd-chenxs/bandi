@@ -99,7 +99,7 @@ function pickRuntime(prefer = ['claude', 'codex', 'dsh']) {
  * @returns {Promise<{message:string, source:'model'|'rule', note?:string}>}
  *   source=rule 时 note 说明为什么没走成模型（界面上小字带一句，别让人以为是模型写的）
  */
-export async function suggestCommitMessage(row, { paths = null, timeoutMs = 15000 } = {}) {
+export async function suggestCommitMessage(row, { paths = null, timeoutMs = 30000 } = {}) {
   /*
    * **不带 diff 正文**（2026-10-29 实测）：同一份改动，喂 4000 字 diff 要 **40 秒**，
    * 只给文件清单 + `--stat` 是 **6.3 秒**，而写一行说明的质量没差 —— 一行字要的是
@@ -115,6 +115,8 @@ export async function suggestCommitMessage(row, { paths = null, timeoutMs = 1500
   }
 
   const ctl = new AbortController();
+  // 15 秒实测不够（2026-10-30）：Claude Code 冷启动到吐字这台机器要 17 秒+，每次都掐死在临门一脚，
+  // 界面永远只见"没给出可用的说明"。30 秒是"真挂了"和"慢"的分界。
   const timer = setTimeout(() => ctl.abort(), timeoutMs);
   try {
     const out = await adapter({
@@ -125,6 +127,11 @@ export async function suggestCommitMessage(row, { paths = null, timeoutMs = 1500
       ...(rt.family === 'codex' ? { sandbox: 'read-only' } : {}),
       signal: ctl.signal,
     });
+    // 适配器失败是**正常 resolve**（text 空 + error 带真话），不是 reject —— 不接住它，
+    // 真话就被扔了，永远报成"没给出可用的说明"（2026-10-30 实测踩过）
+    if (out?.isError || out?.error) {
+      return { message: md, source: 'rule', note: `模型没跑成：${out.error}` };
+    }
     const msg = pickMessage(out?.text);
     if (msg) return { message: msg, source: 'model' };
     return { message: md, source: 'rule', note: `${rt.label ?? rt.family} 没给出可用的说明` };
@@ -228,7 +235,7 @@ export function buildPrPrompt(st, digest) {
  *
  * @returns {Promise<{title:string, body:string, source:'model'|'rule', note?:string}|null>}
  */
-export async function suggestPrDraft(row, { timeoutMs = 15000 } = {}) {
+export async function suggestPrDraft(row, { timeoutMs = 30000 } = {}) {
   const st = await workState(row);
   /* 素材只有**已提交、还没推**的那些（2026-10-29：建 PR 不再顺手提交，脏文件进不去 PR，
      拿它当素材写出来的描述就是假话）。没有提交可推 → 没得填。 */
@@ -252,6 +259,10 @@ export async function suggestPrDraft(row, { timeoutMs = 15000 } = {}) {
       ...(rt.family === 'codex' ? { sandbox: 'read-only' } : {}),
       signal: ctl.signal,
     });
+    // 同 suggestCommitMessage：失败是 resolve 不 reject，error 字段不接住就丢了
+    if (out?.isError || out?.error) {
+      return fb ? { ...fb, source: 'rule', note: `模型没跑成：${out.error}` } : null;
+    }
     const draft = parsePrDraft(out?.text);
     if (draft.title) return { ...draft, source: 'model' };
     return fb ? { ...fb, source: 'rule', note: `${rt.label ?? rt.family} 没给出可用的草稿` } : null;
