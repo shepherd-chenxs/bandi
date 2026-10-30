@@ -75,6 +75,8 @@ const RUN = [
   'apps/server/src/smoke-workflows.mjs',
   'apps/desktop/smoke-shell.mjs',
   'tools/smoke-help-pop.mjs',
+  // 2026-10-30：分支角标（↙N 蓝 / ↗N 绿）在合并里被误退回"单色、不带数字" —— 钉进清单
+  'tools/smoke-branch-badge.mjs',
 ];
 
 /** 不跑的：写明原因（要真实 CLI / 模型，会烧 token） */
