@@ -1482,6 +1482,8 @@ export async function renderGitRepos(root = $('pluginView')) {
        * 单独一个绿 span —— buttonText 是纯文本，上不了色。
        */
       buttonText: (v) => v || '游离 HEAD',
+      // 按钮文案前的分支图标（2026-10-30 用户："左边加图标，像是idea那样"；边框同日去掉，见 style.css）
+      buttonIcon: ICON_BRANCH,
       buttonBadge: () => {
         const up = Number(state.unpushed ?? 0);
         const down = Number(state.unpulled ?? 0);
@@ -1507,11 +1509,19 @@ export async function renderGitRepos(root = $('pluginView')) {
       if (!id) return;
       const remote = id.startsWith('origin/');
       const name = remote ? id.slice('origin/'.length) : id;
-      const rect = ev.detail?.el?.getBoundingClientRect?.();
+      // 整颗浮到**面板外面**（2026-10-30 用户二调："我要的是在弹窗外"）：
+      // x 锚在面板（.combo-pop）右缘外 —— 菜单不压面板边；y 锚在**那一行**（.combo-item）
+      // 的顶上（菜单自带 4px 内边距，减 4 正好让菜单第一项和行顶对齐；
+      // 之前锚的是行尾 `›` 按钮，按钮在行内垂直居中，菜单整体矮了一截）。
+      const rowRect = ev.detail?.el?.closest?.('.combo-item')?.getBoundingClientRect?.();
+      const popRect = ev.detail?.el?.closest?.('.combo-pop')?.getBoundingClientRect?.();
       openBranchMenu(
         repo,
-        { x: rect ? rect.left : 0, y: rect ? rect.bottom + 2 : 0 },
+        { x: popRect ? popRect.right : 0, y: rowRect ? rowRect.top - 4 : 0 },
         { name, remote, cur: state.branch ?? '' },
+        // 签出收进二级菜单第一位（2026-10-30 用户："点击选项就打开，改成二级窗口的一个选项，放在第一位"）：
+        // 复用 onBranchPick 的切分支路径 —— 确认框（ahead / 脏工作区提醒）原样保留。
+        { checkout: () => onBranchPick(repo, id, state.branch ?? '', combo) },
       );
     });
 
@@ -2007,10 +2017,11 @@ export async function renderGitRepos(root = $('pluginView')) {
 
   /**
    * 分支的二级菜单（2026-10-30 用户："加个小箭头，点击展示二级菜单，就是 IDEA 的这种效果"）。
-   * 里面只放"对这条分支做的事"：比较（base 自己不用比）、删除（当前 / base 不给；远端只给平台建的分支）。
+   * 里面只放"对这条分支做的事"：签出（第一位，当前分支不给）、比较（base 自己不用比）、
+   * 删除（当前 / base 不给；远端只给平台建的分支）。
    * 一个能点的都没有就不弹 —— 空白菜单比没有菜单更让人困惑。
    */
-  function openBranchMenu(repo, pos, { name, remote, cur }) {
+  function openBranchMenu(repo, pos, { name, remote, cur }, { checkout } = {}) {
     const base = repos.find((r) => r.id === repo.id)?.defaultBranch || 'main';
     const isBase = name === base;
     const isCur = !remote && name === cur;
@@ -2018,6 +2029,9 @@ export async function renderGitRepos(root = $('pluginView')) {
     const isPlatform =
       /^bandi\//.test(name) || /^(feat|fix|chore|docs|refactor|test|perf)\/[a-z0-9][a-z0-9.-]*$/.test(name);
     const items = [];
+    if (checkout && !isCur) {
+      items.push({ label: remote ? '签出…' : '签出', run: checkout });
+    }
     if (!isBase) items.push({ label: '与 base 比较…', run: () => openBranchCompareDlg(repo, name) });
     if (!remote && !isCur && !isBase) {
       items.push({ label: '删除分支…', danger: true, run: () => deleteBranchByMenu(repo, name, false) });

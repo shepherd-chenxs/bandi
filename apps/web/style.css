@@ -2001,8 +2001,14 @@ dialog#repoPrDlg { width: 660px; height: min(720px, 92vh); max-height: 92vh;
    分支 pill / 改动卡（单文件 diff + 丢弃 + 提交）/ 历史卡。
    pill 是 createCombo（全站公共下拉）套了个胶囊皮：搜索、分组、✓ 全是现成的。 */
 .gr-branch { display: inline-flex; max-width: 300px; vertical-align: middle; }
+/* 分支 pill（2026-10-30 用户："把边框去掉，左边加图标，像是idea那样"）：
+   无边框无底色、悬停只浮一层淡底 —— 跟 VS Code / IDEA 的分支切换器一个气质；
+   图标（.combo-btn-ic）降灰，让分支名当主角。 */
 .gr-branch .combo-btn { width: auto; height: 26px; padding: 0 10px; gap: 6px;
-                        border-radius: 999px; background: var(--side); font-size: 12px; }
+                        border-color: transparent; background: transparent; }
+.gr-branch .combo-btn:hover { border-color: transparent; background: var(--hover); }
+.gr-branch .combo-btn-ic { flex: 0 0 auto; display: inline-flex; color: var(--dim); }
+.gr-branch .combo-btn-ic svg { width: 14px; height: 14px; }
 .gr-branch .combo-text { font-family: ui-monospace, monospace; font-size: 11.5px; }
 .gr-branch .combo-chev { width: 5px; height: 5px; margin-right: 0; }
 /* 分支弹窗比通用下拉大一档（2026-10-27 用户："大一些"）：分支名长（bandi/xxx-时间戳）、
@@ -2013,7 +2019,8 @@ dialog#repoPrDlg { width: 660px; height: min(720px, 92vh); max-height: 92vh;
 .gr-branch .combo-pop { width: 440px; min-width: 0; max-width: min(440px, 92vw); }
 .gr-branch .combo-pop input { font-size: 13px; padding: 8px 10px; }
 .gr-branch .combo-list { height: min(420px, 62vh); max-height: none; }
-.gr-branch .combo-item { padding: 8px 10px; }
+/* 分支行右内边距收窄（2026-10-30 用户："箭头与右边界的间隙减小"）：只收右侧，左对齐不动 */
+.gr-branch .combo-item { padding: 8px 4px 8px 10px; }
 /* 左名右源截断规则（2026-10-27 二调，用户："左边的要显示全，右边的可以加..."）：
    左边本地名 flex-shrink:0 —— 按内容走全宽，永不截断；
    右边远程名 margin-left:auto 顶到行右 + 允许收缩（min-width:0 是省略号生效的前提），

@@ -313,6 +313,9 @@ export function createCombo({
   // 给函数就按当前值现算（返回空串 = 不显示）；给字符串就是固定的。
   // 单独一个 span 是为了**上色**：buttonText 是纯文本，塞不进颜色。
   buttonBadge = null,
+  // 按钮上文案**前面**的图标（SVG 字符串，2026-10-30 分支 pill："左边加图标，像是idea那样"）。
+  // 可选；不传 = 跟以前一样没有图标。
+  buttonIcon = null,
   onChange = () => {},
   // 展开下拉时的回调 —— 给"点开才去取清单"用。
   // 比如模型列表要读运行时的配置（dsh 那条是一次 HTTP），不适合在打开页面时就拉。
@@ -344,6 +347,12 @@ export function createCombo({
   const chev = document.createElement('i');
   chev.className = 'combo-chev';
   btn.append(text, badge, chev);
+  if (buttonIcon) {
+    const ic = document.createElement('span');
+    ic.className = 'combo-btn-ic';
+    ic.innerHTML = buttonIcon;
+    btn.prepend(ic);
+  }
 
   const pop = document.createElement('div');
   pop.className = 'combo-pop is-hidden';
@@ -461,7 +470,7 @@ export function createCombo({
              *   · `menu`（2026-10-30，IDEA 那种小箭头）—— 行尾一颗 `›`，点开是这条分支的二级菜单。
              * 都是可选的，别的下拉不传 = 跟以前逐字一样。
              */
-            return `<div class="combo-item ${it.cls ?? ''} ${it.sub ? 'sub ' : ''}${pi === hi ? 'hi' : ''}" data-pick="${esc(it.id)}">
+            return `<div class="combo-item ${it.cls ?? ''} ${it.sub ? 'sub ' : ''}${pi === hi ? 'hi' : ''}" data-pick="${esc(it.id)}"${it.menu ? ' data-menu="1"' : ''}>
                  ${it.icon ? `<span class="combo-ic">${it.icon}</span>` : ''}
                  <span class="combo-item-label">${esc(it.label)}${it.badge ? `<span class="combo-badge">${esc(it.badge)}</span>` : ''}</span>
                  ${it.hint ? `<span class="combo-hint" title="${esc(it.hint)}">${esc(it.hint)}</span>` : ''}
@@ -471,17 +480,23 @@ export function createCombo({
           })
           .join('')
       : `<div class="combo-empty">${esc(empty)}</div>`;
-    list.querySelectorAll('[data-pick]').forEach((el) => { el.onclick = () => pick(el.dataset.pick); });
     /*
-     * 行尾那颗 `›`（2026-10-30，IDEA 分支弹窗同款）：点它**不是**选这条分支，是开这条分支的二级菜单。
-     * 所以这里 stopPropagation 掉"选中"，再用一个自定义事件交给页面处理（页面只认"给我一个 id 和位置"）。
+     * 带 menu 的行（分支行，2026-10-30 用户："点击选项就打开，改成二级窗口的一个选项，放在第一位"）：
+     * 点**整行**都不再直接选中 —— 跟行尾 `›` 一样只开这条分支的二级菜单（签出收进菜单第一位）。
+     * 没带 menu 的行（标签、别的下拉）照旧点行即选。
      */
+    const fireItemMenu = (row) =>
+      root.dispatchEvent(new CustomEvent('combo-menu', { detail: { id: row.dataset.pick ?? '', el: row } }));
+    list.querySelectorAll('[data-pick]').forEach((el) => {
+      el.onclick = () => (el.dataset.menu ? fireItemMenu(el) : pick(el.dataset.pick));
+    });
+    /* 行尾 `›`：开二级菜单（stopPropagation 掉"选中"；现在整行都开菜单，它只是个显眼的抓手） */
     list.querySelectorAll('.combo-more').forEach((b) => {
       b.addEventListener('click', (ev) => {
         ev.preventDefault();
         ev.stopPropagation();
         const item = b.closest('.combo-item');
-        root.dispatchEvent(new CustomEvent('combo-menu', { detail: { id: item?.dataset.pick ?? '', el: b } }));
+        if (item) fireItemMenu(item);
       });
     });
     list.querySelectorAll('[data-fold]').forEach((el) => {
@@ -556,7 +571,12 @@ export function createCombo({
       } else if (e.key === 'Enter') {
         e.preventDefault();
         const hit = list.querySelector('.hi') ?? hits[0];
-        if (hit) pick(hit.dataset.pick);
+        if (!hit) return;
+        // 带菜单的行（分支行）回车同样开二级菜单，跟点行一致
+        if (hit.dataset.menu) {
+          hit.scrollIntoView({ block: 'nearest' });
+          fireItemMenu(hit);
+        } else pick(hit.dataset.pick);
       }
     });
   }
