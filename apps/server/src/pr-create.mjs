@@ -188,7 +188,7 @@ async function runCreateNode({ runId, task }) {
       url: `https://github.com/${run.prRepo}/pull/${n}`,
     };
   } else {
-    const out = await git.openPr(row, { title: prTitleOf(run), body: prBodyOf(run) });
+    const out = await git.openPr(row, { title: prTitleOf(run), body: prBodyOf(run), push: true });
     pr = {
       repo: row.fullName,
       number: out.pr.number,

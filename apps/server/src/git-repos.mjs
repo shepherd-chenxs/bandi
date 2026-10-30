@@ -696,10 +696,13 @@ export async function checkoutBranch(row, name) {
 }
 
 /**
- * 普通提交（**不建 PR、不推送**）：把工作区全部改动收到当前分支上。
+ * 普通提交（**不建 PR、不推送**）：把工作区改动收到分支上。
  * 与建 PR 共用凭据闸 —— 界面上"就是要提交"和建 PR 弹窗里那颗是一个意思。
+ *
+ * ⚠️ 站在 base（main）上提交会自动先拉一条分支（`autoBranch` 如实回给界面）：
+ * 主分支只接受 PR 合进来，不接受本地提交 —— 2026-10-29 定下的规矩。
  */
-export async function commitAll(row, { message, allowSecrets = false, paths = null } = {}) {
+export async function commitAll(row, { message, allowSecrets = false, paths = null, branch = null } = {}) {
   const msg = String(message ?? '').trim();
   if (!msg) throw new Error('提交说明是空的 —— 一句话说清这次改了什么');
   const st = await workState(row);
@@ -716,6 +719,34 @@ export async function commitAll(row, { message, allowSecrets = false, paths = nu
   if (secrets.length && !allowSecrets) {
     throw new Error(`改动里有看着像凭据的文件：${secrets.slice(0, 4).join('、')}${secrets.length > 4 ? ` 等 ${secrets.length} 个` : ''} —— 一旦提交就进历史了。确认可以提交，再带上"就是要提交"`);
   }
+
+  /*
+   * **主分支闸**（2026-10-29 用户："main 不应该直接提交 —— 提交时就该检查，在 main 上就提示新建分支"）。
+   *
+   * 以前这里直接在当前分支上 `git commit`：人站在 main 上一提交，main 就被本地提交污染了
+   * （随后只能在建 PR 时从 HEAD 补一条分支兜住 —— 那是事后擦屁股，主分支历史已经脏了）。
+   * 现在提交前先看一眼：站在 base 上就先拉一条分支，提交落在新分支上，main 一条提交都不多。
+   *
+   * 不"报错挡人"：挡住等于让人先手动切分支再回来重来（多一步，且他多半不知道叫什么名）。
+   * 默认名由服务端给（`suggestBranchName`，界面上那张卡里看得见、能改）。
+   */
+  const base = row.defaultBranch || null;
+  const branchName = branch ? assertBranchName(branch) : null;
+  let autoBranch = null;
+  if (base && st.branch === base) {
+    const target = branchName ?? suggestBranchName(msg || row.name);
+    if (target === base) throw new Error(`不能直接提交到 ${base}（主分支）—— 给这条改动起个分支名`);
+    const create = await gitIn(row.localPath, ['checkout', '-b', target], { timeoutMs: GIT_FAST_MS });
+    if (create.code !== 0) {
+      // 分支已存在就切过去接着用（同一个分支上补一次提交是常态），不动它的历史
+      const reuse = await gitIn(row.localPath, ['checkout', target], { timeoutMs: GIT_FAST_MS });
+      if (reuse.code !== 0) {
+        throw new Error(`从 ${base} 拉分支 ${target} 没成：${(create.out || reuse.out).split('\n').slice(-3).join(' ')}`);
+      }
+    }
+    autoBranch = { from: base, to: target };
+  }
+  const onBranch = autoBranch?.to ?? st.branch;
   const idArgs = await commitIdentityArgs(row.localPath);
   const addTargets = addTargetsOf(picked);
   // 全是"已暂存的删除"时 targets 为空：整提（非子集）补一把 -A 兜底；子集时什么都不 add
@@ -728,7 +759,7 @@ export async function commitAll(row, { message, allowSecrets = false, paths = nu
   const commit = await gitIn(row.localPath, [...idArgs, 'commit', '-m', msg]);
   if (commit.code !== 0) throw new Error(`提交没成：${commit.out.split('\n').slice(-4).join(' ')}`);
   const sha = await gitIn(row.localPath, ['rev-parse', 'HEAD']);
-  return { committed: { sha: sha.code === 0 ? sha.out : null, subject: msg }, branch: st.branch, files: picked.length };
+  return { committed: { sha: sha.code === 0 ? sha.out : null, subject: msg }, branch: onBranch, files: picked.length, autoBranch };
 }
 
 /**
@@ -1579,6 +1610,7 @@ export async function workState(row) {
   let upstream = null;
   let unpushed = null;
   let unpulled = null;
+  let unpushedCommits = [];
   if (branch) {
     const up = await gitIn(cwd, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
     if (up.code === 0 && up.out) {
@@ -1587,6 +1619,15 @@ export async function workState(row) {
       if (a.code === 0) unpushed = Number(a.out) || 0;
       const b = await gitIn(cwd, ['rev-list', '--count', 'HEAD..@{u}']);
       if (b.code === 0) unpulled = Number(b.out) || 0;
+      // 推送区要展示的清单（2026-10-29 用户："提交下面加一个推送区，展示没有推送的提交"）：
+      // 跟「历史」卡同款格式（sha / 作者 / 时间 / 说明），上限 20 条，多出来的只报数
+      const ul = await gitIn(cwd, ['log', '--max-count=20', '--date=iso-local', '--pretty=format:%h%x09%an%x09%ad%x09%s', '@{u}..HEAD']);
+      if (ul.code === 0) {
+        unpushedCommits = ul.out.split('\n').filter(Boolean).map((line) => {
+          const [sha, author, date, ...rest] = line.split('\t');
+          return { sha, author, date, subject: rest.join('\t') };
+        });
+      }
     }
   }
 
@@ -1604,12 +1645,15 @@ export async function workState(row) {
     behind,
     upstream,
     unpushed,
+    unpushedCommits,
     unpulled,
     dirty,
     dirtyCount: dirty.length,
     secrets: findSecretPaths(dirty.map((f) => f.path)),
     // 默认分支名由服务端给（`bandi/<名>-<时间戳>`）：规则只留一处，界面和人敲的是同一套
     suggest: suggestBranchName(row.name),
+    // 站在 base（main）上：界面据此把提交卡换成"建分支并提交"（主分支不收本地提交）
+    onBase: !!base && branch === base,
     canShip: dirty.length > 0 || (ahead ?? 0) > 0,
     /*
      * 建 PR 的唯一门槛（2026-10-29 用户："提交和建 PR 一起，说不清也不好控制"）：
@@ -1617,6 +1661,8 @@ export async function workState(row) {
      * 只是那些没提交的改动进不去（界面要明说）。
      */
     canPr: (ahead ?? 0) > 0,
+    // 「现在就能建 PR」= 有东西进 PR 且已经推到远端 —— 推送和建 PR 拆开后的闸（2026-10-29）
+    canPrNow: (ahead ?? 0) > 0 && !!upstream && (unpushed ?? 0) === 0,
   };
 }
 
@@ -1820,15 +1866,31 @@ export async function deleteRemoteBranch(repo, branch) {
  *   · 默认 `true` —— 卡上/员工那条路还是"把改动提交上去再建 PR"，agent 干完活手上就是一堆脏文件；
  *   · 代码托管页那颗按钮走 `false` —— **只推已提交的**，提交是「提交」按钮单独一步。
  */
-export async function openPr(row, { title, body, base, branch, message, draft, paths, allowSecrets, includeDirty = true } = {}) {
-  const pushed = await commitAndPush(row, {
-    branch,
-    message: message ?? title,
-    paths: includeDirty ? paths : null,
-    allowSecrets,
-    base,
-    pushOnly: !includeDirty,
-  });
+export async function openPr(row, { title, body, base, branch, message, draft, paths, allowSecrets, includeDirty = true, push = false } = {}) {
+  /*
+   * 推送和建 PR 拆开（2026-10-29 用户："推送和 PR 拆开，这里只是建 PR 就可以，因为前面的推送已经做了"）：
+   *   · push:false（界面那条路，默认）—— 只建 PR：head 就是当前分支，且必须已经推到远端；
+   *     没推完就报错指路推送区，**绝不顺手推** —— 推是「推送」区那颗按钮的事，两件事别混在一颗按钮里。
+   *   · push:true（流程节点那条路）—— 全自动：提交/推送/建 PR 一口气，跟以前一样（人不在场，没有"先推送"可指）。
+   */
+  let pushed;
+  if (push) {
+    pushed = await commitAndPush(row, {
+      branch,
+      message: message ?? title,
+      paths: includeDirty ? paths : null,
+      allowSecrets,
+      base,
+      pushOnly: !includeDirty,
+    });
+  } else {
+    const st = await workState(row);
+    if (st.detached || !st.branch) throw new Error('当前不在任何分支上（detached HEAD）—— 先在那个目录 checkout 回一个分支再建 PR');
+    if (!st.upstream || (st.unpushed ?? 0) > 0) {
+      throw new Error(`这条分支还有 ${st.unpushed ?? '若干'} 个提交没推送 —— 先在「提交」卡的推送区点「推送」，推完再回来建 PR`);
+    }
+    pushed = { branch: st.branch, base: await resolveBase(row, base), committed: null, files: [] };
+  }
   const existing = await findOpenPullForHead(row.fullName, pushed.branch, row.owner);
   if (existing) return { pr: existing, created: false, ...pushed };
   const out = await createPull(row.fullName, {

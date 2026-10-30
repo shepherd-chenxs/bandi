@@ -1957,7 +1957,7 @@ dialog#repoPrDlg { width: 660px; height: min(720px, 92vh); max-height: 92vh;
 /* ⚠️ 上面那条把 #prForm 设成了 display:flex —— 作者样式压过 UA 的 `[hidden]{display:none}`，
    没这一条，「不可建 PR」时表单照样显示（老坑，见 MEMORY「断显隐看 computed display」）。 */
 #repoPrDlg #prForm[hidden] { display: none; }
-#repoPrDlg #prForm > label, #repoPrDlg .pr-fill-row, #repoPrDlg .pr-branch-row { flex: 0 0 auto; }
+#repoPrDlg #prForm > label, #repoPrDlg .pr-fill-row { flex: 0 0 auto; }
 /* 描述框是这一屏唯一的"可伸缩项"：窗口高度固定，多出来的空间给它 */
 #repoPrDlg #prBody { flex: 1 1 auto; min-height: 96px; resize: none; }
 /* 提交清单不再自带滚动条（概览区整体滚就够了，套两层滚轮很难受） */
@@ -1980,8 +1980,6 @@ dialog#repoPrDlg { width: 660px; height: min(720px, 92vh); max-height: 92vh;
 /* 字段 label 的灰色小注（原来塞在括号里，现在挪出来跟在标题后面） */
 #repoPrDlg label em { margin-left: 4px; font-style: normal; }
 #repoPrDlg #prTitle { font-size: 13.5px; }
-.pr-branch-row { display: flex; gap: 14px; }
-.pr-branch-row > div { flex: 1 1 0; min-width: 0; }
 /* 动作条钉底：margin-top:auto 把剩余高度全吃掉（不是固定 16px —— 定高窗口里正文短了会浮在半空） */
 #repoPrDlg .dlg-actions { flex: 0 0 auto; margin: auto -20px -20px; padding: 14px 20px; border-top: 1px solid var(--line); }
 /* 管理员（2026-10-23 用户拍板）：不放 select —— 直接显示员工姓名的按钮，
@@ -2061,6 +2059,15 @@ dialog#repoPrDlg { width: 660px; height: min(720px, 92vh); max-height: 92vh;
 .gr-commit-acts .gr-suggest { height: 32px; padding: 0 16px; border-radius: 8px;
                               font-size: 12.5px; font-weight: 500; }
 .gr-commit-acts .gr-suggest:disabled { opacity: .6; cursor: default; }
+/* 主分支提示（2026-10-29 用户："main 不应该直接提交，提交时就该检查"）：
+   站在 base 上提交 = 先建一条分支，这一格把"提交到哪儿"摆明（名字可改）。 */
+.gr-commit-base { flex: 0 0 auto; padding: 9px 11px; border-radius: 8px;
+                  background: var(--side); border: 1px solid var(--line);
+                  display: flex; flex-direction: column; gap: 7px; }
+.gr-cb-tip { font-size: 12px; line-height: 1.6; color: var(--dim); }
+.gr-cb-tip b { color: var(--text); font-weight: 600; font-family: ui-monospace, monospace; }
+.gr-cb-warn { color: var(--warn); }
+.gr-commit-base input { width: 100%; font-family: ui-monospace, monospace; font-size: 12px; }
 /* 行右缩进（2026-10-27 二调：用户"折叠区的条目再往右缩进"）：文件行比组标题深两级 ——
    组头内容从 12px 起，行内容从 52px 起；悬停底色仍铺满整行。 */
 .gr-chg-row { display: flex; align-items: center; gap: 8px; padding: 6px 12px 6px 52px; cursor: pointer; min-width: 0; }
@@ -2117,6 +2124,12 @@ dialog#repoPrDlg { width: 660px; height: min(720px, 92vh); max-height: 92vh;
 /* 历史卡：sha 等宽、主题吃满、作者/时间靠右降灰 */
 /* 历史卡固定高度（2026-10-27，用户："历史卡片固定高度"）：提交多了卡内滚，不再撑长整页。 */
 #grLog { height: 380px; overflow-y: auto; }
+/* 推送区（2026-10-29 用户："提交下面加一个推送区，展示没有推送的提交"）：
+   标题行（个数 + 推送钮钉右）+ 提交清单（复用 .gr-log-row 的行形与分隔线）。 */
+/* 推送卡（2026-10-29 三改，用户："推送单独作为一个卡片"）：
+   已从「提交」卡里拆出来，成为和「拉取请求」「历史」平级的 .plg-sec —— 卡壳走 .fx，
+   行照抄历史卡（.gr-log-row）。这里只把空状态行的内边距压回卡内基线，别再叠一层 16px。 */
+#grPush > .sk-blank { padding: 6px 2px; }
 .gr-log-row { display: flex; align-items: baseline; gap: 10px; padding: 6px 12px; min-width: 0; }
 .gr-log-row + .gr-log-row { border-top: 1px solid var(--line); }
 .gr-log-sha { flex: 0 0 auto; font-family: ui-monospace, monospace; font-size: 11.5px; color: var(--accent); }

@@ -375,8 +375,10 @@ export async function handleGit(req, res, url) {
       const body = await readBody(req);
       try {
         /* 代码托管页的建 PR：**只推已提交的**（includeDirty:false）—— 提交是「提交」按钮的事。
-           任务卡那条路（下面 /pr/create）保持默认 true，agent 干完活手上是脏文件。 */
-        return sendJson(res, 201, await git.openPr(row, { ...prRequestOf(body), includeDirty: false })), true;
+           任务卡那条路（下面 /pr/create）保持默认 true，agent 干完活手上是脏文件。
+           两条都要 push:true：`openPr` 的 push 默认 false（只建 PR、不碰推送，留给流程外的人自己推），
+           而这两颗按钮的契约是"点一下就该有 PR"，推的是刚提交/已提交的东西，不能让人自己去推送区补一刀。 */
+        return sendJson(res, 201, await git.openPr(row, { ...prRequestOf(body), includeDirty: false, push: true })), true;
       } catch (e) {
         return fail(res, 400, 'E1078', String(e.message ?? e)), true;
       }
@@ -487,7 +489,8 @@ export async function handleGit(req, res, url) {
       if (!git.readToken()) return fail(res, 400, 'E1070', '先连接 GitHub（工作台 → 研发 → 代码托管）'), true;
       const repoRow = store.getGitRepoByFullName(row.fullName);
       try {
-        const out = await git.openPr(repoRow, prRequestOf(body, task));
+        // push:true —— 卡上这条路要"提交 + 推送 + 建 PR"一口气跑完（agent 干完活手上就是脏文件）
+        const out = await git.openPr(repoRow, { ...prRequestOf(body, task), push: true });
         const next = store.updateProjectTask(taskId, {
           prRepo: repoRow.fullName,
           prNumber: out.pr.number,
@@ -674,6 +677,8 @@ export async function handleGit(req, res, url) {
         message: String(body.message ?? ''),
         allowSecrets: !!body.allowSecrets,
         paths: Array.isArray(body.paths) ? body.paths.map(String) : null,
+        // 站在 main 上提交时界面会带一个分支名（不带就由服务端给默认名）—— 主分支不收本地提交
+        branch: body.branch ? String(body.branch) : null,
       })), true;
     } catch (e) {
       return fail(res, 400, 'E1103', String(e.message ?? e)), true;
