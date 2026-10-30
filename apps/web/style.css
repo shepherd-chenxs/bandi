@@ -2167,6 +2167,9 @@ dialog#repoPrDlg { width: 660px; height: min(720px, 92vh); max-height: 92vh;
 .gr-pr-link { display: inline-block; margin-top: 2px; font-size: 11px; color: var(--accent); text-decoration: none; }
 .gr-pr-link:hover { text-decoration: underline; }
 .gr-pr-c5 { text-align: right; }
+/* 表格末列的「合并」钮：显式钉死"宽随文字 + 不折行"（2026-10-30 用户截图：两个汉字竖排折行）——
+   .mini.auto 的 width:auto 在这一列没顶住 .mini 的 26px 定宽时就会一字一行，这里用更高优先级压回去 */
+.gr-pr-c5 .mini.auto { width: auto; padding: 0 12px; font-size: 12.5px; line-height: 1; white-space: nowrap; }
 .gr-pr-check { font-size: 11px; padding: 1px 7px; border-radius: 99px;
                border: 1px solid var(--line); white-space: nowrap; }
 .gr-pr-check.ok { color: var(--ok); border-color: var(--ok); }
@@ -2201,15 +2204,14 @@ button.gr-pr-check:hover { background: var(--side); }
 .gr-cell-ops .mini[disabled] { opacity: .45; cursor: not-allowed; }
 .gr-set-remove { color: var(--bad); }
 
-/* 分支管理弹窗（2026-10-27）：列表行两个动作 + 「与 base 比较」的文件清单。
-   行结构借用 .sk-row（主从页的清单行），这里只压一下间距、把分支名换成等宽。 */
-#grBrmBody { max-height: 58vh; overflow: auto; }
-.gr-br-row { padding: 7px 10px; align-items: center; }
-.gr-br-row .gr-cell-ops { margin-left: auto; }
-.gr-br-row .sk-main b { font-family: ui-monospace, monospace; font-size: 12.5px; }
+/* 「与 base 比较」弹窗（2026-10-30：从「分支管理」里抽出来，右键分支 → 比较）：
+   文件清单点一行懒取该文件 diff。 */
+#grBrCmpBody { max-height: 58vh; overflow: auto; }
 .gr-br-cmp { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .gr-br-file { padding-left: 12px; }
 .gr-br-file:hover { background: var(--hover); }
+
+/* 分支右键菜单复用全站那一套（#ctxMenu，见 listmenu.mjs）：样式在「列表项右键菜单」那段，不另起一份 */
 
 /* keeperDlg 候选行：跟 .member（拉人进群）同一套节奏，但这是单选 —— 点行即选即关 */
 .k-row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px;

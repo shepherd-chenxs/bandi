@@ -1,7 +1,7 @@
 /* skills.mjs —— 技能、从 GitHub 挑仓库（放进弹窗里）、定时任务、从本地导入、技能 → 发给数字员工（反方向挂载）。
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
 import { esc, mdRender, savePlace, setRoute, toast } from './shell.mjs';
-import { ICON_BRANCH, ICON_COMMIT, ICON_EDIT, ICON_GEAR, ICON_PLAY, ICON_PUSH, ICON_SYNC, ICON_TAG, ICON_TRASH, api, createCombo, createDateTimePick, cut, failHtml, initial, post, wireDialogHead } from './ui.mjs';
+import { ICON_BRANCH, ICON_COMMIT, ICON_EDIT, ICON_GEAR, ICON_PLAY, ICON_PUSH, ICON_SYNC, ICON_TAG, ICON_TRASH, api, createCombo, createDateTimePick, cut, failHtml, initial, openCtxMenu, post, wireDialogHead } from './ui.mjs';
 import { load, setNav } from './state.mjs';
 import { openSettings } from './settings.mjs';
 import { setListTitle } from './flowpages.mjs';
@@ -1430,7 +1430,6 @@ export async function renderGitRepos(root = $('pluginView')) {
     { id: '__op-commit__', label: '提交…', icon: ICON_COMMIT },
     { id: '__op-push__', label: '推送…', icon: ICON_PUSH },
     { id: '__op-new__', label: '新建分支…', icon: ICON_BRANCH },
-    { id: '__op-manage__', label: '分支管理…', icon: ICON_BRANCH },
     ...(b.recent?.length
       ? [
           { header: '最近', foldable: true },
@@ -1493,6 +1492,22 @@ export async function renderGitRepos(root = $('pluginView')) {
           toast(e.message, 'error');
         }
       },
+    });
+
+    /*
+     * 分支行右键菜单（2026-10-30 用户："分支管理这个功能没有必要，要删除的话改成右键分支显示删除选项"）：
+     * 「分支管理」那个弹窗撤了，比较 / 删除直接长在分支自己身上 —— 对着哪条分支点右键，就是哪条分支的动作。
+     * 左键照旧是切分支（会先弹确认，不是点一下就切走）。
+     */
+    combo.el.addEventListener('contextmenu', (ev) => {
+      const rowEl = ev.target.closest?.('.combo-item[data-pick]');
+      if (!rowEl) return;
+      const id = rowEl.dataset.pick ?? '';
+      if (!id || id.startsWith('__op-') || id.startsWith('tag:')) return; // 操作项与标签没有分支菜单
+      ev.preventDefault();
+      const remote = id.startsWith('origin/');
+      const name = remote ? id.slice('origin/'.length) : id;
+      openBranchMenu(repo, ev, { name, remote, cur: state.branch ?? '' });
     });
 
     const dirty = state.dirty ?? [];
@@ -1805,11 +1820,6 @@ export async function renderGitRepos(root = $('pluginView')) {
       openBranchNewDlg(repo);
       return;
     }
-    if (id === '__op-manage__') {
-      combo.setValue(fallbackBranch);
-      openBranchManageDlg(repo);
-      return;
-    }
 
     /* ---- 切分支 / 标签 ---- */
     const isTag = String(id).startsWith('tag:');
@@ -1903,113 +1913,42 @@ export async function renderGitRepos(root = $('pluginView')) {
    *   · 比较：三点 diff（base...分支），只读；
    *   · 删除：不能删 base / 当前分支；必须已合并进 base；远端只删 bandi/ 开头且没有开着的 PR。
    */
-  function openBranchManageDlg(repo) {
-    document.getElementById('grBranchMgrDlg')?.close();
+  /**
+   * 与 base 比较（2026-10-30 从「分支管理」弹窗里抽出来）：右键分支 → 比较。
+   * 文件清单点一行懒取该文件 diff，收起不销毁、再点不再拉。
+   */
+  function openBranchCompareDlg(repo, branch) {
+    document.getElementById('grBrCmpDlg')?.close();
     const apiRepo = (p) => `/api/git/repos/${encodeURIComponent(repo.id)}${p}`;
+    const kindOf = (st) => ({ A: 'add', D: 'del', R: 'ren' })[st] || 'mod';
+    const badgeOf = (st) => ({ A: '增', D: '删', R: '移', C: '拷', T: '型' })[st] || '改';
     const dlg = document.createElement('dialog');
-    dlg.id = 'grBranchMgrDlg';
+    dlg.id = 'grBrCmpDlg';
     dlg.style.width = '720px';
     dlg.innerHTML = `
       <form method="dialog">
-        <b>分支管理 · ${esc(repo.fullName)}</b>
-        <div id="grBrmBody"><div class="sk-blank">读分支…</div></div>
+        <b>与 base 比较 · ${esc(branch)}</b>
+        <div id="grBrCmpBody"><div class="sk-blank">对比中…</div></div>
         <div class="dlg-actions"><button type="button" value="cancel">关闭</button></div>
       </form>`;
     document.body.append(dlg);
     wireDialogHead(dlg.querySelector('form'));
     dlg.addEventListener('close', () => dlg.remove());
     dlg.showModal();
+    const body = $('grBrCmpBody');
 
-    const body = $('grBrmBody');
-    const baseName = () => repos.find((r) => r.id === repo.id)?.defaultBranch || 'main';
-    const kindOf = (st) => ({ A: 'add', D: 'del', R: 'ren' })[st] || 'mod';
-    const badgeOf = (st) => ({ A: '增', D: '删', R: '移', C: '拷', T: '型' })[st] || '改';
-
-    const renderList = async () => {
-      body.innerHTML = '<div class="sk-blank">读分支…</div>';
-      let b;
-      try {
-        b = await api(apiRepo('/branches'));
-      } catch (e) {
-        body.innerHTML = `<div class="sk-blank">读不到分支：${esc(e.message)}</div>`;
-        return;
-      }
-      if (!body.isConnected) return; // 弹窗已关
-      const cur = b.current ?? '';
-      const base = baseName();
-      const row = (name, { remote = false } = {}) => {
-        const short = name.replace(/^origin\//, '');
-        const isCur = !remote && name === cur;
-        const isBase = short === base;
-        // 本地：当前分支 / base 不画删除；远端：只有 bandi/ 开头才有删除（服务端同口径）
-        const canDel = remote ? /^bandi\//.test(short) : !isCur && !isBase;
-        return `<div class="sk-row gr-br-row">
-          <div class="sk-main"><b>${esc(name)}</b>${
-            isCur ? ' <span class="pill">当前</span>' : ''
-          }${isBase ? ' <span class="pill">base</span>' : ''}</div>
-          <div class="gr-cell-ops">
-            ${isBase ? '' : `<button type="button" class="mini auto" data-brm-compare="${esc(name)}">比较</button>`}
-            ${
-              canDel
-                ? `<button type="button" class="mini auto" data-brm-del="${esc(name)}" data-brm-remote="${remote ? '1' : '0'}">删除</button>`
-                : ''
-            }
-          </div>
-        </div>`;
-      };
-      body.innerHTML = `
-        <div class="gr-meta" style="margin:2px 0 6px">本地分支 · 当前 <b>${esc(cur || '游离 HEAD')}</b> · base <b>${esc(base)}</b></div>
-        ${(b.local ?? []).map((n) => row(n)).join('') || '<div class="sk-blank">没有本地分支</div>'}
-        <div class="gr-meta" style="margin:14px 0 6px">远程分支</div>
-        ${
-          (b.remote ?? []).map((n) => row(n, { remote: true })).join('') ||
-          '<div class="sk-blank">没有远程分支（点「更新项目」拉一次）</div>'
-        }`;
-      body.querySelectorAll('[data-brm-compare]').forEach((btn) => {
-        btn.onclick = () => showCompare(btn.dataset.brmCompare);
-      });
-      body.querySelectorAll('[data-brm-del]').forEach((btn) => {
-        btn.onclick = async () => {
-          const name = btn.dataset.brmDel;
-          const remote = btn.dataset.brmRemote === '1';
-          const ok = await confirmDo(
-            `删${remote ? '远端' : '本地'}分支 ${name}？\n\n` +
-              (remote
-                ? `只删 bandi/ 开头的平台分支；还有开着的 PR、或还有没合并进 base 的提交，服务端会拒绝。`
-                : `必须已经合并进 base（${baseName()}），不然服务端会拒绝 —— 平台不靠删分支丢代码。`),
-            { ok: '删除', danger: true },
-          );
-          if (!ok) return;
-          btn.disabled = true;
-          btn.textContent = '删除中…';
-          try {
-            await post(apiRepo('/branch-delete'), { branch: name, remote });
-            toast(`已删${remote ? '远端' : '本地'}分支 ${name}`);
-            await renderList();
-            await refresh();
-          } catch (e) {
-            btn.disabled = false;
-            btn.textContent = '删除';
-            toast(e.message, 'error');
-          }
-        };
-      });
-    };
-
-    /* 与 base 比较：文件清单 → 点一行看该文件 diff（懒取，收起不销毁、再点不再拉） */
-    const showCompare = async (name) => {
-      body.innerHTML = '<div class="sk-blank">对比中…</div>';
+    (async () => {
       let cmp;
       try {
-        cmp = await api(apiRepo(`/branch-diff?branch=${encodeURIComponent(name)}`));
+        cmp = await api(apiRepo(`/branch-diff?branch=${encodeURIComponent(branch)}`));
       } catch (e) {
         body.innerHTML = `<div class="sk-blank">对比没成：${esc(e.message)}</div>`;
         return;
       }
-      if (!body.isConnected) return;
+      if (!body.isConnected) return; // 弹窗已关
       const rows = (cmp.files ?? [])
         .map(
-          (f) => `<div class="gr-chg-row gr-br-file" data-brm-file="${esc(f.path)}">
+          (f) => `<div class="gr-chg-row gr-br-file" data-cmp-file="${esc(f.path)}">
             <span class="gr-chg-x gr-x-${kindOf(f.status)}">${esc(badgeOf(f.status))}</span>
             <span class="gr-chg-path" title="${esc(f.path)}">${esc(f.path)}${
               f.from ? ` <span class="dim">← ${esc(f.from)}</span>` : ''
@@ -2018,22 +1957,17 @@ export async function renderGitRepos(root = $('pluginView')) {
           <div class="gr-diff" hidden></div>`,
         )
         .join('');
-      body.innerHTML = `
-        <div class="gr-meta" style="margin:2px 0 10px">
+      const head = `<div class="gr-meta" style="margin:2px 0 10px">
           <b>${esc(cmp.branch)}</b> 与 base <b>${esc(cmp.base)}</b> 比较（base...分支）${
             cmp.shortstat ? ` ｜ ${esc(cmp.shortstat)}` : ''
           }
-        </div>
-        ${
-          rows
-            ? `<div class="gr-br-cmp">${rows}</div>`
-            : '<div class="sk-blank">没有差异 —— 这条分支和 base 一样</div>'
-        }
-        <div class="dlg-actions" style="margin-top:12px">
-          <button type="button" class="mini auto" id="grBrmBack">← 返回分支列表</button>
         </div>`;
-      $('grBrmBack').onclick = () => renderList();
-      body.querySelectorAll('[data-brm-file]').forEach((row) => {
+      body.innerHTML =
+        head +
+        (rows
+          ? `<div class="gr-br-cmp">${rows}</div>`
+          : '<div class="sk-blank">没有差异 —— 这条分支和 base 一样</div>');
+      body.querySelectorAll('[data-cmp-file]').forEach((row) => {
         row.onclick = async () => {
           const box = row.nextElementSibling;
           if (!box) return;
@@ -2046,7 +1980,7 @@ export async function renderGitRepos(root = $('pluginView')) {
           try {
             const d = await api(
               apiRepo(
-                `/branch-diff/file?branch=${encodeURIComponent(name)}&path=${encodeURIComponent(row.dataset.brmFile)}`,
+                `/branch-diff/file?branch=${encodeURIComponent(branch)}&path=${encodeURIComponent(row.dataset.cmpFile)}`,
               ),
             );
             if (box.isConnected && !box.hidden) box.innerHTML = diffHtml(d.diff);
@@ -2055,9 +1989,51 @@ export async function renderGitRepos(root = $('pluginView')) {
           }
         };
       });
-    };
+    })();
+  }
 
-    renderList();
+  /** 删一条分支（右键菜单的动作）：确认里把"为什么可能被拒"说清，失败原话带回 */
+  async function deleteBranchByMenu(repo, name, remote) {
+    const base = repos.find((r) => r.id === repo.id)?.defaultBranch || 'main';
+    const ok = await confirmDo(
+      `删${remote ? '远端' : '本地'}分支 ${name}？\n\n` +
+        (remote
+          ? `还有开着的 PR、或还有没合并进 base 的提交，服务端会拒绝。`
+          : `必须已经合并进 base（${base}），不然服务端会拒绝 —— 平台不靠删分支丢代码。`),
+      { ok: '删除', danger: true },
+    );
+    if (!ok) return;
+    try {
+      await post(`/api/git/repos/${encodeURIComponent(repo.id)}/branch-delete`, { branch: name, remote });
+      toast(`已删${remote ? '远端' : '本地'}分支 ${name}`);
+      await refresh();
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  }
+
+  /**
+   * 分支右键菜单（2026-10-30 用户："分支管理这个功能没有必要，要删除的话改成右键分支显示删除选项"）。
+   * 里面只放"对这条分支做的事"：比较（base 自己不用比）、删除（当前 / base 不给；远端只给平台建的分支）。
+   * 一个能点的都没有就不弹 —— 空白菜单比没有菜单更让人困惑。
+   */
+  function openBranchMenu(repo, ev, { name, remote, cur }) {
+    const base = repos.find((r) => r.id === repo.id)?.defaultBranch || 'main';
+    const isBase = name === base;
+    const isCur = !remote && name === cur;
+    // 与 service 端同一条判据：老前缀 bandi/ 或新规范 <type>/<短描述>
+    const isPlatform =
+      /^bandi\//.test(name) || /^(feat|fix|chore|docs|refactor|test|perf)\/[a-z0-9][a-z0-9.-]*$/.test(name);
+    const items = [];
+    if (!isBase) items.push({ label: '与 base 比较…', run: () => openBranchCompareDlg(repo, name) });
+    if (!remote && !isCur && !isBase) {
+      items.push({ label: '删除分支…', danger: true, run: () => deleteBranchByMenu(repo, name, false) });
+    }
+    if (remote && isPlatform) {
+      items.push({ label: '删除远端分支…', danger: true, run: () => deleteBranchByMenu(repo, name, true) });
+    }
+    if (!items.length) return; // 一个动作都没有就不弹 —— 空白菜单更让人困惑
+    openCtxMenu(ev.clientX, ev.clientY, items);
   }
 
   async function fillLog(repo) {
