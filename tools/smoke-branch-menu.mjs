@@ -43,6 +43,16 @@ check(
 check(/it\.menu \? '<button type="button" class="combo-more"/.test(ui), 'combo 条目按 menu 画出行尾 `›`');
 check(/combo-more[\s\S]{0,200}ev\.stopPropagation\(\)/.test(ui), '点箭头不会顺带选中这条分支（stopPropagation）');
 check(/new CustomEvent\('combo-menu'/.test(ui), '箭头把点击抛成 combo-menu 事件（页面才知道开谁的菜单）');
+/*
+ * 2026-10-30 用户定稿："点击选项就打开，改成二级窗口的一个选项，放在第一位" —— 点**整行**也不许
+ * 直接切分支，只开二级菜单（签出收进菜单第一位）。这条链有三手，漏一手就退回"点一下就切走"：
+ *   · 行上带 `data-menu="1"`（只有 menu 行才有）；
+ *   · 点行分流到 fireItemMenu，不进 pick；
+ *   · 键盘回车走同一条分流。
+ */
+check(/it\.menu \? ' data-menu="1"'|data-menu="\$\{it\.menu \? '1' : '0'\}"/.test(ui), '分支行带 data-menu 标记（不是按行文本猜）');
+check(/el\.dataset\.menu \? fireItemMenu\(el\) : pick\(el\.dataset\.pick\)/.test(ui), '点整行分流到二级菜单，不再顺手切分支');
+check(/if \(hit\.dataset\.menu\) \{[\s\S]{0,120}fireItemMenu\(hit\)/.test(ui), '键盘回车也开二级菜单（跟点行一致）');
 
 /* ---------------------------------------------------------- ③ 页面接住并开菜单 */
 

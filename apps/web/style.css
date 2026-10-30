@@ -2155,7 +2155,7 @@ dialog#repoPrDlg { width: 660px; height: min(720px, 92vh); max-height: 92vh;
    表头吸顶、条数多了表内滚动，列宽固定好对齐着比。 */
 .gr-pulls-refresh { margin-left: auto; white-space: nowrap; flex: 0 0 auto; }
 .gr-pr-table { border: 1px solid var(--line); border-radius: 9px; overflow: auto; max-height: 420px; }
-.gr-pr-tr { display: grid; grid-template-columns: minmax(0, 1fr) 176px 84px 124px 76px;
+.gr-pr-tr { display: grid; grid-template-columns: minmax(0, 1fr) 232px 120px 124px 76px;
             align-items: center; gap: 10px; padding: 7px 10px; min-width: 660px; }
 .gr-pr-tr + .gr-pr-tr { border-top: 1px solid var(--line); }
 .gr-pr-th { position: sticky; top: 0; z-index: 1; background: var(--side);
@@ -2171,9 +2171,13 @@ dialog#repoPrDlg { width: 660px; height: min(720px, 92vh); max-height: 92vh;
               overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gr-pr-who { font-size: 12px; color: var(--dim);
              overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.gr-pr-link { display: inline-block; margin-top: 2px; font-size: 11px; color: var(--accent); text-decoration: none; }
-.gr-pr-link:hover { text-decoration: underline; }
-.gr-pr-c5 { text-align: right; }
+/* PR 标题本体就是 GitHub 链接（2026-10-30 用户："要么把 PR 标题做成可点击"；原「去 GitHub 看」小链接删了） */
+.gr-pr-title-link { color: inherit; text-decoration: none; }
+.gr-pr-title-link:hover { color: var(--accent); text-decoration: underline; }
+/* 末列（2026-10-30 用户："未通过时加处理按钮"）：处理 + 合并并排、贴右 */
+.gr-pr-c5 { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+/* 表头最后一列「操作」居中（2026-10-30 用户："这个是标题啊，居中"） */
+.gr-pr-th span:last-child { text-align: center; }
 /* 表格末列的「合并」钮：显式钉死"宽随文字 + 不折行"（2026-10-30 用户截图：两个汉字竖排折行）——
    .mini.auto 的 width:auto 在这一列没顶住 .mini 的 26px 定宽时就会一字一行，这里用更高优先级压回去 */
 .gr-pr-c5 .mini.auto { width: auto; padding: 0 12px; font-size: 12.5px; line-height: 1; white-space: nowrap; }

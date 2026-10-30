@@ -584,29 +584,17 @@ export async function renderGitRepos(root = $('pluginView')) {
         <section class="fx"><div id="grPulls"><div class="sk-blank">取 PR…</div></div></section>
       </div>
       <!--
-        审核独立成一块（2026-10-29 五改，用户："加一个审核区"）。
-        还合不了的 PR（检查在跑 / 红了 / 草稿 / 冲突）搬到这里 —— 一件事一张卡，
-        「检查没过 · 点这修」跟着行走；「拉取请求」卡只剩待建 CTA。
+        PR 列表（2026-10-30 定稿，用户："再加一个通过状态，是不是合并区就可以去掉了"）：
+        状态列（未开始/进行中/未通过/已通过）+ 行尾合并按钮 = 一张表说完所有 PR，
+        原「审核」「合并」两块不再分家 —— 能不能合看状态、合并按钮自己亮。
       -->
       <div class="plg-sec">
         <div class="plg-sec-head">
-          <label class="plg-sec-title">审核</label><span class="dim" id="grReviewHead"></span>
+          <label class="plg-sec-title">PR 列表</label><span class="dim" id="grReviewHead"></span>
           <button type="button" class="mini auto" id="grReviewRefresh" title="从 GitHub 重新取一次">刷新</button>
         </div>
         <section class="fx"><div id="grReview"><div class="sk-blank">取 PR…</div></div></section>
       </div>
-       <!--
-         合并独立成一块（2026-10-29 四改，用户："加一个合并区，展示等待合并的 PR"）。
-         「拉取请求」只管"还没建 / 还合不了"，能合的那几条搬到这里 —— 一件事一张卡，
-         合并按钮跟着出行，不用在 PR 清单里翻。
-       -->
-       <div class="plg-sec">
-         <div class="plg-sec-head">
-           <label class="plg-sec-title">合并</label><span class="dim" id="grMergeHead"></span>
-           <button type="button" class="mini auto" id="grMergeRefresh" title="从 GitHub 重新取一次">刷新</button>
-         </div>
-         <section class="fx"><div id="grMerge"><div class="sk-blank">取 PR…</div></div></section>
-       </div>
        <div class="plg-sec">
          <div class="plg-sec-head"><label class="plg-sec-title">历史</label></div>
          <section class="fx"><div id="grLog"><div class="sk-blank">读提交记录…</div></div></section>
@@ -947,14 +935,10 @@ export async function renderGitRepos(root = $('pluginView')) {
     fillPulls(sel);
     fillLog(sel);
     // PR 区右上那颗「刷新」：只重取 PR（合并/建 PR 之外，比如在 GitHub 上手动关了 PR 时用）
-    /* 两颗刷新（拉取请求 / 合并）是同一份数据，一次重取两块一起更新 */
     $('grPullsRefresh')?.addEventListener('click', () => {
       fillPulls(sel).catch((e) => toast(e.message, 'error'));
     });
     $('grReviewRefresh')?.addEventListener('click', () => {
-      fillPulls(sel).catch((e) => toast(e.message, 'error'));
-    });
-    $('grMergeRefresh')?.addEventListener('click', () => {
       fillPulls(sel).catch((e) => toast(e.message, 'error'));
     });
   }
@@ -976,10 +960,8 @@ export async function renderGitRepos(root = $('pluginView')) {
   async function fillPulls(repo) {
     const box = $('grPulls');
     const reviewBox = $('grReview');
-    const mergeBox = $('grMerge');
     const head = $('grPullsHead');
     const reviewHead = $('grReviewHead');
-    const mergeHead = $('grMergeHead');
     if (!box) return;
     let prs = [];
     let state = null;
@@ -990,7 +972,6 @@ export async function renderGitRepos(root = $('pluginView')) {
       const msg = `<div class="sk-blank">取不到 PR：${esc(e.message)}</div>`;
       if (box.isConnected) box.innerHTML = msg;
       if (reviewBox?.isConnected) reviewBox.innerHTML = msg;
-      if ($('grMerge')?.isConnected) $('grMerge').innerHTML = msg;
       return;
     }
     try {
@@ -1005,26 +986,30 @@ export async function renderGitRepos(root = $('pluginView')) {
     const mine = prs.find((p) => p.headRef && p.headRef === cur);
 
     /*
-     * gate 一句话：绿/红/跑着/没有/没拿到 —— 合并按钮的可用性主要看它。
-     * 红的/没拿到的是**可点的按钮**（2026-10-29 用户："界面如果不通过就卡住了，得有个修复功能"）：
-     * 点开 gate 明细弹窗 —— 哪条红了、红在哪个 step、能不能重跑，就地给答案，不再逼人去 GitHub 翻。
+     * gate 一句话（2026-10-30 用户："检查改成状态。有未开始、进行中、未通过"）：
+     * 未通过时操作区多一颗「处理」—— 点开就是建卡修复弹窗（选人 → 确定），见 openGateDlg。
      */
     const checkPill = (p) => {
       const c = p.checks;
       const s = c?.state;
-      if (s === 'success') return '<span class="gr-pr-check ok" title="检查全绿">检查通过</span>';
-      // 红的这颗是**入口**，不是结论：点开就一个按钮「让 AI 帮我修」（用户不看报错）
-      if (s === 'failure')
-        return `<button type="button" class="gr-pr-check bad" data-pr-gate="${p.number}"
-                  title="自动检查没过 —— 点开可以让我去修">检查没过 · 点这修</button>`;
-      if (s === 'pending') return '<span class="gr-pr-check wait" title="还在跑">检查中</span>';
+      /*
+       * 有冲突优先说（2026-10-30 用户看着 PR #49 的 GitHub 页问"卡住了吗"）：
+       * 分支和 base 有冲突时 GitHub **根本不启动**必需检查 —— 那两条 gate 会一直挂在
+       * "进行中/未开始"，看着像跑不动。这里直说"有冲突"，别让人误以为在等检查。
+       */
+      if (p.mergeable === false || p.mergeableState === 'dirty') {
+        return '<span class="gr-pr-check bad" title="这条分支和 base 有冲突 —— GitHub 不会启动必需检查，先把 base 合进分支、解掉冲突再推">有冲突</span>';
+      }
+      if (s === 'success') return '<span class="gr-pr-check ok" title="检查全绿">已通过</span>';
+      if (s === 'failure') return '<span class="gr-pr-check bad" title="自动检查没过 —— 操作区那颗「处理」可以建卡去修">未通过</span>';
+      if (s === 'pending') return '<span class="gr-pr-check wait" title="还在跑">进行中</span>';
       /*
        * `none` = 这条 head 上**还没有任何检查结果**（刚建 PR、workflow 还没起，或仓库没配 CI）。
        * 不能当"可以合"：main 有分支保护，没检查一样会被 GitHub 拒 —— 见 blockReason。
        */
-      if (s === 'none') return '<span class="gr-pr-check none" title="这条提交上还没有检查结果 —— 刚建的 PR 等 gate 起来">检查未开始</span>';
+      if (s === 'none') return '<span class="gr-pr-check none" title="这条提交上还没有检查结果 —— 刚建的 PR 等 gate 起来">未开始</span>';
       return `<button type="button" class="gr-pr-check none" data-pr-gate="${p.number}"
-                title="没查到检查状态（网络/权限）—— 点开看明细">检查未知</button>`;
+                title="没查到检查状态（网络/权限）—— 点开看明细">未知</button>`;
     };
     /* 合并为什么按不了：返回 null = 能合 */
     const blockReason = (p) => {
@@ -1054,7 +1039,8 @@ export async function renderGitRepos(root = $('pluginView')) {
       const isMine = p.headRef && p.headRef === cur;
       return `<div class="gr-pr-tr">
           <div class="gr-pr-c1">
-            <div class="gr-pr-title"><b>#${p.number}</b> ${esc(p.title)}
+            <div class="gr-pr-title"><b>#${p.number}</b> <a class="gr-pr-title-link" href="${esc(p.url)}"
+                  target="_blank" rel="noreferrer" title="在 GitHub 上打开这个 PR">${esc(p.title)}</a>
               ${p.draft ? '<span class="pill">草稿</span>' : ''}
               ${isMine ? '<span class="pill">当前分支</span>' : ''}
               ${/* 已关联卡 = 能点的（2026-10-29 用户："既然关联了任务卡，要能跳转过去"）*/ ''}
@@ -1062,32 +1048,31 @@ export async function renderGitRepos(root = $('pluginView')) {
                     title="打开关联的任务卡">已关联卡</button>` : ''}
               ${p.mergeableState === 'dirty' ? '<span class="pill bad">有冲突</span>' : ''}
             </div>
-            <a class="gr-pr-link" href="${esc(p.url)}" target="_blank" rel="noreferrer">去 GitHub 看</a>
           </div>
           <div class="gr-pr-refs">${esc(p.headRef || '?')} → ${esc(p.baseRef || '?')}</div>
           <div class="gr-pr-who">${esc(p.author || '?')}</div>
           <div class="gr-pr-c4">${checkPill(p)}</div>
           <div class="gr-pr-c5">
-            <!-- 合并按钮钉在最后一列（2026-10-29 用户："按钮放右边"） -->
+            <!-- 合并按钮钉在最后一列（2026-10-29 用户："按钮放右边"）；
+                 检查未通过时左边多一颗「处理」（2026-10-30 用户："加一个处理按钮，点击建卡修复"）——
+                 走同一个 data-pr-gate：点开建卡弹窗（选处理人 → 确定建卡） -->
+            ${p.checks?.state === 'failure'
+              ? `<button type="button" class="mini auto" data-pr-gate="${p.number}" title="检查没过 —— 选个处理人，建一张任务卡去修">处理</button>`
+              : ''}
             <button type="button" class="mini auto" data-pr-merge="${p.number}"
                     ${why ? `disabled title="${esc(why)}"` : 'title="合并进 base（走平台令牌；本地会自动收尾）"'}>合并</button>
           </div>
         </div>`;
     };
     const tableHead = `<div class="gr-pr-tr gr-pr-th">
-        <span>PR</span><span>分支</span><span>作者</span><span>检查</span><span></span>
+        <span>PR</span><span>分支</span><span>作者</span><span>状态</span><span>操作</span>
       </div>`;
 
     /*
-     * PR 分三组（2026-10-27 用户："需要建 PR、审核中的、等待合并的分开一下"）：
-     *   待建 PR   —— 当前分支还没有 open PR（CTA 行；脏工作区 / 没差异时也在这组里说清下一步）；
-     *   审核中     —— 有 PR 但还合不了：gate 跑着 / 草稿 / 冲突 / 检查红；
-     *   等待合并   —— gate ✓、mergeable，右边按钮能直接点。
-     * 组序按"离合并还差几步"排；空组不画，三组都空才给一行空态（不再用"没有待合并的 PR"糊住）。
+     * 2026-10-30 定稿（用户："再加一个通过状态，是不是合并区就可以去掉了"）：
+     * 不再按"能不能合"分卡 —— 状态列自己会说（未开始/进行中/未通过/已通过），
+     * 合并按钮在能合的行上自己亮。原「审核」「合并」两块合成一张「PR 列表」表。
      */
-    const ready = (p) => blockReason(p) === null;
-    const reviewPrs = prs.filter((p) => !ready(p));
-    const mergePrs = prs.filter(ready);
     const groupHtml = (title, inner, count) =>
       count
         ? `<div class="gr-pr-group">
@@ -1148,39 +1133,28 @@ export async function renderGitRepos(root = $('pluginView')) {
     }
 
     const ctaGroup = cta ? groupHtml('待建 PR', cta, 1) : '';
-    /* 两块 PR 清单都套上同一份表头；空态给一句话（不再是"一个 PR 一张卡"） */
+    /* PR 列表套上表头；空态给一句话（不再是"一个 PR 一张卡"） */
     const listHtml = (prsIn, emptyText) =>
       prsIn.length
         ? `<div class="gr-pr-table">${tableHead}${prsIn.map(rowHtml).join('')}</div>`
         : `<div class="sk-blank">${emptyText}</div>`;
     if (head?.isConnected) head.textContent = prs.length ? `${prs.length} 条 PR` : '';
-    if (reviewHead?.isConnected) reviewHead.textContent = reviewPrs.length ? `${reviewPrs.length} 条审核中` : '暂无';
-    if (mergeHead?.isConnected) mergeHead.textContent = mergePrs.length ? `${mergePrs.length} 条可以合` : '暂无';
+    if (reviewHead?.isConnected) reviewHead.textContent = prs.length ? `${prs.length} 条 PR` : '暂无';
 
-    /* 三张卡各管一段（2026-10-29 五改）：拉取请求 = 待建 CTA；审核 = 还合不了的；合并 = 能合的。
-       卡标题已经说了是哪一段，里面不再套分组头 —— 一层就够了。 */
+    /* 两张卡各管一段：拉取请求 = 待建 CTA；PR 列表 = 全部 PR（能不能合看状态列 + 合并按钮） */
     box.innerHTML =
       ctaGroup ||
       `<div class="sk-blank">${prs.length ? '当前分支没有待建的 PR —— 有新提交时这里会出现「建 PR」' : '没有进行中的 PR —— 建 PR 后会出现在这里'}</div>`;
     if (reviewBox?.isConnected) {
-      reviewBox.innerHTML = listHtml(
-        reviewPrs,
-        prs.length ? '没有审核中的 PR —— 检查还没起来 / 在跑 / 红了 / 有冲突的会出现在这里' : '还没有 PR',
-      );
-    }
-    if (mergeBox?.isConnected) {
-      mergeBox.innerHTML = listHtml(
-        mergePrs,
-        prs.length ? '没有等待合并的 PR —— 检查通过、没有冲突的才会出现在这里' : '还没有 PR',
-      );
+      reviewBox.innerHTML = listHtml(prs, '还没有 PR —— 在「拉取请求」卡建第一个 PR');
     }
 
     /*
-     * 绑定：三颗「刷新」重取一次；行上的动作（建 PR / gate 明细 / 合并）在三块卡里都有，
-     * 用同一个 scope 列表跑一遍 —— 审核卡里的行也带「检查没过 · 点这修」，漏绑就是"点了没反应"。
+     * 绑定：「刷新」重取一次；行上的动作（建 PR / gate 明细 / 合并）在两块卡里都有，
+     * 用同一个 scope 列表跑一遍 —— 漏绑就是"点了没反应"。
      */
     $('grPrCreate')?.addEventListener('click', () => openRepoPrDialog(repo, refresh));
-    const scopes = [box, reviewBox, mergeBox].filter((el) => el?.isConnected);
+    const scopes = [box, reviewBox].filter((el) => el?.isConnected);
     scopes.forEach((scope) => {
       scope.querySelectorAll('[data-pr-gate]').forEach((b) => {
         b.onclick = () => {
