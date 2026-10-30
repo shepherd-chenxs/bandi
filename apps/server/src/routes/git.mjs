@@ -6,11 +6,10 @@
 import { sendJson, fail, readBody } from '../http.mjs';
 import * as store from '../store.mjs';
 import * as status from '../status.mjs';
-import { updateProjectTask, afterMerged } from '../project-tasks.mjs';
+import { updateProjectTask, afterMerged, createProjectTask } from '../project-tasks.mjs';
 import * as git from '../git-repos.mjs';
 import * as commitMsg from '../commit-msg.mjs';
 import * as patrol from '../repo-patrol.mjs';
-import { dispatchToThread } from '../dispatch.mjs';
 
 /**
  * 请求体 → `git.openPr` 的参数（两个入口共用一份：仓库行上直接建、从任务卡上建）。
@@ -422,16 +421,18 @@ export async function handleGit(req, res, url) {
   }
 
   /* ---- 「让 AI 帮我修」（2026-10-29 用户："我要的是一个按钮，点了 agent 帮我去修"）----
-     用户不看代码、也不关心报错：这里不返回"哪红了"给人读，而是**直接派活** ——
-     挑一个研发（pickGateFixer），在他的 1:1 会话里发一段带现场的 brief（gateFixBrief），
-     让他自己复现、改、跑到绿、推上去。界面只负责回"已经交给他了"和一句人去哪看进展。
-     检查已经绿 / 还在跑时不派活（白烧一次 run），明说没什么可修。 */
+     用户不看代码、也不关心报错：这里不返回"哪红了"给人读，而是**直接建卡派活** ——
+     挑一个研发（pickGateFixer）或用界面上选的人，建一张任务卡挂在他名下。
+     2026-10-29 用户再定："不要开对话，开任务卡就行了" —— 卡只建不派（startNow=false），
+     不起会话、不起 run；什么时候开工由看板上那张卡自己说了算。 */
   const repoPrFix = /^\/api\/git\/repos\/([^/]+)\/prs\/(\d+)\/fix$/.exec(url.pathname);
   if (repoPrFix && req.method === 'POST') {
     const row = store.getGitRepo(decodeURIComponent(repoPrFix[1]));
     if (!row) return fail(res, 404, 'E1076', '仓库不在清单里'), true;
     if (!git.readToken()) return fail(res, 400, 'E1070', '先连接 GitHub（工作台 → 研发 → 代码托管）'), true;
     const number = Number(repoPrFix[2]);
+    const body = await readBody(req).catch(() => ({}));
+    const wantedId = body?.personaId ? String(body.personaId) : null;   // 界面上选的处理人；没选就按岗位挑
     try {
       const pull = await git.fetchPull(row.fullName, number);
       const detail = await git.gateDetail(row.fullName, pull.headSha);
@@ -440,22 +441,39 @@ export async function handleGit(req, res, url) {
       if (detail.state !== 'failure' || !(detail.failed ?? []).length) {
         return fail(res, 400, 'E1123', '这会儿没查到失败的检查（可能没配置，也可能状态没读），暂时没得修'), true;
       }
-      const who = pickGateFixer(row);
+      const who = wantedId ? store.getPersona(wantedId) : pickGateFixer(row);
+      if (wantedId && !who) return fail(res, 400, 'E1128', '选的人已经不在了 —— 刷新一下员工列表再选'), true;
       if (!who) return fail(res, 400, 'E1124', '还没有员工能修代码 —— 先去「专家库」雇一位研发'), true;
       /*
-       * 派活要落在"这个仓库"的目录里。仓库根正好是某个项目的根时带上 projectId
-       * （dispatch 会用它覆盖 cwd + 可写根）；对不上就靠他默认目录 —— 至少能读、能改，
-       * 不硬造项目（同 pr-watch 的规矩：巡检/修复这种动作不该顺手建项目）。
+       * 派活的落点（2026-10-29 用户："这一步是建任务卡修复"）：
+       * **建一张任务卡**派给他，而不是只在 1:1 里丢一段话 —— 卡在看板上，能追进度、能改人、能留痕。
+       * 卡得有地方挂：仓库目录正好是某个项目的根就用它；没有就按这个仓库建一个项目
+       * （这一步是用户点的，不是巡检顺手造 —— 和 pr-watch 的规矩不冲突）。
        */
-      const project = store.listProjects().find((p) => normPath(p.root) === normPath(row.localPath));
-      const conv = store.ensureConversationForPersona(who.id);
-      if (!conv) return fail(res, 400, 'E1125', '找不到这个员工的会话'), true;
-      const { run } = dispatchToThread(conv.id, gateFixBrief({ repo: row.fullName, row, pull, detail }), {
-        projectId: project?.id ?? null,
+      let project = store.listProjects().find((p) => normPath(p.root) === normPath(row.localPath));
+      if (!project) {
+        project = store.createProject({
+          name: row.name || row.fullName,
+          root: row.localPath,
+          summary: `代码托管仓库 ${row.fullName} 的本地克隆`,
+        });
+      }
+      const task = createProjectTask(project, {
+        title: `修 PR #${number} 的自动检查`,
+        description: gateFixBrief({ repo: row.fullName, row, pull, detail }),
+        status: '待办',
+        personaId: who.id,
+        startNow: true,   // 2026-10-30 用户："嘉辉为啥没干活啊" —— 建卡即开工。开的是**任务卡自己的工单会话**（不出消息列表），不是聊天
       });
-      return sendJson(res, 202, {
-        conversationId: conv.id,
-        runId: run.id,
+      // 挂到 PR 上：PR 行会显示「已关联卡」，合完/卡到终态也能互相回写
+      try {
+        store.updateProjectTask(task.id, { prRepo: row.fullName, prNumber: number, prTitle: String(pull.title ?? '') });
+      } catch { /* 挂不上不影响派活 */ }
+      return sendJson(res, 201, {
+        taskId: task.id,
+        projectId: project.id,
+        conversationId: task.conversationId ?? null,
+        runId: task.runId ?? null,
         personaId: who.id,
         personaName: who.name,
         personaRole: who.role ?? null,
