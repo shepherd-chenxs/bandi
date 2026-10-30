@@ -349,7 +349,8 @@ try {
 } catch (e) {
   noCommits = e.message;
 }
-check('422「No commits between」→ 说"没有提交 / base 选错"，原话带着', /没有提交/.test(noCommits) && /No commits between/.test(noCommits), noCommits.slice(0, 80));
+// 2026-10-30 文案改成「没有新提交」并补了"刚合并过"的提示 —— 断言跟着收两种写法，语义没松。
+check('422「No commits between」→ 说"没有提交 / base 选错"，原话带着', /没有新?提交/.test(noCommits) && /No commits between/.test(noCommits), noCommits.slice(0, 80));
 
 gh.failWith(/^POST \/repos\/smoke\/demo\/pulls$/, 403, 'Resource not accessible by personal access token');
 let noScope = '';
@@ -742,8 +743,14 @@ try {
     /* ---------------- ⑬ 「让 AI 帮我修」：一颗按钮建一张卡（2026-10-29 用户："我只要一个按钮"） ----------------
      * 用户不看代码、也不关心报错，所以这条接口**不回明细**：服务端自己取 headSha、判断能不能修、
      * 用界面上选的人（没选就按岗位挑）建一张任务卡挂在他名下。
-     * 2026-10-29 用户定稿："不要开对话，开任务卡就行了" —— 契约三条：
-     *   · 红了就建卡（201 + taskId + personaId；**不开会话**，conversationId 必须是 null）；
+     *
+     * 口径变过一次，别把它当 bug 改回去：
+     *   · 2026-10-29 用户定："不要开对话，开任务卡就行了" —— 那一刻是"只建卡、不派活"；
+     *   · **2026-10-30 用户改口（"嘉辉为啥没干活啊"）：建卡即开工** —— 卡直接进「进行中」并起 run，
+     *     开的是这张卡自己的**工单会话**（kind=exec，不进消息列表），不是执行人那条 1:1 聊天。
+     * 所以断言按新口径钉四条：
+     *   · 红了就建卡并开工（201 + taskId + personaId + conversationId），卡的会话是 kind=exec；
+     *   · 卡挂在选的人名下、状态「进行中」、有 runId；
      *   · 已经全绿不建卡（400 E1121）；
      *   · 卡的描述（brief）里必须写死"不许改 workflow / 删测试骗绿"，否则 agent 会去把闸糊绿。
      */
@@ -754,16 +761,20 @@ try {
     });
     const fx = await req(`/api/git/repos/${id}/prs/${gatePr.number}/fix`, { method: 'POST', body: JSON.stringify({}) });
     check(
-      'POST /fix → 201，回了卡号 + 派给谁，且没开对话',
-      fx.status === 201 && !!fx.b?.taskId && !!fx.b?.personaId && fx.b?.conversationId == null,
-      JSON.stringify({ s: fx.status, t: fx.b?.taskId, e: fx.b?.error }),
+      'POST /fix → 201，回了卡号 + 派给谁 + 开工的会话',
+      fx.status === 201 && !!fx.b?.taskId && !!fx.b?.personaId && !!fx.b?.conversationId,
+      JSON.stringify({ s: fx.status, t: fx.b?.taskId, c: fx.b?.conversationId, e: fx.b?.error }),
     );
+    // 2026-10-30：开工用的是**这张卡的工单会话** —— kind=exec 才是"不出消息列表"的判据，
+    // 不是"没有 conversationId"（那条是 10-29 的旧口径）。
+    const fixConv = fx.b?.conversationId ? store.getConversation(fx.b.conversationId) : null;
+    check('开工的会话是工单会话（kind=exec，不进消息列表）', fixConv?.kind === 'exec', JSON.stringify({ k: fixConv?.kind, id: fixConv?.id }));
     const task = fx.b?.taskId ? await req(`/api/projects/tasks/${encodeURIComponent(fx.b.taskId)}`) : null;
     const trow = task?.b?.task ?? {};
     const brief = String(trow.description ?? '');
     check(
-      '卡挂在选的人名下、还在「待办」（没被派出去跑）',
-      trow.assigneePersonaId === fx.b?.personaId && trow.status === '待办' && !trow.runId,
+      '卡挂在选的人名下、已经开工（进行中 + 有 runId）',
+      trow.assigneePersonaId === fx.b?.personaId && trow.status === '进行中' && !!trow.runId,
       JSON.stringify({ st: trow.status, a: trow.assigneePersonaId, run: trow.runId }),
     );
     check(
