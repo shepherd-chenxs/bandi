@@ -8,7 +8,10 @@ import { confirmDo, askText } from './machine.mjs';
 import { detailSave, showView } from './contacts.mjs';
 import { wbCard } from './workflows.mjs';
 import { hint, openFlowRun, paintRun, setListTitle } from './flowpages.mjs';
-import { attsHtmlOf, firstMeaningfulLine, openConversation, openDetail, streamRun } from './chat.mjs';
+import { attsHtmlOf, firstMeaningfulLine, openConversation, openDetail, streamRun, timelineOf } from './chat.mjs';
+// 运行进度卡：对话页那一套（阶段/步数/用时/卡住提醒/停止生成）搬进任务卡讨论区 —— 2026-10-29 用户："对话里的那一套搬过来用"
+import { createProgressCard } from './run-progress-card.mjs';
+import { fmtElapsed } from './run-progress.mjs';
 import { $, S } from './core.mjs';
 
 
@@ -2089,6 +2092,9 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     try { conv = await api(`/api/conversations/${encodeURIComponent(task.conversationId)}`); } catch { conv = null; }
   }
   const runningRun = (conv?.runs ?? []).find((r) => r.status === '跑中') ?? null;
+  // 跑挂了的运行 id 集合：这些轮次的回话/占位行带「重跑一次」按钮（2026-10-30 用户："失败了可以再让它重新跑一次"）。
+  // threadsHtml 每次重画会按最新 runs 重算 —— 重跑后新回话属于新 run，旧失败轮的按钮留着无妨（multica 同款）。
+  let failedRunIds = new Set((conv?.runs ?? []).filter((r) => r.status === '失败').map((r) => r.id));
   let whoName = conv?.conversation?.personaName ?? assignee?.name ?? '执行人';
 
   /**
@@ -2108,36 +2114,111 @@ export async function paintTaskCardPage(taskId, opts = {}) {
   const isStartNote = (m) => m.role === 'user' && String(m.text ?? '').includes('【任务 · ');
 
   // 我自己的评论不再重复写名字 —— 头像上那个「我」就是名字，写两遍是噪声（他的回话仍然带名字）
-  const cmtItem = (m, isNew = false) => {
+  // 时间放回复下面（2026-10-29 用户："时间放回复下面"）；自己的评论头一行**整行不画** ——
+  // 空着的 meta 行就是正文上面那条留白（用户实测指出）。
+  // `replyTopicId`：议题里**最后一条**回复带「回复」按钮（2026-10-29 用户："最后一句加一个回复按钮"），
+  // 点了挂回同一条议题 —— 输入框就地停靠在那条下面，接着聊。
+  const cmtItem = (m, isNew = false, replyTopicId = null) => {
     const mine = m.role === 'user';
-    return `<div class="tc-cmt${mine ? ' mine' : ''}${isNew ? ' is-new' : ''}">
-      ${mine ? smAvatar('我', 'me') : smAvatar(whoName, '', personaByName(whoName))}
+    const who = mine ? '我' : (m.run?.personaName || whoName);
+    let main;
+    if (m.pseudo === 'stop' || m.pseudo === 'fail') {
+      // 没跑成的那几轮（见 timelineOf）：库里没有 assistant 消息 —— 不补这条，屏幕上就只剩
+      // "我说了一句然后就没了"（2026-10-29 用户："意外终断或者被打断，整条消息都不显示了，这个不对"）
+      const r = m.run ?? {};
+      const began = Date.parse(String(r.startedAt ?? ''));
+      const ended = Date.parse(String(r.endedAt ?? ''));
+      const ran = Number.isFinite(began) && Number.isFinite(ended) && ended >= began ? ended - began : null;
+      // 几秒就停的别写"跑了 00:00"—— 那不是信息，是噪音；上了 5 秒才值得说
+      const dur = ran == null || ran < 5000 ? '' : ` · 跑了 ${fmtElapsed(ran)}`;
+      main = m.pseudo === 'stop'
+        ? '<div class="step stop">已停止生成' + esc(dur) + '（这一轮没有回话）</div>'
+        : `<div class="step bad">没跑成：${esc(firstMeaningfulLine(r.error) || '运行失败（这次没留下原因）')}</div>`;
+    } else {
+      main = `<div class="tc-cmt-text">${renderMarkdown(m.text)}${attsHtmlOf(m.atts)}</div>`;
+    }
+    // 「重跑一次」：失败轮的回话（或没落回话的失败占位）脚上带一颗 —— multica 同款（2026-10-30）
+    const failedRid = m.pseudo === 'fail' ? m.run?.id : (m.runId && failedRunIds.has(m.runId) ? m.runId : null);
+    const rerunBtn = failedRid
+      ? `<button type="button" class="tc-rerun" data-rerun="${esc(failedRid)}"
+             title="让它带着同样的说明再跑一轮（续同一个会话，不用重发）">↻ 重跑一次</button>`
+      : '';
+    // data-mid：进度卡落点反查用 —— 拿消息 id 找它所在的议题（attach 的 host 解析链）
+    return `<div class="tc-cmt${mine ? ' mine' : ''}${isNew ? ' is-new' : ''}" data-mid="${esc(m.id)}">
+      ${mine ? smAvatar('我', 'me') : smAvatar(who, '', personaByName(who))}
       <div class="tc-cmt-main">
-        <div class="tc-cmt-meta">${mine ? '' : `<b>${esc(whoName)}</b>`}<time>${esc(cmtTime(m.createdAt))}</time></div>
-        <div class="tc-cmt-text">${renderMarkdown(m.text)}${attsHtmlOf(m.atts)}</div>
+        ${mine ? '' : `<div class="tc-cmt-meta"><b>${esc(who)}</b></div>`}
+        ${main}
+        <div class="tc-topic-foot">
+          <time class="tc-cmt-at">${esc(cmtTime(m.createdAt))}</time>
+          ${replyTopicId ? `<button type="button" class="tc-reply" data-reply="${esc(replyTopicId)}">回复</button>` : ''}
+          ${rerunBtn}
+        </div>
       </div>
     </div>`;
   };
 
-  const topicsOf = (msgs) => {
+  /**
+   * 议题分组：吃的是**时间线**（timelineOf 合成：消息 + 没跑成的那几轮运行）。
+   * 意外中断 / 被打断的那几轮在库里**没有 assistant 消息**（服务端一个字没流出来就不落），
+   * 只画消息的话屏幕上就是"我说了一句然后就没了" —— 把这些轮次补成一条安静的占位
+   * （pseudo 消息），跟着时间排进它所在的议题（2026-10-29 用户："整条消息都不显示了，这个不对"）。
+   */
+  /**
+   * 议题分组（2026-10-30 二定稿）：
+   *   · 开工说明是**任务全局**的 —— 摘掉，不显示、不占分组；
+   *   · 执行人第一条回话当主评论，他后续没带 parentId 的回话按时间挂进这条工作线程；
+   *   · **我的评论**：点了「回复」发的（parentId 指向线程里某句话）→ 挂进那条议题；
+   *     自己直接发的（无 parentId）→ **新议题、当主评论**（2026-10-30 用户："有的是新发的issue，就是主评论"）。
+   * parentId 解析放宽到「议题里任何一条消息」—— 回复按钮带的是消息 id，不是议题头 id。
+   */
+  const topicsOf = (items) => {
     const topics = [];
-    const byId = new Map();
+    const byId = new Map();    // 议题头 id → 议题
+    const inTopic = new Map(); // 线程里**任何**一条消息 id → 它所属的议题（parentId 解析用）
+    const anchor = new Map();  // 被摘掉的开工说明 id → 它的回话所在的议题
+    const skipped = new Set(); // 被摘掉的开工说明 id（回复它们 = 回到工作线程，见下）
     let cur = null;
-    for (const m of msgs) {
-      if (m.role === 'user' && !m.parentId) {
+    const put = (m, t) => { t.items.push(m); inTopic.set(m.id, t); };
+    for (const it of items) {
+      const m = it.kind === 'msg'
+        ? it.m
+        : {
+            role: 'assistant',
+            pseudo: it.kind,            // 'stop' | 'fail'
+            run: it.r,
+            id: 'run-' + it.r.id,
+            createdAt: it.r.endedAt ?? it.r.startedAt,
+            text: it.kind === 'stop' ? '已停止生成（这一轮没有回话）' : '没跑成',
+          };
+      if (isStartNote(m)) { skipped.add(m.id); continue; } // 全局上下文：不显示、不占分组
+      // 明确挂载：回复按钮带的是消息 id，可能是议题头、线程中间某句话，
+      // 也可能是**被摘掉的开工说明**（服务端把回复拍平到开工说明名下 —— 它才是底层会话的顶层；
+      // 点嘉辉某句回话的「回复」，服务端存的是 hit.parentId = 开工说明 id）。锚点表负责把这层还原。
+      const host = m.parentId ? (byId.get(m.parentId) ?? inTopic.get(m.parentId) ?? anchor.get(m.parentId)) : null;
+      if (host) {
+        cur = host;
+        put(m, host);
+      } else if (m.role === 'user') {
+        // 我直接发的 = 新议题、当主评论
         cur = { id: m.id, head: m, items: [] };
         topics.push(cur);
         byId.set(m.id, cur);
-      } else if (m.parentId && byId.has(m.parentId)) {
-        // 我的回复、他的回话都认 parentId（他的回话现在也带着议题 id，见 runs.mjs）
-        cur = byId.get(m.parentId);
-        cur.items.push(m);
+        inTopic.set(m.id, cur);
+      } else if (cur) {
+        // 他没带 parentId 的回话（含中断占位）＝ 干活还在继续，挂进当前工作线程
+        put(m, cur);
       } else {
-        if (!cur) {
-          cur = { id: 'pre-' + m.id, head: null, items: [] };
-          topics.push(cur);
-        }
-        cur.items.push(m);
+        // 开头就是他的回话（开工说明被摘掉后通常就是这种）：当主评论
+        cur = { id: m.id, head: m, items: [] };
+        topics.push(cur);
+        byId.set(m.id, cur);
+        inTopic.set(m.id, cur);
+      }
+      // 他的回话挂在被摘掉的开工说明下 → 把那条开工说明记到这个议题名下：
+      // 之后"回复开工说明"的消息（服务端拍平的产物）都回这条工作线程
+      if (cur && m.parentId && skipped.has(m.parentId) && !anchor.has(m.parentId)) {
+        anchor.set(m.parentId, cur);
       }
     }
     return topics;
@@ -2157,12 +2238,42 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     String(m.text ?? '').replace(/[#*`>~[\]]/g, '').replace(/\s+/g, ' ').trim().slice(0, 60)
       || (m.atts?.length ? '（附件）' : '…');
 
+  /**
+   * 收工状态条（2026-10-30 用户："用户感知不到活什么时候干完"）：
+   * 讨论区顶上一条横幅，一眼回答"他到底干完没有"——
+   *   · 待验收  → 绿：干完了，等你验收；
+   *   · 失败    → 红：这轮没跑成，消息脚上有重跑钮；
+   *   · 已阻塞  → 黄：他停在这等你拿主意；
+   *   · 进行中但没在跑的轮次 → 灰：两轮之间/排队（这种"看着停了其实没完"最容易误会）。
+   * 他正在跑时不画 —— 那时候进度卡本身就是信号。
+   */
+  const stateBanner = (d) => {
+    const st = task.status;
+    const runs = d?.runs ?? [];
+    const live = runs.some((r) => r.status === '跑中');
+    if (live) return '';
+    const last = runs.filter((r) => r.endedAt).sort((a, b) => String(b.endedAt).localeCompare(String(a.endedAt)))[0];
+    const when = last?.endedAt ? `（${esc(cmtTime(last.endedAt))} 收工）` : '';
+    if (st === '待验收')
+      return `<div class="tc-statebar ok"><b>✅ 活干完了</b> —— 等你验收${when}。上面他最后一句话就是结论。</div>`;
+    if (st === '失败')
+      return `<div class="tc-statebar bad"><b>这轮没跑成</b> —— 没干完。他消息脚上有「↻ 重跑一次」，点一下接着来。</div>`;
+    if (st === '已阻塞')
+      return `<div class="tc-statebar warn"><b>他停在这等你拿主意</b> —— 卡点就是上面最后一条，回他一句或改状态。</div>`;
+    if (st === '进行中')
+      return `<div class="tc-statebar idle"><b>还没干完</b> —— 他在这两轮之间（上一轮刚收尾，下一轮还没起）。说句话或等他自己继续${when}。</div>`;
+    return '';
+  };
+
   const threadsHtml = (d) => {
     const msgs = d?.messages ?? [];
     if (!msgs.length) {
       return `<div class="nc-empty">还没有评论。</div>`;
     }
-    const topics = topicsOf(msgs);
+    const banner = stateBanner(d);
+    // 时间线 = 消息 + 没跑成的那几轮运行（中断/停止的占位也按时间排进去，见 topicsOf）
+    failedRunIds = new Set((d?.runs ?? []).filter((r) => r.status === '失败').map((r) => r.id));
+    const topics = topicsOf(timelineOf(msgs, d?.runs ?? []));
     // 首屏先把库里已有的都记"见过"：高亮只给**这一页打开之后**新到的回话，
     // 不然每次进卡满屏蓝，跟没折一样。
     if (seenReplies.size === 0) {
@@ -2170,24 +2281,22 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     }
     const html = topics
       .map((t) => {
-        const startNote = t.head && isStartNote(t.head);
-        const head = !t.head
-          ? ''
-          : startNote
-            ? `<details class="tc-event"><summary>开工说明 · ${esc(cmtTime(t.head.createdAt))}</summary>
-                 <div class="tc-cmt-text">${renderMarkdown(t.head.text)}${attsHtmlOf(t.head.atts)}</div>
-               </details>`
-            : `<div class="tc-topic-title">${renderMarkdown(t.head.text)}${attsHtmlOf(t.head.atts)}</div>`;
-        // 「开工说明」不是人写的评论：不出头像、不出作者行，只留一条可展开的流水
+        // 开工说明在 topicsOf 里就被摘掉了（任务全局上下文，不进讨论区），这里的 head 一定是真评论
+        const head = t.head
+          ? `<div class="tc-topic-title">${renderMarkdown(t.head.text)}${attsHtmlOf(t.head.atts)}</div>`
+          : '';
         // 「只留言」的便签给一枚小标记：不然它和普通评论长得一模一样，看不出这条没叫醒他
         const noteTag = t.head?.note
           ? '<span class="tc-tag" title="便签：只给你看，没叫醒他">便签</span>'
           : '';
-        const meta = t.head && !startNote
-          ? `<div class="tc-topic-meta">
-               ${t.head.role === 'user' ? '' : `<b>${esc(whoName)}</b>`}
-               ${noteTag}
-               <time>${esc(cmtTime(t.head.createdAt))}</time>
+        // 时间放回复下面（2026-10-29 用户："时间放回复下面"）；上面不留空行 ——
+        // 自己的评论头一行什么都不写，名字/时间/回复全收进正文底下那一行（他的回话头一行仍是名字）
+        const meta = t.head && t.head.role !== 'user'
+          ? `<div class="tc-topic-meta"><b>${esc(whoName)}</b>${noteTag}</div>`
+          : '';
+        const foot = t.head
+          ? `<div class="tc-topic-foot">
+               <time class="tc-cmt-at">${esc(cmtTime(t.head.createdAt))}</time>
                <button type="button" class="tc-reply" data-reply="${esc(t.head.id)}">回复</button>
              </div>`
           : '';
@@ -2201,7 +2310,9 @@ export async function paintTaskCardPage(taskId, opts = {}) {
         if (t.items.length) {
           const last = t.items[t.items.length - 1];
           const author = last.role === 'user' ? '我' : whoName;
-          const items = t.items.map((m) => cmtItem(m, !seenReplies.has(m.id))).join('');
+          const items = t.items.map((m, i) =>
+            cmtItem(m, !seenReplies.has(m.id), i === t.items.length - 1 ? t.id : null),
+          ).join('');
           replies = `<details class="tc-replies" data-replies="${esc(t.id)}"${isOpen ? ' open' : ''}>
                <summary class="tc-replies-toggle">
                  <span class="tc-replies-fold">${t.items.length} 条回复 · <i>${esc(author)}</i>：${esc(replySnippet(last))}</span>
@@ -2210,12 +2321,13 @@ export async function paintTaskCardPage(taskId, opts = {}) {
                <div class="tc-replies-body">${items}</div>
              </details>`;
         }
-        // 作者行在**正文上面**（跟普通评论一致）：头像旁边第一行就是"我 + 时间"，
-        // 再往下才是内容 —— 反过来会让人以为下面又开了一条评论（2026-10-18 用户指出）
-        return `<article class="tc-topic${t.head ? '' : ' pre'}" data-topic="${esc(t.id)}">
-          ${t.head && !startNote ? (t.head.role === 'user' ? smAvatar('我', 'me') : smAvatar(whoName, '', personaByName(whoName))) : ''}
+        // 作者行在**正文上面**（跟普通评论一致）：头像旁边第一行是"我"，再往下才是内容 ——
+        // 反过来会让人以为下面又开了一条评论（2026-10-18 用户指出）。时间/回复在正文底下的落款行。
+        return `<article class="tc-topic" data-topic="${esc(t.id)}">
+          ${t.head ? (t.head.role === 'user' ? smAvatar('我', 'me') : smAvatar(whoName, '', personaByName(whoName))) : ''}
           <div class="tc-topic-body">
             ${meta}${head}
+            ${foot}
             ${replies}
           </div>
         </article>`;
@@ -2223,18 +2335,31 @@ export async function paintTaskCardPage(taskId, opts = {}) {
       .join('');
     // 画完统一记"见过"：下次重画时不在 seenReplies 里的才是新到的
     for (const t of topics) for (const m of t.items) seenReplies.add(m.id);
-    return html;
+    return banner + html;
   };
 
-  // 折叠开关：点击 summary 后 details.open 已被浏览器切换，这里同步记下"用户展开/收起过哪些议题"，
-  // 供下一次重画还原（收起过的不再被自动展开抢回去）。用 click 委托（details 的 toggle 事件不冒泡，得靠 click）。
-  $('tcThreads')?.addEventListener('click', (e) => {
-    const d = e.target.closest?.('details.tc-replies');
-    if (!d) return;
-    const id = d.dataset.replies;
-    if (d.open) { openTopics.add(id); collapsedTopics.delete(id); }
-    else { openTopics.delete(id); collapsedTopics.add(id); }
-  });
+  /**
+   * 「重跑一次」（2026-10-30 用户："失败了可以再让它重新跑一次，像 multica 那样"）：
+   * 失败/阻塞的卡重新派活 —— 走「开始工作」同一条链路（startProjectTask），
+   * 开工说明会对着**同一个会话**再发一次，他接着上次的上下文继续干，不用重发现场。
+   * 跑着的卡不许重（startProjectTask 自己也会拦，这里先拦是为了给句人话）。
+   * ⚠️ 它的点击委托**不能在这里挂** —— 下面 host.innerHTML 才整页重建（#tcThreads 是新的），
+   *    提前挂 = 挂在旧节点/null 上，点击永远哑火（2026-10-30 实测：点了没反应）。委托在后面 wireReplyButtons 旁。
+   */
+  const rerunTask = async (topicId = null) => {
+    if (liveRunId) { toast('他正在跑，等这轮结束再说。', 'error'); return; }
+    // ⚠️ 必须 PATCH：startNow（保存并开始工作）长在 PATCH 分支里，PUT /tasks/:id 没人接 ——
+    // 上一版写成 PUT，点了重跑就是一发哑弹（2026-10-30 用户："点击重跑没有反应"）
+    const res = await api(`/api/projects/tasks/${encodeURIComponent(taskId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ startNow: true }),
+    });
+    if (res?.task) { task = res.task; refreshHeader(); }
+    toast(`已重新交给 ${whoName}`);
+    // 进度卡落在**点重跑的那条议题**里（不是"最后一个议题"—— 中间插了新评论就会挂错位置）
+    if (res?.task?.runId) attach(res.task.runId, topicId); // 直接接上新一轮的实时进度
+    else refreshThread(); // 没拿到 runId（比如在排队）就整块重画，跑起来后进度卡会自己出现
+  };
 
   /**
    * 页面形态参照同类产品的任务详情（2026-10-18 用户要求"简洁一些"）：
@@ -2329,8 +2454,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
             </div>
           </div>
           <div class="tc-composer-foot">
-            <button type="button" class="tc-stop" id="tcStop" hidden
-                    title="掐掉这一轮（他已经说出来的话会留着；会话和上下文都还在，随时可以接着说）">■ 停止生成</button>
+            <!-- 「停止生成」并进发送键了（跑着时发送键原地变身）—— 单摆那颗撤掉（2026-10-29） -->
             <div class="counter left" id="tcHint2"></div>
           </div>
         </div>
@@ -2769,6 +2893,9 @@ export async function paintTaskCardPage(taskId, opts = {}) {
 
   let convId = task.conversationId ?? null;
   let stream = null;
+  let liveRunId = null;   // 正在跑的那一轮（有它 → 发送键变成「停止生成」，跟对话页一个做法）
+  let liveTick = null;    // 进度卡的每秒重画；掐掉运行 / 收尾时都要停表，别留着空转
+  let liveEl = null;      // 进度卡气泡的 DOM —— 讨论区重画会把它冲掉，要用它挂回去（不然他明明在跑、界面"停了"）
   let replyTo = null; // 正在回复哪个议题（null = 新开一条）
   let pendingAtts = []; // 还没发出的附件 { file, name, size, mime, localUrl }
   let attSending = false;
@@ -2854,7 +2981,8 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     }
     if (label) label.textContent = MODE_LABEL[sendMode];
     const input = $('tcInput');
-    if (input) input.placeholder = placeholderText();
+    // 他在跑的时候提示语让位给"要打断就点停止生成"（跟对话页 setBusy 一个道理）
+    if (input) input.placeholder = liveRunId ? '他还在说…（要打断就点「停止生成」）' : placeholderText();
     const menu = $('tcModeMenu');
     if (menu) {
       menu.querySelectorAll('[data-pick]').forEach((b) => {
@@ -2978,6 +3106,26 @@ export async function paintTaskCardPage(taskId, opts = {}) {
   syncReplyDock();
   wireReplyButtons(); // 首屏那批「回复」按钮也要接上 —— 漏了这行，点了没反应（2026-10-18 实测踩过）
 
+  /* ↓↓↓ 这些委托**必须挂在 host.innerHTML 之后**（上面才把新 #tcThreads 放进文档）。
+     提前挂 = 挂在旧节点/null 上，页面怎么点都没反应 —— 2026-10-30 重跑哑弹的根因。 */
+  // 折叠开关：点击 summary 后 details.open 已被浏览器切换，这里同步记下"用户展开/收起过哪些议题"，
+  // 供下一次重画还原（收起过的不再被自动展开抢回去）。用 click 委托（details 的 toggle 事件不冒泡，得靠 click）。
+  $('tcThreads')?.addEventListener('click', (e) => {
+    const d = e.target.closest?.('details.tc-replies');
+    if (!d) return;
+    const id = d.dataset.replies;
+    if (d.open) { openTopics.add(id); collapsedTopics.delete(id); }
+    else { openTopics.delete(id); collapsedTopics.add(id); }
+  });
+  // 重跑按钮是画在讨论区行里的，页面随时重画 —— 委托到容器上，别逐个绑
+  $('tcThreads')?.addEventListener('click', (e) => {
+    const btn = e.target.closest?.('[data-rerun]');
+    if (!btn) return;
+    e.preventDefault();
+    const topicId = btn.closest('.tc-topic')?.dataset.topic ?? null;
+    rerunTask(topicId).catch((err) => toast(err.message, 'error'));
+  });
+
   const refreshThread = async () => {
     if (!convId) return;
     try {
@@ -2990,7 +3138,40 @@ export async function paintTaskCardPage(taskId, opts = {}) {
       box.innerHTML = threadsHtml(d);
       wireReplyButtons();
       syncReplyDock(); // 再停靠回去（回复横幅、议题高亮一起补上）
+      // 他还在跑 → 把进度卡挂回去（2026-10-30 用户："他停下来了" —— 其实是重画把它冲掉了，
+      // stream 还活着、一直在往那块（已脱文档的）DOM 里写，挂回去内容一条不少）
+      if (liveRunId && liveEl && !liveEl.isConnected) {
+        const topics = box.querySelectorAll('.tc-topic');
+        const host = topics.length
+          ? topics[topics.length - 1].querySelector('[data-replies]') ?? box
+          : box;
+        host.appendChild(liveEl);
+        const det = liveEl.closest?.('details.tc-replies');
+        if (det) det.open = true;
+      }
     } catch { /* 拉不到就保持原样，别把页面弄炸 */ }
+  };
+
+  /**
+   * 发送键 ↔ 停止生成（2026-10-29 用户："在生成时，发送变成停止生成。就像是对话面板输入框那样"）：
+   * 原来「停止生成」单摆在输入框下面一颗，发送键还在 —— 人一眼扫到两个按钮，不知道点哪个。
+   * 现在照对话页 setBusy 的规矩：跑着 → 发送键原地变成「停止生成」，跑完自动变回来。
+   */
+  const syncStop = () => {
+    const send = $('tcSend');
+    if (send) {
+      send.classList.toggle('stopping', !!liveRunId);
+      send.textContent = liveRunId ? '停止生成' : '发送';
+      send.title = liveRunId ? '掐掉这一轮（他已经说出来的话会留着）' : '发送';
+    }
+    const input = $('tcInput');
+    if (input && input !== document.activeElement) {
+      // 不抢正在打字的焦点框：只在没在打字时换提示语（打字中的草稿不受影响）
+      paintMode();
+    }
+    const hint = $('tcHint2');
+    // 跑着才说"一次只跑一条"；跑完必须收回 —— 不然这句话一直挂着，人以为还在跑（2026-10-24 用户实感）
+    if (hint) hint.textContent = liveRunId ? '一次只跑一条。要打断就点「停止生成」。' : '';
   };
 
   /**
@@ -2999,14 +3180,6 @@ export async function paintTaskCardPage(taskId, opts = {}) {
    * ⚠️ 是"停止"，不是"暂停"：底层 runtime 都是一次性子进程，没有暂停/续跑这回事。
    *    停掉的是**这一轮**，不是这个人 —— 会话、上下文、卡片都还在，再说一句就能接着办。
    */
-  let liveRunId = null;
-  const syncStop = () => {
-    const btn = $('tcStop');
-    if (btn) btn.hidden = !liveRunId;
-    const hint = $('tcHint2');
-    // 跑着才说"随时可以掐掉"；跑完必须收回 —— 不然这句话一直挂着，人以为还在跑（2026-10-24 用户实感）
-    if (hint) hint.textContent = liveRunId ? '随时可以掐掉这一轮 —— 说过的话留着。' : '';
-  };
   const abortRun = async () => {
     const rid = liveRunId;
     if (!rid) return;
@@ -3016,6 +3189,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     if ($('tcHint2')) $('tcHint2').textContent = '已停下（他说过的话留着）。';
     stream?.close?.();
     stream = null;
+    if (liveTick) { clearInterval(liveTick); liveTick = null; }
     try {
       await api(`/api/runs/${encodeURIComponent(rid)}/abort`, { method: 'POST' });
     } catch (e) {
@@ -3027,22 +3201,35 @@ export async function paintTaskCardPage(taskId, opts = {}) {
       .then((d) => { if (d?.task) { task = d.task; refreshHeader(); } })
       .catch(() => { /* 取不到就等下次刷新 */ });
   };
-  if ($('tcStop')) $('tcStop').onclick = abortRun;
 
   /**
    * 接实时流：**一个气泡里追加分块**（跟主聊天页 `attachStream` 一个写法），
    * 收尾后从库里重画 —— 流式气泡是临时的，库里那份才是完整的。
    * 落点：正在回复的那个议题的回复区里；不知道是哪个议题（比如改状态开的工、或刷新后接上）就落在
    * **最后一条议题**下面 —— 绝不能落到列表末尾，那样看着像他另开了一条新评论（2026-10-18 用户指出）。
+   *
+   * 2026-10-29 用户："这里只看到嘉辉在跑，看不到是不是卡了。对话里的那一套搬过来用" ——
+   * 原来讨论区只有一个三个点的 typing 气泡；现在换成和对话页**同一块运行进度卡**
+   * （run-progress-card.mjs）：阶段 + 第几步 + 总用时、最近动作、卡住了把「停止生成」摆到眼前。
    */
-  const attach = (runId, topicId = replyTo) => {
+  const attach = (runId, topicId = replyTo, startedAt = null) => {
     if (!runId || stream) return;
     liveRunId = runId; // 有这一轮在跑 → 露出「停止生成」
     syncStop();
     const id = 'tcLive-' + runId;
-    let host = topicId
-      ? $('tcThreads')?.querySelector(`[data-replies="${CSS.escape(topicId)}"]`) ?? null
-      : null;
+    // 落点三查（2026-10-30 用户："回复挂载在另外一个位置"）：
+    //   ① topicId 正好是议题头 → [data-replies] 直接命中；
+    //   ② topicId 是议题里某条消息（或被服务端拍平前的原话）→ 按 data-mid 反查所在议题；
+    //   ③ 都查不到（开工说明这种被摘掉的锚）→ 兜底最后一个议题。
+    let host = null;
+    if (topicId) {
+      const threads = $('tcThreads');
+      host = threads?.querySelector(`[data-replies="${CSS.escape(topicId)}"]`) ?? null;
+      if (!host) {
+        const mid = threads?.querySelector(`[data-mid="${CSS.escape(topicId)}"]`);
+        host = mid?.closest('.tc-topic')?.querySelector('[data-replies]') ?? null;
+      }
+    }
     if (!host) {
       const topics = $('tcThreads')?.querySelectorAll('.tc-topic');
       host = topics?.length ? topics[topics.length - 1].querySelector('[data-replies]') : null;
@@ -3058,31 +3245,45 @@ export async function paintTaskCardPage(taskId, opts = {}) {
       `<div class="tc-cmt live" id="${id}">
         ${smAvatar(whoName, '', personaByName(whoName))}
         <div class="tc-cmt-main"><div class="tc-cmt-meta"><b>${esc(whoName)}</b><span class="dim">工作中…</span></div>
-        <div class="tc-cmt-text"><div class="typing"><i></i><i></i><i></i></div></div></div></div>`,
+        <div class="tc-cmt-text"></div></div></div>`,
     );
+    liveEl = document.getElementById(id); // 记住这块气泡：讨论区每次重画都要靠它挂回去
     scrollThreads();
     const body = document.querySelector('#' + id + ' .tc-cmt-text');
+    // 进度卡和对话页同一套；卡上的「停止生成」掐的是这一轮（abortRun 在上面，含界面立即停 + 服务端 abort）
+    const card = createProgressCard({ startedAt, onStop: () => abortRun() });
+    body?.appendChild(card.el);
+    scrollThreads();
     const add = (cls, text, asHtml = false) => {
-      body?.querySelector('.typing')?.remove();
       const d = document.createElement('div');
       d.className = 'step ' + cls;
       if (asHtml) d.innerHTML = text; else d.textContent = text;
       body?.appendChild(d);
       scrollThreads();
     };
+    const finishUp = () => {
+      if (liveTick) { clearInterval(liveTick); liveTick = null; }
+      stream?.close?.();
+      stream = null;
+      liveRunId = null; // 这一轮结束了 → 收起「停止生成」
+      liveEl = null;    // 气泡跟着这一轮作废（下一轮 attach 会造新的）
+      syncStop();
+      refreshThread();
+      // 跑完卡片状态会收成「待验收」—— 页头那颗 pill 跟着刷一下（不重画整页，评论草稿不丢）
+      api(`/api/projects/tasks/${encodeURIComponent(taskId)}`)
+        .then((d) => { if (d?.task) { task = d.task; refreshHeader(); } })
+        .catch(() => { /* 取不到就等下次刷新 */ });
+    };
+    liveTick = setInterval(() => card.paint(), 1000);
     stream = streamRun(runId, {
+      // 每个原始事件喂给进度卡：走到哪一步、多久没动静、是不是卡住了，全靠它
+      onEvent: (evt) => card.applyEvent(evt),
       onText: (chunk) => add('text', renderMarkdown(chunk), true),
-      onRunError: (msg) => add('bad', '· ' + firstMeaningfulLine(msg)),
-      onDone: () => {
-        stream?.close?.();
-        stream = null;
-        liveRunId = null; // 这一轮结束了 → 收起「停止生成」
-        syncStop();
-        refreshThread();
-        // 跑完卡片状态会收成「待验收」—— 页头那颗 pill 跟着刷一下（不重画整页，评论草稿不丢）
-        api(`/api/projects/tasks/${encodeURIComponent(taskId)}`)
-          .then((d) => { if (d?.task) { task = d.task; refreshHeader(); } })
-          .catch(() => { /* 取不到就等下次刷新 */ });
+      onRunError: (msg) => { add('bad', '· ' + firstMeaningfulLine(msg)); card.paint(); },
+      onDone: (evt) => {
+        // 先把"完成/停止/失败 + 总用时"定格一帧，再由 refreshThread 从库里重画
+        card.finish(evt.status);
+        finishUp();
       },
       onReconnect: () => refreshThread(),
     });
@@ -3090,7 +3291,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     // （不掐的话它还在后台收消息，往一个已经从文档里摘掉的 DOM 里写）
     if (dlg) tcDlgStream = stream;
   };
-  if (runningRun) attach(runningRun.id, null); // 打开时正好在跑 → 接上，不等刷新
+  if (runningRun) attach(runningRun.id, null, runningRun.startedAt); // 打开时正好在跑 → 接上，不等刷新
 
   const sendText = async () => {
     const text = $('tcInput').value.trim();
@@ -3154,9 +3355,10 @@ export async function paintTaskCardPage(taskId, opts = {}) {
       // 折叠条带着最新回复预览、点开自动展开，回去的成本很低。
       clearReply();
       await refreshThread();
-      // 新开的议题：他这次的回复要落进**我刚发的那条**下面（服务端也是这么挂 parentId 的），
-      // 所以气泡的落点用新评论的 id，而不是 null
-      if (r.runId) attach(r.runId, parentId ?? r.message?.id ?? null);
+      // 新开的议题：他这次的回复要落进**我刚发的那条**下面（服务端也是这么挂 parentId 的）。
+      // 落点优先用新评论自己的 id —— 分组可能把它归进已有线程（回复被服务端拍平到开工说明时），
+      // attach 会按 data-mid 反查它实际落在哪个议题，进度卡就跟到哪（2026-10-30 用户："回复挂载在另外一个位置"）
+      if (r.runId) attach(r.runId, r.message?.id ?? parentId ?? null);
       else if ($('tcHint2')) {
         $('tcHint2').textContent = '已记下 —— 便签只给你看，没叫醒他。';
       }
@@ -3171,7 +3373,8 @@ export async function paintTaskCardPage(taskId, opts = {}) {
       $('tcInput').focus();
     }
   };
-  $('tcSend').onclick = sendText;
+  // 发送键身兼两职（对话页同款）：闲时是「发送」，他跑着时是「停止生成」
+  $('tcSend').onclick = () => ($('tcSend').classList.contains('stopping') ? abortRun() : sendText());
 
   // 页面要被换掉 / 弹窗要关时，把挂在 document 上的收起监听摘掉（否则会一层层堆起来，见 setRoute）
   cleanups.push(() => document.removeEventListener('click', onDocClick));

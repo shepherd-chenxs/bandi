@@ -157,13 +157,17 @@ console.log('\n⑤ 格式化 / 容错');
 console.log('\n⑥ 聊天页接线（静态断言，防"归约器写了没人用"）');
 {
   const chatSrc = fs.readFileSync(new URL('../../web/js/chat.mjs', import.meta.url), 'utf8');
+  // 2026-10-29：画卡片这一层从 chat.mjs 拆成共用组件 run-progress-card.mjs（任务卡讨论区用同一套）。
+  // 「停止生成 / 等结果」的落点跟着搬进组件 —— 断言改成两头都钉：组件里有这颗钮/这档状态，
+  // chat.mjs 确实把组件接上了并传了 onStop，少一头都算红。
+  const cardSrc = fs.readFileSync(new URL('../../web/js/run-progress-card.mjs', import.meta.url), 'utf8');
   check('chat.mjs 引用了 run-progress.mjs', /from '\.\/run-progress\.mjs'/.test(chatSrc));
   check('streamRun 把每个原始事件交给 onEvent', /h\.onEvent\?\.\(evt\)/.test(chatSrc));
   check('attachStream 接收 startAt 并按真实开始时间计时', /attachStream\(runId, whoName = '', startedAt = null\)/.test(chatSrc));
   check('重进会话时把 run.startedAt 带过去', /attachStream\(last\.id, last\.personaName, last\.startedAt\)/.test(chatSrc));
   check('不再用三个点占位', !/class="typing"><i><\/i><i><\/i><i><\/i>/.test(chatSrc));
-  check('卡住行里直接给「停止生成」按钮', /class="rp-stop">停止生成/.test(chatSrc));
-  check('卡住的步骤有「等结果」状态（不再假装进行中）', /waiting/.test(chatSrc) && /已等/.test(chatSrc));
+  check('卡住行里直接给「停止生成」按钮', /class="rp-stop">停止生成/.test(cardSrc) && /createProgressCard\(\{[\s\S]*?onStop/.test(chatSrc));
+  check('卡住的步骤有「等结果」状态（不再假装进行中）', /waiting/.test(cardSrc) && /已等/.test(cardSrc));
 }
 
 console.log(`\n结论：${failed ? `${failed} 项没过` : '全通过'}`);

@@ -12,8 +12,10 @@ import { openChatLogDrawer, openGroupDrawer } from './groups.mjs';
 import { closeDrawer, fireExpert } from './experts.mjs';
 import { $, S } from './core.mjs';
 import { SANDBOX_LABEL, sandboxItems } from './misc.mjs';
-// 运行进度：把事件流翻译成"走到哪一步"（纯逻辑，不碰 DOM；dsh/codex/claude 的事件都吃）
-import { applyRunEvent, createRunProgress, fmtAgo, fmtElapsed, fmtStepDur, progressView } from './run-progress.mjs';
+// 运行进度：纯逻辑在 run-progress.mjs（冒烟在 Node 里测）；画卡片这一层在 run-progress-card.mjs
+// （对话页 / 任务卡讨论区共用同一份，2026-10-29 用户："对话里的那一套搬过来用"）
+import { fmtElapsed } from './run-progress.mjs';
+import { createProgressCard } from './run-progress-card.mjs';
 
 
 
@@ -774,7 +776,9 @@ export function timelineOf(msgs, runs) {
   );
   for (const m of msgs) items.push({ at: String(m.createdAt ?? ''), kind: 'msg', m });
   for (const r of runs ?? []) {
-    if (r.status === '失败' || r.status === '中断') {
+    /* 失败/中断也认「已有回话」：有的运行时会把报错本身当成回话落库（带 runId）——
+       这时占位行就是同一件事说第二遍（2026-10-30 用户实报"为啥会有两条失败"）。 */
+    if ((r.status === '失败' || r.status === '中断') && !repliedRuns.has(r.id)) {
       items.push({ at: String(r.endedAt ?? r.startedAt ?? ''), kind: 'fail', r });
       continue;
     }
@@ -1120,25 +1124,29 @@ export function attachStream(runId, whoName = '', startedAt = null) {
    * 数据全部来自事件流（跟 `run_events` 同一份），刷新/重连时服务端会重放，不用另存。
    */
   const begun = typeof startedAt === 'string' ? Date.parse(startedAt) : startedAt;
-  const progress = createRunProgress({ startedAt: Number.isFinite(begun) ? begun : Date.now() });
   $('chat').insertAdjacentHTML('beforeend',
     `<div class="row" id="${id}">
        ${smAvatar(name, '', personaByName(name))}
-       <div class="bubble">
-         <div class="rp" data-rp>
-           <div class="rp-head">
-             <span class="rp-dot"></span><span class="rp-phase">准备中</span>
-             <span class="rp-meta"></span><span class="rp-time">00:00</span>
-           </div>
-           <div class="rp-last" hidden></div>
-           <div class="rp-steps"></div>
-         </div>
-       </div>
+       <div class="bubble"></div>
      </div>`);
   scrollDown();
 
   const body = document.querySelector('#' + id + ' .bubble');
-  const rp = body.querySelector('[data-rp]');
+  /*
+   * 运行进度（2026-10-26）：原来这里只有一个"三个点"的 typing 气泡，人只能看出
+   * "他在动"，看不出走到哪、是不是卡住了。现在是一块状态卡：
+   *   · 头一行：阶段 + 第几步 + 总用时（每秒走）；
+   *   · 第二行：最近一次工具动作 + 多久以前；无动静超过 5 分钟就变"可能卡住了"；
+   *   · 下面是工具卡片（第 N 步 · 动词 · 目标 · 耗时/成败）。
+   * 画卡片的代码 2026-10-29 拆成共用组件（run-progress-card.mjs）—— 任务卡讨论区
+   * 用的是同一套，别处再要"看得见他在干嘛"也接这一个。
+   * 数据全部来自事件流（跟 `run_events` 同一份），刷新/重连时服务端会重放，不用另存。
+   */
+  const card = createProgressCard({
+    startedAt: Number.isFinite(begun) ? begun : Date.now(),
+    onStop: () => stopChatRun().catch(() => {}),
+  });
+  body.appendChild(card.el);
   // 思考过程开关跟随**这轮的执行者**（2026-10-24 修群聊失效）：
   // 会话上的 showThinking 是拿 conversations.personaId JOIN 员工表带出来的 ——
   // 单聊有值；群建会话时 personaId 故意置空（见 store/conversations.mjs），JOIN 出来是
@@ -1152,76 +1160,8 @@ export function attachStream(runId, whoName = '', startedAt = null) {
     scrollDown();
   };
 
-  /** 一张工具卡片：第几步、干了什么、多久/成败 */
-  const stepHtml = (s) => {
-    const ic = s.status === 'done' ? '✓' : s.status === 'error' ? '✗' : s.status === 'running' ? '◌' : s.status === 'waiting' ? '◌' : '·';
-    // waiting = 整条运行已经卡住了：不再写"进行中 1237s"，改成"已等 N 分钟"（配合头顶的"可能卡住了"）
-    const fmtWait = (ms) => (ms >= 60000 ? `${Math.floor(ms / 60000)} 分钟` : `${Math.max(1, Math.round(ms / 1000))} 秒`);
-    const dur = s.durMs == null
-      ? ''
-      : s.status === 'running' ? `<span class="rp-dur">进行中 ${fmtStepDur(s.durMs)}</span>`
-      : s.status === 'waiting' ? `<span class="rp-dur">已等 ${fmtWait(s.durMs)}</span>`
-      : `<span class="rp-dur">${fmtStepDur(s.durMs)}</span>`;
-    const err = s.error ? `<span class="rp-err">${esc(s.error)}</span>` : '';
-    // 卡片里那行会被截断（长命令），title 留全量 —— 悬停能看全，不占版面
-    const act = `${s.verb}${s.target ? ` ${s.target}` : ''}`;
-    return `<div class="rp-step ${esc(s.status)}">
-      <span class="rp-ic">${ic}</span>
-      <span class="rp-n">第 ${s.n} 步</span>
-      <span class="rp-act" title="${esc(act)}">${esc(s.verb)}${s.target ? ` <code>${esc(s.target)}</code>` : ''}</span>
-      ${dur}${err}
-    </div>`;
-  };
-  /** 画一帧进度（每秒也走一次：总用时、单步耗时、"多久没动静"都靠它） */
-  const paint = () => {
-    const v = progressView(progress, Date.now());
-    rp.classList.toggle('warn', v.stalled);
-    rp.classList.toggle('done', v.done);
-    rp.querySelector('.rp-phase').textContent =
-      v.stalled ? '可能卡住了' : v.done ? (v.status || '已结束') : v.phaseText;
-    rp.querySelector('.rp-time').textContent = fmtElapsed(v.elapsedMs);
-    const meta = [];
-    if (v.stepCount) meta.push(`${v.stepCount} 步`);
-    if (v.stalled && !v.done) meta.push(`最后动静 ${fmtAgo(v.idleMs)}`);
-    else if (v.currentStep) meta.push('进行中');
-    rp.querySelector('.rp-meta').textContent = meta.join(' · ');
-
-    const lastEl = rp.querySelector('.rp-last');
-    let lastText = '';
-    if (v.stalled && !v.done) {
-      // 卡住时把"停止生成"直接摆在眼前（顶部提示 + 底部按钮都要滚才能看到，人第一反应找不到）
-      lastText = `可能卡住了：最后动静 ${fmtAgo(v.idleMs)}${v.lastAction ? `（${v.lastAction}）` : ''} —— 可以再等等，或 <button type="button" class="rp-stop">停止生成</button>`;
-    } else if (v.error) {
-      lastText = esc(v.error);
-    } else if (v.lastAction) {
-      lastText = esc(`最近动作：${v.lastAction}（${fmtAgo(v.lastAgoMs)}）`);
-    } else if (v.info) {
-      lastText = esc(v.info);
-    } else if (!v.done && v.elapsedMs > 60000) {
-      // 一分多钟还没任何输出：模型首包本来就慢，但得让人知道不是界面坏了
-      lastText = '还没有任何输出（模型还在想，或者运行时在排队）';
-    }
-    lastEl.hidden = !lastText;
-    lastEl.innerHTML = lastText;
-    lastEl.classList.toggle('warn', v.stalled && !v.done);
-
-    const stepsEl = rp.querySelector('.rp-steps');
-    const shown = v.steps.slice(-8);
-    stepsEl.innerHTML =
-      (v.steps.length > 8 ? `<div class="rp-more">…前 ${v.steps.length - 8} 步已折叠</div>` : '') +
-      shown.map(stepHtml).join('');
-  };
-  paint();
-
-  // 卡住行里那颗「停止生成」：走的是和底部按钮同一个接口（stopChatRun）
-  rp.addEventListener('click', (e) => {
-    if (!e.target.closest('.rp-stop')) return;
-    e.preventDefault();
-    stopChatRun().catch(() => {});
-  });
-
   let stopped = false;
-  const tick = setInterval(() => { if (!stopped) paint(); }, 1000);
+  const tick = setInterval(() => { if (!stopped) card.paint(); }, 1000);
 
   /**
    * 收尾唯一出口。
@@ -1237,10 +1177,7 @@ export function attachStream(runId, whoName = '', startedAt = null) {
     setBusy(false);
     setHeaderBadge(status);
     // 先把"完成/停止/失败 + 总用时 + N 步"留一帧，再由 300ms 后的整页重画接手
-    progress.done = true;
-    progress.status = status;
-    progress.phase = status === '失败' ? 'error' : 'done';
-    paint();
+    card.finish(status);
     setTimeout(() => openConversation(convId).then(load).catch(() => {}), 300);
     // 告诉「停止生成」：这一轮真的收尾了（它会等这个信号再决定要不要自己补画）
     settleMe();
@@ -1248,12 +1185,12 @@ export function attachStream(runId, whoName = '', startedAt = null) {
 
   // 实时输出走**共用**的 streamRun（流程实例页的节点对话也是它）
   S.es = streamRun(runId, {
-    // 每个原始事件都喂给进度归约器：dsh 的 tool_call/tool_result、codex 的 tool、
+    // 每个原始事件都喂给进度卡：dsh 的 tool_call/tool_result、codex 的 tool、
     // claude 的 status 都靠它 —— 旧的 onText/onTool 只覆盖了其中一部分。
-    onEvent: (evt) => { applyRunEvent(progress, evt); paint(); },
+    onEvent: (evt) => card.applyEvent(evt),
     onText: (chunk) => add('text', renderMarkdown(chunk), true),
-    onRunError: (msg) => { add('bad', '· ' + firstMeaningfulLine(msg)); paint(); },
-    onThinking: (t) => { if (showThinking) add('', '· 思考：' + t); paint(); },
+    onRunError: (msg) => { add('bad', '· ' + firstMeaningfulLine(msg)); card.paint(); },
+    onThinking: (t) => { if (showThinking) add('', '· 思考：' + t); card.paint(); },
     onDone: (evt) => {
       // 这一行只是"立刻给你一句"；跑完 300ms 后整页从库里重画，
       // 那时由 failBlock 把它**留在回话里**（见 timelineOf 的注释）

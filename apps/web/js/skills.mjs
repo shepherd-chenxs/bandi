@@ -8,9 +8,9 @@ import { setListTitle } from './flowpages.mjs';
 import { breadcrumb, headRow } from './connectors.mjs';
 import { confirmDo, askCheckbox } from './machine.mjs';
 import { openAddMenu, renderList, showView, skillAddItems } from './contacts.mjs';
-import { pickLocalDir } from './projects.mjs';
+import { pickLocalDir, openProjectDetail, openTaskCardDialog } from './projects.mjs';
+
 import { $, S } from './core.mjs';
-import { openConversationSafe } from './listmenu.mjs';
 
 /* 提交卡两组文件的折叠态（模块级 —— renderGitRepos 每次刷新重建 fillChanges，
  * 状态放这儿才能跨刷新保留；false = 展开，默认全展开） */
@@ -576,12 +576,36 @@ export async function renderGitRepos(root = $('pluginView')) {
          </div>
          <section class="fx"><div id="grPush"><div class="sk-blank">读推送状态…</div></div></section>
        </div>
+      <div class="plg-sec">
+        <div class="plg-sec-head">
+          <label class="plg-sec-title">拉取请求</label><span class="dim" id="grPullsHead"></span>
+          <button type="button" class="mini auto gr-pulls-refresh" id="grPullsRefresh" title="从 GitHub 重新取一次">刷新</button>
+        </div>
+        <section class="fx"><div id="grPulls"><div class="sk-blank">取 PR…</div></div></section>
+      </div>
+      <!--
+        审核独立成一块（2026-10-29 五改，用户："加一个审核区"）。
+        还合不了的 PR（检查在跑 / 红了 / 草稿 / 冲突）搬到这里 —— 一件事一张卡，
+        「检查没过 · 点这修」跟着行走；「拉取请求」卡只剩待建 CTA。
+      -->
+      <div class="plg-sec">
+        <div class="plg-sec-head">
+          <label class="plg-sec-title">审核</label><span class="dim" id="grReviewHead"></span>
+          <button type="button" class="mini auto" id="grReviewRefresh" title="从 GitHub 重新取一次">刷新</button>
+        </div>
+        <section class="fx"><div id="grReview"><div class="sk-blank">取 PR…</div></div></section>
+      </div>
+       <!--
+         合并独立成一块（2026-10-29 四改，用户："加一个合并区，展示等待合并的 PR"）。
+         「拉取请求」只管"还没建 / 还合不了"，能合的那几条搬到这里 —— 一件事一张卡，
+         合并按钮跟着出行，不用在 PR 清单里翻。
+       -->
        <div class="plg-sec">
          <div class="plg-sec-head">
-           <label class="plg-sec-title">拉取请求</label><span class="dim" id="grPullsHead"></span>
-           <button type="button" class="mini auto gr-pulls-refresh" id="grPullsRefresh" title="从 GitHub 重新取一次">刷新</button>
+           <label class="plg-sec-title">合并</label><span class="dim" id="grMergeHead"></span>
+           <button type="button" class="mini auto" id="grMergeRefresh" title="从 GitHub 重新取一次">刷新</button>
          </div>
-         <section class="fx"><div id="grPulls"><div class="sk-blank">取 PR…</div></div></section>
+         <section class="fx"><div id="grMerge"><div class="sk-blank">取 PR…</div></div></section>
        </div>
        <div class="plg-sec">
          <div class="plg-sec-head"><label class="plg-sec-title">历史</label></div>
@@ -923,7 +947,14 @@ export async function renderGitRepos(root = $('pluginView')) {
     fillPulls(sel);
     fillLog(sel);
     // PR 区右上那颗「刷新」：只重取 PR（合并/建 PR 之外，比如在 GitHub 上手动关了 PR 时用）
+    /* 两颗刷新（拉取请求 / 合并）是同一份数据，一次重取两块一起更新 */
     $('grPullsRefresh')?.addEventListener('click', () => {
+      fillPulls(sel).catch((e) => toast(e.message, 'error'));
+    });
+    $('grReviewRefresh')?.addEventListener('click', () => {
+      fillPulls(sel).catch((e) => toast(e.message, 'error'));
+    });
+    $('grMergeRefresh')?.addEventListener('click', () => {
       fillPulls(sel).catch((e) => toast(e.message, 'error'));
     });
   }
@@ -944,7 +975,11 @@ export async function renderGitRepos(root = $('pluginView')) {
    */
   async function fillPulls(repo) {
     const box = $('grPulls');
+    const reviewBox = $('grReview');
+    const mergeBox = $('grMerge');
     const head = $('grPullsHead');
+    const reviewHead = $('grReviewHead');
+    const mergeHead = $('grMergeHead');
     if (!box) return;
     let prs = [];
     let state = null;
@@ -952,7 +987,10 @@ export async function renderGitRepos(root = $('pluginView')) {
       const d = await api(`/api/git/repos/${encodeURIComponent(repo.id)}/prs`);
       prs = d.prs ?? [];
     } catch (e) {
-      if (box.isConnected) box.innerHTML = `<div class="sk-blank">取不到 PR：${esc(e.message)}</div>`;
+      const msg = `<div class="sk-blank">取不到 PR：${esc(e.message)}</div>`;
+      if (box.isConnected) box.innerHTML = msg;
+      if (reviewBox?.isConnected) reviewBox.innerHTML = msg;
+      if ($('grMerge')?.isConnected) $('grMerge').innerHTML = msg;
       return;
     }
     try {
@@ -1004,17 +1042,21 @@ export async function renderGitRepos(root = $('pluginView')) {
             <div class="gr-pr-title"><b>#${p.number}</b> ${esc(p.title)}
               ${p.draft ? '<span class="pill">草稿</span>' : ''}
               ${isMine ? '<span class="pill">当前分支</span>' : ''}
-              ${p.taskId ? '<span class="pill" title="已经挂在一张任务卡上">已关联卡</span>' : ''}
+              ${/* 已关联卡 = 能点的（2026-10-29 用户："既然关联了任务卡，要能跳转过去"）*/ ''}
+              ${p.taskId ? `<button type="button" class="pill gr-pr-task" data-pr-task="${esc(p.taskId)}"
+                    title="打开关联的任务卡">已关联卡</button>` : ''}
               ${p.mergeableState === 'dirty' ? '<span class="pill bad">有冲突</span>' : ''}
             </div>
             <div class="gr-pr-sub">
               <span class="gr-pr-refs">${esc(p.headRef || '?')} → ${esc(p.baseRef || '?')}</span>
               <span class="dim">· ${esc(p.author || '?')}</span>
-              ${checkPill(p)}
               <a href="${esc(p.url)}" target="_blank" rel="noreferrer">去 GitHub 看</a>
             </div>
           </div>
           <div class="gr-cell-ops">
+            <!-- 检查徽标（含「检查没过 · 点这修」按钮）2026-10-29 用户："按钮放右边"：
+                 从副行文字中间挪进右侧操作列，竖排在「合并」上面 —— 副行只留信息，动作都靠右 -->
+            <div class="gr-ops-check">${checkPill(p)}</div>
             <button type="button" class="mini auto" data-pr-merge="${p.number}"
                     ${why ? `disabled title="${esc(why)}"` : 'title="合并进 base（走平台令牌；本地会自动收尾）"'}>合并</button>
           </div>
@@ -1052,17 +1094,23 @@ export async function renderGitRepos(root = $('pluginView')) {
         const ahead = state?.ahead;
         if ((ahead ?? 0) > 0) {
           /*
-           * 有已提交没推的就给按钮 —— 不管工作区脏不脏（2026-10-29 用户实报："之前提交的还没建 PR，
-           * 现在新改了，之前的就不能建 PR 了？"）。脏文件不会被顺手带走，界面上说清楚就行。
+           * 没推送时不给按钮（2026-10-30 用户："还没有推送，要这个建PR按钮干啥？"）——
+           * 建出来也是被服务端"先推送"顶回来，白点一下。推送是「推送」卡的事，推完这里再亮。
+           * 文案只说一件事（2026-10-30 用户："去掉这两条，没有啥用"）：去推送，推完能建。
            */
-          const n = ahead === null ? '' : `（领先 ${esc(base)} ${ahead} 个提交）`;
-          const extra = state?.dirtyCount
-            ? `；未提交的 ${state.dirtyCount} 个改动不会进这条 PR`
-            : '';
-          cta = `<div class="gr-pr-cta">
-            <span>当前分支 <b>${esc(cur)}</b> 还没有 PR ${n}${extra}</span>
-            <button type="button" class="mini auto" id="grPrCreate">建 PR</button>
-          </div>`;
+          const unpushed = Number(state?.unpushed ?? 0);
+          if (unpushed > 0 || !state?.upstream) {
+            cta = `<div class="gr-pr-cta">当前分支 <b>${esc(cur)}</b> 还没有 PR —— 先去上面「推送」卡推送，推完这里就能建 PR。</div>`;
+          } else {
+            const n = ahead === null ? '' : `（领先 ${esc(base)} ${ahead} 个提交）`;
+            const extra = state?.dirtyCount
+              ? `；未提交的 ${state.dirtyCount} 个改动不会进这条 PR`
+              : '';
+            cta = `<div class="gr-pr-cta">
+              <span>当前分支 <b>${esc(cur)}</b> 还没有 PR ${n}${extra}</span>
+              <button type="button" class="mini auto" id="grPrCreate">建 PR</button>
+            </div>`;
+          }
         } else if (state?.dirtyCount) {
           cta = `<div class="gr-pr-cta">当前分支 <b>${esc(cur)}</b> 有 ${state.dirtyCount} 个未提交改动 —— 先在「提交」里提交，提交完这里就能建 PR。</div>`;
         } else {
@@ -1087,22 +1135,45 @@ export async function renderGitRepos(root = $('pluginView')) {
     const ctaGroup = cta ? groupHtml('待建 PR', cta, 1) : '';
     const reviewGroup = groupHtml('审核中', reviewPrs.map(rowHtml).join(''), reviewPrs.length);
     const mergeGroup = groupHtml('等待合并', mergePrs.map(rowHtml).join(''), mergePrs.length);
-    if (head?.isConnected) {
-      head.textContent = prs.length ? `${prs.length} 条 PR${mergePrs.length ? ` · ${mergePrs.length} 条可合并` : ''}` : '';
+    if (head?.isConnected) head.textContent = prs.length ? `${prs.length} 条 PR` : '';
+    if (reviewHead?.isConnected) reviewHead.textContent = reviewPrs.length ? `${reviewPrs.length} 条审核中` : '暂无';
+    if (mergeHead?.isConnected) mergeHead.textContent = mergePrs.length ? `${mergePrs.length} 条可以合` : '暂无';
+
+    /* 三张卡各管一段（2026-10-29 五改）：拉取请求 = 待建 CTA；审核 = 还合不了的；合并 = 能合的。
+       卡标题已经说了是哪一段，里面不再套「审核中 / 等待合并」分组头 —— 一层就够了。 */
+    box.innerHTML =
+      ctaGroup ||
+      `<div class="sk-blank">${prs.length ? '当前分支没有待建的 PR —— 有新提交时这里会出现「建 PR」' : '没有进行中的 PR —— 建 PR 后会出现在这里'}</div>`;
+    if (reviewBox?.isConnected) {
+      reviewBox.innerHTML =
+        reviewPrs.map(rowHtml).join('') ||
+        `<div class="sk-blank">${prs.length ? '没有审核中的 PR —— 检查在跑 / 红了 / 有冲突的会出现在这里' : '还没有 PR'}</div>`;
+    }
+    if (mergeBox?.isConnected) {
+      mergeBox.innerHTML =
+        mergePrs.map(rowHtml).join('') ||
+        `<div class="sk-blank">${prs.length ? '没有等待合并的 PR —— 检查通过、没有冲突的才会出现在这里' : '还没有 PR'}</div>`;
     }
 
-    box.innerHTML =
-      ctaGroup + reviewGroup + mergeGroup ||
-      `<div class="sk-blank">没有进行中的 PR —— 建 PR 后会出现在这里</div>`;
-
+    /*
+     * 绑定：三颗「刷新」重取一次；行上的动作（建 PR / gate 明细 / 合并）在三块卡里都有，
+     * 用同一个 scope 列表跑一遍 —— 审核卡里的行也带「检查没过 · 点这修」，漏绑就是"点了没反应"。
+     */
     $('grPrCreate')?.addEventListener('click', () => openRepoPrDialog(repo, refresh));
-    box.querySelectorAll('[data-pr-gate]').forEach((b) => {
-      b.onclick = () => {
-        const one = prs.find((x) => x.number === Number(b.dataset.prGate));
-        if (one) openGateDlg(repo, one);
-      };
+    const scopes = [box, reviewBox, mergeBox].filter((el) => el?.isConnected);
+    scopes.forEach((scope) => {
+      scope.querySelectorAll('[data-pr-gate]').forEach((b) => {
+        b.onclick = () => {
+          const one = prs.find((x) => x.number === Number(b.dataset.prGate));
+          if (one) openGateDlg(repo, one);
+        };
+      });
+      // 「已关联卡」：就手看一眼 → 开弹窗（人本来在代码托管页，整页跳走反而丢位置）
+      scope.querySelectorAll('[data-pr-task]').forEach((b) => {
+        b.onclick = () => openTaskCardDialog(b.dataset.prTask).catch((e) => toast(e.message, 'error'));
+      });
     });
-    box.querySelectorAll('[data-pr-merge]').forEach((b) => {
+    scopes.forEach((scope) => scope.querySelectorAll('[data-pr-merge]').forEach((b) => {
       b.onclick = async () => {
         const n = Number(b.dataset.prMerge);
         const one = prs.find((x) => x.number === n);
@@ -1135,31 +1206,47 @@ export async function renderGitRepos(root = $('pluginView')) {
           toast(e.message, 'error');
         }
       };
-    });
+    }));
   }
 
-  /* ---------------- 检查没过 → 一颗按钮让 AI 去修 ----------------
+  /* ---------------- 检查没过 → 选处理人，建任务卡去修 ----------------
    *
-   * 2026-10-29 用户原话："作为用户，代码不是我写的，我根本不知道代码写了什么，我也不关心报错是什么。
-   * 我要的是一个按钮，点击之后 agent 帮我去修复就足够了。"
-   * 所以这扇窗的**主视线只有一句人话 + 一颗按钮**：
-   *   · 说结果不说术语（"自动检查没过，现在合不进去"，不提 gate / check-runs / step）；
-   *   · 主按钮 = 让 AI 帮我修 —— 派给谁、怎么修是平台的事，服务端一把挑人 + 派活（POST …/fix）；
-   *   · 技术明细（哪条红了、红在哪个 step、重跑）折叠在下面，想查的人自己展开。
+   * 2026-10-29 一路收敛到这一版（用户三次原话）：
+   *   "作为用户，代码不是我写的……我只要一个按钮，点了 agent 帮我去修"；
+   *   "这些去掉，这些都不是我关心的。这里放一个处理人，选择之后点击确定，就开始修复"；
+   *   "这一步是建任务卡修复"。
+   * 所以弹窗只剩三样：**结果标题、处理人下拉、确定**。
+   * 技术细节（runs / job / step）、修复指引、重跑按钮全部撤掉 —— 那些是工程师看的，
+   * 真要查去 GitHub 更快。确定 = 服务端建一张任务卡派给这个人（卡在看板上可追、可改人、留痕）。
    */
   function openGateDlg(repo, pr) {
     document.getElementById('repoGateDlg')?.close();
     const dlg = document.createElement('dialog');
     dlg.id = 'repoGateDlg';
-    dlg.style.width = '560px';
+    dlg.className = 'gr-gate-dlg';
+
+    /* 处理人排序：研发 → 测试 → 运维 → 其它，能修代码的排最上面（默认就选它） */
+    const rank = (role) => {
+      const s = String(role ?? '');
+      return s.startsWith('研发') ? 0 : s.startsWith('测试') ? 1 : s.startsWith('运维') ? 2 : 3;
+    };
+    const people = [...(S.personas ?? [])].sort((a, b) => rank(a.role) - rank(b.role));
+    const opts = people
+      .map((p) => `<option value="${esc(p.id)}">${esc(p.name)}${p.role ? ` · ${esc(String(p.role).split(' · ')[0])}` : ''}</option>`)
+      .join('');
+
     dlg.innerHTML = `
       <form method="dialog">
-        <b id="gateTitle">检查结果 · #${pr.number}</b>
+        <b>检查没过 · #${pr.number}</b>
         <div class="gr-meta gr-gate-refs">${esc(pr.headRef ?? '?')} → ${esc(pr.baseRef ?? '?')}</div>
-        <div id="gateBody"><div class="sk-blank">看看现在什么情况…</div></div>
+        <div id="gateBody">
+          <label class="gr-gate-pick-label" for="gateWho">处理人</label>
+          <select id="gateWho" ${people.length ? '' : 'disabled'}>${opts || '<option>还没有员工</option>'}</select>
+          <div class="gr-gate-hint">确定后建一张任务卡交给他（只建卡、不开对话）；修好会把改动推上去，检查自动重跑。</div>
+        </div>
         <div class="dlg-actions">
-          <button type="button" id="gateRefresh">刷新</button>
           <button type="button" value="cancel">关闭</button>
+          <button class="primary" id="gateGo" ${people.length ? '' : 'disabled'}>确定</button>
         </div>
       </form>`;
     document.body.append(dlg);
@@ -1167,153 +1254,44 @@ export async function renderGitRepos(root = $('pluginView')) {
     dlg.addEventListener('close', () => dlg.remove());
     dlg.showModal();
 
-    const CONC = { success: ['ok', '✓'], failure: ['bad', '✗'], timed_out: ['bad', '✗'],
-                   cancelled: ['none', '⊘'], action_required: ['bad', '✗'], startup_failure: ['bad', '✗'] };
-    const pill = (c) => {
-      const [cls, mark] = CONC[c] ?? (c ? ['none', '·'] : ['wait', '…']);
-      return `<span class="gr-pr-check ${cls}">${mark}</span>`;
-    };
-    const secs = (n) => (n == null ? '' : ` · ${n >= 60 ? `${Math.floor(n / 60)}m${n % 60 ? `${n % 60}s` : ''}` : `${n}s`}`);
-
-    let last = null;
-    // 派活结果（点过「让 AI 帮我修」才有）—— 放在闭包里，刷新明细不会把它刷掉
+    const body = $('gateBody');
+    const go = $('gateGo');
     let handoff = null;
 
-    const paint = () => {
-      const box = $('gateBody');
-      if (!box || !last) return;
-      const s = last.state;
-      const title = $('gateTitle');
-      if (title) {
-        title.textContent = `${
-          s === 'success' ? '检查通过'
-            : s === 'failure' ? '自动检查没过'
-              : s === 'pending' ? '检查还在跑'
-                : '检查情况不明'
-        } · #${pr.number}`;
-      }
-
-      const lead = s === 'failure'
-        ? `<p class="gr-gate-lead">这条 PR 的自动检查没通过，现在合不进去。<br>点下面这颗按钮，我安排人去把原因找出来、改好、重新跑一遍 —— 你不用看代码，也不用管它报什么错。</p>`
-        : s === 'success'
-          ? '<p class="gr-gate-lead">所有自动检查都过了，这条 PR 可以合并。</p>'
-          : s === 'pending'
-            ? '<p class="gr-gate-lead">自动检查还在跑，等几分钟点「刷新」看结果。</p>'
-            : s === 'none'
-              ? '<p class="gr-gate-lead">这个仓库没有配置自动检查 —— 能不能合只能靠人看一眼。</p>'
-              : '<p class="gr-gate-lead">这会儿没读到检查状态（网络或权限的问题），点「刷新」再试一次。</p>';
-
-      const fix = s !== 'failure' ? '' : handoff
-        ? `<div class="gr-gate-fix done">
-            <div class="gr-gate-fix-who">已交给 <b>${esc(handoff.personaName)}</b>${handoff.personaRole ? `<span class="dim">（${esc(handoff.personaRole)}）</span>` : ''}在修</div>
-            <div class="dim">他会在本机复现、改好、推上去，检查自动重跑 —— 修完点「刷新」就是最新结果。</div>
-            <button type="button" class="btn-sm" id="gateFixGo">去看他怎么修</button>
-          </div>`
-        : `<div class="gr-gate-fix">
-            <button type="button" class="primary" id="gateFix">让 AI 帮我修</button>
-            <div class="dim">通常几分钟。它修完会自己把改动推上去，你回来点「刷新」就能看到过没过。</div>
-          </div>`;
-
-      // 技术明细折叠起来：默认看不见，想查的人自己展开（用户不看代码，但排查时有用）
-      const details = (last.runs?.length || last.jobs?.length) ? `<details class="gr-gate-more">
-        <summary>技术细节（不想看可以不理）</summary>
-        ${last.runs?.length ? `<ul class="gr-gate-runs">
-          ${last.runs.map((r) => `<li>${pill(r.conclusion)}<span class="gr-gate-run-name" title="${esc(r.name)}">${esc(r.name)}</span><span class="dim">${secs(r.seconds)}</span>${r.url ? `<a href="${esc(r.url)}" target="_blank" rel="noreferrer">详情</a>` : ''}</li>`).join('')}
-        </ul>` : ''}
-        ${last.jobs?.length ? `<div class="gr-gate-jobs">
-          <div class="gr-gate-sec">红在哪（job → step）</div>
-          ${last.jobs.map((j) => `<div class="gr-gate-job">
-            <div class="gr-gate-job-name">${pill(j.conclusion)}<span>${esc(j.name)}</span>${j.url ? `<a href="${esc(j.url)}" target="_blank" rel="noreferrer">看日志</a>` : ''}</div>
-            ${(j.steps ?? []).length ? `<ul>${j.steps.map((st) => `<li>${esc(st.name)} <span class="gr-gate-step-c">${esc(st.conclusion)}</span></li>`).join('')}</ul>` : '<div class="dim">没拿到 step 明细 —— 去 GitHub 看日志</div>'}
-          </div>`).join('')}
-        </div>` : ''}
-        <div class="gr-gate-escape">
-          <button type="button" id="gateRerun">重跑这次检查</button>
-          <span class="dim">偶发的失败（比如网络抖了一下）重跑一次往往就过了 —— 不用麻烦人。</span>
-        </div>
-      </details>` : '';
-
-      box.innerHTML = `${lead}${fix}${details}`;
-      $('gateFix')?.addEventListener('click', doFix);
-      $('gateFixGo')?.addEventListener('click', goWatch);
-      $('gateRerun')?.addEventListener('click', doRerun);
+    /** 「去看卡片」：跳到那个项目的看板 —— 卡在那儿，开不开工看板上说了算（2026-10-29 用户定稿：不开对话） */
+    const goWatch = () => {
+      if (!handoff?.projectId) return;
+      dlg.close();
+      openProjectDetail(handoff.projectId).catch((err) => toast(err.message, 'error'));
     };
 
-    /** 主按钮：把这条 PR 交给一位研发去修（服务端挑人 + 派活，前端只认结果） */
-    async function doFix(e) {
-      e?.preventDefault();
-      const btn = $('gateFix');
-      if (btn) {
-        btn.disabled = true;
-        btn.textContent = '正在安排人…';
-      }
+    go?.addEventListener('click', async (e) => {
+      e.preventDefault();
+      if (handoff) return goWatch();   // 已经建完了，这颗钮改叫「去看进展」
+      const personaId = $('gateWho')?.value ?? null;
+      go.disabled = true;
+      go.textContent = '建卡中…';
       try {
-        handoff = await post(`/api/git/repos/${encodeURIComponent(repo.id)}/prs/${pr.number}/fix`, {});
-        paint();
-        toast(`已交给 ${handoff.personaName}，他开始看了`);
+        handoff = await post(`/api/git/repos/${encodeURIComponent(repo.id)}/prs/${pr.number}/fix`, { personaId });
+        if (body?.isConnected) {
+          body.innerHTML = `<div class="gr-gate-done">任务卡已建：<b>修 PR #${pr.number} 的自动检查</b>，交给 <b>${esc(handoff.personaName)}</b> 了。</div>`;
+        }
+        go.disabled = false;
+        go.textContent = handoff.projectId ? '去看卡片' : '知道了';
+        if (!handoff.projectId) go.onclick = () => dlg.close();
+        toast(`任务卡已建，交给 ${handoff.personaName}`);
         // 行上的徽标随后会被这轮修复改写（推上去 → 检查重跑），刷一次列表让状态跟上
         renderGitRepos().catch(() => {});
       } catch (err) {
-        // 失败原因就地说清（toast 会飘走），按钮恢复可再点
-        if (btn) {
-          btn.disabled = false;
-          btn.textContent = '让 AI 帮我修';
-        }
-        const box = $('gateBody');
-        box?.querySelector('.gr-gate-fix-err')?.remove();
-        box?.querySelector('.gr-gate-fix')?.insertAdjacentHTML(
-          'beforeend',
-          `<div class="gr-gate-fix-err">没派出去：${esc(err.message)}</div>`,
-        );
+        /* 失败原因就地显示（toast 会飘走），按钮恢复可再点 */
+        go.disabled = false;
+        go.textContent = '确定';
+        body?.querySelector('.gr-gate-err')?.remove();
+        body?.insertAdjacentHTML('beforeend', `<div class="gr-gate-err">没建起来：${esc(err.message)}</div>`);
       }
-    }
-
-    /** 「去看他怎么修」：跳到那位员工的会话（消息页），对话框留着会挡视线 */
-    function goWatch(e) {
-      e?.preventDefault();
-      if (!handoff?.conversationId) return;
-      dlg.close();
-      setNav('messages');
-      showView('chat');
-      openConversationSafe(handoff.conversationId).catch((err) => toast(err.message, 'error'));
-    }
-
-    /** 折叠区里的后路：偶发失败重跑一次 */
-    async function doRerun(e) {
-      e?.preventDefault();
-      const btn = $('gateRerun');
-      if (btn) {
-        btn.disabled = true;
-        btn.textContent = '重跑中…';
-      }
-      try {
-        await post(`/api/git/repos/${encodeURIComponent(repo.id)}/prs/${pr.number}/checks/rerun`, {});
-        toast('已经让 GitHub 重跑了 —— 过几分钟点「刷新」看结果');
-        load();
-      } catch (err) {
-        toast(err.message, 'error');
-      } finally {
-        if (btn?.isConnected) {
-          btn.disabled = false;
-          btn.textContent = '重跑这次检查';
-        }
-      }
-    }
-
-    const load = async () => {
-      const box = $('gateBody');
-      if (!box) return;
-      box.innerHTML = '<div class="sk-blank">看看现在什么情况…</div>';
-      try {
-        last = await api(`/api/git/repos/${encodeURIComponent(repo.id)}/prs/${pr.number}/checks`);
-        paint();
-      } catch (e) {
-        if (box.isConnected) box.innerHTML = `<div class="sk-blank">这会儿读不到检查结果：${esc(e.message)}</div>`;
-      }
-    };
-    $('gateRefresh')?.addEventListener('click', (e) => { e.preventDefault(); load(); });
-    load();
+    });
   }
+
 
   /* porcelain 的 X 列 → 展示用的一类：增 / 删 / 改 / 移（未跟踪算增） */
   const chgKind = (xy) => {

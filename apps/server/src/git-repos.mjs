@@ -214,7 +214,13 @@ const ghFetch = async (pathname, { token, method = 'GET', body, timeoutMs = GH_T
     /* 非 JSON 原样带着 */
   }
   if (!r.ok) {
-    const msg = data?.message ?? text.slice(0, 200);
+    let msg = data?.message ?? text.slice(0, 200);
+    // 422 的真话在 errors 数组里（顶层只有干巴巴的 "Validation Failed"）——
+    // 不带上它，"No commits between / already exists" 那些人话翻译永远匹配不上（2026-10-30 实测踩过）
+    const details = Array.isArray(data?.errors)
+      ? data.errors.map((x) => x?.message ?? JSON.stringify(x)).filter(Boolean).join('；')
+      : '';
+    if (details) msg = `${msg}（${details}）`;
     // **状态码挂在错误上**（2026-10-25）：建/合的分支处理要靠它。
     // 原来调用方用「消息里有没有 '403' 这几个字符」判 —— 那太脆：GitHub 的 404 消息里
     // 完全可能出现一串数字（sha、限额、issue 号），误判就会把"没权限"这种要人换令牌的信号
@@ -1830,7 +1836,7 @@ export async function createPull(repo, { head, base, title, body = '', draft = f
     // 422 在这个接口最常撞，分三档翻译成人话（逐字文案是社区常见、官方文档只列 422，
     // 所以按**语义**判、并且把原话带回 —— 认不出来时人说得出到底撞了哪个）
     if (e?.status === 422 && /No commits between/i.test(m)) {
-      throw new Error(`这两个分支之间没有提交（${base} … ${head}）—— 要么改动没提交，要么 base 选错了：${m}`);
+      throw new Error(`这两个分支之间没有新提交（${base} … ${head}）—— 要么改动没提交，要么 base 选错了；如果这条分支**刚合并过**，说明改动已经进了 ${base}，不用再建 PR：${m}`);
     }
     if (e?.status === 422 && /already exists/i.test(m)) {
       const existing = await findOpenPullForHead(repo, head).catch(() => null);

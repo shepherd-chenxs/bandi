@@ -707,6 +707,25 @@ export function createProjectTask(project, {
  * `allowIdea`：建卡时「想法」不该被 startNow 带去开工（那列刚建完就被转走，等于白建）；
  * 但人**亲手把卡从「想法」拖进「进行中」**是明确的指令，那时要放行（2026-10-17）。
  */
+
+/*
+ * 干活的节奏（2026-10-30）。
+ *
+ * 为什么挂在**每轮派活的文本**上、而不写进卡描述：卡描述是给雇主看的现场（建卡那一刻的快照），
+ * 节奏是给执行的人看的规矩；写进描述里的话，改一次节奏得去改一堆存量卡。
+ *
+ * 为什么需要它：复盘"派人修 gate 往往很久"时看到的不是活难，是**把时间花在重新认识现场和反复试探上**
+ * （实测：全量门禁 3 分半、单条用例几十秒；那张卡 8 分钟走了 33 步还在翻 HEAD 的旧文件）。
+ * 这一段只讲节奏，不讲这个仓库的细节 —— 仓库细节在 skills/bandi-repo/SKILL.md。
+ */
+const PACE_BLOCK = [
+  '【干活的节奏】',
+  '· 动手前先一句话说清计划；别从"通读整个仓库"开始。',
+  '· 跑检查先只跑红的那条（几十秒），全量（3 分半）只在交付前跑一次。',
+  '· 每 15 步给自己一句进展，别闷头走；同一件事第二次还没成，就停下来先问。',
+  '· 要并行也只并行一件：派了子调查员，就别自己再通读一遍。',
+  '· 交不了就直说：做到哪、缺什么、要谁定 —— 比拖到最后说"做不完"强。',
+].join('\n');
 export function startProjectTask(id, { allowIdea = false } = {}) {
   const row = store.getProjectTask(id);
   if (!row) throw new Error('任务不存在');
@@ -746,6 +765,7 @@ export function startProjectTask(id, { allowIdea = false } = {}) {
     `【任务 · ${project.name || project.id}】${row.title}`,
     row.description ? `\n${row.description}` : '',
     `\n工作目录就是这个项目的目录：${project.root}`,
+    `\n${PACE_BLOCK}`,
     '做完直接说明结果即可。',
   ]
     .filter(Boolean)

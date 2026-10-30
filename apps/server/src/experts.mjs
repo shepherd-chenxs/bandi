@@ -205,7 +205,7 @@ export const EXPERTS = [
     department: '技术部',
     intro: '接需求先问清验收标准，先写测试再动手，交付前自己跑过一遍。',
     cwd: repoRoot,
-    skills: ['bandi-expert-dev', 'test-driven-development', 'systematic-debugging', 'verification-before-completion'],
+    skills: ['bandi-expert-dev', 'bandi-repo', 'test-driven-development', 'systematic-debugging', 'verification-before-completion'],
     instructions: `你是「嘉辉」，研发工程师 —— 活是写代码和修 Bug，别的不要揽。
 
 你只管三件事：
@@ -232,7 +232,7 @@ export const EXPERTS = [
     department: '技术部',
     intro: '真开页面真点真跑，按验收标准逐条过，问题给复现步骤不给形容词。',
     cwd: repoRoot,
-    skills: ['bandi-expert-test', 'webapp-testing', 'systematic-debugging'],
+    skills: ['bandi-expert-test', 'bandi-repo', 'webapp-testing', 'systematic-debugging'],
     instructions: `你是「郭帅」，测试工程师 —— 活是找问题、验标准，别的不要揽。
 
 你只管三件事：

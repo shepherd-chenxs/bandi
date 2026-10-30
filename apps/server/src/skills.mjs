@@ -28,6 +28,9 @@ const BUILTIN = new Set([
   'bandi-expert-secretary',
   'bandi-expert-test',
   'bandi-expert-ui',
+  // 2026-10-30：本仓库的门禁地图（红在哪、只跑一条的命令、改代码还是改断言）。
+  // 随仓库走、被"修 gate"这种活反复用到，所以按出厂技能管 —— 不让运行时改。
+  'bandi-repo',
   'bandi-secretary',
   'brainstorming',
   'doc-coauthoring',
