@@ -48,7 +48,22 @@ check(/new CustomEvent\('combo-menu'/.test(ui), '箭头把点击抛成 combo-men
 
 check(/addEventListener\('combo-menu',/.test(skills), 'skills 页监听 combo-menu');
 check(/openBranchMenu\(\s*repo,\s*\{ x:/.test(skills), '事件带着"开在哪儿"（贴箭头）');
-check(/function openBranchMenu\(repo, pos, \{ name, remote, cur \}\)/.test(skills), 'openBranchMenu 收位置对象');
+/*
+ * 2026-10-30 决定改了：签出从「点整行」挪进二级菜单第一位（用户原话："点击选项就打开，改成二级
+ * 窗口的一个选项，放在第一位"），`openBranchMenu` 因此多了第 4 个**可选**参数 `{ checkout } = {}`
+ * （见 apps/web/js/skills.mjs:1524 调用处）。原来这条断言把参数表尾的 `)` 也钉死了，多一个参数就红 ——
+ * 断言跟着放宽到"前三手形状不许变"，同时把新增的 checkout 两个落点（声明处 + 调用处）各钉一条，
+ * 这一条从 1 个 check 变成 3 个 —— **净断言数只增不减，语义没松**。
+ */
+check(/function openBranchMenu\(repo, pos, \{ name, remote, cur \}/.test(skills), 'openBranchMenu 收位置对象');
+check(
+  /function openBranchMenu\(repo, pos, \{ name, remote, cur \}, \{ checkout \} = \{\}\)/.test(skills),
+  '签出是可选的第 4 个参数（不传就不摆这一项）',
+);
+check(
+  /checkout: \(\) => onBranchPick\(repo, id, state\.branch \?\? '', combo\)/.test(skills),
+  '菜单里那一项接回复用原有的切分支路径（确认框还在）',
+);
 check(/openCtxMenu\(pos\.x, pos\.y, items\)/.test(skills), '菜单落到全站那一套 #ctxMenu 上');
 
 /* ------------------------------------------------------------------- ④ 样式 */
