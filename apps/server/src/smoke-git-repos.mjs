@@ -298,20 +298,24 @@ try {
   check('已合并的本地分支能删', delLocal.deleted === 'done' && delLocal.remote === false, JSON.stringify(delLocal));
   check('删完本地真的没了', !g(['branch', '--list', 'done']).trim());
 
-  let remotePrefix = '';
+  /*
+   * 2026-10-30：判据从"`bandi/` 前缀 = 平台拉的分支"扩成"老前缀 bandi/ 或新规范 <type>/<短描述>"
+   * （分支改名成 `<type>/<短描述>` 之后，只认老前缀会把平台自己的新分支判成"人的分支"删不掉）。
+   */
+  let remoteHuman = '';
   try {
-    await git.deleteBranch(brRepo, { branch: 'fix/x', remote: true });
+    await git.deleteBranch(brRepo, { branch: 'feature/human', remote: true });
   } catch (e) {
-    remotePrefix = e.message;
+    remoteHuman = e.message;
   }
-  check('远端只删 bandi/ 前缀（fix/x 被拒）', /bandi\//.test(remotePrefix), remotePrefix);
+  check('人开的分支（feature/x）远端不给删', /平台建的分支/.test(remoteHuman), remoteHuman);
   let remoteNoToken = '';
   try {
-    await git.deleteBranch(brRepo, { branch: 'bandi/demo', remote: true });
+    await git.deleteBranch(brRepo, { branch: 'fix/demo', remote: true });
   } catch (e) {
     remoteNoToken = e.message;
   }
-  check('删远端分支要先连 GitHub（没令牌就拒）', /先连接 GitHub/.test(remoteNoToken), remoteNoToken);
+  check('删远端功能分支要先连 GitHub（没令牌就拒）', /先连接 GitHub/.test(remoteNoToken), remoteNoToken);
   check('删完工作区没被搅（干净）', g(['status', '--porcelain']).trim() === '');
 
   console.log('\n⑦ check-runs 归约（PR 区的 gate 状态是纯逻辑，直接钉）');

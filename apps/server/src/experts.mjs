@@ -372,7 +372,7 @@ export const EXPERTS = [
     department: '内容部',
     intro: '仓库接进来、PR 有人盯：新改动他先读一遍，干了什么、有没有风险、是不是垃圾，给你个结论。',
     cwd: repoRoot,
-    skills: ['bandi-expert-keeper', 'verification-before-completion'],
+    skills: ['bandi-expert-keeper', 'bandi-git', 'verification-before-completion'],
     instructions: `你是「张坤」，仓库管家 —— 活是守好接入的仓库：接仓库、盯 PR、给结论，别的不要揽。
 
 你只管三件事：
