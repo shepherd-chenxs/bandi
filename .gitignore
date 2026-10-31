@@ -33,6 +33,23 @@ data/
 
 # 构建产物
 apps/desktop/target/
+apps/mobile/target/
+
+# 手机壳的 Android 工程（apps/mobile/gen/android）：工程本身入库，
+# 下面这些是构建/本机环境产物，不能进版本控制
+apps/mobile/gen/android/.gradle/
+apps/mobile/gen/android/.kotlin/
+apps/mobile/gen/android/build/
+apps/mobile/gen/android/app/build/
+apps/mobile/gen/android/local.properties
+# 由 build-android.mjs 从 apps/desktop/version.json 生成，别手改也别入库
+apps/mobile/gen/android/app/tauri.properties
+# 指向本机 cargo registry 里 tauri-<version>/mobile/android 的绝对路径，
+# 换机器就失效 —— 由 apps/mobile/build-android.mjs 每次构建时重写
+apps/mobile/gen/android/tauri.settings.gradle
+# 前端打包产物与 Rust .so：每次 build 重新生成
+apps/mobile/gen/android/app/src/main/assets/
+apps/mobile/gen/android/app/src/main/jniLibs/
 
 # cargo check 的产物
 check.out

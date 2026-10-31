@@ -1,7 +1,7 @@
 /* skills.mjs —— 技能、从 GitHub 挑仓库（放进弹窗里）、定时任务、从本地导入、技能 → 发给数字员工（反方向挂载）。
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
 import { esc, mdRender, savePlace, setRoute, toast } from './shell.mjs';
-import { ICON_BRANCH, ICON_COMMIT, ICON_EDIT, ICON_GEAR, ICON_PLAY, ICON_PUSH, ICON_SYNC, ICON_TAG, ICON_TRASH, api, createCombo, createDateTimePick, cut, failHtml, initial, openCtxMenu, post, wireDialogHead } from './ui.mjs';
+import { ICON_BRANCH, ICON_CLOUD, ICON_COMMIT, ICON_EDIT, ICON_FOLDER, ICON_GEAR, ICON_PLAY, ICON_PUSH, ICON_SYNC, ICON_TAG, ICON_TRASH, api, createCombo, createDateTimePick, cut, failHtml, initial, openCtxMenu, post, wireDialogHead } from './ui.mjs';
 import { load, setNav } from './state.mjs';
 import { openSettings } from './settings.mjs';
 import { setListTitle } from './flowpages.mjs';
@@ -45,175 +45,6 @@ export async function openSkill(name) {
  *
  * 「＋」也在这儿（`#listAction` 那个在设置页是隐藏的，见 setNav）。
  */
-/**
- * **手动接入**（2026-10-17）：私有仓库 / 令牌没授权的仓库 / 离线时用。
- *
- * 为什么要它：令牌的 Repository access 没勾的私有仓库**根本不出现在列表里**，
- * 而本地可能早就克隆好了 —— 那就手填 owner/name ＋ 本地目录：
- * 平台只记路径、不联网、不复制代码。
- */
-export function openGitManualDialog(onDone) {
-  const dlg = document.createElement('dialog');
-  dlg.id = 'gitManualDlg';
-  dlg.innerHTML = `
-    <form method="dialog">
-      <b>手动接入仓库</b>
-      <label>仓库（owner/name）</label>
-      <input id="gitManualName" placeholder="例如：shepherd-chenxs/yuku" autocomplete="off" />
-      <label>本地目录（这个仓库已存在的克隆）</label>
-      <div class="row-with-btn">
-        <input id="gitManualPath" placeholder="例如：E:\\repos\\yuku" />
-        <button type="button" id="gitManualPick">选择</button>
-      </div>
-      <div class="counter left">
-        用于私有仓库、令牌没授权的仓库、离线场景。平台**只记路径**：不复制代码、不联网查元数据；
-        私有状态显示为未知，「同步」需要该仓库在令牌的 Repository access 里。
-      </div>
-      <div class="dlg-actions">
-        <button type="button" value="cancel">取消</button>
-        <button class="primary" id="gitManualOk">接入</button>
-      </div>
-    </form>`;
-  document.body.append(dlg);
-  wireDialogHead(dlg.querySelector('form'));
-  dlg.addEventListener('close', () => dlg.remove());
-
-  $('gitManualPick').onclick = async () => {
-    const input = $('gitManualPath');
-    const btn = $('gitManualPick');
-    btn.disabled = true;
-    btn.textContent = '…';
-    try {
-      const picked = await pickLocalDir({
-        title: '选择这个仓库的本地目录',
-        startPath: input.value.trim(),
-      });
-      if (picked) input.value = picked;
-    } catch (e) {
-      toast(e.message, 'error');
-    } finally {
-      btn.disabled = false;
-      btn.textContent = '选择';
-    }
-  };
-  $('gitManualOk').onclick = async (e) => {
-    e.preventDefault();
-    const fullName = $('gitManualName').value.trim();
-    const localPath = $('gitManualPath').value.trim();
-    if (!/^[\w.-]+\/[\w.-]+$/.test(fullName)) return toast('仓库写成 owner/name');
-    if (!localPath) return toast('本地目录不能空（手动接入必须指向已有的克隆）');
-    const btn = $('gitManualOk');
-    btn.disabled = true;
-    btn.textContent = '接入中…';
-    try {
-      const r = await api('/api/git/repos', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fullName, localPath }),
-      });
-      dlg.close();
-      await onDone();
-      toast(`${fullName} 已接入\n${r.repo.localPath}${r.warning ? '\n\n⚠️ ' + r.warning : ''}`);
-    } catch (err) {
-      btn.disabled = false;
-      btn.textContent = '接入';
-      toast(err.message, 'error');
-    }
-  };
-  dlg.showModal();
-}
-
-
-
-/**
- * 接入一个仓库：**克隆一份** 还是 **用本地已有目录**（2026-10-17 用户实报：
- * 本地明明已经有克隆了，点接入又在别处克隆一份，白占盘）。
- *
- * 选"用本地已有目录"时会核对 origin 指向是不是这个仓库 —— 不一致只提示、不拦
- * （fork / 镜像 / 自己改了 remote 都是合理情况）。
- */
-export function openGitAddDialog(fullName, onDone) {
-  const dlg = document.createElement('dialog');
-  dlg.id = 'gitAddDlg';
-  dlg.innerHTML = `
-    <form method="dialog">
-      <b>接入 ${esc(fullName)}</b>
-      <label class="check"><input type="radio" name="gitMode" value="clone" checked />
-        <span>克隆到数据目录<em>——平台自己管一份</em></span></label>
-      <label class="check"><input type="radio" name="gitMode" value="local" />
-        <span>用本地已有目录<em>——不重复克隆、不占第二份盘</em></span></label>
-      <div class="row-with-btn">
-        <input id="gitLocalPath" placeholder="例如：E:\\02CodeSpace\\github\\bandi" disabled />
-        <button type="button" id="gitLocalPick" disabled>选择</button>
-      </div>
-      <div class="counter left" id="gitAddHint">克隆位置：数据目录 \\ repos \\ &lt;owner&gt;__&lt;name&gt;</div>
-      <div class="dlg-actions">
-        <button type="button" value="cancel">取消</button>
-        <button class="primary" id="gitAddOk">接入</button>
-      </div>
-    </form>`;
-  document.body.append(dlg);
-  wireDialogHead(dlg.querySelector('form'));
-  dlg.addEventListener('close', () => dlg.remove());
-
-  const syncMode = () => {
-    const local = dlg.querySelector('input[name="gitMode"]:checked')?.value === 'local';
-    $('gitLocalPath').disabled = !local;
-    $('gitLocalPick').disabled = !local;
-    $('gitAddHint').textContent = local
-      ? '会用这个目录里现成的克隆；平台只记路径，不复制代码。'
-      : '克隆位置：数据目录 / repos / <owner>__<name>';
-  };
-  dlg.querySelectorAll('input[name="gitMode"]').forEach((r) => (r.onchange = syncMode));
-  syncMode();
-
-  $('gitLocalPick').onclick = async () => {
-    const input = $('gitLocalPath');
-    const btn = $('gitLocalPick');
-    btn.disabled = true;
-    btn.textContent = '…';
-    try {
-      const picked = await pickLocalDir({
-        title: '选择这个仓库已存在的克隆目录',
-        startPath: input.value.trim(),
-      });
-      if (picked) input.value = picked;
-    } catch (e) {
-      toast(e.message, 'error');
-    } finally {
-      btn.disabled = false;
-      btn.textContent = '选择';
-    }
-  };
-
-  $('gitAddOk').onclick = async (e) => {
-    e.preventDefault();
-    const local = dlg.querySelector('input[name="gitMode"]:checked')?.value === 'local';
-    const localPath = local ? $('gitLocalPath').value.trim() : '';
-    if (local && !localPath) return toast('选了"用本地已有目录"，但路径是空的');
-    const btn = $('gitAddOk');
-    btn.disabled = true;
-    btn.textContent = local ? '接入中…' : '克隆中…';
-    try {
-      const r = await api('/api/git/repos', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fullName, ...(localPath ? { localPath } : {}) }),
-      });
-      dlg.close();
-      await onDone();
-      const warn = r.warning ? '\n\n⚠️ ' + r.warning : '';
-      toast(`${fullName} 已接入（${r.note}）\n${r.repo.localPath}${warn}`);
-    } catch (err) {
-      btn.disabled = false;
-      btn.textContent = '接入';
-      toast(err.message, 'error');
-    }
-  };
-  dlg.showModal();
-}
-
-
 
 /**
  * 「工作台 → 研发 → 代码托管」（2026-10-17）。
@@ -243,6 +74,110 @@ export function openGitAddDialog(fullName, onDone) {
  * 点下去立刻开始克隆 —— 在一张几十个仓库的清单里，手一抖点错行就得等它克隆完再删。
  * 现在是"先挑、再确认"：选中哪行，弹窗底部那颗「接入」就作用于哪个。
  */
+/*
+ * GitHub 连接弹窗（2026-10-26 五改；2026-10-30 从 renderGitRepos 提到模块级）：
+ * 连接相关的所有东西都收进来 —— 令牌表单 / 掩码 + 状态 + 断开、帮助、whoami 补字。
+ * 动态建 dialog（machine.mjs openAddHostDlg 同款）：建完 wireDialogHead 包吸顶头，
+ * close 即 remove —— 控件 id 每开一次都是新的，不存在重画冲绑定的老问题。
+ * `st`：调用方手里有就传（代码托管页省一次请求）；不传自己查 /api/git/status
+ * （添加仓库弹窗里的「点击连接」就是这么用的）。`onDone`：连接/断开成功后的刷新回调。
+ * whoami 仍然**开了弹窗再问**：不挡渲染，回来只补「@login」一小段。
+ */
+export async function openGitConnDlg(st = null, onDone = null) {
+  if (!st) {
+    try {
+      st = await api('/api/git/status');
+    } catch {
+      st = { connected: false };
+    }
+  }
+  const refresh = async () => {
+    await onDone?.();
+  };
+  const dlg = document.createElement('dialog');
+    dlg.className = 'gr-conn-dlg';
+    const form = document.createElement('form');
+    form.method = 'dialog';
+    form.innerHTML = `
+      <b>GitHub 连接</b>
+      <div class="gr-dlg-body">
+        ${
+          st.connected
+            ? `<div class="gr-dlg-row">
+                 <span class="row-label">令牌</span>
+                 <input class="locked" value="${esc(st.hint || '******')}" readonly
+                        aria-label="已保存的令牌，只显示头 2 位和尾 4 位" />
+                 <button type="button" class="mini auto" id="gitDisconnect"
+                         title="断开 GitHub（已接入的仓库记录和本地克隆都保留）">断开连接</button>
+               </div>
+               <div class="gr-dlg-row">
+                 <span class="row-label gr-dlg-pad" aria-hidden="true">令牌</span>
+                 <span class="gr-dlg-status"><b style="color:var(--ok)">已连接</b><span id="gitWho">${
+                   st.login ? ` —— @${esc(st.login)}` : ''
+                 }</span></span>
+               </div>`
+            : `<div class="gr-dlg-row">
+                 <span class="row-label">令牌</span>
+                 <input id="gitToken" type="password" placeholder="粘贴 fine-grained PAT" autocomplete="off" />
+                 <button type="button" class="primary" id="gitConnect">连接 GitHub</button>
+               </div>`
+        }
+        ${/* 怎么拿令牌直接铺开（2026-10-26 六改，用户："把怎么拿令牌显示出来"），不再藏帮助按钮里 */ ''}
+        <div class="gr-dlg-help">${GIT_TOKEN_HELP}</div>
+      </div>`;
+    dlg.append(form);
+    document.body.append(dlg);
+    wireDialogHead(form); // 动态建的弹窗自己包一次吸顶头（标题 + ×）
+    dlg.addEventListener('close', () => dlg.remove());
+
+    if (st.connected) {
+      api('/api/git/whoami')
+        .then((w) => {
+          const el = form.querySelector('#gitWho');
+          if (!el) return;
+          if (w?.login) el.textContent = ` —— @${w.login}`;
+          else if (w?.error) el.textContent = ' · 连接状态没验上（网络没通）';
+        })
+        .catch(() => {
+          const el = form.querySelector('#gitWho');
+          if (el) el.textContent = ' · 连接状态没验上（网络没通）';
+        });
+    }
+
+    form.querySelector('#gitConnect')?.addEventListener('click', async () => {
+      const token = form.querySelector('#gitToken').value.trim();
+      if (!token) return toast('先把令牌粘进来');
+      const btn = form.querySelector('#gitConnect');
+      btn.disabled = true;
+      btn.textContent = '验证中…';
+      try {
+        const r = await api('/api/git/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token }),
+        });
+        toast(`已连接：@${r.login}`);
+        dlg.close();
+        await refresh();
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = '连接 GitHub';
+        toast(err.message, 'error');
+      }
+    });
+    form.querySelector('#gitDisconnect')?.addEventListener('click', async () => {
+      if (!(await confirmDo('断开 GitHub？已接入的仓库记录和本地克隆都保留。'))) return;
+      try {
+        await api('/api/git/token', { method: 'DELETE' });
+        dlg.close();
+        await refresh();
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    });
+    dlg.showModal();
+  }
+
 export async function mountGitAvailPicker(mount, onDone, onSelect = null) {
   const box = mount ?? $('gitAvail');
   if (!box) return;
@@ -252,7 +187,24 @@ export async function mountGitAvailPicker(mount, onDone, onSelect = null) {
   try {
     available = (await api('/api/git/available')).repos ?? [];
   } catch (e) {
-    box.innerHTML = `<div class="empty" style="padding:12px 4px">拉不到仓库清单：${esc(e.message)}</div>`;
+    /*
+     * 错误码从话里摘掉（2026-10-30 用户："文案改成：还没连接 GitHub（…）"）：
+     * 「还没连接」本来就是一句完整的人话，前缀「拉不到仓库清单」+ 「E1063：」纯属噪音；
+     * 别的错（网络/权限）保留一句来源说明，否则不知道是哪儿出的问题。
+     */
+    const msg = String(e?.message ?? e).replace(/^E\d{4}：/, '');
+    if (/还没连接 GitHub/.test(msg)) {
+      /* 未连接（2026-10-30 用户："改成：GitHub 未连接，点击连接"）：文案本身可点，
+         点了直接开 GitHub 连接弹窗，连上后原地重拉清单 —— 不用关弹窗绕去代码托管页。 */
+      box.innerHTML =
+        '<div class="empty" style="padding:12px 4px"><a href="#" id="gitConnLink" class="git-conn-link">GitHub 未连接，点击连接</a></div>';
+      box.querySelector('#gitConnLink').onclick = async (e2) => {
+        e2.preventDefault();
+        await openGitConnDlg(null, () => mountGitAvailPicker(box, onDone, onSelect));
+      };
+    } else {
+      box.innerHTML = `<div class="empty" style="padding:12px 4px">拉不到仓库清单：${esc(msg)}</div>`;
+    }
     return;
   }
 
@@ -267,19 +219,18 @@ export async function mountGitAvailPicker(mount, onDone, onSelect = null) {
     const list = available.filter((r) => !kw || r.fullName.toLowerCase().includes(kw));
     // 选中的那个被搜没了就别再留着（否则底部按钮会作用在一个看不见的仓库上）
     if (selected && !list.some((r) => r.fullName === selected)) selected = null;
+    /* 行改**单行**（2026-10-30 用户："这个界面改成参考图（IDEA 克隆仓库）这种"）：
+       名字 + 徽标挤一行，描述不再铺两行 —— IDEA 的清单就是一列名字，选中高亮就够。 */
     box.innerHTML = list.length
       ? list
           .map(
             (r) => `<div class="sk-row pickable${r.connected ? ' done' : ''}${
               r.fullName === selected ? ' on' : ''
-            }" data-git-pick="${esc(r.fullName)}" role="button" tabindex="0">
-              <div class="sk-main">
-                <b>${esc(r.fullName)}</b>
-                ${r.isPrivate ? '<span class="pill">私有</span>' : ''}
-                ${r.canWrite === false ? '<span class="pill" title="能克隆，推代码会被拒（token 没给它写权限）">只读</span>' : '<span class="pill" title="能克隆、也能推代码">可写</span>'}
-                ${r.connected ? '<span class="pill" title="已经接进来了 —— 在「代码仓库」清单里">已接入</span>' : ''}
-                <div class="sk-desc">${esc(r.description || r.language || '')}</div>
-              </div>
+            }" data-git-pick="${esc(r.fullName)}" role="button" tabindex="0" title="${esc(r.description || '')}">
+              <b class="gp-name">${esc(r.fullName)}</b>
+              ${r.isPrivate ? '<span class="pill">私有</span>' : ''}
+              ${r.canWrite === false ? '<span class="pill" title="能克隆，推代码会被拒（token 没给它写权限）">只读</span>' : ''}
+              ${r.connected ? '<span class="pill" title="已经接进来了 —— 在「代码仓库」清单里">已接入</span>' : ''}
             </div>`,
           )
           .join('')
@@ -315,24 +266,87 @@ export async function mountGitAvailPicker(mount, onDone, onSelect = null) {
 
 
 /**
- * 「从 GitHub 添加」这个弹窗。
+ * 「添加仓库」弹窗（2026-10-30 用户："这个界面改成参考图（IDEA 克隆仓库）这种"）。
  *
- * 宽到 560px（默认 480）是因为里面是**一张带徽标和两行说明的清单**，
- * 480 会把 owner/name 挤到换行。
+ * 版式对齐 IDEA 的「克隆仓库」：**左边来源、右边清单、底部目录行、右下动作** ——
+ *   · 左侧两块来源：GitHub（@帐号 / 无帐户）、本地代码托管（只记路径不联网）；
+ *   · 右边跟着来源换内容：GitHub = 搜索框 + 仓库单行清单；本地 = 名字 + 目录；
+ *   · 底部「目录」行（IDEA 同款）：GitHub 来源下，留空 = 克隆到平台数据目录，
+ *     填了 = 用这个目录里现成的克隆（不再像原来那样弹第二层问"克隆还是本地"）。
  */
 export async function openGitPickDialog(onDone) {
   const dlg = document.createElement('dialog');
   dlg.id = 'gitPickDlg';
-  dlg.style.width = '560px';
+  let st = null;
+  try {
+    st = await api('/api/git/status');
+  } catch {
+    /* 状态拿不到就当未连接，左侧照样画 */
+  }
+  /* 默认克隆基目录（2026-10-30 用户定稿，IDEA 同款）：「目录」格初始显示它，
+     URL 里认出项目名后拼在后面；拿不到就空着 —— 留空仍走服务端的默认。 */
+  let baseDir = '';
+  try {
+    baseDir = (await api('/api/git/repos-dir'))?.dir ?? '';
+  } catch {
+    /* 服务端旧版没这条 —— 目录格留空，行为退回"留空=数据目录" */
+  }
   dlg.innerHTML = `
     <form method="dialog">
-      <b>从 GitHub 添加</b>
-      <div class="counter left" style="margin:8px 0 6px">
-        这里列的是**令牌能访问的仓库**：公开仓库总是能读；私有仓库要在令牌的
-        Repository access 里选中才会出现。标「只读」的能克隆、推代码会被拒（403）。
+      <b>添加仓库</b>
+      <div class="gp-wrap">
+        <aside class="gp-side">
+          <div class="gp-src on" data-src="gh">
+            <span class="gp-ic">${ICON_CLOUD}</span>
+            <span class="gp-src-t"><b>GitHub</b><em>${st?.connected ? (st.login ? `@${esc(st.login)}` : '已连接') : '无帐户'}</em></span>
+          </div>
+          <div class="gp-src" data-src="url">
+            <span class="gp-ic">${ICON_BRANCH}</span>
+            <span class="gp-src-t"><b>仓库 URL</b><em>粘贴地址直接克隆</em></span>
+          </div>
+          <div class="gp-src" data-src="local">
+            <span class="gp-ic">${ICON_FOLDER}</span>
+            <span class="gp-src-t"><b>本地代码托管</b><em>只记路径，不联网</em></span>
+          </div>
+        </aside>
+        <div class="gp-main">
+          <div id="gpGhPane">
+            <input id="gitFilter" placeholder="搜仓库名…" />
+            <div id="gitAvail" class="git-avail-box"><div class="sk-blank">拉取中…</div></div>
+            <div class="gp-field" title="目录 = 默认目录 + 选中仓库的名字；也可以自己改或点「选择」">
+              <label class="gp-lb">目录</label>
+              <div class="row-with-btn">
+                <input id="gitPickDir" autocomplete="off" spellcheck="false" />
+                <button type="button" id="gitGhDirPick">选择</button>
+              </div>
+            </div>
+          </div>
+          <div id="gpUrlPane" hidden>
+            <div class="gp-field">
+              <label class="gp-lb">URL</label>
+              <input id="gitUrlInput" autocomplete="off" spellcheck="false" />
+            </div>
+            <div class="gp-field" title="目录 = 默认目录 + 从 URL 认出的项目名；也可以点「选择」自己定">
+              <label class="gp-lb">目录</label>
+              <div class="row-with-btn">
+                <input id="gitUrlDir" autocomplete="off" spellcheck="false" />
+                <button type="button" id="gitUrlDirPick">选择</button>
+              </div>
+            </div>
+            <div class="gp-note">github.com 的地址按 GitHub 仓库接入（有 PR / 合并）；其它站的地址照常克隆，只是不出 GitHub 那套 PR。</div>
+          </div>
+          <div id="gpLocalPane" hidden>
+            <div class="gp-field">
+              <label class="gp-lb">本地目录（代码所在的位置）</label>
+              <div class="row-with-btn">
+                <input id="gitManualPath2" placeholder="例如：D:\\我的项目\\my-app" autocomplete="off" spellcheck="false" />
+                <button type="button" id="gitLocalPick2">选择</button>
+              </div>
+            </div>
+            <div class="gp-note">平台只记路径：不复制代码、不联网查元数据。提交、推送、切分支照常；没有 GitHub 身份就不出 PR / 合并。</div>
+          </div>
+        </div>
       </div>
-      <input id="gitFilter" placeholder="搜仓库名…（账号下的仓库，按最近更新排）" style="margin:6px 0" />
-      <div id="gitAvail" class="git-avail-box"><div class="sk-blank">拉取中…</div></div>
       <div class="dlg-actions">
         <button type="button" value="cancel">取消</button>
         <button class="primary" type="button" id="gitPickOk" disabled>接入</button>
@@ -352,28 +366,150 @@ export async function openGitPickDialog(onDone) {
     await onDone();
   };
 
-  /*
-   * 「接入」只在选中了某行时才可点：没选就点，用户不知道自己要接哪个。
-   *
-   * ⚠️ 这里**不**做"点完置灰、完了再放开"那一套：`openGitAddDialog` 是
-   * `showModal()` 完就返回（真正的活在自己那颗按钮里），`await` 等不到结束 ——
-   * 那样写会让它刚弹出就把按钮恢复成可点，底下这层还能再被点一次。
-   * 所以干脆一层只管一件事：选好 → 开下一层弹窗；这层的事到这儿就完了。
-   */
-  let picked = null;
   const okBtn = $('gitPickOk');
-  okBtn.onclick = (e) => {
-    e.preventDefault();
-    if (!picked) return;
-    openGitAddDialog(picked, done);
+  let src = 'gh';          // 当前来源：gh = 从 GitHub 挑；url = 粘贴地址；local = 本地代码托管
+  let picked = null;       // GitHub 来源下选中的仓库全名
+
+  /*
+   * 目录自动拼（2026-10-30 用户定稿，IDEA 同款）：
+   *   URL 空着 → 目录格显示**默认基目录**；URL 里认出项目名 → 拼上去（基目录 + 项目名）；
+   *   用户**改过目录**或点过「选择」→ 认用户的，不再自动覆盖（每个来源各记各的）。
+   */
+  const dirTouched = { gh: false, url: false };
+  const joinDir = (name) => {
+    if (!baseDir) return '';
+    const sep = baseDir.includes('\\') || /^[A-Za-z]:/.test(baseDir) ? '\\' : '/';
+    return baseDir.endsWith('\\') || baseDir.endsWith('/') ? baseDir + name : baseDir + sep + name;
   };
+  /* 从 URL 里认项目名：取最后一段、去掉 .git；认不出（还没粘全）返回 null */
+  const projectNameOf = (raw) => {
+    const s = String(raw ?? '').trim();
+    if (!s) return null;
+    const last = s.replace(/\.git\/?$/i, '').split(/[/:]/).filter(Boolean).pop();
+    return /^[\w.-]+$/.test(last ?? '') ? last : null;
+  };
+  const syncDir = (pane) => {
+    if (dirTouched[pane]) return;
+    const input = pane === 'gh' ? $('gitPickDir') : $('gitUrlDir');
+    if (!input) return;
+    const name = pane === 'gh'
+      ? (picked ? picked.split('/').pop() : null)
+      : projectNameOf($('gitUrlInput').value);
+    input.value = joinDir(name ?? '');
+  };
+
+  /* 来源切换：右侧换面板，按钮跟来源算可用性 */
+  const setSrc = (next) => {
+    src = next;
+    dlg.querySelectorAll('.gp-src').forEach((el) => el.classList.toggle('on', el.dataset.src === src));
+    $('gpGhPane').hidden = src !== 'gh';
+    $('gpUrlPane').hidden = src !== 'url';
+    $('gpLocalPane').hidden = src !== 'local';
+    syncOk();
+  };
+  const syncOk = () => {
+    if (src === 'gh') {
+      okBtn.disabled = !picked;
+      okBtn.textContent = picked ? `接入 ${picked}` : '接入';
+    } else if (src === 'url') {
+      okBtn.disabled = !$('gitUrlInput').value.trim();
+      okBtn.textContent = '接入';
+    } else {
+      const ok = $('gitManualPath2').value.trim();
+      okBtn.disabled = !ok;
+      okBtn.textContent = '接入';
+    }
+  };
+  dlg.querySelectorAll('.gp-src').forEach((el) => {
+    el.onclick = () => setSrc(el.dataset.src);
+  });
+
+  /* 统一提交：两种来源最后都是同一条 POST —— 服务端按名字形状自己分流（owner/name = GitHub） */
+  okBtn.onclick = async (e) => {
+    e.preventDefault();
+    const btn = okBtn;
+    let body;
+    let label;
+    if (src === 'gh') {
+      if (!picked) return;
+      const dir = $('gitPickDir').value.trim();
+      /* 目录 = 基目录本身（还没拼上项目名，比如没选中就点不了；防御一下）→ 当作没填，走服务端默认 */
+      const ghDir = dir && dir !== baseDir ? dir : '';
+      body = { fullName: picked, ...(ghDir ? { localPath: ghDir } : {}) };
+      label = picked;
+    } else if (src === 'url') {
+      const remoteUrl = $('gitUrlInput').value.trim();
+      if (!remoteUrl) return toast('URL 不能空', 'error');
+      const dir = $('gitUrlDir').value.trim();
+      const urlDir = dir && dir !== baseDir ? dir : '';
+      body = { remoteUrl, ...(urlDir ? { localPath: urlDir } : {}) };
+      label = remoteUrl; // 名字服务端从 URL 反推，toast 用它返回的 fullName
+    } else {
+      const localPath = $('gitManualPath2').value.trim();
+      if (!localPath) return toast('本地目录不能空 —— 托管的代码就在这个目录里', 'error');
+      /* 名字不让用户起了（2026-10-30 用户要求"去掉，用默认名，做到统一"）：
+         跟 URL 来源一个套路 —— 自动认，取目录路径的最后一段（去尾分隔符）当仓库名 */
+      const fullName = localPath.replace(/[\\/]+$/, '').split(/[\\/]/).filter(Boolean).pop() || '';
+      if (!fullName) return toast('认不出这个路径的目录名，换一个正常写法的路径', 'error');
+      body = { fullName, localPath };
+      label = fullName;
+    }
+    btn.disabled = true;
+    btn.textContent = '接入中…';
+    try {
+      const r = await api('/api/git/repos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      dlg.close();
+      await onDone();
+      toast(`${r.repo.fullName || label} 已接入（${r.note}）\n${r.repo.localPath}${r.warning ? '\n\n⚠️ ' + r.warning : ''}`);
+    } catch (err) {
+      btn.disabled = false;
+      toast(err.message, 'error');
+    }
+  };
+
+  /* 本地 / URL 两个来源的「选择」：原生目录对话框（桌面壳提供），同一个目录选择器 */
+  const wireDirPick = (btnId, inputId) => {
+    $(btnId).onclick = async () => {
+      const input = $(inputId);
+      const btn = $(btnId);
+      btn.disabled = true;
+      btn.textContent = '…';
+      try {
+        const p = await pickLocalDir({ title: '选择代码所在的本地目录', startPath: input.value.trim() });
+        if (p) input.value = p;
+      } catch (e2) {
+        toast(e2.message, 'error');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '选择';
+      }
+      syncOk();
+    };
+  };
+  wireDirPick('gitUrlDirPick', 'gitUrlDir');
+  wireDirPick('gitLocalPick2', 'gitManualPath2');
+  wireDirPick('gitGhDirPick', 'gitPickDir');
+  /* 用户亲手改了目录或点过「选择」→ 这个来源的目录不再自动拼 */
+  $('gitUrlDir').addEventListener('input', () => { dirTouched.url = true; syncOk(); });
+  $('gitPickDir').addEventListener('input', () => { dirTouched.gh = true; syncOk(); });
+  $('gitUrlDirPick').addEventListener('click', () => { dirTouched.url = true; });
+  $('gitGhDirPick').addEventListener('click', () => { dirTouched.gh = true; });
+  /* URL 每次变化都重算目录（除非用户已接管目录格） */
+  $('gitUrlInput').addEventListener('input', () => { syncDir('url'); syncOk(); });
+  $('gitManualPath2').addEventListener('input', syncOk);
+  syncDir('gh');
+  syncDir('url');
 
   await mountGitAvailPicker(dlg.querySelector('#gitAvail'), done, (fullName) => {
     picked = fullName;
+    syncDir('gh');
     // 弹窗可能已经关了（接完一个就关）—— 关了就别再去摸按钮
     if (!dlg.isConnected) return;
-    okBtn.disabled = !fullName;
-    okBtn.textContent = fullName ? `接入 ${fullName}` : '接入';
+    syncOk();
   });
 }
 
@@ -495,7 +631,7 @@ export async function renderGitRepos(root = $('pluginView')) {
         }</span>
       </button>
     </div>`;
-    foot.querySelector('#gitConnOpen')?.addEventListener('click', openGitConnDlg);
+    foot.querySelector('#gitConnOpen')?.addEventListener('click', () => openGitConnDlg(st, refresh));
   }
 
   // 左栏：面包屑照主从页的规矩画在列表顶上（renderPluginMaster 同款）
@@ -550,6 +686,12 @@ export async function renderGitRepos(root = $('pluginView')) {
    *   · 「拉取请求」区：待合并的 PR 都在这儿（含合并按钮）；当前分支还没 PR 时那儿出现「建 PR」；
    *   · 低频的「从清单移除」收进齿轮弹窗（破坏性动作不放在首屏）。
    */
+  /*
+   * 这个仓库有没有 GitHub 身份（2026-10-30）：名字写成 owner/name 才算；
+   * 本地代码托管（"爻鉴"这种名字）没有 PR 可查，PR 那几张卡也就不画。
+   */
+  const ghLinked = /^[\w.-]+\/[\w.-]+$/.test(sel?.fullName ?? '');
+
   const repoDetail = sel
     ? `<div class="plg-detail-head fixed-head">
          <b>${esc(sel.fullName)}</b>${sel.isPrivate ? '<span class="pill">私有</span>' : ''}
@@ -576,25 +718,29 @@ export async function renderGitRepos(root = $('pluginView')) {
          </div>
          <section class="fx"><div id="grPush"><div class="sk-blank">读推送状态…</div></div></section>
        </div>
-      <div class="plg-sec">
+      <!--
+        拉取请求 + PR 列表只有 GitHub 关联的仓库才有（2026-10-30 重新定位：本地代码托管不走 GitHub，
+        名字随便起，没有 owner/name 就查不到 PR —— 硬画出来只会永远"取不到"）。
+        本地托管改成一句说明：代码在本机管，提交 / 推送 / 分支照常。
+      -->
+      ${ghLinked ? `<div class="plg-sec">
         <div class="plg-sec-head">
           <label class="plg-sec-title">拉取请求</label><span class="dim" id="grPullsHead"></span>
           <button type="button" class="mini auto gr-pulls-refresh" id="grPullsRefresh" title="从 GitHub 重新取一次">刷新</button>
         </div>
         <section class="fx"><div id="grPulls"><div class="sk-blank">取 PR…</div></div></section>
       </div>
-      <!--
-        PR 列表（2026-10-30 定稿，用户："再加一个通过状态，是不是合并区就可以去掉了"）：
-        状态列（未开始/进行中/未通过/已通过）+ 行尾合并按钮 = 一张表说完所有 PR，
-        原「审核」「合并」两块不再分家 —— 能不能合看状态、合并按钮自己亮。
-      -->
       <div class="plg-sec">
         <div class="plg-sec-head">
           <label class="plg-sec-title">PR 列表</label><span class="dim" id="grReviewHead"></span>
           <button type="button" class="mini auto" id="grReviewRefresh" title="从 GitHub 重新取一次">刷新</button>
         </div>
         <section class="fx"><div id="grReview"><div class="sk-blank">取 PR…</div></div></section>
-      </div>
+      </div>` : `<div class="plg-sec">
+        <div class="plg-sec-head"><label class="plg-sec-title">拉取请求</label></div>
+        <section class="fx"><div class="sk-blank">这是本地托管的仓库（没有关联 GitHub 仓库）—— 代码在本机管理，
+          提交、推送、切分支都照常，只是不出 PR / 合并那几张卡。要接 GitHub 上的 PR，用「＋」从账号里加仓库。</div></section>
+      </div>`}
        <div class="plg-sec">
          <div class="plg-sec-head"><label class="plg-sec-title">历史</label></div>
          <section class="fx"><div id="grLog"><div class="sk-blank">读提交记录…</div></div></section>
@@ -609,97 +755,8 @@ export async function renderGitRepos(root = $('pluginView')) {
 
   const refresh = () => renderGitRepos(root);   // 重画回**同一个宿主**（设置页 / 工作台各画各的）
 
-  /*
-   * GitHub 连接弹窗（2026-10-26 五改）：连接相关的所有东西都收进来 —— 令牌表单 /
-   * 掩码 + 状态 + 断开、「?」帮助、whoami 补字。左栏只剩那颗状态按钮。
-   * 动态建 dialog（machine.mjs openAddHostDlg 同款）：建完 wireDialogHead 包吸顶头，
-   * close 即 remove —— 控件 id 每开一次都是新的，不存在重画冲绑定的老问题。
-   * whoami 仍然**开了弹窗再问**：不挡渲染，回来只补「@login」一小段。
-   */
-  function openGitConnDlg() {
-    const dlg = document.createElement('dialog');
-    dlg.className = 'gr-conn-dlg';
-    const form = document.createElement('form');
-    form.method = 'dialog';
-    form.innerHTML = `
-      <b>GitHub 连接</b>
-      <div class="gr-dlg-body">
-        ${
-          st.connected
-            ? `<div class="gr-dlg-row">
-                 <span class="row-label">令牌</span>
-                 <input class="locked" value="${esc(st.hint || '******')}" readonly
-                        aria-label="已保存的令牌，只显示头 2 位和尾 4 位" />
-                 <button type="button" class="mini auto" id="gitDisconnect"
-                         title="断开 GitHub（已接入的仓库记录和本地克隆都保留）">断开连接</button>
-               </div>
-               <div class="gr-dlg-row">
-                 <span class="row-label gr-dlg-pad" aria-hidden="true">令牌</span>
-                 <span class="gr-dlg-status"><b style="color:var(--ok)">已连接</b><span id="gitWho">${
-                   st.login ? ` —— @${esc(st.login)}` : ''
-                 }</span></span>
-               </div>`
-            : `<div class="gr-dlg-row">
-                 <span class="row-label">令牌</span>
-                 <input id="gitToken" type="password" placeholder="粘贴 fine-grained PAT" autocomplete="off" />
-                 <button type="button" class="primary" id="gitConnect">连接 GitHub</button>
-               </div>`
-        }
-        ${/* 怎么拿令牌直接铺开（2026-10-26 六改，用户："把怎么拿令牌显示出来"），不再藏帮助按钮里 */ ''}
-        <div class="gr-dlg-help">${GIT_TOKEN_HELP}</div>
-      </div>`;
-    dlg.append(form);
-    document.body.append(dlg);
-    wireDialogHead(form); // 动态建的弹窗自己包一次吸顶头（标题 + ×）
-    dlg.addEventListener('close', () => dlg.remove());
 
-    if (st.connected) {
-      api('/api/git/whoami')
-        .then((w) => {
-          const el = form.querySelector('#gitWho');
-          if (!el) return;
-          if (w?.login) el.textContent = ` —— @${w.login}`;
-          else if (w?.error) el.textContent = ' · 连接状态没验上（网络没通）';
-        })
-        .catch(() => {
-          const el = form.querySelector('#gitWho');
-          if (el) el.textContent = ' · 连接状态没验上（网络没通）';
-        });
-    }
 
-    form.querySelector('#gitConnect')?.addEventListener('click', async () => {
-      const token = form.querySelector('#gitToken').value.trim();
-      if (!token) return toast('先把令牌粘进来');
-      const btn = form.querySelector('#gitConnect');
-      btn.disabled = true;
-      btn.textContent = '验证中…';
-      try {
-        const r = await api('/api/git/token', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token }),
-        });
-        toast(`已连接：@${r.login}`);
-        dlg.close();
-        await refresh();
-      } catch (err) {
-        btn.disabled = false;
-        btn.textContent = '连接 GitHub';
-        toast(err.message, 'error');
-      }
-    });
-    form.querySelector('#gitDisconnect')?.addEventListener('click', async () => {
-      if (!(await confirmDo('断开 GitHub？已接入的仓库记录和本地克隆都保留。'))) return;
-      try {
-        await api('/api/git/token', { method: 'DELETE' });
-        dlg.close();
-        await refresh();
-      } catch (err) {
-        toast(err.message, 'error');
-      }
-    });
-    dlg.showModal();
-  }
 
   /*
    * 「添加仓库」：入口在**左栏顶上的「＋」**（主从页的规矩，同 renderPluginMaster 的
@@ -932,7 +989,7 @@ export async function renderGitRepos(root = $('pluginView')) {
    */
   if (sel) {
     fillChanges(sel);
-    fillPulls(sel);
+    if (ghLinked) fillPulls(sel);   // 本地托管的仓库没有 PR 区，别去连 GitHub
     fillLog(sel);
     // PR 区右上那颗「刷新」：只重取 PR（合并/建 PR 之外，比如在 GitHub 上手动关了 PR 时用）
     $('grPullsRefresh')?.addEventListener('click', () => {
@@ -1596,11 +1653,15 @@ export async function renderGitRepos(root = $('pluginView')) {
      * 服务端也挡（不传名字它自己建一条）—— 这里是让"提交到哪儿"显式可见，不是唯一防线。
      */
     const onBase = !!state.onBase;
+    /*
+     * 主分支提示压成**一行**（2026-10-30 用户："这个提示不要放这里，改变原来的布局了"）：
+     * 原来是 提示段 + 输入框 + 命名说明 三层叠一大块，把右侧提交栏撑变形。
+     * 现在只留「新分支 ＋ 输入框」一行，解释全收进悬停 title —— 不占版面，规矩也不丢。
+     */
     const branchRow = onBase
       ? `<div class="gr-commit-base">
-          <div class="gr-cb-tip">你在主分支 <b>${esc(state.base)}</b> 上 —— <span class="gr-cb-warn">主分支不收本地提交</span>。这次会先建一条分支，改动落在它上面：</div>
+          <span class="gr-cb-tip" title="你在主分支 ${esc(state.base)} 上 —— 主分支不收本地提交，这次会先建一条分支，改动落在它上面。命名：<type>/v<版本>-<短描述>，type 用 feat / fix / chore / docs / refactor / test / perf（服务端按这条校验）">新分支</span>
           <input id="grCommitBranch" value="${esc(state.suggest ?? '')}" autocomplete="off" spellcheck="false" aria-label="新分支名" placeholder="例如：fix/v1.4.1-pr-gate-smoke" />
-          <div class="gr-cb-hint">命名：<code>&lt;type&gt;/v&lt;版本&gt;-&lt;短描述&gt;</code>，type 用 feat / fix / chore / docs / refactor / test / perf；版本取当前版本（服务端按这条校验）</div>
         </div>`
       : '';
     box.innerHTML = `

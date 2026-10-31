@@ -108,7 +108,11 @@ check('正常分支名放行', git.assertBranchName('feature/ok-2026') === 'feat
  * `bandi/bandi-20261029-125019`（前缀重复、没类型、没语义），历史里 4 次合并都叫这个。
  * 版本段是**发布线**（同公司 Gitlab 规范里 `hotfix-v1.12.5` 的思路），不是每条分支自己升一版。
  */
-const V = '1.4.0';
+// 版本从真源读，别硬编码 —— 硬编码一升版本这条就红（2026-10-31 升 1.5.0 时实锤：
+// 期望还钉着 v1.4.0，建议分支名却已经吐 v1.5.0）。真源唯一：apps/desktop/version.json。
+const V = JSON.parse(
+  fs.readFileSync(path.join(repoRoot, 'apps', 'desktop', 'version.json'), 'utf8'),
+).version;
 const rejectedNew = (list) =>
   list.filter((b) => {
     try {
@@ -119,14 +123,16 @@ const rejectedNew = (list) =>
     }
   });
 const suggestWith = (t, at) => git.suggestBranchName(t, at, { repoName: 'bandi', version: V });
-check('建议名 = <type>/v<版本>-<短描述>（英文标题）', suggestWith('给班底补建 PR v2', new Date('2026-10-25T17:22:03')) === 'chore/v1.4.0-pr-v2', suggestWith('给班底补建 PR v2', new Date('2026-10-25T17:22:03')));
-check('中文标题折不出短描述 → <type>/v<版本>-<时间戳>（不是空分支名）', /^fix\/v1\.4\.0-20261025-090500$/.test(suggestWith('修复错字', new Date('2026-10-25T09:05:00'))), suggestWith('修复错字', new Date('2026-10-25T09:05:00')));
-check('Conventional 前缀直接决定类型', suggestWith('fix(server): pr gate smoke') === 'fix/v1.4.0-pr-gate-smoke', suggestWith('fix(server): pr gate smoke'));
-check('短描述不许就是仓库名（老 bandi/bandi-<戳> 的病根）', /^chore\/v1\.4\.0-\d{8}-\d{6}$/.test(suggestWith('bandi', new Date('2026-10-25T17:22:03'))), suggestWith('bandi', new Date('2026-10-25T17:22:03')));
+// 期望值里的版本段一律从 V 拼 —— 跟着真源走，升版本时这里不会又红一遍
+const vEsc = V.replace(/\./g, '\\.');
+check('建议名 = <type>/v<版本>-<短描述>（英文标题）', suggestWith('给班底补建 PR v2', new Date('2026-10-25T17:22:03')) === `chore/v${V}-pr-v2`, suggestWith('给班底补建 PR v2', new Date('2026-10-25T17:22:03')));
+check('中文标题折不出短描述 → <type>/v<版本>-<时间戳>（不是空分支名）', new RegExp(`^fix\\/v${vEsc}-20261025-090500$`).test(suggestWith('修复错字', new Date('2026-10-25T09:05:00'))), suggestWith('修复错字', new Date('2026-10-25T09:05:00')));
+check('Conventional 前缀直接决定类型', suggestWith('fix(server): pr gate smoke') === `fix/v${V}-pr-gate-smoke`, suggestWith('fix(server): pr gate smoke'));
+check('短描述不许就是仓库名（老 bandi/bandi-<戳> 的病根）', new RegExp(`^chore\\/v${vEsc}-\\d{8}-\\d{6}$`).test(suggestWith('bandi', new Date('2026-10-25T17:22:03'))), suggestWith('bandi', new Date('2026-10-25T17:22:03')));
 check('仓库没有版本号时不带版本段（别的仓库接进来也能建分支）', /^fix\/pr-gate-smoke$/.test(git.suggestBranchName('fix(server): pr gate smoke', new Date(), { version: '' })));
 check('新分支名必须 <type>/v<版本>-<短描述>：老前缀 / 错拼 / 没类型 / 没版本 / 大写都拒', rejectedNew(['bandi/old-style', 'andi/x', 'test', '123', 'feat/pr-x', 'feat/Bad', 'feature/x', 'feat/v1.4-pr-x', 'feat/v1.4.0/x']).length === 9);
 check('合规的新分支名放行', ['fix/v1.4.1-pr-gate-smoke', 'feat/v1.5.0-a1', 'chore/v1.4.0-20261030-125019', 'docs/v1.4.1-readme', 'test/v1.4.0-smoke'].every((b) => git.assertNewBranchName(b, { repoName: 'bandi', version: V }) === b));
-check('短描述等于仓库名 → 拒', rejectedNew(['chore/v1.4.0-bandi']).length === 1);
+check('短描述等于仓库名 → 拒', rejectedNew([`chore/v${V}-bandi`]).length === 1);
 check('「平台建的分支」= 老 bandi/ 或新 <type>/x（feature/x 是人的分支）', git.isPlatformBranchName('bandi/old') && git.isPlatformBranchName('fix/demo') && !git.isPlatformBranchName('feature/human') && !git.isPlatformBranchName('main'));
 check('凭据闸抓住 .env / 私钥 / token 文件', JSON.stringify(git.findSecretPaths(['.env', 'id_rsa', 'a/b/token.json', 'k.pem'])) === '[".env","id_rsa","a/b/token.json","k.pem"]');
 check('模板类放过（.env.example 本来就该提交）', JSON.stringify(git.findSecretPaths(['.env.example', 'config.sample.ts', 'README.md'])) === '[]');
@@ -146,7 +152,7 @@ check('默认分支从元数据来（假 GitHub 给 main）', row.defaultBranch 
 let st = await git.workState(row);
 check('干净工作区：dirtyCount 0、ahead 0、canShip=false', st.dirtyCount === 0 && st.ahead === 0 && st.canShip === false, JSON.stringify({ d: st.dirtyCount, a: st.ahead, c: st.canShip }));
 check('报告当前分支与 base', st.branch === 'main' && st.base === 'main', `${st.branch}/${st.base}`);
-check('给出建议分支名（`<type>/v<版本>-<短描述>`，规则只留服务端一处）', /^chore\/v1\.4\.0-\d{8}-\d{6}$/.test(st.suggest), String(st.suggest));
+check('给出建议分支名（`<type>/v<版本>-<短描述>`，规则只留服务端一处）', new RegExp(`^chore\\/v${vEsc}-\\d{8}-\\d{6}$`).test(st.suggest), String(st.suggest));
 
 fs.writeFileSync(path.join(work, 'feature.js'), 'export const x = 1;\n');
 fs.writeFileSync(path.join(work, '.env'), 'API_KEY=***\n');

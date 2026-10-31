@@ -58,6 +58,10 @@ const HOST_ALLOW = [
   'schema.tauri.app',
   'tauri.app',
   'usemagpie.ai',
+  // Tauri 的 IPC 走 `http://ipc.localhost`（自定义协议在 Android/Windows 上的
+  // 实际 origin），CSP 的 connect-src 必须放它，否则前端调不了任何 command。
+  // 2026-11 新增 apps/mobile 时被误判成"外部地址"。
+  'ipc.localhost',
   // 飞书开放平台（2026-10-28）：用户**自建飞书应用**的官方 API 域名 ——
   // 不是中转站/网关；飞书通道（apps/server/src/feishu.mjs）按官方协议直连它，
   // 与 larksuite/node-sdk 用的是同一个 host。见 docs/架构.md「飞书通道」。
@@ -197,6 +201,20 @@ const hostAllowed = (h) =>
 const isVendored = (f) => /^skills\//.test(f);
 
 /*
+ * 生成物目录：`apps/mobile/gen/**`（`tauri android init` + Gradle 生成的 Android 工程）
+ * 与 `apps/mobile/icons/**`（`tauri icon` 生成的图标）。
+ *
+ * 里面的地址都是框架标准产物，不是我们发起的请求：
+ *   · `schemas.android.com` —— XML namespace 标识符（`xmlns:android=...`）；
+ *   · `json-schema.org` / `urlpattern.spec.whatwg.org` / `mydomain.dev` —— 生成的
+ *     JSON Schema 里的 `$schema` 与示例值；
+ *   · `www.apache.org` —— Gradle wrapper 的 Apache License 头。
+ * 手写的部分（`gen/android/app/build.gradle.kts` 的镜像、`MainActivity.kt`）仍走
+ * NEEDS_EYE 人审，不受这条豁免影响。
+ */
+const isGenerated = (f) => /^apps\/mobile\/(gen|icons)\//.test(f);
+
+/*
  * 冒烟用例里的**反例字面量**：专门验证"不是 github 的 PR 链接 → null"这种
  * 断言，得把 gitlab.com 写进字符串才测得了。
  *
@@ -215,6 +233,8 @@ const isAssertion = (text) => {
 
 for (const [file, list] of added) {
   const vendored = isVendored(file);
+  // 生成物（apps/mobile/gen、icons）里的地址是框架标准产物，不是我们发起的请求
+  if (isGenerated(file)) continue;
   for (const { line, text } of list) {
     const dataOnly = isAssertion(text);
     for (const m of text.matchAll(URL_RE)) {

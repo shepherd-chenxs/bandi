@@ -80,7 +80,7 @@ export async function openExperts() {
 
 
 
-/** 一张专家卡：头像（沿用 avatarStyle 配色）+ 名字/岗位 + 一句话 + 技能 chips + 动作 */
+/** 一张专家卡：头像（沿用 avatarStyle 配色）+ 名字/岗位 + 一句话 + 动作（技能不上卡片，详情弹窗里看） */
 export function expertCard(x) {
   const hired = !!x.hired;
   const name = x.hiredPersona?.name || x.name;
@@ -98,11 +98,6 @@ export function expertCard(x) {
       </div>
     </div>
     <div class="expert-intro">${esc(x.intro || '')}</div>
-    ${x.skills?.length
-      ? `<div class="expert-skills">${x.skills
-          .map((s) => `<span class="x-chip" title="${esc(s.description || s.name)}">${esc(s.name)}</span>`)
-          .join('')}</div>`
-      : ''}
     ${hired
       // 已雇佣（2026-10-23 三改）：胶囊本身可点 = 解聘入口（用户要求"再点击一下解聘，
       // 显示雇佣"）—— 点了先过 confirmDo 确认，解聘完原地退回「雇佣」。

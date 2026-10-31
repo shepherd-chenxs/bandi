@@ -313,6 +313,11 @@ export function localPathFor(fullName) {
   return path.join(REPOS_DIR, `${owner}__${name}`);
 }
 
+/** 默认克隆基目录（2026-10-30，IDEA 同款）：弹窗「目录」格的初始值 = 这里，URL 里认出项目名再拼上去 */
+export function defaultReposDir() {
+  return REPOS_DIR;
+}
+
 const isGitRepo = (dir) => {
   try {
     return fs.existsSync(path.join(dir, '.git'));
@@ -377,6 +382,114 @@ function sameRepo(url, fullName) {
   return u.endsWith('/' + String(fullName).toLowerCase());
 }
 
+/*
+ * 从 origin URL 反推 owner/name（2026-10-30 用户实报：仓库那格填了个中文名、点接入"没反应"）。
+ * 认三种常见写法：git@host:owner/name.git、ssh://git@host/owner/name.git、https://host/owner/name(.git)。
+ * 认不出来返回 null —— 上层决定报什么错。
+ */
+function repoFromRemote(url) {
+  const s = String(url ?? '')
+    .trim()
+    .replace(/^git@([^:]+):/, 'https://$1/')
+    .replace(/\.git$/, '')
+    .replace(/\/$/, '');
+  const m = /^https?:\/\/[^/]+\/([\w.-]+)\/([\w.-]+)$/.exec(s);
+  return m ? `${m[1]}/${m[2]}` : null;
+}
+
+/**
+ * 按 **URL** 接入（2026-10-30，弹窗加「仓库 URL」来源，IDEA 克隆仓库同款）：
+ *   · github.com 的 URL → 按 owner/name 接入，GitHub 全功能（元数据、PR 照常）；
+ *   · 别的站（gitee 等）→ 克隆 / 记路径照常，但 fullName 带上 host 前缀
+ *     （gitee.com/xx/yy —— 故意不做成 owner/name 形状，前端就不画 GitHub 那套 PR）。
+ * 给了 localPath = 用本地现成的克隆（核对 origin）；没给 = 克隆到数据目录。
+ */
+export async function connectByRemoteUrl(remoteUrl, localPath = null) {
+  const raw = String(remoteUrl ?? '').trim().replace(/\.git$/, '').replace(/\/$/, '');
+  if (!raw) throw new Error('URL 不能空');
+  const mm =
+    /^git@([^:/]+)[:/]([\w.-]+)\/([\w.-]+)$/.exec(raw) ??
+    /^ssh:\/\/git@([^/]+)\/([\w.-]+)\/([\w.-]+)$/.exec(raw) ??
+    /^https?:\/\/([^/]+)\/([\w.-]+)\/([\w.-]+)$/.exec(raw);
+  if (!mm) throw new Error('认不出这个 URL 的 owner/name —— 要形如 https://github.com/owner/name.git 或 git@host:owner/name.git');
+  const host = mm[1].toLowerCase();
+  const owner = mm[2];
+  const name = mm[3];
+  const isGh = /^(www\.)?github\.com$/.test(host);
+  const clean = isGh ? `${owner}/${name}` : `${host}/${owner}/${name}`;
+  if (store.getGitRepoByFullName(clean)) throw new Error('这个仓库已经接入过了');
+
+  const recordUrl = (dir, note, warning, defaultBranch) => {
+    const row = store.addGitRepo({
+      fullName: clean,
+      owner,
+      name,
+      isPrivate: 0,
+      defaultBranch: defaultBranch ?? null,
+      localPath: dir,
+      language: null,
+    });
+    return { repo: store.touchGitRepoSync(row.id), note, warning };
+  };
+
+  /*
+   * 本地已有目录：不克隆，核对 origin 指向是不是这个 URL。
+   * **空目录例外**（2026-10-30 用户问"选一个空目录会怎么样"，IDEA 同款语义）：
+   * 目录存在但是空的 = 当作克隆目标，直接克隆进去 —— 用户特意选了个目录，就是想放这儿。
+   */
+  let emptyDirTarget = null;
+  if (localPath) {
+    const dir = path.resolve(String(localPath).trim());
+    if (!fs.existsSync(dir)) {
+      /* 目录还不存在（2026-10-30 用户定稿，IDEA 同款：弹窗「目录」= 基目录 + 从 URL 拼的项目名，
+         那个路径是预估的、多半还没有）→ 当作克隆目标，克隆时建。 */
+      emptyDirTarget = dir;
+    } else if (!isGitRepo(dir)) {
+      const entries = fs.existsSync(dir) ? fs.readdirSync(dir).filter((n) => n !== '.DS_Store' && n !== 'Thumbs.db') : [];
+      if (entries.length) throw new Error(`这个目录不是 git 仓库（有别的文件、没有 .git）：${dir}`);
+      emptyDirTarget = dir; // 空目录：落到下面当克隆目标
+    } else {
+      if (store.getGitRepoByPath(dir)) throw new Error('这个目录已经接入过了');
+      const origin = await run('git', ['remote', 'get-url', 'origin'], { cwd: dir, env: GIT_ENV });
+      let warning = null;
+      if (origin.code !== 0) warning = '这个目录没有 origin ——「同步 / 推送」不可用';
+      else if (!sameRepo(origin.out, `${host}/${owner}/${name}`))
+        warning = `本地 origin 指向 ${origin.out.trim()}，跟 ${raw} 不一致（fork 或镜像？）`;
+      const head = await run('git', ['symbolic-ref', '--short', 'HEAD'], { cwd: dir, env: GIT_ENV });
+      return recordUrl(dir, '使用本地已有目录（没有另建克隆）', warning, head.code === 0 ? head.out : null);
+    }
+  }
+
+  /* 克隆：github 走令牌认证，别的站裸 clone（私有仓库会要凭据 —— GIT_ENV 已禁交互提示）。
+     目标目录：用户给了空目录 = 就克隆到那儿（emptyDirTarget）；没给 = 数据目录。 */
+  const dir = emptyDirTarget ?? (isGh ? localPathFor(clean) : path.join(REPOS_DIR, `${host.replace(/\./g, '-')}__${owner}__${name}`));
+  if (!emptyDirTarget) fs.mkdirSync(REPOS_DIR, { recursive: true });
+  else fs.mkdirSync(path.dirname(dir), { recursive: true }); // 预估路径的父目录也可能还没有（git 只建叶子）
+  const auth = isGh ? gitAuthArgs() : [];
+  let note = '';
+  if (isGitRepo(dir)) {
+    const r = await run('git', [...auth, 'fetch', '--prune', 'origin'], { cwd: dir, env: GIT_ENV });
+    if (r.code !== 0) throw new Error(`本地已有目录、但拉取失败：${r.out.split('\n').slice(-3).join(' ')}`);
+    note = '本地已有克隆，已拉取';
+  } else if (fs.existsSync(dir) && fs.readdirSync(dir).filter((n) => n !== '.DS_Store' && n !== 'Thumbs.db').length) {
+    throw new Error(`目录已存在但不是 git 仓库：${dir}（手动挪走再试）`);
+  } else {
+    const r = await run('git', [...auth, 'clone', '--quiet', raw, dir], { env: GIT_ENV });
+    if (r.code !== 0) throw new Error(`克隆失败：${r.out.split('\n').slice(-3).join(' ')}`);
+    note = emptyDirTarget ? '已克隆到你选的目录' : '已克隆';
+  }
+  const head = await run('git', ['symbolic-ref', '--short', 'HEAD'], { cwd: dir, env: GIT_ENV });
+  let warning = null;
+  if (isGh) {
+    try {
+      await ghFetch(`/repos/${clean}`);
+    } catch {
+      warning = '令牌读不到这个仓库的元数据（私有仓库要授权），已按 URL 接入';
+    }
+  }
+  return recordUrl(dir, note, warning, head.code === 0 ? head.out : null);
+}
+
 /**
  * 接入一个仓库。
  *
@@ -384,18 +497,33 @@ function sameRepo(url, fullName) {
  * 白占盘、还容易两边不同步）。会核对 origin 指向是不是这个仓库；不一致只**提示**不拦（fork/镜像也合理）。
  */
 export async function connectRepo(fullName, info = null, localPath = null) {
-  const clean = String(fullName ?? '').trim();
-  if (!/^[\w.-]+\/[\w.-]+$/.test(clean)) throw new Error(`仓库名写成 owner/name：${clean}`);
+  const typed = String(fullName ?? '').trim();
+
+  /*
+   * 两条路（2026-10-30 重新定位，用户："这个是把本地的代码托管过来。上面是仓库的名字，下面是路径"）：
+   *   ① owner/name  —— 接 GitHub 上的仓库：查元数据、能建 PR；
+   *   ② 随便一个名字（中文也行）—— **把本地代码托管进来**：只认本地目录，代码就在本机，
+   *      不走 GitHub PR（「同步 / 推送」照样能用，那是纯 git，认的是 origin）。
+   * 所以名字只在"空"的时候拦人，格式不再是闸门。
+   */
+  if (!typed) throw new Error('仓库名不能空');
+  if (typed.length > 64) throw new Error('仓库名太长（64 字以内）');
+  const ghName = /^[\w.-]+\/[\w.-]+$/.test(typed);
+  if (!ghName && !localPath) throw new Error('接 GitHub 上的仓库要写成 owner/name；本地代码托管就把本地目录填上');
+
+  const clean = typed;
   if (store.getGitRepoByFullName(clean)) throw new Error('这个仓库已经接入过了');
 
   /*
    * 元数据**懒加载 + 容错**：本地已有目录这条路不该依赖联网。
    * 私有仓库常见情况：令牌没给它授权（GitHub 只默认开放公开仓库）→ 查 /repos 会 404；
    * 这时仍然要能接入（不克隆、只用本地目录），私有状态就不知道（存 0，界面不显示"私有"）。
+   * 本地托管的仓库（名字不是 owner/name）根本不去查 —— 它不是 GitHub 那边的身份。
    */
   let meta = info;
   const getMeta = async () => {
     if (meta) return meta;
+    if (!ghName) return null;
     try {
       meta = await ghFetch(`/repos/${clean}`);
     } catch {
@@ -403,11 +531,13 @@ export async function connectRepo(fullName, info = null, localPath = null) {
     }
     return meta;
   };
-  const record = (dir, note, warning = null, m = null) => {
+  /* originFull = 从本地 origin 反推出的 owner/name（只为填 owner/name 两列，不强求） */
+  const record = (dir, note, warning = null, m = null, originFull = null) => {
+    const slug = originFull ?? (ghName ? clean : null);
     const row = store.addGitRepo({
       fullName: clean,
-      owner: m?.owner?.login ?? clean.split('/')[0],
-      name: m?.name ?? clean.split('/')[1],
+      owner: m?.owner?.login ?? (slug ? slug.split('/')[0] : ''),
+      name: m?.name ?? (slug ? slug.split('/')[1] : clean),
       isPrivate: m?.private ? 1 : 0,
       defaultBranch: m?.default_branch ?? null,
       localPath: dir,
@@ -416,17 +546,37 @@ export async function connectRepo(fullName, info = null, localPath = null) {
     return { repo: store.touchGitRepoSync(row.id), note, warning };
   };
 
-  /* **用本地已有目录**：不克隆，只核对一下 */
+  /* **用本地已有目录**：不克隆，只核对一下。
+     空目录例外（与「仓库 URL」来源同一条语义，2026-10-30）：GitHub 来源给了空目录 = 克隆到那儿。 */
+  let emptyDirTarget = null;
   if (localPath) {
     const dir = path.resolve(String(localPath).trim());
-    if (!fs.existsSync(dir)) throw new Error(`本地目录不存在：${dir}`);
-    if (!isGitRepo(dir)) throw new Error(`这个目录不是 git 仓库（没有 .git）：${dir}`);
+    if (!fs.existsSync(dir)) {
+      /* 目录还不存在（2026-10-30 用户定稿，IDEA 同款：弹窗「目录」= 基目录 + 从 URL 拼的项目名，
+         那个路径是预估的、多半还没有）→ 当作克隆目标，克隆时建。 */
+      emptyDirTarget = dir;
+    } else if (!isGitRepo(dir)) {
+      const entries = fs.readdirSync(dir).filter((n) => n !== '.DS_Store' && n !== 'Thumbs.db');
+      if (entries.length || !ghName) {
+        if (entries.length) throw new Error(`这个目录不是 git 仓库（有别的文件、没有 .git）：${dir}`);
+        /* 本地托管没有 URL 可克隆，空目录没意义 —— 保持原来的报错 */
+        throw new Error(`这个目录不是 git 仓库（没有 .git）：${dir}`);
+      }
+      emptyDirTarget = dir; // 空目录：落到下面当克隆目标
+    } else {
     const dup = store.getGitRepoByPath(dir);
     if (dup) throw new Error(`这个目录已经接给仓库 ${dup.fullName} 了`);
     const origin = await run('git', ['remote', 'get-url', 'origin'], { cwd: dir, env: GIT_ENV });
+    const originFull = origin.code === 0 ? repoFromRemote(origin.out) : null;
     let warning = null;
-    if (origin.code !== 0) warning = '这个目录没有 origin（不是从 GitHub 克隆的）—— 接入后「同步」不可用';
-    else if (!sameRepo(origin.out, clean)) warning = `本地 origin 指向 ${origin.out}，跟 ${clean} 不一致（fork 或镜像？）`;
+    if (origin.code !== 0) warning = '这个目录没有 origin —— 接入后「同步 / 推送」不可用（本地提交照样能管）';
+    else if (ghName && !sameRepo(origin.out, clean)) warning = `本地 origin 指向 ${origin.out}，跟 ${clean} 不一致（fork 或镜像？）`;
+    if (!ghName) {
+      /* 本地托管：不去查 GitHub，默认分支用本地 HEAD（origin 指向哪个托管站都无所谓） */
+      const head = await run('git', ['symbolic-ref', '--short', 'HEAD'], { cwd: dir, env: GIT_ENV });
+      const m = { default_branch: head.code === 0 ? head.out : null };
+      return record(dir, '使用本地已有目录（本地代码托管，不走 GitHub PR）', warning, m, originFull);
+    }
     const m = await getMeta();
     if (!m) warning = (warning ? warning + '；' : '') + '令牌读不到这个仓库（私有仓库要授权才读得到元数据），已按本地信息接入';
     // 默认分支：查不到就用本地 HEAD
@@ -434,26 +584,29 @@ export async function connectRepo(fullName, info = null, localPath = null) {
       const head = await run('git', ['symbolic-ref', '--short', 'HEAD'], { cwd: dir, env: GIT_ENV });
       meta = { default_branch: head.code === 0 ? head.out : null };
     }
-    return record(dir, '使用本地已有目录（没有另建克隆）', warning, m ?? meta);
+    return record(dir, '使用本地已有目录（没有另建克隆）', warning, m ?? meta, originFull);
+    }
   }
   const meta2 = await getMeta();
   if (!meta2) throw new Error('令牌读不到这个仓库（私有仓库要在令牌的 Repository access 里勾上它）');
   meta = meta2;
-  const dir = localPathFor(clean);
+  /* 目标目录：GitHub 来源给了空目录 = 克隆到你选的目录；没给 = 数据目录 */
+  const dir = emptyDirTarget ?? localPathFor(clean);
+  if (!emptyDirTarget) fs.mkdirSync(REPOS_DIR, { recursive: true });
+  else fs.mkdirSync(path.dirname(dir), { recursive: true }); // 预估路径的父目录也可能还没有（git 只建叶子）
   const url = meta.clone_url ?? `https://github.com/${clean}.git`;
-  fs.mkdirSync(REPOS_DIR, { recursive: true });
 
   let note = '';
   if (isGitRepo(dir)) {
     const r = await run('git', [...gitAuthArgs(), 'fetch', '--prune', 'origin'], { cwd: dir, env: GIT_ENV });
     if (r.code !== 0) throw new Error(`本地已有目录、但拉取失败：${r.out.split('\n').slice(-3).join(' ')}`);
     note = '本地已有克隆，已拉取';
-  } else if (fs.existsSync(dir)) {
+  } else if (fs.existsSync(dir) && fs.readdirSync(dir).filter((n) => n !== '.DS_Store' && n !== 'Thumbs.db').length) {
     throw new Error(`目录已存在但不是 git 仓库：${dir}（手动挪走再试）`);
   } else {
     const r = await run('git', [...gitAuthArgs(), 'clone', '--quiet', url, dir], { env: GIT_ENV });
     if (r.code !== 0) throw new Error(`克隆失败：${r.out.split('\n').slice(-3).join(' ')}`);
-    note = '已克隆';
+    note = emptyDirTarget ? '已克隆到你选的目录' : '已克隆';
   }
 
   return record(dir, note);

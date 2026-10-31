@@ -411,6 +411,16 @@ export async function openConversation(id) {
   const isGroup = d.conversation.kind === 'group';
   const running = d.conversation.status === '跑中';
   const badge = `<span class="badge ${esc(d.conversation.status)}">${esc(running ? TYPING : d.conversation.status)}</span>`;
+  /*
+   * 窄屏下聊天头自己带一个返回按钮（2026-11 用户要求）：
+   * 返回、人名、新会话/聊天记录要挤在**同一行**，所以通用返回栏
+   * （mobile.mjs 的 .mb-backbar）在聊天页让位 —— 见 mobile.css 的 body.mb-chat。
+   */
+  const mbBackBtn = document.body.classList.contains('mb-narrow')
+    ? '<button type="button" class="mb-back mb-chat-back" aria-label="返回列表">' +
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>' +
+      '</button>'
+    : '';
 
   if (isGroup) {
     /*
@@ -422,6 +432,7 @@ export async function openConversation(id) {
       ? '<span class="dim" style="font-size:12px">已解散</span>'
       : `<span class="dim" style="font-size:12px">${d.conversation.members.length} 人</span>`;
     $('chatHead').innerHTML = `
+      ${mbBackBtn}
       <div class="avatar grp sm">${esc(initial(d.conversation.title))}</div>
       <div class="meta">
         <div><b>${esc(d.conversation.title)}</b> ${dissolved ? '' : badge} ${metaSub}</div>
@@ -465,6 +476,7 @@ export async function openConversation(id) {
     const name = convDisplayName(d.conversation);
     const pHere = personaGone ? null : ((S.personas ?? []).find((x) => x.id === d.conversation.personaId) ?? null);
     $('chatHead').innerHTML = `
+      ${mbBackBtn}
       ${smAvatar(name, personaGone ? '' : `clickable" data-detail="${esc(d.conversation.personaId)}" title="配置他的 agent CLI`, pHere)}
       <div class="meta">
         <div><b>${esc(name)}</b> ${badge}</div>
@@ -491,6 +503,17 @@ export async function openConversation(id) {
     $('toChatLog').onclick = () => openChatLogDrawer(d.conversation);
     // 新会话（2026-10-24）：员工都没了，开了也没人接 —— 不给按钮
     if (!personaGone) $('toNewConv').onclick = () => startFreshConversation(d.conversation);
+  }
+
+  /*
+   * 窄屏：聊天头自带的返回按钮接上"回列表"（走 mobile.mjs 的自定义事件，
+   * 避免 chat.mjs 反向 import mobile.mjs 造成循环依赖），并给 body 打 mb-chat ——
+   * mobile.css 靠它把通用返回栏藏掉，一行装下 返回/人名/操作。
+   */
+  const mbBack = $('chatHead').querySelector('.mb-chat-back');
+  if (mbBack) {
+    mbBack.onclick = () => document.dispatchEvent(new Event('mb-back'));
+    document.body.classList.add('mb-chat');
   }
 
   renderComposerPerm(d);

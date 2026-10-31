@@ -1697,12 +1697,14 @@ dialog.pj-add-dlg .dlg-head { margin: 0 -20px; padding: 14px 12px 6px 20px; }
 
 /* 从 GitHub 挑仓库那个弹窗里的清单（2026-10-17）：账号下可能有几十上百个仓库，
    不给高度上限会把弹窗顶到视口外、搜索框和关闭按钮都滚没了。
-   给 46vh —— 跟"选目录"那块（.dir-list）一个量级，一屏看得到大半。
    ⚠️ overflow: auto 会把选中行左侧那条强调线一起裁掉（撞过），所以左边留 1px 内边距。 */
 #gitPickDlg { overflow: visible; }
-.git-avail-box { max-height: 46vh; overflow: auto; padding-left: 1px;
+.git-avail-box { overflow: auto; padding-left: 1px;
                  border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
-
+/* 未连接占位（2026-10-30 用户："改成：GitHub 未连接，点击连接"）：文案本身可点，
+   点了开 GitHub 连接弹窗 —— 链接样式用 accent 色，一眼知道能点。 */
+.git-conn-link { color: var(--accent); cursor: pointer; }
+.git-conn-link:hover { text-decoration: underline; }
 /* 可**选中**的行（从 GitHub 添加，2026-10-17）：原来是每行一颗「接入」按钮、点了就克隆，
    在一张几十个仓库的清单里手一抖就白等一场。现在是"先挑、再确认"。 */
 .sk-row.pickable { cursor: pointer; border-left: 3px solid transparent; }
@@ -1712,6 +1714,37 @@ dialog.pj-add-dlg .dlg-head { margin: 0 -20px; padding: 14px 12px 6px 20px; }
 /* 已接入的行：看得见、选不了（再接一次只会得到"已经接入了"） */
 .sk-row.pickable.done { cursor: default; opacity: .55; }
 .sk-row.pickable.done:hover { background: transparent; }
+
+/* —— 「添加仓库」弹窗（2026-10-30，用户："这个界面改成参考图（IDEA 克隆仓库）这种"）——
+   左边来源（GitHub / 本地代码托管）+ 右边内容 + 底部「目录」行 + 右下动作。 */
+#gitPickDlg { width: 760px; max-width: 92vw; }
+.gp-wrap { display: flex; height: 420px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.gp-side { flex: 0 0 188px; border-right: 1px solid var(--line); background: var(--side);
+           padding: 6px; display: flex; flex-direction: column; gap: 2px; }
+.gp-src { display: flex; align-items: center; gap: 9px; padding: 10px 10px; border-radius: 7px; cursor: pointer; }
+.gp-src:hover { background: var(--hover); }
+.gp-src.on { background: var(--sel); }
+.gp-ic { flex: 0 0 auto; color: var(--dim); display: flex; }
+.gp-ic svg { width: 16px; height: 16px; }
+.gp-src.on .gp-ic { color: var(--accent); }
+.gp-src-t { display: flex; flex-direction: column; min-width: 0; }
+.gp-src-t b { font-size: 12.5px; }
+.gp-src-t em { font-style: normal; font-size: 11px; color: var(--dim);
+               overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gp-main { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 10px; }
+/* 右侧面板：每个属性都是「标签在上、输入框在下」（2026-10-30 用户："标签在上，输入框在下，要统一"）。
+   URL / 目录 / 仓库名 / 本地目录 全走这一套，三个来源看起来一致；属性之间留 14px，不再挤在一起。 */
+#gpGhPane, #gpUrlPane, #gpLocalPane { display: flex; flex-direction: column; gap: 14px; flex: 1; min-height: 0; }
+#gpGhPane[hidden], #gpUrlPane[hidden], #gpLocalPane[hidden] { display: none; }
+.gp-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+#gitPickDlg .git-avail-box { flex: 1; max-height: none; min-height: 0; }
+#gitPickDlg .sk-row.pickable { display: flex; align-items: center; gap: 6px; padding: 8px 10px; }
+#gitPickDlg .sk-row .sk-desc { display: none; }
+#gitPickDlg .gp-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.gp-lb { font-size: 12px; color: var(--dim); }
+.gp-field input { width: 100%; font-size: 12px; }
+.gp-note { font-size: 11.5px; color: var(--dim); line-height: 1.6; margin-top: auto; }
+#gitPickDlg .row-with-btn input { flex: 1; }
 
 /* 已连接那个只读的令牌框（2026-10-17）：跟 .member.locked 同一个语义 ——
    看得见、点不动。不写它，只读框跟可编辑框长得一模一样，会让人以为还能改。
@@ -2027,6 +2060,10 @@ dialog#repoPrDlg { width: 660px; height: min(720px, 92vh); max-height: 92vh;
    空间不够时先压右边、它先变 ...，右边顶不住了行才溢出（等宽小字，可接受）。 */
 .gr-branch .combo-item-label { font-size: 13px; flex: 0 0 auto; }
 .gr-branch .combo-hint { flex: 0 1 auto; min-width: 0; max-width: none; margin-left: auto; padding-left: 10px; }
+/* 行尾 `›` 钉在**最右**（2026-10-30 用户："箭头固定在右边"）：
+   有远程名（.combo-hint）的行，远程名自己 ml:auto 顶右，箭头跟在它后面 —— 本来就在最右；
+   没有远程名的行（本地分支），箭头会紧跟在名字后面悬在半空 —— 用 :has 补一个 ml:auto 把它推到行尾。 */
+.gr-branch .combo-item:not(:has(.combo-hint)) .combo-more { margin-left: auto; }
 /* 分组标题与动作项同规格（2026-10-27 二调，用户："下面的字体、大小要和上面一致，
    鼠标放上去再显示蓝色"）：13px 正文色，不吃全局 combo 的 11px + 常驻强调色；
    悬停才变强调色（覆盖 .combo-group.foldable:hover 的"悬停变正文色"）。
@@ -2070,18 +2107,14 @@ dialog#repoPrDlg { width: 660px; height: min(720px, 92vh); max-height: 92vh;
 .gr-commit-acts .gr-suggest { height: 32px; padding: 0 16px; border-radius: 8px;
                               font-size: 12.5px; font-weight: 500; }
 .gr-commit-acts .gr-suggest:disabled { opacity: .6; cursor: default; }
-/* 主分支提示（2026-10-29 用户："main 不应该直接提交，提交时就该检查"）：
-   站在 base 上提交 = 先建一条分支，这一格把"提交到哪儿"摆明（名字可改）。 */
-.gr-commit-base { flex: 0 0 auto; padding: 9px 11px; border-radius: 8px;
-                  background: var(--side); border: 1px solid var(--line);
-                  display: flex; flex-direction: column; gap: 7px; }
-.gr-cb-tip { font-size: 12px; line-height: 1.6; color: var(--dim); }
-.gr-cb-tip b { color: var(--text); font-weight: 600; font-family: ui-monospace, monospace; }
+/* 主分支提示压成一行（2026-10-30 用户："这个提示不要放这里，改变原来的布局了"）：
+   「新分支」小标 + 输入框 同一行，不再三层叠块；解释收进悬停 title。 */
+.gr-commit-base { flex: 0 0 auto; display: flex; align-items: center; gap: 7px; }
+.gr-cb-tip { font-size: 11.5px; color: var(--dim); white-space: nowrap; cursor: help; }
 .gr-cb-warn { color: var(--warn); }
-/* 分支命名规矩那一行提示：`<type>/<短描述>` —— 只提示，不拦输入，挡在服务端 */
+.gr-commit-base input { flex: 1 1 auto; min-width: 0; font-family: ui-monospace, monospace; font-size: 12px; }
+/* 「新建分支」弹窗里的命名说明（还用它自己的那行小字） */
 .gr-cb-hint { font-size: 11px; line-height: 1.5; color: var(--dim); }
-.gr-cb-hint code { font-family: ui-monospace, monospace; color: var(--text); }
-.gr-commit-base input { width: 100%; font-family: ui-monospace, monospace; font-size: 12px; }
 /* 行右缩进（2026-10-27 二调：用户"折叠区的条目再往右缩进"）：文件行比组标题深两级 ——
    组头内容从 12px 起，行内容从 52px 起；悬停底色仍铺满整行。 */
 .gr-chg-row { display: flex; align-items: center; gap: 8px; padding: 6px 12px 6px 52px; cursor: pointer; min-width: 0; }
@@ -2707,6 +2740,8 @@ input, select, textarea { width: 100%; background: var(--input); color: var(--te
               white-space: nowrap; margin-left: 8px; font-size: 11px; color: var(--dim);
               font-family: ui-monospace, monospace; }
 .combo-item:hover, .combo-item.hi { background: var(--hover); }
+/* 行的二级菜单开着时保持高亮（2026-10-30 用户："选中要加效果"）——鼠标移去菜单上 hover 就没了 */
+.combo-item.menu-open { background: var(--hover); }
 .combo-check { flex: 0 0 auto; color: var(--accent); font-size: 12px; line-height: 1; }
 /* 分支行尾的二级菜单箭头（2026-10-30 用户："加个小箭头，点击展示二级菜单，就是 IDEA 的这种效果"）：
    点它只开这条分支的菜单，不选分支（ui.mjs 里把选中事件 stopPropagation 掉了）。 */
@@ -4042,10 +4077,8 @@ button.expert-hire:hover { background: color-mix(in srgb, var(--accent) 8%, var(
 button.expert-fire { cursor: pointer; }
 button.expert-fire:hover { color: var(--bad); border-color: var(--bad);
                            background: color-mix(in srgb, var(--bad) 8%, var(--panel)); }
-/* 技能标签 chip：名 + 悬停给一句话描述（服务端 listExperts 一并带出的 description） */
-.expert-skills { display: flex; flex-wrap: wrap; gap: 6px; }
-.expert-skills .x-chip { font-size: 10.5px; padding: 1px 7px; border-radius: 4px; line-height: 16px;
-                         background: var(--chip); border: 1px solid var(--line); color: var(--text); cursor: default; }
+/* 技能标签不再上卡片（2026-10-30 用户要求）：卡片内容定高（头部 + 两行简介），墙上一致；
+   技能清单只在详情弹窗的「技能」页签里看 */
 /* 卡片本体可点（2026-10-25）：点谁弹谁的详情卡 —— 右上角那两枚胶囊有自己的 onclick，
    点击事件在 paintGrid 里拦了 closest('button')，不会连坐 */
 .expert-card[data-expert-key] { cursor: pointer; }

@@ -46,8 +46,17 @@ check(!/id="gitTokenHelp"/.test(src), '老的标题旁「?」按钮不再出现�
 check(/function openGitConnDlg\(/.test(src), '有 openGitConnDlg（连接弹窗）');
 /* 2026-10-29 六改：状态按钮从左栏中部搬进 `#listFoot` 底栏，绑定从 `$('gitConnOpen')`
    变成 `foot.querySelector('#gitConnOpen')` —— 正则只钉「#gitConnOpen 的 click 开弹窗」，
-   不钉取元素的写法（不然下次挪位置又得改这里）。 */
-check(/#gitConnOpen'\)\?\.addEventListener\('click', openGitConnDlg\)/.test(src), '左栏状态按钮打开连接弹窗');
+   不钉取元素的写法（不然下次挪位置又得改这里）。
+   2026-10-31：`openGitConnDlg` 被提成顶层 `export`（6c74088，「添加仓库」弹窗要复用同一只弹窗），
+   签名多了 `(st, onDone)` 两个参数 —— 原来"直接把函数当监听器"的写法现在**不能要**：
+   那样 Event 对象会当 `st` 传进去，`if (!st)` 不成立，没连上也会画成已连接那一屏。
+   所以钉的对象跟着换成新的调用形状，并**多钉一条**"当前状态 + 左栏重画回调一起递进去"，
+   这一条从 1 个 check 变成 2 个 —— 净断言数只增不减，语义没松。 */
+check(/#gitConnOpen'\)\?\.addEventListener\('click', \(\) => openGitConnDlg\(/.test(src), '左栏状态按钮打开连接弹窗');
+check(
+  /addEventListener\('click', \(\) => openGitConnDlg\(st, refresh\)\)/.test(src),
+  '开弹窗时把当前状态和左栏重画回调一起递进去（连上/断开后那颗灯跟着变）',
+);
 check(/document\.addEventListener\('click', closeHelpPop\)/.test(src), 'document 上装了"点别处收起"');
 
 /* ------------------------------- 连上之后：同一骨架、只换"能不能编辑"和按钮文案 */
@@ -55,11 +64,21 @@ check(/document\.addEventListener\('click', closeHelpPop\)/.test(src), 'document
 // 不许再换成「状态：已连接 + 断开连接」那种另一套行。
 // 现在两个状态在同一处模板里按 `st.connected` 二选一，按 `? \`<div class="gr-dlg-row">` /
 // `: \`<div class="gr-dlg-row">` 两处界标切成两段再分别断言（与老 tokenForm/connectedForm 等价）。
+/*
+ * 2026-10-31：结束界标从 `\n  }\n` 换成 `dlg.showModal();`。**动的是测量区间，不是验收标准。**
+ * 6c74088 把 openGitConnDlg 从左栏渲染函数里提成顶层 `export async function`，函数体的缩进层级跟着变，
+ * 那条"两空格 + }"的界标就先撞上体内 `if (!st) { … }` 的收尾 —— 区间只剩 168 个字符（模板还没开始），
+ * 于是下面 13 项一起红，而产品没坏（两个分支、只读框、掩码、断开按钮都在原位）。
+ * `dlg.showModal();` 是这段"建弹窗"代码的最后一手，拿它收尾就不再依赖缩进层数。
+ * 顺手加一条哨兵：区间短到可疑就单独红在这里，别再用 13 项红去暗示"界标漂了"。
+ */
 const connDlg = (() => {
   const i = src.indexOf('function openGitConnDlg(');
-  const j = src.indexOf('\n  }\n', i);
-  return i >= 0 && j > i ? src.slice(i, j) : '';
+  const end = 'dlg.showModal();';
+  const j = src.indexOf(end, i);
+  return i >= 0 && j > i ? src.slice(i, j + end.length) : '';
 })();
+check(connDlg.length > 1000, `连接弹窗那一整段切全了（实际 ${connDlg.length} 字符；太短 = 界标又漂了，不是产品少了控件）`);
 const iUn = connDlg.indexOf(': `<div class="gr-dlg-row">');
 const iConn = connDlg.lastIndexOf('? `<div class="gr-dlg-row">', iUn);
 check(iUn > 0 && iConn >= 0, '连接弹窗里「已连接 / 未连接」两个分支都在');
@@ -107,17 +126,17 @@ check(
 check(/\.title = '添加仓库'/.test(src), '左栏「＋」的 tooltip 写「添加仓库」');
 check(!/id="gitAddRepo"/.test(src), '页面里不再有旧的「＋ 添加仓库」按钮');
 check(!/id="gitManualAdd"/.test(src), '不再有单独的「手动接入」按钮');
-check(/const gitAddRepoItems = /.test(src), '有「从 GitHub 添加 / 手动接入」两个菜单项');
-// 菜单两项都要开弹窗，不能还是直接跳页面上的某一块
+check(/const gitAddRepoItems = /.test(src), '有「添加仓库」菜单项');
+// 菜单收敛成一条（2026-10-30 用户："这个界面改成参考图（IDEA 克隆仓库）这种"——来源挪进弹窗左侧）
 const menuBlock = (() => {
   const i = src.indexOf('const gitAddRepoItems =');
   return src.slice(i, src.indexOf('];', i));
 })();
-check(/label: '从 GitHub 添加'/.test(menuBlock), '菜单里有「从 GitHub 添加」');
-check(/label: '手动接入'/.test(menuBlock), '菜单里有「手动接入」');
-check(/run: \(\) => openGitPickDialog\(/.test(menuBlock), '「从 GitHub 添加」→ 开弹窗');
-check(/run: \(\) => openGitManualDialog\(/.test(menuBlock), '「手动接入」→ 开弹窗');
+check(/label: '添加仓库…'/.test(menuBlock), '菜单里是「添加仓库…」');
+check(/run: \(\) => openGitPickDialog\(/.test(menuBlock), '「添加仓库…」→ 开弹窗');
 check(/function openGitPickDialog\(/.test(src), '有 openGitPickDialog（从 GitHub 挑）');
+check(/data-src="gh"/.test(src) && /data-src="local"/.test(src), '弹窗左侧两块来源：GitHub / 本地代码托管（手动接入收进来了）');
+check(!/function openGitManualDialog\(/.test(src), '独立的 openGitManualDialog 删了（并入弹窗本地来源）');
 check(/async function mountGitAvailPicker\(/.test(src), '挑仓库那段抽成了可复用的 mountGitAvailPicker');
 // 底部那整块要真的没了（不再挂在 st.connected 上常驻）
 check(
@@ -154,7 +173,7 @@ const dlgBlock = (() => {
 })();
 check(/class="dlg-actions">\s*<button type="button" value="cancel">取消<\/button>\s*<button class="primary" type="button" id="gitPickOk" disabled>接入<\/button>/.test(dlgBlock), '「接入」在「取消」旁边（同一个动作栏）');
 check(/id="gitPickOk" disabled/.test(dlgBlock), '没选中时「接入」是禁用的');
-check(/okBtn\.disabled = !fullName/.test(dlgBlock), '选中后才放开「接入」');
+check(/okBtn\.disabled = !picked;/.test(dlgBlock), '选中后才放开「接入」');
 
 check(!/drawAvail/.test(src), '旧的那份 drawAvail 已经删掉（没有第二份清单逻辑）');
 
