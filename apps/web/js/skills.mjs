@@ -2208,7 +2208,7 @@ export function openRepoPrDialog(repo, onDone) {
     const ahead = !state.base
       ? '不知道（没记录 base 分支）'
       : state.ahead === null
-        ? `不知道（本地还没有 origin/${state.base}，先点「同步」）`
+        ? `不知道（本地还没有 origin/${state.base}，点开分支下拉「更新项目」拉一次）`
         : `${state.ahead} 个提交`;
     /* 推送状态（推送和建 PR 拆开后弹窗要管的第一件事）：没推完 = 现在建不了，指路推送区 */
     const unpushedN = Number(state.unpushed ?? 0);
