@@ -69,6 +69,7 @@ export function workbenchCollabSection() {
 /* ============================================================== 中心页 */
 
 export async function openCollabPage() {
+  stopCenterAutoRefresh(); // 重新进页：先停旧表，渲染完再起（别让旧定时器盯着旧 DOM）
   setRoute('collab');
   /* 工作台子页：把项目 / 看板 / 插件那几条"恢复位置"的路清掉，
      否则刷新时会被它们抢走（跟 openSchedules 同款）。 */
@@ -80,25 +81,72 @@ export async function openCollabPage() {
   $('pluginView').classList.remove('kb-page');
   showView('plugin');
   await renderCollabCenter();
+  startCenterAutoRefresh();
+}
+
+/*
+ * 中心页的自动刷新（2026-10-31 验收补）：分公司 5 秒一拍把状态报回来，中心页不主动看
+ * 就永远是旧的 —— 而"看进度"正是这一页的用途。
+ *
+ * 只在**这一页还开着**的时候刷：`#collabPage` 是这一页的根，别的页面一渲染就把它换掉；
+ * 有弹窗没关、或上一拍还没画完时跳过，别把用户正在点的按钮/正在看的行抽走。
+ * 两张表都没变同样跳过（靠 centerSig 比任务状态与在线状态）——避免每 5 秒白重画一次。
+ */
+let centerTimer = null;
+let centerRendering = false;
+let centerSig = '';
+
+function stopCenterAutoRefresh() {
+  if (centerTimer) clearInterval(centerTimer);
+  centerTimer = null;
+}
+
+function startCenterAutoRefresh() {
+  stopCenterAutoRefresh();
+  centerTimer = setInterval(() => {
+    const mount = $('collabPage');
+    // 页面切走了 / 换了别的页面 → 停表。不靠路由名判断：工作台里还有别的子页也长在 #pluginView 里。
+    if (!mount?.isConnected || !$('pluginView')?.classList.contains('shown')) {
+      stopCenterAutoRefresh();
+      return;
+    }
+    if (document.querySelector('dialog[open]')) return; // 有弹窗在填东西，别动它背后的页
+    if (centerRendering) return;
+    renderCollabCenter({ silent: true }).catch(() => { /* 静默刷新失败就等下一拍 */ });
+  }, 5000);
+  centerTimer.unref?.(); // 浏览器里是数字，没有 unref；这行只是沿用服务端定时器的写法不报错
 }
 
 /** 中心页：两块表 —— 分公司名录 + 我派出去的活 */
-export async function renderCollabCenter() {
+export async function renderCollabCenter({ silent = false } = {}) {
+  if (centerRendering) return; // 上一拍还没画完，别叠
   const view = $('pluginView');
   if (!view) return;
-  view.innerHTML = '<div class="empty" style="padding:24px 4px">读取中…</div>';
-
-  let branches = [];
-  let tasks = [];
+  centerRendering = true;
   try {
-    const [b, t] = await Promise.all([api('/api/collab/branches'), api('/api/collab/tasks')]);
-    branches = b.branches ?? [];
-    tasks = t.tasks ?? [];
-  } catch (e) {
-    view.innerHTML = `${headRow(breadcrumb([{ label: '工作台', to: 'workbench' }, { label: '协作中心' }]))}
-      <div class="detail-body"><div class="empty">取不到：${esc(e.message)}</div></div>`;
-    return;
-  }
+    if (!silent) view.innerHTML = '<div class="empty" style="padding:24px 4px">读取中…</div>';
+
+    let branches = [];
+    let tasks = [];
+    try {
+      const [b, t] = await Promise.all([api('/api/collab/branches'), api('/api/collab/tasks')]);
+      branches = b.branches ?? [];
+      tasks = t.tasks ?? [];
+    } catch (e) {
+      // 静默刷新失败（比如刚好在重启）→ 保留眼前这一屏，不把页面换成错误页
+      if (silent) return;
+      view.innerHTML = `<div id="collabPage">${headRow(breadcrumb([{ label: '工作台', to: 'workbench' }, { label: '协作中心' }]))}
+        <div class="detail-body"><div class="empty">取不到：${esc(e.message)}</div></div></div>`;
+      return;
+    }
+
+    // 同一份数据（任务状态/在线状态没变）→ 不重画；lastSeenAt 每 5 秒都在变，不进签名
+    const sig = JSON.stringify({
+      b: branches.map((b) => [b.id, b.label, b.online, b.revokedAt]),
+      t: tasks.map((t) => [t.id, t.status, t.branchId, t.updatedAt]),
+    });
+    if (silent && sig === centerSig) return;
+    centerSig = sig;
 
   const labelOf = (id) => branches.find((b) => b.id === id)?.label ?? '（分公司已移除）';
 
@@ -146,7 +194,7 @@ export async function renderCollabCenter() {
     }).join('')
     : `<tr><td colspan="5" class="dim" style="padding:18px 10px">还没有派出去的活。</td></tr>`;
 
-  view.innerHTML = `
+  view.innerHTML = `<div id="collabPage">
     ${headRow(
       breadcrumb([{ label: '工作台', to: 'workbench' }, { label: '协作中心' }]),
       '<button class="primary" id="clNewBranch">＋ 新增分公司</button>',
@@ -166,7 +214,7 @@ export async function renderCollabCenter() {
           <tbody>${taskRows}</tbody>
         </table>
       </section>
-    </div>`;
+    </div></div>`;
 
   $('clNewBranch')?.addEventListener('click', () => newBranchDialog());
   view.querySelectorAll('[data-cl-assign]').forEach((el) => {
@@ -223,6 +271,9 @@ export async function renderCollabCenter() {
       }
     };
   });
+  } finally {
+    centerRendering = false;
+  }
 }
 
 /* -------------------------------------------------------------- 弹窗：公共件 */
@@ -356,6 +407,7 @@ async function assignDialog(branchId = null) {
       <button type="button" class="btn-sm" id="clAssignCancel">取消</button>
       <button type="button" class="primary" id="clAssignOk">派出去</button>
     </div>`;
+  wireDialogHead(form); // 内容换过之后重新包一次：否则没有吸顶标题和右上角 ×
   dlg.showModal();
   $('clAssignCancel').onclick = () => dlg.close();
   $('clTitle')?.focus();
@@ -401,6 +453,7 @@ function joinCollabDialog(onDone) {
       <button type="button" class="btn-sm" id="clJoinCancel">取消</button>
       <button type="button" class="primary" id="clJoinOk">加入</button>
     </div>`;
+  wireDialogHead(form); // 同上：makeDialog 包的那层已被 innerHTML 换掉，这里补回来
   dlg.showModal();
   $('clJoinCancel').onclick = () => dlg.close();
   $('clUrl')?.focus();
