@@ -5,13 +5,16 @@ import path from 'node:path';
 import { sendJson, fail, readBody } from '../http.mjs';
 import { withExternals } from '../runtime-view.mjs';
 import { SERVER } from '../server-state.mjs';
-import { port, host, dataDir } from '../config.mjs';
+import { port, host, dataDir, trustProxy } from '../config.mjs';
 import * as netmode from '../netmode.mjs';
 import * as store from '../store.mjs';
 import * as auth from '../auth.mjs';
 import * as runtimes from '../runtimes.mjs';
 import * as cliModels from '../cli-models.mjs';
 import * as lanAnnounce from '../lan-announce.mjs';
+import { authorizeLocal } from '../security/local-policy.mjs';
+import * as localSecret from '../security/local-secret.mjs';
+import { sourceOf } from '../security/source.mjs';
 
 export async function handleRuntime(req, res, url) {
   const devices = /^\/api\/devices$/.exec(url.pathname);
@@ -95,6 +98,22 @@ export async function handleRuntime(req, res, url) {
    *      （它会以为"点了重启就坏了"）。
    */
   if (req.method === 'POST' && url.pathname === '/api/restart') {
+    /*
+     * **接口准入**（2026-10-31，IAM §8.5）：`/api/restart` 不在 `/api/local/` 前缀下，
+     * 前缀规则兜不住，所以它和本机接口共用同一张策略表（`security/local-policy.mjs` 里单列了一行）。
+     * 服务器形态下浏览器里那颗「重启」按钮不再是"谁都能点" —— 要么在本机，要么带 `X-Bandi-Local`。
+     */
+    const verdict = authorizeLocal({
+      method: req.method,
+      pathname: url.pathname,
+      source: sourceOf(req),
+      principal: req.bandiAuth ?? null,
+      hasSecret: localSecret.check(req),
+    });
+    if (!verdict.allow) {
+      fail(res, verdict.status, verdict.code, verdict.message, verdict.hint ? { hint: verdict.hint } : null);
+      return;
+    }
     const nextHost = process.env.BANDI_HOST ?? (netmode.readNetMode().allowLan ? '0.0.0.0' : '127.0.0.1');
     const willRequire = !netmode.isLoopback(nextHost);
     if (willRequire) {
@@ -106,7 +125,7 @@ export async function handleRuntime(req, res, url) {
        * → Cookie 根本设不出来 → 用户点完「重启生效」，自己那个窗口立刻撞上登录页 ✗
        * （他会以为"点了重启就坏了"）。先算这一次，令牌就造出来了 ✓。
        */
-      Object.assign(SERVER.AUTH, auth.setup({ host: nextHost, dataDir, envToken: process.env.BANDI_TOKEN }));
+      Object.assign(SERVER.AUTH, auth.setup({ host: nextHost, dataDir, envToken: process.env.BANDI_TOKEN, trustProxy }));
       if (SERVER.AUTH.token) res.setHeader('Set-Cookie', auth.cookieValue(SERVER.AUTH.token));
     }
     sendJson(res, 200, { ok: true, from: SERVER.boundHost, to: nextHost, requiresToken: willRequire });

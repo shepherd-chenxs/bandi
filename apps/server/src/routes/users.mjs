@@ -36,6 +36,7 @@
 import { sendJson, fail, readBody } from '../http.mjs';
 import * as auth from '../auth.mjs';
 import * as store from '../store.mjs';
+import * as setupCode from '../security/setup-code.mjs';
 
 const NAME_MAX = 20;
 const PASSWORD_MIN = 8;
@@ -416,6 +417,20 @@ export async function handleUsers(req, res, url) {
     if (method === 'POST' && p === '/api/users') {
       const body = await readBody(req);
       const first = !store.hasUsers();
+      /*
+       * **首个管理员要引导码**（IAM §8.6，2026-10-31）：服务器形态下 `POST /api/users`
+       * 在零账号时是免令牌的，没有这一条就是"谁先连上谁当管理员"。
+       * 判据与生成都在 `security/setup-code.mjs`：监听非回环（或声明了 trustProxy）才有码，
+       * 建成第一个管理员后文件立刻删掉。
+       * 单机形态（回环）不受影响 —— 那里"开机建账号"是既有体验。
+       */
+      if (first && req.bandiSource === 'network' && !setupCode.check(req)) {
+        throw new UserError(
+          403,
+          'E4098',
+          '创建第一个管理员需要 X-Bandi-Setup（值在数据目录的 setup_code 文件里），或在终端跑 `bandi user create <名字> --admin`',
+        );
+      }
       const name = checkName(body?.name);
       if (store.nameTaken(name)) throw new UserError(409, 'E3802', `用户名「${name}」已经有人用了`);
       const password = checkPassword(body?.password);
@@ -425,6 +440,7 @@ export async function handleUsers(req, res, url) {
        */
       if (!first) checkRole(body?.roleId);
       const user = store.createUser({ name, password, roleId: first ? 'admin' : body?.roleId });
+      if (first) setupCode.consume(); // 引导码使命结束，别留成第二个后门
       /*
        * 建第一个账号 = **首次开机设置**（2026-10-31）：顺手给创建者发一张登录会话票
        * （Set-Cookie bandi_sid，写法与 /api/login 相同）。回环桌面那边鉴权本来就免，

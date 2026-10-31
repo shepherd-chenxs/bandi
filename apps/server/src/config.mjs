@@ -138,6 +138,26 @@ export function writeReplyStyle(id) {
 export const host = process.env.BANDI_HOST ?? (clientJoined ? '127.0.0.1' : lanAllowed ? '0.0.0.0' : '127.0.0.1');
 
 /**
+ * **声明「我在可信反代 / 隧道后面」**（IAM §5.2 / §5.3，2026-10-31 新增）。
+ *
+ * 为什么要这个开关：反代把流量转进 `127.0.0.1:8787`，服务端看到的所有 peer 都是回环 ——
+ * 只按来源 IP 判"本机"，等于把整站（面板、会话、导出）对全网开放。
+ * 设了它 = 承认"回环来源不可信"，于是：
+ *   · 整站**强制认证**（哪怕监听的是回环）；
+ *   · 破坏性本机动作改由 `X-Bandi-Local`（数据目录 `local_secret`）证明"我在本机"。
+ *
+ * ⚠️ 与反代的 `proxy_set_header X-Forwarded-For` 是**一对**：配了转发头必须同时设这个，
+ * 否则请求会被判成网络来源（更严的一侧，出错只会更安全）。
+ */
+export const trustProxy = /^(1|on|true|yes)$/i.test(String(process.env.BANDI_TRUST_PROXY ?? '').trim());
+
+/**
+ * `BANDI_LOCAL_SECRET=off` —— **逃生口**，只给"反代已经 deny 掉破坏性本机路径"的部署用。
+ * 关掉后破坏性动作不再要求 `X-Bandi-Local`，启动时会打一条 warning 并写审计。
+ */
+export const localSecretDisabled = /^(0|off|false|no)$/i.test(String(process.env.BANDI_LOCAL_SECRET ?? '').trim());
+
+/**
  * 允许的**来源**（写请求的来源白名单，CSRF 那道闸）。
  * 默认只有本机自己；逗号分隔，例如：
  *   `BANDI_ORIGINS=http://192.168.1.9:8787,https://bandi.example.com`

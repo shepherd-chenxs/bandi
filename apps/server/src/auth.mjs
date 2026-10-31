@@ -7,6 +7,14 @@
  *     还会把"单机零配置、不需要 token"这条硬约束毁掉。
  *   · 监听非回环（服务器）→ **所有请求都要令牌**。
  *
+ * ⚠️ **2026-10-31 补丁（IAM §5.3，P0）**：上面这条只说了"进程听哪儿"，但**免鉴权是按请求给的**
+ * —— 反向代理把流量转进 `127.0.0.1:8787` 之后，外部请求在服务端看就是"回环来源"，
+ * 于是整套面板、会话、导出全部免登录（这是本设计里最严重的一个洞）。
+ * 现在每次请求都用 `security/source.mjs` 的 `classifySource()` 现算，四条同时成立才算本机：
+ * 未设 `BANDI_TRUST_PROXY`、无转发头、监听回环、peer 与 Host 都是本机。
+ * 判出来不是本机 → 照常走认证（`auth.required` 只决定"进程有没有令牌可用"，
+ * 不再决定"这个请求要不要认证"）。
+ *
  * 2026-10-31 用户拍板补了一层（「不管总机还是分机，都要用用户来登录」）：
  * 回环形态下 **API 照旧免鉴权**（脚本/冒烟/CLI 一个字节没变），但**浏览器抓面板 HTML
  * 要先有登录会话**（有账号而无会话 → 登录页，免密账号点了就进，见 guard 的回环分支）——
@@ -45,6 +53,15 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 // 每节点令牌存在库里（只存哈希）—— 认证层要能认出来"这是哪台机器的令牌"
 import * as store from './store.mjs';
+/*
+ * 「这个请求从哪来」的唯一判定点（IAM §5.2）。
+ * 2026-10-31 起**本文件不再自己判 remoteAddress** —— 原来那句
+ * `if (isLoopbackHost(host)) return { required:false }` 在反代部署下等于全站免登录。
+ */
+import { classifySource, cfgNow, isLoopbackHost } from './security/source.mjs';
+import { warning as tlsWarning } from './security/tls-check.mjs';
+
+export { isLoopbackHost };
 
 const COOKIE = 'bandi_token';
 const HEADER = 'x-bandi-token';
@@ -64,10 +81,7 @@ const SID_MAX_AGE = 30 * 86400;
 
 
 /** 这个监听地址算不算"只有本机能访问" */
-export function isLoopbackHost(host) {
-  const h = String(host ?? '').trim().toLowerCase();
-  return h === '127.0.0.1' || h === 'localhost' || h === '::1' || h === '[::1]';
-}
+// isLoopbackHost 现在住在 security/source.mjs（本文件上面 import 并原样导出，对外 API 不变）
 
 /**
  * 取令牌：显式环境变量优先，否则数据目录里那个文件（没有就生成一个）。
@@ -100,9 +114,16 @@ export function ensureToken(dataDir, envToken) {
  * ⚠️ 免鉴权时**连令牌文件都不碰** —— 单机该是零安全痕迹的，
  * 否则数据目录里会平白多出一个 `token`，让人猜"这是干嘛的"。
  * 真开成非回环了，下次启动自己会生成（也不丢已登录的会话，因为那时才需要）。
+ *
+ * **2026-10-31 修（IAM §5.3，P0）**：`required` 还要看 `trustProxy` ——
+ * `BANDI_TRUST_PROXY=1 + 监听回环` 时，`guard()` 逐请求要求认证（回环不再可信），
+ * 但进程若还按"回环 = 免鉴权"不生成令牌，根令牌 / CLI / break-glass 就全断了：
+ * 会话能登进来，脚本和应急入口却无凭据可用。所以两个条件一起决定，并且
+ * required 为真时**必须**加载/生成 token。
  */
-export function setup({ host, dataDir, envToken }) {
-  if (isLoopbackHost(host)) return { required: false, token: '', from: '', created: false };
+export function setup({ host, dataDir, envToken, trustProxy = false }) {
+  const required = !isLoopbackHost(host) || !!trustProxy;
+  if (!required) return { required: false, token: '', from: '', created: false };
   return { required: true, ...ensureToken(dataDir, envToken) };
 }
 
@@ -424,6 +445,20 @@ export function decide(who, method, pathname) {
    *     和"一个普通员工该能干什么"完全对得上；再抄一份新白名单，两边迟早走偏。
    */
   if (who.kind === 'user') {
+    /*
+     * **免密账号的受限会话**（IAM §8.6，2026-10-31 补）：
+     * 服务器形态下"没设密码的管理员"等于"任何人打开网页就能改安全策略"。
+     * 但也不能不让他登录 —— 那样"登录后改密码"这条路永远到不了（评审抓到的死锁）。
+     * 折中：能登录，但只放行**引导页必需的那几条**，其余 403 E4098。
+     * 单机（回环）不受这条约束 —— 回环 = 这台机器自己的屏幕。
+     */
+    if (who.restricted) {
+      const open =
+        (method === 'GET' && ['/api/me', '/api/state', '/api/skills', '/api/web-version'].includes(pathname))
+        || (method === 'POST' && pathname === '/api/me/password')
+        || (method === 'GET' && !pathname.startsWith('/api/')); // 静态资源：不然页面根本起不来
+      return open ? 'allow' : 'E4098';
+    }
     if (who.admin) return 'allow';
     /*
      * `/api/me` 必须对**任何已登录账号**成立 —— 它是"我是谁"，登录完第一件事就是问它，
@@ -510,6 +545,16 @@ export function mayManage(req) {
  */
 export function guard(auth, req, res, url) {
   /*
+   * **先判这次请求从哪来**（IAM §5.2 / §5.3）。
+   *
+   * 这条必须在所有豁免之前：下面每一条"免令牌"都只对**真·本机**成立，
+   * 而 `remoteAddress` 在反代后面一律是 127.0.0.1 —— 拿它当"本机证明"等于没有闸。
+   * 判完挂在 `req.bandiSource` 上，下游（本机接口策略、/api/state 的显隐）读它，别再各判一遍。
+   */
+  const source = classifySource(req, cfgNow());
+  req.bandiSource = source;
+
+  /*
    * 免令牌的两条：
    *   · 加入：这台机器**还没有令牌**，凭一次性的邀请码进来（邀请码就是它的凭据，见 /api/nodes/join）。
    *   · `GET /api/hello`（2026-10-20）：加入向导"探这个地址"打的就是它。
@@ -574,17 +619,17 @@ export function guard(auth, req, res, url) {
   if (req.method === 'GET' && (url.pathname === '/js/pair-claim.mjs' || url.pathname.startsWith('/icons/'))) return true;
 
   /*
-   * 数字员工的本机 AI 通道（2026-10-23，skills/bandi-avatar）：回环发起的 /api/ai/* 免令牌。
+   * 数字员工的本机 AI 通道（2026-10-23，skills/bandi-avatar）：**真·回环**发起的 /api/ai/* 免令牌。
    * 员工跑在 CLI 里，拿不到平台令牌，让技能教它 curl 时无凭据可用 —— 通道自身有
-   * 回环来源校验 + CSRF 闸双保险（routes/imageai.mjs），就算 BANDI_HOST=0.0.0.0
-   * 强开监听，局域网机器也摸不到。回环判据与 routes/local.mjs 的 isLoopbackRemote 一致。
+   * 来源校验 + CSRF 闸双保险（routes/imageai.mjs）。
+   *
+   * 2026-10-31 修（IAM §5.3 第 2 条）：原来这里自己判 `req.socket.remoteAddress`，
+   * 反代后面外部请求也是 127.0.0.1 → 直接免令牌。现在统一用 `classifySource`：
+   * 只有 `loopback` 才豁免，`network` 一律走认证。
    */
-  if (url.pathname.startsWith('/api/ai/')) {
-    const a = String(req.socket?.remoteAddress ?? '').trim().toLowerCase();
-    if (a === '::1' || a === 'localhost' || a === '127.0.0.1' || a.startsWith('::ffff:127.') || a.startsWith('127.')) return true;
-  }
+  if (url.pathname.startsWith('/api/ai/') && source === 'loopback') return true;
 
-  if (!auth.required) {
+  if (!auth.required && source === 'loopback') {
     /*
      * 回环形态（桌面版 / 单机 / 分机本机）—— 2026-10-31 用户拍板升级：
      * 「不管总机还是分机，都要用用户来登录」。落成两条，**API 与面板分开**：
@@ -645,6 +690,8 @@ export function guard(auth, req, res, url) {
           userId: hit.user.id,
           roleId: hit.user.roleId,
           admin: hit.user.roleId === 'admin',
+          // 免密 + 服务器形态 = 受限会话（见 decide 里的那段，IAM §8.6）
+          restricted: !hit.user.hasPassword && source === 'network',
           via: 'session',
         };
       }
@@ -666,6 +713,23 @@ export function guard(auth, req, res, url) {
           code: 'E4012',
           platform: 'bandi',
           hint: '在总机上重新发一个邀请码；在这台机器上：设置 →「这台机器」→ 退出总机 → 再加入。',
+        }),
+      );
+      return false;
+    }
+
+    if (decision === 'E4098') {
+      /*
+       * 免密账号在服务器形态下的受限会话（IAM §8.6）：能登录、能改密码，别的都不给。
+       * 文案要指路，否则用户只会看到"什么都没权限"。
+       */
+      res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(
+        JSON.stringify({
+          error: '这个账号还没设密码，在服务器形态下只能先设密码（其余操作一律拒绝）',
+          code: 'E4098',
+          platform: 'bandi',
+          hint: '在「我的」页设置密码，或在服务器终端跑 `bandi user create` / 让管理员重置密码。设完密码重新登录即可正常使用。',
         }),
       );
       return false;
@@ -697,8 +761,7 @@ export function guard(auth, req, res, url) {
       return false;
     }
 
-    if (decision === 'E4033') {
-      /*
+    if (decision === 'E4033') {      /*
        * 两条不同的路走到同一个码，文案必须分开 —— 手机用户看到"手机端只开放…"
        * 会莫名其妙，登录用户看到"手机端"更莫名其妙（2026-10-28 第三刀）。
        */
@@ -756,7 +819,10 @@ export function guard(auth, req, res, url) {
   res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
   res.end(
     JSON.stringify({
-      error: '需要访问令牌（这个控制面没有监听回环地址）',
+      error:
+        source === 'network'
+          ? '需要登录或访问令牌（这个请求不是从本机直接发起的）'
+          : '需要访问令牌（这个控制面没有监听回环地址）',
       code: 'E4010',
       platform: 'bandi',
       hint: '带 X-Bandi-Token 头，或浏览器打开首页用账号登录。令牌在数据目录的 token 文件里。',
@@ -976,6 +1042,15 @@ function loginPage({ hasUsers, loopback = false, users = null }) {
   button:active { transform: translateY(1px); }
   button[disabled] { opacity: .55; cursor: default; }
   .bad { color: var(--bad); font-size: 12.5px; margin: 0 0 12px; }
+  /* 明文告警条（IAM §10.1.1）：监听非回环又没声明反代时，登录页顶上一条黄的 ——
+     这是"人一定会看到"的位置；只写日志的话，部署的人永远不知道密码在明文里跑。 */
+  .warnbar {
+    margin: 0 0 18px; padding: 9px 11px; border-radius: 10px; font-size: 12px; line-height: 1.5;
+    color: #7a4b00; background: #fff4d6; border: 1px solid #f0d089;
+  }
+  @media (prefers-color-scheme: dark) {
+    .warnbar { color: #ffd993; background: #3a2c12; border-color: #6b5220; }
+  }
   .hint { margin: 14px 0 0; font-size: 12.5px; color: var(--dim); text-align: center; }
   .hint a { color: var(--accent); text-decoration: none; }
   /* 账号磁贴（回环登录页）：电脑开机选账户的版式，放进卡片里当网格 */
@@ -995,6 +1070,7 @@ function loginPage({ hasUsers, loopback = false, users = null }) {
 </head>
 <body>
   <main class="card">
+    ${tlsWarning() ? `<p class="warnbar">${esc(tlsWarning())}</p>` : ''}
     <div id="loginPane">
       <header class="brand">
         <div class="logo">

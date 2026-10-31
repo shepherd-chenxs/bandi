@@ -13,20 +13,17 @@
  */
 import { sendJson, fail, readBody, guardWrite } from '../http.mjs';
 import * as imagegen from '../imagegen.mjs';
+import { sourceOf } from '../security/source.mjs';
 
-/* 与 routes/local.mjs 的 isLoopbackRemote 同判据（不跨文件引，避免路由互相依赖） */
-function isLoopbackRemote(address) {
-  const a = String(address ?? '').trim().toLowerCase();
-  if (!a) return false;
-  if (a === '::1' || a === '127.0.0.1' || a === 'localhost') return true;
-  if (a.startsWith('::ffff:127.')) return true; // IPv4-mapped（Node 在双栈 socket 上会这么报）
-  return a.startsWith('127.');
-}
-
+/*
+ * 2026-10-31（IAM §5.3 第 3 条）：这里原来自己抄了一份 `isLoopbackRemote`，判的是
+ * `req.socket.remoteAddress` —— 反代后面外部请求也是 127.0.0.1，等于这条路对外敞开。
+ * 现在只认 `classifySource()` 的结论（guard 已经算过并挂在 `req.bandiSource` 上）。
+ */
 export async function handleImageAi(req, res, url) {
   if (!url.pathname.startsWith('/api/ai/')) return false;
 
-  if (!isLoopbackRemote(req.socket?.remoteAddress)) {
+  if (sourceOf(req) !== 'loopback') {
     return fail(res, 403, 'E2607', 'AI 生图通道只对本机开放（数字员工与设置页用）'), true;
   }
 

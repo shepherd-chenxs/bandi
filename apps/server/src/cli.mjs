@@ -31,6 +31,7 @@
  * 分隔线只用半角 `-`。生成给 cmd 的 `.cmd` 一律**纯 ASCII + CRLF**（这项目踩过两次）。
  */
 import fs from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
 import readline from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
@@ -454,6 +455,166 @@ function doMode() {
   return out.join('\n');
 }
 
+/* ------------------------------------------------------------ 调本机 API */
+
+/*
+ * **为什么 CLI 也走 HTTP、不直接写库**（IAM §10.1.3 / §13）：
+ *   · 单写者：库只由服务进程写，CLI 直连库会和它抢 WAL、还会绕过所有校验；
+ *   · 服务器形态下浏览器根本做不了破坏性动作（要 `X-Bandi-Local`），
+ *     "本机终端"就是唯一合法的执行者 —— 而它只能用同一套接口，不能开后门。
+ * 三个头各管一件事，缺哪个由服务端说了算：
+ *   X-Bandi-Token  身份（root 令牌 = operator）
+ *   X-Bandi-Local  "我在这台机器的文件系统上"（值 = 数据目录 local_secret）
+ *   X-Bandi-Setup  只有"零账号 + 服务器形态"建第一个管理员时才需要
+ */
+function apiHeaders(extra = {}) {
+  const h = { 'Content-Type': 'application/json', ...extra };
+  const t = readText(path.join(dataDir, 'token'));
+  if (t) h['X-Bandi-Token'] = t;
+  const s = readText(path.join(dataDir, 'local_secret'));
+  if (s) h['X-Bandi-Local'] = s;
+  const sc = readText(path.join(dataDir, 'setup_code'));
+  if (sc) h['X-Bandi-Setup'] = sc;
+  return h;
+}
+
+/** 一个最小的 HTTP 调用（不引依赖；只打 127.0.0.1） */
+function api(port, { method = 'GET', path: p = '/', body = null, timeout = 30000 } = {}) {
+  return new Promise((resolve) => {
+    const payload = body === null ? null : Buffer.from(JSON.stringify(body), 'utf8');
+    const req = http.request(
+      {
+        host: '127.0.0.1',
+        port,
+        method,
+        path: p,
+        timeout,
+        headers: { ...apiHeaders(), ...(payload ? { 'Content-Length': payload.length } : {}) },
+      },
+      (res) => {
+        let text = '';
+        res.on('data', (d) => (text += d));
+        res.on('end', () => {
+          let j = null;
+          try {
+            j = JSON.parse(text);
+          } catch { /* 不是 JSON 就把原文给调用方 */ }
+          resolve({ status: res.statusCode, json: j, text });
+        });
+      },
+    );
+    req.on('error', (e) => resolve({ status: 0, json: null, text: String(e?.message ?? e) }));
+    req.on('timeout', () => {
+      req.destroy();
+      resolve({ status: 0, json: null, text: '超时' });
+    });
+    if (payload) req.write(payload);
+    req.end();
+  });
+}
+
+/** 服务没在跑就没法调接口 —— 说清楚怎么办，别丢一个 ECONNREFUSED 给人 */
+async function needService() {
+  const s = await detect();
+  if (!s.running) return { error: `班底没在跑（先 ${cyan('bandi start')}，或 ${cyan('bandi status')} 看它在哪个端口）` };
+  return { port: s.port };
+}
+
+const errText = (r) => (r.json?.code ? `${r.json.code}：${r.json.error}` : r.text || `HTTP ${r.status}`);
+
+/* --------------------------------------------------------------- collab */
+
+async function cmdCollab(argv) {
+  const words = argv.filter((a) => !a.startsWith('-'));
+  const sub = words[1] ?? 'status';
+  const svc = await needService();
+  if (svc.error) return svc.error;
+
+  if (sub === 'status') {
+    const r = await api(svc.port, { path: '/api/local/collab/status' });
+    if (r.status !== 200) return red(errText(r));
+    const j = r.json ?? {};
+    if (!j.joined) return `未加入任何协作中心${j.centerUrl ? dim(`（上次退出的是 ${j.centerUrl}）`) : ''}`;
+    return [
+      `已加入协作中心 ${green(j.centerLabel || j.centerUrl || '?')}`,
+      `  中心  ${j.centerUrl ?? '?'}`,
+      `  分公司 ${j.branchId ?? '?'}${j.online === false ? `  ${yellow('（中心当前不可达）')}` : ''}`,
+    ].join('\n');
+  }
+
+  if (sub === 'join') {
+    const url = words[2];
+    const code = words[3];
+    if (!url) return '用法：bandi collab join <中心地址> [接入码]';
+    const r = await api(svc.port, { method: 'POST', path: '/api/local/collab/join', body: { url, code } });
+    if (r.status !== 200) return red(errText(r));
+    return `${green('已加入')}「${r.json?.centerLabel ?? url}」（${r.json?.branchId ?? '?'}）`;
+  }
+
+  if (sub === 'leave') {
+    const r = await api(svc.port, { method: 'POST', path: '/api/local/collab/leave' });
+    if (r.status !== 200) return red(errText(r));
+    return `${green('已退出协作中心')}（本地项目与卡片都还在）`;
+  }
+
+  return `不认识的子命令：collab ${sub}\n（bandi collab status | join <地址> [码] | leave）`;
+}
+
+/* ----------------------------------------------------------------- data */
+
+async function cmdData(argv) {
+  const words = argv.filter((a) => !a.startsWith('-'));
+  if ((words[1] ?? '') !== 'export') return '用法：bandi data export [--dir 目录]';
+  const svc = await needService();
+  if (svc.error) return svc.error;
+  const dir = argOf(argv, '--dir');
+  const r = await api(svc.port, { method: 'POST', path: '/api/local/export', body: dir ? { dir } : {} });
+  if (r.status !== 200) return red(errText(r));
+  return `${green('已导出')} ${r.json?.file}\n  ${dim(fmtSize(r.json?.size) || '')}`;
+}
+
+/* ----------------------------------------------------------------- user */
+
+async function cmdUser(argv) {
+  const words = argv.filter((a) => !a.startsWith('-'));
+  const sub = words[1] ?? 'list';
+  const svc = await needService();
+  if (svc.error) return svc.error;
+
+  if (sub === 'list') {
+    const r = await api(svc.port, { path: '/api/users' });
+    if (r.status !== 200) return red(errText(r));
+    const list = r.json?.users ?? [];
+    if (!list.length) return '还没有任何账号 —— 用 bandi user create <名字> --admin';
+    return list.map((u) => `  ${u.name}${u.roleId ? dim(` · ${u.roleId}`) : ''}${u.disabled ? dim(' · 已禁用') : ''}${u.hasPassword ? '' : dim(' · 免密')}`).join('\n');
+  }
+
+  if (sub === 'create') {
+    const name = words[2];
+    if (!name) return '用法：bandi user create <名字> [--admin] [--password 密码]';
+    const password = argOf(argv, '--password') ?? '';
+    const body = { name, ...(password ? { password } : {}), ...(argv.includes('--admin') ? { roleId: 'admin' } : {}) };
+    const r = await api(svc.port, { method: 'POST', path: '/api/users', body });
+    if (r.status !== 201 && r.status !== 200) return red(errText(r));
+    let out = `${green('已创建')}「${name}」${r.json?.first ? '（第一个账号，自动是管理员）' : ''}`;
+    if (!password) {
+      out += dim('\n  没设密码 = 免密账号（回环形态下点一下就进）');
+      /*
+       * 服务器形态建免密账号要告知后果（IAM §8.6 受限会话）：从别的机器登录
+       * 这个号只能先设密码，其余操作一律 E4098 —— 不阻断（本机回环用免密依然合理），
+       * 但得让运维在创建的那一刻就知道，而不是登录之后撞了墙再回来问。
+       */
+      const st = await api(svc.port, { path: '/api/state' });
+      if (st.status === 200 && st.json?.localSecret === 'required') {
+        out += dim('\n  ⚠ 这个服务开着局域网访问：这个号从其它机器登录时是受限会话（只能先设密码，其余操作一律拒绝）。\n    建议直接带上密码：bandi user create <名字> --password <密码>');
+      }
+    }
+    return out;
+  }
+
+  return `不认识的子命令：user ${sub}\n（bandi user list | create <名字> [--admin] [--password 密码]）`;
+}
+
 /* --------------------------------------------------------- install-cli */
 
 /*
@@ -541,6 +702,14 @@ const HELP = `班底 · 命令行
   bandi logs [-n 40] [-f]  日志（-f 跟着走）
   bandi node               执行节点状态（只读）
   bandi mode               这台机器是什么身份（只读；改模式去页面）
+  bandi collab [status]    协作中心：我加入了谁
+  bandi collab join <地址> [接入码]
+  bandi collab leave       退出协作中心（本地项目与卡片都还在）
+  bandi data export [--dir 目录]
+                           导出数据快照（服务器形态下这是唯一入口）
+  bandi user list          账号列表
+  bandi user create <名字> [--admin] [--password 密码]
+                           建账号（服务器形态下建第一个管理员用它）
   bandi install-cli        把 bandi 装成一个全局命令
                            [--dir 目录] [--path] [--remove] [--dry-run]
   bandi version | help
@@ -622,6 +791,24 @@ async function main() {
     case 'mode':
       console.log(doMode());
       return 0;
+
+    case 'collab': {
+      console.log(await cmdCollab(argv));
+      return 0;
+    }
+
+    case 'data': {
+      const out = await cmdData(argv);
+      console.log(out);
+      return /^用法/.test(out) ? 2 : 0;
+    }
+
+    case 'user':
+    case 'users': {
+      const out = await cmdUser(argv);
+      console.log(out);
+      return /^用法|不认识的子命令/.test(out) ? 2 : 0;
+    }
 
     case 'install-cli':
       console.log(

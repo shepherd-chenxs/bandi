@@ -4,7 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
-import { port, repoRoot, host, dataDir, dbPath, extraOrigins } from './config.mjs';
+import { port, repoRoot, host, dataDir, dbPath, extraOrigins, trustProxy, localSecretDisabled } from './config.mjs';
 import * as netmode from './netmode.mjs';
 import * as store from './store.mjs';
 import * as auth from './auth.mjs';
@@ -33,6 +33,10 @@ import * as experts from './experts.mjs';
 import * as localMode from './local-mode.mjs';
 import * as discover from './discover.mjs';
 import * as lanAnnounce from './lan-announce.mjs';
+import * as localSecret from './security/local-secret.mjs';
+import * as setupCode from './security/setup-code.mjs';
+import * as tlsCheck from './security/tls-check.mjs';
+import { isLoopbackHost } from './security/source.mjs';
 import { handleConversation } from './routes/conversation.mjs';
 import { handlePair } from './routes/pair.mjs';
 import { handleEvents } from './routes/events.mjs';
@@ -186,6 +190,15 @@ const routes = {
       // 被「不显示」收走的会话：**只给聊天记录抽屉用**（2026-10-20 去掉会话归档后）。
       // 不并进 conversations —— 那条是热路径，工作台/通讯录都在吃，混进隐藏的会凭空多出行。
       hiddenConversations: store.listHiddenConversations(),
+      /*
+       * **这个请求从哪来 + 破坏性动作要不要秘密**（2026-10-31，IAM §10.1.3）。
+       * 前端据此**显隐**破坏性按钮：服务器形态（`localSecret: 'required'`）下浏览器里
+       * 不渲染「导出 / 导入 / 协作加入」这些按钮（它们要由本机终端用 CLI 执行），
+       * 而不是渲染出来再报 E4097 —— 那等于给用户一个永远点不动的按钮。
+       * `source` 同时给"当前是不是本机"的判断用，页面**不猜**。
+       */
+      source: req.bandiSource ?? 'loopback',
+      localSecret: localSecret.mode(),
     });
   },
 
@@ -396,7 +409,21 @@ const routes = {
 
 /** 带路径参数的路由单独处理 */
 
-SERVER.AUTH = auth.setup({ host, dataDir, envToken: process.env.BANDI_TOKEN });
+SERVER.AUTH = auth.setup({ host, dataDir, envToken: process.env.BANDI_TOKEN, trustProxy });
+
+/*
+ * **本机文件秘密**（IAM §5.2）：服务器形态下"我在本机"的唯一证明。
+ * 启动即生成（0600，一次生成、之后复用）—— 生不成也不拦启动：只是破坏性动作一律 E4097。
+ */
+localSecret.ensure();
+if (localSecretDisabled) {
+  console.warn('[安全] BANDI_LOCAL_SECRET=off：破坏性本机动作（导出/导入/加入/重启）不再要求 X-Bandi-Local —— 请确认反代已 deny 这些路径');
+}
+/*
+ * **首个管理员的引导码**（IAM §8.6）：服务器形态 + 库里零账号时才有意义。
+ * 有了它，"谁先连上谁当管理员"就不成立了 —— 建号必须证明"我读得到数据目录"。
+ */
+if (setupCode.sync()) console.warn('[安全] 还没有任何账号：创建第一个管理员需要 X-Bandi-Setup（值在数据目录 setup_code 文件里），或用 `bandi user create <名字> --admin`');
 /*
  * 这个进程**现在**听的是哪儿 —— 不只是启动时那个 `host`。
  *
@@ -783,6 +810,18 @@ if (localMode.isJoined()) {
       }
     })();
   }
+}
+
+/*
+ * **明文检测**（IAM §10.1.1）：监听非回环、没声明反代、也没配 TLS → 告警；
+ * `BANDI_TLS_STRICT=on` 时**拒绝启动**（给"我必须防呆"的公网部署用）。
+ * 位置在 listen 之前：拒绝启动就别先占端口，否则运维会看到一个"起着但没用"的进程。
+ */
+const tlsState = tlsCheck.evaluate(SERVER.boundHost);
+if (tlsState.warn) console.warn(`[安全] ${tlsState.text}`);
+if (tlsState.fatal) {
+  console.error('[安全] BANDI_TLS_STRICT=on：拒绝以明文对外监听。用反代/隧道终结 TLS，或设 BANDI_TRUST_PROXY=1 声明"证书在外层"。');
+  process.exit(1);
 }
 
 server.listen(port, SERVER.boundHost, logListen);
