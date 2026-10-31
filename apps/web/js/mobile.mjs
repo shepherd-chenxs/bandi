@@ -16,6 +16,7 @@
  */
 import { applyMenuGating, load, setNav } from './state.mjs';
 import { $ } from './core.mjs';
+import { closeDrawer } from './experts.mjs';
 
 /* ---------------------------------------------------------------- ① 断点 */
 
@@ -39,19 +40,32 @@ applyBreakpoints();
 
 let listScroll = 0;
 
+/** 从被点的列表行里取标题（会话/员工/群的行结构都是 `.who > .line1 > b`） */
+function rowTitle(row) {
+  return row?.querySelector('.line1 b')?.textContent?.trim() ?? '';
+}
+
 /** 进详情：记下列表滚动位置（返回时恢复 —— PRD P0-1"列表滚动位置在返回时保留"） */
-function enterDetail() {
+function enterDetail(title) {
   if (!isNarrow()) return;
   const body = document.body;
   if (body.classList.contains('mb-detail-open')) return;
   listScroll = $('listBody')?.scrollTop ?? 0;
+  // 返回栏右侧显示当前这一页是谁（2026-11 用户要求：人名放返回按钮右边）
+  const t = backbar.querySelector('.mb-back-title');
+  if (t) t.textContent = title || '';
   body.classList.add('mb-detail-open');
 }
 
 /** 返回列表：摘掉展开态，把滚动位置还给列表 */
 function leaveDetail() {
+  // 抽屉（聊天记录 / 群设置）是 fixed 覆盖层，不归详情态的折叠管 —— 不主动关掉，
+  // 退回列表后它照样盖在屏幕上，看起来"还是聊天记录"（2026-11 用户实报）。
+  closeDrawer();
   if (!document.body.classList.contains('mb-detail-open')) return;
   document.body.classList.remove('mb-detail-open');
+  // 聊天页自带的返回按钮（chat.mjs 的 .mb-chat-back）随页面一起退场
+  document.body.classList.remove('mb-chat');
   requestAnimationFrame(() => {
     if ($('listBody')) $('listBody').scrollTop = listScroll;
   });
@@ -69,15 +83,24 @@ $('listBody').addEventListener('click', (e) => {
   if (!row) return;
   // 点「＋」菜单或分组折叠标题这类不换页的行不动：折叠标题带 data-sec，排除
   if (e.target.closest('[data-sec]')) return;
-  requestAnimationFrame(enterDetail);
+  const title = rowTitle(row);
+  requestAnimationFrame(() => enterDetail(title));
 });
 
-/* 「← 返回」栏：单例 DOM 挂 body 上（grid 里占一行，见 mobile.css 的行模板） */
+/* 「← 返回」栏：单例 DOM 挂 body 上（grid 里占一行，见 mobile.css 的行模板）。
+ * 左边只有图标，右边是当前详情页的人名/标题（2026-11 用户要求）。 */
 const backbar = document.createElement('div');
 backbar.className = 'mb-backbar';
-backbar.innerHTML = '<button type="button" class="mb-back" aria-label="返回列表">← 返回</button>';
+backbar.innerHTML =
+  '<button type="button" class="mb-back" aria-label="返回列表">' +
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>' +
+  '</button><span class="mb-back-title"></span>';
 backbar.querySelector('button').addEventListener('click', leaveDetail);
 document.body.append(backbar);
+
+// 聊天页自带的返回按钮（chat.mjs 的 .mb-chat-back）派这个事件回来 —— 走事件
+// 而不是 import，避免 chat.mjs 反向依赖 mobile.mjs 造成循环
+document.addEventListener('mb-back', leaveDetail);
 
 // Esc 逐级后退：窄屏且详情开着时接管，别抢弹窗的 Esc（弹窗在 open 时 keydown 冒到 document，
 // 这里只在"没有 dialog 开着"的情况下退）
@@ -100,6 +123,8 @@ $('listBody').addEventListener(
     if (!isNarrow()) return;
     const row = e.target.closest('[data-conv], [data-persona], [data-group], [data-set], .item');
     if (!row || e.target.closest('[data-sec]')) return;
+    // 从聊天页跳到别的详情页：先摘掉 mb-chat，聊天头那个返回按钮不该继续占着
+    document.body.classList.remove('mb-chat');
     // 详情已经开着就别再压历史（2026-10-28）：连点几次行会攒出多层"返回"，
     // 手机上要按好几次手势才退得出去 —— 一次折叠只对应一格历史。
     if (document.body.classList.contains('mb-detail-open')) return;
@@ -144,6 +169,9 @@ tabbar.querySelectorAll('.mb-tab').forEach((b) => {
   b.addEventListener('click', () => {
     // 点 tab 先退出详情折叠态：换一级页是回到"一级页"
     document.body.classList.remove('mb-detail-open');
+    document.body.classList.remove('mb-chat');
+    // 抽屉是 fixed 覆盖层，换一级页时必须一起关，否则新页面被旧抽屉盖住
+    closeDrawer();
     setNav(b.dataset.tab);
     syncTabs();
   });

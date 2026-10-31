@@ -57,6 +57,47 @@
 
   /* 列表行加大触控行高（PRD P0-1：≥48px） */
   .list-body .item { min-height: 48px; }
+
+  /*
+   * 窄屏整体字号上调一档（2026-11 用户反馈"比主流 App 小"）：
+   * 桌面正文 15px、单标题 15px；手机上和微信对齐到正文 16、标题 17。
+   * 只动窄屏，桌面端一个像素不变。
+   */
+  :root { --t-page: 17px; }
+  body { font-size: 16px; }
+
+  /*
+   * 手机上的字号/间距配比（2026-11 用户反馈"骨感"，对照主流 IM 调）：
+   * 桌面那套 13.5/12px + 2px 缝隙在手机上字太小、空太大，一屏扫过去没有层级。
+   * 这里只动窄屏，数值对齐微信：主标题 17/600、副标题 14、时间 12、头像 48。
+   */
+  .item .line1 b { font-size: 17px; font-weight: 600; }
+  .item .line2 { font-size: 14px; }
+  .item .line1 span { font-size: 12px; }
+  .avatar { width: 48px; height: 48px; flex-basis: 48px; font-size: 16px; }
+  .item + .item { margin-top: 0; border-top: 1px solid var(--line); }
+
+  /*
+   * 工作台：桌面是卡片网格（每张卡一个边框 + 圆角 + 白底 + 8px 间距），
+   * 搬到手机上就成了"一屏只能放 5 个卡片、每个都孤零零"的桌面感
+   * （2026-11 用户反馈"跟主流 App 风格差别大"）。
+   * 窄屏改成**分组列表**：去边框/圆角/底色，一行一个入口，行间内缩分割线，
+   * 分组之间靠间距和分组标题区分 —— 就是主流 App 的"设置/我的"那一页。
+   */
+  .plg-grid { grid-template-columns: 1fr; gap: 0; }
+  .plg-grid .plg-card {
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    padding: 13px 16px;
+    align-items: center;
+    border-bottom: 1px solid var(--line);
+  }
+  .plg-grid .plg-card:last-child { border-bottom: 0; }
+  .plg-grid .plg-card .plg-desc-clamp {
+    -webkit-line-clamp: 1;
+    font-size: 13px;
+  }
   .list-head { padding: 12px 14px 8px; }
   .list-search input { height: 40px; }
 
@@ -92,9 +133,73 @@
   background: transparent;
   color: var(--accent, #3b6ef5);
   font: inherit;
-  font-size: 15px;
-  padding: 8px 10px;
+  /* 只留一个 chevron 图标（2026-11 用户要求：< 这种），SVG 保证线条粗细稳定 */
+  display: inline-flex;
+  align-items: center;
+  padding: 10px 12px 10px 4px;
   cursor: pointer;
+}
+
+.mb-back svg {
+  width: 22px;
+  height: 22px;
+}
+
+/* 返回按钮右边：当前详情页是谁（会话名 / 员工名 / 设置分节名） */
+.mb-back-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 17px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-right: 10px;
+}
+
+/*
+ * 聊天页（body.mb-chat，由 chat.mjs 渲染时打上）：聊天头自己带了返回按钮，
+ * 通用返回栏让位 —— 返回/人名/新会话/聊天记录挤在**同一行**（2026-11 用户要求）。
+ * 选择器权重与上面那条 `body.mb-detail-open .mb-backbar` 相同，靠后写覆盖。
+ */
+body.mb-chat .mb-backbar {
+  display: none;
+}
+
+/*
+ * 光藏返回栏还不够：详情态的行模板是 `44px minmax(0,1fr)`（第一行留给返回栏），
+ * 聊天页不用那一行，得把行模板也改回单行，否则顶部空 44px（2026-11 用户实报）。
+ */
+body.mb-chat {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+body.mb-chat main {
+  grid-row: 1;
+}
+
+/*
+ * 抽屉（聊天记录 / 群设置）：窄屏全屏，左边不留背景缝（2026-11 用户要求）。
+ * 桌面那版是 `width: 420px; max-width: 92vw` —— 手机上 92vw 会在左边露出 8% 的
+ * scrim，看着像没盖严。
+ *
+ * ⚠️ 必须包在 @media 里：`#drawer` 是 ID 选择器（1,0,0），mobile.css 又在
+ * style.css 之后加载，写成全局规则会把**桌面端**的抽屉也撑成全屏。
+ */
+@media (max-width: 900px) {
+  #drawer {
+    width: 100%;
+    max-width: 100%;
+  }
+}
+
+body.mb-chat .chat-head {
+  padding-left: 4px;
+  gap: 8px;
+}
+
+body.mb-chat .chat-head .mb-chat-back {
+  padding: 8px 6px 8px 2px;
 }
 
 /* ============================================================ 600px 档：底部导航 + 紧凑 */
