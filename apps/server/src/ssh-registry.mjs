@@ -18,6 +18,54 @@ export const expandHome = (p) =>
 export const REGISTRY_PATH = expandHome(process.env.BANDI_SSH_REGISTRY || '~/.bandi/servers.yaml');
 
 /**
+ * 密码的存放处 —— **故意和登记表分开**：
+ * servers.yaml 是给人看、给人改的（MCP / 手工编辑都会碰它），口令放里面迟早被带出去；
+ * 这里单放一份 JSON，界面、MCP、ssh 执行层都只拿 `getPassword(alias)`，谁也不回显它。
+ * mode 0600 在 Windows 上只落个只读位（NTFS ACL 管不了 fs 层），但文件在用户 profile 里，
+ * 和 ~/.ssh 私钥同一个威胁模型 —— 不比钥匙文件差。
+ */
+export const SECRETS_PATH = expandHome(process.env.BANDI_SSH_SECRETS || '~/.bandi/ssh-secrets.json');
+
+const readSecrets = () => {
+  try {
+    const m = JSON.parse(fs.readFileSync(SECRETS_PATH, 'utf8'));
+    return m && typeof m === 'object' ? m : {};
+  } catch {
+    return {};
+  }
+};
+
+function writeSecrets(map) {
+  fs.mkdirSync(path.dirname(SECRETS_PATH), { recursive: true });
+  const tmp = path.join(path.dirname(SECRETS_PATH), '.ssh-secrets.json.tmp');
+  fs.writeFileSync(tmp, JSON.stringify(map, null, 2), { encoding: 'utf8', mode: 0o600 });
+  fs.renameSync(tmp, SECRETS_PATH);
+  try { fs.chmodSync(SECRETS_PATH, 0o600); } catch { /* Windows 上是只读位，尽力就好 */ }
+}
+
+const secretKey = (alias) => String(alias ?? '').toLowerCase();
+
+export function setPassword(alias, password) {
+  const m = readSecrets();
+  m[secretKey(alias)] = String(password ?? '');
+  writeSecrets(m);
+}
+
+export function getPassword(alias) {
+  return String(readSecrets()[secretKey(alias)] ?? '');
+}
+
+export function clearPassword(alias) {
+  const m = readSecrets();
+  const k = secretKey(alias);
+  if (!(k in m)) return;
+  delete m[k];
+  writeSecrets(m);
+}
+
+export const hasPassword = (alias) => Boolean(getPassword(alias));
+
+/**
  * 没填 key_path 时的默认私钥路径 —— **单一来源**：界面展示、key_state 判断、
  * ssh-keygen 落盘（ssh-exec.keyPathOf）都走它，谁也别自己再拼一遍。
  */
@@ -36,7 +84,7 @@ function badInput(message) {
 }
 
 export const KEYS = [
-  'alias', 'host', 'port', 'user', 'key_path', 'key_algorithm', 'key_fingerprint',
+  'alias', 'host', 'port', 'user', 'auth_type', 'key_path', 'key_algorithm', 'key_fingerprint',
   'host_fingerprint', 'host_fingerprint_verified', 'last_checked', 'status', 'purpose',
 ];
 
@@ -110,7 +158,7 @@ export function serialize(reg) {
   const out = [`version: ${reg.version}`, `updated: ${reg.updated}`, 'servers:'];
   for (const s of reg.servers) {
     out.push(`  - alias: ${s.alias}`);
-    for (const k of ['host', 'port', 'user', 'key_path', 'key_algorithm', 'key_fingerprint', 'host_fingerprint']) {
+    for (const k of ['host', 'port', 'user', 'auth_type', 'key_path', 'key_algorithm', 'key_fingerprint', 'host_fingerprint']) {
       out.push(`    ${k}: ${s[k] ?? ''}`);
     }
     out.push(`    host_fingerprint_verified: ${s.host_fingerprint_verified === true}`);
@@ -182,12 +230,30 @@ export function upsertServer(input = {}) {
   const reg = readRegistry();
   const existing = reg.servers.find((s) => String(s.alias).toLowerCase() === alias.toLowerCase());
   const entry = existing ?? { alias };
+  /**
+   * 认证方式（2026-10-31）：'key'（默认，兼容老数据）/ 'password'。
+   * **密码不进 yaml** —— 只落 ssh-secrets.json。逻辑：
+   *   · 选了密码 + 这次给了新密码 → 覆盖存；
+   *   · 选了密码 + 没给（编辑场景）→ 沿用已存的，一台从没存过密码的不放行；
+   *   · 改回私钥 → 旧密码立刻清掉，留着就是隐患。
+   * `input.password` 是临时字段：Object.assign 只拷白名单键，它永远到不了 yaml。
+   */
+  const authType = input.auth_type === 'password' ? 'password' : 'key';
+  if (authType === 'password') {
+    const pw = String(input.password ?? '');
+    if (pw) setPassword(alias, pw);
+    else if (!hasPassword(alias)) throw badInput('认证方式选了「密码」，密码格得填（编辑时留空 = 沿用已存的密码）。');
+  } else if (hasPassword(alias)) {
+    clearPassword(alias);
+  }
   Object.assign(entry, {
     host,
     port,
     user,
+    auth_type: authType,
     // key_path 一旦定下就随条目存住（existing 优先），改名重存不会换文件；
     // 非 ASCII 别名用哈希名 —— 别名是给人看的，密钥文件名是给 ssh-keygen 用的，两回事。
+    // 密码认证的机器也留默认值：以后想迁到私钥认证，生成密钥对直接落这儿。
     key_path: String(input.key_path ?? existing?.key_path ?? (keyFileSafe(alias) ? `~/.ssh/${alias}` : derivedKeyPath(alias))),
     key_algorithm: existing?.key_algorithm ?? 'ed25519',
     key_fingerprint: existing?.key_fingerprint ?? '',
@@ -203,13 +269,14 @@ export function upsertServer(input = {}) {
   return { created: !existing, alias: entry.alias, entry };
 }
 
-/** 从登记表删掉一台（**只删这一行**，服务器和密钥文件都不动） */
+/** 从登记表删掉一台（**只删这一行**，服务器和密钥文件都不动）；顺手清掉它存的密码 */
 export function removeServer(alias) {
   const reg = readRegistry();
   const want = String(alias ?? '').toLowerCase();
   const i = reg.servers.findIndex((s) => String(s.alias).toLowerCase() === want);
   if (i < 0) return { removed: false };
   const [gone] = reg.servers.splice(i, 1);
+  clearPassword(gone.alias);
   reg.updated = stamp();
   writeRegistry(reg);
   return { removed: true, alias: gone.alias };
@@ -236,10 +303,7 @@ export function publicServers() {
     path: REGISTRY_PATH,
     updated: reg.updated,
     servers: reg.servers.map((s) => {
-      /* key_path 留空 = 用默认的 `~/.ssh/<别名>`（跟 ssh-exec 的 keyPathOf 同一条规矩）。
-       * 早先这里只认**显式**写下的 key_path，留空的一律算"未生成密钥" —— 可公钥块
-       * （GET /key 走 tryPublicKeyOf → keyPathOf）又读得到内容，同一页上自相矛盾：
-       * 上面写"未生成密钥"，下面却把公钥整行贴出来了（2026-10-26 用户截图）。 */
+      const authType = s.auth_type === 'password' ? 'password' : 'key';
       const kp = expandHome(s.key_path || defaultKeyPath(s.alias));
       const hasKey = [kp, `${kp}.pub`].some((p) => fs.existsSync(p));
       return {
@@ -247,10 +311,14 @@ export function publicServers() {
         host: s.host ?? '',
         port: s.port ?? 22,
         user: s.user ?? '',
+        // 认证方式：只给「方式」和「有没有存」，**密码本体永不回传**
+        auth_type: authType,
+        auth_label: authType === 'password' ? '密码认证' : '私钥认证',
+        has_password: authType === 'password' && hasPassword(s.alias),
         purpose: s.purpose ?? '',
         // 有没有密钥 —— 只给"有/没有"，不出**内容**
         has_key: hasKey,
-        key_state: hasKey ? '密钥已就绪' : '未生成密钥',
+        key_state: authType === 'password' ? '密码认证' : hasKey ? '密钥已就绪' : '未生成密钥',
         // 私钥**路径**要给：界面上"改"的表单里能填它，不回传就成了只能写不能读的黑洞。
         // 给的是路径不是内容 —— 私钥正文永不读、永不回显。
         // 登记时没填的，这里补上默认路径（否则界面那行是空白，用户不知道密钥落在哪）。

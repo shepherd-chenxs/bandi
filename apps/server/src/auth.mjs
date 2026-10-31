@@ -3,9 +3,14 @@
  *
  * 规则只有一条，而且看的是**监听地址**、不是请求来源：
  *
- *   · 只监听回环（桌面版 / 单机）→ **免鉴权**。外面根本进不来，加它就是白加，
+ *   · 只监听回环（桌面版 / 单机）→ **API 免鉴权**。外面根本进不来，加它就是白加，
  *     还会把"单机零配置、不需要 token"这条硬约束毁掉。
  *   · 监听非回环（服务器）→ **所有请求都要令牌**。
+ *
+ * 2026-10-31 用户拍板补了一层（「不管总机还是分机，都要用用户来登录」）：
+ * 回环形态下 **API 照旧免鉴权**（脚本/冒烟/CLI 一个字节没变），但**浏览器抓面板 HTML
+ * 要先有登录会话**（有账号而无会话 → 登录页，免密账号点了就进，见 guard 的回环分支）——
+ * API 的闸管机器和脚本，登录的闸管人，两层各管各的。
  *
  * 为什么**不按"来源是不是回环"判断**：反向代理会把来源变成回环 ——
  * 那样架一层代理就把闸绕过去了。规则跟着**配置**走，才不会被部署方式偷走。
@@ -132,6 +137,16 @@ export function sessionCookie(token) {
 /** 给退出登录用：让浏览器立刻丢掉这张票（Max-Age=0） */
 export function clearedSessionCookie() {
   return `${SID_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
+}
+
+/**
+ * 让浏览器丢掉**访问令牌**票（Max-Age=0）。退出登录时和会话票一起清 ——
+ * 否则一个曾经填过令牌的浏览器（令牌 Cookie 一年有效）永远被"令牌优先"放进面板，
+ * 永远走不到登录页（2026-10-31 实报：总机上开了局域网，老板的浏览器就是进不了登录页）。
+ * 只影响浏览器：脚本用头/查询参数带令牌，不受 Cookie 影响。
+ */
+export function clearedTokenCookie() {
+  return `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
 }
 
 
@@ -416,6 +431,20 @@ export function decide(who, method, pathname) {
      * 这不放进 `deviceMayReach`：那张表是手机的边界，动它等于改 device 的行为（§三 第一条）。
      */
     if (method === 'GET' && pathname === '/api/me') return 'allow';
+    /*
+     * **改自己的密码**（2026-10-31「我的」页）：任何登录账号都该能改自己的密码，
+     * 不该要求"先当上管理员"。普通账号对 /api/users/* 仍是 403 —— 这里只开"改自己"这一条，
+     * 而且它只认会话里那个 userId（路由层不从 body 里拿 id），想借它改别人没有入口。
+     */
+    if (method === 'POST' && pathname === '/api/me/password') return 'allow';
+    // 动态验证的自助管理（状态 / 绑定 / 确认 / 解绑）—— 同一条"改自己"的口径
+    if (pathname.startsWith('/api/me/otp')) return 'allow';
+    /*
+     * **分机的本机状态页**（2026-10-31 分机也要登录）：renderNodeMode 还要机器名/版本
+     * （/api/runtimes）与本机加入状态（/api/local/status）。后者放得安心 —— 它的 handler
+     * 自带**回环来源校验**，局域网里的登录用户照样进不来，等于只对本机屏幕多开了一条。
+     */
+    if (method === 'GET' && (pathname === '/api/runtimes' || pathname === '/api/local/status')) return 'allow';
     return deviceMayReach(method, pathname) ? 'allow' : 'E4033';
   }
 
@@ -430,6 +459,25 @@ export function decide(who, method, pathname) {
     return 'allow';
   }
   return 'E4031';
+}
+
+/**
+ * 这次请求的**操作人是谁**（2026-10-31 用户概念落地：消息署名 / 建卡人 / 看"我"是谁）。
+ *
+ * 三种答案：
+ *   · 登录用户 → 他自己（多端各记各的，这是唯一精确的一档）；
+ *   · operator（回环 / 共享令牌）→ **第一个用户**（"本机自动登录"：像一台共用电脑，
+ *     没人显式登录时活都算机主的）。还没有任何用户 → null，调用方回落到 LOCAL_USER 占位；
+ *   · 节点 / 手机设备令牌 → null（机器不是人，不冒充任何人）。
+ *
+ * 只用于**落数据**（署名），绝不用于鉴权 —— 权限判定仍然只看 `decide()`，两码事别混。
+ */
+export function actorUser(req) {
+  const a = req?.bandiAuth;
+  if (!a) return null;
+  if (a.kind === 'user' && a.userId) return store.getUser(a.userId);
+  if (a.kind === 'operator') return store.firstUser();
+  return null;
 }
 
 /**
@@ -489,6 +537,18 @@ export function guard(auth, req, res, url) {
    */
   if (req.method === 'POST' && (url.pathname === '/api/login' || url.pathname === '/api/logout')) return true;
   /*
+   * 两段式登录的第二段（2026-10-31 二改）：此刻手上只有一张 `otpToken`（一次性、5 分钟），
+   * 浏览器还没有任何会话 —— 与第一段同一个道理，必须免令牌。凭据校验在 handler 里。
+   */
+  if (req.method === 'POST' && url.pathname === '/api/login/otp') return true;
+  /*
+   * **首次引导直建**（2026-10-31）：一个账号都没有时，登录页的「创建账号」表单打的就是
+   * `POST /api/users` —— 此刻浏览器没有任何凭据（这正是它要干的事）。豁免只对
+   * **零账号**成立，第一个账号落地后这条路立刻关死；路由层自己也按 hasUsers 判一遍
+   * （两层缺一不可，与 /api/pair/claim 的"码即凭据"同一模式）。CSRF 闸照过。
+   */
+  if (req.method === 'POST' && url.pathname === '/api/users' && !store.hasUsers()) return true;
+  /*
    * 落地页的**静态依赖**也要免令牌（2026-10-28 修）：手机此刻没有任何凭据，
    * `/js/pair-claim.mjs` 和图标走的是非 /api GET —— 不豁免时 guard 会回**登录页 HTML**
    * （`Content-Type: text/html`），浏览器按 module 执行必然失败，页面就永远停在
@@ -509,14 +569,38 @@ export function guard(auth, req, res, url) {
 
   if (!auth.required) {
     /*
-     * 回环形态（桌面版 / 单机）免鉴权 —— 但**身份要标出来**。
+     * 回环形态（桌面版 / 单机 / 分机本机）—— 2026-10-31 用户拍板升级：
+     * 「不管总机还是分机，都要用用户来登录」。落成两条，**API 与面板分开**：
      *
-     * 为什么（2026-10-20）：下游用 `mayManage(req)` 判"这次能不能做管理动作"
-     * （改 scope、改员工的 model/runtime），而那个函数只看 `req.bandiAuth`。
-     * 不标的话，单机上自己点「改模型」会被自己的字段闸挡成 403 `E4032` ✗。
-     * 回环 = 就是这台机器的操作员，这与"闸只看监听地址"那条规则是同一个口径。
+     * · **API 仍是回环信任**：本机脚本 / 冒烟 / CLI 不带凭据照旧 = operator（一个字节没变，
+     *   任务书 §三 那条硬约束继续成立）；但**带着有效登录会话的浏览器按登录人算**
+     *   （kind:'user'）—— 消息署名、菜单收敛都精确到人。退出登录之后回 operator。
+     * · **面板要登录**：已经建过账号而这双手上没有会话票的浏览器，抓 HTML 一律给**登录页**
+     *   （账号磁贴，免密账号点了就进）—— 跟电脑开机先选账户一个意思。
+     *   还没建过账号 = 首次开机：放行进面板，由首次引导建第一个账号。
      */
+    const sid = sessionTokenOf(req);
+    if (sid) {
+      const hit = store.userBySession(sid);
+      if (hit) {
+        req.bandiAuth = {
+          kind: 'user',
+          userId: hit.user.id,
+          roleId: hit.user.roleId,
+          admin: hit.user.roleId === 'admin',
+          via: 'session-loopback',
+        };
+        return true;
+      }
+    }
     req.bandiAuth = { kind: 'operator', via: 'loopback' };
+    if (req.method === 'GET' && !url.pathname.startsWith('/api/') && store.hasUsers()) {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+      // 回环 = 这台机器自己的屏幕，摆账号磁贴不泄密（局域网那边的登录页仍是"用户名+密码"表单）；
+      // 禁用的账号不摆 —— 摆上去也登不进，白给人一个"点不动"的磁贴
+      res.end(loginPage({ hasUsers: true, loopback: true, users: store.listUsers().filter((u) => !u.disabled) }));
+      return false;
+    }
     return true;
   }
 
@@ -611,7 +695,7 @@ export function guard(auth, req, res, url) {
           code: 'E4033',
           platform: 'bandi',
           hint: isUser
-            ? '让管理员在「设置 → 用户」里把角色改成「管理员」，或直接在那台机器上用班底（本机免登录、等同操作员）。'
+            ? '让管理员在「设置 → 用户」里把角色改成「管理员」，或在那台机器上用管理员账号登录（本机也要先选账号，2026-10-31 起）。'
             : '请在桌面端操作。',
         }),
       );
@@ -648,7 +732,7 @@ export function guard(auth, req, res, url) {
   const wantsHtml = req.method === 'GET' && !url.pathname.startsWith('/api/');
   if (wantsHtml) {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
-    res.end(loginPage({ wrong: !!got, hasUsers: store.hasUsers() }));
+    res.end(loginPage({ hasUsers: store.hasUsers() }));
     return false;
   }
 
@@ -658,7 +742,7 @@ export function guard(auth, req, res, url) {
       error: '需要访问令牌（这个控制面没有监听回环地址）',
       code: 'E4010',
       platform: 'bandi',
-      hint: '带 X-Bandi-Token 头，或浏览器打开首页在表单里填。令牌在数据目录的 token 文件里。',
+      hint: '带 X-Bandi-Token 头，或浏览器打开首页用账号登录。令牌在数据目录的 token 文件里。',
     }),
   );
   return false;
@@ -692,117 +776,362 @@ function timingSafeEqual(a, b) {
   return crypto.timingSafeEqual(A, B);
 }
 
+/** 登录页内联 HTML 的转义（账号名是用户输入的，别让它把磁贴页写成 XSS） */
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+const esc = escapeHtml;
+
 /**
- * 登录页（2026-10-28 第三刀改：用户名 + 密码优先，令牌退成兜底入口）。
+ * 登录页（2026-10-28 第三刀建；2026-10-31 用户概念两轮改造）。
  *
- * 三态，别混：
- *   · `hasUsers === false` —— **和从前一模一样**：只给令牌表单。此刻还没有任何账号，
- *     给一个"用户名密码"表单只会让人以为"默认密码是什么"（任务书 §五 第 1 条）。
- *   · 有用户 —— 用户名 + 密码是主表单；令牌收进 `<details>`，给部署/运维留一条 root 后路。
- *   · `wrong` —— 令牌填错了（沿用老提示）。
+ * 五态，别混：
+ *   · `hasUsers === false` —— **创建账号**（账号密码直建，第一个自动成为管理员）。
+ *     公网服务器上"先令牌后建号"走不通（人不在那台机器旁边）；代价是"谁先到谁占管理员"。
+ *     ⚠️ 页面上**没有令牌入口**了（2026-10-31 用户定：登录页就是登录页）——部署/运维用
+ *     `X-Bandi-Token` 头或 `?token=`，那条路是给脚本的，不经界面（见 guard 的 operator 分支）。
+ *   · `loopback && hasUsers` —— **账号磁贴**（回环 = 这台机器自己的屏幕，摆名单不泄密）：
+ *     免密账号点一下就进；设了密码的点了出密码框。电脑开机选账户同款。
+ *   · 有用户（非回环）—— 用户名 + 密码主表单（免密账号密码留空直接登录）。
+ *     ⚠️ 非回环**不摆磁贴**：那等于把账号名单送给局域网里每一个人。
+ *   · 开了动态验证的账号（2026-10-31 二改，仿 yaojian-ruoyi）：密码过了服务端回
+ *     `{needOtp:true, otpToken}`，页面**整屏切到第二段**（一个输入框，动态码或恢复码都行，
+ *     带「返回上一步」）；凭据 5 分钟、5 次。
  *
  * 为什么表单靠 inline script 提交而不是原生 `<form method=POST>`：`guardWrite` 要求
  * 写请求带 `X-Bandi: 1` 头，原生表单提交设不了头，必然被 CSRF 闸挡成 403（自己试过）。
  * 所以走 fetch，并把「码 + 中文」原样显示出来 —— 与全站错误口径一致。
  */
-function loginPage({ wrong, hasUsers }) {
+function loginPage({ hasUsers, loopback = false, users = null }) {
   const pwForm = hasUsers
-    ? `
-${wrong ? '<p class="bad">令牌不对，再试一次。</p>' : ''}
+    ? (loopback && Array.isArray(users) && users.length
+      ? `
+<p class="bad" id="err" hidden></p>
+<div id="tiles">
+  ${users
+    .map(
+      (u) => `<button type="button" class="tile" data-name="${esc(u.name)}" data-haspw="${u.hasPassword ? 1 : 0}">
+    <span class="tile-ava">${esc((u.name || '?').slice(0, 1))}</span>
+    <span class="tile-name">${esc(u.name)}</span>
+  </button>`,
+    )
+    .join('')}
+</div>
+<div id="pwRow" hidden>
+  <p class="tile-who" id="pwWho"></p>
+  <form id="pwForm" autocomplete="on">
+    <input id="pw" name="password" type="password" placeholder="密码" autofocus autocomplete="current-password" />
+    <button type="submit">进入</button>
+  </form>
+</div>`
+      : `
 <p class="bad" id="err" hidden></p>
 <form id="pwForm" autocomplete="on">
   <input id="nm" name="username" placeholder="用户名" autofocus autocomplete="username" spellcheck="false" />
-  <input id="pw" name="password" type="password" placeholder="密码" autocomplete="current-password" />
+  <input id="pw" name="password" type="password" placeholder="密码（未设密码就留空）" autocomplete="current-password" />
   <button type="submit">登录</button>
-</form>
-<details id="tok">
-  <summary>用访问令牌登录（部署 / 运维）</summary>
-  <form method="GET" action="/">
-    <input name="token" placeholder="访问令牌" autocomplete="off" spellcheck="false" />
-    <button>进入</button>
-  </form>
-</details>
-<p class="hint">
-  令牌在控制面数据目录的 <code>token</code> 文件里（那台机器上：<code>type &lt;数据目录&gt;\token</code>
-  或 <code>cat &lt;数据目录&gt;/token</code>）。
-</p>`
+</form>`)
     : `
-<p>这个控制面没有监听回环地址，所以每个请求都要访问令牌。</p>
-${wrong ? '<p class="bad">令牌不对，再试一次。</p>' : ''}
-<form method="GET" action="/">
-  <input name="token" placeholder="访问令牌" autofocus autocomplete="off" spellcheck="false" />
-  <button>进入</button>
-</form>
-<p class="hint">
-  令牌在控制面数据目录的 <code>token</code> 文件里（那台机器上：<code>type &lt;数据目录&gt;\token</code>
-  或 <code>cat &lt;数据目录&gt;/token</code>）。
-  <!--
-    ⚠️ 这里原来还跟着一句"启动日志也会打出来一次" —— 2026-10-16 已经**不打了** ✓（日志会被贴、被备份，
-    而那枚令牌等于整套控制权）。这句话留着就是把人往错地方指 ✗，所以删掉 ✓。
-  -->
-  填对之后会记在 Cookie 里，不用每次填。
-</p>
-<p class="hint">
-  还没有任何账号：先用访问令牌进来，到「设置 → 用户」里创建第一个账号
-  （它会自动成为内置管理员，以后这里就能用用户名密码登录了）。
-</p>`;
+<p class="bad" id="err" hidden></p>
+<form id="signForm" autocomplete="on">
+  <input id="nm" placeholder="用户名" autofocus autocomplete="username" spellcheck="false" />
+  <input id="pw" type="password" placeholder="密码（可留空 = 免密）" autocomplete="new-password" />
+  <input id="pw2" type="password" placeholder="再输一遍密码" autocomplete="new-password" />
+  <button type="submit">创建并进入</button>
+</form>`;
 
+  /*
+   * 两段式登录的第二段（2026-10-31 二改，仿 yaojian-ruoyi）：第一段密码过了、账号又开了
+   * 动态验证，卡片整块切到这里 —— 一个输入框同时收 6 位动态码和 8 位恢复码
+   * （手机丢了用恢复码），凭据 5 分钟 / 5 次。带「返回上一步」：记错密码/换账号时不用刷新。
+   */
+  /*
+   * 两段式登录的第二段（2026-10-31 三改，仿 yaojian-ruoyi 的布局）：**替换整个卡片内容**，
+   * 不是在密码表单下面续一段 —— 两套输入框 + 两个按钮叠在一起，人会不知道自己在哪个步骤。
+   * 它的版式就是参考项目那一屏：锁图标 + 标题 + 一行说明 + 一个输入框 + 一个按钮 + 返回链接。
+   */
+  const otpStepHtml = `
+<div id="otpPane" hidden>
+  <header class="brand">
+    <div class="logo lock">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="4.5" y="10.2" width="15" height="10.3" rx="2.6"/>
+        <path d="M8.3 10.2V7.6a3.7 3.7 0 0 1 7.4 0v2.6"/>
+        <circle cx="12" cy="15.3" r="1.15" fill="#fff" stroke="none"/>
+      </svg>
+    </div>
+    <div>
+      <h1>动态验证</h1>
+      <p class="tag" id="otpWho">请输入 6 位动态码，或 8 位恢复码</p>
+    </div>
+  </header>
+  <form id="otpForm" autocomplete="off">
+    <p class="bad" id="otpErr" hidden></p>
+    <input id="otpCode" inputmode="numeric" maxlength="8" autocomplete="one-time-code"
+           placeholder="动态验证码 / 恢复码" autofocus spellcheck="false" />
+    <button type="submit">验证</button>
+  </form>
+  <p class="hint"><a href="#" id="otpBack">返回重新登录</a></p>
+</div>`;
+
+  /*
+   * 页面骨架（2026-10-31 重设计）：**居中一张卡片**，Logo + 产品名 + 一句话，下面才是表单。
+   * 旧版是贴在左上角的一列输入框，屏幕上大片空白、也看不出这是什么产品。
+   * 深色/浅色跟随系统（prefers-color-scheme）—— 班底本身有主题切换，登录页没登录读不到用户偏好，
+   * 跟系统走是唯一合理的默认。
+   */
   return `<!doctype html>
+<html lang="zh-CN">
+<head>
 <meta charset="utf-8" />
-<title>班底 · ${hasUsers ? '登录' : '需要访问令牌'}</title>
 <meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>班底 · ${hasUsers ? '登录' : '创建账号'}</title>
 <style>
-  body { font: 14px/1.8 system-ui,-apple-system,'Segoe UI',sans-serif; margin: 0; padding: 44px;
-         background: #1b1d21; color: #e7e7e7; }
-  h1 { font-size: 19px; margin: 0 0 8px; }
-  p { color: #9aa0a6; margin: 0 0 18px; }
-  form { display: flex; gap: 8px; max-width: 420px; }
-  #pwForm { flex-direction: column; }
-  input { flex: 1; padding: 9px 11px; border-radius: 7px; border: 1px solid #3a3f45;
-          background: #24272c; color: #e7e7e7; font: inherit; }
-  button { padding: 9px 16px; border-radius: 7px; border: 0; background: #3b6ef5; color: #fff;
-           font: inherit; cursor: pointer; }
-  button[disabled] { opacity: .6; cursor: default; }
-  .bad { color: #ff8a80; margin: 0 0 14px; }
-  code { background: #24272c; padding: 1px 5px; border-radius: 4px; }
-  .hint { margin-top: 20px; font-size: 12.5px; color: #7c8288; }
-  details { max-width: 420px; margin-top: 22px; }
-  summary { color: #9aa0a6; font-size: 12.5px; cursor: pointer; }
-  details form { margin-top: 10px; }
+  :root {
+    --bg: #0e1014;
+    --glow: rgba(59,110,245,.16);
+    --card: #171a20;
+    --line: #262b33;
+    --text: #e8eaed;
+    --dim: #8b93a1;
+    --input: #10131a;
+    --accent: #3b6ef5;
+    --accent-hi: #4f7dfa;
+    --bad: #ff8a80;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f3f5fa; --glow: rgba(59,110,245,.10);
+      --card: #ffffff; --line: #e4e8f0; --text: #1b1f27; --dim: #6b7280;
+      --input: #f7f9fc; --bad: #d93025;
+    }
+  }
+  * { box-sizing: border-box; }
+  /*
+   * ⚠️ 必须显式兜住 [hidden]（2026-10-31 实报「两个登录框叠在一起」）：
+   * UA 的 [hidden]{display:none} 优先级最低，下面 #pwForm{display:flex} 这种 ID 选择器
+   * 会把它盖掉 —— 于是"隐藏"的表单照样显示。加 !important 一劳永逸。
+   */
+  [hidden] { display: none !important; }
+  body {
+    margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px 18px;
+    background: radial-gradient(1100px 560px at 50% -12%, var(--glow), transparent 62%), var(--bg);
+    color: var(--text);
+    font: 14px/1.6 system-ui, -apple-system, 'Segoe UI', 'Noto Sans SC', 'Microsoft YaHei', sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .card {
+    width: min(392px, 100%);
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    padding: 30px 30px 24px;
+    box-shadow: 0 24px 60px -22px rgba(0,0,0,.5), 0 2px 10px rgba(0,0,0,.06);
+  }
+  .brand { display: flex; align-items: center; gap: 13px; margin-bottom: 26px; }
+  .logo {
+    width: 46px; height: 46px; border-radius: 13px; flex: none; display: grid; place-items: center;
+    background: linear-gradient(145deg, #3b6ef5, #6f8cff);
+    box-shadow: 0 10px 22px -10px rgba(59,110,245,.8);
+  }
+  .logo svg { width: 26px; height: 26px; display: block; }
+  /* 第二段的锁标（与产品标同尺寸同位，切换时不跳动） */
+  .logo.lock { background: linear-gradient(145deg, #2f5ad6, #5b84f7); }
+  .logo.lock svg { width: 24px; height: 24px; }
+  h1 { font-size: 19px; margin: 0; letter-spacing: .3px; }
+  .tag { margin: 2px 0 0; font-size: 12.5px; color: var(--dim); }
+  form { margin: 0; }
+  #pwForm, #signForm, #otpForm { display: flex; flex-direction: column; gap: 10px; }
+  input {
+    width: 100%; height: 44px; padding: 0 13px;
+    border-radius: 11px; border: 1px solid var(--line);
+    background: var(--input); color: var(--text); font: inherit;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  input::placeholder { color: var(--dim); }
+  input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(59,110,245,.18); }
+  button {
+    height: 44px; border-radius: 11px; border: 0; background: var(--accent);
+    color: #fff; font: inherit; font-weight: 600; letter-spacing: .4px; cursor: pointer;
+    transition: background .15s, transform .05s;
+  }
+  button:hover { background: var(--accent-hi); }
+  button:active { transform: translateY(1px); }
+  button[disabled] { opacity: .55; cursor: default; }
+  .bad { color: var(--bad); font-size: 12.5px; margin: 0 0 12px; }
+  .hint { margin: 14px 0 0; font-size: 12.5px; color: var(--dim); text-align: center; }
+  .hint a { color: var(--accent); text-decoration: none; }
+  /* 账号磁贴（回环登录页）：电脑开机选账户的版式，放进卡片里当网格 */
+  #tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(86px, 1fr)); gap: 10px; margin-bottom: 4px; }
+  .tile {
+    height: auto; padding: 14px 6px 10px; display: flex; flex-direction: column; align-items: center; gap: 8px;
+    background: var(--input); color: var(--text); border: 1px solid var(--line); font-weight: 400;
+  }
+  .tile:hover { background: var(--input); border-color: var(--accent); }
+  .tile-ava { width: 40px; height: 40px; border-radius: 50%; background: var(--accent); color: #fff;
+              font-size: 17px; font-weight: 600; line-height: 40px; text-align: center; }
+  .tile-name { font-size: 12.5px; }
+  .tile-who { margin: 0 0 12px; font-size: 13px; color: var(--dim); }
+  .foot { margin-top: 22px; padding-top: 14px; border-top: 1px solid var(--line);
+          display: flex; justify-content: space-between; font-size: 11.5px; color: var(--dim); }
 </style>
-<h1>班底</h1>
-${pwForm}
+</head>
+<body>
+  <main class="card">
+    <div id="loginPane">
+      <header class="brand">
+        <div class="logo">
+          <svg viewBox="0 0 512 512" aria-hidden="true">
+            <defs>
+              <mask id="b-hole">
+                <rect width="512" height="512" fill="#fff"/>
+                <ellipse cx="268" cy="206" rx="36" ry="29" fill="#000"/>
+                <ellipse cx="274" cy="340" rx="40" ry="31" fill="#000"/>
+              </mask>
+            </defs>
+            <g mask="url(#b-hole)" fill="#fff">
+              <rect x="154" y="138" width="72" height="236" rx="34"/>
+              <path d="M194,156 C272,142 338,168 338,208 C338,248 288,268 194,264 Z"/>
+              <path d="M194,282 C284,276 348,306 348,340 C348,372 288,388 194,382 Z"/>
+              <rect x="172" y="336" width="70" height="52" rx="26"/>
+            </g>
+          </svg>
+        </div>
+        <div>
+          <h1>班底</h1>
+          <p class="tag">${hasUsers ? '登录你的账号' : '创建第一个账号 · 它将自动成为管理员'}</p>
+        </div>
+      </header>
+      ${pwForm}
+    </div>
+    ${otpStepHtml}
+    <div class="foot"><span>bandi</span><span>自托管 · 多 agent 协作</span></div>
+  </main>
 <script>
 (() => {
-  const f = document.getElementById('pwForm');
-  if (!f) return;
   const err = document.getElementById('err');
-  f.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    err.hidden = true;
-    const btn = f.querySelector('button');
-    btn.disabled = true;
+  const say = (t) => { if (err) { err.textContent = t; err.hidden = false; } };
+  // 第二段有自己的错误区（第一段的 #err 此刻在隐藏的 loginPane 里，写进去没人看得见）
+  const otpErrEl = document.getElementById('otpErr');
+  const sayOtp = (t) => { if (otpErrEl) { otpErrEl.textContent = t; otpErrEl.hidden = false; } };
+  const msg = (j, dflt) => (j ? (j.code ? j.code + '：' + j.error : j.error) : dflt);
+  /** 第二段的凭据（内存里，不落任何存储） */
+  let otpToken = '';
+  let otpWho = '';
+  const showOtpStep = (who) => {
+    otpWho = who;
+    // 整块切换：第一段（品牌 + 登录表单）整体让位给第二段那一屏，别让它俩叠在卡片里
+    const login = document.getElementById('loginPane');
+    if (login) login.hidden = true;
+    const step = document.getElementById('otpPane');
+    if (!step) return;
+    step.hidden = false;
+    const tip = document.getElementById('otpWho');
+    // 内联脚本里**不能用模板字符串**：整页本身是 JS 模板字面量，反引号会把它提前闭合
+    if (tip) tip.textContent = who + ' · 请输入 6 位动态码，或 8 位恢复码';
+    const box = document.getElementById('otpCode');
+    box.value = '';
+    box.focus();
+  };
+  // 第一段：用户名 + 密码 → 要么直接进，要么拿 otpToken 走第二段
+  const go = async (name, password) => {
     try {
       const r = await fetch('/api/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Bandi': '1' },
-        body: JSON.stringify({
-          name: document.getElementById('nm').value,
-          password: document.getElementById('pw').value,
-        }),
+        body: JSON.stringify({ name, password }),
       });
       const j = await r.json().catch(() => null);
-      if (r.ok) { location.replace('/'); return; }
-      err.textContent = j ? (j.code ? j.code + '：' + j.error : j.error) : '登录失败，再试一次';
-      err.hidden = false;
+      if (r.ok && j?.needOtp) { otpToken = j.otpToken; showOtpStep(name); return true; }
+      if (r.ok) { location.replace('/'); return true; }
+      say(msg(j, '登录失败，再试一次'));
     } catch {
-      err.textContent = '连不上这台机器，检查网络后重试';
-      err.hidden = false;
+      say('连不上这台机器，检查网络后重试');
+    }
+    return false;
+  };
+  // 账号磁贴：免密的点了就进；设了密码的出密码框
+  document.querySelectorAll('.tile').forEach((t) => {
+    t.addEventListener('click', async () => {
+      if (t.dataset.haspw !== '1') { void go(t.dataset.name, ''); return; }
+      document.getElementById('tiles').hidden = true;
+      const row = document.getElementById('pwRow');
+      row.hidden = false;
+      document.getElementById('pwWho').textContent = t.dataset.name;
+      document.getElementById('pw').focus();
+    });
+  });
+  const f = document.getElementById('pwForm');
+  if (f) f.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const nm = document.getElementById('nm');
+    const name = nm ? nm.value : (document.getElementById('pwWho')?.textContent ?? '');
+    const btn = f.querySelector('button');
+    btn.disabled = true;
+    try { await go(name, document.getElementById('pw').value); }
+    finally { btn.disabled = false; }
+  });
+  // 第二段：动态码 / 恢复码 → 发正式会话
+  const of = document.getElementById('otpForm');
+  if (of) of.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (otpErrEl) otpErrEl.hidden = true;
+    const code = document.getElementById('otpCode').value.trim();
+    if (!code) { sayOtp('请输入验证码'); return; }
+    const btn = of.querySelector('button');
+    btn.disabled = true;
+    try {
+      const r = await fetch('/api/login/otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Bandi': '1' },
+        body: JSON.stringify({ otpToken, code }),
+      });
+      if (r.ok) { location.replace('/'); return; }
+      const j = await r.json().catch(() => null);
+      sayOtp(msg(j, '验证失败，请重新登录'));
+      // 凭据过期/次数用完：服务端会回 E3823/E3824 —— 整页重来（回到第一段）
+      if (j?.code === 'E3823' || j?.code === 'E3824') location.reload();
+    } catch {
+      sayOtp('连不上这台机器，检查网络后重试');
+    } finally {
+      btn.disabled = false;
+    }
+  });
+  document.getElementById('otpBack')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    otpToken = '';
+    // 整页重来最省事：磁贴/表单的显隐状态都回到初始
+    location.reload();
+  });
+  // 还没有账号：创建第一个（自动成为管理员），建完服务端直接发登录票
+  const sf = document.getElementById('signForm');
+  if (sf) sf.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    err.hidden = true;
+    const name = document.getElementById('nm').value.trim();
+    const pw = document.getElementById('pw').value;
+    if (!name) { say('先填用户名'); return; }
+    if (pw !== document.getElementById('pw2').value) { say('两次输入的密码不一样'); return; }
+    const btn = sf.querySelector('button');
+    btn.disabled = true;
+    try {
+      const r = await fetch('/api/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Bandi': '1' },
+        body: JSON.stringify({ name, ...(pw ? { password: pw } : {}) }),
+      });
+      if (r.ok) { location.replace('/'); return; }
+      const j = await r.json().catch(() => null);
+      say(j ? (j.code ? j.code + '：' + j.error : j.error) : '没建成，再试一次');
+    } catch {
+      say('连不上这台机器，检查网络后重试');
     } finally {
       btn.disabled = false;
     }
   });
 })();
 </script>
+</body>
+</html>
 `;
 }

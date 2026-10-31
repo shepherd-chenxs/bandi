@@ -136,11 +136,23 @@ const routes = {
     }
   },
   'GET /api/state': async (req, res) => {
+    /*
+     * 「我」是谁（2026-10-31 用户概念落地）：登录用户是他自己；回环 / 共享令牌的操作员
+     * 是**第一个用户**（"本机自动登录"，像一台共用电脑——没人显式登录时活都算机主的）；
+     * 还没有任何用户 → 维持 LOCAL_USER 占位。手机设备令牌同样占位（设备不是人）。
+     */
+    const actor = auth.actorUser(req);
     sendJson(res, 200, {
       runtimes: runtimeOptions(),
       repoRoot,
       platformRoot: repoRoot,
-      me: store.LOCAL_USER,
+      me: actor ? { id: actor.id, name: actor.name } : store.LOCAL_USER,
+      /*
+       * 账号名册（2026-10-31）：通讯录的「成员」段与看板派活选真人用。
+       * 只有 id / 名字 / 是不是内置 —— "团队里有谁"不是秘密，不要求管理权限；
+       * salt/hash 与增删改仍在 mayManage 后面（/api/users）。
+       */
+      users: store.listUserBriefs(),
       // 带上"忙不忙"：通讯录里要一眼看出谁能马上接活
       // busyLabel：**他在干什么** —— 光一个"工作中"没用，得知道是哪条流程的哪一步
       // （运行上挂的 workflowTask 就是答案；不属于任何流程的就是普通对话）
@@ -628,6 +640,19 @@ try {
   if (pruned) console.log(`清掉 ${pruned} 条过期登录会话`);
 } catch (err) {
   console.log(`清理过期登录会话失败（不影响启动）：${err?.message ?? err}`);
+}
+/*
+ * 动态验证（2026-10-31 二改）：① 上一版把明文密钥存在 users.totpSecret 上，
+ * 启动时搬进独立表 user_otp（AES-GCM 加密）并清空旧列；② 登录第二段的一次性凭据
+ * 过期就清 —— 两件都幂等，失败不拦启动。
+ */
+try {
+  const moved = store.migrateLegacyTotp();
+  if (moved) console.log(`动态验证：${moved} 条旧密钥已搬进加密表`);
+  const prunedOtp = store.pruneChallenges();
+  if (prunedOtp) console.log(`清掉 ${prunedOtp} 条过期验证凭据`);
+} catch (err) {
+  console.log(`动态验证初始化失败（不影响启动）：${err?.message ?? err}`);
 }
 runs.onRunFinish(workflows.onAgentRunFinished);
 // 任务卡同理（2026-10-17）：运行跑完/被停/跑挂了，卡不能永远挂在「进行中」——

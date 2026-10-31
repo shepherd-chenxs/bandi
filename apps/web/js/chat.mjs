@@ -662,9 +662,15 @@ export function stampOf(iso) {
 
 
 
-export function bubble(role, text, name, who, showName = false, at = '', atts = null, meta = null) {
-  const mine = role === 'user';
-  const label = mine ? '我' : (who || name || '数字员工');
+export function bubble(role, text, name, who, showName = false, at = '', atts = null, meta = null, senderName = null) {
+  /*
+   * 真人署名（2026-10-31 用户概念落地）：消息带 senderUserName 且**不是自己** → 按别人画
+   * （靠左、带头像、名字线）。多人一套班底时，群/卡评论区里谁说的话各归各；
+   * 没有署名（员工、回执）或就是自己 → 行为与从前一字不差。
+   */
+  const otherHuman = role === 'user' && senderName && senderName !== (S.me?.name ?? '我');
+  const mine = role === 'user' && !otherHuman;
+  const label = mine ? '我' : otherHuman ? senderName : (who || name || '数字员工');
   // 头像带图（2026-10-22）：优先按名字找员工；群聊消息有 personaName 直接命中，
   // 1:1 改过名时名字可能对不上，再兜一层会话的 personaId
   const p = mine ? null
@@ -673,8 +679,9 @@ export function bubble(role, text, name, who, showName = false, at = '', atts = 
   // 时间放在气泡**外面**的下方（2026-10-19 用户要求，别塞在气泡里）：绝对定位，不占布局
   const t = at ? stampOf(at) : '';
   // 群聊显示名字时，名字放气泡**上面**（2026-10-23 用户要求，别挤在气泡里）：
-  // 名字行 + 气泡包进一个纵向列，其余消息保持原结构不动
-  const nameLine = showName && !mine ? `<div class="who-line">${esc(label)}</div>` : '';
+  // 名字行 + 气泡包进一个纵向列，其余消息保持原结构不动。
+  // 别的真人的消息在 1:1 里也带名字线 —— 不然他跟数字员工的气泡分不出来。
+  const nameLine = (showName && !mine) || otherHuman ? `<div class="who-line">${esc(label)}</div>` : '';
   // 附件（2026-10-23）：图片直接画缩略图，其余文件给一颗可点的 chip（新标签页打开）
   const attsHtml = attsHtmlOf(atts);
   // 卡票（2026-10-24）：PM 建卡 / 卡片回执这类消息带 meta，气泡顶上画一张可点的票
@@ -941,7 +948,7 @@ export function drawMessages(msgs, name, isGroup = false, runs = []) {
     ? items
         .map((it) =>
           it.kind === 'msg'
-            ? bubble(it.m.role, it.m.text, name, it.m.personaName, isGroup, it.m.createdAt, it.m.atts, it.m.meta)
+            ? bubble(it.m.role, it.m.text, name, it.m.personaName, isGroup, it.m.createdAt, it.m.atts, it.m.meta, it.m.senderUserName)
             : it.kind === 'stop' ? stopBlock(it.r, isGroup) : failBlock(it.r, isGroup),
         )
         .join('')

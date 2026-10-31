@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "空壳最小权限：只开主窗口，不给文件系统、shell、网络权限。两个例外都与「壳」自己有关：① setTheme —— 页面切深浅色时要同步到原生标题栏（2026-10-20 用户报「深色模式顶栏没变化」）；② pick_directory —— 工作目录等处的「选择」由壳弹原生目录框（页面经 IPC 调，2026-10-22）。",
+  "description": "空壳最小权限：只开主窗口，不给文件系统、shell、网络权限。例外都与「壳」自己有关：① setTheme —— 页面切深浅色时要同步到原生标题栏（2026-10-20 用户报「深色模式顶栏没变化」）；② pick_directory —— 工作目录等处的「选择」由壳弹原生目录框（页面经 IPC 调，2026-10-22）；③ pick_file —— 远程连接「私钥路径」的选择按钮弹原生文件框（2026-10-31）。",
   "windows": ["main"],
   "remote": {
     "urls": [
@@ -12,6 +12,7 @@
   "permissions": [
     "core:default",
     "core:window:allow-set-theme",
-    "allow-pick-directory"
+    "allow-pick-directory",
+    "allow-pick-file"
   ]
 }

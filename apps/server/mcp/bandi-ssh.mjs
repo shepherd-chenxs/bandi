@@ -21,23 +21,16 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
 import { expandHome, REGISTRY_PATH as REGISTRY, readRegistry, validateHost, upsertServer, removeServer } from '../src/ssh-registry.mjs';
-import { buildGuide } from '../src/ssh-exec.mjs';
+// sshRun 不再各写各的（2026-10-31）：密码认证的 askpass 机制只养得起一份，
+// 从 ssh-exec 拿同一份 —— 私钥/密码两种认证方式两边行为一致。
+import { buildGuide, sshRun } from '../src/ssh-exec.mjs';
 
 /* ------------------------------------------------------------------ 配置 */
 
 const ALLOW_WRITE = /^(1|true|yes|on)$/i.test(process.env.BANDI_SSH_ALLOW_WRITE ?? '');
 const ALLOW_EXEC = (process.env.BANDI_SSH_ALLOW_EXEC ?? '1') !== '0';
 const TIMEOUT_MS = Number(process.env.BANDI_SSH_TIMEOUT_MS) || 30000;
-const STRICT = process.env.BANDI_SSH_STRICT || 'accept-new';
-
-/** ssh 可执行文件：优先环境变量，其次系统 OpenSSH（Windows 上不在 PATH 也能到） */
-function sshBin() {
-  if (process.env.BANDI_SSH_BIN) return expandHome(process.env.BANDI_SSH_BIN);
-  const win = 'C:\\Windows\\System32\\OpenSSH\\ssh.exe';
-  return process.platform === 'win32' && fs.existsSync(win) ? win : 'ssh';
-}
 
 /* ------------------------------------------------------------------ SSH */
 
@@ -63,40 +56,6 @@ export function publicKeyOf(entry) {
 
 function requireExec() {
   if (!ALLOW_EXEC) throw new Error('执行被关掉了（BANDI_SSH_ALLOW_EXEC=0）');
-}
-
-/**
- * 真起一次 ssh。BatchMode=yes 很关键：没配好的话它**立刻失败**，而不是挂在口令提示上等超时。
- */
-export function sshRun(entry, command, timeoutMs = TIMEOUT_MS) {
-  return new Promise((resolve) => {
-    const args = [
-      '-i', expandHome(entry.key_path),
-      '-p', String(entry.port || 22),
-      '-o', 'BatchMode=yes',
-      '-o', `StrictHostKeyChecking=${STRICT}`,
-      '-o', `ConnectTimeout=${Math.max(3, Math.round(timeoutMs / 1000))}`,
-      `${entry.user}@${entry.host}`,
-      '--',
-      command,
-    ];
-    const child = spawn(sshBin(), args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
-    let out = '';
-    let err = '';
-    let done = false;
-    const finish = (result) => { if (!done) { done = true; clearTimeout(timer); try { child.kill(); } catch { /* 已退 */ } resolve(result); } };
-    const timer = setTimeout(() => finish({ ok: false, code: null, out, err, error: `${Math.round(timeoutMs / 1000)}s 没连上` }), timeoutMs + 5000);
-
-    child.stdout.setEncoding('utf8');
-    child.stderr.setEncoding('utf8');
-    child.stdout.on('data', (c) => (out += c));
-    child.stderr.on('data', (c) => (err += c));
-    child.on('error', (e) => finish({ ok: false, code: null, out, err, error: `起不来：${e.message}` }));
-    child.on('close', (code) => {
-      const text = (err + out).slice(0, 4000);
-      finish({ ok: code === 0, code, out: out.trim(), err: err.trim(), error: code === 0 ? null : text || `ssh 退出码 ${code}` });
-    });
-  });
 }
 
 /* ------------------------------------------------------------- 工具实现 */
@@ -146,6 +105,8 @@ const TOOLS = [
         host: { type: 'string', description: 'IPv4 或域名，不带端口/协议头/路径' },
         port: { type: 'number', description: '1–65535，默认 22' },
         user: { type: 'string', description: '服务器登录用户名' },
+        auth_type: { type: 'string', description: "认证方式：'key'（默认，私钥）或 'password'" },
+        password: { type: 'string', description: "auth_type 为 'password' 时要用的登录密码（只落本机 ssh-secrets.json，不进登记表）" },
         key_path: { type: 'string', description: '私钥路径，默认 ~/.ssh/<名称>' },
         purpose: { type: 'string', description: '备注：这台机器干什么用' },
       },
@@ -164,6 +125,7 @@ function view(s) {
   return {
     alias: s.alias,
     address: `${s.user}@${s.host}:${s.port}`,
+    authType: s.auth_type === 'password' ? 'password' : 'key',
     status: s.status || '',
     keyPath: s.key_path,
     keyFingerprint: s.key_fingerprint || '',
@@ -184,8 +146,9 @@ async function callTool(name, args = {}) {
           return [
             `${v.alias}`,
             `  地址：${v.address}`,
+            `  认证：${v.authType === 'password' ? '密码' : '私钥'}`,
             `  状态：${v.status || '（未记）'}${v.lastChecked ? `（最近核对 ${v.lastChecked}）` : ''}`,
-            `  密钥：${v.keyPath}${v.keyFingerprint ? `\n  指纹：${v.keyFingerprint}` : ''}`,
+            v.authType === 'password' ? '' : `  密钥：${v.keyPath}${v.keyFingerprint ? `\n  指纹：${v.keyFingerprint}` : ''}`,
             v.purpose ? `  备注：${v.purpose}` : '',
           ].filter(Boolean).join('\n');
         })

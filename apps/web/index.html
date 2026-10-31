@@ -117,6 +117,14 @@
     </svg>
     <span>设置</span>
   </button>
+  <!-- 「我的」（2026-10-31）：rail 底部最后一级 —— 当前登录的人 + 退出登录。
+       设置**留在**左边菜单栏（用户拍板"设置还是放到左边菜单栏"），不往工作台搬；
+       「我的」只管"我是谁"，人形图标与手机端那个 tab 是同一套符号。
+       ⚠️ rail-bottom（margin-top:auto）只在设置那颗上 —— 两颗都写会把中间撑出一段空档。 -->
+  <button class="nav-btn" data-nav="me">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.6"/><path d="M4.9 20.2c.7-3.6 3.6-5.5 7.1-5.5s6.4 1.9 7.1 5.5"/></svg>
+    <span>我的</span>
+  </button>
 </nav>
 
 <!-- 二级：列表 -->
@@ -448,6 +456,45 @@
     <div class="dlg-actions">
       <button type="button" value="cancel">取消</button>
       <button class="primary" id="plgFormOk" value="ok">保存</button>
+    </div>
+  </form>
+</dialog>
+
+<!--
+  首次引导（2026-10-31 用户概念落地，参照电脑的开机设置）：一个用户都还没有时，启动就弹这个框。
+  第一个用户自动成为内置管理员（服务端定，见 store/users.mjs）；密码可空 ——
+  空密码的账号只是本机身份（署名 / 派活认它），登不了远程，要远程登录再补密码。
+  「跳过」不是"不再问"：下次启动还没有用户就还会弹（跟电脑第一次开机不建账户不让用的思路一致，
+  但班底允许先逛逛 —— 账号没建，功能一样能用，只是消息还署名「我」）。
+-->
+<dialog id="firstUserDlg">
+  <form method="dialog">
+    <b>创建用户</b>
+    <div class="dim" style="margin-top:8px;font-size:12.5px;line-height:1.75">
+      第一个用户自动成为管理员。密码可留空 —— 免密账号下次打开班底，点了就进。
+    </div>
+    <input id="fuName" placeholder="用户名" autocomplete="username" spellcheck="false" maxlength="20" style="margin-top:12px" />
+    <input id="fuPwd" type="password" placeholder="密码（可留空）" autocomplete="new-password" style="margin-top:8px" />
+    <div id="fuErr" style="color:#ff8a80;font-size:12.5px;margin-top:8px" hidden></div>
+    <div class="dlg-actions">
+      <button type="button" value="cancel">跳过</button>
+      <button class="primary" id="fuOk" value="ok">创建</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- 「我的」页的修改密码（2026-10-31）：当前密码只有**设了密码**的账号才显示（免密账号没有旧密码可验）；
+     新密码留空 = 改回免密 —— 与建账号"密码可留空"是同一个口径，两端别走样。 -->
+<dialog id="mePwdDlg">
+  <form method="dialog">
+    <b>修改密码</b>
+    <input id="mePwdCur" type="password" placeholder="当前密码" autocomplete="current-password" spellcheck="false" style="margin-top:12px" />
+    <input id="mePwdNew" type="password" placeholder="新密码（8 位以上；留空 = 改回免密）" autocomplete="new-password" spellcheck="false" style="margin-top:8px" />
+    <input id="mePwdNew2" type="password" placeholder="再输一遍新密码" autocomplete="new-password" spellcheck="false" style="margin-top:8px" />
+    <div id="mePwdErr" style="color:#ff8a80;font-size:12.5px;margin-top:8px" hidden></div>
+    <div class="dlg-actions">
+      <button type="button" value="cancel">取消</button>
+      <button class="primary" id="mePwdOk" value="ok">保存</button>
     </div>
   </form>
 </dialog>

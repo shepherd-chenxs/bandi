@@ -1,7 +1,8 @@
 /* settings.mjs —— 设置、关于、额度。
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
 import { esc, setRoute, setTheme, toast } from './shell.mjs';
-import { api, dt, failHtml, post, showFail } from './ui.mjs';
+import { api, dt, failHtml, initial, post, showFail, wireDialogHead } from './ui.mjs';
+import { qrSvg } from './vendor/qrcode.mjs';
 import { headRow, renderPlugins, renderRuntimes, rtLoading } from './connectors.mjs';
 import { openRemotePage, setPluginRerender } from './experts.mjs';
 import { renderList, showView } from './contacts.mjs';
@@ -9,8 +10,281 @@ import { setListTitle } from './flowpages.mjs';
 import { openCodeRepoPage, renderSkillCards } from './skills.mjs';
 import { renderPairing } from './pairing.mjs';
 import { renderRoles } from './roleadmin.mjs';
-import { renderUsers } from './useradmin.mjs';
+import { logout, renderUsers } from './useradmin.mjs';
 import { $, S } from './core.mjs';
+
+
+
+/* ---------------------------------------------------------------- 我的 */
+
+/**
+ * 「我的」（2026-10-31，rail 底部新增的一级栏）：**只管"我是谁"** ——
+ * 当前登录的人（头像 / 名字 / 身份）+ 退出登录。
+ *
+ * 为什么不把偏好/关于搬进来：用户拍板「设置还是放到左边菜单栏」—— 设置一节不动，
+ * 这里就只放设置页没有的那件事：登录身份。退出登录与用户管理页共用同一份
+ * （useradmin.logout，两张票一起清），别处再写就是第二套口径。
+ *
+ * 整页形态（左栏收掉，与工作台/专家库同款，setNav 里已把 no-list 带上）；
+ * 容器借设置页的 #settingsView —— 反正两者不会同时出现，省一个常驻节点。
+ */
+export function openMe() {
+  setRoute('me');
+  setPluginRerender(null);
+  showView('settings');
+  setListTitle('我的');
+  const who = S.auth ?? null;
+  const isUser = who?.kind === 'user';
+  const name = isUser
+    ? (who?.user?.name ?? '')
+    : who?.kind === 'device'
+      ? (who?.device?.name || '这台设备')
+      : '操作员';
+  const sub = isUser
+    ? (who?.role?.name ?? '')
+    : who?.kind === 'operator'
+      ? '本机 / 访问令牌'
+      : '手机设备';
+  // 免密 / 已设置：只有登录账号有"自己的密码"可改（操作员没有账号，去设置 → 用户里管）
+  const hasPw = isUser ? who?.user?.hasPassword !== false : false;
+  // 动态验证：同上，登录账号才有"自己的验证器"
+  const hasTotp = isUser ? who?.user?.hasTotp === true : false;
+  $('settingsView').innerHTML = `
+    ${headRow('<b>我的</b>')}
+    <div class="detail-body">
+      <section class="set-sec">
+        <div class="set-box">
+          <div class="set-row me-row">
+            <span class="me-ava">${esc(initial(name))}</span>
+            <div class="me-who"><b>${esc(name)}</b>${sub ? `<span class="sub">${esc(sub)}</span>` : ''}</div>
+          </div>
+        </div>
+      </section>
+      ${
+        isUser
+          ? `<section class="set-sec">
+               <div class="set-head"><b>密码</b></div>
+               <div class="set-box">
+                 <div class="set-row">
+                   <span class="set-label">登录密码</span>
+                   <div style="display:flex;align-items:center;gap:10px">
+                     <span class="machine-data">${hasPw ? '已设置' : '免密'}</span>
+                     <button class="btn-sm" id="mePwd">修改密码</button>
+                   </div>
+                 </div>
+               </div>
+             </section>
+             <section class="set-sec">
+               <div class="set-head"><b>安全</b></div>
+               <div class="set-box">
+                 <div class="set-row">
+                   <span class="set-label">动态验证</span>
+                   <div style="display:flex;align-items:center;gap:10px">
+                     <span class="machine-data" id="meTotpState">${hasTotp ? '已开启' : '未开启'}</span>
+                     <button class="btn-sm" id="meTotp">${hasTotp ? '解绑' : '开启'}</button>
+                   </div>
+                 </div>
+               </div>
+             </section>`
+          : ''
+      }
+      <div class="machine-actions"><button class="btn-sm" id="meLogout">退出登录</button></div>
+    </div>`;
+  $('meLogout')?.addEventListener('click', () => void logout());
+  $('mePwd')?.addEventListener('click', () => openMePwdDlg(hasPw));
+  $('meTotp')?.addEventListener('click', () => (hasTotp ? openOtpOffDlg() : openOtpOnDlg()));
+  // 已绑定的：补一行"绑于何时 / 还剩几个恢复码"（参考项目 security 页的 status 显示）
+  if (hasTotp) {
+    api('/api/me/otp/status')
+      .then((st) => {
+        const el = $('meTotpState');
+        if (!el || !st?.enabled) return;
+        const at = String(st.bindTime ?? '').replace('T', ' ').slice(0, 16);
+        el.textContent = `已开启${at ? ' · ' + at : ''} · 恢复码剩 ${st.recoveryLeft ?? 0} 个`;
+      })
+      .catch(() => {});
+  }
+}
+
+/**
+ * 「我的」› 动态验证（2026-10-31 二改，仿 yaojian-ruoyi 的绑定流）。
+ *
+ * 三步，与参考项目的 security 页一致：
+ *   ① 扫码（或手动输密钥）→ ② 输动态码确认 → ③ **一次性展示 10 个恢复码**（必须抄走）。
+ * 密钥在 confirm 之前不落库；恢复码只在 confirm 的响应里出现这一次。
+ */
+function openOtpOnDlg() {
+  const dlg = document.createElement('dialog');
+  dlg.id = 'otpDlg';
+  dlg.innerHTML = `
+    <form method="dialog">
+      <b>开启动态验证</b>
+      <div id="otpS1" style="margin-top:10px">
+        <div class="otp-step">① 用 Authenticator 扫码；扫不了就手动输入下面这串密钥</div>
+        <div id="otpQr"></div>
+        <div class="machine-data machine-addr" id="otpSecret" style="text-align:center;margin-top:6px"></div>
+        <div class="otp-step" style="margin-top:14px">② 输入 App 里显示的 6 位码</div>
+        <input id="otpCode" inputmode="numeric" maxlength="6" placeholder="6 位验证码" autocomplete="one-time-code" style="margin-top:6px" />
+      </div>
+      <div id="otpS2" hidden>
+        <div class="otp-step" style="margin-top:10px">
+          ③ 恢复码 —— <b>只显示这一次</b>，每个只能用一次。手机丢了、验证器换了，用它代替动态码登录。请立即抄下来。
+        </div>
+        <div id="otpRecovery" class="otp-recovery"></div>
+      </div>
+      <div id="otpErr" style="color:#ff8a80;font-size:12.5px;margin-top:8px" hidden></div>
+      <div class="dlg-actions" id="otpActions">
+        <button type="button" value="cancel">取消</button>
+        <button class="primary" id="otpOk" value="ok">确认开启</button>
+      </div>
+    </form>`;
+  document.body.append(dlg);
+  wireDialogHead(dlg.querySelector('form'));
+  dlg.addEventListener('close', () => dlg.remove());
+  const err = dlg.querySelector('#otpErr');
+  const bad = (t) => { err.textContent = t; err.hidden = false; };
+  dlg.querySelector('button[value="cancel"]').onclick = () => dlg.close();
+
+  let secret = '';
+  void (async () => {
+    try {
+      const r = await api('/api/me/otp/bind', { method: 'POST' });
+      secret = r.secret;
+      dlg.querySelector('#otpQr').innerHTML = qrSvg(r.uri);
+      dlg.querySelector('#otpSecret').textContent = r.secret;
+    } catch (e) {
+      bad(e.message);
+      dlg.querySelector('#otpS1').hidden = true;
+    }
+  })();
+
+  dlg.querySelector('#otpOk').onclick = async (e) => {
+    e.preventDefault();
+    err.hidden = true;
+    const code = dlg.querySelector('#otpCode').value.trim();
+    if (!code) return bad('先输验证器里的 6 位码');
+    const btn = dlg.querySelector('#otpOk');
+    btn.disabled = true;
+    try {
+      const r = await api('/api/me/otp/bind/confirm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ secret, code }),
+      });
+      // 第三步：展示恢复码（仅此一次），按钮换成「我已保存」
+      dlg.querySelector('#otpS1').hidden = true;
+      const s2 = dlg.querySelector('#otpS2');
+      s2.hidden = false;
+      dlg.querySelector('#otpRecovery').innerHTML = (r.recoveryCodes ?? [])
+        .map((c) => `<code>${esc(c)}</code>`)
+        .join('');
+      if (S.auth?.user) S.auth.user.hasTotp = true;
+      const acts = dlg.querySelector('#otpActions');
+      acts.innerHTML = `
+        <button type="button" id="otpCopy">复制全部</button>
+        <button class="primary" id="otpDone">我已保存</button>`;
+      acts.querySelector('#otpDone').onclick = () => {
+        dlg.close();
+        toast('动态验证已开启');
+        openMe();
+      };
+      acts.querySelector('#otpCopy').onclick = () => {
+        const text = (r.recoveryCodes ?? []).join('\n');
+        navigator.clipboard?.writeText(text).then(
+          () => toast('恢复码已复制'),
+          () => toast('复制失败，请手动抄写', 'error'),
+        );
+      };
+    } catch (e2) {
+      btn.disabled = false;
+      bad(e2.message);
+    }
+  };
+  dlg.showModal();
+  dlg.querySelector('#otpCode').focus();
+}
+
+/** 解绑：要当前有效动态码或一个恢复码（防手机丢失后被别人顺手关掉） */
+function openOtpOffDlg() {
+  const dlg = document.createElement('dialog');
+  dlg.id = 'otpOffDlg';
+  dlg.innerHTML = `
+    <form method="dialog">
+      <b>关闭动态验证</b>
+      <div class="otp-step" style="margin-top:10px">
+        关闭后登录只需密码。为确认是本人操作，请输入当前验证器的 6 位动态码（或一个恢复码）。
+      </div>
+      <input id="otpCode" inputmode="numeric" maxlength="8" placeholder="动态验证码或恢复码" autocomplete="one-time-code" style="margin-top:8px" />
+      <div id="otpErr" style="color:#ff8a80;font-size:12.5px;margin-top:8px" hidden></div>
+      <div class="dlg-actions">
+        <button type="button" value="cancel">取消</button>
+        <button class="danger" id="otpOff" value="ok">解绑</button>
+      </div>
+    </form>`;
+  document.body.append(dlg);
+  wireDialogHead(dlg.querySelector('form'));
+  dlg.addEventListener('close', () => dlg.remove());
+  const err = dlg.querySelector('#otpErr');
+  dlg.querySelector('button[value="cancel"]').onclick = () => dlg.close();
+  dlg.querySelector('#otpOff').onclick = async (e) => {
+    e.preventDefault();
+    err.hidden = true;
+    try {
+      await api('/api/me/otp/unbind', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: dlg.querySelector('#otpCode').value.trim() }),
+      });
+      dlg.close();
+      if (S.auth?.user) S.auth.user.hasTotp = false;
+      toast('已解绑动态验证');
+      openMe();
+    } catch (e2) {
+      err.textContent = e2.message;
+      err.hidden = false;
+    }
+  };
+  dlg.showModal();
+  dlg.querySelector('#otpCode').focus();
+}
+
+/** 「我的」› 修改密码弹窗（2026-10-31）。免密账号没有"当前密码"格；新密码留空 = 改回免密。 */
+function openMePwdDlg(hasPw) {
+  const dlg = $('mePwdDlg');
+  const cur = $('mePwdCur');
+  const n1 = $('mePwdNew');
+  const n2 = $('mePwdNew2');
+  const err = $('mePwdErr');
+  const bad = (t) => { err.textContent = t; err.hidden = false; };
+  cur.hidden = !hasPw;
+  cur.value = n1.value = n2.value = '';
+  err.hidden = true;
+  dlg.querySelector('button[value="cancel"]').onclick = () => dlg.close();
+  $('mePwdOk').onclick = async (e) => {
+    e.preventDefault();
+    err.hidden = true;
+    if (hasPw && !cur.value) return bad('先填当前密码');
+    if (n1.value !== n2.value) return bad('两次输入的新密码不一样');
+    if (n1.value && n1.value.length < 8) return bad('新密码要 8 位以上（或留空改回免密）');
+    try {
+      await api('/api/me/password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ current: cur.value, password: n1.value }),
+      });
+      dlg.close();
+      // 服务端改完密码会作废全部会话、给这台浏览器补了张新票（Cookie 已换）——
+      // 本地把状态跟上，重画"免密 / 已设置"那一行
+      if (S.auth?.user) S.auth.user.hasPassword = n1.value !== '';
+      toast(n1.value ? '密码已改' : '已改回免密');
+      openMe();
+    } catch (e2) {
+      bad(e2?.message ?? '没改成，再试一次');
+    }
+  };
+  dlg.showModal();
+  (hasPw && !cur.hidden ? cur : n1).focus();
+}
 
 
 

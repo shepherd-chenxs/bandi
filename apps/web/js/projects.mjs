@@ -1804,7 +1804,10 @@ export function wireBoard(view, { refresh, taskProject = () => null }) {
           const who = (S.personas ?? []).find((p) => p.id === res.task?.assigneePersonaId)?.name;
           hint(`已经派给${who ? `「${who}」` : '执行人'}开跑了 —— 进展在他那条会话里看`);
         } else if (toStatus === '进行中') {
-          hint('卡移到「进行中」了；这张卡没有执行人，所以不会自动开跑');
+          // 真人执行的卡（2026-10-31）：有执行人、但不起会话 —— 别说成"没有执行人"
+          hint((S.users ?? []).some((u) => u.id === res.task?.assigneeUserId)
+            ? '卡移到「进行中」了；这张卡派给了真人，不起会话也不自动开跑'
+            : '卡移到「进行中」了；这张卡没有执行人，所以不会自动开跑');
         }
         if (hidden) toast(`卡已经改成「${toStatus}」了，但当前筛选看不到它 —— 点右上角「清除」就能看见。`);
       } catch (err) {
@@ -2113,14 +2116,20 @@ export async function paintTaskCardPage(taskId, opts = {}) {
   // 开工时那条派活说明（带着项目契约与任务正文）：不是人写的评论，收成一行可展开
   const isStartNote = (m) => m.role === 'user' && String(m.text ?? '').includes('【任务 · ');
 
+  // 真人署名（2026-10-31 用户概念落地）：消息带 senderUserName 且**不是自己** → 返回名字。
+  // 卡评论区谁留的言各归各；没署名（员工/回执）或就是自己 → null，一切照旧。
+  const humanOf = (m) =>
+    m.role === 'user' && m.senderUserName && m.senderUserName !== (S.me?.name ?? '我') ? m.senderUserName : null;
+
   // 我自己的评论不再重复写名字 —— 头像上那个「我」就是名字，写两遍是噪声（他的回话仍然带名字）
   // 时间放回复下面（2026-10-29 用户："时间放回复下面"）；自己的评论头一行**整行不画** ——
   // 空着的 meta 行就是正文上面那条留白（用户实测指出）。
   // `replyTopicId`：议题里**最后一条**回复带「回复」按钮（2026-10-29 用户："最后一句加一个回复按钮"），
   // 点了挂回同一条议题 —— 输入框就地停靠在那条下面，接着聊。
   const cmtItem = (m, isNew = false, replyTopicId = null) => {
-    const mine = m.role === 'user';
-    const who = mine ? '我' : (m.run?.personaName || whoName);
+    const human = humanOf(m);
+    const mine = m.role === 'user' && !human;
+    const who = mine ? '我' : human ?? (m.run?.personaName || whoName);
     let main;
     if (m.pseudo === 'stop' || m.pseudo === 'fail') {
       // 没跑成的那几轮（见 timelineOf）：库里没有 assistant 消息 —— 不补这条，屏幕上就只剩
@@ -2290,10 +2299,14 @@ export async function paintTaskCardPage(taskId, opts = {}) {
           ? '<span class="tc-tag" title="便签：只给你看，没叫醒他">便签</span>'
           : '';
         // 时间放回复下面（2026-10-29 用户："时间放回复下面"）；上面不留空行 ——
-        // 自己的评论头一行什么都不写，名字/时间/回复全收进正文底下那一行（他的回话头一行仍是名字）
+        // 自己的评论头一行什么都不写，名字/时间/回复全收进正文底下那一行（他的回话头一行仍是名字）。
+        // 别的真人开的话题同理：头一行写他，别让他的话顶着"我"的名字（2026-10-31）。
+        const headHuman = t.head ? humanOf(t.head) : null;
         const meta = t.head && t.head.role !== 'user'
           ? `<div class="tc-topic-meta"><b>${esc(whoName)}</b>${noteTag}</div>`
-          : '';
+          : headHuman
+            ? `<div class="tc-topic-meta"><b>${esc(headHuman)}</b>${noteTag}</div>`
+            : '';
         const foot = t.head
           ? `<div class="tc-topic-foot">
                <time class="tc-cmt-at">${esc(cmtTime(t.head.createdAt))}</time>
@@ -2309,7 +2322,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
         let replies = `<div class="tc-replies" data-replies="${esc(t.id)}"></div>`;
         if (t.items.length) {
           const last = t.items[t.items.length - 1];
-          const author = last.role === 'user' ? '我' : whoName;
+          const author = last.role === 'user' ? (humanOf(last) ?? '我') : whoName;
           const items = t.items.map((m, i) =>
             cmtItem(m, !seenReplies.has(m.id), i === t.items.length - 1 ? t.id : null),
           ).join('');
@@ -2324,7 +2337,9 @@ export async function paintTaskCardPage(taskId, opts = {}) {
         // 作者行在**正文上面**（跟普通评论一致）：头像旁边第一行是"我"，再往下才是内容 ——
         // 反过来会让人以为下面又开了一条评论（2026-10-18 用户指出）。时间/回复在正文底下的落款行。
         return `<article class="tc-topic" data-topic="${esc(t.id)}">
-          ${t.head ? (t.head.role === 'user' ? smAvatar('我', 'me') : smAvatar(whoName, '', personaByName(whoName))) : ''}
+          ${t.head ? (t.head.role === 'user'
+            ? (headHuman ? smAvatar(headHuman, '', personaByName(headHuman)) : smAvatar('我', 'me'))
+            : smAvatar(whoName, '', personaByName(whoName))) : ''}
           <div class="tc-topic-body">
             ${meta}${head}
             ${foot}
@@ -2637,19 +2652,30 @@ export async function paintTaskCardPage(taskId, opts = {}) {
       })
     : createCombo({
         mount: $('tcWhoMount'),
-        items: [{ id: '', label: '（不指定）' }, ...(S.personas ?? []).map((p) => ({ id: p.id, label: personLabel(p) }))],
-        value: task.assigneePersonaId || '',
+        /*
+         * 执行人一格二选一（2026-10-31 用户概念落地）：数字员工（会派活起会话）或
+         * **真人**（挂名负责，不起会话）——真人的选项 id 带 `u:` 前缀，提交时换成
+         * assigneeUserId（员工的 id 都是 `p-` 系，前缀撞不了车）。
+         */
+        items: [
+          { id: '', label: '（不指定）' },
+          ...(S.users ?? []).map((u) => ({ id: `u:${u.id}`, label: u.name })),
+          ...(S.personas ?? []).map((p) => ({ id: p.id, label: personLabel(p) })),
+        ],
+        value: task.assigneePersonaId || (task.assigneeUserId ? `u:${task.assigneeUserId}` : ''),
         search: true,
         placeholder: '搜名字或岗位…',
         empty: '没有匹配的人',
         onChange: (id) => {
           // 选人**立刻**反映到评论区与页头（原来要点了「保存」重画才生效，看着就像"输入框点不动"）
-          const p = (S.personas ?? []).find((x) => x.id === id) ?? null;
-          if (p) whoName = p.name;
+          const isUser = String(id).startsWith('u:');
+          const p = isUser ? null : (S.personas ?? []).find((x) => x.id === id) ?? null;
+          const u = isUser ? (S.users ?? []).find((x) => x.id === id.slice(2)) : null;
+          if (p || u) whoName = p?.name ?? u?.name;
           const whoText = $('tcWhoText');
-          if (whoText) whoText.textContent = p?.name ?? '（没派活）';
+          if (whoText) whoText.textContent = p?.name ?? u?.name ?? '（没派活）';
           syncComposer();
-          scheduleSave(0); // 指定人立刻存：卡在「待办」时这一下就会自动开工
+          scheduleSave(0); // 指定人立刻存：卡在「待办」时这一下就会自动开工（真人执行不开工，见服务端）
         },
       });
   syncComposer();
@@ -2658,9 +2684,14 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     title: titleVal,
     description: descVal,
     status: statusCombo.value(),
-    // 还没发起的流程卡**不能带 personaId**：服务端看到"流程卡改执行人"会把整个 PATCH 400 掉
+    // 还没发起的流程卡**不能带执行人**：服务端看到"流程卡改执行人"会把整个 PATCH 400 掉
     // （连改标题/描述都一起被挡），而这张卡本来就没有人选。
-    ...(flowOnly ? {} : { personaId: whoCombo.value() }),
+    // 执行人二选一：`u:` 前缀 = 真人（assigneeUserId），否则 = 数字员工（personaId）。
+    ...(flowOnly
+      ? {}
+      : String(whoCombo.value()).startsWith('u:')
+        ? { assigneeUserId: String(whoCombo.value()).slice(2) }
+        : { personaId: whoCombo.value() }),
   });
   let lastSaved = JSON.stringify(snapshot());
   let saving = false;
@@ -2675,7 +2706,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     const p = (S.personas ?? []).find((x) => x.id === task.assigneePersonaId) ?? null;
     if (p) whoName = p.name;
     statusCombo?.setValue(task.status);
-    whoCombo?.setValue(task.assigneePersonaId || '');
+    whoCombo?.setValue(task.assigneePersonaId || (task.assigneeUserId ? `u:${task.assigneeUserId}` : ''));
     if (document.activeElement !== descHost) {
       descVal = task.description || '';
       renderDesc();
@@ -3307,17 +3338,23 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     }
     const mode = sendMode; // note | discuss | execute
     const parentId = replyTo;
+    // 真人执行的卡（2026-10-31）：没有员工会话，评论区这条链路走不通 —— 直说，别让服务端的报错来代言
+    const whoVal = String(whoCombo.value());
+    if (whoVal.startsWith('u:')) {
+      toast('这张卡派给了真人 —— 评论区是跟数字员工讨论的；要让员工接手，把执行人改成他');
+      return;
+    }
     $('tcInput').disabled = true;
     $('tcSend').disabled = true;
     try {
       // 刚在右边选的人可能还没点「保存」：先落库，否则服务端会说"先指定执行人"。
-      if (task.assigneePersonaId !== whoCombo.value()) {
+      if (task.assigneePersonaId !== whoVal) {
         const saved = await api(`/api/projects/tasks/${encodeURIComponent(taskId)}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ personaId: whoCombo.value() }),
+          body: JSON.stringify({ personaId: whoVal }),
         });
-        task.assigneePersonaId = saved?.task?.assigneePersonaId ?? whoCombo.value();
+        task.assigneePersonaId = saved?.task?.assigneePersonaId ?? whoVal;
       }
       // 附件先逐个上传：第一次会懒建工单会话，返回的 conversationId 之后直接复用
       let atts = null;
@@ -3573,10 +3610,18 @@ export function taskDialog(project, colKey) {
       });
   const whoCombo = createCombo({
     mount: $('tkWhoMount'),
-    items: [{ id: '', label: '不派活' }, ...(S.personas ?? []).map((p) => ({ id: p.id, label: personLabel(p) }))],
+    /*
+     * 执行人一格二选一（2026-10-31 用户概念落地）：数字员工（会派活）或**真人**（挂名负责，
+     * 不起会话不派活）——真人选项 id 带 `u:` 前缀，提交时换成 assigneeUserId。
+     */
+    items: [
+      { id: '', label: '不派活' },
+      ...(S.users ?? []).map((u) => ({ id: `u:${u.id}`, label: u.name })),
+      ...(S.personas ?? []).map((p) => ({ id: p.id, label: personLabel(p) })),
+    ],
     value: '',
     search: true,
-    placeholder: '搜数字员工…',
+    placeholder: '搜名字或岗位…',
     empty: '没有匹配的人',
     // 这个箭头只在**点选时**才跑，那时下面的 syncStart / syncFilterHint 早就定义好了 —— 顺序是有意的
     onChange: () => {
@@ -3629,6 +3674,15 @@ export function taskDialog(project, colKey) {
     const wrap = box.closest('.kb-check');
     const text = $('tkStartText');
     const idea = statusCombo.value() === '想法';
+    // 真人执行（2026-10-31）：挂名负责，没有"开始工作"这件事 —— 勾锁死在取消上
+    if (String(whoCombo.value()).startsWith('u:')) {
+      box.disabled = true;
+      box.checked = false;
+      wrap.style.opacity = '.5';
+      text.textContent = '真人执行 —— 卡挂在他名下，不起会话也不派活';
+      wrap.title = '真人执行的卡不会自动开跑；要让员工干，执行人选数字员工';
+      return;
+    }
     if (flowMode()) {
       const picked = !!flowCombo.value();
       const on = picked && !idea; // 定了流程且不是「想法」→ 锁在勾上；否则锁在取消
@@ -3716,6 +3770,9 @@ export function taskDialog(project, colKey) {
       return toast('先选一条流程 —— 还没有已发布的流程就去工作台 → 流程 里发布一条');
     }
     const st = statusCombo.value();
+    // 执行人二选一的提交形态：`u:` 前缀 = 真人（assigneeUserId，绝不 startNow），否则 = 员工
+    const whoVal = String(whoCombo.value());
+    const isUser = whoVal.startsWith('u:');
     try {
       const res = await api(`/api/projects/${encodeURIComponent(chosen.id)}/tasks`, {
         method: 'POST',
@@ -3724,10 +3781,14 @@ export function taskDialog(project, colKey) {
           title,
           description: $('tkDesc').value.trim(),
           status: st,
-          // 执行方式二选一：流程模式**不带 personaId**（服务端把"两个都给"当 400 挡，见 routes/project.mjs）
-          ...(flow ? { flowTemplateId: flowId } : { personaId: whoCombo.value() || null }),
+          // 执行方式二选一：流程模式**不带执行人**（服务端把"两个都给"当 400 挡，见 routes/project.mjs）
+          ...(flow
+            ? { flowTemplateId: flowId }
+            : isUser
+              ? { assigneeUserId: whoVal.slice(2) }
+              : { personaId: whoVal || null }),
           // 流程模式：状态不是「想法」就发起（跟 syncStart 锁死的那个勾是同一份口径）
-          startNow: flow ? st !== '想法' : (!!whoCombo.value() && $('tkStart').checked),
+          startNow: flow ? st !== '想法' : (!isUser && !!whoVal && $('tkStart').checked),
         }),
       });
       const again = $('tkAgain').checked;

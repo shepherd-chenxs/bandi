@@ -8,6 +8,8 @@ import { openPluginForm, pluginFormId } from './experts.mjs';
 import { refreshDeptSuggest } from './contacts.mjs';
 import { $, LOCAL_BASE, S } from './core.mjs';
 import { MENU_KEYS, canSee, canSeeKeys, resolveRole } from './roles.mjs';
+// 首次引导（2026-10-31 用户概念落地）：一个账号都没有时，启动完弹「创建用户」
+import { maybeFirstUser } from './useradmin.mjs';
 
 
 
@@ -484,6 +486,19 @@ export async function boot() {
     const st = await api(`${LOCAL_BASE}/status`);
     if (st?.client?.joined) {
       renderNodeMode(st);
+      /*
+       * 分机也要登录（2026-10-31 用户拍板「不管总机还是分机都要用用户登录」）：
+       * 节点形态不走 load()，身份和首次引导在这里单独来一遍 ——
+       * 还没有账号（面板闸对"零账号"放行）就先弹「创建用户」，建完下次进来就是登录页；
+       * 有会话（服务端闸放行进来的）记下身份，节点页照旧。
+       */
+      try {
+        const me = await api('/api/me');
+        S.auth = me ?? null;
+        S.isUser = me?.kind === 'user';
+        S.isAdmin = me?.kind === 'operator' || me?.kind === 'user' && me?.role?.id === 'admin';
+        if (me?.kind === 'operator') await maybeFirstUser();
+      } catch { /* 问不了身份就照旧画节点页 */ }
       startVersionWatch();
       return;
     }
@@ -493,6 +508,7 @@ export async function boot() {
   // 回到上次的位置（以前是写死 setNav('messages')：在哪个页面按 F5 都会被弹回消息页）
   load()
     .then(() => restorePlace())
+    .then(() => maybeFirstUser())
     .catch((e) => { $('chat').innerHTML = '<div class="empty">' + esc(e.message) + '</div>'; });
   startVersionWatch();
 }
