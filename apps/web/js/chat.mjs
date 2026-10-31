@@ -1494,7 +1494,8 @@ export const PERSONA_TASK_GROUPS = [
  * 卡片上不写执行人：这一页里的每一张都是他的。
  */
 export function personaTaskCard(r) {
-  const local = r.source === 'manual' || r.source === 'repo';
+  // 协作卡（2026-10-31）与手工/仓库卡同族：都活在 project_tasks 里（第三处判据，漏一处就点不开）
+  const local = r.source === 'manual' || r.source === 'repo' || r.source === 'collab';
   const srcCls = r.source === 'chat' ? ' chat' : r.source === 'repo' ? ' repo' : local ? ' manual' : '';
   // 点卡片去哪儿：流程 → 那条实例；有会话 → 那场对话；手工卡没派活 → 它所在项目的看板
   const attr = r.source === 'flow'

@@ -25,6 +25,9 @@ export * from './store/runs.mjs';
 export * from './store/projects.mjs';
 export * from './store/projectTasks.mjs';
 export * from './store/nodes.mjs';
+// 协作中心（2026-10-31 MVP）：collab_invites / collab_branches / collab_tasks 三张表 ——
+// 中心侧只存"分公司名录 + 任务 + 状态"，不碰分公司的业务数据。
+export * from './store/collab.mjs';
 // 手机配对与设备域（2026-11 手机端增量）：mobile_devices / mobile_device_tokens / mobile_pair_tokens
 export * from './store/devices.mjs';
 export * from './store/workflows.mjs';

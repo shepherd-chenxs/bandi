@@ -520,6 +520,23 @@ export function guard(auth, req, res, url) {
   if (req.method === 'GET' && url.pathname === '/api/hello') return true;
 
   /*
+   * **协作中心的分公司通道**（2026-10-31 MVP，任务书 §6.2）：这四条**免操作员令牌**。
+   *
+   * 凭据不是 `bandi_token`：`join` 凭一次性接入码，其余三条凭 `X-Bandi-Token: bc_…`
+   * （**分公司令牌，不是操作员令牌**）。校验全在 `routes/collab.mjs` 的 handler 里 ——
+   * `identify()` 不认识 `bc_`，别去改它（任务书 §十五 第 3 条）。
+   *
+   * 为什么必须放行：中心一开局域网（`BANDI_HOST=0.0.0.0` → 鉴权开），分公司就来不了，
+   * 而它手上永远不会有中心的操作员令牌 —— 不放行等于协作不可用。
+   * ⚠️ 只放这四条，**别的 `/api/collab/*` 照常走 `mayManage`**；
+   *    CSRF 闸照常生效（分公司请求不带 Origin，天然放行）。
+   */
+  if (req.method === 'POST' && url.pathname === '/api/collab/join') return true;
+  if (req.method === 'POST' && url.pathname === '/api/collab/poll') return true;
+  if (req.method === 'POST' && url.pathname === '/api/collab/leave') return true;
+  if (req.method === 'POST' && /^\/api\/collab\/tasks\/[^/]+\/report$/.test(url.pathname)) return true;
+
+  /*
    * 手机配对（2026-11 手机端增量，设计 §2）：落地页与换码接口必须免令牌 ——
    * 手机此刻还**没有任何凭据**，配对码本身就是它的凭据（对齐上面 /api/nodes/join 的既有写法）。
    * · `GET /pair`（及 `/pair.html`）＝ 扫码落地页：服务端不校验 token，校验在 claim；

@@ -30,6 +30,8 @@ const RUN = [
   'apps/server/src/smoke-auth.mjs',
   'apps/server/src/smoke-autostart.mjs',
   'apps/server/src/smoke-chat-to-board.mjs',
+  // 协作中心（2026-10-31 MVP）：两台真进程，走的是"中心派活 → 分公司接单 → 状态双向"整条链
+  'apps/server/src/smoke-collab.mjs',
   'apps/server/src/smoke-connectors.mjs',
   'apps/server/src/smoke-conversation-delete.mjs',
   'apps/server/src/smoke-events.mjs',

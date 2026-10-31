@@ -133,11 +133,23 @@ export async function handleProject(req, res, url) {
         // 拖进「进行中」但没派出去：字段存了、状态没动（见 project-tasks 里的说明）
         return fail(res, 400, 'E1049', String(e.message), { taskId: e.taskId, statusUnchanged: true });
       }
+      // 带错误码的（协作卡的 E4046 那几条）：码 + 中文，UI 只显示这两样
+      if (e?.code) return fail(res, 400, e.code, String(e.message ?? e));
       return sendJson(res, missing ? 404 : 400, { error: String(e.message ?? e) });
     }
   }
   if (req.method === 'DELETE' && taskOne) {
-    const ok = store.deleteProjectTask(decodeURIComponent(taskOne[1]));
+    const id = decodeURIComponent(taskOne[1]);
+    /*
+     * **协作卡不能删**（2026-10-31）：卡的全部意义是"中心那条任务的本地影子"，
+     * 删了下一拍 poll 会把它原样重建出来 —— 用户看到的是"删不掉 / 闹鬼"。
+     * 要它消失只有一条路：让中心取消（中心取消后本地卡变「已取消」，仍在看板上留痕）。
+     */
+    const cur = store.getProjectTask(id);
+    if (cur?.source === 'collab') {
+      return fail(res, 400, 'E4046', '总公司派的任务不能删，只能等中心取消');
+    }
+    const ok = store.deleteProjectTask(id);
     return ok ? sendJson(res, 200, { ok: true }) : fail(res, 404, 'E2038', '任务不存在');
   }
 

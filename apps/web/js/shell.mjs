@@ -9,6 +9,8 @@ import { openSchedules, openSkill, openCodeRepoPage } from './skills.mjs';
 import { openConversation, openDetail } from './chat.mjs';
 import { openGroupDetail } from './groups.mjs';
 import { openExperts, openPlugins, openRemotePage, renderPluginPanel } from './experts.mjs';
+// 协作中心（2026-10-31 MVP）：工作台 › 协作中心（分公司名录 + 我派出去的活）
+import { openCollabPage } from './collab.mjs';
 import { S } from './core.mjs';
 
 
@@ -204,6 +206,14 @@ export const ROUTES = {
   schedules: () => {
     setNav('plugins', { skipOpen: true });
     return openSchedules();
+  },
+  /*
+   * 协作中心（2026-10-31 MVP）：工作台 › 协作中心。
+   * 跟 schedules / remote 一样是工作台子页 —— 左栏收起、页头面包屑写「工作台 › 协作中心」。
+   */
+  collab: () => {
+    setNav('plugins', { skipOpen: true });
+    return openCollabPage();
   },
 };
 

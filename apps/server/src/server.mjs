@@ -68,6 +68,9 @@ import * as feishu from './feishu.mjs';
 import { handleRun } from './routes/run.mjs';
 import { handleSchedules } from './routes/schedules.mjs';
 import { handleLocal, supervisorModule } from './routes/local.mjs';
+// 协作中心（2026-10-31 MVP）：中心管理接口 + 分公司 ↔ 中心的机器接口，两条路都在 handleCollab 里
+import { handleCollab } from './routes/collab.mjs';
+import * as collabBranch from './collab-branch.mjs';
 import { sendJson, fail, readBody, guardWrite, guardHost, serveStatic, BadRequest, allowedOrigins, webDir } from './http.mjs';
 import { SERVER } from './server-state.mjs';
 import { runtimeOptions, runtimesOk, withExternals } from './runtime-view.mjs';
@@ -99,7 +102,9 @@ function helloPayload() {
      */
     role: localMode.isJoined() ? 'node' : 'operator',
     // 能力声明：有这个才认得出 `scope` 字段（旧总机没有 → 加入方回 E2050，不静默降级）
-    caps: ['scope'],
+    // `'collab'`（2026-10-31）：认识协作中心。分公司"加入"前先探这一条 ——
+    // 没有它 = 那台班底太旧（E4043），**不静默降级**。与 lan-announce.mjs 的 caps 同一口径。
+    caps: ['scope', 'collab'],
   };
 }
 
@@ -482,6 +487,14 @@ const server = http.createServer(async (req, res) => {
 
     if (routes[key]) return await routes[key](req, res);
 
+    /*
+     * 协作中心（2026-10-31 MVP）：`/api/collab/*` 全部归它。
+     * 位置在链头附近 —— 它不和别的域共享路径；而 `join / poll / report / leave` 四条
+     * 是**分公司**来打的（不带操作员令牌），早一步匹配少绕几层 handler。
+     */
+    const handledCollab = await handleCollab(req, res, url);
+    if (handledCollab !== false) return;
+
     // 全局 SSE（/api/events）：挂在链头 —— 长命连接，别让它在别的 handler 里排队
     const handledEvents = await handleEvents(req, res, url);
     if (handledEvents !== false) return;
@@ -773,6 +786,18 @@ if (localMode.isJoined()) {
 }
 
 server.listen(port, SERVER.boundHost, logListen);
+
+/*
+ * 协作中心（2026-10-31 MVP）：这台机器**加入过**就在启动后接着同步。
+ * 中心重启过也不用重新加入 —— 分公司与任务都在它的库里，这边一拍就续上。
+ * 放在 `listen` 之后：先能答请求，再往外打（顺序反过来，第一次 poll 会跟自己的启动抢库）。
+ * 失败**不拦启动**：中心没开的时候这台机器照样是一台完整的班底。
+ */
+try {
+  if (collabBranch.startIfJoined()) console.log('[协作] 已恢复与中心的同步');
+} catch (e) {
+  console.warn(`[协作] 同步没起来（不影响本机使用）：${e?.message ?? e}`);
+}
 
 /**
  * 启动横幅。抽成函数是为了**原地重启之后能再打一遍** ✓
