@@ -51,6 +51,14 @@ export function openMe() {
   const hasPw = isUser ? who?.user?.hasPassword !== false : false;
   // 动态验证：同上，登录账号才有"自己的验证器"
   const hasTotp = isUser ? who?.user?.hasTotp === true : false;
+  /*
+   * 「有没有登录态可退」（2026-11-01 实报：回环形态点退出登录没反应）。
+   *   · 登录账号 → 有；
+   *   · 操作员 via 'token'（非回环形态的面板令牌）→ 有，退出会清令牌 Cookie；
+   *   · 操作员 via 'loopback' → **没有** —— 回环是免登录信任，clear Cookie 重载还是操作员，
+   *     摆了按钮就是骗人；手机设备同理（它的凭据是配对令牌，退出=解绑，另有入口）。
+   */
+  const canLogout = isUser || (who?.kind === 'operator' && who?.via !== 'loopback');
   $('settingsView').innerHTML = `
     ${headRow('<b>我的</b>')}
     <div class="detail-body">
@@ -90,7 +98,11 @@ export function openMe() {
              </section>`
           : ''
       }
-      <div class="machine-actions"><button class="btn-sm" id="meLogout">退出登录</button></div>
+      <div class="machine-actions">${
+        canLogout
+          ? '<button class="btn-sm" id="meLogout">退出登录</button>'
+          : '<div class="set-note" style="margin:0">这台机器是本机环境（回环免登录）：打开就是操作员，没有登录态可退。建了账号之后，启动时会先让你选账户。</div>'
+      }</div>
     </div>`;
   $('meLogout')?.addEventListener('click', () => void logout());
   $('mePwd')?.addEventListener('click', () => openMePwdDlg(hasPw));

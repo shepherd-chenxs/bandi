@@ -227,8 +227,16 @@ export async function logout() {
   if (!ok) return;
   try {
     await api('/api/logout', { method: 'POST' });
-  } catch {
-    /* 服务端已经认不出这张票了也没关系：清 Cookie 是浏览器的事，下面照做 */
+  } catch (e) {
+    /*
+     * 401 = 服务端本来就认不出这张票了，等同于退出成功，照常重载。
+     * 其它失败（403 CSRF / 500 ...）**要说出来并停在原地** —— 原来这里是
+     * `catch {}` + 无条件 reload，失败时页面回到原样，用户只看到"点了没反应"。
+     */
+    if (e?.status !== 401) {
+      toast(e?.message ?? '退出失败', 'error');
+      return;
+    }
   }
   location.reload();
 }

@@ -84,6 +84,12 @@ try {
   const setupCode = fs.readFileSync(path.join(tmp, 'setup_code'), 'utf8').trim();
   const first = await call('POST', '/api/users', { headers: { 'X-Bandi-Token': TOKEN, 'X-Bandi-Setup': setupCode }, body: ADMIN });
   check('引导码建号 → 201', first.status === 201, `${first.status} ${first.raw?.slice(0, 120)}`);
+  /*
+   * 建第一个账号会**顺手发一张会话票**（首次开机设置）—— 这张票也必须配 CSRF 值。
+   * 2026-11-01 实报：只发 sid 没发 csrf，建完账号第一次写操作（「退出登录」）直接吃 E4099，
+   * 用户看到的是"点了没反应"。
+   */
+  check('建号响应：会话票与 CSRF 值一起发', /bandi_sid=/.test(first.setCookie) && /bandi_csrf=/.test(first.setCookie), first.setCookie.slice(0, 120));
 
   console.log('\n① 登录响应：会话票与 CSRF 值一起发');
   const lg = await call('POST', '/api/login', { body: ADMIN });
@@ -115,11 +121,42 @@ try {
   const pageSc = page.headers.get('set-cookie') ?? '';
   check('登录页响应种 bandi_csrf（登录前就得有）', page.status === 200 && /bandi_csrf=/.test(pageSc), `${page.status} ${pageSc.slice(0, 80)}`);
 
+  /*
+   * ④b 面板页也自愈补种（2026-11-01）：老浏览器可能只有 sid 没有 csrf，
+   * 打开一次页面就该补上 —— 否则所有写请求永远 E4099（"点了没反应"那一类）。
+   */
+  const panel = await fetch(BASE + '/', {
+    headers: { Accept: 'text/html', Cookie: sid },
+    signal: AbortSignal.timeout(5000),
+  });
+  const panelSc = panel.headers.get('set-cookie') ?? '';
+  check('面板页（无 csrf）打开即补种 bandi_csrf', panel.status === 200 && /bandi_csrf=/.test(panelSc), `${panel.status} ${panelSc.slice(0, 80)}`);
+
   console.log('\n⑤ E4099 进审计（deny 由策略层记，handler 不参与）');
   const audit = await call('GET', '/api/security/audit', { cookie: `${sid}; bandi_csrf=${csrfValue}` });
   check('admin 能查审计', audit.status === 200 && Array.isArray(audit.body?.events), `${audit.status} ${audit.body?.code ?? ''}`);
   const csrfDeny = audit.body?.events?.find((e) => /E4099/.test(e.reason ?? ''));
   check('E4099 的拒绝进审计且 reason 带码（同请求只留一条历史）', !!csrfDeny, JSON.stringify(audit.body?.events?.slice(0, 3) ?? []).slice(0, 240));
+
+  /*
+   * ⑥ 退出登录（2026-11-01 实报：点了没反应）
+   * 走完整的浏览器口径：sid + csrf cookie + X-Bandi-CSRF 头 → 200，
+   * 响应清掉两张票，旧会话票立刻失效（/api/me 401）。
+   */
+  console.log('\n⑥ 退出登录：清两张票 + 会话立刻失效');
+  const lg2 = await call('POST', '/api/login', { body: ADMIN });
+  const sid2 = segOf(lg2.setCookie, 'bandi_sid');
+  const csrf2 = segOf(lg2.setCookie, 'bandi_csrf').split('=')[1];
+  const lo = await call('POST', '/api/logout', {
+    cookie: `${sid2}; bandi_csrf=${csrf2}`,
+    headers: { 'X-Bandi-CSRF': csrf2 },
+  });
+  check('退出 → 200', lo.status === 200, `${lo.status} ${lo.body?.code ?? ''}`);
+  check('退出响应清掉会话票与令牌票（两张都带 Max-Age=0 / 空值）',
+    /bandi_sid=/.test(lo.setCookie) && /bandi_token=/.test(lo.setCookie) && (lo.setCookie.match(/Max-Age=0/gi) ?? []).length >= 2,
+    lo.setCookie.slice(0, 160));
+  const afterLo = await call('GET', '/api/me', { cookie: sid2 });
+  check('退出后旧会话票不可用 → 401', afterLo.status === 401, `${afterLo.status} ${afterLo.body?.code ?? ''}`);
 } catch (err) {
   failed += 1;
   console.error('\n✗ 冒烟跑挂了：', err?.message ?? err);

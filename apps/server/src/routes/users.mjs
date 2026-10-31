@@ -327,7 +327,13 @@ export async function handleUsers(req, res, url) {
     /* ------------------------------------------------ 我是谁 */
     if (method === 'GET' && p === '/api/me') {
       const who = req.bandiAuth;
-      if (who?.kind === 'operator') return sendJson(res, 200, { kind: 'operator' }), true;
+      /*
+       * `via` 要带上（2026-11-01 实报：点「退出登录」没反应）：
+       *   · `loopback` = 本机免登录信任（回环形态 guard 在令牌识别**之前**就判成 operator），
+       *     这种身份**没有登录态可退** —— 清了 Cookie 重载还是操作员，前端据此不摆退出按钮；
+       *   · `token`    = 面板令牌（非回环形态）—— 退出会清掉令牌 Cookie，有效。
+       */
+      if (who?.kind === 'operator') return sendJson(res, 200, { kind: 'operator', via: who.via ?? null }), true;
       if (who?.kind === 'user') {
         const me = meOf(who);
         // 会话有效但账号被删了：当成没登录（前端会回登录页）
@@ -448,7 +454,8 @@ export async function handleUsers(req, res, url) {
       res.writeHead(200, {
         'Content-Type': 'application/json; charset=utf-8',
         'Cache-Control': 'no-store',
-        'Set-Cookie': auth.sessionCookie(token),
+        // 与登录响应同款：发会话票就一并种 CSRF 值（不带的话改完密码第一个写请求就 E4099）
+        'Set-Cookie': [auth.sessionCookie(token), csrf.cookieFor(csrf.mint())],
       });
       res.end(JSON.stringify({ ok: true, user }));
       return true;
@@ -514,7 +521,9 @@ export async function handleUsers(req, res, url) {
         res.writeHead(201, {
           'Content-Type': 'application/json; charset=utf-8',
           'Cache-Control': 'no-store',
-          'Set-Cookie': auth.sessionCookie(token),
+          // 2026-11-01 修：这张票要配 CSRF 值 —— 不带的话，建完账号第一次写操作
+          // （实测是「退出登录」）就吃 E4099，看着像"点了没反应"。
+          'Set-Cookie': [auth.sessionCookie(token), csrf.cookieFor(csrf.mint())],
         });
         res.end(JSON.stringify({ user, first }));
         return true;

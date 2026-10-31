@@ -557,6 +557,15 @@ const server = http.createServer(async (req, res) => {
         }
         return;
       }
+      /*
+       * CSRF 值的自愈补种（2026-11-01）：浏览器里可能只有 `bandi_sid`/`bandi_token`
+       * 而没有 `bandi_csrf`（老版本种的 Cookie、或用脚本/工具手工设过令牌），
+       * 这时所有写请求都会 E4099，用户看到的就是"按钮点了没反应"。
+       * 每个 HTML 页面响应顺手补一枚（已有就不动）—— 打开一次页面即自愈。
+       */
+      const wantsHtmlPage = url.pathname === '/' || url.pathname.endsWith('.html')
+        || String(req.headers.accept ?? '').includes('text/html');
+      if (wantsHtmlPage && !csrf.valuesOf(req).cookie) res.setHeader('Set-Cookie', csrf.cookieFor(csrf.mint()));
       if (serveStatic(res, url.pathname)) return;
       res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
       res.end('没有这个文件');
