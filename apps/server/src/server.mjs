@@ -78,6 +78,22 @@ import * as collabBranch from './collab-branch.mjs';
 import { sendJson, fail, readBody, guardWrite, guardHost, serveStatic, BadRequest, allowedOrigins, webDir } from './http.mjs';
 import { SERVER } from './server-state.mjs';
 import { runtimeOptions, runtimesOk, withExternals } from './runtime-view.mjs';
+// CSRF 双提交（IAM §10.2，2026-10-31 Phase 1 收尾）：Cookie bandi_csrf 与请求头
+// X-Bandi-CSRF 必须一致 —— 第三道闸，与 guardWrite 的 Origin / X-Bandi 并存
+import * as csrf from './security/csrf.mjs';
+
+/** 客户端 IP（审计与会话记录用；IPv4-mapped 前缀剥掉） */
+const clientIp = (req) => String(req.socket?.remoteAddress ?? '').replace(/^::ffff:/, '');
+/** 写审计的 kind 标签（轻映射，别过度工程 —— 查询时按它筛） */
+function auditKindOf(pathname) {
+  if (pathname === '/api/login' || pathname === '/api/login/otp') return 'login';
+  if (pathname === '/api/logout') return 'session.revoke';
+  if (pathname.startsWith('/api/local/')) return 'machine.local';
+  if (pathname.startsWith('/api/collab/')) return 'collab';
+  if (pathname.startsWith('/api/users') || pathname.startsWith('/api/roles')) return 'user.change';
+  if (pathname === '/api/restart') return 'restart';
+  return 'write';
+}
 
 
 
@@ -462,7 +478,13 @@ const server = http.createServer(async (req, res) => {
    * 连"来源对不对"都不该让它摸到面板数据（http.mjs 的 guardHost 注释）。
    */
   const badHost = guardHost(req);
-  if (badHost) return fail(res, 403, 'E3002', badHost);
+  if (badHost) {
+    // DNS rebinding / 未声明 Host：策略层拒绝，审计当场记（IAM §11.2：handler 不参与）
+    try {
+      store.deny({ kind: 'authz.deny', action: `${req.method} ${new URL(req.url, 'http://x').pathname}`, reason: `E3002 ${badHost}`, ip: clientIp(req), ua: req.headers['user-agent'] ?? '' });
+    } catch { /* 审计绝不拖垮请求 */ }
+    return fail(res, 403, 'E3002', badHost);
+  }
 
   const url = new URL(req.url, `http://${req.headers.host}`);
 
@@ -471,7 +493,41 @@ const server = http.createServer(async (req, res) => {
      * 访问令牌：**排在来源闸前面** —— 没令牌的请求，连"来源对不对"都不该让它摸到。
      * 闸开不开只看监听地址（回环免鉴权 / 非回环全要），见 auth.mjs 的长注释。
      */
-    if (!auth.guard(SERVER.AUTH, req, res, url)) return;
+    if (!auth.guard(SERVER.AUTH, req, res, url)) {
+      // guard 拒绝的（401 / 403 / 受限会话…）它自己已经在响应里写好了状态码 ——
+      // 这里只补审计；200 的假响应（登录页 HTML）不记。
+      if (res.statusCode >= 400) {
+        try {
+          store.deny({ kind: 'authz.deny', action: `${req.method} ${url.pathname}`, reason: `HTTP ${res.statusCode}`, ip: clientIp(req), ua: req.headers['user-agent'] ?? '' });
+        } catch { /* 不拖垮 */ }
+      }
+      return;
+    }
+
+    /*
+     * **写操作审计**（IAM §11.2，2026-10-31 Phase 1 收尾）：授权过后立刻写一条
+     * `pending`，响应收尾把**同一行**改成 ok / fail —— handler 漏不掉（它根本不参与）。
+     * 覆盖整个 /api/* 写请求（含 handleLocal / handleCollab，它们都在这之后跑）。
+     */
+    let auditId = null;
+    if (url.pathname.startsWith('/api/') && !['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
+      const actor = req.bandiAuth ?? {};
+      auditId = store.add({
+        kind: auditKindOf(url.pathname),
+        actorKind: actor.kind ?? null,
+        actorId: actor.userId ?? actor.deviceId ?? actor.nodeId ?? null,
+        action: `${req.method} ${url.pathname}`,
+        ip: clientIp(req),
+        ua: req.headers['user-agent'] ?? '',
+      });
+      res.on('finish', () => {
+        store.resolve(auditId, {
+          result: res.statusCode < 400 ? 'ok' : 'fail',
+          reason: res.statusCode >= 400 ? (req.bandiDenyReason ?? `HTTP ${res.statusCode}`) : null,
+          httpStatus: res.statusCode,
+        });
+      });
+    }
 
     /*
      * **本机专属接口**（2026-10-20，设计 §1.2 新增 A）。
@@ -508,9 +564,21 @@ const server = http.createServer(async (req, res) => {
 
     const key = `${req.method} ${url.pathname}`;
 
-    // 写请求先过来源守卫（CSRF）：任何网页借你的浏览器发的写请求都在这里被拦下
+    // 写请求先过来源守卫（CSRF）：任何网页借你的浏览器发的写请求都在这里被拦下。
+    // 拒绝原因挂在 req 上 —— 上面那条 pending 审计在 finish 回填时把它带进 reason，
+    // 不另记一行（同一请求只留一条历史，§11.2）。
     const denied = guardWrite(req);
-    if (denied) return fail(res, 403, 'E3001', denied);
+    if (denied) {
+      req.bandiDenyReason = `E3001 ${denied}`;
+      return fail(res, 403, 'E3001', denied);
+    }
+    // CSRF 双提交（§10.2 第三道）：带 Cookie 凭据的写请求，bandi_csrf Cookie 与
+    // X-Bandi-CSRF 头必须一致（CLI / 脚本走 X-Bandi-Token 头，浏览器不会自动带，天然豁免）
+    const csrfDenied = csrf.check(req);
+    if (csrfDenied) {
+      req.bandiDenyReason = 'E4099 csrf double-submit mismatch';
+      return fail(res, 403, 'E4099', csrfDenied);
+    }
 
     if (routes[key]) return await routes[key](req, res);
 
@@ -673,13 +741,30 @@ try {
 } catch (err) {
   console.log(`内置连接器 seed 失败（不影响启动）：${err?.message ?? err}`);
 }
-// 过期登录会话（2026-10-28 第三刀）：30 天前发的票，启动时扫一次就够 —— 不需要定时器
-// （平时 `userBySession` 撞到过期的也会顺手删，这里只是把"没人再来的"批量收掉）
+// 过期登录会话（2026-10-28 第三刀）：启动时扫一次就够 —— 不需要定时器
+// （平时 `userBySession` 撞到过期的也会顺手删，这里只是把"没人再来的"批量收掉；
+//   2026-10-31 起四道口径一起清：expiresAt 30 天 / 绝对 12h / 空闲 30min）
 try {
   const pruned = store.pruneSessions();
   if (pruned) console.log(`清掉 ${pruned} 条过期登录会话`);
 } catch (err) {
   console.log(`清理过期登录会话失败（不影响启动）：${err?.message ?? err}`);
+}
+// 存量会话迁移（IAM §9，2026-10-31）：老库的会话没有空闲/绝对两道闸 ——
+// 按"12 小时内自然过期"的缓冲口径补上，不追溯不踢人。幂等：已迁过的行不动。
+try {
+  const migrated = store.migrateLegacySessions();
+  if (migrated) console.log(`[安全] ${migrated} 条存量会话已按新规则迁移（12 小时内自然过期）`);
+} catch (err) {
+  console.log(`存量会话迁移失败（不影响启动）：${err?.message ?? err}`);
+}
+// 审计归档（IAM §11.2）：security_events 保留 90 天，启动时搬一批进 archive 表 ——
+// 触发器挡着 DELETE，归档是唯一合法的清理路（见 store/audit.mjs 的 archive 注释）
+try {
+  const archived = store.archive(90);
+  if (archived) console.log(`[安全] 审计已归档 ${archived} 条（保留 90 天）`);
+} catch (err) {
+  console.log(`审计归档失败（不影响启动）：${err?.message ?? err}`);
 }
 /*
  * 动态验证（2026-10-31 二改）：① 上一版把明文密钥存在 users.totpSecret 上，

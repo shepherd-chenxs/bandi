@@ -80,6 +80,12 @@ export async function load(opts = {}) {
   S.conversations = s.conversations;
   S.repoRoot = s.repoRoot;
   S.me = s.me;
+  // 本机安全形态（IAM §10.1.3，2026-10-31）：`localSecret === 'required'` = 服务器形态 ——
+  // 前端据此**不渲染**破坏性本机按钮（数据导出/导入、协作加入/退出、算力加入），
+  // 换成"请在本机终端执行 bandi …"的提示；`source` 是"当前浏览器是不是本机"。
+  // 页面不猜：字段没有（旧服务）就当 not-required，行为与从前一致。
+  S.localSecret = s.localSecret ?? 'not-required';
+  S.bandiSource = s.source ?? 'loopback';
   // 真人名册（2026-10-31 用户概念落地）：通讯录「成员」段与看板派活选真人用
   S.users = s.users ?? [];
   S.skills = sk.skills;

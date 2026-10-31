@@ -1073,11 +1073,22 @@ export const plain = (s) =>
 
 export async function api(path, opts) {
   const method = opts?.method ?? 'GET';
+  const headers = { ...(opts?.headers ?? {}), 'X-Bandi': '1' };
+  /*
+   * CSRF 双提交（2026-10-31，IAM §10.2 第三道）：带 Cookie 的写请求要 `X-Bandi-CSRF`
+   * 与 `bandi_csrf` Cookie 对得上。cookie 是登录响应种的（非 HttpOnly，就是为了让这里读）；
+   * 没有它的场景（登录前 / CLI）服务端不校验，带头无害。
+   * 每次现读 —— cookie 可能刚被登录响应换过。
+   */
+  if (method !== 'GET') {
+    const m = new RegExp('(?:^|;\\s*)bandi_csrf=([^;]*)').exec(document.cookie);
+    if (m) headers['X-Bandi-CSRF'] = decodeURIComponent(m[1]);
+  }
   // X-Bandi：写请求的来源守卫要它（详见服务端 guardWrite）。
   // 浏览器的"简单请求"不触发预检，所以光靠 CORS 挡不住借刀写操作 —— 必须有一个自定义头。
   let r;
   try {
-    r = await fetch(path, { ...opts, headers: { ...(opts?.headers ?? {}), 'X-Bandi': '1' } });
+    r = await fetch(path, { ...opts, headers });
   } catch (e) {
     /*
      * 网络层失败（服务没在跑 / 连接被拒 / 断了）：fetch 自己抛 TypeError('Failed to fetch')，

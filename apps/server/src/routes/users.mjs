@@ -13,7 +13,8 @@
  *
  * **三条不能松的口径**（任务书 §三）：
  *   1. 登录失败一律「用户名或密码不对」—— 不暴露用户是否存在；
- *      同一 IP + 同一用户名 5 分钟内失败 5 次 → 429（内存计数，重启清零）。
+ *      同一 IP + 同一用户名 5 分钟内失败 5 次 → 429（内存窗口 + 落库锁定，IAM §11.1：
+ *      用户名维度的 lockedUntil 在库里，重启不清零；码 E4095，2026-10-31 起 E3806 作废）。
  *   2. 密码 / 会话票**绝不进日志、不回显**；连列表接口都不出现 salt/hash 字段。
  *   3. 内置管理员（第一个账号）不可删、不可改角色、不可禁用；任何时候都不能把
  *      **最后一个管理员**弄没 —— 那是"把自己关在门外"的同义词。
@@ -24,10 +25,10 @@
  *   E3803 密码非空时长度不在 8–128（2026-10-31 起密码可空 = 未设密码，见 checkPassword）  （400）
  *   E3804 角色不存在                       （400）
  *   E3805 用户名或密码不对                 （401）
- *   E3806 登录失败次数过多                 （429）
+ *   E3806 （作废 2026-10-31：登录限速统一改 E4095，见 IAM §11.1 / 附录 C）
  *   E3807 账号不存在                       （404）
  *   E3808 内置管理员不可改角色 / 不可禁用 / 不可删（403）
- *   E3809 不能移除最后一个管理员           （409）
+ *   E4096 不能移除最后一个管理员           （409）
  *   E3810 还没登录                         （401）
  *   E3811 只有管理员能管账号               （403）
  *   E3812 账号接口不支持这个方法           （405）
@@ -37,6 +38,7 @@ import { sendJson, fail, readBody } from '../http.mjs';
 import * as auth from '../auth.mjs';
 import * as store from '../store.mjs';
 import * as setupCode from '../security/setup-code.mjs';
+import * as csrf from '../security/csrf.mjs';
 
 const NAME_MAX = 20;
 const PASSWORD_MIN = 8;
@@ -144,7 +146,8 @@ export async function handleUsers(req, res, url) {
   const p = url.pathname;
   const touched =
     p === '/api/login' || p === '/api/login/otp' || p === '/api/logout' || p === '/api/me'
-    || p === '/api/me/password' || p.startsWith('/api/me/otp') || p.startsWith('/api/users');
+    || p === '/api/me/password' || p.startsWith('/api/me/otp') || p.startsWith('/api/users')
+    || p.startsWith('/api/security');
   if (!touched) return false;
 
   try {
@@ -158,9 +161,12 @@ export async function handleUsers(req, res, url) {
 
       /*
        * 限速先判：**不看用户是否存在**（否则"429 只对存在的用户名出现"本身就是泄漏）。
+       * 两道并集（IAM §11.1，2026-10-31）：内存 IP+用户名窗口（重启清零，挡炸库）＋
+       * 库里 lockedUntil（重启**不清零** —— 无人值守形态"重启解锁"等于没锁）。
+       * 码统一 E4095（文档 §11.1；E3806 作废——错误码附录里 429 段认 E4095）。
        */
-      if (tooMany(req, name)) {
-        throw new UserError(429, 'E3806', `登录失败次数太多，请 ${Math.ceil(FAIL_WINDOW / 60_000)} 分钟后再试`);
+      if (tooMany(req, name) || store.loginLocked(name)) {
+        throw new UserError(429, 'E4095', `登录失败次数太多，请 ${Math.ceil(FAIL_WINDOW / 60_000)} 分钟后再试`);
       }
 
       const user = store.userByName(name);
@@ -175,6 +181,7 @@ export async function handleUsers(req, res, url) {
       const ok = !!user && !user.disabled && (blankOk || pwOk);
       if (!ok) {
         noteFail(req, name);
+        store.noteLoginFail(name); // 落库计数：窗口内第 5 次 → lockedUntil = now+15min（重启不清零）
         // 统一文案：不区分"用户不存在 / 密码错 / 被禁用 / 没设密码"（被禁用也不该告诉外人）
         throw new UserError(401, 'E3805', '用户名或密码不对');
       }
@@ -185,16 +192,23 @@ export async function handleUsers(req, res, url) {
        */
       if (store.isEnabled(user.id)) {
         clearFails(req, name);
+        store.clearLoginFails(name);
         const otpToken = store.createChallenge(user.id);
         return sendJson(res, 200, { ok: true, needOtp: true, otpToken }), true;
       }
       clearFails(req, name);
+      store.clearLoginFails(name);
 
-      const { token } = store.createSession(user.id);
+      const { token } = store.createSession(user.id, {
+        ip: String(req.socket?.remoteAddress ?? '').replace(/^::ffff:/, ''),
+        ua: req.headers['user-agent'] ?? '',
+      });
+      // CSRF 双提交（§10.2）：登录成功时种 bandi_csrf —— 之后所有带 Cookie 的写请求
+      // 都要 header 对得上它。非 HttpOnly 是刻意的（前端 JS 要读，见 security/csrf.mjs）。
       res.writeHead(200, {
         'Content-Type': 'application/json; charset=utf-8',
         'Cache-Control': 'no-store',
-        'Set-Cookie': auth.sessionCookie(token),
+        'Set-Cookie': [auth.sessionCookie(token), csrf.cookieFor(csrf.mint())],
       });
       res.end(
         JSON.stringify({
@@ -232,11 +246,15 @@ export async function handleUsers(req, res, url) {
         throw new UserError(401, 'E3820', '动态验证码或恢复码错误');
       }
       store.dropChallenge(ch);
-      const { token } = store.createSession(user.id);
+      const { token } = store.createSession(user.id, {
+        ip: String(req.socket?.remoteAddress ?? '').replace(/^::ffff:/, ''),
+        ua: req.headers['user-agent'] ?? '',
+      });
+      // 与 /api/login 同款：会话票 + CSRF 双提交值一起发（见上面那段注释）
       res.writeHead(200, {
         'Content-Type': 'application/json; charset=utf-8',
         'Cache-Control': 'no-store',
-        'Set-Cookie': auth.sessionCookie(token),
+        'Set-Cookie': [auth.sessionCookie(token), csrf.cookieFor(csrf.mint())],
       });
       res.end(
         JSON.stringify({
@@ -265,6 +283,45 @@ export async function handleUsers(req, res, url) {
       });
       res.end(JSON.stringify({ ok: true }));
       return true;
+    }
+
+    /* ------------------------------------------------ 安全（IAM §9 / §11.2，2026-10-31 Phase 1 收尾） */
+    /*
+     * 三个口，都只认**会话里**的身份：
+     *   GET  /api/security/sessions           → 我的活动会话（设备/IP/最近活跃）
+     *   POST /api/security/sessions/revoke-others → 踢掉我其它设备（保留当前这张票）
+     *   GET  /api/security/audit             → 审计日志（**admin**；kind/limit 游标翻页）
+     */
+    if (p.startsWith('/api/security')) {
+      const who = req.bandiAuth;
+      if (who?.kind !== 'user') throw new UserError(401, 'E3810', '还没登录');
+      const me = store.getUser(who.userId);
+      if (!me) throw new UserError(401, 'E3810', '这个账号已经不在了，请重新登录');
+
+      if (method === 'GET' && p === '/api/security/sessions') {
+        return sendJson(res, 200, { sessions: store.listSessionsOf(me.id) }), true;
+      }
+
+      if (method === 'POST' && p === '/api/security/sessions/revoke-others') {
+        const sid = auth.sessionTokenOf(req);
+        const hit = sid ? store.userBySession(sid) : null; // 顺手验一遍：票还有效才配"保留自己"
+        if (!hit) throw new UserError(401, 'E3810', '会话已过期，请重新登录');
+        const kicked = store.deleteOtherSessions(me.id, hit.tokenHash);
+        return sendJson(res, 200, { ok: true, kicked }), true;
+      }
+
+      if (method === 'GET' && p === '/api/security/audit') {
+        if (!who.admin) throw new UserError(403, 'E3811', '只有管理员能看审计日志');
+        const events = store.list({
+          kind: url.searchParams.get('kind') ?? '',
+          actorId: url.searchParams.get('actorId') ?? '',
+          before: url.searchParams.get('before') ?? '',
+          limit: Number(url.searchParams.get('limit') ?? 50),
+        });
+        return sendJson(res, 200, { events }), true;
+      }
+
+      throw new UserError(405, 'E3812', '安全接口不支持这个方法');
     }
 
     /* ------------------------------------------------ 我是谁 */
@@ -484,7 +541,7 @@ export async function handleUsers(req, res, url) {
         if (isBuiltinAdmin(cur)) throw new UserError(403, 'E3808', '内置管理员不能改角色');
         // 不能把最后一个管理员降级（防锁死第二道：改角色与禁用是同一种"少一个管理员"）
         if (cur.roleId === 'admin' && role.id !== 'admin' && store.countAdmins(id) === 0) {
-          throw new UserError(409, 'E3809', '这是最后一个管理员，不能改角色');
+          throw new UserError(409, 'E4096', '这是最后一个管理员，不能改角色');
         }
         out = store.setRole(id, role.id) ?? out;
       }
@@ -492,7 +549,7 @@ export async function handleUsers(req, res, url) {
         const want = !!body.disabled;
         if (isBuiltinAdmin(cur) && want) throw new UserError(403, 'E3808', '内置管理员不能被禁用');
         if (want && cur.roleId === 'admin' && store.countAdmins(id) === 0) {
-          throw new UserError(409, 'E3809', '这是最后一个管理员，不能禁用');
+          throw new UserError(409, 'E4096', '这是最后一个管理员，不能禁用');
         }
         out = store.setDisabled(id, want) ?? out;
       }
@@ -502,7 +559,7 @@ export async function handleUsers(req, res, url) {
     if (method === 'DELETE') {
       if (isBuiltinAdmin(cur)) throw new UserError(403, 'E3808', '内置管理员不能删除');
       if (cur.roleId === 'admin' && store.countAdmins(id) === 0) {
-        throw new UserError(409, 'E3809', '这是最后一个管理员，不能删除');
+        throw new UserError(409, 'E4096', '这是最后一个管理员，不能删除');
       }
       store.deleteUser(id);
       return sendJson(res, 200, { ok: true, id }), true;

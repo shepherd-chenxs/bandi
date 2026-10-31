@@ -41,3 +41,6 @@ export * from './store/users.mjs';
 // 动态验证（2026-10-31 二改，仿 yaojian-ruoyi）：user_otp / otp_challenges 两张表 ——
 // 密钥 AES-GCM 加密落库、10 个一次性恢复码、登录第二段的一次性凭据
 export * from './store/otp.mjs';
+// 安全审计（2026-10-31 IAM Phase 1）：security_events —— append-only（触发器兜底），
+// 401/403 由策略层当场记、写操作 pending → finish 回填（见 store/audit.mjs 文件头）
+export * from './store/audit.mjs';

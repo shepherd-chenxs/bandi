@@ -21,8 +21,19 @@
 import crypto from 'node:crypto';
 import { db, ensureColumn, newId, nowIso } from './db.mjs';
 
-/** 会话有效期：30 天（与 Cookie 的 Max-Age 一致，两处必须同步改） */
+/** 会话有效期：30 天（与 Cookie 的 Max-Age 一致，两处必须同步改）。
+ *  ⚠️ 2026-10-31 起**服务端另有更短的两道闸**（IAM §9）：空闲 30 分钟、绝对 12 小时，
+ *  到期即 401 —— Cookie 的 30 天只是浏览器侧的保存期，登录态以服务端为准。 */
 export const SESSION_DAYS = 30;
+
+/** 空闲超时：30 分钟无请求即失效（IAM §9 browser 行） */
+export const IDLE_MINUTES = 30;
+/** 绝对超时：12 小时后必须重新登录（IAM §9 browser 行） */
+export const ABSOLUTE_HOURS = 12;
+/** 登录失败锁定：5 次失败锁 15 分钟（IAM §9 / §11.1；计数落库，重启不清零） */
+export const FAIL_LIMIT = 5;
+export const FAIL_WINDOW_MINUTES = 5;
+export const LOCK_MINUTES = 15;
 
 /** 名字归一：去首尾空白 + 折叠内部空白 + 忽略大小写 —— "张三"和" 张三 "是同一个人 */
 export function normName(name) {
@@ -61,6 +72,24 @@ db.exec(`
 // 启动时由 otp.migrateLegacyTotp() 搬进新表并清空；保留列定义只为老库能开起来。
 ensureColumn('users', 'totpSecret', "totpSecret TEXT NOT NULL DEFAULT ''");
 ensureColumn('users', 'totpPending', 'totpPending INTEGER NOT NULL DEFAULT 0');
+
+// IAM Phase 1（2026-10-31，§12 数据模型变更）——全部幂等补列：
+// · tokenVersion  撤销水位：改密码 / 改角色 +1，会话里存的旧 tv 立刻作废（E4093）
+// · failCount/failAt/lockedUntil  登录失败计数落库（§11.1：重启不清零 —— "重启一次就解锁"
+//   在无人值守的服务器形态下等于没锁）
+ensureColumn('users', 'tokenVersion', 'tokenVersion INTEGER NOT NULL DEFAULT 1');
+ensureColumn('users', 'failCount', 'failCount INTEGER NOT NULL DEFAULT 0');
+ensureColumn('users', 'failAt', 'failAt TEXT');
+ensureColumn('users', 'lockedUntil', 'lockedUntil TEXT');
+ensureColumn('users', 'lastLoginAt', 'lastLoginAt TEXT');
+// user_sessions 扩列（§9）：kind 只有 browser（cli/api 是 Phase 3 的事）；
+// tv = 签发时的 tokenVersion 快照；idle/absolute 两道闸；ip/ua 给"会话列表"页用
+ensureColumn('user_sessions', 'kind', "kind TEXT NOT NULL DEFAULT 'browser'");
+ensureColumn('user_sessions', 'tv', 'tv INTEGER');
+ensureColumn('user_sessions', 'idleExpiresAt', 'idleExpiresAt TEXT');
+ensureColumn('user_sessions', 'absoluteExpiresAt', 'absoluteExpiresAt TEXT');
+ensureColumn('user_sessions', 'ip', 'ip TEXT');
+ensureColumn('user_sessions', 'ua', 'ua TEXT');
 
 /* ------------------------------------------------------------------ 密码 */
 
@@ -237,13 +266,14 @@ export function renameUser(id, name) {
 }
 
 /** 改密码：换 salt 重算 hash，并**作废该用户全部会话**（改密码 = 别处登过的都下线）。
- * 传空串 = 清掉密码（回到"未设密码"：本机身份还在，远程登录关上）。 */
+ * 传空串 = 清掉密码（回到"未设密码"：本机身份还在，远程登录关上）。
+ * 同时 tokenVersion +1（IAM §12 撤销水位）：就算未来有凭据漏删，tv 对不上也认不出来（E4093）。 */
 export function setPassword(id, password) {
   const cur = getUser(id);
   if (!cur) return null;
   const hasPw = String(password ?? '') !== '';
   const salt = hasPw ? crypto.randomBytes(16).toString('hex') : NO_PASSWORD;
-  db.prepare('UPDATE users SET salt = ?, hash = ?, updatedAt = ? WHERE id = ?').run(
+  db.prepare('UPDATE users SET salt = ?, hash = ?, tokenVersion = tokenVersion + 1, updatedAt = ? WHERE id = ?').run(
     salt,
     hasPw ? hashPassword(password, salt) : NO_PASSWORD,
     nowIso(),
@@ -253,11 +283,18 @@ export function setPassword(id, password) {
   return getUser(id);
 }
 
-/** 改角色 */
+/** 改角色：权限变了，会话里的角色快照会陈旧 —— 同样 tv +1（§16：改密码/角色才递增）+ 全踢。
+ *  为什么全踢：guard 是拿"会话签发那一刻的角色"算 admin 的，改完角色不踢，
+ *  被降权的人手里那张票在过期前还是管理员。 */
 export function setRole(id, roleId) {
   const cur = getUser(id);
   if (!cur) return null;
-  db.prepare('UPDATE users SET roleId = ?, updatedAt = ? WHERE id = ?').run(String(roleId).trim(), nowIso(), id);
+  db.prepare('UPDATE users SET roleId = ?, tokenVersion = tokenVersion + 1, updatedAt = ? WHERE id = ?').run(
+    String(roleId).trim(),
+    nowIso(),
+    id,
+  );
+  deleteSessionsOf(id);
   return getUser(id);
 }
 
@@ -294,24 +331,35 @@ const sha256 = (s) => crypto.createHash('sha256').update(String(s)).digest('hex'
 /**
  * 开一次登录会话：**明文只回给调用方一次**，库里只有 sha256。
  * 32 字节随机 base64url（43 字符）—— 足够长，猜不出来。
+ *
+ * IAM §9（2026-10-31）：`kind='browser'`；签发时记 tv 快照（tokenVersion 撤销水位）；
+ * 两道服务端闸 —— 空闲 30 分钟（每次请求顺延）、绝对 12 小时（顺延不了）。
+ * `expiresAt`（30 天）保留：它是浏览器 Cookie 的同步值，也是两道闸的总兜底。
+ * `ip` / `ua` 给"安全 → 会话列表"页展示用。
  */
-export function createSession(userId) {
+export function createSession(userId, { ip = null, ua = null } = {}) {
   const token = crypto.randomBytes(32).toString('base64url');
   const ts = Date.now();
   const created = new Date(ts).toISOString();
   const expires = new Date(ts + SESSION_DAYS * 86400_000).toISOString();
-  db.prepare('INSERT INTO user_sessions (tokenHash, userId, createdAt, expiresAt, lastSeenAt) VALUES (?, ?, ?, ?, ?)').run(
-    sha256(token),
-    String(userId),
-    created,
-    expires,
-    created,
-  );
+  const idle = new Date(ts + IDLE_MINUTES * 60_000).toISOString();
+  const absolute = new Date(ts + ABSOLUTE_HOURS * 3600_000).toISOString();
+  const tv = db.prepare('SELECT tokenVersion FROM users WHERE id = ?').get(String(userId))?.tokenVersion ?? 1;
+  db.prepare(
+    'INSERT INTO user_sessions (tokenHash, userId, createdAt, expiresAt, lastSeenAt, kind, tv, idleExpiresAt, absoluteExpiresAt, ip, ua) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).run(sha256(token), String(userId), created, expires, created, 'browser', tv, idle, absolute, ip, String(ua ?? '').slice(0, 200));
   return { token, expiresAt: expires };
 }
 
 /**
  * 这枚会话 token 是谁的（过期 / 被删 / 用户被禁 都返回 null）。
+ *
+ * 三道失效闸（IAM §9，2026-10-31）：
+ *   · `absoluteExpiresAt` —— 签发 + 12 小时，**不可顺延**（"每天重新登一次"是刻意的）；
+ *   · `idleExpiresAt` —— 最后一次**过闸请求** + 30 分钟（下面 lastSeenAt 更新在判定之后，
+ *     所以"最后一次请求"就是它自己这次，语义正确）；
+ *   · `tv` 不匹配 —— 改密码 / 改角色把水位抬了，旧会话作废（E4093 语义，顺手删干净）。
+ * `expiresAt`（30 天）仍是总兜底。
  *
  * `lastSeenAt` **60 秒节流**写一次：每个请求都写库会让 SSE 那种长连接把磁盘写满，
  * 而这个字段只是"最近活跃"的参考值，差一分钟没有意义（与 `store.touchDevice` 同一口径）。
@@ -321,15 +369,32 @@ export function userBySession(token) {
   if (!t) return null;
   const row = db.prepare('SELECT * FROM user_sessions WHERE tokenHash = ?').get(sha256(t));
   if (!row) return null;
-  if (Date.parse(row.expiresAt) <= Date.now()) {
+  const now = Date.now();
+  if (Date.parse(row.expiresAt) <= now) {
     deleteSession(t); // 过期就顺手清掉，别让表越长越大
+    return null;
+  }
+  if (row.absoluteExpiresAt && Date.parse(row.absoluteExpiresAt) <= now) {
+    deleteSession(t);
+    return null;
+  }
+  if (row.idleExpiresAt && Date.parse(row.idleExpiresAt) <= now) {
+    deleteSession(t); // 空闲太久 —— 删掉而不是放它睡死在表里
     return null;
   }
   const u = getUser(row.userId);
   if (!u || u.disabled) return null;
-  const now = Date.now();
+  if (row.tv != null) {
+    const curTv = db.prepare('SELECT tokenVersion FROM users WHERE id = ?').get(row.userId)?.tokenVersion ?? 1;
+    if (curTv !== row.tv) {
+      deleteSession(t);
+      return null;
+    }
+  }
   if (!row.lastSeenAt || now - Date.parse(row.lastSeenAt) > 60_000) {
-    db.prepare('UPDATE user_sessions SET lastSeenAt = ? WHERE tokenHash = ?').run(new Date(now).toISOString(), row.tokenHash);
+    const ts = new Date(now).toISOString();
+    const idle = new Date(now + IDLE_MINUTES * 60_000).toISOString();
+    db.prepare('UPDATE user_sessions SET lastSeenAt = ?, idleExpiresAt = ? WHERE tokenHash = ?').run(ts, idle, row.tokenHash);
   }
   return { tokenHash: row.tokenHash, user: u };
 }
@@ -347,7 +412,111 @@ export function deleteSessionsOf(userId) {
   return db.prepare('DELETE FROM user_sessions WHERE userId = ?').run(String(userId)).changes;
 }
 
-/** 清过期会话（启动时跑一次就够，不需要定时器） */
+/** 清过期会话（启动时跑一次就够，不需要定时器）—— 四道口径一起清 */
 export function pruneSessions() {
-  return db.prepare('DELETE FROM user_sessions WHERE expiresAt <= ?').run(new Date().toISOString()).changes;
+  const now = new Date().toISOString();
+  return db
+    .prepare('DELETE FROM user_sessions WHERE expiresAt <= ? OR (absoluteExpiresAt IS NOT NULL AND absoluteExpiresAt <= ?) OR (idleExpiresAt IS NOT NULL AND idleExpiresAt <= ?)')
+    .run(now, now, now).changes;
+}
+
+/**
+ * 存量会话迁移（IAM §9，v2.2 补；启动时跑一次，幂等）。
+ *
+ * 老库的会话只有 `expiresAt`（30 天）—— 直接按"创建 + 12h"回推会把所有人一次踢掉。
+ * 口径（照文档抄）：
+ *   · 全部标 `kind='browser'`（现在确实都是浏览器）；
+ *   · `absoluteExpiresAt = max(now+1h, min(原 expiresAt, now+12h))` —— 12 小时内自然过期，
+ *     不追溯、不踢人；
+ *   · `idleExpiresAt = now + 30min`（从现在起算）；
+ *   · `tv` 补当前值（老会话没有 tv 列，不补会被上面那道闸误杀）。
+ * 返回迁移条数，启动日志打一行"N 条存量会话已按新规则迁移"。
+ */
+export function migrateLegacySessions() {
+  const rows = db
+    .prepare('SELECT tokenHash, userId, expiresAt FROM user_sessions WHERE absoluteExpiresAt IS NULL')
+    .all();
+  if (!rows.length) return 0;
+  const now = Date.now();
+  const absFloor = now + 3600_000; // now+1h
+  const absCeil = now + ABSOLUTE_HOURS * 3600_000; // now+12h
+  const idle = new Date(now + IDLE_MINUTES * 60_000).toISOString();
+  const stmt = db.prepare(
+    "UPDATE user_sessions SET kind = 'browser', tv = (SELECT tokenVersion FROM users WHERE id = ?), idleExpiresAt = ?, absoluteExpiresAt = ? WHERE tokenHash = ?",
+  );
+  for (const r of rows) {
+    const exp = Date.parse(r.expiresAt) || now;
+    const abs = new Date(Math.min(Math.max(exp, absFloor), absCeil)).toISOString();
+    stmt.run(r.userId, idle, abs, r.tokenHash);
+  }
+  return rows.length;
+}
+
+/* -------------------------------------------- 登录失败锁定（IAM §11.1，落库） */
+
+/*
+ * 为什么落库而内存 FAILS（routes/users.mjs）也留着：**锁定状态不能随重启清零** ——
+ * 无人值守的服务器形态下"重启一次就解锁"等于没锁；但"同一个 IP"这个维度落不了库
+ * （users 行上没有 IP 的位置），所以 IP+用户名的滑动窗口照旧走内存，**用户名维度**的
+ * 锁定截止走库。两道取并集：哪道说"锁了"就是锁了。
+ * 对不存在的用户名：没有行可落，只有内存那一道 —— 这类攻击也炸不出已存在的用户名。
+ */
+
+/** 记一次登录失败（**只对存在的用户名**落库）：窗口内第 FAIL_LIMIT 次 → 锁 LOCK_MINUTES */
+export function noteLoginFail(name) {
+  const u = db.prepare("SELECT id, failCount, failAt FROM users WHERE id = (SELECT id FROM users WHERE name = ? COLLATE NOCASE LIMIT 1)").get(String(name ?? ''));
+  if (!u) return null;
+  const now = Date.now();
+  const windowMs = FAIL_WINDOW_MINUTES * 60_000;
+  const last = u.failAt ? Date.parse(u.failAt) : 0;
+  // 窗口外 → 从 1 重新数；窗口内 → +1。数到 FAIL_LIMIT → lockedUntil = now + 15min。
+  const n = last && now - last <= windowMs ? (u.failCount ?? 0) + 1 : 1;
+  const lockedUntil = n >= FAIL_LIMIT ? new Date(now + LOCK_MINUTES * 60_000).toISOString() : null;
+  db.prepare('UPDATE users SET failCount = ?, failAt = ?, lockedUntil = ? WHERE id = ?').run(n, new Date(now).toISOString(), lockedUntil, u.id);
+  return { n, lockedUntil };
+}
+
+/** 这个用户名现在锁着吗（锁定截止未到 = 锁着；没这用户 = 没锁，交给内存窗口去挡） */
+export function loginLocked(name) {
+  const row = db
+    .prepare('SELECT lockedUntil FROM users WHERE name = ? COLLATE NOCASE LIMIT 1')
+    .get(String(name ?? ''));
+  if (!row?.lockedUntil) return false;
+  if (Date.parse(row.lockedUntil) <= Date.now()) return false; // 过期即自然解锁
+  return true;
+}
+
+/** 登录成功：清零失败计数（锁定截止不动 —— 锁着就连密码校验都进不去，轮不到成功） */
+export function clearLoginFails(name) {
+  db.prepare('UPDATE users SET failCount = 0, failAt = NULL WHERE name = ? COLLATE NOCASE').run(String(name ?? ''));
+}
+
+/* -------------------------------------------- 会话列表（IAM §9：设置 → 安全） */
+
+/**
+ * 某个用户的活会话列表（"安全"分节的设备列表）。**绝不返回 tokenHash 全量** ——
+ * 那是 sha256 没错，但没必要给；前 8 位只当展示用的"设备指纹"。
+ */
+export function listSessionsOf(userId) {
+  const now = new Date().toISOString();
+  return db
+    .prepare(
+      "SELECT tokenHash, createdAt, lastSeenAt, ip, ua, kind FROM user_sessions WHERE userId = ? AND expiresAt > ? AND (absoluteExpiresAt IS NULL OR absoluteExpiresAt > ?) AND (idleExpiresAt IS NULL OR idleExpiresAt > ?) ORDER BY lastSeenAt DESC",
+    )
+    .all(String(userId), now, now, now)
+    .map((r) => ({
+      id: r.tokenHash.slice(0, 8),
+      kind: r.kind ?? 'browser',
+      createdAt: r.createdAt,
+      lastSeenAt: r.lastSeenAt,
+      ip: r.ip ?? '',
+      ua: r.ua ?? '',
+    }));
+}
+
+/** 踢掉某用户除 keepTokenHash 之外的**全部**会话（"踢掉其它设备"按钮），返回条数 */
+export function deleteOtherSessions(userId, keepTokenHash) {
+  return db
+    .prepare('DELETE FROM user_sessions WHERE userId = ? AND tokenHash != ?')
+    .run(String(userId), String(keepTokenHash ?? '')).changes;
 }

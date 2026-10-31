@@ -64,23 +64,31 @@ export async function renderBackupSection(mount) {
     `<b>${Number(counts.projects ?? 0)}</b> 项目`,
     mtime ? `<b>${esc(mtime)}</b> 最后修改` : '',
   ].filter(Boolean).join('<span class="dm-sep">·</span>');
+  /*
+   * 服务器形态（IAM §10.1.3，2026-10-31）：导出/导入这类破坏性本机动作**只由本机终端
+   * 的 CLI 执行** —— 浏览器里不渲染按钮（渲染出来点一下吃一个 E4097），换成一句指路。
+   * 快照列表照旧显示（只读）。
+   */
+  const serverMode = S.localSecret === 'required';
   mount.innerHTML = `
     <section class="set-sec dm-sec">
       <div class="set-head">
         <b>数据管理</b>
         <div class="dm-actions">
           <span class="machine-path dm-path" title="${esc(local.dbPath ?? '')}">${esc(local.dbPath ?? '—')}</span>
-          <button class="btn-sm" id="backupImport">导入快照</button>
-          <button class="btn-sm primary" id="backupExport">导出快照</button>
+          ${serverMode ? '' : '<button class="btn-sm" id="backupImport">导入快照</button>'}
+          ${serverMode ? '' : '<button class="btn-sm primary" id="backupExport">导出快照</button>'}
         </div>
       </div>
       <div class="dm-line">${stats}</div>
+      ${serverMode ? '<div class="dm-line" style="color:var(--dim)">这个服务开着局域网访问：导出/导入请在本机终端执行 <b>bandi data export</b> / <b>bandi data import &lt;文件&gt;</b>。</div>' : ''}
       <div class="dm-snaps">
         <div class="dm-snaps-head">备份快照<span class="dm-list-count">${bkFiles.length ? `${bkFiles.length} 份 · 定时备份与导入前自动备份都存在数据目录的 backups/ 里` : ''}</span></div>
         <div class="dm-snaps-body">${bkList}</div>
       </div>
     </section>
     <input type="file" id="backupImportFile" accept=".db,.sqlite,.sqlite3" hidden />`;
+  if (serverMode) return; // 服务器形态：下面两颗按钮不存在，别去 querySelector
   const btn = $('backupExport');
   btn.onclick = async () => {
     btn.disabled = true;

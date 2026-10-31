@@ -14,7 +14,7 @@
  *   静态布局大改（预缓存清单变了）时 +1，逼所有客户端整包重建。
  */
 
-const VERSION = 'v6';
+const VERSION = 'v7';
 const CACHE = `bandi-static-${VERSION}`;
 
 /*
@@ -45,6 +45,7 @@ const JS_MODULES = [
   '/js/roleadmin.mjs',
   '/js/roles.mjs',
   '/js/settings.mjs',
+  '/js/securityadmin.mjs',
   '/js/shell.mjs',
   '/js/skills.mjs',
   '/js/state.mjs',

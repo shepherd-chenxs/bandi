@@ -11,6 +11,8 @@ import { openCodeRepoPage, renderSkillCards } from './skills.mjs';
 import { renderPairing } from './pairing.mjs';
 import { renderRoles } from './roleadmin.mjs';
 import { logout, renderUsers } from './useradmin.mjs';
+// 设置 › 安全（2026-10-31 IAM Phase 1）：我的会话 + 审计日志
+import { renderSecurity } from './securityadmin.mjs';
 import { $, S } from './core.mjs';
 
 
@@ -342,6 +344,9 @@ export const SETTINGS_GROUPS = [
       ['roles', '角色与菜单', '角色能看见哪些菜单'],
       /* 「用户」（2026-10-28 第三刀）：账号 + 登录 + 角色分配。设备形态同样不加 —— 见上面那条。 */
       ['users', '用户', '账号与角色'],
+      /* 「安全」（2026-10-31 IAM Phase 1）：我的会话（人人可用）+ 审计日志（admin）。
+         非管理员也放行 —— 会话列表是"自己的"那半页（服务端只认会话里的 userId）。 */
+      ['security', '安全', '会话与审计'],
     ],
   },
 ];
@@ -386,7 +391,7 @@ export function settingsSections() {
    * 本身对这些账号仍然成立 —— 主题、关于是可以看的。
    */
   if (S.isUser && !S.isAdmin) {
-    return SETTINGS_GROUPS.flatMap((g) => g.items).filter(([k]) => k === 'prefs' || k === 'about');
+    return SETTINGS_GROUPS.flatMap((g) => g.items).filter(([k]) => k === 'prefs' || k === 'about' || k === 'security');
   }
   return SETTINGS_GROUPS.flatMap((g) => g.items);
 }
@@ -444,6 +449,7 @@ export function openSettings(section) {
   if (S.settingsSection === 'skills') return renderSkillCards();
   if (S.settingsSection === 'roles') return renderRoles();
   if (S.settingsSection === 'users') return renderUsers();
+  if (S.settingsSection === 'security') return renderSecurity();
   if (S.settingsSection === 'aiimage') return renderImageAi();
   if (S.settingsSection === 'about') return renderAbout();
   if (S.settingsSection !== 'prefs') return;

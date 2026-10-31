@@ -60,6 +60,7 @@ import * as store from './store.mjs';
  */
 import { classifySource, cfgNow, isLoopbackHost } from './security/source.mjs';
 import { warning as tlsWarning } from './security/tls-check.mjs';
+import * as csrf from './security/csrf.mjs';
 
 export { isLoopbackHost };
 
@@ -657,7 +658,10 @@ export function guard(auth, req, res, url) {
     }
     req.bandiAuth = { kind: 'operator', via: 'loopback' };
     if (req.method === 'GET' && !url.pathname.startsWith('/api/') && store.hasUsers()) {
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+      // 登录页顺手种 CSRF 双提交值（§10.2）：登录成功后所有带 Cookie 的写请求都要带上它
+      const headers = { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' };
+      if (!csrf.valuesOf(req).cookie) headers['Set-Cookie'] = csrf.cookieFor(csrf.mint());
+      res.writeHead(200, headers);
       // 回环 = 这台机器自己的屏幕，摆账号磁贴不泄密（局域网那边的登录页仍是"用户名+密码"表单）；
       // 禁用的账号不摆 —— 摆上去也登不进，白给人一个"点不动"的磁贴
       res.end(loginPage({ hasUsers: true, loopback: true, users: store.listUsers().filter((u) => !u.disabled) }));
@@ -811,7 +815,10 @@ export function guard(auth, req, res, url) {
 
   const wantsHtml = req.method === 'GET' && !url.pathname.startsWith('/api/');
   if (wantsHtml) {
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+    // 同上：服务器形态的登录页也种 CSRF 值（登录成功后的写请求要带）
+    const headers = { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' };
+    if (!csrf.valuesOf(req).cookie) headers['Set-Cookie'] = csrf.cookieFor(csrf.mint());
+    res.writeHead(200, headers);
     res.end(loginPage({ hasUsers: store.hasUsers() }));
     return false;
   }

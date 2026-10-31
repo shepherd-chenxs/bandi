@@ -500,6 +500,13 @@ export async function renderCollabSection(mount) {
   const head = (extra = '') => `<div class="fx-head"><label>协作</label>${extra}</div>`;
 
   if (!st.joined) {
+    /*
+     * 服务器形态（IAM §10.1.3，2026-10-31）：`localSecret: 'required'` 时加入/退出
+     * 这类破坏性本机动作**只由本机终端的 CLI 执行** —— 浏览器里不渲染按钮
+     * （渲染出来再报 E4097 等于给用户一个永远点不动的按钮），换成一句指路。
+     * 状态（`/api/local/collab/status`）是只读的，反代后照常显示，不受影响。
+     */
+    const serverMode = S.localSecret === 'required';
     mount.innerHTML = `
       <section class="fx">
         ${head()}
@@ -507,9 +514,11 @@ export async function renderCollabSection(mount) {
           加入一个协作中心 = 那台机器可以把活派到这台机器的看板上。这台仍然是一台完整的班底，
           自己的数据全在本地；加入不改变监听地址、也不需要重启。
         </div>
-        <button class="btn-sm primary" id="clJoin">加入协作中心</button>
+        ${serverMode
+          ? `<div class="dim">这个服务开着局域网访问：加入/退出请在本机终端执行 <b>bandi collab join &lt;接入码&gt;</b> / <b>bandi collab leave</b>。</div>`
+          : `<button class="btn-sm primary" id="clJoin">加入协作中心</button>`}
       </section>`;
-    $('clJoin').onclick = () => joinCollabDialog(() => renderCollabSection(mount));
+    if (!serverMode) $('clJoin').onclick = () => joinCollabDialog(() => renderCollabSection(mount));
     return;
   }
 
@@ -530,7 +539,11 @@ export async function renderCollabSection(mount) {
       <div class="info-row"><span>本地项目</span><b>
         ${st.projectId ? `<button class="btn-sm" id="clOpenProject">打开项目</button>` : '<span class="dim">还没建</span>'}
       </b></div>
-      <div style="margin-top:12px"><button class="btn-sm" id="clLeave">退出协作</button></div>
+      ${
+        S.localSecret === 'required'
+          ? '<div class="dim" style="margin-top:12px">这个服务开着局域网访问：退出请在本机终端执行 <b>bandi collab leave</b>。</div>'
+          : '<div style="margin-top:12px"><button class="btn-sm" id="clLeave">退出协作</button></div>'
+      }
     </section>`;
 
   $('clOpenProject')?.addEventListener('click', () => {
