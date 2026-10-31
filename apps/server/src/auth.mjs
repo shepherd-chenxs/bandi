@@ -60,6 +60,7 @@ import * as store from './store.mjs';
  */
 import { classifySource, cfgNow, isLoopbackHost } from './security/source.mjs';
 import { warning as tlsWarning } from './security/tls-check.mjs';
+import * as tokens from './security/tokens.mjs'; // Bearer at_ 短票（§7.1，Phase 3）
 import * as policy from './security/policy.mjs';
 import { isRegistered } from './security/route-policy.mjs';
 import * as csrf from './security/csrf.mjs';
@@ -471,6 +472,11 @@ export function actorUser(req) {
  *
  * 2026-10-28 第三刀扩了一条：**登录用户且角色是 admin** 也算。其余角色（哪怕是
  * 内置的「操作员」角色）一律不算 —— 管理动作只认 `admin`，这是任务书 §三 的口径。
+ *
+ * ⚠️ 2026-10-31 Phase 3 收编后，路由层的身份闸已全部归 PDP（route-policy +
+ * policy.authorize），handler **不再**用本函数判身份；仅剩 persona.mjs 一处
+ * —— 那里判的是"body 里的模型/运行时字段有没有被改"，是内容判断不是身份判断。
+ * 保留导出是给那条业务规则和存量测试用。
  */
 export function mayManage(req) {
   const a = req?.bandiAuth;
@@ -568,6 +574,13 @@ export function guard(auth, req, res, url) {
    */
   if (req.method === 'POST' && url.pathname === '/api/login/otp') return true;
   /*
+   * 换票链（IAM §6.2，Phase 3）：`/api/auth/token` / `refresh` / `revoke`。
+   * 这三个口的**输入本身就是凭据**（密码+otp / rf_ 刷新票 / at_ 短票 / 根令牌头），
+   * 校验全在 handler（routes/auth-token.mjs）—— 与 /api/login 同一个模式。
+   * Bearer 短票在 guard 里的识别照常生效：带 at_ 票来 revoke 也认得出人。
+   */
+  if (req.method === 'POST' && url.pathname.startsWith('/api/auth/')) return true;
+  /*
    * **首次引导直建**（2026-10-31）：一个账号都没有时，登录页的「创建账号」表单打的就是
    * `POST /api/users` —— 此刻浏览器没有任何凭据（这正是它要干的事）。豁免只对
    * **零账号**成立，第一个账号落地后这条路立刻关死；路由层自己也按 hasUsers 判一遍
@@ -635,6 +648,29 @@ export function guard(auth, req, res, url) {
 
   const got = tokenOf(req, url);
   let who = identify(auth, got);
+
+  /*
+   * **Bearer 短票**（IAM §7.1，Phase 3）：`Authorization: Bearer at_...`。
+   * 人类票 → 与 Cookie 会话同形状的 user Principal（PDP 一个入口判定）；
+   * `scopes='*'` 的机器票 = 根令牌换来的 break-glass 票（§6.4）→ operator 待遇。
+   * 票无效/过期就当没带 —— 落到下面的会话兜底，最后统一 401 E4010。
+   */
+  if (!who) {
+    const bearer = String(req.headers.authorization ?? '').match(/^Bearer\s+(at_\S+)$/i)?.[1];
+    if (bearer) {
+      const row = tokens.verify(bearer);
+      if (row) {
+        if (row.subjectKind === 'user') {
+          const u = store.getUser(row.subjectId);
+          if (u && !u.disabled) {
+            who = { kind: 'user', userId: u.id, roleId: u.roleId, admin: u.roleId === 'admin', restricted: false, via: 'bearer' };
+          }
+        } else if (String(row.scopes).split(',').map((s) => s.trim()).includes('*')) {
+          who = { kind: 'operator', via: 'bearer-root' };
+        }
+      }
+    }
+  }
 
   /*
    * **登录会话兜底**（2026-10-28 第三刀）。

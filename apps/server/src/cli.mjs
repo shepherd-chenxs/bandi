@@ -560,6 +560,94 @@ async function cmdCollab(argv) {
   return `不认识的子命令：collab ${sub}\n（bandi collab status | join <地址> [码] | leave）`;
 }
 
+/* ----------------------------------------------------------------- nodes */
+
+/**
+ * `bandi nodes …`（IAM Phase 3 补，2026-10-31）：算力节点的终端入口。
+ *
+ * 为什么必须有它：前端「算力节点管理」的加入向导在**服务器形态**下不再渲染
+ * （破坏性动作按 `state.localSecret` 显隐，IAM §10.1.3）—— 藏了按钮就得给终端一条路，
+ * 否则服务器形态的算力加入就是死路。走 HTTP 不写库（单写者原则，与 collab 同一套 `api()`，
+ * 自动带 `X-Bandi-Token` / `X-Bandi-Local` 头，`/api/local/join` 的文件秘密闸（E4097）自然过）。
+ *
+ * 两边视角都覆盖：
+ *   · **当节点**（这台机器去给别的总机打工）：status / join / leave —— 打本机 `/api/local/*`；
+ *   · **当总机**（这台机器收节点）：list / invite —— 打 `/api/nodes*`（operator 待遇）。
+ */
+async function cmdNodes(argv) {
+  const words = argv.filter((a) => !a.startsWith('-'));
+  const sub = words[1] ?? 'status';
+  const svc = await needService();
+  if (svc.error) return svc.error;
+
+  if (sub === 'status') {
+    const r = await api(svc.port, { path: '/api/local/status' });
+    if (r.status !== 200) return red(errText(r));
+    const c = r.json?.client ?? {};
+    if (!c.joined) {
+      return [
+        '这台机器没加入任何总机（独立运行）',
+        c.controlPlane === '' || c.controlPlane == null ? dim('  加入：bandi nodes join <总机地址> <邀请码>') : dim(`  上次加入的是 ${c.controlPlane}`),
+      ].join('\n');
+    }
+    return [
+      `已加入总机 ${green(c.hostLabel || c.controlPlane)}`,
+      `  总机  ${c.controlPlane ?? '?'}`,
+      `  权限  ${(c.scope ?? []).join(' + ') || '?'}`,
+      `  节点  ${c.node?.running ? green(`在跑（pid ${c.node.pid}）${c.node.external ? ' · 外部托管' : ''}`) : yellow('没在跑')}${c.node?.why ? dim(`（${c.node.why}）`) : ''}`,
+      `  加入于 ${c.since ?? '?'}`,
+    ].join('\n');
+  }
+
+  if (sub === 'join') {
+    const url = words[2];
+    const code = words[3];
+    if (!url || !code) return '用法：bandi nodes join <总机地址> <邀请码>\n  邀请码在总机上发：bandi nodes invite（10 分钟内有效，只用一次）';
+    const r = await api(svc.port, { method: 'POST', path: '/api/local/join', body: { url, code } });
+    if (r.status !== 200 && r.status !== 201) return red(errText(r));
+    const j = r.json ?? {};
+    return [
+      `${green('已加入')}「${j.hostLabel ?? url}」· 只当算力（${(j.scope ?? ['compute']).join('+')}）`,
+      j.node?.running ? dim('  节点已起') : yellow(`  节点还没起${j.node?.why ? `：${j.node.why}` : '（配置已写，稍后自动起）'}`),
+      dim('  监听正在收回环（几秒内生效）'),
+    ].join('\n');
+  }
+
+  if (sub === 'leave') {
+    const r = await api(svc.port, { method: 'POST', path: '/api/local/leave' });
+    if (r.status !== 200) return red(errText(r));
+    return `${green('已退出总机')}（本地数据都在）`;
+  }
+
+  if (sub === 'list') {
+    // 总机视角：登记了哪些算力节点
+    const r = await api(svc.port, { path: '/api/nodes' });
+    if (r.status !== 200) return red(errText(r));
+    const list = r.json?.nodes ?? [];
+    if (!list.length) return '还没有登记任何算力节点（在那台机器上：bandi nodes join <本机地址> <邀请码>）';
+    return [
+      dim(`  心跳 ${r.json?.heartbeatSeconds ?? '?'}s · ${r.json?.offlineAfterSeconds ?? '?'}s 无心跳算离线`),
+      ...list.map((n) =>
+        `  ${n.online ? green('●') : yellow('○')} ${n.label ?? n.id}${n.hostname && n.hostname !== n.label ? dim(`（${n.hostname}）`) : ''} · ${(n.scope ?? '').trim() || dim('无令牌')}${n.pendingJobs ? ` · 队列 ${n.pendingJobs}` : ''}${n.lastSeenAt ? dim(` · 心跳 ${n.lastSeenAt}`) : ''}`,
+      ),
+    ].join('\n');
+  }
+
+  if (sub === 'invite') {
+    const r = await api(svc.port, { method: 'POST', path: '/api/nodes/invites' });
+    if (r.status !== 200 && r.status !== 201) return red(errText(r));
+    const inv = r.json ?? {};
+    const code = inv.code ?? inv.token ?? '?';
+    return [
+      `${green('邀请码已发')}（10 分钟内有效，只用一次）：`,
+      `  ${code}`,
+      dim('  到那台机器上执行：bandi nodes join <这台机器的地址> <邀请码>'),
+    ].join('\n');
+  }
+
+  return `不认识的子命令：nodes ${sub}\n（bandi nodes status | join <地址> <邀请码> | leave | list | invite）`;
+}
+
 /* ----------------------------------------------------------------- data */
 
 async function cmdData(argv) {
@@ -705,6 +793,12 @@ const HELP = `班底 · 命令行
   bandi collab [status]    协作中心：我加入了谁
   bandi collab join <地址> [接入码]
   bandi collab leave       退出协作中心（本地项目与卡片都还在）
+  bandi nodes [status]     算力节点：这台机器给哪台总机打工
+  bandi nodes join <总机地址> <邀请码>
+                           加入总机（只当算力；邀请码在总机上 bandi nodes invite 发）
+  bandi nodes leave        退出总机
+  bandi nodes list         （总机视角）登记了哪些算力节点、在不在线
+  bandi nodes invite       （总机视角）发一个一次性加入邀请码
   bandi data export [--dir 目录]
                            导出数据快照（服务器形态下这是唯一入口）
   bandi user list          账号列表
@@ -795,6 +889,12 @@ async function main() {
     case 'collab': {
       console.log(await cmdCollab(argv));
       return 0;
+    }
+
+    case 'nodes': {
+      const out = await cmdNodes(argv);
+      console.log(out);
+      return /^用法|不认识的子命令/.test(out) ? 2 : 0;
     }
 
     case 'data': {

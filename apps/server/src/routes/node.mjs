@@ -33,16 +33,12 @@ export async function handleNode(req, res, url) {
    * **改一台机器的权限**（2026-10-20，设计 §5.9 / 决策 A 规则 2）。
    *
    * 决策 A 规则 2：**scope 只能由总机侧改，节点侧只读** —— 能自升级的权限等于没有权限边界。
-   * 所以这里除了 `auth.decide`（`panel` 令牌在禁止清单里已经被 403 `E4032` 拦掉）之外
-   * **再判一次** `mayManage`：compute-only 的令牌根本走不到这里（会被 decide 判成 `E4031`），
-   * 但这条判断是"这条接口只有操作员能碰"的**明文表达**，不该只依赖那张表。
+   * 授权已收编 PDP（Phase 3）：nodes.scope = perm:'machine:manage' 且 noPanel
+   * （**perm ⇒ noPanel**），compute / panel 令牌与未授权成员在 guard 层就被判掉（§8.4）。
    *
    * 改完**不缓存**：下一次请求按新 scope 立刻生效（`store.setNodeScope` 改的是令牌行）。
    */
   if (req.method === 'POST' && scopeOf) {
-    if (!auth.mayManage(req)) {
-      return fail(res, 403, 'E4032', '改权限只能由总机上做（这台机器拿着面板/算力令牌，改不了自己的权限）');
-    }
     const nodeId = decodeURIComponent(scopeOf[1]);
     if (!store.getNode(nodeId)) return fail(res, 404, 'E2040', '这个节点没登记过');
     const body = await readBody(req);
@@ -73,8 +69,9 @@ export async function handleNode(req, res, url) {
   /**
    * **给一台机器指定面板角色**（2026-10-28 第四刀）。
    *
-   * 这是总机侧的动作（`mayManage`）—— 节点自己不能改自己的菜单，跟 scope 同一条道理：
-   * 能自己升级的权限等于没有权限边界。
+   * 这是总机侧的动作 —— 节点自己不能改自己的菜单，跟 scope 同一条道理：
+   * 能自己升级的权限等于没有权限边界。授权已收编 PDP（nodes.role = machine:manage，
+   * perm ⇒ noPanel；Phase 3），guard 层已判。
    *
    * 下发走**心跳**（不是这里）：改完这一行，那台机器下一次心跳（15 秒内）就会在响应里
    * 拿到新的 `panelRole`，写进它自己的 `node-panel.json`。所以这里只回"存好了"，
@@ -83,9 +80,6 @@ export async function handleNode(req, res, url) {
    * `roleId: null / ''` = 恢复默认（节点运维）。
    */
   if (req.method === 'POST' && roleOf) {
-    if (!auth.mayManage(req)) {
-      return fail(res, 403, 'E3703', '只有操作员能分配面板角色');
-    }
     const nodeId = decodeURIComponent(roleOf[1]);
     const node = store.getNode(nodeId);
     if (!node) return fail(res, 404, 'E2040', '这个节点没登记过');

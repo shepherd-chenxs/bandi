@@ -30,6 +30,8 @@ export * from './store/nodes.mjs';
 export * from './store/collab.mjs';
 // 手机配对与设备域（2026-11 手机端增量）：mobile_devices / mobile_device_tokens / mobile_pair_tokens
 export * from './store/devices.mjs';
+// 不透明票域（IAM §12 Phase 3）：access_tokens（at_ 短票）/ refresh_tokens（rf_ 轮换族）
+export * from './store/tokens.mjs';
 export * from './store/workflows.mjs';
 export * from './store/quota.mjs';
 export * from './store/gitRepos.mjs';

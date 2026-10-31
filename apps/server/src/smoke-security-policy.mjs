@@ -247,9 +247,8 @@ try {
     check('device 改密码 → 403 E4033（member 不含 device）', pwByDev.status === 403 && pwByDev.json?.code === 'E4033', `${pwByDev.status} ${pwByDev.json?.code}`);
   }
 
-  // ⑧ role_permissions 解锁：授 machine:read → 成员可读状态台账（status.mjs 无管理闸的口，
-  //    PDP 的词表解锁端到端可见）；/api/menus、/api/users 的 handler 自带 mayManage
-  //    （§8.4 兼容包装仍在），词表解锁对它们还不生效 —— Phase 3 收编。
+  // ⑧ role_permissions 解锁：授 machine:read → 成员可读状态台账；再授 user:manage
+  //    → 成员可读账号列表（Phase 3 收编后 handler 不再自带 mayManage，词表解锁端到端生效）
   await killAll();
   const db = new DatabaseSync(path.join(tmp, 'bandi.db'));
   const memberRole = db.prepare("SELECT roleId FROM users WHERE name = '乙'").get()?.roleId;
@@ -263,6 +262,19 @@ try {
   check('授 machine:read 后成员读 /api/status/ledger → 200（roleHasPerm 生效）', ledgerR.status === 200, `${ledgerR.status} ${ledgerR.json?.code ?? ''}`);
   const usersByPerm = await j2.call('GET', '/api/users');
   check('user:manage 没授，/api/users 依旧 403 E4033（按权判定，不是整站放行）', usersByPerm.status === 403 && usersByPerm.json?.code === 'E4033', `${usersByPerm.status} ${usersByPerm.json?.code}`);
+
+  // ⑧b 收编验证：授 user:manage → 成员可读账号列表（handler 闸已摘，PDP 单门）
+  await killAll();
+  const db2 = new DatabaseSync(path.join(tmp, 'bandi.db'));
+  db2.prepare("INSERT OR IGNORE INTO role_permissions (roleId, permission) VALUES ('operator', 'user:manage')").run();
+  db2.close();
+  startSrv({ BANDI_HOST: '0.0.0.0', BANDI_TOKEN: OP_TOKEN });
+  if (!(await waitUp())) throw new Error('三次没起来');
+  const j3 = await login('乙');
+  const usersR = await j3.call('GET', '/api/users');
+  check('授 user:manage 后成员读 /api/users → 200（收编后词表解锁真正生效）', usersR.status === 200, `${usersR.status} ${usersR.json?.code ?? ''}`);
+  const delUser = await j3.call('DELETE', '/api/users/no-such-user');
+  check('成员删不存在的用户 → 404（过了 PDP，业务层照旧）', delUser.status === 404, `${delUser.status} ${delUser.json?.code ?? ''}`);
 
   // ⑨ 撤销令牌：忘掉节点 → bn_ 变 revoked（E4012）
   await call('DELETE', '/api/nodes/sp-node', { headers: OP() });

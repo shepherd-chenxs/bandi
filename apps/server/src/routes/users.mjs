@@ -6,10 +6,10 @@
  *                               2026-10-31 起未设密码的账号留空密码即进入——免密登录）
  *   POST   /api/logout       → 退出（**免令牌**，凭据就是那张会话票本身）
  *   GET    /api/me           → 我是谁（operator / user + role.menuKeys）
- *   GET    /api/users        → 账号列表（mayManage，**不含 salt/hash**）
- *   POST   /api/users        → 建账号（mayManage）
- *   PATCH  /api/users/:id    → 改名 / 改密码 / 改角色 / 启用禁用（mayManage）
- *   DELETE /api/users/:id    → 删账号（mayManage）
+ *   GET    /api/users        → 账号列表（PDP：user:manage，**不含 salt/hash**）
+ *   POST   /api/users        → 建账号（PDP：user:manage；零账号引导见下）
+ *   PATCH  /api/users/:id    → 改名 / 改密码 / 改角色 / 启用禁用（PDP：user:manage）
+ *   DELETE /api/users/:id    → 删账号（PDP：user:manage）
  *
  * **三条不能松的口径**（任务书 §三）：
  *   1. 登录失败一律「用户名或密码不对」—— 不暴露用户是否存在；
@@ -47,7 +47,7 @@ const PASSWORD_MAX = 128;
 /** 内置管理员 = 第一个账号：`builtin` + `admin` 角色（判据只在这里和 store 里各一处） */
 const isBuiltinAdmin = (u) => !!u?.builtin;
 
-class UserError extends Error {
+export class UserError extends Error {
   constructor(status, code, message, extra = null) {
     super(message);
     this.status = status;
@@ -72,7 +72,7 @@ function failKey(req, name) {
   return `${ip}|${store.normName(name)}`;
 }
 
-function tooMany(req, name) {
+export function tooMany(req, name) {
   const k = failKey(req, name);
   const rec = FAILS.get(k);
   if (!rec) return false;
@@ -83,7 +83,7 @@ function tooMany(req, name) {
   return rec.n >= FAIL_LIMIT;
 }
 
-function noteFail(req, name) {
+export function noteFail(req, name) {
   const k = failKey(req, name);
   const now = Date.now();
   const rec = FAILS.get(k);
@@ -91,7 +91,7 @@ function noteFail(req, name) {
   else rec.n += 1;
 }
 
-function clearFails(req, name) {
+export function clearFails(req, name) {
   FAILS.delete(failKey(req, name));
 }
 
@@ -461,9 +461,14 @@ export async function handleUsers(req, res, url) {
      * 代价是"谁先到谁占管理员"，换来的是部署完浏览器直接就能进；建完这条路立刻关死。
      *
      * ⚠️ 判据只有一条：**库里还没有任何账号**。回环形态下 operator 恒真（免鉴权），
-     * 光靠 `!mayManage` 关不住 —— 实测建完第一个账号后无凭据还能继续建（2026-10-31 自查发现）。
+     * 光靠"有没有管理员"关不住 —— 实测建完第一个账号后无凭据还能继续建（2026-10-31 自查发现）。
+     *
+     * （2026-10-31 Phase 3 收编）原 `!auth.mayManage(req)` 闸已摘 —— 账号管理授权归
+     * PDP（users.* = perm:'user:manage'，**perm ⇒ noPanel**）；给成员授 user:manage
+     * 就能管账号（词表解锁），面板/算力令牌在 guard 层吃 E4032。引导口的
+     * `!store.hasUsers()` 兜底保留：它是"零账号"判据，不是身份判断。
      */
-    if (!(method === 'POST' && p === '/api/users' && !store.hasUsers()) && !auth.mayManage(req)) {
+    if (method === 'POST' && p === '/api/users' && store.hasUsers() && req.bandiAuth?.kind !== 'user' && req.bandiAuth?.kind !== 'operator') {
       throw new UserError(403, 'E3811', '只有管理员能管账号');
     }
 

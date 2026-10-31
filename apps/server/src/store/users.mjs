@@ -20,6 +20,7 @@
 
 import crypto from 'node:crypto';
 import { db, ensureColumn, newId, nowIso } from './db.mjs';
+import { revokeRefreshFamiliesOfUser } from './tokens.mjs'; // tv 变化时刷新族陪葬（Phase 3）
 
 /** 会话有效期：30 天（与 Cookie 的 Max-Age 一致，两处必须同步改）。
  *  ⚠️ 2026-10-31 起**服务端另有更短的两道闸**（IAM §9）：空闲 30 分钟、绝对 12 小时，
@@ -280,6 +281,7 @@ export function setPassword(id, password) {
     id,
   );
   deleteSessionsOf(id);
+  revokeRefreshFamiliesOfUser(id); // tv 变了，手里的刷新族全部作废（§6.2 刷新校验 tv）
   return getUser(id);
 }
 
@@ -295,6 +297,7 @@ export function setRole(id, roleId) {
     id,
   );
   deleteSessionsOf(id);
+  revokeRefreshFamiliesOfUser(id);
   return getUser(id);
 }
 
@@ -492,6 +495,14 @@ export function clearLoginFails(name) {
 }
 
 /* -------------------------------------------- 会话列表（IAM §9：设置 → 安全） */
+
+/**
+ * 按票哈希取一行会话（refresh 族判"所属会话还活着没"用；refresh.mjs）。
+ * 返回原始行或 null —— 状态判断在调用方。
+ */
+export function sessionByHash(tokenHash) {
+  return db.prepare('SELECT * FROM user_sessions WHERE tokenHash = ?').get(String(tokenHash ?? '')) ?? null;
+}
 
 /**
  * 某个用户的活会话列表（"安全"分节的设备列表）。**绝不返回 tokenHash 全量** ——

@@ -1,7 +1,7 @@
 /* routes/collab.mjs —— 协作中心（总公司 / 分公司）的接口（2026-10-31 MVP）。
  *
  * 两条路，两种凭据，别搞混：
- *   · **中心管理接口**（`/api/collab/invites|branches|tasks` 的增删改查）—— 走 `mayManage`
+ *   · **中心管理接口**（`/api/collab/invites|branches|tasks` 的增删改查）—— PDP：collab:manage（perm ⇒ noPanel）
  *     （operator 或 admin 登录用户），跟别的管理动作一个口径；
  *   · **分公司 ↔ 中心的机器接口**（`join / poll / report / leave`）—— 免操作员令牌，
  *     凭据是接入码（join）或 `bc_` 分公司令牌（其余三条）。**校验在 handler 里**，
@@ -190,9 +190,8 @@ export async function handleCollab(req, res, url) {
 
   /* ================================================================ 中心管理 */
 
-  if (!auth.mayManage(req)) {
-    return fail(res, 403, 'E4032', '协作中心只有这台机器的管理员能动（派活、加分公司、验收）'), true;
-  }
+  // 闸已收编 PDP（IAM §8.3/8.4，Phase 3）：collab 的 invites/branches/tasks 全部
+  // perm:'collab:manage|read'（**perm ⇒ noPanel**），未授权身份在 guard 层就被判掉。
 
   /** 发接入码：名字必填（列表上要认出是谁） */
   if (req.method === 'POST' && path === '/api/collab/invites') {

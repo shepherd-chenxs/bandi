@@ -27,7 +27,8 @@ export async function handlePair(req, res, url) {
 
   /* -------------------------------------------- 操作员：发配对码 */
   if (method === 'POST' && p === '/api/pair/tokens') {
-    if (!auth.mayManage(req)) return fail(res, 403, 'E3701', '只有操作员能发手机配对码');
+    // 闸已收编 PDP：pair.tokens = perm:'device:manage'（perm ⇒ noPanel），未授权身份在 guard 层被判（§8.4）
+
     let issued;
     try {
       issued = store.createPairToken();
@@ -101,13 +102,15 @@ export async function handlePair(req, res, url) {
 
   /* -------------------------------------------- 操作员：设备管理 */
   if (method === 'GET' && p === '/api/pair/devices') {
-    if (!auth.mayManage(req)) return fail(res, 403, 'E3701', '只有操作员能看已配对设备');
+    // 闸已收编 PDP：pair.devices = perm:'device:read'
+
     return sendJson(res, 200, { devices: store.listDevices() });
   }
 
   const revoke = /^\/api\/pair\/devices\/([^/]+)\/revoke$/.exec(p);
   if (method === 'POST' && revoke) {
-    if (!auth.mayManage(req)) return fail(res, 403, 'E3701', '只有操作员能踢出设备');
+    // 闸已收编 PDP：pair.device.revoke = perm:'device:manage'
+
     const id = decodeURIComponent(revoke[1]);
     if (!store.getDevice(id)) return fail(res, 404, 'E2701', '没有这台设备');
     const n = store.revokeDeviceTokens(id);
@@ -125,7 +128,8 @@ export async function handlePair(req, res, url) {
    */
   const roleOf = /^\/api\/pair\/devices\/([^/]+)\/role$/.exec(p);
   if (method === 'POST' && roleOf) {
-    if (!auth.mayManage(req)) return fail(res, 403, 'E3701', '只有操作员能给手机分配面板角色');
+    // 闸已收编 PDP：pair.device.role = perm:'device:manage'
+
     const id = decodeURIComponent(roleOf[1]);
     if (!store.getDevice(id)) return fail(res, 404, 'E2701', '没有这台设备');
     const body = await readBody(req);

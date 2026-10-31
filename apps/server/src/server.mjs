@@ -58,6 +58,7 @@ import { handleProject } from './routes/project.mjs';
 import { handleRoles } from './routes/roles.mjs';
 // 账号与登录（2026-10-28 第三刀）：/api/login、/api/logout、/api/me、/api/users*
 import { handleUsers } from './routes/users.mjs';
+import { handleAuthToken } from './routes/auth-token.mjs';
 import { handleWorkspace } from './routes/workspace.mjs';
 import { handleStatus } from './routes/status.mjs';
 import { handleFs } from './routes/fs.mjs';
@@ -616,6 +617,10 @@ const server = http.createServer(async (req, res) => {
     const handledUsers = await handleUsers(req, res, url);
     if (handledUsers !== false) return;
 
+    // 换票链（IAM §6.2，Phase 3）：/api/auth/token|refresh|revoke —— CLI / 脚本的凭据入口
+    const handledAuthToken = await handleAuthToken(req, res, url);
+    if (handledAuthToken !== false) return;
+
     const handledRoles = await handleRoles(req, res, url);
     if (handledRoles !== false) return;
 
@@ -765,6 +770,13 @@ try {
   if (archived) console.log(`[安全] 审计已归档 ${archived} 条（保留 90 天）`);
 } catch (err) {
   console.log(`审计归档失败（不影响启动）：${err?.message ?? err}`);
+}
+// 短票清理（IAM Phase 3）：at_ 本来就 15 分钟、rf_ 30 天；过期/撤销满 1 天的行启动时清掉
+try {
+  const pt = store.pruneAccessTokens() + store.pruneRefreshTokens();
+  if (pt) console.log(`[安全] 清掉 ${pt} 条过期/撤销短票与刷新票`);
+} catch (err) {
+  console.log(`短票清理失败（不影响启动）：${err?.message ?? err}`);
 }
 /*
  * 动态验证（2026-10-31 二改）：① 上一版把明文密钥存在 users.totpSecret 上，

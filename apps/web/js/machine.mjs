@@ -161,6 +161,27 @@ export async function renderBackupSection(mount) {
  */
 export function mountJoinPanel(root) {
 
+  /*
+   * 服务器形态（IAM §10.1.3，Phase 3 起收起）：加入/退出总机会**改监听地址**（收回环）、
+   * 停掉本机服务 —— 和导出/导入同一档"破坏性本机动作"，浏览器里不再渲染，
+   * 换成 CLI 指路（`bandi nodes join/leave` 已补齐，不再是死路）。
+   */
+  if (S.localSecret === 'required') {
+    root.innerHTML = `
+      <section class="set-sec">
+        <div class="set-head"><b>算力节点</b></div>
+        <div class="dim" style="margin:6px 0 10px">
+          这台机器在服务器形态下运行。加入 / 退出总机会改监听地址并重启服务，
+          请在本机终端执行：
+        </div>
+        <div class="dm-line" style="font-family:var(--mono,monospace)">
+          bandi nodes join &lt;总机地址&gt; &lt;邀请码&gt;&nbsp;&nbsp;·&nbsp;&nbsp;bandi nodes status&nbsp;&nbsp;·&nbsp;&nbsp;bandi nodes leave
+        </div>
+        <div class="dim" style="margin-top:10px">邀请码在总机上发：<b>bandi nodes invite</b>（总机上用 <b>bandi nodes list</b> 看已登记的节点）</div>
+      </section>`;
+    return;
+  }
+
   /* 状态机的全部状态都在这个局部对象里 —— 切走设置分区就整个忘掉，不往 S 里塞。
      2026-10-21：scan/pick/manual 三步合并成「主机列表」一页（用户拍板的列表模型）；
      探测改成**纯手动**（进页不扫，点「发现」才扫）+ 添加填了就入列。
