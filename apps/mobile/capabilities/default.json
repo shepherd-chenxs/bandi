@@ -1,0 +1,6 @@
+{
+  "identifier": "default",
+  "description": "手机壳默认能力：启动页调用 discover / probe / open_server 三个自定义 command",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

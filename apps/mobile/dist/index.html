@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <title>班底</title>
+    <link rel="stylesheet" href="launcher.css" />
+  </head>
+  <body>
+    <main class="wrap">
+      <header class="hero">
+        <div class="logo">B</div>
+        <h1>班底</h1>
+        <p class="sub">把电脑上的班底装进口袋</p>
+      </header>
+
+      <!-- 上次连过：一键进 -->
+      <section id="connected" class="card" hidden>
+        <p class="eyebrow">上次连接</p>
+        <p id="connectedUrl" class="addr"></p>
+        <button id="enterBtn" class="btn primary" type="button">进入</button>
+        <button id="switchBtn" class="btn ghost" type="button">换一台</button>
+      </section>
+
+      <!-- 手动地址：放在发现列表**之前**（2026-11 实测结论）。
+           键盘弹起时 Tauri 的 Android WebView 既不滚文档、visualViewport
+           也不派发 resize，任何"等键盘状态再调整"的方案都不可靠。
+           把输入区放在上半屏（y≈220–300），键盘顶部在 y≈350，天然不被挡。 -->
+      <section id="manual" class="card">
+        <p class="eyebrow">填写地址</p>
+        <div class="row">
+          <input
+            id="addrInput"
+            type="text"
+            inputmode="url"
+            autocomplete="off"
+            autocapitalize="off"
+            spellcheck="false"
+            placeholder="192.168.1.5:8787"
+          />
+          <button id="connectBtn" class="btn primary" type="button">连接</button>
+        </div>
+        <p class="hint">
+          在电脑上打开「设置 → 手机配对」生成二维码，把二维码下面的链接粘贴到这里，可以一步完成配对。
+        </p>
+      </section>
+
+      <!-- 自动发现 -->
+      <section id="found" class="card" hidden>
+        <p class="eyebrow">局域网里的班底</p>
+        <div id="candidates" class="list"></div>
+      </section>
+
+      <p id="status" class="status" hidden></p>
+    </main>
+    <script src="launcher.js"></script>
+  </body>
+</html>

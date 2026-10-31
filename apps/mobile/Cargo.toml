@@ -1,0 +1,30 @@
+[package]
+name = "bandi-mobile"
+version = "0.0.0"
+description = "手机薄壳：把局域网上的班底装进一个 Android App（界面复用 apps/web）"
+authors = ["牧羊人"]
+edition = "2021"
+rust-version = "1.77"
+
+# 与桌面壳（apps/desktop）刻意分开：桌面壳带 Win32 调用、node sidecar 与
+# 整套 runtime 资源，混进来只会让移动构建被一堆 cfg(windows) 拖住。
+# 这个壳只做三件事：配置页、连接测试、把 WebView 指到局域网地址。
+
+[lib]
+name = "bandi_mobile"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true
