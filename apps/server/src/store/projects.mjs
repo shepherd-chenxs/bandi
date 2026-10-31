@@ -130,6 +130,16 @@ ensureColumn('project_tasks', 'queuedAt', 'queuedAt TEXT');
 // 人手建的卡是 null。只用来在详情页标「创建人」，不改卡的脾气 —— 照样能拖、能改、能派活。
 ensureColumn('project_tasks', 'createdBy', 'createdBy TEXT');
 
+/*
+ * **真人执行人 / 真人创建人**（2026-10-31 用户概念落地）：
+ *   · `assigneeUserId` —— 卡派给一个**真人**（users 表）：挂名负责，看板署名与筛选都认它；
+ *     与 `assigneePersonaId` 互斥（二选一），真人不起会话、不派活。
+ *   · `createdByUserId` —— 人手建卡的是哪位真人（登录用户 / 回环操作员），员工经接口建的卡是 null。
+ * 真人被删不级联清空：留的是"当时是谁"的事实（与 createdBy 同一口径）。
+ */
+ensureColumn('project_tasks', 'assigneeUserId', 'assigneeUserId TEXT');
+ensureColumn('project_tasks', 'createdByUserId', 'createdByUserId TEXT');
+
 // 卡片回执（2026-10-24）：`creatorConvId` = 建卡那次运行所在的会话（PM 在哪个会话里建的卡，
 // 回执就送回哪个会话）；`notifiedFor` = 已经给建卡人回执过的状态（同一张卡收成同一状态只报一次）。
 // run 收尾 / PR 合并把卡收成「待验收」「已阻塞」「失败」时，往这个会话投一条回执并唤醒建卡人 ——

@@ -35,3 +35,6 @@ export * from './store/schedules.mjs';
 export * from './store/roles.mjs';
 // 账号与登录会话（2026-10-28 第三刀）：users / user_sessions 两张表，密码走 scrypt + 每人独立 salt
 export * from './store/users.mjs';
+// 动态验证（2026-10-31 二改，仿 yaojian-ruoyi）：user_otp / otp_challenges 两张表 ——
+// 密钥 AES-GCM 加密落库、10 个一次性恢复码、登录第二段的一次性凭据
+export * from './store/otp.mjs';

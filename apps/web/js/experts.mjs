@@ -798,56 +798,319 @@ export async function pluginApi(plugin, apiPath) {
 
 
 
-/** 表单字段渲染 —— 内嵌表单和弹窗共用这一份，免得两处走样 */
+/** 表单字段渲染 —— 内嵌表单和弹窗共用这一份，免得两处走样
+ *
+ * 2026-10-31 借 zcode「新建连接」弹窗的版式（远程连接先行）：
+ * · 表单块 `hint` 画在字段顶上（zcode 那行 user@host:22）；
+ * · 字段 `half` = 半宽，相邻的并排一行（.plg-field-row）；`half:"sm"` 再收窄（端口格）；
+ * · 字段 `advanced` = 收进「高级选项」折叠段（<details>，默认收起）；
+ * · 字段 `defaultFrom` = 提交时留空就照另一格的值填（别名留空 = 拿主机地址当别名）。
+ */
 export function pluginFormHTML(b, fid, state = {}) {
   const editing = state.editing ?? null;
   const values = state.values ?? {};
   const side = b.layout === 'side-label';
-  return `<div class="plg-form${side ? ' plg-side' : ''}" data-form="${esc(fid)}">${(b.fields ?? [])
-    .map((f) => {
-      const val = values[f.key] ?? f.value ?? '';
-      const locked = editing && f.key === 'alias' ? ' readonly' : '';
-      // 勾选框（如「生成密钥对」）：新增默认按 f.value 勾上；编辑回填时行里没有这个
-      // 字段 → 不勾 —— 改个端口不至于误触发一次密钥生成（已有同名文件会拒绝）。
-      if (f.type === 'checkbox') {
-        const checked = values[f.key] != null ? values[f.key] : editing ? '' : f.value;
-        const box = `<input type="checkbox" data-field="${esc(f.key)}"${checked ? ' checked' : ''} />`;
-        return `<div class="plg-field">
-        ${
-          side
-            ? `<div class="plg-field-label">${esc(f.label)}</div><div>${box}</div>`
-            : `<label class="plg-check">${box} ${esc(f.label)}</label>`
-        }
-        ${f.hint ? `<div class="plg-field-hint">${esc(f.hint)}</div>` : ''}
-      </div>`;
+  const segs = [];
+  let row = null;
+  let adv = null;
+  const flushRow = () => {
+    if (row) { segs.push(`<div class="plg-field-row">${row.join('')}</div>`); row = null; }
+  };
+  const flushAdv = () => {
+    if (adv) {
+      segs.push(`<details class="plg-adv"><summary>高级选项</summary><div class="plg-adv-body">${adv.join('')}</div></details>`);
+      adv = null;
+    }
+  };
+
+  for (const f of b.fields ?? []) {
+    const val = values[f.key] ?? f.value ?? '';
+    const locked = editing && f.key === 'alias' ? ' readonly' : '';
+    // 勾选框（如「生成密钥对」）：新增默认按 f.value 勾上；编辑回填时行里没有这个
+    // 字段 → 不勾 —— 改个端口不至于误触发一次密钥生成（已有同名文件会拒绝）。
+    let inner = '';
+    if (f.type === 'checkbox') {
+      const checked = values[f.key] != null ? values[f.key] : editing ? '' : f.value;
+      const box = `<input type="checkbox" data-field="${esc(f.key)}"${checked ? ' checked' : ''} />`;
+      inner = side
+        ? `<div class="plg-field-label">${esc(f.label)}</div><div>${box}</div>`
+        : `<label class="plg-check">${box} ${esc(f.label)}</label>`;
+    } else if (f.type === 'segment') {
+      /* 分段选择（认证方式「密码/私钥」这种）：选中值存进 hidden input 的 data-field，
+       * 按钮只负责切值 + 刷新 showIf 显隐。 */
+      const cur = values[f.key] ?? f.value ?? (f.options ?? [])[0]?.value ?? '';
+      const btns = (f.options ?? [])
+        .map((o) => `<button type="button" class="plg-seg-btn${o.value === cur ? ' on' : ''}" data-seg-val="${esc(o.value)}">${esc(o.label)}</button>`)
+        .join('');
+      inner = `<input type="hidden" data-field="${esc(f.key)}" value="${esc(cur)}" /><div class="plg-seg">${btns}</div>`;
+    } else {
+      let input;
+      if (f.type === 'password') {
+        // 密码框：小眼睛切换明文。值照常走 data-field 收集（POST 体），**接口从不回显**
+        input = `<div class="plg-pw"><input type="password" data-field="${esc(f.key)}" value="${esc(val)}" placeholder="${esc(f.placeholder || '')}" autocomplete="off"${locked} />` +
+          `<button type="button" class="plg-eye" data-eye="${esc(f.key)}" title="显示 / 隐藏密码"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z"></path><circle cx="12" cy="12" r="2.6"></circle></svg></button></div>`;
+      } else if (f.pick) {
+        // 本机路径格：输入框右边一个「选择」钮，点了走壳的原生文件/目录框
+        // （远程连接「私钥路径」）。桌面壳里才有原生框，浏览器里点击会提示手填。
+        input = `<div class="plg-pickrow"><input data-field="${esc(f.key)}" value="${esc(val)}" placeholder="${esc(f.placeholder || '')}"${locked} />` +
+          `<button type="button" class="plg-pick" data-pick="${esc(f.key)}" data-pick-kind="${esc(f.pick)}">${esc(f.pickLabel || '选择')}</button></div>`;
+      } else {
+        input =
+          f.type === 'textarea'
+            ? `<textarea data-field="${esc(f.key)}" style="height:56px" placeholder="${esc(f.placeholder || '')}">${esc(val)}</textarea>`
+            : `<input data-field="${esc(f.key)}" value="${esc(val)}" placeholder="${esc(f.placeholder || '')}"${locked} />`;
       }
-      const input =
-        f.type === 'textarea'
-          ? `<textarea data-field="${esc(f.key)}" style="height:56px" placeholder="${esc(f.placeholder || '')}">${esc(val)}</textarea>`
-          : `<input data-field="${esc(f.key)}" value="${esc(val)}" placeholder="${esc(f.placeholder || '')}"${locked} />`;
-      return `<div class="plg-field">
-        <div class="plg-field-label">${esc(f.label)}${f.required ? '<em>*</em>' : ''}</div>
-        ${input}
-        ${f.hint ? `<div class="plg-field-hint">${esc(f.hint)}</div>` : ''}
-      </div>`;
-    })
-    .join('')}</div>`;
+      inner = `<div class="plg-field-label">${esc(f.label)}${f.required ? '<em>*</em>' : ''}</div>${input}`;
+    }
+    const hint = f.hint ? `<div class="plg-field-hint">${esc(f.hint)}</div>` : '';
+    // showIf：跟着同表单里另一格的值显隐（认证方式=密码 → 出密码框）
+    const showAttr = f.showIf?.field
+      ? ` data-show-field="${esc(f.showIf.field)}" data-show-val="${esc(f.showIf.equals ?? '')}"`
+      : '';
+    const cell = `<div class="plg-field${f.half === 'sm' ? ' half-sm' : ''}"${showAttr}>${inner}${hint}</div>`;
+    if (!side && f.advanced) { flushRow(); (adv = adv ?? []).push(cell); continue; }
+    flushAdv();
+    if (!side && f.half) { (row = row ?? []).push(cell); continue; }
+    flushRow();
+    segs.push(cell);
+  }
+  flushRow();
+  flushAdv();
+
+  return `<div class="plg-form${side ? ' plg-side' : ''}" data-form="${esc(fid)}">${b.hint ? `<div class="plg-form-hint">${esc(b.hint)}</div>` : ''}${segs.join('')}</div>`;
+}
+
+/**
+ * 表单的**交互**接线（segment 切值、密码小眼睛、showIf 显隐联动）。
+ * 内嵌表单和弹窗共用。监听全挂在**本次渲染的节点**上（onclick / 每格自己的 input 监听）——
+ * innerHTML 一换就是新节点，天然不用去重；别挂到 box 上（#plgFormBody 是常驻节点，会叠监听）。
+ */
+export function wirePluginForm(box) {
+  if (!box) return;
+  const evalShowIf = () => {
+    const vals = {};
+    box.querySelectorAll('[data-field]').forEach((i) => { vals[i.dataset.field] = i.type === 'checkbox' ? (i.checked ? '1' : '') : i.value; });
+    box.querySelectorAll('[data-show-field]').forEach((el) => { el.style.display = vals[el.dataset.showField] === el.dataset.showVal ? '' : 'none'; });
+  };
+  box.querySelectorAll('.plg-seg-btn').forEach((btn) => {
+    btn.onclick = () => {
+      const field = btn.closest('.plg-field');
+      const hid = field?.querySelector('input[data-field]');
+      if (hid) hid.value = btn.dataset.segVal ?? '';
+      field?.querySelectorAll('.plg-seg-btn').forEach((b) => b.classList.toggle('on', b === btn));
+      evalShowIf();
+    };
+  });
+  box.querySelectorAll('[data-eye]').forEach((eye) => {
+    eye.onclick = () => {
+      const inp = box.querySelector(`input[data-field="${eye.dataset.eye}"]`);
+      if (!inp) return;
+      const show = inp.type === 'password';
+      inp.type = show ? 'text' : 'password';
+      eye.classList.toggle('on', show);
+    };
+  });
+  box.querySelectorAll('[data-pick]').forEach((btn) => {
+    btn.onclick = async () => {
+      const inp = box.querySelector(`input[data-field="${btn.dataset.pick}"]`);
+      if (!inp) return;
+      const isFile = btn.dataset.pickKind !== 'dir';
+      const invoke = window.__TAURI_INTERNALS__?.invoke || window.__TAURI__?.core?.invoke;
+      // 桌面壳：用本机原生文件框（能拿到任意本机路径）
+      if (typeof invoke === 'function') {
+        try {
+          const picked = await invoke(isFile ? 'pick_file' : 'pick_directory', {
+            title: isFile ? '选择私钥文件' : '选择目录',
+            defaultPath: inp.value || null,
+          });
+          if (picked) {
+            inp.value = picked;
+            inp.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+        } catch (e) {
+          toast('文件选择框没打开：' + e, 'error');
+        }
+        return;
+      }
+      /*
+       * 浏览器里（2026-10-31 改）：**浏览班底服务器自己的文件系统**。
+       * 为什么不是让用户手敲路径：班底常部署在远程服务器上，私钥就在那台机器的 ~/.ssh 下，
+       * 用户根本看不到路径长什么样；浏览器又拿不到本机绝对路径（file 框只给文件名）。
+       * 所以由服务端列目录（GET /api/fs/dirs），点着选 —— 选出来的就是"服务器自己的路径"。
+       */
+      const picked = await openFsPicker({
+        title: isFile ? '选择服务器上的文件' : '选择服务器上的目录',
+        kind: isFile ? 'file' : 'dir',
+        start: inp.value || '',
+      });
+      if (picked) {
+        inp.value = picked;
+        inp.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    };
+  });
+  box.querySelectorAll('input[data-field], textarea[data-field]').forEach((i) => i.addEventListener('input', evalShowIf));
+  evalShowIf();
 }
 
 
 
 export const pluginFormId = (b) => b.formId || 'f' + b.__i;
 
+/**
+ * 服务器路径选择弹窗（2026-10-31）：浏览**班底所在这台机器**的文件系统。
+ *
+ * 用在浏览器里点「选择」时 —— 桌面壳走原生文件框，浏览器走这个。
+ * 数据源仍是 `GET /api/fs/dirs`（`files=1&hidden=1`：要选私钥，必须能列文件、能进 `.ssh`）。
+ *
+ * `kind`：'file' = 点文件就选中（目录只用来钻）；'dir' = 点目录即选中，还要能选"当前目录"。
+ * 返回值：选中的绝对路径；取消返回 null。
+ */
+export function openFsPicker({ title = '选择路径', kind = 'file', start = '' } = {}) {
+  return new Promise((resolve) => {
+    const dlg = document.createElement('dialog');
+    dlg.id = 'fsPickDlg';
+    dlg.innerHTML = `
+      <form method="dialog">
+        <b>${esc(title)}</b>
+        <input id="fpPath" value="${esc(start)}" placeholder="路径（可直接粘贴，回车跳转）" spellcheck="false" style="margin-top:10px" />
+        <div id="fpList" class="fp-list"></div>
+        <div class="dlg-actions">
+          <button type="button" value="cancel">取消</button>
+          ${kind === 'dir' ? '<button type="button" id="fpHere">用当前目录</button>' : ''}
+          <button class="primary" id="fpOk" value="ok">确定</button>
+        </div>
+      </form>`;
+    document.body.append(dlg);
+    wireDialogHead(dlg.querySelector('form'));
+    let settled = false;
+    const done = (v) => {
+      if (settled) return;
+      settled = true;
+      resolve(v);
+      dlg.close();
+    };
+    dlg.addEventListener('close', () => done(null));
+    dlg.querySelector('button[value="cancel"]').onclick = () => dlg.close();
+
+    let cur = '';
+    let pickedFile = '';
+    const pathBox = dlg.querySelector('#fpPath');
+    const paint = async () => {
+      try {
+        const q = cur ? `?path=${encodeURIComponent(cur)}&files=1&hidden=1` : '?files=1&hidden=1';
+        const d = await api('/api/fs/dirs' + q);
+        cur = d.path;
+        pathBox.value = d.path;
+        pickedFile = '';
+        const rows = [
+          d.parent ? `<div class="fp-row up" data-go="${esc(d.parent)}">↰ 上一层</div>` : '',
+          ...(d.files ?? []).map(
+            (f) => `<div class="fp-row file" data-file="${esc(f.path)}">${esc(f.name)}${
+              f.size == null ? '' : `<em>${f.size < 1024 ? f.size + ' B' : Math.round(f.size / 1024) + ' KB'}</em>`
+            }</div>`,
+          ),
+          ...d.dirs.map((x) => `<div class="fp-row" data-go="${esc(x.path)}">${esc(x.name)}/</div>`),
+        ].join('');
+        dlg.querySelector('#fpList').innerHTML = rows || '<div class="fp-row none">（这个目录是空的）</div>';
+        dlg.querySelector('#fpList').querySelectorAll('[data-go]').forEach((el) => {
+          el.onclick = () => {
+            cur = el.dataset.go;
+            paint();
+          };
+        });
+        dlg.querySelector('#fpList').querySelectorAll('[data-file]').forEach((el) => {
+          el.onclick = () => {
+            dlg.querySelector('#fpList').querySelectorAll('.file').forEach((x) => x.classList.toggle('on', x === el));
+            pickedFile = el.dataset.file;
+            pathBox.value = pickedFile;
+          };
+        });
+      } catch (e) {
+        dlg.querySelector('#fpList').innerHTML = `<div class="fp-row none">${esc(e.message)}</div>`;
+      }
+    };
+    pathBox.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      // 输的是文件就当作选中它；是目录就钻进去
+      const v = pathBox.value.trim();
+      if (!v) return;
+      if (kind === 'file' && /\.[^/\\]+$/.test(v)) {
+        pickedFile = v;
+        return;
+      }
+      cur = v;
+      paint();
+    });
+    dlg.querySelector('#fpHere')?.addEventListener('click', () => done(cur || pathBox.value.trim()));
+    dlg.querySelector('#fpOk').onclick = (e) => {
+      e.preventDefault();
+      const v = pickedFile || pathBox.value.trim();
+      if (!v) return;
+      // 选文件却没挑到具体文件 = 用户以为"当前目录"也行 → 让他看见列表里选
+      if (kind === 'file' && !pickedFile && !/\.[^/\\]+$/.test(v)) {
+        toast('请在列表里点一个文件');
+        return;
+      }
+      done(v);
+    };
+    void paint();
+    dlg.showModal();
+    pathBox.focus();
+  });
+}
+
+
+
+/** 表单提交前的取值兜底：`defaultFrom` 的格子留空就照另一格填（远程连接：别名留空 = 拿主机地址当别名）。
+ * 弹窗（app.mjs 的 plgFormOk）和面板内嵌表单（本文件 data-form-submit）两条提交路共用。 */
+export function applyFormDefaults(block, values) {
+  for (const f of block.fields ?? []) {
+    if (f.defaultFrom && !values[f.key]) values[f.key] = values[f.defaultFrom] ?? '';
+  }
+  return values;
+}
+
+/**
+ * 表单保存成功后的**连带调用**（`submit.follow` —— 远程连接借 zcode 的口径：
+ * 「添加并连接」= 存完立刻测一次连通性）。测试失败**不回滚**：登记已经落盘，
+ * 详情里还能点「测」重试。
+ * @returns 是否连通（没有 follow = true，调用方照常走成功收尾）
+ */
+export async function runFormFollow(plugin, block, values) {
+  const fu = block.submit?.follow;
+  if (!fu) return true;
+  try {
+    const fm = (fu.method || 'POST').toUpperCase();
+    const furl = tplUrl(fu.api, values);
+    pluginMust(plugin, fm, furl);
+    const r2 = await api(furl, fm === 'GET' ? {} : { method: fm, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(fu.body ?? {}) });
+    if (r2 && r2.ok === false) {
+      toast(tpl(fu.fail ?? '「{alias}」已保存，但连接失败', values), 'error');
+      return false;
+    }
+    toast(tpl(fu.ok ?? '「{alias}」已保存并连通', values), 'ok');
+    return true;
+  } catch (err) {
+    toast(tpl(fu.fail ?? '「{alias}」已保存，但连接失败', values) + '：' + err.message, 'error');
+    return false;
+  } finally {
+    if (values.alias) S.pluginRow = values.alias;   // 新添的那台顺手选中（重画后详情直接就位）
+  }
+}
+
 
 
 /** 打开插件表单弹窗。新增和"编辑某一行"走的是同一个弹窗，只是初始值不同 */
 export function openPluginForm(plugin, block, state = {}) {
-  S.pluginFormDlg = { plugin, block, fid: pluginFormId(block) };
+  S.pluginFormDlg = { plugin, block, fid: pluginFormId(block), editing: !!state.editing };
   $('plgFormTitle').textContent = state.editing
     ? `修改「${state.editing}」`
     : block.heading || '填写';
   $('plgFormBody').innerHTML = pluginFormHTML(block, pluginFormId(block), state);
-  $('plgFormOk').textContent = block.submit?.label || '保存';
+  wirePluginForm($('plgFormBody'));
+  $('plgFormOk').textContent = state.editing ? '保存' : (block.submit?.label || '保存');
   $('plgFormDlg').showModal();
   setTimeout(() => $('plgFormBody').querySelector('input, textarea')?.focus(), 30);
 }
@@ -1555,6 +1818,8 @@ export async function renderPluginPanel() {
  * 传自己的容器和重画函数 —— 接线逻辑一份，两个宿主共用。
  */
 function finishPluginPanel(plugin, allBlocks, root = $('plgPanel'), rerender = rerenderPanel) {
+  /* 内嵌表单的交互（segment / 小眼睛 / showIf）—— 弹窗那份在 openPluginForm 里接 */
+  root.querySelectorAll('.plg-form').forEach(wirePluginForm);
   /* 块的 `__i` 在 tab 子块里是 `"1.0.0"` 这种字符串 —— 早先按 `Number()` 当数组下标取，
      NaN 一取就是 undefined，于是「生成密钥对」「行内动作」点了没反应且不报错。
      （2026-10-26 把公钥块挪进页签时才撞出来。）统一建一张字符串索引表来查。 */
@@ -1695,6 +1960,7 @@ function finishPluginPanel(plugin, allBlocks, root = $('plgPanel'), rerender = r
       const box = el.closest('.plg-form');
       const values = {};
       box.querySelectorAll('[data-field]').forEach((inp) => { values[inp.dataset.field] = inp.value.trim(); });
+      applyFormDefaults(b, values);
 
       const missing = (b.fields ?? []).filter((f) => f.required && !values[f.key]);
       if (missing.length) return toast('这几项得填：' + missing.map((f) => f.label).join('、'));
@@ -1711,6 +1977,7 @@ function finishPluginPanel(plugin, allBlocks, root = $('plgPanel'), rerender = r
         }
         await api(sub.api, opts);
         delete S.pluginForm[fid];
+        await runFormFollow(plugin, b, values);       // submit.follow：存完的连带调用（测连通性）
         await rerender();
       } catch (err) {
         toast(err.message, 'error');

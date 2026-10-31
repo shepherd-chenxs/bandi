@@ -2,7 +2,7 @@
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
 import { savePlace, toast } from './shell.mjs';
 import { api } from './ui.mjs';
-import { openSettings } from './settings.mjs';
+import { openSettings, openMe } from './settings.mjs';
 import { closeAddMenu, renderList, showContactsHome, showView } from './contacts.mjs';
 import { openWorkflows } from './workflows.mjs';
 import { closeRunStream, setListTitle } from './flowpages.mjs';
@@ -28,7 +28,7 @@ const NAV_KEY = {
 };
 
 /** 一级导航的固定顺序（"当前这栏被藏了"时按它挑第一个能看的） */
-const NAV_ORDER = ['messages', 'contacts', 'experts', 'plugins', 'settings'];
+const NAV_ORDER = ['messages', 'contacts', 'experts', 'plugins', 'settings', 'me'];
 
 /** 这个身份能不能看见某个菜单（`S.menuKeys === null` = 不限制：operator，或角色没拿到） */
 export function canSeeMenu(key) {
@@ -80,6 +80,8 @@ export async function load(opts = {}) {
   S.conversations = s.conversations;
   S.repoRoot = s.repoRoot;
   S.me = s.me;
+  // 真人名册（2026-10-31 用户概念落地）：通讯录「成员」段与看板派活选真人用
+  S.users = s.users ?? [];
   S.skills = sk.skills;
   S.skillsRoot = sk.skillsRoot;
   S.hiddenConversations = s.hiddenConversations ?? [];
@@ -249,6 +251,7 @@ export function setNav(nav, opts = {}) {
     : nav === 'workflows' ? '工作流'
     : nav === 'plugins' ? '工作台'
     : nav === 'experts' ? '专家库'
+    : nav === 'me' ? '我的'
     : '设置',
   );
   $('listAction').textContent = '＋';
@@ -257,11 +260,11 @@ export function setNav(nav, opts = {}) {
   // 消息页没有"新建"：发起群聊的入口在通讯录（那里能一次选"群聊 or 员工"）
   $('listAction').classList.toggle(
     'hidden',
-    nav === 'settings' || nav === 'workflows' || nav === 'messages' || nav === 'plugins' || nav === 'experts',
+    nav === 'settings' || nav === 'workflows' || nav === 'messages' || nav === 'plugins' || nav === 'experts' || nav === 'me',
   );
   // 工作台：宫格首页左栏整个收掉；进插件后左栏让位给插件自己的列表（搜索框对插件没用）。
-  // 专家库是整页卡片墙，搜索框同样没用 —— 一起收掉。
-  $('search').closest('.list-search')?.classList.toggle('hidden', nav === 'plugins' || nav === 'experts');
+  // 专家库是整页卡片墙，搜索框同样没用 —— 一起收掉。我的页同理（整页，见 settings.mjs openMe）。
+  $('search').closest('.list-search')?.classList.toggle('hidden', nav === 'plugins' || nav === 'experts' || nav === 'me');
   // 换栏顺手清搜索（2026-10-29）：旧关键词是上一个栏的语境（在代码托管搜仓库名，
   // 切到消息不该还滤着）。只在**真的换了栏**时清 —— 同栏内点行重摆（通讯录点员工详情
   // 也是一遍 setNav('contacts')）不能把用户正打着字的搜索框清掉。
@@ -271,8 +274,8 @@ export function setNav(nav, opts = {}) {
     if (si) si.value = '';
   }
   closeAddMenu();
-  // 工作台是整页宫格，二级列表栏在那儿没用 —— 整列收掉（见 CSS 的 body.no-list）。专家库同理。
-  document.body.classList.toggle('no-list', nav === 'plugins' || nav === 'experts');
+  // 工作台是整页宫格，二级列表栏在那儿没用 —— 整列收掉（见 CSS 的 body.no-list）。专家库、我的页同理。
+  document.body.classList.toggle('no-list', nav === 'plugins' || nav === 'experts' || nav === 'me');
   renderList();
   savePlace();   // 换了位置就记下来，刷新后能回来
   // 通讯录要看实时忙/闲 → 开着这一页时轮询；离开自动停
@@ -286,6 +289,7 @@ export function setNav(nav, opts = {}) {
   // 这里就别再开一次默认页 —— 否则两边抢着渲染，谁后回来谁赢
   if (opts.skipOpen) return;
   if (nav === 'settings') openSettings(S.settingsSection);
+  else if (nav === 'me') openMe();
   else if (nav === 'workflows') openWorkflows().catch((e) => toast(e.message, 'error'));
   else if (nav === 'plugins') openPlugins().catch((e) => toast(e.message, 'error'));
   else if (nav === 'experts') openExperts().catch((e) => toast(e.message, 'error'));

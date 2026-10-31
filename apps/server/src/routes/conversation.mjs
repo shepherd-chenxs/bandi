@@ -6,6 +6,7 @@ import path from 'node:path';
 import { sendJson, fail, readBody, readRawBody, BadRequest } from '../http.mjs';
 import { dataDir } from '../config.mjs';
 import * as store from '../store.mjs';
+import * as auth from '../auth.mjs';
 import * as runs from '../runs.mjs';
 import { dispatchToThread } from '../dispatch.mjs';
 import * as workflows from '../workflows.mjs';
@@ -324,6 +325,9 @@ export async function handleConversation(req, res, url) {
         runId: body.runId ?? null,
         taskId: body.taskId ?? null, // 从流程面板发的话：标给那一步
         atts,                        // 随消息上传的附件（已校验都在这个会话的 uploads/ 里）
+        // 说话的是哪个人（2026-10-31 用户概念落地）：登录用户是他自己，
+        // 回环操作员是第一个用户（"本机自动登录"），节点/手机是 null
+        senderUserId: auth.actorUser(req)?.id ?? null,
       });
       if (body.runId) workflows.attachRound(String(body.runId), run.id);
       return sendJson(res, 202, {

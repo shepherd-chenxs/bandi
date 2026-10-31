@@ -135,7 +135,42 @@ try {
   check('标记 first（前端据此给"第一个账号"的说明）', first.body?.first === true);
   const page1 = await (await fetch(BASE + '/', { headers: { Accept: 'text/html' }, signal: AbortSignal.timeout(5000) })).text();
   check('有账号之后登录页给出用户名密码表单', page1.includes('id="pwForm"') && page1.includes('id="nm"'));
-  check('令牌入口还在（收进 details，给运维留后路）', page1.includes('用访问令牌登录'));
+  // 2026-10-31 用户定：登录页就是登录页，**不再摆令牌入口**（脚本/运维用 X-Bandi-Token 头，不经界面）
+  check('登录页不含令牌入口', !page1.includes('用访问令牌登录') && !page1.includes('name="token"'));
+  // 建第一个账号 = 首次开机设置：顺手发登录会话票（2026-10-31），同一浏览器以后切非回环地址不用再登
+  check('建第一个账号顺手 Set-Cookie bandi_sid（首次引导的自动登录）', /bandi_sid=/.test(first.setCookie ?? ''), String(first.setCookie ?? '').slice(0, 60));
+
+  /* ============ ②.5 免密账号 = 空密码直接登录（2026-10-31 用户拍板） ============ */
+  console.log('\n②.5 免密账号：空密码能登录、错密码不行、补密码后空密码关上');
+  const nopw = await call('POST', '/api/users', { token: TOKEN, body: { name: '本机的人', roleId: 'operator' } });
+  check('不传密码建账号 → 201', nopw.status === 201, String(nopw.status));
+  check('hasPassword = false（界面标「未设密码」的依据）', nopw.body?.user?.hasPassword === false,
+    String(nopw.body?.user?.hasPassword));
+  const nopwLogin = await call('POST', '/api/login', { body: { name: '本机的人', password: '' } });
+  check('空密码登录 → 200（免密进入，任何机器都行）', nopwLogin.status === 200,
+    `${nopwLogin.status} ${nopwLogin.body?.code ?? ''}`);
+  check('免密登录也发会话票', /bandi_sid=/.test(nopwLogin.setCookie ?? ''), String(nopwLogin.setCookie ?? '').slice(0, 60));
+  const nopwWrong = await call('POST', '/api/login', { body: { name: '本机的人', password: 'whatever-1' } });
+  check('免密账号输了密码 → 401 统一文案', nopwWrong.status === 401 && nopwWrong.body?.code === 'E3805'
+    && /用户名或密码不对/.test(nopwWrong.body?.error ?? ''), `${nopwWrong.status} ${nopwWrong.body?.error ?? ''}`);
+  const setPw = await call('PATCH', `/api/users/${encodeURIComponent(nopw.body?.user?.id)}`, {
+    token: TOKEN, body: { password: 'now-has-pass-1' },
+  });
+  check('补密码 → 200 且 hasPassword = true', setPw.status === 200 && setPw.body?.user?.hasPassword === true,
+    `${setPw.status} ${setPw.body?.user?.hasPassword}`);
+  const blankAfter = await call('POST', '/api/login', { body: { name: '本机的人', password: '' } });
+  check('补了密码之后空密码登不进 → 401', blankAfter.status === 401 && blankAfter.body?.code === 'E3805',
+    `${blankAfter.status} ${blankAfter.body?.code ?? ''}`);
+  const withPw = await call('POST', '/api/login', { body: { name: '本机的人', password: 'now-has-pass-1' } });
+  check('补完密码用密码能登 → 200', withPw.status === 200, String(withPw.status));
+  const st1 = await call('GET', '/api/state', { token: TOKEN });
+  check('/api/state 带真人名册（users，只有 id/名字/内置）',
+    Array.isArray(st1.body?.users) && st1.body.users.length >= 2
+      && st1.body.users.every((u) => 'id' in u && 'name' in u && !('salt' in u) && !('hash' in u)),
+    JSON.stringify(st1.body?.users ?? []).slice(0, 120));
+  check('/api/state 的 me = 第一个用户（操作员 = 本机自动登录）',
+    st1.body?.me?.id === first.body?.user?.id && st1.body?.me?.name === ADMIN.name,
+    JSON.stringify(st1.body?.me ?? {}));
 
   /* ============ ③ 登录 ============ */
   console.log('\n③ POST /api/login');
@@ -219,6 +254,10 @@ try {
   console.log('\n⑦ 退出登录：原 Cookie 立刻失效');
   const lo = await call('POST', '/api/logout', { cookie: vCookie });
   check('POST /api/logout → 200 且清 Cookie', lo.status === 200 && /bandi_sid=;/.test(lo.setCookie || ''), lo.setCookie);
+  // 两张票一起清（2026-10-31 实报）：令牌 Cookie 一年有效，不清的话令牌浏览器永远走不到登录页
+  const loTok = await call('POST', '/api/logout', { token: TOKEN });
+  check('退出登录把访问令牌 Cookie 也清掉（令牌浏览器才能走回登录页）',
+    /bandi_token=;/.test(loTok.setCookie ?? ''), String(loTok.setCookie ?? '').slice(0, 90));
   const meAfter = await call('GET', '/api/me', { cookie: vCookie });
   check('原 Cookie 再打 /api/me → 401', meAfter.status === 401, `${meAfter.status} ${meAfter.body?.code ?? ''}`);
 
@@ -287,7 +326,7 @@ try {
    * 任务书 §三 第一条硬约束：`operator` / `device` / `node` 的行为**一个字节都不许变**。
    * 最容易踩的就是「回环分支有没有排在会话检查前面」—— 排后面的话，本机打不开自己的面板。
    */
-  console.log('\n⑪ 不回归：回环形态照旧免登录 operator');
+  console.log('\n⑪ 不回归：回环形态照旧免登录 operator（API），但**面板要登录**（2026-10-31）');
   await stopAll();
   start(); // 不设 BANDI_HOST = 只听回环
   if (!(await waitUp())) throw new Error('回环实例没起来：' + log.slice(-500));
@@ -299,6 +338,32 @@ try {
     meLoopJunk.status === 200 && meLoopJunk.body?.kind === 'operator', `${meLoopJunk.status} ${meLoopJunk.body?.kind}`);
   const stLoop = await call('GET', '/api/state');
   check('回环 /api/state 照旧免登录 200', stLoop.status === 200, String(stLoop.status));
+  // 同一个数据目录里已经有用户了（② 里建的）—— 回环操作员的「我」自动落到第一个用户头上
+  check('回环 /api/state 的 me = 第一个用户（本机自动登录）',
+    stLoop.body?.me?.id === first.body?.user?.id, JSON.stringify(stLoop.body?.me ?? {}));
+  /*
+   * ⑪.1 面板要登录（2026-10-31）：这台"机器"已经建过账号，回环抓首页没会话 → 登录页
+   * （账号磁贴）；免密账号从磁贴那条路（/api/login 空密码）进来后，同一张首页就是面板。
+   */
+  const pageLoop = await fetch(BASE + '/', { headers: { Accept: 'text/html' }, signal: AbortSignal.timeout(5000) });
+  const htmlLoop = await pageLoop.text();
+  check('回环抓首页（有账号、无会话）→ 登录页带账号磁贴',
+    pageLoop.status === 200 && htmlLoop.includes('id="tiles"') && !htmlLoop.includes('/app.mjs'),
+    String(pageLoop.status));
+  const tileLogin = await call('POST', '/api/login', { body: { name: ADMIN.name, password: 'new-wang-pass-9' } });
+  const loopCookie = cookieOf(tileLogin.setCookie);
+  check('磁贴那条路 = /api/login（管理员密码登录）→ 200', tileLogin.status === 200 && !!loopCookie,
+    String(tileLogin.status));
+  const pageIn = await fetch(BASE + '/', {
+    headers: { Accept: 'text/html', Cookie: loopCookie }, signal: AbortSignal.timeout(5000),
+  });
+  const htmlIn = await pageIn.text();
+  check('带着会话票抓首页 → 面板本体（不再挡登录页）',
+    pageIn.status === 200 && htmlIn.includes('/app.mjs') && !htmlIn.includes('id="tiles"'), String(pageIn.status));
+  const meLoopUser = await call('GET', '/api/me', { cookie: loopCookie });
+  check('回环 + 会话：/api/me 按登录人算（不再永远是 operator）',
+    meLoopUser.status === 200 && meLoopUser.body?.kind === 'user' && meLoopUser.body?.user?.name === ADMIN.name,
+    `${meLoopUser.status} ${JSON.stringify(meLoopUser.body?.user ?? {})}`);
 
   console.log(`\n${failed ? '✗ 有 ' + failed + ' 项没过' : '✓ 全部通过'}`);
 } catch (err) {

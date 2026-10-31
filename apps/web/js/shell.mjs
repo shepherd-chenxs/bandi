@@ -114,6 +114,7 @@ export function readPlace() {
 export const ROUTES = {
   messages: () => setNav('messages'),
   contacts: () => setNav('contacts'),
+  me: () => setNav('me'),
   settings: ({ section } = {}) => {
     // 定时任务已搬去工作台（2026-10-17）：存着的旧位置（settings/schedules）还认，
     // 但直接转过去 —— 设置里已经没这一节了，留着会画出个空白页。

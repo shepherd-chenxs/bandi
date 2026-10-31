@@ -19,7 +19,7 @@
  */
 
 import crypto from 'node:crypto';
-import { db, newId, nowIso } from './db.mjs';
+import { db, ensureColumn, newId, nowIso } from './db.mjs';
 
 /** 会话有效期：30 天（与 Cookie 的 Max-Age 一致，两处必须同步改） */
 export const SESSION_DAYS = 30;
@@ -56,7 +56,22 @@ db.exec(`
   );
 `);
 
+// 动态验证（2026-10-31 二改，仿 yaojian-ruoyi）：**独立表 user_otp**（见 store/otp.mjs），
+// 密钥 AES-GCM 加密落库、另有 10 个一次性恢复码。这两列是上一版的遗留（明文存 users 上），
+// 启动时由 otp.migrateLegacyTotp() 搬进新表并清空；保留列定义只为老库能开起来。
+ensureColumn('users', 'totpSecret', "totpSecret TEXT NOT NULL DEFAULT ''");
+ensureColumn('users', 'totpPending', 'totpPending INTEGER NOT NULL DEFAULT 0');
+
 /* ------------------------------------------------------------------ 密码 */
+
+/*
+ * **空密码 = 没有密码 = 免密账号**（2026-10-31 用户拍板，参照电脑的本地账户）：
+ * 建账号时密码可以留空，库里就存 salt='' + hash=''（两列 NOT NULL，空串 = 明确的"未设"）。
+ * 登录时免密账号**密码留空直接进入**（routes/users.mjs 的 /api/login，任何机器都行 ——
+ * 总机、分机一个口径）。千万不要把空密码存成 scrypt('')：那是一个真 hash，
+ * "未设"和"密码就是空串"就再也分不开了。
+ */
+const NO_PASSWORD = '';
 
 function hashPassword(password, saltHex) {
   return crypto.scryptSync(String(password), Buffer.from(saltHex, 'hex'), 64).toString('hex');
@@ -77,6 +92,11 @@ const DUMMY_SALT = '00'.repeat(16);
  */
 const DUMMY_HASH = crypto.scryptSync('x', Buffer.from(DUMMY_SALT, 'hex'), 64).toString('hex');
 export function checkPassword(user, password) {
+  /*
+   * 未设密码的账号（hash=''）在这里**永远失败**：'' 是 falsy → want 落到 DUMMY_HASH，
+   * 任何输入都对不上，而且**跑的 scrypt 次数与"用户不存在"完全一样**（时间上不泄漏）。
+   * 免密登录（密码留空即进入）是登录路由在**这一层之外**单独放行的 —— 这里只认真 hash。
+   */
   const salt = user?.salt || DUMMY_SALT;
   const want = user?.hash || DUMMY_HASH;
   const got = hashPassword(password, salt);
@@ -87,7 +107,18 @@ export function checkPassword(user, password) {
 
 /* ------------------------------------------------------------------ 读 */
 
-const PUBLIC_FIELDS = 'id, name, roleId, builtin, disabled, createdAt, updatedAt';
+/*
+ * `hasPw` / `hasTotp` 都在 SQL 里算好（有没有设密码 / 有没有开动态验证），
+ * **salt / hash / 密钥本体绝不进这份清单** —— 连字段都不出现，
+ * 免得哪天有人顺手把整个对象丢进接口响应里（任务书 §三 硬约束）。
+ * 动态验证记录在独立表 `user_otp`（见 store/otp.mjs），这里 LEFT JOIN 出一个布尔。
+ */
+const PUBLIC_FIELDS = `id, name, roleId, builtin, disabled, createdAt, updatedAt,
+  (CASE WHEN hash IS NULL OR hash = '' THEN 0 ELSE 1 END) AS hasPw,
+  (CASE WHEN o.userId IS NULL THEN 0 ELSE 1 END) AS hasTotp`;
+
+/** 带动态验证的 LEFT JOIN（users 为主，绑定表为从）；子查询里都带上 u 别名 */
+const FROM_USERS = 'FROM users u LEFT JOIN user_otp o ON o.userId = u.id';
 
 function shape(row) {
   if (!row) return null;
@@ -97,6 +128,8 @@ function shape(row) {
     roleId: row.roleId,
     builtin: !!row.builtin,
     disabled: !!row.disabled,
+    hasPassword: !!row.hasPw, // 未设密码的账号远程登不进（界面拿它标「未设密码」）
+    hasTotp: !!row.hasTotp,   // 动态验证开没开（「我的」页与设置→用户列表的标签）
     createdAt: row.createdAt ?? null,
     updatedAt: row.updatedAt ?? null,
   };
@@ -105,21 +138,34 @@ function shape(row) {
 /** 全部账号（**不含 salt/hash**；内置在前，其余按创建顺序） */
 export function listUsers() {
   return db
-    .prepare(`SELECT ${PUBLIC_FIELDS} FROM users ORDER BY builtin DESC, createdAt ASC, id ASC`)
+    .prepare(`SELECT ${PUBLIC_FIELDS} ${FROM_USERS} ORDER BY u.builtin DESC, u.createdAt ASC, u.id ASC`)
     .all()
     .map(shape);
 }
 
-export function getUser(id) {
-  return shape(db.prepare(`SELECT ${PUBLIC_FIELDS} FROM users WHERE id = ?`).get(String(id ?? '')));
+/**
+ * 账号名册（2026-10-31 用户概念落地）：**所有能进面板的身份都能看**的极简版 ——
+ * 只有 id / 名字 / 是不是内置。给通讯录的「成员」段与看板派活选真人用，
+ * 不要求管理权限（管理接口那套 mayManage 挡住的应该是 salt/hash 和增删改，不是"团队里有谁"）。
+ */
+export function listUserBriefs() {
+  return db
+    .prepare('SELECT id, name, builtin FROM users ORDER BY builtin DESC, createdAt ASC, id ASC')
+    .all()
+    .map((r) => ({ id: r.id, name: r.name, builtin: !!r.builtin }));
 }
 
-/** 按名字取（归一后比较；登录与"重名"检查共用这一份口径） */
+export function getUser(id) {
+  return shape(db.prepare(`SELECT ${PUBLIC_FIELDS} ${FROM_USERS} WHERE u.id = ?`).get(String(id ?? '')));
+}
+
+/** 按名字取（归一后比较；登录与"重名"检查共用这一份口径）。
+ *  登录还要验动态验证码 —— 那部分在 store/otp.mjs（独立表），这里只带 salt/hash。 */
 export function userByName(name) {
   const target = normName(name);
   if (!target) return null;
   const row = db
-    .prepare(`SELECT ${PUBLIC_FIELDS}, salt, hash FROM users`)
+    .prepare(`SELECT ${PUBLIC_FIELDS}, u.salt, u.hash ${FROM_USERS}`)
     .all()
     .find((r) => normName(r.name) === target);
   return row ? { ...shape(row), salt: row.salt, hash: row.hash } : null;
@@ -158,7 +204,7 @@ export function countUsersByRole(roleId) {
 
 /** 第一个用户是谁（null = 还没人建过） */
 export function firstUser() {
-  return shape(db.prepare('SELECT ' + PUBLIC_FIELDS + ' FROM users ORDER BY createdAt ASC, id ASC LIMIT 1').get());
+  return shape(db.prepare(`SELECT ${PUBLIC_FIELDS} ${FROM_USERS} ORDER BY u.createdAt ASC, u.id ASC LIMIT 1`).get());
 }
 
 /* ------------------------------------------------------------------ 写 */
@@ -169,13 +215,16 @@ export function firstUser() {
  */
 export function createUser({ name, password, roleId = null } = {}) {
   const first = !hasUsers();
-  const salt = crypto.randomBytes(16).toString('hex');
+  // 密码可空（2026-10-31）：空 = 未设密码（salt/hash 存空串，见文件头「密码」段的口径）
+  const hasPw = String(password ?? '') !== '';
+  const salt = hasPw ? crypto.randomBytes(16).toString('hex') : NO_PASSWORD;
+  const hash = hasPw ? hashPassword(password, salt) : NO_PASSWORD;
   const id = newId('u');
   const ts = nowIso();
   const finalRole = first ? 'admin' : String(roleId ?? '').trim();
   db.prepare(
     'INSERT INTO users (id, name, salt, hash, roleId, builtin, disabled, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)',
-  ).run(id, String(name ?? '').trim(), salt, hashPassword(password, salt), finalRole, first ? 1 : 0, ts, ts);
+  ).run(id, String(name ?? '').trim(), salt, hash, finalRole, first ? 1 : 0, ts, ts);
   return getUser(id);
 }
 
@@ -187,14 +236,16 @@ export function renameUser(id, name) {
   return getUser(id);
 }
 
-/** 改密码：换 salt 重算 hash，并**作废该用户全部会话**（改密码 = 别处登过的都下线） */
+/** 改密码：换 salt 重算 hash，并**作废该用户全部会话**（改密码 = 别处登过的都下线）。
+ * 传空串 = 清掉密码（回到"未设密码"：本机身份还在，远程登录关上）。 */
 export function setPassword(id, password) {
   const cur = getUser(id);
   if (!cur) return null;
-  const salt = crypto.randomBytes(16).toString('hex');
+  const hasPw = String(password ?? '') !== '';
+  const salt = hasPw ? crypto.randomBytes(16).toString('hex') : NO_PASSWORD;
   db.prepare('UPDATE users SET salt = ?, hash = ?, updatedAt = ? WHERE id = ?').run(
     salt,
-    hashPassword(password, salt),
+    hasPw ? hashPassword(password, salt) : NO_PASSWORD,
     nowIso(),
     id,
   );
@@ -227,6 +278,14 @@ export function deleteUser(id) {
   db.prepare('DELETE FROM users WHERE id = ?').run(cur.id);
   return { ok: true, id: cur.id };
 }
+
+/* ------------------------------------------------------------------ 动态验证 */
+
+/*
+ * 已整体搬进 **store/otp.mjs**（2026-10-31 二改，仿 yaojian-ruoyi）：独立表 user_otp、
+ * AES-GCM 加密密钥、10 个一次性恢复码、两段式登录的一次性凭据。
+ * 这里只保留 users 表上那两个遗留列的定义（见文件头的迁移说明），不要再往这儿加 TOTP 逻辑。
+ */
 
 /* ------------------------------------------------------------------ 会话 */
 

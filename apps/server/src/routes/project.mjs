@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { sendJson, fail, readBody, readRawBody } from '../http.mjs';
 import * as store from '../store.mjs';
+import * as auth from '../auth.mjs';
 import { dispatchToThread } from '../dispatch.mjs';
 import * as status from '../status.mjs';
 import { projectTasks, allTasks, createProjectTask, updateProjectTask, startProjectTask, afterMerged, upsertRepoCard } from '../project-tasks.mjs';
@@ -67,7 +68,12 @@ export async function handleProject(req, res, url) {
          * 校验"模板存在 + 已发布 + 没同时给人"，不靠前端自觉（接口谁都能直接调）。
          */
         flowTemplateId: body.flowTemplateId ?? null,
+        // 派给真人（2026-10-31 用户概念落地）：与 personaId 同一条"执行人"格子的另一档。
+        // 真人执行 = 卡挂在他名下（看板署名、筛选都认），**不起会话不派活**。
+        assigneeUserId: body.assigneeUserId ?? null,
         startNow: body.startNow === true,
+        // 人手建卡也记是谁建的（2026-10-31）：登录用户是他自己，回环操作员是第一个用户
+        createdByUserId: auth.actorUser(req)?.id ?? null,
         createdBy: cred?.personaId ?? null,
         creatorConvId: originRun?.conversationId ?? null,
       });
@@ -243,7 +249,7 @@ export async function handleProject(req, res, url) {
 
     if (mode === 'note') {
       // 便签：只落一条消息、不派活、不叫醒。**它是给人看的**，不补投给 agent。
-      const message = store.addMessage({ conversationId: conv.id, role: 'user', text, parentId, note: true, atts });
+      const message = store.addMessage({ conversationId: conv.id, role: 'user', text, parentId, note: true, atts, senderUserId: auth.actorUser(req)?.id ?? null });
       return sendJson(res, 201, { note: true, mode, message, conversationId: conv.id });
     }
     try {
@@ -256,6 +262,7 @@ export async function handleProject(req, res, url) {
         parentId,
         sandbox: mode === 'discuss' ? 'plan' : undefined,
         atts,
+        senderUserId: auth.actorUser(req)?.id ?? null,
         card: {
           title: task.title,
           description: task.description,

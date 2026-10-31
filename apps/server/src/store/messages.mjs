@@ -1,8 +1,15 @@
 /* store/messages.mjs —— 2026-10-22 由 store.mjs 按域拆出。SQL 只在 store/ 目录内。 */
 
-import { db, newId, nowIso } from './db.mjs';
+import { db, ensureColumn, newId, nowIso } from './db.mjs';
 import { createConversation, listHiddenConversations } from './conversations.mjs';
 import { emitConv } from '../events.mjs';
+
+/*
+ * **说话的是哪个人**（2026-10-31 用户概念落地）。真人经浏览器发的消息带 `senderUserId`
+ * （登录用户是他自己；回环操作员是第一个用户，见 auth.actorUser）；员工/飞书/回执是 null。
+ * null ≠ 删除：用户删号后消息还留着（LEFT JOIN 出来 senderUserName 为空，界面回落"我"）。
+ */
+ensureColumn('messages', 'senderUserId', 'senderUserId TEXT');
 
 export function getMessageByRowid(conversationId, rowid) {
   if (!rowid) return null;
@@ -14,10 +21,13 @@ export function getMessageByRowid(conversationId, rowid) {
 }
 
 
+/** 真人署名带出来（用户删号后 name 为空 —— 界面回落"我"，不报错） */
+const SENDER_JOIN = 'LEFT JOIN users u ON u.id = m.senderUserId';
+
 export function listMessages(conversationId) {  return db
     .prepare(
-      `SELECT m.*, p.name AS personaName
-         FROM messages m LEFT JOIN personas p ON p.id = m.personaId
+      `SELECT m.*, p.name AS personaName, u.name AS senderUserName
+         FROM messages m LEFT JOIN personas p ON p.id = m.personaId ${SENDER_JOIN}
         WHERE m.conversationId = ? ORDER BY m.createdAt, m.rowid`,
     )
     .all(conversationId)
@@ -32,8 +42,8 @@ export function listMessages(conversationId) {  return db
 export function listMessagesByTask(taskId) {
   return db
     .prepare(
-      `SELECT m.*, p.name AS personaName
-         FROM messages m LEFT JOIN personas p ON p.id = m.personaId
+      `SELECT m.*, p.name AS personaName, u.name AS senderUserName
+         FROM messages m LEFT JOIN personas p ON p.id = m.personaId ${SENDER_JOIN}
         WHERE m.taskId = ? ORDER BY m.createdAt, m.rowid`,
     )
     .all(taskId)
@@ -48,8 +58,8 @@ export function listMessagesByTask(taskId) {
 export function listMessagesSince(conversationId, afterRowid, excludeMessageId = null) {
   return db
     .prepare(
-      `SELECT m.rowid AS rid, m.*, p.name AS personaName
-         FROM messages m LEFT JOIN personas p ON p.id = m.personaId
+      `SELECT m.rowid AS rid, m.*, p.name AS personaName, u.name AS senderUserName
+         FROM messages m LEFT JOIN personas p ON p.id = m.personaId ${SENDER_JOIN}
         WHERE m.conversationId = ? AND m.rowid > ? ORDER BY m.rowid`,
     )
     .all(conversationId, afterRowid)
@@ -69,10 +79,10 @@ function parseAtts(m) {
 }
 
 
-export function addMessage({ conversationId, runId = null, role, text, personaId = null, taskId = null, parentId = null, note = false, atts = null, meta = null }) {
-  const row = { id: newId('m'), conversationId, runId, role, text, personaId, taskId, parentId, note: note ? 1 : 0, createdAt: nowIso(), atts: atts?.length ? JSON.stringify(atts) : null, meta: meta ? JSON.stringify(meta) : null };
+export function addMessage({ conversationId, runId = null, role, text, personaId = null, taskId = null, parentId = null, note = false, atts = null, meta = null, senderUserId = null }) {
+  const row = { id: newId('m'), conversationId, runId, role, text, personaId, taskId, parentId, note: note ? 1 : 0, createdAt: nowIso(), atts: atts?.length ? JSON.stringify(atts) : null, meta: meta ? JSON.stringify(meta) : null, senderUserId };
   db.prepare(
-    'INSERT INTO messages (id, conversationId, runId, role, text, personaId, taskId, parentId, note, atts, meta, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    'INSERT INTO messages (id, conversationId, runId, role, text, personaId, taskId, parentId, note, atts, meta, senderUserId, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
   ).run(
     row.id,
     row.conversationId,
@@ -85,6 +95,7 @@ export function addMessage({ conversationId, runId = null, role, text, personaId
     row.note,
     row.atts,
     row.meta,
+    row.senderUserId,
     row.createdAt,
   );
   // 说话就把它从"已从列表移除"里恢复 —— 否则会出现"我发了消息，列表里却没有"

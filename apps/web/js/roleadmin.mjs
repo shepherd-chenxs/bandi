@@ -78,7 +78,7 @@ function paint() {
         ${
           isAdmin
             ? `<span class="set-label">角色名</span><div class="machine-data">${esc(cur.name)}<span class="sub">（内置，不可改名）</span></div>`
-            : `<span class="set-label">角色名</span><input id="roleName" value="${esc(cur?.name ?? '')}" maxlength="30" placeholder="比如：运维、只读、项目经理" />`
+            : `<span class="set-label">角色名</span><input id="roleName" value="${esc(cur?.name ?? '')}" maxlength="30" placeholder="比如：运维、只读、项目经理" style="max-width:320px" />`
         }
       </div>
     </div>`;

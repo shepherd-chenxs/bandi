@@ -8,6 +8,8 @@ export function createProjectTask({
   description = '',
   status = '待办',
   assigneePersonaId = null,
+  // 派给真人（2026-10-31）：与 assigneePersonaId 互斥，真人执行不起会话不派活
+  assigneeUserId = null,
   conversationId = null,
   runId = null,
   source = 'manual',
@@ -18,6 +20,8 @@ export function createProjectTask({
   flowTemplateId = null,
   flowRunId = null,
   createdBy = null,
+  // 人手建卡的是哪位真人（2026-10-31；员工经接口建的卡是 null）
+  createdByUserId = null,
   creatorConvId = null,
 }) {
   const ts = nowIso();
@@ -28,6 +32,7 @@ export function createProjectTask({
     description,
     status,
     assigneePersonaId,
+    assigneeUserId,
     conversationId,
     runId,
     source,
@@ -40,6 +45,7 @@ export function createProjectTask({
     flowRunId,
     // 项目经理经"工作证"接口建的卡记他（人手建的卡是 null，见 routes/agent-cards.mjs）
     createdBy,
+    createdByUserId,
     // 建卡那次运行所在的会话（PM 在哪个群里建的卡，回执就送回哪儿；人手建是 null）
     creatorConvId,
     createdAt: ts,
@@ -47,8 +53,8 @@ export function createProjectTask({
   };
   db.prepare(
     `INSERT INTO project_tasks
-       (id, projectId, title, description, status, assigneePersonaId, conversationId, runId, source, externalKey, sourceKey, sourceRunId, flowTemplateId, flowRunId, createdBy, creatorConvId, createdAt, updatedAt)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, projectId, title, description, status, assigneePersonaId, assigneeUserId, conversationId, runId, source, externalKey, sourceKey, sourceRunId, flowTemplateId, flowRunId, createdBy, createdByUserId, creatorConvId, createdAt, updatedAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     row.id,
     row.projectId,
@@ -56,6 +62,7 @@ export function createProjectTask({
     row.description,
     row.status,
     row.assigneePersonaId,
+    row.assigneeUserId,
     row.conversationId,
     row.runId,
     row.source,
@@ -65,6 +72,7 @@ export function createProjectTask({
     row.flowTemplateId,
     row.flowRunId,
     row.createdBy,
+    row.createdByUserId,
     row.creatorConvId,
     row.createdAt,
     row.updatedAt,
@@ -156,7 +164,7 @@ export function updateProjectTask(id, fields) {
   for (const [k, v] of Object.entries(fields)) if (v !== undefined) next[k] = v;
   db.prepare(
     `UPDATE project_tasks
-        SET title = ?, description = ?, status = ?, assigneePersonaId = ?,
+        SET title = ?, description = ?, status = ?, assigneePersonaId = ?, assigneeUserId = ?,
             conversationId = ?, runId = ?, prRepo = ?, prNumber = ?, prState = ?, prTitle = ?,
             prCheckedAt = ?, queuedAt = ?, sourceKey = ?, sourceRunId = ?,
             flowTemplateId = ?, flowRunId = ?,
@@ -166,7 +174,8 @@ export function updateProjectTask(id, fields) {
     next.title,
     next.description,
     next.status,
-    next.assigneePersonaId,
+    next.assigneePersonaId ?? null,
+    next.assigneeUserId ?? null,
     next.conversationId,
     next.runId,
     next.prRepo ?? null,

@@ -15,7 +15,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { defaultKeyPath, expandHome } from './ssh-registry.mjs';
+import { defaultKeyPath, expandHome, getPassword } from './ssh-registry.mjs';
 
 export const TIMEOUT_MS = Number(process.env.BANDI_SSH_TIMEOUT_MS) || 30000;
 const STRICT = process.env.BANDI_SSH_STRICT || 'accept-new';
@@ -48,6 +48,52 @@ export function sshKeygenBin() {
 /** 私钥落在哪：登记表写了就用它，留空落到默认 `~/.ssh/<别名>`（默认值与界面同源：registry.defaultKeyPath） */
 export const keyPathOf = (entry) => expandHome(entry.key_path || defaultKeyPath(entry.alias));
 
+/* ------------------------------------------------------- 密码认证（2026-10-31） */
+
+/** 认证方式：登记表写了 password 且确实存过密码才算密码认证，其余一律私钥（老数据零迁移） */
+export function authTypeOf(entry) {
+  return entry?.auth_type === 'password' && getPassword(entry.alias) ? 'password' : 'key';
+}
+
+/**
+ * SSH_ASKPASS_REQUIRE 需要 OpenSSH ≥ 8.4（8.1 两个都不认、8.6 认 ASKPASS 不认 REQUIRE，
+ * 见 Win32-OpenSSH #1726 / #2115）。查一次缓存一次；解析不了就放行 —— 让 ssh 自己报错。
+ */
+let sshVerCache = null;
+function askpassSupported() {
+  if (sshVerCache !== null) return sshVerCache;
+  try {
+    const r = spawnSync(sshBin(), ['-V'], { encoding: 'utf8', windowsHide: true });
+    const m = /OpenSSH_(\d+)\.(\d+)/.exec(`${r.stdout ?? ''}${r.stderr ?? ''}`);
+    sshVerCache = m ? Number(m[1]) * 100 + Number(m[2]) >= 804 : true;
+  } catch {
+    sshVerCache = true;
+  }
+  return sshVerCache;
+}
+
+/**
+ * 临时 askpass 脚本：只干一件事 —— 把**环境变量里**的密码打到 stdout。
+ *
+ * 为什么不直接 `@echo %PW%`：cmd 展开发生在语法解析**之前**，密码里有 `& | < > "` 就把
+ * 命令行打穿（甚至能注入）；放进 node -e 的环境变量里就绕开了 —— 密码不进文件、不进
+ * 命令行、不进进程 argv。.cmd 能被 Windows OpenSSH 当 askpass 拉起来是实测过的
+ * （agent-bridge / ssh-copy-id for Windows 都这么干），别看着不可能就改掉。
+ * 用完即删（sshRun 的 finish 里）。
+ */
+function buildAskpassFile() {
+  const file = path.join(
+    os.tmpdir(),
+    `bandi-askpass-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.cmd`,
+  );
+  fs.writeFileSync(
+    file,
+    `@echo off\r\n"${process.execPath}" -e "process.stdout.write(process.env.BANDI_ASKPASS_PW||'')"\r\n`,
+    'utf8',
+  );
+  return file;
+}
+
 /** 公钥文件在不在（登记表里没写 key_path 也能判断） */
 export function keyExists(entry) {
   const k = keyPathOf(entry);
@@ -78,21 +124,58 @@ export function tryPublicKeyOf(entry) {
 }
 
 /**
- * 真起一次 ssh。BatchMode=yes 很关键：没配好的话它**立刻失败**，而不是挂在口令提示上等超时。
+ * 真起一次 ssh。
+ * · 私钥：BatchMode=yes 很关键 —— 没配好的话它**立刻失败**，而不是挂在口令提示上等超时。
+ * · 密码（2026-10-31）：没有 BatchMode（它会禁掉口令提示），改走 askpass 喂密码；
+ *   PubkeyAuthentication=no 把钥匙这条路关死，别让 ssh 拿默认钥匙蒙对 ——
+ *   蒙对了用户以为密码对了，其实测的是另一把钥匙。
  */
 export function sshRun(entry, command, timeoutMs = TIMEOUT_MS) {
   return new Promise((resolve) => {
-    const args = [
-      '-i', keyPathOf(entry),
-      '-p', String(entry.port || 22),
-      '-o', 'BatchMode=yes',
-      '-o', `StrictHostKeyChecking=${STRICT}`,
-      '-o', `ConnectTimeout=${Math.max(3, Math.round(timeoutMs / 1000))}`,
-      `${entry.user}@${entry.host}`,
-      '--',
-      command,
-    ];
-    const child = spawn(sshBin(), args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    let args;
+    let askpassFile = null;
+    const env = { ...process.env };
+    if (authTypeOf(entry) === 'password') {
+      const pw = getPassword(entry.alias);
+      if (!pw) {
+        resolve({ ok: false, code: null, out: '', err: '', error: '这台选了密码认证，但本机还没存密码 —— 到「远程连接」的「改」里重新存一次。' });
+        return;
+      }
+      if (!askpassSupported()) {
+        resolve({ ok: false, code: null, out: '', err: '', error: '本机的 OpenSSH 客户端太老（密码喂给 ssh 要 8.4 以上）。到 Windows「设置 → 应用 → 可选功能」里升级 OpenSSH，或改用私钥认证。' });
+        return;
+      }
+      askpassFile = buildAskpassFile();
+      Object.assign(env, {
+        SSH_ASKPASS: askpassFile,
+        SSH_ASKPASS_REQUIRE: 'force',
+        DISPLAY: 'localhost:0',   // 老 ssh 没它不认 askpass；新 ssh 无所谓
+        BANDI_ASKPASS_PW: pw,
+      });
+      args = [
+        '-p', String(entry.port || 22),
+        '-o', `StrictHostKeyChecking=${STRICT}`,
+        '-o', `ConnectTimeout=${Math.max(3, Math.round(timeoutMs / 1000))}`,
+        '-o', 'PreferredAuthentications=password',
+        '-o', 'PubkeyAuthentication=no',
+        '-o', 'NumberOfPasswordPrompts=1',
+        `${entry.user}@${entry.host}`,
+        '--',
+        command,
+      ];
+    } else {
+      args = [
+        '-i', keyPathOf(entry),
+        '-p', String(entry.port || 22),
+        '-o', 'BatchMode=yes',
+        '-o', `StrictHostKeyChecking=${STRICT}`,
+        '-o', `ConnectTimeout=${Math.max(3, Math.round(timeoutMs / 1000))}`,
+        `${entry.user}@${entry.host}`,
+        '--',
+        command,
+      ];
+    }
+    const child = spawn(sshBin(), args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env });
     let out = '';
     let err = '';
     let done = false;
@@ -100,6 +183,7 @@ export function sshRun(entry, command, timeoutMs = TIMEOUT_MS) {
       if (done) return;
       done = true;
       clearTimeout(timer);
+      if (askpassFile) { try { fs.rmSync(askpassFile, { force: true }); } catch { /* 尽力就好 */ } }
       try { child.kill(); } catch { /* 已退 */ }
       resolve(result);
     };
@@ -198,7 +282,10 @@ export async function testConnection(entry, timeoutMs = TIMEOUT_MS) {
     };
   }
 
-  const fp = await checkRemoteFingerprint(entry, timeoutMs);
+  // 密码认证没有本地密钥，指纹无从对起 —— 跳过，别拿"未生成密钥"吓用户
+  const fp = authTypeOf(entry) === 'password'
+    ? { state: 'skip', line: '🔑 指纹核对：跳过（密码认证，本机没有密钥可核对）' }
+    : await checkRemoteFingerprint(entry, timeoutMs);
 
   // 把 key=value 解析成**带标签的事实**：裸输出（三行字符串）用户看不懂谁是谁
   const kv = {};
@@ -236,7 +323,8 @@ export function fingerprintOfPublicFile(pubPath) {
  * 两处各写一遍文案，改了一边忘了另一边，用户就会照着一份过时的说明操作。
  *
  * 规矩（沿用桌面版，这三条是有意的约束，不是文案风格）：
- *   · 程序**不自己连服务器写公钥、不收服务器口令**，界面上没有口令输入框；
+ *   · 指引只管**把公钥装上**（免密那条道）；程序不自己连服务器写公钥。
+ *     （密码认证是 2026-10-31 另开的一条路，见 sshRun 的 askpass 分支，两者不混。）
  *   · 占位符（账号、公钥）**生成时就替换成这台服务器的真实值**，复制下来不用改；
  *   · 指引里**不含任何凭据**：没有私钥、没有口令、没有 PEM 段落。公钥是公开信息，可以出现。
  *

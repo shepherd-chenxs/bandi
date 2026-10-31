@@ -38,7 +38,7 @@ import { doStartFlow, flowStart, openFlowStart, syncFlowTitle } from './js/flowp
 import { importPicked, openSkill, renderSkAssignList, renderGitRepos, scanImport, skAssignPicked, skAssignSkill } from './js/skills.mjs';
 import { addAtts, closeMentionPop, insertMention, linkPersonaId, linkPicked, makeConversationCard, mentionPop, openConversation, openDetail, renderLinkList, searchRefreshDetail, send, setBusy, setComposer, stopChatRun, updateMentionPop } from './js/chat.mjs';
 import { deleteSessionFromLog, memberPicked, renderMemberCandidates } from './js/groups.mjs';
-import { closeDrawer, pluginMust, refreshGroup, rerenderPanel } from './js/experts.mjs';
+import { applyFormDefaults, closeDrawer, pluginMust, refreshGroup, rerenderPanel, runFormFollow } from './js/experts.mjs';
 import { startEvents } from './js/events.mjs';
 import { $, S } from './js/core.mjs';
 import { boot, gAssistantCombo, openGroupDialog, openPluginAdd, pRuntimeCombo, pSandboxCombo, startVersionWatch } from './js/misc.mjs';
@@ -374,6 +374,7 @@ $('plgFormOk').onclick = async (e) => {
   $('plgFormBody').querySelectorAll('[data-field]').forEach((inp) => {
     values[inp.dataset.field] = inp.type === 'checkbox' ? (inp.checked ? '1' : '') : inp.value.trim();
   });
+  applyFormDefaults(d.block, values);
   const missing = (d.block.fields ?? []).filter((f) => f.required && !values[f.key]);
   if (missing.length) return toast('这几项得填：' + missing.map((f) => f.label).join('、'));
 
@@ -390,6 +391,8 @@ $('plgFormOk').onclick = async (e) => {
     await api(sub.api, opts);
     $('plgFormDlg').close();
     S.pluginFormDlg = null;
+    // submit.follow（远程连接「添加并连接」）：存完立刻测一次连通性 —— 编辑态不测（按钮叫「保存」）
+    if (!d.editing) await runFormFollow(d.plugin, d.block, values);
     await rerenderPanel();   // 宿主可能是工作台面板，也可能是设置页里的「远程连接」
   } catch (err) {
     /*

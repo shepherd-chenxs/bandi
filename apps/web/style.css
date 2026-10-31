@@ -738,6 +738,36 @@ main { min-height: 0; }
 .plg-field input[readonly] { color: var(--dim); background: var(--readonly); }
 .plg-form-actions { display: flex; align-items: center; gap: 10px; margin-top: 16px; }
 .plg-form-note { font-size: 12px; color: var(--dim); }
+/* 半宽字段一行两格 + 高级选项折叠 + 表单顶上的格式提示（2026-10-31 远程连接借
+   zcode「新建连接」弹窗的版式；字段由 manifest 的 half / advanced / hint 声明，
+   别的插件表单不写这些字段就还是老样子，零影响） */
+.plg-form-hint { font-size: 12px; color: var(--dim); margin-bottom: 14px; }
+.plg-field-row { display: flex; gap: 12px; }
+.plg-field-row .plg-field { flex: 1; min-width: 0; }
+.plg-field-row .plg-field.half-sm { flex: 0 0 128px; }
+.plg-adv { margin: 2px 0 14px; border: 1px solid var(--line); border-radius: 8px; }
+.plg-adv > summary { cursor: pointer; user-select: none; padding: 8px 12px; font-size: 12.5px; color: var(--dim); }
+.plg-adv > summary:hover { color: var(--text); }
+.plg-adv-body { padding: 4px 12px 8px; }
+/* 这版表单（带半宽行）内容更满，弹窗从默认 480 放宽一档 */
+#plgFormDlg:has(.plg-field-row) { width: 560px; }
+/* 认证方式分段（2026-10-31 借 zcode 的密码/私钥切换）：灰轨道 + 选中白胶囊 */
+.plg-seg { display: inline-flex; gap: 2px; padding: 2px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; }
+.plg-seg-btn { border: 0; background: transparent; padding: 5px 16px; border-radius: 8px; font-size: 12.5px; color: var(--dim); cursor: pointer; }
+.plg-seg-btn:hover { color: var(--text); }
+.plg-seg-btn.on { background: var(--panel); color: var(--text); box-shadow: 0 1px 3px rgba(0, 0, 0, .12); }
+/* 密码框的小眼睛：骑在输入框右缘 */
+.plg-pw { position: relative; }
+.plg-pw input { padding-right: 34px; }
+.plg-eye { position: absolute; right: 5px; top: 50%; transform: translateY(-50%);
+           display: flex; padding: 5px; border: 0; background: transparent; color: var(--dim); cursor: pointer; }
+.plg-eye:hover, .plg-eye.on { color: var(--text); }
+/* 本机路径格：输入框 + 右边「选择」钮（远程连接「私钥路径」） */
+.plg-pickrow { display: flex; gap: 8px; align-items: stretch; }
+.plg-pickrow input { flex: 1; min-width: 0; }
+.plg-pick { border: 1px solid var(--line); background: var(--panel); padding: 0 14px; border-radius: 8px;
+            font-size: 12.5px; color: var(--dim); cursor: pointer; white-space: nowrap; }
+.plg-pick:hover { color: var(--text); border-color: var(--dim); }
 
 /* show 弹窗移除了 —— 公钥和交付指引现在铺在详情区（.plg-code） */
 
@@ -1182,6 +1212,31 @@ body:has(#pluginView.shown .fixed-head)::after {
 .set-head b { font-size: var(--t-sec); font-weight: var(--w-title); }
 .set-tag { font-size: 10.5px; color: var(--dim); border: 1px solid var(--line);
            border-radius: 4px; padding: 0 5px; line-height: 16px; }
+/* 「我的」页（2026-10-31，rail 底部新增一级栏）：身份块 —— 头像 + 名字 + 身份，下面退出登录。
+   justify-content 要压回 flex-start：.set-row 默认 space-between 会把名字推到最右边去。 */
+.me-row { display: flex; align-items: center; justify-content: flex-start; gap: 12px; }
+.me-ava { width: 44px; height: 44px; border-radius: 50%; background: var(--accent); color: #fff;
+          font-size: 19px; line-height: 44px; text-align: center; flex: none; }
+.me-who { display: flex; flex-direction: column; line-height: 1.6; min-width: 0; }
+.me-who .sub { color: var(--dim); font-size: 12.5px; }
+/* 设置 → 用户（2026-10-31 列表化）：一行一个账号，点行（或「修改」）弹窗编辑 */
+/* 「我的」页 › 动态验证（2026-10-31 二改，仿 yaojian-ruoyi）：qrSvg 输出可缩放 SVG，宽度由容器定 */
+#otpQr { display: flex; justify-content: center; }
+#otpQr svg { width: 168px; height: 168px; background: #fff; border-radius: 8px; padding: 8px; }
+#otpSecret { font-size: 12px; letter-spacing: .5px; word-break: break-all; }
+/* 绑定三步的说明行（①扫码 ②验码 ③恢复码） */
+.otp-step { font-size: 12.5px; color: var(--dim); line-height: 1.7; }
+/* 恢复码：两列等宽、等宽字体，方便逐字抄写 */
+.otp-recovery { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; margin-top: 10px; }
+.otp-recovery code { background: var(--input); border: 1px solid var(--line); border-radius: 6px;
+                     padding: 5px 8px; font-size: 13px; letter-spacing: 1px; text-align: center; }
+.usr-row { cursor: pointer; }
+.usr-l { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.usr-l b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.usr-ava { width: 32px; height: 32px; border-radius: 50%; background: var(--accent); color: #fff;
+           font-size: 14px; line-height: 32px; text-align: center; flex: none; }
+.usr-r { display: flex; align-items: center; gap: 10px; flex: none; }
+.usr-role { color: var(--dim); font-size: 12.5px; }
 .set-box { border: 1px solid var(--line); border-radius: 10px;
            background: var(--panel); overflow: hidden; }
 /* 卡里挂着 combo 下拉的：弹层要探出框外，这张卡的裁边放开（默认 hidden 只为圆角裁子元素；
@@ -3524,6 +3579,17 @@ button.att-add:hover { color: var(--text); border: 0; background: var(--panel); 
 .row-with-btn { display: flex; gap: 8px; align-items: center; }
 .row-with-btn input { flex: 1; min-width: 0; }
 .row-with-btn button { flex: 0 0 auto; white-space: nowrap; }
+/* 服务器路径选择弹窗（2026-10-31，插件表单的「选择」在浏览器里的回落）：
+   与上面的选目录对话框同一套视觉，多一列文件（私钥要选到具体文件） */
+.fp-list { max-height: 44vh; overflow: auto; border: 1px solid var(--line); border-radius: 8px; margin-top: 8px; }
+.fp-row { padding: 7px 10px; font-size: 13px; cursor: pointer; display: flex; justify-content: space-between; gap: 10px; }
+.fp-row:hover { background: var(--hover); }
+.fp-row.up { color: var(--accent); border-bottom: 1px solid var(--line); }
+.fp-row.none { color: var(--dim); cursor: default; }
+.fp-row.none:hover { background: none; }
+.fp-row.file { font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; }
+.fp-row.file em { color: var(--dim); font-style: normal; font-size: 11.5px; flex: none; }
+.fp-row.file.on { background: var(--rail-active); color: var(--accent); }
 /* PR 弹窗的「自动填充」行（2026-10-29）：钮贴在标题 label 右侧，别占一整行 */
 .pr-fill-row { display: flex; align-items: center; gap: 8px; }
 .pr-fill-row button:disabled { opacity: .6; cursor: default; }

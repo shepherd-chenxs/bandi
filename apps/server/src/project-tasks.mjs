@@ -264,6 +264,12 @@ const SOURCE_TEXT = { manual: '手动', repo: '仓库值班' };
 
 function manualRows(t) {
   const persona = t.assigneePersonaId ? store.getPersona(t.assigneePersonaId) : null;
+  /*
+   * 真人执行人（2026-10-31）：卡派给了 users 表里的人 —— 挂名负责，不起会话。
+   * `assignee_id` 给执行人筛选用，真人带 `u:` 前缀（员工的 id 都是 `p-` 系，撞不了车）；
+   * 删了的真人名字留空，回落「（没派活）」—— 留的是"当时是谁"，删号不追改历史卡。
+   */
+  const user = t.assigneeUserId ? store.getUser(t.assigneeUserId) : null;
   const source = t.source ?? 'manual';
   /*
    * 「选了流程、还没发起」的卡（「想法」列建的那种）与"实例已经不在了"的孤儿卡，
@@ -281,8 +287,11 @@ function manualRows(t) {
     status: t.status,
     col: COL_OF_MANUAL[t.status] ?? 'other',
     rank: FLOW_RANK[t.status] ?? RANK_OTHER,
-    assignee: persona?.name ?? (t.flowTemplateId && !t.flowRunId ? '（还没发起）' : '（没派活）'),
-    assignee_id: t.assigneePersonaId ?? null,
+    assignee: persona?.name
+      ?? user?.name
+      ?? (t.flowTemplateId && !t.flowRunId ? '（还没发起）' : '（没派活）'),
+    assignee_id: t.assigneePersonaId ?? (t.assigneeUserId ? `u:${t.assigneeUserId}` : null),
+    assignee_user_id: t.assigneeUserId ?? null,
     at: stamp(t.updatedAt),
     note: clip([t.description ? clip(t.description, NOTE_LIMIT) : '手工建的任务', flowWhy].filter(Boolean).join(' · '), NOTE_LIMIT),
     // 行 id：拖拽 / 改状态 / 删卡都走它（手工卡与仓库值班卡共用这一套）
@@ -653,16 +662,23 @@ export function createProjectTask(project, {
   status = '待办',
   personaId = null,
   flowTemplateId = null,
+  // 派给真人（2026-10-31）：与 personaId / flowTemplateId 互斥；真人执行 = 挂名，不起会话
+  assigneeUserId = null,
   startNow = false,
   createdBy = null,
+  createdByUserId = null,
   creatorConvId = null,
 } = {}) {
   const name = String(title ?? '').trim();
   if (!name) throw new Error('任务得有标题');
   const st = MANUAL_STATUSES.has(status) ? status : '待办';
   if (personaId && flowTemplateId) throw new Error('执行方式只能选一个：派给人，或者由流程执行');
+  if (personaId && assigneeUserId) throw new Error('执行人只能选一个：数字员工或真人');
+  if (flowTemplateId && assigneeUserId) throw new Error('执行方式只能选一个：派给真人，或者由流程执行');
   const persona = personaId ? store.getPersona(personaId) : null;
   if (personaId && !persona) throw new Error('选的这个人不在了');
+  const theUser = assigneeUserId ? store.getUser(assigneeUserId) : null;
+  if (assigneeUserId && !theUser) throw new Error('选的这个真人不在了');
   const flowTpl = flowTemplateId ? assertRunnableFlow(flowTemplateId) : null;
 
   const row = store.createProjectTask({
@@ -671,10 +687,12 @@ export function createProjectTask(project, {
     description: String(description ?? '').trim(),
     status: st,
     assigneePersonaId: persona?.id ?? null,
+    assigneeUserId: theUser?.id ?? null,
     // 选了流程：先把模板记在卡上；发起成功再写 flowRunId（见 startCardFlow）
     flowTemplateId: flowTpl?.id ?? null,
     // 项目经理经"工作证"接口建卡时带的身份（人手建是 null）
     createdBy,
+    createdByUserId,
     // 建卡那次运行所在的会话（PM 在哪个群里建的卡，回执就送回哪儿；人手建是 null）
     creatorConvId,
   });
@@ -1095,6 +1113,14 @@ export function updateProjectTask(id, fields = {}, { autoStart = true } = {}) {
   if (fields.personaId !== undefined) {
     if (fields.personaId && !store.getPersona(fields.personaId)) throw new Error('选的这个人不在了');
     patch.assigneePersonaId = fields.personaId || null;
+    // 执行人一格二选一（2026-10-31）：选了员工就清掉真人，别让一张卡挂着两个执行人
+    if (patch.assigneePersonaId) patch.assigneeUserId = null;
+  }
+  if (fields.assigneeUserId !== undefined) {
+    // 派给真人 = 只挂名（不起会话、不派活）；与员工执行人互斥
+    if (fields.assigneeUserId && !store.getUser(fields.assigneeUserId)) throw new Error('选的这个真人不在了');
+    patch.assigneeUserId = fields.assigneeUserId || null;
+    if (patch.assigneeUserId) patch.assigneePersonaId = null;
   }
 
   /*
@@ -1102,11 +1128,11 @@ export function updateProjectTask(id, fields = {}, { autoStart = true } = {}) {
    * 推进去实例页点通过/驳回/终止；看板上这张卡也不给拖 —— 两本账各写一份就会互相覆盖。
    * 卡本身还是"这件事的说明"：标题、描述照常能改。
    */
-  if (cur.flowRunId && (patch.status !== undefined || fields.personaId !== undefined)) {
+  if (cur.flowRunId && (patch.status !== undefined || fields.personaId !== undefined || fields.assigneeUserId !== undefined)) {
     throw new Error('这张卡由流程执行 —— 状态/执行人跟着流程走，去流程实例里推进或终止');
   }
-  // 已经选了流程、还没发起的卡也不能改派给人：执行方式在建卡时就定了，要换就删了重建
-  if (cur.flowTemplateId && !cur.flowRunId && fields.personaId !== undefined) {
+  // 已经选了流程、还没发起的卡也不能改派给人（员工或真人一样）：执行方式在建卡时就定了，要换就删了重建
+  if (cur.flowTemplateId && !cur.flowRunId && (fields.personaId !== undefined || fields.assigneeUserId !== undefined)) {
     throw new Error('这张卡已经选了由流程执行 —— 要改回派人，删掉这张卡重新建');
   }
 

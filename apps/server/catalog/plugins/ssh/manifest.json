@@ -1,7 +1,7 @@
 {
   "id": "ssh",
   "label": "远程连接",
-  "version": "0.5.6",
+  "version": "0.6.2",
   "description": "登记 SSH 服务器、生成与核对密钥、测连通性。登记表就是 ~/.bandi/servers.yaml —— 数字员工带的内置 SSH 工具读的也是它。",
   "category": "运维",
   "panel": {
@@ -11,34 +11,58 @@
       {
         "type": "form",
         "formId": "server",
-        "heading": "登记一台机器",
+        "heading": "新建连接",
         "fields": [
           {
             "key": "alias",
-            "label": "别名",
+            "label": "连接名",
             "required": true,
-            "hint": "唯一标识，例如 bandi-hs4g。改这一项等于新建一台。"
+            "defaultFrom": "host",
+            "hint": "唯一标识，例如 bandi-hs4g；留空则直接用主机地址。改这一项等于新建一台。"
           },
           {
             "key": "host",
-            "label": "地址",
+            "label": "主机",
             "required": true,
-            "hint": "IPv4 或域名，不要带端口和路径。"
-          },
-          {
-            "key": "user",
-            "label": "登录用户",
-            "required": true
+            "half": true,
+            "placeholder": "输入主机地址或 IP，例如 192.168.1.100"
           },
           {
             "key": "port",
             "label": "端口",
+            "half": "sm",
             "value": "22"
+          },
+          {
+            "key": "user",
+            "label": "用户名",
+            "required": true,
+            "placeholder": "输入用户名，例如 root"
+          },
+          {
+            "key": "auth_type",
+            "label": "认证方式",
+            "type": "segment",
+            "value": "key",
+            "options": [
+              { "value": "key", "label": "私钥" },
+              { "value": "password", "label": "密码" }
+            ]
+          },
+          {
+            "key": "password",
+            "label": "密码",
+            "type": "password",
+            "showIf": { "field": "auth_type", "equals": "password" },
+            "placeholder": "输入 SSH 密码",
+            "hint": "只落本机 ~/.bandi/ssh-secrets.json（登记表里不存，界面也不回显）；编辑时留空 = 沿用已存的密码。"
           },
           {
             "key": "key_path",
             "label": "私钥路径",
-            "hint": "留空则用 ~/.ssh/<别名>。"
+            "pick": "file",
+            "showIf": { "field": "auth_type", "equals": "key" },
+            "hint": "留空则用 ~/.ssh/<连接名>；还没有钥匙就先登记，到详情里生成。"
           },
           {
             "key": "purpose",
@@ -49,9 +73,14 @@
         "submit": {
           "method": "POST",
           "api": "/api/ssh/servers",
-          "label": "保存"
-        },
-        "layout": "side-label"
+          "label": "添加并连接",
+          "follow": {
+            "method": "POST",
+            "api": "/api/ssh/servers/{alias}/test",
+            "ok": "「{alias}」已保存，连接正常。",
+            "fail": "「{alias}」已保存，但连接没通（详情里点「测」看完整原因）"
+          }
+        }
       }
     ],
     "split": {
@@ -121,6 +150,10 @@
                       {
                         "label": "端口",
                         "value": "{port}"
+                      },
+                      {
+                        "label": "认证方式",
+                        "value": "{auth_label}"
                       },
                       {
                         "label": "登录用户",

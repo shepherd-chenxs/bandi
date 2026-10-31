@@ -494,6 +494,8 @@ export function dispatchToThread(threadId, text, opts = {}) {
     // 结构化元数据（2026-10-24 卡票）：卡片回执这类"说的是某张卡"的消息带上
     // {type:'card', cardId, …快照}，界面在气泡里画一张可点的卡票
     meta: opts.meta ?? null,
+    // 说话的是哪个人（2026-10-31）：浏览器派活的带 auth.actorUser；流程/回执链路不传 = null
+    senderUserId: opts.senderUserId ?? null,
   });
 
   const run = startMemberRun(thread, member, opts, trigger);

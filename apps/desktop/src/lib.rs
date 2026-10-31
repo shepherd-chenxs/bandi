@@ -81,7 +81,7 @@ const OFFLINE_HTML: &str = include_str!("offline.html");
 
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![pick_directory])
+        .invoke_handler(tauri::generate_handler![pick_directory, pick_file])
         .setup(|app| {
             // 起控制面（最多等 45 秒）。这段时间还没有窗口 —— 用户看到的是"程序正在启动"。
             //
@@ -584,6 +584,110 @@ fn pick_folder_blocking(
                 Ok(()) => {}
                 Err(e) if e.code() == cancelled => return Ok(None),
                 Err(e) => return Err(format!("目录选择框打不开：{}", e.message())),
+            }
+            let item = dialog
+                .GetResult()
+                .map_err(|e| format!("没拿到选择结果：{}", e.message()))?;
+            let name = item
+                .GetDisplayName(SIGDN_FILESYSPATH)
+                .map_err(|e| format!("没拿到路径：{}", e.message()))?;
+            let path = name
+                .to_string()
+                .map_err(|e| format!("路径转不成文本：{e}"))?;
+            if path.is_empty() {
+                return Ok(None);
+            }
+            Ok(Some(path))
+        }
+    })();
+
+    unsafe { CoUninitialize() };
+    result
+}
+
+/// 返回：选中的文件绝对路径；用户取消返回 `None`；出问题返回 `Err`。
+/// （远程连接「私钥路径」的选择按钮用 —— 和 pick_directory 同一套 IFileOpenDialog，
+/// 只是不带 FOS_PICKFOLDERS，改选**文件**。）
+#[tauri::command]
+async fn pick_file(
+    window: tauri::WebviewWindow,
+    title: Option<String>,
+    default_path: Option<String>,
+) -> Result<Option<String>, String> {
+    #[cfg(windows)]
+    {
+        let hwnd = window.hwnd().map_err(|e| format!("拿不到窗口句柄：{e}"))?;
+        // HWND 不是 Send：跨线程只传裸值，进了线程再组回去
+        let hwnd_raw = hwnd.0 as isize;
+        tauri::async_runtime::spawn_blocking(move || {
+            // 单独开线程：文件框要求 STA 套间，tokio 的工作线程可能已经被初始化成 MTA
+            std::thread::spawn(move || {
+                let hwnd = windows::Win32::Foundation::HWND(
+                    hwnd_raw as *mut std::ffi::c_void,
+                );
+                pick_file_blocking(hwnd, title, default_path)
+            })
+            .join()
+            .map_err(|_| "选择文件的线程异常退出".to_string())?
+        })
+        .await
+        .map_err(|e| format!("选择文件失败：{e}"))?
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (window, title, default_path);
+        Err("这个系统上还没做原生文件选择框".to_string())
+    }
+}
+
+/// 真正弹 `IFileOpenDialog`（选文件，不设扩展名过滤 —— 私钥可能是 .pem / .pub / 无后缀）。
+/// 跑在一条自己初始化的 STA 线程上。结构与 pick_folder_blocking 同模。
+#[cfg(windows)]
+fn pick_file_blocking(
+    hwnd: windows::Win32::Foundation::HWND,
+    title: Option<String>,
+    default_path: Option<String>,
+) -> Result<Option<String>, String> {
+    use windows::core::{HRESULT, HSTRING, IUnknown};
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CoUninitialize, IBindCtx, CLSCTX_INPROC_SERVER,
+        COINIT_APARTMENTTHREADED,
+    };
+    use windows::Win32::UI::Shell::{
+        FileOpenDialog, IFileOpenDialog, IShellItem, SHCreateItemFromParsingName,
+        FOS_FILEMUSTEXIST, FOS_PATHMUSTEXIST, SIGDN_FILESYSPATH,
+    };
+
+    // 用户点「取消」时 IFileOpenDialog::Show 返回 HRESULT_FROM_WIN32(ERROR_CANCELLED=1223)
+    let cancelled = HRESULT::from_win32(1223);
+
+    let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+    if hr.is_err() {
+        return Err(format!("COM 初始化失败：{}", hr.message()));
+    }
+
+    let result = (|| -> Result<Option<String>, String> {
+        unsafe {
+            let dialog: IFileOpenDialog =
+                CoCreateInstance(&FileOpenDialog, None::<&IUnknown>, CLSCTX_INPROC_SERVER)
+                    .map_err(|e| format!("创建文件选择框失败：{}", e.message()))?;
+            dialog
+                .SetOptions(FOS_FILEMUSTEXIST | FOS_PATHMUSTEXIST)
+                .map_err(|e| format!("设置文件选择框失败：{}", e.message()))?;
+            let _ = dialog.SetTitle(&HSTRING::from(title.unwrap_or_else(|| "选择文件".into())));
+            let _ = dialog.SetOkButtonLabel(&HSTRING::from("选这个文件"));
+            if let Some(start) = default_path.as_deref().filter(|s| !s.is_empty()) {
+                if let Ok(item) = SHCreateItemFromParsingName::<_, _, IShellItem>(
+                    &HSTRING::from(start),
+                    None::<&IBindCtx>,
+                ) {
+                    let _ = dialog.SetFolder(&item);
+                }
+            }
+            match dialog.Show(Some(hwnd)) {
+                Ok(()) => {}
+                Err(e) if e.code() == cancelled => return Ok(None),
+                Err(e) => return Err(format!("文件选择框打不开：{}", e.message())),
             }
             let item = dialog
                 .GetResult()
