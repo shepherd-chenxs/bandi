@@ -598,7 +598,7 @@ export function guard(auth, req, res, url) {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
       // 回环 = 这台机器自己的屏幕，摆账号磁贴不泄密（局域网那边的登录页仍是"用户名+密码"表单）；
       // 禁用的账号不摆 —— 摆上去也登不进，白给人一个"点不动"的磁贴
-      res.end(loginPage({ wrong: false, hasUsers: true, loopback: true, users: store.listUsers().filter((u) => !u.disabled) }));
+      res.end(loginPage({ hasUsers: true, loopback: true, users: store.listUsers().filter((u) => !u.disabled) }));
       return false;
     }
     return true;
@@ -695,7 +695,7 @@ export function guard(auth, req, res, url) {
           code: 'E4033',
           platform: 'bandi',
           hint: isUser
-            ? '让管理员在「设置 → 用户」里把角色改成「管理员」，或直接在那台机器上用班底（本机免登录、等同操作员）。'
+            ? '让管理员在「设置 → 用户」里把角色改成「管理员」，或在那台机器上用管理员账号登录（本机也要先选账号，2026-10-31 起）。'
             : '请在桌面端操作。',
         }),
       );
@@ -732,7 +732,7 @@ export function guard(auth, req, res, url) {
   const wantsHtml = req.method === 'GET' && !url.pathname.startsWith('/api/');
   if (wantsHtml) {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
-    res.end(loginPage({ wrong: !!got, hasUsers: store.hasUsers() }));
+    res.end(loginPage({ hasUsers: store.hasUsers() }));
     return false;
   }
 
@@ -742,7 +742,7 @@ export function guard(auth, req, res, url) {
       error: '需要访问令牌（这个控制面没有监听回环地址）',
       code: 'E4010',
       platform: 'bandi',
-      hint: '带 X-Bandi-Token 头，或浏览器打开首页在表单里填。令牌在数据目录的 token 文件里。',
+      hint: '带 X-Bandi-Token 头，或浏览器打开首页用账号登录。令牌在数据目录的 token 文件里。',
     }),
   );
   return false;
@@ -788,7 +788,8 @@ const esc = escapeHtml;
  * 五态，别混：
  *   · `hasUsers === false` —— **创建账号**（账号密码直建，第一个自动成为管理员）。
  *     公网服务器上"先令牌后建号"走不通（人不在那台机器旁边）；代价是"谁先到谁占管理员"。
- *     令牌入口仍收在 `<details>` 里（部署/运维的后路不变）。
+ *     ⚠️ 页面上**没有令牌入口**了（2026-10-31 用户定：登录页就是登录页）——部署/运维用
+ *     `X-Bandi-Token` 头或 `?token=`，那条路是给脚本的，不经界面（见 guard 的 operator 分支）。
  *   · `loopback && hasUsers` —— **账号磁贴**（回环 = 这台机器自己的屏幕，摆名单不泄密）：
  *     免密账号点一下就进；设了密码的点了出密码框。电脑开机选账户同款。
  *   · 有用户（非回环）—— 用户名 + 密码主表单（免密账号密码留空直接登录）。
@@ -796,13 +797,12 @@ const esc = escapeHtml;
  *   · 开了动态验证的账号（2026-10-31 二改，仿 yaojian-ruoyi）：密码过了服务端回
  *     `{needOtp:true, otpToken}`，页面**整屏切到第二段**（一个输入框，动态码或恢复码都行，
  *     带「返回上一步」）；凭据 5 分钟、5 次。
- *   · `wrong` —— 令牌填错了（沿用老提示）。
  *
  * 为什么表单靠 inline script 提交而不是原生 `<form method=POST>`：`guardWrite` 要求
  * 写请求带 `X-Bandi: 1` 头，原生表单提交设不了头，必然被 CSRF 闸挡成 403（自己试过）。
  * 所以走 fetch，并把「码 + 中文」原样显示出来 —— 与全站错误口径一致。
  */
-function loginPage({ wrong, hasUsers, loopback = false, users = null }) {
+function loginPage({ hasUsers, loopback = false, users = null }) {
   const pwForm = hasUsers
     ? (loopback && Array.isArray(users) && users.length
       ? `

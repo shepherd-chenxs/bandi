@@ -122,8 +122,13 @@ try {
   check('正文带 platform=bandi（给启动器认的）', noTok.json?.platform === 'bandi', JSON.stringify(noTok.json));
   check('错误码是 E4010', noTok.json?.code === 'E4010', String(noTok.json?.code));
   const page = await get(baseB, '/');
-  check('浏览器要页面 → 200 登录页', page.status === 200 && page.text.includes('name="token"'), `${page.status}`);
-  check('登录页说了令牌在哪', /token/.test(page.text) && /数据目录/.test(page.text));
+  /*
+   * 2026-10-31 改口径：零账号时的登录页不再是"填令牌"表单，而是**建号表单**
+   * （用户拍板「不管总机还是分机，都要用用户来登录」—— 公网服务器上"先令牌后建号"走不通，
+   * 人不在那台机器旁边）。所以这里钉的是「给的是建号页、且不泄面板」。
+   */
+  check('浏览器要页面 → 200 建号页（零账号的首次引导）', page.status === 200 && page.text.includes('id="signForm"'), `${page.status}`);
+  check('建号页说清"第一个账号 = 管理员"', page.text.includes('创建第一个账号') && page.text.includes('管理员'));
 
   console.log('\n④ 三种带法都认');
   check('头 X-Bandi-Token', (await get(baseB, '/api/state', { 'X-Bandi-Token': token })).status === 200);
@@ -134,7 +139,12 @@ try {
   check('Cookie HttpOnly（JS 偷不走）', /HttpOnly/i.test(String(q.headers.get('set-cookie'))));
   check('带 Cookie 能读', (await get(baseB, '/api/state', { Cookie: cookie })).status === 200);
   check('令牌错的 → 401', (await get(baseB, '/api/state', { 'X-Bandi-Token': 'wrong-token' })).status === 401);
-  check('令牌错的 → 登录页会报错', (await get(baseB, '/?token=wrong')).text.includes('令牌不对'));
+  /*
+   * 错令牌不许换出面板（2026-10-31 改）：零账号时这一页是建号页、有账号时是密码页，
+   * 两种都**没有令牌入口**了 —— 所以这里不再找"令牌不对"文案，只钉"进不去"。
+   */
+  const badPage = await get(baseB, '/?token=wrong');
+  check('错令牌 → 还是登录页，不是面板', badPage.status === 200 && badPage.text.includes('id="signForm"') && !badPage.text.includes('id="app"'));
 
   console.log('\n⑤ isUp 必须把 401 认成"是班底、只是要令牌"');
   check('isUp(非回环控制面) === true', (await isUp(P_OPEN)) === true);

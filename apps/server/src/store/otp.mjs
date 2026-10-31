@@ -21,6 +21,8 @@
 
 import crypto from 'node:crypto';
 import { db, nowIso } from './db.mjs';
+// TOTP 的算法本体（纯函数、不碰库）：冒烟也要用它算码，算法不许有两份
+import { base32Decode, totpAt, STEP_SECONDS } from '../otp-code.mjs';
 
 /* ------------------------------------------------------------------ 表 */
 
@@ -69,51 +71,15 @@ export function aesDecrypt(encoded) {
 
 /* ------------------------------------------------------------------ TOTP（RFC 6238） */
 
-const B32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-const STEP_SECONDS = 30;
+/*
+ * 算法本体（B32 / base32Decode / totpAt / generateSecret）在 `src/otp-code.mjs`。
+ * 抽出去的唯一理由：冒烟是黑盒 HTTP 测试，得自己算一个码塞进接口，
+ * 而本文件顶层会建表 —— 冒烟进程 import 它等于往真实数据目录写库 ✗。
+ */
+export { generateSecret } from '../otp-code.mjs';
+
+/** ±1 个时间片：时钟差半分钟不该把人锁在外面 */
 const WINDOW = 1;
-
-/** 20 字节随机密钥 → base32（所有验证器 App 都吃） */
-export function generateSecret() {
-  const buf = crypto.randomBytes(20);
-  let out = '';
-  let bits = 0;
-  let value = 0;
-  for (const b of buf) {
-    value = (value << 8) | b;
-    bits += 8;
-    while (bits >= 5) {
-      out += B32[(value >>> (bits - 5)) & 31];
-      bits -= 5;
-    }
-  }
-  if (bits > 0) out += B32[(value << (5 - bits)) & 31];
-  return out;
-}
-
-function base32Decode(s) {
-  const out = [];
-  let bits = 0;
-  let value = 0;
-  for (const ch of String(s ?? '').toUpperCase().replace(/[^A-Z2-7]/g, '')) {
-    value = (value << 5) | B32.indexOf(ch);
-    bits += 5;
-    if (bits >= 8) {
-      out.push((value >>> (bits - 8)) & 0xff);
-      bits -= 8;
-    }
-  }
-  return Buffer.from(out);
-}
-
-function totpAt(key, step) {
-  const msg = Buffer.alloc(8);
-  msg.writeBigUInt64BE(BigInt(step));
-  const h = crypto.createHmac('sha1', key).update(msg).digest();
-  const off = h[h.length - 1] & 0x0f;
-  const bin = ((h[off] & 0x7f) << 24) | ((h[off + 1] & 0xff) << 16) | ((h[off + 2] & 0xff) << 8) | (h[off + 3] & 0xff);
-  return String(bin % 1_000_000).padStart(6, '0');
-}
 
 /** 验 6 位动态码：±WINDOW 个时间片内任一命中即可，常量时间比较 */
 export function verifyTotp(base32Secret, code) {
