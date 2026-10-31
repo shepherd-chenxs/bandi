@@ -164,7 +164,9 @@ try {
   check('本机 UI 还是自己的（无反代注入标记，静态照常出）',
     !html.includes('__BANDI_CLIENT__') && html.includes('app.mjs'), `注入=${html.includes('__BANDI_CLIENT__')}`);
   check('加入后 /api/state 照常答（本机库，未被动过）', state.status === 200, `status=${state.status}`);
-  const forbidden = await json(BASE_HOST, '/api/personas', { token: cfg?.token });
+  // v2.8：裸 /api/personas 是幽灵路由（未登记、无 handler）→ 404 E4090；
+  // 节点令牌的 E4031 闸改打真实登记的面板路由 /api/experts
+  const forbidden = await json(BASE_HOST, '/api/experts', { token: cfg?.token });
   check('节点令牌摸总机面板 → 403 E4031（闸还在，没面板可看）',
     forbidden.status === 403 && forbidden.body?.code === 'E4031',
     `${forbidden.status} ${forbidden.body?.code ?? ''}`);

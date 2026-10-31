@@ -64,6 +64,13 @@ export const db = new DatabaseSync(dbPath);
 
 db.exec(`PRAGMA journal_mode = WAL;`);
 
+/*
+ * busy_timeout（2026-10-31 收尾回归加）：本机偶发第二个进程也开这条库
+ * （smoke 直连 store / 用户拿 sqlite 工具看数据），两边同时写时默认 busy_timeout=0
+ * 会立刻抛 database is locked。WAL 下写锁只挡毫秒级 —— 等 5 秒足够，别把偶发竞争变事故。
+ */
+db.exec(`PRAGMA busy_timeout = 5000;`);
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS personas (
     id            TEXT PRIMARY KEY,

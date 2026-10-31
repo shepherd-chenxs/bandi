@@ -162,7 +162,8 @@ try {
     const bad2 = await req('/api/experts/nope/fire', { method: 'POST' });
     check('fire 未知 key → 404 + E2051', bad2.status === 404 && bad2.b?.code === 'E2051', `${bad2.status} ${bad2.b?.code}`);
     const bad3 = await req('/api/experts/jiahui/hire', { method: 'GET' });
-    check('方法不对 → 405 + E2052（不是 500）', bad3.status === 405 && bad3.b?.code === 'E2052', `${bad3.status} ${bad3.b?.code}`);
+    // v2.8：hire 只登记了 POST —— GET 在认证之前就 404 E4090（默认拒绝；handler 里的 405 E2052 成不可达兜底）
+    check('方法不对 → 404 E4090（GET 没登记，默认拒绝）', bad3.status === 404 && bad3.b?.code === 'E4090', `${bad3.status} ${bad3.b?.code}`);
 
     /* ------------------------------- ⑦ 解聘没雇佣的：不炸 */
     console.log('\n⑦ 解聘没雇佣的：removed:false，不报错');

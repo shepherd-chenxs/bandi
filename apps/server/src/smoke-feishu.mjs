@@ -363,7 +363,8 @@ try {
     check('留空 secret 保存 → 掩码不变（保留原值）', again.status === 200 && again.b.appSecretHint === 'sk' + '*'.repeat(18) + '3456');
 
     check('不认识的接口 → 404 E2065', (await req(feishuUrl + '/whatever', { method: 'POST', body: '{}' })).status === 404);
-    check('stop 永远可以调（幂等）', (await req(feishuUrl + '/stop', { method: 'POST', body: '{}' })).status === 200);
+    const stopIdem = await req(feishuUrl + '/stop', { method: 'POST', body: '{}' });
+    check('stop 永远可以调（幂等）', stopIdem.status === 200, `${stopIdem.status} ${JSON.stringify(stopIdem.b).slice(0, 120)}`);
 
     /* 旧平台级路由已删：落到通用 404（E2036），不再是 E2065 */
     const oldGone = await req('/api/feishu/config');

@@ -465,7 +465,8 @@ try {
     check('没连 GitHub 就列 PR → 400 说"先连接 GitHub"（不画一个空清单糊人）', noTokenList.status === 400 && /先连接 GitHub/.test(noTokenList.b?.error ?? ''), String(noTokenList.status));
     if (savedToken) git.saveToken(savedToken);
     check('仓库不在清单里 → 404（不是 500）', (await req('/api/git/repos/gr-nope/changes')).status === 404);
-    check('/prs 上不支持的方法 → 405 说清只认 GET/POST', (await req(`/api/git/repos/${id}/prs`, { method: 'PUT', body: JSON.stringify({}) })).status === 405);
+    // v2.8：/prs 只登记了 GET/POST —— PUT 在认证之前就 404 E4090（默认拒绝）
+    check('/prs 上不支持的方法 → 404 E4090（PUT 没登记）', (await req(`/api/git/repos/${id}/prs`, { method: 'PUT', body: JSON.stringify({}) })).status === 404);
 
     gh.reset();
     gh.seed('smoke/demo', { number: 77, title: '别人提的', head: 'feature/x', base: 'main', author: 'someone' });
