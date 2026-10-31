@@ -15,7 +15,7 @@
  * 的输出结构；不动 #listBody 的 innerHTML；搜索/筛选照旧只重画结果块。
  */
 import { applyMenuGating, load, setNav } from './state.mjs';
-import { $ } from './core.mjs';
+import { $, S } from './core.mjs';
 import { closeDrawer } from './experts.mjs';
 
 /* ---------------------------------------------------------------- ① 断点 */
@@ -66,6 +66,16 @@ function leaveDetail() {
   document.body.classList.remove('mb-detail-open');
   // 聊天页自带的返回按钮（chat.mjs 的 .mb-chat-back）随页面一起退场
   document.body.classList.remove('mb-chat');
+  /*
+   * 从通讯录点人开聊的（chat.mjs 的 openDirectChat 会记下来源栏）：
+   * 返回要回**通讯录**，否则落在「会话」列表上 —— 用户是从通讯录进来的，
+   * 退出去却看到另一个模块，等于"回来的路不对"。
+   */
+  const backNav = S.mbBackNav;
+  if (backNav) {
+    S.mbBackNav = '';
+    setNav(backNav);
+  }
   requestAnimationFrame(() => {
     if ($('listBody')) $('listBody').scrollTop = listScroll;
   });
@@ -83,6 +93,9 @@ $('listBody').addEventListener('click', (e) => {
   if (!row) return;
   // 点「＋」菜单或分组折叠标题这类不换页的行不动：折叠标题带 data-sec，排除
   if (e.target.closest('[data-sec]')) return;
+  // 手机通讯录的"入口行"（群聊 / 部门）和部门行是**列表内换页**，不是进详情 ——
+  // 让它们走折叠的话，列表会被藏起来换成一页空的主区（2026-10-31）。
+  if (row.matches('[data-cv], [data-cv-dept]')) return;
   const title = rowTitle(row);
   requestAnimationFrame(() => enterDetail(title));
 });
@@ -123,6 +136,8 @@ $('listBody').addEventListener(
     if (!isNarrow()) return;
     const row = e.target.closest('[data-conv], [data-persona], [data-group], [data-set], .item');
     if (!row || e.target.closest('[data-sec]')) return;
+    // 列表内换页的行（通讯录入口 / 部门）不压历史：它们不是"进详情"，没有可返回的上一层
+    if (row.matches('[data-cv], [data-cv-dept]')) return;
     // 从聊天页跳到别的详情页：先摘掉 mb-chat，聊天头那个返回按钮不该继续占着
     document.body.classList.remove('mb-chat');
     // 详情已经开着就别再压历史（2026-10-28）：连点几次行会攒出多层"返回"，
@@ -161,8 +176,11 @@ tabbar.innerHTML = `
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M4 5.5h16v10H9l-5 4z"/></svg>
     <span>会话</span>
   </button>
+  <!-- 「我的」= 人形轮廓（2026-11 第二版）：原来是"圆 + 八条放射线"，那是**亮度/太阳**
+       的图形语言，图标下面还写着「我的」—— 第一眼会被读成"切换主题"。
+       这一栏进的是账号与权限，人形才是主流 App 里这个 tab 的固定符号。 -->
   <button type="button" class="mb-tab" data-tab="settings">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M12 3v2.2M12 18.8V21M3 12h2.2M18.8 12H21M5.6 5.6l1.6 1.6M16.8 16.8l1.6 1.6M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6"/></svg>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.6"/><path d="M4.9 20.2c.7-3.6 3.6-5.5 7.1-5.5s6.4 1.9 7.1 5.5"/></svg>
     <span>我的</span>
   </button>`;
 tabbar.querySelectorAll('.mb-tab').forEach((b) => {
@@ -172,6 +190,11 @@ tabbar.querySelectorAll('.mb-tab').forEach((b) => {
     document.body.classList.remove('mb-chat');
     // 抽屉是 fixed 覆盖层，换一级页时必须一起关，否则新页面被旧抽屉盖住
     closeDrawer();
+    // 手动换栏就不再是"从通讯录进来又返回"那条路了，来源标记作废
+    S.mbBackNav = '';
+    // 点「通讯录」= 明确要回一级页：通知通讯录把手机端的子页（部门/群聊）退掉。
+    // 走事件而不是 import，避免 contacts.mjs 反向依赖本文件。
+    if (b.dataset.tab === 'contacts') document.dispatchEvent(new CustomEvent('mb-cv-home'));
     setNav(b.dataset.tab);
     syncTabs();
   });
@@ -212,6 +235,35 @@ if (window.visualViewport) {
   vv.addEventListener('resize', onVv);
   vv.addEventListener('scroll', onVv);
   onVv();
+}
+
+/* ---------------------------------------------------------------- ④b 输入框自适应高度 */
+
+/*
+ * 手机输入条是一行胶囊（mobile.css §8），textarea 常态 38px = 一行。写长了必须跟着长，
+ * 否则多出来的行被内部滚动条吃掉 —— 自己刚写的上一句看不见了。
+ * 桌面那条 min-height: 96px 是固定三行的口径，这里只在窄屏接管，宽屏还原（''）。
+ * 上限 96px 跟 CSS 的 max-height 对齐：超过就内部滚动，输入条不再往上顶消息区。
+ */
+const inputEl = $('input');
+
+function autosizeInput() {
+  if (!inputEl) return;
+  if (!isNarrow()) { inputEl.style.height = ''; return; }
+  // ⚠️ 必须量在 `height: 0` 上，不能用 `height: auto`：textarea 没有 rows 属性时
+  //    auto 会回落到浏览器默认的 rows=2（量出来 58px，比一行的 38px 还高），
+  //    清空内容之后输入条就再也收不回一行高。0 则是"内容多高就多高"。
+  inputEl.style.height = '0px';
+  inputEl.style.height = `${Math.min(96, Math.max(38, inputEl.scrollHeight))}px`;
+}
+
+if (inputEl) {
+  inputEl.addEventListener('input', autosizeInput);
+  // 点发送时 chat.mjs 会把 value 清空（不触发 input 事件）—— 高度得手动收回去，
+  // 否则一条长消息发完，输入条还挂在 96px 上。
+  $('send')?.addEventListener('click', () => setTimeout(autosizeInput, 0));
+  mqNarrow.addEventListener('change', autosizeInput);
+  autosizeInput();
 }
 
 /* ---------------------------------------------------------------- ⑤ 401 引导 */

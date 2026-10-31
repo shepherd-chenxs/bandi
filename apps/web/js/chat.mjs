@@ -344,6 +344,18 @@ export const READONLY_WHY = {
 };
 
 
+/*
+ * 输入框占位文案（2026-11 第二版）：手机上没有 Shift 键 —— "Enter 发送，Shift+Enter 换行"
+ * 在手机上是一句无法执行的说明，还占掉半条胶囊的位置（会被截断成"说点什么…（Enter 发送，Sh…"）。
+ * 窄屏只留最必要的一句，桌面原样不动。
+ */
+const isNarrowPh = () => window.matchMedia('(max-width: 900px)').matches;
+
+const phChat = (group) => (isNarrowPh()
+  ? (group ? '说点什么…（@某人 指派）' : '说点什么…')
+  : (group ? '说点什么…（@某人 让他干活；不 @ 就找群主）' : '说点什么…（Enter 发送，Shift+Enter 换行）'));
+
+
 export function setComposerReadonly(on, reason = 'gone') {
   const box = document.querySelector('.composer');
   const input = $('input');
@@ -352,7 +364,7 @@ export function setComposerReadonly(on, reason = 'gone') {
   if (box) box.classList.toggle('is-readonly', on);
   if (input) {
     input.disabled = on;
-    input.placeholder = on ? READONLY_WHY[reason] ?? READONLY_WHY.gone : '说点什么…（Enter 发送，Shift+Enter 换行）';
+    input.placeholder = on ? READONLY_WHY[reason] ?? READONLY_WHY.gone : phChat(S.conversation?.kind === 'group');
   }
   if (send) send.disabled = on;
   if (h) {
@@ -1309,9 +1321,7 @@ export function setBusy(busy) {
   btn.title = busy ? '掐掉这一轮（他已经说出来的话会留着）' : '发送';
   $('input').placeholder = busy
     ? '他还在说…（要打断就点「停止生成」）'
-    : isGroup
-      ? '说点什么…（@某人 让他干活；不 @ 就找群主）'
-      : '说点什么…（Enter 发送，Shift+Enter 换行）';
+    : phChat(isGroup);
   $('hint').textContent = busy
     ? '一次只跑一条。要打断就点「停止生成」。'
     : isGroup
@@ -1591,6 +1601,11 @@ export async function openDirectChat(persona) {
     const convId = target
       ? target.id
       : (await post('/api/conversations', { personaId: persona.id, title: `和 ${persona.name}` })).conversation.id;
+    /*
+     * 从通讯录点人开聊的，记下来源栏：手机上按返回要回**通讯录**，
+     * 不是被扔进「会话」列表（微信同款）。桌面窄屏之外没人读这个标记。
+     */
+    if (S.nav === 'contacts') S.mbBackNav = 'contacts';
     setNav('messages');
     showView('chat');
     /*

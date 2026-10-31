@@ -1,21 +1,87 @@
 /*
- * mobile.css —— 全部移动端样式（2026-11 手机端增量）。
+ * mobile.css —— 移动端设计层（2026-11 第二版）
  *
- * 铁律（设计 §8）：
+ * ══════════════════════════════════════════════════════════════════════
+ * 第一版是"覆盖层"：在桌面密排风格上叠断点 + 放大字号。结果是同一个组件
+ * 两套语法并存 —— 行既有 6px 圆角又有 1px 分割线，工作台既有卡片缝又有列表线，
+ * 一屏看过去还是"Web 后台压窄了"，不是 App（2026-10-31 用户："和主流 APP 风格不太一致"）。
+ *
+ * 这一版把它当**独立的设计层**：窄屏有自己的一套 token（--mb-*），圆角、行高、
+ * 栏高、填充色按 App 语汇重新定；桌面端一个像素都不动。
+ *
+ * 铁律：
  *   · 新增的移动规则**只写在本文件**，style.css 不加移动规则；
  *   · 新组件类名一律 `mb-` 前缀（mb-tabbar / mb-backbar / mb-sheet …）；
- *   · 断点两档：900px（主从折叠）与 600px（底部导航 + 紧凑档）；
+ *   · 断点两档：900px（主从折叠 + App 语汇）与 600px（键盘/抽屉紧凑）；
  *   · 纯样式走 @media（不依赖 JS）；行为相关折叠（进详情/返回）走 body 状态类，
  *     状态类由 js/mobile.mjs 统一维护 —— **双轨并用**。
  *
  * 覆盖顺序：index.html 里本文件排在 style.css 之后，同特异性规则这里赢。
+ * ⚠️ 选择器必须与真实 DOM 类名一致 —— 第一版把工作台写成 `.plg-grid/.plg-card`，
+ *    实际渲染是 `.wb-grid/.wb-tile`，那一整段规则从上线起就是空转（已修）。
+ * ══════════════════════════════════════════════════════════════════════
  */
 
-/* ============================================================ 900px 档：主从折叠 */
+/* ============================================================ 0. 设计 token */
+
+/*
+ * 只在窄屏生效：桌面端不认这些名字，引用处一律带桌面值兜底，两边互不影响。
+ *
+ * 语汇对照（桌面密排 → 移动端 App）：
+ *   行圆角   6px  → 0（通栏行，靠内缩分割线分区，跟微信/Telegram 一致）
+ *   卡片圆角 10px → 12px
+ *   控件圆角 6px  → 10px；输入条 22px（胶囊）
+ *   行高     36px → 72px（拇指友好）
+ *   头栏     无   → 44px 导航栏（居中 17px 标题 + 右侧动作）
+ *   分层     1px 线 → 线 + 面（行有白面，页面有灰底）
+ */
+@media (max-width: 900px) {
+  :root {
+    /* 面：浅色 #fff / 深色 #111214 —— 不能用 --side，浅色下它跟页面底只差 5/255 */
+    --mb-surface: var(--panel);
+    --mb-page: var(--bg);
+    /* 填充面：搜索条 / 输入条 / 分组标题条 —— 用正文色的极低透明度混页面底，
+       深浅两套主题自动成立，不用各写一遍 */
+    --mb-fill: color-mix(in srgb, var(--text) 7%, var(--bg));
+    /* 按压态：App 的"点了一下"必须有反馈，桌面的 :hover 在触屏上不触发 */
+    --mb-press: color-mix(in srgb, var(--text) 8%, transparent);
+    /* 聊天区底：比页面底再压一档，白气泡才浮得起来 */
+    --mb-chatbg: color-mix(in srgb, var(--text) 5%, var(--bg));
+
+    --mb-r-card: 12px;      /* 卡片 / 分组容器 */
+    --mb-r-ctl: 10px;       /* 搜索条 / 按钮 */
+    --mb-r-bubble: 16px;    /* 气泡 */
+    --mb-r-pill: 22px;      /* 输入条胶囊 */
+
+    --mb-nav: 44px;         /* 导航栏 */
+    --mb-pad: 16px;         /* 左右基准边距（微信同款） */
+    --mb-avatar: 48px;
+    --mb-tab: 50px;         /* 底部导航（不含安全区） */
+
+    /*
+     * 分组卡页（通讯录首页 / 设置页）的页底：比行再暗一档，白卡才浮得起来。
+     * 深色：--bg #08090a 与 --panel #111214 只差 9/255，卡边几乎看不见 → 压到近黑；
+     * 浅色：--bg 和 --panel 都浅、只差 8/255，必须单独给一档灰（下一条覆盖）。
+     */
+    --mb-cvbg: #050506;
+  }
+  :root[data-theme='light'] { --mb-cvbg: #eceef1; }
+}
+
+/* ============================================================ 1. 全局触感 */
+
+@media (max-width: 900px) {
+  /* 触屏上不要系统那层蓝/灰高亮：它跟应用自己的按压态打架，看着像 Web 页 */
+  html { -webkit-tap-highlight-color: transparent; }
+  /* 去掉 300ms 点击延迟（配合上面的按压态，点击才"跟手"） */
+  a, button, .item, .wb-tile, .mb-tab { touch-action: manipulation; }
+}
+
+/* ============================================================ 2. 900px 档：主从折叠 */
 
 /*
  * 骨架（index.html）是 body 网格：68px 图标栏 + 300px 列表 + 主区。
- * ≤900px：图标栏收掉（取简，底部导航在 600 档接管一级切换）、单列铺满；
+ * ≤900px：图标栏收掉（取简，底部导航接管一级切换）、单列铺满；
  * 列表与主区互斥铺满，谁在场由 body.mb-detail-open 说了算（手机上的两级导航）。
  * 例外三处要在窄屏下照常整页显示：
  *   body.no-list    —— 工作台宫格 / 专家库（整页视图，本就没有左栏）；
@@ -43,20 +109,17 @@
   body:not(.mb-detail-open):not(.no-list):not(.node-mode) main { display: none; }
 
   /*
-   * 底部三 tab 在 **900 档**就接管一级导航（2026-10-28 修 P0）。
+   * 底部四 tab 在 **900 档**就接管一级导航（2026-10-28 修 P0）。
    *
    * 原来 tabbar 只在 600 档出现，而 `.rail` 在 900 档就收掉了 —— 于是 601–900
    * （iPad 竖屏 768、手机横屏 844/932、桌面半屏窗口）这一段**一个一级导航都没有**，
-   * 切不了「工作台 / 会话 / 我的」。设计里"桌面窄窗口体验同步改善"在这段是反的。
+   * 切不了「工作台 / 通讯录 / 会话 / 我的」。设计里"桌面窄窗口体验同步改善"在这段是反的。
    *
    * 600 档只负责紧凑化（键盘、抽屉、气泡宽度），不再决定 tabbar 出不出现。
    */
   body:not(.mb-detail-open) { grid-template-rows: minmax(0, 1fr) auto; }
   body:not(.mb-detail-open) main { grid-row: 1; }
   body:not(.mb-detail-open) .mb-tabbar { display: flex; grid-row: 2; }
-
-  /* 列表行加大触控行高（PRD P0-1：≥48px） */
-  .list-body .item { min-height: 48px; }
 
   /*
    * 窄屏整体字号上调一档（2026-11 用户反馈"比主流 App 小"）：
@@ -65,58 +128,936 @@
    */
   :root { --t-page: 17px; }
   body { font-size: 16px; }
+}
+
+/* ============================================================ 3. 导航栏（列表页头） */
+
+/*
+ * 桌面那版是"页面标题 + 搜索框"两行 —— 左对齐 15px 小标题压在 40px 输入框上，
+ * 一眼是 Web 的页头，不是 App 的导航栏（2026-10-31 诊断）。
+ *
+ * 移动端按主流 IM 做：44px 定高栏、标题居中 17px/600、动作按钮钉右侧、
+ * 栏底一条 1px 线把"栏"和"内容"分开。
+ * ⚠️ 标题用绝对居中会溢出（面包屑可能三段），所以给 max-width 并把每段继续省略。
+ */
+@media (max-width: 900px) {
+  .list-panel {
+    background: var(--mb-surface, var(--side));
+    border-right: 0;
+  }
+
+  .list-head {
+    height: calc(var(--mb-nav, 44px) + env(safe-area-inset-top, 0px));
+    padding: 0 52px 0 calc(var(--mb-pad, 16px) - 2px);
+    /* 刘海屏：viewport-fit=cover 之后栏必须自己避让状态栏，否则标题压在时间上 */
+    padding-top: env(safe-area-inset-top, 0px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--mb-surface, var(--side));
+    border-bottom: 1px solid var(--line);
+    box-sizing: border-box;
+  }
+
+  /* 标题整条居中（面包屑也跟着居中，读起来仍是"我现在在哪儿"） */
+  .list-head > .list-title {
+    justify-content: center;
+    flex: 0 1 auto;
+    max-width: 100%;
+  }
+
+  .list-head b,
+  .list-head .list-title > b { font-size: 17px; font-weight: 600; }
+
+  /* 动作按钮（＋）：30px 的方钮贴右，拇指够得到又不抢标题 */
+  #listAction {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+  }
+  #listAction.mini { width: 30px; height: 30px; border-radius: 8px; font-size: 18px; }
+
+  /* 搜索条：灰底胶囊 + 放大镜，38px 高，跟标题栏之间留 8px */
+  .list-search {
+    padding: 8px var(--mb-pad, 16px) 10px;
+    background: var(--mb-surface, var(--side));
+  }
+  .list-search input {
+    height: 38px;
+    border: 0;
+    border-radius: var(--mb-r-ctl, 10px);
+    background: var(--mb-fill, var(--input));
+    padding: 0 12px 0 34px;
+    font-size: 15px;
+    background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238d939b' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='M20 20l-4.3-4.3'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: 10px center;
+    background-size: 16px;
+  }
+  .list-search input:focus {
+    border: 0;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 38%, transparent);
+  }
+}
+
+/*
+ * 刘海屏 / 手势条（viewport-fit=cover 已开，见 index.html）：
+ * 列表页头自己避让状态栏，聊天头和整页头也是 —— 只有列表页那条返回栏（.mb-backbar）
+ * 原来就带 safe-area，其余三处不加就会被状态栏压住标题。
+ */
+@media (max-width: 900px) {
+  body.mb-chat .chat-head {
+    padding-top: calc(8px + env(safe-area-inset-top, 0px));
+    min-height: 50px;
+    background: var(--mb-surface, var(--side));
+  }
+
+  /* 整页视图的头（工作台 / 专家库 / 看板）：没有左栏，头就是页面的导航栏 */
+  body.no-list .detail-head {
+    height: calc(50px + env(safe-area-inset-top, 0px));
+    padding-top: env(safe-area-inset-top, 0px);
+    box-sizing: border-box;
+    background: var(--mb-surface, var(--side));
+  }
+}
+
+/* ============================================================ 4. 列表行（通栏 + 内缩分割线） */
+
+/*
+ * 方向（2026-10-31）：从"每行一张圆角卡片"改成"一叠连续的行" —— 这是 IM 列表的
+ * 基本语法。三件事必须一起改，只改一件就会出现第一版那种"卡片缝 + 一条线"的混搭：
+ *   ① 行不要圆角和左右内缩（.list-body padding 归零，行铺满）；
+ *   ② 行与行之间不留缝（margin-top: 0），靠一条 1px 线分区；
+ *   ③ 分割线从头像右侧起（微信/Telegram 都是），不是通栏的一条横杠。
+ */
+@media (max-width: 900px) {
+  .list-body {
+    padding: 0 0 16px;
+    background: var(--mb-surface, var(--side));
+  }
+
+  .item {
+    position: relative;
+    border-radius: 0;
+    /* 上下内边距单独成变量：通讯录要把行压矮一档（见下方 .mb-cv），
+       而状态点的落位跟它算在一起，必须能从同一个地方改。 */
+    padding: var(--mb-item-pad, 12px) var(--mb-pad, 16px);
+    gap: 12px;
+    /* 单行项（设置分节这种没有头像/副标题的）52px 就够；
+       带头像的行由 48px 头像 + 上下 12px 自然撑到 72px，不用再给下限。 */
+    min-height: 52px;
+    background: transparent;
+    /* 分割线起点：默认对齐文字左边距（无头像的行）；有头像的行在下面单独抬到头像右侧 */
+    --mb-gutter: var(--mb-pad, 16px);
+  }
+
+  /* 有头像的行：分割线从头像右侧起（微信/Telegram 的通行做法） */
+  .item:has(> .avatar) {
+    --mb-gutter: calc(var(--mb-pad, 16px) + var(--mb-avatar, 48px) + 12px);
+  }
+
+  /* 行与行之间不留缝，也不再画 border-top（那会通栏贯穿，跟内缩线打架） */
+  .item + .item { margin-top: 0; border-top: 0; }
+
+  /* 内缩分割线：left 跟着**当前行**有没有头像走（有头像 76px、没头像 16px）——
+     只写 76px 的话，设置页那种纯文字行会得到一条"半截线"，看着像画歪了。 */
+  .item + .item::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: var(--mb-gutter, var(--mb-pad, 16px));
+    right: 0;
+    height: 1px;
+    background: var(--line);
+    pointer-events: none;
+  }
 
   /*
-   * 手机上的字号/间距配比（2026-11 用户反馈"骨感"，对照主流 IM 调）：
-   * 桌面那套 13.5/12px + 2px 缝隙在手机上字太小、空太大，一屏扫过去没有层级。
-   * 这里只动窄屏，数值对齐微信：主标题 17/600、副标题 14、时间 12、头像 48。
+   * 设置分节行（带 data-set）右侧补一个 chevron。
+   * 主流 App 里"能进去的行"必须有这个箭头 —— 没有它，通栏列表看着像一组静态文字，
+   * 用户不知道点哪儿。只对 data-set 行挂，消息/通讯录行右侧是时间，不冲突。
+   */
+  .item[data-set] { padding-right: 30px; }
+  .item[data-set]::after {
+    content: '';
+    position: absolute;
+    right: 13px;
+    top: 50%;
+    width: 7px;
+    height: 7px;
+    margin-top: -4px;
+    border-right: 1.8px solid var(--dim);
+    border-bottom: 1.8px solid var(--dim);
+    transform: rotate(-45deg);
+    opacity: .65;
+    pointer-events: none;
+  }
+
+  /* 按压反馈：触屏没有 hover，不给 :active 的话点一行是"毫无动静" */
+  .item:active { background: var(--mb-press, var(--active)); }
+  .item.active { background: var(--sel); }
+
+  /* 头像 48px 圆角方（微信也是圆角方，不是正圆） */
+  .item .avatar {
+    width: var(--mb-avatar, 48px);
+    height: var(--mb-avatar, 48px);
+    flex-basis: var(--mb-avatar, 48px);
+    border-radius: 10px;
+    font-size: 16px;
+  }
+
+  /*
+   * 字号/间距对齐微信：主标题 17/600、副标题 14、时间 12。
+   * 桌面那套 13.5/12px 在手机上字太小、留白却很大，一屏扫过去没有层级。
    */
   .item .line1 b { font-size: 17px; font-weight: 600; }
-  .item .line2 { font-size: 14px; }
+  .item .line2 { font-size: 14px; margin-top: 3px; line-height: 1.3; }
   .item .line1 span { font-size: 12px; }
-  .avatar { width: 48px; height: 48px; flex-basis: 48px; font-size: 16px; }
-  .item + .item { margin-top: 0; border-top: 1px solid var(--line); }
+  /* 简写行（直接 b + .sub）也要跟标准行长得一样，否则同一列表里两套排版 */
+  .item .who > b { font-size: 17px; font-weight: 600; }
+  .item .who > .sub { font-size: 14px; margin-top: 3px; }
 
   /*
-   * 工作台：桌面是卡片网格（每张卡一个边框 + 圆角 + 白底 + 8px 间距），
-   * 搬到手机上就成了"一屏只能放 5 个卡片、每个都孤零零"的桌面感
-   * （2026-11 用户反馈"跟主流 App 风格差别大"）。
-   * 窄屏改成**分组列表**：去边框/圆角/底色，一行一个入口，行间内缩分割线，
-   * 分组之间靠间距和分组标题区分 —— 就是主流 App 的"设置/我的"那一页。
+   * 行内那颗状态点（「● 10 人 · …」）：8px 圆点在 14px 文字里偏大且悬空，
+   * 压到 7px 并以 inline-block 跟随文字基线 —— 桌面是 flex 子项，手机这里是文字流。
    */
-  .plg-grid { grid-template-columns: 1fr; gap: 0; }
-  .plg-grid .plg-card {
+  .item .line2 .dot {
+    display: inline-block;
+    vertical-align: middle;
+    width: 7px;
+    height: 7px;
+    margin: 0 5px 2px 0;
+  }
+
+  /*
+   * 头像右下角的在线点（通讯录）：原来它是 .item 的最后一个 flex 子项，孤零零飘在
+   * 最右边，看着像一颗没加载完的角标。挪到头像角上 —— 这是"在线/忙"的惯用位置。
+   * 只画"正在干活"的绿点：离线也点一颗灰的，一屏十几颗灰点反而像噪点（主流 App 都不画）。
+   *
+   * 位置要**跨在角上**，但不能真的落在"矩形角"那个点上：头像本身有 9px 圆角，
+   * 矩形的角落其实是被切掉的，点放那儿就是悬在头像外面。
+   * 10px 的点偏移 −8px（圆心离矩形角内缩 3px）正好压住圆角的弧线：8 在头像里、2 露在行底色上。
+   */
+  .item > .dot {
+    position: absolute;
+    left: calc(var(--mb-pad, 16px) + var(--mb-avatar, 48px) - 8px);
+    top: calc(var(--mb-item-pad, 12px) + var(--mb-avatar, 48px) - 8px);
+    width: 10px;
+    height: 10px;
+    border: 2px solid var(--mb-surface, var(--side));
+    box-sizing: border-box;
+    z-index: 1;
+  }
+  .item > .dot:not(.busy) { display: none; }
+  /*
+   * 忙点不要再呼吸（桌面 `.dot.busy` 有 1.6s 的 dot-pulse，opacity 1 → .35 → 1）。
+   * 一颗贴在头像上的点在闪，用户读到的不是"他在干活"，而是"头像在闪"（2026-10-31 实报）。
+   * 手机上同时最多几个人在干活，静态绿点已经完全够表达。
+   */
+  .list-body .item > .dot.busy { animation: none; }
+
+  /* 分组标题（通讯录「数字员工 15」/ 设置「通用」）：灰条吸顶，跟行分得开 */
+  .list-sec {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    margin: 0;
+    padding: 9px var(--mb-pad, 16px) 7px;
+    font-size: 12.5px;
+    font-weight: 500;
+    letter-spacing: 0;
+    color: var(--dim);
+    background: var(--mb-page);
+    border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+  }
+
+  /* 底部固定条（如「已归档」）：贴着 tabbar，白底 + 上边线 */
+  .list-foot {
+    background: var(--mb-surface, var(--side));
+    border-top: 1px solid var(--line);
+    padding: 8px var(--mb-pad, 16px);
+  }
+}
+
+/* ============================================================ 4b. 通讯录（手机 ABC 版） */
+
+/*
+ * 2026-10-31 用户："通讯录不是手机的风格，改成手机那种 ABC 的"。
+ *
+ * 形态照着手机系统通讯录 / 微信通讯录做：
+ *   上层是**容器入口**（群聊 / 部门，装在一张卡里，点进去是各自的列表页）；
+ *   下层是全部员工，按拼音首字母分组，组头吸顶，右侧一条 A–Z 索引可点可滑。
+ *
+ * 桌面（>900px）一行不动 —— 那边仍是「群聊 + 部门分组」两段。
+ */
+@media (max-width: 900px) {
+  /* 索引条要相对"列表这一栏"定位：它不能跟着 #listBody 一起滚 */
+  .list-panel { position: relative; }
+
+  /*
+   * 这一栏的底压成灰，行留白 —— 入口卡才"浮"得起来。
+   * 全是白底时（改版第一版实测）群聊/部门两行和下面的人混成一片，看不出这是一组入口，
+   * 反而像 C 组的两名成员。
+   *
+   * ⚠️ 不能直接用 --bg：浅色主题下 --bg #f7f8f9 和白行 #ffffff 只差 8/255，
+   *    白卡浮不起来。浅色单独给一档更深的底（--mb-cvbg）。
+   */
+  .list-body.mb-cv-root { background: var(--mb-cvbg, var(--mb-page, var(--bg))); }
+  .list-body.mb-cv-root .item { background: var(--mb-surface, var(--side)); }
+  /* 按压态特异性要跟着抬一格，否则被上面那条白底盖掉（触屏没 hover，这是唯一的点按反馈） */
+  .list-body.mb-cv-root .item:active { background: var(--mb-press, var(--active)); }
+
+  /*
+   * 通讯录的带头像行压矮一档（2026-10-31 用户："人物卡有点高，调小一些"）。
+   * 通用行是 12+48+12 = 72px，一屏（844 高）只能看到 8 个人，扫起来太散；
+   * 这里是 9+42+9 = 60px，跟 iOS/微信通讯录同档，一屏 11 个人。
+   * 只压通讯录（首页 + 群聊/部门子页 + 搜索态都用 .mb-cv）——
+   * 消息列表行里还有时间戳和两行预览，压了反而挤，那边保持 72。
+   * 用变量覆盖而不是重写 padding：分割线起点（--mb-gutter）和状态点的位置
+   * 都是拿 --mb-avatar / --mb-item-pad 算出来的，改一处就全跟着走。
+   */
+  .list-body.mb-cv .item:has(> .avatar) {
+    --mb-avatar: 42px;
+    --mb-item-pad: 8px;
+  }
+  .list-body.mb-cv .item .avatar { font-size: 15px; border-radius: 9px; }
+  /*
+   * 行高真正的瓶颈不是头像，是文字块：名字 17px 的默认行高 26.4 + 副标题 18.2 + 2 = 48px，
+   * 比 42 的头像还高，所以只调 --mb-avatar 行高一点都不变（实测 72 → 66 就卡住了）。
+   * 名字给 22px 行高（够 17px 字上下各留 2.5）、副标题 17px + 1px 间距 = 40px，
+   * 这时行高才由头像决定：42 + 8×2 = 58。
+   */
+  .list-body.mb-cv .item .line1 { line-height: 22px; }
+  .list-body.mb-cv .item .line2 { margin-top: 1px; line-height: 17px; }
+  .list-body.mb-cv .item .who > b { line-height: 22px; }
+  .list-body.mb-cv .item .who > .sub { margin-top: 1px; line-height: 17px; }
+
+  /* 子页（群聊 / 部门 / 某部门）的「←」：钉在页头左侧，标题照旧居中 */
+  .mb-head-back {    position: absolute;
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 44px;
+    height: 44px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--accent);
+    cursor: pointer;
+  }
+  .mb-head-back svg { width: 22px; height: 22px; }
+  .mb-head-back:active { opacity: .55; }
+
+  /* ── 入口卡：群聊 / 部门 ── */
+  .mb-cv-entry {
+    margin: 10px 12px 12px;
+    background: var(--mb-surface, var(--side));
+    border-radius: var(--mb-r-card, 12px);
+    overflow: hidden;
+  }
+  .mb-cv-row { padding-right: 30px; }
+
+  /* 能进去的行必须有箭头（跟设置行同一套 chevron，位置也一致） */
+  .mb-cv-row::after {
+    content: '';
+    position: absolute;
+    right: 13px;
+    top: 50%;
+    width: 7px;
+    height: 7px;
+    margin-top: -4px;
+    border-right: 1.8px solid var(--dim);
+    border-bottom: 1.8px solid var(--dim);
+    transform: rotate(-45deg);
+    opacity: .65;
+    pointer-events: none;
+  }
+
+  .mb-cv-ico {
+    width: 36px;
+    height: 36px;
+    flex: 0 0 36px;
+    border-radius: 9px;
+    display: grid;
+    place-items: center;
+    background: color-mix(in srgb, var(--accent) 13%, transparent);
+    color: var(--accent);
+  }
+  .mb-cv-ico svg { width: 21px; height: 21px; }
+
+  /* 分割线跟着图标右侧起（默认是 16px，那样会从图标身上穿过去） */
+  .item:has(> .mb-cv-ico) { --mb-gutter: calc(var(--mb-pad, 16px) + 36px + 12px); }
+
+  .mb-cv-n {
+    margin-left: auto;
+    font-size: 15px;
+    color: var(--dim);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ── A–Z 组头（吸顶灰条） ── */
+  .mb-az-head {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    padding: 5px var(--mb-pad, 16px) 4px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: .5px;
+    color: var(--dim);
+    /* 比页底再深一档：它是"夹在白行之间的灰条"，用 --mb-fill 会跟灰底糊成一片 */
+    background: color-mix(in srgb, var(--text) 8%, var(--mb-cvbg, var(--bg)));
+    border-bottom: 1px solid color-mix(in srgb, var(--line) 55%, transparent);
+    user-select: none;
+  }
+
+  /*
+   * ── 右侧索引条 ──
+   * 浮在列表上（iOS 索引条就是这个形态：半透明玻璃压着列表，不是另开一列）。
+   * touch-action: none 必须有 —— 手指在条上竖滑是"扫字母"，不能让它同时滚列表。
+   */
+  .mb-az {
+    position: absolute;
+    z-index: 6;
+    right: 1px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 8px 2px;
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--mb-surface, var(--side)) 88%, transparent);
+    -webkit-backdrop-filter: blur(10px);
+    backdrop-filter: blur(10px);
+    /* 没边没影时它就是一列悬空的字，看不出"这儿能按"；一圈极淡的边 + 投影就够 */
+    box-shadow:
+      0 0 0 0.5px color-mix(in srgb, var(--text) 12%, transparent),
+      0 2px 10px color-mix(in srgb, var(--text) 8%, transparent);
+    touch-action: none;
+    user-select: none;
+  }
+  .mb-az span {
+    width: 19px;
+    text-align: center;
+    font-size: 10.5px;
+    line-height: 1.36;
+    font-weight: 600;
+    color: var(--dim);
+  }
+  /* 高亮只换色 + 加粗：改字号会让条本身抖一下（每个字母高度变了） */
+  .mb-az span.on { color: var(--accent); font-weight: 700; }
+}
+
+/* ============================================================ 4c. 设置（微信设置页版式） */
+
+/*
+ * 2026-10-31 用户："设置这个页面不应该做成折叠，应该参考微信设置页的做法"。
+ *
+ * 改前手机端是**后台侧边栏**的语法：五组各挂一条可折叠的灰条组头（带 ∨ 箭头），
+ * 点一下整组收起，行还缩进 17px。一屏只要滚两下就能看完的 10 项，本来不需要折叠；
+ * 那条箭头反而让"这页到底能点哪儿"变含糊 —— 组头能点、行也能点，两种点法。
+ *
+ * 现在照主流手机设置页（iOS / 微信）做：灰底 + 一叠分组卡片。
+ *   组标题 = 卡片**外面**的一行小灰字，死的（不可点、不收起）；
+ *   卡片 = 白底 12px 圆角，卡内行 52px、行尾 chevron、分割线从行内边距起。
+ * 桌面（>900px）仍是左栏导航 + 可折叠组头（那列只有 300px，收起确实省地方）。
+ */
+@media (max-width: 900px) {
+  /* 页底复用通讯录那档灰（--mb-cvbg）：白卡要浮起来，得有一层比行暗的底 */
+  .list-body.mb-set {
+    background: var(--mb-cvbg, var(--mb-page, var(--bg)));
+    padding: 6px 0 16px;
+  }
+
+  .mb-set-group + .mb-set-group { margin-top: 8px; }
+
+  /* 组标题：左沿与卡内文字对齐（卡片外边距 12 + 行内边距 16），比行低一档、不抢眼 */
+  .mb-set-head {
+    padding: 10px calc(12px + var(--mb-pad, 16px)) 6px;
+    font-size: 13px;
+    font-weight: 400;
+    letter-spacing: 0;
+    color: var(--dim);
+    user-select: none;
+  }
+  /* 第一组的标题不需要"上一组之后"的那点空 */
+  .mb-set-group:first-child > .mb-set-head { padding-top: 2px; }
+
+  .mb-set-card {
+    margin: 0 12px;
+    border-radius: var(--mb-r-card, 12px);
+    /* 裁掉首尾行的直角（不裁的话卡片圆角只在背景上，行是方的，看着像没画完） */
+    overflow: hidden;
+    background: var(--mb-surface, var(--side));
+    /* 深色下卡面 #111214 与近黑页底只差 12/255，纯靠明暗分不开 —— 补一圈 0.5px
+       极淡的描边，让"这是一张卡"这条边在深浅两套主题里都成立（iOS 分组卡同款） */
+    box-shadow: 0 0 0 0.5px color-mix(in srgb, var(--text) 9%, transparent);
+  }
+
+  /* 卡内行：跟 IM 列表行同高，左右内边距归卡片管 */
+  .mb-set-card .item {
+    background: var(--mb-surface, var(--side));
+    padding-left: var(--mb-pad, 16px);
+    min-height: 54px;
+  }
+  /* 按压态要压过上面那条白底（触屏没 hover，这是唯一的点按反馈） */
+  .mb-set-card .item:active { background: var(--mb-press, var(--active)); }
+
+  /*
+   * 设置行的字是"条目"不是"标题"：微信同款常规字重，粗体会让十行全变重点。
+   *
+   * ⚠️ 选择器必须带 `#listBody.mb-set` 这层 id —— style.css 有一条
+   *    `#listBody .item[data-set] .line1 b { font-size: 12.5px }`（那是**桌面左栏**
+   *    300px 窄列的密排档），它带 id、特异性 (1,3,1)，压得过光秃秃的
+   *    `.mb-set-card .item .line1 b` (0,3,0)。2026-10-31 第一版就栽在这儿：
+   *    CSS 里写着 17、"改完了"，手机上量出来还是 12.5（用户报"字体有些小"）。
+   *    带 id 的 1,4,1 才压得住，`.mb-set` 又只在窄屏设置页出现，桌面不受影响。
+   */
+  #listBody.mb-set .item[data-set] .line1 b { font-size: 17px; font-weight: 400; }
+
+  /*
+   * 子页顶部已经有返回栏（`.mb-backbar`）写着「偏好设置」，内容区不该再挂一条同名标题 ——
+   * 手机上连着两行一模一样的字，看着像加载了两遍。
+   * 只藏**没有操作按钮**的那种：技能页的 headRow 里挂着搜索框，藏了就没法搜。
+   */
+  #settingsView > .head-row:not(:has(.head-actions)) { display: none; }
+}
+
+/* ============================================================ 4d. 设置子页（详情区字阶） */
+
+/*
+ * 2026-10-31 用户："设置页的字体有些小。改成和主流的 APP 一致"。
+ *
+ * 主页那层行文字是 12.5px（见上面那条特异性坑），子页这层更彻底 ——
+ * 它压根没有移动端规则，直接吃桌面的密排档：标签 13px、说明 11px、标签牌 10.5px、
+ * 分段按钮 13px。桌面左栏 + 右栏挤在 1440 里，13px 是对的；手机上一屏只有一列，
+ * 同样的 13px 就成了"缩印本"。
+ *
+ * 对齐主流 App（iOS / 微信设置子页）：
+ *   行标签 16 / 分段按钮 15 / 段标题 14 / 说明 13 / 标签牌 11.5。
+ * 不做 17 —— 设置子页的行是"标签 + 控件"两栏，右侧控件本身有内边距，17 会挤到换行。
+ * 全部挂在 `#settingsView` 下：桌面零改动，也压得过 style.css 里那几条（id 起头）。
+ */
+@media (max-width: 900px) {
+  #settingsView .set-sec { margin-bottom: 20px; }
+  #settingsView .set-head { margin-bottom: 7px; }
+  /* 段标题比行标签小一档才像"分组名"，同级就分不出层了 */
+  #settingsView .set-head b { font-size: 14px; }
+  #settingsView .set-tag { font-size: 11.5px; line-height: 17px; padding: 0 6px; border-radius: 5px; }
+
+  /* 行：上下 12px（原 9px）——16px 的字在 9px 里上下只剩 4px，挤成一排细线 */
+  #settingsView .set-row { padding: 12px 16px; gap: 12px; }
+  #settingsView .set-label { font-size: 16px; line-height: 1.45; }
+
+  /* 说明文字：style.css 的 .hint 是 11px + 外侧 20px 缩进（那是给整页提示条用的），
+     进到卡片里这份缩进会顶穿圆角，改成 13px / 缩进归零 */
+  #settingsView .hint,
+  #settingsView .set-row .hint {
+    font-size: 13px;
+    line-height: 1.6;
+    padding: 0;
+    background: none;
+  }
+
+  /* 分段控件 / 行尾按钮：13px 是桌面档，手机给 15 + 更大的点击面 */
+  #settingsView .seg button { font-size: 15px; padding: 6px 14px; }
+  #settingsView .set-row > button { font-size: 15px; }
+
+  /* 输入框 16px：低于 16 时 iOS 会在聚焦瞬间把整页放大（这是唯一必须写死的下限） */
+  #settingsView .set-row input,
+  #settingsView .set-row select,
+  #settingsView .set-row textarea { font-size: 16px; }
+
+  /* 成段说明（额度页"这个数字是怎么来的"）跟着正文走 */
+  #settingsView .set-note { font-size: 13px; line-height: 1.75; padding: 12px 16px; }
+
+  /*
+   * 二级信息（副标题 / 元数据 / 状态标签 / 小按钮）：桌面 11–12.5px，
+   * 手机上同样偏小。这里统一抬一档 —— **不是**把所有小字拉成正文，
+   * 层级还得在（正文 16 / 二级 13 / 标签牌 12），只是整体上移。
+   */
+  #settingsView .sub,
+  #settingsView .machine-data,
+  #settingsView .set-row .machine-data .sub,
+  #settingsView .count,
+  #settingsView .ms-side-title,
+  #settingsView .dm-item-sub { font-size: 13px; }
+  #settingsView .tag-dim,
+  #settingsView .tag-warn,
+  #settingsView .tag-ok { font-size: 12px; }
+  #settingsView .ms-item-n { font-size: 12.5px; }
+  /* 小按钮是可点目标：12.5 → 14，点击面也补到 32px 高（手指的舒适下限） */
+  #settingsView .btn-sm { font-size: 14px; padding: 6px 13px; }
+
+  /* 数据管理行的统计（`<b>0.1 MB</b> 库大小 · <b>1</b> 员工 …`） */
+  #settingsView .dm-line { font-size: 13.5px; }
+
+  /*
+   * 「数据管理」区头的竖排事故（2026-10-31 顺手修）：`.set-head` 是 flex 不换行，
+   * 右边 `.dm-actions` 里塞了个 460px 上限的绝对路径 + 两个按钮，390 宽下把
+   * `<b>数据管理</b>` 挤到只剩一个字宽 —— 四个字竖着排成一列。
+   * 窄屏改成两行：标题独占第一行，路径（单行省略）+ 按钮在第二行。
+   */
+  #settingsView .dm-sec .set-head { flex-wrap: wrap; row-gap: 8px; }
+  #settingsView .dm-actions { flex: 1 1 100%; margin-left: 0; width: 100%; }
+  #settingsView .dm-path {
+    flex: 1 1 0;
+    min-width: 0;
+    max-width: none;
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /*
+   * 同一类事故的通用版：「账号」「关于」页的 `.set-row` 是 flex space-between，
+   * 右侧控件（input 默认 width:100%、长 id 的 .machine-data）会把左侧 `.set-label`
+   * 压成**一个字宽**，四个字的标签就竖着排下来（"用/户/名"、"实/例/标/识"）。
+   * 桌面没露馅是因为上装了固定宽度（.users-form 的 input 240px），390 宽下不够分。
+   *
+   * 口径：标签不可压缩（nowrap），控件吃剩余宽度并且允许自己在长内容里换行。
+   */
+  #settingsView .set-label { flex: 0 0 auto; white-space: nowrap; }
+  #settingsView .set-row > input:not(.num),
+  #settingsView .set-row > select,
+  #settingsView .set-row > textarea {
+    flex: 1 1 2.5em;
+    min-width: 0;
+    width: auto;
+    max-width: none;
+  }
+  #settingsView .set-row > .machine-data,
+  #settingsView .set-row > .plg-check { flex: 1 1 auto; min-width: 0; }
+
+  /*
+   * 「生图服务」那张表单：`.gr-conn.stack` 是三列网格
+   * `max-content | minmax(160px,520px) | max-content` —— 三列最小宽度加起来
+   * 就超过 390，输入框整截戳到卡片外被 overflow:hidden 切掉（"…/v1（填到 /v1 这级"只露半行）。
+   * 窄屏收成单列：字段名在上（小灰字）、输入框占满一行，跟主流 App 的表单页一致。
+   */
+  #settingsView .gr-conn.stack {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 14px 16px;
+    row-gap: 0;
+  }
+  #settingsView .gr-conn.stack .gr-conn-row .row-label {
+    text-align: left;
+    margin-top: 12px;
+    font-size: 13px;
+    color: var(--dim);
+  }
+  #settingsView .gr-conn input { width: 100%; min-width: 0; }
+  #settingsView .gr-conn-status { grid-column: 1; text-align: left; }
+  #settingsView .gr-conn-actions { grid-column: 1; justify-content: flex-start; margin-top: 14px; }
+  /* 表单下方的成段说明：桌面版是贴着卡片内居中的窄正文（max-width 560 + auto 边距），
+     窄屏跟着正文同档，并且左右留出行内边距 —— 否则文字会顶到卡片圆角上 */
+  #settingsView .set-hint {
+    font-size: 13px;
+    line-height: 1.7;
+    max-width: none;
+    margin: 12px 0 0;
+    padding: 0 16px;
+    text-align: left;
+  }
+}
+
+/* ============================================================ 5. 底部导航（App 语汇） */
+
+@media (max-width: 900px) {
+  .mb-tabbar { background: var(--mb-surface, var(--side)); }
+}
+
+/* 常态规则（窄屏外不出现，所以用桌面变量兜底即可） */
+.mb-tabbar {
+  display: none;
+  align-items: stretch;
+  justify-content: space-around;
+  background: var(--side, #17181b);
+  border-top: 1px solid var(--line, #26282c);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  z-index: 60;
+}
+.mb-tab {
+  flex: 1;
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 3px;
+  min-height: 50px;
+  border: 0;
+  background: transparent;
+  color: var(--dim, #8a9096);
+  font: inherit;
+  font-size: 10.5px;
+  cursor: pointer;
+  padding: 5px 0;
+  transition: color .12s;
+}
+.mb-tab svg { width: 24px; height: 24px; }
+/* 选中：图标加粗 + 文字加粗（只换颜色在 24px 线性图标上几乎看不出来） */
+.mb-tab.active { color: var(--accent, #3b6ef5); }
+.mb-tab.active svg { stroke-width: 2.4; }
+.mb-tab.active span { font-weight: 600; }
+.mb-tab:active { background: color-mix(in srgb, currentColor 10%, transparent); }
+
+/* ============================================================ 6. 工作台（分组卡片） */
+
+/*
+ * ⚠️ 第一版这段挂在 `.plg-grid / .plg-card` 上，而工作台真实类名是
+ * `.wb-grid / .wb-tile`（js/experts.mjs 的 wbCard）—— 规则从上线起就是空转，
+ * 手机上一直是"一屏 8 张独立白卡"。这里全部改到真实类名。
+ *
+ * 版式按 iOS 设置页：分组标题在卡片**外面**（灰字），卡内是通栏行 + 内缩分割线。
+ */
+@media (max-width: 900px) {
+  .detail-body.wb-page { padding: 0 0 24px; }
+
+  .wb-page .wb-sec {
+    margin: 26px var(--mb-pad, 16px) 8px;
+    padding: 0;
+    border-top: 0;
+    font-size: 12.5px;
+    font-weight: 500;
+    letter-spacing: 0;
+    color: var(--dim);
+  }
+  .wb-page .wb-sec:first-child { margin-top: 14px; }
+
+  /*
+   * 卡内是通栏行 + 分割线（iOS 设置页的语法）。
+   * ⚠️ **不能给容器加 overflow: hidden 来裁圆角**：插件磁贴的角标骑在图标左上角外侧，
+   *    裁了之后第一张卡的角标会被切掉一半，看着像图标缺了个角（改版时实测）。
+   *    改成给首尾行各自补圆角。
+   */
+  .wb-page .wb-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    margin: 0 var(--mb-pad, 16px);
+    background: var(--mb-surface, var(--panel));
+    border-radius: var(--mb-r-card, 12px);
+  }
+
+  .wb-page .wb-tile {
     border: 0;
     border-radius: 0;
     background: transparent;
-    padding: 13px 16px;
-    align-items: center;
-    border-bottom: 1px solid var(--line);
+    padding: 12px 14px;
+    gap: 12px;
+    box-shadow: none;
+    transform: none;
   }
-  .plg-grid .plg-card:last-child { border-bottom: 0; }
-  .plg-grid .plg-card .plg-desc-clamp {
-    -webkit-line-clamp: 1;
+  .wb-page .wb-tile:first-child { border-radius: var(--mb-r-card, 12px) var(--mb-r-card, 12px) 0 0; }
+  .wb-page .wb-tile:last-child { border-radius: 0 0 var(--mb-r-card, 12px) var(--mb-r-card, 12px); }
+  .wb-page .wb-tile:only-child { border-radius: var(--mb-r-card, 12px); }
+  .wb-page .wb-tile + .wb-tile { border-top: 1px solid var(--line); }
+  .wb-page .wb-tile:active { background: var(--mb-press, var(--active)); }
+
+  .wb-page .wb-name { font-size: 16px; }
+  /* 说明给两行：手机上 240px 的卡片宽度压成一列后，一行只能放十来个字，
+     截成一行就只剩"把所有项目的进度、发布…"，等于没写。 */
+  .wb-page .wb-desc {
     font-size: 13px;
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
   }
-  .list-head { padding: 12px 14px 8px; }
-  .list-search input { height: 40px; }
 
-  /* 「← 返回」栏（单例 DOM 在 body 上，网格第一行） */
-  body.mb-detail-open .mb-backbar { display: flex; grid-row: 1; }
-
-  /* 看板：列改单列纵向堆叠（PRD 主方案），列头吸顶、卡片满宽 */
-  .kb-wrap,
-  #pluginView.kb-page .kb-wrap {
-    flex-direction: column;
-    align-items: stretch;
-  }
-  .kb-col,
-  #pluginView.kb-page .kb-col {
-    flex: 1 1 auto;
-    min-width: 0;
-  }
-  #pluginView.kb-page .kb-cards { max-height: none; overflow-y: visible; }
+  /* 卡片外面那圈"装不上台面"的错误条也跟着缩进 */
+  .wb-page .plg-err { margin: 0 var(--mb-pad, 16px); }
 }
+
+/* ============================================================ 7. 聊天页 */
+
+/*
+ * 桌面那版气泡是"密排风格的块"：8px 圆角 + 1px 描边 + 白底，压在同样的白底上，
+ * 一屏 22 条长文本看下来像在读文档（2026-10-31 诊断）。
+ *
+ * 移动端按主流 IM 调：聊天区压深一档当底，气泡 16px 圆角、无边框、纯白浮起，
+ * 行距收紧（桌面 32px 的行间隔在手机上是"一段一段的"）。
+ */
+@media (max-width: 900px) {
+  .chat {
+    background: var(--mb-chatbg, var(--bg));
+    padding: 14px 12px 6px;
+  }
+
+  .row {
+    gap: 8px;
+    margin-bottom: 6px;
+    /* 桌面那两条 42px 的"走廊"是给宽窗口用的对称留白；手机上它会把气泡再压窄一截
+       （气泡本身还有 max-width），结果左右各空出一大片。这里交还给 flex。 */
+    padding-right: 0;
+    padding-bottom: 16px;
+  }
+  .row.me { padding-left: 0; padding-right: 0; }
+
+  .bubble {
+    border: 0;
+    border-radius: var(--mb-r-bubble, 16px);
+    background: var(--bubble);
+    padding: 9px 12px;
+    font-size: 16px;
+    line-height: 1.55;
+    max-width: 82%;
+  }
+  .row.me .bubble { background: var(--bubble-me); }
+
+  /* 时间戳：11px，贴着气泡下沿（绝对定位由 style.css 给，这里只调坐标和字号） */
+  .btime { left: 40px; font-size: 11px; }
+  .row.me .btime { right: 40px; }
+
+  .who-line { font-size: 12px; margin-bottom: 4px; }
+
+  /* 气泡里的代码块：手机上圆角跟着气泡走，别留桌面那种小方角 */
+  .bubble pre { border-radius: 10px; }
+}
+
+/* ============================================================ 8. 输入条（单行胶囊） */
+
+/*
+ * 桌面输入区是"三行工具条"：96px 的 textarea + 权限/模型/发送一整排 ——
+ * 在 844px 高的屏幕上实测占 158px（19%），是整页最"Web"的东西（2026-10-31 诊断）。
+ *
+ * 移动端改成一条胶囊：[＋] [输入框] [发送]，高度 46px 起、随内容长到 96px 封顶。
+ * 权限/模型下拉在手机上收起（这两个是"配一轮活"的参数，聊天头右侧的菜单里能改），
+ * 否则横排放不下，竖排又变成工具条。
+ *
+ * ⚠️ 靠 `display: contents` 把 .input-tools 摊平，让 ＋ 和 发送直接进 .input-wrap 的网格 ——
+ *    不改 DOM 结构：chat.mjs / app.mjs 的事件绑定和 #send / #attach 的 id 全部照旧。
+ */
+@media (max-width: 900px) {
+  .composer {
+    padding: 8px 10px;
+    padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+    background: var(--mb-surface, var(--side));
+    border-top: 1px solid var(--line);
+  }
+
+  .input-wrap {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      "plus text send"
+      "strip strip strip";
+    align-items: end;
+    column-gap: 2px;
+    row-gap: 4px;
+    min-height: 46px;
+    padding: 4px 5px;
+    border: 0;
+    border-radius: var(--mb-r-pill, 22px);
+    background: var(--mb-fill, var(--input));
+  }
+  /* 焦点环交给外框（胶囊本来就是填充面，再描一圈蓝边会变双框） */
+  .input-wrap:focus-within {
+    border: 0;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
+  }
+
+  .input-wrap textarea {
+    grid-area: text;
+    width: 100%;
+    height: 38px;
+    min-height: 38px;
+    max-height: 96px;
+    padding: 9px 2px;
+    line-height: 20px;
+    font-size: 16px;
+    border: 0;
+    background: transparent;
+  }
+
+  /* 摊平工具排：它的子元素（＋ / 发送 / 两个下拉）直接当网格项 */
+  .input-tools { display: contents; }
+  .input-tools > * { margin: 0; }
+
+  /* 权限 / 模型：手机上收起（详见上面的注释） */
+  #dPermMount,
+  #dModelMount { display: none; }
+
+  .att-wrap { grid-area: plus; align-self: end; }
+
+  button.att-add {
+    width: 38px;
+    height: 38px;
+    padding: 0;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    font-size: 20px;
+    line-height: 1;
+    color: var(--text);
+    background: transparent;
+  }
+  button.att-add:active { background: color-mix(in srgb, var(--text) 10%, transparent); }
+
+  .input-tools #send {
+    grid-area: send;
+    align-self: end;
+    height: 38px;
+    padding: 0 15px;
+    border-radius: 19px;
+    border: 0;
+    background: var(--btn-solid);
+    color: var(--on-solid);
+    font-size: 14px;
+    font-weight: 500;
+  }
+  .input-tools #send:active { filter: brightness(.92); }
+
+  /* 附件条（选了文件之后那排缩略图）横跨整条胶囊 */
+  .att-strip { grid-area: strip; }
+}
+
+/* ============================================================ 9. 600px 档：紧凑化 */
+
+@media (max-width: 600px) {
+  /*
+   * 底部四 tab 的**显示**在 900 档（见上面那条 P0 修复注释）；
+   * 这一档只做紧凑化。详情页照旧自动隐藏（mb-detail-open 的行模板里没有它）。
+   */
+
+  /*
+   * 键盘适配：布局视口不随键盘缩（Android Chrome 默认），用 mobile.mjs 喂的
+   * --mb-vh（visualViewport.height）当整页高度 —— 输入栏贴着键盘上方，不被盖住。
+   */
+  html, body { height: var(--mb-vh, 100%); }
+
+  /* 对话页：输入栏吸底 + 手势条安全区 */
+  .chat { padding: 12px 10px 4px; }
+  .chat-head { padding: 8px 10px; }
+
+  /* 消息气泡别铺满全宽（拇指看着累）：最宽 80% */
+  .chat .bubble { max-width: 80%; }
+
+  /* 弹窗 → 底部抽屉（P1-1，PRD"关键弹窗改为底部抽屉"）：全宽贴底，圆角只留上面 */
+  dialog[open] {
+    position: fixed;
+    inset: auto 0 0 0;
+    top: auto;
+    transform: none;
+    margin: 0;
+    width: 100%;
+    max-width: none;
+    max-height: 82vh;
+    border-radius: 14px 14px 0 0;
+    border-bottom: 0;
+  }
+  dialog[open]::backdrop { background: rgba(0, 0, 0, 0.45); }
+
+  /* 下拉刷新指示条 */
+  .mb-ptr.show, body.mb-tiny .mb-ptr { will-change: transform; }
+}
+
+/* ============================================================ 10. 「← 返回」栏 */
 
 /* 「← 返回」栏的常态（窄屏外永远不出现） */
 .mb-backbar {
@@ -157,6 +1098,27 @@
   padding-right: 10px;
 }
 
+@media (max-width: 900px) {
+  body.mb-detail-open .mb-backbar {
+    display: flex;
+    grid-row: 1;
+    background: var(--mb-surface, var(--side));
+  }
+
+  /*
+   * 抽屉（聊天记录 / 群设置）：窄屏全屏，左边不留背景缝（2026-11 用户要求）。
+   * 桌面那版是 `width: 420px; max-width: 92vw` —— 手机上 92vw 会在左边露出 8% 的
+   * scrim，看着像没盖严。
+   *
+   * ⚠️ 必须包在 @media 里：`#drawer` 是 ID 选择器（1,0,0），mobile.css 又在
+   * style.css 之后加载，写成全局规则会把**桌面端**的抽屉也撑成全屏。
+   */
+  #drawer {
+    width: 100%;
+    max-width: 100%;
+  }
+}
+
 /*
  * 聊天页（body.mb-chat，由 chat.mjs 渲染时打上）：聊天头自己带了返回按钮，
  * 通用返回栏让位 —— 返回/人名/新会话/聊天记录挤在**同一行**（2026-11 用户要求）。
@@ -178,21 +1140,6 @@ body.mb-chat main {
   grid-row: 1;
 }
 
-/*
- * 抽屉（聊天记录 / 群设置）：窄屏全屏，左边不留背景缝（2026-11 用户要求）。
- * 桌面那版是 `width: 420px; max-width: 92vw` —— 手机上 92vw 会在左边露出 8% 的
- * scrim，看着像没盖严。
- *
- * ⚠️ 必须包在 @media 里：`#drawer` 是 ID 选择器（1,0,0），mobile.css 又在
- * style.css 之后加载，写成全局规则会把**桌面端**的抽屉也撑成全屏。
- */
-@media (max-width: 900px) {
-  #drawer {
-    width: 100%;
-    max-width: 100%;
-  }
-}
-
 body.mb-chat .chat-head {
   padding-left: 4px;
   gap: 8px;
@@ -202,80 +1149,9 @@ body.mb-chat .chat-head .mb-chat-back {
   padding: 8px 6px 8px 2px;
 }
 
-/* ============================================================ 600px 档：底部导航 + 紧凑 */
+/* ============================================================ 11. 下拉刷新指示条 */
 
-@media (max-width: 600px) {
-  /*
-   * 底部三 tab 的**显示**已上移到 900 档（见上面那条 P0 修复注释）；
-   * 这一档只做紧凑化。详情页照旧自动隐藏（mb-detail-open 的行模板里没有它）。
-   */
-
-  /*
-   * 键盘适配：布局视口不随键盘缩（Android Chrome 默认），用 mobile.mjs 喂的
-   * --mb-vh（visualViewport.height）当整页高度 —— 输入栏贴着键盘上方，不被盖住。
-   */
-  html, body { height: var(--mb-vh, 100%); }
-
-  /* 对话页：输入栏吸底 + 手势条安全区 */
-  .composer {
-    padding: 10px 12px;
-    padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
-  }
-  .chat { padding: 14px 12px; }
-  .chat-head { padding: 8px 12px; }
-
-  /* 消息气泡别铺满全宽（拇指看着累）：最宽 84% */
-  .chat .row { padding-right: 0; }
-  .chat .bubble { max-width: 84%; }
-
-  /* 弹窗 → 底部抽屉（P1-1，PRD"关键弹窗改为底部抽屉"）：全宽贴底，圆角只留上面 */
-  dialog[open] {
-    position: fixed;
-    inset: auto 0 0 0;
-    top: auto;
-    transform: none;
-    margin: 0;
-    width: 100%;
-    max-width: none;
-    max-height: 82vh;
-    border-radius: 14px 14px 0 0;
-    border-bottom: 0;
-  }
-  dialog[open]::backdrop { background: rgba(0, 0, 0, 0.45); }
-
-  /* 下拉刷新指示条 */
-  .mb-ptr.show, body.mb-tiny .mb-ptr { will-change: transform; }
-}
-
-/* 底部导航条（常态隐藏，600 档由上面的规则打开） */
-.mb-tabbar {
-  display: none;
-  align-items: stretch;
-  justify-content: space-around;
-  background: var(--side, #17181b);
-  border-top: 1px solid var(--line, #26282c);
-  padding-bottom: env(safe-area-inset-bottom, 0px);
-  z-index: 60;
-}
-.mb-tab {
-  flex: 1;
-  display: grid;
-  justify-items: center;
-  align-content: center;
-  gap: 2px;
-  min-height: 52px;
-  border: 0;
-  background: transparent;
-  color: var(--dim, #8a9096);
-  font: inherit;
-  font-size: 11px;
-  cursor: pointer;
-  padding: 6px 0;
-}
-.mb-tab svg { width: 22px; height: 22px; }
-.mb-tab.active { color: var(--accent, #3b6ef5); }
-
-/* 下拉刷新指示条：常态藏在屏顶之上，touchmove 时由 JS 顶下来 */
+/* 常态藏在屏顶之上，touchmove 时由 JS 顶下来 */
 .mb-ptr {
   position: fixed;
   top: 0;
@@ -296,7 +1172,7 @@ body.mb-chat .chat-head .mb-chat-back {
   transition: opacity 0.15s;
 }
 
-/* ============================================================ 配对弹窗（桌面 + 手机共用） */
+/* ============================================================ 12. 配对弹窗（桌面 + 手机共用） */
 
 /* 二维码弹窗里的图：scalable SVG，交给容器定宽（桌面上别超过 240px） */
 .mb-qr-wrap { margin-top: 12px; text-align: center; }
@@ -364,7 +1240,7 @@ body.mb-chat .chat-head .mb-chat-back {
   padding: 3px 10px;
 }
 
-/* ============================================================ 对话富内容降级（P1-4） */
+/* ============================================================ 13. 对话富内容降级（P1-4） */
 
 /*
  * 窄屏折叠摘要条：chat.mjs 在 body.mb-narrow 时把卡票包进这组结构 ——
@@ -387,7 +1263,7 @@ body.mb-chat .chat-head .mb-chat-back {
 .mb-fold-body { margin-top: 6px; }
 .mb-fold-body[hidden] { display: none; }
 
-/* ============================================================ 401 全屏引导 */
+/* ============================================================ 14. 401 全屏引导 */
 
 /* 手机形态下配对失效的全屏提示（js/mobile.mjs showRelpair）。覆盖一切，直到刷新。 */
 .mb-relpair {

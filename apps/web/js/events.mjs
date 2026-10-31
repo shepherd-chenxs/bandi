@@ -38,7 +38,12 @@ function refreshList() {
     listTimer = setTimeout(refreshList, 2500);  // 弹窗里先别刷，晚一拍再试
     return;
   }
-  load().catch(() => {});
+  /*
+   * 停在通讯录时**只同步忙/闲点**：这一栏里没有会话列表，重画整表唯一的效果
+   * 是头像 <img> 被重建 —— 群里跑活时事件一条接一条，头像就一直在闪
+   * （跟 5 秒轮询同一个毛病，2026-10-31 用户实报）。数据照样进 S。
+   */
+  load({ dotsOnly: S.nav === 'contacts' }).catch(() => {});
 }
 
 export function startEvents() {

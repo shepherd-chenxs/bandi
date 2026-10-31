@@ -381,15 +381,19 @@ body.no-list .list-panel { display: none; }
    两级**同字号同字重**（12.5px / 500），层级只靠缩进 + 箭头表达 —— JetBrains 的
    和谐感正来自"没有加粗的头"：五组五个响点反而是噪音。颜色同正文。 */
 .list-sec.nav { font-size: 12.5px; font-weight: 500; color: var(--text); letter-spacing: 0; gap: 10px; }
+/* 静态组头（设置左栏，2026-10-31 去掉折叠后）：只是个分段标题，不是可点的开关 ——
+   指针不能还是手型，否则点下去没反应，看着像坏了。
+   没有箭头+缩进那套层级线索之后，组头必须**自己**比条目轻一档（灰字、小半号），
+   否则它和下面那行条目长得一模一样，看着像"多出来的一行"。 */
+.list-sec.static { cursor: default; color: var(--dim); font-size: 12px; }
 .list-sec.nav .sec-arrow { width: 5.5px; height: 5.5px; }
 /* 箭头不跟组头一起"加粗"：边框画线没有字重，粗感来自 currentColor 继承了
    组头的正文字色（深色）—— 单独压回灰调，文字照旧 600 加粗（2026-10-29 用户）。 */
 .list-sec.nav .sec-arrow { color: var(--dim); }
 #listBody .item[data-set] .line1 b { font-size: 12.5px; }
-/* 二级缩进 = 组头文字起点（JetBrains 同款"二级文字与一级文字对齐"）：
-   组头文字左沿 = 行 padding 10 + 箭头 5.5 + gap 10 = 25.5px；
-   条目文字左沿 = sec-body 缩进 + 行内边距 8 → 缩进 17.5px 正好落在同一条线上。 */
-#listBody .sec-body.nav { padding-left: 17.5px; }
+/* 二级缩进：组头不再挂折叠箭头（2026-10-31），所以按"组头文字 + 10px"重新算 ——
+   组头文字左沿 = 行 padding 10；条目在 10px 缩进后起步，视觉上仍是一级/二级两层。 */
+#listBody .sec-body.nav { padding-left: 10px; }
 /* 组收起后，选中分节被一起藏掉 —— 组头右侧补一颗点（accent 色）标记"正看的东西收在这组里"。
    margin-left:auto 把点推到组头行最右，跟 VS Code 折叠文件夹里的改动点是同一个心智。 */
 .sec-here { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); margin-left: auto; flex: none; }

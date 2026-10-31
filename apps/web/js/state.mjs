@@ -64,7 +64,16 @@ export function applyMenuGating() {
 
 /* ------------------------------------------------------------------ 状态 */
 
-export async function load() {
+/**
+ * 拉一遍全量状态（/api/state + /api/skills）。
+ *
+ * `opts.dotsOnly` —— **只同步忙/闲的点，不重画列表**。
+ * 通讯录的 5 秒轮询本来就是为了那颗绿点，但过去每拍都调 renderList()，
+ * 整个 #listBody 的 innerHTML 重建一次，头像 <img> 跟着重建、重新解码 ——
+ * 用户看到的就是"头像每 5 秒闪一下"（2026-10-31 实报）。
+ * 数据照旧全部更新进 S，只是不动 DOM；切走再回来时 renderList 会画出最新的一份。
+ */
+export async function load(opts = {}) {
   const [s, sk] = await Promise.all([api('/api/state'), api('/api/skills')]);
   S.runtimes = s.runtimes;
   S.personas = s.personas;
@@ -135,7 +144,8 @@ export async function load() {
       } catch { /* 启动很早的时候 DOM 还没齐：下一拍 load() 会再走一遍 */ }
     }
   }
-  renderList();
+  if (opts.dotsOnly) syncBusyDots();
+  else renderList();
   // 详情页开着时，那枚忙/闲徽标也要跟着变（轮询只重画了列表，没重画详情）
   const open = S.persona ? S.personas.find((x) => x.id === S.persona.id) : null;
   const el = $('dBusy');
@@ -148,6 +158,22 @@ export async function load() {
   }
 }
 
+
+
+/**
+ * 只改「忙/闲」那一颗绿的，其余 DOM 一动不动（供 `load({ dotsOnly: true })` 用）。
+ *
+ * 通讯录行的人头上挂着一颗 `.dot`，行上写死 `data-persona=<id>`；
+ * 数据刚从 /api/state 更新进 S.personas，这里只把 class 跟上。
+ * 找不到人就跳过 —— 列表可能是别的页面画的（消息列表的行不带 data-persona）。
+ */
+function syncBusyDots() {
+  document.querySelectorAll('#listBody [data-persona]').forEach((row) => {
+    const p = S.personas.find((x) => x.id === row.dataset.persona);
+    const dot = row.querySelector(':scope > .dot');
+    if (p && dot) dot.classList.toggle('busy', !!p.busy);
+  });
+}
 
 
 /**
@@ -170,10 +196,10 @@ export function syncContactsPoll() {
       contactsTimer = null;
       return;
     }
-    // 有弹窗开着就跳过这一拍：`load()` 会重画左栏和详情，背后跳一下，
-    // 透过遮罩看就是"弹窗在有频率地闪"（跟流程页那个定时重画同一个毛病）
+    // 有弹窗开着就跳过这一拍：重画会让背后跳一下，透过遮罩看就是"弹窗在有频率地闪"
     if (document.querySelector('dialog[open]')) return;
-    load().catch(() => {});
+    // 只同步那颗绿点：整表重画会让头像 <img> 跟着重建，每 5 秒闪一次（用户实报）
+    load({ dotsOnly: true }).catch(() => {});
   }, 5000);
 }
 

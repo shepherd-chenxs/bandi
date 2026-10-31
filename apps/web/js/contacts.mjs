@@ -1,6 +1,11 @@
 /* contacts.mjs —— 二级列表、通讯录：按部门分组、新建选择器、视图切换。
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。
- * 2026-10-25 起「数字员工」从 A–Z 字母头改为按部门分组（用户口径：部门是给人看的分组）。 */
+ * 2026-10-25 起「数字员工」从 A–Z 字母头改为按部门分组（用户口径：部门是给人看的分组）。
+ *
+ * 2026-10-31 手机端通讯录改成主流手机通讯录形态（用户："通讯录不是手机的风格，改成
+ * 手机那种 ABC 的"）：上方一组入口（群聊 / 部门，点进去是各自的列表），下方全部员工
+ * 按拼音首字母 A–Z 分组 + 右侧索引条。**只走窄屏**，桌面仍是部门分组。
+ * A–Z 的首字母判定沿用 2026-10-20 那版的边界字方案（见 nameInitial 注释）。 */
 import { esc, personSubtitle, saveCollapsed, toast } from './shell.mjs';
 import { ICON_CLOUD, ICON_FOLDER, cut, hhmm, initial, personaAvatar, plain } from './ui.mjs';
 import { openSettings, settingsGroups } from './settings.mjs';
@@ -70,6 +75,85 @@ export function groupPeopleByDepartment(people) {
 
 
 
+/* ---------------------------------------------------- 通讯录（手机）：A–Z 分组 */
+
+/**
+ * 名字首字母（手机通讯录 ABC 索引用）。
+ *
+ * 中文不能"取首字" —— 要转拼音首字母，而项目零依赖、不引 pinyin 库。
+ * 这里沿用 2026-10-20 那版的边界字方案：给每个字母一个「该字母拼音区最小的字」当界碑，
+ * 名字首字落在最后一个 ≤ 它的界碑之后，就属于那个字母 —— 只依赖浏览器 ICU，
+ * 不写死姓氏表，生僻姓也能分（只要 ICU 认识这个字）。
+ *
+ * ⚠️ 界碑必须是**汉字**，不能拿拉丁字母当锚点（`col.compare('张','z')` 会走
+ *    script 重排层级，汉字整体排在拉丁之后，A–Z 全落到 '#' —— 实测过）。
+ * ⚠️ i / u / v 没有汉语拼音音节，跳过。
+ */
+const PINYIN_BOUNDS = [
+  ['A', '阿'], ['B', '八'], ['C', '擦'], ['D', '搭'], ['E', '蛾'], ['F', '发'],
+  ['G', '噶'], ['H', '哈'], ['J', '击'], ['K', '喀'], ['L', '拉'], ['M', '妈'],
+  ['N', '拿'], ['O', '哦'], ['P', '啪'], ['Q', '七'], ['R', '燃'], ['S', '撒'],
+  ['T', '塌'], ['W', '挖'], ['X', '夕'], ['Y', '压'], ['Z', '匝'],
+];
+
+/**
+ * 姓氏多音字修正表：ICU 取的是**常用读音**，姓氏用的是另一读。
+ * 实测（364 个百家姓样本）只有这几个会判错；表里其余是同类但样本没覆盖到的。
+ * 只对"名字第一个字"生效。
+ */
+const SURNAME_FIX = {
+  曾: 'Z', 解: 'X', 单: 'S', 仇: 'Q', 翟: 'Z', 查: 'Z', 区: 'O', 覃: 'Q',
+  祭: 'Z', 繁: 'P', 种: 'C', 折: 'S', 乐: 'Y', 长: 'C', 重: 'C', 会: 'K',
+  秘: 'B', 么: 'Y', 句: 'G', 员: 'Y', 黑: 'H',
+};
+
+const HAN_RE = /^[\u3400-\u9fff\uf900-\ufaff]/;
+
+/** 名字 → 分组字母（A–Z / '#'）。'#' 收数字、符号、认不出的字，排最后。 */
+export function nameInitial(name) {
+  const first = String(name ?? '').trim().charAt(0);
+  if (!first) return '#';
+  if (/[A-Za-z]/.test(first)) return first.toUpperCase();
+  if (!HAN_RE.test(first)) return '#';
+  if (SURNAME_FIX[first]) return SURNAME_FIX[first];
+  const col = zhNameCollator();
+  let letter = '#';
+  for (const [L, bound] of PINYIN_BOUNDS) {
+    if (col.compare(first, bound) >= 0) letter = L;
+    else break;
+  }
+  return letter;
+}
+
+/** 通讯录「数字员工」按首字母分组：[{ letter, rows }]，字母序 + '#' 殿后，组内按拼音排。 */
+export function groupPeopleByInitial(people) {
+  const col = zhNameCollator();
+  const withLetter = people.map((p) => ({ p, letter: nameInitial(p.name) }));
+  withLetter.sort((a, b) => {
+    if (a.letter !== b.letter) {
+      if (a.letter === '#') return 1;
+      if (b.letter === '#') return -1;
+      return a.letter < b.letter ? -1 : 1;
+    }
+    return col.compare(a.p.name ?? '', b.p.name ?? '');
+  });
+  const out = [];
+  for (const it of withLetter) {
+    const last = out.at(-1);
+    if (last && last.letter === it.letter) last.rows.push(it.p);
+    else out.push({ letter: it.letter, rows: [it.p] });
+  }
+  return out;
+}
+
+
+
+/** 窄屏判据：用 media query 本身（缓存一份，别每次渲染都新建 MediaQueryList）。 */
+const MQ_NARROW = window.matchMedia('(max-width: 900px)');
+const isNarrowScreen = () => MQ_NARROW.matches;
+
+
+
 /**
  * 部门建议列表（#deptSuggest，新建对话框与员工详情共用一个 datalist）：
  * 库里已有哪些部门就建议哪些，按拼音排。
@@ -90,6 +174,16 @@ export function refreshDeptSuggest() {
 export function renderList() {
   // 列表一重画，原来右键的那一行可能已经不在了 —— 菜单留着就是"点了个寂寞"
   closeCtxMenu();
+  /*
+   * 手机通讯录的两件挂件（右侧 A–Z 索引条、页头「←」）都挂在 #listBody 外面，
+   * 重画 innerHTML 不会连带清掉 —— 每次进来先统一摘一遍，谁需要谁再挂。
+   */
+  document.querySelectorAll('.list-panel > .mb-az, .list-head > .mb-head-back').forEach((el) => el.remove());
+  /* 手机列表的灰底：通讯录首页 `.mb-cv-root`、设置页 `.mb-set` —— 别的页面必须是白底，
+     切栏时先摘掉，谁需要谁在自己的分支里加回来。 */
+  $('listBody')?.classList.remove('mb-cv-root', 'mb-cv', 'mb-set');
+  // 离开通讯录、或窗口拉回桌面宽度，都回首页：下次点回来不该还停在某个部门里
+  if (!isNarrowScreen()) mbCv.view = 'home';
   /*
    * 代码托管页（工作台 › 代码托管）让位（2026-10-29）：左栏整栏（仓库清单 + 底部的
    * GitHub 连接条）归 renderGitRepos 管 —— 它还在 #listFoot 上挂了连接按钮。
@@ -244,16 +338,61 @@ export function renderList() {
   }
 
   if (S.nav === 'settings') {
+    const groups = settingsGroups();
+    /* 页头那个搜索框在设置页一直是**死的**（这个分支从来没读过 q）：框在那儿、
+       点进去能打字、列表一个都不动。手机上尤其刺眼（2026-10-31 顺手接上）——
+       按分节标题过滤，命中为空的组整个不画。桌面左栏共用同一份结果。 */
+    const hit = (t) => !q || String(t).toLowerCase().includes(q);
+    const shown = groups
+      .map((g) => ({ title: g.title, items: g.items.filter(([, t]) => hit(t)) }))
+      .filter((g) => g.items.length);
     /*
-     * 设置左栏**分区**（2026-10-29 用户定稿："设置页各项乱糟糟的"）：
-     * 桌面管理员 = 五组、每组的节挂灰字组头（复用通讯录 `.list-sec` 那套视觉），
-     * 组头**可折叠**（2026-10-29 用户加的需求）：收起状态记进 `S.secCollapsed`
-     * （key 加 `set:` 前缀，跟通讯录的 group/person/dept 键隔开），saveCollapsed 落 localStorage。
+     * 手机（≤900px）= **微信设置页**版式（2026-10-31 用户："设置这个页面不应该做成折叠，
+     * 应该参考微信设置页的做法"）：
+     *   一屏五组卡片，组标题是卡片外的一行小灰字 —— **不可点、不收起**；
+     *   卡片内是行（右侧 chevron），点行开子页。
+     * 旧版把组头做成可折叠的导航树（带 ∨ 箭头、收起后整组消失），那是后台侧边栏的语法，
+     * 手机上一屏只有 5 组 10 项、根本不需要收，箭头反而让人以为"这页坏了/点不动"。
+     *
+     * 桌面左栏同样是**静态**组头（见下面那个分支）：一处行为，两套版式。
+     */
+    if (isNarrowScreen()) {
+      const body = $('listBody');
+      body.classList.add('mb-set');
+      body.innerHTML = shown.length
+        ? shown
+            .map((g) => {
+              const rows = g.items
+                .map(
+                  ([key, title]) => `<div class="item" data-set="${key}">
+            <div class="who"><div class="line1"><b>${esc(title)}</b></div></div>
+          </div>`,
+                )
+                .join('');
+              /* 组标题空了（设备 / 非管理员那种短清单）就不画标题，直接一张卡 */
+              return `<div class="mb-set-group">${
+                g.title ? `<div class="mb-set-head">${esc(g.title)}</div>` : ''
+              }<div class="mb-set-card">${rows}</div></div>`;
+            })
+            .join('')
+        : '<div class="empty" style="padding:40px 16px">没找到相关的设置</div>';
+      body.querySelectorAll('[data-set]').forEach((el) => {
+        el.onclick = () => openSettings(el.dataset.set);
+      });
+      return;
+    }
+
+    /*
+     * 桌面左栏**分区**（2026-10-29 用户定稿："设置页各项乱糟糟的"）：
+     * 桌面管理员 = 五组、每组的节挂灰字组头（复用通讯录 `.list-sec` 那套视觉）；
      * 设备 / 非管理员的清单太短，`title: null` 不画组头，照旧平铺。
      * 行照通讯录的规律给组头让位（`.sec-body` 缩进 12px）。
+     *
+     * 组头**不做折叠**（2026-10-31 用户："设置这个页面不应该做成折叠"）：
+     * 原来是 data-sec + ∨ 箭头 + S.secCollapsed['set:xxx'] 那一套，收起后整组消失、
+     * 还要在组头右侧补一颗点告诉"你正看的分节收在这里"。一屏十项，收起只是让人多点一下，
+     * 两套点法（组头能点、行也能点）反而让"能点哪儿"变含糊 —— 那套分支已删。
      */
-    const collapsed = S.secCollapsed ?? (S.secCollapsed = {});
-    const groups = settingsGroups();
     /* 单行（2026-10-29 用户："二级菜单下的说明去掉"）：只画标题，副标题说明不再渲染 ——
        导航树求短求快，说明是阅读负担；数组里的 sub 留着（title 兜底等别处还用得上）。 */
     const row = ([key, title]) => `<div class="item ${S.settingsSection === key ? 'active' : ''}" data-set="${key}" title="${title}">
@@ -261,29 +400,15 @@ export function renderList() {
             <div class="line1"><b>${title}</b></div>
           </div>
         </div>`;
-    $('listBody').innerHTML = groups
-      .map((g) => {
-        if (!g.title) return g.items.map(row).join('');
-        const key = `set:${g.title}`;
-        /* 随时可收（2026-10-29 用户实报"为什么折叠不了"后去掉强制展开）：
-           当前分节在收起的组里也不拦 —— 右边页头写着它是谁，左栏不欠一份高亮。
-           但收起后选中行跟着消失，"我正看的东西去哪了"没有答案 ——
-           组头右侧补一颗点标记（VS Code 折叠文件夹里有改动文件的同款心智），
-           点开组就能看到高亮行。 */
-        const hasActive = g.items.some(([k]) => k === S.settingsSection);
-        const shut = !!collapsed[key];
-        return `<div class="list-sec nav ${shut ? 'shut' : ''}" data-sec="${key}" title="${shut ? '展开' : '收起'}">
-            <i class="sec-arrow"></i>${esc(g.title)}${shut && hasActive ? '<i class="sec-here" title="当前分节收在这组里"></i>' : ''}
-          </div>` + (shut ? '' : `<div class="sec-body nav">${g.items.map(row).join('')}</div>`);
-      })
-      .join('');
-    $('listBody').querySelectorAll('[data-sec]').forEach((el) => {
-      el.onclick = () => {
-        S.secCollapsed[el.dataset.sec] = !S.secCollapsed[el.dataset.sec];
-        saveCollapsed();
-        renderList();
-      };
-    });
+    $('listBody').innerHTML = shown.length
+      ? shown
+          .map((g) =>
+            g.title
+              ? `<div class="list-sec nav static">${esc(g.title)}</div><div class="sec-body nav">${g.items.map(row).join('')}</div>`
+              : g.items.map(row).join(''),
+          )
+          .join('')
+      : '<div class="empty" style="padding:28px 10px">没找到相关的设置</div>';
     $('listBody').querySelectorAll('[data-set]').forEach((el) => {
       el.onclick = () => openSettings(el.dataset.set);
     });
@@ -342,31 +467,8 @@ export function renderList() {
     );
   };
 
-  const groupRows = groups
-    .map(
-      // data-group 必须是**群 id**：点它进的是群详情页，走的是 /api/groups/:id
-      (g) => {
-        const c = g.conv;                                  // 零段的群没有 conv，别去读 c.xxx
-        const preview = cut(plain(c?.lastMessage), 22);
-        return `<div class="item ${S.groupThreadId === g.id || S.conversation?.groupId === g.id ? 'active' : ''}" data-group="${esc(g.id)}">
-        <div class="avatar grp">${esc(initial(g.title))}</div>
-        <div class="who">
-          <div class="line1"><b>${esc(g.title)}</b></div>
-          <div class="line2"><span class="dot ${esc(c?.status ?? '待跑')}"></span>${g.memberCount} 人 · ${esc(preview || '还没聊过')}</div>
-        </div>
-      </div>`;
-      },
-    )
-    .join('');
+  const groupRows = groups.map(groupRowHTML).join('');
 
-  const personRow = (p) => `<div class="item ${S.persona && S.persona.id === p.id ? 'active' : ''}" data-persona="${p.id}">
-        ${personaAvatar(p)}
-        <div class="who">
-          <div class="line1"><b>${esc(p.name)}${p.builtin ? '<i class="b-inline" title="出厂就在的员工：名字、职责与技能随平台固定，删不掉">内置</i>' : ''}</b></div>
-          <div class="line2">${esc(personSubtitle(p))}</div>
-        </div>
-        <i class="dot ${p.busy ? 'busy' : ''}" title="${p.busy ? '正在干活' : '现在闲着'}"></i>
-      </div>`;
   /* 数字员工按部门分组（2026-10-25 用户拍板：部门是给人看的分组，替代原 A–Z 字母头）。
      部门头是**可折叠的子段**（复用 sec 机制，各自的收起状态记住）：人多时把不关心的
      部门收起来，找部门就不用滚长列表；搜索框也匹配部门名（上面 match 那行）——
@@ -374,9 +476,19 @@ export function renderList() {
      再切开反而碎；且 sec 搜索时强制展开。 */
   const personRows = groupPeopleByDepartment(people)
     .map((g) => (q
-      ? g.rows.map(personRow).join('')
-      : sec(`dept:${g.dept}`, esc(g.dept), g.rows.length, g.rows.map(personRow).join(''))))
+      ? g.rows.map(personRowHTML).join('')
+      : sec(`dept:${g.dept}`, esc(g.dept), g.rows.length, g.rows.map(personRowHTML).join(''))))
     .join('');
+
+  /*
+   * 手机（≤900px）换成手机通讯录形态（2026-10-31 用户："通讯录不是手机的风格，
+   * 改成手机那种 ABC 的"）：上面群聊 / 部门入口，下面按拼音首字母 A–Z 分组。
+   * 桌面继续走部门分组 —— 下面这一整段一行不动。
+   */
+  if (S.nav === 'contacts' && isNarrowScreen()) {
+    renderMobileContacts({ q, groups, people });
+    return;
+  }
 
   $('listBody').innerHTML = !groups.length && !people.length
     ? '<div class="empty" style="padding:36px 12px">通讯录还是空的<br />点右上角 ＋ 发起群聊或添加员工</div>'
@@ -391,19 +503,51 @@ export function renderList() {
     };
   });
 
-  $('listBody').querySelectorAll('[data-conv]').forEach((el) => {
+  bindContactRows();
+}
+
+
+
+/* -------------------------------------------------- 通讯录行模板（桌面 / 手机共用） */
+
+/** 群行。data-group 必须是**群 id**：点它进的是群详情页，走的是 /api/groups/:id */
+const groupRowHTML = (g) => {
+  const c = g.conv;                                  // 零段的群没有 conv，别去读 c.xxx
+  const preview = cut(plain(c?.lastMessage), 22);
+  return `<div class="item ${S.groupThreadId === g.id || S.conversation?.groupId === g.id ? 'active' : ''}" data-group="${esc(g.id)}">
+        <div class="avatar grp">${esc(initial(g.title))}</div>
+        <div class="who">
+          <div class="line1"><b>${esc(g.title)}</b></div>
+          <div class="line2"><span class="dot ${esc(c?.status ?? '待跑')}"></span>${g.memberCount} 人 · ${esc(preview || '还没聊过')}</div>
+        </div>
+      </div>`;
+};
+
+const personRowHTML = (p) => `<div class="item ${S.persona && S.persona.id === p.id ? 'active' : ''}" data-persona="${p.id}">
+        ${personaAvatar(p)}
+        <div class="who">
+          <div class="line1"><b>${esc(p.name)}${p.builtin ? '<i class="b-inline" title="出厂就在的员工：名字、职责与技能随平台固定，删不掉">内置</i>' : ''}</b></div>
+          <div class="line2">${esc(personSubtitle(p))}</div>
+        </div>
+        <i class="dot ${p.busy ? 'busy' : ''}" title="${p.busy ? '正在干活' : '现在闲着'}"></i>
+      </div>`;
+
+/** 列表里三类行的点击绑定（桌面 / 手机共用）。 */
+function bindContactRows() {
+  const body = $('listBody');
+  body.querySelectorAll('[data-conv]').forEach((el) => {
     el.onclick = () => openConversation(el.dataset.conv).catch((e) => toast(e.message, 'error'));
   });
   // 通讯录点群聊 = **看群详情**（右侧），不跳对话。
   // 要聊，去详情里点「发消息」。
-  $('listBody').querySelectorAll('[data-group]').forEach((el) => {
+  body.querySelectorAll('[data-group]').forEach((el) => {
     el.onclick = () => openGroupDetail(el.dataset.group).catch((e) => toast(e.message, 'error'));
   });
   // 通讯录点员工：
   //   · 桌面 = **看详情**（右侧），要聊去详情里点「发消息」——那条路会切到消息模块并把光标放好；
   //   · 手机窄屏 = **直接开聊**（2026-11 移动端增量：手机上多一跳详情反而绕，跟微信一致）。
   //     窄屏判据用 body.mb-narrow（mobile.mjs 维护的状态类）。群聊行不受影响，仍进群详情。
-  $('listBody').querySelectorAll('[data-persona]').forEach((el) => {
+  body.querySelectorAll('[data-persona]').forEach((el) => {
     if (document.body.classList.contains('mb-narrow')) {
       el.onclick = () => {
         // 行和列表是同一批数据画出来的，正常都能找到人；找不到（极端时序）兜底回桌面路径
@@ -415,6 +559,220 @@ export function renderList() {
       el.onclick = () => openDetail(el.dataset.persona).catch((e) => toast(e.message, 'error'));
     }
   });
+}
+
+
+
+/* ---------------------------------------------------- 通讯录（手机）：ABC 索引 */
+
+/*
+ * 形态（2026-10-31，对着手机系统通讯录 / 微信通讯录做的）：
+ *
+ *   ┌ 群聊   2  › ┐      ← 容器入口：点进去是各自的列表（列表内换页，不是详情态）
+ *   ┌ 部门   3  › ┐
+ *   A                     ← 字母条吸顶
+ *   [头像] 安宁   岗位
+ *   B
+ *   ...                   ← 右侧一条 A–Z 索引，点或滑直接跳
+ *
+ * 页面状态只有本模块知道（`mbCv`）：home / groups / depts / dept。不做 URL 路由，
+ * 切走一级栏就回 home（renderList 顶部会重置）。
+ */
+const mbCv = { view: 'home', dept: '' };
+
+/*
+ * 底部 tab 点「通讯录」= 明确要回一级页（事件由 mobile.mjs 派发）。
+ * 这里只重置视图、不自己重画：紧接着的 setNav 会把左栏整体重画一遍。
+ */
+document.addEventListener('mb-cv-home', () => {
+  mbCv.view = 'home';
+  mbCv.dept = '';
+});
+
+const CV_TITLE = { home: '通讯录', groups: '群聊', depts: '部门' };
+
+/** 入口行 / 部门行的图标（40px 圆角方块里的线性图标，跟底部 tab 同一套笔画） */
+const CV_ICON_GROUP = '<div class="mb-cv-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19.5c.9-3.2 3-5 5.5-5s4.6 1.8 5.5 5"/><circle cx="16.8" cy="9.4" r="2.5"/><path d="M15.7 14.9c2.4.3 4.2 1.9 4.9 4.6"/></svg></div>';
+const CV_ICON_DEPT = '<div class="mb-cv-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="8.5" width="7" height="12" rx="1"/><rect x="13.5" y="3.5" width="7" height="17" rx="1"/><path d="M6 12h1M6 15.5h1M16 7h1M16 10.5h1M16 14h1"/></svg></div>';
+
+/**
+ * 列表页头：子页把标题换成子页名，并在左边补一颗「←」——
+ * 手机上"从哪儿来回哪儿去"必须有个实体按钮，光靠手势返回不够。
+ * 直接写 DOM 而不用 flowpages 的 setListTitle：那边反过来 import 本模块，会成环。
+ */
+function paintCvHead() {
+  const head = document.querySelector('.list-head');
+  head?.querySelector('.mb-head-back')?.remove();
+  const title = mbCv.view === 'dept' ? (mbCv.dept || '部门') : (CV_TITLE[mbCv.view] ?? '通讯录');
+  const el = $('listTitle');
+  if (el) el.innerHTML = `<b title="${esc(title)}">${esc(title)}</b>`;
+  if (mbCv.view === 'home' || !head) return;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'mb-head-back';
+  btn.setAttribute('aria-label', '返回通讯录');
+  btn.innerHTML =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>';
+  btn.addEventListener('click', goCvHome);
+  head.prepend(btn);
+}
+
+function goCvHome() {
+  mbCv.view = 'home';
+  mbCv.dept = '';
+  renderList();
+}
+
+/** 右侧 A–Z 索引条：点一下跳，按住上下滑一路扫（手机通讯录的核心手势）。 */
+let azScrollHandler = null;
+
+function mountAzIndex(letters) {
+  const panel = document.querySelector('.list-panel');
+  const body = $('listBody');
+  if (!panel || !body) return;
+
+  const idx = document.createElement('div');
+  idx.className = 'mb-az';
+  idx.setAttribute('aria-hidden', 'true');
+  idx.innerHTML = letters.map((l) => `<span data-letter="${l}">${l}</span>`).join('');
+  panel.append(idx);
+
+  const jump = (letter) => {
+    const head = [...body.querySelectorAll('.mb-az-head')].find((h) => h.dataset.letter === letter);
+    if (head) {
+      // 相对滚动容器算，别用 scrollIntoView（那会把外层一起滚，页面抖一下）
+      const b = body.getBoundingClientRect();
+      body.scrollTop += head.getBoundingClientRect().top - b.top;
+    }
+    idx.querySelectorAll('span').forEach((s) => s.classList.toggle('on', s.dataset.letter === letter));
+  };
+
+  const pick = (clientY) => {
+    const r = idx.getBoundingClientRect();
+    const n = letters.length;
+    if (!n || !r.height) return;
+    const i = Math.min(n - 1, Math.max(0, Math.floor(((clientY - r.top) / r.height) * n)));
+    jump(letters[i]);
+  };
+
+  let dragging = false;
+  idx.addEventListener('touchstart', (e) => { dragging = true; pick(e.touches[0].clientY); e.preventDefault(); }, { passive: false });
+  idx.addEventListener('touchmove', (e) => { if (dragging) { pick(e.touches[0].clientY); e.preventDefault(); } }, { passive: false });
+  idx.addEventListener('touchend', () => { dragging = false; });
+  idx.addEventListener('click', (e) => {
+    const s = e.target.closest('[data-letter]');
+    if (s) jump(s.dataset.letter);
+  });
+
+  // 滚动时同步高亮：顶部压过 40px 的最后一个字母条 = 当前所在组
+  if (azScrollHandler) body.removeEventListener('scroll', azScrollHandler);
+  let raf = 0;
+  azScrollHandler = () => {
+    if (raf) return;
+    raf = requestAnimationFrame(() => {
+      raf = 0;
+      const top = body.getBoundingClientRect().top;
+      let cur = letters[0];
+      for (const h of body.querySelectorAll('.mb-az-head')) {
+        if (h.getBoundingClientRect().top - top <= 42) cur = h.dataset.letter;
+        else break;
+      }
+      idx.querySelectorAll('span').forEach((s) => s.classList.toggle('on', s.dataset.letter === cur));
+    });
+  };
+  body.addEventListener('scroll', azScrollHandler, { passive: true });
+  idx.querySelector('span')?.classList.add('on');
+}
+
+/** 手机通讯录的全部四种视图。groups / people 已按搜索词过滤过。 */
+function renderMobileContacts({ q, groups, people }) {
+  const body = $('listBody');
+  /*
+   * 灰底只给**首页**：那里有入口卡要"浮起来"，ABC 名单也需要灰底衬托白行。
+   * 子页（群聊 / 部门 / 某部门）没有卡，通栏白底才是列表的正常样子 ——
+   * 灰底会让半屏的部门列表看起来像"白块没画完"（改版时截到的）。
+   * 搜索态同理：结果就是一行行白的，没有卡可浮。
+   */
+  body.classList.toggle('mb-cv-root', mbCv.view === 'home' && !q);
+  /* 通讯录四种视图共用「行矮一档」这套尺寸（.mb-cv 挂 padding/头像压缩），
+     灰底只首页那份是上面那条 —— 两个类各管一件事，别混。 */
+  body.classList.add('mb-cv');
+  paintCvHead();
+
+  /* 搜索：不画入口区、不画字母头 —— 结果本来就只有几条，再按字母切碎反而难扫。 */
+  if (q) {
+    const rows = groups.map(groupRowHTML).join('') + people.map(personRowHTML).join('');
+    body.innerHTML = rows || '<div class="empty" style="padding:36px 12px">没找到匹配的人或群</div>';
+    bindContactRows();
+    return;
+  }
+
+  if (mbCv.view === 'groups') {
+    body.innerHTML = groups.length
+      ? groups.map(groupRowHTML).join('')
+      : '<div class="empty" style="padding:36px 12px">还没有群聊<br />点右上角 ＋ 发起群聊</div>';
+    bindContactRows();
+    return;
+  }
+
+  const depts = groupPeopleByDepartment(people);
+
+  if (mbCv.view === 'depts') {
+    body.innerHTML = depts.length
+      ? depts.map((g) => `<div class="item mb-cv-row" data-cv-dept="${esc(g.dept)}">
+          ${CV_ICON_DEPT}
+          <div class="who"><div class="line1"><b>${esc(g.dept)}</b></div></div>
+          <span class="mb-cv-n">${g.rows.length}</span>
+        </div>`).join('')
+      : '<div class="empty" style="padding:36px 12px">还没有部门<br />部门在员工资料里填</div>';
+    body.querySelectorAll('[data-cv-dept]').forEach((el) => {
+      el.onclick = () => {
+        mbCv.view = 'dept';
+        mbCv.dept = el.dataset.cvDept;
+        renderList();
+      };
+    });
+    return;
+  }
+
+  if (mbCv.view === 'dept') {
+    const g = depts.find((x) => x.dept === mbCv.dept);
+    body.innerHTML = g && g.rows.length
+      ? g.rows.map(personRowHTML).join('')
+      : '<div class="empty" style="padding:36px 12px">这个部门还没有人</div>';
+    bindContactRows();
+    return;
+  }
+
+  // 首页：入口卡 + A–Z 名单
+  const az = groupPeopleByInitial(people);
+  const entry = `<div class="mb-cv-entry">
+      <div class="item mb-cv-row" data-cv="groups">
+        ${CV_ICON_GROUP}
+        <div class="who"><div class="line1"><b>群聊</b></div></div>
+        <span class="mb-cv-n">${groups.length}</span>
+      </div>
+      <div class="item mb-cv-row" data-cv="depts">
+        ${CV_ICON_DEPT}
+        <div class="who"><div class="line1"><b>部门</b></div></div>
+        <span class="mb-cv-n">${depts.length}</span>
+      </div>
+    </div>`;
+  const list = az
+    .map((g) => `<div class="mb-az-head" data-letter="${g.letter}">${g.letter}</div>${g.rows.map(personRowHTML).join('')}`)
+    .join('');
+  body.innerHTML =
+    entry +
+    (list || '<div class="empty" style="padding:36px 12px">通讯录还是空的<br />点右上角 ＋ 添加员工</div>');
+
+  bindContactRows();
+  body.querySelectorAll('[data-cv]').forEach((el) => {
+    el.onclick = () => {
+      mbCv.view = el.dataset.cv;
+      renderList();
+    };
+  });
+  if (az.length) mountAzIndex(az.map((g) => g.letter));
 }
 
 
