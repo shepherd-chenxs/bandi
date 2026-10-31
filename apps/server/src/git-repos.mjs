@@ -452,7 +452,7 @@ export async function connectByRemoteUrl(remoteUrl, localPath = null) {
       if (store.getGitRepoByPath(dir)) throw new Error('这个目录已经接入过了');
       const origin = await run('git', ['remote', 'get-url', 'origin'], { cwd: dir, env: GIT_ENV });
       let warning = null;
-      if (origin.code !== 0) warning = '这个目录没有 origin ——「同步 / 推送」不可用';
+      if (origin.code !== 0) warning = '这个目录没有 origin ——「更新项目 / 推送」不可用';
       else if (!sameRepo(origin.out, `${host}/${owner}/${name}`))
         warning = `本地 origin 指向 ${origin.out.trim()}，跟 ${raw} 不一致（fork 或镜像？）`;
       const head = await run('git', ['symbolic-ref', '--short', 'HEAD'], { cwd: dir, env: GIT_ENV });
@@ -503,7 +503,7 @@ export async function connectRepo(fullName, info = null, localPath = null) {
    * 两条路（2026-10-30 重新定位，用户："这个是把本地的代码托管过来。上面是仓库的名字，下面是路径"）：
    *   ① owner/name  —— 接 GitHub 上的仓库：查元数据、能建 PR；
    *   ② 随便一个名字（中文也行）—— **把本地代码托管进来**：只认本地目录，代码就在本机，
-   *      不走 GitHub PR（「同步 / 推送」照样能用，那是纯 git，认的是 origin）。
+   *      不走 GitHub PR（「更新项目 / 推送」照样能用，那是纯 git，认的是 origin）。
    * 所以名字只在"空"的时候拦人，格式不再是闸门。
    */
   if (!typed) throw new Error('仓库名不能空');
@@ -569,7 +569,7 @@ export async function connectRepo(fullName, info = null, localPath = null) {
     const origin = await run('git', ['remote', 'get-url', 'origin'], { cwd: dir, env: GIT_ENV });
     const originFull = origin.code === 0 ? repoFromRemote(origin.out) : null;
     let warning = null;
-    if (origin.code !== 0) warning = '这个目录没有 origin —— 接入后「同步 / 推送」不可用（本地提交照样能管）';
+    if (origin.code !== 0) warning = '这个目录没有 origin —— 接入后「更新项目 / 推送」不可用（本地提交照样能管）';
     else if (ghName && !sameRepo(origin.out, clean)) warning = `本地 origin 指向 ${origin.out}，跟 ${clean} 不一致（fork 或镜像？）`;
     if (!ghName) {
       /* 本地托管：不去查 GitHub，默认分支用本地 HEAD（origin 指向哪个托管站都无所谓） */
@@ -1014,11 +1014,11 @@ export function translatePushFailure(out, { branch = null, remote = 'origin', ba
       ? `推不上去：${who} 是 base 分支、有保护规则${rules} —— 不能直接推。改成切一条新分支推上去、建 PR，等 gate 检查绿了再合并。平台**不会强推**，也绕不过保护。原始信息：${raw}`
       : `推不上去：${who} 分支有保护规则${rules} —— 不能直接推。改成推一条新分支、建 PR（平台不会强推，也绕不过保护）。原始信息：${raw}`;
   }
-  // ② 快进不了：远端有你本地没有的提交（这才是"先同步"那种）
+  // ② 快进不了：远端有你本地没有的提交（这才是"先更新"那种）
   if (/rejected|non-fast-forward/i.test(text)) {
     return rejectedHint === 'rename'
       ? `远端已经有一个不同的 ${branch ?? '同名'} 分支（推送被拒）。平台**不会强推** —— 换一个分支名，或先在那个目录把分支理干净。原始信息：${raw}`
-      : `远端有本地没有的提交（推送被拒）—— 先点「同步」拉一次；分叉了同步不动就去那个目录理历史。平台**不会强推**。原始信息：${raw}`;
+      : `远端有本地没有的提交（推送被拒）。平台**不会强推** —— 点开分支下拉的「更新项目」拉一次再推；分叉了拉不动就去那个目录理历史。原始信息：${raw}`;
   }
   // ③ 权限
   if (/Permission denied|403|Authentication failed|invalid credentials|Write access/i.test(text)) {
@@ -1827,7 +1827,7 @@ async function resolveBase(row, askedBase) {
  * 本地工作区状态（**不联网**：全读本地 git，界面上那颗按钮点下去要立刻有反应）。
  *
  * `ahead` 可能为 null —— 本地还没有 `origin/<base>` 这个引用（刚接入没同步过），
- * 这时候不能报"0 个提交领先"（那是假话），要报"不知道"并让人先点同步。
+ * 这时候不能报"0 个提交领先"（那是假话），要报"不知道"并让人先「更新项目」拉一次。
  */
 export async function workState(row) {
   const cwd = row.localPath;
@@ -2023,7 +2023,7 @@ export async function commitAndPush(row, { branch = null, message = null, paths 
       throw new Error(
         st.baseKnown
           ? `当前分支没有领先 base 的提交 —— 没有东西可以进 PR${dirtyNote || '（工作区也是干净的，先改点东西）'}`
-          : `本地还没有 origin/${targetBase} 这个引用 —— 先点「同步」拉一次再说`,
+          : `本地还没有 origin/${targetBase} 这个引用 —— 点开分支下拉的「更新项目」拉一次再说`,
       );
     }
     if (branchName !== st.branch) {

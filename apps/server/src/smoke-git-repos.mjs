@@ -351,7 +351,8 @@ try {
   check('把 remote: 里的规则原话带上（PR / gate）', /pull request/i.test(protMsg) && /required status check/i.test(protMsg), protMsg.slice(0, 220));
   check('base 分支被拒时明确"切一条新分支"', /新分支/.test(protMsg), protMsg.slice(0, 220));
   const ffMsg = tpf(' ! [rejected] main -> main (non-fast-forward)\nerror: failed to push some refs', { branch: 'main' });
-  check('普通非快进仍然说"先同步"', /先点「同步」/.test(ffMsg), ffMsg.slice(0, 100));
+  check('普通非快进指向分支下拉的「更新项目」（「同步」按钮早就没了，文案不能再指它）',
+    /更新项目/.test(ffMsg) && !/「同步」/.test(ffMsg), ffMsg.slice(0, 100));
   const renameMsg = tpf(' ! [rejected] bandi/x -> bandi/x (non-fast-forward)', { branch: 'bandi/x', rejectedHint: 'rename' });
   check('建 PR 的新分支撞名 → 说"换个分支名、不强推"', /换一个分支名/.test(renameMsg) && /强推/.test(renameMsg), renameMsg.slice(0, 100));
   const permMsg = tpf('remote: Permission denied\nfatal: unable to access', { branch: 'x' });
