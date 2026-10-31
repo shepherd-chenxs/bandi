@@ -60,6 +60,8 @@ import * as store from './store.mjs';
  */
 import { classifySource, cfgNow, isLoopbackHost } from './security/source.mjs';
 import { warning as tlsWarning } from './security/tls-check.mjs';
+import * as policy from './security/policy.mjs';
+import { isRegistered } from './security/route-policy.mjs';
 import * as csrf from './security/csrf.mjs';
 
 export { isLoopbackHost };
@@ -413,88 +415,30 @@ function deviceMayReach(method, pathname) {
 }
 
 /**
- * **判定只有一处**（设计 §6.1）。`guard()` 里只调这一个函数，别的什么都不判。
+ * **判定只有一处**（设计 §6.1 / IAM §8.4）。`guard()` 里只调这一个函数，别的什么都不判。
+ *
+ * **Phase 2 起 `decide()` 是 PDP 的兼容包装**：判定逻辑本体在
+ * `security/policy.mjs` 的 `authorize()`（路由清单默认拒绝 + 权限词表 +
+ * 成员基线 ∪ role_permissions），这里只负责把本模块的归属判定
+ * （节点只认自己的端点 —— 那两条要查库对 nodeId）作为 `rules` 注进去，
+ * 顺便避免 security/ ↔ auth.mjs 的 import 环。
  *
  * 三种令牌携带方式（Cookie / `X-Bandi-Token` / `?token=`）走的**都是这里** ——
  * `tokenOf()` 先统一取出令牌，`identify()` 再统一认出"是谁"。
  * 所以"面板令牌换个 Cookie 就变成操作员"这种事不会发生。
  *
- * 返回 `'allow' | 'E4012' | 'E4031' | 'E4032' | 'E4033'`，规则按序：
- *   1. `operator` → 放行；
- *   2. 有 `compute` 且是"节点自己的活"（`nodeMayReach` + `runMayReach`）→ 放行；
- *   3. 有 `panel` 且**不在**禁止清单里 → 放行（并节流记一次"最近使用"）；
- *   4. 有 `panel` 但命中禁止清单 → `E4032`；其余（只有 compute）→ `E4031`；
- *   5. `device` 且在白名单里 → 放行（并节流记一次"最近活跃"）；白名单外 → `E4033`。
+ * 返回 `'allow' | 'E4012' | 'E4031' | 'E4032' | 'E4033' | 'E4098'`。
  *
  * **不缓存**（决策 A 规则 2）：每次请求现算，总机那边改完对下一次请求立即生效。
  */
 export function decide(who, method, pathname) {
-  if (!who) return 'allow'; // 不该发生：guard 只在 identify 到身份之后才问
-  if (who.kind === 'operator') return 'allow';
-  if (who.kind === 'revoked') return 'E4012';
-  // 手机设备：白名单制（判定只有一处，touchDevice 的节流写库也只在这一条路上发生）
-  if (who.kind === 'device') {
-    return deviceMayReach(method, pathname) ? 'allow' : 'E4033';
-  }
-  /*
-   * **登录用户**（2026-10-28 第三刀）。
-   *
-   * 只有两种结果，不引入第三套白名单：
-   *   · 角色是 `admin` → 全放行（他就是管理员，没有"管理员做不了"这回事）；
-   *   · 其余角色 → **复用手机的 `deviceMayReach`**（任务书 §三 硬性要求）。
-   *     理由：那张表的口径正好是"看 + 发消息 + 留便签 + 审批 + 停止"，
-   *     和"一个普通员工该能干什么"完全对得上；再抄一份新白名单，两边迟早走偏。
-   */
-  if (who.kind === 'user') {
-    /*
-     * **免密账号的受限会话**（IAM §8.6，2026-10-31 补）：
-     * 服务器形态下"没设密码的管理员"等于"任何人打开网页就能改安全策略"。
-     * 但也不能不让他登录 —— 那样"登录后改密码"这条路永远到不了（评审抓到的死锁）。
-     * 折中：能登录，但只放行**引导页必需的那几条**，其余 403 E4098。
-     * 单机（回环）不受这条约束 —— 回环 = 这台机器自己的屏幕。
-     */
-    if (who.restricted) {
-      const open =
-        (method === 'GET' && ['/api/me', '/api/state', '/api/skills', '/api/web-version'].includes(pathname))
-        || (method === 'POST' && pathname === '/api/me/password')
-        || (method === 'GET' && !pathname.startsWith('/api/')); // 静态资源：不然页面根本起不来
-      return open ? 'allow' : 'E4098';
-    }
-    if (who.admin) return 'allow';
-    /*
-     * `/api/me` 必须对**任何已登录账号**成立 —— 它是"我是谁"，登录完第一件事就是问它，
-     * 拿不到就等于"登录成功但界面不知道拿哪个菜单"（前端 `load()` 靠它填 `S.menuKeys`）。
-     * 这不放进 `deviceMayReach`：那张表是手机的边界，动它等于改 device 的行为（§三 第一条）。
-     */
-    if (method === 'GET' && pathname === '/api/me') return 'allow';
-    /*
-     * **改自己的密码**（2026-10-31「我的」页）：任何登录账号都该能改自己的密码，
-     * 不该要求"先当上管理员"。普通账号对 /api/users/* 仍是 403 —— 这里只开"改自己"这一条，
-     * 而且它只认会话里那个 userId（路由层不从 body 里拿 id），想借它改别人没有入口。
-     */
-    if (method === 'POST' && pathname === '/api/me/password') return 'allow';
-    // 动态验证的自助管理（状态 / 绑定 / 确认 / 解绑）—— 同一条"改自己"的口径
-    if (pathname.startsWith('/api/me/otp')) return 'allow';
-    /*
-     * **分机的本机状态页**（2026-10-31 分机也要登录）：renderNodeMode 还要机器名/版本
-     * （/api/runtimes）与本机加入状态（/api/local/status）。后者放得安心 —— 它的 handler
-     * 自带**回环来源校验**，局域网里的登录用户照样进不来，等于只对本机屏幕多开了一条。
-     */
-    if (method === 'GET' && (pathname === '/api/runtimes' || pathname === '/api/local/status')) return 'allow';
-    return deviceMayReach(method, pathname) ? 'allow' : 'E4033';
-  }
-
-  const scope = who.scope instanceof Set ? who.scope : new Set([store.SCOPE_COMPUTE]);
-  if (scope.has(store.SCOPE_COMPUTE) && (nodeMayReach(who.nodeId, method, pathname) || runMayReach(who.nodeId, method, pathname))) {
-    return 'allow';
-  }
-  if (scope.has(store.SCOPE_PANEL)) {
-    if (isPanelForbidden(method, pathname)) return 'E4032';
-    // 「最近使用」= 真的用了面板（60 秒节流，见 store.touchNodeUsed 的注释）
-    store.touchNodeUsed(who.nodeId);
-    return 'allow';
-  }
-  return 'E4031';
+  return policy.authorize({
+    who,
+    method,
+    pathname,
+    rules: { nodeMayReach, runMayReach, touchNodeUsed: store.touchNodeUsed },
+    roleHasPerm: store.roleHasPerm,
+  });
 }
 
 /**
@@ -554,6 +498,25 @@ export function guard(auth, req, res, url) {
    */
   const source = classifySource(req, cfgNow());
   req.bandiSource = source;
+
+  /*
+   * **路由清单默认拒绝**（IAM §8.3，Phase 2 落地）：没登记的 `/api/*` 路径
+   * 一律 404 E4090 —— 排在认证之前，"服务里有但清单上没有"的接口对**所有人**
+   * 都不存在（连"探测它要不要凭据"这个信息都不给）。新加路由必须先去
+   * `security/route-policy.mjs` 登记，smoke 的覆盖率扫描会逼着两端同步。
+   */
+  if (url.pathname.startsWith('/api/') && !isRegistered(url.pathname)) {
+    res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end(
+      JSON.stringify({
+        error: '没有这个接口',
+        code: 'E4090',
+        platform: 'bandi',
+        hint: '路径没在路由权限清单里登记（默认拒绝）。若这是新接口，先在 security/route-policy.mjs 登记。',
+      }),
+    );
+    return false;
+  }
 
   /*
    * 免令牌的两条：

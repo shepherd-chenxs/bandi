@@ -41,6 +41,18 @@ db.exec(`
     menuKey TEXT NOT NULL,
     PRIMARY KEY (roleId, menuKey)
   );
+
+  /*
+   * 角色 → 权限（IAM §8.2，2026-10-31 Phase 2）：只做**加法** —— 非 admin 用户
+   * 的基线（手机白名单那批路由）不在这里，PDP 的口径是
+   * 「基线 ∪ role_permissions（本角色）∪ admin 隐式星号」。
+   * admin 永远不落这张表（§8.2 防锁死：误删权限也关不住管理员）。
+   */
+  CREATE TABLE IF NOT EXISTS role_permissions (
+    roleId     TEXT NOT NULL,
+    permission TEXT NOT NULL,
+    PRIMARY KEY (roleId, permission)
+  );
 `);
 
 /* ------------------------------------------------------------------ seed */
@@ -216,6 +228,41 @@ export function deleteRole(id) {
   if (!row) return { ok: false, reason: 'missing' };
   if (row.builtin) return { ok: false, reason: 'builtin' };
   db.prepare('DELETE FROM role_menus WHERE roleId = ?').run(row.id);
+  db.prepare('DELETE FROM role_permissions WHERE roleId = ?').run(row.id);
   db.prepare('DELETE FROM roles WHERE id = ?').run(row.id);
   return { ok: true, id: row.id };
+}
+
+/* -------------------------------------------------- 角色 → 权限（IAM §8.2） */
+
+/**
+ * **这个角色有没有这个权限**（PDP 每请求查的口，§7.1「权限不入票」）。
+ *
+ *   · `admin` → 恒真（隐式 `*`，不落库 —— 防锁死的锁，§8.6 第 1 条）；
+ *   · 其余 → 查 `role_permissions`（点查，主键命中，单进程足够快）。
+ *
+ * 词表校验在调用方（route-policy 的 smoke）；这里不判"权限存不存在"——
+ * 库里出现词表外的串只会让对应路由永远放不进（登记处校验），查询端宽容无害。
+ */
+export function roleHasPerm(roleId, perm) {
+  if (String(roleId ?? '') === 'admin') return true;
+  if (!perm) return false;
+  return !!db.prepare('SELECT 1 FROM role_permissions WHERE roleId = ? AND permission = ?').get(String(roleId ?? ''), String(perm));
+}
+
+/** 一个角色的权限全集（角色详情页以后展示用；admin 返回 `['*']`） */
+export function listRolePerms(roleId) {
+  const id = String(roleId ?? '');
+  if (id === 'admin') return ['*'];
+  return db.prepare('SELECT permission FROM role_permissions WHERE roleId = ? ORDER BY permission').all(id).map((r) => r.permission);
+}
+
+/** 整份替换一个角色的权限（勾选界面口径；admin 传了也当没传 —— 隐式 * 不可拆） */
+export function setRolePerms(roleId, perms) {
+  const id = String(roleId ?? '');
+  if (!id || id === 'admin') return listRolePerms(id);
+  db.prepare('DELETE FROM role_permissions WHERE roleId = ?').run(id);
+  const ins = db.prepare('INSERT OR IGNORE INTO role_permissions (roleId, permission) VALUES (?, ?)');
+  for (const p of Array.isArray(perms) ? perms : []) ins.run(id, String(p));
+  return listRolePerms(id);
 }
