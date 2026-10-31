@@ -272,30 +272,41 @@ export const ROUTES = [
 const COMPILED = ROUTES.map((r) => ({ ...r, re: r.path }));
 
 /**
- * 登记了这条路径吗（**只看路径**；方法级拒绝由 decide()/handler 负责）。
- * guard 在认证之前调它 —— 未登记 = 这个接口不存在（404 E4090）。
+ * 登记了这条「路径 + 方法」吗。guard 在认证之前调它 —— 未登记 = 这个接口
+ * 不存在（404 E4090）。**方法也要登记**：PUT /api/prefs 这种"路径登记过、
+ * 方法没登记"的写法同样 404（v2.8 修正 —— 旧版只看路径，PUT 会借 GET 条目
+ * 溜过这道闸，PDP 那层的方法感知被它架空）。HEAD 按 GET 算；OPTIONS 交给
+ * CORS 层处理，这里放行。
  */
-export function isRegistered(pathname) {
+export function isRegistered(pathname, method) {
   const p = String(pathname ?? '');
-  return COMPILED.some((r) => r.re.test(p));
+  const m = String(method ?? '').toUpperCase();
+  if (m === 'OPTIONS') return true;
+  const eff = m === 'HEAD' ? 'GET' : m;
+  return COMPILED.some((r) => r.re.test(p) && (!eff || r.m.includes(eff)));
 }
 
 /**
- * 按路径（+ 方法，可选）找登记项（PDP 用）。
+ * 按路径（+ 方法）找登记项（PDP 用）。
  *
  * 两条规则：
  *   · **session 条目优先** —— 同一路径可能有多条登记（`/api/local/status` 一条
  *     auth:'local'、一条给登录用户的 member 条目；`/api/users` 一条 bootstrap、
  *     一条 list），判"这个**已认证**的身份能不能过"该看 session 那条；
- *   · **方法匹配优先** —— 同一路径不同方法待遇不同（`GET /api/quota` 只读、
- *     `POST /api/quota` 是 noPanel 的管理动作），带 method 时先找方法命中的条目。
+ *   · **方法必须命中** —— 同一路径不同方法待遇不同（`GET /api/quota` 只读、
+ *     `POST /api/quota` 是 noPanel 的管理动作）。带 method 时**只认方法命中的
+ *     条目**，找不到就返回 null（v2.8 修正：旧版回落到同路径其它方法的条目，
+ *     PUT /api/prefs 会借 GET 条目的 device:true 放行 —— 方法闸等于没有）。
  */
 export function findRoute(pathname, method) {
   const p = String(pathname ?? '');
   const m = String(method ?? '').toUpperCase();
-  if (m) {
-    const byMethod = COMPILED.find((r) => r.auth === 'session' && r.re.test(p) && r.m.includes(m));
+  const eff = m === 'HEAD' ? 'GET' : m;
+  if (eff) {
+    const byMethod = COMPILED.find((r) => r.auth === 'session' && r.re.test(p) && r.m.includes(eff))
+      ?? COMPILED.find((r) => r.re.test(p) && r.m.includes(eff));
     if (byMethod) return byMethod;
+    return null;
   }
   return COMPILED.find((r) => r.auth === 'session' && r.re.test(p)) ?? COMPILED.find((r) => r.re.test(p)) ?? null;
 }

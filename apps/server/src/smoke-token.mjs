@@ -12,10 +12,13 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 
 const PORT = 8821;
 const BASE = `http://127.0.0.1:${PORT}`;
+// server.mjs 用绝对路径定位 —— 这套 smoke 从仓库根（node apps/server/src/…）跑也能起
+const SERVER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'server.mjs');
 let failed = 0;
 const check = (name, ok, detail = '') => {
   console.log(`  ${ok ? '✓' : '✗'} ${name}${ok ? '' : ` — ${detail}`}`);
@@ -30,8 +33,8 @@ let tmp = null;
 let child = null;
 const start = () => {
   tmp ??= fs.mkdtempSync(path.join(os.tmpdir(), 'smoke-token-'));
-  child = spawn(process.execPath, ['server.mjs'], {
-    cwd: process.cwd(),
+  child = spawn(process.execPath, [SERVER], {
+    cwd: path.dirname(SERVER),
     env: {
       ...process.env,
       BANDI_PORT: String(PORT),

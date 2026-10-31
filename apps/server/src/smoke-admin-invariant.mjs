@@ -121,13 +121,24 @@ try {
   const denied = [
     ['GET', '/api/users'],
     ['GET', '/api/roles'],
-    ['GET', '/api/personas'],
+    ['GET', '/api/experts'],
     ['POST', '/api/users'],
-    ['POST', '/api/security/audit'],
+    ['POST', '/api/roles'],
   ];
   for (const [m, p] of denied) {
     const r = await call(m, p, { cookie, body: m === 'POST' ? {} : undefined });
     check(`受限会话拒绝 ${m} ${p} → 403 E4098`, r.status === 403 && r.body?.code === 'E4098', `${r.status} ${r.body?.code ?? ''}`);
+  }
+  // v2.8：isRegistered 方法感知后，"路径登记过、方法没登记"的请求在认证之前
+  // 就 404 E4090（受限会话的 E4098 排在后面，轮不到它）
+  const ghost = [
+    ['GET', '/api/personas'], // 服务端没有列表口（前端走 /api/state），也未登记
+    ['POST', '/api/security/audit'], // 只登记了 GET
+    ['PUT', '/api/prefs'], // 只登记了 GET
+  ];
+  for (const [m, p] of ghost) {
+    const r = await call(m, p, { cookie, body: m === 'GET' ? undefined : {} });
+    check(`未登记的 ${m} ${p} → 404 E4090（默认拒绝在认证之前）`, r.status === 404 && r.body?.code === 'E4090', `${r.status} ${r.body?.code ?? ''}`);
   }
   const pageIn = await fetch(BASE + '/', { headers: { Accept: 'text/html', Cookie: cookie }, signal: AbortSignal.timeout(5000) });
   const html = await pageIn.text();

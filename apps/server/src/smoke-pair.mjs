@@ -127,6 +127,12 @@ try {
 
   const ok1 = await claim(inv.json.token);
   const devCookie = String(ok1.headers.get('set-cookie') ?? '').split(';')[0];
+  // v2.8：claim 与登录对齐一并种 bandi_csrf（E4099 双提交）—— 设备 jar 也要
+  // cookie+头两样都带（模拟浏览器：JS 读 cookie 再放头里）
+  const devCsrfC = (ok1.headers.getSetCookie?.() ?? []).map((c) => c.split(';')[0]).find((c) => c.startsWith('bandi_csrf=')) ?? '';
+  check('claim 一并种了 bandi_csrf（非 HttpOnly）', !!devCsrfC && !/httponly/i.test(devCsrfC), devCsrfC.slice(0, 30));
+  const devJar = [devCookie, devCsrfC].filter(Boolean).join('; ');
+  const devCSRF = devCsrfC ? { 'X-Bandi-CSRF': decodeURIComponent(devCsrfC.split('=')[1]) } : {};
   check('claim 成功 → 200 + deviceId', ok1.status === 200 && !!ok1.json?.deviceId, JSON.stringify(ok1.json));
   check('Cookie 是 bandi_token=bd_…（HttpOnly）', /^bandi_token=bd_/.test(devCookie) && /HttpOnly/i.test(String(ok1.headers.get('set-cookie'))), devCookie.slice(0, 26));
   // 网页发的写请求（带 Origin）必须带 X-Bandi: 1，否则 guardWrite 拦 403 ——
@@ -173,7 +179,7 @@ try {
   check('GET /api/events → 200 + text/event-stream（不再是 403）', ev.status === 200 && /text\/event-stream/.test(ev.type), `${ev.status} ${ev.type}`);
   const st = await get(baseB, '/api/runs/__no_such_run__/stream', { Cookie: devCookie });
   check('GET /api/runs/:id/stream → 404（过了权限闸，不是 403）', st.status === 404, `${st.status} ${st.json?.code ?? ''}`);
-  const ab = await send(baseB, '/api/runs/__no_such_run__/abort', { headers: { Cookie: devCookie, 'X-Bandi': '1' } });
+  const ab = await send(baseB, '/api/runs/__no_such_run__/abort', { headers: { Cookie: devJar, 'X-Bandi': '1', ...devCSRF } });
   check('POST /api/runs/:id/abort → 200（过了权限闸，不是 403）', ab.status === 200, `${ab.status} ${ab.json?.code ?? ''}`);
 
   /*
@@ -181,10 +187,9 @@ try {
    * 注意 `/api/pair/devices` 这类走的是 decide() 的 E4033；`runtime-skills` 是
    * "前缀匹配顺带放行"最容易踩的坑，必须单独钉住。
    */
-  console.log('\n②.6 反例：受限视图碰不到的面必须仍 403');
+  console.log('\n②.6 反例：受限视图碰不到的面必须仍 403（未登记的是 404 E4090）');
   const forbiddenGets = [
     ['/api/pair/devices', '设备清单（含 IP/最近活跃）'],
-    ['/api/status', '项目进度账本'],
     ['/api/experts', '专家库（含磁盘路径）'],
     ['/api/plugins', '插件目录（含磁盘路径）'],
     ['/api/personas/p-xier/runtime-skills', '员工技能编辑视图（前缀匹配陷阱）'],
@@ -195,9 +200,14 @@ try {
     const r = await get(baseB, p, { Cookie: devCookie });
     check(`GET ${p} → 403（${why}）`, r.status === 403, `${r.status} ${r.json?.code ?? ''}`);
   }
-  const putPrefs = await send(baseB, '/api/prefs', { method: 'PUT', headers: { Cookie: devCookie, 'X-Bandi': '1' }, body: { replyStyle: 'concise' } });
-  check('PUT /api/prefs → 403（读放行、写不放行）', putPrefs.status === 403, `${putPrefs.status} ${putPrefs.json?.code ?? ''}`);
-  const postPersona = await send(baseB, '/api/personas', { headers: { Cookie: devCookie, 'X-Bandi': '1' }, body: { name: '越权员工' } });
+  // v2.8：裸 /api/status 没登记（本来就只有 /api/status/projects 有 handler）——
+  // 默认拒绝 doctrine 下它在认证之前就 404 E4090，连 403 都轮不到
+  const rStatus = await get(baseB, '/api/status', { Cookie: devCookie });
+  check('GET /api/status → 404 E4090（未登记默认拒绝，项目进度账本）', rStatus.status === 404 && rStatus.json?.code === 'E4090', `${rStatus.status} ${rStatus.json?.code ?? ''}`);
+  // v2.8：PUT /api/prefs 路径登记了（GET）但方法没登记 —— isRegistered 方法感知后 404 E4090
+  const putPrefs = await send(baseB, '/api/prefs', { method: 'PUT', headers: { Cookie: devJar, 'X-Bandi': '1', ...devCSRF }, body: { replyStyle: 'concise' } });
+  check('PUT /api/prefs → 404 E4090（GET 登记、PUT 没登记）', putPrefs.status === 404 && putPrefs.json?.code === 'E4090', `${putPrefs.status} ${putPrefs.json?.code ?? ''}`);
+  const postPersona = await send(baseB, '/api/personas', { headers: { Cookie: devJar, 'X-Bandi': '1', ...devCSRF }, body: { name: '越权员工' } });
   check('POST /api/personas → 403（受限视图没有这个写）', postPersona.status === 403, `${postPersona.status} ${postPersona.json?.code ?? ''}`);
 
   /* ----------------------------- ③ 设备令牌的读与写 */
@@ -215,19 +225,19 @@ try {
   const taskUrl = `/api/projects/tasks/${encodeURIComponent(card.json.task.id)}`;
 
   check('读卡详情 → 200', (await get(baseB, taskUrl, { Cookie: devCookie })).status === 200);
-  const patchOk = await send(baseB, taskUrl, { method: 'PATCH', headers: { Cookie: devCookie, 'X-Bandi': '1' }, body: { status: '已完成' } });
+  const patchOk = await send(baseB, taskUrl, { method: 'PATCH', headers: { Cookie: devJar, 'X-Bandi': '1', ...devCSRF }, body: { status: '已完成' } });
   check('手机改卡状态（审批）→ 200', patchOk.status === 200 && patchOk.json?.task?.status === '已完成', String(patchOk.status));
-  const patchTitle = await send(baseB, taskUrl, { method: 'PATCH', headers: { Cookie: devCookie, 'X-Bandi': '1' }, body: { title: '改标题' } });
+  const patchTitle = await send(baseB, taskUrl, { method: 'PATCH', headers: { Cookie: devJar, 'X-Bandi': '1', ...devCSRF }, body: { title: '改标题' } });
   check('手机改卡标题 → 403 E3702（字段级闸）', patchTitle.status === 403 && patchTitle.json?.code === 'E3702', `${patchTitle.status} ${patchTitle.json?.code ?? ''}`);
-  const patchMore = await send(baseB, taskUrl, { method: 'PATCH', headers: { Cookie: devCookie, 'X-Bandi': '1' }, body: { status: '待办', note: 'x', description: '越权' } });
+  const patchMore = await send(baseB, taskUrl, { method: 'PATCH', headers: { Cookie: devJar, 'X-Bandi': '1', ...devCSRF }, body: { status: '待办', note: 'x', description: '越权' } });
   check('手机多传字段 → 403 E3702', patchMore.status === 403 && patchMore.json?.code === 'E3702', `${patchMore.status} ${patchMore.json?.code ?? ''}`);
-  const del = await send(baseB, taskUrl, { method: 'DELETE', headers: { Cookie: devCookie, 'X-Bandi': '1' } });
+  const del = await send(baseB, taskUrl, { method: 'DELETE', headers: { Cookie: devJar, 'X-Bandi': '1', ...devCSRF } });
   check('手机删卡 → 403 E4033（白名单外）', del.status === 403 && del.json?.code === 'E4033', `${del.status} ${del.json?.code ?? ''}`);
-  const noteOk = await send(baseB, taskUrl + '/comments', { headers: { Cookie: devCookie, 'X-Bandi': '1' }, body: { text: '驳回：缺验收单', mode: 'note' } });
+  const noteOk = await send(baseB, taskUrl + '/comments', { headers: { Cookie: devJar, 'X-Bandi': '1', ...devCSRF }, body: { text: '驳回：缺验收单', mode: 'note' } });
   // 这张验收卡没指定执行人 → E1061"先指定执行人"。拿到 E1061（而不是 E3702/E4033）
   // 就证明设备的档位闸已经放行 note、请求真走到了业务逻辑 —— 这正是要验收的。
   check('手机留便签（note）过了档位闸（400 E1061 = 卡没执行人）', noteOk.status === 400 && noteOk.json?.code === 'E1061', `${noteOk.status} ${noteOk.json?.code ?? ''}`);
-  const execNo = await send(baseB, taskUrl + '/comments', { headers: { Cookie: devCookie, 'X-Bandi': '1' }, body: { text: '干活', mode: 'execute' } });
+  const execNo = await send(baseB, taskUrl + '/comments', { headers: { Cookie: devJar, 'X-Bandi': '1', ...devCSRF }, body: { text: '干活', mode: 'execute' } });
   check('手机发执行评论 → 403 E3702（只许便签）', execNo.status === 403 && execNo.json?.code === 'E3702', `${execNo.status} ${execNo.json?.code ?? ''}`);
   check('手机读设备列表（/api/devices）→ 403 E4033', (await get(baseB, '/api/devices', { Cookie: devCookie })).status === 403);
 

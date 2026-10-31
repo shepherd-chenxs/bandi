@@ -511,7 +511,7 @@ export function guard(auth, req, res, url) {
    * 都不存在（连"探测它要不要凭据"这个信息都不给）。新加路由必须先去
    * `security/route-policy.mjs` 登记，smoke 的覆盖率扫描会逼着两端同步。
    */
-  if (url.pathname.startsWith('/api/') && !isRegistered(url.pathname)) {
+  if (url.pathname.startsWith('/api/') && !isRegistered(url.pathname, req.method)) {
     res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
     res.end(
       JSON.stringify({

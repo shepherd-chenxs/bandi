@@ -20,6 +20,7 @@ import { port } from '../config.mjs';
 import * as netmode from '../netmode.mjs';
 import * as store from '../store.mjs';
 import * as auth from '../auth.mjs';
+import * as csrf from '../security/csrf.mjs';
 
 export async function handlePair(req, res, url) {
   const method = req.method;
@@ -70,10 +71,15 @@ export async function handlePair(req, res, url) {
       return fail(res, 409, 'E4701', '配对码已被使用 —— 一个码只能配一台设备');
     }
     const deviceToken = store.issueDeviceToken(device.id);
-    // Cookie 名沿用 bandi_token：EventSource 设不了自定义头，设备令牌靠它走 SSE（设计 §1.1）
+    // Cookie 名沿用 bandi_token：EventSource 设不了自定义头，设备令牌靠它走 SSE（设计 §1.1）。
+    // v2.8：与登录响应对齐，一并种 CSRF 双提交值（§10.2）—— 设备凭据在 Cookie 里，
+    // 写请求要过 E4099 闸，没有 csrf 值手机落地页的写操作全会被挡。
     res.setHeader(
       'Set-Cookie',
-      `bandi_token=${encodeURIComponent(deviceToken)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000`,
+      [
+        `bandi_token=${encodeURIComponent(deviceToken)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000`,
+        csrf.cookieFor(csrf.mint()),
+      ],
     );
     console.log(`[配对] 手机「${device.name}」已配对（${device.id}）`);
     return sendJson(res, 200, { ok: true, deviceId: device.id, name: device.name });

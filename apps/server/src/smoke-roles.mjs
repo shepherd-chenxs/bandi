@@ -167,7 +167,9 @@ try {
   const nullMenus = await call('PATCH', `/api/roles/${encodeURIComponent(customId)}`, { menuKeys: null });
   check('menuKeys: null → 400 E1116（清空要传 []）', nullMenus.status === 400 && nullMenus.body?.code === 'E1116', `${nullMenus.status} ${nullMenus.body?.code ?? ''}`);
   const badMethod = await call('PUT', `/api/roles/${encodeURIComponent(customId)}`, {});
-  check('PUT 角色 → 405 E1118', badMethod.status === 405 && badMethod.body?.code === 'E1118', `${badMethod.status} ${badMethod.body?.code ?? ''}`);
+  // v2.8：路由清单方法感知后，PUT 没登记 → 认证之前就 404 E4090（roles.mjs 里的
+  // 405 E1118 分支成了不可达兜底，留作纵深防御）
+  check('PUT 角色 → 404 E4090（方法没登记，默认拒绝）', badMethod.status === 404 && badMethod.body?.code === 'E4090', `${badMethod.status} ${badMethod.body?.code ?? ''}`);
   await stopAll();
   start();
   if (!(await waitUp())) throw new Error('重启后实例没起来：' + log.slice(-500));
