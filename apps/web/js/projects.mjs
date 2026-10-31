@@ -1075,7 +1075,8 @@ export function kbMobileRow(r, isAll) {
     : r.conversation_id
       ? `data-kb-conv="${esc(r.conversation_id)}"`
       : '';
-  const open = (r.source === 'manual' || r.source === 'repo') && r.manual_id
+  // 协作卡（2026-10-31）与手工/仓库卡同一族：卡本身也在 project_tasks 里，点得开详情
+  const open = (r.source === 'manual' || r.source === 'repo' || r.source === 'collab') && r.manual_id
     ? `data-kb-open="${esc(r.manual_id)}" tabindex="0"`
     : '';
   const proj = isAll && r.project_name
@@ -2084,6 +2085,8 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     : '';
   const proj = (S.projects ?? []).find((p) => p.id === task.projectId) ?? null;
   const isRepo = task.source === 'repo';
+  // 协作卡（2026-10-31）：内容是中心派下来的，本地只读标题/描述（改由中心改）
+  const isCollab = task.source === 'collab';
   // 流程派生的卡（sourceKey = flow:<runId>:<nodeId>:<visit>，2026-10-19）：身份由流程那一行代表，
   // 删了没意义——看板流程行照旧、下次点流程那步的「任务」还会再建一张。删除键不给它。
   const isFlowCard = !!task.sourceKey;
@@ -2405,7 +2408,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
   /* 页头右侧那颗「删除」：流程派生的卡不摆（身份由流程行代表，删了没意义 —— 2026-10-23 用户拍板）。
      ⚠️ 先算成常量再插值：这里是**外层模板里再嵌一层模板**，直接写 `${isFlowCard ? '' : '…'}`
         会被外层先吃掉，整段 `headRow(...)` 的调用就被切断了（多行再嵌引号尤其容易踩）。 */
-  const delBtn = isFlowCard ? '' : '<button class="tc-del" id="tcDel" title="删掉这张卡（＝忽略它）">删除</button>';
+  const delBtn = isFlowCard || isCollab ? '' : '<button class="tc-del" id="tcDel" title="删掉这张卡（＝忽略它）">删除</button>';
   host.innerHTML = `
     ${dlg ? '' : headRow(
       taskCardFromAll || !proj
@@ -2486,7 +2489,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
           ? `<div class="tc-prop"><span class="tc-prop-k">流程</span><span class="tc-prop-v">${esc(flowName)} <span class="dim">· 还没发起</span></span></div>`
           : ''}
         <div class="tc-prop"><span class="tc-prop-k">项目</span><span class="tc-prop-v">${esc(proj?.name ?? '（项目已不在）')}</span></div>
-        <div class="tc-prop"><span class="tc-prop-k">来源</span><span class="tc-prop-v">${isFlowCard ? '流程' : isRepo ? '仓库值班' : '手动建卡'}</span></div>
+        <div class="tc-prop"><span class="tc-prop-k">来源</span><span class="tc-prop-v">${isFlowCard ? '流程' : isCollab ? '总公司' : isRepo ? '仓库值班' : '手动建卡'}</span></div>
 
         <h3>Pull Request</h3>
         ${
@@ -2550,6 +2553,14 @@ export async function paintTaskCardPage(taskId, opts = {}) {
   /* 标题：h1 本身就可写（contenteditable）。**不换元素、不加边框** ——
      换 input 会改字号/行高/盒模型，页面会抖一下（2026-10-18 用户实报）。 */
   const titleEl = $('tcTitleText');
+  /*
+   * 协作卡（2026-10-31）：标题/描述**只读** —— 内容归中心（后端也会用 E4046 拦，
+   * 这里只是别让人白改一遍再被拒）。状态、执行人、评论照常能动。
+   */
+  if (isCollab) {
+    titleEl.removeAttribute('contenteditable');
+    titleEl.title = '总公司派的任务，标题由中心改';
+  }
   titleEl.addEventListener('input', () => { titleVal = titleEl.textContent; scheduleSave(700); });
   titleEl.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); titleEl.blur(); } // 单行标题：回车＝改完
@@ -2572,6 +2583,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     descHost.innerHTML = descVal ? renderMarkdown(descVal) : '<span class="dim">添加描述…</span>';
   };
   const startDescEdit = () => {
+    if (isCollab) return; // 协作卡的描述由中心写（同上）
     if (descHost.classList.contains('editing')) return;
     descHost.classList.add('editing');
     descHost.setAttribute('contenteditable', 'plaintext-only'); // 不给边框，只给可写
@@ -2793,7 +2805,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
   // 弹窗这条路**不摆「删除」**（2026-10-26 用户截图要求）：轻界面不承载不可逆动作；
   // 整页那条路在页头；流程派生的卡也不摆（身份由流程行代表，删了没意义 —— 2026-10-23 用户拍板）
   const delEl = dlg ? null : $('tcDel');
-  if (delEl && isFlowCard) delEl.remove();
+  if (delEl && (isFlowCard || isCollab)) delEl.remove();
   if (delEl) {
     delEl.onclick = async () => {
       if (!(await confirmDo('删掉这张任务卡？（＝忽略它，以后不再提）'))) return;
@@ -3489,7 +3501,9 @@ export function kbCard(r) {
    * 同一族：都能拖（**拖到哪一列就是人给的指令**）、都能删（＝忽略）。
    * 流程卡与聊天卡的状态归平台管，拖不动。
    */
-  const local = r.source === 'manual' || r.source === 'repo';
+  // 协作卡（2026-10-31）也算"本地卡"：能拖（拖到哪一列就是告诉中心'我干到哪一步了'）。
+  // 三条判据必须一起认 —— 漏一处卡就点不开、筛选也错（任务书 §十五 第 7 条）
+  const local = r.source === 'manual' || r.source === 'repo' || r.source === 'collab';
   const jump = r.source === 'flow'
     ? `data-kb-flow="${esc(r.flow_id)}" data-kb-tpl="${esc(r.template_id || '')}"`
     : r.conversation_id

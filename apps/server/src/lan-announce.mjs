@@ -171,7 +171,9 @@ function announcePayload(nonce) {
      */
     joinable: isJoinable({ ...lastSync }),
     version: localMode.platformVersion(),
-    caps: ['scope'],
+    // 能力声明：与 `/api/hello` 的 `caps` **同一份口径**（`'collab'` = 认识协作中心）。
+    // 两处必须一起加，否则会出现"一台能加、一台加不了"——见 server.mjs 的 helloPayload。
+    caps: ['scope', 'collab'],
     proto: 1,
   };
   let json = JSON.stringify(p);

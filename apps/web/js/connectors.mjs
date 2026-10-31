@@ -8,6 +8,8 @@ import { confirmDo, mountJoinPanel, renderBackupSection, renderCliDetail, render
 import { renderList } from './contacts.mjs';
 import { openProjectsPage, openTaskBoard } from './projects.mjs';
 import { openPlugins } from './experts.mjs';
+// 协作中心（2026-10-31 MVP）：「这台机器」页里的协作分节（加入 / 状态 / 退出）
+import { renderCollabSection, watchCollabSection } from './collab.mjs';
 import { $, LOCAL_BASE, S } from './core.mjs';
 
 
@@ -890,6 +892,9 @@ export async function renderDeviceList() {
       <div id="modeMount"></div>
       <div id="devMount"></div>
       <div id="joinSlot"></div>
+      <!-- 协作中心（2026-10-31 MVP）：分公司侧。加入 / 状态 / 退出都在这里；
+           节点形态的机器走另一套整页（renderNodeMode），这一页压根不渲染 —— 与「两种关系互斥」一致。 -->
+      <div id="collabMount"></div>
       <!-- 「数据管理」区（2026-10-29 从设置独立分节降级成这页的一个区，用户："把数据管理
            作为这台机器的一个区域"）：不跟模式走 —— 模式切换只重画上面两块，这里原地不动。
            数据自己拉（状态 + backups 列表），拉完才画，失败各有兜底。 -->
@@ -1002,11 +1007,24 @@ export async function renderDeviceList() {
     });
   };
 
+  /*
+   * 协作这一节（2026-10-31）：**不跟模式走** —— 单机 / 总机都可能加入协作中心
+   * （中心要求"正常面板的机器"，但没要求它一定在总机档）。所以它自己画、自己刷。
+   */
+  const paintCollab = () => {
+    const mount = $('collabMount');
+    if (!mount) return;
+    renderCollabSection(mount).catch(() => { /* 拉不到就空着，别把整页拖白 */ });
+    watchCollabSection(mount);
+  };
+  paintCollab();
+
   /* refresh(deep)：确认取消/请求失败只回拨模式卡高亮；切换**成功**传 deep=true，
      连着重画设备节与接入总机节（它们的显隐跟模式走） */
   const refresh = (deep) => {
     renderMode();
     if (deep) renderBody();
+    paintCollab(); // 整页那一层换过节点了，协作那一节得重新挂上（含它自己的状态轮询）
   };
   renderMode();
   renderBody();

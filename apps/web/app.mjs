@@ -16,6 +16,8 @@ import './js/chat.mjs';
 import './js/events.mjs';
 import './js/groups.mjs';
 import './js/experts.mjs';
+// 协作中心（2026-10-31 MVP）：中心页 + 分公司设置分节，一个模块两个半边
+import './js/collab.mjs';
 import './js/core.mjs';
 import './js/misc.mjs';
 // 手机端（2026-11 增量）：响应式壳（断点状态类 / 主从折叠 / 底部导航）与配对分节。

@@ -260,7 +260,7 @@ function flowCardRow(run, card) {
  * 本地卡（存在 `project_tasks` 里的）：人在列头「＋」建的手工卡，与**仓库值班**写进来的卡。
  * 同一族、同一张表 —— 都能拖（**卡的状态就是人给它的指令**）、都能删。
  */
-const SOURCE_TEXT = { manual: '手动', repo: '仓库值班' };
+const SOURCE_TEXT = { manual: '手动', repo: '仓库值班', collab: '总公司' };
 
 function manualRows(t) {
   const persona = t.assigneePersonaId ? store.getPersona(t.assigneePersonaId) : null;
@@ -1121,6 +1121,26 @@ export function updateProjectTask(id, fields = {}, { autoStart = true } = {}) {
     if (fields.assigneeUserId && !store.getUser(fields.assigneeUserId)) throw new Error('选的这个真人不在了');
     patch.assigneeUserId = fields.assigneeUserId || null;
     if (patch.assigneeUserId) patch.assigneePersonaId = null;
+  }
+
+  /*
+   * **协作卡**（2026-10-31 协作中心 MVP）：卡本身还是本地的卡（能指派、能评论、能走流程），
+   * 但**内容归中心**，三条硬边界：
+   *   ① 标题 / 描述**只读** —— 本地改了不回传，两边迟早不一致（要补充信息写评论，或让中心改）；
+   *   ② 不能自己判「已取消」—— 取消是中心的动作，本地改了中心不认，下一拍又盖回去；
+   *   ③ 终态（已完成 / 已取消）之后不能再改状态 —— 与中心那边"终态不可逆"同一口径。
+   * 「已完成」允许本地判（看板上拖到已完成是自然动作，硬拦会让人以为坏了，任务书 §2.1）。
+   */
+  if (cur.source === 'collab') {
+    if (fields.title !== undefined || fields.description !== undefined) {
+      throw Object.assign(new Error('总公司派的任务，标题/描述由中心改'), { code: 'E4046' });
+    }
+    if (patch.status === '已取消') {
+      throw Object.assign(new Error('取消由中心决定'), { code: 'E4046' });
+    }
+    if ((cur.status === '已完成' || cur.status === '已取消') && patch.status !== undefined) {
+      throw Object.assign(new Error('这条任务已经收了尾（已完成或已取消），不能再改'), { code: 'E4046' });
+    }
   }
 
   /*
