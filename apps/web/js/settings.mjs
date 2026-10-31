@@ -98,11 +98,11 @@ export function openMe() {
              </section>`
           : ''
       }
-      <div class="machine-actions">${
+      ${
         canLogout
-          ? '<button class="btn-sm" id="meLogout">退出登录</button>'
-          : '<div class="set-note" style="margin:0">这台机器是本机环境（回环免登录）：打开就是操作员，没有登录态可退。建了账号之后，启动时会先让你选账户。</div>'
-      }</div>
+          ? '<div class="machine-actions"><button class="btn-sm" id="meLogout">退出登录</button></div>'
+          : '<div class="set-note">这台机器是本机环境（回环免登录）：打开就是操作员，没有登录态可退。建了账号之后，启动时会先让你选账户。</div>'
+      }
     </div>`;
   $('meLogout')?.addEventListener('click', () => void logout());
   $('mePwd')?.addEventListener('click', () => openMePwdDlg(hasPw));
