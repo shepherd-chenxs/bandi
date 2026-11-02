@@ -23,6 +23,12 @@ import { sleep, stopRunning } from './lifecycle.mjs';
 const PORT = Number(process.env.SMOKE_PORT ?? 8807);
 const BASE = `http://127.0.0.1:${PORT}`;
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bandi-devroles-'));
+/*
+ * 种总机形态（2026-11-02）：显式监听不再自动当总机 —— `acceptNodes` 跟随 `allowLan`
+ * （默认 false），发邀请码会 409 E1091、后面整条节点链全连锁崩。这个用例钉的是
+ * 节点身份/角色下发，先把 netmode.json 写成「总机 + 收节点」。
+ */
+fs.writeFileSync(path.join(tmp, 'netmode.json'), JSON.stringify({ allowLan: true, acceptNodes: true }));
 const NODE_DATA = path.join(tmp, 'node-side'); // 模拟"那台被管的机器"的数据目录
 const SERVER = path.join(repoRoot, 'apps', 'server', 'src', 'server.mjs');
 const NODE = path.join(repoRoot, 'apps', 'server', 'src', 'node.mjs');
