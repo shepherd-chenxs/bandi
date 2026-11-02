@@ -62,6 +62,13 @@ const HOST_ALLOW = [
   // 实际 origin），CSP 的 connect-src 必须放它，否则前端调不了任何 command。
   // 2026-11 新增 apps/mobile 时被误判成"外部地址"。
   'ipc.localhost',
+  // 手机壳（Android WebView）本地页的固定 origin `http://tauri.localhost` ——
+  // Tauri v2 自定义协议在 Android 上的实际 origin（tauri.conf.json 未开 useHttpsScheme）。
+  // 壳的自定义命令只对本地页放行（apps/web/js/mobile.mjs 的 SHELL_ORIGIN），不是外部地址。
+  'tauri.localhost',
+  // `new URL(req.url, 'http://x')` 的占位 base（apps/server/src/server.mjs 的审计埋点）：
+  // 只为解析 pathname 而设，URL 构造器要求 base 参数，永远不会真的请求它，不是网络地址。
+  'x',
   // 飞书开放平台（2026-10-28）：用户**自建飞书应用**的官方 API 域名 ——
   // 不是中转站/网关；飞书通道（apps/server/src/feishu.mjs）按官方协议直连它，
   // 与 larksuite/node-sdk 用的是同一个 host。见 docs/架构.md「飞书通道」。
