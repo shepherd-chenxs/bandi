@@ -102,6 +102,12 @@ function literalRegistered(lit) {
 /* ----------------------------------------------------- C. 真服务身份矩阵 */
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bandi-secpol-'));
+/*
+ * 种总机形态（2026-11-02）：显式监听不再自动当总机 —— `acceptNodes` 没显式写过就跟随
+ * `allowLan`（默认 false），发邀请码会 409 E1091、后面整条节点链全连锁崩。这里的用例
+ * 就是要钉节点令牌的身份矩阵，所以先把 netmode.json 写成「总机 + 收节点」。
+ */
+fs.writeFileSync(path.join(tmp, 'netmode.json'), JSON.stringify({ allowLan: true, acceptNodes: true }));
 let child = null;
 const started = [];
 function startSrv(extra = {}) {

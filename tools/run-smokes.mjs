@@ -27,6 +27,16 @@ const rel = (p) => path.relative(repo, p).split(path.sep).join('/');
 /** 要跑的：都不碰真实 data/、不要真实 CLI、不联网 */
 const RUN = [
   'apps/server/src/smoke-agent-cards.mjs',
+  // IAM 安全收编（Phase 1–3）的 8 个用例（2026-11-02 补登记）：策略表 / 审计 / CSRF /
+  // bootstrap / 本机策略 / 反代鉴权 / 安全策略 / 票据，全部临时数据目录、不联网
+  'apps/server/src/smoke-admin-invariant.mjs',
+  'apps/server/src/smoke-audit.mjs',
+  'apps/server/src/smoke-bootstrap.mjs',
+  'apps/server/src/smoke-csrf.mjs',
+  'apps/server/src/smoke-local-policy.mjs',
+  'apps/server/src/smoke-proxy-auth.mjs',
+  'apps/server/src/smoke-security-policy.mjs',
+  'apps/server/src/smoke-token.mjs',
   'apps/server/src/smoke-auth.mjs',
   'apps/server/src/smoke-autostart.mjs',
   'apps/server/src/smoke-chat-to-board.mjs',
