@@ -135,7 +135,17 @@
     <div class="list-title" id="listTitle"><b>消息</b></div>
     <button id="listAction" class="mini" title="新建数字员工">＋</button>
   </div>
-  <div class="list-search"><input id="search" placeholder="搜索" /></div>
+  <!-- 搜索框（2026-11-02 二十八改）：图标 + 清空 × + Ctrl/⌘K 提示 ——
+       全站共用一个 #search，脚本只接线不改结构（app.mjs 的 input 委托负责 S.filter）。 -->
+  <div class="list-search"><div class="ls-field">
+    <svg class="ls-ico" width="13" height="13" viewBox="0 0 13 13" aria-hidden="true">
+      <circle cx="5.5" cy="5.5" r="4" fill="none" stroke="currentColor" stroke-width="1.4"/>
+      <path d="M8.7 8.7 12 12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+    </svg>
+    <input id="search" placeholder="搜索" aria-label="搜索" />
+    <button id="searchClear" class="ls-clear" type="button" aria-label="清空搜索" title="清空">×</button>
+    <kbd class="ls-kbd" aria-hidden="true">Ctrl K</kbd>
+  </div></div>
   <div class="list-body" id="listBody"></div>
   <div class="list-foot" id="listFoot"></div>
 </div>
@@ -503,7 +513,7 @@
   通用的「问一句 / 确认一下」。
 
   为什么不用原生的 prompt() / confirm()（2026-10-16 用户指着改名那个框说的）：那是**浏览器**的框 ——
-  标题栏里印着 `127.0.0.1:8787 显示`，跟班底长得不是一个东西，而且没法用班底自己的样式与说明。
+  标题栏里印着 `127.0.0.1:18787 显示`，跟班底长得不是一个东西，而且没法用班底自己的样式与说明。
   这一个 dialog 同时管两件事：`askText`（要一段文字，有输入框）和 `askConfirm`（只要一个是/否）。
 -->
 <dialog id="askDlg">
@@ -531,29 +541,8 @@
   </form>
 </dialog>
 
-<!--
-  「让一台新机器加入」：发一个**一次性邀请码**，把能直接粘的整条命令摆出来。
-
-  为什么要有这一步（2026-10-16）：节点原来用的是总机那枚 master 令牌 ✗ ——
-  一台节点被翻等于整套被翻，而且「忘掉」踢不掉它（令牌还有效）。
-  现在换成"邀请码 → 每节点一枚自己的令牌"，界面上就得有个地方**发这个码**、
-  并且把"下一步在那台机器上粘什么"摆清楚（不然用户拿到码也不知道干嘛）。
--->
-<dialog id="joinDlg">
-  <form method="dialog">
-    <b>让一台新机器加入</b>
-    <div class="dim" style="margin-top:8px;font-size:12.5px;line-height:1.75">
-      在那台机器上跑下面这条。它凭这个<b>一次性</b>的码，换回<b>只属于它自己</b>的一枚令牌 ——
-      那枚只能干它自己那台的事（报到/心跳/领活/回传），读对话、改员工、看设备名单都不行。
-    </div>
-    <pre id="joinCmd" style="margin-top:12px;padding:10px 12px;background:var(--input);border:1px solid var(--line);border-radius:8px;font-size:11.5px;line-height:1.7;white-space:pre-wrap;word-break:break-all;max-height:230px;overflow:auto"></pre>
-    <div class="dlg-actions">
-      <button type="button" value="cancel">关闭</button>
-      <button type="button" class="primary" id="joinCopy">复制命令</button>
-    </div>
-    <div id="joinFoot" class="dim" style="font-size:11.5px;line-height:1.7;margin-top:10px;border-top:1px solid var(--line);padding-top:10px"></div>
-  </form>
-</dialog>
+<!-- 2026-11-01 撤掉「让一台新机器加入」弹窗：只发码不派活（说明见 js/connectors.mjs
+     的 renderBody）。发码改 `bandi nodes invite`。 -->
 
 <!-- 岗位的建议列表：内容由 js/misc.mjs 从 ROLE_SUGGEST 填（一处定义，别在 HTML 里再抄一份） -->
 <datalist id="roleSuggest"></datalist>

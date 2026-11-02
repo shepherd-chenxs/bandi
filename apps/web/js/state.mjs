@@ -80,6 +80,12 @@ export async function load(opts = {}) {
   S.conversations = s.conversations;
   S.repoRoot = s.repoRoot;
   S.me = s.me;
+  // 本机安全形态（IAM §10.1.3，2026-10-31）：`localSecret === 'required'` = 服务器形态 ——
+  // 前端据此**不渲染**破坏性本机按钮（数据导出/导入、协作加入/退出、算力加入），
+  // 换成"请在本机终端执行 bandi …"的提示；`source` 是"当前浏览器是不是本机"。
+  // 页面不猜：字段没有（旧服务）就当 not-required，行为与从前一致。
+  S.localSecret = s.localSecret ?? 'not-required';
+  S.bandiSource = s.source ?? 'loopback';
   // 真人名册（2026-10-31 用户概念落地）：通讯录「成员」段与看板派活选真人用
   S.users = s.users ?? [];
   S.skills = sk.skills;
@@ -276,6 +282,15 @@ export function setNav(nav, opts = {}) {
   closeAddMenu();
   // 工作台是整页宫格，二级列表栏在那儿没用 —— 整列收掉（见 CSS 的 body.no-list）。专家库、我的页同理。
   document.body.classList.toggle('no-list', nav === 'plugins' || nav === 'experts' || nav === 'me');
+  /*
+   * 占位文案按栏回落（2026-11-02）：各页在自己的 renderList 分支里改 placeholder
+   * （搜流程 / 搜项目名 / 搜索设置 …），换栏时先归位默认值，否则从设置切回消息，
+   * 框里还写着「搜索设置」。默认值必须在 renderList **之前**写 —— 页面自己的覆盖后到。
+   */
+  if (prevNav !== nav) {
+    const si = $('search');
+    if (si) si.placeholder = '搜索';
+  }
   renderList();
   savePlace();   // 换了位置就记下来，刷新后能回来
   // 通讯录要看实时忙/闲 → 开着这一页时轮询；离开自动停

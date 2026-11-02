@@ -2,12 +2,14 @@
  * 手机配对链路的验收（2026-11 手机端增量，T01）。
  *
  * 钉住的是设计 §3.2/§3.3 的那套边界：
- *   ① 操作员发一次性配对码（bp_，5 分钟）→ claim 换长期设备令牌（bd_，Cookie bandi_token）；
+ *   ① 操作员发一次性邀请码（9 位数字，2026-11-01 起的主路径；旧 bp_ 长令牌仍认）
+ *      → claim 换长期设备令牌（bd_，Cookie bandi_token）；
  *   ② 一次性：同一个码第二次 claim → 409 E4701；瞎编的码 → 400 E1702；格式不对 → 400 E1701；
  *   ③ 设备令牌的白名单：读 200；PATCH 卡改 status 200；改 title → 403 E3702（字段级闸）；
  *      DELETE 卡 → 403 E4033（白名单外）；POST 卡评论 execute → 403 E3702（只许便签）；
  *   ④ 设备管理只对操作员开（403 E3701）；踢出（revoke）后原令牌 401 E4010；
- *   ⑤ 回环形态（免鉴权）下 operator 动作照常可用 —— 单机自测不被自己的闸挡住。
+ *   ⑤ 一机一刀（2026-11-01）：新 claim 顶掉旧设备（行删光）；同一 clientKey 重配复用同一行；
+ *   ⑥ 回环形态（免鉴权）下 operator 动作照常可用 —— 单机自测不被自己的闸挡住。
  *
  * 隔离：临时数据目录 + 临时端口（对齐 smoke-auth.mjs 的 spawn 模式）。
  * 跑法：node apps/server/src/smoke-pair.mjs
@@ -112,21 +114,27 @@ try {
   check('不带令牌发码 → 401', noTok.status === 401, String(noTok.status));
 
   const inv = await send(baseB, '/api/pair/tokens', { headers: op });
-  check('操作员能发配对码', inv.status === 200 && /^bp_/.test(inv.json?.token ?? ''), String(inv.json?.token ?? '').slice(0, 8));
+  check('操作员能发邀请码（9 位数字）', inv.status === 200 && /^\d{9}$/.test(inv.json?.code ?? ''), String(inv.json?.code ?? ''));
   check('配对码带过期时间', !!inv.json?.expiresAt, String(inv.json?.expiresAt ?? ''));
   check('给出候选地址（urls）', Array.isArray(inv.json?.urls) && inv.json.urls.length >= 1, JSON.stringify(inv.json?.urls ?? []));
 
   /* ----------------------------- ② claim：换 bd_ 令牌 */
   console.log('\n② claim：一次性码换设备令牌');
-  const claim = async (tk, extra = {}) =>
-    send(baseB, '/api/pair/claim', { body: { token: tk, name: '测试手机', ...extra }, headers: { 'X-Bandi': '1' } });
+  const claim = async (code, extra = {}) =>
+    send(baseB, '/api/pair/claim', { body: { code, name: '测试手机', ...extra }, headers: { 'X-Bandi': '1' } });
   const bad1 = await claim('hello');
   check('格式不对的码 → 400 E1701', bad1.status === 400 && bad1.json?.code === 'E1701', `${bad1.status} ${bad1.json?.code ?? ''}`);
   const bad2 = await claim('bp_zzzzzzzzzzzz');
   check('瞎编的码 → 400 E1702', bad2.status === 400 && bad2.json?.code === 'E1702', `${bad2.status} ${bad2.json?.code ?? ''}`);
 
-  const ok1 = await claim(inv.json.token);
+  const ok1 = await claim(inv.json.code, { clientKey: 'key-first-device-001' });
   const devCookie = String(ok1.headers.get('set-cookie') ?? '').split(';')[0];
+  // v2.8：claim 与登录对齐一并种 bandi_csrf（E4099 双提交）—— 设备 jar 也要
+  // cookie+头两样都带（模拟浏览器：JS 读 cookie 再放头里）
+  const devCsrfC = (ok1.headers.getSetCookie?.() ?? []).map((c) => c.split(';')[0]).find((c) => c.startsWith('bandi_csrf=')) ?? '';
+  check('claim 一并种了 bandi_csrf（非 HttpOnly）', !!devCsrfC && !/httponly/i.test(devCsrfC), devCsrfC.slice(0, 30));
+  const devJar = [devCookie, devCsrfC].filter(Boolean).join('; ');
+  const devCSRF = devCsrfC ? { 'X-Bandi-CSRF': decodeURIComponent(devCsrfC.split('=')[1]) } : {};
   check('claim 成功 → 200 + deviceId', ok1.status === 200 && !!ok1.json?.deviceId, JSON.stringify(ok1.json));
   check('Cookie 是 bandi_token=bd_…（HttpOnly）', /^bandi_token=bd_/.test(devCookie) && /HttpOnly/i.test(String(ok1.headers.get('set-cookie'))), devCookie.slice(0, 26));
   // 网页发的写请求（带 Origin）必须带 X-Bandi: 1，否则 guardWrite 拦 403 ——
@@ -137,7 +145,7 @@ try {
   });
   check('带 Origin 但缺 X-Bandi 的 claim → 403（CSRF 闸真在拦）', noXBandi.status === 403, String(noXBandi.status));
 
-  const again = await claim(inv.json.token);
+  const again = await claim(inv.json.code);
   check('同一个码第二次 claim → 409 E4701', again.status === 409 && again.json?.code === 'E4701', `${again.status} ${again.json?.code ?? ''}`);
 
   /*
@@ -173,7 +181,7 @@ try {
   check('GET /api/events → 200 + text/event-stream（不再是 403）', ev.status === 200 && /text\/event-stream/.test(ev.type), `${ev.status} ${ev.type}`);
   const st = await get(baseB, '/api/runs/__no_such_run__/stream', { Cookie: devCookie });
   check('GET /api/runs/:id/stream → 404（过了权限闸，不是 403）', st.status === 404, `${st.status} ${st.json?.code ?? ''}`);
-  const ab = await send(baseB, '/api/runs/__no_such_run__/abort', { headers: { Cookie: devCookie, 'X-Bandi': '1' } });
+  const ab = await send(baseB, '/api/runs/__no_such_run__/abort', { headers: { Cookie: devJar, 'X-Bandi': '1', ...devCSRF } });
   check('POST /api/runs/:id/abort → 200（过了权限闸，不是 403）', ab.status === 200, `${ab.status} ${ab.json?.code ?? ''}`);
 
   /*
@@ -181,10 +189,9 @@ try {
    * 注意 `/api/pair/devices` 这类走的是 decide() 的 E4033；`runtime-skills` 是
    * "前缀匹配顺带放行"最容易踩的坑，必须单独钉住。
    */
-  console.log('\n②.6 反例：受限视图碰不到的面必须仍 403');
+  console.log('\n②.6 反例：受限视图碰不到的面必须仍 403（未登记的是 404 E4090）');
   const forbiddenGets = [
     ['/api/pair/devices', '设备清单（含 IP/最近活跃）'],
-    ['/api/status', '项目进度账本'],
     ['/api/experts', '专家库（含磁盘路径）'],
     ['/api/plugins', '插件目录（含磁盘路径）'],
     ['/api/personas/p-xier/runtime-skills', '员工技能编辑视图（前缀匹配陷阱）'],
@@ -195,9 +202,14 @@ try {
     const r = await get(baseB, p, { Cookie: devCookie });
     check(`GET ${p} → 403（${why}）`, r.status === 403, `${r.status} ${r.json?.code ?? ''}`);
   }
-  const putPrefs = await send(baseB, '/api/prefs', { method: 'PUT', headers: { Cookie: devCookie, 'X-Bandi': '1' }, body: { replyStyle: 'concise' } });
-  check('PUT /api/prefs → 403（读放行、写不放行）', putPrefs.status === 403, `${putPrefs.status} ${putPrefs.json?.code ?? ''}`);
-  const postPersona = await send(baseB, '/api/personas', { headers: { Cookie: devCookie, 'X-Bandi': '1' }, body: { name: '越权员工' } });
+  // v2.8：裸 /api/status 没登记（本来就只有 /api/status/projects 有 handler）——
+  // 默认拒绝 doctrine 下它在认证之前就 404 E4090，连 403 都轮不到
+  const rStatus = await get(baseB, '/api/status', { Cookie: devCookie });
+  check('GET /api/status → 404 E4090（未登记默认拒绝，项目进度账本）', rStatus.status === 404 && rStatus.json?.code === 'E4090', `${rStatus.status} ${rStatus.json?.code ?? ''}`);
+  // v2.8：PUT /api/prefs 路径登记了（GET）但方法没登记 —— isRegistered 方法感知后 404 E4090
+  const putPrefs = await send(baseB, '/api/prefs', { method: 'PUT', headers: { Cookie: devJar, 'X-Bandi': '1', ...devCSRF }, body: { replyStyle: 'concise' } });
+  check('PUT /api/prefs → 404 E4090（GET 登记、PUT 没登记）', putPrefs.status === 404 && putPrefs.json?.code === 'E4090', `${putPrefs.status} ${putPrefs.json?.code ?? ''}`);
+  const postPersona = await send(baseB, '/api/personas', { headers: { Cookie: devJar, 'X-Bandi': '1', ...devCSRF }, body: { name: '越权员工' } });
   check('POST /api/personas → 403（受限视图没有这个写）', postPersona.status === 403, `${postPersona.status} ${postPersona.json?.code ?? ''}`);
 
   /* ----------------------------- ③ 设备令牌的读与写 */
@@ -215,19 +227,19 @@ try {
   const taskUrl = `/api/projects/tasks/${encodeURIComponent(card.json.task.id)}`;
 
   check('读卡详情 → 200', (await get(baseB, taskUrl, { Cookie: devCookie })).status === 200);
-  const patchOk = await send(baseB, taskUrl, { method: 'PATCH', headers: { Cookie: devCookie, 'X-Bandi': '1' }, body: { status: '已完成' } });
+  const patchOk = await send(baseB, taskUrl, { method: 'PATCH', headers: { Cookie: devJar, 'X-Bandi': '1', ...devCSRF }, body: { status: '已完成' } });
   check('手机改卡状态（审批）→ 200', patchOk.status === 200 && patchOk.json?.task?.status === '已完成', String(patchOk.status));
-  const patchTitle = await send(baseB, taskUrl, { method: 'PATCH', headers: { Cookie: devCookie, 'X-Bandi': '1' }, body: { title: '改标题' } });
+  const patchTitle = await send(baseB, taskUrl, { method: 'PATCH', headers: { Cookie: devJar, 'X-Bandi': '1', ...devCSRF }, body: { title: '改标题' } });
   check('手机改卡标题 → 403 E3702（字段级闸）', patchTitle.status === 403 && patchTitle.json?.code === 'E3702', `${patchTitle.status} ${patchTitle.json?.code ?? ''}`);
-  const patchMore = await send(baseB, taskUrl, { method: 'PATCH', headers: { Cookie: devCookie, 'X-Bandi': '1' }, body: { status: '待办', note: 'x', description: '越权' } });
+  const patchMore = await send(baseB, taskUrl, { method: 'PATCH', headers: { Cookie: devJar, 'X-Bandi': '1', ...devCSRF }, body: { status: '待办', note: 'x', description: '越权' } });
   check('手机多传字段 → 403 E3702', patchMore.status === 403 && patchMore.json?.code === 'E3702', `${patchMore.status} ${patchMore.json?.code ?? ''}`);
-  const del = await send(baseB, taskUrl, { method: 'DELETE', headers: { Cookie: devCookie, 'X-Bandi': '1' } });
+  const del = await send(baseB, taskUrl, { method: 'DELETE', headers: { Cookie: devJar, 'X-Bandi': '1', ...devCSRF } });
   check('手机删卡 → 403 E4033（白名单外）', del.status === 403 && del.json?.code === 'E4033', `${del.status} ${del.json?.code ?? ''}`);
-  const noteOk = await send(baseB, taskUrl + '/comments', { headers: { Cookie: devCookie, 'X-Bandi': '1' }, body: { text: '驳回：缺验收单', mode: 'note' } });
+  const noteOk = await send(baseB, taskUrl + '/comments', { headers: { Cookie: devJar, 'X-Bandi': '1', ...devCSRF }, body: { text: '驳回：缺验收单', mode: 'note' } });
   // 这张验收卡没指定执行人 → E1061"先指定执行人"。拿到 E1061（而不是 E3702/E4033）
   // 就证明设备的档位闸已经放行 note、请求真走到了业务逻辑 —— 这正是要验收的。
   check('手机留便签（note）过了档位闸（400 E1061 = 卡没执行人）', noteOk.status === 400 && noteOk.json?.code === 'E1061', `${noteOk.status} ${noteOk.json?.code ?? ''}`);
-  const execNo = await send(baseB, taskUrl + '/comments', { headers: { Cookie: devCookie, 'X-Bandi': '1' }, body: { text: '干活', mode: 'execute' } });
+  const execNo = await send(baseB, taskUrl + '/comments', { headers: { Cookie: devJar, 'X-Bandi': '1', ...devCSRF }, body: { text: '干活', mode: 'execute' } });
   check('手机发执行评论 → 403 E3702（只许便签）', execNo.status === 403 && execNo.json?.code === 'E3702', `${execNo.status} ${execNo.json?.code ?? ''}`);
   check('手机读设备列表（/api/devices）→ 403 E4033', (await get(baseB, '/api/devices', { Cookie: devCookie })).status === 403);
 
@@ -252,14 +264,92 @@ try {
   const afterRevoke = await get(baseB, '/api/state', { Cookie: devCookie });
   check('被踢出后原令牌 → 401 E4010', afterRevoke.status === 401 && afterRevoke.json?.code === 'E4010', `${afterRevoke.status} ${afterRevoke.json?.code ?? ''}`);
 
-  /* ----------------------------- ⑤ 回环形态（免鉴权）照常可用 */
-  console.log('\n⑤ 回环形态（单机免鉴权）：operator 动作照常可用');
+  /* ----------------------------- ⑤ 一机一刀：断开 / 连回来 / 复用（2026-11-01） */
+  console.log('\n⑤ 一机一刀：断开连接 ≠ 取消配对');
+  const devRowId = devRow.id;
+  const inv3 = await send(baseB, '/api/pair/tokens', { headers: op });
+  const ok3 = await send(baseB, '/api/pair/claim', {
+    body: { code: inv3.json.code, name: '第二台手机', clientKey: 'key-second-device-01' },
+    headers: { 'X-Bandi': '1' },
+  });
+  check('第二台手机 claim → 200（新 deviceId）', ok3.status === 200 && !!ok3.json?.deviceId && ok3.json.deviceId !== devRowId, JSON.stringify(ok3.json));
+  const secondCookie = String(ok3.headers.get('set-cookie') ?? '').split(';')[0];
+  const afterEvict = await get(baseB, '/api/state', { Cookie: devCookie });
+  check('旧手机的令牌立刻失效 → 401', afterEvict.status === 401 && afterEvict.json?.code === 'E4010', `${afterEvict.status} ${afterEvict.json?.code ?? ''}`);
+  const devsAfterEvict = await get(baseB, '/api/pair/devices', op);
+  const oldRow = (devsAfterEvict.json?.devices ?? []).find((d) => d.id === devRowId);
+  check('旧手机只是「已断开」：行还在、带 disconnectedAt、令牌归零',
+    !!oldRow && !!oldRow.disconnectedAt && oldRow.tokenCount === 0,
+    JSON.stringify(oldRow ? { disconnectedAt: oldRow.disconnectedAt, tokenCount: oldRow.tokenCount } : null));
+  check('列表里 2 条记录（1 在用 + 1 已断开）', devsAfterEvict.json?.devices?.length === 2, String(devsAfterEvict.json?.devices?.length ?? 0));
+
+  /* 有人在用时连不回来 */
+  const busy = await send(baseB, '/api/pair/resume', { body: { clientKey: 'key-first-device-001' }, headers: { 'X-Bandi': '1' } });
+  check('别的手机在用 → 连回来被拒 409 E1705', busy.status === 409 && busy.json?.code === 'E1705', `${busy.status} ${busy.json?.code ?? ''}`);
+
+  /* 断开第二台 → 第一台能连回来（不用重新扫码） */
+  const dis = await send(baseB, `/api/pair/devices/${encodeURIComponent(ok3.json.deviceId)}/disconnect`, { headers: op });
+  check('断开连接 → 200', dis.status === 200, `${dis.status} ${dis.json?.code ?? ''}`);
+  const back = await send(baseB, '/api/pair/resume', { body: { clientKey: 'key-first-device-001' }, headers: { 'X-Bandi': '1' } });
+  check('断开的手机凭 clientKey 连回来 → 200（同一 deviceId）', back.status === 200 && back.json?.deviceId === devRowId, JSON.stringify(back.json));
+  const backCookie = String(back.headers.get('set-cookie') ?? '').split(';')[0];
+  check('连回来后新令牌能读 /api/state', (await get(baseB, '/api/state', { Cookie: backCookie })).status === 200);
+  const devsAfterBack = await get(baseB, '/api/pair/devices', op);
+  const backRow = (devsAfterBack.json?.devices ?? []).find((d) => d.id === devRowId);
+  check('连回来后 disconnectedAt 清空', !!backRow && backRow.disconnectedAt === null, JSON.stringify(backRow?.disconnectedAt ?? null));
+
+  /* 同一台手机重配：复用同一行，并让前一台转成已断开 */
+  const inv4 = await send(baseB, '/api/pair/tokens', { headers: op });
+  const ok4 = await send(baseB, '/api/pair/claim', {
+    body: { code: inv4.json.code, name: '第二台手机', clientKey: 'key-second-device-01' },
+    headers: { 'X-Bandi': '1' },
+  });
+  check('同一台手机（同 clientKey）重配 → 复用同一 deviceId', ok4.status === 200 && ok4.json?.deviceId === ok3.json.deviceId, JSON.stringify(ok4.json));
+  const devsAfterReuse = await get(baseB, '/api/pair/devices', op);
+  check('重配不新增记录（仍 2 条）', devsAfterReuse.json?.devices?.length === 2, String(devsAfterReuse.json?.devices?.length ?? 0));
+  check('被顶下去的又变回「已断开」', (devsAfterReuse.json?.devices ?? []).find((d) => d.id === devRowId)?.disconnectedAt !== null, '');
+  const secondCookie2 = String(ok4.headers.get('set-cookie') ?? '').split(';')[0];
+  check('第二台手机重新在用（重配发的令牌可用）', (await get(baseB, '/api/state', { Cookie: secondCookie2 })).status === 200);
+  check('第二台手机的旧令牌已作废（同一台设备只留一把钥匙）', (await get(baseB, '/api/state', { Cookie: secondCookie })).status === 401);
+
+  /* 没配过的 clientKey：不能凭猜连进来 */
+  const ghost = await send(baseB, '/api/pair/resume', { body: { clientKey: 'key-never-paired-99' }, headers: { 'X-Bandi': '1' } });
+  check('没配过的 clientKey → 404 E1706', ghost.status === 404 && ghost.json?.code === 'E1706', `${ghost.status} ${ghost.json?.code ?? ''}`);
+
+  /* ----------------------------- ⑤.5 手机自己断开（2026-11-02：/api/pair/leave） */
+  console.log('\n⑤.5 手机自己断开：/api/pair/leave（记录留着，能连回来）');
+  /* ok4 的 jar：设备令牌 + bandi_csrf（写请求要双提交） */
+  const jar4 = (ok4.headers.getSetCookie?.() ?? []).map((c) => c.split(';')[0]);
+  const csrfCookie4 = jar4.find((c) => c.startsWith('bandi_csrf=')) ?? '';
+  const dev4 = { Cookie: jar4.filter((c) => /^bandi_(token|csrf)=/.test(c)).join('; '),
+    ...(csrfCookie4 ? { 'X-Bandi-CSRF': decodeURIComponent(csrfCookie4.split('=')[1]) } : {}) };
+
+  const leaveOp = await send(baseB, '/api/pair/leave', { headers: op });
+  check('操作员调 leave → 403 E2702（这个口只给手机身份）',
+    leaveOp.status === 403 && leaveOp.json?.code === 'E2702', `${leaveOp.status} ${leaveOp.json?.code ?? ''}`);
+
+  const leaveOk = await send(baseB, '/api/pair/leave', { headers: dev4 });
+  check('手机自己断开 → 200 且收走令牌', leaveOk.status === 200 && (leaveOk.json?.revoked ?? 0) >= 1, JSON.stringify(leaveOk.json));
+  check('断开后旧令牌立刻失效（/api/state 401）', (await get(baseB, '/api/state', { Cookie: secondCookie2 })).status === 401);
+
+  const devsAfterLeave = await get(baseB, '/api/pair/devices', op);
+  const leaveRow = (devsAfterLeave.json?.devices ?? []).find((d) => d.id === ok4.json.deviceId);
+  check('电脑端看到的是「已断开」：行留着、disconnectedAt 有值、令牌归零',
+    !!leaveRow && !!leaveRow.disconnectedAt && leaveRow.tokenCount === 0,
+    JSON.stringify(leaveRow ? { disconnectedAt: leaveRow.disconnectedAt, tokenCount: leaveRow.tokenCount } : null));
+
+  const backAfterLeave = await send(baseB, '/api/pair/resume', { body: { clientKey: 'key-second-device-01' }, headers: { 'X-Bandi': '1' } });
+  check('断开 ≠ 取消配对：同机 clientKey 还能连回来（同一 deviceId）',
+    backAfterLeave.status === 200 && backAfterLeave.json?.deviceId === ok4.json.deviceId, JSON.stringify(backAfterLeave.json));
+
+  /* ----------------------------- ⑥ 回环形态（免鉴权）照常可用 */
+  console.log('\n⑥ 回环形态（单机免鉴权）：operator 动作照常可用');
   const a = start(P_LOOP, { BANDI_HOST: '127.0.0.1' });
   const baseA = `http://127.0.0.1:${P_LOOP}`;
   if (!(await waitUp(baseA))) throw new Error('回环实例没起来：' + a.log().slice(-400));
   const inv2 = await send(baseA, '/api/pair/tokens');
-  check('免鉴权下发码 → 200', inv2.status === 200 && /^bp_/.test(inv2.json?.token ?? ''), String(inv2.status));
-  const ok2 = await send(baseA, '/api/pair/claim', { body: { token: inv2.json.token, name: '回环手机' }, headers: { 'X-Bandi': '1' } });
+  check('免鉴权下发码 → 200', inv2.status === 200 && /^\d{9}$/.test(inv2.json?.code ?? ''), String(inv2.json?.code ?? ''));
+  const ok2 = await send(baseA, '/api/pair/claim', { body: { code: inv2.json.code, name: '回环手机' }, headers: { 'X-Bandi': '1' } });
   check('免鉴权下 claim → 200', ok2.status === 200 && !!ok2.json?.deviceId, JSON.stringify(ok2.json));
   const cookie2 = String(ok2.headers.get('set-cookie') ?? '').split(';')[0];
   check('设备令牌在回环形态照常能读', (await get(baseA, '/api/state', { Cookie: cookie2 })).status === 200);

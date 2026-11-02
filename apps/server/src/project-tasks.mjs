@@ -260,7 +260,7 @@ function flowCardRow(run, card) {
  * 本地卡（存在 `project_tasks` 里的）：人在列头「＋」建的手工卡，与**仓库值班**写进来的卡。
  * 同一族、同一张表 —— 都能拖（**卡的状态就是人给它的指令**）、都能删。
  */
-const SOURCE_TEXT = { manual: '手动', repo: '仓库值班' };
+const SOURCE_TEXT = { manual: '手动', repo: '仓库值班', collab: '总公司' };
 
 function manualRows(t) {
   const persona = t.assigneePersonaId ? store.getPersona(t.assigneePersonaId) : null;
@@ -500,6 +500,52 @@ function allRows(projects, byId, runs, { withChat = false } = {}) {
 }
 
 /**
+ * **派到分公司（协作中心）的活** —— 只在全局面板上出现（2026-11-01 用户："派活这一步
+ * 能不能加进任务面板里，指定设备"）。
+ *
+ * 为什么不写进 `project_tasks`：这些活的数据**归分公司**（它改状态、它删卡），中心这边
+ * 只是派单方。两边各写一份就有"中心显示进行中、那台机器显示已完成"的分歧；
+ * 现在一行一行照 `collab_tasks` 现读（分公司每 5 秒报一次状态，中心侧看到的就是最新的）。
+ *
+ * 行上带三个前端要用的东西：
+ *   · `remote: true` —— 只读（拖不动、删不掉、点不开本地卡，改状态得走协作中心）；
+ *   · `collab_task_id` / `branch_id` —— 点卡片回协作中心、以后要撤单都靠它；
+ *   · `project_name: '协作 · 设备名'` —— 卡片上那枚「属于哪个项目」的标签，一眼看出在谁的机器上跑。
+ */
+function collabRows() {
+  let list = [];
+  try {
+    list = store.listCollabTasks({ limit: 200 });
+  } catch {
+    return []; // 协作表还没建 / 读挂了 —— 看板不能因为这一路数据整体空掉
+  }
+  return list.map((t) => {
+    const b = store.getCollabBranch(t.branchId);
+    const device = b?.label ?? '（分公司已移除）';
+    return {
+      source: 'collab',
+      remote: true,
+      source_text: '协作',
+      task: clip(t.title, TASK_LIMIT),
+      status: t.status,
+      col: COL_OF_MANUAL[t.status] ?? 'other',
+      rank: FLOW_RANK[t.status] ?? RANK_OTHER,
+      // 执行人那一格放**设备名**：这类活派的是机器，不是某个人
+      assignee: device,
+      assignee_id: null,
+      at: stamp(t.updatedAt),
+      note: clip([t.description || '派到分公司的活', `在「${device}」上跑`].join(' · '), NOTE_LIMIT),
+      manual_id: null,
+      collab_task_id: t.id,
+      branch_id: t.branchId,
+      device,
+      project_id: null,
+      project_name: `协作 · ${device}`,
+    };
+  });
+}
+
+/**
  * **全局任务看板**（工作台 → 任务看板）：所有项目的活铺在同一张看板上。
  *
  * 跟项目看板同源、同列、同卡片，只多两件事：
@@ -520,7 +566,7 @@ export function allTasks() {
   const runs = store.listWorkflowRuns({ limit: 500 });
 
   // 看板视图：不收聊天行（2026-10-24，见 chatRows 的注释）
-  const rows = allRows(projects, byId, runs);
+  const rows = [...allRows(projects, byId, runs), ...collabRows()];
   const boarded = board(rows, {
     scope: 'all',
     project_count: projects.length,
@@ -1121,6 +1167,26 @@ export function updateProjectTask(id, fields = {}, { autoStart = true } = {}) {
     if (fields.assigneeUserId && !store.getUser(fields.assigneeUserId)) throw new Error('选的这个真人不在了');
     patch.assigneeUserId = fields.assigneeUserId || null;
     if (patch.assigneeUserId) patch.assigneePersonaId = null;
+  }
+
+  /*
+   * **协作卡**（2026-10-31 协作中心 MVP）：卡本身还是本地的卡（能指派、能评论、能走流程），
+   * 但**内容归中心**，三条硬边界：
+   *   ① 标题 / 描述**只读** —— 本地改了不回传，两边迟早不一致（要补充信息写评论，或让中心改）；
+   *   ② 不能自己判「已取消」—— 取消是中心的动作，本地改了中心不认，下一拍又盖回去；
+   *   ③ 终态（已完成 / 已取消）之后不能再改状态 —— 与中心那边"终态不可逆"同一口径。
+   * 「已完成」允许本地判（看板上拖到已完成是自然动作，硬拦会让人以为坏了，任务书 §2.1）。
+   */
+  if (cur.source === 'collab') {
+    if (fields.title !== undefined || fields.description !== undefined) {
+      throw Object.assign(new Error('总公司派的任务，标题/描述由中心改'), { code: 'E4046' });
+    }
+    if (patch.status === '已取消') {
+      throw Object.assign(new Error('取消由中心决定'), { code: 'E4046' });
+    }
+    if ((cur.status === '已完成' || cur.status === '已取消') && patch.status !== undefined) {
+      throw Object.assign(new Error('这条任务已经收了尾（已完成或已取消），不能再改'), { code: 'E4046' });
+    }
   }
 
   /*

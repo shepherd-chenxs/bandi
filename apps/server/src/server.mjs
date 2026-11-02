@@ -4,7 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
-import { port, repoRoot, host, dataDir, dbPath, extraOrigins } from './config.mjs';
+import { port, repoRoot, host, dataDir, dbPath, extraOrigins, trustProxy, localSecretDisabled } from './config.mjs';
 import * as netmode from './netmode.mjs';
 import * as store from './store.mjs';
 import * as auth from './auth.mjs';
@@ -31,8 +31,11 @@ import * as schedules from './schedules.mjs';
 import * as steward from './steward.mjs';
 import * as experts from './experts.mjs';
 import * as localMode from './local-mode.mjs';
-import * as discover from './discover.mjs';
 import * as lanAnnounce from './lan-announce.mjs';
+import * as localSecret from './security/local-secret.mjs';
+import * as setupCode from './security/setup-code.mjs';
+import * as tlsCheck from './security/tls-check.mjs';
+import { isLoopbackHost } from './security/source.mjs';
 import { handleConversation } from './routes/conversation.mjs';
 import { handlePair } from './routes/pair.mjs';
 import { handleEvents } from './routes/events.mjs';
@@ -54,6 +57,7 @@ import { handleProject } from './routes/project.mjs';
 import { handleRoles } from './routes/roles.mjs';
 // 账号与登录（2026-10-28 第三刀）：/api/login、/api/logout、/api/me、/api/users*
 import { handleUsers } from './routes/users.mjs';
+import { handleAuthToken } from './routes/auth-token.mjs';
 import { handleWorkspace } from './routes/workspace.mjs';
 import { handleStatus } from './routes/status.mjs';
 import { handleFs } from './routes/fs.mjs';
@@ -68,9 +72,28 @@ import * as feishu from './feishu.mjs';
 import { handleRun } from './routes/run.mjs';
 import { handleSchedules } from './routes/schedules.mjs';
 import { handleLocal, supervisorModule } from './routes/local.mjs';
+// 协作中心（2026-10-31 MVP）：中心管理接口 + 分公司 ↔ 中心的机器接口，两条路都在 handleCollab 里
+import { handleCollab } from './routes/collab.mjs';
+import * as collabBranch from './collab-branch.mjs';
 import { sendJson, fail, readBody, guardWrite, guardHost, serveStatic, BadRequest, allowedOrigins, webDir } from './http.mjs';
 import { SERVER } from './server-state.mjs';
 import { runtimeOptions, runtimesOk, withExternals } from './runtime-view.mjs';
+// CSRF 双提交（IAM §10.2，2026-10-31 Phase 1 收尾）：Cookie bandi_csrf 与请求头
+// X-Bandi-CSRF 必须一致 —— 第三道闸，与 guardWrite 的 Origin / X-Bandi 并存
+import * as csrf from './security/csrf.mjs';
+
+/** 客户端 IP（审计与会话记录用；IPv4-mapped 前缀剥掉） */
+const clientIp = (req) => String(req.socket?.remoteAddress ?? '').replace(/^::ffff:/, '');
+/** 写审计的 kind 标签（轻映射，别过度工程 —— 查询时按它筛） */
+function auditKindOf(pathname) {
+  if (pathname === '/api/login' || pathname === '/api/login/otp') return 'login';
+  if (pathname === '/api/logout') return 'session.revoke';
+  if (pathname.startsWith('/api/local/')) return 'machine.local';
+  if (pathname.startsWith('/api/collab/')) return 'collab';
+  if (pathname.startsWith('/api/users') || pathname.startsWith('/api/roles')) return 'user.change';
+  if (pathname === '/api/restart') return 'restart';
+  return 'write';
+}
 
 
 
@@ -87,7 +110,13 @@ function helloPayload() {
     hostname: me.hostname,
     httpPort: port,
     allowLan: nm.allowLan,
-    joinable: netmode.isJoinable({ allowLan: nm.allowLan, explicit: !!process.env.BANDI_HOST, boundHost: SERVER.boundHost }),
+    /*
+     * 角色位（2026-11-01 晚）：true = 总机（收别的机器当节点），false = 分机
+     * （对外服务照旧、手机照连，但不发邀请码、别的机器加不上去）。
+     * 跟 `joinable` 的区别：joinable 还要乘上"实际听着非回环"这个必要条件。
+     */
+    acceptNodes: nm.acceptNodes,
+    joinable: netmode.isJoinable({ acceptNodes: nm.acceptNodes, boundHost: SERVER.boundHost }),
     /*
      * **机器角色**（2026-10-28 节点配置面）：`node` = 这台机器已加入某台总机；
      * `operator` = 未加入（本机单机版）。前端的菜单矩阵要它，跟"打开页面的人是谁"
@@ -99,7 +128,9 @@ function helloPayload() {
      */
     role: localMode.isJoined() ? 'node' : 'operator',
     // 能力声明：有这个才认得出 `scope` 字段（旧总机没有 → 加入方回 E2050，不静默降级）
-    caps: ['scope'],
+    // `'collab'`（2026-10-31）：认识协作中心。分公司"加入"前先探这一条 ——
+    // 没有它 = 那台班底太旧（E4043），**不静默降级**。与 lan-announce.mjs 的 caps 同一口径。
+    caps: ['scope', 'collab'],
   };
 }
 
@@ -181,6 +212,15 @@ const routes = {
       // 被「不显示」收走的会话：**只给聊天记录抽屉用**（2026-10-20 去掉会话归档后）。
       // 不并进 conversations —— 那条是热路径，工作台/通讯录都在吃，混进隐藏的会凭空多出行。
       hiddenConversations: store.listHiddenConversations(),
+      /*
+       * **这个请求从哪来 + 破坏性动作要不要秘密**（2026-10-31，IAM §10.1.3）。
+       * 前端据此**显隐**破坏性按钮：服务器形态（`localSecret: 'required'`）下浏览器里
+       * 不渲染「导出 / 导入 / 协作加入」这些按钮（它们要由本机终端用 CLI 执行），
+       * 而不是渲染出来再报 E4097 —— 那等于给用户一个永远点不动的按钮。
+       * `source` 同时给"当前是不是本机"的判断用，页面**不猜**。
+       */
+      source: req.bandiSource ?? 'loopback',
+      localSecret: localSecret.mode(),
     });
   },
 
@@ -391,7 +431,21 @@ const routes = {
 
 /** 带路径参数的路由单独处理 */
 
-SERVER.AUTH = auth.setup({ host, dataDir, envToken: process.env.BANDI_TOKEN });
+SERVER.AUTH = auth.setup({ host, dataDir, envToken: process.env.BANDI_TOKEN, trustProxy });
+
+/*
+ * **本机文件秘密**（IAM §5.2）：服务器形态下"我在本机"的唯一证明。
+ * 启动即生成（0600，一次生成、之后复用）—— 生不成也不拦启动：只是破坏性动作一律 E4097。
+ */
+localSecret.ensure();
+if (localSecretDisabled) {
+  console.warn('[安全] BANDI_LOCAL_SECRET=off：破坏性本机动作（导出/导入/加入/重启）不再要求 X-Bandi-Local —— 请确认反代已 deny 这些路径');
+}
+/*
+ * **首个管理员的引导码**（IAM §8.6）：服务器形态 + 库里零账号时才有意义。
+ * 有了它，"谁先连上谁当管理员"就不成立了 —— 建号必须证明"我读得到数据目录"。
+ */
+if (setupCode.sync()) console.warn('[安全] 还没有任何账号：创建第一个管理员需要 X-Bandi-Setup（值在数据目录 setup_code 文件里），或用 `bandi user create <名字> --admin`');
 /*
  * 这个进程**现在**听的是哪儿 —— 不只是启动时那个 `host`。
  *
@@ -430,7 +484,13 @@ const server = http.createServer(async (req, res) => {
    * 连"来源对不对"都不该让它摸到面板数据（http.mjs 的 guardHost 注释）。
    */
   const badHost = guardHost(req);
-  if (badHost) return fail(res, 403, 'E3002', badHost);
+  if (badHost) {
+    // DNS rebinding / 未声明 Host：策略层拒绝，审计当场记（IAM §11.2：handler 不参与）
+    try {
+      store.deny({ kind: 'authz.deny', action: `${req.method} ${new URL(req.url, 'http://x').pathname}`, reason: `E3002 ${badHost}`, ip: clientIp(req), ua: req.headers['user-agent'] ?? '' });
+    } catch { /* 审计绝不拖垮请求 */ }
+    return fail(res, 403, 'E3002', badHost);
+  }
 
   const url = new URL(req.url, `http://${req.headers.host}`);
 
@@ -439,7 +499,41 @@ const server = http.createServer(async (req, res) => {
      * 访问令牌：**排在来源闸前面** —— 没令牌的请求，连"来源对不对"都不该让它摸到。
      * 闸开不开只看监听地址（回环免鉴权 / 非回环全要），见 auth.mjs 的长注释。
      */
-    if (!auth.guard(SERVER.AUTH, req, res, url)) return;
+    if (!auth.guard(SERVER.AUTH, req, res, url)) {
+      // guard 拒绝的（401 / 403 / 受限会话…）它自己已经在响应里写好了状态码 ——
+      // 这里只补审计；200 的假响应（登录页 HTML）不记。
+      if (res.statusCode >= 400) {
+        try {
+          store.deny({ kind: 'authz.deny', action: `${req.method} ${url.pathname}`, reason: `HTTP ${res.statusCode}`, ip: clientIp(req), ua: req.headers['user-agent'] ?? '' });
+        } catch { /* 不拖垮 */ }
+      }
+      return;
+    }
+
+    /*
+     * **写操作审计**（IAM §11.2，2026-10-31 Phase 1 收尾）：授权过后立刻写一条
+     * `pending`，响应收尾把**同一行**改成 ok / fail —— handler 漏不掉（它根本不参与）。
+     * 覆盖整个 /api/* 写请求（含 handleLocal / handleCollab，它们都在这之后跑）。
+     */
+    let auditId = null;
+    if (url.pathname.startsWith('/api/') && !['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
+      const actor = req.bandiAuth ?? {};
+      auditId = store.add({
+        kind: auditKindOf(url.pathname),
+        actorKind: actor.kind ?? null,
+        actorId: actor.userId ?? actor.deviceId ?? actor.nodeId ?? null,
+        action: `${req.method} ${url.pathname}`,
+        ip: clientIp(req),
+        ua: req.headers['user-agent'] ?? '',
+      });
+      res.on('finish', () => {
+        store.resolve(auditId, {
+          result: res.statusCode < 400 ? 'ok' : 'fail',
+          reason: res.statusCode >= 400 ? (req.bandiDenyReason ?? `HTTP ${res.statusCode}`) : null,
+          httpStatus: res.statusCode,
+        });
+      });
+    }
 
     /*
      * **本机专属接口**（2026-10-20，设计 §1.2 新增 A）。
@@ -468,6 +562,15 @@ const server = http.createServer(async (req, res) => {
         }
         return;
       }
+      /*
+       * CSRF 值的自愈补种（2026-11-01）：浏览器里可能只有 `bandi_sid`/`bandi_token`
+       * 而没有 `bandi_csrf`（老版本种的 Cookie、或用脚本/工具手工设过令牌），
+       * 这时所有写请求都会 E4099，用户看到的就是"按钮点了没反应"。
+       * 每个 HTML 页面响应顺手补一枚（已有就不动）—— 打开一次页面即自愈。
+       */
+      const wantsHtmlPage = url.pathname === '/' || url.pathname.endsWith('.html')
+        || String(req.headers.accept ?? '').includes('text/html');
+      if (wantsHtmlPage && !csrf.valuesOf(req).cookie) res.setHeader('Set-Cookie', csrf.cookieFor(csrf.mint()));
       if (serveStatic(res, url.pathname)) return;
       res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
       res.end('没有这个文件');
@@ -476,11 +579,31 @@ const server = http.createServer(async (req, res) => {
 
     const key = `${req.method} ${url.pathname}`;
 
-    // 写请求先过来源守卫（CSRF）：任何网页借你的浏览器发的写请求都在这里被拦下
+    // 写请求先过来源守卫（CSRF）：任何网页借你的浏览器发的写请求都在这里被拦下。
+    // 拒绝原因挂在 req 上 —— 上面那条 pending 审计在 finish 回填时把它带进 reason，
+    // 不另记一行（同一请求只留一条历史，§11.2）。
     const denied = guardWrite(req);
-    if (denied) return fail(res, 403, 'E3001', denied);
+    if (denied) {
+      req.bandiDenyReason = `E3001 ${denied}`;
+      return fail(res, 403, 'E3001', denied);
+    }
+    // CSRF 双提交（§10.2 第三道）：带 Cookie 凭据的写请求，bandi_csrf Cookie 与
+    // X-Bandi-CSRF 头必须一致（CLI / 脚本走 X-Bandi-Token 头，浏览器不会自动带，天然豁免）
+    const csrfDenied = csrf.check(req);
+    if (csrfDenied) {
+      req.bandiDenyReason = 'E4099 csrf double-submit mismatch';
+      return fail(res, 403, 'E4099', csrfDenied);
+    }
 
     if (routes[key]) return await routes[key](req, res);
+
+    /*
+     * 协作中心（2026-10-31 MVP）：`/api/collab/*` 全部归它。
+     * 位置在链头附近 —— 它不和别的域共享路径；而 `join / poll / report / leave` 四条
+     * 是**分公司**来打的（不带操作员令牌），早一步匹配少绕几层 handler。
+     */
+    const handledCollab = await handleCollab(req, res, url);
+    if (handledCollab !== false) return;
 
     // 全局 SSE（/api/events）：挂在链头 —— 长命连接，别让它在别的 handler 里排队
     const handledEvents = await handleEvents(req, res, url);
@@ -507,6 +630,10 @@ const server = http.createServer(async (req, res) => {
     // 与别处不重叠，但 /api/me 是"每个页面启动都会问一次"的接口，能早一步就早一步
     const handledUsers = await handleUsers(req, res, url);
     if (handledUsers !== false) return;
+
+    // 换票链（IAM §6.2，Phase 3）：/api/auth/token|refresh|revoke —— CLI / 脚本的凭据入口
+    const handledAuthToken = await handleAuthToken(req, res, url);
+    if (handledAuthToken !== false) return;
 
     const handledRoles = await handleRoles(req, res, url);
     if (handledRoles !== false) return;
@@ -633,13 +760,37 @@ try {
 } catch (err) {
   console.log(`内置连接器 seed 失败（不影响启动）：${err?.message ?? err}`);
 }
-// 过期登录会话（2026-10-28 第三刀）：30 天前发的票，启动时扫一次就够 —— 不需要定时器
-// （平时 `userBySession` 撞到过期的也会顺手删，这里只是把"没人再来的"批量收掉）
+// 过期登录会话（2026-10-28 第三刀）：启动时扫一次就够 —— 不需要定时器
+// （平时 `userBySession` 撞到过期的也会顺手删，这里只是把"没人再来的"批量收掉；
+//   2026-10-31 起四道口径一起清：expiresAt 30 天 / 绝对 12h / 空闲 30min）
 try {
   const pruned = store.pruneSessions();
   if (pruned) console.log(`清掉 ${pruned} 条过期登录会话`);
 } catch (err) {
   console.log(`清理过期登录会话失败（不影响启动）：${err?.message ?? err}`);
+}
+// 存量会话迁移（IAM §9，2026-10-31）：老库的会话没有空闲/绝对两道闸 ——
+// 按"12 小时内自然过期"的缓冲口径补上，不追溯不踢人。幂等：已迁过的行不动。
+try {
+  const migrated = store.migrateLegacySessions();
+  if (migrated) console.log(`[安全] ${migrated} 条存量会话已按新规则迁移（12 小时内自然过期）`);
+} catch (err) {
+  console.log(`存量会话迁移失败（不影响启动）：${err?.message ?? err}`);
+}
+// 审计归档（IAM §11.2）：security_events 保留 90 天，启动时搬一批进 archive 表 ——
+// 触发器挡着 DELETE，归档是唯一合法的清理路（见 store/audit.mjs 的 archive 注释）
+try {
+  const archived = store.archive(90);
+  if (archived) console.log(`[安全] 审计已归档 ${archived} 条（保留 90 天）`);
+} catch (err) {
+  console.log(`审计归档失败（不影响启动）：${err?.message ?? err}`);
+}
+// 短票清理（IAM Phase 3）：at_ 本来就 15 分钟、rf_ 30 天；过期/撤销满 1 天的行启动时清掉
+try {
+  const pt = store.pruneAccessTokens() + store.pruneRefreshTokens();
+  if (pt) console.log(`[安全] 清掉 ${pt} 条过期/撤销短票与刷新票`);
+} catch (err) {
+  console.log(`短票清理失败（不影响启动）：${err?.message ?? err}`);
 }
 /*
  * 动态验证（2026-10-31 二改）：① 上一版把明文密钥存在 users.totpSecret 上，
@@ -772,7 +923,31 @@ if (localMode.isJoined()) {
   }
 }
 
+/*
+ * **明文检测**（IAM §10.1.1）：监听非回环、没声明反代、也没配 TLS → 告警；
+ * `BANDI_TLS_STRICT=on` 时**拒绝启动**（给"我必须防呆"的公网部署用）。
+ * 位置在 listen 之前：拒绝启动就别先占端口，否则运维会看到一个"起着但没用"的进程。
+ */
+const tlsState = tlsCheck.evaluate(SERVER.boundHost);
+if (tlsState.warn) console.warn(`[安全] ${tlsState.text}`);
+if (tlsState.fatal) {
+  console.error('[安全] BANDI_TLS_STRICT=on：拒绝以明文对外监听。用反代/隧道终结 TLS，或设 BANDI_TRUST_PROXY=1 声明"证书在外层"。');
+  process.exit(1);
+}
+
 server.listen(port, SERVER.boundHost, logListen);
+
+/*
+ * 协作中心（2026-10-31 MVP）：这台机器**加入过**就在启动后接着同步。
+ * 中心重启过也不用重新加入 —— 分公司与任务都在它的库里，这边一拍就续上。
+ * 放在 `listen` 之后：先能答请求，再往外打（顺序反过来，第一次 poll 会跟自己的启动抢库）。
+ * 失败**不拦启动**：中心没开的时候这台机器照样是一台完整的班底。
+ */
+try {
+  if (collabBranch.startIfJoined()) console.log('[协作] 已恢复与中心的同步');
+} catch (e) {
+  console.warn(`[协作] 同步没起来（不影响本机使用）：${e?.message ?? e}`);
+}
 
 /**
  * 启动横幅。抽成函数是为了**原地重启之后能再打一遍** ✓
@@ -784,7 +959,7 @@ function logListen() {
    * 启动那一刻、以及每次「重启生效」之后都要对一次 ——
    * `sync` 的判据是"开关开 且 真的听着非回环"，所以这里传的是 `SERVER.boundHost`（实际监听）。
    */
-  lanAnnounce.sync({ allowLan: netmode.readNetMode().allowLan, explicit: !!process.env.BANDI_HOST, boundHost: SERVER.boundHost, httpPort: port });
+  lanAnnounce.sync({ ...netmode.readNetMode(), explicit: !!process.env.BANDI_HOST, boundHost: SERVER.boundHost, httpPort: port });
   /*
    * 启动就把**数据落在哪儿**打出来。
    * 部署排查时最费时间的一类问题是"我在看的到底是哪个库"——
@@ -848,7 +1023,7 @@ function restartListening() {
      * 这里也要对一次（设计 §5.5 的三处同步点之一）：开关可能刚变过、而监听地址恰好没变
      * （比如 `BANDI_HOST` 显式指定着，或者本来就在回环上）—— 应答器该停就得停。
      */
-    lanAnnounce.sync({ allowLan: netmode.readNetMode().allowLan, explicit: !!process.env.BANDI_HOST, boundHost: SERVER.boundHost, httpPort: port });
+    lanAnnounce.sync({ ...netmode.readNetMode(), explicit: !!process.env.BANDI_HOST, boundHost: SERVER.boundHost, httpPort: port });
     return;
   }
   console.log(`[网络] 重启监听：${SERVER.boundHost} → ${want}`);
@@ -861,7 +1036,7 @@ function restartListening() {
      * 开关是关的时候就这一下就够（`sync` 见到 on=false 直接 stop，不等 listen 回调）。
      * 开关是开的时候它会重新 bind，`logListen` 里那次是幂等的第二遍。
      */
-    lanAnnounce.sync({ allowLan: netmode.readNetMode().allowLan, explicit: !!process.env.BANDI_HOST, boundHost: SERVER.boundHost, httpPort: port });
+    lanAnnounce.sync({ ...netmode.readNetMode(), explicit: !!process.env.BANDI_HOST, boundHost: SERVER.boundHost, httpPort: port });
     server.listen(port, SERVER.boundHost, logListen);
   });
   // 挂着的长轮询（领活那种 20 秒的）别挡着 close 回调 —— 节点收到断开自己会重连 ✓

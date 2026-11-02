@@ -5,12 +5,17 @@ import { api, dt, failHtml, initial, post, showFail, wireDialogHead } from './ui
 import { qrSvg } from './vendor/qrcode.mjs';
 import { headRow, renderPlugins, renderRuntimes, rtLoading } from './connectors.mjs';
 import { openRemotePage, setPluginRerender } from './experts.mjs';
+import { confirmDo } from './machine.mjs';
 import { renderList, showView } from './contacts.mjs';
 import { setListTitle } from './flowpages.mjs';
 import { openCodeRepoPage, renderSkillCards } from './skills.mjs';
 import { renderPairing } from './pairing.mjs';
+// 设置 › 协作中心（2026-11-01 从工作台搬来）：页面本体在 collab.mjs，这里只挂分节
+import { renderCollabCenter } from './collab.mjs';
 import { renderRoles } from './roleadmin.mjs';
 import { logout, renderUsers } from './useradmin.mjs';
+// 设置 › 安全（2026-10-31 IAM Phase 1）：我的会话 + 审计日志
+import { renderSecurity } from './securityadmin.mjs';
 import { $, S } from './core.mjs';
 
 
@@ -27,6 +32,12 @@ import { $, S } from './core.mjs';
  *
  * 整页形态（左栏收掉，与工作台/专家库同款，setNav 里已把 no-list 带上）；
  * 容器借设置页的 #settingsView —— 反正两者不会同时出现，省一个常驻节点。
+ *
+ * 2026-11-01 手机端改造（用户："手机我的页面改造一下。显示当前登录卡，然后加一个设置入口那种"）：
+ *   手机底部「我的」tab 以前**直接进设置页**，等于把"我是谁"这一层吞掉了 —— 打开
+ *   个人中心却看到一堆开关。现在按主流 App 的「我的」做：**上面一张登录卡、下面一个
+ *   设置入口**，设置页退成它的下一级（见 renderList 里那条返回行）。
+ *   桌面照旧：左栏本来就有「设置」，这里再摆一个入口是重复，所以入口只在窄屏画。
  */
 export function openMe() {
   setRoute('me');
@@ -35,28 +46,55 @@ export function openMe() {
   setListTitle('我的');
   const who = S.auth ?? null;
   const isUser = who?.kind === 'user';
+  const isDevice = who?.kind === 'device';
   const name = isUser
     ? (who?.user?.name ?? '')
-    : who?.kind === 'device'
+    : isDevice
       ? (who?.device?.name || '这台设备')
-      : '操作员';
+      : '未登录';
   const sub = isUser
     ? (who?.role?.name ?? '')
     : who?.kind === 'operator'
-      ? '本机 / 访问令牌'
-      : '手机设备';
+      ? '这台机器还没有登录账号'
+      : ''; /* 手机设备：名称默认就是「手机设备」，再来一行同字是重复；已配对信息在 me-dev 那行 */
   // 免密 / 已设置：只有登录账号有"自己的密码"可改（操作员没有账号，去设置 → 用户里管）
   const hasPw = isUser ? who?.user?.hasPassword !== false : false;
   // 动态验证：同上，登录账号才有"自己的验证器"
   const hasTotp = isUser ? who?.user?.hasTotp === true : false;
+  /*
+   * 「有没有登录态可退」（2026-11-01 实报：回环形态点退出登录没反应）。
+   *   · 登录账号 → 有；
+   *   · 操作员 via 'token'（非回环形态的面板令牌）→ 有，退出会清令牌 Cookie；
+   *   · 操作员 via 'loopback' → **没有** —— 回环是免登录信任，clear Cookie 重载还是操作员，
+   *     摆了按钮就是骗人；手机设备同理（它的凭据是配对令牌，退出=解绑，另有入口）。
+   */
+  const canLogout = isUser || (who?.kind === 'operator' && who?.via !== 'loopback');
   $('settingsView').innerHTML = `
     ${headRow('<b>我的</b>')}
     <div class="detail-body">
       <section class="set-sec">
         <div class="set-box">
-          <div class="set-row me-row">
+          <div class="set-row me-row me-hero">
             <span class="me-ava">${esc(initial(name))}</span>
-            <div class="me-who"><b>${esc(name)}</b>${sub ? `<span class="sub">${esc(sub)}</span>` : ''}</div>
+            <div class="me-who">
+              <b>${esc(name)}</b>
+              ${sub ? `<span class="sub">${esc(sub)}</span>` : ''}
+              ${isDevice ? `<span class="sub me-dev" id="meDevMeta">已配对 · ${esc(location.host)}</span>` : ''}
+            </div>
+          </div>
+        </div>
+      </section>
+      <!-- 「设置」入口（2026-11-01）：只在窄屏显示（桌面左栏已经有设置，再摆一个是重复）。
+           走事件而不是 import setNav —— settings ← state 是反向依赖，会成环
+           （mobile.mjs 里通讯录那个 mb-cv-home 同一套办法）。 -->
+      <section class="set-sec me-entry-sec">
+        <div class="set-box">
+          <div class="set-row me-entry" id="meSettings" role="button" tabindex="0">
+            <span class="me-entry-ico">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.1"/><path d="M19.4 14.5a1.6 1.6 0 0 0 .32 1.77l.06.06a1.94 1.94 0 1 1-2.75 2.75l-.06-.06a1.6 1.6 0 0 0-1.77-.32 1.6 1.6 0 0 0-.97 1.47V20a1.94 1.94 0 1 1-3.88 0v-.1a1.6 1.6 0 0 0-1.05-1.47 1.6 1.6 0 0 0-1.77.32l-.06.06a1.94 1.94 0 1 1-2.75-2.75l.06-.06a1.6 1.6 0 0 0 .32-1.77 1.6 1.6 0 0 0-1.47-.97H4a1.94 1.94 0 1 1 0-3.88h.1a1.6 1.6 0 0 0 1.47-1.05 1.6 1.6 0 0 0-.32-1.77l-.06-.06a1.94 1.94 0 1 1 2.75-2.75l.06.06a1.6 1.6 0 0 0 1.77.32h.08A1.6 1.6 0 0 0 11.9 4.1V4a1.94 1.94 0 1 1 3.88 0v.1a1.6 1.6 0 0 0 .97 1.47 1.6 1.6 0 0 0 1.77-.32l.06-.06a1.94 1.94 0 1 1 2.75 2.75l-.06.06a1.6 1.6 0 0 0-.32 1.77v.08a1.6 1.6 0 0 0 1.47.97H20a1.94 1.94 0 1 1 0 3.88h-.1a1.6 1.6 0 0 0-1.47.97z"/></svg>
+            </span>
+            <span class="set-label">设置</span>
+            <span class="me-chevron" aria-hidden="true">›</span>
           </div>
         </div>
       </section>
@@ -88,11 +126,54 @@ export function openMe() {
              </section>`
           : ''
       }
-      <div class="machine-actions"><button class="btn-sm" id="meLogout">退出登录</button></div>
+      ${
+        canLogout
+          ? '<div class="machine-actions"><button class="btn-sm" id="meLogout">退出登录</button></div>'
+          : isDevice
+            ? /* 手机设备（2026-11-02 用户："手机端连接之后需要一个入口能够断开连接"）——
+                 与「退出登录」同位、同款：这是这台手机的"退出"。断开≠取消配对：
+                 记录留着，没有别的手机在用的时候打开 App 点「连接」就能回来。 */
+              '<div class="machine-actions"><button class="btn-sm" id="meDisconnect">断开连接</button></div>'
+            : '<div class="machine-actions"><button class="btn-sm" id="meGoLogin">去登录</button></div>'
+      }
     </div>`;
   $('meLogout')?.addEventListener('click', () => void logout());
+  /*
+   * 手机「断开连接」：调 /api/pair/leave（手机身份专属口），成功后派 `mb-left` 让
+   * mobile.mjs 决定落到哪儿 —— 壳里回连接页，浏览器里回配对页。
+   * 退场导航不在这一页写：SHELL_ORIGIN 是 mobile.mjs 的知识（远程页调不了壳命令那条注释），
+   * 这里 import 过去就和 settings → mobile 成环。
+   */
+  $('meDisconnect')?.addEventListener('click', async () => {
+    const ok = await confirmDo(
+      '断开后这台手机会立刻退出，但配对记录留着 —— 没有别的手机在用的时候，打开 App 点「连接」就能回来。',
+      { ok: '断开连接', danger: false },
+    );
+    if (!ok) return;
+    const b = $('meDisconnect');
+    if (b) b.disabled = true;
+    try {
+      await post('/api/pair/leave', {});
+      document.dispatchEvent(new CustomEvent('mb-left'));
+    } catch (e) {
+      if (b) b.disabled = false;
+      toast(e.message, 'error');
+    }
+  });
+  // 兜底：正常进不到这个分支（面板门前移到登录页，见 auth.mjs 的 wantsPanelHtml），
+  // 万一从令牌通道挤进来，至少给一条出路 —— 别再摆一段讲实现细节的说明。
+  $('meGoLogin')?.addEventListener('click', () => location.reload());
   $('mePwd')?.addEventListener('click', () => openMePwdDlg(hasPw));
   $('meTotp')?.addEventListener('click', () => (hasTotp ? openOtpOffDlg() : openOtpOnDlg()));
+  // 设置入口：交给 mobile.mjs 转一次 setNav（反向 import 会成环，见上面的注释）
+  const goSet = () => document.dispatchEvent(new CustomEvent('mb-nav', { detail: { nav: 'settings' } }));
+  $('meSettings')?.addEventListener('click', goSet);
+  $('meSettings')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      goSet();
+    }
+  });
   // 已绑定的：补一行"绑于何时 / 还剩几个恢复码"（参考项目 security 页的 status 显示）
   if (hasTotp) {
     api('/api/me/otp/status')
@@ -301,26 +382,37 @@ function openMePwdDlg(hasPw) {
 export const SETTINGS_GROUPS = [
   {
     title: '通用',
+    /* 组头小图标（2026-11-02 用户："加上看看"）：只给组头、单色 currentColor（跟随组头灰）、
+       14 viewBox 线性 path —— 条目不加，避免 emoji 墙；组是不可点的分隔标签，图标保持安静。 */
+    icon: '<circle cx="5" cy="3.5" r="1.6"/><path d="M2 3.5h1.4M6.6 3.5H12M2 10.5h5.9M11.1 10.5H12"/><circle cx="9.5" cy="10.5" r="1.6"/>',
     items: [
       ['prefs', '偏好设置', '主题与外观'],
       ['about', '关于', '版本与说明'],
     ],
   },
   {
-    /* 「这台机器」= 模式页（2026-10-21 用户拍板：与「运行时」合并成一页；同日三改：两档 + 动作按钮）——
-       分段控件只有 单机 / 总机；「接入总机…」是动作不是第三档，点了只会展开加入面板。
-       「局域网」就是单机⇄总机的切换本体，不再是独立开关；备份独立成「数据管理」分节。 */
+    /* 「这台机器」（2026-10-21 用户拍板：与「运行时」合并成一页）——
+       2026-11-01 六改：模式卡搬到「手机连接」页（切档不用跨页），这页只剩设备 + 数据管理。
+       2026-11-01 八改：模式 = **角色（总机/分机）+ 对外服务**两个维度，分机也对外（手机照连）。 */
     title: '本机与设备',
+    icon: '<rect x="2" y="2.5" width="10" height="7" rx="1.5"/><path d="M5.5 12h3M7 9.5V12"/>',
     items: [
-      ['runtimes', '这台机器', '模式 · 设备'],
-      /* 「手机配对」（2026-11 手机端增量）：扫码连接手机 —— 局域网形态才有意义，
-         未监听局域网时分节里给引导（见 pairing.mjs renderPairing 的 boundLan 分支） */
-      ['pairing', '手机配对', '扫码连接手机'],
+      ['runtimes', '这台机器', '运行时 · 数据管理'],
+      /* 「手机连接」（2026-11 手机端增量）：扫码连接手机 —— 对外服务形态才有意义。
+         2026-11-01 起模式卡长在这页顶上：回环时当场切成对外服务 + 重启即可 */
+      ['pairing', '手机连接', '模式 · 扫码连接手机'],
+      /* 「协作中心」（2026-11-01 从工作台搬进设置；同日晚从「协作」组挪到本机与设备
+         下面 —— 用户："协作中心放到本机与设备下面"，跟这台机器/手机连接本来就
+         是一摊"这台设备怎么接人"的事）。页面本体长在 collab.mjs renderCollabCenter
+         （画进 #settingsView），这里只是左栏的一个分节 —— 非管理员
+         （settingsSections 的过滤）看不到，与接口层的 mayManage（admin/operator）对齐。 */
+      ['collab', '协作中心', '把活派给分公司，看进度'],
     ],
   },
   {
     /* 额度与生图都是"管模型"的事：额度管花销，生图管一条图片通道 —— 放一组。 */
     title: '模型与 AI',
+    icon: '<rect x="2" y="2" width="4.2" height="4.2" rx="1"/><rect x="7.8" y="2" width="4.2" height="4.2" rx="1"/><rect x="2" y="7.8" width="4.2" height="4.2" rx="1"/><rect x="7.8" y="7.8" width="4.2" height="4.2" rx="1"/>',
     items: [
       ['quota', '额度', '每个模型每天最多用多少'],
       ['aiimage', '生图服务', '数字员工生成图片的通道'],
@@ -328,6 +420,7 @@ export const SETTINGS_GROUPS = [
   },
   {
     title: '扩展',
+    icon: '<path d="M7 1.8l1.3 3.9L12.2 7 8.3 8.3 7 12.2 5.7 8.3 1.8 7l3.9-1.3z"/>',
     items: [
       ['plugins', '插件', '扩展点'],
       ['skills', '技能', '给数字员工用的能力包'],
@@ -338,10 +431,14 @@ export const SETTINGS_GROUPS = [
        **设备形态不加进下面的平铺** —— 服务端五个口都要操作员，
        列出来就是"点一下吃一个 403"（那条规矩见 settingsSections 的注释）。 */
     title: '账号与权限',
+    icon: '<path d="M7 1.5l4.8 1.9v3.4c0 3-2 4.7-4.8 5.7C4.2 11.5 2.2 9.8 2.2 6.8V3.4z"/>',
     items: [
       ['roles', '角色与菜单', '角色能看见哪些菜单'],
       /* 「用户」（2026-10-28 第三刀）：账号 + 登录 + 角色分配。设备形态同样不加 —— 见上面那条。 */
       ['users', '用户', '账号与角色'],
+      /* 「安全」（2026-10-31 IAM Phase 1）：我的会话（人人可用）+ 审计日志（admin）。
+         非管理员也放行 —— 会话列表是"自己的"那半页（服务端只认会话里的 userId）。 */
+      ['security', '安全', '会话与审计'],
     ],
   },
 ];
@@ -361,7 +458,7 @@ export const SETTINGS_GROUPS = [
  * 手机设备（受限视图）的「我的」= 设备信息 + 可用设置（2026-10-28，设计 T04 第 1 条）。
  *
  * 为什么单独一份而不是在渲染里逐条 `if`：服务端白名单已经决定设备碰不到
- * 技能/连接器/插件/飞书/额度/数据管理/这台机器/手机配对 —— 左栏还把它们列出来，
+ * 技能/连接器/插件/飞书/额度/数据管理/这台机器/手机连接 —— 左栏还把它们列出来，
  * 用户点一个吃一个 E4033 toast，等于把「没权限」包装成「这东西坏了」。
  * 设备端只留**真能用**的三节；`/api/pair/me` 就是「这台手机」那节的数据源。
  */
@@ -386,7 +483,7 @@ export function settingsSections() {
    * 本身对这些账号仍然成立 —— 主题、关于是可以看的。
    */
   if (S.isUser && !S.isAdmin) {
-    return SETTINGS_GROUPS.flatMap((g) => g.items).filter(([k]) => k === 'prefs' || k === 'about');
+    return SETTINGS_GROUPS.flatMap((g) => g.items).filter(([k]) => k === 'prefs' || k === 'about' || k === 'security');
   }
   return SETTINGS_GROUPS.flatMap((g) => g.items);
 }
@@ -439,11 +536,13 @@ export function openSettings(section) {
   if (S.settingsSection === 'device') return renderDeviceInfo();
   if (S.settingsSection === 'runtimes') return renderRuntimes();
   if (S.settingsSection === 'pairing') return renderPairing();
+  if (S.settingsSection === 'collab') return renderCollabCenter();
   if (S.settingsSection === 'plugins') return renderPlugins();
   if (S.settingsSection === 'quota') return renderQuota();
   if (S.settingsSection === 'skills') return renderSkillCards();
   if (S.settingsSection === 'roles') return renderRoles();
   if (S.settingsSection === 'users') return renderUsers();
+  if (S.settingsSection === 'security') return renderSecurity();
   if (S.settingsSection === 'aiimage') return renderImageAi();
   if (S.settingsSection === 'about') return renderAbout();
   if (S.settingsSection !== 'prefs') return;
@@ -677,7 +776,7 @@ export async function renderImageAi() {
  *
  * 数据来自 `/api/pair/me`（`load()` 里取过一次，存在 `S.device`）—— 不再打
  * `/api/pair/devices`：那是**操作员**的设备清单（含别的手机），设备令牌碰它 403。
- * 「解除配对」只给指路：踢出是电脑端动作（白名单里没有 revoke，也不该有）。
+ * 「断开连接 / 取消配对」只给指路：都是电脑端动作（设备令牌的白名单里没有它们，也不该有）。
  */
 export function renderDeviceInfo() {
   const d = S.device ?? {};
@@ -696,8 +795,8 @@ export function renderDeviceInfo() {
             <div class="machine-data">${esc(d.pairedAt ? dt(d.pairedAt) : '—')}</div>
           </div>
           <div class="set-row">
-            <span class="set-label">解除配对</span>
-            <div class="machine-data">在电脑上打开「设置 → 手机配对」，把这台设备踢出即可；踢出后本机下一次操作会提示重新扫码。</div>
+            <span class="set-label">断开连接</span>
+            <div class="machine-data">在电脑上打开「设置 → 手机连接」，点这台手机的「断开连接」——断开后本机下次操作会掉线，但配对记录还在：没有别的手机在用的时候，本机打开班底会自己连回来，不用重新扫码。要彻底解绑用「取消配对」。</div>
           </div>
         </div>
       </section>

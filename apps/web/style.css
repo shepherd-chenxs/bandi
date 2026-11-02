@@ -121,7 +121,7 @@
   --tile-codex-bg: #23262b;  --tile-codex-fg: #e8e9ea;    /* Codex / OpenAI（12.49） */
   --tile-claude-bg: #2b211d; --tile-claude-fg: #e79a7a;   /* Claude / Anthropic（6.95） */
   --tile-dsh-bg: #1c2038;    --tile-dsh-fg: #8fa3ff;      /* DeepSeek（6.74） */
-  --tile-magpie-bg: #16292d; --tile-magpie-fg: #5cc7d8;   /* magpie（7.64） */
+  /* （--tile-magpie-* 2026-11-01 随「外部件」段一起删了 —— git 历史里有） */
   --av-grp: #2b7062; --av-grp-2: #123028;      /* 群（5.84） */
   --av-dim: #2b3a55; --av-dim-2: #1a2233;      /* 旧小号头像底色（已弃用，见 .avatar.sm） */
   /* 四档底色：中性灰蓝 / 偏蓝 / 偏紫 / 偏青。
@@ -207,7 +207,6 @@
   --tile-codex-bg: #f3f4f6;  --tile-codex-fg: #111827;    /* 16.12 */
   --tile-claude-bg: #fdf1ec; --tile-claude-fg: #b04e2e;   /* 4.77 */
   --tile-dsh-bg: #eef1ff;    --tile-dsh-fg: #3f5ae0;      /* 4.98 */
-  --tile-magpie-bg: #e8f5f7; --tile-magpie-fg: #0e7490;   /* 4.81 */
   --av-grp: #2b7062; --av-grp-2: #1f5a4e;
   --av-dim: #52688c; --av-dim-2: #3d4f6e;
   /* 浅色小头像：四档都要**压得住白字**（实测 7.75 / 7.79 / 8.06 / 7.9:1）。
@@ -353,6 +352,25 @@ body.no-list .list-panel { display: none; }
                      border: 1px solid var(--line); border-radius: 6px;
                      padding: 6px 10px; font: inherit; font-size: 13px; }
 .list-search input:focus { border-color: var(--accent); outline: none; }
+/* 搜索框的气泡（2026-11-02 二十八改）：放大镜 / Ctrl·K 提示 / 清空 × 叠在输入框两侧。
+   kbd 与 × 互斥（有字出 ×、空格出 kbd；聚焦时 kbd 让位，别挡着打字）。 */
+.list-search .ls-field { position: relative; display: flex; align-items: center; width: 100%; }
+.list-search .ls-ico { position: absolute; left: 9px; display: grid; place-items: center;
+                       color: var(--dim); pointer-events: none; }
+.list-search input { padding-left: 30px; padding-right: 46px; }
+.list-search .ls-kbd { position: absolute; right: 8px; font: inherit; font-size: 10.5px; line-height: 16px;
+                       color: var(--dim); border: 1px solid var(--line); border-radius: 4px;
+                       padding: 0 4px; pointer-events: none; }
+.list-search .ls-clear { position: absolute; right: 5px; display: none; width: 20px; height: 20px;
+                         padding: 0; place-items: center; border: 0; border-radius: 50%;
+                         background: transparent; color: var(--dim); font-size: 14px; line-height: 1; }
+.list-search .ls-clear:hover { background: var(--hover); color: var(--text); }
+/* 有字才出 ×，空格出快捷键提示 —— 用 :placeholder-shown 判断，**不靠 JS 加类**：
+   别处代码会直接 `$('search').value = ''` 清框（切栏、清项目搜索），
+   类名状态会跟 value 脱节，:has 天然跟着输入值走。 */
+.list-search:has(input:not(:placeholder-shown)) .ls-clear { display: grid; }
+.list-search:has(input:not(:placeholder-shown)) .ls-kbd { display: none; }
+.list-search:focus-within .ls-kbd { display: none; }
 .list-body { overflow: auto; padding: 4px 8px 10px; }
 /* 二级列表里的分段标题（通讯录：群聊 / 数字员工） */
 .list-sec { display: flex; align-items: center; gap: 6px; padding: 14px 10px 5px; cursor: pointer;
@@ -386,14 +404,19 @@ body.no-list .list-panel { display: none; }
    没有箭头+缩进那套层级线索之后，组头必须**自己**比条目轻一档（灰字、小半号），
    否则它和下面那行条目长得一模一样，看着像"多出来的一行"。 */
 .list-sec.static { cursor: default; color: var(--dim); font-size: 12px; }
+/* 组头小图标（2026-11-02 用户："加上看看"）：单色 currentColor（跟随组头灰），13px 线性。
+   .list-sec.nav 的 10px gap 是给折叠箭头留的；静态组头没有箭头，图标-文字收窄回 6px。 */
+.list-sec .sec-ico { width: 13px; height: 13px; flex: none; margin-top: 1px; }
+.list-sec.nav.static { gap: 6px; }
 .list-sec.nav .sec-arrow { width: 5.5px; height: 5.5px; }
 /* 箭头不跟组头一起"加粗"：边框画线没有字重，粗感来自 currentColor 继承了
    组头的正文字色（深色）—— 单独压回灰调，文字照旧 600 加粗（2026-10-29 用户）。 */
 .list-sec.nav .sec-arrow { color: var(--dim); }
 #listBody .item[data-set] .line1 b { font-size: 12.5px; }
-/* 二级缩进：组头不再挂折叠箭头（2026-10-31），所以按"组头文字 + 10px"重新算 ——
-   组头文字左沿 = 行 padding 10；条目在 10px 缩进后起步，视觉上仍是一级/二级两层。 */
-#listBody .sec-body.nav { padding-left: 10px; }
+/* 二级缩进：条目文字与组头**图标后的标题文字**对齐（2026-11-02 用户："条目向右缩进"）——
+   组头文字左沿 = 行 padding 10 + 图标 13 + gap 6 = 29px；条目自身 padding 8，
+   所以 sec-body 缩进 29 - 8 = 21px，条目和组头标题踩同一条线。 */
+#listBody .sec-body.nav { padding-left: 21px; }
 /* 组收起后，选中分节被一起藏掉 —— 组头右侧补一颗点（accent 色）标记"正看的东西收在这组里"。
    margin-left:auto 把点推到组头行最右，跟 VS Code 折叠文件夹里的改动点是同一个心智。 */
 .sec-here { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); margin-left: auto; flex: none; }
@@ -437,6 +460,13 @@ body.no-list .list-panel { display: none; }
 .item:has(> .who > .line2) { min-height: 0; }
 .item:hover { background: var(--hover); }
 .item.active { background: var(--sel); }
+/* 设置左栏（唯一用 data-set 的导航树，2026-11-02 二十八改）：
+   · active 行加一道 accent 左缘条 —— hover(灰) 与 active(浅蓝) 太接近，划过去时看不出
+     "我正停在哪一页"；
+   · 行是 div+role=button，键盘 Tab 进来必须有可见焦点（默认 UA 环在这套底上几乎看不见）。 */
+#listBody .item[data-set].active::before { content: ''; position: absolute; left: 2px; top: 50%;
+  transform: translateY(-50%); width: 2px; height: 14px; border-radius: 1px; background: var(--accent); }
+#listBody .item[data-set]:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 /* 头像（密排风格）：**不再是圆形彩色块**。
    iOS 的头像是"彩色圆 + 白色字"，一团高饱和色在列表里非常跳；密排风格的头像是一个
    **淡底小方块 + 深色字**（6px 圆角、1px 描边），颜色只表达"是谁"，不争视线。
@@ -1348,9 +1378,58 @@ body:has(#pluginView.shown .fixed-head)::after {
 .qt-save { display: flex; justify-content: flex-end; margin-top: 12px; }
 .ms-dot-bad { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--bad); }
 
+/* ── 手机连接 · 已配对设备表（2026-11-01 五改：卡片行改表格）──
+   列齐了才扫得快：手机 / 状态 / 配对时间 / 最近活跃 / 面板角色 / 操作。
+   原来那套 .mb-pair-dev 卡片行样式在 mobile.css 的 ≤900px 媒体块里（桌面从来没有），
+   按钮和胶囊的类名沿用 —— 窄屏媒体块里的旧规则还能管到表里的这些元素。
+   min-width + 外层横滚：390px 的手机设置页里表太窄，宁可滚也不挤成竖条。 */
+.mb-pair-wrap { overflow-x: auto; }
+.pair-table { min-width: 620px; }
+.pair-table td { vertical-align: middle; }
+.pair-table td.pair-act { text-align: right; white-space: nowrap; }
+.pair-table tr.off td { opacity: .55; }
+.pair-ontag {
+  display: inline-block;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 14%, transparent);
+}
+.pair-table .mb-pair-offtag {
+  display: inline-block;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  background: color-mix(in srgb, var(--dim) 16%, transparent);
+}
+.pair-table .mb-pair-role { width: 150px; height: 30px; font-size: 12.5px; padding: 0 8px; border-radius: 8px; }
+/* 危险色归位（2026-11-02 用户评审："断开是可逆的，红应该给不可逆的"）——
+   断开连接 = 可逆（手机能自己连回来）→ 中性钮；取消配对 = 删记录不可逆 → 红钮。 */
+.pair-table .mb-pair-kick {
+  border: 1px solid var(--line); background: transparent; color: var(--text);
+  font: inherit; font-size: 12.5px; padding: 5px 12px; border-radius: 8px; cursor: pointer;
+}
+.pair-table .mb-pair-kick:hover { background: var(--hover); }
+.pair-table .mb-pair-forget {
+  border: 1px solid color-mix(in srgb, var(--bad) 45%, transparent); background: transparent; color: var(--bad);
+  font: inherit; font-size: 12.5px; padding: 5px 12px; border-radius: 8px; cursor: pointer;
+}
+.pair-table .mb-pair-forget:hover {
+  border-color: var(--bad);
+  background: color-mix(in srgb, var(--bad) 12%, transparent);
+}
+
+/* ── 手机连接 · 页顶「连接」总开关卡（2026-11-02）──
+   左标签右开关的横排；开关关掉后邀请码 / 已配对两节整个不画（pairing.mjs）。 */
+.pair-switch-box { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.pair-switch-txt { min-width: 0; }
+.pair-switch-txt b { font-size: 13.5px; }
+.pair-switch-txt .hint { margin: 3px 0 0; }
+
 /* 小节标题行：左边标题，右边动作按钮 */
 /* 标题行定高（2026-10-21 用户："切换按钮，框的高度不要变"）：
-   「添加设备」这类行内按钮随模式显隐，不定高的话切换时标题行一涨一缩，
+   行内按钮随状态显隐（「多机协同 › 展开」、技能页的刷新/新建），不定高的话显隐时标题行一涨一缩，
    下面的卡片跟着跳。min-height 必须按按钮的**实际**高度来 —— 实测 .btn-sm
    是 30.6px（12.5px 字 + 4px×2 内边距 + 按钮默认行高），定 26px 定小了，
    有按钮 30.6 / 无按钮 26，标题还是会跳 ~4px（用户追问"为什么切单机标题往上"）。
@@ -1481,7 +1560,7 @@ button.pill.gr-pr-task:hover { color: var(--accent); border-color: var(--accent)
    一句话判断：**能聊天的走①，不能聊天的走②**。
    两类的说明文字都在本段与 app.js 的 cliAvatar / avatarStyle 上，改之前先看这里。 */
 
-/* 运行时 / 外部件的图标块：颜色全部来自 --tile-* 一对 token（浅深两套主题都在文件头定义），
+/* 运行时的图标块：颜色全部来自 --tile-* 一对 token（浅深两套主题都在文件头定义），
    JS 只负责给 data-brand —— **不再内联写颜色**（2026-10-20 收口的重点：
    昨天那版把浅色调写进了 app.js，切深色主题就成了一排亮块）。 */
 .avatar.cli { background: var(--tile-cli-bg); color: var(--tile-cli-fg);
@@ -1490,7 +1569,6 @@ button.pill.gr-pr-task:hover { color: var(--accent); border-color: var(--accent)
 .avatar.cli[data-brand='codex']  { background: var(--tile-codex-bg);  color: var(--tile-codex-fg); }
 .avatar.cli[data-brand='claude'] { background: var(--tile-claude-bg); color: var(--tile-claude-fg); }
 .avatar.cli[data-brand='dsh']    { background: var(--tile-dsh-bg);    color: var(--tile-dsh-fg); }
-.avatar.cli[data-brand='magpie'] { background: var(--tile-magpie-bg); color: var(--tile-magpie-fg); }
 /* 💤 `.avatar.proj`（项目详情那枚蓝色「班」字方块）2026-10-19 用户要求去掉，已删 ——
    项目名本身就是标题，色块没有信息量；别再加回来。员工头像那枚 `.avatar` 仍在用。 */
 /* 技能图标块：同属"物品类"（淡底深字），颜色走 --tile-skill-* 一对 token，
@@ -3386,6 +3464,13 @@ button.att-add:hover { color: var(--text); border: 0; background: var(--panel); 
 .kb-tag.manual { color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, transparent); }
 .kb-del { margin-left: 4px; border: none; background: none; color: var(--dim); cursor: pointer; font-size: 13px; }
 .kb-del:hover { color: var(--bad); }
+/* 协作卡上的验收/撤销（2026-11-01 二十改）：跟 kb-del 同一生态位 —— 卡角小动作，
+   不抢标题；验收用 ok 色点一下就完，撤销默认灰、悬停变红（它才是一去不回的那个）。 */
+.kb-act { margin-left: 4px; border: 1px solid var(--line); background: none; color: var(--dim); cursor: pointer; font-size: 12px; line-height: 1; padding: 3px 8px; border-radius: 999px; }
+.kb-act:hover { color: var(--text); border-color: var(--dim); }
+.kb-act[data-kb-cl-done] { color: var(--ok); }
+.kb-act[data-kb-cl-done]:hover { border-color: var(--ok); }
+.kb-act[data-kb-cl-cancel]:hover { color: var(--bad); border-color: var(--bad); }
 .kb-check { display: flex; align-items: center; gap: 7px; font-size: 12.5px; margin-top: 10px; }
 .kb-check input { width: auto; }
 .kb-proj-hint { font-size: 12px; color: var(--dim); margin-top: 8px; word-break: break-all; }
@@ -3907,9 +3992,11 @@ details.tc-replies[open] > .tc-replies-toggle .tc-replies-unfold { display: inli
 /* ===== 数据管理 —— 「这台机器」页底下的一个区（2026-10-29 从设置独立分节降级）=====
    降成区之后不再摆大字统计条和两张动作卡（用户："导入导出做成按钮就行，
    没必要占据那么大的位置"）：导出/导入收成节头两颗按钮，状态压成一行小字，
-   备份快照是一个矮列表。颜色/圆角全走全站 tokens，深浅色主题自动跟随。 */
-.dm-sec { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); padding: 12px 16px; }
-.dm-sec .set-head { margin-bottom: 2px; }
+   备份快照是一个矮列表。颜色/圆角全走全站 tokens，深浅色主题自动跟随。
+   2026-11-01（用户截图圈红"数据管理拿到卡片外面"）：区头跟「设备」「运行时」
+   同款 —— `.fx` + `.fx-head`，标题在卡片外；统计 + 快照包进 `.dm-card` 一张卡
+   （区本身的下间距由 `.fx` 的 padding-bottom 提供，不用再写）。 */
+.dm-card { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); padding: 12px 16px; }
 .dm-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; flex: none; min-width: 0; }
 .dm-path { color: var(--dim); max-width: 460px; text-align: right; }
 /* 状态一行：数字加重、项目之间点隔；拉不到的数据显示 — */
@@ -3944,6 +4031,39 @@ details.tc-replies[open] > .tc-replies-toggle .tc-replies-unfold { display: inli
 /* 标题行下面那行**随选项卡走的状态说明**（单机/总机各一句）——
    让选项卡有语义可读；比正文小一档、淡色，不抢戏 */
 .mode-sec .mode-state { margin-top: 2px; font-size: 12px; color: var(--dim); }
+/* 主状态行（"我是总机/我是分机"）要读得见（2026-11-02 用户："这个太不明显了"）——
+   12px 淡灰那档是给次要说明的，主身份行升到 13px、正文色 */
+.mode-sec .mode-state.mode-main { font-size: 13px; color: var(--text); font-weight: 600; }
+/* 2026-11-02 二十六改：身份行搬进标题行（「模式  我是分机 —— [分机|总机]」），
+   跟标题同一行读，省掉一行独占的空间；权重回落到 500 —— 同一行里两个 600 会互相抢。
+   必须排在 .mode-state.mode-main 之后才能盖住它（同特异性，后写的赢）。 */
+.mode-sec .set-head .mode-state { margin: 0; font-size: 13px; color: var(--text); font-weight: 500; }
+/* 角色开关专属样式（2026-11-02 用户："这个太不明显了"）：通版 .seg 的选中态是
+   var(--panel) 底，撞上 .mode-sec 自己的 var(--panel) 底 = 选中跟没选一样。
+   seg-mode 用 accent 蓝实底 + 白字，块头也放大一档。 */
+.seg.seg-mode button { padding: 5px 20px; font-size: 13px; font-weight: 600; }
+.seg.seg-mode button.on { background: var(--accent); color: #fff; box-shadow: none; }
+.seg.seg-mode button.on:hover { color: #fff; }
+/* 「只在本机使用」那行（2026-11-01 八改）：次要动作，别和标题行的 seg 抢视线 */
+.mode-sec .mode-foot { margin-top: 8px; }
+/* 协作中心 · 未连接态的空状态卡（2026-11-02 二十六改，UI 评审）：
+   这张卡承担整页唯一的任务，所以给它一整块面 —— 图标 + 状态 + 一句说明 + 主按钮居中。
+   原来是「整宽空卡 + 左上角一颗 btn-sm」，按重要度看就是一个找不到入口的角落。 */
+.cl-empty { border: 1px solid var(--line); border-radius: 10px; background: var(--panel);
+            padding: 34px 20px 30px; text-align: center; }
+.cl-empty-ico { display: grid; place-items: center; margin: 0 auto 10px; width: 44px; height: 44px; }
+.cl-empty-title { font-size: 14px; font-weight: var(--w-title); }
+.cl-empty-desc { margin-top: 4px; font-size: 12.5px; color: var(--dim); }
+.cl-empty .cl-empty-btn { margin-top: 16px; padding: 8px 26px; }
+/* 紧凑变体（2026-11-02 二十七改）：用在「我的分机 0」这种**页内一块区域**的空态上，
+   下面还接着别的内容，不需要未连接总机那张那么大的垂直留白。 */
+.cl-empty-sm { padding: 26px 20px 24px; }
+.cl-empty-sm .cl-empty-ico { width: 40px; height: 40px; margin-bottom: 8px; }
+.cl-empty-sm .cl-empty-btn { margin-top: 14px; }
+/* 键盘可达（2026-11-02 二十六改）：seg 与主按钮补一圈可见焦点环 ——
+   默认 UA 描边在这套深色底上几乎看不见 */
+.seg button:focus-visible, .mode-ctl button:focus-visible, .cl-empty-btn:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px; }
 .machine-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
 .machine-warn { margin-top: 10px; font-size: 12px; color: var(--warn); line-height: 1.6; }
 .machine-dot { display: inline-block; width: 7px; height: 7px; border-radius: 99px;

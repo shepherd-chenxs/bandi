@@ -31,12 +31,14 @@
  * 分隔线只用半角 `-`。生成给 cmd 的 `.cmd` 一律**纯 ASCII + CRLF**（这项目踩过两次）。
  */
 import fs from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
 import readline from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 import { repoRoot, dataDir, dbPath, port as defaultPort, lanAllowed } from './config.mjs';
 import { ensureRunning, stopRunning, isUp, listeners, urlOf, openUrl, sleep, processInfo } from './lifecycle.mjs';
 import { platformVersion } from './local-mode.mjs';
+import * as netmode from './netmode.mjs';
 import { readLock, lockPath } from './node-supervisor.mjs';
 
 /* ------------------------------------------------------------------ 样式 */
@@ -124,7 +126,7 @@ const CFG_FILE = path.join(dataDir, 'config.json');
  * 记下"这次用的是哪个端口"（`<数据目录>/port`，与桌面壳同一个约定、同一个文件）。
  *
  * 为什么非记不可：`BANDI_PORT` 只活在**当时那个终端**里。在一个窗口里 `set BANDI_PORT=8899`
- * 起过之后，另一个窗口敲 `bandi stop` 会看不到它（按 8787 找，扑空）—— 用户看到的是
+ * 起过之后，另一个窗口敲 `bandi stop` 会看不到它（按默认端口找，扑空）—— 用户看到的是
  * "明明在跑，命令说没在跑"。记一笔，下次谁来看都能找到。桌面壳也读它来决定"复用自己的实例"，
  * 所以这个文件本来就是"上次在哪个端口"的公共记忆，不是我们另立的。
  */
@@ -140,9 +142,9 @@ function recordPort(port) {
 /**
  * 服务在不在跑、在哪个端口。
  *
- * **必须看 `service.json`**：桌面壳是**自己挑端口**的（8787 起往上找），所以"8787 起没起"
- * 这个判断在壳起的服务上永远是错的（会看到一个在 8788 上好好跑着的服务，却报"未运行"）。
- * 候选端口按「登记过的 → 端口文件 → 约定端口」依次试，第一个应答的就认。
+ * **必须看 `service.json`**：端口虽然已经固定（18787），但 `BANDI_PORT` 可以显式改，桌面壳
+ * 也会把它读到的实际端口写进登记 —— "默认端口起没起"不能代表"服务在不在"。
+ * 候选端口按「登记过的 → 端口文件 → 默认端口」依次试，第一个应答的就认。
  */
 async function detect() {
   const record = readJson(SERVICE_FILE);
@@ -170,13 +172,24 @@ async function detect() {
   return { running: false, port: first, url: urlOf(first), pids: [], record: null, taken };
 }
 
-/** 这台机器是什么身份。判据与 `config.mjs` / `local-mode.mjs` 同一套（别另立一套） */
+/**
+ * 这台机器是什么身份。判据与 `config.mjs` / `netmode.mjs` 同一套（别另立一套）。
+ *
+ * 2026-11-01 晚起形态拆成两层，标签也得跟着分：
+ *   · **能不能被加入**（`acceptNodes`）= 角色：总机 / 分机；
+ *   · **听什么地址**（`BANDI_HOST` 或 `allowLan`）= 对外服务 / 只听本机。
+ * 原来只会说"BANDI_HOST 给了 = 总机" —— 那台显式部署的机器改成分机后，
+ * `bandi status` 还会一直叫它总机，等于命令行在说谎。
+ */
 function modeOf() {
   const cp = String(readJson(CFG_FILE)?.controlPlane ?? '').trim();
   if (cp) return { id: 'client', label: '节点（这台机器已加入总机）', detail: cp };
-  if (process.env.BANDI_HOST) return { id: 'host', label: '总机（显式指定了监听地址）', detail: process.env.BANDI_HOST };
-  if (lanAllowed) return { id: 'host', label: '总机（允许局域网内的机器加入）', detail: '' };
-  return { id: 'solo', label: '单机（只听本机）', detail: '' };
+  const nm = netmode.readNetMode(); // 现读：角色是运行期可切的，别用启动快照
+  const where = process.env.BANDI_HOST ?? (nm.allowLan ? '0.0.0.0' : '127.0.0.1');
+  const serving = !netmode.isLoopback(where);
+  if (!serving) return { id: 'solo', label: '单机（只听本机）', detail: '' };
+  if (nm.acceptNodes) return { id: 'host', label: '总机（对外服务，收别的机器当节点）', detail: where };
+  return { id: 'branch', label: '分机（对外服务，但不收节点）', detail: where };
 }
 
 /** 执行节点（`node.mjs`）在这台机器上跑没跑 —— 只读锁文件，不碰进程 */
@@ -454,6 +467,254 @@ function doMode() {
   return out.join('\n');
 }
 
+/* ------------------------------------------------------------ 调本机 API */
+
+/*
+ * **为什么 CLI 也走 HTTP、不直接写库**（IAM §10.1.3 / §13）：
+ *   · 单写者：库只由服务进程写，CLI 直连库会和它抢 WAL、还会绕过所有校验；
+ *   · 服务器形态下浏览器根本做不了破坏性动作（要 `X-Bandi-Local`），
+ *     "本机终端"就是唯一合法的执行者 —— 而它只能用同一套接口，不能开后门。
+ * 三个头各管一件事，缺哪个由服务端说了算：
+ *   X-Bandi-Token  身份（root 令牌 = operator）
+ *   X-Bandi-Local  "我在这台机器的文件系统上"（值 = 数据目录 local_secret）
+ *   X-Bandi-Setup  只有"零账号 + 服务器形态"建第一个管理员时才需要
+ */
+function apiHeaders(extra = {}) {
+  const h = { 'Content-Type': 'application/json', ...extra };
+  const t = readText(path.join(dataDir, 'token'));
+  if (t) h['X-Bandi-Token'] = t;
+  const s = readText(path.join(dataDir, 'local_secret'));
+  if (s) h['X-Bandi-Local'] = s;
+  const sc = readText(path.join(dataDir, 'setup_code'));
+  if (sc) h['X-Bandi-Setup'] = sc;
+  return h;
+}
+
+/** 一个最小的 HTTP 调用（不引依赖；只打 127.0.0.1） */
+function api(port, { method = 'GET', path: p = '/', body = null, timeout = 30000 } = {}) {
+  return new Promise((resolve) => {
+    const payload = body === null ? null : Buffer.from(JSON.stringify(body), 'utf8');
+    const req = http.request(
+      {
+        host: '127.0.0.1',
+        port,
+        method,
+        path: p,
+        timeout,
+        headers: { ...apiHeaders(), ...(payload ? { 'Content-Length': payload.length } : {}) },
+      },
+      (res) => {
+        let text = '';
+        res.on('data', (d) => (text += d));
+        res.on('end', () => {
+          let j = null;
+          try {
+            j = JSON.parse(text);
+          } catch { /* 不是 JSON 就把原文给调用方 */ }
+          resolve({ status: res.statusCode, json: j, text });
+        });
+      },
+    );
+    req.on('error', (e) => resolve({ status: 0, json: null, text: String(e?.message ?? e) }));
+    req.on('timeout', () => {
+      req.destroy();
+      resolve({ status: 0, json: null, text: '超时' });
+    });
+    if (payload) req.write(payload);
+    req.end();
+  });
+}
+
+/** 服务没在跑就没法调接口 —— 说清楚怎么办，别丢一个 ECONNREFUSED 给人 */
+async function needService() {
+  const s = await detect();
+  if (!s.running) return { error: `班底没在跑（先 ${cyan('bandi start')}，或 ${cyan('bandi status')} 看它在哪个端口）` };
+  return { port: s.port };
+}
+
+const errText = (r) => (r.json?.code ? `${r.json.code}：${r.json.error}` : r.text || `HTTP ${r.status}`);
+
+/* --------------------------------------------------------------- collab */
+
+async function cmdCollab(argv) {
+  const words = argv.filter((a) => !a.startsWith('-'));
+  const sub = words[1] ?? 'status';
+  const svc = await needService();
+  if (svc.error) return svc.error;
+
+  if (sub === 'status') {
+    const r = await api(svc.port, { path: '/api/local/collab/status' });
+    if (r.status !== 200) return red(errText(r));
+    const j = r.json ?? {};
+    if (!j.joined) return `未加入任何协作中心${j.centerUrl ? dim(`（上次退出的是 ${j.centerUrl}）`) : ''}`;
+    return [
+      `已加入协作中心 ${green(j.centerLabel || j.centerUrl || '?')}`,
+      `  中心  ${j.centerUrl ?? '?'}`,
+      `  分公司 ${j.branchId ?? '?'}${j.online === false ? `  ${yellow('（中心当前不可达）')}` : ''}`,
+    ].join('\n');
+  }
+
+  if (sub === 'join') {
+    const url = words[2];
+    const code = words[3];
+    if (!url) return '用法：bandi collab join <中心地址> [接入码]';
+    const r = await api(svc.port, { method: 'POST', path: '/api/local/collab/join', body: { url, code } });
+    if (r.status !== 200) return red(errText(r));
+    return `${green('已加入')}「${r.json?.centerLabel ?? url}」（${r.json?.branchId ?? '?'}）`;
+  }
+
+  if (sub === 'leave') {
+    const r = await api(svc.port, { method: 'POST', path: '/api/local/collab/leave' });
+    if (r.status !== 200) return red(errText(r));
+    return `${green('已退出协作中心')}（本地项目与卡片都还在）`;
+  }
+
+  return `不认识的子命令：collab ${sub}\n（bandi collab status | join <地址> [码] | leave）`;
+}
+
+/* ----------------------------------------------------------------- nodes */
+
+/**
+ * `bandi nodes …`（IAM Phase 3 补，2026-10-31）：算力节点的终端入口。
+ *
+ * 为什么必须有它：前端「算力节点管理」的加入向导在**服务器形态**下不再渲染
+ * （破坏性动作按 `state.localSecret` 显隐，IAM §10.1.3）—— 藏了按钮就得给终端一条路，
+ * 否则服务器形态的算力加入就是死路。走 HTTP 不写库（单写者原则，与 collab 同一套 `api()`，
+ * 自动带 `X-Bandi-Token` / `X-Bandi-Local` 头，`/api/local/join` 的文件秘密闸（E4097）自然过）。
+ *
+ * 两边视角都覆盖：
+ *   · **当节点**（这台机器去给别的总机打工）：status / join / leave —— 打本机 `/api/local/*`；
+ *   · **当总机**（这台机器收节点）：list / invite —— 打 `/api/nodes*`（operator 待遇）。
+ */
+async function cmdNodes(argv) {
+  const words = argv.filter((a) => !a.startsWith('-'));
+  const sub = words[1] ?? 'status';
+  const svc = await needService();
+  if (svc.error) return svc.error;
+
+  if (sub === 'status') {
+    const r = await api(svc.port, { path: '/api/local/status' });
+    if (r.status !== 200) return red(errText(r));
+    const c = r.json?.client ?? {};
+    if (!c.joined) {
+      return [
+        '这台机器没加入任何总机（独立运行）',
+        c.controlPlane === '' || c.controlPlane == null ? dim('  加入：bandi nodes join <总机地址> <邀请码>') : dim(`  上次加入的是 ${c.controlPlane}`),
+      ].join('\n');
+    }
+    return [
+      `已加入总机 ${green(c.hostLabel || c.controlPlane)}`,
+      `  总机  ${c.controlPlane ?? '?'}`,
+      `  权限  ${(c.scope ?? []).join(' + ') || '?'}`,
+      `  节点  ${c.node?.running ? green(`在跑（pid ${c.node.pid}）${c.node.external ? ' · 外部托管' : ''}`) : yellow('没在跑')}${c.node?.why ? dim(`（${c.node.why}）`) : ''}`,
+      `  加入于 ${c.since ?? '?'}`,
+    ].join('\n');
+  }
+
+  if (sub === 'join') {
+    const url = words[2];
+    const code = words[3];
+    if (!url || !code) return '用法：bandi nodes join <总机地址> <邀请码>\n  邀请码在总机上发：bandi nodes invite（10 分钟内有效，只用一次）';
+    const r = await api(svc.port, { method: 'POST', path: '/api/local/join', body: { url, code } });
+    if (r.status !== 200 && r.status !== 201) return red(errText(r));
+    const j = r.json ?? {};
+    return [
+      `${green('已加入')}「${j.hostLabel ?? url}」· 只当算力（${(j.scope ?? ['compute']).join('+')}）`,
+      j.node?.running ? dim('  节点已起') : yellow(`  节点还没起${j.node?.why ? `：${j.node.why}` : '（配置已写，稍后自动起）'}`),
+      dim('  监听正在收回环（几秒内生效）'),
+    ].join('\n');
+  }
+
+  if (sub === 'leave') {
+    const r = await api(svc.port, { method: 'POST', path: '/api/local/leave' });
+    if (r.status !== 200) return red(errText(r));
+    return `${green('已退出总机')}（本地数据都在）`;
+  }
+
+  if (sub === 'list') {
+    // 总机视角：登记了哪些算力节点
+    const r = await api(svc.port, { path: '/api/nodes' });
+    if (r.status !== 200) return red(errText(r));
+    const list = r.json?.nodes ?? [];
+    if (!list.length) return '还没有登记任何算力节点（在那台机器上：bandi nodes join <本机地址> <邀请码>）';
+    return [
+      dim(`  心跳 ${r.json?.heartbeatSeconds ?? '?'}s · ${r.json?.offlineAfterSeconds ?? '?'}s 无心跳算离线`),
+      ...list.map((n) =>
+        `  ${n.online ? green('●') : yellow('○')} ${n.label ?? n.id}${n.hostname && n.hostname !== n.label ? dim(`（${n.hostname}）`) : ''} · ${(n.scope ?? '').trim() || dim('无令牌')}${n.pendingJobs ? ` · 队列 ${n.pendingJobs}` : ''}${n.lastSeenAt ? dim(` · 心跳 ${n.lastSeenAt}`) : ''}`,
+      ),
+    ].join('\n');
+  }
+
+  if (sub === 'invite') {
+    const r = await api(svc.port, { method: 'POST', path: '/api/nodes/invites' });
+    if (r.status !== 200 && r.status !== 201) return red(errText(r));
+    const inv = r.json ?? {};
+    const code = inv.code ?? inv.token ?? '?';
+    return [
+      `${green('邀请码已发')}（10 分钟内有效，只用一次）：`,
+      `  ${code}`,
+      dim('  到那台机器上执行：bandi nodes join <这台机器的地址> <邀请码>'),
+    ].join('\n');
+  }
+
+  return `不认识的子命令：nodes ${sub}\n（bandi nodes status | join <地址> <邀请码> | leave | list | invite）`;
+}
+
+/* ----------------------------------------------------------------- data */
+
+async function cmdData(argv) {
+  const words = argv.filter((a) => !a.startsWith('-'));
+  if ((words[1] ?? '') !== 'export') return '用法：bandi data export [--dir 目录]';
+  const svc = await needService();
+  if (svc.error) return svc.error;
+  const dir = argOf(argv, '--dir');
+  const r = await api(svc.port, { method: 'POST', path: '/api/local/export', body: dir ? { dir } : {} });
+  if (r.status !== 200) return red(errText(r));
+  return `${green('已导出')} ${r.json?.file}\n  ${dim(fmtSize(r.json?.size) || '')}`;
+}
+
+/* ----------------------------------------------------------------- user */
+
+async function cmdUser(argv) {
+  const words = argv.filter((a) => !a.startsWith('-'));
+  const sub = words[1] ?? 'list';
+  const svc = await needService();
+  if (svc.error) return svc.error;
+
+  if (sub === 'list') {
+    const r = await api(svc.port, { path: '/api/users' });
+    if (r.status !== 200) return red(errText(r));
+    const list = r.json?.users ?? [];
+    if (!list.length) return '还没有任何账号 —— 用 bandi user create <名字> --admin';
+    return list.map((u) => `  ${u.name}${u.roleId ? dim(` · ${u.roleId}`) : ''}${u.disabled ? dim(' · 已禁用') : ''}${u.hasPassword ? '' : dim(' · 免密')}`).join('\n');
+  }
+
+  if (sub === 'create') {
+    const name = words[2];
+    if (!name) return '用法：bandi user create <名字> [--admin] [--password 密码]';
+    const password = argOf(argv, '--password') ?? '';
+    const body = { name, ...(password ? { password } : {}), ...(argv.includes('--admin') ? { roleId: 'admin' } : {}) };
+    const r = await api(svc.port, { method: 'POST', path: '/api/users', body });
+    if (r.status !== 201 && r.status !== 200) return red(errText(r));
+    let out = `${green('已创建')}「${name}」${r.json?.first ? '（第一个账号，自动是管理员）' : ''}`;
+    if (!password) {
+      out += dim('\n  没设密码 = 免密账号（回环形态下点一下就进）');
+      /*
+       * 服务器形态建免密账号要告知后果（IAM §8.6 受限会话）：从别的机器登录
+       * 这个号只能先设密码，其余操作一律 E4098 —— 不阻断（本机回环用免密依然合理），
+       * 但得让运维在创建的那一刻就知道，而不是登录之后撞了墙再回来问。
+       */
+      const st = await api(svc.port, { path: '/api/state' });
+      if (st.status === 200 && st.json?.localSecret === 'required') {
+        out += dim('\n  ⚠ 这个服务开着局域网访问：这个号从其它机器登录时是受限会话（只能先设密码，其余操作一律拒绝）。\n    建议直接带上密码：bandi user create <名字> --password <密码>');
+      }
+    }
+    return out;
+  }
+
+  return `不认识的子命令：user ${sub}\n（bandi user list | create <名字> [--admin] [--password 密码]）`;
+}
+
 /* --------------------------------------------------------- install-cli */
 
 /*
@@ -541,6 +802,20 @@ const HELP = `班底 · 命令行
   bandi logs [-n 40] [-f]  日志（-f 跟着走）
   bandi node               执行节点状态（只读）
   bandi mode               这台机器是什么身份（只读；改模式去页面）
+  bandi collab [status]    协作中心：我加入了谁
+  bandi collab join <地址> [接入码]
+  bandi collab leave       退出协作中心（本地项目与卡片都还在）
+  bandi nodes [status]     算力节点：这台机器给哪台总机打工
+  bandi nodes join <总机地址> <邀请码>
+                           加入总机（只当算力；邀请码在总机上 bandi nodes invite 发）
+  bandi nodes leave        退出总机
+  bandi nodes list         （总机视角）登记了哪些算力节点、在不在线
+  bandi nodes invite       （总机视角）发一个一次性加入邀请码
+  bandi data export [--dir 目录]
+                           导出数据快照（服务器形态下这是唯一入口）
+  bandi user list          账号列表
+  bandi user create <名字> [--admin] [--password 密码]
+                           建账号（服务器形态下建第一个管理员用它）
   bandi install-cli        把 bandi 装成一个全局命令
                            [--dir 目录] [--path] [--remove] [--dry-run]
   bandi version | help
@@ -622,6 +897,30 @@ async function main() {
     case 'mode':
       console.log(doMode());
       return 0;
+
+    case 'collab': {
+      console.log(await cmdCollab(argv));
+      return 0;
+    }
+
+    case 'nodes': {
+      const out = await cmdNodes(argv);
+      console.log(out);
+      return /^用法|不认识的子命令/.test(out) ? 2 : 0;
+    }
+
+    case 'data': {
+      const out = await cmdData(argv);
+      console.log(out);
+      return /^用法/.test(out) ? 2 : 0;
+    }
+
+    case 'user':
+    case 'users': {
+      const out = await cmdUser(argv);
+      console.log(out);
+      return /^用法|不认识的子命令/.test(out) ? 2 : 0;
+    }
 
     case 'install-cli':
       console.log(

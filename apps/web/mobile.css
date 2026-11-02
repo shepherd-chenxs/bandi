@@ -577,6 +577,9 @@
 
   /* 组标题：左沿与卡内文字对齐（卡片外边距 12 + 行内边距 16），比行低一档、不抢眼 */
   .mb-set-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
     padding: 10px calc(12px + var(--mb-pad, 16px)) 6px;
     font-size: 13px;
     font-weight: 400;
@@ -625,6 +628,12 @@
    * 只藏**没有操作按钮**的那种：技能页的 headRow 里挂着搜索框，藏了就没法搜。
    */
   #settingsView > .head-row:not(:has(.head-actions)) { display: none; }
+  /*
+   * 协作中心是**嵌套**一层的（`#collabPage > .head-row`，见 collab.mjs 的 clHead），
+   * 上面那条直系选择器够不到它 —— 手机上就还是两行「协作中心」（2026-11-02 用户："清"）。
+   * 口径与上一条一致：只藏没有操作按钮的，带搜索/动作的页头留着。
+   */
+  #settingsView #collabPage > .head-row:not(:has(.head-actions)) { display: none; }
 }
 
 /* ============================================================ 4d. 设置子页（详情区字阶） */
@@ -697,12 +706,13 @@
   #settingsView .dm-line { font-size: 13.5px; }
 
   /*
-   * 「数据管理」区头的竖排事故（2026-10-31 顺手修）：`.set-head` 是 flex 不换行，
+   * 「数据管理」区头的竖排事故（2026-10-31 顺手修）：区头是 flex 不换行，
    * 右边 `.dm-actions` 里塞了个 460px 上限的绝对路径 + 两个按钮，390 宽下把
-   * `<b>数据管理</b>` 挤到只剩一个字宽 —— 四个字竖着排成一列。
+   * 「数据管理」挤到只剩一个字宽 —— 四个字竖着排成一列。
    * 窄屏改成两行：标题独占第一行，路径（单行省略）+ 按钮在第二行。
+   * 2026-11-01 区头改 `.fx-head`（标题拿到卡片外，跟「设备/运行时」同款），选择器跟着换。
    */
-  #settingsView .dm-sec .set-head { flex-wrap: wrap; row-gap: 8px; }
+  #settingsView .dm-sec .fx-head { flex-wrap: wrap; row-gap: 8px; }
   #settingsView .dm-actions { flex: 1 1 100%; margin-left: 0; width: 100%; }
   #settingsView .dm-path {
     flex: 1 1 0;
@@ -943,10 +953,11 @@
 
   .input-wrap {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
+    /* mic 这一列只有手机壳里才有按钮（voice.mjs 注入），桌面浏览器上宽度自动为 0 */
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
     grid-template-areas:
-      "plus text send"
-      "strip strip strip";
+      "plus text mic send"
+      "strip strip strip strip";
     align-items: end;
     column-gap: 2px;
     row-gap: 4px;
@@ -1012,6 +1023,12 @@
     font-weight: 500;
   }
   .input-tools #send:active { filter: brightness(.92); }
+
+  /* 语音按钮占 mic 列（只在手机壳里存在，见 js/voice.mjs） */
+  .input-tools .voice-btn {
+    grid-area: mic;
+    align-self: end;
+  }
 
   /* 附件条（选了文件之后那排缩略图）横跨整条胶囊 */
   .att-strip { grid-area: strip; }
@@ -1178,6 +1195,107 @@ body.mb-chat .chat-head .mb-chat-back {
 .mb-qr-wrap { margin-top: 12px; text-align: center; }
 .mb-qr { display: inline-grid; place-items: center; }
 .mb-qr svg { width: 220px; height: 220px; max-width: 100%; border-radius: 10px; }
+
+/* 邀请码卡（2026-11-01 四改）：左边竖着两行（电脑地址 / 邀请码），行内动作跟在值后面
+   （地址 → 复制地址；码 → 眼睛 + 换一个），**与二维码区之间一条竖分隔线**。
+   邀请码右边的小眼睛点一下遮成圆点（演示、截屏、旁边有人时用）。 */
+.mb-invite { display: flex; align-items: center; gap: 24px; padding: 14px 8px 8px; }
+.mb-invite-col {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  /* 与二维码区的分隔线：细线 + 与卡片同高的留白 */
+  border-right: 1px solid var(--line, #26282c);
+  padding-right: 24px;
+}
+.mb-invite-row { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.mb-invite-k {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12.5px;
+  color: var(--dim);
+}
+.mb-invite-v { display: flex; align-items: center; gap: 10px; min-height: 34px; }
+.mb-invite-addr {
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 21px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  user-select: all;
+}
+.mb-invite-code { cursor: pointer; -webkit-tap-highlight-color: transparent; min-width: 0; }
+.mb-invite-code-row {
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--text);
+  user-select: all; /* 点一下全选，拖一半抄错最难查 */
+}
+/* 遮住时只换色、不动字距（2026-11-02 用户："点击小眼睛宽度为啥会变"）——
+   旧版把字距拉到 0.14em，11 个字符整行宽出 ~24px，眼睛和「换一个」跟着横移。
+   等宽字体里圆点与数字同宽，字距不动两态就一样宽。 */
+.mb-invite-code.is-masked .mb-invite-code-row { color: var(--dim); }
+.mb-invite-wait { font-size: 13px; color: var(--dim); }
+.mb-invite-left { font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; }
+.mb-invite-left.expired { color: var(--bad, #c0504d); }
+/* 最后 60 秒（2026-11-02 评审）：紧迫感长在数字颜色上，不用读秒 */
+.mb-invite-left.soon { color: var(--bad, #c0504d); }
+/* 过期妆（2026-11-02）：码灰化即可 —— 划线版被用户毙了（"你加删除线干嘛"），
+   死码的信号靠灰色 + 「换一个」主色钮传递，别在 30px 大字上画线。 */
+.mb-invite-code.expired { cursor: default; }
+.mb-invite-code.expired .mb-invite-code-row { color: var(--dim, #7c8288); }
+/* 小眼睛：贴着码右边，只有图标，别做成按钮的样子（要轻） */
+.mb-eye {
+  appearance: none;
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dim);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.15s, color 0.15s;
+}
+.mb-eye:hover { background: color-mix(in srgb, var(--text) 8%, transparent); color: var(--text); }
+.mb-eye svg { width: 18px; height: 18px; }
+.mb-invite-side { flex: none; text-align: center; }
+.mb-invite-side .mb-qr svg { width: 112px; height: 112px; }
+.mb-invite-side-hint { font-size: 11.5px; color: var(--dim); margin-top: 6px; }
+/* 窄屏：整体竖排 —— 两行 → 二维码；分隔线转横 */
+@media (max-width: 900px) {
+  .mb-invite { flex-direction: column; align-items: stretch; gap: 16px; padding: 12px 0 6px; }
+  .mb-invite-col {
+    border-right: 0;
+    padding-right: 0;
+    border-bottom: 1px solid var(--line, #26282c);
+    padding-bottom: 14px;
+  }
+  .mb-invite-col { gap: 14px; }
+  .mb-invite-row + .mb-invite-row {
+    border-top: 1px solid var(--line, #26282c);
+    padding-top: 13px;
+  }
+  .mb-invite-code-row { font-size: 27px; }
+  .mb-invite-side { align-self: center; }
+  .mb-invite-side .mb-qr svg { width: 150px; height: 150px; }
+}
 .mb-urls { display: grid; gap: 6px; margin-top: 8px; }
 .mb-url {
   border: 1px solid var(--line, #26282c);
@@ -1192,18 +1310,42 @@ body.mb-chat .chat-head .mb-chat-back {
 }
 .mb-url.primary { border-color: var(--accent, #3b6ef5); }
 
-/* 设置分节里的设备行（.members 容器沿用既有样式，行本体按 mb- 命名空间） */
-.mb-pair-dev {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 8px;
-  border-bottom: 1px solid var(--line, #26282c);
-}
-.mb-pair-dev:last-child { border-bottom: 0; }
-.mb-pair-dev-main { flex: 1; min-width: 0; }
+/* 设置分节里的设备**表**（2026-11-01 五改：卡片行改表格，见 style.css 的 .pair-table）——
+   窄屏下表太窄，横滚交给 .mb-pair-wrap（style.css）；这里只留按钮/胶囊/下拉的窄屏微调。 */
+.mb-pair-wrap { -webkit-overflow-scrolling: touch; }
+/* 危险色归位（2026-11-02 评审）：断开连接可逆 → 中性钮；取消配对删记录不可逆 → 红钮。
+   旧口径"踢出是危险的主动动作"作废 —— 踢出能连回来，真正回不来的是取消配对。 */
 .mb-pair-kick {
   border: 1px solid var(--line, #26282c);
+  background: transparent;
+  color: var(--text, #3a3f47);
+  font: inherit;
+  font-size: 12.5px;
+  padding: 5px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  flex: none;
+}
+.mb-pair-kick:hover { background: var(--hover, rgba(0, 0, 0, .05)); }
+/* 已断开（2026-11-01 二刀）：行留着，靠这个胶囊和灰掉的行区分「取消配对」前的状态
+   （灰行在 style.css 的 .pair-table tr.off；这里的 margin-top 是卡片行遗留，表格里去掉） */
+.mb-pair-offtag {
+  display: inline-block;
+  margin-left: 2px;
+  padding: 0 6px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--dim, #7c8288) 16%, transparent);
+  font-size: 11.5px;
+}
+/* 面板角色下拉（2026-10-28 第四刀）：手机底部导航由总机分配的角色决定。
+ * 全局 `input,select` 是 width:100%（style.css），这里要按内容定宽，不然它会撑满整行、
+ * 把「断开连接」挤出屏幕。高度压到 30px —— 跟旁边那颗小按钮一个视觉重量。
+ */
+.mb-pair-role { flex: 0 0 auto; }
+/* 取消配对（2026-11-01）：已踢出的行上的清理动作。
+   2026-11-02 评审改红：它是**删记录、不可逆**的那一个 —— 危险色归它，别再给可逆的断开。 */
+.mb-pair-forget {
+  border: 1px solid color-mix(in srgb, var(--bad, #c0504d) 45%, transparent);
   background: transparent;
   color: var(--bad, #c0504d);
   font: inherit;
@@ -1213,31 +1355,9 @@ body.mb-chat .chat-head .mb-chat-back {
   cursor: pointer;
   flex: none;
 }
-.mb-pair-kick:hover { background: color-mix(in srgb, var(--bad, #c0504d) 12%, transparent); }
-/* 已踢出/令牌已失效的设备（2026-10-28）：行留着当记录，靠这个标记和「已踢出」胶囊区分 */
-.mb-pair-dev.off .mb-pair-dev-main { opacity: .55; }
-/*
- * 面板角色下拉（2026-10-28 第四刀）：手机底部导航由总机分配的角色决定。
- * 全局 `input,select` 是 width:100%（style.css），这里要按内容定宽，不然它会撑满整行、
- * 把「踢出」挤出屏幕。高度压到 30px —— 跟旁边那颗小按钮一个视觉重量。
- */
-.mb-pair-role {
-  width: 150px;
-  height: 30px;
-  flex: 0 0 auto;
-  margin-top: 8px;
-  font-size: 12.5px;
-  padding: 0 8px;
-  border-radius: 8px;
-}
-.mb-pair-dev.off .mb-pair-role { opacity: .6; }
-.mb-pair-off {
-  flex: none;
-  font-size: 12px;
-  color: var(--dim, #7c8288);
-  border: 1px solid var(--line, #26282c);
-  border-radius: 999px;
-  padding: 3px 10px;
+.mb-pair-forget:hover {
+  border-color: var(--bad, #c0504d);
+  background: color-mix(in srgb, var(--bad, #c0504d) 12%, transparent);
 }
 
 /* ============================================================ 13. 对话富内容降级（P1-4） */
@@ -1292,3 +1412,257 @@ body.mb-chat .chat-head .mb-chat-back {
 }
 .mb-relpair-card h2 { font-size: 18px; margin: 0 0 10px; color: var(--text, #e7e7e7); }
 .mb-relpair-card p { font-size: 13.5px; line-height: 1.8; color: var(--dim, #9aa0a6); margin: 0; }
+
+/*
+ * 遮罩上的唯一动作（2026-11-01）：配对真没了才回连接页。
+ * 工作台里没有"返回连接页"的入口 —— 那是登录页，不是上一级；按返回键是退出 App。
+ */
+.mb-relpair-btn {
+  margin-top: 22px;
+  padding: 11px 26px;
+  border: 0;
+  border-radius: var(--mb-r-pill, 22px);
+  background: var(--accent, #3b6ef5);
+  color: #fff;
+  font: inherit;
+  font-size: 14.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.mb-relpair-btn:disabled { opacity: .6; }
+
+/* ============================================================ 15. 我的（个人中心） */
+
+/*
+ * 2026-11-01 用户："手机我的页面改造一下。显示当前登录卡，然后加一个设置入口那种"。
+ *
+ * 改前：底部「我的」tab 直接进设置页 —— 点"我的"看到一串开关，没有"我是谁"。
+ * 改后：手机「我的」= 主流 App 的个人中心 ——
+ *   上面一张登录卡（大头像 + 名字 + 身份/配对信息），
+ *   下面一个「设置 ›」入口，设置页退成它的下一级（左栏顶部那条「← 我的」）。
+ * 桌面（>900px）不动：左栏一级菜单里本来就有「设置」，再摆入口是重复。
+ */
+
+/* 桌面不画这个入口（设置入口只属于手机形态）。挂 body.mb-narrow 而不是媒体查询，
+   与页面其余"行为折叠"的判据保持同一把尺子。 */
+body:not(.mb-narrow) .me-entry-sec { display: none; }
+
+@media (max-width: 900px) {
+  /* 页底灰同设置页：白卡要浮在灰上才有"卡片"这层关系 */
+  body.mb-narrow #settingsView { background: var(--mb-cvbg, var(--mb-page, var(--bg))); }
+
+  /* 登录卡与入口卡：去掉 set-box 的 1px 描边 + 10px 圆角，换成分组卡的语汇 */
+  body.mb-narrow #settingsView .me-hero-sec .set-box,
+  body.mb-narrow #settingsView .me-entry-sec .set-box {
+    border: 0;
+    border-radius: var(--mb-r-card, 12px);
+    background: var(--mb-surface, var(--side));
+    /* 深色下卡面与页底只差 12/255，补一圈极淡的描边（与 .mb-set-card 同款） */
+    box-shadow: 0 0 0 0.5px color-mix(in srgb, var(--text) 9%, transparent);
+  }
+
+  /* 登录卡：从"一行"变"一块"（头像 62、名字 20），行内边距按卡片给 */
+  body.mb-narrow #settingsView .me-row.me-hero {
+    padding: 20px 16px;
+    gap: 14px;
+    justify-content: flex-start;
+  }
+  body.mb-narrow #settingsView .me-hero .me-ava {
+    width: 62px;
+    height: 62px;
+    font-size: 25px;
+    flex: 0 0 auto;
+  }
+  body.mb-narrow #settingsView .me-hero .me-who { gap: 1px; }
+  body.mb-narrow #settingsView .me-hero .me-who b { font-size: 20px; line-height: 1.45; font-weight: 600; }
+  body.mb-narrow #settingsView .me-hero .me-who .sub { font-size: 13px; line-height: 1.6; }
+  /* 设备形态那行（已配对 · ip:port）用等宽，跟设置里其它地址同款 */
+  body.mb-narrow #settingsView .me-hero .me-dev {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12px;
+    color: var(--dim);
+  }
+
+  /* 「设置」入口：一行，按钮的语义（整行可点）+ chevron */
+  body.mb-narrow #settingsView .me-entry {
+    justify-content: flex-start;
+    gap: 12px;
+    min-height: 54px;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  body.mb-narrow #settingsView .me-entry:active { background: var(--mb-press, var(--active)); }
+  body.mb-narrow #settingsView .me-entry-ico {
+    display: inline-flex;
+    flex: 0 0 auto;
+    width: 22px;
+    height: 22px;
+    color: var(--dim);
+  }
+  body.mb-narrow #settingsView .me-entry-ico svg { width: 22px; height: 22px; }
+  /* label 吃掉中间那段，chevron 才被推到右沿（.set-row 默认是 space-between，
+     三个子元素会被均分，那是"图标浮中间"的错版） */
+  body.mb-narrow #settingsView .me-entry .set-label { flex: 1; }
+  body.mb-narrow #settingsView .me-entry .me-chevron {
+    flex: 0 0 auto;
+    color: var(--dim);
+    font-size: 20px;
+    line-height: 1;
+    transform: translateY(-1px);
+  }
+
+  /* 「我的」页底那两个按钮（退出登录 / 去登录）在手机上不该贴在右沿：
+     个人中心的动作用整宽按钮，比右下角一颗小按钮好点得多 */
+  body.mb-narrow #settingsView .machine-actions { justify-content: stretch; }
+  body.mb-narrow #settingsView .machine-actions .btn-sm {
+    flex: 1;
+    height: 46px;
+    font-size: 15px;
+    border-radius: var(--mb-r-ctl, 10px);
+  }
+
+  /* 设置列表顶上的「← 我的」行（contacts.mjs 画的）：图标 + 文字，跟 IM 列表行同高 */
+  body.mb-narrow .mb-set-card .item.mb-set-back {
+    min-height: 48px;
+    gap: 8px;
+    color: var(--dim);
+  }
+  body.mb-narrow .mb-set-card .item.mb-set-back svg {
+    width: 18px;
+    height: 18px;
+    flex: 0 0 auto;
+  }
+  body.mb-narrow .mb-set-card .item.mb-set-back .line1 b { font-size: 15px; font-weight: 500; }
+}
+
+/* ============================================================ 15. 语音输入（2026-11-01）
+
+   只在手机壳里出现（voice.mjs 探测到 window.__BandiSpeech 才插按钮），
+   所以这里不写 @media —— 平板/横屏同样按这套走。
+
+   浮层是一张压在输入条上方的小卡片：左边一个红点在跳（在听）、中间五根音量柱、
+   一行状态字，右边「取消」。它**不遮输入框** —— 识别出来的字实时写在框里，
+   遮住就等于让用户看不见自己在说什么。 */
+
+.voice-btn {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: var(--dim);
+  background: transparent;
+  flex: none;
+  transition: color .15s ease, background .15s ease;
+}
+.voice-btn:hover { color: var(--text); background: var(--hover); }
+.voice-btn.is-on {
+  color: #fff;
+  background: var(--bad, #c0504d);
+}
+.voice-btn.is-on svg { animation: voice-breathe 1.4s ease-in-out infinite; }
+@keyframes voice-breathe {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: .72; transform: scale(.92); }
+}
+
+.voice-layer {
+  position: fixed;
+  left: 12px;
+  right: 12px;
+  bottom: 84px;
+  z-index: 60;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(10px);
+  transition: opacity .16s ease, transform .16s ease;
+}
+.voice-layer.is-open { opacity: 1; transform: translateY(0); }
+.voice-layer.is-closing { opacity: 0; transform: translateY(6px); }
+
+.voice-card {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 560px;
+  width: 100%;
+  padding: 9px 10px 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--card, var(--side));
+  box-shadow: 0 8px 28px rgb(0 0 0 / .16);
+}
+
+.voice-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--bad, #c0504d);
+  flex: none;
+  animation: voice-pulse 1.1s ease-in-out infinite;
+}
+@keyframes voice-pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgb(192 80 77 / .45); }
+  50% { opacity: .55; box-shadow: 0 0 0 5px rgb(192 80 77 / 0); }
+}
+
+.voice-bars {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 18px;
+  flex: none;
+}
+.voice-bars i {
+  width: 3px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--dim);
+  transition: height .1s linear, background .1s linear;
+}
+.voice-bars i.on { background: var(--accent, #3b6ef5); }
+.voice-bars i:nth-child(1).on { height: 8px; }
+.voice-bars i:nth-child(2).on { height: 13px; }
+.voice-bars i:nth-child(3).on { height: 17px; }
+.voice-bars i:nth-child(4).on { height: 12px; }
+.voice-bars i:nth-child(5).on { height: 7px; }
+
+.voice-msg {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.voice-x {
+  flex: none;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dim);
+  font-size: 13px;
+  cursor: pointer;
+}
+.voice-x:hover { background: var(--hover); color: var(--text); }
+
+/* 出错：不用波形也不用红点，整条变成一句说明 */
+.voice-layer.is-error .voice-dot,
+.voice-layer.is-error .voice-bars { display: none; }
+.voice-layer.is-error .voice-msg { color: var(--bad, #c0504d); }
+.voice-layer.is-error .voice-x { display: none; }
+
+/* 窄屏（手机壳本体）：按钮跟 ＋ / 发送 一样高，圆一点 */
+@media (max-width: 900px) {
+  .voice-btn { width: 38px; height: 38px; }
+  .voice-card { padding: 8px 8px 8px 12px; }
+  .voice-msg { font-size: 12.5px; }
+}

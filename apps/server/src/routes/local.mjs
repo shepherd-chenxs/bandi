@@ -4,6 +4,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { sendJson, fail, readBody, readRawBody } from '../http.mjs';
 import { SERVER } from '../server-state.mjs';
 import { port, host, dataDir, dbPath } from '../config.mjs';
@@ -13,15 +14,19 @@ import * as runtimes from '../runtimes.mjs';
 import * as externals from '../externals.mjs';
 import * as status from '../status.mjs';
 import * as localMode from '../local-mode.mjs';
-import * as discover from '../discover.mjs';
+// 协作中心（2026-10-31 MVP）：分公司侧的 join / leave / status 在它里面（配置 + 同步循环）
+import * as collabBranch from '../collab-branch.mjs';
+// 本机接口的**接口级授权**（2026-10-31 IAM §8.5 / 姊妹文档 v5）：声明式、默认拒绝
+import { authorizeLocal } from '../security/local-policy.mjs';
+import * as localSecret from '../security/local-secret.mjs';
+import { sourceOf } from '../security/source.mjs';
 
-function isLoopbackRemote(address) {
-  const a = String(address ?? '').trim().toLowerCase();
-  if (!a) return false;
-  if (a === '::1' || a === '127.0.0.1' || a === 'localhost') return true;
-  if (a.startsWith('::ffff:127.')) return true; // IPv4-mapped（Node 在双栈 socket 上会这么报）
-  return a.startsWith('127.');
-}
+/*
+ * 这里原来有一个 `isLoopbackRemote(req.socket.remoteAddress)` —— **已删除**。
+ * 它既不看角色也不分动作，而且在反代后面（peer 全是 127.0.0.1）等于没判。
+ * 来源判定现在只有一处：`security/source.mjs` 的 `classifySource()`（guard 已经把结果挂在
+ * `req.bandiSource` 上，`sourceOf(req)` 直接读它，不重算）。
+ */
 
 /**
  * 节点守护进程（T03 的 `node-supervisor.mjs`）：起停与状态。
@@ -207,14 +212,28 @@ function validateSnapshot(buf) {
  * 为什么由本机处理：它读写的是**本机**的事实（`config.json`、本机库），总机那边没有这些；
  * 加入/退出两个入口也在它里面（client 形态已随反代移除，本机接口永远是本机答）。
  *
- * 七条：`GET status`、`POST discover / probe / join / leave / export / import`。
- * **每条之前先判回环**（P0-8）—— 见 `isLoopbackRemote` 那段。
+ * 六条：`GET status`、`POST probe / join / leave / export / import`（discover 已随 UDP 发现一并下线，2026-11-02）。
+ * **准入统一走 `security/local-policy.mjs`**（2026-10-31 起）：原来那句
+ * `if (!isLoopbackRemote(...)) E1094` 既不分身份也不分动作，反代下还形同虚设。
  */
 export async function handleLocal(req, res, url) {
   if (!url.pathname.startsWith('/api/local/')) return false;
 
-  if (!isLoopbackRemote(req.socket?.remoteAddress)) {
-    fail(res, 403, 'E1094', '本机专属接口只能在回环上调用（远程机器不能让你加入它的总机）');
+  /*
+   * **接口准入**（唯一一处，2026-10-31）：策略表在 `security/local-policy.mjs`，
+   * 判定顺序是「登记 → 身份 → 位置/秘密」，三条失败码各说一件事：
+   *   E4090 未登记（404，代码问题） / E4091 身份不够（403） / E4097 缺 X-Bandi-Local（403）。
+   * handler 里不再各写各的回环判断 —— 要放开某一行就改表 + 补用例，不动这里。
+   */
+  const verdict = authorizeLocal({
+    method: req.method,
+    pathname: url.pathname,
+    source: sourceOf(req),
+    principal: req.bandiAuth ?? null,
+    hasSecret: localSecret.check(req),
+  });
+  if (!verdict.allow) {
+    fail(res, verdict.status, verdict.code, verdict.message, verdict.hint ? { hint: verdict.hint } : null);
     return true;
   }
 
@@ -228,15 +247,7 @@ export async function handleLocal(req, res, url) {
       return sendJson(res, 200, st), true;
     }
 
-    /* ------------------------------------------------------------------------ 扫局域网 */
-    if (req.method === 'POST' && url.pathname === '/api/local/discover') {
-      const body = await readBody(req);
-      // 空数组不是错误 —— PRD 步骤 3 的兜底页就是它；最多 4 秒返回
-      const candidates = await discover.discover({ rounds: body?.rounds, port: body?.port });
-      return sendJson(res, 200, { candidates }), true;
-    }
-
-    /* ---------------------------------------------------------------------- 探一个地址 */
+    /* ------------------------------------------------------------------------ 探一个地址 */
     if (req.method === 'POST' && url.pathname === '/api/local/probe') {
       const body = await readBody(req);
       const host = await localMode.probe(body?.url); // 失败抛 LocalError（E1090/E1091/E1092/E2050）
@@ -246,7 +257,8 @@ export async function handleLocal(req, res, url) {
     /* ------------------------------------------- 主机列表（2026-10-21 增量：列表模型）
      * add = 填了就入列（不拦探测；行上的「测试」负责验连接，2026-10-21 用户定）；
      * test = 探一次，在列的顺带刷新该行；remove = 从通讯录移除。
-     * 三条都在上面那道回环闸（E1094）之后，局域网里任何人改不了这台机器的通讯录。 */
+     * 三条都在上面那道**接口准入**之后（`security/local-policy.mjs`：operator/admin +
+     * 网络来源要 `X-Bandi-Local`），局域网里任何人改不了这台机器的通讯录。 */
     if (req.method === 'POST' && url.pathname === '/api/local/hosts/add') {
       const body = await readBody(req);
       return sendJson(res, 201, await localMode.addHost(body?.url)), true;
@@ -260,8 +272,39 @@ export async function handleLocal(req, res, url) {
       return sendJson(res, 200, localMode.removeHost(body?.url)), true;
     }
 
+    /* ------------------------------------------- 协作中心（2026-10-31 MVP）
+     * 三条：读状态 / 加入 / 退出。都在那道**接口准入**之后 ——
+     * 「这台机器属于哪个协作中心」是本机的事，局域网里谁都不能替它改。
+     *
+     * ⚠️ 与「加入总机（算力节点）」是**两套互斥的关系**（任务书 §三）：
+     *   这里不重启、不动 netmode、不动 `config.json`，也不起 `node.mjs`。 */
+    if (req.method === 'GET' && url.pathname === '/api/local/collab/status') {
+      return sendJson(res, 200, collabBranch.status()), true;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/local/collab/join') {
+      const body = await readBody(req);
+      // 失败码由 collabBranch 抛 LocalError（E4040/E4041/E4042/E4043/E4047），下面统一翻
+      const out = await collabBranch.join({ url: body?.url, code: body?.code });
+      console.log(`[本机] 加入了协作中心「${out.centerLabel}」（${out.branchId}）`);
+      return sendJson(res, 200, out), true;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/local/collab/leave') {
+      const out = await collabBranch.leave();
+      return sendJson(res, 200, out), true;
+    }
+
     /* -------------------------------------------------------------------------- 加入 */
     if (req.method === 'POST' && url.pathname === '/api/local/join') {
+      /*
+       * **两条关系互斥**（任务书 §三）：已经加入协作中心的机器不能再去当算力节点 ——
+       * 那条通道会把机器变成"只剩节点配置页"的形态，正好和"分公司保留完整本机"相反。
+       * 反过来（已加入总机又点协作）拦在 collab-branch.join 里，同一句话两处说，别只拦一边。
+       */
+      if (collabBranch.isJoined()) {
+        return fail(res, 409, 'E4047', '这台机器已经加入了协作中心，先退出才能加入总机'), true;
+      }
       const body = await readBody(req);
       /*
        * 2026-10-21 拍板：**节点一律只当算力** —— 不信任前端的 scope，写死 compute。

@@ -8,10 +8,10 @@
  *      壳一退，把另一个还开着的窗口的服务杀了（2026-10-22 实报的
  *      `ERR_CONNECTION_REFUSED` 就是它）—— 也可能反过来把用户命令行的实例杀掉；
  *   ④ **壳直接没了（stdin 关闭）**，自己起的那个也要收掉 —— 这是壳崩溃时的安全网；
- *   ⑤ 不指定端口时**自己挑**一个，并记进数据目录（桌面版没人关心端口，但不能撞别人）；
- *   ⑥ 探测起点被**别人的程序**占着时：跳过它换一个，而且**不碰人家**；
- *   ⑦ 再开一个壳：复用**自己**那一个，而不是在隔壁再起一个控制面；
- *   ⑧ 复用的那个，退出时不许停。
+ *   ⑤ **壳直接没了（stdin 关闭）**，自己起的那个也要收掉 —— 这是壳崩溃时的安全网；
+ *   ⑥ 不指定端口时落在**固定默认端口**上，并记进数据目录（2026-11-01 起不漂移）；
+ *   ⑦ 默认端口被**别人的程序**占着：报 `BANDI_SHELL ALIEN` 退出（码 2），**不碰人家**；
+ *   ⑧ 再开一个壳：复用**自己**那一个，而不是在隔壁再起一个控制面；
  *
  * 隔离：临时数据目录 + 临时端口。
  * 跑法：node apps/desktop/smoke-shell.mjs
@@ -120,16 +120,21 @@ try {
   await sleep(1000);
   check('它起的控制面被收掉了', (await isUp(PORT)) === false);
 
-  /* -------------------------------------------- 自己挑端口（BANDI_PORT 不指定） */
+  /* ------------------------------------- 固定默认端口（2026-11-01 起不再漂移） */
 
-  console.log('\n⑥ 不指定端口时：**自己挑**一个，并且记下来');
-  const noPort = { BANDI_PORT: '', BANDI_PORT_BASE: String(BASE) }; // 空 = 没指定
+  /*
+   * ⑥⑦⑧ 的口径换了（2026-11-01）：端口只有两个来源 —— `BANDI_PORT` 显式给、
+   * 或固定高位默认（`BANDI_PORT_DEFAULT` 可覆盖，生产是 18787）。没有"往上找空位"：
+   * 被外人占着就报 `BANDI_SHELL ALIEN` 退出（码 2），绝不偷偷挪。测试里用
+   * `BANDI_PORT_DEFAULT` 把默认端口钉在临时区段，不碰真机上跑着的 18787。
+   */
+  const noPort = { BANDI_PORT: '', BANDI_PORT_DEFAULT: String(BASE) }; // 空 = 没指定
   const portFile = path.join(tmp, 'port');
   fs.rmSync(portFile, { force: true }); // 先清掉，保证是"第一次"的样子
   const e = startShell(noPort);
   if (!(await waitFor(e, (s) => !!readyOf(s)))) throw new Error('壳 E 没报 READY：' + e.err.slice(-400));
   const re = readyOf(e);
-  check('挑到了探测起点 ' + BASE, onPort(re, BASE), re);
+  check('不指定端口 = 落在固定默认 ' + BASE, onPort(re, BASE), re);
   check('标明是"我们起的"', re.endsWith(' 1'), re);
   check('控制面在这个端口上活着', await isUp(BASE));
   check('端口记进了数据目录', fs.readFileSync(portFile, 'utf8').trim() === String(BASE), fs.readFileSync(portFile, 'utf8').trim());
@@ -137,7 +142,7 @@ try {
   await Promise.race([e.exited, sleep(8000)]);
   await sleep(900);
 
-  console.log('\n⑦ 起点被**别人的程序**占着：跳过它换个端口，而且不碰人家');
+  console.log('\n⑦ 默认端口被**别人的程序**占着：报 ALIEN 退出，而且不碰人家');
   alien = spawn(
     process.execPath,
     ['-e', `require('http').createServer((q,s)=>s.end('not-bandi')).listen(${BASE})`],
@@ -145,27 +150,33 @@ try {
   );
   spawned.push(alien);
   await sleep(900);
-  check('别人的程序占住了起点', listeners(BASE).includes(alien.pid), listeners(BASE).join(','));
-  f = startShell(noPort);
-  if (!(await waitFor(f, (s) => !!readyOf(s)))) throw new Error('壳 F 没报 READY：' + f.err.slice(-400));
-  const rf = readyOf(f);
-  check('跳过 ' + BASE + '，选了下一位', onPort(rf, BASE + 1), rf);
+  check('别人的程序占住了默认端口', listeners(BASE).includes(alien.pid), listeners(BASE).join(','));
+  const f2 = startShell(noPort);
+  const alienLine = await waitFor(f2, (s) => s.protocol.some((l) => l.startsWith('BANDI_SHELL ALIEN')), 15000);
+  check('报了 ALIEN（列出占用者，不起第二个）', alienLine, f2.protocol.join(' | ').slice(0, 160));
+  const codeF = await Promise.race([f2.exited, sleep(8000).then(() => 'timeout')]);
+  check('壳退出码是 2（ALIEN）', codeF === 2, String(codeF));
   check('别人的程序**还活着**', alien.exitCode === null, 'exitCode=' + alien.exitCode);
   check('它还占着原端口', listeners(BASE).includes(alien.pid));
+  alien.kill();
+  await sleep(900);
 
-  console.log('\n⑧ 再开一个壳：复用**自己**那一个，而不是在隔壁再起一个');
+  console.log('\n⑧ 清场后再开两个壳：第一个起、第二个复用，谁也不多起一个');
+  const f = startShell(noPort);
+  if (!(await waitFor(f, (s) => !!readyOf(s)))) throw new Error('壳 F 没报 READY：' + f.err.slice(-400));
+  check('F 起在固定默认上（READY … 1）', onPort(readyOf(f), BASE) && readyOf(f).endsWith(' 1'), readyOf(f));
   const g = startShell(noPort);
   if (!(await waitFor(g, (s) => !!readyOf(s)))) throw new Error('壳 G 没报 READY：' + g.err.slice(-400));
-  check('复用了同一个端口', onPort(readyOf(g), BASE + 1), readyOf(g));
+  check('复用了同一个端口', onPort(readyOf(g), BASE), readyOf(g));
   check('标明"复用了已有的"（READY … 0）', readyOf(g).endsWith(' 0'), readyOf(g));
   g.child.stdin.write('STOP\n');
   await Promise.race([g.exited, sleep(8000)]);
   await sleep(800);
-  check('G 退出后控制面还在（它是 F 起的）', await isUp(BASE + 1));
+  check('G 退出后控制面还在（它是 F 起的）', await isUp(BASE));
   f.child.stdin.write('STOP\n');
   await Promise.race([f.exited, sleep(8000)]);
   await sleep(1000);
-  check('F 退出后它起的控制面被收掉了', (await isUp(BASE + 1)) === false);
+  check('F 退出后它起的控制面被收掉了', (await isUp(BASE)) === false);
 
   console.log('\n⑨ 环境退化（PATH 里没有 powershell）时，**照样要收掉自己起的进程**');
   /*

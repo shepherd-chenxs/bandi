@@ -7,6 +7,14 @@
  *     还会把"单机零配置、不需要 token"这条硬约束毁掉。
  *   · 监听非回环（服务器）→ **所有请求都要令牌**。
  *
+ * ⚠️ **2026-10-31 补丁（IAM §5.3，P0）**：上面这条只说了"进程听哪儿"，但**免鉴权是按请求给的**
+ * —— 反向代理把流量转进 `127.0.0.1:18787` 之后，外部请求在服务端看就是"回环来源"，
+ * 于是整套面板、会话、导出全部免登录（这是本设计里最严重的一个洞）。
+ * 现在每次请求都用 `security/source.mjs` 的 `classifySource()` 现算，四条同时成立才算本机：
+ * 未设 `BANDI_TRUST_PROXY`、无转发头、监听回环、peer 与 Host 都是本机。
+ * 判出来不是本机 → 照常走认证（`auth.required` 只决定"进程有没有令牌可用"，
+ * 不再决定"这个请求要不要认证"）。
+ *
  * 2026-10-31 用户拍板补了一层（「不管总机还是分机，都要用用户来登录」）：
  * 回环形态下 **API 照旧免鉴权**（脚本/冒烟/CLI 一个字节没变），但**浏览器抓面板 HTML
  * 要先有登录会话**（有账号而无会话 → 登录页，免密账号点了就进，见 guard 的回环分支）——
@@ -45,6 +53,19 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 // 每节点令牌存在库里（只存哈希）—— 认证层要能认出来"这是哪台机器的令牌"
 import * as store from './store.mjs';
+/*
+ * 「这个请求从哪来」的唯一判定点（IAM §5.2）。
+ * 2026-10-31 起**本文件不再自己判 remoteAddress** —— 原来那句
+ * `if (isLoopbackHost(host)) return { required:false }` 在反代部署下等于全站免登录。
+ */
+import { classifySource, cfgNow, isLoopbackHost } from './security/source.mjs';
+import { warning as tlsWarning } from './security/tls-check.mjs';
+import * as tokens from './security/tokens.mjs'; // Bearer at_ 短票（§7.1，Phase 3）
+import * as policy from './security/policy.mjs';
+import { isRegistered } from './security/route-policy.mjs';
+import * as csrf from './security/csrf.mjs';
+
+export { isLoopbackHost };
 
 const COOKIE = 'bandi_token';
 const HEADER = 'x-bandi-token';
@@ -64,10 +85,7 @@ const SID_MAX_AGE = 30 * 86400;
 
 
 /** 这个监听地址算不算"只有本机能访问" */
-export function isLoopbackHost(host) {
-  const h = String(host ?? '').trim().toLowerCase();
-  return h === '127.0.0.1' || h === 'localhost' || h === '::1' || h === '[::1]';
-}
+// isLoopbackHost 现在住在 security/source.mjs（本文件上面 import 并原样导出，对外 API 不变）
 
 /**
  * 取令牌：显式环境变量优先，否则数据目录里那个文件（没有就生成一个）。
@@ -100,9 +118,16 @@ export function ensureToken(dataDir, envToken) {
  * ⚠️ 免鉴权时**连令牌文件都不碰** —— 单机该是零安全痕迹的，
  * 否则数据目录里会平白多出一个 `token`，让人猜"这是干嘛的"。
  * 真开成非回环了，下次启动自己会生成（也不丢已登录的会话，因为那时才需要）。
+ *
+ * **2026-10-31 修（IAM §5.3，P0）**：`required` 还要看 `trustProxy` ——
+ * `BANDI_TRUST_PROXY=1 + 监听回环` 时，`guard()` 逐请求要求认证（回环不再可信），
+ * 但进程若还按"回环 = 免鉴权"不生成令牌，根令牌 / CLI / break-glass 就全断了：
+ * 会话能登进来，脚本和应急入口却无凭据可用。所以两个条件一起决定，并且
+ * required 为真时**必须**加载/生成 token。
  */
-export function setup({ host, dataDir, envToken }) {
-  if (isLoopbackHost(host)) return { required: false, token: '', from: '', created: false };
+export function setup({ host, dataDir, envToken, trustProxy = false }) {
+  const required = !isLoopbackHost(host) || !!trustProxy;
+  if (!required) return { required: false, token: '', from: '', created: false };
   return { required: true, ...ensureToken(dataDir, envToken) };
 }
 
@@ -391,74 +416,30 @@ function deviceMayReach(method, pathname) {
 }
 
 /**
- * **判定只有一处**（设计 §6.1）。`guard()` 里只调这一个函数，别的什么都不判。
+ * **判定只有一处**（设计 §6.1 / IAM §8.4）。`guard()` 里只调这一个函数，别的什么都不判。
+ *
+ * **Phase 2 起 `decide()` 是 PDP 的兼容包装**：判定逻辑本体在
+ * `security/policy.mjs` 的 `authorize()`（路由清单默认拒绝 + 权限词表 +
+ * 成员基线 ∪ role_permissions），这里只负责把本模块的归属判定
+ * （节点只认自己的端点 —— 那两条要查库对 nodeId）作为 `rules` 注进去，
+ * 顺便避免 security/ ↔ auth.mjs 的 import 环。
  *
  * 三种令牌携带方式（Cookie / `X-Bandi-Token` / `?token=`）走的**都是这里** ——
  * `tokenOf()` 先统一取出令牌，`identify()` 再统一认出"是谁"。
  * 所以"面板令牌换个 Cookie 就变成操作员"这种事不会发生。
  *
- * 返回 `'allow' | 'E4012' | 'E4031' | 'E4032' | 'E4033'`，规则按序：
- *   1. `operator` → 放行；
- *   2. 有 `compute` 且是"节点自己的活"（`nodeMayReach` + `runMayReach`）→ 放行；
- *   3. 有 `panel` 且**不在**禁止清单里 → 放行（并节流记一次"最近使用"）；
- *   4. 有 `panel` 但命中禁止清单 → `E4032`；其余（只有 compute）→ `E4031`；
- *   5. `device` 且在白名单里 → 放行（并节流记一次"最近活跃"）；白名单外 → `E4033`。
+ * 返回 `'allow' | 'E4012' | 'E4031' | 'E4032' | 'E4033' | 'E4098'`。
  *
  * **不缓存**（决策 A 规则 2）：每次请求现算，总机那边改完对下一次请求立即生效。
  */
 export function decide(who, method, pathname) {
-  if (!who) return 'allow'; // 不该发生：guard 只在 identify 到身份之后才问
-  if (who.kind === 'operator') return 'allow';
-  if (who.kind === 'revoked') return 'E4012';
-  // 手机设备：白名单制（判定只有一处，touchDevice 的节流写库也只在这一条路上发生）
-  if (who.kind === 'device') {
-    return deviceMayReach(method, pathname) ? 'allow' : 'E4033';
-  }
-  /*
-   * **登录用户**（2026-10-28 第三刀）。
-   *
-   * 只有两种结果，不引入第三套白名单：
-   *   · 角色是 `admin` → 全放行（他就是管理员，没有"管理员做不了"这回事）；
-   *   · 其余角色 → **复用手机的 `deviceMayReach`**（任务书 §三 硬性要求）。
-   *     理由：那张表的口径正好是"看 + 发消息 + 留便签 + 审批 + 停止"，
-   *     和"一个普通员工该能干什么"完全对得上；再抄一份新白名单，两边迟早走偏。
-   */
-  if (who.kind === 'user') {
-    if (who.admin) return 'allow';
-    /*
-     * `/api/me` 必须对**任何已登录账号**成立 —— 它是"我是谁"，登录完第一件事就是问它，
-     * 拿不到就等于"登录成功但界面不知道拿哪个菜单"（前端 `load()` 靠它填 `S.menuKeys`）。
-     * 这不放进 `deviceMayReach`：那张表是手机的边界，动它等于改 device 的行为（§三 第一条）。
-     */
-    if (method === 'GET' && pathname === '/api/me') return 'allow';
-    /*
-     * **改自己的密码**（2026-10-31「我的」页）：任何登录账号都该能改自己的密码，
-     * 不该要求"先当上管理员"。普通账号对 /api/users/* 仍是 403 —— 这里只开"改自己"这一条，
-     * 而且它只认会话里那个 userId（路由层不从 body 里拿 id），想借它改别人没有入口。
-     */
-    if (method === 'POST' && pathname === '/api/me/password') return 'allow';
-    // 动态验证的自助管理（状态 / 绑定 / 确认 / 解绑）—— 同一条"改自己"的口径
-    if (pathname.startsWith('/api/me/otp')) return 'allow';
-    /*
-     * **分机的本机状态页**（2026-10-31 分机也要登录）：renderNodeMode 还要机器名/版本
-     * （/api/runtimes）与本机加入状态（/api/local/status）。后者放得安心 —— 它的 handler
-     * 自带**回环来源校验**，局域网里的登录用户照样进不来，等于只对本机屏幕多开了一条。
-     */
-    if (method === 'GET' && (pathname === '/api/runtimes' || pathname === '/api/local/status')) return 'allow';
-    return deviceMayReach(method, pathname) ? 'allow' : 'E4033';
-  }
-
-  const scope = who.scope instanceof Set ? who.scope : new Set([store.SCOPE_COMPUTE]);
-  if (scope.has(store.SCOPE_COMPUTE) && (nodeMayReach(who.nodeId, method, pathname) || runMayReach(who.nodeId, method, pathname))) {
-    return 'allow';
-  }
-  if (scope.has(store.SCOPE_PANEL)) {
-    if (isPanelForbidden(method, pathname)) return 'E4032';
-    // 「最近使用」= 真的用了面板（60 秒节流，见 store.touchNodeUsed 的注释）
-    store.touchNodeUsed(who.nodeId);
-    return 'allow';
-  }
-  return 'E4031';
+  return policy.authorize({
+    who,
+    method,
+    pathname,
+    rules: { nodeMayReach, runMayReach, touchNodeUsed: store.touchNodeUsed },
+    roleHasPerm: store.roleHasPerm,
+  });
 }
 
 /**
@@ -491,6 +472,11 @@ export function actorUser(req) {
  *
  * 2026-10-28 第三刀扩了一条：**登录用户且角色是 admin** 也算。其余角色（哪怕是
  * 内置的「操作员」角色）一律不算 —— 管理动作只认 `admin`，这是任务书 §三 的口径。
+ *
+ * ⚠️ 2026-10-31 Phase 3 收编后，路由层的身份闸已全部归 PDP（route-policy +
+ * policy.authorize），handler **不再**用本函数判身份；仅剩 persona.mjs 一处
+ * —— 那里判的是"body 里的模型/运行时字段有没有被改"，是内容判断不是身份判断。
+ * 保留导出是给那条业务规则和存量测试用。
  */
 export function mayManage(req) {
   const a = req?.bandiAuth;
@@ -510,6 +496,35 @@ export function mayManage(req) {
  */
 export function guard(auth, req, res, url) {
   /*
+   * **先判这次请求从哪来**（IAM §5.2 / §5.3）。
+   *
+   * 这条必须在所有豁免之前：下面每一条"免令牌"都只对**真·本机**成立，
+   * 而 `remoteAddress` 在反代后面一律是 127.0.0.1 —— 拿它当"本机证明"等于没有闸。
+   * 判完挂在 `req.bandiSource` 上，下游（本机接口策略、/api/state 的显隐）读它，别再各判一遍。
+   */
+  const source = classifySource(req, cfgNow());
+  req.bandiSource = source;
+
+  /*
+   * **路由清单默认拒绝**（IAM §8.3，Phase 2 落地）：没登记的 `/api/*` 路径
+   * 一律 404 E4090 —— 排在认证之前，"服务里有但清单上没有"的接口对**所有人**
+   * 都不存在（连"探测它要不要凭据"这个信息都不给）。新加路由必须先去
+   * `security/route-policy.mjs` 登记，smoke 的覆盖率扫描会逼着两端同步。
+   */
+  if (url.pathname.startsWith('/api/') && !isRegistered(url.pathname, req.method)) {
+    res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end(
+      JSON.stringify({
+        error: '没有这个接口',
+        code: 'E4090',
+        platform: 'bandi',
+        hint: '路径没在路由权限清单里登记（默认拒绝）。若这是新接口，先在 security/route-policy.mjs 登记。',
+      }),
+    );
+    return false;
+  }
+
+  /*
    * 免令牌的两条：
    *   · 加入：这台机器**还没有令牌**，凭一次性的邀请码进来（邀请码就是它的凭据，见 /api/nodes/join）。
    *   · `GET /api/hello`（2026-10-20）：加入向导"探这个地址"打的就是它。
@@ -520,6 +535,23 @@ export function guard(auth, req, res, url) {
   if (req.method === 'GET' && url.pathname === '/api/hello') return true;
 
   /*
+   * **协作中心的分公司通道**（2026-10-31 MVP，任务书 §6.2）：这四条**免操作员令牌**。
+   *
+   * 凭据不是 `bandi_token`：`join` 凭一次性接入码，其余三条凭 `X-Bandi-Token: bc_…`
+   * （**分公司令牌，不是操作员令牌**）。校验全在 `routes/collab.mjs` 的 handler 里 ——
+   * `identify()` 不认识 `bc_`，别去改它（任务书 §十五 第 3 条）。
+   *
+   * 为什么必须放行：中心一开局域网（`BANDI_HOST=0.0.0.0` → 鉴权开），分公司就来不了，
+   * 而它手上永远不会有中心的操作员令牌 —— 不放行等于协作不可用。
+   * ⚠️ 只放这四条，**别的 `/api/collab/*` 照常走 `mayManage`**；
+   *    CSRF 闸照常生效（分公司请求不带 Origin，天然放行）。
+   */
+  if (req.method === 'POST' && url.pathname === '/api/collab/join') return true;
+  if (req.method === 'POST' && url.pathname === '/api/collab/poll') return true;
+  if (req.method === 'POST' && url.pathname === '/api/collab/leave') return true;
+  if (req.method === 'POST' && /^\/api\/collab\/tasks\/[^/]+\/report$/.test(url.pathname)) return true;
+
+  /*
    * 手机配对（2026-11 手机端增量，设计 §2）：落地页与换码接口必须免令牌 ——
    * 手机此刻还**没有任何凭据**，配对码本身就是它的凭据（对齐上面 /api/nodes/join 的既有写法）。
    * · `GET /pair`（及 `/pair.html`）＝ 扫码落地页：服务端不校验 token，校验在 claim；
@@ -528,6 +560,12 @@ export function guard(auth, req, res, url) {
    */
   if (req.method === 'GET' && (url.pathname === '/pair' || url.pathname === '/pair.html')) return true;
   if (req.method === 'POST' && url.pathname === '/api/pair/claim') return true;
+  /*
+   * `POST /api/pair/resume`（2026-11-01 二刀）也免令牌：手机被「断开连接」后手里没有
+   * 能用的凭据了（令牌已吊销），它能出示的只有 localStorage 里的 clientKey ——
+   * 这正是它要干的事（换一张新令牌回来）。校验在 handler，与 claim 同一模式。
+   */
+  if (req.method === 'POST' && url.pathname === '/api/pair/resume') return true;
   /*
    * 登录 / 退出（2026-10-28 第三刀）：此刻请求还没带任何凭据（这就是它要干的事），
    * 所以必须免令牌。**CSRF 闸照过**（server.mjs 里的 guardWrite 在 guard 之后）——
@@ -541,6 +579,13 @@ export function guard(auth, req, res, url) {
    * 浏览器还没有任何会话 —— 与第一段同一个道理，必须免令牌。凭据校验在 handler 里。
    */
   if (req.method === 'POST' && url.pathname === '/api/login/otp') return true;
+  /*
+   * 换票链（IAM §6.2，Phase 3）：`/api/auth/token` / `refresh` / `revoke`。
+   * 这三个口的**输入本身就是凭据**（密码+otp / rf_ 刷新票 / at_ 短票 / 根令牌头），
+   * 校验全在 handler（routes/auth-token.mjs）—— 与 /api/login 同一个模式。
+   * Bearer 短票在 guard 里的识别照常生效：带 at_ 票来 revoke 也认得出人。
+   */
+  if (req.method === 'POST' && url.pathname.startsWith('/api/auth/')) return true;
   /*
    * **首次引导直建**（2026-10-31）：一个账号都没有时，登录页的「创建账号」表单打的就是
    * `POST /api/users` —— 此刻浏览器没有任何凭据（这正是它要干的事）。豁免只对
@@ -557,17 +602,17 @@ export function guard(auth, req, res, url) {
   if (req.method === 'GET' && (url.pathname === '/js/pair-claim.mjs' || url.pathname.startsWith('/icons/'))) return true;
 
   /*
-   * 数字员工的本机 AI 通道（2026-10-23，skills/bandi-avatar）：回环发起的 /api/ai/* 免令牌。
+   * 数字员工的本机 AI 通道（2026-10-23，skills/bandi-avatar）：**真·回环**发起的 /api/ai/* 免令牌。
    * 员工跑在 CLI 里，拿不到平台令牌，让技能教它 curl 时无凭据可用 —— 通道自身有
-   * 回环来源校验 + CSRF 闸双保险（routes/imageai.mjs），就算 BANDI_HOST=0.0.0.0
-   * 强开监听，局域网机器也摸不到。回环判据与 routes/local.mjs 的 isLoopbackRemote 一致。
+   * 来源校验 + CSRF 闸双保险（routes/imageai.mjs）。
+   *
+   * 2026-10-31 修（IAM §5.3 第 2 条）：原来这里自己判 `req.socket.remoteAddress`，
+   * 反代后面外部请求也是 127.0.0.1 → 直接免令牌。现在统一用 `classifySource`：
+   * 只有 `loopback` 才豁免，`network` 一律走认证。
    */
-  if (url.pathname.startsWith('/api/ai/')) {
-    const a = String(req.socket?.remoteAddress ?? '').trim().toLowerCase();
-    if (a === '::1' || a === 'localhost' || a === '127.0.0.1' || a.startsWith('::ffff:127.') || a.startsWith('127.')) return true;
-  }
+  if (url.pathname.startsWith('/api/ai/') && source === 'loopback') return true;
 
-  if (!auth.required) {
+  if (!auth.required && source === 'loopback') {
     /*
      * 回环形态（桌面版 / 单机 / 分机本机）—— 2026-10-31 用户拍板升级：
      * 「不管总机还是分机，都要用用户来登录」。落成两条，**API 与面板分开**：
@@ -575,9 +620,9 @@ export function guard(auth, req, res, url) {
      * · **API 仍是回环信任**：本机脚本 / 冒烟 / CLI 不带凭据照旧 = operator（一个字节没变，
      *   任务书 §三 那条硬约束继续成立）；但**带着有效登录会话的浏览器按登录人算**
      *   （kind:'user'）—— 消息署名、菜单收敛都精确到人。退出登录之后回 operator。
-     * · **面板要登录**：已经建过账号而这双手上没有会话票的浏览器，抓 HTML 一律给**登录页**
-     *   （账号磁贴，免密账号点了就进）—— 跟电脑开机先选账户一个意思。
-     *   还没建过账号 = 首次开机：放行进面板，由首次引导建第一个账号。
+     * · **面板要登录**：抓 HTML 一律给**登录页** —— 有账号是账号磁贴（免密账号点了就进，
+     *   跟电脑开机先选账户一个意思），零账号是建号页（第一个账号 = 内置管理员）。
+     *   2026-11-01 改：零账号**不再**放行进面板，见下面那段注释。
      */
     const sid = sessionTokenOf(req);
     if (sid) {
@@ -594,11 +639,29 @@ export function guard(auth, req, res, url) {
       }
     }
     req.bandiAuth = { kind: 'operator', via: 'loopback' };
-    if (req.method === 'GET' && !url.pathname.startsWith('/api/') && store.hasUsers()) {
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+    /*
+     * **面板只给"人"**（2026-11-01 口径统一，用户：「每个用户都要登录，操作员只是一个身份」）。
+     *
+     * operator 是**机器凭据**（回环免登录 / 令牌），不是一个可以在界面上当"我"的身份：
+     * 它没有 users 行，所以「我的」页画不出密码和动态验证 —— 从前零账号时"直接放行进面板
+     * 当操作员"，用户看到的就是一个空页 + 一段解释（2026-11-01 实报）。
+     * 现在门前移：**零账号 → 建号页**（第一个账号 = 内置管理员，建完服务端顺手发会话票），
+     * **有账号 → 账号磁贴**。两条路都进来才是 user，operator 不再出现在界面里。
+     * API 一个字节没变：本机脚本 / 冒烟 / CLI 不带凭据照旧 = operator（任务书 §三 硬约束）。
+     */
+    if (wantsPanelHtml(req, url)) {
+      const hasUsers = store.hasUsers();
+      // 登录页顺手种 CSRF 双提交值（§10.2）：登录成功后所有带 Cookie 的写请求都要带上它
+      const headers = { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' };
+      if (!csrf.valuesOf(req).cookie) headers['Set-Cookie'] = csrf.cookieFor(csrf.mint());
+      res.writeHead(200, headers);
       // 回环 = 这台机器自己的屏幕，摆账号磁贴不泄密（局域网那边的登录页仍是"用户名+密码"表单）；
       // 禁用的账号不摆 —— 摆上去也登不进，白给人一个"点不动"的磁贴
-      res.end(loginPage({ hasUsers: true, loopback: true, users: store.listUsers().filter((u) => !u.disabled) }));
+      res.end(loginPage({
+        hasUsers,
+        loopback: hasUsers,
+        users: hasUsers ? store.listUsers().filter((u) => !u.disabled) : null,
+      }));
       return false;
     }
     return true;
@@ -606,6 +669,29 @@ export function guard(auth, req, res, url) {
 
   const got = tokenOf(req, url);
   let who = identify(auth, got);
+
+  /*
+   * **Bearer 短票**（IAM §7.1，Phase 3）：`Authorization: Bearer at_...`。
+   * 人类票 → 与 Cookie 会话同形状的 user Principal（PDP 一个入口判定）；
+   * `scopes='*'` 的机器票 = 根令牌换来的 break-glass 票（§6.4）→ operator 待遇。
+   * 票无效/过期就当没带 —— 落到下面的会话兜底，最后统一 401 E4010。
+   */
+  if (!who) {
+    const bearer = String(req.headers.authorization ?? '').match(/^Bearer\s+(at_\S+)$/i)?.[1];
+    if (bearer) {
+      const row = tokens.verify(bearer);
+      if (row) {
+        if (row.subjectKind === 'user') {
+          const u = store.getUser(row.subjectId);
+          if (u && !u.disabled) {
+            who = { kind: 'user', userId: u.id, roleId: u.roleId, admin: u.roleId === 'admin', restricted: false, via: 'bearer' };
+          }
+        } else if (String(row.scopes).split(',').map((s) => s.trim()).includes('*')) {
+          who = { kind: 'operator', via: 'bearer-root' };
+        }
+      }
+    }
+  }
 
   /*
    * **登录会话兜底**（2026-10-28 第三刀）。
@@ -628,6 +714,8 @@ export function guard(auth, req, res, url) {
           userId: hit.user.id,
           roleId: hit.user.roleId,
           admin: hit.user.roleId === 'admin',
+          // 免密 + 服务器形态 = 受限会话（见 decide 里的那段，IAM §8.6）
+          restricted: !hit.user.hasPassword && source === 'network',
           via: 'session',
         };
       }
@@ -649,6 +737,23 @@ export function guard(auth, req, res, url) {
           code: 'E4012',
           platform: 'bandi',
           hint: '在总机上重新发一个邀请码；在这台机器上：设置 →「这台机器」→ 退出总机 → 再加入。',
+        }),
+      );
+      return false;
+    }
+
+    if (decision === 'E4098') {
+      /*
+       * 免密账号在服务器形态下的受限会话（IAM §8.6）：能登录、能改密码，别的都不给。
+       * 文案要指路，否则用户只会看到"什么都没权限"。
+       */
+      res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(
+        JSON.stringify({
+          error: '这个账号还没设密码，在服务器形态下只能先设密码（其余操作一律拒绝）',
+          code: 'E4098',
+          platform: 'bandi',
+          hint: '在「我的」页设置密码，或在服务器终端跑 `bandi user create` / 让管理员重置密码。设完密码重新登录即可正常使用。',
         }),
       );
       return false;
@@ -680,8 +785,7 @@ export function guard(auth, req, res, url) {
       return false;
     }
 
-    if (decision === 'E4033') {
-      /*
+    if (decision === 'E4033') {      /*
        * 两条不同的路走到同一个码，文案必须分开 —— 手机用户看到"手机端只开放…"
        * 会莫名其妙，登录用户看到"手机端"更莫名其妙（2026-10-28 第三刀）。
        */
@@ -725,27 +829,99 @@ export function guard(auth, req, res, url) {
       res.end();
       return false;
     }
+    /*
+     * **令牌不是人**（2026-11-01）：面板 HTML 只给登录账号。
+     * 带令牌抓首页（`?token=` 换完 Cookie 再进来、或手工填了 bandi_token）以前会直接
+     * 进面板当"操作员"，于是「我的」页永远没有密码/动态验证。现在统一给登录/建号页；
+     * 令牌继续管 **API**（脚本、CLI、节点、运维照旧 `X-Bandi-Token`，一个字没变）。
+     * 手机设备（device）不走这条：配对令牌就是它的登录。
+     */
+    if (who.kind === 'operator' && wantsPanelHtml(req, url)) {
+      const hasUsers = store.hasUsers();
+      const headers = { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' };
+      /*
+       * **顺手清掉这枚令牌 Cookie**（2026-11-01 实报：点了登录，输入框被刷空、还在登录页）。
+       * 面板不再认令牌，而 `令牌优先于会话` 会让这枚陈年 Cookie 把刚登录的人一直压回
+       * operator → 又挡回登录页 → 登录永远"没反应"。浏览器以会话为准，令牌只走请求头。
+       * 只清"确实是根令牌"的那枚：手机配对用的是同一个 Cookie 名（bd_），别误伤。
+       */
+      const staleTok = String(parseCookies(req.headers.cookie)[COOKIE] || '');
+      const dropToken = !!staleTok && !!auth.token && timingSafeEqual(staleTok, auth.token);
+      const setCookies = [];
+      if (!csrf.valuesOf(req).cookie) setCookies.push(csrf.cookieFor(csrf.mint()));
+      if (dropToken) setCookies.push(clearedTokenCookie());
+      if (setCookies.length) headers['Set-Cookie'] = setCookies;
+      res.writeHead(200, headers);
+      res.end(loginPage({
+        hasUsers,
+        loopback: source === 'loopback' && hasUsers,
+        users: hasUsers ? store.listUsers().filter((u) => !u.disabled) : null,
+      }));
+      return false;
+    }
     req.bandiAuth = who; // 下游（比如"忘掉"、员工编辑的字段闸）据此知道这枚令牌是谁
     return true;
   }
 
-  const wantsHtml = req.method === 'GET' && !url.pathname.startsWith('/api/');
+  /*
+   * ⚠️ **必须是 `wantsPanelHtml`，不能是一刀切的"GET 且非 /api/"**（2026-11-02 三十三改）。
+   *
+   * 老写法让 `/js/collab.mjs`、`/sw.js` 这类静态文件在**没带任何凭据**时也吃到登录页 HTML
+   * （`200 + text/html`）：浏览器那边是 MIME/语法错误，命令行那边更阴 —— `curl … | grep`
+   * 拿到一张登录页去数关键词，得到的是"没找到"，看上去和"文件没部署上"一模一样
+   * （2026-11-02 实踩：验线上 collab.mjs 就是这么被误导的）。
+   * 上面两处（回环分支 / 令牌分支）早就换成同一个判据，唯独这里漏了；
+   * 静态资源现在走下面的 401 JSON（`E4010`），页面照旧给登录页。
+   */
+  const wantsHtml = wantsPanelHtml(req, url);
   if (wantsHtml) {
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
-    res.end(loginPage({ hasUsers: store.hasUsers() }));
+    // 同上：服务器形态的登录页也种 CSRF 值（登录成功后的写请求要带）
+    const headers = { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' };
+    const setCookies = [];
+    if (!csrf.valuesOf(req).cookie) setCookies.push(csrf.cookieFor(csrf.mint()));
+    /*
+     * 顺手扫掉**没法用的**访问令牌 Cookie（2026-11-01）：认不出来的根令牌 / 被吊销的
+     * 节点令牌留在浏览器里，只会在每次请求上添一次 401，还挡在"令牌优先"那条路上。
+     * 手机配对（bd_）不清 —— 那是它唯一的凭据。
+     */
+    const staleTok = String(parseCookies(req.headers.cookie)[COOKIE] || '');
+    if (staleTok && !staleTok.startsWith('bd_')) setCookies.push(clearedTokenCookie());
+    if (setCookies.length) headers['Set-Cookie'] = setCookies;
+    res.writeHead(200, headers);
+    res.end(loginPage({ hasUsers: store.hasUsers(), loopback: source === 'loopback' }));
     return false;
   }
 
   res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
   res.end(
     JSON.stringify({
-      error: '需要访问令牌（这个控制面没有监听回环地址）',
+      error:
+        source === 'network'
+          ? '需要登录或访问令牌（这个请求不是从本机直接发起的）'
+          : '需要访问令牌（这个控制面没有监听回环地址）',
       code: 'E4010',
       platform: 'bandi',
       hint: '带 X-Bandi-Token 头，或浏览器打开首页用账号登录。令牌在数据目录的 token 文件里。',
     }),
   );
   return false;
+}
+
+/**
+ * 这次请求是不是在要**面板页面**（不是 API、不是静态资源）。
+ *
+ * 只认真正会渲染成文档的那几种：根路径 / `*.html` / `Accept: text/html`。
+ * 不这么收窄的话，`/app.mjs`、`/style.css` 也会被当成"要页面"而吃到登录页 HTML
+ * （浏览器那边表现成"脚本语法错误"，比登录页还难查）。
+ * `/pair` 是扫码落地页，自己带令牌校验，别挡。
+ */
+function wantsPanelHtml(req, url) {
+  if (req.method !== 'GET' && req.method !== 'HEAD') return false;
+  const p = url.pathname;
+  if (p.startsWith('/api/')) return false;
+  if (p === '/pair' || p === '/pair.html') return false;
+  if (p === '/' || p.endsWith('.html')) return true;
+  return String(req.headers.accept ?? '').includes('text/html');
 }
 
 function stripToken(params) {
@@ -959,6 +1135,15 @@ function loginPage({ hasUsers, loopback = false, users = null }) {
   button:active { transform: translateY(1px); }
   button[disabled] { opacity: .55; cursor: default; }
   .bad { color: var(--bad); font-size: 12.5px; margin: 0 0 12px; }
+  /* 明文告警条（IAM §10.1.1）：监听非回环又没声明反代时，登录页顶上一条黄的 ——
+     这是"人一定会看到"的位置；只写日志的话，部署的人永远不知道密码在明文里跑。 */
+  .warnbar {
+    margin: 0 0 18px; padding: 9px 11px; border-radius: 10px; font-size: 12px; line-height: 1.5;
+    color: #7a4b00; background: #fff4d6; border: 1px solid #f0d089;
+  }
+  @media (prefers-color-scheme: dark) {
+    .warnbar { color: #ffd993; background: #3a2c12; border-color: #6b5220; }
+  }
   .hint { margin: 14px 0 0; font-size: 12.5px; color: var(--dim); text-align: center; }
   .hint a { color: var(--accent); text-decoration: none; }
   /* 账号磁贴（回环登录页）：电脑开机选账户的版式，放进卡片里当网格 */
@@ -978,6 +1163,7 @@ function loginPage({ hasUsers, loopback = false, users = null }) {
 </head>
 <body>
   <main class="card">
+    ${tlsWarning() ? `<p class="warnbar">${esc(tlsWarning())}</p>` : ''}
     <div id="loginPane">
       <header class="brand">
         <div class="logo">
@@ -1015,6 +1201,17 @@ function loginPage({ hasUsers, loopback = false, users = null }) {
   const otpErrEl = document.getElementById('otpErr');
   const sayOtp = (t) => { if (otpErrEl) { otpErrEl.textContent = t; otpErrEl.hidden = false; } };
   const msg = (j, dflt) => (j ? (j.code ? j.code + '：' + j.error : j.error) : dflt);
+  /*
+   * CSRF 双提交（§10.2）：浏览器里只要躺着一枚 bandi_sid / bandi_token（旧令牌、
+   * 上一个账号的陈年会话），登录/建号这种写请求也要过 CSRF 闸 —— 只发 X-Bandi: 1
+   * 会吃 403 E4099（2026-11-01 实报：令牌被门前挡到登录页之后，这条必现）。
+   * bandi_csrf 是非 HttpOnly 的（JS 就是要读它），登录页响应顺手种过了。
+   */
+  const csrfVal = () => {
+    const m = document.cookie.match(/(?:^|;\\s*)bandi_csrf=([^;]+)/);
+    try { return m ? decodeURIComponent(m[1]) : ''; } catch { return m ? m[1] : ''; }
+  };
+  const csrfHeader = () => ({ 'X-Bandi': '1', 'X-Bandi-CSRF': csrfVal() });
   /** 第二段的凭据（内存里，不落任何存储） */
   let otpToken = '';
   let otpWho = '';
@@ -1038,7 +1235,7 @@ function loginPage({ hasUsers, loopback = false, users = null }) {
     try {
       const r = await fetch('/api/login', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Bandi': '1' },
+        headers: csrfHeader(),
         body: JSON.stringify({ name, password }),
       });
       const j = await r.json().catch(() => null);
@@ -1083,7 +1280,7 @@ function loginPage({ hasUsers, loopback = false, users = null }) {
     try {
       const r = await fetch('/api/login/otp', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Bandi': '1' },
+        headers: csrfHeader(),
         body: JSON.stringify({ otpToken, code }),
       });
       if (r.ok) { location.replace('/'); return; }
@@ -1117,7 +1314,7 @@ function loginPage({ hasUsers, loopback = false, users = null }) {
     try {
       const r = await fetch('/api/users', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Bandi': '1' },
+        headers: { 'Content-Type': 'application/json', ...csrfHeader() },
         body: JSON.stringify({ name, ...(pw ? { password: pw } : {}) }),
       });
       if (r.ok) { location.replace('/'); return; }

@@ -78,7 +78,7 @@ export function listeners(port) {
     }
     for (const line of out.split(/\r?\n/)) {
       if (!/LISTENING/i.test(line)) continue;
-      // 必须精确匹配 :8787，别把 :87870 也算进来
+      // 必须精确匹配 :<port>，别把 :187870 也算进来
       if (!new RegExp(`[:.]${port}\\s`).test(line)) continue;
       add(line.trim().split(/\s+/).pop());
     }

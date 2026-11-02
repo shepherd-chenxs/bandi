@@ -1,7 +1,8 @@
 /*
  * routes/roles.mjs —— 角色与菜单的管理口（2026-10-28 第二刀）。
  *
- * 五个口，全部**先过 `auth.mayManage`**（只有操作员能管角色与菜单）：
+ * 五个口的授权已收编 PDP（IAM §8.3/8.4，Phase 3）：清单上全部 `perm:'role:manage'`
+ * （**perm ⇒ noPanel**），手机设备令牌 / 节点令牌 / 未授权成员在 guard 层就被判掉：
  *   GET    /api/menus        → { menus: MENU_CATALOG }   菜单目录（字典，给勾选界面用）
  *   GET    /api/roles        → { roles: [...] }          角色 + 它勾了哪些 key
  *   POST   /api/roles        → 201 自建角色
@@ -78,8 +79,9 @@ export async function handleRoles(req, res, url) {
   const p = url.pathname;
   if (!p.startsWith('/api/menus') && !p.startsWith('/api/roles')) return false;
 
-  // 五个口同一道闸：非操作员（手机设备令牌、节点令牌）一律进不来
-  if (!auth.mayManage(req)) return fail(res, 403, 'E3703', '只有操作员能管角色与菜单'), true;
+  // 五个口的闸已收编进 PDP（route-policy：roles/menus 全部 perm:'role:manage'，
+  // **perm ⇒ noPanel**）—— 手机设备令牌 / 节点令牌 / 未授权成员在 guard 层就吃
+  // E4033 / E4032，这里不再重复判（IAM §8.4：handler 不做身份判断）。
 
   try {
     if (method === 'GET' && p === '/api/menus') {

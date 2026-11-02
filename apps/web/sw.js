@@ -14,7 +14,79 @@
  *   静态布局大改（预缓存清单变了）时 +1，逼所有客户端整包重建。
  */
 
-const VERSION = 'v5';
+/* v13（2026-11-01 七改）：设备行加「取消配对」（已踢出行的清理动作，直删不确认）——
+   pairing.mjs + mobile.css 变了，逼客户端换缓存。
+
+   v14（2026-11-01 八改）：默认端口 8787 → 18787（高位、固定不漂），
+   pair-claim / machine / collab / projects 的示例地址与提示跟着换。
+
+   v16（2026-11-01 十改）：撤掉 v15 的「已连接」区（与下方「已配对的手机」重复，
+   用户看过实际效果后不要了）—— 在线状态仍能在设备行的「最近活跃」里看到。
+   pairing.mjs + mobile.css 又变了，v15 已可能被客户端缓存，必须再进一版。
+
+   v17（2026-11-01 十一改）：一机一刀 —— pair-claim.mjs 上报 clientKey
+   （同一台手机重配复用同一条设备记录），旧缓存的脚本不会带这个字段。
+
+   v18（2026-11-01 十二改）：断开连接 ≠ 取消配对 —— pairing.mjs / mobile.mjs /
+   pair-claim.mjs（resume）/ mobile.css / settings.mjs 全动了，必须再进一版。
+
+   v19（2026-11-01 十三改）：401 遮罩加「重新连接 / 再试一次」按钮（mobile.mjs +
+   mobile.css）—— 连接页不再靠返回键进入，只有配对失效时从遮罩主动回去。
+
+   v20（2026-11-01 十四改）：手机壳语音输入 —— 输入条多一个麦克风（桌面浏览器里不出现），
+   新增 js/voice.mjs + .voice-* 样式；壳侧加了 Kotlin 的 SpeechPlugin（不走 Tauri IPC，
+   走 WebView 的 addJavascriptInterface，见 apps/mobile/README.md）。
+
+   v21（2026-11-01 十五改）：内嵌识别起不来时自动降级到系统语音输入面板；
+   面板一弹就关（引擎自身没麦克风权限）给出具体提示 —— 只改 js/voice.mjs。
+
+   v22（2026-11-01 十六改）：「这台机器」页的数据管理区头拿到卡片外（跟设备/运行时
+   同款 .fx-head），统计 + 快照包进 .dm-card —— machine.mjs + style.css + mobile.css。
+
+   v23（2026-11-01 十七改）：导出/导入快照按钮任何形态都显示（总机/局域网形态
+   不再藏按钮换 CLI 指路）—— 只改 js/machine.mjs。
+
+   v24（2026-11-01 十八改）：协作中心搬进设置 —— 工作台撤磁贴（experts.mjs），
+   中心页长在设置 →「协作」组（settings.mjs + collab.mjs + shell.mjs），
+   旧缓存的入口/页面都对不上，必须再进一版。
+
+   v25（2026-11-01 十九改）：协作中心设备表的空态收成一句「还没有设备。」（原来那句
+   指路把「添加设备 + 接入码」两步都念了一遍，表格正上方就是按钮，属于废话）—— 只改 collab.mjs。
+
+   v26（2026-11-01 二十改）：协作中心撤「我派出去的活」表（用户："任务面板已经有了"）——
+   看板的只读协作卡上长出「验收/撤销」（projects.mjs + style.css），中心页只剩设备名录
+   （collab.mjs 少拉一路 /api/collab/tasks）。
+
+   v27（2026-11-01 二十改续）：「退出协作」按钮任何形态都显示（用户："是不是少一个退出
+   协作的按钮"）—— 服务端把 /api/local/collab/leave 改成 secret:'never'（单向门，同
+   restart/export），前端不再按 localSecret 藏按钮；未加入时 serverMode 的指路只说 join。
+
+   v28（2026-11-02 二十一改）：模式卡（分机/总机）从「手机连接」页搬到「协作中心」页顶
+   （用户："放到协作中心更合适"）—— pairing.mjs 撤两处挂载、回环指路改去协作中心；
+   collab.mjs 设备节上面挂 paintModeCard。
+
+   v29（2026-11-02 二十二改）：模式卡 explicit 态的说明句改桌面/部署两用口径（桌面壳
+   起 spawn 时会按 netmode.allowLan 显式传 BANDI_HOST=0.0.0.0，见 shell.mjs —— 桌面
+   对外机器自此进 explicit，卡上不再有重启/只在本机使用）。
+
+   v30（2026-11-02 二十三改）：「协作」分节从「这台机器」页搬到「协作中心」页
+   （用户："把这个协作移到协作中心，通过分机和总机开关控制显示和隐藏"）——
+   collab.mjs 的 renderCollabSection 长在 #clBranchMount（模式卡下、设备表上），
+   分机给加入入口、总机一行指路、已加入任何角色都显示状态卡；模式卡新增
+   onRoleChange（切角色成功只重画那一节）；connectors.mjs 撤挂载与 import。
+
+   v31（2026-11-02 三十一改）：「连接总机」一律真加入（用户截图："这里应该是连接"）
+   —— collab/join 放宽成 secret:'never'（local-policy.mjs），joinCommandDialog
+   （终端执行变体）删除；CLI 只服务无头机器。
+
+   v32（2026-11-02 三十二改）：「连接总机」弹窗删掉三段说明文案（用户："删掉这个文案"）
+   —— 那一坨「还是一台完整的班底 / 多一个协作项目 / 别跟算力节点邀请码混用」不再出现，
+   弹窗只剩地址 + 接入码 + 按钮。
+
+   v33（2026-11-02 三十三改）：「手机连接」页顶加「连接」总开关卡（左标签右开关）
+   —— 关 = 邀请码 / 已配对两节整个隐藏，服务端断开全部手机、拒绝扫码 / 连回来
+   （POST /api/pair/enabled，E1707；状态存 netmode.json 的 pairEnabled）。 */
+const VERSION = 'v33';
 const CACHE = `bandi-static-${VERSION}`;
 
 /*
@@ -24,6 +96,7 @@ const CACHE = `bandi-static-${VERSION}`;
  */
 const JS_MODULES = [
   '/js/chat.mjs',
+  '/js/collab.mjs',
   '/js/connectors.mjs',
   '/js/contacts.mjs',
   '/js/core.mjs',
@@ -43,7 +116,9 @@ const JS_MODULES = [
   '/js/useradmin.mjs',
   '/js/roleadmin.mjs',
   '/js/roles.mjs',
+  '/js/voice.mjs',
   '/js/settings.mjs',
+  '/js/securityadmin.mjs',
   '/js/shell.mjs',
   '/js/skills.mjs',
   '/js/state.mjs',

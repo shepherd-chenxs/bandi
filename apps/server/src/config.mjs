@@ -6,6 +6,17 @@ import { userDataDir } from './data-dir.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
+/**
+ * 服务端默认端口。**高位固定**，桌面壳（`apps/desktop/shell.mjs` 的 `DEFAULT_PORT`）用的是同一个值。
+ *
+ * 为什么不是 8787：那一带开发工具扎堆，撞车概率高。18787 不在 Windows 的临时端口段
+ * （49152+，系统会随手发给 outgoing 连接）里，也不是 IANA 注册的常见服务。
+ *
+ * ⚠️ 这个值**不是"探测起点"** —— 全局没有"往上找空端口"的逻辑了（2026-11-01 改）。
+ * 要换端口：`BANDI_PORT=<n>`，或者把这一处和 `shell.mjs` 的两处一起改掉。
+ */
+const DEFAULT_PORT = 18787;
+
 /** 仓库根：apps/server/src -> 上三级 */
 export const repoRoot = path.resolve(here, '..', '..', '..');
 
@@ -138,15 +149,35 @@ export function writeReplyStyle(id) {
 export const host = process.env.BANDI_HOST ?? (clientJoined ? '127.0.0.1' : lanAllowed ? '0.0.0.0' : '127.0.0.1');
 
 /**
+ * **声明「我在可信反代 / 隧道后面」**（IAM §5.2 / §5.3，2026-10-31 新增）。
+ *
+ * 为什么要这个开关：反代把流量转进 `127.0.0.1:18787`，服务端看到的所有 peer 都是回环 ——
+ * 只按来源 IP 判"本机"，等于把整站（面板、会话、导出）对全网开放。
+ * 设了它 = 承认"回环来源不可信"，于是：
+ *   · 整站**强制认证**（哪怕监听的是回环）；
+ *   · 破坏性本机动作改由 `X-Bandi-Local`（数据目录 `local_secret`）证明"我在本机"。
+ *
+ * ⚠️ 与反代的 `proxy_set_header X-Forwarded-For` 是**一对**：配了转发头必须同时设这个，
+ * 否则请求会被判成网络来源（更严的一侧，出错只会更安全）。
+ */
+export const trustProxy = /^(1|on|true|yes)$/i.test(String(process.env.BANDI_TRUST_PROXY ?? '').trim());
+
+/**
+ * `BANDI_LOCAL_SECRET=off` —— **逃生口**，只给"反代已经 deny 掉破坏性本机路径"的部署用。
+ * 关掉后破坏性动作不再要求 `X-Bandi-Local`，启动时会打一条 warning 并写审计。
+ */
+export const localSecretDisabled = /^(0|off|false|no)$/i.test(String(process.env.BANDI_LOCAL_SECRET ?? '').trim());
+
+/**
  * 允许的**来源**（写请求的来源白名单，CSRF 那道闸）。
  * 默认只有本机自己；逗号分隔，例如：
- *   `BANDI_ORIGINS=http://192.168.1.9:8787,https://bandi.example.com`
+ *   `BANDI_ORIGINS=http://192.168.1.9:18787,https://bandi.example.com`
  *
  * ⚠️ 不配这个、只改 `BANDI_HOST`，远端浏览器打开页面会**能看不能动**（写请求全 403）。
  * 节点不受影响：它用脚本调接口，浏览器不带 Origin，走的是放行那条路。
  *
  * 开了「允许局域网加入」时，本机的局域网地址自动放行 ✓ —— 不然用户还以为开关坏了
- * （页面在 `http://192.168.x.x:8787` 上打得开、却什么都改不了 ✗）。
+ * （页面在 `http://192.168.x.x:18787` 上打得开、却什么都改不了 ✗）。
  * 但这份"自动放行"**不能在导入时算一次冻结** —— 见下面 `lanOrigins()` 的注释。
  */
 
@@ -198,7 +229,7 @@ export function lanOrigins() {
    * ⚠️ 这里**不能**用下面那个 `port`：它是 `const`，在这个位置还在 TDZ 里 ✗
    * （第一次写就是这么炸的）。自己读一遍环境变量就好 —— 它们读的是同一个。
    */
-  const p = Number(process.env.BANDI_PORT ?? 8787);
+  const p = Number(process.env.BANDI_PORT ?? DEFAULT_PORT);
   return lanNics.map((ip) => `http://${ip}:${p}`);
 }
 
@@ -231,8 +262,8 @@ export const dshProfile = process.env.BANDI_DSH_PROFILE ?? 'headless';
  * `dsh --profile headless --json -` 照样跑通）。
  */
 
-/** 服务端端口 */
-export const port = Number(process.env.BANDI_PORT ?? 8787);
+/** 服务端端口（`BANDI_PORT` 优先，默认见上面 `DEFAULT_PORT`） */
+export const port = Number(process.env.BANDI_PORT ?? DEFAULT_PORT);
 
 /** dsh 跑任务时的工作目录：agent 在这个目录里干活 */
 export const runCwd = process.env.BANDI_RUN_CWD ?? repoRoot;

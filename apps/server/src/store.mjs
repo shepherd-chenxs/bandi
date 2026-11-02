@@ -25,8 +25,13 @@ export * from './store/runs.mjs';
 export * from './store/projects.mjs';
 export * from './store/projectTasks.mjs';
 export * from './store/nodes.mjs';
+// 协作中心（2026-10-31 MVP）：collab_invites / collab_branches / collab_tasks 三张表 ——
+// 中心侧只存"分公司名录 + 任务 + 状态"，不碰分公司的业务数据。
+export * from './store/collab.mjs';
 // 手机配对与设备域（2026-11 手机端增量）：mobile_devices / mobile_device_tokens / mobile_pair_tokens
 export * from './store/devices.mjs';
+// 不透明票域（IAM §12 Phase 3）：access_tokens（at_ 短票）/ refresh_tokens（rf_ 轮换族）
+export * from './store/tokens.mjs';
 export * from './store/workflows.mjs';
 export * from './store/quota.mjs';
 export * from './store/gitRepos.mjs';
@@ -38,3 +43,6 @@ export * from './store/users.mjs';
 // 动态验证（2026-10-31 二改，仿 yaojian-ruoyi）：user_otp / otp_challenges 两张表 ——
 // 密钥 AES-GCM 加密落库、10 个一次性恢复码、登录第二段的一次性凭据
 export * from './store/otp.mjs';
+// 安全审计（2026-10-31 IAM Phase 1）：security_events —— append-only（触发器兜底），
+// 401/403 由策略层当场记、写操作 pending → finish 回填（见 store/audit.mjs 文件头）
+export * from './store/audit.mjs';

@@ -1,5 +1,6 @@
 package app.local.bandi.mobile
 
+import android.content.Intent
 import android.os.Bundle
 import android.view.View
 import androidx.activity.enableEdgeToEdge
@@ -30,5 +31,17 @@ class MainActivity : TauriActivity() {
       view.setPadding(0, top, 0, bottom)
       insets
     }
+  }
+
+  /**
+   * 系统语音输入面板的结果要回到语音插件里。
+   *
+   * 为什么非要在 Activity 里接一道：Tauri 的 `Plugin` 基类只开了
+   * load/onResume/onPause/onNewIntent 这些钩子，**没有** `onActivityResult`，
+   * 插件自己收不到 `startActivityForResult` 的回传。所以 Activity 转一手。
+   */
+  override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+    super.onActivityResult(requestCode, resultCode, data)
+    SpeechPlugin.deliverResult(requestCode, resultCode, data)
   }
 }

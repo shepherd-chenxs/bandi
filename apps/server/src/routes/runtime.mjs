@@ -5,13 +5,16 @@ import path from 'node:path';
 import { sendJson, fail, readBody } from '../http.mjs';
 import { withExternals } from '../runtime-view.mjs';
 import { SERVER } from '../server-state.mjs';
-import { port, host, dataDir } from '../config.mjs';
+import { port, host, dataDir, trustProxy } from '../config.mjs';
 import * as netmode from '../netmode.mjs';
 import * as store from '../store.mjs';
 import * as auth from '../auth.mjs';
 import * as runtimes from '../runtimes.mjs';
 import * as cliModels from '../cli-models.mjs';
 import * as lanAnnounce from '../lan-announce.mjs';
+import { authorizeLocal } from '../security/local-policy.mjs';
+import * as localSecret from '../security/local-secret.mjs';
+import { sourceOf } from '../security/source.mjs';
 
 export async function handleRuntime(req, res, url) {
   const devices = /^\/api\/devices$/.exec(url.pathname);
@@ -95,6 +98,22 @@ export async function handleRuntime(req, res, url) {
    *      （它会以为"点了重启就坏了"）。
    */
   if (req.method === 'POST' && url.pathname === '/api/restart') {
+    /*
+     * **接口准入**（2026-10-31，IAM §8.5）：`/api/restart` 不在 `/api/local/` 前缀下，
+     * 前缀规则兜不住，所以它和本机接口共用同一张策略表（`security/local-policy.mjs` 里单列了一行）。
+     * 服务器形态下浏览器里那颗「重启」按钮不再是"谁都能点" —— 要么在本机，要么带 `X-Bandi-Local`。
+     */
+    const verdict = authorizeLocal({
+      method: req.method,
+      pathname: url.pathname,
+      source: sourceOf(req),
+      principal: req.bandiAuth ?? null,
+      hasSecret: localSecret.check(req),
+    });
+    if (!verdict.allow) {
+      fail(res, verdict.status, verdict.code, verdict.message, verdict.hint ? { hint: verdict.hint } : null);
+      return;
+    }
     const nextHost = process.env.BANDI_HOST ?? (netmode.readNetMode().allowLan ? '0.0.0.0' : '127.0.0.1');
     const willRequire = !netmode.isLoopback(nextHost);
     if (willRequire) {
@@ -106,7 +125,7 @@ export async function handleRuntime(req, res, url) {
        * → Cookie 根本设不出来 → 用户点完「重启生效」，自己那个窗口立刻撞上登录页 ✗
        * （他会以为"点了重启就坏了"）。先算这一次，令牌就造出来了 ✓。
        */
-      Object.assign(SERVER.AUTH, auth.setup({ host: nextHost, dataDir, envToken: process.env.BANDI_TOKEN }));
+      Object.assign(SERVER.AUTH, auth.setup({ host: nextHost, dataDir, envToken: process.env.BANDI_TOKEN, trustProxy }));
       if (SERVER.AUTH.token) res.setHeader('Set-Cookie', auth.cookieValue(SERVER.AUTH.token));
     }
     sendJson(res, 200, { ok: true, from: SERVER.boundHost, to: nextHost, requiresToken: willRequire });
@@ -115,38 +134,66 @@ export async function handleRuntime(req, res, url) {
   }
 
   /**
-   * 桌面版那个开关：**要不要让局域网里的机器作为节点加入这台机器**（2026-10-16 加的）。
+   * 这台机器的**形态**（2026-10-16 起；2026-11-01 晚拆成两个键）。
    *
-   * 改动**要重启才生效** —— 监听地址只能在进程启动那一刻定 ✗，所以返回值里带 `restartNeeded`，
-   * 界面据此说"重启后生效"，而不是骗用户"已经开了"。
+   *   · `allowLan`    —— **对外服务**（监听 0.0.0.0）。改动**要重启才生效** ——
+   *                      监听地址只能在进程启动那一刻定 ✗，所以返回值里带 `restartNeeded`，
+   *                      界面据此说"重启后生效"，而不是骗用户"已经开了"。
+   *   · `acceptNodes` —— **角色**：总机（收别的机器当节点）/ 分机（不收）。**立刻生效**，
+   *                      不碰监听地址，所以不产生"待重启"。分机照样对外服务、手机照样能连，
+   *                      只是不发邀请码、`/api/hello` 的 `joinable` 为 false。
+   *
+   * 两个键正交（用户 2026-11-01："把 thinkpad-p15 开分机模式。界面照样显示，手机照样可以连。
+   * 但是不提供邀请码，其他的机器也加不上去"）—— 所以 POST 必须是**部分更新**：
+   * 只传 `acceptNodes` 时不许动 `allowLan`，否则切一下角色就把对外服务记成了关。
+   *
    * 真值存在数据目录的 `netmode.json` 里，`config.mjs` 读它 → **桌面壳 / 开机自启 / 命令行三种起法都认** ✓。
    */
   if (url.pathname === '/api/lan') {
     if (req.method === 'POST') {
       const body = await readBody(req);
-      netmode.writeNetMode(body?.allowLan === true);
-      console.log(`[网络] 局域网加入：${body?.allowLan === true ? '开' : '关'}（重启后生效）`);
+      const patch = {};
+      if (typeof body?.allowLan === 'boolean') patch.allowLan = body.allowLan;
+      if (typeof body?.acceptNodes === 'boolean') patch.acceptNodes = body.acceptNodes;
+      if (Object.keys(patch).length) netmode.writeNetMode(patch);
+      const now = netmode.readNetMode();
+      if (typeof patch.allowLan === 'boolean') {
+        console.log(`[网络] 对外服务：${patch.allowLan ? '开' : '关'}（重启后生效）`);
+      }
+      if (typeof patch.acceptNodes === 'boolean') {
+        console.log(`[网络] 角色：${patch.acceptNodes ? '总机（收节点）' : '分机（不收节点）'}（立即生效）`);
+      }
       /*
-       * **UDP 应答器跟着开关原地启停**（2026-10-20，设计 §5.5 三处同步点之一）。
-       * 开关关掉必须**立刻**停 bind —— 否则"关掉之后不再出现在候选里"这条 PRD 验收项
-       * 就得等重启才成立 ✗。
+       * **UDP 应答器跟着形态原地同步**（2026-10-20，设计 §5.5 三处同步点之一）。
+       * 关掉对外服务必须**立刻**停 bind —— 否则"关掉之后不再出现在候选里"这条 PRD 验收项
+       * 就得等重启才成立 ✗。切角色则不能停：分机也要应答（手机配对 / 机器发现靠它），
+       * 只是应答体里的 `joinable` 变成 false。
        *
        * 这里用 `SERVER.boundHost`（这个进程**实际**听着什么），不是配置里想要的：
        * 开关刚打开、还没点重启时监听仍是回环，那时回应答毫无意义（别人根本连不进来）。
        */
-      lanAnnounce.sync({ allowLan: body?.allowLan === true, explicit: !!process.env.BANDI_HOST, boundHost: SERVER.boundHost, httpPort: port });
+      lanAnnounce.sync({ ...now, explicit: !!process.env.BANDI_HOST, boundHost: SERVER.boundHost, httpPort: port });
     }
-    const want = netmode.readNetMode().allowLan;
+    const nm = netmode.readNetMode();
+    const want = nm.allowLan;
     const boundLan = !netmode.isLoopback(SERVER.boundHost); // 这个进程**现在实际**听的是什么（原地重启后会变）
     /*
-     * ⚠️ 监听地址是**环境变量显式指定**的时候，这个开关**管不着**（env 优先 ✓）——
-     * 云端那台就是这么起的（`BANDI_HOST=0.0.0.0`），而它**本来就必须**对外听（节点在公网 ✓）。
-     * 所以这里如实回报 `explicit`，让界面把开关禁掉、并**按实际监听**说状态 ✓：
+     * ⚠️ 监听地址是**环境变量显式指定**的时候，`allowLan` **管不着**（env 优先 ✓）——
+     * 云端那台就是这么起的（`BANDI_HOST=0.0.0.0`）。
+     * 所以这里如实回报 `explicit`，让界面把"对外服务"那一项锁成只读、并**按实际监听**说状态 ✓：
      * 第一版没这条，于是云端那一页显示"关着 —— 只听本机"，而它其实对外开着 ✗（界面上说谎）。
+     *
+     * ⚠️ 但 `acceptNodes`（角色）跟 `explicit` **无关**：启动参数只定监听地址，
+     * 收不收节点随时能切。`explicit` 曾经让整张模式卡消失，正是这次要修的病根。
      */
     const explicit = !!process.env.BANDI_HOST;
     return sendJson(res, 200, {
       allowLan: want,
+      acceptNodes: nm.acceptNodes,
+      // 手机连接总开关（2026-11-02，「手机连接」页顶那颗；关 = 不发码 + 拒绝配对 + 断开全部）
+      pairEnabled: nm.pairEnabled,
+      // 给界面直读的角色名（省得每处自己 if）
+      role: nm.acceptNodes ? 'hub' : 'branch',
       explicit,
       host: SERVER.boundHost, // **实际**听着的（原地重启后会变）—— 别报启动时那个，那会骗人 ✗
       boundLan,

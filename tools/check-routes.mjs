@@ -43,6 +43,12 @@ const produced = new Set(used);
 
 // 一级栏：由 setNav 兜底，不需要入口函数里 setRoute
 const NAV_ONLY = new Set(['messages', 'contacts']);
+/*
+ * 转发条目（2026-11-01）：入口本身不落 view —— ROUTES.collab 把「协作中心」转到
+ * 设置页（S.settingsSection + setNav('settings')），存的位置是 {view:'settings'}；
+ * 'collab' 只负责接住旧存档转发。它永远不会有 setRoute('collab')，是故意的。
+ */
+const FORWARD_ONLY = new Set(['collab']);
 
 let failed = 0;
 const bad = (msg) => {
@@ -71,7 +77,7 @@ for (const v of produced) {
   if (!registered.includes(v)) bad(`setRoute('${v}') —— ROUTES 里没有登记，刷新恢复时打不开`);
 }
 for (const v of registered) {
-  if (NAV_ONLY.has(v)) continue;
+  if (NAV_ONLY.has(v) || FORWARD_ONLY.has(v)) continue;
   if (!produced.has(v)) bad(`ROUTES 里有 '${v}'，但没有任何 setRoute('${v}') —— 这个条目永远不会被记录`);
 }
 

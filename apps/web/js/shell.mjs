@@ -205,6 +205,16 @@ export const ROUTES = {
     setNav('plugins', { skipOpen: true });
     return openSchedules();
   },
+  /*
+   * 协作中心（2026-10-31 MVP；2026-11-01 从工作台搬进设置 →「协作」组）：
+   * 现在就是设置的一个分节 —— 走 openSettings 摆左栏高亮，页面本体在
+   * collab.mjs renderCollabCenter（画进 #settingsView）。存过的旧位置 {view:'collab'}
+   * 也从这儿转发，刷新恢复不丢。
+   */
+  collab: () => {
+    S.settingsSection = 'collab';
+    return setNav('settings');
+  },
 };
 
 
@@ -270,7 +280,7 @@ export async function restorePlace() {
  * 标题栏是 Rust 那边画的，网页改 data-theme 它听不见 —— 它只认 `setTheme`。
  * 「跟随系统」传 null（原生窗口自己跟系统走），手动档传实际的 light/dark。
  * 只在桌面壳里跑：__TAURI__ 是 withGlobalTauri 注入的，浏览器里没有（capabilities
- * 里给 127.0.0.1:8787 开了 core:window:allow-set-theme + remote urls，见 desktop）。
+ * 里给 127.0.0.1:18787 开了 core:window:allow-set-theme + remote urls，见 desktop）。
  */
 export function applyTheme() {
   const resolved = S.theme === 'system' ? (prefersLight() ? 'light' : 'dark') : S.theme;

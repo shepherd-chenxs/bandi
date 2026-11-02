@@ -4,10 +4,13 @@ import { esc, toast } from './shell.mjs';
 import { api, failHtml, initial, post } from './ui.mjs';
 import { setNav } from './state.mjs';
 import { openSettings } from './settings.mjs';
-import { confirmDo, mountJoinPanel, renderBackupSection, renderCliDetail, renderDeviceDetail, rich } from './machine.mjs';
+import { confirmDo, paintLocalRuntimes, renderBackupSection, renderCliDetail } from './machine.mjs';
 import { renderList } from './contacts.mjs';
 import { openProjectsPage, openTaskBoard } from './projects.mjs';
 import { openPlugins } from './experts.mjs';
+// 「协作」分节 2026-11-02 二十三改搬去 collab.mjs（协作中心页 #clBranchMount）——
+// 这边不再 import renderCollabSection / watchCollabSection。与 collab.mjs 的互相 import
+// 只剩单向（collab.mjs 引这儿的 headRow / paintModeCard），成环风险反而小了一截。
 import { $, LOCAL_BASE, S } from './core.mjs';
 
 
@@ -750,7 +753,8 @@ export const CRUMB_GO = {
   board: () => openTaskBoard(),
   // 运行时那两级：不是"分节"而是状态 —— 得先把 S.rtLevel 摆好，renderRuntimes 按它分发
   devices: () => { S.rtLevel = 'devices'; S.rtDevice = null; S.rtRuntime = null; return renderRuntimes(); },
-  device: () => { S.rtLevel = 'device'; S.rtRuntime = null; return renderRuntimes(); },
+  // 2026-11-01 设备详情页撤了：旧的 device 面包屑目标归到这台机器页
+  device: () => { S.rtLevel = 'devices'; S.rtDevice = null; S.rtRuntime = null; return renderRuntimes(); },
   // 设置子页（技能等）的面包屑回设置首页
   settings: () => openSettings('prefs'),
   // 技能详情的面包屑回技能列表
@@ -791,7 +795,6 @@ export function breadcrumb(items) {
 
 export async function renderRuntimes() {
   if (S.rtLevel === 'cli' && S.rtDevice && S.rtRuntime) return renderCliDetail();
-  if (S.rtLevel === 'device' && S.rtDevice) return renderDeviceDetail();
   return renderDeviceList();
 }
 
@@ -801,34 +804,9 @@ export async function renderRuntimes() {
    一个开关，一个重启按钮就可以了"）——
    单机/总机分段 + 说明行 + 连接行全部收掉，只剩「总机」开关（开=总机、关=单机）+ 常显重启按钮。
    真加入成功之后整站换成节点页（renderNodeMode），那台机器上这页都进不去了，没有"模式"可切。
-   「接入总机」是页面最底一节（只在单机档出现）。**2026-10-28 形态降级**：多机协同不再是产品主线
-   （docs/design/2026-10-28-形态降级-单机加隧道-方案.md），这一节收进默认收起的「多机协同（实验）」
-   分节、标「实验」—— 不删代码，观察期后再决定去留。
+   「接入总机」原是页面最底一节 —— **2026-11-01 晚整节撤掉**（用户："这个是干嘛的？历史遗留？"）：
+   本机加入别的总机当算力节点的 UI 不再画，命令行 bandi nodes join 顶上；后端全留。
    备份/导出导入 2026-10-29 起也长回这页底下（「数据管理」区，见 dmMount）。 */
-
-/* 设备行（总机的设备区）：远程节点多一枚「在线/离线」+ 排队数 —— 行的骨架与本地完全一致 */
-export const deviceRowHtml = (dev) => {
-  const isNode = dev.kind === 'node';
-  /* 「本机」身份标签（2026-10-21 用户：节标题固定叫「设备」，本机这条用标签标出来 ——
-     开关总机不再牵动标题）。颜色中性：它不是状态，只是身份。 */
-  const self = dev.kind === 'local' ? '<em class="tag-dim">本机</em>' : '';
-  const flag = isNode
-    ? `<em class="${dev.online ? 'tag-ok' : 'tag-warn'}">${dev.online ? '在线' : '离线'}</em>`
-    : '';
-  // 队列里压着几个活 —— 节点离线时这个数会一直涨，那就是"离线排队"看得见的样子
-  const queued = isNode && dev.pendingJobs ? ` · 排队 <b>${dev.pendingJobs}</b>` : '';
-  const tail = isNode ? '（远程节点）' : '';
-  return `<div class="row-item" data-open-device="${esc(dev.id)}">
-    <div class="avatar">${esc(initial(dev.label))}</div>
-    <div class="who">
-      <b>${esc(dev.label)}${self}${flag}</b>
-      <div class="sub">${esc(dev.platform)} · ${dev.runtimeCount} 个 agent CLI${queued}${tail}</div>
-    </div>
-    <span class="chev">›</span>
-  </div>`;
-};
-
-
 
 export async function renderDeviceList() {
   S.rtLevel = 'devices';
@@ -844,185 +822,182 @@ export async function renderDeviceList() {
     $('settingsView').innerHTML = `${headRow('<b>这台机器</b>')}<div class="empty">${failHtml(err)}</div>`;
     return;
   }
-  // 网络现状（旧后端没这条路由 → 按默认画，页面不能因此白屏 ✗）
-  let lan = { allowLan: false, boundLan: false, restartNeeded: false, urls: [], explicit: false };
-  try {
-    lan = await api('/api/lan');
-  } catch { /* 忽略：按默认画 */ }
-  // 模式卡附带的预警（如「另一个数据目录里也有节点常驻」）：拉不到不挡模式卡
-  let local = null;
-  try {
-    local = await api(`${LOCAL_BASE}/status`);
-  } catch { local = null; }
+  // 网络现状 2026-11-01 晚不再读：模式卡搬去了「手机连接」页、「多机协同」节也撤了，
+  // 这页没有再关心 lan 的地方（要加回来先想清楚谁消费）。
 
   /*
-   * 模式只有一个事实源：netmode.allowLan（+ 启动参数 explicit）。
-   * 「总机」不是又一个开关 —— 允许局域网连入 = 当总机，关掉 = 回单机
-   * （用户 2026-10-21：「被局域网探测这个说法不对，开了之后也不是总机，不开是单机模式」）。
-   * 收过的设备不算模式：单机也可能留着设备记录（重开总机就回来）。
-   * explicit（BANDI_HOST 指定监听）的服务端总机：模式锁死，不给切。
-   */
-  /* 总机不接入别的总机（2026-10-21 截图反馈）：「接入总机」整条路只在**单机档**存在 ——
-     收设备的机器不该同时摆着"去给别人当算力"的面板。分节只在单机档渲染，无需手动收。 */
-
-  /*
-   * 只有两档：单机 / 总机，开关就是切换本体（开=总机、关=单机 —— 2026-10-21 五改收成一行）。
-   * 「接入总机」不是第三档模式，是页面最底一节。2026-10-28 形态降级：收进默认收起的
-   * 「多机协同（实验）」分节（六改/七改的"常开无标题"随之作废 —— 多机已不是主线，
-   * 入口降级为实验但不删，见 docs/design/2026-10-28-形态降级-单机加隧道-方案.md §六）。
-   * 真加入成功后整站换成节点页，那时这台已经没有"模式"可切了。
+   * 形态的两个事实源（2026-11-01 八改，别再合回一个）：
+   *   · `netmode.allowLan`   —— 对外服务（监听 0.0.0.0）；启动参数 `BANDI_HOST` 优先级更高。
+   *   · `netmode.acceptNodes` —— 角色：总机（收别的机器当节点）/ 分机（不收）。
+   * 旧口径「允许局域网连入 = 当总机」把两者焊死了（用户 2026-10-21 的原话只否掉了
+   * "被局域网探测"这个说法，没说分机不存在）；2026-11-01 晚用户明确要分机形态：
+   * 对外服务照旧、手机照连，只是不发邀请码、别的机器加不上去。
+   * 收过的设备不算模式：只听本机也可能留着设备记录。
    */
 
   /*
-   * 设备区**单机/总机都显示**（2026-10-21 用户：单机也要能进本机管运行时），
-   * 但只有总机态给「添加设备」—— 单机不收设备，不派活给别人。
-   * 单机态只列本机：手上留着的远程节点记录这时候连不上，摆出来反而误导。
-   * （节点态走的是另一套整页 renderNodeMode，压根不渲染这页。）
+   * ⚠️ 2026-11-01 撤掉「添加设备」（用户："总机-节点就算有的话，我也没办法让它干活"）：
+   * 发邀请码改走命令行 `bandi nodes invite`；后端 `POST /api/nodes/invites` 与领活通道保留。
+   *
+   * ⚠️ 同日八改撤掉「设备」节 + 设备详情页（用户截图圈红"去掉这个模块和对应的页面"）：
+   * 单机常态下那节只有「本机」一行，点进去的详情页（已安装/未安装/外部件）已全部并入
+   * 下面的「运行时」区（paintLocalRuntimes）—— 模块和页面都成了多余的中间层。
+   * 远程节点的详情页（renderNodeDetail）随之删除：设备节是它唯一的入口。
+   * （节点态走的是另一套整页 renderNodeMode，不受影响。）
    */
+  const localDev = list.find((d) => d.kind === 'local');
 
   $('settingsView').innerHTML = `
     ${headRow('<b>这台机器</b>')}
     <div class="detail-body">
-      <!-- 模式节走 renderMode() 单独渲染（2026-10-21 十改，用户："切换的时候画面有点闪"）：
-           切换只重画这一小块，设备/可用总机列表原地不动，不再整页 innerHTML 重写闪一下。
-           （十一改：设备节 + 接入总机节也抽成 renderBody() —— 它们的显隐/过滤跟着模式走，
-           切换**成功**后要连着重画，否则页面纹丝不动 —— 十改只顾模式卡，漏了下面。 -->
-      <div id="modeMount"></div>
-      <div id="devMount"></div>
-      <div id="joinSlot"></div>
+      <!-- 2026-11-01 八改：设备节撤了；同日晚「多机协同」节也撤（用户："这个是干嘛的？历史遗留？"）——
+           2026-11-02 二十三改：「协作」分节也搬去「协作中心」页（用户："把这个协作移到协作中心，
+           通过分机和总机开关控制显示和隐藏"）—— 这页 = 运行时 / 数据管理。加入算力节点只剩
+           命令行（bandi nodes join，总机发码 bandi nodes invite）。 -->
+      <!-- 「运行时」区（2026-11-01 七改，用户："把运行时放到这个页面的数据管理上面"）：
+           本机的「已安装」长在这页，看运行时不用再点进本机详情（paintLocalRuntimes）。 -->
+      <div id="rtMount"></div>
       <!-- 「数据管理」区（2026-10-29 从设置独立分节降级成这页的一个区，用户："把数据管理
            作为这台机器的一个区域"）：不跟模式走 —— 模式切换只重画上面两块，这里原地不动。
            数据自己拉（状态 + backups 列表），拉完才画，失败各有兜底。 -->
       <div id="dmMount"></div>
     </div>`;
 
-  /* 模式节单独渲染：只重画 #modeMount 这一小块（整页重写是切换闪烁的根源）。
-     lan 是闭包里的活对象 —— 切换成功后改它再重画，高亮/待重启标记/状态行都跟着走 */
-  const modeNow = () => (lan.explicit || lan.allowLan ? 'host' : 'standalone');
-  const renderMode = () => {
-    const m = modeNow();
-    const pd = !!lan.restartNeeded || (m === 'host' && !lan.boundLan);
-    const mount = $('modeMount');
-    if (!mount) return;
-    /* 服务端总机（BANDI_HOST 指定监听，2026-10-21 截图反馈）：没有"模式"可言 ——
-       这台锁死当总机，单机/总机切换、待重启标记、重启按钮全是摆设。
-       整张模式卡不画，只留预警（如有）。 */
-    if (lan.explicit) {
-      mount.innerHTML = (local?.warnings ?? []).length
-        ? `<section class="set-sec mode-sec">${(local?.warnings ?? []).map((w) => `<div class="machine-warn">${esc(w)}</div>`).join('')}</section>`
-        : '';
-      return;
-    }
-    mount.innerHTML = `
-      <section class="set-sec mode-sec">
-        <div class="set-head">
-          <b>模式</b>${pd ? '<span class="set-tag">改了还没生效 —— 点「重启」生效</span>' : ''}
-          <div class="mode-ctl">
-            <div class="seg" id="modeSeg">
-              <button data-mode="standalone" class="${m === 'standalone' ? 'on' : ''}">单机</button>
-              <button data-mode="host" class="${m === 'host' ? 'on' : ''}" ${
-                lan.explicit ? 'disabled title="监听地址由启动参数指定（BANDI_HOST），这台常驻当总机"' : ''
-              }>总机（实验）</button>
-            </div>
-            <button class="btn-sm ${pd ? 'primary' : ''}" id="lanRestart">重启</button>
-          </div>
-        </div>
-        <!-- 2026-10-28 形态降级：两档话术都改成"这是本机"口径 —— 单机是默认形态与主线；
-             总机只是把本机接进多机协同的实验入口（文档见 deploy/README.md 三之二节的隧道）。
-             两句都压短，别把模式卡撑高。 -->
-        <div class="mode-state">${
-          m === 'host'
-            ? '总机（实验）—— 多机协同是实验特性；同一网络里的设备可以连到这台、领活干'
-            : '单机 —— 这是本机：自己的库、项目、员工、会话都在这台机器上。要从外面访问它，用隧道接出去（见 deploy/README.md）'
-        }</div>
-        ${(local?.warnings ?? []).map((w) => `<div class="machine-warn">${esc(w)}</div>`).join('')}
-      </section>`;
-    wireModeCard({ lan, mode: m, refresh });
-  };
+  /* 「多机协同」节 2026-11-01 晚整节撤掉（用户："这个是干嘛的？现在还在用吗，还是历史遗留？"）：
+     本机加入别的总机当算力节点的 UI 不再画 —— 线上没一个节点登记过，用户跨机走的是协作中心。
+     与设备详情页同口径：只撤界面，后端 /api/local/hosts/*、discover、nodes join/leave 全留，
+     要用走命令行 bandi nodes join <总机地址> <邀请码>。 */
 
-  /* 模式之下的一切（设备节 + 接入总机节，2026-10-21 十一改）：显隐与过滤都跟着模式走 ——
-     切换**成功**后跟着 renderMode 一起重画（十改只重画模式卡，下面纹丝不动是 bug）。
-     「接入总机」节不要标题（用户连着两次删）——面板自己带「可用总机 + 发现/添加」。 */
-  const renderBody = () => {
-    const m = modeNow();
-    const rows = m === 'host' ? list : list.filter((d) => d.kind !== 'node');
-    const dev = $('devMount');
-    const slot = $('joinSlot');
-    if (!dev || !slot) return;
-    dev.innerHTML = `
-      <section class="fx">
-        <div class="fx-head">
-          <label>设备 <span class="count">${rows.length}</span></label>
-          ${m === 'host' ? '<button class="btn-sm primary" id="joinNode">添加设备</button>' : ''}
-        </div>
-        ${rows.map(deviceRowHtml).join('')}
-      </section>`;
-    /* 2026-10-28 形态降级：「接入总机」不再是常开的裸面板 —— 多机协同降为实验特性
-       （docs/design/2026-10-28-形态降级-单机加隧道-方案.md），所以收进一个默认收起的分节：
-       节头「多机协同」+ 实验标签 + 展开/收起按钮，点开才把 mountJoinPanel 挂进来（不白挂）。
-       面板本身一行没动（mountJoinPanel 的 root.isConnected 守卫会自己收摊），只是入口变了。 */
-    slot.innerHTML = m === 'standalone'
-      ? `<section class="fx">
-          <div class="fx-head">
-            <label>多机协同 <em class="tag-warn">实验</em></label>
-            <button class="btn-sm" id="joinToggle">展开</button>
-          </div>
-          <div class="dim">多机协同（加入别的总机 / 局域网派活）是实验特性：每台机器跑一个完整班底、各自一份数据。跨机协作推荐项目走 git 仓库 + PR。</div>
-          <div id="joinMount" style="display:none"></div>
-        </section>`
-      : '';
-    const jn = $('joinNode');
-    if (jn) jn.onclick = () => openJoinDialog(lan);
-    if (m === 'standalone') {
-      const mount = $('joinMount');
-      const toggle = $('joinToggle');
-      /* 挂载判据写在 mount 节点自己身上：renderBody 每次切换都重建这段 innerHTML，
-         旧节点被换掉时它的 isConnected 守卫会停掉面板里的定时器；dataset 跟着新节点归零，
-         所以"每个新 mount 只挂一次"这个不变式不需要额外的闭包状态去维护。 */
-      if (toggle && mount) {
-        toggle.onclick = () => {
-          const hidden = mount.style.display === 'none';
-          mount.style.display = hidden ? '' : 'none';
-          toggle.textContent = hidden ? '收起' : '展开';
-          // 点开才挂：收起状态下不白挂面板（它自带状态机与轮询，挂着就是白转）
-          if (hidden && !mount.dataset.mounted) {
-            mount.dataset.mounted = '1';
-            mountJoinPanel(mount);
-          }
-        };
-      }
-    }
-    /* 设备行点进去（本机 / 远程节点同一个入口，详情页自己分叉） */
-    dev.querySelectorAll('[data-open-device]').forEach((el) => {
-      el.onclick = () => {
-        S.rtLevel = 'device';
-        S.rtDevice = el.dataset.openDevice;
-        renderRuntimes();
-      };
-    });
-  };
+  /* 「协作」分节 2026-11-02 二十三改搬去「协作中心」页（collab.mjs renderCollabCenter
+     的 #clBranchMount）—— 这页不再挂它，renderCollabSection / watchCollabSection 的
+     import 一并撤了（collab.mjs 自己用，不再外借）。 */
 
-  /* refresh(deep)：确认取消/请求失败只回拨模式卡高亮；切换**成功**传 deep=true，
-     连着重画设备节与接入总机节（它们的显隐跟模式走） */
-  const refresh = (deep) => {
-    renderMode();
-    if (deep) renderBody();
-  };
-  renderMode();
-  renderBody();
-  /* 数据管理区：进页挂一次（renderBody 换模式重画时不动它 —— 里面的导出/导入
-     按钮和快照列表跟模式无关，重挂反而白拉一遍接口） */
+  /* 「运行时」区（2026-11-01 七改）：本机的「已安装」长在这页 —— 数据管理上面。
+     不 await：区块自己拉数据自己画，别挡着数据管理区先出来 */
+  if (localDev) paintLocalRuntimes($('rtMount'), localDev.id).catch(() => {});
+  /* 数据管理区：进页挂一次（里面的导出/导入按钮和快照列表跟模式无关，重挂反而白拉一遍接口） */
   renderBackupSection($('dmMount'));
 }
 
 
 
 /**
- * 模式卡的接线：单机⇄总机 = 改 allowLan + 重启生效（确认框把后果说全）。
- * 「接入总机」那节的折叠/挂载在 renderBody 里自己管（2026-10-28 降级后默认收起、点开才挂），
- * 这里不管它；真加入成功后整站变节点页。
+ * 模式卡（2026-11-01 八改：**角色与监听地址拆开** —— 用户："一台机器难道就不能一直处于
+ * 不监听回环的模式吗？就是一直处于总机模式。比如把 thinkpad-p15 开分机模式。界面照样显示，
+ * 手机照样可以连。但是不提供邀请码，其他的机器也加不上去"）。
+ *
+ * 卡上是**两个正交的维度**，别再混成一个"模式"：
+ *   · **角色**（总机 / 分机）—— 收不收别的机器当节点。`POST /api/lan {acceptNodes}`，
+ *     **立即生效**，不碰监听地址，所以永远不产生"待重启"。
+ *   · **对外服务**（监听 0.0.0.0 / 只听本机）—— 手机和浏览器连不连得进来。
+ *     只能在进程启动那一刻定，所以要么靠「重启」按钮，要么被 `BANDI_HOST` 钉死。
+ *
+ * 旧版把两者焊成"单机 ⇄ 总机（实验）"：总机 == 对外 == 收节点，于是分机这个形态
+ * **根本表达不出来**；更糟的是 `explicit`（启动参数指定了监听）时整张卡被藏掉，
+ * 显式部署的机器连"我是总机还是分机"都看不见 ✗。现在 explicit 只锁**对外服务那一项**。
+ *
+ * lan 由调用方传入并**就地更新**（切换成功后改 acceptNodes / allowLan / restartNeeded）；不传就自己拉。
+ * local（预警）同理。onChange：切换**成功**后的回调（deep 才调）——「手机连接」页据此换引导。
  */
-export function wireModeCard({ lan, mode, refresh }) {
+export async function paintModeCard(mount, { lan, local, onChange, onRoleChange } = {}) {
+  if (!mount) return;
+  if (!lan) {
+    lan = { allowLan: false, acceptNodes: false, boundLan: false, restartNeeded: false, urls: [], explicit: false };
+    try { lan = await api('/api/lan'); } catch { /* 拉不到按默认画 */ }
+  }
+  if (local === undefined) {
+    // 模式卡附带的预警（如「另一个数据目录里也有节点常驻」）：拉不到不挡模式卡
+    try { local = await api(`${LOCAL_BASE}/status`); } catch { local = null; }
+  }
+  /* 挂卡那一刻对外没有 —— 之后**翻面**了才值得让调用方整页重画（切角色不翻面，不闪） */
+  const servingAtPaint = !!lan.boundLan;
+  const render = (light) => {
+    const role = lan.acceptNodes ? 'hub' : 'branch';
+    const serving = !!lan.boundLan; // 这个进程**现在**真的对外听着吗
+    const keep = lan.explicit || lan.allowLan; // 打算对外（含"改了还没重启"）
+    /* 待重启 = 打算对外，但现在还没。explicit 时监听由启动参数钉死，永远没有"待重启" */
+    const pd = !lan.explicit && (!!lan.restartNeeded || (keep && !serving));
+    /* 启动参数把监听钉在回环上：这台永远不能对外 —— 两个角色都点不动，
+       只能换 deploy 里的 BANDI_HOST（所以给 disabled + title 说明，别画成能点的样子） */
+    const locked = !!lan.explicit && !serving;
+    /*
+     * 状态行：**先说清"能不能连进来"，再说角色** —— 用户看这行是为了知道
+     * "我手机上还能不能打开它"，那是比"收不收节点"更靠前的问题。
+     */
+    const state = !serving && !keep
+      ? lan.explicit
+        ? '这台只听本机 —— 监听地址由启动参数（BANDI_HOST）钉住，手机和别的机器都连不进来'
+        : '这台目前只听本机 —— 手机和别的机器都连不进来。选「分机」或「总机」开始对外服务'
+      : role === 'hub'
+        ? '我是总机'
+        : '我是分机';
+    /*
+     * **轻更新**（2026-11-01 用户："切换总机和分机页面不要闪动"）：切角色只改
+     * 高亮和状态行文字，DOM 结构一动不动 —— 整段 innerHTML 重写会把 seg 按钮整个
+     * 换成新节点，视觉上就是卡壳一闪。结构（待重启标记/监听行/预警）只有
+     * 动了 allowLan 才会变，那种重建留给全量渲染。
+     */
+    if (light && mount.querySelector('#modeSeg')) {
+      mount.querySelectorAll('#modeSeg [data-role]').forEach((b) => b.classList.toggle('on', b.dataset.role === role));
+      const main = mount.querySelector('#modeStateMain');
+      if (main) main.textContent = state;
+      return;
+    }
+    mount.innerHTML = `
+      <section class="set-sec mode-sec">
+        <div class="set-head">
+          <b>模式</b>
+          <span class="mode-state mode-main" id="modeStateMain">${state}</span>
+          ${pd ? '<span class="set-tag">改了还没生效 —— 点「重启」生效</span>' : ''}
+          <div class="mode-ctl">
+            <div class="seg seg-mode" id="modeSeg">
+              <button data-role="branch" class="${role === 'branch' ? 'on' : ''}" ${
+                locked ? 'disabled title="监听地址由启动参数钉在回环上，这台只在本机可用"' : ''
+              }>分机</button>
+              <button data-role="hub" class="${role === 'hub' ? 'on' : ''}" ${
+                locked ? 'disabled title="监听地址由启动参数钉在回环上，这台只在本机可用"' : ''
+              }>总机</button>
+            </div>
+            ${pd ? '<button class="btn-sm primary" id="lanRestart">重启</button>' : ''}
+          </div>
+        </div>
+        ${
+          lan.explicit
+            ? '<div class="mode-state">对外地址由部署配置决定，此处不可修改</div>'
+            : serving || keep
+              ? '<div class="mode-foot"><button class="btn-sm" id="modeLocal" type="button">只在本机使用</button></div>'
+              : ''
+        }
+        ${(local?.warnings ?? []).map((w) => `<div class="machine-warn">${esc(w)}</div>`).join('')}
+      </section>`;
+    wireModeCard({ lan, refresh });
+  };
+  const refresh = (deep, light) => {
+    render(light); // 失败拨回真实模式；light=只切角色（高亮+文字），全量才动结构
+    /* 只有**对外服务翻面**（回环 ⇄ 对外）才让调用方整页重画 —— 切总机/分机不动监听，
+       下面的邀请码/二维码一个字节都不用变，重画纯属闪动 ✗ */
+    if (deep && !!lan.boundLan !== servingAtPaint) onChange?.();
+    /* 角色切换成功也要单独知会（2026-11-02 二十三改）：协作中心页的「协作」分节
+       显隐跟着分机/总机走，切了角色它得当场换脸 —— 但只重画那一节，不整页闪。
+       手机连接页已不挂模式卡，这个回调没有别的消费方。 */
+    if (deep && onRoleChange) onRoleChange(lan);
+  };
+  render();
+}
+
+/**
+ * 模式卡的接线（2026-11-01 八改）。
+ *
+ * 两件事分开接，因为它们的"生效方式"根本不同：
+ *   · **角色**（分机 ⇄ 总机）= `POST /api/lan {acceptNodes}`，**立即生效**、不重启、不弹确认
+ *     （2026-10-21 用户："切换不要弹窗" —— 可逆动作不用拦）。
+ *   · **对外服务**（监听）= 要重启。点角色时如果这台还在回环上、又没被启动参数钉住，
+ *     顺手把 `allowLan` 打开（监听照样等「重启」）—— 否则用户点了"总机"却什么都没发生，
+ *     会以为按钮坏了 ✗。
+ *
+ * 请求失败 refresh() 把高亮拨回真实状态 —— 界面说的必须就是库里存的。
+ */
+export function wireModeCard({ lan, refresh }) {
   const restart = $('lanRestart');
   if (restart) {
     restart.onclick = async () => {
@@ -1053,85 +1028,56 @@ export function wireModeCard({ lan, mode, refresh }) {
     };
   }
 
-  /* 选项卡即模式：点哪档切哪档，**不弹确认**（2026-10-21 用户："切换不要弹窗"）——
-     切换本来就可逆（再点一下切回来），后果由状态行 + 「重启」按钮承担，不用对话框拦一道。
-     请求失败 refresh() 把高亮拨回真实模式 —— 否则界面说的和库里存的是两回事。
-     成功后改闭包里的 lan（allowLan + restartNeeded）再 refresh(true) ——
-     deep=true 连着重画设备节/接入总机节（显隐跟模式走），模式卡本身原地重画不闪整页 */
   const modeSeg = $('modeSeg');
   if (modeSeg) {
-    modeSeg.querySelectorAll('[data-mode]').forEach((btn) => {
+    modeSeg.querySelectorAll('[data-role]').forEach((btn) => {
       btn.onclick = async () => {
-        const toHost = btn.dataset.mode === 'host';
-        if (toHost === (mode === 'host')) return;
+        const wantHub = btn.dataset.role === 'hub';
+        const body = {};
+        if (wantHub !== !!lan.acceptNodes) body.acceptNodes = wantHub;
+        /* 回环 + 没被启动参数钉死 → 顺手打开对外服务（只改开关，监听等重启） */
+        if (!lan.boundLan && !lan.explicit) body.allowLan = true;
+        if (!Object.keys(body).length) return;
         try {
-          await post('/api/lan', { allowLan: toHost });
+          await post('/api/lan', body);
         } catch {
           refresh();
           return; // api() 已经提示过了
         }
-        lan.allowLan = toHost;
-        lan.restartNeeded = true;
-        refresh(true);
+        if (typeof body.acceptNodes === 'boolean') lan.acceptNodes = body.acceptNodes;
+        if (body.allowLan) {
+          lan.allowLan = true;
+          lan.restartNeeded = true;
+        }
+        /* 只切了角色（没碰 allowLan）→ 轻更新：DOM 结构不动、只拨高亮换文字，页面零闪动；
+           连带动了对外开关（回环上点总机）→ 全量重建，把「待重启」标记带出来 */
+        refresh(true, body.acceptNodes !== undefined && !body.allowLan);
       };
     });
   }
-}
 
-
-
-/**
- * 「让一台新机器加入」：发一个**一次性邀请码**，把能直接粘的整条命令摆出来。
- *
- * 为什么要有这一步（2026-10-16）：节点原来用总机那枚 master 令牌 ✗ —— 一台被翻等于整套被翻，
- * 而且「忘掉」踢不掉它（令牌还有效）。现在换成"邀请码 → 每节点一枚自己的令牌"。
- *
- * ⚠️ 命令里的地址用 `location.origin`（**浏览器眼里**的控制面地址）——
- * 这正是那台新机器要连的地址 ✓；`BANDI_DATA` 必须跟那台机器上服务用的是同一个 ✗
- * （我迁移时就漏了这句，配置写到了别处，节点直接哑了）。
- */
-export async function openJoinDialog(lan = null) {
-  const dlg = $('joinDlg');
-  const pre = $('joinCmd');
-  const foot = $('joinFoot');
-  pre.textContent = '正在生成邀请码…';
-  foot.textContent = '';
-  dlg.showModal();
-  let inv;
-  try {
-    inv = await api('/api/nodes/invites', { method: 'POST' });
-  } catch (err) {
-    pre.textContent = '生成失败：' + err.message;
-    return;
+  /* 「只在本机使用」= 收回对外服务（角色留着，下次重新对外还是原来那个）。
+     ⚠️ 只在**非显式部署**时出现：explicit 时 allowLan 管不着监听，画出来就是假按钮。 */
+  const localBtn = $('modeLocal');
+  if (localBtn) {
+    localBtn.onclick = async () => {
+      try {
+        await post('/api/lan', { allowLan: false });
+      } catch {
+        refresh();
+        return;
+      }
+      lan.allowLan = false;
+      lan.restartNeeded = true;
+      refresh(true);
+    };
   }
-  /*
-   * 命令里的地址得是**那台新机器能连到的**那个 ✗ —— 不能一律用 `location.origin`：
-   * 如果控制面已经开在局域网上，用户在**本机**打开这一页时 origin 是 `127.0.0.1` ✗，
-   * 拿这条命令去别的机器上粘，那台机器会连到它**自己**的 127.0.0.1 ✗（然后一头雾水）。
-   */
-  const base =
-    lan?.boundLan && lan.urls?.length ? lan.urls[0] : location.origin;
-  const cmd = [
-    '# 在那台新机器上跑（它得先有 Node 和这份代码 —— 见 deploy/README）',
-    'export BANDI_DATA="$HOME/.bandi-node"',
-    `node apps/server/src/node.mjs --join ${base} --code ${inv.code}`,
-    '',
-    '# 它换回自己的令牌之后，把它起成常驻（开机自己起）：',
-    'BANDI_DATA="$HOME/.bandi-node" node apps/server/src/autostart.mjs install node',
-  ].join('\n');
-  pre.textContent = cmd;
-  const at = new Date(inv.expiresAt);
-  foot.innerHTML = rich(
-    `这个码 ${at.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })} 前有效，**只用一次**。换来的令牌只能干它自己那台的事，随时可以在设备页把它忘掉（= 吊销）。` +
-      (lan?.boundLan ? '' : '⚠️ 现在这台机器只听本机 —— 别的机器连不到它，得先在下面把「局域网」打开并重启。'),
-  );
-  $('joinCopy').onclick = async () => {
-    try {
-      await navigator.clipboard.writeText(cmd);
-      $('joinCopy').textContent = '已复制';
-      setTimeout(() => { $('joinCopy').textContent = '复制命令'; }, 1500);
-    } catch {
-      toast('复制不了，手动选中吧：\n\n' + cmd);
-    }
-  };
 }
+
+
+
+/*
+ * 2026-11-01 删除「让一台新机器加入」弹窗（原 openJoinDialog）：
+ * 它只发邀请码、不发活 —— 收进来的机器没有派活入口（节点态整页见 renderNodeMode）。
+ * 发码改命令行 `bandi nodes invite`；后端 `POST /api/nodes/invites` 不动。
+ */

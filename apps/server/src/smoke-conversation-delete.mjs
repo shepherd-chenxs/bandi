@@ -198,7 +198,9 @@ console.log('\n⑥ 事务边界：中途失败必须**整体回滚**（不是"�
  */
 const rw = await (async () => {
   const { DatabaseSync } = await import('node:sqlite');
-  return new DatabaseSync(process.env.BANDI_DB);
+  const d = new DatabaseSync(process.env.BANDI_DB);
+  d.exec('PRAGMA busy_timeout = 5000'); // 服务端活着时直写库：写锁竞争要等，别秒抛 locked
+  return d;
 })();
 const rollbackConv = store.createConversation({ title: '和 波哥', personaId: dev.id });
 store.addMessage({ conversationId: rollbackConv.id, role: 'user', text: '这段要验回滚' });
@@ -283,6 +285,7 @@ store.addMessage({ conversationId: groupSeg2.id, role: 'user', text: '第二段�
 // 注意 `openDb()` 是**只读**连接（专门用来绕开 store 验事实），写夹具要另开一个可写连接
 const { DatabaseSync: DatabaseSyncW } = await import('node:sqlite');
 const dbW = new DatabaseSyncW(process.env.BANDI_DB);
+dbW.exec('PRAGMA busy_timeout = 5000'); // 同上：与活着的 server 共库，写前先等锁
 dbW
   .prepare('INSERT INTO member_sessions (threadId, personaId, scope, sessionId) VALUES (?, ?, ?, ?)')
   .run(delGroup.id, dev2.id, 'smoke', 's-smoke-group');

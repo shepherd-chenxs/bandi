@@ -71,11 +71,22 @@ async function waitUp(ms = 15000) {
   return false;
 }
 
-/** 统一请求：`cookie` / `token` 二选一，写请求都带 X-Bandi（来源闸认它） */
-const call = async (method, p, { body, cookie, token } = {}) => {
+/*
+ * CSRF 双提交（2026-10-31，IAM §10.2）：带 Cookie 的写请求要 `bandi_csrf` Cookie 与
+ * `X-Bandi-CSRF` 头成对。smoke 模拟**同一个浏览器**：登录/建号响应种下 bandi_csrf 就记进
+ * jar（CSRF），后续带 cookie 的请求自动合并进 Cookie 头并带上同名 header ——
+ * 服务端只做值比对，不同用户的 csrf 值互换无所谓（比对对象是请求者自己的 cookie）。
+ */
+let CSRF = '';
+
+/** 统一请求：`cookie` / `token` / `setup` 三选 N，写请求都带 X-Bandi（来源闸认它） */
+const call = async (method, p, { body, cookie, token, setup } = {}) => {
   const headers = { 'Content-Type': 'application/json', 'X-Bandi': '1' };
-  if (cookie) headers.Cookie = cookie;
+  if (cookie) headers.Cookie = CSRF ? `${cookie}; bandi_csrf=${CSRF}` : cookie;
+  else if (CSRF && method !== 'GET') headers.Cookie = `bandi_csrf=${CSRF}`;
+  if (method !== 'GET' && CSRF) headers['X-Bandi-CSRF'] = CSRF;
   if (token) headers['X-Bandi-Token'] = token;
+  if (setup) headers['X-Bandi-Setup'] = setup;
   const r = await fetch(BASE + p, {
     method,
     headers,
@@ -83,9 +94,12 @@ const call = async (method, p, { body, cookie, token } = {}) => {
     signal: AbortSignal.timeout(5000),
   });
   const raw = await r.text();
+  const sc = r.headers.get('set-cookie') ?? '';
+  const mCsrf = /bandi_csrf=([^;]*)/.exec(sc);
+  if (mCsrf) CSRF = decodeURIComponent(mCsrf[1]); // 浏览器语义：登录响应把 csrf 值换新
   let parsed = null;
   try { parsed = JSON.parse(raw); } catch { /* HTML 或空 */ }
-  return { status: r.status, body: parsed, raw, setCookie: r.headers.get('set-cookie') ?? '' };
+  return { status: r.status, body: parsed, raw, setCookie: sc };
 };
 
 /** 从 Set-Cookie 里抽出 `name=value`（只取这一段，后面是 Path/HttpOnly…） */
@@ -134,10 +148,19 @@ try {
   const st0 = await call('GET', '/api/state', { token: TOKEN });
   check('共享令牌照旧能读 /api/state（③ 的兜底：root 没被关在门外）', st0.status === 200, String(st0.status));
 
-  /* ============ ② 第一个账号 = 内置管理员 ============ */
-  console.log('\n② root 令牌建第一个账号 → 自动成为内置管理员');
-  const first = await call('POST', '/api/users', { token: TOKEN, body: ADMIN });
-  check('201', first.status === 201, String(first.status));
+  /* ============ ② 第一个账号 = 内置管理员（服务器形态要走 setup_code 引导） ============ */
+  console.log('\n② root 令牌建第一个账号 → 自动成为内置管理员（需 X-Bandi-Setup）');
+  // 2026-10-31 IAM v2.4：服务器形态 + 零账号 → 数据目录生成 setup_code，
+  // 首账号创建必须带 X-Bandi-Setup（堵「谁先连上谁当 admin」）。完整矩阵见 smoke-bootstrap.mjs。
+  const setupCode = fs.readFileSync(path.join(tmp, 'setup_code'), 'utf8').trim();
+  const noSetup = await call('POST', '/api/users', { token: TOKEN, body: ADMIN });
+  check('不带引导码 → 403 E4098', noSetup.status === 403 && noSetup.body?.code === 'E4098',
+    `${noSetup.status} ${noSetup.body?.code ?? ''}`);
+  const badSetup = await call('POST', '/api/users', { token: TOKEN, body: ADMIN, setup: 'wrong-code-0000' });
+  check('引导码不对 → 403 E4098', badSetup.status === 403 && badSetup.body?.code === 'E4098',
+    `${badSetup.status} ${badSetup.body?.code ?? ''}`);
+  const first = await call('POST', '/api/users', { token: TOKEN, body: ADMIN, setup: setupCode });
+  check('带对引导码 → 201', first.status === 201, String(first.status));
   check('builtin = true', first.body?.user?.builtin === true, String(first.body?.user?.builtin));
   check('roleId = admin（不传也强制是它）', first.body?.user?.roleId === 'admin', String(first.body?.user?.roleId));
   check('标记 first（前端据此给"第一个账号"的说明）', first.body?.first === true);
@@ -147,6 +170,7 @@ try {
   check('登录页不含令牌入口', !page1.includes('用访问令牌登录') && !page1.includes('name="token"'));
   // 建第一个账号 = 首次开机设置：顺手发登录会话票（2026-10-31），同一浏览器以后切非回环地址不用再登
   check('建第一个账号顺手 Set-Cookie bandi_sid（首次引导的自动登录）', /bandi_sid=/.test(first.setCookie ?? ''), String(first.setCookie ?? '').slice(0, 60));
+  check('引导码建成即删（文件不再存在）', !fs.existsSync(path.join(tmp, 'setup_code')));
 
   /* ============ ②.5 免密账号 = 空密码直接登录（2026-10-31 用户拍板） ============ */
   console.log('\n②.5 免密账号：空密码能登录、错密码不行、补密码后空密码关上');
@@ -375,8 +399,30 @@ try {
     last = await call('POST', '/api/login', { body: { name: ghostName, password: 'wrong-pass' } });
     if (last.status === 429) { saw429 = true; break; }
   }
-  check('连打 6 次至少出现一次 429（E3806）', saw429 && last?.body?.code === 'E3806',
+  check('连打 6 次至少出现一次 429（E4095；E3806 已作废，见 IAM §11.1）', saw429 && last?.body?.code === 'E4095',
     `${last?.status} ${last?.body?.code ?? ''}`);
+  // 落库锁定（IAM §11.1）：ghost 名不存在落不了库（内存窗口独挡），所以要**存在的用户**：
+  const lockMe = await call('POST', '/api/users', { token: TOKEN, body: { name: '锁定测试员', password: 'lock-pass-123', roleId: 'operator' } });
+  check('建一个专用账号验锁定 → 201', lockMe.status === 201, `${lockMe.status} ${lockMe.raw?.slice(0, 160)}`);
+  let lockSaw429 = false;
+  let lockLast = null;
+  for (let i = 0; i < 6; i += 1) {
+    lockLast = await call('POST', '/api/login', { body: { name: '锁定测试员', password: 'totally-wrong' } });
+    if (lockLast.status === 429) { lockSaw429 = true; break; }
+  }
+  check('存在的用户连错 5 次 → 429（内存窗口 + 落库锁定双成立）', lockSaw429,
+    `${lockLast?.status} ${lockLast?.body?.code ?? ''}`);
+  // 重启（⑧ 同款）：内存窗口清零 → 不存在的用户名回到 401；**库里的 lockedUntil 还在** →
+  // 专用账号仍 429 —— "重启一次就解锁"在无人值守形态等于没锁，这正是要落库的原因。
+  await stopAll();
+  start({ BANDI_HOST: '0.0.0.0', BANDI_TOKEN: TOKEN });
+  if (!(await waitUp())) throw new Error('重启后没起来：' + log.slice(-500));
+  const ghostAfter = await call('POST', '/api/login', { body: { name: ghostName, password: 'wrong-pass' } });
+  check('重启后不存在的用户名回到 401（内存窗口确实清了）', ghostAfter.status === 401,
+    `${ghostAfter.status} ${ghostAfter.body?.code ?? ''}`);
+  const lockAfter = await call('POST', '/api/login', { body: { name: '锁定测试员', password: 'totally-wrong' } });
+  check('重启后专用账号仍 429（锁定落库，重启不清零）', lockAfter.status === 429 && lockAfter.body?.code === 'E4095',
+    `${lockAfter.status} ${lockAfter.body?.code ?? ''}`);
 
   /* ============ ⑩.5 删角色前要问「还有没有账号在用」 ============ */
   /*

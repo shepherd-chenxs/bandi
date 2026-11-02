@@ -2,19 +2,54 @@
   box-sizing: border-box;
 }
 
+/*
+ * 主题：深色是默认值，浅色在文件末尾 `@media (prefers-color-scheme: light)` 里覆盖。
+ *
+ * 为什么跟随系统而不是照抄主站的「主题」设置：启动页跑在 http://tauri.localhost，
+ * 和业务页（192.168.x / 域名）不是同一个 origin，读不到那边的 localStorage；
+ * 而且它出现在连接之前 —— 那时还没有"某台电脑的偏好"可读。系统亮/暗是唯一
+ * 可靠的信号（2026-11-01 用户问"界面为什么是黑色的"后加的）。
+ */
 :root {
+  color-scheme: dark;
+
   --bg: #08090a;
+  --bg-glow: #182031;
   --card: #101214;
+  --card-2: #0b0d10;
   --line: #23262a;
-  --text: #e7e7e7;
+  --line-2: #2c3037;
+  --text: #e8e9ea;
   --dim: #9aa0a6;
+  --strong: #c8cdd4;
   --accent: #3b6ef5;
+  --accent-2: #6d92ff;
   --bad: #c0504d;
+  --good: #2e9e6b;
+  /* 破坏性按钮的文字色：深底上要亮一点才看得清（浅色主题换成更深的红） */
+  --bad-ink: #e0948f;
+
+  /* 组件级 */
+  --seg-bg: #0b0d10;
+  --seg-thumb-bg: linear-gradient(180deg, #252b34, #1b2027);
+  --seg-thumb-shadow: 0 2px 8px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  --target-a: #151b26;
+  --target-b: #0c0e11;
+  --target-shadow: none;
+  --qr-bg: rgba(59, 110, 245, 0.14);
+  --sweep-glow: rgba(109, 146, 255, 0.65);
+  --btn-bg: #171a1e;
+  --status-bg: #17191d;
+  --placeholder: #4a4f56;
+  --placeholder-2: #363a40;
+
+  --r-card: 20px;
+  --r-ctl: 13px;
 }
 
 /* 注意：这里**不能**用 `height: 100%`。钉死视口高度后，键盘弹起时内容
    超出视口的部分会被裁掉而不是产生滚动 —— 输入框就永远滚不出来。
-   用 min-height 让 body 随内容长，配合下面的 overflow-y 才滚得动。 */
+   用 min-height 让 body 随内容长。 */
 html {
   min-height: 100%;
 }
@@ -23,32 +58,42 @@ body {
   min-height: 100dvh;
   margin: 0;
   background:
-    radial-gradient(120% 80% at 50% 0%, #14181f 0%, var(--bg) 60%) fixed;
+    radial-gradient(120% 70% at 50% -10%, var(--bg-glow) 0%, transparent 62%),
+    var(--bg);
   color: var(--text);
   font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
     "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
   -webkit-text-size-adjust: 100%;
   -webkit-tap-highlight-color: transparent;
-  /* 注意：这里**不要**给 body 加 overflow-y —— 移动 WebView 的滚动容器是
-     文档本身，body 上的 overflow 不接管滚动，加了反而让内容被裁掉。
-     键盘弹起时靠 launcher.js 的 window.scrollTo 把输入框顶上来。 */
+  /* 不给 body 加 overflow-y —— 移动 WebView 的滚动容器是文档本身，
+     body 上的 overflow 不接管滚动，加了反而让内容被裁掉。 */
 }
 
 .wrap {
   min-height: var(--vvh, 100dvh);
   display: flex;
   flex-direction: column;
-  /* 不用 justify-content: center —— flex 居中在内容溢出时会上下都裁，
-     键盘弹起后输入框永远滚不进来。改用两个 auto margin 的伪元素做
-     "安全居中"：空间够就居中，不够就从顶部开始、正常滚动。 */
-  gap: 18px;
-  padding: calc(28px + env(safe-area-inset-top)) 20px
-    calc(28px + var(--kb, 0px) + env(safe-area-inset-bottom));
-  max-width: 520px;
+  gap: 13px;
+  /* 顶部 60px：标题别贴着状态栏，往下沉一截（常态，聚焦也不变） */
+  padding: calc(60px + env(safe-area-inset-top)) 20px
+    calc(26px + var(--kb, 0px) + env(safe-area-inset-bottom));
+  max-width: 460px;
   margin: 0 auto;
 }
 
-.wrap::before,
+/*
+ * 键盘弹起时**页面不动**（用户 2026-11-01 实测定稿：键盘盖不住输入框，
+ * 别往上挤）。以前那套「聚焦就整页上移给键盘让位」全删了 —— 没有位移，
+ * 标题也不会跟着晃。顶部 60px 的留白就是常态，不因聚焦而变。
+ *
+ * 错误条是底部悬浮，同样不参与布局，报错时上面一个字都不动。
+ */
+
+/* 只把剩余空间放到**底部**：内容从顶部排，空间够时也不会下移。
+   垂直居中的代价写在 2026-11-01 的教训里 —— 居中出现下移，地址框落到
+   y≈410、码框 y≈466，而键盘顶部在 y≈350 且文档不滚，两块输入框全被盖住。
+   ⚠️ 这里**故意不写 .wrap::before**：它是 flex 子项，会白吃一个 gap 槽位
+   （10-13px），正是键盘那点余量。只要 ::after 就够了。 */
 .wrap::after {
   content: "";
   margin: auto;
@@ -56,61 +101,343 @@ body {
 
 /* ---------------------------------------------------------------- 头部 */
 
+/* 横向 hero：总高 44 + 底部 26，和页签之间留出呼吸（.wrap 的 gap 之外再加）。
+   这个下边距是常态，跟聚焦/报错都无关（那两件事都不改布局了）。 */
 .hero {
-  text-align: center;
-  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  margin-bottom: 26px;
+  transition: margin-bottom 0.2s ease;
 }
 
 .logo {
-  width: 64px;
-  height: 64px;
-  margin: 0 auto 14px;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 auto;
   display: grid;
   place-items: center;
-  border-radius: 18px;
-  background: linear-gradient(145deg, #4c7bff, #2b52c9);
+  border-radius: 13px;
+  background: linear-gradient(145deg, #5b86ff, #2b52c9);
   color: #fff;
-  font-size: 30px;
+  font-size: 21px;
   font-weight: 700;
-  box-shadow: 0 12px 32px rgba(59, 110, 245, 0.35);
+  letter-spacing: 0.02em;
+  box-shadow: 0 10px 26px rgba(59, 110, 245, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22);
+}
+
+.hero-txt {
+  min-width: 0;
 }
 
 h1 {
   margin: 0;
-  font-size: 26px;
-  letter-spacing: 0.08em;
+  font-size: 19px;
+  line-height: 1.3;
+  font-weight: 650;
+  letter-spacing: 0.04em;
 }
 
 .sub {
-  margin: 6px 0 0;
+  margin: 2px 0 0;
   color: var(--dim);
-  font-size: 13.5px;
+  font-size: 12.5px;
+  line-height: 1.4;
 }
 
-/* ---------------------------------------------------------------- 卡片 */
+/* ---------------------------------------------------------------- 页签 */
 
-.card {
-  background: color-mix(in srgb, var(--card) 88%, transparent);
+.seg {
+  position: relative;
+  display: grid;
+  /* 列数由 JS 的 --seg-n 给（2 或 3）：`已配对` 页签在没有记录时是 hidden 的，
+     硬写 1fr 1fr 会让剩下两个挤在左边、滑块也对不齐 */
+  grid-template-columns: repeat(var(--seg-n, 2), 1fr);
+  padding: 3px;
   border: 1px solid var(--line);
-  border-radius: 18px;
-  padding: 16px;
+  border-radius: var(--r-ctl);
+  background: var(--seg-bg);
 }
 
-.card[hidden] {
+/* 滑块 = 一格宽，靠 transform 平移（不动布局，60fps 也稳）。
+   宽度用 `(100% - 6px) / n`：100% 是 padding box 减掉左右各 3px 的内宽，
+   正好等于 n 格平分；`translateX(100%)` 的百分比又相对自身宽度，
+   所以第 i 格 = translateX(i×100%)，一个像素都不会差。 */
+.seg-thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: calc((100% - 6px) / var(--seg-n, 2));
+  height: calc(100% - 6px);
+  border-radius: 10px;
+  background: var(--seg-thumb-bg);
+  box-shadow: var(--seg-thumb-shadow);
+  transform: translateX(calc(var(--seg-i, 0) * 100%));
+  transition: transform 0.24s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.seg-btn {
+  position: relative;
+  z-index: 1;
+  height: 34px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--dim);
+  font-family: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  transition: color 0.18s ease;
+}
+
+/* ⚠️ grid 子项上的 [hidden] 会被 display 规则压掉 —— 「已配对」页签必须显式藏 */
+.seg-btn[hidden] {
   display: none;
 }
 
-.eyebrow {
-  margin: 0 0 10px;
-  font-size: 11.5px;
-  letter-spacing: 0.14em;
-  color: var(--dim);
+.seg-btn.is-on {
+  color: var(--text);
 }
 
-.addr {
-  margin: 0 0 14px;
-  font: 15px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  word-break: break-all;
+.seg-btn:focus-visible {
+  outline: 2px solid var(--accent-2);
+  outline-offset: 3px;
+  border-radius: 9px;
+}
+
+/* ⚠️ .seg 是 display:grid，会压掉 UA 的 [hidden] —— 记住设备那屏必须显式藏 */
+.seg[hidden] {
+  display: none;
+}
+
+/* ---------------------------------------------------------------- 面板 */
+
+.pane {
+  display: flex;
+  flex-direction: column;
+}
+
+.pane[hidden] {
+  display: none;
+}
+
+/* ---------------------------------------------------------------- 扫码 */
+
+/* 整块都是按钮（点击目标足够大），外面一圈四角取景标记 + 一道扫描线，
+   让"这里要放二维码"一眼就懂，不必先按一下才知道要干什么。 */
+.scan-target {
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  padding: 26px 18px 22px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+  background: radial-gradient(120% 90% at 50% 0%, var(--target-a) 0%, var(--target-b) 72%);
+  box-shadow: var(--target-shadow);
+  color: var(--text);
+  font-family: inherit;
+  cursor: pointer;
+  transition: transform 0.09s ease, border-color 0.18s ease, background 0.2s ease;
+}
+
+.scan-target:active {
+  transform: scale(0.99);
+  border-color: var(--line-2);
+}
+
+.scan-target:focus-visible {
+  outline: 2px solid var(--accent-2);
+  outline-offset: 2px;
+}
+
+.frame {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 126px;
+  height: 126px;
+  margin-bottom: 16px;
+}
+
+/* 取景框四角。⚠️ 用 nth-of-type 而不是 nth-child：.frame 的第一个子元素是
+   .frame-qr 图标，nth-child 会整体错位一格 —— 左上角永远匹配不上（实际渲染成
+   右上/右下/左下 + 一个没定位的裸方块）。nth-of-type 只数 <i>，不受影响。 */
+.frame i {
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  border: 2.5px solid var(--accent-2);
+  opacity: 0.85;
+}
+
+.frame i:nth-of-type(1) {
+  top: 0;
+  left: 0;
+  border-right: 0;
+  border-bottom: 0;
+  border-top-left-radius: 12px;
+}
+
+.frame i:nth-of-type(2) {
+  top: 0;
+  right: 0;
+  border-left: 0;
+  border-bottom: 0;
+  border-top-right-radius: 12px;
+}
+
+.frame i:nth-of-type(3) {
+  right: 0;
+  bottom: 0;
+  border-left: 0;
+  border-top: 0;
+  border-bottom-right-radius: 12px;
+}
+
+.frame i:nth-of-type(4) {
+  bottom: 0;
+  left: 0;
+  border-right: 0;
+  border-top: 0;
+  border-bottom-left-radius: 12px;
+}
+
+.frame-qr {
+  display: grid;
+  place-items: center;
+  width: 58px;
+  height: 58px;
+  border-radius: 16px;
+  background: var(--qr-bg);
+  color: var(--accent-2);
+}
+
+.frame-qr svg {
+  width: 30px;
+  height: 30px;
+}
+
+/* 扫描线：一条在框里来回走的细光，暗示"这里正在等二维码" */
+.sweep {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  top: 14px;
+  height: 2px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent-2), transparent);
+  box-shadow: 0 0 14px var(--sweep-glow);
+  opacity: 0.5;
+  animation: sweep 2.8s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+
+@keyframes sweep {
+  0%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.15;
+  }
+  50% {
+    transform: translateY(96px);
+    opacity: 0.9;
+  }
+}
+
+.scan-title {
+  font-size: 16.5px;
+  font-weight: 650;
+  letter-spacing: 0.03em;
+}
+
+.scan-sub {
+  margin-top: 5px;
+  color: var(--dim);
+  font-size: 12.5px;
+}
+
+.foot-hint {
+  margin: 13px 2px 0;
+  color: var(--dim);
+  font-size: 12.5px;
+  line-height: 1.72;
+}
+
+.foot-hint b {
+  color: var(--strong);
+  font-weight: 600;
+}
+
+/* ---------------------------------------------------------------- 邀请码 */
+
+.lab {
+  display: block;
+  margin: 0 0 6px 2px;
+  color: var(--dim);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.3;
+  letter-spacing: 0.14em;
+}
+
+.field {
+  width: 100%;
+  height: 46px;
+  margin-bottom: 11px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-ctl);
+  background: var(--card-2);
+  color: var(--text);
+  font: 14px/1 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  outline: none;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease, margin-bottom 0.2s ease;
+}
+
+.field::placeholder {
+  color: var(--placeholder);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+  font-size: 13.5px;
+}
+
+.field:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(59, 110, 245, 0.16);
+}
+
+/* 九位数字：居中、等宽、三位一组留字距 —— 对照电脑上那串一眼能核对第几位 */
+.code-input {
+  width: 100%;
+  height: 54px;
+  margin-bottom: 13px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--card-2);
+  color: var(--text);
+  font: 600 22px/1 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.1em;
+  text-align: center;
+  outline: none;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease, margin-bottom 0.2s ease;
+}
+
+.code-input::placeholder {
+  color: var(--placeholder-2);
+  font-weight: 500;
+}
+
+.code-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(59, 110, 245, 0.16);
 }
 
 /* ---------------------------------------------------------------- 按钮 */
@@ -120,16 +447,18 @@ h1 {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 8px;
   width: 100%;
   height: 48px;
   padding: 0 18px;
   border: 1px solid var(--line);
-  border-radius: 13px;
-  background: #171a1e;
+  border-radius: 14px;
+  background: var(--btn-bg);
   color: var(--text);
-  font: inherit;
-  font-size: 15px;
+  font-family: inherit;
+  font-size: 15.5px;
   font-weight: 600;
+  letter-spacing: 0.03em;
   cursor: pointer;
   transition: transform 0.08s ease, background 0.15s ease, opacity 0.15s ease;
 }
@@ -139,24 +468,30 @@ h1 {
 }
 
 .btn.primary {
-  background: var(--accent);
+  background: linear-gradient(180deg, #4a7cff, #2f5ee0);
   border-color: transparent;
   color: #fff;
+  box-shadow: 0 10px 24px rgba(59, 110, 245, 0.3);
 }
 
-.btn.ghost {
-  margin-top: 10px;
+.btn.quiet {
+  height: 44px;
+  margin-top: 8px;
+  border-color: transparent;
   background: transparent;
   color: var(--dim);
+  font-size: 14px;
+  font-weight: 500;
 }
 
-.btn.small {
-  width: auto;
-  flex: 0 0 auto;
-  height: 38px;
-  padding: 0 14px;
-  border-radius: 10px;
-  font-size: 13.5px;
+/* 破坏性动作（「取消配对」）：描边 + 红字，不用实心红 —— 它不是这个页面的主按钮，
+   压过「连接」就本末倒置了。颜色走 --bad-ink，浅色主题换成更深的红才够对比度。 */
+.btn.danger {
+  margin-top: 8px;
+  border-color: color-mix(in srgb, var(--bad) 42%, transparent);
+  background: transparent;
+  color: var(--bad-ink);
+  font-size: 14.5px;
 }
 
 .btn[disabled] {
@@ -164,96 +499,268 @@ h1 {
   cursor: default;
 }
 
-/* ---------------------------------------------------------------- 发现列表 */
-
-.list {
-  display: grid;
-  gap: 8px;
+/* ⚠️ .btn / .scan-target 自己有 display，会压掉 UA 的 [hidden] —— 必须显式写，
+   否则"记住设备"那屏的扫码钮照旧露在外面（CDP 实测 display:flex） */
+.btn[hidden],
+.scan-target[hidden] {
+  display: none;
 }
 
-.cand {
+/* ---------------------------------------------------------------- 已配对 */
+
+/*
+ * 连过的电脑：列表 → 详情两级（2026-11-01 四改）。
+ * 列表整行是按钮（点哪都进详情），右端一个箭头 —— 连接放在详情里，不做成
+ * 列表上的副作用：点错一下就连到别的电脑上，比多点一层烦得多。
+ */
+.paired {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ⚠️ 自己声明了 display 就会压掉 UA 的 [hidden] —— 详情打开时列表必须显式藏
+   （不然列表和详情叠在一起，截图实测到了） */
+.paired[hidden] {
+  display: none;
+}
+
+.paired-row {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 12px;
+  width: 100%;
+  padding: 0;
   border: 1px solid var(--line);
-  border-radius: 13px;
-  background: #0d0f11;
+  border-radius: var(--r-ctl);
+  background: var(--card-2);
+  color: var(--text);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
 }
 
-.cand-main {
-  flex: 1;
+.paired-row + .paired-row {
+  margin-top: 9px;
+}
+
+.paired-row:active {
+  background: var(--btn-bg);
+  border-color: var(--line-2);
+}
+
+.paired-main {
+  flex: 1 1 auto;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 13px 4px 13px 14px;
 }
 
-.cand-name {
+.paired-name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  min-width: 0;
+  font-size: 15px;
   font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  letter-spacing: 0.01em;
 }
 
-.cand-meta {
-  color: var(--dim);
-  font: 12.5px/1.6 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+/* 名字太长（机器名可能一长串）就省略，别把箭头挤出去 */
+.paired-txt {
+  min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
-.empty {
-  margin: 0;
-  padding: 10px 0;
+.paired-tag {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  color: var(--accent-2);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.paired-meta {
+  max-width: 100%;
   color: var(--dim);
-  font-size: 13.5px;
+  font: 12px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.paired-chev {
+  flex: 0 0 auto;
+  width: 34px;
+  display: grid;
+  place-items: center;
+  color: var(--dim);
+  opacity: 0.8;
+}
+
+.paired-chev svg {
+  width: 16px;
+  height: 16px;
+}
+
+.paired .empty {
+  padding: 26px 8px;
+  border: 1px dashed var(--line);
+  border-radius: var(--r-ctl);
+  color: var(--dim);
+  font-size: 13px;
   text-align: center;
 }
 
-/* ---------------------------------------------------------------- 手动地址 */
+/* ---------------------------------------------------------------- 已配对 · 详情 */
 
-.row {
+.pd {
   display: flex;
-  gap: 10px;
+  flex-direction: column;
 }
 
-.row input {
-  flex: 1;
-  min-width: 0;
-  height: 48px;
-  padding: 0 14px;
-  border: 1px solid var(--line);
-  border-radius: 13px;
-  background: #0b0d0f;
+.pd[hidden] {
+  display: none;
+}
+
+/* 返回：小一号的文字按钮，带左箭头 —— 不抢「连接」的视觉重量 */
+.pd-back {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 30px;
+  margin: 0 0 10px -4px;
+  padding: 0 8px 0 0;
+  border: 0;
+  border-radius: 9px;
+  background: none;
+  color: var(--dim);
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.pd-back svg {
+  width: 16px;
+  height: 16px;
+}
+
+.pd-back:active {
   color: var(--text);
-  font: 15px/1 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  outline: none;
 }
 
-.row input:focus {
-  border-color: var(--accent);
+.pd-card {
+  padding: 16px;
+  margin-bottom: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+  background: linear-gradient(180deg, var(--target-a), var(--target-b));
+  box-shadow: var(--target-shadow);
 }
 
-.row .btn {
-  width: auto;
-  flex: 0 0 auto;
+.pd-name {
+  font-size: 19px;
+  font-weight: 650;
+  line-height: 1.35;
+  letter-spacing: 0.02em;
+  word-break: break-word;
 }
 
-.hint {
-  margin: 12px 0 0;
+.pd-host {
+  margin-top: 3px;
   color: var(--dim);
   font-size: 12.5px;
-  line-height: 1.7;
+  word-break: break-all;
+}
+
+.pd-host[hidden] {
+  display: none;
+}
+
+.pd-rows {
+  margin: 0 0 16px;
+}
+
+.pd-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 16px;
+  padding: 11px 2px;
+  border-bottom: 1px solid var(--line);
+}
+
+.pd-row:last-child {
+  border-bottom: 0;
+}
+
+.pd-row dt {
+  flex: 0 0 auto;
+  color: var(--dim);
+  font-size: 12.5px;
+}
+
+.pd-row dd {
+  margin: 0;
+  min-width: 0;
+  text-align: right;
+  font: 12.5px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  word-break: break-all;
+}
+
+/* 正在连：列表和详情里的按钮都不吃点击（probe 最长 4 秒，连点会开两次跳转） */
+body.connecting .paired,
+body.connecting .pd .btn,
+body.connecting .pd-back {
+  pointer-events: none;
+  opacity: 0.6;
 }
 
 /* ---------------------------------------------------------------- 状态条 */
 
+/*
+ * 错误/进度条 = **底部浮出的横幅**（用户 2026-11-01：报错显示在下面，底下大片空地）。
+ *
+ * 为什么不是顶部：以前钉在顶部，一报错就得让头部整块让位，标题闪没一下很难受，
+ * 而且错误条压着页签。挪到底部后，上面一个像素都不用动 —— 内容是顶部对齐的，
+ * 下半屏本来就空着，条子落在那儿正合适，谁也不压。
+ *
+ * 它仍然是 fixed（不参与布局）：以前放文档流里，一报错就把输入框往下推 50px，
+ * 正好推进键盘底下（键盘不滚文档，盖住就是盖住了）。
+ */
 .status {
-  margin: 0;
-  padding: 12px 14px;
-  border-radius: 12px;
-  font-size: 13.5px;
-  line-height: 1.6;
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: calc(18px + env(safe-area-inset-bottom));
+  z-index: 30;
+  margin: 0 auto;
+  width: min(420px, calc(100% - 40px));
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--status-bg);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.5);
+  font-size: 13px;
+  line-height: 1.55;
   word-break: break-word;
+  opacity: 0;
+  transform: translateY(10px);
+  transition: opacity 0.16s ease, transform 0.2s ease;
+}
+
+.status.on {
+  opacity: 1;
+  transform: none;
 }
 
 .status[hidden] {
@@ -261,20 +768,285 @@ h1 {
 }
 
 .status.bad {
-  background: color-mix(in srgb, var(--bad) 16%, transparent);
-  border: 1px solid color-mix(in srgb, var(--bad) 45%, transparent);
+  border-color: color-mix(in srgb, var(--bad) 45%, transparent);
+  background: color-mix(in srgb, var(--bad) 20%, var(--status-bg));
   color: #f0b3b1;
 }
 
 .status.good {
-  background: color-mix(in srgb, #2e9e6b 16%, transparent);
-  border: 1px solid color-mix(in srgb, #2e9e6b 45%, transparent);
+  border-color: color-mix(in srgb, var(--good) 45%, transparent);
+  background: color-mix(in srgb, var(--good) 20%, var(--status-bg));
   color: #9fe3c1;
 }
 
-/* 横屏 / 小高度：别把内容挤在垂直居中里，从顶部排 */
+/* ---------------------------------------------------------------- 扫码遮罩 */
+
+.scan {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: calc(14px + env(safe-area-inset-top)) 20px
+    calc(24px + env(safe-area-inset-bottom));
+  background: #000;
+}
+
+/* ⚠️ .scan 自己有 display:flex，UA 的 [hidden] 会被压掉 —— 必须显式写 */
+.scan[hidden] {
+  display: none;
+}
+
+.scan-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: #000;
+}
+
+.scan-top {
+  position: absolute;
+  top: calc(10px + env(safe-area-inset-top));
+  left: 16px;
+  right: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  z-index: 2;
+}
+
+.scan-head {
+  margin: 0;
+  color: #f4f5f6;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.9);
+}
+
+.scan-x {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: 0;
+  border-radius: 19px;
+  background: rgba(18, 18, 20, 0.6);
+  color: #f2f2f2;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+}
+
+.scan-x svg {
+  width: 19px;
+  height: 19px;
+}
+
+.scan-center {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 22px;
+}
+
+.scan-guide {
+  position: relative;
+  width: min(64vw, 258px);
+  aspect-ratio: 1;
+  border-radius: 26px;
+  /* 框外压暗：一圈铺满全屏的投影，比再叠一层半透明遮罩省事 */
+  box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.46);
+}
+
+.scan-guide i {
+  position: absolute;
+  width: 32px;
+  height: 32px;
+  border: 3px solid #fff;
+  border-radius: 4px;
+}
+
+.scan-guide i:nth-of-type(1) {
+  top: 0;
+  left: 0;
+  border-right: 0;
+  border-bottom: 0;
+  border-top-left-radius: 18px;
+}
+
+.scan-guide i:nth-of-type(2) {
+  top: 0;
+  right: 0;
+  border-left: 0;
+  border-bottom: 0;
+  border-top-right-radius: 18px;
+}
+
+.scan-guide i:nth-of-type(3) {
+  right: 0;
+  bottom: 0;
+  border-left: 0;
+  border-top: 0;
+  border-bottom-right-radius: 18px;
+}
+
+.scan-guide i:nth-of-type(4) {
+  bottom: 0;
+  left: 0;
+  border-right: 0;
+  border-top: 0;
+  border-bottom-left-radius: 18px;
+}
+
+.scan-sweep {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  top: 16px;
+  height: 2px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, transparent, #9dbcff, transparent);
+  box-shadow: 0 0 16px rgba(120, 160, 255, 0.8);
+  animation: scanline 2.4s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+
+@keyframes scanline {
+  0%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.2;
+  }
+  50% {
+    transform: translateY(200px);
+    opacity: 1;
+  }
+}
+
+.scan-msg {
+  position: relative;
+  margin: 0;
+  max-width: 80vw;
+  color: #f2f2f2;
+  font-size: 13.5px;
+  line-height: 1.6;
+  text-align: center;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.95);
+}
+
+.scan-msg.bad {
+  color: #ffb3ad;
+}
+
+.scan-tip {
+  position: absolute;
+  bottom: calc(26px + env(safe-area-inset-bottom));
+  left: 0;
+  right: 0;
+  margin: 0;
+  color: rgba(242, 242, 242, 0.62);
+  font-size: 12px;
+  text-align: center;
+}
+
+/* 横屏 / 小高度：别把内容挤在垂直居中里 */
 @media (max-height: 560px) {
   .wrap {
     justify-content: flex-start;
+  }
+
+  .scan-guide {
+    width: min(46vw, 200px);
+  }
+
+  @keyframes scanline {
+    0%,
+    100% {
+      transform: translateY(0);
+      opacity: 0.2;
+    }
+    50% {
+      transform: translateY(148px);
+      opacity: 1;
+    }
+  }
+}
+
+/* 尊重"减少动态效果" */
+@media (prefers-reduced-motion: reduce) {
+  .sweep,
+  .scan-sweep {
+    animation: none;
+    opacity: 0.55;
+  }
+
+  .seg-thumb,
+  .btn,
+  .scan-target {
+    transition: none;
+  }
+}
+
+/* ---------------------------------------------------------------- 浅色 */
+
+/*
+ * 浅色只在系统是浅色时生效（手机深色的还是深色页 —— 启动页不该比别处更亮）。
+ * 取值不是纯白大底：底 #f2f4f7、卡片 #fff，靠一层浅蓝顶光把标题带出来，
+ * 和主站浅色主题同一路子。正文 #14161a ≈ 16.4:1、次要 #656a72 ≈ 4.9:1（AA）。
+ * 扫码遮罩（`.scan`）保持深色 —— 那是相机画面，不需要跟着变。
+ */
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+
+    --bg: #f2f4f7;
+    --bg-glow: #dde6fb;
+    --card: #ffffff;
+    --card-2: #ffffff;
+    --line: #e3e6ea;
+    --line-2: #d5d9df;
+    --text: #14161a;
+    --dim: #656a72;
+    --strong: #2c3037;
+    --accent: #2f62e8;
+    --accent-2: #3b6ef5;
+    --bad-ink: #a4262c;
+
+    --seg-bg: #e8eaee;
+    --seg-thumb-bg: #ffffff;
+    --seg-thumb-shadow: 0 2px 6px rgba(16, 24, 40, 0.14),
+      inset 0 0 0 0.5px rgba(16, 24, 40, 0.05);
+    --target-a: #ffffff;
+    --target-b: #f7f9fc;
+    --target-shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 10px 26px rgba(16, 24, 40, 0.06);
+    --qr-bg: rgba(59, 110, 245, 0.1);
+    --sweep-glow: rgba(59, 110, 245, 0.35);
+    --btn-bg: #eaedf1;
+    --status-bg: #ffffff;
+    --placeholder: #9aa0a6;
+    --placeholder-2: #b5bac1;
+  }
+
+  /* 深色那套 #17191d 阴影放在浅底上会发灰，这里换浅投影 */
+  .status {
+    box-shadow: 0 12px 30px rgba(16, 24, 40, 0.14);
+  }
+
+  .status.bad {
+    color: #a4262c;
+  }
+
+  .status.good {
+    color: #1b6f47;
+  }
+
+  .scan-target:active {
+    background: radial-gradient(120% 90% at 50% 0%, #f2f6ff 0%, #eef2f8 72%);
   }
 }

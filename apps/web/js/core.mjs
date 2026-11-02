@@ -49,7 +49,7 @@ export const S = {
   catalogError: null,
   runtimeFamilies: [],
   theme: 'system',          // light | dark | system
-  rtLevel: 'devices',       // devices | device | cli
+  rtLevel: 'devices',       // devices | cli（2026-11-01 设备详情页撤了，device 级随之作废）
   rtScan: null,             // 「识别本机运行时」的扫描结果（null = 这轮还没扫过）
   taskPoll: null,           // 「有活在做就自己刷」的定时器（见 scheduleTaskPoll）
   rtDevice: null,

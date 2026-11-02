@@ -5,8 +5,9 @@
  * 分工：Rust 那半只管窗口与进程；"控制面起没起、要不要起、退出收不收"全在这儿 ——
  * 用的是 `apps/server/src/lifecycle.mjs`，**与 `start.cmd` 同一条实现**（不写第二份）。
  *
- * 与 `start.mjs` 的本质差别只剩**端口**（下面 `pickPort` 有长注释）：命令行的 8787 是
- * 给人用的约定，桌面版没人关心端口 —— 它只该**别撞上别人的程序、也别粘上别人的实例**。
+ * 端口**两边同一个默认**（18787，见下面 `pickPort` 的长注释）：命令行和桌面版都固定这一个，
+ * `BANDI_PORT` 可显式覆盖。桌面版唯一多做的事是"先看有没有活着的实例、有就复用"
+ * 以及"被外人占着就报 ALIEN"—— **不再自己往上找空端口**（2026-11-01 改）。
  *
  * 数据目录两边**同一个默认**：本机用户目录（`apps/server/src/data-dir.mjs`）。桌面版不能
  * 塞安装目录 —— 否则用户机器上要么要管理员权限、要么升级被覆盖（docs/形态决策.md §十二 第 1 条）；
@@ -83,10 +84,22 @@ import {
 } from '../server/src/lifecycle.mjs';
 import { userDataDir } from '../server/src/data-dir.mjs';
 
-/** 探测起点。桌面版**没有**"端口"这个概念要给人看，这里只是个起点。 */
-const BASE_PORT = Number(process.env.BANDI_PORT_BASE ?? 8787);
-/** 往上找多少个。20 个够用了；全被占着才报错。 */
-const PROBE_RANGE = 20;
+/**
+ * 固定端口。**故意选高位**：`18787` = 8787 前面加个 1，好记。
+ *
+ * 为什么不是 8787：这一带是"开发工具都爱挑"的区段，撞车概率高。18787 既不在
+ * Windows 的临时端口段（49152+，系统会随手发给 outgoing 连接），也不是 IANA 注册的
+ * 常见服务端口。
+ *
+ * 为什么是**固定**、不再"往上找空位"（2026-11-01 改）：
+ * 端口早就不是壳的内部细节了 —— 它进了 `port` / `service.json`，更关键的是进了**配对链接**
+ * （手机里存的是 `http://192.168.x.x:<port>`）。换端口 = 已配对的手机全部连不上；而数据目录
+ * 跟端口无关，两个进程会共用一个 `bandi.db`（WAL 双写）→ 手机连 A、桌面看 B，同一份库两个世界。
+ * 所以撞车了要**明确报出来让人处理**（ALIEN），绝不偷偷挪一个。
+ *
+ * 要临时换（开发/沙盒/反代）：`BANDI_PORT=xxxx`，只认这一个来源。
+ */
+const DEFAULT_PORT = Number(process.env.BANDI_PORT_DEFAULT ?? 18787);
 
 const emit = (line) => process.stdout.write(line + '\n');
 
@@ -516,40 +529,58 @@ function oursOnPort(port) {
     .map((i) => i.pid);
 }
 
-/* ------------------------------------------------------------------- 挑端口 */
+/* ------------------------------------------------------------------- 定端口 */
 
 /**
- * 挑端口。**这是桌面版与命令行版的一处本质差别。**
+ * 定端口。**只定一个，不再"往上找空位"**。
  *
- * 命令行的 8787 是"人的约定" —— 你要知道去哪儿开浏览器、去连谁。桌面版没有这个约定：
- * 窗口是它自己开的，端口只是个内部细节。所以它可以、也应该自己挑。
+ * 第一答案永远是 `DEFAULT_PORT`（18787），`BANDI_PORT` 可以显式覆盖。定下来之后只做一件事：
+ * **确认这个端口上有没有"已经在跑的我自己"** —— 有就复用（绝不起第二个），没有就起在这一个上；
+ * 是别人的就交给 `ensureRunning` 报 ALIEN（列出占用者的 PID/名字/命令行，然后退出）。
  *
- * 对每个候选端口：
- *   · 上面是**我们自己的**实例而且在响应 → 用它（复用，`mode: 'reuse'`）；
- *   · 谁都没在听，或者听的是我们自己但已经僵死 → 用它（起，或让 lifecycle 重启）；
- *   · 听的是**别人的**程序 → **跳过**（不碰、不报错，看下一个）。
+ * 判"是不是自己人"**不吃命令行**（`isOurs` 只在收摊/清理时用）：命令行读不到（权限不足、
+ * 进程刚 fork）就会被判成"别人的" → 换端口起第二个，这正是老的漂移根因（实测踩到）。
+ * 这里改用 `isUp()` —— 它从 `/api/state` 的 `platform: 'bandi'` 认人，比命令行可靠。
  *
- * 最后一条是关键：硬编码 8787 的桌面版，在"用户机器上恰好有别的程序占着 8787"时
- * 只剩一张错误页 —— 对不懂电脑的人是死路。自己挑就不会。
+ * 为什么还要瞄一眼 `port` / `service.json` 里记的旧端口：那是**防双开**的兜底 ——
+ * 万一之前漂到过别的端口（8788 那类历史包袱）而且那个实例还活着，必须复用它，不能在
+ * 18787 上再起一个。等它自然退出（或用户重启应用）之后就回到 18787，因为端口不再从
+ * "上次记的"继承。
  */
 async function pickPort() {
-  const candidates = [];
-  const recorded = readRecordedPort();
-  if (recorded) candidates.push(recorded);
-  for (let p = BASE_PORT; p < BASE_PORT + PROBE_RANGE; p++) {
-    if (!candidates.includes(p)) candidates.push(p);
+  const explicit = Number(process.env.BANDI_PORT ?? 0);
+  const hasExplicit = Number.isInteger(explicit) && explicit >= 1 && explicit <= 65535;
+  const desired = hasExplicit ? explicit : DEFAULT_PORT;
+  const from = hasExplicit ? 'BANDI_PORT 指定的' : '固定的高位端口';
+
+  /*
+   * 先查有没有活着的实例。顺序：想要的端口 → 上次记的 → service.json 记的。
+   * 判活一律用 `isUp()`，所以"记了一个死端口"不会骗人（探不通就当没有）。
+   */
+  const seen = new Set();
+  for (const p of [desired, readRecordedPort(), readService()?.port]) {
+    const port = Number(p);
+    if (!Number.isInteger(port) || port < 1 || port > 65535 || seen.has(port)) continue;
+    seen.add(port);
+    if (!listeners(port).length) continue;
+    if (!(await isUp(port))) continue;
+    if (port !== desired) {
+      log(
+        `端口 ${port} 上已经有一个活着的实例（不是本次想要的 ${desired}）—— 复用它，绝不起第二个。` +
+          `等它退出后，下次启动会回到 ${desired}（端口不再从"上次记的"继承）`,
+      );
+    } else {
+      log(`端口 ${port} 上已经有一个活着的实例 —— 复用它`);
+    }
+    return { port, from: '复用已有实例' };
   }
 
-  for (const port of candidates) {
-    const pids = listeners(port);
-    if (!pids.length) return { port, mode: 'fresh' }; // 空着 → 就在这儿起
-    const infos = pids.map(processInfo);
-    // 认不出来（读不到命令行等）也按"别人的"处理 —— 宁可换一个端口，也不误判成自己人
-    if (!infos.every(isOurs)) continue;
-    if (await isUp(port)) return { port, mode: 'reuse' };
-    return { port, mode: 'fresh' }; // 自己的但僵死 → 交给 ensureRunning 收掉重起
-  }
-  return { port: 0, mode: 'none', error: `从 ${BASE_PORT} 往上找了 ${PROBE_RANGE} 个端口，全被别人占着` };
+  /*
+   * 没有活着的自己人 → 就起在想要的端口上。
+   * 被外人占着也照这个值返回：`ensureRunning` 会判出 alien、列出占用者、退出 2 ——
+   * 报错路径只有一条，不在这儿另写一份。
+   */
+  return { port: desired, from };
 }
 
 /* ------------------------------------------------------- 起服务串行化（start.lock） */
@@ -795,8 +826,23 @@ function ensureOptions() {
      * 数据目录里的 `netmode.json`（设置里那个「允许局域网内的机器加入」开关 ✓）：
      * `config.mjs` 读它 → 桌面壳 / 开机自启 / 命令行**三种起法都按同一个开关走** ✓。
      * 开关默认**关** → 行为跟以前一模一样（只听回环、免鉴权）✓。
+     *
+     * **对外开着的机器，直接用启动参数钉死 `BANDI_HOST=0.0.0.0`**（2026-11-02 用户：
+     * "改成 thinkpad 那种体验"）。光靠服务端读 netmode，开关是**运行期**的：运行中
+     * 翻面 / 点「只在本机使用」都会落进"改了还没生效——点重启"的循环（bind 只能
+     * 重来一次）。改由壳在 spawn 时读 netmode：`allowLan:true` 就显式传 0.0.0.0 ——
+     * 服务端进 explicit 形态，模式卡变成 thinkpad 同款（分机/总机即时切、无重启、
+     * 无「只在本机使用」）；`allowLan:false`/读不到 → 不传，全新安装照旧回环免鉴权。
+     * 想退回单机形态：把 netmode.json 的 allowLan 改 false 再重开壳（界面入口随
+     * explicit 撤掉，这是代价 —— 对外服务的机器本来也不该从网页里关监听）。
      */
-    extraEnv: {},
+    extraEnv: (() => {
+      try {
+        const nm = readJson(path.join(DATA, 'netmode.json'));
+        if (nm && nm.allowLan === true) return { BANDI_HOST: '0.0.0.0' };
+      } catch { /* 读不到按没开关处理（回环） */ }
+      return {};
+    })(),
     /*
      * **spawn 那一刻就落记录**（QA R2-B 的修法，见 `recordPendingService`）。
      * 回调的是 `lifecycle.ensureRunning` —— 它一 `startDetached` 出 PID 就同步喊我一声，
@@ -945,29 +991,18 @@ enroll(null);
 
 /* ---------------------------------------------------------------- 定端口 */
 
-let PORT = Number(process.env.BANDI_PORT ?? 0);
-let mode = 'explicit';
-if (!PORT) {
-  const picked = await pickPort();
-  if (picked.mode === 'none') {
-    log(picked.error);
-    leave();
-    emit(`BANDI_SHELL FAILED ${picked.error}`);
-    process.exit(3);
-  }
-  PORT = picked.port;
-  mode = picked.mode;
-  recordPort(PORT);
-}
+/*
+ * 端口只有一个来源（`pickPort` 里定）：`BANDI_PORT` 或固定高位端口。
+ * **没有"往上找空位"这回事了** —— 端口被外人占着就走 ALIEN 报出来，不偷偷换。
+ */
+const picked = await pickPort();
+let PORT = picked.port;
+recordPort(PORT);
 
 /* 端口确定了，把登记补上端口号（人排查时能一眼看到"这个窗口用的是哪个端口"） */
 enroll(PORT);
 
-log(
-  `端口 ${PORT}（${
-    mode === 'explicit' ? '环境变量指定的' : mode === 'reuse' ? '复用已有实例' : '自己挑的'
-  }）`,
-);
+log(`端口 ${PORT}（${picked.from}）`);
 log(`控制面 ${urlOf(PORT)}`);
 
 /* ---------------------------------------------------------------- 起控制面 */

@@ -14,7 +14,7 @@
 |---|---|
 | **鉴权体系扩容** | `apps/server/src/auth.mjs` 已有三类身份（`identify()`：`operator` / `node`（`bn_` 前缀，`store.nodeAuthByToken`）/ `revoked`），闸门只看监听地址（回环免鉴权 / 非回环全要）。**方案：扩展而非并列** —— 在 `identify()` 里追加第四类 `device`（`bd_` 前缀，走新的 `store.deviceAuthByToken`），`decide()` 里加 `deviceMayReach()` 白名单（仿 `nodeMayReach()` 的写法）。这样"判定只有一处"的既有铁律不破。 |
 | **SSE 不能带自定义头** | 会话流（`/api/events`、`/api/runs/:id/stream`）用 `EventSource`，设不了 `X-Bandi-Token` 头，只有 Cookie 一条活路。**设备令牌复用现有 Cookie 名 `bandi_token`**（`auth.mjs` 顶部的 `COOKIE` 常量），`tokenOf()` 一行不改 —— 三路取值（Cookie / 头 / 查询）原样生效。 |
-| **一次性配对码** | `store/nodes.mjs` 的 `createInvite()/consumeInvite()` 已给出完整范式：只存 sha256 哈希、`UPDATE … WHERE usedAt IS NULL AND expiresAt > ?` 原子核销。配对令牌照抄这套（独立表，不混进节点表）。 |
+| **一次性配对码** | `store/nodes.mjs` 的 `createInvite()/consumeInvite()` 已给出完整范式：只存 sha256 哈希、`UPDATE … WHERE usedAt IS NULL AND expiresAt > ?` 原子核销。配对令牌照抄这套（独立表，不混进节点表）。**2026-11-01 起主路径是 9 位数字邀请码**（`createPairCode`，同表同核销 SQL；`bp_…` 长令牌兼容保留）—— 手机壳改成"输码找人"后，凭据要能人念人听。9 位数字空间小，靠 claim 端点的按 IP 试错限速（E1703，60 秒 12 次）与 UDP 带码探测限速（60/分）补回熵差。 |
 | **二维码生成（无构建步骤）** | 选 **`qrcode-generator@1.4.4`**（Kazuhiko Arase，MIT）**vendored** 为 `apps/web/js/vendor/qrcode.mjs`（ESM 包装，约 10KB min）。理由：① 纯 JS 无 DOM/canvas 依赖，输出模块串可直接画 `<table>`/SVG；② 场景是局域网，**必须离线可用** —— 排除运行时 CDN 加载（手机/PC 都可能断外网）；③ 无构建步骤约束下，npm 引入不可行，vendored 单文件是唯一务实解；④ 该库是业界引用最广的二维码编码器之一，MIT 无传染。 |
 | **主从结构折叠** | 全站骨架是"图标栏（`.rail`）→ 列表（`.list-panel`）→ 内容（`main`）"三级（`index.html` + `state.mjs setNav`）。`style.css` 仅 6 处零散 `@media`（860/900/1100px）。**方案：新建 `mobile.css` 追加加载**，900/600 两档断点，折叠状态用 `body` 上的状态类（`mb-detail-open` 等）由新模块 `js/mobile.mjs` 驱动，不改既有渲染函数的输出结构 —— 列表/详情 DOM 本来就常驻，窄屏只是换布局。 |
 | **静态资源与更新** | 服务端静态文件每请求现读（`http.mjs serveStatic`，`Cache-Control: no-store`），前端改动刷新即生效；`/api/web-version` 指纹（`server.mjs`，覆盖 `app.mjs` + `js/*.mjs`）驱动"刷新页面"提示条（`misc.mjs startVersionWatch`）。P1 的 SW 必须与它共存：静态走 stale-while-revalidate、`/api/*` 一律不缓存（见 §8）。 |
@@ -86,8 +86,12 @@ CREATE TABLE IF NOT EXISTS mobile_devices (
   name        TEXT NOT NULL,             -- 配对时自报（如 "张三的 iPhone"）
   pairedAt    TEXT NOT NULL,             -- ISO 8601 UTC（全库同口径 nowIso()）
   lastSeenAt  TEXT NOT NULL,             -- 最近活跃（60 秒节流更新）
-  lastIp      TEXT                       -- 最近请求来源 IP（排查用）
+  lastIp      TEXT,                      -- 最近请求来源 IP（排查用）
+  roleId      TEXT,                      -- 面板角色（2026-10-28），空 = 默认 mobile
+  clientKey   TEXT,                      -- 手机自报的随机 ID（2026-11-01），重复配对复用同一行
+  disconnectedAt TEXT                    -- 非空 = 已断开（2026-11-01 二刀）：行留着、能连回来
 );
+CREATE UNIQUE INDEX IF NOT EXISTS uq_mobile_clientKey ON mobile_devices (clientKey) WHERE clientKey IS NOT NULL;
 
 -- 设备长期令牌：只存哈希（对齐 node_tokens）
 CREATE TABLE IF NOT EXISTS mobile_device_tokens (
@@ -113,11 +117,29 @@ CREATE TABLE IF NOT EXISTS mobile_pair_tokens (
 | 方法 路径 | 鉴权 | 请求 | 响应 | 错误 |
 |---|---|---|---|---|
 | `POST /api/pair/tokens` | operator | `{}` | `{ token, expiresAt, urls: string[] }`（`urls` = `netmode.lanUrls(port)`，已按 192.168 > 10 > 172 排序） | `E3701` 非操作员（403）；`E5701` 落库失败（500） |
-| `POST /api/pair/claim` | **免**（guard 豁免） | `{ token, name }`，Origin 必须合法 + `X-Bandi: 1` | 200 `{ ok, deviceId, name }` + `Set-Cookie: bandi_token=bd_…; HttpOnly; SameSite=Lax; Max-Age=31536000` | `E1701` 缺 token/格式不对（400）；`E1702` 已过期（400）；`E4701` 已被使用（409） |
+| `POST /api/pair/claim` | **免**（guard 豁免） | `{ token|code, name, clientKey? }`，Origin 必须合法 + `X-Bandi: 1` | 200 `{ ok, deviceId, name }` + `Set-Cookie: bandi_token=bd_…; HttpOnly; SameSite=Lax; Max-Age=31536000` | `E1701` 缺 token/格式不对（400）；`E1702` 已过期（400）；`E4701` 已被使用（409） |
 | `GET /api/pair/me` | 任意已登录 | — | `{ kind: 'device', device: {id,name,pairedAt} }` 或 `{ kind: 'operator' }` | 401 走 `E4010` 既有闸 |
-| `GET /api/pair/devices` | operator | — | `{ devices: [{id,name,pairedAt,lastSeenAt,lastIp}] }` | `E3701`（403） |
-| `POST /api/pair/devices/:id/revoke` | operator | `{}` | `{ ok, revoked: <吊销的令牌数> }` | `E2701` 没有这个设备（404）；`E3701`（403） |
+| `GET /api/pair/devices` | operator | — | `{ devices: [{id,name,pairedAt,lastSeenAt,lastIp,disconnectedAt,tokenCount}] }` | `E3701`（403） |
+| `POST /api/pair/devices/:id/revoke` | operator | `{}` | `{ ok, revoked }`（老接口，语义同 disconnect，保留兼容） | `E2701` 没有这个设备（404）；`E3701`（403） |
+| `POST /api/pair/resume` | **免**（guard 豁免） | `{ clientKey }` + `X-Bandi: 1` | 200 `{ ok, deviceId, name }` + 新 `Set-Cookie` | `E1705` 别的手机在用（409）；`E1706` 没配过/已取消配对（404） |
 | `GET /pair?token=…` | **免** | — | `pair.html`（落地页；服务端不校验 token，校验在 claim） | — |
+
+**一机一刀（2026-11-01 二刀定稿）**：一台电脑同一时间只允许**一台**手机在用，且
+**断开连接 ≠ 取消配对**（用户定的口径，别混）：
+
+| 动作 | 端点 | 结果 | 手机怎么回来 |
+|---|---|---|---|
+| 断开连接 | `POST /api/pair/devices/:id/disconnect` | 吊销令牌 + 置 `disconnectedAt`，**设备行和 clientKey 留着** | 自己打开班底 → 401 → 自动 `POST /api/pair/resume {clientKey}`，没有别的手机在用就连回来，**不用重新扫码** |
+| 取消配对 | `POST /api/pair/devices/:id/forget` | 吊销令牌 + **删行** | 只能重新扫码 / 填邀请码 |
+| 新手机配对 | `POST /api/pair/claim` | 其它手机一律转「已断开」（`disconnectOtherDevices`，不删行） | 同上：等没人在用时 resume 回来 |
+
+claim 请求带 `clientKey`（手机 localStorage 生成的随机 ID，不是设备指纹）：
+命中已有设备行 → 复用同一行（`createDevice` 返回 `reused:true`），同一台手机重复
+扫码不再长出第二条记录。
+
+`POST /api/pair/resume` 免令牌（clientKey 即凭据），三条规则：自己在用 → 换新钥匙；
+自己已断开且无人在用 → 恢复并清标记；自己已断开但**别的手机在用** → 409 `E1705`。
+没配过 / 已被取消配对 → 404 `E1706`。
 
 ### 3.3 设备令牌权限边界 `deviceMayReach(method, pathname)`（`auth.mjs` 内，仿 `nodeMayReach`）
 
@@ -213,19 +235,21 @@ sequenceDiagram
     W->>S: GET /api/lan
     S-->>W: { boundLan, urls, port }
     alt 未开局域网 (boundLan=false)
-        W-->>Op: 提示"切到总机模式并重启"，不出二维码
+        W-->>Op: 提示"切到总机模式并重启"，不出邀请码
     else 已监听局域网
         W->>S: POST /api/pair/tokens
         S->>P: handlePair
-        P->>D: createPairToken(5min)  % 只存哈希 bp_…
-        P-->>W: { token, expiresAt, urls }
-        W->>W: qrSvg("http://<lan-ip>:8787/pair?token=bp_xxx")
-        W-->>Op: 弹二维码 + 倒计时 + 刷新按钮
+        P->>D: createPairCode(5min)  % 9 位数字，只存 sha256；发新码先作废全部未用旧码
+        P-->>W: { code, expiresAt, urls }
+        W->>W: 大字分组显示 + qrSvg("http://<lan-ip>:8787/pair?code=…")
+        W-->>Op: 邀请码卡（内联） + 倒计时 + 「换一个」
     end
 
-    Ph->>S: GET /pair?token=bp_xxx   (guard 豁免)
+    Note over Ph,S: 2026-11-01 二改：连接方式与部署形态无关 ——<br/>默认 = 扫码（二维码里地址+码都在，局域网/云端都成立）；<br/>手动 = **地址 + 邀请码两栏都填**（局域网也填地址，壳不再发 UDP 广播猜机器，<br/>没有部署形态分支）→ navigate(<地址>/pair?code=…）<br/>三改（同日）：启动页加第三个页签「已配对」—— 这台手机连过的电脑（壳侧<br/>shell.json 只存 origin+名字，≤8 台），列表 → 详情两级：<br/>详情里「连接」= replace(<origin>/pair?resume=1) 凭远程页 localStorage 的 clientKey<br/>换新令牌，**不用重新扫码**；没连过任何电脑时该页签整个不出现。<br/>四改（同日）：**跳转一律 location.replace**（不是 navigate）—— 连接页不进<br/>WebView 历史，进工作台后按返回键不会退回连接页（登录页 ≠ 上一级），<br/>只有配对失效时从 401 遮罩点「重新连接」回来（远程页自己 location.replace 到<br/>tauri.localhost —— 远程 origin 调不了壳的自定义命令，ACL 拒绝，导航不受限）。
+
+    Ph->>S: GET /pair?code=482913665   (guard 豁免；旧 ?token=bp_… 仍兼容)
     S-->>Ph: pair.html
-    Ph->>S: POST /api/pair/claim {token, name} + X-Bandi:1 (guard 豁免)
+    Ph->>S: POST /api/pair/claim {code, name} + X-Bandi:1 (guard 豁免；失败按 IP 限速 E1703)
     S->>P: handlePair
     P->>D: consumePairToken  % UPDATE…WHERE usedAt IS NULL AND expiresAt>now，原子
     alt 核销成功
@@ -236,7 +260,7 @@ sequenceDiagram
         S->>S: identify(): bd_ 前缀 → deviceAuthByToken → kind='device'
     else 过期/已用/格式错
         P-->>Ph: 400 E1702 / 409 E4701 / 400 E1701
-        Ph-->>Ph: 显示"请在桌面端重新生成二维码"
+        Ph-->>Ph: 显示"请在桌面端换一个邀请码"
     end
 ```
 
@@ -374,11 +398,11 @@ sequenceDiagram
 
 ## 8. 共享知识（跨文件约定，实现者必读）
 
-1. **错误码**：沿用"按 HTTP 状态分段"（E1xxx=400 / E2xxx=404 / E3xxx=403 / E4xxx=409 / E5xxx=500，写在调用点上不集中登记）。手机配对模块分配各段内 **x7xx 子段**：`E1701/E1702`（配对令牌缺失/过期）、`E2701`（设备不存在）、`E3701/E3702/E4033`（非操作员/字段越权/设备白名单外）、`E4701`（码已用）、`E5701`（落库失败）。**理由**：不破坏既有分段语义（码的第一位仍等于 HTTP 状态/5 类），"7"这个百位是未被占用的空段（现有码散布在 x0xx/x2xx/x6xx），`grep E17` 只命中配对模块，排查直达。
+1. **错误码**：沿用"按 HTTP 状态分段"（E1xxx=400 / E2xxx=404 / E3xxx=403 / E4xxx=409 / E5xxx=500，写在调用点上不集中登记）。手机配对模块分配各段内 **x7xx 子段**：`E1701/E1702`（配对令牌缺失/过期）、`E2701`（设备不存在）、`E3701/E3702/E4033`（非操作员/字段越权/设备白名单外）、`E4701`（码已用）、`E1705`（另一台手机正在用，resume 409）、`E1706`（这台手机没配对记录，resume 404）、`E5701`（落库失败）。**理由**：不破坏既有分段语义（码的第一位仍等于 HTTP 状态/5 类），"7"这个百位是未被占用的空段（现有码散布在 x0xx/x2xx/x6xx），`grep E17` 只命中配对模块，排查直达。
 2. **断点体系**：900px（主从折叠）/ 600px（底部导航 + 紧凑档）两档；JS 侧 `body.mb-narrow` / `body.mb-tiny` / `body.mb-detail-open` 状态类由 `mobile.mjs` 统一维护，CSS 侧 `mobile.css` 内 `@media` 与状态类**双轨并用**（纯样式走 media query，行为相关折叠走状态类）。
 3. **CSS 命名空间**：移动端新组件类名一律 `mb-` 前缀（`mb-tabbar`、`mb-sheet`、`mb-backbar`…），全部规则只写进 `mobile.css`；`style.css` 不新增移动规则，只允许为可覆盖性做的最小改写。
 4. **前端新模块命名**：`js/` 下小写单词（既有惯例：`chat.mjs`、`machine.mjs`），新模块 `mobile.mjs` / `pairing.mjs` / `pair-claim.mjs`；vendored 第三方放 `js/vendor/`（`/api/web-version` 指纹只扫 `js/*.mjs` 一层，vendor 不进指纹 —— 有意为之，vendored 文件不变就不用触发刷新提醒）。
-5. **令牌体系**：设备令牌前缀 `bd_`（节点是 `bn_`、操作员无前缀），Cookie 沿用 `bandi_token`（`EventSource` 兼容），库里只存 sha256。配对令牌前缀 `bp_`、5 分钟一次性。新增令牌类型时 `identify()` 是唯一判定入口。
+5. **令牌体系**：设备令牌前缀 `bd_`（节点是 `bn_`、操作员无前缀），Cookie 沿用 `bandi_token`（`EventSource` 兼容），库里只存 sha256。配对凭据两代并存（2026-11-01）：**9 位数字邀请码**（主路径，人念人听，5 分钟单次，发新码即作废旧码）与 `bp_…` 长令牌（旧二维码/书签兼容）。新增令牌类型时 `identify()` 是唯一判定入口。
 6. **请求纪律**：所有前端写请求带 `X-Bandi: 1`（`ui.mjs api()` 已统一；`pair-claim.mjs` 独立实现时必须自己带）；手机页面 Origin 依赖 `config.mjs selfLanOrigins()` 自动放行，勿在配对链路上绕过 `guardWrite`。
 7. **时间/ID**：一律 `store/db.mjs` 的 `nowIso()`（ISO 8601 UTC）与 `newId('md'|'mp')`。
 8. **验证**：见 §5 顶部的两条验证注意事项（前端热更 / 后端换进程 / 隔离实例跑法）。

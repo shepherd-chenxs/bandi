@@ -736,6 +736,9 @@ export function renderWorkbenchGrid() {
     openSchedules().catch((e) => toast(e.message, 'error'));
   });
   /*
+   * （协作中心 2026-11-01 搬去设置 →「协作」组了：宫格里不再有这一组磁贴，
+   *   页面本体在 collab.mjs renderCollabCenter。）
+   *
    * 研发区的两个内置入口（代码托管 / 远程连接）→ 各自的工作台子页。
    *
    * 2026-10-26 二改：原来这俩**借设置页的壳**（`setNav('settings')` + `S.settingsSection`），

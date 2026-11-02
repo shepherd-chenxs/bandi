@@ -2,6 +2,28 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- 扫一扫（2026-11）：相机走 WebView 的 getUserMedia，wry 的
+         RustWebChromeClient.onPermissionRequest 会替我们请求这条运行时权限。
+         但权限必须先在 manifest 里声明 —— 没声明的话系统直接拒绝，
+         getUserMedia 报 NotAllowedError（表现为"相机权限被拒绝"，看着像没授权）。
+         ⚠️ 这是 gen/android 里的手改，重新 `tauri android init` 后要再加一次。 -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+
+    <!-- 语音输入（2026-11）：系统 SpeechRecognizer 要录音权限。运行时授权由
+         SpeechPlugin 自己 requestPermissions，这条只是"允许申请"。
+         ⚠️ 同样是 gen/android 里的手改，重新 init 后要再加一次。 -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <!-- Android 11+ 的包可见性：不声明 queries，SpeechRecognizer.isRecognitionAvailable()
+         会恒返回 false（看不到任何识别服务），表现成"这台手机没有语音引擎"。
+         ⚠️ 手改，重新 init 后要再加一次。 -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+    </queries>
+
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
 

@@ -10,7 +10,7 @@
 | | |
 | --- | --- |
 | **下载（Windows）** | [GitHub Releases](https://github.com/shepherd-chenxs/bandi/releases/latest) → `bandi_<版本>_x64-setup.exe` |
-| **从源码跑** | `node start.mjs`（默认 <http://127.0.0.1:8787/>） |
+| **从源码跑** | `node start.mjs`（默认 <http://127.0.0.1:18787/>） |
 | **它长什么样** | 见下面的「三步用起来」；设计说明在 [docs/架构.md](docs/架构.md) |
 
 ## 30 秒上手
@@ -30,7 +30,7 @@
 ```sh
 node --version        # 需要 Node 22 或更高（用了内置 node:sqlite）
 node start.mjs        # 起控制面 + 开浏览器；Windows 也可以直接双击 start.cmd
-# 控制面默认只听本机 http://127.0.0.1:8787/，数据落在本机用户目录（Windows 是 %APPDATA%\bandi，可用 BANDI_DATA 指到别处）
+# 控制面默认只听本机 http://127.0.0.1:18787/，数据落在本机用户目录（Windows 是 %APPDATA%\bandi，可用 BANDI_DATA 指到别处）
 ```
 
 零依赖：没有 `npm install` 这一步，也没有打包器。

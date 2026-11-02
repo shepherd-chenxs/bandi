@@ -64,20 +64,28 @@ export async function renderBackupSection(mount) {
     `<b>${Number(counts.projects ?? 0)}</b> 项目`,
     mtime ? `<b>${esc(mtime)}</b> 最后修改` : '',
   ].filter(Boolean).join('<span class="dm-sep">·</span>');
+  /*
+   * 导出/导入按钮**任何形态都显示**（2026-11-01 用户："不管是不是总机分机，
+   * 这个导入导出都要一直显示"）—— 原来服务器形态（局域网访问）藏按钮只留 CLI 指路，
+   * 但桌面壳走的是 127.0.0.1 回环，服务端本来就直接放行；真从别的机器开网页点下去，
+   * 也会拿到 E4097 的人话报错，不会误伤。藏按钮属于过度防御。
+   */
   mount.innerHTML = `
-    <section class="set-sec dm-sec">
-      <div class="set-head">
-        <b>数据管理</b>
+    <section class="fx dm-sec">
+      <div class="fx-head">
+        <label>数据管理</label>
         <div class="dm-actions">
           <span class="machine-path dm-path" title="${esc(local.dbPath ?? '')}">${esc(local.dbPath ?? '—')}</span>
           <button class="btn-sm" id="backupImport">导入快照</button>
           <button class="btn-sm primary" id="backupExport">导出快照</button>
         </div>
       </div>
-      <div class="dm-line">${stats}</div>
-      <div class="dm-snaps">
-        <div class="dm-snaps-head">备份快照<span class="dm-list-count">${bkFiles.length ? `${bkFiles.length} 份 · 定时备份与导入前自动备份都存在数据目录的 backups/ 里` : ''}</span></div>
-        <div class="dm-snaps-body">${bkList}</div>
+      <div class="dm-card">
+        <div class="dm-line">${stats}</div>
+        <div class="dm-snaps">
+          <div class="dm-snaps-head">备份快照<span class="dm-list-count">${bkFiles.length ? `${bkFiles.length} 份 · 定时备份与导入前自动备份都存在数据目录的 backups/ 里` : ''}</span></div>
+          <div class="dm-snaps-body">${bkList}</div>
+        </div>
       </div>
     </section>
     <input type="file" id="backupImportFile" accept=".db,.sqlite,.sqlite3" hidden />`;
@@ -136,425 +144,6 @@ export async function renderBackupSection(mount) {
 
 
 
-/**
- * 「加入总机」面板（2026-10-20 设计 §9.4，2026-10-21 从弹窗改成**页面内嵌**）：
- * list（主机列表）→ explain（会改变什么 + 邀请码）→ joining → done。
- *
- * 2026-10-21 拍板：**节点只当算力，不做「看总机面板」** —— 原 scope 三选一步骤删除，
- * 加入一律拿 compute 令牌（服务端也写死，不信任前端）。
- *
- * 为什么不再用 dialog：用户实报"弹窗的方式操作有点不舒服"—— 主机列表是这页的主体内容，
- * 塞进 520px 的小弹窗里又要滚动又要等扫描，不如直接长在页面上（跟设置页其它分区同一种列表式）。
- * 与 `openJoinDialog` 语义不同：那个是**总机**发码给别人，这个是**本机**去加入别人。
- *
- * 状态机全部在这个局部对象里（重进设置页 = 整个重来，不往 S 里塞）。
- * 列表页：**不自动扫**（2026-10-21 用户：去掉自动探测，改手动）+ 「发现」按钮扫
- *        + 「添加」（填了就入列）+ 已存的先测试、通过才出「加入」。
- */
-export function mountJoinPanel(root) {
-
-  /* 状态机的全部状态都在这个局部对象里 —— 切走设置分区就整个忘掉，不往 S 里塞。
-     2026-10-21：scan/pick/manual 三步合并成「主机列表」一页（用户拍板的列表模型）；
-     探测改成**纯手动**（进页不扫，点「发现」才扫）+ 添加填了就入列。
-     同日再改（用户："加入按钮一直显示，点击加入，打开弹窗"）：加入不再换页 ——
-     原来那套 explain/joining/done 步骤机（wiz.step）整个撤掉，改成**一个弹窗**装下
-     「会改变什么 + 邀请码 + 加入 + 结果」，列表页永远留在原地。 */
-  const wiz = {
-    hosts: [],            // 通讯录（/status 透传 + add/remove 的返回刷新）
-    candidates: [],       // 本次扫描结果（不入列，刷新会重扫）
-    tested: new Map(),    // url → {state:'testing'|'ok'|'fail', host?, code?, msg?}
-    scanning: false,
-    url: '',              // 上一次点「加入」的目标（弹窗默认值）
-    code: '',             // 邀请码：弹窗关掉再开还留着上次填的
-    err: '',
-    status: null,         // 本机读数：本机员工/会话/项目数（status 透传）
-    secs: 0,
-    tick: null,
-  };
-
-  // 本机读数拉一次就够（弹窗里的本机数据 + 通讯录初值）；拉不到不挡路 —— 列表按空画，扫描照常
-  api(`${LOCAL_BASE}/status`).then((st) => {
-    wiz.status = st;
-    wiz.hosts = Array.isArray(st?.hosts) ? st.hosts : [];
-    render(); // 通讯录行补上（列表页是唯一的一页，直接重画）
-  }).catch(() => {});
-
-  // 离开这页（设置切到别的分区，root 被整个换掉）就停表 —— 定时器别挂在看不见的节点上空转
-  const tickGuard = setInterval(() => {
-    if (!root.isConnected) {
-      clearInterval(wiz.tick);
-      clearInterval(tickGuard);
-    }
-  }, 1000);
-
-  const errLine = () => (wiz.err ? `<div class="joinwiz-err">${esc(wiz.err)}</div>` : '');
-
-  /* ---------------------------------------------------- 步骤 1 · 主机列表 */
-  /* 扫描不再切步骤：原地转圈，结果合并进列表。空结果不是错误 —— 通讯录和「添加」仍在。 */
-  const runScan = () => {
-    if (wiz.scanning) return;
-    wiz.scanning = true;
-    wiz.secs = 0;
-    clearInterval(wiz.tick);
-    // 「已经找了 N 秒」：本地计时（服务端最多 4 秒返回）
-    wiz.tick = setInterval(() => {
-      wiz.secs += 1;
-      const el = root.querySelector('[data-sec]');
-      if (el) el.textContent = `已经找了 ${wiz.secs} 秒 · 同一网络里的班底会自动应答`;
-    }, 1000);
-    render();
-    post(`${LOCAL_BASE}/discover`, {})
-      .then((r) => {
-        clearInterval(wiz.tick);
-        wiz.candidates = r?.candidates ?? [];
-        wiz.scanning = false;
-        render();
-      })
-      .catch((err) => {
-        clearInterval(wiz.tick);
-        wiz.scanning = false;
-        toast(err.message, 'error'); // 扫描这条路废了也不挡路：通讯录与「添加」必须还能走通
-        render();
-      });
-  };
-
-  /* 通讯录在前（用户明确记住的），扫描结果在后；同一台总机（instanceId 或 url 撞上）
-     合并成一行 —— 扫描带来的 joinable/caps 是刚出炉的，盖到通讯录行上刷新状态。 */
-  const mergeRows = () => {
-    const keyOf = (x) => (x.instanceId ? `i:${x.instanceId}` : `u:${x.url}`);
-    const rows = [];
-    const seen = new Set();
-    for (const h of wiz.hosts) {
-      const k = keyOf(h);
-      if (seen.has(k)) continue;
-      seen.add(k);
-      rows.push({ ...h, persisted: true });
-    }
-    for (const c of wiz.candidates) {
-      const k = keyOf(c);
-      const exist = rows.find((r) => keyOf(r) === k);
-      if (exist) {
-        exist.joinable = c.joinable;
-        exist.caps = c.caps;
-        continue;
-      }
-      seen.add(k);
-      rows.push({ ...c, persisted: false });
-    }
-    return rows;
-  };
-
-  const drawList = (box) => {
-    const rowsHtml = mergeRows()
-      .map((h) => {
-        const t = wiz.tested.get(h.url);
-        const stale = Array.isArray(h.caps) && !h.caps.includes('scope');
-        let tag = '';
-        let sub = '';
-        let action = '';
-        if (t?.state === 'testing') {
-          tag = '<em class="tag-ok">（测试中…）</em>';
-        } else if (t?.state === 'ok') {
-          // 测试通过 → 只把标签说清楚；「加入」本来就一直在，不用等测试
-          tag = '<em class="tag-ok">（可加入）</em>';
-          action = `<button type="button" class="mini auto dim" data-test="${esc(h.url)}">测试</button>`;
-        } else if (t?.state === 'fail') {
-          tag = `<em class="tag-warn">（${esc(t.code ?? 'E1092')}）</em>`;
-          sub = `<div class="sub">${esc(t.msg ?? '')}</div>`;
-          action = `<button type="button" class="mini auto" data-test="${esc(h.url)}">重试</button>`;
-        } else if (!h.persisted) {
-          // 扫描来的行：UDP 应答本身就是"活着"的证明，直接可选
-          if (h.joinable) {
-            tag = '<em class="tag-ok">（可加入）</em>';
-          } else if (stale) {
-            tag = '<em class="tag-warn">（版本太旧）</em>';
-            sub = '<div class="sub">那台班底版本太旧，先升级它再加入</div>';
-          } else {
-            tag = '<em class="tag-warn">（未开放加入）</em>';
-            sub = '<div class="sub">这台班底没有对外开放加入（可能只在本机使用）。去那台机器上打开『允许局域网内的机器加入』→ 点重启</div>';
-          }
-        } else {
-          // 通讯录里还没测过的行（刚「添加」的也在这档）：可以点「测试」验连接，
-          // 也可以直接点「加入」—— 行上没说"可加入"不代表点不得，弹窗会把真实原因说清楚
-          tag = '<em class="tag-warn">（未测试）</em>';
-          action = `<button type="button" class="mini auto" data-test="${esc(h.url)}">测试</button>`;
-        }
-        /* 「加入」**一直显示**（2026-10-21 用户："加入按钮一直显示，点击加入，打开弹窗"）——
-           以前它只在"测试通过/可加入"时才冒出来，用户得先猜哪行能点。现在每行都有，
-           能不能加由弹窗里的第一次请求回答（连不上/没开放/版本旧都会把原因写回弹窗） */
-        const joinBtn = `<button type="button" class="mini auto primary" data-join="${esc(h.url)}" data-label="${esc(h.label ?? '')}">加入</button>`;
-        /* 点行仍可加入，但只对"扫描到且开放加入"的行开放 —— 其余行点一下就是加入弹窗，
-           容易误触；行上的「加入」按钮已经够显眼 */
-        const clickable = !h.persisted && h.joinable;
-        return `<div class="row-item joinwiz-cand ${clickable || t?.state === 'ok' ? '' : 'off'}" ${clickable ? `data-pick="${esc(h.url)}" data-label="${esc(h.label ?? '')}" style="cursor:pointer"` : ''}>
-          <div class="avatar">${esc(initial(h.label))}</div>
-          <div class="who">
-            <b>${esc(h.label)}${tag}</b>
-            <div class="sub">${esc(h.hostname ?? '')}${h.hostname ? ' · ' : ''}${esc(h.url)}</div>
-            ${sub}
-          </div>
-          <div class="row-acts">
-            ${h.persisted ? `<button type="button" class="mini auto dim" data-remove="${esc(h.url)}">移除</button>` : ''}
-            ${action}
-            ${joinBtn}
-            ${clickable ? '<span class="chev">›</span>' : ''}
-          </div>
-        </div>`;
-      })
-      .join('');
-    box.innerHTML = `
-      <div class="machine-join-head">
-        <div class="machine-join-title">可用总机</div>
-        <div class="machine-join-actions">
-          <button type="button" class="btn-sm" data-w="refresh" ${wiz.scanning ? 'disabled' : ''}>发现</button>
-          <button type="button" class="btn-sm primary" data-w="add">添加</button>
-        </div>
-      </div>
-      <div class="joinwiz-cands">${
-        rowsHtml ||
-        '<div class="dim joinwiz-note">列表还是空的 —— 点「发现」找同一网络里的班底，或点「添加」直接填地址（云端也行）。</div>'
-      }</div>
-      ${
-        wiz.scanning
-          ? `<div class="joinwiz-scan">
-              <div class="joinwiz-spin"></div>
-              <div>正在找同一网络里的班底总机…</div>
-              <div class="dim" data-sec>已经找了 0 秒 · 同一网络里的班底会自动应答</div>
-              <div class="dim">总机在云端、或不在同一个网络时不会出现在这里 —— 点「添加」直接填它的地址</div>
-            </div>`
-          : ''
-      }
-      ${errLine()}`;
-  };
-
-  /* 列表页是**唯一的一页**：加入的「会改变什么 / 邀请码 / 加入中 / 成功」全都进了弹窗
-     （2026-10-21 用户："加入按钮一直显示，点击加入，打开弹窗"），页面不再被步骤机换来换去。 */
-  const render = () => {
-    const box = document.createElement('div');
-    box.className = 'joinwiz page';
-    drawList(box);
-    // 只重画内容层：面板挂载点（#joinMount）是常驻元素
-    root.querySelector('.joinwiz')?.remove();
-    root.appendChild(box);
-
-    /* 统一接线：`data-w` 对到列表页自己的动作（发现 / 添加）。
-       行内按钮（data-test / data-join / data-remove / data-pick）走各自的直接接线 ——
-       「加入」现在只负责开弹窗，加入本体在弹窗里。 */
-    const handlers = {
-      refresh: () => { wiz.err = ''; runScan(); },
-      add: openAddHostDlg,
-    };
-    box.querySelectorAll('[data-w]').forEach((el) => {
-      const fn = handlers[el.dataset.w];
-      if (fn) el.onclick = () => fn();
-    });
-    // 行内按钮：点行 = 加入弹窗（只对扫描到的、开放加入的行）；「加入」按钮每行都有
-    box.querySelectorAll('[data-pick]').forEach((el) => {
-      el.onclick = () => openJoinDlg(el.dataset.pick, el.dataset.label);
-    });
-    box.querySelectorAll('[data-join]').forEach((el) => {
-      el.onclick = () => openJoinDlg(el.dataset.join, el.dataset.label);
-    });
-    box.querySelectorAll('[data-test]').forEach((el) => {
-      el.onclick = () => doTest(el.dataset.test, el);
-    });
-    box.querySelectorAll('[data-remove]').forEach((el) => {
-      el.onclick = () => doRemove(el.dataset.remove);
-    });
-  };
-
-  /* 「测试」一行（通讯录里的行）：原地转圈 → 通过标「可加入」/ 失败显示原因 + 重试。
-     它只回答"连得上吗"，【不代表】按钮才出现 —— 「加入」每行常显
-     （2026-10-21 用户："加入按钮一直显示"）。 */
-  async function doTest(url) {
-    wiz.tested.set(url, { state: 'testing' });
-    render();
-    try {
-      const r = await post(`${LOCAL_BASE}/hosts/test`, { url });
-      wiz.tested.set(url, { state: 'ok', host: r?.host ?? null });
-      render();
-    } catch (err) {
-      wiz.tested.set(url, { state: 'fail', code: err.code ?? 'E1092', msg: err.message });
-      toast(err.message, 'error');
-      render();
-    }
-  }
-
-  /**
-   * 「添加」= 一个**小弹窗**（2026-10-21 用户："点击添加，打开弹窗，填写之后，完成添加"）。
-   * 为什么这里又用弹窗：它不是页面的主体内容，只是"补一条地址"的一次性输入 ——
-   * 填地址 + 两个按钮塞进一行会把列表页撑乱；而加入流程（列表/说明/用途）仍留在页面上。
-   *
-   * 服务端 `hosts/add` 现在**填了就入列**（不拦探测），所以这里成功后不预设"可加入"：
-   * 行按「未测试」画，用户点行上的「测试」验连接 —— 这正是用户要的操作顺序。
-   */
-  function openAddHostDlg() {
-    const dlg = document.createElement('dialog');
-    dlg.className = 'joinwiz-dlg';
-    const form = document.createElement('form');
-    form.method = 'dialog';
-    form.innerHTML = `
-      <b>添加总机</b>
-      <div class="joinwiz">
-        <label for="joinAddUrl">总机地址</label>
-        <input id="joinAddUrl" spellcheck="false" autocomplete="off" placeholder="http://192.168.1.9:8787 或 https://bandi.example.com" />
-        <div class="dim joinwiz-note">局域网或云端都行。添加后用它那行的「测试」验连接。</div>
-        <div class="joinwiz-err" id="joinAddErr" hidden></div>
-        <div class="dlg-actions">
-          <button type="button" value="cancel">取消</button>
-          <button type="button" class="primary" id="joinAddOk">完成添加</button>
-        </div>
-      </div>`;
-    dlg.append(form);
-    document.body.append(dlg);
-    wireDialogHead(form); // 动态建的弹窗自己包一次吸顶头（标题 + ×）
-    const input = form.querySelector('#joinAddUrl');
-    const errEl = form.querySelector('#joinAddErr');
-    const okBtn = form.querySelector('#joinAddOk');
-
-    const submit = async () => {
-      const url = input.value.trim();
-      if (!url) {
-        errEl.hidden = false;
-        errEl.textContent = '先填一个地址，例如 http://192.168.1.9:8787';
-        input.focus();
-        return;
-      }
-      okBtn.disabled = true;
-      errEl.hidden = true;
-      try {
-        const r = await post(`${LOCAL_BASE}/hosts/add`, { url });
-        wiz.hosts = Array.isArray(r?.hosts) ? r.hosts : wiz.hosts;
-        wiz.tested.delete(r?.host?.url ?? url); // 入列但没测过 → 行上出「测试」
-        dlg.close();
-        render();
-      } catch (err) {
-        errEl.hidden = false;
-        errEl.textContent = err.message;
-        okBtn.disabled = false;
-      }
-    };
-    okBtn.onclick = submit;
-    // 回车 = 完成添加（method=dialog 的默认提交会直接关窗丢输入，必须自己拦）
-    form.addEventListener('submit', (e) => { e.preventDefault(); submit(); });
-    dlg.addEventListener('close', () => dlg.remove());
-    dlg.showModal();
-    input.focus();
-  }
-
-  /* 从通讯录移除一台（扫描来的临时行没有这个按钮 —— 它们本来就不落盘）。 */
-  async function doRemove(url) {
-    try {
-      const r = await post(`${LOCAL_BASE}/hosts/remove`, { url });
-      wiz.hosts = Array.isArray(r?.hosts) ? r.hosts : wiz.hosts.filter((h) => h.url !== url);
-      wiz.tested.delete(url);
-    } catch (err) {
-      toast(err.message, 'error');
-    }
-    render();
-  }
-
-  /* 从列表选中一台（扫描行点选 / 通讯录行「加入」）→ 先探再进 explain。
-     这次探测就是加入前的最后一道闸：列表状态和真实状态之间有时间差
-     （刚关了开关 / 那台刚关机），在这里被拦下比走到一半失败好。 */
-  /**
-   * 「加入」= 弹窗（2026-10-21 用户："加入按钮一直显示，点击加入，打开弹窗"）。
-   * 为什么进弹窗：加入前得先讲清"会改变什么"、再填邀请码，这是**一次性的确认**；
-   * 塞在列表里会把"找哪台机器"这件事挤走，所以整块挪进 dialog，列表页永远原地不动。
-   *
-   * 为什么不先 probe：能不能加由服务端 `/join` 直接回答（连不上 E1092 / 未开放 E1091 /
-   * 版本太旧 E2050 / 邀请码不对 E4011），失败原因写在弹窗里、码留着改就行 ——
-   * 多探一次只是多等一次，判定标准却是同一个。名字从行上带过来，不必等 probe 才知道是谁。
-   */
-  function openJoinDlg(url, label) {
-    wiz.url = url;
-    const host = label || '那台班底';
-    const dlg = document.createElement('dialog');
-    dlg.className = 'joinwiz-dlg';
-    const form = document.createElement('form');
-    form.method = 'dialog';
-    form.innerHTML = `
-      <b>邀请码（10 分钟内有效，只能用一次）</b>
-      <div class="joinwiz">
-        <input id="joinCode" spellcheck="false" autocomplete="off" aria-label="邀请码" placeholder="bj_" value="${esc(wiz.code)}" />
-        <div class="joinwiz-hint">加入后，这台电脑就是「${esc(host)}」的算力节点：总机把活派过来，在这台电脑上跑。</div>
-        <div class="joinwiz-err" id="joinErr" hidden></div>
-        <div class="dlg-actions">
-          <button type="button" value="cancel">取消</button>
-          <button type="button" class="primary" id="joinOk">加入</button>
-        </div>
-      </div>`;
-    dlg.append(form);
-    document.body.append(dlg);
-    wireDialogHead(form); // 动态建的弹窗自己包一次吸顶头（标题 + ×）
-
-    const codeEl = form.querySelector('#joinCode');
-    const errEl = form.querySelector('#joinErr');
-    const okBtn = form.querySelector('#joinOk');
-    const showErr = (msg) => { errEl.hidden = false; errEl.textContent = msg; };
-
-    okBtn.onclick = async () => {
-      wiz.code = codeEl.value;
-      if (!wiz.code.trim()) {
-        showErr(`先填邀请码 —— 在「${host}」上：设置 → 这台机器 → 添加设备`);
-        codeEl.focus();
-        return;
-      }
-      errEl.hidden = true;
-      okBtn.disabled = true;
-      okBtn.textContent = '加入中…';
-      try {
-        const r = await post(`${LOCAL_BASE}/join`, { url, code: wiz.code.trim() });
-        drawJoined(form, r?.hostLabel || host);
-      } catch (err) {
-        showErr(err.message); // E4011 码不对 → 就地改码再点，不用关弹窗
-        okBtn.disabled = false;
-        okBtn.textContent = '加入';
-      }
-    };
-
-    dlg.addEventListener('close', () => dlg.remove());
-    dlg.showModal();
-    codeEl.focus();
-  }
-
-  /* 加入成功：同一个弹窗换成"落地说明 + 完成"（点完成等它重绑完再刷，别撞上白屏断口） */
-  function drawJoined(form, host) {
-    const n = Number(wiz.status?.local?.counts?.personas ?? 0);
-    form.innerHTML = `
-      <b>加入成功</b>
-      <div class="joinwiz">
-        <div class="joinwiz-text joinwiz-ok">✓ 这台电脑现在是「${esc(host)}」的算力节点了</div>
-        <ul class="joinwiz-list">
-          <li>总机把活派过来，在这台电脑上跑（节点已在后台常驻）</li>
-          <li>这台电脑的班底界面从此只显示节点状态，不显示面板</li>
-          <li>本机原来的 ${n} 个员工还在本机，没动过</li>
-        </ul>
-        <div class="dlg-actions">
-          <button type="button" class="primary" id="joinDone">完成</button>
-        </div>
-      </div>`;
-    form.querySelector('#joinDone').onclick = async () => {
-      /*
-       * 加入成功那一刻服务端会把监听**收回环**（见 `/api/local/join`），重绑有几毫秒断口。
-       * 点「完成」先等它答话再刷，别让人正好撞上重绑白屏。
-       */
-      for (let i = 0; i < 40; i++) {
-        try {
-          if ((await fetch(`${LOCAL_BASE}/status`, { cache: 'no-store' })).ok) break;
-        } catch {
-          /* 重绑中 */
-        }
-        await new Promise((done) => setTimeout(done, 100));
-      }
-      location.reload();
-    };
-  }
-
-  render(); // 不自动扫（2026-10-21 用户："去掉自动刷新探测，手动探测"）——
-  // 进页只画「通讯录 + 空列表提示」，扫描由「发现」按钮触发，用户点一次才发一次 UDP。
-}
-
 
 
 /**
@@ -566,41 +155,10 @@ export function mountJoinPanel(root) {
  * 所以这一版只回答两件事：它是什么、它自报装了什么。
  */
 /**
- * 设备头那块：**大标题是人给它的名字，小字回真实主机名**。
- *
- * 为什么两个都显示：机器名可以是人随口起的（两台都叫「办公机」很正常），主机名不会重。
- * 改完名还能一眼认出是哪台，靠的就是下面那行小字。
- *
- * 为什么要有「重命名机器」：运行时下拉里显示的是**机器名**（`Codex CLI（我的笔记本）`），
- * 就叫 `DESKTOP-XXXXXXX` 的话，两台机器的条目在员工配置里根本分不出来。
- */
-export function devHeadHtml(dev, { badges = '', sub = '', actions = '' } = {}) {
-  const host = dev.hostname ?? '';
-  return `<div class="dev-head">
-    <div class="dev-icon">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
-        <rect x="2.5" y="4" width="19" height="13" rx="2" />
-        <path d="M8.5 20.5h7M12 17v3.5" stroke-linecap="round" />
-      </svg>
-    </div>
-    <div class="dev-meta">
-      <div class="dev-title">${esc(dev.label)}${badges}</div>
-      <div class="dev-sub">${host ? esc(host) + (sub ? ' · ' : '') : ''}${sub}</div>
-    </div>
-    <div class="dev-actions">
-      <button class="btn-sm" id="renameDevice" title="给它起个好认的名字 —— 员工选运行时时显示的就是这个">重命名机器</button>
-      ${actions}
-    </div>
-  </div>`;
-}
-
-
-
-/**
  * 班的「问一句」/「确认一下」—— 替代原生 `prompt()` / `confirm()`。
  *
  * 为什么不用原生的（2026-10-16 用户指着改名那个框说"改成弹窗组件"）：原生框是**浏览器**画的，
- * 标题栏里印着 `127.0.0.1:8787 显示`，跟班底长得不是一个东西；也没法用班底自己的措辞、
+ * 标题栏里印着 `127.0.0.1:18787 显示`，跟班底长得不是一个东西；也没法用班底自己的措辞、
  * 说明文字和"破坏性操作"那种红色按钮。
  *
  * 一个 dialog 管两件事：给了 `field` 就要一段文字（有输入框），不给就只要一个是/否。
@@ -689,32 +247,6 @@ export const confirmDo = async (text, opts = {}) =>
  * （2026-10-16 用户提的：普通用户不知道镜像地址，就不该让他填地址）。
  */
 export const askCheckbox = (o) => askDialog({ ...o, field: false });
-
-
-
-/**
- * 接上改名。**名字跟主机名是两回事**：这里只改名字，主机名是那台机器自报的事实，动不了。
- * 留空 = 恢复默认（回到主机名）。
- */
-export function wireRenameDevice(dev) {
-  const btn = $('renameDevice');
-  if (!btn) return;
-  btn.onclick = async () => {
-    const next = await askText({
-      title: '给这台机器起个名字',
-      body: `主机名：${dev.hostname ?? dev.label}\n（留空 = 恢复成主机名）`,
-      value: dev.renamed ? dev.label : '',
-      placeholder: '留空就用主机名',
-    });
-    if (next === null) return; // 取消
-    try {
-      await post(`/api/devices/${encodeURIComponent(dev.id)}/rename`, { label: next });
-      renderRuntimes(); // 重渲染：名字、面包屑、运行时的显示名一起跟上
-    } catch {
-      /* api() 已经提示过了 */
-    }
-  };
-}
 
 
 
@@ -810,7 +342,7 @@ export function healedTag(r) {
 
 
 /**
- * 那台机器上**正在跑**的那件小事（装运行时 / 装外部件），针对某个目标。
+ * 那台机器上**正在跑**的那件小事（装运行时），针对某个目标。
  *
  * 为什么从 `dev.task` 读、而不是靠点击时那个闭包（2026-10-16 用户报的"刷新页面，看不到安装进度了"）：
  * 进度原来是**浏览器里的临时状态** —— 一刷新就没了，可那件事其实还在那台机器上跑着。
@@ -827,6 +359,45 @@ export function runningTaskFor(dev, target) {
 /** 任务输出的最后一行（界面上就显示这一行，够用又不吵） */
 export function taskTail(task) {
   return (task?.output ?? '').trim().split('\n').filter(Boolean).slice(-1)[0] ?? '';
+}
+
+
+
+/**
+ * 给那台机器排一件事，然后盯着它做完 —— **「排队 → 轮询 → 出结果」这套只写一遍**。
+ *
+ * ⚠️ 这段在 app.js → js/ 拆分时被弄丢了（2026-11-02 用户报"点击安装并不能真的安装"）：
+ * `wireInstallRuntime` 里 `await runNodeTask(...)` 直接 ReferenceError，
+ * async onclick 静默拒绝 —— 确认框点了「开始安装」后按钮卡在「进行中…」，什么都没发生。
+ * 这里按 394b0a3 的原实现逐字搬回（`mirror` 参数留着：外部件那套已删，但签名别缩）。
+ * 返回 `{ok, status, tail, output}` / 失败 `{ok:false, reason}`。
+ */
+async function runNodeTask(dev, { kind, target, mirror = '', onLine = () => {} }) {
+  let task;
+  try {
+    task = (await post(`/api/nodes/${encodeURIComponent(dev.id)}/tasks`, { kind, family: target, mirror })).task;
+  } catch {
+    return { ok: false, reason: '排不上' }; // api() 已经提示过了
+  }
+  onLine('排队中 —— 等那台机器来领（它离线时会一直等着，不会丢）');
+  // 上限 10 分钟：免得那台机器一直不来领，这个页面就永远转着
+  const deadline = Date.now() + 10 * 60 * 1000;
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 1500));
+    let t;
+    try {
+      t = (await api(`/api/nodes/${encodeURIComponent(dev.id)}/tasks/${encodeURIComponent(task.id)}`)).task;
+    } catch {
+      return { ok: false, reason: '查不到进度了' };
+    }
+    if (!t) return { ok: false, reason: '任务不见了' };
+    const tail = (t.output ?? '').trim().split('\n').filter(Boolean).slice(-1)[0] ?? '';
+    if (t.status === '执行中') onLine(tail || '正在跑…');
+    else if (t.done) return { ok: t.status === '完成', status: t.status, tail, output: t.output ?? '' };
+    if (Date.now() > deadline) {
+      return { ok: false, reason: '等了 10 分钟还没完 —— 那台机器可能没在领活（离线 / 正忙）。进度不会丢，回来刷新能看到。' };
+    }
+  }
 }
 
 
@@ -875,10 +446,11 @@ export function failAt(task) {
 export function scheduleTaskPoll(dev) {
   const t = dev?.task;
   if (!t || t.done) return;
-  if (S.rtLevel !== 'device' || S.rtDevice !== dev.id) return;
+  // 2026-11-01 设备详情页撤了：安装任务长在「这台机器」页（devices 层、无 rtDevice）
+  if (S.rtLevel !== 'devices' || S.rtDevice) return;
   clearTimeout(S.taskPoll);
   S.taskPoll = setTimeout(async () => {
-    if (S.rtLevel !== 'device' || S.rtDevice !== dev.id) return;
+    if (S.rtLevel !== 'devices' || S.rtDevice) return;
     let next;
     try {
       // 只取这一件活的进度（一条小请求），不重画整页
@@ -899,620 +471,10 @@ export function scheduleTaskPoll(dev) {
 
 
 
-/**
- * 「外部件」那一段 —— 一台机器上**班底之外还要有的东西**（现在只有 magpie）。
- *
- * 为什么要单独摆出来（2026-10-16 用户提的）：它是"这台机器能不能干活"的**前提**，
- * 之前这个前提是隐形的 —— 装好了没人告诉你，没装 / 网关没起也不会提醒，
- * 只会在派活之后看到一串 502。
- *
- * 判定就三条，**不 import、不解析它的配置文件**（这样它怎么更新都不用动我们）：
- * ① 命令在不在（装了没）② 网关端口通不通 ③ 那台机器能不能一键装（命令表在**节点**那侧）。
- */
-export function externalsHtml(dev) {
-  const ex = dev.externals;
-  if (!ex?.catalog?.length) return '';
-  const probed = new Map((ex.probed ?? []).map((p) => [p.id, p]));
-  const rows = ex.catalog
-    .map((c) => {
-      const p = probed.get(c.id) ?? { installed: false, gateway: null, panel: null };
-      // 装了但网关没起，是最坑的状态：被它接管的 agent 会全线 502
-      const health = !p.installed
-        ? { text: '未安装', cls: 'tag-warn', why: '这台机器上还没装上它' }
-        : c.gatewayPort && p.gateway === false
-          ? { text: `网关没起（${c.gatewayPort}）`, cls: 'tag-warn', why: '装了但网关没在跑 —— 被它接管的 agent 会连不上，报 502' }
-          : c.gatewayPort
-            ? { text: '在线', cls: 'tag-ok', why: `网关在 ${c.gatewayPort} 上跑着` }
-            : { text: '装了', cls: 'tag-ok', why: '命令在' };
-      /*
-       * 面板：**界面是它自己的，我们只放入口**（2026-10-16 定的）。
-       * 所以这里不给"面板内容"，只给"起没起" ＋ 一条从局域网能打开的链接。
-       * 面板自己有访问密钥（magpie 生成、跨重启保留），所以链接可能需要再点一次（或在它那边取带密钥的链接）。
-       */
-      const panelBadge =
-        c.panelPort && p.installed
-          ? p.panel
-            ? `<em class="tag-ok" title="面板在 ${c.panelPort} 上跑着">面板已开</em>`
-            : `<em class="tag-warn" title="装了但面板没跑 —— 在那台机器上跑 magpie daemon install --web --lan 就会常驻，开机自己起">面板没起</em>`
-          : '';
-      const oneClick = c.installCmd && dev.kind === 'node';
-      const serve = c.serveCmd && dev.kind === 'node';
-      const busy = runningTaskFor(dev, c.id);
-      /*
-       * 上一次**没成**的那件事 —— 也摆出来。
-       *
-       * 为什么要有（2026-10-16 用户停了安装、回来重看时发现的）：失败之后那一行原本什么都不说 ✗
-       * （按钮回来了，可你不知道上次为什么没成 —— 只能去翻控制面的日志）。
-       * 失败是**做过的事**，就该留在那儿：鼠标悬停还有完整输出。
-       */
-      const lastFail = !busy && dev.task?.done && dev.task.status !== '完成' && dev.task.family === c.id ? dev.task : null;
-      return `<div class="row-item ${health.cls === 'tag-ok' ? '' : 'off'}" data-ext-row="${esc(c.id)}">
-        ${cliAvatar(c.id, c.label)}
-        <div class="who">
-          <b>${esc(c.label)}<em class="${health.cls}" title="${esc(health.why)}">${esc(health.text)}</em>${panelBadge}</b>
-          ${
-            /*
-             * 描述那行直接摆**它自己的官网**（2026-10-16 用户提的）：
-             * 免得人误以为 magpie 是班底的产品 —— 它是个独立的开源工具，我们只是"认得它、能帮你装它"。
-             * 原来那段"把各 agent 的请求转给你配的供应商…"挪到悬停里（想了解的人还能看）。
-             */
-            c.home
-              ? `<div class="sub"><a href="${esc(c.home)}" target="_blank" rel="noreferrer" title="${esc(c.note ?? '')}" style="font-family:ui-monospace,monospace;font-size:11.5px">${esc(
-                  c.home,
-                )}</a></div>`
-              : `<div class="sub">${esc(c.note ?? '')}</div>`
-          }
-          ${p.installed && p.where ? `<div class="sub" style="font-family:ui-monospace,monospace;font-size:11.5px">装在 ${esc(p.where)}</div>` : ''}
-          <div class="sub install-log" style="display:none;font-family:ui-monospace,monospace;font-size:11.5px"></div>
-          ${
-            /*
-             * 刷新页面之后进度也还在：直接读服务端那件正在跑的活。
-             * `data-task-line` 是给"接着盯"用的：只**就地改这一行的文字**，不重画整页
-             * （2026-10-16 用户报的"页面在不停刷新"就是整页重画闹的）。
-             */
-            busy
-              ? `<div class="sub install-log" data-task-line="${esc(busy.id)}" style="display:block;font-family:ui-monospace,monospace;font-size:11.5px">${
-                  busy.running ? '进行中… ' : '排队中… '
-                }${esc(taskTail(busy) || '（等那台机器来领）')}</div>`
-              : lastFail
-                ? `<div class="sub" title="${esc(lastFail.output)}" style="color:var(--bad);font-size:11.5px">上次没成（${esc(
-                    failAt(lastFail),
-                  )}）：${esc(taskFailLine(lastFail) || '（没输出）')}（悬停看全部）</div>`
-                : ''
-          }
-        </div>
-        ${
-          // 入口只在**面板真跑着**、而且我们知道一个能连上的地址时才给（不然点开是空白/401）
-          c.panelPort && p.panel && p.panelUrl
-            ? `<a class="mini auto" href="${esc(p.panelUrl)}" target="_blank" rel="noreferrer" title="在浏览器里打开它自己的面板（${esc(
-                p.panelUrl,
-              )}）—— 链接里带着访问密钥，点开就是已登录。⚠️ 这条链接等于那台机器上 magpie 的控制权（能改模型、看到密钥），而且是明文 HTTP：别外传；要更稳就在它那边配 --tls-cert/--tls-key。">打开面板</a>`
-            : ''
-        }
-        ${
-          /*
-           * 外部件那颗按钮 —— **按状态给，只给一颗**（2026-10-16 用户定的）：
-           *   · 没装                     → 「安装」：装了**自动**把服务也设好（用户不需要知道"常驻"是什么）
-           *   · 装了但没跑起来            → 「重启」：把它拉起来（比"重装"轻，语义也对）
-           *   · 上次失败过               → 「重装」：重走一遍安装 + 服务
-           *   · 一切正常（网关或面板应答）→ **不给按钮**（装好了还杵着东西，人会以为还有事没做完 ✗）
-           * 具体跑什么命令放悬停里：想知道的人能看，普通用户不用看。
-           */
-          busy
-            ? '<span class="dim" style="font-size:11.5px">进行中…</span>'
-            : p.installed && (p.gateway === true || p.panel === true)
-              ? ''
-              : oneClick || serve
-                ? lastFail || !p.installed
-                  ? `<button class="mini auto primary" data-ext-do="external-setup" data-ext-id="${esc(c.id)}" title="会在那台机器上依次跑：${esc(
-                      [!p.installed ? c.installCmd : null, c.serveCmd].filter(Boolean).join('  →  '),
-                    )}">${lastFail ? '重装' : '安装'}</button>`
-                  : `<button class="mini auto primary" data-ext-do="external-serve" data-ext-id="${esc(c.id)}" title="它装着，但网关和面板都没在跑 —— 点一下把它拉起来（会在那台机器上跑：${esc(
-                      c.serveCmd ?? '',
-                    )}）">重启</button>`
-                : c.installCmd && !p.installed
-                  ? `<button class="mini auto" data-copy="${esc(c.installCmd)}">复制安装命令</button>`
-                  : /* 已经装了、这个平台又没有"一条命令"（Windows 桌面安装包）—— 什么都不给 */
-                    ''
-        }
-      </div>`;
-    })
-    .join('');
-  return `<section class="fx" style="margin-top:26px">
-      <label>外部件 <span class="count">${rows ? ex.catalog.length : 0}</span></label>
-      ${rows}
-    </section>`;
-}
-
-
-
-/**
- * 远程节点的详情页 —— 有几颗按钮，但**都是这台机器自己的事**（改名 / 忘掉），
- * 没有一颗会去改那台机器上的运行时配置（路径是那台机器上的事实，改不了，也不该假装能改）。
- *
- * 2026-10-16 起这里也分**已安装 / 未安装**：原来没探到就一句"一个都没探到"，
- * 等于把"该怎么办"藏起来了 —— 用户看到的是一台空机器，而不是"这三个里你一个都还没装，
- * 装上哪条命令在这"。判断依据是**节点自报的清单**（不是控制面本机的探测：那是两台机器）。
- */
-export async function renderNodeDetail(dev) {
-  // 左栏只写「设置」（在 openSettings 里）；这台机器的名字/状态/动作都在正文的 devHeadHtml 里，
-  // 右页头不再重复一遍。
-  const rts = dev.runtimes ?? [];
-  // 族清单拉不到就不显示"未安装"那一段 —— 但这一页照常渲染，别因为一个附加块白屏
-  let families = [];
-  try {
-    families = (await api('/api/runtime-families')).families ?? [];
-  } catch {
-    /* 忽略：下面按空处理 */
-  }
-  const haveFamily = new Set(rts.map((r) => r.family));
-  const missing = families.filter((f) => !haveFamily.has(f.id));
-  const isWin = /win/i.test(dev.platform ?? '');
-
-  // 工作空间映射清单（2026-10-22）：拉不到就不显示已有条目，表单照常给
-  let wsPaths = [];
-  try {
-    wsPaths = (await api(`/api/nodes/${encodeURIComponent(dev.id)}/paths`)).paths ?? [];
-  } catch {
-    /* 忽略：老版本服务没有这条路由 */
-  }
-
-  /*
-   * 角色清单（2026-10-28 第四刀）：给「面板角色」那个下拉用。
-   * `/api/roles` 在 mayManage 后面（只有操作员能读）—— 读不到就**不画那个下拉**，
-   * 这一页照常渲染（别因为一个附加块白屏）。
-   */
-  let roles = [];
-  try {
-    roles = (await api('/api/roles')).roles ?? [];
-  } catch {
-    roles = [];
-  }
-  /** 映射列表的行（添加/删除后重画用同一份；⚠️ 必须声明在 innerHTML 那句之前 —— 模板串要用它） */
-  const wsRowsHtml = (paths) =>
-    paths.length
-      ? paths
-          .map(
-            (p) => `<div class="row-item">
-              <div class="who">
-                <b style="font-family:ui-monospace,monospace;font-size:11.5px">${esc(p.remotePath)}</b>
-                <div class="sub" style="font-family:ui-monospace,monospace;font-size:11.5px">→ ${esc(p.localPath)}</div>
-              </div>
-              <button class="mini auto txt" data-ws-del="${esc(p.remotePath)}">删除</button>
-            </div>`,
-          )
-          .join('')
-      : '<div class="empty">还没配映射 —— 需要在这台机器上干非 git 项目时再配</div>';
-
-  const rowOfMissing = (f) => {
-    /*
-     * dsh 是 Windows 桌面端自带的，Linux/macOS 上根本没有那个形态 ——
-     * 摆一条装不了的命令比不摆更糟（他会去试，然后回来问为什么不行）。
-     */
-    const cmd = f.install?.kind === 'app' && !isWin ? null : (f.install?.cmd ?? null);
-    // 只有 npm 那种**能一键装**：dsh 要靠装桌面端，不是一条命令能解决的事，不给按钮
-    const oneClick = f.install?.kind === 'npm' && !!cmd;
-    const busy = runningTaskFor(dev, f.id);
-    // 上次没成的那件（同外部件那行：失败也要留痕，不然用户不知道上次为什么没成）
-    const lastFail = !busy && dev.task?.done && dev.task.status !== '完成' && dev.task.family === f.id ? dev.task : null;
-    return `<div class="row-item off" data-rt-row="${esc(f.id)}">
-      ${cliAvatar(f.id, f.label)}
-      <div class="who">
-        <b>${esc(f.label)}</b>
-        ${
-          cmd
-            ? `<div class="sub" style="font-family:ui-monospace,monospace;font-size:11.5px">${esc(cmd)}</div>`
-            : '<div class="sub">这台机器上装不了（它是 Windows 桌面端自带的）</div>'
-        }
-        <!-- 安装进度就写在这儿（点击之后才出现），不另开弹窗 -->
-        <div class="sub install-log" style="display:none;font-family:ui-monospace,monospace;font-size:11.5px"></div>
-        ${
-          // 刷新页面之后进度也还在 —— 从服务端那件正在跑的活读回来（见 runningTaskFor）。
-          // `data-task-line` 让"接着盯"只需就地改这一行，不用整页重画。
-          busy
-            ? `<div class="sub" data-task-line="${esc(busy.id)}" style="font-family:ui-monospace,monospace;font-size:11.5px">${
-                busy.running ? '进行中… ' : '排队中… '
-              }${esc(taskTail(busy) || '（等那台机器来领）')}</div>`
-            : lastFail
-              ? `<div class="sub" title="${esc(lastFail.output)}" style="color:var(--bad);font-size:11.5px">上次没成（${esc(
-                  failAt(lastFail),
-                )}）：${esc(taskFailLine(lastFail) || '（没输出）')}（悬停看全部）</div>`
-              : ''
-        }
-      </div>
-      ${
-        busy
-          ? '<span class="dim" style="font-size:11.5px">进行中…</span>'
-          : oneClick
-            ? `<button class="mini auto primary" data-install-rt="${esc(f.id)}" data-cmd="${esc(cmd)}">在这台机器上安装</button>`
-            : ''
-      }
-      ${cmd ? `<button class="mini auto" data-copy="${esc(cmd)}">复制命令</button>` : ''}
-    </div>`;
-  };
-
-  $('settingsView').innerHTML = `
-    ${headRow(breadcrumb([{ label: '这台机器', to: 'devices' }, { label: dev.label }]))}
-    <div class="detail-body">
-      ${devHeadHtml(dev, {
-        badges: `<span class="${dev.online ? 'pill-ok' : 'pill'}">${dev.online ? '在线' : '离线'}</span><span class="pill">远程节点</span>`,
-        sub: `${esc(dev.platform)} · ${dev.runtimeCount} 个 agent CLI`,
-        /*
-         * 「忘掉这台」放在这儿（跟「重命名机器」并排）——它原来占页面底部一整段 ✗。
-         * 说明进悬停：那台机器换过数据目录/身份文件丢了就会用新身份再报到一次，
-         * 这一行会永远"离线"躺着，而它的运行时还挂在员工的下拉里。
-         */
-        actions: `<button class="btn-sm danger" id="forgetNode" title="忘掉这台机器：删掉控制面上这一条记录。那台机器什么都不受影响，而且它下一次心跳（15 秒内）就会自己重新报到 —— 身份、运行时都在，只有你给它起的名字会丢。只有"它永远不会再回来了"（比如你清掉了那台机器的数据目录、或换了一台机器）才需要忘掉它。">忘掉这台机器</button>`,
-      })}
-      <!--
-        ⚠️ 这里原来有一行「上次心跳 …Z —— 每 15 秒一次，超过三个周期没过来就判离线」＋「远程节点（主动连出）」。
-        2026-10-16 用户让删掉：**那是开发关心的事，用户不关心** ✓ ——
-        用户只需要知道"在线还是离线"（左上角那个标记就是干这个的 ✓），
-        心跳间隔、判离线的周期数、连出方向都是实现细节。
-        （真要看这些的场合是排查故障 —— 后端日志和 /api/devices 里照样有 ✓。）
-      -->
-      ${
-        /* 权限与「最近使用」（2026-10-20，P1-3 的一半）：两个字段都来自 GET /api/devices
-           （runtimes.publicDevice 的节点分支），**没有就不渲染这一行** —— 别给用户看 "undefined"。 */
-        dev.scope
-          ? `<div class="sub machine-scope-line">${
-              String(dev.scope).includes('panel')
-                ? '这台能看到面板'
-                : '这台看不到面板（总机没给面板权限）'
-            }${dev.lastUsedAt ? ` · 最近使用 ${esc(dt(dev.lastUsedAt))}` : ''}</div>`
-          : ''
-      }
-
-      ${
-        /*
-         * 「面板角色」（2026-10-28 第四刀）：这台机器**本地面板**显示哪几节。
-         *
-         * 与上面那行 scope 是两件事，别合并：scope 管"能不能看总机面板"（服务端权限），
-         * 面板角色管"它自己那一页显示哪几节"（纯界面）。所以这里只存总机侧一行，
-         * 下发靠那台机器的下一次心跳（15 秒内）—— 文案必须这么说，不许假装"立刻生效"。
-         *
-         * 角色清单读不到（非操作员 / 老服务）就整段不画。
-         */
-        roles.length
-          ? `<section class="fx" style="margin-top:26px">
-               <label>面板</label>
-               <div class="row-item" style="gap:10px;align-items:flex-start">
-                 <div class="who">
-                   <b>面板角色</b>
-                   <div class="sub">这台机器<b>本地面板</b>显示哪几节，由这里决定；改完它下一次心跳（15 秒内）就按新角色画。未分配 = 默认「节点运维」（六节全看）。「连接」那一节永远显示 —— 免得一次误配把它锁在外面。</div>
-                 </div>
-                 <select class="node-panel-role" id="nodePanelRole" data-node="${esc(dev.id)}">
-                   <option value=""${dev.roleId ? '' : ' selected'}>默认（节点运维）</option>
-                   ${roles
-                     .map(
-                       (r) =>
-                         `<option value="${esc(r.id)}"${dev.roleId === r.id ? ' selected' : ''}>${esc(r.name)}${
-                           r.builtin ? '' : '（自建）'
-                         }</option>`,
-                     )
-                     .join('')}
-                 </select>
-               </div>
-             </section>`
-          : ''
-      }
-
-      <section class="fx">
-        <!-- 跟本机那页一个词（「已安装」）—— 用户不关心"自报"这套机制 -->
-        <label>已安装 <span class="count">${rts.length}</span></label>
-        ${
-          rts.length
-            ? rts
-                .map(
-                  (r) => {
-                    const h = runtimeHealth(r);
-                    return `<div class="row-item ${h.cls === 'tag-ok' ? '' : 'off'}">
-              ${cliAvatar(r.family ?? r.id, r.label)}
-              <div class="who" title="${esc(r.path)}">
-                <b>${esc(r.label)}${healthTag(r)}</b>
-                ${h.showPath ? `<div class="sub">${esc(r.path)}</div>` : ''}
-              </div>
-            </div>`;
-                  },
-                )
-                .join('')
-            : `<div class="empty">它说本机一个 agent CLI 都没探到${missing.length ? ' —— 看下面「未安装」那段' : ''}</div>`
-        }
-        <!--
-          这里原来还有一段说明（"这些条目能派活…但不能在这儿改：路径是那台机器上的事实…
-          控制面也不会在本机起它们 —— 那等于拿着一个只有那台机器才有的路径在这儿 spawn"）。
-          2026-10-16 用户让删掉 ✓：那是在解释**我们为什么这么写**，不是在告诉用户**能干什么**。
-          用户能看出来的部分（哪些装了什么）已经摆在上面了 ✓。
-        -->
-      </section>
-
-      ${
-        missing.length
-          ? `<section class="fx" style="margin-top:26px">
-               <label>未安装 <span class="count">${missing.length}</span></label>
-               ${missing.map(rowOfMissing).join('')}
-               <!--
-                 这里原来还有一段说明（"有「在这台机器上安装」的点一下就行……控制面只把族名递过去，
-                 所以这条通道递不出任意命令" ＋ "装完不用重启节点：每次心跳都会把清单报上来"）。
-                 2026-10-16 用户让删掉 ✓ —— 半句是**我们内部的安全边界**，半句是**实现细节**，
-          用户要的只是"这颗按钮能装、那台机器的清单会自己更新"（前者按钮上写着、后者看得见）✓。
-                -->
-             </section>`
-          : ''
-      }
-
-      ${
-        /* 工作空间（2026-10-22）：派到这台机器的活在它那儿落脚的两条路 ——
-           git 仓库自动 clone/pull（不用配）；普通文件夹项目用这张映射表。
-           列表拉不到就只显示表单（对面是老版本服务时也不至于白屏）。 */
-        `<section class="fx" style="margin-top:26px">
-          <label>工作空间${wsPaths.length ? ` <span class="count">${wsPaths.length}</span>` : ''}</label>
-          <div class="sub" style="margin-bottom:10px">派到这台机器的活在这儿干活：git 仓库会自动克隆、拉最新（私有仓库在这台机器上 git 登录一次即可）；普通文件夹项目在下面配一条「总机目录 → 这台机器目录」。</div>
-          <div id="wsRows">${wsRowsHtml(wsPaths)}</div>
-          <div class="row-item" style="gap:8px;align-items:center">
-            <input id="wsRemote" placeholder="总机上的目录，如 E:\\02CodeSpace\\proj" style="flex:1;min-width:0" />
-            <span style="color:var(--dim)">→</span>
-            <input id="wsLocal" placeholder="这台机器上的目录，如 D:\\work\\proj" style="flex:1;min-width:0" />
-            <button class="mini auto primary" id="wsAdd">添加映射</button>
-          </div>
-        </section>`
-      }
-
-      ${externalsHtml(dev)}
-    </div>`;
-
-  /*
-   * 「忘掉这台」挪到**头部**跟「重命名机器」并排（2026-10-16 用户提的：省点空间）。
-   * 原来它是页面底部一整段（标题 ＋ 三段说明 ＋ 按钮）✗ —— 一个很少用到的破坏性操作
-   * 占了一整块。现在说明挪进**悬停**和**确认框**里（点下去之前照样看得到，包括"身上还压着几个活"）。
-   *
-   * ⚠️ 这里的话**必须跟代码实际行为对上**（2026-10-16 用户问"能重新连回来吗"时发现的）：
-   * 原来写的是"在那台机器上重新起一次节点就行（会得到新身份）" —— 那是**错的** ✗。
-   * 实际是：节点下一次心跳/领活会拿到 404，它自己就重新报到了（15 秒内），
-   * 而且用的是**同一个 id**（id 存在那台机器的数据目录里）—— 身份、运行时都回来，
-   * 只有**名字**会丢（名字存在控制面这一侧）。会"得到新身份"的只有一种情况：
-   * 那台机器上的数据目录被清掉/换了（身份文件没了）。
-   */
-  /* ---- 工作空间映射（2026-10-22）：增删走同一份行渲染，页面随时重画也不怕 ---- */
-  const paintWs = (paths) => {
-    const box = $('wsRows');
-    if (box) box.innerHTML = wsRowsHtml(paths);
-  };
-  const wsAdd = $('wsAdd');
-  if (wsAdd) {
-    wsAdd.onclick = async () => {
-      const remotePath = $('wsRemote').value.trim();
-      const localPath = $('wsLocal').value.trim();
-      if (!remotePath || !localPath) return toast('两边路径都要填：总机上的目录 + 这台机器上的目录', 'error');
-      try {
-        const r = await api(`/api/nodes/${encodeURIComponent(dev.id)}/paths`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ remotePath, localPath }),
-        });
-        wsPaths = r.paths ?? [];
-        $('wsRemote').value = '';
-        $('wsLocal').value = '';
-        paintWs(wsPaths);
-      } catch (err) {
-        toast(err.message, 'error');
-      }
-    };
-  }
-  const wsRows = $('wsRows');
-  if (wsRows) {
-    wsRows.addEventListener('click', async (e) => {
-      const btn = e.target.closest('[data-ws-del]');
-      if (!btn) return;
-      try {
-        const r = await api(`/api/nodes/${encodeURIComponent(dev.id)}/paths`, {
-          method: 'DELETE',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ remotePath: btn.dataset.wsDel }),
-        });
-        wsPaths = r.paths ?? [];
-        paintWs(wsPaths);
-      } catch (err) {
-        toast(err.message, 'error');
-      }
-    });
-  }
-
-  $('forgetNode').onclick = async () => {
-    const urge = dev.pendingJobs ? `\n\n⚠️ 它身上还压着 ${dev.pendingJobs} 个活，会一并收掉。` : '';
-    const ok = await askConfirm({
-      title: `忘掉「${dev.label}」？`,
-      body: `只删控制面上的这条记录。那台机器不受影响，15 秒内会自己重新报到，只有你给它起的名字会丢。${urge}`,
-      ok: '忘掉',
-      danger: true,
-    });
-    if (!ok) return;
-    try {
-      await api('/api/nodes/' + encodeURIComponent(dev.id), { method: 'DELETE' });
-      S.rtLevel = 'devices';
-      S.rtDevice = null;
-      renderRuntimes();
-    } catch { /* api() 已经提示过了 */ }
-  };
-
-  wireRenameDevice(dev);
-  wireCopyButtons(); // 未安装那段的「复制命令」
-  wireInstallRuntime(dev); // 未安装那段的「在这台机器上安装」—— 走节点的领活通道，命令在节点那侧查表
-  wireExternalActions(dev); // 外部件那颗按钮：安装 / 重启 / 重装（按状态给，只给一颗）
-  wirePanelRole(dev); // 面板角色下拉（2026-10-28 第四刀）
-  // 有活在做就自己刷（进度是服务端的事实，不是点击时记的定时器）
-  scheduleTaskPoll(dev);
-}
-
-/**
- * 「面板角色」下拉（2026-10-28 第四刀）：改完只回一句"下一次心跳生效"。
- *
- * 为什么不假装立刻生效：菜单是**那台机器**的心跳带回去写进 `node-panel.json` 的，
- * 总机这边改的只是"它该用哪个角色"这一行 —— 说"已生效"就是在撒谎（离线机器压根不会变）。
- */
-function wirePanelRole(dev) {
-  const sel = $('nodePanelRole');
-  if (!sel) return;
-  sel.onchange = async () => {
-    sel.disabled = true;
-    try {
-      await api(`/api/nodes/${encodeURIComponent(dev.id)}/role`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roleId: sel.value || null }),
-      });
-      dev.roleId = sel.value || null;
-      toast(sel.value ? '已分配，等它下一次心跳（15 秒内）就按新角色画' : '已改回默认，等它下一次心跳（15 秒内）生效', 'ok');
-    } catch (err) {
-      toast(err.message, 'error');
-      sel.value = dev.roleId ?? ''; // 回滚到改动前的选择
-    } finally {
-      sel.disabled = false;
-    }
-  };
-}
-
-
-
-/**
- * 外部件那颗按钮：**安装 / 重启 / 重装**（按状态给，只给一颗）。
- *
- * 跟「在这台机器上安装运行时」是同一条通道（节点的领活），只是命令表不同 ——
- * 控制面照样只发 **id + 哪一步**，命令由那台机器自己查（安全边界一致）。
- */
-/**
- * 给那台机器排一件事，然后盯着它做完 —— **「排队 → 轮询 → 出结果」这套只写一遍**。
- *
- * 为什么要有这个函数（2026-10-16）：我先给「装运行时」写了一遍，又给「外部件」写了一遍，
- * 两处一模一样 —— 正是那种"迟早只改其中一处"的重复。`onLine(text, keep)` 负责写进度。
- * 返回 `{ok, status, tail, reason}`。
- */
-export async function runNodeTask(dev, { kind, target, mirror = '', onLine = () => {} }) {
-  let task;
-  try {
-    task = (await post(`/api/nodes/${encodeURIComponent(dev.id)}/tasks`, { kind, family: target, mirror })).task;
-  } catch {
-    return { ok: false, reason: '排不上' }; // api() 已经提示过了
-  }
-  onLine('排队中 —— 等那台机器来领（它离线时会一直等着，不会丢）');
-  // 上限 10 分钟：免得那台机器一直不来领，这个页面就永远转着
-  const deadline = Date.now() + 10 * 60 * 1000;
-  for (;;) {
-    await new Promise((r) => setTimeout(r, 1500));
-    let t;
-    try {
-      t = (await api(`/api/nodes/${encodeURIComponent(dev.id)}/tasks/${encodeURIComponent(task.id)}`)).task;
-    } catch {
-      return { ok: false, reason: '查不到进度了' };
-    }
-    if (!t) return { ok: false, reason: '任务不见了' };
-    const tail = (t.output ?? '').trim().split('\n').filter(Boolean).slice(-1)[0] ?? '';
-    if (t.status === '执行中') onLine(tail || '正在跑…');
-    else if (t.done) return { ok: t.status === '完成', status: t.status, tail, output: t.output ?? '' };
-    if (Date.now() > deadline) {
-      return { ok: false, reason: '等了 10 分钟还没完 —— 那台机器可能没在领活（离线 / 正忙）。进度不会丢，回来刷新能看到。' };
-    }
-  }
-}
-
-
-
-/**
- * 外部件的**一颗**按钮（安装 / 重启 / 重装）。
- *
- * 用户不需要知道"常驻服务"是什么（2026-10-16 用户定的）—— 所以：
- *   · 「安装」（没装）：**自动**两步一起做。①`curl … install.sh | sh` 让它**存在**；
- *     ②`magpie daemon install --web --lan` 让它**一直跑**（网关＋面板、开机自己起）。
- *     顺序不能反（②要①的产物），但这是**我们的事**，不是用户的事。
- *   · 「重启」（装了但没跑起来）：只跑②（幂等 —— 服务丢了也能补上）。
- *   · 「重装」（上次失败过）：重走①＋②。
- * 具体命令放悬停里：想知道的人能看，普通用户不用看。
- */
-export function wireExternalActions(dev) {
-  $('settingsView').querySelectorAll('[data-ext-do]').forEach((btn) => {
-    btn.onclick = async () => {
-      const kind = btn.dataset.extDo; // external-setup（安装/重装）| external-serve（重启）
-      const extId = btn.dataset.extId;
-      const catalog = (dev.externals?.catalog ?? []).find((x) => x.id === extId) ?? {};
-      const probed = (dev.externals?.probed ?? []).find((x) => x.id === extId) ?? {};
-      const steps =
-        kind === 'external-setup'
-          ? [
-              // 已经装着就别再下一次 48M 了 —— 那种"重装"要的是把服务重新弄好
-              probed.installed ? null : { kind: 'external-install', cmd: catalog.installCmd },
-              { kind: 'external-serve', cmd: catalog.serveCmd },
-            ].filter((s) => s && s.cmd)
-          : [{ kind: 'external-serve', cmd: catalog.serveCmd }];
-      const row = btn.closest('.row-item');
-      const log = row?.querySelector('.install-log');
-      const say = (text, keep = false) => {
-        if (!log) return;
-        log.style.display = '';
-        log.textContent = keep ? (log.textContent + text).slice(-600) : text;
-      };
-
-      const extLabel = catalog.label ?? extId; // 目录里的名字（原来这里引用了外层 map 的 c，点击必抛 ReferenceError）
-      const needDownload = steps.some((s) => s.kind === 'external-install');
-      let mirror = '';
-      if (needDownload) {
-        /*
-         * **走不走镜像** —— 一个勾选框，不是让人填地址（2026-10-16 用户提的：
-         * 普通用户不知道镜像地址该填什么）。地址由我们内置（见 externals.mjs 的 mirrors），
-         * 勾上就按顺序试，谁先通用谁 —— 这类公共镜像会挂，不能只写死一个。
-         */
-        const mirrors = catalog.mirrors ?? [];
-        const r = await askCheckbox({
-          title: kind === 'external-setup' && probed.installed ? '重装？' : '安装？',
-          body: `会在「${dev.label}」上安装 ${extLabel}。`,
-          check: mirrors.length
-            ? { label: '走国内镜像下载', checked: true } // 默认勾上：直连在国内基本是等它超时
-            : null,
-          ok: '开始',
-        });
-        if (!r.ok) return;
-        mirror = r.checked && mirrors.length ? mirrors : '';
-      } else {
-        const ok = await askConfirm({
-          title: '重启？',
-          body: `会把「${dev.label}」上的 ${extLabel} 拉起来。`,
-          ok: '重启',
-        });
-        if (!ok) return;
-      }
-
-      const label = btn.textContent;
-      btn.disabled = true;
-      // 勾了镜像就按顺序试：第一个不行就换下一个（每个都有各自的超时，别把用户钉在一个挂掉的镜像上）
-      const tries = Array.isArray(mirror) ? (mirror.length ? mirror : ['']) : [mirror];
-      let last = null;
-      for (let t = 0; t < tries.length; t++) {
-        const useMirror = tries[t];
-        if (tries.length > 1) say(`试第 ${t + 1} 个镜像：${useMirror}`);
-        let failed = false;
-        for (const [i, s] of steps.entries()) {
-          btn.textContent = steps.length > 1 ? `${i + 1}/${steps.length} 进行中…` : '进行中…';
-          const res = await runNodeTask(dev, { kind: s.kind, target: extId, mirror: useMirror, onLine: say });
-          last = res;
-          if (!res.ok) {
-            failed = true;
-            break;
-          }
-        }
-        if (!failed) {
-          // 不提"两步"：用户不需要知道底下是几步（2026-10-16）
-          say('好了 —— 正在刷新…');
-          btn.textContent = '好了';
-          setTimeout(() => renderRuntimes(), 700);
-          return;
-        }
-        if (t < tries.length - 1) say(`这个镜像没成（${last?.tail || last?.reason || '没输出'}），换下一个…`, true);
-      }
-      say(`没成：${last?.tail || last?.reason || '（没输出）'}`, true);
-      btn.disabled = false;
-      btn.textContent = label;
-    };
-  });
-}
+/* 「外部件」段已删（2026-11-01 用户定：没啥用）。它只剩 magpie 一个条目、
+   又只在「这台机器」页露面 —— 拆掉后 dev.externals 无人消费，
+   服务端 externals.mjs / 节点上报那套就闲置着（节点侧老客户端还在报，接口兼容收下即存）。
+   要找回这段从 git 找：本文件历史里的 externalsHtml()。 */
 
 
 
@@ -1569,71 +531,32 @@ export function wireInstallRuntime(dev) {
 
 
 
-/* ② 设备详情：这台设备上的 CLI —— 一行一个实例，一个开关决定接不接入 */
-
-/**
- * 这一页是"这台机器上有什么、我要不要用"，**不是"填表加一条"**。
- *
- * 为什么不做成表单：路径是"这台机器上的事实"，不是用户该知道的知识 ——
- * 一个不懂电脑的人不可能知道 `%LOCALAPPDATA%\Programs` 在哪，也不该被要求知道。
- * 所以：
- *   · 分两段：**已安装的在上，没装的在下**（下面每行带一条能直接粘的安装命令）
- *   · 归属看 `publicFamilies().installed`，页面加载就有值（纯 existsSync）
- *   · 已有实例的行：开着的 = 接入中；关掉 = 停用（不删，位置记着）
- *   · 装了但还没接入的族：一行，开关关着，打开就建一条
- *   · 点「识别本机运行时」：只为了补**版本号**（那要 spawn 进程，约 0.5 秒）
- *
- * 「安装」弹窗是唯一还可能出现手填的入口（"我装了、但你没认出来"），正常流程碰不到。
- */
-export async function renderDeviceDetail() {
-  $('settingsView').innerHTML = rtLoading('这台机器');
-
-  let dev;
-  let families;
+/* 「运行时」区（2026-11-01 七改，用户截图："把运行时放到这个页面的数据管理上面"；
+   同日八改：设备节 + 设备详情页整个撤掉 —— 本机详情页的「已安装 / 未安装 / 外部件」
+   全部并入这里，这就是这台机器页的一部分了）。
+   deviceId = 设备列表里本机那条的 id；开关/接入/识别/安装的语义与原详情页完全一致。
+   onChange：改动成功后的回调 —— 不传就整页 renderRuntimes()。 */
+export async function paintLocalRuntimes(mount, deviceId, { onChange } = {}) {
+  if (!mount || !deviceId) return;
+  let dev = null;
+  let families = [];
   try {
-    // 族列表**每次都拉**：bandi 只支持这三家，所以"未安装"那一段要一直摆在那儿
-    // （各自带安装命令），不能等点了「识别」才出现。
     [dev, families] = await Promise.all([
-      api('/api/devices/' + encodeURIComponent(S.rtDevice)).then((d) => d.device),
-      api('/api/runtime-families').then((f) => f.families),
+      api('/api/devices/' + encodeURIComponent(deviceId)).then((d) => d.device),
+      api('/api/runtime-families').then((f) => f.families).catch(() => []),
     ]);
-  } catch (err) {
-    $('settingsView').innerHTML = `${headRow('<b>这台机器</b>')}<div class="empty">${failHtml(err)}</div>`;
-    return;
-  }
-
-  /* 运行时是**多层**的（运行时 › 设备 › CLI）：页头用面包屑，上级能直接点回去
-     （2026-10-20 用户截图：「运行时这个功能，下面有多层页面，应该改成面包屑模式」）。
-     左栏仍是「设置」的分节列表，所以面包屑从「运行时」这一层起 —— 不再写成"设置 › 运行时 › …"。 */
-
-  // 远程节点：这一版只报到，它的运行时是只读的 —— 别让它掉进下面那套"改本机"的交互里
-  // 远程节点：交给它自己那页（那边要拉族清单，所以是异步的）
-  if (dev.kind === 'node') return await renderNodeDetail(dev);
-
+  } catch { mount.innerHTML = ''; return; } // 拉不到就空着，别把整页拖白
   const scan = S.rtScan; // null = 这一轮还没点过「识别本机运行时」
-  const haveFamily = new Set(dev.runtimes.map((r) => r.family));
   const verOf = new Map((scan ?? []).map((f) => [f.id, f.version]));
-  const pathOf = new Map(
-    (scan ?? []).map((f) => [f.id, (f.candidates ?? []).find((c) => c.usable)?.path ?? null]),
-  );
-
-  /*
-   * 放上面还是下面，看**这台机器上装没装** —— 用族列表里现成的 `installed`
-   * （服务端渲染这一页时已经探过了，纯 existsSync，约 8ms）。
-   *
-   * 为什么不靠「识别本机运行时」才分：那等于**明知故等**。这个字段本来就有值，
-   * 却让一个装着的 CLI 先蹲在「未安装」里、还挂着一条安装命令，等人点一下才承认。
-   * 那颗按钮现在只干一件事：把**版本号**补上（那才需要 spawn 进程，约 0.5 秒）。
-   */
+  const pathOf = new Map((scan ?? []).map((f) => [f.id, (f.candidates ?? []).find((c) => c.usable)?.path ?? null]));
+  const haveFamily = new Set(dev.runtimes.map((r) => r.family));
   const notYet = families.filter((f) => f.installed && !haveFamily.has(f.id));
   const absent = families.filter((f) => !f.installed && !haveFamily.has(f.id));
 
-  const rowOfRuntime = (r) => {
-    // 健康度用**共用的**那个判据（本机＝这个 CLI 现在能不能起；远程＝那台机器在不在线）。
-    // 那条"判据必须 === false、不能用 !field"的教训已经收进 runtimeHealth 的注释里。
+  /* 行骨架沿用原详情页的 rowOf —— 改样式连这里一起改 */
+  const rowOf = (r) => {
     const ver = verOf.get(r.family);
     const h = runtimeHealth(r);
-    // 路径只在"路径本身有问题"时摆出来 —— 见 runtimeHealth 的 showPath
     const sub = h.showPath ? `<div class="sub">${esc(r.path)}</div>` : '';
     return `<div class="row-item ${h.cls === 'tag-ok' ? '' : 'off'}">
       ${cliAvatar(r.family ?? r.id, r.label)}
@@ -1646,9 +569,6 @@ export async function renderDeviceDetail() {
       </label>
     </div>`;
   };
-
-  // 探测到、但这台设备上还没有它的实例 —— 开关关着，打开就建一条
-  // 探测到、但这台设备上还没有它的实例 —— 开关关着，打开就建一条
   const rowOfNotYet = (f) => {
     const ver = verOf.get(f.id);
     const p = pathOf.get(f.id) ?? f.detectedPath ?? '';
@@ -1664,20 +584,15 @@ export async function renderDeviceDetail() {
     </div>`;
   };
 
-  /*
-   * 这台机器上没有 —— **跟远程节点那一行完全一致**（2026-10-21 用户提的）：
-   * 一颗「在这台机器上安装」（点了当场装，进度就地写），外加「复制命令」「按路径接入」。
-   * 原来这里只给「复制安装命令」—— 可节点页早就能一键装了，本机反而要人开终端，
-   * 两台机器两套动作，没有道理（本机就是控制面自己，更没理由绕不开）。
-   * 判据逐条对齐节点页的 rowOfMissing：dsh 是 Windows 桌面端自带的，别处不给那条"命令"。
-   */
+  /* 「未安装」行 —— 原样搬自 renderDeviceDetail 的 rowOfAbsent（2026-11-01 八改并区）：
+     一键安装 / 复制命令 / 按路径接入，语义一个不少 */
   const isWinLocal = /win/i.test(dev.platform ?? '');
   const rowOfAbsent = (f) => {
     const cmd = f.install?.kind === 'app' && !isWinLocal ? null : (f.install?.cmd ?? null);
-    // 只有 npm 那种能一键装（同节点页：dsh 要靠装桌面端，不是一条命令能解决的事，不给按钮）
+    // 只有 npm 那种能一键装（dsh 是 Windows 桌面端自带的，不是一条命令能解决的事，不给按钮）
     const oneClick = f.install?.kind === 'npm' && !!cmd;
     const busy = runningTaskFor(dev, f.id);
-    // 上次没成的那件也摆出来（同节点页：失败是做过的事，就该留在那儿，悬停看完整输出）
+    // 上次没成的那件也摆出来（失败是做过的事，就该留在那儿，悬停看完整输出）
     const lastFail = !busy && dev.task?.done && dev.task.status !== '完成' && dev.task.family === f.id ? dev.task : null;
     const sub = cmd
       ? `<div class="sub" style="font-family:ui-monospace,monospace;font-size:11.5px">${esc(cmd)}</div>`
@@ -1713,33 +628,22 @@ export async function renderDeviceDetail() {
     </div>`;
   };
 
-  $('settingsView').innerHTML = `
-    ${headRow(breadcrumb([{ label: '这台机器', to: 'devices' }, { label: dev.label }]))}
-    <div class="detail-body">
-      ${devHeadHtml(dev, {
-        badges: '<span class="pill-ok">在线</span><span class="pill">本机</span>',
-        sub: `${esc(dev.platform)} · 已接入 ${dev.runtimes.filter((r) => r.enabled).length} 个 agent CLI`,
-      })}
-
+  const render = () => {
+    mount.innerHTML = `
       <section class="fx">
         <div class="fx-head">
-          <label>已安装 <span class="count">${dev.runtimes.length + notYet.length}</span></label>
+          <label>运行时 <span class="count">${dev.runtimes.length + notYet.length}</span></label>
           <button class="btn-sm" id="detectRuntime" title="再扫一遍这台机器：补上版本号，也确认没装错">识别本机运行时</button>
         </div>
-        ${dev.runtimes.map(rowOfRuntime).join('')}
+        ${dev.runtimes.map(rowOf).join('')}
         ${notYet.map(rowOfNotYet).join('')}
         ${
           !dev.runtimes.length && !notYet.length
-            ? '<div class="dim" style="padding:14px 16px">这台机器上还没探测到任何一个 agent CLI —— 看下面「未安装」那一段怎么装。</div>'
+            ? '<div class="dim" style="padding:14px 16px">这台机器上还没探测到 agent CLI —— 看「未安装」那一段怎么装。</div>'
             : ''
         }
-        ${
-          scan === null
-            ? '<div class="dim" style="padding:10px 2px;font-size:12px">点「识别本机运行时」可以补上版本号。</div>'
-            : ''
-        }
+        ${scan === null ? '<div class="dim" style="padding:10px 2px;font-size:12px">点「识别本机运行时」可以补上版本号。</div>' : ''}
       </section>
-
       ${
         absent.length
           ? `<section class="fx" style="margin-top:26px">
@@ -1750,87 +654,79 @@ export async function renderDeviceDetail() {
                ${absent.map(rowOfAbsent).join('')}
              </section>`
           : ''
-      }
+      }`;
 
-      ${externalsHtml(dev)}
-    </div>`;
-
-  wireRenameDevice(dev);
-  wireCopyButtons(); // 外部件那段的「复制安装命令」（本机不给一键：控制面直接跑 curl|sh 不合适，用户在终端里粘一下更清楚）
-  wireInstallRuntime(dev); // 未安装那段的「在这台机器上安装」—— 本机由控制面当场执行（见 server.mjs 的 local 分支）
-  scheduleTaskPoll(dev); // 有装在跑就接着盯（刷新页面之后进度也能从服务端读回来）
-
-  // 扫描：点了才跑（要 spawn 进程拿版本号，约半秒）
-  $('detectRuntime').onclick = async () => {
-    const btn = $('detectRuntime');
-    btn.disabled = true;
-    btn.textContent = '识别中…';
-    try {
-      S.rtScan = (await api('/api/runtimes/detect')).families;
-      await renderDeviceDetail();
-    } catch (err) {
-      btn.disabled = false;
-      btn.textContent = '识别本机运行时';
-      toast(err.message, 'error');
+    /* 接线范围限定在 mount 里（querySelector 而非 $('')）；安装/复制/任务轮询那几个
+       帮手自己扫 #settingsView —— 页面上只有这一节带这些属性，借用无妨 */
+    const detect = mount.querySelector('#detectRuntime');
+    if (detect) {
+      detect.onclick = async () => {
+        detect.disabled = true;
+        detect.textContent = '识别中…';
+        try {
+          S.rtScan = (await api('/api/runtimes/detect')).families;
+          await paintLocalRuntimes(mount, deviceId, { onChange }); // 重画这一节：版本号上标签
+        } catch (err) {
+          detect.disabled = false;
+          detect.textContent = '识别本机运行时';
+          toast(err.message, 'error');
+        }
+      };
     }
+    mount.querySelectorAll('[data-rt-toggle]').forEach((el) => {
+      el.onchange = async () => {
+        try {
+          await api(`/api/devices/${encodeURIComponent(deviceId)}/runtimes/${encodeURIComponent(el.dataset.rtToggle)}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled: el.checked }),
+          });
+          await load();
+          if (onChange) onChange(); else await renderRuntimes();
+        } catch (err) {
+          toast(err.message, 'error');
+          el.checked = !el.checked;
+        }
+      };
+    });
+    mount.querySelectorAll('[data-rt-add]').forEach((el) => {
+      el.onchange = async () => {
+        el.disabled = true;
+        try {
+          await post(`/api/devices/${encodeURIComponent(deviceId)}/runtimes`, {
+            family: el.dataset.rtAdd,
+            path: el.dataset.rtPath,
+          });
+          await load();
+          if (onChange) onChange(); else await renderRuntimes();
+        } catch (err) {
+          toast(err.message, 'error');
+          el.disabled = false;
+          el.checked = false;
+        }
+      };
+    });
+    mount.querySelectorAll('[data-open-cli]').forEach((el) => {
+      el.onclick = () => {
+        S.rtDevice = deviceId;
+        S.rtLevel = 'cli';
+        S.rtRuntime = el.dataset.openCli;
+        renderRuntimes();
+      };
+    });
+    /* 「未安装」段的三个动作（原详情页的接线，一个不少） */
+    wireInstallRuntime(dev); // 「在这台机器上安装」—— 本机由控制面当场执行（server.mjs 的 local 分支）
+    wireCopyButtons(); // 「复制命令」
+    mount.querySelectorAll('[data-rt-manual]').forEach((el) => {
+      el.onclick = () => {
+        // 族可能来自扫描结果（带 candidates）也可能来自族列表（带 detectedPath）
+        const f = [...(scan ?? []), ...families].find((x) => x.id === el.dataset.rtManual);
+        if (f) openAddRuntime(f);
+      };
+    });
+    scheduleTaskPoll(dev); // 有安装任务在跑就接着盯（进度是服务端的事实）
   };
-
-  // 已有实例：开关 = 停用/启用
-  $('settingsView').querySelectorAll('[data-rt-toggle]').forEach((el) => {
-    el.onchange = async () => {
-      try {
-        await api(`/api/devices/${encodeURIComponent(S.rtDevice)}/runtimes/${encodeURIComponent(el.dataset.rtToggle)}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ enabled: el.checked }),
-        });
-        await load();
-        await renderDeviceDetail();
-      } catch (err) {
-        toast(err.message, 'error');
-        el.checked = !el.checked;
-      }
-    };
-  });
-
-  // 探测到但还没接入：打开开关 = 用探测到的位置建一条
-  $('settingsView').querySelectorAll('[data-rt-add]').forEach((el) => {
-    el.onchange = async () => {
-      el.disabled = true;
-      try {
-        await post(`/api/devices/${encodeURIComponent(S.rtDevice)}/runtimes`, {
-          family: el.dataset.rtAdd,
-          path: el.dataset.rtPath,
-        });
-        await load();
-        await renderDeviceDetail();
-      } catch (err) {
-        toast(err.message, 'error');
-        el.disabled = false;
-        el.checked = false;
-      }
-    };
-  });
-
-  wireCopyButtons();
-
-  // 名字带 rt 前缀：插件页那条「粘一条 MCP 配置」的按钮也叫 data-manual，
-  // 两边虽然同时只有一个渲染、不会真撞，但同名迟早会咬人
-  $('settingsView').querySelectorAll('[data-rt-manual]').forEach((el) => {
-    el.onclick = () => {
-      // 族可能来自扫描结果（带 candidates）也可能来自族列表（带 detectedPath）
-      const f = [...(scan ?? []), ...families].find((x) => x.id === el.dataset.rtManual);
-      if (f) openAddRuntime(f);
-    };
-  });
-
-  $('settingsView').querySelectorAll('[data-open-cli]').forEach((el) => {
-    el.onclick = () => {
-      S.rtLevel = 'cli';
-      S.rtRuntime = el.dataset.openCli;
-      renderRuntimes();
-    };
-  });
+  render();
 }
 
 
@@ -1967,12 +863,12 @@ export async function renderCliDetail() {
     return;
   }
 
-  /* 运行时是**多层**的（运行时 › 设备 › 这个 CLI）：页头用面包屑，两级上级都能点回去。
-     左栏仍是「设置」的分节列表，所以面包屑从「运行时」这一层起。 */
+  /* 运行时是**多层**的（运行时 › 这个 CLI）：页头用面包屑，上级能点回去。
+     左栏仍是「设置」的分节列表，所以面包屑从「运行时」这一层起。
+     （2026-11-01 设备详情页撤了 —— 中间那级「本机」没了，CLI 详情直接挂在这台机器下。） */
   $('settingsView').innerHTML = `
     ${headRow(breadcrumb([
       { label: '这台机器', to: 'devices' },
-      { label: dev.label, to: 'device' },
       { label: rt.label },
     ]))}
     <div class="detail-body">
@@ -2022,7 +918,8 @@ export async function renderCliDetail() {
       try {
         await api(url, { method: 'DELETE' });
         await load();
-        S.rtLevel = 'device';
+        S.rtLevel = 'devices';
+        S.rtDevice = null;
         S.rtRuntime = null;
         renderRuntimes();
       } catch (err) { toast(err.message, 'error'); }

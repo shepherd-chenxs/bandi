@@ -10,6 +10,7 @@ import * as runtimes from '../runtimes.mjs';
 import * as externals from '../externals.mjs';
 import * as connectors from '../connectors.mjs';
 import * as status from '../status.mjs';
+import * as netmode from '../netmode.mjs';
 
 const CLAIM_POLL_MS = 250;
 const CLAIM_MAX_WAIT_MS = 45000;
@@ -201,8 +202,19 @@ export async function handleNodeWork(req, res, url) {
    * 发一个**一次性邀请码**（10 分钟、只用一次）—— 新机器凭它加入。
    *
    * 只有操作员能用：节点令牌的权限边界里没有这条（见 auth.nodeMayReach）✓。
+   *
+   * ⚠️ **分机形态不发码**（2026-11-01 晚）：`acceptNodes=false` 时这台不收节点 ——
+   * 它照样对外服务（手机、浏览器都能连），只是别的机器挂不上来。这是用户定的形态：
+   * 「把 thinkpad-p15 开分机模式。界面照样显示，手机照样可以连。但是不提供邀请码，
+   * 其他的机器也加不上去」。码沿用 `E1091`：与节点探测"那台不开放加入"是同一件事，
+   * 同一个码，别让用户看到两个码要学会两种解法。
    */
   if (req.method === 'POST' && url.pathname === '/api/nodes/invites') {
+    if (!netmode.readNetMode().acceptNodes) {
+      return fail(res, 409, 'E1091', '这台现在是分机形态：不发邀请码，别的机器加不上去 —— 要收机器，先把模式切成「总机」', {
+        acceptNodes: false,
+      });
+    }
     const inv = store.createInvite();
     console.log('[节点] 发了一个邀请码（10 分钟内有效，只用一次）');
     return sendJson(res, 201, inv);
