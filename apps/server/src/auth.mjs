@@ -8,7 +8,7 @@
  *   · 监听非回环（服务器）→ **所有请求都要令牌**。
  *
  * ⚠️ **2026-10-31 补丁（IAM §5.3，P0）**：上面这条只说了"进程听哪儿"，但**免鉴权是按请求给的**
- * —— 反向代理把流量转进 `127.0.0.1:8787` 之后，外部请求在服务端看就是"回环来源"，
+ * —— 反向代理把流量转进 `127.0.0.1:18787` 之后，外部请求在服务端看就是"回环来源"，
  * 于是整套面板、会话、导出全部免登录（这是本设计里最严重的一个洞）。
  * 现在每次请求都用 `security/source.mjs` 的 `classifySource()` 现算，四条同时成立才算本机：
  * 未设 `BANDI_TRUST_PROXY`、无转发头、监听回环、peer 与 Host 都是本机。
@@ -561,6 +561,12 @@ export function guard(auth, req, res, url) {
   if (req.method === 'GET' && (url.pathname === '/pair' || url.pathname === '/pair.html')) return true;
   if (req.method === 'POST' && url.pathname === '/api/pair/claim') return true;
   /*
+   * `POST /api/pair/resume`（2026-11-01 二刀）也免令牌：手机被「断开连接」后手里没有
+   * 能用的凭据了（令牌已吊销），它能出示的只有 localStorage 里的 clientKey ——
+   * 这正是它要干的事（换一张新令牌回来）。校验在 handler，与 claim 同一模式。
+   */
+  if (req.method === 'POST' && url.pathname === '/api/pair/resume') return true;
+  /*
    * 登录 / 退出（2026-10-28 第三刀）：此刻请求还没带任何凭据（这就是它要干的事），
    * 所以必须免令牌。**CSRF 闸照过**（server.mjs 里的 guardWrite 在 guard 之后）——
    * 登录页自己的 fetch 带 `X-Bandi: 1`，别在这条链路上绕开它。
@@ -614,9 +620,9 @@ export function guard(auth, req, res, url) {
      * · **API 仍是回环信任**：本机脚本 / 冒烟 / CLI 不带凭据照旧 = operator（一个字节没变，
      *   任务书 §三 那条硬约束继续成立）；但**带着有效登录会话的浏览器按登录人算**
      *   （kind:'user'）—— 消息署名、菜单收敛都精确到人。退出登录之后回 operator。
-     * · **面板要登录**：已经建过账号而这双手上没有会话票的浏览器，抓 HTML 一律给**登录页**
-     *   （账号磁贴，免密账号点了就进）—— 跟电脑开机先选账户一个意思。
-     *   还没建过账号 = 首次开机：放行进面板，由首次引导建第一个账号。
+     * · **面板要登录**：抓 HTML 一律给**登录页** —— 有账号是账号磁贴（免密账号点了就进，
+     *   跟电脑开机先选账户一个意思），零账号是建号页（第一个账号 = 内置管理员）。
+     *   2026-11-01 改：零账号**不再**放行进面板，见下面那段注释。
      */
     const sid = sessionTokenOf(req);
     if (sid) {
@@ -633,14 +639,29 @@ export function guard(auth, req, res, url) {
       }
     }
     req.bandiAuth = { kind: 'operator', via: 'loopback' };
-    if (req.method === 'GET' && !url.pathname.startsWith('/api/') && store.hasUsers()) {
+    /*
+     * **面板只给"人"**（2026-11-01 口径统一，用户：「每个用户都要登录，操作员只是一个身份」）。
+     *
+     * operator 是**机器凭据**（回环免登录 / 令牌），不是一个可以在界面上当"我"的身份：
+     * 它没有 users 行，所以「我的」页画不出密码和动态验证 —— 从前零账号时"直接放行进面板
+     * 当操作员"，用户看到的就是一个空页 + 一段解释（2026-11-01 实报）。
+     * 现在门前移：**零账号 → 建号页**（第一个账号 = 内置管理员，建完服务端顺手发会话票），
+     * **有账号 → 账号磁贴**。两条路都进来才是 user，operator 不再出现在界面里。
+     * API 一个字节没变：本机脚本 / 冒烟 / CLI 不带凭据照旧 = operator（任务书 §三 硬约束）。
+     */
+    if (wantsPanelHtml(req, url)) {
+      const hasUsers = store.hasUsers();
       // 登录页顺手种 CSRF 双提交值（§10.2）：登录成功后所有带 Cookie 的写请求都要带上它
       const headers = { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' };
       if (!csrf.valuesOf(req).cookie) headers['Set-Cookie'] = csrf.cookieFor(csrf.mint());
       res.writeHead(200, headers);
       // 回环 = 这台机器自己的屏幕，摆账号磁贴不泄密（局域网那边的登录页仍是"用户名+密码"表单）；
       // 禁用的账号不摆 —— 摆上去也登不进，白给人一个"点不动"的磁贴
-      res.end(loginPage({ hasUsers: true, loopback: true, users: store.listUsers().filter((u) => !u.disabled) }));
+      res.end(loginPage({
+        hasUsers,
+        loopback: hasUsers,
+        users: hasUsers ? store.listUsers().filter((u) => !u.disabled) : null,
+      }));
       return false;
     }
     return true;
@@ -808,17 +829,66 @@ export function guard(auth, req, res, url) {
       res.end();
       return false;
     }
+    /*
+     * **令牌不是人**（2026-11-01）：面板 HTML 只给登录账号。
+     * 带令牌抓首页（`?token=` 换完 Cookie 再进来、或手工填了 bandi_token）以前会直接
+     * 进面板当"操作员"，于是「我的」页永远没有密码/动态验证。现在统一给登录/建号页；
+     * 令牌继续管 **API**（脚本、CLI、节点、运维照旧 `X-Bandi-Token`，一个字没变）。
+     * 手机设备（device）不走这条：配对令牌就是它的登录。
+     */
+    if (who.kind === 'operator' && wantsPanelHtml(req, url)) {
+      const hasUsers = store.hasUsers();
+      const headers = { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' };
+      /*
+       * **顺手清掉这枚令牌 Cookie**（2026-11-01 实报：点了登录，输入框被刷空、还在登录页）。
+       * 面板不再认令牌，而 `令牌优先于会话` 会让这枚陈年 Cookie 把刚登录的人一直压回
+       * operator → 又挡回登录页 → 登录永远"没反应"。浏览器以会话为准，令牌只走请求头。
+       * 只清"确实是根令牌"的那枚：手机配对用的是同一个 Cookie 名（bd_），别误伤。
+       */
+      const staleTok = String(parseCookies(req.headers.cookie)[COOKIE] || '');
+      const dropToken = !!staleTok && !!auth.token && timingSafeEqual(staleTok, auth.token);
+      const setCookies = [];
+      if (!csrf.valuesOf(req).cookie) setCookies.push(csrf.cookieFor(csrf.mint()));
+      if (dropToken) setCookies.push(clearedTokenCookie());
+      if (setCookies.length) headers['Set-Cookie'] = setCookies;
+      res.writeHead(200, headers);
+      res.end(loginPage({
+        hasUsers,
+        loopback: source === 'loopback' && hasUsers,
+        users: hasUsers ? store.listUsers().filter((u) => !u.disabled) : null,
+      }));
+      return false;
+    }
     req.bandiAuth = who; // 下游（比如"忘掉"、员工编辑的字段闸）据此知道这枚令牌是谁
     return true;
   }
 
-  const wantsHtml = req.method === 'GET' && !url.pathname.startsWith('/api/');
+  /*
+   * ⚠️ **必须是 `wantsPanelHtml`，不能是一刀切的"GET 且非 /api/"**（2026-11-02 三十三改）。
+   *
+   * 老写法让 `/js/collab.mjs`、`/sw.js` 这类静态文件在**没带任何凭据**时也吃到登录页 HTML
+   * （`200 + text/html`）：浏览器那边是 MIME/语法错误，命令行那边更阴 —— `curl … | grep`
+   * 拿到一张登录页去数关键词，得到的是"没找到"，看上去和"文件没部署上"一模一样
+   * （2026-11-02 实踩：验线上 collab.mjs 就是这么被误导的）。
+   * 上面两处（回环分支 / 令牌分支）早就换成同一个判据，唯独这里漏了；
+   * 静态资源现在走下面的 401 JSON（`E4010`），页面照旧给登录页。
+   */
+  const wantsHtml = wantsPanelHtml(req, url);
   if (wantsHtml) {
     // 同上：服务器形态的登录页也种 CSRF 值（登录成功后的写请求要带）
     const headers = { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' };
-    if (!csrf.valuesOf(req).cookie) headers['Set-Cookie'] = csrf.cookieFor(csrf.mint());
+    const setCookies = [];
+    if (!csrf.valuesOf(req).cookie) setCookies.push(csrf.cookieFor(csrf.mint()));
+    /*
+     * 顺手扫掉**没法用的**访问令牌 Cookie（2026-11-01）：认不出来的根令牌 / 被吊销的
+     * 节点令牌留在浏览器里，只会在每次请求上添一次 401，还挡在"令牌优先"那条路上。
+     * 手机配对（bd_）不清 —— 那是它唯一的凭据。
+     */
+    const staleTok = String(parseCookies(req.headers.cookie)[COOKIE] || '');
+    if (staleTok && !staleTok.startsWith('bd_')) setCookies.push(clearedTokenCookie());
+    if (setCookies.length) headers['Set-Cookie'] = setCookies;
     res.writeHead(200, headers);
-    res.end(loginPage({ hasUsers: store.hasUsers() }));
+    res.end(loginPage({ hasUsers: store.hasUsers(), loopback: source === 'loopback' }));
     return false;
   }
 
@@ -835,6 +905,23 @@ export function guard(auth, req, res, url) {
     }),
   );
   return false;
+}
+
+/**
+ * 这次请求是不是在要**面板页面**（不是 API、不是静态资源）。
+ *
+ * 只认真正会渲染成文档的那几种：根路径 / `*.html` / `Accept: text/html`。
+ * 不这么收窄的话，`/app.mjs`、`/style.css` 也会被当成"要页面"而吃到登录页 HTML
+ * （浏览器那边表现成"脚本语法错误"，比登录页还难查）。
+ * `/pair` 是扫码落地页，自己带令牌校验，别挡。
+ */
+function wantsPanelHtml(req, url) {
+  if (req.method !== 'GET' && req.method !== 'HEAD') return false;
+  const p = url.pathname;
+  if (p.startsWith('/api/')) return false;
+  if (p === '/pair' || p === '/pair.html') return false;
+  if (p === '/' || p.endsWith('.html')) return true;
+  return String(req.headers.accept ?? '').includes('text/html');
 }
 
 function stripToken(params) {
@@ -1114,6 +1201,17 @@ function loginPage({ hasUsers, loopback = false, users = null }) {
   const otpErrEl = document.getElementById('otpErr');
   const sayOtp = (t) => { if (otpErrEl) { otpErrEl.textContent = t; otpErrEl.hidden = false; } };
   const msg = (j, dflt) => (j ? (j.code ? j.code + '：' + j.error : j.error) : dflt);
+  /*
+   * CSRF 双提交（§10.2）：浏览器里只要躺着一枚 bandi_sid / bandi_token（旧令牌、
+   * 上一个账号的陈年会话），登录/建号这种写请求也要过 CSRF 闸 —— 只发 X-Bandi: 1
+   * 会吃 403 E4099（2026-11-01 实报：令牌被门前挡到登录页之后，这条必现）。
+   * bandi_csrf 是非 HttpOnly 的（JS 就是要读它），登录页响应顺手种过了。
+   */
+  const csrfVal = () => {
+    const m = document.cookie.match(/(?:^|;\\s*)bandi_csrf=([^;]+)/);
+    try { return m ? decodeURIComponent(m[1]) : ''; } catch { return m ? m[1] : ''; }
+  };
+  const csrfHeader = () => ({ 'X-Bandi': '1', 'X-Bandi-CSRF': csrfVal() });
   /** 第二段的凭据（内存里，不落任何存储） */
   let otpToken = '';
   let otpWho = '';
@@ -1137,7 +1235,7 @@ function loginPage({ hasUsers, loopback = false, users = null }) {
     try {
       const r = await fetch('/api/login', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Bandi': '1' },
+        headers: csrfHeader(),
         body: JSON.stringify({ name, password }),
       });
       const j = await r.json().catch(() => null);
@@ -1182,7 +1280,7 @@ function loginPage({ hasUsers, loopback = false, users = null }) {
     try {
       const r = await fetch('/api/login/otp', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Bandi': '1' },
+        headers: csrfHeader(),
         body: JSON.stringify({ otpToken, code }),
       });
       if (r.ok) { location.replace('/'); return; }
@@ -1216,7 +1314,7 @@ function loginPage({ hasUsers, loopback = false, users = null }) {
     try {
       const r = await fetch('/api/users', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Bandi': '1' },
+        headers: { 'Content-Type': 'application/json', ...csrfHeader() },
         body: JSON.stringify({ name, ...(pw ? { password: pw } : {}) }),
       });
       if (r.ok) { location.replace('/'); return; }

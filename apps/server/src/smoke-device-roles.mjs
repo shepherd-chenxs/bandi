@@ -246,8 +246,8 @@ try {
   /* ============ ⑤ 手机 ============ */
   console.log('\n⑤ 手机：配对 → /api/me 的 role');
   const pt = await call('POST', '/api/pair/tokens', { token: TOKEN });
-  check('发配对码 → 200', pt.status === 200 && /^bp_/.test(pt.body?.token ?? ''), `${pt.status}`);
-  const claim = await call('POST', '/api/pair/claim', { body: { token: pt.body?.token, name: '测试手机' } });
+  check('发配对码 → 200', pt.status === 200 && /^\d{9}$/.test(pt.body?.code ?? ''), `${pt.status}`);
+  const claim = await call('POST', '/api/pair/claim', { body: { code: pt.body?.code, name: '测试手机' } });
   const devCookie = cookieOf(claim.setCookie);
   const deviceId = claim.body?.deviceId;
   check('配对成功且拿到设备令牌', claim.status === 200 && !!devCookie && !!deviceId, `${claim.status} ${deviceId}`);

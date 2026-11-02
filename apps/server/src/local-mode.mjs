@@ -282,13 +282,13 @@ export function platformVersion() {
 /** 把用户填的地址归一化成 `http://host:port`（不带尾斜杠） */
 function normalizeBase(input) {
   const raw = String(input ?? '').trim();
-  if (!raw) throw new LocalError(400, 'E1092', '先填一个地址，比如 http://192.168.1.9:8787 或 https://bandi.example.com');
+  if (!raw) throw new LocalError(400, 'E1092', '先填一个地址，比如 http://192.168.1.9:18787 或 https://bandi.example.com');
   const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `http://${raw}`;
   let u;
   try {
     u = new URL(withScheme);
   } catch {
-    throw new LocalError(400, 'E1092', `这个地址看不懂：${raw}。照 http://192.168.1.9:8787 或 https://bandi.example.com 这样填`);
+    throw new LocalError(400, 'E1092', `这个地址看不懂：${raw}。照 http://192.168.1.9:18787 或 https://bandi.example.com 这样填`);
   }
   if (u.protocol !== 'http:' && u.protocol !== 'https:') {
     throw new LocalError(400, 'E1092', '只支持 http:// 或 https://（云端部署用 https:// 开头的地址）');
@@ -298,7 +298,7 @@ function normalizeBase(input) {
   return `${u.protocol}//${u.hostname}:${port}`;
 }
 
-/** 给人看的那半句（`http://` 去掉，剩下 `192.168.1.9:8787`） */
+/** 给人看的那半句（`http://` 去掉，剩下 `192.168.1.9:18787`） */
 function pretty(base) {
   return String(base ?? '').replace(/^https?:\/\//i, '').replace(/\/+$/, '');
 }
@@ -480,7 +480,7 @@ export function removeHost(input) {
  * 而本文件不许带进 SQLite —— 起停由 `server.mjs` 侧调 supervisor，本函数只负责"换令牌 + 写配置"。
  *
  * @param {object} opts
- * @param {string} opts.url     总机地址（`http://192.168.1.9:8787`）
+ * @param {string} opts.url     总机地址（`http://192.168.1.9:18787`）
  * @param {string} opts.code    一次性邀请码
  * @param {string|string[]} opts.scopes `['compute','panel']` 或 `'compute panel'`
  * @param {object[]} [opts.runtimes] 这台机器上探到的 CLI（由 server 侧探好传进来，见文件头）

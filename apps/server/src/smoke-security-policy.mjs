@@ -233,9 +233,9 @@ try {
   const fsByPanel = await call('GET', '/api/fs/dirs', { headers: NB });
   check('panel 列目录 → 403 E4032', fsByPanel.status === 403 && fsByPanel.json?.code === 'E4032', String(fsByPanel.status));
 
-  // ⑦ device 令牌：配对 → 白名单基线（配对码字段是 token，bp_ 开头）
+  // ⑦ device 令牌：配对 → 白名单基线（2026-11-01 起发的是 9 位数字邀请码 code）
   const pairCode = await call('POST', '/api/pair/tokens', { headers: OP() });
-  const claim = await call('POST', '/api/pair/claim', { body: { token: pairCode.json?.token ?? '', name: '测试手机' } });
+  const claim = await call('POST', '/api/pair/claim', { body: { code: pairCode.json?.code ?? '', name: '测试手机' } });
   const devTok = /bandi_token=([^;]+)/.exec(claim.setCookie)?.[1] ?? '';
   check('手机配对换设备令牌 → 200', claim.status === 200 && !!devTok, `${claim.status} ${claim.raw.slice(0, 80)}`);
   const DB = { 'X-Bandi-Token': devTok };

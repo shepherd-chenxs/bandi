@@ -10,19 +10,22 @@ sequenceDiagram
     W->>S: GET /api/lan
     S-->>W: { boundLan, urls, port }
     alt 未开局域网 (boundLan=false)
-        W-->>Op: 提示"切到总机模式并重启"，不出二维码
+        W-->>Op: 提示"切到总机模式并重启"，不出邀请码
     else 已监听局域网
         W->>S: POST /api/pair/tokens
         S->>P: handlePair
-        P->>D: createPairToken(5min)  % 只存哈希 bp_…
-        P-->>W: { token, expiresAt, urls }
-        W->>W: qrSvg("http://<lan-ip>:8787/pair?token=bp_xxx")
-        W-->>Op: 弹二维码 + 倒计时 + 刷新按钮
+        P->>D: createPairCode(5min)  % 9 位数字、只存 sha256、发新码作废旧码
+        P-->>W: { code, expiresAt, urls }
+        W->>W: 大字分组 435 561 548 + qrSvg("http://<lan-ip>:8787/pair?code=…")
+        W-->>Op: 邀请码卡（内联）+ 倒计时 + 「换一个」
     end
 
-    Ph->>S: GET /pair?token=bp_xxx   (guard 豁免)
+    %% 2026-11-01 二改：连接与部署形态无关。扫码（默认）= 二维码自带地址+码；
+    %% 手动 = 地址 + 邀请码两栏都填（局域网也填地址，壳不再发 UDP 广播猜机器）。
+    %% 两条路都落在 /pair?code=…（旧 ?token=bp_… 仍兼容）
+    Ph->>S: GET /pair?code=435561548   (guard 豁免)
     S-->>Ph: pair.html
-    Ph->>S: POST /api/pair/claim {token, name} + X-Bandi:1 (guard 豁免)
+    Ph->>S: POST /api/pair/claim {code, name} + X-Bandi:1 (guard 豁免；失败按 IP 限速 E1703)
     S->>P: handlePair
     P->>D: consumePairToken  % UPDATE…WHERE usedAt IS NULL AND expiresAt>now，原子
     alt 核销成功
@@ -33,7 +36,7 @@ sequenceDiagram
         S->>S: identify(): bd_ 前缀 → deviceAuthByToken → kind='device'
     else 过期/已用/格式错
         P-->>Ph: 400 E1702 / 409 E4701 / 400 E1701
-        Ph-->>Ph: 显示"请在桌面端重新生成二维码"
+        Ph-->>Ph: 显示"请在桌面端换一个邀请码"
     end
 
     %% 手机端请求鉴权（以审批一张卡票为例）

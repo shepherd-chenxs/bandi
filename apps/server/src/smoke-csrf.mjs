@@ -116,6 +116,43 @@ try {
   const loginAgain = await call('POST', '/api/login', { body: { name: '根本没这人', password: 'x-pass-123' } });
   check('登录请求豁免（此刻没有任何 Cookie 凭据）', loginAgain.status === 401, `${loginAgain.status} ${loginAgain.body?.code}`);
 
+  console.log('\n③.5 浏览器带着陈年 Cookie 登录（2026-11-01 实报）');
+  /*
+   * 令牌被「面板只给人」挡到登录页之后，这条必现：浏览器里还躺着旧的 bandi_token /
+   * bandi_sid，登录 POST 就成了"带 Cookie 凭据的写请求" → 必须过双提交。
+   * 登录页脚本已改成把 bandi_csrf 的值一并放进 X-Bandi-CSRF 头（见 auth.mjs loginPage）。
+   */
+  const staleNoHdr = await call('POST', '/api/login', { cookie: `bandi_token=${TOKEN}`, body: ADMIN });
+  check('带旧令牌 Cookie、缺 CSRF 头 → 403 E4099', staleNoHdr.status === 403 && staleNoHdr.body?.code === 'E4099',
+    `${staleNoHdr.status} ${staleNoHdr.body?.code ?? ''}`);
+  const staleOk = await call('POST', '/api/login', {
+    cookie: `bandi_token=${TOKEN}; bandi_csrf=${csrfValue}`,
+    headers: { 'X-Bandi-CSRF': csrfValue },
+    body: ADMIN,
+  });
+  check('带旧令牌 Cookie + 头与 cookie 一致 → 200（登录脚本就是这么发的）', staleOk.status === 200,
+    `${staleOk.status} ${staleOk.body?.code ?? ''}`);
+
+  console.log('\n③.6 陈旧令牌 Cookie 不能把登录后的人压回登录页（2026-11-01 实报）');
+  /*
+   * 令牌优先于会话 —— 浏览器里躺着一枚**真根令牌** Cookie 时，登录后的每个请求都被判成
+   * operator，而面板不再给 operator，于是"登录成功 → 回首页 → 又被挡回登录页"，
+   * 用户看到的是"点了登录没反应、输入框被清空"。
+   * 口径：人走会话，机器走请求头 —— 面板响应与登录成功响应都把令牌 Cookie 清掉。
+   */
+  const stalePage = await fetch(BASE + '/', { headers: { Accept: 'text/html', Cookie: `bandi_token=${TOKEN}` }, signal: AbortSignal.timeout(5000) });
+  const staleHtml = await stalePage.text();
+  const stalePageSc = stalePage.headers.get('set-cookie') ?? '';
+  check('带根令牌抓首页 → 登录页（不是面板）', staleHtml.includes('id="pwForm"') && !staleHtml.includes('/app.mjs'));
+  check('响应里当场清掉那枚令牌 Cookie', /bandi_token=;/.test(stalePageSc) && /Max-Age=0/i.test(stalePageSc), stalePageSc.slice(0, 120));
+  const loginClean = await call('POST', '/api/login', {
+    cookie: `bandi_token=${TOKEN}; bandi_csrf=${csrfValue}`,
+    headers: { 'X-Bandi-CSRF': csrfValue },
+    body: ADMIN,
+  });
+  check('登录成功响应也清掉令牌 Cookie（否则登录完还是 operation）',
+    loginClean.status === 200 && /bandi_token=;/.test(loginClean.setCookie), `${loginClean.status} ${loginClean.setCookie.slice(0, 100)}`);
+
   console.log('\n④ 登录页种 CSRF 值');
   const page = await fetch(BASE + '/', { headers: { Accept: 'text/html' }, signal: AbortSignal.timeout(5000) });
   const pageSc = page.headers.get('set-cookie') ?? '';

@@ -10,7 +10,8 @@
  *      - 带转发头的 /api/state、/api/local/status、/api/local/export、/api/ai/*、/api/events
  *        **全部 401**（一个都不许过）；
  *      - 带 root 令牌照样能用（proves setup 在 trustProxy 下也加载/生成了 token）；
- *      - 破坏性动作（collab/join）带令牌但**不带 X-Bandi-Local** → E4097，带了才到业务层。
+ *      - 破坏性动作（算力节点 join）带令牌但**不带 X-Bandi-Local** → E4097，带了才到业务层
+ *        （collab/join 2026-11-02 起放宽成 never，不再是 E4097 样本，另有专条断言）。
  *   ② **裸反代漏配**：`BANDI_HOST=127.0.0.1`、不设 trustProxy、不设转发头，只把 Host
  *      换成外部域名（并在 BANDI_ORIGINS 里声明，否则先被 Host 守卫 403）→ **必须 401**（Host 兜底）；
  *      同一台机器上用 `Host: 127.0.0.1` 仍然 200（单机行为一行没变）。
@@ -135,13 +136,14 @@ console.log('\n[1] BANDI_HOST=127.0.0.1 + BANDI_TRUST_PROXY=1（声明在代理�
     check('带转发头 + 令牌 → /api/state 200（认证不被误杀）', okProxyState.status === 200, String(okProxyState.status));
 
     // 破坏性动作：位置对了、身份对了，还缺"我在本机"的证明
+    // （collab/join 2026-11-02 起放宽成 never，E4097 的样本换成还是 network 档的算力节点 join）
     const secretPath = path.join(data, 'local_secret');
     check('启动了 local_secret（0600）', fs.existsSync(secretPath));
     const secret = fs.existsSync(secretPath) ? fs.readFileSync(secretPath, 'utf8').trim() : '';
 
     const noSecret = await raw(port, {
       method: 'POST',
-      path: '/api/local/collab/join',
+      path: '/api/local/join',
       headers: { ...viaProxy, 'X-Bandi-Token': token, 'Content-Type': 'application/json' },
       body: JSON.stringify({ url: 'http://127.0.0.1:1', code: 'x' }),
     });
@@ -149,7 +151,7 @@ console.log('\n[1] BANDI_HOST=127.0.0.1 + BANDI_TRUST_PROXY=1（声明在代理�
 
     const withSecret = await raw(port, {
       method: 'POST',
-      path: '/api/local/collab/join',
+      path: '/api/local/join',
       headers: { ...viaProxy, 'X-Bandi-Token': token, 'X-Bandi-Local': secret, 'Content-Type': 'application/json' },
       body: JSON.stringify({ url: 'http://127.0.0.1:1', code: 'x' }),
     });
@@ -161,10 +163,10 @@ console.log('\n[1] BANDI_HOST=127.0.0.1 + BANDI_TRUST_PROXY=1（声明在代理�
 
     // ⚠️ trustProxy 一设，**连本机也不再免秘密** —— 这是 IAM §5.3 的口径：
     //    "声明了我在代理后面"就等于"回环来源不可信"，此时只有文件秘密能证明本机。
-    //    所以 CLI（`bandi collab join`）在本机也要读 local_secret 带头，这是设计如此。
+    //    所以 CLI 在本机也要读 local_secret 带头，这是设计如此。
     const localNoSecret = await raw(port, {
       method: 'POST',
-      path: '/api/local/collab/join',
+      path: '/api/local/join',
       headers: { ...base, 'X-Bandi-Token': token, 'Content-Type': 'application/json' },
       body: JSON.stringify({ url: 'http://127.0.0.1:1', code: 'x' }),
     });
@@ -176,7 +178,7 @@ console.log('\n[1] BANDI_HOST=127.0.0.1 + BANDI_TRUST_PROXY=1（声明在代理�
 
     const localWithSecret = await raw(port, {
       method: 'POST',
-      path: '/api/local/collab/join',
+      path: '/api/local/join',
       headers: { ...base, 'X-Bandi-Token': token, 'X-Bandi-Local': secret, 'Content-Type': 'application/json' },
       body: JSON.stringify({ url: 'http://127.0.0.1:1', code: 'x' }),
     });
@@ -184,6 +186,20 @@ console.log('\n[1] BANDI_HOST=127.0.0.1 + BANDI_TRUST_PROXY=1（声明在代理�
       '本机 + 令牌 + 秘密 → 过闸（CLI 的执行路径）',
       localWithSecret.status !== 403 && codeOf(localWithSecret) !== 'E4097',
       `${localWithSecret.status} ${codeOf(localWithSecret)}`,
+    );
+
+    // collab/join 2026-11-02（三十一改）起 secret:'never'：网络来源无秘密也过秘密闸
+    //（会落到业务失败 —— 码/地址是假的，这不是 403/E4097 就行）
+    const collabJoin = await raw(port, {
+      method: 'POST',
+      path: '/api/local/collab/join',
+      headers: { ...viaProxy, 'X-Bandi-Token': token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: 'http://127.0.0.1:1', code: 'bi_nosuch' }),
+    });
+    check(
+      'collab/join 网络来源无秘密 → 过秘密闸（业务失败，不是 4097）',
+      collabJoin.status !== 403 && codeOf(collabJoin) !== 'E4097',
+      `${collabJoin.status} ${codeOf(collabJoin)}`,
     );
   } finally {
     stop(ctx);

@@ -8,7 +8,9 @@
 <meta name="theme-color" content="#08090a" />
 <link rel="icon" href="/icons/icon-192.png" />
 <!--
-  手机扫码落地页（PRD §4 极简线框）：校验中 → 成功进工作台 / 失败给一行人话。
+  手机连接落地页（PRD §4 极简线框）：校验中 → 成功进工作台 / 失败给一行人话。
+  两种入口共用这一页：扫码进来带 `?code=`（二维码里就是邀请码 + 地址），
+  手输邀请码进来也是 `?code=`（手机壳自己在局域网里找到电脑再跳过来）。
   **独立页面、不加载整个 SPA** —— 手机首屏只拉几 KB（设计 §2）。
   主验证平台是 Android Chrome；iOS Safari 的差异只在"添加到主屏幕"体验上，
   这页本身不依赖任何 PWA 能力，纯 fetch + location 跳转，两端行为一致。
@@ -47,9 +49,9 @@
   <div id="pairState">
     <div class="spin"></div>
     <h1>正在配对…</h1>
-    <p>正在向电脑上的班底核验这个二维码</p>
+    <p>正在向电脑上的班底核验这个邀请码</p>
   </div>
-  <p class="hint">配对之后这台手机就可以直接打开 <code>/</code> 进入工作台，不用再输地址和令牌。</p>
+  <p class="hint">配对之后这台手机就可以直接打开 <code>/</code> 进入工作台，不用再输邀请码。</p>
 </div>
 <script type="module" src="/js/pair-claim.mjs"></script>
 </body>

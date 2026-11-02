@@ -13,9 +13,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ensureRunning, urlOf, openUrl } from './apps/server/src/lifecycle.mjs';
 import { userDataDir } from './apps/server/src/data-dir.mjs';
+import { port as serverPort } from './apps/server/src/config.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)));
-const PORT = Number(process.env.BANDI_PORT ?? 8787);
+/*
+ * 端口**只有一个真源**（`config.mjs` 的 `port`）：`BANDI_PORT` 优先，否则 18787。
+ * 这里不再写一份字面量 —— 以前两边各写一个 8787，改一处就漂。
+ */
+const PORT = serverPort;
 const HOME = urlOf(PORT);
 /*
  * 日志跟着**数据目录**走（`BANDI_DATA`；不设就是本机用户目录 —— 与桌面壳同一个默认）。

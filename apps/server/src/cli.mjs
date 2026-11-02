@@ -38,6 +38,7 @@ import { fileURLToPath } from 'node:url';
 import { repoRoot, dataDir, dbPath, port as defaultPort, lanAllowed } from './config.mjs';
 import { ensureRunning, stopRunning, isUp, listeners, urlOf, openUrl, sleep, processInfo } from './lifecycle.mjs';
 import { platformVersion } from './local-mode.mjs';
+import * as netmode from './netmode.mjs';
 import { readLock, lockPath } from './node-supervisor.mjs';
 
 /* ------------------------------------------------------------------ 样式 */
@@ -125,7 +126,7 @@ const CFG_FILE = path.join(dataDir, 'config.json');
  * 记下"这次用的是哪个端口"（`<数据目录>/port`，与桌面壳同一个约定、同一个文件）。
  *
  * 为什么非记不可：`BANDI_PORT` 只活在**当时那个终端**里。在一个窗口里 `set BANDI_PORT=8899`
- * 起过之后，另一个窗口敲 `bandi stop` 会看不到它（按 8787 找，扑空）—— 用户看到的是
+ * 起过之后，另一个窗口敲 `bandi stop` 会看不到它（按默认端口找，扑空）—— 用户看到的是
  * "明明在跑，命令说没在跑"。记一笔，下次谁来看都能找到。桌面壳也读它来决定"复用自己的实例"，
  * 所以这个文件本来就是"上次在哪个端口"的公共记忆，不是我们另立的。
  */
@@ -141,9 +142,9 @@ function recordPort(port) {
 /**
  * 服务在不在跑、在哪个端口。
  *
- * **必须看 `service.json`**：桌面壳是**自己挑端口**的（8787 起往上找），所以"8787 起没起"
- * 这个判断在壳起的服务上永远是错的（会看到一个在 8788 上好好跑着的服务，却报"未运行"）。
- * 候选端口按「登记过的 → 端口文件 → 约定端口」依次试，第一个应答的就认。
+ * **必须看 `service.json`**：端口虽然已经固定（18787），但 `BANDI_PORT` 可以显式改，桌面壳
+ * 也会把它读到的实际端口写进登记 —— "默认端口起没起"不能代表"服务在不在"。
+ * 候选端口按「登记过的 → 端口文件 → 默认端口」依次试，第一个应答的就认。
  */
 async function detect() {
   const record = readJson(SERVICE_FILE);
@@ -171,13 +172,24 @@ async function detect() {
   return { running: false, port: first, url: urlOf(first), pids: [], record: null, taken };
 }
 
-/** 这台机器是什么身份。判据与 `config.mjs` / `local-mode.mjs` 同一套（别另立一套） */
+/**
+ * 这台机器是什么身份。判据与 `config.mjs` / `netmode.mjs` 同一套（别另立一套）。
+ *
+ * 2026-11-01 晚起形态拆成两层，标签也得跟着分：
+ *   · **能不能被加入**（`acceptNodes`）= 角色：总机 / 分机；
+ *   · **听什么地址**（`BANDI_HOST` 或 `allowLan`）= 对外服务 / 只听本机。
+ * 原来只会说"BANDI_HOST 给了 = 总机" —— 那台显式部署的机器改成分机后，
+ * `bandi status` 还会一直叫它总机，等于命令行在说谎。
+ */
 function modeOf() {
   const cp = String(readJson(CFG_FILE)?.controlPlane ?? '').trim();
   if (cp) return { id: 'client', label: '节点（这台机器已加入总机）', detail: cp };
-  if (process.env.BANDI_HOST) return { id: 'host', label: '总机（显式指定了监听地址）', detail: process.env.BANDI_HOST };
-  if (lanAllowed) return { id: 'host', label: '总机（允许局域网内的机器加入）', detail: '' };
-  return { id: 'solo', label: '单机（只听本机）', detail: '' };
+  const nm = netmode.readNetMode(); // 现读：角色是运行期可切的，别用启动快照
+  const where = process.env.BANDI_HOST ?? (nm.allowLan ? '0.0.0.0' : '127.0.0.1');
+  const serving = !netmode.isLoopback(where);
+  if (!serving) return { id: 'solo', label: '单机（只听本机）', detail: '' };
+  if (nm.acceptNodes) return { id: 'host', label: '总机（对外服务，收别的机器当节点）', detail: where };
+  return { id: 'branch', label: '分机（对外服务，但不收节点）', detail: where };
 }
 
 /** 执行节点（`node.mjs`）在这台机器上跑没跑 —— 只读锁文件，不碰进程 */

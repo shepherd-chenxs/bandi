@@ -95,7 +95,8 @@ $('listBody').addEventListener('click', (e) => {
   if (e.target.closest('[data-sec]')) return;
   // 手机通讯录的"入口行"（群聊 / 部门）和部门行是**列表内换页**，不是进详情 ——
   // 让它们走折叠的话，列表会被藏起来换成一页空的主区（2026-10-31）。
-  if (row.matches('[data-cv], [data-cv-dept]')) return;
+  // 设置页顶部那条「← 我的」同理（2026-11-01）：它是回上一级，不是进详情。
+  if (row.matches('[data-cv], [data-cv-dept], [data-me-back]')) return;
   const title = rowTitle(row);
   requestAnimationFrame(() => enterDetail(title));
 });
@@ -136,8 +137,9 @@ $('listBody').addEventListener(
     if (!isNarrow()) return;
     const row = e.target.closest('[data-conv], [data-persona], [data-group], [data-set], .item');
     if (!row || e.target.closest('[data-sec]')) return;
-    // 列表内换页的行（通讯录入口 / 部门）不压历史：它们不是"进详情"，没有可返回的上一层
-    if (row.matches('[data-cv], [data-cv-dept]')) return;
+    // 列表内换页的行（通讯录入口 / 部门 / 设置页的「← 我的」）不压历史：
+    // 它们不是"进详情"，没有可返回的上一层
+    if (row.matches('[data-cv], [data-cv-dept], [data-me-back]')) return;
     // 从聊天页跳到别的详情页：先摘掉 mb-chat，聊天头那个返回按钮不该继续占着
     document.body.classList.remove('mb-chat');
     // 详情已经开着就别再压历史（2026-10-28）：连点几次行会攒出多层"返回"，
@@ -152,12 +154,16 @@ $('listBody').addEventListener(
 /* ---------------------------------------------------------------- ③ 底部导航 */
 
 /*
- * 四 tab：工作台 / 通讯录 / 会话 / 我的 —— 映射 setNav('plugins' | 'contacts' | 'messages' | 'settings')。
+ * 四 tab：工作台 / 通讯录 / 会话 / 我的 —— 映射 setNav('plugins' | 'contacts' | 'messages' | 'me')。
  * 「通讯录」是 2026-11 移动端增量加的第 4 个 tab（手机上找人聊天，跟微信一致）：
  * 高亮同步机制不用改 —— 桌面左栏本就有 data-nav="contacts" 的导航按钮，
  * setNav('contacts') 会把它点亮，syncTabs 按 .nav-btn.active 对齐自然命中新 tab。
- * 「我的」= 设置页（设备管理在 设置 → 手机配对；P1 口径的只读视图本期不单开一页，
- * 复用整页设置，窄屏下它本来就是主从折叠里的"详情"）。
+ *
+ * 「我的」（2026-11-01 改）：以前这个 tab 直接 `setNav('settings')` 进设置页，
+ * 手机上点"我的"看到的是一串开关，没有"我是谁"。现在进的是 openMe 的个人中心
+ * （登录卡 + 设置入口），设置页成为它的下一级 —— 见 settings.mjs 的 openMe
+ * 与 contacts.mjs 里那条「← 我的」返回行。
+ *
  * 高亮同步：nav 还会从面包屑/深链接进来，靠 1s 轮询对齐（改 setNav 本体违反"最小改动"，
  * 轮询只是读 S.nav 一个字段，代价为零）。
  */
@@ -179,7 +185,7 @@ tabbar.innerHTML = `
   <!-- 「我的」= 人形轮廓（2026-11 第二版）：原来是"圆 + 八条放射线"，那是**亮度/太阳**
        的图形语言，图标下面还写着「我的」—— 第一眼会被读成"切换主题"。
        这一栏进的是账号与权限，人形才是主流 App 里这个 tab 的固定符号。 -->
-  <button type="button" class="mb-tab" data-tab="settings">
+  <button type="button" class="mb-tab" data-tab="me">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.6"/><path d="M4.9 20.2c.7-3.6 3.6-5.5 7.1-5.5s6.4 1.9 7.1 5.5"/></svg>
     <span>我的</span>
   </button>`;
@@ -200,6 +206,22 @@ tabbar.querySelectorAll('.mb-tab').forEach((b) => {
   });
 });
 document.body.append(tabbar);
+
+/*
+ * 「我的」↔「设置」互跳（2026-11-01）：settings.mjs / contacts.mjs 派 `mb-nav` 事件过来，
+ * 这里统一转成 setNav。
+ * 为什么不让他们直接 `import { setNav } from './state.mjs'` —— state.mjs 自己 import 了
+ * settings.mjs（setNav 的 settings 分支调 openSettings），反向再 import 就成环了。
+ * 事件是本站既有的解环手法（通讯录的 mb-cv-home 同款）。
+ */
+document.addEventListener('mb-nav', (e) => {
+  const nav = e.detail?.nav;
+  if (!nav) return;
+  // 互跳是换一级页：详情折叠态要先收掉，否则新页面被压在折叠态后面
+  document.body.classList.remove('mb-detail-open');
+  setNav(nav);
+  syncTabs();
+});
 /*
  * 底部导航按角色收敛（2026-10-28 第三刀）：tabbar 是**运行时创建**的，
  * `load()` 里那次 applyMenuGating 跑得比它早，抓不到这几个按钮 —— 建完再补一次。
@@ -210,7 +232,12 @@ function syncTabs() {
   // 高亮以左栏 .nav-btn.active 为准（state.mjs setNav 维护的那份，含"工作流 → 工作台"映射）
   const activeNav = document.querySelector('.nav-btn.active')?.dataset.nav ?? '';
   tabbar.querySelectorAll('.mb-tab').forEach((b) => {
-    const hit = activeNav === b.dataset.tab || (b.dataset.tab === 'plugins' && activeNav === 'workflows');
+    const hit =
+      activeNav === b.dataset.tab ||
+      (b.dataset.tab === 'plugins' && activeNav === 'workflows') ||
+      // 设置页是「我的」的下一级（2026-11-01）：停在设置上时 tab 仍亮「我的」。
+      // 不然手机上从「我的」点进设置后，底部四个 tab 一个都不亮 —— 看着像"哪儿都没选中"。
+      (b.dataset.tab === 'me' && activeNav === 'settings');
     b.classList.toggle('active', hit);
   });
 }
@@ -275,29 +302,172 @@ if (inputEl) {
  * 所有口）；SSE 断流不走这条路 —— 那条是静默重连，401 时页面刷新自然会落到这里。
  */
 let relpairShown = false;
+let resumeTried = false;
 
-function showRelpair() {
+/** 在手机壳里？（壳会注入 __TAURI_INTERNALS__ / __TAURI__；浏览器 PWA 里没有） */
+function inShell() {
+  return !!(window.__TAURI_INTERNALS__ || window.__TAURI__);
+}
+
+/**
+ * 手机壳的本地页 origin（Tauri 的 app 协议，Android 上恒为 `http://tauri.localhost`）。
+ *
+ * 为什么写死：**远程 origin 调不了壳的自定义命令** —— Tauri v2 的 ACL 只对本地页开
+ * app 命令，远程页 invoke 直接回 "not allowed. Plugin not found"（2026-11-01 真机实测）。
+ * 而这个 origin 由壳的配置决定（tauri.conf.json 未开 useHttpsScheme），改了壳才需要改它。
+ * 跳过去走的是壳的 on_navigation 白名单（tauri/http/https 全放行），不经 invoke。
+ */
+const SHELL_ORIGIN = 'http://tauri.localhost';
+
+/**
+ * 回壳的连接页（扫码 / 邀请码 / 已配对那三页）。
+ *
+ * 连接页是**登录页**，不是工作台的上一级 —— 正常操作里根本走不回去（连上时壳用
+ * location.replace 把它从历史里顶掉了；返回键在根页没得退，直接退出 App）。
+ * 只有配对真的没了（电脑端断开 / 取消配对 / 换了另一台手机）才需要这条退路，
+ * 所以按钮只长在 401 遮罩上。replace 同样顶替当前条目 —— 回到连接页后按返回键
+ * 也不会退回那个已经失效的工作台。
+ */
+function backToLauncher() {
+  location.replace(`${SHELL_ORIGIN}/`);
+}
+
+/**
+ * 手机自己「断开连接」后的退场（2026-11-02，settings.mjs 的 openMe 派 `mb-left`）：
+ *   · 壳里 → 回连接页（launcher 的已配对卡还在，点「连接」= /pair?resume=1 连回来）；
+ *   · 浏览器 → 回配对页（没有壳，走不了 resume 那条入口）。
+ * 与 401 那条 backToLauncher 同一套落点，别各写一份。
+ */
+document.addEventListener('mb-left', () => {
+  if (inShell()) return backToLauncher();
+  location.replace('/pair');
+});
+
+/**
+ * @param {'launcher'|'retry'} action 遮罩上的按钮：
+ *   launcher = 回连接页重新扫码（配对没了）；retry = 再试一次连回来（别人在用）
+ */
+function showRelpair(title, text, action = 'launcher') {
   if (relpairShown) return;
   relpairShown = true;
   const mask = document.createElement('div');
   mask.className = 'mb-relpair';
+  const canBack = action === 'launcher' && inShell();
+  /* 有按钮才说"点下面的按钮"；浏览器 PWA 里没有壳，只能回电脑上重新生成二维码 */
+  const body =
+    text ||
+    (canBack
+      ? '这台手机的配对已被移除或已过期。点下面的「重新连接」回到连接页，重新扫码（或在电脑上「设置 → 手机连接」生成新的邀请码）。'
+      : '这台手机的配对已被移除或已过期。请在电脑上打开「设置 → 手机连接」重新生成二维码，扫码即可恢复。');
   mask.innerHTML = `
     <div class="mb-relpair-card">
       <div class="mb-relpair-logo">B</div>
-      <h2>登录已失效</h2>
-      <p>这台手机的配对已被移除或已过期。请在电脑上打开「设置 → 手机配对」重新生成二维码，扫码即可恢复。</p>
+      <h2>${title || '登录已失效'}</h2>
+      <p>${body}</p>
+      ${
+        canBack
+          ? '<button type="button" class="mb-relpair-btn" data-relpair="launcher">重新连接</button>'
+          : action === 'retry'
+            ? '<button type="button" class="mb-relpair-btn" data-relpair="retry">再试一次</button>'
+            : ''
+      }
     </div>`;
   document.body.append(mask);
+  mask.querySelector('[data-relpair]')?.addEventListener('click', async (e) => {
+    const b = e.currentTarget;
+    if (b.dataset.relpair === 'retry') {
+      location.reload();
+      return;
+    }
+    b.disabled = true;
+    b.textContent = '正在回到连接页…';
+    backToLauncher(); // 页面随即被替换掉，后面几行只在跳失败时才看得到
+    setTimeout(() => {
+      if (!document.body.contains(b)) return;
+      b.disabled = false;
+      b.textContent = '重新连接';
+      const p = mask.querySelector('p');
+      if (p) p.textContent = '回不到连接页 —— 把 App 从后台划掉，重新打开就行。';
+    }, 1500);
+  });
+}
+
+/** localStorage 里那台手机的随机 ID（与 pair-claim.mjs 同一个键） */
+function clientKeyOf() {
+  try {
+    return localStorage.getItem('bandi.clientKey') || '';
+  } catch {
+    return '';
+  }
+}
+
+/** bandi_csrf 不是 HttpOnly，JS 读得到；resume 是写请求，要过 E4099 双提交闸 */
+function csrfOf() {
+  for (const part of String(document.cookie ?? '').split(';')) {
+    const i = part.indexOf('=');
+    if (i < 0) continue;
+    if (part.slice(0, i).trim() === 'bandi_csrf') {
+      try {
+        return decodeURIComponent(part.slice(i + 1).trim());
+      } catch {
+        return part.slice(i + 1).trim();
+      }
+    }
+  }
+  return '';
+}
+
+/**
+ * 401 时先试「连回来」（2026-11-01 二刀）：手机被电脑端「断开连接」之后令牌没了，
+ * 但 clientKey 还在 —— 没有别的手机在用就换一张新令牌，刷新即回工作台，不用重新扫码。
+ * 返回 'ok' | 'busy' | 'fail'。用 origFetch 发（别让拦截器把自己再拦一遍）。
+ */
+async function tryResume() {
+  const key = clientKeyOf();
+  if (!key) return 'fail';
+  try {
+    const r = await origFetch('/api/pair/resume', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Bandi': '1', 'X-Bandi-CSRF': csrfOf() },
+      body: JSON.stringify({ clientKey: key }),
+      credentials: 'same-origin',
+    });
+    if (r.ok) return 'ok';
+    const d = await r.json().catch(() => null);
+    return d?.code === 'E1705' ? 'busy' : 'fail';
+  } catch {
+    return 'fail';
+  }
 }
 
 const origFetch = window.fetch.bind(window);
 window.fetch = async (...args) => {
   const r = await origFetch(...args);
   if (r.status === 401 && document.body.classList.contains('mb-tiny') && !relpairShown) {
+    let body = null;
     try {
-      const body = await r.clone().json();
-      if (body?.code === 'E4010' || body?.code === 'E4012') showRelpair();
+      body = await r.clone().json();
     } catch { /* 非 JSON 响应（登录页 HTML）不算 —— 那是桌面浏览器的事 */ }
+    if (body?.code !== 'E4010' && body?.code !== 'E4012') return r;
+    if (resumeTried) {
+      showRelpair();
+      return r;
+    }
+    resumeTried = true;
+    const how = await tryResume();
+    if (how === 'ok') {
+      location.reload(); // 新令牌已经种进 Cookie，重来一次就是工作台
+      return r;
+    }
+    if (how === 'busy') {
+      showRelpair(
+        '另一台手机正在使用',
+        '一台电脑同一时间只允许一台手机连接。想用这台，先在电脑上「设置 → 手机连接」把正在用的那台「断开连接」，然后回到这里点「再试一次」。',
+        'retry',
+      );
+      return r;
+    }
+    showRelpair();
   }
   return r;
 };

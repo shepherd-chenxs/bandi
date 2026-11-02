@@ -4,8 +4,11 @@
  * 2026-10-21 拍板：**节点只当算力，不做「看总机面板」** —— 反代（client-proxy）已删，
  * 加入一律 compute（服务端写死，不信任前端）。本文件验证六件事
  * （两个数据目录 + 一台回环对照机 + 一个 mock 旧总机）：
- *   ① **云端总机可加入**：总机用 `BANDI_HOST=0.0.0.0` 显式监听（**不开**「允许局域网」开关）
- *      → `/api/hello` 照样 `joinable:true`，节点 probe → 200（增量 1 修的 E1091 误报，核心回归）；
+ *   ① **云端总机可加入**：总机用 `BANDI_HOST=0.0.0.0` 显式监听、角色 `acceptNodes:true`
+ *      （**不开**「允许局域网」开关）→ `/api/hello` 照样 `joinable:true`，节点 probe → 200；
+ *   ①b **分机形态**（2026-11-01 晚新增）：同一台切成 `acceptNodes:false` → 监听没动、
+ *      对外照样服务，但 `joinable:false` + `POST /api/nodes/invites` 409 E1091
+ *      （用户定稿："把 thinkpad-p15 开分机模式……不提供邀请码，其他的机器也加不上去"）；
  *   ② probe 三级判定顺序：E1090/E2050/E1091 各走各的出口，`E1091` 文案中性（不提「局域网」）；
  *   ③ 真加入（故意带旧拼写的 `scopes:['compute','panel']`）→ 服务端强制 compute：
  *      `config.json` 七键 + `lastHost`、总机库 `node_tokens.scope` 落库 `compute`、
@@ -29,7 +32,6 @@ import { repoRoot } from './config.mjs';
 const PORT_HOST = Number(process.env.SMOKE_PORT ?? 8874); // 总机（云端形态）
 const PORT_NODE = PORT_HOST + 1;                          // 待加入机（8875）
 const PORT_LOOP = PORT_HOST + 2;                          // 回环对照机（8876）
-const DISC_PORT = 18774;                                  // 独立 UDP 端口，别撞真服务的 8788
 const PORT_DEAD = PORT_HOST + 125;                        // 一个没人听的端口（E1092）
 const BASE_HOST = `http://127.0.0.1:${PORT_HOST}`;
 const BASE_NODE = `http://127.0.0.1:${PORT_NODE}`;
@@ -59,7 +61,7 @@ const kids = [];
 const startServer = (dataDir, port, extra = {}) => {
   const c = spawn(process.execPath, [SERVER], {
     cwd: repoRoot,
-    env: { ...process.env, BANDI_DATA: dataDir, BANDI_PORT: String(port), BANDI_DISCOVERY_PORT: String(DISC_PORT), ...extra },
+    env: { ...process.env, BANDI_DATA: dataDir, BANDI_PORT: String(port), ...extra },
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -94,6 +96,12 @@ const DATA_HOST = path.join(tmp, 'host');
 const DATA_NODE = path.join(tmp, 'node');
 for (const d of [DATA_HOST, DATA_NODE]) fs.mkdirSync(d, { recursive: true });
 
+/*
+ * 角色位（2026-11-01 晚）：显式监听**不再**自动等于"收节点"—— 总机要靠 `acceptNodes` 声明。
+ * ⚠️ 故意**不写 `allowLan`**：① 要保的回归点正是"不点界面上的局域网开关、显式部署也能当总机"。
+ */
+fs.writeFileSync(path.join(DATA_HOST, 'netmode.json'), JSON.stringify({ acceptNodes: true }, null, 2), 'utf8');
+
 /* 假「旧总机」：是班底（platform:'bandi'）但 hello 里没有 joinable 字段（E2050 的判据） */
 const mockOld = http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -113,14 +121,34 @@ try {
   if (!(await waitReady(BASE_NODE))) throw new Error('节点侧服务没起来');
   if (!(await waitReady(BASE_LOOP))) throw new Error('回环对照机没起来');
 
-  console.log('① 云端总机（BANDI_HOST=0.0.0.0，不开 allowLan）自己声明可加入');
+  console.log('① 云端总机（BANDI_HOST=0.0.0.0 + acceptNodes:true，不开 allowLan）自己声明可加入');
   const hello = await json(BASE_HOST, '/api/hello');
-  check('hello joinable=true 且 allowLan=false（显式监听即开放，开关值照实广播）',
-    hello.body?.joinable === true && hello.body?.allowLan === false,
-    JSON.stringify({ joinable: hello.body?.joinable, allowLan: hello.body?.allowLan }));
+  check('hello joinable=true 且 allowLan=false（角色说了算，开关值照实广播）',
+    hello.body?.joinable === true && hello.body?.allowLan === false && hello.body?.acceptNodes === true,
+    JSON.stringify({ joinable: hello.body?.joinable, allowLan: hello.body?.allowLan, acceptNodes: hello.body?.acceptNodes }));
   const helloLoop = await json(BASE_LOOP, '/api/hello');
   check('回环对照机 joinable=false（判定输入是「实际监听」，不是部署方式）',
     helloLoop.body?.joinable === false, `joinable=${helloLoop.body?.joinable}`);
+
+  console.log('\n①b 同一台切成「分机」：监听不动、但不再收节点（无需重启）');
+  const toBranch = await json(BASE_HOST, '/api/lan', { method: 'POST', token: OP_TOKEN, body: { acceptNodes: false } });
+  check('POST /api/lan {acceptNodes:false} → 200，restartNeeded=false（角色不碰监听）',
+    toBranch.status === 200 && toBranch.body?.acceptNodes === false && toBranch.body?.restartNeeded === false
+      && toBranch.body?.boundLan === true,
+    JSON.stringify({ acceptNodes: toBranch.body?.acceptNodes, restartNeeded: toBranch.body?.restartNeeded, boundLan: toBranch.body?.boundLan }));
+  const helloBranch = await json(BASE_HOST, '/api/hello');
+  check('分机仍对外服务（allowLan 照旧 true）但 joinable=false',
+    helloBranch.body?.acceptNodes === false && helloBranch.body?.joinable === false,
+    JSON.stringify({ acceptNodes: helloBranch.body?.acceptNodes, joinable: helloBranch.body?.joinable }));
+  const inviteBranch = await json(BASE_HOST, '/api/nodes/invites', { method: 'POST', token: OP_TOKEN });
+  check('分机发邀请码 → 409 E1091（其他机器加不上去）',
+    inviteBranch.status === 409 && inviteBranch.body?.code === 'E1091',
+    `${inviteBranch.status} ${inviteBranch.body?.code ?? ''}`);
+  const backHub = await json(BASE_HOST, '/api/lan', { method: 'POST', token: OP_TOKEN, body: { acceptNodes: true } });
+  check('切回总机 → 200 且 joinable 恢复 true（同一进程，没重启）',
+    backHub.status === 200 && backHub.body?.acceptNodes === true
+      && (await json(BASE_HOST, '/api/hello')).body?.joinable === true,
+    JSON.stringify({ acceptNodes: backHub.body?.acceptNodes }));
 
   console.log('\n② probe 三级判定（顺序即语义）');
   const pUp = await json(BASE_NODE, '/api/local/probe', { method: 'POST', body: { url: BASE_HOST } });
@@ -161,8 +189,14 @@ try {
     JSON.stringify(st.body?.lastHost ?? null).slice(0, 100));
   const html = await (await fetch(BASE_NODE + '/')).text();
   const state = await json(BASE_NODE, '/api/state');
-  check('本机 UI 还是自己的（无反代注入标记，静态照常出）',
-    !html.includes('__BANDI_CLIENT__') && html.includes('app.mjs'), `注入=${html.includes('__BANDI_CLIENT__')}`);
+  /*
+   * 判据（2026-11-01 改）：新数据目录首次启动出的是「班底 · 创建账号」引导页，
+   * 里面没有 app.mjs —— 原来找 app.mjs 的写法在这条产品流程下必然红（不是节点注入）。
+   * 这里要验的其实是两件事：**没有被反代注入壳标记** + **出的仍是班底自己的页面**。
+   */
+  check('本机 UI 还是自己的（无反代注入标记，出的是班底自己的页面）',
+    !html.includes('__BANDI_CLIENT__') && (html.includes('app.mjs') || html.includes('班底')),
+    `注入=${html.includes('__BANDI_CLIENT__')}`);
   check('加入后 /api/state 照常答（本机库，未被动过）', state.status === 200, `status=${state.status}`);
   // v2.8：裸 /api/personas 是幽灵路由（未登记、无 handler）→ 404 E4090；
   // 节点令牌的 E4031 闸改打真实登记的面板路由 /api/experts

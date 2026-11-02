@@ -16,7 +16,6 @@ import * as status from '../status.mjs';
 import * as localMode from '../local-mode.mjs';
 // 协作中心（2026-10-31 MVP）：分公司侧的 join / leave / status 在它里面（配置 + 同步循环）
 import * as collabBranch from '../collab-branch.mjs';
-import * as discover from '../discover.mjs';
 // 本机接口的**接口级授权**（2026-10-31 IAM §8.5 / 姊妹文档 v5）：声明式、默认拒绝
 import { authorizeLocal } from '../security/local-policy.mjs';
 import * as localSecret from '../security/local-secret.mjs';
@@ -213,7 +212,7 @@ function validateSnapshot(buf) {
  * 为什么由本机处理：它读写的是**本机**的事实（`config.json`、本机库），总机那边没有这些；
  * 加入/退出两个入口也在它里面（client 形态已随反代移除，本机接口永远是本机答）。
  *
- * 七条：`GET status`、`POST discover / probe / join / leave / export / import`。
+ * 六条：`GET status`、`POST probe / join / leave / export / import`（discover 已随 UDP 发现一并下线，2026-11-02）。
  * **准入统一走 `security/local-policy.mjs`**（2026-10-31 起）：原来那句
  * `if (!isLoopbackRemote(...)) E1094` 既不分身份也不分动作，反代下还形同虚设。
  */
@@ -248,15 +247,7 @@ export async function handleLocal(req, res, url) {
       return sendJson(res, 200, st), true;
     }
 
-    /* ------------------------------------------------------------------------ 扫局域网 */
-    if (req.method === 'POST' && url.pathname === '/api/local/discover') {
-      const body = await readBody(req);
-      // 空数组不是错误 —— PRD 步骤 3 的兜底页就是它；最多 4 秒返回
-      const candidates = await discover.discover({ rounds: body?.rounds, port: body?.port });
-      return sendJson(res, 200, { candidates }), true;
-    }
-
-    /* ---------------------------------------------------------------------- 探一个地址 */
+    /* ------------------------------------------------------------------------ 探一个地址 */
     if (req.method === 'POST' && url.pathname === '/api/local/probe') {
       const body = await readBody(req);
       const host = await localMode.probe(body?.url); // 失败抛 LocalError（E1090/E1091/E1092/E2050）

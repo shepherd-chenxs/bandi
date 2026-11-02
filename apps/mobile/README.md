@@ -6,9 +6,10 @@
 | 壳负责 | 不负责 |
 |---|---|
 | 自动发现局域网里的班底（复用服务端 UDP 8788 应答器） | 任何业务页面、看板、对话渲染 |
-| 连接测试（`GET /api/hello`，认 `platform === 'bandi'`） | 数据同步、鉴权逻辑（都是 web 的） |
-| 记住地址、把 WebView 指过去 | 通知推送（未接，见「没做」） |
-| Android 返回键天然退回启动页（WebView 历史） | 扫码（未接，见「没做」） |
+| 扫二维码配对（WebView 相机 + vendored jsQR，见「扫码」） | 数据同步、鉴权逻辑（都是 web 的） |
+| 连接测试（`GET /api/hello`，认 `platform === 'bandi'`） | 通知推送（未接，见「没做」） |
+| 记住地址、把 WebView 指过去 | iOS（要 macOS） |
+| 连接页只当"登录页"用：连上后不进 WebView 历史，返回键退出 App | |
 
 形态定位见 `docs/mobile/pwa-prd.md`：**PWA 是主形态，壳是可选分发**。同一个
 `apps/web` 同时服务两者，改产品页面不需要动这里。
@@ -24,11 +25,16 @@ apps/mobile/
 ├── dist/                 启动页（本地 asset，tauri:// 加载）
 │   ├── index.html
 │   ├── launcher.css
-│   └── launcher.js
+│   ├── launcher.js       启动页逻辑（读设置 / 扫网 / 探测 / 跳转）
+│   ├── scanner.js        扫一扫：getUserMedia + 逐帧解码（见「扫码」）
+│   └── vendor/jsQR.js    vendored jsQR@1.4.0（离线铁律，不许 CDN）
 ├── capabilities/         Tauri 2 权限（没有它 invoke 一律被拒）
 ├── icons/                tauri icon 生成的全套图标
 ├── tauri.conf.json
 └── gen/android/          tauri android init 生成的 Android Studio 工程（入库）
+    └── app/src/main/java/app/local/bandi/mobile/
+        ├── MainActivity.kt   安全区内边距（手改）
+        └── SpeechPlugin.kt   语音输入插件（手写，见「语音输入」）
 ```
 
 ## 构建前置
@@ -81,11 +87,12 @@ Tauri CLI（`cargo-mobile2` 的 `jnilibs.rs`）把 `.so` **符号链接**进
 `SeCreateSymbolicLinkPrivilege`，除非开 Windows 开发者模式，否则必然失败，
 而且没有回退分支。
 
-所以本工程做了两处改动（**重新 `tauri android init` 后要再改一次**）：
+所以本工程做了三处改动（**重新 `tauri android init` 后要再改一次**）：
 
 - `gen/android/app/build.gradle.kts` 摘掉 `id("rust")` 和 `rust { rootDirRel }`
   —— Gradle 不再回头调 cargo；
-- 改由 `build-android.mjs` 预编译并**复制** `.so`。
+- 改由 `build-android.mjs` 预编译并**复制** `.so`；
+- `gen/android/app/src/main/AndroidManifest.xml` 补 `CAMERA` 权限（扫码用，见「扫码」）。
 
 ### 2. release 包必须允许明文 HTTP
 
@@ -96,7 +103,7 @@ manifestPlaceholders["usesCleartextTraffic"] = "true"
 ```
 
 Tauri 模板默认是 `false`（只给 debug 开 true）。不改的话 debug 包能连、release
-包永远连不上 —— 局域网控制面就是 `http://192.168.x.x:8787`，没有 TLS。
+包永远连不上 —— 局域网控制面就是 `http://192.168.x.x:18787`，没有 TLS。
 
 ### 3. 没有 capabilities 就没有 invoke
 
@@ -117,29 +124,172 @@ Tauri 的 Android WebView 里，键盘弹起时：
   那套兜底也不会生效。
 
 所以别写"等键盘状态再调整"的逻辑（实测连试 5 版都失败）。现在的做法是
-纯布局：`dist/index.html` 里「填写地址」卡片排在「局域网里的班底」**之前**，
-输入框落在 y≈300，键盘顶部在 y≈350，天然不被挡。改启动页布局时别把它挪回去。
+纯布局（2026-11-01 四改后）：
 
-## 启动页怎么走
+- 顶部 60px 留白是**常态**：页签（扫码 / 邀请码）与两个输入框都在上半屏，
+  真机键盘起来**盖不住**它们（用户实测）；
+- 因此**键盘弹起时页面完全不动** —— 不位移、不收起头部、不加过渡。
+  （中途试过 `body.typing` 整页上移、更早试过藏头部，都被用户否掉了：
+  "键鼠盖不住输入框，不需要往上"+"标题突然没了很不舒服"。两条都删干净了，
+  别再往回加。）地址框 bottom≈219、码框 bottom≈330、连接按钮 bottom≈411；
+- 错误条是 **fixed 悬浮在页面底部**（离底 18px + 安全区），不参与布局 ——
+  报错时上面一个字都不动。**不要**再放回文档流（那会把输入框往下推 50px）；
+  也**不要**放回顶部（要连带让头部让位，标题会闪没）；
+- ⚠️ `.wrap` **不要写 `::before`**：它是 flex 子项，白吃一个 gap 槽位（10-13px）。
+  内容顶部对齐只靠 `::after { margin: auto }` 就够。
 
-1. 读 `app_config_dir/shell.json` 的 `server`；
-2. 有 → 显示「上次连接 / 进入 / 换一台」；没有 → 直接扫描；
-3. 扫描 = UDP 8788 广播 `{"bandi":"discover","v":1,"nonce":...}`，收
-   `{"bandi":"announce",...}`，地址取回包来源 IP、端口取应答的 `httpPort`
-   （与服务端 `discover.mjs` 同一套口径）；
-4. 点连接 / 手输地址 → Rust 侧 `GET /api/hello` 探测 → `webview.navigate()`。
+改启动页布局时别把输入框推到下半屏（2026-11-01 CDP 实测：hero 竖排时码框
+bottom=399，真机上会被键盘盖住）。
 
-配对：在电脑上「设置 → 手机配对」生成二维码，把二维码下面的链接
-（`http://<ip>:8787/pair?token=bp_xxx`）粘贴到启动页输入框，一次完成配对。
-**token 不落盘** —— `shell.json` 只存 origin。
+## 启动页怎么走（2026-11-01 四改：已配对 / 扫码 / 邀请码三张页签）
 
-返回键：远程页由启动页 navigate 过去，WebView 历史里天然有启动页。
-Android 返回键在远程页根页时退回启动页，再按一次退出 App（Tauri AppPlugin
-的默认行为，没有改 Kotlin）。
+连接有三种方式，**跟部署形态无关**（用户定稿：局域网也填地址，
+壳里不做"这是局域网还是云端"的判断）。三种方式做成**同一张页签**
+（`#tabs` 的 data-mode = paired | scan | code），**默认选中「已配对」**
+（没连过任何电脑才落到扫码）—— 扫码在两种部署下都成立，是首次配对的主路；
+邀请码是"扫不了"时的退路；「已配对」是日常回来的一键直达：
+
+1. 读 `app_config_dir/shell.json` 的 `servers`（**只存 origin + 名字，≤8 台**，
+   新的在前；老配置只有 `server` 一个字段，启动时回填成一条）。有记录 →
+   出现「已配对」页签并列出这些电脑；没有 → 该页签整个不出现（两页签）；
+2. **扫码（默认）**：整块取景框是一个大按钮，点开相机遮罩
+   （scanner.js）。电脑「设置 → 手机配对」的二维码内容是
+   `http://<地址>/pair?code=…`（地址 + 码一起带）。扫到后**切到邀请码
+   页签**、拆成两半填进输入框（用户能核对）再 `open_server`；
+   解不出 `code=` 的整条打开，非班底码（WIFI: 等）只提示；
+   相机起不来（没权限 / 被占用）→ 自动切到邀请码页签，错误条给出路；
+3. **邀请码**：地址 + 9 位码两栏**都填**才连 —— 拼成
+   `<地址>/pair?code=<码>`（地址去尾斜杠、码剥非数字、三位一组实时格式化）。
+   地址写 `192.168.1.5:18787` 或 `https://bandi.example.com` 都行，
+   归一化（补协议/补 18787 端口）在 Rust `normalize()`；
+4. 地址栏粘**一整条配对链接**（`http://…/pair?…`）也直通 —— 没有相机、
+   不在同一 Wi-Fi 时唯一的路，桌面端「复制配对链接」一键给它；
+5. **已配对（有记录时默认）**：列表 → 详情两级（2026-11-01 五改）。
+   列表一行一台，名字用 `/api/hello` 报的机器名（没有就退回地址），副行是
+   地址 + 最近连接时间，右端一个**箭头**（连接不是列表的副作用 —— 点错一下
+   就连到别的电脑上，比多点一层烦）。点行进详情：设备卡（名字 + 主机名）+
+   信息行（完整地址、最近连接时间）+ 两个按钮 ——
+   **「连接」** = `open_server(<origin>/pair?resume=1)`，远程页凭 localStorage
+   的 clientKey 换新令牌连回去，**不消耗邀请码、不用重新扫码**（配对被断开
+   且没别的手机在用时也能回；有人在用会提示"另一台手机正在使用"）；
+   **「取消配对」**（红描边）= 只清这台手机上的记录，电脑端那条设备记录不动。
+   详情往 history 里压了一条 state：Android 返回键直接退回列表，不退 App；
+   切走页签再回来落在列表，不停在详情里。
+6. `https://` 跳过 probe：Rust 的探测是裸 TCP + 明文 HTTP，对着 443 说话
+   必然失败，所以云端地址直接 `open_server`，连不上由 WebView 报错。
+
+**为什么局域网也要求填地址**：上一版用 UDP 广播"拿码找电脑"（discover(code)），
+听着省事，但壳里从此分两条路，还要处理"广播被路由器吃掉"的一堆边角。
+两栏填满这条路在两种部署下是同一条，程序简单、测试只跑一遍。
+`discover` 命令仍在 Rust 里（启动页已不调用），服务端带码 UDP 应答同理保留。
+
+**为什么废掉"只填地址直连"**：知道地址就能连，安全全靠"别人猜不到你的网段"，
+不成立。现在凭据永远是邀请码（5 分钟、单次、只存哈希、试错限流 E1703）。
+
+**token / 码都不落盘** —— `shell.json` 只存 origin 和给人看的名字；
+设备凭据在远程页的 Cookie 里，壳不碰。
+
+**主题跟随系统**（2026-11-01 三改）：启动页跑在 `http://tauri.localhost`，和业务页
+不是一个 origin，读不到那边「设置 → 偏好 → 主题」的值；而且它出现在连接之前，
+还没有"某台电脑的偏好"可读。所以深色是默认（CSS 变量本体），浅色整段放在
+`@media (prefers-color-scheme: light)` 里覆盖（底 #f2f4f7、卡片 #fff、次要文字
+#656a72 ≈ 4.9:1 过 AA）。所有硬编码颜色都收进了 token（--seg-bg / --target-a /
+--seg-bg / --status-bg…），加主题就是加一段覆盖。扫码遮罩 `.scan` 保持深色 ——
+那是相机画面，不跟主题走。
+
+返回键（2026-11-01 改）：连接页**不进 WebView 历史** —— `open_server` 用
+`location.replace` 而不是 `webview.navigate`（navigate 是"前进一格"，启动页留在
+历史里，进工作台一按返回就退回连接页，像"干点事就被踢回登录页"）。replace 顶掉
+当前历史项后，返回键在远程页根页没得退，Tauri AppPlugin 把事件交回 Activity，
+正常退出 App。
+
+要回连接页只有一条路：配对真的没了（电脑端「断开连接」/「取消配对」/ 换了别的手机）
+→ 远程页 401 遮罩上点「重新连接」—— 远程页自己 `location.replace('http://tauri.localhost/')`
+（同样是 replace，不推历史）。**不走自定义 command**：Tauri v2 的 ACL 只对本地页开 app 命令，
+远程页 invoke 会被 "not allowed" 拒掉（2026-11-01 真机实测）；好在壳的 on_navigation 白名单
+放行 http/https，导航不受限。工作台里不提供"返回连接页"的入口 —— 那是登录页，不是上一级。
+
+## 扫码（2026-11）
+
+不碰原生、不加 gradle 依赖：相机走 WebView 的 `getUserMedia`，解码走
+`dist/vendor/jsQR.js`（纯 JS，vendored，Apache-2.0）。
+
+为什么不用 Tauri 的 barcode-scanner 插件：它是移动端插件，Android 侧的 Kotlin
+类得靠 tauri-cli 把插件工程 include 进 `tauri.settings.gradle` —— 而我们为了
+绕开符号链接（坑 1）根本不用 CLI 构建。走 WebView 则原生侧一行不用改。
+
+链路：`scanner.js` 开 `facingMode: environment` → 每 180ms 把一帧（最长边缩到
+720）画进 canvas → `jsQR(imageData)` → 解到 `http(s)://…` 就停流、收遮罩 →
+交给 `launcher.js` 的 `connect()`。
+
+三个必须知道的约束：
+
+1. **只能在本页扫码**。`getUserMedia` 要 secure context：`http://tauri.localhost`
+   算（`.localhost` 是可信来源），业务页 `http://192.168.x.x:18787` **不算** ——
+   一旦 navigate 过去，那边的页面上 `getUserMedia` 直接用不了。所以扫码入口只在
+   启动页，别想着在业务页加"扫一扫"。
+2. **`CAMERA` 权限必须写进 manifest**（见坑 1 第三条）。wry 的
+   `RustWebChromeClient.onPermissionRequest` 会替我们弹系统授权框，但前提是
+   manifest 声明过；没声明就是 `NotAllowedError`，看着像"用户拒了权限"。
+3. **回调前必须 stop 掉所有 track**。回调会 navigate，旧文档销毁，流不停就一直
+   占着相机（下次打开黑屏 + 后台耗电）。
+
+解到非链接的码（付款码、名片码）只提示不退出，用户换一张继续扫；同一张错码
+1.5 秒内不重复闪提示。
+
+## 语音输入（2026-11-01）
+
+需求是"像豆包那样：说话 → 文字 → 发出去"。这里的每一个设计选择都是被同一个
+约束逼出来的：**业务页跑在 `http://192.168.x.x:18787`，不是安全上下文**。
+
+因此：
+
+- `navigator.mediaDevices` 在业务页上是 `undefined`（拿不到麦克风）；
+- WebView 也没有 `webkitSpeechRecognition`（那是 Chrome 浏览器层的东西）；
+- 所以识别**只能壳做** —— 和扫码相反，扫码在启动页（`tauri.localhost`，算安全
+  上下文）就能做，语音不行，因为语音按钮在业务页的输入条上。
+
+### 怎么搭的桥（**故意不走 Tauri IPC**）
+
+```
+业务页 (http://192.168.x.x)                壳 (Kotlin)
+  window.__BandiSpeech.start()   ───────▶  SpeechPlugin.Bridge.start()
+  window.__bandiSpeechEvent({...}) ◀─────  webView.evaluateJavascript(...)
+```
+
+- 页面 → 壳：`addJavascriptInterface(Bridge(), "__BandiSpeech")`（`Plugin.load()` 里）。
+- 壳 → 页面：`evaluateJavascript("window.__bandiSpeechEvent({...})")`。
+
+为什么不用 `invoke('plugin:speech|start')`：远端 origin 要 invoke，得在 capability
+里给 `remote.urls` 开白，还得给自定义命令写 ACL 条目（`permissions/*.toml`）。
+`addJavascriptInterface` 两条都不需要，而且只对壳自己的 WebView 生效 —— 比开
+`http://*:*` 的 IPC 白名单安全得多。副作用是**不用改 `capabilities/default.json`**。
+
+页面侧在 `apps/web/js/voice.mjs`：探测不到 `window.__BandiSpeech` 就直接返回，
+所以桌面浏览器上按钮压根不出现，`style.css` 一行没动。
+
+### gen/android 里的手改（重新 `tauri android init` 会丢，要重贴）
+
+| 文件 | 改了什么 | 为什么 |
+|---|---|---|
+| `app/src/main/AndroidManifest.xml` | `CAMERA`（扫码，旧） | 不声明则 `getUserMedia` 直接 `NotAllowedError` |
+| 同上 | `RECORD_AUDIO`（语音） | 系统 `SpeechRecognizer` 要录音权限 |
+| 同上 | `<queries><intent>android.speech.RecognitionService` | **Android 11+ 包可见性**：不声明则 `isRecognitionAvailable()` 恒为 false，表现成"这台手机没有语音引擎" |
+| `.../app/local/bandi/mobile/SpeechPlugin.kt` | 整个文件 | 语音插件本体 |
+| `MainActivity.kt` | 安全区内边距（旧） | Android 15 edge-to-edge |
+
+### 已知限制
+
+1. **长语音会被系统引擎切段**。系统 `SpeechRecognizer` 在静音或达到上限时会自己
+   收尾（`onResults`），第一版就按"一句一次"处理；要连续长听，得在 `onResults`
+   后自动重启识别并把结果接起来 —— 没做。
+2. **识别质量取决于手机自带的引擎**（国产 ROM 一般是讯飞/厂商自研，够用）。装了
+   但没下载语音包的机型会给 `ERROR_NETWORK`/`ERROR_SERVER`，浮层里报得出来。
+3. **不能边说边发**：识别完文字留在输入框，等用户点发送。这是故意的 —— 语音一定
+   有错字，直接发出去对方只看到错句。
 
 ## 没做
 
-- **扫码**：需要相机权限 + 扫码库，当前用「粘贴配对链接」代替。
 - **通知**：需要 Web Push（VAPID + SW push handler + 服务端订阅表），
   或者原生 NotificationManager 桥接。这是壳相对 PWA 唯一有意义的增量，但没做。
 - **iOS**：Tauri 的 iOS 构建要 macOS + Xcode，Windows 上做不了。

@@ -500,6 +500,52 @@ function allRows(projects, byId, runs, { withChat = false } = {}) {
 }
 
 /**
+ * **派到分公司（协作中心）的活** —— 只在全局面板上出现（2026-11-01 用户："派活这一步
+ * 能不能加进任务面板里，指定设备"）。
+ *
+ * 为什么不写进 `project_tasks`：这些活的数据**归分公司**（它改状态、它删卡），中心这边
+ * 只是派单方。两边各写一份就有"中心显示进行中、那台机器显示已完成"的分歧；
+ * 现在一行一行照 `collab_tasks` 现读（分公司每 5 秒报一次状态，中心侧看到的就是最新的）。
+ *
+ * 行上带三个前端要用的东西：
+ *   · `remote: true` —— 只读（拖不动、删不掉、点不开本地卡，改状态得走协作中心）；
+ *   · `collab_task_id` / `branch_id` —— 点卡片回协作中心、以后要撤单都靠它；
+ *   · `project_name: '协作 · 设备名'` —— 卡片上那枚「属于哪个项目」的标签，一眼看出在谁的机器上跑。
+ */
+function collabRows() {
+  let list = [];
+  try {
+    list = store.listCollabTasks({ limit: 200 });
+  } catch {
+    return []; // 协作表还没建 / 读挂了 —— 看板不能因为这一路数据整体空掉
+  }
+  return list.map((t) => {
+    const b = store.getCollabBranch(t.branchId);
+    const device = b?.label ?? '（分公司已移除）';
+    return {
+      source: 'collab',
+      remote: true,
+      source_text: '协作',
+      task: clip(t.title, TASK_LIMIT),
+      status: t.status,
+      col: COL_OF_MANUAL[t.status] ?? 'other',
+      rank: FLOW_RANK[t.status] ?? RANK_OTHER,
+      // 执行人那一格放**设备名**：这类活派的是机器，不是某个人
+      assignee: device,
+      assignee_id: null,
+      at: stamp(t.updatedAt),
+      note: clip([t.description || '派到分公司的活', `在「${device}」上跑`].join(' · '), NOTE_LIMIT),
+      manual_id: null,
+      collab_task_id: t.id,
+      branch_id: t.branchId,
+      device,
+      project_id: null,
+      project_name: `协作 · ${device}`,
+    };
+  });
+}
+
+/**
  * **全局任务看板**（工作台 → 任务看板）：所有项目的活铺在同一张看板上。
  *
  * 跟项目看板同源、同列、同卡片，只多两件事：
@@ -520,7 +566,7 @@ export function allTasks() {
   const runs = store.listWorkflowRuns({ limit: 500 });
 
   // 看板视图：不收聊天行（2026-10-24，见 chatRows 的注释）
-  const rows = allRows(projects, byId, runs);
+  const rows = [...allRows(projects, byId, runs), ...collabRows()];
   const boarded = board(rows, {
     scope: 'all',
     project_count: projects.length,

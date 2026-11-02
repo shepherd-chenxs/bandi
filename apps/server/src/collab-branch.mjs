@@ -99,18 +99,18 @@ const rt = {
   version: null,
 };
 
-/** 中心地址归一化：去尾斜杠、补协议（用户可能只填 `192.168.1.9:8787`） */
+/** 中心地址归一化：去尾斜杠、补协议（用户可能只填 `192.168.1.9:18787`） */
 function normalizeBase(input) {
   const raw = String(input ?? '').trim();
   if (!raw) {
-    throw new localMode.LocalError(400, 'E4041', '先填中心的地址，比如 http://192.168.1.9:8787');
+    throw new localMode.LocalError(400, 'E4041', '先填中心的地址，比如 http://192.168.1.9:18787');
   }
   const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `http://${raw}`;
   let u;
   try {
     u = new URL(withScheme);
   } catch {
-    throw new localMode.LocalError(400, 'E4041', `这个地址看不懂：${raw}。照 http://192.168.1.9:8787 这样填`);
+    throw new localMode.LocalError(400, 'E4041', `这个地址看不懂：${raw}。照 http://192.168.1.9:18787 这样填`);
   }
   if (u.protocol !== 'http:' && u.protocol !== 'https:') {
     throw new localMode.LocalError(400, 'E4041', '只支持 http:// 或 https://');

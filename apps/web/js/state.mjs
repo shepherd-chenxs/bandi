@@ -282,6 +282,15 @@ export function setNav(nav, opts = {}) {
   closeAddMenu();
   // 工作台是整页宫格，二级列表栏在那儿没用 —— 整列收掉（见 CSS 的 body.no-list）。专家库、我的页同理。
   document.body.classList.toggle('no-list', nav === 'plugins' || nav === 'experts' || nav === 'me');
+  /*
+   * 占位文案按栏回落（2026-11-02）：各页在自己的 renderList 分支里改 placeholder
+   * （搜流程 / 搜项目名 / 搜索设置 …），换栏时先归位默认值，否则从设置切回消息，
+   * 框里还写着「搜索设置」。默认值必须在 renderList **之前**写 —— 页面自己的覆盖后到。
+   */
+  if (prevNav !== nav) {
+    const si = $('search');
+    if (si) si.placeholder = '搜索';
+  }
   renderList();
   savePlace();   // 换了位置就记下来，刷新后能回来
   // 通讯录要看实时忙/闲 → 开着这一页时轮询；离开自动停

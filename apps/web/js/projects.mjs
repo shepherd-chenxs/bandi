@@ -1,7 +1,7 @@
 /* projects.mjs —— 项目。
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
 import { esc, mdRender, personLabel, runtimeLabel, savePlace, setRoute, toast } from './shell.mjs';
-import { ICON_FOLDER, ICON_WB_BOARD, ICON_WB_CLOCK, ICON_WB_FLOW, api, createCombo, handleCopyPaths, personaAvatar, personaByName, renderMarkdown, smAvatar, wireDialogHead } from './ui.mjs';
+import { ICON_FOLDER, ICON_WB_BOARD, ICON_WB_CLOCK, ICON_WB_FLOW, api, createCombo, handleCopyPaths, post, personaAvatar, personaByName, renderMarkdown, smAvatar, wireDialogHead } from './ui.mjs';
 import { setNav } from './state.mjs';
 import { breadcrumb, headRow } from './connectors.mjs';
 import { confirmDo, askText } from './machine.mjs';
@@ -508,7 +508,7 @@ export async function renderProjDetail(p) {
                 </div>
               </div>
               <div id="pjConstView" class="md-view"></div>
-              <textarea id="projConstInput" hidden placeholder="只写本项目特有的（共通规矩契约已经管了）：&#10;例如：零依赖，不许引入 npm 包；端口固定 8787；改 store.mjs 的 SQL 必须先问人">${esc(p.constitution ?? '')}</textarea>
+              <textarea id="projConstInput" hidden placeholder="只写本项目特有的（共通规矩契约已经管了）：&#10;例如：零依赖，不许引入 npm 包；端口固定 18787；改 store.mjs 的 SQL 必须先问人">${esc(p.constitution ?? '')}</textarea>
             </div>
             <div class="counter">派活时会全文带给 AI，并注明「只许加码，与契约冲突以契约为准」。</div>
           </div>
@@ -1844,6 +1844,48 @@ export function wireBoard(view, { refresh, taskProject = () => null }) {
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
         openTaskCardPage(el.dataset.kbOpen);
+      }
+    };
+  });
+  /*
+   * 派到分公司的卡（2026-11-01 二十改）：**验收 / 撤销**长在卡上 —— 原来这俩动作只在
+   * 协作中心的「我派出去的活」表里，那张表撤了（看板上本来就有同样的卡，多一处展示
+   * 反而要对两遍状态）。PATCH /api/collab/tasks/:id 与协作中心原来发的是同一个接口。
+   */
+  view.querySelectorAll('[data-kb-cl-done]').forEach((el) => {
+    el.onclick = async (e) => {
+      e.stopPropagation();
+      try {
+        await api(`/api/collab/tasks/${encodeURIComponent(el.dataset.kbClDone)}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: '已完成' }),
+        });
+        toast('已验收', 'ok');
+        await refresh();
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    };
+  });
+  view.querySelectorAll('[data-kb-cl-cancel]').forEach((el) => {
+    el.onclick = async (e) => {
+      e.stopPropagation();
+      const ok = await confirmDo(
+        '撤销这个任务？\n取消之后两边都不能再改（分公司那边的卡会变成「已取消」，留着当痕）。',
+        { title: '撤销任务', ok: '撤销' },
+      );
+      if (!ok) return;
+      try {
+        await api(`/api/collab/tasks/${encodeURIComponent(el.dataset.kbClCancel)}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: '已取消' }),
+        });
+        toast('已撤销', 'ok');
+        await refresh();
+      } catch (err) {
+        toast(err.message, 'error');
       }
     };
   });
@@ -3503,7 +3545,9 @@ export function kbCard(r) {
    */
   // 协作卡（2026-10-31）也算"本地卡"：能拖（拖到哪一列就是告诉中心'我干到哪一步了'）。
   // 三条判据必须一起认 —— 漏一处卡就点不开、筛选也错（任务书 §十五 第 7 条）
-  const local = r.source === 'manual' || r.source === 'repo' || r.source === 'collab';
+  // `remote`（2026-11-01）：中心这边**派到分公司**的活 —— 数据归那台机器，这儿只读
+  // （拖不动、删不掉：改状态要到那台机器上改，或者以后在协作中心撤单）。
+  const local = !r.remote && (r.source === 'manual' || r.source === 'repo' || r.source === 'collab');
   const jump = r.source === 'flow'
     ? `data-kb-flow="${esc(r.flow_id)}" data-kb-tpl="${esc(r.template_id || '')}"`
     : r.conversation_id
@@ -3516,15 +3560,30 @@ export function kbCard(r) {
   const del = local ? `<button class="kb-del" type="button" data-kb-del="${esc(r.manual_id)}" title="删掉这张卡">×</button>` : '';
   // 全局面板的行才带 project_name（项目看板的行服务端已经摘掉了）——
   // 站在全局看，第一眼要知道的就是"这是哪个项目的活"
-  const proj = r.project_name
+  // 派到分公司的卡不画它：`协作 · 设备` 跟右边的设备标签是同一句话，画两遍反而吵
+  const proj = r.project_name && !r.remote
     ? `<span class="kb-tag proj" title="属于哪个项目">${esc(r.project_name)}</span>`
     : '';
   const srcCls = r.source === 'chat' ? ' chat' : r.source === 'repo' ? ' repo' : local ? ' manual' : '';
-  return `<article class="kb-card ${local ? 'manual' : ''}" ${jump} ${drag}${local ? ` data-kb-open="${esc(r.manual_id)}" tabindex="0"` : ''} data-col="${esc(r.col)}" title="${esc(r.note || '')}">
+  /* 派到分公司的卡（2026-11-01）：多一枚设备标签，鼠标悬停说清楚"改状态得去那台机器"。
+     二十改：验收/撤销直接长在卡上（原来在协作中心的表里，那张表撤了 —— 展示和动作
+     都归任务面板）：待验收 → 「验收」；没到终态 → 「撤销」；终态不给动作。 */
+  const clAct = r.remote && r.collab_task_id
+    ? r.status === '待验收'
+      ? `<button class="kb-act" type="button" data-kb-cl-done="${esc(r.collab_task_id)}" title="验收：这活干完了，收下">验收</button>`
+      : r.status !== '已完成' && r.status !== '已取消'
+        ? `<button class="kb-act" type="button" data-kb-cl-cancel="${esc(r.collab_task_id)}" title="撤销：不干了，两边一起停">撤销</button>`
+        : ''
+    : '';
+  const devTag = r.remote && r.device
+    ? `<span class="kb-tag dev" title="这张卡在「${esc(r.device)}」上跑 —— 状态由那台机器报回来">${esc(r.device)}</span>`
+    : '';
+  const remoteAttrs = r.remote ? `data-kb-collab="${esc(r.collab_task_id || '')}"` : '';
+  return `<article class="kb-card ${local ? 'manual' : ''}${r.remote ? ' remote' : ''}" ${jump} ${drag}${local ? ` data-kb-open="${esc(r.manual_id)}" tabindex="0"` : remoteAttrs} data-col="${esc(r.col)}" title="${esc(r.note || '')}">
     <div class="kb-card-top">
-      ${proj}<span class="kb-tag${srcCls}">${esc(r.source_text)}</span>${prPillOf(r)}
+      ${proj}<span class="kb-tag${srcCls}">${esc(r.source_text)}</span>${devTag}${prPillOf(r)}
       <span class="kb-state">${esc(r.status)}</span>
-      ${del}
+      ${clAct}${del}
     </div>
     <div class="kb-card-title">${esc(r.task)}</div>
     <div class="kb-card-foot"><span class="kb-who">${esc(r.assignee)}</span><span>${esc(r.at)}</span></div>
@@ -3575,8 +3634,12 @@ export function taskDialog(project, colKey) {
         <span class="tk-chip" id="tkModeMount"></span>
         <span class="tk-chip" id="tkWhoMount"></span>
         <span class="tk-chip" id="tkFlowMount" hidden></span>
+        <!-- 执行设备（2026-11-01 用户："派活这一步加进任务面板，指定设备"）：
+             只有本机 = 只有「本设备」；接了分公司（协作中心）就多几项，选了就派到那台机器上跑。 -->
+        <span class="tk-chip" id="tkDevMount"></span>
         ${pick}
       </div>
+      <div class="dim" id="tkDevHint" style="font-size:12px" hidden>派到分公司：卡建在<b>那台机器</b>上，状态由它报回来（看板上那张卡只读）。</div>
       <div class="dim" id="tkFlowEmpty" style="font-size:12px" hidden>还没有已发布的流程 —— 先去工作台 → 流程 里发布一条</div>
       <div class="dim" id="tkFilterHint" style="font-size:12px" hidden></div>
       <div class="tk-foot">
@@ -3675,6 +3738,37 @@ export function taskDialog(project, colKey) {
     },
   });
 
+  /**
+   * **执行设备**（2026-11-01 用户："派活这一步加进任务面板，指定设备"）。
+   *
+   * 只有本机 = 只有「本设备」一项（默认，行为跟从前一字不差）；
+   * 接了分公司（协作中心）就多几项，选了以后这张活**派到那台机器上跑**：
+   *   · 卡建在那台机器上（它的本地项目「协作 · 中心名」），由它执行、它报状态；
+   *   · 中心的看板上出现的是一张**只读**卡（`source: 'collab'`，带设备标签），
+   *     不能拖、不能删 —— 要改去那台机器上改，或者在协作中心撤销。
+   * 为什么不双写一张本地卡：同一个状态两个来源，迟早出现"这边进行中、那边已完成"。
+   *
+   * 清单是**打开弹窗后现拉**的：分公司会随时加入/被移除，缓存一份只会显示过期的。
+   */
+  const devCombo = createCombo({
+    mount: $('tkDevMount'),
+    items: [{ id: '', label: '本设备' }],
+    value: '',
+    blank: '本设备',
+    onChange: () => syncDevice(),
+  });
+  api('/api/collab/branches')
+    .then((r) => {
+      // 只有**已接入**的能收活（待接入的派过去没人领，服务端也会拒 E4046）
+      const list = (r?.branches ?? []).filter((b) => b.status === 'active');
+      if (!list.length || !devCombo) return;
+      devCombo.setItems([
+        { id: '', label: '本设备' },
+        ...list.map((b) => ({ id: b.id, label: `${b.label}${b.online ? '' : '（离线）'}` })),
+      ]);
+    })
+    .catch(() => { /* 没有协作表 / 读不到 —— 就当没接分公司，只有本设备 */ });
+
   /*
    * 「立即开始」什么时候不该给勾 / 什么时候不给改：
    *   · 派给人：没选执行人 = 勾了也没人可派；状态是「想法」= 还没决定要不要做，谈不上开始。
@@ -3767,15 +3861,54 @@ export function taskDialog(project, colKey) {
     $('tkWhoMount').hidden = flow;
     $('tkFlowMount').hidden = !flow;
     $('tkFlowEmpty').hidden = !flow || published.length > 0;
+    syncDevice();
     syncStart();
     syncFilterHint();
   };
+
+  /**
+   * 选了分公司 = 这活交给**那台机器**：执行人 / 执行方式 / 项目 / 状态 / 立即开始
+   * 在这儿都没有意义（卡建在那边，状态由它流转），全部收起来，只留标题、描述和一句说明。
+   * 选回「本设备」就原样放回来 —— 上面几颗胶囊选好的值不丢。
+   */
+  function syncDevice() {
+    const remote = !!devCombo?.value();
+    $('tkWhoMount').hidden = remote || flowMode();
+    $('tkModeMount').hidden = remote;
+    $('tkFlowMount').hidden = remote || !flowMode();
+    $('tkFlowEmpty').hidden = remote || !flowMode() || published.length > 0;
+    if (projCombo) $('tkProjMount').hidden = remote; // 派到分公司不挂在中心的项目下
+    $('tkStatusMount').hidden = remote;              // 那边从「待办」起，状态在它那边流转
+    const hint = $('tkDevHint');
+    if (hint) hint.hidden = !remote;
+    const start = $('tkStart')?.closest('.kb-check');
+    if (start) start.style.visibility = remote ? 'hidden' : '';
+  }
+
   // 状态 / 执行方式 / 流程变了，这几件事都要跟着算 —— 挂在各自 combo 的 onChange 上（见上面创建处）
   syncMode();
   $('tkOk').onclick = async (e) => {
     e.preventDefault();
     const title = $('tkTitle').value.trim();
     if (!title) return toast('任务得有标题');
+    /*
+     * 派到分公司（2026-11-01）：只发标题 + 描述，其余一律不掺和 ——
+     * 卡建在那台机器的本地项目里，状态从「待办」起、由它流转，中心这边只留一张只读卡。
+     */
+    const devBranch = String(devCombo?.value() ?? '');
+    if (devBranch) {
+      try {
+        await post('/api/collab/tasks', { branchId: devBranch, title, description: $('tkDesc').value.trim() });
+        const again = $('tkAgain').checked;
+        if (!again) dlg.close();
+        else { $('tkTitle').value = ''; $('tkDesc').value = ''; $('tkTitle').focus(); }
+        toast('派出去了 —— 它下一次同步（几秒内）就会出现在那台机器的看板上', 'ok');
+        await (S.boardAll ? openTaskBoard() : openProjectDetail(project?.id ?? projects[0]?.id));
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+      return;
+    }
     const chosen = project ?? projects.find((x) => x.id === projCombo?.value());
     if (!chosen) return toast('先建一个项目，任务才有地方挂');
     const flow = flowMode();

@@ -344,8 +344,11 @@ export function renderList() {
        按分节标题过滤，命中为空的组整个不画。桌面左栏共用同一份结果。 */
     const hit = (t) => !q || String(t).toLowerCase().includes(q);
     const shown = groups
-      .map((g) => ({ title: g.title, items: g.items.filter(([, t]) => hit(t)) }))
+      .map((g) => ({ title: g.title, icon: g.icon, items: g.items.filter(([, t]) => hit(t)) }))
       .filter((g) => g.items.length);
+    /* 占位文案说明作用域（2026-11-02 二十八改）：这一栏搜的是**设置项标题**，
+       写「搜索设置」比光秃秃的「搜索」明确。换栏时 state.setNav 会归位默认值。 */
+    { const si = $('search'); if (si) si.placeholder = '搜索设置'; }
     /*
      * 手机（≤900px）= **微信设置页**版式（2026-10-31 用户："设置这个页面不应该做成折叠，
      * 应该参考微信设置页的做法"）：
@@ -359,25 +362,50 @@ export function renderList() {
     if (isNarrowScreen()) {
       const body = $('listBody');
       body.classList.add('mb-set');
-      body.innerHTML = shown.length
-        ? shown
-            .map((g) => {
-              const rows = g.items
-                .map(
-                  ([key, title]) => `<div class="item" data-set="${key}">
+      /*
+       * 「← 我的」返回行（2026-11-01）：设置现在是「我的」的下一级 —— 手机底部 tab
+       * 停在「我的」上，这一行是回个人中心的路（桌面上左栏本来就有一级菜单，不画）。
+       * 走 mb-nav 事件而不是 import setNav：这里 → settings → state 已经绕了一圈，再加
+       * 一条就是环（mobile.mjs 里那句注释）。
+       */
+      const backRow =
+        '<div class="mb-set-group"><div class="mb-set-card">' +
+        '<div class="item mb-set-back" data-me-back="1">' +
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>' +
+        '<div class="who"><div class="line1"><b>我的</b></div></div>' +
+        '</div></div></div>';
+      body.innerHTML =
+        backRow +
+        (shown.length
+          ? shown
+              .map((g) => {
+                const rows = g.items
+                  .map(
+                    ([key, title]) => `<div class="item" data-set="${key}" role="button" tabindex="0">
             <div class="who"><div class="line1"><b>${esc(title)}</b></div></div>
           </div>`,
-                )
-                .join('');
-              /* 组标题空了（设备 / 非管理员那种短清单）就不画标题，直接一张卡 */
-              return `<div class="mb-set-group">${
-                g.title ? `<div class="mb-set-head">${esc(g.title)}</div>` : ''
-              }<div class="mb-set-card">${rows}</div></div>`;
-            })
-            .join('')
-        : '<div class="empty" style="padding:40px 16px">没找到相关的设置</div>';
+                  )
+                  .join('');
+                /* 组标题空了（设备 / 非管理员那种短清单）就不画标题，直接一张卡。
+                   组头图标同桌面（2026-11-02）：单色 currentColor，跟着 .mb-set-head 的灰。 */
+                const headIcon = g.icon
+                  ? `<svg class="sec-ico" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">${g.icon}</svg>`
+                  : '';
+                return `<div class="mb-set-group">${
+                  g.title ? `<div class="mb-set-head">${headIcon}${esc(g.title)}</div>` : ''
+                }<div class="mb-set-card">${rows}</div></div>`;
+              })
+              .join('')
+          : '<div class="empty" style="padding:40px 16px">没找到相关的设置</div>');
+      body.querySelector('[data-me-back]').onclick = () =>
+        document.dispatchEvent(new CustomEvent('mb-nav', { detail: { nav: 'me' } }));
       body.querySelectorAll('[data-set]').forEach((el) => {
         el.onclick = () => openSettings(el.dataset.set);
+        el.onkeydown = (ev) => {
+          if (ev.key !== 'Enter' && ev.key !== ' ') return;
+          ev.preventDefault();
+          openSettings(el.dataset.set);
+        };
       });
       return;
     }
@@ -395,7 +423,8 @@ export function renderList() {
      */
     /* 单行（2026-10-29 用户："二级菜单下的说明去掉"）：只画标题，副标题说明不再渲染 ——
        导航树求短求快，说明是阅读负担；数组里的 sub 留着（title 兜底等别处还用得上）。 */
-    const row = ([key, title]) => `<div class="item ${S.settingsSection === key ? 'active' : ''}" data-set="${key}" title="${title}">
+    const row = ([key, title]) => `<div class="item ${S.settingsSection === key ? 'active' : ''}" data-set="${key}"
+          role="button" tabindex="0" title="${title}">
           <div class="who">
             <div class="line1"><b>${title}</b></div>
           </div>
@@ -404,14 +433,24 @@ export function renderList() {
       ? shown
           .map((g) =>
             g.title
-              ? `<div class="list-sec nav static">${esc(g.title)}</div><div class="sec-body nav">${g.items.map(row).join('')}</div>`
+              ? `<div class="list-sec nav static">${g.icon ? `<svg class="sec-ico" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">${g.icon}</svg>` : ''}${esc(g.title)}</div><div class="sec-body nav">${g.items.map(row).join('')}</div>`
               : g.items.map(row).join(''),
           )
           .join('')
       : '<div class="empty" style="padding:28px 10px">没找到相关的设置</div>';
     $('listBody').querySelectorAll('[data-set]').forEach((el) => {
       el.onclick = () => openSettings(el.dataset.set);
+      /* 键盘可达（2026-11-02 二十八改）：行是 div，Tab 本来进不来 —— role/tabindex 补上后
+         回车与空格要自己接（原生 button 才自带这两个键）。 */
+      el.onkeydown = (ev) => {
+        if (ev.key !== 'Enter' && ev.key !== ' ') return;
+        ev.preventDefault();
+        openSettings(el.dataset.set);
+      };
     });
+    /* 进页定位（2026-11-02）：13 项一屏装不下时，选中项可能根本不在视野里 ——
+       进来先把它滚进来，用户不用自己找"我现在在哪"。nearest 不惊动已可见的情况。 */
+    $('listBody').querySelector('.item.active')?.scrollIntoView({ block: 'nearest' });
     return;
   }
 

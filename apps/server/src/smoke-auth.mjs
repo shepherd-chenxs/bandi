@@ -187,6 +187,12 @@ try {
    * 「忘掉」也该是**真的把它踢出去**，而不是删了记录等它下次心跳回来。
    */
   console.log('\n⑧ 每节点令牌：邀请码加入 → 只能干自己那台的事');
+  /*
+   * 角色位（2026-11-01 晚）：发邀请码要求这台是**总机**（`acceptNodes:true`）——
+   * 显式 `BANDI_HOST=0.0.0.0` 不再自动等于"收节点"。⚠️ 只写 acceptNodes、不写 allowLan：
+   * ⑨ 还要验"打开界面上的局域网开关就自动要令牌"那条路径（那一步会自己写 allowLan）。
+   */
+  fs.writeFileSync(path.join(tmp, 'netmode.json'), JSON.stringify({ acceptNodes: true }, null, 2), 'utf8');
   const op = { 'X-Bandi-Token': token }; // 操作员令牌
   const inv = await send(baseB, '/api/nodes/invites', { headers: op });
   check('操作员能发邀请码', inv.status === 201 && /^bj_/.test(inv.json?.code ?? ''), String(inv.json?.code ?? '').slice(0, 10));

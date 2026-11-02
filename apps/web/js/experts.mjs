@@ -11,8 +11,6 @@ import { openWorkflows, wbCard } from './workflows.mjs';
 import { openProjectsPage, openTaskBoard, workbenchAutoSection, workbenchProjectSection } from './projects.mjs';
 import { setListTitle } from './flowpages.mjs';
 import { openCodeRepoPage, openSchedules } from './skills.mjs';
-// 协作中心（2026-10-31 MVP）：宫格里的「协作」组与那颗磁贴
-import { openCollabPage, workbenchCollabSection } from './collab.mjs';
 import { setBusy, setComposer } from './chat.mjs';
 import { gidOf, paintDrawer, paintGroupDetail } from './groups.mjs';
 import { $, S } from './core.mjs';
@@ -695,7 +693,7 @@ export function renderWorkbenchGrid() {
   $('pluginView').classList.remove('kb-page'); // 宫格是长页面，按普通滚动
   $('pluginView').innerHTML = `
     <div class="detail-head head-row"><div class="head-title"><b>工作台</b></div></div>
-    <div class="detail-body wb-page">${pluginSections}${workbenchProjectSection()}${devMode || limitedByRole ? '' : workbenchCollabSection()}${devMode || limitedByRole ? '' : workbenchAutoSection()}${
+    <div class="detail-body wb-page">${pluginSections}${workbenchProjectSection()}${devMode || limitedByRole ? '' : workbenchAutoSection()}${
       broken.length
         ? `<div class="wb-sec">装不上台面</div>
            ${broken
@@ -738,14 +736,9 @@ export function renderWorkbenchGrid() {
     openSchedules().catch((e) => toast(e.message, 'error'));
   });
   /*
-   * 协作中心（2026-10-31 MVP）：把活派给分公司、看进度。
-   * 这一组只对 operator / admin 摆（宫格那里按 limitedByRole / devMode 收掉），
-   * 与接口层的 `mayManage` 对齐 —— 看得到就点得进去。
-   */
-  view.querySelector('[data-wb-collab]')?.addEventListener('click', () => {
-    openCollabPage().catch((e) => toast(e.message, 'error'));
-  });
-  /*
+   * （协作中心 2026-11-01 搬去设置 →「协作」组了：宫格里不再有这一组磁贴，
+   *   页面本体在 collab.mjs renderCollabCenter。）
+   *
    * 研发区的两个内置入口（代码托管 / 远程连接）→ 各自的工作台子页。
    *
    * 2026-10-26 二改：原来这俩**借设置页的壳**（`setNav('settings')` + `S.settingsSection`），

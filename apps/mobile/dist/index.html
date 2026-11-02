@@ -3,57 +3,186 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="color-scheme" content="dark" />
+    <meta name="color-scheme" content="light dark" />
     <title>班底</title>
     <link rel="stylesheet" href="launcher.css" />
   </head>
   <body>
     <main class="wrap">
       <header class="hero">
-        <div class="logo">B</div>
-        <h1>班底</h1>
-        <p class="sub">把电脑上的班底装进口袋</p>
+        <div class="logo" aria-hidden="true">B</div>
+        <div class="hero-txt">
+          <h1>连接班底</h1>
+          <p class="sub">扫一扫、输邀请码，或选一台连过的</p>
+        </div>
       </header>
 
-      <!-- 上次连过：一键进 -->
-      <section id="connected" class="card" hidden>
-        <p class="eyebrow">上次连接</p>
-        <p id="connectedUrl" class="addr"></p>
-        <button id="enterBtn" class="btn primary" type="button">进入</button>
-        <button id="switchBtn" class="btn ghost" type="button">换一台</button>
+      <!--
+        三种连接方式（2026-11-01 三改，用户在扫码/邀请码之后补的第三条）：
+          A. 已配对 —— 这台手机连过的电脑，点一下直接连回去（走 `/pair?resume=1`：
+             凭远程页 localStorage 里的 clientKey 换新令牌，不用再扫码）。
+             没有连过任何电脑时这个页签整个不出现。
+          B. 扫码 —— 二维码里带着地址 + 邀请码，扫完直接进；局域网、云端都成立。
+          C. 邀请码 —— 地址 + 9 位数字两栏都填。局域网也要填地址：壳不再发 UDP
+             广播去"猜"电脑在哪，程序里因此没有任何"局域网还是云端"的判断，
+             少一条分支就少一处出错。
+        三者做成同一张页签（默认：连过就选 A，没连过选 B），而不是并列几块 ——
+        并列会让"填地址"那块抢走首屏的注意力，也把输入框推到键盘底下（见 CSS 里
+        关于 y<350 的说明）。滑块位置由 `--seg-i` / `--seg-n` 算，页签增减不用改 CSS。
+      -->
+      <div id="tabs" class="seg" role="tablist" aria-label="连接方式">
+        <span class="seg-thumb" aria-hidden="true"></span>
+        <button
+          class="seg-btn"
+          type="button"
+          role="tab"
+          data-mode="paired"
+          aria-selected="false"
+          aria-controls="panePaired"
+          hidden
+        >已配对</button>
+        <button
+          class="seg-btn is-on"
+          type="button"
+          role="tab"
+          data-mode="scan"
+          aria-selected="true"
+          aria-controls="paneScan"
+        >扫码</button>
+        <button
+          class="seg-btn"
+          type="button"
+          role="tab"
+          data-mode="code"
+          aria-selected="false"
+          aria-controls="paneCode"
+        >邀请码</button>
+      </div>
+
+      <!-- 状态条钉在页面底部（CSS position:fixed），不占布局位、不推输入框 -->
+      <p id="status" class="status" hidden></p>
+
+      <!--
+        「已配对」是**列表 → 详情**两级（2026-11-01 四改，用户要的）：
+        列表一行一台、右端一个箭头；点进去看连接信息，再决定「连接」还是「取消配对」。
+        这样"点错就秒连"不会发生 —— 连接是个明确动作，不是列表的副作用。
+      -->
+      <section id="panePaired" class="pane" role="tabpanel" aria-labelledby="tabs" hidden>
+        <div id="pairedList" class="paired"><div class="empty">读取中…</div></div>
+        <p class="foot-hint" id="pairedHint">
+          这些都是这台手机<b>连过</b>的电脑。点一台看详情，配对凭据还留在手机上，不用重新扫码。
+        </p>
+
+        <div id="pairedDetail" class="pd" hidden>
+          <button id="pdBack" class="pd-back" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M15 5l-7 7 7 7" />
+            </svg>
+            已配对
+          </button>
+
+          <div class="pd-card">
+            <div class="pd-name" id="pdName"></div>
+            <div class="pd-host" id="pdHost"></div>
+          </div>
+
+          <dl class="pd-rows">
+            <div class="pd-row">
+              <dt>电脑地址</dt>
+              <dd id="pdOrigin"></dd>
+            </div>
+            <div class="pd-row">
+              <dt>最近连接</dt>
+              <dd id="pdLast"></dd>
+            </div>
+          </dl>
+
+          <button id="pdConnect" class="btn primary" type="button">连接</button>
+          <button id="pdForget" class="btn danger" type="button">取消配对</button>
+          <p class="foot-hint">
+            「取消配对」只清掉这台手机上的记录 —— 电脑端「设置 → 手机连接」里那条设备还在，要断去电脑上断开。
+          </p>
+        </div>
       </section>
 
-      <!-- 手动地址：放在发现列表**之前**（2026-11 实测结论）。
-           键盘弹起时 Tauri 的 Android WebView 既不滚文档、visualViewport
-           也不派发 resize，任何"等键盘状态再调整"的方案都不可靠。
-           把输入区放在上半屏（y≈220–300），键盘顶部在 y≈350，天然不被挡。 -->
-      <section id="manual" class="card">
-        <p class="eyebrow">填写地址</p>
-        <div class="row">
-          <input
-            id="addrInput"
-            type="text"
-            inputmode="url"
-            autocomplete="off"
-            autocapitalize="off"
-            spellcheck="false"
-            placeholder="192.168.1.5:8787"
-          />
-          <button id="connectBtn" class="btn primary" type="button">连接</button>
-        </div>
-        <p class="hint">
-          在电脑上打开「设置 → 手机配对」生成二维码，把二维码下面的链接粘贴到这里，可以一步完成配对。
+      <section id="paneScan" class="pane" role="tabpanel" aria-labelledby="tabs">
+        <button id="scanBtn" class="scan-target" type="button">
+          <span class="frame" aria-hidden="true">
+            <span class="frame-qr">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="3" width="6.4" height="6.4" rx="1.7" />
+                <rect x="14.6" y="3" width="6.4" height="6.4" rx="1.7" />
+                <rect x="3" y="14.6" width="6.4" height="6.4" rx="1.7" />
+                <path d="M14.6 14.6h2.9v2.9h-2.9z" />
+                <path d="M20.4 14.6v.01M20.4 21v-3.5M17.6 21h-3" />
+              </svg>
+            </span>
+            <i></i><i></i><i></i><i></i>
+            <span class="sweep"></span>
+          </span>
+          <span class="scan-title">扫码连接</span>
+          <span class="scan-sub">对准电脑上的二维码，自动进入</span>
+        </button>
+        <p class="foot-hint">
+          二维码在电脑上「设置 → 手机配对」里，点一下放大。码里已经带着电脑地址和邀请码。
         </p>
       </section>
 
-      <!-- 自动发现 -->
-      <section id="found" class="card" hidden>
-        <p class="eyebrow">局域网里的班底</p>
-        <div id="candidates" class="list"></div>
+      <section id="paneCode" class="pane" role="tabpanel" aria-labelledby="tabs" hidden>
+        <label class="lab" for="addrInput">电脑地址</label>
+        <input
+          id="addrInput"
+          class="field"
+          type="text"
+          inputmode="url"
+          enterkeyhint="next"
+          autocomplete="off"
+          autocapitalize="off"
+          spellcheck="false"
+          placeholder="192.168.1.5:18787"
+          aria-label="电脑地址"
+        />
+        <label class="lab" for="codeInput">邀请码</label>
+        <input
+          id="codeInput"
+          class="code-input"
+          type="text"
+          inputmode="numeric"
+          enterkeyhint="go"
+          autocomplete="off"
+          autocapitalize="off"
+          spellcheck="false"
+          maxlength="11"
+          placeholder="000 000 000"
+          aria-label="九位邀请码"
+        />
+        <button id="connectBtn" class="btn primary" type="button">连接</button>
+        <p class="foot-hint">
+          两样都要填：电脑上那行<b>地址</b>，和下面那串 <b>9 位数字</b>。号码 5 分钟内有效，只能配一台手机。
+        </p>
       </section>
-
-      <p id="status" class="status" hidden></p>
     </main>
+
+    <!-- 扫码遮罩：铺满全屏，video 垫底，取景框和提示浮在上面 -->
+    <div id="scan" class="scan" hidden>
+      <video id="scanVideo" class="scan-video" playsinline muted autoplay></video>
+      <div class="scan-top">
+        <p class="scan-head">扫描二维码</p>
+        <button id="scanCancel" class="scan-x" type="button" aria-label="关闭扫码">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+            <path d="M6 6l12 12M18 6L6 18" />
+          </svg>
+        </button>
+      </div>
+      <div class="scan-center">
+        <div class="scan-guide"><i></i><i></i><i></i><i></i><span class="scan-sweep"></span></div>
+        <p id="scanMsg" class="scan-msg">对准电脑上的二维码</p>
+      </div>
+      <p class="scan-tip">电脑上「设置 → 手机配对」</p>
+    </div>
+
+    <script src="vendor/jsQR.js"></script>
+    <script src="scanner.js"></script>
     <script src="launcher.js"></script>
   </body>
 </html>

@@ -16,7 +16,7 @@ import './js/chat.mjs';
 import './js/events.mjs';
 import './js/groups.mjs';
 import './js/experts.mjs';
-// 协作中心（2026-10-31 MVP）：中心页 + 分公司设置分节，一个模块两个半边
+// 协作中心（2026-10-31 MVP；2026-11-01 起中心页长在设置 →「协作」组，分公司侧走 CLI）
 import './js/collab.mjs';
 import './js/core.mjs';
 import './js/misc.mjs';
@@ -25,6 +25,9 @@ import './js/misc.mjs';
 // 而脚本是 defer 的 module，此刻 body 已经解析完，安全。
 import './js/mobile.mjs';
 import './js/pairing.mjs';
+// 语音输入（2026-11-01）：只在手机壳里生效 —— 壳在 WebView 上注入了 window.__BandiSpeech，
+// 桌面浏览器没有这个对象，mountVoice() 会直接返回（按钮不出现，不碰任何桌面逻辑）。
+import { mountVoice } from './js/voice.mjs';
 
 import { ROLE_SUGGEST, THEME_KEY, applyTheme, esc, readCollapsed, toast } from './js/shell.mjs';
 import { api, closeHelpPop, hideTip, openCombo, post, showTip, tipAnchor, tipTimer, wireDialogHead } from './js/ui.mjs';
@@ -705,6 +708,28 @@ document.addEventListener('keydown', (e) => {
 // （下拉的"点别处收起"由公共组件的 click 监听统一处理）
 $('search').addEventListener('input', (e) => { S.filter = e.target.value; renderList(); });
 
+/*
+ * 搜索框的两个附件（2026-11-02 二十八改）：
+ *   · 清空 ×：只做"清框 + 重画"，过滤状态仍归 S.filter 那份单一真相；
+ *   · Ctrl/⌘+K：聚焦搜索。框被收起来的页面（工作台/专家库/我的）不抢这个键 ——
+ *     否则按下去只看见页面纹丝不动，像快捷键坏了。
+ */
+$('searchClear')?.addEventListener('click', () => {
+  const si = $('search');
+  si.value = '';
+  S.filter = '';
+  renderList();
+  si.focus();
+});
+document.addEventListener('keydown', (e) => {
+  if (!(e.key === 'k' || e.key === 'K') || !(e.ctrlKey || e.metaKey)) return;
+  const si = $('search');
+  if (!si || si.closest('.list-search')?.classList.contains('hidden')) return;
+  e.preventDefault();
+  si.focus();
+  si.select();
+});
+
 
 $('listAction').onclick = () =>
   S.nav === 'contacts' ? openAddMenu(contactAddItems())
@@ -808,6 +833,9 @@ setComposer(false);
 
    // 还没选会话，输入区先收起
 applyTheme();
+
+// 语音输入：手机壳里才有桥（window.__BandiSpeech），桌面浏览器上这里是空操作
+mountVoice();
 
 
 boot();

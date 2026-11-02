@@ -31,7 +31,6 @@ import * as schedules from './schedules.mjs';
 import * as steward from './steward.mjs';
 import * as experts from './experts.mjs';
 import * as localMode from './local-mode.mjs';
-import * as discover from './discover.mjs';
 import * as lanAnnounce from './lan-announce.mjs';
 import * as localSecret from './security/local-secret.mjs';
 import * as setupCode from './security/setup-code.mjs';
@@ -111,7 +110,13 @@ function helloPayload() {
     hostname: me.hostname,
     httpPort: port,
     allowLan: nm.allowLan,
-    joinable: netmode.isJoinable({ allowLan: nm.allowLan, explicit: !!process.env.BANDI_HOST, boundHost: SERVER.boundHost }),
+    /*
+     * 角色位（2026-11-01 晚）：true = 总机（收别的机器当节点），false = 分机
+     * （对外服务照旧、手机照连，但不发邀请码、别的机器加不上去）。
+     * 跟 `joinable` 的区别：joinable 还要乘上"实际听着非回环"这个必要条件。
+     */
+    acceptNodes: nm.acceptNodes,
+    joinable: netmode.isJoinable({ acceptNodes: nm.acceptNodes, boundHost: SERVER.boundHost }),
     /*
      * **机器角色**（2026-10-28 节点配置面）：`node` = 这台机器已加入某台总机；
      * `operator` = 未加入（本机单机版）。前端的菜单矩阵要它，跟"打开页面的人是谁"
@@ -954,7 +959,7 @@ function logListen() {
    * 启动那一刻、以及每次「重启生效」之后都要对一次 ——
    * `sync` 的判据是"开关开 且 真的听着非回环"，所以这里传的是 `SERVER.boundHost`（实际监听）。
    */
-  lanAnnounce.sync({ allowLan: netmode.readNetMode().allowLan, explicit: !!process.env.BANDI_HOST, boundHost: SERVER.boundHost, httpPort: port });
+  lanAnnounce.sync({ ...netmode.readNetMode(), explicit: !!process.env.BANDI_HOST, boundHost: SERVER.boundHost, httpPort: port });
   /*
    * 启动就把**数据落在哪儿**打出来。
    * 部署排查时最费时间的一类问题是"我在看的到底是哪个库"——
@@ -1018,7 +1023,7 @@ function restartListening() {
      * 这里也要对一次（设计 §5.5 的三处同步点之一）：开关可能刚变过、而监听地址恰好没变
      * （比如 `BANDI_HOST` 显式指定着，或者本来就在回环上）—— 应答器该停就得停。
      */
-    lanAnnounce.sync({ allowLan: netmode.readNetMode().allowLan, explicit: !!process.env.BANDI_HOST, boundHost: SERVER.boundHost, httpPort: port });
+    lanAnnounce.sync({ ...netmode.readNetMode(), explicit: !!process.env.BANDI_HOST, boundHost: SERVER.boundHost, httpPort: port });
     return;
   }
   console.log(`[网络] 重启监听：${SERVER.boundHost} → ${want}`);
@@ -1031,7 +1036,7 @@ function restartListening() {
      * 开关是关的时候就这一下就够（`sync` 见到 on=false 直接 stop，不等 listen 回调）。
      * 开关是开的时候它会重新 bind，`logListen` 里那次是幂等的第二遍。
      */
-    lanAnnounce.sync({ allowLan: netmode.readNetMode().allowLan, explicit: !!process.env.BANDI_HOST, boundHost: SERVER.boundHost, httpPort: port });
+    lanAnnounce.sync({ ...netmode.readNetMode(), explicit: !!process.env.BANDI_HOST, boundHost: SERVER.boundHost, httpPort: port });
     server.listen(port, SERVER.boundHost, logListen);
   });
   // 挂着的长轮询（领活那种 20 秒的）别挡着 close 回调 —— 节点收到断开自己会重连 ✓

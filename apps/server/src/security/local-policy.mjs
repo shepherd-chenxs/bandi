@@ -2,7 +2,7 @@
  *
  * 起因（姊妹文档 `2026-10-31-本机接口授权-设计.md` v5）：`/api/local/*` 原来只有一道
  * 「来源必须是回环」的一刀切（`E1094`）。它既不分身份、也不分读/写/危险动作，于是：
- *   · 本机管理员在 `192.168.x.x:8787` 上被挡（正常需求做不了）；
+ *   · 本机管理员在 `192.168.x.x:18787` 上被挡（正常需求做不了）；
  *   · `panel` 令牌这种不该碰本机管理的身份，只是"恰好"被同一道闸挡住了；
  *   · 每加一个本机接口就要在 handler 里再写一遍判断 —— 这就是打补丁。
  *
@@ -32,15 +32,37 @@ export const LOCAL_POLICY = [
   { method: 'GET', path: '/api/local/collab/status', principals: ['operator', 'admin'], secret: 'never' },
   { method: 'GET', path: '/api/local/backups', principals: ['operator', 'admin'], secret: 'never' },
 
-  // 破坏性：本机来源不要秘密；从网络来必须带 X-Bandi-Local（只有本机进程读得到）。
-  { method: 'POST', path: '/api/local/collab/join', principals: ['operator', 'admin'], secret: 'network' },
-  { method: 'POST', path: '/api/local/collab/leave', principals: ['operator', 'admin'], secret: 'network' },
-  { method: 'POST', path: '/api/local/export', principals: ['operator', 'admin'], secret: 'network' },
-  { method: 'POST', path: '/api/local/import', principals: ['operator', 'admin'], secret: 'network' },
+  /*
+   * ⚠️ 协作**加入/退出**都跟 `/api/restart` 同档（网络来源也不要秘密）。
+   * 退出 2026-11-01（二十改续）放宽；加入 2026-11-02（三十一改）跟进一步，用户截图拍板：
+   * "这里应该是连接" —— 显式 BANDI_HOST 部署下 classifySource 判 ③ 把**桌面壳自己的
+   * 127.0.0.1 也判成 network**，秘密闸对 join 就是单向门：界面里「连接总机」永远 E4097，
+   * 只能复制 CLI 命令去终端跑，这正是 leave / export / restart 已经骂过并拆掉的同款形态。
+   * 风险论证（拿到 operator/admin 会话的人）：
+   *   · join 的落点要**目标中心的接入码**背书 —— 码不对在对面就 E4040，指不动；
+   *   · 接入成功只是多一条「协作」连接：中心能派卡、分公司回报状态，**本机通讯录 /
+   *     项目 / 会话不经过这个接口外带**（与 leave "不外带数据" 同构）；
+   *   · 完全可逆（leave 即断），且这个人本来就能 restart / import / 删库，不缺这一下破坏面。
+   * 反代契约仍 deny /api/local/*（IAM §10.1.2），那一道比秘密更硬。
+   */
+  { method: 'POST', path: '/api/local/collab/join', principals: ['operator', 'admin'], secret: 'never' },
+  { method: 'POST', path: '/api/local/collab/leave', principals: ['operator', 'admin'], secret: 'never' },
+  /*
+   * ⚠️ 导出/导入快照从 2026-11-01 起跟 `/api/restart` 同档（**网络来源也不要秘密**），
+   * 用户拍板："不管是不是总机分机，这个导入导出都要一直显示"。总机形态监听 0.0.0.0，
+   * `classifySource` 判 ③ 把**桌面壳自己的 127.0.0.1 请求也判成 network** ——
+   * 秘密闸在这里就是「单向门」：开了局域网，浏览器里的导出/导入就永远 E4097，
+   * 正是 /api/restart 那条注释②骂过的形态。风险面（拿到 admin/operator 会话的人）：
+   *   · 导出只是在服务端落一份快照文件、返回路径 —— 数据**不经由这个接口离开机器**；
+   *   · 导入有确认框 + 导入前自动备份兜底；能拿到管理会话的攻击者本来就能删会话、
+   *     改配置，不缺这一下 —— 与 /api/restart 那条「risk ≤ 已有权限」的论证同构。
+   * 反代部署契约仍然 deny /api/local/*（IAM §10.1.2），那一道比秘密更硬。
+   */
+  { method: 'POST', path: '/api/local/export', principals: ['operator', 'admin'], secret: 'never' },
+  { method: 'POST', path: '/api/local/import', principals: ['operator', 'admin'], secret: 'never' },
   { method: 'POST', path: '/api/local/hosts/add', principals: ['operator', 'admin'], secret: 'network' },
   { method: 'POST', path: '/api/local/hosts/test', principals: ['operator', 'admin'], secret: 'network' },
   { method: 'POST', path: '/api/local/hosts/remove', principals: ['operator', 'admin'], secret: 'network' },
-  { method: 'POST', path: '/api/local/discover', principals: ['operator', 'admin'], secret: 'network' },
   { method: 'POST', path: '/api/local/probe', principals: ['operator', 'admin'], secret: 'network' },
   { method: 'POST', path: '/api/local/join', principals: ['operator', 'admin'], secret: 'network' },
   { method: 'POST', path: '/api/local/leave', principals: ['operator', 'admin'], secret: 'network' },

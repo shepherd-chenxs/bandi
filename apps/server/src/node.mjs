@@ -13,7 +13,7 @@
  *
  * 跑法：
  *   node apps/server/src/node.mjs
- *   BANDI_CONTROL_PLANE=http://192.168.1.9:8787 node apps/server/src/node.mjs
+ *   BANDI_CONTROL_PLANE=http://192.168.1.9:18787 node apps/server/src/node.mjs
  *   BANDI_NODE_TOKEN=<控制面令牌> node apps/server/src/node.mjs   # 控制面监听非回环时必需
  *   node apps/server/src/node.mjs --once                          # 报到 + 心跳一次就退（验收用）
  */
@@ -93,7 +93,7 @@ function readToken(cfg = readConfig()) {
 }
 
 // `let`：`--join` 那一步会把它们换成"刚拿到的那套"
-let CONTROL = (process.env.BANDI_CONTROL_PLANE ?? readConfig().controlPlane ?? 'http://127.0.0.1:8787').replace(/\/+$/, '');
+let CONTROL = (process.env.BANDI_CONTROL_PLANE ?? readConfig().controlPlane ?? 'http://127.0.0.1:18787').replace(/\/+$/, '');
 let TOKEN = readToken();
 
 /**
@@ -766,7 +766,7 @@ function argOf(name) {
  * 现在：邀请码（一次性、10 分钟）→ 这枚令牌只能干它自己那台的事 ✓；「忘掉」= 吊销 ✓。
  *
  * 用法：
- *   node apps/server/src/node.mjs --join http://总机:8787 --code bj_xxx
+ *   node apps/server/src/node.mjs --join http://总机:18787 --code bj_xxx
  * 换完接着正常跑（不用再起一次）✓。
  */
 async function join(control, code) {
@@ -826,7 +826,7 @@ async function main() {
   const joinCode = argOf('--code');
   if (joinTo || joinCode) {
     if (!joinTo || !joinCode) {
-      say('加入要同时给两个：`--join http://总机:8787 --code bj_xxx`');
+      say('加入要同时给两个：`--join http://总机:18787 --code bj_xxx`');
       process.exitCode = 2;
       return;
     }
@@ -892,7 +892,7 @@ async function main() {
     if (reg.status === 401) {
       return say(
         '报到被拒：这个控制面**要求访问令牌**（它监听的不是回环地址）。\n' +
-          '  · **推荐**：让管理员在控制面上点「添加设备」拿一个邀请码，然后\n' +
+          '  · **推荐**：在控制面上敲 `bandi nodes invite` 拿一个邀请码（10 分钟、只用一次），然后\n' +
           '    `node apps/server/src/node.mjs --join <总机地址> --code <邀请码>` —— 换回这台机器**自己的**令牌 ✓\n' +
           '  · 或者：设 `BANDI_NODE_TOKEN=<操作员令牌>`（在控制面数据目录的 `token` 文件里）。\n' +
           '  ⚠️ 那枚令牌**不会**打进控制面的启动日志（2026-10-16 起）—— 别去日志里找。',

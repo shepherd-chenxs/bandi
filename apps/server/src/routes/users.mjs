@@ -205,10 +205,18 @@ export async function handleUsers(req, res, url) {
       });
       // CSRF 双提交（§10.2）：登录成功时种 bandi_csrf —— 之后所有带 Cookie 的写请求
       // 都要 header 对得上它。非 HttpOnly 是刻意的（前端 JS 要读，见 security/csrf.mjs）。
+      /*
+       * **顺手清掉访问令牌 Cookie**（2026-11-01 实报：登不进去、输入框被刷空）。
+       * 浏览器里躺着一枚旧 `bandi_token` 时，`令牌优先于会话` 会让登录后的每个请求
+       * 都按 operator 算 —— 而 operator 现在进不了面板，于是登录成功 → 回首页 → 又被挡回
+       * 登录页，看起来就是"点了登录没反应、输入框被清空"。
+       * 口径：**人走会话，机器走令牌头**。登录就是"以人为准"，那枚 Token Cookie 在这台
+       * 浏览器上让位（手机配对用的是同一个 Cookie 名，但它不走 /api/login）。
+       */
       res.writeHead(200, {
         'Content-Type': 'application/json; charset=utf-8',
         'Cache-Control': 'no-store',
-        'Set-Cookie': [auth.sessionCookie(token), csrf.cookieFor(csrf.mint())],
+        'Set-Cookie': [auth.sessionCookie(token), csrf.cookieFor(csrf.mint()), auth.clearedTokenCookie()],
       });
       res.end(
         JSON.stringify({
@@ -250,11 +258,12 @@ export async function handleUsers(req, res, url) {
         ip: String(req.socket?.remoteAddress ?? '').replace(/^::ffff:/, ''),
         ua: req.headers['user-agent'] ?? '',
       });
-      // 与 /api/login 同款：会话票 + CSRF 双提交值一起发（见上面那段注释）
+      // 与 /api/login 同款：会话票 + CSRF 双提交值一起发（见上面那段注释），
+      // 并清掉旧访问令牌 Cookie（否则"令牌优先"会把刚登录的人压回登录页）
       res.writeHead(200, {
         'Content-Type': 'application/json; charset=utf-8',
         'Cache-Control': 'no-store',
-        'Set-Cookie': [auth.sessionCookie(token), csrf.cookieFor(csrf.mint())],
+        'Set-Cookie': [auth.sessionCookie(token), csrf.cookieFor(csrf.mint()), auth.clearedTokenCookie()],
       });
       res.end(
         JSON.stringify({

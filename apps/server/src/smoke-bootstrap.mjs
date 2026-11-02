@@ -146,6 +146,21 @@ console.log('\n[2] 单机形态（回环）+ 零账号');
   const ctx = await start({ port, data, env: { BANDI_HOST: null, BANDI_TRUST_PROXY: null } });
   try {
     check('不生成 setup_code（单机不需要）', !fs.existsSync(path.join(data, 'setup_code')));
+    /*
+     * 2026-11-01 口径统一（用户：「每个用户都要登录，操作员只是一个身份」）：
+     * 零账号时**不再放行进面板当操作员** —— 面板门前移到建号页。从前那种做法会让
+     * 「我的」页既没有密码也没有动态验证（operator 没有 users 行，没地方存），
+     * 用户在界面上看到的是一个空页 + 一段实现说明。
+     * API 一个字节没变：本机脚本/冒烟/CLI 不带凭据照旧是 operator。
+     */
+    const page = await raw(port, { path: '/', headers: { Accept: 'text/html' } });
+    check(
+      '零账号抓首页 → 建号页（operator 不再直接进面板）',
+      page.status === 200 && page.body.includes('id="signForm"') && !page.body.includes('/app.mjs'),
+      String(page.status),
+    );
+    const api0 = await raw(port, { path: '/api/state' });
+    check('同一台机器 API 照旧免鉴权（脚本不带凭据也能用）', api0.status === 200, String(api0.status));
     const r = await raw(port, { method: 'POST', path: '/api/users', body: { name: '老王' } });
     const j = jsonOf(r.body) ?? {};
     check('本机裸建 → 201 且是管理员', r.status === 201 && j.user?.roleId === 'admin', `${r.status} role=${j.user?.roleId}`);
