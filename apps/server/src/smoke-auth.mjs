@@ -273,6 +273,20 @@ try {
   check('它自己也知道现在听着局域网（boundLan）', lanInfo.json?.boundLan === true, JSON.stringify(lanInfo.json));
   check('报的监听地址是实际那个（0.0.0.0）', lanInfo.json?.host === '0.0.0.0', String(lanInfo.json?.host));
   check('并且给出了"让别的机器连这个地址"', (lanInfo.json?.urls ?? []).some((u) => /^http:\/\/\d+\.\d+\.\d+\.\d+:/.test(u)), JSON.stringify(lanInfo.json?.urls ?? []));
+  check('/api/lan 响应不再有 restartNeeded（中间态的字段一起陪葬）', lanInfo.json != null && !('restartNeeded' in lanInfo.json), Object.keys(lanInfo.json ?? {}).join(','));
+  /*
+   * "对外"的不变量不能只在回环上验（2026-11-03 补）：鉴权开是因为**监听对外**，
+   * 那就该真的从局域网地址走一遍 —— 匿名被挡、带令牌能通、配对页照开。
+   * （urls 取本机真实网卡地址，本机连自己的局域网地址不需要任何外部条件。）
+   */
+  const lanUrl = (lanInfo.json?.urls ?? []).find((u) => u.startsWith('http://'));
+  const lanAnon = await get(lanUrl, '/api/state');
+  check('从局域网地址进来同样要令牌（鉴权跟来源无关，只跟"对外"有关）', lanAnon.status === 401, String(lanAnon.status));
+  check('局域网地址带令牌照常能读', (await get(lanUrl, '/api/state', { 'X-Bandi-Token': token })).status === 200);
+  const pairPage = await get(lanUrl, '/pair');
+  check('匿名能开配对页（手机扫码的第一步，不要求登录）', pairPage.status === 200 && /text\/html/.test(pairPage.headers.get('content-type') ?? ''), String(pairPage.status));
+  check('配对页响应带着补种的 CSRF Cookie（E4099 的病根钉住：所有 HTML 响应前必须补种）', /bandi_csrf=/.test(pairPage.headers.get('set-cookie') ?? ''), pairPage.headers.get('set-cookie') ?? '(无)');
+  check('匿名 POST 写接口也被挡（对外形态下写比读更不能裸）', (await send(lanUrl, '/api/projects', { headers: {} })).status === 401, '401 才对');
   /*
    * 老客户端（旧界面 / 旧脚本）可能还在发 `allowLan`。已删的键必须**写不回配置**
    * （patch 不认它 → netmode.json 不长出这个键），接口本身照回 200 —— 状态不漂移，
@@ -285,6 +299,7 @@ try {
     lanLegacy.status === 200 && !('allowLan' in nmAfter),
     JSON.stringify(nmAfter),
   );
+  check('netmode.json 也不长出 restartNeeded 这种已删的键', !('restartNeeded' in nmAfter), JSON.stringify(nmAfter));
 
   /*
    * ⑩ 「重启生效」整个下线（2026-11-03）。
@@ -297,12 +312,15 @@ try {
   console.log('\n⑩ /api/restart 已删；角色切换立刻生效，没有"重启"中间态');
   const rs = await send(baseC, '/api/restart', { headers: { 'X-Bandi-Token': token, 'X-Bandi': '1' } });
   check('POST /api/restart → E4090（接口已删，默认拒绝）', rs.json?.code === 'E4090', JSON.stringify(rs.json));
+  check('GET /api/restart 也一样是 E4090（不是只拦 POST）', (await get(baseC, '/api/restart', { 'X-Bandi-Token': token })).json?.code === 'E4090');
   const toBranch = await send(baseC, '/api/lan', { method: 'POST', headers: { 'X-Bandi-Token': token, 'X-Bandi': '1' }, body: { acceptNodes: false } });
   check('切分机 → 立刻生效（role 变 branch，不用重启）', toBranch.status === 200 && toBranch.json?.role === 'branch', JSON.stringify(toBranch.json));
   check('响应里没有 allowLan / restartNeeded 这种中间态字段', toBranch.json != null && !('allowLan' in toBranch.json) && !('restartNeeded' in toBranch.json), Object.keys(toBranch.json ?? {}).join(','));
   const toHub = await send(baseC, '/api/lan', { method: 'POST', headers: { 'X-Bandi-Token': token, 'X-Bandi': '1' }, body: { acceptNodes: true } });
   check('切回总机 → role 变 hub', toHub.status === 200 && toHub.json?.role === 'hub', String(toHub.json?.role));
   check('操作员令牌照旧能用（角色切了个来回，鉴权不受影响）', (await get(baseC, '/api/state', { 'X-Bandi-Token': token })).status === 200);
+  const lanFinal = await get(baseC, '/api/lan', { 'X-Bandi-Token': token });
+  check('角色切了个来回，监听地址纹丝不动（监听归启动配置管，跟角色无关）', lanFinal.json?.host === '0.0.0.0', String(lanFinal.json?.host));
 } catch (err) {
   console.log('\n跑挂了：' + String(err?.message ?? err));
   failed += 1;
