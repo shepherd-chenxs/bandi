@@ -180,7 +180,8 @@ export function updateProjectTask(id, fields) {
             prCheckedAt = ?, queuedAt = ?, sourceKey = ?, sourceRunId = ?,
             flowTemplateId = ?, flowRunId = ?,
             creatorConvId = ?, notifiedFor = ?,
-            collabTaskId = ?, collabRev = ?, collabStatus = ?, updatedAt = ?
+            collabTaskId = ?, collabRev = ?, collabStatus = ?,
+            statusByUserId = ?, statusAt = ?, updatedAt = ?
       WHERE id = ?`,
   ).run(
     next.title,
@@ -207,6 +208,11 @@ export function updateProjectTask(id, fields) {
     next.collabTaskId ?? null,
     Number(next.collabRev ?? 0) || 0,
     next.collabStatus ?? null,
+    // 「状态改动」归因（2026-11-03）：store 层只透传，谁写进来由 project-tasks.mjs 那层
+    // （人走的路）带；系统动作（跑完收状态等）不传这两列 —— `next` 是 cur 的浅拷贝，
+    // 不传就原样写回，**不会把上一次人的署名冲掉**。
+    next.statusByUserId ?? null,
+    next.statusAt ?? null,
     nowIso(),
     id,
   );

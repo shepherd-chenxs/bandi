@@ -1070,6 +1070,32 @@
   }
   dialog[open]::backdrop { background: rgba(0, 0, 0, 0.45); }
 
+  /*
+   * 建卡弹窗（#taskDlg）→ **全屏工作纸**（2026-11-03 实机："手机建卡没有完成按钮"）。
+   *
+   * 上面那条抽屉规则治不了它：style.css 里 #taskDlg 是 ID 选择器（1,0,0），这里的
+   * dialog[open]（0,1,1）赢不了它的 `width: 640px` / `overflow: visible` —— 结果
+   * 640px 的浮窗塞进手机、内容比 82vh 高，溢出部分从抽屉底边**直接漏出屏幕外**，
+   * 「创建任务」按钮恰好钉在最底下，等于没有。浮窗形态在手机上没有活路，重新设计：
+   *   · 满屏贴边当一页纸写 —— 不是修浮窗的宽高比，是换形态；
+   *   · 高度吃 --mb-vh（visualViewport.height，mobile.mjs ④ 喂的）：键盘弹起视口
+   *     缩多少、纸就缩多少，「创建任务」永远贴在键盘上方 —— 与对话页输入栏同一招；
+   *   · form 转列布局，描述吃掉富余高度，动作条钉底不随内容漂；
+   *   · 动作条重排：两枚勾选一行，「创建任务」**满宽**独占一行（拇指够得着），
+   *     `Ctrl ↵` 在触屏上没有意义，藏掉。
+   * overflow 保持 visible：执行人/项目下拉展开会伸出弹窗（桌面撞过两次的坑，见
+   * style.css #flowStartDlg 注释）；满屏纸里下拉上方有余量 —— 极端矮视口下宁可
+   * 裁下拉，也不能再丢按钮。
+   */
+  #taskDlg { width: 100%; height: var(--mb-vh, 100dvh); max-height: none; border-radius: 0; }
+  #taskDlg > form { display: flex; flex-direction: column; height: 100%;
+                    padding: 10px 16px calc(14px + env(safe-area-inset-bottom)); }
+  #taskDlg .dlg-max { display: none; }  /* 已经满屏，「展开成抽屉」没有意义了 */
+  #taskDlg #tkDesc { flex: 1 1 auto; min-height: 96px; }
+  #taskDlg .tk-foot { flex-wrap: wrap; row-gap: 10px; }
+  #taskDlg #tkOk { flex: 1 0 100%; justify-content: center; }
+  #taskDlg #tkOk kbd { display: none; }
+
   /* 下拉刷新指示条 */
   .mb-ptr.show, body.mb-tiny .mb-ptr { will-change: transform; }
 }
@@ -1451,9 +1477,12 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
   /* 页底灰同设置页：白卡要浮在灰上才有"卡片"这层关系 */
   body.mb-narrow #settingsView { background: var(--mb-cvbg, var(--mb-page, var(--bg))); }
 
-  /* 登录卡与入口卡：去掉 set-box 的 1px 描边 + 10px 圆角，换成分组卡的语汇 */
-  body.mb-narrow #settingsView .me-hero-sec .set-box,
-  body.mb-narrow #settingsView .me-entry-sec .set-box {
+  /* 登录卡/入口卡/安全卡/退出行（2026-11-03 重设计后共四类卡）：
+     去掉桌面那套 1px 描边 + 10px 圆角，换成分组卡的语汇（面浮在灰页底上） */
+  body.mb-narrow #settingsView .me-hero-sec .me-hero-card,
+  body.mb-narrow #settingsView .me-entry-sec .set-box,
+  body.mb-narrow #settingsView .me-sec-card,
+  body.mb-narrow #settingsView .me-out-box {
     border: 0;
     border-radius: var(--mb-r-card, 12px);
     background: var(--mb-surface, var(--side));
@@ -1462,25 +1491,35 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
   }
 
   /* 登录卡：从"一行"变"一块"（头像 62、名字 20），行内边距按卡片给 */
-  body.mb-narrow #settingsView .me-row.me-hero {
+  body.mb-narrow #settingsView .me-hero-card {
     padding: 20px 16px;
     gap: 14px;
-    justify-content: flex-start;
   }
-  body.mb-narrow #settingsView .me-hero .me-ava {
+  body.mb-narrow #settingsView .me-ava {
     width: 62px;
     height: 62px;
+    line-height: 62px;
     font-size: 25px;
     flex: 0 0 auto;
   }
-  body.mb-narrow #settingsView .me-hero .me-who { gap: 1px; }
-  body.mb-narrow #settingsView .me-hero .me-who b { font-size: 20px; line-height: 1.45; font-weight: 600; }
-  body.mb-narrow #settingsView .me-hero .me-who .sub { font-size: 13px; line-height: 1.6; }
+  body.mb-narrow #settingsView .me-who { gap: 1px; }
+  body.mb-narrow #settingsView .me-name b { font-size: 20px; line-height: 1.45; font-weight: 600; }
+  body.mb-narrow #settingsView .me-meta { font-size: 13px; line-height: 1.6; }
   /* 设备形态那行（已配对 · ip:port）用等宽，跟设置里其它地址同款 */
-  body.mb-narrow #settingsView .me-hero .me-dev {
+  body.mb-narrow #settingsView .me-dev {
     font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     font-size: 12px;
     color: var(--dim);
+  }
+
+  /* 账号安全双卡：落成单列，触屏把卡内留白放宽 */
+  body.mb-narrow #settingsView .me-sec-grid { grid-template-columns: 1fr; gap: 10px; }
+  body.mb-narrow #settingsView .me-sec-card { padding: 16px; gap: 10px; }
+
+  /* 退场整行：手机上加大点击高度与字号（替代旧 .machine-actions 那条） */
+  body.mb-narrow #settingsView .me-out {
+    padding: 15px 16px;
+    font-size: 15px;
   }
 
   /* 「设置」入口：一行，按钮的语义（整行可点）+ chevron */

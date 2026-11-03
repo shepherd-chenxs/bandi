@@ -111,7 +111,9 @@ export async function handleProject(req, res, url) {
     }
     try {
       const before = store.getProjectTask(id);
-      const task = updateProjectTask(id, body, { autoStart: body.startNow !== true });
+      // actorUser（2026-11-03 设备绑人后对设备返回归属人）→ 改状态就署到这个人头上，
+      // 卡详情的「状态改动」行和"手机上批的卡是谁批的"都靠它
+      const task = updateProjectTask(id, body, { autoStart: body.startNow !== true, actorUserId: auth.actorUser(req)?.id ?? null });
       if (body.startNow === true) {
         try {
           return sendJson(res, 200, { task: startProjectTask(id), started: true });

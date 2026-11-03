@@ -72,8 +72,12 @@ const waitFor = async (st, pred, ms = 25000) => {
 };
 
 const readyOf = (st) => st.protocol.find((l) => l.startsWith('BANDI_SHELL READY ')) ?? null;
-/** 协议行里的 URL **不带尾斜杠**（就是 urlOf(port) 的原样），后面跟一个空格再接标记 */
-const onPort = (line, port) => !!line && line.includes(`:${port} `);
+/*
+ * 协议行里的 URL 后面跟一个空格再接标记。URL 可能带 `/?token=…`（2026-11-03 起壳
+ * 显式对外监听 → 要令牌 → 窗口地址带令牌免登录），所以"在这个端口上"的判据是
+ * `:端口` 后面跟 `/`、`?` 或空格，不能只认空格。
+ */
+const onPort = (line, port) => !!line && new RegExp(`:${port}(\\?|/|\\s)`).test(line);
 
 let a = null;
 let f = null;
@@ -83,7 +87,8 @@ try {
   a = startShell();
   if (!(await waitFor(a, (s) => !!readyOf(s)))) throw new Error('壳 A 没报 READY：' + a.err.slice(-400));
   const ra = readyOf(a);
-  check('协议行格式对', /^BANDI_SHELL READY http:\/\/127\.0\.0\.1:\d+ [01]$/.test(ra), ra);
+  /* URL 可带 `/?token=…`（对外监听后窗口地址带令牌，见 onPort 的注释）—— 只钉骨架格式 */
+  check('协议行格式对', /^BANDI_SHELL READY http:\/\/127\.0\.0\.1:\d+\S* [01]$/.test(ra), ra);
   check('末尾标记 = 1（我们起的，退出要收）', ra.endsWith(' 1'), ra);
   check('控制面真的活着', await isUp(PORT));
   check('它把数据目录落在指定的地方', fs.existsSync(path.join(tmp, 'bandi.db')), tmp);

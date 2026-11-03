@@ -96,7 +96,7 @@ export function isLocalHost(raw) {
 /**
  * 这次的判定上下文。
  * `listeningOnLoopback` 读 `SERVER.boundHost`（进程**现在**听的是什么）——
- * `/api/restart` 会原地换监听，读启动期的 `config.host` 会滞后一拍。
+ * 监听地址整个进程生命周期不变，但仍可能与启动期 `config.host` 的字面量不同（bind 后的回报）。
  */
 export function cfgNow() {
   return {

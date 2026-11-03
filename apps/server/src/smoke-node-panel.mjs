@@ -46,7 +46,7 @@ function start() {
     cwd: repoRoot,
     env: {
       ...process.env,
-      BANDI_PORT: String(PORT),
+      BANDI_HOST: '127.0.0.1',      BANDI_PORT: String(PORT),
       BANDI_DATA: tmp,
       BANDI_DB: path.join(tmp, 'bandi.db'),
     },

@@ -196,11 +196,18 @@ export async function waitHealthy(port, ms = 30000) {
  * `dataDir` 只在给了的时候才设 `BANDI_DATA` —— 不设就用服务端自己的默认
  * （本机用户目录，见 `config.mjs` / `data-dir.mjs`）。所有起法（命令行、桌面壳、自启）
  * 都走同一个默认；要隔离/指定就用 `BANDI_DATA`（2026-10-18 收敛）。
+ *
+ * `stripEnv`（2026-11-03，`bandi reset-host` 救援用）：起服务前**从继承环境里删掉**
+ * 这些变量 —— 典型是 `BANDI_HOST`：用户在终端/自启里钉错过网卡地址、机器 IP 一变
+ * 就把自己锁在门外，救援必须是"这一次起服务当它不存在"。⚠️ `extraEnv` 仍然最后覆盖
+ * （桌面壳钉死 `BANDI_HOST: '0.0.0.0'` 那条不能被剥掉）。
  */
-export function startDetached({ port, dataDir, logFile, extraEnv = {} }) {
+export function startDetached({ port, dataDir, logFile, extraEnv = {}, stripEnv = [] }) {
   fs.mkdirSync(path.dirname(logFile), { recursive: true });
   const fd = fs.openSync(logFile, 'a');
-  const env = { ...process.env, BANDI_PORT: String(port), ...(dataDir ? { BANDI_DATA: dataDir } : {}), ...extraEnv };
+  const env = { ...process.env };
+  for (const k of stripEnv) delete env[k];
+  Object.assign(env, { BANDI_PORT: String(port) }, dataDir ? { BANDI_DATA: dataDir } : {}, extraEnv);
   const child = spawn(process.execPath, [SERVER_ENTRY], {
     cwd: repoRoot,
     detached: true,
@@ -230,7 +237,7 @@ export function startDetached({ port, dataDir, logFile, extraEnv = {} }) {
  * 于是后面每一个壳都认为"这服务不是我起的"→ 谁都不收 → 永久孤儿。
  * 有了这次回调，壳能在拿到 PID 的那一刻就落一条 pending 记录。
  */
-export async function ensureRunning({ port, dataDir, logFile, force = false, extraEnv = {}, onSpawn }) {
+export async function ensureRunning({ port, dataDir, logFile, force = false, extraEnv = {}, stripEnv = [], onSpawn }) {
   const url = urlOf(port);
   /*
    * **部署即装**（2026-10-22）：起服务的每个入口（start.cmd / 桌面壳 / bandi start）
@@ -264,7 +271,7 @@ export async function ensureRunning({ port, dataDir, logFile, force = false, ext
     }
   }
 
-  const pid = startDetached({ port, dataDir, logFile, extraEnv });
+  const pid = startDetached({ port, dataDir, logFile, extraEnv, stripEnv });
   /*
    * **一拿到 PID 就先告诉调用方一声**，然后才去等它健康（见函数头 `onSpawn` 那段）。
    * 顺序不能反：健康等待最长 30 秒，而"这个服务是我起的"这份记录必须现在就落 ——

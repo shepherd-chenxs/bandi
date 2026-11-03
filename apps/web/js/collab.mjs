@@ -360,7 +360,7 @@ async function inviteDialog(branchId) {
     </div>
     ${
       lan && !lan.boundLan
-        ? '<div class="machine-warn">这台机器现在只听本机，分公司连不到它 —— 先在设置 → 手机连接 里切成对外服务（分机 / 总机都行）并重启，或走隧道。</div>'
+        ? '<div class="machine-warn">这台机器现在只听本机（启动参数把监听钉在了回环上），分公司连不到它 —— 改部署配置里的 BANDI_HOST 重新起，或走隧道。</div>'
         : ''
     }
     <div class="dlg-actions">

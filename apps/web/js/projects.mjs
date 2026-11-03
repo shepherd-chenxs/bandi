@@ -2562,6 +2562,13 @@ export async function paintTaskCardPage(taskId, opts = {}) {
         ${task.createdBy ? `<div class="tc-prop"><span class="tc-prop-k">创建人</span><span class="tc-prop-v">${esc(pjPersona(task.createdBy)?.name ?? '那个人已经不在了')}（员工建卡）</span></div>` : ''}
         <div class="tc-prop"><span class="tc-prop-k">创建时间</span><span class="tc-prop-v">${esc(String(task.createdAt ?? '').replace('T', ' ').slice(0, 16))}</span></div>
         <div class="tc-prop"><span class="tc-prop-k">更新时间</span><span class="tc-prop-v" id="tcAt">${esc(String(task.updatedAt ?? '').replace('T', ' ').slice(0, 16))}</span></div>
+        ${
+          /* 状态改动归因（2026-11-03）：谁最后一次由人改的状态、什么时候。
+             只在**人**改过状态后才有（系统收状态不冒充人）；老卡两列是 NULL 就不显示这行。 */
+          task.statusByUserId
+            ? `<div class="tc-prop"><span class="tc-prop-k">状态改动</span><span class="tc-prop-v">${esc((S.users ?? []).find((u) => u.id === task.statusByUserId)?.name ?? '那个人已经不在了')}<span class="dim"> · ${esc(String(task.statusAt ?? '').replace('T', ' ').slice(0, 16))}</span></span></div>`
+            : ''
+        }
       </aside>
     </div>`;
 

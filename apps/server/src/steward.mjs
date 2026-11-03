@@ -41,6 +41,14 @@ export const STEWARD_NAME = '崔老三';
 /** 出厂岗位（身份三件之一；`syncSteward` 与建号共用同一个值） */
 export const STEWARD_ROLE = '系统管家';
 
+/**
+ * 出厂头像（2026-11-03 补 seed 疏漏）：apps/web/avatars/ 下的**文件名** ——
+ * personas.avatar 存文件名、前端拼 /avatars/ 静态路由（见 ui.mjs personaAvatar）。
+ * 图片一直都在，但 seed（ensureSteward 建号）从来没把它写进库，全新安装的管家
+ * 在界面上一直是字母兜底头像；只有走过 p-xier 迁移的老库才有（migrateStewardId 顺手改的名）。
+ */
+export const STEWARD_AVATAR = 'p-cuilaosan.png';
+
 /** 挂在他的技能（目录：`skills/bandi-secretary/`） */
 export const STEWARD_SKILL = 'bandi-secretary';
 
@@ -121,7 +129,7 @@ export function migrateStewardId() {
   if (!store.getPersona(LEGACY_STEWARD_ID) || store.getPersona(STEWARD_ID)) return false;
   const refs = store.renamePersonaId(LEGACY_STEWARD_ID, STEWARD_ID, {
     avatarFrom: 'p-xier.png',
-    avatarTo: 'p-cuilaosan.png',
+    avatarTo: STEWARD_AVATAR,
   });
   console.log(`内置员工 id 已迁移：${LEGACY_STEWARD_ID} → ${STEWARD_ID}（引用 ${refs} 处一并搬走，会话与群关系全部保留）`);
   return true;
@@ -159,12 +167,23 @@ export function ensureSteward() {
   const existing = store.getPersona(STEWARD_ID);
   if (existing) {
     if (!existing.builtin) store.markPersonaBuiltin(STEWARD_ID);
+    /*
+     * 补头像（2026-11-03，与 syncExpertAvatar 同一分寸）：**只在空着时**补出厂值 ——
+     * 空说明是 seed 疏漏期的存量库（或从没设过），用户自己设过的（非空）不碰；
+     * 他将来显式清空头像也一样会被这里补回 —— 管家是出厂的人，光头不是出厂态，
+     * 真不想要头像属于极端个案，不值得为它加一个迁移标记。
+     */
+    if (!existing.avatar) {
+      store.updatePersona(STEWARD_ID, { avatar: STEWARD_AVATAR });
+      existing.avatar = STEWARD_AVATAR;
+    }
     return { created: false, persona: { ...existing, builtin: 1 } };
   }
 
   const persona = store.createPersona({
     id: STEWARD_ID,
     ...STEWARD_IDENTITY,
+    avatar: STEWARD_AVATAR,
     // auto：按「谁现在能用」挑 CLI。换机器、换 CLI 都不用回来改她
     runtime: 'auto',
     sandbox: 'danger-full-access',

@@ -1142,7 +1142,7 @@ export function upsertRepoCard({ projectId, key, title, description = '', pr = n
  *     所以我们**先不写状态**，让 `startProjectTask` 一起写「进行中 + runId」；
  *     它抛错就什么都不动，把原因原样带出去（"没开工：他还在跑上一条…"）。
  */
-export function updateProjectTask(id, fields = {}, { autoStart = true } = {}) {
+export function updateProjectTask(id, fields = {}, { autoStart = true, actorUserId = null } = {}) {
   const cur = store.getProjectTask(id);
   if (!cur) throw new Error('任务不存在');
   const patch = {};
@@ -1155,6 +1155,17 @@ export function updateProjectTask(id, fields = {}, { autoStart = true } = {}) {
   if (fields.status !== undefined) {
     if (!MANUAL_STATUSES.has(fields.status)) throw new Error(`不认识的状态：${fields.status}`);
     patch.status = fields.status;
+    /*
+     * 「状态改动」归因（2026-11-03，补设备绑人的另一半）：谁改的状态记谁。
+     * 本函数是**人改卡的唯一入口**（PATCH /api/projects/tasks/:id），actor 一定是个"人"——
+     * 设备令牌来的也是归属人（auth.actorUser 对设备返回绑定的用户）。系统动作
+     * （跑完收状态、协作卡同步）走 store 直写，不经过这里，不会冒充人。
+     * 状态没真变（提交的和原来一样）就不记，免得详情页出现"张三改成待办"其实啥也没发生。
+     */
+    if (patch.status !== cur.status) {
+      patch.statusByUserId = actorUserId ?? null;
+      patch.statusAt = store.nowIso();
+    }
   }
   if (fields.personaId !== undefined) {
     if (fields.personaId && !store.getPersona(fields.personaId)) throw new Error('选的这个人不在了');
@@ -1209,6 +1220,10 @@ export function updateProjectTask(id, fields = {}, { autoStart = true } = {}) {
    */
   if (cur.flowTemplateId && !cur.flowRunId && patch.status === '进行中' && autoStart) {
     delete patch.status; // 状态交给 startCardFlow 落初值
+    // 归因也撤掉（上面记的是"人改状态"，但这一下真正发生的动作是**发起流程**，
+    // 状态由引擎写 —— 别让详情页显示"张三 改状态"，他点的是"发起"）
+    delete patch.statusByUserId;
+    delete patch.statusAt;
     const saved = store.updateProjectTask(id, patch);
     try {
       return startProjectTask(saved.id, { allowIdea: true });
@@ -1222,6 +1237,9 @@ export function updateProjectTask(id, fields = {}, { autoStart = true } = {}) {
   const whoId = patch.assigneePersonaId !== undefined ? patch.assigneePersonaId : cur.assigneePersonaId;
   if (toDoing && whoId) {
     delete patch.status; // 状态交给 startProjectTask 一起落（进行中 + runId）
+    // 归因同上撤掉：这一下是"开工"，状态由 startProjectTask 写，不算人改状态
+    delete patch.statusByUserId;
+    delete patch.statusAt;
     const saved = store.updateProjectTask(id, patch);
     try {
       return startProjectTask(saved.id, { allowIdea: true });

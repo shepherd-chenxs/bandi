@@ -1,26 +1,17 @@
 /**
- * 这台机器的**形态**：分两个互不干扰的键（2026-11-01 晚，用户拍板）。
+ * 这台机器的**形态**（2026-11-03 用户拍板，"对外服务"这一维**整个删除**）：
  *
- *   · `allowLan`    —— **对外服务**（监听 0.0.0.0）。只在进程启动那一刻能定，
- *                      所以在起服务之前就得读到；桌面壳 / 自启 / 命令行三种起法共用它。
+ *   · 监听地址 —— **永远对外**（默认 `0.0.0.0`，`BANDI_HOST` 可覆盖成具体地址）。
+ *     手机 / 浏览器永远连得进来；这是启动配置（部署 / 桌面壳）的事，界面上没有开关、
+ *     没有「重启生效」、没有「只在本机使用」—— 曾经的 `allowLan` 键连同那套
+ *     "改了还没生效"机制一起删掉了（配置总会有遗漏，漏出来的必须是安全的那边）。
  *   · `acceptNodes` —— **角色**：收不收别的机器作为算力节点加入（总机 / 分机）。
- *                      纯运行期判定，**改完立刻生效、不用重启**（监听地址没动）。
+ *     纯运行期判定，**改完立刻生效**。总机 = 收节点、发邀请码；分机 = 手机照连、
+ *     不收节点。
+ *   · `pairEnabled` —— **手机连接**总开关（「设置 → 手机连接」页顶那颗）。
  *
- * 为什么必须拆开（这次改的起因，用户原话："一台机器难道就不能一直处于不监听回环的
- * 模式吗？……把 thinkpad-p15 开分机模式。界面照样显示，手机照样可以连。但是不提供
- * 邀请码，其他的机器也加不上去"）：
- *
- *   原来只有 `allowLan` 一个键，`joinable` 是由**监听地址**反推的
- *   （`!isLoopback(boundHost) && (allowLan || explicit)`）—— 于是"对外服务"和"当总机"
- *   被焊死：只要手机能连，就必然宣称"我能被加入、快来发码"，中间没有第三种状态 ✗。
- *   而实际上这是两件事：
- *     · 对外服务 = 手机 / 浏览器能不能连进来；
- *     · 当总机   = 别的**机器**能不能挂到这台下面领活。
- *   分机就是「对外服务 ✓、当总机 ✗」—— 现在能表达了。
- *
- * 默认：`allowLan` 关（桌面版只听回环、免鉴权，单机零配置那条硬约束不变）；
- * `acceptNodes` 缺省跟随 `allowLan` —— **老配置文件（只有 allowLan:true）继续当总机**，
- * 升级不改变任何一台在跑的机器的行为。
+ * `acceptNodes` 没显式写过时回退看一眼老的 `allowLan`（true = 当年开过对外服务的总机）
+ * —— 只为了升级那一刻：老配置文件（只有 allowLan:true）继续当总机，在跑的机器不降级。
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -29,49 +20,69 @@ import { dataDir } from './config.mjs';
 
 const FILE = path.join(dataDir, 'netmode.json');
 
+/*
+ * mtime 缓存（2026-11-03）：网络周界闸（security/ipallow.mjs）挂在**每个请求**的入口上，
+ * 每请求 readFileSync 一遍太奢侈 —— 按 mtime 缓存，文件没动就不重读；
+ * `writeNetMode` 写完顺手把缓存种上（同毫秒内写后读也不会拿到旧值）。
+ * 外部直接改文件（手救现场 / smoke 种配置）靠 mtime 变化自动失效 ✓。
+ */
+let cache = null; // { mtimeMs, value }
+
 export function readNetMode() {
+  let st = null;
+  try {
+    st = fs.statSync(FILE);
+  } catch {
+    st = null; // 没这个文件 = 默认（分机、手机可配对）
+  }
+  if (cache && st && cache.mtimeMs === st.mtimeMs) return cache.value;
   let j = {};
   try {
     j = JSON.parse(fs.readFileSync(FILE, 'utf8')) ?? {};
   } catch {
-    j = {}; // 没这个文件 / 坏了 = 默认（只听回环、不当总机）
+    j = {}; // 坏了 = 默认，口径与"没有文件"一致
   }
-  const allowLan = j?.allowLan === true;
-  /*
-   * `acceptNodes` 只在**显式写过**时才算数；没写过就跟随 allowLan（老口径）。
-   * 不能用 `?? allowLan` 之外的兜底：用户把总机切成分机后，allowLan 是 true、
-   * acceptNodes 是 false —— 这一对必须能同时存在。
-   */
-  const acceptNodes = typeof j?.acceptNodes === 'boolean' ? j.acceptNodes : allowLan;
+  const acceptNodes =
+    typeof j?.acceptNodes === 'boolean' ? j.acceptNodes : j?.allowLan === true;
   /*
    * `pairEnabled`（2026-11-02）：**手机连接**总开关 —— 「设置 → 手机连接」页顶那颗。
    * 没写过 = 开（老配置文件升级后行为不变：手机照连）。关掉后：不发邀请码、
    * 手机 claim / resume 一律拒绝、已配对的手机当场全部断开（routes/pair.mjs）。
    */
   const pairEnabled = j?.pairEnabled !== false;
-  return { allowLan, acceptNodes, pairEnabled };
+  /*
+   * `whitelistEnabled` / `whitelistIps`（2026-11-03，对齐 1Panel 安全页的「授权 IP」）：
+   * **网络周界闸** —— 开启后名单之外的 IP 连不上（security/ipallow.mjs 的 E3003）。
+   * 监听改成**永远对外**之后，这是令牌闸外面那道网络层的门。没写过 = 关（行为不变）。
+   * 名单条目的解析与匹配都在 ipallow.mjs，这里只管存取 —— 读取口全仓就这一处。
+   * `boundDomain`（同日，对齐「域名绑定」）：非空时非本机来源只能用这个域名访问（E3004）。
+   */
+  const whitelistEnabled = j?.whitelistEnabled === true;
+  const whitelistIps = Array.isArray(j?.whitelistIps) ? j.whitelistIps.map((x) => String(x)) : [];
+  const boundDomain = typeof j?.boundDomain === 'string' ? j.boundDomain : '';
+  const value = { acceptNodes, pairEnabled, whitelistEnabled, whitelistIps, boundDomain };
+  if (st) cache = { mtimeMs: st.mtimeMs, value };
+  return value;
 }
 
 /**
- * 写形态。两种调用都认：
- *   · `writeNetMode(true/false)`   —— 老签名，只改 `allowLan`（routes/local.mjs 加入 / 退出总机时用）；
- *   · `writeNetMode({ allowLan?, acceptNodes? })` —— 只改显式给了的键（**部分更新**）。
- *
- * ⚠️ 必须是**部分更新**：界面切角色时只 POST `acceptNodes`，老写法会把 `allowLan` 一起冲成
- * false —— 那台正对外服务的总机切一下角色就"下次重启变回只听本机"，等于静默掉线 ✗。
+ * 写形态。只改显式给了的键（**部分更新**）—— 界面切角色只 POST `acceptNodes`、
+ * 手机连接页只 POST `pairEnabled`、安全页只 POST 白名单/域名那几个键，
+ * 谁也不许顺手动别人的键。
  */
 export function writeNetMode(patch) {
   const cur = readNetMode();
-  const next =
-    typeof patch === 'boolean'
-      ? { allowLan: patch, acceptNodes: cur.acceptNodes }
-      : {
-          allowLan: typeof patch?.allowLan === 'boolean' ? patch.allowLan : cur.allowLan,
-          acceptNodes: typeof patch?.acceptNodes === 'boolean' ? patch.acceptNodes : cur.acceptNodes,
-          pairEnabled: typeof patch?.pairEnabled === 'boolean' ? patch.pairEnabled : cur.pairEnabled,
-        };
+  const next = {
+    acceptNodes: typeof patch?.acceptNodes === 'boolean' ? patch.acceptNodes : cur.acceptNodes,
+    pairEnabled: typeof patch?.pairEnabled === 'boolean' ? patch.pairEnabled : cur.pairEnabled,
+    whitelistEnabled:
+      typeof patch?.whitelistEnabled === 'boolean' ? patch.whitelistEnabled : cur.whitelistEnabled,
+    whitelistIps: Array.isArray(patch?.whitelistIps) ? patch.whitelistIps : cur.whitelistIps,
+    boundDomain: typeof patch?.boundDomain === 'string' ? patch.boundDomain : cur.boundDomain,
+  };
   fs.mkdirSync(path.dirname(FILE), { recursive: true });
   fs.writeFileSync(FILE, JSON.stringify(next, null, 2), 'utf8');
+  cache = { mtimeMs: fs.statSync(FILE).mtimeMs, value: next }; // 写完种上，读方不用再 stat 一轮
   return { ...next, file: FILE };
 }
 
@@ -135,12 +146,8 @@ export function isLoopback(host) {
  *   · **角色**（`acceptNodes`）是主动的那一半：分机形态下不论监听什么地址，一律 false ——
  *     这台自己不收徒弟（不发邀请码、探测回来也是"不开放加入"），但照样对外服务、
  *     手机照样能连 ✓（用户 2026-11-01 定的形态）；
- *   · **可达**（`!isLoopback`）只是必要条件：只听回环时别人根本连不进来，宣布可加入是说谎 ✗。
- *
- * ⚠️ 与旧口径的区别（别再改回去）：原来是 `!isLoopback && (allowLan || explicit)`，
- * 意思是"只要对外听就算总机" —— 于是显式部署（`BANDI_HOST=0.0.0.0`）的机器**无法**当分机，
- * 界面上的模式卡也被 `explicit` 整张藏掉。现在 `BANDI_HOST` 只决定**监听地址**，
- * 收不收节点由 `acceptNodes` 说了算，两者正交。
+ *   · **可达**（`!isLoopback`）只是必要条件：监听被 `BANDI_HOST=127.0.0.1` 钉在回环上时
+ *     别人根本连不进来，宣布可加入是说谎 ✗（调试场景才有的形态，2026-11-03 起默认就是 0.0.0.0）。
  *
  * 两个出口共用本函数、**不许各自再写一份**：`GET /api/hello`（server.mjs）与
  * `/api/lan`/模式卡（前端）。UDP 应答器已下线（2026-11-02，lan-announce.mjs 只剩状态存根）。

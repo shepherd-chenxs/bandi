@@ -422,6 +422,20 @@ export function toast(msg, kind = 'info') {
     wrap.id = 'toastWrap';
     wrap.className = 'toast-wrap';
     document.body.appendChild(wrap);
+    /*
+     * 送进**顶层**（popover API，2026-11-03 实机踩坑）：开着的 `<dialog>` 在浏览器
+     * 顶层里渲染，普通层的元素 z-index 再高也被它连 backdrop 一起盖住 ——
+     * 弹窗里的校验失败、接口报错全都被吞掉，手机上表现成"点了没反应"
+     * （建卡 403 就是这么藏了一整天的）。popover="manual" 把 toast 也送进顶层，
+     * 后显示的盖先显示的，正好压过 dialog。不支持 popover 的老浏览器回落
+     * 原行为（弹窗外看得见、弹窗内看不见）。
+     */
+    if ('popover' in wrap) {
+      try {
+        wrap.popover = 'manual';
+        wrap.showPopover();
+      } catch { /* 已显示 / 不支持 —— 回落普通层 */ }
+    }
   }
   // 多于 4 条：先把最旧的赶走（连着失败十次不该糊一屏）
   while (wrap.children.length >= 4) wrap.firstElementChild?.remove();

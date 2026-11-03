@@ -1,7 +1,7 @@
 /**
- * 访问令牌 —— **把控制面放到公网之后的第一道闸**。
+ * 访问令牌 —— **把控制面放到公网之后的第一道闸**（账号管"人"，令牌管"机器"，两层并存）。
  *
- * 规则只有一条，而且看的是**监听地址**、不是请求来源：
+ * 2026-10-15 的原始规则只看**监听地址**、不看请求来源：
  *
  *   · 只监听回环（桌面版 / 单机）→ **API 免鉴权**。外面根本进不来，加它就是白加，
  *     还会把"单机零配置、不需要 token"这条硬约束毁掉。
@@ -20,8 +20,9 @@
  * 要先有登录会话**（有账号而无会话 → 登录页，免密账号点了就进，见 guard 的回环分支）——
  * API 的闸管机器和脚本，登录的闸管人，两层各管各的。
  *
- * 为什么**不按"来源是不是回环"判断**：反向代理会把来源变成回环 ——
- * 那样架一层代理就把闸绕过去了。规则跟着**配置**走，才不会被部署方式偷走。
+ * 为什么**不只看 `remoteAddress` 是不是 `127.0.0.1`**：反向代理会把来源变成回环 ——
+ * 那样架一层代理就把闸绕过去了。所以判的是 `classifySource()` 的**四条同时成立**
+ * （没开 trust-proxy、无转发头、监听回环、peer 与 Host 都是本机），不是单看一个字段。
  *
  * 令牌从哪来，按优先级：
  *   1. `BANDI_TOKEN`（显式指定，方便容器/CI）
@@ -34,14 +35,17 @@
  *   · **查询** `?token=` —— 首次进来那一下，随即换成 Cookie 并重定向掉，
  *     免得令牌留在地址栏与历史里。
  *
- * ⚠️ **"为什么不做用户名＋密码"** —— 2026-10-16 用户问过三次，最后的结论是**不做** ✓，
- * 这里把理由钉住，免得以后又绕回来：
- *   · 改善的只是"**记得住**"，**不是更安全** ✗ —— 明文 HTTP 下令牌、密码、会话票**一样会被抓包** ✓；
- *     真正要防抓包只有一条路：**把链路加密**（SSH 隧道 / Cloudflare 隧道 / 给控制面挂 TLS ✓）；
- *   · 随机令牌被抓的**影响面最小**（只赔这一个面板 ✓），而且**能一键作废**（删 `token` 文件 + 重启 ✓）；
- *     人设的密码一旦和别处重复，赔的是一串账号 ✗✗；
- *   · 密码模式还额外欠三笔账：**"第一个账号只有本机能设"**（否则局域网里先打开的人就占了 ✗）、
- *     **加盐哈希＋长度下限＋失败限速**、**忘了怎么重置** ✓ —— 而随机令牌＋本机文件天生就没这三笔账 ✓。
+ * ⚠️ **"为什么不做用户名＋密码"（2026-10-16 的结论，已被 2026-10-31 推翻 —— 留档防绕回，别再当现行口径）**
+ * 当时用户问过三次，结论是"不做"，理由有两条：
+ *   · 明文 HTTP 下令牌、密码、会话票**一样会被抓包** —— 真正要防抓包只有一条路：**把链路加密**
+ *     （SSH 隧道 / Cloudflare 隧道 / 给控制面挂 TLS）—— 这条**至今成立**；
+ *   · 随机令牌影响面小、能一键作废（删 `token` 文件 + 重启）—— 这条也**至今成立**（机器凭据那一层没变）。
+ * **2026-10-31 用户拍板改做账号体系**（「不管总机还是分机，都要用用户来登录」，见上面那层）。
+ * 当时列的"三笔账"后来都还了：
+ *   · 第一个账号只有本机能设 → 零账号时建号页只在回环形态出现（guard 回环分支，第一个账号 = 内置管理员）；
+ *   · 加盐哈希＋长度下限＋失败限速 → `store/users.mjs`（scrypt）＋登录限速；
+ *   · 忘了怎么重置 → 两段式登录（TOTP 动态码 / 恢复码，`/api/login/otp`）。
+ * 结论不是当年的二选一：**账号管"人"（浏览器面板），令牌管"机器"（脚本 / CLI / 节点），两层并存**。
  *
  * 要找回令牌就一条命令（控制面那台机器上）：
  *   Windows:  `type <数据目录>\token`      例：type E:\02CodeSpace\bandi\data\token
@@ -179,10 +183,13 @@ export function clearedTokenCookie() {
  * 这枚令牌**是谁的**（2026-10-16 加的，2026-10-20 带上 scope）。
  *
  * 原来是"一枚令牌走天下"：节点手上的就是总机那枚 master ✗ —— 一台节点被翻 = 整套被翻，
- * 而且「忘掉」踢不掉它（令牌还有效）。现在分三种身份：
- *   · `operator` —— 总机那枚（浏览器登录、脚本、运维）；
+ * 而且「忘掉」踢不掉它（令牌还有效）。现在分四类身份（2026-11 手机端增量补了第三类）：
+ *   · `operator` —— 总机那枚（脚本 / CLI / 运维，以及 `?token=` 首次进场；
+ *                   **浏览器面板走账号会话**，见 `guard` 的回环分支）；
  *   · `node`     —— 每台机器**自己那枚**（邀请码换来的，见 store.issueNodeToken），
  *                  带 `scope: Set`（`compute` / `panel`）；
+ *   · `device`   —— 手机设备令牌（`bd_` 前缀，2026-11 手机端增量；见下面 identify 里的注释），
+ *                   2026-11-03 起带 `userId`（这部手机属于谁），但**权限仍是 device 白名单**；
  *   · `revoked`  —— **曾经是节点令牌、现在库里没有这行哈希**（唯一会删它的是
  *                  `store.revokeNodeTokens`，也就是总机上的「忘掉」）。
  *
@@ -197,12 +204,18 @@ export function identify(auth, token) {
   if (hit) return { kind: 'node', nodeId: hit.nodeId, scope: hit.scope };
   /*
    * 第四类身份：手机设备令牌（`bd_` 前缀，2026-11 手机端增量）。
-   * 走 store.deviceAuthByToken（只存哈希的那张表）；不认识/已过期/被踢出都返回 null，
-   * 走下面的 401 E4010 —— **不学节点造 `revoked` 类**：设备被踢出的引导是"重新扫码"，
-   * 与"需要令牌"在前端是同一条提示，不值得多一个身份类。
+   * 走 store.deviceAuthByToken（只存哈希的那张表）；不认识/已过期/被踢出/归属人被禁用
+   * 都返回 null，走下面的 401 E4010 —— **不学节点造 `revoked` 类**：设备被踢出的引导是
+   * "重新扫码"，与"需要令牌"在前端是同一条提示，不值得多一个身份类。
+   *
+   * `userId`（2026-11-03 设备绑人）：这部手机**属于谁**。以前设备是孤儿 —— 有身份
+   * （deviceId + 设备名）但不挂在任何人名下，于是手机上审批/发消息在事件流里只记
+   * 「一台设备」。现在把归属人一起带出来，`actorUser` 才能把它记到人头上。
+   * ⚠️ 带 userId ≠ 提权：`kind` 仍是 `device`，PDP 照走 device 白名单
+   * （security/policy.mjs），手机看不到比白名单更多的东西。
    */
   const dev = store.deviceAuthByToken(token);
-  if (dev) return { kind: 'device', deviceId: dev.deviceId };
+  if (dev) return { kind: 'device', deviceId: dev.deviceId, userId: dev.userId ?? null };
   if (String(token).startsWith('bn_')) return { kind: 'revoked' };
   return null;
 }
@@ -294,8 +307,7 @@ const PANEL_FORBIDDEN = [
   { method: /^POST$/, path: /^\/api\/quota$/ },
   //   第 15 条 `PUT|PATCH /api/personas/:id` **且 body 带 model 或 runtime**
   //   是**字段级**的（readBody 只有 handler 里有）→ 落在 server.mjs 的 handler（用 mayManage）
-  // 5 重启与局域网开关
-  { method: /^POST$/, path: /^\/api\/restart$/ }, //                             server.mjs:1425
+  // 5 局域网开关（角色 / 手机连接；监听地址不是可切的了，2026-11-03）
   { method: /^POST$/, path: /^\/api\/lan$/ }, //（GET 允许 —— 只读）              server.mjs:1452
   // — 权限本身：scope 只能总机侧改（决策 A 规则 2）                             本次新增
   { method: /^POST$/, path: /^\/api\/nodes\/[^/]+\/scope$/ },
@@ -338,6 +350,12 @@ export function isPanelForbidden(method, pathname) {
  *
  * 往里加路径之前先回答一句：手机**凭什么**需要它？白名单外的都是操作员的事 ——
  * 删任务、改员工、动连接器、踢设备，一台被翻的手机不该碰得到。
+ *
+ * ⚠️ **这个函数已经没有调用方了**（2026-11-03 核实）：Phase 2 PDP 收编后，设备能到哪儿
+ * 由 `security/route-policy.mjs` 清单里的 `device: true` 标记说了算（policy.mjs 判定），
+ * 这里的口径被逐条搬了过去。留着只为对照 v2.5 的历史口径 ——
+ * **要改手机能干什么，去 route-policy 加 `device: true`，改这里一行用都没有**
+ * （2026-11-03 手机建卡 403 排查时在这里白改了一轮，才发见判定根本不经过它）。
  */
 function deviceMayReach(method, pathname) {
   /*
@@ -445,19 +463,24 @@ export function decide(who, method, pathname) {
 /**
  * 这次请求的**操作人是谁**（2026-10-31 用户概念落地：消息署名 / 建卡人 / 看"我"是谁）。
  *
- * 三种答案：
+ * 四种答案：
  *   · 登录用户 → 他自己（多端各记各的，这是唯一精确的一档）；
  *   · operator（回环 / 共享令牌）→ **第一个用户**（"本机自动登录"：像一台共用电脑，
  *     没人显式登录时活都算机主的）。还没有任何用户 → null，调用方回落到 LOCAL_USER 占位；
- *   · 节点 / 手机设备令牌 → null（机器不是人，不冒充任何人）。
+ *   · 手机设备令牌 → **它归属的那个人**（2026-11-03 设备绑人）。在此之前这里返回 null，
+ *     于是手机上批的卡、说的话在事件流里只有一个设备 id —— 和"人"是两套语义。
+ *     没绑人（零账号形态的老设备）才回 null；
+ *   · 节点令牌 → null（机器不是人，不冒充任何人）。
  *
  * 只用于**落数据**（署名），绝不用于鉴权 —— 权限判定仍然只看 `decide()`，两码事别混。
+ * 手机也不因为带上了 userId 就拿到那个人的权限：它走的是 device 白名单。
  */
 export function actorUser(req) {
   const a = req?.bandiAuth;
   if (!a) return null;
   if (a.kind === 'user' && a.userId) return store.getUser(a.userId);
   if (a.kind === 'operator') return store.firstUser();
+  if (a.kind === 'device' && a.userId) return store.getUser(a.userId);
   return null;
 }
 
@@ -937,8 +960,7 @@ function cookieHeader(token) {
 }
 
 /**
- * 给"原地重启"用：开关打开之后鉴权会生效，浏览器手上得先有 Cookie，
- * 否则它自己那个窗口会被自己的登录页挡在外面 ✗（见 server.mjs 的 /api/restart）。
+ * 登录页 / ?token= 换 Cookie 用：把令牌包成 `bandi_token=…; HttpOnly; …` 那一行。
  */
 export function cookieValue(token) {
   return cookieHeader(token);
@@ -961,7 +983,7 @@ const esc = escapeHtml;
 /**
  * 登录页（2026-10-28 第三刀建；2026-10-31 用户概念两轮改造）。
  *
- * 五态，别混：
+ * 四态，别混（2026-10-31 删掉令牌表单后从五态变四态）：
  *   · `hasUsers === false` —— **创建账号**（账号密码直建，第一个自动成为管理员）。
  *     公网服务器上"先令牌后建号"走不通（人不在那台机器旁边）；代价是"谁先到谁占管理员"。
  *     ⚠️ 页面上**没有令牌入口**了（2026-10-31 用户定：登录页就是登录页）——部署/运维用

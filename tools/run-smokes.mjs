@@ -34,6 +34,8 @@ const RUN = [
   'apps/server/src/smoke-bootstrap.mjs',
   'apps/server/src/smoke-csrf.mjs',
   'apps/server/src/smoke-local-policy.mjs',
+  // 网络周界闸（2026-11-03，对齐 1Panel 安全页）：授权 IP 白名单 E3003 / 域名绑定 E3004
+  'apps/server/src/smoke-network.mjs',
   'apps/server/src/smoke-proxy-auth.mjs',
   'apps/server/src/smoke-security-policy.mjs',
   'apps/server/src/smoke-token.mjs',
@@ -196,6 +198,21 @@ if (!onlyArg) {
     process.exit(1);
   }
 
+  /*
+   * 再跑**文档与代码的对账**（2026-11-03 加）：活文档里提到的文件得在、行号得站得住、
+   * 注释里的数字得等于代码里的实际数量、旧说法不许又写回来。
+   * 同样挂在 CI 的唯一入口上 —— 它和冒烟一样是"掉队就该红"的东西，
+   * 而人工"记得改文档"已经证明靠不住（11-03 那一轮挖出 11 处漂移）。
+   */
+  const drift = spawnSync(process.execPath, [path.join(repo, 'tools', 'check-doc-drift.mjs')], {
+    cwd: repo,
+    stdio: 'inherit',
+  });
+  if (drift.status !== 0) {
+    console.error('✗ 文档与代码对不上（见上）');
+    process.exit(1);
+  }
+
   console.log(`跳过 ${Object.keys(SKIP).length} 个（要真实 CLI / 模型）：`);
   for (const [f, why] of Object.entries(SKIP)) console.log(`  · ${path.basename(f)} —— ${why}`);
 }
@@ -206,7 +223,18 @@ const failed = [];
 const results = [];
 for (const f of targets) {
   const t0 = Date.now();
-  const r = spawnSync(process.execPath, [f], { cwd: repo, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8' });
+  const r = spawnSync(process.execPath, [f], {
+    cwd: repo,
+    /*
+     * ⚠️ 冒烟默认钉 `BANDI_HOST=127.0.0.1`（2026-11-03：服务端缺省改成对外监听 0.0.0.0）。
+     * 绝大多数用例要的是"免鉴权的回环形态"这个确定性底座，不是"对外监听"本身；
+     * 要测**缺省对外 / 鉴权**的用例（smoke-auth ⑨、smoke-lan-origin）自己把 BANDI_HOST
+     * 从子进程 env 里剥掉 —— 那才是被测行为，别让整批用例陪跑。
+     */
+    env: { ...process.env, BANDI_HOST: process.env.BANDI_HOST ?? '127.0.0.1' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+    encoding: 'utf8',
+  });
   const ms = Date.now() - t0;
   const ok = r.status === 0;
   console.log(`  ${ok ? '✓' : '✗'} ${path.basename(f)}  ${(ms / 1000).toFixed(1)}s`);

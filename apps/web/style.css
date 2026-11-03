@@ -1242,13 +1242,56 @@ body:has(#pluginView.shown .fixed-head)::after {
 .set-head b { font-size: var(--t-sec); font-weight: var(--w-title); }
 .set-tag { font-size: 10.5px; color: var(--dim); border: 1px solid var(--line);
            border-radius: 4px; padding: 0 5px; line-height: 16px; }
-/* 「我的」页（2026-10-31，rail 底部新增一级栏）：身份块 —— 头像 + 名字 + 身份，下面退出登录。
-   justify-content 要压回 flex-start：.set-row 默认 space-between 会把名字推到最右边去。 */
-.me-row { display: flex; align-items: center; justify-content: flex-start; gap: 12px; }
-.me-ava { width: 44px; height: 44px; border-radius: 50%; background: var(--accent); color: #fff;
-          font-size: 19px; line-height: 44px; text-align: center; flex: none; }
-.me-who { display: flex; flex-direction: column; line-height: 1.6; min-width: 0; }
-.me-who .sub { color: var(--dim); font-size: 12.5px; }
+/* ── 「我的」页（2026-11-03 重设计）────────────────────────────────
+   三段式个人中心：身份卡 → 账号安全双卡 → 退场整行。
+   版心收窄到 980px：这页只有三块内容，铺满 1400px 只会显得空。
+   （选择器带 #settingsView —— 否则压不过上面 #settingsView .detail-body 的 1400px。） */
+#settingsView .me-body { max-width: 980px; }
+/* 身份卡：头像 + 名字 + 身份章 + 一行说明。左上角一层极淡的 accent 渐变，
+   让这张卡跟下面"功能卡"区分开 —— 页面唯一的视觉重心就在这。 */
+.me-hero-card { display: flex; align-items: center; gap: 16px; padding: 18px 20px;
+                border: 1px solid var(--line); border-radius: 10px;
+                background: linear-gradient(115deg, color-mix(in srgb, var(--accent) 9%, transparent), transparent 46%),
+                            var(--panel); }
+.me-ava { width: 56px; height: 56px; border-radius: 50%; color: #fff; font-size: 23px;
+          line-height: 56px; text-align: center; flex: none;
+          background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 58%, #000));
+          box-shadow: 0 2px 10px color-mix(in srgb, var(--accent) 30%, transparent); }
+.me-who { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.me-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.me-name b { font-size: 17px; font-weight: var(--w-title); line-height: 1.4;
+             white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.me-role { flex: none; font-size: 11px; line-height: 18px; padding: 0 8px; border-radius: 99px;
+           color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent);
+           border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent); }
+.me-meta { font-size: 12.5px; color: var(--dim); }
+.me-dev { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12px; }
+/* 账号安全：双卡网格（容器不够宽时 auto-fit 自动落成单列）。 */
+.me-sec-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+.me-sec-card { border: 1px solid var(--line); border-radius: 10px; background: var(--panel);
+               padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
+.me-sec-head { display: flex; align-items: center; gap: 10px; }
+.me-sec-ico { flex: none; width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center;
+              color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.me-sec-ico svg { width: 18px; height: 18px; }
+.me-sec-head b { font-size: 13.5px; font-weight: var(--w-title); }
+/* 状态章：小圆点 + 状态词。绿 = 已设置/已开启，橙 = 免密（该补的），灰 = 未开启（可选的）。 */
+.me-state { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 6px;
+            font-size: 12px; color: var(--dim); }
+.me-state i { width: 6px; height: 6px; border-radius: 99px; background: currentColor; }
+.me-state.is-ok { color: var(--ok); }
+.me-state.is-warn { color: var(--warn); }
+.me-sec-desc { margin: 0; font-size: 12.5px; color: var(--dim); line-height: 1.7; }
+.me-sec-meta { font-size: 12px; color: var(--dim); }
+.me-sec-foot { display: flex; justify-content: flex-end; }
+/* 退场整行：退出登录是"走人"的动作 —— 文字染 --bad、hover 才铺淡红底；
+   断开连接/去登录是中性动作，不染。 */
+.me-out-box { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); overflow: hidden; }
+.me-out { display: block; width: 100%; text-align: left; padding: 12px 16px; border: 0;
+          background: transparent; color: var(--text); font-size: 13px; cursor: pointer; }
+.me-out:hover { background: color-mix(in srgb, var(--text) 5%, transparent); }
+.me-out-danger { color: var(--bad); }
+.me-out-danger:hover { background: color-mix(in srgb, var(--bad) 8%, transparent); }
 /* 设置 → 用户（2026-10-31 列表化）：一行一个账号，点行（或「修改」）弹窗编辑 */
 /* 「我的」页 › 动态验证（2026-10-31 二改，仿 yaojian-ruoyi）：qrSvg 输出可缩放 SVG，宽度由容器定 */
 #otpQr { display: flex; justify-content: center; }
@@ -1420,12 +1463,10 @@ body:has(#pluginView.shown .fixed-head)::after {
   background: color-mix(in srgb, var(--bad) 12%, transparent);
 }
 
-/* ── 手机连接 · 页顶「连接」总开关卡（2026-11-02）──
-   左标签右开关的横排；开关关掉后邀请码 / 已配对两节整个不画（pairing.mjs）。 */
-.pair-switch-box { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.pair-switch-txt { min-width: 0; }
-.pair-switch-txt b { font-size: 13.5px; }
-.pair-switch-txt .hint { margin: 3px 0 0; }
+/* ── 手机连接 · 分节头里的「连接」总开关（2026-11-02 加，2026-11-03 收进标题行）──
+   用户："邀请码改成连接，右边加开关，上面的可以去掉了" —— 页顶那张独立开关键卡删掉，
+   开关贴到分节标题最右边；关掉后卡片体换成一句提示（pairing.mjs）。 */
+.set-head.pair-head { justify-content: space-between; }
 
 /* 小节标题行：左边标题，右边动作按钮 */
 /* 标题行定高（2026-10-21 用户："切换按钮，框的高度不要变"）：
@@ -4477,3 +4518,39 @@ dialog.mg-dlg { width: 520px; }
 /* 卡底那截（「最新发布」）用一条细线跟上面隔开 —— 跟稿子一致 */
 .plg-card-foot { display: flex; flex-direction: column; gap: 3px;
                  border-top: 1px solid var(--line); padding-top: 9px; }
+
+/* ═══ 手机连接 · 2026-11-03 评审改版（pairing.mjs 配套） ═══
+   ① 页头状态标签：已开启（绿点）/ 已关闭（灰点），颜色只跟令牌走，深浅主题都成立 */
+.pair-state { display: inline-flex; align-items: center; gap: 5px; }
+.pair-state::before { content: ''; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--dim); flex: 0 0 auto; }
+.pair-state.on { color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 38%, transparent);
+  background: color-mix(in srgb, var(--ok) 10%, transparent); }
+.pair-state.on::before { background: var(--ok); }
+
+/* ② 关闭态引导卡：替换原来「一行灰字套空框」—— 空框看着像加载失败，页面还没有动作。
+   图标淡蓝圆底 + 标题 + 一句后果 + 主按钮（按钮复用全局 button.primary）。
+   set-box 原本就有卡底/描边，这里只管内容层的排版。
+   内边距 22/18 是按「两态等高」反推的：34/30 时卡高 247，比开态（邀请码卡 223）多 24px，
+   拨开关整页会跟着抖一下。 */
+.pair-off { text-align: center; padding: 22px 24px 18px; }
+.pair-off-ico { width: 46px; height: 46px; margin: 0 auto 12px; border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent);
+  display: grid; place-items: center; }
+.pair-off-ico svg { width: 22px; height: 22px; }
+.pair-off b { display: block; font-size: 14px; font-weight: var(--w-title, 600); margin-bottom: 4px; }
+.pair-off p { margin: 0 auto 16px; max-width: 380px;
+  color: var(--dim); font-size: 12.5px; line-height: 1.7; }
+.pair-off button.primary { padding: 7px 22px; }
+
+/* ②b 连接卡开 / 关两态等高（2026-11-03 用户："这两个框要一样大"）。
+   223 是开启态（地址 + 邀请码 + 二维码 + 底部提示）在 900px 内容宽下的实测高度，
+   关闭态靠它兜底、内容垂直居中；内容真变多（窄窗二维码竖排）时 min-height 不拦，
+   让它自己长 —— 那种宽度下两态本来就都超出这个值。 */
+.pair-sec .set-box { min-height: 223px; display: flex; flex-direction: column; }
+.pair-sec .pair-off { margin: auto 0; }
+
+/* ③ 开关关闭态轨道加深一档：--line 在深底上对比不足 3:1（WCAG 1.4.11 非文本下限），
+   看不出"这颗开关现在关着"。用 color-mix 把文字灰压进边框色，两种主题各自动适配。 */
+.switch > span { background: color-mix(in srgb, var(--dim) 45%, var(--line)); }

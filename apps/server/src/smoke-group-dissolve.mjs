@@ -131,7 +131,7 @@ if (portBusy) {
 }
 const logFd = fs.openSync(path.join(tmp, 'server.log'), 'a');
 const srv = spawn(process.execPath, [path.join(process.cwd(), 'apps/server/src/server.mjs')], {
-  env: { ...process.env, BANDI_DATA: tmp, BANDI_PORT: String(PORT) },
+  env: { ...process.env, BANDI_HOST: '127.0.0.1', BANDI_DATA: tmp, BANDI_PORT: String(PORT) },
   stdio: ['ignore', logFd, logFd],
 });
 let up = false;

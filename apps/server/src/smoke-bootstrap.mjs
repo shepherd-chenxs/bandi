@@ -139,11 +139,15 @@ console.log('\n[1] 服务器形态（监听 0.0.0.0）+ 零账号');
 }
 
 /* --------------------------------------------------------- 单机形态 */
-console.log('\n[2] 单机形态（回环）+ 零账号');
+/*
+ * "单机"是**显式钉出来的调试形态**（2026-11-03 起 BANDI_HOST 缺省 0.0.0.0，
+ * 缺省形态就是服务器形态、setup_code 照发）—— 这里钉显式回环下的老行为不变。
+ */
+console.log('\n[2] 单机形态（BANDI_HOST=127.0.0.1 显式钉出来的调试形态）+ 零账号');
 {
   const port = 8812;
   const data = tmpOf('solo-bootstrap');
-  const ctx = await start({ port, data, env: { BANDI_HOST: null, BANDI_TRUST_PROXY: null } });
+  const ctx = await start({ port, data, env: { BANDI_HOST: '127.0.0.1', BANDI_TRUST_PROXY: null } });
   try {
     check('不生成 setup_code（单机不需要）', !fs.existsSync(path.join(data, 'setup_code')));
     /*

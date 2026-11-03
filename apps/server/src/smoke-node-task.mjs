@@ -46,7 +46,7 @@ const req = async (p, opts = {}) => {
 
 const server = spawn(process.execPath, [path.join(ROOT, 'apps', 'server', 'src', 'server.mjs')], {
   cwd: ROOT,
-  env: { ...process.env, BANDI_PORT: String(PORT), BANDI_DATA: tmp, BANDI_DB: path.join(tmp, 'bandi.db') },
+  env: { ...process.env, BANDI_HOST: '127.0.0.1', BANDI_PORT: String(PORT), BANDI_DATA: tmp, BANDI_DB: path.join(tmp, 'bandi.db') },
   windowsHide: true,
   stdio: ['ignore', 'pipe', 'pipe'],
 });

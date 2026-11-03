@@ -38,7 +38,23 @@ import { $, S } from './core.mjs';
  *   个人中心却看到一堆开关。现在按主流 App 的「我的」做：**上面一张登录卡、下面一个
  *   设置入口**，设置页退成它的下一级（见 renderList 里那条返回行）。
  *   桌面照旧：左栏本来就有「设置」，这里再摆一个入口是重复，所以入口只在窄屏画。
+ *
+ * 2026-11-03 桌面重设计（用户："这个页面重新设计一下"）：三段式个人中心 ——
+ *   ① 身份卡（.me-hero-card）：头像 + 名字 + 身份章 + 一行说明，页面唯一的视觉重心；
+ *   ② 账号安全双卡（.me-sec-grid）：密码 / 动态验证各一张，图标 + 状态章 + 说明 + 动作，
+ *      取代原来"一节一行的两张清单卡"；
+ *   ③ 退场整行（.me-out-box）：退出登录/断开连接/去登录，整宽一行、文字染色。
+ *   版心收窄到 980px（.me-body）—— 这页只有三块内容，铺满 1400px 只会显得空。
  */
+
+/* 账号安全两卡的线性小图标（跟随 .me-sec-ico 的 accent 色，与 rail 图标同一套笔触） */
+const ICO_KEY =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">' +
+  '<path d="m21 2-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0 3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>';
+const ICO_SHIELD =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">' +
+  '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></svg>';
+
 export function openMe() {
   setRoute('me');
   setPluginRerender(null);
@@ -52,11 +68,20 @@ export function openMe() {
     : isDevice
       ? (who?.device?.name || '这台设备')
       : '未登录';
-  const sub = isUser
-    ? (who?.role?.name ?? '')
-    : who?.kind === 'operator'
-      ? '这台机器还没有登录账号'
-      : ''; /* 手机设备：名称默认就是「手机设备」，再来一行同字是重复；已配对信息在 me-dev 那行 */
+  /*
+   * 身份卡：名字旁的身份章（登录账号才有角色）+ 一行说明。说明按身份各一句 ——
+   * 手机设备不再另写（名称默认就是「手机设备」，重复），只留等宽的已配对地址行。
+   *
+   * ⚠️ 2026-11-03 设备绑人：手机那行不再空着，写清「以谁的身份用」——
+   * 同一台电脑上两个账号各配一台手机时，屏幕上这句话是唯一能分辨"我现在是谁"的地方
+   * （否则两台手机长得一模一样，批错了都不知道）。
+   */
+  const role = isUser ? (who?.role?.name ?? '') : '';
+  const meta = isUser
+    ? '班底账号'
+    : isDevice
+      ? (who?.user?.name ? `以「${who.user.name}」的身份使用` : '')
+      : '这台机器还没有登录账号';
   // 免密 / 已设置：只有登录账号有"自己的密码"可改（操作员没有账号，去设置 → 用户里管）
   const hasPw = isUser ? who?.user?.hasPassword !== false : false;
   // 动态验证：同上，登录账号才有"自己的验证器"
@@ -71,16 +96,17 @@ export function openMe() {
   const canLogout = isUser || (who?.kind === 'operator' && who?.via !== 'loopback');
   $('settingsView').innerHTML = `
     ${headRow('<b>我的</b>')}
-    <div class="detail-body">
-      <section class="set-sec">
-        <div class="set-box">
-          <div class="set-row me-row me-hero">
-            <span class="me-ava">${esc(initial(name))}</span>
-            <div class="me-who">
+    <div class="detail-body me-body">
+      <section class="set-sec me-hero-sec">
+        <div class="me-hero-card">
+          <span class="me-ava">${esc(initial(name))}</span>
+          <div class="me-who">
+            <div class="me-name">
               <b>${esc(name)}</b>
-              ${sub ? `<span class="sub">${esc(sub)}</span>` : ''}
-              ${isDevice ? `<span class="sub me-dev" id="meDevMeta">已配对 · ${esc(location.host)}</span>` : ''}
+              ${role ? `<span class="me-role">${esc(role)}</span>` : ''}
             </div>
+            ${meta ? `<span class="me-meta">${esc(meta)}</span>` : ''}
+            ${isDevice ? `<span class="me-meta me-dev">已配对 · ${esc(location.host)}</span>` : ''}
           </div>
         </div>
       </section>
@@ -101,40 +127,54 @@ export function openMe() {
       ${
         isUser
           ? `<section class="set-sec">
-               <div class="set-head"><b>密码</b></div>
-               <div class="set-box">
-                 <div class="set-row">
-                   <span class="set-label">登录密码</span>
-                   <div style="display:flex;align-items:center;gap:10px">
-                     <span class="machine-data">${hasPw ? '已设置' : '免密'}</span>
-                     <button class="btn-sm" id="mePwd">修改密码</button>
+               <div class="set-head"><b>账号安全</b></div>
+               <div class="me-sec-grid">
+                 <div class="me-sec-card">
+                   <div class="me-sec-head">
+                     <span class="me-sec-ico">${ICO_KEY}</span>
+                     <b>登录密码</b>
+                     <span class="me-state ${hasPw ? 'is-ok' : 'is-warn'}"><i></i>${hasPw ? '已设置' : '免密'}</span>
                    </div>
+                   <p class="me-sec-desc">${
+                     hasPw
+                       ? '用于登录班底。改完密码后，其它已登录的设备会全部下线。'
+                       : '免密账号只是本机身份，别的设备登不进来；要远程登录，先在这里补上密码。'
+                   }</p>
+                   <div class="me-sec-foot"><button class="btn-sm" id="mePwd">修改密码</button></div>
                  </div>
-               </div>
-             </section>
-             <section class="set-sec">
-               <div class="set-head"><b>安全</b></div>
-               <div class="set-box">
-                 <div class="set-row">
-                   <span class="set-label">动态验证</span>
-                   <div style="display:flex;align-items:center;gap:10px">
-                     <span class="machine-data" id="meTotpState">${hasTotp ? '已开启' : '未开启'}</span>
-                     <button class="btn-sm" id="meTotp">${hasTotp ? '解绑' : '开启'}</button>
+                 <div class="me-sec-card">
+                   <div class="me-sec-head">
+                     <span class="me-sec-ico">${ICO_SHIELD}</span>
+                     <b>动态验证</b>
+                     <span class="me-state ${hasTotp ? 'is-ok' : ''}"><i></i>${hasTotp ? '已开启' : '未开启'}</span>
                    </div>
+                   <p class="me-sec-desc">${
+                     hasTotp
+                       ? '登录时除了密码，还要输一个验证器 6 位码。'
+                       : '开启后，登录除了密码还要输一个验证器 6 位码；手机丢了，用恢复码也能进。'
+                   }</p>
+                   <div class="me-sec-meta" id="meTotpMeta" hidden></div>
+                   <div class="me-sec-foot"><button class="btn-sm" id="meTotp">${hasTotp ? '解绑' : '开启'}</button></div>
                  </div>
                </div>
              </section>`
           : ''
       }
       ${
-        canLogout
-          ? '<div class="machine-actions"><button class="btn-sm" id="meLogout">退出登录</button></div>'
-          : isDevice
-            ? /* 手机设备（2026-11-02 用户："手机端连接之后需要一个入口能够断开连接"）——
-                 与「退出登录」同位、同款：这是这台手机的"退出"。断开≠取消配对：
-                 记录留着，没有别的手机在用的时候打开 App 点「连接」就能回来。 */
-              '<div class="machine-actions"><button class="btn-sm" id="meDisconnect">断开连接</button></div>'
-            : '<div class="machine-actions"><button class="btn-sm" id="meGoLogin">去登录</button></div>'
+        /* 退场动作整宽一行：个人中心的"走人"动作用整行 + 文字染色，比右下角一颗
+           小按钮稳。退出登录染 --bad（"走人"的分量）；断开连接/去登录是中性动作，不染。 */
+        `<section class="set-sec me-out-sec">
+           <div class="me-out-box">${
+             canLogout
+               ? '<button class="me-out me-out-danger" id="meLogout">退出登录</button>'
+               : isDevice
+                 ? /* 手机设备（2026-11-02 用户："手机端连接之后需要一个入口能够断开连接"）——
+                      与「退出登录」同位、同款：这是这台手机的"退出"。断开≠取消配对：
+                      记录留着，没有别的手机在用的时候打开 App 点「连接」就能回来。 */
+                   '<button class="me-out" id="meDisconnect">断开连接</button>'
+                 : '<button class="me-out" id="meGoLogin">去登录</button>'
+           }</div>
+         </section>`
       }
     </div>`;
   $('meLogout')?.addEventListener('click', () => void logout());
@@ -174,14 +214,15 @@ export function openMe() {
       goSet();
     }
   });
-  // 已绑定的：补一行"绑于何时 / 还剩几个恢复码"（参考项目 security 页的 status 显示）
+  // 已绑定的：说明下面补一行"绑于何时 / 还剩几个恢复码"（参考项目 security 页的 status 显示）
   if (hasTotp) {
     api('/api/me/otp/status')
       .then((st) => {
-        const el = $('meTotpState');
+        const el = $('meTotpMeta');
         if (!el || !st?.enabled) return;
         const at = String(st.bindTime ?? '').replace('T', ' ').slice(0, 16);
-        el.textContent = `已开启${at ? ' · ' + at : ''} · 恢复码剩 ${st.recoveryLeft ?? 0} 个`;
+        el.textContent = `绑定于 ${at || '—'} · 恢复码剩 ${st.recoveryLeft ?? 0} 个`;
+        el.hidden = false;
       })
       .catch(() => {});
   }

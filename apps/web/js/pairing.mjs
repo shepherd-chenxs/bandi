@@ -1,19 +1,18 @@
 /* pairing.mjs —— 设置页「手机连接」分节（2026-11 手机端增量）。
  *
  * 三块：
- *   ① 配对入口：先查 /api/lan —— boundLan=false 时手机根本连不进来（回环形态），
- *      给"去协作中心切成对外服务并重启"的引导，不出邀请码（设计 §1.3 前置条件）。
- *      ⚠️ 前提是**对外服务**，不是"总机"：2026-11-01 晚起分机也对外（手机照连），
- *      只是不收节点 —— 这两个维度别混（模式卡在「协作中心」页，2026-11-02 搬过去）。
- *   ② 邀请码卡（2026-11-01 改版）：分节里直接摆 9 位数字（`xxx xxx xxx`）+ 倒计时 +
+ *   ① 配对入口：先查 /api/lan —— boundLan=false 时手机连不进来（监听被启动参数
+ *      BANDI_HOST=127.0.0.1 钉在回环上的调试形态，2026-11-03 起默认就是对外监听），
+ *      给"改部署配置重起"的引导，不出邀请码（设计 §1.3 前置条件）。
+ *   ② 连接卡（2026-11-01 改版）：分节里直接摆 9 位数字（`xxx xxx xxx`）+ 倒计时 +
  *      「换一个」+ 旁边一张小二维码。**打开这一节就发一个新码**（旧码当场作废），
  *      所以不存在"页面上这个码到底还算不算数"的疑虑 —— 看见的就是能用的。
  *      改版前是弹窗里的长链接二维码：手机上要么扫码、要么把一条 70 字符的地址手打进去，
  *      后者根本不是人干的事。这才是"填地址"被推翻的真正原因。
  *   ③ 已配对设备**表**（2026-11-01 五改：卡片行改表格 —— 手机/状态/配对时间/最近活跃/
  *      面板角色/操作，列对齐比一坨点连的小字好读）：断开连接 / 取消配对（PRD P1-2）。
- *   ⓪ 页顶「连接」总开关卡（2026-11-02，用户："加个卡片，标签是连接，右边是开关"）：
- *      关 = 邀请码、已配对两节整个隐藏；服务端断开全部在用手机、拒绝扫码 / 连回来
+ *   ⓪ 分节头的「连接」总开关（2026-11-02 加，2026-11-03 收进标题行）：
+ *      关 = 邀请码卡整个换成一句提示、服务端断开全部在用手机、拒绝扫码 / 连回来
  *      （POST /api/pair/enabled → pairEnabled 存 netmode.json，E1707）。
  *
  * 两个动作，语义完全不同（2026-11-01 用户定稿，都要 askConfirm —— 绝不 alert/confirm()）：
@@ -47,19 +46,18 @@ export async function renderPairing() {
   }
 
   if (!lan?.boundLan) {
-    // 回环形态：手机连不进来，配对功能整个不可用 —— 指路「协作中心」当场切成对外服务
-    // + 重启（模式卡 2026-11-02 搬去了那边，设计 §1.3 前置条件）
+    // 监听被启动参数钉在回环上（调试形态）：手机连不进来，配对功能整个不可用 ——
+    // 指路部署配置（2026-11-03 起没有"切对外 + 重启"这个界面动作了）
     view.innerHTML = `
       ${headRow()}
       <div class="detail-body">
         <section class="set-sec">
-          <div class="set-head"><b>手机连接</b><span class="set-tag">未开局域网</span></div>
+          <div class="set-head"><b>手机连接</b><span class="set-tag">只听本机</span></div>
           <div class="set-box">
             <div class="set-note">
-              这台机器现在<b>只监听本机</b>（回环形态），手机连不进来，所以没法配对。<br />
-              去 <b>设置 → 协作中心</b>，在页顶「模式」卡上选<b>分机</b>或<b>总机</b>（都能让手机连），
-              再点「重启」让监听生效，重启完成后回到这一页生成邀请码。<br />
-              差别只有一个：<b>总机</b>还能收别的机器当节点，<b>分机</b>不收。
+              这台机器的监听地址被启动参数（<code>BANDI_HOST=127.0.0.1</code>）钉在了本机，
+              手机连不进来，所以没法配对。<br />
+              改部署配置里的 <code>BANDI_HOST</code>（缺省就是对外）重新起，再回到这一页生成邀请码。
             </div>
           </div>
         </section>
@@ -68,59 +66,27 @@ export async function renderPairing() {
   }
 
   /*
-   * 「连接」总开关（2026-11-02）：页顶一张卡，左标签右开关。
-   * 关 = 这台电脑不接受手机连接：邀请码、已配对列表**两节整个隐藏**，
+   * 「连接」总开关（2026-11-02 加，2026-11-03 收进分节头）：
+   * 用户："邀请码改成连接，右边加开关，上面的可以去掉了" —— 页顶那张独立开关卡删掉，
+   * 开关贴到分节标题右边，标题从「邀请码」改成「连接」。
+   * 关 = 这台电脑不接受手机连接：卡片体（电脑地址 / 邀请码 / 二维码）换成一句提示，
    * 服务端同时断开所有在用手机、拒绝扫码 / 连回来（E1707）。
+   * 已配对的手机照常留在下面 —— 关掉之后正好在那里「取消配对」。
    * 老服务没有这个字段时按开着算（向后兼容）。
    */
   const pairEnabled = lan?.pairEnabled !== false;
-
-  if (!pairEnabled) {
-    view.innerHTML = `
-      ${headRow()}
-      <div class="detail-body">
-        ${pairSwitchCard(false)}
-        <section class="set-sec">
-          <div class="set-box"><div class="empty">手机连接已关闭 —— 打开上面的开关后，这里会显示邀请码和已配对的手机。</div></div>
-        </section>
-      </div>`;
-    bindPairSwitch();
-    return;
-  }
+  pairOn = pairEnabled;
 
   view.innerHTML = `
-    ${headRow()}
+    ${headRow(pairEnabled ? 'on' : 'off')}
     <div class="detail-body">
-      ${pairSwitchCard(true)}
-      <section class="set-sec">
-        <div class="set-head"><b>邀请码</b></div>
+      <section class="set-sec pair-sec">
+        <div class="set-head pair-head">
+          <b>连接</b>
+          ${pairSwitch(pairEnabled)}
+        </div>
         <div class="set-box">
-          <div class="mb-invite">
-            <div class="mb-invite-col">
-              <div class="mb-invite-row">
-                <div class="mb-invite-k">电脑地址</div>
-                <div class="mb-invite-v">
-                  <span class="mb-invite-addr" id="pairAddr" title="点一下复制">…</span>
-                  <button class="btn-sm" type="button" id="pairAddrCopy">复制地址</button>
-                </div>
-              </div>
-              <div class="mb-invite-row">
-                <div class="mb-invite-k">邀请码<span class="mb-invite-left" id="pairLeft"></span></div>
-                <div class="mb-invite-v">
-                  <span class="mb-invite-code" id="pairCode" title="点一下复制"><span class="mb-invite-wait">生成中…</span></span>
-                  <button class="mb-eye" type="button" id="pairEye" aria-pressed="false" title="遮住 / 露出邀请码"></button>
-                  <button class="btn-sm" type="button" id="pairRefresh">换一个</button>
-                </div>
-              </div>
-            </div>
-            <div class="mb-invite-side">
-              <div class="mb-qr" id="pairQr"></div>
-              <div class="mb-invite-side-hint">手机扫码直接连</div>
-            </div>
-          </div>
-          <div class="set-row">
-            <p class="hint">邀请码 5 分钟内有效、<b>只能配一台手机</b>。</p>
-          </div>
+          ${pairEnabled ? inviteCard() : pairOffCard()}
         </div>
       </section>
       <section class="set-sec">
@@ -131,70 +97,132 @@ export async function renderPairing() {
       </section>
     </div>`;
 
-  $('pairRefresh').onclick = () => {
-    issueInvite().catch((e) => toast(e.message, 'error'));
-  };
-  // 码 / 地址本身都可点复制：发给同事 / 粘到手机上，比手抄可靠
-  $('pairCode').onclick = async () => {
-    const text = $('pairCode')?.dataset.code ?? '';
-    if (!text) return;
-    if ($('pairCode').classList.contains('expired')) return toast('这个码已过期 —— 点「换一个」', 'error');
-    await copyPlainText(text);
-    toast('已复制邀请码', 'ok');
-  };
-  $('pairAddr').onclick = async () => {
-    const text = $('pairAddr')?.textContent ?? '';
-    if (!text || text === '暂无可用地址') return;
-    await copyPlainText(text);
-    toast('已复制地址', 'ok');
-  };
-  /* 「复制地址」：手机手填那栏的来源。地址/码本身也可点复制（发给同事 / 粘到手机） */
-  $('pairAddrCopy').onclick = async () => {
-    const text = $('pairAddr')?.textContent ?? '';
-    if (!text || text === '暂无可用地址') return;
-    await copyPlainText(text);
-    toast('已复制地址', 'ok');
-  };
-  /*
-   * 小眼睛（2026-11-01 三改，照 ToDesk 的验证码那样）：把码遮成圆点。
-   * 演示 / 截屏 / 旁边有人时用得上 —— 遮住只是视觉，复制、倒计时、二维码都照旧。
-   */
-  $('pairEye').onclick = () => {
-    codeHidden = !codeHidden;
-    paintEye();
-    paintCodeValue();
-  };
-  paintEye();
   bindPairSwitch();
 
-  issueInvite().catch((e) => {
-    const el = $('pairCode');
-    if (el) el.innerHTML = `<span class="mb-invite-wait">${esc(failHtml(e))}</span>`;
-  });
+  /* 关闭态引导卡的主按钮：扳分节头那颗开关（走同一条 onchange 链路，不另开写路径） */
+  const onBtn = $('pairOnBtn');
+  if (onBtn) {
+    onBtn.onclick = () => {
+      const sw = $('pairSwitch');
+      if (!sw || sw.disabled) return;
+      sw.checked = true;
+      sw.dispatchEvent(new Event('change'));
+    };
+  }
+
+  if (pairEnabled) {
+    $('pairRefresh').onclick = () => {
+      issueInvite().catch((e) => toast(e.message, 'error'));
+    };
+    // 码 / 地址本身都可点复制：发给同事 / 粘到手机上，比手抄可靠
+    $('pairCode').onclick = async () => {
+      const text = $('pairCode')?.dataset.code ?? '';
+      if (!text) return;
+      if ($('pairCode').classList.contains('expired')) return toast('这个码已过期 —— 点「换一个」', 'error');
+      await copyPlainText(text);
+      toast('已复制邀请码', 'ok');
+    };
+    $('pairAddr').onclick = async () => {
+      const text = $('pairAddr')?.textContent ?? '';
+      if (!text || text === '暂无可用地址') return;
+      await copyPlainText(text);
+      toast('已复制地址', 'ok');
+    };
+    /* 「复制地址」：手机手填那栏的来源。地址/码本身也可点复制（发给同事 / 粘到手机） */
+    $('pairAddrCopy').onclick = async () => {
+      const text = $('pairAddr')?.textContent ?? '';
+      if (!text || text === '暂无可用地址') return;
+      await copyPlainText(text);
+      toast('已复制地址', 'ok');
+    };
+    /*
+     * 小眼睛（2026-11-01 三改，照 ToDesk 的验证码那样）：把码遮成圆点。
+     * 演示 / 截屏 / 旁边有人时用得上 —— 遮住只是视觉，复制、倒计时、二维码都照旧。
+     */
+    $('pairEye').onclick = () => {
+      codeHidden = !codeHidden;
+      paintEye();
+      paintCodeValue();
+    };
+    paintEye();
+
+    issueInvite().catch((e) => {
+      const el = $('pairCode');
+      if (el) el.innerHTML = `<span class="mb-invite-wait">${esc(failHtml(e))}</span>`;
+    });
+  }
   renderDeviceList().catch((e) => {
     const box = $('pairDevices');
     if (box) box.innerHTML = `<div class="empty">${failHtml(e)}</div>`;
   });
 }
 
-const headRow = () => '<div class="detail-head" style="padding:14px 20px 10px"><b style="font-size:var(--t-page)">手机连接</b></div>';
+const headRow = (state) =>
+  `<div class="detail-head" style="padding:14px 20px 10px"><b style="font-size:var(--t-page)">手机连接</b>${
+    /* 状态标签（2026-11-03 评审）：页面标题旁边直接说当前开着没，不用滚到分节里看开关。
+       读取中 / 「只听本机」两种前置态不画 —— 那时分节里已有更准确的说明。 */
+    state ? `<span class="set-tag pair-state${state === 'on' ? ' on' : ''}">${state === 'on' ? '已开启' : '已关闭'}</span>` : ''
+  }</div>`;
+
+/** 分节总开关的当前状态（空列表 / 卡片体文案据此换一句） */
+let pairOn = true;
+
+/** 关闭态图标（描线手机，随 .pair-off-ico 的 accent 淡底变色） */
+const PHONE_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="2" width="10" height="20" rx="2.5"/><path d="M11 18.5h2"/></svg>`;
 
 /**
- * 页顶「连接」卡（2026-11-02）：左标签 + 一句说明，右边总开关。
+ * 关闭态引导卡（2026-11-03 评审改版）：原来是 60px 高的一行灰字套个空框 ——
+ * 边框让它看着像"加载失败的容器"，而且页面上没有任何活的动作。
+ * 现在：图标 + 标题 + 一句后果说明 + 主按钮，按钮直接扳分节头那颗开关（复用同一条链路，
+ * 服务端语义 / toast / 整节重画都不变，不另开第二条写路径）。
+ */
+const pairOffCard = () => `
+  <div class="pair-off">
+    <div class="pair-off-ico">${PHONE_SVG}</div>
+    <b>手机连接已关闭</b>
+    <p>打开后，这里会显示电脑地址、邀请码和二维码，手机扫码即可连接。</p>
+    <button class="primary" type="button" id="pairOnBtn">打开手机连接</button>
+  </div>`;
+
+/**
+ * 「连接」分节头右边那颗总开关（2026-11-03 从页顶卡搬进来）。
  * 开 = 手机可以连；关 = 服务端断开全部在用手机 + 拒绝扫码 / 连回来（E1707），
- * 前端随之把邀请码、已配对两节藏掉。切完**整节重画**（renderPairing）——
+ * 前端随之把卡片体换成一句提示。切完**整节重画**（renderPairing）——
  * 邀请码的倒计时 / 码值都是状态，局部抠 DOM 容易留残尸。
  */
-const pairSwitchCard = (on) => `
-  <section class="set-sec">
-    <div class="set-box pair-switch-box">
-      <div class="pair-switch-txt">
-        <b>连接</b>
-        <p class="hint">${on ? '打开后，手机才能通过邀请码或扫码连接这台电脑。' : '已关闭 —— 手机连不上这台电脑，已连接的也已全部断开。'}</p>
+const pairSwitch = (on) => `
+  <label class="switch" title="${on ? '关闭手机连接' : '打开手机连接'}"><input type="checkbox" id="pairSwitch" ${
+    on ? 'checked' : ''
+  } /><span></span></label>`;
+
+/** 手机能连时的那张卡：电脑地址 + 邀请码（倒计时 / 小眼睛 / 换一个）+ 二维码 */
+const inviteCard = () => `
+  <div class="mb-invite">
+    <div class="mb-invite-col">
+      <div class="mb-invite-row">
+        <div class="mb-invite-k">电脑地址</div>
+        <div class="mb-invite-v">
+          <span class="mb-invite-addr" id="pairAddr" title="点一下复制">…</span>
+          <button class="btn-sm" type="button" id="pairAddrCopy">复制地址</button>
+        </div>
       </div>
-      <label class="switch" title="${on ? '关闭手机连接' : '打开手机连接'}"><input type="checkbox" id="pairSwitch" ${on ? 'checked' : ''} /><span></span></label>
+      <div class="mb-invite-row">
+        <div class="mb-invite-k">邀请码<span class="mb-invite-left" id="pairLeft"></span></div>
+        <div class="mb-invite-v">
+          <span class="mb-invite-code" id="pairCode" title="点一下复制"><span class="mb-invite-wait">生成中…</span></span>
+          <button class="mb-eye" type="button" id="pairEye" aria-pressed="false" title="遮住 / 露出邀请码"></button>
+          <button class="btn-sm" type="button" id="pairRefresh">换一个</button>
+        </div>
+      </div>
     </div>
-  </section>`;
+    <div class="mb-invite-side">
+      <div class="mb-qr" id="pairQr"></div>
+      <div class="mb-invite-side-hint">手机扫码直接连</div>
+    </div>
+  </div>
+  <div class="set-row">
+    <p class="hint">邀请码 5 分钟内有效、<b>只能配一台手机</b>。</p>
+  </div>`;
 
 /** 给当页那颗总开关接线（开 / 关两种页面都会画它） */
 function bindPairSwitch() {
@@ -368,16 +396,20 @@ export async function renderDeviceList() {
       ? `${active.length} 台在用${off ? ` · ${off} 台已断开` : ''}`
       : off
         ? `${off} 台已断开`
-        : '还没有';
+        : '0 台'; /* 「还没有」（2026-11-03 评审）：描边小标签是筛选器的视觉语言，表数量用「0 台」直给 */
   }
   if (!devices.length) {
-    box.innerHTML = '<div class="empty">还没有手机连接过 —— 把上面的邀请码填到手机里就行</div>';
+    /* 关闭态只说事实（2026-11-03 评审）：上面引导卡已经有「打开手机连接」的动作和说明，
+       这里再来一句"打开上面的开关……"就是同一件事说两遍。开着态的提示保留 —— 那时它是唯一指引。 */
+    box.innerHTML = pairOn
+      ? '<div class="empty">还没有手机连接过 —— 把上面的邀请码填到手机里就行</div>'
+      : '<div class="empty">暂无配对设备</div>';
     return;
   }
   box.innerHTML = `
     <div class="mb-pair-wrap">
       <table class="plg-table pair-table">
-        <thead><tr><th>手机</th><th>状态</th><th>配对时间</th><th>最近活跃</th><th>面板角色</th><th></th></tr></thead>
+        <thead><tr><th>手机</th><th>使用者</th><th>状态</th><th>配对时间</th><th>最近活跃</th><th>面板角色</th><th></th></tr></thead>
         <tbody>
           ${devices
             .map((d) => {
@@ -385,6 +417,12 @@ export async function renderDeviceList() {
               return `
               <tr data-dev="${esc(d.id)}"${isDisconnected ? ' class="off"' : ''}>
                 <td><b>${esc(d.name)}</b></td>
+                ${
+                  /* 使用者（2026-11-03 设备绑人）：这部手机的操作算谁的。
+                     绑人之前这里根本没有"人"，手机批的卡票在记录里只有一台设备 ——
+                     一眼看不出"这是谁批的"。未绑定 = 零账号形态的老设备（或发码时还没有账号）。 */
+                  `<td>${d.ownerName ? esc(d.ownerName) : '<span class="dim">未绑定</span>'}</td>`
+                }
                 <td>${
                   isDisconnected
                     ? '<span class="mb-pair-offtag">已断开</span>'

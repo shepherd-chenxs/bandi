@@ -210,7 +210,7 @@ const BASE = `http://127.0.0.1:${PORT}`;
 
 const child = spawn(process.execPath, [path.join(repoRoot, 'apps', 'server', 'src', 'server.mjs')], {
   cwd: repoRoot,
-  env: { ...process.env, BANDI_PORT: String(PORT), BANDI_DATA: tmp2, BANDI_DB: path.join(tmp2, 'bandi.db') },
+  env: { ...process.env, BANDI_HOST: '127.0.0.1', BANDI_PORT: String(PORT), BANDI_DATA: tmp2, BANDI_DB: path.join(tmp2, 'bandi.db') },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 let serverLog = '';

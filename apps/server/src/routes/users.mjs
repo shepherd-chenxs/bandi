@@ -355,9 +355,16 @@ export async function handleUsers(req, res, url) {
        */
       if (who?.kind === 'device') {
         const d = store.getDevice(who.deviceId);
+        /*
+         * 归属人（2026-11-03 设备绑人）：手机也要能回答"我是谁"。
+         * 以前这里只有设备名 —— 一台手机在工作台里没有"人"，说话、审批都只算设备。
+         * 现在带上它归属的账号（零账号形态的老设备可能是 null，前端按"未绑定"显示）。
+         */
+        const owner = who.userId ? store.getUser(who.userId) : null;
         return sendJson(res, 200, {
           kind: 'device',
           device: d ? { id: d.id, name: d.name, pairedAt: d.pairedAt } : null,
+          user: owner ? { id: owner.id, name: owner.name } : null,
           /*
            * 手机的面板角色（2026-10-28 第四刀）：未分配 = 默认 `mobile`（底部四个 tab），
            * 与今天完全一样。前端 `S.menuKeys` 直接吃它的 menuKeys。

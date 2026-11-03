@@ -3,6 +3,7 @@
 > 依据：`docs/mobile/pwa-prd.md` v0.1（增量 PRD）。
 > 已定决策不推翻：不做原生 APP / 不做外网中继 / 不做推送；复用 `apps/web` 响应式改造；无构建步骤贯穿所有选型；手机端 = 受限视图，服务端按设备令牌区分权限。
 > 本文所有引用的文件、函数名均为 2026-11 现仓库实际代码（已逐文件核实）。
+> **正文是手机端开工时的快照**；后续代码改动以带日期的行内批注为准，两者不一致时以代码与批注为准。
 
 ---
 
@@ -12,7 +13,7 @@
 
 | 挑战 | 现状与对策 |
 |---|---|
-| **鉴权体系扩容** | `apps/server/src/auth.mjs` 已有三类身份（`identify()`：`operator` / `node`（`bn_` 前缀，`store.nodeAuthByToken`）/ `revoked`），闸门只看监听地址（回环免鉴权 / 非回环全要）。**方案：扩展而非并列** —— 在 `identify()` 里追加第四类 `device`（`bd_` 前缀，走新的 `store.deviceAuthByToken`），`decide()` 里加 `deviceMayReach()` 白名单（仿 `nodeMayReach()` 的写法）。这样"判定只有一处"的既有铁律不破。 |
+| **鉴权体系扩容** | `apps/server/src/auth.mjs` 已有三类身份（`identify()`：`operator` / `node`（`bn_` 前缀，`store.nodeAuthByToken`）/ `revoked`），闸门只看监听地址（回环免鉴权 / 非回环全要）。⚠️ **2026-10-31 起这条"闸门只看监听地址"已升级**：来源按 `classifySource()` 四条同时成立才算本机，回环形态下**浏览器抓面板 HTML 要先有登录会话**（API 仍回环信任）—— 结论不变，详见 `auth.mjs` 顶部注释。**方案：扩展而非并列** —— 在 `identify()` 里追加第四类 `device`（`bd_` 前缀，走新的 `store.deviceAuthByToken`），`decide()` 里加 `deviceMayReach()` 白名单（仿 `nodeMayReach()` 的写法）。这样"判定只有一处"的既有铁律不破。 |
 | **SSE 不能带自定义头** | 会话流（`/api/events`、`/api/runs/:id/stream`）用 `EventSource`，设不了 `X-Bandi-Token` 头，只有 Cookie 一条活路。**设备令牌复用现有 Cookie 名 `bandi_token`**（`auth.mjs` 顶部的 `COOKIE` 常量），`tokenOf()` 一行不改 —— 三路取值（Cookie / 头 / 查询）原样生效。 |
 | **一次性配对码** | `store/nodes.mjs` 的 `createInvite()/consumeInvite()` 已给出完整范式：只存 sha256 哈希、`UPDATE … WHERE usedAt IS NULL AND expiresAt > ?` 原子核销。配对令牌照抄这套（独立表，不混进节点表）。**2026-11-01 起主路径是 9 位数字邀请码**（`createPairCode`，同表同核销 SQL；`bp_…` 长令牌兼容保留）—— 手机壳改成"输码找人"后，凭据要能人念人听。9 位数字空间小，靠 claim 端点的按 IP 试错限速（E1703，60 秒 12 次）与 UDP 带码探测限速（60/分）补回熵差。 |
 | **二维码生成（无构建步骤）** | 选 **`qrcode-generator@1.4.4`**（Kazuhiko Arase，MIT）**vendored** 为 `apps/web/js/vendor/qrcode.mjs`（ESM 包装，约 10KB min）。理由：① 纯 JS 无 DOM/canvas 依赖，输出模块串可直接画 `<table>`/SVG；② 场景是局域网，**必须离线可用** —— 排除运行时 CDN 加载（手机/PC 都可能断外网）；③ 无构建步骤约束下，npm 引入不可行，vendored 单文件是唯一务实解；④ 该库是业界引用最广的二维码编码器之一，MIT 无传染。 |
@@ -30,8 +31,13 @@
 
 ### 1.3 前置条件（重要）
 
-- 扫码配对**只在总机形态可用**（监听非回环，`netmode.readNetMode().allowLan` / `BANDI_HOST`）：回环形态手机根本连不进来。桌面端配对弹窗打开前先 `GET /api/lan`（`routes/runtime.mjs:124`），`boundLan === false` 时提示"先在模式里切到总机并重启"，不生成二维码。
-- CSRF 闸（`guardWrite`）要求写请求的 Origin 在 `allowedOrigins()` 里：手机页面 Origin 是 `http://<局域网IP>:8787`，`config.mjs selfLanOrigins()` 在 `allowLan` 开启时已自动把本机所有 IPv4 网卡地址放行 ✓（既有逻辑，无需改）。`BANDI_HOST` 显式指定的服务器部署仍需 `BANDI_ORIGINS` 显式声明（既有要求，文档里写明）。
+- 扫码配对的前提是**手机能访问到这台机器**。2026-11-03 起缺省就对外监听（`0.0.0.0`），
+  「切到总机并重启」那一步已不存在（`allowLan` 键与 `/api/restart` **一起删了**）；现在管"能不能配"的是两个
+  **立刻生效**的开关：**角色**（`acceptNodes`，收不收别的机器当节点）与**手机连接总开关**（`pairEnabled`，
+  关掉时设备令牌一律失效、未用邀请码全作废 —— `deviceAuthByToken` / `invalidateAllPairCodes`）。
+  桌面端配对弹窗仍先 `GET /api/lan` 拿 `urls`；`boundLan === false` 现在只可能是
+  `BANDI_HOST=127.0.0.1` 的调试形态（手机连不进来）——给一行提示、不出邀请码。
+- CSRF 闸（`guardWrite`）要求写请求的 Origin 在 `allowedOrigins()`（`http.mjs`）里：手机页面 Origin 是 `http://<局域网IP>:8787`，本机所有 IPv4 网卡地址由 `config.lanOrigins()` **恒现算放行**（2026-11-03 起不再有"开了局域网才放行"这一层）。`BANDI_HOST` 显式指定的服务器部署仍需 `BANDI_ORIGINS` 显式声明（既有要求，文档里写明）。
 - 手机端所有写请求照旧带 `X-Bandi: 1` 头（前端 `ui.mjs api()` 统一注入，配对落地页单独实现时也要带）。
 
 ---
@@ -89,7 +95,9 @@ CREATE TABLE IF NOT EXISTS mobile_devices (
   lastIp      TEXT,                      -- 最近请求来源 IP（排查用）
   roleId      TEXT,                      -- 面板角色（2026-10-28），空 = 默认 mobile
   clientKey   TEXT,                      -- 手机自报的随机 ID（2026-11-01），重复配对复用同一行
-  disconnectedAt TEXT                    -- 非空 = 已断开（2026-11-01 二刀）：行留着、能连回来
+  disconnectedAt TEXT,                   -- 非空 = 已断开（2026-11-01 二刀）：行留着、能连回来
+  userId      TEXT                       -- 归属于谁（2026-11-03 设备绑人）：发码人就
+                                         -- 是这部手机的主人；空 = 零账号形态的老设备
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_mobile_clientKey ON mobile_devices (clientKey) WHERE clientKey IS NOT NULL;
 
@@ -108,18 +116,28 @@ CREATE TABLE IF NOT EXISTS mobile_pair_tokens (
   createdAt  TEXT NOT NULL,
   expiresAt  TEXT NOT NULL,
   usedAt     TEXT,
-  usedByDeviceId TEXT
+  usedByDeviceId TEXT,
+  userId     TEXT                        -- 这枚码是发给谁的（2026-11-03）：claim 时继承到设备行
 );
 ```
+
+> **设备绑人（2026-11-03 增补）**：`mobile_devices.userId` = 这部手机属于谁。
+> 归属来自**发码人**（claim 是免令牌端点，服务端在那儿认不出"拿手机的人"，
+> 唯一可信的人是点「生成邀请码」的那个）；码上没写人（老码 / 当时还没有账号）
+> 就认第一个账号，与老库补齐、operator 回落三处同一口径。
+> 效果：`identify()` 出来的 `device` 带 `userId` → `actorUser()` 把它记到人头上
+> （消息/便签署"谁说的"）；归属人被**禁用或删号**时 `deviceAuthByToken` 直接返回 null，
+> 那台手机下一次请求就 401（语义是**冻结不是吊销**：重新启用后同一台手机接着用，不用重扫）。
+> ⚠️ 带 `userId` **不提权**：`kind` 仍是 `device`，PDP 照走 device 白名单。
 
 ### 3.2 API 一览（错误码分配见 §8）
 
 | 方法 路径 | 鉴权 | 请求 | 响应 | 错误 |
 |---|---|---|---|---|
-| `POST /api/pair/tokens` | operator | `{}` | `{ token, expiresAt, urls: string[] }`（`urls` = `netmode.lanUrls(port)`，已按 192.168 > 10 > 172 排序） | `E3701` 非操作员（403）；`E5701` 落库失败（500） |
-| `POST /api/pair/claim` | **免**（guard 豁免） | `{ token|code, name, clientKey? }`，Origin 必须合法 + `X-Bandi: 1` | 200 `{ ok, deviceId, name }` + `Set-Cookie: bandi_token=bd_…; HttpOnly; SameSite=Lax; Max-Age=31536000` | `E1701` 缺 token/格式不对（400）；`E1702` 已过期（400）；`E4701` 已被使用（409） |
-| `GET /api/pair/me` | 任意已登录 | — | `{ kind: 'device', device: {id,name,pairedAt} }` 或 `{ kind: 'operator' }` | 401 走 `E4010` 既有闸 |
-| `GET /api/pair/devices` | operator | — | `{ devices: [{id,name,pairedAt,lastSeenAt,lastIp,disconnectedAt,tokenCount}] }` | `E3701`（403） |
+| `POST /api/pair/tokens` | operator | `{}` | `{ code, expiresAt, owner: {id,name}\|null, urls: string[] }`（`owner` = 这张码会把手机认到谁名下，2026-11-03；`urls` = `netmode.lanUrls(port)`，已按 192.168 > 10 > 172 排序） | `E3701` 非操作员（403）；`E5701` 落库失败（500） |
+| `POST /api/pair/claim` | **免**（guard 豁免） | `{ token\|code, name, clientKey? }`，Origin 必须合法 + `X-Bandi: 1` | 200 `{ ok, deviceId, name, owner }` + `Set-Cookie: bandi_token=bd_…; HttpOnly; SameSite=Lax; Max-Age=31536000` | `E1701` 缺 token/格式不对（400）；`E1702` 已过期（400）；`E4701` 已被使用（409） |
+| `GET /api/pair/me` | 任意已登录 | — | `{ kind:'device', device:{id,name,pairedAt}, user:{id,name}\|null }` 或 `{ kind:'operator' }` | 401 走 `E4010` 既有闸 |
+| `GET /api/pair/devices` | operator | — | `{ devices: [{id,name,userId,ownerName,pairedAt,lastSeenAt,lastIp,disconnectedAt,tokenCount}] }` | `E3701`（403） |
 | `POST /api/pair/devices/:id/revoke` | operator | `{}` | `{ ok, revoked }`（老接口，语义同 disconnect，保留兼容） | `E2701` 没有这个设备（404）；`E3701`（403） |
 | `POST /api/pair/resume` | **免**（guard 豁免） | `{ clientKey }` + `X-Bandi: 1` | 200 `{ ok, deviceId, name }` + 新 `Set-Cookie` | `E1705` 别的手机在用（409）；`E1706` 没配过/已取消配对（404） |
 | `GET /pair?token=…` | **免** | — | `pair.html`（落地页；服务端不校验 token，校验在 claim） | — |
@@ -141,18 +159,28 @@ claim 请求带 `clientKey`（手机 localStorage 生成的随机 ID，不是设
 自己已断开且无人在用 → 恢复并清标记；自己已断开但**别的手机在用** → 409 `E1705`。
 没配过 / 已被取消配对 → 404 `E1706`。
 
-### 3.3 设备令牌权限边界 `deviceMayReach(method, pathname)`（`auth.mjs` 内，仿 `nodeMayReach`）
+### 3.3 设备令牌权限边界
 
-**白名单制**（不在名单 = `E4033` 403，沿用"手机端只有审批 + 对话两类写操作"的口径）：
+> ⚠️ **判定落点已迁移（2026-11-03 核实）**：本节最初设计的 `deviceMayReach()`（`auth.mjs`）在
+> Phase 2 PDP 收编后**已没有调用方**——设备能到哪儿由 `security/route-policy.mjs` 清单的
+> `device: true` 标记说了算（`policy.mjs` 判定：`route?.device ? 'allow' : 'E4033'`，设备不查
+> `perm`）。`deviceMayReach` 函数体留在 `auth.mjs` 只为对照 v2.5 历史口径（函数头有标注）。
+> **要改手机能干什么，改 route-policy，别改 deviceMayReach**（当天排查手机建卡 403 时在这里
+> 白改了一轮才发现判定根本不经过它）。
+
+**白名单制**（不在名单 = `E4033` 403）：
 
 | 方法 | 路径 | 对应手机场景 |
 |---|---|---|
-| GET | `/api/state`、`/api/projects`、`/api/tasks`、`/api/projects/tasks/:id`、`/api/projects/tasks/:id/comments`、`/api/conversations/:id`、`/api/pair/me` | 看状态 / 看卡详情 / 看会话 |
+| GET | `/api/state`、`/api/projects`、`/api/tasks`、`/api/projects/tasks/:id`、`/api/projects/tasks/:id/comments`、`/api/conversations/:id`、`/api/pair/me`、`/api/collab/branches`（建卡弹窗的执行设备胶囊） | 看状态 / 看卡详情 / 看会话 |
 | POST | `/api/conversations/:id/messages` | 给员工发消息 |
 | POST | `/api/projects/tasks/:id/comments`（仅 `mode:'note'`） | 驳回附一句理由 |
+| POST | `/api/projects/:id/tasks`（2026-11-03 放开） | **手机建卡**——"人不在电脑前想起一件事要派下去"；署名走 actorUser = 归属人。只开**建**，删卡/改归属留在桌面端 |
 | PATCH | `/api/projects/tasks/:id` | 审批通过/驳回（改状态） |
 
 PATCH 任务的**字段级闸**落在 `routes/project.mjs` 的 `taskOne` handler（`readBody` 在它手里，`auth.mjs` 看不见 body —— 与 `PUT /api/personas/:id` 的 model/runtime 字段闸同一模式）：`req.bandiAuth.kind === 'device'` 时只允许 `{status, note}` 两个键，多一个键 → `fail(res, 403, 'E3702', '手机端只能改卡票状态')`。
+
+**审批归因**（2026-11-03 设备绑人的另一半）：PATCH 状态真变了就写 `project_tasks.statusByUserId / statusAt`（actor = `auth.actorUser(req)`，设备令牌 = **归属人**）。系统动作（跑完收状态、协作卡同步、PR 巡检）走 store 直写、不经过这条人走的路 —— 不会冒充人，也不会冲掉上一次人的署名。卡详情页据此显示「状态改动：谁 · 什么时候」。
 
 ### 3.4 类图
 
@@ -234,9 +262,9 @@ sequenceDiagram
     Op->>W: 设置 → 手机配对
     W->>S: GET /api/lan
     S-->>W: { boundLan, urls, port }
-    alt 未开局域网 (boundLan=false)
-        W-->>Op: 提示"切到总机模式并重启"，不出邀请码
-    else 已监听局域网
+    alt 回环调试形态 (boundLan=false，BANDI_HOST=127.0.0.1)
+        W-->>Op: 提示"这台机器只在回环调试形态，手机连不进来"，不出邀请码
+    else 已对外监听
         W->>S: POST /api/pair/tokens
         S->>P: handlePair
         P->>D: createPairCode(5min)  % 9 位数字，只存 sha256；发新码先作废全部未用旧码
@@ -387,7 +415,7 @@ sequenceDiagram
 | # | 问题（PRD §5） | 架构默认 | 影响面 |
 |---|---|---|---|
 | 1 | 手机端写操作边界 | 放行"审批（PATCH 任务状态 + note 评论）+ 发消息"两类写，其余只读（§3.3 白名单已按此实现） | `deviceMayReach` / `project.mjs` 字段闸。若要收紧"哪些卡票类型可手机审批"，在字段闸加 `task.kind` 判断即可，不改架构 |
-| 2 | 多手机/多用户 | 支持**多设备**（一人多机或多人各配各的），设备之间权限相同、都从属于这台 PC 的操作员；设备表天然支持 | 表结构已按 deviceId 维度建，无返工风险 |
+| 2 | 多手机/多用户 | 支持**多设备**（一人多机或多人各配各的），设备之间权限相同、都从属于这台 PC 的操作员；设备表天然支持 | 表结构已按 deviceId 维度建，无返工风险。⚠️ **2026-11-01 改（一机一刀）**：同一时间只允许**一台**手机在用——新配对落定时其它设备全部转「已断开」（`disconnectOtherDevices`）；断开的凭 `clientKey` 连回（`resumeDevice`），别人占着就报 E1705。另一处已定口径：**「断开连接」≠「取消配对」**（前者留行可连回，后者删行要重新扫码） |
 | 3 | 令牌有效期 | **默认永久有效 + 手动踢出**（本期）；`expiresAt` 列已建好留作旋钮，若确认要 30 天上限，一行默认值改动 | `store/devices.mjs issueDeviceToken` |
 | 4 | 多网卡 IP 选取 | 用 `netmode.lanUrls(port)` 既有排序（192.168 > 10 > 172，docker 的 172.x 沉底）；**首选画码 + 全部候选列出可复制**，用户扫不上自己换 | `pairing.mjs` 二维码弹窗 |
 | 5 | iOS / Android 优先级 | **Android Chrome 先行验证**（SW/Add2HS 行为标准），iOS Safari 跟随；iOS 无安装提示、`apple-mobile-web-app-capable` 走 legacy 模式，均已在 T02 meta 里覆盖 | T02 验收顺序 |
@@ -403,7 +431,7 @@ sequenceDiagram
 3. **CSS 命名空间**：移动端新组件类名一律 `mb-` 前缀（`mb-tabbar`、`mb-sheet`、`mb-backbar`…），全部规则只写进 `mobile.css`；`style.css` 不新增移动规则，只允许为可覆盖性做的最小改写。
 4. **前端新模块命名**：`js/` 下小写单词（既有惯例：`chat.mjs`、`machine.mjs`），新模块 `mobile.mjs` / `pairing.mjs` / `pair-claim.mjs`；vendored 第三方放 `js/vendor/`（`/api/web-version` 指纹只扫 `js/*.mjs` 一层，vendor 不进指纹 —— 有意为之，vendored 文件不变就不用触发刷新提醒）。
 5. **令牌体系**：设备令牌前缀 `bd_`（节点是 `bn_`、操作员无前缀），Cookie 沿用 `bandi_token`（`EventSource` 兼容），库里只存 sha256。配对凭据两代并存（2026-11-01）：**9 位数字邀请码**（主路径，人念人听，5 分钟单次，发新码即作废旧码）与 `bp_…` 长令牌（旧二维码/书签兼容）。新增令牌类型时 `identify()` 是唯一判定入口。
-6. **请求纪律**：所有前端写请求带 `X-Bandi: 1`（`ui.mjs api()` 已统一；`pair-claim.mjs` 独立实现时必须自己带）；手机页面 Origin 依赖 `config.mjs selfLanOrigins()` 自动放行，勿在配对链路上绕过 `guardWrite`。
+6. **请求纪律**：所有前端写请求带 `X-Bandi: 1`（`ui.mjs api()` 已统一；`pair-claim.mjs` 独立实现时必须自己带）；手机页面 Origin 由 `http.allowedOrigins()` 里的 `config.lanOrigins()` **恒现算放行**（2026-11-03 起，原 `selfLanOrigins()` 已更名且不再受"局域网开关"门控），勿在配对链路上绕过 `guardWrite`。
 7. **时间/ID**：一律 `store/db.mjs` 的 `nowIso()`（ISO 8601 UTC）与 `newId('md'|'mp')`。
 8. **验证**：见 §5 顶部的两条验证注意事项（前端热更 / 后端换进程 / 隔离实例跑法）。
 

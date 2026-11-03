@@ -145,6 +145,7 @@ try {
   });
   check('带 Origin 但缺 X-Bandi 的 claim → 403（CSRF 闸真在拦）', noXBandi.status === 403, String(noXBandi.status));
 
+
   const again = await claim(inv.json.code);
   check('同一个码第二次 claim → 409 E4701', again.status === 409 && again.json?.code === 'E4701', `${again.status} ${again.json?.code ?? ''}`);
 
@@ -341,6 +342,198 @@ try {
   const backAfterLeave = await send(baseB, '/api/pair/resume', { body: { clientKey: 'key-second-device-01' }, headers: { 'X-Bandi': '1' } });
   check('断开 ≠ 取消配对：同机 clientKey 还能连回来（同一 deviceId）',
     backAfterLeave.status === 200 && backAfterLeave.json?.deviceId === ok4.json.deviceId, JSON.stringify(backAfterLeave.json));
+
+  /* ----------------------------- ⑤.7 设备绑人（2026-11-03） */
+  /*
+   * 钉住三件事：
+   *   ① **谁发的码，手机就归谁** —— 码上带 userId，claim 时继承到设备行；
+   *   ② 设备说的话**署到人头上** —— `/api/me` 与 actorUser 都认得出归属人；
+   *   ③ **归属人失效 = 手机失效** —— 禁用那个人，那台手机下一次请求就 401
+   *      （在此之前「禁用」只禁掉了浏览器，手机照连，等于没禁）。
+   */
+  console.log('\n⑤.7 设备绑人：谁发的码，手机就归谁');
+  const jarOf = (res) =>
+    (res.headers.getSetCookie?.() ?? [String(res.headers.get('set-cookie') ?? '')])
+      .map((c) => c.split(';')[0])
+      .filter(Boolean)
+      .join('; ');
+  const csrfOf = (jar) => {
+    const m = /bandi_csrf=([^;]*)/.exec(jar);
+    return m ? { 'X-Bandi-CSRF': decodeURIComponent(m[1]) } : {};
+  };
+
+  // 这台实例还没有账号：先建第一个（= 内置管理员），再建一个普通管理员当"小李"
+  const setupCode = fs.readFileSync(path.join(tmp + '-' + P_OPEN, 'setup_code'), 'utf8').trim();
+  const mkBoss = await send(baseB, '/api/users', {
+    body: { name: '老王', password: 'wang-pass-123' },
+    headers: { ...op, 'X-Bandi-Setup': setupCode, 'X-Bandi': '1' },
+  });
+  check('建第一个账号 → 201', mkBoss.status === 201, `${mkBoss.status} ${mkBoss.json?.code ?? ''}`);
+  const bossLogin = await send(baseB, '/api/login', { body: { name: '老王', password: 'wang-pass-123' }, headers: { 'X-Bandi': '1' } });
+  const bossJar = jarOf(bossLogin);
+  check('老王登录 → 拿到会话', bossLogin.status === 200 && /bandi_sid=/.test(bossJar), String(bossLogin.status));
+
+  const mkLi = await send(baseB, '/api/users', {
+    body: { name: '小李', password: 'li-pass-1234', roleId: 'admin' },
+    headers: { Cookie: bossJar, 'X-Bandi': '1', ...csrfOf(bossJar) },
+  });
+  check('建「小李」→ 201', mkLi.status === 201, `${mkLi.status} ${mkLi.json?.code ?? ''}`);
+  const liId = mkLi.json?.user?.id;
+  const liLogin = await send(baseB, '/api/login', { body: { name: '小李', password: 'li-pass-1234' }, headers: { 'X-Bandi': '1' } });
+  const liJar = jarOf(liLogin);
+  check('小李登录 → 拿到会话', liLogin.status === 200 && /bandi_sid=/.test(liJar), String(liLogin.status));
+
+  const invLi = await send(baseB, '/api/pair/tokens', { headers: { Cookie: liJar, 'X-Bandi': '1', ...csrfOf(liJar) } });
+  check('小李发码 → 码上写明归属人（owner=小李）', invLi.status === 200 && invLi.json?.owner?.name === '小李', JSON.stringify(invLi.json?.owner ?? null));
+
+  const claimLi = await send(baseB, '/api/pair/claim', {
+    body: { code: invLi.json.code, name: '小李的手机', clientKey: 'key-li-phone-0001' },
+    headers: { 'X-Bandi': '1' },
+  });
+  check('小李的码被扫 → 200，回执里带归属人', claimLi.status === 200 && claimLi.json?.owner === '小李', JSON.stringify(claimLi.json));
+  const liPhoneJar = jarOf(claimLi);
+  const liPhoneCookie = liPhoneJar.split('; ').filter((c) => /^bandi_(token|csrf)=/.test(c)).join('; ');
+
+  const mePhone = await get(baseB, '/api/me', { Cookie: liPhoneCookie });
+  check('手机问「我是谁」→ 带出归属人小李', mePhone.status === 200 && mePhone.json?.kind === 'device' && mePhone.json?.user?.name === '小李', JSON.stringify(mePhone.json?.user ?? null));
+
+  /*
+   * 归属的真正效果：**手机上说的话落到人头上**。
+   * 走便签（note）这条路 —— 它只落一条消息、不派活、不叫醒任何员工，
+   * 所以不用真起一个 CLI 就能验到"署名是谁"（上线时最容易错的就是这一环：
+   * 归属写进了设备行，但 actorUser 没认，结果还是 null）。
+   */
+  const personaOwn = (await get(baseB, '/api/state', { Cookie: bossJar })).json?.personas?.[0]?.id;
+  const projOwn = await send(baseB, '/api/projects', {
+    method: 'POST',
+    headers: { Cookie: bossJar, 'X-Bandi': '1', ...csrfOf(bossJar) },
+    body: { name: '归属验收', root: path.join(tmp, 'proj-own') },
+  });
+  const cardOwn = await send(baseB, `/api/projects/${encodeURIComponent(projOwn.json?.project?.id ?? '')}/tasks`, {
+    method: 'POST',
+    headers: { Cookie: bossJar, 'X-Bandi': '1', ...csrfOf(bossJar) },
+    body: { title: '谁批的卡', personaId: personaOwn },
+  });
+  const noteOwn = await send(baseB, `/api/projects/tasks/${encodeURIComponent(cardOwn.json?.task?.id ?? '')}/comments`, {
+    headers: { Cookie: liPhoneCookie, 'X-Bandi': '1', ...csrfOf(liPhoneCookie) },
+    body: { text: '驳回：缺验收单', mode: 'note' },
+  });
+  check(
+    '手机上留的便签**署到「小李」头上**（以前是 null = 一台设备在说话）',
+    noteOwn.status === 201 && noteOwn.json?.message?.senderUserId === liId,
+    `${noteOwn.status} ${JSON.stringify(noteOwn.json?.message?.senderUserId ?? null)}`,
+  );
+
+  /*
+   * 手机**建卡**（2026-11-03 放开白名单后补的回归）："人不在电脑前想起一件事要派下去"
+   * 是手机端的核心场景。之前 route-policy 里 `POST /api/projects/:id/tasks` 没有
+   * `device: true`，手机建卡吃 403 E4033 —— 而报错 toast 被弹窗盖住（shell.mjs toast
+   * 注释），实机上表现成「点创建没反应」，坑了一下午。断言钉两件事：
+   * 白名单真放行了、建卡人署到归属人头上。
+   */
+  const phoneCard = await send(baseB, `/api/projects/${encodeURIComponent(projOwn.json?.project?.id ?? '')}/tasks`, {
+    method: 'POST',
+    headers: { Cookie: liPhoneCookie, 'X-Bandi': '1', ...csrfOf(liPhoneCookie) },
+    body: { title: '手机上建的一张卡' },
+  });
+  check('手机建卡 → 201（白名单放行 POST tasks）', phoneCard.status === 201, `${phoneCard.status} ${JSON.stringify(phoneCard.json?.error ?? phoneCard.json?.code ?? '')}`);
+  check(
+    '手机建的卡，创建人**署到「小李」头上**（createdByUserId = 归属人）',
+    phoneCard.json?.task?.createdByUserId === liId,
+    JSON.stringify(phoneCard.json?.task?.createdByUserId ?? null),
+  );
+
+  /*
+   * 审批归因（2026-11-03，补绑人的另一半）：手机上批卡 = **归属人**批的。
+   * PATCH 状态走 routes/project.mjs → actorUser（设备=归属人）→ statusByUserId，
+   * 卡详情页的「状态改动」行就靠这两列。
+   */
+  const approveOwn = await send(baseB, `/api/projects/tasks/${encodeURIComponent(cardOwn.json?.task?.id ?? '')}`, {
+    method: 'PATCH',
+    headers: { Cookie: liPhoneCookie, 'X-Bandi': '1', ...csrfOf(liPhoneCookie) },
+    body: { status: '已完成' },
+  });
+  check('手机上批卡 → 200', approveOwn.status === 200, `${approveOwn.status} ${JSON.stringify(approveOwn.json?.error ?? approveOwn.json?.code ?? '')}`);
+  check(
+    '批卡的人记到了「小李」头上（statusByUserId + statusAt）',
+    approveOwn.json?.task?.statusByUserId === liId && !!approveOwn.json?.task?.statusAt,
+    JSON.stringify({ by: approveOwn.json?.task?.statusByUserId, at: approveOwn.json?.task?.statusAt }),
+  );
+  const bossApprove = await send(baseB, `/api/projects/tasks/${encodeURIComponent(cardOwn.json?.task?.id ?? '')}`, {
+    method: 'PATCH',
+    headers: { Cookie: bossJar, 'X-Bandi': '1', ...csrfOf(bossJar) },
+    body: { status: '待办' },
+  });
+  check(
+    '桌面端再改一次 → 署名**换成操作的人**（不是小李）',
+    bossApprove.json?.task?.statusByUserId && bossApprove.json?.task?.statusByUserId !== liId,
+    JSON.stringify({ by: bossApprove.json?.task?.statusByUserId }),
+  );
+
+  const devsOwned = await get(baseB, '/api/pair/devices', op);
+  const liRow = (devsOwned.json?.devices ?? []).find((d) => d.id === claimLi.json?.deviceId);
+  check('设备列表里能看到「使用者 = 小李」', liRow?.ownerName === '小李', JSON.stringify(liRow ? { ownerName: liRow.ownerName, userId: liRow.userId } : null));
+
+  /*
+   * ③ 禁用小李 → 那台手机立刻进不来（这是"绑人"真正的安全价值）。
+   * 语义是**冻结不是吊销**：令牌还留着，重新启用后同一台手机接着用，不用重新扫码 ——
+   * 与「断开连接」（吊销令牌、要 resume）刻意分开。
+   */
+  const disLi = await send(baseB, `/api/users/${encodeURIComponent(liId)}`, {
+    method: 'PATCH',
+    body: { disabled: true },
+    headers: { Cookie: bossJar, 'X-Bandi': '1', ...csrfOf(bossJar) },
+  });
+  check('禁用小李 → 200', disLi.status === 200, `${disLi.status} ${disLi.json?.code ?? ''}`);
+  check('禁用后那台手机立刻 401（以前它照连）', (await get(baseB, '/api/state', { Cookie: liPhoneCookie })).status === 401);
+  const reOn = await send(baseB, `/api/users/${encodeURIComponent(liId)}`, {
+    method: 'PATCH',
+    body: { disabled: false },
+    headers: { Cookie: bossJar, 'X-Bandi': '1', ...csrfOf(bossJar) },
+  });
+  check('重新启用 → 200', reOn.status === 200, `${reOn.status} ${reOn.json?.code ?? ''}`);
+  check('冻结不是吊销：启用后同一台手机接着用（不用重扫）', (await get(baseB, '/api/state', { Cookie: liPhoneCookie })).status === 200);
+
+  // 换人复用同一台手机：老板发的码把这部手机认到老王名下（复用行要改归属）
+  const invBoss = await send(baseB, '/api/pair/tokens', { headers: { Cookie: bossJar, 'X-Bandi': '1', ...csrfOf(bossJar) } });
+  const claimAgain = await send(baseB, '/api/pair/claim', {
+    body: { code: invBoss.json.code, name: '小李的手机', clientKey: 'key-li-phone-0001' },
+    headers: { 'X-Bandi': '1' },
+  });
+  check(
+    '同一台手机换成老王的码重配 → 复用同一行、归属改成老王',
+    claimAgain.status === 200 && claimAgain.json?.deviceId === claimLi.json?.deviceId && claimAgain.json?.owner === '老王',
+    JSON.stringify(claimAgain.json),
+  );
+
+  /* ----------------------------- ⑤.9 扫码页的 csrf 自愈（2026-11-03 实机 E4099 回归） */
+  /*
+   * bandi_csrf 只活 1 天（Max-Age=86400），bandi_sid / bandi_token 活 30 天 / 1 年 ——
+   * "凭据还在、csrf 先过期"是常态而非意外。/pair 分支若排在补种之前提前 return，
+   * 扫码页就成了唯一自愈不了、又偏偏最需要自愈的页面：手机 jar 里有旧凭据、没有 csrf，
+   * claim 是"带 Cookie 凭据的写请求" → 403 E4099（配对失败）；而手机没有地址栏，
+   * 用户唯一的动作就是"重新扫码"，死循环。放在 ⑤.9 是因为下面的 claim 会新建设备、
+   * 把前面的设备 jar 顶掉 —— 不能插在 ②.5 之前。两条断言钉住：
+   *   a) GET /pair 必须顺手补种 bandi_csrf；
+   *   b) "旧凭据 + 补种出的 csrf"的 claim 必须能过 —— 不能逼用户去清 Cookie。
+   */
+  console.log('\n⑤.9 扫码页的 csrf 自愈：旧凭据 + 过期 csrf 也能配对');
+  const pairPage = await get(baseB, '/pair', { Accept: 'text/html' });
+  const healedCsrf = (pairPage.headers.getSetCookie?.() ?? [])
+    .map((c) => c.split(';')[0])
+    .find((c) => c.startsWith('bandi_csrf=')) ?? '';
+  check('GET /pair 顺手补种 bandi_csrf（扫码页自愈）', pairPage.status === 200 && !!healedCsrf, `${pairPage.status} ${healedCsrf.slice(0, 26)}`);
+  const healInv = await send(baseB, '/api/pair/tokens', { headers: op });
+  const staleClaim = await send(baseB, '/api/pair/claim', {
+    body: { code: healInv.json.code, name: '旧凭据手机', clientKey: 'key-stale-csrf-01' },
+    // 模拟真实浏览器：补种出的 bandi_csrf 会被存进 jar 并随请求自动带上（和头是同一个值）
+    headers: {
+      'X-Bandi': '1',
+      Cookie: `bandi_token=bd_stale_from_yesterday; ${healedCsrf}`,
+      'X-Bandi-CSRF': decodeURIComponent(healedCsrf.split('=')[1]),
+    },
+  });
+  check('旧凭据 + 补种出的 csrf → claim 照常过（不用清 Cookie）', staleClaim.status === 200, `${staleClaim.status} ${staleClaim.json?.code ?? ''}`);
 
   /* ----------------------------- ⑥ 回环形态（免鉴权）照常可用 */
   console.log('\n⑥ 回环形态（单机免鉴权）：operator 动作照常可用');

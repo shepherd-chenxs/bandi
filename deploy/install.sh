@@ -49,6 +49,9 @@ if [ "${1:-}" = "--uninstall" ]; then
 fi
 
 [ "$(id -u)" = "0" ] || die "请用 root 运行：sudo sh install.sh"
+# ⚠️ 先补执行位再检查 —— Windows 上打的包（fs.copyFileSync / tar）不带 +x，
+#    "先检查后补"等于永远过不了（2026-11-03 实报：thinkpad-p15 升级卡在这一步）。
+chmod +x "$PWD/node" 2>/dev/null || true
 [ -x "$PWD/node" ] || die "找不到随包的 node —— 请在解压出来的 bandi/ 目录里运行"
 [ -f "$PWD/apps/server/src/server.mjs" ] || die "找不到服务端入口（包不完整？）"
 

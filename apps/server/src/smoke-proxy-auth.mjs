@@ -233,11 +233,16 @@ console.log('\n[2] 裸反代（未设 trustProxy / 未带转发头，Host 是外
 }
 
 /* --------------------------------------------------------------- ③ 单机回归 */
-console.log('\n[3] 单机形态（什么都没设）');
+/*
+ * "单机"现在是**显式钉出来的调试形态**（2026-11-03 起 BANDI_HOST 缺省 0.0.0.0，
+ * "缺省 = 对外 + 自动要令牌"由 smoke-auth ⑨ 钉住）—— 这节钉的是：显式回环时，
+ * 单机那套"免鉴权 / 不要秘密 / 零安全痕迹"一行没变。
+ */
+console.log('\n[3] 单机形态（BANDI_HOST=127.0.0.1 显式钉出来的调试形态）');
 {
   const port = 8803;
   const data = tmpOf('solo');
-  const ctx = await start({ port, data, env: { BANDI_HOST: null, BANDI_TRUST_PROXY: null } });
+  const ctx = await start({ port, data, env: { BANDI_HOST: '127.0.0.1', BANDI_TRUST_PROXY: null } });
   try {
     const st = await raw(port, { path: '/api/state', headers: { Host: `127.0.0.1:${port}` } });
     const body = json(st.body) ?? {};

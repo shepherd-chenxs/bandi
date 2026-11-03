@@ -130,6 +130,14 @@ ensureColumn('project_tasks', 'queuedAt', 'queuedAt TEXT');
 // 人手建的卡是 null。只用来在详情页标「创建人」，不改卡的脾气 —— 照样能拖、能改、能派活。
 ensureColumn('project_tasks', 'createdBy', 'createdBy TEXT');
 
+// 「状态改动」归因（2026-11-03）：**最后一次由人改状态**是谁（users.id）、什么时候。
+// 只在 PATCH /api/projects/tasks/:id 这条人走的路写（project-tasks.mjs 的 updateProjectTask）；
+// 系统动作（跑完收状态、协作卡同步、PR 巡检）走 store 直写，不经过它 —— 不会把人的署名冲掉，
+// 但也不会冒充人（那些改动详情页不显示署名，只有"人批的"才显示）。
+// 手机上批的卡 = 归属人批的（auth.actorUser 对设备返回归属人，2026-11-03 设备绑人）。
+ensureColumn('project_tasks', 'statusByUserId', 'statusByUserId TEXT');
+ensureColumn('project_tasks', 'statusAt', 'statusAt TEXT');
+
 /*
  * **真人执行人 / 真人创建人**（2026-10-31 用户概念落地）：
  *   · `assigneeUserId` —— 卡派给一个**真人**（users 表）：挂名负责，看板署名与筛选都认它；

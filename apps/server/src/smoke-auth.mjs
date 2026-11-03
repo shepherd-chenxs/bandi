@@ -35,9 +35,16 @@ const check = (label, ok, detail = '') => {
 
 const started = [];
 function start(port, extra = {}) {
+  /*
+   * ⚠️ **剥掉继承来的 BANDI_HOST**（2026-11-03）：run-smokes 给所有子进程钉
+   * `BANDI_HOST=127.0.0.1` 当免鉴权底座，而 ⑨ 测的恰恰是"**不给** BANDI_HOST
+   * = 缺省 0.0.0.0 + 自动要令牌" —— 不剥的话 ⑨ 拿到的是继承来的回环，永远测不到缺省。
+   * 各形态要什么监听地址，用例自己在 extra 里显式给。
+   */
+  const { BANDI_HOST: _inheritedHost, ...baseEnv } = process.env;
   const c = spawn(process.execPath, [SERVER], {
     cwd: repoRoot,
-    env: { ...process.env, BANDI_PORT: String(port), BANDI_DATA: tmp, BANDI_DB: path.join(tmp, 'bandi.db'), ...extra },
+    env: { ...baseEnv, BANDI_PORT: String(port), BANDI_DATA: tmp, BANDI_DB: path.join(tmp, 'bandi.db'), ...extra },
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -189,8 +196,7 @@ try {
   console.log('\n⑧ 每节点令牌：邀请码加入 → 只能干自己那台的事');
   /*
    * 角色位（2026-11-01 晚）：发邀请码要求这台是**总机**（`acceptNodes:true`）——
-   * 显式 `BANDI_HOST=0.0.0.0` 不再自动等于"收节点"。⚠️ 只写 acceptNodes、不写 allowLan：
-   * ⑨ 还要验"打开界面上的局域网开关就自动要令牌"那条路径（那一步会自己写 allowLan）。
+   * 监听地址（缺省 0.0.0.0）是启动配置的事，跟"收不收节点"再无关联。
    */
   fs.writeFileSync(path.join(tmp, 'netmode.json'), JSON.stringify({ acceptNodes: true }, null, 2), 'utf8');
   const op = { 'X-Bandi-Token': token }; // 操作员令牌
@@ -249,85 +255,54 @@ try {
   check('操作员照旧能把一台重新加回来（邀请码那条路还在）', back.status === 404 || back.status === 200, String(back.status));
 
   /*
-   * ⑨ 局域网开关（桌面版那个「允许局域网内的机器加入」）。
+   * ⑨ **缺省对外监听**（2026-11-03：不给 BANDI_HOST 就是 0.0.0.0）。
    *
-   * 这一节要钉的是它的**安全含义**：开关一开，监听地址就变成 0.0.0.0，
-   * 于是"只看监听地址"那条规则**自动把鉴权打开** ✓ —— 不需要用户再记得去设令牌。
-   * （判据在 config.mjs：它读数据目录里的 netmode.json，所以桌面壳 / 开机自启 / 命令行三种起法都认。）
+   * "对外服务"这一维整个删了：监听地址是启动配置（缺省 0.0.0.0，`BANDI_HOST` 可钉具体
+   * 地址），界面上没有开关、没有「重启」。这一节钉住**缺省路径**：什么都不配，起来就
+   * 在听局域网 —— 于是"只看监听地址"那条规则**自动把鉴权打开** ✓，不需要用户记得设令牌。
    */
-  console.log('\n⑨ 局域网开关：打开 = 监听 0.0.0.0 + 自动要令牌');
-  const NM = path.join(tmp, 'netmode.json');
-  fs.writeFileSync(NM, JSON.stringify({ allowLan: true }), 'utf8');
+  console.log('\n⑨ 缺省对外监听：不给 BANDI_HOST = 0.0.0.0 + 自动要令牌');
   const P_LAN = P_OPEN + 1;
-  const c3 = start(P_LAN, {}); // **不**给 BANDI_HOST —— 让它自己按开关定
+  const c3 = start(P_LAN, {}); // **不**给 BANDI_HOST —— 缺省就该对外听
   const baseC = `http://127.0.0.1:${P_LAN}`;
-  if (!(await waitUp(baseC))) throw new Error('按开关起不来：' + c3.log().slice(-300));
+  if (!(await waitUp(baseC))) throw new Error('缺省起不来：' + c3.log().slice(-300));
   const lanNoTok = await get(baseC, '/api/state');
-  check('不给 BANDI_HOST，开关一开就自动要令牌（401）', lanNoTok.status === 401, String(lanNoTok.status));
+  check('不给 BANDI_HOST 也对外听 → 自动要令牌（401）', lanNoTok.status === 401, String(lanNoTok.status));
   check('带上令牌照旧能读', (await get(baseC, '/api/state', { 'X-Bandi-Token': token })).status === 200);
   const lanInfo = await get(baseC, '/api/lan', { 'X-Bandi-Token': token });
   check('它自己也知道现在听着局域网（boundLan）', lanInfo.json?.boundLan === true, JSON.stringify(lanInfo.json));
-  check('靠开关起来的 → explicit=false（这台的监听地址没被命令行指定）', lanInfo.json?.explicit === false, String(lanInfo.json?.explicit));
-  /*
-   * ⚠️ 云端那台是 `BANDI_HOST=0.0.0.0` 显式起的 —— 开关对它**无效**（env 优先）。
-   * 这一条钉住"如实回报"，不然界面会按开关值说"关着 —— 只听本机"，而它明明对外开着 ✗。
-   */
-  const lanOpen = await get(baseB, '/api/lan', { 'X-Bandi-Token': token });
-  check('命令行指定过监听地址的（云端那种）→ explicit=true + 确实对外', lanOpen.json?.explicit === true && lanOpen.json?.boundLan === true, JSON.stringify(lanOpen.json));
-  check('那种情况不再说"要重启"（开关本来就管不着它）', lanOpen.json?.restartNeeded === false, String(lanOpen.json?.restartNeeded));
-  check('这时候不再提示"要重启"', lanInfo.json?.restartNeeded === false, String(lanInfo.json?.restartNeeded));
+  check('报的监听地址是实际那个（0.0.0.0）', lanInfo.json?.host === '0.0.0.0', String(lanInfo.json?.host));
   check('并且给出了"让别的机器连这个地址"', (lanInfo.json?.urls ?? []).some((u) => /^http:\/\/\d+\.\d+\.\d+\.\d+:/.test(u)), JSON.stringify(lanInfo.json?.urls ?? []));
-  const lanBack = await send(baseC, '/api/lan', { method: 'POST', headers: { 'X-Bandi-Token': token, 'X-Bandi': '1' }, body: { allowLan: false } });
-  check('把开关拨回去 → 提示要重启才生效', lanBack.json?.allowLan === false && lanBack.json?.restartNeeded === true, JSON.stringify(lanBack.json));
+  /*
+   * 老客户端（旧界面 / 旧脚本）可能还在发 `allowLan`。已删的键必须**写不回配置**
+   * （patch 不认它 → netmode.json 不长出这个键），接口本身照回 200 —— 状态不漂移，
+   * 老调用方也不炸。
+   */
+  const lanLegacy = await send(baseC, '/api/lan', { method: 'POST', headers: { 'X-Bandi-Token': token, 'X-Bandi': '1' }, body: { allowLan: false } });
+  const nmAfter = JSON.parse(fs.readFileSync(path.join(tmp, 'netmode.json'), 'utf8'));
+  check(
+    '老客户端发 allowLan → 200 且键被忽略（不写回 netmode.json）',
+    lanLegacy.status === 200 && !('allowLan' in nmAfter),
+    JSON.stringify(nmAfter),
+  );
 
   /*
-   * ⑩ **原地重启**（界面上那颗「重启生效」）—— 2026-10-16 用户问"重启怎么重启？关掉软件吗？"。
+   * ⑩ 「重启生效」整个下线（2026-11-03）。
    *
-   * 要钉住三件事：
-   *   ① 改完开关，**不用关掉软件**，打一下这个接口就把监听换过去；
-   *   ② 换过去之后鉴权真的生效（不带令牌 401）；
-   *   ③ 但**用户自己那个浏览器不能被挡在外面** —— 响应里必须带令牌 Cookie ✓
-   *      （第一版忘了：回环形态下压根没生成过令牌，Cookie 设不出来 ✗）。
+   * 监听地址不再随运行期开关变 —— `/api/restart` 连接口一起删了。要钉住两件事：
+   *   ① 接口真没了（路由权限清单默认拒绝，E4090）—— 谁按老文档打它，得得到明确的"没有"；
+   *   ② 角色切换**立刻生效**，没有"改了还没生效"的中间态 —— 那个中间态正是这次删掉的
+   *      第三态的根，`restartNeeded` / `allowLan` 字段也不许再出现在响应里。
    */
-  console.log('\n⑩ 原地重启：不关软件就把监听换过去');
-  /*
-   * 两个方向都要走一遍 —— 只走一个方向的话，`from === to`（"不用动"那条路）会被误当成成功 ✗
-   * （第一版就是这样，白跑一轮）。
-   */
-  const restart = async () =>
-    fetch(`${baseC}/api/restart`, {
-      method: 'POST',
-      // ⚠️ 这个实例是**靠开关起的** → 它一直要求令牌 ✓，所以调重启也得带着
-      headers: { 'Content-Type': 'application/json', 'X-Bandi': '1', 'X-Bandi-Token': token },
-      body: '{}',
-    });
-
-  // 方向一：现在开关是"关"、进程还听着局域网 → 重启该换回**只听本机**
-  const rs = await restart();
-  const rsBody = await rs.json().catch(() => null);
-  check('方向一：0.0.0.0 → 127.0.0.1（真的换了，不是"不用动"）', rs.status === 200 && rsBody?.from === '0.0.0.0' && rsBody?.to === '127.0.0.1', JSON.stringify(rsBody));
-  await sleep(2500);
-  const stOff = await get(baseC, '/api/state');
-  check('换回本机之后：不带令牌也能读（回到单机那种免鉴权形态）', stOff.status === 200, String(stOff.status));
-  const lanOff = await get(baseC, '/api/lan');
-  check('它自己也说回到只听本机了', lanOff.json?.boundLan === false && lanOff.json?.restartNeeded === false, JSON.stringify(lanOff.json));
-
-  // 方向二：打开开关 + 重启 → 鉴权要开，而且响应里必须给令牌 Cookie
-  await send(baseC, '/api/lan', { method: 'POST', headers: { 'X-Bandi': '1' }, body: { allowLan: true } });
-  const rs2 = await restart();
-  const rs2Body = await rs2.json().catch(() => null);
-  const rsCookie = String(rs2.headers.get('set-cookie') ?? '').split(';')[0];
-  check('方向二：127.0.0.1 → 0.0.0.0', rs2.status === 200 && rs2Body?.from === '127.0.0.1' && rs2Body?.to === '0.0.0.0', JSON.stringify(rs2Body));
-  check('响应里带令牌 Cookie（不然用户自己的窗口会被登录页挡住）', /^bandi_token=/.test(rsCookie), rsCookie ? rsCookie.slice(0, 20) + '…' : '(没有)');
-  await sleep(2500);
-  check('重启后：不带令牌 → 401（鉴权真开了）', (await get(baseC, '/api/state')).status === 401);
-  check('重启后：带那个 Cookie → 200（浏览器不用重新登录）', (await get(baseC, '/api/state', { Cookie: rsCookie })).status === 200);
-  const lanAfter = await get(baseC, '/api/lan', { Cookie: rsCookie });
-  check('重启后它自己也说在听局域网了', lanAfter.json?.boundLan === true && lanAfter.json?.restartNeeded === false, JSON.stringify(lanAfter.json));
-  check('页面报的监听地址是**实际**那个（不是启动时那个）', lanAfter.json?.host === '0.0.0.0', String(lanAfter.json?.host));
-  const nodeStillOk = await send(baseC, '/api/nodes/register', { headers: { 'X-Bandi-Token': token }, body: { id: 'node-after-restart', label: 'x', hostname: 'x', platform: 'linux x64', runtimes: [] } });
-  check('操作员令牌在重启后照旧能用', nodeStillOk.status === 201, String(nodeStillOk.status));
-  fs.rmSync(NM, { force: true });
+  console.log('\n⑩ /api/restart 已删；角色切换立刻生效，没有"重启"中间态');
+  const rs = await send(baseC, '/api/restart', { headers: { 'X-Bandi-Token': token, 'X-Bandi': '1' } });
+  check('POST /api/restart → E4090（接口已删，默认拒绝）', rs.json?.code === 'E4090', JSON.stringify(rs.json));
+  const toBranch = await send(baseC, '/api/lan', { method: 'POST', headers: { 'X-Bandi-Token': token, 'X-Bandi': '1' }, body: { acceptNodes: false } });
+  check('切分机 → 立刻生效（role 变 branch，不用重启）', toBranch.status === 200 && toBranch.json?.role === 'branch', JSON.stringify(toBranch.json));
+  check('响应里没有 allowLan / restartNeeded 这种中间态字段', toBranch.json != null && !('allowLan' in toBranch.json) && !('restartNeeded' in toBranch.json), Object.keys(toBranch.json ?? {}).join(','));
+  const toHub = await send(baseC, '/api/lan', { method: 'POST', headers: { 'X-Bandi-Token': token, 'X-Bandi': '1' }, body: { acceptNodes: true } });
+  check('切回总机 → role 变 hub', toHub.status === 200 && toHub.json?.role === 'hub', String(toHub.json?.role));
+  check('操作员令牌照旧能用（角色切了个来回，鉴权不受影响）', (await get(baseC, '/api/state', { 'X-Bandi-Token': token })).status === 200);
 } catch (err) {
   console.log('\n跑挂了：' + String(err?.message ?? err));
   failed += 1;
