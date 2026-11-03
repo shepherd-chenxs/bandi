@@ -94,6 +94,15 @@ export function openMe() {
    *     摆了按钮就是骗人；手机设备同理（它的凭据是配对令牌，退出=解绑，另有入口）。
    */
   const canLogout = isUser || (who?.kind === 'operator' && who?.via !== 'loopback');
+  /*
+   * 手机形态功能子集（2026-11-03 用户拍板）：**手机只要一部分功能，甚至是简化版**。
+   * 「我的」页在窄屏只留两块：身份卡 + 退场行。设置入口、账号安全双卡都不画 ——
+   * 不是藏起来（藏了还能被翻出来），是根本不进 DOM：密码/动态验证/主题这类是
+   * PC 独有的管理动作，手机上不渲染就不存在"适配"和"泄漏"两件事。
+   * 判据用 body.mb-narrow（mobile.mjs 维护的状态类，import 它会成环）——
+   * 与 mobile.css 的 @media 同源同拍：窄屏 = 手机形态，桌面缩窄窗口同样成立。
+   */
+  const onPhone = document.body.classList.contains('mb-narrow');
   $('settingsView').innerHTML = `
     ${headRow('<b>我的</b>')}
     <div class="detail-body me-body">
@@ -112,8 +121,13 @@ export function openMe() {
       </section>
       <!-- 「设置」入口（2026-11-01）：只在窄屏显示（桌面左栏已经有设置，再摆一个是重复）。
            走事件而不是 import setNav —— settings ← state 是反向依赖，会成环
-           （mobile.mjs 里通讯录那个 mb-cv-home 同一套办法）。 -->
-      <section class="set-sec me-entry-sec">
+           （mobile.mjs 里通讯录那个 mb-cv-home 同一套办法）。
+           ⚠️ 2026-11-03 反转：手机功能收成白名单子集后，设置页整个是 PC 独有的 ——
+           窄屏**不画**这个入口（画了就是把整页设置重新暴露给手机）。 -->
+      ${
+        onPhone
+          ? ''
+          : `<section class="set-sec me-entry-sec">
         <div class="set-box">
           <div class="set-row me-entry" id="meSettings" role="button" tabindex="0">
             <span class="me-entry-ico">
@@ -123,9 +137,12 @@ export function openMe() {
             <span class="me-chevron" aria-hidden="true">›</span>
           </div>
         </div>
-      </section>
+      </section>`
+      }
       ${
-        isUser
+        /* 账号安全双卡（2026-11-03 桌面重设计）：密码 / 动态验证是 PC 端的管理动作，
+           手机白名单之外 —— 窄屏不渲染（见上面 onPhone 的注释）。 */
+        isUser && !onPhone
           ? `<section class="set-sec">
                <div class="set-head"><b>账号安全</b></div>
                <div class="me-sec-grid">
