@@ -77,6 +77,54 @@ db.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_mobile_clientKey ON mobile_devices
  */
 ensureColumn('mobile_devices', 'disconnectedAt', 'disconnectedAt TEXT');
 
+/*
+ * `mobile_devices.userId`（2026-11-03 **设备绑人**）：这部手机**属于谁**（`users.id`）。
+ *
+ * 为什么加这一列：在此之前手机是"孤儿设备" —— 它有一个设备身份（设备名 + `bd_` 令牌），
+ * 但不挂任何人，于是
+ *   · 手机上审批、发消息，事件流里只记「一台设备」，不记「谁」；
+ *   · 用户被禁用/删除，手机照连（两套身份语义各走各的）；
+ *   · 界面上「这是谁的手机」答不出来。
+ * 而桌面端 2026-10-31 起已经是"人用账号登录、操作精确到人"，手机这条等于没接上。
+ *
+ * **归属从哪来**：claim（手机凭码换令牌）是**免令牌**端点，服务端在那儿认不出"拿着手机的人
+ * 是谁"。唯一可信的"人"是**发码的那个人** —— 所以码上带 userId，claim 时继承下来。
+ * 这不是权宜：邀请码本来就该是"发给某个人的入场券"，谁发归谁是最小且诚实的解释。
+ *
+ * 列留 NULL 的两种情况：老库（下面一次性补齐）和"这台机器还没有任何账号"（零账号形态）。
+ * NULL ≠ 无主，见 `ownerOfDevice` 的回落口径。
+ */
+ensureColumn('mobile_devices', 'userId', 'userId TEXT');
+
+/*
+ * `mobile_pair_tokens.userId`（同一刀）：这枚码**是发给谁的**。
+ * 发码时写（`createPairCode(ownerUserId)`），claim 时读出来落到设备行上 ——
+ * 这样"谁发的码"这件事不会因为发码与扫码之间隔了几分钟而丢。
+ */
+ensureColumn('mobile_pair_tokens', 'userId', 'userId TEXT');
+
+/*
+ * **老设备一次性补归属**（2026-11-03）。
+ *
+ * 这一刀之前根本没有"归属"这个概念，所有已配对的手机都是操作员自己配的 ——
+ * 把它们认到第一个账号名下，是唯一有依据的解释（与 `auth.actorUser` 对 operator
+ * 的既有回落「本机自动登录 = 第一个人」同一条口径）。
+ *
+ * 为什么先查 sqlite_master：users 表由 store/users.mjs 建，模块加载顺序不保证
+ * devices.mjs 在它之后（这里 import 的 db.mjs 只管连接）。查不到就当没有账号，跳过。
+ * 幂等：`WHERE userId IS NULL` —— 新设备在 claim 时就已经写好了归属，不会被这条改到。
+ */
+{
+  const hasUsers = db.prepare("SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = 'users'").get();
+  if (hasUsers) {
+    const first = db.prepare('SELECT id FROM users ORDER BY createdAt LIMIT 1').get();
+    if (first) {
+      const n = db.prepare('UPDATE mobile_devices SET userId = ? WHERE userId IS NULL').run(first.id).changes;
+      if (n > 0) console.log(`[配对] ${n} 台老设备补上了归属（认到第一个账号 ${first.id}）`);
+    }
+  }
+}
+
 /** clientKey 的形状（与 pair-claim.mjs 生成的 32 位 hex 对齐；放这里是为了路由不用重复校验） */
 const CLIENT_KEY_RE = /^[A-Za-z0-9_-]{8,64}$/;
 
@@ -142,10 +190,15 @@ function prunePairTokens() {
 }
 
 /** 一套「码 → 行」的写入（token 与 code 除了明文怎么来，别的完全一样） */
-function insertPairSecret(secret, ttlMs, defaultTtl) {
+function insertPairSecret(secret, ttlMs, defaultTtl, ownerUserId = null) {
   prunePairTokens();
   const expiresAt = new Date(Date.now() + Math.max(1000, Number(ttlMs) || defaultTtl)).toISOString();
-  db.prepare('INSERT INTO mobile_pair_tokens (tokenHash, createdAt, expiresAt) VALUES (?, ?, ?)').run(hashOf(secret), nowIso(), expiresAt);
+  db.prepare('INSERT INTO mobile_pair_tokens (tokenHash, createdAt, expiresAt, userId) VALUES (?, ?, ?, ?)').run(
+    hashOf(secret),
+    nowIso(),
+    expiresAt,
+    ownerUserId ? String(ownerUserId) : null,
+  );
   return { expiresAt };
 }
 
@@ -155,10 +208,13 @@ function insertPairSecret(secret, ttlMs, defaultTtl) {
  * 2026-11-01 起手机端主路径换成 9 位邀请码（见 `createPairCode`）—— 长令牌仍留着，
  * 因为已经生成的二维码/书签地址可能还在用，核销路径完全一样，多留住一代不花钱。
  * **只存哈希**，明文只在这里回一次。
+ *
+ * `ownerUserId`（2026-11-03 设备绑人）：这枚码是发给谁的 —— 扫码的那台手机就归谁。
+ * 两种码都带，否则老路径配出来的设备又成了孤儿。
  */
-export function createPairToken(ttlMs = PAIR_TOKEN_TTL_MS) {
+export function createPairToken(ttlMs = PAIR_TOKEN_TTL_MS, ownerUserId = null) {
   const token = `bp_${crypto.randomBytes(18).toString('base64url')}`;
-  return { token, ...insertPairSecret(token, ttlMs, PAIR_TOKEN_TTL_MS) };
+  return { token, ...insertPairSecret(token, ttlMs, PAIR_TOKEN_TTL_MS, ownerUserId) };
 }
 
 /** 邀请码位数（对齐向日葵/ToDesk 的"报一串数字"体感；1e9 空间 + 5 分钟 + 单次） */
@@ -175,7 +231,7 @@ const PAIR_CODE_DIGITS = 9;
  * 唯一的算法差异是空间从 2^144 掉到 1e9 —— 所以核销端点必须限速
  * （routes/pair.mjs 的 E1703 闸），否则 5 分钟里 brute force 是有意义的。
  */
-export function createPairCode(ttlMs = PAIR_CODE_TTL_MS) {
+export function createPairCode(ttlMs = PAIR_CODE_TTL_MS, ownerUserId = null) {
   /*
    * **发新码 = 旧码立刻失效**（与界面上"点「换一个」，旧码作废"的文案对齐）。
    * 语义上这不是"再发一个"，而是"换一个" —— 同时压着两三枚有效码，会让
@@ -184,7 +240,7 @@ export function createPairCode(ttlMs = PAIR_CODE_TTL_MS) {
   db.prepare('DELETE FROM mobile_pair_tokens WHERE usedAt IS NULL').run();
   // 首位非 0：显示成 xxx xxx xxx 时不会被人当成"少了一位"而删掉前导 0
   const code = String(crypto.randomInt(10 ** (PAIR_CODE_DIGITS - 1), 10 ** PAIR_CODE_DIGITS));
-  return { code, ...insertPairSecret(code, ttlMs, PAIR_TOKEN_TTL_MS) };
+  return { code, ...insertPairSecret(code, ttlMs, PAIR_TOKEN_TTL_MS, ownerUserId) };
 }
 
 /**
@@ -226,6 +282,10 @@ export function consumePairToken(token, deviceId) {
  *
  * `clientKey`（2026-11-01）命中已有行时**复用不新建**（返回 `reused: true`）——
  * 同一台手机重复扫码/重配，设备列表里永远只有一条。返回 `{ device, reused }`。
+ *
+ * 归属（2026-11-03）**不在这里写**：调用方要在"码真的被这台手机核销掉"之后再绑
+ * （`setDeviceOwner`）。先绑再核销的话，并发抢码失败的那台手机已经改了归属 ——
+ * 回滚只删新建的行，改不回来。
  */
 export function createDevice(name, clientKey = null) {
   const k = cleanClientKey(clientKey);
@@ -252,6 +312,39 @@ export function createDevice(name, clientKey = null) {
     k,
   );
   return { device: getDevice(id), reused: false };
+}
+
+/**
+ * 把这台手机认到某个人名下（2026-11-03 设备绑人）。
+ *
+ * **复用行会改写归属**：一台手机换了主人（家人把旧手机给你、你自己换了账号），以
+ * **最近一次配对的发码人**为准。这不是漏洞而是正确语义 —— 能发码的人本来就有
+ * `device:manage`，他发的码就是"把这台手机授权给这个人"；反过来如果复用行不改归属，
+ * 换手之后那台手机还会顶着上一个人的名字说话（比不绑人更糟 ✗）。
+ *
+ * `userId` 传 null = 清空归属（零账号形态），正常路径不该走到。
+ */
+export function setDeviceOwner(deviceId, userId) {
+  const d = getDevice(deviceId);
+  if (!d) return null;
+  const next = userId ? String(userId) : null;
+  if (d.userId !== next) {
+    db.prepare('UPDATE mobile_devices SET userId = ? WHERE id = ?').run(next, deviceId);
+    console.log(`[配对] 手机「${d.name}」的归属：${d.userId ?? '无'} → ${next ?? '无'}`);
+  }
+  return getDevice(deviceId);
+}
+
+/**
+ * 这部手机归谁（`users.id`），没有就是 null。
+ *
+ * **不在这里回落 firstUser** —— 回落会把"绑人"和"零账号形态的隐式操作员"混成一件事，
+ * 将来加多用户时最难查的就是这种"看起来有主、其实是猜的"。回落只做一次，在配对时
+ * （`routes/pair.mjs` 的 claim：码上没写人就认第一个账号，与老库补齐同一口径）。
+ */
+export function ownerOfDevice(deviceId) {
+  const row = db.prepare('SELECT userId FROM mobile_devices WHERE id = ?').get(String(deviceId ?? ''));
+  return row?.userId ?? null;
 }
 
 export function getDevice(id) {
@@ -382,11 +475,16 @@ export function listDevices() {
    * 带上**有效令牌数**（2026-10-28）：踢出只删令牌、设备行留着当记录（见上面 forgetDevice
    * 的注释）。界面要是只看行，踢完那台手机原样还在列表里 —— 用户会以为没踢掉。
    * 数 = 0 就是「已踢出/已失效」，由前端渲染成那个状态。
+   *
+   * `ownerName`（2026-11-03 设备绑人）：界面上要能回答"这是谁的手机"。
+   * LEFT JOIN：老设备（userId 为 NULL）和账号已删的设备照样列出来，名字为空由前端回落。
    */
   return db
     .prepare(
-      `SELECT d.*, (SELECT COUNT(*) FROM mobile_device_tokens t WHERE t.deviceId = d.id) AS tokenCount
-         FROM mobile_devices d ORDER BY d.pairedAt`,
+      `SELECT d.*, u.name AS ownerName,
+              (SELECT COUNT(*) FROM mobile_device_tokens t WHERE t.deviceId = d.id) AS tokenCount
+         FROM mobile_devices d LEFT JOIN users u ON u.id = d.userId
+        ORDER BY d.pairedAt`,
     )
     .all();
 }
@@ -415,14 +513,35 @@ export function issueDeviceToken(deviceId, ttlMs = null) {
  *
  * `pairEnabled = false`（2026-11-02 总开关）→ 一律 null：就算有令牌因为并发
  * 之类的原因漏吊了，关着开关的手机也**一条请求都进不来**（真·拒绝所有连接）。
+ *
+ * **2026-11-03 设备绑人**：一起把归属人带出去（`userId`），认证层据此把手机上的操作
+ * 记到人头上；同时**归属人失效 = 这台手机失效** —— 用户被禁用或删号之后，那台手机
+ * 的下一次请求直接 401，与浏览器会话同一条口径（`userBySession` 也是这么判的）。
+ * 少了这条，「禁用一个人」只禁掉了他的浏览器，手机还照连，等于没禁。
+ *
+ * 判"人还在不在"用 LEFT JOIN 而不是"查不到就拒绝"：零账号形态（老库、只有 token 文件）
+ * 配出来的设备 userId 是 NULL，那种机器本来就没有人可绑，不能因此把手机全踢了。
  */
 export function deviceAuthByToken(token) {
   if (!token) return null;
   if (!readNetMode().pairEnabled) return null;
-  const row = db.prepare('SELECT deviceId, expiresAt FROM mobile_device_tokens WHERE tokenHash = ?').get(hashOf(token));
+  const row = db
+    .prepare(
+      `SELECT t.deviceId AS deviceId, t.expiresAt AS expiresAt,
+              d.userId    AS userId,
+              u.id        AS ownerId,
+              u.disabled  AS ownerDisabled
+         FROM mobile_device_tokens t
+         JOIN mobile_devices d ON d.id = t.deviceId
+         LEFT JOIN users u ON u.id = d.userId
+        WHERE t.tokenHash = ?`,
+    )
+    .get(hashOf(token));
   if (!row) return null;
   if (row.expiresAt && row.expiresAt <= nowIso()) return null;
-  return { deviceId: row.deviceId };
+  // 绑了人、但那个人没了 / 被禁用了 → 这台手机跟着失效（引导重新配对，与"被踢出"同一条提示）
+  if (row.userId && (!row.ownerId || row.ownerDisabled)) return null;
+  return { deviceId: row.deviceId, userId: row.userId ?? null };
 }
 
 /** 吊销一台设备的全部令牌 —— 「踢出」就是**真的**把它踢出去（下次请求 401，引导重新扫码） */

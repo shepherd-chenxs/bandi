@@ -50,7 +50,8 @@ export const ROUTES = [
   { id: 'collab.task.report', m: ['POST'], path: p('/api/collab/tasks', id1, 'report'), auth: 'public', note: '同上' },
   // —— 中心侧管理面（操作员令牌 / admin，mayManage 语义）——
   { id: 'collab.invites', m: ['POST'], path: p('/api/collab/invites'), auth: 'session', perm: 'collab:manage', noPanel: true },
-  { id: 'collab.branches', m: ['GET'], path: p('/api/collab/branches'), auth: 'session', perm: 'collab:read', noPanel: true },
+  { id: 'collab.branches', m: ['GET'], path: p('/api/collab/branches'), auth: 'session', perm: 'collab:read', noPanel: true, device: true,
+    note: '手机建卡弹窗的「执行设备」胶囊要拉它（只读）；不放行的话请求 403 被 catch 吞掉，手机上永远只有「本设备」还看不出坏了' },
   { id: 'collab.branch.create', m: ['POST'], path: p('/api/collab/branches'), auth: 'session', perm: 'collab:manage', noPanel: true, note: '添加设备：先落一行待接入（2026-11-01 七改）' },
   { id: 'collab.branch.revoke', m: ['POST'], path: p('/api/collab/branches', id1, 'revoke'), auth: 'session', perm: 'collab:manage', noPanel: true },
   { id: 'collab.branch.delete', m: ['DELETE'], path: p('/api/collab/branches', id1), auth: 'session', perm: 'collab:manage', noPanel: true, note: '真删已移除/待接入的行（连带任务记录）' },
@@ -78,7 +79,6 @@ export const ROUTES = [
   { id: 'local.hosts.test', m: ['POST'], path: p('/api/local/hosts/test'), auth: 'local' },
   { id: 'local.join', m: ['POST'], path: p('/api/local/join'), auth: 'local' },
   { id: 'local.leave', m: ['POST'], path: p('/api/local/leave'), auth: 'local' },
-  { id: 'restart', m: ['POST'], path: p('/api/restart'), auth: 'local', note: "秘密档位 'never'（v2.5：单向门）；但 panel 仍禁止" },
 
   /* ------------------------------------------------- 成员基线（登录即可） */
   { id: 'state.read', m: ['GET'], path: p('/api/state'), auth: 'session', member: true, device: true, perm: 'state:read' },
@@ -110,6 +110,8 @@ export const ROUTES = [
   { id: 'card.files', m: ['GET', 'POST'], path: p('/api/projects/tasks', id1, 'files'), auth: 'session', member: true, perm: 'task:read' },
   { id: 'card.pr', m: ['GET', 'POST'], path: p('/api/projects/tasks', id1, 'pr(?:/refresh|/create|/merge)?'), auth: 'session', member: true, perm: 'task:write' },
   { id: 'board', m: ['GET'], path: p('/api/projects', id1, 'tasks'), auth: 'session', member: true, device: true, perm: 'project:read' },
+  { id: 'card.create', m: ['POST'], path: p('/api/projects', id1, 'tasks'), auth: 'session', member: true, device: true, perm: 'task:write',
+    note: '手机建卡（2026-11-03 实机放开）："人不在电脑前想起一件事要派下去"是手机端核心场景，绑人后建卡署名走 actorUser=归属人。只开**建**——删卡/改归属留在桌面；PATCH 的 {status, note} 字段级闸仍在 project.mjs' },
   { id: 'persona.detail', m: ['GET'], path: p('/api/personas', id1), auth: 'session', member: true, device: true, perm: 'persona:read' },
   { id: 'persona.tasks', m: ['GET'], path: p('/api/personas', id1, 'tasks'), auth: 'session', member: true, device: true, perm: 'persona:read' },
   { id: 'group.detail', m: ['GET'], path: p('/api/groups', id1), auth: 'session', member: true, device: true },

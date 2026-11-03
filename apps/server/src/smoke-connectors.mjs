@@ -15,7 +15,7 @@ const BASE = `http://127.0.0.1:${PORT}`;
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bandi-api-'));
 const env = {
   ...process.env,
-  BANDI_PORT: String(PORT),
+  BANDI_HOST: '127.0.0.1',  BANDI_PORT: String(PORT),
   // 数据目录也指过去：不然这个用例起的那台服务会写进**真实的 data/**（库和账本一起）
   BANDI_DATA: tmp,
   BANDI_CONNECTORS: path.join(tmp, 'connectors.json'),

@@ -108,6 +108,9 @@ fs.rmSync(nodeExtract, { recursive: true, force: true });
 fs.mkdirSync(nodeExtract, { recursive: true });
 execFileSync('tar', ['-xzf', path.basename(cache), '-C', path.basename(nodeExtract), `node-v${nodeVer}-linux-x64/bin/node`], { cwd: stage });
 fs.copyFileSync(path.join(nodeExtract, 'node-v' + nodeVer + '-linux-x64', 'bin', 'node'), path.join(pkg, 'node'));
+// Windows 文件系统没有 +x：拷出来的 node 是 644，tar 原样带过去，远端解压即不可执行。
+// install.sh 里也补了一手，这里在源头补齐（2026-11-03 thinkpad-p15 升级实报）。
+fs.chmodSync(path.join(pkg, 'node'), 0o755);
 fs.rmSync(nodeExtract, { recursive: true, force: true });
 
 /* ---------------------------------------------------------------- 打 tar */

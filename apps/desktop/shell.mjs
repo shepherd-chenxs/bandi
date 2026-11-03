@@ -819,30 +819,17 @@ function ensureOptions() {
     dataDir: DATA,
     logFile: LOG,
     /*
-     * ⚠️ **不再写死 `BANDI_HOST: '127.0.0.1'`**（2026-10-16 改）。
+     * **壳显式钉死 `BANDI_HOST: '0.0.0.0'`**（2026-11-03 用户拍板：对外服务这一维整个删除）。
      *
-     * 原来那句是故意的（"壳只服务本机，别因为外面环境里塞了 BANDI_HOST 就把界面暴露出去" ✓）——
-     * 但那让桌面版**永远当不了总机** ✗（别的机器连不进来）。现在这件事交给
-     * 数据目录里的 `netmode.json`（设置里那个「允许局域网内的机器加入」开关 ✓）：
-     * `config.mjs` 读它 → 桌面壳 / 开机自启 / 命令行**三种起法都按同一个开关走** ✓。
-     * 开关默认**关** → 行为跟以前一模一样（只听回环、免鉴权）✓。
+     * 手机和别的机器永远都可以连进来，让不让进由「分机/总机」（acceptNodes）和
+     * 「手机连接」（pairEnabled）两个运行期开关管 —— 监听地址不再是一种"形态"，
+     * 也没有界面开关 / 「重启生效」/「只在本机使用」那一套了（`allowLan` 键已删）。
      *
-     * **对外开着的机器，直接用启动参数钉死 `BANDI_HOST=0.0.0.0`**（2026-11-02 用户：
-     * "改成 thinkpad 那种体验"）。光靠服务端读 netmode，开关是**运行期**的：运行中
-     * 翻面 / 点「只在本机使用」都会落进"改了还没生效——点重启"的循环（bind 只能
-     * 重来一次）。改由壳在 spawn 时读 netmode：`allowLan:true` 就显式传 0.0.0.0 ——
-     * 服务端进 explicit 形态，模式卡变成 thinkpad 同款（分机/总机即时切、无重启、
-     * 无「只在本机使用」）；`allowLan:false`/读不到 → 不传，全新安装照旧回环免鉴权。
-     * 想退回单机形态：把 netmode.json 的 allowLan 改 false 再重开壳（界面入口随
-     * explicit 撤掉，这是代价 —— 对外服务的机器本来也不该从网页里关监听）。
+     * 显式传还有一个老理由（2026-10-16 原注释）：**屏蔽外面环境里塞进来的 BANDI_HOST**，
+     * 壳拉起的服务监听什么是确定的，不随 shell 环境漂移。要钉具体网卡地址 / 回环调试，
+     * 用命令行 / systemd 起，别走壳。
      */
-    extraEnv: (() => {
-      try {
-        const nm = readJson(path.join(DATA, 'netmode.json'));
-        if (nm && nm.allowLan === true) return { BANDI_HOST: '0.0.0.0' };
-      } catch { /* 读不到按没开关处理（回环） */ }
-      return {};
-    })(),
+    extraEnv: { BANDI_HOST: '0.0.0.0' },
     /*
      * **spawn 那一刻就落记录**（QA R2-B 的修法，见 `recordPendingService`）。
      * 回调的是 `lifecycle.ensureRunning` —— 它一 `startDetached` 出 PID 就同步喊我一声，

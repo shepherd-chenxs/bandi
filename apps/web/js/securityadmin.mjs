@@ -9,7 +9,7 @@
  * 版式沿 useradmin.mjs 的 set-sec 卡片；错误一律「码 + 中文」toast，不用 alert。
  */
 import { esc, toast } from './shell.mjs';
-import { api, dt, failHtml } from './ui.mjs';
+import { api, dt, failHtml, post } from './ui.mjs';
 import { confirmDo } from './machine.mjs';
 import { $, S } from './core.mjs';
 
@@ -42,10 +42,12 @@ export async function renderSecurity() {
   $('settingsView').innerHTML = `${head()}<div class="empty" style="padding:24px 4px">加载中…</div>`;
   const isAdmin = !!S.isAdmin && !S.isDevice;
 
-  /* 会话必加载；审计只有 admin 拉 —— 非 admin 不发那一条请求（发了也是 403 toast） */
-  const [sess, audit] = await Promise.all([
+  /* 会话必加载；审计只有 admin 拉 —— 非 admin 不发那一条请求（发了也是 403 toast）。
+     网络访问（2026-11-03）：同样是 admin 的事（POST /api/lan 要 machine:manage），非 admin 不拉。 */
+  const [sess, audit, lan] = await Promise.all([
     api('/api/security/sessions').catch(() => null),
     isAdmin ? api('/api/security/audit?limit=50').catch(() => null) : Promise.resolve(null),
+    isAdmin ? api('/api/lan').catch(() => null) : Promise.resolve(null),
   ]);
 
   const sessions = sess?.sessions ?? [];
@@ -81,9 +83,55 @@ export async function renderSecurity() {
         </div>
       </section>`;
 
+  /*
+   * 网络访问（2026-11-03，对齐 1Panel 安全页的「授权 IP / 域名绑定」）：
+   * 网络周界闸（security/ipallow.mjs，E3003 / E3004）的界面。只做三件事：
+   * 把名单和域名摆出来让人改、把"你会被自动加进名单"说清楚、保存即生效。
+   * 监听地址 / 端口是启动配置（BANDI_HOST / 固定 18787），这里只读展示、不给开关。
+   */
+  const netHtml = !isAdmin
+    ? ''
+    : !lan
+      ? `<section class="set-sec">
+          <div class="set-head"><b>网络访问</b><span class="set-tag">仅管理员</span></div>
+          <div class="set-box"><div class="empty">拉不到网络状态（/api/lan），稍后再试。</div></div>
+        </section>`
+      : `<section class="set-sec">
+          <div class="set-head"><b>网络访问</b><span class="set-tag">网络周界 · 保存即生效</span></div>
+          <div class="set-box">
+            <div class="set-row">
+              <span class="set-label">服务地址</span>
+              <div class="machine-data machine-addr">${esc(String(lan.host ?? ''))}:${esc(String(lan.port ?? ''))}<span class="sub">（监听由启动配置决定，界面不改）</span></div>
+            </div>
+            <div class="set-row">
+              <span class="set-label">授权 IP 白名单</span>
+              <div class="seg" id="netWlSeg">
+                <button data-wl="1" class="${lan.whitelistEnabled ? 'on' : ''}">开启</button>
+                <button data-wl="0" class="${!lan.whitelistEnabled ? 'on' : ''}">关闭</button>
+              </div>
+            </div>
+            <div class="set-row" style="flex-direction:column;align-items:flex-start;gap:6px">
+              <span class="set-label">名单（每行一个 IP 或网段）</span>
+              <textarea id="netWlIps" rows="4" placeholder="192.168.5.9&#10;192.168.5.0/24" style="resize:vertical" spellcheck="false">${esc((lan.whitelistIps ?? []).join('\n'))}</textarea>
+            </div>
+            <div class="set-row">
+              <span class="set-label">域名绑定</span>
+              <input id="netDomain" value="${esc(lan.boundDomain ?? '')}" placeholder="如 pan.example.com（留空 = 不绑定）" autocomplete="off" spellcheck="false" />
+            </div>
+            <div class="set-row" style="justify-content:flex-end">
+              <button class="primary" id="netSave">保存</button>
+            </div>
+            <div class="set-row"><p class="hint">开启白名单后，名单之外的 IP 连登录页都摸不到（403）；本机直连永远放行，
+            开启时会自动把你现在的 IP（${esc(lan.yourIp || '未知')}）写进名单防锁死。设了域名绑定后，只有本机直连和用这个域名访问能打开面板。
+            配了可信反代（BANDI_TRUST_PROXY）时按 X-Forwarded-For 取真实来源，且反代必须覆写转发头。</p></div>
+            <div class="hint-line" id="netMsg"></div>
+          </div>
+        </section>`;
+
   $('settingsView').innerHTML = `
     ${head()}
     <div class="detail-body">
+      ${netHtml}
       <section class="set-sec">
         <div class="set-head"><b>我的会话</b><span class="set-tag">空闲 30 分钟 / 绝对 12 小时自动失效</span></div>
         <div class="set-box">
@@ -96,6 +144,43 @@ export async function renderSecurity() {
       </section>
       ${auditHtml}
     </div>`;
+
+  /* 网络访问卡的接线（admin 且拉到 lan 才有这些节点） */
+  if (isAdmin && lan) {
+    const wlSeg = $('netWlSeg');
+    wlSeg.querySelectorAll('[data-wl]').forEach((b) => {
+      b.onclick = () => {
+        wlSeg.querySelectorAll('[data-wl]').forEach((x) => x.classList.toggle('on', x === b));
+      };
+    });
+    $('netSave').onclick = async () => {
+      const enable = wlSeg.querySelector('[data-wl="1"]').classList.contains('on');
+      const ips = $('netWlIps').value.split('\n').map((s) => s.trim()).filter(Boolean);
+      const domain = $('netDomain').value.trim();
+      const msg = $('netMsg');
+      /*
+       * **首次开启要确认**：白名单是少数"存错了就把所有人关在门外"的开关 ——
+       * 服务端虽然会自动把当前 IP 写进名单，但多一次"知道自己在干什么"不过分。
+       */
+      if (enable && !lan.whitelistEnabled) {
+        const ok = await confirmDo(
+          `开启后，只有名单里的 IP（会自动加上你现在的 IP ${lan.yourIp || '未知'}）和本机直连能访问面板，其它一律 403。确认开启？`,
+          { ok: '开启白名单' },
+        );
+        if (!ok) return;
+      }
+      $('netSave').disabled = true;
+      try {
+        const r = await post('/api/lan', { whitelistEnabled: enable, whitelistIps: ips, boundDomain: domain });
+        toast(r?.addedYourIp ? `已保存，自动把你的 IP ${r.addedYourIp} 加进了名单` : '已保存', 'ok');
+        renderSecurity(); // 重画：名单归一化后的写法以服务端那份为准
+      } catch (e) {
+        toast(e.message, 'error');
+        $('netSave').disabled = false;
+      }
+    };
+  }
+
 
   $('kickOthers').onclick = async () => {
     confirmDo('把其它设备上的登录全部踢下线？当前这台不受影响。', async () => {

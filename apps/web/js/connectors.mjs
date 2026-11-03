@@ -826,13 +826,10 @@ export async function renderDeviceList() {
   // 这页没有再关心 lan 的地方（要加回来先想清楚谁消费）。
 
   /*
-   * 形态的两个事实源（2026-11-01 八改，别再合回一个）：
-   *   · `netmode.allowLan`   —— 对外服务（监听 0.0.0.0）；启动参数 `BANDI_HOST` 优先级更高。
-   *   · `netmode.acceptNodes` —— 角色：总机（收别的机器当节点）/ 分机（不收）。
-   * 旧口径「允许局域网连入 = 当总机」把两者焊死了（用户 2026-10-21 的原话只否掉了
-   * "被局域网探测"这个说法，没说分机不存在）；2026-11-01 晚用户明确要分机形态：
-   * 对外服务照旧、手机照连，只是不发邀请码、别的机器加不上去。
-   * 收过的设备不算模式：只听本机也可能留着设备记录。
+   * 形态的事实源（2026-11-03 终稿）：只剩 `netmode.acceptNodes` 一个运行期开关 ——
+   * 角色：总机（收别的机器当节点）/ 分机（不收）。监听永远对外（`BANDI_HOST` 可钉
+   * 具体地址），是启动配置的事，界面上没有开关（`allowLan` 已删）。
+   * 收过的设备不算模式。
    */
 
   /*
@@ -882,60 +879,46 @@ export async function renderDeviceList() {
 
 
 /**
- * 模式卡（2026-11-01 八改：**角色与监听地址拆开** —— 用户："一台机器难道就不能一直处于
- * 不监听回环的模式吗？就是一直处于总机模式。比如把 thinkpad-p15 开分机模式。界面照样显示，
- * 手机照样可以连。但是不提供邀请码，其他的机器也加不上去"）。
+ * 模式卡（2026-11-03 终稿：**只剩角色一个开关** —— 用户拍板"手机和节点永远都可以连进来，
+ * 只通过总机和分机的开关控制让不让连进来；对外地址由部署配置决定"）。
  *
- * 卡上是**两个正交的维度**，别再混成一个"模式"：
+ * 曾经卡上有第二个维度「对外服务」（`allowLan` 开关 + 「重启生效」+「只在本机使用」），
+ * 整个删除了：监听永远对外（`BANDI_HOST` 可钉具体地址），是启动配置的事，界面上没有、
+ * 也不该有开关 —— 配置总会有遗漏，漏出来的必须是"对外服务且强制鉴权"这一侧。
+ *
  *   · **角色**（总机 / 分机）—— 收不收别的机器当节点。`POST /api/lan {acceptNodes}`，
- *     **立即生效**，不碰监听地址，所以永远不产生"待重启"。
- *   · **对外服务**（监听 0.0.0.0 / 只听本机）—— 手机和浏览器连不连得进来。
- *     只能在进程启动那一刻定，所以要么靠「重启」按钮，要么被 `BANDI_HOST` 钉死。
+ *     **立即生效**。
  *
- * 旧版把两者焊成"单机 ⇄ 总机（实验）"：总机 == 对外 == 收节点，于是分机这个形态
- * **根本表达不出来**；更糟的是 `explicit`（启动参数指定了监听）时整张卡被藏掉，
- * 显式部署的机器连"我是总机还是分机"都看不见 ✗。现在 explicit 只锁**对外服务那一项**。
- *
- * lan 由调用方传入并**就地更新**（切换成功后改 acceptNodes / allowLan / restartNeeded）；不传就自己拉。
- * local（预警）同理。onChange：切换**成功**后的回调（deep 才调）——「手机连接」页据此换引导。
+ * lan 由调用方传入并**就地更新**（切换成功后改 acceptNodes）；不传就自己拉。
+ * local（预警）同理。onChange：对外翻面才整页重画（现在监听不再翻面，只剩防御性保留）；
+ * onRoleChange：切角色成功后知会 —— 协作中心页的「协作」分节显隐跟着角色走。
  */
 export async function paintModeCard(mount, { lan, local, onChange, onRoleChange } = {}) {
   if (!mount) return;
   if (!lan) {
-    lan = { allowLan: false, acceptNodes: false, boundLan: false, restartNeeded: false, urls: [], explicit: false };
+    lan = { acceptNodes: false, boundLan: true, urls: [] };
     try { lan = await api('/api/lan'); } catch { /* 拉不到按默认画 */ }
   }
   if (local === undefined) {
     // 模式卡附带的预警（如「另一个数据目录里也有节点常驻」）：拉不到不挡模式卡
     try { local = await api(`${LOCAL_BASE}/status`); } catch { local = null; }
   }
-  /* 挂卡那一刻对外没有 —— 之后**翻面**了才值得让调用方整页重画（切角色不翻面，不闪） */
   const servingAtPaint = !!lan.boundLan;
   const render = (light) => {
     const role = lan.acceptNodes ? 'hub' : 'branch';
-    const serving = !!lan.boundLan; // 这个进程**现在**真的对外听着吗
-    const keep = lan.explicit || lan.allowLan; // 打算对外（含"改了还没重启"）
-    /* 待重启 = 打算对外，但现在还没。explicit 时监听由启动参数钉死，永远没有"待重启" */
-    const pd = !lan.explicit && (!!lan.restartNeeded || (keep && !serving));
-    /* 启动参数把监听钉在回环上：这台永远不能对外 —— 两个角色都点不动，
-       只能换 deploy 里的 BANDI_HOST（所以给 disabled + title 说明，别画成能点的样子） */
-    const locked = !!lan.explicit && !serving;
-    /*
-     * 状态行：**先说清"能不能连进来"，再说角色** —— 用户看这行是为了知道
-     * "我手机上还能不能打开它"，那是比"收不收节点"更靠前的问题。
-     */
-    const state = !serving && !keep
-      ? lan.explicit
-        ? '这台只听本机 —— 监听地址由启动参数（BANDI_HOST）钉住，手机和别的机器都连不进来'
-        : '这台目前只听本机 —— 手机和别的机器都连不进来。选「分机」或「总机」开始对外服务'
+    const serving = !!lan.boundLan; // 这个进程真的对外听着吗（只有 BANDI_HOST=127.0.0.1 调试时才不是）
+    /* 监听被启动参数钉在回环上：这台连不进来，总机也无从谈起 —— 两个角色都点不动，
+       只能改部署里的 BANDI_HOST（disabled + title 说明，别画成能点的样子） */
+    const locked = !serving;
+    const state = !serving
+      ? '这台只听本机 —— 监听地址被启动参数（BANDI_HOST=127.0.0.1）钉住，手机和别的机器都连不进来'
       : role === 'hub'
         ? '我是总机'
         : '我是分机';
     /*
      * **轻更新**（2026-11-01 用户："切换总机和分机页面不要闪动"）：切角色只改
      * 高亮和状态行文字，DOM 结构一动不动 —— 整段 innerHTML 重写会把 seg 按钮整个
-     * 换成新节点，视觉上就是卡壳一闪。结构（待重启标记/监听行/预警）只有
-     * 动了 allowLan 才会变，那种重建留给全量渲染。
+     * 换成新节点，视觉上就是卡壳一闪。
      */
     if (light && mount.querySelector('#modeSeg')) {
       mount.querySelectorAll('#modeSeg [data-role]').forEach((b) => b.classList.toggle('on', b.dataset.role === role));
@@ -948,130 +931,59 @@ export async function paintModeCard(mount, { lan, local, onChange, onRoleChange 
         <div class="set-head">
           <b>模式</b>
           <span class="mode-state mode-main" id="modeStateMain">${state}</span>
-          ${pd ? '<span class="set-tag">改了还没生效 —— 点「重启」生效</span>' : ''}
           <div class="mode-ctl">
             <div class="seg seg-mode" id="modeSeg">
               <button data-role="branch" class="${role === 'branch' ? 'on' : ''}" ${
-                locked ? 'disabled title="监听地址由启动参数钉在回环上，这台只在本机可用"' : ''
+                locked ? 'disabled title="监听地址被启动参数钉在回环上，这台只在本机可用"' : ''
               }>分机</button>
               <button data-role="hub" class="${role === 'hub' ? 'on' : ''}" ${
-                locked ? 'disabled title="监听地址由启动参数钉在回环上，这台只在本机可用"' : ''
+                locked ? 'disabled title="监听地址被启动参数钉在回环上，这台只在本机可用"' : ''
               }>总机</button>
             </div>
-            ${pd ? '<button class="btn-sm primary" id="lanRestart">重启</button>' : ''}
           </div>
         </div>
-        ${
-          lan.explicit
-            ? '<div class="mode-state">对外地址由部署配置决定，此处不可修改</div>'
-            : serving || keep
-              ? '<div class="mode-foot"><button class="btn-sm" id="modeLocal" type="button">只在本机使用</button></div>'
-              : ''
-        }
+        ${serving ? '<div class="mode-state">对外地址由部署配置决定，此处不可修改</div>' : ''}
         ${(local?.warnings ?? []).map((w) => `<div class="machine-warn">${esc(w)}</div>`).join('')}
       </section>`;
     wireModeCard({ lan, refresh });
   };
   const refresh = (deep, light) => {
     render(light); // 失败拨回真实模式；light=只切角色（高亮+文字），全量才动结构
-    /* 只有**对外服务翻面**（回环 ⇄ 对外）才让调用方整页重画 —— 切总机/分机不动监听，
-       下面的邀请码/二维码一个字节都不用变，重画纯属闪动 ✗ */
+    /* 防御性保留：监听现在不会翻面（没有原地重启了），真翻面（换了部署重启）时整页重画 */
     if (deep && !!lan.boundLan !== servingAtPaint) onChange?.();
-    /* 角色切换成功也要单独知会（2026-11-02 二十三改）：协作中心页的「协作」分节
-       显隐跟着分机/总机走，切了角色它得当场换脸 —— 但只重画那一节，不整页闪。
-       手机连接页已不挂模式卡，这个回调没有别的消费方。 */
+    /* 角色切换成功要单独知会：协作中心页的「协作」分节显隐跟着分机/总机走，
+       切了角色它得当场换脸 —— 但只重画那一节，不整页闪。 */
     if (deep && onRoleChange) onRoleChange(lan);
   };
   render();
 }
 
 /**
- * 模式卡的接线（2026-11-01 八改）。
+ * 模式卡的接线（2026-11-03 终稿：只剩角色一颗开关）。
  *
- * 两件事分开接，因为它们的"生效方式"根本不同：
- *   · **角色**（分机 ⇄ 总机）= `POST /api/lan {acceptNodes}`，**立即生效**、不重启、不弹确认
- *     （2026-10-21 用户："切换不要弹窗" —— 可逆动作不用拦）。
- *   · **对外服务**（监听）= 要重启。点角色时如果这台还在回环上、又没被启动参数钉住，
- *     顺手把 `allowLan` 打开（监听照样等「重启」）—— 否则用户点了"总机"却什么都没发生，
- *     会以为按钮坏了 ✗。
+ * **角色**（分机 ⇄ 总机）= `POST /api/lan {acceptNodes}`，**立即生效**、不重启、不弹确认
+ * （2026-10-21 用户："切换不要弹窗" —— 可逆动作不用拦）。
  *
  * 请求失败 refresh() 把高亮拨回真实状态 —— 界面说的必须就是库里存的。
  */
 export function wireModeCard({ lan, refresh }) {
-  const restart = $('lanRestart');
-  if (restart) {
-    restart.onclick = async () => {
-      restart.disabled = true;
-      restart.textContent = '重启中…';
-      try {
-        await post('/api/restart', {});
-      } catch {
-        restart.disabled = false;
-        restart.textContent = '重启';
-        return; // api() 已经提示过了
-      }
-      const t0 = Date.now();
-      for (;;) {
-        await new Promise((r) => setTimeout(r, 400));
-        try {
-          const r = await fetch('/api/state', { cache: 'no-store' });
-          // 401 也算"起来了"（那说明它开始要令牌了 —— 刷新之后会看到登录页 ✓）
-          if (r.ok || r.status === 401) break;
-        } catch { /* 还没回来 */ }
-        if (Date.now() - t0 > 20000) {
-          restart.disabled = false;
-          restart.textContent = '重启后没连上，刷新看看';
-          return;
-        }
-      }
-      location.reload();
-    };
-  }
-
   const modeSeg = $('modeSeg');
-  if (modeSeg) {
-    modeSeg.querySelectorAll('[data-role]').forEach((btn) => {
-      btn.onclick = async () => {
-        const wantHub = btn.dataset.role === 'hub';
-        const body = {};
-        if (wantHub !== !!lan.acceptNodes) body.acceptNodes = wantHub;
-        /* 回环 + 没被启动参数钉死 → 顺手打开对外服务（只改开关，监听等重启） */
-        if (!lan.boundLan && !lan.explicit) body.allowLan = true;
-        if (!Object.keys(body).length) return;
-        try {
-          await post('/api/lan', body);
-        } catch {
-          refresh();
-          return; // api() 已经提示过了
-        }
-        if (typeof body.acceptNodes === 'boolean') lan.acceptNodes = body.acceptNodes;
-        if (body.allowLan) {
-          lan.allowLan = true;
-          lan.restartNeeded = true;
-        }
-        /* 只切了角色（没碰 allowLan）→ 轻更新：DOM 结构不动、只拨高亮换文字，页面零闪动；
-           连带动了对外开关（回环上点总机）→ 全量重建，把「待重启」标记带出来 */
-        refresh(true, body.acceptNodes !== undefined && !body.allowLan);
-      };
-    });
-  }
-
-  /* 「只在本机使用」= 收回对外服务（角色留着，下次重新对外还是原来那个）。
-     ⚠️ 只在**非显式部署**时出现：explicit 时 allowLan 管不着监听，画出来就是假按钮。 */
-  const localBtn = $('modeLocal');
-  if (localBtn) {
-    localBtn.onclick = async () => {
+  if (!modeSeg) return;
+  modeSeg.querySelectorAll('[data-role]').forEach((btn) => {
+    btn.onclick = async () => {
+      const wantHub = btn.dataset.role === 'hub';
+      if (wantHub === !!lan.acceptNodes) return;
       try {
-        await post('/api/lan', { allowLan: false });
+        await post('/api/lan', { acceptNodes: wantHub });
       } catch {
         refresh();
-        return;
+        return; // api() 已经提示过了
       }
-      lan.allowLan = false;
-      lan.restartNeeded = true;
-      refresh(true);
+      lan.acceptNodes = wantHub;
+      /* 轻更新：DOM 结构不动、只拨高亮换文字，页面零闪动 */
+      refresh(true, true);
     };
-  }
+  });
 }
 
 

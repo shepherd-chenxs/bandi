@@ -35,7 +35,7 @@ import http from 'node:http';
 import path from 'node:path';
 import readline from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
-import { repoRoot, dataDir, dbPath, port as defaultPort, lanAllowed } from './config.mjs';
+import { repoRoot, dataDir, dbPath, port as defaultPort } from './config.mjs';
 import { ensureRunning, stopRunning, isUp, listeners, urlOf, openUrl, sleep, processInfo } from './lifecycle.mjs';
 import { platformVersion } from './local-mode.mjs';
 import * as netmode from './netmode.mjs';
@@ -175,21 +175,18 @@ async function detect() {
 /**
  * 这台机器是什么身份。判据与 `config.mjs` / `netmode.mjs` 同一套（别另立一套）。
  *
- * 2026-11-01 晚起形态拆成两层，标签也得跟着分：
- *   · **能不能被加入**（`acceptNodes`）= 角色：总机 / 分机；
- *   · **听什么地址**（`BANDI_HOST` 或 `allowLan`）= 对外服务 / 只听本机。
- * 原来只会说"BANDI_HOST 给了 = 总机" —— 那台显式部署的机器改成分机后，
- * `bandi status` 还会一直叫它总机，等于命令行在说谎。
+ * 2026-11-03 起"对外服务"这一维没了（永远对外监听，`BANDI_HOST` 只钉具体地址），
+ * 标签只剩角色一层：总机（收节点）/ 分机（不收）。`BANDI_HOST=127.0.0.1` 钉在
+ * 回环上是调试形态，照实说"只听本机"。
  */
 function modeOf() {
   const cp = String(readJson(CFG_FILE)?.controlPlane ?? '').trim();
   if (cp) return { id: 'client', label: '节点（这台机器已加入总机）', detail: cp };
   const nm = netmode.readNetMode(); // 现读：角色是运行期可切的，别用启动快照
-  const where = process.env.BANDI_HOST ?? (nm.allowLan ? '0.0.0.0' : '127.0.0.1');
-  const serving = !netmode.isLoopback(where);
-  if (!serving) return { id: 'solo', label: '单机（只听本机）', detail: '' };
-  if (nm.acceptNodes) return { id: 'host', label: '总机（对外服务，收别的机器当节点）', detail: where };
-  return { id: 'branch', label: '分机（对外服务，但不收节点）', detail: where };
+  const where = process.env.BANDI_HOST ?? '0.0.0.0';
+  if (netmode.isLoopback(where)) return { id: 'solo', label: '单机（只听本机 —— BANDI_HOST 钉的调试形态）', detail: where };
+  if (nm.acceptNodes) return { id: 'host', label: '总机（收别的机器当节点）', detail: where };
+  return { id: 'branch', label: '分机（不收节点）', detail: where };
 }
 
 /** 执行节点（`node.mjs`）在这台机器上跑没跑 —— 只读锁文件，不碰进程 */
@@ -390,6 +387,44 @@ async function doRestart(promptOf = null, { assumeYes = false } = {}) {
     recordPort(port);
     return s.running ? `${green('已重启')} · 端口 ${port} · ${r.url}` : `${green('已启动')} · ${r.url}`;
   }
+  if (r.action === 'alien') {
+    return red(`端口 ${port} 被别的程序占着：${r.alien.map((a) => `${a.pid} ${a.name}`).join(', ')}`);
+  }
+  const tail = r.logTail ? `\n\n--- 日志尾部 ---\n${r.logTail}` : '';
+  return red(`没起来：${r.reason}${tail}`);
+}
+
+/**
+ * **重置监听**（2026-11-03，对齐 1Panel 的 `1pctl listen-ip` / `reset` 那条救援路）：
+ * 忽略 `BANDI_HOST`、按缺省 `0.0.0.0`（对外）强制重启。
+ *
+ * 救的是"钉错网卡把自己锁在门外"的现场：`BANDI_HOST=192.168.5.9` 钉下去之后
+ * 机器 IP 变了，页面打不开、界面上又没有开关 —— 命令行是唯一的门。
+ *
+ * ⚠️ 只救**这一次**：坏变量是从终端 / 自启脚本 / 服务单元里带进来的，这里没法
+ * 改那些地方 —— 所以事后必须点名"它还在哪，下次照旧"，别让用户以为重置是持久的。
+ */
+async function doResetHost(promptOf = null, { assumeYes = false } = {}) {
+  const s = await detect();
+  const pinned = String(process.env.BANDI_HOST ?? '').trim();
+  const port = s.running ? s.port : defaultPort;
+  if (s.running && !assumeYes) {
+    const warn = shellWarning(s);
+    const lines = [
+      `将忽略 BANDI_HOST、按缺省监听 0.0.0.0（对外）强制重启 —— 会打断正在跑的活。`,
+      warn,
+    ].filter(Boolean);
+    if (!(await confirm(`  ${lines.join('\n  ')}\n  确认重置？[y/N] `, promptOf))) return '没动。';
+  }
+  const r = await ensureRunning({ port, dataDir, logFile: LOG_FILE, force: s.running, stripEnv: ['BANDI_HOST'] });
+  if (r.action === 'started') {
+    recordPort(port);
+    const note = pinned
+      ? yellow(`\n\n⚠ 你的环境里仍钉着 BANDI_HOST=${pinned} —— 这次起服务我特意当它不存在；下次正常 start 还会被带进来。要永久生效，去设置它的地方改（终端 profile / 自启脚本 / 服务单元）。`)
+      : '';
+    return `${green('已重置')} · 监听缺省 0.0.0.0（对外） · ${r.url}${note}`;
+  }
+  if (r.action === 'already') return `已经在跑 —— ${r.url}（要重置得先重启：本次没动）`;
   if (r.action === 'alien') {
     return red(`端口 ${port} 被别的程序占着：${r.alien.map((a) => `${a.pid} ${a.name}`).join(', ')}`);
   }
@@ -745,6 +780,7 @@ const ITEMS = [
   },
   { k: '7', label: '节点状态', run: async () => doNode() },
   { k: '8', label: '模式说明（怎么切总机）', run: async () => doMode() },
+  { k: '9', label: '重置监听（忽略 BANDI_HOST，回到对外 0.0.0.0）', run: async (promptOf) => doResetHost(promptOf) },
   { k: '0', label: '退出', run: async () => '', exit: true },
 ];
 
@@ -797,6 +833,8 @@ const HELP = `班底 · 命令行
   bandi status [--json]    只出状态
   bandi start              起来（没在跑才真的起）
   bandi restart [-y]       强制重启（**会打断正在跑的活**，-y 跳过确认）
+  bandi reset-host [-y]    忽略 BANDI_HOST 重启（监听恢复缺省 0.0.0.0 对外；
+                           救"钉错网卡连不上页面"的现场 —— 见 bandi mode 的监听地址）
   bandi stop               停掉班底自己的服务（不碰别人的进程）
   bandi url [--open]       访问地址
   bandi logs [-n 40] [-f]  日志（-f 跟着走）
@@ -876,6 +914,15 @@ async function main() {
         return 2;
       }
       console.log(await doRestart(null, { assumeYes: yes }));
+      return (await detect()).running ? 0 : 1;
+    }
+
+    case 'reset-host': {
+      if (!TTY && !yes) {
+        console.error('非交互环境下要显式确认：bandi reset-host -y（会打断正在跑的活）');
+        return 2;
+      }
+      console.log(await doResetHost(null, { assumeYes: yes }));
       return (await detect()).running ? 0 : 1;
     }
 

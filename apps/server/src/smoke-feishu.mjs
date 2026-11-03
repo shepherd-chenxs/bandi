@@ -304,7 +304,7 @@ const child = spawn(process.execPath, [path.join(repoRoot, 'apps', 'server', 'sr
   cwd: repoRoot,
   env: {
     ...process.env,
-    BANDI_PORT: String(PORT),
+    BANDI_HOST: '127.0.0.1',    BANDI_PORT: String(PORT),
     BANDI_DATA: tmp2,
     BANDI_DB: path.join(tmp2, 'bandi.db'),
     BANDI_FEISHU: path.join(tmp2, 'feishu.json'),

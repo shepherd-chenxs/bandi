@@ -46,10 +46,9 @@ export function runtimesOk(id) {
  * UDP 8788 的应答（见 lan-announce.mjs）。**故意不带任何秘密** —— 这些字段
  * PRD P0-1 已经定成"局域网可见"（机器名、主机名、端口、能不能加入、版本）。
  *
- * ⚠️ `allowLan` 取的是**开关值**（`netmode.readNetMode().allowLan`），不是"现在听没听 0.0.0.0"：
- * 它仍是开关值的广播（`/api/lan` 页口径不动）。而**能不能加入**由 `netmode.isJoinable()`
- * 判（2026-10-20 增量 1，设计 §1.1/§1.2）：云端总机（`BANDI_HOST=0.0.0.0` 显式监听、开关值
- * 恒为 false）在这里必须回 `joinable:true` —— 否则节点探测会把它误报成"没开局域网开关"（E1091）。
+ * **能不能加入**由 `netmode.isJoinable()` 判（2026-10-20 增量 1，设计 §1.1/§1.2）：
+ * `joinable = acceptNodes && 实际听着非回环`（2026-11-03 起"对外服务"这一维已删，
+ * 监听缺省对外 —— 回环只剩 `BANDI_HOST=127.0.0.1` 钉出来的调试形态）。
  * 判定与 UDP 应答包共用同一函数，杜绝两份逻辑漂移。
  */
 

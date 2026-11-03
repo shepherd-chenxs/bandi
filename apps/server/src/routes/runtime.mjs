@@ -5,16 +5,14 @@ import path from 'node:path';
 import { sendJson, fail, readBody } from '../http.mjs';
 import { withExternals } from '../runtime-view.mjs';
 import { SERVER } from '../server-state.mjs';
-import { port, host, dataDir, trustProxy } from '../config.mjs';
+import { port, host } from '../config.mjs';
 import * as netmode from '../netmode.mjs';
 import * as store from '../store.mjs';
-import * as auth from '../auth.mjs';
 import * as runtimes from '../runtimes.mjs';
 import * as cliModels from '../cli-models.mjs';
 import * as lanAnnounce from '../lan-announce.mjs';
-import { authorizeLocal } from '../security/local-policy.mjs';
-import * as localSecret from '../security/local-secret.mjs';
-import { sourceOf } from '../security/source.mjs';
+// 网络周界闸（security/ipallow.mjs）的名单校验与归一化 —— 写库前把脏数据挡住
+import { normalizeIpList, normalizeDomain, clientIpOf, ipAllowed } from '../security/ipallow.mjs';
 
 export async function handleRuntime(req, res, url) {
   const devices = /^\/api\/devices$/.exec(url.pathname);
@@ -86,125 +84,83 @@ export async function handleRuntime(req, res, url) {
   }
 
   /**
-   * **原地重启监听** —— 界面上那颗「重启生效」打的（2026-10-16 加的）。
+   * 这台机器的**形态**（2026-10-16 起；2026-11-03 起"对外服务"这一维整个删除）。
    *
-   * 为什么要有（用户问"重启怎么重启？关掉软件吗？"）：监听地址只能在启动那一刻定 ✗，
-   * 于是那个开关一直挂着"改了要重启才生效" —— 而"重启"对用户就是关掉软件重开，太笨 ✗。
+   *   · 监听地址 —— **永远对外**（`BANDI_HOST` 可覆盖，缺省 `0.0.0.0`），是启动配置的事，
+   *     界面上没有开关、没有「重启」。曾经管这个的 `allowLan` 键与 `/api/restart` 已删。
+   *   · `acceptNodes` —— **角色**：总机（收别的机器当节点）/ 分机（不收）。**立刻生效**。
+   *     分机照样对外服务、手机照样能连，只是不发邀请码、`/api/hello` 的 `joinable` 为 false。
    *
-   * ⚠️ 两件事必须做对：
-   *   ① **先回响应**再动监听 —— 反过来的话，浏览器拿不到答复，只看到连接被断 ✗；
-   *   ② 开关打开后**鉴权会生效**（"只看监听地址"那条规则 ✓）→ 必须顺手把令牌
-   *      **塞进 Cookie** ✓，否则用户自己这个窗口下一次请求就被 401 挡在登录页外面 ✗
-   *      （它会以为"点了重启就坏了"）。
-   */
-  if (req.method === 'POST' && url.pathname === '/api/restart') {
-    /*
-     * **接口准入**（2026-10-31，IAM §8.5）：`/api/restart` 不在 `/api/local/` 前缀下，
-     * 前缀规则兜不住，所以它和本机接口共用同一张策略表（`security/local-policy.mjs` 里单列了一行）。
-     * 服务器形态下浏览器里那颗「重启」按钮不再是"谁都能点" —— 要么在本机，要么带 `X-Bandi-Local`。
-     */
-    const verdict = authorizeLocal({
-      method: req.method,
-      pathname: url.pathname,
-      source: sourceOf(req),
-      principal: req.bandiAuth ?? null,
-      hasSecret: localSecret.check(req),
-    });
-    if (!verdict.allow) {
-      fail(res, verdict.status, verdict.code, verdict.message, verdict.hint ? { hint: verdict.hint } : null);
-      return;
-    }
-    const nextHost = process.env.BANDI_HOST ?? (netmode.readNetMode().allowLan ? '0.0.0.0' : '127.0.0.1');
-    const willRequire = !netmode.isLoopback(nextHost);
-    if (willRequire) {
-      /*
-       * ⚠️ **先按"目标"监听地址算一次鉴权**，再把令牌塞进 Cookie。
-       *
-       * 为什么不能等 `SERVER.restart` 里去算（第一版就是那样，测试抓出来了）：回环形态下
-       * `auth.setup` **连令牌文件都不生成**（单机零安全痕迹 ✓）→ 这里的 `SERVER.AUTH.token` 是空字符串 ✗
-       * → Cookie 根本设不出来 → 用户点完「重启生效」，自己那个窗口立刻撞上登录页 ✗
-       * （他会以为"点了重启就坏了"）。先算这一次，令牌就造出来了 ✓。
-       */
-      Object.assign(SERVER.AUTH, auth.setup({ host: nextHost, dataDir, envToken: process.env.BANDI_TOKEN, trustProxy }));
-      if (SERVER.AUTH.token) res.setHeader('Set-Cookie', auth.cookieValue(SERVER.AUTH.token));
-    }
-    sendJson(res, 200, { ok: true, from: SERVER.boundHost, to: nextHost, requiresToken: willRequire });
-    setTimeout(SERVER.restart, 80); // 让这个响应先发出去
-    return;
-  }
-
-  /**
-   * 这台机器的**形态**（2026-10-16 起；2026-11-01 晚拆成两个键）。
-   *
-   *   · `allowLan`    —— **对外服务**（监听 0.0.0.0）。改动**要重启才生效** ——
-   *                      监听地址只能在进程启动那一刻定 ✗，所以返回值里带 `restartNeeded`，
-   *                      界面据此说"重启后生效"，而不是骗用户"已经开了"。
-   *   · `acceptNodes` —— **角色**：总机（收别的机器当节点）/ 分机（不收）。**立刻生效**，
-   *                      不碰监听地址，所以不产生"待重启"。分机照样对外服务、手机照样能连，
-   *                      只是不发邀请码、`/api/hello` 的 `joinable` 为 false。
-   *
-   * 两个键正交（用户 2026-11-01："把 thinkpad-p15 开分机模式。界面照样显示，手机照样可以连。
-   * 但是不提供邀请码，其他的机器也加不上去"）—— 所以 POST 必须是**部分更新**：
-   * 只传 `acceptNodes` 时不许动 `allowLan`，否则切一下角色就把对外服务记成了关。
-   *
-   * 真值存在数据目录的 `netmode.json` 里，`config.mjs` 读它 → **桌面壳 / 开机自启 / 命令行三种起法都认** ✓。
+   * 真值存在数据目录的 `netmode.json` 里（`netmode.mjs`）。
    */
   if (url.pathname === '/api/lan') {
     if (req.method === 'POST') {
       const body = await readBody(req);
       const patch = {};
-      if (typeof body?.allowLan === 'boolean') patch.allowLan = body.allowLan;
       if (typeof body?.acceptNodes === 'boolean') patch.acceptNodes = body.acceptNodes;
+      if (typeof body?.pairEnabled === 'boolean') patch.pairEnabled = body.pairEnabled;
+      /*
+       * 网络周界（2026-11-03，安全页「网络访问」卡）：授权 IP 白名单 + 域名绑定。
+       * 名单**先整体校验再入库**（一条写错就整份不存 —— 存一半等于让人以为防住了）；
+       * 域名归一化到纯主机名，空串 = 清除绑定。
+       */
+      if (Array.isArray(body?.whitelistIps)) {
+        const { ips, bad } = normalizeIpList(body.whitelistIps);
+        if (bad.length) return fail(res, 400, 'E1052', `授权 IP 里有写不对的：${bad.join('、')}（每行一个 IP 或网段，如 192.168.5.9 / 192.168.5.0/24）`);
+        patch.whitelistIps = ips;
+      }
+      if (typeof body?.whitelistEnabled === 'boolean') patch.whitelistEnabled = body.whitelistEnabled;
+      if (typeof body?.boundDomain === 'string') patch.boundDomain = normalizeDomain(body.boundDomain);
+      /*
+       * **开启白名单时自动把你当前的 IP 加进名单**（防锁死）：界面保存的瞬间，
+       * 你的浏览器就来自某个 IP —— 它不在名单里的话，保存成功 = 你自己立刻 403。
+       * 本机直连本来就放行（127.0.0.1），这条主要救的是从局域网/公网管理服务器的场景。
+       */
+      let addedMyIp = null;
+      if (patch.whitelistEnabled === true) {
+        const list = patch.whitelistIps ?? netmode.readNetMode().whitelistIps;
+        const mine = clientIpOf(req);
+        if (mine && !ipAllowed(mine, list)) {
+          patch.whitelistIps = [...list, mine];
+          addedMyIp = mine;
+        }
+      }
       if (Object.keys(patch).length) netmode.writeNetMode(patch);
       const now = netmode.readNetMode();
-      if (typeof patch.allowLan === 'boolean') {
-        console.log(`[网络] 对外服务：${patch.allowLan ? '开' : '关'}（重启后生效）`);
-      }
       if (typeof patch.acceptNodes === 'boolean') {
         console.log(`[网络] 角色：${patch.acceptNodes ? '总机（收节点）' : '分机（不收节点）'}（立即生效）`);
       }
+      if (typeof patch.whitelistEnabled === 'boolean') {
+        console.log(`[网络] 授权 IP 白名单：${patch.whitelistEnabled ? '开' : '关'}（${now.whitelistIps.length} 条${addedMyIp ? `，已自动加入你的 IP ${addedMyIp}` : ''}）`);
+      }
+      if (patch.boundDomain !== undefined && patch.boundDomain !== '') {
+        console.log(`[网络] 域名绑定：${patch.boundDomain}（仅本机直连与该域名可访问）`);
+      }
       /*
-       * **UDP 应答器跟着形态原地同步**（2026-10-20，设计 §5.5 三处同步点之一）。
-       * 关掉对外服务必须**立刻**停 bind —— 否则"关掉之后不再出现在候选里"这条 PRD 验收项
-       * 就得等重启才成立 ✗。切角色则不能停：分机也要应答（手机配对 / 机器发现靠它），
-       * 只是应答体里的 `joinable` 变成 false。
-       *
-       * 这里用 `SERVER.boundHost`（这个进程**实际**听着什么），不是配置里想要的：
-       * 开关刚打开、还没点重启时监听仍是回环，那时回应答毫无意义（别人根本连不进来）。
+       * UDP 应答器已下线（lan-announce.mjs 只剩状态存根）；sync 照调保形状，
+       * 让"状态里报的端口"跟当前进程对得上。
        */
-      lanAnnounce.sync({ ...now, explicit: !!process.env.BANDI_HOST, boundHost: SERVER.boundHost, httpPort: port });
+      lanAnnounce.sync({ ...now, boundHost: SERVER.boundHost, httpPort: port });
+      if (addedMyIp) return sendJson(res, 200, { ok: true, addedYourIp: addedMyIp });
     }
     const nm = netmode.readNetMode();
-    const want = nm.allowLan;
-    const boundLan = !netmode.isLoopback(SERVER.boundHost); // 这个进程**现在实际**听的是什么（原地重启后会变）
-    /*
-     * ⚠️ 监听地址是**环境变量显式指定**的时候，`allowLan` **管不着**（env 优先 ✓）——
-     * 云端那台就是这么起的（`BANDI_HOST=0.0.0.0`）。
-     * 所以这里如实回报 `explicit`，让界面把"对外服务"那一项锁成只读、并**按实际监听**说状态 ✓：
-     * 第一版没这条，于是云端那一页显示"关着 —— 只听本机"，而它其实对外开着 ✗（界面上说谎）。
-     *
-     * ⚠️ 但 `acceptNodes`（角色）跟 `explicit` **无关**：启动参数只定监听地址，
-     * 收不收节点随时能切。`explicit` 曾经让整张模式卡消失，正是这次要修的病根。
-     */
-    const explicit = !!process.env.BANDI_HOST;
+    const boundLan = !netmode.isLoopback(SERVER.boundHost); // 实际听着非回环吗（BANDI_HOST=127.0.0.1 调试时才是 false）
     return sendJson(res, 200, {
-      allowLan: want,
       acceptNodes: nm.acceptNodes,
       // 手机连接总开关（2026-11-02，「手机连接」页顶那颗；关 = 不发码 + 拒绝配对 + 断开全部）
       pairEnabled: nm.pairEnabled,
+      // 网络周界（2026-11-03，安全页「网络访问」卡）。yourIp：界面提示"你会被自动加进名单"用
+      whitelistEnabled: nm.whitelistEnabled,
+      whitelistIps: nm.whitelistIps,
+      boundDomain: nm.boundDomain,
+      yourIp: clientIpOf(req),
       // 给界面直读的角色名（省得每处自己 if）
       role: nm.acceptNodes ? 'hub' : 'branch',
-      explicit,
-      host: SERVER.boundHost, // **实际**听着的（原地重启后会变）—— 别报启动时那个，那会骗人 ✗
+      host: SERVER.boundHost, // **实际**听着的
       boundLan,
-      restartNeeded: explicit ? false : want !== boundLan,
       port,
       // 摆给用户看"让别的机器连这个地址"（也是加入命令里该用的地址）
       urls: netmode.lanUrls(port),
-      /*
-       * UDP 应答器**实际**在不在听（2026-10-20 加）：`on` 才是"别的机器能不能发现我"的真相。
-       * 开关开着但还没重启 → `on:false` —— 界面上那句"重启后生效"就有据可依了。
-       */
       discovery: lanAnnounce.state(),
     });
   }

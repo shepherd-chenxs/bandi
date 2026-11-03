@@ -22,8 +22,8 @@ const SCOPE_PANEL = 'panel';
  *   · `'network'` —— **只有从网络来**才要（本机终端不要）；
  *   · `'always'`  —— 任何来源都要（本项目的服务器形态用不到，留给极端部署）。
  *
- * ⚠️ `/api/restart` 也在这张表里：它不在 `/api/local/` 前缀下（`routes/runtime.mjs`），
- * 靠前缀规则兜不住，必须逐条登记。
+ * ⚠️ 这张表只收 `/api/local/` 前缀下的接口；前缀外的例外接口必须逐条登记
+ * （曾经的 `/api/restart` 就登记在这儿，2026-11-03 连接口一起删了）。
  */
 export const LOCAL_POLICY = [
   // 只读状态：网络来源也放行、不要秘密 —— 反代后面的设置页要显示本机 / 协作状态，
@@ -33,29 +33,29 @@ export const LOCAL_POLICY = [
   { method: 'GET', path: '/api/local/backups', principals: ['operator', 'admin'], secret: 'never' },
 
   /*
-   * ⚠️ 协作**加入/退出**都跟 `/api/restart` 同档（网络来源也不要秘密）。
+   * ⚠️ 协作**加入/退出**都是"网络来源也不要秘密"档。
    * 退出 2026-11-01（二十改续）放宽；加入 2026-11-02（三十一改）跟进一步，用户截图拍板：
-   * "这里应该是连接" —— 显式 BANDI_HOST 部署下 classifySource 判 ③ 把**桌面壳自己的
+   * "这里应该是连接" —— 对外监听形态下 classifySource 判 ③ 把**桌面壳自己的
    * 127.0.0.1 也判成 network**，秘密闸对 join 就是单向门：界面里「连接总机」永远 E4097，
-   * 只能复制 CLI 命令去终端跑，这正是 leave / export / restart 已经骂过并拆掉的同款形态。
+   * 只能复制 CLI 命令去终端跑，这正是 leave / export 已经骂过并拆掉的同款形态。
    * 风险论证（拿到 operator/admin 会话的人）：
    *   · join 的落点要**目标中心的接入码**背书 —— 码不对在对面就 E4040，指不动；
    *   · 接入成功只是多一条「协作」连接：中心能派卡、分公司回报状态，**本机通讯录 /
    *     项目 / 会话不经过这个接口外带**（与 leave "不外带数据" 同构）；
-   *   · 完全可逆（leave 即断），且这个人本来就能 restart / import / 删库，不缺这一下破坏面。
+   *   · 完全可逆（leave 即断），且这个人本来就能 import / 删库，不缺这一下破坏面。
    * 反代契约仍 deny /api/local/*（IAM §10.1.2），那一道比秘密更硬。
    */
   { method: 'POST', path: '/api/local/collab/join', principals: ['operator', 'admin'], secret: 'never' },
   { method: 'POST', path: '/api/local/collab/leave', principals: ['operator', 'admin'], secret: 'never' },
   /*
-   * ⚠️ 导出/导入快照从 2026-11-01 起跟 `/api/restart` 同档（**网络来源也不要秘密**），
-   * 用户拍板："不管是不是总机分机，这个导入导出都要一直显示"。总机形态监听 0.0.0.0，
+   * ⚠️ 导出/导入快照从 2026-11-01 起也是"网络来源不要秘密"档，
+   * 用户拍板："不管是不是总机分机，这个导入导出都要一直显示"。监听 0.0.0.0 时，
    * `classifySource` 判 ③ 把**桌面壳自己的 127.0.0.1 请求也判成 network** ——
-   * 秘密闸在这里就是「单向门」：开了局域网，浏览器里的导出/导入就永远 E4097，
-   * 正是 /api/restart 那条注释②骂过的形态。风险面（拿到 admin/operator 会话的人）：
+   * 秘密闸在这里就是「单向门」：对外一开，浏览器里的导出/导入就永远 E4097。
+   * 风险面（拿到 admin/operator 会话的人）：
    *   · 导出只是在服务端落一份快照文件、返回路径 —— 数据**不经由这个接口离开机器**；
    *   · 导入有确认框 + 导入前自动备份兜底；能拿到管理会话的攻击者本来就能删会话、
-   *     改配置，不缺这一下 —— 与 /api/restart 那条「risk ≤ 已有权限」的论证同构。
+   *     改配置，不缺这一下破坏面。
    * 反代部署契约仍然 deny /api/local/*（IAM §10.1.2），那一道比秘密更硬。
    */
   { method: 'POST', path: '/api/local/export', principals: ['operator', 'admin'], secret: 'never' },
@@ -66,17 +66,6 @@ export const LOCAL_POLICY = [
   { method: 'POST', path: '/api/local/probe', principals: ['operator', 'admin'], secret: 'network' },
   { method: 'POST', path: '/api/local/join', principals: ['operator', 'admin'], secret: 'network' },
   { method: 'POST', path: '/api/local/leave', principals: ['operator', 'admin'], secret: 'network' },
-  /*
-   * ⚠️ **`/api/restart` 是这张表里唯一一条"网络来源不要秘密"的破坏性动作**，故意的，
-   * 理由两条：
-   *   ① 它**不动数据、不外带数据** —— 只把监听地址换一下。风险是"别人能重启你的服务"，
-   *      而那已经被 `operator / admin` 挡住了（拿到管理会话的人本来就能删库，不缺这一下）；
-   *   ② 要求秘密会造成**单向门**：开了局域网 → 监听变 0.0.0.0 → 之后浏览器里所有请求都是
-   *      network 来源 → 想再点「重启」退回单机就永远 E4097，只能去终端敲 CLI。
-   *      一个"开了关不掉"的开关比这点风险糟得多。
-   * 部署契约里反代仍然 deny `/api/restart`（IAM §10.1.2），那一道比秘密更硬。
-   */
-  { method: 'POST', path: '/api/restart', principals: ['operator', 'admin'], secret: 'never' },
 ];
 
 /**

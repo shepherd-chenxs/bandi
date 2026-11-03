@@ -9,9 +9,9 @@ sequenceDiagram
     Op->>W: 设置 → 手机配对
     W->>S: GET /api/lan
     S-->>W: { boundLan, urls, port }
-    alt 未开局域网 (boundLan=false)
-        W-->>Op: 提示"切到总机模式并重启"，不出邀请码
-    else 已监听局域网
+    alt 回环调试形态 (boundLan=false，BANDI_HOST=127.0.0.1)
+        W-->>Op: 提示"这台机器只在回环调试形态，手机连不进来"，不出邀请码
+    else 已对外监听
         W->>S: POST /api/pair/tokens
         S->>P: handlePair
         P->>D: createPairCode(5min)  % 9 位数字、只存 sha256、发新码作废旧码

@@ -126,8 +126,16 @@ export async function handlePair(req, res, url) {
     }
 
     let issued;
+    /*
+     * **归属人 = 发码的人**（2026-11-03 设备绑人）。
+     * claim 是免令牌端点，服务端在那儿认不出"拿着手机的是谁"；唯一可信的"人"就是
+     * 点「生成邀请码」的这个人 —— 这张码本来就是"发给某个人的入场券"。
+     * 回落到第一个用户：零账号形态（单机、只有 token 文件）里 operator 就是机主本人，
+     * 与 `auth.actorUser` 对 operator 的既有口径、老库补齐口径三处一致。
+     */
+    const owner = auth.actorUser(req) ?? store.firstUser();
     try {
-      issued = store.createPairCode();
+      issued = store.createPairCode(undefined, owner?.id ?? null);
     } catch (err) {
       // 落库失败（库被锁 / 磁盘满）按设计 §3.2 回配对模块自己的 500 码，别落进顶层 catch 的通用 E5004
       console.error('[配对] E5701 · 邀请码落库失败', err);
@@ -142,7 +150,17 @@ export async function handlePair(req, res, url) {
      *     前端拿 urls[0] 画码、其余列出来可复制（多网卡 IP 选取最容易翻车，PRD §5-4）。
      */
     const pub = netmode.publicOrigin(req);
-    return sendJson(res, 200, { code, expiresAt, urls: pub ? [pub] : netmode.lanUrls(port) });
+    /*
+     * `owner`（2026-11-03 设备绑人）：这张码会把这台手机认到谁名下。
+     * 一回给前端是为了把话说清楚 ——「扫这个码连上来的手机，操作都算「张三」的」，
+     * 多人机器上这一句能省掉后面所有"这卡谁批的"的扯皮。
+     */
+    return sendJson(res, 200, {
+      code,
+      expiresAt,
+      owner: owner ? { id: owner.id, name: owner.name } : null,
+      urls: pub ? [pub] : netmode.lanUrls(port),
+    });
   }
 
   /* -------------------------------------------- 手机：凭邀请码换令牌（免令牌端点） */
@@ -183,9 +201,9 @@ export async function handlePair(req, res, url) {
     }
     const name = String(body?.name ?? '').trim().slice(0, 60) || '手机设备';
     /*
-     * 时序（设计 §4.1，2026-11-01 二刀改）：
+     * 时序（设计 §4.1，2026-11-01 二刀改；2026-11-03 加归属）：
      *   1. 按 `clientKey` 落设备行 —— 同一台手机（localStorage 的随机 ID）复用同一行，
-     *      不再长出第二条记录；
+     *      不再长出第二条记录；**归属人来自码**（发码那个人）；
      *   2. 原子核销邀请码（usedByDeviceId 记下是谁用的）。失败（并发抢码）就回滚：
      *      新建的行删掉，复用的行原样留着 —— 别把人家的真设备行清了；
      *   3. **顶替**：其它手机一律转成「已断开」（吊销令牌 + 打标记，**不删行**）——
@@ -193,12 +211,24 @@ export async function handlePair(req, res, url) {
      *      连回来（`/api/pair/resume`），要彻底清掉是操作员点「取消配对」；
      *   4. 自己名下的旧令牌也清了再发新的（复用行的场景）。
      */
+    /*
+     * 归属人（2026-11-03）：**码上写着谁就是谁**。码上没有（老码 / 发码时这台机器还
+     * 没有账号）→ 认第一个账号，与老库补齐、operator 回落三处同一口径；一个账号都没有
+     * → null（零账号形态，保持设备无主，不编一个出来）。
+     * 码上写着的人如果在发码之后被删了，`getUser` 查不到 → 同样回落，
+     * 免得配出一台"归属人不存在"的设备（那种设备下一次请求就会被 deviceAuthByToken 拒掉，
+     * 用户看到的是"配对成功但一打开就 401"，比直接回落更难查）。
+     */
+    const codeOwner = row.userId && store.getUser(row.userId) ? row.userId : store.firstUser()?.id ?? null;
     const { device, reused } = store.createDevice(name, body?.clientKey);
     if (!store.consumePairToken(secret, device.id)) {
       if (!reused) store.forgetDevice(device.id);
       noteFail(req);
       return fail(res, 409, 'E4701', '邀请码已被使用 —— 一个码只能配一台设备');
     }
+    // 归属只在这一步之后写：码真被这台手机核销掉了，才谈得上"这部手机是谁的"
+    // （先绑再核销的话，抢码失败的那台已经改了归属，而回滚只删新建的行，改不回来）
+    store.setDeviceOwner(device.id, codeOwner);
     store.revokeDeviceTokens(device.id);
     store.markConnected(device.id);
     const others = store.disconnectOtherDevices(device.id);
@@ -208,8 +238,11 @@ export async function handlePair(req, res, url) {
     // v2.8：与登录响应对齐，一并种 CSRF 双提交值（§10.2）—— 设备凭据在 Cookie 里，
     // 写请求要过 E4099 闸，没有 csrf 值手机落地页的写操作全会被挡。
     setDeviceCookies(res, deviceToken);
-    console.log(`[配对] 手机「${device.name}」已配对（${device.id}${reused ? '，同一台手机复用原记录' : ''}）`);
-    return sendJson(res, 200, { ok: true, deviceId: device.id, name: device.name });
+    const ownerName = codeOwner ? store.getUser(codeOwner)?.name : null;
+    console.log(
+      `[配对] 手机「${device.name}」已配对（${device.id}${reused ? '，同一台手机复用原记录' : ''}，归属于${ownerName ? `「${ownerName}」` : '（无账号，零账号形态）'}）`,
+    );
+    return sendJson(res, 200, { ok: true, deviceId: device.id, name: device.name, owner: ownerName });
   }
 
   /* -------------------------------------------- 手机：连回来（免令牌端点） */
@@ -244,7 +277,9 @@ export async function handlePair(req, res, url) {
     }
     setDeviceCookies(res, r.token);
     console.log(`[配对] 手机「${r.device.name}」连回来了（${r.device.id}）`);
-    return sendJson(res, 200, { ok: true, deviceId: r.device.id, name: r.device.name });
+    // owner 与 claim 回执同口径（2026-11-03 设备绑人）：连回来的成功页也亮一下归属人
+    const ownerName = r.device.userId ? store.getUser(r.device.userId)?.name ?? null : null;
+    return sendJson(res, 200, { ok: true, deviceId: r.device.id, name: r.device.name, owner: ownerName });
   }
 
   /* -------------------------------------------- 任意已登录：我是谁 */
@@ -252,7 +287,17 @@ export async function handlePair(req, res, url) {
     const a = req.bandiAuth;
     if (a?.kind === 'device') {
       const d = store.getDevice(a.deviceId);
-      return sendJson(res, 200, { kind: 'device', device: d ? { id: d.id, name: d.name, pairedAt: d.pairedAt } : null });
+      /*
+       * 归属人（2026-11-03 设备绑人）：手机上要能说清"我现在是以谁的身份在操作"。
+       * 这件事对多账号的机器尤其重要 —— 同一台电脑上，两个账号各配一台手机，
+       * 手机屏幕上写着名字，才不会出现"以为是自己批的、其实是别人"。
+       */
+      const owner = a.userId ? store.getUser(a.userId) : null;
+      return sendJson(res, 200, {
+        kind: 'device',
+        device: d ? { id: d.id, name: d.name, pairedAt: d.pairedAt } : null,
+        user: owner ? { id: owner.id, name: owner.name } : null,
+      });
     }
     /*
      * 登录用户（2026-10-28 第三刀）：**必须单独认出来**。

@@ -31,7 +31,7 @@ const check = (label, ok, detail = '') => {
 
 /** 一个够用的 MCP 客户端：起进程、按 id 对回包 */
 function mcpClient(env) {
-  const child = spawn(process.execPath, [SERVER], { env: { ...process.env, ...env }, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [SERVER], { env: { ...process.env, BANDI_HOST: '127.0.0.1', ...env }, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
   let buf = '';
   let stderr = '';
   const pending = new Map();

@@ -311,7 +311,7 @@ function pretty(base) {
  *   ② `E2050` 是班底但版本太旧 —— hello 里**没有** `joinable` 布尔字段，或 `caps` 没有
  *      `scope`（两个是同一个版本信号，归并到一个出口；**显式抛，不静默降级**）；
  *   ③ `E1091` 是班底但**没对外开放加入**（`joinable:false` —— 总机自己的声明，节点侧
- *      不读也不关心 allowLan 开关，增量 1 P0-A2）。
+ *      只读这一个布尔，增量 1 P0-A2）。
  * 另有 `E1092` 连不上（fetch 抛错）。
  */
 export async function probe(input) {

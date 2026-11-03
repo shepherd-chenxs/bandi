@@ -3,9 +3,9 @@
  *
  * 2026-10-21 拍板：**节点只当算力，不做「看总机面板」** —— 反代（client-proxy）已删，
  * 加入一律 compute（服务端写死，不信任前端）。本文件验证六件事
- * （两个数据目录 + 一台回环对照机 + 一个 mock 旧总机）：
- *   ① **云端总机可加入**：总机用 `BANDI_HOST=0.0.0.0` 显式监听、角色 `acceptNodes:true`
- *      （**不开**「允许局域网」开关）→ `/api/hello` 照样 `joinable:true`，节点 probe → 200；
+ * （两个数据目录 + 一台缺省对照机 + 一个 mock 旧总机）：
+ *   ① **总机可加入**：总机角色 `acceptNodes:true` → `/api/hello` 照样 `joinable:true`
+ *      （监听缺省对外，2026-11-03 起"对外服务"维度已删，不用也没法再"开开关"）；
  *   ①b **分机形态**（2026-11-01 晚新增）：同一台切成 `acceptNodes:false` → 监听没动、
  *      对外照样服务，但 `joinable:false` + `POST /api/nodes/invites` 409 E1091
  *      （用户定稿："把 thinkpad-p15 开分机模式……不提供邀请码，其他的机器也加不上去"）；
@@ -13,7 +13,9 @@
  *   ③ 真加入（故意带旧拼写的 `scopes:['compute','panel']`）→ 服务端强制 compute：
  *      `config.json` 七键 + `lastHost`、总机库 `node_tokens.scope` 落库 `compute`、
  *      本机 UI 还是自己的（无注入标记、`/api/state` 答本机库）、
- *      节点令牌摸总机面板 → 403 `E4031`（那道闸还在）；
+ *      节点令牌摸总机面板 → 403 `E4031`（那道闸还在）。
+ *      ⚠️ 节点侧实例缺省对外监听 → 鉴权自动开：本文件对它的调用都带**它自己的**
+ *      令牌（数据目录里首次启动生成的 `token` 文件）。
  *   ④ 退出总机：七键清、**`lastHost` 保留**（退出不清，覆盖写语义）；
  *   ⑤ 重加（旧拼写 scope 字符串 `'compute panel'`）→ 一样被强制成 `compute`；
  *   ⑥ 总机侧直连接口（node.mjs --join 那一路）仍收 scope 并归一化（总机侧机制保留）。
@@ -50,7 +52,11 @@ const readJson = (p) => { try { return JSON.parse(fs.readFileSync(p, 'utf8')); }
 const json = async (base, p, opts = {}) => {
   const r = await fetch(base + p, {
     method: opts.method ?? 'GET',
-    headers: { 'Content-Type': 'application/json', ...(opts.token ? { 'X-Bandi-Token': opts.token } : {}) },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(opts.token ? { 'X-Bandi-Token': opts.token } : {}),
+      ...(opts.local ? { 'X-Bandi-Local': opts.local } : {}),
+    },
     body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
     signal: AbortSignal.timeout(opts.timeout ?? 15000),
   });
@@ -59,9 +65,16 @@ const json = async (base, p, opts = {}) => {
 
 const kids = [];
 const startServer = (dataDir, port, extra = {}) => {
+  /*
+   * ⚠️ **剥掉继承来的 BANDI_HOST**（2026-11-03）：run-smokes 给所有子进程钉
+   * `BANDI_HOST=127.0.0.1` 当免鉴权底座，而这台用例里"节点侧缺省对外监听 → 鉴权自动开"
+   * 恰恰是被测前提（节点令牌/local_secret 都从这来）—— 不剥就跑到回环免鉴权上去，
+   * token 文件根本不会生成。三台要什么监听，用例自己显式给。
+   */
+  const { BANDI_HOST: _inheritedHost, ...baseEnv } = process.env;
   const c = spawn(process.execPath, [SERVER], {
     cwd: repoRoot,
-    env: { ...process.env, BANDI_DATA: dataDir, BANDI_PORT: String(port), ...extra },
+    env: { ...baseEnv, BANDI_DATA: dataDir, BANDI_PORT: String(port), ...extra },
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -97,8 +110,8 @@ const DATA_NODE = path.join(tmp, 'node');
 for (const d of [DATA_HOST, DATA_NODE]) fs.mkdirSync(d, { recursive: true });
 
 /*
- * 角色位（2026-11-01 晚）：显式监听**不再**自动等于"收节点"—— 总机要靠 `acceptNodes` 声明。
- * ⚠️ 故意**不写 `allowLan`**：① 要保的回归点正是"不点界面上的局域网开关、显式部署也能当总机"。
+ * 角色位（2026-11-01 晚）：**收节点**要靠 `acceptNodes` 声明 —— 监听（缺省 0.0.0.0）
+ * 跟角色再无关联，2026-11-03 起"对外服务"这一维整个删了。
  */
 fs.writeFileSync(path.join(DATA_HOST, 'netmode.json'), JSON.stringify({ acceptNodes: true }, null, 2), 'utf8');
 
@@ -116,28 +129,37 @@ let loop = null;
 try {
   host = startServer(DATA_HOST, PORT_HOST, { BANDI_HOST: '0.0.0.0', BANDI_TOKEN: OP_TOKEN });
   node = startServer(DATA_NODE, PORT_NODE);
-  loop = startServer(path.join(tmp, 'loop'), PORT_LOOP);
+  loop = startServer(path.join(tmp, 'loop'), PORT_LOOP, { BANDI_HOST: '127.0.0.1' }); // 回环对照：显式钉，别吃缺省
   if (!(await waitReady(BASE_HOST))) throw new Error('总机没起来：' + (kids[0]?.log() ?? '').slice(-300));
   if (!(await waitReady(BASE_NODE))) throw new Error('节点侧服务没起来');
   if (!(await waitReady(BASE_LOOP))) throw new Error('回环对照机没起来');
 
-  console.log('① 云端总机（BANDI_HOST=0.0.0.0 + acceptNodes:true，不开 allowLan）自己声明可加入');
+  /*
+   * 节点侧实例缺省对外监听 → 鉴权自动开、来源判 `network`（2026-11-03）：下面对它的
+   * probe / join / leave 调用都带 **它自己的** 令牌 ＋ `X-Bandi-Local`（数据目录
+   * `local_secret`）—— 这正是 `node.mjs --join` / CLI 那条路的真实形态（IAM §8.5）。
+   */
+  const nodeTok = fs.readFileSync(path.join(DATA_NODE, 'token'), 'utf8').trim();
+  const nodeLocal = fs.readFileSync(path.join(DATA_NODE, 'local_secret'), 'utf8').trim();
+  check('节点侧实例鉴权已开（令牌 + local_secret 落盘）', nodeTok.length > 20 && nodeLocal.length > 10, `${nodeTok.slice(0, 6)}…`);
+
+  console.log('① 总机（acceptNodes:true）自己声明可加入（监听缺省对外，没有开关可开）');
   const hello = await json(BASE_HOST, '/api/hello');
-  check('hello joinable=true 且 allowLan=false（角色说了算，开关值照实广播）',
-    hello.body?.joinable === true && hello.body?.allowLan === false && hello.body?.acceptNodes === true,
-    JSON.stringify({ joinable: hello.body?.joinable, allowLan: hello.body?.allowLan, acceptNodes: hello.body?.acceptNodes }));
+  check('hello joinable=true 且 acceptNodes=true（角色说了算）',
+    hello.body?.joinable === true && hello.body?.acceptNodes === true,
+    JSON.stringify({ joinable: hello.body?.joinable, acceptNodes: hello.body?.acceptNodes }));
   const helloLoop = await json(BASE_LOOP, '/api/hello');
-  check('回环对照机 joinable=false（判定输入是「实际监听」，不是部署方式）',
+  check('缺省对照机（没写 acceptNodes）joinable=false（角色说了算，跟监听无关）',
     helloLoop.body?.joinable === false, `joinable=${helloLoop.body?.joinable}`);
 
   console.log('\n①b 同一台切成「分机」：监听不动、但不再收节点（无需重启）');
   const toBranch = await json(BASE_HOST, '/api/lan', { method: 'POST', token: OP_TOKEN, body: { acceptNodes: false } });
-  check('POST /api/lan {acceptNodes:false} → 200，restartNeeded=false（角色不碰监听）',
-    toBranch.status === 200 && toBranch.body?.acceptNodes === false && toBranch.body?.restartNeeded === false
+  check('POST /api/lan {acceptNodes:false} → 200，role=branch（角色不碰监听）',
+    toBranch.status === 200 && toBranch.body?.acceptNodes === false && toBranch.body?.role === 'branch'
       && toBranch.body?.boundLan === true,
-    JSON.stringify({ acceptNodes: toBranch.body?.acceptNodes, restartNeeded: toBranch.body?.restartNeeded, boundLan: toBranch.body?.boundLan }));
+    JSON.stringify({ acceptNodes: toBranch.body?.acceptNodes, role: toBranch.body?.role, boundLan: toBranch.body?.boundLan }));
   const helloBranch = await json(BASE_HOST, '/api/hello');
-  check('分机仍对外服务（allowLan 照旧 true）但 joinable=false',
+  check('分机仍对外服务（监听不动）但 joinable=false',
     helloBranch.body?.acceptNodes === false && helloBranch.body?.joinable === false,
     JSON.stringify({ acceptNodes: helloBranch.body?.acceptNodes, joinable: helloBranch.body?.joinable }));
   const inviteBranch = await json(BASE_HOST, '/api/nodes/invites', { method: 'POST', token: OP_TOKEN });
@@ -151,24 +173,24 @@ try {
     JSON.stringify({ acceptNodes: backHub.body?.acceptNodes }));
 
   console.log('\n② probe 三级判定（顺序即语义）');
-  const pUp = await json(BASE_NODE, '/api/local/probe', { method: 'POST', body: { url: BASE_HOST } });
+  const pUp = await json(BASE_NODE, '/api/local/probe', { method: 'POST', token: nodeTok, local: nodeLocal, body: { url: BASE_HOST } });
   check('probe 云端总机 → 200（旧行为这里会误报 E1091）',
     pUp.status === 200 && pUp.body?.host?.joinable === true,
     `${pUp.status} host.joinable=${pUp.body?.host?.joinable}`);
-  const pLoop = await json(BASE_NODE, '/api/local/probe', { method: 'POST', body: { url: BASE_LOOP } });
+  const pLoop = await json(BASE_NODE, '/api/local/probe', { method: 'POST', token: nodeTok, local: nodeLocal, body: { url: BASE_LOOP } });
   check('probe 回环总机 → 400 E1091，文案中性（不提「局域网」）',
     pLoop.status === 400 && pLoop.body?.code === 'E1091' && !String(pLoop.body?.error ?? '').includes('局域网'),
     `${pLoop.status} ${JSON.stringify(pLoop.body?.error)}`);
-  const pOld = await json(BASE_NODE, '/api/local/probe', { method: 'POST', body: { url: BASE_MOCK } });
+  const pOld = await json(BASE_NODE, '/api/local/probe', { method: 'POST', token: nodeTok, local: nodeLocal, body: { url: BASE_MOCK } });
   check('probe 旧总机（hello 无 joinable 字段）→ 409 E2050，不静默降级',
     pOld.status === 409 && pOld.body?.code === 'E2050', `${pOld.status} ${pOld.body?.code ?? ''}`);
-  const pDead = await json(BASE_NODE, '/api/local/probe', { method: 'POST', body: { url: `http://127.0.0.1:${PORT_DEAD}` } });
+  const pDead = await json(BASE_NODE, '/api/local/probe', { method: 'POST', token: nodeTok, local: nodeLocal, body: { url: `http://127.0.0.1:${PORT_DEAD}` } });
   check('probe 没人听的地址 → 400 E1092', pDead.status === 400 && pDead.body?.code === 'E1092',
     `${pDead.status} ${pDead.body?.code ?? ''}`);
 
   console.log('\n③ 真加入（故意带旧拼写的 scopes —— 服务端必须强制成 compute）');
   const j1 = await json(BASE_NODE, '/api/local/join', {
-    method: 'POST', body: { url: BASE_HOST, code: await invite(), scopes: ['compute', 'panel'] } });
+    method: 'POST', token: nodeTok, local: nodeLocal, body: { url: BASE_HOST, code: await invite(), scopes: ['compute', 'panel'] } });
   check('join → 201，回显 scope = compute（旧拼写被写死覆盖）',
     j1.status === 201 && JSON.stringify(j1.body?.scope) === JSON.stringify(['compute']),
     `${j1.status} scope=${JSON.stringify(j1.body?.scope)}`);
@@ -184,11 +206,11 @@ try {
   check('总机库 node_tokens.scope 落库 compute',
     JSON.stringify(hubScopes(path.join(DATA_HOST, 'bandi.db'), bNodeId)) === JSON.stringify(['compute']),
     `nodeId=${bNodeId} ${JSON.stringify(hubScopes(path.join(DATA_HOST, 'bandi.db'), bNodeId))}`);
-  const st = await json(BASE_NODE, '/api/local/status');
+  const st = await json(BASE_NODE, '/api/local/status', { token: nodeTok });
   check('status() 顶层带出 lastHost', st.body?.lastHost?.url === BASE_HOST && st.body?.client?.joined === true,
     JSON.stringify(st.body?.lastHost ?? null).slice(0, 100));
   const html = await (await fetch(BASE_NODE + '/')).text();
-  const state = await json(BASE_NODE, '/api/state');
+  const state = await json(BASE_NODE, '/api/state', { token: nodeTok });
   /*
    * 判据（2026-11-01 改）：新数据目录首次启动出的是「班底 · 创建账号」引导页，
    * 里面没有 app.mjs —— 原来找 app.mjs 的写法在这条产品流程下必然红（不是节点注入）。
@@ -206,7 +228,7 @@ try {
     `${forbidden.status} ${forbidden.body?.code ?? ''}`);
 
   console.log('\n④ 退出总机：lastHost 保留');
-  const leave = await json(BASE_NODE, '/api/local/leave', { method: 'POST' });
+  const leave = await json(BASE_NODE, '/api/local/leave', { method: 'POST', token: nodeTok, local: nodeLocal });
   const after = readJson(cfgPath);
   check('leave → 200；七键清但 lastHost **仍在**（文件保留，退出不清）',
     leave.status === 200 && fs.existsSync(cfgPath)
@@ -216,7 +238,7 @@ try {
 
   console.log('\n⑤ 重加（旧拼写 scope 字符串）→ 照样强制 compute');
   const j2 = await json(BASE_NODE, '/api/local/join', {
-    method: 'POST', body: { url: BASE_HOST, code: await invite(), scope: 'compute panel' } });
+    method: 'POST', token: nodeTok, local: nodeLocal, body: { url: BASE_HOST, code: await invite(), scope: 'compute panel' } });
   check('重加 → 201，scope = compute（字符串拼写也一样被覆盖）',
     j2.status === 201 && JSON.stringify(j2.body?.scope) === JSON.stringify(['compute']),
     `${j2.status} scope=${JSON.stringify(j2.body?.scope)}`);
@@ -231,7 +253,7 @@ try {
     jDir.status === 201 && jDir.body?.scope === 'compute panel', `${jDir.status} scope=${JSON.stringify(jDir.body?.scope)}`);
 
   console.log('\n⑦ 收尾：退出还原');
-  const leave2 = await json(BASE_NODE, '/api/local/leave', { method: 'POST' });
+  const leave2 = await json(BASE_NODE, '/api/local/leave', { method: 'POST', token: nodeTok, local: nodeLocal });
   check('退出成功（把 spawn 的节点进程一起停掉）', leave2.status === 200, String(leave2.status));
 } catch (err) {
   console.log('\n跑挂了：' + String(err?.message ?? err));

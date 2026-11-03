@@ -6,7 +6,6 @@ import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { sendJson, fail, readBody, readRawBody } from '../http.mjs';
-import { SERVER } from '../server-state.mjs';
 import { port, host, dataDir, dbPath } from '../config.mjs';
 import * as netmode from '../netmode.mjs';
 import * as store from '../store.mjs';
@@ -345,29 +344,23 @@ export async function handleLocal(req, res, url) {
       }
 
       /*
-       * 2026-10-21 修（三态互斥的两个漏，用户实报）：
-       *   ① 清掉 allowLan —— 加入 = 放弃本机总机角色。不清的话，退出总机后机器会落到
-       *      「总机（等重启）」，而不是回单机。
-       *   ② 把监听收回环 —— 之前是总机的话现在听着 0.0.0.0，加入后到下次重启前一直敞着，
-       *      和"已加入必须只听回环"（SERVER.restart 里那条）直接矛盾。
-       * 先回响应再动监听：同 `/api/lan` 的写法，否则浏览器拿不到这个 201。
+       * 加入 = 放弃本机总机角色（角色位关掉、立即生效）。监听地址**不动** ——
+       * 对外服务由部署配置钉死（2026-11-03 起），分机照样界面照开、手机照连。
        */
       try {
-        netmode.writeNetMode(false);
+        netmode.writeNetMode({ acceptNodes: false });
       } catch (e) {
-        console.warn(`[本机] 加入后清 allowLan 失败：${e?.message ?? e}`);
+        console.warn(`[本机] 加入后收起总机角色失败：${e?.message ?? e}`);
       }
       console.log(`[本机] 加入了「${joined.hostLabel}」（${joined.controlPlane}）· 只当算力（${joined.scope.join('+')}）`);
-      sendJson(res, 201, {
+      return sendJson(res, 201, {
         ok: true,
         hostLabel: joined.hostLabel,
         hostHostname: joined.hostHostname,
         controlPlane: joined.controlPlane,
         scope: joined.scope,
         node,
-      });
-      setTimeout(SERVER.restart, 80); // 让 201 先发出去，再把监听收回环
-      return true;
+      }), true;
     }
 
     /* ---------------------------------------------------------------------- 退出总机 */
@@ -417,13 +410,13 @@ export async function handleLocal(req, res, url) {
       }
       const out = localMode.leave(); // 只清 config.json 里那七个字段，node.json 保留
       /*
-       * 退出后**一定回单机**（2026-10-21）：不清 allowLan 的话，之前开过总机的机器会落到
-       * 「总机（等重启）」—— 与「退出总机，回到本机」的文案和"三态互斥"都不符。
+       * 退出后**一定回分机**（角色位关掉、立即生效）——「退出总机，回到本机」：
+       * 本机数据原样、界面照开、手机照连，只是不再当任何总机的节点、也不收节点。
        */
       try {
-        netmode.writeNetMode(false);
+        netmode.writeNetMode({ acceptNodes: false });
       } catch (e) {
-        console.warn(`[本机] 退出后清 allowLan 失败：${e?.message ?? e}`);
+        console.warn(`[本机] 退出后收起总机角色失败：${e?.message ?? e}`);
       }
       console.log('[本机] 已退出总机 —— 本机数据原样（从来没被写过）');
       return sendJson(res, 200, { ok: true, killed, autoRemoved, note, local: localDataInfo(), nodeId: out.nodeId }), true;

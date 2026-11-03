@@ -81,6 +81,9 @@ import { runtimeOptions, runtimesOk, withExternals } from './runtime-view.mjs';
 // CSRF 双提交（IAM §10.2，2026-10-31 Phase 1 收尾）：Cookie bandi_csrf 与请求头
 // X-Bandi-CSRF 必须一致 —— 第三道闸，与 guardWrite 的 Origin / X-Bandi 并存
 import * as csrf from './security/csrf.mjs';
+// 网络周界闸（2026-11-03，对齐 1Panel 安全页）：授权 IP 白名单 + 域名绑定，
+// 排在 guardHost 之后、令牌闸之前 —— 名单外的 IP 连登录口都不给摸
+import { guardNetwork } from './security/ipallow.mjs';
 
 /** 客户端 IP（审计与会话记录用；IPv4-mapped 前缀剥掉） */
 const clientIp = (req) => String(req.socket?.remoteAddress ?? '').replace(/^::ffff:/, '');
@@ -91,7 +94,6 @@ function auditKindOf(pathname) {
   if (pathname.startsWith('/api/local/')) return 'machine.local';
   if (pathname.startsWith('/api/collab/')) return 'collab';
   if (pathname.startsWith('/api/users') || pathname.startsWith('/api/roles')) return 'user.change';
-  if (pathname === '/api/restart') return 'restart';
   return 'write';
 }
 
@@ -109,7 +111,6 @@ function helloPayload() {
     label: me.label,
     hostname: me.hostname,
     httpPort: port,
-    allowLan: nm.allowLan,
     /*
      * 角色位（2026-11-01 晚）：true = 总机（收别的机器当节点），false = 分机
      * （对外服务照旧、手机照连，但不发邀请码、别的机器加不上去）。
@@ -439,7 +440,7 @@ SERVER.AUTH = auth.setup({ host, dataDir, envToken: process.env.BANDI_TOKEN, tru
  */
 localSecret.ensure();
 if (localSecretDisabled) {
-  console.warn('[安全] BANDI_LOCAL_SECRET=off：破坏性本机动作（导出/导入/加入/重启）不再要求 X-Bandi-Local —— 请确认反代已 deny 这些路径');
+  console.warn('[安全] BANDI_LOCAL_SECRET=off：破坏性本机动作（导出/导入/加入）不再要求 X-Bandi-Local —— 请确认反代已 deny 这些路径');
 }
 /*
  * **首个管理员的引导码**（IAM §8.6）：服务器形态 + 库里零账号时才有意义。
@@ -447,11 +448,9 @@ if (localSecretDisabled) {
  */
 if (setupCode.sync()) console.warn('[安全] 还没有任何账号：创建第一个管理员需要 X-Bandi-Setup（值在数据目录 setup_code 文件里），或用 `bandi user create <名字> --admin`');
 /*
- * 这个进程**现在**听的是哪儿 —— 不只是启动时那个 `host`。
- *
- * 为什么要有它（2026-10-16）：加了「重启生效」那颗按钮之后，监听地址会**原地换**（见 restartListening），
- * 于是"配置里想要什么"（netmode.json）和"实际听着什么"可能不再是一回事，
- * `/api/lan` 要如实分辨这两者 ✓。
+ * 这个进程**现在**听的是哪儿 —— `SERVER.boundHost`（`server-state.mjs`）。
+ * 监听地址整个进程生命周期不变（2026-11-03 起没有"原地重启监听"这回事了），
+ * 但它仍可能不等于 `config.host` 的字面量（`0.0.0.0` 实际 bind 后的回报），照实分辨。
  */
 /**
  * 定时任务（`/api/schedules`，2026-10-17）。
@@ -490,6 +489,19 @@ const server = http.createServer(async (req, res) => {
       store.deny({ kind: 'authz.deny', action: `${req.method} ${new URL(req.url, 'http://x').pathname}`, reason: `E3002 ${badHost}`, ip: clientIp(req), ua: req.headers['user-agent'] ?? '' });
     } catch { /* 审计绝不拖垮请求 */ }
     return fail(res, 403, 'E3002', badHost);
+  }
+
+  /*
+   * 网络周界闸（2026-11-03）：授权 IP 白名单（E3003）与域名绑定（E3004）。
+   * 与 Host 守卫同一层 —— 排在令牌闸**之前**：名单外的来源连登录口都别摸，
+   * 这才对得起"网络层的门"。拒绝同样当场记审计，口径与上一条一致。
+   */
+  const netDenied = guardNetwork(req);
+  if (netDenied) {
+    try {
+      store.deny({ kind: 'authz.deny', action: `${req.method} ${new URL(req.url, 'http://x').pathname}`, reason: `${netDenied.code} ${netDenied.message}`, ip: clientIp(req), ua: req.headers['user-agent'] ?? '' });
+    } catch { /* 审计绝不拖垮请求 */ }
+    return fail(res, 403, netDenied.code, netDenied.message);
   }
 
   const url = new URL(req.url, `http://${req.headers.host}`);
@@ -547,6 +559,24 @@ const server = http.createServer(async (req, res) => {
 
     if (!url.pathname.startsWith('/api/')) {
       /*
+       * CSRF 值的自愈补种（2026-11-01）：浏览器里可能只有 `bandi_sid`/`bandi_token`
+       * 而没有 `bandi_csrf`（老版本种的 Cookie、或用脚本/工具手工设过令牌），
+       * 这时所有写请求都会 E4099，用户看到的就是"按钮点了没反应"。
+       * 每个 HTML 页面响应顺手补一枚（已有就不动）—— 打开一次页面即自愈。
+       *
+       * ⚠️ 必须放在 `/pair` 分支**前面**（2026-11-03 实机踩过 E4099）：`bandi_csrf`
+       * 只活 1 天（Max-Age=86400），而 bandi_sid / bandi_token 活 30 天 / 1 年 ——
+       * "凭据还在、csrf 先过期"是常态而非意外。这对 Cookie 一旦凑不齐，手机扫码
+       * 落地页的 claim 就是"带 Cookie 凭据的写请求"，直接 403 E4099（配对失败）。
+       * 最初补种写在 /pair 分支之后，而 /pair 提前 return 了，扫码页恰好是唯一
+       * 自愈不了、又偏偏最需要自愈的页面 —— 手机没有地址栏，用户只会"重新扫码"，
+       * 死循环。放在这里 = 任何 HTML 响应（含 /pair）都先补种再说话。
+       */
+      const wantsHtmlPage = url.pathname === '/' || url.pathname === '/pair' || url.pathname === '/pair.html'
+        || url.pathname.endsWith('.html')
+        || String(req.headers.accept ?? '').includes('text/html');
+      if (wantsHtmlPage && !csrf.valuesOf(req).cookie) res.setHeader('Set-Cookie', csrf.cookieFor(csrf.mint()));
+      /*
        * 扫码落地页（2026-11 手机端增量）：`GET /pair?token=…` → apps/web/pair.html。
        * 不能走 serveStatic('/pair') —— 它按路径找文件会 404；这里显式映射。
        * 页面校验不做在这里：guard 已豁免这条路（免令牌），token 的校验在 claim 接口。
@@ -562,15 +592,6 @@ const server = http.createServer(async (req, res) => {
         }
         return;
       }
-      /*
-       * CSRF 值的自愈补种（2026-11-01）：浏览器里可能只有 `bandi_sid`/`bandi_token`
-       * 而没有 `bandi_csrf`（老版本种的 Cookie、或用脚本/工具手工设过令牌），
-       * 这时所有写请求都会 E4099，用户看到的就是"按钮点了没反应"。
-       * 每个 HTML 页面响应顺手补一枚（已有就不动）—— 打开一次页面即自愈。
-       */
-      const wantsHtmlPage = url.pathname === '/' || url.pathname.endsWith('.html')
-        || String(req.headers.accept ?? '').includes('text/html');
-      if (wantsHtmlPage && !csrf.valuesOf(req).cookie) res.setHeader('Set-Cookie', csrf.cookieFor(csrf.mint()));
       if (serveStatic(res, url.pathname)) return;
       res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
       res.end('没有这个文件');
@@ -710,7 +731,6 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-SERVER.restart = restartListening; // 原地重启监听：handler 里通过 SERVER 调（见 server-state.mjs）
 const reaped = store.reapStaleRuns();
 if (reaped) console.log(`清理了 ${reaped} 条被中断的运行`);
 
@@ -950,16 +970,14 @@ try {
 }
 
 /**
- * 启动横幅。抽成函数是为了**原地重启之后能再打一遍** ✓
- * —— 不重打的话，日志里"监听 127.0.0.1"会一直骗着后面看日志的人 ✗。
+ * 启动横幅（listen 回调里打一遍；没有"原地重启"了，监听整个进程生命周期不变）。
  */
 function logListen() {
   /*
-   * **UDP 应答器跟着监听地址原地启停**（2026-10-20，设计 §5.5 之一）：
-   * 启动那一刻、以及每次「重启生效」之后都要对一次 ——
-   * `sync` 的判据是"开关开 且 真的听着非回环"，所以这里传的是 `SERVER.boundHost`（实际监听）。
+   * 应答器已下线（lan-announce.mjs 只剩状态存根）；sync 照调保形状，
+   * 让状态里报的端口跟当前进程对得上。
    */
-  lanAnnounce.sync({ ...netmode.readNetMode(), explicit: !!process.env.BANDI_HOST, boundHost: SERVER.boundHost, httpPort: port });
+  lanAnnounce.sync({ ...netmode.readNetMode(), boundHost: SERVER.boundHost, httpPort: port });
   /*
    * 启动就把**数据落在哪儿**打出来。
    * 部署排查时最费时间的一类问题是"我在看的到底是哪个库"——
@@ -991,54 +1009,6 @@ function logListen() {
     console.log(`访问令牌：在数据目录的 token 文件里（0600，不打印到日志）· 来自 ${SERVER.AUTH.from}${SERVER.AUTH.created ? '，本次新生成' : ''}`);
     console.log('要求令牌：浏览器打开首页填一次（会记进 Cookie），节点/脚本用 X-Bandi-Token 头。');
   } else {
-    console.log('只监听回环 —— 免鉴权（桌面版 / 单机的形态）。');
+    console.log('只监听回环 —— 免鉴权（BANDI_HOST=127.0.0.1 显式钉出来的调试形态）。');
   }
-}
-
-/**
- * **原地重启监听**（`POST /api/restart` 打它）。
- *
- * 为什么要这个（2026-10-16 用户问"重启怎么重启？关掉软件吗？能不能做一个重启按钮"）：
- * 监听地址只能在**启动那一刻**定 ✗，所以那个局域网开关一直是"改了要重启才生效" ——
- * 而"重启"对用户意味着关掉软件重开，太笨 ✓。这里改成**只换监听**：
- *   · 进程不退出（pid 不变 → 桌面壳的监管关系不变 ✓、日志重定向也不丢 ✓）；
- *   · 关掉旧监听、丢掉挂着的长轮询（节点会自己重连 ✓），再按最新配置 listen ✓。
- *
- * 配置从 `netmode.json` + `BANDI_HOST` 重新算 —— 跟启动时**同一套优先级** ✓。
- */
-function restartListening() {
-  /*
-   * ⚠️ **已加入 = 节点形态，必须只听回环**（2026-10-20，设计 §4.4）：
-   * 节点令牌虽已收窄成 compute，但本机服务里还有导出等本机接口 —— 不该敞给网段。
-   * 这里**现读** `localMode.isJoined()`（join/leave 会原地改它，启动时的快照会过期），
-   * 与 `config.mjs` 启动时那份是同一套优先级（`BANDI_HOST` 仍最优先）。
-   */
-  const want = process.env.BANDI_HOST
-    ?? (localMode.isJoined()
-      ? '127.0.0.1'
-      : netmode.readNetMode().allowLan ? '0.0.0.0' : '127.0.0.1');
-  if (want === SERVER.boundHost) {
-    console.log(`[网络] 重启监听：本来就是 ${SERVER.boundHost}，不用动`);
-    /*
-     * 这里也要对一次（设计 §5.5 的三处同步点之一）：开关可能刚变过、而监听地址恰好没变
-     * （比如 `BANDI_HOST` 显式指定着，或者本来就在回环上）—— 应答器该停就得停。
-     */
-    lanAnnounce.sync({ ...netmode.readNetMode(), explicit: !!process.env.BANDI_HOST, boundHost: SERVER.boundHost, httpPort: port });
-    return;
-  }
-  console.log(`[网络] 重启监听：${SERVER.boundHost} → ${want}`);
-  server.close(() => {
-    SERVER.boundHost = want;
-    // 鉴权要跟着新的监听地址重算（"只看监听地址"那条规则）
-    Object.assign(SERVER.AUTH, auth.setup({ host: want, dataDir, envToken: process.env.BANDI_TOKEN }));
-    /*
-     * UDP 应答器同步（三处同步点之二）：**在 listen 之前**把上一份停掉 ——
-     * 开关是关的时候就这一下就够（`sync` 见到 on=false 直接 stop，不等 listen 回调）。
-     * 开关是开的时候它会重新 bind，`logListen` 里那次是幂等的第二遍。
-     */
-    lanAnnounce.sync({ ...netmode.readNetMode(), explicit: !!process.env.BANDI_HOST, boundHost: SERVER.boundHost, httpPort: port });
-    server.listen(port, SERVER.boundHost, logListen);
-  });
-  // 挂着的长轮询（领活那种 20 秒的）别挡着 close 回调 —— 节点收到断开自己会重连 ✓
-  server.closeAllConnections?.();
 }

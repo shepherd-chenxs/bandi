@@ -43,39 +43,13 @@ export const dataDir = process.env.BANDI_DATA
 export const dbPath = process.env.BANDI_DB ?? path.join(dataDir, 'bandi.db');
 
 /**
- * 监听地址。**默认只听本机。**
+ * 监听地址。**永远对外**（2026-11-03 用户拍板：手机和节点永远都可以连进来，
+ * 让不让进由「分机/总机」和「手机连接」两个开关管，不由监听地址管）。
  *
- * 这个服务端**还没有鉴权**（`LOCAL_USER` 是写死的，来源守卫只挡"借浏览器使坏"，
- * 不认证任何调用方）。所以 `0.0.0.0` 等于把 agent 的控制权交出去。
- * 要远程访问，二选一：
- *   · 走 SSH 隧道 —— 不用改任何配置，也不用开端口（**推荐先这么用**）；
- *   · 设 `BANDI_HOST=0.0.0.0`，同时把访问来源加进 `BANDI_ORIGINS`，并且**自己确保外面有保护**
- *     （防火墙 / 反向代理的鉴权 / 只在内网）。
+ * `BANDI_HOST` 仍可显式覆盖（部署要钉具体网卡地址；`127.0.0.1` 只留给调试）。
+ * 曾经的 `allowLan` 键与"只听本机"形态已整个删除 —— 配置总会有遗漏，
+ * 漏出来的必须是"对外服务且强制鉴权"这一侧，而不是裸听回环的假安全感。
  */
-/*
- * 桌面版那个「允许局域网内的机器加入」开关（2026-10-16）。
- *
- * ⚠️ 为什么在这儿读、而不是在桌面壳里读：**监听地址只能在进程启动那一刻定** ✗，
- * 而拉起控制面的有三个入口（桌面壳 / 开机自启 / 命令行）—— 只在壳里读的话，
- * 这台机器上如果是自启起的控制面，用户点了开关会"没反应" ✗。
- * 放在这里，三种起法都按同一个开关走 ✓。
- *
- * 默认关。`BANDI_HOST` 显式给了就以它为准（脚本 / 部署仍能压过去 ✓）。
- */
-const netMode = (() => {
-  try {
-    return JSON.parse(fs.readFileSync(path.join(dataDir, 'netmode.json'), 'utf8'));
-  } catch {
-    return {}; // 没这个文件 = 默认（只听回环）
-  }
-})();
-
-/**
- * 启动那一刻的开关值（`host` 的默认值、cli.mjs 的形态标签用它）。
- * ⚠️ 只代表**进程启动时**的状态 —— 运行期别拿它做判断，用 `lanOrigins()` /
- * `netmode.readNetMode().allowLan`（那次修复的教训就在这儿）。
- */
-export const lanAllowed = netMode?.allowLan === true;
 
 /*
  * **这台机器已经加入某台总机了吗**（2026-10-20，设计 §4.4）。
@@ -138,15 +112,13 @@ export function writeReplyStyle(id) {
 
 
 /**
- * 监听地址。
+ * 监听地址：`BANDI_HOST` 优先（部署钉具体网卡 / 调试钉回环），缺省 `0.0.0.0`。
  *
- * ⚠️ **已加入 = 瘦客户端，必须只监听回环**（2026-10-20，设计 §4.4）：
- * 否则一台昨天开过局域网的机器（`netmode.json` 里 `allowLan:true`）今天变成瘦客户端，
- * 会以 `0.0.0.0` + **强制鉴权**起来 —— 等于把**总机的面板令牌**敞给整个网段。
- *
- * `BANDI_HOST` 仍然最优先（部署 / 调试要能压过去）。
+ * ⚠️ 曾经"已加入 = 瘦客户端，必须只听回环"（2026-10-20 设计 §4.4）那条已随
+ * `allowLan` 一起删除（2026-11-03）：分机也要手机照连、界面照开（用户 2026-11-01 原话），
+ * 而非回环监听**自动强制鉴权**（auth.mjs"只看监听地址"那条规则），网段侧不是裸的。
  */
-export const host = process.env.BANDI_HOST ?? (clientJoined ? '127.0.0.1' : lanAllowed ? '0.0.0.0' : '127.0.0.1');
+export const host = process.env.BANDI_HOST ?? '0.0.0.0';
 
 /**
  * **声明「我在可信反代 / 隧道后面」**（IAM §5.2 / §5.3，2026-10-31 新增）。
@@ -170,48 +142,19 @@ export const localSecretDisabled = /^(0|off|false|no)$/i.test(String(process.env
 
 /**
  * 允许的**来源**（写请求的来源白名单，CSRF 那道闸）。
- * 默认只有本机自己；逗号分隔，例如：
+ * 固定部分是 `BANDI_ORIGINS` 声明的（服务器部署时明确给出来的），逗号分隔，例如：
  *   `BANDI_ORIGINS=http://192.168.1.9:18787,https://bandi.example.com`
  *
- * ⚠️ 不配这个、只改 `BANDI_HOST`，远端浏览器打开页面会**能看不能动**（写请求全 403）。
+ * 本机的局域网地址**不用配**：监听永远对外（2026-11-03），`lanOrigins()` 恒把它们
+ * 放进白名单 —— 不然页面在 `http://192.168.x.x:18787` 上打得开、却什么都改不了
+ * （2026-11 修的"手机扫码卡正在配对"就是这条的病根，别再退回"导入时冻结"的写法）。
+ *
  * 节点不受影响：它用脚本调接口，浏览器不带 Origin，走的是放行那条路。
- *
- * 开了「允许局域网加入」时，本机的局域网地址自动放行 ✓ —— 不然用户还以为开关坏了
- * （页面在 `http://192.168.x.x:18787` 上打得开、却什么都改不了 ✗）。
- * 但这份"自动放行"**不能在导入时算一次冻结** —— 见下面 `lanOrigins()` 的注释。
  */
-
-/*
- * 「允许局域网加入」开关是**运行期**可变的（`POST /api/lan` 写 netmode.json +
- * `POST /api/restart` 原地重听 —— 不重载模块）。2026-11 修的"手机扫码卡正在配对"
- * 就是栽在这儿：局域网来源在导入时算了一次冻结进 `extraOrigins`，用户切完开关，
- * 监听已经变 0.0.0.0、页面打得开，Origin 白名单却还是空的 → 局域网写请求全 403 E3001。
- *
- * 所以动态部分拆成 `lanOrigins()`，`http.allowedOrigins()` **每次现算**：
- *   · 开关值：mtime 缓存 —— 文件没动就不重读（不是每请求读盘 ✗），
- *     `POST /api/lan` 写完文件 mtime 一变自动失效，不需要谁手工通知 ✓；
- *   · 网卡列表：缓存 60 秒（对齐 http.mjs `localAddresses()` 的口径，DHCP 换 IP 一分钟内自愈）。
- */
-
-let netModeCache = null; // { mtimeMs, allowLan }
-function lanAllowedNow() {
-  const file = path.join(dataDir, 'netmode.json');
-  try {
-    const st = fs.statSync(file);
-    if (netModeCache && netModeCache.mtimeMs === st.mtimeMs) return netModeCache.allowLan;
-    const j = JSON.parse(fs.readFileSync(file, 'utf8'));
-    const allowLan = j?.allowLan === true;
-    netModeCache = { mtimeMs: st.mtimeMs, allowLan };
-    return allowLan;
-  } catch {
-    return false; // 没这个文件 / 坏了 = 默认（不开局域网），与启动时 netMode 的口径一致
-  }
-}
 
 let lanNicsAt = 0;
 let lanNics = [];
 export function lanOrigins() {
-  if (!lanAllowedNow()) return [];
   const now = Date.now();
   if (now - lanNicsAt > 60_000) {
     lanNics = [];

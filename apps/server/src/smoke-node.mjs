@@ -60,7 +60,7 @@ function runNodeOnce() {
       cwd: repoRoot,
       env: {
         ...process.env,
-        BANDI_CONTROL_PLANE: BASE,
+        BANDI_HOST: '127.0.0.1',        BANDI_CONTROL_PLANE: BASE,
         BANDI_NODE_STATE: NODE_STATE,
         // 节点自己也需要一个库路径吗？不需要 —— 它不碰库，只用身份文件
       },
@@ -78,7 +78,7 @@ let server = null;
 try {
   server = spawn(process.execPath, [SERVER], {
     cwd: repoRoot,
-    env: { ...process.env, BANDI_PORT: String(PORT), BANDI_DATA: tmp, BANDI_DB: DB },
+    env: { ...process.env, BANDI_HOST: '127.0.0.1', BANDI_PORT: String(PORT), BANDI_DATA: tmp, BANDI_DB: DB },
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
