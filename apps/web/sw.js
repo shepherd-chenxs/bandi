@@ -126,7 +126,7 @@
    v40（2026-11-03 三十改）：toast 送进**顶层**（popover API）—— 开着的 dialog 在浏览器
    顶层，普通层的 toast 被连 backdrop 一起盖住，弹窗里的一切报错（校验失败 / 接口 403）
    在手机上都"看不见"，表现成"点了没反应"（建卡 403 这么藏了一下午）—— shell.mjs。 */
-const VERSION = 'v41';
+const VERSION = 'v42';
 const CACHE = `bandi-static-${VERSION}`;
 
 /*
