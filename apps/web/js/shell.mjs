@@ -440,6 +440,23 @@ export function toast(msg, kind = 'info') {
   // 多于 4 条：先把最旧的赶走（连着失败十次不该糊一屏）
   while (wrap.children.length >= 4) wrap.firstElementChild?.remove();
 
+  /*
+   * 同文案去重（2026-11-03 实报：连点「复制地址」，顶层里竖着堆出一列“已复制地址”）。
+   * 最新一条**文案相同**（复制成功/网络重试这类高频动作很容易连点）→ 不再加新的，
+   * 把旧的那条重播一次出现动画、计时清零 —— 用户得到“刚发生”的反馈，屏幕不糊。
+   * kind 一起比：同文案不同级别（info→error）算不同消息，照常加新条。
+   */
+  const lastEl = wrap.lastElementChild;
+  if (
+    lastEl &&
+    lastEl.querySelector('.toast-text')?.textContent === text &&
+    lastEl.classList.contains(kind) &&
+    typeof lastEl._refresh === 'function'
+  ) {
+    lastEl._refresh();
+    return;
+  }
+
   const el = document.createElement('div');
   el.className = `toast ${kind}`;
   el.setAttribute('role', kind === 'error' ? 'alert' : 'status');
@@ -463,6 +480,14 @@ export function toast(msg, kind = 'info') {
   // 悬停暂停：人多半是在读那句错误，别读一半自己没了
   el.onmouseenter = stop;
   el.onmouseleave = () => { if (left > 400) start(); };
+  // 同文案去重的重播口（见上面的去重注释）：动画重播 + 计时清零重来
+  el._refresh = () => {
+    stop();
+    left = TOAST_KEEP[kind] ?? TOAST_KEEP.info;
+    el.classList.remove('in');
+    requestAnimationFrame(() => el.classList.add('in'));
+    start();
+  };
   start();
 }
 

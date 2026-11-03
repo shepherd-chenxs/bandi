@@ -4007,6 +4007,15 @@ details.tc-replies[open] > .tc-replies-toggle .tc-replies-unfold { display: inli
 .toast-wrap { position: fixed; right: 22px; bottom: 22px; z-index: 90;
               display: flex; flex-direction: column; gap: 8px; align-items: flex-end;
               pointer-events: none; }
+/* 顶层化之后的 UA 样式回收（2026-11-03 实报）。#toastWrap 用 popover API 进顶层
+   （压过 dialog，见 shell.mjs toast），但浏览器对 [popover] 自带一整套默认样式：
+   inset:0 + margin:auto + width/height:fit-content + border:solid + Canvas 底。
+   上面只覆盖了 right/bottom，残留的 top:0/left:0 + auto margin 会把整个容器
+   **水平居中**（toast 从右下角跑到屏幕中央竖着堆）；toast 走光后空壳还挂着
+   自带边框和底色，渲染成一个"黑方块"。这里整套回收掉。 */
+#toastWrap:popover-open { inset: auto; right: 22px; bottom: 22px; margin: 0;
+                          border: 0; padding: 0; background: transparent; overflow: visible;
+                          width: auto; height: auto; }
 .toast { pointer-events: auto; cursor: pointer; max-width: min(440px, 78vw);
          background: var(--panel); color: var(--text); border: 1px solid var(--line);
          border-left: 3px solid var(--dim); border-radius: 10px;
