@@ -30,8 +30,13 @@ import { sourceOf } from '../security/source.mjs';
 /**
  * 节点守护进程（T03 的 `node-supervisor.mjs`）：起停与状态。
  *
- * 这个模块**还没落地**时返回 `null`，`/api/local/*` 照样能用（只是 `node.running:false`）——
+ * 加载不到时返回 `null`，`/api/local/*` 照样能用（只是 `node.running:false`）——
  * 不让"少一个文件"变成整个本机接口 500。
+ *
+ * ⚠️ 现状（2026-11-04 记录）：模块其实在**上一层**（`apps/server/src/node-supervisor.mjs`），
+ * 下面这行写的是 `'./'`，少一层 `../` —— 所以恒落 catch、**恒返回 null**，节点进程从来起不来。
+ * 这是 2026-10-22「服务端按域拆分」把它搬进 `routes/` 时漏改路径留下的，**不是"模块还没落地"**。
+ * 为什么暂不修、修了会发生什么，见 `docs/现状.md` 第八节。
  *
  * **导出**：server.mjs 的启动段（已加入 → 直接进节点形态）也要用它，别再复制一份。
  */
@@ -43,10 +48,13 @@ export async function supervisorModule() {
   }
 }
 
+/** 节点守护接不上时对用户说的话：`/status` 与 join 返回共用一句，免得两处漂移 */
+const NODE_WHY_NOT_WIRED = '节点守护还没接上：配置已写，节点不会自己起';
+
 /** 节点进程现在在不在跑（`external:true` = 是 autostart 拉起的那个，不是我们起的） */
 async function localNodeStatus() {
   const sup = await supervisorModule();
-  if (!sup) return { running: false, pid: null, external: false };
+  if (!sup) return { running: false, pid: null, external: false, why: NODE_WHY_NOT_WIRED };
   try {
     return sup.status();
   } catch (e) {
@@ -362,7 +370,7 @@ export async function handleLocal(req, res, url) {
             node = { running: false, pid: null, external: false, why: String(e?.message ?? e) };
           }
         } else {
-          node = { running: false, pid: null, external: false, why: '节点守护还没接上：配置已写，节点不会自己起' };
+          node = { running: false, pid: null, external: false, why: NODE_WHY_NOT_WIRED };
         }
       }
 
