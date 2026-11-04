@@ -17,30 +17,35 @@ const CLAIM_MAX_WAIT_MS = 45000;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * **本机就地执行**一件安装任务（2026-10-21）：「设置 → 这台机器 → 未安装 → 在这台机器上安装」。
+ * **本机就地执行**一件外部件任务（2026-11-04）：插件页「软件」商店条目 —— 用户点一下就装。
  *
- * 为什么要有这一条：远程节点那侧是"控制面排任务 → 节点领走 → 节点自己查表跑"；
- * 而单机形态下本机（id=`local`）没有节点进程来领活，任务会永远"待领"。
- * 本机就是控制面自己，所以排完任务由本进程直接跑。
+ * 为什么现在给本机开了（原来是"复制命令去终端粘"，2026-10-16 定的）：
+ * 用户要把 magpie 当软件商店条目 —— "我点一下就可以直接安装了，不要再去找命令或者安装包"。
+ * 那条旧边界防的是"控制面替用户跑来路不明的命令"，不是"一键"本身；现在命令仍然**只能来自
+ * externals.commandFor 这张写死的表**（调用方递不进命令），Windows 上那条是"下载官方
+ * 固定下载口的安装包 + 启动它自己的安装程序"，安装界面是 magpie 的 —— 边界没松。
  *
- * ⚠️ **安全边界和节点那条完全一样**：调用方只能发**族名**，命令永远来自
- * `runtimes.installCommandFor` 这张写死在代码里的表 —— 这里没有"传什么跑什么"的口子。
+ * （2026-11-04：原来并排的 `runLocalInstall` —— 装运行时那半 —— 已随 install-runtime
+ * 通路整体拆除，"班底只识别、不代装"；这里只剩外部件这一种。）
  *
- * Windows 上 `npm` 是 .cmd 垫片：Node 22 直接 spawn 它会 EINVAL（实测，见 connectors.mjs
- * 的 launcher 注释），所以过一层 `cmd /c` —— 拼进去的仍是表里的固定字符串，没有用户输入。
- * 输出节流写回任务行（界面每 1.5 秒读回来），装完的清单本机是**现探**的，不用额外上报。
+ * 与被拆掉的那位的一点不同：命令表是 externals 的；Windows 上不包一层 `cmd /c`
+ * （表里那条自己就是 cmd.exe 整行，且要 windowsVerbatimArguments ——
+ * 见 externals.mjs install.win32 的注释）。
  */
-async function runLocalInstall(taskId) {
+async function runLocalExternal(taskId) {
   const task = store.claimNodeTaskById(taskId);
   if (!task) return; // 已经被领走 / 已经结束：不重复执行
-  const spec = runtimes.installCommandFor(task.family);
+  const step = task.kind === 'external-install' ? 'install' : task.kind === 'external-open' ? 'open' : 'serve';
+  const spec = externals.commandFor(step, task.family, `${process.platform} ${process.arch}`, {
+    mirror: task.arg ?? '',
+  });
   if (!spec) {
-    store.appendNodeTaskOutput(task.id, '这台机器上的班底不认识这个族，或者它不是一条命令能装的\n');
+    store.appendNodeTaskOutput(task.id, '这台机器上的班底不认识这个外部件，或者这一步在这里没法一键做\n');
     return store.finishNodeTask(task.id, '失败');
   }
   const isWin = process.platform === 'win32';
-  const file = isWin ? process.env.ComSpec || 'cmd.exe' : spec.bin;
-  const args = isWin ? ['/c', spec.bin, ...spec.args] : spec.args;
+  const file = spec.raw ? spec.bin : isWin ? process.env.ComSpec || 'cmd.exe' : spec.bin;
+  const args = spec.raw ? spec.args : isWin ? ['/c', spec.bin, ...spec.args] : spec.args;
 
   let buf = '';
   let lastAt = 0;
@@ -54,11 +59,16 @@ async function runLocalInstall(taskId) {
     store.appendNodeTaskOutput(task.id, chunk);
   };
 
-  console.log(`[本机] 开始安装 ${task.family}：${spec.cmd}`);
+  console.log(`[本机] 开始处理外部件 ${task.family}（${step}）：${spec.cmd}`);
   let child;
   try {
     const { spawn } = await import('node:child_process');
-    child = spawn(file, args, { cwd: os.homedir(), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    child = spawn(file, args, {
+      cwd: os.homedir(),
+      windowsHide: true,
+      windowsVerbatimArguments: !!spec.raw, // 整行进 cmd —— Node 的默认转义会把引号拆烂
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
   } catch (e) {
     store.appendNodeTaskOutput(task.id, `起不来：${[e?.code, e?.message].filter(Boolean).join(' ')}\n`);
     return store.finishNodeTask(task.id, '失败');
@@ -80,7 +90,7 @@ async function runLocalInstall(taskId) {
     }
     store.finishNodeTask(task.id, status);
   };
-  // 兜底超时：npm 卡死（网络挂起）不该让这一行永远"执行中"
+  // 兜底超时：安装包下载卡死（网络挂起）不该让这一行永远"执行中"
   const killer = setTimeout(() => {
     try {
       child.kill();
@@ -91,12 +101,12 @@ async function runLocalInstall(taskId) {
   killer.unref();
   child.on('error', (e) => {
     finish('失败', `起不来：${e?.message ?? e}\n`);
-    console.log(`[本机] 安装 ${task.family} 失败：${e?.message ?? e}`);
+    console.log(`[本机] 外部件 ${task.family} ${step} 失败：${e?.message ?? e}`);
   });
   child.on('close', (code) => {
     const ok = code === 0;
-    finish(ok ? '完成' : '失败', ok ? '\n装完了。\n' : `\n（${spec.bin} 退出码 ${code}）\n`);
-    console.log(`[本机] 安装 ${task.family}${ok ? '装好了' : `失败了（退出码 ${code}）`}`);
+    finish(ok ? '完成' : '失败', ok ? '\n好了。\n' : `\n（${spec.bin} 退出码 ${code}）\n`);
+    console.log(`[本机] 外部件 ${task.family} ${step}${ok ? '好了' : `失败了（退出码 ${code}）`}`);
   });
 }
 
@@ -118,14 +128,18 @@ export async function handleNodeWork(req, res, url) {
   const taskReport = /^\/api\/nodes\/([^/]+)\/tasks\/([^/]+)\/report$/.exec(url.pathname);
 
   /*
-   * 一键安装 —— 排一个「让那台机器做件小事」。
+   * 一键处理 —— 排一个「让那台机器做件小事」。
    *
-   * ⚠️ 只接受**族名**：命令表在节点那侧（`runtimes.installCommandFor`），控制面发不出命令。
-   * 谁拿着令牌就能在每台节点上装软件，所以这条边界是这件事成立的前提，不是"顺手的设计"。
+   * ⚠️ 只接受**外部件 id**：命令表在节点那侧（`externals.commandFor`），控制面发不出命令。
+   * 谁拿着令牌就能在每台节点上跑这张表里的安装/常驻，所以这条边界是这件事成立的前提，
+   * 不是"顺手的设计"。
    *
-   * 本机（id=`local`）2026-10-21 起也走这里：单机形态下没有节点进程来领活，
-   * 所以排完任务由**控制面自己执行**（见 runLocalInstall）—— 边界不变，
-   * 命令还是那张固定表里的，前端照样只能发族名。
+   * 本机（id=`local`）也走这里：单机形态下没有节点进程来领活，
+   * 所以排完任务由**控制面自己执行**（见 runLocalExternal）—— 边界不变，
+   * 命令还是那张固定表里的，前端照样只能发 id 与步骤。
+   *
+   * （2026-11-04：`install-runtime` 这个 kind 随「班底只识别、不代装」整体拆除 ——
+   * 装运行时的入口、本机执行器和节点执行器一并清了；任务队列只剩外部件在用。）
    */
   if (req.method === 'POST' && tasks) {
     const nodeId = decodeURIComponent(tasks[1]);
@@ -135,47 +149,37 @@ export async function handleNodeWork(req, res, url) {
     const kind = String(body?.kind ?? '');
     const target = String(body?.family ?? body?.id ?? '');
 
-    /*
-     * 两种"小事"，共用一套队列：装一个**运行时**（agent CLI），或处理一个**外部件**的某一步
-     * （装上 / 装成常驻服务）。命令表都在**节点那侧**，控制面只发 id 与步骤。
-     */
-    let spec = null;
-    if (kind === 'install-runtime') {
-      spec = runtimes.installCommandFor(target);
-      if (!spec) {
-        return fail(res, 400, 'E1044', `「${target || '(没给族名)'}」没法一键安装 —— 它要么不是这三个族之一，要么形态上就不是 npm 装的（比如 dsh 是 Windows 桌面端自带的）。去那台机器上手工装。`);
-      }
-      const task = store.enqueueNodeTask({ nodeId, kind, family: target });
-      console.log(`[节点] 给 ${nodeId} 排了个任务：${kind} ${target}`);
-      if (isLocal) void runLocalInstall(task.id); // 本机：控制面当场跑，不等谁来领
-      return sendJson(res, 201, { task: store.publicNodeTask(task), willRun: spec.cmd });
-    } else if (kind === 'external-install' || kind === 'external-serve') {
-      // 本机不给外部件一键（2026-10-16 定的边界，别被"本机也能装运行时"带偏）：
-      // 那是 `curl … | sh`，控制面直接跑不合适 —— 界面上给复制命令，用户自己在终端粘。
-      if (isLocal) {
-        return fail(res, 400, 'E1043', '本机不给外部件一键安装 —— 复制那条命令，在终端里粘一下更清楚');
-      }
-      const step = kind === 'external-install' ? 'install' : 'serve';
-      /*
-       * 走镜像装：`mirror` 是个**参数**，不是命令 —— 它会先过 externals.mirrorOk()
-       * （它要被拼进 `sh -c '… --mirror "<前缀>"'`，所以带 shell 元字符的一律拒）。
-       * 不能过就直接 400，别让它跑到那台机器上再失败。
-       */
-      const mirror = String(body?.mirror ?? '').trim();
-      if (mirror && !externals.mirrorOk(mirror)) {
-        return fail(res, 400, 'E1046', '镜像前缀里不能有空格、引号、反引号、$、;、|、& 这些字符（它会被拼进 shell 命令）—— 给一个普通的 https:// 前缀');
-      }
-      // 按**那台节点**的平台判（控制面在 Linux，节点可能是 Windows）
-      spec = externals.commandFor(step, target, store.getNode(nodeId)?.platform, { mirror });
-      if (!spec) {
-        return fail(res, 400, 'E1045', `「${target}」的这一步在**那台机器**上没法一键做（比如 Windows 上 magpie 是桌面安装包，没有一条命令）。去那台机器上手工装。`);
-      }
-      const task = store.enqueueNodeTask({ nodeId, kind, family: target, arg: mirror || null });
-      console.log(`[节点] 给 ${nodeId} 排了个任务：${kind} ${target}${mirror ? `（走镜像 ${mirror}）` : ''}`);
-      return sendJson(res, 201, { task: store.publicNodeTask(task), willRun: spec.cmd });
-    } else {
-      return fail(res, 400, 'E1043', '只认这三种小事：install-runtime / external-install / external-serve');
+    if (kind !== 'external-install' && kind !== 'external-serve' && kind !== 'external-open') {
+      return fail(res, 400, 'E1043', '只认这几种小事：external-install / external-serve / external-open');
     }
+
+    /*
+     * 本机也一键（2026-11-04 改，见 runLocalExternal 的注释）：插件页「软件」条目
+     * 点一下就要装上。安全边界不变：命令还是**那张表**里的，控制面只发 id 与步骤；
+     * 平台按**目标机器**算 —— 本机就是 `${process.platform} ${process.arch}`。
+     * external-open（2026-11-04 新增）：把桌面软件自己的面板窗口拉起来 ——
+     * Windows 上 magpie 的面板不是网页，是一扇窗口，"打开面板"就是启动那个 exe。
+     */
+    const step = kind === 'external-install' ? 'install' : kind === 'external-open' ? 'open' : 'serve';
+    /*
+     * 走镜像装：`mirror` 是个**参数**，不是命令 —— 它会先过 externals.mirrorOk()
+     * （它要被拼进 `sh -c '… --mirror "<前缀>"'`，所以带 shell 元字符的一律拒）。
+     * 不能过就直接 400，别让它跑到那台机器上再失败。
+     */
+    const mirror = String(body?.mirror ?? '').trim();
+    if (mirror && !externals.mirrorOk(mirror)) {
+      return fail(res, 400, 'E1046', '镜像前缀里不能有空格、引号、反引号、$、;、|、& 这些字符（它会被拼进 shell 命令）—— 给一个普通的 https:// 前缀');
+    }
+    // 按**那台机器**的平台判（本机带架构 —— win32 那条要按它挑下载口）
+    const platform = isLocal ? `${process.platform} ${process.arch}` : store.getNode(nodeId)?.platform;
+    const spec = externals.commandFor(step, target, platform, { mirror });
+    if (!spec) {
+      return fail(res, 400, 'E1045', `「${target}」的这一步在那台机器上没法一键做 —— 去那台机器上手工装。`);
+    }
+    const task = store.enqueueNodeTask({ nodeId, kind, family: target, arg: mirror || null });
+    console.log(`[节点] 给 ${nodeId} 排了个任务：${kind} ${target}${mirror ? `（走镜像 ${mirror}）` : ''}`);
+    if (isLocal) void runLocalExternal(task.id); // 本机：控制面当场跑，不等谁来领
+    return sendJson(res, 201, { task: store.publicNodeTask(task), willRun: spec.cmd });
   }
 
   // 界面轮询"装到哪一步了"

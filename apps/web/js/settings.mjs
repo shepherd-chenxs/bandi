@@ -45,6 +45,13 @@ import { $, S } from './core.mjs';
  *      取代原来"一节一行的两张清单卡"；
  *   ③ 退场整行（.me-out-box）：退出登录/断开连接/去登录，整宽一行、文字染色。
  *   版心收窄到 980px（.me-body）—— 这页只有三块内容，铺满 1400px 只会显得空。
+ *
+ * 2026-11-03 三改：**账户为主**（用户："以账户为主，设备只是它的一个属性"）——
+ *   身份卡的标题永远是**账号**：手机设备绑了归属人，头像和名字就取归属账号；
+ *   设备本身（型号 / 配对地址 / 配对时间）从身份卡里退出来，落成「这台设备」
+ *   属性卡的三行 label + value（.me-dev-box）。零账号形态的老设备没有账号可
+ *   显示，才退回设备名兜底，meta 写明"未绑定账号"。原来那行"以「X」的身份使用"
+ *   随之作废 —— 账号就是标题，不用再用一句话解释"这是谁"。
  */
 
 /* 账号安全两卡的线性小图标（跟随 .me-sec-ico 的 accent 色，与 rail 图标同一套笔触） */
@@ -63,25 +70,31 @@ export function openMe() {
   const who = S.auth ?? null;
   const isUser = who?.kind === 'user';
   const isDevice = who?.kind === 'device';
+  /*
+   * 账户为主（2026-11-03 三改）：身份卡的头像/名字取**账号**。设备绑了归属人
+   * 就显示归属账号；只有零账号形态的老设备才退回设备名兜底。
+   * 设备信息（型号 / 地址 / 时间）不进身份卡 —— 它是属性，在下面的「这台设备」卡。
+   */
+  const dev = who?.device ?? null;
   const name = isUser
     ? (who?.user?.name ?? '')
     : isDevice
-      ? (who?.device?.name || '这台设备')
+      ? (who?.user?.name || dev?.name || '这台设备')
       : '未登录';
   /*
-   * 身份卡：名字旁的身份章（登录账号才有角色）+ 一行说明。说明按身份各一句 ——
-   * 手机设备不再另写（名称默认就是「手机设备」，重复），只留等宽的已配对地址行。
-   *
-   * ⚠️ 2026-11-03 设备绑人：手机那行不再空着，写清「以谁的身份用」——
-   * 同一台电脑上两个账号各配一台手机时，屏幕上这句话是唯一能分辨"我现在是谁"的地方
-   * （否则两台手机长得一模一样，批错了都不知道）。
+   * 身份卡：名字旁的身份章（登录账号才有角色）+ 一行说明。
+   * 设备绑了账号时 meta 与登录账号同款（"班底账号"）—— 账号是标题，不用再解释
+   * "以谁的身份"；没绑账号的才需要一句话说清"现在是什么身份在用"。
    */
   const role = isUser ? (who?.role?.name ?? '') : '';
   const meta = isUser
     ? '班底账号'
     : isDevice
-      ? (who?.user?.name ? `以「${who.user.name}」的身份使用` : '')
+      ? (who?.user?.name ? '班底账号' : '未绑定账号 · 以设备身份使用')
       : '这台机器还没有登录账号';
+  // 配对时间给「这台设备」卡 —— dt() 按本机时区出「2026/11/03 19:39」
+  // （ISO 里存的是 UTC，手切字符串会差 8 小时，2026-11-03 实机踩过）
+  const pairedAt = dev?.pairedAt ? dt(dev.pairedAt) : '';
   // 免密 / 已设置：只有登录账号有"自己的密码"可改（操作员没有账号，去设置 → 用户里管）
   const hasPw = isUser ? who?.user?.hasPassword !== false : false;
   // 动态验证：同上，登录账号才有"自己的验证器"
@@ -115,10 +128,23 @@ export function openMe() {
               ${role ? `<span class="me-role">${esc(role)}</span>` : ''}
             </div>
             ${meta ? `<span class="me-meta">${esc(meta)}</span>` : ''}
-            ${isDevice ? `<span class="me-meta me-dev">已配对 · ${esc(location.host)}</span>` : ''}
           </div>
         </div>
       </section>
+      ${
+        /* 「这台设备」属性卡（2026-11-03 账户为主）：设备是账号的一个属性，
+           不再占身份卡 —— 落成 label + value 的属性行。设备记录丢了就不画空卡。 */
+        isDevice && dev
+          ? `<section class="set-sec me-dev-sec">
+               <div class="set-head"><b>这台设备</b></div>
+               <div class="me-dev-box">
+                 <div class="me-kv"><span class="me-k">设备名</span><span class="me-v">${esc(dev.name || '—')}</span></div>
+                 <div class="me-kv"><span class="me-k">已配对到</span><span class="me-v me-v-mono">${esc(location.host)}</span></div>
+                 ${pairedAt ? `<div class="me-kv"><span class="me-k">配对时间</span><span class="me-v">${esc(pairedAt)}</span></div>` : ''}
+               </div>
+             </section>`
+          : ''
+      }
       <!-- 「设置」入口（2026-11-01）：只在窄屏显示（桌面左栏已经有设置，再摆一个是重复）。
            走事件而不是 import setNav —— settings ← state 是反向依赖，会成环
            （mobile.mjs 里通讯录那个 mb-cv-home 同一套办法）。
@@ -445,7 +471,6 @@ export const SETTINGS_GROUPS = [
     icon: '<circle cx="5" cy="3.5" r="1.6"/><path d="M2 3.5h1.4M6.6 3.5H12M2 10.5h5.9M11.1 10.5H12"/><circle cx="9.5" cy="10.5" r="1.6"/>',
     items: [
       ['prefs', '偏好设置', '主题与外观'],
-      ['about', '关于', '版本与说明'],
     ],
   },
   {
@@ -497,6 +522,15 @@ export const SETTINGS_GROUPS = [
       /* 「安全」（2026-10-31 IAM Phase 1）：我的会话（人人可用）+ 审计日志（admin）。
          非管理员也放行 —— 会话列表是"自己的"那半页（服务端只认会话里的 userId）。 */
       ['security', '安全', '会话与审计'],
+    ],
+  },
+  {
+    /* 「关于」拆出「通用」、钉到整列最后（2026-11-04 用户："关于放到最后，加个图标"）——
+       版本说明是最低频的入口，不占第一屏。title:null 不画组头，这一行直接落在
+       组头的缩进层；行上带一枚 info 小图标（条目级图标的唯一一处，见 contacts.mjs itemIco）。 */
+    title: null,
+    items: [
+      ['about', '关于', '版本与说明', '<circle cx="7" cy="7" r="5.4"/><path d="M7 6.4v2.8"/><path d="M7 4.1v.01"/>'],
     ],
   },
 ];

@@ -296,10 +296,12 @@ export async function handleUsers(req, res, url) {
 
     /* ------------------------------------------------ 安全（IAM §9 / §11.2，2026-10-31 Phase 1 收尾） */
     /*
-     * 三个口，都只认**会话里**的身份：
+     * 四个口，都只认**会话里**的身份：
      *   GET  /api/security/sessions           → 我的活动会话（设备/IP/最近活跃）
      *   POST /api/security/sessions/revoke-others → 踢掉我其它设备（保留当前这张票）
      *   GET  /api/security/audit             → 审计日志（**admin**；kind/limit 游标翻页）
+     *   GET  /api/security/audit/export      → 审计日志全量导出（**admin**；同 kind 筛选）
+     *   POST /api/security/audit/clear       → 清空（**admin**；先归档再删，留 audit.clear 痕迹）
      */
     if (p.startsWith('/api/security')) {
       const who = req.bandiAuth;
@@ -328,6 +330,30 @@ export async function handleUsers(req, res, url) {
           limit: Number(url.searchParams.get('limit') ?? 50),
         });
         return sendJson(res, 200, { events }), true;
+      }
+
+      /*
+       * 导出（2026-11-03 审计页「导出」按钮）：同一套类型筛选，全量返回（上限 5000 行）。
+       * 回 JSON 而不是 CSV —— 前端自己拼 CSV 再下载，服务端不管编码 / 换行 / BOM 这些浏览器侧的事。
+       */
+      if (method === 'GET' && p === '/api/security/audit/export') {
+        if (!who.admin) throw new UserError(403, 'E3811', '只有管理员能导出审计日志');
+        const events = store.listForExport({ kind: url.searchParams.get('kind') ?? '' });
+        return sendJson(res, 200, { events }), true;
+      }
+
+      /*
+       * 清空（2026-11-03，同上）：先归档再删，主表留一条 audit.clear 痕迹 ——
+       * "清空"不等于"抹掉证据"，搬进 archive 表的行仍然可事后查。
+       */
+      if (method === 'POST' && p === '/api/security/audit/clear') {
+        if (!who.admin) throw new UserError(403, 'E3811', '只有管理员能清空审计日志');
+        const cleared = store.clearAll({
+          actorKind: who.kind,
+          actorId: who.userId ?? null,
+          ip: String(req.socket?.remoteAddress ?? '').replace(/^::ffff:/, ''),
+        });
+        return sendJson(res, 200, { ok: true, cleared }), true;
       }
 
       throw new UserError(405, 'E3812', '安全接口不支持这个方法');

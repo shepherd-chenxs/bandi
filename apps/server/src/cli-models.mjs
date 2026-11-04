@@ -31,7 +31,7 @@ import { dshProfile } from './config.mjs';
  *           没有目录文件就退回它配的 `base_url` + GET /models
  *   dsh   : profile 的 cordis.patch.yml 里 llm-pi-ai 的 baseURL → GET /models
  *   claude: `~/.claude/settings.json` 的 `modelPicker.options`（magpie 把可用模型写在这儿），
- *           没有就退回 `ANTHROPIC_BASE_URL` 上的 /v1/models，都没有才只剩三个官方别名
+ *           没有就退回 `ANTHROPIC_BASE_URL` 上的 /v1/models，都没有就是空清单（模型名手工填）
  *
  * `BANDI_MODELS_URL` 可以指到任何一个 OpenAI 兼容的 /models，作为通用后门。
  */
@@ -213,18 +213,17 @@ const CLAUDE_HOME = process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), '.c
 /**
  * 读 Claude Code 自己的 `settings.json`（2026-10-17 补的）。
  *
- * 原来这里写着"claude 没有可查的源头，只给三个官方别名" —— 那是**想当然**：
+ * 原来这里写着"claude 没有可查的源头" —— 那是**想当然**：
  * 实际机器上 magpie 把账号下能用的模型全写进 `modelPicker.options`（label 给人看、
- * `model` 就是传给 CLI 的那个值），当前默认在 `model` 字段，三个别名各自指向谁在
- * `env.ANTHROPIC_DEFAULT_*_MODEL` 里。用户问"claude code 现在的真实模型是什么"
- * 时，答案就在这份文件里，只是班底一直没去读。
+ * `model` 就是传给 CLI 的那个值），当前默认在 `model` 字段。用户问"claude code
+ * 现在的真实模型是什么"时，答案就在这份文件里，只是班底一直没去读。
  *
  * 顺带一个不是界面的收益：`effectiveModelOf()` 以前对 claude 一律"不知道" →
  * 没绑模型的 claude 员工，每次运行都记不进 `runs.model`，用量落进"认不出"的黑洞、
  * 按模型的额度永远拦不住。有了 `model` 这个字段就认得出来了。
  *
- * 读不到（文件不在 / 不是 JSON）返回 null —— 调用方退回"三个官方别名"的老样子，
- * **不能因为读不到就让下拉变空**。
+ * 读不到（文件不在 / 不是 JSON）返回 null —— 调用方退回问网关那条路，
+ * **不能因为读不到就让下拉变空**（前端会保住当前值）。
  */
 function readClaudeCatalog() {
   const file = path.join(CLAUDE_HOME, 'settings.json');
@@ -235,7 +234,6 @@ function readClaudeCatalog() {
     return null;
   }
   const env = doc?.env ?? {};
-  const alias = (k) => clean(env[k]) || null;
   // `modelPicker.options` 才是真清单。每项：{ label 给人看, model 传给 CLI, description 一行说明 }
   const opts = Array.isArray(doc?.modelPicker?.options) ? doc.modelPicker.options : [];
   const models = opts
@@ -245,11 +243,6 @@ function readClaudeCatalog() {
     file,
     models,
     defaultModel: clean(doc?.model) || null,
-    aliases: {
-      sonnet: alias('ANTHROPIC_DEFAULT_SONNET_MODEL'),
-      opus: alias('ANTHROPIC_DEFAULT_OPUS_MODEL'),
-      haiku: alias('ANTHROPIC_DEFAULT_HAIKU_MODEL'),
-    },
     baseUrl: clean(env.ANTHROPIC_BASE_URL) || null,
     key: clean(env.ANTHROPIC_AUTH_TOKEN) || null,
   };
@@ -258,27 +251,6 @@ function readClaudeCatalog() {
 /** claude 没绑模型时真正生效的那个 —— 只有 `settings.json` 的 `model` 说得准 */
 function readClaudeDefaultModel() {
   return readClaudeCatalog()?.defaultModel ?? null;
-}
-
-/**
- * 三个别名条目。
- *
- * 为什么还留着：`--model sonnet` 确实能用，删了等于丢掉一种合法写法。
- * 但必须**标清实际指向** —— 这台机器上三个别名全指向同一个模型，
- * 界面上不说，人会以为"选 Sonnet / Opus / Haiku"是三个不同的东西。
- */
-function claudeAliasModels(info) {
-  const label = { sonnet: 'Sonnet', opus: 'Opus', haiku: 'Haiku' };
-  return ['sonnet', 'opus', 'haiku'].map((id) => {
-    const to = info?.aliases?.[id] ?? null;
-    return {
-      id,
-      // 指向写在**标签里**：下拉里只显示标签，藏在 note 里等于没说
-      name: to ? `${label[id]}（别名 → ${to}）` : `${label[id]}（别名）`,
-      group: '别名',
-      note: to ? `实际指向 ${to}${to === info?.defaultModel ? '（就是当前默认）' : ''}` : 'Claude Code 官方别名',
-    };
-  });
 }
 
 /** 某个族"CLI 自己配的 provider"（班底不存它，只为不冲掉它而回读） */
@@ -404,13 +376,12 @@ export async function forRuntime(rt) {
 
   if (family === 'claude') {
     const info = readClaudeCatalog();
-    const aliases = claudeAliasModels(info);
     // ① 首选：Claude Code 自己的 settings.json（离线、带显示名、还知道当前默认是哪个）
     if (info?.models.length) {
       return {
         ...out,
         ok: true,
-        models: [...info.models, ...aliases],
+        models: info.models,
         source: info.file,
         note: `读的是 Claude Code 自己的配置${info.defaultModel ? `；当前默认 ${info.defaultModel}` : ''}`,
         defaultModel: info.defaultModel,
@@ -426,7 +397,7 @@ export async function forRuntime(rt) {
             return {
               ...out,
               ok: true,
-              models: [...r.models, ...aliases],
+              models: r.models,
               source: r.source,
               note: `Claude Code 的配置里没有可选清单，从它配的网关列出来的`,
               defaultModel: info.defaultModel,
@@ -437,15 +408,15 @@ export async function forRuntime(rt) {
         }
       }
     }
-    // ③ 兜底：还是只有三个别名 —— 但把"为什么只有它"写在 note 里
+    // ③ 兜底：清单是空的 —— 把"为什么空"写在 note 里，模型名让人手工填
     return {
       ...out,
       ok: true,
-      models: aliases,
-      source: 'Claude Code 官方别名',
+      models: [],
+      source: '无可用清单',
       note: info
-        ? '没读到可选清单（settings.json 里没有 modelPicker，网关也没返回）—— 三个别名照旧能用，完整模型名也可以直接填。'
-        : '没读到 ~/.claude/settings.json —— 只能给三个官方别名；完整模型名可以手工填。',
+        ? '没读到可选清单（settings.json 里没有 modelPicker，网关也没返回）—— 完整模型名可以手工填。'
+        : '没读到 ~/.claude/settings.json —— 完整模型名可以手工填。',
       defaultModel: info?.defaultModel ?? null,
     };
   }

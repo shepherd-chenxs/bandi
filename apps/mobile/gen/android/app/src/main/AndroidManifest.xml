@@ -27,12 +27,27 @@
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
 
+    <!--
+      锁竖屏（2026-11-03 用户："手机端锁定竖屏"）。
+
+      壳只做手机形态：界面全是单列（列表 / 详情 / 底部四 tab），横过来只会把列表压成
+      两行高、把键盘顶到一半。所以方向在这层钉死，不去 CSS 里补救（Web 侧补救不了：
+      `screen.orientation.lock()` 要先进全屏，浏览器里调不动）。
+
+      · 对 Android：`screenOrientation` 是 Activity 的硬约束，连系统"自动旋转"开关都
+        翻不动它；
+      · 对 PWA（浏览器"添加到主屏幕"）：靠 manifest 的 `orientation: portrait-primary`，
+        见 apps/web/manifest.webmanifest（那份文件才是那条路的方向来源）。
+
+      ⚠️ 同样是 gen/android 里的手改，重新 init 后要再加一次（build-android.mjs 打包前会扫）。
+    -->
     <application
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:theme="@style/Theme.bandi_mobile"
         android:usesCleartextTraffic="${usesCleartextTraffic}">
         <activity
+            android:screenOrientation="portrait"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
             android:launchMode="singleTask"
             android:label="@string/main_activity_title"

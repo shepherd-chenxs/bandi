@@ -71,44 +71,43 @@ export async function renderPairing() {
    * 开关贴到分节标题右边，标题从「邀请码」改成「连接」。
    * 关 = 这台电脑不接受手机连接：卡片体（电脑地址 / 邀请码 / 二维码）换成一句提示，
    * 服务端同时断开所有在用手机、拒绝扫码 / 连回来（E1707）。
-   * 已配对的手机照常留在下面 —— 关掉之后正好在那里「取消配对」。
+   * 已配对的手机整个分节也不画（2026-11-03 用户：关闭连接的时候不要显示已配对手机）——
+   * 关闭态下设备管理没有意义，要取消配对先打开连接。
    * 老服务没有这个字段时按开着算（向后兼容）。
    */
   const pairEnabled = lan?.pairEnabled !== false;
   pairOn = pairEnabled;
 
   view.innerHTML = `
-    ${headRow(pairEnabled ? 'on' : 'off')}
+    ${headRow()}
     <div class="detail-body">
       <section class="set-sec pair-sec">
         <div class="set-head pair-head">
           <b>连接</b>
+          <span class="set-tag pair-state${pairEnabled ? ' on' : ''}">${pairEnabled ? '已开启' : '已关闭'}</span>
           ${pairSwitch(pairEnabled)}
         </div>
         <div class="set-box">
           ${pairEnabled ? inviteCard() : pairOffCard()}
         </div>
       </section>
+      ${
+        /* 已配对的手机只在开着的时候画（2026-11-03 用户：关闭连接的时候不要显示已配对手机）——
+           关闭态手机本来就连不上，管理设备没有意义；要取消配对先打开连接。
+           （2026-11-04 试过"0 台整节不显示"，用户当天回退 —— 空状态卡留着） */
+        pairEnabled
+          ? `
       <section class="set-sec">
         <div class="set-head"><b>已配对的手机</b><span class="set-tag" id="pairDevCount">…</span></div>
         <div id="pairDevices" class="mb-pair-list"><div class="empty">读取中…</div></div>
         <!-- 2026-11-02 两轮删文案：先从四行策略压成一句判别，后整段删（用户："去掉这个文案"）——
              断开/取消配对两个确认弹窗里各有全文，页面上不留说明 -->
-      </section>
+      </section>`
+          : ''
+      }
     </div>`;
 
   bindPairSwitch();
-
-  /* 关闭态引导卡的主按钮：扳分节头那颗开关（走同一条 onchange 链路，不另开写路径） */
-  const onBtn = $('pairOnBtn');
-  if (onBtn) {
-    onBtn.onclick = () => {
-      const sw = $('pairSwitch');
-      if (!sw || sw.disabled) return;
-      sw.checked = true;
-      sw.dispatchEvent(new Event('change'));
-    };
-  }
 
   if (pairEnabled) {
     $('pairRefresh').onclick = () => {
@@ -157,12 +156,8 @@ export async function renderPairing() {
   });
 }
 
-const headRow = (state) =>
-  `<div class="detail-head" style="padding:14px 20px 10px"><b style="font-size:var(--t-page)">手机连接</b>${
-    /* 状态标签（2026-11-03 评审）：页面标题旁边直接说当前开着没，不用滚到分节里看开关。
-       读取中 / 「只听本机」两种前置态不画 —— 那时分节里已有更准确的说明。 */
-    state ? `<span class="set-tag pair-state${state === 'on' ? ' on' : ''}">${state === 'on' ? '已开启' : '已关闭'}</span>` : ''
-  }</div>`;
+const headRow = () =>
+  `<div class="detail-head" style="padding:14px 20px 10px"><b style="font-size:var(--t-page)">手机连接</b></div>`;
 
 /** 分节总开关的当前状态（空列表 / 卡片体文案据此换一句） */
 let pairOn = true;
@@ -173,15 +168,14 @@ const PHONE_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" st
 /**
  * 关闭态引导卡（2026-11-03 评审改版）：原来是 60px 高的一行灰字套个空框 ——
  * 边框让它看着像"加载失败的容器"，而且页面上没有任何活的动作。
- * 现在：图标 + 标题 + 一句后果说明 + 主按钮，按钮直接扳分节头那颗开关（复用同一条链路，
- * 服务端语义 / toast / 整节重画都不变，不另开第二条写路径）。
+ * 图标 + 标题 + 一句后果说明；开关就在分节头右上角，不另设按钮
+ * （2026-11-03 用户："去掉这个按钮"）。
  */
 const pairOffCard = () => `
   <div class="pair-off">
     <div class="pair-off-ico">${PHONE_SVG}</div>
     <b>手机连接已关闭</b>
     <p>打开后，这里会显示电脑地址、邀请码和二维码，手机扫码即可连接。</p>
-    <button class="primary" type="button" id="pairOnBtn">打开手机连接</button>
   </div>`;
 
 /**
@@ -195,33 +189,30 @@ const pairSwitch = (on) => `
     on ? 'checked' : ''
   } /><span></span></label>`;
 
-/** 手机能连时的那张卡：电脑地址 + 邀请码（倒计时 / 小眼睛 / 换一个）+ 二维码 */
+/** 手机能连时的那张卡：电脑地址 + 邀请码（倒计时 / 小眼睛 / 换一个）+ 二维码
+ *  2026-11-04 重设计（用户："邀请码和地址太大了"）：21px 地址 / 30px 大码收成
+ *  「标签 | 值 | 动作」的紧凑单行 —— 值还是等宽字体、可点复制，动作靠右；
+ *  倒计时从标签里挪到码后面（紧迫感贴着数字看），标签列定宽对齐。 */
 const inviteCard = () => `
   <div class="mb-invite">
     <div class="mb-invite-col">
       <div class="mb-invite-row">
-        <div class="mb-invite-k">电脑地址</div>
-        <div class="mb-invite-v">
-          <span class="mb-invite-addr" id="pairAddr" title="点一下复制">…</span>
-          <button class="btn-sm" type="button" id="pairAddrCopy">复制地址</button>
-        </div>
+        <span class="mb-invite-k">电脑地址</span>
+        <span class="mb-invite-addr" id="pairAddr" title="点一下复制">…</span>
+        <button class="btn-sm" type="button" id="pairAddrCopy">复制地址</button>
       </div>
       <div class="mb-invite-row">
-        <div class="mb-invite-k">邀请码<span class="mb-invite-left" id="pairLeft"></span></div>
-        <div class="mb-invite-v">
-          <span class="mb-invite-code" id="pairCode" title="点一下复制"><span class="mb-invite-wait">生成中…</span></span>
-          <button class="mb-eye" type="button" id="pairEye" aria-pressed="false" title="遮住 / 露出邀请码"></button>
-          <button class="btn-sm" type="button" id="pairRefresh">换一个</button>
-        </div>
+        <span class="mb-invite-k">邀请码</span>
+        <span class="mb-invite-code" id="pairCode" title="点一下复制"><span class="mb-invite-wait">生成中…</span></span>
+        <span class="mb-invite-left" id="pairLeft"></span>
+        <button class="mb-eye" type="button" id="pairEye" aria-pressed="false" title="遮住 / 露出邀请码"></button>
+        <button class="btn-sm" type="button" id="pairRefresh">换一个</button>
       </div>
     </div>
     <div class="mb-invite-side">
       <div class="mb-qr" id="pairQr"></div>
       <div class="mb-invite-side-hint">手机扫码直接连</div>
     </div>
-  </div>
-  <div class="set-row">
-    <p class="hint">邀请码 5 分钟内有效、<b>只能配一台手机</b>。</p>
   </div>`;
 
 /** 给当页那颗总开关接线（开 / 关两种页面都会画它） */
@@ -409,7 +400,7 @@ export async function renderDeviceList() {
   box.innerHTML = `
     <div class="mb-pair-wrap">
       <table class="plg-table pair-table">
-        <thead><tr><th>手机</th><th>使用者</th><th>状态</th><th>配对时间</th><th>最近活跃</th><th>面板角色</th><th></th></tr></thead>
+        <thead><tr><th>手机</th><th>使用者</th><th>状态</th><th>配对时间</th><th>最近活跃</th><th>面板角色</th><th>操作</th></tr></thead>
         <tbody>
           ${devices
             .map((d) => {

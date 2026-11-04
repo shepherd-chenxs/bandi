@@ -1571,11 +1571,11 @@ export function wirePersonaTaskLinks() {
 
 
 /**
- * 「接着最近那段继续聊」——详情页「发消息 / 回到聊天」与通讯录窄屏点员工行共用的那一条路。
+ * 「接着最近那段继续聊」——详情页「发消息 / 回到聊天」共用的那一条路。
  *
- * 2026-11 移动端增量从 renderDetail 里提出来成了**模块级导出**：通讯录在手机上点
- * 「数字员工」行不再进详情页而是直接开聊，那里没有 renderDetail 的闭包（persona、
- * toastConvErr 都是闭包里的东西），函数化后从入参拿，桌面行为一个字没变。
+ * 2026-11 移动端增量从 renderDetail 里提出来成了**模块级导出**：详情页没有 renderDetail
+ * 的闭包（persona、toastConvErr 都是闭包里的东西），函数化后从入参拿，桌面行为一个字没变。
+ * （曾供"通讯录窄屏点行直接开聊"调用 —— 那条路 2026-11-03 用户拍板改回先看详情，见 contacts.mjs。）
  *
  * 口径（2026-10-24 用户拍板，改掉"每次新开一段"的旧口径 —— 想另起一段去聊天页头的
  * 「新会话」按钮，跟微信一致：名片「发消息」进的就是现有聊天）：
@@ -1636,8 +1636,9 @@ export async function openDirectChat(persona) {
 
 
 /**
- * 手机窄屏的员工详情（2026-11 移动端增量）：只保留「执行配置」三件 ——
- * 运行时 / 并发数 / 思考过程（用户口径：其他的暂时都不需要）。
+ * 手机窄屏的员工详情（2026-11 移动端增量；2026-11-03 二改）：「执行配置」四件 +
+ * 页头身份（姓名 / 岗位 / 忙闲）+「发消息」。模型是这次按用户口径补上的 ——
+ * 只读展示，不做成下拉（换模型是低频配置动作，留给桌面员工详情）。
  *
  * 复用桌面的类名（.detail-body/.p-head/.group/.form-row/.row-label/.switch.sm），
  * 样式天然继承，mobile.css 不用为这页新写规则；监听也只挂精简版用得上的那几个。
@@ -1672,11 +1673,17 @@ function renderDetailMobile(persona, runtimes) {
         </div>
       </div>
 
-      <!-- 精简正文：只有执行配置三件。类名照搬桌面执行配置分区，样式自动继承 -->
+      <!-- 精简正文：执行配置四件。类名照搬桌面执行配置分区，样式自动继承 -->
       <div class="group">
         <div class="form-row">
           <div class="row-label">运行时</div>
           <div id="dRuntimeMount"></div>
+        </div>
+        <div class="form-row">
+          <div class="row-label">模型</div>
+          <!-- 只读展示（2026-11-03 用户口径：详情页显示他用的模型）；真要换模型去桌面端员工详情。
+               值异步填：清单直接问运行时（readModelList 自带 60s 缓存），拿不到就写"跟随默认"。 -->
+          <div id="dModelText">${esc(persona.model || '跟随默认')}</div>
         </div>
         <div class="form-row">
           <div class="row-label">并发数</div>
@@ -1694,6 +1701,14 @@ function renderDetailMobile(persona, runtimes) {
       </div>
     </div>`;
 
+  /*
+   * 手机折叠态（2026-11-03）：从**非列表路径**进来的详情（刷新恢复直达 / 项目成员行）
+   * 没人打 mb-detail-open，mobile.css 会把整个 main 藏掉 —— 内容画了也看不见，
+   * 用户看到的就是"详情页空白"。派事件让 mobile.mjs 补折叠态；从列表行进来的
+   * （折叠态已开）它只会把返回栏标题对齐成这个人，不会重复压历史。
+   */
+  document.dispatchEvent(new CustomEvent('mb-detail', { detail: { title: persona.name } }));
+
   /* 防抖节奏与桌面版一致：输入 700ms / 下拉 300ms / 开关 200ms / 失焦立刻；串行保存不并发打 PUT */
   let saveTimer = null;
   let saving = false;
@@ -1706,7 +1721,7 @@ function renderDetailMobile(persona, runtimes) {
   /*
    * 运行时下拉与桌面同一套挂载组件（createCombo）。内置员工与雇佣员工多一条「自动」——
    * 他们出厂 runtime 就是 'auto'，清单缺当前值按钮会退化成裸 id（桌面踩过的坑，口径照搬）。
-   * 手机版不画沙箱/模型，onChange 不需要做联动对齐，选完直接进防抖保存。
+   * 手机版不画沙箱，模型行是只读的（见上），onChange 不需要做联动对齐，选完直接进防抖保存。
    */
   const rtItems = runtimes.map((r) => ({ id: r.id, label: r.label }));
   if (persona.builtin || String(persona.id ?? '').startsWith('p-expert-'))
@@ -1718,6 +1733,29 @@ function renderDetailMobile(persona, runtimes) {
     search: false,
     onChange: () => scheduleSave(300),
   });
+
+  /*
+   * 模型行只读补名（2026-11-03）：页面上先写现值（id 或"跟随默认"），清单问到了
+   * 再换成显示名 —— 清单直接问运行时（readModelList 自带 60s 缓存，与桌面同一份）。
+   * 拉不到就算了：详情页的这个小展示不该因为一次取数失败闹脾气。
+   */
+  const paintModel = (text) => {
+    const el = $('dModelText');
+    if (el) el.textContent = text;
+  };
+  if (persona.runtime && persona.runtime !== 'auto') {
+    readModelList(persona.runtime)
+      .then((d) => {
+        if (persona.model) {
+          const hit = (d.models ?? []).find((m) => m.id === persona.model);
+          // 清单里没有也要留着现值 —— 他配的模型可能只是这台 CLI 这会儿报不出来
+          paintModel(hit ? (String(hit.name ?? '').trim() || hit.id) : persona.model);
+        } else if (d.defaultModel) {
+          paintModel('跟随默认 · ' + d.defaultModel);
+        }
+      })
+      .catch(() => {});
+  }
 
   /**
    * 精简版收集器。服务端 PUT /api/personas/:id 是**字段级更新**（store.updatePersona
@@ -2527,19 +2565,20 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
    * 模型下拉的清单 —— **直接问运行时**（服务端去读 CLI 自己那份配置），不再走账本。
    *
    * 为什么按运行时问：模型列表在 CLI 背后的服务端手里，不在班底手里。
-   * 每个族问法不同（codex 读本地目录文件、dsh 发一次 HTTP、claude 只有几个别名），
-   * 这些差异由服务端的 cli-models 收拾掉。
+   * 每个族问法不同（codex 读本地目录文件、dsh 发一次 HTTP、claude 读 settings.json /
+   * 网关 /v1/models），这些差异由服务端的 cli-models 收拾掉。
    *
    * ⚠️ 读不到时**不能把下拉清空**：那样连原来绑着的模型都不见了，人只看到一个空框。
    * 降级成"保留当前值 + 一句说明"，并且允许手工填名字。
    *
-   * `align`：**用户主动换运行时**时要"自动对齐"（2026-10-17 用户要求）。
-   *   · 新运行时的清单里也有原来那个模型（codex 和 claude 接的是同一台 magpie，
-   *     `workbuddy/hy3` 两边都有）→ 留着，什么都没变；
-   *   · 没有 → 退回「用 CLI 默认」，**不**沿用原来那条「（清单里没有）xxx」：
-   *     那种值一旦被静默保存下去，CLI 收到一个它不认识的模型名，跑起来才报错，
-   *     人根本猜不到是"换运行时"留下的。
-   * 打开页面时（align=false）仍然一律"不清空" —— 那是保护已在用的绑定，两回事。
+   * 绑着的模型不在清单里 → 退回「用 CLI 默认」，**不**沿用原来那条「（清单里没有）xxx」：
+   * 那种值留着，CLI 收到一个它不认识的模型名，跑起来才报错，人根本猜不到原因
+   * （2026-10-17 换运行时时这么定；2026-11-04 用户要求推广到打开页面 —— "模型给删了
+   * 就切默认"，实测过 magpie 对死 id 是真 404，留着纯属埋雷）。两种时机有一点不同：
+   *   · 换运行时（align）：清单读不到也切 —— 跨运行时沿用旧模型名本来就不对；
+   *   · 打开页面 / 刷新：**只在清单成功读到且非空**时才切 —— 读不到可能只是暂时取不到，
+   *     盲切会弄丢活绑定（codex 配置缺字段时盲同步差点误删 23 个模型的教训）。
+   * 切了要在 note 里说一声 —— 这不是"解释性描述"，是改了人家的值，必须报。
    */
   const fillModels = async (runtimeId, { align = false } = {}) => {
     const note = $('dModelNote');
@@ -2550,22 +2589,27 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
       const list = d.models ?? [];
       const cur = modelCombo.value();
       const known = list.some((m) => m.id === cur);
-      // 换运行时、而新清单里没有它 → 对齐到"用 CLI 默认"
-      const dropped = align && !!cur && !known;
+      // 绑的值不在清单里 → 对齐到"用 CLI 默认"。换运行时无条件切；
+      // 打开页面/刷新只在清单真读到了才切（读不到 ≠ 被删了，见上方说明）
+      const dropped = !!cur && !known && (align || list.length > 0);
       const keep = dropped ? '' : cur;
       // 「用 CLI 默认」后面带上**真实**的默认模型名（2026-10-17）：只写"默认"的话，
       // 人根本不知道它落到哪个模型上 —— 用户就问过"claude code 现在的真实模型是什么"。
       const items = [{ id: '', label: d.defaultModel ? `（用 CLI 默认：${d.defaultModel}）` : '（用 CLI 默认）' }];
-      // 当前值不在清单里也要留着 —— 清单可能读不到，不能把人家绑着的模型弄丢
+      // 只剩清单读不到这一种情况会走到这 —— 那也不能把人家绑着的模型弄丢
       if (keep && !known) items.push({ id: keep, label: `（清单里没有）${keep}` });
       items.push(...modelItems(list));
       // 第二个参数是 keepValue：对齐时要真的把值换成 ''，所以只在没对齐时才保留
       modelCombo.setItems(items, keep === cur);
       if (note) {
-        // 成功时**不留任何说明文字**（2026-10-17 用户要求去掉）：
-        // 「N 个可选，点开可以搜 / 原来选的 X 这个运行时没有 / （codex 自己的模型目录（provider：magpie））」
-        // 这些都属于解释性描述，下拉自己会说话。只在取不到清单时才提示，那是真需要人知道的事。
-        note.textContent = list.length ? '' : (d.error ?? '这个运行时的清单是空的') + ' —— 模型名也可以直接填';
+        // 对齐了值就要报一声 —— 这不在"成功时不留说明文字"（2026-10-17，指的清单解释）之列：
+        // 改的是人家绑着的模型，不说人根本不知道为什么变成默认了。
+        if (dropped) {
+          note.textContent = `原来绑的 ${cur} 已不在这台 CLI 的清单里，已切回「用 CLI 默认${d.defaultModel ? `：${d.defaultModel}` : ''}」—— 要用回去，先把它加回网关再「刷新」，或直接手工填。`;
+        } else {
+          // 清单正常时**不留任何说明文字**（2026-10-17 用户要求去掉）：下拉自己会说话。
+          note.textContent = list.length ? '' : (d.error ?? '这个运行时的清单是空的') + ' —— 模型名也可以直接填';
+        }
       }
     } catch (err) {
       // 读不到就降级：别清空下拉，让人至少还能看见当前值、还能手工填

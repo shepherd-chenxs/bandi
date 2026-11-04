@@ -29,6 +29,8 @@ export const LOCAL_POLICY = [
   // 只读状态：网络来源也放行、不要秘密 —— 反代后面的设置页要显示本机 / 协作状态，
   // 要秘密就等于永远显示不出来（IAM §10.1.2 也因此只 deny 破坏性路径）。
   { method: 'GET', path: '/api/local/status', principals: ['operator', 'admin'], secret: 'never' },
+  // 外部件现状（2026-11-04）：插件页「软件」商店条目要画"装没装、网关/面板通不通" —— 只读
+  { method: 'GET', path: '/api/local/externals', principals: ['operator', 'admin'], secret: 'never' },
   { method: 'GET', path: '/api/local/collab/status', principals: ['operator', 'admin'], secret: 'never' },
   { method: 'GET', path: '/api/local/backups', principals: ['operator', 'admin'], secret: 'never' },
 

@@ -9,14 +9,17 @@
 所以**执行路径的改动请先开 issue 说一声**，不要直接提 PR。具体是这些地方：
 
 - `apps/server/src/node.mjs` —— `runTask` / `spawn` / `binSearchDirs`（节点在本机起进程）
-- `apps/server/src/runtimes.mjs` —— `installCommandFor`（一键安装跑的那条命令）
 - `apps/server/src/externals.mjs` —— `commandFor` / `mirrors`（外部件的命令与镜像）
 - `apps/web/js/*.mjs` —— 任何把字符串拼进 `data-*` 再执行的写法（前端已拆原生 ESM，无打包器）
 
 ### 2. 有一条架构红线，别为了"方便"拆掉
 
-**控制面只发「族名 + 哪一步」，命令由那台机器自己查表**（见 `runtimes.installCommandFor` /
-`externals.commandFor`）。这条是**安全边界**：它保证了控制面**递不出任意命令**。
+**控制面只发「id + 哪一步」，命令由那台机器自己查表**（见 `externals.commandFor`）。
+这条是**安全边界**：它保证了控制面**递不出任意命令**。
+
+（2026-11-04 起 agent CLI 的一键安装整个拆掉了 —— "班底只识别、不代装"；这条红线的
+唯一现存消费方是外部件，比如 magpie 的装 / 常驻 / 打开面板。别用"给运行时也加回来"
+之类的 PR 试探这条线。）
 
 所以这些 PR 会被拒：
 

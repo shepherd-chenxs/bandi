@@ -1,15 +1,20 @@
 /**
- * 「一键安装运行时」的验收（2026-10-16）。
+ * 「让那台机器做件小事」任务队列的验收（2026-10-16 建；2026-11-04 随 install-runtime 拆除改造）。
  *
- * 这条链路是：界面点一下 → 控制面**只排一个族名** → 节点在它的领活循环里领走 →
- * **节点自己查命令表**跑 → 边跑边报输出 → 装完节点重报清单、界面那行跳到已安装。
+ * 这条链路是：界面点一下 → 控制面**只排一个 id + 哪一步** → 节点在它的领活循环里领走 →
+ * **节点自己查命令表**跑 → 边跑边报输出 → 做完节点重报现状、界面那栏跟着变。
  *
- * 用**假节点**驱动（就是照着真节点那样发 HTTP），所以不装任何东西、也不需要 npm：
- * 这里验的是**协议与安全边界**，真机上的 npm 安装另手工验（见 deploy/README）。
+ * 原来这里验的是"一键安装运行时"（install-runtime）；那个通路 2026-11-04 整体拆了
+ * （班底只识别 agent CLI、不代装），任务队列只剩**外部件**（magpie 装上/常驻/打开面板）在用 ——
+ * 协议没变，所以用例换到 external-install 上继续验，外加一条回归：
+ * **install-runtime 这个 kind 必须被明确拒绝**（拆干净了，别留半个口子）。
  *
- * 最要紧的一条：**控制面发不出命令**。它只能发族名；族名不在表里、或者那个族本来就不是
- * npm 装的（dsh），一律要**明确拒绝** —— 这条边界要是松了，一键安装就成了
- * "谁拿着令牌谁就能在每台机器上跑任意命令"。
+ * 用**假节点**驱动（就是照着真节点那样发 HTTP），所以不装任何东西、也不需要网络：
+ * 这里验的是**协议与安全边界**，真机上的安装另手工验（见 deploy/README）。
+ *
+ * 最要紧的一条：**控制面发不出命令**。它只能发 id 与步骤；id 不在表里、或者那一步
+ * 在那台机器的平台上没有（Windows 上的 serve），一律要**明确拒绝** —— 这条边界要是松了，
+ * 一键就成了"谁拿着令牌谁就能在每台机器上跑任意命令"。
  *
  * 跑法：node apps/server/src/smoke-node-task.mjs
  */
@@ -66,20 +71,20 @@ try {
     body: { id: NODE, label: '装东西的机器', hostname: 'install-host', platform: 'linux x64', runtimes: [] },
   });
 
-  console.log('① 排一个安装任务（只给族名）');
-  const made = await req(`/api/nodes/${NODE}/tasks`, { method: 'POST', body: { kind: 'install-runtime', family: 'codex' } });
+  console.log('① 排一个外部件任务（只给 id + 哪一步）');
+  const made = await req(`/api/nodes/${NODE}/tasks`, { method: 'POST', body: { kind: 'external-install', family: 'magpie' } });
   check('排上了（201）', made.status === 201, String(made.status));
   const tid = made.body?.task?.id;
   check('任务带 id 和"待领"状态', !!tid && made.body.task.status === '待领', made.body?.task?.status);
-  check('顺带回一句"将要跑什么"给界面确认用', /npm install -g @openai\/codex/.test(made.body?.willRun ?? ''), made.body?.willRun);
+  check('顺带回一句"将要跑什么"给界面确认用', /usemagpie\.ai/.test(made.body?.willRun ?? ''), made.body?.willRun);
 
-  console.log('\n② 安全边界：控制面**发不出命令**，只能发族名');
-  const bad = await req(`/api/nodes/${NODE}/tasks`, { method: 'POST', body: { kind: 'install-runtime', family: 'rm -rf /' } });
-  check('不认识的"族名"被拒（400）', bad.status === 400, String(bad.status));
-  check('且说清为什么', /没法一键安装/.test(bad.body?.error ?? ''), bad.body?.error);
-  const dsh = await req(`/api/nodes/${NODE}/tasks`, { method: 'POST', body: { kind: 'install-runtime', family: 'dsh' } });
-  check('dsh（桌面端自带的）也明确拒绝，不装作能装', dsh.status === 400, String(dsh.status));
-  const wrongKind = await req(`/api/nodes/${NODE}/tasks`, { method: 'POST', body: { kind: 'run-anything', family: 'codex' } });
+  console.log('\n② 安全边界：控制面**发不出命令**，只能发 id 与步骤');
+  const bad = await req(`/api/nodes/${NODE}/tasks`, { method: 'POST', body: { kind: 'external-install', family: 'rm -rf /' } });
+  check('不认识的"外部件 id"被拒（400）', bad.status === 400, String(bad.status));
+  check('且说清为什么', /没法一键做/.test(bad.body?.error ?? ''), bad.body?.error);
+  const legacy = await req(`/api/nodes/${NODE}/tasks`, { method: 'POST', body: { kind: 'install-runtime', family: 'codex' } });
+  check('install-runtime（已拆除的 kind）也要明确拒绝，别留半个口子', legacy.status === 400 && /只认这几种小事/.test(legacy.body?.error ?? ''), String(legacy.status));
+  const wrongKind = await req(`/api/nodes/${NODE}/tasks`, { method: 'POST', body: { kind: 'run-anything', family: 'magpie' } });
   check('别的 kind 一律不收（免得多出个通用执行口子）', wrongKind.status === 400, String(wrongKind.status));
 
   console.log('\n③ 节点来领活 —— 任务应该**在同一个长轮询里**发给它');
@@ -87,22 +92,24 @@ try {
   check('领到了这个任务', claimed.body?.task?.id === tid, JSON.stringify(claimed.body?.task?.id));
   check('领走之后状态变"执行中"', claimed.body?.task?.status === '执行中', claimed.body?.task?.status);
   /*
-   * ⚠️ 断言要写精确：第一版用 `/npm|install/` 抓，结果被自己的 `kind: "install-runtime"`
-   * 打中（假失败）。要断言的是"**没有命令字段、没有包名**"，不是"没有 install 这个词"。
+   * ⚠️ 断言要写精确（2026-10-16 的教训）：不能用 `/install|magpie/` 这种宽抓 ——
+   * 会被自己的 `kind: "external-install"` 打中（假失败）。要断言的是
+   * "**没有命令字段、没有命令内容**"：keys 里不许出现 cmd/args/bin/raw，
+   * payload 里不许出现那台机器才会去跑的命令片段。
    */
   const payload = JSON.stringify(claimed.body?.task ?? {});
   const keys = Object.keys(claimed.body?.task ?? {}).sort().join(',');
   check(
-    '下发里没有命令字段（只有族名 —— 这条最关键）',
-    !/(^|,)(cmd|args|bin)(,|$)/.test(keys) && !/@openai|@anthropic/.test(payload),
+    '下发里没有命令字段（只有 id 与步骤 —— 这条最关键）',
+    !/(^|,)(cmd|args|bin|raw)(,|$)/.test(keys) && !/usemagpie|curl|daemon install/.test(payload),
     keys,
   );
 
   console.log('\n④ 节点边跑边报输出');
-  await req(`/api/nodes/${NODE}/tasks/${tid}/report`, { method: 'POST', body: { output: 'npm warn deprecated\n' } });
-  await req(`/api/nodes/${NODE}/tasks/${tid}/report`, { method: 'POST', body: { output: 'added 1 package\n' } });
+  await req(`/api/nodes/${NODE}/tasks/${tid}/report`, { method: 'POST', body: { output: 'downloading magpie ...\n' } });
+  await req(`/api/nodes/${NODE}/tasks/${tid}/report`, { method: 'POST', body: { output: 'installing ...\n' } });
   const mid = await req(`/api/nodes/${NODE}/tasks/${tid}`);
-  check('两次输出都攒着', /deprecated[\s\S]*added 1 package/.test(mid.body?.task?.output ?? ''), JSON.stringify(mid.body?.task?.output));
+  check('两次输出都攒着', /downloading magpie[\s\S]*installing/.test(mid.body?.task?.output ?? ''), JSON.stringify(mid.body?.task?.output));
   check('还没结束（running，不是 done）', mid.body?.task?.running === true && mid.body?.task?.done === false);
 
   /*
@@ -112,28 +119,22 @@ try {
    */
   const devMid = (await req(`/api/devices/${NODE}`)).body.device;
   check('设备详情里带着那件在跑的活（刷新也不会丢）', devMid.task?.id === tid, JSON.stringify(devMid.task?.id ?? null));
-  check('它带来状态与输出（界面据此画进度）', devMid.task?.status === '执行中' && /added 1 package/.test(devMid.task?.output ?? ''), devMid.task?.status);
-  check('目标也在（界面靠它认出是给哪一行画的）', devMid.task?.family === 'codex', String(devMid.task?.family));
+  check('它带来状态与输出（界面据此画进度）', devMid.task?.status === '执行中' && /installing \.\.\./.test(devMid.task?.output ?? ''), devMid.task?.status);
+  check('目标也在（界面靠它认出是给哪一行画的）', devMid.task?.family === 'magpie', String(devMid.task?.family));
 
-  console.log('\n⑤ 收尾 + 节点重报清单');
-  await req(`/api/nodes/${NODE}/tasks/${tid}/report`, { method: 'POST', body: { status: '完成', output: '\n装完了。\n' } });
+  console.log('\n⑤ 收尾');
+  await req(`/api/nodes/${NODE}/tasks/${tid}/report`, { method: 'POST', body: { status: '完成', output: '\n好了。\n' } });
   const fin = await req(`/api/nodes/${NODE}/tasks/${tid}`);
   check('状态是"完成"', fin.body?.task?.status === '完成', fin.body?.task?.status);
   check('done=true（界面据此收手）', fin.body?.task?.done === true);
-  await req(`/api/nodes/${NODE}/heartbeat`, {
-    method: 'POST',
-    body: { runtimes: [{ family: 'codex', label: 'Codex CLI', path: '/home/x/.local/node/lib/node_modules/@openai/codex/bin/codex.js', usable: true }] },
-  });
-  const dev = (await req(`/api/devices/${NODE}`)).body.device;
-  check('装完那台机器立刻就"有"这个运行时可派了', dev.runtimeCount === 1 && dev.runtimes[0].family === 'codex', `count=${dev.runtimeCount}`);
 
   console.log('\n⑥ 失败路径也要能说清');
-  const t2 = await req(`/api/nodes/${NODE}/tasks`, { method: 'POST', body: { kind: 'install-runtime', family: 'claude' } });
+  const t2 = await req(`/api/nodes/${NODE}/tasks`, { method: 'POST', body: { kind: 'external-serve', family: 'magpie' } });
   const id2 = t2.body.task.id;
   await req(`/api/nodes/${NODE}/claim`, { method: 'POST', body: { waitMs: 3000 } });
-  await req(`/api/nodes/${NODE}/tasks/${id2}/report`, { method: 'POST', body: { status: '失败', output: 'npm ERR! 源连不上\n' } });
+  await req(`/api/nodes/${NODE}/tasks/${id2}/report`, { method: 'POST', body: { status: '失败', output: 'curl: (7) 连不上\n' } });
   const bad2 = await req(`/api/nodes/${NODE}/tasks/${id2}`);
-  check('失败状态与输出都留下来了（不是一声不吭）', bad2.body?.task?.status === '失败' && /源连不上/.test(bad2.body?.task?.output ?? ''), bad2.body?.task?.status);
+  check('失败状态与输出都留下来了（不是一声不吭）', bad2.body?.task?.status === '失败' && /连不上/.test(bad2.body?.task?.output ?? ''), bad2.body?.task?.status);
 
   console.log('\n⑧ 外部件：控制面照样只发 id + 哪一步（命令表在那台机器那侧）');
   /*
@@ -143,7 +144,15 @@ try {
    */
   const { commandFor } = await import('./externals.mjs');
   check('Linux 节点：这一步能一键', !!commandFor('install', 'magpie', 'linux x64'));
-  check('Windows 节点：这一步给不出来（桌面安装包）', commandFor('install', 'magpie', 'win32 x64') === null);
+  /*
+   * 2026-11-04 改：Windows 上也有命令了 —— 官方固定下载口（usemagpie.ai/download/<平台>，
+   * 永远指向当前正式版）下载安装包并启动它自己的安装程序。改前这里是"给不出来"，
+   * 因为当时 Windows 没有一条能写的命令；现在有官方下载口，就能写了。
+   */
+  const winSpec = commandFor('install', 'magpie', 'win32 x64');
+  check('Windows 节点：官方固定下载口的安装包', /usemagpie\.ai\/download\/windows-amd64/.test(winSpec?.cmd ?? ''), winSpec?.cmd);
+  check('那条命令是"整行进 cmd"（raw，runner 别让 Node 转义引号）', winSpec?.raw === true);
+  check('Windows ARM 挑的是 arm64 的包', /windows-arm64/.test(commandFor('install', 'magpie', 'win32 arm64')?.cmd ?? ''));
 
   // 这台测试节点报的是 linux x64 → 应当**被接受**
   const ext = await req(`/api/nodes/${NODE}/tasks`, { method: 'POST', body: { kind: 'external-install', family: 'magpie' } });
@@ -155,14 +164,17 @@ try {
   check('下发里同样没有命令（只有 id 与步骤）', !/curl|usemagpie|daemon install/.test(extPayload), extPayload.slice(0, 130));
   await req(`/api/nodes/${NODE}/tasks/${extId}/report`, { method: 'POST', body: { status: '完成' } });
 
-  // 换成一台 **Windows** 节点：同一步就得被拒，并说清为什么
+  // 换成一台 **Windows** 节点：同一步现在也排得上（2026-11-04，官方下载口那条命令），
+  // 回执里要写明装的是什么 —— 界面拿它给用户确认
   const WINNODE = 'node-win-test';
   await req('/api/nodes/register', {
     method: 'POST',
     body: { id: WINNODE, label: 'Windows 那台', hostname: 'win-host', platform: 'win32 x64', runtimes: [] },
   });
   const extWin = await req(`/api/nodes/${WINNODE}/tasks`, { method: 'POST', body: { kind: 'external-install', family: 'magpie' } });
-  check('Windows 节点上**明确拒绝**，不装作能装', extWin.status === 400 && /没法一键做/.test(extWin.body?.error ?? ''), extWin.body?.error);
+  check('Windows 节点上排得上，要跑的是官方安装包', extWin.status === 201 && /windows-amd64/.test(extWin.body?.willRun ?? ''), extWin.body?.willRun);
+  const bogusWin = await req(`/api/nodes/${WINNODE}/tasks`, { method: 'POST', body: { kind: 'external-serve', family: 'magpie' } });
+  check('Windows 上没有的那一步（serve）照样明确拒绝', bogusWin.status === 400 && /没法一键做/.test(bogusWin.body?.error ?? ''), bogusWin.body?.error);
 
   const idBogus = await req(`/api/nodes/${NODE}/tasks`, { method: 'POST', body: { kind: 'external-install', family: 'rm -rf /' } });
   check('不认识的外部件 id 一样被拒', idBogus.status === 400, String(idBogus.status));
@@ -196,7 +208,9 @@ try {
   console.log('\n⑩ 走镜像装：那个前缀是**参数**，必须严格校验（它会被拼进 shell 命令）');
   const { mirrorOk } = await import('./externals.mjs');
   const MIRROR = 'https://ghproxy.example.com/';
-  check('直连：命令里没有 --mirror', !/--mirror/.test(commandFor('install', 'magpie', 'linux x64')?.cmd ?? ''));
+  /* 2026-11-04 改：默认命令**就带镜像**（thinkpad 直连 GitHub 下载挂死，用户定走镜像）——
+     所以"直连"这条改成断言默认带着内置的第一家镜像；给了前缀则**替换**成给的那家。 */
+  check('默认：命令带上内置镜像（gh-proxy.com）', (commandFor('install', 'magpie', 'linux x64')?.cmd ?? '').includes('--mirror https://gh-proxy.com/'));
   check(
     '给了合法前缀 → 命令里带上它',
     (commandFor('install', 'magpie', 'linux x64', { mirror: MIRROR })?.cmd ?? '').includes(`--mirror ${MIRROR}`),
@@ -230,8 +244,10 @@ try {
   const builtIn = publicExternals('linux x64').find((x) => x.id === 'magpie')?.mirrors ?? [];
   check('内置镜像不止一个（这类公共镜像会挂，写死一个等于把"装不上"钉死）', builtIn.length >= 2, JSON.stringify(builtIn));
   check('每一条内置镜像都能过校验', builtIn.every((m) => mirrorOk(m) && commandFor('install', 'magpie', 'linux x64', { mirror: m })), JSON.stringify(builtIn));
-  check('Windows 上没有内置镜像（它本来就是桌面安装包）', (publicExternals('win32 x64').find((x) => x.id === 'magpie')?.mirrors ?? ['x']).length === 0);
+  check('Windows 上没有内置镜像（它走的是官方下载口，没有镜像一说）', (publicExternals('win32 x64').find((x) => x.id === 'magpie')?.mirrors ?? ['x']).length === 0);
+  // ⚠️ 这里拦的其实是"win32 规格已存在，但镜像只属于 POSIX 那条脚本" —— commandFor 里的 win 守卫
   check('Windows 上给镜像也一样给不出命令', commandFor('install', 'magpie', 'win32 x64', { mirror: MIRROR }) === null);
+  check('官方下载口也带给了界面（一键装不了时的兜底）', publicExternals('win32 x64').find((x) => x.id === 'magpie')?.downloadUrl === 'https://usemagpie.ai/download/windows-amd64');
 
   // 接口这一层也要挡住（不然它会被排进队列，跑到那台机器上才失败）
   const badMirror = await req(`/api/nodes/${NODE}/tasks`, {

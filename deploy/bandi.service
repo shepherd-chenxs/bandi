@@ -1,9 +1,5 @@
 # 班底控制面 —— Linux 部署单元（2026-10-15）
 #
-# ⚠️ 这个服务端**还没有鉴权**（`LOCAL_USER` 是写死的）。所以这里让它**只听本机**，
-#    外面走 SSH 隧道进来（见同目录 README.md）。**别把 8787 开到公网** ——
-#    那等于把 agent 的控制权交出去。
-#
 # 装法（细节见 README.md）：
 #   sudo cp deploy/bandi.service /etc/systemd/system/bandi.service
 #   sudo systemctl daemon-reload && sudo systemctl enable --now bandi
@@ -31,10 +27,18 @@ Environment=BANDI_PORT=8787
 # 部署即装：服务起来那一刻把 `bandi` 装进 bandi 用户的 ~/.local/bin（幂等）。
 # BANDI_DATA 显式指定时自动安装默认闸住（那是测试/沙箱的口径）—— 真部署在这里明说放行。
 Environment=BANDI_INSTALL_CLI=1
-# 只听本机。远程访问走 SSH 隧道（不用开端口，也不用碰下面这两行之外的配置）。
-# 真要开内网/公网，才需要 BANDI_HOST=0.0.0.0 ＋ BANDI_ORIGINS=<访问来源>，
-# 而且**不配 BANDI_ORIGINS 的话远端浏览器能看不能动**（写请求全 403）。
-Environment=BANDI_HOST=127.0.0.1
+
+# 有人在看管这个进程（2026-11-04）：界面「安全 → 监听地址」改完要重启控制面，
+# 服务端靠这个标记才敢自己退出 —— systemd 的 Restart=always 会把它拉起来。
+Environment=BANDI_SUPERVISED=1
+
+# 监听地址**不在这个文件里写死**（2026-11-04 用户定）：
+#   真源是数据目录的 `config.json`（`listenHost`）—— 界面上能改、改完重启生效，
+#   **升级/重装都不会被覆盖**（install.sh 每次都会重新生成本文件）。
+#   缺省 `0.0.0.0`：对外服务 + 强制鉴权；让不让进由「总机/分机」和「手机连接」管。
+#   ⚠️ 别把地址写回这里 —— 2026-11-04 的实际事故就是三次升级把 0.0.0.0 写回 127.0.0.1，
+#   局域网访问全断。要临时钉（调试），用 `BANDI_HOST=127.0.0.1` 启动，或 `bandi reset-host` 救回来。
+# 外网/反代还要配 BANDI_ORIGINS=<访问来源>，否则远端浏览器能看不能动（写请求全 403）。
 
 # ⚠️ ExecStart 里的 node 路径要按机器改：先 `which node`。
 #    这里写 /usr/bin/node 是 NodeSource 的装法；用 nvm 装的会是 ~/.nvm/... 下的绝对路径

@@ -31,8 +31,10 @@ export const fmtMb = (bytes) => {
    写成待用文件，**重启班底才换库**（换的时候现库自动备份进 backups/导入前-*.db）。
    恢复从此有两条路：直接导入快照，或照老办法手动覆盖 bandi.db。
    降成区之后 UI 跟着收（用户："导入导出做成按钮就行，没必要占据那么大的位置"）——
-   大字统计条、两张动作卡、右栏快照列表全部收掉：导出/导入就是节头两颗按钮，
-   状态压成一行小字，备份快照是一个矮列表。「重启生效」这类后果话术归导入确认框。 */
+   导出/导入就是节头两颗按钮。「重启生效」这类后果话术归导入确认框。
+   2026-11-04 重设计：库路径从节头挪到卡上面一行小字（不再跟按钮挤一行）；
+   点隔的一行统计改成等宽分格的统计块（数字大、标签小，一眼可比）；
+   快照条目压成单行 —— 文件名居左、来源·大小·时间右对齐。 */
 export async function renderBackupSection(mount) {
   /* 状态和备份列表并行拉；谁挂了都不拦渲染 —— 状态挂了数字显示 —，列表挂了显示空态，
      点导出/导入都会拿到真实报错。 */
@@ -57,13 +59,16 @@ export async function renderBackupSection(mount) {
           <div class="dm-item-sub">${SRC_LABEL[f.src] ?? SRC_LABEL.other} · ${fmtMb(f.size) || '—'} · ${dt(f.mtime)}</div>
         </div>`).join('')
     : `<div class="dm-empty">还没有备份。导入快照换库、或开了定时备份之后，会自动存进数据目录的 backups/ 里。</div>`;
-  const stats = [
-    size ? `<b>${esc(size)}</b> 库大小` : '',
-    `<b>${Number(counts.personas ?? 0)}</b> 员工`,
-    `<b>${Number(counts.conversations ?? 0)}</b> 会话`,
-    `<b>${Number(counts.projects ?? 0)}</b> 项目`,
-    mtime ? `<b>${esc(mtime)}</b> 最后修改` : '',
-  ].filter(Boolean).join('<span class="dm-sep">·</span>');
+  /* 统计块：数字当主信息、标签当辅信息；拉不到的（比如状态接口挂了）整块不画，别摆空格子 */
+  const tiles = [
+    size ? { v: size, l: '库大小' } : null,
+    { v: Number(counts.personas ?? 0), l: '员工' },
+    { v: Number(counts.conversations ?? 0), l: '会话' },
+    { v: Number(counts.projects ?? 0), l: '项目' },
+    mtime ? { v: mtime, l: '最后修改', time: true } : null,
+  ].filter(Boolean)
+    .map((s) => `<div class="dm-stat${s.time ? ' dm-stat-time' : ''}"><b>${esc(s.v)}</b><span>${s.l}</span></div>`)
+    .join('');
   /*
    * 导出/导入按钮**任何形态都显示**（2026-11-01 用户："不管是不是总机分机，
    * 这个导入导出都要一直显示"）—— 原来服务器形态（局域网访问）藏按钮只留 CLI 指路，
@@ -75,13 +80,13 @@ export async function renderBackupSection(mount) {
       <div class="fx-head">
         <label>数据管理</label>
         <div class="dm-actions">
-          <span class="machine-path dm-path" title="${esc(local.dbPath ?? '')}">${esc(local.dbPath ?? '—')}</span>
           <button class="btn-sm" id="backupImport">导入快照</button>
           <button class="btn-sm primary" id="backupExport">导出快照</button>
         </div>
       </div>
+      <div class="dm-pathline" title="${esc(local.dbPath ?? '')}">库文件<span class="machine-path">${esc(local.dbPath ?? '—')}</span></div>
       <div class="dm-card">
-        <div class="dm-line">${stats}</div>
+        <div class="dm-stats">${tiles}</div>
         <div class="dm-snaps">
           <div class="dm-snaps-head">备份快照<span class="dm-list-count">${bkFiles.length ? `${bkFiles.length} 份 · 定时备份与导入前自动备份都存在数据目录的 backups/ 里` : ''}</span></div>
           <div class="dm-snaps-body">${bkList}</div>
@@ -251,29 +256,6 @@ export const askCheckbox = (o) => askDialog({ ...o, field: false });
 
 
 /**
- * 「复制」按钮：文案从 `data-copy` 取，复制完显示「已复制」再还原。
- *
- * 抽出来是因为**两页都要用**（本机设备页、远程节点页）—— 同一段逻辑各写一份，
- * 迟早只修其中一份（前端的"两套"就是这么来的）。
- */
-export function wireCopyButtons() {
-  $('settingsView').querySelectorAll('[data-copy]').forEach((el) => {
-    const label = el.textContent;
-    el.onclick = async () => {
-      try {
-        await navigator.clipboard.writeText(el.dataset.copy);
-        el.textContent = '已复制';
-        setTimeout(() => { el.textContent = label; }, 1500);
-      } catch {
-        toast('复制不了，手动选中吧：\n\n' + el.dataset.copy);
-      }
-    };
-  });
-}
-
-
-
-/**
  * 一个运行时的**健康度** —— 同类产品那张表叫「健康度」，这里按机器诚实分：
  *
  *   · **本机**运行时：健康 = **这个 CLI 现在能不能起**（文件在、班底起得来、已接入）。
@@ -341,96 +323,9 @@ export function healedTag(r) {
 
 
 
-/**
- * 那台机器上**正在跑**的那件小事（装运行时），针对某个目标。
- *
- * 为什么从 `dev.task` 读、而不是靠点击时那个闭包（2026-10-16 用户报的"刷新页面，看不到安装进度了"）：
- * 进度原来是**浏览器里的临时状态** —— 一刷新就没了，可那件事其实还在那台机器上跑着。
- * 按这条架构一贯的原则（**状态在服务端**），它得能从服务端读回来：刷新、换台电脑、明天再看，都还是它。
- */
-export function runningTaskFor(dev, target) {
-  const t = dev.task;
-  if (!t || t.done || t.family !== target) return null;
-  return t;
-}
-
-
-
 /** 任务输出的最后一行（界面上就显示这一行，够用又不吵） */
 export function taskTail(task) {
   return (task?.output ?? '').trim().split('\n').filter(Boolean).slice(-1)[0] ?? '';
-}
-
-
-
-/**
- * 给那台机器排一件事，然后盯着它做完 —— **「排队 → 轮询 → 出结果」这套只写一遍**。
- *
- * ⚠️ 这段在 app.js → js/ 拆分时被弄丢了（2026-11-02 用户报"点击安装并不能真的安装"）：
- * `wireInstallRuntime` 里 `await runNodeTask(...)` 直接 ReferenceError，
- * async onclick 静默拒绝 —— 确认框点了「开始安装」后按钮卡在「进行中…」，什么都没发生。
- * 这里按 394b0a3 的原实现逐字搬回（`mirror` 参数留着：外部件那套已删，但签名别缩）。
- * 返回 `{ok, status, tail, output}` / 失败 `{ok:false, reason}`。
- */
-async function runNodeTask(dev, { kind, target, mirror = '', onLine = () => {} }) {
-  let task;
-  try {
-    task = (await post(`/api/nodes/${encodeURIComponent(dev.id)}/tasks`, { kind, family: target, mirror })).task;
-  } catch {
-    return { ok: false, reason: '排不上' }; // api() 已经提示过了
-  }
-  onLine('排队中 —— 等那台机器来领（它离线时会一直等着，不会丢）');
-  // 上限 10 分钟：免得那台机器一直不来领，这个页面就永远转着
-  const deadline = Date.now() + 10 * 60 * 1000;
-  for (;;) {
-    await new Promise((r) => setTimeout(r, 1500));
-    let t;
-    try {
-      t = (await api(`/api/nodes/${encodeURIComponent(dev.id)}/tasks/${encodeURIComponent(task.id)}`)).task;
-    } catch {
-      return { ok: false, reason: '查不到进度了' };
-    }
-    if (!t) return { ok: false, reason: '任务不见了' };
-    const tail = (t.output ?? '').trim().split('\n').filter(Boolean).slice(-1)[0] ?? '';
-    if (t.status === '执行中') onLine(tail || '正在跑…');
-    else if (t.done) return { ok: t.status === '完成', status: t.status, tail, output: t.output ?? '' };
-    if (Date.now() > deadline) {
-      return { ok: false, reason: '等了 10 分钟还没完 —— 那台机器可能没在领活（离线 / 正忙）。进度不会丢，回来刷新能看到。' };
-    }
-  }
-}
-
-
-
-/**
- * 失败时该显示哪一行。
- *
- * ⚠️ 不能直接用最后一行（2026-10-16 用户报的："（sh 退出码 1）这个报错重装怎么还有"）：
- * 我让节点在收尾时补了一行 `（退出码 N）` —— 那是**我自己加的**，真正的错因在它**上面**几行
- * （比如 `magpie: could not download …`、`起不来：spawn magpie ENOENT`），
- * 结果界面上只显示了那行没用的，有用的被塞进悬停里 ✗。
- * 所以这里跳过"我自己补的那种行"（整行被括号包住的），挑**最后一行像错因的**。
- */
-export function taskFailLine(task) {
-  const lines = (task?.output ?? '')
-    .split('\n')
-    .map((l) => l.trim())
-    .filter(Boolean);
-  const mine = /^（.*）$/; // 我自己补的：`（sh 退出码 1）`
-  const good = lines.filter((l) => !mine.test(l));
-  return (good.length ? good[good.length - 1] : lines[lines.length - 1]) ?? '';
-}
-
-
-
-/** 失败发生在什么时候（本地时分）—— 让"这次刚失败"和"上次的旧失败"分得出来 */
-export function failAt(task) {
-  const t = task?.endedAt ? new Date(task.endedAt) : null;
-  if (!t || Number.isNaN(t.getTime())) return '';
-  const mins = Math.round((Date.now() - t.getTime()) / 60000);
-  if (mins < 1) return '刚刚';
-  if (mins < 60) return `${mins} 分钟前`;
-  return t.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
 }
 
 
@@ -441,7 +336,8 @@ export function failAt(task) {
  * ⚠️ 为什么必须这样（2026-10-16 用户报的"页面在不停刷新"）：第一版我让它在跑的时候每 2 秒
  * 整页重画一次，看着就是"页面不停刷新"，滚动位置、展开状态全被打回去 ✗。
  * 进度是**一小段文字**的事，就只改那一小段文字：`textContent` 换掉，别的一动不动。
- * 只有**做完**那一刻才整页重画一次 —— 因为那一行要从「未安装」挪到「已安装」去。
+ * 只有**做完**那一刻才整页重画一次。安装入口已撤（2026-11-04 用户定：班底只识别、不代装，
+ * 因为"替用户装东西"遇到的坑太多），这里只剩兜底：升级前留下的旧任务还在跑时，进度照样能接上。
  */
 export function scheduleTaskPoll(dev) {
   const t = dev?.task;
@@ -478,63 +374,23 @@ export function scheduleTaskPoll(dev) {
 
 
 
-/**
- * 「在这台机器上安装」（远程节点）。
- *
- * 流程：确认（把**要跑的命令原样**摆出来）→ 排个任务 → 节点在它自己的领活循环里领走并跑 →
- * 界面轮询任务状态显示进度 → 装完那台机器**立刻重报清单**，这一页自己刷新。
- *
- * 为什么命令要在确认框里原样显示：这是"在**别人的机器**上装东西"。点下去之前得看清楚是什么。
- * 而命令本身**不是这里拼的** —— 这里只发族名，节点自己查表（安全边界）。
- */
-export function wireInstallRuntime(dev) {
-  $('settingsView').querySelectorAll('[data-install-rt]').forEach((btn) => {
-    btn.onclick = async () => {
-      const family = btn.dataset.installRt;
-      const cmd = btn.dataset.cmd;
-      const row = btn.closest('.row-item');
-      const log = row?.querySelector('.install-log');
-      const say = (text, keep = false) => {
-        if (!log) return;
-        log.style.display = '';
-        log.textContent = keep ? (log.textContent + text).slice(-600) : text;
-      };
-      const ok = await askConfirm({
-        title: '在这台机器上安装？',
-        /*
-         * 正文只留"会在哪台机器上跑什么" —— 点之前必须看清楚的是**要执行什么** ✓。
-         * 原来后面还跟一句"装完不用重启节点 —— 它会自己把新清单报上来"，
-         * 2026-10-16 用户让删 ✓（那是实现细节；用户会自己看见清单变了，原理归网站讲）。
-         */
-        body: `会在「${dev.label}」上跑：\n${cmd}`,
-        ok: '开始安装',
-      });
-      if (!ok) return;
-
-      const label = btn.textContent;
-      btn.disabled = true;
-      btn.textContent = '进行中…';
-      // 「排队 → 轮询 → 出结果」那套只用写一遍（见 runNodeTask）
-      const r = await runNodeTask(dev, { kind: 'install-runtime', target: family, onLine: say });
-      if (r.ok) {
-        say('装好了 —— 正在刷新…');
-        btn.textContent = '装好了';
-        setTimeout(() => renderRuntimes(), 700); // 那台机器已经重报清单了，刷新就能看到
-        return;
-      }
-      say(`装失败了：${r.tail || r.reason || '（没输出）'}`, true);
-      btn.disabled = false;
-      btn.textContent = label;
-    };
-  });
-}
+/* 「在这台机器上安装」已撤（2026-11-04 用户定：班底**只识别，不代装** ——
+   替用户跑安装命令遇到的坑太多：npm 不在 PATH、spawn ENOENT、装完路径对不上…）。
+   一键安装 / 复制命令 / 安装任务排队那套（wireInstallRuntime / runNodeTask）整体删除；
+   同日下午：服务端的 install-runtime 通路（runtimes 的安装命令表、本机/节点两个执行器、
+   POST /api/nodes/:id/tasks 的分支）也一并清了 —— 界面、协议、执行三层都不留残骸。
+   magpie 的安装不走这里：那是外部件（externals.commandFor），在插件页「软件」条目。
+   要找回从 git 找：本文件历史里的 wireInstallRuntime()。 */
 
 
 
 /* 「运行时」区（2026-11-01 七改，用户截图："把运行时放到这个页面的数据管理上面"；
    同日八改：设备节 + 设备详情页整个撤掉 —— 本机详情页的「已安装 / 未安装 / 外部件」
-   全部并入这里，这就是这台机器页的一部分了）。
-   deviceId = 设备列表里本机那条的 id；开关/接入/识别/安装的语义与原详情页完全一致。
+   全部并入这里，这就是这台机器页的一部分了。
+   2026-11-04：安装入口整段撤掉（「未安装」→「未识别」）；同日再撤：用户拍板
+   "只要识别功能" —— 「未识别」段和「按路径接入」弹窗也整个去掉，这一区只剩
+   识别（「识别本机运行时」）+ 接入（已识别列表上的开关）。
+   deviceId = 设备列表里本机那条的 id；开关/识别的语义与原详情页完全一致。
    onChange：改动成功后的回调 —— 不传就整页 renderRuntimes()。 */
 export async function paintLocalRuntimes(mount, deviceId, { onChange } = {}) {
   if (!mount || !deviceId) return;
@@ -551,7 +407,6 @@ export async function paintLocalRuntimes(mount, deviceId, { onChange } = {}) {
   const pathOf = new Map((scan ?? []).map((f) => [f.id, (f.candidates ?? []).find((c) => c.usable)?.path ?? null]));
   const haveFamily = new Set(dev.runtimes.map((r) => r.family));
   const notYet = families.filter((f) => f.installed && !haveFamily.has(f.id));
-  const absent = families.filter((f) => !f.installed && !haveFamily.has(f.id));
 
   /* 行骨架沿用原详情页的 rowOf —— 改样式连这里一起改 */
   const rowOf = (r) => {
@@ -584,80 +439,32 @@ export async function paintLocalRuntimes(mount, deviceId, { onChange } = {}) {
     </div>`;
   };
 
-  /* 「未安装」行 —— 原样搬自 renderDeviceDetail 的 rowOfAbsent（2026-11-01 八改并区）：
-     一键安装 / 复制命令 / 按路径接入，语义一个不少 */
-  const isWinLocal = /win/i.test(dev.platform ?? '');
-  const rowOfAbsent = (f) => {
-    const cmd = f.install?.kind === 'app' && !isWinLocal ? null : (f.install?.cmd ?? null);
-    // 只有 npm 那种能一键装（dsh 是 Windows 桌面端自带的，不是一条命令能解决的事，不给按钮）
-    const oneClick = f.install?.kind === 'npm' && !!cmd;
-    const busy = runningTaskFor(dev, f.id);
-    // 上次没成的那件也摆出来（失败是做过的事，就该留在那儿，悬停看完整输出）
-    const lastFail = !busy && dev.task?.done && dev.task.status !== '完成' && dev.task.family === f.id ? dev.task : null;
-    const sub = cmd
-      ? `<div class="sub" style="font-family:ui-monospace,monospace;font-size:11.5px">${esc(cmd)}</div>`
-      : '<div class="sub">这台机器上装不了（它是 Windows 桌面端自带的）</div>';
-    return `<div class="row-item off">
-      ${cliAvatar(f.id, f.label)}
-      <div class="who">
-        <b>${esc(f.label)}</b>
-        ${sub}
-        <!-- 安装进度就写在这儿（点击之后才出现），不另开弹窗 -->
-        <div class="sub install-log" style="display:none;font-family:ui-monospace,monospace;font-size:11.5px"></div>
-        ${
-          busy
-            ? `<div class="sub" data-task-line="${esc(busy.id)}" style="display:block;font-family:ui-monospace,monospace;font-size:11.5px">${
-                busy.running ? '进行中… ' : '排队中… '
-              }${esc(taskTail(busy) || '（马上开始）')}</div>`
-            : lastFail
-              ? `<div class="sub" title="${esc(lastFail.output)}" style="color:var(--bad);font-size:11.5px">上次没成（${esc(
-                  failAt(lastFail),
-                )}）：${esc(taskFailLine(lastFail) || '（没输出）')}（悬停看全部）</div>`
-              : ''
-        }
-      </div>
-      ${
-        busy
-          ? '<span class="dim" style="font-size:11.5px">进行中…</span>'
-          : oneClick
-            ? `<button class="mini auto primary" data-install-rt="${esc(f.id)}" data-cmd="${esc(cmd)}">在这台机器上安装</button>`
-            : ''
-      }
-      ${cmd ? `<button class="mini auto" data-copy="${esc(cmd)}">复制命令</button>` : ''}
-      <button class="mini auto" data-rt-manual="${esc(f.id)}">按路径接入</button>
-    </div>`;
-  };
-
   const render = () => {
+    /* 空态（一条都没有）用引导卡：原来两行灰字看着像页面坏了，
+       现在给出「去哪点、点了会发生什么」；有内容时 scan===null 才留一行补版本号的提示 */
+    const nAny = dev.runtimes.length + notYet.length;
     mount.innerHTML = `
       <section class="fx">
         <div class="fx-head">
-          <label>运行时 <span class="count">${dev.runtimes.length + notYet.length}</span></label>
+          <label>运行时 <span class="count">${nAny}</span></label>
           <button class="btn-sm" id="detectRuntime" title="再扫一遍这台机器：补上版本号，也确认没装错">识别本机运行时</button>
         </div>
         ${dev.runtimes.map(rowOf).join('')}
         ${notYet.map(rowOfNotYet).join('')}
         ${
-          !dev.runtimes.length && !notYet.length
-            ? '<div class="dim" style="padding:14px 16px">这台机器上还没探测到 agent CLI —— 看「未安装」那一段怎么装。</div>'
-            : ''
+          nAny
+            ? scan === null
+              ? '<div class="rt-hint">点「识别本机运行时」可以补上版本号。</div>'
+              : ''
+            : `<div class="rt-empty">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m21 21-4.3-4.3"></path></svg>
+                <b>这台机器上还没识别到 agent CLI</b>
+                <span>点右上角的「识别本机运行时」扫一遍 —— 识别到的会列在这里，用右边的开关逐个接入。</span>
+              </div>`
         }
-        ${scan === null ? '<div class="dim" style="padding:10px 2px;font-size:12px">点「识别本机运行时」可以补上版本号。</div>' : ''}
-      </section>
-      ${
-        absent.length
-          ? `<section class="fx" style="margin-top:26px">
-               <div class="fx-head">
-                 <label>未安装 <span class="count">${absent.length}</span></label>
-                 <span class="dim" style="font-size:12px">安装成功之后，点击【识别本机运行时】按钮进行刷新</span>
-               </div>
-               ${absent.map(rowOfAbsent).join('')}
-             </section>`
-          : ''
-      }`;
+      </section>`;
 
-    /* 接线范围限定在 mount 里（querySelector 而非 $('')）；安装/复制/任务轮询那几个
-       帮手自己扫 #settingsView —— 页面上只有这一节带这些属性，借用无妨 */
+    /* 接线全部限定在 mount 里（querySelector，不扫全局） */
     const detect = mount.querySelector('#detectRuntime');
     if (detect) {
       detect.onclick = async () => {
@@ -714,136 +521,9 @@ export async function paintLocalRuntimes(mount, deviceId, { onChange } = {}) {
         renderRuntimes();
       };
     });
-    /* 「未安装」段的三个动作（原详情页的接线，一个不少） */
-    wireInstallRuntime(dev); // 「在这台机器上安装」—— 本机由控制面当场执行（server.mjs 的 local 分支）
-    wireCopyButtons(); // 「复制命令」
-    mount.querySelectorAll('[data-rt-manual]').forEach((el) => {
-      el.onclick = () => {
-        // 族可能来自扫描结果（带 candidates）也可能来自族列表（带 detectedPath）
-        const f = [...(scan ?? []), ...families].find((x) => x.id === el.dataset.rtManual);
-        if (f) openAddRuntime(f);
-      };
-    });
-    scheduleTaskPoll(dev); // 有安装任务在跑就接着盯（进度是服务端的事实）
+    scheduleTaskPoll(dev); // 升级前留下的旧安装任务若还在跑，进度照样接上（新任务已无处可发起）
   };
   render();
-}
-
-
-
-/* 「安装」弹窗 —— 正常流程碰不到它（打开开关就自动建好了） */
-
-export let addRtFamily = null;
-
-
-
-/**
- * 「安装」弹窗：只干一件事 —— 你说你装了、可班底没认出来，那把位置告诉它。
- *
- * 为什么这儿**不再放安装命令**：列表里「未安装」那一行已经给了命令 + 复制按钮，
- * 弹窗里再来一份是重复的（用户实报）。
- *
- * 输入可以是**安装目录**也可以是可执行文件路径：服务端会往里找到真正的可执行文件
- * （见 runtimes.mjs 的 resolveCliPath）。
- */
-export function openAddRuntime(family) {
-  addRtFamily = family;
-  const usable = (family.candidates ?? []).filter((c) => c.usable);
-  /*
-   * 预填**只认探测结果**。
-   *
-   * 以前这里还会退回 `family.defaultPath`，而那是各个适配器里**写死的**路径
-   * （值来自开发那台机器的布局）。能走到这个弹窗的族，按定义就是"没探测到"的 ——
-   * 那个写死的路径极可能根本不存在。预填进去等于递给他一个看着合理、
-   * 点下去必然得一个「路径已失效」的值，他还不知道哪儿错了。
-   * 空着 + placeholder 才是诚实的。（写死的兜底已经从服务端整条去掉了。）
-   */
-  const preset = usable[0]?.path || family.detectedPath || '';
-
-  /*
-   * 标题跟列表里那颗按钮一致（都叫「按路径接入」）。
-   *
-   * 为什么**不叫「安装」**（2026-10-16 用户提的）：这个弹窗干的事是
-   * "告诉我它装在哪（目录或可执行文件都行）→ 检测 → 接进来"，**它不装任何东西**。
-   * 叫「安装」会让人以为点了就会帮他装一个 —— 于是真没装的人点进来、填了个猜的路径、
-   * 得到一个「路径已失效」，还不知道问题出在哪。
-   * 也不用「路径配置」：那是**名词**（像个设置项），按钮该是动词，而且它确实**当场完成接入**。
-   * 同一行那个「复制安装命令」才是真安装（`npm install -g …`），那个词是对的。
-   */
-  $('addRtTitle').textContent = `按路径接入 ${family.label}`;
-  $('addRtPath').value = preset;
-  $('addRtPath').placeholder = `它的位置：安装目录或可执行文件，例如 ${EXAMPLE_DIR[family.id] ?? 'D:\\Tools\\xxx'}`;
-  // 底部那一行先放常驻提示；点「检测」之后会被结果替换掉（同一块地方，不占两处）
-  $('addRtFoot').innerHTML = `如果<b>已经装了、但没被认出来</b>，把它的位置填进来 —— 目录或可执行文件都行（如：${esc(
-    EXAMPLE_DIR[family.id] ?? 'D:\\Tools\\xxx',
-  )}）。`;
-  $('addRtDlg').showModal();
-  setTimeout(() => $('addRtPath').focus(), 30);
-}
-
-
-
-/** 提示里那个"例如"用的目录。**只是举例**，不会被当成默认值填进去 */
-export const EXAMPLE_DIR = {
-  codex: 'D:\\Tools\\codex',
-  claude: 'D:\\Tools\\Claude',
-  dsh: 'D:\\AppData\\Local\\Programs\\DeepSeek Harness',
-};
-
-
-
-/**
- * 「检测」：跑一次 `--version`，看这个路径到底行不行。
- *
- * 为什么要有：手填路径最容易出的错是"看着对、其实跑不起来"（填了个目录、
- * 填了个 .cmd shim、版本不对）。让人在**接入之前**就知道结果，比接进去之后
- * 在列表里看到一个「路径已失效」强得多。
- *
- * 服务端会先过 `resolveCliPath`：填目录的话解析成里面的可执行文件，
- * 并把解析结果回给这里 —— 所以解析结果要**写回输入框**，让人看见实际用哪个文件。
- *
- * 结果写进底部的 `addRtFoot`（**和常驻提示共用那一行**），不是另开一块：
- * 另开一块就得为它预留高度，弹窗中间会出现一个空洞。
- */
-export async function testAddRuntimePath() {
-  const btn = $('addRtTest');
-  const out = $('addRtFoot');
-  const given = $('addRtPath').value.trim();
-  if (!given) {
-    out.innerHTML = '<em class="tag-warn">先填一个路径</em>';
-    return;
-  }
-  btn.disabled = true;
-  btn.textContent = '检测中…';
-  out.textContent = '';
-  try {
-    const r = await post('/api/runtimes/test', { family: addRtFamily.id, path: given });
-    if (r.ok) {
-      out.innerHTML = `<em class="tag-ok">${esc(r.version || '能跑')}</em> 可以接入`;
-      if (r.path && r.path !== given) {
-        // 填的是目录 → 服务端解析出了真身，写回去让人看见
-        $('addRtPath').value = r.path;
-        out.innerHTML += '<span class="dim" style="font-size:11.5px">（已定位到可执行文件）</span>';
-      }
-    } else {
-      let msg = r.error || '';
-      /*
-       * 最常见的坑：填的是 Windows 的 `.cmd` / `.bat` shim（比如 npm 全局装完留下的那个）。
-       * 文件确实在，但 Node 22 起 spawn 一个 .cmd（不挂 shell）直接 EINVAL ——
-       * 报出来的原文 "起不来：EINVAL spawn EINVAL" 对用户毫无意义，换成人话。
-       */
-      if (/EINVAL/i.test(msg) && /\.(cmd|bat)$/i.test(given)) {
-        // 短一点：结果区只预留了两行，太长会把弹窗撑高
-        msg = '班底不能直接启动 .cmd/.bat —— 请指向它背后的 .exe 或 .js';
-      }
-      out.innerHTML = `<em class="tag-warn">跑不起来</em> <span class="dim">${esc(msg)}</span>`;
-    }
-  } catch (err) {
-    out.innerHTML = `<em class="tag-warn">${failHtml(err)}</em>`;
-  } finally {
-    btn.disabled = false;
-    btn.textContent = '检测';
-  }
 }
 
 

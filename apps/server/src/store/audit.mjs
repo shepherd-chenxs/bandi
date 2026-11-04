@@ -111,6 +111,25 @@ export function list({ kind = '', actorId = '', before = '', limit = 50 } = {}) 
   return db.prepare(sql).all(...args);
 }
 
+/**
+ * 导出用（2026-11-03）：同一套筛选，但**不吃 list() 的 200 上限** —— 导出要的是全量。
+ * 上限 5000 只是防一次把几万行塞进内存；再多就该分批导，而不是拉爆浏览器。
+ */
+export function listForExport({ kind = '', limit = 5000 } = {}) {
+  const n = Math.min(Math.max(Number(limit) || 5000, 1), 20000);
+  const where = [];
+  const args = [];
+  if (kind) { where.push('kind = ?'); args.push(String(kind)); }
+  const sql = `SELECT id, at, kind, actorKind, actorId, action, resource, result, reason, httpStatus, endedAt, ip
+    FROM security_events ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY at DESC, id DESC LIMIT ${n}`;
+  return db.prepare(sql).all(...args);
+}
+
+/** 删除触发器：archive() / clearAll() 期间要临时摘掉，之后必须原样装回 */
+const restoreDeleteTrigger = () =>
+  db.exec(`CREATE TRIGGER trg_events_no_delete BEFORE DELETE ON security_events
+    BEGIN SELECT RAISE(ABORT, 'security_events is append-only'); END;`);
+
 /** 归档：搬走 N 天前的行（临时摘掉删除触发器，搬完装回），往主表留一条 archive 痕迹 */
 export function archive(days = 90) {
   const cutoff = new Date(Date.now() - days * 86400_000).toISOString();
@@ -121,9 +140,28 @@ export function archive(days = 90) {
     db.prepare('INSERT INTO security_events_archive SELECT * FROM security_events WHERE at < ?').run(cutoff);
     db.prepare('DELETE FROM security_events WHERE at < ?').run(cutoff);
   } finally {
-    db.exec(`CREATE TRIGGER trg_events_no_delete BEFORE DELETE ON security_events
-      BEGIN SELECT RAISE(ABORT, 'security_events is append-only'); END;`);
+    restoreDeleteTrigger();
   }
   add({ kind: 'audit.archive', action: `archived ${n} events older than ${days}d`, result: 'ok' });
+  return n;
+}
+
+/**
+ * 清空（2026-11-03，审计页「清空」按钮）：**先归档再删** —— 行不能在主表里凭空消失
+ * （append-only 的口径），搬进 security_events_archive 仍可事后查；搬完往主表留一条
+ * `kind='audit.clear'` 的痕迹，说清楚"是谁在什么时候清了 N 条"。
+ * 所以清空之后列表里还剩这一条 —— 这是**故意**的。
+ */
+export function clearAll({ actorKind = null, actorId = null, ip = null } = {}) {
+  const n = db.prepare('SELECT COUNT(*) AS n FROM security_events').get().n;
+  if (!n) return 0;
+  db.exec('DROP TRIGGER IF EXISTS trg_events_no_delete;');
+  try {
+    db.prepare('INSERT INTO security_events_archive SELECT * FROM security_events').run();
+    db.prepare('DELETE FROM security_events').run();
+  } finally {
+    restoreDeleteTrigger();
+  }
+  add({ kind: 'audit.clear', actorKind, actorId, ip, action: `cleared ${n} events`, result: 'ok' });
   return n;
 }

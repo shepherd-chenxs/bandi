@@ -67,6 +67,8 @@ export const ROUTES = [
   // auth:'local' = handler 里 authorizeLocal() 说了算（§8.5 矩阵 / 姊妹文档）；
   // 这里登记只为「存在性」—— 漏登记会被默认拒绝 404。
   { id: 'local.status', m: ['GET'], path: p('/api/local/status'), auth: 'local' },
+  // 外部件现状（2026-11-04）：插件页「软件」商店条目 —— 只读
+  { id: 'local.externals', m: ['GET'], path: p('/api/local/externals'), auth: 'local' },
   { id: 'local.backups', m: ['GET'], path: p('/api/local/backups'), auth: 'local' },
   { id: 'local.collab.status', m: ['GET'], path: p('/api/local/collab/status'), auth: 'local' },
   { id: 'local.collab.join', m: ['POST'], path: p('/api/local/collab/join'), auth: 'local' },
@@ -118,7 +120,8 @@ export const ROUTES = [
   { id: 'run.abort', m: ['POST'], path: p('/api/runs', id1, 'abort'), auth: 'session', member: true, device: true, note: '能派不能停 = 会话永远「正在输入」' },
 
   /* --------------------------------------- 需要权限（role_permissions 可扩） */
-  { id: 'conv.create', m: ['POST'], path: p('/api/conversations'), auth: 'session', perm: 'conversation:read' },
+  { id: 'conv.create', m: ['POST'], path: p('/api/conversations'), auth: 'session', device: true, perm: 'conversation:read',
+    note: '手机「发消息」的第一步（2026-11-03 实机：E4033）。通讯录点人进详情 → 详情点「发消息」→ 与这个人**还没聊过**时没有可复用的会话，必须先建一段（openDirectChat 的 ③ 分支）。原来没开 device，于是「先聊过的能发、没聊过的报 E4033」—— 看着像"发消息按钮坏了"。只开建：改名/删会话/不显示仍是桌面的事' },
   { id: 'conv.update', m: ['PUT'], path: p('/api/conversations', id1), auth: 'session', perm: 'conversation:read' },
   { id: 'conv.delete', m: ['DELETE'], path: p('/api/conversations', id1), auth: 'session', perm: 'conversation:read' },
   { id: 'conv.hide', m: ['POST'], path: p('/api/conversations', id1, 'hide'), auth: 'session', perm: 'conversation:read' },
@@ -253,6 +256,7 @@ export const ROUTES = [
   { id: 'runtime.models', m: ['GET'], path: p('/api/runtimes', id1, 'models'), auth: 'session', perm: 'machine:read' },
   { id: 'lan.read', m: ['GET'], path: p('/api/lan'), auth: 'session', perm: 'machine:read' },
   { id: 'lan.write', m: ['POST'], path: p('/api/lan'), auth: 'session', perm: 'machine:manage', noPanel: true, note: '局域网开关' },
+  { id: 'control.restart', m: ['POST'], path: p('/api/control-plane/restart'), auth: 'session', perm: 'machine:manage', noPanel: true, note: '重启控制面（改了监听地址后生效；只给被 systemd/桌面壳监护的进程，E1061）' },
   { id: 'experts.list', m: ['GET'], path: p('/api/experts'), auth: 'session', perm: 'persona:read' },
   { id: 'expert.hire', m: ['POST'], path: p('/api/experts', id1, 'hire'), auth: 'session', perm: 'persona:write' },
   { id: 'expert.fire', m: ['POST'], path: p('/api/experts', id1, 'fire'), auth: 'session', perm: 'persona:write' },
@@ -274,6 +278,8 @@ export const ROUTES = [
   { id: 'security.sessions', m: ['GET'], path: p('/api/security/sessions'), auth: 'session', perm: 'audit:read' },
   { id: 'security.revokeOthers', m: ['POST'], path: p('/api/security/sessions/revoke-others'), auth: 'session', member: true, note: '踢自己的其它会话，本人操作不算管理' },
   { id: 'security.audit', m: ['GET'], path: p('/api/security/audit'), auth: 'session', perm: 'audit:read' },
+  { id: 'security.auditExport', m: ['GET'], path: p('/api/security/audit/export'), auth: 'session', perm: 'audit:read', noPanel: true, note: '审计日志全量导出（2026-11-03）；读的是同一份数据，权限同 audit' },
+  { id: 'security.auditClear', m: ['POST'], path: p('/api/security/audit/clear'), auth: 'session', perm: 'security:manage', noPanel: true, note: '清空审计日志（先归档再删，留 audit.clear 痕迹）；破坏性动作，走 security:manage 而不是 audit:read' },
   { id: 'run.events', m: ['POST'], path: p('/api/runs', id1, 'events'), auth: 'session', compute: true, note: '过程回传：getNodeJobByRun 归属校验' },
   { id: 'run.finish', m: ['POST'], path: p('/api/runs', id1, 'finish'), auth: 'session', compute: true, note: '回执：同上' },
 ];

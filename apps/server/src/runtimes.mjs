@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { dataDir } from './config.mjs';
+import { pathDirs, wellKnownBins } from './path-env.mjs';
 import { listNodes, countNodeJobs, getNode, renameNode, scopeOfNode } from './store.mjs';
 import * as codex from './codex.mjs';
 import * as claude from './claude.mjs';
@@ -31,9 +32,6 @@ const FAMILIES = {
     // 实测：headless 无人审批时，开了沙箱的命令全被拒。所以这两档等于"禁用工具"。
     blocked: ['workspace-write', 'read-only'],
     note: '只有 danger-full-access 在无人审批下跑得动命令。',
-    // 没装的时候给用户一条**能直接粘的命令** —— 别让他去猜自己去哪儿找安装包
-    // `bin`/`args` 是给**一键安装**用的（shell-free：直接 spawn，不经过 shell）—— 见 installCommandFor
-    install: { kind: 'npm', cmd: 'npm install -g @openai/codex', bin: 'npm', args: ['install', '-g', '@openai/codex'] },
   },
   claude: {
     id: 'claude',
@@ -43,12 +41,13 @@ const FAMILIES = {
     sandboxes: claude.PERMISSION_MODES,
     blocked: [],
     note: '权限对应 --permission-mode；--resume 能续接会话记忆。',
-    install: {
-      kind: 'npm',
-      cmd: 'npm install -g @anthropic-ai/claude-code',
-      bin: 'npm',
-      args: ['install', '-g', '@anthropic-ai/claude-code'],
-    },
+    /*
+     * 安装（2026-11-04 定稿）：**班底不装 agent CLI，只识别**。npm 那条一键安装
+     * （`npm install -g @anthropic-ai/claude-code`）随整个 install-runtime 通路一起拆了 ——
+     * 它是一键安装所有事故的病根（npm 不在 GUI 进程 PATH、fnm/volta 的 shim 看不见、
+     * spawn .cmd EINVAL）。用户自己装（官方原生安装器 `irm https://claude.ai/install.ps1 | iex`，
+     * 落点 `~/.local/bin` —— path-env.mjs 的 wellKnownBins 认得，装完即见，不用重启班底）。
+     */
   },
   dsh: {
     id: 'dsh',
@@ -56,10 +55,7 @@ const FAMILIES = {
     adapter: 'dsh',
     sandboxes: ['workspace-write'],
     blocked: [],
-    note: 'dsh.cmd 不在 PATH 上，路径必须是绝对路径。',
-    // dsh 这个 CLI 是桌面端自带的，npm 上那个班底起不来（spawn .cmd 会 EINVAL）,
-    // 所以不能给一条 npm 命令 —— 只能让他装桌面端
-    install: { kind: 'app', cmd: '装 DeepSeek Harness 桌面端（这个 CLI 是它自带的）' },
+    note: 'dsh.cmd 不在 PATH 上，路径必须是绝对路径。这个 CLI 是 Windows 桌面端自带的 —— 要用就装桌面端。',
   },
 };
 
@@ -661,9 +657,13 @@ export function publicList() {
  *
  * 为什么不用 `where` / `which`：那要 spawn 一个子进程（几十毫秒 + 一层 shell 引号坑），
  * 而这里最多 stat 几十次、同量级就完了。24 个 PATH 目录 × 几个扩展名 ≈ 几毫秒。
+ *
+ * 2026-11-04 补：目录来源换成 `pathDirs()` —— 进程 PATH 快照之外，实时并上注册表里
+ * 最新的系统/用户 PATH 和各安装器的固定落点（见 path-env.mjs）。
+ * "bandi 先启动、CLI 后装"也能识别出来，靠的就是这条；reg query 有 5 秒记忆化，不贵。
  */
 function findOnPath(names) {
-  const dirs = String(process.env.PATH ?? '').split(path.delimiter).filter(Boolean);
+  const dirs = pathDirs();
   const exts = process.platform === 'win32' ? ['.cmd', '.exe', '.bat', '.ps1', ''] : [''];
   for (const dir of dirs) {
     for (const name of names) {
@@ -678,9 +678,16 @@ function findOnPath(names) {
   return null;
 }
 
-/** PATH 上那些带 node_modules 的目录 —— 就是 npm 全局前缀的候选（不 spawn `npm prefix -g`） */
+/**
+ * PATH 上那些带 node_modules 的目录 —— 就是 npm 全局前缀的候选（不 spawn `npm prefix -g`）。
+ *
+ * 2026-11-04 补：扫描范围加上 `wellKnownBins()`（npm/fnm/volta… 的固定落点）——
+ * fnm 的 `aliases\default` 自带 node_modules 却**不在任何 PATH 上**（只有跑过
+ * `fnm env` 的 shell 会话看得见），光扫 PATH 永远漏。这里的契约不变：
+ * 加进去的必须是"直接装着 node_modules 的那个目录"，不带 node_modules 的落点会被下面的检查滤掉。
+ */
 function npmPrefixes() {
-  const dirs = String(process.env.PATH ?? '').split(path.delimiter).filter(Boolean);
+  const dirs = [...pathDirs(), ...wellKnownBins()];
   const out = new Set();
   for (const d of dirs) {
     try {
@@ -736,6 +743,9 @@ function npmPrefixes() {
  * 为什么要加"住在 AppData 下面"这个条件：不加的话 `C:\Windows\system32`
  * 也会推出一个 `C:\AppData\Local\Programs` —— 一个根本不存在的假根，
  * 白白多 stat 几次，列出来还让人困惑。
+ *
+ * 2026-11-04 补：遍历的 PATH 换成 `pathDirs()` —— 桌面端装在"只有注册表 PATH 才有
+ * 的那个盘"上（进程快照里没有），现在也推得出来。
  */
 function appRoots() {
   const roots = new Set();
@@ -743,7 +753,7 @@ function appRoots() {
   push(process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Programs'));
   push(process.env.ProgramFiles);
   push(process.env['ProgramFiles(x86)']);
-  for (const d of String(process.env.PATH ?? '').split(path.delimiter)) {
+  for (const d of pathDirs()) {
     const m = /^([A-Za-z]:)[\\/]AppData[\\/]/i.exec(String(d).trim());
     if (m) push(path.join(m[1] + path.sep, 'AppData', 'Local', 'Programs'));
   }
@@ -789,7 +799,13 @@ const DETECT = {
           source: `PATH 上的 ${path.basename(shim)}（推出真身）`,
         });
       }
-      out.push({ path: shim, source: `PATH 上的 ${path.basename(shim)}（班底起不来）` });
+      /*
+       * 2026-11-04 补：标签按 shim 是什么来定 —— npm 的转发脚本（.cmd/.bat/.ps1）
+       * 班底起不来；原生安装器放的 .exe（如 `~/.local/bin/claude.exe`）直接 spawn
+       * 就能跑，不该背这个名。
+       */
+      const native = /\.(cmd|bat|ps1)$/i.test(shim) ? '班底起不来' : '原生二进制';
+      out.push({ path: shim, source: `PATH 上的 ${path.basename(shim)}（${native}）` });
     }
     for (const d of npmPrefixes()) {
       for (const rel of ['bin/claude.exe', 'bin/claude', 'cli.js']) {
@@ -964,22 +980,12 @@ export async function probePath(familyId, cliPath) {
 }
 
 /**
- * 「一键安装」这个族要跑什么 —— **命令表在代码里，不是从控制面传过来的**。
+ * 「一键安装运行时」已整体拆除（2026-11-04 用户拍板「班底只识别、不代装」，入口与通路一并清）。
  *
- * 这是这件事的**安全边界**：控制面只能发一个**族名**（`codex` / `claude`），
- * 由**节点自己**拿族名来这里查命令。所以"一键安装"永远不会变成
- * "谁拿着令牌谁就能在别人机器上跑任意命令"。
- *
- * 返回 null = 这个族**一键装不了**（比如 dsh 是 Windows 桌面端自带的），
- * 调用方要如实说清，别装作能装。
- *
- * `bin`/`args` 是 shell-free 的形式（直接 spawn，不经过 shell）—— 少一层引号/注入的面。
+ * 历史上的安全边界值得留档：命令表写死在代码里、控制面只能发族名、节点自己查表 ——
+ * 这套「发意图不发命令」的口径由**外部件**那条路继承（`externals.commandFor`，
+ * magpie 的装/常驻/打开面板），想要模型的话去那边看。
  */
-export function installCommandFor(familyId) {
-  const ins = FAMILIES[familyId]?.install;
-  if (!ins || ins.kind !== 'npm' || !ins.bin || !Array.isArray(ins.args)) return null;
-  return { bin: ins.bin, args: ins.args, cmd: ins.cmd };
-}
 
 /** 可添加的协议族（「添加协议族」里那三个选项） */
 export function publicFamilies() {
@@ -991,9 +997,6 @@ export function publicFamilies() {
       label: f.label,
       sandboxes: f.sandboxes,
       note: f.note,
-      // 没装时给他一条能直接粘的命令。页面初次加载就要能显示"未安装"那一段，
-      // 所以这个字段不能只在 /detect 里给 —— 那是点按钮才有的
-      install: f.install ?? null,
       installed: usable.length > 0,
       detectedPath: usable[0]?.path ?? null,
       detectedBy: usable[0]?.source ?? null,

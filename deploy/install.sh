@@ -8,7 +8,11 @@
 #
 # 做的事：代码落 /opt/bandi → 建系统用户与数据目录 → 写 systemd 单元并启动 →
 #         注册「bandi」全局命令（部署即装的服务端同款逻辑，install-cli）。
-# 端口/监听想改：BANDI_PORT=8899 BANDI_HOST=0.0.0.0 sudo -E sh install.sh
+#
+# 端口想改：BANDI_PORT=8899 sudo -E sh install.sh
+# 监听地址**不用在这里传**（2026-11-04 用户定）：它存在数据目录的 config.json 里，
+# 界面上「设置 → 安全 → 监听地址」能改、改完重启生效，**升级重装都不丢**。
+# 只有"临时钉一次"才用 BANDI_HOST=127.0.0.1（会写进单元，下次安装若不再传就消失）。
 #
 # ⚠️ 脚本必须待在解压出来的 bandi/ 目录里运行（它按 $PWD 找随包的 node 和代码）。
 set -eu
@@ -17,7 +21,8 @@ PREFIX=/opt/bandi
 DATA=/var/lib/bandi
 SVC_USER=bandi
 PORT="${BANDI_PORT:-8787}"
-HOST="${BANDI_HOST:-127.0.0.1}"
+# 空 = 不往单元里写地址，交给数据目录里的配置（缺省 0.0.0.0）
+HOST="${BANDI_HOST:-}"
 
 say() { printf '%s\n' "  $*"; }
 die() { printf '\n✗ %s\n' "$*" >&2; exit 1; }
@@ -60,7 +65,7 @@ if [ -f "$PWD/version.json" ]; then
   VER=$(grep -o '"version"[^,}]*' "$PWD/version.json" | head -1 | sed 's/.*: *"\(.*\)"/\1/')
 fi
 
-say "班底 v$VER · 端口 $PORT · 监听 $HOST"
+say "班底 v$VER · 端口 $PORT · 监听 ${HOST:-缺省 0.0.0.0（配置可改）}"
 say "落点 $PREFIX · 数据 $DATA"
 
 # 1. 收旧的（升级场景：跑着就先停）
@@ -82,8 +87,14 @@ chown -R "$SVC_USER":"$SVC_USER" "$DATA" "$PREFIX" 2>/dev/null || true
 if command -v systemctl >/dev/null 2>&1; then
   sed -e "s|ExecStart=/usr/bin/node|ExecStart=$PREFIX/node|" \
       -e "s|Environment=BANDI_PORT=8787|Environment=BANDI_PORT=$PORT|" \
-      -e "s|Environment=BANDI_HOST=127.0.0.1|Environment=BANDI_HOST=$HOST|" \
       "$PREFIX/deploy/bandi.service" > /etc/systemd/system/bandi.service
+  # 监听地址**默认不写死**（2026-11-04）：真源是 $DATA/config.json 的 listenHost，
+  # 界面可改、升级不丢。只有显式传了 BANDI_HOST 才钉进单元（临时/特殊部署）。
+  # 每次都覆盖写单元 → 旧版本留下的 `Environment=BANDI_HOST=127.0.0.1` 会被清掉 ✓
+  if [ -n "$HOST" ]; then
+    sed -i "/^\[Service\]/a Environment=BANDI_HOST=$HOST" /etc/systemd/system/bandi.service
+    say "⚠ 已按 BANDI_HOST=$HOST 把监听钉进服务单元（下次安装不再传就放开）"
+  fi
   systemctl daemon-reload
   systemctl enable --now bandi >/dev/null 2>&1 || systemctl restart bandi
 
@@ -112,9 +123,11 @@ register_cli
 say ""
 say "✓ 就绪  http://127.0.0.1:$PORT"
 if [ "$HOST" = "127.0.0.1" ]; then
-  say "  远程访问走 SSH 隧道：  ssh -N -L $PORT:127.0.0.1:$PORT <用户>@<这台机器>"
-else
-  say "  ⚠ 监听非回环 —— 远端访问要求令牌（在 $DATA/token，启动日志也打了一次）"
+  say "  ⚠ 监听被这次参数钉在回环上 —— 远程访问只能走 SSH 隧道："
+  say "     ssh -N -L $PORT:127.0.0.1:$PORT <用户>@<这台机器>"
+elif [ "$HOST" = "0.0.0.0" ] || [ -z "$HOST" ]; then
+  say "  局域网/远程访问：http://<这台机器的 IP>:$PORT（要登录，令牌在 $DATA/token）"
 fi
+say "  监听地址以后在界面「设置 → 安全 → 监听地址」里改（改完点重启即可，重装不会改回去）"
 say "  新开一个终端敲 bandi 看状态 / 起停 / 日志。"
 say "  常用：systemctl status bandi · journalctl -u bandi -f · bandi status"
