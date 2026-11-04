@@ -497,7 +497,7 @@ export function startCurrentStep(runId, { force = false } = {}) {
    * 消息列表里不出现（从工作台 / 流程页进去），不再淹没人和员工的对话。
    */
   const conv = runConversation(run, task.assigneePersonaId);
-  store.setWorkflowRunThread(runId, conv); // 记下"这一步在哪个会话"，实例页和会话卡片要用
+  store.setWorkflowRunThread(runId, conv); // 记下"这一步在哪个会话"：删会话时凭它把流程实例的会话指针归零
   const at = store.getConversation(conv)?.kind === 'group' ? `@${store.getPersona(task.assigneePersonaId)?.name} ` : '';
   // 发起时填的「想法」就是发给第一个人的第一句 —— 后面几步也带上，作为起因的上下文
   const constitution = projectConstitutionBlock(run.projectId);
@@ -620,11 +620,6 @@ export function runsOfTemplate(templateId, { limit = 200 } = {}) {
     lastAt: stat.lastAt,
     runs: store.listWorkflowRunsByTemplate(templateId, { limit }).map((r) => viewRun(r)),
   };
-}
-
-/** 这个会话里挂着的流程（一个项目群可以挂好几条） */
-export function runsOfThread(threadId) {
-  return store.listWorkflowRunsByThread(threadId).map((r) => viewRun(r));
 }
 
 /**

@@ -26,7 +26,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use tauri::{Manager, State, Url, Webview};
 
-/// 与服务端 `discover.mjs` 的 DISCOVERY_PORT 一致（UDP）
+/// 服务端 UDP 发现已下线（原 `discover.mjs`，2026-11-02 退场）；端口口径沿用当时的
+/// 8788，`discover` 命令保留但启动页不再调用。
 const DISCOVERY_PORT: u16 = 8788;
 /// 用户没写端口时补的默认值（服务端 `BANDI_PORT` 默认 18787，两边必须一致）
 const DEFAULT_HTTP_PORT: u16 = 18787;
@@ -287,7 +288,7 @@ fn probe(input: String) -> Result<ProbeInfo, String> {
 
 /* ---------------------------------------------------------------- UDP 发现 */
 
-/// 与 `discover.mjs` 的 `candidateOf` 同一套字段口径：
+/// 与服务端已下线的 UDP 发现（原 `discover.mjs` 的 `candidateOf`）同一套字段口径：
 /// **地址只取回包的来源 IP**（多网卡时应答里的 url 可能是别的网卡），端口取应答的 httpPort。
 ///
 /// `codeMatch`（2026-11-01 邀请码）：探测里带了码才会有这个字段 —— `Some(true)` = 这台
