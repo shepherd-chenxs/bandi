@@ -124,6 +124,7 @@ try {
     ['GET', '/api/experts'],
     ['POST', '/api/users'],
     ['POST', '/api/roles'],
+    ['PUT', '/api/prefs'], // 2026-11-04 补登（登录用户可改）：受限会话仍拦在 E4098 —— 不在 RESTRICTED_OPEN
   ];
   for (const [m, p] of denied) {
     const r = await call(m, p, { cookie, body: m === 'POST' ? {} : undefined });
@@ -134,7 +135,6 @@ try {
   const ghost = [
     ['GET', '/api/personas'], // 服务端没有列表口（前端走 /api/state），也未登记
     ['POST', '/api/security/audit'], // 只登记了 GET
-    ['PUT', '/api/prefs'], // 只登记了 GET
   ];
   for (const [m, p] of ghost) {
     const r = await call(m, p, { cookie, body: m === 'GET' ? undefined : {} });
