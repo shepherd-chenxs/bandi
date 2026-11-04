@@ -15,13 +15,6 @@ export async function handleWorkflow(req, res, url) {
   const tplRuns = /^\/api\/workflows\/templates\/([^/]+)\/runs$/.exec(url.pathname);
   const tplPub = /^\/api\/workflows\/templates\/([^/]+)\/publish$/.exec(url.pathname);
 
-  // 某个会话里挂着的流程（会话里画流程卡片用；一个项目群可以挂好几条）
-  if (req.method === 'GET' && url.pathname === '/api/workflows/thread') {
-    const tid = url.searchParams.get('threadId') ?? '';
-    if (!tid) return fail(res, 400, 'E1029', '要 threadId');
-    return sendJson(res, 200, { runs: workflows.runsOfThread(tid) });
-  }
-
   // 列表 + 模板（左栏要的都在这一口里，少一次往返）
   if (req.method === 'GET' && url.pathname === '/api/workflows') {
     // 跑过多少次：一次 GROUP BY 拿全，**不能拿下面那个 runs 去数**（它有 100 条上限）

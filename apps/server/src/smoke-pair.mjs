@@ -224,9 +224,10 @@ try {
   // 默认拒绝 doctrine 下它在认证之前就 404 E4090，连 403 都轮不到
   const rStatus = await get(baseB, '/api/status', { Cookie: devCookie });
   check('GET /api/status → 404 E4090（未登记默认拒绝，项目进度账本）', rStatus.status === 404 && rStatus.json?.code === 'E4090', `${rStatus.status} ${rStatus.json?.code ?? ''}`);
-  // v2.8：PUT /api/prefs 路径登记了（GET）但方法没登记 —— isRegistered 方法感知后 404 E4090
+  // 2026-11-04 补登 PUT /api/prefs（用户实报 E4090：设置页「言简意赅」开关打不通）。
+  // 登录用户可改全体沟通偏好，但设备仍不给 —— 设备打它应是 403 E4033，不再是 404。
   const putPrefs = await send(baseB, '/api/prefs', { method: 'PUT', headers: { Cookie: devJar, 'X-Bandi': '1', ...devCSRF }, body: { replyStyle: 'concise' } });
-  check('PUT /api/prefs → 404 E4090（GET 登记、PUT 没登记）', putPrefs.status === 404 && putPrefs.json?.code === 'E4090', `${putPrefs.status} ${putPrefs.json?.code ?? ''}`);
+  check('PUT /api/prefs → 403 E4033（设备令牌：改全体偏好不是设备的事）', putPrefs.status === 403 && putPrefs.json?.code === 'E4033', `${putPrefs.status} ${putPrefs.json?.code ?? ''}`);
   const postPersona = await send(baseB, '/api/personas', { headers: { Cookie: devJar, 'X-Bandi': '1', ...devCSRF }, body: { name: '越权员工' } });
   check('POST /api/personas → 403（受限视图没有这个写）', postPersona.status === 403, `${postPersona.status} ${postPersona.json?.code ?? ''}`);
 

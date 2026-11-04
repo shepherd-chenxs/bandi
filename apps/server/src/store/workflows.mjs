@@ -128,13 +128,6 @@ export function deleteWorkflowTemplate(id) {
   }
   return runIds.length;
 }
-/** 某个会话里挂着的流程（一个项目群可以挂多条） */
-
-export function listWorkflowRunsByThread(threadId) {
-  return db
-    .prepare("SELECT * FROM workflow_runs WHERE threadId = ? ORDER BY CASE status WHEN '进行中' THEN 0 ELSE 1 END, updatedAt DESC")
-    .all(threadId);
-}
 
 export function getWorkflowRun(id) {
   return db.prepare('SELECT * FROM workflow_runs WHERE id = ?').get(id) ?? null;

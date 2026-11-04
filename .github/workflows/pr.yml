@@ -44,6 +44,10 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: node tools/check-pr.mjs
 
+      - name: 契约对账（route-policy ↔ 实现 ↔ 调用方）
+        shell: pwsh
+        run: node tools/check-contracts.mjs
+
       - name: 语法与配置形状
         shell: pwsh
         run: |

@@ -93,13 +93,17 @@ export const ROUTES = [
   { id: 'me.otp.unbind', m: ['POST'], path: p('/api/me/otp/unbind'), auth: 'session', member: true },
   { id: 'skills.list', m: ['GET'], path: p('/api/skills'), auth: 'session', member: true, device: true },
   { id: 'workflows.list', m: ['GET'], path: p('/api/workflows'), auth: 'session', member: true, device: true },
-  { id: 'workflows.thread', m: ['GET'], path: p('/api/workflows/thread'), auth: 'session', member: true },
   { id: 'projects.list', m: ['GET'], path: p('/api/projects'), auth: 'session', member: true, device: true },
   { id: 'tasks.list', m: ['GET'], path: p('/api/tasks'), auth: 'session', member: true, device: true },
   { id: 'pair.me', m: ['GET'], path: p('/api/pair/me'), auth: 'session', member: true, device: true },
   { id: 'pair.leave', m: ['POST'], path: p('/api/pair/leave'), auth: 'session', device: true, noPanel: true, note: '手机自己断开与这台电脑的连接（收钥匙，记录留着，下次打开能连回来）' },
   { id: 'web.version', m: ['GET'], path: p('/api/web-version'), auth: 'session', member: true, device: true, note: '60 秒版本指纹轮询，零敏感' },
-  { id: 'prefs.read', m: ['GET'], path: p('/api/prefs'), auth: 'session', member: true, device: true, note: 'PUT（改全体沟通偏好）不在此列' },
+  { id: 'prefs.read', m: ['GET'], path: p('/api/prefs'), auth: 'session', member: true, device: true, note: '回复风格读：设备也放行（手机设置页要画）' },
+  // 2026-11-04 补登（用户实报 E4090）：v2.8 默认拒绝时漏了 PUT —— 设置 › 偏好的
+  // 「言简意赅」开关点的就是它，一点就 404 E4090。语义：改**全体数字员工**的沟通
+  // 偏好（存 config.json，下一轮派活生效），登录用户可改、设备不给 —— 与 settings.mjs
+  // 「设备形态不渲染那一节」的前端口径对齐（设备打它 → E4033，不是 404）。
+  { id: 'prefs.write', m: ['PUT'], path: p('/api/prefs'), auth: 'session', member: true, noPanel: true },
   { id: 'events.sse', m: ['GET'], path: p('/api/events'), auth: 'session', member: true, device: true, noPanel: true, note: '全局 SSE；panel 禁（只许单运行流）' },
   { id: 'runtimes.list', m: ['GET'], path: p('/api/runtimes'), auth: 'session', member: true, note: '分机模式页要机器名/版本' },
   { id: 'local.status.forUser', m: ['GET'], path: p('/api/local/status'), auth: 'session', member: true, note: '与 local.status 同路径：登记处放行，handler 的 authorizeLocal 照旧把员外身份拦下（E4091）' },
@@ -217,7 +221,6 @@ export const ROUTES = [
   { id: 'workspace.file', m: ['GET', 'POST'], path: p('/api/workspace/file'), auth: 'session', perm: 'project:read' },
   { id: 'open.path', m: ['POST'], path: p('/api/open'), auth: 'session', perm: 'project:read' },
   { id: 'fs.dirs', m: ['GET'], path: p('/api/fs/dirs'), auth: 'session', perm: 'machine:read', noPanel: true, note: '任意目录列举 = 摸操作员整块磁盘' },
-  { id: 'fs.pickDir', m: ['POST'], path: p('/api/fs/pick-dir'), auth: 'session', perm: 'machine:read' },
   { id: 'status.ledger', m: ['GET'], path: p('/api/status/ledger'), auth: 'session', perm: 'machine:read' },
   { id: 'status.managed', m: ['POST'], path: p('/api/status/managed'), auth: 'session', perm: 'machine:read' },
   { id: 'status.projects', m: ['GET'], path: p('/api/status/projects'), auth: 'session', perm: 'project:read' },
@@ -290,10 +293,10 @@ const COMPILED = ROUTES.map((r) => ({ ...r, re: r.path }));
 
 /**
  * 登记了这条「路径 + 方法」吗。guard 在认证之前调它 —— 未登记 = 这个接口
- * 不存在（404 E4090）。**方法也要登记**：PUT /api/prefs 这种"路径登记过、
- * 方法没登记"的写法同样 404（v2.8 修正 —— 旧版只看路径，PUT 会借 GET 条目
- * 溜过这道闸，PDP 那层的方法感知被它架空）。HEAD 按 GET 算；OPTIONS 交给
- * CORS 层处理，这里放行。
+ * 不存在（404 E4090）。**方法也要登记**：同一路径只登记部分方法时（如
+ * `/api/security/audit` 只有 GET），没登记的方法同样 404（v2.8 修正 —— 旧版
+ * 只看路径，其它方法会借已登记条目溜过这道闸，PDP 那层的方法感知被它架空）。
+ * HEAD 按 GET 算；OPTIONS 交给 CORS 层处理，这里放行。
  */
 export function isRegistered(pathname, method) {
   const p = String(pathname ?? '');
@@ -310,10 +313,11 @@ export function isRegistered(pathname, method) {
  *   · **session 条目优先** —— 同一路径可能有多条登记（`/api/local/status` 一条
  *     auth:'local'、一条给登录用户的 member 条目；`/api/users` 一条 bootstrap、
  *     一条 list），判"这个**已认证**的身份能不能过"该看 session 那条；
- *   · **方法必须命中** —— 同一路径不同方法待遇不同（`GET /api/quota` 只读、
- *     `POST /api/quota` 是 noPanel 的管理动作）。带 method 时**只认方法命中的
- *     条目**，找不到就返回 null（v2.8 修正：旧版回落到同路径其它方法的条目，
- *     PUT /api/prefs 会借 GET 条目的 device:true 放行 —— 方法闸等于没有）。
+ *   · **方法必须命中** —— 同一路径不同方法待遇不同（`GET /api/prefs` 设备可读、
+ *     `PUT /api/prefs` 只给登录用户；`GET /api/quota` 只读、`POST /api/quota`
+ *     是 noPanel 的管理动作）。带 method 时**只认方法命中的条目**，找不到就
+ *     返回 null（v2.8 修正：旧版回落到同路径其它方法的条目，未登记的方法会
+ *     借别的条目的 device:true 放行 —— 方法闸等于没有）。
  */
 export function findRoute(pathname, method) {
   const p = String(pathname ?? '');
