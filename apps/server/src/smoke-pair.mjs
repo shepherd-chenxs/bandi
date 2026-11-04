@@ -161,6 +161,23 @@ try {
     const r = await get(baseB, p, { Cookie: devCookie });
     check(`静态 GET ${p} → 200（不再 E4033 白屏）`, r.status === 200, String(r.status));
   }
+  /*
+   * PWA manifest 的两条硬要求（2026-11-03 锁竖屏时补的）：
+   *   · MIME 必须是 JSON 系 —— `application/octet-stream` 会让 Chrome 整份 manifest 作废
+   *     （没图标、不是独立窗口、横屏照转）；
+   *   · orientation 必须是竖屏 —— 这就是"手机端锁定竖屏"在 PWA 那条路上的唯一开关。
+   */
+  const mf = await get(baseB, '/manifest.webmanifest', { Cookie: devCookie });
+  check(
+    'manifest 的 Content-Type 是 application/manifest+json',
+    /application\/manifest\+json/.test(mf.headers.get('content-type') ?? ''),
+    String(mf.headers.get('content-type')),
+  );
+  check(
+    'manifest 声明竖屏（orientation: portrait-primary）',
+    /^portrait/.test(String(mf.json?.orientation ?? '')),
+    String(mf.json?.orientation ?? '（没有 orientation）'),
+  );
   for (const p of ['/api/state', '/api/skills', '/api/workflows', '/api/web-version', '/api/prefs']) {
     const r = await get(baseB, p, { Cookie: devCookie });
     check(`启动链 GET ${p} → 200`, r.status === 200, `${r.status} ${r.json?.code ?? ''}`);
@@ -216,6 +233,19 @@ try {
   /* ----------------------------- ③ 设备令牌的读与写 */
   console.log('\n③ 设备令牌：白名单内的读与写');
   check('读 /api/state → 200', (await get(baseB, '/api/state', { Cookie: devCookie })).status === 200);
+  /*
+   * 手机「发消息」的第一步（2026-11-03 实机报 E4033）：通讯录点人进详情 → 「发消息」，
+   * 与这个人**还没聊过**时要先建一段会话（chat.mjs openDirectChat 的 ③ 分支）。
+   * 这条不放行的话，症状是"聊过的能发、没聊过的报 E4033"，极容易被当成按钮坏了。
+   */
+  const devState = await get(baseB, '/api/state', { Cookie: devCookie });
+  const somePersona = devState.json?.personas?.[0]?.id;
+  if (somePersona) {
+    const mkConv = await send(baseB, '/api/conversations', { headers: { Cookie: devJar, 'X-Bandi': '1', ...devCSRF }, body: { personaId: somePersona, title: '手机开聊' } });
+    check('手机建会话（发消息第一步）→ 201', mkConv.status === 201 && !!mkConv.json?.conversation?.id, `${mkConv.status} ${mkConv.json?.code ?? ''}`);
+  } else {
+    check('手机建会话（发消息第一步）→ 201', false, 'state 里没有员工，没法验');
+  }
   const me = await get(baseB, '/api/pair/me', { Cookie: devCookie });
   check('/api/pair/me 说自己是设备', me.json?.kind === 'device' && me.json?.device?.name === '测试手机', JSON.stringify(me.json));
   const meOp = await get(baseB, '/api/pair/me', op);

@@ -481,7 +481,7 @@ function deviceMayReach(method, pathname) {
 | 16 | `GET /api/runs/:id/stream` | 单运行实时事件流（对话「边跑边看」） | **2026-10-28 修**：前端 `streamRun()` 默认就订阅它；不放行会一直停在「正在输入」。内容即该会话正文，不超出第 9 条的读范围 |
 | 17 | `GET /api/events` | 全局「哪个会话动了」通知 | **2026-10-28 修**：`startEvents()` 每页都开，不放行手机端每页一条 403；只推 `{type:'conv', id}`，不超出读范围 |
 
-写操作：`POST /api/conversations/:id/messages`、`POST /api/projects/tasks/:id/comments`（仅 note）、`PATCH /api/projects/tasks/:id`（字段闸在 `routes/project.mjs`）、`POST /api/runs/:id/abort`（**2026-10-28 修**：与发消息成对，能派不能停会一直卡在「正在输入」）。
+写操作：`POST /api/conversations/:id/messages`、`POST /api/projects/tasks/:id/comments`（仅 note）、`PATCH /api/projects/tasks/:id`（字段闸在 `routes/project.mjs`）、`POST /api/runs/:id/abort`（**2026-10-28 修**：与发消息成对，能派不能停会一直卡在「正在输入」）、`POST /api/conversations`（**2026-11-03 修**：手机「发消息」在**还没跟这个人聊过**时要先建一段会话 —— 通讯录点人 → 详情 → 发消息，`openDirectChat` 只有在"正在聊 / 聊过"时才复用，否则建新的。没放行时症状是"聊过的能发、没聊过的报 E4033"，看着像按钮坏了。只开「建」：改名 / 删会话 / 不显示仍是桌面的事）。
 
 **必须保持 403（E4033）**（QA 已验证有效的面不要放开）：
 
@@ -545,7 +545,7 @@ function deviceMayReach(method, pathname) {
 | 会话 | 照旧（本来就是按手机做的） | mb-tab |
 | 通讯录 | 照旧 | mb-tab |
 | 工作台 | **只画「项目 / 任务看板」两格**；插件宫格、研发区、自动化、坏插件提示都不进 DOM | `renderWorkbenchGrid` 的 `gridLite` |
-| 我的 | **只画身份卡 + 退场行**（退出登录/断开连接）；设置入口、账号安全双卡都不进 DOM | `openMe` 的 `onPhone` |
+| 我的 | **只画身份卡 + 「这台设备」属性卡 + 退场行**（退出登录/断开连接）；设置入口、账号安全双卡都不进 DOM。身份卡以**账户为主**（2026-11-03：标题取归属账号，设备信息降为属性卡三行） | `openMe` 的 `onPhone` |
 
 白名单之外（设置整页、账号安全、插件管理、代码托管、远程连接、定时任务、工作流设计、
 协作管理……）在窄屏**根本不渲染** —— 不是 `display:none` 藏起来。不渲染就不存在"适配"，
@@ -569,3 +569,26 @@ function deviceMayReach(method, pathname) {
 - 桌面壳窗口缩到 <900px 也会得到手机子集 —— 这是响应式的一致行为，不是泄漏。
 - 主题切换 / 账号安全 / 协作开关在手机上没有入口了（它们本来就是 PC 的事）；
   用户明确接受（2026-11-03 当面拍板）。要恢复某个，白名单表加一行即可。
+
+## 10. 增量修订：锁定竖屏（2026-11-03，用户："手机端锁定竖屏"）
+
+> 手机形态的界面全是单列（列表 / 详情 / 底部四 tab），横过来只会把列表压成两行高、
+> 让键盘顶到屏幕一半。方向问题**不在 CSS 里解决** —— Web 侧锁不了方向
+> （`screen.orientation.lock()` 要求先进全屏，普通页面调不动）。
+
+两条路各自钉死，缺一条就有一种进入方式能横过来：
+
+| 进入方式 | 方向由谁决定 | 落点 |
+|---|---|---|
+| 手机壳 APK（Android WebView） | Activity 的 `screenOrientation` | `gen/android/app/src/main/AndroidManifest.xml` 的 `<activity>` 加 `android:screenOrientation="portrait"` —— 硬约束，连系统「自动旋转」开关都翻不动 |
+| PWA（浏览器「添加到主屏幕」） | manifest 的 `orientation` | `apps/web/manifest.webmanifest` 的 `"orientation": "portrait-primary"` |
+
+**PWA 那条路 2026-11-03 才真生效**：`.webmanifest` 原先没进 `http.mjs` 的 MIME 表，
+兜底成 `application/octet-stream`，而 Chrome 只认 JSON 系类型 —— 类型不对**整份 manifest
+作废**，`orientation`、`display:standalone`、图标一起失效，控制台只留一句警告
+（看着像"这台手机不支持 PWA"）。现在补了 `application/manifest+json`，
+`smoke-pair.mjs` 里钉了两条断言（Content-Type + `orientation` 以 `portrait` 开头）。
+
+**边界**：手机浏览器里**以标签页**打开（没装到主屏幕）、iOS Safari 非全屏态，系统层
+不认 manifest 的 `orientation` —— 这几种没法锁，只能横着用（布局仍是单列，只是很矮）。
+壳（APK）不受影响，它走的是 Activity 约束。

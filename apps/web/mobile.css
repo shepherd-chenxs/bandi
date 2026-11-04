@@ -702,27 +702,23 @@
   /* 小按钮是可点目标：12.5 → 14，点击面也补到 32px 高（手指的舒适下限） */
   #settingsView .btn-sm { font-size: 14px; padding: 6px 13px; }
 
-  /* 数据管理行的统计（`<b>0.1 MB</b> 库大小 · <b>1</b> 员工 …`） */
-  #settingsView .dm-line { font-size: 13.5px; }
+  /* 数据管理 · 统计块（2026-11-04 重设计后是分格的）：390 宽下折两列，
+     「最后修改」那种长日期整格占满一行更从容 */
+  #settingsView .dm-stat { padding: 10px 14px 9px; }
+  #settingsView .dm-stats { grid-template-columns: repeat(2, 1fr); }
+  #settingsView .dm-stat-time { grid-column: 1 / -1; }
 
   /*
    * 「数据管理」区头的竖排事故（2026-10-31 顺手修）：区头是 flex 不换行，
-   * 右边 `.dm-actions` 里塞了个 460px 上限的绝对路径 + 两个按钮，390 宽下把
-   * 「数据管理」挤到只剩一个字宽 —— 四个字竖着排成一列。
-   * 窄屏改成两行：标题独占第一行，路径（单行省略）+ 按钮在第二行。
+   * 右边 `.dm-actions` 里塞了两个按钮，390 宽下会把「数据管理」挤到只剩一个字宽
+   * —— 四个字竖着排成一列。窄屏改成两行：标题独占第一行，按钮在第二行。
    * 2026-11-01 区头改 `.fx-head`（标题拿到卡片外，跟「设备/运行时」同款），选择器跟着换。
+   * 2026-11-04 库路径挪出按钮行（成了独立的 .dm-pathline 一行小字），这里不再管它。
    */
   #settingsView .dm-sec .fx-head { flex-wrap: wrap; row-gap: 8px; }
   #settingsView .dm-actions { flex: 1 1 100%; margin-left: 0; width: 100%; }
-  #settingsView .dm-path {
-    flex: 1 1 0;
-    min-width: 0;
-    max-width: none;
-    text-align: left;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
+  /* 库文件路径一行：窄屏下从 12px 提到 13px，等宽字还是省略号兜底 */
+  #settingsView .dm-pathline { font-size: 13px; }
 
   /*
    * 同一类事故的通用版：「账号」「关于」页的 `.set-row` 是 flex space-between，
@@ -1222,35 +1218,37 @@ body.mb-chat .chat-head .mb-chat-back {
 .mb-qr { display: inline-grid; place-items: center; }
 .mb-qr svg { width: 220px; height: 220px; max-width: 100%; border-radius: 10px; }
 
-/* 邀请码卡（2026-11-01 四改）：左边竖着两行（电脑地址 / 邀请码），行内动作跟在值后面
-   （地址 → 复制地址；码 → 眼睛 + 换一个），**与二维码区之间一条竖分隔线**。
-   邀请码右边的小眼睛点一下遮成圆点（演示、截屏、旁边有人时用）。 */
-.mb-invite { display: flex; align-items: center; gap: 24px; padding: 14px 8px 8px; }
+/* 邀请码卡（2026-11-04 五改，用户："邀请码和地址太大了"）：
+   原来的 21px 地址 / 30px 大码收成「标签 | 值 | 动作」的紧凑单行 ——
+   标签列定宽对齐，值还是等宽字体、可点复制，动作（复制/眼睛/换一个）靠右；
+   倒计时贴在码后面（紧迫感长在数字旁边）。两行之间一条细线，与二维码区
+   之间仍是竖分隔线。 */
+.mb-invite { display: flex; align-items: center; gap: 24px; padding: 8px 8px 4px; }
 .mb-invite-col {
   flex: 1 1 auto;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 15px;
   /* 与二维码区的分隔线：细线 + 与卡片同高的留白 */
   border-right: 1px solid var(--line, #26282c);
   padding-right: 24px;
 }
-.mb-invite-row { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.mb-invite-row { display: flex; align-items: center; gap: 12px; min-width: 0; padding: 10px 0; }
+.mb-invite-row + .mb-invite-row { border-top: 1px solid var(--line, #26282c); }
+/* 标签列定宽：两行的值从同一根线起排，扫读是竖着的两列 */
 .mb-invite-k {
-  display: flex;
-  align-items: center;
-  gap: 12px;
+  flex: none;
+  width: 4.5em;
   font-size: 12.5px;
   color: var(--dim);
 }
-.mb-invite-v { display: flex; align-items: center; gap: 10px; min-height: 34px; }
 .mb-invite-addr {
+  flex: 1 1 auto;
+  min-width: 0;
   font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
   font-variant-numeric: tabular-nums;
-  font-size: 21px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
+  font-size: 14px;
+  font-weight: 500;
   color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1259,14 +1257,15 @@ body.mb-chat .chat-head .mb-chat-back {
   -webkit-tap-highlight-color: transparent;
   user-select: all;
 }
-.mb-invite-code { cursor: pointer; -webkit-tap-highlight-color: transparent; min-width: 0; }
+.mb-invite-code { flex: 0 1 auto; min-width: 0; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .mb-invite-code-row {
   font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
   font-variant-numeric: tabular-nums;
-  font-size: 30px;
+  font-size: 18px;
   font-weight: 600;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.05em;
   color: var(--text);
+  white-space: nowrap;
   user-select: all; /* 点一下全选，拖一半抄错最难查 */
 }
 /* 遮住时只换色、不动字距（2026-11-02 用户："点击小眼睛宽度为啥会变"）——
@@ -1274,22 +1273,24 @@ body.mb-chat .chat-head .mb-chat-back {
    等宽字体里圆点与数字同宽，字距不动两态就一样宽。 */
 .mb-invite-code.is-masked .mb-invite-code-row { color: var(--dim); }
 .mb-invite-wait { font-size: 13px; color: var(--dim); }
-.mb-invite-left { font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; }
+.mb-invite-left { flex: none; font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; }
 .mb-invite-left.expired { color: var(--bad, #c0504d); }
 /* 最后 60 秒（2026-11-02 评审）：紧迫感长在数字颜色上，不用读秒 */
 .mb-invite-left.soon { color: var(--bad, #c0504d); }
 /* 过期妆（2026-11-02）：码灰化即可 —— 划线版被用户毙了（"你加删除线干嘛"），
-   死码的信号靠灰色 + 「换一个」主色钮传递，别在 30px 大字上画线。 */
+   死码的信号靠灰色 + 「换一个」主色钮传递，别在大字上画线。 */
 .mb-invite-code.expired { cursor: default; }
 .mb-invite-code.expired .mb-invite-code-row { color: var(--dim, #7c8288); }
-/* 小眼睛：贴着码右边，只有图标，别做成按钮的样子（要轻） */
+/* 小眼睛：贴着码右边，只有图标，别做成按钮的样子（要轻）；
+   margin-left:auto 把眼睛和「换一个」推到行尾 —— 倒计时留在码旁边 */
 .mb-eye {
   appearance: none;
   flex: none;
+  margin-left: auto;
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
+  width: 28px;
+  height: 28px;
   padding: 0;
   border: 0;
   border-radius: 8px;
@@ -1304,21 +1305,11 @@ body.mb-chat .chat-head .mb-chat-back {
 .mb-invite-side { flex: none; text-align: center; }
 .mb-invite-side .mb-qr svg { width: 112px; height: 112px; }
 .mb-invite-side-hint { font-size: 11.5px; color: var(--dim); margin-top: 6px; }
-/* 窄屏：整体竖排 —— 两行 → 二维码；分隔线转横 */
+/* 窄屏：整体竖排 —— 两行 → 二维码居中；分隔线方向随布局转 */
 @media (max-width: 900px) {
-  .mb-invite { flex-direction: column; align-items: stretch; gap: 16px; padding: 12px 0 6px; }
-  .mb-invite-col {
-    border-right: 0;
-    padding-right: 0;
-    border-bottom: 1px solid var(--line, #26282c);
-    padding-bottom: 14px;
-  }
-  .mb-invite-col { gap: 14px; }
-  .mb-invite-row + .mb-invite-row {
-    border-top: 1px solid var(--line, #26282c);
-    padding-top: 13px;
-  }
-  .mb-invite-code-row { font-size: 27px; }
+  .mb-invite { flex-direction: column; align-items: stretch; gap: 12px; padding: 8px 0 4px; }
+  .mb-invite-col { border-right: 0; padding-right: 0; }
+  .mb-invite-code-row { font-size: 17px; }
   .mb-invite-side { align-self: center; }
   .mb-invite-side .mb-qr svg { width: 150px; height: 150px; }
 }
@@ -1505,12 +1496,21 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
   body.mb-narrow #settingsView .me-who { gap: 1px; }
   body.mb-narrow #settingsView .me-name b { font-size: 20px; line-height: 1.45; font-weight: 600; }
   body.mb-narrow #settingsView .me-meta { font-size: 13px; line-height: 1.6; }
-  /* 设备形态那行（已配对 · ip:port）用等宽，跟设置里其它地址同款 */
-  body.mb-narrow #settingsView .me-dev {
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    font-size: 12px;
-    color: var(--dim);
+
+  /* 「这台设备」属性卡（2026-11-03 账户为主）：与页上其它卡同款分组卡语汇。
+     行 52px、标签左值右 —— iOS 设置页"标签 + 详情"的双栏读法；地址行给等宽。 */
+  body.mb-narrow #settingsView .me-dev-box {
+    border: 0;
+    border-radius: var(--mb-r-card, 12px);
+    background: var(--mb-surface, var(--side));
+    box-shadow: 0 0 0 0.5px color-mix(in srgb, var(--text) 9%, transparent);
   }
+  body.mb-narrow #settingsView .me-kv { min-height: 52px; padding: 10px 16px; }
+  body.mb-narrow #settingsView .me-k { font-size: 15px; color: var(--text); }
+  body.mb-narrow #settingsView .me-v { font-size: 14px; color: var(--dim); }
+  body.mb-narrow #settingsView .me-v-mono { font-size: 13px; }
+  /* 属性卡的组头与下面账号安全那段共用 set-head 字阶（14px），间距贴卡一点 */
+  body.mb-narrow #settingsView .me-dev-sec .set-head { margin-bottom: 7px; }
 
   /* 账号安全双卡：落成单列，触屏把卡内留白放宽 */
   body.mb-narrow #settingsView .me-sec-grid { grid-template-columns: 1fr; gap: 10px; }

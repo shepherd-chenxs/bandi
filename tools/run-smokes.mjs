@@ -36,6 +36,8 @@ const RUN = [
   'apps/server/src/smoke-local-policy.mjs',
   // 网络周界闸（2026-11-03，对齐 1Panel 安全页）：授权 IP 白名单 E3003 / 域名绑定 E3004
   'apps/server/src/smoke-network.mjs',
+  // 监听地址持久化（2026-11-04，做进系统）：env > 数据目录配置 > 缺省 0.0.0.0
+  'apps/server/src/smoke-listen-host.mjs',
   'apps/server/src/smoke-proxy-auth.mjs',
   'apps/server/src/smoke-security-policy.mjs',
   'apps/server/src/smoke-token.mjs',
@@ -74,6 +76,9 @@ const RUN = [
   'apps/server/src/smoke-run-events.mjs',
   'apps/server/src/smoke-run-progress.mjs',
   'apps/server/src/smoke-runtime-heal.mjs',
+  // 运行时识别不依赖进程 PATH 快照（2026-11-04）：注册表实时 PATH + 固定落点。
+  // ⚠️ 这条会临时改 HKCU\Environment\Path（原样写回）—— 真注册表用例
+  'apps/server/src/smoke-runtime-detect.mjs',
   'apps/server/src/smoke-roles.mjs',
   'apps/server/src/smoke-device-roles.mjs',
   'apps/server/src/smoke-users.mjs',

@@ -162,13 +162,15 @@ export function lookupNodePath(nodeId, cwd) {
 }
 
 /*
- * 「让那台机器做一件小事」——目前只有一种：一键安装运行时（2026-10-16）。
+ * 「让那台机器做一件小事」——外部件的某一步（装上 / 常驻 / 打开面板）。
+ * （2026-10-16 建表时是"一键安装运行时"；2026-11-04 那半随 install-runtime 通路拆除，
+ *   队列只剩外部件在用。）
  *
  * 为什么不复用 node_jobs：那张表的 `runId` 是**必填**的，它服务的是"一次对话运行"（有会话、
  * 有事件流、有产物）。安装没有 run，硬塞进去会让"什么算一次运行"这件事变得含糊。
  *
- * ⚠️ 表里只存**族名**，不存命令 —— 命令由节点自己查（见 runtimes.installCommandFor）。
- * 这条是安全边界：控制面永远发不出命令，只能发"装这三个里的哪一个"。
+ * ⚠️ 表里只存**外部件 id 和哪一步**，不存命令 —— 命令由那台机器自己查
+ * （见 externals.commandFor）。这条是安全边界：控制面永远发不出命令。
  */
 
 export function enqueueNodeTask({ nodeId, kind, family, arg = null }) {
@@ -236,6 +238,30 @@ export function finishNodeTask(id, status = '完成') {
 export function listNodeTasks(nodeId, limit = 5) {
   return db.prepare('SELECT * FROM node_tasks WHERE nodeId = ? ORDER BY createdAt DESC LIMIT ?').all(nodeId, limit);
 }
+
+/**
+ * 开机收尸：**本机**的安装任务卡在 待领/执行中 的，一律标失败。
+ *
+ * 为什么只动本机（nodeId='local'，2026-11-04 用户连点四次安装全是僵尸的教训）：
+ * 本机任务是 `runLocalExternal()` 在控制面**进程内**跑的 —— 控制面一重启，
+ * 那个下载/安装进程必然已经没了，任务却永远停在「执行中」，界面跟着永远"安装中"。
+ * 远程节点的不动：节点可能真在跑、跑完会来报终态，替它写"失败"是篡改事实
+ * （run.mjs 2026-10-x 踩过的那类坑）。
+ */
+export function reapOrphanLocalTasks() {
+  const rows = db
+    .prepare("SELECT id, family, status FROM node_tasks WHERE nodeId = 'local' AND status IN ('待领','执行中')")
+    .all();
+  for (const t of rows) {
+    db.prepare("UPDATE node_tasks SET status = '失败', endedAt = ? WHERE id = ?").run(nowIso(), t.id);
+    db.prepare("UPDATE node_tasks SET output = output || ? WHERE id = ?").run(
+      '\n班底重启时这件活还在跑 —— 执行进程已经没了，按失败算；要装再点一次。',
+      t.id,
+    );
+  }
+  return rows.length;
+}
+
 
 /** 界面上要的公开形状：状态就是一句人话，不用前端再翻译一遍 */
 

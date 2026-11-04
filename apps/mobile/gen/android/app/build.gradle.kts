@@ -73,6 +73,10 @@ kotlin {
 }
 
 dependencies {
+    // Tauri 的 Android 库模块（app.tauri.TauriActivity / Plugin…）。
+    // 正常由 tauri CLI 生成在 tauri.build.gradle.kts 里，本工程手工维护到此
+    // （见 README「四个必须知道的坑」），否则 app 编译报 Unresolved reference 'TauriActivity'。
+    implementation(project(":tauri-android"))
     implementation("androidx.webkit:webkit:1.14.0")
     implementation("androidx.appcompat:appcompat:1.7.1")
     implementation("androidx.activity:activity-ktx:1.10.1")

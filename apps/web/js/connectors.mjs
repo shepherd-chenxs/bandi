@@ -4,7 +4,7 @@ import { esc, toast } from './shell.mjs';
 import { api, failHtml, initial, post } from './ui.mjs';
 import { setNav } from './state.mjs';
 import { openSettings } from './settings.mjs';
-import { confirmDo, paintLocalRuntimes, renderBackupSection, renderCliDetail } from './machine.mjs';
+import { confirmDo, paintLocalRuntimes, renderBackupSection, renderCliDetail, taskTail } from './machine.mjs';
 import { renderList } from './contacts.mjs';
 import { openProjectsPage, openTaskBoard } from './projects.mjs';
 import { openPlugins } from './experts.mjs';
@@ -80,6 +80,9 @@ export const PLG_ICONS = {
   panel: IC('<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M3.5 9.2h17"/><path d="M6.2 7h.01M8.7 7h.01"/><path d="M6.5 13h7"/>'),
   // 连接器兜底：插头（两脚留出气口 + 半圆罩 + 出线弯钩）
   connector: IC('<path d="M9 7.2V4.6M15 7.2V4.6"/><path d="M6.8 7.2h10.4v3.4a5.2 5.2 0 0 1-10.4 0z"/><path d="M12 16v1.9c0 1.1.9 2 2 2h1.6"/>'),
+  // 独立软件（外部件，2026-11-04「软件」商店条目）：双向交换 —— 这类东西（magpie）的本行
+  // 就是"两种协议互转"，两根反向箭头一个主形就说明白了
+  软件: IC('<path d="M4.5 8.8h13"/><path d="M14.4 5.6l3.1 3.2-3.1 3.2"/><path d="M19.5 15.2h-13"/><path d="M9.6 12l-3.1 3.2 3.1 3.2"/>'),
   开发: IC('<path d="M8.6 7.6 4.4 12l4.2 4.4"/><path d="M15.4 7.6l4.2 4.4-4.2 4.4"/><path d="M13.4 6 10.6 18"/>'),
   生产力: IC('<path d="M13.4 3 6.4 13.2h4.4L10.6 21l7-10.2h-4.4z"/>'),
   运维: IC('<rect x="4.5" y="3.2" width="15" height="6.9" rx="1.6"/><rect x="4.5" y="13.9" width="15" height="6.9" rx="1.6"/><path d="M7.5 6.6h.01M7.5 17.3h.01"/><path d="M13 6.6h3.3M13 17.3h3.3"/>'),
@@ -130,12 +133,16 @@ export async function renderPlugins() {
   let cat;
   let fam;
   let plg;
+  let ext;
   try {
-    [list, cat, fam, plg] = await Promise.all([
+    [list, cat, fam, plg, ext] = await Promise.all([
       api('/api/connectors'),
       api('/api/connectors/catalog'),
       api('/api/runtime-families'),
       api('/api/plugins'),
+      // 「软件」商店条目（2026-11-04）：本机外部件的现状 + 清单。拉不到就整段不画，
+      // 不挡插件/连接器 —— 老服务端没有这个接口时页面照常
+      api('/api/local/externals').catch(() => null),
     ]);
   } catch (err) {
     $('settingsView').innerHTML = `${headRow('<b>插件</b>')}<div class="empty">${failHtml(err)}</div>`;
@@ -145,6 +152,7 @@ export async function renderPlugins() {
   S.catalog = cat.catalog ?? [];
   S.plugins = plg.plugins ?? [];
   S.catalogError = cat.error ?? null;
+  S.extSoftware = ext;   // { externals: 现状(probed), catalog: 清单 } 或 null
   S.runtimeFamilies = (fam.families ?? []).map((f) => ({ id: f.id, label: f.label }));
 
   // 旧会话可能还停在已撤掉的「界面插件」页签上 —— 归一到「已安装」（装了的界面插件就在那）
@@ -154,10 +162,11 @@ export async function renderPlugins() {
   const marketPanels = S.plugins.filter((p) => p.panel?.slot === 'plugins');
   const panelsInstalled = marketPanels.filter((p) => p.installed).length;
   const userConns = S.connectors.filter((c) => !c.builtin);
+  const swInstalled = extSoftware().filter((e) => e.installed).length;
 
   const counts = {
-    installed: userConns.length + panelsInstalled,
-    catalog: publicCatalog().length + marketPanels.length,
+    installed: userConns.length + panelsInstalled + swInstalled,
+    catalog: publicCatalog().length + marketPanels.length + (S.extSoftware?.catalog ?? []).length,
     personal: localConnectors().filter((c) => !c.builtin).length,   // 「个人」＝你自己的本机来源（示例已不再摆）
   };
 
@@ -315,7 +324,8 @@ export function plgConnCardHTML(c) {
 export function plgInstalledHTML() {
   const panels = S.plugins.filter((p) => p.installed && p.panel?.slot === 'plugins');
   const conns = S.connectors.filter((c) => !c.builtin);
-  if (!panels.length && !conns.length) {
+  const swSec = swSectionHTML({ onlyInstalled: true });
+  if (!panels.length && !conns.length && !swSec) {
     return '<div class="empty">还没装任何东西<br />去「公开」挑一个，或在「个人」里手工粘一条</div>';
   }
   const panelsSec = panels.length
@@ -333,7 +343,7 @@ export function plgInstalledHTML() {
         <div class="hint-line">Codex 把外部工具放在「工具搜索」后面 —— 要让数字员工用上，提示词里先让它 tool_search 找一下（班底随后会把这句写进首轮注入）。</div>
       </section>`
     : '';
-  return panelsSec + connSec;
+  return swSec + panelsSec + connSec;
 }
 
 
@@ -348,6 +358,85 @@ export function plgCardHTML(c) {
     </div>
     ${c.installed ? '' : ibtn(`data-install="${esc(c.id)}"`)}
   </div>`;
+}
+
+/* ------------------------------------------------- 软件（独立软件的商店条目，2026-11-04） */
+
+/*
+ * 「软件」= 独立软件的**商店条目**（magpie 是第一个）。用户原话：
+ * "他不需要装到bandi里。他原来是什么样就什么样，这里只是为了不浪费时间去找安装包。"
+ * 所以这里的全部职责：认得它、点一下帮你装它、看得见它跑没跑 —— 装上之后它自己管自己，
+ * 没有"停用/卸载"（那是插件和连接器的语义，独立软件去它自己的安装器里卸）。
+ */
+
+/** 本机外部件现状（probed）；接口没拉到就空 —— 整段不画，别挡插件/连接器 */
+export const extSoftware = () => S.extSoftware?.externals ?? [];
+
+/** 清单条目 + 现状 + 最近任务 合成一张软件卡（「公开」「已安装」两处共用同一个样子） */
+function swCardHTML(e, probedList) {
+  const p = (probedList ?? []).find((x) => x.id === e.id);
+  const installed = !!p?.installed;
+  const t = S.extSoftware?.tasks?.[e.id] ?? null;   // 最近一次装/起任务 —— 服务端存的，刷新照样在
+  const busy = !installed && !!t && !t.done;        // 排队/执行中：按钮收起来，别让人重复点
+  const tags = [
+    '<span class="set-tag">独立软件</span>',
+    installed ? '<span class="set-tag">已安装</span>' : '',
+    installed && p.gateway ? '<span class="set-tag">网关在跑</span>' : '',
+    busy ? `<span class="set-tag">${t.running ? '安装中…' : '排队中…'}</span>` : '',
+    !installed && t?.status === '失败' ? '<span class="set-tag">上次没装成</span>' : '',
+  ]
+    .filter(Boolean)
+    .join('');
+  /* 在装的时候，说明文字那行**就地变成进度**（输出末行），跟「这台机器」页同一套玩法 */
+  const desc = busy
+    ? `<span data-ext-tail="${esc(e.id)}">${esc(t.running ? `安装中… ${taskTail(t)}` : `排队中… ${taskTail(t) || '（等这台机器空出手）'}`)}</span>`
+    : esc(e.note);
+  return `<div class="plg-card plg-card-click" data-plgview="ext:${esc(e.id)}" title="点击看详情">
+    <div class="plg-ico">${PLG_ICONS.软件}</div>
+    <div class="plg-card-main">
+      <div class="plg-title"><b>${esc(e.label)}</b></div>
+      <div class="plg-tags">${tags}</div>
+      <div class="plg-desc plg-desc-clamp">${desc}</div>
+    </div>
+    ${installed || busy ? '' : ibtn(`data-ext-install="${esc(e.id)}"`)}
+  </div>`;
+}
+
+/** 「软件」分节。公开页画全清单（装了的打标），已安装页只画装了的 */
+export function swSectionHTML({ onlyInstalled = false } = {}) {
+  const cat = S.extSoftware?.catalog ?? [];
+  const probed = extSoftware();
+  const shown = onlyInstalled ? cat.filter((e) => probed.some((p) => p.id === e.id && p.installed)) : cat;
+  if (!shown.length) return '';
+  const foot = onlyInstalled
+    ? '<div class="hint-line">它们独立运行、自己管自己 —— 班底只认得它、看得见它跑没跑。</div>'
+    : '<div class="hint-line">点「安装」= 拿官方安装包、起它自己的安装程序；软件本身不装进班底，也不归班底卸。</div>';
+  return `<section class="set-sec">
+    <div class="set-head"><b>软件</b><span class="set-tag">独立软件 · 装在这台机器上</span></div>
+    <div class="plg-grid">${shown.map((e) => swCardHTML(e, probed)).join('')}</div>
+    ${foot}
+  </section>`;
+}
+
+/**
+ * 装一个「软件」条目：排一个 external-install 给本机（本机就地执行，命令出自服务端那张表），
+ * 然后重画 —— 卡片立刻变「安装中」，进度和终态由 watchBusySoftware() 盯
+ * （刷新页面也一样接得上，状态在服务端任务表里）。
+ * Windows 上那一步是"下载官方安装包 + 启动安装程序" —— 任务"完成"
+ * 指的是**安装程序已经启动**，真正的安装界面是软件自己的，用户自己点完。
+ */
+async function installSoftware(id, btn) {
+  if (btn) btn.disabled = true;
+  toast('在装了 —— 安装窗口弹出来后，按它的界面点完就行。');
+  try {
+    const r = await post('/api/nodes/local/tasks', { kind: 'external-install', family: id });
+    if (!r.task?.id) throw new Error('任务没排上');
+    await renderPlugins(); // 立刻重画：卡片这会儿就该变成「安装中」，不等轮询
+    renderList();
+  } catch (err) {
+    if (btn) btn.disabled = false;
+    toast(err.message, 'error');
+  }
 }
 
 /**
@@ -414,6 +503,120 @@ export function openPlgDetail(kind, id) {
         } catch (err) {
           el.disabled = false;
           toast(err.message, 'error');
+        }
+      };
+    });
+    dlg.showModal();
+    return;
+  }
+
+  /* 软件条目（2026-11-04）：现状 + 装法 + 它自己的入口（官网 / 面板） */
+  if (kind === 'ext') {
+    const e = (S.extSoftware?.catalog ?? []).find((x) => x.id === id);
+    if (!e) return;
+    const p = extSoftware().find((x) => x.id === id);
+    $('plgDlgTitle').textContent = '软件详情';
+    const tags = [
+      '<span class="set-tag">独立软件</span>',
+      p?.installed ? '<span class="set-tag">已安装</span>' : '<span class="set-tag">未安装</span>',
+    ].join('');
+    const bits = [];
+    if (p?.where) bits.push(`<div class="plg-meta">装在：${esc(p.where)}</div>`);
+    if (p?.gatewayPort) bits.push(`<div class="plg-meta">网关（127.0.0.1:${p.gatewayPort}）：${p.gateway ? '在应答 ✓' : '没起'}</div>`);
+    /* 面板分两种形态（2026-11-04 用户纠正）：Windows 上 magpie 是桌面软件，面板是它自己的窗口（不是网页）；
+       Linux 上才是网页（端口 3430）。别在 Windows 上报"端口 3430 没起"——那是拿网页的尺子量窗口。 */
+    if (p?.panelKind === 'app') bits.push('<div class="plg-meta">它的面板：桌面软件自己的窗口（不是网页，点下面的按钮拉起来）</div>');
+    else if (p?.panelPort) {
+      /* 网页形态（Linux）没起时不要说半句 —— 下面有「把它的面板起起来」那颗按钮，
+         别让人点一个打不开的链接（2026-11-04 thinkpad 实测：面板没起、链接照样给，点了是死页）。 */
+      bits.push(
+        `<div class="plg-meta">它自己的面板（端口 ${p.panelPort}）：${
+          p.panel ? '起着' : e.serveCmd ? '没起 —— 点下面的按钮起它' : '没起'
+        }</div>`,
+      );
+    }
+    /* 装了但网关没起是最坑的状态 —— 被它接管的 agent 会全线 502，得喊出来 */
+    const warn =
+      p?.installed && p.gatewayPort && !p.gateway
+        ? '<div class="plg-warn">装了但网关没起 —— 被它接管的 agent 会全线 502。去它自己的面板看看。</div>'
+        : '';
+    /* 最近一次安装任务（2026-11-04 用户："点击之后显示安装状态"）—— 状态在服务端，
+       刷新/改天看都在。在装就不给安装按钮（重复点只会再排一个任务）。 */
+    const t = S.extSoftware?.tasks?.[id] ?? null;
+    const busy = !p?.installed && !!t && !t.done;
+    if (busy) {
+      bits.push(`<div class="plg-meta" data-ext-tail="${esc(id)}">${t.running ? '安装中…' : '排队中…'} ${esc(taskTail(t))}</div>`);
+    } else if (t?.status === '失败') {
+      bits.push(`<div class="plg-warn">上次安装没成：${esc(taskTail(t) || t.output?.slice(-200) || '（没有输出）')}</div>`);
+    } else if (t?.status === '完成' && !p?.installed) {
+      bits.push('<div class="plg-warn">上次任务报了「完成」，但这台机器上没认出它装好了 —— 点安装可以再来一遍。</div>');
+    }
+    /* 打开面板：桌面形态（Windows）→ 拉起它自己的窗口；网页形态（Linux）→ **只在面板起着时**
+       给链接（没起就给死页，2026-11-04 thinkpad 实测踩到）；没起但表里有常驻命令 → 给它起起来。
+       两条命令都在服务端那张表里，这里只发 id 与步骤（external-open / external-serve），边界不变。 */
+    const panelUp = p?.panelKind === 'web' && !!p?.panel;
+    let acts = '';
+    if (!p?.installed && !busy) acts = `<button class="primary" data-dlg-act="ext-install">安装</button>`;
+    else if (p?.installed && p.panelKind === 'app') acts = `<button class="primary" data-dlg-act="ext-panel">打开它的面板</button>`;
+    else if (p?.installed && panelUp) acts = `<button class="primary" data-dlg-act="ext-panel">打开它的面板</button>`;
+    else if (p?.installed && p.panelKind === 'web' && e.serveCmd) acts = `<button class="primary" data-dlg-act="ext-serve">把它的面板起起来</button>`;
+    if (e.home) acts += `<button data-dlg-act="ext-home">打开官网</button>`;
+    body.innerHTML = `
+      <div class="plg-d-head">
+        <div class="plg-ico">${PLG_ICONS.软件}</div>
+        <div class="plg-d-who">
+          <div class="plg-title"><b>${esc(e.label)}</b></div>
+          <div class="plg-tags">${tags}</div>
+        </div>
+      </div>
+      <div class="plg-desc">${esc(e.note || '（没有说明）')}</div>
+      ${e.installCmd ? `<div class="plg-meta">装它这件事，实际做的是：${esc(e.installCmd)}</div>` : ''}
+      ${e.downloadUrl ? `<div class="plg-meta">官方下载口：<a href="${esc(e.downloadUrl)}" target="_blank" rel="noopener">${esc(e.downloadUrl)}</a></div>` : ''}
+      ${bits.join('')}
+      ${warn}
+      <div class="dlg-actions">${acts}</div>
+    `;
+    const bar = body.querySelector('.dlg-actions');
+    if (bar) form.appendChild(bar);
+    bar?.querySelectorAll('[data-dlg-act]').forEach((el) => {
+      el.onclick = async () => {
+        const act = el.dataset.dlgAct;
+        if (act === 'ext-install') {
+          dlg.close();
+          await installSoftware(id, null);
+        } else if (act === 'ext-panel') {
+          if (p.panelKind === 'web') {
+            // 网页形态：面板起着才有链接（没起的那条路径由「把它的面板起起来」那颗按钮兜住）
+            window.open(p.panelUrl || `http://127.0.0.1:${p.panelPort}`, '_blank', 'noopener');
+          } else {
+            // 桌面软件的面板是它自己的窗口（Windows 上的 magpie）—— 排个 external-open，
+            // 让这台机器自己把 exe 拉起来（命令出自服务端那张表，这里只发 id 与步骤）
+            el.disabled = true;
+            try {
+              await post('/api/nodes/local/tasks', { kind: 'external-open', family: id });
+              dlg.close();
+              toast('打开了 —— 它的面板窗口应该已经弹出来（没看见就去任务栏找）。');
+            } catch (err) {
+              el.disabled = false;
+              toast(err.message, 'error');
+            }
+          }
+        } else if (act === 'ext-serve') {
+          /* 网页形态的面板没起：让那台机器按表里那条常驻命令起它（`magpie daemon install --web --lan`）。
+             起完面板端口就在了 —— 重新点开这里就能直接打开。 */
+          el.disabled = true;
+          try {
+            await post('/api/nodes/local/tasks', { kind: 'external-serve', family: id });
+            dlg.close();
+            toast('在起它的面板了 —— 起好后重新点开这个软件，就能直接打开面板。');
+            await renderPlugins();
+            renderList();
+          } catch (err) {
+            el.disabled = false;
+            toast(err.message, 'error');
+          }
+        } else if (act === 'ext-home') {
+          window.open(e.home, '_blank', 'noopener');
         }
       };
     });
@@ -513,6 +716,7 @@ export function plgCatalogHTML() {
   const err = S.catalogError ? `<div class="plg-warn">${esc(S.catalogError)}</div>` : '';
   const list = publicCatalog();
   const panels = S.plugins.filter((p) => p.panel?.slot === 'plugins');   // settings.section 的不进市场（内置设置分节）
+  const swSec = swSectionHTML();
   const panelsSec = panels.length
     ? `<section class="set-sec">
         <div class="set-head"><b>界面插件</b><span class="set-tag">带界面的扩展</span></div>
@@ -524,8 +728,8 @@ export function plgCatalogHTML() {
         <div class="set-head"><b>连接器</b><span class="set-tag">随仓库走的清单</span></div>
         <div class="plg-grid">${list.map(plgCardHTML).join('')}</div>
       </section>`
-    : (!panels.length ? '<div class="empty">清单是空的</div>' : '');
-  return `${err}${panelsSec}${connSec}`;
+    : (!panels.length && !swSec ? '<div class="empty">清单是空的</div>' : '');
+  return `${err}${swSec}${panelsSec}${connSec}`;
 }
 
 
@@ -587,9 +791,58 @@ export function wirePlugins() {
   /* 2026-10-25 用户口径：测/改撤掉、停/卸进详情弹窗 —— 行式条目的 data-probe/
      data-toggle/data-edit/data-del 接线随之移除（弹窗里自己绑 data-dlg-act）。 */
 
+  root.querySelectorAll('[data-ext-install]').forEach((el) => {
+    el.onclick = async (ev) => {
+      ev.stopPropagation(); // 别冒泡成"点卡看详情"
+      await installSoftware(el.dataset.extInstall, el);
+    };
+  });
+
+  watchBusySoftware();
+
   root.querySelectorAll('[data-manual]').forEach((el) => {
     el.onclick = () => openConnDialog(null);
   });
+}
+
+/**
+ * 有「软件」条目正装着就**接着盯**（2026-11-04 用户："点击之后显示安装状态"）。
+ *
+ * 为什么独立于 installSoftware 的轮询：那份定时器活在点击那次渲染里 —— 用户一刷新
+ * 页面它就没了，而任务在那台机器上**还在跑**。进度该跟「这台机器」页同一原则：
+ * 状态在服务端，界面只负责接上（scheduleTaskPoll 同款思路）。做完才整页重画一次；
+ * 跑的时候只就地改进度那行（2026-10-16 "页面不停刷新"的教训）。
+ */
+function watchBusySoftware() {
+  clearTimeout(S.extWatchTimer);
+  const busy = Object.entries(S.extSoftware?.tasks ?? {}).filter(([, t]) => t && !t.done);
+  if (!busy.length) return;
+  S.extWatchTimer = setTimeout(async () => {
+    let dirty = false;
+    for (const [family, t] of busy) {
+      let next = null;
+      try {
+        next = (await api(`/api/nodes/local/tasks/${encodeURIComponent(t.id)}`)).task;
+      } catch {
+        continue; // 抖一下等下一轮
+      }
+      if (!next) continue;
+      if (next.done) {
+        dirty = true; // 做完/失败 —— 交给整页重画（探针也会跟着更新）
+        if (next.status === '完成') S.pluginTab = 'installed';
+        else toast(`「${family}」没装成：${taskTail(next) || '看服务端日志'}`, 'error');
+      } else {
+        const line = `${next.running ? '安装中…' : '排队中…'} ${taskTail(next)}`.trim();
+        for (const el of document.querySelectorAll(`[data-ext-tail="${CSS.escape(family)}"]`)) el.textContent = line;
+      }
+    }
+    if (dirty) {
+      await renderPlugins();
+      renderList();
+    } else {
+      watchBusySoftware(); // 接着盯
+    }
+  }, 1500);
 }
 
 

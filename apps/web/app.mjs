@@ -34,7 +34,6 @@ import { api, closeHelpPop, hideTip, openCombo, post, showTip, tipAnchor, tipTim
 import { load, setNav } from './js/state.mjs';
 import { openSettings } from './js/settings.mjs';
 import { CRUMB_GO, connEditing, connSetTransport, connTransport, parseKeyValues, renderPlugins, renderRuntimes } from './js/connectors.mjs';
-import { addRtFamily, testAddRuntimePath } from './js/machine.mjs';
 import { closeCtxMenu, hideConversationRow, openCtxMenu, removeConversationForever, wipeScopeOf } from './js/listmenu.mjs';
 import { addMenu, addMenuAnchor, closeAddMenu, contactAddItems, detailSave, gitAddRepoItems, openAddMenu, renderList } from './js/contacts.mjs';
 import { archiveFlowTemplate, deleteFlowTemplate, newTemplateDialog } from './js/workflows.mjs';
@@ -209,31 +208,6 @@ document.addEventListener('click', (e) => {
     .then(() => go(el.dataset.crumbArg ?? null))
     .catch((err) => toast(err?.message ?? String(err), 'error'));
 });
-
-
-$('addRtTest').onclick = testAddRuntimePath;
-
-
-
-$('addRtOk').onclick = async (e) => {
-  e.preventDefault();
-  const path = $('addRtPath').value.trim();
-  if (!path) {
-    return toast('先填一个安装目录或可执行文件路径 —— 还没装的话，回列表看「未安装」那一行给的安装命令。');
-  }
-  try {
-    // 不传 label：服务端会默认用协议族名（「Codex CLI」这种）。这类名字够了，
-    // 让人先起个名是多余的一步 —— 真想改，详情页里有。
-    await post(`/api/devices/${encodeURIComponent(S.rtDevice)}/runtimes`, {
-      family: addRtFamily.id,
-      path,
-    });
-    $('addRtDlg').close();
-    await load(); // 员工的 Runtime 下拉要跟着多一项
-    S.rtLevel = 'device';
-    renderRuntimes();
-  } catch (err) { toast(err.message, 'error'); }
-};
 
 
 document.addEventListener('click', (e) => {

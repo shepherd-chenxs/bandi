@@ -29,21 +29,24 @@
   /* 破坏性按钮的文字色：深底上要亮一点才看得清（浅色主题换成更深的红） */
   --bad-ink: #e0948f;
 
-  /* 组件级 */
-  --seg-bg: #0b0d10;
-  --seg-thumb-bg: linear-gradient(180deg, #252b34, #1b2027);
-  --seg-thumb-shadow: 0 2px 8px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.06);
-  --target-a: #151b26;
-  --target-b: #0c0e11;
-  --target-shadow: none;
-  --qr-bg: rgba(59, 110, 245, 0.14);
-  --sweep-glow: rgba(109, 146, 255, 0.65);
+  /* 大按钮（扫码）：主色渐变 + 白字。深浅两套主题都用同一块蓝 —— 它是首屏唯一的
+     强调色，换主题不该换掉"主按钮长什么样"。 */
+  --hero-a: #4a7cff;
+  --hero-b: #2b53cf;
+  --hero-glow: rgba(59, 110, 245, 0.4);
+  --hero-edge: rgba(255, 255, 255, 0.16);
+
+  /* 次要入口（列表行） */
+  --alt-bg: #101214;
+  --alt-ico-bg: rgba(59, 110, 245, 0.14);
+  --alt-ico-ink: #8aa8ff;
+
   --btn-bg: #171a1e;
   --status-bg: #17191d;
   --placeholder: #4a4f56;
   --placeholder-2: #363a40;
 
-  --r-card: 20px;
+  --r-card: 22px;
   --r-ctl: 13px;
 }
 
@@ -73,208 +76,130 @@ body {
   min-height: var(--vvh, 100dvh);
   display: flex;
   flex-direction: column;
-  gap: 13px;
-  /* 顶部 60px：标题别贴着状态栏，往下沉一截（常态，聚焦也不变） */
-  padding: calc(60px + env(safe-area-inset-top)) 20px
-    calc(26px + var(--kb, 0px) + env(safe-area-inset-bottom));
+  /* 顶部 20px：首页是从品牌块开始的，不需要旧版那种 60px 的"标题让位"。
+     邀请码/已配对两个视图自带 .nav 返回行，输入框照样落在上半屏。 */
+  padding: calc(20px + env(safe-area-inset-top)) 20px
+    calc(22px + var(--kb, 0px) + env(safe-area-inset-bottom));
   max-width: 460px;
   margin: 0 auto;
 }
 
 /*
- * 键盘弹起时**页面不动**（用户 2026-11-01 实测定稿：键盘盖不住输入框，
- * 别往上挤）。以前那套「聚焦就整页上移给键盘让位」全删了 —— 没有位移，
- * 标题也不会跟着晃。顶部 60px 的留白就是常态，不因聚焦而变。
- *
- * 错误条是底部悬浮，同样不参与布局，报错时上面一个字都不动。
+ * 视图（首页 / 邀请码 / 已配对）在同一张页面里切换，不做滑动转场 ——
+ * Android WebView 里转场动画会把 fixed 的状态条一起带着飘。
  */
-
-/* 只把剩余空间放到**底部**：内容从顶部排，空间够时也不会下移。
-   垂直居中的代价写在 2026-11-01 的教训里 —— 居中出现下移，地址框落到
-   y≈410、码框 y≈466，而键盘顶部在 y≈350 且文档不滚，两块输入框全被盖住。
-   ⚠️ 这里**故意不写 .wrap::before**：它是 flex 子项，会白吃一个 gap 槽位
-   （10-13px），正是键盘那点余量。只要 ::after 就够了。 */
-.wrap::after {
-  content: "";
-  margin: auto;
+.view {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
-/* ---------------------------------------------------------------- 头部 */
+.view[hidden] {
+  display: none;
+}
 
-/* 横向 hero：总高 44 + 底部 26，和页签之间留出呼吸（.wrap 的 gap 之外再加）。
-   这个下边距是常态，跟聚焦/报错都无关（那两件事都不改布局了）。 */
-.hero {
+/*
+ * 键盘：仍然只靠布局（README「4. 启动页的键盘适配只能靠布局」）。
+ * 邀请码视图是**顶部对齐**的：返回行 30 + 标题 55 + 两个输入框 ≈ 底部 310-330，
+ * 真机键盘顶在 y≈350，盖不住。⚠️ 别给它加垂直居中、别加大段留白。
+ */
+
+/* ---------------------------------------------------------------- 首页 · 品牌 */
+
+.brand {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 12px;
-  min-height: 44px;
-  margin-bottom: 26px;
-  transition: margin-bottom 0.2s ease;
+  text-align: center;
+  margin-top: clamp(10px, 4vh, 40px);
 }
 
 .logo {
-  width: 44px;
-  height: 44px;
-  flex: 0 0 auto;
+  width: 54px;
+  height: 54px;
   display: grid;
   place-items: center;
-  border-radius: 13px;
+  border-radius: 16px;
   background: linear-gradient(145deg, #5b86ff, #2b52c9);
   color: #fff;
-  font-size: 21px;
+  font-size: 26px;
   font-weight: 700;
   letter-spacing: 0.02em;
-  box-shadow: 0 10px 26px rgba(59, 110, 245, 0.35),
+  box-shadow: 0 12px 30px rgba(59, 110, 245, 0.34),
     inset 0 1px 0 rgba(255, 255, 255, 0.22);
 }
 
-.hero-txt {
-  min-width: 0;
-}
-
 h1 {
-  margin: 0;
-  font-size: 19px;
-  line-height: 1.3;
-  font-weight: 650;
-  letter-spacing: 0.04em;
+  margin: 14px 0 0;
+  font-size: 25px;
+  line-height: 1.25;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  /* 两个字带字距时右侧会多出一格空白，负边距补回来才真居中 */
+  text-indent: 0.1em;
 }
 
-.sub {
-  margin: 2px 0 0;
+.brand-sub {
+  margin: 6px 0 0;
   color: var(--dim);
-  font-size: 12.5px;
-  line-height: 1.4;
+  font-size: 13px;
+  letter-spacing: 0.02em;
 }
 
-/* ---------------------------------------------------------------- 页签 */
+/* ---------------------------------------------------------------- 首页 · 扫码大按钮 */
 
-.seg {
-  position: relative;
-  display: grid;
-  /* 列数由 JS 的 --seg-n 给（2 或 3）：`已配对` 页签在没有记录时是 hidden 的，
-     硬写 1fr 1fr 会让剩下两个挤在左边、滑块也对不齐 */
-  grid-template-columns: repeat(var(--seg-n, 2), 1fr);
-  padding: 3px;
-  border: 1px solid var(--line);
-  border-radius: var(--r-ctl);
-  background: var(--seg-bg);
-}
-
-/* 滑块 = 一格宽，靠 transform 平移（不动布局，60fps 也稳）。
-   宽度用 `(100% - 6px) / n`：100% 是 padding box 减掉左右各 3px 的内宽，
-   正好等于 n 格平分；`translateX(100%)` 的百分比又相对自身宽度，
-   所以第 i 格 = translateX(i×100%)，一个像素都不会差。 */
-.seg-thumb {
-  position: absolute;
-  top: 3px;
-  left: 3px;
-  width: calc((100% - 6px) / var(--seg-n, 2));
-  height: calc(100% - 6px);
-  border-radius: 10px;
-  background: var(--seg-thumb-bg);
-  box-shadow: var(--seg-thumb-shadow);
-  transform: translateX(calc(var(--seg-i, 0) * 100%));
-  transition: transform 0.24s cubic-bezier(0.32, 0.72, 0, 1);
-}
-
-.seg-btn {
-  position: relative;
-  z-index: 1;
-  height: 34px;
-  margin: 0;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--dim);
-  font-family: inherit;
-  font-size: 13.5px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  cursor: pointer;
-  transition: color 0.18s ease;
-}
-
-/* ⚠️ grid 子项上的 [hidden] 会被 display 规则压掉 —— 「已配对」页签必须显式藏 */
-.seg-btn[hidden] {
-  display: none;
-}
-
-.seg-btn.is-on {
-  color: var(--text);
-}
-
-.seg-btn:focus-visible {
-  outline: 2px solid var(--accent-2);
-  outline-offset: 3px;
-  border-radius: 9px;
-}
-
-/* ⚠️ .seg 是 display:grid，会压掉 UA 的 [hidden] —— 记住设备那屏必须显式藏 */
-.seg[hidden] {
-  display: none;
-}
-
-/* ---------------------------------------------------------------- 面板 */
-
-.pane {
-  display: flex;
-  flex-direction: column;
-}
-
-.pane[hidden] {
-  display: none;
-}
-
-/* ---------------------------------------------------------------- 扫码 */
-
-/* 整块都是按钮（点击目标足够大），外面一圈四角取景标记 + 一道扫描线，
-   让"这里要放二维码"一眼就懂，不必先按一下才知道要干什么。 */
-.scan-target {
+/*
+ * 首屏唯一的主按钮（用户 2026-11-03：「扫码做成一个大按钮」）。
+ * 整块都是可点的：取景框四角 + 中间二维码图标 + 一道扫描线，不用读字也知道
+ * 这里是"扫一扫"；底下两行字说明对准哪儿。
+ */
+.scan-hero {
   appearance: none;
   display: flex;
   flex-direction: column;
   align-items: center;
   width: 100%;
-  padding: 26px 18px 22px;
-  border: 1px solid var(--line);
+  margin-top: clamp(18px, 5vh, 44px);
+  padding: 24px 20px 22px;
+  border: 1px solid var(--hero-edge);
   border-radius: var(--r-card);
-  background: radial-gradient(120% 90% at 50% 0%, var(--target-a) 0%, var(--target-b) 72%);
-  box-shadow: var(--target-shadow);
-  color: var(--text);
+  background: linear-gradient(168deg, var(--hero-a) 0%, var(--hero-b) 100%);
+  color: #fff;
   font-family: inherit;
   cursor: pointer;
-  transition: transform 0.09s ease, border-color 0.18s ease, background 0.2s ease;
+  box-shadow: 0 18px 40px var(--hero-glow),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  transition: transform 0.1s ease, box-shadow 0.2s ease;
 }
 
-.scan-target:active {
-  transform: scale(0.99);
-  border-color: var(--line-2);
+.scan-hero:active {
+  transform: scale(0.985);
+  box-shadow: 0 8px 22px var(--hero-glow),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18);
 }
 
-.scan-target:focus-visible {
+.scan-hero:focus-visible {
   outline: 2px solid var(--accent-2);
-  outline-offset: 2px;
+  outline-offset: 3px;
 }
 
 .frame {
   position: relative;
   display: grid;
   place-items: center;
-  width: 126px;
-  height: 126px;
+  width: 98px;
+  height: 98px;
   margin-bottom: 16px;
 }
 
 /* 取景框四角。⚠️ 用 nth-of-type 而不是 nth-child：.frame 的第一个子元素是
-   .frame-qr 图标，nth-child 会整体错位一格 —— 左上角永远匹配不上（实际渲染成
-   右上/右下/左下 + 一个没定位的裸方块）。nth-of-type 只数 <i>，不受影响。 */
+   .frame-qr 图标，nth-child 会整体错位一格。nth-of-type 只数 <i>，不受影响。 */
 .frame i {
   position: absolute;
-  width: 26px;
-  height: 26px;
-  border: 2.5px solid var(--accent-2);
-  opacity: 0.85;
+  width: 24px;
+  height: 24px;
+  border: 2.5px solid rgba(255, 255, 255, 0.85);
 }
 
 .frame i:nth-of-type(1) {
@@ -312,29 +237,30 @@ h1 {
 .frame-qr {
   display: grid;
   place-items: center;
-  width: 58px;
-  height: 58px;
-  border-radius: 16px;
-  background: var(--qr-bg);
-  color: var(--accent-2);
+  width: 62px;
+  height: 62px;
+  border-radius: 17px;
+  background: rgba(255, 255, 255, 0.16);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+  color: #fff;
 }
 
 .frame-qr svg {
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
 }
 
 /* 扫描线：一条在框里来回走的细光，暗示"这里正在等二维码" */
 .sweep {
   position: absolute;
-  left: 12px;
-  right: 12px;
-  top: 14px;
+  left: 10px;
+  right: 10px;
+  top: 12px;
   height: 2px;
   border-radius: 2px;
-  background: linear-gradient(90deg, transparent, var(--accent-2), transparent);
-  box-shadow: 0 0 14px var(--sweep-glow);
-  opacity: 0.5;
+  background: linear-gradient(90deg, transparent, #fff, transparent);
+  box-shadow: 0 0 12px rgba(255, 255, 255, 0.7);
+  opacity: 0.55;
   animation: sweep 2.8s cubic-bezier(0.45, 0, 0.55, 1) infinite;
 }
 
@@ -345,36 +271,198 @@ h1 {
     opacity: 0.15;
   }
   50% {
-    transform: translateY(96px);
-    opacity: 0.9;
+    transform: translateY(72px);
+    opacity: 0.85;
   }
 }
 
 .scan-title {
-  font-size: 16.5px;
+  font-size: 18px;
   font-weight: 650;
-  letter-spacing: 0.03em;
+  letter-spacing: 0.05em;
 }
 
 .scan-sub {
   margin-top: 5px;
-  color: var(--dim);
+  color: rgba(255, 255, 255, 0.74);
   font-size: 12.5px;
+  letter-spacing: 0.01em;
 }
 
-.foot-hint {
-  margin: 13px 2px 0;
+/* ---------------------------------------------------------------- 首页 · 其他方式 */
+
+/* 「其他方式」分隔线：两条 hairline + 中间一行小字，把主按钮和次要入口分层 */
+.or {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 20px 4px 14px;
   color: var(--dim);
-  font-size: 12.5px;
-  line-height: 1.72;
+  font-size: 11.5px;
+  letter-spacing: 0.12em;
 }
 
-.foot-hint b {
-  color: var(--strong);
+.or::before,
+.or::after {
+  content: "";
+  flex: 1 1 auto;
+  height: 1px;
+  background: var(--line);
+}
+
+.alt {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--alt-bg);
+  overflow: hidden;
+}
+
+.alt-row {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 13px 12px 13px 13px;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.14s ease;
+}
+
+.alt-row + .alt-row {
+  border-top: 1px solid var(--line);
+}
+
+.alt-row:active {
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+}
+
+.alt-row:focus-visible {
+  outline: 2px solid var(--accent-2);
+  outline-offset: -2px;
+}
+
+/* ⚠️ .alt-row 自己声明了 display:flex，会压掉 UA 的 [hidden] —— 必须显式写，
+   否则"已配对"那行在没有记录时照旧露出来 */
+.alt-row[hidden] {
+  display: none;
+}
+
+.alt-ico {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 11px;
+  background: var(--alt-ico-bg);
+  color: var(--alt-ico-ink);
+}
+
+.alt-ico svg {
+  width: 20px;
+  height: 20px;
+}
+
+.alt-txt {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.alt-label {
+  font-size: 14.5px;
   font-weight: 600;
+  letter-spacing: 0.02em;
 }
 
-/* ---------------------------------------------------------------- 邀请码 */
+.alt-meta {
+  color: var(--dim);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.alt-chev {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  color: var(--dim);
+  opacity: 0.75;
+}
+
+.alt-chev svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* ---------------------------------------------------------------- 视图头（返回 + 标题） */
+
+.nav {
+  display: flex;
+  align-items: center;
+  min-height: 30px;
+  margin-bottom: 10px;
+}
+
+.nav-back {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  height: 30px;
+  margin-left: -6px;
+  padding: 0 10px 0 2px;
+  border: 0;
+  border-radius: 9px;
+  background: none;
+  color: var(--dim);
+  font-family: inherit;
+  font-size: 13.5px;
+  cursor: pointer;
+}
+
+.nav-back svg {
+  width: 17px;
+  height: 17px;
+}
+
+.nav-back:active {
+  color: var(--text);
+}
+
+.nav-back:focus-visible {
+  outline: 2px solid var(--accent-2);
+  outline-offset: 1px;
+}
+
+.view-title {
+  margin: 0;
+  font-size: 21px;
+  line-height: 1.3;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+
+.view-sub {
+  margin: 4px 0 16px;
+  color: var(--dim);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+/* ---------------------------------------------------------------- 表单 */
 
 .lab {
   display: block;
@@ -397,7 +485,7 @@ h1 {
   color: var(--text);
   font: 14px/1 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   outline: none;
-  transition: border-color 0.16s ease, box-shadow 0.16s ease, margin-bottom 0.2s ease;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease;
 }
 
 .field::placeholder {
@@ -427,7 +515,7 @@ h1 {
   letter-spacing: 0.1em;
   text-align: center;
   outline: none;
-  transition: border-color 0.16s ease, box-shadow 0.16s ease, margin-bottom 0.2s ease;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease;
 }
 
 .code-input::placeholder {
@@ -438,6 +526,28 @@ h1 {
 .code-input:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(59, 110, 245, 0.16);
+}
+
+.foot-hint {
+  margin: 13px 2px 0;
+  color: var(--dim);
+  font-size: 12.5px;
+  line-height: 1.72;
+}
+
+/* 首页那条说明钉在底部：内容少的时候不吊在半空，短屏时自然被推下去 */
+.view-home .foot-hint {
+  margin-top: auto;
+  padding-top: 22px;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.7;
+  color: color-mix(in srgb, var(--dim) 86%, transparent);
+}
+
+.foot-hint b {
+  color: var(--strong);
+  font-weight: 600;
 }
 
 /* ---------------------------------------------------------------- 按钮 */
@@ -474,16 +584,6 @@ h1 {
   box-shadow: 0 10px 24px rgba(59, 110, 245, 0.3);
 }
 
-.btn.quiet {
-  height: 44px;
-  margin-top: 8px;
-  border-color: transparent;
-  background: transparent;
-  color: var(--dim);
-  font-size: 14px;
-  font-weight: 500;
-}
-
 /* 破坏性动作（「取消配对」）：描边 + 红字，不用实心红 —— 它不是这个页面的主按钮，
    压过「连接」就本末倒置了。颜色走 --bad-ink，浅色主题换成更深的红才够对比度。 */
 .btn.danger {
@@ -499,17 +599,16 @@ h1 {
   cursor: default;
 }
 
-/* ⚠️ .btn / .scan-target 自己有 display，会压掉 UA 的 [hidden] —— 必须显式写，
-   否则"记住设备"那屏的扫码钮照旧露在外面（CDP 实测 display:flex） */
+/* ⚠️ .btn / .scan-hero 自己有 display，会压掉 UA 的 [hidden] —— 必须显式写 */
 .btn[hidden],
-.scan-target[hidden] {
+.scan-hero[hidden] {
   display: none;
 }
 
 /* ---------------------------------------------------------------- 已配对 */
 
 /*
- * 连过的电脑：列表 → 详情两级（2026-11-01 四改）。
+ * 连过的电脑：列表 → 详情两级。
  * 列表整行是按钮（点哪都进详情），右端一个箭头 —— 连接放在详情里，不做成
  * 列表上的副作用：点错一下就连到别的电脑上，比多点一层烦得多。
  */
@@ -518,8 +617,7 @@ h1 {
   flex-direction: column;
 }
 
-/* ⚠️ 自己声明了 display 就会压掉 UA 的 [hidden] —— 详情打开时列表必须显式藏
-   （不然列表和详情叠在一起，截图实测到了） */
+/* ⚠️ 自己声明了 display 就会压掉 UA 的 [hidden] —— 详情打开时列表必须显式藏 */
 .paired[hidden] {
   display: none;
 }
@@ -631,40 +729,12 @@ h1 {
   display: none;
 }
 
-/* 返回：小一号的文字按钮，带左箭头 —— 不抢「连接」的视觉重量 */
-.pd-back {
-  align-self: flex-start;
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  height: 30px;
-  margin: 0 0 10px -4px;
-  padding: 0 8px 0 0;
-  border: 0;
-  border-radius: 9px;
-  background: none;
-  color: var(--dim);
-  font-family: inherit;
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.pd-back svg {
-  width: 16px;
-  height: 16px;
-}
-
-.pd-back:active {
-  color: var(--text);
-}
-
 .pd-card {
   padding: 16px;
   margin-bottom: 12px;
   border: 1px solid var(--line);
   border-radius: var(--r-card);
-  background: linear-gradient(180deg, var(--target-a), var(--target-b));
-  box-shadow: var(--target-shadow);
+  background: linear-gradient(180deg, var(--alt-bg), var(--card-2));
 }
 
 .pd-name {
@@ -720,7 +790,7 @@ h1 {
 /* 正在连：列表和详情里的按钮都不吃点击（probe 最长 4 秒，连点会开两次跳转） */
 body.connecting .paired,
 body.connecting .pd .btn,
-body.connecting .pd-back {
+body.connecting .nav-back {
   pointer-events: none;
   opacity: 0.6;
 }
@@ -731,8 +801,7 @@ body.connecting .pd-back {
  * 错误/进度条 = **底部浮出的横幅**（用户 2026-11-01：报错显示在下面，底下大片空地）。
  *
  * 为什么不是顶部：以前钉在顶部，一报错就得让头部整块让位，标题闪没一下很难受，
- * 而且错误条压着页签。挪到底部后，上面一个像素都不用动 —— 内容是顶部对齐的，
- * 下半屏本来就空着，条子落在那儿正合适，谁也不压。
+ * 而且错误条压着内容。挪到底部后，上面一个像素都不用动。
  *
  * 它仍然是 fixed（不参与布局）：以前放文档流里，一报错就把输入框往下推 50px，
  * 正好推进键盘底下（键盘不滚文档，盖住就是盖住了）。
@@ -955,12 +1024,66 @@ body.connecting .pd-back {
   text-align: center;
 }
 
-/* 横屏 / 小高度：别把内容挤在垂直居中里 */
-@media (max-height: 560px) {
-  .wrap {
-    justify-content: flex-start;
+/* 矮屏（小手机 / 横屏）：把首页压紧一点，别让大按钮把说明顶出屏幕 */
+@media (max-height: 700px) {
+  .brand {
+    margin-top: 6px;
   }
 
+  .logo {
+    width: 46px;
+    height: 46px;
+    border-radius: 14px;
+    font-size: 22px;
+  }
+
+  h1 {
+    margin-top: 10px;
+    font-size: 22px;
+  }
+
+  .brand-sub {
+    margin-top: 4px;
+    font-size: 12.5px;
+  }
+
+  .scan-hero {
+    margin-top: 18px;
+    padding: 20px 18px 18px;
+  }
+
+  .frame {
+    width: 86px;
+    height: 86px;
+    margin-bottom: 14px;
+  }
+
+  @keyframes sweep {
+    0%,
+    100% {
+      transform: translateY(0);
+      opacity: 0.15;
+    }
+    50% {
+      transform: translateY(60px);
+      opacity: 0.85;
+    }
+  }
+
+  .or {
+    margin: 16px 4px 12px;
+  }
+
+  .alt-row {
+    padding: 11px 12px;
+  }
+
+  .view-home .foot-hint {
+    padding-top: 16px;
+  }
+}
+
+@media (max-height: 560px) {
   .scan-guide {
     width: min(46vw, 200px);
   }
@@ -986,9 +1109,9 @@ body.connecting .pd-back {
     opacity: 0.55;
   }
 
-  .seg-thumb,
   .btn,
-  .scan-target {
+  .scan-hero,
+  .alt-row {
     transition: none;
   }
 }
@@ -1018,15 +1141,15 @@ body.connecting .pd-back {
     --accent-2: #3b6ef5;
     --bad-ink: #a4262c;
 
-    --seg-bg: #e8eaee;
-    --seg-thumb-bg: #ffffff;
-    --seg-thumb-shadow: 0 2px 6px rgba(16, 24, 40, 0.14),
-      inset 0 0 0 0.5px rgba(16, 24, 40, 0.05);
-    --target-a: #ffffff;
-    --target-b: #f7f9fc;
-    --target-shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 10px 26px rgba(16, 24, 40, 0.06);
-    --qr-bg: rgba(59, 110, 245, 0.1);
-    --sweep-glow: rgba(59, 110, 245, 0.35);
+    /* 主按钮在浅底上要压得住：渐变略深一档，阴影收紧一点 */
+    --hero-a: #4272f7;
+    --hero-b: #2a4fc6;
+    --hero-glow: rgba(47, 98, 232, 0.28);
+
+    --alt-bg: #ffffff;
+    --alt-ico-bg: rgba(47, 98, 232, 0.1);
+    --alt-ico-ink: #2f62e8;
+
     --btn-bg: #eaedf1;
     --status-bg: #ffffff;
     --placeholder: #9aa0a6;
@@ -1046,7 +1169,7 @@ body.connecting .pd-back {
     color: #1b6f47;
   }
 
-  .scan-target:active {
-    background: radial-gradient(120% 90% at 50% 0%, #f2f6ff 0%, #eef2f8 72%);
+  .alt {
+    box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
   }
 }

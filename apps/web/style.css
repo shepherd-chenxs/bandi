@@ -417,6 +417,10 @@ body.no-list .list-panel { display: none; }
    组头文字左沿 = 行 padding 10 + 图标 13 + gap 6 = 29px；条目自身 padding 8，
    所以 sec-body 缩进 29 - 8 = 21px，条目和组头标题踩同一条线。 */
 #listBody .sec-body.nav { padding-left: 21px; }
+/* 条目行内的小图标（2026-11-04，目前只有钉在最后的「关于」）：内联在标题 <b> 里，
+   vertical-align 抵掉基线差；单色 currentColor 跟随标题，13px 与组头图标同套语法 */
+#listBody .item[data-set] .line1 .sec-ico { width: 13px; height: 13px; flex: none;
+                                           margin-right: 6px; vertical-align: -2px; }
 /* 组收起后，选中分节被一起藏掉 —— 组头右侧补一颗点（accent 色）标记"正看的东西收在这组里"。
    margin-left:auto 把点推到组头行最右，跟 VS Code 折叠文件夹里的改动点是同一个心智。 */
 .sec-here { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); margin-left: auto; flex: none; }
@@ -1265,7 +1269,14 @@ body:has(#pluginView.shown .fixed-head)::after {
            color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent);
            border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent); }
 .me-meta { font-size: 12.5px; color: var(--dim); }
-.me-dev { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12px; }
+/* 「这台设备」属性卡（2026-11-03 账户为主）：设备从身份卡退出来，落成
+   label + value 的属性行。地址行用等宽，跟设置页其它地址同款。 */
+.me-dev-box { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); overflow: hidden; }
+.me-kv { display: flex; align-items: center; gap: 12px; padding: 10px 16px; }
+.me-kv + .me-kv { border-top: 1px solid var(--line); }
+.me-k { flex: none; font-size: 12.5px; color: var(--dim); }
+.me-v { flex: 1; min-width: 0; font-size: 12.5px; text-align: right; word-break: break-all; }
+.me-v-mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12px; }
 /* 账号安全：双卡网格（容器不够宽时 auto-fit 自动落成单列）。 */
 .me-sec-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
 .me-sec-card { border: 1px solid var(--line); border-radius: 10px; background: var(--panel);
@@ -1429,7 +1440,10 @@ body:has(#pluginView.shown .fixed-head)::after {
 .mb-pair-wrap { overflow-x: auto; }
 .pair-table { min-width: 620px; }
 .pair-table td { vertical-align: middle; }
-.pair-table td.pair-act { text-align: right; white-space: nowrap; }
+/* 操作列（2026-11-04 用户："改成左对齐看看"）：表头与按钮一起靠左，紧跟「面板角色」列成组。
+   原先是 td 右对齐（按钮贴表格右缘），2026-11-04 晚一度把表头也右拉对齐，用户要求改回左 ——
+   宁可按钮右边留白，也要表头和按钮贴在一起。 */
+.pair-table td.pair-act { text-align: left; white-space: nowrap; }
 .pair-table tr.off td { opacity: .55; }
 .pair-ontag {
   display: inline-block;
@@ -1465,8 +1479,11 @@ body:has(#pluginView.shown .fixed-head)::after {
 
 /* ── 手机连接 · 分节头里的「连接」总开关（2026-11-02 加，2026-11-03 收进标题行）──
    用户："邀请码改成连接，右边加开关，上面的可以去掉了" —— 页顶那张独立开关键卡删掉，
-   开关贴到分节标题最右边；关掉后卡片体换成一句提示（pairing.mjs）。 */
-.set-head.pair-head { justify-content: space-between; }
+   开关贴到分节标题最右边；关掉后卡片体换成一句提示（pairing.mjs）。
+   状态标签（已开启/已关闭）也在这里（2026-11-03 用户："标签放这里"）——
+   跟着标题走，开关用 margin-left:auto 推到最右。 */
+.set-head.pair-head { justify-content: flex-start; gap: 8px; }
+.set-head.pair-head .switch { margin-left: auto; }
 
 /* 小节标题行：左边标题，右边动作按钮 */
 /* 标题行定高（2026-10-21 用户："切换按钮，框的高度不要变"）：
@@ -1764,6 +1781,23 @@ dialog.pj-add-dlg .dlg-head { margin: 0 -20px; padding: 14px 12px 6px 20px; }
 .tab.on { color: var(--text); font-weight: 500; border-bottom-color: var(--accent); }
 .tab-n { font-size: 11px; color: var(--dim); background: var(--chip); border-radius: 99px;
          padding: 0 6px; line-height: 16px; }
+
+/* 设置 › 安全的页签外壳（2026-11-03 用户："让滚动只发生在日志区，上面的不动"）：
+   页头（.detail-head）+ 页签条 flex: none 钉住，只有 .sec-scroll 内部滚 ——
+   #settingsView 自己不出滚动条（外壳正好填满它的内容盒，底部 40px padding 已算在内）。 */
+.sec-shell { height: 100%; display: flex; flex-direction: column; }
+.sec-shell .detail-head { flex: none; }
+.sec-shell .tabs { flex: none; margin: 0 24px; }
+.sec-shell .sec-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto;
+  /* 滚动条常驻占位：日志加载出滚动条时内容宽度不再突然变窄，页面不抖（2026-11-03） */
+  scrollbar-gutter: stable; }
+/* 分节头右侧的动作组（审计日志的「导出 / 清空」）：.set-head 是纯 flex，靠 auto 左边距顶到最右 */
+.sec-head-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+/* 标题行里的下拉不要边框（2026-11-03 用户：审计日志的类型筛选去掉边框，像颗纯文字按钮）；
+   宽度收紧到内容本身 —— 固定宽会让「文字 ↔ 箭头 ↔ 导出」之间空出一截 */
+.sec-head-actions .combo { display: inline-flex; }
+.sec-head-actions .combo-btn { width: auto; border: none; background: transparent; padding: 4px 2px; }
+.sec-head-actions .combo-btn:hover { border: none; background: var(--input); }
 
 /* 员工详情「任务」页（2026-10-18）：竖着分堆，卡片直接复用看板那张（.kb-card）。
    不铺六列是因为这一页是主区的一栏，放不下；堆的**顺序**照看板的生命周期走。 */
@@ -4040,32 +4074,55 @@ details.tc-replies[open] > .tc-replies-toggle .tc-replies-unfold { display: inli
 .machine-path { font-family: ui-monospace, monospace; font-size: 11.5px; overflow-wrap: anywhere; }
 
 /* ===== 数据管理 —— 「这台机器」页底下的一个区（2026-10-29 从设置独立分节降级）=====
-   降成区之后不再摆大字统计条和两张动作卡（用户："导入导出做成按钮就行，
-   没必要占据那么大的位置"）：导出/导入收成节头两颗按钮，状态压成一行小字，
-   备份快照是一个矮列表。颜色/圆角全走全站 tokens，深浅色主题自动跟随。
-   2026-11-01（用户截图圈红"数据管理拿到卡片外面"）：区头跟「设备」「运行时」
-   同款 —— `.fx` + `.fx-head`，标题在卡片外；统计 + 快照包进 `.dm-card` 一张卡
-   （区本身的下间距由 `.fx` 的 padding-bottom 提供，不用再写）。 */
-.dm-card { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); padding: 12px 16px; }
+   2026-11-04 重设计：库路径从节头挪到卡上面一行小字（不再跟按钮挤一行）；
+   点隔的一行统计改成等宽分格的统计块（数字大、标签小）；快照条目压成单行
+   —— 文件名居左、来源·大小·时间右对齐。颜色/圆角全走全站 tokens，
+   深浅色主题自动跟随；区头的下间距由 `.fx` 提供。 */
+.dm-card { border: 1px solid var(--line); border-radius: 10px; background: var(--panel);
+           overflow: hidden; padding-bottom: 4px; }
 .dm-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; flex: none; min-width: 0; }
-.dm-path { color: var(--dim); max-width: 460px; text-align: right; }
-/* 状态一行：数字加重、项目之间点隔；拉不到的数据显示 — */
-.dm-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 14px;
-           font-size: 12.5px; color: var(--dim); padding: 3px 0 4px; }
-.dm-line b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
-.dm-sep { color: var(--line); }
+/* 库文件路径一行：节头下面、卡片上面；超长省略，完整路径悬停有 title */
+.dm-pathline { display: flex; gap: 8px; align-items: baseline; min-width: 0;
+               margin: -2px 0 10px; font-size: 12px; color: var(--dim);
+               white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 统计块：每格自带左/上 1px 边框，容器用负 margin 抵掉最外沿（卡 overflow:hidden 裁掉）
+   —— 不用"缝隙露底色"的技巧：格子折行、末行缺格时也不会露出一条灰底 */
+.dm-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); }
+.dm-stat { background: var(--panel); padding: 12px 16px 11px; min-width: 0;
+           border-left: 1px solid var(--line); border-top: 1px solid var(--line);
+           margin: -1px 0 0 -1px; }
+.dm-stat b { display: block; font-size: 18px; font-weight: 650; line-height: 24px;
+             color: var(--text); font-variant-numeric: tabular-nums;
+             overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dm-stat span { display: block; margin-top: 1px; font-size: 12px; color: var(--dim); }
+/* 「最后修改」是长日期：数字不必 18px 那么大，行高对齐别的格子就行 */
+.dm-stat-time b { font-size: 14px; font-weight: 600; }
 /* —— 备份快照：矮列表（约五行就开始滚），只读 —— */
-.dm-snaps { margin-top: 6px; border-top: 1px solid var(--line); }
-.dm-snaps-head { display: flex; align-items: baseline; gap: 10px; padding: 8px 0 4px;
+.dm-snaps { padding: 10px 16px 8px; border-top: 1px solid var(--line); }
+.dm-snaps-head { display: flex; align-items: baseline; gap: 10px; padding: 0 0 4px;
                  font-size: 12.5px; font-weight: 600; min-width: 0; }
 .dm-list-count { font-size: 12px; font-weight: 400; color: var(--dim);
                  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dm-snaps-body { max-height: 190px; overflow: auto; }
-.dm-item { padding: 6px 0 7px; min-width: 0; }
+.dm-item { display: flex; align-items: baseline; justify-content: space-between;
+           gap: 12px; padding: 6px 0 7px; min-width: 0; }
 .dm-item + .dm-item { border-top: 1px solid var(--line); }
-.dm-item-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
-.dm-item-sub { margin-top: 2px; font-size: 12px; color: var(--dim); }
+.dm-item-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+                white-space: nowrap; color: var(--text); }
+.dm-item-sub { flex: none; font-size: 12px; color: var(--dim); }
 .dm-empty { padding: 6px 0 10px; font-size: 12.5px; color: var(--dim); line-height: 1.75; }
+
+/* —— 「这台机器」· 运行时空态（2026-11-04）：识别不到 CLI 时的引导卡，
+      替换原来两行灰字 —— 虚线框是"这里是空的"的全站语言，居中排版别抢眼 —— */
+.rt-empty { border: 1px dashed var(--line); border-radius: 10px;
+            padding: 28px 20px 26px; margin: 2px 0 2px;
+            display: flex; flex-direction: column; align-items: center; gap: 6px;
+            text-align: center; color: var(--dim); }
+.rt-empty svg { width: 26px; height: 26px; color: var(--dim); margin-bottom: 3px; }
+.rt-empty b { color: var(--text); font-weight: 500; font-size: 13.5px; }
+.rt-empty span { font-size: 12px; line-height: 1.7; max-width: 430px; }
+/* 有内容但还没扫过时的一行提示（补版本号用） */
+.rt-hint { padding: 8px 2px 0; font-size: 12px; color: var(--dim); }
 /* 模式标题行（2026-10-21 八改）：不再挂 machine-card —— 那个类带 max-width:720px，
    是给「数据备份/节点页」那种长表单卡用的，放在这只会让开关顶不到页面右边。
    「模式」标题在左，开关 + 重启顶到最右；标题行下是一行随开关走的状态说明 */
@@ -4112,8 +4169,20 @@ details.tc-replies[open] > .tc-replies-toggle .tc-replies-unfold { display: inli
 .cl-empty-sm .cl-empty-btn { margin-top: 14px; }
 /* 键盘可达（2026-11-02 二十六改）：seg 与主按钮补一圈可见焦点环 ——
    默认 UA 描边在这套深色底上几乎看不见 */
-.seg button:focus-visible, .mode-ctl button:focus-visible, .cl-empty-btn:focus-visible {
+.seg button:focus-visible, .mode-ctl button:focus-visible, .cl-empty-btn:focus-visible,
+.cl-inv-box:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 2px; }
+/* 接入码弹窗（2026-11-03 用户："只要地址和接入码两个，其他说明不要"，再改"标签放框外面"）：
+   标签在框外上方，框里只有等宽值；点框 = 复制，成功后标签临时变「已复制」。 */
+.cl-inv { display: grid; gap: 12px; margin: 12px 0 4px; }
+.cl-inv-field { display: grid; gap: 6px; }
+.cl-inv-label { font-size: 11.5px; color: var(--dim); letter-spacing: .04em; }
+.cl-inv-box { width: 100%; text-align: left; font: inherit; color: inherit; cursor: pointer;
+              padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--input); }
+.cl-inv-box:hover { border-color: var(--accent); }
+.cl-inv-box:active { transform: translateY(1px); }
+.cl-inv-value { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 14.5px;
+                letter-spacing: .03em; overflow-wrap: anywhere; user-select: all; }
 .machine-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
 .machine-warn { margin-top: 10px; font-size: 12px; color: var(--warn); line-height: 1.6; }
 .machine-dot { display: inline-block; width: 7px; height: 7px; border-radius: 99px;
@@ -4538,8 +4607,8 @@ dialog.mg-dlg { width: 520px; }
   background: color-mix(in srgb, var(--ok) 10%, transparent); }
 .pair-state.on::before { background: var(--ok); }
 
-/* ② 关闭态引导卡：替换原来「一行灰字套空框」—— 空框看着像加载失败，页面还没有动作。
-   图标淡蓝圆底 + 标题 + 一句后果 + 主按钮（按钮复用全局 button.primary）。
+/* ② 关闭态引导卡：替换原来「一行灰字套空框」—— 空框看着像加载失败。
+   图标淡蓝圆底 + 标题 + 一句后果（打开动作就是分节头那颗开关，不另设按钮）。
    set-box 原本就有卡底/描边，这里只管内容层的排版。
    内边距 22/18 是按「两态等高」反推的：34/30 时卡高 247，比开态（邀请码卡 223）多 24px，
    拨开关整页会跟着抖一下。 */
@@ -4549,15 +4618,15 @@ dialog.mg-dlg { width: 520px; }
   display: grid; place-items: center; }
 .pair-off-ico svg { width: 22px; height: 22px; }
 .pair-off b { display: block; font-size: 14px; font-weight: var(--w-title, 600); margin-bottom: 4px; }
-.pair-off p { margin: 0 auto 16px; max-width: 380px;
+.pair-off p { margin: 0 auto; max-width: 380px;
   color: var(--dim); font-size: 12.5px; line-height: 1.7; }
-.pair-off button.primary { padding: 7px 22px; }
 
 /* ②b 连接卡开 / 关两态等高（2026-11-03 用户："这两个框要一样大"）。
-   223 是开启态（地址 + 邀请码 + 二维码 + 底部提示）在 900px 内容宽下的实测高度，
-   关闭态靠它兜底、内容垂直居中；内容真变多（窄窗二维码竖排）时 min-height 不拦，
-   让它自己长 —— 那种宽度下两态本来就都超出这个值。 */
-.pair-sec .set-box { min-height: 223px; display: flex; flex-direction: column; }
+   174 是去掉「邀请码 5 分钟内有效」提示行后开态卡（地址 + 邀请码 + 二维码）在 900px
+   内容宽下的实测高度（headless 探针，tmp/pairing-height/probe.html）；关态自然高 170，
+   差 4px 由 min-height 拉齐、引导卡 margin:auto 垂直居中。内容真变多（窄窗二维码竖排）
+   时 min-height 不拦，让它自己长。 */
+.pair-sec .set-box { min-height: 174px; display: flex; flex-direction: column; }
 .pair-sec .pair-off { margin: auto 0; }
 
 /* ③ 开关关闭态轨道加深一档：--line 在深底上对比不足 3:1（WCAG 1.4.11 非文本下限），

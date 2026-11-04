@@ -124,47 +124,44 @@ Tauri 的 Android WebView 里，键盘弹起时：
   那套兜底也不会生效。
 
 所以别写"等键盘状态再调整"的逻辑（实测连试 5 版都失败）。现在的做法是
-纯布局（2026-11-01 四改后）：
+纯布局（2026-11-03 五改后）：
 
-- 顶部 60px 留白是**常态**：页签（扫码 / 邀请码）与两个输入框都在上半屏，
-  真机键盘起来**盖不住**它们（用户实测）；
+- **输入只存在于邀请码视图**，而它是顶部对齐的：返回行 30px + 标题 +
+  地址框 + 码框 + 连接按钮，底部 ≈340 —— 真机键盘顶在 y≈350，
+  **盖不住**（用户实测）；首页没有输入框，怎么排版都安全；
 - 因此**键盘弹起时页面完全不动** —— 不位移、不收起头部、不加过渡。
   （中途试过 `body.typing` 整页上移、更早试过藏头部，都被用户否掉了：
   "键鼠盖不住输入框，不需要往上"+"标题突然没了很不舒服"。两条都删干净了，
-  别再往回加。）地址框 bottom≈219、码框 bottom≈330、连接按钮 bottom≈411；
-- 错误条是 **fixed 悬浮在页面底部**（离底 18px + 安全区），不参与布局 ——
-  报错时上面一个字都不动。**不要**再放回文档流（那会把输入框往下推 50px）；
-  也**不要**放回顶部（要连带让头部让位，标题会闪没）；
-- ⚠️ `.wrap` **不要写 `::before`**：它是 flex 子项，白吃一个 gap 槽位（10-13px）。
-  内容顶部对齐只靠 `::after { margin: auto }` 就够。
+  别再往回加。）
+- ⚠️ 给邀请码视图加东西之前先算高度：标题再大一号、或者多一行说明，
+  输入框就可能掉进键盘底下。
 
 改启动页布局时别把输入框推到下半屏（2026-11-01 CDP 实测：hero 竖排时码框
 bottom=399，真机上会被键盘盖住）。
 
-## 启动页怎么走（2026-11-01 四改：已配对 / 扫码 / 邀请码三张页签）
+## 启动页怎么走（2026-11-03 五改：一个大按钮 + 两个次要入口）
 
 连接有三种方式，**跟部署形态无关**（用户定稿：局域网也填地址，
-壳里不做"这是局域网还是云端"的判断）。三种方式做成**同一张页签**
-（`#tabs` 的 data-mode = paired | scan | code），**默认选中「已配对」**
-（没连过任何电脑才落到扫码）—— 扫码在两种部署下都成立，是首次配对的主路；
-邀请码是"扫不了"时的退路；「已配对」是日常回来的一键直达：
+壳里不做"这是局域网还是云端"的判断）。2026-11-03 用户要求照 WorkBuddy
+手机端登录页重排：**扫码做成一个大按钮，其他方式收在下面**，于是把旧的
+「已配对 / 扫码 / 邀请码」三张页签（含滑块）整个删掉，改成首页 + 两层视图：
 
-1. 读 `app_config_dir/shell.json` 的 `servers`（**只存 origin + 名字，≤8 台**，
-   新的在前；老配置只有 `server` 一个字段，启动时回填成一条）。有记录 →
-   出现「已配对」页签并列出这些电脑；没有 → 该页签整个不出现（两页签）；
-2. **扫码（默认）**：整块取景框是一个大按钮，点开相机遮罩
-   （scanner.js）。电脑「设置 → 手机配对」的二维码内容是
-   `http://<地址>/pair?code=…`（地址 + 码一起带）。扫到后**切到邀请码
-   页签**、拆成两半填进输入框（用户能核对）再 `open_server`；
+1. **首页**：品牌块（logo + 「班底」+ 一句副标）→ 蓝色大按钮**扫码连接**
+   （首屏唯一的主 CTA；取景框四角 + 扫描线是纯 CSS，不用读字也知道这是扫一扫）
+   → 「其他方式」分隔线 → 两条列表行：**已配对的电脑**（有记录才出现，副行是
+   `3 台 · 2 小时前`）和**输入邀请码** → 页脚一句说明（二维码在哪、码 5 分钟有效）；
+2. **扫码**：大按钮整块可点，点开相机遮罩（scanner.js）。电脑「设置 → 手机配对」
+   的二维码内容是 `http://<地址>/pair?code=…`（地址 + 码一起带）。扫到后**进
+   邀请码视图**、拆成两半填进输入框（用户能核对）再 `open_server`；
    解不出 `code=` 的整条打开，非班底码（WIFI: 等）只提示；
-   相机起不来（没权限 / 被占用）→ 自动切到邀请码页签，错误条给出路；
+   相机起不来（没权限 / 被占用）→ 自动进邀请码视图，错误条给出路；
 3. **邀请码**：地址 + 9 位码两栏**都填**才连 —— 拼成
    `<地址>/pair?code=<码>`（地址去尾斜杠、码剥非数字、三位一组实时格式化）。
    地址写 `192.168.1.5:18787` 或 `https://bandi.example.com` 都行，
    归一化（补协议/补 18787 端口）在 Rust `normalize()`；
 4. 地址栏粘**一整条配对链接**（`http://…/pair?…`）也直通 —— 没有相机、
    不在同一 Wi-Fi 时唯一的路，桌面端「复制配对链接」一键给它；
-5. **已配对（有记录时默认）**：列表 → 详情两级（2026-11-01 五改）。
+5. **已配对**：列表 → 详情两级（2026-11-01 五改）。
    列表一行一台，名字用 `/api/hello` 报的机器名（没有就退回地址），副行是
    地址 + 最近连接时间，右端一个**箭头**（连接不是列表的副作用 —— 点错一下
    就连到别的电脑上，比多点一层烦）。点行进详情：设备卡（名字 + 主机名）+
@@ -173,8 +170,8 @@ bottom=399，真机上会被键盘盖住）。
    的 clientKey 换新令牌连回去，**不消耗邀请码、不用重新扫码**（配对被断开
    且没别的手机在用时也能回；有人在用会提示"另一台手机正在使用"）；
    **「取消配对」**（红描边）= 只清这台手机上的记录，电脑端那条设备记录不动。
-   详情往 history 里压了一条 state：Android 返回键直接退回列表，不退 App；
-   切走页签再回来落在列表，不停在详情里。
+   视图切换和详情都往 history 里压 state（launcher.js 的 `go` / `back`，state
+   即视图状态）：Android 返回键一层层退（详情 → 列表 → 首页），不退 App。
 6. `https://` 跳过 probe：Rust 的探测是裸 TCP + 明文 HTTP，对着 443 说话
    必然失败，所以云端地址直接 `open_server`，连不上由 WebView 报错。
 
@@ -193,9 +190,10 @@ bottom=399，真机上会被键盘盖住）。
 不是一个 origin，读不到那边「设置 → 偏好 → 主题」的值；而且它出现在连接之前，
 还没有"某台电脑的偏好"可读。所以深色是默认（CSS 变量本体），浅色整段放在
 `@media (prefers-color-scheme: light)` 里覆盖（底 #f2f4f7、卡片 #fff、次要文字
-#656a72 ≈ 4.9:1 过 AA）。所有硬编码颜色都收进了 token（--seg-bg / --target-a /
---seg-bg / --status-bg…），加主题就是加一段覆盖。扫码遮罩 `.scan` 保持深色 ——
-那是相机画面，不跟主题走。
+#656a72 ≈ 4.9:1 过 AA）。所有硬编码颜色都收进了 token（--alt-bg / --alt-ico-bg /
+--status-bg…），加主题就是加一段覆盖。扫码遮罩 `.scan` 保持深色 ——
+那是相机画面，不跟主题走。扫码大按钮（--hero-a/--hero-b）深浅两套
+是同一块蓝：它是首屏唯一的强调色，换主题不换主按钮。
 
 返回键（2026-11-01 改）：连接页**不进 WebView 历史** —— `open_server` 用
 `location.replace` 而不是 `webview.navigate`（navigate 是"前进一格"，启动页留在
@@ -275,8 +273,12 @@ bottom=399，真机上会被键盘盖住）。
 | `app/src/main/AndroidManifest.xml` | `CAMERA`（扫码，旧） | 不声明则 `getUserMedia` 直接 `NotAllowedError` |
 | 同上 | `RECORD_AUDIO`（语音） | 系统 `SpeechRecognizer` 要录音权限 |
 | 同上 | `<queries><intent>android.speech.RecognitionService` | **Android 11+ 包可见性**：不声明则 `isRecognitionAvailable()` 恒为 false，表现成"这台手机没有语音引擎" |
+| 同上 | `<activity android:screenOrientation="portrait">` | **锁竖屏**（2026-11-03）：界面全是单列，横过来只是把列表压扁。这是 Activity 的硬约束，CSS/JS 锁不了方向（`screen.orientation.lock()` 要全屏）。丢了的表现：手机一横，整个界面跟着转 |
 | `.../app/local/bandi/mobile/SpeechPlugin.kt` | 整个文件 | 语音插件本体 |
 | `MainActivity.kt` | 安全区内边距（旧） | Android 15 edge-to-edge |
+| `app/build.gradle.kts` | dependencies 里加 `implementation(project(":tauri-android"))` | 否则 app 编译 `Unresolved reference 'TauriActivity'`。别放到 `tauri.build.gradle.kts` 里 —— 那个文件是 `apply(from=…)` 进来的，拿不到 `implementation` 访问器 |
+| `app/tauri.build.gradle.kts` | 必须有这个文件（空壳即可） | `app/build.gradle.kts` 末尾 apply 它；被 gitignore，缺失时 gradle 直接 `Could not read script`。`build-android.mjs` 会自动补 |
+| `app/src/main/java/<包名>/generated/` | `TauriActivity.kt` 等 | **不是源码**，是 cargo 编译 tauri/wry 时 build.rs 生成的，前提是 `WRY_ANDROID_PACKAGE` / `WRY_ANDROID_LIBRARY` / `WRY_ANDROID_KOTLIN_FILES_OUT_DIR` 等环境变量（`build-android.mjs` 已设）。tauri 的 build.rs **没声明** `rerun-if-env-changed`，所以曾经裸编过就得 `cargo clean -p tauri --target <triple>` 再来一次 |
 
 ### 已知限制
 

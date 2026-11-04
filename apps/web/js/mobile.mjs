@@ -93,6 +93,8 @@ $('listBody').addEventListener('click', (e) => {
   if (!row) return;
   // 点「＋」菜单或分组折叠标题这类不换页的行不动：折叠标题带 data-sec，排除
   if (e.target.closest('[data-sec]')) return;
+  // 真人「成员」行没有详情页（管账号去「设置 → 用户」）—— 点了不该摆出一个空详情态
+  if (e.target.closest('[data-nodetail]')) return;
   // 手机通讯录的"入口行"（群聊 / 部门）和部门行是**列表内换页**，不是进详情 ——
   // 让它们走折叠的话，列表会被藏起来换成一页空的主区（2026-10-31）。
   // 设置页顶部那条「← 我的」同理（2026-11-01）：它是回上一级，不是进详情。
@@ -116,6 +118,26 @@ document.body.append(backbar);
 // 而不是 import，避免 chat.mjs 反向依赖 mobile.mjs 造成循环
 document.addEventListener('mb-back', leaveDetail);
 
+/*
+ * 程序化进详情（2026-11-03）：不是点列表行进来的详情 —— 刷新后 restorePlace 直达
+ * 人物详情、项目成员行点人 —— 没人打 mb-detail-open，mobile.css 会把整个 main
+ * 藏掉：内容画了也看不见，用户看到的就是"详情页空白"（实报的那条）。渲染方派
+ * `mb-detail` 事件把标题带过来，这里补上折叠态与历史；已经开着就只把返回栏标题
+ * 对齐成当前这个人。走事件而不是 import，同理 —— 渲染模块不反向依赖本文件。
+ */
+document.addEventListener('mb-detail', (e) => {
+  if (!isNarrow()) return;
+  const title = e.detail?.title ?? '';
+  if (document.body.classList.contains('mb-detail-open')) {
+    const t = backbar.querySelector('.mb-back-title');
+    if (t) t.textContent = title;
+    return;
+  }
+  enterDetail(title);
+  // 与列表行进详情同一条规矩：一格折叠压一格历史，手势返回才回得来
+  history.pushState({ mbDetail: true }, '');
+});
+
 // Esc 逐级后退：窄屏且详情开着时接管，别抢弹窗的 Esc（弹窗在 open 时 keydown 冒到 document，
 // 这里只在"没有 dialog 开着"的情况下退）
 document.addEventListener('keydown', (e) => {
@@ -137,6 +159,8 @@ $('listBody').addEventListener(
     if (!isNarrow()) return;
     const row = e.target.closest('[data-conv], [data-persona], [data-group], [data-set], .item');
     if (!row || e.target.closest('[data-sec]')) return;
+    // 真人「成员」行不进详情（同上）：不该压历史，也不该让手势返回落到空详情上
+    if (e.target.closest('[data-nodetail]')) return;
     // 列表内换页的行（通讯录入口 / 部门 / 设置页的「← 我的」）不压历史：
     // 它们不是"进详情"，没有可返回的上一层
     if (row.matches('[data-cv], [data-cv-dept], [data-me-back]')) return;

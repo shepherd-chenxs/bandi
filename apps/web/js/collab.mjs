@@ -161,7 +161,7 @@ export async function renderCollabCenter({ silent = false } = {}) {
           ? `<div class="fx-head"><label>我的分机 <span class="count">${branches.length}</span></label>
           <button class="primary" id="clNewBranch">＋ 添加分机</button></div>
         <div class="mb-pair-wrap"><table class="plg-table">
-          <thead><tr><th>名称</th><th>主机名</th><th>状态</th><th>最近联系</th><th>加入时间</th><th></th></tr></thead>
+          <thead><tr><th>名称</th><th>主机名</th><th>状态</th><th>最近联系</th><th>加入时间</th><th>操作</th></tr></thead>
           <tbody>${branchRows}</tbody>
         </table></div>`
           : `<div class="cl-empty cl-empty-sm">
@@ -341,43 +341,48 @@ async function inviteDialog(branchId) {
     toast(e.message, 'error');
     return;
   }
-  /* 这是**展示型**弹窗（码 + 三步说明），全站没有现成组件 —— 自建，头部仍走共用的
-     wireDialogHead（内容填完再包，否则吸顶标题和 × 会被 innerHTML 冲掉）。 */
+  /* 展示型弹窗（2026-11-03 用户："只要两个就可以，一个是地址，一个是接入码。其他的说明不要"；
+     同日再改："标签放框外面"）—— 标签在框上方，框里只有可点复制的值，其余说明全撤。
+     头部仍走共用的 wireDialogHead（内容填完再包，否则吸顶标题和 × 会被 innerHTML 冲掉）。 */
   const { dlg, form } = makeDialog('cl-dlg');
-  const { url, lan } = await centerAddress();
-  const at = new Date(inv.expiresAt);
-  const hhmm = at.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  const { url } = await centerAddress();
   form.innerHTML = `
     <b>把「${esc(inv.label)}」接进来</b>
-    <div style="margin:10px 0 4px;padding:10px 12px;background:var(--input);border:1px solid var(--line);border-radius:8px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:15px;letter-spacing:1px">${esc(inv.code)}</div>
-    <div class="dim" style="margin:6px 0 12px">这个码 <b>${esc(hhmm)}</b> 前有效，<b>只用一次</b>。接入成功后这一行会变成「已接入」。</div>
-    <div class="dim" style="font-size:12.5px;line-height:1.9">
-      <div>① 在那台机器上：<b>设置 → 协作中心</b>（模式卡在<b>分机</b>一档才出现「连接总机」，点开填地址和接入码直接连）</div>
-      <div>② 地址填 <code>${esc(url)}</code>，接入码粘贴上面这串</div>
-      <div style="margin-top:6px">没有界面（服务器形态 / 无头机器）就在终端跑：</div>
-      <div style="margin:6px 0;padding:8px 12px;background:var(--input);border:1px solid var(--line);border-radius:8px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px;user-select:all">bandi collab join ${esc(url)} ${esc(inv.code)}</div>
-      <div>⚠️ 别填进「这台机器」页的算力节点加入弹窗 —— 那是另一套码（<code>bandi nodes invite</code> 发的），这个接入码会被它拒掉（E4011）。</div>
+    <div class="cl-inv">
+      <div class="cl-inv-field">
+        <span class="cl-inv-label">地址</span>
+        <button type="button" class="cl-inv-box" id="clCopyUrl" title="点击复制">
+          <code class="cl-inv-value">${esc(url)}</code>
+        </button>
+      </div>
+      <div class="cl-inv-field">
+        <span class="cl-inv-label">接入码</span>
+        <button type="button" class="cl-inv-box" id="clCopyCode" title="点击复制">
+          <code class="cl-inv-value">${esc(inv.code)}</code>
+        </button>
+      </div>
     </div>
-    ${
-      lan && !lan.boundLan
-        ? '<div class="machine-warn">这台机器现在只听本机（启动参数把监听钉在了回环上），分公司连不到它 —— 改部署配置里的 BANDI_HOST 重新起，或走隧道。</div>'
-        : ''
-    }
     <div class="dlg-actions">
-      <button type="button" class="btn-sm" id="clCopy">复制整条命令</button>
       <button type="button" class="primary" id="clDone">知道了</button>
     </div>`;
   wireDialogHead(form); // 内容填完再包：才有吸顶标题和右上角 ×
   dlg.showModal();
-  $('clCopy').onclick = async () => {
+  const copyField = async (btn, text) => {
+    const label = btn.closest('.cl-inv-field')?.querySelector('.cl-inv-label');
     try {
-      await navigator.clipboard.writeText(`bandi collab join ${url} ${inv.code}`);
-      $('clCopy').textContent = '已复制';
-      setTimeout(() => { if ($('clCopy')) $('clCopy').textContent = '复制整条命令'; }, 1500);
+      await navigator.clipboard.writeText(text);
+      if (!label) return;
+      const old = label.textContent;
+      label.textContent = '已复制';
+      setTimeout(() => {
+        if ($('clCopyUrl') && $('clCopyCode')) label.textContent = old;
+      }, 1500);
     } catch {
-      toast(`复制不了，手动抄一下：bandi collab join ${url} ${inv.code}`, 'error');
+      toast(`复制不了，手动抄一下：${text}`, 'error');
     }
   };
+  $('clCopyUrl').onclick = (el) => copyField(el.currentTarget, url);
+  $('clCopyCode').onclick = (el) => copyField(el.currentTarget, inv.code);
   $('clDone').onclick = async () => {
     dlg.close();
     await renderCollabCenter();
@@ -504,9 +509,11 @@ function joinCollabDialog(onDone) {
  * 搬进来（用户："把这个协作移到协作中心"），跟模式卡同页：**分机/总机就是这台机器在协作里
  * 当什么角色**，加入入口只在分机一档出现（用户："通过分机和总机开关控制显示和隐藏"）。
  *
- * 四种样子：未加入+分机（说明 + 加入入口）/ 未加入+总机（整节不画，2026-11-02 用户："总机不需要这个"）/
- * 已加入（状态卡 + 打开项目 + 退出，任何角色都显示 —— 退出总得有地方点）/
- * 已被移除（状态卡 + 退出 —— 不是自动清配置，跟 E4012 同口径：留在盘上，给用户一个明确的出口）。
+ * 四种样子：未加入+分机（说明 + 加入入口）/ 总机（整节不画 —— 不管加没加入，
+ * 2026-11-04 用户："协作这个是分机模式的内容，不应该显示在总机模式里"；
+ * 此前的口径是"已加入任何角色都显示、给退出留地方"，作废）/
+ * 分机已加入（状态卡 + 打开项目 + 退出）/ 已被移除（状态卡 + 退出 —— 不是自动清配置，
+ * 跟 E4012 同口径：留在盘上，给用户一个明确的出口）。
  */
 export async function renderCollabSection(mount, { hub } = {}) {
   if (!mount) return;
@@ -528,9 +535,11 @@ export async function renderCollabSection(mount, { hub } = {}) {
 
   const head = (extra = '') => `<div class="fx-head"><label>协作</label>${extra}</div>`;
 
-  if (!st.joined && hub) {
-    /* 总机（模式卡切到总机）：这台是中心，不加入别人的中心 —— 整节不画（2026-11-02
-       用户："删除。总机不需要这个"）。分机一档的样子不动。 */
+  if (hub) {
+    /* 总机：协作分节整节不画（2026-11-04 用户："协作这个是分机模式的内容，不应该显示在
+       总机模式里"）。原口径只在「未加入」时藏、已加入仍给状态卡（"退出总得有地方点"）——
+       但那样切到总机后还挂着一张外人的协作卡，两头不是。现在总机一档彻底不画；
+       真要退出协作，切回分机再退（模式卡就在这页上面，一步的事）。 */
     mount.innerHTML = '';
     return;
   }

@@ -125,8 +125,67 @@
 
    v40（2026-11-03 三十改）：toast 送进**顶层**（popover API）—— 开着的 dialog 在浏览器
    顶层，普通层的 toast 被连 backdrop 一起盖住，弹窗里的一切报错（校验失败 / 接口 403）
-   在手机上都"看不见"，表现成"点了没反应"（建卡 403 这么藏了一下午）—— shell.mjs。 */
-const VERSION = 'v42';
+   在手机上都"看不见"，表现成"点了没反应"（建卡 403 这么藏了一下午）—— shell.mjs。
+
+   v43（2026-11-03）：审计日志行收成单行（结果字跟 action 走、时间右对齐）、类型筛选换
+   createCombo 挪进分节头且去边框、.sec-scroll 加 scrollbar-gutter 防抖；「接入码」弹窗
+   ① 删掉「模式卡在分机一档才出现…」那句括号说明 —— securityadmin.mjs + style.css + collab.mjs。
+
+   v44（2026-11-03 用户："只要地址和接入码两个，其他说明不要"）：接入码弹窗重设计成
+   两张可点复制的字段卡（地址 / 接入码），有效期提示、①②步骤、CLI 命令、E4011 警告、
+   回环监听警告、「复制整条命令」全撤 —— collab.mjs + style.css（.cl-inv-*）。
+
+   v45（2026-11-03）：接入码弹窗的标签挪到框外（"标签放框外面"）—— collab.mjs 结构改
+   .cl-inv-field（label）+ .cl-inv-box（button），style.css 对应改。
+
+   v46（2026-11-03 账户为主，用户："以账户为主，设备只是它的一个属性"）：「我的」页
+   身份卡标题改取**账号**（设备绑了归属人就是归属账号的名字）；设备信息（型号 /
+   配对地址 / 配对时间）从身份卡退出来，落成「这台设备」属性卡三行 label + value
+   —— settings.mjs + style.css（.me-dev-box/.me-kv）+ mobile.css。
+
+   v47（2026-11-03 用户："通讯录点人物，详情页是空白的"）：三处 ——
+   · 通讯录窄屏点「数字员工」行改回**先进详情页**（详情里点「发消息」再开聊）—— contacts.mjs；
+   · 手机员工详情补「模型」行（只读，显示名异步问运行时）—— chat.mjs renderDetailMobile；
+   · 非列表路径进详情（刷新直达 / 项目成员）没人打 mb-detail-open，main 被 mobile.css
+     整个藏掉 → 内容画了也看不见（"空白"根因）：渲染方派 `mb-detail` 事件、mobile.mjs
+     补折叠态与历史；真人「成员」行标 `data-nodetail` 不再摆空详情态
+     —— chat.mjs + mobile.mjs + contacts.mjs。
+
+   v48（2026-11-03 用户："手机端锁定竖屏"）：壳体钉竖屏（AndroidManifest 的
+   screenOrientation=portrait），PWA 那条路补上 MIME —— `.webmanifest` 原来落进
+   application/octet-stream，Chrome 直接作废整份 manifest（没有 orientation、没有独立
+   窗口）；服务端 http.mjs 加 application/manifest+json。SW 升版本是为了让装过的手机
+   重拉那份 manifest（预缓存清单里有它，旧响应的头还是错的）。
+
+   v50（2026-11-04 用户："安装入口去掉，只识别不提供安装"）：「这台机器」页的
+   「未安装」段降为「未识别」—— 一键安装 / 复制命令 / 安装命令与进度全撤，只留
+   「按路径接入」；wireInstallRuntime / runNodeTask / wireCopyButtons 等一并删除
+   —— machine.mjs + app.mjs。
+
+   v51（2026-11-04 用户："只要识别功能，未识别这块不要了"）：「未识别」段连同
+   「按路径接入」弹窗整条撤掉（openAddRuntime / testAddRuntimePath / addRtDlg），
+   「运行时」区只剩识别 + 已识别列表的接入开关 —— machine.mjs + app.mjs + index.html。
+
+   v52（2026-11-04 用户："重新设计一下这个页面"）：「这台机器」页重设计 —— 运行时
+   空态换成虚线引导卡（.rt-empty）；数据管理把点隔统计行改成等宽分格统计块、库路径
+   挪出按钮行、快照条目压成单行 —— machine.mjs + style.css + mobile.css。
+
+   v53（2026-11-04 用户："邀请码和地址太大了"）：手机连接页邀请码卡紧凑化 ——
+   21px 地址 / 30px 大码收成「标签|值|动作」的紧凑单行，倒计时贴到码后面
+   —— pairing.mjs + mobile.css。
+
+   v54（2026-11-04）：协作中心总机模式不再画「协作」分节；两张表的行尾操作列补
+   「操作」表头（协作中心 / 手机连接），pair-table 操作列改左对齐；手机连接页
+   没配对过就不显示「已配对的手机」整节 —— collab.mjs + pairing.mjs + style.css。
+
+   v55（2026-11-04 用户："关于放到最后，加个图标"）：设置左栏「关于」拆出「通用」组、
+   独立一条钉在整列最后，行上加 info 小图标（条目级图标仅此一处）—— settings.mjs +
+   contacts.mjs + style.css。
+
+   v56（2026-11-04 用户回退）：撤回 v54 里"没配对过不显示已配对的手机"—— 0 台照旧
+   给空状态卡（v54 的其余改动保留：总机藏协作分节、操作表头、pair-table 左对齐）
+   —— pairing.mjs。 */
+const VERSION = 'v56';
 const CACHE = `bandi-static-${VERSION}`;
 
 /*

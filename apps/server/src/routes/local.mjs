@@ -246,6 +246,29 @@ export async function handleLocal(req, res, url) {
       return sendJson(res, 200, st), true;
     }
 
+    /* ------------------------------------------- 外部件（2026-11-04：插件页「软件」商店条目）
+     * catalog = 界面要画的清单（含装法说明与官方下载口），probed = 这台机器的**现状**
+     * （装没装、网关/面板通不通）。只读 —— 安装不在这里排：走 /api/nodes/local/tasks
+     * 那条既有通路，命令仍只出自 externals 那张表（边界不变）。
+     * tasks（2026-11-04 用户："点击之后显示安装状态"）＝ 每个软件**最近一次**装/起任务。
+     * 进度只活在浏览器轮询里、一刷新就没 —— 这坑 2026-10-16 在运行时那侧踩过一次
+     * （见 runtime-view.withExternals 的注释），这次同一原则：状态在服务端，刷新照旧。 */
+    if (req.method === 'GET' && url.pathname === '/api/local/externals') {
+      const tasks = {};
+      for (const t of store.listNodeTasks('local', 20)) {
+        if (t.kind !== 'external-install' && t.kind !== 'external-serve' && t.kind !== 'external-open') continue;
+        if (!tasks[t.family]) tasks[t.family] = store.publicNodeTask(t); // listNodeTasks 新的在前
+      }
+      return sendJson(res, 200, {
+        /* `withPanelUrls`：面板起着时把那串**带密钥**的链接补上（问 `magpie daemon web` 要，
+           缓存 10 分钟）。2026-11-04 thinkpad 实测：本机这条路原来拿的是"按局域网地址猜的"
+           那条，点开 401 —— 节点那边一直是对的，只有本机忘了走同一套。 */
+        externals: await externals.withPanelUrls(await externals.declared()),
+        catalog: externals.publicExternals(`${process.platform} ${process.arch}`),
+        tasks,
+      }), true;
+    }
+
     /* ------------------------------------------------------------------------ 探一个地址 */
     if (req.method === 'POST' && url.pathname === '/api/local/probe') {
       const body = await readBody(req);

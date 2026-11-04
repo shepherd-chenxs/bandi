@@ -598,88 +598,46 @@ function resolveBin(name) {
 /**
  * 外部件现状 + **带密钥的面板链接**（一次报全，三处调用都走它）。
  *
- * 面板为什么要密钥：magpie 的页面**不带密钥就是 401**（2026-10-16 实测：
- * 我以为 `http://192.168.5.19:3430` 能直接开，结果"未经授权" ✗）。
- * 密钥不由我们编 —— 问它自己要（`magpie daemon web` 会打印带密钥的链接），
- * 而且**缓存 10 分钟**：密钥跨重启不变，没必要每次心跳都 spawn 一个进程。
+ * 面板为什么要密钥、链接怎么来：见 `externals.panelUrlFor` 的注释（2026-11-04 那套逻辑
+ * 搬去 externals.mjs 了 —— 本机软件商店那条路也要用，不能只有节点这边带密钥）。
  */
-const panelCache = new Map();
-async function panelUrlFor(id, port) {
-  const hit = panelCache.get(id);
-  if (hit && Date.now() - hit.at < 10 * 60 * 1000) return hit.url;
-  const want = externals.lanAddrs();
-  const url = await new Promise((resolve) => {
-    let out = '';
-    let child;
-    try {
-      child = spawn(resolveBin('magpie'), ['daemon', 'web'], {
-        env: { ...process.env, PATH: binSearchDirs().join(path.delimiter) },
-        windowsHide: true,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-    } catch {
-      return resolve(null);
-    }
-    const timer = setTimeout(() => {
-      try { child.kill(); } catch { /* 已经退了 */ }
-      resolve(null);
-    }, 4000);
-    const onData = (c) => { out += String(c); };
-    child.stdout?.on('data', onData);
-    child.stderr?.on('data', onData);
-    child.on('error', () => { clearTimeout(timer); resolve(null); });
-    child.on('close', () => {
-      clearTimeout(timer);
-      // 它会把每个网卡都列一遍（docker 的 172.x 也在里头）—— 挑"我自己那张局域网卡"那条
-      const urls = [...out.matchAll(/https?:\/\/[^\s"']*\/\?k=[A-Za-z0-9._-]+/g)].map((m) => m[0]);
-      const mine = urls.find((u) => want.some((ip) => u.includes(`//${ip}:${port}`)));
-      resolve(mine ?? urls.find((u) => u.includes(`:${port}/`)) ?? null);
-    });
-  });
-  panelCache.set(id, { url, at: Date.now() });
-  return url;
-}
-
-/** 这台机器上的外部件现状（节点每次心跳、每次报到、每件活做完都报它） */
 async function declaredExternals() {
-  const list = await externals.declared();
-  for (const e of list) {
-    if (!e.panel || !e.panelPort) continue;
-    const keyed = await panelUrlFor(e.id, e.panelPort);
-    if (keyed) e.panelUrl = keyed; // 用带密钥的那条，盖掉"按局域网地址猜的"那条
-  }
-  return list;
+  return externals.withPanelUrls(await externals.declared());
 }
 
 /**
- * 让这台机器做件**小事** —— 目前只有「一键安装运行时」。
+ * 让这台机器做件**小事** —— 外部件的某一步（装上 / 常驻 / 打开面板）。
  *
- * ⚠️ 命令**不是控制面发过来的**：控制面只发一个族名，这里拿族名查**本机这份代码**里的表
- * （`runtimes.installCommandFor`）。所以这条通道永远变不成"谁拿着令牌谁就能在我机器上跑任意命令" ——
- * 这是这件事能成立的前提，不是顺手的设计。
+ * （2026-11-04：原来并排的「一键安装运行时」分支随 install-runtime 通路整体拆除 ——
+ * 班底只识别 agent CLI、不代装；任务队列只剩外部件在用。）
  *
- * ⚠️ npm 去哪儿找：**别指望 PATH**。Linux 上节点多半是 systemd 起的，PATH 是 systemd 的默认值，
- * 里头**没有**用户态 Node 的 bin 目录（`~/.local/node/bin`）—— 那样"一键安装"会在最后一米失败
- * （跟探测那个坑同源）。我这台 node 的旁边就躺着它自带的 npm：`<dirname(process.execPath)>/npm`。
+ * ⚠️ 命令**不是控制面发过来的**：控制面只发一个外部件 id 和哪一步，这里拿它查
+ * **本机这份代码**里的表（`externals.commandFor`）。所以这条通道永远变不成
+ * "谁拿着令牌谁就能在我机器上跑任意命令" —— 这是这件事能成立的前提，不是顺手的设计。
+ *
+ * ⚠️ 命令去哪儿找：**别指望 PATH**。Linux 上节点多半是 systemd 起的，PATH 是 systemd
+ * 的默认值，里头**没有**用户态 bin 目录（`~/.local/bin`）—— 那样任务会在最后一米失败
+ * （跟探测那个坑同源）。所以先过 `resolveBin` 拿真实路径。
  */
 async function runTask(task) {
   const tid = encodeURIComponent(task.id);
   const report = (body) =>
     post(`/api/nodes/${encodeURIComponent(id)}/tasks/${tid}/report`, body).catch(() => {});
   /*
-   * 命令**从本机这张表里查**：装运行时查 runtimes 那张，外部件的某一步查 externals 那张。
-   * 控制面只发了 id 与步骤 —— 这条边界就是"一键安装"能成立的前提。
+   * 命令**从本机 externals 这张表里查**（装上 / 常驻 / 打开面板）。
+   * 控制面只发了 id 与步骤 —— 这条边界就是"一键处理"能成立的前提。
    */
   const spec =
-    task.kind === 'install-runtime'
-      ? runtimes.installCommandFor(task.family)
-      : task.kind === 'external-install' || task.kind === 'external-serve'
-        ? // `task.arg` 是这个任务的参数（走镜像装的那个前缀）—— 照样只是**参数**：
-          // 命令还是本机这张表里的固定命令，而且前缀会再过一次 mirrorOk（防注入，见那张表）
-          externals.commandFor(task.kind === 'external-install' ? 'install' : 'serve', task.family, process.platform, {
-            mirror: task.arg ?? '',
-          })
-        : null;
+    task.kind === 'external-install' || task.kind === 'external-serve' || task.kind === 'external-open'
+      ? // `task.arg` 是这个任务的参数（走镜像装的那个前缀）—— 照样只是**参数**：
+        // 命令还是本机这张表里的固定命令，而且前缀会再过一次 mirrorOk（防注入，见那张表）
+        externals.commandFor(
+          task.kind === 'external-install' ? 'install' : task.kind === 'external-open' ? 'open' : 'serve',
+          task.family,
+          `${process.platform} ${process.arch}`,
+          { mirror: task.arg ?? '' },
+        )
+      : null;
   if (!spec) {
     say(`控制面让我做「${task.kind} ${task.family}」，可本机这份代码里没有对应的命令`);
     return report({ status: '失败', output: `这台机器上的班底不认识「${task.kind} ${task.family}」，或者这一步在这里没法一键做\n` });
@@ -690,7 +648,7 @@ async function runTask(task) {
   const childPath = binSearchDirs().join(path.delimiter);
   say(`开始做 ${task.kind} ${task.family}：${spec.cmd}`);
 
-  // 输出节流：npm 刷得很快，攒 400ms 报一次（也让界面上的进度是"滚动的"而不是一行行跳）
+  // 输出节流：安装脚本刷得很快，攒 400ms 报一次（也让界面上的进度是"滚动的"而不是一行行跳）
   let buf = '';
   let lastAt = 0;
   const flush = async (force = false) => {
@@ -710,6 +668,8 @@ async function runTask(task) {
         cwd: os.homedir(),
         env: { ...process.env, PATH: childPath },
         windowsHide: true,
+        // 外部件表里的 Windows 那条（spec.raw）是给 cmd 的一整行 —— 别让 Node 转义里面的引号
+        windowsVerbatimArguments: !!spec.raw,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
     } catch (e) {
@@ -738,9 +698,8 @@ async function runTask(task) {
   say(ok ? `${task.family} 装好了` : `${task.family} 装失败了（退出码 ${code}）`);
 
   /*
-   * 装完**立刻把新清单报上去**，不等下一次心跳（最多 15 秒）——
-   * 用户正盯着界面上那一行，等它从「未安装」跳到「已安装」。
-   * 外部件也一样（装完 magpie 之后，"网关起没起"这一栏要马上变）。
+   * 做完**立刻把新现状报上去**，不等下一次心跳（最多 15 秒）——
+   * 用户正盯着界面上那一栏，等它变（装完 magpie 之后，"网关起没起"这一栏要马上变）。
    */
   try {
     await post(`/api/nodes/${encodeURIComponent(id)}/heartbeat`, {

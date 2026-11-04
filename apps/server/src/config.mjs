@@ -74,6 +74,61 @@ const clientCfg = (() => {
 
 export const clientJoined = typeof clientCfg.controlPlane === 'string' && clientCfg.controlPlane.trim() !== '';
 
+/**
+ * 监听地址的**合法写法**（2026-11-04）。空 / 认不出来 = null（调用方当"没配"）。
+ *
+ * 只放行 IP 与两个通配：`0.0.0.0`（所有网卡）、`127.0.0.1`（只听本机）。
+ * **不收主机名** —— `listen()` 拿到 `my-box.local` 会去解析，解析结果随网络环境变，
+ * 出问题时排查成本远高于收益（要写域名请走反代，那是 `boundDomain` 的事）。
+ */
+export function normalizeListenHost(v) {
+  const s = String(v ?? '').trim();
+  if (!s) return null;
+  if (s === 'localhost') return '127.0.0.1';
+  if (s === '0.0.0.0' || s === '::' || s === '::1') return s;
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(s);
+  if (!m) return null;
+  return m.slice(1).every((n) => Number(n) <= 255) ? s : null;
+}
+
+/**
+ * 把监听地址**写进数据目录的 `config.json`**（界面「安全 → 监听地址」保存时调）。
+ *
+ * 为什么落这里、不落 `/etc/systemd/system/bandi.service` 或部署参数：
+ * 单元文件每次重装都会被重新生成（`deploy/install.sh` 覆盖写），2026-11-04 的实际事故
+ * 就是这么来的 —— 三次升级把 `0.0.0.0` 又写回了 `127.0.0.1`，局域网访问全断。
+ * 数据目录（`/var/lib/bandi`）跟库、token 一个待遇：**升级不碰**，所以配置放这儿才"坐得住"。
+ *
+ * ⚠️ 写完**不立刻生效**：`host` 是本模块求值时算的，`server.listen()` 早就绑过了。
+ * 界面拿到 `needRestart` 后要重启控制面（`POST /api/control-plane/restart`）。
+ */
+export function writeListenHost(v) {
+  const h = normalizeListenHost(v);
+  if (!h) throw new Error(`监听地址写不对：${v}（给 0.0.0.0 / 127.0.0.1 / 具体 IPv4）`);
+  const cfgPath = path.join(dataDir, 'config.json');
+  let cur = {};
+  try { cur = JSON.parse(fs.readFileSync(cfgPath, 'utf8')); } catch { /* 还没有这个文件 */ }
+  if (!cur || typeof cur !== 'object' || Array.isArray(cur)) cur = {};
+  cur.listenHost = h;
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.writeFileSync(cfgPath, JSON.stringify(cur, null, 2), 'utf8');
+  return h;
+}
+
+/**
+ * 把持久化的监听地址**清掉**（`bandi reset-host` 用）：清完回落到 `0.0.0.0`。
+ * 与 `writeListenHost` 一样，只改磁盘，重启才生效。
+ */
+export function clearListenHost() {
+  const cfgPath = path.join(dataDir, 'config.json');
+  let cur = {};
+  try { cur = JSON.parse(fs.readFileSync(cfgPath, 'utf8')); } catch { return false; }
+  if (!cur || typeof cur !== 'object' || Array.isArray(cur) || !('listenHost' in cur)) return false;
+  delete cur.listenHost;
+  fs.writeFileSync(cfgPath, JSON.stringify(cur, null, 2), 'utf8');
+  return true;
+}
+
 /*
  * 回复风格（2026-10-24 用户的设计：偏好设置里一项，改了**全体数字员工**生效）。
  *
@@ -112,13 +167,29 @@ export function writeReplyStyle(id) {
 
 
 /**
- * 监听地址：`BANDI_HOST` 优先（部署钉具体网卡 / 调试钉回环），缺省 `0.0.0.0`。
+ * 监听地址：三层取值（2026-11-04 重做 —— **做进系统**，不再靠部署时传环境变量）。
  *
- * ⚠️ 曾经"已加入 = 瘦客户端，必须只听回环"（2026-10-20 设计 §4.4）那条已随
- * `allowLan` 一起删除（2026-11-03）：分机也要手机照连、界面照开（用户 2026-11-01 原话），
- * 而非回环监听**自动强制鉴权**（auth.mjs"只看监听地址"那条规则），网段侧不是裸的。
+ *   ① `BANDI_HOST` 环境变量 —— 显式钉（调试 / 特殊部署 / 桌面壳）。最高优先。
+ *   ② 数据目录 `config.json` 的 `listenHost` —— **主路**：界面可改、重启生效、
+ *      升级重装都不丢（`writeListenHost` / `clearListenHost`）。
+ *   ③ 缺省 `0.0.0.0` —— **永远对外**（2026-11-03 用户拍板：手机和节点永远都能连进来，
+ *      让不让进由「总机/分机」和「手机连接」两个开关管，不由监听地址管）。
+ *
+ * 为什么②要落在数据目录：systemd 单元每次重装都会被 `deploy/install.sh` 覆盖写，
+ * 11-04 的事故就是三次升级把 `0.0.0.0` 写回了 `127.0.0.1`，外面全连不上。
+ * 数据目录跟库、token 一样**升级不碰**，配置放这儿才坐得住。
+ *
+ * ⚠️ 曾经的 `allowLan` 键与"只听本机"形态已删除 —— 配置总会有遗漏，
+ * 漏出来的必须是"对外服务且强制鉴权"这一侧，而不是裸听回环的假安全感。
  */
-export const host = process.env.BANDI_HOST ?? '0.0.0.0';
+const cfgHost = normalizeListenHost(clientCfg.listenHost);
+export const host = process.env.BANDI_HOST ?? cfgHost ?? '0.0.0.0';
+
+/**
+ * 现在这个监听地址是谁定的：`env` / `config` / `default`。
+ * 界面拿它说清"为什么这里改不了"（env 钉着时是只读的），别让人白点。
+ */
+export const hostSource = process.env.BANDI_HOST ? 'env' : cfgHost ? 'config' : 'default';
 
 /**
  * **声明「我在可信反代 / 隧道后面」**（IAM §5.2 / §5.3，2026-10-31 新增）。

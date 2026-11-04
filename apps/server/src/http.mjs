@@ -204,6 +204,14 @@ const MIME = {
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
   '.json': 'application/json; charset=utf-8',
+  /*
+   * PWA manifest（2026-11-03 锁竖屏）：必须有这个类型。
+   * 只配 `.json` 的话 `.webmanifest` 落进最后的兜底 `application/octet-stream`，
+   * 而 Chrome 只认 JSON 系 MIME —— 类型不对就**整份 manifest 作废**，
+   * 表现是"添加到主屏幕没有图标 / 还是浏览器壳 / 横屏照转"，
+   * 控制台只留一句 Manifest 警告，很容易被当成"手机不支持"。
+   */
+  '.webmanifest': 'application/manifest+json; charset=utf-8',
   // 员工产出常给的类型（2026-10-24，/api/workspace/file 按它回 Content-Type）
   '.md': 'text/markdown; charset=utf-8',
   '.txt': 'text/plain; charset=utf-8',

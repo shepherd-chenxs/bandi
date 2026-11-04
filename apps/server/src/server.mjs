@@ -4,7 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
-import { port, repoRoot, host, dataDir, dbPath, extraOrigins, trustProxy, localSecretDisabled } from './config.mjs';
+import { port, repoRoot, host, hostSource, dataDir, dbPath, extraOrigins, trustProxy, localSecretDisabled } from './config.mjs';
 import * as netmode from './netmode.mjs';
 import * as store from './store.mjs';
 import * as auth from './auth.mjs';
@@ -955,6 +955,15 @@ if (tlsState.fatal) {
   process.exit(1);
 }
 
+/* 开机收尸（2026-11-04）：上回进程内跑着的本机安装任务，随上次进程一起没了 ——
+ * 别让它们永远停在「执行中」，界面会跟着永远"安装中"、按钮也回不来。 */
+try {
+  const reaped = store.reapOrphanLocalTasks();
+  if (reaped) console.log(`[本机] 收掉了 ${reaped} 件上次没跑完的安装任务（已标失败，要装再点一次）`);
+} catch (e) {
+  console.warn(`[本机] 安装任务收尸失败（不影响启动）：${e?.message ?? e}`);
+}
+
 server.listen(port, SERVER.boundHost, logListen);
 
 /*
@@ -1009,6 +1018,17 @@ function logListen() {
     console.log(`访问令牌：在数据目录的 token 文件里（0600，不打印到日志）· 来自 ${SERVER.AUTH.from}${SERVER.AUTH.created ? '，本次新生成' : ''}`);
     console.log('要求令牌：浏览器打开首页填一次（会记进 Cookie），节点/脚本用 X-Bandi-Token 头。');
   } else {
-    console.log('只监听回环 —— 免鉴权（BANDI_HOST=127.0.0.1 显式钉出来的调试形态）。');
+    /*
+     * 回环监听有三种来源（2026-11-04 起监听地址可以存在数据目录里了）：环境变量钉的、
+     * 界面里改的、缺省调试形态。照实说是哪一种 —— 不然运维看着日志会去找一个不存在的
+     * `BANDI_HOST`。免鉴权只跟"听回环"有关，跟谁设的无关（auth.mjs 同一条规则）。
+     */
+    const why =
+      hostSource === 'env'
+        ? 'BANDI_HOST 环境变量钉的'
+        : hostSource === 'config'
+          ? '界面里设的（设置 → 安全 → 监听地址）'
+          : '显式调试形态';
+    console.log(`只监听回环 —— 免鉴权（${why}；要让别的机器连，改成 0.0.0.0 再重启）。`);
   }
 }

@@ -9,104 +9,25 @@
   </head>
   <body>
     <main class="wrap">
-      <header class="hero">
-        <div class="logo" aria-hidden="true">B</div>
-        <div class="hero-txt">
-          <h1>连接班底</h1>
-          <p class="sub">扫一扫、输邀请码，或选一台连过的</p>
-        </div>
-      </header>
-
       <!--
-        三种连接方式（2026-11-01 三改，用户在扫码/邀请码之后补的第三条）：
-          A. 已配对 —— 这台手机连过的电脑，点一下直接连回去（走 `/pair?resume=1`：
-             凭远程页 localStorage 里的 clientKey 换新令牌，不用再扫码）。
-             没有连过任何电脑时这个页签整个不出现。
-          B. 扫码 —— 二维码里带着地址 + 邀请码，扫完直接进；局域网、云端都成立。
-          C. 邀请码 —— 地址 + 9 位数字两栏都填。局域网也要填地址：壳不再发 UDP
-             广播去"猜"电脑在哪，程序里因此没有任何"局域网还是云端"的判断，
-             少一条分支就少一处出错。
-        三者做成同一张页签（默认：连过就选 A，没连过选 B），而不是并列几块 ——
-        并列会让"填地址"那块抢走首屏的注意力，也把输入框推到键盘底下（见 CSS 里
-        关于 y<350 的说明）。滑块位置由 `--seg-i` / `--seg-n` 算，页签增减不用改 CSS。
+        2026-11-03 改版（用户定的）：不再做「页签并列」，改成
+          · 首屏一个**大按钮** = 扫码（首次配对的主路，也是唯一不需要读字的动作）；
+          · 「其他方式」= 两条列表行（已配对的电脑 / 邀请码），收在按钮下面；
+          · 点列表行进入**下一层视图**（左上角返回），不再有滑块和页签。
+        视觉参考 WorkBuddy 手机端登录页：品牌居中、留白多、只有一个主 CTA，
+        次要入口做小做灰，页脚一句说明。
       -->
-      <div id="tabs" class="seg" role="tablist" aria-label="连接方式">
-        <span class="seg-thumb" aria-hidden="true"></span>
-        <button
-          class="seg-btn"
-          type="button"
-          role="tab"
-          data-mode="paired"
-          aria-selected="false"
-          aria-controls="panePaired"
-          hidden
-        >已配对</button>
-        <button
-          class="seg-btn is-on"
-          type="button"
-          role="tab"
-          data-mode="scan"
-          aria-selected="true"
-          aria-controls="paneScan"
-        >扫码</button>
-        <button
-          class="seg-btn"
-          type="button"
-          role="tab"
-          data-mode="code"
-          aria-selected="false"
-          aria-controls="paneCode"
-        >邀请码</button>
-      </div>
 
-      <!-- 状态条钉在页面底部（CSS position:fixed），不占布局位、不推输入框 -->
-      <p id="status" class="status" hidden></p>
+      <!-- ============================================================ 首页 -->
+      <section id="viewHome" class="view view-home">
+        <header class="brand">
+          <div class="logo" aria-hidden="true">B</div>
+          <h1>班底</h1>
+          <p class="brand-sub">连上你的电脑，接着干</p>
+        </header>
 
-      <!--
-        「已配对」是**列表 → 详情**两级（2026-11-01 四改，用户要的）：
-        列表一行一台、右端一个箭头；点进去看连接信息，再决定「连接」还是「取消配对」。
-        这样"点错就秒连"不会发生 —— 连接是个明确动作，不是列表的副作用。
-      -->
-      <section id="panePaired" class="pane" role="tabpanel" aria-labelledby="tabs" hidden>
-        <div id="pairedList" class="paired"><div class="empty">读取中…</div></div>
-        <p class="foot-hint" id="pairedHint">
-          这些都是这台手机<b>连过</b>的电脑。点一台看详情，配对凭据还留在手机上，不用重新扫码。
-        </p>
-
-        <div id="pairedDetail" class="pd" hidden>
-          <button id="pdBack" class="pd-back" type="button">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M15 5l-7 7 7 7" />
-            </svg>
-            已配对
-          </button>
-
-          <div class="pd-card">
-            <div class="pd-name" id="pdName"></div>
-            <div class="pd-host" id="pdHost"></div>
-          </div>
-
-          <dl class="pd-rows">
-            <div class="pd-row">
-              <dt>电脑地址</dt>
-              <dd id="pdOrigin"></dd>
-            </div>
-            <div class="pd-row">
-              <dt>最近连接</dt>
-              <dd id="pdLast"></dd>
-            </div>
-          </dl>
-
-          <button id="pdConnect" class="btn primary" type="button">连接</button>
-          <button id="pdForget" class="btn danger" type="button">取消配对</button>
-          <p class="foot-hint">
-            「取消配对」只清掉这台手机上的记录 —— 电脑端「设置 → 手机连接」里那条设备还在，要断去电脑上断开。
-          </p>
-        </div>
-      </section>
-
-      <section id="paneScan" class="pane" role="tabpanel" aria-labelledby="tabs">
-        <button id="scanBtn" class="scan-target" type="button">
+        <!-- 扫码 = 整块大按钮（相机与解码在 scanner.js，这里只负责开遮罩） -->
+        <button id="scanBtn" class="scan-hero" type="button">
           <span class="frame" aria-hidden="true">
             <span class="frame-qr">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -121,14 +42,72 @@
             <span class="sweep"></span>
           </span>
           <span class="scan-title">扫码连接</span>
-          <span class="scan-sub">对准电脑上的二维码，自动进入</span>
+          <span class="scan-sub">对准电脑上的二维码，扫完直接进</span>
         </button>
+
+        <p class="or"><span>其他方式</span></p>
+
+        <!--
+          两条次要入口。整行是按钮（点击区域够大），右端箭头表示"还有下一层"。
+          「已配对的电脑」没有记录时整行不出现（JS 里 hidden）。
+        -->
+        <div class="alt">
+          <button id="pairedEntry" class="alt-row" type="button" hidden>
+            <span class="alt-ico" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="2.6" y="3.8" width="18.8" height="12.8" rx="2.4" />
+                <path d="M8.4 20.4h7.2M12 16.6v3.8" />
+              </svg>
+            </span>
+            <span class="alt-txt">
+              <span class="alt-label">已配对的电脑</span>
+              <span class="alt-meta" id="pairedMeta">读取中…</span>
+            </span>
+            <span class="alt-chev" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M9 5l7 7-7 7" />
+              </svg>
+            </span>
+          </button>
+
+          <button id="codeEntry" class="alt-row" type="button">
+            <span class="alt-ico" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="2.8" y="4" width="18.4" height="16" rx="2.6" />
+                <path d="M7.2 9h.01M12 9h.01M16.8 9h.01M7.2 14h.01M12 14h.01M16.8 14h.01" />
+              </svg>
+            </span>
+            <span class="alt-txt">
+              <span class="alt-label">输入邀请码</span>
+              <span class="alt-meta">电脑上的 9 位数字</span>
+            </span>
+            <span class="alt-chev" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M9 5l7 7-7 7" />
+              </svg>
+            </span>
+          </button>
+        </div>
+
         <p class="foot-hint">
-          二维码在电脑上「设置 → 手机配对」里，点一下放大。码里已经带着电脑地址和邀请码。
+          二维码在电脑上「设置 → 手机配对」，点一下可以放大。邀请码 5 分钟内有效，只能配一台手机。
         </p>
       </section>
 
-      <section id="paneCode" class="pane" role="tabpanel" aria-labelledby="tabs" hidden>
+      <!-- ============================================================ 邀请码 -->
+      <section id="viewCode" class="view" hidden>
+        <div class="nav">
+          <button id="codeBack" class="nav-back" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M15 5l-7 7 7 7" />
+            </svg>
+            返回
+          </button>
+        </div>
+
+        <h2 class="view-title">输入邀请码</h2>
+        <p class="view-sub">电脑上「设置 → 手机配对」里那串 9 位数字</p>
+
         <label class="lab" for="addrInput">电脑地址</label>
         <input
           id="addrInput"
@@ -158,9 +137,55 @@
         />
         <button id="connectBtn" class="btn primary" type="button">连接</button>
         <p class="foot-hint">
-          两样都要填：电脑上那行<b>地址</b>，和下面那串 <b>9 位数字</b>。号码 5 分钟内有效，只能配一台手机。
+          两样都要填：电脑上那行<b>地址</b>，和下面那串 <b>9 位数字</b>。地址栏粘一整条配对链接也可以。
         </p>
       </section>
+
+      <!-- ============================================================ 已配对 -->
+      <section id="viewPaired" class="view" hidden>
+        <div class="nav">
+          <button id="pairedBack" class="nav-back" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M15 5l-7 7 7 7" />
+            </svg>
+            返回
+          </button>
+        </div>
+
+        <h2 id="pairedTitle" class="view-title">已配对的电脑</h2>
+
+        <div id="pairedList" class="paired"><div class="empty">读取中…</div></div>
+        <p class="foot-hint" id="pairedHint">
+          这些都是这台手机<b>连过</b>的电脑。点一台看详情，配对凭据还留在手机上，不用重新扫码。
+        </p>
+
+        <div id="pairedDetail" class="pd" hidden>
+          <div class="pd-card">
+            <div class="pd-name" id="pdName"></div>
+            <div class="pd-host" id="pdHost"></div>
+          </div>
+
+          <dl class="pd-rows">
+            <div class="pd-row">
+              <dt>电脑地址</dt>
+              <dd id="pdOrigin"></dd>
+            </div>
+            <div class="pd-row">
+              <dt>最近连接</dt>
+              <dd id="pdLast"></dd>
+            </div>
+          </dl>
+
+          <button id="pdConnect" class="btn primary" type="button">连接</button>
+          <button id="pdForget" class="btn danger" type="button">取消配对</button>
+          <p class="foot-hint">
+            「取消配对」只清掉这台手机上的记录 —— 电脑端「设置 → 手机连接」里那条设备还在，要断去电脑上断开。
+          </p>
+        </div>
+      </section>
+
+      <!-- 状态条钉在页面底部（CSS position:fixed），不占布局位、不推输入框 -->
+      <p id="status" class="status" hidden></p>
     </main>
 
     <!-- 扫码遮罩：铺满全屏，video 垫底，取景框和提示浮在上面 -->

@@ -1,17 +1,20 @@
 /*
- * launcher.js —— 手机壳的启动页（2026-11）。
+ * launcher.js —— 手机壳的启动页（2026-11 改版：一大按钮 + 次要入口）。
  *
- * 连接有三种方式，**跟部署形态无关**（2026-11-01：先定扫码/邀请码，同日补「已配对」）：
- *   A. 已配对：这台手机连过的电脑（Rust 侧 shell.json 的 servers），点一下直接连回去 ——
- *      打开 `<origin>/pair?resume=1`，凭远程页 localStorage 的 clientKey 换新令牌，
- *      不用再扫码。没连过任何电脑时这个页签整个不出现。
- *   B. 扫码：二维码里带地址 + 邀请码，扫完直接进 —— 局域网、云端都成立，默认（没记录时）；
+ * 连接有三种方式，**跟部署形态无关**：
+ *   A. 扫码：二维码里带着地址 + 邀请码，扫完直接进 —— 局域网、云端都成立。
+ *      首屏唯一的**大按钮**，点开相机遮罩（scanner.js）。
+ *   B. 已配对：这台手机连过的电脑（Rust 侧 shell.json 的 servers），列表 → 详情 →
+ *      「连接」走 `<origin>/pair?resume=1`，凭远程页 localStorage 的 clientKey 换新令牌。
+ *      没有连过任何电脑时，这条入口整行不出现。
  *   C. 邀请码：地址 + 9 位码两栏都填，拼成 `<地址>/pair?code=…` 再进。
  *
- * 三者是同一张页签（`#tabs` 的 data-mode = paired | scan | code），滑块位置由
- * `--seg-n` / `--seg-i` 算 —— 加/减页签不用动 CSS。
- * 为什么不做成"上下几块并列"：并列时填地址那块会把首屏注意力分走，还会把
- * 输入框推到 y>350 —— 键盘弹起时 Android WebView 不滚文档，那就永远点不到。
+ * 2026-11-03 改版：旧版是「已配对 / 扫码 / 邀请码」三张页签 + 滑块；用户要求
+ * 照 WorkBuddy 手机端登录页的样子重排 —— 扫码做成一个大按钮，其余收在下面。
+ * 于是删掉页签，改成三张**视图**（home / code / paired），点次要入口进下一层，
+ * 左上角返回。视图切换进了 history：Android 返回键先退回上一层，不退 App。
+ * ⚠️ 但**连接跳转前**要把这几层退干净（squashHistory）——「location.replace 只顶掉最上面
+ * 一条」，不退的话连上之后按返回键能一路退出工作台、回到登录页（2026-11-03 用户反馈）。
  *
  * 为什么局域网也要填地址（不再 UDP 自动发现）：广播"猜电脑在哪"会让壳里多出
  * 一条"局域网 / 云端"的分支，两种部署下这条路也就没法共用同一套测试。
@@ -46,7 +49,6 @@
     /*
      * 条子钉在**底部**（见 CSS）。键盘要是还开着，底部整块都被盖住 ——
      * 所以报结果之前先把输入框失焦（点「连接」通常已经失焦了，这是兜底）。
-     * 代价：极少数情况（码没填满就点连接）键盘会收起，再点一下输入框就回来。
      */
     const ae = document.activeElement;
     if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA')) ae.blur();
@@ -70,8 +72,7 @@
 
   /*
    * 键盘弹起时页面**不做任何位移**（用户 2026-11-01 实测定稿：键盘盖不住输入框）。
-   * 以前这里给输入框挂 focus/blur 去加 body.typing、让整页上移 —— 已删，
-   * 现在聚焦只是聚焦，布局不动。
+   * 聚焦只是聚焦，布局不动 —— 邀请码视图靠顶部对齐把两个输入框留在上半屏。
    */
 
   /** ⚠️ 只用来改「连接」这种纯文字按钮：它 replace textContent，带图标的按钮别传。 */
@@ -87,37 +88,126 @@
     }
   }
 
-  /* ------------------------------------------------------------ 页签 */
+  /* ------------------------------------------------------------ 视图 */
 
-  /** 当前可见的页签（`已配对` 在没有记录时是 hidden 的，得跳过它算滑块位置） */
-  function visibleModes() {
-    return [...$('tabs').querySelectorAll('.seg-btn')]
-      .filter((b) => !b.hidden)
-      .map((b) => b.dataset.mode);
-  }
-
-  /**
-   * 切页签。只改 data-mode + 三个 pane 的 hidden —— 输入内容一直留在 DOM 里，
-   * 来回切不会丢（用户扫失败后手输，正是靠这一点）。
+  /*
+   * 状态就两个字段：view = home | code | paired，detail = 是否停在「已配对」的详情。
+   * 渲染是纯函数式的（apply 只读 state 摆 DOM），history 里存的也是同一份 state ——
+   * 返回键和点「返回」因此走同一条路，不用各写一遍。
    */
-  function setMode(mode) {
-    const vis = visibleModes();
-    const next = vis.includes(mode) ? mode : vis.includes('scan') ? 'scan' : vis[0];
-    // 滑块：宽度 = 一格，位移 = 第几格（CSS 里用这两个变量算，不再写死 50%）
-    $('tabs').style.setProperty('--seg-n', String(vis.length || 1));
-    $('tabs').style.setProperty('--seg-i', String(Math.max(0, vis.indexOf(next))));
-    $('tabs').dataset.mode = next;
-    for (const btn of $('tabs').querySelectorAll('.seg-btn')) {
-      const on = btn.dataset.mode === next;
-      btn.classList.toggle('is-on', on);
-      btn.setAttribute('aria-selected', on ? 'true' : 'false');
-    }
-    $('panePaired').hidden = next !== 'paired';
-    $('paneScan').hidden = next !== 'scan';
-    $('paneCode').hidden = next !== 'code';
-    // 切走再回来要落在列表上，别停在上一台的详情里
-    if (next !== 'paired' && !$('pairedDetail').hidden) closePairDetail();
+  const HOME = { view: 'home', detail: false };
+  let state = HOME;
+  /** 我们自己往 history 里压了几层（只用来判断"还有没有上一层可退"） */
+  let depth = 0;
+  /** 压过的每一层（最老的在前）。连接失败时要照着补回去 —— 见 squashHistory */
+  let trail = [];
+  /** 正在离开启动页（连接跳转中）：这几步 popstate 只退历史，不重画 */
+  let leaving = false;
+  /** 被 squashHistory 退掉的层（失败时补回来用） */
+  let squashed = [];
+  /** 「取消配对」后要重读列表：等 popstate 落回上一层再读，避免和 history 抢状态 */
+  let pendingReload = false;
+
+  function apply(next) {
+    state = next && next.view ? next : HOME;
+    const v = state.view;
+    $('viewHome').hidden = v !== 'home';
+    $('viewCode').hidden = v !== 'code';
+    $('viewPaired').hidden = v !== 'paired';
+    // 详情打开时列表和说明都让位（⚠️ 它们自己声明了 display，必须显式藏）
+    $('pairedDetail').hidden = !(v === 'paired' && state.detail);
+    $('pairedList').hidden = v === 'paired' && state.detail;
+    $('pairedHint').hidden = v === 'paired' && state.detail;
+    $('pairedTitle').hidden = v === 'paired' && state.detail;
+    document.body.dataset.view = v;
   }
+
+  /** 进下一层：先摆 DOM，再往 history 压一条（压不进去就退化成"返回键退 App"） */
+  function go(next) {
+    clearStatus();
+    apply(next);
+    try {
+      history.pushState(state, '');
+      depth += 1;
+      trail.push(state);
+    } catch {
+      /* pushState 不可用（file:// 之类）：返回键就退页，认了 */
+    }
+  }
+
+  function back() {
+    if (depth > 0) history.back();
+    else apply(HOME);
+  }
+
+  /*
+   * 连接前把启动页**自己压出来的历史退干净**（2026-11-03 用户反馈）。
+   *
+   * 现象：连上之后在工作台按 Android 返回键，会先退回「已配对」那层，再退一次就
+   * 回到登录页 —— 像是干了点事就被踢回登录页。
+   *
+   * 原因：视图切换是 pushState 进来的（首页 → 邀请码 / 已配对 → 详情），而跳转用的是
+   * `location.replace` —— 它只顶掉**最上面那一条**，下面几条还留在 WebView 的历史里。
+   * 扫码进来自动填码那条路也一样（applyScan 先 go 到邀请码视图再连）。
+   *
+   * 所以跳转前 `history.go(-depth)` 一路退到最初那条（首页），再让 Rust 去 replace：
+   * 登录页连人带层一起没了，返回键在远程页根页没得退，直接退出 App。
+   * 退的过程 `leaving` 把 popstate 的重画按住 —— 屏幕上是「正在进入…」，看不出闪。
+   * 连接**失败**时 restoreHistory 把退掉的那几层照原样压回去（不然这一趟白退，
+   * 返回键就成"直接退 App"了）。
+   */
+  async function squashHistory() {
+    leaving = true;
+    squashed = trail.slice();
+    if (depth <= 0) return;
+    await new Promise((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        window.removeEventListener('popstate', finish);
+        resolve();
+      };
+      window.addEventListener('popstate', finish);
+      // 兜底：万一这版 WebView 连退多格不派 popstate，别把连接卡在这儿
+      setTimeout(finish, 300);
+      history.go(-depth);
+    });
+    depth = 0;
+    trail = [];
+  }
+
+  /** 连接失败：把 squash 退掉的层压回去，返回键仍旧一层层退 */
+  function restoreHistory() {
+    for (const s of squashed) {
+      try {
+        history.pushState(s, '');
+        depth += 1;
+        trail.push(s);
+      } catch {
+        /* 压不回去就算了，反正是失败兜底 */
+      }
+    }
+    squashed = [];
+    leaving = false;
+    apply(state);
+  }
+
+  window.addEventListener('popstate', (e) => {
+    depth = Math.max(0, depth - 1);
+    trail.pop();
+    // 正在连走（squashHistory 退历史）：别重画，屏幕要停在「正在进入…」
+    if (leaving) return;
+    apply(e.state);
+    const ae = document.activeElement;
+    if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA')) ae.blur();
+    if (pendingReload) {
+      pendingReload = false;
+      reloadPaired();
+    }
+  });
+
+  /* ------------------------------------------------------------ 连接 */
 
   /** 探测 → 跳转。成功时页面会直接离开，不用收尾。 */
   async function connect(input, btn, info) {
@@ -141,18 +231,21 @@
         showStatus('正在进入…', 'good');
       }
       // label/hostname 只为了让「已配对」列表显示成人话，落盘的是 origin（见 lib.rs）
+      // 跳转前先把登录页从历史里退干净 —— 连上之后返回键不该还能摸到它
+      await squashHistory();
       await invoke('open_server', {
         input,
         label: (who && who.label) || null,
         hostname: (who && who.hostname) || null,
       });
     } catch (e) {
+      restoreHistory();
       showStatus(String(e || '连不上这个地址'), 'bad');
     } finally {
       /*
        * 不管成没成都要把按钮放回来。连上是 `location.replace`（连接页不进历史，
        * 页面会直接走掉），恢复一下没副作用；连不上时这行才是关键 ——
-       * 不然按钮永远停在「连接中…」且 disabled（2026-11-01 CDP 实测到了）。
+       * 不然按钮永远停在「连接中…」且 disabled。
        */
       setBusy(btn, false);
       document.body.classList.remove('connecting');
@@ -267,12 +360,20 @@
       .join('');
   }
 
+  /** 首页那一行入口的副标题：`3 台 · 2 小时前` */
+  function renderEntry() {
+    const row = $('pairedEntry');
+    const meta = $('pairedMeta');
+    row.hidden = !saved.length;
+    if (!saved.length) return;
+    const n = saved.length === 1 ? '1 台' : saved.length + ' 台';
+    meta.textContent = [n, fmtAgo(saved[0].lastAt)].filter(Boolean).join(' · ');
+  }
+
   /* ------------------------------------------------------------ 已配对 · 详情 */
 
-  /** 详情页当前看的那台（空 = 没开详情）；`pdPushed` = 往 history 里压过一条（返回键用） */
+  /** 详情页当前看的那台（空 = 没开详情） */
   let pdOrigin = '';
-  let pdPushed = false;
-  const detailOpen = () => !$('pairedDetail').hidden;
 
   /**
    * 进详情。**不连** —— 连接是详情页里那个明确动作（用户 2026-11-01 定：
@@ -289,26 +390,12 @@
     $('pdHost').hidden = !host;
     $('pdOrigin').textContent = s.origin;
     $('pdLast').textContent = fmtAgo(s.lastAt);
-    $('pairedList').hidden = true;
-    $('pairedHint').hidden = true;
-    $('pairedDetail').hidden = false;
-    clearStatus();
-    // 压一条历史：Android 返回键能直接退回列表，而不是退出 App
-    if (!pdPushed) {
-      try {
-        history.pushState({ pd: origin }, '');
-        pdPushed = true;
-      } catch {
-        /* pushState 不可用（file:// 之类）：返回键就退页，认了 */
-      }
-    }
+    go({ view: 'paired', detail: true });
   }
 
   function closePairDetail() {
-    $('pairedDetail').hidden = true;
-    $('pairedList').hidden = false;
-    $('pairedHint').hidden = false;
     pdOrigin = '';
+    apply({ view: 'paired', detail: false });
     clearStatus();
   }
 
@@ -322,29 +409,26 @@
     }
     if (s) saved = Array.isArray(s.servers) ? s.servers.filter((x) => x && x.origin) : [];
     renderPaired();
-    // 记录清空 → 那个页签跟着消失（否则点进去是空列表，没意义）
-    const tab = $('tabs').querySelector('[data-mode="paired"]');
-    if (tab) tab.hidden = !saved.length;
-    setMode($('tabs').dataset.mode || 'scan');
+    renderEntry();
+    // 记录清空 → 首页那行入口跟着消失（否则点进去是空列表，没意义）
+    apply(state);
   }
 
   /* ------------------------------------------------------------ 启动 */
 
   async function boot() {
     await reloadPaired();
-    // 连过就默认停在「已配对」（最常见的动作是一键回去），没连过才落到扫码
-    setMode(saved.length ? 'paired' : 'scan');
+    apply(HOME);
   }
 
   /* ------------------------------------------------------------ 事件 */
 
-  $('tabs').addEventListener('click', (e) => {
-    const btn = e.target.closest('.seg-btn');
-    if (!btn) return;
-    if (btn.dataset.mode === $('tabs').dataset.mode) return;
-    setMode(btn.dataset.mode);
-    clearStatus();
-  });
+  $('codeEntry').addEventListener('click', () => go({ view: 'code', detail: false }));
+  $('pairedEntry').addEventListener('click', () => go({ view: 'paired', detail: false }));
+
+  // 返回：详情 → 列表 → 首页，交给 history 一层层退（返回键走同一条路）
+  $('codeBack').addEventListener('click', () => back());
+  $('pairedBack').addEventListener('click', () => back());
 
   $('connectBtn').addEventListener('click', () => submit($('connectBtn')));
 
@@ -368,30 +452,15 @@
   });
 
   /*
-   * 「已配对」：列表 → 详情两级（2026-11-01 四改）。
+   * 「已配对」：列表 → 详情两级。
    *   · 点行 → 进详情（读连接信息），**不直接连** —— 一秒连错电脑比多点一下烦；
    *   · 详情「连接」→ `<origin>/pair?resume=1`：远程页拿 localStorage 的 clientKey
-   *     换新令牌，不用邀请码。断开的手机在自己没人在用时就是这么连回来的；
+   *     换新令牌，不用邀请码；
    *   · 详情「取消配对」→ 只清这台手机上的记录，电脑端那条设备记录不动。
    */
   $('pairedList').addEventListener('click', (e) => {
     const row = e.target.closest('[data-open]');
     if (row) openPairDetail(row.dataset.open);
-  });
-
-  // 返回：有历史条目就走 back（由 popstate 收尾，返回键和点按钮走同一条路）
-  $('pdBack').addEventListener('click', () => {
-    if (pdPushed) {
-      pdPushed = false;
-      history.back();
-    } else {
-      closePairDetail();
-    }
-  });
-
-  window.addEventListener('popstate', () => {
-    pdPushed = false;
-    if (!$('pairedDetail').hidden) closePairDetail();
   });
 
   $('pdConnect').addEventListener('click', () => {
@@ -407,12 +476,22 @@
     b.disabled = true;
     try {
       await invoke('forget_server', { origin: pdOrigin });
-      closePairDetail();
+      pdOrigin = '';
+      // 退回列表再重读：先退 history，落到上一层后在 popstate 里 reload
+      if (depth > 1) {
+        pendingReload = true;
+        showStatus('已取消配对：' + name, 'good');
+        history.back();
+        return;
+      }
       await reloadPaired();
+      closePairDetail();
       showStatus('已取消配对：' + name, 'good');
     } catch (err) {
       b.disabled = false;
       showStatus(String(err || '取消配对失败'), 'bad');
+    } finally {
+      b.disabled = false;
     }
   });
 
@@ -434,10 +513,10 @@
     try {
       await window.BandiScan.open((text) => applyScan(text));
     } catch (e) {
-      // 相机起不来（没权限 / 被占用 / 没摄像头）：直接切到邀请码页签，
+      // 相机起不来（没权限 / 被占用 / 没摄像头）：直接进邀请码视图，
       // 让人还有路可走。scanner 的文案里已带「切到邀请码手输」，别再拼一遍。
       showStatus(String((e && e.message) || e), 'bad');
-      setMode('code');
+      go({ view: 'code', detail: false });
     }
   });
 
@@ -452,11 +531,12 @@
       showStatus('这不是班底的配对码 —— 回电脑上再扫一次', 'bad');
       return;
     }
-    setMode('code');
+    // 进邀请码视图再填：用户能核对扫到了什么（返回键能退回首页）
+    go({ view: 'code', detail: false });
     $('addrInput').value = origin;
     if (code) setCode(code);
     // ⚠️ 别把 #scanBtn 传给 connect：setBusy 会 replace 它的 textContent，
-    // 把取景框那圈标记和两个 span 全抹掉。扫码在手时按钮本来也已经收起。
+    // 把取景框那圈标记和两个 span 全抹掉。
     // 带 token 的老码 / 没解析出 code 的，整条打开；其余走标准配对地址
     return void connect(code ? buildTarget(origin, code) : t, null);
   }
@@ -467,9 +547,9 @@
    * Tauri 的 Android WebView 里，键盘弹起时
    *   · 文档**滚不动**（scrollIntoView / window.scrollTo / 补 padding 全无效）；
    *   · `visualViewport` 不派发 resize（所以 --kb / --vvh 那套兜底也不会生效）。
-   * 因此这里不做任何键盘状态判断，改成布局层解决：两个输入框都落在上半屏、
-   * 键盘盖不住（用户真机确认）。键盘弹起时页面**一动不动** —— 别再写
-   * "聚焦就上移/收头部"那种逻辑，两个版本都被用户否掉了。
+   * 因此这里不做任何键盘状态判断，改成布局层解决：邀请码视图顶部对齐，
+   * 两个输入框都落在上半屏、键盘盖不住（用户真机确认）。键盘弹起时页面
+   * **一动不动** —— 别再写"聚焦就上移/收头部"那种逻辑，两个版本都被用户否掉了。
    */
 
   boot();

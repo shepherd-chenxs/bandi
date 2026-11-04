@@ -5,7 +5,7 @@ import path from 'node:path';
 import { sendJson, fail, readBody } from '../http.mjs';
 import { withExternals } from '../runtime-view.mjs';
 import { SERVER } from '../server-state.mjs';
-import { port, host } from '../config.mjs';
+import { port, host, hostSource, writeListenHost, normalizeListenHost } from '../config.mjs';
 import * as netmode from '../netmode.mjs';
 import * as store from '../store.mjs';
 import * as runtimes from '../runtimes.mjs';
@@ -96,6 +96,30 @@ export async function handleRuntime(req, res, url) {
   if (url.pathname === '/api/lan') {
     if (req.method === 'POST') {
       const body = await readBody(req);
+      /*
+       * **监听地址**（2026-11-04 用户：界面上那句"监听由启动配置决定，界面不改"
+       * 是实现时自作主张加的口径，不是他的设计。要做成 1Panel 那样：面板里能改、
+       * 重启生效、升级重装都不丢）。
+       *
+       * 值存数据目录的 `config.json`（`writeListenHost`）—— **不是** systemd 单元、
+       * 也不是部署参数：单元每次安装都会被 `deploy/install.sh` 重新生成，11-04 的
+       * 事故就是三次升级把 `0.0.0.0` 写回 `127.0.0.1`，局域网访问全断。
+       *
+       * `BANDI_HOST` 环境变量钉着时直接拒 —— 那不是"界面不给改"，是这个进程
+       * **真的在听它**，写了也白写；先去掉变量（或 `bandi reset-host`）再改。
+       */
+      if (typeof body?.listenHost === 'string') {
+        if (hostSource === 'env') {
+          return fail(res, 400, 'E1053', `监听地址被启动参数钉着（BANDI_HOST=${process.env.BANDI_HOST}）—— 界面改不动它。去掉那个变量（或 bandi reset-host）再改。`);
+        }
+        const want = normalizeListenHost(body.listenHost);
+        if (!want) {
+          return fail(res, 400, 'E1054', '监听地址写不对：给 0.0.0.0（所有网卡）/ 127.0.0.1（只听本机）/ 具体 IPv4');
+        }
+        writeListenHost(want);
+        console.log(`[网络] 监听地址 → ${want}（重启控制面后生效）`);
+        return sendJson(res, 200, { ok: true, listenHost: want, needRestart: want !== SERVER.boundHost });
+      }
       const patch = {};
       if (typeof body?.acceptNodes === 'boolean') patch.acceptNodes = body.acceptNodes;
       if (typeof body?.pairEnabled === 'boolean') patch.pairEnabled = body.pairEnabled;
@@ -157,6 +181,21 @@ export async function handleRuntime(req, res, url) {
       // 给界面直读的角色名（省得每处自己 if）
       role: nm.acceptNodes ? 'hub' : 'branch',
       host: SERVER.boundHost, // **实际**听着的
+      /*
+       * 监听地址的完整状态（2026-11-04，界面「监听地址」卡直接用这一块）：
+       *   · `host`     这个进程**现在**听的（`SERVER.boundHost`，重启后才变）；
+       *   · `wanted`   配置要它听的（config.json / BANDI_HOST / 缺省）；
+       *   · `source`   谁定的：env（界面不能改）/ config（界面改过）/ default；
+       *   · `needRestart` 改了还没重启 —— 界面据此提示"重启生效"。
+       */
+      listen: {
+        host: SERVER.boundHost,
+        wanted: host,
+        source: hostSource,
+        editable: hostSource !== 'env',
+        port,
+        needRestart: host !== SERVER.boundHost,
+      },
       boundLan,
       port,
       // 摆给用户看"让别的机器连这个地址"（也是加入命令里该用的地址）

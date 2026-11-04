@@ -58,6 +58,11 @@ const HOST_ALLOW = [
   'schema.tauri.app',
   'tauri.app',
   'usemagpie.ai',
+  // magpie 安装的下载镜像（apps/server/src/externals.mjs 的 mirrors）：它**只是**
+  // GitHub 发布文件的下载中转，版本清单（SHA-256 的来源）仍从 usemagpie.ai 官网拿、
+  // 文件哈希由官方清单校验 —— 镜像改不了内容；只扛"直连 GitHub 下载挂死"的网络问题。
+  // 2026-11-04 起成为 POSIX 侧默认（用户实机：直连下载四次全卡成僵尸）。
+  'gh-proxy.com',
   // Tauri 的 IPC 走 `http://ipc.localhost`（自定义协议在 Android/Windows 上的
   // 实际 origin），CSP 的 connect-src 必须放它，否则前端调不了任何 command。
   // 2026-11 新增 apps/mobile 时被误判成"外部地址"。

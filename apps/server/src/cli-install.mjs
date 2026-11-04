@@ -16,6 +16,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { repoRoot } from './config.mjs';
+// readUserPath 搬去 path-env.mjs 了（2026-11-04）：runtimes/externals 探测也要读注册表
+// PATH，一份代码两处用。path-env 只用 node 内置模块 —— "库坏了也能装"的铁律不破。
+import { readUserPath } from './path-env.mjs';
 
 /* ------------------------------------------------------------------ 样式 */
 
@@ -87,20 +90,7 @@ export function shimBody() {
 
 /* ------------------------------------------------------------ 用户 PATH */
 
-/** 读用户级 PATH（**连类型一起读**：REG_SZ 与 REG_EXPAND_SZ 混了，别人的 %VAR% 就不展开了） */
-function readUserPath() {
-  try {
-    const out = execFileSync('reg', ['query', 'HKCU\\Environment', '/v', 'Path'], {
-      encoding: 'utf8',
-      windowsHide: true,
-    });
-    const m = /Path\s+(REG_[A-Z_]+)\s+([\s\S]*)/i.exec(out);
-    if (!m) return { value: '', type: 'REG_EXPAND_SZ', exists: false };
-    return { value: m[2].trim(), type: m[1].toUpperCase(), exists: true };
-  } catch {
-    return { value: '', type: 'REG_EXPAND_SZ', exists: false };
-  }
-}
+// readUserPath 在 path-env.mjs —— 探测（runtimes/externals）和安装（这里）共用一份
 
 function writeUserPath(value, type) {
   execFileSync('reg', ['add', 'HKCU\\Environment', '/v', 'Path', '/t', type, '/d', value, '/f'], {

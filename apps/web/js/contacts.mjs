@@ -13,7 +13,7 @@ import { archivedEntryHTML, closeCtxMenu, convDisplayName, enterArchiveView, ope
 import { renderFlowList } from './workflows.mjs';
 import { renderRunList } from './flowpages.mjs';
 import { newSkill, openGitPickDialog, openImportDialog } from './skills.mjs';
-import { openConversation, openDetail, openDirectChat } from './chat.mjs';
+import { openConversation, openDetail } from './chat.mjs';
 import { gidOf, openGroupDetail } from './groups.mjs';
 import { $, S } from './core.mjs';
 import { openProjectsPage, renderProjectList } from './projects.mjs';
@@ -379,10 +379,13 @@ export function renderList() {
         (shown.length
           ? shown
               .map((g) => {
+                /* 条目图标同桌面（2026-11-04）：目前只有「关于」这行带 */
+                const itemIco = (icon) =>
+                  `<svg class="sec-ico" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">${icon}</svg>`;
                 const rows = g.items
                   .map(
-                    ([key, title]) => `<div class="item" data-set="${key}" role="button" tabindex="0">
-            <div class="who"><div class="line1"><b>${esc(title)}</b></div></div>
+                    ([key, title, , icon]) => `<div class="item" data-set="${key}" role="button" tabindex="0">
+            <div class="who"><div class="line1"><b>${icon ? itemIco(icon) : ''}${esc(title)}</b></div></div>
           </div>`,
                   )
                   .join('');
@@ -422,11 +425,16 @@ export function renderList() {
      * 两套点法（组头能点、行也能点）反而让"能点哪儿"变含糊 —— 那套分支已删。
      */
     /* 单行（2026-10-29 用户："二级菜单下的说明去掉"）：只画标题，副标题说明不再渲染 ——
-       导航树求短求快，说明是阅读负担；数组里的 sub 留着（title 兜底等别处还用得上）。 */
-    const row = ([key, title]) => `<div class="item ${S.settingsSection === key ? 'active' : ''}" data-set="${key}"
+       导航树求短求快，说明是阅读负担；数组里的 sub 留着（title 兜底等别处还用得上）。
+       条目级小图标（2026-11-04，目前只有「关于」）：内联在标题 <b> 里 —— 别拆进
+       .line1（那是 space-between，svg 会被顶到另一头）；单色 currentColor，
+       与组头图标同一套语法，尺寸/间距见 style.css 的 .item[data-set] .sec-ico。 */
+    const itemIco = (icon) =>
+      `<svg class="sec-ico" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">${icon}</svg>`;
+    const row = ([key, title, sub, icon]) => `<div class="item ${S.settingsSection === key ? 'active' : ''}" data-set="${key}"
           role="button" tabindex="0" title="${title}">
           <div class="who">
-            <div class="line1"><b>${title}</b></div>
+            <div class="line1"><b>${icon ? itemIco(icon) : ''}${title}</b></div>
           </div>
         </div>`;
     $('listBody').innerHTML = shown.length
@@ -583,8 +591,11 @@ const personRowHTML = (p) => `<div class="item ${S.persona && S.persona.id === p
 /**
  * 真人行（2026-10-31 用户概念落地）：只摆名字 —— 成员没有会话、没有忙闲，
  * 点不出详情页（要管账号去「设置 → 用户」），所以不给 data-* 也不绑点击。
+ * ⚠️ 但要给 `data-nodetail`（2026-11-03）：mobile.mjs 的列表点击委托兜着 `.item`，
+ * 不标记的话手机上点成员行会进一个**空的详情态**（主区摆出来却没人往里画 ——
+ * 用户实报"详情页空白"的另一半）。
  */
-const userRowHTML = (u) => `<div class="item">
+const userRowHTML = (u) => `<div class="item" data-nodetail>
         <div class="avatar">${esc(initial(u.name))}</div>
         <div class="who">
           <div class="line1"><b>${esc(u.name)}</b></div>
@@ -605,19 +616,11 @@ function bindContactRows() {
   });
   // 通讯录点员工：
   //   · 桌面 = **看详情**（右侧），要聊去详情里点「发消息」——那条路会切到消息模块并把光标放好；
-  //   · 手机窄屏 = **直接开聊**（2026-11 移动端增量：手机上多一跳详情反而绕，跟微信一致）。
-  //     窄屏判据用 body.mb-narrow（mobile.mjs 维护的状态类）。群聊行不受影响，仍进群详情。
+  //   · 手机窄屏 = **同样进详情页**（2026-11-03 用户拍板，改掉"直接开聊"的旧口径 ——
+  //     通讯录点人物详情页是空白的根因之一：手机上根本没给详情入口）。窄屏判据用
+  //     body.mb-narrow（mobile.mjs 维护的状态类）。群聊行不受影响，仍进群详情。
   body.querySelectorAll('[data-persona]').forEach((el) => {
-    if (document.body.classList.contains('mb-narrow')) {
-      el.onclick = () => {
-        // 行和列表是同一批数据画出来的，正常都能找到人；找不到（极端时序）兜底回桌面路径
-        const p = S.personas.find((x) => x.id === el.dataset.persona);
-        if (p) openDirectChat(p);
-        else openDetail(el.dataset.persona).catch((e) => toast(e.message, 'error'));
-      };
-    } else {
-      el.onclick = () => openDetail(el.dataset.persona).catch((e) => toast(e.message, 'error'));
-    }
+    el.onclick = () => openDetail(el.dataset.persona).catch((e) => toast(e.message, 'error'));
   });
 }
 
