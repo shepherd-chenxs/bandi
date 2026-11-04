@@ -80,16 +80,16 @@ try {
   // 同一个文件里还有别的键（controlPlane / replyStyle / 生图…）—— 不许顺手弄丢
   fs.writeFileSync(
     path.join(process.env.BANDI_DATA, 'config.json'),
-    JSON.stringify({ controlPlane: 'http://hub:8787', replyStyle: 'concise' }),
+    JSON.stringify({ controlPlane: 'http://localhost:8787', replyStyle: 'concise' }),
     'utf8',
   );
   cfg.writeListenHost('0.0.0.0');
   const merged = JSON.parse(fs.readFileSync(path.join(process.env.BANDI_DATA, 'config.json'), 'utf8'));
-  check('只动 listenHost，别的键原样保留', merged.controlPlane === 'http://hub:8787' && merged.replyStyle === 'concise' && merged.listenHost === '0.0.0.0', JSON.stringify(merged));
+  check('只动 listenHost，别的键原样保留', merged.controlPlane === 'http://localhost:8787' && merged.replyStyle === 'concise' && merged.listenHost === '0.0.0.0', JSON.stringify(merged));
 
   check('clearListenHost 清掉了', cfg.clearListenHost() === true);
   const cleared = JSON.parse(fs.readFileSync(path.join(process.env.BANDI_DATA, 'config.json'), 'utf8'));
-  check('清完别的键还在', cleared.listenHost === undefined && cleared.controlPlane === 'http://hub:8787', JSON.stringify(cleared));
+  check('清完别的键还在', cleared.listenHost === undefined && cleared.controlPlane === 'http://localhost:8787', JSON.stringify(cleared));
   check('没得清时返回 false（幂等）', cfg.clearListenHost() === false);
 
   let threw = false;
