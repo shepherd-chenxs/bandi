@@ -165,6 +165,14 @@ export function wellKnownBins() {
       ]
     : [
         path.join(home, '.local', 'bin'),
+        /*
+         * 用户态 Node 的 npm 全局 bin（deploy/README.md「B：用户态装法」的标准落点）。
+         * 2026-11-04 补：thinkpad 实测漏了这条 —— claude 装在 `~/.local/node`，
+         * 包在 `~/.local/node/lib/node_modules`，但 systemd 的 PATH 不带
+         * `~/.local/node/bin`，这里又不认它，探测一个候选都落不进去。
+         * 加上之后 npmPrefixes 的形态二（`<bin>/../lib/node_modules`）就能接住。
+         */
+        path.join(home, '.local', 'node', 'bin'),
         path.join(home, '.cargo', 'bin'),
         path.join(home, '.bun', 'bin'),
         path.join(home, '.npm-global', 'bin'),
