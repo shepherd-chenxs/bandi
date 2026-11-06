@@ -8,7 +8,7 @@ import { confirmDo } from './machine.mjs';
 import { ICON_FILE, ICON_LINK, showView } from './contacts.mjs';
 import { openWorkflows, renderFlowList } from './workflows.mjs';
 import { openTaskCardDialog } from './projects.mjs';
-import { convPermCombo, streamRun } from './chat.mjs';
+import { convPermCombo, isNarrowPh, streamRun } from './chat.mjs';
 import { $, S } from './core.mjs';
 
 
@@ -792,7 +792,7 @@ export function runHTML(v) {
                边框、焦点环、textarea 的 padding/字号/resize 全在那儿了。
                自己再写一套 .nc-say-box 的结果是"看着像个裸 textarea"——踩过。 -->
           <div class="input-wrap">
-            <textarea id="ncInput" rows="5" placeholder="说点什么…（回车换行）"></textarea>
+            <textarea id="ncInput" rows="5" placeholder="${isNarrowPh() ? '' : '说点什么…（回车换行）'}"></textarea>
             <div class="input-tools">
               <div id="ncPermMount"></div>
               <!-- 发送：小圆圈 + 向上箭头 -->
@@ -1188,7 +1188,8 @@ export async function refreshNodeChat() {
   const title = $('ncTitle');
   if (title) title.textContent = `${t.nodeName} · ${t.assigneeName ?? '没人'}`;
   const input = $('ncInput');
-  if (input) input.placeholder = t.runningRunId ? '他正在办…也可以再补一句' : '说点什么…';
+  // 手机上占位提示不显示（2026-11-04 用户要求，同主聊天框口径）；窄屏模板里已置空，这里别再写回
+  if (input && !isNarrowPh()) input.placeholder = t.runningRunId ? '他正在办…也可以再补一句' : '说点什么…';
   // 打开时他正好在跑（比如你刚发完就切走了）→ 接上那条实时流，别等刷新
   if (t.runningRunId) openNodeStream(t.runningRunId);
 

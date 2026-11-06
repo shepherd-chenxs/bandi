@@ -12,12 +12,17 @@ description: 班底平台的值班手册 —— 服务起没起来、连的是�
 任何判断之前先取一次真实状态。**不要凭印象说"应该是……"**：
 
 ```bash
-curl -s --noproxy '*' http://127.0.0.1:8787/api/state
+curl -s --noproxy '*' "http://127.0.0.1:${BANDI_PORT:-18787}/api/state"
 ```
 
 > `--noproxy '*'` 不是可选。开发机上常常有全局代理，`curl` 访问回环地址也会走代理，
 > 拿回来的是 502 —— 那不是服务挂了，是请求根本没到。**去掉它报 502、加上它正常**，
 > 就说明是代理问题，别诊断成服务故障。
+>
+> 端口也**不写死**：`${BANDI_PORT:-18787}` 跟服务端自己取端口的公式一字不差
+> （`BANDI_PORT` 优先，缺省 18787 —— `apps/server/src/config.mjs`）。你是服务端
+> 进程拉起来的，环境变量里带着它；自己手跑时缺省也对。下文所有命令同此，端口换了
+> 它们自动跟着换，不用改文档。
 
 `/api/state` 一次能看出大半问题：
 
@@ -33,7 +38,7 @@ curl -s --noproxy '*' http://127.0.0.1:8787/api/state
 
 按顺序排，不要跳步：
 
-1. **端口上有没有人**：`curl -s --noproxy '*' -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8787/api/state`
+1. **端口上有没有人**：`curl -s --noproxy '*' -o /dev/null -w '%{http_code}\n' "http://127.0.0.1:${BANDI_PORT:-18787}/api/state"`
    - 返回 `200` → 服务活着，问题在界面或浏览器缓存，让他刷新（`Ctrl+F5`）。
    - 连接被拒 → 服务没起。往下走。
 2. **看日志尾巴**：数据目录下的 `server.log`（路径见首轮注入给你的「机器现状」）。
@@ -59,7 +64,7 @@ curl -s --noproxy '*' http://127.0.0.1:8787/api/state
 ## 三、agent CLI 没配好（能建人、不能干活）
 
 ```bash
-curl -s --noproxy '*' http://127.0.0.1:8787/api/runtimes
+curl -s --noproxy '*' "http://127.0.0.1:${BANDI_PORT:-18787}/api/runtimes"
 ```
 
 逐个看：
@@ -77,13 +82,13 @@ curl -s --noproxy '*' http://127.0.0.1:8787/api/runtimes
 
 ```bash
 # 1) 看引擎：记下可用的 id（enabled=true 且 blocked=false）
-curl -s --noproxy '*' http://127.0.0.1:8787/api/runtimes
+curl -s --noproxy '*' "http://127.0.0.1:${BANDI_PORT:-18787}/api/runtimes"
 
 # 2) 看技能库：这个人的活有没有现成的技能可挂
-curl -s --noproxy '*' http://127.0.0.1:8787/api/skills
+curl -s --noproxy '*' "http://127.0.0.1:${BANDI_PORT:-18787}/api/skills"
 
 # 3) 建人
-curl -s --noproxy '*' -X POST http://127.0.0.1:8787/api/personas \
+curl -s --noproxy '*' -X POST "http://127.0.0.1:${BANDI_PORT:-18787}/api/personas" \
   -H 'Content-Type: application/json' \
   -d '{"name":"小周","role":"前端","instructions":"你是这个团队的前端工程师……","runtime":"<上一步的 id>","sandbox":"danger-full-access","cwd":"<项目目录>"}'
 ```

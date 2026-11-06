@@ -6,6 +6,9 @@ import * as gitRepos from './git-repos.mjs';
 import { normalizeSandbox } from './sandbox.mjs';
 import { ADAPTERS } from './adapters.mjs';
 import { controlUrl, issueRunCredential, revokeRunCredential } from './agent-auth.mjs';
+// 收尾快照的归约器跟界面进度卡是同一份（apps/web/js/run-progress.mjs 刻意不碰 DOM，
+// 冒烟用例一直在 Node 里 import 它；服务端算 meta.progress 也用它 —— 别在那边碰 DOM）
+import { summarizeEvents } from '../../web/js/run-progress.mjs';
 
 /**
  * 「这条会话在对面那个 CLI 里不存在」的报错特征。
@@ -461,14 +464,17 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
       if (res.sessionId) store.setMemberSession(thread.id, personaId, res.sessionId, sessionScope, rt.family);
       if (watermark) store.setMemberWatermark(thread.id, personaId, watermark);
 
-      // 回话落库（见 persistReply）。人停的那一轮也要落 —— 带 meta.stopped 给界面标「已停止生成」
-      persistReply(run, run.finalText, stopped ? { stopped: true } : null);
-
       // 成功的判据：没标错，且没有非零退出码。
       // claude 在收到 result 就结算，不给 exitCode —— 所以不能只看 exitCode === 0。
       const ok = !res.isError && (res.exitCode == null || res.exitCode === 0);
+      const status = stopped ? '已停止' : ok ? '完成' : '失败';
+
+      // 回话落库（见 persistReply）。人停的那一轮也要落 —— 带 meta.stopped 给界面标「已停止生成」；
+      // 跑过工具的带 meta.progress（过程快照，界面在气泡顶上收成一行）
+      persistReply(run, run.finalText, replyMeta(run, { stopped, status }));
+
       finish(run, {
-        status: stopped ? '已停止' : ok ? '完成' : '失败',
+        status,
         exitCode: res.exitCode ?? null,
         error: stopped
           ? null
@@ -608,7 +614,7 @@ export function finishRemote(
       taskId: run.workflowTaskId ?? null,
       // 远端那台机器上被停的也一样：留个标记，界面上认得出「这不是他说完的」
       // （一个字都没回来的那种由 finish() 用已经流过来的 text 事件兜底）
-      meta: status === '已停止' ? { stopped: true } : null,
+      meta: replyMeta(run, { stopped: status === '已停止', status }),
     });
     run.replyPersisted = true;
   }
@@ -686,6 +692,36 @@ export function onRunFinish(fn) {
 }
 
 /**
+ * 过程快照（2026-11-05 评鉴落地）：跑过工具的回话，气泡顶上留一行
+ * 「✓ 意图 · N 步 · 用时」，点开看每步干了啥 —— "他到底查了啥"不用再翻事件流。
+ *
+ * 数据就是 run_events 原样重放（界面进度卡的同一套归约器，见顶部 import）。
+ * 快照在落库时刻写死 —— 跟卡票同一哲学：聊天一屏可能十几条回话，逐条回查太贵。
+ * 纯聊天（一次工具都没调）返回 null，那种回话不需要"过程收起行"。
+ * 摘要是锦上添花：任何意外都不能把落库本身带崩，所以整段兜底。
+ */
+function progressMeta(runId, status) {
+  try {
+    const rows = store
+      .listRunEvents(runId)
+      .map((r) => {
+        try { return { evt: JSON.parse(r.evt), at: r.at }; } catch { return null; }
+      })
+      .filter(Boolean);
+    return summarizeEvents(rows, { status });
+  } catch {
+    return null;
+  }
+}
+
+/** 回话消息的 meta：人停的标记 + 过程快照（两样都没有就给 null，别落个空对象） */
+function replyMeta(run, { stopped = false, status = '' } = {}) {
+  const prog = progressMeta(run.id, status);
+  if (!stopped && !prog) return null;
+  return { ...(stopped ? { stopped: true } : {}), ...(prog ? { progress: prog } : {}) };
+}
+
+/**
  * 把这一轮的回话落成一条 assistant 消息（**唯一入口**，2026-10-29 收口）。
  *
  * 评论区（2026-10-18）：回话挂在**触发他的那条评论所在的议题**下。
@@ -694,7 +730,8 @@ export function onRunFinish(fn) {
  * 顶层评论（parentId 为空）的回复挂到**这条评论自己**：只靠"时序"归组的话，
  * 过几天回到旧议题补一句、中间又插了新议题时，回复会认到错的议题下。
  *
- * `meta`：人点停止的那一轮带 `{ stopped: true }`，界面据此在气泡上标「已停止生成」。
+ * `meta`：人点停止的那一轮带 `{ stopped: true }`，界面据此在气泡上标「已停止生成」；
+ * 跑过工具的带 `progress`（过程快照，见 progressMeta）。
  * 重复调用是安全空操作（`replyPersisted` 记住已经落过的那一次）。
  */
 function persistReply(run, text, meta = null) {
@@ -740,7 +777,7 @@ function finish(run, { status, exitCode = null, error = null, usage = null, elap
    */
   if (status === '已停止' && !run.replyPersisted && run.streamedText) {
     if (!run.finalText) run.finalText = run.streamedText;
-    persistReply(run, run.streamedText, { stopped: true });
+    persistReply(run, run.streamedText, replyMeta(run, { stopped: true, status }));
   }
 
   store.finishRun(run.id, { status, exitCode, error, usage });

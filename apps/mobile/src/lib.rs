@@ -473,37 +473,9 @@ fn forget_server(origin: Option<String>, state: State<ShellState>) -> Result<(),
 
 /* ---------------------------------------------------------------- 入口 */
 
-/**
- * 语音输入插件（2026-11-01）。
- *
- * 这里面**不注册任何 command**，也不碰 capability —— 桥是 WebView 层的：
- * Kotlin 的 `SpeechPlugin.load()` 往页面注入 `window.__BandiSpeech`（页面调它），
- * 识别结果用 `evaluateJavascript` 回调 `window.__bandiSpeechEvent`（壳调页面）。
- *
- * 为什么不走 Tauri IPC：业务页是远端 origin（`http://192.168.x.x:18787`），
- * 要 invoke 得在 capability 里给 `remote.urls` 开白，还得为自定义命令写 ACL 条目；
- * 而 `addJavascriptInterface` 两条都不需要，只在壳自己的 WebView 里生效。
- *
- * 这里唯一的活是把 Kotlin 那个类反射实例化并挂上（`register_android_plugin`
- * 要求构造签名是 `(Activity)`，与 SpeechPlugin.kt 一致）。
- */
-fn speech_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
-  let builder = tauri::plugin::Builder::new("speech");
-
-  // 桌面（cargo check / 非 android target）没有这个插件，留一个空壳，编得过
-  #[cfg(target_os = "android")]
-  let builder = builder.setup(|_app, api| {
-    api.register_android_plugin("app.local.bandi.mobile", "SpeechPlugin")?;
-    Ok(())
-  });
-
-  builder.build()
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(speech_plugin())
         .setup(|app| {
             let dir = app
                 .path()

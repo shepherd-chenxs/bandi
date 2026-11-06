@@ -7,8 +7,10 @@ import { openSettings } from './settings.mjs';
 import { setListTitle } from './flowpages.mjs';
 import { breadcrumb, headRow } from './connectors.mjs';
 import { confirmDo, askCheckbox } from './machine.mjs';
-import { openAddMenu, renderList, showView, skillAddItems } from './contacts.mjs';
-import { pickLocalDir, openProjectDetail, openTaskCardDialog } from './projects.mjs';
+import { openAddMenu, closeAddMenu, addMenu, renderList, showView, skillAddItems } from './contacts.mjs';
+import { pickLocalDir, openProjectDetail, openTaskCardDialog, KB_ICON_BACK, KB_ICON_PLUS } from './projects.mjs';
+/* 手机上的选择一律走任务面板那张全屏选择页（2026-11-06 用户："参考任务面板的新建任务"） */
+import { mbClosePicker, mbOpenPicker } from './chat.mjs';
 
 import { $, S } from './core.mjs';
 
@@ -2349,6 +2351,9 @@ export async function openSchedules() {
   S.boardAll = false;
   savePlace();
   $('pluginView').classList.remove('kb-page'); // 列表页按普通长页面滚
+  // 玻璃顶栏（body.no-list .detail-head）是整页视图的底座：宫格进来时多半已经带着，
+  // 刷新恢复这条路不一定 —— 自己补上，别让顶栏掉回列表页那种面包屑形态
+  document.body.classList.add('no-list');
   showView('plugin');
   await renderSchedules();
 }
@@ -2395,7 +2400,7 @@ export async function renderSchedules() {
        结构：第一行 名字+状态 → 第二行 要干什么+节拍 → 第三行 上次结果（原话）→ 底部动作。
        margin-top:auto 把动作压到卡底，多张卡并排时按钮齐平。 */
     return `
-    <article class="sch-card">
+    <article class="sch-card" data-sch-card="${esc(j.id)}">
       <div class="sch-card-top">
         <b>${esc(j.name)}</b>
         <span class="pill">${esc(actionOf(j.action)?.label ?? j.action)}</span>
@@ -2439,13 +2444,26 @@ export async function renderSchedules() {
     </article>`;
   };
 
+  /*
+   * 窄屏导航栏照**任务看板**的（2026-11-06 用户："顶部导航栏修改一下，对标任务面板的"）：
+   * 三槽 —— 左 ‹ 返回工作台 / 居中「定时任务」/ 右 ＋ 新建。面包屑（工作台 › 定时任务）
+   * 与胶囊「＋ 新建任务」撤掉：进 App 不进网页，这是看板定稿的规矩（projects.mjs §21）。
+   * 桌面（>900）一行不动，照旧 headRow + 面包屑。
+   */
+  const narrowHead = document.body.classList.contains('mb-narrow')
+    ? `<div class="detail-head kb-l-head">
+        <button type="button" class="kb-l-navbtn back" data-sch-back aria-label="返回工作台">${KB_ICON_BACK}</button>
+        <h1 class="kb-l-navtitle">定时任务</h1>
+        <button type="button" class="kb-l-navbtn add" id="schNew" aria-label="新建任务">${KB_ICON_PLUS}</button>
+      </div>`
+    : headRow(
+        breadcrumb([{ label: '工作台', to: 'workbench' }, { label: '定时任务' }]),
+        '<button class="primary" id="schNew">＋ 新建任务</button>',
+      );
   view.innerHTML = `
-    ${headRow(
-      breadcrumb([{ label: '工作台', to: 'workbench' }, { label: '定时任务' }]),
-      '<button class="primary" id="schNew">＋ 新建任务</button>',
-    )}
+    ${narrowHead}
     <div class="detail-body">
-      <div class="group-title">任务 <span class="dim" style="font-weight:400">${jobs.length} 个</span></div>
+      <div class="group-title sch-count">任务 <span class="dim" style="font-weight:400">${jobs.length} 个</span></div>
       ${
         jobs.length
           ? `<div class="sch-grid">${jobs.map(card).join('')}</div>`
@@ -2455,6 +2473,8 @@ export async function renderSchedules() {
       }
     </div>`;
 
+  // 返回只有一层含义（与看板同一口径）：定时任务 → 工作台
+  view.querySelector('[data-sch-back]')?.addEventListener('click', () => setNav('plugins'));
   $('schNew')?.addEventListener('click', () => scheduleDialog(null));
   view.querySelectorAll('[data-sch-run]').forEach((el) => {
     el.onclick = async () => {
@@ -2507,6 +2527,21 @@ export async function renderSchedules() {
       }
     };
   });
+
+  /*
+   * 手机：点卡片进详情（2026-11-06 用户拍板）。卡上那三颗图标在 ≤600 的 CSS 里已经藏了，
+   * 动作全搬进详情页；开关是例外 —— 高频、二元、改完就想立刻看见，留在卡上。
+   * 桌面（>600）不接这条路：那块仍是 hover 显形的三颗图标，鼠标流程没变。
+   */
+  if (window.matchMedia('(max-width: 600px)').matches) {
+    view.querySelectorAll('[data-sch-card]').forEach((el) => {
+      el.addEventListener('click', (e) => {
+        if (e.target.closest('.switch, .sch-ic')) return;   // 拨开关 / 桌面残留的图标不吃这一下
+        const j = jobs.find((x) => x.id === el.dataset.schCard);
+        if (j) schOpenJobDetail(j, { actions: data.actions ?? [] });
+      });
+    });
+  }
 }
 
 
@@ -2604,8 +2639,190 @@ export function mountSchRepeatCombos(mode, job) {
 
 
 
+/* ------------------------------------------------ 手机上：重复方式 / 星期 / 月份走底部抽屉
+
+   2026-11-06 用户："新建定时任务的定时器，不要使用下拉，改成使用抽屉。"
+
+   手机那一版（≤600）的重复区不再有 `.combo`：
+     · 重复方式 = 一行菜单（值在右、尾巴一颗 ›），点开底部抽屉选 7 种；
+     · 星期 / 月份 同一种行 + 同一种抽屉（它们本来就是"一组短选项"）；
+     · 间隔 / 日期 / 时间 仍是输入框，但排成同一行语汇（标签在左、值靠右）。
+   值的出口没变：仍是 `{ wd, mo }` 两个 `{ value() }`，保存那段一行不用改。 */
+
+/** 手机版重复区：一行一条，标签在左、值靠右（与「交给谁」同一语汇） */
+export function schRepeatBodyPhone(mode, job, min) {
+  const time = /^([01]\d|2[0-3]):[0-5]\d$/.test(job?.atTime ?? '') ? job.atTime : '09:00';
+  const row = (label, inner) => `<div class="sch-pick sch-pick-static"><span class="sch-pick-k">${label}</span>${inner}</div>`;
+  /* 「时间」这一行不再用原生 <input type="time">（2026-11-06 用户："每天时，时间的选择方式
+     是系统自带的，不好看"）：原生控件在 Android 上弹的是**系统时钟盘** —— 圆角 / 字号 /
+     配色 / 遮罩全由系统定，跟这张工作纸是两套皮，还压在页脚主按钮上面，"取消 / 完成"
+     根本不在纸里。改成和「重复 / 星期 / 月份」同一个语汇：一行菜单（值靠右 + ›），
+     点开是底部抽屉里的时:分转轮。值仍落在同名 hidden input #schAt 上 ——
+     保存那段（`$('schAt').value`）一行不用改。
+
+     单次（2026-11-06 二改）也用它 —— 见下面 once 那一支。 */
+  const timeRowOf = (t) =>
+    `<input id="schAt" type="hidden" value="${esc(t)}" />` +
+    `<button type="button" class="sch-pick" id="schTimeRow">
+        <span class="sch-pick-k">时间</span>
+        <span class="sch-pick-v is-time" id="schTimeVal">${esc(t)}</span><i class="sch-pick-chev" aria-hidden="true"></i>
+      </button>`;
+  const timeRow = timeRowOf(time);
+  if (mode === 'interval') {
+    return row(
+      '间隔',
+      `<input id="schEvery" class="sch-pick-in" type="number" min="${min}" step="1" value="${job?.everyMinutes ?? 30}" /><span class="sch-pick-u">分钟</span>`,
+    );
+  }
+  if (mode === 'once') {
+    /* 「单次」原来是**一个**自建日历浮层（.combo + .dt-pop，日期格子 + 两个原生 <select>
+       选时分）。2026-11-06 用户："重复方式为单次时，时间也不好看，跟其他的统一"：
+       那两个 select 在手机上弹的又是系统滚轮 —— 同一张纸上两套滚轮。
+       现在拆成**两行**，与「每月」（日期 + 时间）完全同构：
+         · 日期 → 一行菜单，点开抽屉里的月历（点某一天就收）；
+         · 时间 → 就是上面那颗时:分转轮。
+       值仍拼回 `#schRunAt`（`YYYY-MM-DDTHH:MM`，与 datetime-local 同格式），
+       保存那段（`Date.parse($('schRunAt').value)`）一行不用改。 */
+    let v = '';
+    const ts = Date.parse(job?.runAt ?? '');
+    if (Number.isFinite(ts)) {
+      const d = new Date(ts);
+      const p = (n) => String(n).padStart(2, '0');
+      v = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+    }
+    const dstr = /^\d{4}-\d{2}-\d{2}$/.test(v.slice(0, 10)) ? v.slice(0, 10) : schTodayStr();
+    const tstr = /^([01]\d|2[0-3]):[0-5]\d$/.test(v.slice(11, 16)) ? v.slice(11, 16) : '09:00';
+    return (
+      `<input id="schRunAt" type="hidden" value="${esc(`${dstr}T${tstr}`)}" />` +
+      `<button type="button" class="sch-pick" id="schDateRow">
+        <span class="sch-pick-k">日期</span>
+        <span class="sch-pick-v" id="schDateVal">${esc(schFmtDate(dstr))}</span><i class="sch-pick-chev" aria-hidden="true"></i>
+      </button>` +
+      timeRowOf(tstr)
+    );
+  }
+  if (mode === 'daily') return timeRow;
+  if (mode === 'weekly' || mode === 'biweekly') {
+    return `<button type="button" class="sch-pick" id="schWdRow">
+        <span class="sch-pick-k">星期</span>
+        <span class="sch-pick-v" id="schWdVal"></span><i class="sch-pick-chev" aria-hidden="true"></i>
+      </button>${timeRow}`;
+  }
+  const dom = Number.isInteger(job?.dayOfMonth) ? job.dayOfMonth : 1;
+  const domRow = row(
+    '日期',
+    `<input id="schDom" class="sch-pick-in" type="number" min="1" max="31" step="1" value="${dom}" /><span class="sch-pick-u">号</span>`,
+  );
+  if (mode === 'monthly') return domRow + timeRow;
+  return `<button type="button" class="sch-pick" id="schMoRow">
+      <span class="sch-pick-k">月份</span>
+      <span class="sch-pick-v" id="schMoVal"></span><i class="sch-pick-chev" aria-hidden="true"></i>
+    </button>${domRow}${timeRow}`;
+}
+
+/**
+ * 手机版重复区的接线：星期 / 月份 / 日期 / 时间 → 底部抽屉。
+ * 返回 `{ wd, mo }`（`{ value() }`），当前模式没有的那颗是 null。
+ *
+ * 「单次」是**两行一个值**：日期行 + 时间行分别持有自己那段，任一处改动都拼回
+ * `#schRunAt`（`YYYY-MM-DDTHH:MM`）—— 保存那段只认这一个 input，不用知道拆成了两行。
+ */
+export function mountSchRepeatPicks(mode, job) {
+  const out = { wd: null, mo: null };
+  const runInput = $('schRunAt');
+  const once = Boolean($('schDateRow'));
+  let dstr = once ? (runInput?.value ?? '').slice(0, 10) || schTodayStr() : '';
+  const commitRunAt = () => {
+    if (!runInput) return;
+    const tv = $('schAt')?.value ?? '09:00';
+    runInput.value = `${dstr}T${tv}`;
+  };
+  const timeRow = $('schTimeRow');
+  if (timeRow) {
+    let v = $('schAt')?.value ?? '09:00';
+    const paint = () => {
+      const el = $('schTimeVal');
+      if (el) el.textContent = v;
+    };
+    paint();
+    timeRow.onclick = () =>
+      schOpenTimeSheet({
+        value: v,
+        onPick: (nv) => {
+          v = nv;
+          const h = $('schAt');
+          if (h) h.value = nv;   // 值的唯一出口：保存那段照旧读它
+          paint();
+          commitRunAt();         // 单次：时分是 runAt 的后半段
+        },
+      });
+  }
+  const dateRow = $('schDateRow');
+  if (dateRow) {
+    const paint = () => {
+      const el = $('schDateVal');
+      if (el) el.textContent = schFmtDate(dstr);
+    };
+    paint();
+    dateRow.onclick = () =>
+      schOpenDateSheet({
+        value: dstr,
+        onPick: (nv) => {
+          dstr = nv;
+          paint();
+          commitRunAt();         // 单次：年月日是 runAt 的前半段
+        },
+      });
+  }
+  const wdRow = $('schWdRow');
+  if (wdRow) {
+    let v = String(Number.isInteger(job?.weekday) ? job.weekday : 1);
+    const items = '日一二三四五六'.split('').map((c, i) => ({ id: String(i), label: `星期${c}` }));
+    const paint = () => {
+      const el = $('schWdVal');
+      if (el) el.textContent = items.find((x) => x.id === v)?.label ?? '';
+    };
+    paint();
+    wdRow.onclick = () => schOpenSheet({ title: '星期几', items, value: v, onPick: (nv) => { v = nv; paint(); } });
+    out.wd = { value: () => v };
+  }
+  const moRow = $('schMoRow');
+  if (moRow) {
+    let v = String(Number.isInteger(job?.month) ? job.month : 1);
+    const items = Array.from({ length: 12 }, (_, i) => ({ id: String(i + 1), label: `${i + 1} 月` }));
+    const paint = () => {
+      const el = $('schMoVal');
+      if (el) el.textContent = items.find((x) => x.id === v)?.label ?? '';
+    };
+    paint();
+    moRow.onclick = () => schOpenSheet({ title: '几月', items, value: v, onPick: (nv) => { v = nv; paint(); } });
+    out.mo = { value: () => v };
+  }
+  // 「单次」不再有自建日历浮层（那是桌面的那颗 .combo + .dt-pop，见 mountSchRepeatCombos）
+  return out;
+}
+
+
+
 /** 这几种字段是下拉，值由 .combo 组件持有（不是 DOM 里的原生 <select>） */
 export const SCH_COMBO_TYPES = ['repo', 'project', 'persona', 'flow'];
+
+/**
+ * 一个选择字段的选项清单。第一项永远是「留空」那一档 —— 它的文案由动作自己给
+ * （`empty`：全部 / 自动 / 选一个人 / 选一条流程），"可留空"才不是一句空话。
+ * 桌面下拉（.combo）与手机选择页（mbOpenPicker）共用这一份，不许各造一套。
+ */
+export function schComboItems(f, repos, projects, personas, flows) {
+  if (f.type === 'repo') return [{ id: '', label: f.empty ?? '全部' }, ...(repos ?? []).map((r) => ({ id: r.fullName, label: r.fullName }))];
+  if (f.type === 'project') return [{ id: '', label: f.empty ?? '自动' }, ...(projects ?? []).map((p) => ({ id: p.id, label: p.name }))];
+  if (f.type === 'flow') {
+    // 一条都没发布时给一行**说明**（禁用不住的下拉会像"坏了"）：去工作台 › 工作流里发布
+    return (flows ?? []).length
+      ? [{ id: '', label: f.empty ?? '选一条流程' }, ...(flows ?? []).map((x) => ({ id: x.id, label: x.name }))]
+      : [{ id: '', label: '还没有已发布的流程' }];
+  }
+  return [{ id: '', label: f.empty ?? '选一个人' }, ...(personas ?? []).map((p) => ({ id: p.id, label: p.name }))];
+}
 
 
 
@@ -2677,17 +2894,7 @@ export function mountSchConfigCombos(action, cfg, repos, projects, personas, flo
     // ⚠️ 只找挂载点 `.sch-cfg`：`[data-cfg]` 也挂在输入框上，直接选会选错元素
     const mount = document.querySelector(`#schFields .sch-cfg[data-cfg="${f.key}"]`);
     if (!mount) continue;
-    const items =
-      f.type === 'repo'
-        ? [{ id: '', label: f.empty ?? '全部' }, ...(repos ?? []).map((r) => ({ id: r.fullName, label: r.fullName }))]
-        : f.type === 'project'
-          ? [{ id: '', label: f.empty ?? '自动' }, ...(projects ?? []).map((p) => ({ id: p.id, label: p.name }))]
-          : f.type === 'flow'
-            // 一条都没发布时给一行**说明**（禁用不住的下拉会像"坏了"）：去工作台 › 工作流里发布
-            ? (flows ?? []).length
-              ? [{ id: '', label: f.empty ?? '选一条流程' }, ...(flows ?? []).map((x) => ({ id: x.id, label: x.name }))]
-              : [{ id: '', label: '还没有已发布的流程' }]
-            : [{ id: '', label: f.empty ?? '选一个人' }, ...(personas ?? []).map((p) => ({ id: p.id, label: p.name }))];
+    const items = schComboItems(f, repos, projects, personas, flows);
     map.set(
       f.key,
       createCombo({
@@ -2699,6 +2906,99 @@ export function mountSchConfigCombos(action, cfg, repos, projects, personas, flo
         placeholder: f.type === 'repo' ? '找仓库…' : '搜…',
       }),
     );
+  }
+  return map;
+}
+
+
+
+/* ------------------------------------------------ 手机上：一行菜单 + 全屏选择页
+
+   2026-11-06 用户口径："做法下拉框改成选项按钮，交给谁做成一行菜单，右边加个箭头，
+   点击跳转到新页面进行选择（参考任务面板的新建任务）。管理项目也改成到新页面选择。"
+
+   为什么手机上不留下拉：弹窗本来就是满屏一张纸，浮层要么被底边切、要么躲在键盘后面；
+   而"选一个人 / 选一个项目"本来就是**一页清单**的事（任务面板的新建任务已经这么做了，
+   chat.mjs 的 mbPicker）。于是窄屏（≤600）把四个下拉换成「一行菜单 + ›」，
+   点开就推到那张全屏选择页，选完回填到行尾。
+
+   值仍然收在 Map<key, { value() }> 里 —— readSchConfig 一行都不用改。 */
+
+/** 手机上参数区的 HTML：下拉 → 一行菜单，其余（textarea / 单行 / 数字）照旧 */
+export function schConfigFieldsPhone(action, cfg) {
+  const left = [];
+  const right = [];
+  for (const f of action?.fields ?? []) {
+    const key = esc(f.key);
+    const v = cfg?.[f.key];
+    if (SCH_COMBO_TYPES.includes(f.type)) {
+      // 行尾的值先空着：拿到 items 才知道该写什么（mountSchConfigPicks 里填）
+      right.push(`<button type="button" class="sch-pick" data-pick="${key}">
+          <span class="sch-pick-k">${esc(f.label)}</span>
+          <span class="sch-pick-v is-off" data-pick-val="${key}"></span>
+          <i class="sch-pick-chev" aria-hidden="true"></i>
+        </button>`);
+      continue;
+    }
+    if (f.type === 'number') {
+      right.push(`<label>${esc(f.label)}</label>
+        <div class="dlg-box" style="max-width:none">
+          <input data-cfg="${key}" type="number" ${f.min != null ? `min="${f.min}"` : ''} ${f.max != null ? `max="${f.max}"` : ''} step="1" value="${esc(v ?? f.def ?? '')}" />
+          ${f.suffix ? `<span class="dlg-box-u">${esc(f.suffix)}</span>` : ''}
+        </div>`);
+      continue;
+    }
+    if (f.type === 'textarea') {
+      left.push(`<label>${esc(f.label)}</label>
+        <textarea data-cfg="${key}" rows="${Number(f.rows) || 3}" placeholder="${esc(f.placeholder ?? '')}">${esc(v ?? '')}</textarea>`);
+      continue;
+    }
+    left.push(`<label>${esc(f.label)}</label><input data-cfg="${key}" value="${esc(v ?? '')}" />`);
+  }
+  return { left: left.join(''), right: right.join('') };
+}
+
+/**
+ * 把「一行菜单」接上全屏选择页。
+ * `root` 是弹窗本身：行是在 `#schRightFields` 里现画的，得从弹窗这层找（`document` 也能找，
+ * 但弹窗关掉之前它可能同时存在两份，闭包里锁死本弹窗这一份更稳）。
+ */
+export function mountSchConfigPicks(action, cfg, repos, projects, personas, flows, root) {
+  const map = new Map();
+  for (const f of action?.fields ?? []) {
+    if (!SCH_COMBO_TYPES.includes(f.type)) continue;
+    const items = schComboItems(f, repos, projects, personas, flows);
+    const blank = items[0]?.label ?? '未选择';
+    let v = String(cfg?.[f.key] ?? '');
+    const row = root?.querySelector(`.sch-pick[data-pick="${f.key}"]`);
+    const valEl = row?.querySelector('.sch-pick-v');
+    const paint = () => {
+      if (!valEl) return;
+      const it = items.find((x) => x.id === v);
+      // 留空那一档也是"一个值"（全部 / 自动），只是颜色弱一档
+      valEl.textContent = it ? it.label : blank;
+      valEl.classList.toggle('is-off', !v);
+    };
+    paint();
+    if (row) {
+      row.onclick = () => {
+        mbOpenPicker({
+          // 弹窗是 top layer：选择页必须挂进它里面，否则整页被弹窗盖住（见 mbOpenPicker 注释）
+          host: root?.closest('dialog') ?? null,
+          title: f.label,
+          items,
+          value: v,
+          search: items.length > 12 || f.type === 'persona',
+          searchPlaceholder:
+            f.type === 'repo' ? '搜仓库…' : f.type === 'project' ? '搜项目名…' : f.type === 'flow' ? '搜流程名…' : '搜名字或岗位…',
+          onPick: (nv) => {
+            v = nv;
+            paint();
+          },
+        });
+      };
+    }
+    map.set(f.key, { value: () => v });
   }
   return map;
 }
@@ -2728,12 +3028,572 @@ export function readSchConfig(fields, combos) {
 
 
 
+/* ------------------------------------------------ 定时任务的新建 / 编辑（手机全屏页）
+
+   2026-11-06 用户："定时任务点击添加按钮，现在是打开抽屉操作的，改成跳转到一个新的页面。
+   对标任务面板的做法。"
+
+   于是窄屏（≤600）不再用 `showModal()` 的 dialog，改成与 tasks 的 `.kb-new` 同一套覆盖层：
+   滑入、压一格历史、‹ / 硬件返回退格。为什么不继续用 dialog：
+
+     · 视觉上 dialog 满屏也还是"弹层"——没有页头、没有转场，返回键的行为也和页面不一致；
+     · dialog 在浏览器 **top layer**，里面的选择页必须 appendChild 进弹窗（见 mbOpenPicker 的
+       `host`）；整页是一层普通覆盖层，选择页照旧挂在 body 上、靠 z-index 就压得住，少一层嵌套；
+     · 页头 / 页脚 / 滚动区直接复用 `.kb-new-*` 那套（顶栏玻璃底、页脚贴键盘），零新语汇。
+
+   历史铁律与 kb-new / mbPicker 一字不差：**先 history.back()，画面等 popstate 收**。
+   反过来先摘画面再 back()，那条 popstate 到时 class 已经没了，mobile.mjs 会把它当
+   "退到根页"再压一格回去 —— 用户要按两次返回才出得去列表。 */
+let schPageEl = null;
+let schPageClosing = false;   // 已经在退格（防连点退两格）
+let schPageAbandon = false;   // 用户确认放弃 → 下一次 popstate 直接收画面
+let schPageDirty = null;      // 草稿判据（开页时按当时的快照定），null = 没判据
+
+/** 草稿快照：名字 + 参数区里所有输入值（下拉是按钮行，不参与 —— 它选完就画在行尾） */
+function schSnapshot() {
+  const inputs = [...document.querySelectorAll('#schFields #schName, #schFields [data-cfg]')].map((el) => String(el.value ?? ''));
+  return inputs.join('\u0001');
+}
+
+/* ------------------------------------------------ 底部抽屉（选一小组值）
+
+   2026-11-06 用户："新建定时任务的定时器，不要使用下拉，改成使用抽屉。"
+
+   为什么在这张页上抽屉比下拉对：
+     · 重复方式、星期几、月份都是一组**短选项**（7 / 7 / 12 条），下拉只露出标题、
+       点开才看见有什么；抽屉一次把整组摊在拇指够得着的下半屏，选中的那条打勾；
+     · 下拉浮层是 absolute、长在按钮旁边，页面在键盘上方时它经常被底边切掉
+       （前一轮"看着混乱"里就有它一份）；抽屉是 fixed，永远贴底、永远完整。
+
+   历史与页面同一条铁律（见下）：**先 back()，画面等 popstate 收**，
+   并且页面的 popstate / Esc 都要给 `.sch-sheet-open` 放行 —— 否则按一次返回
+   会顺手把整张新建页也收掉（草稿全丢）。
+
+   抽屉只有**一个** DOM（一个历史格、一条关闭路径），内容按需换：
+     · 清单：一组短选项，点一条就收（重复方式 / 星期 / 月份）；
+     · 转轮：时:分两列滚轮 + 取消/完成（「时间」那一行，2026-11-06 见 schOpenTimeSheet）。 */
+let schSheetEl = null;
+let schSheetClosing = false;
+let schSheetOnPick = null;   // 清单：点一条后回调
+let schSheetOnOk = null;     // 转轮：按「完成」后回调
+
+function schEnsureSheet() {
+  if (schSheetEl) return schSheetEl;
+  const el = document.createElement('div');
+  el.className = 'sch-sheet';
+  el.id = 'schSheet';
+  el.hidden = true;
+  el.innerHTML = `
+    <div class="sch-sheet-mask" data-sch-sheet-close></div>
+    <div class="sch-sheet-panel" role="dialog" aria-modal="true" aria-labelledby="schSheetTitle">
+      <div class="sch-sheet-title" id="schSheetTitle"></div>
+      <div class="sch-sheet-body" id="schSheetBody"></div>
+    </div>`;
+  document.body.append(el);
+  el.addEventListener('click', (e) => {
+    // 「完成」先收画面再回调：回调里可能立刻 toast / 重画，留着浮层会挡在新画面顶上
+    if (e.target.closest('[data-sch-sheet-ok]')) {
+      const fn = schSheetOnOk;
+      schCloseSheet();
+      fn?.();
+      return;
+    }
+    if (e.target.closest('[data-sch-sheet-close]')) { schCloseSheet(); return; }
+    const row = e.target.closest('[data-sch-sheet-pick]');
+    if (!row) return;
+    const v = row.dataset.schSheetPick;
+    const fn = schSheetOnPick;
+    schCloseSheet();
+    fn?.(v);
+  });
+  schSheetEl = el;
+  return el;
+}
+
+/**
+ * 撑开抽屉：换标题、换内容，返回内容容器（转轮要往里装）。
+ * `onOk` 只给自带 `[data-sch-sheet-ok]` 的内容（转轮那种"选好再确认"），
+ * 清单是点一条就收，不需要它。
+ */
+function schShowSheet({ title, body, onOk = null }) {
+  const el = schEnsureSheet();
+  $('schSheetTitle').textContent = title;
+  $('schSheetBody').innerHTML = body;
+  schSheetOnPick = null;
+  schSheetOnOk = onOk;
+  schSheetClosing = false;
+  document.body.classList.add('sch-sheet-open');
+  el.hidden = false;
+  // 从 display:none 出来要**先量一次**再滑入：转轮要按像素把当前值滚到中线，
+  // 没有布局就量不到 scrollHeight（会停在 00:00）。
+  void el.offsetHeight;
+  el.classList.remove('in');
+  requestAnimationFrame(() => {
+    if (el.hidden) return;
+    el.classList.add('in');
+  });
+  if (!history.state?.schSheet) history.pushState({ schSheet: true }, '');
+  return $('schSheetBody');
+}
+
+/** 开抽屉（清单）：一组 `{ id, label }`，当前值打勾，选完回调 */
+function schOpenSheet({ title, items, value, onPick }) {
+  schShowSheet({
+    title,
+    body: `<div class="sch-sheet-list" role="listbox">${(items ?? [])
+      .map(
+        (it) => `<button type="button" class="sch-sheet-item${String(it.id) === String(value) ? ' on' : ''}"
+        role="option" aria-selected="${String(it.id) === String(value)}"
+        data-sch-sheet-pick="${esc(String(it.id))}">
+        <span class="sch-sheet-lab">${esc(it.label)}</span><i class="sch-sheet-check" aria-hidden="true"></i>
+      </button>`,
+      )
+      .join('')}</div>
+      <button type="button" class="sch-sheet-cancel" data-sch-sheet-close>取消</button>`,
+  });
+  schSheetOnPick = onPick ?? null;
+}
+
+/* ------------------------------------------------ 时间转轮（时 : 分）
+
+   2026-11-06 用户："每天时，时间的选择方式是系统自带的，不好看。"
+
+   为什么不是修原生控件：`<input type="time">` 在 Android 上弹的是**系统时钟盘** ——
+   圆角 / 字号 / 配色 / 遮罩全由系统定，跟这张工作纸是两套皮；它还压在页脚主按钮上，
+   "取消 / 完成"根本不在这张纸里。抽屉式转轮是同一套语汇：贴底、整页宽、中线上一条
+   高亮槽，取消 / 完成就在拇指底下。
+
+   值仍是 `HH:MM`（与原生 input 的 value 同格式），出口是 `onPick(v)`。 */
+const SCH_WHEEL_I = 40;   // 一格高（px）。⚠️ 必须与 mobile.css 的 --sch-wheel-i 同值
+
+/**
+ * 一列滚轮：滚停在哪一格就是哪个值。
+ * `start` 是格号（不是值），`fmt(i)` 给文案。
+ */
+function schWheelCol(el, count, start, fmt) {
+  el.innerHTML = Array.from({ length: count }, (_, i) =>
+    `<button type="button" class="sch-wheel-i" data-v="${i}" role="option">${fmt(i)}</button>`).join('');
+  let idx = Math.max(0, Math.min(count - 1, Number(start) || 0));
+  const items = [...el.children];
+  const paint = () =>
+    items.forEach((it, i) => {
+      it.classList.toggle('on', i === idx);
+      it.setAttribute('aria-selected', i === idx ? 'true' : 'false');
+    });
+  const place = (smooth) => {
+    const top = idx * SCH_WHEEL_I;
+    if (smooth && typeof el.scrollTo === 'function') el.scrollTo({ top, behavior: 'smooth' });
+    else el.scrollTop = top;
+    paint();
+  };
+  // 滚动里每帧算一次"最靠近中线的那格"：列表一屏就被手指拖过去，不必等 scrollend
+  let raf = 0;
+  el.addEventListener('scroll', () => {
+    if (raf) return;
+    raf = requestAnimationFrame(() => {
+      raf = 0;
+      const n = Math.max(0, Math.min(count - 1, Math.round(el.scrollTop / SCH_WHEEL_I)));
+      if (n === idx) return;
+      idx = n;
+      paint();
+    });
+  }, { passive: true });
+  // 点某一格 = 滚到那一格（看得见的值都能直接点，不必拖到它）
+  el.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-v]');
+    if (!b) return;
+    idx = Number(b.dataset.v);
+    place(true);
+  });
+  return { jump: () => place(false), value: () => idx };
+}
+
+/** 开抽屉（时间转轮）：value = 'HH:MM'，确认后 onPick('HH:MM') */
+function schOpenTimeSheet({ value, onPick }) {
+  const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(String(value ?? ''));
+  const pad = (n) => String(n).padStart(2, '0');
+  const hh = m ? Number(m[1]) : 9;
+  const mm = m ? Number(m[2]) : 0;
+  let hour = null;
+  let min = null;
+  const body = schShowSheet({
+    title: '时间',
+    body: `<div class="sch-time">
+        <div class="sch-time-band" aria-hidden="true"></div>
+        <div class="sch-time-col" id="schHourCol" role="listbox" aria-label="小时"></div>
+        <span class="sch-time-colon" aria-hidden="true">:</span>
+        <div class="sch-time-col" id="schMinCol" role="listbox" aria-label="分钟"></div>
+      </div>
+      <div class="sch-sheet-foot">
+        <button type="button" class="sch-sheet-btn" data-sch-sheet-close>取消</button>
+        <button type="button" class="sch-sheet-btn is-primary" data-sch-sheet-ok>完成</button>
+      </div>`,
+    onOk: () => onPick?.(`${pad(hour.value())}:${pad(min.value())}`),
+  });
+  hour = schWheelCol(body.querySelector('#schHourCol'), 24, hh, (i) => pad(i));
+  min = schWheelCol(body.querySelector('#schMinCol'), 60, mm, (i) => pad(i));
+  // 只在开页这一刻跳位（instant）：带平滑滚动会在抽屉滑入的同时动，看着像没对齐
+  hour.jump();
+  min.jump();
+}
+
+/* ------------------------------------------------ 日期抽屉（单次：选哪一天）
+
+   2026-11-06 用户："重复方式为单次时，时间也不好看，你重新设计一下，跟其他的统一。"
+
+   「单次」原来是**一个**自建日历浮层：日历格子 + 两个原生 `<select>` 选时分。
+   两个病：① 那两个 select 在 Android 上弹系统滚轮，跟刚做的转轮是两套；
+   ② 浮层长在行下面，手机上一高就被底边切。
+
+   拆成两行以后，日期这半就是**一页月历**：抽屉贴底、整月摊开、点某一天即收
+   （与「星期几 / 几月」那种"点一条就收"同一个动作），时分交给另一行的时间转轮。
+   值出口是 `onPick('YYYY-MM-DD')`。 */
+function schTodayStr() {
+  const n = new Date();
+  const p = (x) => String(x).padStart(2, '0');
+  return `${n.getFullYear()}-${p(n.getMonth() + 1)}-${p(n.getDate())}`;
+}
+
+/** 'YYYY-MM-DD' → 「11月7日 周五」（不是今年才带年份：跨年任务一眼看得出年份） */
+function schFmtDate(s) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s ?? ''));
+  if (!m) return '选日期';
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  const wd = '日一二三四五六'[d.getDay()];
+  const year = d.getFullYear() === new Date().getFullYear() ? '' : `${d.getFullYear()}年`;
+  return `${year}${d.getMonth() + 1}月${d.getDate()}日 周${wd}`;
+}
+
+/** 开抽屉（日期）：value = 'YYYY-MM-DD'，点某一天即回填 */
+function schOpenDateSheet({ value, onPick }) {
+  const pad = (n) => String(n).padStart(2, '0');
+  const m0 = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value ?? ''));
+  const picked = m0 ? { y: Number(m0[1]), m: Number(m0[2]), d: Number(m0[3]) } : null;
+  const fallback = picked ?? (() => {
+    const n = new Date();
+    return { y: n.getFullYear(), m: n.getMonth() + 1, d: n.getDate() };
+  })();
+  // 翻页不等于改值：看的是哪个月，跟已选的那一天分开记
+  let view = { y: fallback.y, m: fallback.m };
+  const body = schShowSheet({
+    title: '日期',
+    body: `<div class="sch-date">
+        <div class="sch-date-head">
+          <button type="button" class="sch-date-nav" data-dnav="-1" aria-label="上个月"><i></i></button>
+          <span class="sch-date-title" id="schDateTitle"></span>
+          <button type="button" class="sch-date-nav is-next" data-dnav="1" aria-label="下个月"><i></i></button>
+        </div>
+        <div class="sch-date-week">${'一二三四五六日'.split('').map((c) => `<span>${c}</span>`).join('')}</div>
+        <div class="sch-date-grid" id="schDateGrid"></div>
+      </div>
+      <button type="button" class="sch-sheet-cancel" data-sch-sheet-close>取消</button>`,
+  });
+  const paint = () => {
+    $('schDateTitle').textContent = `${view.y} 年 ${view.m} 月`;
+    const lead = (new Date(view.y, view.m - 1, 1).getDay() + 6) % 7;   // 表头周一起头（与日历浮层一致）
+    const days = new Date(view.y, view.m, 0).getDate();
+    const now = schTodayStr();
+    const cells = [];
+    // 前导空位也占格（.is-out），否则 1 号会跑到别的星期列上
+    for (let i = 0; i < lead; i += 1) cells.push('<span class="sch-date-cell is-out"></span>');
+    for (let d = 1; d <= days; d += 1) {
+      const iso = `${view.y}-${pad(view.m)}-${pad(d)}`;
+      const on = picked && picked.y === view.y && picked.m === view.m && picked.d === d;
+      const cls = `sch-date-cell${on ? ' on' : ''}${iso === now ? ' is-today' : ''}`;
+      cells.push(`<button type="button" class="${cls}" data-sch-sheet-pick="${iso}"
+        aria-pressed="${Boolean(on)}" aria-label="${view.y}年${view.m}月${d}日 星期${'日一二三四五六'[new Date(view.y, view.m - 1, d).getDay()]}">
+        <span>${d}</span></button>`);
+    }
+    $('schDateGrid').innerHTML = cells.join('');
+  };
+  paint();
+  body.querySelectorAll('[data-dnav]').forEach((b) => {
+    b.onclick = () => {
+      const d = new Date(view.y, view.m - 1 + Number(b.dataset.dnav), 1); // 越年/越月交给 Date 自己进位
+      view = { y: d.getFullYear(), m: d.getMonth() + 1 };
+      paint();
+    };
+  });
+  // 点某一天走抽屉那条公共出口（[data-sch-sheet-pick] → 收抽屉 → 回调），跟清单同一条路
+  schSheetOnPick = (nv) => onPick?.(nv);
+}
+
+/** 收抽屉。`alreadyPopped` = 这格历史已经被浏览器退掉了（popstate 进来的） */
+function schCloseSheet(alreadyPopped = false) {
+  const el = schSheetEl;
+  if (!el || el.hidden) return;
+  if (!alreadyPopped && history.state?.schSheet) {
+    if (schSheetClosing) return;
+    schSheetClosing = true;
+    history.back();
+    return;
+  }
+  schSheetClosing = false;
+  schSheetOnPick = null;
+  schSheetOnOk = null;
+  document.body.classList.remove('sch-sheet-open');
+  el.classList.remove('in');
+  el.hidden = true;
+}
+
+/** 首次开页才建 DOM（桌面永远走不到这里） */
+function schEnsurePage() {
+  if (schPageEl) return schPageEl;
+  const el = document.createElement('div');
+  // 外框与顶栏 / 页脚全借 `.kb-new` 那套（同一种"从右滑进来的工作纸"）
+  el.className = 'kb-new sch-page';
+  el.id = 'schPage';
+  el.hidden = true;
+  el.innerHTML = `
+    <div class="detail-head kb-new-bar">
+      <button type="button" class="kb-l-navbtn back" data-sch-page-back aria-label="返回">${KB_ICON_BACK}</button>
+      <h1 class="kb-new-bartitle" id="schPageTitle">新建定时任务</h1>
+      <button type="button" class="kb-new-navlink" id="schPageAct" hidden></button>
+    </div>
+    <div class="kb-new-body" id="schPageBody"></div>
+    <div class="kb-new-foot"><button type="button" class="kb-new-submit" id="schOk">创建</button></div>`;
+  document.body.append(el);
+  el.querySelector('[data-sch-page-back]').addEventListener('click', () => { schTryClose(); });
+  schPageEl = el;
+  return el;
+}
+
+/** 开页：换标题 / 塞表单 / 滑入 / 压一格历史
+ *  `actLabel` + `onAct`：右上角那颗文字按钮（详情页的「编辑」）；表单页不传 = 隐藏
+ */
+function schOpenPage({ title, bodyHtml, submitLabel, actLabel, onAct }) {
+  const el = schEnsurePage();
+  $('schPageTitle').textContent = title;
+  $('schPageBody').innerHTML = `<form id="schForm">${bodyHtml}</form>`;
+  const ok = $('schOk');
+  /* 详情页不传 submitLabel = 页脚不放主按钮（动作收进右上角 ⋯ 菜单，2026-11-06 用户口径） */
+  el.querySelector('.kb-new-foot').style.display = submitLabel ? '' : 'none';
+  ok.textContent = submitLabel;
+  ok.disabled = false;
+  ok.removeAttribute('aria-disabled');
+  const act = $('schPageAct');
+  const bar = el.querySelector('.kb-new-bar');
+  if (actLabel) {
+    act.textContent = actLabel;
+    act.hidden = false;
+    act.onclick = (e) => onAct?.(e);   // 详情页的 ⋯ 菜单要按事件.target 找锚点按钮定位
+    bar.classList.add('has-act');
+  } else {
+    act.hidden = true;
+    act.textContent = '';
+    act.onclick = null;
+    bar.classList.remove('has-act');
+  }
+  schPageAbandon = false;
+  schPageClosing = false;
+  document.body.classList.add('sch-page-open');
+  el.hidden = false;
+  // 滑入分两帧：隐藏 → 可见那一帧浏览器会跳过 transition（与 #mbPicker / .kb-new 同因）
+  el.classList.remove('kb-new-in');
+  requestAnimationFrame(() => {
+    if (el.hidden) return;   // 这一帧里又被收起来了（连点返回）—— 别把它滑回来
+    el.classList.add('kb-new-in');
+  });
+  if (!history.state?.schPage) history.pushState({ schPage: true }, '');
+  return el;
+}
+
+/** ‹ / 硬件返回 / Esc 的公共出口：填过东西才问一句，空表直接退 */
+async function schTryClose() {
+  closeAddMenu();               // ⋯ 下拉还开着就一起收 —— 页面退了别留一张浮在原地的菜单
+  if (!schPageEl || schPageEl.hidden || schPageClosing) return;
+  // 抽屉开着时这一下是收抽屉，不是退页（抽屉自己压了一格历史）
+  if (document.body.classList.contains('sch-sheet-open')) { schCloseSheet(); return; }
+  const dirty = typeof schPageDirty === 'function' ? schPageDirty() : false;
+  if (!dirty) { schClosePage(); return; }
+  const ok = await confirmDo('写过的东西不会保留。', { title: '放弃这次填写？', ok: '放弃' });
+  if (!ok) return;            // 「继续填写」/ 点蒙层：留在原页，已填的一个不丢
+  schPageAbandon = true;
+  schClosePage();
+}
+
+/**
+ * 收页。`alreadyPopped` = 这格历史已经被浏览器退掉了（popstate 进来的），只收画面不再退格。
+ * ⚠️ 顺序：**先 back()，画面留到 popstate 再收**（见本节顶上的历史铁律）。
+ */
+function schClosePage(alreadyPopped = false) {
+  const el = schPageEl;
+  if (!el || el.hidden) return;
+  if (!alreadyPopped && history.state?.schPage) {
+    if (schPageClosing) return;
+    schPageClosing = true;
+    history.back();
+    return;
+  }
+  schPageClosing = false;
+  schPageAbandon = false;
+  schPageDirty = null;
+  document.body.classList.remove('sch-page-open');
+  el.classList.remove('kb-new-in');
+  el.hidden = true;
+  $('schPageBody').innerHTML = '';   // 表单连同监听一起作废，下次开页重画
+  // 抽屉 / 选择页还开着（保存成功时理论上压不到，防御一下）→ 一起收，别留空层盖住列表
+  if (document.body.classList.contains('sch-sheet-open')) schCloseSheet(true);
+  if (document.body.classList.contains('mb-picker-open')) mbClosePicker();
+}
+
+/*
+ * 返回手势 / 返回键：这一格是这张页自己压的。三条与 kb-new 完全同因：
+ *   ① 收画面推到下一拍 —— mobile.mjs 的 popstate 先注册，当场摘 class 会让它把这次返回
+ *      当成"退到根页"再压一格回去；
+ *   ② 有草稿：浏览器已经把画面退走了 —— 先补一格把画面钉住，再问要不要放弃；
+ *   ③ 选择页盖在上面时这一格是**它**的（chat.mjs 自己收），这里一律放行。
+ */
+window.addEventListener('popstate', () => {
+  if (document.body.classList.contains('mb-picker-open')) return;
+  // 底部抽屉压在自己上面：那一格是它的（下面那条监听收）
+  if (document.body.classList.contains('sch-sheet-open')) return;
+  if (!document.body.classList.contains('sch-page-open')) return;
+  setTimeout(() => {
+    if (!document.body.classList.contains('sch-page-open')) return;
+    const dirty = typeof schPageDirty === 'function' ? schPageDirty() : false;
+    if (schPageAbandon || !dirty) { schClosePage(true); return; }
+    if (!history.state?.schPage) history.pushState({ schPage: true }, '');
+    schPageClosing = false;
+    schTryClose();
+  }, 0);
+});
+
+// 抽屉自己那一格：退回来了 = 收抽屉（与 tc-sheet / mbPicker 同一套时序）
+window.addEventListener('popstate', () => {
+  if (!document.body.classList.contains('sch-sheet-open')) return;
+  setTimeout(() => {
+    if (document.body.classList.contains('sch-sheet-open')) schCloseSheet(true);
+  }, 0);
+});
+
+// Esc：选择页 / 抽屉 / 确认框开着时让它们自己吃（外接键盘与桌面缩窗口才有这一路）
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  if (!document.body.classList.contains('sch-page-open')) return;
+  if (document.body.classList.contains('mb-picker-open')) return;
+  if (document.querySelector('dialog[open]')) return;
+  e.preventDefault();
+  if (document.body.classList.contains('sch-sheet-open')) { schCloseSheet(); return; }
+  schTryClose();
+});
+
+/**
+ * 手机：任务详情页（2026-11-06 用户拍板"点进去打开详情页进行操作"）。
+ *
+ * 列表回答"有哪些、多久跑、上次成没成"，详情回答"它怎么配的、怎么动它" —— iOS 里
+ * "列表 → 详情"的默认分工。动作（编辑 / 删除 / 立即执行）收在右上角 ⋯ 的**下拉菜单**里
+ * （2026-11-06 用户两轮口径：先"显示三个点，点击显示：编辑、删除、立即执行"，随后
+ * "不要使用抽屉，在上面显示选项卡，参考通讯录里的那个添加按钮"—— 于是从 sch-sheet 抽屉
+ * 换成通讯录「＋」那套 openAddMenu 下拉）。顺序照用户口径，删除虽在中间但红字足以认出；
+ * 页脚主按钮与红字行随之撤掉，详情页回归纯信息。
+ *
+ * 外壳复用 `.sch-page`（新建/编辑那张纸）：同一套历史格、返回键、滑入动画。所以在详情页
+ * 点「编辑」不用"先收页再开页" —— scheduleDialog 会**复用同一个元素**重画成表单，
+ * 历史里仍是同一格（schOpenPage 见 state 已存在就不再 push），返回键不会连退两层。
+ */
+export function schOpenJobDetail(job, meta = {}) {
+  const actions = meta.actions ?? [];
+  const whenStr = (iso) => String(iso).replace('T', ' ').slice(0, 16);
+
+  const bodyOf = (j, running = false) => {
+    const lead = String(j.lead ?? '').trim();
+    const ok = j.lastStatus === 'ok';
+    const res = j.lastStatus
+      ? `${ok ? '<span class="sch-dt-ok">✓</span>' : '<span class="sch-dt-bad">✗</span>'} ${esc((ok ? j.lastSummary : j.lastError) || (ok ? '完成' : '失败了（没有原因）'))}`
+      : '<span class="dim">还没跑过</span>';
+    return `
+      <div class="sch-dt">
+        <div class="sch-dt-head">
+          <span class="pill">${esc(actions.find((a) => a.id === j.action)?.label ?? j.action)}</span>
+          ${running ? '<span class="pill" style="color:var(--warn)">在跑</span>' : ''}
+        </div>
+        ${
+          lead
+            ? `<div class="sch-dt-card"><div class="sch-dt-block">
+                 <div class="sch-dt-k">要做什么</div>
+                 <div class="sch-dt-txt">${esc(lead)}</div>
+               </div></div>`
+            : ''
+        }
+        <div class="sch-dt-card">
+          <div class="sch-dt-row"><span class="sch-dt-k">重复</span><span class="sch-dt-v">${esc(j.text ?? `每 ${j.everyMinutes} 分钟`)}</span></div>
+          <div class="sch-dt-row"><span class="sch-dt-k">状态</span><span class="sch-dt-v">${j.enabled ? '已启用' : '已停用'}</span></div>
+          <div class="sch-dt-row"><span class="sch-dt-k">上次执行</span><span class="sch-dt-v">${j.lastRunAt ? esc(whenStr(j.lastRunAt)) : '还没跑过'}</span></div>
+        </div>
+        <div class="sch-dt-card">
+          <div class="sch-dt-block"><div class="sch-dt-k">上次结果</div><div class="sch-dt-txt">${res}</div></div>
+        </div>
+      </div>`;
+  };
+
+  const paint = (j, running = false) => {
+    $('schPageBody').innerHTML = bodyOf(j, running);
+  };
+
+  /** 立即执行：跑完重取一份任务只重画详情，列表在背后一起刷 */
+  const runNow = async () => {
+    paint(job, true);
+    try {
+      const r = await api(`/api/schedules/${encodeURIComponent(job.id)}/run`, { method: 'POST' });
+      const fresh = (await api('/api/schedules').catch(() => null))?.jobs?.find((x) => x.id === job.id) ?? job;
+      paint(fresh);
+      await renderSchedules();
+      toast(r.ok ? `跑完了：${r.summary ?? '完成'}` : `这次没跑成：${r.error ?? '没有原因'}`);
+    } catch (e) {
+      paint(job);
+      toast(e.message, 'error');
+    }
+  };
+
+  const deleteJob = async (j) => {
+    const yes = await confirmDo('删掉之后不会再跑，历史记录也一起没了。', { title: '删除这个任务？', ok: '删除' });
+    if (!yes) return;
+    try {
+      await api(`/api/schedules/${encodeURIComponent(j.id)}`, { method: 'DELETE' });
+      schClosePage();          // 先退格（popstate 收画面），再刷列表
+      await renderSchedules();
+      toast('已删除');
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  };
+
+  /**
+   * ⋯ 菜单：**下拉**，从按钮正下方长出来（2026-11-06 用户："不要使用抽屉，在上面显示选项卡，
+   * 参考通讯录里的那个添加按钮打选项卡"）。复用通讯录「＋」那套 openAddMenu —— 挂 body +
+   * position:fixed 按视口坐标摆，绕开玻璃导航栏的合成层裁剪（那次的实机报障，别再踩）。
+   * 顺序照用户口径：编辑 / 删除 / 立即执行，删除红字。再点一次 ⋯ 或点菜单外都收起。
+   */
+  const openMenu = (e) => {
+    if (addMenu) { closeAddMenu(); return; }   // 再点一次 ⋯ = 收起（toggle，不是重开）
+    const m = openAddMenu(
+      [
+        { label: '编辑', icon: ICON_EDIT, run: () => scheduleDialog(job) },
+        { label: '删除', icon: ICON_TRASH, danger: true, run: () => deleteJob(job) },
+        { label: '立即执行', icon: ICON_PLAY, run: () => runNow() },
+      ],
+      e?.currentTarget ?? $('schPageAct'),
+      { below: true, outsideClose: true, width: 184 },   // 只有三条短菜单，268 太空（2026-11-06 用户："卡有点宽"）
+    );
+    /* 详情页是 z-index 90 的整页覆盖层（.kb-new 那套），菜单要盖在它上面 */
+    if (m) m.style.zIndex = 96;
+  };
+
+  schOpenPage({ title: job.name, bodyHtml: bodyOf(job), actLabel: '⋯', onAct: openMenu });
+  // 详情页没有草稿：随便退
+  schPageDirty = () => false;
+}
+
 /**
  * 新建 / 编辑一个定时任务。
  *
- * **这个弹窗不认识任何具体动作**：动作清单、名字默认值、参数区全部来自注册表的声明。
- * 所以 PR 巡检的「仓库 / 项目」只是它自己的两个参数，不是弹窗里写死的下拉；
+ * **这个表单不认识任何具体动作**：动作清单、名字默认值、参数区全部来自注册表的声明。
+ * 所以 PR 巡检的「仓库 / 项目」只是它自己的两个参数，不是写死的下拉；
  * 备份动作只有「保留份数」，换个动作这两行就没了。
+ *
+ * 两种外壳（2026-11-06）：窄屏 = 整页 `.sch-page`（上面那套），桌面 = 原来的 `.sch-dlg` 弹窗。
+ * 表单内容与接线只有一份，差别只在"装在哪、怎么关"。
  */
 export async function scheduleDialog(job) {
   let meta;
@@ -2776,23 +3636,69 @@ export async function scheduleDialog(job) {
     { id: 'yearly', label: '每年' },
   ];
 
-  const dlg = document.createElement('dialog');
-  dlg.className = 'sch-dlg';
   /*
-   * 布局照「元舱的新建自动化」（2026-10-17 用户截图要求）：**左边输入、右边配置**。
-   *   · 左 = 名字 + 动作声明的输入区（textarea/text），textarea 撑满高度；
-   *   · 右 = 做法（换动作）+ 动作声明的下拉/数字 + 重复方式 + 启用。
-   * 动作没声明输入区（PR 巡检 / 备份）时左边就只有名字，弹窗自然变矮。
+   * 两种形态（2026-11-06，用户两轮口径："做法下拉框改成选项按钮，交给谁做成一行菜单，
+   * 右边加个箭头，点进去选（参考任务面板的新建任务）；管理项目也改成到新页面选择"，
+   * 随后："点击添加按钮，现在是打开抽屉操作的，改成跳转到一个新的页面。对标任务面板的做法"）：
+   *
+   *   · 桌面（>600）照旧「左输入、右配置」两栏弹窗（2026-10-17 用户截图要求）：
+   *     左 = 名字 + 输入区（textarea 撑满），右 = 做法下拉（.combo）+ 参数 + 重复 + 启用；
+   *   · 手机（≤600）**整页**（`.sch-page`，与任务面板的新建任务是同一种工作纸）：
+   *     竖着排，做法是一排选项按钮（就 4 种，下拉纯属多一次点击），
+   *     选人 / 选项目 / 选仓库 / 选流程是「一行菜单 + ›」，点开推到全屏选择页。
+   *     下拉浮层在满屏纸里没有活路：要么被底边切，要么躲在键盘后面。
    */
-  const f0 = schConfigFields(curAction, cfg);
-  dlg.innerHTML = `
+  const phone = window.matchMedia('(max-width: 600px)').matches;
+  const fieldsOf = (action) => (phone ? schConfigFieldsPhone(action, cfg) : schConfigFields(action, cfg));
+  const nameInput = `<input id="schName" value="${esc(job?.name ?? curAction?.defaultName ?? '定时任务')}" placeholder="给它起个名字" />`;
+  const repeatBodyOf = (mode) => (phone ? schRepeatBodyPhone(mode, job, min) : schRepeatBody(mode, job, min));
+  /* 重复区：桌面是「重复」下拉 + 右侧参数框；手机是一行菜单（点开底部抽屉选方式） */
+  const repeatRow = phone
+    ? `
+          <button type="button" class="sch-pick" id="schRepeatRow" aria-haspopup="dialog">
+            <span class="sch-pick-k">重复</span>
+            <span class="sch-pick-v" id="schRepeatVal">${esc(REPEAT_ITEMS.find((x) => x.id === repeat0)?.label ?? '间隔')}</span>
+            <i class="sch-pick-chev" aria-hidden="true"></i>
+          </button>
+          <div id="schRepeatBody">${repeatBodyOf(repeat0)}</div>
+          <label class="check sch-enable">
+            <input id="schEnabled" type="checkbox" ${job ? (job.enabled ? 'checked' : '') : 'checked'} />
+            <span>启用（到点就跑）</span>
+          </label>`
+    : `
+          <div class="dlg-row">
+            <span class="dlg-box"><span class="dlg-box-k">重复：</span><span class="dlg-combo" id="schRepeatMount"></span></span>
+            <span class="dlg-row-rest" id="schRepeatBody">${repeatBodyOf(repeat0)}</span>
+          </div>
+          <label class="check sch-enable">
+            <input id="schEnabled" type="checkbox" ${job ? (job.enabled ? 'checked' : '') : 'checked'} />
+            <span>启用（到点就跑）</span>
+          </label>`;
+  const actions = `
+      <div class="dlg-actions">
+        <span class="dim" style="flex:1;font-size:12px;align-self:center">保存后就生效，到点自动跑；列表里可以随时停用、改时间或改内容。</span>
+        <button type="button" value="cancel">取消</button>
+        <button class="primary" id="schOk" value="ok">${job ? '保存' : '创建'}</button>
+      </div>`;
+  const f0 = fieldsOf(curAction);
+  /* 手机：表单内容只到「启用」为止 —— 标题在页头，主按钮在页脚（贴键盘上沿） */
+  const phoneBody = `
+      <div class="sch-m" id="schFields">
+        <!-- 做法：4 种，排成一排按钮。换一种做法，下面的参数跟着换 -->
+        <div class="sch-seg" id="schActionSeg" role="radiogroup" aria-label="做法"></div>
+        <label for="schName">名字</label>
+        ${nameInput}
+        <div id="schLeftFields">${f0.left}</div>
+        <div id="schRightFields">${f0.right}</div>
+        ${repeatRow}`;
+  const desktopForm = `
     <form method="dialog">
       <b>${job ? '编辑定时任务' : '新建定时任务'}</b>
       <div class="dim" id="schActionHint" style="font-size:12px;margin:2px 0 2px">${esc(curAction?.hint ?? '')}</div>
       <div class="sch-cols" id="schFields">
         <div class="sch-left">
           <label>名字</label>
-          <input id="schName" value="${esc(job?.name ?? curAction?.defaultName ?? '定时任务')}" placeholder="给它起个名字" />
+          ${nameInput}
           <div class="sch-left-fields" id="schLeftFields">${f0.left}</div>
         </div>
         <div class="sch-right" id="schRight">
@@ -2801,68 +3707,132 @@ export async function scheduleDialog(job) {
           <label>做法</label>
           <span id="schActionMount" title="换一种做法"></span>
           <div id="schRightFields">${f0.right}</div>
-          <div class="dlg-row">
-            <span class="dlg-box"><span class="dlg-box-k">重复：</span><span class="dlg-combo" id="schRepeatMount"></span></span>
-            <span class="dlg-row-rest" id="schRepeatBody">${schRepeatBody(repeat0, job, min)}</span>
-          </div>
-          <label class="check sch-enable">
-            <input id="schEnabled" type="checkbox" ${job ? (job.enabled ? 'checked' : '') : 'checked'} />
-            <span>启用（到点就跑）</span>
-          </label>
+          ${repeatRow}
         </div>
       </div>
-      <div class="dlg-actions">
-        <span class="dim" style="flex:1;font-size:12px;align-self:center">保存后就生效，到点自动跑；列表里可以随时停用、改时间或改内容。</span>
-        <button type="button" value="cancel">取消</button>
-        <button class="primary" id="schOk" value="ok">${job ? '保存' : '创建'}</button>
-      </div>
+      ${actions}
     </form>`;
-  document.body.append(dlg);
-  wireDialogHead(dlg.querySelector('form'));
-  dlg.addEventListener('close', () => dlg.remove());
 
-  // 参数区里的下拉（仓库 / 项目 / 选人 / 流程）—— 公共组件，值存在 combo 里，读值靠这张表
-  let cfgCombos = mountSchConfigCombos(curAction, cfg, repos, projects, S.personas ?? [], flows);
-  let repeatCombos = mountSchRepeatCombos(repeat0, job);
+  /* 外壳只有两种：整页 / 弹窗。里面的表单、接线、读值全部共用一份。 */
+  let dlg = null;
+  let root;
+  let closeForm;
+  if (phone) {
+    root = schOpenPage({
+      title: job ? '编辑定时任务' : '新建定时任务',
+      bodyHtml: phoneBody,
+      submitLabel: job ? '保存' : '创建',
+    });
+    // 草稿判据按开页时的快照定：名字和参数区一个字都没动过，返回就别问
+    const snap = schSnapshot();
+    schPageDirty = () => schSnapshot() !== snap;
+    closeForm = () => schClosePage();
+  } else {
+    dlg = document.createElement('dialog');
+    dlg.className = 'sch-dlg';
+    dlg.innerHTML = desktopForm;
+    document.body.append(dlg);
+    wireDialogHead(dlg.querySelector('form'));
+    dlg.addEventListener('close', () => dlg.remove());
+    root = dlg;
+    closeForm = () => dlg.close();
+  }
 
-  // 「方式」：换动作 → 参数跟着换
-  const actionCombo = createCombo({
-    mount: $('schActionMount'),
-    items: (meta.actions ?? []).map((a) => ({ id: a.id, label: a.label })),
-    value: curAction?.id ?? '',
-    onChange: (id) => {
-      const prevDefault = curAction?.defaultName;
-      curAction = (meta.actions ?? []).find((a) => a.id === id) ?? null;
-      $('schActionHint').textContent = curAction?.hint ?? '';
-      // 名字还是上一个动作的默认名（人没改过）→ 跟着换；改过就尊重人
-      const nameEl = $('schName');
-      if (!nameEl.value.trim() || nameEl.value.trim() === prevDefault) nameEl.value = curAction?.defaultName ?? '';
-      const f1 = schConfigFields(curAction, cfg);
-      $('schLeftFields').innerHTML = f1.left;
-      $('schRightFields').innerHTML = f1.right;
-      cfgCombos = mountSchConfigCombos(curAction, cfg, repos, projects, S.personas ?? [], flows);
-    },
-  });
-  actionCombo.el.classList.add('sch-mode');
+  // 参数区里的选择（仓库 / 项目 / 选人 / 流程）：桌面是 .combo 下拉，手机是一行菜单 + 选择页。
+  // 两边都收在 Map<key, {value()}> 里 —— 读值那段（readSchConfig）不知道这一层差别。
+  const mountFields = (action) =>
+    phone
+      ? mountSchConfigPicks(action, cfg, repos, projects, S.personas ?? [], flows, root)
+      : mountSchConfigCombos(action, cfg, repos, projects, S.personas ?? [], flows);
+  let cfgCombos = mountFields(curAction);
+  let repeatCombos = phone ? mountSchRepeatPicks(repeat0, job) : mountSchRepeatCombos(repeat0, job);
 
-  // 「重复」：换方式 → 右边那块字段跟着换（间隔给分钟数，单次给日期时间，每天给几点…）
-  const repeatCombo = createCombo({
-    mount: $('schRepeatMount'),
-    items: REPEAT_ITEMS,
-    value: repeat0,
-    onChange: (mode) => {
-      $('schRepeatBody').innerHTML = schRepeatBody(mode, job, min);
-      repeatCombos = mountSchRepeatCombos(mode, job);
-    },
-  });
-  // 这一排在弹窗最下面，**往上弹**，否则开出来就被窗口底边切掉
-  repeatCombo.el.classList.add('up');
+  /** 换动作 → 参数跟着换（桌面下拉与手机选项按钮共用这一份，别写两遍） */
+  const applyAction = (id) => {
+    const prevDefault = curAction?.defaultName;
+    curAction = (meta.actions ?? []).find((a) => a.id === id) ?? null;
+    /* hint 只剩桌面弹窗这一个节点（2026-11-06 用户："去掉文案"，手机整页不放说明） */
+    const hintEl = $('schActionHint');
+    if (hintEl) hintEl.textContent = curAction?.hint ?? '';
+    // 名字还是上一个动作的默认名（人没改过）→ 跟着换；改过就尊重人
+    const nameEl = $('schName');
+    if (!nameEl.value.trim() || nameEl.value.trim() === prevDefault) nameEl.value = curAction?.defaultName ?? '';
+    const f1 = fieldsOf(curAction);
+    $('schLeftFields').innerHTML = f1.left;
+    $('schRightFields').innerHTML = f1.right;
+    cfgCombos = mountFields(curAction);
+  };
+
+  // 「做法」：桌面是下拉；手机是一排选项按钮（当前那颗 .on）
+  const actionItems = (meta.actions ?? []).map((a) => ({ id: a.id, label: a.label }));
+  let actionCombo = null;
+  if (phone) {
+    const seg = $('schActionSeg');
+    const paintSeg = () => {
+      seg.innerHTML = actionItems
+        .map(
+          (a) => `<button type="button" class="sch-seg-btn${a.id === curAction?.id ? ' on' : ''}"
+            role="radio" aria-checked="${a.id === curAction?.id}" data-act="${esc(a.id)}">${esc(a.label)}</button>`,
+        )
+        .join('');
+    };
+    paintSeg();
+    seg.onclick = (e) => {
+      const btn = e.target.closest('[data-act]');
+      if (!btn || btn.dataset.act === curAction?.id) return;
+      applyAction(btn.dataset.act);
+      paintSeg();   // 重画是因为 applyAction 可能把名字也换了；选中态跟着当前动作走
+    };
+  } else {
+    actionCombo = createCombo({
+      mount: $('schActionMount'),
+      items: actionItems,
+      value: curAction?.id ?? '',
+      onChange: applyAction,
+    });
+    actionCombo.el.classList.add('sch-mode');
+  }
+
+  /*
+   * 「重复」：换方式 → 下面那块字段跟着换（间隔给分钟数，单次给日期时间，每天给几点…）。
+   * 桌面继续用 `.combo` 下拉；手机是一行菜单 + **底部抽屉**（2026-11-06 用户：
+   * "定时器不要用下拉，改成使用抽屉"）。两边都只改 `repeatMode`，保存时读它。
+   */
+  let repeatMode = repeat0;
+  let repeatCombo = null;
+  const setRepeatMode = (mode) => {
+    repeatMode = mode;
+    $('schRepeatBody').innerHTML = repeatBodyOf(mode);
+    repeatCombos = phone ? mountSchRepeatPicks(mode, job) : mountSchRepeatCombos(mode, job);
+  };
+  if (phone) {
+    $('schRepeatRow').onclick = () =>
+      schOpenSheet({
+        title: '重复方式',
+        items: REPEAT_ITEMS,
+        value: repeatMode,
+        onPick: (mode) => {
+          const el = $('schRepeatVal');
+          if (el) el.textContent = REPEAT_ITEMS.find((x) => x.id === mode)?.label ?? '';
+          setRepeatMode(mode);
+        },
+      });
+  } else {
+    repeatCombo = createCombo({
+      mount: $('schRepeatMount'),
+      items: REPEAT_ITEMS,
+      value: repeat0,
+      onChange: setRepeatMode,
+    });
+    // 这一排在弹窗最下面，**往上弹**，否则开出来就被窗口底边切掉
+    repeatCombo.el.classList.add('up');
+  }
 
   $('schOk').onclick = async (e) => {
     e.preventDefault();
     const name = $('schName').value.trim();
     if (!name) return toast('给它起个名字');
-    const repeat = repeatCombo.value();
+    const repeat = phone ? repeatMode : repeatCombo.value();
     const config = readSchConfig(curAction?.fields, cfgCombos);
     // 动作自己声明了必填（`required`）的，先在这儿拦一道 —— 服务端还会再拦一次，
     // 这里拦是为了"别让人填完时间才发现上面空着"，不用等一次往返。
@@ -2871,7 +3841,7 @@ export async function scheduleDialog(job) {
     }
     const body = {
       name,
-      action: actionCombo.value(),
+      action: phone ? (curAction?.id ?? '') : actionCombo.value(),
       repeat,
       enabled: $('schEnabled').checked,
       config,
@@ -2898,14 +3868,23 @@ export async function scheduleDialog(job) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
-      dlg.close();
+      /*
+       * 摘掉草稿判据再关：内容还填着，直接 back() 会被自己的 popstate 当成
+       * "有草稿按返回"，补一格历史又弹「放弃这次填写？」——跟 kb-new 提交前
+       * 先清空标题是同一个坑（那里清字段，这里摘判据，语义一样：这次关闭是自愿的）。
+       */
+      schPageDirty = null;
+      closeForm();
       await renderSchedules();
     } catch (err) {
       toast(err.message, 'error');
     }
   };
-  dlg.showModal();
-  setTimeout(() => $('schName').focus(), 50);
+  if (dlg) {
+    dlg.showModal();
+    // 桌面弹窗直接开写；手机上不抢焦点（一进来就顶起键盘，做法那排按钮和选择行全被挤出视野）
+    setTimeout(() => $('schName').focus(), 50);
+  }
 }
 
 

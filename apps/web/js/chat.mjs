@@ -14,8 +14,9 @@ import { $, S } from './core.mjs';
 import { SANDBOX_LABEL, sandboxItems } from './misc.mjs';
 // 运行进度：纯逻辑在 run-progress.mjs（冒烟在 Node 里测）；画卡片这一层在 run-progress-card.mjs
 // （对话页 / 任务卡讨论区共用同一份，2026-10-29 用户："对话里的那一套搬过来用"）
-import { fmtElapsed } from './run-progress.mjs';
+import { fmtElapsed, fmtStepDur } from './run-progress.mjs';
 import { createProgressCard } from './run-progress-card.mjs';
+import { createThinkingLive } from './thinking-live.mjs';
 
 
 
@@ -345,14 +346,14 @@ export const READONLY_WHY = {
 
 
 /*
- * 输入框占位文案（2026-11 第二版）：手机上没有 Shift 键 —— "Enter 发送，Shift+Enter 换行"
- * 在手机上是一句无法执行的说明，还占掉半条胶囊的位置（会被截断成"说点什么…（Enter 发送，Sh…"）。
- * 窄屏只留最必要的一句，桌面原样不动。
+ * 输入框占位文案（2026-11 第三版）：手机上完全不显示 —— 屏幕本来就小，胶囊里还垫着
+ * 一句提示词很难看（2026-11-04 用户要求去掉，含忙态的"他还在说…"）；桌面原样不动。
+ * isNarrowPh 导出给 projects.mjs（议题聊天）与 flowpages.mjs（节点聊天）用同一把尺子。
  */
-const isNarrowPh = () => window.matchMedia('(max-width: 900px)').matches;
+export const isNarrowPh = () => window.matchMedia('(max-width: 900px)').matches;
 
 const phChat = (group) => (isNarrowPh()
-  ? (group ? '说点什么…（@某人 指派）' : '说点什么…')
+  ? ''
   : (group ? '说点什么…（@某人 让他干活；不 @ 就找群主）' : '说点什么…（Enter 发送，Shift+Enter 换行）'));
 
 
@@ -381,6 +382,44 @@ export function setComposerReadonly(on, reason = 'gone') {
 
 
 
+/* ------------------------------------------------ 未读红点（本设备账本） */
+
+/*
+ * 未读是**纯前端账**（2026-11-05）：服务端会话没有已读字段（也不该为红点加），
+ * 就用 localStorage 记"这个设备最后看到每个会话的什么时候"。口径：
+ *   · 进会话（openConversation）= 看到该会话**当时**的最后一条 → 记它的 updatedAt；
+ *     存会话自己的时间戳而不是 Date.now()，服务端/本机时钟有偏差也不会"看过了还亮"。
+ *   · 正开着的会话永远不算未读（contacts.mjs 画行时排除 active）。
+ *   · 只留最近 200 个会话，localStorage 别跟着使用年头无限长。
+ * 存不进去（隐私模式）就静默放弃：红点会常亮，比报错强。
+ */
+const SEEN_KEY = 'bandi.seenConvs';
+
+const seenMap = () => {
+  try { return JSON.parse(localStorage.getItem(SEEN_KEY) || '{}') || {}; } catch { return {}; }
+};
+
+export function markConvSeen(id, updatedAt) {
+  if (!id) return;
+  try {
+    const m = seenMap();
+    m[id] = Date.parse(updatedAt) || Date.now();
+    const keys = Object.keys(m);
+    if (keys.length > 200) {
+      keys.sort((a, b) => m[a] - m[b]).slice(0, keys.length - 200).forEach((k) => delete m[k]);
+    }
+    localStorage.setItem(SEEN_KEY, JSON.stringify(m));
+  } catch { /* 存不了就算了 */ }
+}
+
+/** 这行会话要不要画未读点（contacts.mjs 画行时调用） */
+export function convUnread(c) {
+  if (!c || !(c.messageCount > 0)) return false;        // 空壳会话（一段都没聊过）不算未读
+  if (c.id === S.conversation?.id) return false;        // 正开着的这行永远不亮
+  const at = Date.parse(c.updatedAt) || 0;
+  return at > (seenMap()[c.id] ?? 0);                   // 没记录 = 从没打开过 = 未读
+}
+
 export async function openConversation(id) {
   setRoute('conversation', { id });
   // 换会话/刷新视图时，先把上一次的事件流停掉
@@ -393,6 +432,7 @@ export async function openConversation(id) {
 
   const d = await api('/api/conversations/' + encodeURIComponent(id));
   S.conversation = d.conversation;
+  markConvSeen(id, d.conversation.updatedAt);   // 进来看了 = 本设备已读（见 SEEN_KEY 那段）
   // 这段会话是不是**一个字都没说过**（详情页「发消息」连点复用它，见 openDirectChat）。
   // 依据是服务端刚给的 messages，不是本地猜测 —— 零额外请求、刷新后结论一致。
   S.convEmpty = (d.messages || []).length === 0;
@@ -414,6 +454,8 @@ export async function openConversation(id) {
    */
   const dissolved = d.conversation.kind === 'group' && !!d.conversation.dissolvedAt;
   setComposerReadonly(personaGone || dissolved, dissolved ? 'dissolved' : 'gone');
+  // 「续 @」胶囊跟着会话走：进群聊看有没有记着的人，进私聊自动藏（见 applyStickyMention）
+  renderStickyMention();
   // 换到别的会话时，抽屉里那套群成员设置就不再适用了。
   // 但**同一个群换一段会话**不该关：群设置是群级的，抽屉里看的就是这个群。
   if (S.drawerOpen && S.drawerThreadId !== id && S.drawerThreadId !== d.conversation.groupId) closeDrawer();
@@ -440,14 +482,21 @@ export async function openConversation(id) {
      * 改标「已解散」，并且**不给群设置入口** —— 成员/群名/助手都没了，点开只能是空抽屉。
      * 「聊天记录」照旧留着：解散后它可能就是唯一能翻历史的入口（列表里只显示这一行）。
      */
-    const metaSub = dissolved
-      ? '<span class="dim" style="font-size:12px">已解散</span>'
-      : `<span class="dim" style="font-size:12px">${d.conversation.members.length} 人</span>`;
+    /*
+     * 人数跟在群名后面、同一行（2026-11-05 用户：「群人数显示在群名后面，不要折行」）。
+     * 上一版把人数另起一行当副标题 —— 群聊头凭空高出一截，跟单聊头（一行名字）不齐。
+     * 现在一行四样：群名 + 人数 + 徽章 + 动作钮。不换行靠的是「只有群名可收缩」：
+     * .head-name 是 flex:0 1 auto + 省略号截断，人数/徽章 flex:none（见 mobile.css §16.8），
+     * 名字再长也只挤自己，把人数和徽章保住；实在窄到放不下时，先截名字。
+     */
+    const metaSub = dissolved ? '已解散' : `${d.conversation.members.length} 人`;
     $('chatHead').innerHTML = `
       ${mbBackBtn}
-      <div class="avatar grp sm">${esc(initial(d.conversation.title))}</div>
+      <div class="avatar grp sm head-avatar">${esc(initial(d.conversation.title))}</div>
       <div class="meta">
-        <div><b>${esc(d.conversation.title)}</b> ${dissolved ? '' : badge} ${metaSub}</div>
+        <div>${dissolved
+          ? `<b class="head-name-static">${esc(d.conversation.title)}</b> <span class="sub">${metaSub}</span>`
+          : `<b class="head-name" title="群设置">${esc(d.conversation.title)}</b> <span class="sub">${metaSub}</span> ${badge}`}</div>
       </div>
       <button class="icon-btn" id="toNewConv" title="给这个群开一段新会话（一次任务一段；旧段留在聊天记录里）">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
@@ -463,16 +512,15 @@ export async function openConversation(id) {
           <path d="M3.6 4.6V10H9" />
           <path d="M12 8v4.4l3 1.8" />
         </svg>
-      </button>
-      ${dissolved ? '' : `<button class="icon-btn" id="toSettings" title="群设置">
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-          <!-- 跟左栏「设置」同一版圆齿轮（index.html，2026-10-20 用户从候选稿里选的 F）。
-               别再用"圆 + 八根短射线"那版 —— 看着就是个太阳（2026-10-24 用户实报）。 -->
-          <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
-          <circle cx="12" cy="12" r="3"/>
-        </svg>
-      </button>`}`;
-    if (!dissolved) $('toSettings').onclick = () => openGroupDrawer(d.conversation);
+      </button>`;
+    /*
+     * 群设置入口从右上角齿轮挪到**群名**上（2026-11-05 用户要求）：
+     * 一行里返回 + 群名 + 新会话 + 聊天记录 + 齿轮 = 五个可点目标，手机上挤成一团；
+     * iOS/微信都是点标题进群详情，齿轮在这里只是多一颗钮。
+     * 解散的群不开抽屉（点开是空抽屉），所以名字不给 head-name 类、也不绑事件。
+     */
+    const grpName = $('chatHead').querySelector('.head-name');
+    if (grpName && !dissolved) grpName.onclick = () => openGroupDrawer(d.conversation);
     // 群聊天记录（2026-10-20 用户要求）：抽屉列出这个群的会话（含被「不显示」的那条）
     $('toChatLog').onclick = () => openChatLogDrawer(d.conversation);
     // 新会话（2026-10-24）：解散的群开不了（服务端 E2049），按钮也不给
@@ -489,10 +537,17 @@ export async function openConversation(id) {
     const pHere = personaGone ? null : ((S.personas ?? []).find((x) => x.id === d.conversation.personaId) ?? null);
     $('chatHead').innerHTML = `
       ${mbBackBtn}
-      ${smAvatar(name, personaGone ? '' : `clickable" data-detail="${esc(d.conversation.personaId)}" title="配置他的 agent CLI`, pHere)}
+      ${smAvatar(name, personaGone
+        ? 'head-avatar'
+        : `head-avatar clickable" data-detail="${esc(d.conversation.personaId)}" title="配置他的 agent CLI`, pHere)}
       <div class="meta">
-        <div><b>${esc(name)}</b> ${badge}</div>
+        <div>${personaGone
+          ? `<b>${esc(name)}</b>`
+          : `<b class="head-name" data-detail="${esc(d.conversation.personaId)}" title="查看TA的资料">${esc(name)}</b>`} ${badge}</div>
       </div>
+      ${/* 右侧本来还有一句「正在干活 / 现在闲着」（2026-11-05 用户要求去掉）：
+             它和名字在同一条线右端，名字稍长就被推到换行；忙闲在列表的点里已经能看出来，
+             聊天页真正要占这条线的是两颗动作钮。 */ ''}
       ${personaGone ? '' : `<button class="icon-btn" id="toNewConv" title="和TA另起一段全新会话 —— 不带之前的上下文；旧会话留在聊天记录里">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
              stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -508,9 +563,10 @@ export async function openConversation(id) {
           <path d="M12 8v4.4l3 1.8" />
         </svg>
       </button>`;
-    // 点头像进员工详情（原来那个「员工详情」按钮去掉了，省地方）
-    const detail = $('chatHead').querySelector('[data-detail]');
-    if (detail) detail.onclick = () => openDetail(d.conversation.personaId);
+    // 头像（桌面保留）和名字（手机端的唯一入口）都指向员工详情
+    $('chatHead').querySelectorAll('[data-detail]').forEach((el) => {
+      el.onclick = () => openDetail(d.conversation.personaId);
+    });
     // 聊天记录（2026-10-20 落地）：右侧抽屉列出这个人的全部会话，点一条就回看/续聊
     $('toChatLog').onclick = () => openChatLogDrawer(d.conversation);
     // 新会话（2026-10-24）：员工都没了，开了也没人接 —— 不给按钮
@@ -662,7 +718,7 @@ export function stampOf(iso) {
 
 
 
-export function bubble(role, text, name, who, showName = false, at = '', atts = null, meta = null, senderName = null) {
+export function bubble(role, text, name, who, showName = false, at = '', atts = null, meta = null, senderName = null, opts = null) {
   /*
    * 真人署名（2026-10-31 用户概念落地）：消息带 senderUserName 且**不是自己** → 按别人画
    * （靠左、带头像、名字线）。多人一套班底时，群/卡评论区里谁说的话各归各；
@@ -686,18 +742,69 @@ export function bubble(role, text, name, who, showName = false, at = '', atts = 
   const attsHtml = attsHtmlOf(atts);
   // 卡票（2026-10-24）：PM 建卡 / 卡片回执这类消息带 meta，气泡顶上画一张可点的票
   const ticket = cardTicketHtml(meta);
+  // 过程收起行（2026-11-05）：跑过工具的回话，气泡顶上留一行「✓ 意图 · N 步 · 用时」
+  const progressNote = progressNoteHtml(meta);
   /*
    * 停止生成（2026-10-29 用户实报「点停止生成，对方的消息完全消失」）：
    * 人停的那一轮，回话是**掐在半句上**的（服务端带 meta.stopped 落库，见 runs.mjs 的 persistReply）。
    * 不标一下，隔天翻记录的人会以为他就说了这么多 —— 标在气泡底部，比在时间线里另起一行轻。
    */
   const stoppedNote = meta?.stopped ? '<div class="bubble-note">已停止生成</div>' : '';
-    return `<div class="row ${mine ? 'me' : ''}">
+    /* 手机端消息流降噪（2026-11-05 用户：「聊天页 UI 重新设计」）：
+       · nt = 3 分钟内不重复挂时间戳（时间只留在每组第一条下面，微信/iMessage 同口径；
+         桌面不受影响 —— .nt 的显示规则只写在 mobile.css 的 ≤900px 档里）；
+       · tight = 同一人紧接着的下一句，行距收紧（换人才松开，段落感就出来了）。
+       时间照常渲染进 DOM，只是被 CSS 藏 —— 桌面/手机共用一份 HTML。 */
+    return `<div class="row ${mine ? 'me' : ''}${opts?.tight ? ' tight' : ''}${opts?.hideTime ? ' nt' : ''}">
     ${mine ? smAvatar('我', 'me') : smAvatar(label, '', p)}
     ${nameLine
-      ? `<div class="msg-main">${nameLine}<div class="bubble">${ticket}${renderMarkdown(text)}${attsHtml}${stoppedNote}</div></div>`
-      : `<div class="bubble">${ticket}${renderMarkdown(text)}${attsHtml}${stoppedNote}</div>`}
+      ? `<div class="msg-main">${nameLine}<div class="bubble">${ticket}${progressNote}${renderMarkdown(text)}${attsHtml}${stoppedNote}</div></div>`
+      : `<div class="bubble">${ticket}${progressNote}${renderMarkdown(text)}${attsHtml}${stoppedNote}</div>`}
     ${t ? `<div class="btime">${esc(t)}</div>` : ''}
+  </div>`;
+}
+
+/**
+ * 过程收起行（2026-11-05 评鉴落地）：跑过工具的回话，气泡顶上一行
+ * 「✓ 数代码量 · 2 步 · 19s ▾」，点开看每步（动词 + 目标 + 耗时/成败）——
+ * "他到底查了啥"留在记录里，不用翻事件流。2026-11-05 二期起快照带 phases
+ * （工具之间的正文当段标题），展开体按段画；老快照平铺，形状兼容。
+ *
+ * 数据是服务端收尾时写进 meta.progress 的快照（runs.mjs 的 progressMeta，
+ * run_events 原样重放）—— 跟卡票同一哲学：快照在落库时刻写死，界面上不回查。
+ * 没调过工具的回话没有这行（服务端就不落 progress）。
+ * 展开体的行画法复用进度卡的 .rp-step 那套，形状跟实时卡片收尾那行一致。
+ */
+function progressNoteHtml(meta) {
+  const p = meta?.progress;
+  if (!p || !Array.isArray(p.steps) || !p.steps.length) return '';
+  const cls = p.status === '失败' ? 'bad' : p.status === '已停止' ? 'warn' : 'ok';
+  const ico = p.status === '失败' ? '✗' : p.status === '已停止' ? '⏹' : '✓';
+  const title = p.intent ? (p.intent.length > 48 ? `${p.intent.slice(0, 48)}…` : p.intent) : p.status || '已结束';
+  const row = (s) => {
+    const sic = s.s === 'done' ? '✓' : s.s === 'error' ? '✗' : '·';
+    return `<div class="rp-step ${esc(s.s || '')}"><span class="rp-ic">${sic}</span><span class="rp-act">${esc(s.v)}${s.t ? ` <code>${esc(s.t)}</code>` : ''}</span>${s.ms != null ? `<span class="rp-dur">${fmtStepDur(s.ms)}</span>` : ''}</div>`;
+  };
+  /*
+   * 阶段分组（2026-11-05 二期）：快照带 phases（服务端 summarizeEvents 落的）就按段画，
+   * 段头一句人话 + "N 步"；老快照没有 phases → 平铺老路，形状照旧。
+   * 展开体只有一层（收起行 → 全部阶段），不再嵌套点击 —— 历史记录是翻的，不是盯的。
+   */
+  const phases = Array.isArray(p.phases) && p.phases.length >= 2 ? p.phases : null;
+  const metaTxt = phases
+    ? `${p.phases.length} 阶段 · ${p.steps.length} 步${p.elapsedMs != null ? ` · ${fmtElapsed(p.elapsedMs)}` : ''}`
+    : `${p.steps.length} 步${p.elapsedMs != null ? ` · ${fmtElapsed(p.elapsedMs)}` : ''}`;
+  const body = phases
+    ? phases
+        .map((g) => {
+          const t = g.t || '调用工具';
+          return `<div class="rp-ph"><span class="rp-ph-t" title="${esc(t)}">${esc(t)}</span><span class="rp-ph-n">${g.n} 步</span></div>${p.steps.slice(g.i, g.i + g.n).map(row).join('')}`;
+        })
+        .join('')
+    : p.steps.map(row).join('');
+  return `<div class="rp-note ${cls}">
+    <button type="button" class="rp-note-line" data-rp-note>${ico} <span class="rp-note-title">${esc(title)}</span><span class="rp-note-meta">${metaTxt}</span><span class="rp-note-arrow"></span></button>
+    <div class="rp-note-body" hidden>${body}</div>
   </div>`;
 }
 
@@ -743,7 +850,8 @@ export function cardTicketHtml(meta) {
   return inner;
 }
 
-/** 给画出来的卡票接上点击：主点击**在弹窗里**打开卡，「看板」进任务看板；窄屏摘要条管展开 */
+/** 给画出来的卡票接上点击：主点击**在弹窗里**打开卡，「看板」进任务看板；窄屏摘要条管展开。
+ *  顺带把气泡顶上别的可点附属物也接了 —— 过程收起行（data-rp-note）点行展开每步明细。 */
 export function wireCardTickets(root) {
   /*
    * 窄屏折叠摘要条（P1-4）：点摘要 → 内联展开/收起正文（就是下面那张完整的卡票，
@@ -756,6 +864,17 @@ export function wireCardTickets(root) {
       bodyEl.hidden = !bodyEl.hidden;
       const hint = f.querySelector('[data-mb-fold-hint]');
       if (hint) hint.textContent = bodyEl.hidden ? ' · 点击展开' : ' · 收起';
+    };
+  });
+  // 过程收起行（2026-11-05）：点行 → 展开/收起每步明细，跟窄屏卡票摘要条同一套交互
+  (root ?? $('chat')).querySelectorAll('[data-rp-note]').forEach((f) => {
+    f.onclick = () => {
+      const bodyEl = f.nextElementSibling;
+      if (!bodyEl) return;
+      bodyEl.hidden = !bodyEl.hidden;
+      // 箭头只切类：CSS 里 mask 的 chevron 转 -90°=收起朝右 / 0°=展开朝下（2026-11-05 用户拍板方向）
+      const arrow = f.querySelector('.rp-note-arrow');
+      if (arrow) arrow.classList.toggle('is-open', !bodyEl.hidden);
     };
   });
   (root ?? $('chat')).querySelectorAll('[data-card-ticket]').forEach((el) => {
@@ -941,16 +1060,61 @@ export function drawMessages(msgs, name, isGroup = false, runs = []) {
    */
   const items = timelineOf(msgs, runs).filter((it) => it.kind !== 'msg' || !it.m.meta?.silent);
   /*
-   * 空会话**什么都不画**（2026-10-20 用户要求）：「和 X 还没有对话 / 在下面说第一句吧」
-   * 这两行提示去掉了 —— 输入框就在下面，不需要再教一遍。
+   * 日期分隔（2026-11-05，手机端 iOS 化配套）：**当天第一条前面**插一行居中的
+   * 「今天 / 昨天 / M月D日」—— 插在中间会让时间线倒挂。样式在 mobile.css §16.10
+   * （.mb-day，手机 ≤900px 生效）；桌面这条 div 无样式，就是一行空档，无害。
+   * 取时间：消息用 createdAt；运行块（stop/fail）也带 createdAt，取不到就跳过不分组。
    */
+  const DAY = 86400000;
+  const dayLabel = (t) => {
+    const d = new Date(t);
+    const startToday = new Date();
+    startToday.setHours(0, 0, 0, 0);
+    if (t >= startToday.getTime()) return '今天';
+    if (t >= startToday.getTime() - DAY) return '昨天';
+    return (d.getFullYear() === startToday.getFullYear() ? '' : d.getFullYear() + '年')
+      + (d.getMonth() + 1) + '月' + d.getDate() + '日';
+  };
+  let lastDay = '';
+  /*
+   * 消息流降噪（2026-11-05，手机端重设计配套）：
+   *   · 3 分钟内不再重复挂时间戳（.nt，CSS 在手机档藏掉）—— 每条下面都挂一个时间
+   *     是把"仪表"当"内容"画，一屏下来全是灰字；微信/iMessage 都只在组头挂一次。
+   *   · 同一人紧接着的下一句（.tight）行距收紧 —— 换人才松开，段落感就出来了。
+   * 发送者口径与 bubble() 一致：自己（user 且无他人署名）记 'me'，
+   * 其余按署名 > 群昵称 > 角色；运行块（stop/fail）单独算，永远不跟消息合并。
+   */
+  const GAP = 3 * 60000;
+  let prevT = NaN;
+  let prevKey = '';
+  /* 空会话**什么都不画**（2026-10-20 用户要求）：输入框就在下面，不需要再教一遍。 */
   $('chat').innerHTML = items.length
     ? items
-        .map((it) =>
-          it.kind === 'msg'
-            ? bubble(it.m.role, it.m.text, name, it.m.personaName, isGroup, it.m.createdAt, it.m.atts, it.m.meta, it.m.senderUserName)
-            : it.kind === 'stop' ? stopBlock(it.r, isGroup) : failBlock(it.r, isGroup),
-        )
+        .map((it) => {
+          const ts = it.kind === 'msg' ? it.m.createdAt : (it.r?.createdAt ?? null);
+          let sep = '';
+          const t = ts ? Date.parse(ts) : NaN;
+          if (!Number.isNaN(t)) {
+            const d = new Date(t);
+            const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+            if (key !== lastDay) { lastDay = key; sep = `<div class="mb-day"><span>${esc(dayLabel(t))}</span></div>`; }
+          }
+          const keyOf = it.kind === 'msg'
+            ? (it.m.role === 'user' && !(it.m.senderUserName && it.m.senderUserName !== (S.me?.name ?? '我'))
+              ? 'me'
+              : (it.m.senderUserName || it.m.personaName || it.m.role))
+            : `#${it.kind}`;
+          /* 跨了天（sep 非空）就重新开组：日期头下面第一条永远带时间、不收紧 */
+          const soon = !sep && !Number.isNaN(t) && !Number.isNaN(prevT) && t - prevT < GAP;
+          const opts = it.kind === 'msg'
+            ? { hideTime: soon, tight: soon && keyOf === prevKey }
+            : null;
+          prevT = t;
+          prevKey = keyOf;
+          return sep + (it.kind === 'msg'
+            ? bubble(it.m.role, it.m.text, name, it.m.personaName, isGroup, it.m.createdAt, it.m.atts, it.m.meta, it.m.senderUserName, opts)
+            : it.kind === 'stop' ? stopBlock(it.r, isGroup) : failBlock(it.r, isGroup));
+        })
         .join('')
     : '';
   wireCardTickets(); // 画完顺手接上卡票的点击（票是 innerHTML 画出来的，得逐张绑）
@@ -1017,15 +1181,19 @@ export function resetAtts() {
 }
 
 export async function send() {
-  const text = $('input').value.trim();
+  const raw = $('input').value.trim();
   // 光贴图不说话也能发（IM 的常识）；两者都没有才不动作
-  if ((!text && !pendingAtts.length) || !S.conversation || S.running) return;
+  if ((!raw && !pendingAtts.length) || !S.conversation || S.running) return;
   // 附件还在上传中就别重复触发（上传是 send 里顺序做的，SENDING 只是防抖）
   if (attSending) return;
   // 说出第一句就不再是"空会话"了 —— 详情页「发消息」的连点复用靠它判断
   S.convEmpty = false;
   $('input').value = '';
   closeMentionPop();
+  // 群里的「续 @」（2026-11-05）：话里 @ 了谁就记住谁；没 @ 就把上回那位续到句首。
+  // 光发图也一样 —— 附件也要落到同一个人头上。
+  const text = applyStickyMention(raw);
+  renderStickyMention();
   const name = S.conversation.personaName || S.persona?.name || '数字员工';
   const convId = S.conversation.id;
 
@@ -1189,6 +1357,14 @@ export function attachStream(runId, whoName = '', startedAt = null) {
     onStop: () => stopChatRun().catch(() => {}),
   });
   body.appendChild(card.el);
+  /*
+   * 开场白 = 意图（2026-11-05 评鉴落地）：第一件工具之前的回话是"他要干嘛"的人话
+   * （"我先看仓库结构，再数代码量"），进度卡拿它当标题（归约器里攒成 intent）。
+   * 它在正文里照常先流出来（不耽误看），第一件工具一到就整段收进标题 ——
+   * 不然同一句话说两遍；一次工具都没调（纯聊天）就一直在正文里，跟从前一字不差。
+   */
+  let sawTool = false;
+  const preface = [];
   // 思考过程开关跟随**这轮的执行者**（2026-10-24 修群聊失效）：
   // 会话上的 showThinking 是拿 conversations.personaId JOIN 员工表带出来的 ——
   // 单聊有值；群建会话时 personaId 故意置空（见 store/conversations.mjs），JOIN 出来是
@@ -1203,6 +1379,10 @@ export function attachStream(runId, whoName = '', startedAt = null) {
   };
 
   let stopped = false;
+  // 思考直播块（thinking-live.mjs，2026-11-04）：首段思考到了才建（不开这个开关就
+  // 一行都不占）。原来每段思考 add 一行「· 思考：…」，模型的原始思维流四五段整段
+  // 摞在进度卡下面，把回话正文顶走（用户："这个看着怎么有点乱"）。
+  let think = null;
   const tick = setInterval(() => { if (!stopped) card.paint(); }, 1000);
 
   /**
@@ -1229,10 +1409,30 @@ export function attachStream(runId, whoName = '', startedAt = null) {
   S.es = streamRun(runId, {
     // 每个原始事件都喂给进度卡：dsh 的 tool_call/tool_result、codex 的 tool、
     // claude 的 status 都靠它 —— 旧的 onText/onTool 只覆盖了其中一部分。
-    onEvent: (evt) => card.applyEvent(evt),
-    onText: (chunk) => add('text', renderMarkdown(chunk), true),
+    onEvent: (evt) => {
+      if (!sawTool && (evt.type === 'tool' || evt.type === 'tool_call')) {
+        sawTool = true;
+        // 开场白收进卡片标题（它已经作为 intent 攒在归约器里），正文从现在起
+        // 只流工具之后的回话
+        preface.splice(0).forEach((d) => d.remove());
+      }
+      card.applyEvent(evt);
+    },
+    onText: (chunk) => {
+      const d = document.createElement('div');
+      d.className = 'step text';
+      d.innerHTML = renderMarkdown(chunk);
+      body.appendChild(d);
+      if (!sawTool) preface.push(d);
+      scrollDown();
+    },
     onRunError: (msg) => { add('bad', '· ' + firstMeaningfulLine(msg)); card.paint(); },
-    onThinking: (t) => { if (showThinking) add('', '· 思考：' + t); card.paint(); },
+    onThinking: (t) => {
+      if (!showThinking) return;
+      if (!think) { think = createThinkingLive(); body.appendChild(think.el); }
+      think.push(t);
+      card.paint();
+    },
     onDone: (evt) => {
       // 这一行只是"立刻给你一句"；跑完 300ms 后整页从库里重画，
       // 那时由 failBlock 把它**留在回话里**（见 timelineOf 的注释）
@@ -1327,13 +1527,12 @@ export function setBusy(busy) {
   btn.classList.toggle('stopping', !!busy);
   btn.title = busy ? '掐掉这一轮（他已经说出来的话会留着）' : '发送';
   $('input').placeholder = busy
-    ? '他还在说…（要打断就点「停止生成」）'
+    // 2026-11-05 评鉴：原来是"他还在说…"—— 跑工具的时候他不是在说，是在干活
+    ? (isNarrowPh() ? '' : '他还在干活…（要打断就点「停止生成」）')
     : phChat(isGroup);
   $('hint').textContent = busy
-    ? '一次只跑一条。要打断就点「停止生成」。'
-    : isGroup
-      ? '在输入框里打 @ 就会弹出群成员；不 @ 就找群助手。'
-      : '';
+    ? (isNarrowPh() ? '' : '一次只跑一条。要打断就点「停止生成」。')
+    : '';
 }
 
 
@@ -1427,6 +1626,76 @@ export function insertMention(i) {
   el.setSelectionRange(pos, pos);
   el.focus();
   closeMentionPop();
+}
+
+
+
+/* ---------------------------------------------------- 群里的「续 @」（2026-11-05）
+
+   用户："@一个人，下次聊天自动继续@他，就像 workbuddy 里选了专家一样。"
+
+   以前每句话都要重新打 @ 选人；现在 @ 过一次之后，这条群里后续的话**默认都找他**
+   —— 输入条上方挂一颗可摘的「@名字」胶囊（WorkBuddy 选专家的那颗同款）：
+
+   · 记忆按**群会话**存（localStorage），关页面 / 重开都在 —— "下次聊天"是真下次；
+   · 发送时话里已经 @ 了人 → 以话为准，顺便把记忆换成 @ 的那位（多 @ 记第一个，
+     长名优先，跟服务端 parseMentions 同一把尺，别让「@李」吃掉「@李俊」）；
+   · 点胶囊上的 ✕ 摘掉 → 回到"不 @ 找群助手"的老规矩；
+   · 只在群里生效，私聊没有"找谁"的分岔；成员被移出群后记忆自动失效（每次现校名单）。 */
+
+const STICKY_KEY = 'bandi-sticky-mention';
+
+const stickyMentions = readStickyMentions();
+function readStickyMentions() {
+  try { return JSON.parse(localStorage.getItem(STICKY_KEY) ?? '{}') ?? {}; }
+  catch { return {}; }
+}
+function saveStickyMentions() {
+  try { localStorage.setItem(STICKY_KEY, JSON.stringify(stickyMentions)); } catch { /* 存不上就算了，功能降级成"本次会话内有效" */ }
+}
+
+/** 当前群被记住的那位（没有 / 已不在群里 → null） */
+function stickyMember() {
+  const c = S.conversation;
+  if (!c || c.kind !== 'group') return null;
+  const id = stickyMentions[c.id];
+  if (!id) return null;
+  return (c.members ?? []).find((m) => m.personaId === id) ?? null;
+}
+
+/** 输入条上方那颗「@名字 ✕」胶囊：有记忆就亮出来（进会话 / 发送后都刷一遍） */
+export function renderStickyMention() {
+  const el = $('stickyMention');
+  if (!el) return;
+  const m = stickyMember();
+  el.hidden = !m;
+  if (!m) return;
+  el.innerHTML = `<span class="sm-at">@${esc(m.name)}</span>` +
+    '<button type="button" class="sm-x" title="不再自动 @ 他" aria-label="不再自动 @ 他">✕</button>';
+  el.querySelector('.sm-x').onclick = () => {
+    if (!S.conversation) return;
+    delete stickyMentions[S.conversation.id];
+    saveStickyMentions();
+    renderStickyMention();
+  };
+}
+
+/** 发送前调用：话里 @ 了人 → 记住他、原话照发；没 @ → 把记忆的那位续到句首 */
+function applyStickyMention(raw) {
+  const c = S.conversation;
+  if (!c || c.kind !== 'group') return raw;
+  const hit = (c.members ?? [])
+    .filter((m) => raw.includes('@' + m.name))
+    .sort((a, b) => b.name.length - a.name.length)[0] ?? null;
+  if (hit) {
+    if (stickyMentions[c.id] !== hit.personaId) {
+      stickyMentions[c.id] = hit.personaId;
+      saveStickyMentions();
+    }
+    return raw;
+  }
+  const sticky = stickyMember();
+  return sticky ? `@${sticky.name} ${raw}` : raw;
 }
 
 
@@ -1633,7 +1902,260 @@ export async function openDirectChat(persona) {
   }
 }
 
+/* ------------------------------------------ 手机端全屏选择页（mbPicker） */
 
+/*
+ * 2026-11-05 用户口径：手机详情页的「运行时 / 模型」不要下拉框，点整行推开一整页
+ * iOS 风格的选择页（头部返回栏 + 分组列表 + 选中行打勾）。
+ *
+ * DOM 由本文件自己建（不进 index.html）：两处入口共用同一张页，每次开页重画列表，
+ * 没点过就不存在成本；样式在 mobile.css §20.5。历史口径与详情页折叠同一套 ——
+ * 开页压一格、返回手势只退这一格，所以 mobile.mjs 的 popstate / Esc 里各有一行守卫。
+ */
+let mbPickerEl = null;
+let mbPickerOnPick = null;
+let mbPickerClosing = false;
+// 这次开页铺的原始选项与当前值：搜索框输入时按它们重画（行是每次输入整体重画的，
+// 不存一份原文的话，只能对着已被滤掉的 DOM 再滤一次，滤完就回不来了）
+let mbPickerItems = [];
+let mbPickerValue = '';
+
+/** 首次开页才建 DOM（懒到真用的时候；桌面端永远走不到这里） */
+function mbEnsurePicker() {
+  if (mbPickerEl) return mbPickerEl;
+  const el = document.createElement('div');
+  el.id = 'mbPicker';
+  el.hidden = true;
+  el.innerHTML = `
+    <div class="mb-picker-bar">
+      <button type="button" class="mb-picker-back" aria-label="返回">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+      </button>
+      <div class="mb-picker-title" id="mbPickerTitle"></div>
+    </div>
+    <!--
+      搜索行（视觉 v2.1）：在**滚动区之外**的固定行 —— 列表滑到哪儿框都在。
+      只在调用方传 search:true 时露出来（运行时/模型那两处不传，行为一字不变）。
+    -->
+    <div class="mb-picker-search" id="mbPickerSearchWrap" hidden>
+      <svg class="mb-picker-search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.6-3.6"/></svg>
+      <input type="search" id="mbPickerSearch" placeholder="搜索" aria-label="搜索"
+             autocomplete="off" spellcheck="false" />
+    </div>
+    <div class="mb-picker-body">
+      <div class="mb-picker-note" id="mbPickerNote" hidden></div>
+      <div id="mbPickerList"></div>
+    </div>`;
+  document.body.appendChild(el);
+  el.querySelector('.mb-picker-back').addEventListener('click', () => mbClosePicker());
+  /*
+   * 输入即过滤：整段列表重画（选项最多几十行，重画比逐行改 display 简单且不会漏恢复）。
+   * 重画只碰 #mbPickerList，搜索框在外面 —— 输入焦点不会因为重画被踢掉。
+   */
+  el.querySelector('#mbPickerSearch').addEventListener('input', (e) => {
+    const q = e.target.value;
+    mbPaintPicker(
+      el.querySelector('#mbPickerList'),
+      mbFilterItems(mbPickerItems, q),
+      mbPickerValue,
+      q.trim() ? '没有匹配的' : '',   // 只有真搜过才说"没有匹配的"（空清单是另一回事）
+    );
+  });
+  /*
+   * 行用事件委托：列表每次开页整体重画（运行时 3~5 行、模型 20+ 行），
+   * 逐行 addEventListener 只会把旧闭包留在 detached 节点上。
+   */
+  const list = el.querySelector('#mbPickerList');
+  list.addEventListener('click', (e) => {
+    const row = e.target.closest('[data-mb-pick]');
+    if (!row) return;
+    const onPick = mbPickerOnPick;
+    mbClosePicker();          // 先收页：回调里的 toast / 文本刷新不能被全屏页盖住
+    onPick?.(row.dataset.mbPick);
+  });
+  // role=button 的 div 不会自己把 Enter/Space 变成 click —— 外接键盘 / 读屏走这条
+  list.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const row = e.target.closest('[data-mb-pick]');
+    if (!row) return;
+    e.preventDefault();
+    row.click();
+  });
+  mbPickerEl = el;
+  return el;
+}
+
+/** 选中勾用 SVG：字符 ✓ 的粗细/基线各机型不稳，跟返回箭头同一套描边语汇 */
+const MB_CHECK_SVG =
+  '<svg class="mb-picker-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
+
+/*
+ * 画列表（2026-11-05 二版，用户嫌一版丑）：iOS inset grouped 的正确分层 ——
+ *   · 每个 header 开一张**新卡**，header 是卡**外**的小节标签（不再挤在卡里当行）；
+ *   · header 前的散行（「跟随默认」「清单里没有」）自成第一张卡 —— 推荐项不跟供应商混居；
+ *   · 行支持 sub 副标题（「跟随默认」下面写真实默认模型名）。
+ */
+function mbPaintPicker(host, items, value, emptyText = '') {
+  if (!host) return;
+  let html = '';
+  let rows = '';
+  let sec = '';
+  const flush = () => {
+    if (!rows) return;
+    html +=
+      (sec ? `<div class="mb-picker-sec">${sec}</div>` : '') +
+      `<div class="mb-picker-group">${rows}</div>`;
+    rows = '';
+    sec = '';
+  };
+  for (const it of items ?? []) {
+    if (it.header) {
+      flush();
+      sec = esc(it.header);
+      continue;
+    }
+    const on = it.id === value;
+    // `dot` = 行首那颗 6px 圆点（任务看板的 8 个状态用它带出 --st-* 色）。
+    // 写在 label 里面而不是行首的 flex 子项：行首会和文字差出一整个 gap，点多宽就偏多少。
+    // label/id 都可能是用户自己起的名字（模型显示名、运行时别名）→ 一律 esc
+    rows += `<div class="mb-picker-row${on ? ' on' : ''}" role="button" tabindex="0" data-mb-pick="${esc(it.id)}">
+        <span class="mb-picker-main">
+          <span class="mb-picker-label">${it.dot ? `<i class="mb-picker-dot" style="background:${esc(it.dot)}"></i>` : ''}${esc(it.label)}</span>
+          ${it.sub ? `<span class="mb-picker-sub">${esc(it.sub)}</span>` : ''}
+        </span>
+        ${on ? MB_CHECK_SVG : ''}
+      </div>`;
+  }
+  flush();
+  // 搜不到时也要有话说（一行 13px 弱色），不能只留一张空白页
+  host.innerHTML = html || (emptyText ? `<div class="mb-picker-empty">${esc(emptyText)}</div>` : '');
+}
+
+/*
+ * 搜索过滤：按 label 子串（不区分大小写），**组标题跟着它的组一起决定去留** ——
+ * header 全空的组留着就是一排空小节标签（"数字员工"下面什么都没有），比不过滤还乱。
+ * 返回的是**新的 items 数组**，形状与入参一致，直接可以喂回 mbPaintPicker。
+ */
+function mbFilterItems(items, q) {
+  const kw = String(q ?? '').trim().toLowerCase();
+  if (!kw) return items ?? [];
+  const out = [];
+  let head = null;   // 当前组的 header（散行那一段没有 header）
+  let rows = [];
+  const flush = () => {
+    if (!rows.length) return;
+    if (head) out.push(head);
+    out.push(...rows);
+    rows = [];
+    head = null;
+  };
+  for (const it of items ?? []) {
+    if (it.header) { flush(); head = it; continue; }
+    if (String(it.label ?? '').toLowerCase().includes(kw)) rows.push(it);
+  }
+  flush();
+  return out;
+}
+
+/**
+ * 全屏选择页。（2026-11-05 从本文件私有改成 export：手机端「新建任务」页复用同一张页，
+ * 四个选择项都走它 —— 再抄一份等于把"开页压一格历史、返回收画面"这套时序搬两遍。）
+ *
+ * `search`：可选。传 true 才出现搜索行（执行人 / 流程 / 项目这种可能 20+ 项的）；
+ * 不传时与从前完全一致（运行时、模型那两处调用一个字都不用改）。
+ * `searchPlaceholder`：占位文案按场景分（「搜名字或岗位…」/「搜项目名…」/「搜流程名…」）——
+ * 一个通用的「搜索」看不出这一页在搜什么。
+ * `host`：把选择页挂到哪个容器里，默认 document.body。**模态弹窗里调用必须传那个 dialog**：
+ * `showModal()` 会把弹窗提到浏览器 top layer，body 下无论多高的 z-index 都压不上去 ——
+ * 选择页会整页藏在弹窗背后，用户看到的是"点了没反应"（定时任务弹窗 2026-11-06 踩到）。
+ */
+export function mbOpenPicker({ title = '', note = '', items = [], value = '', search = false, searchPlaceholder = '搜索', host = null, onPick } = {}) {
+  const el = mbEnsurePicker();
+  /*
+   * 挂载点：每次开页都 appendChild 一次。既是"换宿主"（body ↔ dialog），也在宿主被移除后
+   * 把节点捞回来 —— 弹窗一关，挂在它里面的选择页跟着被删，mbPickerEl 就成了脱离文档的孤儿，
+   * 下一次开页不重新挂就是"什么都不显示"。
+   */
+  const mountTo = host ?? document.body;
+  if (el.parentElement !== mountTo) mountTo.appendChild(el);
+  mbPickerClosing = false;
+  mbPickerOnPick = typeof onPick === 'function' ? onPick : null;
+  const titleEl = el.querySelector('#mbPickerTitle');
+  if (titleEl) titleEl.textContent = title;
+  const noteEl = el.querySelector('#mbPickerNote');
+  if (noteEl) {
+    noteEl.textContent = note;
+    noteEl.hidden = !note;
+  }
+  mbPickerItems = items ?? [];
+  mbPickerValue = value;
+  const searchWrap = el.querySelector('#mbPickerSearchWrap');
+  const searchInput = el.querySelector('#mbPickerSearch');
+  // 每次开页清空搜索词：上一次搜过的词留在框里，新一页会"莫名少一半选项"
+  if (searchInput) {
+    searchInput.value = '';
+    searchInput.placeholder = searchPlaceholder || '搜索';
+  }
+  if (searchWrap) searchWrap.hidden = !search;
+  mbPaintPicker(el.querySelector('#mbPickerList'), mbPickerItems, value);
+  document.body.classList.add('mb-picker-open');
+  el.hidden = false;
+  /*
+   * 滑入分两帧：display:none → 可见那一帧浏览器会跳过 transition，
+   * 拆到下一帧再加 class，iOS 那种"从右沿推进来"才跑得出来
+   * （prefers-reduced-motion 时 CSS 里 transition:none，等于直接显隐）。
+   */
+  el.classList.remove('mb-picker-in');
+  requestAnimationFrame(() => {
+    if (el.hidden) return;   // 这一帧里又被收起来了（连点两下返回）—— 别把它滑回来
+    el.classList.add('mb-picker-in');
+  });
+  if (!history.state?.mbPicker) history.pushState({ mbPicker: true }, '');
+}
+
+/**
+ * `alreadyPopped` = 这格历史已经被浏览器退掉了（popstate 进来的），只收画面不再退格。
+ *
+ * ⚠️ 顺序不能反：**先** history.back()、画面留到 popstate 再收。若先摘掉
+ * `mb-picker-open` 再 back()，那条 popstate 到时 class 已经没了，mobile.mjs 会当成
+ * "详情页该收" —— 用户按一次返回，从选择页直接掉回列表。
+ * mbPickerClosing 防连点：「返回」按两下时第二下不能再退一格（否则连详情一起退掉）。
+ */
+export function mbClosePicker(alreadyPopped = false) {
+  if (!document.body.classList.contains('mb-picker-open')) return;
+  if (!alreadyPopped && history.state?.mbPicker) {
+    if (mbPickerClosing) return;
+    mbPickerClosing = true;
+    history.back();
+    return;
+  }
+  mbPickerClosing = false;
+  document.body.classList.remove('mb-picker-open');
+  if (mbPickerEl) {
+    mbPickerEl.classList.remove('mb-picker-in');
+    mbPickerEl.hidden = true;
+  }
+  mbPickerOnPick = null;
+}
+
+/*
+ * 手势返回 / 返回键：这格是选择页自己压的，退回来只收画面。
+ * ⚠️ 收画面推到下一拍（setTimeout 0）：本文件与 mobile.mjs 的 popstate 谁先注册不确定，
+ * 若本回调当场摘掉 class，排在后面的 mobile.mjs 就把这次返回当成"收详情页"了。
+ */
+window.addEventListener('popstate', () => {
+  if (!document.body.classList.contains('mb-picker-open')) return;
+  setTimeout(() => mbClosePicker(true), 0);
+});
+
+// Esc：选择页是详情页的下一级，先收它；弹窗开着时让人家自己吃（同 mobile.mjs 的规矩）
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  if (!document.body.classList.contains('mb-picker-open')) return;
+  if (document.querySelector('dialog[open]')) return;
+  e.preventDefault();
+  mbClosePicker();
+});
 
 /**
  * 手机窄屏的员工详情（2026-11 移动端增量；2026-11-03 二改）：「执行配置」四件 +
@@ -1645,14 +2167,22 @@ export async function openDirectChat(persona) {
  * 保存走自己的 collect —— 桌面版 collect 会读 #dName 等手机上不存在的输入框，直接照搬会炸。
  */
 function renderDetailMobile(persona, runtimes) {
-  const rt = runtimes.find((r) => r.id === persona.runtime);
   // 按钮文案跟着入口走（与桌面同一口径）：消息页点进详情 = 「回到聊天」，其余 = 「发消息」
   const backToChat =
     S.detailFrom === 'messages' &&
     (S.conversations ?? []).some((c) => c.kind === 'direct' && c.personaId === persona.id);
 
+  /*
+   * 详情页重画（换了个人 / 从别处进详情）时把可能开着的选择页收掉：它的 items 与
+   * onPick 闭包指着上一个人的值，留着就是一排"点下去改错人"的行。
+   */
+  mbClosePicker();
+
   $('detailView').innerHTML = `
-    <div class="detail-body">
+    <div class="detail-body mb-emp">
+      <!-- 身份卡（mobile.css §20.1）：头像 + 名字 + 岗位/忙闲章。
+           桌面 .p-meta 那行「运行时」小章删掉 —— 与下面执行配置卡的「运行时」行
+           完全重复，手机上少一行碎章。 -->
       <div class="p-head">
         ${personaAvatar(persona)}
         <div class="p-head-main">
@@ -1663,33 +2193,29 @@ function renderDetailMobile(persona, runtimes) {
                 }</span>`
               : '<span class="pill" id="dBusy">空闲</span>'
           }</h2>
-          <div class="p-meta">
-            <span class="pill">${esc(rt ? rt.label : persona.runtime === 'auto' ? '自动' : persona.runtime)}</span>
-          </div>
-        </div>
-        <div class="hero-actions">
-          <!-- 「⋯ 更多」菜单手机上不画（用户口径：其他的暂时都不需要） -->
-          <button class="primary" id="dMsg" title="打开和TA的聊天 —— 有会话就接着最近那段聊，不会另开新会话">${backToChat ? '回到聊天' : '发消息'}</button>
         </div>
       </div>
 
-      <!-- 精简正文：执行配置四件。类名照搬桌面执行配置分区，样式自动继承 -->
+      <!-- 精简正文：执行配置四件。类名照搬桌面执行配置分区，mobile.css §20.2 重排成
+           iOS 分组行（去外框控件、值右对齐） -->
       <div class="group">
-        <div class="form-row">
+        <!-- 运行时 / 模型：iOS 设置那种 value cell（整行可点 + ›），点开是 §20.5 的全屏选择页。
+             2026-11-05 用户口径：这两项不要下拉框。 -->
+        <div class="form-row mb-nav" id="dRuntimeRow" role="button" tabindex="0">
           <div class="row-label">运行时</div>
-          <div id="dRuntimeMount"></div>
+          <div class="mb-nav-val"><span id="dRuntimeText"></span><i class="mb-chev" aria-hidden="true"></i></div>
         </div>
-        <div class="form-row">
+        <div class="form-row mb-nav" id="dModelRow" role="button" tabindex="0">
           <div class="row-label">模型</div>
-          <!-- 只读展示（2026-11-03 用户口径：详情页显示他用的模型）；真要换模型去桌面端员工详情。
-               值异步填：清单直接问运行时（readModelList 自带 60s 缓存），拿不到就写"跟随默认"。 -->
-          <div id="dModelText">${esc(persona.model || '跟随默认')}</div>
+          <!-- 值文本的 id 还是 dModelText（异步补名那段照旧写它），外面多包一层只为放 › -->
+          <div class="mb-nav-val"><span id="dModelText">${esc(persona.model || '跟随默认')}</span><i class="mb-chev" aria-hidden="true"></i></div>
         </div>
         <div class="form-row">
           <div class="row-label">并发数</div>
-          <!-- 并发数口径同桌面：空着 = 默认 6；服务端钳到 [1, 20]，手滑填坏也不打断保存 -->
+          <!-- 并发数口径同桌面：空着 = 默认 6；服务端钳到 [1, 20]，手滑填坏也不打断保存。
+               外观（宽度/对齐）交给 §20.2，不再写内联样式 —— 内联优先级会压过重排。 -->
           <input id="dMaxParallel" type="number" min="1" max="20" step="1"
-                 style="width:120px;text-align:center" value="${persona.maxParallel ?? ''}"
+                 value="${persona.maxParallel ?? ''}"
                  placeholder="6" />
         </div>
         <div class="form-row">
@@ -1699,6 +2225,10 @@ function renderDetailMobile(persona, runtimes) {
           </label>
         </div>
       </div>
+
+      <!-- 主动作通栏（§20.3）：桌面那颗挤在头右上角的小蓝钮在手机上又重又挤，
+           落到正文末尾做整宽主按钮（微信资料页「发消息」同款位）。 -->
+      <button class="primary mb-msg-btn" id="dMsg" title="打开和TA的聊天 —— 有会话就接着最近那段聊，不会另开新会话">${backToChat ? '回到聊天' : '发消息'}</button>
     </div>`;
 
   /*
@@ -1719,42 +2249,147 @@ function renderDetailMobile(persona, runtimes) {
   };
 
   /*
-   * 运行时下拉与桌面同一套挂载组件（createCombo）。内置员工与雇佣员工多一条「自动」——
-   * 他们出厂 runtime 就是 'auto'，清单缺当前值按钮会退化成裸 id（桌面踩过的坑，口径照搬）。
-   * 手机版不画沙箱，模型行是只读的（见上），onChange 不需要做联动对齐，选完直接进防抖保存。
+   * 运行时清单（口径同桌面）：内置员工与专家库雇来的员工（p-expert-*）多一条「自动」——
+   * 他们出厂 runtime 就是 'auto'，清单里没有当前值那行会退化成裸 id，而且改成具体
+   * 运行时之后再也选不回「自动」（桌面踩过的坑，口径照搬）。
    */
   const rtItems = runtimes.map((r) => ({ id: r.id, label: r.label }));
   if (persona.builtin || String(persona.id ?? '').startsWith('p-expert-'))
     rtItems.unshift({ id: 'auto', label: '自动（挑一个能用的）' });
-  const rtCombo = createCombo({
-    mount: $('dRuntimeMount'),
-    items: rtItems,
-    value: persona.runtime,
-    search: false,
-    onChange: () => scheduleSave(300),
-  });
 
   /*
-   * 模型行只读补名（2026-11-03）：页面上先写现值（id 或"跟随默认"），清单问到了
-   * 再换成显示名 —— 清单直接问运行时（readModelList 自带 60s 缓存，与桌面同一份）。
-   * 拉不到就算了：详情页的这个小展示不该因为一次取数失败闹脾气。
+   * 两行都改成「点开全屏选择页」（2026-11-05 用户口径：不要下拉框）。
+   * 选中的值只活在这两个变量里，页面上那两行是纯展示文本，collect() 从这里取值。
+   * curModel 的 '' = 跟随默认（服务端就这么存，与桌面 modelCombo 的 '' 同义）。
    */
+  let curRuntime = persona.runtime ?? '';
+  let curModel = String(persona.model ?? '').trim();
+
+  const paintRuntime = () => {
+    // 清单里找不到就退回原值：宁可显示一个裸 id，也别把那行写成空白
+    const hit = rtItems.find((r) => r.id === curRuntime);
+    const el = $('dRuntimeText');
+    if (el) el.textContent = hit ? hit.label : String(curRuntime ?? '');
+  };
   const paintModel = (text) => {
     const el = $('dModelText');
     if (el) el.textContent = text;
   };
-  if (persona.runtime && persona.runtime !== 'auto') {
-    readModelList(persona.runtime)
-      .then((d) => {
-        if (persona.model) {
-          const hit = (d.models ?? []).find((m) => m.id === persona.model);
-          // 清单里没有也要留着现值 —— 他配的模型可能只是这台 CLI 这会儿报不出来
-          paintModel(hit ? (String(hit.name ?? '').trim() || hit.id) : persona.model);
-        } else if (d.defaultModel) {
-          paintModel('跟随默认 · ' + d.defaultModel);
-        }
-      })
-      .catch(() => {});
+  paintRuntime();
+
+  /*
+   * 「模型」那行的显示名（2026-11-03 起）：页面上先写现值，清单问到了再换成显示名 ——
+   * 清单直接问运行时（readModelList 自带 60s 缓存，与桌面同一份）。
+   * 拉不到就算了：这一行的小展示不该因为一次取数失败闹脾气。
+   *
+   * 注意这里**只补名、不动值**：手机这页没有「刷新」按钮，也没有下拉要喂，
+   * 静默把人家绑着的模型改成默认属于"没打招呼就改配置"——对齐只在用户主动换运行时时做。
+   */
+  const paintModelFromList = async () => {
+    if (!curRuntime || curRuntime === 'auto') { paintModel('跟随默认'); return; }
+    try {
+      const d = await readModelList(curRuntime);
+      if (curModel) {
+        const hit = (d.models ?? []).find((m) => m.id === curModel);
+        // 清单里没有也要留着现值 —— 他配的模型可能只是这台 CLI 这会儿报不出来
+        paintModel(hit ? (String(hit.name ?? '').trim() || hit.id) : curModel);
+      } else {
+        paintModel(d.defaultModel ? '跟随默认 · ' + d.defaultModel : '跟随默认');
+      }
+    } catch { /* 取不到清单：留着现值 / 「跟随默认」，不为一次取数失败打断这一页 */ }
+  };
+  paintModelFromList();
+
+  /*
+   * 换运行时（选择页选中之后）—— 桌面 fillModels 的手机精简版：
+   *   · auto 没有自己的模型清单（问它只会 404）→ 模型只能是「跟随默认」；
+   *   · 其余：清单**读到了**才对齐（跨运行时沿用旧模型名本来就不对，桌面同口径），
+   *     读不到保留现值（读不到可能只是暂时取不到，盲切会弄丢活绑定）。
+   * 改的是人家绑着的模型，切了必须报一声 —— 不说人根本不知道为什么变成默认了。
+   */
+  const pickRuntime = async (id) => {
+    if (id === curRuntime) return;
+    curRuntime = id;
+    paintRuntime();
+    if (id === 'auto') {
+      curModel = '';
+      paintModel('跟随默认');
+      scheduleSave(300);
+      return;
+    }
+    paintModel(curModel || '跟随默认');   // 先显示旧值，别让那行在取数期间空着
+    try {
+      const d = await readModelList(id);
+      const list = d.models ?? [];
+      if (curModel && !list.some((m) => m.id === curModel)) {
+        toast(`原来绑的 ${curModel} 已不在这台 CLI 的清单里，已切回跟随默认`);
+        curModel = '';
+      }
+      const hit = list.find((m) => m.id === curModel);
+      paintModel(
+        curModel
+          ? (String(hit?.name ?? '').trim() || curModel)
+          : (d.defaultModel ? '跟随默认 · ' + d.defaultModel : '跟随默认'),
+      );
+    } catch {
+      paintModel(curModel || '跟随默认');
+    }
+    // 对齐完再存：否则会把旧模型名存给新运行时
+    scheduleSave(300);
+  };
+
+  $('dRuntimeRow').onclick = () =>
+    mbOpenPicker({ title: '选择运行时', items: rtItems, value: curRuntime, onPick: pickRuntime });
+
+  $('dModelRow').onclick = async () => {
+    if (curRuntime === 'auto') { toast('运行时是自动挑的，模型跟着默认走'); return; }
+    let d;
+    try {
+      d = await readModelList(curRuntime);
+    } catch (err) {
+      toast('取不到模型清单：' + (err?.message ?? '服务异常'), 'error');
+      return;   // 打不开选择页就别开：一页「没有匹配」比不开更让人糊涂
+    }
+    const list = d.models ?? [];
+    // 第一项固定「跟随默认」，sub 写**真实**默认模型名 —— 只写"默认"人不知道落到哪个模型
+    const items = [{
+      id: '',
+      label: '跟随默认',
+      sub: d.defaultModel ? '默认走 ' + d.defaultModel : '交给 CLI 自己的默认',
+    }];
+    // 清单里没有也留着现值：宁可显示「清单里没有」，也别当成没配（可能只是这会儿报不出来）
+    if (curModel && !list.some((m) => m.id === curModel))
+      items.push({ id: curModel, label: '（清单里没有）' + curModel });
+    items.push(...modelItems(list));   // 供应商分组 / 撞名补 id，与桌面下拉同一份口径
+    // 顶部说明行：有几条、来自哪个运行时 —— 空清单时这里交代原因，页面不至于莫名其妙
+    const rtLabel = rtItems.find((r) => r.id === curRuntime)?.label ?? curRuntime;
+    const note = list.length
+      ? `${list.length} 个模型 · ${rtLabel}`
+      : `这台 CLI 没报出模型清单 · ${rtLabel}`;
+    mbOpenPicker({
+      title: '选择模型',
+      note,
+      items,
+      value: curModel,
+      onPick: (id) => {
+        curModel = id;
+        // 显示名从清单补（真实名 / 撞名 / 默认名），与进页时的补名同一份口径
+        paintModelFromList();
+        scheduleSave(300);
+      },
+    });
+  };
+
+  /*
+   * 两行是 role=button 的 div（不是 <button>）：整行可点、又能吃 .form-row 的栅格重排。
+   * 代价是键盘 Enter/Space 不会自动变 click —— 补这一下，读屏 / 外接键盘才点得动。
+   */
+  for (const rid of ['dRuntimeRow', 'dModelRow']) {
+    $(rid)?.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      e.preventDefault();
+      $(rid).click();
+    });
   }
 
   /**
@@ -1763,15 +2398,16 @@ function renderDetailMobile(persona, runtimes) {
    *   · name 必填（缺了直接 E1011 拒掉）；
    *   · instructions 在路由里是无条件 `String(body.instructions ?? '')` —— 缺省会被兜成
    *     空串**清空职责设定**。
-   * 所以身份资料必须从现值原样带回；runtime / showThinking / maxParallel 三个才是
-   * 精简表单真正能改的字段。
+   * 所以身份资料必须从现值原样带回；runtime / model / showThinking / maxParallel 四个才是
+   * 精简表单真正能改的字段（model 与桌面同一字段名：'' = 交给 CLI 自己的默认）。
    */
   const collect = () => ({
     name: persona.name,
     role: persona.role ?? null,
     department: persona.department ?? null,
     instructions: persona.instructions ?? '',
-    runtime: rtCombo.value(),
+    runtime: curRuntime,
+    model: curModel,
     showThinking: $('dThink').checked,
     // 空着 = 恢复默认（null）；数字服务端会钳位，这里只管传
     maxParallel: $('dMaxParallel').value.trim() === '' ? null : Number($('dMaxParallel').value),

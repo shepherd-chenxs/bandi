@@ -9,7 +9,9 @@
  *   ④ 键盘适配：visualViewport 高度喂给 --mb-vh，对话页输入栏不挡；
  *   ⑤ 401 引导（PRD P0-3）：手机形态下收到 E4010/E4012 → 全屏"重新扫码"提示，
  *      不做裸登录页；
- *   ⑥ 下拉刷新（P1-1）：列表一级页顶部下拉重拉 load()，节流。
+ *   ⑥ 下拉刷新（P1-1）：列表一级页顶部下拉重拉 load()，节流；
+ *   ⑦ 历史栈卫生（2026-11-05）：返回键永远摸不到登录页 —— 开机截断启动页残留的
+ *      forward 层；跨文档退回旧文档时自动续连，不复活旧会话。
  *
  * 骨架既有规矩的遵守：列表/详情 DOM 常驻，这里只切 body 状态类，不改任何渲染函数
  * 的输出结构；不动 #listBody 的 innerHTML；搜索/筛选照旧只重画结果块。
@@ -57,8 +59,15 @@ function enterDetail(title) {
   body.classList.add('mb-detail-open');
 }
 
-/** 返回列表：摘掉展开态，把滚动位置还给列表 */
-function leaveDetail() {
+/**
+ * 返回列表：摘掉展开态，把滚动位置还给列表。
+ *
+ * `alreadyPopped` = 这次收起是手势/返回键的 popstate 带来的 —— 那格历史系统已经替我们
+ * 退掉了，别再 history.back() 多退一格。按钮/Esc 进来的（默认）要自己退：进详情时压的
+ * 那格必须跟着收起一起回收，否则它成"幽灵格"—— 画面在列表，栈里还停在详情，用户按
+ * 返回先无声吞掉一格，再按就跨文档退出工作台（见文件尾 ⑦ 历史栈卫生）。
+ */
+function leaveDetail(alreadyPopped) {
   // 抽屉（聊天记录 / 群设置）是 fixed 覆盖层，不归详情态的折叠管 —— 不主动关掉，
   // 退回列表后它照样盖在屏幕上，看起来"还是聊天记录"（2026-11 用户实报）。
   closeDrawer();
@@ -79,6 +88,9 @@ function leaveDetail() {
   requestAnimationFrame(() => {
     if ($('listBody')) $('listBody').scrollTop = listScroll;
   });
+  // 视觉态和栈必须一起退：当前这格就是进详情时压的那格（state 带着标记）才退。
+  // 从 popstate 进来时历史已经退过（此刻 state 是上一层），守卫保证不会多退。
+  if (!alreadyPopped && history.state?.mbDetail) history.back();
 }
 
 /*
@@ -134,8 +146,10 @@ document.addEventListener('mb-detail', (e) => {
     return;
   }
   enterDetail(title);
-  // 与列表行进详情同一条规矩：一格折叠压一格历史，手势返回才回得来
-  history.pushState({ mbDetail: true }, '');
+  // 与列表行进详情同一条规矩：一格折叠压一格历史，手势返回才回得来。
+  // reload 恢复的详情（当前格 state 里已带着 mbDetail 标记）复用那一格，不再重压 ——
+  // 多压一格，返回就得多按一次空的。
+  if (!history.state?.mbDetail) history.pushState({ mbDetail: true }, '');
 });
 
 // Esc 逐级后退：窄屏且详情开着时接管，别抢弹窗的 Esc（弹窗在 open 时 keydown 冒到 document，
@@ -143,15 +157,55 @@ document.addEventListener('mb-detail', (e) => {
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape' || !isNarrow()) return;
   if (document.querySelector('dialog[open]')) return;
+  // 选择页开着时 Esc 归它（chat.mjs 的监听里收的是选择页，不是详情页）
+  if (document.body.classList.contains('mb-picker-open')) return;
+  // 「新建任务」页（projects.mjs 的 .kb-new）也是详情页的下一级 —— 它自己那一格历史
+  // 退回来时画面上还盖着它，这里当详情处理就会把底下的看板一起收掉（按一次返回掉两级）
+  if (document.body.classList.contains('kb-new-open')) return;
+  // 定时任务的新建/编辑页（skills.mjs 的 .sch-page）同理：它自己收自己那一格
+  if (document.body.classList.contains('sch-page-open')) return;
+  // 任务卡的「讨论抽屉」（projects.mjs 的 .tc-sheet）同理：它是卡页的下一级，
+  // 退回来只该收它自己 —— 这里放行，由 projects.mjs 的 Esc 监听收（2026-11-05）
+  if (document.body.classList.contains('tc-sheet-open')) return;
   if (document.body.classList.contains('mb-detail-open')) {
     e.preventDefault();
     leaveDetail();
   }
 });
 
-// 浏览器返回键（手机上的手势返回）也走同一条路：history 里推进一格，popstate 时收起
-window.addEventListener('popstate', () => {
-  if (isNarrow() && document.body.classList.contains('mb-detail-open')) leaveDetail();
+// 浏览器返回键（手机上的手势返回）也走同一条路：history 里推进一格，popstate 时收起。
+// alreadyPopped=true：这格历史手势已经替我们退了，leaveDetail 只收画面不再退格。
+window.addEventListener('popstate', (e) => {
+  // 全屏选择页（chat.mjs 的 mbPicker）自己那一格：它自己会收，这里放行 ——
+  // 否则它压的那格历史退回来时，详情页会被跟着一起收掉（按一次返回掉回列表）
+  if (document.body.classList.contains('mb-picker-open')) return;
+  // 同上：「新建任务」页（.kb-new）也自己收自己那一格。漏了这一行，它退回来时会被当成
+  // "退到根页"，⑦c 的根页井再压一格回去 —— 用户要按两次返回才出得来看板。
+  if (document.body.classList.contains('kb-new-open')) return;
+  // 同上：定时任务的新建/编辑页（.sch-page）也自己收自己那一格（skills.mjs 的 popstate）
+  if (document.body.classList.contains('sch-page-open')) return;
+  // 同上：任务卡的讨论抽屉（.tc-sheet）也自己收自己那一格（projects.mjs 的 popstate）。
+  // 漏了这行，返回键会把底下的卡页一起收掉 —— 一次返回从抽屉直接掉回看板（2026-11-05）
+  if (document.body.classList.contains('tc-sheet-open')) return;
+  if (isNarrow() && document.body.classList.contains('mb-detail-open')) {
+    leaveDetail(true);
+    return;
+  }
+  // 详情没开却退到一格带 mbDetail 标记的 = 上一场会话 / reload 前攒下的幽灵格：
+  // 标记就地清掉，免得下次 leaveDetail 把它错当成"自己压的格"又多退一格
+  if (e.state?.mbDetail) {
+    history.replaceState(null, '');
+    return;
+  }
+  /*
+   * ⑦c 根页井（2026-11-05 用户四报"两次返回退到扫码页"的收口）：退到底了 ——
+   * 落回文档首格（state 不是我们的标记），立刻补一格标记回去。画面不动、栈不再
+   * 往下走：返回键在根页就是原地不动，Android 永远收不到"退无可退"的信号，
+   * App 不会被返回键退出 —— 重开自然也不会落启动页（扫码页）。
+   * 退出靠 Home 手势；回连接页只剩「断开连接」和配对失效两条正路。
+   * （浏览器里没有壳，不拦 —— 标签页的返回交还浏览器。）
+   */
+  if (inShell() && !e.state?.mbBoot) history.pushState({ mbBoot: 1 }, '');
 });
 $('listBody').addEventListener(
   'click',
@@ -169,8 +223,9 @@ $('listBody').addEventListener(
     // 详情已经开着就别再压历史（2026-10-28）：连点几次行会攒出多层"返回"，
     // 手机上要按好几次手势才退得出去 —— 一次折叠只对应一格历史。
     if (document.body.classList.contains('mb-detail-open')) return;
-    // 详情页压一格历史：手机手势返回 = 回列表（与 Esc / 「← 返回」同一条路）
-    history.pushState({ mbDetail: true }, '');
+    // 详情页压一格历史：手机手势返回 = 回列表（与 Esc / 「← 返回」同一条路）。
+    // 当前格已带 mbDetail 标记（reload 恢复的场景）就复用，不重压
+    if (!history.state?.mbDetail) history.pushState({ mbDetail: true }, '');
   },
   true,
 );
@@ -215,9 +270,14 @@ tabbar.innerHTML = `
   </button>`;
 tabbar.querySelectorAll('.mb-tab').forEach((b) => {
   b.addEventListener('click', () => {
-    // 点 tab 先退出详情折叠态：换一级页是回到"一级页"
+    // 点 tab 先退出详情折叠态：换一级页是回到"一级页"。
+    // 历史格要跟折叠态一起回收（2026-11-05）：只摘类不退格，那格成幽灵 ——
+    // 手势返回先无声吞掉一格，再按就跨文档退出去。tab 明确换栏，不走 leaveDetail
+    // 的"来源栏回跳"（S.mbBackNav），只做格子回收。
+    const wasOpen = document.body.classList.contains('mb-detail-open');
     document.body.classList.remove('mb-detail-open');
     document.body.classList.remove('mb-chat');
+    if (wasOpen && history.state?.mbDetail) history.back();
     // 抽屉是 fixed 覆盖层，换一级页时必须一起关，否则新页面被旧抽屉盖住
     closeDrawer();
     // 手动换栏就不再是"从通讯录进来又返回"那条路了，来源标记作废
@@ -241,8 +301,11 @@ document.body.append(tabbar);
 document.addEventListener('mb-nav', (e) => {
   const nav = e.detail?.nav;
   if (!nav) return;
-  // 互跳是换一级页：详情折叠态要先收掉，否则新页面被压在折叠态后面
+  // 互跳是换一级页：详情折叠态要先收掉，否则新页面被压在折叠态后面。
+  // 历史格同 tab 那条规矩一起回收（见 tabbar click 的注释）
+  const wasOpen = document.body.classList.contains('mb-detail-open');
   document.body.classList.remove('mb-detail-open');
+  if (wasOpen && history.state?.mbDetail) history.back();
   setNav(nav);
   syncTabs();
 });
@@ -554,3 +617,134 @@ $('listBody').addEventListener(
   },
   { passive: true },
 );
+
+/* ---------------------------------------------------------------- ⑦ 历史栈卫生 */
+
+/*
+ * 2026-11-05 用户三报「点返回直接退到登录页」的根治。病灶是壳的 WebView 历史栈里
+ * 残着连接页（=登录页）的条目，工作台按返回会跨文档撞回去。前两次修复各堵了一个口，
+ * 但都没堵全：
+ *   · 11-01（壳 lib.rs）：navigate → location.replace —— 只保证连接页的**首条**被顶掉；
+ *   · 11-03（启动页 launcher.js squashHistory）：history.go(-depth) 退到底再 replace ——
+ *     但 go() 只是把启动页自己压的那几层"退到底"，栈里并没删，它们变成 **forward 残留**
+ *     （方向朝前）留在栈里，而 replace 只顶当前条目。连接成功后的栈 =
+ *     [工作台(当前), 启动页视图层(forward 残留)] —— 开详情之前的任何一次返回，一步就
+ *     跨文档撞进残层 = 登录页；
+ *   · 本文件（旧 leaveDetail）：按钮关详情只摘 CSS 类不退历史格 —— "幽灵格"让手势返回
+ *     先无声吞一格，再按就出文档，同样撞进残层。
+ *
+ * 三道闸（⑦a/⑦b/⑦c + 上文 leaveDetail 的格子回收）合起来：返回键在详情关详情、
+ * 在根页原地不动（⑦c 的井），永远不再落登录页、也不会把 App 退出去重开见启动页。
+ * 回登录页只剩「断开连接」和配对失效两条正路。
+ */
+
+/** ⑦a 跨文档退回了班底自己的旧文档 —— 原地续连，不弹登录页也不复活旧会话。 */
+function bounceBackArrival() {
+  if (!inShell()) return;
+  // 用 clientKey 换张新令牌接着用；续不上（真断开了）落 /pair 的报错脸 ——
+  // 那才是唯一该见到连接页的形态
+  location.replace('/pair?resume=1');
+}
+
+const navType =
+  performance.getEntriesByType?.('navigation')?.[0]?.type ?? 'navigate';
+// 手势返回撞进栈里残留的旧工作台条目时，旧文档会重新起一遍：navigation type 是
+// back_forward。bfcache 复活（pageshow.persisted）同理 —— 都不是正常进场，续连接管。
+let backBounced = false;
+if (navType === 'back_forward') {
+  backBounced = true;
+  bounceBackArrival();
+}
+window.addEventListener('pageshow', (e) => {
+  if (e.persisted) bounceBackArrival();
+});
+
+/*
+ * ⑦b 根页预留格：开机（壳里）压一格我们自己的标记 —— pushState 按规范会截掉当前
+ * 条目之后的整个 forward 栈，启动页残留的视图层连人带格消失。
+ *
+ * 这格同时也是 ⑦c 依赖的"井底水囊"：它在，手势返回就永远有得退（WebView 的
+ * canGoBack 恒真），Android 永远收不到"退无可退"的信号 —— App 不会被返回键退出，
+ * 重开更不会落启动页。reload 后当前格已经是自己的标记/详情格就免压（历史原样保留）。
+ */
+if (
+  inShell() &&
+  !backBounced &&
+  history.state?.mbBoot !== 1 &&
+  !history.state?.mbDetail
+) {
+  history.pushState({ mbBoot: 1 }, '');
+}
+
+/* ---------------------------------------------------------------- ⑧ 长按出菜单（会话行） */
+
+/*
+ * 手机上右键不存在，但「不显示 / 删除会话」的菜单（#ctxMenu）是必需的 ——
+ * 不新写一份菜单，只把长按**合成为一次 contextmenu**，交给 app.mjs boot 区那条委托
+ * （它按 e.target.closest('[data-conv]') 找人、按 clientX/Y 定位）。菜单长什么样
+ * 由 mobile.css §16.12 改造成贴底 action sheet，这里一句样式都不碰。
+ *
+ * 为什么要吞掉随后的 click：长按松手一样会派 click，不拦就直接进会话，菜单白弹。
+ * 拦截放 capture 阶段并且只拦一次 —— 否则下一次正常点击也会被吃掉。
+ */
+if ($('listBody')) {
+  const LONG = 500;     // 触发时长：微信/Telegram 都是 0.5s 左右，更短容易和滚动打架
+  const SLOP = 10;      // 手指抖动容忍：超过 10px 就认定用户在滚列表，取消长按
+  let timer = 0;
+  let startX = 0;
+  let startY = 0;
+  let row = null;
+  let fired = false;    // 这一轮触摸已经出过菜单 → 吞掉紧跟着的 click
+
+  const cancel = () => {
+    clearTimeout(timer);
+    timer = 0;
+    row = null;
+  };
+
+  $('listBody').addEventListener('touchstart', (e) => {
+    if (!isNarrow() || e.touches.length !== 1) return;
+    const t = e.target.closest?.('[data-conv]');
+    if (!t) return;
+    row = t;
+    fired = false;
+    startX = e.touches[0].clientX;
+    startY = e.touches[0].clientY;
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = 0;
+      const r = row;
+      if (!r || !r.isConnected) return;
+      fired = true;
+      // 振动是锦上添花：WebView 里可能没有，没有就算了
+      try { navigator.vibrate?.(10); } catch { /* 不支持 */ }
+      r.dispatchEvent(new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        clientX: startX,
+        clientY: startY,
+      }));
+    }, LONG);
+  }, { passive: true });
+
+  $('listBody').addEventListener('touchmove', (e) => {
+    if (!timer) return;
+    const t = e.touches[0];
+    if (Math.abs(t.clientX - startX) > SLOP || Math.abs(t.clientY - startY) > SLOP) cancel();
+  }, { passive: true });
+
+  $('listBody').addEventListener('touchcancel', cancel, { passive: true });
+
+  /*
+   * touchend 只清定时器、不取消 fired：菜单已经弹出来的那种情况，click 随后就到。
+   * 顺序上 touchend 先于 click，所以这里不能把 fired 归零。
+   */
+  $('listBody').addEventListener('touchend', () => { clearTimeout(timer); timer = 0; }, { passive: true });
+
+  $('listBody').addEventListener('click', (e) => {
+    if (!fired) return;
+    fired = false;
+    e.stopPropagation();
+    e.preventDefault();
+  }, true);
+}

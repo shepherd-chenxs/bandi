@@ -9,21 +9,26 @@
  * 和业务页（192.168.x / 域名）不是同一个 origin，读不到那边的 localStorage；
  * 而且它出现在连接之前 —— 那时还没有"某台电脑的偏好"可读。系统亮/暗是唯一
  * 可靠的信号（2026-11-01 用户问"界面为什么是黑色的"后加的）。
+ *
+ * 2026-11-05 视觉重排（去网页味）：
+ *   · 背景是**纯色系统底**（深 #0a0b0d / 浅 iOS grouped #f2f3f7），不再加径向光晕；
+ *   · 卡片一律 filled（白 / 深灰），靠 hairline 分层，不靠描边套描边；
+ *   · 标题、正文的 letter-spacing 全部收掉 —— 字距是排版网页的习惯，原生 App 没有；
+ *   · 层级只留三档：大标题 / 正文 / 次要灰字。
  */
 :root {
   color-scheme: dark;
 
-  --bg: #08090a;
-  --bg-glow: #182031;
-  --card: #101214;
-  --card-2: #0b0d10;
-  --line: #23262a;
-  --line-2: #2c3037;
-  --text: #e8e9ea;
-  --dim: #9aa0a6;
-  --strong: #c8cdd4;
-  --accent: #3b6ef5;
-  --accent-2: #6d92ff;
+  --bg: #0a0b0d;
+  --card: #16181c;
+  --card-2: #1e2126;
+  --hairline: rgba(255, 255, 255, 0.08);
+  --line: rgba(255, 255, 255, 0.1);
+  --text: #f1f2f4;
+  --dim: #9aa1a9;
+  --strong: #d5d9de;
+  --accent: #3d76f6;
+  --accent-2: #6d95ff;
   --bad: #c0504d;
   --good: #2e9e6b;
   /* 破坏性按钮的文字色：深底上要亮一点才看得清（浅色主题换成更深的红） */
@@ -33,21 +38,20 @@
      强调色，换主题不该换掉"主按钮长什么样"。 */
   --hero-a: #4a7cff;
   --hero-b: #2b53cf;
-  --hero-glow: rgba(59, 110, 245, 0.4);
-  --hero-edge: rgba(255, 255, 255, 0.16);
+  --hero-glow: rgba(59, 110, 245, 0.3);
 
-  /* 次要入口（列表行） */
-  --alt-bg: #101214;
-  --alt-ico-bg: rgba(59, 110, 245, 0.14);
+  --alt-ico-bg: rgba(109, 149, 255, 0.14);
   --alt-ico-ink: #8aa8ff;
 
-  --btn-bg: #171a1e;
-  --status-bg: #17191d;
-  --placeholder: #4a4f56;
-  --placeholder-2: #363a40;
+  --btn-bg: #22262c;
+  --status-bg: #1d2025;
+  --placeholder: #575d65;
+  --placeholder-2: #4a5058;
 
-  --r-card: 22px;
-  --r-ctl: 13px;
+  --r-card: 18px;
+  --r-group: 16px;
+  --r-ctl: 12px;
+  --r-btn: 14px;
 }
 
 /* 注意：这里**不能**用 `height: 100%`。钉死视口高度后，键盘弹起时内容
@@ -60,14 +64,13 @@ html {
 body {
   min-height: 100dvh;
   margin: 0;
-  background:
-    radial-gradient(120% 70% at 50% -10%, var(--bg-glow) 0%, transparent 62%),
-    var(--bg);
+  background: var(--bg);
   color: var(--text);
   font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
     "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
   -webkit-text-size-adjust: 100%;
   -webkit-tap-highlight-color: transparent;
+  -webkit-font-smoothing: antialiased;
   /* 不给 body 加 overflow-y —— 移动 WebView 的滚动容器是文档本身，
      body 上的 overflow 不接管滚动，加了反而让内容被裁掉。 */
 }
@@ -76,11 +79,10 @@ body {
   min-height: var(--vvh, 100dvh);
   display: flex;
   flex-direction: column;
-  /* 顶部 20px：首页是从品牌块开始的，不需要旧版那种 60px 的"标题让位"。
-     邀请码/已配对两个视图自带 .nav 返回行，输入框照样落在上半屏。 */
-  padding: calc(20px + env(safe-area-inset-top)) 20px
-    calc(22px + var(--kb, 0px) + env(safe-area-inset-bottom));
-  max-width: 460px;
+  /* 邀请码/已配对两个视图自带 .nav 返回行，输入框照样落在上半屏。 */
+  padding: calc(16px + env(safe-area-inset-top)) 18px
+    calc(20px + var(--kb, 0px) + env(safe-area-inset-bottom));
+  max-width: 480px;
   margin: 0 auto;
 }
 
@@ -101,82 +103,82 @@ body {
 
 /*
  * 键盘：仍然只靠布局（README「4. 启动页的键盘适配只能靠布局」）。
- * 邀请码视图是**顶部对齐**的：返回行 30 + 标题 55 + 两个输入框 ≈ 底部 310-330，
- * 真机键盘顶在 y≈350，盖不住。⚠️ 别给它加垂直居中、别加大段留白。
+ * 邀请码视图是**顶部对齐**的：返回行 36 + 标题/说明 ~70 + 两个输入框 + 按钮，
+ * 底部落在 330-360，真机键盘顶在 y≈350，盖不住。
+ * ⚠️ 别给它加垂直居中、别加大段留白。
  */
 
-/* ---------------------------------------------------------------- 首页 · 品牌 */
+/* ---------------------------------------------------------------- 首页 · 品牌区 */
 
+/* iOS 大标题式：logo 和名字一行排开、左对齐 —— 居中 hero 是落地页的排法 */
 .brand {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  text-align: center;
-  margin-top: clamp(10px, 4vh, 40px);
+  gap: 13px;
+  margin-top: clamp(8px, 3vh, 26px);
 }
 
 .logo {
-  width: 54px;
-  height: 54px;
+  flex: 0 0 auto;
+  width: 46px;
+  height: 46px;
   display: grid;
   place-items: center;
-  border-radius: 16px;
-  background: linear-gradient(145deg, #5b86ff, #2b52c9);
-  color: #fff;
-  font-size: 26px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  box-shadow: 0 12px 30px rgba(59, 110, 245, 0.34),
-    inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  border-radius: 13px;
+  background: linear-gradient(150deg, #5b86ff, #2b52c9);
+  box-shadow: 0 6px 16px rgba(59, 110, 245, 0.32);
 }
 
-h1 {
-  margin: 14px 0 0;
-  font-size: 25px;
-  line-height: 1.25;
+/* 2026-11-06 品牌统一：文字「B」换真 B 字标（SVG），字号规则随之退役 */
+.logo svg {
+  width: 26px;
+  height: 26px;
+  display: block;
+}
+
+.brand-txt h1 {
+  margin: 0;
+  font-size: 22px;
+  line-height: 1.2;
   font-weight: 700;
-  letter-spacing: 0.1em;
-  /* 两个字带字距时右侧会多出一格空白，负边距补回来才真居中 */
-  text-indent: 0.1em;
 }
 
 .brand-sub {
-  margin: 6px 0 0;
+  margin: 2px 0 0;
   color: var(--dim);
   font-size: 13px;
-  letter-spacing: 0.02em;
 }
 
-/* ---------------------------------------------------------------- 首页 · 扫码大按钮 */
+/* ---------------------------------------------------------------- 首页 · 扫码主卡片 */
 
 /*
- * 首屏唯一的主按钮（用户 2026-11-03：「扫码做成一个大按钮」）。
- * 整块都是可点的：取景框四角 + 中间二维码图标 + 一道扫描线，不用读字也知道
- * 这里是"扫一扫"；底下两行字说明对准哪儿。
+ * 首屏唯一的主按钮（用户 2026-11-03：「扫码做成一个大按钮」；2026-11-05 改横向）。
+ * 取景框在左、文案在右 —— 一眼是"扫一扫"，手感的分量靠整块卡片的渐变蓝给。
+ * 位置跟着品牌区走（不居中、不落底）：内容从上往下密排，长屏下方留白是
+ * 原生 App 的常态（设置页就长这样），比"页中一个大空洞"干净得多。
  */
 .scan-hero {
   appearance: none;
   display: flex;
-  flex-direction: column;
   align-items: center;
+  gap: 15px;
   width: 100%;
-  margin-top: clamp(18px, 5vh, 44px);
-  padding: 24px 20px 22px;
-  border: 1px solid var(--hero-edge);
+  margin-top: clamp(20px, 5vh, 36px);
+  padding: 18px 16px;
+  border: none;
   border-radius: var(--r-card);
   background: linear-gradient(168deg, var(--hero-a) 0%, var(--hero-b) 100%);
   color: #fff;
   font-family: inherit;
+  text-align: left;
   cursor: pointer;
-  box-shadow: 0 18px 40px var(--hero-glow),
-    inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  box-shadow: 0 10px 28px var(--hero-glow);
   transition: transform 0.1s ease, box-shadow 0.2s ease;
 }
 
 .scan-hero:active {
-  transform: scale(0.985);
-  box-shadow: 0 8px 22px var(--hero-glow),
-    inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  transform: scale(0.98);
+  box-shadow: 0 5px 16px var(--hero-glow);
 }
 
 .scan-hero:focus-visible {
@@ -184,22 +186,27 @@ h1 {
   outline-offset: 3px;
 }
 
+/* ⚠️ .scan-hero 自己声明了 display，会压掉 UA 的 [hidden] —— 必须显式写 */
+.scan-hero[hidden] {
+  display: none;
+}
+
 .frame {
   position: relative;
+  flex: 0 0 auto;
   display: grid;
   place-items: center;
-  width: 98px;
-  height: 98px;
-  margin-bottom: 16px;
+  width: 62px;
+  height: 62px;
 }
 
 /* 取景框四角。⚠️ 用 nth-of-type 而不是 nth-child：.frame 的第一个子元素是
    .frame-qr 图标，nth-child 会整体错位一格。nth-of-type 只数 <i>，不受影响。 */
 .frame i {
   position: absolute;
-  width: 24px;
-  height: 24px;
-  border: 2.5px solid rgba(255, 255, 255, 0.85);
+  width: 17px;
+  height: 17px;
+  border: 2.5px solid rgba(255, 255, 255, 0.9);
 }
 
 .frame i:nth-of-type(1) {
@@ -207,7 +214,7 @@ h1 {
   left: 0;
   border-right: 0;
   border-bottom: 0;
-  border-top-left-radius: 12px;
+  border-top-left-radius: 8px;
 }
 
 .frame i:nth-of-type(2) {
@@ -215,7 +222,7 @@ h1 {
   right: 0;
   border-left: 0;
   border-bottom: 0;
-  border-top-right-radius: 12px;
+  border-top-right-radius: 8px;
 }
 
 .frame i:nth-of-type(3) {
@@ -223,7 +230,7 @@ h1 {
   bottom: 0;
   border-left: 0;
   border-top: 0;
-  border-bottom-right-radius: 12px;
+  border-bottom-right-radius: 8px;
 }
 
 .frame i:nth-of-type(4) {
@@ -231,35 +238,34 @@ h1 {
   left: 0;
   border-right: 0;
   border-top: 0;
-  border-bottom-left-radius: 12px;
+  border-bottom-left-radius: 8px;
 }
 
 .frame-qr {
   display: grid;
   place-items: center;
-  width: 62px;
-  height: 62px;
-  border-radius: 17px;
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
   background: rgba(255, 255, 255, 0.16);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
   color: #fff;
 }
 
 .frame-qr svg {
-  width: 32px;
-  height: 32px;
+  width: 22px;
+  height: 22px;
 }
 
 /* 扫描线：一条在框里来回走的细光，暗示"这里正在等二维码" */
 .sweep {
   position: absolute;
-  left: 10px;
-  right: 10px;
-  top: 12px;
+  left: 7px;
+  right: 7px;
+  top: 9px;
   height: 2px;
   border-radius: 2px;
   background: linear-gradient(90deg, transparent, #fff, transparent);
-  box-shadow: 0 0 12px rgba(255, 255, 255, 0.7);
+  box-shadow: 0 0 10px rgba(255, 255, 255, 0.7);
   opacity: 0.55;
   animation: sweep 2.8s cubic-bezier(0.45, 0, 0.55, 1) infinite;
 }
@@ -271,51 +277,57 @@ h1 {
     opacity: 0.15;
   }
   50% {
-    transform: translateY(72px);
+    transform: translateY(42px);
     opacity: 0.85;
   }
 }
 
+.scan-txt {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
 .scan-title {
-  font-size: 18px;
+  font-size: 17px;
   font-weight: 650;
-  letter-spacing: 0.05em;
 }
 
 .scan-sub {
-  margin-top: 5px;
-  color: rgba(255, 255, 255, 0.74);
-  font-size: 12.5px;
-  letter-spacing: 0.01em;
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 13px;
+}
+
+.scan-chev {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.scan-chev svg {
+  width: 16px;
+  height: 16px;
 }
 
 /* ---------------------------------------------------------------- 首页 · 其他方式 */
 
-/* 「其他方式」分隔线：两条 hairline + 中间一行小字，把主按钮和次要入口分层 */
-.or {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin: 20px 4px 14px;
+/* 小节标签：原生 App 的 grouped list 上方就一行小灰字，不要网页那种分隔线 */
+.sec-label {
+  margin: 26px 2px 8px;
   color: var(--dim);
-  font-size: 11.5px;
-  letter-spacing: 0.12em;
-}
-
-.or::before,
-.or::after {
-  content: "";
-  flex: 1 1 auto;
-  height: 1px;
-  background: var(--line);
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .alt {
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--line);
-  border-radius: 16px;
-  background: var(--alt-bg);
+  border-radius: var(--r-group);
+  background: var(--card);
   overflow: hidden;
 }
 
@@ -325,7 +337,8 @@ h1 {
   align-items: center;
   gap: 12px;
   width: 100%;
-  padding: 13px 12px 13px 13px;
+  min-height: 62px;
+  padding: 12px 14px;
   border: 0;
   background: none;
   color: var(--text);
@@ -335,12 +348,13 @@ h1 {
   transition: background 0.14s ease;
 }
 
+/* 行间 hairline：grouped list 的分隔就在组内，组外没有边框 */
 .alt-row + .alt-row {
-  border-top: 1px solid var(--line);
+  border-top: 1px solid var(--hairline);
 }
 
 .alt-row:active {
-  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  background: var(--card-2);
 }
 
 .alt-row:focus-visible {
@@ -358,16 +372,16 @@ h1 {
   flex: 0 0 auto;
   display: grid;
   place-items: center;
-  width: 36px;
-  height: 36px;
-  border-radius: 11px;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
   background: var(--alt-ico-bg);
   color: var(--alt-ico-ink);
 }
 
 .alt-ico svg {
-  width: 20px;
-  height: 20px;
+  width: 19px;
+  height: 19px;
 }
 
 .alt-txt {
@@ -379,14 +393,13 @@ h1 {
 }
 
 .alt-label {
-  font-size: 14.5px;
+  font-size: 15px;
   font-weight: 600;
-  letter-spacing: 0.02em;
 }
 
 .alt-meta {
   color: var(--dim);
-  font-size: 12px;
+  font-size: 12.5px;
   line-height: 1.4;
   overflow: hidden;
   white-space: nowrap;
@@ -397,14 +410,14 @@ h1 {
   flex: 0 0 auto;
   display: grid;
   place-items: center;
-  width: 20px;
+  width: 18px;
   color: var(--dim);
-  opacity: 0.75;
+  opacity: 0.55;
 }
 
 .alt-chev svg {
-  width: 16px;
-  height: 16px;
+  width: 15px;
+  height: 15px;
 }
 
 /* ---------------------------------------------------------------- 视图头（返回 + 标题） */
@@ -412,34 +425,34 @@ h1 {
 .nav {
   display: flex;
   align-items: center;
-  min-height: 30px;
-  margin-bottom: 10px;
+  min-height: 40px;
+  margin: 0 0 2px -10px;
 }
 
+/* 返回 = 原生样式：蓝色 chevron + 蓝字（iOS 导航返回），点击区做到 40 高 */
 .nav-back {
   appearance: none;
   display: inline-flex;
   align-items: center;
-  gap: 1px;
-  height: 30px;
-  margin-left: -6px;
+  gap: 2px;
+  height: 40px;
   padding: 0 10px 0 2px;
   border: 0;
-  border-radius: 9px;
+  border-radius: 10px;
   background: none;
-  color: var(--dim);
+  color: var(--accent);
   font-family: inherit;
-  font-size: 13.5px;
+  font-size: 15px;
   cursor: pointer;
 }
 
 .nav-back svg {
-  width: 17px;
-  height: 17px;
+  width: 20px;
+  height: 20px;
 }
 
 .nav-back:active {
-  color: var(--text);
+  opacity: 0.6;
 }
 
 .nav-back:focus-visible {
@@ -448,18 +461,22 @@ h1 {
 }
 
 .view-title {
-  margin: 0;
-  font-size: 21px;
-  line-height: 1.3;
+  margin: 2px 0 0;
+  font-size: 24px;
+  line-height: 1.25;
   font-weight: 700;
-  letter-spacing: 0.03em;
 }
 
 .view-sub {
-  margin: 4px 0 16px;
+  margin: 3px 0 12px;
   color: var(--dim);
-  font-size: 12.5px;
+  font-size: 13px;
   line-height: 1.5;
+}
+
+/* ⚠️ .view-title 被 JS 用 hidden 切换（详情打开时让位）—— 必须显式写 */
+.view-title[hidden] {
+  display: none;
 }
 
 /* ---------------------------------------------------------------- 表单 */
@@ -468,22 +485,19 @@ h1 {
   display: block;
   margin: 0 0 6px 2px;
   color: var(--dim);
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 1.3;
-  letter-spacing: 0.14em;
+  font-size: 13px;
 }
 
 .field {
   width: 100%;
-  height: 46px;
-  margin-bottom: 11px;
+  height: 48px;
+  margin-bottom: 10px;
   padding: 0 14px;
   border: 1px solid var(--line);
   border-radius: var(--r-ctl);
-  background: var(--card-2);
+  background: var(--card);
   color: var(--text);
-  font: 14px/1 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font: 15px/1 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   outline: none;
   transition: border-color 0.16s ease, box-shadow 0.16s ease;
 }
@@ -492,27 +506,26 @@ h1 {
   color: var(--placeholder);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
     "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
-  font-size: 13.5px;
 }
 
 .field:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(59, 110, 245, 0.16);
+  box-shadow: 0 0 0 3px rgba(61, 118, 246, 0.18);
 }
 
 /* 九位数字：居中、等宽、三位一组留字距 —— 对照电脑上那串一眼能核对第几位 */
 .code-input {
   width: 100%;
   height: 54px;
-  margin-bottom: 13px;
+  margin-bottom: 12px;
   padding: 0 10px;
   border: 1px solid var(--line);
-  border-radius: 14px;
-  background: var(--card-2);
+  border-radius: var(--r-ctl);
+  background: var(--card);
   color: var(--text);
-  font: 600 22px/1 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font: 600 24px/1 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   font-variant-numeric: tabular-nums;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.12em;
   text-align: center;
   outline: none;
   transition: border-color 0.16s ease, box-shadow 0.16s ease;
@@ -525,24 +538,22 @@ h1 {
 
 .code-input:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(59, 110, 245, 0.16);
+  box-shadow: 0 0 0 3px rgba(61, 118, 246, 0.18);
 }
 
 .foot-hint {
-  margin: 13px 2px 0;
+  margin: 14px 2px 0;
   color: var(--dim);
   font-size: 12.5px;
-  line-height: 1.72;
+  line-height: 1.7;
 }
 
-/* 首页那条说明钉在底部：内容少的时候不吊在半空，短屏时自然被推下去 */
+/* 首页脚注 = grouped list 下方的说明（iOS 的写法：左对齐、紧跟分组、小灰字） */
 .view-home .foot-hint {
-  margin-top: auto;
-  padding-top: 22px;
-  text-align: center;
-  font-size: 12px;
-  line-height: 1.7;
-  color: color-mix(in srgb, var(--dim) 86%, transparent);
+  margin: 10px 2px 0;
+  text-align: left;
+  font-size: 12.5px;
+  color: color-mix(in srgb, var(--dim) 92%, transparent);
 }
 
 .foot-hint b {
@@ -559,39 +570,37 @@ h1 {
   justify-content: center;
   gap: 8px;
   width: 100%;
-  height: 48px;
+  height: 50px;
   padding: 0 18px;
-  border: 1px solid var(--line);
-  border-radius: 14px;
+  border: none;
+  border-radius: var(--r-btn);
   background: var(--btn-bg);
   color: var(--text);
   font-family: inherit;
-  font-size: 15.5px;
+  font-size: 16px;
   font-weight: 600;
-  letter-spacing: 0.03em;
   cursor: pointer;
-  transition: transform 0.08s ease, background 0.15s ease, opacity 0.15s ease;
+  transition: transform 0.08s ease, filter 0.15s ease, opacity 0.15s ease;
 }
 
 .btn:active {
-  transform: scale(0.985);
+  transform: scale(0.98);
+  filter: brightness(0.92);
 }
 
 .btn.primary {
-  background: linear-gradient(180deg, #4a7cff, #2f5ee0);
-  border-color: transparent;
+  background: var(--accent);
   color: #fff;
-  box-shadow: 0 10px 24px rgba(59, 110, 245, 0.3);
 }
 
 /* 破坏性动作（「取消配对」）：描边 + 红字，不用实心红 —— 它不是这个页面的主按钮，
    压过「连接」就本末倒置了。颜色走 --bad-ink，浅色主题换成更深的红才够对比度。 */
 .btn.danger {
-  margin-top: 8px;
-  border-color: color-mix(in srgb, var(--bad) 42%, transparent);
+  margin-top: 10px;
+  border: 1px solid color-mix(in srgb, var(--bad) 45%, transparent);
   background: transparent;
   color: var(--bad-ink);
-  font-size: 14.5px;
+  font-size: 15px;
 }
 
 .btn[disabled] {
@@ -599,9 +608,8 @@ h1 {
   cursor: default;
 }
 
-/* ⚠️ .btn / .scan-hero 自己有 display，会压掉 UA 的 [hidden] —— 必须显式写 */
-.btn[hidden],
-.scan-hero[hidden] {
+/* ⚠️ .btn 自己有 display，会压掉 UA 的 [hidden] —— 必须显式写 */
+.btn[hidden] {
   display: none;
 }
 
@@ -609,12 +617,17 @@ h1 {
 
 /*
  * 连过的电脑：列表 → 详情两级。
- * 列表整行是按钮（点哪都进详情），右端一个箭头 —— 连接放在详情里，不做成
- * 列表上的副作用：点错一下就连到别的电脑上，比多点一层烦得多。
+ * 列表 = 一张 grouped 卡（整组圆角、行间 hairline），整行是按钮（点哪都进详情），
+ * 右端一个箭头 —— 连接放在详情里，不做成列表上的副作用：点错一下就连到别的
+ * 电脑上，比多点一层烦得多。
  */
 .paired {
   display: flex;
   flex-direction: column;
+  margin-top: 20px;
+  border-radius: var(--r-group);
+  background: var(--card);
+  overflow: hidden;
 }
 
 /* ⚠️ 自己声明了 display 就会压掉 UA 的 [hidden] —— 详情打开时列表必须显式藏 */
@@ -626,24 +639,23 @@ h1 {
   display: flex;
   align-items: center;
   width: 100%;
+  min-height: 64px;
   padding: 0;
-  border: 1px solid var(--line);
-  border-radius: var(--r-ctl);
-  background: var(--card-2);
+  border: 0;
+  background: none;
   color: var(--text);
   font-family: inherit;
   text-align: left;
   cursor: pointer;
-  transition: background 0.12s ease, border-color 0.12s ease;
+  transition: background 0.12s ease;
 }
 
 .paired-row + .paired-row {
-  margin-top: 9px;
+  border-top: 1px solid var(--hairline);
 }
 
 .paired-row:active {
-  background: var(--btn-bg);
-  border-color: var(--line-2);
+  background: var(--card-2);
 }
 
 .paired-main {
@@ -662,9 +674,8 @@ h1 {
   gap: 7px;
   width: 100%;
   min-width: 0;
-  font-size: 15px;
+  font-size: 15.5px;
   font-weight: 600;
-  letter-spacing: 0.01em;
 }
 
 /* 名字太长（机器名可能一长串）就省略，别把箭头挤出去 */
@@ -677,19 +688,18 @@ h1 {
 
 .paired-tag {
   flex: 0 0 auto;
-  padding: 1px 6px;
+  padding: 1px 7px;
   border-radius: 6px;
-  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
   color: var(--accent-2);
-  font-size: 10.5px;
+  font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.02em;
 }
 
 .paired-meta {
   max-width: 100%;
   color: var(--dim);
-  font: 12px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font: 12.5px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -701,20 +711,19 @@ h1 {
   display: grid;
   place-items: center;
   color: var(--dim);
-  opacity: 0.8;
+  opacity: 0.55;
 }
 
 .paired-chev svg {
-  width: 16px;
-  height: 16px;
+  width: 15px;
+  height: 15px;
 }
 
+/* 空态：不做虚线框（那是网页表单的画法），居中一行灰字就够 */
 .paired .empty {
-  padding: 26px 8px;
-  border: 1px dashed var(--line);
-  border-radius: var(--r-ctl);
+  padding: 32px 16px;
   color: var(--dim);
-  font-size: 13px;
+  font-size: 13.5px;
   text-align: center;
 }
 
@@ -723,6 +732,7 @@ h1 {
 .pd {
   display: flex;
   flex-direction: column;
+  margin-top: 6px;
 }
 
 .pd[hidden] {
@@ -732,16 +742,14 @@ h1 {
 .pd-card {
   padding: 16px;
   margin-bottom: 12px;
-  border: 1px solid var(--line);
   border-radius: var(--r-card);
-  background: linear-gradient(180deg, var(--alt-bg), var(--card-2));
+  background: var(--card);
 }
 
 .pd-name {
-  font-size: 19px;
-  font-weight: 650;
+  font-size: 20px;
+  font-weight: 700;
   line-height: 1.35;
-  letter-spacing: 0.02em;
   word-break: break-word;
 }
 
@@ -757,7 +765,10 @@ h1 {
 }
 
 .pd-rows {
-  margin: 0 0 16px;
+  margin: 0 0 20px;
+  padding: 2px 14px;
+  border-radius: var(--r-group);
+  background: var(--card);
 }
 
 .pd-row {
@@ -765,8 +776,8 @@ h1 {
   justify-content: space-between;
   align-items: baseline;
   gap: 16px;
-  padding: 11px 2px;
-  border-bottom: 1px solid var(--line);
+  padding: 13px 0;
+  border-bottom: 1px solid var(--hairline);
 }
 
 .pd-row:last-child {
@@ -776,14 +787,14 @@ h1 {
 .pd-row dt {
   flex: 0 0 auto;
   color: var(--dim);
-  font-size: 12.5px;
+  font-size: 13px;
 }
 
 .pd-row dd {
   margin: 0;
   min-width: 0;
   text-align: right;
-  font: 12.5px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font: 13px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   word-break: break-all;
 }
 
@@ -813,10 +824,9 @@ body.connecting .nav-back {
   bottom: calc(18px + env(safe-area-inset-bottom));
   z-index: 30;
   margin: 0 auto;
-  width: min(420px, calc(100% - 40px));
-  padding: 11px 13px;
-  border: 1px solid var(--line);
-  border-radius: 13px;
+  width: min(420px, calc(100% - 36px));
+  padding: 12px 14px;
+  border-radius: 14px;
   background: var(--status-bg);
   box-shadow: 0 16px 36px rgba(0, 0, 0, 0.5);
   font-size: 13px;
@@ -837,13 +847,11 @@ body.connecting .nav-back {
 }
 
 .status.bad {
-  border-color: color-mix(in srgb, var(--bad) 45%, transparent);
-  background: color-mix(in srgb, var(--bad) 20%, var(--status-bg));
+  background: color-mix(in srgb, var(--bad) 22%, var(--status-bg));
   color: #f0b3b1;
 }
 
 .status.good {
-  border-color: color-mix(in srgb, var(--good) 45%, transparent);
   background: color-mix(in srgb, var(--good) 20%, var(--status-bg));
   color: #9fe3c1;
 }
@@ -892,21 +900,20 @@ body.connecting .nav-back {
 .scan-head {
   margin: 0;
   color: #f4f5f6;
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 600;
-  letter-spacing: 0.04em;
   text-shadow: 0 1px 8px rgba(0, 0, 0, 0.9);
 }
 
 .scan-x {
   display: grid;
   place-items: center;
-  width: 38px;
-  height: 38px;
+  width: 40px;
+  height: 40px;
   padding: 0;
   border: 0;
-  border-radius: 19px;
-  background: rgba(18, 18, 20, 0.6);
+  border-radius: 20px;
+  background: rgba(120, 120, 128, 0.36);
   color: #f2f2f2;
   cursor: pointer;
   backdrop-filter: blur(6px);
@@ -1024,38 +1031,40 @@ body.connecting .nav-back {
   text-align: center;
 }
 
-/* 矮屏（小手机 / 横屏）：把首页压紧一点，别让大按钮把说明顶出屏幕 */
+/* 矮屏（小手机 / 横屏）：把首页压紧一点，别让主卡片把说明顶出屏幕 */
 @media (max-height: 700px) {
   .brand {
-    margin-top: 6px;
+    margin-top: 4px;
   }
 
   .logo {
-    width: 46px;
-    height: 46px;
-    border-radius: 14px;
-    font-size: 22px;
+    width: 42px;
+    height: 42px;
+    border-radius: 12px;
   }
 
-  h1 {
-    margin-top: 10px;
-    font-size: 22px;
+  .logo svg {
+    width: 24px;
+    height: 24px;
   }
 
-  .brand-sub {
-    margin-top: 4px;
-    font-size: 12.5px;
+  .brand-txt h1 {
+    font-size: 20px;
   }
 
   .scan-hero {
-    margin-top: 18px;
-    padding: 20px 18px 18px;
+    margin-top: 16px;
+    padding: 15px 14px;
   }
 
   .frame {
-    width: 86px;
-    height: 86px;
-    margin-bottom: 14px;
+    width: 54px;
+    height: 54px;
+  }
+
+  .frame-qr {
+    width: 34px;
+    height: 34px;
   }
 
   @keyframes sweep {
@@ -1065,21 +1074,17 @@ body.connecting .nav-back {
       opacity: 0.15;
     }
     50% {
-      transform: translateY(60px);
+      transform: translateY(34px);
       opacity: 0.85;
     }
   }
 
-  .or {
-    margin: 16px 4px 12px;
-  }
-
-  .alt-row {
-    padding: 11px 12px;
+  .sec-label {
+    margin-top: 18px;
   }
 
   .view-home .foot-hint {
-    padding-top: 16px;
+    margin-top: 8px;
   }
 }
 
@@ -1120,22 +1125,20 @@ body.connecting .nav-back {
 
 /*
  * 浅色只在系统是浅色时生效（手机深色的还是深色页 —— 启动页不该比别处更亮）。
- * 取值不是纯白大底：底 #f2f4f7、卡片 #fff，靠一层浅蓝顶光把标题带出来，
- * 和主站浅色主题同一路子。正文 #14161a ≈ 16.4:1、次要 #656a72 ≈ 4.9:1（AA）。
- * 扫码遮罩（`.scan`）保持深色 —— 那是相机画面，不需要跟着变。
+ * 底色是 iOS grouped #f2f3f7，卡片纯白；正文 #14161a ≈ 16.4:1、
+ * 次要 #6d727b ≈ 5:1（AA）。扫码遮罩（`.scan`）保持深色 —— 那是相机画面，不跟着变。
  */
 @media (prefers-color-scheme: light) {
   :root {
     color-scheme: light;
 
-    --bg: #f2f4f7;
-    --bg-glow: #dde6fb;
+    --bg: #f2f3f7;
     --card: #ffffff;
-    --card-2: #ffffff;
-    --line: #e3e6ea;
-    --line-2: #d5d9df;
+    --card-2: #f5f6f9;
+    --hairline: rgba(60, 60, 67, 0.13);
+    --line: rgba(60, 60, 67, 0.16);
     --text: #14161a;
-    --dim: #656a72;
+    --dim: #6d727b;
     --strong: #2c3037;
     --accent: #2f62e8;
     --accent-2: #3b6ef5;
@@ -1144,21 +1147,20 @@ body.connecting .nav-back {
     /* 主按钮在浅底上要压得住：渐变略深一档，阴影收紧一点 */
     --hero-a: #4272f7;
     --hero-b: #2a4fc6;
-    --hero-glow: rgba(47, 98, 232, 0.28);
+    --hero-glow: rgba(47, 98, 232, 0.24);
 
-    --alt-bg: #ffffff;
-    --alt-ico-bg: rgba(47, 98, 232, 0.1);
+    --alt-ico-bg: rgba(47, 98, 232, 0.09);
     --alt-ico-ink: #2f62e8;
 
-    --btn-bg: #eaedf1;
+    --btn-bg: #e8eaf0;
     --status-bg: #ffffff;
     --placeholder: #9aa0a6;
     --placeholder-2: #b5bac1;
   }
 
-  /* 深色那套 #17191d 阴影放在浅底上会发灰，这里换浅投影 */
+  /* 深色那套 #1d2025 阴影放在浅底上会发灰，这里换浅投影 */
   .status {
-    box-shadow: 0 12px 30px rgba(16, 24, 40, 0.14);
+    box-shadow: 0 12px 30px rgba(16, 24, 40, 0.16);
   }
 
   .status.bad {
@@ -1169,7 +1171,10 @@ body.connecting .nav-back {
     color: #1b6f47;
   }
 
-  .alt {
+  .alt,
+  .paired,
+  .pd-card,
+  .pd-rows {
     box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
   }
 }

@@ -75,7 +75,9 @@ export function runPersonaTask({ job, config }) {
   }
 
   return {
-    summary: `已交给「${persona.name}」${project ? `（在「${project.name || project.id}」）` : ''}：${clip(instruction, 36)}（会话里看结果）`,
+    // 卡上「要干什么」那一行（describePersonaTask）已经说了交给谁、在哪儿、干什么 ——
+    // 结论再复述一遍就是两行重复（2026-11-06 用户："重复了"）。这里只说增量：派出去了、去哪儿看。
+    summary: '已派活，会话里看结果',
     // 给界面/日志留个把手：这次派活落在哪条会话、哪次运行
     conversationId: conv.id,
     runId: run.id,

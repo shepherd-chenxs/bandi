@@ -139,6 +139,100 @@ function meOf(who) {
   return { kind: 'user', user: { id: u.id, name: u.name, hasPassword: u.hasPassword, hasTotp: u.hasTotp }, role: roleBrief(u.roleId) };
 }
 
+/*
+ * ============================================================ 手机身份统一（2026-11-05）
+ *
+ * **问题**：手机上原来有两套身份 —— 配对发的是 `bandi_token`（设备，我的页有「这台设备」
+ * 卡 + 断开连接），账号密码登录发的是 `bandi_sid`（账号，我的页只剩一个「退出登录」）。
+ * 而且登录响应会顺手 `clearedTokenCookie()`：一台配过对的手机只要输过一次密码，
+ * 就**永久**从设备身份掉成账号身份，两个页面来回换（用户：「账号密码登录的，我的页面
+ * 长得也不一样」），电脑端那条设备记录还挂着却再也不会被用到。
+ *
+ * **口径（用户：「手机端设备身份和账号密码应该统一起来」）**：手机上只有一种身份 = **设备**。
+ * 账号密码在手机上不再"换身份"，只做两件事：
+ *   1. **认领归属人** —— 这台手机以后的操作算到登录的这个账号头上（`setDeviceOwner`）；
+ *   2. **补一张设备卡** —— 重发 `bandi_token`，并把可能残留的会话票清掉（免得票没了之后
+ *      又飘回账号身份，两个身份来回切）。
+ * 于是「我的」页在手机壳里永远只有一套（设备卡 + 断开连接），不再出现"页面不一样"。
+ *
+ * **触发条件**：请求体带一个形状合法的 `clientKey`（手机壳 / 手机浏览器上的登录页会带上）。
+ * 有没有对应的设备记录都接 —— 2026-11-05 用户拍板（选 A）：
+ *   · **有记录**（配过对，票丢了）→ 说的就是上面那两步，复用原来那一行；
+ *   · **没记录**（从没配过对，第一次在这台手机上输密码）→ 当成"用密码配了一次对"，
+ *     当场落一行设备（`createDevice` 的 clientKey 分支会自动复用同 key 的行，
+ *     所以一台手机永远只有一条记录），归属人就是这次登录的账号。
+ * 于是手机端只有一条入口差异（扫码 / 密码），进去以后完全一样。
+ *
+ * **为什么敢放开**：用户名 + 密码是这台机器上最高的凭据（配个对都还要先拿到电脑上的
+ * 二维码/邀请码），拿密码换一张设备票不是提权。桌面浏览器不带 clientKey（登录页脚本
+ * 只在手机 UA 下生成），仍然一位字节不变地走会话路径。
+ *
+ * 返回 true = 已经按设备身份回完响应，调用方别再发会话。
+ */
+/**
+ * 设备自报名：登录页上报的优先，没有就按 UA 猜一个（与 pair-claim.mjs 的 guessDeviceName 同款）。
+ * ⚠️ 字段是 `deviceName` 而不是 `name` —— `/api/login` 的 `name` 是**用户名**，
+ * 混用会把电脑端的设备名改成登录账号名（试过一次，设备列表里出现一排「老板」）。
+ */
+function deviceNameOf(req, body) {
+  const given = String(body?.deviceName ?? '').trim().slice(0, 60);
+  if (given) return given;
+  const ua = String(req.headers['user-agent'] ?? '');
+  if (/iPhone/i.test(ua)) return 'iPhone';
+  if (/iPad/i.test(ua)) return 'iPad';
+  const m = /Android[^;)]*;\s*([^;)]+?)\s+Build/i.exec(ua) || /Android[^;)]*;\s*([^;)]+)/i.exec(ua);
+  if (m) return 'Android · ' + m[1].split(/\s+/)[0];
+  // 猜不出就交白卷：`createDevice` 只在名字非空时改已有行，空字符串不会把人家认得的名字冲掉
+  // （新建时 store 那边自己兜底成「手机设备」）
+  return '';
+}
+
+function claimPhoneIdentity(req, res, user, body) {
+  const ck = String(body?.clientKey ?? '').trim();
+  // 形状不对 = 不是手机壳里那枚（空、太短、带怪字符）：当桌面浏览器处理，别为它建行
+  if (!/^[A-Za-z0-9_-]{8,64}$/.test(ck)) return false;
+  /*
+   * 设备名给人看：手机自报优先（登录页从 UA 猜一个），其次服务端按 UA 再猜一次 ——
+   * 电脑端「设备」列表里出现一条「手机设备」是能接受的，出现一条空名字不行。
+   */
+  const { device: dev } = store.createDevice(deviceNameOf(req, body), ck);
+  /*
+   * 归属直接改绑成登录的人：手机是"谁的"由这一次登录决定（与配对时"码上写着谁就是谁"
+   * 同一口径）。要改绑得先有密码 —— 这比扫码更硬，不存在被同屋的人随便认领。
+   */
+  store.setDeviceOwner(dev.id, user.id);
+  store.markConnected(dev.id);
+  // 旧令牌一并吊销：一台手机只留一枚在用的钥匙（`resumeDevice` 同款口径）
+  store.revokeDeviceTokens(dev.id);
+  /*
+   * 和配对同一条规矩：**一台电脑同一时间只允许一台手机在用**。
+   * 用密码在另一台手机上认领，等于"重新配一次对"，那台旧的让位（令牌吊销 + 打「已断开」，
+   * 行和 clientKey 都留着，它下次打开 App 还能自己连回来）。
+   */
+  const others = store.disconnectOtherDevices(dev.id);
+  if (others.disconnected > 0) console.log(`[登录] 其它 ${others.disconnected} 台手机转为「已断开」（吊销 ${others.revoked} 枚令牌）`);
+  const deviceToken = store.issueDeviceToken(dev.id);
+  res.writeHead(200, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'Set-Cookie': [
+      auth.cookieValue(deviceToken),
+      csrf.cookieFor(csrf.mint()),
+      // 会话票清掉：否则设备票哪天失效，身份会自己飘回账号版，又是两个页面
+      auth.clearedSessionCookie(),
+    ],
+  });
+  res.end(
+    JSON.stringify({
+      ok: true,
+      kind: 'device',
+      user: { id: user.id, name: user.name },
+      device: { id: dev.id, name: dev.name },
+    }),
+  );
+  return true;
+}
+
 /* ------------------------------------------------------------------ 主体 */
 
 export async function handleUsers(req, res, url) {
@@ -199,6 +293,13 @@ export async function handleUsers(req, res, url) {
       clearFails(req, name);
       store.clearLoginFails(name);
 
+      /*
+       * 手机（带合法 clientKey）→ **设备身份**，见 claimPhoneIdentity 上面那段：
+       * 账号密码在手机上只认领归属人 + 发设备卡（没有记录就当场建一台），不发会话票。
+       * 桌面浏览器没有 clientKey，一位字节不变地走下面的会话路径。
+       */
+      if (claimPhoneIdentity(req, res, user, body)) return true;
+
       const { token } = store.createSession(user.id, {
         ip: String(req.socket?.remoteAddress ?? '').replace(/^::ffff:/, ''),
         ua: req.headers['user-agent'] ?? '',
@@ -254,6 +355,8 @@ export async function handleUsers(req, res, url) {
         throw new UserError(401, 'E3820', '动态验证码或恢复码错误');
       }
       store.dropChallenge(ch);
+      // 第二段同样认这台手机：动态码过了 = 密码也过了，按设备身份回（见 claimPhoneIdentity）
+      if (claimPhoneIdentity(req, res, user, body)) return true;
       const { token } = store.createSession(user.id, {
         ip: String(req.socket?.remoteAddress ?? '').replace(/^::ffff:/, ''),
         ua: req.headers['user-agent'] ?? '',

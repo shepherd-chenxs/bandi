@@ -6,7 +6,8 @@
  *      → claim 换长期设备令牌（bd_，Cookie bandi_token）；
  *   ② 一次性：同一个码第二次 claim → 409 E4701；瞎编的码 → 400 E1702；格式不对 → 400 E1701；
  *   ③ 设备令牌的白名单：读 200；PATCH 卡改 status 200；改 title → 403 E3702（字段级闸）；
- *      DELETE 卡 → 403 E4033（白名单外）；POST 卡评论 execute → 403 E3702（只许便签）；
+ *      DELETE 卡 → 403 E4033（白名单外）；POST 卡评论 note/discuss/execute 都过档位闸
+ *      （讨论/执行 2026-11-05 放行，落到 E1061 = 卡没执行人，业务逻辑在答话）；
  *   ④ 设备管理只对操作员开（403 E3701）；踢出（revoke）后原令牌 401 E4010；
  *   ⑤ 一机一刀（2026-11-01）：新 claim 顶掉旧设备（行删光）；同一 clientKey 重配复用同一行；
  *   ⑥ 回环形态（免鉴权）下 operator 动作照常可用 —— 单机自测不被自己的闸挡住。
@@ -268,11 +269,14 @@ try {
   const del = await send(baseB, taskUrl, { method: 'DELETE', headers: { Cookie: devJar, 'X-Bandi': '1', ...devCSRF } });
   check('手机删卡 → 403 E4033（白名单外）', del.status === 403 && del.json?.code === 'E4033', `${del.status} ${del.json?.code ?? ''}`);
   const noteOk = await send(baseB, taskUrl + '/comments', { headers: { Cookie: devJar, 'X-Bandi': '1', ...devCSRF }, body: { text: '驳回：缺验收单', mode: 'note' } });
-  // 这张验收卡没指定执行人 → E1061"先指定执行人"。拿到 E1061（而不是 E3702/E4033）
-  // 就证明设备的档位闸已经放行 note、请求真走到了业务逻辑 —— 这正是要验收的。
+  // 这张验收卡没指定执行人 → E1061"先指定执行人"。拿到 E1061（而不是 E4033）
+  // 就证明白名单放行、请求真走到了业务逻辑 —— 这正是要验收的。
   check('手机留便签（note）过了档位闸（400 E1061 = 卡没执行人）', noteOk.status === 400 && noteOk.json?.code === 'E1061', `${noteOk.status} ${noteOk.json?.code ?? ''}`);
-  const execNo = await send(baseB, taskUrl + '/comments', { headers: { Cookie: devJar, 'X-Bandi': '1', ...devCSRF }, body: { text: '干活', mode: 'execute' } });
-  check('手机发执行评论 → 403 E3702（只许便签）', execNo.status === 403 && execNo.json?.code === 'E3702', `${execNo.status} ${execNo.json?.code ?? ''}`);
+  // 讨论/执行 2026-11-05 放行（曾经只许便签 → 403 E3702）：同样的判据 —— E1061 = 档位闸已过、业务在答话。
+  const execOk = await send(baseB, taskUrl + '/comments', { headers: { Cookie: devJar, 'X-Bandi': '1', ...devCSRF }, body: { text: '干活', mode: 'execute' } });
+  check('手机发执行评论过了档位闸（400 E1061 = 卡没执行人）', execOk.status === 400 && execOk.json?.code === 'E1061', `${execOk.status} ${execOk.json?.code ?? ''}`);
+  const discOk = await send(baseB, taskUrl + '/comments', { headers: { Cookie: devJar, 'X-Bandi': '1', ...devCSRF }, body: { text: '聊聊方案', mode: 'discuss' } });
+  check('手机发讨论评论过了档位闸（400 E1061 = 卡没执行人）', discOk.status === 400 && discOk.json?.code === 'E1061', `${discOk.status} ${discOk.json?.code ?? ''}`);
   check('手机读设备列表（/api/devices）→ 403 E4033', (await get(baseB, '/api/devices', { Cookie: devCookie })).status === 403);
 
   /* ----------------------------- ④ 设备管理：只对操作员开 + 踢出 */

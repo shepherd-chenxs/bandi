@@ -1,13 +1,16 @@
 /*
  * launcher.js —— 手机壳的启动页（2026-11 改版：一大按钮 + 次要入口）。
  *
- * 连接有三种方式，**跟部署形态无关**：
+ * 连接有四种方式，**跟部署形态无关**：
  *   A. 扫码：二维码里带着地址 + 邀请码，扫完直接进 —— 局域网、云端都成立。
  *      首屏唯一的**大按钮**，点开相机遮罩（scanner.js）。
  *   B. 已配对：这台手机连过的电脑（Rust 侧 shell.json 的 servers），列表 → 详情 →
  *      「连接」走 `<origin>/pair?resume=1`，凭远程页 localStorage 的 clientKey 换新令牌。
  *      没有连过任何电脑时，这条入口整行不出现。
  *   C. 邀请码：地址 + 9 位码两栏都填，拼成 `<地址>/pair?code=…` 再进。
+ *   D. 账号密码（2026-11-05）：只填地址，打开 `<origin>/` 让服务端渲染登录页。
+ *      与扫码/邀请码**同一个终点** —— 登录成功后服务端把这台手机落成一台设备
+ *      （routes/users.mjs 的 claimPhoneIdentity），进去以后身份、我的页、已配对列表全一致。
  *
  * 2026-11-03 改版：旧版是「已配对 / 扫码 / 邀请码」三张页签 + 滑块；用户要求
  * 照 WorkBuddy 手机端登录页的样子重排 —— 扫码做成一个大按钮，其余收在下面。
@@ -91,7 +94,7 @@
   /* ------------------------------------------------------------ 视图 */
 
   /*
-   * 状态就两个字段：view = home | code | paired，detail = 是否停在「已配对」的详情。
+   * 状态就两个字段：view = home | code | login | paired，detail = 是否停在「已配对」的详情。
    * 渲染是纯函数式的（apply 只读 state 摆 DOM），history 里存的也是同一份 state ——
    * 返回键和点「返回」因此走同一条路，不用各写一遍。
    */
@@ -113,6 +116,7 @@
     const v = state.view;
     $('viewHome').hidden = v !== 'home';
     $('viewCode').hidden = v !== 'code';
+    $('viewLogin').hidden = v !== 'login';
     $('viewPaired').hidden = v !== 'paired';
     // 详情打开时列表和说明都让位（⚠️ 它们自己声明了 display，必须显式藏）
     $('pairedDetail').hidden = !(v === 'paired' && state.detail);
@@ -155,8 +159,14 @@
    * 退的过程 `leaving` 把 popstate 的重画按住 —— 屏幕上是「正在进入…」，看不出闪。
    * 连接**失败**时 restoreHistory 把退掉的那几层照原样压回去（不然这一趟白退，
    * 返回键就成"直接退 App"了）。
+   *
+   * ⚠️ 例外 —— 账号密码登录这条路（2026-11-05）：**不清历史**，keepBack=true。
+   *   那条路地址全靠手填，填错时 WebView 停在错误页/陌生页，返回键是唯一的退路：
+   *   history 里留着「首页 → 账号密码视图」这条栈，replace 顶掉视图那层之后，
+   *   远程页按返回正好退回启动页首页。清了历史反而把人困死在外面。
    */
-  async function squashHistory() {
+  async function squashHistory(keepBack) {
+    if (keepBack) return;
     leaving = true;
     squashed = trail.slice();
     if (depth <= 0) return;
@@ -209,8 +219,12 @@
 
   /* ------------------------------------------------------------ 连接 */
 
-  /** 探测 → 跳转。成功时页面会直接离开，不用收尾。 */
-  async function connect(input, btn, info) {
+  /**
+   * 探测 → 跳转。成功时页面会直接离开，不用收尾。
+   * @param {boolean} [keepBack] 账号密码登录专用：不清历史，远程页返回键能退回启动页
+   *   （见 squashHistory 开头的例外说明）。
+   */
+  async function connect(input, btn, info, keepBack) {
     clearStatus();
     setBusy(btn, true);
     document.body.classList.add('connecting');
@@ -232,7 +246,7 @@
       }
       // label/hostname 只为了让「已配对」列表显示成人话，落盘的是 origin（见 lib.rs）
       // 跳转前先把登录页从历史里退干净 —— 连上之后返回键不该还能摸到它
-      await squashHistory();
+      await squashHistory(keepBack);
       await invoke('open_server', {
         input,
         label: (who && who.label) || null,
@@ -306,6 +320,58 @@
       return;
     }
     return void connect(buildTarget(addr, code), btn);
+  }
+
+  /* ------------------------------------------------------------ 账号密码 */
+
+  /**
+   * 地址栏 → origin。
+   *
+   * 用户手输几乎都是 `192.168.1.5:18787`（Rust 的 normalize 会补 http:// 和默认端口
+   * 18787），也可能顺手粘了带路径的首页地址 —— 只取 origin，后面统一拼 `/`。
+   */
+  function originOf(v) {
+    const s = String(v || '').trim();
+    if (!s) return '';
+    const withScheme = /^https?:\/\//i.test(s) ? s : 'http://' + s;
+    const m = withScheme.match(/^https?:\/\/[^/?#]+/i);
+    return m ? m[0] : '';
+  }
+
+  /**
+   * 进「账号密码」视图：地址栏空着就预填最近连过的那台。
+   * 不自动连 —— 用户可能是想换一台、或者只是看看，填好再点「打开登录页」。
+   */
+  function openLogin() {
+    const el = $('loginAddr');
+    if (!el.value.trim() && saved.length) el.value = hostOf(saved[0].origin);
+    $('loginHint').textContent = saved.length
+      ? '已经填好最近连过的那台，也可以改成别的地址。'
+      : '地址在电脑上「设置 → 手机配对」里能看到。';
+    go({ view: 'login', detail: false });
+  }
+
+  /**
+   * 打开 `<origin>/` —— 有没有登录票由电脑判断：
+   *   · 配过对、只是掉了票 → 登录页脚本先拿 clientKey 自动补卡，直接进工作台；
+   *   · 没配过对 / 设备记录被删 → 显示账号密码表单，登录成功后服务端把这枚 clientKey
+   *     落成一台设备（认领归属人 + 发设备卡，见 routes/users.mjs 的 claimPhoneIdentity）。
+   * 于是这个入口和扫码、邀请码是**同一个终点**，只是证明"你是你"的方式不同。
+   */
+  function submitLogin(btn) {
+    const raw = $('loginAddr').value.trim();
+    if (!raw) {
+      showStatus('先填电脑地址，如 192.168.1.5:18787', 'bad');
+      return;
+    }
+    // 粘进来的整条配对链接：原样打开（里面自带码，比手拆可靠）
+    if (looksLikePairUrl(raw)) return void connect(raw, btn, null, true);
+    const origin = originOf(raw);
+    if (!origin) {
+      showStatus('这个地址看不懂 —— 像 192.168.1.5:18787 这样填', 'bad');
+      return;
+    }
+    return void connect(origin + '/', btn, null, true);
   }
 
   /* ------------------------------------------------------------ 已配对 */
@@ -424,13 +490,23 @@
   /* ------------------------------------------------------------ 事件 */
 
   $('codeEntry').addEventListener('click', () => go({ view: 'code', detail: false }));
+  $('loginEntry').addEventListener('click', openLogin);
   $('pairedEntry').addEventListener('click', () => go({ view: 'paired', detail: false }));
 
   // 返回：详情 → 列表 → 首页，交给 history 一层层退（返回键走同一条路）
   $('codeBack').addEventListener('click', () => back());
+  $('loginBack').addEventListener('click', () => back());
   $('pairedBack').addEventListener('click', () => back());
 
   $('connectBtn').addEventListener('click', () => submit($('connectBtn')));
+  $('loginGo').addEventListener('click', () => submitLogin($('loginGo')));
+
+  $('loginAddr').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      submitLogin($('loginGo'));
+    }
+  });
 
   /*
    * 输入即格式化：只留数字、每三位一个空格（`482 913 665`），跟电脑上显示的

@@ -13,7 +13,7 @@ import { archivedEntryHTML, closeCtxMenu, convDisplayName, enterArchiveView, ope
 import { renderFlowList } from './workflows.mjs';
 import { renderRunList } from './flowpages.mjs';
 import { newSkill, openGitPickDialog, openImportDialog } from './skills.mjs';
-import { openConversation, openDetail } from './chat.mjs';
+import { convUnread, openConversation, openDetail } from './chat.mjs';
 import { gidOf, openGroupDetail } from './groups.mjs';
 import { $, S } from './core.mjs';
 import { openProjectsPage, renderProjectList } from './projects.mjs';
@@ -298,6 +298,9 @@ export function renderList() {
                 <div class="line1"><b>${esc(title)}</b><span>${hhmm(c.updatedAt)}</span></div>
                 <div class="line2"><span class="dot ${esc(c.status)}"></span>${sub}</div>
               </div>
+              ${/* 未读红点（2026-11-05）：头像右上角纯点（本设备账本，见 chat.mjs convUnread），
+                    样式 mobile.css §16.5；桌面无样式且是空节点，不显示 */
+                convUnread(c) ? '<span class="unread dot-only" aria-hidden="true"></span>' : ''}
             </div>`;
           }).join('')
         : '<div class="empty" style="padding:36px 12px">还没有消息<br />先去<strong>通讯录</strong>发起群聊或找个人聊</div>');
@@ -505,8 +508,14 @@ export function renderList() {
     .map((g) => ({ ...g, conv: latestConvOfGroup.get(g.id) ?? null }))
     .filter((g) => match(g.title));
   const people = S.personas.filter((p) => match(p.name) || match(p.department));
-  // 真人（2026-10-31 用户概念落地）：设置 → 用户里建的账号，通讯录单独一段，跟数字员工分开
-  const users = (S.users ?? []).filter((u) => match(u.name));
+  // 真人（2026-10-31 用户概念落地）：设置 → 用户里建的账号，通讯录单独一段，跟数字员工分开。
+  // 自己不摆进来（2026-11-04 用户实报"用户不要显示在这里"）：通讯录是找别人的名册，
+  // 自己（me = 回环 / 令牌的本机自动登录用户，或登录用户本人）摆在里面没有意义。
+  // 只过滤通讯录这一处 —— 看板派活那些读的是全量 S.users，自己给自己派活是合法操作。
+  const users = (S.users ?? []).filter((u) => u.id !== S.me?.id && match(u.name));
+  // 名册里除了自己还有没有别人：单人部署时「成员」段整段不画 ——
+  // 摆一个"成员 0 · 还没有成员"反而误导（人其实有，就是自己）。
+  const hasOtherUsers = (S.users ?? []).some((u) => u.id !== S.me?.id);
   /**
    * 分段标题。收起时**整段内容不渲染**（不是单纯 display:none）——
    * 收起就没有它的 DOM，点了也不会先闪一下再消失。
@@ -541,14 +550,14 @@ export function renderList() {
    * 桌面继续走部门分组 —— 下面这一整段一行不动。
    */
   if (S.nav === 'contacts' && isNarrowScreen()) {
-    renderMobileContacts({ q, groups, people, users });
+    renderMobileContacts({ q, groups, people, users, hasOtherUsers });
     return;
   }
 
   $('listBody').innerHTML = !groups.length && !people.length && !users.length
     ? '<div class="empty" style="padding:36px 12px">通讯录还是空的<br />点右上角 ＋ 发起群聊或添加员工</div>'
     : (groups.length || !q ? sec('group', '群聊', groups.length, groups.length ? groupRows : '<div class="list-none">还没有群聊</div>') : '') +
-      (users.length || !q ? sec('users', '成员', users.length, users.length ? users.map(userRowHTML).join('') : '<div class="list-none">还没有成员 —— 在「设置 → 用户」里创建</div>') : '') +
+      (hasOtherUsers && (users.length || !q) ? sec('users', '成员', users.length, users.length ? users.map(userRowHTML).join('') : '<div class="list-none">还没有成员 —— 在「设置 → 用户」里创建</div>') : '') +
       (people.length || !q ? sec('person', '数字员工', people.length, people.length ? personRows : '<div class="list-none">还没有数字员工</div>') : '');
 
   $('listBody').querySelectorAll('[data-sec]').forEach((el) => {
@@ -691,7 +700,7 @@ function goCvHome() {
 /** 右侧 A–Z 索引条：点一下跳，按住上下滑一路扫（手机通讯录的核心手势）。 */
 let azScrollHandler = null;
 
-function mountAzIndex(letters) {
+function mountAzIndex(letters, avoidTop = 0) {
   const panel = document.querySelector('.list-panel');
   const body = $('listBody');
   if (!panel || !body) return;
@@ -701,6 +710,16 @@ function mountAzIndex(letters) {
   idx.setAttribute('aria-hidden', 'true');
   idx.innerHTML = letters.map((l) => `<span data-letter="${l}">${l}</span>`).join('');
   panel.append(idx);
+  /*
+   * 索引条只在**字母名单区**里垂直居中，别压到上面的入口卡（2026-11-06 实测：
+   * 390 宽时 A 压到「成员」行的数字＋箭头，320 宽直接盖住「部门」的 chevron ——
+   * 索引条是绝对定位 top:50% 全高居中，根本不知道上面还有一张卡）。
+   * avoidTop = 入口卡在面板里的下缘（px）。条的可用区从卡下 8px 起到面板底 8px 止，
+   * 在这段里继续居中 —— CSS 里那条 top:50% 只在 avoidTop=0（旧调用方）时原样生效。
+   */
+  if (avoidTop > 0) {
+    idx.style.top = `calc(${Math.round(avoidTop) + 8}px + (100% - ${Math.round(avoidTop) + 16}px) / 2)`;
+  }
 
   const jump = (letter) => {
     const head = [...body.querySelectorAll('.mb-az-head')].find((h) => h.dataset.letter === letter);
@@ -749,8 +768,8 @@ function mountAzIndex(letters) {
   idx.querySelector('span')?.classList.add('on');
 }
 
-/** 手机通讯录的全部四种视图。groups / people 已按搜索词过滤过。 */
-function renderMobileContacts({ q, groups, people, users = [] }) {
+/** 手机通讯录的全部四种视图。groups / people / users 已按搜索词过滤过（users 已去掉自己）。 */
+function renderMobileContacts({ q, groups, people, users = [], hasOtherUsers = false }) {
   const body = $('listBody');
   /*
    * 灰底只给**首页**：那里有入口卡要"浮起来"，ABC 名单也需要灰底衬托白行。
@@ -819,21 +838,22 @@ function renderMobileContacts({ q, groups, people, users = [] }) {
   // 首页：入口卡 + A–Z 名单
   const az = groupPeopleByInitial(people);
   const entry = `<div class="mb-cv-entry">
+      <!-- 2026-11-05 用户：「群聊和部门不要显示数字」——
+           入口行是导航（点进去才是内容），右侧只该有箭头；数字在这里既不是状态
+           也不可操作，纯占位。成员那行保留（它只有多账号时才出现，是个例外项）。 -->
       <div class="item mb-cv-row" data-cv="groups">
         ${CV_ICON_GROUP}
         <div class="who"><div class="line1"><b>群聊</b></div></div>
-        <span class="mb-cv-n">${groups.length}</span>
       </div>
       <div class="item mb-cv-row" data-cv="depts">
         ${CV_ICON_DEPT}
         <div class="who"><div class="line1"><b>部门</b></div></div>
-        <span class="mb-cv-n">${depts.length}</span>
       </div>
-      <div class="item mb-cv-row" data-cv="users">
+      ${hasOtherUsers ? `<div class="item mb-cv-row" data-cv="users">
         ${CV_ICON_USER}
         <div class="who"><div class="line1"><b>成员</b></div></div>
         <span class="mb-cv-n">${users.length}</span>
-      </div>
+      </div>` : ''}
     </div>`;
   const list = az
     .map((g) => `<div class="mb-az-head" data-letter="${g.letter}">${g.letter}</div>${g.rows.map(personRowHTML).join('')}`)
@@ -849,7 +869,13 @@ function renderMobileContacts({ q, groups, people, users = [] }) {
       renderList();
     };
   });
-  if (az.length) mountAzIndex(az.map((g) => g.letter));
+  if (az.length) {
+    /* 卡的下缘（相对面板）：索引条要避开它 —— 见 mountAzIndex 里 avoidTop 的注释 */
+    const panelBox = document.querySelector('.list-panel')?.getBoundingClientRect();
+    const entryBox = document.querySelector('.mb-cv-entry')?.getBoundingClientRect();
+    const avoidTop = panelBox && entryBox ? Math.max(0, entryBox.bottom - panelBox.top) : 0;
+    mountAzIndex(az.map((g) => g.letter), avoidTop);
+  }
 }
 
 
@@ -889,73 +915,150 @@ export let addMenuAnchor = null;
 
 
 export function closeAddMenu() {
+  /* 点外部收起的监听跟菜单同生共死（openAddMenu 里挂、这里摘），别留孤儿监听 */
+  if (addMenuDismiss) { document.removeEventListener('pointerdown', addMenuDismiss, true); addMenuDismiss = null; }
   if (addMenu) { addMenu.remove(); addMenu = null; }
   addMenuAnchor = null;
 }
 
+/** 点外部收起（capture）：菜单外一按就收，点菜单/锚点按钮本身不拦 —— 锚点再点一次的收起由调用方自己 toggle */
+let addMenuDismiss = null;
 
-export function openAddMenu(items, anchor = null) {
+export function openAddMenu(items, anchor = null, opts = {}) {
   closeAddMenu();
+  /*
+   * ⚠️ 菜单**永远挂在 body 上**（2026-11-06 实机报障后定的规矩）。
+   *
+   * 原来它 append 进 `.list-head`、absolute top:calc(100% - 4px) 溢到栏外。而手机端
+   * `.list-head` 带 backdrop-filter（玻璃导航栏 = 合成层），Android WebView 会把
+   * **溢出合成层的子元素裁掉不画**：实机只剩贴着栏的一条白，下半透出搜索框和列表，
+   * 看着像"菜单半透明 / 渲染坏了"。桌面 Chrome 不裁，所以模拟器截图一直正常。
+   *
+   * 位置观感**一点没变**（右缘 16px、栏底再往上 4px 起 —— 就是原来那处下拉），
+   * 只是换成 body 下的 position:fixed 按视口坐标摆，跟玻璃栏不沾亲。
+   */
+  const narrow = matchMedia('(max-width: 900px)').matches;
+  /*
+   * opts（2026-11-06 定时派活详情页的 ⋯ 菜单也走这一套后加的，通讯录不传 = 行为不变）：
+   *   · below —— 无视 .list-head，永远 position:fixed 从锚点按钮**正下方**长出来（右缘对齐锚点）。
+   *     详情页是 z-index 90 的整页覆盖层，背后的 .list-head 量出来照样有矩形，走老逻辑会挂错地方。
+   *   · outsideClose —— 点菜单/锚点以外任意处收起（通讯录没开它：那是老行为，别动）。
+   *   · width —— 收窄菜单（CSS 默认 196px）。必须在量宽**之前**写上，placeBelow 的右对齐才算得准。
+   */
+  const { below = false, outsideClose = false, width = 0 } = opts;
   const box = document.createElement('div');
   box.className = 'add-menu';
-  box.innerHTML = items
-    .map(
-      (it, i) => `<button data-add="${i}" title="${esc(it.hint)}">
-        <i class="ico">${it.icon ?? ''}</i>
-        <span class="txt"><b>${esc(it.label)}</b><em>${esc(it.hint)}</em></span>
-      </button>`,
-    )
-    .join('');
-  /*
-   * 挂哪儿：左栏**真的显示着**才挂 `.list-head`，否则挂 body。
-   *
-   * 2026-10-26 用户报「＋ 添加仓库 打不开」：代码托管是工作台下的整页，`body.no-list`
-   * 把整个 `.list-panel` 设成 `display:none` —— 菜单 append 进去了，元素在、事件也绑上了，
-   * 但量出来 0×0、坐标 0,0，永远看不见（不是"没反应"，是"渲染在一个不显示的地方"）。
-   * 挂 body 时改用 `position:fixed` 直接按按钮的视口坐标摆，不再需要左栏当坐标原点。
-   */
-  const head = document.querySelector('.list-head');
-  const inList = !!head && head.getClientRects().length > 0;
-  (inList ? head : document.body).append(box);
-  /*
-   * 让「＋」落在菜单的中线上：按**打开它的那颗按钮**算，不写死像素。
-   *
-   * ⚠️ 以前这里写死 `#listAction`。技能搬进「设置 → 技能」之后，那颗 ＋ 在主区
-   * （`#skNew`），而 `#listAction` 在设置页是**隐藏的** —— 隐藏元素的 getBoundingClientRect()
-   * 全是 0，菜单会跑到左上角去。
-   */
+  if (width) box.style.width = `${width}px`;
+  const rowHTML = (it, i) => `<button data-add="${i}"${it.danger ? ' class="is-danger"' : ''} title="${esc(it.hint)}">
+      <i class="ico">${it.icon ?? ''}</i>
+      <span class="txt"><b>${esc(it.label)}</b></span>
+    </button>`;
+  box.innerHTML = items.map(rowHTML).join('');
+  document.body.append(box);
   const anchorEl = anchor ?? document.querySelector('#listAction');
-  const btn = anchorEl.getBoundingClientRect();
-  const w = box.getBoundingClientRect().width || 268; // 刚 append 就量，宽度可能还是 0（样式没落地）
-  let left = btn.left + btn.width / 2 - w / 2;
-  left = Math.min(Math.max(left, 8), window.innerWidth - w - 8); // 别探出视口
-  if (inList) {
-    const hb = head.getBoundingClientRect();
-    box.style.left = Math.round(left - hb.left) + 'px';
-    box.style.right = 'auto';
-    /*
-     * 竖直位置：**打开菜单的那颗按钮不在左栏头部里**时（主区那颗「＋」，
-     * 比如「代码仓库 → ＋ 添加仓库」），菜单得跟着按钮走。
-     *
-     * CSS 里写的是 `top: calc(100% - 4px)` —— 那是"紧贴左栏页头下面"，
-     * 对页头里那颗 ＋ 正好；但主区那颗 ＋ 在页面几十到几百像素以下，
-     * 菜单会**浮在按钮上方老远**，看着像从别处冒出来的。
-     */
-    if (!head.contains(anchorEl)) {
-      box.style.top = Math.round(btn.bottom - hb.top + 6) + 'px';
-    }
-  } else {
-    // 挂在 body 上：没有左栏可以当坐标原点，直接固定在按钮正下方
+
+  /** 按锚点的视口矩形摆位：从按钮下面 6px 长出来，右缘对齐按钮（⋯ 都在右上角），左右别探出视口。量不到矩形（隐藏/没传）返回 false 走老逻辑 */
+  const placeBelow = () => {
+    const br = anchorEl?.getBoundingClientRect();
+    if (!br || (!br.width && !br.height)) return false;
+    const w = box.getBoundingClientRect().width || 196;
+    let left = br.right - w;
+    left = Math.min(Math.max(left, 8), window.innerWidth - w - 8);
     box.style.position = 'fixed';
     box.style.left = Math.round(left) + 'px';
     box.style.right = 'auto';
-    box.style.top = Math.round(btn.bottom + 6) + 'px';
+    box.style.top = Math.round(br.bottom + 6) + 'px';
+    return true;
+  };
+
+  if (below && placeBelow()) {
+    /* 位置已按锚点定好 */
+  } else if (narrow) {
+    /*
+     * 手机：坐标照抄原下拉 —— 右缘 16px（.list-head 的 padding）、
+     * 顶边 = 导航栏底 - 4px（原来那条 top: calc(100% - 4px)）。
+     * 用导航栏的视口矩形算，不依赖它是定位祖先。
+     */
+    const head = document.querySelector('.list-head');
+    const inList = !!head && head.getClientRects().length > 0;
+    box.style.position = 'fixed';
+    if (inList) {
+      box.style.top = Math.round(head.getBoundingClientRect().bottom - 4) + 'px';
+      box.style.left = 'auto';
+      box.style.right = '16px';
+    } else {
+      /* 主区那颗「＋」（技能 / 代码仓库…）：还是从按钮下面长出来，居中于按钮 */
+      const br = anchorEl?.getBoundingClientRect();
+      const w = box.getBoundingClientRect().width || 196;
+      const left = br
+        ? Math.min(Math.max(br.left + br.width / 2 - w / 2, 8), window.innerWidth - w - 8)
+        : 8;
+      box.style.left = Math.round(left) + 'px';
+      box.style.right = 'auto';
+      box.style.top = Math.round((br?.bottom ?? 8) + 6) + 'px';
+    }
+  } else {
+    /*
+     * 挂哪儿：左栏**真的显示着**才挂 `.list-head`，否则挂 body。
+     *
+     * 2026-10-26 用户报「＋ 添加仓库 打不开」：代码托管是工作台下的整页，`body.no-list`
+     * 把整个 `.list-panel` 设成 `display:none` —— 菜单 append 进去了，元素在、事件也绑上了，
+     * 但量出来 0×0、坐标 0,0，永远看不见（不是"没反应"，是"渲染在一个不显示的地方"）。
+     * 挂 body 时改用 `position:fixed` 直接按按钮的视口坐标摆，不再需要左栏当坐标原点。
+     */
+    const head = document.querySelector('.list-head');
+    const inList = !!head && head.getClientRects().length > 0;
+    if (inList) head.append(box); else document.body.append(box);
+    /*
+     * 让「＋」落在菜单的中线上：按**打开它的那颗按钮**算，不写死像素。
+     *
+     * ⚠️ 以前这里写死 `#listAction`。技能搬进「设置 → 技能」之后，那颗 ＋ 在主区
+     * （`#skNew`），而 `#listAction` 在设置页是**隐藏的** —— 隐藏元素的 getBoundingClientRect()
+     * 全是 0，菜单会跑到左上角去。
+     */
+    const btn = anchorEl?.getBoundingClientRect();
+    if (btn) {
+      const w = box.getBoundingClientRect().width || 196; // 刚 append 就量，宽度可能还是 0（样式没落地）
+      let left = btn.left + btn.width / 2 - w / 2;
+      left = Math.min(Math.max(left, 8), window.innerWidth - w - 8); // 别探出视口
+      if (inList) {
+        const hb = head.getBoundingClientRect();
+        box.style.left = Math.round(left - hb.left) + 'px';
+        box.style.right = 'auto';
+        /*
+         * 竖直位置：**打开菜单的那颗按钮不在左栏头部里**时（主区那颗「＋」，
+         * 比如「代码仓库 → ＋ 添加仓库」），菜单得跟着按钮走。
+         *
+         * CSS 里写的是 `top: calc(100% - 4px)` —— 那是"紧贴左栏页头下面"，
+         * 对页头里那颗 ＋ 正好；但主区那颗 ＋ 在页面几十到几百像素以下，
+         * 菜单会**浮在按钮上方老远**，看着像从别处冒出来的。
+         */
+        if (!head.contains(anchorEl)) {
+          box.style.top = Math.round(btn.bottom - hb.top + 6) + 'px';
+        }
+      } else {
+        // 挂在 body 上：没有左栏可以当坐标原点，直接固定在按钮正下方
+        box.style.position = 'fixed';
+        box.style.left = Math.round(left) + 'px';
+        box.style.right = 'auto';
+        box.style.top = Math.round(btn.bottom + 6) + 'px';
+      }
+    }
   }
   box.querySelectorAll('[data-add]').forEach((b) => {
     b.onclick = () => { closeAddMenu(); items[Number(b.dataset.add)].run(); };
   });
   addMenuAnchor = anchorEl;
   addMenu = box;
+  if (outsideClose) {
+    addMenuDismiss = (e) => {
+      if (!addMenu) return;
+      if (addMenu.contains(e.target) || (addMenuAnchor && addMenuAnchor.contains(e.target))) return;
+      closeAddMenu();
+    };
+    document.addEventListener('pointerdown', addMenuDismiss, true);
+  }
+  return box;
 }
 
 

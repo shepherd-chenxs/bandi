@@ -11,6 +11,25 @@ import { $, S } from './core.mjs';
 
 
 
+/* ------------------------------------------------------------------ 壳层标记 */
+
+/*
+ * 给网址打「已进工作台」标记（#bandi-app）—— 手机壳的返回键分流要用（MainActivity）。
+ *
+ * 为什么不用 Cookie 判：Cookie 只能说明"这台机登录过"——登录成功一次就一直在，
+ * 停在登录页/配对页时也会被误判成"已登录在工作台"，返回键被吞（2026-11-05 用户实报）。
+ * 标记由**网页自己**在认证通过后打上，壳层读 WebView 当前 URL 就能拿到"此刻"的状态。
+ * 应用不用 hash 路由（全项目无 hashchange 监听），这个标记不跟任何东西打架。
+ */
+export function markAppUrl() {
+  if (location.hash.includes('bandi-app')) return;
+  try {
+    history.replaceState(history.state, '', '#bandi-app');
+  } catch { /* file:// 之类打不上就算了：壳层按"没标记"放行 */ }
+}
+
+
+
 /* ------------------------------------------------------------------ 菜单收敛 */
 
 /**
@@ -122,6 +141,7 @@ export async function load(opts = {}) {
     try {
       const me = await api('/api/me');
       S.auth = me ?? null;   // ⚠️ 不能叫 S.me —— 那个字段是「本机用户」(/api/state 的 me)，groups.mjs 在用
+      if (me) markAppUrl();   // 认证通过：给壳层的返回键分流报"此刻在工作台"
       S.isDevice = me?.kind === 'device';
       S.device = me?.device ?? null;
       S.isUser = me?.kind === 'user';

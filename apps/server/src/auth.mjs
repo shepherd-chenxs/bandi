@@ -684,6 +684,7 @@ export function guard(auth, req, res, url) {
         hasUsers,
         loopback: hasUsers,
         users: hasUsers ? store.listUsers().filter((u) => !u.disabled) : null,
+        mobile: isMobileUA(req),
       }));
       return false;
     }
@@ -879,6 +880,7 @@ export function guard(auth, req, res, url) {
         hasUsers,
         loopback: source === 'loopback' && hasUsers,
         users: hasUsers ? store.listUsers().filter((u) => !u.disabled) : null,
+        mobile: isMobileUA(req),
       }));
       return false;
     }
@@ -911,7 +913,7 @@ export function guard(auth, req, res, url) {
     if (staleTok && !staleTok.startsWith('bd_')) setCookies.push(clearedTokenCookie());
     if (setCookies.length) headers['Set-Cookie'] = setCookies;
     res.writeHead(200, headers);
-    res.end(loginPage({ hasUsers: store.hasUsers(), loopback: source === 'loopback' }));
+    res.end(loginPage({ hasUsers: store.hasUsers(), loopback: source === 'loopback', mobile: isMobileUA(req) }));
     return false;
   }
 
@@ -981,7 +983,16 @@ function escapeHtml(s) {
 const esc = escapeHtml;
 
 /**
- * 登录页（2026-10-28 第三刀建；2026-10-31 用户概念两轮改造）。
+ * 登录页（2026-10-28 第三刀建；2026-10-31 四态定型；2026-11-06 起**双端分设计**）。
+ *
+ * ┌ 架构（2026-11-06，用户：「同一个页面在两个地方显示，那就必定不好看」）─────────
+ * │ loginPage() 只是分发器：按请求里的手机信号（isMobileUA）出**两份完全独立的页面**：
+ * │   · loginDesktopPage() —— PC：左右分栏（左品牌大区 + 右表单面），只为宽屏设计；
+ * │   · loginMobilePage() —— 手机：对齐壳启动页（apps/mobile/dist/launcher.css）的 iOS 语汇。
+ * │ 两页共用下面的四态表单标记（loginFormHtml）、OTP 第二段（OTP_PANE_HTML）和内联脚本
+ * │ （LOGIN_SCRIPT）—— 逻辑只写一份；各自的 <style>/<body> 各画各的。元素 ID 两端一致
+ * │ （smoke 契约和脚本都靠它们，别改）。
+ * └────────────────────────────────────────────────────────────────────────
  *
  * 四态，别混（2026-10-31 删掉令牌表单后从五态变四态）：
  *   · `hasUsers === false` —— **创建账号**（账号密码直建，第一个自动成为管理员）。
@@ -1000,7 +1011,32 @@ const esc = escapeHtml;
  * 写请求带 `X-Bandi: 1` 头，原生表单提交设不了头，必然被 CSRF 闸挡成 403（自己试过）。
  * 所以走 fetch，并把「码 + 中文」原样显示出来 —— 与全站错误口径一致。
  */
-function loginPage({ hasUsers, loopback = false, users = null }) {
+
+/**
+ * B 字母标（与 apps/web/index.html 同源的双椭圆镂空 B）。
+ * key 用来区分同一页上的多处实例 —— mask 的 id 在文档里必须唯一。
+ */
+function brandSvg(key) {
+  const id = `b-hole-${key}`;
+  return `<svg viewBox="0 0 512 512" aria-hidden="true">
+  <defs>
+    <mask id="${id}">
+      <rect width="512" height="512" fill="#fff"/>
+      <ellipse cx="268" cy="206" rx="36" ry="29" fill="#000"/>
+      <ellipse cx="274" cy="340" rx="40" ry="31" fill="#000"/>
+    </mask>
+  </defs>
+  <g mask="url(#${id})" fill="#fff">
+    <rect x="154" y="138" width="72" height="236" rx="34"/>
+    <path d="M194,156 C272,142 338,168 338,208 C338,248 288,268 194,264 Z"/>
+    <path d="M194,282 C284,276 348,306 348,340 C348,372 288,388 194,382 Z"/>
+    <rect x="172" y="336" width="70" height="52" rx="26"/>
+  </g>
+</svg>`;
+}
+
+/** 四态表单标记（建号 / 账号磁贴 / 用户名密码；#err 一并在这里）—— 只这一份，两端页面共用 */
+function loginFormHtml({ hasUsers, loopback = false, users = null }) {
   const pwForm = hasUsers
     ? (loopback && Array.isArray(users) && users.length
       ? `
@@ -1018,37 +1054,55 @@ function loginPage({ hasUsers, loopback = false, users = null }) {
 <div id="pwRow" hidden>
   <p class="tile-who" id="pwWho"></p>
   <form id="pwForm" autocomplete="on">
-    <input id="pw" name="password" type="password" placeholder="密码" autofocus autocomplete="current-password" />
+    <label class="field">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="10.2" width="15" height="10.3" rx="2.6"/><path d="M8.3 10.2V7.6a3.7 3.7 0 0 1 7.4 0v2.6"/></svg>
+      <input id="pw" name="password" type="password" placeholder="密码" autofocus autocomplete="current-password" />
+    </label>
     <button type="submit">进入</button>
   </form>
 </div>`
       : `
 <p class="bad" id="err" hidden></p>
 <form id="pwForm" autocomplete="on">
-  <input id="nm" name="username" placeholder="用户名" autofocus autocomplete="username" spellcheck="false" />
-  <input id="pw" name="password" type="password" placeholder="密码（未设密码就留空）" autocomplete="current-password" />
+  <label class="field">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="8" r="3.6"/><path d="M5 19.4c.8-3.4 3.6-5.2 7-5.2s6.2 1.8 7 5.2"/></svg>
+    <input id="nm" name="username" placeholder="用户名" autofocus autocomplete="username" spellcheck="false" />
+  </label>
+  <label class="field">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="10.2" width="15" height="10.3" rx="2.6"/><path d="M8.3 10.2V7.6a3.7 3.7 0 0 1 7.4 0v2.6"/></svg>
+    <input id="pw" name="password" type="password" placeholder="密码（未设密码就留空）" autocomplete="current-password" />
+  </label>
   <button type="submit">登录</button>
 </form>`)
     : `
 <p class="bad" id="err" hidden></p>
 <form id="signForm" autocomplete="on">
-  <input id="nm" placeholder="用户名" autofocus autocomplete="username" spellcheck="false" />
-  <input id="pw" type="password" placeholder="密码（可留空 = 免密）" autocomplete="new-password" />
-  <input id="pw2" type="password" placeholder="再输一遍密码" autocomplete="new-password" />
+  <label class="field">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="8" r="3.6"/><path d="M5 19.4c.8-3.4 3.6-5.2 7-5.2s6.2 1.8 7 5.2"/></svg>
+    <input id="nm" placeholder="用户名" autofocus autocomplete="username" spellcheck="false" />
+  </label>
+  <label class="field">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="10.2" width="15" height="10.3" rx="2.6"/><path d="M8.3 10.2V7.6a3.7 3.7 0 0 1 7.4 0v2.6"/></svg>
+    <input id="pw" type="password" placeholder="密码（可留空 = 免密）" autocomplete="new-password" />
+  </label>
+  <label class="field">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="10.2" width="15" height="10.3" rx="2.6"/><path d="M8.3 10.2V7.6a3.7 3.7 0 0 1 7.4 0v2.6"/><path d="M9 15.4l2 2 3.6-3.8"/></svg>
+    <input id="pw2" type="password" placeholder="再输一遍密码" autocomplete="new-password" />
+  </label>
   <button type="submit">创建并进入</button>
 </form>`;
 
-  /*
-   * 两段式登录的第二段（2026-10-31 二改，仿 yaojian-ruoyi）：第一段密码过了、账号又开了
-   * 动态验证，卡片整块切到这里 —— 一个输入框同时收 6 位动态码和 8 位恢复码
-   * （手机丢了用恢复码），凭据 5 分钟 / 5 次。带「返回上一步」：记错密码/换账号时不用刷新。
-   */
-  /*
-   * 两段式登录的第二段（2026-10-31 三改，仿 yaojian-ruoyi 的布局）：**替换整个卡片内容**，
-   * 不是在密码表单下面续一段 —— 两套输入框 + 两个按钮叠在一起，人会不知道自己在哪个步骤。
-   * 它的版式就是参考项目那一屏：锁图标 + 标题 + 一行说明 + 一个输入框 + 一个按钮 + 返回链接。
-   */
-  const otpStepHtml = `
+  return pwForm;
+}
+
+/*
+ * 两段式登录的第二段（2026-10-31 二改三改，仿 yaojian-ruoyi 的布局）：第一段密码过了、
+ * 账号又开了动态验证，**替换整个表单区**（第一段整块 hidden，见脚本 showOtpStep）——
+ * 两套输入框 + 两个按钮叠在一起，人会不知道自己在哪个步骤。版式：锁图标 + 标题 +
+ * 一行说明 + 一个输入框 + 一个按钮 + 返回链接；一个输入框同时收 6 位动态码和 8 位恢复码
+ * （手机丢了用恢复码），凭据 5 分钟 / 5 次。两端页面共用这份标记。
+ */
+const OTP_PANE_HTML = `
 <div id="otpPane" hidden>
   <header class="brand">
     <div class="logo lock">
@@ -1065,157 +1119,21 @@ function loginPage({ hasUsers, loopback = false, users = null }) {
   </header>
   <form id="otpForm" autocomplete="off">
     <p class="bad" id="otpErr" hidden></p>
-    <input id="otpCode" inputmode="numeric" maxlength="8" autocomplete="one-time-code"
-           placeholder="动态验证码 / 恢复码" autofocus spellcheck="false" />
+    <label class="field">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.4 19 6.2v5.2c0 4.3-2.9 7.6-7 9.2-4.1-1.6-7-4.9-7-9.2V6.2Z"/><path d="M9.2 12.1l2 2 3.6-3.8"/></svg>
+      <input id="otpCode" inputmode="numeric" maxlength="8" autocomplete="one-time-code"
+             placeholder="动态验证码 / 恢复码" autofocus spellcheck="false" />
+    </label>
     <button type="submit">验证</button>
   </form>
   <p class="hint"><a href="#" id="otpBack">返回重新登录</a></p>
 </div>`;
 
-  /*
-   * 页面骨架（2026-10-31 重设计）：**居中一张卡片**，Logo + 产品名 + 一句话，下面才是表单。
-   * 旧版是贴在左上角的一列输入框，屏幕上大片空白、也看不出这是什么产品。
-   * 深色/浅色跟随系统（prefers-color-scheme）—— 班底本身有主题切换，登录页没登录读不到用户偏好，
-   * 跟系统走是唯一合理的默认。
-   */
-  return `<!doctype html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>班底 · ${hasUsers ? '登录' : '创建账号'}</title>
-<style>
-  :root {
-    --bg: #0e1014;
-    --glow: rgba(59,110,245,.16);
-    --card: #171a20;
-    --line: #262b33;
-    --text: #e8eaed;
-    --dim: #8b93a1;
-    --input: #10131a;
-    --accent: #3b6ef5;
-    --accent-hi: #4f7dfa;
-    --bad: #ff8a80;
-  }
-  @media (prefers-color-scheme: light) {
-    :root {
-      --bg: #f3f5fa; --glow: rgba(59,110,245,.10);
-      --card: #ffffff; --line: #e4e8f0; --text: #1b1f27; --dim: #6b7280;
-      --input: #f7f9fc; --bad: #d93025;
-    }
-  }
-  * { box-sizing: border-box; }
-  /*
-   * ⚠️ 必须显式兜住 [hidden]（2026-10-31 实报「两个登录框叠在一起」）：
-   * UA 的 [hidden]{display:none} 优先级最低，下面 #pwForm{display:flex} 这种 ID 选择器
-   * 会把它盖掉 —— 于是"隐藏"的表单照样显示。加 !important 一劳永逸。
-   */
-  [hidden] { display: none !important; }
-  body {
-    margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px 18px;
-    background: radial-gradient(1100px 560px at 50% -12%, var(--glow), transparent 62%), var(--bg);
-    color: var(--text);
-    font: 14px/1.6 system-ui, -apple-system, 'Segoe UI', 'Noto Sans SC', 'Microsoft YaHei', sans-serif;
-    -webkit-font-smoothing: antialiased;
-  }
-  .card {
-    width: min(392px, 100%);
-    background: var(--card);
-    border: 1px solid var(--line);
-    border-radius: 18px;
-    padding: 30px 30px 24px;
-    box-shadow: 0 24px 60px -22px rgba(0,0,0,.5), 0 2px 10px rgba(0,0,0,.06);
-  }
-  .brand { display: flex; align-items: center; gap: 13px; margin-bottom: 26px; }
-  .logo {
-    width: 46px; height: 46px; border-radius: 13px; flex: none; display: grid; place-items: center;
-    background: linear-gradient(145deg, #3b6ef5, #6f8cff);
-    box-shadow: 0 10px 22px -10px rgba(59,110,245,.8);
-  }
-  .logo svg { width: 26px; height: 26px; display: block; }
-  /* 第二段的锁标（与产品标同尺寸同位，切换时不跳动） */
-  .logo.lock { background: linear-gradient(145deg, #2f5ad6, #5b84f7); }
-  .logo.lock svg { width: 24px; height: 24px; }
-  h1 { font-size: 19px; margin: 0; letter-spacing: .3px; }
-  .tag { margin: 2px 0 0; font-size: 12.5px; color: var(--dim); }
-  form { margin: 0; }
-  #pwForm, #signForm, #otpForm { display: flex; flex-direction: column; gap: 10px; }
-  input {
-    width: 100%; height: 44px; padding: 0 13px;
-    border-radius: 11px; border: 1px solid var(--line);
-    background: var(--input); color: var(--text); font: inherit;
-    transition: border-color .15s, box-shadow .15s;
-  }
-  input::placeholder { color: var(--dim); }
-  input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(59,110,245,.18); }
-  button {
-    height: 44px; border-radius: 11px; border: 0; background: var(--accent);
-    color: #fff; font: inherit; font-weight: 600; letter-spacing: .4px; cursor: pointer;
-    transition: background .15s, transform .05s;
-  }
-  button:hover { background: var(--accent-hi); }
-  button:active { transform: translateY(1px); }
-  button[disabled] { opacity: .55; cursor: default; }
-  .bad { color: var(--bad); font-size: 12.5px; margin: 0 0 12px; }
-  /* 明文告警条（IAM §10.1.1）：监听非回环又没声明反代时，登录页顶上一条黄的 ——
-     这是"人一定会看到"的位置；只写日志的话，部署的人永远不知道密码在明文里跑。 */
-  .warnbar {
-    margin: 0 0 18px; padding: 9px 11px; border-radius: 10px; font-size: 12px; line-height: 1.5;
-    color: #7a4b00; background: #fff4d6; border: 1px solid #f0d089;
-  }
-  @media (prefers-color-scheme: dark) {
-    .warnbar { color: #ffd993; background: #3a2c12; border-color: #6b5220; }
-  }
-  .hint { margin: 14px 0 0; font-size: 12.5px; color: var(--dim); text-align: center; }
-  .hint a { color: var(--accent); text-decoration: none; }
-  /* 账号磁贴（回环登录页）：电脑开机选账户的版式，放进卡片里当网格 */
-  #tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(86px, 1fr)); gap: 10px; margin-bottom: 4px; }
-  .tile {
-    height: auto; padding: 14px 6px 10px; display: flex; flex-direction: column; align-items: center; gap: 8px;
-    background: var(--input); color: var(--text); border: 1px solid var(--line); font-weight: 400;
-  }
-  .tile:hover { background: var(--input); border-color: var(--accent); }
-  .tile-ava { width: 40px; height: 40px; border-radius: 50%; background: var(--accent); color: #fff;
-              font-size: 17px; font-weight: 600; line-height: 40px; text-align: center; }
-  .tile-name { font-size: 12.5px; }
-  .tile-who { margin: 0 0 12px; font-size: 13px; color: var(--dim); }
-  .foot { margin-top: 22px; padding-top: 14px; border-top: 1px solid var(--line);
-          display: flex; justify-content: space-between; font-size: 11.5px; color: var(--dim); }
-</style>
-</head>
-<body>
-  <main class="card">
-    ${tlsWarning() ? `<p class="warnbar">${esc(tlsWarning())}</p>` : ''}
-    <div id="loginPane">
-      <header class="brand">
-        <div class="logo">
-          <svg viewBox="0 0 512 512" aria-hidden="true">
-            <defs>
-              <mask id="b-hole">
-                <rect width="512" height="512" fill="#fff"/>
-                <ellipse cx="268" cy="206" rx="36" ry="29" fill="#000"/>
-                <ellipse cx="274" cy="340" rx="40" ry="31" fill="#000"/>
-              </mask>
-            </defs>
-            <g mask="url(#b-hole)" fill="#fff">
-              <rect x="154" y="138" width="72" height="236" rx="34"/>
-              <path d="M194,156 C272,142 338,168 338,208 C338,248 288,268 194,264 Z"/>
-              <path d="M194,282 C284,276 348,306 348,340 C348,372 288,388 194,382 Z"/>
-              <rect x="172" y="336" width="70" height="52" rx="26"/>
-            </g>
-          </svg>
-        </div>
-        <div>
-          <h1>班底</h1>
-          <p class="tag">${hasUsers ? '登录你的账号' : '创建第一个账号 · 它将自动成为管理员'}</p>
-        </div>
-      </header>
-      ${pwForm}
-    </div>
-    ${otpStepHtml}
-    <div class="foot"><span>bandi</span><span>自托管 · 多 agent 协作</span></div>
-  </main>
-<script>
+/*
+ * 内联脚本 —— 两端页面共用同一份（四态表单 / OTP / 手机补卡），一个字节不差。
+ * ⚠️ 别引入反引号：它本身躺在模板字面量里。元素 ID 与两端页面的标记一一对应。
+ */
+const LOGIN_SCRIPT = `<script>
 (() => {
   const err = document.getElementById('err');
   const say = (t) => { if (err) { err.textContent = t; err.hidden = false; } };
@@ -1234,6 +1152,46 @@ function loginPage({ hasUsers, loopback = false, users = null }) {
     try { return m ? decodeURIComponent(m[1]) : ''; } catch { return m ? m[1] : ''; }
   };
   const csrfHeader = () => ({ 'X-Bandi': '1', 'X-Bandi-CSRF': csrfVal() });
+  /*
+   * 手机端身份统一（2026-11-05 用户：「手机端设备身份和账号密码应该统一起来」）。
+   *
+   * 这台手机如果配过对，localStorage 里就有一枚 clientKey（与 pair-claim.mjs 同一个键）。
+   * 有它说明"这台手机是登记过的"，于是登录页做两件事，都是围着**设备身份**转：
+   *   1. 先拿它去 /api/pair/resume 换一张新设备卡 —— 卡只是丢了（WebView 清缓存、
+   *      升级、被系统回收），配对记录还在，压根不该让人输密码；
+   *   2. 真要输密码（设备记录被「取消配对」删了 / 从没配过对），把 clientKey 一起提交 ——
+   *      服务端认出来后按**设备身份**回（绑归属人 + 发设备卡；没有记录就当场建一台），
+   *      不再发第二套会话身份。见 routes/users.mjs 的 claimPhoneIdentity。
+   * 桌面浏览器没有这枚键、也不会生成，两条都不发生，登录页一位字节不变。
+   */
+  const IS_PHONE = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+  let ck = (() => { try { return localStorage.getItem('bandi.clientKey') || ''; } catch { return ''; } })();
+  /*
+   * 从没配过对的手机：这里**现造一枚**（与 pair-claim.mjs 同样的键、同样的形状）。
+   * 服务端据此把这台手机落成一台设备 —— 于是"用密码登录"和"扫码配对"进去以后是
+   * 同一种身份、同一套「我的」页（2026-11-05 用户选的口径 A）。
+   * 只在手机 UA 下生成：桌面浏览器不带 clientKey，登录仍旧是账号会话。
+   */
+  const ensureCk = () => {
+    if (ck || !IS_PHONE) return ck;
+    ck = crypto.randomUUID
+      ? crypto.randomUUID().replace(/-/g, '')
+      : Math.random().toString(36).slice(2) + Date.now().toString(36) + Math.random().toString(36).slice(2);
+    try { localStorage.setItem('bandi.clientKey', ck); } catch { /* 隐私模式：存不下，这次拿不到设备身份 */ }
+    return ck;
+  };
+  /** 设备自报名（电脑端「设备」列表里那一行）：与 pair-claim.mjs 的 guessDeviceName 同款 */
+  const devName = () => {
+    const ua = navigator.userAgent;
+    if (/iPhone/i.test(ua)) return 'iPhone';
+    if (/iPad/i.test(ua)) return 'iPad';
+    const m = /Android[^;)]*;\\s*([^;)]+?)\\s+Build/i.exec(ua) || /Android[^;)]*;\\s*([^;)]+)/i.exec(ua);
+    return m ? 'Android · ' + m[1].split(/\\s+/)[0] : '';
+  };
+  const withCk = (o) => {
+    const k = ensureCk();
+    return k ? { ...o, clientKey: k, deviceName: devName() } : o;
+  };
   /** 第二段的凭据（内存里，不落任何存储） */
   let otpToken = '';
   let otpWho = '';
@@ -1258,7 +1216,7 @@ function loginPage({ hasUsers, loopback = false, users = null }) {
       const r = await fetch('/api/login', {
         method: 'POST',
         headers: csrfHeader(),
-        body: JSON.stringify({ name, password }),
+        body: JSON.stringify(withCk({ name, password })),
       });
       const j = await r.json().catch(() => null);
       if (r.ok && j?.needOtp) { otpToken = j.otpToken; showOtpStep(name); return true; }
@@ -1303,7 +1261,7 @@ function loginPage({ hasUsers, loopback = false, users = null }) {
       const r = await fetch('/api/login/otp', {
         method: 'POST',
         headers: csrfHeader(),
-        body: JSON.stringify({ otpToken, code }),
+        body: JSON.stringify(withCk({ otpToken, code })),
       });
       if (r.ok) { location.replace('/'); return; }
       const j = await r.json().catch(() => null);
@@ -1348,9 +1306,506 @@ function loginPage({ hasUsers, loopback = false, users = null }) {
       btn.disabled = false;
     }
   });
+  /*
+   * 掉卡先自动补卡（只对配过对的手机成立，见上面 clientKey 那段）：
+   * 成功就地跳进工作台，连密码框都不用看。失败（设备记录被删 / 被别的手机占着）就留在
+   * 这一页让人登录 —— 登录时 clientKey 会跟着提交，身份仍是设备。
+   * bandi.ck-tried 保证一个标签页只试一次：否则"补卡失败 → 页面还在登录页 →
+   * 又触发补卡"会来回打接口。
+   */
+  if (ck) {
+    let tried = false;
+    try { tried = sessionStorage.getItem('bandi.ck-tried') === '1'; } catch { /* 隐私模式：当没试过 */ }
+    if (!tried) {
+      fetch('/api/pair/resume', {
+        method: 'POST',
+        headers: { ...csrfHeader(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientKey: ck }),
+      })
+        .then((r) => {
+          try { sessionStorage.setItem('bandi.ck-tried', '1'); } catch { /* 存不下就算了 */ }
+          if (r.ok) location.replace('/');
+        })
+        .catch(() => { /* 连不上：留在登录页，人还能手输 */ });
+    }
+  }
 })();
-</script>
+</script>`;
+
+/** 分发器：mobile 位由 guard 的三个发放点按 isMobileUA(req) 传入（2026-11-06 双端分设计） */
+function loginPage(args) {
+  return args.mobile ? loginMobilePage(args) : loginDesktopPage(args);
+}
+
+/** 明文 TLS 告警条（IAM §10.1.1）：两端的登录页都顶在表单跟前，两端各调样式 */
+function warnbarHtml() {
+  const t = tlsWarning();
+  return t
+    ? `<p class="warnbar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.6 21.4 20H2.6Z"/><path d="M12 10v4.2"/><circle cx="12" cy="17.1" r=".4" fill="currentColor"/></svg><span>${esc(t)}</span></p>`
+    : '';
+}
+
+/**
+ * PC 登录页（2026-11-06 重设计：**左右分栏**）。
+ *
+ * 2026-10-31 起是"居中一张卡片"，2026-11-05 给它铺过色斑与毛玻璃 —— 但它一直同时
+ * 服务电脑和手机，两头将就。用户拍板分端设计后，这页从此**只为宽屏设计**：
+ *   · 左侧品牌大区：永远深色（不随系统反转），深海军蓝底 + 两团色斑 + 渐隐网格，
+ *     logo / 产品名 / 一句话 / 三条产品特性。品牌大区是"为什么用它"，不是表单的装饰。
+ *   · 右侧表单面：跟随系统深浅（登录前读不到用户主题偏好，跟系统走是唯一合理默认）。
+ * 配色与主站同源：交互蓝 #0a84ff（浅色 #0066cc）、实心主按钮 #0071e3、logo 渐变
+ * #4b6cb7→#182848（style.css 的 --logo-1/--logo-2）；圆角收成 10px（主站"面"档）。
+ * ≤960px 是**兜底不是设计目标**：左栏收成顶部横向品牌条（特性列表藏掉），表单照常可用
+ * —— 手机不该落到这页（isMobileUA 分流），落到这档的只有桌面窄窗口 / 桌面模式的浏览器。
+ */
+function loginDesktopPage({ hasUsers, loopback = false, users = null }) {
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>班底 · ${hasUsers ? '登录' : '创建账号'}</title>
+<style>
+  :root {
+    --bg: #101216;
+    --glow: rgba(10,132,255,.07);
+    --line: rgba(255,255,255,.09);
+    --line-strong: rgba(255,255,255,.17);
+    --text: #e9ecf2;
+    --dim: #8d94a5;
+    --input: rgba(255,255,255,.045);
+    --input-solid: #15171c;
+    --accent: #0a84ff;
+    --btn: #0071e3;
+    --accent-hi: #409cff;
+    --bad: #ff8a80;
+    --logo1: #4b6cb7;
+    --logo2: #182848;
+    color-scheme: dark;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f7f8fb;
+      --glow: rgba(10,132,255,.06);
+      --line: rgba(15,23,42,.10);
+      --line-strong: rgba(15,23,42,.18);
+      --text: #1a1f2a;
+      --dim: #67718a;
+      --input: rgba(15,23,42,.028);
+      --input-solid: #ffffff;
+      --accent: #0066cc;
+      --btn: #0066cc;
+      --accent-hi: #0a84ff;
+      --bad: #d93025;
+      color-scheme: light;
+    }
+  }
+  * { box-sizing: border-box; }
+  /*
+   * ⚠️ 必须显式兜住 [hidden]（2026-10-31 实报「两个登录框叠在一起」）：
+   * UA 的 [hidden]{display:none} 优先级最低，下面表单的 display:flex 这类选择器
+   * 会把它盖掉 —— 于是"隐藏"的表单照样显示。加 !important 一劳永逸。
+   */
+  [hidden] { display: none !important; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.6 system-ui, -apple-system, 'Segoe UI', 'Noto Sans SC', 'Microsoft YaHei', sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .split { display: grid; grid-template-columns: minmax(0, 1fr) clamp(400px, 36vw, 480px); min-height: 100vh; }
+
+  /* ---------- 左：品牌大区（永远深色） ---------- */
+  .brandpane {
+    position: relative; overflow: hidden; display: flex; flex-direction: column;
+    padding: 56px 60px 40px;
+    background: linear-gradient(158deg, #0e1424 0%, #0a0e18 58%, #080a10 100%);
+    color: #eef2f8;
+  }
+  .brandpane::before {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background: radial-gradient(900px 520px at 18% -8%, rgba(59,110,245,.16), transparent 62%);
+  }
+  .brandpane::after {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background-image:
+      linear-gradient(rgba(255,255,255,.045) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,.045) 1px, transparent 1px);
+    background-size: 34px 34px;
+    -webkit-mask-image: radial-gradient(ellipse 90% 80% at 30% 30%, #000 20%, transparent 72%);
+    mask-image: radial-gradient(ellipse 90% 80% at 30% 30%, #000 20%, transparent 72%);
+  }
+  .orb { position: absolute; border-radius: 50%; pointer-events: none; }
+  .o1 { width: 48vmax; height: 48vmax; left: -14vmax; top: -16vmax;
+        background: radial-gradient(closest-side, rgba(59,110,245,.20), transparent 72%);
+        animation: drift1 28s ease-in-out infinite alternate; }
+  .o2 { width: 40vmax; height: 40vmax; left: 18vw; bottom: -18vmax;
+        background: radial-gradient(closest-side, rgba(45,175,235,.12), transparent 72%);
+        animation: drift2 36s ease-in-out infinite alternate; }
+  @keyframes drift1 { to { transform: translate(6vmax, 5vmax) scale(1.08); } }
+  @keyframes drift2 { to { transform: translate(-5vmax, -6vmax) scale(1.1); } }
+  @keyframes fade-in { from { opacity: 0; } }
+  .bp-brand { position: relative; z-index: 1; display: flex; align-items: center; gap: 16px; animation: fade-in .7s ease both; }
+  .bp-logo {
+    width: 58px; height: 58px; border-radius: 16px; flex: none; display: grid; place-items: center;
+    background: linear-gradient(150deg, var(--logo1) 10%, var(--logo2) 95%);
+    box-shadow: 0 16px 34px -14px rgba(35,64,140,.9), inset 0 1px 0 rgba(255,255,255,.22);
+  }
+  .bp-logo svg { width: 32px; height: 32px; display: block; }
+  .bp-name { margin: 0; font-size: 27px; font-weight: 700; letter-spacing: .3px; }
+  .bp-tag { margin: 4px 0 0; font-size: 13.5px; color: #93a0b8; }
+  .bp-feats {
+    position: relative; z-index: 1; margin: clamp(40px, 9vh, 96px) 0 0; padding: 0; list-style: none;
+    display: flex; flex-direction: column; gap: 26px; animation: fade-in .7s .12s ease both;
+  }
+  .bp-feats li { display: flex; align-items: flex-start; gap: 14px; max-width: 420px; }
+  .bp-ico { flex: none; width: 38px; height: 38px; border-radius: 11px; display: grid; place-items: center;
+            background: rgba(59,110,245,.15); color: #7ea6ff; }
+  .bp-ico svg { width: 19px; height: 19px; }
+  .bp-feats b { display: block; font-size: 14.5px; font-weight: 600; color: #dfe6f2; }
+  .bp-feats span { display: block; margin-top: 2px; font-size: 13px; line-height: 1.55; color: #8b97ad; }
+  .bp-foot { position: relative; z-index: 1; margin: auto 0 0; padding-top: 28px;
+             font-size: 12px; color: #5f6b80; letter-spacing: .2px; animation: fade-in .7s .2s ease both; }
+
+  /* ---------- 右：表单面（跟随系统深浅） ---------- */
+  .formpane { position: relative; display: flex; padding: 44px 48px; background: var(--bg); color: var(--text); }
+  .formpane::before {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background: radial-gradient(700px 380px at 50% -10%, var(--glow), transparent 65%);
+  }
+  .fp-inner { position: relative; z-index: 1; width: min(360px, 100%); margin: auto; padding: 20px 0; }
+  .fp-brand { display: flex; align-items: center; gap: 13px; margin-bottom: 26px; }
+  .fp-logo { width: 40px; height: 40px; border-radius: 11px; flex: none; display: grid; place-items: center;
+             background: linear-gradient(150deg, var(--logo1) 10%, var(--logo2) 95%);
+             box-shadow: 0 10px 22px -10px rgba(35,64,140,.8), inset 0 1px 0 rgba(255,255,255,.2); }
+  .fp-logo svg { width: 22px; height: 22px; display: block; }
+  h1 { margin: 0; font-size: 18px; font-weight: 700; letter-spacing: .2px; }
+  .tag { margin: 2px 0 0; font-size: 12.5px; color: var(--dim); }
+  form { margin: 0; }
+  #pwForm, #signForm, #otpForm { display: flex; flex-direction: column; gap: 10px; }
+  /* 带图标的输入框：图标绝对定位在左，input 让出 38px；focus 时图标跟着点亮 */
+  .field { position: relative; display: block; }
+  .field > svg {
+    position: absolute; left: 13px; top: 50%; width: 16px; height: 16px;
+    transform: translateY(-50%); color: var(--dim); pointer-events: none; transition: color .15s;
+  }
+  .field:focus-within > svg { color: var(--accent); }
+  input {
+    width: 100%; height: 44px; padding: 0 13px 0 38px;
+    border-radius: 10px; border: 1px solid var(--line);
+    background: var(--input); color: var(--text); font: inherit;
+    transition: border-color .15s, box-shadow .15s, background .15s;
+  }
+  input::placeholder { color: var(--dim); }
+  input:hover { border-color: var(--line-strong); }
+  input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3.5px rgba(10,132,255,.18); }
+  /* 浏览器自动填充会把自己的淡黄底刷进输入框（深色下尤其突兀），压回主题色 */
+  input:-webkit-autofill, input:-webkit-autofill:hover, input:-webkit-autofill:focus {
+    -webkit-text-fill-color: var(--text);
+    -webkit-box-shadow: 0 0 0 100px var(--input-solid) inset;
+    caret-color: var(--text);
+    transition: background-color 9999s ease-out;
+  }
+  button {
+    height: 44px; border-radius: 10px; border: 0; cursor: pointer;
+    background: var(--btn); color: #fff; font: inherit; font-weight: 600; letter-spacing: .4px;
+    box-shadow: 0 10px 22px -10px rgba(0,86,214,.55);
+    transition: filter .15s, transform .12s, box-shadow .15s;
+  }
+  button:hover { filter: brightness(1.08); }
+  button:active { transform: translateY(1px); filter: brightness(.96); }
+  button:focus-visible { outline: 2px solid var(--accent-hi); outline-offset: 2px; }
+  button[disabled] { opacity: .55; cursor: default; transform: none; filter: none; }
+  .bad { color: var(--bad); font-size: 12.5px; margin: 0 0 12px; }
+  /* 每次从 hidden 里放出来都抖一下：让"这条就是为你响的"可感知（display 切换会重放动画） */
+  .bad:not([hidden]) { animation: shake .32s ease; }
+  @keyframes shake { 20% { transform: translateX(-4px); } 45% { transform: translateX(3px); } 70% { transform: translateX(-2px); } }
+  /* 明文告警条（IAM §10.1.1）：监听非回环又没声明反代时，登录页顶上一条黄的 ——
+     这是"人一定会看到"的位置；只写日志的话，部署的人永远不知道密码在明文里跑。 */
+  .warnbar {
+    display: flex; gap: 9px; align-items: flex-start;
+    margin: 0 0 18px; padding: 10px 12px; border-radius: 10px; font-size: 12px; line-height: 1.55;
+    color: #7a4b00; background: #fff4d6; border: 1px solid #f0d089;
+  }
+  .warnbar svg { flex: none; width: 15px; height: 15px; margin-top: 1px; }
+  @media (prefers-color-scheme: dark) {
+    .warnbar { color: #ffd993; background: rgba(58,44,18,.82); border-color: #6b5220; }
+  }
+  .hint { margin: 14px 0 0; font-size: 12.5px; color: var(--dim); text-align: center; }
+  .hint a { color: var(--accent); text-decoration: none; font-weight: 500; }
+  .hint a:hover { text-decoration: underline; }
+  /* OTP 第二段（共享标记用的 .brand/.logo/.tag 结构在这里定样）：锁标压成主站蓝系 */
+  #otpPane .brand { display: flex; align-items: center; gap: 13px; margin-bottom: 26px; }
+  #otpPane .logo { width: 40px; height: 40px; border-radius: 11px; flex: none; display: grid; place-items: center;
+                   background: linear-gradient(150deg, #2f7cf6, #0a5bd8);
+                   box-shadow: 0 10px 22px -10px rgba(0,86,214,.7); }
+  #otpPane .logo svg { width: 21px; height: 21px; }
+  /* 账号磁贴（回环登录页）：电脑开机选账户的版式。
+     .tile 是 button —— 上面主按钮的实心底/白字要在它身上压回去 */
+  #tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 10px; margin-bottom: 4px; }
+  .tile {
+    height: auto; margin: 0; padding: 15px 6px 11px; border-radius: 12px; letter-spacing: 0;
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+    background: var(--input); color: var(--text); border: 1px solid var(--line);
+    font-weight: 400; box-shadow: none;
+    transition: border-color .15s, transform .15s, box-shadow .15s;
+  }
+  .tile:hover {
+    background: var(--input); border-color: var(--accent); filter: none; transform: translateY(-2px);
+    box-shadow: 0 10px 22px -12px rgba(10,132,255,.45);
+  }
+  .tile:active { transform: translateY(0); filter: none; }
+  .tile-ava { width: 42px; height: 42px; border-radius: 50%; color: #fff;
+              background: linear-gradient(145deg, var(--accent), var(--logo1));
+              box-shadow: 0 8px 18px -8px rgba(10,132,255,.6), inset 0 1px 0 rgba(255,255,255,.3);
+              font-size: 17px; font-weight: 600; line-height: 42px; text-align: center; }
+  .tile-name { font-size: 12.5px; }
+  .tile-who { margin: 0 0 12px; font-size: 13px; color: var(--dim); }
+  ::selection { background: rgba(10,132,255,.32); }
+  @media (prefers-reduced-motion: reduce) {
+    .orb, .bad:not([hidden]), .bp-brand, .bp-feats, .bp-foot { animation: none !important; }
+    button, input, .tile, .field > svg { transition: none !important; }
+  }
+  /*
+   * 兜底，不是设计目标（手机另有专页）：窄窗口下左栏收成顶部横向品牌条。
+   */
+  @media (max-width: 960px) {
+    .split { grid-template-columns: 1fr; }
+    .brandpane { padding: 24px 28px 20px; }
+    .bp-feats, .bp-foot { display: none; }
+    .bp-logo { width: 42px; height: 42px; border-radius: 12px; }
+    .bp-logo svg { width: 24px; height: 24px; }
+    .bp-name { font-size: 20px; }
+    .bp-tag { font-size: 12.5px; }
+    .formpane { padding: 26px 24px 34px; }
+  }
+</style>
+</head>
+<body>
+  <div class="split">
+    <aside class="brandpane">
+      <!-- 色斑是纯装饰：aria-hidden 且不接事件，读屏当它不存在 -->
+      <div class="bg" aria-hidden="true" style="position:absolute;inset:0;overflow:hidden;pointer-events:none"><i class="orb o1"></i><i class="orb o2"></i></div>
+      <header class="bp-brand">
+        <div class="bp-logo">${brandSvg('bp')}</div>
+        <div>
+          <p class="bp-name">班底</p>
+          <p class="bp-tag">自托管 · 多 agent 协作平台</p>
+        </div>
+      </header>
+      <ul class="bp-feats">
+        <li>
+          <i class="bp-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/></svg></i>
+          <div><b>消息协作</b><span>人和数字员工在同一个会话里干活</span></div>
+        </li>
+        <li>
+          <i class="bp-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg></i>
+          <div><b>专家库</b><span>把常用能力沉淀成随取随用的专家</span></div>
+        </li>
+        <li>
+          <i class="bp-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M7 7h3v9H7z"/><path d="M14 7h3v5h-3z"/></svg></i>
+          <div><b>任务看板</b><span>任务从想法到落地，全程可追</span></div>
+        </li>
+      </ul>
+      <p class="bp-foot">bandi · self-hosted</p>
+    </aside>
+    <main class="formpane">
+      <div class="fp-inner">
+        ${warnbarHtml()}
+        <div id="loginPane">
+          <header class="fp-brand">
+            <div class="fp-logo">${brandSvg('fp')}</div>
+            <div>
+              <h1>班底</h1>
+              <p class="tag">${hasUsers ? '登录你的账号' : '创建第一个账号 · 它将自动成为管理员'}</p>
+            </div>
+          </header>
+          ${loginFormHtml({ hasUsers, loopback, users })}
+        </div>
+        ${OTP_PANE_HTML}
+      </div>
+    </main>
+  </div>
+${LOGIN_SCRIPT}
 </body>
 </html>
 `;
+}
+
+/**
+ * 手机登录页（2026-11-06 新增：与 PC **分端设计**，用户：「手机端的账号密码登录页
+ * 不必和 PC 端的一样」）。这页照壳启动页（apps/mobile/dist/launcher.css）的 iOS 语汇画：
+ *   · 纯色系统底（深 #0a0b0d / 浅 iOS grouped #f2f3f7），不加光晕，靠 filled 卡片 + hairline 分层；
+ *   · 品牌区 = iOS 大标题式一行、左对齐（居中 hero 是落地页的排法），与启动页首页同款；
+ *   · 输入框 48px filled、主按钮 50px 实心 accent、去字距 —— token 与 launcher.css 同名同值；
+ *   · 报错 = **底部浮出横幅**（launcher 的 .status 同款）：#err/#otpErr 是共享标记里的
+ *     同一些元素，这里只用 CSS 改样，脚本一个字节不动；
+ *   · 内容顶部对齐、输入框落上半屏，键盘盖不住（launcher「别垂直居中、别加大段留白」的教训）；
+ *     body 不加 overflow-y：移动 WebView 的滚动容器是文档本身。
+ * 逻辑（四态表单 / OTP / 补卡）与 PC 页共用同一份。磁贴态手机实际到不了（回环才摆磁贴），
+ * 样式补全只为共享标记完整。
+ */
+function loginMobilePage({ hasUsers, loopback = false, users = null }) {
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+<title>班底 · ${hasUsers ? '登录' : '创建账号'}</title>
+<style>
+  :root {
+    --bg: #0a0b0d;
+    --card: #16181c;
+    --card-2: #1e2126;
+    --hairline: rgba(255,255,255,.08);
+    --line: rgba(255,255,255,.1);
+    --text: #f1f2f4;
+    --dim: #9aa1a9;
+    --strong: #d5d9de;
+    --accent: #3d76f6;
+    --accent-2: #6d95ff;
+    --bad: #c0504d;
+    --err-ink: #f0b3b1;
+    --err-bg: color-mix(in srgb, var(--bad) 22%, #1d2025);
+    --placeholder: #575d65;
+    --r-card: 18px;
+    --r-ctl: 12px;
+    --r-btn: 14px;
+    color-scheme: dark;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f2f3f7;
+      --card: #ffffff;
+      --card-2: #f5f6f9;
+      --hairline: rgba(60,60,67,.13);
+      --line: rgba(60,60,67,.16);
+      --text: #14161a;
+      --dim: #6d727b;
+      --strong: #2c3037;
+      --accent: #2f62e8;
+      --accent-2: #3b6ef5;
+      --bad: #a4262c;
+      --err-ink: #a4262c;
+      --err-bg: color-mix(in srgb, var(--bad) 10%, #ffffff);
+      --placeholder: #9aa0a6;
+      color-scheme: light;
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html { min-height: 100%; }
+  body {
+    margin: 0; min-height: 100dvh; background: var(--bg); color: var(--text);
+    font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+    -webkit-text-size-adjust: 100%; -webkit-tap-highlight-color: transparent; -webkit-font-smoothing: antialiased;
+  }
+  .wrap {
+    min-height: 100dvh; max-width: 480px; margin: 0 auto;
+    display: flex; flex-direction: column;
+    padding: calc(20px + env(safe-area-inset-top)) 20px calc(20px + env(safe-area-inset-bottom));
+  }
+  /* 品牌区：iOS 大标题式一行、左对齐（launcher 同款） */
+  .brand { display: flex; align-items: center; gap: 13px; margin-top: clamp(6px, 4vh, 30px); }
+  .logo { flex: none; width: 46px; height: 46px; display: grid; place-items: center; border-radius: 13px;
+          background: linear-gradient(150deg, #5b86ff, #2b52c9);
+          box-shadow: 0 6px 16px rgba(59,110,245,.32); }
+  .logo svg { width: 26px; height: 26px; }
+  /* 第二段的锁标（与产品标同尺寸同位，切换时不跳动） */
+  .logo.lock { background: linear-gradient(150deg, #4d80f7, #2b52c9); }
+  h1 { margin: 0; font-size: 22px; line-height: 1.2; font-weight: 700; }
+  .tag { margin: 3px 0 0; font-size: 13px; color: var(--dim); }
+  .warnbar { display: flex; gap: 9px; align-items: flex-start; margin: 16px 0 0; padding: 12px 14px;
+             border-radius: var(--r-ctl); font-size: 12.5px; line-height: 1.55;
+             color: #7a4b00; background: #fff4d6; border: 1px solid #f0d089; }
+  .warnbar svg { flex: none; width: 15px; height: 15px; margin-top: 1px; }
+  @media (prefers-color-scheme: dark) {
+    .warnbar { color: #ffd993; background: rgba(58,44,18,.82); border-color: #6b5220; }
+  }
+  form { margin: 0; }
+  #pwForm, #signForm, #otpForm { display: flex; flex-direction: column; gap: 10px; margin-top: clamp(18px, 4.5vh, 32px); }
+  /* 左侧图标是 PC 版共享标记带来的；手机按 launcher 的纯 filled 输入框来 —— 藏掉 */
+  .field { display: block; }
+  .field > svg { display: none; }
+  input { width: 100%; height: 48px; padding: 0 14px; border: 1px solid var(--line); border-radius: var(--r-ctl);
+          background: var(--card); color: var(--text); font: inherit; outline: none;
+          transition: border-color .16s ease, box-shadow .16s ease; }
+  input::placeholder { color: var(--placeholder); }
+  input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(61,118,246,.18); }
+  input:-webkit-autofill, input:-webkit-autofill:hover, input:-webkit-autofill:focus {
+    -webkit-text-fill-color: var(--text);
+    -webkit-box-shadow: 0 0 0 100px var(--card) inset;
+    caret-color: var(--text);
+    transition: background-color 9999s ease-out;
+  }
+  button { appearance: none; width: 100%; height: 50px; margin-top: 6px; border: none; border-radius: var(--r-btn);
+           background: var(--accent); color: #fff; font-family: inherit; font-size: 16px; font-weight: 600; cursor: pointer;
+           transition: transform .08s ease, filter .15s ease, opacity .15s ease; }
+  button:active { transform: scale(.98); filter: brightness(.92); }
+  button:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
+  button[disabled] { opacity: .55; cursor: default; transform: none; filter: none; }
+  /*
+   * 报错 = 底部浮出横幅（launcher .status 同款）。display 切换不触发 transition，
+   * 入场动画用 animation；左下的阴影别太重，别抢表单的戏。
+   */
+  .bad { position: fixed; left: 14px; right: 14px; bottom: calc(16px + env(safe-area-inset-bottom)); z-index: 30;
+         margin: 0; padding: 12px 14px; border-radius: 14px;
+         background: var(--err-bg); color: var(--err-ink);
+         font-size: 13px; line-height: 1.55; word-break: break-word;
+         box-shadow: 0 16px 36px rgba(0,0,0,.35); }
+  .bad:not([hidden]) { animation: rise .22s ease both; }
+  @keyframes rise { from { opacity: 0; transform: translateY(10px); } }
+  .hint { margin: 16px 2px 0; font-size: 13px; color: var(--dim); }
+  .hint a { color: var(--accent); text-decoration: none; font-weight: 500; }
+  /* 账号磁贴：手机到不了这个态（回环才摆磁贴），样式补全只为共享标记完整 */
+  #tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 10px; margin-top: 2px; }
+  .tile { appearance: none; height: auto; margin: 0; padding: 14px 6px 11px; border-radius: var(--r-ctl); letter-spacing: 0;
+          display: flex; flex-direction: column; align-items: center; gap: 8px;
+          background: var(--card); color: var(--text); border: 1px solid var(--line);
+          font-family: inherit; font-size: 12.5px; font-weight: 400; box-shadow: none; }
+  .tile:active { background: var(--card-2); transform: none; filter: none; }
+  .tile-ava { width: 44px; height: 44px; border-radius: 50%; color: #fff;
+              background: linear-gradient(150deg, #5b86ff, #2b52c9);
+              font-size: 17px; font-weight: 600; line-height: 44px; text-align: center; }
+  .tile-name { font-size: 12.5px; }
+  .tile-who { margin: 0; font-size: 13px; color: var(--dim); }
+  #pwRow { margin-top: 14px; }
+  .foot { margin: auto 0 0; padding-top: 24px; font-size: 12px; color: var(--dim); }
+  @media (prefers-reduced-motion: reduce) {
+    .bad:not([hidden]) { animation: none; }
+    button, input { transition: none; }
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    ${warnbarHtml()}
+    <div id="loginPane">
+      <header class="brand">
+        <div class="logo">${brandSvg('m')}</div>
+        <div>
+          <h1>班底</h1>
+          <p class="tag">${hasUsers ? '登录你的账号' : '创建第一个账号 · 它将自动成为管理员'}</p>
+        </div>
+      </header>
+      ${loginFormHtml({ hasUsers, loopback, users })}
+    </div>
+    ${OTP_PANE_HTML}
+    <p class="foot">bandi · 自托管 · 多 agent 协作</p>
+  </div>
+${LOGIN_SCRIPT}
+</body>
+</html>
+`;
+}
+
+/*
+ * 这台设备是不是手机/平板（2026-11-06 双端分设计的分叉点）。两个信号任一命中即算：
+ *   · Sec-CH-UA-Mobile: ?1 —— Chromium 系默认随每个请求发的低熵客户端提示，最可靠；
+ *   · UA 正则 —— Safari（不发客户端提示）与 Android WebView 兜底。
+ * 误判代价可控：手机被判成 PC 会拿到分栏页（≤960px 自动收成单列，仍可用）；
+ * PC 被判成手机几乎不可能（桌面 UA 不含这些词）。桌面 Tauri 壳（Windows）走 PC 页。
+ */
+function isMobileUA(req) {
+  if (String(req.headers['sec-ch-ua-mobile'] ?? '').trim() === '?1') return true;
+  return /Android|iPhone|iPod|iPad|Mobi|Phone/i.test(String(req.headers['user-agent'] ?? ''));
 }

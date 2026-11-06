@@ -8,7 +8,7 @@ import { confirmDo, askText } from './machine.mjs';
 import { detailSave, showView } from './contacts.mjs';
 import { wbCard } from './workflows.mjs';
 import { hint, openFlowRun, paintRun, setListTitle } from './flowpages.mjs';
-import { attsHtmlOf, firstMeaningfulLine, openConversation, openDetail, streamRun, timelineOf } from './chat.mjs';
+import { attsHtmlOf, firstMeaningfulLine, isNarrowPh, mbOpenPicker, openConversation, openDetail, streamRun, timelineOf } from './chat.mjs';
 // 运行进度卡：对话页那一套（阶段/步数/用时/卡住提醒/停止生成）搬进任务卡讨论区 —— 2026-10-29 用户："对话里的那一套搬过来用"
 import { createProgressCard } from './run-progress-card.mjs';
 import { fmtElapsed } from './run-progress.mjs';
@@ -28,13 +28,17 @@ import { $, S } from './core.mjs';
  *
  * 「工作流」这颗磁贴原先单列一组（组名叫「工作流」、卡名叫「流程编排」），用户 2026-10-26
  * 截图拍板：**卡名改「工作流」，并进自动化这一组** —— 少一段标题，多一个同类邻居。
+ *
+ * `schedulesOnly`（2026-11-06 手机端开放定时任务）：窄屏宫格只画「定时任务」一格 ——
+ * 工作流设计器（画布拖节点）在窄屏没法用，仍是 PC 独有。调用方见 experts.mjs 的
+ * renderWorkbenchGrid：手机形态的功能子集从"全都不给"放开到"给定时任务"这一格。
  */
-export function workbenchAutoSection() {
+export function workbenchAutoSection({ schedulesOnly = false } = {}) {
   return `
     <div class="wb-sec">自动化</div>
     <div class="wb-grid">
       ${wbCard('cron', ICON_WB_CLOCK, '定时任务', '到点自动做一件事：干什么、交给谁、多久一次', 'data-schedules')}
-      ${wbCard('flow', ICON_WB_FLOW, '工作流', '画流程：节点、指派、发布', 'data-flow-design')}
+      ${schedulesOnly ? '' : wbCard('flow', ICON_WB_FLOW, '工作流', '画流程：节点、指派、发布', 'data-flow-design')}
     </div>`;
 }
 
@@ -921,10 +925,12 @@ export async function openBoardPage({ project = null } = {}) {
    * 窄屏（body.mb-narrow，js/mobile.mjs 维护）直接渲染成「状态 tab + 列表」，
    * **不做 web 端形态切换**；桌面（>900px）一行不动。fetch 在上面已经共用完，
    * 这里只分渲染 —— 与员工详情 renderDetailMobile 同一模式。
-   * 取数失败不分支：错误空态桌面窄屏都认，别为它再抄一份。
+   *
+   * ⚠️ 判据里**没有** `&& !err`（2026-11-05 二版修掉）：带上它，取数失败就掉进桌面分支，
+   * 手机上一屏桌面看板 —— 错误态也得是窄屏的模样（顶栏还在 + 一条「重试」）。
    */
-  if (document.body.classList.contains('mb-narrow') && !err) {
-    renderBoardMobile(view, data, { project, isAll });
+  if (document.body.classList.contains('mb-narrow')) {
+    renderBoardMobile(view, data, { project, isAll, err });
     return;
   }
 
@@ -976,97 +982,231 @@ export async function openBoardPage({ project = null } = {}) {
 
 /* ---------------------------------------------------------------- 看板 · 窄屏列表形态 */
 
+/*
+ * 页头上的三颗图标（返回 / ＋ / 刷新）走内联 SVG：与 .mb-backbar、#mbPicker 同一笔语汇
+ * （22×22、stroke 2、round cap）。字符「‹ ＋ ↻」的粗细/基线随字体漂，同一个页头上
+ * 三颗钮会看起来不是一套。
+ */
+/* 2026-11-06 起 export：定时任务列表的窄屏导航栏也用这两颗（同一笔语汇，不许各画一份） */
+export const KB_ICON_BACK =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>';
+export const KB_ICON_PLUS =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>';
+const KB_ICON_REFRESH =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 12a8.5 8.5 0 1 1-2.6-6.1"/><path d="M20.5 4.5V11h-6.5"/></svg>';
+/* 讨论气泡（2026-11-05 建，2026-11-06 撤、同日用户要回，恢复）：跟底部 tab 的
+   「会话」同一族轮廓，只是不封口、留一条尾巴（评论区那个符号）。 */
+const KB_ICON_CHAT =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 11.6c0 3.9-3.8 7.1-8.5 7.1a9.7 9.7 0 0 1-2.7-.4L4.5 20l1.1-3.4a6.7 6.7 0 0 1-2.1-4.9C3.5 7.7 7.3 4.5 12 4.5s8.5 3.2 8.5 7.1z"/></svg>';
+/* 讨论抽屉的「放大 / 还原」（2026-11-05）：双箭头。图标说的是"点下去会怎样"——
+   还没铺满时朝上（铺满整屏），已经铺满时朝下（回到默认的 78%）。 */
+const TC_ICON_CHEVRONS_UP =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 11.5l5-5 5 5"/><path d="M7 18l5-5 5 5"/></svg>';
+const TC_ICON_CHEVRONS_DOWN =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 5.5l5 5 5-5"/><path d="M7 12.5l5 5 5-5"/></svg>';
+
 /**
- * 看板的**窄屏形态**（2026-11 用户定案）：手机上看不了多列横排 + 拖拽 ——
- * 窄屏（body.mb-narrow）直接渲染成「状态 tab + 列表」，桌面看板一行不动。
- * 数据抓取在 openBoardPage 已共用，这里只管渲染（renderDetailMobile 同一模式）。
+ * 看板的**窄屏形态**（2026-11 二版，视觉规格 v2）：手机上看不了多列横排 + 拖拽 ——
+ * 窄屏（body.mb-narrow）直接渲染成「导航栏 + 状态胶囊条 + 一张分组卡的连续行」，
+ * 桌面看板一行不动。数据抓取在 openBoardPage 已共用，这里只管渲染。
+ *
+ * 三处与一版的差别（都来自定稿规格，不是随手改）：
+ *   · 导航栏三槽（‹ / 居中标题 / ＋）：进 App 不进网页 —— 面包屑去掉，
+ *     ＋ 与刷新分家（刷新归列表数据，贴着筛选条右端，不占导航栏的对称位）；
+ *   · 整个列表是**一张** inset grouped 卡（行间 hairline 内缩 16），不按状态分节 ——
+ *     tab 与分节是同一维度，同时上就是两套导航并排；
+ *   · 状态用行内 6px 圆点 + 状态词（色弱也读得到），不上色、无 pill、无左色条。
  *
  * 窄屏**不画**：拖拽、列头「＋」、列宽设置、筛选弹层（现有筛选层没为窄屏适配过）。
  * 所以这里也**不应用 S.kbFilter**：筛选层画不出来，还悄悄生效的话，列表会
  * "莫名少任务"且无处可清 —— 宁可全量，也别让看不见的筛选替人做主。
  *
- * 页头：面包屑照旧 + 「刷新」+「＋ 新建」（建卡走既有 taskDialog 弹窗，
- * 项目口径走 wire.taskProject —— 项目看板不选项目，全局面板弹窗里选）。
+ * `err` 有值时**也走这一支**（2026-11 修）：原来写成 `mb-narrow && !err`，
+ * 取数失败就掉进桌面分支，手机上画出一屏桌面看板 —— 错误态也得是窄屏的模样。
  */
-function renderBoardMobile(view, data, { project = null, isAll = false }) {
+function renderBoardMobile(view, data, { project = null, isAll = false, err = '' } = {}) {
   S.view = 'plugin';
   showView('plugin');
+
+  const pageTitle = isAll ? '任务看板' : (project?.name || '任务看板');
   view.innerHTML = `
-    ${headRow(isAll
-      ? breadcrumb([{ label: '工作台', to: 'workbench' }, { label: '任务看板' }])
-      : breadcrumb([
-          { label: '工作台', to: 'workbench' },
-          { label: '项目', to: 'projects' },
-          { label: project.name, to: 'projects', arg: project.id },
-          { label: '任务看板' },
-        ]),
-      `<button data-kb-new class="primary">＋ 新建</button><button data-kb-refresh>刷新</button>`)}
+    <div class="detail-head kb-l-head">
+      <button type="button" class="kb-l-navbtn back" data-kb-back aria-label="${
+        isAll ? '返回工作台' : '返回项目清单'}">${KB_ICON_BACK}</button>
+      <h1 class="kb-l-navtitle">${esc(pageTitle)}</h1>
+      <button type="button" class="kb-l-navbtn add" data-kb-new aria-label="新建任务">${KB_ICON_PLUS}</button>
+    </div>
     <div class="detail-body">
-      <nav class="kb-m-tabs" id="kbMTabs" aria-label="任务状态"></nav>
-      <div class="kb-m-list" id="kbMList"></div>
+      ${
+        err
+          ? ''
+          : `<div class="kb-l-filter">
+        <nav class="kb-l-tabs" id="kbTabs" aria-label="任务状态"></nav>
+        <button type="button" class="kb-l-refresh" data-kb-refresh aria-label="刷新">${KB_ICON_REFRESH}</button>
+      </div>`
+      }
+      <div class="kb-l-list" id="kbList">${
+        err ? kbMobileEmpty({ text: '任务没取到', sub: err, cta: '重试', act: 'retry' }) : ''
+      }</div>
     </div>`;
 
-  // 与桌面同一个 S.kbLast：卡片详情、建卡弹窗的回调口径一点不变
+  // 与桌面同一个 S.kbLast：卡片详情、建卡回调的口径一点不变
   S.kbLast = {
     data,
     wire: {
       refresh: () => (isAll ? openTaskBoard() : openProjectDetail(project.id)),
-      // 项目的看板：建卡不用选项目；全局：null = 弹窗里选
+      // 项目的看板：建卡不用选项目；全局：null = 创建页里选
       taskProject: () => project,
     },
   };
 
-  view.querySelector('[data-kb-refresh]')?.addEventListener('click', () => {
-    S.kbLast.wire.refresh().catch((e) => toast(e.message, 'error'));
-  });
-  // 默认落「待办」：全局面板的「＋ 新建」没有列可依，待办 = 决定做了的（想法列是收集箱，
-  // 桌面上列头「＋」也只给 想法/待办 两列 —— 这里收成一个入口，落待办最不意外）
-  view.querySelector('[data-kb-new]')?.addEventListener('click', () => {
-    taskDialog(S.kbLast.wire.taskProject(), 'todo');
+  // 返回只有一层含义（交互规格 §0.2）：全局看板 → 工作台；项目看板 → 项目清单。
+  // 项目那一支**不带 id** —— 带了会在手机上把那个项目的详情又画一遍，等于没退。
+  view.querySelector('[data-kb-back]')?.addEventListener('click', () => {
+    if (isAll) setNav('plugins');
+    else openProjectsPage();
   });
 
-  // 状态 tab：'all' + 数据里**出现了的**状态（不写死全八态，空态不出 tab）；
-  // 顺序跟列序走（COL_STATUS 的键序），与桌面看板从左到右一致。
-  // 当前 tab 记内存态（S.kbMobileTab），不进路由；换板后没这一类就回落「全部」。
-  const tabs = [
-    { key: 'all', label: '全部', count: kbRows(data).length },
-    ...(data?.columns ?? [])
-      .map((c) => ({ key: c.key, label: c.label, count: (c.cards ?? []).length }))
-      .filter((t) => t.count > 0),
-  ];
-  if (!tabs.some((t) => t.key === S.kbMobileTab)) S.kbMobileTab = 'all';
+  // 刷新：图标转圈 + 期间禁用（连点只发一次请求）+ 完成后回顶；失败 toast 并复位图标
+  let refreshing = false;
+  const refresh = async () => {
+    if (refreshing) return;      // 连点只发一次请求
+    refreshing = true;
+    const btn = view.querySelector('[data-kb-refresh]');
+    // 转圈只给 svg 加 transform（圆的是图标，不是按钮）—— 动 padding/尺寸会让筛选条抖 1px
+    btn?.classList.add('spinning');
+    btn?.setAttribute('aria-busy', 'true');
+    try {
+      // 重画的还是这一页：S.kbMobileTab 是内存态，所以 tab 不会被重置
+      await S.kbLast.wire.refresh();
+      // 刷新后回顶，不加 smooth —— "跳"一下比滑过去更清楚"列表换了一批"
+      $('kbList')?.scrollTo({ top: 0 });
+    } catch (e) {
+      toast(e.message, 'error');
+      // 失败就停在这一页、按钮还是同一颗，得自己复位（成功那条路页面重画，节点已经换了）
+      btn?.classList.remove('spinning');
+      btn?.removeAttribute('aria-busy');
+    } finally {
+      refreshing = false;
+    }
+  };
+  view.querySelector('[data-kb-refresh]')?.addEventListener('click', refresh);
+  // 空/错三态里那颗按钮：新建 / 看全部 / 重试。用委托而不是逐次绑定 ——
+  // 那三块是 paint() 重画的，逐次绑定要跟着重画走一遍
+  $('kbList')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-kb-empty-act]');
+    if (!btn) return;
+    const act = btn.dataset.kbEmptyAct;
+    if (act === 'new') openKbNewPage({ project, isAll });
+    else if (act === 'all') { curTab = 'all'; S.kbMobileTab = 'all'; paint(); }
+    else if (act === 'retry') refresh();
+  });
+
+  /*
+   * ＋ 新建任务（导航栏右上）：一版直接调 taskDialog，手机上那个弹窗是"桌面弹窗压成全屏"
+   * 打补丁打出来的（mobile.css 那三段注释就是补丁史），二版走自己的创建页。
+   * 桌面那条路一个字没动 —— taskDialog 还在，只是手机不再调它。
+   */
+  view.querySelector('[data-kb-new]')?.addEventListener('click', () => openKbNewPage({ project, isAll }));
+
+  if (err) return;
+
+  const cols = data?.columns ?? [];
+  const total = kbRows(data).length;
+
+  // 状态 tab：当前值记内存态（S.kbMobileTab），不进路由、不压历史 —— 筛选是视图状态
+  // 不是位置，压了历史"返回"就变成"撤筛选"（交互规格 §3）
+  let curTab = S.kbMobileTab || 'all';
+  const order = Object.keys(COL_STATUS);
+  const orderIdx = (k) => (order.indexOf(k) < 0 ? order.length : order.indexOf(k));
+  if (curTab !== 'all' && !COL_STATUS[curTab] && !cols.some((c) => c.key === curTab)) curTab = 'all';
+  /*
+   * tab 集合：'all' + 有卡的列（顺序 = data.columns 的列序，与桌面从左到右一致）。
+   * **例外**：正在看的那一列哪怕已经 0 张也留着 —— 唯一一张卡被移走后 tab 凭空消失，
+   * 读起来像"筛选被重置了"；留着 0 计数 +「这个状态没有任务」才解释得清。
+   */
+  const tabs = [{ key: 'all', label: '全部', count: total }];
+  for (const c of cols) {
+    const count = (c.cards ?? []).length;
+    if (count > 0 || c.key === curTab) tabs.push({ key: c.key, label: c.label, count });
+  }
+  // 当前 tab 是合法列 key、但这一版数据里没有这一列（换了板）：按列序插回去，别让它静默消失
+  if (curTab !== 'all' && !tabs.some((t) => t.key === curTab)) {
+    const at = tabs.findIndex((t) => t.key !== 'all' && orderIdx(t.key) > orderIdx(curTab));
+    tabs.splice(at < 0 ? tabs.length : at, 0, { key: curTab, label: COL_STATUS[curTab] ?? curTab, count: 0 });
+  }
 
   const paint = () => {
-    const tabsEl = $('kbMTabs');
-    const listEl = $('kbMList');
+    const tabsEl = $('kbTabs');
+    const listEl = $('kbList');
     if (!tabsEl || !listEl) return;
-    tabsEl.innerHTML = tabs.map((t) =>
-      `<button type="button" class="kb-m-tab${S.kbMobileTab === t.key ? ' on' : ''}" data-kb-m-tab="${esc(t.key)}">${esc(t.label)}<span class="kb-m-n">${t.count}</span></button>`,
-    ).join('');
+    tabsEl.innerHTML = tabs
+      .map((t) => `<button type="button" class="kb-l-tab${curTab === t.key ? ' on' : ''}"
+        data-kb-m-tab="${esc(t.key)}" aria-pressed="${curTab === t.key}"
+        aria-label="${esc(`${t.label} ${t.count} 个`)}">${esc(t.label)}<span class="kb-l-n">${t.count}</span></button>`)
+      .join('');
     // 按**列**过滤而不是按状态词：一列可能混两个状态词（「已阻塞」列收已阻塞·已停止、
     // 「待办」列收流程的「待办」）—— 跟桌面"列 = 类"的口径一致；「全部」不过滤。
-    const rows = S.kbMobileTab === 'all'
-      ? kbRows(data)
-      : ((data?.columns ?? []).find((c) => c.key === S.kbMobileTab)?.cards ?? []);
-    listEl.innerHTML = rows.length
-      ? rows.map((r) => kbMobileRow(r, isAll)).join('')
-      : `<div class="kb-m-empty">${kbRows(data).length ? '这一类没有任务' : '还没有任务'}</div>`;
+    const rows = curTab === 'all' ? kbRows(data) : (cols.find((c) => c.key === curTab)?.cards ?? []);
+    if (rows.length) {
+      listEl.innerHTML = `<div class="kb-l-group">${rows.map((r) => kbMobileRow(r, isAll)).join('')}</div>`;
+    } else {
+      listEl.innerHTML = total === 0
+        ? kbMobileEmpty({ text: '还没有任务', sub: '建一张，手机上也能派活', cta: '新建任务', act: 'new' })
+        : kbMobileEmpty({ text: '这个状态没有任务', cta: '看全部', act: 'all' });
+    }
+    // 刚建出来的那张卡：1.6s 高亮，让人一眼看到"建在哪儿了"（只在建卡后第一遍画时有）
+    if (kbFlashId) {
+      listEl.querySelector(`[data-kb-open="${CSS.escape(kbFlashId)}"]`)?.classList.add('flash');
+      kbFlashId = '';
+    }
     tabsEl.querySelectorAll('[data-kb-m-tab]').forEach((b) => {
-      b.onclick = () => { S.kbMobileTab = b.dataset.kbMTab; paint(); };
+      b.onclick = () => {
+        curTab = b.dataset.kbMTab;
+        S.kbMobileTab = curTab;
+        paint();
+        // 当前项滚进可视区只在**换 tab**时做，不在每次重画时抢滚动
+        b.scrollIntoView({ inline: 'center', block: 'nearest' });
+      };
     });
     // 点卡片 = 桌面看板**同一条路**：行上带与 kbCard 相同的跳转属性
     // （data-kb-open / data-kb-conv / data-kb-flow），wireBoard 原样认 —— 不另写一份开卡逻辑
     wireBoard(listEl, S.kbLast.wire);
   };
   paint();
+
+  /*
+   * 外接键盘 / 读屏：wireBoard 只给 `data-kb-open` 挂了 Enter/Space，流程卡与会话卡没有 ——
+   * 这里补一条委托，覆盖那两类。`e.target === row` 守一道：行内按钮（验收/撤销）自己处理。
+   */
+  $('kbList')?.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const row = e.target.closest('[data-kb-flow], [data-kb-conv]');
+    if (!row || e.target !== row) return;
+    e.preventDefault();
+    row.click();
+  });
 }
 
-
+/**
+ * 窄屏的空态 / 错误态：一种版式两个文案（视觉规格 §4）。
+ * 按钮是**软底**而不是实心主蓝 —— 空态里的蓝不该和导航栏那颗「＋」抢。
+ */
+function kbMobileEmpty({ text = '', sub = '', cta = '', act = '' } = {}) {
+  return `<div class="kb-l-empty">
+    <p>${esc(text)}</p>${sub ? `<p class="kb-l-reason">${esc(sub)}</p>` : ''}
+    ${cta ? `<button type="button" class="kb-l-cta" data-kb-empty-act="${esc(act)}">${esc(cta)}</button>` : ''}
+  </div>`;
+}
 
 /**
- * 窄屏列表的一行：标题（粗）、项目名 pill（全局面板才显）、执行人、状态 pill、时间（有就显）。
- * 跳转属性与 kbCard 完全同款 —— 「本地卡」（手工/仓库值班）带 data-kb-open 进整页详情，
+ * 窄屏列表的一行（视觉规格 §3.2）：标题（≤2 行）+ 元信息行
+ * `[● 状态词] [项目 pill（仅全局面板）] [执行人] ……… [时间]`。
+ *
+ * 跳转属性与 kbCard 完全同款 —— 「本地卡」（手工/仓库值班/协作）带 data-kb-open 进整页详情，
  * 流程卡带 data-kb-flow、聊天卡带 data-kb-conv，wireBoard 的开卡逻辑原样复用，不复制粘贴。
+ * **不画 chevron**：三路跳转里两种是弹窗，箭头会骗人（以为是"推进一层页面"）。
+ * 来源 / PR / 设备标签窄屏一律不画 —— 一屏只留一处彩色，那些标签在 390px 下是噪声。
  * **不带**拖拽属性与删除按钮：那两个手势是桌面看板的，窄屏的删改在卡片详情页里做。
  */
 export function kbMobileRow(r, isAll) {
@@ -1079,15 +1219,642 @@ export function kbMobileRow(r, isAll) {
   const open = (r.source === 'manual' || r.source === 'repo' || r.source === 'collab') && r.manual_id
     ? `data-kb-open="${esc(r.manual_id)}" tabindex="0"`
     : '';
+  /*
+   * 状态色：行上挂 `--st-c`，圆点取它的原值（不混明度 —— --st-* 已按"压在淡底上 ≥4.5"
+   * 双主题校准过，再乘个 60~70% 会让浅色档糊在灰底上）。列 key 优先用行自带的 `col`
+   * （桌面 kbCard 也用它），老数据没有就按状态词反查 COL_STATUS。
+   */
+  const colKey = r.col || Object.keys(COL_STATUS).find((k) => COL_STATUS[k] === r.status) || 'other';
+  // 全局面板的行才带 project_name（项目看板的行服务端已经摘掉了）
   const proj = isAll && r.project_name
-    ? `<span class="kb-tag proj" title="属于哪个项目">${esc(r.project_name)}</span>`
+    ? `<span class="kb-l-pill">${esc(r.project_name)}</span>`
     : '';
-  return `<article class="kb-m-card" ${jump} ${open} title="${esc(r.note || '')}">
-    <div class="kb-m-title">${esc(r.task)}</div>
-    <div class="kb-m-meta">${proj}<span class="kb-state">${esc(r.status)}</span></div>
-    <div class="kb-m-foot"><span class="kb-who">${esc(r.assignee || '未指派')}</span><span>${esc(r.at ?? '')}</span></div>
+  const who = r.assignee || '未指派';
+  /*
+   * 派到分公司的卡（remote）没有跳转属性 = 死行。行尾补上桌面同一口径的动作：
+   * 待验收 →「验收」；非终态 →「撤销」；终态不给。data-kb-cl-* 与 wireBoard 里现成的
+   * 接线一一对应（含撤销的二次确认），不另写一套请求。
+   */
+  const act = r.remote && r.collab_task_id
+    ? r.status === '待验收'
+      ? `<div class="kb-l-acts"><button type="button" class="kb-l-act" data-kb-cl-done="${esc(r.collab_task_id)}">验收</button></div>`
+      : r.status !== '已完成' && r.status !== '已取消'
+        ? `<div class="kb-l-acts"><button type="button" class="kb-l-act" data-kb-cl-cancel="${esc(r.collab_task_id)}">撤销</button></div>`
+        : ''
+    : '';
+  // `title`（原来放 note）在触屏上永远看不到 —— 换 aria-label，读屏才拿得到同样的信息
+  return `<article class="kb-l-row" style="--st-c: var(--st-${esc(colKey)})" ${jump} ${open}
+      aria-label="${esc(`${r.task}，${r.status}，${who}`)}">
+    <div class="kb-l-title">${esc(r.task)}</div>
+    <div class="kb-l-meta">
+      <span class="kb-l-dot" aria-hidden="true"></span>
+      <span class="kb-l-state">${esc(r.status)}</span>
+      ${proj}
+      <span class="kb-l-who">${esc(who)}</span>
+      <span class="kb-l-time">${esc(r.at ?? '')}</span>
+    </div>${act}
   </article>`;
 }
+
+
+
+/* ---------------------------------------------------------------- 新建任务（手机全屏页） */
+
+/*
+ * 为什么是**覆盖层**而不是在同一页里换 innerHTML（交互规格 §5 的原案，本次裁决否掉）：
+ * 返回时若重画 #pluginView，就得重跑 openBoardPage —— 重新 fetch、滚回顶部、丢 tab 态；
+ * 覆盖层只要摘掉。历史与守卫口径也和 #mbPicker 完全一致（压一格、退一格），
+ * 少一套"这一格是谁的、要不要重画"的判定。视觉规格 §6 / `#mbPicker` 同款推入。
+ *
+ * 历史铁律（与 mbClosePicker 一字不差）：**先 history.back()，画面等 popstate 收**。
+ * 反过来先摘画面再 back()，那条 popstate 到时 class 已经没了，mobile.mjs 会把它当
+ * "退到根页"再压一格回去 —— 用户要按两次返回才出得去看板。
+ */
+let kbNewEl = null;
+let kbNewState = null;      // 这一次创建页的状态；null = 关着
+let kbNewClosing = false;   // 已经在退格（防连点：第二下不能再退一格）
+let kbNewAbandon = false;   // 用户已确认放弃 → 下一次 popstate 直接收画面，不再问
+let kbFlashId = '';         // 刚建出来的那张卡：下一次画列表时给它 1.6s 高亮
+
+const KB_NEW_IDEA = '想法';
+
+/** 首次开页才建 DOM（懒到真用的时候；桌面永远走不到这里） */
+function kbEnsureNew() {
+  if (kbNewEl) return kbNewEl;
+  const el = document.createElement('div');
+  el.className = 'kb-new';
+  el.id = 'kbNew';
+  el.hidden = true;
+  el.innerHTML = `
+    <div class="detail-head kb-new-bar">
+      <button type="button" class="kb-l-navbtn back" data-kb-new-back aria-label="返回看板">${KB_ICON_BACK}</button>
+      <h1 class="kb-new-bartitle">新建任务</h1>
+    </div>
+    <div class="kb-new-body">
+      <!-- ① 无框输入区：靠字号/字重与下面的分组卡分层，不给输入框画框（iOS 新建提醒同款） -->
+      <div class="kb-new-draft">
+        <input class="kb-new-inputtitle" id="kbNewTitle" placeholder="任务要做什么"
+               autocomplete="off" enterkeyhint="done" aria-label="任务标题" />
+        <textarea class="kb-new-desc" id="kbNewDesc" rows="1" placeholder="补充说明（可选）"
+                  aria-label="补充说明"></textarea>
+      </div>
+      <div class="kb-new-group" id="kbNewGroup"></div>
+    </div>
+    <div class="kb-new-foot">
+      <button type="button" class="kb-new-submit" id="kbNewOk" aria-disabled="true">创建任务</button>
+    </div>`;
+  document.body.appendChild(el);
+  el.querySelector('[data-kb-new-back]').addEventListener('click', () => { kbTryClose(); });
+
+  /*
+   * 行是 paintKbNew() 整段重画的（条件显示会变），所以监听挂在容器上、用委托：
+   * 逐行 addEventListener 的话，每选一次值都得重新绑一遍，漏一处那行就"点不动了"。
+   */
+  el.querySelector('#kbNewGroup').addEventListener('click', (e) => {
+    // 大卡尾的 › 箭头：切到这张卡的模式（preventDefault 挡住 label 的默认激活，
+    // 模式由这里显式设，不然 radio 的 change 和这里各画一遍），再跳选择页
+    const gopick = e.target.closest('[data-kb-gopick]');
+    if (gopick && kbNewState) {
+      e.preventDefault();
+      const which = gopick.dataset.kbGopick ?? '';
+      kbNewState.mode = which === 'flow' ? 'flow' : 'person';
+      paintKbNew();
+      kbNewPick(which);
+      return;
+    }
+    const row = e.target.closest('[data-kb-pick]');
+    if (row) { kbNewPick(row.dataset.kbPick); return; }
+    const pub = e.target.closest('[data-kb-gopub]');
+    if (pub) { e.preventDefault(); kbNewGoPublish(); }
+  });
+  el.querySelector('#kbNewGroup').addEventListener('change', (e) => {
+    const r = e.target;
+    if (!kbNewState) return;
+    // 执行方式 radio：切模式只换显示，两边已选的值都留着（与桌面 syncMode 同口径）
+    if (r?.name === 'kbNewMode') { kbNewState.mode = r.value; paintKbNew(); return; }
+    // 「立即开始」勾选框（收在「更多设置」里）：只记用户的意愿；能不能勾、
+    // 锁在勾上还是取消，全部由 kbNewSyncStart / paintKbNew 算
+    if (r?.id === 'kbNewStart') { kbNewState.startNow = r.checked; paintKbNew(); }
+  });
+
+  const titleEl = el.querySelector('#kbNewTitle');
+  titleEl.addEventListener('input', () => {
+    const ok = el.querySelector('#kbNewOk');
+    /*
+     * 用 aria-disabled 而不是原生 disabled（2026-11-05 定稿）：原生 disabled 点下去
+     * **完全没反应**，比"点了告诉你缺什么"更糟。样式照旧是灰底灰字，点仍然进 kbNewSubmit，
+     * 由那里 toast + 把焦点打到标题框。
+     */
+    ok?.setAttribute('aria-disabled', String(!titleEl.value.trim()));
+  });
+  // 描述自动长高（min 44 由 CSS 给，>8 行改内部滚动）
+  el.querySelector('#kbNewDesc').addEventListener('input', (e) => {
+    const t = e.target;
+    t.style.height = 'auto';
+    t.style.height = `${t.scrollHeight}px`;
+  });
+  el.querySelector('#kbNewOk').addEventListener('click', () => { kbNewSubmit(); });
+
+  kbNewEl = el;
+  return el;
+}
+
+/**
+ * 开页。`project` 有值 = 从项目看板进来的（项目已定）；`isAll` = 全局面板（要自己选项目）。
+ *
+ * 状态默认值照交互规格 §5.3：只有「想法」「待办」两个 tab 会预填（与桌面"只有这两列给 ＋"
+ * 同一口径），其余一律「待办」—— 进行中及之后是**流转的产物**，直接建进去没有语义。
+ */
+function openKbNewPage({ project = null, isAll = false } = {}) {
+  const el = kbEnsureNew();
+  const startCol = S.kbMobileTab === 'idea' ? 'idea' : 'todo';
+  kbNewState = {
+    project: project ?? null,
+    isAll: !!isAll,
+    colKey: startCol,
+    mode: 'person',
+    who: '',                                        // '' = 不派活（与 taskDialog 同口径）
+    projId: '',                                     // 手机看不见左栏，**不预选**第一个项目
+    flowId: (S.flowPublished ?? [])[0]?.id ?? '',
+    startNow: false,                                // 「立即开始」的用户意愿（勾选框常显）
+    submitting: false,
+    onDone: () => S.kbLast?.wire?.refresh?.(),
+  };
+  // 每次开页都是一张白纸：草稿只存在内存里，关掉即弃（建一张卡是 30 秒内的事，
+  // 为它加 storage + 恢复提示不划算 —— 写在这儿免得后面当 bug 修）
+  $('kbNewTitle').value = '';
+  $('kbNewDesc').value = '';
+  $('kbNewDesc').style.height = '';
+  // 标题为空 = 主按钮显示禁用态（灰底灰字），但**仍然可点** —— 点了会 toast 说缺什么
+  const okBtn = $('kbNewOk');
+  okBtn.disabled = false;            // 上一轮提交失败/成功可能把它留成原生禁用
+  okBtn.setAttribute('aria-disabled', 'true');
+  okBtn.textContent = '创建任务';
+  kbNewAbandon = false;
+  kbNewClosing = false;
+  paintKbNew();
+
+  document.body.classList.add('kb-new-open');
+  el.hidden = false;
+  // 滑入分两帧：display:none → 可见那一帧浏览器会跳过 transition（与 #mbPicker 同因）
+  el.classList.remove('kb-new-in');
+  requestAnimationFrame(() => {
+    if (el.hidden) return;   // 这一帧里又被收起来了（连点两下返回）—— 别把它滑回来
+    el.classList.add('kb-new-in');
+  });
+  if (!history.state?.kbNew) history.pushState({ kbNew: true }, '');
+  // 自动聚焦标题：进页第一件事就是写字。⚠️ 不能直接 focus —— 滑入那 160ms 里聚焦，
+  // iOS 会把焦点框滚进视野、把还在屏外的层拽一下，看着像"页面先抖一下再出来"
+  setTimeout(() => { if (!el.hidden) $('kbNewTitle')?.focus(); }, 80);
+}
+
+/** 执行人清单：与 taskDialog 同口径（`u:` 前缀 = 真人），分组标题让 30+ 个人不至于排成一坨 */
+function kbNewWhoItems() {
+  return [
+    { id: '', label: '不派活' },
+    { header: '真人' },
+    ...(S.users ?? []).map((u) => ({ id: `u:${u.id}`, label: u.name })),
+    { header: '数字员工' },
+    ...(S.personas ?? []).map((p) => ({ id: p.id, label: personLabel(p) })),
+  ];
+}
+
+const kbNewProjItems = () => (S.projects ?? []).map((p) => ({ id: p.id, label: p.name }));
+const kbNewFlowItems = () => (S.flowPublished ?? []).map((f) => ({ id: f.id, label: f.name }));
+const kbNewItemLabel = (items, id) => items.find((it) => !it.header && it.id === String(id ?? ''))?.label ?? '';
+
+/** 一个 value cell（label 左 · 值右 ›）。`empty` = 还没选（值走 --mb-text-3 灰）。
+ *  aria-label 拼当前值（交互规格 §4：读屏不用翻右边的值也能知道这行是什么、现在选了啥） */
+function kbNewRowHtml(key, label, value, empty = false) {
+  return `<button type="button" class="kb-new-row" data-kb-pick="${esc(key)}" aria-label="${esc(`${label}，当前 ${value}`)}">
+    <span class="kb-new-lab">${esc(label)}</span>
+    <span class="kb-new-val${empty ? ' is-empty' : ''}"><span>${esc(value)}</span><i class="kb-new-chev"></i></span>
+  </button>`;
+}
+
+/**
+ * 「立即开始」的可用性 —— 纯计算，不做任何 DOM/状态改动（画 HTML 的 kbNewGroupHtml
+ * 和摸 DOM 的 kbNewSyncStart 都要用它，一份口径两处消费）。规则与桌面 `syncStart()`
+ * **行为完全一致**，只把长解释压成一行。三种"锁死"的来源各自不同：
+ *   · 真人执行：卡挂在他名下，没有"开始工作"这件事 → 锁在取消；
+ *   · 「想法」：还没决定要不要做，派活/发起都谈不上 → 锁在取消；
+ *   · 流程模式选定了流程且不是想法：建卡就**一定**发起 → 锁在勾上（它不是给人改的，
+ *     只用来表示"会发生什么"）。
+ * 未派活（chips 上的「不派活」是显式选择）的文案不再说"先选执行人"——那是指路到
+ * 已被 chips 取代的清单位置；改说这件事现在的实际后果。
+ */
+function kbStartState(st) {
+  const idea = (COL_STATUS[st.colKey] ?? '待办') === KB_NEW_IDEA;
+  const isUser = String(st.who).startsWith('u:');
+  if (st.mode === 'flow') {
+    const picked = !!st.flowId;
+    return {
+      can: false,
+      lockOn: picked && !idea,
+      why: !picked ? '先选一条流程（实际不可达：radio 已置灰）'
+        : idea ? '「想法」先不发起，拖到「进行中」才发'
+          : '选了流程就立即发起；想先挂着就把状态改成「想法」',
+    };
+  }
+  if (isUser) return { can: false, lockOn: false, why: '真人执行：卡挂在他名下，不开会话、不派活' };
+  if (!st.who) return { can: false, lockOn: false, why: '未派活：卡先挂着，谁也不会被叫醒' };
+  if (idea) return { can: false, lockOn: false, why: '「想法」先不派活，想做的时候拖到「进行中」' };
+  return { can: true, lockOn: false, why: '建好就派到他的会话，工作目录是这个项目' };
+}
+
+/**
+ * 画创建页主体（2026-11-06 再设计，方案 A「卡片预览式重排」）。
+ *
+ * 信息分层照建卡的思考顺序：**怎么干**（两张大卡二选一，选中的人/流程回显在卡上）
+ * → **更多设置**（状态/项目/立即开始，直接铺开 —— 2026-11-06 三改：折叠摘要撤掉，
+ * 页面本来就短，收起来反而多一跳）。
+ * 原来的「执行配置」一张长表在手机上读起来像填设置；再设计时中段的「派给谁」chips /
+ * 「选流程」行也撤了 —— 卡上的 › 箭头是进选择页的唯一入口，选中结果**回显在卡上**。
+ */
+function kbNewGroupHtml(st, ss) {
+  const published = S.flowPublished ?? [];
+  const sec = (t) => `<div class="kb-new-sec">${esc(t)}</div>`;
+  const card = (inner, cls = '', attrs = '') => `<div class="kb-new-card${cls ? ` ${cls}` : ''}"${attrs ? ` ${attrs}` : ''}>${inner}</div>`;
+  /*
+   * 卡尾的 › 箭头（2026-11-06 用户要的）：点它**跳到对应的选择页** —— 派给他 → 执行人
+   * （带搜索），由流程执行 → 流程。跳之前先把模式切过去（选人这件事本身就声明了
+   * "派给他"）。没已发布流程时流程卡置灰，箭头也不画（点了只会进一张空清单，
+   * 副标题和「去发布 ›」已经把话说完了）。
+   */
+  const goPick = (which, label) => `<button type="button" class="kb-new-gopick" data-kb-gopick="${esc(which)}" aria-label="${esc(label)}">
+      <i class="kb-new-chev" aria-hidden="true"></i>
+    </button>`;
+  /*
+   * mode() 模板（2026-11-06 视觉规格 §5.4）：撤圆点（它逼出 48 的左缩进，是表单感主因），
+   * 回显值从解释之后**挪到标题正下方**（"给了谁"必须比"怎么走"更亮 —— 值的阅读顺序 =
+   * 想事的顺序）。radio 的 aria-label 拼回显值（交互规格 §4），label 挂 tabindex="-1"
+   * 仅供程序聚焦（提交被挡时把焦点送到流程卡，交互规格 §3.4 D3）。
+   */
+  const mode = (val, title, sub, echo, echoOn, disabled = false) => `<label class="kb-new-radio is-card" tabindex="-1" data-kb-modecard="${esc(val)}">
+      <input type="radio" name="kbNewMode" value="${esc(val)}"${st.mode === val ? ' checked' : ''}${
+        disabled ? ' disabled' : ''} aria-label="${esc(echoOn ? `${title}，已选 ${echo}` : title)}" />
+      <span class="kb-new-rtxt">
+        <span class="kb-new-rtitle">${esc(title)}</span>
+        <span class="kb-new-rpick${echoOn ? ' is-on' : ''}">${esc(echo)}</span>
+        <span class="kb-new-rsub">${esc(sub)}</span>
+      </span>
+      ${disabled ? '' : goPick(val === 'person' ? 'who' : 'flow', val === 'person' ? '选执行人' : '选流程')}
+    </label>`;
+
+  const parts = [];
+
+  /* ── 怎么干：执行方式两张大卡，选中的人/流程回显在第三行 ── */
+  parts.push(sec('怎么干'));
+  parts.push(card(
+    mode('person', '派给他', '发到他的会话里去做，进展在那条会话里看',
+      st.who ? kbNewItemLabel(kbNewWhoItems(), st.who) : '不派活', !!st.who) +
+    mode('flow', '由流程执行', published.length ? '卡跟着流程走，按步骤办' : '还没有已发布的流程',
+      st.flowId ? kbNewItemLabel(kbNewFlowItems(), st.flowId) : '未选择', !!st.flowId, !published.length),
+    'kb-new-modes',
+    'role="radiogroup" aria-label="执行方式"',
+  ));
+  // 无已发布流程：选进去只会看到一张空清单 —— 置灰，并在卡下给一条去发布的路
+  if (!published.length) {
+    parts.push('<div class="kb-new-pub"><button type="button" class="kb-new-link" data-kb-gopub aria-label="去发布流程">去发布 ›</button></div>');
+  }
+
+  /* ── 建好之后：状态 / 项目 / 立即开始 直接铺开（2026-11-06 三改：不再折叠；D1 改名）── */
+  const more = [
+    // 状态选项带 6px --st-* 圆点：颜色是"是哪一类活"的编码
+    kbNewRowHtml('status', '状态', COL_STATUS[st.colKey] ?? '待办'),
+  ];
+  // 项目行只在全局面板出现（项目看板的项目已经定死了）
+  if (st.isAll) {
+    const projects = kbNewProjItems();
+    more.push(kbNewRowHtml(
+      'proj', '项目',
+      projects.length ? (kbNewItemLabel(projects, st.projId) || '未选择') : '还没有项目',
+      !st.projId || !projects.length,
+    ));
+  }
+  /*
+   * 「立即开始」换开关皮（2026-11-06 视觉规格 §5.5）：同一个 `<input type=checkbox>`
+   * id/接线不动，视觉交给 .kb-new-sw（46×28 轨道 + 旋钮）；label 吃 flex:1 把开关顶到行尾。
+   * aria-describedby → #kbNewHint：说明是"为什么不让勾"的唯一入口（交互规格 §4）。
+   */
+  more.push(`<label class="kb-new-check" id="kbNewStartWrap" aria-describedby="kbNewHint">
+    <input type="checkbox" id="kbNewStart" />
+    <span class="kb-new-lab">创建后立即开始</span>
+    <span class="kb-new-sw" aria-hidden="true"></span>
+  </label>`);
+  more.push(`<p class="kb-new-hint" id="kbNewHint" aria-live="polite">${esc(ss.why)}</p>`);
+  parts.push(sec('建好之后'));
+  parts.push(card(more.join('')));
+
+  return parts.join('');
+}
+
+/**
+ * 主按钮文案（交互规格 §1.3 D2）：文案随 kbStartState 的结论走，把"点下去会发生什么"
+ * 放到按下点上 —— 只表达"会不会立刻叫醒人"这一件事，其余后果仍在「建好之后」说明里。
+ *   · 流程模式且锁勾（必然发起）→「创建并发起流程」；
+ *   · 派给数字员工且勾了立即开始（可派）→「创建并派活」；
+ *   · 其余 →「创建任务」（空表不预支承诺）。
+ */
+function kbNewBtnLabel(st, ss) {
+  if (st.mode === 'flow') return ss.lockOn ? '创建并发起流程' : '创建任务';
+  return (ss.can && st.startNow) ? '创建并派活' : '创建任务';
+}
+
+/** 重画创建页主体 + 重算「立即开始」+ 刷新主按钮文案。 */
+function paintKbNew() {
+  const st = kbNewState;
+  const group = $('kbNewGroup');
+  if (!st || !group) return;
+  const ss = kbStartState(st);
+  if (!ss.can && !ss.lockOn) st.startNow = false;   // 条件不再满足 → 意愿作废（勾上会真的派活，自动勾 = 自动产生副作用）
+  group.innerHTML = kbNewGroupHtml(st, ss);
+  kbNewSyncStart(ss);
+  // 主按钮文案跟着模式/锁定结论走（提交中不碰 —— 那时是「创建中…」）
+  if (!st.submitting) {
+    const btn = $('kbNewOk');
+    if (btn) btn.textContent = kbNewBtnLabel(st, ss);
+  }
+}
+
+/**
+ * 把 kbStartState 的结论落到 DOM（勾选框收在「更多设置」里，收起时那三个节点不存在，
+ * 意愿的清与留已由 paintKbNew 在画之前算完 —— 这里只管"在 DOM 里就把 DOM 摆对"）。
+ * 禁用时**只降复选框的透明度**，说明文字一个像素都不降 —— 那句话是用户唯一能看懂
+ * "为什么不让勾"的入口，降了就等于不说。
+ */
+function kbNewSyncStart(ss = null) {
+  const st = kbNewState;
+  const wrap = $('kbNewStartWrap');
+  const box = $('kbNewStart');
+  const hint = $('kbNewHint');
+  if (!st || !wrap || !box) return;
+  const state = ss ?? kbStartState(st);
+  box.disabled = !state.can;
+  // 锁在勾上时不算"禁用"：它是**确定的陈述**，不是"你不能改的那个空框"
+  if (state.lockOn) box.checked = true;
+  else box.checked = !!st.startNow;
+  wrap.classList.toggle('on', box.checked);
+  wrap.setAttribute('aria-disabled', String(!state.can && !state.lockOn));
+  if (hint) hint.textContent = state.why;
+}
+
+/** 四个选择项一律走全屏选择页（§20.5 mbPicker），不新建组件 */
+function kbNewPick(which) {
+  const st = kbNewState;
+  if (!st) return;
+  if (which === 'status') {
+    // 只有 8 项 → 不给搜索；行首带状态色圆点
+    mbOpenPicker({
+      title: '状态',
+      items: Object.keys(COL_STATUS).map((k) => ({ id: k, label: COL_STATUS[k], dot: `var(--st-${k})` })),
+      value: st.colKey,
+      onPick: (v) => { st.colKey = v; paintKbNew(); },
+    });
+    return;
+  }
+  if (which === 'who') {
+    mbOpenPicker({
+      title: '执行人',
+      items: kbNewWhoItems(),
+      value: st.who,
+      search: true,
+      searchPlaceholder: '搜名字或岗位…',
+      onPick: (v) => { st.who = v; paintKbNew(); },
+    });
+    return;
+  }
+  if (which === 'proj') {
+    mbOpenPicker({
+      title: '项目',
+      items: kbNewProjItems(),
+      value: st.projId,
+      search: true,
+      searchPlaceholder: '搜项目名…',
+      note: kbNewProjItems().length ? '' : '还没有项目 —— 任务得有地方挂，先去工作台 → 项目 建一个',
+      onPick: (v) => { st.projId = v; paintKbNew(); },
+    });
+    return;
+  }
+  if (which === 'flow') {
+    mbOpenPicker({
+      title: '流程',
+      items: kbNewFlowItems(),
+      value: st.flowId,
+      search: true,
+      searchPlaceholder: '搜流程名…',
+      onPick: (v) => { st.flowId = v; paintKbNew(); },
+    });
+  }
+}
+
+/** 「还没有已发布的流程」时那条文字链：先按"放弃创建"的规矩退出，再去流程清单 */
+function kbNewGoPublish() {
+  const go = () => {
+    kbNewAbandon = true;
+    kbCloseNew();
+    setNav('workflows');
+  };
+  if (!kbHasDraft()) return go();
+  confirmDo('写下的标题和描述不会保留。', { title: '放弃这次创建？', ok: '放弃' }).then((ok) => { if (ok) go(); });
+}
+
+const kbHasDraft = () => !!(String($('kbNewTitle')?.value ?? '').trim() || String($('kbNewDesc')?.value ?? '').trim());
+
+/**
+ * 提交（字段口径照 taskDialog，**不复制**那份弹窗代码）：只发标题/描述/状态，
+ * 执行方式二选一（流程不带执行人 —— 服务端把"两个都给"当 400 挡），`startNow` 照抄桌面算法
+ * `flow ? 状态 !== '想法' : (!isUser && !!执行人 && 勾选)`，不在手机端另算一套。
+ */
+async function kbNewSubmit() {
+  const st = kbNewState;
+  if (!st || st.submitting) return;    // 闸：弱网连点会建两张
+  const titleEl = $('kbNewTitle');
+  const title = String(titleEl?.value ?? '').trim();
+  // 标题为空：主按钮只是"看起来禁用"，点得动 —— 点了就说缺什么，并把焦点送过去
+  if (!title) {
+    toast('任务得有标题');
+    titleEl?.focus();
+    return;
+  }
+  const proj = st.project ?? (S.projects ?? []).find((p) => p.id === st.projId);
+  // D3（交互规格 §3.4）：被挡要说缺什么，**焦点也要落到缺的那格** —— 读屏与视线同时到位
+  if (!proj) {
+    toast('先选一个项目，任务才有地方挂');
+    kbNewEl?.querySelector('[data-kb-pick="proj"]')?.focus();
+    return;
+  }
+  const flow = st.mode === 'flow';
+  if (flow && !st.flowId) {
+    toast('先选一条流程 —— 还没有已发布的流程就去工作台 → 流程 里发布一条');
+    // 流程卡：radio 已置灰（无已发布流程），焦点落到卡本身（label 挂了 tabindex="-1"）
+    kbNewEl?.querySelector('[data-kb-modecard="flow"]')?.focus();
+    return;
+  }
+
+  const statusText = COL_STATUS[st.colKey] ?? '待办';
+  const whoVal = String(st.who);
+  const isUser = whoVal.startsWith('u:');
+  const startChecked = !!st.startNow;   // 意愿记在状态里（勾选框收起时不在 DOM，不能从 DOM 读）
+  const btn = $('kbNewOk');
+  const backBtn = kbNewEl?.querySelector('[data-kb-new-back]');
+  const onDone = st.onDone;
+  const colKey = st.colKey;
+
+  st.submitting = true;
+  if (btn) { btn.disabled = true; btn.textContent = '创建中…'; }
+  // 提交期间整页禁止返回（弱网下手快按返回会把请求留在半路）
+  if (backBtn) backBtn.disabled = true;
+
+  try {
+    const res = await api(`/api/projects/${encodeURIComponent(proj.id)}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title,
+        description: String($('kbNewDesc')?.value ?? '').trim(),
+        status: statusText,
+        ...(flow
+          ? { flowTemplateId: st.flowId }
+          : isUser
+            ? { assigneeUserId: whoVal.slice(2) }
+            : { personaId: whoVal || null }),
+        startNow: flow ? statusText !== KB_NEW_IDEA : (!isUser && !!whoVal && startChecked),
+      }),
+    });
+    /*
+     * ⚠️ 顺序不能反：**先**把 tab 切到新卡所在列、**再**刷新看板。
+     * renderBoardMobile 只保留"数据里还在"的 tab，先刷新的话 tab 会回落成「全部」，
+     * 新建的卡就不在眼前那一屏了（交互规格 §5.5 第一条）。
+     */
+    S.kbMobileTab = colKey;
+    kbFlashId = res?.task?.id ? String(res.task.id) : '';
+    // 草稿此刻已经变成卡了 —— 先清空再关层，否则返回守卫会把这张**已建成**的卡
+    // 当成"没保存的草稿"，紧接着弹「放弃这次创建？」
+    $('kbNewTitle').value = '';
+    $('kbNewDesc').value = '';
+    kbCloseNew();
+    // 成功反馈带结果对象（交互规格 §3.3 D4）：只说"这一次建出来的东西走到了哪"
+    if (res?.task?.flowRunId) toast('流程已经起来了 —— 到流程实例里看每一步');
+    else if (!flow && !isUser && !!whoVal && startChecked) {
+      toast(`已创建，${kbNewItemLabel(kbNewWhoItems(), whoVal)}这就开始`, 'ok');
+    } else toast('已创建', 'ok');
+    await onDone?.();
+    const listEl = $('kbList');
+    if (listEl) listEl.scrollTop = 0;   // 只在**提交成功**时滚到顶（返回不动滚动位置）
+  } catch (err) {
+    // 失败留在创建页，草稿一个不丢：重填一遍标题是最让人放弃的操作
+    toast(err.message, 'error');
+    st.submitting = false;
+    if (btn) {
+      btn.disabled = false;
+      // 文案按 §1.3 规则**重算**（不是死写回「创建任务」—— 草稿还在，结论可能还是"会派活"）
+      btn.textContent = kbNewBtnLabel(st, kbStartState(st));
+      // 草稿还在（标题非空），按钮回到"可用"的外观 —— aria-disabled 得跟着回来
+      btn.setAttribute('aria-disabled', 'false');
+      // D3：刚才按的就是它，失败后从这继续（读屏与视线都落回主按钮）
+      btn.focus();
+    }
+    if (backBtn) backBtn.disabled = false;
+  }
+}
+
+/** ‹ / 硬件返回 / Esc 的公共出口：有草稿才问，空的一律直接退 */
+async function kbTryClose() {
+  const st = kbNewState;
+  if (!st || st.submitting) return;
+  if (!kbHasDraft()) { kbCloseNew(); return; }
+  const ok = await confirmDo('写下的标题和描述不会保留。', { title: '放弃这次创建？', ok: '放弃' });
+  if (!ok) return;            // 「继续编辑」/ 点蒙层：留在原页，已填内容一个不丢
+  kbNewAbandon = true;
+  kbCloseNew();
+}
+
+/**
+ * 收层。`alreadyPopped` = 这格历史已经被浏览器退掉了（popstate 进来的），只收画面不再退格。
+ * ⚠️ 顺序与 mbClosePicker 同一条铁律：**先 back()，画面留到 popstate 再收**。
+ */
+function kbCloseNew(alreadyPopped = false) {
+  const el = kbNewEl;
+  if (!el || el.hidden) return;
+  if (!alreadyPopped && history.state?.kbNew) {
+    if (kbNewClosing) return;
+    kbNewClosing = true;
+    history.back();
+    return;
+  }
+  kbNewClosing = false;
+  kbNewAbandon = false;
+  kbNewState = null;
+  document.body.classList.remove('kb-new-open');
+  el.classList.remove('kb-new-in');
+  el.hidden = true;
+}
+
+/*
+ * 返回手势 / 返回键：这一格是创建页自己压的。
+ *   ① 收画面推到下一拍 —— 本文件与 mobile.mjs 的 popstate 谁先注册不确定，
+ *      当场摘 class 会让它把这次返回当成"退到根页"再压一格回去（与 mbClosePicker 同因）；
+ *   ② 有草稿：浏览器已经把画面退走了 —— 先**补一格**把画面钉住，再问要不要放弃，
+ *      否则确认框会盖在看板上（交互规格 §5.4）。
+ *   ③ 选择页盖在上面时这一格是**它**的（chat.mjs 自己收），这里一律放行。
+ */
+window.addEventListener('popstate', () => {
+  if (document.body.classList.contains('mb-picker-open')) return;
+  if (!document.body.classList.contains('kb-new-open')) return;
+  setTimeout(() => {
+    if (!document.body.classList.contains('kb-new-open')) return;
+    if (kbNewAbandon || !kbHasDraft()) { kbCloseNew(true); return; }
+    if (!history.state?.kbNew) history.pushState({ kbNew: true }, '');
+    kbNewClosing = false;
+    kbTryClose();
+  }, 0);
+});
+
+/*
+ * 手机整页的任务卡（openTaskCardPage 压的 {tcCard:true} 那格）退回来了 = 离开这张卡。
+ * 两个早退与上面几条监听同一套：
+ *   · 落点的 state 还带 tcCard —— 是选择页/别的层收掉自己那格，卡还开着，放行；
+ *   · 没开着（tcPageOpen=false）—— 与这张卡无关的一次 popstate，放行。
+ * 收画面的 setTimeout 与 kb-new 同因：mobile.mjs 的 popstate 先注册，它会先把
+ * "根页井"补上；我们让它先把栈料理完，再画回上一级（看板 / 项目 / 流程）。
+ */
+window.addEventListener('popstate', () => {
+  if (!tcPageOpen) return;
+  if (history.state?.tcCard) return;
+  tcPageOpen = false;
+  setTimeout(() => { try { tcCardLeave?.(); } catch { /* 上一级画不出来就算了 */ } }, 0);
+});
+
+/*
+ * 任务卡的「讨论抽屉」自己那一格（2026-11-05）：退回来了 = 收抽屉。
+ * 与 mb-picker / kb-new 同一套时序 —— 收画面推到下一拍：mobile.mjs 的 popstate 先注册，
+ * 当场摘掉 tc-sheet-open 会让它把这次返回当成"该收卡页"，用户按一次返回就掉回看板。
+ * 上面那条 tcCard 的监听先跑：此刻 state 已经是 {tcCard:true}，它直接放行。
+ */
+window.addEventListener('popstate', () => {
+  if (!document.body.classList.contains('tc-sheet-open')) return;
+  setTimeout(() => { tcSheetClose?.(true); }, 0);
+});
+
+// Esc：与 #mbPicker 同一套规矩 —— 选择页/弹窗开着时让它们自己吃
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  if (!document.body.classList.contains('kb-new-open')) return;
+  if (document.body.classList.contains('mb-picker-open')) return;
+  if (document.querySelector('dialog[open]')) return;
+  e.preventDefault();
+  kbTryClose();
+});
+
+// Esc：讨论抽屉是卡页的下一级 —— 先收它（外接键盘 / 桌面浏览器缩窗口时才有这一路）
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  if (!document.body.classList.contains('tc-sheet-open')) return;
+  if (document.querySelector('dialog[open]')) return;
+  e.preventDefault();
+  tcSheetClose?.();
+});
 
 
 
@@ -1953,6 +2720,42 @@ export let taskCardFromFlow = null;
 
 
 
+/*
+ * 手机整页开着的一张卡（2026-11-05 任务卡手机版重做）：
+ *   · `tcPageOpen` —— 此刻屏幕上是手机整页的卡（弹窗那条路不算，桌面也不算）；
+ *   · `tcCardLeave` —— 画回上一级的函数（渲染时赋值 = backTo：看板 / 项目 / 流程）。
+ * 手机开卡时压一格 `{tcCard:true}` 历史（openTaskCardPage），返回手势/返回键退掉
+ * 这一格 → 下面的 popstate 监听把画面画回上一级 —— 与「新建任务」页同一条路。
+ */
+let tcPageOpen = false;
+let tcCardLeave = null;
+/*
+ * 手机任务卡上的「讨论抽屉」（2026-11-05）：该由谁来收画面。
+ * 渲染时赋值（非手机/弹窗那条路赋 null），模块级的两条监听（popstate / Esc）只认这一个钩子 ——
+ * 页面每次重画都挂一遍监听的话，同一屏上会叠出好几份，一次返回关几层。
+ */
+let tcSheetClose = null;
+/*
+ * 讨论抽屉是不是铺满整屏了（2026-11-05 用户要的「最大化」）。
+ * 存模块级而不是只挂 class：页面重画（换卡 / 跨断点）会整块重建 DOM，
+ * 面板得按上次的选择长出来；关掉抽屉再点开也还是上次那个高度 —— 别把人的选择忘掉。
+ */
+let tcSheetMax = false;
+
+/*
+ * 跨过 900px 断点时重画当前这张卡（2026-11-05 讨论抽屉带来的一条收尾）：
+ * mbTC（手机整页形态）在**画的时候**定死 —— 讨论流/输入条在手机版进抽屉、桌面版留在页面上。
+ * 窗口从窄拖宽（或反向）不重画的话，宽屏上输入条会跟着抽屉一起"消失"。
+ * 桌面没有系统返回键这回事，重画也不动历史格；S.route 里就记着当前卡的 id。
+ */
+window.matchMedia('(max-width: 900px)').addEventListener('change', () => {
+  if (!tcPageOpen || S.route?.view !== 'taskCard' || !S.route?.id) return;
+  document.body.classList.remove('tc-sheet-open');
+  paintTaskCardPage(S.route.id).catch(() => { /* 画不回来就算了，下次进页自愈 */ });
+});
+
+
+
 export async function openTaskCardPage(taskId, opts = {}) {
   // 来源定死：恢复位置时从 route 里带回来（刷新也还记得），否则看当前的 S.boardAll
   taskCardFromAll = opts.fromAll ?? !!S.boardAll; // 必须在 S.boardAll = false 之前读
@@ -1969,6 +2772,13 @@ export async function openTaskCardPage(taskId, opts = {}) {
    */
   taskCardFromFlow = opts.fromFlow ?? null;
   setRoute('taskCard', { id: taskId, fromAll: taskCardFromAll, fromFlow: taskCardFromFlow });
+  /*
+   * 手机：这一页压一格历史 —— 系统返回键/手势 = 回上一级（与「新建任务」页同一条路，
+   * popstate 里画回上一级，不再另外压格）。桌面不压：桌面没有系统返回键这回事，
+   * 想回看板点面包屑/左栏。已有这格（刷新恢复）就复用，不重复压。
+   */
+  tcPageOpen = document.body.classList.contains('mb-narrow');
+  if (tcPageOpen && !history.state?.tcCard) history.pushState({ tcCard: true }, '');
   const view = $('pluginView');
   view.classList.add('kb-page'); // 这一页要满屏（见 style.css 的 #pluginView.kb-page）
   S.view = 'plugin';
@@ -2134,6 +2944,16 @@ export async function paintTaskCardPage(taskId, opts = {}) {
   const isFlowCard = !!task.sourceKey;
   const assignee = S.personas.find((p) => p.id === task.assigneePersonaId) ?? null;
 
+  /*
+   * 上一屏的讨论抽屉不能带进这一屏（2026-11-05）：下面是整块 innerHTML 重画，抽屉节点一起作废，
+   * 但 body 上的 tc-sheet-open 是个全局状态 —— 留着它，遮罩其实已经没了、Esc/返回键的判断
+   * 却还当抽屉开着，一次返回就无声吞掉一格。重画前先收干净，历史格也顺手退回卡页那一格。
+   */
+  if (document.body.classList.contains('tc-sheet-open')) {
+    document.body.classList.remove('tc-sheet-open');
+    if (history.state?.tcSheet) history.replaceState({ ...(history.state ?? {}), tcSheet: false }, '');
+  }
+
   // 往来：派过活才有会话
   let conv = null;
   if (task.conversationId) {
@@ -2287,11 +3107,6 @@ export async function paintTaskCardPage(taskId, opts = {}) {
   const collapsedTopics = new Set();
   const seenReplies = new Set();
 
-  // 折叠条上露的那一眼：最新回复去 markdown 记号、压成一行（B站/微博的"共 N 条回复"带预览的套路）
-  const replySnippet = (m) =>
-    String(m.text ?? '').replace(/[#*`>~[\]]/g, '').replace(/\s+/g, ' ').trim().slice(0, 60)
-      || (m.atts?.length ? '（附件）' : '…');
-
   /**
    * 收工状态条（2026-10-30 用户："用户感知不到活什么时候干完"）：
    * 讨论区顶上一条横幅，一眼回答"他到底干完没有"——
@@ -2354,6 +3169,9 @@ export async function paintTaskCardPage(taskId, opts = {}) {
             : '';
         const foot = t.head
           ? `<div class="tc-topic-foot">
+               ${/* 自己的评论没有作者行（名字/时间都在落款），便签标记就落到落款这一行 ——
+                   否则"便签"和普通评论在界面上完全分不出来（2026-11-05 手机自测发现） */ ''}
+               ${meta ? '' : noteTag}
                <time class="tc-cmt-at">${esc(cmtTime(t.head.createdAt))}</time>
                <button type="button" class="tc-reply" data-reply="${esc(t.head.id)}">回复</button>
              </div>`
@@ -2362,19 +3180,24 @@ export async function paintTaskCardPage(taskId, opts = {}) {
         //   1. 折叠条露最新一条回复的作者+摘要，收着也能扫到他说了什么；
         //   2. 这轮新到的回复让议题自动展开、回复本身高亮 ——
         //      除非用户手动收起过这条（collapsedTopics），手动操作优先。
+        // 折叠照旧（全铺开确实杂），但他的回话不再被藏住：这轮新到的回复让议题
+        // 自动展开、回复本身高亮 —— 除非用户手动收起过这条（collapsedTopics），
+        // 手动操作优先。折叠条本身照抖音（2026-11-06 用户发截图拍板）：只报条数。
         const hasNew = t.items.some((m) => !seenReplies.has(m.id));
         const isOpen = openTopics.has(t.id) || (hasNew && !collapsedTopics.has(t.id));
         let replies = `<div class="tc-replies" data-replies="${esc(t.id)}"></div>`;
         if (t.items.length) {
-          const last = t.items[t.items.length - 1];
-          const author = last.role === 'user' ? (humanOf(last) ?? '我') : whoName;
           const items = t.items.map((m, i) =>
             cmtItem(m, !seenReplies.has(m.id), i === t.items.length - 1 ? t.id : null),
           ).join('');
+          // 折叠条两态文案照抖音（2026-11-06 用户发截图拍板）：左一条短灰线，
+          // 折叠「展开N条回复 ⌄」/ 展开「收起N条回复 ⌃」—— 不再露最新回复预览
+          // （2026-10-24 那版"作者：摘要"撤了；藏话的问题仍由 hasNew 自动展开兜着）。
           replies = `<details class="tc-replies" data-replies="${esc(t.id)}"${isOpen ? ' open' : ''}>
                <summary class="tc-replies-toggle">
-                 <span class="tc-replies-fold">${t.items.length} 条回复 · <i>${esc(author)}</i>：${esc(replySnippet(last))}</span>
-                 <span class="tc-replies-unfold">收起回复</span>
+                 <span class="tc-replies-fold">展开${t.items.length}条回复</span>
+                 <span class="tc-replies-unfold">收起${t.items.length}条回复</span>
+                 <svg class="tc-replies-caret" viewBox="0 0 12 12" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 4.5 6 8l3.5-3.5"/></svg>
                </summary>
                <div class="tc-replies-body">${items}</div>
              </details>`;
@@ -2451,36 +3274,45 @@ export async function paintTaskCardPage(taskId, opts = {}) {
      ⚠️ 先算成常量再插值：这里是**外层模板里再嵌一层模板**，直接写 `${isFlowCard ? '' : '…'}`
         会被外层先吃掉，整段 `headRow(...)` 的调用就被切断了（多行再嵌引号尤其容易踩）。 */
   const delBtn = isFlowCard || isCollab ? '' : '<button class="tc-del" id="tcDel" title="删掉这张卡（＝忽略它）">删除</button>';
-  host.innerHTML = `
-    ${dlg ? '' : headRow(
-      taskCardFromAll || !proj
-        ? breadcrumb([{ label: '工作台', to: 'workbench' }, { label: '任务看板', to: 'board' }, { label: '任务卡' }])
-        : breadcrumb([
-            { label: '工作台', to: 'workbench' },
-            { label: '项目', to: 'projects' },
-            { label: proj.name, to: 'projects', arg: proj.id },
-            { label: '任务卡' },
-          ]),
-      delBtn,
-    )}
-    <div class="detail-body tc-page${dlg ? ' in-dlg' : ''}">
-      <div class="tc-main">
-        <div class="tc-main-scroll">
-          <div class="tc-headblock">
-            ${fromFlowBar}
-            <h1 class="tc-title" id="tcTitleText" contenteditable="plaintext-only" spellcheck="false">${esc(task.title)}</h1>
-            ${flowOnly
-              ? `<div class="dim" style="font-size:12.5px;margin:-6px 0 12px">由流程「${esc(flowName)}」执行 —— 把状态改成「进行中」（或拖到「进行中」）就发起；发起后往来在流程实例里看。</div>`
-              : ''}
-            <div class="tc-desc${task.description ? '' : ' empty'}" id="tcDescView">${task.description ? renderMarkdown(task.description) : '<span class="dim">添加描述…</span>'}</div>
-          </div>
+  /* PR 状态词（手机行 / 桌面右栏两处用） */
+  const prStateText = (state) => (state === 'merged' ? '已合并' : state === 'closed' ? '已关闭' : state === 'open' ? '开着' : '状态未知');
+  /*
+   * **手机整页形态**（2026-11-05 任务卡手机版）：窄屏不再是"桌面页压小"——
+   * 原来标题、描述、讨论、右栏属性表按桌面 grid 压成一列，属性表沉在讨论区底下，
+   * 要滚到底才看得到执行人，页头还是三级面包屑。手机版按看板 v2 / 员工详情的同一套语汇：
+   *   · 导航栏三槽（‹ / 任务卡）—— 面包屑撤掉，返回键/手势回上一级（见 openTaskCardPage）；
+   *   · 状态做成标题上方的一颗**色点胶囊**（点它改状态 → 全屏选择页）；
+   *   · 属性收成一张 inset grouped 卡：执行人（点开选择页）/ 项目 / 来源 / PR / 删除；
+   *   · 创建/更新时间收成卡下一行脚注；
+   *   · **没有 PR 的关联/建 PR**（主理人 2026-11-05 口径：手机端不建 PR，
+   *     真要在手机上开 PR 就在对话里说一声让员工办）—— 已关联的只留一行可点进 GitHub。
+   * 弹窗那条路（流程步骤 / 会话卡票）不算手机整页：弹窗有自己的头，结构不动。
+   */
+  const mbTC = !dlg && document.body.classList.contains('mb-narrow');
+  const stKey = Object.keys(COL_STATUS).find((k) => COL_STATUS[k] === task.status) ?? 'other';
+  const whoLabel = flowOnly
+    ? '（由流程执行）'
+    : assignee?.name
+      ?? (S.users ?? []).find((u) => u.id === task.assigneeUserId)?.name
+      ?? '（没派活）';
 
-          <section class="group tc-comments">
-            <div class="group-title">讨论</div>
-            <div class="tc-threads" id="tcThreads">${threadsHtml(conv)}</div>
-          </section>
-        </div>
+  /*
+   * 讨论条数（2026-11-05）：导航栏那颗气泡上的角标、抽屉标题上的数字。
+   * 数的是**议题**（顶层评论）不是消息 —— 一条议题下面挂十句回复，人看到的还是"一件事"。
+   * 开工说明在 topicsOf 里就被摘掉了，跟讨论区里画出来的一致。
+   */
+  const cmtCount = topicsOf(timelineOf(conv?.messages ?? [], conv?.runs ?? [])).length;
+  const cmtN = cmtCount > 99 ? '99+' : String(cmtCount);
 
+  /* 讨论流本体：整页（桌面）/ 抽屉（手机）两处共用同一份内容，谁在 DOM 里谁就是 #tcThreads */
+  const threadsInner = threadsHtml(conv);
+
+  /*
+   * 输入条（附件 / 档位 / 发送 / 停靠横幅）。位置只有两种：
+   *   · 桌面 —— 摆在 .tc-main 末尾（点「回复」时整条搬进那条议题下面，见 dockComposer）；
+   *   · 手机 —— 常驻讨论抽屉底部（抽屉不开时它也就不在屏幕上）。
+   */
+  const composerBlock = `
         <div class="tc-composer" id="tcComposer">
           <!-- 回复横幅：输入框停靠到某条议题下面时亮出来，一句话说清"在回哪条"，✕ 取消（2026-10-24 重做） -->
           <div class="tc-reply-banner" id="tcReplyBanner" hidden>
@@ -2513,17 +3345,124 @@ export async function paintTaskCardPage(taskId, opts = {}) {
               <button class="primary tc-send" id="tcSend" type="button" title="发送">发送</button>
             </div>
           </div>
+          <!-- 档位三颗（2026-11-06 用户口径：键盘唤起后把便签/讨论/执行摊平，摆在
+               **输入卡外面** —— 卡片底边与键盘之间那条区域）。只在手机抽屉的展开态
+               显示（mobile.css §22b）；桌面还是卡内那颗「讨论 ▾」下拉。 -->
+          <div class="tc-mode-chips" id="tcModeChips">
+            <button type="button" data-chip="note"><span class="tc-mode-dot"></span>便签</button>
+            <button type="button" data-chip="discuss"><span class="tc-mode-dot"></span>讨论</button>
+            <button type="button" data-chip="execute"><span class="tc-mode-dot"></span>执行</button>
+          </div>
           <div class="tc-composer-foot">
             <!-- 「停止生成」并进发送键了（跑着时发送键原地变身）—— 单摆那颗撤掉（2026-10-29） -->
             <div class="counter left" id="tcHint2"></div>
           </div>
+        </div>`;
+
+  host.innerHTML = `
+    ${
+      mbTC
+        ? `<div class="detail-head tc-m-head">
+             <button type="button" class="kb-l-navbtn back" data-tc-back aria-label="返回上一级">${KB_ICON_BACK}</button>
+             <h1 class="kb-l-navtitle">任务卡</h1>
+             <!-- 讨论入口（2026-11-06 定稿）：只留导航栏右上角这颗💬气泡，角标 = 议题数，
+                  0 条时不摆。卡页底部那条常驻评论条（.tc-m-cmtbar）是过渡产物，已删。 -->
+             <button type="button" class="kb-l-navbtn cmt" id="tcCmtBtn"
+                     aria-label="讨论${cmtCount ? `（${cmtCount} 条）` : ''}">${KB_ICON_CHAT}<span class="tc-cmt-n" id="tcCmtN"${cmtCount ? '' : ' hidden'}>${cmtN}</span></button>
+           </div>`
+        : dlg
+          ? ''
+          : headRow(
+              taskCardFromAll || !proj
+                ? breadcrumb([{ label: '工作台', to: 'workbench' }, { label: '任务看板', to: 'board' }, { label: '任务卡' }])
+                : breadcrumb([
+                    { label: '工作台', to: 'workbench' },
+                    { label: '项目', to: 'projects' },
+                    { label: proj.name, to: 'projects', arg: proj.id },
+                    { label: '任务卡' },
+                  ]),
+              delBtn,
+            )
+    }
+    <div class="detail-body tc-page${dlg ? ' in-dlg' : ''}${mbTC ? ' tc-m' : ''}">
+      <div class="tc-main">
+        <div class="tc-main-scroll"${mbTC ? ' id="tcScroll"' : ''}>
+          ${
+            mbTC
+              ? `<div class="tc-m-hero">
+                   ${fromFlowBar}
+                   <button type="button" class="tc-m-st" id="tcStatusChip" style="--st-c:var(--st-${esc(stKey)})" title="改状态">
+                     <i aria-hidden="true"></i><span id="tcStatusText">${esc(task.status)}</span>
+                   </button>
+                   <!-- 手机标题/描述只读：device 身份的 PATCH 只收 {status, note}（E3702），
+                        让人改了存不上比不让改更糟。要改内容去桌面，或在对话里让员工改。 -->
+                   <h1 class="tc-title" id="tcTitleText">${esc(task.title)}</h1>
+                   ${flowOnly
+                     ? `<div class="tc-m-flownote">由流程「${esc(flowName)}」执行 —— 把状态改成「进行中」就发起；发起后往来在流程实例里看。</div>`
+                     : ''}
+                   <div class="tc-desc${task.description ? '' : ' empty'}" id="tcDescView">${task.description ? renderMarkdown(task.description) : '<span class="dim">添加描述…</span>'}</div>
+                 </div>
+                 <div class="tc-m-card">
+                   ${
+                     /* 执行人行手机上**只读**：服务端字段级闸（routes/project.mjs）对 device 身份
+                        只放 {status, note}（E3702），改执行人是桌面端的事 —— 摆一行展示即可。 */
+                     `<div class="tc-m-row"><span class="tc-m-k">执行人</span><span class="tc-m-v${flowOnly ? ' is-dim' : ''}">${esc(whoLabel)}</span></div>`
+                   }
+                   <div class="tc-m-row"><span class="tc-m-k">项目</span><span class="tc-m-v">${esc(proj?.name ?? '（项目已不在）')}</span></div>
+                   <div class="tc-m-row"><span class="tc-m-k">来源</span><span class="tc-m-v">${isFlowCard ? '流程' : isCollab ? '总公司' : isRepo ? '仓库值班' : '手动建卡'}</span></div>
+                   ${
+                     /* 手机只留「已关联的 PR」一行可点进 GitHub：关联/建 PR/合并都不上手机
+                        —— 主理人 2026-11-05 口径：手机端不建 PR，要开就在对话里让员工办。 */
+                     task.prRepo && task.prNumber
+                       ? `<a class="tc-m-row" href="https://github.com/${esc(task.prRepo)}/pull/${task.prNumber}" target="_blank" rel="noreferrer">
+                            <span class="tc-m-k">Pull Request</span>
+                            <span class="tc-m-v">#${task.prNumber} · ${esc(prStateText(task.prState))}</span><i class="tc-m-chev" aria-hidden="true"></i>
+                          </a>`
+                       : ''
+                   }
+                   ${
+                     /* 删除行不摆：card.delete 没给 device 放行（route-policy），点了只会吃 403。
+                        手机上废弃一张卡 = 在对话里说一声，或在桌面看板删。 */
+                     ''
+                   }
+                 </div>
+                 <p class="tc-m-foot">创建 ${esc(String(task.createdAt ?? '').replace('T', ' ').slice(0, 16))} · 更新 <span id="tcAt">${esc(String(task.updatedAt ?? '').replace('T', ' ').slice(0, 16))}</span></p>`
+              : `<div class="tc-headblock">
+                   ${fromFlowBar}
+                   <h1 class="tc-title" id="tcTitleText" contenteditable="plaintext-only" spellcheck="false">${esc(task.title)}</h1>
+                   ${flowOnly
+                     ? `<div class="dim" style="font-size:12.5px;margin:-6px 0 12px">由流程「${esc(flowName)}」执行 —— 把状态改成「进行中」（或拖到「进行中」）就发起；发起后往来在流程实例里看。</div>`
+                     : ''}
+                   <div class="tc-desc${task.description ? '' : ' empty'}" id="tcDescView">${task.description ? renderMarkdown(task.description) : '<span class="dim">添加描述…</span>'}</div>
+                 </div>`
+          }
+
+          ${
+            /* 手机不摆讨论（2026-11-05）：它整体收进下面那张抽屉 —— 卡页只留"这件事本身" */
+            mbTC
+              ? ''
+              : `<section class="group tc-comments">
+            <div class="group-title">讨论</div>
+            <div class="tc-threads" id="tcThreads">${threadsInner}</div>
+          </section>`
+          }
         </div>
+
+        ${mbTC ? '' : composerBlock}
         <!-- 输入框停靠到议题下面期间，底部这颗幽灵按钮就是"开新话题"的回路（2026-10-24） -->
         <button type="button" class="tc-new-topic" id="tcNewTopic" hidden
                 title="不回复谁，开一条新议题（输入框回到底部）">＋ 新议题</button>
       </div>
 
-      <aside class="tc-side">
+      ${
+        mbTC
+          ? `<aside class="tc-side tc-m-side" aria-hidden="true">
+               <!-- 手机：两个 combo 只当"值与联动"的仓库（上面 .tc-m-card 的行才是界面），
+                    整个 aside 不显示。删了它 createCombo 就没地方挂了。 -->
+               <div id="tcStatusMount"></div>
+               <div id="tcWhoMount"></div>
+             </aside>`
+          : `<aside class="tc-side">
         <h3>属性</h3>
         <div class="tc-prop"><span class="tc-prop-k">状态</span><div id="tcStatusMount"></div></div>
         <div class="tc-prop"><span class="tc-prop-k">执行人</span><div id="tcWhoMount"></div></div>
@@ -2569,7 +3508,44 @@ export async function paintTaskCardPage(taskId, opts = {}) {
             ? `<div class="tc-prop"><span class="tc-prop-k">状态改动</span><span class="tc-prop-v">${esc((S.users ?? []).find((u) => u.id === task.statusByUserId)?.name ?? '那个人已经不在了')}<span class="dim"> · ${esc(String(task.statusAt ?? '').replace('T', ' ').slice(0, 16))}</span></span></div>`
             : ''
         }
-      </aside>
+      </aside>`
+      }
+
+      ${
+        /* 讨论抽屉（2026-11-05 用户口径）：讨论不摊在卡页上，收进一张抽屉 ——
+           入口是导航栏右上角那颗💬气泡（#tcCmtBtn，2026-11-06 定稿：卡页底部那条
+           常驻评论条是过渡产物，已删；入口只留一处）。
+           点开是抖音评论区那套：底部升起一张面板，上面遮罩压住整页，里面只有"讨论流 + 输入条"。
+           它挂在 .tc-page 里面（position:fixed，不参与 flex 布局），为的是继续吃到
+           `.tc-page.tc-m .tc-composer` 那一套玻璃输入条样式；页面重画时跟着一起换新。
+           历史栈与「手机全屏选择页」同一套：开抽屉压一格，返回手势/返回键只收这一格。
+           ⚠️ 抽屉里必须有 #tcThreads / #tcComposer 这两个 id —— 下面所有接线都按 id 找节点。 */
+        mbTC
+          ? `
+      <div class="tc-sheet${tcSheetMax ? ' max' : ''}" id="tcSheet" role="dialog" aria-modal="true" aria-label="讨论">
+        <div class="tc-sheet-mask" data-tc-sheet-close></div>
+        <div class="tc-sheet-panel">
+          <div class="tc-sheet-grip" aria-hidden="true"></div>
+          <div class="tc-sheet-head">
+            <b>讨论<span class="tc-sheet-n" id="tcSheetN">${cmtN}</span></b>
+            <!-- 最大化（2026-11-05）：78% 的默认高度看不全长讨论，给一颗就地铺满整屏的键，
+                 再点一下还原。图标画的是"点下去会怎样"：朝上＝展开，朝下＝收起。 -->
+            <button type="button" class="tc-sheet-ic tc-sheet-max" id="tcSheetMax"
+                    aria-label="${tcSheetMax ? '还原讨论面板' : '放大讨论面板'}"
+                    aria-pressed="${tcSheetMax ? 'true' : 'false'}"
+                    title="${tcSheetMax ? '还原' : '铺满整屏'}">${tcSheetMax ? TC_ICON_CHEVRONS_DOWN : TC_ICON_CHEVRONS_UP}</button>
+            <button type="button" class="tc-sheet-ic tc-sheet-x" data-tc-sheet-close aria-label="收起讨论">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+            </button>
+          </div>
+          <div class="tc-sheet-body" id="tcSheetBody">
+            <div class="tc-threads" id="tcThreads">${threadsInner}</div>
+          </div>
+          ${composerBlock}
+        </div>
+      </div>`
+          : ''
+      }
     </div>`;
 
   /*
@@ -2586,12 +3562,179 @@ export async function paintTaskCardPage(taskId, opts = {}) {
       : taskCardFromAll
         ? () => openTaskBoard()
         : proj ? () => openProjectDetail(proj.id) : () => openProjectsPage();
-  // 离开这张卡就把位置记忆清掉：否则下一次刷新又会被拽回这张卡
-  const leaveTo = async () => { await backTo(); };
-  // （页头不再有返回按钮；backTo 只剩 leaveTo 和下面那行「来自流程」在用）
+  /*
+   * 离开这张卡（手机整页）：有自己压的那格历史就走 history.back() —— popstate 监听里
+   * 会画回上一级，返回键/手势/‹ 按钮走的是同一条路，栈不会攒出幽灵格。
+   * 没有那格（桌面、或状态被别的层换掉了）就直接画回上一级。
+   * 离开就把位置记忆的"开着"标记放下：否则下一次刷新又会被拽回这张卡。
+   */
+  const leaveTo = async () => {
+    // 手机整页：**先退格再收场** —— popstate 监听里画回上一级（tcPageOpen 在那儿才置 false）。
+    // 反过来先摘标记再 back()，popstate 进来一看"没开着"就什么都不画，屏幕会停在卡上（实测踩过）。
+    if (mbTC && history.state?.tcCard) { history.back(); return; }
+    tcPageOpen = false;
+    await backTo();
+  };
+  // popstate 监听要用"画回上一级"：渲染时记下来（手机整页才会被用到）
+  tcCardLeave = backTo;
+  // 手机导航栏那颗 ‹：与系统返回键同一条路（有自己压的那格就退格，popstate 统一画回上一级）
+  host.querySelector('[data-tc-back]')?.addEventListener('click', () => { leaveTo().catch((e) => toast(e.message, 'error')); });
 
   // 「来自流程」那行：点一下回那条流程的时间轴（跟删完卡之后回的是同一个地方）
-  $('tcFromFlow')?.addEventListener('click', () => { backTo().catch((e) => toast(e.message, 'error')); });
+  $('tcFromFlow')?.addEventListener('click', () => { leaveTo().catch((e) => toast(e.message, 'error')); });
+
+  /* ---------------- 讨论抽屉（手机，2026-11-05 用户口径） ----------------
+   *
+   * 「讨论别摊在卡页上，收进一颗气泡按钮，点开像抖音评论区」——
+   * 卡页因此只剩：状态 → 标题 → 描述 → 属性卡 → 脚注；讨论流和输入条整体搬进抽屉。
+   *
+   * 历史栈与「手机全屏选择页」（chat.mjs 的 mbPicker）/「新建任务」页同一套：
+   *   开抽屉压一格 {tcSheet:true}；返回手势/返回键退掉这格 → 本文件尾的 popstate 收画面；
+   *   「✕」/点遮罩 → **先 history.back()、画面留到 popstate 再收**。
+   *   顺序反了会怎样：popstate 到时 class 已经被摘掉，mobile.mjs 会把这次返回当成
+   *   "该收卡页了" —— 用户按一次返回，从抽屉直接掉回看板（mbClosePicker 踩过同一个坑）。
+   *   mobile.mjs 的 popstate / Esc 各有一行 `tc-sheet-open` 守卫，给这里让路。
+   */
+  const sheet = mbTC ? $('tcSheet') : null;
+  let sheetClosing = false;
+
+  const sheetIsOpen = () => !!sheet && document.body.classList.contains('tc-sheet-open');
+  const sheetMaxBtn = $('tcSheetMax');
+
+  /*
+   * 铺满整屏 / 还原（2026-11-05）：只切 .max 一枚 class，高度、圆角、顶部安全区全交给 CSS。
+   * 高度不用 transform 做（面板得缩起 22% 才轮到输入条露出来，只能动 height）—— 见 mobile.css。
+   * 滚动位置**不**强行拉到底：浏览器布局后会自己把越界的 scrollTop 夹回去，
+   * 原本在翻历史中间的人也不会被一巴掌打回最新一条。
+   */
+  const paintSheetMax = () => {
+    if (!sheet) return;
+    sheet.classList.toggle('max', tcSheetMax);
+    if (!sheetMaxBtn) return;
+    sheetMaxBtn.innerHTML = tcSheetMax ? TC_ICON_CHEVRONS_DOWN : TC_ICON_CHEVRONS_UP;
+    sheetMaxBtn.setAttribute('aria-label', tcSheetMax ? '还原讨论面板' : '放大讨论面板');
+    sheetMaxBtn.setAttribute('aria-pressed', tcSheetMax ? 'true' : 'false');
+    sheetMaxBtn.title = tcSheetMax ? '还原' : '铺满整屏';
+  };
+  const scrollSheetBottom = () => {
+    const b = $('tcSheetBody');
+    if (b) b.scrollTop = b.scrollHeight;
+  };
+
+  /*
+   * 输入条两态（2026-11-06 用户发抖音截图拍板）：抽屉底部平时是**一条单行评论条**
+   * （工具栏整条藏掉、textarea 压成药丸、placeholder 换成抖音那句）—— 键盘没起来
+   * 就该长这样；点它（或点某条评论的「回复」）才展开成完整输入区，键盘跟着起来；
+   * 输入框失焦（键盘收了）120ms 后收回单行 —— 延迟是给「点发送」让路的：
+   * mousedown 先 blur，click 还没落，立刻收会把发送键藏没了。
+   * 状态只挂在 .tc-sheet 的 .expanded 一枚 class 上，样式全在 mobile.css §22b。
+   * 注意手机 placeholder 平时是空串（2026-11-04 口径），单行态在这里单独填那句。
+   */
+  const MB_COMPACT_PH = '留下你的友善评论吧';
+  /*
+   * 抽屉顶边钉住（2026-11-06 用户口径：键盘唤起后抽屉**别往上走**）。
+   * 面板高度是 78%，而 .tc-sheet 的高度 = 可见视口 —— 键盘一起来视口变矮，
+   * 78% 跟着变矮，面板顶边就自己往上跳一格（约 0.22 × 键盘高）。抖音那种手感
+   * 是"抽屉待在原地、键盘从下面吃掉一截"。所以展开态把顶边钉成固定 px
+   * （mobile.css 的 .tc-sheet.expanded .tc-sheet-panel 用 --tc-panel-top + bottom:0
+   * 定高），这里负责在键盘还没起来时把这个位置记下来。
+   * 只在非 expanded 时量 —— 已经缩过的视口量出来就偏了。
+   */
+  const pinSheetTop = () => {
+    if (!sheet) return;
+    if (sheet.classList.contains('expanded')) return;
+    const h = sheet.getBoundingClientRect().height;
+    const top = sheet.classList.contains('max') ? 0 : Math.round(h * 0.22);
+    sheet.style.setProperty('--tc-panel-top', `${top}px`);
+  };
+  const tcCompact = () => {
+    sheet.classList.remove('expanded');
+    const input = $('tcInput');
+    if (input) input.placeholder = MB_COMPACT_PH;
+  };
+  const tcExpand = () => {
+    sheet.classList.add('expanded');
+  };
+
+  function openSheet() {
+    if (!sheet || sheetIsOpen()) return;
+    document.body.classList.add('tc-sheet-open');
+    sheet.classList.add('in');
+    tcCompact();   // 每次拉开都从单行态起步（草稿文字还在，展开即见）
+    pinSheetTop(); // 键盘还没起来：记下此刻面板顶边，展开时钉住它（别让抽屉往上跳）
+    // 进来先落到最新一条（评论区都这样：最新的在最下面）
+    requestAnimationFrame(scrollSheetBottom);
+    if (history.state?.tcSheet) return;   // 重画后重开：这格已经压过了
+    /*
+     * 卡页那格没打 tcCard 标记的（宽屏开卡 → 缩窄这种）：先给**当前这格**补上标记再压抽屉格。
+     * 补不上就会出"关抽屉把卡页一起退掉"—— 关抽屉的 back() 退到的那格若不是卡页，
+     * 本文件尾的 tcCard popstate 就会把画面画回上一级。
+     */
+    if (!history.state?.tcCard) history.replaceState({ ...(history.state ?? {}), tcCard: true }, '');
+    history.pushState({ tcCard: true, tcSheet: true }, '');
+  }
+
+  /** @param {boolean} alreadyPopped 这格历史已被浏览器退掉（popstate 进来）—— 只收画面、不再退格 */
+  function closeSheet(alreadyPopped = false) {
+    if (!sheet || !sheetIsOpen()) return;
+    if (!alreadyPopped && history.state?.tcSheet) {
+      if (sheetClosing) return;   // 连点「✕」：第二下不能再退一格
+      sheetClosing = true;
+      history.back();
+      return;
+    }
+    sheetClosing = false;
+    // 收键盘：输入框还挂着焦点的话，抽屉收起来了键盘还杵在屏幕上
+    if (sheet.contains(document.activeElement)) document.activeElement.blur();
+    document.body.classList.remove('tc-sheet-open');
+    sheet.classList.remove('in');
+    tcCompact();   // 下次拉开从单行态起步（与 openSheet 的口径一致）
+  }
+  // 模块级 popstate / Esc 用它收画面（本文件头那段监听只认这一个钩子，不在每次渲染时叠监听）
+  tcSheetClose = mbTC ? closeSheet : null;
+
+  if (sheet) {
+    $('tcCmtBtn')?.addEventListener('click', openSheet);
+    /* 两态切换：聚焦/点输入条 → 展开；失焦（且焦点不在抽屉里）→ 收回单行 */
+    const tcInput = $('tcInput');
+    tcInput?.addEventListener('focus', tcExpand);
+    tcInput?.addEventListener('blur', () => {
+      setTimeout(() => {
+        if (!sheet.classList.contains('expanded')) return;
+        const act = document.activeElement;
+        if (act && sheet.contains(act) && act !== document.body) return; // 焦点还在抽屉里（发送/＋/档位）
+        tcCompact();
+      }, 120);
+    });
+    sheet.addEventListener('click', (e) => {
+      if (sheet.classList.contains('expanded')) return;
+      if (!e.target.closest('.tc-composer')) return;
+      tcExpand();
+      tcInput?.focus();   // 点单行条就是想打字：键盘跟着起来（抖音同款）
+    });
+    sheetMaxBtn?.addEventListener('click', () => {
+      tcSheetMax = !tcSheetMax;
+      paintSheetMax();
+      pinSheetTop();   // 顶边基准跟着放大/还原重记（展开态里这条会自己跳过）
+    });
+    sheet.querySelectorAll('[data-tc-sheet-close]').forEach((el) => {
+      el.addEventListener('click', () => closeSheet());
+    });
+  }
+
+  /** 讨论条数刷新（发完 / 他回完 / 重跑完都会走到）：导航气泡角标 + 抽屉标题数字 */
+  const paintCmtBadge = (d) => {
+    const n = topicsOf(timelineOf(d?.messages ?? [], d?.runs ?? [])).length;
+    const badge = $('tcCmtN');
+    if (badge) {
+      badge.textContent = n > 99 ? '99+' : String(n);
+      badge.hidden = !n;
+    }
+    const btn = $('tcCmtBtn');
+    if (btn) btn.setAttribute('aria-label', n ? `讨论（${n} 条）` : '讨论');
+    const label = $('tcSheetN');
+    if (label) label.textContent = String(n);
+  };
 
   /* ---------------- 标题 / 描述：就地编辑（2026-10-18 用户要求：没有编辑按钮，点了就改，改完自动存）
      做法跟同类产品一致：标题、描述平时就是"读"的样子，点上去原地变成输入框；
@@ -2605,10 +3748,11 @@ export async function paintTaskCardPage(taskId, opts = {}) {
   /*
    * 协作卡（2026-10-31）：标题/描述**只读** —— 内容归中心（后端也会用 E4046 拦，
    * 这里只是别让人白改一遍再被拒）。状态、执行人、评论照常能动。
+   * 手机整页（mbTC）同样只读：device 身份的 PATCH 只收 {status, note}（E3702）。
    */
-  if (isCollab) {
+  if (isCollab || mbTC) {
     titleEl.removeAttribute('contenteditable');
-    titleEl.title = '总公司派的任务，标题由中心改';
+    if (isCollab) titleEl.title = '总公司派的任务，标题由中心改';
   }
   titleEl.addEventListener('input', () => { titleVal = titleEl.textContent; scheduleSave(700); });
   titleEl.addEventListener('keydown', (e) => {
@@ -2632,7 +3776,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     descHost.innerHTML = descVal ? renderMarkdown(descVal) : '<span class="dim">添加描述…</span>';
   };
   const startDescEdit = () => {
-    if (isCollab) return; // 协作卡的描述由中心写（同上）
+    if (isCollab || mbTC) return; // 协作卡的描述由中心写；手机端 device 只能改状态（E3702），点了也存不上
     if (descHost.classList.contains('editing')) return;
     descHost.classList.add('editing');
     descHost.setAttribute('contenteditable', 'plaintext-only'); // 不给边框，只给可写
@@ -2690,14 +3834,25 @@ export async function paintTaskCardPage(taskId, opts = {}) {
       ? ''
       : flowOnly
         ? `这张卡由流程「${flowName}」执行 —— 发起后在流程实例里跟当前经办人往来。`
-        : '先在右边选执行人，再发送。';
+        : isNarrowPh()
+          ? '先指定执行人，再发送。'
+          : '先在右边选执行人，再发送。';
+  };
+
+  /* 手机行上的状态展示（#tcStatusChip/#tcStatusText；桌面没有这两个节点，函数空转） */
+  const syncMobileStatus = (st = task.status) => {
+    const el = $('tcStatusText');
+    if (!el) return;
+    el.textContent = st;
+    const k = Object.keys(COL_STATUS).find((x) => COL_STATUS[x] === st);
+    $('tcStatusChip')?.style.setProperty('--st-c', `var(--st-${k ?? 'other'})`);
   };
 
   const statusCombo = createCombo({
     mount: $('tcStatusMount'),
     items: ['想法', '待办', '进行中', '待验收', '已阻塞', '失败', '已完成', '已取消'].map((s) => ({ id: s, label: s })),
     value: task.status,
-    onChange: () => scheduleSave(0), // 改状态立刻存：待办+人 = 开工（服务端负责）
+    onChange: (st) => { syncMobileStatus(st); scheduleSave(0); }, // 改状态立刻存：待办+人 = 开工（服务端负责）
   });
   /*
    * 执行人那一格：还没发起的流程卡**只留「（由流程执行）」一项**。
@@ -2705,6 +3860,20 @@ export async function paintTaskCardPage(taskId, opts = {}) {
    * 人只会觉得"执行人怎么没了"；留一项写着「由流程执行」，等于把这张卡的执行方式摆明。
    * 也**不能**让人选：服务端明确拒绝改派（见 project-tasks.mjs 的 400），选了也存不上。
    */
+  /*
+   * 选人的共用回调：combo（桌面）与手机的全屏选择页走同一个。
+   * 选人**立刻**反映到评论区与行上（原来要点了「保存」重画才生效，看着就像"输入框点不动"）。
+   */
+  const onWhoChange = (id) => {
+    const isUser = String(id).startsWith('u:');
+    const p = isUser ? null : (S.personas ?? []).find((x) => x.id === id) ?? null;
+    const u = isUser ? (S.users ?? []).find((x) => x.id === id.slice(2)) : null;
+    if (p || u) whoName = p?.name ?? u?.name;
+    const whoText = $('tcWhoText');
+    if (whoText) whoText.textContent = p?.name ?? u?.name ?? '（没派活）';
+    syncComposer();
+    scheduleSave(0); // 指定人立刻存：卡在「待办」时这一下就会自动开工（真人执行不开工，见服务端）
+  };
   const whoCombo = flowOnly
     ? createCombo({
         mount: $('tcWhoMount'),
@@ -2727,32 +3896,51 @@ export async function paintTaskCardPage(taskId, opts = {}) {
         search: true,
         placeholder: '搜名字或岗位…',
         empty: '没有匹配的人',
-        onChange: (id) => {
-          // 选人**立刻**反映到评论区与页头（原来要点了「保存」重画才生效，看着就像"输入框点不动"）
-          const isUser = String(id).startsWith('u:');
-          const p = isUser ? null : (S.personas ?? []).find((x) => x.id === id) ?? null;
-          const u = isUser ? (S.users ?? []).find((x) => x.id === id.slice(2)) : null;
-          if (p || u) whoName = p?.name ?? u?.name;
-          const whoText = $('tcWhoText');
-          if (whoText) whoText.textContent = p?.name ?? u?.name ?? '（没派活）';
-          syncComposer();
-          scheduleSave(0); // 指定人立刻存：卡在「待办」时这一下就会自动开工（真人执行不开工，见服务端）
-        },
+        onChange: onWhoChange,
       });
   syncComposer();
 
+  /*
+   * 手机：状态点开**全屏选择页**（mbOpenPicker，与员工详情的运行时/模型、
+   * 新建任务的状态同一套 —— 开页压一格历史、返回收画面、防连点都 inside）。
+   * 值的落地复用 statusCombo：setValue 存值，保存走 scheduleSave（手机 snapshot 只有 status）。
+   * 执行人不上选择页：device 身份改不了执行人（E3702），那行是只读展示。
+   */
+  if (mbTC) {
+    $('tcStatusChip')?.addEventListener('click', () => {
+      mbOpenPicker({
+        title: '状态',
+        items: Object.keys(COL_STATUS).map((k) => ({ id: k, label: COL_STATUS[k], dot: `var(--st-${k})` })),
+        value: Object.keys(COL_STATUS).find((k) => COL_STATUS[k] === statusCombo.value()) ?? '',
+        onPick: (k) => {
+          const label = COL_STATUS[k] ?? k;
+          statusCombo.setValue(label);
+          syncMobileStatus(label);
+          scheduleSave(0);
+        },
+      });
+    });
+  }
+
   const snapshot = () => ({
-    title: titleVal,
-    description: descVal,
-    status: statusCombo.value(),
-    // 还没发起的流程卡**不能带执行人**：服务端看到"流程卡改执行人"会把整个 PATCH 400 掉
-    // （连改标题/描述都一起被挡），而这张卡本来就没有人选。
-    // 执行人二选一：`u:` 前缀 = 真人（assigneeUserId），否则 = 数字员工（personaId）。
-    ...(flowOnly
-      ? {}
-      : String(whoCombo.value()).startsWith('u:')
-        ? { assigneeUserId: String(whoCombo.value()).slice(2) }
-        : { personaId: whoCombo.value() }),
+    // 手机整页（device 身份）：服务端字段级闸只收 {status, note}（E3702），所以
+    // snapshot 只带状态 —— 标题/描述/执行人都不在手机上改（界面也是只读的）。
+    // 桌面照旧：改了什么就存什么。
+    ...(mbTC
+      ? { status: statusCombo.value() }
+      : {
+          title: titleVal,
+          description: descVal,
+          status: statusCombo.value(),
+          // 还没发起的流程卡**不能带执行人**：服务端看到"流程卡改执行人"会把整个 PATCH 400 掉
+          // （连改标题/描述都一起被挡），而这张卡本来就没有人选。
+          // 执行人二选一：`u:` 前缀 = 真人（assigneeUserId），否则 = 数字员工（personaId）。
+          ...(flowOnly
+            ? {}
+            : String(whoCombo.value()).startsWith('u:')
+              ? { assigneeUserId: String(whoCombo.value()).slice(2) }
+              : { personaId: whoCombo.value() }),
+        }),
   });
   let lastSaved = JSON.stringify(snapshot());
   let saving = false;
@@ -2767,7 +3955,17 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     const p = (S.personas ?? []).find((x) => x.id === task.assigneePersonaId) ?? null;
     if (p) whoName = p.name;
     statusCombo?.setValue(task.status);
-    whoCombo?.setValue(task.assigneePersonaId || (task.assigneeUserId ? `u:${task.assigneeUserId}` : ''));
+    syncMobileStatus(task.status);
+    const wv = task.assigneePersonaId || (task.assigneeUserId ? `u:${task.assigneeUserId}` : '');
+    whoCombo?.setValue(wv);
+    // 手机行上的执行人名跟着刷（combo.setValue 不走 onChange，行不会自己动）
+    if (mbTC) {
+      const isUser = String(wv).startsWith('u:');
+      const wp = isUser ? null : (S.personas ?? []).find((x) => x.id === wv) ?? null;
+      const wu = isUser ? (S.users ?? []).find((x) => x.id === String(wv).slice(2)) : null;
+      const wt = $('tcWhoText');
+      if (wt) wt.textContent = wp?.name ?? wu?.name ?? (flowOnly ? '（由流程执行）' : '（没派活）');
+    }
     if (document.activeElement !== descHost) {
       descVal = task.description || '';
       renderDesc();
@@ -2794,7 +3992,8 @@ export async function paintTaskCardPage(taskId, opts = {}) {
   saveNow = async ({ keepalive = false } = {}) => {
     if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
     const payload = snapshot();
-    if (!payload.title.trim()) { setSaveState('标题不能空 · 未保存', 'bad'); return false; }
+    // 手机端只发 `{status}`（服务端给设备的白名单就这一个键），没有 title 可校验 —— 别在这里炸。
+    if (!mbTC && !String(payload.title ?? '').trim()) { setSaveState('标题不能空 · 未保存', 'bad'); return false; }
     const json = JSON.stringify(payload);
     if (json === lastSaved) { setSaveState('已保存', 'ok'); return true; }
     if (saving) { saveQueued = true; return false; }
@@ -2866,7 +4065,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
   }
 
   /* ---------------- PR 联动（卡片 ↔ GitHub PR） ---------------- */
-  const prStateText = (state) => (state === 'merged' ? '已合并' : state === 'closed' ? '已关闭' : state === 'open' ? '开着' : '未知');
+  // （prStateText 在上面画模板之前就定义了 —— 手机行/桌面右栏两处都用它）
 
   $('tcPrLink')?.addEventListener('click', async (e) => {
     e.preventDefault();
@@ -3045,9 +4244,12 @@ export async function paintTaskCardPage(taskId, opts = {}) {
    *   · note    便签 —— 只记在卡上给你看，不叫醒他、agent 不读；
    *   · discuss 讨论 —— 叫醒他聊、看代码、给方案，但只读不动手（服务端沙箱盖成 plan）；
    *   · execute 执行 —— 叫醒他基于讨论真正干活，用员工默认沙箱。
-   * 默认「讨论」：用户的痛点是"需求没聊清就动手"，先聊才符合直觉。
+   * 桌面默认「讨论」：用户的痛点是"需求没聊清就动手"，先聊才符合直觉。
+   * 手机也默认「讨论」（2026-11-05 用户改口径，同一天先定的便签作废）：讨论/执行既然放开了，
+   * 默认就照桌面的算法 —— 记一句不叫人的话自己切「便签」，一档之遥。
    */
-  let sendMode = 'discuss';
+  const DEFAULT_MODE = 'discuss';
+  let sendMode = DEFAULT_MODE;
   const MODE_TIP = {
     note: '便签：只记在卡上给你看，不叫醒他',
     discuss: '讨论：叫醒他聊、看代码、给方案，不动手改文件',
@@ -3058,8 +4260,10 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     mode === 'note' ? '留个便签…（不会叫醒他）'
     : mode === 'discuss' ? '跟他讨论…（只聊不动手）'
     : '让他干活…（回车换行）';
-  // 输入框提示语：选了回复目标就说"回复这个议题…"，否则按三档说
-  const placeholderText = () => (!replyTo ? placeholderFor(sendMode)
+  // 输入框提示语：选了回复目标就说"回复这个议题…"，否则按三档说。
+  // 手机上不显示（跟主聊天框同一把尺子，2026-11-04 用户要求：屏幕小，提示词难看）。
+  const placeholderText = () => (isNarrowPh() ? ''
+    : !replyTo ? placeholderFor(sendMode)
     : sendMode === 'note' ? '回复这个议题…（便签）'
     : sendMode === 'discuss' ? '回复这个议题…（只聊不动手）'
     : '回复这个议题…（回车换行）');
@@ -3074,11 +4278,23 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     if (label) label.textContent = MODE_LABEL[sendMode];
     const input = $('tcInput');
     // 他在跑的时候提示语让位给"要打断就点停止生成"（跟对话页 setBusy 一个道理）
-    if (input) input.placeholder = liveRunId ? '他还在说…（要打断就点「停止生成」）' : placeholderText();
+    if (input) input.placeholder = liveRunId
+      ? (isNarrowPh() ? '' : '他还在说…（要打断就点「停止生成」）')
+      : placeholderText();
     const menu = $('tcModeMenu');
     if (menu) {
       menu.querySelectorAll('[data-pick]').forEach((b) => {
         b.classList.toggle('on', b.dataset.pick === sendMode);
+      });
+    }
+    /* 手机展开态那三颗（便签/讨论/执行）：选中态与档位色都跟着 sendMode 走 */
+    const chips = $('tcModeChips');
+    if (chips) {
+      chips.dataset.mode = sendMode;
+      chips.querySelectorAll('[data-chip]').forEach((b) => {
+        const on = b.dataset.chip === sendMode;
+        b.classList.toggle('on', on);
+        b.setAttribute('aria-pressed', on ? 'true' : 'false');
       });
     }
   };
@@ -3093,6 +4309,15 @@ export async function paintTaskCardPage(taskId, opts = {}) {
       e.stopPropagation();
       sendMode = ['note', 'discuss', 'execute'].includes(b.dataset.pick) ? b.dataset.pick : 'discuss';
       closeModeMenu();
+      paintMode();
+      $('tcInput')?.focus();
+    });
+  });
+  /* 手机展开态的三颗（便签/讨论/执行）：点一下切档位，焦点留在输入框（键盘别收） */
+  $('tcModeChips')?.querySelectorAll('[data-chip]').forEach((b) => {
+    b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      sendMode = ['note', 'discuss', 'execute'].includes(b.dataset.chip) ? b.dataset.chip : 'discuss';
       paintMode();
       $('tcInput')?.focus();
     });
@@ -3140,16 +4365,29 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     collapsedTopics.delete(replyTo);
     const det = topicEl.querySelector('details.tc-replies');
     if (det) det.open = true;
-    const body = topicEl.querySelector('.tc-topic-body');
-    if (body && composer.parentElement !== body) body.appendChild(composer);
-    composer.classList.add('inline');
-    const ghost = $('tcNewTopic');
-    if (ghost) ghost.hidden = false;
-    const banner = $('tcReplyBanner');
-    if (banner) {
-      banner.hidden = false;
-      const t = $('tcReplyBannerText');
-      if (t) t.textContent = `回复：${topicTitleOf(replyTo) || '这个议题'}`;
+    if (mbTC) {
+      /*
+       * 手机**不搬家**：输入框吸在底部（拇指够得着），搬进议题里的话键盘一弹、
+       * 那条议题顶到屏幕外，输入框也被顶得看不见。"在回哪条"交给横幅 + 议题高亮。
+       */
+      const banner = $('tcReplyBanner');
+      if (banner) {
+        banner.hidden = false;
+        const t = $('tcReplyBannerText');
+        if (t) t.textContent = `回复：${topicTitleOf(replyTo) || '这个议题'}`;
+      }
+    } else {
+      const body = topicEl.querySelector('.tc-topic-body');
+      if (body && composer.parentElement !== body) body.appendChild(composer);
+      composer.classList.add('inline');
+      const ghost = $('tcNewTopic');
+      if (ghost) ghost.hidden = false;
+      const banner = $('tcReplyBanner');
+      if (banner) {
+        banner.hidden = false;
+        const t = $('tcReplyBannerText');
+        if (t) t.textContent = `回复：${topicTitleOf(replyTo) || '这个议题'}`;
+      }
     }
     threads?.querySelectorAll('.tc-topic.is-replying').forEach((el) => el.classList.remove('is-replying'));
     topicEl.classList.add('is-replying');
@@ -3158,7 +4396,9 @@ export async function paintTaskCardPage(taskId, opts = {}) {
   const syncReplyDock = () => { replyTo ? dockComposer() : homeComposer(); };
 
   const scrollThreads = () => {
-    const box = $('tcThreads');
+    // 手机：讨论流在抽屉里，要滚的是抽屉的滚动区（#tcThreads 自己不滚，scrollTop 设了也不动）；
+    // 桌面：讨论区就在页面流里，滚它自己。
+    const box = (mbTC ? $('tcSheetBody') : null) ?? $('tcThreads');
     if (box) box.scrollTop = box.scrollHeight;
   };
 
@@ -3223,6 +4463,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     try {
       const d = await api(`/api/conversations/${encodeURIComponent(convId)}`);
       conv = d;
+      paintCmtBadge(d);   // 新到的议论要反映到导航栏角标上（抽屉可能正好收着）
       const box = $('tcThreads');
       if (!box) return;
       // 输入框若停靠在议题里，先搬回底部 —— 不然下面的 innerHTML 重建会把它连草稿一起销毁
@@ -3262,8 +4503,9 @@ export async function paintTaskCardPage(taskId, opts = {}) {
       paintMode();
     }
     const hint = $('tcHint2');
-    // 跑着才说"一次只跑一条"；跑完必须收回 —— 不然这句话一直挂着，人以为还在跑（2026-10-24 用户实感）
-    if (hint) hint.textContent = liveRunId ? '一次只跑一条。要打断就点「停止生成」。' : '';
+    // 跑着才说"一次只跑一条"；跑完必须收回 —— 不然这句话一直挂着，人以为还在跑（2026-10-24 用户实感）。
+    // 手机上这行也不显示（2026-11-05 用户要求：输入框下面不要挂说明）。
+    if (hint) hint.textContent = liveRunId && !isNarrowPh() ? '一次只跑一条。要打断就点「停止生成」。' : '';
   };
 
   /**
@@ -3394,7 +4636,9 @@ export async function paintTaskCardPage(taskId, opts = {}) {
       // 照着老文案叫他"选执行人"等于指路指到死胡同。
       toast(flowOnly
         ? `这张卡由流程「${flowName}」执行 —— 等它发起后，去流程实例里跟当前经办人往来`
-        : '先在右边选一个执行人 —— 评论区是跟他讨论的');
+        : isNarrowPh()
+          ? '先指定一个执行人 —— 评论区是跟他讨论的'
+          : '先在右边选一个执行人 —— 评论区是跟他讨论的');
       return;
     }
     const mode = sendMode; // note | discuss | execute
@@ -3405,6 +4649,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
       toast('这张卡派给了真人 —— 评论区是跟数字员工讨论的；要让员工接手，把执行人改成他');
       return;
     }
+    let sent = false;   // 真发出去了没有：决定收尾是"收键盘"还是"留着改"
     $('tcInput').disabled = true;
     $('tcSend').disabled = true;
     try {
@@ -3460,15 +4705,27 @@ export async function paintTaskCardPage(taskId, opts = {}) {
       else if ($('tcHint2')) {
         $('tcHint2').textContent = '已记下 —— 便签只给你看，没叫醒他。';
       }
+      sent = true;
     } catch (e) {
       // 400/409 的原因要原样说出来（比如"他还在跑上一条"）
       toast(`没发出去：${e.message}`);
     } finally {
       $('tcInput').disabled = false;
       $('tcSend').disabled = false;
-      // 便签是刻意选的：发完回到默认「讨论」（下一次多半是要跟他聊）
-      if (mode === 'note') { sendMode = 'discuss'; paintMode(); }
-      $('tcInput').focus();
+      // 发完回到默认档「讨论」（手机桌面同一算法）——别把上一把的选择留到下一句
+      if (sendMode !== DEFAULT_MODE) { sendMode = DEFAULT_MODE; paintMode(); }
+      if (sent) {
+        /* 发完就收键盘、回单行态（2026-11-06 用户口径）：评论发出后画面该是评论区本体，
+           不该还支着键盘跟一张展开的输入卡。先 blur 收键盘，再显式回单行（blur 那条
+           120ms 的兜底看到 !expanded 会自己跳过，不会打架）。 */
+        $('tcInput').blur();
+        tcCompact();
+        // 收起后抽屉变回 78% 高、列表换了尺寸 —— 滚到最新一条，刚发的那句就在眼前
+        requestAnimationFrame(scrollSheetBottom);
+      } else {
+        // 没发出去（校验没过 / 接口报错）：焦点留在输入框，改完能直接再发
+        $('tcInput').focus();
+      }
     }
   };
   // 发送键身兼两职（对话页同款）：闲时是「发送」，他跑着时是「停止生成」

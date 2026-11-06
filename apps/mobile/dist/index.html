@@ -10,23 +10,46 @@
   <body>
     <main class="wrap">
       <!--
-        2026-11-03 改版（用户定的）：不再做「页签并列」，改成
-          · 首屏一个**大按钮** = 扫码（首次配对的主路，也是唯一不需要读字的动作）；
-          · 「其他方式」= 两条列表行（已配对的电脑 / 邀请码），收在按钮下面；
-          · 点列表行进入**下一层视图**（左上角返回），不再有滑块和页签。
-        视觉参考 WorkBuddy 手机端登录页：品牌居中、留白多、只有一个主 CTA，
-        次要入口做小做灰，页脚一句说明。
+        2026-11-05 再改版（用户定的）：上一版还是"落地页"味 —— 居中品牌 hero、
+        分隔线、大段说明。这一版按原生 App 的习惯重排：
+          · 品牌区 = iOS 大标题式**左对齐**一行（logo + 名字 + 一句副标题）；
+          · 扫码 = 全宽**横向**主卡片（取景框在左、文案在右，像原生列表的主入口）；
+          · 次要入口 = iOS inset grouped list（整组一张卡、行间 hairline）；
+          · 返回按钮用原生的蓝色 chevron；说明文字一律压短。
+        结构契约不动：launcher.js / scanner.js 依赖的 id 和类名原样保留。
       -->
 
       <!-- ============================================================ 首页 -->
       <section id="viewHome" class="view view-home">
         <header class="brand">
-          <div class="logo" aria-hidden="true">B</div>
-          <h1>班底</h1>
-          <p class="brand-sub">连上你的电脑，接着干</p>
+          <!--
+            2026-11-06 品牌统一：文字「B」换成与登录页/主站同源的真 B 字标
+            （双椭圆镂空，auth.mjs brandSvg / index.html 同一笔画）。渐变底不变。
+          -->
+          <div class="logo" aria-hidden="true">
+            <svg viewBox="0 0 512 512" role="img" aria-label="班底">
+              <defs>
+                <mask id="b-hole">
+                  <rect width="512" height="512" fill="#fff" />
+                  <ellipse cx="268" cy="206" rx="36" ry="29" fill="#000" />
+                  <ellipse cx="274" cy="340" rx="40" ry="31" fill="#000" />
+                </mask>
+              </defs>
+              <g mask="url(#b-hole)" fill="#fff">
+                <rect x="154" y="138" width="72" height="236" rx="34" />
+                <path d="M194,156 C272,142 338,168 338,208 C338,248 288,268 194,264 Z" />
+                <path d="M194,282 C284,276 348,306 348,340 C348,372 288,388 194,382 Z" />
+                <rect x="172" y="336" width="70" height="52" rx="26" />
+              </g>
+            </svg>
+          </div>
+          <div class="brand-txt">
+            <h1>班底</h1>
+            <p class="brand-sub">连上你的电脑，接着干</p>
+          </div>
         </header>
 
-        <!-- 扫码 = 整块大按钮（相机与解码在 scanner.js，这里只负责开遮罩） -->
+        <!-- 扫码 = 全宽横向主卡片（相机与解码在 scanner.js，这里只负责开遮罩） -->
         <button id="scanBtn" class="scan-hero" type="button">
           <span class="frame" aria-hidden="true">
             <span class="frame-qr">
@@ -41,15 +64,22 @@
             <i></i><i></i><i></i><i></i>
             <span class="sweep"></span>
           </span>
-          <span class="scan-title">扫码连接</span>
-          <span class="scan-sub">对准电脑上的二维码，扫完直接进</span>
+          <span class="scan-txt">
+            <span class="scan-title">扫码连接</span>
+            <span class="scan-sub">对准电脑屏幕上的二维码</span>
+          </span>
+          <span class="scan-chev" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9 5l7 7-7 7" />
+            </svg>
+          </span>
         </button>
 
-        <p class="or"><span>其他方式</span></p>
+        <p class="sec-label">其他方式</p>
 
         <!--
-          两条次要入口。整行是按钮（点击区域够大），右端箭头表示"还有下一层"。
-          「已配对的电脑」没有记录时整行不出现（JS 里 hidden）。
+          两条次要入口 = 一张 grouped 卡。整行是按钮（点击区域够大），右端箭头
+          表示"还有下一层"。「已配对的电脑」没有记录时整行不出现（JS 里 hidden）。
         -->
         <div class="alt">
           <button id="pairedEntry" class="alt-row" type="button" hidden>
@@ -87,18 +117,37 @@
               </svg>
             </span>
           </button>
-        </div>
 
-        <p class="foot-hint">
-          二维码在电脑上「设置 → 手机配对」，点一下可以放大。邀请码 5 分钟内有效，只能配一台手机。
-        </p>
+          <!--
+            账号密码登录（2026-11-05 用户：「把账号密码登录的入口也放到扫码页」）。
+            与扫码/邀请码殊途同归：进去以后都是**设备身份**（服务端按 clientKey 落设备，
+            见 routes/users.mjs 的 claimPhoneIdentity），「我的」页只有一套。
+          -->
+          <button id="loginEntry" class="alt-row" type="button">
+            <span class="alt-ico" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="8.1" r="3.7" />
+                <path d="M4.9 20.2c0-3.7 3.2-6.1 7.1-6.1s7.1 2.4 7.1 6.1" />
+              </svg>
+            </span>
+            <span class="alt-txt">
+              <span class="alt-label">账号密码登录</span>
+              <span class="alt-meta">用电脑上那个账号</span>
+            </span>
+            <span class="alt-chev" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M9 5l7 7-7 7" />
+              </svg>
+            </span>
+          </button>
+        </div>
       </section>
 
       <!-- ============================================================ 邀请码 -->
       <section id="viewCode" class="view" hidden>
         <div class="nav">
           <button id="codeBack" class="nav-back" type="button">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M15 5l-7 7 7 7" />
             </svg>
             返回
@@ -137,7 +186,46 @@
         />
         <button id="connectBtn" class="btn primary" type="button">连接</button>
         <p class="foot-hint">
-          两样都要填：电脑上那行<b>地址</b>，和下面那串 <b>9 位数字</b>。地址栏粘一整条配对链接也可以。
+          从电脑上复制整条配对链接、粘进地址栏，也可以。
+        </p>
+      </section>
+
+      <!-- ============================================================ 账号密码 -->
+      <!--
+        和扫码/邀请码同一个终点：打开 `<origin>/`，没票时服务端渲染登录页。
+        区别只在"怎么证明你是你"——这里是密码，那里是邀请码。登录成功后服务端照样
+        发设备卡，所以进去以后「我的」页、已配对列表、断开连接全一致。
+      -->
+      <section id="viewLogin" class="view" hidden>
+        <div class="nav">
+          <button id="loginBack" class="nav-back" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M15 5l-7 7 7 7" />
+            </svg>
+            返回
+          </button>
+        </div>
+
+        <h2 class="view-title">账号密码登录</h2>
+        <p class="view-sub">用电脑上那个账号登录。这台手机同时会被记成一台设备，和扫码配对一样。</p>
+
+        <label class="lab" for="loginAddr">电脑地址</label>
+        <input
+          id="loginAddr"
+          class="field"
+          type="text"
+          inputmode="url"
+          enterkeyhint="go"
+          autocomplete="off"
+          autocapitalize="off"
+          spellcheck="false"
+          placeholder="192.168.1.5:18787"
+          aria-label="电脑地址"
+        />
+
+        <button id="loginGo" class="btn primary" type="button">打开登录页</button>
+        <p class="foot-hint" id="loginHint">
+          地址在电脑上「设置 → 手机配对」里能看到。
         </p>
       </section>
 
@@ -145,7 +233,7 @@
       <section id="viewPaired" class="view" hidden>
         <div class="nav">
           <button id="pairedBack" class="nav-back" type="button">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M15 5l-7 7 7 7" />
             </svg>
             返回
@@ -156,7 +244,7 @@
 
         <div id="pairedList" class="paired"><div class="empty">读取中…</div></div>
         <p class="foot-hint" id="pairedHint">
-          这些都是这台手机<b>连过</b>的电脑。点一台看详情，配对凭据还留在手机上，不用重新扫码。
+          点一台看详情。凭据留在手机上，连接不用重新扫码。
         </p>
 
         <div id="pairedDetail" class="pd" hidden>
@@ -179,7 +267,7 @@
           <button id="pdConnect" class="btn primary" type="button">连接</button>
           <button id="pdForget" class="btn danger" type="button">取消配对</button>
           <p class="foot-hint">
-            「取消配对」只清掉这台手机上的记录 —— 电脑端「设置 → 手机连接」里那条设备还在，要断去电脑上断开。
+            取消配对只清这台手机上的记录，电脑端不受影响。
           </p>
         </div>
       </section>
@@ -188,7 +276,7 @@
       <p id="status" class="status" hidden></p>
     </main>
 
-    <!-- 扫码遮罩：铺满全屏，video 垫底，取景框和提示浮在上面 -->
+    <!-- 扫码遮罩：铺满全屏，video 垫底，取景框和提示浮在上面（恒深色，相机画面） -->
     <div id="scan" class="scan" hidden>
       <video id="scanVideo" class="scan-video" playsinline muted autoplay></video>
       <div class="scan-top">

@@ -53,10 +53,24 @@
     --mb-r-bubble: 16px;    /* 气泡 */
     --mb-r-pill: 22px;      /* 输入条胶囊 */
 
-    --mb-nav: 44px;         /* 导航栏 */
+    /*
+     * 导航栏（列表页 .list-head / 聊天页 .chat-head 共用这一个高度）。
+     * 2026-11-05 用户「导航栏高度增加」：44 → 52。
+     * 44 是 iOS 的基准值，但那需要配大标题或更紧的字号；这里名字是 17px 粗体、
+     * 右边还挂着 44×44 的图标热区，44 高时上下只剩 0 余量，看着就是"贴边"。
+     * 52 给上下各留 4px 呼吸，热区仍居中，不破坏 44pt 触控下限。
+     */
+    --mb-nav: 52px;
     --mb-pad: 16px;         /* 左右基准边距（微信同款） */
     --mb-avatar: 48px;
-    --mb-tab: 50px;         /* 底部导航（不含安全区） */
+    /*
+     * 底部 tab 栏（不含安全区）。2026-11-05 用户「底部 tab 栏增高」：50 → 56。
+     * iOS UITabBar 标准是 49，但那套图标是 25/26 且文字 10；这里图标 24、文字 10.5，
+     * 49 高时图标+文字把栏塞满，图标顶边几乎贴 hairline。56 让图标上留 7px、
+     * 文字下留 8px，热区仍是整格（远大于 44pt），不影响可用性。
+     * 双主题共用这一个值：原来深色单独给 49 是有意压 1px，现在基数抬了就不再分叉。
+     */
+    --mb-tab: 56px;
 
     /*
      * 分组卡页（通讯录首页 / 设置页）的页底：比行再暗一档，白卡才浮得起来。
@@ -102,7 +116,11 @@
 
   /* 详情展开 = 列表让位（列表 DOM 常驻，只是不显示 —— 返回时滚动位置还在） */
   body.mb-detail-open .list-panel { display: none; }
-  body.mb-detail-open { grid-template-rows: 44px minmax(0, 1fr); }
+
+  /* 第一行给返回栏，高度与首页导航栏同档（2026-11-05 用户：「详情页也拉到 52 同高」）：
+     原来写死 44px，且 .mb-backbar 自己还带 safe-area 的 padding-top —— 刘海机上
+     内容区只剩 44-safe，比首页那三条栏矮一截，进详情像换了个 App。 */
+  body.mb-detail-open { grid-template-rows: calc(var(--mb-nav, 52px) + env(safe-area-inset-top, 0px)) minmax(0, 1fr); }
   body.mb-detail-open main { grid-row: 2; }
 
   /* 没进详情时主区藏掉 —— 否则消息空态会和列表抢一层 */
@@ -213,13 +231,39 @@
     background: var(--mb-surface, var(--side));
   }
 
-  /* 整页视图的头（工作台 / 专家库 / 看板）：没有左栏，头就是页面的导航栏 */
+  /*
+   * 整页视图的头（工作台 / 专家库 / 看板）：没有左栏，头就是页面的导航栏。
+   * 与列表页 .list-head（§16.2）同规格 —— 2026-11-05 用户：「工作台、通讯录、消息
+   * 的导航栏风格怎么不一致」：列表页已经是"52 高玻璃栏 + 居中标题 + hairline"，
+   * 工作台还是桌面那套"50 高白底左对齐无线"，三个 tab 摆一起像三个 App。
+   * 统一到同一档：高度走 --mb-nav（一处调全局跟）、玻璃底、标题居中 17/600、
+   * 底线用同一条 0.5px hairline。
+   */
   body.no-list .detail-head {
-    height: calc(50px + env(safe-area-inset-top, 0px));
+    height: calc(var(--mb-nav, 52px) + env(safe-area-inset-top, 0px));
+    padding: 0 var(--mb-pad, 16px);
     padding-top: env(safe-area-inset-top, 0px);
     box-sizing: border-box;
-    background: var(--mb-surface, var(--side));
+    background: var(--mb-nav-glass, var(--side));
+    border-bottom: 0;
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    backdrop-filter: blur(20px) saturate(180%);
   }
+  /* hairline：与列表页/聊天头同一条线。detail-head 是 sticky（定位元素），absolute 直接贴它 */
+  body.no-list .detail-head::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 0.5px;
+    background: var(--mb-hairline, var(--line));
+    pointer-events: none;
+  }
+  /* 标题居中 + 17/600：与 .list-head 的标题同一档（head-title 本来就 flex:1，转居中即可；
+     带 .head-actions 的整页（插件面板等）标题在剩余空间居中 —— 和列表页标题＋绝对定位钮同款结构） */
+  body.no-list .detail-head .head-title { justify-content: center; }
+  body.no-list .detail-head .head-title > b { font-size: 17px; font-weight: 600; }
 }
 
 /* ============================================================ 4. 列表行（通栏 + 内缩分割线） */
@@ -552,8 +596,53 @@
   .mb-az span.on { color: var(--accent); font-weight: 700; }
 }
 
-/* ============================================================ 4c. 设置（微信设置页版式） */
+/* ============================================================ 4b. 「＋」菜单（导航栏下方下拉） */
 
+/*
+ * 位置**跟桌面那只下拉完全一致**（右缘 16px、导航栏底 - 4px 起）——
+ * 用户 2026-11-06 明确："不要改变原来的位置"。
+ *
+ * 真机那只"半透明 / 只画出一截"的毛病不在样式，在**挂载点**：
+ * 菜单原来 append 在 `.list-head` 里，而手机端导航栏带 backdrop-filter（玻璃栏 = 合成层），
+ * Android WebView 会把溢出合成层的子元素裁掉不画。JS 已改成挂 body + position:fixed
+ * 按视口坐标摆（见 contacts.mjs openAddMenu），这里只补手机端的观感：
+ * 实底（跟导航栏同一档 --mb-surface，别用 --panel 那档深色）、发丝描边、浮起阴影。
+ */
+@media (max-width: 900px) {
+  .add-menu {
+    /* JS 会写 inline 的 top/left/right；这里只钉死形态，不用 top:100% 那套（那是给 .list-head 当定位祖先的） */
+    position: fixed;
+    z-index: 45;
+    top: auto;
+    width: 196px;   /* 单行菜单（图标 + 名称）用不到 268：2026-11-06 用户"通讯录那个也窄一些" */
+    max-width: calc(100vw - 32px);
+    padding: 6px;
+    background: var(--mb-surface, var(--panel));
+    border: 0.5px solid var(--mb-hairline, var(--line));
+    border-radius: 12px;
+    box-shadow: 0 16px 44px rgba(0, 0, 0, .24), 0 2px 8px rgba(0, 0, 0, .10);
+    transform-origin: 100% 0;
+    animation: mb-menu-in .13s ease-out;
+  }
+  /*
+   * 单行菜单（2026-11-06 用户："发起群聊、添加数字员工下面的说明文案不要"）：
+   * 副标题已从 DOM 里去掉，行只剩「图标 + 名称」—— 高度按 44pt 热区定，
+   * 文字 15px、图标与文字垂直居中（原来两行时靠的是文本块自身高度）。
+   */
+  .add-menu button { padding: 0 12px; gap: 12px; min-height: 44px; border-radius: 9px; }
+  .add-menu button:active { background: var(--hover); }
+  .add-menu .ico { width: 22px; height: 22px; }
+  .add-menu .ico svg { width: 21px; height: 21px; }
+  .add-menu .txt b { font-size: 15px; }
+  /* 危险项（定时派活详情页 ⋯ 菜单的「删除」）：整行红，跟桌面同一语义 */
+  .add-menu button.is-danger .txt b, .add-menu button.is-danger .ico { color: var(--mb-unread, var(--bad)); }
+}
+
+/* 从「＋」那一角张开的微动效：只做位移+淡入，不缩放（缩放会让 268px 的卡在低端机上糊一帧） */
+@keyframes mb-menu-in {
+  from { opacity: 0; transform: translateY(-5px); }
+}
+/* ============================================================ 4c. 设置（微信设置页版式） */
 /*
  * 2026-10-31 用户："设置这个页面不应该做成折叠，应该参考微信设置页的做法"。
  *
@@ -794,7 +883,7 @@
   justify-items: center;
   align-content: center;
   gap: 3px;
-  min-height: 50px;
+  min-height: var(--mb-tab, 56px);
   border: 0;
   background: transparent;
   color: var(--dim, #8a9096);
@@ -818,10 +907,16 @@
  * `.wb-grid / .wb-tile`（js/experts.mjs 的 wbCard）—— 规则从上线起就是空转，
  * 手机上一直是"一屏 8 张独立白卡"。这里全部改到真实类名。
  *
- * 版式按 iOS 设置页：分组标题在卡片**外面**（灰字），卡内是通栏行 + 内缩分割线。
+ * 版式 2026-11-06 二改（用户："项目标题跟阴影区的间隙太小…最好的方式就是去掉外部的阴影区"）：
+ * 原来 iOS 分组页那套（灰底 + 分组一整张白卡）让灰底看着像卡片外圈的大阴影 —— 撤掉。
+ * 浅色页底改**白**，磁贴各自成卡（浅描边 + 圆角 + 间隙）；深色仍是黑底浅卡，靠描边区分。
+ * 分组标题照旧在卡片外面，标题与卡的间距归 10px。
  */
 @media (max-width: 900px) {
-  .detail-body.wb-page { padding: 0 0 24px; }
+  /* 上内边距 20px：标题 ↔ 顶部导航栏的呼吸位。用容器的 padding 而不是标题的
+     margin-top —— 容器无上内边距/边框时，首个子元素的 margin-top 会穿透折叠，
+     空间被吞掉（2026-11-06 用户："我说的是上边距"） */
+  .detail-body.wb-page { padding: 20px 0 24px; }
 
   .wb-page .wb-sec {
     margin: 26px var(--mb-pad, 16px) 8px;
@@ -832,36 +927,33 @@
     letter-spacing: 0;
     color: var(--dim);
   }
-  .wb-page .wb-sec:first-child { margin-top: 14px; }
+  /* 首组标题贴住容器的上内边距（间距由 .wb-page 的 padding-top 给，见上） */
+  .wb-page .wb-sec:first-child { margin-top: 0; }
 
   /*
-   * 卡内是通栏行 + 分割线（iOS 设置页的语法）。
-   * ⚠️ **不能给容器加 overflow: hidden 来裁圆角**：插件磁贴的角标骑在图标左上角外侧，
-   *    裁了之后第一张卡的角标会被切掉一半，看着像图标缺了个角（改版时实测）。
-   *    改成给首尾行各自补圆角。
+   * 磁贴**各自成卡**：一列排开、卡间留 10px 间隙 —— 不再是一组拼一整张。
+   * 容器只管间距，底色 / 圆角 / 描边全部下沉到每块磁贴（.wb-tile）。
+   * （旧版"首尾行各自补圆角"那条的顾虑 —— 角标骑在图标外沿怕被 overflow 裁掉 ——
+   *   随整卡容器一起消失：现在没有任何容器裁切，角标爱探多远探多远。）
    */
   .wb-page .wb-grid {
-    display: flex;
-    flex-direction: column;
-    gap: 0;
+    display: grid;
+    grid-template-columns: 1fr;   /* 手机一列；桌面（>900）仍走 auto-fill 那套 */
+    gap: 10px;
     margin: 0 var(--mb-pad, 16px);
-    background: var(--mb-surface, var(--panel));
-    border-radius: var(--mb-r-card, 12px);
+    background: transparent;
+    border-radius: 0;
   }
 
   .wb-page .wb-tile {
-    border: 0;
-    border-radius: 0;
-    background: transparent;
+    border: 0.5px solid var(--mb-hairline, var(--line));
+    border-radius: var(--mb-r-card, 12px);
+    background: var(--mb-surface, var(--panel));
     padding: 12px 14px;
     gap: 12px;
     box-shadow: none;
     transform: none;
   }
-  .wb-page .wb-tile:first-child { border-radius: var(--mb-r-card, 12px) var(--mb-r-card, 12px) 0 0; }
-  .wb-page .wb-tile:last-child { border-radius: 0 0 var(--mb-r-card, 12px) var(--mb-r-card, 12px); }
-  .wb-page .wb-tile:only-child { border-radius: var(--mb-r-card, 12px); }
-  .wb-page .wb-tile + .wb-tile { border-top: 1px solid var(--line); }
   .wb-page .wb-tile:active { background: var(--mb-press, var(--active)); }
 
   .wb-page .wb-name { font-size: 16px; }
@@ -949,11 +1041,10 @@
 
   .input-wrap {
     display: grid;
-    /* mic 这一列只有手机壳里才有按钮（voice.mjs 注入），桌面浏览器上宽度自动为 0 */
-    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    grid-template-columns: auto minmax(0, 1fr) auto;
     grid-template-areas:
-      "plus text mic send"
-      "strip strip strip strip";
+      "plus text send"
+      "strip strip strip";
     align-items: end;
     column-gap: 2px;
     row-gap: 4px;
@@ -1020,14 +1111,76 @@
   }
   .input-tools #send:active { filter: brightness(.92); }
 
-  /* 语音按钮占 mic 列（只在手机壳里存在，见 js/voice.mjs） */
-  .input-tools .voice-btn {
-    grid-area: mic;
-    align-self: end;
-  }
+  /* 「续 @」胶囊（chat.mjs）：手机上放大到拇指档 —— 16px 字、更大的 ✕ 热区 */
+  .sticky-mention { font-size: 14px; margin: 0 2px 8px; }
+  .sticky-mention .sm-at { padding: 6px 14px; }
+  .sticky-mention .sm-x { width: 26px; height: 26px; font-size: 13px; }
 
   /* 附件条（选了文件之后那排缩略图）横跨整条胶囊 */
   .att-strip { grid-area: strip; }
+
+  /* ── ＋ 菜单 → 底部抽屉（2026-11-05 用户："点击+号不要弹出卡片，改成打开底部抽屉"）
+
+     桌面那颗朝上弹的小 popover（style.css .attach-menu）在手机上是反模式：目标小、
+     悬在拇指上方、没有蒙层。按 PRD「关键弹窗改为底部抽屉」的同一套语言（dialog
+     贴底 + ::backdrop 那条）重做成 action sheet。DOM 与 hidden 开关一概不动 ——
+     还是 #attachMenu，app.mjs 的开合逻辑照旧。
+
+     蒙层是菜单自己的 ::before：伪元素不是事件目标，点蒙层的 target 落回
+     #attachMenu 本体 —— app.mjs 的收起判定按这个补了一条（点本体 = 收）。 */
+  .attach-menu {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 70; /* 压过 tabbar / backbar（60） */
+    min-width: 0;
+    display: grid;
+    gap: 8px;
+    padding: 14px 12px calc(12px + env(safe-area-inset-bottom, 0px));
+    border: 0;
+    border-radius: 18px 18px 0 0;
+    background: var(--mb-surface, var(--panel));
+    box-shadow: 0 0 0 0.5px color-mix(in srgb, var(--text) 10%, transparent),
+                0 -12px 36px rgb(0 0 0 / .25);
+    animation: mb-attach-up .2s ease-out;
+  }
+  .attach-menu::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: rgb(0 0 0 / .45);
+    z-index: -1;
+    animation: mb-attach-fade .2s ease-out;
+  }
+  /* 抓手：底部抽屉的标配暗示「这条可以往下捋」（实际收起走点蒙层 / 点按钮） */
+  .attach-menu::after {
+    content: '';
+    position: absolute;
+    top: 6px;
+    left: 50%;
+    width: 36px;
+    height: 4px;
+    border-radius: 2px;
+    transform: translateX(-50%);
+    background: color-mix(in srgb, var(--text) 18%, transparent);
+  }
+  .attach-menu .item {
+    padding: 15px 16px;
+    border-radius: 14px;
+    font-size: 16px;
+    text-align: center;
+    background: var(--mb-fill, var(--input));
+  }
+  .attach-menu .item:active { filter: brightness(.94); }
+  /* 滑入动画只能动 bottom 不能动 transform/translate —— 菜单一旦带变换就成了
+     自己 ::before（fixed 蒙层）的包含块，动画那 200ms 蒙层会缩成贴纸再突然铺开 */
+  @keyframes mb-attach-up {
+    from { bottom: -30%; opacity: .4; }
+  }
+  @keyframes mb-attach-fade {
+    from { opacity: 0; }
+  }
 }
 
 /* ============================================================ 9. 600px 档：紧凑化 */
@@ -1141,7 +1294,27 @@
   body.mb-detail-open .mb-backbar {
     display: flex;
     grid-row: 1;
-    background: var(--mb-surface, var(--side));
+    /*
+     * 与首页导航栏同规格（2026-11-05 用户：「详情页也拉到 52 同高」＋ 三 tab 顶栏统一）：
+     * 底色从实底 --mb-surface 换成 --mb-nav-glass 玻璃、底边从 1px 换成 0.5px hairline。
+     * 高度不写在这 —— 由 body.mb-detail-open 的网格首行（--mb-nav + 安全区）决定，
+     * 跟列表页/聊天头/整页头同一个 token，免得四处各写一个数字。
+     */
+    background: var(--mb-nav-glass, var(--side));
+    border-bottom: 0;
+    position: relative;
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    backdrop-filter: blur(20px) saturate(180%);
+  }
+  body.mb-detail-open .mb-backbar::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 0.5px;
+    background: var(--mb-hairline, var(--line));
+    pointer-events: none;
   }
 
   /*
@@ -1574,134 +1747,3607 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
   body.mb-narrow .mb-set-card .item.mb-set-back .line1 b { font-size: 15px; font-weight: 500; }
 }
 
-/* ============================================================ 15. 语音输入（2026-11-01）
+/* ── 15b. 「我的」手机 iOS 风试点（2026-11-05）─────────────────────────
 
-   只在手机壳里出现（voice.mjs 探测到 window.__BandiSpeech 才插按钮），
-   所以这里不写 @media —— 平板/横屏同样按这套走。
+   用户："现在的手机页面显得太线性化，跟主流的 APP（豆包、抖音、美团等）风格不太
+   一样。手机端改成 iOS 风是不是更好呢？先改我的页面，我看看效果。"
 
-   浮层是一张压在输入条上方的小卡片：左边一个红点在跳（在听）、中间五根音量柱、
-   一行状态字，右边「取消」。它**不遮输入框** —— 识别出来的字实时写在框里，
-   遮住就等于让用户看不见自己在说什么。 */
+   "线性"指的是：整宽色块一条条往下摞，每块等宽等重等圆角，从上到下没有视觉锚点。
+   这轮不动 DOM、不动白名单（手机仍然只有身份卡 + 设备卡 + 退场行），只把这几块
+   按 iOS 个人中心页的语法重新排版：
 
-.voice-btn {
-  width: 34px;
-  height: 34px;
-  padding: 0;
-  border: 0;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  color: var(--dim);
-  background: transparent;
-  flex: none;
-  transition: color .15s ease, background .15s ease;
+   ① hero 承担视觉重心 —— 身份卡脱掉"卡"状态升格为通栏渐变 hero：顶部双 radial
+      accent 辉光，向下淡入分组卡页底（--mb-cvbg），头像居中放大（62→78，带光环），
+      名字 20→22。豆包/美团个人中心的头部就是这个读法。
+   ② 卡片"浮"起来 —— hero 之后的第一张卡用负 margin 压到渐变下缘，形成
+      "彩色头部 + 白卡上浮"的前后层次，线性感的正解就在这一步。
+   ③ iOS 分组细节 —— 组头改成卡外 13px 常规字重灰字（与 .mb-set-head 同字阶）、
+      分割线内缩到文字沿、退场行居中放大（iOS 设置页"退出登录"那行居中红字的读法）、
+      按压反馈走 --mb-press。
+
+   桌面零改动：全部挂在 body.mb-narrow；与 §15 顶上那批规则撞车的，靠本节
+   靠后（同特异性后来赢）覆盖。
+*/
+@media (max-width: 900px) {
+  /* ① 通栏 hero：负 margin 反吃 detail-body 的 20/24 内边距，渐变铺到屏幕边；
+        顶部留 safe-area。2026-11-06 重设计（用户："头像在左，姓名在右的那种"）：
+        竖排居中 hero 改成横排 —— 渐变只做一层薄薄的背景，头像贴左、身份信息贴右，
+        高度收掉（78 头像+双行 → 64 头像单行块），页面更早进入卡片列表，不再一屏
+        只看到一个大头像。 */
+  body.mb-narrow #settingsView .me-hero-sec {
+    margin: -20px -24px 0;
+    padding: calc(20px + env(safe-area-inset-top, 0px)) 20px 52px;
+    background:
+      radial-gradient(90% 76% at 80% -14%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 60%),
+      radial-gradient(130% 90% at 20% -20%, color-mix(in srgb, var(--accent) 24%, transparent), transparent 56%),
+      var(--mb-cvbg, var(--mb-page, var(--bg)));
+  }
+
+  /* 身份信息横排：头像在左，姓名/身份章/说明贴右、左对齐（iOS 设置页个人资料行
+     的读法；桌面 .me-hero-card 本来就是这个结构，这里不再改成竖排） */
+  body.mb-narrow #settingsView .me-hero-sec .me-hero-card {
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    align-items: center;
+    gap: 14px;
+    padding: 2px 0 0;
+    text-align: left;
+  }
+  body.mb-narrow #settingsView .me-hero-sec .me-ava {
+    width: 64px;
+    height: 64px;
+    line-height: 64px;
+    font-size: 26px;
+    /* 光环：一圈极淡的"环"压在头像外 —— 把头像从渐变底上托出来，深浅主题
+       都成立；落影给"浮在页上"的立体感 */
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--text) 8%, transparent),
+                0 8px 22px color-mix(in srgb, var(--accent) 30%, transparent);
+  }
+  body.mb-narrow #settingsView .me-hero-sec .me-who { align-items: flex-start; gap: 3px; }
+  body.mb-narrow #settingsView .me-hero-sec .me-name { justify-content: flex-start; }
+  body.mb-narrow #settingsView .me-hero-sec .me-name b { font-size: 21px; }
+  /* 2026-11-05 用户："字体粗细呢" —— 身份章 400 → 500：主流 App 的 badge 都是
+     中黑档，400 在深色底上发飘；名字 600 / 行文字 400 是 iOS 档，不动 */
+  body.mb-narrow #settingsView .me-hero-sec .me-role { font-weight: 500; }
+  /* 说明行：13.5 次色一行 —— 横排后它是姓名底下的副行，比竖排时代的 14 收半档 */
+  body.mb-narrow #settingsView .me-hero-sec .me-meta { font-size: 13.5px; }
+
+  /* 字阶对齐主流 App（同上反馈）：属性行 15/14 → 16/15（微信/美团"标签+详情"
+     行的读法，iOS 表格行是 17），等宽地址 13 → 14 —— 再大就顶到换行了 */
+  body.mb-narrow #settingsView .me-k { font-size: 16px; }
+  body.mb-narrow #settingsView .me-v { font-size: 15px; }
+  body.mb-narrow #settingsView .me-v-mono { font-size: 14px; }
+
+  /* ② 卡片上浮：hero 之后的第一张卡（设备形态 = 「这台设备」，账号形态 = 退场行）
+     压上渐变下缘（20px 分节距 - 36px 负 margin = 净上浮 16px）；relative 把它
+     抬到 hero 背景之上 */
+  body.mb-narrow #settingsView .me-hero-sec + .set-sec {
+    position: relative;
+    margin-top: -36px;
+  }
+
+  /* ③ 组头改"卡外灰小字"：跟设置页 .mb-set-head 同字阶 —— 它是分组名，
+     不是标题，13px 常规字重 */
+  body.mb-narrow #settingsView .me-dev-sec .set-head b {
+    font-size: 13px;
+    font-weight: 400;
+    color: var(--dim);
+  }
+
+  /* 属性行分割线内缩到文字沿（iOS 分组列表同读法）：border 退掉换 ::before，
+     position:relative 由 .me-kv 自带锚定 */
+  body.mb-narrow #settingsView .me-kv { position: relative; }
+  body.mb-narrow #settingsView .me-kv + .me-kv { border-top: 0; }
+  body.mb-narrow #settingsView .me-kv + .me-kv::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 16px;
+    right: 0;
+    height: 1px;
+    background: var(--line);
+  }
+
+  /* 退场行 iOS 读法：居中、加大、整行可点 —— "走人"的分量由居中红字给，
+     不靠按钮色块；按压反馈照 App 的规矩来。17 = iOS 表格行字阶（2026-11-05
+     用户反馈"字体偏小"后从 16 提上来） */
+  body.mb-narrow #settingsView .me-out {
+    padding: 15px 16px;
+    font-size: 17px;
+    font-weight: 500;
+    text-align: center;
+  }
+  body.mb-narrow #settingsView .me-out:active { background: var(--mb-press, var(--active)); }
+  body.mb-narrow #settingsView .me-out-danger:active {
+    background: color-mix(in srgb, var(--bad) 10%, transparent);
+  }
+
+  /* ④ 外观卡（2026-11-05 用户：「我的页面加一个主题选择的功能」，同日改：
+        「也改成这种选项卡的方式」= 桌面偏好设置那张「主题 + 分段选项卡」的截图）。
+        卡面与「这台设备」同款；一行 layout：左标签 16px、右侧 .seg 分段 ——
+        结构与桌面 .set-row + .seg 完全一致，只是尺寸按手机档放大。 */
+  body.mb-narrow #settingsView .me-theme-box {
+    border: 0;
+    border-radius: var(--mb-r-card, 12px);
+    background: var(--mb-surface, var(--side));
+    box-shadow: 0 0 0 0.5px color-mix(in srgb, var(--text) 9%, transparent);
+    overflow: hidden;
+  }
+  body.mb-narrow #settingsView .me-theme-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: 52px;
+    padding: 8px 16px;
+    box-sizing: border-box;
+  }
+  body.mb-narrow #settingsView .me-theme-label {
+    font-size: 16px;
+    line-height: 1.35;
+    color: var(--text);
+    flex: none;
+  }
+  /* 分段控件：底座 = 按压色一档灰（比卡面沉一点），选中格 = 卡面白浮起 ——
+     桌面 .seg 同一读法；触控目标压到 32 高（行 52 里上下留白，热区不小） */
+  body.mb-narrow #settingsView .me-theme-seg {
+    flex: none;
+    gap: 2px;
+    padding: 2px;
+    border: 0;
+    border-radius: 9px;
+    background: var(--mb-press, var(--active));
+  }
+  body.mb-narrow #settingsView .me-theme-seg button {
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--mb-text-2, var(--dim));
+    font: inherit;
+    font-size: 13px;
+    line-height: 1;
+    padding: 9px 13px;
+    min-height: 32px;
+    box-sizing: border-box;
+    cursor: pointer;
+  }
+  body.mb-narrow #settingsView .me-theme-seg button:active { opacity: .6; }
+  body.mb-narrow #settingsView .me-theme-seg button.on {
+    background: var(--mb-surface, var(--panel));
+    color: var(--text);
+    font-weight: 500;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.14);
+  }
+  body.mb-narrow #settingsView .me-theme-sec .set-head { margin-bottom: 7px; }
+  body.mb-narrow #settingsView .me-theme-sec .set-head b {
+    font-size: 13px;
+    font-weight: 400;
+    color: var(--dim);
+  }
+
+  /* ⑤ 通用 · 清除缓存（2026-11-06）：卡面复用「这台设备」的 .me-dev-box，
+        行是 .me-kv 的 button 形态 —— 按钮默认样式全退掉，触控目标抬到 52 高，
+        按压反馈走 --mb-press；行尾体积数字用第三档灰（它是数据不是文字）。 */
+  body.mb-narrow #settingsView .me-cache-sec .set-head { margin-bottom: 7px; }
+  body.mb-narrow #settingsView .me-cache-sec .set-head b {
+    font-size: 13px;
+    font-weight: 400;
+    color: var(--dim);
+  }
+  body.mb-narrow #settingsView button.me-cache-row {
+    display: flex;
+    width: 100%;
+    min-height: 52px;
+    box-sizing: border-box;
+    padding: 13px 16px;
+    border: 0;
+    background: transparent;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  body.mb-narrow #settingsView button.me-cache-row:active {
+    background: var(--mb-press, var(--active));
+  }
+  body.mb-narrow #settingsView .me-cache-row .me-v {
+    color: var(--mb-text-3, var(--dim));
+    white-space: nowrap;
+  }
+  body.mb-narrow #settingsView .me-cache-row .me-chevron {
+    flex: 0 0 auto;
+    color: var(--mb-text-3, var(--dim));
+    font-size: 20px;
+    line-height: 1;
+    transform: translateY(-1px);
+  }
 }
-.voice-btn:hover { color: var(--text); background: var(--hover); }
-.voice-btn.is-on {
-  color: #fff;
-  background: var(--bad, #c0504d);
-}
-.voice-btn.is-on svg { animation: voice-breathe 1.4s ease-in-out infinite; }
-@keyframes voice-breathe {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: .72; transform: scale(.92); }
+/*
+ * ══════════════════════════════════════════════════════════════════════════════
+ * mobile-patch.css —— 消息页 iOS 化（视觉 Phase 1 + 体验 Phase 2）补丁片段
+ * ══════════════════════════════════════════════════════════════════════════════
+ *
+ * 用法：**追加到 apps/web/mobile.css 末尾**（section 15 之后），文件里已经排好
+ * 分节号（16.x），追加即生效，不需要改 index.html 或其他地方。
+ *
+ * 三条铁律（沿用 mobile.css 的）：
+ *   ① 全部规则关在 @media (max-width: 900px) 里 —— 桌面端一个像素都不动；
+ *   ② 每处 var() 都带桌面兜底值（var(--mb-text-2, var(--dim)) 这种）——
+ *      就算这段被单独摘出来、或者 token 块没跟着搬，引用处也不会失效成"白色/透明"；
+ *   ③ 颜色只从 --mb-* 出，规则里**不出现十六进制**（值全部集中在 16.0 的 token 块）。
+ *
+ * 为什么这份补丁能赢过原有规则：它追加在文件末尾，同特异性下后写的胜。
+ * 个别地方（.ctx-menu 的 left/top 是 JS 写内联样式）只能靠 !important，见 16.12。
+ * ══════════════════════════════════════════════════════════════════════════════
+ */
+
+/* ============================================================ 16.0 token 修订 */
+
+/*
+ * 这一块**覆盖** §0 的同名 token（后写的胜），不是并列新增 —— 两套值同时成立会让
+ * "到底是哪档灰"永远说不清。
+ *
+ * 与 §0 的差异，一句话说清为什么：
+ *   · --mb-surface 从 var(--panel)（深 #111214）提到 #1C1C1E：iOS 深色的卡面是
+ *     secondarySystemGroupedBackground，比"自定义深灰"亮一档，行与行之间才分得开；
+ *   · --mb-page 深色取**纯黑**：消息页的底就该是最深的（微信/iMessage 都这样），
+ *     灰底留给通讯录/设置那种"卡片浮在灰上"的页面；
+ *   · --mb-chatbg 改纯白/纯黑：灰气泡要浮在这层上，底灰一深气泡就糊了；
+ *   · --mb-fill / --mb-press 从 color-mix 换成 iOS 官方那两个 rgba：color-mix 的
+ *     基色是 --text，浅色下混出来偏黑、深色下偏白，同一套公式跨主题不成立
+ *     （视觉规范 §2.1 结论），所以分主题各写一档；
+ *   · 新增 --mb-text/-2/-3：淘汰 --dim 那种"独立灰"。透明度派生的好处是同一档
+ *     文字压在任何面色上都自动成立，浅色白卡不发虚、深色卡面不发亮；
+ *   · 新增 --mb-tint：移动端交互色与桌面 --accent 有意分档（桌面 #0066CC 是为
+ *     "白字压蓝按钮"选的值；这里 tint 只用于图标/返回/选中/17px 文字）。
+ */
+@media (max-width: 900px) {
+  :root {
+    /* ── 深色（默认档，跟 :root 一致） ── */
+    --mb-page: #000000;
+    --mb-surface: #1C1C1E;
+    --mb-fill: rgba(120, 120, 128, 0.24);
+    --mb-press: rgba(120, 120, 128, 0.36);
+    --mb-chatbg: #000000;
+    --mb-nav-glass: rgba(28, 28, 30, 0.72);
+    --mb-hairline: rgba(84, 84, 88, 0.65);
+    --mb-text: #FFFFFF;
+    --mb-text-2: rgba(235, 235, 245, 0.60);
+    --mb-text-3: rgba(235, 235, 245, 0.38);
+    --mb-tint: #0A84FF;
+    --mb-bubble-me: #0071E3;
+    --mb-bubble-them: #2C2C2E;
+    --mb-online: #30D158;
+    --mb-unread: #FF453A;
+    --mb-scrim: rgba(0, 0, 0, 0.55);
+    /* 键盘面板色（2026-11-06 用户「输入卡要和键盘一个颜色」）：抽屉展开态的输入区
+       染成这个色，跟系统键盘接缝处不分你我。深色键盘面板 ≈ #1C1C1E（Gboard/搜狗
+       深色档都在这附近，正好与 --mb-surface 同值，系统内自洽）。 */
+    --mb-kb: #1C1C1E;
+
+    /* ── 几何：双主题共用（只改两处校准 + 一个新增） ── */
+    --mb-r-ava: 12px;        /* 头像圆角 10 → 12（跟卡片同档，视觉规范 2.4） */
+    --mb-r-bubble: 18px;     /* 气泡 16 → 18（iMessage/微信实测档，16 略方） */
+    /*
+     * tab 栏高度不再在这里覆写：深色原来单独给 49（比浅色矮 1px），
+     * 2026-11-05 基数抬到 56 后这 1px 的差没意义，反而让两主题切换时栏高跳动。
+     * 统一回 §16 的 --mb-tab。
+     */
+
+    /* ── 双主题共用色：只跟"压在什么底色上"有关，跟明暗无关 ── */
+    --mb-on-bubble: #FFFFFF;                 /* 白字压蓝（气泡 / 发送钮 / 角标） */
+    --mb-code-them: rgba(0, 0, 0, 0.06);     /* 灰气泡里的代码块：压深一档 */
+    --mb-code-me: rgba(255, 255, 255, 0.16); /* 蓝气泡里的代码块：压白一档 */
+    /*
+     * 发送钮底色 = 气泡蓝的别名。白字压蓝的对比只取决于那个蓝，与主题无关，
+     * 所以两主题共用 #0071E3（白字 4.70:1）；--mb-tint 不动（它是给图标/文字用的
+     * #007AFF / #0A84FF，非文本 3:1 达标，17px 中文可读）。
+     */
+    --mb-btn-send: var(--mb-bubble-me);
+  }
+
+  /* ── 浅色 ── */
+  :root[data-theme='light'] {
+    --mb-page: #F2F2F7;
+    --mb-surface: #FFFFFF;
+    --mb-fill: rgba(118, 118, 128, 0.12);
+    --mb-press: rgba(118, 118, 128, 0.22);
+    --mb-chatbg: #FFFFFF;
+    --mb-nav-glass: rgba(242, 242, 247, 0.72);
+    --mb-hairline: rgba(60, 60, 67, 0.12);
+    --mb-text: #000000;
+    /* 0.60 压白面只有 3.4:1（14px 预览文字不达 AA）→ 0.72 ≈ #737373，4.8:1。
+       只动一个 alpha，iOS 那套"透明度派生"机制不变（拍板 A）。 */
+    --mb-text-2: rgba(60, 60, 67, 0.72);
+    /* 0.30 在 12px 时间戳上过虚 → 0.38（拍板 A） */
+    --mb-text-3: rgba(60, 60, 67, 0.38);
+    --mb-tint: #007AFF;
+    --mb-bubble-me: #0071E3;
+    --mb-bubble-them: #E9E9EB;
+    --mb-online: #34C759;
+    --mb-unread: #FF3B30;
+    --mb-scrim: rgba(0, 0, 0, 0.4);
+    /* 浅色键盘面板 ≈ 纯白（国产输入法浅色档面板都在 #FFF~#F7F7F7），取白。 */
+    --mb-kb: #FFFFFF;
+  }
 }
 
-.voice-layer {
+/* ============================================================ 16.1 全局触感 */
+
+@media (max-width: 900px) {
+  /*
+   * 字体栈与三件套。style.css 的栈里没有 PingFang/Noto CJK 的显式档，
+   * 安卓 WebView 会掉到思源黑体的默认字重上，跟 iOS 观感差一截 —— 这里补齐。
+   * letter-spacing 归零：iOS 正文不带字距，之前面包屑那点 .3px 在 17px 标题上会散。
+   */
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    letter-spacing: 0;
+  }
+}
+
+/* ============================================================ 16.2 导航栏（玻璃） */
+
+/*
+ * 视觉规范 §1 第 5 条：实色栏 + 1px 硬线是"最像网页"的部分。
+ * 改成 44px 定高 + 半透明底 + blur(20px) saturate(180%)，底边留给 hairline。
+ *
+ * ⚠️ 现状限制（本轮未动，只记在这儿）：列表页是"栏一行 / 列表一行"的**行布局**，
+ *    内容滚不到栏下面，所以 blur 实际没有东西可糊 —— 视觉上等价于"半透明面"。
+ *    要真做出 iOS 那种"内容从栏下透出来"，得让 #listBody 滚到栏下面
+ *    （栏 position: sticky 或改成 absolute + 列表 padding-top），属于布局层改动，
+ *    等这一版视觉验收通过后再单独一轮。
+ */
+@media (max-width: 900px) {
+  .list-head {
+    /* 左右对称：标题是 flex 居中的，两边内边距不等会把标题挤偏
+       （§3 原来是 52/14，标题实际左移了 19px，#listAction 是绝对定位，不需要那 52px） */
+    padding: var(--mb-safe-top-dummy, 0) var(--mb-pad, 16px) 0 var(--mb-pad, 16px);
+    padding-top: env(safe-area-inset-top, 0px);
+    height: calc(var(--mb-nav, 44px) + env(safe-area-inset-top, 0px));
+    background: var(--mb-nav-glass, var(--side));
+    border-bottom: 0;
+    position: relative;
+    box-sizing: border-box;
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    backdrop-filter: blur(20px) saturate(180%);
+  }
+
+  /* hairline：0.5px 在 dpr2 上正好 1 物理像素；用 ::after 而不是 border-bottom，
+     免得 box-sizing 把 44px 的高度吃走半像素 */
+  .list-head::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 0.5px;
+    background: var(--mb-hairline, var(--line));
+    pointer-events: none;
+  }
+
+  /* 右动作钮：视觉 22px 的 tint 加号，热区补到 44×44（UX §5.1）——
+     透明补，观感不变，拇指够得着。
+     ⚠️ border:0 是必需的（2026-11-05 用户：「＋号不要有边框」）：桌面那套按钮底子
+     给 button 画了 1px var(--line)，这里背景已经透明，只剩那圈线 —— 44×44 的方框
+     挂在标题右边，看着像个没填内容的输入框。手机上这颗钮的语义只有"＋"本身。 */
+  #listAction,
+  #listAction.mini {
+    position: absolute;
+    right: 6px;
+    top: calc(env(safe-area-inset-top, 0px) + var(--mb-nav, 44px) / 2);
+    transform: translateY(-50%);
+    width: 44px;
+    height: 44px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: var(--mb-tint, var(--accent));
+    font-size: 24px;
+    line-height: 1;
+  }
+  #listAction:active { opacity: 0.45; background: transparent; }
+}
+
+/* ============================================================ 16.3 搜索条 */
+
+@media (max-width: 900px) {
+  .list-search { background: var(--mb-surface, var(--side)); }
+
+  .list-search input {
+    background: var(--mb-fill, var(--input));
+    /* ⚠️ 必须撤掉 §3 里那条 data-uri 放大镜：index.html 的 .ls-field 里**已经有**
+         一个 inline SVG 的 .ls-ico，两条一起在就是一行两个放大镜（左 9px + 右 10px）。
+         撤掉写死的 %238d939b 之后，图标颜色跟着 .ls-ico 的 currentColor 走主题 ——
+         这正是视觉规范差异清单 #13 要的结果。 */
+    background-image: none;
+    color: var(--mb-text, var(--text));
+    font-size: 16px;        /* ≥16：iOS 聚焦时不会放大页面 */
+    padding: 0 12px 0 30px;
+  }
+  .list-search input::placeholder { color: var(--mb-text-3, var(--dim)); }
+  .list-search input:focus {
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--mb-tint, var(--accent)) 30%, transparent);
+  }
+  .list-search .ls-ico { color: var(--mb-text-3, var(--dim)); }
+  /* 手机没有物理键盘，Ctrl K 提示在触屏上是一句看不懂的废话 */
+  .list-search .ls-kbd { display: none; }
+}
+
+/* ============================================================ 16.4 会话行 */
+
+/*
+ * 三处修订（视觉规范 3.1 + 差异清单 #6/#7）：
+ *   ① 名字 600 → 500：一屏名字全 600 就没有主次了，微信会话名是常规字重；
+ *   ② 预览文字从 --dim 归 --mb-text-2、时间 12px 归 --mb-text-3：
+ *      iOS 的时间戳永远是最弱一档，弱色比"独立灰"更退后；
+ *   ③ 选中态 --sel（淡蓝）→ --mb-fill（灰）：手机上点进详情列表就藏了，
+ *      持久蓝底没有信息价值；灰是微信/设置页的通行做法。
+ */
+@media (max-width: 900px) {
+  .list-body { background: var(--mb-surface, var(--side)); }
+
+  .item { padding: var(--mb-item-pad, 12px) var(--mb-pad, 16px); }
+
+  /* 分割线换 hairline（替代散落的 --line）：正文色 12% 透明，深浅两套都更准 */
+  .item + .item::before { height: 0.5px; background: var(--mb-hairline, var(--line)); }
+
+  /* 按压：无 transition —— 按下即变、抬起即回，加过渡反而"显肉"（UX §3.1） */
+  .item:active { background: var(--mb-press, var(--active)); transition: none; }
+  .item.active { background: var(--mb-fill, var(--sel)); }
+
+  .item .avatar {
+    border-radius: var(--mb-r-ava, 10px);
+    background: var(--mb-fill, var(--chip));
+    color: var(--mb-text-2, var(--dim));
+    border-color: transparent;
+  }
+
+  .item .line1 b,
+  .item .who > b { font-weight: 500; color: var(--mb-text, var(--text)); }
+  .item .line1 span { font-size: 12px; color: var(--mb-text-3, var(--dim)); font-variant-numeric: tabular-nums; }
+  .item .line2,
+  .item .who > .sub {
+    font-size: 14px;
+    line-height: 19px;
+    margin-top: 3px;
+    color: var(--mb-text-2, var(--dim));
+  }
+
+  /* 状态点只画"正在忙"：在线是常态、离线更不画 —— 一屏灰点全是噪点（UX §2） */
+  .item .line2 .dot.busy { background: var(--mb-online, var(--ok)); animation: none; }
+}
+
+/* ============================================================ 16.5 未读红点（新增） */
+
+/*
+ * 长在头像右上角，不是行右侧 —— 行右侧留给时间（主流 IM 惯例）。
+ * 落位沿用 §4 那颗"忙点"的思路：偏移要压在头像圆角的弧上，不是压在矩形角上。
+ * 18px 的角标取 −9px（圆心正好在角上）：一半在头像里、一半在行底上。
+ *
+ * 2px 的"骑角描边"用 box-shadow ring 画而不是 border：border 会把 18px 吃掉内圈、
+ * 数字被挤，ring 不占宽度 —— 所以 >99 变 "99+" 时宽度只往右长，行高恒 72 不跳。
+ *
+ * ⚠️ 需要一行 JS 配合（CSS 造不出节点）：contacts.mjs 的会话行模板里补
+ *    `<span class="unread" aria-hidden="true">N</span>`（无数字时加 .dot-only）。
+ */
+@media (max-width: 900px) {
+  .item > .unread {
+    position: absolute;
+    left: calc(var(--mb-pad, 16px) + var(--mb-avatar, 48px) - 9px);
+    top: calc(var(--mb-item-pad, 12px) - 9px);
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 9px;
+    display: grid;
+    place-items: center;
+    background: var(--mb-unread, var(--bad));
+    color: var(--mb-on-bubble, var(--on-solid));
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+    /* 骑角描边：颜色必须等于**行面**色，否则白圈会跟着页面底变灰 */
+    box-shadow: 0 0 0 2px var(--mb-surface, var(--side));
+    z-index: 1;
+    pointer-events: none;
+  }
+
+  /* 无数字的未读：8px 纯点（UX §2"未读"）*/
+  .item > .unread.dot-only {
+    left: calc(var(--mb-pad, 16px) + var(--mb-avatar, 48px) - 4px);
+    top: calc(var(--mb-item-pad, 12px) - 4px);
+    min-width: 8px;
+    width: 8px;
+    height: 8px;
+    padding: 0;
+    border-radius: 50%;
+    font-size: 0;
+  }
+}
+
+/* ============================================================ 16.6 归档固定条 */
+
+/*
+ * 低频收件箱不占第一屏，但必须永远可达 —— 固定条不跟列表滚，样式与列表行同语法
+ * （52px 一行、右侧计数 + chevron），这样它读起来是"列表的最后一行"，
+ * 不是一个例外的小按钮。
+ */
+@media (max-width: 900px) {
+  .list-foot {
+    background: var(--mb-surface, var(--side));
+    border-top: 0.5px solid var(--mb-hairline, var(--line));
+    padding: 0 var(--mb-pad, 16px);
+  }
+
+  .arch-entry {
+    height: 52px;
+    gap: 8px;
+    padding: 0;
+    border-radius: 0;
+    font-size: 16px;
+    color: var(--mb-text, var(--text));
+  }
+  .arch-entry svg { color: var(--mb-text-2, var(--dim)); opacity: 1; }
+  /* 计数原来是 chip 底的小胶囊，通栏条里太"卡片"，压成纯文字弱色 */
+  .arch-entry .arch-n {
+    background: none;
+    padding: 0;
+    font-size: 12px;
+    color: var(--mb-text-3, var(--dim));
+  }
+  .arch-entry:active { background: var(--mb-press, var(--active)); }
+}
+
+/* ============================================================ 16.7 底部 tab 栏 */
+
+@media (max-width: 900px) {
+  .mb-tabbar {
+    background: var(--mb-nav-glass, var(--side));
+    border-top: 0;
+    position: relative;
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    backdrop-filter: blur(20px) saturate(180%);
+  }
+  /* 顶边 hairline：跟导航栏/输入条对称，三条栏都用同一种线 */
+  .mb-tabbar::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    height: 0.5px;
+    background: var(--mb-hairline, var(--line));
+    pointer-events: none;
+  }
+
+  .mb-tab {
+    min-height: var(--mb-tab, 56px);
+    gap: 2px;
+    font-size: 10px;
+    font-weight: 500;
+    /* 未选中归次色：--dim 那种独立灰在深色栏上偏亮，会跟选中项抢注意力 */
+    color: var(--mb-text-2, var(--dim));
+  }
+  .mb-tab.active { color: var(--mb-tint, var(--accent)); }
+  .mb-tab.active svg { stroke-width: 2.4; }
+  .mb-tab.active span { font-weight: 600; }
+}
+
+/* ============================================================ 16.8 聊天头 */
+
+@media (max-width: 900px) {
+  body.mb-chat .chat-head {
+    min-height: calc(var(--mb-nav, 44px) + env(safe-area-inset-top, 0px));
+    padding: env(safe-area-inset-top, 0px) 12px 0 4px;
+    /*
+     * 底色跟内容区（.chat）同源（2026-11-05 用户：「顶部导航栏颜色统一成跟内容区一致」）：
+     * 原来用 --mb-nav-glass，浅色下是 #F2F2F7 的半透明玻璃压在纯白消息区上 ——
+     * 一条灰带横在顶上，滚动时还透出气泡，像两套主题拼在一起。
+     * 现在直接取 --mb-chatbg（浅 #FFF / 深 #000），玻璃模糊随之取消（底不透明后没意义）。
+     * 分界只剩那条 0.5px hairline，跟 tab 栏/输入条同一根线。
+     */
+    background: var(--mb-chatbg, var(--bg));
+    border-bottom: 0;
+    position: relative;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  body.mb-chat .chat-head::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 0.5px;
+    background: var(--mb-hairline, var(--line));
+    pointer-events: none;
+  }
+
+  /* 返回 chevron：tint 色 + 44×44 热区（UX §5.1 / §1.3） */
+  .mb-chat-back {
+    width: 44px;
+    height: 44px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    color: var(--mb-tint, var(--accent));
+  }
+  .mb-chat-back:active { opacity: 0.5; }
+
+  body.mb-chat .chat-head .meta { flex: 1 1 auto; min-width: 0; }
+  body.mb-chat .chat-head .meta b { font-size: 17px; font-weight: 600; color: var(--mb-text, var(--text)); }
+
+  /*
+   * 聊天头改版（2026-11-05 用户：「头像去掉、点名字进详情、去掉现在闲着、按钮不要边框」）
+   *
+   * 一行里原来有五个东西：← 头像 名字 状态字 ＋钮 ⟲钮 —— 390px 上名字只剩一百来像素，
+   * 稍长就换行，整条头忽高忽低。这一版按 iOS/微信的语法收成三个：
+   *   ←（44）+ 名字（可点，进详情）+ ＋/⟲（两颗 44 热区、纯图标）。
+   * 头像只在桌面保留（那边横向空间够，头像也是"点进详情"的老入口）。
+   */
+
+  /* 头像：手机上撤掉，名字接管详情入口 */
+  body.mb-chat .chat-head > .head-avatar { display: none; }
+
+  /*
+   * 名字 = 详情入口。第一行做成 flex：名字可收缩截断（长群名不把徽章挤到第二行），
+   * 徽章跟在后面不换行；上下内缩负外边距把点击热区撑到约 44 高，视觉位置不动。
+   */
+  body.mb-chat .chat-head .meta > div:first-child {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+  body.mb-chat .chat-head .head-name {
+    flex: 0 1 auto;
+    min-width: 0;
+    padding: 11px 0;
+    margin: -11px 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  body.mb-chat .chat-head .head-name:active { opacity: 0.45; }
+  /* 徽章在 flex 行里不许收缩，宁可让名字截断 */
+  body.mb-chat .chat-head .meta .badge { flex: none; }
+
+  /*
+   * 群人数 / 已解散：跟在群名后同一行（2026-11-05 用户：「群人数显示在群名后面，不要折行」）。
+   * 上一版是第二行副标题，群里聊天头比单聊高出一截，两条头并排看着不齐。
+   * 现在靠"只有群名可收缩"保证不折行：人数 flex:none + nowrap 钉死宽度，
+   * 名字不够放时截自己（.head-name 的省略号），绝不换行、绝不把动作钮挤走。
+   */
+  body.mb-chat .chat-head .sub {
+    flex: none;
+    font-size: 12px;
+    line-height: 15px;
+    color: var(--mb-text-2, var(--dim));
+    white-space: nowrap;
+  }
+  /* 解散的群：群名不可点（无 head-name 的事件与热区），但同样要能截断不让整行溢出 */
+  body.mb-chat .chat-head .head-name-static {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* 徽章（跑中/完成/失败）压到 10px：跟 17px 的名字并排时不抢行高 */
+  body.mb-chat .chat-head .badge {
+    font-size: 10px;
+    line-height: 15px;
+    padding: 0 6px;
+    border-color: var(--mb-hairline, var(--line));
+  }
+
+  /*
+   * 右侧动作钮：桌面的 button 底子给每颗画了 1px var(--line)，在玻璃头上就是两个方框。
+   * 手机上这颗钮的语义只有图标本身（同 #listAction 的修法），44×44 透明热区。
+   */
+  body.mb-chat .chat-head .icon-btn {
+    flex: none;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    display: grid;
+    place-items: center;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: var(--mb-tint, var(--accent));
+  }
+  body.mb-chat .chat-head .icon-btn:active { opacity: 0.45; }
+  /* 两颗钮各带 13px 内白（18px 图标居中于 44px），再叠 gap 8 就散成 34px；收一点 */
+  body.mb-chat .chat-head .icon-btn + .icon-btn { margin-left: -6px; }
+}
+
+/* ============================================================ 16.9 聊天气泡 */
+
+/*
+ * 从"密排风格的块"（8px 圆角 + 1px 描边 + 白底压白底）改成 iMessage 语法：
+ * 入站灰 #E9E9EB / #2C2C2E，出站系统蓝实底白字，圆角 18，无边框无阴影。
+ *
+ * 为什么必须灰/蓝两档：现在的淡蓝 #eef4fd 让"整页都是蓝的"，主色失去指向性；
+ * 灰 = 别人说的、蓝 = 我说的，语义不用猜。切尾角**不做** —— iMessage 与微信都是
+ * 对称圆角，切角是 Telegram Android 的语汇，还要每侧多维护两套 radius。
+ */
+@media (max-width: 900px) {
+  .chat { background: var(--mb-chatbg, var(--bg)); }
+
+  .bubble {
+    background: var(--mb-bubble-them, var(--panel));
+    color: var(--mb-text, var(--text));
+    border: 0;
+    border-radius: var(--mb-r-bubble, 16px);
+    padding: 9px 13px;
+    font-size: 16px;
+    line-height: 1.5;
+    max-width: 80%;
+    /* 中文标点不落行首（「登录」被拆成两行很难看）；anywhere 管长词，strict 管标点 */
+    line-break: strict;
+  }
+  .row.me .bubble {
+    background: var(--mb-bubble-me, var(--btn-solid));
+    color: var(--mb-on-bubble, var(--on-solid));
+  }
+
+  /* 正文段落贴住气泡（真实现是 renderMarkdown 出的 <p>，浏览器默认 1em 上下边距） */
+  .bubble p { margin: 0; }
+  .bubble > p:last-child { margin-bottom: 0; }
+
+  /* 行内码跟随正文色：蓝气泡里的 `code` 如果还是 --text（黑），在蓝底上几乎看不见 */
+  .bubble code { color: inherit; font-size: 13px; }
+
+  /* 代码块：灰气泡里压深一档、蓝气泡里压白一档 —— 同一档 #FFF 压不出层次 */
+  .bubble pre {
+    background: var(--mb-code-them, var(--well));
+    border: 0;
+    border-radius: 10px;
+    padding: 9px 11px;
+    /* 负 margin 让代码块吃到气泡内边距，一行代码多放两三个字符 */
+    margin: 8px -4px 0;
+    font-size: 12.5px;
+    line-height: 1.55;
+  }
+  .row.me .bubble pre { background: var(--mb-code-me, var(--bubble-me-line)); }
+
+  /* 群昵称：次色不用弱色 —— "谁在说"比"什么时候说"重一档（视觉规范 3.4） */
+  .who-line { color: var(--mb-text-2, var(--dim)); }
+}
+
+/* ============================================================ 16.10 时间戳 / 日期分隔 */
+
+@media (max-width: 900px) {
+  /* 11 → 12：11px 中文低于手机可读下限（微信/Telegram 都在 12 档） */
+  .btime {
+    left: 40px;
+    font-size: 12px;
+    line-height: 1.3;
+    color: var(--mb-text-3, var(--dim));
+    font-variant-numeric: tabular-nums;
+  }
+  .row.me .btime { right: 40px; }
+
+  /*
+   * 日期分隔（新增）：居中 12px 弱色，就是 iOS 会话里那行 "今天"。
+   * 位置在**当天第一条之前**，不插在中间 —— 插在中间会让时间线倒挂。
+   * ⚠️ 需要 JS 配合：chat.mjs 的 drawMessages 在一组消息开头插
+   *    `<div class="mb-day"><span>今天</span></div>`（跨天时按 createdAt 分组）。
+   */
+  .mb-day { display: flex; justify-content: center; margin: 2px 0 12px; }
+  .mb-day span { font-size: 12px; color: var(--mb-text-3, var(--dim)); letter-spacing: 0; }
+}
+
+/* ============================================================ 16.11 输入条 */
+
+/*
+ * 外底改玻璃 + 顶边 hairline（与聊天头对称）；胶囊底 --mb-fill；
+ * 发送钮改实底蓝 —— 发送是页面上唯一的主按钮，主按钮必须实色
+ * （微信绿钮 / iMessage 蓝箭头同理）。
+ */
+@media (max-width: 900px) {
+  .composer {
+    background: var(--mb-nav-glass, var(--side));
+    border-top: 0;
+    position: relative;
+    padding: 8px 10px;
+    padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    backdrop-filter: blur(20px) saturate(180%);
+  }
+  .composer::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    height: 0.5px;
+    background: var(--mb-hairline, var(--line));
+    pointer-events: none;
+  }
+
+  .input-wrap { background: var(--mb-fill, var(--input)); }
+  .input-wrap:focus-within {
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--mb-tint, var(--accent)) 30%, transparent);
+  }
+
+  .input-wrap textarea { color: var(--mb-text, var(--text)); }
+  .input-wrap textarea::placeholder { color: var(--mb-text-3, var(--dim)); }
+
+  /* [＋]：38px 圆形透明底，按压变 --mb-press（视觉规范 3.6） */
+  button.att-add { color: var(--mb-text, var(--text)); }
+  button.att-add:active { background: var(--mb-press, var(--active)); }
+
+  .input-tools #send {
+    background: var(--mb-btn-send, var(--btn-solid));
+    color: var(--mb-on-bubble, var(--on-solid));
+    font-weight: 600;
+  }
+
+  /* 「续 @」胶囊：tint 文字表达"这是可点的人名"，✕ 的热区保持 26px */
+  .sticky-mention .sm-at {
+    background: var(--mb-fill, var(--input));
+    color: var(--mb-tint, var(--accent));
+    border-radius: 999px;
+  }
+  .sticky-mention .sm-x {
+    background: var(--mb-fill, var(--input));
+    color: var(--mb-text-2, var(--dim));
+  }
+}
+
+/* ============================================================ 16.12 长按菜单（action sheet） */
+
+/*
+ * 会话行的长按菜单走的是 #ctxMenu（同一个单例，桌面右键也用它）。
+ * 桌面上它是"跟光标走的小浮层"，手机上必须换成**贴底的 action sheet**：
+ *   ① 浮层在拇指下经不起误触，而且没有蒙层 —— 点别处不会关；
+ *   ② 贴底的 sheet 在单手可达区，跟 .attach-menu 是同一套语言，用户不用学第二遍。
+ *
+ * ⚠️ !important 是必须的：left/top 是 ui.mjs 的 openCtxMenu() 现算完写成**内联样式**的，
+ *    CSS 要赢过内联只能 !important。四个方向都给，免得残留一个 top 把 sheet 顶到半空。
+ *
+ * 菜单项：不显示（可逆）/ 删除会话（不可逆，红字）—— 危险色只给不可逆的那一个。
+ */
+@media (max-width: 900px) {
+  .ctx-menu {
+    position: fixed;
+    left: 0 !important;
+    right: 0;
+    top: auto !important;
+    bottom: 0 !important;
+    z-index: 70;                 /* 压过 tabbar / backbar（60） */
+    min-width: 0;
+    display: grid;
+    gap: 8px;
+    padding: 14px 12px calc(12px + env(safe-area-inset-bottom, 0px));
+    border: 0;
+    border-radius: 18px 18px 0 0;
+    background: var(--mb-surface, var(--panel));
+    box-shadow: var(--mb-shadow-3, 0 -8px 24px rgb(0 0 0 / .3)),
+                0 0 0 0.5px var(--mb-hairline, var(--line));
+    animation: mb-sheet-up .2s ease-out;
+  }
+
+  /* 蒙层用菜单自己的 ::before（伪元素不是事件目标，点蒙层的 target 落回菜单本体，
+     跟 #attachMenu 的收起判定同一条路 —— app.mjs 那边已经按这个写过一次） */
+  .ctx-menu::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: var(--mb-scrim, rgb(0 0 0 / .45));
+    z-index: -1;
+    animation: mb-attach-fade .2s ease-out;
+  }
+
+  /* 抓手：底部抽屉的标配暗示 */
+  .ctx-menu::after {
+    content: '';
+    position: absolute;
+    top: 6px;
+    left: 50%;
+    width: 36px;
+    height: 4px;
+    border-radius: 2px;
+    transform: translateX(-50%);
+    background: color-mix(in srgb, var(--mb-text, var(--text)) 18%, transparent);
+  }
+
+  .ctx-item {
+    padding: 15px 16px;
+    border-radius: 14px;
+    background: var(--mb-fill, var(--input));
+    font-size: 16px;
+    text-align: center;
+    color: var(--mb-tint, var(--accent));
+  }
+  .ctx-item:hover:not([disabled]),
+  .ctx-item:focus-visible { background: var(--mb-fill, var(--input)); }
+  .ctx-item:active { filter: brightness(.94); }
+  .ctx-item.danger { color: var(--mb-unread, var(--bad)); }
+
+  /* 入场只能动 bottom —— 菜单一旦带 transform 就成了 ::before（fixed 蒙层）的
+     包含块，动画那 200ms 蒙层会缩成一条贴纸再突然铺开（.attach-menu 的教训） */
+  @keyframes mb-sheet-up {
+    from { bottom: -30%; opacity: .4; }
+  }
+}
+
+/*
+ * ────────────────────────────── 落地步骤（做完就能删这段注释） ──────────────────────────────
+ *  1. 把本文件整段（16.0 ~ 16.12）追加到 apps/web/mobile.css 末尾，保存；
+ *  2. 确认没有第二处定义同名 token：grep "mb-text-2\|mb-nav-glass\|mb-hairline\|mb-tint"
+ *     —— 只应命中本段（§0 那批旧 token 已被 16.0 覆盖，不用删）；
+ *  3. 清缓存刷新，浅/深两套各走一遍：导航栏、tab 栏、聊天头、输入条四条玻璃栏的
+ *     底色与 hairline 是否一致；气泡灰/蓝两档是否分得清；
+ *  4. 三处 JS 配合（CSS 造不出节点，都不改状态机）：
+ *     · contacts.mjs 会话行模板补 `<span class="unread">N</span>`（无数字加 .dot-only）；
+ *     · chat.mjs drawMessages 按天插 `<div class="mb-day"><span>今天</span></div>`；
+ *     · chat.mjs chatHead 右侧**不**再放状态字（2026-11-05 用户已删，见 16.13）；
+ *  5. 长按出菜单：mobile.mjs 补 touchstart 起 500ms 定时器、move>10px 取消，
+ *     到点派一次 contextmenu（同 #listBody 现有委托，菜单自然复用）；
+ *  6. 验收按 design-ux.md §7 的 15 条清单走，其中第 3 条（按压无淡蓝残留）、
+ *     第 4/5 条（对比度）、第 12 条（长按 sheet）是本补丁直接负责的。
+ * ──────────────────────────────────────────────────────────────────────────────────────────
+ */
+
+/* ============================================================ 16.13 聊天头状态字（已移除） */
+
+/*
+ * 这一节原来放的是单聊头的「正在干活 / 现在闲着」：桌面藏、手机显。
+ * 2026-11-05 用户要求整句去掉 —— 忙闲在消息列表的点里已经能读出来，
+ * 聊天页这条线要留给名字和两颗动作钮。JS 模板里那个 `<span class="status">`
+ * 已同步删除，这里只留一段说明，避免以后有人照着旧注释再把节点加回来。
+ */
+
+/* ============================================================ 17.0 分组页 token 校准 */
+
+/*
+ * v79 只把「消息页」的语汇钉住了；通讯录、工作台、我的（含设置）还在吃 §0 的旧值。
+ * 这一档**不改任何选择器结构**，只把同名 token 换成 iOS 分组页口径 ——
+ * 跟 yaojian 那次改版同一手法：换值不换名，几十条引用自动跟上。
+ *
+ *   · --mb-cvbg：分组页页底。旧值 #050506 / #eceef1 是"近黑 / 蓝灰"，
+ *     iOS grouped 是 #000 / #F2F2F7 —— 浅色那档差得最明显（旧值偏蓝，白卡压上去发脏）。
+ *   · --dim：桌面语义是"独立灰"，手机上它出现在副标题/说明/组头等三十来处；
+ *     直接换值等于一次性归到 iOS 次色（0.72 / 0.60 两档都过 AA，与 §16.0 同源）。
+ *   · --line：桌面那条硬线在手机上等于 hairline 颜色，几十处引用一起换；
+ *     真正"太粗"的那几处单独压 0.5px（见 17.1/17.2/17.3）。
+ *   · --mb-card-edge：深色卡面 #1C1C1E 压纯黑只差 28/255，补一圈 0.5px；
+ *     浅色白卡压 #F2F2F7 已经分得开，**不许画边** —— 有边就是"网页卡片"。
+ */
+@media (max-width: 900px) {
+  :root {
+    --mb-cvbg: #000000;
+    --mb-card-edge: rgba(84, 84, 88, 0.55);
+    --dim: rgba(235, 235, 245, 0.60);
+    --line: rgba(84, 84, 88, 0.65);
+  }
+  :root[data-theme='light'] {
+    --mb-cvbg: #F2F2F7;
+    --mb-card-edge: transparent;
+    --dim: rgba(60, 60, 67, 0.72);
+    --line: rgba(60, 60, 67, 0.12);
+  }
+
+  /* 所有分组卡共用这一圈边（浅色下 transparent = 不画）。
+     带 body.mb-narrow 是为了压过 §15 那批同语义规则（它带这层前缀，特异性高两格）。
+     ⚠️ .me-hero-card 不在列（2026-11-06）：hero 已改横排，它是渐变背景的内容本身，
+     带上这圈边就又变回"一张卡"，跟渐变头脱节了。 */
+  body.mb-narrow .mb-set-card,
+  body.mb-narrow .mb-cv-entry,
+  body.mb-narrow #settingsView .me-entry-sec .set-box,
+  body.mb-narrow #settingsView .me-sec-card,
+  body.mb-narrow #settingsView .me-out-box,
+  body.mb-narrow #settingsView .me-dev-box {
+    box-shadow: 0 0 0 0.5px var(--mb-card-edge, transparent);
+  }
+
+  /* 组头（iOS 分组标题）：13px / 常规偏中 / 次色，卡外一行，没有下边线 */
+  #settingsView .set-head b { font-size: 13px; font-weight: 500; }
+  .list-sec {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--mb-text-2, var(--dim));
+    border-bottom: 0;
+  }
+
+  /* 行尾箭头归最弱一档：它不是信息，只是"能点"的提示 */
+  .item[data-set]::after { border-color: var(--mb-text-3, var(--dim)); opacity: .9; }
+  body.mb-narrow #settingsView .me-entry .me-chevron { color: var(--mb-text-3, var(--dim)); }
+
+  /* 卡内行分割线：1px → 0.5px（dpr2 上 1px 是 2 物理像素，行一密就成了表格） */
+  #settingsView .set-row + .set-row { border-top-width: 0.5px; }
+}
+
+/* ============================================================ 17.1 工作台 */
+
+@media (max-width: 900px) {
+  /*
+   * 页底（2026-11-06 用户："去掉外部的阴影区"）：浅色从 --mb-cvbg 灰改成**白** ——
+   * 磁贴已各自成卡（§6，浅描边区分边界），灰底只剩"看着像卡片的大阴影"这一个作用。
+   * 深色仍用黑底（--mb-page）：黑上放 #1C1C1E 的卡，本来就是浮起的，不需要变。
+   */
+  .detail-body.wb-page { background: #ffffff; }
+  /* 深色是 :root 默认档（data-theme 可能缺省）：非 light 一律按黑底走 */
+  :root:not([data-theme='light']) .detail-body.wb-page { background: var(--mb-page, var(--bg)); }
+
+  /* 组头 12.5 → 13（iOS 分组标题档）；颜色已由 --dim 归到次色 */
+  .wb-page .wb-sec { font-size: 13px; font-weight: 500; letter-spacing: 0; }
+
+  /* 磁贴标题 16 → 17：卡里只有它担"标题"，跟列表行同档才不显小 */
+  .wb-page .wb-name { font-size: 17px; }
+  .wb-page .wb-desc { color: var(--mb-text-2, var(--dim)); }
+}
+
+/* ============================================================ 17.2 通讯录 */
+
+@media (max-width: 900px) {
+  /*
+   * A–Z 组头：13 / 次色 / 无下边线。
+   * 底色跟着新页底重算 —— 原来那条 mix 的基色是 var(--text) 8% + 旧 cvbg，
+   * 旧值近黑时看不出问题，换到纯黑后 8% 白压黑会发灰一片。
+   */
+  .mb-az-head {
+    font-size: 13px;
+    font-weight: 500;
+    letter-spacing: 0;
+    color: var(--mb-text-2, var(--dim));
+    background: color-mix(in srgb, var(--text) 6%, var(--mb-cvbg, var(--bg)));
+    border-bottom: 0;
+  }
+
+  /* 右侧索引条：字母次色、当前字母主色（tint）；与桌面 --accent 有意分档 */
+  .mb-az span { color: var(--mb-text-2, var(--dim)); }
+  .mb-az span.on { color: var(--mb-tint, var(--accent)); }
+
+  /* 子页「←」：交互色统一 tint */
+  .mb-head-back { color: var(--mb-tint, var(--accent)); }
+
+  /* 忙点：iOS systemGreen（桌面 --ok 偏暗，压在纯白行上发灰、不够"活"） */
+  .item > .dot.busy { background: var(--mb-online, var(--ok)); }
+}
+
+/* ============================================================ 17.3 我的（个人中心） */
+
+@media (max-width: 900px) {
+  /*
+   * 登录卡的名字/身份/元数据：20/600 是"页标题"档，副行 13 次色（--dim 已归位）。
+   * 这里只补两处语义色：属性值归次色（原来直接吃桌面 --text 的派生灰）、
+   * 危险动作归 --mb-unread（桌面 --bad 偏砖红，iOS 是 systemRed）。
+   */
+  body.mb-narrow #settingsView .me-v { color: var(--mb-text-2, var(--dim)); }
+  body.mb-narrow #settingsView .me-out-danger { color: var(--mb-unread, var(--bad)); }
+  body.mb-narrow #settingsView .me-out-danger:active {
+    background: color-mix(in srgb, var(--mb-unread, var(--bad)) 10%, transparent);
+  }
+
+  /* hero 辉光跟 tint 走（§15b 写的时候还是桌面 --accent，色相偏深发闷） */
+  body.mb-narrow #settingsView .me-hero-sec {
+    background:
+      radial-gradient(90% 76% at 80% -14%, color-mix(in srgb, var(--mb-tint, var(--accent)) 16%, transparent), transparent 60%),
+      radial-gradient(130% 90% at 20% -20%, color-mix(in srgb, var(--mb-tint, var(--accent)) 24%, transparent), transparent 56%),
+      var(--mb-cvbg, var(--mb-page, var(--bg)));
+  }
+
+  /* 属性行分割线与其它卡内线同档：0.5px hairline */
+  body.mb-narrow #settingsView .me-kv + .me-kv::before { height: 0.5px; background: var(--mb-hairline, var(--line)); }
+}
+
+/* ============================================================ 18.0 聊天页消息流降噪 */
+
+/*
+ * 2026-11-05 用户：「聊天页 UI 重新设计」。这轮只动消息流的"密度语法"，
+ * 不碰气泡语汇（§16 已定：18px 对称圆角 / 灰 #E9E9EB vs 蓝 #0071E3）：
+ *
+ *   1. 时间戳只在每组第一条下面挂（chat.mjs drawMessages 打 .nt —— 3 分钟内
+ *      不重复）。之前每条下面都挂一个 12px 灰字，一屏八行就是八个时间，
+ *      "仪表"比"内容"还多；微信/iMessage 都只在组头挂一次。
+ *   2. 同一人紧接着的下一句（.tight）行距收紧，换人才松开 —— 语句成段，
+ *      对话的节奏感就出来了（iMessage 的 tight grouping 同款思路）。
+ *   3. 聊天页头像从桌面那套 6px 小圆角换成 10px squircle —— 32px 的面上 6px
+ *      圆角接近纯方，跟列表行（48px/r12）放一起明显更"网页"。
+ *   4. 代码块 overflow-x —— 长行在气泡里被硬裁（用户截图可见 res.status( 被切），
+ *      手机上横向滑动是唯一不丢字符的解法（换行 pre-wrap 会把代码拆得没法读）。
+ *
+ * .nt / .tight 由 JS 渲染时打进 DOM，桌面共用同一份 HTML —— 显示规则只写在本档，
+ * 桌面时间戳照旧（那是桌面自己的设计决定，2026-10-19 定的"气泡外下方"）。
+ */
+@media (max-width: 900px) {
+  /*
+   * grid item 的隐形最小宽度（2026-11-05 修）：#chatView 是 grid 容器，
+   * 它的直接子项（.chat-head / .chat / .composer）默认 min-width:auto ——
+   * 气泡里一段不换行的代码（pre 的 min-content 很大）能把整列撑到视口之外，
+   * 聊天头跟着变宽、右侧动作钮被顶出屏幕。放开收缩后，超宽内容在 pre 里横滚。
+   */
+  #chatView > * { min-width: 0; }
+
+  .row.nt { padding-bottom: 8px; }        /* 不挂时间的行收回时间戳占的高度 */
+  .row.nt .btime { display: none; }
+  .row.tight { margin-bottom: 2px; }      /* 同人连发：6 → 2，段落感 */
+
+  .chat .avatar,
+  .chat-head .avatar { border-radius: 10px; }
+
+  .bubble pre {
+    overflow-x: auto;
+    max-width: 100%;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* pre 放开收缩后 bubble 这层也要能缩（flex item 同样有 min-width:auto） */
+  .row .bubble { min-width: 0; }
+}
+
+/* ============================================================ 19. 版本更新提示条（手机） */
+
+/*
+ * misc.mjs 的 startVersionWatch 会在代码变更后弹一条「代码有更新，这个页面还是旧的」
+ * —— 桌面它落在右下角，手机上那个位置正好被底部 tab 栏压住，几乎看不见
+ * （2026-11-05「手机端没变化」的一部分原因）。这里抬到 tab 栏之上、通栏铺开。
+ *
+ * ⚠️ 提示条的定位写在 JS 内联样式（cssText）里，内联优先级最高，只能 !important 覆盖。
+ */
+@media (max-width: 900px) {
+  #verBanner {
+    left: 12px !important;
+    right: 12px !important;
+    bottom: calc(var(--mb-tab, 56px) + env(safe-area-inset-bottom, 0px) + 12px) !important;
+    justify-content: space-between;
+    padding: 12px 14px !important;
+    font-size: 13px !important;
+    border-radius: 12px !important;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+  }
+}
+
+/* ============================================================ 20. 数字员工详情页 */
+
+/*
+ * 桌面的 .p-head + .group + .form-row 原样搬到 390px 上是"桌面缩小版"：
+ * 1px 描边卡、132px 标签列、带边框的原生控件、右上角一颗孤立的主按钮。
+ * 这里按全站手机端的分组卡语汇（§15b「我的」同款）重排：
+ *   ① 身份卡：面浮起、头像 56、名字 20；桌面那行重复的「运行时」章已从模板删掉。
+ *   ② 执行配置卡：iOS 分组行 —— 标签左（主文本色）、控件右（去边框、次级灰），
+ *      行间 0.5px hairline；并发数输入框不再居中带框。
+ *   ③ 「发消息」通栏主按钮（模板里已从头右上角挪到正文末尾）。
+ * 只罩 #detailView（这页模板是 chat.mjs renderDetailMobile 独有的），桌面一位字节不变。
+ */
+@media (max-width: 900px) {
+  /* 页底留白：卡与返回栏之间 12，两侧 16（--mb-pad 基准） */
+  body.mb-narrow #detailView .detail-body { padding: 12px 16px 32px; }
+
+  /* ── ① 身份卡 ── */
+  body.mb-narrow #detailView .p-head {
+    align-items: center;
+    gap: 14px;
+    margin: 0 0 12px;
+    padding: 16px;
+    border: 0;
+    border-radius: var(--mb-r-card, 12px);
+    background: var(--mb-surface, var(--side));
+    box-shadow: 0 0 0 0.5px color-mix(in srgb, var(--text) 9%, transparent);
+  }
+  body.mb-narrow #detailView .p-head .avatar {
+    width: 56px;
+    height: 56px;
+    flex-basis: 56px;
+    font-size: 22px;
+  }
+  body.mb-narrow #detailView .p-head h2 { font-size: 20px; row-gap: 6px; }
+  /* 章从"描边小字"换"软底色块"：与全站手机端 pill 同语汇，比空心框精致 */
+  body.mb-narrow #detailView .p-head .pill {
+    border: 0;
+    padding: 2px 8px;
+    border-radius: 6px;
+    font-size: 11.5px;
+    font-weight: 500;
+    line-height: 18px;
+    background: var(--mb-fill, var(--active));
+    color: var(--mb-text-2, var(--dim));
+  }
+  body.mb-narrow #detailView .p-head .pill.role {
+    background: color-mix(in srgb, var(--mb-tint, var(--accent)) 14%, transparent);
+    color: var(--mb-tint, var(--accent));
+  }
+  body.mb-narrow #detailView .p-head .pill.busy {
+    background: color-mix(in srgb, var(--mb-online, var(--ok)) 16%, transparent);
+    color: var(--mb-online, var(--ok));
+  }
+
+  /* ── ② 执行配置卡：iOS 分组行 ── */
+  body.mb-narrow #detailView .group {
+    margin: 0 0 16px;
+    padding: 0 16px;
+    border: 0;
+    border-radius: var(--mb-r-card, 12px);
+    background: var(--mb-surface, var(--side));
+    box-shadow: 0 0 0 0.5px color-mix(in srgb, var(--text) 9%, transparent);
+  }
+  body.mb-narrow #detailView .form-row {
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 12px;
+    align-items: center;
+    min-height: 52px;
+    padding: 11px 0;
+    border-top: 0;
+  }
+  body.mb-narrow #detailView .form-row + .form-row {
+    border-top: 0.5px solid var(--mb-hairline, var(--line));
+  }
+  /* 标签升级为主文本色 15px（桌面那档 13px 灰在手机上像被禁用）；
+     值压到右沿 —— 「标签左 · 详情右」的双栏读法 */
+  body.mb-narrow #detailView .row-label { font-size: 15px; color: var(--mb-text, var(--text)); }
+  body.mb-narrow #detailView .form-row > :last-child {
+    justify-self: end;
+    max-width: 62%;
+    text-align: right;
+  }
+  /* 下拉：去边框去底色，值 15px 次级灰 + 右箭头（iOS value cell）。
+     浮层 .combo-pop 仍是桌面那张卡，弹出定位不受影响 */
+  body.mb-narrow #detailView .combo { max-width: 100%; }
+  body.mb-narrow #detailView .combo-btn {
+    justify-content: flex-end;
+    gap: 6px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    font-size: 15px;
+  }
+  body.mb-narrow #detailView .combo-text { flex: 0 1 auto; color: var(--mb-text-2, var(--dim)); }
+  body.mb-narrow #detailView .combo-chev { margin-right: 0; }
+  /* 模型（只读）值同口径 */
+  body.mb-narrow #detailView #dModelText { font-size: 15px; color: var(--mb-text-2, var(--dim)); }
+  /* 并发数：去框、右对齐、主文本色 —— 输入位仍是这个格子，placeholder=6 */
+  body.mb-narrow #detailView #dMaxParallel {
+    width: 72px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    font: inherit;
+    font-size: 15px;
+    color: var(--mb-text, var(--text));
+    text-align: right;
+  }
+  /* 思考过程开关抬到 iOS 标准尺寸（51×31 的近似档），拇指好拨 */
+  body.mb-narrow #detailView .switch.sm { width: 46px; height: 28px; }
+  body.mb-narrow #detailView .switch.sm > span { border-radius: 14px; }
+  body.mb-narrow #detailView .switch.sm > span::after { width: 24px; height: 24px; top: 2px; left: 2px; }
+  body.mb-narrow #detailView .switch.sm input:checked + span::after { transform: translateX(18px); }
+
+  /* ── ③ 主动作通栏 ── */
+  body.mb-narrow #detailView .mb-msg-btn {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    justify-content: center;
+    min-height: 50px;
+    margin: 4px 0 0;
+    border: 0;
+    border-radius: var(--mb-r-card, 12px);
+    background: var(--mb-btn-send, var(--mb-bubble-me, var(--accent)));
+    color: #fff;
+    font: inherit;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  body.mb-narrow #detailView .mb-msg-btn:active { filter: brightness(0.9); }
+}
+
+/* ── ④ 运行时 / 模型：导航行（点开 §20.5 全屏选择页，2026-11-05 用户口径） ── */
+@media (max-width: 900px) {
+  /* 整行可点：命中区就是整格 52px（远大于 44pt），别只让右侧文字可点 */
+  body.mb-narrow #detailView .form-row.mb-nav { cursor: pointer; }
+  body.mb-narrow #detailView .form-row.mb-nav:active { background: var(--mb-press, var(--active)); }
+  body.mb-narrow #detailView .mb-nav-val {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
+    min-width: 0;    /* 值那列要能缩，否则长模型名把左边标签挤到换行 */
+  }
+  body.mb-narrow #detailView .mb-nav-val > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 15px;
+    color: var(--mb-text-2, var(--dim));
+  }
+  /* 箭头用 CSS 画（旋转 45° 的两条边）：比字符 › 的粗细/基线稳定，两主题都吃 --mb-text-2 */
+  body.mb-narrow #detailView .mb-chev {
+    flex: 0 0 auto;
+    width: 6px;
+    height: 6px;
+    margin-left: 1px;
+    border-top: 1.5px solid color-mix(in srgb, var(--mb-text-2, var(--dim)) 40%, transparent);
+    border-right: 1.5px solid color-mix(in srgb, var(--mb-text-2, var(--dim)) 40%, transparent);
+    transform: rotate(45deg);
+  }
+}
+
+/* ============================================================ 20.5 全屏选择页（运行时 / 模型） */
+
+/*
+ * 为什么不是底部抽屉：这两项是**配置**、选项多（模型 20+ 条），抽屉展开就被拇指挡住；
+ * 全屏页可以整屏滚，返回手势与系统一致（iOS 设置里"选一项"同款）。
+ * 词表全部复用 §20：--mb-page 打底、--mb-surface 卡片、0.5px hairline、行高 52。
+ * 深浅两套主题只靠 token，不写死任何色值。DOM 由 chat.mjs 的 mbEnsurePicker 动态建。
+ */
+@media (max-width: 900px) {
+  /* 页已经盖满屏，底下那层别再跟着滑动 */
+  body.mb-picker-open { overflow: hidden; }
+
+  #mbPicker {
+    position: fixed;
+    inset: 0;
+    z-index: 91;              /* 压过 tabbar / backbar（60）、「＋」抽屉（70），以及任务看板的创建页 .kb-new（90）—— 选择页永远盖在它上面 */
+    display: flex;
+    flex-direction: column;
+    background: var(--mb-page, var(--bg));
+    /* 起手在屏右沿外，开页时 .mb-picker-in 推回来（iOS push 的位移方向） */
+    transform: translateX(100%);
+    transition: transform 160ms ease-out;
+  }
+  #mbPicker.mb-picker-in { transform: translateX(0); }
+  /* UA 的 [hidden]{display:none} 权重低于上面这条 #mbPicker，必须自己写一条 */
+  #mbPicker[hidden] { display: none; }
+
+  /* ── 头部：与 .mb-backbar 同规格（玻璃底 + 0.5px hairline + --mb-nav 高度） ── */
+  #mbPicker .mb-picker-bar {
+    position: relative;
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    height: calc(var(--mb-nav, 52px) + env(safe-area-inset-top, 0px));
+    padding: env(safe-area-inset-top, 0px) 10px 0;
+    background: var(--mb-nav-glass, var(--side));
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    backdrop-filter: blur(20px) saturate(180%);
+  }
+  #mbPicker .mb-picker-bar::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 0.5px;
+    background: var(--mb-hairline, var(--line));
+    pointer-events: none;
+  }
+  #mbPicker .mb-picker-back {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;             /* 44×44 命中下限，视觉上贴左沿 */
+    height: 44px;
+    margin-left: -6px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--mb-tint, var(--accent));
+    cursor: pointer;
+  }
+  #mbPicker .mb-picker-back svg { width: 22px; height: 22px; }
+  #mbPicker .mb-picker-title {
+    position: absolute;
+    left: 60px;              /* 两侧各让出返回钮宽度，标题才真落在屏幕中线 */
+    right: 60px;
+    text-align: center;
+    font-size: 17px;
+    font-weight: 600;
+    color: var(--mb-text, var(--text));
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    pointer-events: none;
+  }
+
+  /* ── 列表：iOS inset grouped 二版 —— 每个供应商一张卡，组标题提到卡外 ── */
+  #mbPicker .mb-picker-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;   /* 滑到底别把底下的详情页带着滚 */
+    padding: 12px var(--mb-pad, 16px) calc(24px + env(safe-area-inset-bottom, 0px));
+    /*
+     * 滚动条必须藏掉（2026-11-05 用户「卡片和左右的间隙不一样」）：
+     * 它会吃掉内容宽（实测 11px），卡片变成左 16 / 右 27。
+     * 全屏列表是原生 App 观感，本来也不该出现桌面式滚动条。
+     */
+    scrollbar-width: none;
+  }
+  #mbPicker .mb-picker-body::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+  }
+  /* 顶部说明行（「13 个模型 · Codex CLI」）：给这页一个前言，空清单时交代原因 */
+  #mbPicker .mb-picker-note {
+    padding: 2px 16px 10px;   /* 文字缩进对齐卡内文字列（卡 16 + 内距 16 = 屏上 32） */
+    font-size: 12.5px;
+    line-height: 1.4;
+    color: var(--mb-text-3, var(--dim));
+  }
+  #mbPicker .mb-picker-note[hidden] { display: none; }
+  /*
+   * 搜索行（视觉 v2.1）：**滚动区之外**的固定行 —— 列表滑到哪儿，框都在原位。
+   * 36 高、`--mb-fill` 实底、无边框、圆角 10；放大镜绝对定位在左 12、16×16，
+   * 用中性的 `--mb-text-3`（不跟主题变蓝：它是提示，不是可选中的东西）。
+   */
+  #mbPicker .mb-picker-search {
+    position: relative;
+    flex: 0 0 auto;
+    padding: 8px 16px 10px;
+    background: var(--mb-page, var(--bg));
+  }
+  #mbPicker .mb-picker-search[hidden] { display: none; }
+  #mbPicker .mb-picker-search-ico {
+    position: absolute;
+    left: 28px;              /* 行内距 16 + 输入框左内距 12 */
+    top: 18px;               /* 行内距 8 + (36 - 16) / 2 —— 正落在输入框的中线上 */
+    width: 16px;
+    height: 16px;
+    color: var(--mb-text-3, var(--dim));
+    pointer-events: none;
+  }
+  #mbPicker .mb-picker-search input {
+    width: 100%;
+    box-sizing: border-box;
+    height: 36px;
+    padding: 0 12px 0 34px;
+    border: 0;
+    border-radius: 10px;
+    background: var(--mb-fill, var(--active));
+    color: var(--mb-text, var(--text));
+    font: inherit;
+    font-size: 15px;
+    outline: none;
+    -webkit-appearance: none;
+    appearance: none;
+  }
+  #mbPicker .mb-picker-search input::placeholder { color: var(--mb-text-3, var(--dim)); }
+  /* 焦点环用 box-shadow 而不是 outline：圆角输入框上 outline 会画成方角 */
+  #mbPicker .mb-picker-search input:focus {
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--mb-tint, var(--accent)) 30%, transparent);
+  }
+  /* 搜不到东西时那一行（13px 弱色），不能只留一张空白页 */
+  #mbPicker .mb-picker-empty {
+    padding: 24px 16px;
+    text-align: center;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--mb-text-3, var(--dim));
+  }
+  /* 行首那颗 6px 圆点（任务看板的 8 个状态用 --st-*；颜色由调用方以内联 style 给） */
+  #mbPicker .mb-picker-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    margin-right: 8px;
+    border-radius: 50%;
+    vertical-align: middle;
+  }
+  /*
+   * 组标题：卡**外**的小节标签（iOS 设置的 SECTION 头）—— 一版把它排在卡内，
+   * 跟模型行挤在同一张卡里，层级糊成一团，是"丑"的主因。
+   * 供应商 id 是小写英文，大写 + 字距才有"栏目"的感觉。
+   */
+  #mbPicker .mb-picker-sec {
+    padding: 20px 16px 8px;   /* 与卡片内文字同列：iOS 分组列表的 section 头就是这个缩进 */
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--mb-text-3, var(--dim));
+  }
+  #mbPicker .mb-picker-group {
+    overflow: hidden;               /* 圆角裁掉首末行的按压底色 */
+    border-radius: var(--mb-r-card, 12px);
+    background: var(--mb-surface, var(--side));
+    box-shadow: 0 0 0 0.5px color-mix(in srgb, var(--text) 9%, transparent);
+  }
+  #mbPicker .mb-picker-row {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 52px;
+    padding: 10px 16px;
+    cursor: pointer;
+  }
+  #mbPicker .mb-picker-row:not(:last-child)::after {
+    content: '';
+    position: absolute;
+    left: 16px;
+    right: 0;
+    bottom: 0;
+    height: 0.5px;
+    background: var(--mb-hairline, var(--line));
+    pointer-events: none;
+  }
+  #mbPicker .mb-picker-row:active { background: var(--mb-press, var(--active)); }
+  #mbPicker .mb-picker-row:focus-visible {
+    outline: 2px solid var(--mb-tint, var(--accent));
+    outline-offset: -2px;
+  }
+  /* 主列：label + 可选 sub（「跟随默认」下面写真实默认模型名） */
+  #mbPicker .mb-picker-main {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  #mbPicker .mb-picker-label {
+    min-width: 0;
+    font-size: 15px;
+    line-height: 1.35;
+    color: var(--mb-text, var(--text));
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #mbPicker .mb-picker-sub {
+    min-width: 0;
+    font-size: 12.5px;
+    line-height: 1.35;
+    color: var(--mb-text-3, var(--dim));
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /*
+   * 选中行：主文字转主题蓝 + 右侧 SVG 勾（iOS 设置的选择页就是这个表达，
+   * 不做整行染色）；sub 保持灰 —— 层级在，蓝只落在"选中的那一项"上。
+   */
+  #mbPicker .mb-picker-row.on .mb-picker-label { color: var(--mb-tint, var(--accent)); }
+  #mbPicker .mb-picker-check {
+    flex: 0 0 auto;
+    width: 18px;
+    height: 18px;
+    color: var(--mb-tint, var(--accent));
+  }
+}
+
+/* 减少动态效果：不分主题，写在 900px 档外面 */
+@media (prefers-reduced-motion: reduce) {
+  #mbPicker { transition: none; }
+}
+
+/* ============================================================ 21. 任务看板（手机列表形态） */
+
+/*
+ * 视觉规格 v2（2026-11-05 定稿）§1~§8 的落地。三条原则决定了这里每一个值：
+ *   ① **进 App 不进网页**：导航栏三槽（左返回 / 居中标题 / 右＋），面包屑撤掉。
+ *      左右各 44，标题才落在真中线上 —— 也正因为要对称，刷新不占导航栏（它去筛选条右端）；
+ *   ② **容器是一张，行是连续的**：整个列表是一张 inset grouped 卡，行间 hairline 内缩 16。
+ *      不按状态切 8 张卡、也不画分节头（tab 已经给了计数，再分节是把同一句话说两遍）；
+ *   ③ **一屏只留一处彩色**：状态 = 6px `--st-*` 圆点 + 不带色的状态词；页面蓝只出现在
+ *      tab 选中 / ＋ / 主按钮三处。
+ *
+ * 类名 `kb-l-*`（一版的 `kb-m-*` 已退役，style.css 里那一段已删）。看板页的规则包在
+ * @media 里；创建页（`kb-new-*`）的 DOM 只可能由手机端渲染出来，所以不入 media ——
+ * 转屏到宽档时它照样完整可用（交互规格 §11）。
+ */
+@media (max-width: 900px) {
+  /* ── §1 顶部导航栏 ──
+     高度 / 玻璃底 / hairline 全部沿用 `body.no-list .detail-head`（§3），这里只定内容层 */
+  .kb-l-navbtn {
+    width: 44px;
+    height: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    border-radius: 50%;
+    cursor: pointer;
+  }
+  .kb-l-navbtn:active { background: var(--mb-press, var(--active)); }
+  .kb-l-navbtn svg { width: 22px; height: 22px; }
+  /*
+   * 垂直居中用 calc 而不是 top:50%：`.detail-head` 的盒子里含着 env(safe-area-inset-top)
+   * （刘海屏约 47px），50% 会把这截安全区也算一半 —— 标题和两颗钮会**冒出导航条**、顶进状态栏。
+   * 真正的中线是「安全区 + 导航条高的一半」。
+   */
+  .kb-l-navbtn.back,
+  .kb-l-navbtn.add,
+  .kb-l-navbtn.cmt {
+    position: absolute;
+    top: calc(env(safe-area-inset-top, 0px) + var(--mb-nav, 52px) / 2);
+    transform: translateY(-50%);
+  }
+  /* margin-left:-6px：图标视觉贴到 16 的基准边距上，44 的热区一点不缩 */
+  .kb-l-navbtn.back { left: 10px; margin-left: -6px; color: var(--mb-tint, var(--accent)); }
+  .kb-l-navbtn.add { right: 10px; color: var(--mb-tint, var(--accent)); }
+  /*
+   * 任务卡的「讨论」气泡（2026-11-06 定稿 —— 当日口径改了几轮：11-05 建气泡 →
+   * 11-06 上午撤掉换底部评论条 → 用户说"右边的评论入口不见了"把气泡加回来 →
+   * 中午定稿只留气泡，底部评论条是残留已删）：
+   * 图标不上色 —— 规格里"一屏只留一处彩色"（页面蓝只在 tab 选中 / ＋ / 主按钮），
+   * 这颗是**入口**不是动作；引人点的是右上角那颗计数角标。
+   */
+  .kb-l-navbtn.cmt { right: 10px; color: var(--mb-text, var(--text)); }
+  .tc-cmt-n {
+    position: absolute;
+    top: 5px;
+    right: 4px;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    box-sizing: border-box;
+    border-radius: 999px;
+    background: var(--bad, #d9534f);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 16px;
+    text-align: center;
+    pointer-events: none;
+  }
+  .tc-cmt-n[hidden] { display: none; }
+  .kb-l-navbtn:disabled { opacity: 0.4; }
+  /*
+   * 标题：`kb-l-navtitle` 而不是规格里的 `kb-l-title` —— 规格 §1（导航栏标题）与 §3.2（行标题）
+   * 用了同一个类名，照抄会让其中一组规则把另一组顶掉（绝对定位的行标题 = 全列表叠在一点）。
+   * 行标题保留 `kb-l-title`（那是出现得多的一侧）。
+   */
+  .kb-l-navtitle {
+    position: absolute;
+    left: 52px;
+    right: 52px;
+    top: env(safe-area-inset-top, 0px);
+    height: var(--mb-nav, 52px);
+    line-height: var(--mb-nav, 52px);   /* 块级 + line-height 才能留住 text-overflow 的省略号 */
+    margin: 0;
+    text-align: center;
+    font-size: 17px;
+    font-weight: 600;
+    color: var(--mb-text, var(--text));
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    pointer-events: none;
+  }
+
+  /* ── §2 状态筛选条 + 刷新（44 高；刷新固定在右端，不随 tab 滚） ──
+     不是 sticky：顶栏与这一条都是 flex 列里 flex:0 0 auto 的固定项，天然不滚
+     （iOS 上 sticky + 内滚容器会抖）。真正滚动的是下面的 #kbList。 */
+  .kb-l-filter {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 0 0 auto;
+    height: 44px;
+    padding: 0 8px 0 var(--mb-pad, 16px);
+    background: var(--mb-page, var(--bg));
+  }
+  .kb-l-tabs {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    padding: 6px 0;
+    scrollbar-width: none;
+  }
+  .kb-l-tabs::-webkit-scrollbar { width: 0; height: 0; }
+  /*
+   * tab 定死「填充胶囊」（不换 segmented、不用下划线）：段数在 2~9 之间浮动（全部 + 有卡的列），
+   * segmented 要求段数固定等宽，8 段中文在 390px 下每段只剩约 40px，还放不下计数。
+   * 未选态用实底 `--mb-fill`（不再是"透明 + 描边"）：一排胶囊宽度才稳定，横滑时不抖。
+   */
+  .kb-l-tab {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 32px;
+    padding: 0 14px;
+    border: 0;
+    border-radius: 999px;
+    font: inherit;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--mb-text-2, var(--dim));
+    background: var(--mb-fill, var(--input));
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  /* 14%（与 §20 身份卡 role pill 同浓度）：10% 在浅色档几乎看不出选中 */
+  .kb-l-tab.on {
+    color: var(--mb-tint, var(--accent));
+    background: color-mix(in srgb, var(--mb-tint, var(--accent)) 14%, transparent);
+  }
+  /* 计数是**胶囊里的纯文字**（12px），不做独立角标底 —— 胶囊里再套胶囊会显得碎 */
+  .kb-l-n {
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    color: var(--mb-text-3, var(--dim));
+  }
+  .kb-l-tab.on .kb-l-n { color: color-mix(in srgb, var(--mb-tint, var(--accent)) 70%, transparent); }
+  /* 刷新：语义归列表数据，所以贴着列表起点，而不是挤进导航栏抢对称位 */
+  .kb-l-refresh {
+    flex: 0 0 auto;
+    width: 32px;
+    height: 32px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 6px;              /* 32 的视觉 + 外扩 = 44 的命中 */
+    box-sizing: content-box;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--mb-text-2, var(--dim));
+    cursor: pointer;
+  }
+  .kb-l-refresh:active { background: var(--mb-press, var(--active)); }
+  /*
+   * 转圈只转 18×18 的图标本身：按钮的 padding / 尺寸一个像素都不动，否则筛选条会抖 1px
+   * （32 视觉 + 6 外扩 = 44 命中的那套排布全靠这几个值稳定）。
+   */
+  .kb-l-refresh svg { width: 18px; height: 18px; }
+  .kb-l-refresh.spinning svg { animation: kb-refresh-spin 800ms linear infinite; }
+  .kb-l-refresh.spinning { pointer-events: none; }   /* 转圈期间禁用：连点只发一次请求 */
+  @keyframes kb-refresh-spin { to { transform: rotate(360deg); } }
+
+  /* ── 布局：本页唯一的滚动容器 ──
+     #pluginView.kb-page 是 flex 列：顶栏 / 筛选条 flex:0 0 auto 钉住，
+     #kbList 吃掉剩下所有高度并自己滚（不进 sticky，iOS 上那套会抖）。 */
+  #pluginView.kb-page .detail-body {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+    padding: 0;
+    max-width: none;
+  }
+  #kbList {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+    scrollbar-width: none;
+  }
+  #kbList::-webkit-scrollbar { width: 0; height: 0; }   /* 全屏列表是原生观感，不要桌面滚动条 */
+
+  /* ── §3 列表：一张分组卡 + 连续行 ── */
+  .kb-l-list {
+    padding: 4px var(--mb-pad, 16px) calc(24px + env(safe-area-inset-bottom, 0px));
+  }
+  .kb-l-group {
+    overflow: hidden;            /* 圆角裁掉首末行的按压底色 */
+    border-radius: var(--mb-r-card, 12px);
+    background: var(--mb-surface, var(--side));
+    box-shadow: 0 0 0 0.5px color-mix(in srgb, var(--text) 9%, transparent);
+  }
+  .kb-l-row {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-height: 68px;
+    padding: 11px 16px;
+    cursor: pointer;
+  }
+  /* 行间 hairline 内缩 16（微信/iOS 列表的语法），不是通栏一条横杠 */
+  .kb-l-row:not(:last-child)::after {
+    content: '';
+    position: absolute;
+    left: 16px;
+    right: 0;
+    bottom: 0;
+    height: 0.5px;
+    background: var(--mb-hairline, var(--line));
+    pointer-events: none;
+  }
+  .kb-l-row:active { background: var(--mb-press, var(--active)); }
+  .kb-l-title {
+    font-size: 16px;
+    font-weight: 500;
+    line-height: 1.4;
+    color: var(--mb-text, var(--text));
+    word-break: break-word;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+  }
+  /*
+   * 元信息行的收缩优先级（390px 下四段一定放不下，必须定死谁先让）：
+   *   时间 0 0 auto → 永不缩；状态点 + 状态词 0 0 auto → 永不缩（它是行的维度）；
+   *   执行人 1 1 auto → 第一个被省略；项目 pill 0 1 auto + max-width 40% → 第二个被省略。
+   */
+  .kb-l-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    font-size: 13px;
+    color: var(--mb-text-2, var(--dim));
+  }
+  /* 6px 圆点，取 --st-* 原值（不混明度：那套色是按"压在淡底上 ≥4.5"校准的） */
+  .kb-l-dot {
+    flex: 0 0 auto;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--st-c, var(--st-other));
+  }
+  .kb-l-state { flex: 0 0 auto; color: var(--mb-text-2, var(--dim)); }   /* 状态词不上色 */
+  .kb-l-pill {
+    flex: 0 1 auto;
+    max-width: 40%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 2px 8px;
+    border-radius: 6px;
+    line-height: 18px;
+    font-size: 11.5px;
+    font-weight: 500;
+    background: var(--mb-fill, var(--active));
+    color: var(--mb-text-2, var(--dim));
+  }
+  .kb-l-who {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--mb-text-2, var(--dim));
+  }
+  .kb-l-time {
+    flex: 0 0 auto;
+    font-size: 12.5px;
+    font-variant-numeric: tabular-nums;
+    color: var(--mb-text-3, var(--dim));
+  }
+  /*
+   * 派到分公司的卡（remote，没有跳转属性）行尾的「验收 / 撤销」——
+   * 视觉规格里没有这一段（它假设所有行都可点），交互规格 §4.2 要求把桌面卡上的动作
+   * 补到行上。单独一行右对齐：塞进元信息行会把时间挤走，而时间是永不缩的那一段。
+   */
+  .kb-l-acts { display: flex; justify-content: flex-end; gap: 8px; padding-top: 2px; }
+  .kb-l-act {
+    min-height: 30px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 8px;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    background: var(--mb-fill, var(--active));
+    color: var(--mb-tint, var(--accent));
+    cursor: pointer;
+  }
+  .kb-l-act:active { background: var(--mb-press, var(--active)); }
+
+  /* ── §4 空态 / 错误态：一种版式，两个文案 ──
+     视觉重量：一句话 13px + 一颗**软底**按钮（不是实心主蓝 —— 空态里的蓝不该和导航「＋」抢） */
+  .kb-l-empty {
+    padding: 96px 16px 24px;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+  }
+  .kb-l-empty p {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--mb-text-3, var(--dim));
+  }
+  /* 错误原因那一行（服务端的原话）：比主句再小一档、再浅一档 —— 它是解释，不是标题 */
+  .kb-l-empty .kb-l-reason {
+    margin-top: -8px;
+    max-width: 32em;
+    font-size: 12.5px;
+    word-break: break-word;
+  }
+  .kb-l-empty .kb-l-cta {
+    min-height: 44px;
+    padding: 0 20px;
+    border: 0;
+    border-radius: 10px;
+    font: inherit;
+    font-size: 15px;
+    font-weight: 500;
+    background: var(--mb-fill, var(--active));
+    color: var(--mb-tint, var(--accent));
+    cursor: pointer;
+  }
+  .kb-l-empty .kb-l-cta:active { background: var(--mb-press, var(--active)); }
+
+  /* 刚建出来的那张卡：一次性的 1.6s 高亮（只在提交成功后由 JS 加 .flash） */
+  .kb-l-row.flash { animation: kb-row-flash 1.6s ease-out; }
+  @keyframes kb-row-flash {
+    from { background: color-mix(in srgb, var(--mb-tint, var(--accent)) 12%, transparent); }
+    to { background: transparent; }
+  }
+
+  /* 焦点环：触屏不画（只在 :focus-visible 时出现），外接键盘才看得到 */
+  .kb-l-row:focus-visible,
+  .kb-l-tab:focus-visible,
+  .kb-l-navbtn:focus-visible,
+  .kb-l-refresh:focus-visible {
+    outline: 2px solid var(--mb-tint, var(--accent));
+    outline-offset: -2px;
+  }
+}
+
+/* ============================================================ 21.1 新建任务（kb-new-*） */
+
+/*
+ * 全屏固定层，与 `#mbPicker` 同一套推入/历史口径（压一格 → 退一格 → popstate 收画面）。
+ * 为什么是覆盖层而不是"在同一页里换 innerHTML"：返回时若重画 #pluginView，就得重跑
+ * openBoardPage（重新 fetch、滚回顶部、丢 tab 态），覆盖层只要摘掉。
+ *
+ * 这一块**不套 @media**：DOM 只由手机端渲染出来，桌面永远不会进；反过来，转屏变宽时
+ * 若把它关进 media，页面会当场散架、草稿也跟着没了（交互规格 §11）。
+ */
+.kb-new {
   position: fixed;
-  left: 12px;
-  right: 12px;
-  bottom: 84px;
-  z-index: 60;
+  /* 键盘铁律（视觉规格 §5.7）：不用 inset:0 —— 布局视口不缩，键盘会把页脚整个盖住。
+     高度跟 --mb-vh（visualViewport.height，mobile.mjs ④ 喂）：键盘弹起整页跟着缩，
+     页脚贴键盘上沿、标题输入钉在上半屏，不需要任何 JS 滚动补偿。 */
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--mb-vh, 100%);
+  z-index: 90;                 /* 压过 tabbar / backbar（60）与「＋」抽屉（70） */
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  background: var(--mb-page, var(--bg));
+  transform: translateX(100%);
+  transition: transform 160ms ease-out;
+}
+.kb-new.kb-new-in { transform: translateX(0); }
+/* UA 的 [hidden]{display:none} 权重低于上面那条 .kb-new，必须自己写一条 */
+.kb-new[hidden] { display: none; }
+body.kb-new-open { overflow: hidden; }
+body.kb-new-open .mb-tabbar { display: none; }   /* 进创建页隐底部 tab，避免误点丢草稿 */
+
+/* §6.1 头部：与 §1 同规格，但只有返回 + 居中标题，右槽空（不放假按钮） */
+/*
+ * 收口到自己的类（视觉规格 §5.1）：原来高度/玻璃底/发丝线全靠 `body.no-list .detail-head`
+ * 匹配 —— 一旦 no-list 不在（刷新恢复、转屏），导航栏会塌成"内容撑高"。这页 DOM 只在
+ * 手机渲染，这里写自己的规则不碰桌面。
+ */
+.kb-new .kb-new-bar {
+  position: relative;
+  flex: 0 0 auto;
+  height: calc(var(--mb-nav, 52px) + env(safe-area-inset-top, 0px));
+  padding: 0 var(--mb-pad, 16px);
+  padding-top: env(safe-area-inset-top, 0px);
+  box-sizing: border-box;
+  background: var(--mb-nav-glass, var(--side));
+  border-bottom: 0;
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  backdrop-filter: blur(20px) saturate(180%);
+}
+.kb-new .kb-new-bar::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 0.5px;
+  background: var(--mb-hairline, var(--line));
   pointer-events: none;
-  opacity: 0;
-  transform: translateY(10px);
-  transition: opacity .16s ease, transform .16s ease;
 }
-.voice-layer.is-open { opacity: 1; transform: translateY(0); }
-.voice-layer.is-closing { opacity: 0; transform: translateY(6px); }
-
-.voice-card {
-  pointer-events: auto;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  max-width: 560px;
-  width: 100%;
-  padding: 9px 10px 9px 12px;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: var(--card, var(--side));
-  box-shadow: 0 8px 28px rgb(0 0 0 / .16);
-}
-
-.voice-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--bad, #c0504d);
-  flex: none;
-  animation: voice-pulse 1.1s ease-in-out infinite;
-}
-@keyframes voice-pulse {
-  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgb(192 80 77 / .45); }
-  50% { opacity: .55; box-shadow: 0 0 0 5px rgb(192 80 77 / 0); }
-}
-
-.voice-bars {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  height: 18px;
-  flex: none;
-}
-.voice-bars i {
-  width: 3px;
-  height: 4px;
-  border-radius: 2px;
-  background: var(--dim);
-  transition: height .1s linear, background .1s linear;
-}
-.voice-bars i.on { background: var(--accent, #3b6ef5); }
-.voice-bars i:nth-child(1).on { height: 8px; }
-.voice-bars i:nth-child(2).on { height: 13px; }
-.voice-bars i:nth-child(3).on { height: 17px; }
-.voice-bars i:nth-child(4).on { height: 12px; }
-.voice-bars i:nth-child(5).on { height: 7px; }
-
-.voice-msg {
-  flex: 1 1 auto;
-  min-width: 0;
-  font-size: 13px;
-  color: var(--text);
+.kb-new .kb-new-bartitle {
+  position: absolute;
+  left: 52px;
+  right: 52px;
+  top: env(safe-area-inset-top, 0px);
+  height: var(--mb-nav, 52px);
+  line-height: var(--mb-nav, 52px);
+  margin: 0;
+  text-align: center;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--mb-text, var(--text));
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  pointer-events: none;
 }
 
-.voice-x {
-  flex: none;
-  padding: 5px 10px;
+/* 滚动区：顶栏与底部主按钮都不参与滚动，键盘弹出时（--mb-vh）按钮永远在键盘上方 */
+.kb-new-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  padding-bottom: 8px;
+}
+
+/* §6.2 ① 输入区卡化（视觉规格 §5.2）：裸排占位"灰对灰"读起来像静态标签，且与下方
+   三张卡没有语汇承接 —— 抬头纸也是一张卡（面 + 0.5px 环），但卡里依旧不画框，
+   所以它是"抬头"不是"字段"。 */
+.kb-new-draft {
+  margin: 12px var(--mb-pad, 16px) 0;
+  padding: 12px 16px 14px;
+  border-radius: var(--mb-r-card, 12px);
+  background: var(--mb-surface, var(--side));
+  box-shadow: 0 0 0 0.5px color-mix(in srgb, var(--mb-text, var(--text)) 9%, transparent);
+}
+/* 草稿卡无 focus 环（2026-11-06 视觉 v1.1 定稿）：caret 即焦点指示 —— 环留给选中卡，
+   两处同环会把"正在写"和"已选中"糊成同一个意思。 */
+.kb-new-inputtitle {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0;
+  min-height: 25px;
   border: 0;
-  border-radius: 8px;
   background: transparent;
-  color: var(--dim);
-  font-size: 13px;
+  outline: none;
+  font: inherit;
+  font-size: 19px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--mb-text, var(--text));
+}
+.kb-new-desc {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  outline: none;
+  font: inherit;
+  font-size: 15px;
+  line-height: 1.5;
+  min-height: 44px;
+  max-height: 180px;    /* 约 8 行，超过就内部滚（规格 §6.2） */
+  overflow-y: auto;
+  resize: none;
+  color: var(--mb-text, var(--text));
+}
+.kb-new-inputtitle::placeholder,
+.kb-new-desc::placeholder { color: var(--mb-text-3, var(--dim)); }
+
+/* §6.3 ② 执行配置：分节头在卡外，行 52 高 */
+.kb-new-sec {
+  padding: 24px 16px 8px;   /* 上 20 → 24（视觉规格 §5.3）：页顶到"怎么干"的缝与别处一致 */
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--mb-text-3, var(--dim));
+}
+/*
+ * 2026-11-06 再设计（方案 A「卡片预览式重排」）：原来「执行配置」一张长表
+ * （状态/方式/执行人/项目/流程五行顺排）读起来像填设置 —— 行多、主次不分，
+ * 「立即开始」这个最重的后果埋在中间。改成按建卡的思考顺序分两段卡：
+ * **怎么干**（两张大卡二选一，选中的人/流程回显在卡上，› 箭头进选择页）
+ * → **更多设置**（状态/项目/立即开始直接铺开，2026-11-06 三改：折叠摘要撤掉）。
+ * 同日二次收敛：中段的「派给谁」chips /「选流程」行撤掉，卡上回显替代。
+ * #kbNewGroup 只是各段卡的流式容器，卡样式下沉到 .kb-new-card。
+ */
+.kb-new-group { margin: 0; }   /* 边距下沉到 .kb-new-card（"去发布 ›"行自己带 padding） */
+.kb-new-card {
+  margin: 0 var(--mb-pad, 16px) 8px;
+  overflow: hidden;
+  border-radius: var(--mb-r-card, 12px);
+  background: var(--mb-surface, var(--side));
+  box-shadow: 0 0 0 0.5px color-mix(in srgb, var(--mb-text, var(--text)) 9%, transparent);
+}
+/*
+ * 卡内行间线改**左缩进 16**（视觉规格 §5.5）：原来通栏 border-top 撞在卡片外缘的圆角上。
+ * 用 ::before 画线还有个白送的好处：说明小字 `<p>` 上没有 ::before，
+ * "开关行 → 说明"之间天然没有线，不需要 :not(:last-child) 例外。
+ * 行必须 position:relative（.kb-new-row 本就有，.kb-new-check 补上）。
+ */
+.kb-new-row::before,
+.kb-new-check::before {
+  content: '';
+  position: absolute;
+  left: 16px;
+  right: 0;
+  top: 0;
+  height: 0.5px;
+  background: var(--mb-hairline, var(--line));
+  pointer-events: none;
+}
+.kb-new-card > :first-child::before { display: none; }
+
+/* value cell（全部选择项共用；规格里的 §20 `.form-row.mb-nav` 同值） */
+.kb-new-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 52px;
+  padding: 11px 16px;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
   cursor: pointer;
 }
-.voice-x:hover { background: var(--hover); color: var(--text); }
+.kb-new-row:active { background: var(--mb-press, var(--active)); }
+.kb-new-row:focus-visible { outline: 2px solid var(--mb-tint, var(--accent)); outline-offset: -2px; }
+.kb-new-lab { flex: 0 0 auto; font-size: 15px; color: var(--mb-text, var(--text)); }
+.kb-new-val {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.kb-new-val > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+  color: var(--mb-text-2, var(--dim));
+}
+.kb-new-val.is-empty > span { color: var(--mb-text-3, var(--dim)); }   /* 「未选择」 */
+/* 箭头用 CSS 画（旋转 45° 的两条边）：比字符 › 的粗细/基线稳定，两主题都吃 --mb-text-2。
+   描边浓度全页统一 45%（视觉规格 §5.4）—— 原来大卡的 › 单独给 55%，两种灰没有意义 */
+.kb-new-chev {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-top: 1.5px solid color-mix(in srgb, var(--mb-text-2, var(--dim)) 45%, transparent);
+  border-right: 1.5px solid color-mix(in srgb, var(--mb-text-2, var(--dim)) 45%, transparent);
+  transform: rotate(45deg);
+}
 
-/* 出错：不用波形也不用红点，整条变成一句说明 */
-.voice-layer.is-error .voice-dot,
-.voice-layer.is-error .voice-bars { display: none; }
-.voice-layer.is-error .voice-msg { color: var(--bad, #c0504d); }
-.voice-layer.is-error .voice-x { display: none; }
+/*
+ * 执行方式：两张独立大卡（视觉规格 §5.4，2026-11-06 二版）。选中 = 1.5px tint 环 +
+ * 标题染 tint —— 不用 ✓（页面上已经两颗：选择页行尾 + 开关）、不用圆点（圆点逼出
+ * 48 的左缩进，是表单感主因）、不加 tint 淡底（深色几乎不可见、浅色像 ：active 残留）。
+ * 非 .is-card 的裸 radio 皮已随模板退役，这里只保留大卡一种形态。
+ */
+/* .kb-new-modes 是两张卡的容器：把 .kb-new-card 的皮褪掉，卡面/环由每张 radio 自己画；
+   overflow:visible 让 › 的 44px 热区能向卡外溢 2px */
+.kb-new-modes {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: none;
+  box-shadow: none;
+  border-radius: 0;
+  overflow: visible;
+}
+.kb-new-radio {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  cursor: pointer;
+}
+.kb-new-radio:focus-visible,
+.kb-new-radio:has(input:focus-visible) { outline: 2px solid var(--mb-tint, var(--accent)); outline-offset: -2px; }
+/* 真的 <input> 收起来（读屏与键盘照旧认它） */
+.kb-new-radio input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+.kb-new-radio.is-card {
+  min-height: 0;
+  padding: 12px 46px 12px 16px;   /* 右侧 46 = 44 › 热区 + 2 光学余量 */
+  border: 0;
+  border-radius: var(--mb-r-card, 12px);
+  background: var(--mb-surface, var(--side));
+  box-shadow: 0 0 0 0.5px color-mix(in srgb, var(--mb-text, var(--text)) 9%, transparent);
+  transition: box-shadow 120ms;
+}
+/* 按压：不换底色档位，只混 6% 正文色（两张主题都成立）；环不变 —— 状态变化零位移 */
+.kb-new-radio.is-card:active {
+  background: color-mix(in srgb, var(--mb-text, var(--text)) 6%, var(--mb-surface, var(--side)));
+}
+/* 选中：1.5px tint 60% 环（唯一的"第二种彩"），背景保持 surface；标题染 tint（字重不变，不换行） */
+.kb-new-radio.is-card:has(input:checked) {
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--mb-tint, var(--accent)) 60%, transparent);
+}
+.kb-new-radio:has(input:checked) .kb-new-rtitle { color: var(--mb-tint, var(--accent)); }
+.kb-new-radio:has(input:disabled) { cursor: default; }
+.kb-new-radio:has(input:disabled) .kb-new-rtitle { color: var(--mb-text-3, var(--dim)); }
+.kb-new-rtxt { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.kb-new-rtitle { font-size: 15px; font-weight: 500; line-height: 1.33; color: var(--mb-text, var(--text)); }
+.kb-new-rsub { margin-top: 2px; font-size: 12.5px; line-height: 1.35; color: var(--mb-text-3, var(--dim)); }
+/* 卡尾 › 箭头（选择页唯一入口）：热区 44×44，绝对定位右缘 -2px 是光学对齐 —— 箭头视觉
+   右缘落在卡边内 16px，与下方设置行的箭头同一条竖线；44px 热区向卡外溢 2px（卡外还有
+   16px 页边距，不会出屏）。.kb-new-modes 的 overflow:visible 保它不被裁。 */
+.kb-new-gopick {
+  position: absolute;
+  right: -2px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  padding: 0;
+  border-radius: 10px;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+.kb-new-gopick:active { background: var(--mb-press, var(--active)); }
+.kb-new-gopick:focus-visible { outline: 2px solid var(--mb-tint, var(--accent)); outline-offset: -2px; }
 
-/* 窄屏（手机壳本体）：按钮跟 ＋ / 发送 一样高，圆一点 */
+/* 选中回显（视觉规格 §6.2）：标题**正下方**、解释之上 —— "给了谁"必须比"怎么走"更亮。
+   单行省略是有意的：流程名可以很长，两张卡必须同高；全文在选择页里看。 */
+.kb-new-rpick {
+  margin-top: 3px;
+  font-size: 13.5px;
+  font-weight: 400;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--mb-text-3, var(--dim));
+}
+.kb-new-rpick.is-on {
+  color: var(--mb-text, var(--text));
+  font-weight: 500;
+}
+
+/* 「还没有已发布的流程」时那条文字链：贴着流程卡的文字轨道起点（左 16），不再右对齐 */
+.kb-new-pub { display: flex; justify-content: flex-start; padding: 8px 16px 0; }
+.kb-new-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  font-size: 13px;
+  color: var(--mb-tint, var(--accent));
+  cursor: pointer;
+}
+.kb-new-link:active { background: var(--mb-press, var(--active)); border-radius: 6px; }
+
+/* §6.4 ③「创建后立即开始」：与设置行同一条行语汇（独立卡皮退役），勾选框换开关 ——
+   同一个 <input type=checkbox> 换 CSS 皮（视觉规格 §5.5），id/接线不变 */
+.kb-new-check {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 50px;
+  padding: 11px 16px 0;
+  box-sizing: border-box;
+  cursor: pointer;
+}
+.kb-new-check[aria-disabled='true'] { cursor: default; }
+.kb-new-check input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+.kb-new-check .kb-new-lab { flex: 1 1 auto; min-width: 0; font-size: 15px; color: var(--mb-text, var(--text)); }
+/* 开关：46×28 轨道 + 24 旋钮（iOS UISwitch 档）；180ms 只动 background 与 transform，
+   状态变化不引起任何布局位移 */
+.kb-new-sw {
+  flex: 0 0 auto;
+  width: 46px;
+  height: 28px;
+  border-radius: 999px;
+  background: var(--mb-fill, var(--active));
+  position: relative;
+  transition: background 180ms;
+}
+.kb-new-sw::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--mb-on-bubble, #fff);
+  transition: transform 180ms;
+}
+.kb-new-check.on .kb-new-sw { background: var(--mb-tint, var(--accent)); }
+.kb-new-check.on .kb-new-sw::after { transform: translateX(18px); }
+/*
+ * 禁用时**只**降轨道（label 与说明文字一个像素都不降）：那句话是用户唯一能看懂
+ * "为什么不让勾"的入口，降了就等于不说。
+ */
+.kb-new-check[aria-disabled='true'] .kb-new-sw { opacity: 0.4; }
+.kb-new-check:has(input:focus-visible) { outline: 2px solid var(--mb-tint, var(--accent)); outline-offset: -2px; }
+.kb-new-hint {
+  margin: 3px 0 0;          /* 贴在开关行下沿：它是"这一行的注脚"，不是"卡的页脚" —— 与开关行无线 */
+  padding: 0 16px 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--mb-text-3, var(--dim));
+}
+
+/* §6.5 底部 sticky 主按钮（底栏与滚动区之间不画 hairline：滚动内容在上方被裁切，
+   边线会像"断了一截"） */
+.kb-new-foot {
+  flex: 0 0 auto;
+  padding: 8px var(--mb-pad, 16px) calc(8px + env(safe-area-inset-bottom, 0px));
+  background: var(--mb-page, var(--bg));
+}
+.kb-new-submit {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: center;
+  min-height: 50px;
+  border: 0;
+  border-radius: var(--mb-r-card, 12px);
+  background: var(--mb-btn-send, var(--mb-bubble-me, var(--accent)));
+  color: var(--mb-on-bubble, #fff);
+  font: inherit;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 120ms;
+}
+.kb-new-submit:active { filter: brightness(0.94); }
+/*
+ * 灰色只由 [aria-disabled="true"] 触发（视觉规格 §6.4）：标题为空 = 看起来禁用但**仍可点**
+ * （点了 toast + 焦点回标题）。:disabled 只剩 cursor —— 提交中按钮**保持蓝色**，
+ * "正在干活"不再被画成"不可用"（文案已是「创建中…」）。
+ */
+.kb-new-submit[aria-disabled='true'] {
+  background: var(--mb-fill, var(--active));
+  color: var(--mb-text-3, var(--dim));
+}
+.kb-new-submit:disabled { cursor: default; }
+
+/* §7 减少动态效果：滑入与高亮都关掉（不分主题，写在 900px 档外面） */
+@media (prefers-reduced-motion: reduce) {
+  .kb-new { transition: none; }
+  .kb-l-row.flash { animation: none; }
+  /* 转圈换成静态的 60% 透明：没有旋转也照样看得出"正在刷新" */
+  .kb-l-refresh.spinning svg { animation: none; opacity: 0.6; }
+}
+
+/* ============================================================ 22. 任务卡详情（手机整页形态） */
+
+/*
+ * 2026-11-05 任务卡手机版：窄屏上原来就是"桌面页压小"——三级面包屑 + 标题/描述/讨论
+ * 一列 + 桌面右栏属性表沉到讨论区底下 + PR 关联框照搬。这轮按看板 v2 / 员工详情的
+ * 同一套语汇重画：
+ *   ① 导航栏（‹ / 任务卡）：§21 看板同款（.kb-l-navbtn / .kb-l-navtitle 直接复用）；
+ *   ② 内容是一列连续的东西：状态胶囊 → 标题 → 描述 → 属性卡 → 讨论流，输入框吸底；
+ *   ③ 改状态 / 换执行人 = 全屏选择页（§20.5 的 mb-picker，JS 走 mbOpenPicker）；
+ *   ④ 桌面右栏（aside）整块不显示 —— 两个 combo 藏在里面当"值与联动"的仓库；
+ *   ⑤ PR 手机端只留"已关联"一行可点进 GitHub，关联/建 PR/合并都不上手机
+ *      （主理人口径：手机端不建 PR，要开就在对话里让员工办）。
+ * 类名 `tc-m-*`。整段包在 900px 档里：桌面一个像素不变。
+ */
 @media (max-width: 900px) {
-  .voice-btn { width: 38px; height: 38px; }
-  .voice-card { padding: 8px 8px 8px 12px; }
-  .voice-msg { font-size: 12.5px; }
+  /* ── 骨架：#pluginView.kb-page .detail-body 在 §21 已被改成 flex 列，这里只补本页的底色 ── */
+  .tc-page.tc-m {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    padding: 0;
+    background: var(--mb-page, var(--bg));
+  }
+  .tc-page.tc-m .tc-main { border-right: 0; padding: 0; overflow: hidden; }
+  .tc-page.tc-m .tc-main-scroll {
+    display: block;              /* 桌面的 flex+gap 换成 margin：间距各自管自己的 */
+    /* 底部留安全区：讨论搬进抽屉、底部也没有常驻条了，页面末尾就是脚注，
+       不留白的话最后一个字贴着屏幕边 */
+    padding: 0 0 calc(24px + env(safe-area-inset-bottom, 0px));
+    scrollbar-width: none;
+  }
+  .tc-page.tc-m .tc-main-scroll::-webkit-scrollbar { width: 0; height: 0; }
+  .tc-page.tc-m .tc-side { display: none; }   /* 只装着两个隐形 combo */
+
+  /* ── 导航栏：与看板 §1 同规格（玻璃底 + hairline + 居中标题）。
+     不依赖 body.no-list：这张卡可能被刷新恢复直接落在屏上，body 类不保证。 ── */
+  #pluginView .tc-m-head {
+    position: relative;
+    flex: 0 0 auto;
+    height: calc(var(--mb-nav, 52px) + env(safe-area-inset-top, 0px));
+    padding-top: env(safe-area-inset-top, 0px);
+    box-sizing: border-box;
+    background: var(--mb-nav-glass, var(--side));
+    border-bottom: 0;
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    backdrop-filter: blur(20px) saturate(180%);
+  }
+  #pluginView .tc-m-head::after {
+    content: '';
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    height: 0.5px;
+    background: var(--mb-hairline, var(--line));
+    pointer-events: none;
+  }
+
+  /* ── 头块：状态胶囊 + 标题 + 描述 ── */
+  .tc-page.tc-m .tc-m-hero { padding: 14px var(--mb-pad, 16px) 0; }
+  /* 状态胶囊：6px --st-* 圆点 + 状态词（与看板行同一颗点）。整颗可点 = 改状态。 */
+  .tc-m-st {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    height: 30px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 999px;
+    background: var(--mb-fill, var(--input));
+    font: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--mb-text, var(--text));
+    cursor: pointer;
+  }
+  .tc-m-st:active { background: var(--mb-press, var(--active)); }
+  .tc-m-st i { width: 8px; height: 8px; border-radius: 50%; background: var(--st-c, var(--dim)); flex: 0 0 auto; }
+  .tc-page.tc-m .tc-title { margin: 10px 0 6px; font-size: 20px; line-height: 1.4; }
+  .tc-page.tc-m .tc-m-flownote { font-size: 13px; line-height: 1.6; color: var(--mb-text-2, var(--dim)); margin: -2px 0 8px; }
+  .tc-page.tc-m .tc-desc { flex: none; font-size: 15px; line-height: 1.7; min-height: 24px; }
+  /* 空描述：桌面 .empty 的"60px 上下留白 + 居中"是给大面积留白用的 —— 手机上一屏很贵，
+     收成一行"添加描述…"（点它就地编辑的交互不变） */
+  .tc-page.tc-m .tc-desc.empty { padding: 2px 0 0; text-align: left; min-height: 28px; }
+
+  /* ── 属性卡：一张 inset grouped 卡，行 50 高，行间 hairline 内缩 16（§3 同语法） ── */
+  .tc-page.tc-m .tc-m-card {
+    margin: 14px var(--mb-pad, 16px) 0;
+    overflow: hidden;            /* 圆角裁掉按压底色 */
+    border-radius: var(--mb-r-card, 12px);
+    background: var(--mb-surface, var(--side));
+    box-shadow: 0 0 0 0.5px color-mix(in srgb, var(--text) 9%, transparent);
+  }
+  .tc-m-row {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    min-height: 50px;
+    padding: 9px var(--mb-pad, 16px);
+    border: 0;
+    background: transparent;
+    font: inherit;
+    font-size: 15px;
+    text-align: left;
+    color: var(--mb-text, var(--text));
+    cursor: pointer;
+  }
+  .tc-m-row:active { background: var(--mb-press, var(--active)); }
+  a.tc-m-row { text-decoration: none; }
+  .tc-m-row + .tc-m-row::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: var(--mb-pad, 16px);
+    right: 0;
+    height: 0.5px;
+    background: var(--mb-hairline, var(--line));
+    pointer-events: none;
+  }
+  .tc-m-k { flex: 0 0 auto; }
+  .tc-m-v {
+    flex: 1;
+    min-width: 0;
+    text-align: right;
+    color: var(--mb-text-2, var(--dim));
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .tc-m-v.is-dim { color: var(--mb-text-3, var(--dim)); }
+  /* chevron 用 CSS 画（§2 data-set 行同一条边框路数），比字符 › 稳 */
+  .tc-m-chev {
+    flex: 0 0 auto;
+    width: 7px;
+    height: 7px;
+    margin-right: 2px;
+    border-right: 1.8px solid var(--mb-text-3, var(--dim));
+    border-bottom: 1.8px solid var(--mb-text-3, var(--dim));
+    transform: rotate(-45deg);
+    opacity: 0.65;
+  }
+  /* 删除：iOS 的居中红字行（页面里没有大红按钮的规矩不变，红只出现在"确认删"那一刻） */
+  .tc-m-row.danger {
+    justify-content: center;
+    color: var(--bad);
+    font-weight: 500;
+    min-height: 48px;
+  }
+
+  /* 创建/更新时间：卡下一行脚注，不占行 */
+  .tc-page.tc-m .tc-m-foot {
+    margin: 8px var(--mb-pad, 16px) 0;
+    font-size: 12px;
+    color: var(--mb-text-3, var(--dim));
+  }
+
+  /* ── 讨论流的排版（2026-11-06 向抖音观感精修）：它在抽屉里（§22b），这里只管字号/头像/留白 ──
+   * 抖音的那几把尺子：头像更大（36）、用户名是**灰色**不加粗（黑色留给正文）、
+   * 「回复」是纯灰字不是按钮、每条之间留白更松 —— 黑色越少越高级。 */
+  .tc-page.tc-m .tc-threads { padding: 0; gap: 20px; }
+  .tc-page.tc-m .tc-topic + .tc-topic:not(.pre) { border-top: 0; padding-top: 0; margin-top: 20px; }
+  .tc-page.tc-m .tc-topic > .avatar,
+  .tc-page.tc-m .tc-cmt > .avatar { width: 36px; height: 36px; flex-basis: 36px; }
+  .tc-page.tc-m .tc-topic-meta b,
+  .tc-page.tc-m .tc-cmt-meta b { font-size: 13px; color: var(--mb-text-2, var(--dim)); font-weight: 500; }
+  .tc-page.tc-m .tc-cmt-meta { font-size: 12px; }
+  .tc-page.tc-m .tc-topic-title,
+  .tc-page.tc-m .tc-cmt-text { font-size: 15px; line-height: 1.6; }
+  .tc-page.tc-m .tc-cmt-at { font-size: 11.5px; }
+  .tc-page.tc-m .tc-statebar { border-radius: 10px; padding: 9px 12px; font-size: 12.5px; }
+  /* 折叠条照抖音（2026-11-06）：手机正文 15px，折叠条跟一档 13px 灰字 */
+  .tc-page.tc-m .tc-replies-toggle { font-size: 13px; }
+  /* 「回复」照抖音是纯灰字（不是描边小药丸）：点完会有按压反馈，够了 */
+  .tc-page.tc-m .tc-topic-meta .tc-reply,
+  .tc-page.tc-m .tc-topic-foot .tc-reply {
+    border: 0;
+    background: none;
+    padding: 2px 0;
+    color: var(--mb-text-3, var(--dim));
+    font-size: 12px;
+  }
+  .tc-page.tc-m .tc-topic-foot .tc-reply:active { color: var(--mb-text-2, var(--dim)); }
+
+  /* ── 输入条：吸底玻璃条（§16.11 同一档），textarea 16px 防 iOS 聚焦缩放 ── */
+  .tc-page.tc-m .tc-composer {
+    position: relative;
+    flex: 0 0 auto;
+    background: var(--mb-nav-glass, var(--side));
+    border-top: 0;
+    padding: 8px 10px;
+    padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    backdrop-filter: blur(20px) saturate(180%);
+  }
+  .tc-page.tc-m .tc-composer::before {
+    content: '';
+    position: absolute;
+    left: 0; right: 0; top: 0;
+    height: 0.5px;
+    background: var(--mb-hairline, var(--line));
+    pointer-events: none;
+  }
+  .tc-page.tc-m .tc-input-box {
+    border-radius: 18px;
+    border-color: transparent;
+    background: var(--mb-fill, var(--input));
+  }
+  .tc-page.tc-m .tc-input-box:focus-within {
+    border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  }
+  .tc-page.tc-m .tc-input-box textarea { font-size: 16px; height: 44px; min-height: 44px; }
+  .tc-page.tc-m .tc-composer-foot { display: none; }  /* 提示行不上手机（2026-11-05 用户口径） */
+}
+
+/* §7 减少动态效果补一条：本节没有自带动画，防的是 header 玻璃层的过渡 */
+@media (prefers-reduced-motion: reduce) {
+  .tc-page.tc-m .tc-composer,
+  #pluginView .tc-m-head { transition: none; }
+}
+
+/* ============================================================ 22b. 任务卡「讨论抽屉」 */
+
+/*
+ * 2026-11-05 用户口径：讨论别摊在卡页上 —— 卡页只留"这件事本身"（状态/标题/描述/属性卡），
+ * 讨论整体收进导航栏那颗气泡按钮，点开是**抖音评论区**那套：底部升起一张面板，
+ * 上面遮罩压住整页，面板里只有「讨论流（自己滚）+ 输入条（吸底）」。
+ *
+ * 三个值为什么是这么定的：
+ *   ① height 用 --mb-vh（mobile.mjs ④ 喂的 visualViewport 高度）—— 键盘弹起时布局视口
+ *      不缩，不跟着缩的话面板底部（也就是输入条）会被键盘整个盖住。对话页输入栏、
+ *      「新建任务」页同一招。
+ *   ② z-index 80 —— 压过 tabbar / 返回栏（60）和「＋」抽屉（70），但给「新建任务」页（90）
+ *      和全屏选择页（91）让路：抽屉里也点得开状态选择页。
+ *   ③ 关闭靠 visibility + transform 两条过渡（面板滑完再隐藏），不用 hidden 属性 ——
+ *      display 切换那一帧浏览器会跳过 transition，面板会"啪"地出现/消失。
+ *   ④ 最大化（2026-11-05）：78% 看不全长讨论，头部给了颗「铺满整屏」。只切 .max 一枚 class，
+ *      高度动的是 height 不是 transform（面板得缩起 22% 才轮到输入条露出来）。
+ *
+ * DOM 只在手机整页那条路上存在（projects.mjs 的 mbTC），所以这段不包 @media。
+ */
+.tc-sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: var(--mb-vh, 100%);
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  visibility: hidden;
+  pointer-events: none;
+  transition: visibility 0s 0.28s;   /* 收起时等面板滑出去再隐藏 */
+}
+.tc-sheet.in {
+  visibility: visible;
+  pointer-events: auto;
+  transition-delay: 0s;
+}
+
+.tc-sheet-mask {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.34);
+  opacity: 0;
+  transition: opacity 0.24s ease;
+}
+.tc-sheet.in .tc-sheet-mask { opacity: 1; }
+
+.tc-sheet-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 78%;
+  min-height: 0;
+  border-radius: 16px 16px 0 0;
+  background: var(--mb-page, var(--bg));
+  overflow: hidden;                 /* 圆角裁掉输入条那块玻璃底 */
+  transform: translateY(100%);
+  /* height 也得过渡：最大化是 78% → 100%，只动 transform 的话面板会"啪"地跳高 */
+  transition: transform 0.26s cubic-bezier(0.22, 0.61, 0.36, 1), height 0.24s ease;
+}
+.tc-sheet.in .tc-sheet-panel { transform: translateY(0); }
+
+/* 最大化（2026-11-05 用户要求）：铺满整屏，圆角收掉；顶部让出状态栏，
+   面板顶边贴屏幕后那道 grip 就没有"往下收"的含义了，收起来 */
+.tc-sheet.max .tc-sheet-panel {
+  height: 100%;
+  border-radius: 0;
+}
+.tc-sheet.max .tc-sheet-grip { display: none; }
+.tc-sheet.max .tc-sheet-head {
+  padding-top: calc(env(safe-area-inset-top, 0px) + 14px);
+}
+
+/* 顶部那道小横杠：iOS 上"这张纸可以往下收"的固定符号 */
+.tc-sheet-grip {
+  flex: 0 0 auto;
+  width: 36px;
+  height: 4px;
+  margin: 8px auto 0;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--text) 18%, transparent);
+}
+
+.tc-sheet-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px var(--mb-pad, 16px);
+  /* 2026-11-06 用户口径：标题行下面压一条 hairline，跟面板内容分开；
+     底距从 2px 提到 6px，别让线贴着两颗圆钮 */
+  border-bottom: 1px solid var(--mb-hairline, var(--line));
+}
+.tc-sheet-head b {
+  margin-right: auto;              /* 标题靠左，两颗圆钮（放大 / ✕）一起被顶到右端 */
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--mb-text, var(--text));
+}
+.tc-sheet-n {
+  margin-left: 7px;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--mb-text-3, var(--dim));
+}
+/* 头部两颗圆钮共用一套壳（放大 / 收起）。
+   2026-11-06 用户口径：透明底太"飘"，给两颗都描一圈 hairline（border-box 不吃热区）；
+   又嫌 40 太大 —— 收到 32 的壳、16 的图标（比导航栏那颗小一号）。 */
+.tc-sheet-ic {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--mb-hairline, var(--line));
+  border-radius: 50%;
+  background: transparent;
+  color: var(--mb-text-2, var(--dim));
+  cursor: pointer;
+}
+.tc-sheet-ic:active { background: var(--mb-press, var(--active)); }
+.tc-sheet-ic svg { width: 16px; height: 16px; }
+
+/* 讨论流的滚动区：面板里唯一会滚的东西（输入条钉在它下面） */
+.tc-sheet-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;      /* 滚到头别把底下的卡页带着一起滑 */
+  padding: 4px var(--mb-pad, 16px) 12px;
+  scrollbar-width: none;
+}
+.tc-sheet-body::-webkit-scrollbar { width: 0; height: 0; }
+.tc-sheet-body .tc-threads { display: flex; flex-direction: column; gap: 20px; }
+
+/* ── 输入条两态（2026-11-06 用户发抖音截图拍板）────────────────────────
+ * 单行态（默认，键盘没起来）：工具栏（＋/档位/发送）、回复横幅、附件条整条藏掉，
+ * textarea 压成 42px 的药丸 —— 就是抖音评论区底部那条"留下你的友善评论吧"。
+ * 展开态（.expanded）：完整输入区回来（回复横幅/附件/档位/发送都在）。
+ * 切换的 JS 在 projects.mjs（tcCompact / tcExpand）：聚焦展开、失焦 120ms 收回。
+ * 放在 §21 输入条样式之后：同特异性靠后者赢，42px 才压得过上面那条 44px。 */
+.tc-sheet:not(.expanded) .tc-sendbar,
+.tc-sheet:not(.expanded) .tc-reply-banner,
+.tc-sheet:not(.expanded) .att-strip { display: none; }
+.tc-sheet:not(.expanded) .tc-input-box { border-radius: 21px; }
+.tc-sheet:not(.expanded) .tc-input-box textarea {
+  height: 42px;
+  min-height: 42px;
+  max-height: 42px;
+  padding: 10px 14px 12px;
+  border-radius: 21px;
+  font-size: 15px;
+  line-height: 1.25;
+  overflow: hidden;
+}
+/* 药丸 ↔ 输入区的高度过渡：morph 一下，别"啪"地变脸 */
+.tc-sheet .tc-input-box textarea { transition: height 0.16s ease, min-height 0.16s ease; }
+@media (prefers-reduced-motion: reduce) {
+  .tc-sheet .tc-input-box textarea { transition: none; }
+}
+
+/* ── 展开态的视觉弱化（2026-11-06 用户发抖音截图：唤起键盘后"后面似乎灰了一些"）
+ * 键盘起来 = .expanded（键盘信号我们只有这一枚），给输入区**后面**的所有东西
+ * （讨论流 / 抽屉头部 /  grip）盖一层暗 scrim —— 抖音那个"打字时列表退后"的层次。
+ * 实现：panel::after 铺满整张面板（z:1），输入条抬到 z:2 浮在 scrim 之上；
+ * pointer-events:none 不挡 ✕/放大键的点击，只暗不掉功能。 */
+.tc-sheet .tc-composer { position: relative; z-index: 2; }
+/* 展开态输入条玻璃底：上缘两角圆起来（2026-11-06 用户红框标注）——
+   全宽玻璃条直角顶在屏幕边上太生硬，圆 16 跟面板顶角同档；玻璃底浮在
+   scrim 之上，圆角缺口里露出的是压暗的讨论流，正好是"浮着的输入卡"。
+   顶上那条 hairline 分隔线一并收掉：圆角上拉通条直线会戳出角去。 */
+.tc-page.tc-m .tc-sheet.expanded .tc-composer {
+  border-radius: 16px 16px 0 0;
+  /* 按钮区加高（2026-11-06 用户）：卡外那行 36px 的 ＋/三颗/发送，底部再留 10 */
+  padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+  /* 键盘同色（2026-11-06 用户「输入卡要和键盘一个颜色」）：整个输入区（卡 + 卡外
+     那块摆三颗/发送的区域）都染成 --mb-kb，跟系统键盘面板接缝处不分你我 ——
+     原来卡是 --mb-fill 浅灰、脚下 composer 是半透明玻璃，压在白键盘上就是三截色。 */
+  background: var(--mb-kb);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;                     /* 纯色底了，玻璃模糊没有意义还耗电 */
+}
+/* 卡本体是**灰药丸**浮在白区上（2026-11-06 精修，抖音同款）：脚下 composer 和键盘
+   连成一片白，卡回 --mb-fill 灰底、去描边 —— 描边框在纯白上显得生硬，灰药丸才是
+   "输入框"的质感（跟单行态同一颗，只是长高了）。 */
+.tc-page.tc-m .tc-sheet.expanded .tc-input-box {
+  background: var(--mb-fill);
+  border-color: transparent;
+}
+.tc-page.tc-m .tc-sheet.expanded .tc-input-box:focus-within { border-color: transparent; }
+/* 展开态是**多行**模式（2026-11-06 用户：键盘唤起后还是要能写几行，别压成一行）：
+   卡跟着内容长高（rows=3 起步 ≈ 72px），最多约 5 行，再多就在框里滚（滚动条已隐藏）。
+   §7 那条 44px 是给单行药丸的，这里多一个 .tc-sheet.expanded 压过它。 */
+.tc-page.tc-m .tc-sheet.expanded .tc-input-box textarea {
+  height: auto;
+  min-height: 72px;
+  max-height: 140px;
+  padding: 12px 14px 10px;
+}
+.tc-page.tc-m .tc-sheet.expanded .tc-composer::before { display: none; }
+
+/* ── 档位三颗（2026-11-06 用户口径：键盘唤起后，便签/讨论/执行摊平，摆在**输入卡外面**
+      —— 卡片底边与键盘之间那条区域，见 composerBlock 的结构）──
+ * 桌面和手机单行态都还是「讨论 ▾」那套下拉（一颗 chip 带 ▾、点开三行说明）；
+ * 只有抽屉**展开态**（键盘起来、屏幕本来就挤）才摊平成一行三颗：一眼看见、
+ * 一点就切，不用在键盘上方再弹一层菜单。 */
+.tc-mode-chips { display: none; }                    /* 默认不上场（桌面也在这一档） */
+/* 卡内那条 sendbar 在展开态不再占位（2026-11-06 用户：＋ 也拿出去）：
+   ＋ 和发送都绝对定位到卡外那行，下拉已藏 —— 里面什么都不剩，高度归零，
+   免得卡底多出一截空条（绝对定位子元素不受父级高度影响，overflow 保持 visible）。 */
+.tc-sheet.expanded .tc-sendbar { height: 0; min-height: 0; padding: 0; }
+/* ＋ 搬到卡外那行的最左端（2026-11-06 用户「加号拿出来放到按钮区」）：36 圆、
+   hairline 描边，跟右侧发送键同一档高度、同一条基线。 */
+.tc-sheet.expanded button.att-add {
+  position: absolute;
+  left: 10px;
+  bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  margin: 0;
+  border: 1px solid var(--mb-hairline, var(--line));
+  border-radius: 50%;
+  background: none;
+  color: var(--mb-text-2, var(--dim));
+  font-size: 19px;
+  line-height: 1;
+}
+.tc-sheet.expanded button.att-add:active { background: var(--mb-press, var(--active)); }
+.tc-sheet.expanded .tc-mode-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;                                   /* 与卡片底边留一口气，别贴着 */
+  padding-left: 54px;                                /* 让开左边的 ＋（10 + 36 + 8） */
+  padding-right: 100px;                              /* 让开右边的发送键 */
+}
+/* 键盘态里有三颗了，卡内那颗「讨论 ▾」收起来，免得同一个设置两个入口 */
+.tc-sheet.expanded .tc-mode-wrap { display: none; }
+/* 发送键也搬到卡外：同一行的右端（2026-11-06 用户：发送也拿出来，输入框下面靠右）。
+   用绝对定位而不是改 DOM —— 桌面/单行态还得吃卡内那颗，同一个节点两套位置最省事。
+   参照物是 .tc-composer（§7 里它本来就是 position:relative）；
+   bottom 与 composer 的底部 padding 同档，height 与三颗齐平，看起来就是一行。 */
+.tc-sheet.expanded .tc-send {
+  position: absolute;
+  right: 10px;                                       /* 与 composer 左右 padding 对齐 */
+  bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 36px;                                      /* 与 ＋、三颗同高（2026-11-06 按钮区加高） */
+  margin: 0;
+  padding: 0 18px;
+  border-radius: 99px;
+  font-size: 13.5px;
+  line-height: 1;
+}
+.tc-sheet.expanded .tc-mode-chips button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 13px;
+  border: 1px solid var(--mb-hairline, var(--line));
+  border-radius: 99px;
+  background: transparent;
+  color: var(--mb-text-2, var(--dim));
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.tc-sheet.expanded .tc-mode-chips button:active { background: var(--mb-press, var(--active)); }
+/* 选中那颗：淡蓝底 + 边，文字回到正文色（不抢发送键的位置） */
+.tc-sheet.expanded .tc-mode-chips button.on {
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--mb-text, var(--text));
+}
+/* 圆点按档位语义上色（便签=灰 / 讨论=蓝 / 执行=绿），未选中也看得懂哪个是哪个 */
+.tc-mode-chips .tc-mode-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--dim); }
+.tc-mode-chips [data-chip='discuss'] .tc-mode-dot { background: var(--accent); }
+.tc-mode-chips [data-chip='execute'] .tc-mode-dot { background: var(--ok); }
+/* 键盘唤起（.expanded）时：顶边**钉住不动**，底边跟键盘（2026-11-06 用户口径：
+   "键盘起来后抽屉不要往上去"）。原来面板是 height:78%，而 sheet 高度 = 可见视口，
+   键盘一弹视口变矮、78% 跟着变矮，顶边就自己往上跳一格（≈0.22 × 键盘高）。
+   现在改成 absolute + top(键盘起来前的位置，projects.mjs pinSheetTop 记的) +
+   bottom:0 —— 键盘吃掉的是抽屉下半截，抽屉本体待在原地。
+   同时把铺满整屏（.max）归零的圆角补回来：一打字抽屉顶还是要有圆角。 */
+.tc-sheet.expanded .tc-sheet-panel {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: var(--tc-panel-top, 22%);
+  bottom: 0;
+  height: auto;                     /* top/bottom 定高，别再叠 78% */
+  border-radius: 16px 16px 0 0;
+}
+/* 用户自己点了「铺满整屏」时顶边就是屏幕顶，不该被钉住的位置拉着 */
+.tc-sheet.expanded.max .tc-sheet-panel { top: 0; }
+.tc-sheet .tc-sheet-panel::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  pointer-events: none;
+}
+.tc-sheet.expanded .tc-sheet-panel::after {
+  background: rgba(0, 0, 0, 0.30);
+  opacity: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tc-sheet .tc-sheet-panel::after { transition: none; }
+}
+
+
+
+/* 展开态（键盘起来）的高度改吃**布局视口**（100%），不再吃 --mb-vh。
+   --mb-vh 是 visualViewport 高度喂的 px（mobile.mjs ④），量不到键盘时它就是
+   旧值 —— 抽屉会比可见区高一截，WebView 只好把整页往上滚去露出输入框，于是
+   "输入框被顶上去了、下面一片空白、还能继续滑"（2026-11-06 用户实报）。
+   100% 跟着真实窗口走：壳把键盘高度让出来多少（MainActivity 的 ime inset），
+   面板就矮多少，输入条永远钉在键盘上沿。 */
+.tc-sheet.expanded { height: 100%; }
+
+/* 抽屉开着时整页不许滚（键盘弹起时浏览器会为了露出焦点滚文档，一滚 fixed 的
+   抽屉就跟着上移）。卡页自己的滚动区在下面那条规则里单独锁。 */
+body.tc-sheet-open { overflow: hidden; overscroll-behavior: none; }
+
+/* 抽屉开着时卡页不再跟手滚（遮罩只盖住露在上面的那 22%，手势还是摸得到底下的滚动区） */
+body.tc-sheet-open .tc-page.tc-m .tc-main-scroll { overflow: hidden; }
+
+@media (prefers-reduced-motion: reduce) {
+  .tc-sheet,
+  .tc-sheet-mask,
+  .tc-sheet-panel { transition: none; }
+}
+
+/* 宽屏保险：抽屉 DOM 只该在手机整页那条路上存在。窗口从窄拖过 900px 时
+   projects.mjs 会重画整页（mbTC 在画的时候才定），这一条只是过渡那一瞬的兜底 */
+@media (min-width: 901px) {
+  .tc-sheet { display: none; }
+}
+
+/* 卡页底部的常驻评论条（.tc-m-cmtbar，2026-11-06 上午建的）已于当天中午删掉：
+   讨论入口只留导航栏右上角那颗💬气泡，底部那条是过渡产物（键盘唤起时它会从
+   键盘上方露出来跟抽屉输入区打架）。 */
+
+/* ============================================================ 23. 定时任务（手机，2026-11-06 开放）
+
+   入口先开的这一天样式跟着补齐。四件事：
+
+   ① 列表页（≤900）：任务卡的动作按钮（立即跑/编辑/删除）在桌面是"悬浮才显形"
+      ——手机没有 hover，永远显不了形。触屏上改成常显；卡片网格压成单列。
+   ② 弹窗（≤900）：桌面的「左输入、右配置」两栏是 920px 的形态，窄屏改竖排
+      （写的东西在上、选的东西在下，中间一条横线当分界）；宽度收进视口。
+      **两段都不许被压扁、容器自己滚** —— 见下面 sch-cols 的注释（2026-11-06 叠字）。
+   ③ 弹窗（≤600）：照 #taskDlg 的"全屏工作纸"重做 —— 600px 档通用的 dialog[open]
+      底部抽屉规则赢不了 `dialog.sch-dlg` 的 `width: 920px`（同为 0,1,1，但它在
+      style.css 更早，这里在文件尾、必赢），但抽屉形态救不了它：内容比 82vh 高时
+      溢出部分直接漏出屏幕外，「保存」按钮恰好钉在最底下等于没有（#taskDlg 实机踩过
+      同一个坑）。满屏贴边 + 高度吃 --mb-vh：键盘弹起视口缩多少、纸就缩多少，
+      动作条永远在键盘上方。overflow 保持 visible：.combo 下拉要往外伸。
+   ④ 弹窗（≤600）内容形态（2026-11-06 晚，用户："做法下拉框改成选项按钮，交给谁做成
+      一行菜单，右边加个箭头，点击跳转到新页面进行选择（参考任务面板的新建任务）；
+      管理项目也改成到新页面选择"）：做法 = 一排选项按钮（4 种全露出来，不用先点开
+      才知道有什么），选人 / 选项目 / 选仓库 / 选流程 = 一行菜单 + › → 全屏选择页
+      （#mbPicker，DOM 挂进这个 dialog 才压得住 top layer，见 mbOpenPicker 注释）。
+      这也是"看着混乱"的正解：满屏纸里塞四五个下拉浮层，永远会跟键盘和底边打架。
+*/
+@media (max-width: 900px) {
+  .sch-grid { grid-template-columns: 1fr; }
+  /* 触屏没有 hover：动作按钮常显（「在跑」的转环本来就不吃这条） */
+  .sch-acts .sch-ic { opacity: 1; pointer-events: auto; }
+  /* 动作按钮从 26×26 放大到 34×34：桌面靠悬浮才出现、小一点不碍事，
+     手机上常驻显形又是拇指目标，44 档够不着就至少上 34 */
+  .sch-acts .sch-ic { width: 34px; height: 34px; }
+  .sch-acts .sch-ic svg { width: 17px; height: 17px; }
+
+  dialog.sch-dlg {
+    width: min(920px, calc(100vw - 16px));
+    max-height: 92vh;
+  }
+  /*
+   * 竖排之后**容器必须自己滚**：内容一高，flex 先把两段压扁（flex-shrink 默认 1），
+   * 可段里的标签/输入框不会跟着缩 —— 溢出的字直接画到下一段身上，看着就是
+   * "做什么和交给谁叠在一起、名字框被切掉一半"（2026-11-06 用户截图报的就是这个）。
+   * 所以：两段 flex-shrink: 0，滚动交给 .sch-cols。
+   */
+  dialog.sch-dlg .sch-cols { flex-direction: column; gap: 0; overflow-y: auto; overscroll-behavior: contain; }
+  dialog.sch-dlg .sch-left { flex: 0 0 auto; min-height: 0; }
+  dialog.sch-dlg .sch-left-fields textarea { min-height: 84px; }
+  /* 分界线转 90°：竖线变横线，贴在右栏顶上 */
+  dialog.sch-dlg .sch-right {
+    flex: 0 0 auto;
+    margin-top: 14px;
+    padding-left: 0;
+    padding-top: 14px;
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+}
+
+/* ---- 列表页 iOS 重排（≤600，2026-11-06 用户："这个页面不像手机的页面"）----
+
+   桌面那套"描边小卡 + 灰幽灵图标"搬上手机就是网页味。这里不动 DOM（card() 桌面手机
+   共用一份），全部 CSS 换皮：
+   · 卡 = inset grouped：无描边、14px 圆角白卡浮在 --mb-page 灰底上；
+   · 标题 17/600（iOS 大标题的正文档），动作图标染 tint（删除保持红），36px 热区；
+   · 说明 15 / 结果 13，按 iOS 字阶；底行一根发丝线隔开节拍与上次时间；
+   · 开关从 32×18 放大到 46×26（.sm 的几何整套重算：thumb 22、位移 20）。 */
+@media (max-width: 600px) {
+  .sch-count { margin: 4px 2px 10px; font-size: 13px; font-weight: 400; color: var(--mb-text-2, var(--dim)); }
+  .sch-grid { display: flex; flex-direction: column; gap: 10px; }
+  .sch-card {
+    gap: 0;
+    border: 0;
+    border-radius: 14px;
+    background: var(--mb-surface, var(--panel));
+    box-shadow: none;
+    padding: 0 16px;
+  }
+  .sch-card:hover { border: 0; }
+  .sch-card-top { flex-wrap: nowrap; padding: 13px 0 6px; }
+  .sch-card-top b {
+    min-width: 0;
+    font-size: 17px;
+    font-weight: 600;
+    color: var(--mb-text, var(--text));
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .sch-card-top .pill { display: none; }   /* 动作名卡上不占位（2026-11-06 用户："这个标签去掉"），详情页里有 */
+  /* 卡面瘦身（2026-11-06 用户："按钮操作有点挤"）：三颗图标全搬进详情页，卡上只留开关。
+     尾部那颗 › 也不要了（同日："箭头去掉"）—— 卡还是可点的，按压反馈留着。 */
+  .sch-card { cursor: pointer; }
+  .sch-card:active { background: var(--mb-press, rgba(118, 118, 128, 0.14)); }
+  .sch-acts { gap: 0; }
+  .sch-acts .sch-ic { display: none; }
+  .sch-acts .switch.sm { width: 46px; height: 26px; margin-left: 4px; }
+  .sch-acts .switch.sm > span::after { width: 22px; height: 22px; top: 2px; left: 2px; }
+  .sch-acts .switch.sm input:checked + span::after { transform: translateX(20px); }
+  .sch-desc { padding-top: 2px; font-size: 15px; line-height: 1.5; color: var(--mb-text, var(--text)); }
+  /* 上次结果卡上不放（2026-11-06 用户："已派活xxxx去掉"）：结果看详情页，卡只留节拍与时间 */
+  .sch-result { display: none; }
+  .sch-foot { margin-top: 10px; padding: 9px 0 11px; border-top: 0.5px solid var(--mb-hairline, var(--line)); }
+  .sch-when { font-size: 13px; color: var(--mb-text-2, var(--dim)); }
+  .sch-last { font-size: 13px; color: var(--mb-text-3, var(--dim)); font-variant-numeric: tabular-nums; }
+
+  /* ---- 详情页（2026-11-06 用户："点进去打开详情页进行操作"）----
+     与列表同一套 inset grouped 语汇：说明一块、配置一块、结果一块，红字「删除」单独一块。
+     导航栏右上那颗「编辑」是文字按钮（iOS 的 Edit），出现时标题两侧礼让出去。 */
+  .kb-new .kb-new-navlink {
+    position: absolute;
+    right: var(--mb-pad, 16px);
+    top: env(safe-area-inset-top, 0px);
+    height: var(--mb-nav, 52px);
+    padding: 0 2px;
+    border: 0;
+    background: none;
+    font: inherit;
+    font-size: 22px;
+    line-height: 1;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    color: var(--mb-tint, var(--accent));
+  }
+  .kb-new .kb-new-navlink:active { opacity: 0.5; }
+  .kb-new-bar.has-act .kb-new-bartitle { left: 64px; right: 76px; }
+
+  .sch-dt { display: flex; flex-direction: column; gap: 12px; }
+  .sch-dt-head { display: flex; }
+  .sch-dt-head .pill { font-size: 12px; }
+  .sch-dt-card { background: var(--mb-surface, var(--panel)); border-radius: 14px; padding: 2px 16px; }
+  .sch-dt-row { display: flex; align-items: center; gap: 12px; min-height: 50px; }
+  .sch-dt-row + .sch-dt-row, .sch-dt-block + .sch-dt-row { border-top: 0.5px solid var(--mb-hairline, var(--line)); }
+  .sch-dt-block { padding: 12px 0; }
+  .sch-dt-block + .sch-dt-block { border-top: 0.5px solid var(--mb-hairline, var(--line)); }
+  .sch-dt-k { flex: 0 0 auto; font-size: 13px; color: var(--mb-text-2, var(--dim)); }
+  .sch-dt-txt { margin-top: 4px; font-size: 15px; line-height: 1.55; color: var(--mb-text, var(--text)); overflow-wrap: anywhere; }
+  .sch-dt-v { flex: 1 1 auto; min-width: 0; text-align: right; font-size: 15px; color: var(--mb-text, var(--text)); }
+  .sch-dt-ok { color: var(--ok); }
+  .sch-dt-bad { color: var(--bad); }
+  /* ⋯ 菜单（复用「重复方式」的 sch-sheet）：删除项标红 */
+  .sch-sheet-item.is-danger { color: var(--mb-unread, var(--bad)); }
+  .sch-sheet-item.is-danger .sch-sheet-lab { color: inherit; }
+}
+/* ---- 底部抽屉（重复方式 / 星期 / 月份）：2026-11-06 用户"定时器不要用下拉，改成使用抽屉" ----
+
+   fixed 贴底、整组选项一次摊开、当前值打勾。不用 absolute 的下拉浮层：那东西长在按钮旁边，
+   页面在键盘上方时经常被底边切掉，也看不清"还有哪些选项"。层级 95 = 压住整页（90）
+   与选择页（91），但仍低于浏览器 top layer（confirmDo 那种 dialog）。
+   z-index / 滑入时序与 .tc-sheet（讨论抽屉）同一套。 */
+.sch-sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: var(--mb-vh, 100%);
+  z-index: 95;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  visibility: hidden;
+  pointer-events: none;
+  transition: visibility 0s 0.24s;   /* 收起时等面板滑出去再隐藏 */
+}
+.sch-sheet.in { visibility: visible; pointer-events: auto; transition-delay: 0s; }
+.sch-sheet[hidden] { display: none; }
+.sch-sheet-mask {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.34);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+.sch-sheet.in .sch-sheet-mask { opacity: 1; }
+.sch-sheet-panel {
+  position: relative;
+  margin: 0 8px calc(8px + env(safe-area-inset-bottom, 0px));
+  display: flex;
+  flex-direction: column;
+  max-height: 72vh;
+  border-radius: 16px;
+  background: var(--mb-page, var(--bg));
+  box-shadow: 0 -10px 34px rgba(0, 0, 0, 0.22);
+  overflow: hidden;
+  transform: translateY(110%);
+  transition: transform 0.24s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+.sch-sheet.in .sch-sheet-panel { transform: translateY(0); }
+.sch-sheet-title {
+  flex: 0 0 auto;
+  padding: 14px 16px 8px;
+  text-align: center;
+  font-size: 12.5px;
+  color: var(--dim);
+}
+/* 抽屉内容槽：清单 / 转轮共用（同一个 DOM、同一个历史格，内容按需换 —— 见 skills.mjs
+   schShowSheet）。自己不吃高度，让里面那块（.sch-sheet-list 滚动 / .sch-time 定高）去决定。 */
+.sch-sheet-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.sch-sheet-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.sch-sheet-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 52px;
+  padding: 0 16px;
+  border: 0;
+  border-top: 0.5px solid var(--line);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 16px;
+  text-align: left;
+}
+.sch-sheet-item:active { background: color-mix(in srgb, var(--mb-text, var(--text)) 6%, transparent); }
+.sch-sheet-item.on { color: var(--mb-tint, var(--accent)); font-weight: 600; }
+.sch-sheet-lab { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 打勾：一根 7×12 的折线（border 画），只有选中那条显形 */
+.sch-sheet-check {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 12px;
+  margin-right: 2px;
+  border-right: 2px solid var(--mb-tint, var(--accent));
+  border-bottom: 2px solid var(--mb-tint, var(--accent));
+  transform: rotate(45deg) translate(-1px, -1px);
+  opacity: 0;
+}
+.sch-sheet-item.on .sch-sheet-check { opacity: 1; }
+.sch-sheet-cancel {
+  flex: 0 0 auto;
+  min-height: 56px;
+  border: 0;
+  border-top: 0.5px solid var(--line);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 16px;
+  font-weight: 600;
+}
+.sch-sheet-cancel:active { background: color-mix(in srgb, var(--mb-text, var(--text)) 6%, transparent); }
+
+/* ---- 时间转轮（「每天 / 每周 / 每月 / 每年」的「时间」那一行） ----
+
+   2026-11-06 用户："每天时，时间的选择方式是系统自带的，不好看。"
+
+   原生 `<input type="time">` 弹的是系统时钟盘：另一套皮、压在页脚主按钮上、
+   取消/确定不在纸里。换成抽屉里的两列滚轮 —— 同宽两列 + 中线高亮槽 + 上下渐隐，
+   取消/完成跟着抽屉一起贴底。语汇与清单版抽屉一字不差（同一个 .sch-sheet-panel）。
+
+   ⚠️ --sch-wheel-i（格高）与 skills.mjs 的 SCH_WHEEL_I 必须同值：跳位靠 scrollTop = 格号×格高。 */
+.sch-time {
+  --sch-wheel-i: 40px;
+  position: relative;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  height: calc(var(--sch-wheel-i) * 5);   /* 一整格 × 5：上下各留 2 格，中线永远有一格停 */
+  padding: 0 16px;
+}
+/* 中线高亮槽：选中值的那一格。上下各一条 0.5px 细线 = 槽的边，
+   比整块染蓝更轻（数自己的光就够，不需要底色喊话） */
+.sch-time-band {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  top: 50%;
+  height: var(--sch-wheel-i);
+  margin-top: calc(var(--sch-wheel-i) / -2);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--mb-tint, var(--accent)) 9%, transparent);
+  box-shadow:
+    inset 0 0.5px 0 color-mix(in srgb, var(--mb-tint, var(--accent)) 22%, transparent),
+    inset 0 -0.5px 0 color-mix(in srgb, var(--mb-tint, var(--accent)) 22%, transparent);
+  pointer-events: none;
+}
+/* 两列滚轮本体。scroll-snap: mandatory + 中央对齐 —— 手一松必停在格上，
+   停在哪格就是哪个值（不靠"算惯性"，省掉一堆手感补丁）。 */
+.sch-time-col {
+  position: relative;
+  z-index: 1;
+  flex: 0 0 auto;
+  width: 88px;
+  height: 100%;
+  padding: calc(var(--sch-wheel-i) * 2) 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scroll-snap-type: y mandatory;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  /* 上下渐隐：离中线越远越淡，视线自然落进高亮槽（也顺手盖住"边缘格被裁一半"） */
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 26%, #000 74%, transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 26%, #000 74%, transparent 100%);
+}
+.sch-time-col::-webkit-scrollbar { display: none; }
+.sch-wheel-i {
+  display: block;
+  width: 100%;
+  height: var(--sch-wheel-i);
+  border: 0;
+  background: none;
+  color: var(--mb-text-3, var(--dim));
+  font: inherit;
+  font-size: 20px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;   /* 等宽数字：滚起来不左右抖 */
+  letter-spacing: 0.02em;
+  scroll-snap-align: center;
+  transition: color 0.12s ease;
+}
+.sch-wheel-i.on { color: var(--mb-text, var(--text)); }
+.sch-time-colon {
+  position: relative;
+  z-index: 1;
+  flex: 0 0 auto;
+  margin: 0 2px;
+  color: var(--mb-text-3, var(--dim));
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1;
+}
+/* 抽屉底栏（转轮版：取消 + 完成 并排）。清单版仍是整条 .sch-sheet-cancel。 */
+.sch-sheet-foot {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 8px;
+  padding: 12px;
+  border-top: 0.5px solid var(--line);
+}
+.sch-sheet-btn {
+  flex: 1 1 0;
+  min-height: 46px;                     /* 拇指区 ≥44（WCAG 2.5.5） */
+  border: 0;
+  border-radius: 12px;
+  background: var(--mb-fill, var(--input));
+  color: var(--mb-text, var(--text));
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  transition: filter 0.12s ease;
+}
+.sch-sheet-btn:active { filter: brightness(0.96); }
+.sch-sheet-btn.is-primary {
+  background: var(--mb-btn-send, var(--mb-bubble-me, var(--accent)));
+  color: var(--mb-on-bubble, #fff);
+}
+
+/* ---- 日期抽屉（「单次」的日期那一行）----
+
+   2026-11-06 用户："重复方式为单次时，时间也不好看，你重新设计一下，跟其他的统一。"
+
+   「单次」拆成两行（日期 + 时间）后，日期这半就是一页**贴底的月历**：
+   点某一天即收（与「星期几 / 几月」那种"点一条就收"同一个动作），时分交给时间转轮。
+   格高 46 / 圆 38 是拇指尺寸；选中填 --mb-btn-send 而不是 --mb-tint —— 白字压 tint
+   只有 3.9:1，压 bubble-me 是 4.7:1（与主按钮同一条口径）。 */
+.sch-date { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.sch-date-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px 0;
+}
+.sch-date-title {
+  flex: 1 1 auto;
+  text-align: center;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--mb-text, var(--text));
+}
+.sch-date-nav {
+  position: relative;
+  flex: 0 0 auto;
+  width: 44px;              /* 拇指区（WCAG 2.5.5） */
+  height: 44px;
+  border: 0;
+  border-radius: 12px;
+  background: none;
+  color: var(--mb-tint, var(--accent));
+}
+.sch-date-nav i {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 9px;
+  height: 9px;
+  border-left: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(45deg) translate(2px, -2px);
+}
+.sch-date-nav.is-next i { transform: rotate(-135deg) translate(2px, -2px); }
+.sch-date-nav:active { background: color-mix(in srgb, var(--mb-tint, var(--accent)) 12%, transparent); }
+.sch-date-week {
+  display: grid;
+  /* minmax(0,1fr)：1fr 的下限是 min-content，格子里那个固定 38px 的圆会把每列顶到
+     62px —— 七列加起来超出面板，周日那一整列被裁掉（2026-11-06 实测踩到）。
+     钉成"等分、可以为 0"，表头与日格的列才严格对齐。 */
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  padding: 0 8px;
+}
+.sch-date-week span {
+  text-align: center;
+  font-size: 11.5px;
+  line-height: 26px;
+  color: var(--mb-text-3, var(--dim));
+}
+.sch-date-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));   /* 同上：列宽不许被内容顶大 */
+  padding: 0 8px 10px;
+}
+.sch-date-cell {
+  position: relative;
+  height: 46px;
+  border: 0;
+  background: none;
+  color: var(--mb-text, var(--text));
+  font: inherit;
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+}
+.sch-date-cell > span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  margin: 4px auto;
+  border-radius: 999px;
+  transition: background-color 0.12s ease;
+}
+/* 前导空位：占格不显示（否则 1 号会跑到别的星期列上） */
+.sch-date-cell.is-out { visibility: hidden; }
+/* 今天：只描一圈细环，不抢"选中"的实心 */
+.sch-date-cell.is-today > span {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--mb-tint, var(--accent)) 45%, transparent);
+  color: var(--mb-tint, var(--accent));
+  font-weight: 600;
+}
+.sch-date-cell.on > span {
+  background: var(--mb-btn-send, var(--mb-bubble-me, var(--accent)));
+  color: var(--mb-on-bubble, #fff);
+  font-weight: 600;
+  box-shadow: none;
+}
+.sch-date-cell:not(.is-out):not(.on):active > span { background: color-mix(in srgb, var(--mb-text, var(--text)) 8%, transparent); }
+@media (prefers-reduced-motion: reduce) {
+  .sch-sheet-panel { transition: none; }
+  .sch-wheel-i { transition: none; }
+}
+
+/* ---- ≤600：整页（2026-11-06 用户："点击添加按钮，现在是打开抽屉操作的，改成跳转到一个
+   新的页面。对标任务面板的做法"）----
+
+   外框 / 顶栏 / 页脚 / 主按钮**全部借 `.kb-new` 那套**（projects.mjs 的新建任务页）：
+   同一种"从右滑进来的工作纸"—— 滑入、玻璃底、发丝线、页脚贴键盘上沿都由它给。
+   这里只补三件与本表单有关的：
+
+     ① 滚动区的页边距（内容是 .sch-m，不是 .kb-new-draft 那种自带 margin 的块）；
+     ② 字段排版（标签 12px、名字 16/600、textarea 96 高）；
+     ③ 做法 = 一排选项按钮；参数 = 一行菜单 + ›。
+
+   为什么不再用满屏 dialog：那仍然是一张"弹层"（没有页头、返回键另走一套），而且在
+   top layer 里选择页只能 appendChild 进弹窗本体才压得住。整页是普通覆盖层，
+   选择页挂 body、z-index 91 > 90 就够。见 skills.mjs 的 schEnsurePage。 */
+@media (max-width: 600px) {
+  body.sch-page-open { overflow: hidden; }
+  body.sch-page-open .mb-tabbar { display: none; }   /* 进表单页隐底部 tab，避免误点丢草稿 */
+
+  /* 滚动区（.kb-new-body 会给滚动与 flex）只补页边距 */
+  .sch-page #schPageBody { padding: 12px var(--mb-pad, 16px) 8px; }
+
+  .sch-m { display: flex; flex-direction: column; padding-bottom: 6px; }
+  .sch-m label:not(.check) { margin: 18px 0 7px; font-size: 12px; }
+  /* 输入区统一"填充式"软底：描边框混在下面无边框的一行菜单里，层次是乱的 */
+  .sch-m #schName,
+  .sch-m #schLeftFields input[data-cfg],
+  .sch-m textarea {
+    border: 1px solid transparent;
+    border-radius: 12px;
+    padding: 11px 14px;
+  }
+  .sch-m #schName:focus,
+  .sch-m #schLeftFields input[data-cfg]:focus,
+  .sch-m textarea:focus {
+    border-color: color-mix(in srgb, var(--mb-tint, var(--accent)) 45%, transparent);
+  }
+  .sch-m #schName { font-size: 16px; font-weight: 600; }
+  .sch-m textarea { min-height: 108px; line-height: 1.6; resize: none; }
+  .sch-m #schRightFields { margin-top: 14px; }
+
+  /* ---- 做法：一排选项按钮 ----
+     4 种固定两两成行（flex 换行时 3+1 那种孤行很难看）；等宽网格读起来也更快 */
+  .sch-seg { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 0; }
+  .sch-seg-btn {
+    width: 100%;
+    height: 36px;
+    padding: 0 10px;
+    text-align: center;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: var(--input);
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+    line-height: 1;
+  }
+  .sch-seg-btn.on {
+    border-color: color-mix(in srgb, var(--mb-tint, var(--accent)) 55%, transparent);
+    background: color-mix(in srgb, var(--mb-tint, var(--accent)) 12%, var(--panel));
+    color: var(--mb-tint, var(--accent));
+    font-weight: 600;
+  }
+  .sch-m-hint { margin-top: 10px; font-size: 12px; line-height: 1.5; color: var(--dim); }
+
+  /* ---- 一行菜单（字段名在左，值靠右，尾巴一颗 ›）---- */
+  .sch-page .sch-pick {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    min-height: 50px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-top: 0.5px solid var(--line);
+    background: none;
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+  }
+  .sch-page .sch-pick:active { background: color-mix(in srgb, var(--mb-text, var(--text)) 5%, transparent); }
+  .sch-page .sch-pick-k { flex: 0 0 auto; font-size: 12px; color: var(--dim); }
+  .sch-page .sch-pick-v {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: right;
+    font-size: 14px;
+    color: var(--text);
+  }
+  .sch-page .sch-pick-v.is-off { color: var(--dim); }
+  /* 时间那一行的值：等宽数字 + 加粗一档。它是"一个时刻"，不是一段文字 ——
+     滚轮里怎么显示，行尾就怎么显示（同字距、同宽） */
+  .sch-page .sch-pick-v.is-time {
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
+  }
+  .sch-page .sch-pick-chev {
+    flex: 0 0 auto;
+    width: 7px;
+    height: 7px;
+    border-top: 1.5px solid color-mix(in srgb, var(--dim) 55%, transparent);
+    border-right: 1.5px solid color-mix(in srgb, var(--dim) 55%, transparent);
+    transform: rotate(45deg);
+  }
+
+  /* 「启用」：收进配置组，与一行菜单同一语汇 —— 文字在左、iOS 开关在右；
+     蓝方块 checkbox 混在一排无边框的行里太跳。纯 CSS 开关，DOM 一字不动 */
+  .sch-page .sch-enable {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    min-height: 50px;
+    margin-top: 0;
+    border-top: 0.5px solid var(--line);
+    font-size: 14px;
+  }
+  .sch-page .sch-enable span { order: 1; flex: 1 1 auto; }
+  .sch-page .sch-enable input {
+    order: 2;
+    flex: 0 0 auto;
+    width: 46px;
+    height: 28px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--dim) 35%, transparent);
+    position: relative;
+    appearance: none;
+    -webkit-appearance: none;
+    transition: background 0.18s ease;
+    cursor: pointer;
+  }
+  .sch-page .sch-enable input::before {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 1px 3px rgb(0 0 0 / 0.25);
+    transition: transform 0.18s ease;
+  }
+  .sch-page .sch-enable input:checked { background: var(--mb-tint, var(--accent)); }
+  .sch-page .sch-enable input:checked::before { transform: translateX(18px); }
+  .sch-page .sch-enable input:focus-visible {
+    outline: 2px solid var(--mb-tint, var(--accent));
+    outline-offset: 2px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .sch-page .sch-enable input,
+    .sch-page .sch-enable input::before { transition: none; }
+  }
+
+  /* ---- 重复区第二层：间隔 / 日期 / 时间是输入框，但仍排成"一行"的样子 ----
+     （第一层「重复」与「星期 / 月份」是 .sch-pick 按钮行，点开底部抽屉） */
+  .sch-page .sch-pick-static {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    min-height: 50px;
+    border-top: 0.5px solid var(--line);
+  }
+  /* 行内输入：去掉输入框的壳（边框/底色），值靠右、字号与一行菜单的值一致。
+     width:auto + flex 才能压住全局 input 的 width:100%（不然会把"分钟/号"顶出屏幕） */
+  .sch-page .sch-pick-in {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--text);
+    font: inherit;
+    font-size: 14px;
+    text-align: right;
+    -webkit-appearance: none;
+    appearance: none;
+  }
+  .sch-page .sch-pick-in:focus { outline: none; }
+  .sch-page .sch-pick-u { flex: 0 0 auto; font-size: 13px; color: var(--dim); }
+  /* 「单次」不再是自建日历浮层（2026-11-06 二改：与「每月」同构 = 日期行 + 时间行），
+     所以这里原先那组 .sch-dt / .combo-btn 覆盖一并撤掉 —— 桌面的那颗还在
+     mountSchRepeatCombos 里，只是手机上走不到了。 */
 }

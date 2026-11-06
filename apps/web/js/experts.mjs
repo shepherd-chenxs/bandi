@@ -636,13 +636,29 @@ export function renderWorkbenchGrid() {
   const limitedByRole = !devMode && !!S.isUser && !S.isAdmin;
   /*
    * 手机形态功能子集（2026-11-03 用户拍板"手机只要一部分功能，甚至是简化版"）：
-   * 窄屏（body.mb-narrow，mobile.mjs 维护）宫格**只画**「项目 / 任务看板」两格 ——
-   * 插件、研发、自动化、坏插件提示都是 PC 独有功能，不是藏起来、是根本不进 DOM：
+   * 窄屏（body.mb-narrow，mobile.mjs 维护）宫格不画插件、研发、坏插件提示 ——
+   * 插件、研发是 PC 独有功能，不是藏起来、是根本不进 DOM：
    * 不渲染就不存在"适配"，也不会像绑人前那样点一格吃一个 403。
    * 与 settings.mjs 的 onPhone 判据同源同拍（mb-narrow ↔ mobile.css 的 @media 900px）。
+   *
+   * 2026-11-06 开放「定时任务」：手机上也能建/管定时任务。权限照旧由服务端那把
+   * 尺子量 —— 被角色砍过的账号（limitedByRole）仍然不给，点进去只会吃 403；
+   * 设备形态另在 route-policy 里给四条 schedule 路由打了 device 标（见下方
+   * phoneSchedules 的注释）。工作流设计器仍是 PC 独有。
    */
   const onPhone = document.body.classList.contains('mb-narrow');
   const gridLite = devMode || limitedByRole || onPhone;
+  /*
+   * 手机宫格补「定时任务」一格（工作流设计器仍是 PC 独有：画布拖节点在窄屏没法用）。
+   *
+   * 2026-11-06 一天里改了两回口径，记清楚免得再来一次：
+   *   · 上午先按「管理员真人账号」放开（`!devMode`）—— 结果手机实机还是看不到：
+   *     手机是**配对设备**（/api/me 回 kind:'device'），走的正是被排除的 devMode 那条。
+   *   · 现在设备也放（服务端四条 schedule 路由同步打了 device 标，见 route-policy），
+   *     判据只剩「窄屏 + 不是被角色砍过的账号」——limitedByRole 那种点进去只会吃 403，
+   *     摆出来等于骗人。
+   */
+  const phoneSchedules = onPhone && !limitedByRole;
   // 宫格是整页布局：把左栏收掉（进插件后会由 renderPluginMaster 放回来）
   document.body.classList.add('no-list');
   setListTitle('工作台');
@@ -708,7 +724,9 @@ export function renderWorkbenchGrid() {
   $('pluginView').classList.remove('kb-page'); // 宫格是长页面，按普通滚动
   $('pluginView').innerHTML = `
     <div class="detail-head head-row"><div class="head-title"><b>工作台</b></div></div>
-    <div class="detail-body wb-page">${pluginSections}${workbenchProjectSection()}${gridLite ? '' : workbenchAutoSection()}${
+    <div class="detail-body wb-page">${pluginSections}${workbenchProjectSection()}${
+      gridLite ? (phoneSchedules ? workbenchAutoSection({ schedulesOnly: true }) : '') : workbenchAutoSection()
+    }${
       broken.length
         ? `<div class="wb-sec">装不上台面</div>
            ${broken
