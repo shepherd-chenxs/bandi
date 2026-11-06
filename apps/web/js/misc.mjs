@@ -1,7 +1,7 @@
 /* misc.mjs —— 新建员工、新建群、换群助手、绑定、列表项右键菜单（绑定）、版本提醒。
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
 import { esc, personLabel, personSubtitle, restorePlace, toast } from './shell.mjs';
-import { api, createCombo, dt, post } from './ui.mjs';
+import { api, copyPlainText, createCombo, dt, post } from './ui.mjs';
 import { load } from './state.mjs';
 import { confirmDo } from './machine.mjs';
 import { openPluginForm, pluginFormId } from './experts.mjs';
@@ -515,8 +515,40 @@ export async function boot() {
 
 
 
-/* ---------------------------------------------------------------- 版本提醒 */
+/* ------------------------------------------------------- 版本号（rail 标的下一行） */
 
+/**
+ * rail 里品牌标下面那行小字（2026-11-05 用户：「原来这里有个版本号，去掉了，加回来」）。
+ * 版本只有 `/api/hello` 知道（服务端读 apps/desktop/version.json，见 server.mjs 的 helloPayload）。
+ *
+ * 三条口径：
+ *  - 拿不到就**继续藏着** —— 不编 "v0.0.0"，也不留空档把下面的导航顶下去；
+ *  - 点一下复制整串版本号：报障时用户第一句就是版本，能直接粘出去；
+ *  - 只填一次，不轮询：版本是随进程读的，页面活着的这一轮里不会变。
+ */
+export async function initRailVersion() {
+  const el = $('railVer');
+  if (!el) return;
+  let ver = '';
+  try {
+    ver = String((await api('/api/hello'))?.version ?? '').trim();
+  } catch {
+    return; // 服务没起来：留空，别在标下面挂个假版本
+  }
+  if (!ver) return;
+  el.textContent = 'v' + ver;
+  el.title = `班底 v${ver} · 点击复制版本号`;
+  el.setAttribute('aria-label', `版本 v${ver}，点击复制`);
+  el.hidden = false;
+  el.addEventListener('click', async () => {
+    const ok = await copyPlainText(ver);
+    toast(ok ? `已复制 v${ver}` : `版本号 v${ver}`);
+  });
+}
+
+
+
+/* ---------------------------------------------------------------- 版本提醒 */
 /*
  * 前端是**长活 SPA**：磁盘上的 app.js 换了，开着的页面不会自己换 JS ——
  * 2026-10-17 一天里踩了两回「点了没反应 / 看到的还是旧页面」，全是它：

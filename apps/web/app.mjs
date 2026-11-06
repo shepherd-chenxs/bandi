@@ -25,9 +25,6 @@ import './js/misc.mjs';
 // 而脚本是 defer 的 module，此刻 body 已经解析完，安全。
 import './js/mobile.mjs';
 import './js/pairing.mjs';
-// 语音输入（2026-11-01）：只在手机壳里生效 —— 壳在 WebView 上注入了 window.__BandiSpeech，
-// 桌面浏览器没有这个对象，mountVoice() 会直接返回（按钮不出现，不碰任何桌面逻辑）。
-import { mountVoice } from './js/voice.mjs';
 
 import { ROLE_SUGGEST, THEME_KEY, applyTheme, esc, readCollapsed, toast } from './js/shell.mjs';
 import { api, closeHelpPop, hideTip, openCombo, post, showTip, tipAnchor, tipTimer, wireDialogHead } from './js/ui.mjs';
@@ -45,7 +42,7 @@ import { deleteSessionFromLog, memberPicked, renderMemberCandidates } from './js
 import { applyFormDefaults, closeDrawer, pluginMust, refreshGroup, rerenderPanel, runFormFollow } from './js/experts.mjs';
 import { startEvents } from './js/events.mjs';
 import { $, S } from './js/core.mjs';
-import { boot, gAssistantCombo, openGroupDialog, openPluginAdd, pRuntimeCombo, pSandboxCombo, startVersionWatch } from './js/misc.mjs';
+import { boot, gAssistantCombo, initRailVersion, openGroupDialog, openPluginAdd, pRuntimeCombo, pSandboxCombo, startVersionWatch } from './js/misc.mjs';
 
 
 
@@ -754,7 +751,9 @@ $('input').addEventListener('blur', () => setTimeout(closeMentionPop, 150));
 
 
 /* 「＋」的两项菜单（2026-10-24）：上传文件走原路；任务卡 = 原页头「立成卡」搬进来的，
-   逻辑在 chat.mjs 的 makeConversationCard。菜单朝上弹（输入区贴着屏幕底）。 */
+   逻辑在 chat.mjs 的 makeConversationCard。桌面朝上弹小卡片；手机端（mobile.css）
+   是贴底抽屉，蒙层是菜单自己的 ::before —— 伪元素不是事件目标，点蒙层时 target
+   就是 #attachMenu 本体，按"点本体"收起。 */
 $('attach').onclick = (e) => {
   e.stopPropagation();
   const m = $('attachMenu');
@@ -764,7 +763,9 @@ $('attach').onclick = (e) => {
 $('attFile').onclick = () => { $('attachMenu').hidden = true; $('filePick').click(); };
 $('attCard').onclick = () => { $('attachMenu').hidden = true; if (S.conversation) makeConversationCard(S.conversation); };
 document.addEventListener('click', (e) => {
-  if (!e.target.closest?.('.att-wrap')) { const m = $('attachMenu'); if (m) m.hidden = true; }
+  const m = $('attachMenu');
+  if (!m) return;
+  if (e.target === m || !e.target.closest?.('.att-wrap')) m.hidden = true;
 });
 
 /* 附件（2026-10-23）：菜单里选文件、Ctrl+V 直接贴图 —— 都是 addAtts 的两个入口 */
@@ -808,11 +809,10 @@ setComposer(false);
    // 还没选会话，输入区先收起
 applyTheme();
 
-// 语音输入：手机壳里才有桥（window.__BandiSpeech），桌面浏览器上这里是空操作
-mountVoice();
-
-
 boot();
+
+// rail 标下面那行版本号（/api/hello，拿不到就藏）—— 独立于 boot 分岔：节点页、面板页都要有
+initRailVersion();
 
 
 // 全局事件流（SSE）：后台有人往任何会话说话，开着的窗口和左栏立刻跟上（见 js/events.mjs）

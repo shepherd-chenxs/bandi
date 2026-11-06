@@ -219,13 +219,12 @@ export async function handleProject(req, res, url) {
     if (!task) return fail(res, 404, 'E2039', '任务不存在');
     const body = await readBody(req);
     /*
-     * 手机设备令牌只许留**便签**（2026-11 手机端增量，设计 §3.3）：驳回附一句理由就是 note；
-     * 讨论（discuss）/执行（execute）会真的派活，是桌面端动作 —— 白名单放行了这条 POST，
-     * 但档位必须收在 note，两层缺一不可。
+     * 手机设备令牌曾经只许留**便签**（2026-11 手机端增量，设计 §3.3：讨论/执行会真的派活，
+     * 当时收在桌面）。2026-11-05 用户放开：讨论/执行也上手机 —— 配对手机本来就给
+     * 「发消息」（conv.create）和「停跑」（run.abort）放了行，在对话里说一句"干活"
+     * 和在这张卡上说一句"干活"是同一信任级别，没有理由卡评论区这一处。
+     * 档位归一在下面照常做：mode 三档全认，老客户端的 note:true 也照旧认。
      */
-    if (req.bandiAuth?.kind === 'device' && body.mode !== 'note' && body.note !== true) {
-      return fail(res, 403, 'E3702', '手机端只能留便签（note）—— 讨论/执行请在桌面端发起');
-    }
     const text = String(body.text ?? '').trim();
     if (!task.assigneePersonaId) return fail(res, 400, 'E1061', '先指定执行人 —— 评论区是跟他讨论的');
     const persona = store.getPersona(task.assigneePersonaId);

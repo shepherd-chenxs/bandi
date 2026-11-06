@@ -52,6 +52,12 @@ import { $, S } from './core.mjs';
  *   属性卡的三行 label + value（.me-dev-box）。零账号形态的老设备没有账号可
  *   显示，才退回设备名兜底，meta 写明"未绑定账号"。原来那行"以「X」的身份使用"
  *   随之作废 —— 账号就是标题，不用再用一句话解释"这是谁"。
+ *
+ * 2026-11-05 手机端 iOS 风试点（用户："手机页面太线性化……改成 iOS 风是不是更好？
+ *   先改我的页面我看看效果"）：手机形态按 iOS 个人中心的读法重排 —— 通栏渐变
+ *   hero（身份居中放大）→ 卡片上浮压住渐变下缘 → 卡外灰组头/内缩分割线/居中退场行。
+ *   DOM、类名、功能白名单一概没动（本文件代码零改动）—— 样式全在 mobile.css §15b，
+ *   桌面（非 mb-narrow）不受影响。
  */
 
 /* 账号安全两卡的线性小图标（跟随 .me-sec-ico 的 accent 色，与 rail 图标同一套笔触） */
@@ -61,6 +67,17 @@ const ICO_KEY =
 const ICO_SHIELD =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">' +
   '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></svg>';
+
+/*
+ * 外观选项（2026-11-05 用户：「我的页面加一个主题选择的功能」）。
+ * 键与桌面 设置 › 偏好 › 主题 完全同一套（'light' / 'dark' / 'system'），
+ * 存的是 localStorage 的 bandi.theme —— 两处入口改的是同一个值，不存在两套口径。
+ */
+const THEME_OPTS = [
+  ['light', '浅色'],
+  ['dark', '深色'],
+  ['system', '跟随系统'],
+];
 
 export function openMe() {
   setRoute('me');
@@ -131,6 +148,54 @@ export function openMe() {
           </div>
         </div>
       </section>
+      ${
+        /*
+         * 外观（2026-11-05 用户：「我的页面加一个主题选择的功能。可以选深色、浅色那种」）。
+         * 只在手机形态画：桌面有 设置 › 偏好 › 主题 那一处，再摆一份是重复入口。
+         * 位置紧贴 hero —— 它正好吃 §15b 的 `.me-hero-sec + .set-sec { margin-top:-36px }`
+         * 上浮规则，成为"渐变头 + 白卡上浮"里的第一张卡。
+         * 控件形态（同日晚用户拍板：「也改成这种选项卡的方式」，指桌面偏好设置那张截图）：
+         * 一行「主题 + 分段选项卡」，与桌面 .seg 同一结构 —— 不做三行单选了。
+         * 右对齐的分段不占整行宽（三格总宽 ~240px），390px 放得下，不会出现
+         * 当初担心的"跟随系统挤成两行"。
+         */
+        onPhone
+          ? `<section class="set-sec me-theme-sec">
+               <div class="set-head"><b>外观</b></div>
+               <div class="me-theme-box" id="meThemeBox">
+                 <div class="me-theme-row">
+                   <span class="me-theme-label">主题</span>
+                   <div class="seg me-theme-seg">
+                     ${THEME_OPTS.map(
+                       ([v, label]) =>
+                         `<button type="button" class="${S.theme === v ? ' on' : ''}" data-theme-opt="${v}">${label}</button>`,
+                     ).join('')}
+                   </div>
+                 </div>
+               </div>
+             </section>`
+          : ''
+      }
+      ${
+        /* 「通用 · 清除缓存」（2026-11-06 用户：「手机端我的页面加一个清除缓存的功能」）：
+           只在手机形态画。清的是本机 Service Worker 的 bandi-static-* 静态缓存
+           （页面/脚本/样式），治"改了代码手机上看不到"—— 上一轮评论入口改版就靠
+           杀 App 重开才换新，有了这个入口在页面里就能自愈。登录态在 Cookie 里、
+           业务数据在服务端，都不在缓存里，所以清除不伤账号。
+           右侧常态显示缓存体积（异步算），点了走 confirmDo → 清缓存 + 注销 SW → 重载。 */
+        onPhone
+          ? `<section class="set-sec me-cache-sec">
+               <div class="set-head"><b>通用</b></div>
+               <div class="me-dev-box">
+                 <button type="button" class="me-kv me-cache-row" id="meClearCache">
+                   <span class="me-k">清除缓存</span>
+                   <span class="me-v" id="meCacheHint">计算中…</span>
+                   <i class="me-chevron" aria-hidden="true">›</i>
+                 </button>
+               </div>
+             </section>`
+          : ''
+      }
       ${
         /* 「这台设备」属性卡（2026-11-03 账户为主）：设备是账号的一个属性，
            不再占身份卡 —— 落成 label + value 的属性行。设备记录丢了就不画空卡。 */
@@ -220,7 +285,70 @@ export function openMe() {
          </section>`
       }
     </div>`;
+  /*
+   * 外观选择（2026-11-05）：setTheme 默认会重绘「设置 › 偏好」那一页 ——
+   * 手机上那页根本不存在，点一下就被踢出「我的」。keepPage 让它只存值 + 换肤，
+   * 选中态就在原地toggle（不整页重绘，也就不会闪一下、不会滚回顶部）。
+   */
+  const themeBox = $('meThemeBox');
+  if (themeBox) {
+    themeBox.querySelectorAll('[data-theme-opt]').forEach((b) => {
+      b.onclick = () => {
+        setTheme(b.dataset.themeOpt, { keepPage: true });
+        themeBox.querySelectorAll('[data-theme-opt]').forEach((x) => x.classList.toggle('on', x === b));
+      };
+    });
+  }
   $('meLogout')?.addEventListener('click', () => void logout());
+  /*
+   * 清除缓存（2026-11-06）：进页先异步算一遍 bandi-static-* 缓存体积亮在行尾；
+   * 点击 → confirmDo → 清掉全部 Cache Storage + 注销 Service Worker → location.reload()。
+   * 注销而不是只删缓存：SW 注销后这次重载直连网络，index.html 会重新注册出
+   * 一个"只装新文件"的 SW —— 相当于把"杀 App 重开"压进一个按钮里。
+   * 任何一步失败都不拦重载（清不掉就硬刷，网络优先的 SW 本来也会拿新文件）。
+   */
+  const cacheRow = $('meClearCache');
+  if (cacheRow) {
+    const hint = $('meCacheHint');
+    const fmtBytes = (n) =>
+      n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.ceil(n / 1024))} KB`;
+    const hasCaches = 'caches' in window;
+    (async () => {
+      /*
+       * 没有 caches = 非安全上下文（手机走 http://192.168.5.x 明文 HTTP，Cache Storage /
+       * Service Worker 这对安全上下文专属 API 浏览器不给）。没有 SW 就没有 SW 缓存，
+       * 页面资源每次都从服务器现拉 —— 无东西可清，行尾说"无需清除"，下面也不绑点击
+       * （2026-11-06 用户看到"不支持"问为什么：那话听着像坏了，其实是"没有缓存"）。
+       */
+      if (!hasCaches) { hint.textContent = '无需清除'; return; }
+      let bytes = 0;
+      for (const key of await caches.keys()) {
+        const store = await caches.open(key);
+        for (const req of await store.keys()) {
+          const res = await store.match(req);
+          if (res) bytes += (await res.blob()).size;
+        }
+      }
+      hint.textContent = bytes ? fmtBytes(bytes) : '无缓存';
+    })().catch(() => { hint.textContent = ''; });
+    if (!hasCaches) return;   // 没有可清的东西，这行不是按钮 —— 点了只会空转重载
+    cacheRow.addEventListener('click', async () => {
+      const ok = await confirmDo(
+        '清掉手机上缓存的页面资源，然后重新拉最新版。登录状态和数据不受影响。',
+        { ok: '清除并刷新', danger: false },
+      );
+      if (!ok) return;
+      try {
+        if ('caches' in window) {
+          for (const key of await caches.keys()) await caches.delete(key);
+        }
+        if (navigator.serviceWorker?.getRegistrations) {
+          for (const reg of await navigator.serviceWorker.getRegistrations()) await reg.unregister();
+        }
+      } catch { /* 清不掉就直接刷 */ }
+      location.reload();
+    });
+  }
   /*
    * 手机「断开连接」：调 /api/pair/leave（手机身份专属口），成功后派 `mb-left` 让
    * mobile.mjs 决定落到哪儿 —— 壳里回连接页，浏览器里回配对页。

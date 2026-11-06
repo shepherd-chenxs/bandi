@@ -11,7 +11,7 @@
  *   ③ 写到 `POST /api/projects/<id>/repo-cards` —— 服务端按去重键更新，**绝不覆盖你改过的状态**。
  *
  * 跑法：
- *   node tools/repo-scan.mjs                       # 用默认控制面 127.0.0.1:8787 + 仓库默认项目
+ *   node tools/repo-scan.mjs                       # 用默认控制面 127.0.0.1:18787 + 仓库默认项目
  *   node tools/repo-scan.mjs --dry                 # 只看会写什么，不写
  *   node tools/repo-scan.mjs --project pj-xxxx     # 指定项目
  *   node tools/repo-scan.mjs --note "给 main 加分支保护" --note-body "……"   # 手记一条"卫生"卡
@@ -33,7 +33,7 @@ function parseArgs(argv) {
 }
 
 const args = parseArgs(process.argv.slice(2));
-const BASE = String(args.base ?? process.env.BANDI_BASE ?? 'http://127.0.0.1:8787').replace(/\/+$/, '');
+const BASE = String(args.base ?? process.env.BANDI_BASE ?? 'http://127.0.0.1:18787').replace(/\/+$/, '');
 const TOKEN = process.env.BANDI_TOKEN ?? '';
 const REPO = String(args.repo ?? process.env.GITHUB_REPO ?? 'shepherd-chenxs/bandi');
 const DRY = args.dry === true;

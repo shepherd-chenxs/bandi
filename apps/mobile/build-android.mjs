@@ -230,9 +230,9 @@ fs.copyFileSync(path.join(HERE, 'tauri.conf.json'), path.join(assetsDir, 'tauri.
 /* ---------------------------------------------------------------- ③.5 manifest 手改项 */
 
 /*
- * `gen/android` 是 `tauri android init` 生成的，但**我们手改过**几处（相机 / 录音权限、
- * SpeechRecognizer 的包可见性、锁竖屏）。一旦有人重新 init，这些改动会静默消失，
- * 表现分别是"相机权限被拒绝""这台手机没有语音引擎""横屏能转" —— 每一条都要实机排半天。
+ * `gen/android` 是 `tauri android init` 生成的，但**我们手改过**几处（相机权限、
+ * 锁竖屏）。一旦有人重新 init，这些改动会静默消失，
+ * 表现分别是"相机权限被拒绝""横屏能转" —— 每一条都要实机排半天。
  *
  * 打包前扫一遍：缺了就**吼出来**，但不拦构建（缺的是功能，不是编译错误）。
  */
@@ -240,8 +240,6 @@ log('检查 AndroidManifest 的手改项');
 const manifestPath = path.join(PROJECT, 'src', 'main', 'AndroidManifest.xml');
 const MANUAL_MANIFEST_BITS = [
   ['android.permission.CAMERA', '扫一扫 → 相机权限'],
-  ['android.permission.RECORD_AUDIO', '语音输入 → 录音权限'],
-  ['android.speech.RecognitionService', '语音输入 → SpeechRecognizer 包可见性'],
   ['android:screenOrientation="portrait"', '手机端锁竖屏'],
 ];
 const manifestText = fs.existsSync(manifestPath) ? fs.readFileSync(manifestPath, 'utf8') : '';

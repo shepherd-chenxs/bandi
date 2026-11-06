@@ -14,12 +14,15 @@ import fs from 'node:fs';
 
 import {
   applyRunEvent,
+  clipEnds,
   createRunProgress,
   fmtAgo,
   fmtElapsed,
   fmtStepDur,
+  humanizeCommand,
   progressView,
   STALL_MS,
+  summarizeEvents,
   toolSummary,
 } from '../../web/js/run-progress.mjs';
 
@@ -161,13 +164,150 @@ console.log('\n⑥ 聊天页接线（静态断言，防"归约器写了没人用
   // 「停止生成 / 等结果」的落点跟着搬进组件 —— 断言改成两头都钉：组件里有这颗钮/这档状态，
   // chat.mjs 确实把组件接上了并传了 onStop，少一头都算红。
   const cardSrc = fs.readFileSync(new URL('../../web/js/run-progress-card.mjs', import.meta.url), 'utf8');
+  // 2026-11-05：过程快照的服务端半边（runs.mjs 收尾时把摘要落进回话消息的 meta.progress）
+  const runsSrc = fs.readFileSync(new URL('./runs.mjs', import.meta.url), 'utf8');
   check('chat.mjs 引用了 run-progress.mjs', /from '\.\/run-progress\.mjs'/.test(chatSrc));
   check('streamRun 把每个原始事件交给 onEvent', /h\.onEvent\?\.\(evt\)/.test(chatSrc));
   check('attachStream 接收 startAt 并按真实开始时间计时', /attachStream\(runId, whoName = '', startedAt = null\)/.test(chatSrc));
   check('重进会话时把 run.startedAt 带过去', /attachStream\(last\.id, last\.personaName, last\.startedAt\)/.test(chatSrc));
   check('不再用三个点占位', !/class="typing"><i><\/i><i><\/i><i><\/i>/.test(chatSrc));
-  check('卡住行里直接给「停止生成」按钮', /class="rp-stop">停止生成/.test(cardSrc) && /createProgressCard\(\{[\s\S]*?onStop/.test(chatSrc));
+  // 2026-11-05 评鉴：停止钮从"卡住才出现"改成**常驻卡头**（收尾才隐掉），打断是第一类操作
+  check('停止钮常驻卡头（收尾才隐掉）', /class="rp-stop" title="停止生成" hidden/.test(cardSrc) && /createProgressCard\(\{[\s\S]*?onStop/.test(chatSrc));
   check('卡住的步骤有「等结果」状态（不再假装进行中）', /waiting/.test(cardSrc) && /已等/.test(cardSrc));
+  check('进度卡拿意图当标题', /showIntent/.test(cardSrc));
+  check('开场白在第一件工具到来时收进标题', /preface\.splice\(0\)/.test(chatSrc));
+  check('跑过工具的回话气泡带过程收起行', /progressNoteHtml\(meta\)/.test(chatSrc) && /data-rp-note/.test(chatSrc));
+  check('服务端收尾把过程快照落进 meta.progress', /function progressMeta\(/.test(runsSrc) && /replyMeta\(run, \{ stopped, status \}\)/.test(runsSrc));
+  // 2026-11-05 二期：阶段分组要两头都接上 —— 实时卡按段画、历史收起行认快照里的 phases
+  check('实时进度卡按阶段画步骤', /rp-ph/.test(cardSrc) && /v\.phases/.test(cardSrc));
+  check('历史收起行认快照里的 phases（老快照平铺兜底）', /p\.phases/.test(chatSrc));
+  // 2026-11-05 实测（用户截图）：display:flex 的作者样式压过 UA 的 [hidden]{display:none}，
+  // 收起行明细永远摊开、实时卡收尾收不起来 —— 全局 reset 是这条链路能收起的前提
+  const styleSrc = fs.readFileSync(new URL('../../web/style.css', import.meta.url), 'utf8');
+  check('全局 [hidden] reset 在（display 类压不过它）', /\[hidden\]\s*\{\s*display:\s*none\s*!important/.test(styleSrc));
+}
+
+/* --------------------------------------------------- ⑦ 意图（2026-11-05 评鉴） */
+console.log('\n⑦ 意图：第一件工具之前的正文 = "他要干嘛"');
+{
+  const f = feeder();
+  f.feed({ type: 'text', text: '我先看仓库结构，' });
+  f.feed({ type: 'text', text: '再数代码量。' });
+  check('开场白（分块来）攒成意图', f.view().intent === '我先看仓库结构，再数代码量。', f.view().intent);
+
+  f.feed({ type: 'tool', name: 'Bash', input: { command: 'git ls-files' } });
+  check('工具开跑后意图定格', f.view().intent === '我先看仓库结构，再数代码量。', f.view().intent);
+
+  f.feed({ type: 'text', text: '答案是 1.2 万行' });
+  check('工具之后的正文不进意图', f.view().intent === '我先看仓库结构，再数代码量。', f.view().intent);
+
+  const f2 = feeder();
+  f2.feed({ type: 'text', text: '纯聊天，一次工具都没调' });
+  check('纯聊天也攒得出意图（用不用由界面定）', f2.view().intent === '纯聊天，一次工具都没调', f2.view().intent);
+}
+
+/* --------------------------------------------------- ⑧ 命令人话化（2026-11-05 评鉴） */
+console.log('\n⑧ 命令人话化：剥解释器全路径 / 双层转义归一 / 保头保尾');
+{
+  // 截图里那条真实的噪声命令：解释器全路径占了 80 字截断的大半，唯一有信息量的参数被切掉
+  const noisy = '"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe" -Command "Get-ChildItem -Recurse | Measure-Object"';
+  check('全路径 + 双层转义 + 引号三层皮都剥掉',
+    humanizeCommand(noisy) === 'Get-ChildItem -Recurse | Measure-Object', humanizeCommand(noisy));
+  check('裸 powershell.exe 也剥', humanizeCommand('powershell.exe -Command Get-Date') === 'Get-Date', humanizeCommand('powershell.exe -Command Get-Date'));
+  check('cmd /c 的参数词也剥', humanizeCommand('C:\\Windows\\System32\\cmd.exe /c echo hi') === 'echo hi', humanizeCommand('C:\\Windows\\System32\\cmd.exe /c echo hi'));
+  check('sh -c 剥参数词', humanizeCommand('/usr/bin/sh -c "git ls-files | head"') === 'git ls-files | head', humanizeCommand('/usr/bin/sh -c "git ls-files | head"'));
+  check('普通命令原样保留', humanizeCommand('npm test') === 'npm test', humanizeCommand('npm test'));
+  check('不把 -compile 之类误当 -c', humanizeCommand('app -compile x') === 'app -compile x', humanizeCommand('app -compile x'));
+
+  const long = clipEnds('x'.repeat(100) + ' | wc -l', 80);
+  check('长命令保头保尾：头在', long.startsWith('x'.repeat(48)) && long.includes('…'), long);
+  check('长命令保头保尾：尾也在（管道是信息量）', long.endsWith(' | wc -l'), long);
+}
+
+/* --------------------------------------------------- ⑨ 收尾快照（2026-11-05 评鉴） */
+console.log('\n⑨ 收尾快照：summarizeEvents → 回话消息的 meta.progress');
+{
+  const rows = [
+    { evt: { type: 'text', text: '我先看仓库结构' }, at: '2026-11-05T00:00:00.000Z' },
+    { evt: { type: 'tool_call', callId: 'c1', tool: 'shell', input: { command: 'git ls-files' } }, at: '2026-11-05T00:00:02.000Z' },
+    { evt: { type: 'tool_result', callId: 'c1', status: 'completed' }, at: '2026-11-05T00:00:04.000Z' },
+    { evt: { type: 'tool', name: 'Bash', input: { command: 'powershell.exe -Command "wc -l"' } }, at: '2026-11-05T00:00:05.000Z' },
+  ];
+  const snap = summarizeEvents(rows, { status: '完成', elapsedMs: 19100 });
+  check('纯聊天返回 null（不落收起行）',
+    summarizeEvents([{ evt: { type: 'text', text: 'hi' }, at: '2026-11-05T00:00:00.000Z' }]) === null, '');
+  check('快照带状态/意图/用时',
+    snap.status === '完成' && snap.intent === '我先看仓库结构' && snap.elapsedMs === 19100,
+    JSON.stringify({ status: snap.status, intent: snap.intent, elapsedMs: snap.elapsedMs }));
+  check('第一步带真实耗时（靠事件落库时刻）', snap.steps[0].ms === 2000 && snap.steps[0].s === 'done', JSON.stringify(snap.steps[0]));
+  check('没等到结果的一步收成「已发起」，不硬猜成败', snap.steps[1].s === 'called' && snap.steps[1].ms === null, JSON.stringify(snap.steps[1]));
+  check('快照里的命令也是人话', snap.steps[1].t === 'wc -l', snap.steps[1].t);
+}
+
+/* --------------------------------------------------- ⑩ 阶段分组（2026-11-05 二期） */
+console.log('\n⑩ 阶段分组：工具之间的正文 = 下一批工具的段标题');
+{
+  const f = feeder();
+  f.feed({ type: 'text', text: '我先看看技能安装手册，再去 GitHub 上找。' });
+  f.feed({ type: 'tool', name: 'Read', input: { file_path: 'SKILL.md' } });
+  f.feed({ type: 'tool', name: 'Bash', input: { command: 'python list-skills.py' } });
+  f.feed({ type: 'text', text: '官方库里没有，去社区搜。' });
+  f.feed({ type: 'tool', name: 'WebSearch', input: { query: 'concise reply skill' } });
+  f.feed({ type: 'text', text: '找到三个候选，逐个核对 README。' });
+  f.feed({ type: 'tool', name: 'WebFetch', input: { url: 'https://raw.githubusercontent.com/x/SKILL.md' } });
+  f.feed({ type: 'text', text: '结论是这三个都能用，答案在下面。' });
+  const v = f.view();
+  check('三批工具被正文分成三段', Array.isArray(v.phases) && v.phases.length === 3,
+    JSON.stringify(v.phases?.map((g) => [g.title, g.i, g.n])));
+  check('第一段标题 = 意图（开场白）', v.phases[0].title.includes('技能安装手册'), v.phases[0].title);
+  check('第二段标题来自工具之间的正文', v.phases[1].title === '官方库里没有，去社区搜。', v.phases[1].title);
+  check('段与段的步数对得上（2/1/1）', v.phases.map((g) => g.n).join(',') === '2,1,1',
+    v.phases.map((g) => g.n).join(','));
+  check('收尾正文不当段标题（气泡里已经有了）', v.phases.every((g) => !g.title.includes('结论是')),
+    v.phases.map((g) => g.title).join(' | '));
+
+  // 全程没说话 → 不分组，界面走平铺（别硬编故事）
+  const f2 = feeder();
+  f2.feed({ type: 'tool', name: 'Bash', input: { command: 'npm test' } });
+  f2.feed({ type: 'tool', name: 'Bash', input: { command: 'npm run lint' } });
+  check('没有中途正文就不分组', f2.view().phases === null, String(f2.view().phases));
+
+  // 同一批工具前的多段/分块正文并成一条段标题
+  const f3 = feeder();
+  f3.feed({ type: 'tool', name: 'Bash', input: { command: 'git status' } });
+  f3.feed({ type: 'text', text: '工作区是脏的，' });
+  f3.feed({ type: 'text', text: '先提交再继续。' });
+  f3.feed({ type: 'tool', name: 'Bash', input: { command: 'git commit' } });
+  check('同一批前的分块正文并成一条段标题',
+    f3.view().phases?.length === 2 && f3.view().phases[1].title === '工作区是脏的，先提交再继续。',
+    f3.view().phases?.[1]?.title);
+
+  // 收尾快照也带 phases（服务端 progressMeta → meta.progress → 历史收起行按段画）
+  const rows = [
+    { evt: { type: 'text', text: '我先看仓库结构' }, at: '2026-11-05T00:00:00.000Z' },
+    { evt: { type: 'tool_call', callId: 'c1', tool: 'shell', input: { command: 'git ls-files' } }, at: '2026-11-05T00:00:02.000Z' },
+    { evt: { type: 'tool_result', callId: 'c1', status: 'completed' }, at: '2026-11-05T00:00:04.000Z' },
+    { evt: { type: 'text', text: '结构清楚了，数一下行数。' }, at: '2026-11-05T00:00:05.000Z' },
+    { evt: { type: 'tool', name: 'Bash', input: { command: 'powershell.exe -Command "wc -l"' } }, at: '2026-11-05T00:00:06.000Z' },
+  ];
+  const snap = summarizeEvents(rows, { status: '完成', elapsedMs: 19100 });
+  check('快照带阶段（标题 + 步数区间）',
+    Array.isArray(snap.phases) && snap.phases.length === 2 &&
+    snap.phases[0].t === '我先看仓库结构' && snap.phases[1].t === '结构清楚了，数一下行数。' &&
+    snap.phases[0].i === 0 && snap.phases[0].n === 1 && snap.phases[1].i === 1 && snap.phases[1].n === 1,
+    JSON.stringify(snap.phases));
+  check('超过 30 步的分组快照区间跟着平移（不出负数、不丢段）', (() => {
+    const many = [{ evt: { type: 'text', text: '开场' }, at: '2026-11-05T00:00:00.000Z' }];
+    for (let i = 0; i < 35; i++) {
+      many.push({ evt: { type: 'tool', name: 'Bash', input: { command: `cmd ${i}` } }, at: `2026-11-05T00:00:${String(i + 1).padStart(2, '0')}.000Z` });
+      if (i === 20) many.push({ evt: { type: 'text', text: '后半段开始。' }, at: `2026-11-05T00:00:${String(i + 1).padStart(2, '0')}.500Z` });
+    }
+    const s = summarizeEvents(many, { status: '完成', elapsedMs: 36000 });
+    const okShape = s.phases?.length === 2 && s.steps.length === 30 &&
+      s.phases.every((g) => g.i >= 0 && g.i + g.n <= 30) &&
+      s.phases[0].i + s.phases[0].n === s.phases[1].i;
+    return okShape;
+  })(), '');
 }
 
 console.log(`\n结论：${failed ? `${failed} 项没过` : '全通过'}`);

@@ -33,8 +33,7 @@ apps/mobile/
 ├── tauri.conf.json
 └── gen/android/          tauri android init 生成的 Android Studio 工程（入库）
     └── app/src/main/java/app/local/bandi/mobile/
-        ├── MainActivity.kt   安全区内边距（手改）
-        └── SpeechPlugin.kt   语音输入插件（手写，见「语音输入」）
+        └── MainActivity.kt   安全区内边距 + 返回键分流（手改）
 ```
 
 ## 构建前置
@@ -235,60 +234,31 @@ bottom=399，真机上会被键盘盖住）。
 解到非链接的码（付款码、名片码）只提示不退出，用户换一张继续扫；同一张错码
 1.5 秒内不重复闪提示。
 
-## 语音输入（2026-11-01）
+## 语音输入（2026-11-01 加，2026-11-05 整个拆除）
 
-需求是"像豆包那样：说话 → 文字 → 发出去"。这里的每一个设计选择都是被同一个
-约束逼出来的：**业务页跑在 `http://192.168.x.x:18787`，不是安全上下文**。
+曾经做过"像豆包那样：说话 → 文字 → 发出去"：壳里一个 Kotlin 的 `SpeechPlugin`
+（`addJavascriptInterface` 桥，不走 Tauri IPC），页面侧 `apps/web/js/voice.mjs`，
+内嵌识别失败时降级拉系统语音输入面板。2026-11-05 用户拍板**整个机制拆除**
+（不是藏入口，是不留代码尸体），后续要换别的识别方案再重做。拆掉的东西：
 
-因此：
+- 壳：`SpeechPlugin.kt`、`MainActivity.onActivityResult` 转发、
+  `lib.rs` 的 `speech_plugin` 注册、Manifest 的 `RECORD_AUDIO` +
+  `RecognitionService` queries（本次会话截图里的"正在倾听/说完了"灰条面板
+  就是降级路线拉起的系统公版面板，UI 改不了）；
+- 页面：`apps/web/js/voice.mjs`、`app.mjs` 的挂载、`mobile.css` 的 `.voice-*`。
 
-- `navigator.mediaDevices` 在业务页上是 `undefined`（拿不到麦克风）；
-- WebView 也没有 `webkitSpeechRecognition`（那是 Chrome 浏览器层的东西）；
-- 所以识别**只能壳做** —— 和扫码相反，扫码在启动页（`tauri.localhost`，算安全
-  上下文）就能做，语音不行，因为语音按钮在业务页的输入条上。
-
-### 怎么搭的桥（**故意不走 Tauri IPC**）
-
-```
-业务页 (http://192.168.x.x)                壳 (Kotlin)
-  window.__BandiSpeech.start()   ───────▶  SpeechPlugin.Bridge.start()
-  window.__bandiSpeechEvent({...}) ◀─────  webView.evaluateJavascript(...)
-```
-
-- 页面 → 壳：`addJavascriptInterface(Bridge(), "__BandiSpeech")`（`Plugin.load()` 里）。
-- 壳 → 页面：`evaluateJavascript("window.__bandiSpeechEvent({...})")`。
-
-为什么不用 `invoke('plugin:speech|start')`：远端 origin 要 invoke，得在 capability
-里给 `remote.urls` 开白，还得给自定义命令写 ACL 条目（`permissions/*.toml`）。
-`addJavascriptInterface` 两条都不需要，而且只对壳自己的 WebView 生效 —— 比开
-`http://*:*` 的 IPC 白名单安全得多。副作用是**不用改 `capabilities/default.json`**。
-
-页面侧在 `apps/web/js/voice.mjs`：探测不到 `window.__BandiSpeech` 就直接返回，
-所以桌面浏览器上按钮压根不出现，`style.css` 一行没动。
+没拆的：CAMERA 权限（扫码还要用）、锁竖屏（与语音无关）。
 
 ### gen/android 里的手改（重新 `tauri android init` 会丢，要重贴）
 
 | 文件 | 改了什么 | 为什么 |
 |---|---|---|
 | `app/src/main/AndroidManifest.xml` | `CAMERA`（扫码，旧） | 不声明则 `getUserMedia` 直接 `NotAllowedError` |
-| 同上 | `RECORD_AUDIO`（语音） | 系统 `SpeechRecognizer` 要录音权限 |
-| 同上 | `<queries><intent>android.speech.RecognitionService` | **Android 11+ 包可见性**：不声明则 `isRecognitionAvailable()` 恒为 false，表现成"这台手机没有语音引擎" |
 | 同上 | `<activity android:screenOrientation="portrait">` | **锁竖屏**（2026-11-03）：界面全是单列，横过来只是把列表压扁。这是 Activity 的硬约束，CSS/JS 锁不了方向（`screen.orientation.lock()` 要全屏）。丢了的表现：手机一横，整个界面跟着转 |
-| `.../app/local/bandi/mobile/SpeechPlugin.kt` | 整个文件 | 语音插件本体 |
-| `MainActivity.kt` | 安全区内边距（旧） | Android 15 edge-to-edge |
+| `MainActivity.kt` | 安全区内边距（旧）+ 返回键分流（2026-11-05） | Android 15 edge-to-edge；返回键分流见 MainActivity.kt 注释 |
 | `app/build.gradle.kts` | dependencies 里加 `implementation(project(":tauri-android"))` | 否则 app 编译 `Unresolved reference 'TauriActivity'`。别放到 `tauri.build.gradle.kts` 里 —— 那个文件是 `apply(from=…)` 进来的，拿不到 `implementation` 访问器 |
 | `app/tauri.build.gradle.kts` | 必须有这个文件（空壳即可） | `app/build.gradle.kts` 末尾 apply 它；被 gitignore，缺失时 gradle 直接 `Could not read script`。`build-android.mjs` 会自动补 |
 | `app/src/main/java/<包名>/generated/` | `TauriActivity.kt` 等 | **不是源码**，是 cargo 编译 tauri/wry 时 build.rs 生成的，前提是 `WRY_ANDROID_PACKAGE` / `WRY_ANDROID_LIBRARY` / `WRY_ANDROID_KOTLIN_FILES_OUT_DIR` 等环境变量（`build-android.mjs` 已设）。tauri 的 build.rs **没声明** `rerun-if-env-changed`，所以曾经裸编过就得 `cargo clean -p tauri --target <triple>` 再来一次 |
-
-### 已知限制
-
-1. **长语音会被系统引擎切段**。系统 `SpeechRecognizer` 在静音或达到上限时会自己
-   收尾（`onResults`），第一版就按"一句一次"处理；要连续长听，得在 `onResults`
-   后自动重启识别并把结果接起来 —— 没做。
-2. **识别质量取决于手机自带的引擎**（国产 ROM 一般是讯飞/厂商自研，够用）。装了
-   但没下载语音包的机型会给 `ERROR_NETWORK`/`ERROR_SERVER`，浮层里报得出来。
-3. **不能边说边发**：识别完文字留在输入框，等用户点发送。这是故意的 —— 语音一定
-   有错字，直接发出去对方只看到错句。
 
 ## 没做
 

@@ -56,22 +56,27 @@
   <!-- 应用标（2026-10-26 定稿「B 字母标」：bandi 的 B，主干+上下鼓包+左下圆顶）。
        与 apps/desktop/icons/icon.svg 同一套几何 —— 改形状两处要一起改，
        贝塞尔控制点在 make-icon.py 的 UPPER/LOWER。两个负形孔用 mask 镂空，透出下方渐变。 -->
-  <div class="rail-logo" aria-label="班底">
-    <svg viewBox="0 0 512 512" width="22" height="22" aria-hidden="true">
-      <defs>
-        <mask id="bandi-b-hole">
-          <rect width="512" height="512" fill="#fff"/>
-          <ellipse cx="268" cy="206" rx="36" ry="29" fill="#000"/>
-          <ellipse cx="274" cy="340" rx="40" ry="31" fill="#000"/>
-        </mask>
-      </defs>
-      <g mask="url(#bandi-b-hole)" fill="#fff">
-        <rect x="154" y="138" width="72" height="236" rx="34"/>
-        <path d="M194,156 C272,142 338,168 338,208 C338,248 288,268 194,264 Z"/>
-        <path d="M194,282 C284,276 348,306 348,340 C348,372 288,388 194,382 Z"/>
-        <rect x="172" y="336" width="70" height="52" rx="26"/>
-      </g>
-    </svg>
+  <!-- 品牌块（2026-11-05）：标 + 版本号一组。版本号在标下面那行小字，
+       值由 app.mjs 的 initRailVersion() 从 /api/hello 填，拿不到就整行藏起来。 -->
+  <div class="rail-brand">
+    <div class="rail-logo" aria-label="班底">
+      <svg viewBox="0 0 512 512" width="22" height="22" aria-hidden="true">
+        <defs>
+          <mask id="bandi-b-hole">
+            <rect width="512" height="512" fill="#fff"/>
+            <ellipse cx="268" cy="206" rx="36" ry="29" fill="#000"/>
+            <ellipse cx="274" cy="340" rx="40" ry="31" fill="#000"/>
+          </mask>
+        </defs>
+        <g mask="url(#bandi-b-hole)" fill="#fff">
+          <rect x="154" y="138" width="72" height="236" rx="34"/>
+          <path d="M194,156 C272,142 338,168 338,208 C338,248 288,268 194,264 Z"/>
+          <path d="M194,282 C284,276 348,306 348,340 C348,372 288,388 194,382 Z"/>
+          <rect x="172" y="336" width="70" height="52" rx="26"/>
+        </g>
+      </svg>
+    </div>
+    <button type="button" class="rail-ver" id="railVer" hidden></button>
   </div>
   <button class="nav-btn active" data-nav="messages">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round">
@@ -158,6 +163,9 @@
     </div>
     <div class="chat" id="chat"><div class="empty">还没有对话</div></div>
     <div class="composer is-hidden">
+      <!-- 群里的「续 @」胶囊（2026-11-05）：@ 过谁，这条群后续的话默认还找他。
+           chat.mjs 的 renderStickyMention 画，点 ✕ 摘掉。 -->
+      <div class="sticky-mention" id="stickyMention" hidden></div>
       <div class="input-wrap">
         <div class="mention-pop" id="mentionPop"></div>
         <textarea id="input" placeholder="说点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
@@ -555,15 +563,16 @@
   })();
 </script>
 <!--
-  Service Worker（2026-11 手机端增量，P1-3）：静态资源 stale-while-revalidate，
-  /api/* 一律不缓存（本地优先产品，数据以服务端为准 —— 设计 §8）。
+  Service Worker（2026-11 手机端增量，P1-3）：代码类（页面/CSS/JS）**网络优先**、
+  图片类缓存优先，/api/* 一律不缓存（本地优先产品，数据以服务端为准 —— 设计 §8）。
   注册失败（SW 不存在 / 浏览器不支持）静默忽略 —— 它是地基，不能挡住主应用。
   为什么等 load 再注册：首屏的网络请求别和 SW 安装抢带宽（弱网局域网下有感）。
 
-  ⚠️ **只在手机/平板上注册**（2026-10-28 修）：桌面壳与桌面浏览器原本走"每请求现读
-  + /api/web-version 版本指纹"那套，刷新一次就拿到新前端；SW 的 stale-while-revalidate
-  会把升级后的首屏压回旧 HTML/JS，要刷两次。触屏 + 窄屏才算移动端（避免触屏笔记本误判）。
+  ⚠️ **只在手机/平板上注册**（2026-10-28 修）：桌面壳与桌面浏览器走"每请求现读
+  + /api/web-version 版本指纹"那套，刷新一次就拿到新前端，不需要 SW。
   之前老版本在桌面端注册过 → 这里顺手注销并清掉静态缓存，别让旧缓存一直留着。
+  （SW 曾经是"缓存优先 + 后台悄悄换新"，手机上要刷两次才看到改动；2026-11-05 改成
+   网络优先 + 版本升级时自动重载，见 sw.js 的 activate。）
 -->
 <script>
   (function () {
@@ -573,7 +582,33 @@
       window.matchMedia('(max-width: 900px)').matches;
     window.addEventListener('load', function () {
       if (mobile) {
-        navigator.serviceWorker.register('/sw.js').catch(function () { /* 起不来不影响页面 */ });
+        /*
+         * 每次打开都**主动查一次版本**（2026-11-05 用户实报「手机端没变化」后加）：
+         * 手机上 App 常年挂着不关，指望浏览器"导航时顺便检查 sw.js"太看时机 ——
+         * 实测重开一次都没触发更新，用户看到的就是改完跟没改一样。
+         * update() 只是一次 sw.js 请求，内网里零成本；发现新版 → 装好 → 老页面会被
+         * 新 SW 就地重载一次（见 sw.js 的 activate）。
+         *
+         * 光 load 查一次还不够（2026-11-06「手机端没有显示定时任务」二报的根因）：
+         * Android 上"切回 App"多半只是**从后台恢复** —— 不导航、不触发 load，
+         * 上面那条就永远不跑，页面挂着多旧就多旧。所以回前台也查一次；
+         * 再挂一个 10 分钟的兜底间隔，防个别壳不派 visibilitychange。
+         */
+        navigator.serviceWorker.register('/sw.js')
+          .then(function (reg) {
+            reg.update().catch(function () {});
+            document.addEventListener('visibilitychange', function () {
+              if (document.visibilityState === 'visible') reg.update().catch(function () {});
+            });
+            setInterval(function () { reg.update().catch(function () {}); }, 10 * 60 * 1000);
+          })
+          .catch(function () { /* 起不来不影响页面 */ });
+
+        /* 新 SW 装好后会发这条消息（见 sw.js 的 activate）：说明磁盘上的前端换了一代，
+           当前这屏还是旧的 —— 就地重载一次。只在**版本升级**时来一次，不是每次启动。 */
+        navigator.serviceWorker.addEventListener('message', function (e) {
+          if (e.data && e.data.type === 'bandi:sw-updated') location.reload();
+        });
         return;
       }
       navigator.serviceWorker.getRegistrations()

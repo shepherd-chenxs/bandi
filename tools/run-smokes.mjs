@@ -81,6 +81,8 @@ const RUN = [
   'apps/server/src/smoke-runtime-detect.mjs',
   'apps/server/src/smoke-roles.mjs',
   'apps/server/src/smoke-device-roles.mjs',
+  // 纯静态断言（不联网）：手机该走的路由必须带 device 标，桌面专属的必须没有
+  'apps/server/src/smoke-device-routes.mjs',
   'apps/server/src/smoke-users.mjs',
   'apps/server/src/smoke-schedules.mjs',
   'apps/server/src/smoke-steward.mjs',

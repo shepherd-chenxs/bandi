@@ -8,7 +8,9 @@
  *
  * 这一层**不碰 DOM**（纯逻辑），好处有两个：
  *   · 聊天页用它画实时状态；流程实例页的节点对话将来可以共用同一份；
- *   · 冒烟用例直接 import 它、喂真实事件序列断言，不需要浏览器。
+ *   · 冒烟用例直接 import 它、喂真实事件序列断言，不需要浏览器；
+ *   · 服务端收尾也算快照（runs.mjs 的 progressMeta 用 summarizeEvents 给回话消息
+ *     落 meta.progress）—— 所以**永远别在这里碰 DOM / window**。
  *
  * 四家 runtime 的词不一样，这里收敛成三种语义：
  *   · 阶段：status(phase) / thinking / text / error / __done
@@ -53,6 +55,48 @@ function clip(text, max = 80) {
 }
 
 /**
+ * 命令串的"保头保尾"截断（2026-11-05 评鉴）：头是动作，尾常是管道/目标 ——
+ * 两头都比中间值钱。普通 clip 从头截，长命令的尾巴（`| wc -l`）正好被切掉。
+ */
+export function clipEnds(text, max = 80) {
+  const s = String(text ?? '').replace(/\s+/g, ' ').trim();
+  if (s.length <= max) return s;
+  const head = Math.max(24, Math.floor(max * 0.6));
+  const tail = max - head - 1;
+  return `${s.slice(0, head)}…${s.slice(-tail)}`;
+}
+
+/**
+ * 命令串的人话化（2026-11-05 评鉴）：进度卡上"运行命令 …"的目标本来是整条命令，
+ * 但解释器的全路径（C:\Windows\...\powershell.exe）是噪音 —— 人知道系统目录在哪，
+ * 机器才知道为什么要全路径；而 80 字截断又正好切在唯一有信息量的参数上。剥三层皮：
+ *   · 上游事件里的**双层转义**（C:\\Windows）归一成单反斜杠 —— 只影响展示，
+ *     原始命令在悬停 title / 展开详情里还是全的；
+ *   · 开头的解释器全路径（带引号 / 带盘符 / 裸 powershell.exe）整段剥掉；
+ *   · PowerShell 的 -Command / shell 的 -c 参数词剥掉，只留正文。
+ */
+export function humanizeCommand(raw) {
+  let s = String(raw ?? '').replace(/\s+/g, ' ').trim();
+  if (!s) return '';
+  s = s.replace(/\\{2,}/g, '\\');
+  s = s
+    .replace(/^"([^"]+[\\/][^"]*\.(?:exe|cmd|bat|ps1|py|sh|js|pl))"\s+/i, '')
+    .replace(/^(?:[A-Za-z]:)?\S*?[\\/]\S*\.(?:exe|cmd|bat|ps1|py|sh|js|pl)\s+/i, '')
+    .replace(/^\S+\.(?:exe|cmd|bat)\s+/i, '');
+  // PowerShell 的 -Command、shell/cmd 的 -c / /c：参数词本身不给人看，后面才是正文
+  const mc = s.match(/^[-\/](?:Command|c)\s+([\s\S]*)$/i);
+  if (mc) s = mc[1];
+  else {
+    // 不带扩展名的解释器路径（/usr/bin/sh、/bin/bash）：靠"后面跟 -c"认出它是解释器，
+    // 路径和参数词一起剥。（要求开头必须是路径 —— 'git -c xxx=true' 的 -c 是配置项，不能剥）
+    const mi = s.match(/^\S*[\\/]\S*\s+(?=[-\/](?:Command|c)\s)/i);
+    if (mi) s = s.slice(mi[0].length).replace(/^[-\/](?:Command|c)\s+/i, '');
+  }
+  if (s.length > 1 && s.startsWith('"') && s.endsWith('"')) s = s.slice(1, -1);
+  return s.trim();
+}
+
+/**
  * 把一次工具调用压成"动词 + 目标"。
  *
  * 目标从各 runtime 的输入字段里按优先级捡（命令 > 文件路径 > 搜索词 > URL > 描述）；
@@ -83,7 +127,12 @@ export function toolSummary(name, input, detail = null) {
     p.pattern, p.query, p.url, p.description, p.prompt,
     p.changes, d.changes, d.path,
   );
-  return { verb, target: clip(target), name: raw };
+  // 命令类目标走人话化（剥解释器全路径 / 双层转义归一）+ 保头保尾截断；
+  // 其余（文件路径、搜索词、URL）保持普通截断 —— 路径的头才是信息量所在
+  const shown = first(p.command, d.command)
+    ? clipEnds(humanizeCommand(target))
+    : clip(target);
+  return { verb, target: shown, name: raw };
 }
 
 /**
@@ -102,6 +151,15 @@ export function createRunProgress({ startedAt = Date.now(), now = Date.now() } =
     info: '',
     done: false,
     status: '',
+    // 意图（2026-11-05 评鉴）：第一件工具之前的回话原文 —— "他要干嘛"的人话，
+    // 界面拿它当进度卡标题（"调用工具"这种机器词退居后备）
+    intent: '',
+    // 工具之间的正文（2026-11-05 评鉴二期）："官方库没有，去社区搜"这种话天然是
+    // 下一批工具的**阶段标题**。after = 说这话时已经落了几步（阶段边界）；
+    // 同一 after 的分块正文往一条里并（流式 chunk / 同一批前的多段话）。
+    speech: [],
+    // 服务端 __done 带来的总用时（收尾后时钟冻结用；没有就退回 lastEventAt-startedAt）
+    finalElapsedMs: null,
   };
 }
 
@@ -143,9 +201,19 @@ export function applyRunEvent(state, evt, now = Date.now()) {
     case 'thinking':
       state.phase = 'thinking';
       break;
-    case 'text':
+    case 'text': {
       state.phase = 'writing';
+      const txt = typeof evt.text === 'string' ? evt.text : '';
+      // 开场白攒成"意图"：第一件工具之前的正文是"他要干嘛"（"我先看仓库结构，再数代码量"），
+      // 工具开跑之后的正文是回话本身，不算意图；但它是**阶段边界**（见 speech）
+      if (!state.steps.length) state.intent += txt;
+      else if (txt.trim()) {
+        const last = state.speech[state.speech.length - 1];
+        if (last && last.after === state.steps.length) last.text += txt;
+        else state.speech.push({ after: state.steps.length, text: txt });
+      }
       break;
+    }
     case 'tool': {
       // codex / claude / 平台统一词汇：只有"开始"，没有结果
       state.steps.push({
@@ -198,6 +266,7 @@ export function applyRunEvent(state, evt, now = Date.now()) {
       state.done = true;
       state.status = String(evt.status ?? '');
       state.phase = evt.status === '失败' ? 'error' : 'done';
+      if (Number.isFinite(evt.elapsedMs)) state.finalElapsedMs = evt.elapsedMs;
       closeRunning(state);
       break;
     }
@@ -205,6 +274,66 @@ export function applyRunEvent(state, evt, now = Date.now()) {
       break;
   }
   return state;
+}
+
+/* --------------------------------------------------- 阶段分组（2026-11-05 评鉴二期） */
+
+/**
+ * 把一次运行的步骤按**模型自己说话的时机**分段。
+ *
+ * 工具之间的正文（"官方库没有，去社区搜"）是模型对"接下来这批工具"的预告 ——
+ * 拿它当阶段标题，13 条命令流水账就变成"读手册 → 查官方库 → 搜社区 → 核对候选"。
+ * 第一段没有中途正文可标题，用意图（开场白）顶着；都没有就退回机器词。
+ *
+ * 开头之前（after=0，那进意图）和最后回话之后（没有后续步骤）的话不构成边界 ——
+ * 收尾正文是答案本身，气泡里已经有，不重复当标题。
+ * 分不出两段（没有中途正文）返回 null，界面走平铺 —— 别为了分组硬编故事。
+ *
+ * 返回 [{ title, raw, i, n }]：i/n 是 steps 数组里的下标区间。
+ */
+export function phaseGroups(speech, intent, total) {
+  const bounds = [];
+  for (const sp of speech ?? []) {
+    const text = String(sp?.text ?? '').trim();
+    if (!text || !Number.isInteger(sp?.after)) continue;
+    if (sp.after <= 0 || sp.after >= total) continue;
+    if (bounds.length && bounds[bounds.length - 1].i === sp.after) continue;
+    bounds.push({ i: sp.after, text });
+  }
+  if (!bounds.length) return null;
+  const groups = [];
+  const push = (title, i, n) => {
+    if (n > 0) groups.push({ title: clip(title, 48), raw: clip(title, 200), i, n });
+  };
+  push(String(intent ?? '').trim(), 0, bounds[0].i);
+  for (let k = 0; k < bounds.length; k++) {
+    const end = k + 1 < bounds.length ? bounds[k + 1].i : total;
+    push(bounds[k].text, bounds[k].i, end - bounds[k].i);
+  }
+  return groups.length >= 2 ? groups : null;
+}
+
+/**
+ * 分组 + 截断一步到位：有阶段时步骤留最后 maxSteps 步（区间跟着平移，空段丢掉），
+ * 没阶段时原样返回 —— 平铺的老路（聊天页实时卡"…前 N 步已折叠"）不受影响。
+ */
+export function withPhases(steps, speech, intent, maxSteps = 30) {
+  let phases = phaseGroups(speech, intent, steps.length);
+  let list = steps;
+  if (phases && steps.length > maxSteps) {
+    const off = steps.length - maxSteps;
+    list = steps.slice(off);
+    phases = phases
+      .map((g) => {
+        // 头尾都要平移：只移头不移尾的话，截断点两侧的段会重叠
+        const start = Math.max(0, g.i - off);
+        const end = Math.min(g.i + g.n - off, list.length);
+        return { ...g, i: start, n: Math.max(0, end - start) };
+      })
+      .filter((g) => g.n > 0);
+    if (phases.length < 2) phases = null;
+  }
+  return { steps: list, phases };
 }
 
 /**
@@ -243,22 +372,80 @@ export function progressView(state, now = Date.now()) {
   const lastRaw = state.steps[state.steps.length - 1] ?? null;
   const current = [...steps].reverse().find((s) => s.status === 'running') ?? null;
   const last = steps[steps.length - 1] ?? null;
+  // 阶段分组：分得出来就给 phases（界面按段画），分不出来 null（平铺老路）
+  const grouped = withPhases(steps, state.speech, (state.intent || '').trim());
   return {
     phase: state.phase,
     phaseText: PHASE_TEXT[state.phase] ?? '进行中',
-    elapsedMs: Math.max(0, now - state.startedAt),
+    // 收尾后时钟冻结：服务端 __done 带了总用时就用它，没有就用"最后一个事件"的时刻，
+    // 别让每秒重画把"已完成"的用时继续往上跳
+    elapsedMs:
+      state.done && state.finalElapsedMs != null ? state.finalElapsedMs
+      : state.done ? Math.max(0, state.lastEventAt - state.startedAt)
+      : Math.max(0, now - state.startedAt),
     idleMs,
     stalled,
     done: state.done,
     status: state.status,
     error: state.error,
     info: state.info,
+    intent: (state.intent || '').trim(),
     stepCount: steps.length,
-    steps,
+    steps: grouped.steps,
+    phases: grouped.phases,
     currentStep: current,
     lastStep: last,
     lastAgoMs: lastRaw ? Math.max(0, now - lastRaw.at) : null,
     lastAction: last ? `${last.verb}${last.target ? ` ${last.target}` : ''}` : '',
+  };
+}
+
+/* ------------------------------------------------ 收尾快照（落库给历史用） */
+
+/**
+ * 一次运行的事件流 → **收尾快照**（2026-11-05 评鉴落地）。
+ *
+ * 服务端收尾时调（runs.mjs 的 progressMeta），把快照写进回话消息的 meta.progress ——
+ * 界面上"他到底查了啥"留一行可展开的收起行，不用回查 run_events。
+ * 跟卡票同一哲学：**快照在落库时刻写死**，聊天一屏可能十几条回话，逐条回查太贵。
+ *
+ * 跟 progressView 的差别：收尾时不猜"进行中" —— 还没等到结果的一律收成「已发起」
+ * （called），不硬猜成败。rows = [{ evt, at }]（store.listRunEvents 的行、evt 已
+ * JSON.parse；at 是落库时刻，每步耗时靠它；缺了就退回上一条事件的时刻，耗时归零
+ * 但步骤本身不丢）。
+ *
+ * 没调过工具的运行返回 null —— 纯聊天的回话不需要"过程收起行"。
+ */
+export function summarizeEvents(rows, { status = '', elapsedMs = null, maxSteps = 30 } = {}) {
+  const state = createRunProgress({});
+  for (const r of rows ?? []) {
+    const evt = r?.evt;
+    if (!evt || typeof evt !== 'object') continue;
+    const t = Date.parse(r.at ?? '');
+    applyRunEvent(state, evt, Number.isFinite(t) ? t : state.lastEventAt);
+  }
+  if (!state.steps.length) return null;
+  closeRunning(state);
+  const list = state.steps.map((s) => {
+    const { verb, target } = toolSummary(s.name, s.input, s.detail);
+    return {
+      v: verb,
+      t: target,
+      ms: s.endedAt != null ? s.endedAt - s.at : null,
+      s: s.status, // called | done | error（收尾时不会有 running）
+    };
+  });
+  // 阶段分组（2026-11-05 二期）：分得出来快照带 phases（界面按段画），
+  // 分不出来 phases 缺省 —— 老快照/平铺回话的界面画法原样兼容
+  const grouped = withPhases(list, state.speech, state.intent.trim(), maxSteps);
+  return {
+    status,
+    intent: state.intent.trim() ? clip(state.intent.trim(), 120) : '',
+    steps: grouped.phases ? grouped.steps : list.slice(-maxSteps),
+    ...(grouped.phases
+      ? { phases: grouped.phases.map((g) => ({ t: g.title, i: g.i, n: g.n })) }
+      : {}),
+    elapsedMs: elapsedMs != null ? elapsedMs : Math.max(0, state.lastEventAt - state.startedAt),
   };
 }
 

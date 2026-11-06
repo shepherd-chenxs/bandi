@@ -9,10 +9,12 @@ description: 班底平台的头像生成手册 —— 给数字员工/专家生�
 
 ## 零、开工前先确认通道
 
-生图走本机服务端的 AI 通道（端口见首轮注入给你的「机器现状」，一般是 8787）：
+生图走本机服务端的 AI 通道（端口**不写死**：你是服务端进程拉起来的，环境变量里带着
+`BANDI_PORT`；命令里写 `${BANDI_PORT:-18787}` —— 跟服务端自己的取端口公式一字不差，
+缺省 18787。端口换了这里自动跟着换，不用改文档）：
 
 ```bash
-curl -s --noproxy '*' http://127.0.0.1:<端口>/api/ai/image-config
+curl -s --noproxy '*' "http://127.0.0.1:${BANDI_PORT:-18787}/api/ai/image-config"
 ```
 
 - 回 `configured: true` → 通道可用，继续。
@@ -28,7 +30,7 @@ curl -s --noproxy '*' http://127.0.0.1:<端口>/api/ai/image-config
 <repoRoot>/docs/头像生成规范.md
 ```
 
-`repoRoot` 从 `curl -s --noproxy '*' http://127.0.0.1:<端口>/api/state` 里拿。下面是两条模板的骨架：
+`repoRoot` 从 `curl -s --noproxy '*' "http://127.0.0.1:${BANDI_PORT:-18787}/api/state"` 里拿。下面是两条模板的骨架：
 
 **新建头像（文生图）**——厚涂软阴影卡通风，中景半身，头约占画面一半：
 
@@ -56,12 +58,12 @@ No text, no watermark, no border.
 
 ```bash
 # 文生图
-curl -s --noproxy '*' -X POST http://127.0.0.1:<端口>/api/ai/image \
+curl -s --noproxy '*' -X POST "http://127.0.0.1:${BANDI_PORT:-18787}/api/ai/image" \
   -H 'Content-Type: application/json' \
   -d '{"prompt":"<上面写好的完整 prompt>","size":"1024x1024"}'
 
 # 图生图（改已有头像）：多带一个 image 字段 = 原图绝对路径
-curl -s --noproxy '*' -X POST http://127.0.0.1:<端口>/api/ai/image \
+curl -s --noproxy '*' -X POST "http://127.0.0.1:${BANDI_PORT:-18787}/api/ai/image" \
   -H 'Content-Type: application/json' \
   -d '{"prompt":"<图生图模板>","size":"1024x1024","image":"<原图绝对路径>"}'
 ```
@@ -92,7 +94,7 @@ node <repoRoot>/tools/avatar-process.mjs <生成的1024.png> <输出256.png>
 2. 绑到人头上（`personas.avatar` 存文件名）：
 
    ```bash
-   curl -s --noproxy '*' -X PUT http://127.0.0.1:<端口>/api/personas/<personaId> \
+   curl -s --noproxy '*' -X PUT "http://127.0.0.1:${BANDI_PORT:-18787}/api/personas/<personaId>" \
      -H 'Content-Type: application/json' \
      -d '{"avatar":"<avatar-name>.png"}'
    ```

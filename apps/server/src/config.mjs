@@ -14,6 +14,8 @@ const here = path.dirname(fileURLToPath(import.meta.url));
  *
  * ⚠️ 这个值**不是"探测起点"** —— 全局没有"往上找空端口"的逻辑了（2026-11-01 改）。
  * 要换端口：`BANDI_PORT=<n>`，或者把这一处和 `shell.mjs` 的两处一起改掉。
+ * skills/ 里的手册写的是 `${BANDI_PORT:-18787}`（同一公式）—— `BANDI_PORT` 一改它们
+ * 自动跟；只有动这个缺省值本身，才要连 skills/ 里的兜底一起找一遍。
  */
 const DEFAULT_PORT = 18787;
 

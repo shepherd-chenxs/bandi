@@ -293,11 +293,19 @@ export function applyTheme() {
 
 
 
-export function setTheme(theme) {
+/**
+ * 换主题。
+ *
+ * `keepPage`（2026-11-05 加的）：设置 › 偏好里的分段控件点完要重绘那一页（选中态），
+ * 但**手机上「我的」页也放了一组外观选项** —— 那边点完必须留在「我的」，
+ * 重绘会把页面翻到设置页（手机根本没有设置页入口）。所以把"重绘去哪儿"
+ * 交给调用方决定，本函数只负责存值 + 应用到文档。
+ */
+export function setTheme(theme, { keepPage = false } = {}) {
   S.theme = theme;
   try { localStorage.setItem(THEME_KEY, theme); } catch { /* 隐私模式下写不了就算了 */ }
   applyTheme();
-  openSettings('prefs');
+  if (!keepPage) openSettings('prefs');
 }
 
 

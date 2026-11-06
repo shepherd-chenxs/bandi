@@ -191,7 +191,27 @@ export async function handlePersona(req, res, url) {
     const id = decodeURIComponent(one[1]);
     const before = store.getPersona(id);
     if (!before) return fail(res, 404, 'E2009', '员工不存在');
-    const body = await readBody(req);
+    let body = await readBody(req);
+    /*
+     * **手机设备令牌的收窄**（2026-11-05）：手机执行配置卡（mobile 详情页）只开放
+     * runtime / model / showThinking / maxParallel 四项 —— 身份字段（名字/岗位/职责/部门）
+     * 不是手机的菜单，一律以库中现值**原样回填**（name 是必填项 E1011，不能剥掉只能带回），
+     * 这样设备侧就算构造请求也改不了身份；头像/技能/沙箱/目录等没带的键照旧不动。
+     * 放行的先例与口径同手机审卡 card.patch：PDP 放 device + handler 字段级闸
+     * （route-policy persona.update 的 note）。
+     */
+    if (req.bandiAuth?.kind === 'device') {
+      body = {
+        name: before.name,
+        role: before.role,
+        department: before.department,
+        instructions: before.instructions ?? '',
+        runtime: body.runtime,
+        model: body.model,
+        showThinking: body.showThinking,
+        maxParallel: body.maxParallel,
+      };
+    }
     /*
      * **字段级闸**：改员工的「模型」或「运行时」= 改**模型路由**，那是五类管理动作之一
      * （设计 §6.3 第 15 条 / 决策 A 规则 1）。面板令牌能改名字、职责、技能、权限，
@@ -202,9 +222,14 @@ export async function handlePersona(req, res, url) {
      *
      * ⚠️ 判的是"**值真的变了**"，不是"body 里带了这个键"：界面保存时会把整份表单发上来
      * （名字、职责、技能……带着没改过的 model），只按键存在就拦会把"改名字"也挡掉 ✗。
+     *
+     * 2026-11-05：**设备令牌豁免** —— 上面那段收窄后，设备请求的 body 只剩执行配置四项
+     * （身份字段已回填成现值），改 runtime/model 正是这台配对手机被允许做的事；mayManage
+     * 对 device 恒 false，不豁免的话手机执行配置卡的保存会被这道闸打死（E4032）。
      */
     if (
       !auth.mayManage(req) &&
+      req.bandiAuth?.kind !== 'device' &&
       (('model' in body && String(body.model ?? '') !== String(before.model ?? '')) ||
         ('runtime' in body && String(body.runtime ?? '') !== String(before.runtime ?? '')))
     ) {
