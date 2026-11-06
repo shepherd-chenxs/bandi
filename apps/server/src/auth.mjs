@@ -68,6 +68,9 @@ import * as tokens from './security/tokens.mjs'; // Bearer at_ 短票（§7.1，
 import * as policy from './security/policy.mjs';
 import { isRegistered } from './security/route-policy.mjs';
 import * as csrf from './security/csrf.mjs';
+// 只读 `<数据目录>/hub.json`（一个本地文件）：登录页据此决定要不要摆中枢入口。
+// 注意这不是"依赖中枢"—— 没加入过中枢就是 null，启动与登录一个字节都不受影响。
+import { readHubConfig } from './hub/config.mjs';
 
 export { isLoopbackHost };
 
@@ -131,8 +134,10 @@ export function ensureToken(dataDir, envToken) {
  */
 export function setup({ host, dataDir, envToken, trustProxy = false }) {
   const required = !isLoopbackHost(host) || !!trustProxy;
-  if (!required) return { required: false, token: '', from: '', created: false };
-  return { required: true, ...ensureToken(dataDir, envToken) };
+  // dataDir 一起带出去：登录页要读 `<数据目录>/hub.json` 才知道这台机器有没有加入中枢
+  //（只是读一个本地文件，中枢不在、没加入，都返回 null —— 不构成对中枢的依赖）
+  if (!required) return { required: false, token: '', from: '', created: false, dataDir };
+  return { required: true, ...ensureToken(dataDir, envToken), dataDir };
 }
 
 function parseCookies(header) {
@@ -590,6 +595,23 @@ export function guard(auth, req, res, url) {
    */
   if (req.method === 'POST' && url.pathname === '/api/pair/resume') return true;
   /*
+   * **身份中枢进门**（2026-11-06）：`GET /hub/enter?ticket=…`。
+   *
+   * 此刻请求手上**只有一张中枢签的票** —— 那就是它的凭据（手机壳里没有"登录表单"
+   * 这一步，它只会打开一个 URL）。与上面 `/pair` 同一个模式：guard 只负责放它进来，
+   * 验票、查本地授权表、发本机会话全在 `routes/hub.mjs` 里 —— 别在这里提前判，
+   * 也别让这里"看起来像"在做认证。
+   *
+   * ⚠️ 它**不削弱**任何东西：票验不过就是 400，票有效但本地没认过这个账号就是 403。
+   */
+  if (req.method === 'GET' && url.pathname === '/hub/enter') return true;
+  /*
+   * **桌面端「用中枢登录」的起点**（2026-11-06）：`GET /hub/login`。
+   * 它此刻手上同样什么都没有（这正是它的作用），做的事只有一件：302 到中枢。
+   * 和 /hub/enter 一样，guard 只管放行，认证在中枢、授权在主机。
+   */
+  if (req.method === 'GET' && url.pathname === '/hub/login') return true;
+  /*
    * 登录 / 退出（2026-10-28 第三刀）：此刻请求还没带任何凭据（这就是它要干的事），
    * 所以必须免令牌。**CSRF 闸照过**（server.mjs 里的 guardWrite 在 guard 之后）——
    * 登录页自己的 fetch 带 `X-Bandi: 1`，别在这条链路上绕开它。
@@ -685,6 +707,7 @@ export function guard(auth, req, res, url) {
         loopback: hasUsers,
         users: hasUsers ? store.listUsers().filter((u) => !u.disabled) : null,
         mobile: isMobileUA(req),
+        hub: hubOf(auth),
       }));
       return false;
     }
@@ -738,9 +761,16 @@ export function guard(auth, req, res, url) {
           userId: hit.user.id,
           roleId: hit.user.roleId,
           admin: hit.user.roleId === 'admin',
-          // 免密 + 服务器形态 = 受限会话（见 decide 里的那段，IAM §8.6）
-          restricted: !hit.user.hasPassword && source === 'network',
-          via: 'session',
+          /*
+           * 免密 + 服务器形态 = 受限会话（见 decide 里的那段，IAM §8.6）。
+           *
+           * **例外：从身份中枢进来的会话**（`kind='hub'`，2026-11-06）。那条限制的
+           * 理由是「免密账号在局域网上等于谁都能点进来」—— 而中枢会话背后是中枢签的
+           * 票据（GitHub 身份 + Ed25519 签名 + 一次性），证明力比一个本地密码只高不低。
+           * 不豁免的话，主力场景（主机开局域网 + 本机账号免密）会一进面板就 E4098。
+           */
+          restricted: !hit.user.hasPassword && source === 'network' && hit.kind !== 'hub',
+          via: hit.kind === 'hub' ? 'hub' : 'session',
         };
       }
     }
@@ -881,6 +911,7 @@ export function guard(auth, req, res, url) {
         loopback: source === 'loopback' && hasUsers,
         users: hasUsers ? store.listUsers().filter((u) => !u.disabled) : null,
         mobile: isMobileUA(req),
+        hub: hubOf(auth),
       }));
       return false;
     }
@@ -913,7 +944,7 @@ export function guard(auth, req, res, url) {
     if (staleTok && !staleTok.startsWith('bd_')) setCookies.push(clearedTokenCookie());
     if (setCookies.length) headers['Set-Cookie'] = setCookies;
     res.writeHead(200, headers);
-    res.end(loginPage({ hasUsers: store.hasUsers(), loopback: source === 'loopback', mobile: isMobileUA(req) }));
+    res.end(loginPage({ hasUsers: store.hasUsers(), loopback: source === 'loopback', mobile: isMobileUA(req), hub: hubOf(auth) }));
     return false;
   }
 
@@ -1337,6 +1368,37 @@ function loginPage(args) {
   return args.mobile ? loginMobilePage(args) : loginDesktopPage(args);
 }
 
+/**
+ * 这台机器加入过中枢没有 —— 只看本地 `hub.json`，**不联网、不探活**。
+ * 登录页是渲染路径上最不该等待的地方；中枢在不在，由点下去之后的 302 去回答。
+ */
+function hubOf(auth) {
+  try {
+    const cfg = readHubConfig(auth && auth.dataDir);
+    return cfg ? { baseUrl: cfg.baseUrl, deviceId: cfg.deviceId, name: cfg.name || null } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 桌面端登录页上的「用中枢账号登录」（2026-11-06）。
+ *
+ * 只在这台机器**已经加入中枢**时出现（`<数据目录>/hub.json` 有内容）。点了不为难人：
+ * `/hub/login` 会 302 到中枢，中枢认完人签一张票再 302 回 `/hub/enter` —— 桌面端
+ * 走的和手机是同一条路，主机侧只有这一个入口。
+ *
+ * 本机账号**没有删掉**，退到分隔线下面：中枢挂在别人家的云上，它抖一下不该让人
+ * 连自己桌上的电脑都打不开。中枢是默认路径，本机账号是离线兜底 —— 主次靠排版表达，
+ * 不靠删功能表达。
+ */
+function hubLoginHtml() {
+  return `<a class="hubbtn" href="/hub/login">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8.2" r="3.6"/><path d="M4.6 19.6c.9-3.6 3.8-5.5 7.4-5.5s6.5 1.9 7.4 5.5"/></svg>
+  用中枢账号登录</a>
+<p class="hubsep">或本机账号</p>`;
+}
+
 /** 明文 TLS 告警条（IAM §10.1.1）：两端的登录页都顶在表单跟前，两端各调样式 */
 function warnbarHtml() {
   const t = tlsWarning();
@@ -1358,7 +1420,7 @@ function warnbarHtml() {
  * ≤960px 是**兜底不是设计目标**：左栏收成顶部横向品牌条（特性列表藏掉），表单照常可用
  * —— 手机不该落到这页（isMobileUA 分流），落到这档的只有桌面窄窗口 / 桌面模式的浏览器。
  */
-function loginDesktopPage({ hasUsers, loopback = false, users = null }) {
+function loginDesktopPage({ hasUsers, loopback = false, users = null, hub = null }) {
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -1515,6 +1577,21 @@ function loginDesktopPage({ hasUsers, loopback = false, users = null }) {
   button:active { transform: translateY(1px); filter: brightness(.96); }
   button:focus-visible { outline: 2px solid var(--accent-hi); outline-offset: 2px; }
   button[disabled] { opacity: .55; cursor: default; transform: none; filter: none; }
+  /*
+   * 中枢登录（2026-11-06）：桌面端的主入口就是它，本机账号退到分隔线下面。
+   * 做成 <a> 而不是 <button>：它要的是一次跳转（/hub/login → 中枢 → 带票回来），
+   * 登录页上没有任何脚本要参与，少一段 JS 就少一处可错的地方。
+   */
+  .hubbtn { display: flex; align-items: center; justify-content: center; gap: 8px;
+            height: 44px; border-radius: 10px; text-decoration: none;
+            background: var(--btn); color: #fff; font-weight: 600; letter-spacing: .4px;
+            box-shadow: 0 10px 22px -10px rgba(0,86,214,.55); transition: filter .15s, transform .12s; }
+  .hubbtn:hover { filter: brightness(1.08); }
+  .hubbtn:active { transform: translateY(1px); }
+  .hubbtn:focus-visible { outline: 2px solid var(--accent-hi); outline-offset: 2px; }
+  .hubbtn svg { width: 16px; height: 16px; flex: none; }
+  .hubsep { display: flex; align-items: center; gap: 10px; margin: 20px 0 14px; font-size: 12px; color: var(--dim); }
+  .hubsep::before, .hubsep::after { content: ""; flex: 1; height: 1px; background: var(--line); }
   .bad { color: var(--bad); font-size: 12.5px; margin: 0 0 12px; }
   /* 每次从 hidden 里放出来都抖一下：让"这条就是为你响的"可感知（display 切换会重放动画） */
   .bad:not([hidden]) { animation: shake .32s ease; }
@@ -1619,6 +1696,7 @@ function loginDesktopPage({ hasUsers, loopback = false, users = null }) {
               <p class="tag">${hasUsers ? '登录你的账号' : '创建第一个账号 · 它将自动成为管理员'}</p>
             </div>
           </header>
+          ${hub ? hubLoginHtml() : ''}
           ${loginFormHtml({ hasUsers, loopback, users })}
         </div>
         ${OTP_PANE_HTML}
@@ -1644,7 +1722,7 @@ ${LOGIN_SCRIPT}
  * 逻辑（四态表单 / OTP / 补卡）与 PC 页共用同一份。磁贴态手机实际到不了（回环才摆磁贴），
  * 样式补全只为共享标记完整。
  */
-function loginMobilePage({ hasUsers, loopback = false, users = null }) {
+function loginMobilePage({ hasUsers, loopback = false, users = null, hub = null }) {
   return `<!doctype html>
 <html lang="zh-CN">
 <head>

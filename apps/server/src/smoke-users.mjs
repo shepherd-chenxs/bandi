@@ -452,7 +452,7 @@ try {
    */
   console.log('\n⑪ 不回归：回环形态照旧免登录 operator（API），但**面板要登录**（2026-10-31）');
   await stopAll();
-  start(); // 不设 BANDI_HOST = 只听回环
+  start({ BANDI_HOST: '127.0.0.1' }); // 显式钉回环：2026-11-04 起缺省是 0.0.0.0（对外），不设就测不到这条
   if (!(await waitUp())) throw new Error('回环实例没起来：' + log.slice(-500));
   const meLoop = await call('GET', '/api/me');
   check('回环 /api/me → operator（不需要任何凭据）', meLoop.status === 200 && meLoop.body?.kind === 'operator',

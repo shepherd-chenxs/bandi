@@ -80,7 +80,7 @@ export async function renderSecurity() {
         .map(
           (s) => `<div class="set-row" style="flex-direction:column;align-items:flex-start;gap:2px">
             <div style="display:flex;gap:8px;align-items:center;width:100%">
-              <b>${esc(s.kind === 'browser' ? '浏览器' : s.kind)}</b>
+              <b>${esc(s.kind === 'hub' ? '中枢登录' : s.kind === 'browser' ? '浏览器' : s.kind)}</b>
               <span style="color:var(--dim);font-size:12px">指纹 ${esc(s.id)}</span>
               ${s.ip ? `<span style="color:var(--dim);font-size:12px">IP ${esc(s.ip)}</span>` : ''}
             </div>

@@ -340,7 +340,7 @@ const sha256 = (s) => crypto.createHash('sha256').update(String(s)).digest('hex'
  * `expiresAt`（30 天）保留：它是浏览器 Cookie 的同步值，也是两道闸的总兜底。
  * `ip` / `ua` 给"安全 → 会话列表"页展示用。
  */
-export function createSession(userId, { ip = null, ua = null } = {}) {
+export function createSession(userId, { ip = null, ua = null, kind = 'browser' } = {}) {
   const token = crypto.randomBytes(32).toString('base64url');
   const ts = Date.now();
   const created = new Date(ts).toISOString();
@@ -350,7 +350,7 @@ export function createSession(userId, { ip = null, ua = null } = {}) {
   const tv = db.prepare('SELECT tokenVersion FROM users WHERE id = ?').get(String(userId))?.tokenVersion ?? 1;
   db.prepare(
     'INSERT INTO user_sessions (tokenHash, userId, createdAt, expiresAt, lastSeenAt, kind, tv, idleExpiresAt, absoluteExpiresAt, ip, ua) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-  ).run(sha256(token), String(userId), created, expires, created, 'browser', tv, idle, absolute, ip, String(ua ?? '').slice(0, 200));
+  ).run(sha256(token), String(userId), created, expires, created, String(kind), tv, idle, absolute, ip, String(ua ?? '').slice(0, 200));
   return { token, expiresAt: expires };
 }
 
@@ -399,7 +399,7 @@ export function userBySession(token) {
     const idle = new Date(now + IDLE_MINUTES * 60_000).toISOString();
     db.prepare('UPDATE user_sessions SET lastSeenAt = ?, idleExpiresAt = ? WHERE tokenHash = ?').run(ts, idle, row.tokenHash);
   }
-  return { tokenHash: row.tokenHash, user: u };
+  return { tokenHash: row.tokenHash, user: u, kind: row.kind ?? 'browser' };
 }
 
 /** 退出登录：删这一条会话 */

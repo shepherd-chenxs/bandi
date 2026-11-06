@@ -759,6 +759,110 @@ async function cmdUser(argv) {
   return `不认识的子命令：user ${sub}\n（bandi user list | create <名字> [--admin] [--password 密码]）`;
 }
 
+/* ------------------------------------------------------------------ hub */
+
+/*
+ * 身份中枢（2026-11-06）：`bandi hub join | status | leave | allow | revoke`。
+ *
+ * ⚠️ 这里**动态 import** `hub/join.mjs`（它会开库）—— 铁律②要求 `bandi status`
+ * 在"库坏了"的时候也能说人话，所以这条依赖只能出现在 `hub` 子命令里，
+ * 不能提到文件顶部。
+ *
+ * `join` 会**停在那儿等人**：先印设备码，人拿着手机去中枢页面确认，这边每 2 秒轮询。
+ * 主机没有浏览器，这是它唯一能完成登录的方式（参见 bandi-hub/contract.md §四）。
+ */
+async function cmdHub(argv) {
+  const words = argv.filter((a) => !a.startsWith('-'));
+  const sub = words[1] ?? 'status';
+  const hub = await import('./hub/join.mjs');
+
+  if (sub === 'status') {
+    const s = hub.hubStatus(dataDir);
+    if (!s.joined) {
+      return [
+        '这台机器没加入任何身份中枢（独立运行，一切照旧）',
+        dim('  加入：bandi hub join <中枢地址>'),
+      ].join('\n');
+    }
+    const links = s.links ?? [];
+    return [
+      `已加入中枢 ${green(s.baseUrl)}`,
+      `  设备  ${s.deviceId}${s.name ? dim(` · ${s.name}`) : ''}`,
+      `  账号  ${s.accountId ?? dim('（未知，第一次进门时认领）')}`,
+      `  加入于 ${s.joinedAt ?? '?'}`,
+      `  授权表 ${links.length ? '' : dim('（空）')}`,
+      ...links.map((l) => `    ${l.accountId} → ${l.userId}${l.lastEnterAt ? dim(` · 最近 ${l.lastEnterAt}`) : ''}`),
+      dim('  放行一个账号：bandi hub allow <账号 id>'),
+    ].join('\n');
+  }
+
+  if (sub === 'join') {
+    const url = words[2] ?? argOf(argv, '--hub');
+    if (!url) {
+      return '用法：bandi hub join <中枢地址> [--name 名字] [--port 端口] [--pubkey 公钥]\n  例：bandi hub join https://hub.example.com';
+    }
+    const port = Number(argOf(argv, '--port', String(defaultPort))) || defaultPort;
+    try {
+      const r = await hub.join({
+        dataDir,
+        hubUrl: url,
+        name: argOf(argv, '--name'),
+        pubkey: argOf(argv, '--pubkey'),
+        port,
+        version: platformVersion(),
+        onCode: ({ code, hubUrl, expiresAt }) => {
+          const mins = Math.max(1, Math.round((expiresAt * 1000 - Date.now()) / 60_000));
+          console.log('');
+          console.log(`  在中枢页面上输入这串码（${mins} 分钟内有效，只用一次）：`);
+          console.log('');
+          console.log(`    ${green(code)}`);
+          console.log('');
+          console.log(`  打开 ${hubUrl} ，登录后点「添加设备」。`);
+          console.log(dim('  这边在等，确认完自动继续（Ctrl+C 可以放弃）……'));
+          console.log('');
+        },
+      });
+      const lines = [
+        `${green('已加入中枢')} ${r.baseUrl}`,
+        `  设备  ${r.deviceId}${r.name ? dim(` · ${r.name}`) : ''}`,
+        `  账号  ${r.accountId ?? dim('（未知）')}`,
+      ];
+      if (r.linkedUser) lines.push(`  授权  ${dim('已把这个中枢账号绑到本机用户')} ${r.linkedUser}`);
+      else if (r.claimPending) lines.push(yellow('  授权  中枢没返回账号 id —— 第一次从手机点进来时会认领给本机第一个用户'));
+      lines.push(dim('  心跳  服务端每 60 秒报一次地址（正在运行的服务最多 60 秒后跟上，不用重启）'));
+      return lines.join('\n');
+    } catch (e) {
+      return red(`${e?.code ? `${e.code} ` : ''}${e?.message ?? e}`);
+    }
+  }
+
+  if (sub === 'leave') {
+    const had = hub.leave(dataDir);
+    return had ? `${green('已退出中枢')}（本地数据一个字节没动；要再连回来重新 join 一次）` : '这台机器本来就没加入中枢。';
+  }
+
+  if (sub === 'allow') {
+    const accountId = words[2];
+    if (!accountId) return '用法：bandi hub allow <中枢账号 id> [--user 本机用户名或 id]\n  账号 id 在手机上「我的」页，或中枢的设备列表里';
+    try {
+      const r = hub.allowAccount({ accountId, userId: argOf(argv, '--user') });
+      return `${green('已放行')} ${r.accountId} → 本机用户「${r.userName}」\n${dim('  他现在可以从手机点进这台机器了')}`;
+    } catch (e) {
+      return red(`${e?.code ? `${e.code} ` : ''}${e?.message ?? e}`);
+    }
+  }
+
+  if (sub === 'revoke' || sub === 'deny') {
+    const accountId = words[2];
+    if (!accountId) return '用法：bandi hub revoke <中枢账号 id>';
+    return hub.revokeAccount(accountId)
+      ? `${green('已收回')} ${accountId} 的进入权限（他的会话下一次请求就失效）`
+      : `授权表里没有 ${accountId}。`;
+  }
+
+  return `不认识的子命令：hub ${sub}\n（bandi hub status | join <中枢地址> | leave | allow <账号> | revoke <账号>）`;
+}
+
 /* --------------------------------------------------------- install-cli */
 
 /*
@@ -858,6 +962,11 @@ const HELP = `班底 · 命令行
   bandi nodes leave        退出总机
   bandi nodes list         （总机视角）登记了哪些算力节点、在不在线
   bandi nodes invite       （总机视角）发一个一次性加入邀请码
+  bandi hub [status]       身份中枢：这台机器加入了吗、谁被允许进来
+  bandi hub join <中枢地址>  加入中枢（印出设备码，到中枢页面确认；没有浏览器也能加）
+  bandi hub leave          退出中枢（本地数据一个字节没动）
+  bandi hub allow <账号>   放行一个中枢账号进这台机器（--user 指定本机用户）
+  bandi hub revoke <账号>  收回某个中枢账号的进入权限
   bandi data export [--dir 目录]
                            导出数据快照（服务器形态下这是唯一入口）
   bandi user list          账号列表
@@ -961,6 +1070,12 @@ async function main() {
 
     case 'nodes': {
       const out = await cmdNodes(argv);
+      console.log(out);
+      return /^用法|不认识的子命令/.test(out) ? 2 : 0;
+    }
+
+    case 'hub': {
+      const out = await cmdHub(argv);
       console.log(out);
       return /^用法|不认识的子命令/.test(out) ? 2 : 0;
     }

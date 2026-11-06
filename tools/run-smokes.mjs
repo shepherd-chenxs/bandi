@@ -63,6 +63,9 @@ const RUN = [
   'apps/server/src/smoke-node-panel.mjs',
   'apps/server/src/smoke-node-task.mjs',
   'apps/server/src/smoke-pair.mjs',
+  // 身份中枢进门（2026-11-06）：验票九类负样本 + /hub/enter 正路 + 本地授权表 + 服务器形态
+  // 不联网（票是本地现签的假票，只验"主机这一侧"的逻辑）
+  'apps/server/src/smoke-hub.mjs',
   'apps/server/src/smoke-personas.mjs',
   'apps/server/src/smoke-plugin-blocks.mjs',
   'apps/server/src/smoke-pr-create.mjs',

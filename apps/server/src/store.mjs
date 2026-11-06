@@ -46,3 +46,6 @@ export * from './store/otp.mjs';
 // 安全审计（2026-10-31 IAM Phase 1）：security_events —— append-only（触发器兜底），
 // 401/403 由策略层当场记、写操作 pending → finish 回填（见 store/audit.mjs 文件头）
 export * from './store/audit.mjs';
+// 身份中枢的本地授权表（2026-11-06）：hub_links —— 中枢账号 ↔ 本机用户。
+// 「认证在中枢、授权在主机」那条规则的落地物，别和 user_sessions 混
+export * from './store/hubLinks.mjs';

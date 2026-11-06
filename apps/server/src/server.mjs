@@ -72,6 +72,9 @@ import * as feishu from './feishu.mjs';
 import { handleRun } from './routes/run.mjs';
 import { handleSchedules } from './routes/schedules.mjs';
 import { handleLocal, supervisorModule } from './routes/local.mjs';
+// 身份中枢进门（2026-11-06）：`GET /hub/enter?ticket=…` —— 验票 → 查本地授权表 → 发会话
+import { handleHub } from './routes/hub.mjs';
+import * as hub from './hub/join.mjs';
 // 协作中心（2026-10-31 MVP）：中心管理接口 + 分公司 ↔ 中心的机器接口，两条路都在 handleCollab 里
 import { handleCollab } from './routes/collab.mjs';
 import * as collabBranch from './collab-branch.mjs';
@@ -557,6 +560,14 @@ const server = http.createServer(async (req, res) => {
     const handledLocal = await handleLocal(req, res, url);
     if (handledLocal !== false) return;
 
+    /*
+     * 身份中枢进门（2026-11-06）：`GET /hub/enter?ticket=…`。
+     * 排在静态资源之前 —— 它不是一个文件，而是一次「验票换会话」的动作
+     * （`serveStatic` 会按路径找文件，先到那里就变成 404 了）。
+     */
+    const handledHub = await handleHub(req, res, url, { dataDir });
+    if (handledHub !== false) return;
+
     if (!url.pathname.startsWith('/api/')) {
       /*
        * CSRF 值的自愈补种（2026-11-01）：浏览器里可能只有 `bandi_sid`/`bandi_token`
@@ -976,6 +987,23 @@ try {
   if (collabBranch.startIfJoined()) console.log('[协作] 已恢复与中心的同步');
 } catch (e) {
   console.warn(`[协作] 同步没起来（不影响本机使用）：${e?.message ?? e}`);
+}
+
+/*
+ * 身份中枢（2026-11-06）：加入了就接着报心跳 —— 中枢靠它画「在线」，
+ * 不给地址的话手机名册上只有一台点不动的机器。
+ *
+ * 放在 `listen` 之后（先能答请求，再往外打）。**失败不拦启动**：
+ * 中枢是可选增强，不是核心路径（docs/形态决策.md「单机零外部依赖」那条）。
+ * 没加入过时它什么都不做，但定时器会一直挂着 —— 这样 `bandi hub join`
+ * 写进 hub.json 之后，最多 60 秒这边就跟上了，不用重启服务。
+ */
+try {
+  if (hub.startHeartbeat({ dataDir, port, version: localMode.platformVersion() }).joined) {
+    console.log('[中枢] 已恢复心跳');
+  }
+} catch (e) {
+  console.warn(`[中枢] 心跳没起来（不影响本机使用）：${e?.message ?? e}`);
 }
 
 /**
