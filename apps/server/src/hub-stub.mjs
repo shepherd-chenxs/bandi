@@ -43,10 +43,11 @@ export function signTicket(privateKey, { sub = 'acc_me', dev = 'dev_self', login
  *   keyPair?: { publicKey: string, privateKey: import('node:crypto').KeyObject },
  *   deviceId?: string, deviceToken?: string,
  *   accounts?: Record<string, { password: string, id?: string, name?: string }>,
+ *   relay?: any,
  * }} opts
  * @returns {Promise<{ url: string, publicKey: string, requests: { path: string, body: any }[], close: () => Promise<void> }>}
  */
-export function startHubStub({ keyPair = generateKeyPair(), deviceId = 'dev_self', deviceToken = 'dt_stub', accounts = {} } = {}) {
+export function startHubStub({ keyPair = generateKeyPair(), deviceId = 'dev_self', deviceToken = 'dt_stub', accounts = {}, relay = null } = {}) {
   const requests = [];
   const server = http.createServer((req, res) => {
     const chunks = [];
@@ -87,11 +88,16 @@ export function startHubStub({ keyPair = generateKeyPair(), deviceId = 'dev_self
           deviceToken,
           publicKey: keyPair.publicKey,
           account: { id, login: username, name: acct.name ?? username },
+          // 隧道开通（2026-11-07）：真中枢在同一个响应里给出 relay，机器端据此起 frpc
+          ...(relay ? { relay } : {}),
         });
       }
 
-      // 心跳 / 名册：测试里不需要它们说什么，但别让连接挂着
-      if (req.method === 'POST' && (req.url ?? '').startsWith('/v1/devices/')) return reply(200, { ok: true });
+      // 心跳 / 名册：测试里不需要它们说什么，但别让连接挂着。
+      // 带 relay 时一并下发 —— 覆盖"开通/换子域名/吊销(null)"这一整条改派路径。
+      if (req.method === 'POST' && (req.url ?? '').startsWith('/v1/devices/')) {
+        return reply(200, { ok: true, ...(relay ? { relay } : {}) });
+      }
       return reply(404, { error: { code: 'H3004', message: '假中枢不认识这个口' } });
     });
   });

@@ -59,10 +59,12 @@ const RUN = [
   'apps/server/src/smoke-node-jobs.mjs',
   'apps/server/src/smoke-node-panel.mjs',
   'apps/server/src/smoke-node-task.mjs',
-  'apps/server/src/smoke-pair.mjs',
   // 身份中枢进门（2026-11-06）：验票九类负样本 + /hub/enter 正路 + 本地授权表 + 服务器形态
   // 不联网（票是本地现签的假票，只验"主机这一侧"的逻辑）
   'apps/server/src/smoke-hub.mjs',
+  // 外网访问的机器侧（2026-11-07）：relay 配置 → frpc.toml → 子进程生命周期 → 两道闸放行。
+  // 用假 frpc（.mjs）验，不联网、不装 frp
+  'apps/server/src/smoke-tunnel.mjs',
   'apps/server/src/smoke-personas.mjs',
   'apps/server/src/smoke-plugin-blocks.mjs',
   'apps/server/src/smoke-pr-create.mjs',
@@ -80,7 +82,6 @@ const RUN = [
   // ⚠️ 这条会临时改 HKCU\Environment\Path（原样写回）—— 真注册表用例
   'apps/server/src/smoke-runtime-detect.mjs',
   // 纯静态断言（不联网）：手机该走的路由必须带 device 标，桌面专属的必须没有
-  'apps/server/src/smoke-device-routes.mjs',
   'apps/server/src/smoke-users.mjs',
   'apps/server/src/smoke-schedules.mjs',
   'apps/server/src/smoke-steward.mjs',

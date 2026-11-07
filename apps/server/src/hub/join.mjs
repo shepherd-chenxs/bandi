@@ -21,8 +21,8 @@ import * as store from '../store.mjs';
 
 /* ------------------------------------------------------------------ 心跳 */
 
-/** @type {{ timer: NodeJS.Timeout|null, warned: boolean, revokedWarned: boolean, tick: (() => Promise<void>)|null }} */
-const beat = { timer: null, warned: false, revokedWarned: false, tick: null };
+/** @type {{ timer: NodeJS.Timeout|null, warned: boolean, revokedWarned: boolean, tick: (() => Promise<void>)|null, onBeat: ((dataDir: string) => void)|null }} */
+const beat = { timer: null, warned: false, revokedWarned: false, tick: null, onBeat: null };
 
 /**
  * 启动心跳（幂等）。**失败了不拦启动** —— 中枢挂了、断网了，这台机器照样是一台完整的班底。
@@ -32,24 +32,41 @@ const beat = { timer: null, warned: false, revokedWarned: false, tick: null };
  *     不用为了"刚加入"去重启一次服务；
  *   · `bandi hub leave` 删掉配置后，这边自然停下，不会往一个不认识自己的中枢白打请求。
  *
- * @param {{ dataDir: string, port?: number, version?: string|null, intervalMs?: number }} input
+ * @param {{ dataDir: string, port?: number, version?: string|null, intervalMs?: number, onBeat?: ((dataDir: string) => void)|null }} input
  * @returns {{ joined: boolean }}
  */
-export function startHeartbeat({ dataDir, port, version = null, intervalMs = 60_000 }) {
+export function startHeartbeat({ dataDir, port, version = null, intervalMs = 60_000, onBeat = null }) {
   const joined = !!readHubConfig(dataDir);
+  beat.onBeat = onBeat ?? null;
   if (beat.timer) return { joined };
 
   const tick = async () => {
     const cfg = readHubConfig(dataDir);
     if (!cfg?.deviceId || !cfg?.deviceToken) return; // 还没在这台机器上登录过：这一轮什么都不做
     try {
-      await client.heartbeat(cfg.baseUrl, {
+      const res = await client.heartbeat(cfg.baseUrl, {
         deviceId: cfg.deviceId,
         deviceToken: cfg.deviceToken,
         lanAddrs: client.lanAddrs(),
         port: port ?? cfg.port ?? undefined,
         version: version ?? undefined,
       });
+      /*
+       * 顺带收下中枢改派的 relay（2026-11-07 外网访问）：开通、换子域名、吊销，
+       * 都走这一条已经存在的通道 —— 不新增轮询、不要求用户重启。
+       *
+       * 「有这个字段」和「字段是 null」是两件事：前者=中枢在管这件事，后者=**撤销**。
+       * 所以判据是 `hasOwnProperty`，不是 `if (res.relay)`。
+       */
+      if (res && Object.prototype.hasOwnProperty.call(res, 'relay')) {
+        const fresh = readHubConfig(dataDir); // 这一轮里登录页可能刚写过，别拿旧快照盖回去
+        const next = res.relay ?? null;
+        if (fresh && JSON.stringify(fresh.relay ?? null) !== JSON.stringify(next)) {
+          try {
+            writeHubConfig(dataDir, { ...fresh, relay: next });
+          } catch { /* 写不进去：这一轮仍旧用旧配置，下一轮再来 */ }
+        }
+      }
       beat.warned = false;
       beat.revokedWarned = false;
     } catch (e) {
@@ -67,6 +84,12 @@ export function startHeartbeat({ dataDir, port, version = null, intervalMs = 60_
         console.warn(`[中枢] 心跳没发出去（不影响本机使用，下一轮再试）：${e?.message ?? e}`);
       }
       return;
+    }
+    // 心跳成功 = 手里这份 relay 是最新的：让隧道那边收敛一次（没变化时是空转）
+    try {
+      beat.onBeat?.(dataDir);
+    } catch (e) {
+      console.warn(`[外网] 隧道收敛失败（不影响本机使用）：${e?.message ?? e}`);
     }
   };
 
