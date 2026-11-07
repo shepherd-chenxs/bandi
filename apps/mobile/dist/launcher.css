@@ -1178,3 +1178,77 @@ body.connecting .nav-back {
     box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
   }
 }
+
+/* ---------------------------------------------------------------- 登录 / 设备列表（2026-11-07） */
+
+/*
+ * 主路径改成「账号密码登录 → 设备列表」后新增的两块：
+ *   · .adv —— 中枢地址的折叠块（默认收起：绝大多数人一辈子不用改它）；
+ *   · .dev-badge —— 名册行上的探活角标。
+ * 其余（输入框、列表、按钮）全部复用既有语汇，不另起一套。
+ */
+
+.adv {
+  margin-top: 14px;
+  border-radius: var(--r-ctl);
+  background: var(--card);
+}
+
+/* summary 默认带三角标记（那是网页味），换成右侧 chevron */
+.adv summary {
+  list-style: none;
+  padding: 12px 14px;
+  color: var(--dim);
+  font-size: 13.5px;
+  cursor: pointer;
+}
+
+.adv summary::-webkit-details-marker {
+  display: none;
+}
+
+.adv summary::after {
+  content: '›';
+  float: right;
+  opacity: 0.55;
+  transition: transform 0.15s ease;
+}
+
+.adv[open] summary::after {
+  transform: rotate(90deg);
+}
+
+.adv .field {
+  width: calc(100% - 24px);
+  margin: 0 12px 6px;
+}
+
+.adv .foot-hint {
+  margin: 0 14px 14px;
+}
+
+/*
+ * 探活角标：「可连」= 绿；没探到的不写"离线" —— 它可能只是不在同一个网段，
+ * 说"离线"会让人以为机器关了（用户 2026-11-07 定的口径：不知道就别说死）。
+ */
+.dev-badge {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  border-radius: 6px;
+  background: var(--card-2);
+  color: var(--dim);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.dev-badge.ok {
+  background: color-mix(in srgb, var(--good) 20%, transparent);
+  color: var(--good);
+}
+
+@media (prefers-color-scheme: light) {
+  .dev-badge.ok {
+    background: rgba(27, 111, 71, 0.12);
+    color: #1b6f47;
+  }
+}

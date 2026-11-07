@@ -20,6 +20,7 @@ import { spawn } from 'node:child_process';
 import { repoRoot } from './config.mjs';
 import { sleep } from './lifecycle.mjs';
 import { verifyTicket } from './hub/verify.mjs';
+import { startHubStub, hubLogin } from './hub-stub.mjs';
 
 const PORT = Number(process.env.SMOKE_PORT ?? 8866);
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bandi-hub-'));
@@ -161,26 +162,112 @@ try {
   check('换一张新票还能进（一次性只针对同一张）', fresh.status === 302, `HTTP ${fresh.status}`);
 
   /*
-   * [4] 桌面端登录入口（2026-11-06）：面板不再"只连自己"。
+   * [4] 登录页（2026-11-07 定稿）：**手机号 + 密码，一个框一个按钮**，提交给本机 /hub/login。
    *
-   * 桌面 App 打开就是本机面板，登录页上第一个按钮必须是「用中枢账号登录」；
-   * 点下去打 `/hub/login`，它只做一件事：带着自己的 origin 302 到中枢的 enter 端点。
-   * `return` 用回环 + 本机端口 —— 中枢只接受设备上报过的地址或 127.0.0.1 同端口。
+   * 页面自己长在本机，表单转给中枢，人不跳域；登录即注册（中枢按手机号存不存在
+   * 自己决定登录还是创建），所以页面上没有第二个"创建账号"按钮。这里验页面的形状：
+   * 手机号输入框、单个提交按钮、没有本机账号磁贴。
    */
-  console.log('\n[4] 桌面端登录入口');
+  console.log('\n[4] 登录页');
   const loginHtml = await (await get('/', { accept: 'text/html' })).text();
-  check('登录页有「用中枢账号登录」', loginHtml.includes('用中枢账号登录'));
-  check('按钮指向 /hub/login', loginHtml.includes('href="/hub/login"'));
-  const go = await get('/hub/login');
-  const loc = go.headers.get('location') ?? '';
-  check('点它 302 到中枢的 enter', go.status === 302 && loc.startsWith('https://hub.test/v1/devices/dev_self/enter?'), `HTTP ${go.status} ${loc.slice(0, 60)}`);
-  check('带回环 origin 作 return', loc.includes(`return=${encodeURIComponent(base)}`), loc.slice(-60));
+  check('登录页就是中枢账号表单', loginHtml.includes('action="/hub/login"') && loginHtml.includes('name="password"'));
+  check('手机号输入框（tel 键盘 + 11 位上限）', loginHtml.includes('name="username"') && loginHtml.includes('inputmode="tel"') && loginHtml.includes('maxlength="11"'));
+  check('只有一个提交按钮（登录即注册，没有单独的注册按钮）', !loginHtml.includes('value="register"'));
+  check('没有本机账号磁贴', !loginHtml.includes('class="tile"'));
+  const loginGet = await get('/hub/login');
+  check('GET /hub/login 只是回首页（老书签兼容）', loginGet.status === 302 && (loginGet.headers.get('location') ?? '') === '/', `HTTP ${loginGet.status}`);
+  const loginPost = await fetch(`${base}/hub/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', origin: base },
+    body: new URLSearchParams({ username: 'no-such-one', password: 'not-the-password' }).toString(),
+    redirect: 'manual',
+  });
+  const loginPostHtml = await loginPost.text();
+  check('错的账号原地回登录页并给原因', loginPost.status === 401 && loginPostHtml.includes('action="/hub/login"'), `HTTP ${loginPost.status}`);
 
   /*
-   * [5] 服务器形态（开局域网）：免密账号的「受限会话」不该把中枢会话也锁住。
-   *
-   * 那条限制的理由是「免密账号在局域网 = 谁都能点进来」，而中枢会话背后是签过名的票。
-   * 不豁免的话，主力场景（主机开局域网 + 本机账号免密）一进面板就 E4098。
+   * [4b] Origin: null 的兜底（2026-11-07 实报 E7006）：桌面壳的 WebView2 表单 POST
+   * 有时带 `Origin: null`（从 POST 响应渲染的页面上再提交时尤其如此）。同源闸此刻
+   * 退到 CSRF 双提交：没有这对值 → 403 渲染回登录页；带上 → 放行，照旧走到中枢。
+   */
+  console.log('\n[4b] Origin: null 的兜底');
+  const nullPost = await fetch(`${base}/hub/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', origin: 'null' },
+    body: new URLSearchParams({ username: 'x', password: 'y' }).toString(),
+    redirect: 'manual',
+  });
+  const nullHtml = await nullPost.text();
+  check('Origin: null 且没有双提交对 → 403 回登录页', nullPost.status === 403 && nullHtml.includes('E7006') && nullHtml.includes('action="/hub/login"'), `HTTP ${nullPost.status}`);
+
+  // 取一对真实值：登录页种 `bandi_csrf` Cookie，表单里带同值隐藏域 —— 浏览器提交时天然齐全
+  const seeded = await get('/', { accept: 'text/html' });
+  const csrfCookie = /bandi_csrf=([^;]+)/.exec(seeded.headers.get('set-cookie') ?? '')?.[1] ?? '';
+  const csrfField = /name="_csrf" value="([^"]+)"/.exec(await seeded.text())?.[1] ?? '';
+  check('登录页种下 csrf 双提交对（Cookie = 隐藏域）', !!csrfCookie && csrfCookie === csrfField);
+  const nullOk = await fetch(`${base}/hub/login`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/x-www-form-urlencoded',
+      origin: 'null',
+      cookie: `bandi_csrf=${encodeURIComponent(csrfCookie)}`,
+    },
+    body: new URLSearchParams({ username: 'no-such-one', password: 'not-the-password', _csrf: csrfField }).toString(),
+    redirect: 'manual',
+  });
+  check('Origin: null + 双提交对 → 放行走到中枢（401 回登录页）', nullOk.status === 401 && (await nullOk.text()).includes('action="/hub/login"'), `HTTP ${nullOk.status}`);
+
+  /*
+   * [4c] 登录成功路径 + 认领（假中枢，起一台**全新机器**）：
+   * 主服务在 [2] 已经被 acc_me 认领过了 —— 2026-11-07 认领只此一次，新账号在这儿
+   * 登录必须被拒。所以成功路径（注册 → 登录 → 认领 → 进面板）要一台干净机器来钉：
+   * hub.json 都不用预写，BANDI_HUB 环境变量直接指到假中枢。
+   */
+  console.log('\n[4c] 登录成功 + 认领（假中枢，全新机器）');
+  const stub = await startHubStub({
+    accounts: { 甲: { password: '甲-pass-123' }, 乙: { password: '乙-pass-456' } },
+  });
+  const dir2 = path.join(tmp, 'data-fresh');
+  fs.mkdirSync(dir2, { recursive: true });
+  const PORT2 = PORT + 1;
+  const child2 = spawn(process.execPath, [SERVER], {
+    cwd: repoRoot,
+    env: { ...process.env, BANDI_PORT: String(PORT2), BANDI_HOST: '127.0.0.1', BANDI_DATA: dir2, BANDI_DB: path.join(dir2, 'bandi.db'), BANDI_HUB: stub.url },
+    windowsHide: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  child2.stdout.on('data', (d) => (log += d));
+  child2.stderr.on('data', (d) => (log += d));
+  const base2 = `http://127.0.0.1:${PORT2}`;
+  for (let i = 0; i < 60; i++) {
+    try { if ((await fetch(`${base2}/api/hello`)).status === 200) break; } catch { /* 还没起 */ }
+    await sleep(200);
+  }
+
+  const okLogin = await hubLogin(base2, { username: '甲', password: '甲-pass-123', origin: base2 });
+  check('对的账号密码 → 302 进面板（零账号机器：第一个登录的人认领）',
+    okLogin.status === 302 && okLogin.location === '/' && !!okLogin.sid, `HTTP ${okLogin.status}`);
+  const cfgAfterLogin = JSON.parse(fs.readFileSync(path.join(dir2, 'hub.json'), 'utf8'));
+  check('登录后 hub.json 落了设备身份与账号', !!cfgAfterLogin.deviceId && cfgAfterLogin.accountId === 'acc_甲');
+  const stubHome = await fetch(`${base2}/`, { headers: { cookie: `bandi_sid=${okLogin.sid}`, accept: 'text/html' } });
+  check('登录会话真的能进面板', stubHome.status === 200 && (await stubHome.text()).includes('<title>班底</title>'), `HTTP ${stubHome.status}`);
+  const badLogin = await hubLogin(base2, { username: '甲', password: 'wrong-pass-9', origin: base2 });
+  check('错的密码原地回登录页并给原因', badLogin.status === 401 && badLogin.html.includes('action="/hub/login"'), `HTTP ${badLogin.status}`);
+
+  // 认领只此一次：第二个中枢账号凭对的密码也进不来，得机器主人放行
+  const secondLogin = await hubLogin(base2, { username: '乙', password: '乙-pass-456', origin: base2 });
+  check('第二个中枢账号凭对密码也进不来（认领已关闭）→ 403', secondLogin.status === 403 && secondLogin.html.includes('E7003'),
+    `HTTP ${secondLogin.status}`);
+  check('拒绝文案指路 bandi hub allow', secondLogin.html.includes('bandi hub allow'));
+  // 甲（已认领的账号）再登录 → 照常进门：认领是一次性的，不是每次登录都要重新认
+  const reLogin = await hubLogin(base2, { username: '甲', password: '甲-pass-123', origin: base2 });
+  check('已认领的账号再登录 → 照常 302', reLogin.status === 302 && !!reLogin.sid, `HTTP ${reLogin.status}`);
+
+  child2.kill();
+  await stub.close();
+
+  /*
+   * [5] 服务器形态（开局域网）：中枢票进门在 LAN 监听下照常工作。
    */
   console.log('\n[5] 服务器形态');
   child.kill();
@@ -204,7 +291,7 @@ try {
   check('服务器形态下同样能验票进门', lanEnter.status === 302 && !!lanSid, `HTTP ${lanEnter.status}`);
   const lanHome = await get('/', { cookie: `bandi_sid=${lanSid}`, accept: 'text/html' });
   const lanHtml = await lanHome.text();
-  check('免密账号的中枢会话不被 E4098 锁住', lanHome.status === 200 && lanHtml.includes('<title>班底</title>'), `HTTP ${lanHome.status}`);
+  check('中枢会话在服务器形态下能进面板', lanHome.status === 200 && lanHtml.includes('<title>班底</title>'), `HTTP ${lanHome.status}`);
   lan.kill();
 } catch (e) {
   check('冒烟过程没抛异常', false, String(e?.stack ?? e));

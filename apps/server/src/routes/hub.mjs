@@ -1,18 +1,16 @@
 /*
- * routes/hub.mjs —— `GET /hub/enter?ticket=…`：手机从身份中枢点进来时**唯一**的入口。
+ * routes/hub.mjs —— 主机这边与中枢有关的两件事，都只有**一个入口**：
  *
- * 为什么是 GET 一个带票的地址：手机壳（Tauri）里没有"浏览器登录"这一步，它能做的
- * 就是打开一个 URL。所以票走查询参数、主机当场验、验完立刻 302 到 `/` —— 票不会
- * 留在页面上，也不会被页面里的任何脚本读到（票进浏览器历史是已知代价，靠
- * 「一次性 + 5 分钟」对冲，见 bandi-hub/contract.md §六）。
+ *   · `POST /hub/login`  —— 本机登录页上的账号密码，转给中枢认人（新，2026-11-07）
+ *   · `GET  /hub/enter`  —— 手机上从名册点进来时带票进门（2026-11-06）
  *
- * 这一步做三件事，顺序不能换：
+ * 两条最后都落到同一件事上：**发一张本机会话**（`bandi_sid`），不另造权限模型。
+ * 区别只在"凭据从哪来"：一个来自用户刚输入的密码，一个来自中枢签的票。
+ *
+ * `GET /hub/enter` 这一步做三件事，顺序不能换：
  *   1. **验票**（hub/verify.mjs）：签名、aud/iss、过期、dev 是不是这台机器、jti 没重放；
  *   2. **查本地授权表**（store/hubLinks.mjs）：这台机器认不认识这个中枢账号；
  *   3. **发本机会话**（与用户名密码登录**同一套** `bandi_sid`）—— 不另造权限模型。
- *
- * 第 2 步是这套设计的安全底座：中枢被攻破、私钥泄露，攻击者能伪造任意账号的票，
- * 但伪造出来的 sub 不在这张表里，最多撞出一行「这台机器还没确认这个账号」。
  *
  * 错误一律给**一张小页面**（不是 JSON）：打开这个地址的是手机 WebView，JSON 在
  * 那里就是一屏看不懂的字。页面只印错误码与一句中文，不回显票内容。
@@ -20,54 +18,31 @@
 
 import * as store from '../store.mjs';
 import * as auth from '../auth.mjs';
+import * as csrf from '../security/csrf.mjs';
 import { readHubConfig, writeHubConfig } from '../hub/config.mjs';
+import { loginThroughHub } from '../hub/login.mjs';
+import { HubError } from '../hub/client.mjs';
 import { VERIFY_ERRORS, verifyTicket } from '../hub/verify.mjs';
+import { poke as pokeHeartbeat } from '../hub/join.mjs';
 
 /**
  * @param {import('node:http').IncomingMessage} req
  * @param {import('node:http').ServerResponse} res
  * @param {URL} url
- * @param {{ dataDir: string }} deps
+ * @param {{ dataDir: string, port?: number }} deps
  * @returns {Promise<boolean>} 处理了就 true
  */
-export async function handleHub(req, res, url, { dataDir }) {
-  /*
-   * **桌面端的「用中枢登录」**（2026-11-06）。
-   *
-   * 桌面 App 打开的是本机面板，登录页不再让人挑本机账号，而是直接把浏览器送到中枢；
-   * 中枢认完人、签一张票，再 302 回 `/hub/enter` —— 走的和手机是同一条路，主机这边
-   * 只有一个入口要维护（第 3 步之后完全一样）。
-   *
-   * `return` 带自己的 origin：桌面端是 `http://127.0.0.1:18787`。中枢只接受「这台设备
-   * 上报过的地址」或「本机回环 + 同一端口」，所以这张票不会被引到别人域名上。
-   */
+export async function handleHub(req, res, url, { dataDir, port }) {
   if (url.pathname === '/hub/login') {
-    if (req.method !== 'GET' && req.method !== 'HEAD') {
-      res.writeHead(405, { Allow: 'GET', 'Content-Type': 'text/plain; charset=utf-8' });
-      res.end('只用 GET');
+    // 老链接（按钮时代留下的书签）：直接回首页，登录页就在那儿
+    if (req.method === 'GET' || req.method === 'HEAD') {
+      res.writeHead(302, { Location: '/', 'Cache-Control': 'no-store' });
+      res.end();
       return true;
     }
-    const joined = readHubConfig(dataDir);
-    if (!joined) {
-      return errorPage(
-        res,
-        400,
-        'E7001',
-        '这台机器还没加入中枢',
-        '先在主机上跑一次：bandi hub join <中枢地址>',
-        { href: '/', label: '改用本机账号登录' },
-      );
-    }
-    const origin = `http://${req.headers.host || '127.0.0.1'}`;
-    const target =
-      `${joined.baseUrl}/v1/devices/${encodeURIComponent(joined.deviceId)}/enter` +
-      `?return=${encodeURIComponent(origin)}`;
-    res.writeHead(302, {
-      Location: target,
-      'Cache-Control': 'no-store',
-      'Referrer-Policy': 'no-referrer',
-    });
-    res.end();
+    if (req.method === 'POST') return handleLocalLogin(req, res, { dataDir, port });
+    res.writeHead(405, { Allow: 'GET, POST', 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('只用 GET 或 POST');
     return true;
   }
 
@@ -80,8 +55,8 @@ export async function handleHub(req, res, url, { dataDir }) {
   }
 
   const cfg = readHubConfig(dataDir);
-  if (!cfg) {
-    return errorPage(res, 400, 'E7001', '这台机器还没加入中枢', '在主机上跑一次：bandi hub join <中枢地址>');
+  if (!cfg?.deviceId || !cfg?.publicKey) {
+    return errorPage(res, 400, 'E7001', '这台机器还没在中枢上登录过', '在本机打开首页，用中枢账号登录一次');
   }
 
   const ticket = url.searchParams.get('ticket');
@@ -100,12 +75,12 @@ export async function handleHub(req, res, url, { dataDir }) {
   /*
    * 本地授权表：中枢只说了"他是谁"，这里才回答"他能不能进这台机器"。
    *
-   * 「首次认领」只在**表还是空的时候**成立一次：那是机器主人自己跑 `bandi hub join`
-   * 刚批准完的那一下 —— 人就在机器跟前。之后任何新账号都要在这台机器上显式放行
+   * 「首次认领」只在**表还是空的时候**成立一次：这台机器刚被第一个账号登录绑定完，
+   * 人就在机器跟前。之后任何新账号都要在这台机器上显式放行
    * （`bandi hub allow <账号 id>`），否则中枢侧的账号再多也进不来。
    */
   let link = store.hubLinkOf(accountId);
-  if (!link && cfg.claimPending && store.countHubLinks() === 0) {
+  if (!link && cfg.claimPending !== false && store.countHubLinks() === 0) {
     const owner = store.firstUser();
     if (owner) {
       link = store.linkHubAccount({ accountId, userId: owner.id });
@@ -157,6 +132,175 @@ export async function handleHub(req, res, url, { dataDir }) {
   });
   res.end();
   return true;
+}
+
+/**
+ * 登录页表单：`POST /hub/login`（2026-11-07）。
+ *
+ * 用户看到的是**本机页面上的一个登录框**，不会跳去别的域名 —— 这一支只是把同一次输入
+ * 转给中枢。成功之后中枢会顺手把本机登记进名册，返回票与本机设备身份，这里验票、
+ * 落 `hub.json`、发本机会话，然后 302 回首页。
+ *
+ * 失败一律**回到登录页**（不是一张错误页）：输错密码是常态，人应该站在原地重输，
+ * 而不是被丢到一个只有错误码的屏幕上。
+ */
+async function handleLocalLogin(req, res, { dataDir, port }) {
+  /** @type {Record<string,string>} */
+  let form = {};
+  try {
+    const text = await readRaw(req);
+    const ct = String(req.headers['content-type'] ?? '');
+    if (ct.includes('application/json')) {
+      const j = JSON.parse(text || '{}');
+      if (j && typeof j === 'object') form = j;
+    } else {
+      form = parseForm(text);
+    }
+  } catch {
+    form = {};
+  }
+
+  const username = String(form.username ?? '').trim();
+  const password = String(form.password ?? '');
+  // mode 不再有区别（2026-11-07 登录即注册）：中枢按"手机号存不存在"自己决定登录还是创建
+
+  const fail = (message, status = 401) => {
+    // 重渲染的登录页带一枚**新** csrf 值（Set-Cookie 与隐藏域成对）：人要能站在原地重试
+    const csrfVal = csrf.mint();
+    res.writeHead(status, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'Referrer-Policy': 'no-referrer',
+      'Set-Cookie': csrf.cookieFor(csrfVal),
+    });
+    res.end(auth.renderHubLoginPage({ error: message, username, csrf: csrfVal }));
+    return true;
+  };
+
+  /*
+   * 同源检查：这是本机页面的表单，正常提交一定带 Origin / Referer。
+   * 别的网站没法替你提交一个跨站表单再读结果（读不到），但"能不能提交"本身就该拒 ——
+   * 登录请求里带着明文密码，不该有任何一处代码需要容忍它从别处飞来。
+   *
+   * **Origin: null 的兜底**（2026-11-07 实报 E7006）：桌面壳的 WebView2 表单 POST
+   * 有时会带 `Origin: null`（尤其从一次 POST 响应渲染出的页面上再提交时 —— 用户
+   * 第一次输错密码拿到 H3004 页，第二次提交就撞上了）。null ≠ 跨站，不能一刀切，
+   * 但也不能白白放行（沙箱 iframe 一样发得出 Origin: null，那是真的攻击面）。
+   * 所以退到 **CSRF 双提交**：登录页渲染时种下的 `bandi_csrf` Cookie 与表单隐藏域
+   * 必须成对 —— 跨站伪造者读不到别域的 Cookie，凑不齐这对值；本机页面怎么都拿得到。
+   */
+  const origin = String(req.headers.origin ?? '');
+  let originOk = false;
+  if (origin) {
+    try {
+      originOk = new URL(origin).host === String(req.headers.host ?? '');
+    } catch { originOk = false; }
+  }
+  if (!originOk) {
+    const pair = csrf.valuesOf(req);
+    const field = String(form._csrf ?? '');
+    // 值是本次页面渲染刚生成、随页面一起发出去的，明文比较即可（不是长寿密钥）
+    if (!pair.cookie || !field || pair.cookie !== field) {
+      return fail('E7006 来源不对 —— 刷新页面后重试', 403);
+    }
+  }
+
+  if (!username || !password) return fail('请填写用户名和密码', 400);
+
+  /** @type {any} */
+  let out;
+  try {
+    out = await loginThroughHub({ dataDir, username, password, port });
+  } catch (e) {
+    if (e instanceof HubError) return fail(`${e.code} ${e.message}`, 401);
+    return fail(`E7100 ${e?.message ?? '登录没成功'}`, 500);
+  }
+
+  /*
+   * 本地用户：**认领只发生一次**（2026-11-07 两套账号分离）。中枢注册常开之后，
+   * 任何人都能注册一个设备账号 —— 如果每次登录都自动绑定，就等于谁注册谁进门。
+   * 所以和 /hub/enter 同一条口径：授权表**还是空的**时，第一个登录的人认领这台机器
+   * （绑到本机第一个用户，没有就建一个）；之后的新账号一律要机器主人显式放行
+   * （`bandi hub allow <账号 id>`）。
+   */
+  let link = store.hubLinkOf(out.account.id);
+  if (!link && store.countHubLinks() === 0) {
+    const owner = store.firstUser() ?? store.createUser({ name: out.account.name || out.account.login });
+    link = store.linkHubAccount({ accountId: out.account.id, userId: owner.id, login: out.account.login });
+  }
+  if (!link) {
+    return fail('E7003 这台机器还没认这个账号 —— 让机器主人在主机上跑 bandi hub allow 后再登录', 403);
+  }
+  const user = store.getUser(link.userId);
+  if (!user || user.disabled) return fail('E7004 这个账号在这台机器上被停用了', 403);
+
+  /*
+   * 本机名条的名字**随中枢对齐**（2026-11-07）：本地账号是老黄历 —— 署名、通讯录成员、
+   * 「我的」页显示的名字就是这个中枢账号（手机号）。老库里遗留的旧名字（本地账号时代
+   * 建的）在这一次登录后自动消失。幂等：同名就什么都不做。
+   */
+  const hubName = out.account.login || out.account.id;
+  if (user.name !== hubName) store.renameUser(user.id, hubName);
+
+  const { token } = store.createSession(user.id, {
+    ip: req.socket?.remoteAddress ?? null,
+    ua: req.headers['user-agent'] ?? '',
+    kind: 'hub',
+  });
+  store.touchHubLink(out.account.id);
+  // 刚绑上设备身份：立刻报一次心跳，手机上马上就能看到「在线」，不用等下一轮 60 秒
+  pokeHeartbeat();
+
+  const cookies = [auth.sessionCookie(token)];
+  if (String(req.headers.cookie ?? '').includes('bandi_token=')) cookies.push(auth.clearedTokenCookie());
+  res.writeHead(302, {
+    'Set-Cookie': cookies,
+    Location: '/',
+    'Cache-Control': 'no-store',
+    'Referrer-Policy': 'no-referrer',
+  });
+  res.end();
+  return true;
+}
+
+/**
+ * 读原始请求体（登录表单是 urlencoded，`http.readBody` 只认 JSON）。
+ * 64KB 上限：登录表单再大也没有道理，超出就断。
+ * @param {import('node:http').IncomingMessage} req
+ */
+function readRaw(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > 64 * 1024) {
+        reject(new Error('请求体过大'));
+        req.destroy();
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('error', reject);
+  });
+}
+
+/**
+ * `application/x-www-form-urlencoded` → 对象。
+ * （登录页不该有脚本：脚本一挂人就登不进来，所以走浏览器原生表单提交。）
+ * @param {string} text
+ */
+function parseForm(text) {
+  const out = {};
+  for (const pair of String(text ?? '').split('&')) {
+    if (!pair) continue;
+    const i = pair.indexOf('=');
+    const k = decodeURIComponent((i < 0 ? pair : pair.slice(0, i)).replace(/\+/g, ' '));
+    const v = i < 0 ? '' : decodeURIComponent(pair.slice(i + 1).replace(/\+/g, ' '));
+    out[k] = v;
+  }
+  return out;
 }
 
 /**

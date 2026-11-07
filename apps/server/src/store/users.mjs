@@ -1,40 +1,35 @@
 /*
- * store/users.mjs —— 账号与会话（2026-10-28 第三刀：账号、登录与角色分配）。
+ * store/users.mjs —— 账号与会话。
  *
  * 两张表，SQL 全在本文件（仓库规矩：SQL 只出现在 store/ 里）：
- *   · `users`         —— 账号本体（名字 / salt / hash / 角色 / 内置 / 禁用）
- *   · `user_sessions` —— 登录会话（**只存 token 的 sha256**，明文只在登录响应里回一次）
+ *   · `users`         —— 账号本体（名字 / 内置 / 禁用）
+ *   · `user_sessions` —— 登录会话（**只存 token 的 sha256**，明文只在发会话时回一次）
  *
- * **密码口径**（任务书 §二 拍板，别改）：
- *   · `scryptSync(password, salt, 64)`，每人独立 16 字节 salt；库里只有 salt + hash，**没有明文**；
- *   · 零依赖 —— 只用 `node:crypto`，不引 bcrypt/argon2（红线上不许有 node_modules）；
- *   · 定长比较走 `timingSafeEqual`，"比到第几个字符不同"不泄漏出去。
+ * **2026-11-07 起账号只是「中枢账号在本机的影子」**：认证全在中枢（本机登录页
+ * `POST /hub/login` → `hub/login.mjs`），主机不存密码、不建凭据 —— 这边剩下的只有
+ * 「这个人是谁」（名字）和「给他发过哪些会话」。登录 = hub 绑定（store/hubLinks.mjs）
+ * + 在这里发一张本机会话。
  *
- * **第一个用户 = 内置管理员**（`builtin=1` + `roleId='admin'`）：
- * 只有本机（回环）能建，建完**不可删、不可改角色、不可禁用** —— 这是防锁死的锁。
- * 和 roles 那边的 `admin` 角色是同一个思路：系统里必须永远有一条能进门的钥匙。
+ * 表结构里的 salt/hash/roleId 等历史列**留着不读**（老库不做列重建）；新写入一律存空串。
  *
- * ⚠️ `listUsers()` **绝不返回 salt / hash**（任务书 §三 硬约束）：连字段都不出现，
- * 免得哪天有人顺手把整个对象丢进接口响应里。
+ * **第一个账号 = 内置账号**（`builtin=1`）：不可删、不可禁用 —— 防锁死的锁：
+ * hub 绑定（hub_links）都指向它，删光了下一个中枢账号就只能凭空重建。
+ *
+ * ⚠️ `listUsers()` 只返回上表字段 —— 存量死列（salt/hash 等）连字段都不出现。
  */
 
 import crypto from 'node:crypto';
 import { db, ensureColumn, newId, nowIso } from './db.mjs';
-import { revokeRefreshFamiliesOfUser } from './tokens.mjs'; // tv 变化时刷新族陪葬（Phase 3）
 
 /** 会话有效期：30 天（与 Cookie 的 Max-Age 一致，两处必须同步改）。
- *  ⚠️ 2026-10-31 起**服务端另有更短的两道闸**（IAM §9）：空闲 30 分钟、绝对 12 小时，
- *  到期即 401 —— Cookie 的 30 天只是浏览器侧的保存期，登录态以服务端为准。 */
+ *  ⚠️ 服务端另有更短的两道闸：空闲 30 分钟、绝对 12 小时，到期即 401 ——
+ *  Cookie 的 30 天只是浏览器侧的保存期，登录态以服务端为准。 */
 export const SESSION_DAYS = 30;
 
-/** 空闲超时：30 分钟无请求即失效（IAM §9 browser 行） */
+/** 空闲超时：30 分钟无请求即失效 */
 export const IDLE_MINUTES = 30;
-/** 绝对超时：12 小时后必须重新登录（IAM §9 browser 行） */
+/** 绝对超时：12 小时后必须重新登录 */
 export const ABSOLUTE_HOURS = 12;
-/** 登录失败锁定：5 次失败锁 15 分钟（IAM §9 / §11.1；计数落库，重启不清零） */
-export const FAIL_LIMIT = 5;
-export const FAIL_WINDOW_MINUTES = 5;
-export const LOCK_MINUTES = 15;
 
 /** 名字归一：去首尾空白 + 折叠内部空白 + 忽略大小写 —— "张三"和" 张三 "是同一个人 */
 export function normName(name) {
@@ -50,9 +45,9 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS users (
     id        TEXT PRIMARY KEY,
     name      TEXT NOT NULL,
-    salt      TEXT NOT NULL,
-    hash      TEXT NOT NULL,
-    roleId    TEXT NOT NULL,
+    salt      TEXT NOT NULL DEFAULT '',
+    hash      TEXT NOT NULL DEFAULT '',
+    roleId    TEXT NOT NULL DEFAULT '',
     builtin   INTEGER NOT NULL DEFAULT 0,
     disabled  INTEGER NOT NULL DEFAULT 0,
     createdAt TEXT,
@@ -68,115 +63,41 @@ db.exec(`
   );
 `);
 
-// 动态验证（2026-10-31 二改，仿 yaojian-ruoyi）：**独立表 user_otp**（见 store/otp.mjs），
-// 密钥 AES-GCM 加密落库、另有 10 个一次性恢复码。这两列是上一版的遗留（明文存 users 上），
-// 启动时由 otp.migrateLegacyTotp() 搬进新表并清空；保留列定义只为老库能开起来。
-ensureColumn('users', 'totpSecret', "totpSecret TEXT NOT NULL DEFAULT ''");
-ensureColumn('users', 'totpPending', 'totpPending INTEGER NOT NULL DEFAULT 0');
-
-// IAM Phase 1（2026-10-31，§12 数据模型变更）——全部幂等补列：
-// · tokenVersion  撤销水位：改密码 / 改角色 +1，会话里存的旧 tv 立刻作废（E4093）
-// · failCount/failAt/lockedUntil  登录失败计数落库（§11.1：重启不清零 —— "重启一次就解锁"
-//   在无人值守的服务器形态下等于没锁）
-ensureColumn('users', 'tokenVersion', 'tokenVersion INTEGER NOT NULL DEFAULT 1');
-ensureColumn('users', 'failCount', 'failCount INTEGER NOT NULL DEFAULT 0');
-ensureColumn('users', 'failAt', 'failAt TEXT');
-ensureColumn('users', 'lockedUntil', 'lockedUntil TEXT');
-ensureColumn('users', 'lastLoginAt', 'lastLoginAt TEXT');
-// user_sessions 扩列（§9）：kind 只有 browser（cli/api 是 Phase 3 的事）；
-// tv = 签发时的 tokenVersion 快照；idle/absolute 两道闸；ip/ua 给"会话列表"页用
-ensureColumn('user_sessions', 'kind', "kind TEXT NOT NULL DEFAULT 'browser'");
-ensureColumn('user_sessions', 'tv', 'tv INTEGER');
+// user_sessions 扩列：kind 只有 'hub'（本机登录页与中枢票进门都发这一种）；
+// idle/absolute 两道闸；ip/ua 给"会话列表"页用
+ensureColumn('user_sessions', 'kind', "kind TEXT NOT NULL DEFAULT 'hub'");
 ensureColumn('user_sessions', 'idleExpiresAt', 'idleExpiresAt TEXT');
 ensureColumn('user_sessions', 'absoluteExpiresAt', 'absoluteExpiresAt TEXT');
 ensureColumn('user_sessions', 'ip', 'ip TEXT');
 ensureColumn('user_sessions', 'ua', 'ua TEXT');
 
-/* ------------------------------------------------------------------ 密码 */
-
-/*
- * **空密码 = 没有密码 = 免密账号**（2026-10-31 用户拍板，参照电脑的本地账户）：
- * 建账号时密码可以留空，库里就存 salt='' + hash=''（两列 NOT NULL，空串 = 明确的"未设"）。
- * 登录时免密账号**密码留空直接进入**（routes/users.mjs 的 /api/login，任何机器都行 ——
- * 总机、分机一个口径）。千万不要把空密码存成 scrypt('')：那是一个真 hash，
- * "未设"和"密码就是空串"就再也分不开了。
- */
-const NO_PASSWORD = '';
-
-function hashPassword(password, saltHex) {
-  return crypto.scryptSync(String(password), Buffer.from(saltHex, 'hex'), 64).toString('hex');
-}
-
-/**
- * 密码对不对（**不区分"用户不存在"**：调用方一律回同一句话，见路由层）。
- *
- * `user` 为 null 时也走一遍 scrypt（对一个固定假 salt），让"存在的用户名 / 不存在的用户名"
- * 在响应时间上尽量一致 —— 时间侧信道比文案泄漏更难防，能做的就做。
- */
-const DUMMY_SALT = '00'.repeat(16);
-/**
- * 假 hash **预计算一次**：用不存在的用户名登录时，`want` 直接取它，
- * 这样"用户存在 / 不存在"两条路都只跑**一次** scrypt。
- * （2026-10-28 修：原来在函数里现算，等于不存在时跑两次 scrypt —— 既慢一倍，
- *   又把"用户是否存在"从响应时间上漏出去，方向还正好反了。）
- */
-const DUMMY_HASH = crypto.scryptSync('x', Buffer.from(DUMMY_SALT, 'hex'), 64).toString('hex');
-export function checkPassword(user, password) {
-  /*
-   * 未设密码的账号（hash=''）在这里**永远失败**：'' 是 falsy → want 落到 DUMMY_HASH，
-   * 任何输入都对不上，而且**跑的 scrypt 次数与"用户不存在"完全一样**（时间上不泄漏）。
-   * 免密登录（密码留空即进入）是登录路由在**这一层之外**单独放行的 —— 这里只认真 hash。
-   */
-  const salt = user?.salt || DUMMY_SALT;
-  const want = user?.hash || DUMMY_HASH;
-  const got = hashPassword(password, salt);
-  const A = Buffer.from(got, 'hex');
-  const B = Buffer.from(want, 'hex');
-  return A.length === B.length && crypto.timingSafeEqual(A, B) && !!user;
-}
-
 /* ------------------------------------------------------------------ 读 */
 
-/*
- * `hasPw` / `hasTotp` 都在 SQL 里算好（有没有设密码 / 有没有开动态验证），
- * **salt / hash / 密钥本体绝不进这份清单** —— 连字段都不出现，
- * 免得哪天有人顺手把整个对象丢进接口响应里（任务书 §三 硬约束）。
- * 动态验证记录在独立表 `user_otp`（见 store/otp.mjs），这里 LEFT JOIN 出一个布尔。
- */
-const PUBLIC_FIELDS = `id, name, roleId, builtin, disabled, createdAt, updatedAt,
-  (CASE WHEN hash IS NULL OR hash = '' THEN 0 ELSE 1 END) AS hasPw,
-  (CASE WHEN o.userId IS NULL THEN 0 ELSE 1 END) AS hasTotp`;
-
-/** 带动态验证的 LEFT JOIN（users 为主，绑定表为从）；子查询里都带上 u 别名 */
-const FROM_USERS = 'FROM users u LEFT JOIN user_otp o ON o.userId = u.id';
+const PUBLIC_FIELDS = 'id, name, builtin, disabled, createdAt, updatedAt';
 
 function shape(row) {
   if (!row) return null;
   return {
     id: row.id,
     name: row.name,
-    roleId: row.roleId,
     builtin: !!row.builtin,
     disabled: !!row.disabled,
-    hasPassword: !!row.hasPw, // 未设密码的账号远程登不进（界面拿它标「未设密码」）
-    hasTotp: !!row.hasTotp,   // 动态验证开没开（「我的」页与设置→用户列表的标签）
     createdAt: row.createdAt ?? null,
     updatedAt: row.updatedAt ?? null,
   };
 }
 
-/** 全部账号（**不含 salt/hash**；内置在前，其余按创建顺序） */
+/** 全部账号（内置在前，其余按创建顺序） */
 export function listUsers() {
   return db
-    .prepare(`SELECT ${PUBLIC_FIELDS} ${FROM_USERS} ORDER BY u.builtin DESC, u.createdAt ASC, u.id ASC`)
+    .prepare(`SELECT ${PUBLIC_FIELDS} FROM users ORDER BY builtin DESC, createdAt ASC, id ASC`)
     .all()
     .map(shape);
 }
 
 /**
- * 账号名册（2026-10-31 用户概念落地）：**所有能进面板的身份都能看**的极简版 ——
- * 只有 id / 名字 / 是不是内置。给通讯录的「成员」段与看板派活选真人用，
- * 不要求管理权限（管理接口那套 mayManage 挡住的应该是 salt/hash 和增删改，不是"团队里有谁"）。
+ * 账号名册：**所有能进面板的身份都能看**的极简版 —— 只有 id / 名字 / 是不是内置。
+ * 给通讯录的「成员」段与看板派活选真人用。
  */
 export function listUserBriefs() {
   return db
@@ -186,19 +107,7 @@ export function listUserBriefs() {
 }
 
 export function getUser(id) {
-  return shape(db.prepare(`SELECT ${PUBLIC_FIELDS} ${FROM_USERS} WHERE u.id = ?`).get(String(id ?? '')));
-}
-
-/** 按名字取（归一后比较；登录与"重名"检查共用这一份口径）。
- *  登录还要验动态验证码 —— 那部分在 store/otp.mjs（独立表），这里只带 salt/hash。 */
-export function userByName(name) {
-  const target = normName(name);
-  if (!target) return null;
-  const row = db
-    .prepare(`SELECT ${PUBLIC_FIELDS}, u.salt, u.hash ${FROM_USERS}`)
-    .all()
-    .find((r) => normName(r.name) === target);
-  return row ? { ...shape(row), salt: row.salt, hash: row.hash } : null;
+  return shape(db.prepare(`SELECT ${PUBLIC_FIELDS} FROM users WHERE id = ?`).get(String(id ?? '')));
 }
 
 export function nameTaken(name, exceptId = null) {
@@ -210,94 +119,37 @@ export function nameTaken(name, exceptId = null) {
     .some((r) => normName(r.name) === target && r.id !== exceptId);
 }
 
-/** 有没有任何账号（登录页据此决定"显不显示用户名密码表单"） */
+/** 有没有任何账号（hub 绑定据此决定「认领第一个用户」还是「新建」） */
 export function hasUsers() {
   return !!db.prepare('SELECT 1 FROM users LIMIT 1').get();
 }
 
-/** 还活着的管理员有几个（= `admin` 角色 + 未禁用）—— 删/降级前必须问它 */
-export function countAdmins(exceptId = null) {
-  return db
-    .prepare("SELECT id FROM users WHERE roleId = 'admin' AND disabled = 0")
-    .all()
-    .filter((r) => r.id !== exceptId).length;
-}
-
-/**
- * 有多少账号绑在这个角色上（2026-10-28 第三刀补）—— 删角色前必须问它。
- * 不查的话，删完角色那些账号的 roleId 就成了悬空引用：`/api/me` 回 role=null，
- * 前端拿不到 menuKeys，菜单整个消失，人还以为自己"被降权"了。
- */
-export function countUsersByRole(roleId) {
-  return db.prepare('SELECT COUNT(*) AS n FROM users WHERE roleId = ?').get(String(roleId ?? '')).n;
-}
-
 /** 第一个用户是谁（null = 还没人建过） */
 export function firstUser() {
-  return shape(db.prepare(`SELECT ${PUBLIC_FIELDS} ${FROM_USERS} ORDER BY u.createdAt ASC, u.id ASC LIMIT 1`).get());
+  return shape(db.prepare(`SELECT ${PUBLIC_FIELDS} FROM users ORDER BY createdAt ASC, id ASC LIMIT 1`).get());
 }
 
 /* ------------------------------------------------------------------ 写 */
 
 /**
- * 建账号。**第一个账号自动成为内置管理员**（`roleId='admin'`、`builtin=1`）——
- * 调用方不必传 roleId，传了也会被覆盖：规则只在这里判一次，别在路由层再写一遍。
+ * 建账号。**第一个账号自动成为内置账号**（`builtin=1`）—— 调用方不必管，
+ * 规则只在这里判一次，别在路由层再写一遍。
  */
-export function createUser({ name, password, roleId = null } = {}) {
+export function createUser({ name } = {}) {
   const first = !hasUsers();
-  // 密码可空（2026-10-31）：空 = 未设密码（salt/hash 存空串，见文件头「密码」段的口径）
-  const hasPw = String(password ?? '') !== '';
-  const salt = hasPw ? crypto.randomBytes(16).toString('hex') : NO_PASSWORD;
-  const hash = hasPw ? hashPassword(password, salt) : NO_PASSWORD;
   const id = newId('u');
   const ts = nowIso();
-  const finalRole = first ? 'admin' : String(roleId ?? '').trim();
   db.prepare(
-    'INSERT INTO users (id, name, salt, hash, roleId, builtin, disabled, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)',
-  ).run(id, String(name ?? '').trim(), salt, hash, finalRole, first ? 1 : 0, ts, ts);
+    'INSERT INTO users (id, name, salt, hash, roleId, builtin, disabled, createdAt, updatedAt) VALUES (?, ?, \'\', \'\', \'\', ?, 0, ?, ?)',
+  ).run(id, String(name ?? '').trim(), first ? 1 : 0, ts, ts);
   return getUser(id);
 }
 
-/** 改名（唯一性由路由层判，见 E1113/E3804） */
+/** 改名（唯一性由路由层判） */
 export function renameUser(id, name) {
   const cur = getUser(id);
   if (!cur) return null;
   db.prepare('UPDATE users SET name = ?, updatedAt = ? WHERE id = ?').run(String(name).trim(), nowIso(), id);
-  return getUser(id);
-}
-
-/** 改密码：换 salt 重算 hash，并**作废该用户全部会话**（改密码 = 别处登过的都下线）。
- * 传空串 = 清掉密码（回到"未设密码"：本机身份还在，远程登录关上）。
- * 同时 tokenVersion +1（IAM §12 撤销水位）：就算未来有凭据漏删，tv 对不上也认不出来（E4093）。 */
-export function setPassword(id, password) {
-  const cur = getUser(id);
-  if (!cur) return null;
-  const hasPw = String(password ?? '') !== '';
-  const salt = hasPw ? crypto.randomBytes(16).toString('hex') : NO_PASSWORD;
-  db.prepare('UPDATE users SET salt = ?, hash = ?, tokenVersion = tokenVersion + 1, updatedAt = ? WHERE id = ?').run(
-    salt,
-    hasPw ? hashPassword(password, salt) : NO_PASSWORD,
-    nowIso(),
-    id,
-  );
-  deleteSessionsOf(id);
-  revokeRefreshFamiliesOfUser(id); // tv 变了，手里的刷新族全部作废（§6.2 刷新校验 tv）
-  return getUser(id);
-}
-
-/** 改角色：权限变了，会话里的角色快照会陈旧 —— 同样 tv +1（§16：改密码/角色才递增）+ 全踢。
- *  为什么全踢：guard 是拿"会话签发那一刻的角色"算 admin 的，改完角色不踢，
- *  被降权的人手里那张票在过期前还是管理员。 */
-export function setRole(id, roleId) {
-  const cur = getUser(id);
-  if (!cur) return null;
-  db.prepare('UPDATE users SET roleId = ?, tokenVersion = tokenVersion + 1, updatedAt = ? WHERE id = ?').run(
-    String(roleId).trim(),
-    nowIso(),
-    id,
-  );
-  deleteSessionsOf(id);
-  revokeRefreshFamiliesOfUser(id);
   return getUser(id);
 }
 
@@ -310,7 +162,7 @@ export function setDisabled(id, disabled) {
   return getUser(id);
 }
 
-/** 删账号（连会话一起清）—— 内置与"最后一个管理员"的保护在路由层，那是产品规则 */
+/** 删账号（连会话一起清）—— 内置账号的保护在路由层，那是产品规则 */
 export function deleteUser(id) {
   const cur = db.prepare('SELECT id FROM users WHERE id = ?').get(String(id ?? ''));
   if (!cur) return { ok: false, reason: 'missing' };
@@ -318,14 +170,6 @@ export function deleteUser(id) {
   db.prepare('DELETE FROM users WHERE id = ?').run(cur.id);
   return { ok: true, id: cur.id };
 }
-
-/* ------------------------------------------------------------------ 动态验证 */
-
-/*
- * 已整体搬进 **store/otp.mjs**（2026-10-31 二改，仿 yaojian-ruoyi）：独立表 user_otp、
- * AES-GCM 加密密钥、10 个一次性恢复码、两段式登录的一次性凭据。
- * 这里只保留 users 表上那两个遗留列的定义（见文件头的迁移说明），不要再往这儿加 TOTP 逻辑。
- */
 
 /* ------------------------------------------------------------------ 会话 */
 
@@ -335,33 +179,30 @@ const sha256 = (s) => crypto.createHash('sha256').update(String(s)).digest('hex'
  * 开一次登录会话：**明文只回给调用方一次**，库里只有 sha256。
  * 32 字节随机 base64url（43 字符）—— 足够长，猜不出来。
  *
- * IAM §9（2026-10-31）：`kind='browser'`；签发时记 tv 快照（tokenVersion 撤销水位）；
- * 两道服务端闸 —— 空闲 30 分钟（每次请求顺延）、绝对 12 小时（顺延不了）。
+ * 签发即带两道服务端闸 —— 空闲 30 分钟（每次请求顺延）、绝对 12 小时（顺延不了）。
  * `expiresAt`（30 天）保留：它是浏览器 Cookie 的同步值，也是两道闸的总兜底。
  * `ip` / `ua` 给"安全 → 会话列表"页展示用。
  */
-export function createSession(userId, { ip = null, ua = null, kind = 'browser' } = {}) {
+export function createSession(userId, { ip = null, ua = null, kind = 'hub' } = {}) {
   const token = crypto.randomBytes(32).toString('base64url');
   const ts = Date.now();
   const created = new Date(ts).toISOString();
   const expires = new Date(ts + SESSION_DAYS * 86400_000).toISOString();
   const idle = new Date(ts + IDLE_MINUTES * 60_000).toISOString();
   const absolute = new Date(ts + ABSOLUTE_HOURS * 3600_000).toISOString();
-  const tv = db.prepare('SELECT tokenVersion FROM users WHERE id = ?').get(String(userId))?.tokenVersion ?? 1;
   db.prepare(
-    'INSERT INTO user_sessions (tokenHash, userId, createdAt, expiresAt, lastSeenAt, kind, tv, idleExpiresAt, absoluteExpiresAt, ip, ua) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-  ).run(sha256(token), String(userId), created, expires, created, String(kind), tv, idle, absolute, ip, String(ua ?? '').slice(0, 200));
+    'INSERT INTO user_sessions (tokenHash, userId, createdAt, expiresAt, lastSeenAt, kind, idleExpiresAt, absoluteExpiresAt, ip, ua) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).run(sha256(token), String(userId), created, expires, created, String(kind), idle, absolute, ip, String(ua ?? '').slice(0, 200));
   return { token, expiresAt: expires };
 }
 
 /**
  * 这枚会话 token 是谁的（过期 / 被删 / 用户被禁 都返回 null）。
  *
- * 三道失效闸（IAM §9，2026-10-31）：
+ * 三道失效闸：
  *   · `absoluteExpiresAt` —— 签发 + 12 小时，**不可顺延**（"每天重新登一次"是刻意的）；
  *   · `idleExpiresAt` —— 最后一次**过闸请求** + 30 分钟（下面 lastSeenAt 更新在判定之后，
- *     所以"最后一次请求"就是它自己这次，语义正确）；
- *   · `tv` 不匹配 —— 改密码 / 改角色把水位抬了，旧会话作废（E4093 语义，顺手删干净）。
+ *     所以"最后一次请求"就是它自己这次，语义正确）。
  * `expiresAt`（30 天）仍是总兜底。
  *
  * `lastSeenAt` **60 秒节流**写一次：每个请求都写库会让 SSE 那种长连接把磁盘写满，
@@ -387,19 +228,12 @@ export function userBySession(token) {
   }
   const u = getUser(row.userId);
   if (!u || u.disabled) return null;
-  if (row.tv != null) {
-    const curTv = db.prepare('SELECT tokenVersion FROM users WHERE id = ?').get(row.userId)?.tokenVersion ?? 1;
-    if (curTv !== row.tv) {
-      deleteSession(t);
-      return null;
-    }
-  }
   if (!row.lastSeenAt || now - Date.parse(row.lastSeenAt) > 60_000) {
     const ts = new Date(now).toISOString();
     const idle = new Date(now + IDLE_MINUTES * 60_000).toISOString();
     db.prepare('UPDATE user_sessions SET lastSeenAt = ?, idleExpiresAt = ? WHERE tokenHash = ?').run(ts, idle, row.tokenHash);
   }
-  return { tokenHash: row.tokenHash, user: u, kind: row.kind ?? 'browser' };
+  return { tokenHash: row.tokenHash, user: u, kind: row.kind ?? 'hub' };
 }
 
 /** 退出登录：删这一条会话 */
@@ -410,12 +244,12 @@ export function deleteSession(token) {
   return r.changes > 0;
 }
 
-/** 踢掉某个用户的全部会话（改密码 / 禁用 / 删除时用） */
+/** 踢掉某个用户的全部会话（禁用 / 删除时用） */
 export function deleteSessionsOf(userId) {
   return db.prepare('DELETE FROM user_sessions WHERE userId = ?').run(String(userId)).changes;
 }
 
-/** 清过期会话（启动时跑一次就够，不需要定时器）—— 四道口径一起清 */
+/** 清过期会话（启动时跑一次就够，不需要定时器）—— 三道口径一起清 */
 export function pruneSessions() {
   const now = new Date().toISOString();
   return db
@@ -424,15 +258,13 @@ export function pruneSessions() {
 }
 
 /**
- * 存量会话迁移（IAM §9，v2.2 补；启动时跑一次，幂等）。
+ * 存量会话迁移（启动时跑一次，幂等）。
  *
  * 老库的会话只有 `expiresAt`（30 天）—— 直接按"创建 + 12h"回推会把所有人一次踢掉。
  * 口径（照文档抄）：
- *   · 全部标 `kind='browser'`（现在确实都是浏览器）；
  *   · `absoluteExpiresAt = max(now+1h, min(原 expiresAt, now+12h))` —— 12 小时内自然过期，
  *     不追溯、不踢人；
- *   · `idleExpiresAt = now + 30min`（从现在起算）；
- *   · `tv` 补当前值（老会话没有 tv 列，不补会被上面那道闸误杀）。
+ *   · `idleExpiresAt = now + 30min`（从现在起算）。
  * 返回迁移条数，启动日志打一行"N 条存量会话已按新规则迁移"。
  */
 export function migrateLegacySessions() {
@@ -445,64 +277,17 @@ export function migrateLegacySessions() {
   const absCeil = now + ABSOLUTE_HOURS * 3600_000; // now+12h
   const idle = new Date(now + IDLE_MINUTES * 60_000).toISOString();
   const stmt = db.prepare(
-    "UPDATE user_sessions SET kind = 'browser', tv = (SELECT tokenVersion FROM users WHERE id = ?), idleExpiresAt = ?, absoluteExpiresAt = ? WHERE tokenHash = ?",
+    'UPDATE user_sessions SET idleExpiresAt = ?, absoluteExpiresAt = ? WHERE tokenHash = ?',
   );
   for (const r of rows) {
     const exp = Date.parse(r.expiresAt) || now;
     const abs = new Date(Math.min(Math.max(exp, absFloor), absCeil)).toISOString();
-    stmt.run(r.userId, idle, abs, r.tokenHash);
+    stmt.run(idle, abs, r.tokenHash);
   }
   return rows.length;
 }
 
-/* -------------------------------------------- 登录失败锁定（IAM §11.1，落库） */
-
-/*
- * 为什么落库而内存 FAILS（routes/users.mjs）也留着：**锁定状态不能随重启清零** ——
- * 无人值守的服务器形态下"重启一次就解锁"等于没锁；但"同一个 IP"这个维度落不了库
- * （users 行上没有 IP 的位置），所以 IP+用户名的滑动窗口照旧走内存，**用户名维度**的
- * 锁定截止走库。两道取并集：哪道说"锁了"就是锁了。
- * 对不存在的用户名：没有行可落，只有内存那一道 —— 这类攻击也炸不出已存在的用户名。
- */
-
-/** 记一次登录失败（**只对存在的用户名**落库）：窗口内第 FAIL_LIMIT 次 → 锁 LOCK_MINUTES */
-export function noteLoginFail(name) {
-  const u = db.prepare("SELECT id, failCount, failAt FROM users WHERE id = (SELECT id FROM users WHERE name = ? COLLATE NOCASE LIMIT 1)").get(String(name ?? ''));
-  if (!u) return null;
-  const now = Date.now();
-  const windowMs = FAIL_WINDOW_MINUTES * 60_000;
-  const last = u.failAt ? Date.parse(u.failAt) : 0;
-  // 窗口外 → 从 1 重新数；窗口内 → +1。数到 FAIL_LIMIT → lockedUntil = now + 15min。
-  const n = last && now - last <= windowMs ? (u.failCount ?? 0) + 1 : 1;
-  const lockedUntil = n >= FAIL_LIMIT ? new Date(now + LOCK_MINUTES * 60_000).toISOString() : null;
-  db.prepare('UPDATE users SET failCount = ?, failAt = ?, lockedUntil = ? WHERE id = ?').run(n, new Date(now).toISOString(), lockedUntil, u.id);
-  return { n, lockedUntil };
-}
-
-/** 这个用户名现在锁着吗（锁定截止未到 = 锁着；没这用户 = 没锁，交给内存窗口去挡） */
-export function loginLocked(name) {
-  const row = db
-    .prepare('SELECT lockedUntil FROM users WHERE name = ? COLLATE NOCASE LIMIT 1')
-    .get(String(name ?? ''));
-  if (!row?.lockedUntil) return false;
-  if (Date.parse(row.lockedUntil) <= Date.now()) return false; // 过期即自然解锁
-  return true;
-}
-
-/** 登录成功：清零失败计数（锁定截止不动 —— 锁着就连密码校验都进不去，轮不到成功） */
-export function clearLoginFails(name) {
-  db.prepare('UPDATE users SET failCount = 0, failAt = NULL WHERE name = ? COLLATE NOCASE').run(String(name ?? ''));
-}
-
-/* -------------------------------------------- 会话列表（IAM §9：设置 → 安全） */
-
-/**
- * 按票哈希取一行会话（refresh 族判"所属会话还活着没"用；refresh.mjs）。
- * 返回原始行或 null —— 状态判断在调用方。
- */
-export function sessionByHash(tokenHash) {
-  return db.prepare('SELECT * FROM user_sessions WHERE tokenHash = ?').get(String(tokenHash ?? '')) ?? null;
-}
+/* -------------------------------------------- 会话列表（设置 → 安全） */
 
 /**
  * 某个用户的活会话列表（"安全"分节的设备列表）。**绝不返回 tokenHash 全量** ——
@@ -517,7 +302,7 @@ export function listSessionsOf(userId) {
     .all(String(userId), now, now, now)
     .map((r) => ({
       id: r.tokenHash.slice(0, 8),
-      kind: r.kind ?? 'browser',
+      kind: r.kind ?? 'hub',
       createdAt: r.createdAt,
       lastSeenAt: r.lastSeenAt,
       ip: r.ip ?? '',

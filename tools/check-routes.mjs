@@ -43,12 +43,8 @@ const produced = new Set(used);
 
 // 一级栏：由 setNav 兜底，不需要入口函数里 setRoute
 const NAV_ONLY = new Set(['messages', 'contacts']);
-/*
- * 转发条目（2026-11-01）：入口本身不落 view —— ROUTES.collab 把「协作中心」转到
- * 设置页（S.settingsSection + setNav('settings')），存的位置是 {view:'settings'}；
- * 'collab' 只负责接住旧存档转发。它永远不会有 setRoute('collab')，是故意的。
- */
-const FORWARD_ONLY = new Set(['collab']);
+// 转发条目机制：接住旧存档的 view 转发到现行页面（2026-11-07 collab 退场后暂无成员）。
+const FORWARD_ONLY = new Set();
 
 let failed = 0;
 const bad = (msg) => {

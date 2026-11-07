@@ -681,12 +681,8 @@ function registeredBy(raw) {
  * ⚠️ 不要往这里加"顺手能删但其实有人用"的条目 —— 这里只豁免 warning，不豁免 ①/②。
  */
 const ALLOW_ORPHANS = [
-  { id: 'auth.token', why: '换票链入口（IAM §6.2）：仓外 CLI / 脚本用密码+otp 换 at_ 票，前端登录走 /api/login' },
-  { id: 'auth.refresh', why: '换票链续期：仓外 CLI / 脚本的 at_ 到期后用 rf_ 换新票（轮换语义见 security/refresh.mjs）' },
-  { id: 'auth.revoke', why: '换票链撤销：仓外 CLI / 脚本凭票自撤（accessToken / refreshToken 至少一个）' },
   { id: 'pair.me', why: '旧手机客户端兼容垫片：新前端改问 /api/me（users.mjs 里带上了设备详情），这条留着给存量客户端' },
   { id: 'pair.device.revoke', why: '兼容垫片：语义等同 disconnect（pair.mjs:366「老接口，保留兼容」），新前端只调 disconnect' },
-  { id: 'collab.invites', why: '兼容垫片：老的"按名字直接发码"，新流程是 branches 落行 + /invite；按「老接口保留兼容」留着' },
   { id: 'runtime.test', why: '契约保留、无 UI 消费（docs/现状.md:997）：原「按路径接入」弹窗撤了，接口按当时口径保留' },
   { id: 'ai.image', why: '外部/临时生图工具回环直调（前端设置页只消费 image-config / image-test）；生图能力唯一的 HTTP 出口' },
   { id: 'files.get', why: '附件/图片 URL 由服务端响应里的 url 字段回传（conversation.mjs / project.mjs 拼），前端不拼字面量' },
@@ -699,9 +695,7 @@ const ALLOW_ORPHANS = [
   { id: 'local.hosts.add', why: '同上：/api/local/hosts/* 是局域网手动加主机的一组本机接口，仓内入口已收' },
   { id: 'local.hosts.remove', why: '同上：/api/local/hosts/* 是局域网手动加主机的一组本机接口，仓内入口已收' },
   { id: 'local.hosts.test', why: '同上：/api/local/hosts/* 是局域网手动加主机的一组本机接口，仓内入口已收' },
-  { id: 'me.otp', why: '动态验证基路径（GET 状态 / DELETE 解绑在旧面板按基路径调）；新前端走 /status /bind /unbind 子路径' },
   { id: 'nodes.scope', why: '总机侧节点权限设置：面板入口 2026-11 收进 CLI（bandi nodes），HTTP 口按既有契约保留给脚本' },
-  { id: 'nodes.role', why: '同上（节点角色改由 CLI / 脚本驱动，HTTP 口保留）' },
   { id: 'nodes.paths', why: '同上（节点可访问路径改由 CLI / 脚本驱动，HTTP 口保留）' },
   { id: 'control.restart', why: '改监听地址后的"重启控制面"：由桌面壳 / systemd 监护进程调用（仓内只有 config.mjs 的说明），走 machine:manage' },
   { id: 'status.project.one', why: '连接器 / 插件面板按项目 id 取状态详情；仓内通用面板用 pick 字段，不拼字面量' },

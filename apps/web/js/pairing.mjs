@@ -359,20 +359,11 @@ function startCountdown(expiresAt, code) {
 
 /* ---------------------------------------------------------------- 设备列表 */
 
-/** 已配对设备：名字 / 配对时间 / 最近活跃 / 面板角色 + 踢出。踢出前 askConfirm（不可逆动作） */
+/** 已配对设备：名字 / 配对时间 / 最近活跃 / 使用者 + 踢出。踢出前 askConfirm（不可逆动作） */
 export async function renderDeviceList() {
   const box = $('pairDevices');
   if (!box) return;
-  /*
-   * 角色清单（2026-10-28 第四刀）：给每行的「面板角色」下拉用。
-   * 读不到（非操作员 / 老服务）就只画设备行 —— 别让一个附加控件把整段弄挂。
-   */
-  const [devicesRes, rolesRes] = await Promise.all([
-    api('/api/pair/devices'),
-    api('/api/roles').catch(() => ({ roles: [] })),
-  ]);
-  const { devices = [] } = devicesRes;
-  const roles = rolesRes?.roles ?? [];
+  const { devices = [] } = await api('/api/pair/devices');
   /*
    * 「在用 / 已断开」判据（2026-11-01 二刀）：`disconnectedAt` 有值 = 已断开。
    * 与「取消配对」（删行）区分：断开的行留着，那台手机还能凭 clientKey 连回来。
@@ -400,7 +391,7 @@ export async function renderDeviceList() {
   box.innerHTML = `
     <div class="mb-pair-wrap">
       <table class="plg-table pair-table">
-        <thead><tr><th>手机</th><th>使用者</th><th>状态</th><th>配对时间</th><th>最近活跃</th><th>面板角色</th><th>操作</th></tr></thead>
+        <thead><tr><th>手机</th><th>使用者</th><th>状态</th><th>配对时间</th><th>最近活跃</th><th>操作</th></tr></thead>
         <tbody>
           ${devices
             .map((d) => {
@@ -421,22 +412,6 @@ export async function renderDeviceList() {
                 }</td>
                 <td class="dim">${esc(dt(d.pairedAt))}</td>
                 <td class="dim">${esc(dt(d.lastSeenAt))}${d.lastIp ? ` · ${esc(d.lastIp)}` : ''}</td>
-                <td>${
-                  /* 面板角色：这台手机下一次打开班底就按它画底部导航；未分配 = 默认「手机」 */
-                  roles.length
-                    ? `<select class="mb-pair-role" data-dev-role="${esc(d.id)}"${isDisconnected ? ' disabled' : ''}>
-                         <option value=""${d.roleId ? '' : ' selected'}>默认（手机）</option>
-                         ${roles
-                           .map(
-                             (r) =>
-                               `<option value="${esc(r.id)}"${d.roleId === r.id ? ' selected' : ''}>${esc(r.name)}${
-                                 r.builtin ? '' : '（自建）'
-                               }</option>`,
-                           )
-                           .join('')}
-                       </select>`
-                    : '<span class="dim">默认（手机）</span>'
-                }</td>
                 <td class="pair-act">${
                   isDisconnected
                     ? `<button type="button" class="mb-pair-forget" data-forget="${esc(d.id)}" data-name="${esc(d.name)}">取消配对</button>`
@@ -448,27 +423,6 @@ export async function renderDeviceList() {
         </tbody>
       </table>
     </div>`;
-  box.querySelectorAll('[data-dev-role]').forEach((sel) => {
-    sel.onchange = async () => {
-      sel.disabled = true;
-      try {
-        await post(`/api/pair/devices/${encodeURIComponent(sel.dataset.devRole)}/role`, { roleId: sel.value || null });
-        /*
-         * 成功就把本地这份也更新掉：失败回滚用的是 `d.roleId`，不更新的话
-         * "改 A 成功 → 再改 B 失败"会回滚到最初那个角色，而不是刚存的 A。
-         */
-        const d = devices.find((x) => x.id === sel.dataset.devRole);
-        if (d) d.roleId = sel.value || null;
-        toast(sel.value ? '已分配 —— 那台手机下一次打开班底就按新角色显示' : '已改回默认 —— 那台手机下一次打开班底就是四个 tab', 'ok');
-      } catch (e) {
-        toast(e.message, 'error');
-        const d = devices.find((x) => x.id === sel.dataset.devRole);
-        sel.value = d?.roleId ?? ''; // 回滚到改动前的选择
-      } finally {
-        sel.disabled = false;
-      }
-    };
-  });
   box.querySelectorAll('[data-kick]').forEach((b) => {
     b.onclick = async () => {
       const ok = await askConfirm({

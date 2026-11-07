@@ -31,24 +31,8 @@ export const LOCAL_POLICY = [
   { method: 'GET', path: '/api/local/status', principals: ['operator', 'admin'], secret: 'never' },
   // 外部件现状（2026-11-04）：插件页「软件」商店条目要画"装没装、网关/面板通不通" —— 只读
   { method: 'GET', path: '/api/local/externals', principals: ['operator', 'admin'], secret: 'never' },
-  { method: 'GET', path: '/api/local/collab/status', principals: ['operator', 'admin'], secret: 'never' },
   { method: 'GET', path: '/api/local/backups', principals: ['operator', 'admin'], secret: 'never' },
 
-  /*
-   * ⚠️ 协作**加入/退出**都是"网络来源也不要秘密"档。
-   * 退出 2026-11-01（二十改续）放宽；加入 2026-11-02（三十一改）跟进一步，用户截图拍板：
-   * "这里应该是连接" —— 对外监听形态下 classifySource 判 ③ 把**桌面壳自己的
-   * 127.0.0.1 也判成 network**，秘密闸对 join 就是单向门：界面里「连接总机」永远 E4097，
-   * 只能复制 CLI 命令去终端跑，这正是 leave / export 已经骂过并拆掉的同款形态。
-   * 风险论证（拿到 operator/admin 会话的人）：
-   *   · join 的落点要**目标中心的接入码**背书 —— 码不对在对面就 E4040，指不动；
-   *   · 接入成功只是多一条「协作」连接：中心能派卡、分公司回报状态，**本机通讯录 /
-   *     项目 / 会话不经过这个接口外带**（与 leave "不外带数据" 同构）；
-   *   · 完全可逆（leave 即断），且这个人本来就能 import / 删库，不缺这一下破坏面。
-   * 反代契约仍 deny /api/local/*（IAM §10.1.2），那一道比秘密更硬。
-   */
-  { method: 'POST', path: '/api/local/collab/join', principals: ['operator', 'admin'], secret: 'never' },
-  { method: 'POST', path: '/api/local/collab/leave', principals: ['operator', 'admin'], secret: 'never' },
   /*
    * ⚠️ 导出/导入快照从 2026-11-01 起也是"网络来源不要秘密"档，
    * 用户拍板："不管是不是总机分机，这个导入导出都要一直显示"。监听 0.0.0.0 时，
@@ -77,7 +61,8 @@ export const LOCAL_POLICY = [
 export function principalKind(auth) {
   if (!auth) return 'anonymous';
   if (auth.kind === 'operator') return 'operator';
-  if (auth.kind === 'user') return auth.admin ? 'admin' : 'member';
+  // 登录用户 = 全权（2026-11-07 角色体系退场）：与 operator 同档对待
+  if (auth.kind === 'user') return 'admin';
   if (auth.kind === 'device') return 'device';
   if (auth.kind === 'node') {
     const scope = auth.scope instanceof Set ? auth.scope : new Set();
@@ -131,7 +116,7 @@ export function authorizeLocal({ method, pathname, source, principal, hasSecret 
       'E4097',
       403,
       '这个动作需要 X-Bandi-Local（服务器形态请在本机终端用 CLI 执行）',
-      '值在数据目录的 local_secret 文件里；`bandi collab join` / `bandi data export` 会自动带上。',
+      '值在数据目录的 local_secret 文件里；`bandi data export` 会自动带上。',
     );
   }
 

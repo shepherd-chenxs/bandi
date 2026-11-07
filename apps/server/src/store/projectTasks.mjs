@@ -23,10 +23,6 @@ export function createProjectTask({
   // 人手建卡的是哪位真人（2026-10-31；员工经接口建的卡是 null）
   createdByUserId = null,
   creatorConvId = null,
-  // 协作卡（2026-10-31）：中心那条任务的 id + 已应用到的 rev + 已对齐的状态
-  collabTaskId = null,
-  collabRev = 0,
-  collabStatus = null,
 }) {
   const ts = nowIso();
   const row = {
@@ -52,17 +48,13 @@ export function createProjectTask({
     createdByUserId,
     // 建卡那次运行所在的会话（PM 在哪个群里建的卡，回执就送回哪儿；人手建是 null）
     creatorConvId,
-    // 协作卡三列（非协作卡：null / 0 / null）
-    collabTaskId,
-    collabRev,
-    collabStatus,
     createdAt: ts,
     updatedAt: ts,
   };
   db.prepare(
     `INSERT INTO project_tasks
-       (id, projectId, title, description, status, assigneePersonaId, assigneeUserId, conversationId, runId, source, externalKey, sourceKey, sourceRunId, flowTemplateId, flowRunId, createdBy, createdByUserId, creatorConvId, collabTaskId, collabRev, collabStatus, createdAt, updatedAt)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, projectId, title, description, status, assigneePersonaId, assigneeUserId, conversationId, runId, source, externalKey, sourceKey, sourceRunId, flowTemplateId, flowRunId, createdBy, createdByUserId, creatorConvId, createdAt, updatedAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     row.id,
     row.projectId,
@@ -82,9 +74,6 @@ export function createProjectTask({
     row.createdBy,
     row.createdByUserId,
     row.creatorConvId,
-    row.collabTaskId ?? null,
-    row.collabRev ?? 0,
-    row.collabStatus ?? null,
     row.createdAt,
     row.updatedAt,
   );
@@ -180,7 +169,6 @@ export function updateProjectTask(id, fields) {
             prCheckedAt = ?, queuedAt = ?, sourceKey = ?, sourceRunId = ?,
             flowTemplateId = ?, flowRunId = ?,
             creatorConvId = ?, notifiedFor = ?,
-            collabTaskId = ?, collabRev = ?, collabStatus = ?,
             statusByUserId = ?, statusAt = ?, updatedAt = ?
       WHERE id = ?`,
   ).run(
@@ -204,10 +192,6 @@ export function updateProjectTask(id, fields) {
     next.flowRunId ?? null,
     next.creatorConvId ?? null,
     next.notifiedFor ?? null,
-    // 协作卡三列（同上：老库刚 ALTER 出来，历史行是 NULL —— 写回 null / 0 幂等）
-    next.collabTaskId ?? null,
-    Number(next.collabRev ?? 0) || 0,
-    next.collabStatus ?? null,
     // 「状态改动」归因（2026-11-03）：store 层只透传，谁写进来由 project-tasks.mjs 那层
     // （人走的路）带；系统动作（跑完收状态等）不传这两列 —— `next` 是 cur 的浅拷贝，
     // 不传就原样写回，**不会把上一次人的署名冲掉**。
@@ -217,38 +201,6 @@ export function updateProjectTask(id, fields) {
     id,
   );
   return getProjectTask(id);
-}
-
-/* ------------------------------------------------------- 协作卡（2026-10-31） */
-
-/**
- * 中心那条任务在这台机器上的卡（认不出 → null）。
- *
- * 判据是 `collabTaskId`，**不是** `source='collab'` —— 后者是给人看的来源标签，
- * 一个手滑写成 collab 的卡不该被同步循环接管。
- */
-export function getProjectTaskByCollabTaskId(collabTaskId) {
-  if (!collabTaskId) return null;
-  return db.prepare('SELECT * FROM project_tasks WHERE collabTaskId = ? LIMIT 1').get(String(collabTaskId)) ?? null;
-}
-
-/**
- * 本地改过、还没报给中心的协作卡：`status <> collabStatus`（含 collabStatus 为 NULL 的旧行）。
- *
- * ⚠️ **不能拿 `status` 排除终态** —— 「本地自己判已完成」正是要报出去的一种改动
- *    （任务书 §2.1：分公司也可以收尾）。要排除的是"中心已经收过尾"的卡：
- *    那种卡的 `collabStatus` 已经是终态，本地再改也报不上去（中心会 409）。
- */
-export function listCollabCardsNeedingReport() {
-  return db
-    .prepare(
-      `SELECT * FROM project_tasks
-        WHERE collabTaskId IS NOT NULL
-          AND status <> COALESCE(collabStatus, '')
-          AND COALESCE(collabStatus, '') NOT IN ('已完成', '已取消')
-        ORDER BY updatedAt`,
-    )
-    .all();
 }
 
 

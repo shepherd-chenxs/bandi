@@ -142,15 +142,6 @@ export async function handleProject(req, res, url) {
   }
   if (req.method === 'DELETE' && taskOne) {
     const id = decodeURIComponent(taskOne[1]);
-    /*
-     * **协作卡不能删**（2026-10-31）：卡的全部意义是"中心那条任务的本地影子"，
-     * 删了下一拍 poll 会把它原样重建出来 —— 用户看到的是"删不掉 / 闹鬼"。
-     * 要它消失只有一条路：让中心取消（中心取消后本地卡变「已取消」，仍在看板上留痕）。
-     */
-    const cur = store.getProjectTask(id);
-    if (cur?.source === 'collab') {
-      return fail(res, 400, 'E4046', '总公司派的任务不能删，只能等中心取消');
-    }
     const ok = store.deleteProjectTask(id);
     return ok ? sendJson(res, 200, { ok: true }) : fail(res, 404, 'E2038', '任务不存在');
   }

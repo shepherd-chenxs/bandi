@@ -205,16 +205,8 @@ export const ROUTES = {
     setNav('plugins', { skipOpen: true });
     return openSchedules();
   },
-  /*
-   * 协作中心（2026-10-31 MVP；2026-11-01 从工作台搬进设置 →「协作」组）：
-   * 现在就是设置的一个分节 —— 走 openSettings 摆左栏高亮，页面本体在
-   * collab.mjs renderCollabCenter（画进 #settingsView）。存过的旧位置 {view:'collab'}
-   * 也从这儿转发，刷新恢复不丢。
-   */
-  collab: () => {
-    S.settingsSection = 'collab';
-    return setNav('settings');
-  },
+  // 协作中心 2026-11-07 随协作子系统整体退场；存过的旧位置 {view:'collab'}
+  // 走 openRoute 的"不认识就回消息页"兜底，不用迁移。
 };
 
 

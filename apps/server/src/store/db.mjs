@@ -1030,4 +1030,24 @@ export function backupTo(file) {
   return file;
 }
 
+/*
+ * 2026-11-07：本地账号凭据层与角色/菜单体系整体退场（账号挪到身份中枢，登录即全权）。
+ * 这些表的建表语句随模块一起删掉了，老库里还躺着的副本在这里清掉 —— 幂等，没有就跳过：
+ *   roles / role_menus / role_permissions   角色与菜单（授权改为「登录即全权」）
+ *   user_otp / otp_challenges               TOTP 二段验证
+ *   access_tokens / refresh_tokens          at_/rf_ 换票链（无真实消费者）
+ * users 表里的死列（salt/hash/roleId/hasPassword 等）留着不读，不做重建。
+ */
+for (const t of [
+  'roles',
+  'role_menus',
+  'role_permissions',
+  'user_otp',
+  'otp_challenges',
+  'access_tokens',
+  'refresh_tokens',
+]) {
+  db.exec(`DROP TABLE IF EXISTS ${t}`);
+}
+
 /** 模块加载时跑一次：老技能名落到当前技能上（幂等，表里没有就什么都不做） */

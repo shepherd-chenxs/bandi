@@ -3,12 +3,12 @@
  *
  * 铁律（新仓建的时候就定下的）：**bandi 只准通过 HTTP 认中枢，不许 import 它的代码。**
  * 于是所有差异都收在这一个文件里：契约升到 /v2 时，改的是这里的 `HUB_API_VERSION`
- * 和下面四个函数的路径，别的文件一行都不用动。
+ * 和下面函数的路径，别的文件一行都不用动。
  *
- * 三个调用点：
- *   · `enroll` / `pollEnroll` —— `bandi hub join` 的一次性握手（主机没有浏览器）；
+ * 两个调用点：
  *   · `heartbeat` —— 进程活着时每 60 秒报一次地址（中枢靠它画「在线」）；
- *   · `fetchPublicKey` —— 加入时把中枢公钥钉到本地（之后不再联网取钥匙）。
+ *   · `deviceLogin` —— 本机登录页的账号密码转给中枢（登录即登记机器，2026-11-07 起
+ *     这是机器接入的唯一通道，设备码 / `bandi hub join` 已退场）。
  *
  * 网络失败一律抛 `HubError`（带中枢的错误码 / 或 `E7xxx`），由调用方决定是打印还是吞掉。
  * **不重试**：心跳下一轮自然会重来；握手是一次性的，重试只会让用户看到两个码。
@@ -20,10 +20,9 @@ import os from 'node:os';
 export const HUB_API_VERSION = 'v1';
 
 const PATHS = {
-  enroll: `/${HUB_API_VERSION}/devices/enroll`,
-  poll: `/${HUB_API_VERSION}/devices/enroll/poll`,
   heartbeat: (deviceId) => `/${HUB_API_VERSION}/devices/${encodeURIComponent(deviceId)}/heartbeat`,
   pubkey: `/${HUB_API_VERSION}/pubkey`,
+  deviceLogin: `/${HUB_API_VERSION}/auth/device-login`,
 };
 
 /** 握手与心跳都不该拖住进程：一次请求最长 10 秒 */
@@ -119,42 +118,6 @@ function isVirtualIface(name) {
   return /^(docker|br-|veth|virbr|vmnet|vboxnet|vEthernet|Loopback|Tailscale|zt|utun|tun|tap|wg|Hyper-V|WSL|本地连接\*)/i.test(name);
 }
 
-/**
- * 主机取设备码（中枢存 10 分钟，一次性）。
- * @param {string} baseUrl
- * @param {{ name: string, platform?: string, version?: string|null, lanAddrs?: string[], scheme?: 'http'|'https', port?: number }} meta
- * @returns {Promise<{ code: string, pollToken: string, expiresAt: number, hint?: string }>}
- */
-export async function enroll(baseUrl, meta) {
-  return call(baseUrl, PATHS.enroll, {
-    method: 'POST',
-    body: {
-      name: meta.name,
-      platform: meta.platform ?? process.platform,
-      version: meta.version ?? null,
-      lanAddrs: meta.lanAddrs ?? lanAddrs(),
-      scheme: meta.scheme ?? 'http',
-      port: meta.port,
-    },
-  });
-}
-
-/**
- * 轮询：`pending` 或 `approved`。
- * @param {string} baseUrl
- * @param {{ code: string, pollToken: string }} input
- * @returns {Promise<{ status: 'pending' } | { status: 'approved', deviceId: string, deviceToken: string, accountId?: string|null }>}
- */
-export async function pollEnroll(baseUrl, { code, pollToken }) {
-  return call(baseUrl, PATHS.poll, { method: 'POST', body: { code, pollToken } });
-}
-
-/**
- * 心跳：60 秒一次，把最新地址与端口报上去。
- * 中枢不知道地址，名册上就只有一台"在线但点不动"的机器 —— 这才是中枢存在的理由。
- * @param {string} baseUrl
- * @param {{ deviceId: string, deviceToken: string, lanAddrs?: string[], port?: number, version?: string|null }} input
- */
 export async function heartbeat(baseUrl, { deviceId, deviceToken, lanAddrs: addrs, port, version }) {
   return call(baseUrl, PATHS.heartbeat(deviceId), {
     method: 'POST',
@@ -190,4 +153,36 @@ export async function fetchPublicKey(baseUrl) {
   const key = String(data?.publicKey ?? '').trim();
   if (!key) throw new HubError('E7103', '中枢没有配置签名公钥（TICKET_PUBLIC_KEY），请用 --pubkey 手动指定');
   return key;
+}
+
+/**
+ * 账号密码登录（2026-11-07）。
+ *
+ * 用户在本机登录页输入的账号密码，经这里转给中枢 —— 主机**不存密码、不建账号**，
+ * 认人的事一直在中枢。成功时中枢顺手把本机登记进名册，回来的是：
+ * 一张票（主机自己验）+ 本机的设备身份（写 hub.json）+ 中枢账号信息（绑本地用户）。
+ *
+ * @param {string} baseUrl
+ * @param {{ username: string, password: string, mode?: 'login'|'register', deviceId?: string|null, deviceToken?: string|null, name?: string, platform?: string, version?: string|null, lanAddrs?: string[], scheme?: 'http'|'https', port?: number }} input
+ * @returns {Promise<{ ticket: string, deviceId: string, deviceToken: string, publicKey?: string|null, account: { id: string, login: string, name?: string|null } }>}
+ */
+export async function deviceLogin(baseUrl, input) {
+  return call(baseUrl, PATHS.deviceLogin, {
+    method: 'POST',
+    headers: input.deviceToken ? { authorization: `Device ${input.deviceToken}` } : {},
+    body: {
+      username: input.username,
+      password: input.password,
+      mode: input.mode ?? 'login',
+      deviceId: input.deviceId ?? null,
+      name: input.name,
+      platform: input.platform ?? process.platform,
+      version: input.version ?? null,
+      lanAddrs: input.lanAddrs ?? lanAddrs(),
+      scheme: input.scheme ?? 'http',
+      port: input.port,
+    },
+    // 人正在等这一下，比心跳多给几秒（PBKDF2 + 一次 D1 写）
+    timeoutMs: 15_000,
+  });
 }

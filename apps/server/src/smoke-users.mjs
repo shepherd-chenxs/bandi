@@ -1,22 +1,25 @@
 /**
- * 账号、登录与角色分配（2026-10-28 第三刀）的验收。
+ * 账号与登录（2026-11-07 中枢一刀）的验收。
  *
- * 这一刀是**全项目鉴权风险最高的一刀**，所以钉的边界比前两刀细：
- *   ① 没建任何账号时**首次引导是建号**（第一个账号自动管理员；令牌照旧可用，走 X-Bandi-Token 头）；
- *   ② 第一个账号自动成为内置管理员；
- *   ③ 登录：密码错 → 401 且文案不暴露"用户是否存在"；密码对 → Set-Cookie；
- *   ④ 会话 Cookie 能认人（`/api/me` 回 role.menuKeys），管理员能管账号；
- *   ⑤ 非管理员：管理口 403、白名单内的读接口 200；
- *   ⑥ 管理员：管理口 200；
- *   ⑦ 退出后原 Cookie 失效；
- *   ⑧ 内置管理员的删 / 改角色 / 禁用三道保护；
- *   ⑨ 会话**落库**：重启服务后原 Cookie 仍有效；伪造的 Cookie 一律 401；
- *   ⑩ 不回归：回环形态照旧 operator、共享令牌照旧可用。
- *   + 登录限速（同一 IP + 同一用户名 5 次失败 → 429）与"改密码踢下线"；
- *   + 动态验证（TOTP，⑤.5）：密码对了不发会话、错码不绑、凭据一次性、恢复码一次性、解绑要验码。
+ * 这一刀把**本机凭据层整体退场**了：登录入口只有中枢账号密码框
+ * （POST /hub/login，转发给中枢），本文件不再测任何本机密码 / 角色 / 菜单权限。
+ * 登录 = 全权，本机账号只是中枢账号的影子。这份冒烟钉的是新世界的形状：
  *
- * 隔离：临时数据目录 + 临时端口，跑完全删，不碰 data/、不碰真令牌。
- * 跑法：node apps/server/src/smoke-users.mjs
+ *   ① 登录页只有一张：中枢账号密码表单（action="/hub/login"），零账号也是它；
+ *   ② 首次登录：中枢认人 → 绑本机用户 → 发 bandi_sid（ hub 这条路是**唯一**真路，
+ *      用假中枢 hub-stub.mjs 起一个，把 hub.json 指过去）；
+ *   ③ /api/me = { kind:'user', user:{id,name} } —— 没有任何角色 / 菜单字段；
+ *   ④ 本地账号只是影子：POST /api/users 只收 name，第一个账号自动 builtin；
+ *      PATCH 只认 name / disabled；内置账号不可删不可禁（E3808）；
+ *   ⑤ 退出登录：会话真删（回环退回 operator，不是还挂着一个 user）；
+ *   ⑥ 安全接口只认会话里的身份 —— operator（机器凭据）打 /api/security/* → 401 E3810；
+ *   ⑦ 会话落库：重启（顺手换成服务器形态）后原 Cookie 仍有效，死票 / 伪造票一律 401。
+ *
+ * 纯管理动作（建 / 列 / 删账号）走回环 operator：BANDI_HOST=127.0.0.1、不带会话
+ * Cookie 即 operator，跟登录是两条独立的路，互不干扰。
+ *
+ * 隔离：临时数据目录 + 临时端口 + 假中枢（hub-stub.mjs），跑完全删，不碰 data/。
+ * 跑法：SMOKE_PORT=8909 node apps/server/src/smoke-users.mjs
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -24,12 +27,13 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { repoRoot } from './config.mjs';
 import { sleep, stopRunning } from './lifecycle.mjs';
-// 冒烟自己算 TOTP 码（模拟验证器 App）。纯函数文件，import 它不会碰库
-import { codeAt } from './otp-code.mjs';
+// 假中枢 + 登录帮手：造会话只有一条真路 —— 起个假中枢，让本机把登录表单转给它
+import { startHubStub, hubLogin } from './hub-stub.mjs';
 
-const PORT = Number(process.env.SMOKE_PORT ?? 8790);
+const PORT = Number(process.env.SMOKE_PORT ?? 8909);
 const BASE = `http://127.0.0.1:${PORT}`;
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bandi-users-'));
+const dataDir = path.join(tmp, 'data');
 const SERVER = path.join(repoRoot, 'apps', 'server', 'src', 'server.mjs');
 const TOKEN = 'smoke-users-token';
 
@@ -48,8 +52,11 @@ function start(extraEnv = {}) {
     env: {
       ...process.env,
       BANDI_PORT: String(PORT),
-      BANDI_DATA: tmp,
-      BANDI_DB: path.join(tmp, 'bandi.db'),
+      // 中枢地址永远有值，但测试里必须显式指到假中枢（写 hub.json），
+      // 不然就去连真的 hub.yuancang.space 了 —— 空串逼服务器去读 hub.json
+      BANDI_HUB: '',
+      BANDI_DATA: dataDir,
+      BANDI_DB: path.join(dataDir, 'bandi.db'),
       ...extraEnv,
     },
     windowsHide: true,
@@ -72,21 +79,19 @@ async function waitUp(ms = 15000) {
 }
 
 /*
- * CSRF 双提交（2026-10-31，IAM §10.2）：带 Cookie 的写请求要 `bandi_csrf` Cookie 与
- * `X-Bandi-CSRF` 头成对。smoke 模拟**同一个浏览器**：登录/建号响应种下 bandi_csrf 就记进
- * jar（CSRF），后续带 cookie 的请求自动合并进 Cookie 头并带上同名 header ——
- * 服务端只做值比对，不同用户的 csrf 值互换无所谓（比对对象是请求者自己的 cookie）。
+ * CSRF 双提交（IAM §10.2）：带 Cookie 凭据的写请求要 `bandi_csrf` Cookie 与
+ * `X-Bandi-CSRF` 头成对。smoke 模拟**同一个浏览器**：任何 HTML 响应种下 bandi_csrf
+ * 就记进 jar，后续带 cookie 的请求自动合并进 Cookie 头并带上同名 header。
  */
 let CSRF = '';
 
-/** 统一请求：`cookie` / `token` / `setup` 三选 N，写请求都带 X-Bandi（来源闸认它） */
-const call = async (method, p, { body, cookie, token, setup } = {}) => {
+/** 统一请求：`cookie` / `token` 二选 N，写请求都带 X-Bandi（来源闸认它） */
+const call = async (method, p, { body, cookie, token } = {}) => {
   const headers = { 'Content-Type': 'application/json', 'X-Bandi': '1' };
   if (cookie) headers.Cookie = CSRF ? `${cookie}; bandi_csrf=${CSRF}` : cookie;
   else if (CSRF && method !== 'GET') headers.Cookie = `bandi_csrf=${CSRF}`;
   if (method !== 'GET' && CSRF) headers['X-Bandi-CSRF'] = CSRF;
   if (token) headers['X-Bandi-Token'] = token;
-  if (setup) headers['X-Bandi-Setup'] = setup;
   const r = await fetch(BASE + p, {
     method,
     headers,
@@ -96,7 +101,7 @@ const call = async (method, p, { body, cookie, token, setup } = {}) => {
   const raw = await r.text();
   const sc = r.headers.get('set-cookie') ?? '';
   const mCsrf = /bandi_csrf=([^;]*)/.exec(sc);
-  if (mCsrf) CSRF = decodeURIComponent(mCsrf[1]); // 浏览器语义：登录响应把 csrf 值换新
+  if (mCsrf) CSRF = decodeURIComponent(mCsrf[1]); // 浏览器语义：页面响应把 csrf 种进 jar
   let parsed = null;
   try { parsed = JSON.parse(raw); } catch { /* HTML 或空 */ }
   return { status: r.status, body: parsed, raw, setCookie: sc };
@@ -117,377 +122,209 @@ async function stopAll() {
 
 const cleanup = async () => {
   await stopAll();
+  try { await HUB.close(); } catch { /* 已经关了 */ }
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* 删不掉就算了 */ }
 };
 
-const ADMIN = { name: '老王', password: 'wang-pass-123' };
-const VILLAGER = { name: '小李', password: 'li-pass-1234' };
+/* 假中枢：两个中枢账号。甲带 name（本机影子账号该用它，而不是登录名） */
+const HUB = await startHubStub({
+  deviceId: 'dev_self',
+  accounts: {
+    甲: { password: '甲-pass-123', name: '老板' },
+    乙: { password: '乙-pass-456' },
+  },
+});
+
+// 把本机 hub 配置指到假中枢：baseUrl + 公钥，deviceId/deviceToken 一并落盘（mirror smoke-hub.mjs [4c]）
+fs.mkdirSync(dataDir, { recursive: true });
+fs.writeFileSync(
+  path.join(dataDir, 'hub.json'),
+  JSON.stringify({
+    baseUrl: HUB.url,
+    publicKey: HUB.publicKey,
+    deviceId: 'dev_self',
+    deviceToken: 'dt_stub',
+  }, null, 2),
+  { mode: 0o600 },
+);
 
 try {
-  /* 非回环形态 = 服务端自己会开令牌闸（auth.setup 看监听地址） */
-  start({ BANDI_HOST: '0.0.0.0', BANDI_TOKEN: TOKEN });
+  /* 回环形态：API 免登录（operator），面板要会话 —— 任务书的确定性底座 */
+  start({ BANDI_HOST: '127.0.0.1' });
   if (!(await waitUp())) throw new Error('实例没起来：' + log.slice(-500));
 
-  /* ============ ① 没账号时 = 与从前一模一样 ============ */
-  console.log('① 还没建任何账号：行为与从前一致');
-  const me0 = await call('GET', '/api/me', { token: TOKEN });
-  check('带令牌 GET /api/me → operator（老路没变）', me0.status === 200 && me0.body?.kind === 'operator',
-    `${me0.status} ${me0.body?.kind ?? me0.body?.code}`);
-  const meNo = await call('GET', '/api/me');
-  check('不带任何凭据 GET /api/me → 401', meNo.status === 401, `${meNo.status} ${meNo.body?.code ?? ''}`);
+  // 登录页种下 CSRF 双提交对（无会话 → 回登录页，顺手 set-cookie bandi_csrf）
+  const seed = await fetch(BASE + '/', { headers: { Accept: 'text/html' }, signal: AbortSignal.timeout(5000) });
+  const seedSc = seed.headers.get('set-cookie') ?? '';
+  const seedCsrf = /bandi_csrf=([^;]*)/.exec(seedSc);
+  if (seedCsrf) CSRF = decodeURIComponent(seedCsrf[1]);
+
+  /* ============ ① 登录页：中枢账号表单是唯一一张 ============ */
+  console.log('① 登录页：只有中枢账号密码框（零账号也是它）');
   const page0 = await fetch(BASE + '/', { headers: { Accept: 'text/html' }, signal: AbortSignal.timeout(5000) });
   const html0 = await page0.text();
-  check('登录页 200', page0.status === 200, String(page0.status));
-  /*
-   * 2026-10-31 改口径（用户：「不管总机还是分机，都要用用户来登录」）：
-   * 零账号时登录页给的是**建号表单**（第一个账号自动管理员），不再是"只给令牌表单"。
-   * 令牌入口在有账号的登录页上也已经撤掉（见下面 ② 的断言）——运维走 X-Bandi-Token 头。
-   */
-  check('没有账号时给**创建账号**表单（不是用户名密码登录）', html0.includes('id="signForm"') && !html0.includes('id="pwForm"'));
-  check('并且说清"创建第一个账号 = 管理员"', html0.includes('创建第一个账号') && html0.includes('管理员'));
-  const st0 = await call('GET', '/api/state', { token: TOKEN });
-  check('共享令牌照旧能读 /api/state（③ 的兜底：root 没被关在门外）', st0.status === 200, String(st0.status));
+  check('零账号 GET / → 200 登录页', page0.status === 200, String(page0.status));
+  check('表单提交到本机 /hub/login（人不跳域）', html0.includes('action="/hub/login"'));
+  check('用户名 / 密码字段在', html0.includes('name="username"') && html0.includes('name="password"'));
+  check('登录即注册：没有单独的注册按钮', !html0.includes('value="register"') && (html0.match(/<button/g) ?? []).length === 1);
+  const me0 = await call('GET', '/api/me');
+  check('回环 /api/me 照旧 operator（机器侧的闸没变）', me0.status === 200 && me0.body?.kind === 'operator',
+    `${me0.status} ${me0.body?.kind ?? me0.body?.code}`);
 
-  /* ============ ② 第一个账号 = 内置管理员（服务器形态要走 setup_code 引导） ============ */
-  console.log('\n② root 令牌建第一个账号 → 自动成为内置管理员（需 X-Bandi-Setup）');
-  // 2026-10-31 IAM v2.4：服务器形态 + 零账号 → 数据目录生成 setup_code，
-  // 首账号创建必须带 X-Bandi-Setup（堵「谁先连上谁当 admin」）。完整矩阵见 smoke-bootstrap.mjs。
-  const setupCode = fs.readFileSync(path.join(tmp, 'setup_code'), 'utf8').trim();
-  const noSetup = await call('POST', '/api/users', { token: TOKEN, body: ADMIN });
-  check('不带引导码 → 403 E4098', noSetup.status === 403 && noSetup.body?.code === 'E4098',
-    `${noSetup.status} ${noSetup.body?.code ?? ''}`);
-  const badSetup = await call('POST', '/api/users', { token: TOKEN, body: ADMIN, setup: 'wrong-code-0000' });
-  check('引导码不对 → 403 E4098', badSetup.status === 403 && badSetup.body?.code === 'E4098',
-    `${badSetup.status} ${badSetup.body?.code ?? ''}`);
-  const first = await call('POST', '/api/users', { token: TOKEN, body: ADMIN, setup: setupCode });
-  check('带对引导码 → 201', first.status === 201, String(first.status));
-  check('builtin = true', first.body?.user?.builtin === true, String(first.body?.user?.builtin));
-  check('roleId = admin（不传也强制是它）', first.body?.user?.roleId === 'admin', String(first.body?.user?.roleId));
-  check('标记 first（前端据此给"第一个账号"的说明）', first.body?.first === true);
-  const page1 = await (await fetch(BASE + '/', { headers: { Accept: 'text/html' }, signal: AbortSignal.timeout(5000) })).text();
-  check('有账号之后登录页给出用户名密码表单', page1.includes('id="pwForm"') && page1.includes('id="nm"'));
-  // 2026-10-31 用户定：登录页就是登录页，**不再摆令牌入口**（脚本/运维用 X-Bandi-Token 头，不经界面）
-  check('登录页不含令牌入口', !page1.includes('用访问令牌登录') && !page1.includes('name="token"'));
-  // 建第一个账号 = 首次开机设置：顺手发登录会话票（2026-10-31），同一浏览器以后切非回环地址不用再登
-  check('建第一个账号顺手 Set-Cookie bandi_sid（首次引导的自动登录）', /bandi_sid=/.test(first.setCookie ?? ''), String(first.setCookie ?? '').slice(0, 60));
-  check('引导码建成即删（文件不再存在）', !fs.existsSync(path.join(tmp, 'setup_code')));
+  /* ============ ② 建阴影账号（预占名字），回环 operator 免登录 ============ */
+  console.log('\n② POST /api/users 只收 name：第一个=内置，重名/空名/超长拦下');
+  const cBoss = await call('POST', '/api/users', { body: { name: '老板' } });
+  check('POST {name} → 201（预占影子账号）', cBoss.status === 201, `${cBoss.status} ${cBoss.raw?.slice(0, 80)}`);
+  check('第一个账号 first:true 且自动 builtin（防锁死）',
+    cBoss.body?.first === true && cBoss.body?.user?.builtin === true, JSON.stringify(cBoss.body?.user ?? {}));
+  const cBing = await call('POST', '/api/users', { body: { name: '丙' } });
+  check('第二个 POST {name} → 201，first:false 且 builtin:false',
+    cBing.status === 201 && cBing.body?.first === false && cBing.body?.user?.builtin === false,
+    JSON.stringify(cBing.body?.user ?? {}));
 
-  /* ============ ②.5 免密账号 = 空密码直接登录（2026-10-31 用户拍板） ============ */
-  console.log('\n②.5 免密账号：空密码能登录、错密码不行、补密码后空密码关上');
-  const nopw = await call('POST', '/api/users', { token: TOKEN, body: { name: '本机的人', roleId: 'operator' } });
-  check('不传密码建账号 → 201', nopw.status === 201, String(nopw.status));
-  check('hasPassword = false（界面标「未设密码」的依据）', nopw.body?.user?.hasPassword === false,
-    String(nopw.body?.user?.hasPassword));
-  const nopwLogin = await call('POST', '/api/login', { body: { name: '本机的人', password: '' } });
-  check('空密码登录 → 200（免密进入，任何机器都行）', nopwLogin.status === 200,
-    `${nopwLogin.status} ${nopwLogin.body?.code ?? ''}`);
-  check('免密登录也发会话票', /bandi_sid=/.test(nopwLogin.setCookie ?? ''), String(nopwLogin.setCookie ?? '').slice(0, 60));
-  const nopwWrong = await call('POST', '/api/login', { body: { name: '本机的人', password: 'whatever-1' } });
-  check('免密账号输了密码 → 401 统一文案', nopwWrong.status === 401 && nopwWrong.body?.code === 'E3805'
-    && /用户名或密码不对/.test(nopwWrong.body?.error ?? ''), `${nopwWrong.status} ${nopwWrong.body?.error ?? ''}`);
-  const setPw = await call('PATCH', `/api/users/${encodeURIComponent(nopw.body?.user?.id)}`, {
-    token: TOKEN, body: { password: 'now-has-pass-1' },
+  /* ============ ③ GET /api/users 列表形状 ============ */
+  console.log('\n③ GET /api/users：列表形状，零凭据字段');
+  const users0 = await call('GET', '/api/users');
+  check('GET /api/users → 200（回环 operator 免登录）', users0.status === 200, String(users0.status));
+  check('hasUsers:true，正好两个账号', users0.body?.hasUsers === true && users0.body?.users?.length === 2,
+    JSON.stringify(users0.body?.users?.map((u) => u.name)));
+  const ALLOWED = new Set(['id', 'name', 'builtin', 'disabled', 'createdAt', 'updatedAt']);
+  check('列表字段只有 id/name/builtin/disabled/createdAt/updatedAt（无凭据字段）',
+    (users0.body?.users ?? []).every((u) => Object.keys(u).every((k) => ALLOWED.has(k))),
+    JSON.stringify(Object.keys(users0.body?.users?.[0] ?? {})));
+
+  const dup = await call('POST', '/api/users', { body: { name: ' 丙 ' } });
+  check('重名（首尾空白归一）→ 409 E3802', dup.status === 409 && dup.body?.code === 'E3802',
+    `${dup.status} ${dup.body?.code ?? ''}`);
+  const blank = await call('POST', '/api/users', { body: { name: '   ' } });
+  check('空名字 → 400 E3801', blank.status === 400 && blank.body?.code === 'E3801', `${blank.status} ${blank.body?.code ?? ''}`);
+  const long = await call('POST', '/api/users', { body: { name: '一'.repeat(21) } });
+  check('超过 20 个字 → 400 E3801', long.status === 400 && long.body?.code === 'E3801', `${long.status} ${long.body?.code ?? ''}`);
+
+  /* ============ ④ PATCH 改名 / 内置保护 / DELETE ============ */
+  console.log('\n④ PATCH 只认 name / disabled；内置账号不可删不可禁');
+  const pid = cBing.body?.user?.id;
+  const bossId = cBoss.body?.user?.id;
+  const rn = await call('PATCH', `/api/users/${encodeURIComponent(pid)}`, { body: { name: '丙二' } });
+  check('改名 → 200', rn.status === 200 && rn.body?.user?.name === '丙二', `${rn.status} ${rn.body?.user?.name}`);
+  const disBuiltin = await call('PATCH', `/api/users/${encodeURIComponent(bossId)}`, { body: { disabled: true } });
+  check('禁用内置账号 → 403 E3808', disBuiltin.status === 403 && disBuiltin.body?.code === 'E3808',
+    `${disBuiltin.status} ${disBuiltin.body?.code ?? ''}`);
+  const delBuiltin = await call('DELETE', `/api/users/${encodeURIComponent(bossId)}`);
+  check('删内置账号 → 403 E3808（hub 绑定都指着它）', delBuiltin.status === 403 && delBuiltin.body?.code === 'E3808',
+    `${delBuiltin.status} ${delBuiltin.body?.code ?? ''}`);
+  const delC = await call('DELETE', `/api/users/${encodeURIComponent(pid)}`);
+  check('删影子账号 → 200', delC.status === 200 && delC.body?.ok === true, String(delC.status));
+  const ghost = await call('DELETE', '/api/users/u_nosuch');
+  check('删不存在的 → 404 E3807', ghost.status === 404 && ghost.body?.code === 'E3807', `${ghost.status} ${ghost.body?.code ?? ''}`);
+
+  /* ============ ⑤ 中枢登录（唯一真路）= 认人 → 绑本机用户 → 发会话 ============ */
+  console.log('\n⑤ 中枢登录（假中枢）全链：绑本机用户 + 发 bandi_sid');
+  const first = await hubLogin(BASE, { username: '甲', password: '甲-pass-123', origin: BASE });
+  check('对的账号密码 → 302 回首页', first.status === 302 && first.location === '/', `HTTP ${first.status}`);
+  check('Set-Cookie 发了 bandi_sid', !!first.sid);
+  // 会话票的浏览器侧约定（与 store.SESSION_DAYS 同步的 30 天）单独钉一次
+  const raw1 = await fetch(`${BASE}/hub/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', origin: BASE },
+    body: new URLSearchParams({ username: '甲', password: '甲-pass-123' }).toString(),
+    redirect: 'manual',
   });
-  check('补密码 → 200 且 hasPassword = true', setPw.status === 200 && setPw.body?.user?.hasPassword === true,
-    `${setPw.status} ${setPw.body?.user?.hasPassword}`);
-  const blankAfter = await call('POST', '/api/login', { body: { name: '本机的人', password: '' } });
-  check('补了密码之后空密码登不进 → 401', blankAfter.status === 401 && blankAfter.body?.code === 'E3805',
-    `${blankAfter.status} ${blankAfter.body?.code ?? ''}`);
-  const withPw = await call('POST', '/api/login', { body: { name: '本机的人', password: 'now-has-pass-1' } });
-  check('补完密码用密码能登 → 200', withPw.status === 200, String(withPw.status));
-  const st1 = await call('GET', '/api/state', { token: TOKEN });
-  check('/api/state 带真人名册（users，只有 id/名字/内置）',
-    Array.isArray(st1.body?.users) && st1.body.users.length >= 2
-      && st1.body.users.every((u) => 'id' in u && 'name' in u && !('salt' in u) && !('hash' in u)),
-    JSON.stringify(st1.body?.users ?? []).slice(0, 120));
-  check('/api/state 的 me = 第一个用户（操作员 = 本机自动登录）',
-    st1.body?.me?.id === first.body?.user?.id && st1.body?.me?.name === ADMIN.name,
-    JSON.stringify(st1.body?.me ?? {}));
+  const sc1 = raw1.headers.get('set-cookie') ?? '';
+  check('会话 Cookie：HttpOnly / SameSite=Lax / 30 天',
+    /HttpOnly/i.test(sc1) && /SameSite=Lax/i.test(sc1) && /Max-Age=2592000/.test(sc1), sc1.slice(0, 80));
 
-  /* ============ ③ 登录 ============ */
-  console.log('\n③ POST /api/login');
-  const bad = await call('POST', '/api/login', { body: { name: ADMIN.name, password: 'nope-nope' } });
-  check('错密码 → 401', bad.status === 401, String(bad.status));
-  check('码 E3805', bad.body?.code === 'E3805', String(bad.body?.code));
-  check('文案统一「用户名或密码不对」（不暴露用户是否存在）',
-    /用户名或密码不对/.test(bad.body?.error ?? '') && !/不存在|没有这个用户/.test(bad.body?.error ?? ''),
-    String(bad.body?.error));
-  const ghost = await call('POST', '/api/login', { body: { name: '根本没这个人', password: 'whatever-1' } });
-  check('不存在的用户名 → **同一条**文案同一个码', ghost.status === 401 && ghost.body?.code === 'E3805'
-    && ghost.body?.error === bad.body?.error, `${ghost.status} ${ghost.body?.error}`);
+  const sidA = `bandi_sid=${first.sid}`;
+  const meA = await call('GET', '/api/me', { cookie: sidA });
+  check('/api/me → kind:user', meA.body?.kind === 'user', `${meA.status} ${JSON.stringify(meA.body ?? {})}`);
+  // 本机名条的名字**随中枢对齐**（登录时自动改名）：老板 → 甲；hub = 绑着的中枢账号
+  check('user = id + name + hub（名字已对齐中枢，无角色 / 凭据字段）', (() => {
+    const u = meA.body?.user;
+    if (!u) return false;
+    const ks = Object.keys(u);
+    return ks.length === 3 && ks.includes('id') && ks.includes('name') && ks.includes('hub')
+      && u.name === '甲' && u.hub === '甲';
+  })(), JSON.stringify(meA.body?.user ?? {}));
+  const meAId = meA.body?.user?.id;
 
-  const good = await call('POST', '/api/login', { body: ADMIN });
-  const adminCookie = cookieOf(good.setCookie);
-  check('对密码 → 200', good.status === 200, String(good.status));
-  check('返回 kind=user + role.menuKeys', good.body?.kind === 'user' && Array.isArray(good.body?.role?.menuKeys),
-    JSON.stringify(good.body?.role?.menuKeys ?? null));
-  check('Set-Cookie 带 bandi_sid 且 HttpOnly / SameSite=Lax / 30 天', !!adminCookie && /HttpOnly/i.test(good.setCookie)
-    && /SameSite=Lax/i.test(good.setCookie) && /Max-Age=2592000/.test(good.setCookie), good.setCookie);
-  check('响应里**没有**密码 / salt / hash 字段',
-    !/password|salt|hash/i.test(JSON.stringify(good.body ?? {})), JSON.stringify(good.body ?? {}).slice(0, 120));
+  /* ============ ⑤b hubAccounts：这台机器认下的中枢账号名单 ============ */
+  console.log('\n⑤b GET /api/users 带出 hubAccounts（中枢账号 ↔ 影子账号绑定）');
+  const users1 = await call('GET', '/api/users');
+  const hub0 = users1.body?.hubAccounts;
+  check('hubAccounts 是数组且正好一行（甲登录时自动认下的那个）',
+    Array.isArray(hub0) && hub0.length === 1, JSON.stringify(hub0));
+  check('行里带 login / userName / lastEnterAt（页面「中枢账号」节的数据源）',
+    hub0?.[0]?.login === '甲' && hub0?.[0]?.userName === '甲' && typeof hub0?.[0]?.lastEnterAt === 'string',
+    JSON.stringify(hub0?.[0] ?? null));
+  check('不回中枢侧凭据（无 deviceToken / publicKey 之类）',
+    !!hub0?.[0] && !Object.keys(hub0[0]).some((k) => /token|secret|key/i.test(k)),
+    JSON.stringify(Object.keys(hub0?.[0] ?? {})));
 
-  /* ============ ④ 会话认人 + 管理员权限 ============ */
-  console.log('\n④ 带会话 Cookie：/api/me 认人、管理员能管账号');
-  const meA = await call('GET', '/api/me', { cookie: adminCookie });
-  check('kind = user', meA.body?.kind === 'user', `${meA.status} ${meA.body?.kind}`);
-  check('role.menuKeys 非空且含 messages', Array.isArray(meA.body?.role?.menuKeys)
-    && meA.body.role.menuKeys.includes('messages'), JSON.stringify(meA.body?.role?.menuKeys));
-  const usersA = await call('GET', '/api/users', { cookie: adminCookie });
-  check('GET /api/users → 200', usersA.status === 200, String(usersA.status));
-  check('列表**不含** salt / hash（连字段都不出现）',
-    Array.isArray(usersA.body?.users) && usersA.body.users.every((u) => !('salt' in u) && !('hash' in u)),
-    JSON.stringify(Object.keys(usersA.body?.users?.[0] ?? {})));
-  const rolesA = await call('GET', '/api/roles', { cookie: adminCookie });
-  check('管理员 GET /api/roles → 200', rolesA.status === 200, String(rolesA.status));
+  /* ============ ⑥ 退出登录 ============ */
+  console.log('\n⑥ 退出登录：会话真删（回环退回 operator）');
+  const lo = await call('POST', '/api/logout', { cookie: sidA });
+  check('POST /api/logout → 200 且种下 Max-Age=0 的清场 Cookie',
+    lo.status === 200 && /bandi_sid=;/.test(lo.setCookie ?? '') && /Max-Age=0/.test(lo.setCookie ?? ''),
+    String(lo.setCookie ?? '').slice(0, 90));
+  const meAfter = await call('GET', '/api/me', { cookie: sidA });
+  check('退出后原票失效：回环退回 operator（不是还挂着一个 user）',
+    meAfter.status === 200 && meAfter.body?.kind === 'operator', `${meAfter.status} ${meAfter.body?.kind}`);
 
-  /* ============ ⑤ 非管理员 ============ */
-  console.log('\n⑤ 非管理员账号：管理口 403、看和用照常');
-  const mk = await call('POST', '/api/users', { token: TOKEN, body: { ...VILLAGER, roleId: 'operator' } });
-  check('建非管理员 → 201', mk.status === 201 && mk.body?.user?.builtin === false, String(mk.status));
-  const vg = await call('POST', '/api/login', { body: VILLAGER });
-  const vCookie = cookieOf(vg.setCookie);
-  check('小李登录 → 200', vg.status === 200, String(vg.status));
-  check('他的 role 是 operator', vg.body?.role?.id === 'operator', String(vg.body?.role?.id));
-  const meV = await call('GET', '/api/me', { cookie: vCookie });
-  check('普通账号也能问 /api/me（前端靠它拿菜单）', meV.status === 200 && meV.body?.kind === 'user', `${meV.status}`);
-  const rolesV = await call('GET', '/api/roles', { cookie: vCookie });
-  check('GET /api/roles → 403（mayManage 拦）', rolesV.status === 403, `${rolesV.status} ${rolesV.body?.code ?? ''}`);
-  const usersV = await call('GET', '/api/users', { cookie: vCookie });
-  check('GET /api/users → 403', usersV.status === 403, `${usersV.status} ${usersV.body?.code ?? ''}`);
-  const postV = await call('POST', '/api/users', { cookie: vCookie, body: { name: '偷建', password: '123456789', roleId: 'admin' } });
-  check('POST /api/users → 403（不能自己给自己升管理员）', postV.status === 403, `${postV.status} ${postV.body?.code ?? ''}`);
-  const stV = await call('GET', '/api/state', { cookie: vCookie });
-  check('GET /api/state → 200（白名单内的"看"照常）', stV.status === 200, String(stV.status));
+  /* ============ ⑦ 第二个中枢账号：认领过后不再自动进门 ============ */
+  console.log('\n⑦ 已认领的机器上，新中枢账号凭对密码也进不来（要 bandi hub allow）');
+  const second = await hubLogin(BASE, { username: '乙', password: '乙-pass-456', origin: BASE });
+  check('乙凭据正确但机器没认过 → 403 原地回登录页', second.status === 403 && second.html.includes('E7003'),
+    `HTTP ${second.status}`);
+  check('拒绝文案指路 bandi hub allow', second.html.includes('bandi hub allow'));
 
-  /* ============ ⑤.5 动态验证（TOTP）：绑定 → 两段式登录 → 恢复码 → 解绑 ============ */
-  /*
-   * 2026-10-31 二改（仿 yaojian-ruoyi）。这一段钉的是**安全边界**，不是"功能能跑"：
-   * 密码对了不给会话、错码不绑、凭据一次性、恢复码一次性、解绑要验码。
-   */
-  console.log('\n⑤.5 动态验证：绑定 → 两段式登录 → 恢复码一次性 → 解绑');
-  const status0 = await call('GET', '/api/me/otp/status', { cookie: vCookie });
-  check('没绑时 status.enabled = false', status0.status === 200 && status0.body?.enabled === false, JSON.stringify(status0.body));
-  const otpOp = await call('GET', '/api/me/otp/status', { token: TOKEN });
-  check('操作员（令牌）没有"自己的验证器" → 401 E3810', otpOp.status === 401 && otpOp.body?.code === 'E3810',
-    `${otpOp.status} ${otpOp.body?.code}`);
+  /* ============ ⑧ 安全接口：只认会话里的身份 ============ */
+  console.log('\n⑧ /api/security/* 只认会话身份（operator 是机器凭据，不是"我"）');
+  // ⑥ 把甲登出了（认领还在 —— 授权表与登录会话是两回事），再登一次拿活会话
+  const again = await hubLogin(BASE, { username: '甲', password: '甲-pass-123', origin: BASE });
+  check('已认领的账号再登录 → 照常 302（认领一次，长期有效）', again.status === 302 && !!again.sid,
+    `HTTP ${again.status}`);
+  const sess = await call('GET', '/api/security/sessions', { cookie: `bandi_sid=${again.sid}` });
+  check('登录用户 GET /api/security/sessions → 200 列表',
+    sess.status === 200 && Array.isArray(sess.body?.sessions) && sess.body.sessions.length >= 1,
+    `${sess.status} ${sess.body?.sessions?.length ?? sess.body?.code}`);
+  check('会话列表只给 8 位指纹，不给 tokenHash 全量',
+    (sess.body?.sessions ?? []).every((s) => typeof s.id === 'string' && s.id.length === 8 && !('tokenHash' in s)),
+    JSON.stringify(Object.keys(sess.body?.sessions?.[0] ?? {})));
+  const audit = await call('GET', '/api/security/audit', { cookie: `bandi_sid=${again.sid}` });
+  check('登录用户读审计日志 → 200', audit.status === 200 && Array.isArray(audit.body?.events), String(audit.status));
+  const opSec = await call('GET', '/api/security/sessions');
+  check('operator（免登录的机器身份）→ 401 E3810', opSec.status === 401 && opSec.body?.code === 'E3810',
+    `${opSec.status} ${opSec.body?.code ?? ''}`);
 
-  const bind = await call('POST', '/api/me/otp/bind', { cookie: vCookie });
-  const secret = String(bind.body?.secret ?? '');
-  check('发起绑定 → 200 给 base32 密钥', bind.status === 200 && secret.length >= 16, `${bind.status} / ${secret.length} 字符`);
-  check('给了 otpauth:// 串（给验证器扫码）', String(bind.body?.uri ?? '').startsWith('otpauth://totp/'),
-    String(bind.body?.uri ?? '').slice(0, 42));
-  check('这一步**不落库**（没验码就还是未开启）',
-    (await call('GET', '/api/me/otp/status', { cookie: vCookie })).body?.enabled === false);
+  /* ============ ⑨ 登录失败：原地回登录页 ============ */
+  console.log('\n⑨ 登录失败：原地回登录页（中枢的拒绝，本机不遮不掩）');
+  const bad = await hubLogin(BASE, { username: '甲', password: 'not-the-password', origin: BASE });
+  check('错密码 → 401 回登录页（表单还在，能重输）', bad.status === 401 && bad.html.includes('action="/hub/login"'),
+    `HTTP ${bad.status}`);
+  // 登录即注册：没见过的手机号在中枢侧注册成功，但这台机器认领已关闭 → 挡在授权表
+  const ghostLogin = await hubLogin(BASE, { username: '13900139000', password: 'whatever-123', origin: BASE });
+  check('没注册过的手机号 → 中枢自动注册成功，但机器没认过 → 403 E7003',
+    ghostLogin.status === 403 && ghostLogin.html.includes('E7003'), `HTTP ${ghostLogin.status}`);
 
-  const code1 = codeAt(secret);
-  const notCode = code1 === '000000' ? '000001' : '000000';
-  const badBind = await call('POST', '/api/me/otp/bind/confirm', { cookie: vCookie, body: { secret, code: notCode } });
-  check('错码确认 → 401 E3820（不许"先绑定后验"）', badBind.status === 401 && badBind.body?.code === 'E3820',
-    `${badBind.status} ${badBind.body?.code}`);
-  const rec = await call('POST', '/api/me/otp/bind/confirm', { cookie: vCookie, body: { secret, code: code1 } });
-  const recCodes = rec.body?.recoveryCodes ?? [];
-  check('对码 → 绑定成功，一次性给 10 个恢复码', rec.status === 200 && recCodes.length === 10,
-    `${rec.status} / ${recCodes.length} 个`);
-  check('恢复码 8 位、字符集剔除易混字、响应里不再出现明文密钥',
-    recCodes.every((c) => /^[A-Za-z2-9]{8}$/.test(c)) && !JSON.stringify(rec.body ?? {}).includes(secret), recCodes[0]);
-  const status1 = await call('GET', '/api/me/otp/status', { cookie: vCookie });
-  check('status：enabled = true、剩余恢复码 10', status1.body?.enabled === true && status1.body?.recoveryLeft === 10,
-    JSON.stringify(status1.body));
-
-  // 第一段：密码过了**不发会话**，只发一张一次性凭据
-  const seg1 = await call('POST', '/api/login', { body: VILLAGER });
-  check('开了动态验证：密码对了也只回 needOtp（不给会话）',
-    seg1.status === 200 && seg1.body?.needOtp === true && !seg1.setCookie,
-    `${seg1.status} needOtp=${seg1.body?.needOtp} cookie=${seg1.setCookie ? '有' : '无'}`);
-  check('发了一张一次性 otpToken', typeof seg1.body?.otpToken === 'string' && seg1.body.otpToken.length > 20);
-  const bad2 = await call('POST', '/api/login/otp', { body: { otpToken: seg1.body?.otpToken, code: notCode } });
-  check('第二段错码 → 401 E3820 且不发会话', bad2.status === 401 && bad2.body?.code === 'E3820' && !bad2.setCookie,
-    `${bad2.status} ${bad2.body?.code}`);
-  const seg2 = await call('POST', '/api/login/otp', { body: { otpToken: seg1.body?.otpToken, code: codeAt(secret) } });
-  const otpCookie = cookieOf(seg2.setCookie);
-  check('第二段对码 → 200 + bandi_sid 会话', seg2.status === 200 && !!otpCookie && seg2.body?.kind === 'user', String(seg2.status));
-  check('这张会话确实是小李本人', (await call('GET', '/api/me', { cookie: otpCookie })).body?.user?.name === VILLAGER.name);
-  check('同一张凭据不能再用第二次（一次性）',
-    (await call('POST', '/api/login/otp', { body: { otpToken: seg1.body?.otpToken, code: codeAt(secret) } })).status === 401);
-
-  // 恢复码：手机丢了那条路，用一次删一个
-  const seg3 = await call('POST', '/api/login', { body: VILLAGER });
-  const viaRec = await call('POST', '/api/login/otp', { body: { otpToken: seg3.body?.otpToken, code: recCodes[0] } });
-  check('恢复码能过第二段', viaRec.status === 200 && !!cookieOf(viaRec.setCookie), String(viaRec.status));
-  const left = (await call('GET', '/api/me/otp/status', { cookie: vCookie })).body?.recoveryLeft;
-  check('恢复码用一次就从库里删掉（剩 9）', left === 9, String(left));
-  const seg4 = await call('POST', '/api/login', { body: VILLAGER });
-  const reuse = await call('POST', '/api/login/otp', { body: { otpToken: seg4.body?.otpToken, code: recCodes[0] } });
-  check('同一个恢复码第二次 → 401（一次性）', reuse.status === 401, `${reuse.status} ${reuse.body?.code}`);
-
-  // 解绑也必须验码
-  const unbindBad = await call('POST', '/api/me/otp/unbind', { cookie: vCookie, body: { code: notCode } });
-  check('解绑不给对码 → 401 E3820（手机丢了也不该被别人顺手关掉）',
-    unbindBad.status === 401 && unbindBad.body?.code === 'E3820', `${unbindBad.status}`);
-  const unbindOk = await call('POST', '/api/me/otp/unbind', { cookie: vCookie, body: { code: codeAt(secret) } });
-  check('给当前动态码 → 解绑成功', unbindOk.status === 200 && unbindOk.body?.ok === true, String(unbindOk.status));
-  const seg5 = await call('POST', '/api/login', { body: VILLAGER });
-  check('解绑后登录回到单段（密码对了直接发会话）', seg5.status === 200 && !!cookieOf(seg5.setCookie), String(seg5.status));
-
-  /* ============ ⑥ 内置保护 / 最后一个管理员 ============ */
-  console.log('\n⑥ 内置管理员的三道保护（= 最后一个管理员不能被移除）');
-  const adminId = first.body?.user?.id;
-  const delAdmin = await call('DELETE', `/api/users/${encodeURIComponent(adminId)}`, { cookie: adminCookie });
-  check('删内置管理员 → 403 E3808', delAdmin.status === 403 && delAdmin.body?.code === 'E3808',
-    `${delAdmin.status} ${delAdmin.body?.code}`);
-  const roleAdmin = await call('PATCH', `/api/users/${encodeURIComponent(adminId)}`, {
-    cookie: adminCookie, body: { roleId: 'operator' },
-  });
-  check('改内置管理员的角色 → 403 E3808', roleAdmin.status === 403 && roleAdmin.body?.code === 'E3808',
-    `${roleAdmin.status} ${roleAdmin.body?.code}`);
-  const disAdmin = await call('PATCH', `/api/users/${encodeURIComponent(adminId)}`, {
-    cookie: adminCookie, body: { disabled: true },
-  });
-  check('禁用内置管理员 → 403 E3808', disAdmin.status === 403 && disAdmin.body?.code === 'E3808',
-    `${disAdmin.status} ${disAdmin.body?.code}`);
-  // 反证：内置管理员还在，所以**别的** admin 可以被降级（保护不是误伤）
-  const mkAdmin2 = await call('POST', '/api/users', { token: TOKEN, body: { name: '老张', password: 'zhang-pass-1', roleId: 'admin' } });
-  const demote = await call('PATCH', `/api/users/${encodeURIComponent(mkAdmin2.body?.user?.id)}`, {
-    cookie: adminCookie, body: { roleId: 'operator' },
-  });
-  check('另一个 admin 可以被降级（内置那把钥匙还在，不误伤）', demote.status === 200, `${demote.status} ${demote.body?.code ?? ''}`);
-
-  /* ============ ⑦ 退出登录 ============ */
-  console.log('\n⑦ 退出登录：原 Cookie 立刻失效');
-  const lo = await call('POST', '/api/logout', { cookie: vCookie });
-  check('POST /api/logout → 200 且清 Cookie', lo.status === 200 && /bandi_sid=;/.test(lo.setCookie || ''), lo.setCookie);
-  // 两张票一起清（2026-10-31 实报）：令牌 Cookie 一年有效，不清的话令牌浏览器永远走不到登录页
-  const loTok = await call('POST', '/api/logout', { token: TOKEN });
-  check('退出登录把访问令牌 Cookie 也清掉（令牌浏览器才能走回登录页）',
-    /bandi_token=;/.test(loTok.setCookie ?? ''), String(loTok.setCookie ?? '').slice(0, 90));
-  const meAfter = await call('GET', '/api/me', { cookie: vCookie });
-  check('原 Cookie 再打 /api/me → 401', meAfter.status === 401, `${meAfter.status} ${meAfter.body?.code ?? ''}`);
-
-  /* ============ ⑧ 会话落库 + 伪造 Cookie ============ */
-  console.log('\n⑧ 会话落库：重启后仍有效；伪造的一律 401');
+  /* ============ ⑩ 会话落库 + 服务器形态 ============ */
+  console.log('\n⑩ 会话落库：重启后仍有效；服务器形态下死票 / 伪造票一律 401');
   await stopAll();
-  start({ BANDI_HOST: '0.0.0.0', BANDI_TOKEN: TOKEN });
+  start({ BANDI_HOST: '0.0.0.0', BANDI_TOKEN: TOKEN }); // 同一份数据目录，换成对外监听
   if (!(await waitUp())) throw new Error('重启后没起来：' + log.slice(-500));
-  const meR = await call('GET', '/api/me', { cookie: adminCookie });
-  check('重启服务后原 Cookie 仍有效（会话在库里，不是内存）', meR.status === 200 && meR.body?.kind === 'user',
+  const meR = await call('GET', '/api/me', { cookie: `bandi_sid=${again.sid}` });
+  check('重启后甲的会话仍有效（会话在库里，不是内存）',
+    meR.status === 200 && meR.body?.kind === 'user' && meR.body?.user?.id === meAId,
     `${meR.status} ${meR.body?.kind ?? meR.body?.code}`);
-  const fake = await call('GET', '/api/me', { cookie: 'bandi_sid=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' });
-  check('伪造 Cookie → 401', fake.status === 401, String(fake.status));
-
-  /* ============ ⑨ 改密码踢下线 ============ */
-  console.log('\n⑨ 改密码 = 别处登过的全部下线');
-  const relogin = await call('POST', '/api/login', { body: ADMIN });
-  const c2 = cookieOf(relogin.setCookie);
-  check('重新登录拿到新票', relogin.status === 200 && !!c2);
-  const chpw = await call('PATCH', `/api/users/${encodeURIComponent(adminId)}`, {
-    cookie: c2, body: { password: 'new-wang-pass-9' },
-  });
-  check('改密码 → 200', chpw.status === 200, `${chpw.status} ${chpw.body?.code ?? ''}`);
-  const meCh = await call('GET', '/api/me', { cookie: c2 });
-  check('改完密码，刚那张票立刻失效', meCh.status === 401, String(meCh.status));
-  const oldpw = await call('POST', '/api/login', { body: ADMIN });
-  check('旧密码登不进 → 401', oldpw.status === 401, String(oldpw.status));
-  const newpw = await call('POST', '/api/login', { body: { name: ADMIN.name, password: 'new-wang-pass-9' } });
-  check('新密码能登 → 200', newpw.status === 200, String(newpw.status));
-
-  /* ============ ⑩ 登录限速 ============ */
-  console.log('\n⑩ 登录失败限速：同一 IP + 同一用户名 5 分钟 5 次 → 429');
-  const ghostName = '限速测试用';
-  let saw429 = false;
-  let last = null;
-  for (let i = 0; i < 6; i += 1) {
-    last = await call('POST', '/api/login', { body: { name: ghostName, password: 'wrong-pass' } });
-    if (last.status === 429) { saw429 = true; break; }
-  }
-  check('连打 6 次至少出现一次 429（E4095；E3806 已作废，见 IAM §11.1）', saw429 && last?.body?.code === 'E4095',
-    `${last?.status} ${last?.body?.code ?? ''}`);
-  // 落库锁定（IAM §11.1）：ghost 名不存在落不了库（内存窗口独挡），所以要**存在的用户**：
-  const lockMe = await call('POST', '/api/users', { token: TOKEN, body: { name: '锁定测试员', password: 'lock-pass-123', roleId: 'operator' } });
-  check('建一个专用账号验锁定 → 201', lockMe.status === 201, `${lockMe.status} ${lockMe.raw?.slice(0, 160)}`);
-  let lockSaw429 = false;
-  let lockLast = null;
-  for (let i = 0; i < 6; i += 1) {
-    lockLast = await call('POST', '/api/login', { body: { name: '锁定测试员', password: 'totally-wrong' } });
-    if (lockLast.status === 429) { lockSaw429 = true; break; }
-  }
-  check('存在的用户连错 5 次 → 429（内存窗口 + 落库锁定双成立）', lockSaw429,
-    `${lockLast?.status} ${lockLast?.body?.code ?? ''}`);
-  // 重启（⑧ 同款）：内存窗口清零 → 不存在的用户名回到 401；**库里的 lockedUntil 还在** →
-  // 专用账号仍 429 —— "重启一次就解锁"在无人值守形态等于没锁，这正是要落库的原因。
-  await stopAll();
-  start({ BANDI_HOST: '0.0.0.0', BANDI_TOKEN: TOKEN });
-  if (!(await waitUp())) throw new Error('重启后没起来：' + log.slice(-500));
-  const ghostAfter = await call('POST', '/api/login', { body: { name: ghostName, password: 'wrong-pass' } });
-  check('重启后不存在的用户名回到 401（内存窗口确实清了）', ghostAfter.status === 401,
-    `${ghostAfter.status} ${ghostAfter.body?.code ?? ''}`);
-  const lockAfter = await call('POST', '/api/login', { body: { name: '锁定测试员', password: 'totally-wrong' } });
-  check('重启后专用账号仍 429（锁定落库，重启不清零）', lockAfter.status === 429 && lockAfter.body?.code === 'E4095',
-    `${lockAfter.status} ${lockAfter.body?.code ?? ''}`);
-
-  /* ============ ⑩.5 删角色前要问「还有没有账号在用」 ============ */
-  /*
-   * 悬空 roleId 的后果：`/api/me` 回 role=null → 前端拿不到 menuKeys → 菜单全消失，
-   * 人只会觉得"我被降权了"。所以角色被账号绑着时必须拦住，先把账号换走。
-   */
-  console.log('\n⑩.5 删角色前要问「还有没有账号在用」');
-  const tmpRole = await call('POST', '/api/roles', { token: TOKEN, body: { name: '临时角色', menuKeys: ['messages'] } });
-  const tmpRoleId = tmpRole.body?.role?.id;
-  check('建一个临时角色 → 201', tmpRole.status === 201 && !!tmpRoleId, `${tmpRole.status}`);
-  const tmpUser = await call('POST', '/api/users', {
-    token: TOKEN,
-    body: { name: '临时工', password: 'temp-pass-01', roleId: tmpRoleId },
-  });
-  check('建一个用它的账号 → 201', tmpUser.status === 201, String(tmpUser.status));
-  const delUsed = await call('DELETE', `/api/roles/${encodeURIComponent(tmpRoleId)}`, { token: TOKEN });
-  check('删还有账号在用的角色 → 409 E2071', delUsed.status === 409 && delUsed.body?.code === 'E2071',
-    `${delUsed.status} ${delUsed.body?.code ?? ''}`);
-  await call('DELETE', `/api/users/${encodeURIComponent(tmpUser.body?.user?.id)}`, { token: TOKEN });
-  const delFree = await call('DELETE', `/api/roles/${encodeURIComponent(tmpRoleId)}`, { token: TOKEN });
-  check('账号删掉后可以删角色 → 200', delFree.status === 200, String(delFree.status));
-
-  /* ============ ⑪ 不回归：回环形态 ============ */
-  /*
-   * 任务书 §三 第一条硬约束：`operator` / `device` / `node` 的行为**一个字节都不许变**。
-   * 最容易踩的就是「回环分支有没有排在会话检查前面」—— 排后面的话，本机打不开自己的面板。
-   */
-  console.log('\n⑪ 不回归：回环形态照旧免登录 operator（API），但**面板要登录**（2026-10-31）');
-  await stopAll();
-  start({ BANDI_HOST: '127.0.0.1' }); // 显式钉回环：2026-11-04 起缺省是 0.0.0.0（对外），不设就测不到这条
-  if (!(await waitUp())) throw new Error('回环实例没起来：' + log.slice(-500));
-  const meLoop = await call('GET', '/api/me');
-  check('回环 /api/me → operator（不需要任何凭据）', meLoop.status === 200 && meLoop.body?.kind === 'operator',
-    `${meLoop.status} ${meLoop.body?.kind}`);
-  const meLoopJunk = await call('GET', '/api/me', { cookie: 'bandi_sid=garbage-value' });
-  check('回环下带一张乱码 Cookie 也还是 operator（回环分支在会话之前）',
-    meLoopJunk.status === 200 && meLoopJunk.body?.kind === 'operator', `${meLoopJunk.status} ${meLoopJunk.body?.kind}`);
-  const stLoop = await call('GET', '/api/state');
-  check('回环 /api/state 照旧免登录 200', stLoop.status === 200, String(stLoop.status));
-  // 同一个数据目录里已经有用户了（② 里建的）—— 回环操作员的「我」自动落到第一个用户头上
-  check('回环 /api/state 的 me = 第一个用户（本机自动登录）',
-    stLoop.body?.me?.id === first.body?.user?.id, JSON.stringify(stLoop.body?.me ?? {}));
-  /*
-   * ⑪.1 面板要登录（2026-10-31）：这台"机器"已经建过账号，回环抓首页没会话 → 登录页
-   * （账号磁贴）；免密账号从磁贴那条路（/api/login 空密码）进来后，同一张首页就是面板。
-   */
-  const pageLoop = await fetch(BASE + '/', { headers: { Accept: 'text/html' }, signal: AbortSignal.timeout(5000) });
-  const htmlLoop = await pageLoop.text();
-  check('回环抓首页（有账号、无会话）→ 登录页带账号磁贴',
-    pageLoop.status === 200 && htmlLoop.includes('id="tiles"') && !htmlLoop.includes('/app.mjs'),
-    String(pageLoop.status));
-  const tileLogin = await call('POST', '/api/login', { body: { name: ADMIN.name, password: 'new-wang-pass-9' } });
-  const loopCookie = cookieOf(tileLogin.setCookie);
-  check('磁贴那条路 = /api/login（管理员密码登录）→ 200', tileLogin.status === 200 && !!loopCookie,
-    String(tileLogin.status));
-  const pageIn = await fetch(BASE + '/', {
-    headers: { Accept: 'text/html', Cookie: loopCookie }, signal: AbortSignal.timeout(5000),
-  });
-  const htmlIn = await pageIn.text();
-  check('带着会话票抓首页 → 面板本体（不再挡登录页）',
-    pageIn.status === 200 && htmlIn.includes('/app.mjs') && !htmlIn.includes('id="tiles"'), String(pageIn.status));
-  const meLoopUser = await call('GET', '/api/me', { cookie: loopCookie });
-  check('回环 + 会话：/api/me 按登录人算（不再永远是 operator）',
-    meLoopUser.status === 200 && meLoopUser.body?.kind === 'user' && meLoopUser.body?.user?.name === ADMIN.name,
-    `${meLoopUser.status} ${JSON.stringify(meLoopUser.body?.user ?? {})}`);
+  const meDead = await call('GET', '/api/me', { cookie: sidA });
+  check('⑥ 里退出那张票重启后也是死的 → 401（删除是持久的）', meDead.status === 401,
+    `${meDead.status} ${meDead.body?.code ?? ''}`);
+  const fake = await call('GET', '/api/me', { cookie: `bandi_sid=${'A'.repeat(43)}` });
+  check('伪造 Cookie → 401', fake.status === 401, `${fake.status} ${fake.body?.code ?? ''}`);
+  const meNoCred = await call('GET', '/api/me');
+  check('服务器形态：不带凭据 → 401 E4010（机器侧的闸没跟着放宽）',
+    meNoCred.status === 401 && meNoCred.body?.code === 'E4010', `${meNoCred.status} ${meNoCred.body?.code ?? ''}`);
+  const stTok = await call('GET', '/api/state', { token: TOKEN });
+  check('共享令牌照旧能读 /api/state（⑨ 的兜底：root 没被关在门外）', stTok.status === 200, String(stTok.status));
 
   console.log(`\n${failed ? '✗ 有 ' + failed + ' 项没过' : '✓ 全部通过'}`);
 } catch (err) {

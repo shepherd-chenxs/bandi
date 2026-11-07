@@ -307,7 +307,7 @@ export async function handlePair(req, res, url) {
      */
     if (a?.kind === 'user') {
       const u = store.getUser(a.userId);
-      return sendJson(res, 200, { kind: 'user', user: u ? { id: u.id, name: u.name } : null, roleId: a.roleId });
+      return sendJson(res, 200, { kind: 'user', user: u ? { id: u.id, name: u.name } : null });
     }
     // operator（含回环免鉴权形态标出来的 operator）
     return sendJson(res, 200, { kind: 'operator' });
@@ -391,28 +391,6 @@ export async function handlePair(req, res, url) {
     const r = store.unpairDevice(id);
     console.log(`[配对] 取消配对 ${id}（吊销 ${r.revoked} 枚令牌，设备行已删）`);
     return sendJson(res, 200, { ok: true, revoked: r.revoked });
-  }
-
-  /* -------------------------------------------- 操作员：给手机分配面板角色 */
-  /**
-   * `POST /api/pair/devices/:id/role {roleId|null}`（2026-10-28 第四刀）。
-   *
-   * 与节点那条同构：只存总机侧一行，**下发发生在设备的下一次请求**（手机每次打开都问
-   * `/api/me`，那里带 `role.menuKeys`）。所以这里同样只说"存好了"。
-   * `roleId: null / ''` = 恢复默认（`mobile`：手机底部那四个 tab）。
-   */
-  const roleOf = /^\/api\/pair\/devices\/([^/]+)\/role$/.exec(p);
-  if (method === 'POST' && roleOf) {
-    // 闸已收编 PDP：pair.device.role = perm:'device:manage'
-
-    const id = decodeURIComponent(roleOf[1]);
-    if (!store.getDevice(id)) return fail(res, 404, 'E2701', '没有这台设备');
-    const body = await readBody(req);
-    const want = body?.roleId === undefined || body?.roleId === null ? '' : String(body.roleId).trim();
-    if (want && !store.getRole(want)) return fail(res, 400, 'E2072', `没有这个角色：${want}`);
-    const next = store.setDeviceRole(id, want || null);
-    console.log(`[配对] 手机 ${id} 的面板角色改成 ${want || `默认（${store.DEFAULT_PHONE_ROLE}）`}`);
-    return sendJson(res, 200, { deviceId: id, roleId: next?.roleId ?? null, role: store.roleOrDefault(next?.roleId, store.DEFAULT_PHONE_ROLE) });
   }
 
   return false;

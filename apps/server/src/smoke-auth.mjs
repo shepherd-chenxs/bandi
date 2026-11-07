@@ -1,16 +1,20 @@
 /**
- * 访问令牌的验收（2026-10-15）。
+ * 访问闸的验收（2026-11-07 中枢登录一刀后重写）。
  *
- * 规则只有一条，但**不能靠人记**：闸开不开只看**监听地址**。
- *   ① 只监听回环 → 免鉴权（桌面版/单机；"单机不需要 token"是硬约束）；
- *   ② 监听非回环 → **所有请求**都要令牌（服务器）；
- *   ③ 令牌三种带法都认：Cookie（浏览器）、`X-Bandi-Token` 头（节点/脚本）、`?token=`（首次进）；
- *   ④ 没带/带错：API 给 401 JSON（带 `platform: 'bandi'`），浏览器给登录页；
- *   ⑤ **`isUp()` 必须把 401 认成"是班底、只是要令牌"** ——
- *      否则启动器会把它当成"没起来"而再起一个，把现场搞乱；
- *   ⑥ 令牌落盘、重启不变；节点带着令牌能报到、不带会被拒。
+ * 闸现在分**两层**，别混：
+ *   · **机器层**（①-⑤、⑦-⑪）：令牌闸开不开只看**监听地址** ——
+ *     只监听回环 → API 免鉴权（桌面版/单机；"单机不需要 token"是硬约束）；
+ *     监听非回环 → **所有请求**都要令牌（服务器）；
+ *     令牌三种带法都认：Cookie（浏览器）、`X-Bandi-Token` 头（节点/脚本）、`?token=`（首次进）；
+ *     没带/带错：API 给 401 JSON（带 `platform: 'bandi'`），浏览器给登录页；
+ *     **`isUp()` 必须把 401 认成"是班底、只是要令牌"** —— 否则启动器会把它当成"没起来"而再起一个；
+ *     令牌落盘、重启不变；节点带着令牌能报到、不带会被拒。
+ *   · **人层**（③⑥）：面板 HTML 只给**登录会话**（bandi_sid）。本地账号体系已整体退场
+ *     （BANDI_HUB=off 这个选项没了），唯一的登录是中枢账号密码框（POST /hub/login）——
+ *     测试把 BANDI_HUB 指到假中枢（hub-stub.mjs），不然就会去连真的 hub.yuancang.space。
+ *     **令牌不是人**：operator 抓面板 HTML 也只得到登录页，令牌继续管 API（脚本/CLI/节点）。
  *
- * 隔离：临时数据目录 + 临时端口。
+ * 隔离：临时数据目录 + 临时端口 + 假中枢。
  * 跑法：node apps/server/src/smoke-auth.mjs
  */
 import fs from 'node:fs';
@@ -18,7 +22,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { repoRoot } from './config.mjs';
-import { isUp, listeners, stopRunning, sleep } from './lifecycle.mjs';
+import { isUp, stopRunning, sleep } from './lifecycle.mjs';
+// 假中枢 + 登录帮手：造人层会话只有一条真路 —— 起个假中枢，让本机把登录表单转给它
+import { startHubStub, hubLogin } from './hub-stub.mjs';
 
 const P_LOOP = Number(process.env.SMOKE_PORT ?? 8850);
 const P_OPEN = P_LOOP + 1;
@@ -37,14 +43,17 @@ const started = [];
 function start(port, extra = {}) {
   /*
    * ⚠️ **剥掉继承来的 BANDI_HOST**（2026-11-03）：run-smokes 给所有子进程钉
-   * `BANDI_HOST=127.0.0.1` 当免鉴权底座，而 ⑨ 测的恰恰是"**不给** BANDI_HOST
-   * = 缺省 0.0.0.0 + 自动要令牌" —— 不剥的话 ⑨ 拿到的是继承来的回环，永远测不到缺省。
+   * `BANDI_HOST=127.0.0.1` 当免鉴权底座，而 ⑩ 测的恰恰是"**不给** BANDI_HOST
+   * = 缺省 0.0.0.0 + 自动要令牌" —— 不剥的话 ⑩ 拿到的是继承来的回环，永远测不到缺省。
    * 各形态要什么监听地址，用例自己在 extra 里显式给。
+   *
+   * ⚠️ BANDI_HUB **必须**显式指到假中枢（2026-11-07）：本地登录没了，中枢地址永远有值
+   * （内置默认），不指就会去连真的 hub.yuancang.space —— 那不是测试该干的事。
    */
   const { BANDI_HOST: _inheritedHost, ...baseEnv } = process.env;
   const c = spawn(process.execPath, [SERVER], {
     cwd: repoRoot,
-    env: { ...baseEnv, BANDI_PORT: String(port), BANDI_DATA: tmp, BANDI_DB: path.join(tmp, 'bandi.db'), ...extra },
+    env: { ...baseEnv, BANDI_PORT: String(port), BANDI_DATA: tmp, BANDI_DB: path.join(tmp, 'bandi.db'), BANDI_HUB: HUB.url, ...extra },
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -91,9 +100,12 @@ const send = async (base, p, { method = 'POST', body = {}, headers = {} } = {}) 
   return { status: r.status, headers: r.headers, text, json: (() => { try { return JSON.parse(text); } catch { return null; } })() };
 };
 
+/* 假中枢：一个中枢账号（⑥ 的人层会话从它来） */
+const HUB = await startHubStub({ deviceId: 'dev_self', accounts: { 甲: { password: '甲-pass-123' } } });
+
 try {
   /* ---------------------------------------------- ① 回环：免鉴权 */
-  console.log('① 只监听回环 → 免鉴权（桌面版/单机那条路）');
+  console.log('① 只监听回环 → API 免鉴权（桌面版/单机那条路）');
   const a = start(P_LOOP, { BANDI_HOST: '127.0.0.1' });
   const baseA = `http://127.0.0.1:${P_LOOP}`;
   if (!(await waitUp(baseA))) throw new Error('回环那台没起来：' + a.log().slice(-400));
@@ -123,19 +135,31 @@ try {
     (logText.match(/访问令牌：.+/) ?? ['(没打这一行)'])[0].slice(0, 64),
   );
 
-  console.log('\n③ 不带令牌：API 给 401、浏览器给登录页');
+  console.log('\n③ 不带令牌：API 给 401、浏览器给中枢登录页');
   const noTok = await get(baseB, '/api/state');
   check('API 返回 401', noTok.status === 401, String(noTok.status));
   check('正文带 platform=bandi（给启动器认的）', noTok.json?.platform === 'bandi', JSON.stringify(noTok.json));
   check('错误码是 E4010', noTok.json?.code === 'E4010', String(noTok.json?.code));
-  const page = await get(baseB, '/');
   /*
-   * 2026-10-31 改口径：零账号时的登录页不再是"填令牌"表单，而是**建号表单**
-   * （用户拍板「不管总机还是分机，都要用用户来登录」—— 公网服务器上"先令牌后建号"走不通，
-   * 人不在那台机器旁边）。所以这里钉的是「给的是建号页、且不泄面板」。
+   * 2026-11-07 改口径：本地账号体系退场，登录页只剩**一张** —— 中枢账号密码框。
+   * 「登录即注册」：没有单独的注册按钮，页脚写明「提交就自动创建」（routes/hub.mjs
+   * 的 mode 注释同口径），没有"零账号给建号页"的分支了。这里钉的是「给的是中枢登录页、且不泄面板」。
    */
-  check('浏览器要页面 → 200 建号页（零账号的首次引导）', page.status === 200 && page.text.includes('id="signForm"'), `${page.status}`);
-  check('建号页说清"第一个账号 = 管理员"', page.text.includes('创建第一个账号') && page.text.includes('管理员'));
+  const page = await get(baseB, '/');
+  check('浏览器要页面 → 200 中枢登录页（零账号也是它）', page.status === 200 && page.text.includes('action="/hub/login"'), `${page.status}`);
+  check('登录页有手机号+密码输入框，注册没有独立按钮（登录即注册）',
+    page.text.includes('name="username"') && page.text.includes('type="password"')
+    && page.text.includes('提交就自动创建') && !page.text.includes('value="register"'));
+  check('不是面板（/app.mjs 不出现在登录页）', !page.text.includes('/app.mjs'));
+  /*
+   * ⚠️ 静态资源**不能**吃到登录页 HTML（2026-11-02 三十三改）：/app.mjs 这类非页面请求
+   * 没有 Accept: text/html，落到 401 JSON —— 回成 HTML 的话浏览器按 module 执行必然报
+   * 语法错误，看起来像"文件没部署上"，比 401 难查得多。
+   */
+  const staticNoTok = await get(baseB, '/app.mjs');
+  check('静态文件没凭据 → 401 JSON E4010（不是登录页 HTML）',
+    staticNoTok.status === 401 && staticNoTok.json?.code === 'E4010' && /application\/json/.test(staticNoTok.headers.get('content-type') ?? ''),
+    `${staticNoTok.status} ${staticNoTok.headers.get('content-type')}`);
 
   console.log('\n④ 三种带法都认');
   check('头 X-Bandi-Token', (await get(baseB, '/api/state', { 'X-Bandi-Token': token })).status === 200);
@@ -147,17 +171,45 @@ try {
   check('带 Cookie 能读', (await get(baseB, '/api/state', { Cookie: cookie })).status === 200);
   check('令牌错的 → 401', (await get(baseB, '/api/state', { 'X-Bandi-Token': 'wrong-token' })).status === 401);
   /*
-   * 错令牌不许换出面板（2026-10-31 改）：零账号时这一页是建号页、有账号时是密码页，
-   * 两种都**没有令牌入口**了 —— 所以这里不再找"令牌不对"文案，只钉"进不去"。
+   * 错令牌不许换出面板（口径随 2026-11-07 一刀更新）：**令牌不是人** —— 面板 HTML 只给
+   * 登录会话，带令牌/错令牌抓首页一律得到中枢登录页。令牌继续管 API（上面那些 200）。
    */
   const badPage = await get(baseB, '/?token=wrong');
-  check('错令牌 → 还是登录页，不是面板', badPage.status === 200 && badPage.text.includes('id="signForm"') && !badPage.text.includes('id="app"'));
+  check('错令牌 → 还是登录页，不是面板',
+    badPage.status === 200 && badPage.text.includes('action="/hub/login"') && !badPage.text.includes('/app.mjs'));
+  const tokPage = await get(baseB, '/', { Cookie: cookie });
+  check('对令牌抓首页**同样**是登录页（令牌不是"我"，登录只认会话）',
+    tokPage.status === 200 && tokPage.text.includes('action="/hub/login"') && !tokPage.text.includes('/app.mjs'));
 
   console.log('\n⑤ isUp 必须把 401 认成"是班底、只是要令牌"');
   check('isUp(非回环控制面) === true', (await isUp(P_OPEN)) === true);
   check('这也是启动器不会误判的前提（否则会再起一个）', await isUp(P_OPEN));
 
-  console.log('\n⑥ 节点：带令牌能报到，不带会被明确拒绝');
+  /*
+   * ⑥ **人走中枢**（2026-11-07）：/hub/login 是唯一的登录。
+   *
+   * 表单提交到本机 /hub/login → 主机转给假中枢认人 → 绑本地影子用户 → 发 bandi_sid。
+   * 失败（中枢拒绝）原地回登录页；成功进面板。这一节也钉住"面板 vs 登录页"的分界线：
+   * 同一台服务器，有没有会话就是两种页面。
+   */
+  console.log('\n⑥ 人走中枢：POST /hub/login 全链（假中枢）');
+  const badLogin = await hubLogin(baseB, { username: '甲', password: 'not-the-password', origin: baseB });
+  check('错密码 → 401 原地回登录页（中枢的拒绝，本机不遮）',
+    badLogin.status === 401 && badLogin.html.includes('action="/hub/login"'), `HTTP ${badLogin.status}`);
+  const okLogin = await hubLogin(baseB, { username: '甲', password: '甲-pass-123', origin: baseB });
+  check('对的账号密码 → 302 回首页 + bandi_sid',
+    okLogin.status === 302 && okLogin.location === '/' && !!okLogin.sid, `HTTP ${okLogin.status}`);
+  const panel = await get(baseB, '/', { Cookie: `bandi_sid=${okLogin.sid}`, Accept: 'text/html' });
+  check('带着中枢会话 → 面板本体（<title>班底</title>）',
+    panel.status === 200 && panel.text.includes('<title>班底</title>') && panel.text.includes('/app.mjs'), String(panel.status));
+  const meHub = await get(baseB, '/api/me', { Cookie: `bandi_sid=${okLogin.sid}` });
+  check('/api/me → kind=user（本地影子账号随登录自动建好）',
+    meHub.json?.kind === 'user' && meHub.json?.user?.name === '甲', JSON.stringify(meHub.json ?? {}));
+  const anon = await get(baseB, '/');
+  check('同一台服务器，没会话就还是登录页（面板只给登录的人）',
+    anon.status === 200 && anon.text.includes('action="/hub/login"') && !anon.text.includes('/app.mjs'));
+
+  console.log('\n⑦ 节点：带令牌能报到，不带会被明确拒绝');
   const runNode = (env) =>
     new Promise((resolve) => {
       const c = spawn(process.execPath, [NODE, '--once'], {
@@ -179,7 +231,7 @@ try {
   const devs = await get(baseB, '/api/devices', { 'X-Bandi-Token': token });
   check('设备列表里能看到这个节点', (devs.json?.devices ?? []).some((d) => d.kind === 'node'), JSON.stringify((devs.json?.devices ?? []).map((d) => d.id)));
 
-  console.log('\n⑦ 令牌重启不变（否则每次重启都得重新登录）');
+  console.log('\n⑧ 令牌重启不变（否则每次重启都得重新登录）');
   await cleanup();
   const c2 = start(P_OPEN, { BANDI_HOST: '0.0.0.0' });
   if (!(await waitUp(baseB))) throw new Error('第二次没起来：' + c2.log().slice(-400));
@@ -188,12 +240,12 @@ try {
   check('日志标了"不是本次新建"', !/本次新生成/.test(c2.log()), (c2.log().match(/来自 .*/) ?? ['(没有)'])[0]);
 
   /*
-   * ⑧ **每节点令牌 ＋ 权限边界**（2026-10-16）。
+   * ⑨ **每节点令牌 ＋ 权限边界**（2026-10-16）。
    *
    * 这一节是那次改动的**全部意义**：一台节点被翻，不该等于整套被翻；
    * 「忘掉」也该是**真的把它踢出去**，而不是删了记录等它下次心跳回来。
    */
-  console.log('\n⑧ 每节点令牌：邀请码加入 → 只能干自己那台的事');
+  console.log('\n⑨ 每节点令牌：邀请码加入 → 只能干自己那台的事');
   /*
    * 角色位（2026-11-01 晚）：发邀请码要求这台是**总机**（`acceptNodes:true`）——
    * 监听地址（缺省 0.0.0.0）是启动配置的事，跟"收不收节点"再无关联。
@@ -255,13 +307,13 @@ try {
   check('操作员照旧能把一台重新加回来（邀请码那条路还在）', back.status === 404 || back.status === 200, String(back.status));
 
   /*
-   * ⑨ **缺省对外监听**（2026-11-03：不给 BANDI_HOST 就是 0.0.0.0）。
+   * ⑩ **缺省对外监听**（2026-11-03：不给 BANDI_HOST 就是 0.0.0.0）。
    *
    * "对外服务"这一维整个删了：监听地址是启动配置（缺省 0.0.0.0，`BANDI_HOST` 可钉具体
    * 地址），界面上没有开关、没有「重启」。这一节钉住**缺省路径**：什么都不配，起来就
    * 在听局域网 —— 于是"只看监听地址"那条规则**自动把鉴权打开** ✓，不需要用户记得设令牌。
    */
-  console.log('\n⑨ 缺省对外监听：不给 BANDI_HOST = 0.0.0.0 + 自动要令牌');
+  console.log('\n⑩ 缺省对外监听：不给 BANDI_HOST = 0.0.0.0 + 自动要令牌');
   const P_LAN = P_OPEN + 1;
   const c3 = start(P_LAN, {}); // **不**给 BANDI_HOST —— 缺省就该对外听
   const baseC = `http://127.0.0.1:${P_LAN}`;
@@ -302,14 +354,15 @@ try {
   check('netmode.json 也不长出 restartNeeded 这种已删的键', !('restartNeeded' in nmAfter), JSON.stringify(nmAfter));
 
   /*
-   * ⑩ 「重启生效」整个下线（2026-11-03）。
+   * ⑪ 「重启生效」整个下线（2026-11-03）。
    *
    * 监听地址不再随运行期开关变 —— `/api/restart` 连接口一起删了。要钉住两件事：
    *   ① 接口真没了（路由权限清单默认拒绝，E4090）—— 谁按老文档打它，得得到明确的"没有"；
    *   ② 角色切换**立刻生效**，没有"改了还没生效"的中间态 —— 那个中间态正是这次删掉的
    *      第三态的根，`restartNeeded` / `allowLan` 字段也不许再出现在响应里。
+   *   （这里的"角色"是**机器**的总机/分机角色，与人登录后的权限无关 —— 人登录即全权。）
    */
-  console.log('\n⑩ /api/restart 已删；角色切换立刻生效，没有"重启"中间态');
+  console.log('\n⑪ /api/restart 已删；机器角色切换立刻生效，没有"重启"中间态');
   const rs = await send(baseC, '/api/restart', { headers: { 'X-Bandi-Token': token, 'X-Bandi': '1' } });
   check('POST /api/restart → E4090（接口已删，默认拒绝）', rs.json?.code === 'E4090', JSON.stringify(rs.json));
   check('GET /api/restart 也一样是 E4090（不是只拦 POST）', (await get(baseC, '/api/restart', { 'X-Bandi-Token': token })).json?.code === 'E4090');
@@ -326,6 +379,7 @@ try {
   failed += 1;
 } finally {
   await cleanup();
+  try { await HUB.close(); } catch { /* 已经关了 */ }
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* 删不掉就算了 */ }
 }
 

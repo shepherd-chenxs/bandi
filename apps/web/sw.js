@@ -614,8 +614,23 @@
    两行各自改动都拼回 hidden #schRunAt（YYYY-MM-DDTHH:MM），保存段一字未改；
    mountSchRepeatPicks 里手机那颗 .sch-dt 挂载点随之删掉。坑：月历格子用 repeat(7,1fr)
    会被固定 38px 圆点把每列顶到 62px，周日整列被裁出面板 —— 必须 minmax(0,1fr)。
-   桌面（>600）「单次」仍是那颗日历浮层，一字未动。 */
-const VERSION = 'v147';
+   桌面（>600）「单次」仍是那颗日历浮层，一字未动。
+
+   v148（2026-11-07）：协作子系统整体退场 —— 预缓存清单删 /js/collab.mjs（模块本体
+   已删，清单项还留着会把整张模块图 404 掉：app.mjs 那行 import 就是「侧边栏点不动」
+   的元凶）。同批下线的还有 /js/roleadmin.mjs、/js/roles.mjs（角色/菜单体系退场）。
+
+   v149（2026-11-07 用户：「这个系统版本从哪里来的」）：「我的 › 这台机器 › 系统 / 版本」
+   那行的左边（原 `navigator.platform`）报的是**看页面那台电脑**的平台 —— Windows 上远程
+   看 Linux 主机会写 Win32。改由服务端 `/api/hello` 新增的 `os` 字段回答（README 契约
+   加字段不动既有键）。settings.mjs 变了，进一版逼客户端换。
+
+   v150（2026-11-07 用户：「修改手机端」）：手机「我的」页也有了「这台机器」卡 ——
+   原来这张卡只在桌面画（手机窄屏当成"语义不对"整段跳过），可手机用户恰恰想知道
+   自己连的是哪台机、跑的哪版。窄屏拆三行（设备名 / 系统 / 版本），不合并成一行：
+   `.me-v` 是 break-all，内核号会被拦腰断字。顺带把「通用 · 清除缓存」挪到它后面，
+   两张设备卡读在一起。settings.mjs 变了，进一版。 */
+const VERSION = 'v150';
 const CACHE = `bandi-static-${VERSION}`;
 
 /*
@@ -625,7 +640,6 @@ const CACHE = `bandi-static-${VERSION}`;
  */
 const JS_MODULES = [
   '/js/chat.mjs',
-  '/js/collab.mjs',
   '/js/connectors.mjs',
   '/js/contacts.mjs',
   '/js/core.mjs',
@@ -643,9 +657,6 @@ const JS_MODULES = [
   '/js/projects.mjs',
   '/js/run-progress.mjs',
   '/js/run-progress-card.mjs',
-  '/js/useradmin.mjs',
-  '/js/roleadmin.mjs',
-  '/js/roles.mjs',
   '/js/settings.mjs',
   '/js/securityadmin.mjs',
   '/js/shell.mjs',

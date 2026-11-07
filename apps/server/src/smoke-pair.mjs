@@ -9,23 +9,32 @@
  *      DELETE 卡 → 403 E4033（白名单外）；POST 卡评论 note/discuss/execute 都过档位闸
  *      （讨论/执行 2026-11-05 放行，落到 E1061 = 卡没执行人，业务逻辑在答话）；
  *   ④ 设备管理只对操作员开（403 E3701）；踢出（revoke）后原令牌 401 E4010；
- *   ⑤ 一机一刀（2026-11-01）：新 claim 顶掉旧设备（行删光）；同一 clientKey 重配复用同一行；
+ *   ⑤ 一机一刀（2026-11-01）：新 claim 把别的手机顶成「已断开」（行留着，能连回来）；
+ *      同一 clientKey 重配复用同一行；
+ *   ⑤.7 设备绑人（2026-11-03）：谁发的码手机就归谁、设备说的话署到人头上、
+ *      禁用归属人 = 手机失效 —— 2026-11-07 起造用户会话只有中枢登录一条路
+ *      （假中枢 + POST /hub/login，见 hub-stub.mjs）；
  *   ⑥ 回环形态（免鉴权）下 operator 动作照常可用 —— 单机自测不被自己的闸挡住。
  *
- * 隔离：临时数据目录 + 临时端口（对齐 smoke-auth.mjs 的 spawn 模式）。
+ * 隔离：临时数据目录 + 临时端口 + **假中枢** —— 中枢地址永远有值（内置默认），
+ * 不把 BANDI_HUB 指到假中枢/死地址就会去连真的 hub.yuancang.space，那不是测试该干的事。
  * 跑法：node apps/server/src/smoke-pair.mjs
  */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { repoRoot } from './config.mjs';
 import { stopRunning, sleep } from './lifecycle.mjs';
+import { startHubStub, hubLogin } from './hub-stub.mjs';
 
 const P_OPEN = Number(process.env.SMOKE_PORT ?? 8860);
 const P_LOOP = P_OPEN + 1;
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bandi-pair-'));
 const SERVER = path.join(repoRoot, 'apps', 'server', 'src', 'server.mjs');
+const CLI = path.join(repoRoot, 'apps', 'server', 'src', 'cli.mjs');
+// 死地址（discard 端口，没东西在听）：回环实例用不到中枢登录，指过去只为别去碰真中枢
+const HUB_DEAD = 'http://127.0.0.1:9';
 
 let failed = 0;
 const check = (label, ok, detail = '') => {
@@ -34,6 +43,8 @@ const check = (label, ok, detail = '') => {
 };
 
 const started = [];
+/** 假中枢（try 块里赋值）；关停要放在 cleanup 里，别让端口挂在用例后面 */
+let stub = null;
 function start(port, extra = {}) {
   const c = spawn(process.execPath, [SERVER], {
     cwd: repoRoot,
@@ -64,6 +75,7 @@ const cleanup = async () => {
   for (const c of started) { try { c.kill(); } catch { /* 已退 */ } }
   await sleep(400);
   for (const p of [P_OPEN, P_LOOP]) { try { stopRunning(p); } catch { /* 没在跑 */ } }
+  if (stub) { try { await stub.close(); } catch { /* 已关 */ } }
 };
 
 const get = async (base, p, headers = {}) => {
@@ -103,9 +115,21 @@ const sseProbe = async (base, p, headers = {}, ms = 1500) => {
 };
 
 try {
+  /*
+   * 假中枢先起（⑤.7 要靠它造登录会话）：两个中枢账号，id 显式给定 ——
+   * `bandi hub allow` 的参数要用它，别让默认的 `acc_<用户名>` 散在断言里。
+   */
+  stub = await startHubStub({
+    deviceId: 'dev_pair_smoke',
+    accounts: {
+      老王: { password: 'wang-pass-123', id: 'acc_boss' },
+      小李: { password: 'li-pass-1234', id: 'acc_li' },
+    },
+  });
+
   /* ----------------------------- ① 非回环（鉴权开）：发码 → 换令牌 */
   console.log('① 操作员发配对码，手机凭码换长期令牌');
-  const b = start(P_OPEN, { BANDI_HOST: '0.0.0.0' });
+  const b = start(P_OPEN, { BANDI_HOST: '0.0.0.0', BANDI_HUB: stub.url });
   const baseB = `http://127.0.0.1:${P_OPEN}`;
   if (!(await waitUp(baseB))) throw new Error('实例没起来：' + b.log().slice(-400));
   const token = fs.readFileSync(path.join(tmp + '-' + P_OPEN, 'token'), 'utf8').trim();
@@ -249,7 +273,8 @@ try {
     check('手机建会话（发消息第一步）→ 201', false, 'state 里没有员工，没法验');
   }
   const me = await get(baseB, '/api/pair/me', { Cookie: devCookie });
-  check('/api/pair/me 说自己是设备', me.json?.kind === 'device' && me.json?.device?.name === '测试手机', JSON.stringify(me.json));
+  // 此时实例还没有任何账号（⑤.7 才造人）—— 零账号形态的设备就是无主（user: null）
+  check('/api/pair/me 说自己是设备（未绑人）', me.json?.kind === 'device' && me.json?.device?.name === '测试手机' && me.json?.user === null, JSON.stringify(me.json));
   const meOp = await get(baseB, '/api/pair/me', op);
   check('/api/pair/me 对操作员说 operator', meOp.json?.kind === 'operator', JSON.stringify(meOp.json));
 
@@ -378,13 +403,18 @@ try {
   check('断开 ≠ 取消配对：同机 clientKey 还能连回来（同一 deviceId）',
     backAfterLeave.status === 200 && backAfterLeave.json?.deviceId === ok4.json.deviceId, JSON.stringify(backAfterLeave.json));
 
-  /* ----------------------------- ⑤.7 设备绑人（2026-11-03） */
+  /* ----------------------------- ⑤.7 设备绑人（2026-11-03；2026-11-07 改走中枢登录） */
   /*
    * 钉住三件事：
    *   ① **谁发的码，手机就归谁** —— 码上带 userId，claim 时继承到设备行；
    *   ② 设备说的话**署到人头上** —— `/api/me` 与 actorUser 都认得出归属人；
    *   ③ **归属人失效 = 手机失效** —— 禁用那个人，那台手机下一次请求就 401
    *      （在此之前「禁用」只禁掉了浏览器，手机照连，等于没禁）。
+   *
+   * 本机账号密码登录退场后，造用户会话只有一条真路：中枢账号 `POST /hub/login`
+   * （假中枢，见文件头）。绑定的口径（routes/hub.mjs）：零账号时第一个中枢登录
+   * 自动建**内置**账号（不可禁用/不可删 —— 防锁死的锁）；第二个中枢账号要落到
+   * 预占的影子账号上，得先 `bandi hub allow <账号 id> --user <用户 id>` 显式放行。
    */
   console.log('\n⑤.7 设备绑人：谁发的码，手机就归谁');
   const jarOf = (res) =>
@@ -396,29 +426,51 @@ try {
     const m = /bandi_csrf=([^;]*)/.exec(jar);
     return m ? { 'X-Bandi-CSRF': decodeURIComponent(m[1]) } : {};
   };
+  /*
+   * 登录帮手：表单转给假中枢拿 bandi_sid，再开一次首页把 bandi_csrf 领齐 ——
+   * 登录成功路径只种会话票，后面的写请求要过 CSRF 双提交闸（E4099）。
+   */
+  const loginAs = async (username, password) => {
+    const r = await hubLogin(baseB, { username, password, origin: baseB });
+    const seed = await get(baseB, '/', { Cookie: `bandi_sid=${r.sid}`, Accept: 'text/html' });
+    const csrfCookie = (seed.headers.getSetCookie?.() ?? [])
+      .map((c) => c.split(';')[0])
+      .find((c) => c.startsWith('bandi_csrf=')) ?? '';
+    return {
+      status: r.status,
+      jar: [`bandi_sid=${r.sid}`, csrfCookie].filter(Boolean).join('; '),
+      csrf: csrfCookie ? { 'X-Bandi-CSRF': decodeURIComponent(csrfCookie.split('=')[1]) } : {},
+    };
+  };
 
-  // 这台实例还没有账号：先建第一个（= 内置管理员），再建一个普通管理员当"小李"
-  const setupCode = fs.readFileSync(path.join(tmp + '-' + P_OPEN, 'setup_code'), 'utf8').trim();
-  const mkBoss = await send(baseB, '/api/users', {
-    body: { name: '老王', password: 'wang-pass-123' },
-    headers: { ...op, 'X-Bandi-Setup': setupCode, 'X-Bandi': '1' },
-  });
-  check('建第一个账号 → 201', mkBoss.status === 201, `${mkBoss.status} ${mkBoss.json?.code ?? ''}`);
-  const bossLogin = await send(baseB, '/api/login', { body: { name: '老王', password: 'wang-pass-123' }, headers: { 'X-Bandi': '1' } });
-  const bossJar = jarOf(bossLogin);
-  check('老王登录 → 拿到会话', bossLogin.status === 200 && /bandi_sid=/.test(bossJar), String(bossLogin.status));
+  // 第一个中枢账号登录 = 认领：自动建内置账号「老王」
+  const boss = await loginAs('老王', 'wang-pass-123');
+  check('老王（第一个中枢账号）登录 → 302 拿到会话', boss.status === 302 && /bandi_sid=/.test(boss.jar), String(boss.status));
+  const bossMe = await get(baseB, '/api/me', { Cookie: boss.jar });
+  const bossId = bossMe.json?.user?.id;
+  check('/api/me 说他是登录用户「老王」', bossMe.json?.kind === 'user' && bossMe.json?.user?.name === '老王', JSON.stringify(bossMe.json));
 
+  // 第二个人：先建影子账号（预占名字），再把中枢账号显式放行到它头上
   const mkLi = await send(baseB, '/api/users', {
-    body: { name: '小李', password: 'li-pass-1234', roleId: 'admin' },
-    headers: { Cookie: bossJar, 'X-Bandi': '1', ...csrfOf(bossJar) },
+    body: { name: '小李' },
+    headers: { ...op, 'X-Bandi': '1' },
   });
-  check('建「小李」→ 201', mkLi.status === 201, `${mkLi.status} ${mkLi.json?.code ?? ''}`);
+  check('建影子账号「小李」→ 201（非内置）', mkLi.status === 201 && !!mkLi.json?.user?.id && !mkLi.json?.user?.builtin, `${mkLi.status} ${JSON.stringify(mkLi.json?.user ?? mkLi.json?.code ?? '')}`);
   const liId = mkLi.json?.user?.id;
-  const liLogin = await send(baseB, '/api/login', { body: { name: '小李', password: 'li-pass-1234' }, headers: { 'X-Bandi': '1' } });
-  const liJar = jarOf(liLogin);
-  check('小李登录 → 拿到会话', liLogin.status === 200 && /bandi_sid=/.test(liJar), String(liLogin.status));
+  const allowCli = spawnSync(process.execPath, [CLI, 'hub', 'allow', 'acc_li', '--user', liId], {
+    cwd: repoRoot,
+    env: { ...process.env, BANDI_DATA: tmp + '-' + P_OPEN, BANDI_DB: path.join(tmp + '-' + P_OPEN, 'bandi.db'), NO_COLOR: '1' },
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  const allowOut = String(allowCli.stdout ?? '') + String(allowCli.stderr ?? '');
+  check('bandi hub allow 把中枢账号 acc_li 绑到小李头上', allowCli.status === 0 && allowOut.includes('已放行'), allowOut.trim().split('\n')[0]?.slice(0, 120));
+  const li = await loginAs('小李', 'li-pass-1234');
+  check('小李登录 → 会话落到影子账号上', li.status === 302 && /bandi_sid=/.test(li.jar), String(li.status));
+  const liMe = await get(baseB, '/api/me', { Cookie: li.jar });
+  check('/api/me 说她是登录用户「小李」（同一个 id）', liMe.json?.kind === 'user' && liMe.json?.user?.name === '小李' && liMe.json?.user?.id === liId, JSON.stringify(liMe.json));
 
-  const invLi = await send(baseB, '/api/pair/tokens', { headers: { Cookie: liJar, 'X-Bandi': '1', ...csrfOf(liJar) } });
+  const invLi = await send(baseB, '/api/pair/tokens', { headers: { Cookie: li.jar, 'X-Bandi': '1', ...li.csrf } });
   check('小李发码 → 码上写明归属人（owner=小李）', invLi.status === 200 && invLi.json?.owner?.name === '小李', JSON.stringify(invLi.json?.owner ?? null));
 
   const claimLi = await send(baseB, '/api/pair/claim', {
@@ -426,8 +478,8 @@ try {
     headers: { 'X-Bandi': '1' },
   });
   check('小李的码被扫 → 200，回执里带归属人', claimLi.status === 200 && claimLi.json?.owner === '小李', JSON.stringify(claimLi.json));
-  const liPhoneJar = jarOf(claimLi);
-  const liPhoneCookie = liPhoneJar.split('; ').filter((c) => /^bandi_(token|csrf)=/.test(c)).join('; ');
+  const liPhoneCookie = jarOf(claimLi).split('; ').filter((c) => /^bandi_(token|csrf)=/.test(c)).join('; ');
+  const liPhoneCsrf = csrfOf(liPhoneCookie);
 
   const mePhone = await get(baseB, '/api/me', { Cookie: liPhoneCookie });
   check('手机问「我是谁」→ 带出归属人小李', mePhone.status === 200 && mePhone.json?.kind === 'device' && mePhone.json?.user?.name === '小李', JSON.stringify(mePhone.json?.user ?? null));
@@ -438,19 +490,19 @@ try {
    * 所以不用真起一个 CLI 就能验到"署名是谁"（上线时最容易错的就是这一环：
    * 归属写进了设备行，但 actorUser 没认，结果还是 null）。
    */
-  const personaOwn = (await get(baseB, '/api/state', { Cookie: bossJar })).json?.personas?.[0]?.id;
+  const personaOwn = (await get(baseB, '/api/state', { Cookie: boss.jar })).json?.personas?.[0]?.id;
   const projOwn = await send(baseB, '/api/projects', {
     method: 'POST',
-    headers: { Cookie: bossJar, 'X-Bandi': '1', ...csrfOf(bossJar) },
+    headers: { Cookie: boss.jar, 'X-Bandi': '1', ...boss.csrf },
     body: { name: '归属验收', root: path.join(tmp, 'proj-own') },
   });
   const cardOwn = await send(baseB, `/api/projects/${encodeURIComponent(projOwn.json?.project?.id ?? '')}/tasks`, {
     method: 'POST',
-    headers: { Cookie: bossJar, 'X-Bandi': '1', ...csrfOf(bossJar) },
+    headers: { Cookie: boss.jar, 'X-Bandi': '1', ...boss.csrf },
     body: { title: '谁批的卡', personaId: personaOwn },
   });
   const noteOwn = await send(baseB, `/api/projects/tasks/${encodeURIComponent(cardOwn.json?.task?.id ?? '')}/comments`, {
-    headers: { Cookie: liPhoneCookie, 'X-Bandi': '1', ...csrfOf(liPhoneCookie) },
+    headers: { Cookie: liPhoneCookie, 'X-Bandi': '1', ...liPhoneCsrf },
     body: { text: '驳回：缺验收单', mode: 'note' },
   });
   check(
@@ -468,7 +520,7 @@ try {
    */
   const phoneCard = await send(baseB, `/api/projects/${encodeURIComponent(projOwn.json?.project?.id ?? '')}/tasks`, {
     method: 'POST',
-    headers: { Cookie: liPhoneCookie, 'X-Bandi': '1', ...csrfOf(liPhoneCookie) },
+    headers: { Cookie: liPhoneCookie, 'X-Bandi': '1', ...liPhoneCsrf },
     body: { title: '手机上建的一张卡' },
   });
   check('手机建卡 → 201（白名单放行 POST tasks）', phoneCard.status === 201, `${phoneCard.status} ${JSON.stringify(phoneCard.json?.error ?? phoneCard.json?.code ?? '')}`);
@@ -485,7 +537,7 @@ try {
    */
   const approveOwn = await send(baseB, `/api/projects/tasks/${encodeURIComponent(cardOwn.json?.task?.id ?? '')}`, {
     method: 'PATCH',
-    headers: { Cookie: liPhoneCookie, 'X-Bandi': '1', ...csrfOf(liPhoneCookie) },
+    headers: { Cookie: liPhoneCookie, 'X-Bandi': '1', ...liPhoneCsrf },
     body: { status: '已完成' },
   });
   check('手机上批卡 → 200', approveOwn.status === 200, `${approveOwn.status} ${JSON.stringify(approveOwn.json?.error ?? approveOwn.json?.code ?? '')}`);
@@ -496,7 +548,7 @@ try {
   );
   const bossApprove = await send(baseB, `/api/projects/tasks/${encodeURIComponent(cardOwn.json?.task?.id ?? '')}`, {
     method: 'PATCH',
-    headers: { Cookie: bossJar, 'X-Bandi': '1', ...csrfOf(bossJar) },
+    headers: { Cookie: boss.jar, 'X-Bandi': '1', ...boss.csrf },
     body: { status: '待办' },
   });
   check(
@@ -513,24 +565,32 @@ try {
    * ③ 禁用小李 → 那台手机立刻进不来（这是"绑人"真正的安全价值）。
    * 语义是**冻结不是吊销**：令牌还留着，重新启用后同一台手机接着用，不用重新扫码 ——
    * 与「断开连接」（吊销令牌、要 resume）刻意分开。
+   * 反向先钉一笔：内置账号（第一个）**不可禁用**（E3808）—— hub 绑定都指着它，
+   * 禁用内置 = 把自己关在门外（routes/users.mjs 的两条口径之一）。
    */
+  const disBuiltin = await send(baseB, `/api/users/${encodeURIComponent(bossId)}`, {
+    method: 'PATCH',
+    body: { disabled: true },
+    headers: { Cookie: boss.jar, 'X-Bandi': '1', ...boss.csrf },
+  });
+  check('禁用内置账号「老王」→ 403 E3808（防锁死的锁）', disBuiltin.status === 403 && disBuiltin.json?.code === 'E3808', `${disBuiltin.status} ${disBuiltin.json?.code ?? ''}`);
   const disLi = await send(baseB, `/api/users/${encodeURIComponent(liId)}`, {
     method: 'PATCH',
     body: { disabled: true },
-    headers: { Cookie: bossJar, 'X-Bandi': '1', ...csrfOf(bossJar) },
+    headers: { Cookie: boss.jar, 'X-Bandi': '1', ...boss.csrf },
   });
   check('禁用小李 → 200', disLi.status === 200, `${disLi.status} ${disLi.json?.code ?? ''}`);
   check('禁用后那台手机立刻 401（以前它照连）', (await get(baseB, '/api/state', { Cookie: liPhoneCookie })).status === 401);
   const reOn = await send(baseB, `/api/users/${encodeURIComponent(liId)}`, {
     method: 'PATCH',
     body: { disabled: false },
-    headers: { Cookie: bossJar, 'X-Bandi': '1', ...csrfOf(bossJar) },
+    headers: { Cookie: boss.jar, 'X-Bandi': '1', ...boss.csrf },
   });
   check('重新启用 → 200', reOn.status === 200, `${reOn.status} ${reOn.json?.code ?? ''}`);
   check('冻结不是吊销：启用后同一台手机接着用（不用重扫）', (await get(baseB, '/api/state', { Cookie: liPhoneCookie })).status === 200);
 
   // 换人复用同一台手机：老板发的码把这部手机认到老王名下（复用行要改归属）
-  const invBoss = await send(baseB, '/api/pair/tokens', { headers: { Cookie: bossJar, 'X-Bandi': '1', ...csrfOf(bossJar) } });
+  const invBoss = await send(baseB, '/api/pair/tokens', { headers: { Cookie: boss.jar, 'X-Bandi': '1', ...boss.csrf } });
   const claimAgain = await send(baseB, '/api/pair/claim', {
     body: { code: invBoss.json.code, name: '小李的手机', clientKey: 'key-li-phone-0001' },
     headers: { 'X-Bandi': '1' },
@@ -572,7 +632,7 @@ try {
 
   /* ----------------------------- ⑥ 回环形态（免鉴权）照常可用 */
   console.log('\n⑥ 回环形态（单机免鉴权）：operator 动作照常可用');
-  const a = start(P_LOOP, { BANDI_HOST: '127.0.0.1' });
+  const a = start(P_LOOP, { BANDI_HOST: '127.0.0.1', BANDI_HUB: HUB_DEAD });
   const baseA = `http://127.0.0.1:${P_LOOP}`;
   if (!(await waitUp(baseA))) throw new Error('回环实例没起来：' + a.log().slice(-400));
   const inv2 = await send(baseA, '/api/pair/tokens');

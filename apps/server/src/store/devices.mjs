@@ -49,15 +49,6 @@ db.exec(`
 
 const hashOf = (s) => crypto.createHash('sha256').update(String(s)).digest('hex');
 
-/* ------------------------------------------------- 面板角色（2026-10-28 第四刀） */
-
-/*
- * `mobile_devices.roleId`：总机给这部手机指定的面板角色（`roles.id`），空 = 默认（`mobile`）。
- * `ensureColumn` 让老库平滑升级；这一列只影响**手机端的菜单显示**（底部 tab 与页面），
- * 不参与 `deviceMayReach` 那套白名单判定。
- */
-ensureColumn('mobile_devices', 'roleId', 'roleId TEXT');
-
 /*
  * `mobile_devices.clientKey`（2026-11-01 一机一刀）：手机端自己生成并持久保存的
  * 随机 ID（localStorage），claim 时随 body 上报。服务端拿它认"这台手机之前配过"——
@@ -138,35 +129,6 @@ export function findDeviceByClientKey(clientKey) {
   const k = cleanClientKey(clientKey);
   if (!k) return null;
   return db.prepare('SELECT * FROM mobile_devices WHERE clientKey = ?').get(k) ?? null;
-}
-
-/** 给一部手机指定面板角色（`null` = 恢复默认）。设备不存在返回 null */
-export function setDeviceRole(deviceId, roleId) {
-  const d = getDevice(deviceId);
-  if (!d) return null;
-  const next = String(roleId ?? '').trim() || null;
-  db.prepare('UPDATE mobile_devices SET roleId = ? WHERE id = ?').run(next, deviceId);
-  return getDevice(deviceId);
-}
-
-/**
- * 有多少部**还在用**的手机绑着这个角色（删角色前要问，见 routes/roles.mjs 的 E2071）。
- *
- * 只数名下有**有效令牌**的设备：被踢出的设备行留着当记录（`tokenCount=0`），
- * 它已经拿不到任何菜单了。把它也算"在用"会让那个角色**永远删不掉** ——
- * 而界面上被踢设备的下拉是禁用的，连"解绑"都做不了（2026-10-28 修）。
- */
-export function countPhonesByRole(roleId) {
-  return db
-    .prepare(
-      `SELECT COUNT(*) AS n FROM mobile_devices d
-        WHERE d.roleId = ?
-          AND EXISTS (
-            SELECT 1 FROM mobile_device_tokens t
-             WHERE t.deviceId = d.id AND (t.expiresAt IS NULL OR t.expiresAt > ?)
-          )`,
-    )
-    .get(String(roleId ?? ''), nowIso()).n;
 }
 
 /** 配对令牌默认时效（PRD P0-2：短时效，5 分钟、单次使用） */

@@ -208,25 +208,6 @@ ensureColumn('project_tasks', 'flowTemplateId', 'flowTemplateId TEXT');
 
 ensureColumn('project_tasks', 'flowRunId', 'flowRunId TEXT');
 
-/*
- * **协作卡**（2026-10-31 协作中心 MVP）：分公司这边把中心的活变成一张本地卡，
- * 这样指派数字员工、走流程、评论、关联 PR 全是现成的，不造第二套卡。
- *
- *   · `collabTaskId` —— 中心那条任务（`ct_xxx`）的 id；**NULL = 不是协作卡**（判据只认它，
- *     不认 `source='collab'` —— 后者是给人看的来源标签，前者才是身份）；
- *   · `collabRev`    —— 已经应用过的中心 `rev`（防回环的水位：`task.rev > collabRev` 才应用）；
- *   · `collabStatus` —— 最后一次与中心对齐的状态（本地把它改掉 = 该报给中心了）。
- *
- * ⚠️ 这三列**只由同步循环写**（collab-branch.mjs），不走业务层 —— 业务层改状态会触发
- *    "待办 + 有执行人 = 自动开工"，而中心的取消/验收不该把活跑起来。
- */
-ensureColumn('project_tasks', 'collabTaskId', 'collabTaskId TEXT');
-ensureColumn('project_tasks', 'collabRev', 'collabRev INTEGER NOT NULL DEFAULT 0');
-ensureColumn('project_tasks', 'collabStatus', 'collabStatus TEXT');
-
-// 索引放在列之后（同上面那条老坑：建索引时列得存在）
-db.exec('CREATE INDEX IF NOT EXISTS idx_project_tasks_collab ON project_tasks (collabTaskId);');
-
 /**
  * 内置的默认项目：`<文档>\bandi\default-workspace`。
  *

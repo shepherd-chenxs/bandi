@@ -7,7 +7,7 @@
  *   · **审计日志**（仅管理员）—— 谁、什么时候、做了什么、成没成。策略层自动记
  *     （401/403 拒绝、写操作 pending→回填），这里只是查询窗口：按类型筛 + 游标翻页。
  *
- * 版式沿 useradmin.mjs 的 set-sec 卡片；错误一律「码 + 中文」toast，不用 alert。
+ * 版式沿设置页的 set-sec 卡片；错误一律「码 + 中文」toast，不用 alert。
  */
 import { esc, toast } from './shell.mjs';
 import { api, createCombo, dt, failHtml, post } from './ui.mjs';
@@ -47,7 +47,6 @@ async function waitForRestart() {
   'session.revoke': '退出/踢下线',
   'user.change': '账号变更',
   'machine.local': '本机操作',
-  collab: '协作',
   restart: '重启',
   write: '写操作',
   'authz.deny': '拒绝访问',

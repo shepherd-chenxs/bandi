@@ -13,8 +13,6 @@ import * as runtimes from '../runtimes.mjs';
 import * as externals from '../externals.mjs';
 import * as status from '../status.mjs';
 import * as localMode from '../local-mode.mjs';
-// 协作中心（2026-10-31 MVP）：分公司侧的 join / leave / status 在它里面（配置 + 同步循环）
-import * as collabBranch from '../collab-branch.mjs';
 // 本机接口的**接口级授权**（2026-10-31 IAM §8.5 / 姊妹文档 v5）：声明式、默认拒绝
 import { authorizeLocal } from '../security/local-policy.mjs';
 import * as localSecret from '../security/local-secret.mjs';
@@ -302,39 +300,8 @@ export async function handleLocal(req, res, url) {
       return sendJson(res, 200, localMode.removeHost(body?.url)), true;
     }
 
-    /* ------------------------------------------- 协作中心（2026-10-31 MVP）
-     * 三条：读状态 / 加入 / 退出。都在那道**接口准入**之后 ——
-     * 「这台机器属于哪个协作中心」是本机的事，局域网里谁都不能替它改。
-     *
-     * ⚠️ 与「加入总机（算力节点）」是**两套互斥的关系**（任务书 §三）：
-     *   这里不重启、不动 netmode、不动 `config.json`，也不起 `node.mjs`。 */
-    if (req.method === 'GET' && url.pathname === '/api/local/collab/status') {
-      return sendJson(res, 200, collabBranch.status()), true;
-    }
-
-    if (req.method === 'POST' && url.pathname === '/api/local/collab/join') {
-      const body = await readBody(req);
-      // 失败码由 collabBranch 抛 LocalError（E4040/E4041/E4042/E4043/E4047），下面统一翻
-      const out = await collabBranch.join({ url: body?.url, code: body?.code });
-      console.log(`[本机] 加入了协作中心「${out.centerLabel}」（${out.branchId}）`);
-      return sendJson(res, 200, out), true;
-    }
-
-    if (req.method === 'POST' && url.pathname === '/api/local/collab/leave') {
-      const out = await collabBranch.leave();
-      return sendJson(res, 200, out), true;
-    }
-
     /* -------------------------------------------------------------------------- 加入 */
     if (req.method === 'POST' && url.pathname === '/api/local/join') {
-      /*
-       * **两条关系互斥**（任务书 §三）：已经加入协作中心的机器不能再去当算力节点 ——
-       * 那条通道会把机器变成"只剩节点配置页"的形态，正好和"分公司保留完整本机"相反。
-       * 反过来（已加入总机又点协作）拦在 collab-branch.join 里，同一句话两处说，别只拦一边。
-       */
-      if (collabBranch.isJoined()) {
-        return fail(res, 409, 'E4047', '这台机器已经加入了协作中心，先退出才能加入总机'), true;
-      }
       const body = await readBody(req);
       /*
        * 2026-10-21 拍板：**节点一律只当算力** —— 不信任前端的 scope，写死 compute。

@@ -131,7 +131,7 @@ export const VERIFY_ERRORS = {
   bad_header: { code: 'E7001', message: '连接凭据格式不对' },
   bad_payload: { code: 'E7001', message: '连接凭据格式不对' },
   bad_signature: { code: 'E7001', message: '连接凭据验签失败' },
-  bad_key: { code: 'E7002', message: '这台机器没配好中枢公钥（重新 bandi hub join 一次）' },
+  bad_key: { code: 'E7002', message: '这台机器没配好中枢公钥（在本机登录页重新登录一次）' },
   bad_audience: { code: 'E7001', message: '连接凭据不是发给班底的' },
   bad_issuer: { code: 'E7001', message: '连接凭据不是这台机器信任的中枢签的' },
   expired: { code: 'E7003', message: '连接凭据已过期，请重新点一次' },
