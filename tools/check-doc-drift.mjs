@@ -73,6 +73,7 @@ const LIVE = [
   ['docs/契约.md', '接口契约'],
   ['docs/审阅经验.md', 'PR 审阅踩过的坑'],
   ['docs/头像生成规范.md', '头像生成口径'],
+  ['apps/mobile-native/README.md', '原生手机壳：构建、结构、与 Tauri 壳的关系'],
   ['docs/mobile/pwa-design.md', '手机端实现说明（头部已声明为快照性质，但仍是现行实现的主要参考）'],
   ['docs/mobile/sequence-diagram.mermaid', '手机配对的时序图'],
 ];

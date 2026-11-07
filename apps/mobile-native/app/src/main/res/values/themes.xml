@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Bandi" parent="Theme.Material3.DayNight.NoActionBar">
+        <!-- 无 ActionBar：三个视图各自带标题，导航栏由系统给 -->
+    </style>
+</resources>

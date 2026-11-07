@@ -129,11 +129,15 @@ export async function openMe() {
    */
   const hello = await api('/api/hello').catch(() => null);
   /*
-   * 壳标记（2026-11-07）：跑在手机壳里时由壳的 initialization_script 注入
-   * （apps/mobile/src/lib.rs），带启动页地址。浏览器 / PWA 没有它 ——
-   * 「当前设备」行与退出落点都只在壳里生效，桌面行为一个字节不变。
+   * 壳标记（2026-11-07）：
+   *   · 原生壳（Kotlin，apps/mobile-native）—— WebView 启动前挂好 `window.BandiShell`
+   *     （addJavascriptInterface，页面第一行起可用），直接调方法回壳；
+   *   · 旧 Tauri 壳 —— initialization_script 注入 `window.__BANDI_SHELL__`（带启动页
+   *     地址，导航 hash 流），保留作过渡兜底。
+   * 浏览器 / PWA 两个都没有 ——「当前设备」行与退出落点只在壳里生效，桌面行为不变。
    */
-  const shell = window.__BANDI_SHELL__ ?? null;
+  const nativeShell = typeof window.BandiShell !== 'undefined' ? window.BandiShell : null;
+  const shell = nativeShell ? { native: true } : (window.__BANDI_SHELL__ ?? null);
   /*
    * 机器信息两套行（2026-11-07）：
    *   桌面 —— 四行，系统与版本并成一行（卡宽够，"Linux 6.x x64 · 班底 v1.5.x"一行读得完）；
@@ -335,10 +339,11 @@ export async function openMe() {
   }
   $('meLogout')?.addEventListener('click', () => void logout());
   /*
-   * 当前设备 → 回启动页的设备列表（2026-11-07）：只在壳里渲染（见上面 shell），
-   * 导航回启动页并带意图 hash，启动页 boot() 会吃掉它（apps/mobile/dist/launcher.js）。
+   * 当前设备 → 回壳的设备列表（2026-11-07）：只在壳里渲染（见上面 shell）。
+   * 原生壳直接调 BandiShell.openDeviceList()；旧 Tauri 壳走启动页意图 hash。
    */
   $('meSwitchDevice')?.addEventListener('click', () => {
+    if (nativeShell) { nativeShell.openDeviceList(); return; }
     if (shell?.home) location.href = shell.home + '#bandi-devices';
   });
   /*
@@ -840,10 +845,15 @@ async function logout() {
   }
   /*
    * 壳里退出（2026-11-07 用户：「点击退出按钮，退出到最开始的登录页」）：面板自己的
-   * 登录页对手机壳没有意义 —— 导航回启动页并带 #bandi-bye 意图，由启动页把中枢会话
-   * 一并清掉、落回登录页并报「已退出登录」（launcher.js boot）。机器侧的会话票和
-   * 访问令牌 Cookie 上面 /api/logout 已经清了。浏览器 / PWA 维持原样：重载走服务端的闸。
+   * 登录页对壳没有意义 —— 机器会话上面 /api/logout 已清，这里把人交回壳：
+   *   · 原生壳 → BandiShell.onLoggedOut()：原生清中枢会话与 Cookie，回登录页；
+   *   · 旧 Tauri 壳 → 启动页 #bandi-bye 意图（launcher.js boot 清中枢会话）。
+   * 浏览器 / PWA 维持原样：重载走服务端的闸。
    */
+  if (nativeShell) {
+    nativeShell.onLoggedOut();
+    return;
+  }
   const shellHome = window.__BANDI_SHELL__?.home;
   if (shellHome) {
     location.href = shellHome + '#bandi-bye';

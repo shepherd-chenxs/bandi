@@ -635,8 +635,13 @@
    「当前设备」（显示这台面板是哪台机器），点了导航回启动页的设备列表换一台；
    「退出登录」在壳里不再落在面板的登录页，而是回启动页最开始的登录页（意图经
    #bandi-devices / #bandi-bye 传给 launcher.js boot）。两行只在壳里渲染
-   （window.__BANDI_SHELL__ 由壳注入），浏览器 / PWA 行为不变。settings.mjs 变了，进一版。 */
-const VERSION = 'v151';
+   （window.__BANDI_SHELL__ 由壳注入），浏览器 / PWA 行为不变。settings.mjs 变了，进一版。
+
+   v152（2026-11-07 原生壳）：壳换成 Kotlin 原生 App（apps/mobile-native），桥升级成
+   addJavascriptInterface 的 `window.BandiShell`（页面第一行起可用）：「当前设备」
+   与「退出登录」优先调方法（openDeviceList / onLoggedOut），旧 Tauri 壳的
+   __BANDI_SHELL__ hash 流保留作兜底，浏览器 / PWA 照旧走各自路径。settings.mjs 变了，进一版。 */
+const VERSION = 'v152';
 const CACHE = `bandi-static-${VERSION}`;
 
 /*
