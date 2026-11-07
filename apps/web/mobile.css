@@ -1213,6 +1213,26 @@
   }
   dialog[open]::backdrop { background: rgba(0, 0, 0, 0.45); }
 
+  /* 确认弹窗（#askDlg）→ 居中小卡片，不进抽屉（2026-11-07 用户："点击退出不要使用
+     抽屉，要使用弹窗"）：confirmDo 都是"一句话 + 两个按钮"的小确认，抽屉形态
+     又矮又贴底，按钮正好怼在导航栏上。ID 选择器(1,0,0) 压过上面的
+     dialog[open](0,1,0)，顺序无关；inset:0 + margin:auto 恢复居中，
+     height:fit-content 让卡片只有内容那么高。 */
+  #askDlg {
+    inset: 0;
+    margin: auto;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    width: min(420px, calc(100vw - 48px));
+    max-width: none;
+    height: fit-content;
+    max-height: 82vh;
+    border-radius: 16px;
+    border-bottom: 1px solid var(--line);
+  }
+
   /*
    * 建卡弹窗（#taskDlg）→ **全屏工作纸**（2026-11-03 实机："手机建卡没有完成按钮"）。
    *

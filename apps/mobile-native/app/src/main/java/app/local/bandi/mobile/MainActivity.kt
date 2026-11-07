@@ -349,6 +349,16 @@ class MainActivity : AppCompatActivity() {
                 }
                 runOnUiThread {
                     binding.devSub.text = "点一台进去"
+                    /*
+                     * 进门前清一遍 Cookie（2026-11-07 用户实报「我的页有两条设备卡」）：
+                     * 旧配对时代留下的 bd_ 设备令牌还在 Cookie 罐里，机器闸是「令牌优先、
+                     * 会话兜底」—— 旧令牌会把刚发的中枢会话压下去，人就以设备身份进了面板
+                     * （新代码的 /hub/enter 会顺手清 bd_，但旧版本机器进程没有这步）。
+                     * 每次进门都是一张新鲜票，旧 Cookie 没有存活价值：全清，落进来的
+                     * 一定是干净的中枢身份，「这台设备」配对卡随之消失。
+                     */
+                    CookieManager.getInstance().removeAllCookies(null)
+                    CookieManager.getInstance().flush()
                     pendingClearHistory = true
                     showPanel()
                     // 机器验票后 302 到 / 并发会话 Cookie；CookieManager 默认接收，
