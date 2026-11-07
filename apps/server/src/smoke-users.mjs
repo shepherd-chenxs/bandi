@@ -211,7 +211,7 @@ try {
   check('禁用内置账号 → 403 E3808', disBuiltin.status === 403 && disBuiltin.body?.code === 'E3808',
     `${disBuiltin.status} ${disBuiltin.body?.code ?? ''}`);
   const delBuiltin = await call('DELETE', `/api/users/${encodeURIComponent(bossId)}`);
-  check('删内置账号 → 403 E3808（hub 绑定都指着它）', delBuiltin.status === 403 && delBuiltin.body?.code === 'E3808',
+  check('删内置账号 → 403 E3808（防锁死锚）', delBuiltin.status === 403 && delBuiltin.body?.code === 'E3808',
     `${delBuiltin.status} ${delBuiltin.body?.code ?? ''}`);
   const delC = await call('DELETE', `/api/users/${encodeURIComponent(pid)}`);
   check('删影子账号 → 200', delC.status === 200 && delC.body?.ok === true, String(delC.status));
@@ -270,18 +270,22 @@ try {
   check('退出后原票失效：回环退回 operator（不是还挂着一个 user）',
     meAfter.status === 200 && meAfter.body?.kind === 'operator', `${meAfter.status} ${meAfter.body?.kind}`);
 
-  /* ============ ⑦ 第二个中枢账号：认领过后不再自动进门 ============ */
-  console.log('\n⑦ 已认领的机器上，新中枢账号凭对密码也进不来（要 bandi hub allow）');
+  /* ============ ⑦ 第二个中枢账号：登录即放行，自动建自己的影子账号 ============ */
+  console.log('\n⑦ 登录即放行：乙凭对密码直接进门（自动建影子账号「乙」）');
   const second = await hubLogin(BASE, { username: '乙', password: '乙-pass-456', origin: BASE });
-  check('乙凭据正确但机器没认过 → 403 原地回登录页', second.status === 403 && second.html.includes('E7003'),
+  check('乙凭对密码 → 302 进门（不再有 bandi hub allow 那道闸）', second.status === 302 && !!second.sid,
     `HTTP ${second.status}`);
-  check('拒绝文案指路 bandi hub allow', second.html.includes('bandi hub allow'));
+  const listAfter = await call('GET', '/api/users');
+  check('本机名册长出乙的影子（非内置；此时共老板/甲/乙三个）',
+    listAfter.status === 200 && listAfter.body?.users?.length === 3
+      && listAfter.body.users.some((u) => u.name === '乙' && !u.builtin),
+    JSON.stringify(listAfter.body?.users ?? []).slice(0, 140));
 
   /* ============ ⑧ 安全接口：只认会话里的身份 ============ */
   console.log('\n⑧ /api/security/* 只认会话身份（operator 是机器凭据，不是"我"）');
-  // ⑥ 把甲登出了（认领还在 —— 授权表与登录会话是两回事），再登一次拿活会话
+  // ⑥ 把甲登出了（绑定还在 —— 绑定表与登录会话是两回事），再登一次拿活会话
   const again = await hubLogin(BASE, { username: '甲', password: '甲-pass-123', origin: BASE });
-  check('已认领的账号再登录 → 照常 302（认领一次，长期有效）', again.status === 302 && !!again.sid,
+  check('绑过的账号再登录 → 照常 302', again.status === 302 && !!again.sid,
     `HTTP ${again.status}`);
   const sess = await call('GET', '/api/security/sessions', { cookie: `bandi_sid=${again.sid}` });
   check('登录用户 GET /api/security/sessions → 200 列表',
@@ -301,10 +305,10 @@ try {
   const bad = await hubLogin(BASE, { username: '甲', password: 'not-the-password', origin: BASE });
   check('错密码 → 401 回登录页（表单还在，能重输）', bad.status === 401 && bad.html.includes('action="/hub/login"'),
     `HTTP ${bad.status}`);
-  // 登录即注册：没见过的手机号在中枢侧注册成功，但这台机器认领已关闭 → 挡在授权表
+  // 登录即注册 + 登录即放行：没见过的手机号在中枢注册成功，进门自动建自己的影子账号
   const ghostLogin = await hubLogin(BASE, { username: '13900139000', password: 'whatever-123', origin: BASE });
-  check('没注册过的手机号 → 中枢自动注册成功，但机器没认过 → 403 E7003',
-    ghostLogin.status === 403 && ghostLogin.html.includes('E7003'), `HTTP ${ghostLogin.status}`);
+  check('没注册过的手机号 → 中枢自动注册，进门自动建影子账号 → 302',
+    ghostLogin.status === 302 && !!ghostLogin.sid, `HTTP ${ghostLogin.status}`);
 
   /* ============ ⑩ 会话落库 + 服务器形态 ============ */
   console.log('\n⑩ 会话落库：重启后仍有效；服务器形态下死票 / 伪造票一律 401');

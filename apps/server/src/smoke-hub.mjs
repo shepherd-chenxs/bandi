@@ -1,13 +1,13 @@
 /**
- * 身份中枢进门的验收（2026-11-06）。
+ * 身份中枢进门的验收（2026-11-06；2026-11-07 三改「登录即放行」）。
  *
  * 钉住的是 bandi-hub/contract.md §五、§六 那两条：
  *   · 验票：逐字节认 header（不做 alg 协商）、内置公钥验签、aud/iss、过期、dev 是不是自己、jti 一次性；
- *   · 进门：验过 ≠ 能进 —— 还要过本地授权表（hub_links）；首次认领只对**空表**成立一次。
+ *   · 进门：验过 = 能进 —— 中枢账号首次进门自动建**自己的**影子账号
+ *     （登录即放行；曾经的「本地授权表 + bandi hub allow」第二道闸已退场）。
  *
- * 五类负样本各有对应的错误码，改坏了要看得出来是哪一条松了：
- *   E7001 签名/格式（篡改、alg=none）、E7003 过期、E7004 换了机器、E7005 重放、
- *   E7003 页面（本地没认过这个账号）。
+ * 负样本各有对应的错误码，改坏了要看得出来是哪一条松了：
+ *   E7001 签名/格式（篡改、alg=none）、E7003 过期、E7004 换了机器、E7005 重放。
  *
  * 隔离：临时数据目录 + 临时端口（对齐 smoke-pair.mjs 的 spawn 模式）。
  * 跑法：node apps/server/src/smoke-hub.mjs
@@ -39,10 +39,10 @@ const HEADER = Buffer.from(JSON.stringify({ alg: 'Ed25519', typ: 'JWT' }), 'utf8
 const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
 const PUB = publicKey.export({ format: 'der', type: 'spki' }).subarray(-32).toString('base64url');
 
-/** 按中枢的格式签一张票 */
-function sign({ sub = 'acc_me', dev = 'dev_self', exp = 300, jti = crypto.randomBytes(9).toString('base64url'), key = privateKey, header = HEADER } = {}) {
+/** 按中枢的格式签一张票（`login` = 2026-11-07 起随票带的登录名，机器端建影子账号用它） */
+function sign({ sub = 'acc_me', dev = 'dev_self', login = null, exp = 300, jti = crypto.randomBytes(9).toString('base64url'), key = privateKey, header = HEADER } = {}) {
   const now = Math.floor(Date.now() / 1000);
-  const payload = { iss: 'bandi-hub', aud: 'bandi', sub, dev, jti, iat: now, exp: now + exp };
+  const payload = { iss: 'bandi-hub', aud: 'bandi', sub, dev, ...(login ? { login } : {}), jti, iat: now, exp: now + exp };
   const body = `${header}.${Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url')}`;
   const sig = crypto.sign(null, Buffer.from(body, 'utf8'), key).toString('base64url');
   return `${body}.${sig}`;
@@ -83,10 +83,9 @@ console.log('\n[1] 验票');
 
 const dataDir = path.join(tmp, 'data');
 fs.mkdirSync(dataDir, { recursive: true });
-// claimPending=true 模拟"中枢没回 accountId"的老版本握手：第一次进门时认领给本机第一个用户
 fs.writeFileSync(
   path.join(dataDir, 'hub.json'),
-  JSON.stringify({ baseUrl: 'https://hub.test', deviceId: 'dev_self', deviceToken: 'dt_test', publicKey: PUB, accountId: null, claimPending: true }, null, 2),
+  JSON.stringify({ baseUrl: 'https://hub.test', deviceId: 'dev_self', deviceToken: 'dt_test', publicKey: PUB, accountId: null }, null, 2),
   { mode: 0o600 },
 );
 
@@ -114,20 +113,13 @@ try {
   }
 
   console.log('\n[2] 进门');
-  // 先建一个本机账号 —— 会话必须落到一个本地用户上（零账号时 hub 进不来）
-  const mk = await fetch(base + '/api/users', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-bandi': '1' },
-    body: JSON.stringify({ name: '老板' }),
-  });
-  check('本机建好第一个账号', mk.status === 201 || mk.status === 200, `HTTP ${mk.status}`);
-
+  // 零账号也放行（登录即放行）：第一张票进门时自动建**内置**影子账号（防锁死锚）
   const noTicket = await get('/hub/enter');
   const noTicketHtml = await noTicket.text();
   check('没带票 → 400 E7002', noTicket.status === 400 && noTicketHtml.includes('E7002'), `HTTP ${noTicket.status}`);
 
-  // 本地授权表为空 = 首次认领：把 acc_me 绑到「老板」
-  const firstTicket = sign({ sub: 'acc_me' });
+  // 第一张票（带 login 声明）进门：自动建内置影子账号「老板」
+  const firstTicket = sign({ sub: 'acc_me', login: '老板' });
   const first = await get(`/hub/enter?ticket=${encodeURIComponent(firstTicket)}`);
   const cookie = first.headers.get('set-cookie') ?? '';
   check('有效票 → 302 到 /', first.status === 302 && first.headers.get('location') === '/', `HTTP ${first.status}`);
@@ -137,9 +129,8 @@ try {
   const pageHtml = await page.text();
   // 面板首页的 title 是「班底」，登录页是「班底 · 登录」—— 用这个分，别用关键词（首页里也有"登录"两个字）
   check('带着这枚会话能进面板（不是登录页）', page.status === 200 && pageHtml.includes('<title>班底</title>'), `HTTP ${page.status}`);
-
-  const cfgAfter = JSON.parse(fs.readFileSync(path.join(dataDir, 'hub.json'), 'utf8'));
-  check('首次认领后 claimPending 关掉', cfgAfter.claimPending === false);
+  const bossMe = await (await get('/api/me', { cookie: `bandi_sid=${sid}` })).json();
+  check('影子账号自动建成：内置、名字取票里的 login', bossMe?.kind === 'user' && bossMe?.user?.name === '老板', JSON.stringify(bossMe ?? {}));
 
   console.log('\n[3] 负样本');
   const expired = await get(`/hub/enter?ticket=${encodeURIComponent(sign({ sub: 'acc_me', exp: -600 }))}`);
@@ -151,9 +142,14 @@ try {
   const badSig = await get(`/hub/enter?ticket=${encodeURIComponent(sign({ sub: 'acc_me' }).slice(0, -4) + 'AAAA')}`);
   check('签名坏了 → 400 E7001', badSig.status === 400 && (await badSig.text()).includes('E7001'), `HTTP ${badSig.status}`);
 
-  // 有效票但本地没认过这个账号：授权表已经有行了（上面认领过），不会再认领
-  const stranger = await get(`/hub/enter?ticket=${encodeURIComponent(sign({ sub: 'acc_stranger' }))}`);
-  check('有效票 + 本地没认过 → 403 E7003', stranger.status === 403 && (await stranger.text()).includes('E7003'), `HTTP ${stranger.status}`);
+  // 有效票但没见过的账号：登录即放行 —— 自动建它自己的影子账号（不再有 E7003 那道闸）
+  const stranger = await get(`/hub/enter?ticket=${encodeURIComponent(sign({ sub: 'acc_stranger', login: '陌生人' }))}`);
+  const strangerCookie = /bandi_sid=([^;]+)/.exec(stranger.headers.get('set-cookie') ?? '')?.[1] ?? '';
+  check('有效票 + 没见过的账号 → 302 进门（登录即放行）', stranger.status === 302 && !!strangerCookie, `HTTP ${stranger.status}`);
+  const strangerMe = await (await get('/api/me', { cookie: `bandi_sid=${strangerCookie}` })).json();
+  check('陌生人 → 自己的影子账号「陌生人」（不是老板那枚，署名按人分）',
+    strangerMe?.kind === 'user' && strangerMe?.user?.name === '陌生人' && strangerMe?.user?.id !== bossMe?.user?.id,
+    JSON.stringify(strangerMe ?? {}));
 
   const replayed = await get(`/hub/enter?ticket=${encodeURIComponent(firstTicket)}`);
   check('同一张票再用一次 → 410 E7005', replayed.status === 410 && (await replayed.text()).includes('E7005'), `HTTP ${replayed.status}`);
@@ -254,14 +250,20 @@ try {
   const badLogin = await hubLogin(base2, { username: '甲', password: 'wrong-pass-9', origin: base2 });
   check('错的密码原地回登录页并给原因', badLogin.status === 401 && badLogin.html.includes('action="/hub/login"'), `HTTP ${badLogin.status}`);
 
-  // 认领只此一次：第二个中枢账号凭对的密码也进不来，得机器主人放行
+  // 登录即放行（2026-11-07 三改）：第二个中枢账号凭对的密码直接进门，
+  // 自动建**自己的**影子账号 —— 不再有 E7003 / bandi hub allow 那道闸。
+  const meJia = await (await fetch(`${base2}/api/me`, { headers: { cookie: `bandi_sid=${okLogin.sid}` } })).json();
+  check('甲进门 → 自己的影子账号「甲」（内置）', meJia?.kind === 'user' && meJia?.user?.name === '甲', JSON.stringify(meJia ?? {}));
   const secondLogin = await hubLogin(base2, { username: '乙', password: '乙-pass-456', origin: base2 });
-  check('第二个中枢账号凭对密码也进不来（认领已关闭）→ 403', secondLogin.status === 403 && secondLogin.html.includes('E7003'),
+  check('第二个中枢账号凭对密码 → 302 进门（登录即放行）', secondLogin.status === 302 && !!secondLogin.sid,
     `HTTP ${secondLogin.status}`);
-  check('拒绝文案指路 bandi hub allow', secondLogin.html.includes('bandi hub allow'));
-  // 甲（已认领的账号）再登录 → 照常进门：认领是一次性的，不是每次登录都要重新认
+  const secondMe = await (await fetch(`${base2}/api/me`, { headers: { cookie: `bandi_sid=${secondLogin.sid}` } })).json();
+  check('乙进门 → 自己的影子账号「乙」（不是甲那枚，署名按人分）',
+    secondMe?.kind === 'user' && secondMe?.user?.name === '乙' && secondMe?.user?.id !== meJia?.user?.id,
+    JSON.stringify(secondMe ?? {}));
+  // 甲（已绑定的账号）再登录 → 照常进门
   const reLogin = await hubLogin(base2, { username: '甲', password: '甲-pass-123', origin: base2 });
-  check('已认领的账号再登录 → 照常 302', reLogin.status === 302 && !!reLogin.sid, `HTTP ${reLogin.status}`);
+  check('已绑定的账号再登录 → 照常 302', reLogin.status === 302 && !!reLogin.sid, `HTTP ${reLogin.status}`);
 
   child2.kill();
   await stub.close();

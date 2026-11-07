@@ -75,8 +75,6 @@ export async function loginThroughHub({ dataDir, username, password, mode = 'log
     name,
     port: port ?? cfg?.port ?? null,
     joinedAt: cfg?.joinedAt ?? new Date().toISOString(),
-    // 走到这里说明这台机器已经是这个账号的了，不再需要"首次进门认领"那套
-    claimPending: false,
   };
   writeHubConfig(dataDir, next);
 

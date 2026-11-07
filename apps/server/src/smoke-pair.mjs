@@ -23,7 +23,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { repoRoot } from './config.mjs';
 import { stopRunning, sleep } from './lifecycle.mjs';
 import { startHubStub, hubLogin } from './hub-stub.mjs';
@@ -32,7 +32,6 @@ const P_OPEN = Number(process.env.SMOKE_PORT ?? 8860);
 const P_LOOP = P_OPEN + 1;
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bandi-pair-'));
 const SERVER = path.join(repoRoot, 'apps', 'server', 'src', 'server.mjs');
-const CLI = path.join(repoRoot, 'apps', 'server', 'src', 'cli.mjs');
 // 死地址（discard 端口，没东西在听）：回环实例用不到中枢登录，指过去只为别去碰真中枢
 const HUB_DEAD = 'http://127.0.0.1:9';
 
@@ -450,25 +449,14 @@ try {
   const bossId = bossMe.json?.user?.id;
   check('/api/me 说他是登录用户「老王」', bossMe.json?.kind === 'user' && bossMe.json?.user?.name === '老王', JSON.stringify(bossMe.json));
 
-  // 第二个人：先建影子账号（预占名字），再把中枢账号显式放行到它头上
-  const mkLi = await send(baseB, '/api/users', {
-    body: { name: '小李' },
-    headers: { ...op, 'X-Bandi': '1' },
-  });
-  check('建影子账号「小李」→ 201（非内置）', mkLi.status === 201 && !!mkLi.json?.user?.id && !mkLi.json?.user?.builtin, `${mkLi.status} ${JSON.stringify(mkLi.json?.user ?? mkLi.json?.code ?? '')}`);
-  const liId = mkLi.json?.user?.id;
-  const allowCli = spawnSync(process.execPath, [CLI, 'hub', 'allow', 'acc_li', '--user', liId], {
-    cwd: repoRoot,
-    env: { ...process.env, BANDI_DATA: tmp + '-' + P_OPEN, BANDI_DB: path.join(tmp + '-' + P_OPEN, 'bandi.db'), NO_COLOR: '1' },
-    encoding: 'utf8',
-    windowsHide: true,
-  });
-  const allowOut = String(allowCli.stdout ?? '') + String(allowCli.stderr ?? '');
-  check('bandi hub allow 把中枢账号 acc_li 绑到小李头上', allowCli.status === 0 && allowOut.includes('已放行'), allowOut.trim().split('\n')[0]?.slice(0, 120));
+  // 第二个人：登录即放行（2026-11-07 三改）—— 中枢账号首次进门自动建**自己的**影子账号，
+  // 不再「先建影子再 bandi hub allow」（那道闸随协作时代退场）。
   const li = await loginAs('小李', 'li-pass-1234');
-  check('小李登录 → 会话落到影子账号上', li.status === 302 && /bandi_sid=/.test(li.jar), String(li.status));
+  check('小李登录 → 302 拿到会话', li.status === 302 && /bandi_sid=/.test(li.jar), String(li.status));
   const liMe = await get(baseB, '/api/me', { Cookie: li.jar });
-  check('/api/me 说她是登录用户「小李」（同一个 id）', liMe.json?.kind === 'user' && liMe.json?.user?.name === '小李' && liMe.json?.user?.id === liId, JSON.stringify(liMe.json));
+  check('/api/me 说她是登录用户「小李」（自己的影子，不是老王那枚）',
+    liMe.json?.kind === 'user' && liMe.json?.user?.name === '小李' && liMe.json?.user?.id !== bossId, JSON.stringify(liMe.json));
+  const liId = liMe.json?.user?.id;
 
   const invLi = await send(baseB, '/api/pair/tokens', { headers: { Cookie: li.jar, 'X-Bandi': '1', ...li.csrf } });
   check('小李发码 → 码上写明归属人（owner=小李）', invLi.status === 200 && invLi.json?.owner?.name === '小李', JSON.stringify(invLi.json?.owner ?? null));

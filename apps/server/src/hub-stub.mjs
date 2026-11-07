@@ -28,10 +28,10 @@ export function generateKeyPair() {
   return { publicKey: pub, privateKey };
 }
 
-/** 按中枢的格式签一张票（verifyTicket 的正样本） */
-export function signTicket(privateKey, { sub = 'acc_me', dev = 'dev_self', exp = 300, jti = crypto.randomBytes(9).toString('base64url') } = {}) {
+/** 按中枢的格式签一张票（verifyTicket 的正样本）。`login` = 中枢登录名（手机号），机器端拿它建影子账号 */
+export function signTicket(privateKey, { sub = 'acc_me', dev = 'dev_self', login = null, exp = 300, jti = crypto.randomBytes(9).toString('base64url') } = {}) {
   const now = Math.floor(Date.now() / 1000);
-  const payload = { iss: 'bandi-hub', aud: 'bandi', sub, dev, jti, iat: now, exp: now + exp };
+  const payload = { iss: 'bandi-hub', aud: 'bandi', sub, dev, ...(login ? { login } : {}), jti, iat: now, exp: now + exp };
   const body = `${HEADER}.${Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url')}`;
   const sig = crypto.sign(null, Buffer.from(body, 'utf8'), privateKey).toString('base64url');
   return `${body}.${sig}`;
@@ -81,7 +81,8 @@ export function startHubStub({ keyPair = generateKeyPair(), deviceId = 'dev_self
         const acct = accounts[username];
         const id = acct.id ?? `acc_${username}`;
         return reply(200, {
-          ticket: signTicket(keyPair.privateKey, { sub: id, dev: deviceId }),
+          // 票带 login（与真中枢 2026-11-07 起同语义）：机器端 /hub/enter 据此给影子账号起人话名
+          ticket: signTicket(keyPair.privateKey, { sub: id, dev: deviceId, login: username }),
           deviceId,
           deviceToken,
           publicKey: keyPair.publicKey,

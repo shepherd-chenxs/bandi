@@ -24,7 +24,7 @@ export function hubConfigPath(dataDir) {
   return path.join(dataDir, 'hub.json');
 }
 
-/** @param {string} dataDir @returns {null | { baseUrl: string, deviceId: string, deviceToken: string, publicKey: string, accountId?: string|null, claimPending?: boolean, name?: string, joinedAt?: string }} */
+/** @param {string} dataDir @returns {null | { baseUrl: string, deviceId: string, deviceToken: string, publicKey: string, accountId?: string|null, name?: string, joinedAt?: string }} */
 export function readHubConfig(dataDir) {
   try {
     const raw = fs.readFileSync(hubConfigPath(dataDir), 'utf8');

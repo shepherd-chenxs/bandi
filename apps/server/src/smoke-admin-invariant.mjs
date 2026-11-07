@@ -11,7 +11,8 @@
  *      名字是它的另一条腿：占用即 E3802；
  *   ② 登录即全权下的账号接口：普通中枢会话就能管影子账号、读审计、看/踢自己的会话
  *      （安全口只认**会话里**的身份 —— 回环 operator 反而不行，机器不是人）。
- *      多个中枢账号绑定的是**同一个**本地首账号 —— 本地没有"第二个有会话的用户"可造。
+ *      多个中枢账号进门各自建**自己的**影子账号（登录即放行，2026-11-07 三改）——
+ *      署名按人分，本地仍然没有"第二个管理员"这种东西。
  *
  * 流程（照 smoke-hub.mjs [4c] 的写法）：起一个假中枢 → 把本机 hub.json 指到它 →
  * 在回环（loopback）形态下 hubLogin 一次 → 中枢认人 → 绑本机第一个用户（builtin）。
@@ -24,7 +25,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { repoRoot } from './config.mjs';
 import { sleep } from './lifecycle.mjs';
 import { startHubStub, hubLogin } from './hub-stub.mjs';
@@ -34,7 +35,6 @@ const BASE = `http://127.0.0.1:${PORT}`;
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bandi-admininv-'));
 const dataDir = tmp;
 const SERVER = path.join(repoRoot, 'apps', 'server', 'src', 'server.mjs');
-const CLI = path.join(repoRoot, 'apps', 'server', 'src', 'cli.mjs');
 
 let failed = 0;
 const check = (label, ok, detail = '') => {
@@ -173,35 +173,28 @@ try {
     && (sess.body?.sessions?.length ?? 0) >= 1
     && (sess.body?.sessions ?? []).every((s) => typeof s.id === 'string' && s.id.length === 8), `${sess.status} ${sess.raw?.slice(0, 120)}`);
 
-  // 第二个中枢账号：认领已关闭，凭对的密码也进不来（E7003，smoke-hub [4] 同款）；
-  // 机器主人 `bandi hub allow` 放行后才进得来 —— 进来绑的还是**同一个**本地首账号
-  // （本地不会冒出第二个有会话的用户）。
-  const deny = await hubLogin(BASE, { username: '乙', password: '乙-pass-456', origin: BASE });
-  check('第二个中枢账号凭对密码也进不来（认领已关闭）→ 403 E7003',
-    deny.status === 403 && deny.html.includes('E7003'), `HTTP ${deny.status}`);
-  const allowCli = spawnSync(process.execPath, [CLI, 'hub', 'allow', 'acc_乙'], {
-    cwd: repoRoot,
-    env: { ...process.env, BANDI_DATA: dataDir, BANDI_DB: path.join(dataDir, 'bandi.db'), NO_COLOR: '1' },
-    encoding: 'utf8',
-    windowsHide: true,
-  });
-  const allowOut = String(allowCli.stdout ?? '') + String(allowCli.stderr ?? '');
-  check('bandi hub allow 放行成功', allowCli.status === 0 && allowOut.includes('已放行'), allowOut.trim().split('\n')[0]?.slice(0, 120));
+  // 第二个中枢账号：登录即放行（2026-11-07 三改，用户：「用户不会给你执行 bandi hub
+  // allow」）—— 凭对密码直接进门，自动建**自己的**影子账号（不再收敛到首账号：
+  // actorUser 认本地 userId，署名要按人分）。meKicked 那条踢会话也靠这枚新会话。
   const reg = await hubLogin(BASE, { username: '乙', password: '乙-pass-456', origin: BASE });
-  check('放行后的第二个中枢账号 → 302 进来', reg.status === 302 && !!reg.sid, `HTTP ${reg.status}`);
+  check('第二个中枢账号凭对密码 → 302 进来（登录即放行）', reg.status === 302 && !!reg.sid, `HTTP ${reg.status}`);
   const me2 = await call('GET', '/api/me', { cookie: `bandi_sid=${reg.sid}` });
-  check('两个中枢账号 → 同一个本地用户（绑定收敛到首账号）',
-    me2.body?.kind === 'user' && me2.body?.user?.id === me.body?.user?.id, `${me2.status} ${JSON.stringify(me2.body ?? {})}`);
+  check('乙进门 → 自己的影子账号（不是首账号）',
+    me2.body?.kind === 'user' && me2.body?.user?.id !== me.body?.user?.id && me2.body?.user?.name === '乙',
+    `${me2.status} ${JSON.stringify(me2.body ?? {})}`);
   const list2 = await call('GET', '/api/users');
-  check('本地名册仍然只有内置一个账号', list2.body?.users?.length === 1, JSON.stringify(list2.body?.users ?? []));
+  check('本地名册：内置 + 乙的影子，共两个', list2.body?.users?.length === 2, JSON.stringify(list2.body?.users ?? []));
 
-  /* 先补种 csrf（面板页自愈），再以第一枚会话踢掉其它会话 */
+  /* 先补种 csrf（面板页自愈）；踢会话按**用户**收敛 —— 乙如今是自己的影子账号，
+     就用乙的第二枚会话去踢乙的第一枚，钉住「踢其它」照常工作 */
   await call('GET', '/', { cookie: sid });
-  const kick = await call('POST', '/api/security/sessions/revoke-others', { cookie: sid });
-  check('踢其它会话 → 200 且踢掉 ≥1 条（乙那枚）', kick.status === 200 && (kick.body?.kicked ?? 0) >= 1, `${kick.status} ${kick.raw?.slice(0, 100)}`);
-  const sessAfter = await call('GET', '/api/security/sessions', { cookie: sid });
-  check('踢完后只剩当前这张票', sessAfter.status === 200 && (sessAfter.body?.sessions?.length ?? 0) === 1, JSON.stringify(sessAfter.body ?? {}).slice(0, 120));
-  const meKicked = await call('GET', '/api/security/audit', { cookie: `bandi_sid=${reg.sid}` });
+  const reg2 = await hubLogin(BASE, { username: '乙', password: '乙-pass-456', origin: BASE });
+  check('乙再登一枚 → 两枚会话分属两行', reg2.status === 302 && !!reg2.sid && reg2.sid !== reg.sid, `HTTP ${reg2.status}`);
+  const kick = await call('POST', '/api/security/sessions/revoke-others', { cookie: `bandi_sid=${reg.sid}` });
+  check('踢其它会话 → 200 且踢掉 ≥1 条（乙那枚多的）', kick.status === 200 && (kick.body?.kicked ?? 0) >= 1, `${kick.status} ${kick.raw?.slice(0, 100)}`);
+  const sessAfter = await call('GET', '/api/security/sessions', { cookie: `bandi_sid=${reg.sid}` });
+  check('踢完后乙只剩当前这张票', sessAfter.status === 200 && (sessAfter.body?.sessions?.length ?? 0) === 1, JSON.stringify(sessAfter.body ?? {}).slice(0, 120));
+  const meKicked = await call('GET', '/api/security/audit', { cookie: `bandi_sid=${reg2.sid}` });
   // ⚠️ 回环形态下死票在 /api/me 上会被 loopback operator 兜住（200），看不出死活 ——
   // 安全口只认会话里的身份，才是死票的照妖镜。
   check('被踢的那枚会话票摸安全口 → 401 E3810（会话真被删了）', meKicked.status === 401 && meKicked.body?.code === 'E3810', `${meKicked.status} ${meKicked.body?.code ?? ''}`);

@@ -687,7 +687,7 @@ async function cmdUser(argv) {
      * 2026-11-07 起账号只是「中枢账号在本机的影子」：建号 = 预占一个名字
      * （中枢账号首次登录时按 hub_links 绑到它头上），密码与角色都不在本机。
      */
-    return `${green('已创建')}「${name}」${r.json?.first ? '（第一个账号，内置不可删）' : ''}\n${dim('  中枢账号首次登录时会自动绑定；要提前认领别的账号：bandi hub allow <账号 id>')}`;
+    return `${green('已创建')}「${name}」${r.json?.first ? '（第一个账号，内置不可删）' : ''}\n${dim('  「登录即放行」之下这个预占基本用不上：中枢账号首次登录会建自己的影子账号')}`;
   }
 
   return `不认识的子命令：user ${sub}\n（bandi user list | create <名字>）`;
@@ -696,7 +696,8 @@ async function cmdUser(argv) {
 /* ------------------------------------------------------------------ hub */
 
 /*
- * 身份中枢（2026-11-06；2026-11-07 设备码加入通道退场）：status | leave | allow | revoke。
+ * 身份中枢（2026-11-06；2026-11-07 设备码加入通道退场、allow/revoke 随「登录即放行」退场）：
+ * status | leave。
  *
  * ⚠️ 这里**动态 import** `hub/join.mjs`（它会开库）—— 铁律②要求 `bandi status`
  * 在"库坏了"的时候也能说人话，所以这条依赖只能出现在 `hub` 子命令里，
@@ -721,11 +722,11 @@ async function cmdHub(argv) {
     return [
       `已加入中枢 ${green(s.baseUrl)}`,
       `  设备  ${s.deviceId}${s.name ? dim(` · ${s.name}`) : ''}`,
-      `  账号  ${s.accountId ?? dim('（未知，第一次进门时认领）')}`,
+      `  账号  ${s.accountId ?? dim('（未知）')}`,
       `  加入于 ${s.joinedAt ?? '?'}`,
-      `  授权表 ${links.length ? '' : dim('（空）')}`,
+      `  绑定表 ${links.length ? '' : dim('（空）')}`,
       ...links.map((l) => `    ${l.accountId} → ${l.userId}${l.lastEnterAt ? dim(` · 最近 ${l.lastEnterAt}`) : ''}`),
-      dim('  放行一个账号：bandi hub allow <账号 id>'),
+      dim('  登录即放行：中枢账号首次进门自动建自己的影子账号，无需任何命令'),
     ].join('\n');
   }
 
@@ -734,26 +735,7 @@ async function cmdHub(argv) {
     return had ? `${green('已退出中枢')}（本地数据一个字节没动；要再接回来，在本机登录页重新登录一次）` : '这台机器本来就没加入中枢。';
   }
 
-  if (sub === 'allow') {
-    const accountId = words[2];
-    if (!accountId) return '用法：bandi hub allow <中枢账号 id> [--user 本机用户名或 id]\n  账号 id 在手机上「我的」页，或中枢的设备列表里';
-    try {
-      const r = hub.allowAccount({ accountId, userId: argOf(argv, '--user') });
-      return `${green('已放行')} ${r.accountId} → 本机用户「${r.userName}」\n${dim('  他现在可以从手机点进这台机器了')}`;
-    } catch (e) {
-      return red(`${e?.code ? `${e.code} ` : ''}${e?.message ?? e}`);
-    }
-  }
-
-  if (sub === 'revoke' || sub === 'deny') {
-    const accountId = words[2];
-    if (!accountId) return '用法：bandi hub revoke <中枢账号 id>';
-    return hub.revokeAccount(accountId)
-      ? `${green('已收回')} ${accountId} 的进入权限（他的会话下一次请求就失效）`
-      : `授权表里没有 ${accountId}。`;
-  }
-
-  return `不认识的子命令：hub ${sub}\n（bandi hub status | join <中枢地址> | leave | allow <账号> | revoke <账号>）`;
+  return `不认识的子命令：hub ${sub}\n（bandi hub status | leave）`;
 }
 
 /* --------------------------------------------------------- install-cli */
@@ -852,10 +834,8 @@ const HELP = `班底 · 命令行
   bandi nodes leave        退出总机
   bandi nodes list         （总机视角）登记了哪些算力节点、在不在线
   bandi nodes invite       （总机视角）发一个一次性加入邀请码
-  bandi hub [status]       身份中枢：这台机器登录过吗、谁被允许进来
+  bandi hub [status]       身份中枢：登录状态与影子账号绑定表
   bandi hub leave          退出中枢（本地数据一个字节没动）
-  bandi hub allow <账号>   放行一个中枢账号进这台机器（--user 指定本机用户）
-  bandi hub revoke <账号>  收回某个中枢账号的进入权限
   bandi data export [--dir 目录]
                            导出数据快照（服务器形态下这是唯一入口）
   bandi user list          账号列表

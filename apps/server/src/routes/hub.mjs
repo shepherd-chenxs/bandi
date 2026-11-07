@@ -9,7 +9,7 @@
  *
  * `GET /hub/enter` 这一步做三件事，顺序不能换：
  *   1. **验票**（hub/verify.mjs）：签名、aud/iss、过期、dev 是不是这台机器、jti 没重放；
- *   2. **查本地授权表**（store/hubLinks.mjs）：这台机器认不认识这个中枢账号；
+ *   2. **绑影子账号**（bindHubAccount）：中枢账号在本机落一个本地用户（首次自动建）；
  *   3. **发本机会话**（与用户名密码登录**同一套** `bandi_sid`）—— 不另造权限模型。
  *
  * 错误一律给**一张小页面**（不是 JSON）：打开这个地址的是手机 WebView，JSON 在
@@ -19,11 +19,40 @@
 import * as store from '../store.mjs';
 import * as auth from '../auth.mjs';
 import * as csrf from '../security/csrf.mjs';
-import { readHubConfig, writeHubConfig } from '../hub/config.mjs';
+import { readHubConfig } from '../hub/config.mjs';
 import { loginThroughHub } from '../hub/login.mjs';
 import { HubError } from '../hub/client.mjs';
 import { VERIFY_ERRORS, verifyTicket } from '../hub/verify.mjs';
 import { poke as pokeHeartbeat } from '../hub/join.mjs';
+
+/*
+ * 中枢账号 → 本机影子账号（2026-11-07 三改：**登录即放行**）。
+ *
+ * 口径沿革：§二十五「认领只此一次 + `bandi hub allow` 放行」是协作时代的第二道闸，
+ * 与 §二十六 定下的「能过中枢登录这一关，本机就不再有第二道分级」自相矛盾；
+ * 用户实报一锤定音：「用户不会给你执行这个命令」—— 家里人走到电脑前用自己的
+ * 中枢账号登录，被要求在主机上跑命令，这不是产品该有的样子。所以：
+ *
+ *   · 中枢验过票 / 密码 = 授权完成，本机不再有第二道闸（E7003 与 allow/revoke 退场）；
+ *   · 本机还没有任何账号 → 建出来的就是**内置账号**（防锁死锚，E3808 保护不变）；
+ *   · 之后的每个中枢账号自动建**自己的**影子账号 —— 署名按人分（actorUser 认本地
+ *     userId，全家收敛到一个影子就分不清谁说的了）；
+ *   · 影子名取中枢登录名（手机号，全局唯一），撞了已有名字就缀上中枢账号 id。
+ *
+ * 安全取舍（用户拍板接受）：中枢被攻破 / 签发私钥泄露时，伪造的票不再撞「没认过」
+ * 一道，而是直接进门 —— 防换钥匙那道还在（钉公钥不符即 E7113，见 hub/login.mjs）。
+ *
+ * @param {string} accountId 中枢账号 id（票的 sub / device-login 回的 account.id）
+ * @param {string|null} login 中枢登录名（手机号；票里没有时退回账号 id）
+ */
+function bindHubAccount(accountId, login) {
+  const existing = store.hubLinkOf(accountId);
+  if (existing) return existing;
+  const base = String(login ?? '').trim() || accountId;
+  const name = store.hasUsers() && store.nameTaken(base) ? `${base}·${accountId}` : base;
+  const user = store.createUser({ name });
+  return store.linkHubAccount({ accountId, userId: user.id, login: login ?? null });
+}
 
 /**
  * @param {import('node:http').IncomingMessage} req
@@ -73,33 +102,11 @@ export async function handleHub(req, res, url, { dataDir, port }) {
 
   const accountId = String(v.payload.sub);
   /*
-   * 本地授权表：中枢只说了"他是谁"，这里才回答"他能不能进这台机器"。
-   *
-   * 「首次认领」只在**表还是空的时候**成立一次：这台机器刚被第一个账号登录绑定完，
-   * 人就在机器跟前。之后任何新账号都要在这台机器上显式放行
-   * （`bandi hub allow <账号 id>`），否则中枢侧的账号再多也进不来。
+   * 绑影子账号：登录即放行（2026-11-07 三改，见 bindHubAccount 的口径说明）。
+   * 票里现在带 `login` 声明（中枢签票时写入，2026-11-07 起）—— 老票没有就退回
+   * 账号 id 当名字，那个人下次在登录页输一次密码就会对齐（名条随中枢对齐那步）。
    */
-  let link = store.hubLinkOf(accountId);
-  if (!link && cfg.claimPending !== false && store.countHubLinks() === 0) {
-    const owner = store.firstUser();
-    if (owner) {
-      link = store.linkHubAccount({ accountId, userId: owner.id });
-      // 认领一次就完事：改回 false，别让"空表"这条路一直敞着
-      try {
-        writeHubConfig(dataDir, { ...cfg, claimPending: false });
-      } catch { /* 写不进去也不影响这次进门，下次还会走到同一个分支 */ }
-    }
-  }
-
-  if (!link) {
-    return errorPage(
-      res,
-      403,
-      'E7003',
-      '这台机器还没确认这个账号',
-      `在主机上跑一次：bandi hub allow ${accountId}`,
-    );
-  }
+  const link = bindHubAccount(accountId, v.payload.login ?? null);
 
   const user = store.getUser(link.userId);
   if (!user || user.disabled) {
@@ -217,20 +224,10 @@ async function handleLocalLogin(req, res, { dataDir, port }) {
   }
 
   /*
-   * 本地用户：**认领只发生一次**（2026-11-07 两套账号分离）。中枢注册常开之后，
-   * 任何人都能注册一个设备账号 —— 如果每次登录都自动绑定，就等于谁注册谁进门。
-   * 所以和 /hub/enter 同一条口径：授权表**还是空的**时，第一个登录的人认领这台机器
-   * （绑到本机第一个用户，没有就建一个）；之后的新账号一律要机器主人显式放行
-   * （`bandi hub allow <账号 id>`）。
+   * 登录即放行（2026-11-07 三改，见文件头 bindHubAccount 的口径说明）：
+   * 中枢验过密码 = 授权完成。首个进门的人建内置账号，后来的自动建**自己的**影子。
    */
-  let link = store.hubLinkOf(out.account.id);
-  if (!link && store.countHubLinks() === 0) {
-    const owner = store.firstUser() ?? store.createUser({ name: out.account.name || out.account.login });
-    link = store.linkHubAccount({ accountId: out.account.id, userId: owner.id, login: out.account.login });
-  }
-  if (!link) {
-    return fail('E7003 这台机器还没认这个账号 —— 让机器主人在主机上跑 bandi hub allow 后再登录', 403);
-  }
+  const link = bindHubAccount(out.account.id, out.account.login ?? null);
   const user = store.getUser(link.userId);
   if (!user || user.disabled) return fail('E7004 这个账号在这台机器上被停用了', 403);
 

@@ -1,12 +1,16 @@
 /*
- * hub/join.mjs —— 「活着时每 60 秒向中枢报一次到」+ 授权（allow/revoke）与状态。
+ * hub/join.mjs —— 「活着时每 60 秒向中枢报一次到」+ 状态快照与退出。
  *
  * 机器接入（2026-11-07 起）只有一条路：**在本机登录页输中枢手机号密码**（登录即注册），
  * 设备当场登记进名册（hub/login.mjs → device-login）。曾经的 `bandi hub join` 设备码
  * 通道随中枢侧 enroll 端点一起退场 —— 它是为"主机没有浏览器"设计的，而登录页恰恰
  * 就是主机开着的页面。
  *
- * 这份文件剩下的都是**长活**：心跳、状态快照、授权表的放行/收回。
+ * 曾经的「授权表」allow/revoke（bandi hub allow 放行账号进本机）随「登录即放行」
+ * 一起退场（2026-11-07 用户拍板：用户不会去主机上跑命令）—— 中枢验过人，本机就认，
+ * 每个中枢账号首次进门自动建自己的影子账号（见 routes/hub.mjs 的 bindHubAccount）。
+ *
+ * 这份文件剩下的都是**长活**：心跳、状态快照、退出。
  */
 
 import os from 'node:os';
@@ -110,41 +114,10 @@ export function hubStatus(dataDir) {
   };
 }
 
-/** 退出中枢：只删「加入」这件事，**不动授权表**（谁被允许进来是另一件事） */
+/** 退出中枢：只删「加入」这件事（配置与心跳），不动影子账号与已发的会话 */
 export function leave(dataDir) {
   const had = !!readHubConfig(dataDir);
   clearHubConfig(dataDir);
   stopHeartbeat();
   return had;
-}
-
-/* -------------------------------------------------------------- 授权表 */
-
-/**
- * 放行一个中枢账号进这台机器（`bandi hub allow`）。
- *
- * 为什么这条必须是**本机命令**而不是中枢上的一个开关：中枢被攻破时，攻击者已经能
- * 伪造任意账号的票；如果"谁能进这台机器"也由中枢说了算，那道闸就等于不存在。
- * 所以放行只能在这台机器的 shell 里做（能跑命令的人 = 已经能碰这台机器的人）。
- *
- * @param {{ accountId: string, userId?: string|null }} input
- * @returns {{ accountId: string, userId: string, userName: string }}
- */
-export function allowAccount({ accountId, userId = null }) {
-  const id = String(accountId ?? '').trim();
-  if (!id) throw new HubError('E7120', '要指定中枢账号 id（`bandi hub status` 里能看到待确认的那个）');
-  const user = userId ? store.getUser(String(userId)) : store.firstUser();
-  if (!user) {
-    throw new HubError(
-      'E7121',
-      userId ? `这台机器上没有这个用户：${userId}` : '这台机器还没有任何账号，先用中枢账号登录一次（会自动建），或 bandi user create <名字> 预占',
-    );
-  }
-  store.linkHubAccount({ accountId: id, userId: user.id });
-  return { accountId: id, userId: user.id, userName: user.name };
-}
-
-/** @param {string} accountId */
-export function revokeAccount(accountId) {
-  return store.removeHubLink(String(accountId ?? '').trim());
 }
