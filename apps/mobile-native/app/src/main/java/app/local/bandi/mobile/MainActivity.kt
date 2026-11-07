@@ -30,6 +30,7 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import app.local.bandi.mobile.databinding.ActivityMainBinding
@@ -66,9 +67,31 @@ class MainActivity : AppCompatActivity() {
     private var pendingClearHistory = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+
+        /*
+         * Android 15+（本机是 Android 16）强制 edge-to-edge：WebView 的内容会画到
+         * 状态栏和导航栏下面，而 Android WebView 的 env(safe-area-inset-*) 恒为 0，
+         * 网页自己的安全区 padding 不起作用 —— 面板里底部固定的按钮（抽屉 / 弹窗）
+         * 会被系统导航栏挡住（用户实报）。修法与 Tauri 壳同款：给根内容视图补上
+         * 「状态栏 + 刘海」的顶部 padding，「导航栏」与「键盘」取较大者的底部 padding
+         * （键盘弹起时导航栏 inset 变 0，取 max 才不会一开一关抖一下）—— WebView
+         * 整个落在安全区里，网页以为的高度就是真实可用高度。
+         */
+        val content = findViewById<View>(android.R.id.content)
+        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(content) { view, insets ->
+            val top = insets.getInsets(
+                androidx.core.view.WindowInsetsCompat.Type.statusBars()
+                    or androidx.core.view.WindowInsetsCompat.Type.displayCutout(),
+            ).top
+            val navBottom = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.navigationBars()).bottom
+            val imeBottom = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.ime()).bottom
+            view.setPadding(0, top, 0, maxOf(navBottom, imeBottom))
+            insets
+        }
 
         setupWebView()
         setupBackHandler()

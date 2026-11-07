@@ -550,7 +550,7 @@ function walk(dir, exts, skip) {
 }
 
 // ② 的扫描面（规格就是这三个地方：前端 / 插件 / 手机）
-const FRONT_ROOTS = ['apps/web', 'plugins', 'apps/mobile'];
+const FRONT_ROOTS = ['apps/web', 'plugins', 'apps/mobile-native'];
 // ③ 额外算上"服务端内部的跨机/CLI 调用方"（实现侧自己不算，否则自我覆盖）
 const SERVER_CALLER_FILES = walk(path.join(repo, 'apps/server/src'), EXTS, SNAPSHOT_SKIP)
   .filter((f) => !f.startsWith('apps/server/src/routes/')

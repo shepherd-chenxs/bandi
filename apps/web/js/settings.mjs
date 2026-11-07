@@ -829,7 +829,11 @@ export async function renderImageAi() {
  * 为什么是 location.reload()：重载走服务端的闸，由它决定给登录页还是面板。
  */
 async function logout() {
-  const ok = await confirmDo('退出登录？这台浏览器上的登录票和访问令牌都会清掉，下次进来走登录页。', {
+  /*
+   * 文案说「这台设备」而不是「这台浏览器」（2026-11-07 手机端实机截图）：同一个弹窗
+   * 桌面浏览器和手机壳里都会出现，写成浏览器在手机上就是错的；"设备"两边都读得通。
+   */
+  const ok = await confirmDo('退出登录？这台设备上的登录票和访问令牌都会清掉，下次进来走登录页。', {
     title: '退出登录',
     ok: '退出',
   });

@@ -18,7 +18,7 @@
             android:orientation="vertical"
             android:paddingStart="24dp"
             android:paddingEnd="24dp"
-            android:paddingTop="72dp"
+            android:paddingTop="24dp"
             android:paddingBottom="32dp">
 
             <LinearLayout
@@ -165,7 +165,7 @@
             android:layout_height="wrap_content"
             android:paddingStart="24dp"
             android:paddingEnd="24dp"
-            android:paddingTop="72dp"
+            android:paddingTop="24dp"
             android:textAppearance="?attr/textAppearanceHeadlineSmall"
             android:textStyle="bold"
             android:text="选择电脑" />

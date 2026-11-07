@@ -25,15 +25,16 @@ object Probe {
         val host = if (idx > 0) hostPort.substring(0, idx) else hostPort
         val port = if (idx > 0) hostPort.substring(idx + 1).toIntOrNull() ?: 18787 else 18787
 
-        val sock = Socket()
-        try {
-            sock.connect(InetSocketAddress(host, port), 4_000)
-            sock.soTimeout = 4_000
-            val req = "GET /api/hello HTTP/1.1\r\n" +
-                "Host: $host:$port\r\n" +
-                "User-Agent: bandi-mobile-native\r\n" +
-                "Accept: application/json\r\n" +
-                "Connection: close\r\n\r\n"
+            val sock = Socket()
+            try {
+                sock.connect(InetSocketAddress(host, port), 4_000)
+                sock.soTimeout = 4_000
+                // ⚠️ 用 HTTP/1.0：1.1 + 无 Content-Length 时 Node 会回 chunked
+                //（hex 长度行夹在正文前），裸读 JSON 会解析失败 —— 实测踩过
+                val req = "GET /api/hello HTTP/1.0\r\n" +
+                    "Host: $host:$port\r\n" +
+                    "User-Agent: bandi-mobile-native\r\n" +
+                    "Accept: application/json\r\n\r\n"
             sock.getOutputStream().write(req.toByteArray(Charsets.UTF_8))
             val text = sock.getInputStream().bufferedReader().readText()
             val status = text.lineSequence().firstOrNull() ?: return null

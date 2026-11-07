@@ -640,8 +640,11 @@
    v152（2026-11-07 原生壳）：壳换成 Kotlin 原生 App（apps/mobile-native），桥升级成
    addJavascriptInterface 的 `window.BandiShell`（页面第一行起可用）：「当前设备」
    与「退出登录」优先调方法（openDeviceList / onLoggedOut），旧 Tauri 壳的
-   __BANDI_SHELL__ hash 流保留作兜底，浏览器 / PWA 照旧走各自路径。settings.mjs 变了，进一版。 */
-const VERSION = 'v152';
+   __BANDI_SHELL__ hash 流保留作兜底，浏览器 / PWA 照旧走各自路径。settings.mjs 变了，进一版。
+
+   v153（2026-11-07 实机截图）：退出登录的确认弹窗写着「这台浏览器上的登录票」——
+   同一个弹窗在手机壳里也出现，手机上叫"浏览器"是错的，改成「这台设备」。进一版逼客户端换。 */
+const VERSION = 'v153';
 const CACHE = `bandi-static-${VERSION}`;
 
 /*
