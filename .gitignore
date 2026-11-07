@@ -109,3 +109,6 @@ codex-*.html
 headers-platform.txt
 tmp_state.json
 tmp_tasks.json
+
+# wrangler 本地状态（从 bandi 目录跑 wrangler deploy 时落在 cwd 的缓存，不入库）
+.wrangler/

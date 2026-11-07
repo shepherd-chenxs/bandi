@@ -129,6 +129,12 @@ export async function openMe() {
    */
   const hello = await api('/api/hello').catch(() => null);
   /*
+   * 壳标记（2026-11-07）：跑在手机壳里时由壳的 initialization_script 注入
+   * （apps/mobile/src/lib.rs），带启动页地址。浏览器 / PWA 没有它 ——
+   * 「当前设备」行与退出落点都只在壳里生效，桌面行为一个字节不变。
+   */
+  const shell = window.__BANDI_SHELL__ ?? null;
+  /*
    * 机器信息两套行（2026-11-07）：
    *   桌面 —— 四行，系统与版本并成一行（卡宽够，"Linux 6.x x64 · 班底 v1.5.x"一行读得完）；
    *   手机 —— 三行，系统 / 版本**分开**：窄屏一行放不下"Linux 6.8.0-138-generic x64 ·
@@ -277,6 +283,25 @@ export async function openMe() {
       </section>`
       }
       ${
+        /* 「当前设备」（2026-11-07 用户：「我的页面加一个当前设备菜单。点击之后进入
+           到设备列表页，选择之后进行切换」）：只在**壳里 + 中枢账号会话**画 ——
+           面板和启动页是两个 origin，"设备列表"只存在于壳的启动页上；桥 = 导航回
+           启动页并带上 #bandi-devices 意图（会话还活着，启动页开机自动进列表）。
+           扫码进来的设备身份没有中枢会话，列表对它无意义（2026-11-07 同日撤掉扫码，
+           老设备令牌到过期为止），不画这行。值显示这台面板是哪台机器（/api/hello）。 */
+        shell && onPhone && hello && isUser
+          ? `<section class="set-sec me-cache-sec">
+               <div class="me-dev-box">
+                 <button type="button" class="me-kv" id="meSwitchDevice">
+                   <span class="me-k">当前设备</span>
+                   <span class="me-v">${esc(hello.label || hello.hostname || '—')}</span>
+                   <i class="me-chevron" aria-hidden="true">›</i>
+                 </button>
+               </div>
+             </section>`
+          : ''
+      }
+      ${
         /* 退场动作整宽一行：个人中心的"走人"动作用整行 + 文字染色，比右下角一颗
            小按钮稳。退出登录染 --bad（"走人"的分量）；断开连接/去登录是中性动作，不染。
            （2026-11-07：账号安全双卡随本地密码/OTP 退场 —— 密码与动态验证都在中枢上管。） */
@@ -309,6 +334,13 @@ export async function openMe() {
     });
   }
   $('meLogout')?.addEventListener('click', () => void logout());
+  /*
+   * 当前设备 → 回启动页的设备列表（2026-11-07）：只在壳里渲染（见上面 shell），
+   * 导航回启动页并带意图 hash，启动页 boot() 会吃掉它（apps/mobile/dist/launcher.js）。
+   */
+  $('meSwitchDevice')?.addEventListener('click', () => {
+    if (shell?.home) location.href = shell.home + '#bandi-devices';
+  });
   /*
    * 清除缓存（2026-11-06）：进页先异步算一遍 bandi-static-* 缓存体积亮在行尾；
    * 点击 → confirmDo → 清掉全部 Cache Storage + 注销 Service Worker → location.reload()。
@@ -805,6 +837,17 @@ async function logout() {
       toast(e?.message ?? '退出失败', 'error');
       return;
     }
+  }
+  /*
+   * 壳里退出（2026-11-07 用户：「点击退出按钮，退出到最开始的登录页」）：面板自己的
+   * 登录页对手机壳没有意义 —— 导航回启动页并带 #bandi-bye 意图，由启动页把中枢会话
+   * 一并清掉、落回登录页并报「已退出登录」（launcher.js boot）。机器侧的会话票和
+   * 访问令牌 Cookie 上面 /api/logout 已经清了。浏览器 / PWA 维持原样：重载走服务端的闸。
+   */
+  const shellHome = window.__BANDI_SHELL__?.home;
+  if (shellHome) {
+    location.href = shellHome + '#bandi-bye';
+    return;
   }
   location.reload();
 }

@@ -158,8 +158,45 @@ class MainActivity : TauriActivity() {
   override fun onWebViewCreate(webView: WebView) {
     super.onWebViewCreate(webView)
     shellWebView = webView
+    applyWebViewPolicy()
     // 重挂：保证我们的回调是 dispatcher 里最后加入的 —— 压过 AppPlugin 那个
     hookBack(webView)
+  }
+
+  /** 填充排除是否已经钉上（钉一次就停，onResume 不再重复找） */
+  private var shellPolicyDone = false
+
+  /*
+   * 把 WebView 从系统「自动填充 / 保存密码」里排除（2026-11-07 用户实报：登录后
+   * 弹「保存 tauri.localhost 的账号密码？」—— 那是 Android WebView 的密码管理
+   * 启发式，不是班底的设计；它还会在每台电脑的登录页上再弹，host 显示成假域名，
+   * 并把中枢密码存进系统填充库）。会话是 30 天 Cookie，重新手填密码的场景极少，
+   * 这个弹窗只有困惑没有收益 —— 整个 WebView 连同子树一起退出自动填充，
+   * 老接口 setSavePassword(false) 一并兜住（老系统上另一个独立的开关）。
+   *
+   * 为什么不只在 onWebViewCreate 里做：这个回调在某些 Tauri/WebView 组合上
+   * 不保证被调（返回键的兜底搜索一直都在工作就是旁证）——所以 onResume
+   * 也找一遍，找到就钉上并停；两条路谁先到都行。
+   */
+  private fun applyWebViewPolicy() {
+    val wv = shellWebView ?: findWebView(window.decorView ?: return) ?: return
+    // ⚠️ 每次都重涂（不留 done 标志）：dumpsys autofill 的请求历史证明第一版「钉一次」
+    // 没有生效（18:50 仍有会话）—— 要么 WebView 晚挂、要么 Chromium 会在某些时机
+    // 重置标志；重涂是幂等的，onResume 一次不过几微秒。
+    wv.importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
+    @Suppress("DEPRECATION")
+    wv.settings.savePassword = false
+    wv.settings.saveFormData = false
+    android.util.Log.i(
+      "bandi-shell",
+      "autofill policy applied: view=" + System.identityHashCode(wv) +
+        " flag=" + wv.importantForAutofill + " savePassword=" + wv.settings.savePassword,
+    )
+  }
+
+  override fun onResume() {
+    super.onResume()
+    applyWebViewPolicy()
   }
 
 }

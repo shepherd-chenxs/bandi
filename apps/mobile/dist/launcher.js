@@ -1,7 +1,9 @@
 /*
  * launcher.js —— 手机壳的启动页（2026-11-07 改版：登录 → 设备列表 → 进一台）。
  *
- * 主路径（用户 2026-11-07 定稿）：
+ * 主路径（用户 2026-11-07 定稿；同日再拍板「撤掉扫码，hub 唯一入口」——
+ * 曾经的兜底三条「扫码 / 邀请码 / 已配对」整场退场，扫码时代的视图、
+ * scanner.js 与 vendored jsQR 一并删除）：
  *   A. 账号密码登录：手机号 + 密码 → POST <中枢>/v1/auth/phone-login，换一枚
  *      `role:'user'` 的会话（30 天，存 localStorage）。手机号就是电脑上登录用的那个。
  *   B. 设备列表：GET <中枢>/v1/devices（Bearer 会话）→ 你名下那几台机器；
@@ -10,10 +12,7 @@
  *      打开 `<那台电脑>/hub/enter?ticket=…`，电脑验票（它本地钉着中枢公钥）后发会话。
  *      **这一路不用输码**：票就是进门凭据（契约 §五/§六）。
  *
- * 兜底三条（「连不上中枢？」那一组）：扫码 / 邀请码 / 已配对 —— 都是老机制，
- * 只在中枢够不着、电脑还没进名册、或要把这台手机配成长期钥匙时才用。
- *
- * 视图与 history：home / devices / code / paired 四层，切换一律 pushState，
+ * 视图与 history：home / devices 两层，切换一律 pushState，
  * Android 返回键一层层退（详见 squashHistory 的注释）。
  *
  * 探测和跳转交给 Rust（probe / open_server）：本页 origin 是 http://tauri.localhost，
@@ -27,14 +26,6 @@
     showStatus('请通过班底 App 打开这个页面。', 'bad');
     return;
   }
-
-  /** 邀请码位数（与服务端 store/devices.mjs 的 PAIR_CODE_DIGITS 一致） */
-  const CODE_LEN = 9;
-  // 报错文案尽量压在一行内 —— 错误条两行会把按钮往键盘里多顶 20px
-  const CODE_HINT = '电脑上那串 ' + CODE_LEN + ' 位数字';
-
-  /** 连过的电脑（Rust `get_settings().servers`，新的在前） */
-  let saved = [];
 
   let statusTimer = 0;
 
@@ -164,9 +155,8 @@
   /* ------------------------------------------------------------ 视图 */
 
   /*
-   * 状态就两个字段：view = home | devices | code | paired，detail = 是否停在某一层的详情。
-   * 渲染是纯函数式的（apply 只读 state 摆 DOM），history 里存的也是同一份 state ——
-   * 返回键和点「返回」因此走同一条路，不用各写一遍。
+   * 状态就两个字段：view = home | devices。渲染是纯函数式的（apply 只读 state 摆 DOM），
+   * history 里存的也是同一份 state —— 返回键因此走同一条路，不用各写一遍。
    */
   const HOME = { view: 'home', detail: false };
   let state = HOME;
@@ -178,21 +168,12 @@
   let leaving = false;
   /** 被 squashHistory 退掉的层（失败时补回来用） */
   let squashed = [];
-  /** 「取消配对」后要重读列表：等 popstate 落回上一层再读，避免和 history 抢状态 */
-  let pendingReload = false;
 
   function apply(next) {
     state = next && next.view ? next : HOME;
     const v = state.view;
     $('viewHome').hidden = v !== 'home';
     $('viewDevices').hidden = v !== 'devices';
-    $('viewCode').hidden = v !== 'code';
-    $('viewPaired').hidden = v !== 'paired';
-    // 详情打开时列表和说明都让位（⚠️ 它们自己声明了 display，必须显式藏）
-    $('pairedDetail').hidden = !(v === 'paired' && state.detail);
-    $('pairedList').hidden = v === 'paired' && state.detail;
-    $('pairedHint').hidden = v === 'paired' && state.detail;
-    $('pairedTitle').hidden = v === 'paired' && state.detail;
     document.body.dataset.view = v;
   }
 
@@ -207,11 +188,6 @@
     } catch {
       /* pushState 不可用（file:// 之类）：返回键就退页，认了 */
     }
-  }
-
-  function back() {
-    if (depth > 0) history.back();
-    else apply(HOME);
   }
 
   /*
@@ -229,9 +205,9 @@
    * 连接**失败**时 restoreHistory 把退掉的那几层照原样压回去（不然这一趟白退，
    * 返回键就成"直接退 App"了）。
    *
-   * ⚠️ 例外 —— keepBack=true：扫码/邀请码/设备点选这几条**地址靠猜**的路不清历史，
+   * ⚠️ 例外 —— keepBack=true：设备点选这条**地址靠猜**的路不清历史，
    *   连错时 WebView 停在错误页/陌生页，返回键是唯一的退路：history 里留着
-   *   「首页 → 那一层」这条栈，replace 顶掉最上面那层之后，远程页按返回正好退回上一层。
+   *   「首页 → 设备列表」这条栈，replace 顶掉最上面那层之后，远程页按返回正好退回上一层。
    */
   async function squashHistory(keepBack) {
     if (keepBack) return;
@@ -279,10 +255,6 @@
     apply(e.state);
     const ae = document.activeElement;
     if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA')) ae.blur();
-    if (pendingReload) {
-      pendingReload = false;
-      reloadPaired();
-    }
   });
 
   /* ------------------------------------------------------------ 连接 */
@@ -495,62 +467,6 @@
     }
   }
 
-  /* ------------------------------------------------------------ 两栏输入（邀请码兜底） */
-
-  /** 地址列：去空白、去尾部斜杠（`https://x.com/` + `/pair?code=` 会长出双斜杠） */
-  function readAddr() {
-    return $('addrInput').value.trim().replace(/\/+$/, '');
-  }
-
-  /** 整条配对链接（粘贴进来的，或老二维码里的 `?token=bp_…`） */
-  function looksLikePairUrl(v) {
-    return /^https?:\/\/\S+\/pair(\?|$)/i.test(v);
-  }
-
-  /** 邀请码列：只认 9 位数字，其余返回 null */
-  function readCode() {
-    const digits = $('codeInput').value.replace(/\D/g, '');
-    return digits.length === CODE_LEN ? digits : null;
-  }
-
-  function setCode(digits) {
-    const el = $('codeInput');
-    el.value = String(digits || '')
-      .replace(/\D/g, '')
-      .slice(0, CODE_LEN)
-      .replace(/(\d{3})(?=\d)/g, '$1 ');
-  }
-
-  /**
-   * 两栏 → 真正要打开的地址。
-   *
-   * 地址栏里如果已经是一条完整配对链接（用户从电脑上复制粘贴的），原样用 ——
-   * 那是"没有相机"时唯一的活路，不该要求他手工拆成两截。
-   */
-  function buildTarget(addr, code) {
-    if (looksLikePairUrl(addr)) return addr;
-    if (!addr) return null;
-    // 用户可能只写了域名/IP，也可能顺手粘了带路径的首页地址：只取 origin
-    const origin = (addr.match(/^https?:\/\/[^/?#]+/i) || [])[0] || addr;
-    return origin + '/pair?code=' + encodeURIComponent(code);
-  }
-
-  function submit(btn) {
-    const addr = readAddr();
-    if (!addr) {
-      showStatus('先填电脑地址，如 192.168.1.5:18787', 'bad');
-      return;
-    }
-    // 完整链接直接走（老二维码 / 手抄链接；里面可能带的是 token 而不是 code）
-    if (looksLikePairUrl(addr)) return void connect(addr, btn, null, true);
-    const code = readCode();
-    if (!code) {
-      showStatus('邀请码还差几位 —— ' + CODE_HINT, 'bad');
-      return;
-    }
-    return void connect(buildTarget(addr, code), btn, null, true);
-  }
-
   /* ------------------------------------------------------------ 已配对 */
 
   const esc = (s) =>
@@ -560,130 +476,6 @@
   function hostOf(origin) {
     const m = String(origin || '').match(/^https?:\/\/([^/]+)/i);
     return m ? m[1] : String(origin || '');
-  }
-
-  function fmtAgo(ms) {
-    if (!ms) return '之前连过';
-    const d = Date.now() - ms;
-    if (d < 0 || d < 60e3) return '刚刚';
-    if (d < 3600e3) return Math.floor(d / 60e3) + ' 分钟前';
-    if (d < 86400e3) return Math.floor(d / 3600e3) + ' 小时前';
-    if (d < 30 * 86400e3) return Math.floor(d / 86400e3) + ' 天前';
-    return new Date(ms).toLocaleDateString();
-  }
-
-  /**
-   * 列表重画。名字优先用 `/api/hello` 报的机器名，没有就退回地址。
-   * 整行是一个按钮（点哪都进详情），右端那个箭头只是"这里有下一层"的指示。
-   */
-  function renderPaired() {
-    const box = $('pairedList');
-    if (!box) return;
-    if (!saved.length) {
-      box.innerHTML = '<div class="empty">还没有连过任何电脑</div>';
-      return;
-    }
-    box.innerHTML = saved
-      .map((s, i) => {
-        const name = s.label || s.hostname || hostOf(s.origin);
-        const meta = [hostOf(s.origin), fmtAgo(s.lastAt)].filter(Boolean).join(' · ');
-        return `
-        <button class="paired-row" type="button" data-open="${esc(s.origin)}" aria-label="查看 ${esc(name)} 的连接信息">
-          <span class="paired-main">
-            <span class="paired-name"><span class="paired-txt">${esc(name)}</span>${i === 0 ? '<span class="paired-tag">最近</span>' : ''}</span>
-            <span class="paired-meta">${esc(meta)}</span>
-          </span>
-          <span class="paired-chev" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M9 5l7 7-7 7" />
-            </svg>
-          </span>
-        </button>`;
-      })
-      .join('');
-  }
-
-  /** 首页那一行入口的副标题：`3 台 · 2 小时前` */
-  function renderEntry() {
-    const row = $('pairedEntry');
-    const meta = $('pairedMeta');
-    row.hidden = !saved.length;
-    if (!saved.length) return;
-    const n = saved.length === 1 ? '1 台' : saved.length + ' 台';
-    meta.textContent = [n, fmtAgo(saved[0].lastAt)].filter(Boolean).join(' · ');
-  }
-
-  /* ------------------------------------------------------------ 已配对 · 详情 */
-
-  /** 详情页当前看的那台（空 = 没开详情） */
-  let pdOrigin = '';
-
-  /**
-   * 进详情。**不连** —— 连接是详情页里那个明确动作（用户 2026-11-01 定：
-   * 列表上点一下就秒连太容易误触，先看清是哪台再决定）。
-   */
-  function openPairDetail(origin) {
-    const s = saved.find((x) => x.origin === origin);
-    if (!s) return;
-    pdOrigin = origin;
-    const name = s.label || s.hostname || hostOf(s.origin);
-    const host = s.hostname && s.hostname !== name ? s.hostname : '';
-    $('pdName').textContent = name;
-    $('pdHost').textContent = host;
-    $('pdHost').hidden = !host;
-    $('pdOrigin').textContent = s.origin;
-    $('pdLast').textContent = fmtAgo(s.lastAt);
-    go({ view: 'paired', detail: true });
-  }
-
-  function closePairDetail() {
-    pdOrigin = '';
-    apply({ view: 'paired', detail: false });
-    clearStatus();
-  }
-
-  /** 重新读一遍记录（Rust 侧已经排好序：新的在前） */
-  async function reloadPaired() {
-    let s = null;
-    try {
-      s = await invoke('get_settings');
-    } catch {
-      /* 读不到就保持原样 */
-    }
-    if (s) saved = Array.isArray(s.servers) ? s.servers.filter((x) => x && x.origin) : [];
-    renderPaired();
-    renderEntry();
-    // 记录清空 → 首页那行入口跟着消失（否则点进去是空列表，没意义）
-    apply(state);
-  }
-
-  /* ------------------------------------------------------------ 启动 */
-
-  async function boot() {
-    await reloadPaired();
-    apply(HOME);
-
-    // 中枢地址：记得上次填的就回填（默认那个不写进输入框，占位符已经写了）
-    const hubSaved = lsGet(K_HUB);
-    if (hubSaved) $('hubInput').value = hubSaved;
-
-    const session = lsGet(K_SESSION);
-    if (!session) return;
-    const account = lsGet(K_ACCOUNT);
-    if (account) $('phoneInput').value = account;
-
-    // 有会话就直接试着进列表（票 30 天有效，重开 App 不该再让人输一遍密码）
-    apply({ view: 'devices', detail: false });
-    try {
-      await loadDevices();
-    } catch (e) {
-      if (e && e.status === 401) {
-        signOut('登录已过期，请重新登录');
-      } else {
-        $('devSub').textContent = '读取名册失败';
-        $('deviceList').innerHTML = '<div class="empty">' + esc(errText(e)) + '</div>';
-      }
-    }
   }
 
   /* ------------------------------------------------------------ 事件 */
@@ -724,123 +516,8 @@
     }
   });
 
-  $('devLogout').addEventListener('click', () => signOut('已退出登录'));
-
-  $('codeEntry').addEventListener('click', () => go({ view: 'code', detail: false }));
-  $('pairedEntry').addEventListener('click', () => go({ view: 'paired', detail: false }));
-
-  // 返回：详情 → 列表 → 首页，交给 history 一层层退（返回键走同一条路）
-  $('codeBack').addEventListener('click', () => back());
-  $('pairedBack').addEventListener('click', () => back());
-
-  $('connectBtn').addEventListener('click', () => submit($('connectBtn')));
-
-  /*
-   * 输入即格式化：只留数字、每三位一个空格（`482 913 665`），跟电脑上显示的
-   * 分组一致 —— 抄错一位最常见的形态就是"中间那组少一个数"。粘进来的整条
-   * 链接不碰（那种内容放地址栏更合适，见 buildTarget）。
-   */
-  $('codeInput').addEventListener('input', () => {
-    const el = $('codeInput');
-    const digits = el.value.replace(/\D/g, '').slice(0, CODE_LEN);
-    el.value = digits.replace(/(\d{3})(?=\d)/g, '$1 ');
-    if (digits.length === CODE_LEN) clearStatus();
-  });
-
-  $('addrInput').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      $('codeInput').focus();
-    }
-  });
-
-  /*
-   * 「已配对」：列表 → 详情两级。
-   *   · 点行 → 进详情（读连接信息），**不直接连** —— 一秒连错电脑比多点一下烦；
-   *   · 详情「连接」→ `<origin>/pair?resume=1`：远程页拿 localStorage 的 clientKey
-   *     换新令牌，不用邀请码；
-   *   · 详情「取消配对」→ 只清这台手机上的记录，电脑端那条设备记录不动。
-   */
-  $('pairedList').addEventListener('click', (e) => {
-    const row = e.target.closest('[data-open]');
-    if (row) openPairDetail(row.dataset.open);
-  });
-
-  $('pdConnect').addEventListener('click', () => {
-    if (!pdOrigin) return;
-    // 提示条交给 connect 自己发（它开头会 clearStatus，这里先写也会被清掉）
-    connect(pdOrigin.replace(/\/+$/, '') + '/pair?resume=1', $('pdConnect'), null, true);
-  });
-
-  $('pdForget').addEventListener('click', async () => {
-    const b = $('pdForget');
-    if (!pdOrigin) return;
-    const name = $('pdName').textContent || pdOrigin;
-    b.disabled = true;
-    try {
-      await invoke('forget_server', { origin: pdOrigin });
-      pdOrigin = '';
-      // 退回列表再重读：先退 history，落到上一层后在 popstate 里 reload
-      if (depth > 1) {
-        pendingReload = true;
-        showStatus('已取消配对：' + name, 'good');
-        history.back();
-        return;
-      }
-      await reloadPaired();
-      closePairDetail();
-      showStatus('已取消配对：' + name, 'good');
-    } catch (err) {
-      b.disabled = false;
-      showStatus(String(err || '取消配对失败'), 'bad');
-    } finally {
-      b.disabled = false;
-    }
-  });
-
-  $('codeInput').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') submit($('connectBtn'));
-  });
-
-  /*
-   * 扫一扫：相机与解码在 scanner.js，这里只管"解到东西之后怎么办"。
-   * 二维码内容 = `http://<ip>:<port>/pair?code=…`（地址 + 邀请码一起带），
-   * 所以拆成两半填进输入框再连接 —— 用户能看见自己扫到了什么，填错了还能改。
-   */
-  $('scanEntry').addEventListener('click', async () => {
-    if (!window.BandiScan) {
-      showStatus('扫码模块没加载上（dist/scanner.js 丢了）', 'bad');
-      return;
-    }
-    clearStatus();
-    try {
-      await window.BandiScan.open((text) => applyScan(text));
-    } catch (e) {
-      // 相机起不来（没权限 / 被占用 / 没摄像头）：直接进邀请码视图，
-      // 让人还有路可走。scanner 的文案里已带「切到邀请码手输」，别再拼一遍。
-      showStatus(String((e && e.message) || e), 'bad');
-      go({ view: 'code', detail: false });
-    }
-  });
-
-  /** 扫码结果：能拆就拆成两栏（可核对），拆不了就整条打开 */
-  function applyScan(text) {
-    const t = String(text || '').trim();
-    if (!t) return;
-    const origin = (t.match(/^https?:\/\/[^/?#]+/i) || [])[0] || '';
-    const code = (t.match(/[?&]code=(\d{6,12})/i) || [])[1] || '';
-
-    if (!origin) {
-      showStatus('这不是班底的配对码 —— 回电脑上再扫一次', 'bad');
-      return;
-    }
-    // 进邀请码视图再填：用户能核对扫到了什么（返回键能退回首页）
-    go({ view: 'code', detail: false });
-    $('addrInput').value = origin;
-    if (code) setCode(code);
-    // 带 token 的老码 / 没解析出 code 的，整条打开；其余走标准配对地址
-    return void connect(code ? buildTarget(origin, code) : t, null, null, false);
-  }
+  // devLogout（列表页的退出登录）2026-11-07 随按钮一起撤：退出的正路只剩
+  // 面板「我的 → 退出登录」（#bandi-bye 闭环），signOut 留给 401 过期与 boot 用。
 
   /*
    * 键盘适配（2026-11 实测结论，写下来免得下次又踩）：

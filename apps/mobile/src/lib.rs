@@ -506,6 +506,56 @@ pub fn run() {
                 tauri::WebviewUrl::App("index.html".into()),
             )
             .title("班底")
+            /*
+             * 给**每一页**（含导航过去的远程面板）注入壳标记 + 密码框改造（2026-11-07）。
+             *
+             * 标记：面板（机器的网页）与启动页是两个 origin，互相摸不到对方的 JS 与
+             * 存储；面板的「我的」页要认出"我跑在壳里"并拿到启动页地址，「当前设备 /
+             * 退出登录」才有路回去（消费方 apps/web/js/settings.mjs，意图 hash 见
+             * launcher.js boot）。浏览器 / PWA 没有这个标记，那两行根本不渲染。
+             * Android 上启动页 origin 是 http://tauri.localhost（tauri manager
+             * get_app_url(false) 在 android 分支返回的值）。
+             *
+             * 密码框改造：Android 16 的 WebView 存密码弹窗走凭据管理器那套，
+             * importantForAutofill / setSavePassword 都压不住（用户实报三轮）。
+             * 釜底抽薪：把 input[type=password] 转成 type=text + `-webkit-text-security:
+             * disc` —— 看到的效果一模一样（圆点掩码），但 Chromium 的凭据启发式
+             * 彻底失去判定依据，「保存账号密码？」永远不再弹。壳是 30 天会话 +
+             * 单人设备，系统里存中枢密码没有收益只有困惑。MutationObserver 兜住
+             * 动态渲染的登录页（机器侧登录失败重渲染等），rAF 去抖别在重页面刷。
+             */
+            .initialization_script(
+                r#"window.__BANDI_SHELL__={home:'http://tauri.localhost/'};
+(function(){
+  var mark='data-bandi-pw';
+  var pending=false;
+  function convert(root){
+    try{
+      var list=(root||document).querySelectorAll('input[type=password]');
+      for(var i=0;i<list.length;i++){
+        var el=list[i];
+        if(el.getAttribute(mark)) continue;
+        el.setAttribute(mark,'1');
+        el.type='text';
+        el.style.webkitTextSecurity='disc';
+      }
+    }catch(e){}
+  }
+  function queue(){
+    if(pending) return;
+    pending=true;
+    requestAnimationFrame(function(){ pending=false; convert(document); });
+  }
+  function start(){
+    convert(document);
+    try{
+      new MutationObserver(queue).observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['type']});
+    }catch(e){}
+  }
+  if(document.documentElement) start();
+  else document.addEventListener('DOMContentLoaded',start);
+})();"#,
+            )
             .on_navigation(|url| matches!(url.scheme(), "tauri" | "http" | "https"))
             .build()?;
             Ok(())
