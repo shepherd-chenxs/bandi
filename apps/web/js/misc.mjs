@@ -7,9 +7,6 @@ import { confirmDo } from './machine.mjs';
 import { openPluginForm, pluginFormId } from './experts.mjs';
 import { refreshDeptSuggest } from './contacts.mjs';
 import { $, LOCAL_BASE, S } from './core.mjs';
-import { MENU_KEYS, canSee, canSeeKeys, resolveRole } from './roles.mjs';
-// 首次引导（2026-10-31 用户概念落地）：一个账号都没有时，启动完弹「创建用户」
-import { maybeFirstUser } from './useradmin.mjs';
 
 
 
@@ -167,8 +164,6 @@ function sizeText(n) {
  *
  * 所以这一页按**本机配置面**分节（连接 / 这台机器 / 运行时 / 访问方式 / 数据 / 关于），
  * 版式沿用设置页那套 `set-sec` / `set-box` / `set-row`，不另造视觉。
- * 每节的准入走 `roles.mjs` 的 `canSee(role, key)` —— 本轮恒真，但门必须有：
- * 以后「菜单配置」要改的就是那一处，不该回来重写这页。
  *
  * 弹窗（confirmDo 的 #askDlg）是 body 下的常驻节点，没被藏 —— 「退出总机」的确认照常可用。
  */
@@ -222,23 +217,7 @@ export function renderNodeMode(st) {
     const running = !!c.node?.running;
     const external = !!c.node?.external; // autostart 拉起的常驻（退出时要连自启一起收）
     const warnings = (s?.warnings ?? []).map((w) => `<div class="machine-warn">${esc(w)}</div>`).join('');
-    /*
-     * 查看者身份 × 机器角色的组合（roles.mjs）。机器角色优先信 `/api/hello` 的新字段；
-     * 它还没回来时按 `/api/local/status` 的 joined 兜底 —— 这页本来就是"已加入"才画的，
-     * 所以兜底恒为 node，不会出现"hello 慢半拍，六节先消失再出现"的闪动。
-     */
     const machineRole = self.role === 'node' || c.joined ? 'node' : 'operator';
-    const role = resolveRole({ isDevice: !!S.isDevice, machineRole });
-    /*
-     * **菜单以总机下发的为准**（2026-10-28 第四刀）：`panelRole` 由心跳写进本机
-     * `node-panel.json`，`/api/local/status` 读出来给我们。没下发（`null`）= 不限制，
-     * 六节全显示 —— 与改之前一模一样。
-     *
-     * `role` 那一列现在只是**兜底口径**（总机还没下发过、或老总机）：它仍然是
-     * `roles.mjs` 里 node 那六个 key，所以两种来源画出来是同一个页面。
-     */
-    const panelKeys = Array.isArray(s?.panelRole?.menuKeys) ? s.panelRole.menuKeys : null;
-    const roleName = String(s?.panelRole?.name ?? '').trim();
     /* 明细行的小图标（14px 线性，颜色随 --dim）：给每行一点可扫读的锚点 */
     const ICO = {
       hub: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="7" rx="2"></rect><rect x="3" y="13" width="18" height="7" rx="2"></rect><path d="M7 7.5h.01"></path><path d="M7 16.5h.01"></path></svg>',
@@ -256,26 +235,13 @@ export function renderNodeMode(st) {
     const row = (label, valueHtml, icon) =>
       `<div class="set-row"><span class="set-label">${icon ?? ''}${esc(label)}</span><div class="machine-data">${valueHtml}</div></div>`;
 
-    /**
-     * 一个分节。`key` 就是 roles.mjs 的菜单 key —— 准入检查**放在这里**，
-     * 六个分节都从这一条路出去，不会有哪一节忘了过门。
-     *
-     * **「连接」这一节永远显示**（2026-10-28 第四刀，安全阀）：它身上挂着「打开总机面板」
-     * 与「退出总机」两个逃生口 —— 管理员一旦在某台机器上勾错了角色，那是唯一能把
-     * 那台机器救回来的路。其余五节照总机下发的 `menuKeys` 收敛。
-     */
-    const allowed = (key) => {
-      if (key === MENU_KEYS.NODE_CONNECTION) return true;
-      return panelKeys ? canSeeKeys(panelKeys, key) : canSee(role, key);
-    };
-    const sec = (key, title, tag, inner, extra = '') =>
-      allowed(key)
-        ? `<section class="set-sec machine-card">
-             <div class="set-head"><b>${esc(title)}</b>${tag ? `<span class="set-tag">${esc(tag)}</span>` : ''}</div>
-             <div class="set-box">${inner}</div>
-             ${extra}
-           </section>`
-        : '';
+    /** 一个分节（2026-11-07 起不做菜单收敛：六节全显示，角色/菜单体系已退场） */
+    const sec = (title, tag, inner, extra = '') =>
+      `<section class="set-sec machine-card">
+           <div class="set-head"><b>${esc(title)}</b>${tag ? `<span class="set-tag">${esc(tag)}</span>` : ''}</div>
+           <div class="set-box">${inner}</div>
+           ${extra}
+         </section>`;
 
     /* —— 运行时那几行：还在拉 / 读不到 / 一个都没装 / 正常 —— */
     const runtimeRows = (() => {
@@ -323,13 +289,9 @@ export function renderNodeMode(st) {
             <span class="node-link-end host"><span class="node-link-dot"></span>${esc(host)}</span>
           </div>
           <div class="node-hero-line">这台电脑是「<b>${esc(host)}</b>」的算力节点 —— 总机把活派过来，在这台电脑上跑。班底的面板（员工、会话、项目）只在总机上；这台机器只负责<b>配置</b>和<b>干活</b>。</div>
-          <div class="node-hero-line sub">本页显示哪几节由<b>总机分配</b>${
-            roleName ? `（当前角色：${esc(roleName)}）` : '（还没分配，用默认）'
-          }。</div>
         </section>
 
         ${sec(
-          MENU_KEYS.NODE_CONNECTION,
           '连接',
           '总机',
           row('总机', esc(host), ICO.hub) +
@@ -348,7 +310,6 @@ export function renderNodeMode(st) {
         )}
 
         ${sec(
-          MENU_KEYS.NODE_MACHINE,
           '这台机器',
           '本机',
           row('主机名', esc(self.hostname || '—'), ICO.chip) +
@@ -360,18 +321,10 @@ export function renderNodeMode(st) {
                 ? '节点 <span class="sub">已加入总机，只当算力</span>'
                 : '单机 <span class="sub">未加入任何总机</span>',
               ICO.hub,
-            ) +
-            row(
-              '面板角色',
-              roleName
-                ? `${esc(roleName)} <span class="sub">总机分配 · ${panelKeys ? `${panelKeys.length} 个菜单` : '不限菜单'}</span>`
-                : '默认 <span class="sub">总机还没分配</span>',
-              ICO.shield,
             ),
         )}
 
         ${sec(
-          MENU_KEYS.NODE_RUNTIMES,
           '运行时',
           '本机 CLI',
           runtimeRows,
@@ -379,7 +332,6 @@ export function renderNodeMode(st) {
         )}
 
         ${sec(
-          MENU_KEYS.NODE_ACCESS,
           '访问方式',
           '只本机',
           row('当前监听', `<span class="machine-addr">${esc(listen)}</span>`, ICO.link) +
@@ -388,7 +340,6 @@ export function renderNodeMode(st) {
         )}
 
         ${sec(
-          MENU_KEYS.NODE_DATA,
           '数据',
           '本机库',
           row('数据目录', `<span class="machine-addr">${esc(local.dataDir ?? '—')}</span>`, ICO.db) +
@@ -408,7 +359,6 @@ export function renderNodeMode(st) {
         )}
 
         ${sec(
-          MENU_KEYS.NODE_ABOUT,
           '关于',
           '',
           row('产品', '班底 <span class="sub">自托管的多 agent 协作平台</span>', ICO.info) +
@@ -487,17 +437,14 @@ export async function boot() {
     if (st?.client?.joined) {
       renderNodeMode(st);
       /*
-       * 分机也要登录（2026-10-31 用户拍板「不管总机还是分机都要用用户登录」）：
-       * 节点形态不走 load()，身份和首次引导在这里单独来一遍 ——
-       * 还没有账号（面板闸对"零账号"放行）就先弹「创建用户」，建完下次进来就是登录页；
+       * 分机也要登录：节点形态不走 load()，身份在这里单独来一遍 ——
        * 有会话（服务端闸放行进来的）记下身份，节点页照旧。
        */
       try {
         const me = await api('/api/me');
         S.auth = me ?? null;
         S.isUser = me?.kind === 'user';
-        S.isAdmin = me?.kind === 'operator' || me?.kind === 'user' && me?.role?.id === 'admin';
-        if (me?.kind === 'operator') await maybeFirstUser();
+        S.isAdmin = me?.kind === 'operator' || me?.kind === 'user';
       } catch { /* 问不了身份就照旧画节点页 */ }
       startVersionWatch();
       return;
@@ -508,7 +455,6 @@ export async function boot() {
   // 回到上次的位置（以前是写死 setNav('messages')：在哪个页面按 F5 都会被弹回消息页）
   load()
     .then(() => restorePlace())
-    .then(() => maybeFirstUser())
     .catch((e) => { $('chat').innerHTML = '<div class="empty">' + esc(e.message) + '</div>'; });
   startVersionWatch();
 }

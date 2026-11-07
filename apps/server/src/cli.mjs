@@ -518,10 +518,9 @@ function doMode() {
  *   · 单写者：库只由服务进程写，CLI 直连库会和它抢 WAL、还会绕过所有校验；
  *   · 服务器形态下浏览器根本做不了破坏性动作（要 `X-Bandi-Local`），
  *     "本机终端"就是唯一合法的执行者 —— 而它只能用同一套接口，不能开后门。
- * 三个头各管一件事，缺哪个由服务端说了算：
+ * 两个头各管一件事，缺哪个由服务端说了算：
  *   X-Bandi-Token  身份（root 令牌 = operator）
  *   X-Bandi-Local  "我在这台机器的文件系统上"（值 = 数据目录 local_secret）
- *   X-Bandi-Setup  只有"零账号 + 服务器形态"建第一个管理员时才需要
  */
 function apiHeaders(extra = {}) {
   const h = { 'Content-Type': 'application/json', ...extra };
@@ -529,8 +528,6 @@ function apiHeaders(extra = {}) {
   if (t) h['X-Bandi-Token'] = t;
   const s = readText(path.join(dataDir, 'local_secret'));
   if (s) h['X-Bandi-Local'] = s;
-  const sc = readText(path.join(dataDir, 'setup_code'));
-  if (sc) h['X-Bandi-Setup'] = sc;
   return h;
 }
 
@@ -578,44 +575,6 @@ async function needService() {
 
 const errText = (r) => (r.json?.code ? `${r.json.code}：${r.json.error}` : r.text || `HTTP ${r.status}`);
 
-/* --------------------------------------------------------------- collab */
-
-async function cmdCollab(argv) {
-  const words = argv.filter((a) => !a.startsWith('-'));
-  const sub = words[1] ?? 'status';
-  const svc = await needService();
-  if (svc.error) return svc.error;
-
-  if (sub === 'status') {
-    const r = await api(svc.port, { path: '/api/local/collab/status' });
-    if (r.status !== 200) return red(errText(r));
-    const j = r.json ?? {};
-    if (!j.joined) return `未加入任何协作中心${j.centerUrl ? dim(`（上次退出的是 ${j.centerUrl}）`) : ''}`;
-    return [
-      `已加入协作中心 ${green(j.centerLabel || j.centerUrl || '?')}`,
-      `  中心  ${j.centerUrl ?? '?'}`,
-      `  分公司 ${j.branchId ?? '?'}${j.online === false ? `  ${yellow('（中心当前不可达）')}` : ''}`,
-    ].join('\n');
-  }
-
-  if (sub === 'join') {
-    const url = words[2];
-    const code = words[3];
-    if (!url) return '用法：bandi collab join <中心地址> [接入码]';
-    const r = await api(svc.port, { method: 'POST', path: '/api/local/collab/join', body: { url, code } });
-    if (r.status !== 200) return red(errText(r));
-    return `${green('已加入')}「${r.json?.centerLabel ?? url}」（${r.json?.branchId ?? '?'}）`;
-  }
-
-  if (sub === 'leave') {
-    const r = await api(svc.port, { method: 'POST', path: '/api/local/collab/leave' });
-    if (r.status !== 200) return red(errText(r));
-    return `${green('已退出协作中心')}（本地项目与卡片都还在）`;
-  }
-
-  return `不认识的子命令：collab ${sub}\n（bandi collab status | join <地址> [码] | leave）`;
-}
-
 /* ----------------------------------------------------------------- nodes */
 
 /**
@@ -623,7 +582,7 @@ async function cmdCollab(argv) {
  *
  * 为什么必须有它：前端「算力节点管理」的加入向导在**服务器形态**下不再渲染
  * （破坏性动作按 `state.localSecret` 显隐，IAM §10.1.3）—— 藏了按钮就得给终端一条路，
- * 否则服务器形态的算力加入就是死路。走 HTTP 不写库（单写者原则，与 collab 同一套 `api()`，
+ * 否则服务器形态的算力加入就是死路。走 HTTP 不写库（单写者原则，同一套 `api()`，
  * 自动带 `X-Bandi-Token` / `X-Bandi-Local` 头，`/api/local/join` 的文件秘密闸（E4097）自然过）。
  *
  * 两边视角都覆盖：
@@ -652,20 +611,6 @@ async function cmdNodes(argv) {
       `  权限  ${(c.scope ?? []).join(' + ') || '?'}`,
       `  节点  ${c.node?.running ? green(`在跑（pid ${c.node.pid}）${c.node.external ? ' · 外部托管' : ''}`) : yellow('没在跑')}${c.node?.why ? dim(`（${c.node.why}）`) : ''}`,
       `  加入于 ${c.since ?? '?'}`,
-    ].join('\n');
-  }
-
-  if (sub === 'join') {
-    const url = words[2];
-    const code = words[3];
-    if (!url || !code) return '用法：bandi nodes join <总机地址> <邀请码>\n  邀请码在总机上发：bandi nodes invite（10 分钟内有效，只用一次）';
-    const r = await api(svc.port, { method: 'POST', path: '/api/local/join', body: { url, code } });
-    if (r.status !== 200 && r.status !== 201) return red(errText(r));
-    const j = r.json ?? {};
-    return [
-      `${green('已加入')}「${j.hostLabel ?? url}」· 只当算力（${(j.scope ?? ['compute']).join('+')}）`,
-      j.node?.running ? dim('  节点已起') : yellow(`  节点还没起${j.node?.why ? `：${j.node.why}` : '（配置已写，稍后自动起）'}`),
-      dim('  监听正在收回环（几秒内生效）'),
     ].join('\n');
   }
 
@@ -729,34 +674,68 @@ async function cmdUser(argv) {
     const r = await api(svc.port, { path: '/api/users' });
     if (r.status !== 200) return red(errText(r));
     const list = r.json?.users ?? [];
-    if (!list.length) return '还没有任何账号 —— 用 bandi user create <名字> --admin';
-    return list.map((u) => `  ${u.name}${u.roleId ? dim(` · ${u.roleId}`) : ''}${u.disabled ? dim(' · 已禁用') : ''}${u.hasPassword ? '' : dim(' · 免密')}`).join('\n');
+    if (!list.length) return '还没有任何账号 —— 中枢账号首次登录时会自动建一个；也可以 bandi user create <名字> 预占';
+    return list.map((u) => `  ${u.name}${u.disabled ? dim(' · 已禁用') : ''}${u.builtin ? dim(' · 内置') : ''}`).join('\n');
   }
 
   if (sub === 'create') {
     const name = words[2];
-    if (!name) return '用法：bandi user create <名字> [--admin] [--password 密码]';
-    const password = argOf(argv, '--password') ?? '';
-    const body = { name, ...(password ? { password } : {}), ...(argv.includes('--admin') ? { roleId: 'admin' } : {}) };
-    const r = await api(svc.port, { method: 'POST', path: '/api/users', body });
+    if (!name) return '用法：bandi user create <名字>';
+    const r = await api(svc.port, { method: 'POST', path: '/api/users', body: { name } });
     if (r.status !== 201 && r.status !== 200) return red(errText(r));
-    let out = `${green('已创建')}「${name}」${r.json?.first ? '（第一个账号，自动是管理员）' : ''}`;
-    if (!password) {
-      out += dim('\n  没设密码 = 免密账号（回环形态下点一下就进）');
-      /*
-       * 服务器形态建免密账号要告知后果（IAM §8.6 受限会话）：从别的机器登录
-       * 这个号只能先设密码，其余操作一律 E4098 —— 不阻断（本机回环用免密依然合理），
-       * 但得让运维在创建的那一刻就知道，而不是登录之后撞了墙再回来问。
-       */
-      const st = await api(svc.port, { path: '/api/state' });
-      if (st.status === 200 && st.json?.localSecret === 'required') {
-        out += dim('\n  ⚠ 这个服务开着局域网访问：这个号从其它机器登录时是受限会话（只能先设密码，其余操作一律拒绝）。\n    建议直接带上密码：bandi user create <名字> --password <密码>');
-      }
-    }
-    return out;
+    /*
+     * 2026-11-07 起账号只是「中枢账号在本机的影子」：建号 = 预占一个名字
+     * （中枢账号首次登录时按 hub_links 绑到它头上），密码与角色都不在本机。
+     */
+    return `${green('已创建')}「${name}」${r.json?.first ? '（第一个账号，内置不可删）' : ''}\n${dim('  「登录即放行」之下这个预占基本用不上：中枢账号首次登录会建自己的影子账号')}`;
   }
 
-  return `不认识的子命令：user ${sub}\n（bandi user list | create <名字> [--admin] [--password 密码]）`;
+  return `不认识的子命令：user ${sub}\n（bandi user list | create <名字>）`;
+}
+
+/* ------------------------------------------------------------------ hub */
+
+/*
+ * 身份中枢（2026-11-06；2026-11-07 设备码加入通道退场、allow/revoke 随「登录即放行」退场）：
+ * status | leave。
+ *
+ * ⚠️ 这里**动态 import** `hub/join.mjs`（它会开库）—— 铁律②要求 `bandi status`
+ * 在"库坏了"的时候也能说人话，所以这条依赖只能出现在 `hub` 子命令里，
+ * 不能提到文件顶部。
+ *
+ * 机器接入不再走这里：在本机登录页用中枢手机号登录一次，设备自动登记进名册。
+ */
+async function cmdHub(argv) {
+  const words = argv.filter((a) => !a.startsWith('-'));
+  const sub = words[1] ?? 'status';
+  const hub = await import('./hub/join.mjs');
+
+  if (sub === 'status') {
+    const s = hub.hubStatus(dataDir);
+    if (!s.joined) {
+      return [
+        '这台机器还没登录过中枢（独立运行，一切照旧）',
+        dim('  接入：打开本机班底登录页，用中枢手机号登录一次即可'),
+      ].join('\n');
+    }
+    const links = s.links ?? [];
+    return [
+      `已加入中枢 ${green(s.baseUrl)}`,
+      `  设备  ${s.deviceId}${s.name ? dim(` · ${s.name}`) : ''}`,
+      `  账号  ${s.accountId ?? dim('（未知）')}`,
+      `  加入于 ${s.joinedAt ?? '?'}`,
+      `  绑定表 ${links.length ? '' : dim('（空）')}`,
+      ...links.map((l) => `    ${l.accountId} → ${l.userId}${l.lastEnterAt ? dim(` · 最近 ${l.lastEnterAt}`) : ''}`),
+      dim('  登录即放行：中枢账号首次进门自动建自己的影子账号，无需任何命令'),
+    ].join('\n');
+  }
+
+  if (sub === 'leave') {
+    const had = hub.leave(dataDir);
+    return had ? `${green('已退出中枢')}（本地数据一个字节没动；要再接回来，在本机登录页重新登录一次）` : '这台机器本来就没加入中枢。';
+  }
+
+  return `不认识的子命令：hub ${sub}\n（bandi hub status | leave）`;
 }
 
 /* --------------------------------------------------------- install-cli */
@@ -849,20 +828,18 @@ const HELP = `班底 · 命令行
   bandi logs [-n 40] [-f]  日志（-f 跟着走）
   bandi node               执行节点状态（只读）
   bandi mode               这台机器是什么身份（只读；改模式去页面）
-  bandi collab [status]    协作中心：我加入了谁
-  bandi collab join <地址> [接入码]
-  bandi collab leave       退出协作中心（本地项目与卡片都还在）
   bandi nodes [status]     算力节点：这台机器给哪台总机打工
   bandi nodes join <总机地址> <邀请码>
                            加入总机（只当算力；邀请码在总机上 bandi nodes invite 发）
   bandi nodes leave        退出总机
   bandi nodes list         （总机视角）登记了哪些算力节点、在不在线
   bandi nodes invite       （总机视角）发一个一次性加入邀请码
+  bandi hub [status]       身份中枢：登录状态与影子账号绑定表
+  bandi hub leave          退出中枢（本地数据一个字节没动）
   bandi data export [--dir 目录]
                            导出数据快照（服务器形态下这是唯一入口）
   bandi user list          账号列表
-  bandi user create <名字> [--admin] [--password 密码]
-                           建账号（服务器形态下建第一个管理员用它）
+  bandi user create <名字> 建影子账号（预占名字，中枢账号首次登录时自动绑定）
   bandi install-cli        把 bandi 装成一个全局命令
                            [--dir 目录] [--path] [--remove] [--dry-run]
   bandi version | help
@@ -954,13 +931,14 @@ async function main() {
       console.log(doMode());
       return 0;
 
-    case 'collab': {
-      console.log(await cmdCollab(argv));
-      return 0;
-    }
-
     case 'nodes': {
       const out = await cmdNodes(argv);
+      console.log(out);
+      return /^用法|不认识的子命令/.test(out) ? 2 : 0;
+    }
+
+    case 'hub': {
+      const out = await cmdHub(argv);
       console.log(out);
       return /^用法|不认识的子命令/.test(out) ? 2 : 0;
     }

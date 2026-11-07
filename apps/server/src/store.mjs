@@ -11,8 +11,8 @@
  * 域地图：db=连接/建表/迁移 · personas=数字员工 · personaSkills=技能挂载 ·
  * conversations/messages/groups=会话与消息 · runs=一次执行及事件流 ·
  * projects/projectTasks=项目与看板卡 · nodes=节点/任务/作业/令牌 · workflows=流程引擎 ·
- * quota=额度 · gitRepos=仓库 · schedules=定时任务 · roles=角色与角色→菜单（2026-10-28）·
- * users=账号与登录会话（2026-10-28 第三刀）。
+ * quota=额度 · gitRepos=仓库 · schedules=定时任务 ·
+ * users=账号与登录会话（2026-11-07 起只是中枢账号的本机影子，无密码）。
  */
 
 export { newId, nowIso, getMetaValue, setMetaValue, backupTo } from './store/db.mjs';
@@ -25,24 +25,19 @@ export * from './store/runs.mjs';
 export * from './store/projects.mjs';
 export * from './store/projectTasks.mjs';
 export * from './store/nodes.mjs';
-// 协作中心（2026-10-31 MVP）：collab_invites / collab_branches / collab_tasks 三张表 ——
-// 中心侧只存"分公司名录 + 任务 + 状态"，不碰分公司的业务数据。
-export * from './store/collab.mjs';
 // 手机配对与设备域（2026-11 手机端增量）：mobile_devices / mobile_device_tokens / mobile_pair_tokens
 export * from './store/devices.mjs';
-// 不透明票域（IAM §12 Phase 3）：access_tokens（at_ 短票）/ refresh_tokens（rf_ 轮换族）
-export * from './store/tokens.mjs';
 export * from './store/workflows.mjs';
 export * from './store/quota.mjs';
 export * from './store/gitRepos.mjs';
 export * from './store/schedules.mjs';
-// 角色与菜单（2026-10-28 第二刀）：roles / role_menus 两张表，模块加载时幂等 seed 三个内置角色
-export * from './store/roles.mjs';
-// 账号与登录会话（2026-10-28 第三刀）：users / user_sessions 两张表，密码走 scrypt + 每人独立 salt
+// 账号与登录会话：users / user_sessions 两张表。
+// 2026-11-07 起本地账号只是「中枢账号在本机的影子」：认证全在中枢（POST /hub/login），
+// 这里不再存密码 —— 登录 = hub 绑定（hub_links）+ 发一张本机会话。
 export * from './store/users.mjs';
-// 动态验证（2026-10-31 二改，仿 yaojian-ruoyi）：user_otp / otp_challenges 两张表 ——
-// 密钥 AES-GCM 加密落库、10 个一次性恢复码、登录第二段的一次性凭据
-export * from './store/otp.mjs';
 // 安全审计（2026-10-31 IAM Phase 1）：security_events —— append-only（触发器兜底），
 // 401/403 由策略层当场记、写操作 pending → finish 回填（见 store/audit.mjs 文件头）
 export * from './store/audit.mjs';
+// 身份中枢的本地授权表（2026-11-06）：hub_links —— 中枢账号 ↔ 本机用户。
+// 「认证在中枢、授权在主机」那条规则的落地物，别和 user_sessions 混
+export * from './store/hubLinks.mjs';

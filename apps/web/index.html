@@ -454,45 +454,6 @@
 </dialog>
 
 <!--
-  首次引导（2026-10-31 用户概念落地，参照电脑的开机设置）：一个用户都还没有时，启动就弹这个框。
-  第一个用户自动成为内置管理员（服务端定，见 store/users.mjs）；密码可空 ——
-  空密码的账号只是本机身份（署名 / 派活认它），登不了远程，要远程登录再补密码。
-  「跳过」不是"不再问"：下次启动还没有用户就还会弹（跟电脑第一次开机不建账户不让用的思路一致，
-  但班底允许先逛逛 —— 账号没建，功能一样能用，只是消息还署名「我」）。
--->
-<dialog id="firstUserDlg">
-  <form method="dialog">
-    <b>创建用户</b>
-    <div class="dim" style="margin-top:8px;font-size:12.5px;line-height:1.75">
-      第一个用户自动成为管理员。密码可留空 —— 免密账号下次打开班底，点了就进。
-    </div>
-    <input id="fuName" placeholder="用户名" autocomplete="username" spellcheck="false" maxlength="20" style="margin-top:12px" />
-    <input id="fuPwd" type="password" placeholder="密码（可留空）" autocomplete="new-password" style="margin-top:8px" />
-    <div id="fuErr" style="color:#ff8a80;font-size:12.5px;margin-top:8px" hidden></div>
-    <div class="dlg-actions">
-      <button type="button" value="cancel">跳过</button>
-      <button class="primary" id="fuOk" value="ok">创建</button>
-    </div>
-  </form>
-</dialog>
-
-<!-- 「我的」页的修改密码（2026-10-31）：当前密码只有**设了密码**的账号才显示（免密账号没有旧密码可验）；
-     新密码留空 = 改回免密 —— 与建账号"密码可留空"是同一个口径，两端别走样。 -->
-<dialog id="mePwdDlg">
-  <form method="dialog">
-    <b>修改密码</b>
-    <input id="mePwdCur" type="password" placeholder="当前密码" autocomplete="current-password" spellcheck="false" style="margin-top:12px" />
-    <input id="mePwdNew" type="password" placeholder="新密码（8 位以上；留空 = 改回免密）" autocomplete="new-password" spellcheck="false" style="margin-top:8px" />
-    <input id="mePwdNew2" type="password" placeholder="再输一遍新密码" autocomplete="new-password" spellcheck="false" style="margin-top:8px" />
-    <div id="mePwdErr" style="color:#ff8a80;font-size:12.5px;margin-top:8px" hidden></div>
-    <div class="dlg-actions">
-      <button type="button" value="cancel">取消</button>
-      <button class="primary" id="mePwdOk" value="ok">保存</button>
-    </div>
-  </form>
-</dialog>
-
-<!--
   通用的「问一句 / 确认一下」。
 
   为什么不用原生的 prompt() / confirm()（2026-10-16 用户指着改名那个框说的）：那是**浏览器**的框 ——

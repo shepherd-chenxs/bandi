@@ -1,51 +1,40 @@
 /*
- * routes/users.mjs —— 账号、登录与角色分配（2026-10-28 第三刀）。
+ * routes/users.mjs —— 账号与安全。
  *
- * 七个口：
- *   POST   /api/login        → 登录（**免令牌**，见 auth.mjs 的豁免；CSRF 闸照过。
- *                               2026-10-31 起未设密码的账号留空密码即进入——免密登录）
+ * 账号（2026-11-07 起）只是「中枢账号在本机的影子」：**登录入口只有 `POST /hub/login`**
+ * （routes/hub.mjs 转给中枢），本文件不再管认证 —— 剩下的是影子账号的维护与"我是谁"：
+ *
  *   POST   /api/logout       → 退出（**免令牌**，凭据就是那张会话票本身）
- *   GET    /api/me           → 我是谁（operator / user + role.menuKeys）
- *   GET    /api/users        → 账号列表（PDP：user:manage，**不含 salt/hash**）
- *   POST   /api/users        → 建账号（PDP：user:manage；零账号引导见下）
- *   PATCH  /api/users/:id    → 改名 / 改密码 / 改角色 / 启用禁用（PDP：user:manage）
- *   DELETE /api/users/:id    → 删账号（PDP：user:manage）
+ *   GET    /api/me           → 我是谁（operator / user / device）
+ *   GET    /api/users        → 账号列表（**不含任何凭据字段**）
+ *   POST   /api/users        → 建影子账号（预占名字，等中枢账号首次登录时绑定）
+ *   PATCH  /api/users/:id    → 改名 / 启用禁用
+ *   DELETE /api/users/:id    → 删账号
+ *   GET    /api/security/*   → 会话列表 / 审计日志（只认会话里的身份）
  *
- * **三条不能松的口径**（任务书 §三）：
- *   1. 登录失败一律「用户名或密码不对」—— 不暴露用户是否存在；
- *      同一 IP + 同一用户名 5 分钟内失败 5 次 → 429（内存窗口 + 落库锁定，IAM §11.1：
- *      用户名维度的 lockedUntil 在库里，重启不清零；码 E4095，2026-10-31 起 E3806 作废）。
- *   2. 密码 / 会话票**绝不进日志、不回显**；连列表接口都不出现 salt/hash 字段。
- *   3. 内置管理员（第一个账号）不可删、不可改角色、不可禁用；任何时候都不能把
- *      **最后一个管理员**弄没 —— 那是"把自己关在门外"的同义词。
+ * **两条不能松的口径**：
+ *   1. 会话票**绝不进日志、不回显**；列表接口不出现任何凭据字段。
+ *   2. 内置账号（第一个账号）不可删、不可禁用 —— hub 绑定（hub_links）都指向它，
+ *      那是"把自己关在门外"的同义词。
  *
- * 本文件用掉的错误码（E38xx 段，全仓此前都没占用）：
+ * 本文件用掉的错误码（E38xx 段）：
  *   E3801 用户名不能为空 / 超过 20 字      （400）
  *   E3802 用户名已被占用                   （409）
- *   E3803 密码非空时长度不在 8–128（2026-10-31 起密码可空 = 未设密码，见 checkPassword）  （400）
- *   E3804 角色不存在                       （400）
- *   E3805 用户名或密码不对                 （401）
- *   E3806 （作废 2026-10-31：登录限速统一改 E4095，见 IAM §11.1 / 附录 C）
  *   E3807 账号不存在                       （404）
- *   E3808 内置管理员不可改角色 / 不可禁用 / 不可删（403）
- *   E4096 不能移除最后一个管理员           （409）
+ *   E3808 内置账号不可禁用 / 不可删        （403）
  *   E3810 还没登录                         （401）
- *   E3811 只有管理员能管账号               （403）
  *   E3812 账号接口不支持这个方法           （405）
  */
 
 import { sendJson, fail, readBody } from '../http.mjs';
 import * as auth from '../auth.mjs';
 import * as store from '../store.mjs';
-import * as setupCode from '../security/setup-code.mjs';
 import * as csrf from '../security/csrf.mjs';
 
 const NAME_MAX = 20;
-const PASSWORD_MIN = 8;
-const PASSWORD_MAX = 128;
 
-/** 内置管理员 = 第一个账号：`builtin` + `admin` 角色（判据只在这里和 store 里各一处） */
-const isBuiltinAdmin = (u) => !!u?.builtin;
+/** 内置账号 = 第一个账号（判据只在这里和 store 里各一处） */
+const isBuiltin = (u) => !!u?.builtin;
 
 export class UserError extends Error {
   constructor(status, code, message, extra = null) {
@@ -54,45 +43,6 @@ export class UserError extends Error {
     this.code = code;
     this.extra = extra;
   }
-}
-
-/* ------------------------------------------------------------------ 登录限速 */
-
-/*
- * 内存计数：`ip|用户名` → { n, until }。重启清零 —— 够用（任务书 §三 明确允许）。
- * 为什么不落库：这是**闸**不是**数据**，落库反而给磁盘写压力，也让"重启解锁"
- * 这件好事变成坏事（攻击者会盯着它）。
- */
-const FAILS = new Map();
-const FAIL_LIMIT = 5;
-const FAIL_WINDOW = 5 * 60_000;
-
-function failKey(req, name) {
-  const ip = String(req.socket?.remoteAddress ?? '').replace(/^::ffff:/, '');
-  return `${ip}|${store.normName(name)}`;
-}
-
-export function tooMany(req, name) {
-  const k = failKey(req, name);
-  const rec = FAILS.get(k);
-  if (!rec) return false;
-  if (Date.now() > rec.until) {
-    FAILS.delete(k);
-    return false;
-  }
-  return rec.n >= FAIL_LIMIT;
-}
-
-export function noteFail(req, name) {
-  const k = failKey(req, name);
-  const now = Date.now();
-  const rec = FAILS.get(k);
-  if (!rec || now > rec.until) FAILS.set(k, { n: 1, until: now + FAIL_WINDOW });
-  else rec.n += 1;
-}
-
-export function clearFails(req, name) {
-  FAILS.delete(failKey(req, name));
 }
 
 /* ------------------------------------------------------------------ 校验 */
@@ -104,133 +54,13 @@ function checkName(raw) {
   return name;
 }
 
-function checkPassword(raw) {
-  /*
-   * 密码**可空**（2026-10-31 用户拍板，参照电脑的本地账户）：空 = 未设密码，
-   * 这种账号登不进 /api/login（远程登录天然被关），只作为本机身份参与署名/派活；
-   * 要远程登录就在这里补一个 8–128 位的密码。非空时照旧校验长度。
-   */
-  const pwd = String(raw ?? '');
-  if (pwd && (pwd.length < PASSWORD_MIN || pwd.length > PASSWORD_MAX)) {
-    throw new UserError(400, 'E3803', `密码长度要在 ${PASSWORD_MIN}–${PASSWORD_MAX} 之间`);
-  }
-  return pwd;
-}
-
-/** 角色必须存在（`roleId` 指向 roles.id） */
-function checkRole(roleId) {
-  const role = store.getRole(String(roleId ?? '').trim());
-  if (!role) throw new UserError(400, 'E3804', `没有这个角色：${roleId || '(空)'}`);
-  return role;
-}
-
-/** 给前端的角色摘要（`menuKeys` 是"这个人该看见哪些菜单"的唯一来源） */
-function roleBrief(roleId) {
-  const r = store.getRole(roleId);
-  if (!r) return null;
-  return { id: r.id, name: r.name, menuKeys: Array.isArray(r.menuKeys) ? r.menuKeys : [] };
-}
-
 function meOf(who) {
   const u = store.getUser(who.userId);
   if (!u) return null;
-  // hasPassword / hasTotp 给「我的」页用：免密账号的改密码弹窗不显示"当前密码"格，
-  // 动态验证行据此显示 开启/关闭
-  return { kind: 'user', user: { id: u.id, name: u.name, hasPassword: u.hasPassword, hasTotp: u.hasTotp }, role: roleBrief(u.roleId) };
-}
-
-/*
- * ============================================================ 手机身份统一（2026-11-05）
- *
- * **问题**：手机上原来有两套身份 —— 配对发的是 `bandi_token`（设备，我的页有「这台设备」
- * 卡 + 断开连接），账号密码登录发的是 `bandi_sid`（账号，我的页只剩一个「退出登录」）。
- * 而且登录响应会顺手 `clearedTokenCookie()`：一台配过对的手机只要输过一次密码，
- * 就**永久**从设备身份掉成账号身份，两个页面来回换（用户：「账号密码登录的，我的页面
- * 长得也不一样」），电脑端那条设备记录还挂着却再也不会被用到。
- *
- * **口径（用户：「手机端设备身份和账号密码应该统一起来」）**：手机上只有一种身份 = **设备**。
- * 账号密码在手机上不再"换身份"，只做两件事：
- *   1. **认领归属人** —— 这台手机以后的操作算到登录的这个账号头上（`setDeviceOwner`）；
- *   2. **补一张设备卡** —— 重发 `bandi_token`，并把可能残留的会话票清掉（免得票没了之后
- *      又飘回账号身份，两个身份来回切）。
- * 于是「我的」页在手机壳里永远只有一套（设备卡 + 断开连接），不再出现"页面不一样"。
- *
- * **触发条件**：请求体带一个形状合法的 `clientKey`（手机壳 / 手机浏览器上的登录页会带上）。
- * 有没有对应的设备记录都接 —— 2026-11-05 用户拍板（选 A）：
- *   · **有记录**（配过对，票丢了）→ 说的就是上面那两步，复用原来那一行；
- *   · **没记录**（从没配过对，第一次在这台手机上输密码）→ 当成"用密码配了一次对"，
- *     当场落一行设备（`createDevice` 的 clientKey 分支会自动复用同 key 的行，
- *     所以一台手机永远只有一条记录），归属人就是这次登录的账号。
- * 于是手机端只有一条入口差异（扫码 / 密码），进去以后完全一样。
- *
- * **为什么敢放开**：用户名 + 密码是这台机器上最高的凭据（配个对都还要先拿到电脑上的
- * 二维码/邀请码），拿密码换一张设备票不是提权。桌面浏览器不带 clientKey（登录页脚本
- * 只在手机 UA 下生成），仍然一位字节不变地走会话路径。
- *
- * 返回 true = 已经按设备身份回完响应，调用方别再发会话。
- */
-/**
- * 设备自报名：登录页上报的优先，没有就按 UA 猜一个（与 pair-claim.mjs 的 guessDeviceName 同款）。
- * ⚠️ 字段是 `deviceName` 而不是 `name` —— `/api/login` 的 `name` 是**用户名**，
- * 混用会把电脑端的设备名改成登录账号名（试过一次，设备列表里出现一排「老板」）。
- */
-function deviceNameOf(req, body) {
-  const given = String(body?.deviceName ?? '').trim().slice(0, 60);
-  if (given) return given;
-  const ua = String(req.headers['user-agent'] ?? '');
-  if (/iPhone/i.test(ua)) return 'iPhone';
-  if (/iPad/i.test(ua)) return 'iPad';
-  const m = /Android[^;)]*;\s*([^;)]+?)\s+Build/i.exec(ua) || /Android[^;)]*;\s*([^;)]+)/i.exec(ua);
-  if (m) return 'Android · ' + m[1].split(/\s+/)[0];
-  // 猜不出就交白卷：`createDevice` 只在名字非空时改已有行，空字符串不会把人家认得的名字冲掉
-  // （新建时 store 那边自己兜底成「手机设备」）
-  return '';
-}
-
-function claimPhoneIdentity(req, res, user, body) {
-  const ck = String(body?.clientKey ?? '').trim();
-  // 形状不对 = 不是手机壳里那枚（空、太短、带怪字符）：当桌面浏览器处理，别为它建行
-  if (!/^[A-Za-z0-9_-]{8,64}$/.test(ck)) return false;
-  /*
-   * 设备名给人看：手机自报优先（登录页从 UA 猜一个），其次服务端按 UA 再猜一次 ——
-   * 电脑端「设备」列表里出现一条「手机设备」是能接受的，出现一条空名字不行。
-   */
-  const { device: dev } = store.createDevice(deviceNameOf(req, body), ck);
-  /*
-   * 归属直接改绑成登录的人：手机是"谁的"由这一次登录决定（与配对时"码上写着谁就是谁"
-   * 同一口径）。要改绑得先有密码 —— 这比扫码更硬，不存在被同屋的人随便认领。
-   */
-  store.setDeviceOwner(dev.id, user.id);
-  store.markConnected(dev.id);
-  // 旧令牌一并吊销：一台手机只留一枚在用的钥匙（`resumeDevice` 同款口径）
-  store.revokeDeviceTokens(dev.id);
-  /*
-   * 和配对同一条规矩：**一台电脑同一时间只允许一台手机在用**。
-   * 用密码在另一台手机上认领，等于"重新配一次对"，那台旧的让位（令牌吊销 + 打「已断开」，
-   * 行和 clientKey 都留着，它下次打开 App 还能自己连回来）。
-   */
-  const others = store.disconnectOtherDevices(dev.id);
-  if (others.disconnected > 0) console.log(`[登录] 其它 ${others.disconnected} 台手机转为「已断开」（吊销 ${others.revoked} 枚令牌）`);
-  const deviceToken = store.issueDeviceToken(dev.id);
-  res.writeHead(200, {
-    'Content-Type': 'application/json; charset=utf-8',
-    'Cache-Control': 'no-store',
-    'Set-Cookie': [
-      auth.cookieValue(deviceToken),
-      csrf.cookieFor(csrf.mint()),
-      // 会话票清掉：否则设备票哪天失效，身份会自己飘回账号版，又是两个页面
-      auth.clearedSessionCookie(),
-    ],
-  });
-  res.end(
-    JSON.stringify({
-      ok: true,
-      kind: 'device',
-      user: { id: user.id, name: user.name },
-      device: { id: dev.id, name: dev.name },
-    }),
-  );
-  return true;
+  // hub = 这个本机名条绑着的**中枢账号**（登录用的手机号）——「我的」页身份卡用它；
+  // 本机名条的名字随每次登录与中枢对齐（routes/hub.mjs），所以 name 一般就等于 hub。
+  const link = store.listHubLinks().find((l) => l.userId === u.id);
+  return { kind: 'user', user: { id: u.id, name: u.name, hub: link?.login ?? null } };
 }
 
 /* ------------------------------------------------------------------ 主体 */
@@ -239,154 +69,18 @@ export async function handleUsers(req, res, url) {
   const method = req.method;
   const p = url.pathname;
   const touched =
-    p === '/api/login' || p === '/api/login/otp' || p === '/api/logout' || p === '/api/me'
-    || p === '/api/me/password' || p.startsWith('/api/me/otp') || p.startsWith('/api/users')
-    || p.startsWith('/api/security');
+    p === '/api/logout' || p === '/api/me' || p.startsWith('/api/users') || p.startsWith('/api/security');
   if (!touched) return false;
 
   try {
-    /* ------------------------------------------------ 登录（免令牌） */
-    if (method === 'POST' && p === '/api/login') {
-      const body = await readBody(req);
-      const name = String(body?.name ?? '').trim();
-      const password = String(body?.password ?? '');
-      // 密码可空（2026-10-31 用户拍板）：免密账号留空即进入，所以只强求用户名
-      if (!name) throw new UserError(400, 'E3801', '请输入用户名');
-
-      /*
-       * 限速先判：**不看用户是否存在**（否则"429 只对存在的用户名出现"本身就是泄漏）。
-       * 两道并集（IAM §11.1，2026-10-31）：内存 IP+用户名窗口（重启清零，挡炸库）＋
-       * 库里 lockedUntil（重启**不清零** —— 无人值守形态"重启解锁"等于没锁）。
-       * 码统一 E4095（文档 §11.1；E3806 作废——错误码附录里 429 段认 E4095）。
-       */
-      if (tooMany(req, name) || store.loginLocked(name)) {
-        throw new UserError(429, 'E4095', `登录失败次数太多，请 ${Math.ceil(FAIL_WINDOW / 60_000)} 分钟后再试`);
-      }
-
-      const user = store.userByName(name);
-      /*
-       * scrypt **总是跑一次**（时间上不区分"用户不存在 / 未设密码 / 密码错"），然后三选一：
-       *   · 未设密码的账号（hash=''）+ 密码留空 → 免密进入（电脑的本地账户同款，任何机器都行）；
-       *   · 设了密码的 → 定长比对；
-       *   · 免密账号输了密码 / 密码错 → 401，文案统一，不泄漏"这个账号没设密码"。
-       */
-      const pwOk = store.checkPassword(user, password);
-      const blankOk = !!user && !user.hash && password === '';
-      const ok = !!user && !user.disabled && (blankOk || pwOk);
-      if (!ok) {
-        noteFail(req, name);
-        store.noteLoginFail(name); // 落库计数：窗口内第 5 次 → lockedUntil = now+15min（重启不清零）
-        // 统一文案：不区分"用户不存在 / 密码错 / 被禁用 / 没设密码"（被禁用也不该告诉外人）
-        throw new UserError(401, 'E3805', '用户名或密码不对');
-      }
-      /*
-       * **两段式登录 · 第一段**（2026-10-31 二改，仿 yaojian-ruoyi）：
-       * 密码对了、账号又开了动态验证 → **先不发会话**，发一张 5 分钟/5 次的一次性凭据，
-       * 前端拿 otpToken 去 /api/login/otp 交动态码。密码与账号状态校验仍只在第一段做一遍。
-       */
-      if (store.isEnabled(user.id)) {
-        clearFails(req, name);
-        store.clearLoginFails(name);
-        const otpToken = store.createChallenge(user.id);
-        return sendJson(res, 200, { ok: true, needOtp: true, otpToken }), true;
-      }
-      clearFails(req, name);
-      store.clearLoginFails(name);
-
-      /*
-       * 手机（带合法 clientKey）→ **设备身份**，见 claimPhoneIdentity 上面那段：
-       * 账号密码在手机上只认领归属人 + 发设备卡（没有记录就当场建一台），不发会话票。
-       * 桌面浏览器没有 clientKey，一位字节不变地走下面的会话路径。
-       */
-      if (claimPhoneIdentity(req, res, user, body)) return true;
-
-      const { token } = store.createSession(user.id, {
-        ip: String(req.socket?.remoteAddress ?? '').replace(/^::ffff:/, ''),
-        ua: req.headers['user-agent'] ?? '',
-      });
-      // CSRF 双提交（§10.2）：登录成功时种 bandi_csrf —— 之后所有带 Cookie 的写请求
-      // 都要 header 对得上它。非 HttpOnly 是刻意的（前端 JS 要读，见 security/csrf.mjs）。
-      /*
-       * **顺手清掉访问令牌 Cookie**（2026-11-01 实报：登不进去、输入框被刷空）。
-       * 浏览器里躺着一枚旧 `bandi_token` 时，`令牌优先于会话` 会让登录后的每个请求
-       * 都按 operator 算 —— 而 operator 现在进不了面板，于是登录成功 → 回首页 → 又被挡回
-       * 登录页，看起来就是"点了登录没反应、输入框被清空"。
-       * 口径：**人走会话，机器走令牌头**。登录就是"以人为准"，那枚 Token Cookie 在这台
-       * 浏览器上让位（手机配对用的是同一个 Cookie 名，但它不走 /api/login）。
-       */
-      res.writeHead(200, {
-        'Content-Type': 'application/json; charset=utf-8',
-        'Cache-Control': 'no-store',
-        'Set-Cookie': [auth.sessionCookie(token), csrf.cookieFor(csrf.mint()), auth.clearedTokenCookie()],
-      });
-      res.end(
-        JSON.stringify({
-          ok: true,
-          kind: 'user',
-          user: { id: user.id, name: user.name },
-          role: roleBrief(user.roleId),
-        }),
-      );
-      return true;
-    }
-
-    /* ------------------------------------------------ 两段式登录 · 第二段（免令牌） */
-    if (method === 'POST' && p === '/api/login/otp') {
-      /*
-       * 提交动态码（6 位）或恢复码（8 位），通过才发正式会话。
-       * 与参考项目同口径：凭据 5 分钟过期、最多试 5 次（超了就作废，重新登录）。
-       */
-      const body = await readBody(req);
-      const ch = store.getChallenge(body?.otpToken);
-      if (!ch) throw new UserError(401, 'E3823', '验证已过期或不存在，请重新登录');
-      if (ch.tries >= store.CHALLENGE_MAX_ATTEMPTS) {
-        store.dropChallenge(ch);
-        throw new UserError(429, 'E3824', '验证码错误次数过多，请重新登录');
-      }
-      const user = store.getUser(ch.userId);
-      if (!user || user.disabled) {
-        store.dropChallenge(ch);
-        throw new UserError(401, 'E3810', '账号状态异常，请重新登录');
-      }
-      if (!store.verify(user.id, body?.code)) {
-        const tries = store.bumpChallengeTries(ch);
-        // 最后一次机会用掉 = 当场作废，别让它还能再试
-        if (tries >= store.CHALLENGE_MAX_ATTEMPTS) store.dropChallenge(ch);
-        throw new UserError(401, 'E3820', '动态验证码或恢复码错误');
-      }
-      store.dropChallenge(ch);
-      // 第二段同样认这台手机：动态码过了 = 密码也过了，按设备身份回（见 claimPhoneIdentity）
-      if (claimPhoneIdentity(req, res, user, body)) return true;
-      const { token } = store.createSession(user.id, {
-        ip: String(req.socket?.remoteAddress ?? '').replace(/^::ffff:/, ''),
-        ua: req.headers['user-agent'] ?? '',
-      });
-      // 与 /api/login 同款：会话票 + CSRF 双提交值一起发（见上面那段注释），
-      // 并清掉旧访问令牌 Cookie（否则"令牌优先"会把刚登录的人压回登录页）
-      res.writeHead(200, {
-        'Content-Type': 'application/json; charset=utf-8',
-        'Cache-Control': 'no-store',
-        'Set-Cookie': [auth.sessionCookie(token), csrf.cookieFor(csrf.mint()), auth.clearedTokenCookie()],
-      });
-      res.end(
-        JSON.stringify({
-          ok: true,
-          kind: 'user',
-          user: { id: user.id, name: user.name },
-          role: roleBrief(user.roleId),
-        }),
-      );
-      return true;
-    }
-
     /* ------------------------------------------------ 退出（免令牌） */
     if (method === 'POST' && p === '/api/logout') {
       const sid = auth.sessionTokenOf(req);
       if (sid) store.deleteSession(sid);
       /*
-       * **两张票一起清**（2026-10-31）：除了登录会话票，还要让浏览器丢掉访问令牌 Cookie ——
-       * 否则一个填过令牌的浏览器永远被"令牌优先"放进面板，退出登录退了个寂寞，
-       * 也永远走不到登录页（当天实报）。脚本用头带令牌，不受 Cookie 影响。
+       * **两张票一起清**：除了登录会话票，还要让浏览器丢掉访问令牌 Cookie ——
+       * 否则一个填过令牌的浏览器永远被"令牌优先"放进面板，退出登录退了个寂寞。
+       * 脚本用头带令牌，不受 Cookie 影响。
        */
       res.writeHead(200, {
         'Content-Type': 'application/json; charset=utf-8',
@@ -397,14 +91,14 @@ export async function handleUsers(req, res, url) {
       return true;
     }
 
-    /* ------------------------------------------------ 安全（IAM §9 / §11.2，2026-10-31 Phase 1 收尾） */
+    /* ------------------------------------------------ 安全（会话 / 审计） */
     /*
-     * 四个口，都只认**会话里**的身份：
-     *   GET  /api/security/sessions           → 我的活动会话（设备/IP/最近活跃）
+     * 口子，都只认**会话里**的身份：
+     *   GET  /api/security/sessions               → 我的活动会话（设备/IP/最近活跃）
      *   POST /api/security/sessions/revoke-others → 踢掉我其它设备（保留当前这张票）
-     *   GET  /api/security/audit             → 审计日志（**admin**；kind/limit 游标翻页）
-     *   GET  /api/security/audit/export      → 审计日志全量导出（**admin**；同 kind 筛选）
-     *   POST /api/security/audit/clear       → 清空（**admin**；先归档再删，留 audit.clear 痕迹）
+     *   GET  /api/security/audit                  → 审计日志（kind/limit 游标翻页）
+     *   GET  /api/security/audit/export           → 审计日志全量导出
+     *   POST /api/security/audit/clear            → 清空（先归档再删，留 audit.clear 痕迹）
      */
     if (p.startsWith('/api/security')) {
       const who = req.bandiAuth;
@@ -425,7 +119,6 @@ export async function handleUsers(req, res, url) {
       }
 
       if (method === 'GET' && p === '/api/security/audit') {
-        if (!who.admin) throw new UserError(403, 'E3811', '只有管理员能看审计日志');
         const events = store.list({
           kind: url.searchParams.get('kind') ?? '',
           actorId: url.searchParams.get('actorId') ?? '',
@@ -436,21 +129,19 @@ export async function handleUsers(req, res, url) {
       }
 
       /*
-       * 导出（2026-11-03 审计页「导出」按钮）：同一套类型筛选，全量返回（上限 5000 行）。
+       * 导出：同一套类型筛选，全量返回（上限 5000 行）。
        * 回 JSON 而不是 CSV —— 前端自己拼 CSV 再下载，服务端不管编码 / 换行 / BOM 这些浏览器侧的事。
        */
       if (method === 'GET' && p === '/api/security/audit/export') {
-        if (!who.admin) throw new UserError(403, 'E3811', '只有管理员能导出审计日志');
         const events = store.listForExport({ kind: url.searchParams.get('kind') ?? '' });
         return sendJson(res, 200, { events }), true;
       }
 
       /*
-       * 清空（2026-11-03，同上）：先归档再删，主表留一条 audit.clear 痕迹 ——
+       * 清空：先归档再删，主表留一条 audit.clear 痕迹 ——
        * "清空"不等于"抹掉证据"，搬进 archive 表的行仍然可事后查。
        */
       if (method === 'POST' && p === '/api/security/audit/clear') {
-        if (!who.admin) throw new UserError(403, 'E3811', '只有管理员能清空审计日志');
         const cleared = store.clearAll({
           actorKind: who.kind,
           actorId: who.userId ?? null,
@@ -486,7 +177,6 @@ export async function handleUsers(req, res, url) {
         const d = store.getDevice(who.deviceId);
         /*
          * 归属人（2026-11-03 设备绑人）：手机也要能回答"我是谁"。
-         * 以前这里只有设备名 —— 一台手机在工作台里没有"人"，说话、审批都只算设备。
          * 现在带上它归属的账号（零账号形态的老设备可能是 null，前端按"未绑定"显示）。
          */
         const owner = who.userId ? store.getUser(who.userId) : null;
@@ -494,186 +184,43 @@ export async function handleUsers(req, res, url) {
           kind: 'device',
           device: d ? { id: d.id, name: d.name, pairedAt: d.pairedAt } : null,
           user: owner ? { id: owner.id, name: owner.name } : null,
-          /*
-           * 手机的面板角色（2026-10-28 第四刀）：未分配 = 默认 `mobile`（底部四个 tab），
-           * 与今天完全一样。前端 `S.menuKeys` 直接吃它的 menuKeys。
-           */
-          role: store.roleOrDefault(d?.roleId, store.DEFAULT_PHONE_ROLE),
         }), true;
       }
       throw new UserError(401, 'E3810', '还没登录');
     }
 
-    /* ------------------------------------------------ 动态验证（自助，2026-10-31 二改） */
-    /*
-     * 仿 yaojian-ruoyi 的绑定流，**四步分四个口**，别再合回"先落库再确认"：
-     *   GET  /api/me/otp/status          → { enabled, bindTime, recoveryLeft }
-     *   POST /api/me/otp/bind            → { secret, uri }（**不落库**）
-     *   POST /api/me/otp/bind/confirm    → 动态码通过才落库，返回一次性恢复码
-     *   POST /api/me/otp/unbind          → 需当前有效动态码或恢复码
-     *
-     * 全部只认**会话里**那个 userId（不从 body 拿 id）；操作员/节点/手机没有"自己的验证器"。
-     */
-    if (p.startsWith('/api/me/otp')) {
-      const who = req.bandiAuth;
-      if (who?.kind !== 'user') throw new UserError(401, 'E3810', '还没登录');
-      const me = store.getUser(who.userId);
-      if (!me) throw new UserError(401, 'E3810', '这个账号已经不在了，请重新登录');
-
-      if (method === 'GET' && p === '/api/me/otp/status') {
-        const otp = store.getOtp(me.id);
-        return sendJson(res, 200, otp
-          ? { enabled: true, bindTime: otp.bindTime ?? null, recoveryLeft: otp.recoveryLeft }
-          : { enabled: false, bindTime: null, recoveryLeft: 0 }), true;
-      }
-
-      if (method === 'POST') {
-        const body = await readBody(req);
-
-        // 第一步：出密钥与 otpauth URI —— **不落库**（confirm 通过才生效，扫了没确认就什么都不留）
-        if (p === '/api/me/otp/bind') {
-          if (store.isEnabled(me.id)) throw new UserError(409, 'E3821', '已绑定动态验证，请先解绑');
-          const secret = store.generateSecret();
-          return sendJson(res, 200, { secret, uri: store.otpauthUri(secret, me.name) }), true;
-        }
-
-        // 第二步：动态码校验通过才落库，并**一次性**返回 10 个恢复码（库里只有哈希）
-        if (p === '/api/me/otp/bind/confirm') {
-          const secret = String(body?.secret ?? '').trim();
-          if (!secret) throw new UserError(400, 'E3822', '缺少密钥，请重新发起绑定');
-          if (store.isEnabled(me.id)) throw new UserError(409, 'E3821', '已绑定动态验证，请先解绑');
-          if (!store.verifyTotp(secret, body?.code)) {
-            throw new UserError(401, 'E3820', '动态验证码错误，请确认验证器时间与输入');
-          }
-          const recoveryCodes = store.saveBinding(me.id, secret);
-          return sendJson(res, 200, {
-            ok: true,
-            recoveryCodes, // 仅此一次，前端必须让用户抄下来
-            user: store.getUser(me.id),
-          }), true;
-        }
-
-        // 解绑：要当前有效动态码或恢复码（手机丢了也不该被别人顺手关掉）
-        if (p === '/api/me/otp/unbind') {
-          if (!store.isEnabled(me.id)) throw new UserError(400, 'E3825', '当前未绑定动态验证');
-          if (!store.verify(me.id, body?.code)) {
-            throw new UserError(401, 'E3820', '动态验证码或恢复码错误');
-          }
-          store.removeBinding(me.id);
-          return sendJson(res, 200, { ok: true, user: store.getUser(me.id) }), true;
-        }
-      }
-      return fail(res, 404, 'E2036', '没有这个动态验证接口'), true;
-    }
-
-    /* ------------------------------------------------ 改自己的密码（2026-10-31「我的」页） */
-    if (method === 'POST' && p === '/api/me/password') {
-      /*
-       * **自助改密码** —— 与 PATCH /api/users/:id 的区别：这里只认**会话里**那个 userId
-       * （不从 body/path 拿 id，想改别人没有入口），且不需要管理员（mayManage）。
-       * 操作员（令牌 / 回环）、节点、手机设备没有"自己的账号"，一律 401。
-       */
-      const who = req.bandiAuth;
-      if (who?.kind !== 'user') throw new UserError(401, 'E3810', '还没登录');
-      const cur = store.getUser(who.userId);
-      if (!cur) throw new UserError(401, 'E3810', '这个账号已经不在了，请重新登录');
-      const body = await readBody(req);
-      // getUser 按 red line 不带 hash；验当前密码走归一名字查询（带 salt/hash），口径与登录一致
-      const full = store.userByName(cur.name);
-      const current = String(body?.current ?? '');
-      // 免密账号没有"当前密码"可验 —— 只有设了密码的才要求先验旧的
-      if (full?.hash && !store.checkPassword(full, current)) {
-        throw new UserError(401, 'E3805', '当前密码不对');
-      }
-      const next = String(body?.password ?? '');
-      if (next && (next.length < PASSWORD_MIN || next.length > PASSWORD_MAX)) {
-        throw new UserError(400, 'E3803', `密码长度要在 ${PASSWORD_MIN}–${PASSWORD_MAX} 之间`);
-      }
-      const user = store.setPassword(cur.id, next); // 空串 = 改回免密（store 的口径）
-      /*
-       * setPassword 会作废**全部**会话（改密码 = 别处登过的都下线，防锁死的口径不变）——
-       * 但**这台浏览器**正在改密码，把人家也踢出去就是"改完密码自己进了登录页"。
-       * 当场补一张新票随 Set-Cookie 带回去，别人的会话照旧全下线。
-       */
-      const { token } = store.createSession(cur.id);
-      res.writeHead(200, {
-        'Content-Type': 'application/json; charset=utf-8',
-        'Cache-Control': 'no-store',
-        // 与登录响应同款：发会话票就一并种 CSRF 值（不带的话改完密码第一个写请求就 E4099）
-        'Set-Cookie': [auth.sessionCookie(token), csrf.cookieFor(csrf.mint())],
-      });
-      res.end(JSON.stringify({ ok: true, user }));
-      return true;
-    }
-
-    /* ------------------------------------------------ 以下全部要管理员 */
-    /*
-     * **首次引导直建**（2026-10-31 改）：一个账号都没有时，**登录页直接建第一个账号** ——
-     * 公网服务器上"先拿令牌进来再到设置里建号"那套走不通（人不在那台机器旁边）。
-     * 代价是"谁先到谁占管理员"，换来的是部署完浏览器直接就能进；建完这条路立刻关死。
-     *
-     * ⚠️ 判据只有一条：**库里还没有任何账号**。回环形态下 operator 恒真（免鉴权），
-     * 光靠"有没有管理员"关不住 —— 实测建完第一个账号后无凭据还能继续建（2026-10-31 自查发现）。
-     *
-     * （2026-10-31 Phase 3 收编）原 `!auth.mayManage(req)` 闸已摘 —— 账号管理授权归
-     * PDP（users.* = perm:'user:manage'，**perm ⇒ noPanel**）；给成员授 user:manage
-     * 就能管账号（词表解锁），面板/算力令牌在 guard 层吃 E4032。引导口的
-     * `!store.hasUsers()` 兜底保留：它是"零账号"判据，不是身份判断。
-     */
-    if (method === 'POST' && p === '/api/users' && store.hasUsers() && req.bandiAuth?.kind !== 'user' && req.bandiAuth?.kind !== 'operator') {
-      throw new UserError(403, 'E3811', '只有管理员能管账号');
-    }
+    /* ------------------------------------------------ 账号 CRUD（登录即全权） */
 
     if (method === 'GET' && p === '/api/users') {
-      return sendJson(res, 200, { users: store.listUsers(), hasUsers: store.hasUsers() }), true;
+      /*
+       * `hubAccounts`（2026-11-07）：这台机器认下的**中枢账号**名单 —— 「认证在中枢、
+       * 授权在本机」里"授权"那一半的可视形态：有行 = 票验过后能进门。
+       * userName 带出来是给「中枢账号绑着哪个影子账号」看的（一机一用户是常态，
+       * 但预占影子账号时会出现多行绑同一个人的情况，页面上要能对上号）。
+       */
+      const hubAccounts = store
+        .listHubLinks()
+        .map((l) => ({
+          accountId: l.accountId,
+          login: l.login ?? null,
+          userId: l.userId,
+          userName: store.getUser(l.userId)?.name ?? null,
+          createdAt: l.createdAt ?? null,
+          lastEnterAt: l.lastEnterAt ?? null,
+        }));
+      return sendJson(res, 200, { users: store.listUsers(), hasUsers: store.hasUsers(), hubAccounts }), true;
     }
 
     if (method === 'POST' && p === '/api/users') {
-      const body = await readBody(req);
-      const first = !store.hasUsers();
       /*
-       * **首个管理员要引导码**（IAM §8.6，2026-10-31）：服务器形态下 `POST /api/users`
-       * 在零账号时是免令牌的，没有这一条就是"谁先连上谁当管理员"。
-       * 判据与生成都在 `security/setup-code.mjs`：监听非回环（或声明了 trustProxy）才有码，
-       * 建成第一个管理员后文件立刻删掉。
-       * 单机形态（回环）不受影响 —— 那里"开机建账号"是既有体验。
+       * 建影子账号：预占一个名字（多台设备/多个中枢账号要提前排好绑定时用）。
+       * 真正"进人"靠中枢账号首次登录时的自动绑定（routes/hub.mjs → firstUser ?? createUser）。
        */
-      if (first && req.bandiSource === 'network' && !setupCode.check(req)) {
-        throw new UserError(
-          403,
-          'E4098',
-          '创建第一个管理员需要 X-Bandi-Setup（值在数据目录的 setup_code 文件里），或在终端跑 `bandi user create <名字> --admin`',
-        );
-      }
+      const body = await readBody(req);
       const name = checkName(body?.name);
       if (store.nameTaken(name)) throw new UserError(409, 'E3802', `用户名「${name}」已经有人用了`);
-      const password = checkPassword(body?.password);
-      /*
-       * 第一个账号**必须**是管理员（store 内部也会强制覆盖），所以它不校验 roleId；
-       * 后面的账号必须显式给一个存在的角色 —— 没有"默认只读"这种含糊事。
-       */
-      if (!first) checkRole(body?.roleId);
-      const user = store.createUser({ name, password, roleId: first ? 'admin' : body?.roleId });
-      if (first) setupCode.consume(); // 引导码使命结束，别留成第二个后门
-      /*
-       * 建第一个账号 = **首次开机设置**（2026-10-31）：顺手给创建者发一张登录会话票
-       * （Set-Cookie bandi_sid，写法与 /api/login 相同）。回环桌面那边鉴权本来就免，
-       * 这张票真正起作用的地方是"同一台机器以后改听局域网"——
-       * 浏览器切到非回环地址时它就是凭据，不用再登录一次。
-       */
-      if (first) {
-        const { token } = store.createSession(user.id);
-        res.writeHead(201, {
-          'Content-Type': 'application/json; charset=utf-8',
-          'Cache-Control': 'no-store',
-          // 2026-11-01 修：这张票要配 CSRF 值 —— 不带的话，建完账号第一次写操作
-          // （实测是「退出登录」）就吃 E4099，看着像"点了没反应"。
-          'Set-Cookie': [auth.sessionCookie(token), csrf.cookieFor(csrf.mint())],
-        });
-        res.end(JSON.stringify({ user, first }));
-        return true;
-      }
-      return sendJson(res, 201, { user, first }), true;
+      const user = store.createUser({ name });
+      return sendJson(res, 201, { user, first: !!user.builtin }), true;
     }
 
     const one = /^\/api\/users\/([^/]+)$/.exec(p);
@@ -691,35 +238,16 @@ export async function handleUsers(req, res, url) {
         if (store.nameTaken(name, id)) throw new UserError(409, 'E3802', `用户名「${name}」已经有人用了`);
         out = store.renameUser(id, name) ?? out;
       }
-      if (body?.password !== undefined) {
-        out = store.setPassword(id, checkPassword(body.password)) ?? out;
-      }
-      if (body?.roleId !== undefined) {
-        const role = checkRole(body.roleId);
-        // 内置管理员不可改角色（防锁死第一道）
-        if (isBuiltinAdmin(cur)) throw new UserError(403, 'E3808', '内置管理员不能改角色');
-        // 不能把最后一个管理员降级（防锁死第二道：改角色与禁用是同一种"少一个管理员"）
-        if (cur.roleId === 'admin' && role.id !== 'admin' && store.countAdmins(id) === 0) {
-          throw new UserError(409, 'E4096', '这是最后一个管理员，不能改角色');
-        }
-        out = store.setRole(id, role.id) ?? out;
-      }
       if (body?.disabled !== undefined) {
         const want = !!body.disabled;
-        if (isBuiltinAdmin(cur) && want) throw new UserError(403, 'E3808', '内置管理员不能被禁用');
-        if (want && cur.roleId === 'admin' && store.countAdmins(id) === 0) {
-          throw new UserError(409, 'E4096', '这是最后一个管理员，不能禁用');
-        }
+        if (isBuiltin(cur) && want) throw new UserError(403, 'E3808', '内置账号不能被禁用');
         out = store.setDisabled(id, want) ?? out;
       }
       return sendJson(res, 200, { user: out }), true;
     }
 
     if (method === 'DELETE') {
-      if (isBuiltinAdmin(cur)) throw new UserError(403, 'E3808', '内置管理员不能删除');
-      if (cur.roleId === 'admin' && store.countAdmins(id) === 0) {
-        throw new UserError(409, 'E4096', '这是最后一个管理员，不能删除');
-      }
+      if (isBuiltin(cur)) throw new UserError(403, 'E3808', '内置账号不能删除');
       store.deleteUser(id);
       return sendJson(res, 200, { ok: true, id }), true;
     }

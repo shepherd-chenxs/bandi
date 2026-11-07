@@ -7,7 +7,7 @@
  *   · **审计日志**（仅管理员）—— 谁、什么时候、做了什么、成没成。策略层自动记
  *     （401/403 拒绝、写操作 pending→回填），这里只是查询窗口：按类型筛 + 游标翻页。
  *
- * 版式沿 useradmin.mjs 的 set-sec 卡片；错误一律「码 + 中文」toast，不用 alert。
+ * 版式沿设置页的 set-sec 卡片；错误一律「码 + 中文」toast，不用 alert。
  */
 import { esc, toast } from './shell.mjs';
 import { api, createCombo, dt, failHtml, post } from './ui.mjs';
@@ -47,7 +47,6 @@ async function waitForRestart() {
   'session.revoke': '退出/踢下线',
   'user.change': '账号变更',
   'machine.local': '本机操作',
-  collab: '协作',
   restart: '重启',
   write: '写操作',
   'authz.deny': '拒绝访问',
@@ -80,7 +79,7 @@ export async function renderSecurity() {
         .map(
           (s) => `<div class="set-row" style="flex-direction:column;align-items:flex-start;gap:2px">
             <div style="display:flex;gap:8px;align-items:center;width:100%">
-              <b>${esc(s.kind === 'browser' ? '浏览器' : s.kind)}</b>
+              <b>${esc(s.kind === 'hub' ? '中枢登录' : s.kind === 'browser' ? '浏览器' : s.kind)}</b>
               <span style="color:var(--dim);font-size:12px">指纹 ${esc(s.id)}</span>
               ${s.ip ? `<span style="color:var(--dim);font-size:12px">IP ${esc(s.ip)}</span>` : ''}
             </div>

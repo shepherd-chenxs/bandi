@@ -3662,13 +3662,6 @@ button.att-add:hover { color: var(--text); border: 0; background: var(--panel); 
 .kb-tag.manual { color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, transparent); }
 .kb-del { margin-left: 4px; border: none; background: none; color: var(--dim); cursor: pointer; font-size: 13px; }
 .kb-del:hover { color: var(--bad); }
-/* 协作卡上的验收/撤销（2026-11-01 二十改）：跟 kb-del 同一生态位 —— 卡角小动作，
-   不抢标题；验收用 ok 色点一下就完，撤销默认灰、悬停变红（它才是一去不回的那个）。 */
-.kb-act { margin-left: 4px; border: 1px solid var(--line); background: none; color: var(--dim); cursor: pointer; font-size: 12px; line-height: 1; padding: 3px 8px; border-radius: 999px; }
-.kb-act:hover { color: var(--text); border-color: var(--dim); }
-.kb-act[data-kb-cl-done] { color: var(--ok); }
-.kb-act[data-kb-cl-done]:hover { border-color: var(--ok); }
-.kb-act[data-kb-cl-cancel]:hover { color: var(--bad); border-color: var(--bad); }
 .kb-check { display: flex; align-items: center; gap: 7px; font-size: 12.5px; margin-top: 10px; }
 .kb-check input { width: auto; }
 .kb-proj-hint { font-size: 12px; color: var(--dim); margin-top: 8px; word-break: break-all; }
@@ -4227,66 +4220,9 @@ details.tc-replies[open] > .tc-replies-toggle .tc-replies-unfold { display: inli
 .rt-empty span { font-size: 12px; line-height: 1.7; max-width: 430px; }
 /* 有内容但还没扫过时的一行提示（补版本号用） */
 .rt-hint { padding: 8px 2px 0; font-size: 12px; color: var(--dim); }
-/* 模式标题行（2026-10-21 八改）：不再挂 machine-card —— 那个类带 max-width:720px，
-   是给「数据备份/节点页」那种长表单卡用的，放在这只会让开关顶不到页面右边。
-   「模式」标题在左，开关 + 重启顶到最右；标题行下是一行随开关走的状态说明 */
-/* 模式节（2026-10-21 十改，用户："加个边框、按钮大小协调、切换别闪"）：
-   一张卡框把「模式 + 选项卡 + 状态行」装起来，跟设备/总机行的卡片语言一致 */
-.mode-sec { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); padding: 12px 16px; }
-.mode-sec .set-head { margin-bottom: 4px; }
-.mode-sec .mode-ctl { margin-left: auto; display: flex; align-items: stretch; gap: 14px; }
-/* 重启按钮跟选项卡等高（2026-10-21 用户："单机总机按钮高度和重启按钮保持一致"）：
-   实测 seg 整体 37.4px、btn-sm 30.6px —— 差 ~7px。stretch 让重启自动撑到
-   容器高度（= seg 高），按钮文字本身垂直居中，不用硬编码像素 */
-.mode-sec .mode-ctl .btn-sm { padding: 4px 14px; font-size: 13px; }
-/* 标题行下面那行**随选项卡走的状态说明**（单机/总机各一句）——
-   让选项卡有语义可读；比正文小一档、淡色，不抢戏 */
-.mode-sec .mode-state { margin-top: 2px; font-size: 12px; color: var(--dim); }
-/* 主状态行（"我是总机/我是分机"）要读得见（2026-11-02 用户："这个太不明显了"）——
-   12px 淡灰那档是给次要说明的，主身份行升到 13px、正文色 */
-.mode-sec .mode-state.mode-main { font-size: 13px; color: var(--text); font-weight: 600; }
-/* 2026-11-02 二十六改：身份行搬进标题行（「模式  我是分机 —— [分机|总机]」），
-   跟标题同一行读，省掉一行独占的空间；权重回落到 500 —— 同一行里两个 600 会互相抢。
-   必须排在 .mode-state.mode-main 之后才能盖住它（同特异性，后写的赢）。 */
-.mode-sec .set-head .mode-state { margin: 0; font-size: 13px; color: var(--text); font-weight: 500; }
-/* 角色开关专属样式（2026-11-02 用户："这个太不明显了"）：通版 .seg 的选中态是
-   var(--panel) 底，撞上 .mode-sec 自己的 var(--panel) 底 = 选中跟没选一样。
-   seg-mode 用 accent 蓝实底 + 白字，块头也放大一档。 */
-.seg.seg-mode button { padding: 5px 20px; font-size: 13px; font-weight: 600; }
-.seg.seg-mode button.on { background: var(--accent); color: #fff; box-shadow: none; }
-.seg.seg-mode button.on:hover { color: #fff; }
-/* 「只在本机使用」那行（2026-11-01 八改）：次要动作，别和标题行的 seg 抢视线 */
-.mode-sec .mode-foot { margin-top: 8px; }
-/* 协作中心 · 未连接态的空状态卡（2026-11-02 二十六改，UI 评审）：
-   这张卡承担整页唯一的任务，所以给它一整块面 —— 图标 + 状态 + 一句说明 + 主按钮居中。
-   原来是「整宽空卡 + 左上角一颗 btn-sm」，按重要度看就是一个找不到入口的角落。 */
-.cl-empty { border: 1px solid var(--line); border-radius: 10px; background: var(--panel);
-            padding: 34px 20px 30px; text-align: center; }
-.cl-empty-ico { display: grid; place-items: center; margin: 0 auto 10px; width: 44px; height: 44px; }
-.cl-empty-title { font-size: 14px; font-weight: var(--w-title); }
-.cl-empty-desc { margin-top: 4px; font-size: 12.5px; color: var(--dim); }
-.cl-empty .cl-empty-btn { margin-top: 16px; padding: 8px 26px; }
-/* 紧凑变体（2026-11-02 二十七改）：用在「我的分机 0」这种**页内一块区域**的空态上，
-   下面还接着别的内容，不需要未连接总机那张那么大的垂直留白。 */
-.cl-empty-sm { padding: 26px 20px 24px; }
-.cl-empty-sm .cl-empty-ico { width: 40px; height: 40px; margin-bottom: 8px; }
-.cl-empty-sm .cl-empty-btn { margin-top: 14px; }
-/* 键盘可达（2026-11-02 二十六改）：seg 与主按钮补一圈可见焦点环 ——
-   默认 UA 描边在这套深色底上几乎看不见 */
-.seg button:focus-visible, .mode-ctl button:focus-visible, .cl-empty-btn:focus-visible,
-.cl-inv-box:focus-visible {
+/* 键盘可达：seg 主按钮补一圈可见焦点环（默认 UA 描边在深色底上几乎看不见） */
+.seg button:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 2px; }
-/* 接入码弹窗（2026-11-03 用户："只要地址和接入码两个，其他说明不要"，再改"标签放框外面"）：
-   标签在框外上方，框里只有等宽值；点框 = 复制，成功后标签临时变「已复制」。 */
-.cl-inv { display: grid; gap: 12px; margin: 12px 0 4px; }
-.cl-inv-field { display: grid; gap: 6px; }
-.cl-inv-label { font-size: 11.5px; color: var(--dim); letter-spacing: .04em; }
-.cl-inv-box { width: 100%; text-align: left; font: inherit; color: inherit; cursor: pointer;
-              padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--input); }
-.cl-inv-box:hover { border-color: var(--accent); }
-.cl-inv-box:active { transform: translateY(1px); }
-.cl-inv-value { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 14.5px;
-                letter-spacing: .03em; overflow-wrap: anywhere; user-select: all; }
 .machine-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
 .machine-warn { margin-top: 10px; font-size: 12px; color: var(--warn); line-height: 1.6; }
 .machine-dot { display: inline-block; width: 7px; height: 7px; border-radius: 99px;

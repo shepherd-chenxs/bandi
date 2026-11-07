@@ -27,11 +27,11 @@ const rel = (p) => path.relative(repo, p).split(path.sep).join('/');
 /** 要跑的：都不碰真实 data/、不要真实 CLI、不联网 */
 const RUN = [
   'apps/server/src/smoke-agent-cards.mjs',
-  // IAM 安全收编（Phase 1–3）的 8 个用例（2026-11-02 补登记）：策略表 / 审计 / CSRF /
-  // bootstrap / 本机策略 / 反代鉴权 / 安全策略 / 票据，全部临时数据目录、不联网
+  // IAM 安全收编（Phase 1–3）的 6 个用例（2026-11-02 补登记）：策略表 / 审计 / CSRF /
+  // 本机策略 / 反代鉴权 / 安全策略，全部临时数据目录、不联网
+  // （bootstrap 与票据两条随 2026-11-07 本地账号退场删除 —— 被测机制没了，用例跟着删）
   'apps/server/src/smoke-admin-invariant.mjs',
   'apps/server/src/smoke-audit.mjs',
-  'apps/server/src/smoke-bootstrap.mjs',
   'apps/server/src/smoke-csrf.mjs',
   'apps/server/src/smoke-local-policy.mjs',
   // 网络周界闸（2026-11-03，对齐 1Panel 安全页）：授权 IP 白名单 E3003 / 域名绑定 E3004
@@ -40,12 +40,9 @@ const RUN = [
   'apps/server/src/smoke-listen-host.mjs',
   'apps/server/src/smoke-proxy-auth.mjs',
   'apps/server/src/smoke-security-policy.mjs',
-  'apps/server/src/smoke-token.mjs',
   'apps/server/src/smoke-auth.mjs',
   'apps/server/src/smoke-autostart.mjs',
   'apps/server/src/smoke-chat-to-board.mjs',
-  // 协作中心（2026-10-31 MVP）：两台真进程，走的是"中心派活 → 分公司接单 → 状态双向"整条链
-  'apps/server/src/smoke-collab.mjs',
   'apps/server/src/smoke-connectors.mjs',
   'apps/server/src/smoke-conversation-delete.mjs',
   'apps/server/src/smoke-events.mjs',
@@ -63,6 +60,9 @@ const RUN = [
   'apps/server/src/smoke-node-panel.mjs',
   'apps/server/src/smoke-node-task.mjs',
   'apps/server/src/smoke-pair.mjs',
+  // 身份中枢进门（2026-11-06）：验票九类负样本 + /hub/enter 正路 + 本地授权表 + 服务器形态
+  // 不联网（票是本地现签的假票，只验"主机这一侧"的逻辑）
+  'apps/server/src/smoke-hub.mjs',
   'apps/server/src/smoke-personas.mjs',
   'apps/server/src/smoke-plugin-blocks.mjs',
   'apps/server/src/smoke-pr-create.mjs',
@@ -79,8 +79,6 @@ const RUN = [
   // 运行时识别不依赖进程 PATH 快照（2026-11-04）：注册表实时 PATH + 固定落点。
   // ⚠️ 这条会临时改 HKCU\Environment\Path（原样写回）—— 真注册表用例
   'apps/server/src/smoke-runtime-detect.mjs',
-  'apps/server/src/smoke-roles.mjs',
-  'apps/server/src/smoke-device-roles.mjs',
   // 纯静态断言（不联网）：手机该走的路由必须带 device 标，桌面专属的必须没有
   'apps/server/src/smoke-device-routes.mjs',
   'apps/server/src/smoke-users.mjs',

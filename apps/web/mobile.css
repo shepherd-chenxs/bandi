@@ -717,12 +717,6 @@
    * 只藏**没有操作按钮**的那种：技能页的 headRow 里挂着搜索框，藏了就没法搜。
    */
   #settingsView > .head-row:not(:has(.head-actions)) { display: none; }
-  /*
-   * 协作中心是**嵌套**一层的（`#collabPage > .head-row`，见 collab.mjs 的 clHead），
-   * 上面那条直系选择器够不到它 —— 手机上就还是两行「协作中心」（2026-11-02 用户："清"）。
-   * 口径与上一条一致：只藏没有操作按钮的，带搜索/动作的页头留着。
-   */
-  #settingsView #collabPage > .head-row:not(:has(.head-actions)) { display: none; }
 }
 
 /* ============================================================ 4d. 设置子页（详情区字阶） */
@@ -3617,26 +3611,6 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     font-variant-numeric: tabular-nums;
     color: var(--mb-text-3, var(--dim));
   }
-  /*
-   * 派到分公司的卡（remote，没有跳转属性）行尾的「验收 / 撤销」——
-   * 视觉规格里没有这一段（它假设所有行都可点），交互规格 §4.2 要求把桌面卡上的动作
-   * 补到行上。单独一行右对齐：塞进元信息行会把时间挤走，而时间是永不缩的那一段。
-   */
-  .kb-l-acts { display: flex; justify-content: flex-end; gap: 8px; padding-top: 2px; }
-  .kb-l-act {
-    min-height: 30px;
-    padding: 0 12px;
-    border: 0;
-    border-radius: 8px;
-    font: inherit;
-    font-size: 13px;
-    font-weight: 500;
-    background: var(--mb-fill, var(--active));
-    color: var(--mb-tint, var(--accent));
-    cursor: pointer;
-  }
-  .kb-l-act:active { background: var(--mb-press, var(--active)); }
-
   /* ── §4 空态 / 错误态：一种版式，两个文案 ──
      视觉重量：一句话 13px + 一颗**软底**按钮（不是实心主蓝 —— 空态里的蓝不该和导航「＋」抢） */
   .kb-l-empty {

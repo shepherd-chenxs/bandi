@@ -16,8 +16,8 @@ import './js/chat.mjs';
 import './js/events.mjs';
 import './js/groups.mjs';
 import './js/experts.mjs';
-// 协作中心（2026-10-31 MVP；2026-11-01 起中心页长在设置 →「协作」组，分公司侧走 CLI）
-import './js/collab.mjs';
+// 协作中心 2026-11-07 随协作子系统整体退场（app.mjs 的这行 import 就是「点不动」的元凶：
+// 它 404 让整个模块图起不来，页面只剩静态骨架 + 全屏兜底遮罩）。
 import './js/core.mjs';
 import './js/misc.mjs';
 // 手机端（2026-11 增量）：响应式壳（断点状态类 / 主从折叠 / 底部导航）与配对分节。

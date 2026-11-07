@@ -1,6 +1,0 @@
-{
-  "identifier": "default",
-  "description": "手机壳默认能力：启动页调用 get_settings / open_server / forget_server / discover / probe 这些自定义 command（自定义命令不走 permission，这里只需 core:default）",
-  "windows": ["main"],
-  "permissions": ["core:default"]
-}

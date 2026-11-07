@@ -10,10 +10,7 @@ import { renderList, showView } from './contacts.mjs';
 import { setListTitle } from './flowpages.mjs';
 import { openCodeRepoPage, renderSkillCards } from './skills.mjs';
 import { renderPairing } from './pairing.mjs';
-// 设置 › 协作中心（2026-11-01 从工作台搬来）：页面本体在 collab.mjs，这里只挂分节
-import { renderCollabCenter } from './collab.mjs';
-import { renderRoles } from './roleadmin.mjs';
-import { logout, renderUsers } from './useradmin.mjs';
+
 // 设置 › 安全（2026-10-31 IAM Phase 1）：我的会话 + 审计日志
 import { renderSecurity } from './securityadmin.mjs';
 import { $, S } from './core.mjs';
@@ -28,7 +25,7 @@ import { $, S } from './core.mjs';
  *
  * 为什么不把偏好/关于搬进来：用户拍板「设置还是放到左边菜单栏」—— 设置一节不动，
  * 这里就只放设置页没有的那件事：登录身份。退出登录与用户管理页共用同一份
- * （useradmin.logout，两张票一起清），别处再写就是第二套口径。
+ * （logout()，两张票一起清），别处再写就是第二套口径。
  *
  * 整页形态（左栏收掉，与工作台/专家库同款，setNav 里已把 no-list 带上）；
  * 容器借设置页的 #settingsView —— 反正两者不会同时出现，省一个常驻节点。
@@ -60,14 +57,6 @@ import { $, S } from './core.mjs';
  *   桌面（非 mb-narrow）不受影响。
  */
 
-/* 账号安全两卡的线性小图标（跟随 .me-sec-ico 的 accent 色，与 rail 图标同一套笔触） */
-const ICO_KEY =
-  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">' +
-  '<path d="m21 2-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0 3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>';
-const ICO_SHIELD =
-  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">' +
-  '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></svg>';
-
 /*
  * 外观选项（2026-11-05 用户：「我的页面加一个主题选择的功能」）。
  * 键与桌面 设置 › 偏好 › 主题 完全同一套（'light' / 'dark' / 'system'），
@@ -79,7 +68,7 @@ const THEME_OPTS = [
   ['system', '跟随系统'],
 ];
 
-export function openMe() {
+export async function openMe() {
   setRoute('me');
   setPluginRerender(null);
   showView('settings');
@@ -93,29 +82,25 @@ export function openMe() {
    * 设备信息（型号 / 地址 / 时间）不进身份卡 —— 它是属性，在下面的「这台设备」卡。
    */
   const dev = who?.device ?? null;
+  // 身份卡显示**中枢账号**（登录用的手机号）：本机名条只是实现细节（2026-11-07）
   const name = isUser
-    ? (who?.user?.name ?? '')
+    ? (who?.user?.hub || who?.user?.name || '')
     : isDevice
-      ? (who?.user?.name || dev?.name || '这台设备')
+      ? (who?.user?.hub || who?.user?.name || dev?.name || '这台设备')
       : '未登录';
   /*
-   * 身份卡：名字旁的身份章（登录账号才有角色）+ 一行说明。
-   * 设备绑了账号时 meta 与登录账号同款（"班底账号"）—— 账号是标题，不用再解释
-   * "以谁的身份"；没绑账号的才需要一句话说清"现在是什么身份在用"。
+   * 身份卡：一行说明。设备绑了账号时 meta 与登录账号同款（"班底账号"）—— 账号是标题，
+   * 不用再解释"以谁的身份"；没绑账号的才需要一句话说清"现在是什么身份在用"。
+   * （2026-11-07：身份章随角色体系一起退场 —— 登录即全权，没有"角色名"可标。）
    */
-  const role = isUser ? (who?.role?.name ?? '') : '';
   const meta = isUser
-    ? '班底账号'
+    ? '中枢账号 · 手机号登录'
     : isDevice
-      ? (who?.user?.name ? '班底账号' : '未绑定账号 · 以设备身份使用')
+      ? (who?.user?.hub ? '中枢账号 · 手机号登录' : '未绑定账号 · 以设备身份使用')
       : '这台机器还没有登录账号';
   // 配对时间给「这台设备」卡 —— dt() 按本机时区出「2026/11/03 19:39」
   // （ISO 里存的是 UTC，手切字符串会差 8 小时，2026-11-03 实机踩过）
   const pairedAt = dev?.pairedAt ? dt(dev.pairedAt) : '';
-  // 免密 / 已设置：只有登录账号有"自己的密码"可改（操作员没有账号，去设置 → 用户里管）
-  const hasPw = isUser ? who?.user?.hasPassword !== false : false;
-  // 动态验证：同上，登录账号才有"自己的验证器"
-  const hasTotp = isUser ? who?.user?.hasTotp === true : false;
   /*
    * 「有没有登录态可退」（2026-11-01 实报：回环形态点退出登录没反应）。
    *   · 登录账号 → 有；
@@ -133,6 +118,52 @@ export function openMe() {
    * 与 mobile.css 的 @media 同源同拍：窄屏 = 手机形态，桌面缩窄窗口同样成立。
    */
   const onPhone = document.body.classList.contains('mb-narrow');
+  /*
+   * 当前机器的信息（2026-11-07）：`/api/hello` 描述**服务着这个页面的机器** ——
+   * 桌面 App / 本机浏览器里它就是"这台电脑"；手机浏览器里它是被访问的那台班底机。
+   * 拉不到（旧服务 / 网络断）就整卡不画，别画一行全是"—"的空卡。
+   *
+   * 「系统」也用 `hello.os`（2026-11-07 用户实报）：原来取 `navigator.platform`，
+   * 那是**看页面那台电脑**的平台 —— 在 Windows 上远程看 Linux 主机会显示 Win32，
+   * 跟这张卡「这台机器」的名头对不上。系统只有服务端自己知道，由它报。
+   */
+  const hello = await api('/api/hello').catch(() => null);
+  /*
+   * 壳标记（2026-11-07）：
+   *   · 原生壳（Kotlin，apps/mobile-native）—— WebView 启动前挂好 `window.BandiShell`
+   *     （addJavascriptInterface，页面第一行起可用），直接调方法回壳；
+   *   · 旧 Tauri 壳 —— initialization_script 注入 `window.__BANDI_SHELL__`（带启动页
+   *     地址，导航 hash 流），保留作过渡兜底。
+   * 浏览器 / PWA 两个都没有 ——「当前设备」行与退出落点只在壳里生效，桌面行为不变。
+   */
+  const nativeShell = typeof window.BandiShell !== 'undefined' ? window.BandiShell : null;
+  const shell = nativeShell ? { native: true } : (window.__BANDI_SHELL__ ?? null);
+  /*
+   * 机器信息两套行（2026-11-07）：
+   *   桌面 —— 四行，系统与版本并成一行（卡宽够，"Linux 6.x x64 · 班底 v1.5.x"一行读得完）；
+   *   手机 —— 三行，系统 / 版本**分开**：窄屏一行放不下"Linux 6.8.0-138-generic x64 ·
+   *   班底 v1.5.x"，`.me-v` 是 break-all，硬挤会在内核号中间断字（iOS 设置页也是拆行的）。
+   *   本机地址手机上不画：与「已配对到」同一个 location.host；实例标识是排查用的，同上。
+   */
+  const machineAll = hello
+    ? [
+        ['设备名', hello.hostname || hello.label || '—'],
+        ['系统 / 版本', `${hello.os || '未知'}${hello.version ? ` · 班底 v${hello.version}` : ''}`],
+        ['本机地址', location.host || '—'],
+        ['实例标识', hello.instanceId || '—'],
+      ]
+    : [];
+  const phoneMachineAll = hello
+    ? [
+        ['设备名', hello.hostname || hello.label || '—'],
+        ['系统', hello.os || '未知'],
+        ['版本', hello.version ? `班底 v${hello.version}` : '未知'],
+      ]
+    : [];
+  const machineRowHtml = ([k, v]) =>
+    `<div class="me-kv"><span class="me-k">${esc(k)}</span><span class="me-v ${k === '实例标识' ? 'me-v-mono' : ''}">${esc(v)}</span></div>`;
+  const machineRows = machineAll.map(machineRowHtml).join('');
+  const phoneMachineRows = phoneMachineAll.map(machineRowHtml).join('');
   $('settingsView').innerHTML = `
     ${headRow('<b>我的</b>')}
     <div class="detail-body me-body">
@@ -142,12 +173,23 @@ export function openMe() {
           <div class="me-who">
             <div class="me-name">
               <b>${esc(name)}</b>
-              ${role ? `<span class="me-role">${esc(role)}</span>` : ''}
             </div>
             ${meta ? `<span class="me-meta">${esc(meta)}</span>` : ''}
           </div>
         </div>
       </section>
+      ${
+        /* 当前机器（2026-11-07）：这台电脑的名字 / 系统 / 实例标识 —— 「我的」页原本
+           只有账号没有机器，用户问"这台设备呢"。桌面画全四行；手机窄屏另有一张
+           同名卡（下面 phoneMachineRows 那段），但只留两行 —— 手机上"这台机器"
+           指的是**连过去的那台班底机**，跟"这台设备"（手机自己）不是一回事。 */
+        !onPhone && machineRows
+          ? `<section class="set-sec me-dev-sec">
+               <div class="set-head"><b>这台机器</b></div>
+               <div class="me-dev-box">${machineRows}</div>
+             </section>`
+          : ''
+      }
       ${
         /*
          * 外观（2026-11-05 用户：「我的页面加一个主题选择的功能。可以选深色、浅色那种」）。
@@ -177,26 +219,6 @@ export function openMe() {
           : ''
       }
       ${
-        /* 「通用 · 清除缓存」（2026-11-06 用户：「手机端我的页面加一个清除缓存的功能」）：
-           只在手机形态画。清的是本机 Service Worker 的 bandi-static-* 静态缓存
-           （页面/脚本/样式），治"改了代码手机上看不到"—— 上一轮评论入口改版就靠
-           杀 App 重开才换新，有了这个入口在页面里就能自愈。登录态在 Cookie 里、
-           业务数据在服务端，都不在缓存里，所以清除不伤账号。
-           右侧常态显示缓存体积（异步算），点了走 confirmDo → 清缓存 + 注销 SW → 重载。 */
-        onPhone
-          ? `<section class="set-sec me-cache-sec">
-               <div class="set-head"><b>通用</b></div>
-               <div class="me-dev-box">
-                 <button type="button" class="me-kv me-cache-row" id="meClearCache">
-                   <span class="me-k">清除缓存</span>
-                   <span class="me-v" id="meCacheHint">计算中…</span>
-                   <i class="me-chevron" aria-hidden="true">›</i>
-                 </button>
-               </div>
-             </section>`
-          : ''
-      }
-      ${
         /* 「这台设备」属性卡（2026-11-03 账户为主）：设备是账号的一个属性，
            不再占身份卡 —— 落成 label + value 的属性行。设备记录丢了就不画空卡。 */
         isDevice && dev
@@ -206,6 +228,40 @@ export function openMe() {
                  <div class="me-kv"><span class="me-k">设备名</span><span class="me-v">${esc(dev.name || '—')}</span></div>
                  <div class="me-kv"><span class="me-k">已配对到</span><span class="me-v me-v-mono">${esc(location.host)}</span></div>
                  ${pairedAt ? `<div class="me-kv"><span class="me-k">配对时间</span><span class="me-v">${esc(pairedAt)}</span></div>` : ''}
+               </div>
+             </section>`
+          : ''
+      }
+      ${
+        /* 手机窄屏的「这台机器」（2026-11-07 用户：「修改手机端」）：手机上"这台机器"
+           指的是**被连接的那台班底机**（当前这个页面就是它服务的），与上面「这台设备」
+           （手机自己）是两张卡、两件不同的事实 —— 分开摆，别混成一张。
+           只画「设备名 + 系统 / 版本」两行：本机地址与「已配对到」重复，实例标识是
+           排查才用的，窄屏一屏放得下两条就够回答"我连的是哪台机、跑的哪版"。 */
+        onPhone && phoneMachineRows
+          ? `<section class="set-sec me-dev-sec">
+               <div class="set-head"><b>这台机器</b></div>
+               <div class="me-dev-box">${phoneMachineRows}</div>
+             </section>`
+          : ''
+      }
+      ${
+        /* 「通用 · 清除缓存」（2026-11-06 用户：「手机端我的页面加一个清除缓存的功能」）：
+           只在手机形态画。清的是本机 Service Worker 的 bandi-static-* 静态缓存
+           （页面/脚本/样式），治"改了代码手机上看不到"—— 上一轮评论入口改版就靠
+           杀 App 重开才换新，有了这个入口在页面里就能自愈。登录态在 Cookie 里、
+           业务数据在服务端，都不在缓存里，所以清除不伤账号。
+           右侧常态显示缓存体积（异步算），点了走 confirmDo → 清缓存 + 注销 SW → 重载。
+           2026-11-07：挪到「这台机器」之后 —— 两张设备卡连在一起读，维护类入口收尾。 */
+        onPhone
+          ? `<section class="set-sec me-cache-sec">
+               <div class="set-head"><b>通用</b></div>
+               <div class="me-dev-box">
+                 <button type="button" class="me-kv me-cache-row" id="meClearCache">
+                   <span class="me-k">清除缓存</span>
+                   <span class="me-v" id="meCacheHint">计算中…</span>
+                   <i class="me-chevron" aria-hidden="true">›</i>
+                 </button>
                </div>
              </section>`
           : ''
@@ -231,46 +287,28 @@ export function openMe() {
       </section>`
       }
       ${
-        /* 账号安全双卡（2026-11-03 桌面重设计）：密码 / 动态验证是 PC 端的管理动作，
-           手机白名单之外 —— 窄屏不渲染（见上面 onPhone 的注释）。 */
-        isUser && !onPhone
-          ? `<section class="set-sec">
-               <div class="set-head"><b>账号安全</b></div>
-               <div class="me-sec-grid">
-                 <div class="me-sec-card">
-                   <div class="me-sec-head">
-                     <span class="me-sec-ico">${ICO_KEY}</span>
-                     <b>登录密码</b>
-                     <span class="me-state ${hasPw ? 'is-ok' : 'is-warn'}"><i></i>${hasPw ? '已设置' : '免密'}</span>
-                   </div>
-                   <p class="me-sec-desc">${
-                     hasPw
-                       ? '用于登录班底。改完密码后，其它已登录的设备会全部下线。'
-                       : '免密账号只是本机身份，别的设备登不进来；要远程登录，先在这里补上密码。'
-                   }</p>
-                   <div class="me-sec-foot"><button class="btn-sm" id="mePwd">修改密码</button></div>
-                 </div>
-                 <div class="me-sec-card">
-                   <div class="me-sec-head">
-                     <span class="me-sec-ico">${ICO_SHIELD}</span>
-                     <b>动态验证</b>
-                     <span class="me-state ${hasTotp ? 'is-ok' : ''}"><i></i>${hasTotp ? '已开启' : '未开启'}</span>
-                   </div>
-                   <p class="me-sec-desc">${
-                     hasTotp
-                       ? '登录时除了密码，还要输一个验证器 6 位码。'
-                       : '开启后，登录除了密码还要输一个验证器 6 位码；手机丢了，用恢复码也能进。'
-                   }</p>
-                   <div class="me-sec-meta" id="meTotpMeta" hidden></div>
-                   <div class="me-sec-foot"><button class="btn-sm" id="meTotp">${hasTotp ? '解绑' : '开启'}</button></div>
-                 </div>
+        /* 「当前设备」（2026-11-07 用户：「我的页面加一个当前设备菜单。点击之后进入
+           到设备列表页，选择之后进行切换」）：只在**壳里 + 中枢账号会话**画 ——
+           面板和启动页是两个 origin，"设备列表"只存在于壳的启动页上；桥 = 导航回
+           启动页并带上 #bandi-devices 意图（会话还活着，启动页开机自动进列表）。
+           扫码进来的设备身份没有中枢会话，列表对它无意义（2026-11-07 同日撤掉扫码，
+           老设备令牌到过期为止），不画这行。值显示这台面板是哪台机器（/api/hello）。 */
+        shell && onPhone && hello && isUser
+          ? `<section class="set-sec me-cache-sec">
+               <div class="me-dev-box">
+                 <button type="button" class="me-kv" id="meSwitchDevice">
+                   <span class="me-k">当前设备</span>
+                   <span class="me-v">${esc(hello.label || hello.hostname || '—')}</span>
+                   <i class="me-chevron" aria-hidden="true">›</i>
+                 </button>
                </div>
              </section>`
           : ''
       }
       ${
         /* 退场动作整宽一行：个人中心的"走人"动作用整行 + 文字染色，比右下角一颗
-           小按钮稳。退出登录染 --bad（"走人"的分量）；断开连接/去登录是中性动作，不染。 */
+           小按钮稳。退出登录染 --bad（"走人"的分量）；断开连接/去登录是中性动作，不染。
+           （2026-11-07：账号安全双卡随本地密码/OTP 退场 —— 密码与动态验证都在中枢上管。） */
         `<section class="set-sec me-out-sec">
            <div class="me-out-box">${
              canLogout
@@ -300,6 +338,14 @@ export function openMe() {
     });
   }
   $('meLogout')?.addEventListener('click', () => void logout());
+  /*
+   * 当前设备 → 回壳的设备列表（2026-11-07）：只在壳里渲染（见上面 shell）。
+   * 原生壳直接调 BandiShell.openDeviceList()；旧 Tauri 壳走启动页意图 hash。
+   */
+  $('meSwitchDevice')?.addEventListener('click', () => {
+    if (nativeShell) { nativeShell.openDeviceList(); return; }
+    if (shell?.home) location.href = shell.home + '#bandi-devices';
+  });
   /*
    * 清除缓存（2026-11-06）：进页先异步算一遍 bandi-static-* 缓存体积亮在行尾；
    * 点击 → confirmDo → 清掉全部 Cache Storage + 注销 Service Worker → location.reload()。
@@ -374,8 +420,6 @@ export function openMe() {
   // 兜底：正常进不到这个分支（面板门前移到登录页，见 auth.mjs 的 wantsPanelHtml），
   // 万一从令牌通道挤进来，至少给一条出路 —— 别再摆一段讲实现细节的说明。
   $('meGoLogin')?.addEventListener('click', () => location.reload());
-  $('mePwd')?.addEventListener('click', () => openMePwdDlg(hasPw));
-  $('meTotp')?.addEventListener('click', () => (hasTotp ? openOtpOffDlg() : openOtpOnDlg()));
   // 设置入口：交给 mobile.mjs 转一次 setNav（反向 import 会成环，见上面的注释）
   const goSet = () => document.dispatchEvent(new CustomEvent('mb-nav', { detail: { nav: 'settings' } }));
   $('meSettings')?.addEventListener('click', goSet);
@@ -385,202 +429,7 @@ export function openMe() {
       goSet();
     }
   });
-  // 已绑定的：说明下面补一行"绑于何时 / 还剩几个恢复码"（参考项目 security 页的 status 显示）
-  if (hasTotp) {
-    api('/api/me/otp/status')
-      .then((st) => {
-        const el = $('meTotpMeta');
-        if (!el || !st?.enabled) return;
-        const at = String(st.bindTime ?? '').replace('T', ' ').slice(0, 16);
-        el.textContent = `绑定于 ${at || '—'} · 恢复码剩 ${st.recoveryLeft ?? 0} 个`;
-        el.hidden = false;
-      })
-      .catch(() => {});
-  }
 }
-
-/**
- * 「我的」› 动态验证（2026-10-31 二改，仿 yaojian-ruoyi 的绑定流）。
- *
- * 三步，与参考项目的 security 页一致：
- *   ① 扫码（或手动输密钥）→ ② 输动态码确认 → ③ **一次性展示 10 个恢复码**（必须抄走）。
- * 密钥在 confirm 之前不落库；恢复码只在 confirm 的响应里出现这一次。
- */
-function openOtpOnDlg() {
-  const dlg = document.createElement('dialog');
-  dlg.id = 'otpDlg';
-  dlg.innerHTML = `
-    <form method="dialog">
-      <b>开启动态验证</b>
-      <div id="otpS1" style="margin-top:10px">
-        <div class="otp-step">① 用 Authenticator 扫码；扫不了就手动输入下面这串密钥</div>
-        <div id="otpQr"></div>
-        <div class="machine-data machine-addr" id="otpSecret" style="text-align:center;margin-top:6px"></div>
-        <div class="otp-step" style="margin-top:14px">② 输入 App 里显示的 6 位码</div>
-        <input id="otpCode" inputmode="numeric" maxlength="6" placeholder="6 位验证码" autocomplete="one-time-code" style="margin-top:6px" />
-      </div>
-      <div id="otpS2" hidden>
-        <div class="otp-step" style="margin-top:10px">
-          ③ 恢复码 —— <b>只显示这一次</b>，每个只能用一次。手机丢了、验证器换了，用它代替动态码登录。请立即抄下来。
-        </div>
-        <div id="otpRecovery" class="otp-recovery"></div>
-      </div>
-      <div id="otpErr" style="color:#ff8a80;font-size:12.5px;margin-top:8px" hidden></div>
-      <div class="dlg-actions" id="otpActions">
-        <button type="button" value="cancel">取消</button>
-        <button class="primary" id="otpOk" value="ok">确认开启</button>
-      </div>
-    </form>`;
-  document.body.append(dlg);
-  wireDialogHead(dlg.querySelector('form'));
-  dlg.addEventListener('close', () => dlg.remove());
-  const err = dlg.querySelector('#otpErr');
-  const bad = (t) => { err.textContent = t; err.hidden = false; };
-  dlg.querySelector('button[value="cancel"]').onclick = () => dlg.close();
-
-  let secret = '';
-  void (async () => {
-    try {
-      const r = await api('/api/me/otp/bind', { method: 'POST' });
-      secret = r.secret;
-      dlg.querySelector('#otpQr').innerHTML = qrSvg(r.uri);
-      dlg.querySelector('#otpSecret').textContent = r.secret;
-    } catch (e) {
-      bad(e.message);
-      dlg.querySelector('#otpS1').hidden = true;
-    }
-  })();
-
-  dlg.querySelector('#otpOk').onclick = async (e) => {
-    e.preventDefault();
-    err.hidden = true;
-    const code = dlg.querySelector('#otpCode').value.trim();
-    if (!code) return bad('先输验证器里的 6 位码');
-    const btn = dlg.querySelector('#otpOk');
-    btn.disabled = true;
-    try {
-      const r = await api('/api/me/otp/bind/confirm', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ secret, code }),
-      });
-      // 第三步：展示恢复码（仅此一次），按钮换成「我已保存」
-      dlg.querySelector('#otpS1').hidden = true;
-      const s2 = dlg.querySelector('#otpS2');
-      s2.hidden = false;
-      dlg.querySelector('#otpRecovery').innerHTML = (r.recoveryCodes ?? [])
-        .map((c) => `<code>${esc(c)}</code>`)
-        .join('');
-      if (S.auth?.user) S.auth.user.hasTotp = true;
-      const acts = dlg.querySelector('#otpActions');
-      acts.innerHTML = `
-        <button type="button" id="otpCopy">复制全部</button>
-        <button class="primary" id="otpDone">我已保存</button>`;
-      acts.querySelector('#otpDone').onclick = () => {
-        dlg.close();
-        toast('动态验证已开启');
-        openMe();
-      };
-      acts.querySelector('#otpCopy').onclick = () => {
-        const text = (r.recoveryCodes ?? []).join('\n');
-        navigator.clipboard?.writeText(text).then(
-          () => toast('恢复码已复制'),
-          () => toast('复制失败，请手动抄写', 'error'),
-        );
-      };
-    } catch (e2) {
-      btn.disabled = false;
-      bad(e2.message);
-    }
-  };
-  dlg.showModal();
-  dlg.querySelector('#otpCode').focus();
-}
-
-/** 解绑：要当前有效动态码或一个恢复码（防手机丢失后被别人顺手关掉） */
-function openOtpOffDlg() {
-  const dlg = document.createElement('dialog');
-  dlg.id = 'otpOffDlg';
-  dlg.innerHTML = `
-    <form method="dialog">
-      <b>关闭动态验证</b>
-      <div class="otp-step" style="margin-top:10px">
-        关闭后登录只需密码。为确认是本人操作，请输入当前验证器的 6 位动态码（或一个恢复码）。
-      </div>
-      <input id="otpCode" inputmode="numeric" maxlength="8" placeholder="动态验证码或恢复码" autocomplete="one-time-code" style="margin-top:8px" />
-      <div id="otpErr" style="color:#ff8a80;font-size:12.5px;margin-top:8px" hidden></div>
-      <div class="dlg-actions">
-        <button type="button" value="cancel">取消</button>
-        <button class="danger" id="otpOff" value="ok">解绑</button>
-      </div>
-    </form>`;
-  document.body.append(dlg);
-  wireDialogHead(dlg.querySelector('form'));
-  dlg.addEventListener('close', () => dlg.remove());
-  const err = dlg.querySelector('#otpErr');
-  dlg.querySelector('button[value="cancel"]').onclick = () => dlg.close();
-  dlg.querySelector('#otpOff').onclick = async (e) => {
-    e.preventDefault();
-    err.hidden = true;
-    try {
-      await api('/api/me/otp/unbind', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: dlg.querySelector('#otpCode').value.trim() }),
-      });
-      dlg.close();
-      if (S.auth?.user) S.auth.user.hasTotp = false;
-      toast('已解绑动态验证');
-      openMe();
-    } catch (e2) {
-      err.textContent = e2.message;
-      err.hidden = false;
-    }
-  };
-  dlg.showModal();
-  dlg.querySelector('#otpCode').focus();
-}
-
-/** 「我的」› 修改密码弹窗（2026-10-31）。免密账号没有"当前密码"格；新密码留空 = 改回免密。 */
-function openMePwdDlg(hasPw) {
-  const dlg = $('mePwdDlg');
-  const cur = $('mePwdCur');
-  const n1 = $('mePwdNew');
-  const n2 = $('mePwdNew2');
-  const err = $('mePwdErr');
-  const bad = (t) => { err.textContent = t; err.hidden = false; };
-  cur.hidden = !hasPw;
-  cur.value = n1.value = n2.value = '';
-  err.hidden = true;
-  dlg.querySelector('button[value="cancel"]').onclick = () => dlg.close();
-  $('mePwdOk').onclick = async (e) => {
-    e.preventDefault();
-    err.hidden = true;
-    if (hasPw && !cur.value) return bad('先填当前密码');
-    if (n1.value !== n2.value) return bad('两次输入的新密码不一样');
-    if (n1.value && n1.value.length < 8) return bad('新密码要 8 位以上（或留空改回免密）');
-    try {
-      await api('/api/me/password', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ current: cur.value, password: n1.value }),
-      });
-      dlg.close();
-      // 服务端改完密码会作废全部会话、给这台浏览器补了张新票（Cookie 已换）——
-      // 本地把状态跟上，重画"免密 / 已设置"那一行
-      if (S.auth?.user) S.auth.user.hasPassword = n1.value !== '';
-      toast(n1.value ? '密码已改' : '已改回免密');
-      openMe();
-    } catch (e2) {
-      bad(e2?.message ?? '没改成，再试一次');
-    }
-  };
-  dlg.showModal();
-  (hasPw && !cur.hidden ? cur : n1).focus();
-}
-
-
-
 /* ---------------------------------------------------------------- 设置 */
 
 /**
@@ -612,12 +461,7 @@ export const SETTINGS_GROUPS = [
       /* 「手机连接」（2026-11 手机端增量）：扫码连接手机 —— 对外服务形态才有意义。
          2026-11-01 起模式卡长在这页顶上：回环时当场切成对外服务 + 重启即可 */
       ['pairing', '手机连接', '模式 · 扫码连接手机'],
-      /* 「协作中心」（2026-11-01 从工作台搬进设置；同日晚从「协作」组挪到本机与设备
-         下面 —— 用户："协作中心放到本机与设备下面"，跟这台机器/手机连接本来就
-         是一摊"这台设备怎么接人"的事）。页面本体长在 collab.mjs renderCollabCenter
-         （画进 #settingsView），这里只是左栏的一个分节 —— 非管理员
-         （settingsSections 的过滤）看不到，与接口层的 mayManage（admin/operator）对齐。 */
-      ['collab', '协作中心', '把活派给分公司，看进度'],
+      /* 「协作中心」2026-11-07 随协作子系统整体退场（单兵作战，不再有分公司协作）。 */
     ],
   },
   {
@@ -638,17 +482,11 @@ export const SETTINGS_GROUPS = [
     ],
   },
   {
-    /* 「角色与菜单」（2026-10-28 第二刀）：角色 = 名字 + 一组菜单 key，先只存库。
-       **设备形态不加进下面的平铺** —— 服务端五个口都要操作员，
-       列出来就是"点一下吃一个 403"（那条规矩见 settingsSections 的注释）。 */
-    title: '账号与权限',
+    /* 「账号」（2026-11-07）：中枢账号授权名册 + 会话/审计。 */
+    title: '账号',
     icon: '<path d="M7 1.5l4.8 1.9v3.4c0 3-2 4.7-4.8 5.7C4.2 11.5 2.2 9.8 2.2 6.8V3.4z"/>',
     items: [
-      ['roles', '角色与菜单', '角色能看见哪些菜单'],
-      /* 「用户」（2026-10-28 第三刀）：账号 + 登录 + 角色分配。设备形态同样不加 —— 见上面那条。 */
-      ['users', '用户', '账号与角色'],
-      /* 「安全」（2026-10-31 IAM Phase 1）：我的会话（人人可用）+ 审计日志（admin）。
-         非管理员也放行 —— 会话列表是"自己的"那半页（服务端只认会话里的 userId）。 */
+      /* 「安全」：我的会话 + 审计日志。会话列表是"自己的"那半页（服务端只认会话里的 userId）。 */
       ['security', '安全', '会话与审计'],
     ],
   },
@@ -690,34 +528,22 @@ export const DEVICE_SETTINGS_SECTIONS = [
 
 /**
  * 当前身份能看到的设置分节（**平铺**）：openSettings 的兜底判断用这一份。
- * 桌面管理员 = 分组拍平；设备 / 非管理员 = 各自的小清单。
+ * 桌面（登录即全权）= 分组拍平；设备 = 自己的小清单。
  */
 export function settingsSections() {
   if (S.isDevice) return DEVICE_SETTINGS_SECTIONS;
-  /*
-   * 非管理员的登录账号（2026-10-28 第三刀）：**只留「偏好设置」与「关于」**。
-   *
-   * 为什么硬编码两条而不是"按菜单 key 拆设置小节"：设置里的每一节对应的是
-   * **这台机器的管理动作**（改模型路由、装卸插件、管账号…），逐节做权限就是
-   * 给每节再配一份权限表，本刀明确不做（任务书 §八 非目标）。而"能看设置"这件事
-   * 本身对这些账号仍然成立 —— 主题、关于是可以看的。
-   */
-  if (S.isUser && !S.isAdmin) {
-    return SETTINGS_GROUPS.flatMap((g) => g.items).filter(([k]) => k === 'prefs' || k === 'about' || k === 'security');
-  }
   return SETTINGS_GROUPS.flatMap((g) => g.items);
 }
 
 /**
- * 左栏分组渲染用（2026-10-29 分区）：`[{title, items}]`。
+ * 左栏分组渲染用：`[{title, items}]`。
  *
- * **只有桌面管理员画组头** —— 设备形态 3 节、非管理员 2 节，本来就短，
- * 再切一组反而是给短列表加噪音；这两种形态 `title: null` = 渲染时不画组头。
+ * **只有桌面画组头** —— 设备形态 3 节本来就短，再切一组反而是给短列表加噪音；
+ * 这种形态 `title: null` = 渲染时不画组头。
  * 组内顺序即左栏顺序，`settingsSections()` 就是把它拍平的，两份永远同源。
  */
 export function settingsGroups() {
   if (S.isDevice) return [{ title: null, items: DEVICE_SETTINGS_SECTIONS }];
-  if (S.isUser && !S.isAdmin) return [{ title: null, items: settingsSections() }];
   return SETTINGS_GROUPS;
 }
 
@@ -756,12 +582,9 @@ export function openSettings(section) {
   if (S.settingsSection === 'device') return renderDeviceInfo();
   if (S.settingsSection === 'runtimes') return renderRuntimes();
   if (S.settingsSection === 'pairing') return renderPairing();
-  if (S.settingsSection === 'collab') return renderCollabCenter();
   if (S.settingsSection === 'plugins') return renderPlugins();
   if (S.settingsSection === 'quota') return renderQuota();
   if (S.settingsSection === 'skills') return renderSkillCards();
-  if (S.settingsSection === 'roles') return renderRoles();
-  if (S.settingsSection === 'users') return renderUsers();
   if (S.settingsSection === 'security') return renderSecurity();
   if (S.settingsSection === 'aiimage') return renderImageAi();
   if (S.settingsSection === 'about') return renderAbout();
@@ -998,6 +821,51 @@ export async function renderImageAi() {
  * `/api/pair/devices`：那是**操作员**的设备清单（含别的手机），设备令牌碰它 403。
  * 「断开连接 / 取消配对」只给指路：都是电脑端动作（设备令牌的白名单里没有它们，也不该有）。
  */
+
+/**
+ * 退出登录（2026-11-07 从 useradmin.mjs 并入 —— 那一页删了）：删掉服务端那张会话票 +
+ * **清掉两张 Cookie（登录票与访问令牌）**，然后整页重载。为什么要连令牌一起清：
+ * 令牌 Cookie 一年有效，握着它的浏览器被"令牌优先"永远放进面板，只清会话票退了个寂寞。
+ * 为什么是 location.reload()：重载走服务端的闸，由它决定给登录页还是面板。
+ */
+async function logout() {
+  /*
+   * 文案说「这台设备」而不是「这台浏览器」（2026-11-07 手机端实机截图）：同一个弹窗
+   * 桌面浏览器和手机壳里都会出现，写成浏览器在手机上就是错的；"设备"两边都读得通。
+   */
+  const ok = await confirmDo('退出登录？这台设备上的登录票和访问令牌都会清掉，下次进来走登录页。', {
+    title: '退出登录',
+    ok: '退出',
+  });
+  if (!ok) return;
+  try {
+    await api('/api/logout', { method: 'POST' });
+  } catch (e) {
+    // 401 = 服务端本来就认不出这张票了，等同于退出成功；其它失败要说出来并停在原地
+    if (e?.status !== 401) {
+      toast(e?.message ?? '退出失败', 'error');
+      return;
+    }
+  }
+  /*
+   * 壳里退出（2026-11-07 用户：「点击退出按钮，退出到最开始的登录页」）：面板自己的
+   * 登录页对壳没有意义 —— 机器会话上面 /api/logout 已清，这里把人交回壳：
+   *   · 原生壳 → BandiShell.onLoggedOut()：原生清中枢会话与 Cookie，回登录页；
+   *   · 旧 Tauri 壳 → 启动页 #bandi-bye 意图（launcher.js boot 清中枢会话）。
+   * 浏览器 / PWA 维持原样：重载走服务端的闸。
+   */
+  if (nativeShell) {
+    nativeShell.onLoggedOut();
+    return;
+  }
+  const shellHome = window.__BANDI_SHELL__?.home;
+  if (shellHome) {
+    location.href = shellHome + '#bandi-bye';
+    return;
+  }
+  location.reload();
+}
+
 export function renderDeviceInfo() {
   const d = S.device ?? {};
   $('settingsView').innerHTML = `

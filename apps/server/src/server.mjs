@@ -33,7 +33,6 @@ import * as experts from './experts.mjs';
 import * as localMode from './local-mode.mjs';
 import * as lanAnnounce from './lan-announce.mjs';
 import * as localSecret from './security/local-secret.mjs';
-import * as setupCode from './security/setup-code.mjs';
 import * as tlsCheck from './security/tls-check.mjs';
 import { isLoopbackHost } from './security/source.mjs';
 import { handleConversation } from './routes/conversation.mjs';
@@ -50,14 +49,8 @@ import { handleNodeWork } from './routes/nodeWork.mjs';
 import { handleRuntime } from './routes/runtime.mjs';
 import { handlePluginAction } from './routes/plugin.mjs';
 import { handleProject } from './routes/project.mjs';
-/*
- * 角色与菜单（2026-10-28 第二刀）：/api/menus + /api/roles 的增删改查。
- * handler 自己判路径，所以链里位置只影响"谁先匹配"——放在 project 之前是按任务书口径。
- */
-import { handleRoles } from './routes/roles.mjs';
-// 账号与登录（2026-10-28 第三刀）：/api/login、/api/logout、/api/me、/api/users*
+// 账号与安全（影子账号）：/api/logout、/api/me、/api/users*、/api/security*
 import { handleUsers } from './routes/users.mjs';
-import { handleAuthToken } from './routes/auth-token.mjs';
 import { handleWorkspace } from './routes/workspace.mjs';
 import { handleStatus } from './routes/status.mjs';
 import { handleFs } from './routes/fs.mjs';
@@ -72,9 +65,9 @@ import * as feishu from './feishu.mjs';
 import { handleRun } from './routes/run.mjs';
 import { handleSchedules } from './routes/schedules.mjs';
 import { handleLocal, supervisorModule } from './routes/local.mjs';
-// 协作中心（2026-10-31 MVP）：中心管理接口 + 分公司 ↔ 中心的机器接口，两条路都在 handleCollab 里
-import { handleCollab } from './routes/collab.mjs';
-import * as collabBranch from './collab-branch.mjs';
+// 身份中枢进门（2026-11-06）：`GET /hub/enter?ticket=…` —— 验票 → 查本地授权表 → 发会话
+import { handleHub } from './routes/hub.mjs';
+import * as hub from './hub/join.mjs';
 import { sendJson, fail, readBody, guardWrite, guardHost, serveStatic, BadRequest, allowedOrigins, webDir } from './http.mjs';
 import { SERVER } from './server-state.mjs';
 import { runtimeOptions, runtimesOk, withExternals } from './runtime-view.mjs';
@@ -89,11 +82,9 @@ import { guardNetwork } from './security/ipallow.mjs';
 const clientIp = (req) => String(req.socket?.remoteAddress ?? '').replace(/^::ffff:/, '');
 /** 写审计的 kind 标签（轻映射，别过度工程 —— 查询时按它筛） */
 function auditKindOf(pathname) {
-  if (pathname === '/api/login' || pathname === '/api/login/otp') return 'login';
   if (pathname === '/api/logout') return 'session.revoke';
   if (pathname.startsWith('/api/local/')) return 'machine.local';
-  if (pathname.startsWith('/api/collab/')) return 'collab';
-  if (pathname.startsWith('/api/users') || pathname.startsWith('/api/roles')) return 'user.change';
+  if (pathname.startsWith('/api/users')) return 'user.change';
   return 'write';
 }
 
@@ -110,6 +101,13 @@ function helloPayload() {
     instanceId: localMode.instanceId(),
     label: me.label,
     hostname: me.hostname,
+    /*
+     * 这台机器**自己的**操作系统（2026-11-07）：「我的」页的「系统 / 版本」原先取
+     * `navigator.platform` —— 那是**看页面那台电脑**的平台（Windows 上远程看 Linux
+     * 主机会显示 Win32，名不副实）。机器的系统只有服务端自己知道，由它报。
+     * 用 `os.type()` 而不是 `os.platform()`：前者已经是人话（Linux / Darwin / Windows_NT）。
+     */
+    os: `${os.type()} ${os.release()} ${os.arch()}`.replace(/^Windows_NT/, 'Windows'),
     httpPort: port,
     /*
      * 角色位（2026-11-01 晚）：true = 总机（收别的机器当节点），false = 分机
@@ -129,9 +127,7 @@ function helloPayload() {
      */
     role: localMode.isJoined() ? 'node' : 'operator',
     // 能力声明：有这个才认得出 `scope` 字段（旧总机没有 → 加入方回 E2050，不静默降级）
-    // `'collab'`（2026-10-31）：认识协作中心。分公司"加入"前先探这一条 ——
-    // 没有它 = 那台班底太旧（E4043），**不静默降级**。与 lan-announce.mjs 的 caps 同一口径。
-    caps: ['scope', 'collab'],
+    caps: ['scope'],
   };
 }
 
@@ -443,11 +439,6 @@ if (localSecretDisabled) {
   console.warn('[安全] BANDI_LOCAL_SECRET=off：破坏性本机动作（导出/导入/加入）不再要求 X-Bandi-Local —— 请确认反代已 deny 这些路径');
 }
 /*
- * **首个管理员的引导码**（IAM §8.6）：服务器形态 + 库里零账号时才有意义。
- * 有了它，"谁先连上谁当管理员"就不成立了 —— 建号必须证明"我读得到数据目录"。
- */
-if (setupCode.sync()) console.warn('[安全] 还没有任何账号：创建第一个管理员需要 X-Bandi-Setup（值在数据目录 setup_code 文件里），或用 `bandi user create <名字> --admin`');
-/*
  * 这个进程**现在**听的是哪儿 —— `SERVER.boundHost`（`server-state.mjs`）。
  * 监听地址整个进程生命周期不变（2026-11-03 起没有"原地重启监听"这回事了），
  * 但它仍可能不等于 `config.host` 的字面量（`0.0.0.0` 实际 bind 后的回报），照实分辨。
@@ -525,7 +516,7 @@ const server = http.createServer(async (req, res) => {
     /*
      * **写操作审计**（IAM §11.2，2026-10-31 Phase 1 收尾）：授权过后立刻写一条
      * `pending`，响应收尾把**同一行**改成 ok / fail —— handler 漏不掉（它根本不参与）。
-     * 覆盖整个 /api/* 写请求（含 handleLocal / handleCollab，它们都在这之后跑）。
+     * 覆盖整个 /api/* 写请求（含 handleLocal，它在这之后跑）。
      */
     let auditId = null;
     if (url.pathname.startsWith('/api/') && !['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
@@ -556,6 +547,14 @@ const server = http.createServer(async (req, res) => {
      */
     const handledLocal = await handleLocal(req, res, url);
     if (handledLocal !== false) return;
+
+    /*
+     * 身份中枢进门（2026-11-06）：`GET /hub/enter?ticket=…`。
+     * 排在静态资源之前 —— 它不是一个文件，而是一次「验票换会话」的动作
+     * （`serveStatic` 会按路径找文件，先到那里就变成 404 了）。
+     */
+    const handledHub = await handleHub(req, res, url, { dataDir, port });
+    if (handledHub !== false) return;
 
     if (!url.pathname.startsWith('/api/')) {
       /*
@@ -618,14 +617,6 @@ const server = http.createServer(async (req, res) => {
 
     if (routes[key]) return await routes[key](req, res);
 
-    /*
-     * 协作中心（2026-10-31 MVP）：`/api/collab/*` 全部归它。
-     * 位置在链头附近 —— 它不和别的域共享路径；而 `join / poll / report / leave` 四条
-     * 是**分公司**来打的（不带操作员令牌），早一步匹配少绕几层 handler。
-     */
-    const handledCollab = await handleCollab(req, res, url);
-    if (handledCollab !== false) return;
-
     // 全局 SSE（/api/events）：挂在链头 —— 长命连接，别让它在别的 handler 里排队
     const handledEvents = await handleEvents(req, res, url);
     if (handledEvents !== false) return;
@@ -647,17 +638,9 @@ const server = http.createServer(async (req, res) => {
     const handledExpert = await handleExpert(req, res, url);
     if (handledExpert !== false) return;
 
-    // 账号与登录（2026-10-28 第三刀）：放在角色之前 —— 它自己的路径集合（login/logout/me/users）
-    // 与别处不重叠，但 /api/me 是"每个页面启动都会问一次"的接口，能早一步就早一步
+    // 账号与安全：/api/me 是"每个页面启动都会问一次"的接口，能早一步就早一步
     const handledUsers = await handleUsers(req, res, url);
     if (handledUsers !== false) return;
-
-    // 换票链（IAM §6.2，Phase 3）：/api/auth/token|refresh|revoke —— CLI / 脚本的凭据入口
-    const handledAuthToken = await handleAuthToken(req, res, url);
-    if (handledAuthToken !== false) return;
-
-    const handledRoles = await handleRoles(req, res, url);
-    if (handledRoles !== false) return;
 
     const handledProject = await handleProject(req, res, url);
     if (handledProject !== false) return;
@@ -805,26 +788,6 @@ try {
 } catch (err) {
   console.log(`审计归档失败（不影响启动）：${err?.message ?? err}`);
 }
-// 短票清理（IAM Phase 3）：at_ 本来就 15 分钟、rf_ 30 天；过期/撤销满 1 天的行启动时清掉
-try {
-  const pt = store.pruneAccessTokens() + store.pruneRefreshTokens();
-  if (pt) console.log(`[安全] 清掉 ${pt} 条过期/撤销短票与刷新票`);
-} catch (err) {
-  console.log(`短票清理失败（不影响启动）：${err?.message ?? err}`);
-}
-/*
- * 动态验证（2026-10-31 二改）：① 上一版把明文密钥存在 users.totpSecret 上，
- * 启动时搬进独立表 user_otp（AES-GCM 加密）并清空旧列；② 登录第二段的一次性凭据
- * 过期就清 —— 两件都幂等，失败不拦启动。
- */
-try {
-  const moved = store.migrateLegacyTotp();
-  if (moved) console.log(`动态验证：${moved} 条旧密钥已搬进加密表`);
-  const prunedOtp = store.pruneChallenges();
-  if (prunedOtp) console.log(`清掉 ${prunedOtp} 条过期验证凭据`);
-} catch (err) {
-  console.log(`动态验证初始化失败（不影响启动）：${err?.message ?? err}`);
-}
 runs.onRunFinish(workflows.onAgentRunFinished);
 // 任务卡同理（2026-10-17）：运行跑完/被停/跑挂了，卡不能永远挂在「进行中」——
 // 完成 → 待验收；人停的 → 已阻塞、跑挂的 → 失败（都不回「待办」，否则会被自动重新派活 → 死循环）
@@ -967,15 +930,20 @@ try {
 server.listen(port, SERVER.boundHost, logListen);
 
 /*
- * 协作中心（2026-10-31 MVP）：这台机器**加入过**就在启动后接着同步。
- * 中心重启过也不用重新加入 —— 分公司与任务都在它的库里，这边一拍就续上。
- * 放在 `listen` 之后：先能答请求，再往外打（顺序反过来，第一次 poll 会跟自己的启动抢库）。
- * 失败**不拦启动**：中心没开的时候这台机器照样是一台完整的班底。
+ * 身份中枢（2026-11-06）：加入了就接着报心跳 —— 中枢靠它画「在线」，
+ * 不给地址的话手机名册上只有一台点不动的机器。
+ *
+ * 放在 `listen` 之后（先能答请求，再往外打）。**失败不拦启动**：
+ * 中枢是可选增强，不是核心路径（docs/形态决策.md「单机零外部依赖」那条）。
+ * 没加入过时它什么都不做，但定时器会一直挂着 —— 这样 本机登录页
+ * 写进 hub.json 之后，最多 60 秒这边就跟上了，不用重启服务。
  */
 try {
-  if (collabBranch.startIfJoined()) console.log('[协作] 已恢复与中心的同步');
+  if (hub.startHeartbeat({ dataDir, port, version: localMode.platformVersion() }).joined) {
+    console.log('[中枢] 已恢复心跳');
+  }
 } catch (e) {
-  console.warn(`[协作] 同步没起来（不影响本机使用）：${e?.message ?? e}`);
+  console.warn(`[中枢] 心跳没起来（不影响本机使用）：${e?.message ?? e}`);
 }
 
 /**

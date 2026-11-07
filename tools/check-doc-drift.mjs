@@ -73,6 +73,7 @@ const LIVE = [
   ['docs/契约.md', '接口契约'],
   ['docs/审阅经验.md', 'PR 审阅踩过的坑'],
   ['docs/头像生成规范.md', '头像生成口径'],
+  ['apps/mobile-native/README.md', '原生手机壳：构建、结构、与 Tauri 壳的关系'],
   ['docs/mobile/pwa-design.md', '手机端实现说明（头部已声明为快照性质，但仍是现行实现的主要参考）'],
   ['docs/mobile/sequence-diagram.mermaid', '手机配对的时序图'],
 ];
@@ -266,6 +267,7 @@ function inVersionRecord(lines, i) {
 const REF_ALLOW = {
   'cli.js': 'dsh / Electron 包内部的文件（docs/架构.md 讲的是外部 CLI 自己的结构）',
   'qrcode.js': 'vendored 的来源文件，在 npm 包里；仓库里只有转出的 vendor/qrcode.mjs（原文已写明）',
+  'bandi-hub/contract.md': '身份中枢的契约文档在**另一个仓库**（github.com/shepherd-chenxs/bandi-hub），本仓库里没有它的拷贝',
 };
 
 if (want.includes('refs')) {
@@ -401,21 +403,8 @@ const COUNTS = [
       return { n: kinds.size, detail: [...kinds].join(' / ') };
     },
   },
-  {
-    id: '登录页状态数',
-    file: 'apps/server/src/auth.mjs',
-    claim: /([一二三四五六七八九十\d]+)态，别混/,
-    why: '登录页删/加一个状态，文件头那句"N态"必须跟着改（2026-11-03 真漂过：四态写成五态）',
-    compute: () => {
-      const src = read('apps/server/src/auth.mjs');
-      const start = src.indexOf('态，别混');
-      if (start < 0) throw new Error('找不到「态，别混」那段注释（改写了？先修这个检查）');
-      const block = src.slice(start, src.indexOf('*/', start));
-      const bullets = block.split('\n').filter((l) => /^\s*\*\s+·\s/.test(l)).length;
-      if (!bullets) throw new Error('那段注释里没有「· 」条目（格式变了？）');
-      return { n: bullets, detail: `${bullets} 条状态` };
-    },
-  },
+  // 2026-11-07 撤掉了「登录页状态数」这条：登录页只剩中枢账号密码框一张
+  //（四态表单随本地账号体系退场），「N 态，别混」的注释不存在了，数量枚举没了对象。
 ];
 
 if (want.includes('counts')) {

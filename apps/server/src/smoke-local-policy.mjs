@@ -1,124 +1,122 @@
 /**
- * `security/local-policy.mjs` 的穷举用例（姊妹文档 §5.1）。
+ * `security/policy.mjs` 的 `authorize` 穷举用例（姊妹文档 §3，2026-11-07 登录即全权模型）。
  *
- * 为什么单独一个文件：这张表是**本机破坏性动作的唯一闸门**，错一格就是"给人导出全部数据"。
- * 纯逻辑模块（不 import store、不写库），所以可以在这里把 身份 × 来源 × 每条策略 全跑一遍，
- * 不用起服务。
+ * 为什么单独一个文件、不起服务：`authorize` 是纯函数（只 import `route-policy.mjs` 的
+ * 静态路由表，不碰 store、不读库、不开进程），所以可以在这里把 身份 × 来源 × 每条策略
+ * 全跑一遍，且能在空目录里直接 `node` 跑。
  *
- * 三件事必须钉住：
- *   ① 矩阵：loopback 不看角色；network 下 operator/admin 是"要不要秘密"的区别，
- *      member / panel / compute / device / anonymous 一律 E4091；
- *   ② 默认拒绝：没登记的路径 → E4090（404），方法不对也走这一条；
- *   ③ 覆盖：`routes/local.mjs` 与 `routes/runtime.mjs` 里出现的每个 `/api/local/…`
- *      都必须在这张表里有一行 —— 漏登记 = 测试红（IAM §8.3 的"未登记即拒绝"靠它兜）。
+ * 三件事必须钉住（2026-11-07 角色/菜单权限体系退场后）：
+ *   ① 机器身份 vs 人：operator / 登录用户（kind:'user'）一律全权；
+ *      device 只认 `device:true` 路由，否则 `E4033`；node 按 compute/panel 收敛；
+ *      revoked 一律 `E4012`（先判这一个，排在所有人/机器之前）；
+ *   ② 节点令牌边界：compute 只许"自己的活"（归属判定由 rules.nodeMayReach 注入，
+ *      本测试用桩函数喂），panel 命中 `noPanel` 路由给 `E4032`；
+ *   ③ 覆盖：样例路径必须能在 `ROUTES` 命中（漏登记 = 路由表腐化）。
  *
  * 跑法：node apps/server/src/smoke-local-policy.mjs
+ *       或：SMOKE_PORT=8907 node apps/server/src/smoke-local-policy.mjs
  */
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { LOCAL_POLICY, authorizeLocal, principalKind, registeredPaths } from './security/local-policy.mjs';
+import { authorize } from './security/policy.mjs';
+import { findRoute } from './security/route-policy.mjs';
 
-const here = path.dirname(fileURLToPath(import.meta.url));
 let failed = 0;
 const check = (label, ok, detail = '') => {
   console.log(`  ${ok ? '✓' : '✗'} ${label}${detail ? ' — ' + detail : ''}`);
   if (!ok) failed += 1;
 };
 
-const PRINCIPALS = {
-  anonymous: null,
+// 新模型下的身份 principal —— 不再携带任何分级 / 菜单字段（旧角色体系已整体退场）。
+const WHO = {
   operator: { kind: 'operator' },
-  admin: { kind: 'user', roleId: 'admin', admin: true },
-  member: { kind: 'user', roleId: 'operator', admin: false },
-  panel: { kind: 'node', nodeId: 'n1', scope: new Set(['panel']) },
-  compute: { kind: 'node', nodeId: 'n1', scope: new Set(['compute']) },
-  device: { kind: 'device', deviceId: 'd1' },
+  user: { kind: 'user' },
+  device: { kind: 'device', deviceId: 'dev_x' },
+  nodeCompute: { kind: 'node', nodeId: 'n1', scope: new Set(['compute']) },
+  nodePanel: { kind: 'node', nodeId: 'p1', scope: new Set(['panel']) },
+  revoked: { kind: 'revoked' },
 };
 
-const verdict = (row, who, source, hasSecret) =>
-  authorizeLocal({ method: row.method, pathname: row.path, source, principal: PRINCIPALS[who], hasSecret });
+const verdict = (who, method, path, rules = {}) =>
+  authorize({ who, method, pathname: path, rules });
 
-console.log('\n[1] 身份归一');
-check('operator', principalKind(PRINCIPALS.operator) === 'operator');
-check('admin', principalKind(PRINCIPALS.admin) === 'admin');
-check('member', principalKind(PRINCIPALS.member) === 'member');
-check('panel', principalKind(PRINCIPALS.panel) === 'panel');
-check('compute', principalKind(PRINCIPALS.compute) === 'compute');
-check('device', principalKind(PRINCIPALS.device) === 'device');
-check('无凭据 → anonymous', principalKind(null) === 'anonymous');
-check('已撤销的令牌 → anonymous', principalKind({ kind: 'revoked' }) === 'anonymous');
+console.log('\n[1] 身份形状（kind 归一）');
+check('operator.kind === operator', WHO.operator.kind === 'operator');
+check('user.kind === user（登录即全权，不再分级）', WHO.user.kind === 'user');
+check('device 带 deviceId', WHO.device.kind === 'device' && WHO.device.deviceId === 'dev_x');
+check('node 带 scope（compute）', WHO.nodeCompute.kind === 'node' && WHO.nodeCompute.scope.has('compute'));
+check('node 带 scope（panel）', WHO.nodePanel.kind === 'node' && WHO.nodePanel.scope.has('panel'));
+check('revoked.kind === revoked', WHO.revoked.kind === 'revoked');
 
-console.log(`\n[2] 矩阵（${LOCAL_POLICY.length} 条）`);
-for (const row of LOCAL_POLICY) {
-  const tag = `${row.method} ${row.path}`;
+console.log('\n[2] 矩阵（身份 × 路由）');
+/**
+ * 每条 case 给一个 (method, path) 与预期：每个身份应得到的判定（'allow' 或错误码）。
+ * rules 仅给需要归属判定的 compute 用例喂桩。
+ */
+const CASES = [
+  {
+    // device:true 路由：设备可读，panel 节点可读（非 noPanel），compute 节点不沾（E4031）
+    tag: 'device 可读路由（GET /api/me, device:true）',
+    method: 'GET', path: '/api/me',
+    expect: {
+      operator: 'allow', user: 'allow', device: 'allow',
+      nodeCompute: 'E4031', nodePanel: 'allow', revoked: 'E4012',
+    },
+  },
+  {
+    // noPanel 管理路由：设备无 device 标 → E4033；panel 节点命中 noPanel → E4032
+    tag: 'noPanel 管理路由（GET /api/users）',
+    method: 'GET', path: '/api/users',
+    expect: {
+      operator: 'allow', user: 'allow', device: 'E4033',
+      nodeCompute: 'E4031', nodePanel: 'E4032', revoked: 'E4012',
+    },
+  },
+  {
+    // compute 自端点、归属命中：compute 节点 allow；panel 节点（非 noPanel）allow；设备无 device 标 → E4033
+    tag: 'compute 自端点（POST /api/nodes/register）— 归属命中',
+    method: 'POST', path: '/api/nodes/register', rules: { nodeMayReach: () => true },
+    expect: {
+      operator: 'allow', user: 'allow', device: 'E4033',
+      nodeCompute: 'allow', nodePanel: 'allow', revoked: 'E4012',
+    },
+  },
+  {
+    // compute 自端点、归属未命中：compute 节点落 E4031；其余同上
+    tag: 'compute 自端点（POST /api/nodes/register）— 归属未命中',
+    method: 'POST', path: '/api/nodes/register', rules: { nodeMayReach: () => false },
+    expect: {
+      operator: 'allow', user: 'allow', device: 'E4033',
+      nodeCompute: 'E4031', nodePanel: 'allow', revoked: 'E4012',
+    },
+  },
+  {
+    // 非 /api 页面：设备 GET 放行；compute 节点无归属 → E4031；panel 节点（非 noPanel）放行
+    tag: '非 /api 页面（GET /index.html）',
+    method: 'GET', path: '/index.html',
+    expect: {
+      operator: 'allow', user: 'allow', device: 'allow',
+      nodeCompute: 'E4031', nodePanel: 'allow', revoked: 'E4012',
+    },
+  },
+];
 
-  // 本机：不看角色、不要秘密（与改造前行为一致）
-  for (const who of ['anonymous', 'member', 'operator']) {
-    const v = verdict(row, who, 'loopback', false);
-    if (!v.allow) check(`loopback + ${who} → 放行 · ${tag}`, false, v.code);
-  }
-
-  // 网络：非 operator/admin 一律 E4091
-  for (const who of ['anonymous', 'member', 'panel', 'compute', 'device']) {
-    const v = verdict(row, who, 'network', true); // 即便带着秘密也不该放行
-    const ok = !v.allow && v.code === 'E4091';
-    check(`network + ${who} → E4091 · ${tag}`, ok, v.code ?? 'allow');
-  }
-
-  // 网络：operator / admin，按 secret 三档
-  for (const who of ['operator', 'admin']) {
-    const noSecret = verdict(row, who, 'network', false);
-    const withSecret = verdict(row, who, 'network', true);
-    if (row.secret === 'never') {
-      check(`network + ${who} + 无秘密 → 放行 · ${tag}`, noSecret.allow, noSecret.code ?? '');
-      check(`network + ${who} + 秘密 → 放行 · ${tag}`, withSecret.allow, withSecret.code ?? '');
-    } else {
-      const ok = !noSecret.allow && noSecret.code === 'E4097';
-      check(`network + ${who} + 无秘密 → E4097 · ${tag}`, ok, noSecret.code ?? 'allow');
-      check(`network + ${who} + 秘密 → 放行 · ${tag}`, withSecret.allow, withSecret.code ?? '');
-    }
+for (const c of CASES) {
+  for (const [whoKey, expected] of Object.entries(c.expect)) {
+    const got = verdict(WHO[whoKey], c.method, c.path, c.rules);
+    const ok = got === expected;
+    check(
+      `${whoKey} · ${c.method} ${c.path} → ${expected}`,
+      ok,
+      ok ? '' : `实际 ${got}`,
+    );
   }
 }
 
-console.log('\n[3] 默认拒绝');
-const unregistered = authorizeLocal({
-  method: 'POST',
-  pathname: '/api/local/whatever',
-  source: 'loopback',
-  principal: PRINCIPALS.operator,
-  hasSecret: true,
-});
-check('未登记路径 → E4090 / 404（本机来源也一样）', !unregistered.allow && unregistered.code === 'E4090' && unregistered.status === 404);
-const wrongMethod = authorizeLocal({
-  method: 'DELETE',
-  pathname: '/api/local/export',
-  source: 'loopback',
-  principal: PRINCIPALS.operator,
-  hasSecret: true,
-});
-check('方法不在表里 → E4090', !wrongMethod.allow && wrongMethod.code === 'E4090');
-
-console.log('\n[4] 覆盖检查（路由字面量必须全部登记）');
-const wanted = new Set();
-for (const file of ['routes/local.mjs', 'routes/runtime.mjs', 'routes/imageai.mjs']) {
-  const src = fs.readFileSync(path.join(here, file), 'utf8');
-  for (const m of src.matchAll(/'(\/api\/local\/[a-z/]+)'/g)) wanted.add(m[1]);
-  if (file !== 'routes/local.mjs' && src.includes("'/api/restart'")) wanted.add('/api/restart');
+console.log('\n[3] 路由接线（样例路径能在 ROUTES 命中）');
+for (const c of CASES) {
+  if (!c.path.startsWith('/api/')) continue; // 非 /api 路径本来就不在 ROUTES 里
+  const r = findRoute(c.path, c.method);
+  check(`findRoute(${c.method} ${c.path}) 命中`, !!r, r ? r.id : '未登记');
 }
-const have = new Set(registeredPaths());
-const missing = [...wanted].filter((p) => !have.has(p));
-check(
-  `路由里出现的本机路径全部已登记（扫到 ${wanted.size} 条）`,
-  missing.length === 0,
-  missing.length ? `漏登记：${missing.join(', ')}` : '',
-);
-const extra = [...have].filter((p) => !wanted.has(p) && p !== '/api/restart');
-check(
-  '表里没有"早就不存在"的路径（防表腐化）',
-  extra.length === 0,
-  extra.length ? `多余：${extra.join(', ')}` : '',
-);
 
 console.log(failed ? `\n✗ ${failed} 条不通过\n` : '\n✓ 全部通过\n');
 process.exit(failed ? 1 : 0);

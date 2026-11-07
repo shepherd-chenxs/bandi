@@ -1,0 +1,5 @@
+# 本机构建产物与 SDK 指针（每台机器不一样）
+build/
+.gradle/
+local.properties
+*.iml

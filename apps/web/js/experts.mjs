@@ -628,37 +628,24 @@ export function renderWorkbenchGrid() {
    */
   const devMode = !!S.isDevice;
   /*
-   * 非管理员的登录账号（2026-10-28 第三刀）：宫格**只留项目与任务看板**。
-   * 研发（代码托管/远程连接）、自动化（定时任务/工作流设计）都是管理动作，
-   * 普通账号点进去只会吃 E4033 —— "没权限"看起来就是"坏了"，干脆不摆出来。
-   * 判据与 mobile 那条同源：`S.isUser && !S.isAdmin`，设备形态仍走 devMode（它另有一套白名单）。
-   */
-  const limitedByRole = !devMode && !!S.isUser && !S.isAdmin;
-  /*
    * 手机形态功能子集（2026-11-03 用户拍板"手机只要一部分功能，甚至是简化版"）：
    * 窄屏（body.mb-narrow，mobile.mjs 维护）宫格不画插件、研发、坏插件提示 ——
    * 插件、研发是 PC 独有功能，不是藏起来、是根本不进 DOM：
    * 不渲染就不存在"适配"，也不会像绑人前那样点一格吃一个 403。
    * 与 settings.mjs 的 onPhone 判据同源同拍（mb-narrow ↔ mobile.css 的 @media 900px）。
    *
-   * 2026-11-06 开放「定时任务」：手机上也能建/管定时任务。权限照旧由服务端那把
-   * 尺子量 —— 被角色砍过的账号（limitedByRole）仍然不给，点进去只会吃 403；
-   * 设备形态另在 route-policy 里给四条 schedule 路由打了 device 标（见下方
-   * phoneSchedules 的注释）。工作流设计器仍是 PC 独有。
+   * 2026-11-06 开放「定时任务」：手机上也能建/管定时任务。设备形态在 route-policy
+   * 里给四条 schedule 路由打了 device 标。工作流设计器仍是 PC 独有。
+   *
+   * 2026-11-07 起不再有"被角色砍过的账号"（登录即全权，角色体系已退场）——
+   * 宫格的收敛只剩设备形态与窄屏两种。
    */
   const onPhone = document.body.classList.contains('mb-narrow');
-  const gridLite = devMode || limitedByRole || onPhone;
+  const gridLite = devMode || onPhone;
   /*
    * 手机宫格补「定时任务」一格（工作流设计器仍是 PC 独有：画布拖节点在窄屏没法用）。
-   *
-   * 2026-11-06 一天里改了两回口径，记清楚免得再来一次：
-   *   · 上午先按「管理员真人账号」放开（`!devMode`）—— 结果手机实机还是看不到：
-   *     手机是**配对设备**（/api/me 回 kind:'device'），走的正是被排除的 devMode 那条。
-   *   · 现在设备也放（服务端四条 schedule 路由同步打了 device 标，见 route-policy），
-   *     判据只剩「窄屏 + 不是被角色砍过的账号」——limitedByRole 那种点进去只会吃 403，
-   *     摆出来等于骗人。
    */
-  const phoneSchedules = onPhone && !limitedByRole;
+  const phoneSchedules = onPhone;
   // 宫格是整页布局：把左栏收掉（进插件后会由 renderPluginMaster 放回来）
   document.body.classList.add('no-list');
   setListTitle('工作台');

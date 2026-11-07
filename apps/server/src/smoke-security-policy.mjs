@@ -1,14 +1,17 @@
 /*
- * smoke-security-policy.mjs —— Phase 2 验收（IAM §8.1-§8.4）：
- *   · 词表/清单的**纯逻辑**校验（perm 拼写、登记项唯一、受限会话白名单口径）；
- *   · **覆盖率扫描**：routes/*.mjs + server.mjs 里出现的每个 /api 字面量必须已登记
- *     （"未登记即拒绝"的另一面 = "存在的接口必须登记"，漏登记 = 上线即 404）；
- *   · **身份 × 路由矩阵**（起真服务）：operator / admin / 成员 / panel / compute /
- *     device / revoked 七种身份对基线、管理面、节点自端点的判定；
- *   · **role_permissions 解锁**：给角色授 `user:manage` → 成员能读用户名册；
- *     收回 → 403（权限在库里、PDP 每请求查，§7.1）。
+ * smoke-security-policy.mjs —— 2026-11-07 验收（hub-only 模型，删本地凭据层 + 角色/菜单权限体系）：
+ *   · A. 清单纯逻辑校验（登记项 id 唯一、无 perm/member 残留、device/compute/noPanel 标记、
+ *        findRoute 优先级）；
+ *   · B. 覆盖率扫描：routes/*.mjs + server.mjs 里出现的每个 /api 字面量必须已登记
+ *     （"未登记即拒绝"的另一面 = "存在的接口必须登记"，漏登记 = 上线即 404 E4090）；
+ *   · C. 身份 × 路由矩阵（调 PDP 纯函数 authorize）：operator / user / device / node / revoked
+ *        五种身份对基线、管理面、节点自端点、设备白名单的判定；
+ *   · D. 起真服务（回环形态，免鉴权 operator）冒烟：/api/hello 起得来、operator 全通；
+ *   · E. 服务器形态（0.0.0.0）的真会话矩阵：中枢登录的普通用户摸原来 admin 专属的
+ *        管理面 / 审计口（登录即全权），compute / panel / device / revoked 照旧各自有边界。
  *
- * 跑法：`node smoke-security-policy.mjs`（自管临时数据目录与端口 8903）。
+ * 跑法：`SMOKE_PORT=8908 node apps/server/src/smoke-security-policy.mjs`
+ *   （端口从 process.env.SMOKE_PORT 派生，缺省 8908；D / E 先后共用同一端口）。
  */
 
 import { spawn } from 'node:child_process';
@@ -16,14 +19,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DatabaseSync } from 'node:sqlite';
+import { repoRoot } from './config.mjs';
 import { ROUTES, isRegistered, findRoute } from './security/route-policy.mjs';
-import { PERMS, isValidPerm } from './security/permissions.mjs';
-import { RESTRICTED_OPEN } from './security/policy.mjs';
+import { authorize } from './security/policy.mjs';
+import { startHubStub, hubLogin } from './hub-stub.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const SERVER = path.join(here, 'server.mjs');
-const PORT = 8903;
+const SERVER = path.join(repoRoot, 'apps', 'server', 'src', 'server.mjs');
+const PORT = Number(process.env.SMOKE_PORT ?? 8908);
 const BASE = `http://127.0.0.1:${PORT}`;
 
 let failed = 0;
@@ -35,16 +38,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /* --------------------------------------------------------- A. 纯逻辑校验 */
 
-console.log('\nA. 词表与清单的纯逻辑校验');
-check('RESTRICTED_OPEN 与 §8.6 白名单逐字一致',
-  RESTRICTED_OPEN.length === 5
-  && RESTRICTED_OPEN.some((r) => r.method === 'GET' && r.path === '/api/me')
-  && RESTRICTED_OPEN.some((r) => r.method === 'GET' && r.path === '/api/state')
-  && RESTRICTED_OPEN.some((r) => r.method === 'GET' && r.path === '/api/skills')
-  && RESTRICTED_OPEN.some((r) => r.method === 'GET' && r.path === '/api/web-version')
-  && RESTRICTED_OPEN.some((r) => r.method === 'POST' && r.path === '/api/me/password'),
-  JSON.stringify(RESTRICTED_OPEN));
-
+console.log('\nA. 清单与 PDP 的纯逻辑校验');
 {
   const ids = new Set();
   let dup = null;
@@ -55,17 +49,16 @@ check('RESTRICTED_OPEN 与 §8.6 白名单逐字一致',
   check('登记项 id 唯一', !dup, dup ?? '');
 }
 {
-  const bad = ROUTES.filter((r) => r.perm && !isValidPerm(r.perm)).map((r) => `${r.id}:${r.perm}`);
-  check('清单里每个 perm 都在词表里（§8.1 拼写闸）', bad.length === 0, bad.join(', '));
-  check('词表含管理四权 + 敏感四权',
-    ['user:manage', 'role:manage', 'collab:manage', 'machine:manage', 'audit:read', 'data:export', 'data:import', 'security:manage'].every((p) => PERMS.includes(p)));
+  // 2026-11-07：perm / member / role 字段随角色体系一道退场 —— 清单里不能再有它们。
+  const stray = ROUTES.filter((r) => 'perm' in r || 'member' in r || 'role' in r).map((r) => r.id);
+  check('清单无 perm/member/role 字段残留', stray.length === 0, stray.join(', '));
 }
 {
   // 节点自端点必须排在通配 :id 条目之前（smoke-auth ⑥ 的教训：register 被 :id 抢走）
   const idx = (id) => ROUTES.findIndex((r) => r.id === id);
   check('nodes.register 登记在 nodes.one（/api/nodes/:id）之前', idx('nodes.register') < idx('nodes.one'), `${idx('nodes.register')} vs ${idx('nodes.one')}`);
   check('/api/nodes/register 解析到 compute 条目', findRoute('/api/nodes/register', 'POST')?.id === 'nodes.register');
-  check('/api/local/status 解析到成员条目（分机状态页）', findRoute('/api/local/status', 'GET')?.id === 'local.status.forUser');
+  check('/api/local/status 解析到 session 条目（分机状态页）', findRoute('/api/local/status', 'GET')?.id === 'local.status.forUser');
   check('POST /api/quota 解析到 noPanel 条目（方法感知）', findRoute('/api/quota', 'POST')?.id === 'quota.write' && findRoute('/api/quota', 'GET')?.id === 'quota.read');
 }
 
@@ -99,21 +92,58 @@ function literalRegistered(lit) {
   return ROUTES.some((r) => r.path.source.includes(esc));
 }
 
-/* ----------------------------------------------------- C. 真服务身份矩阵 */
+/* --------------------------------------------- C. 身份 × 路由矩阵（PDP） */
+
+console.log('\nC. 身份 × 路由矩阵（PDP 纯函数 authorize）');
+{
+  const who = {
+    operator: { kind: 'operator' },
+    user: { kind: 'user' },
+    device: { kind: 'device' },
+    nodeCompute: { kind: 'node', scope: new Set(['compute']), nodeId: 'sp-node' },
+    nodePanel: { kind: 'node', scope: new Set(['panel']), nodeId: 'sp-node' },
+    revoked: { kind: 'revoked' },
+  };
+  // compute 端点要过归属判定（nodeMayReach / runMayReach），这里给"自己能碰自己"的正样本
+  const reachRules = { nodeMayReach: () => true, runMayReach: () => true };
+  const a = (w, method, pathname, rules = {}) => authorize({ who: w, method, pathname, rules });
+
+  // operator：清单内全通（未登记由 guard 兜 404，PDP 不再二次挡）
+  check('operator 读 /api/state → allow', a(who.operator, 'GET', '/api/state') === 'allow');
+
+  // user（登录 = 全权，2026-11-07 起无角色闸）：连管理面 / 安全面都直接放行
+  check('user 读 /api/users → allow（登录即全权）', a(who.user, 'GET', '/api/users') === 'allow');
+  check('user 读 /api/security/audit → allow（无 roleHasPerm 闸）', a(who.user, 'GET', '/api/security/audit') === 'allow');
+
+  // device：白名单制（只认 device:true 的路由）
+  check('device 读 /api/state → allow（state.read 标 device）', a(who.device, 'GET', '/api/state') === 'allow');
+  check('device 读 /api/users → E4033（未标 device）', a(who.device, 'GET', '/api/users') === 'E4033');
+  check('device 写 /api/local/export → E4033（非白名单）', a(who.device, 'POST', '/api/local/export') === 'E4033');
+
+  // node（compute scope）：只许"自己的活"
+  check('compute 报到 → allow（nodes.register compute + 归属命中）', a(who.nodeCompute, 'POST', '/api/nodes/register', reachRules) === 'allow');
+  check('compute 心跳（自己 id）→ allow', a(who.nodeCompute, 'POST', '/api/nodes/sp-node/heartbeat', reachRules) === 'allow');
+  check('compute 发邀请码 → E4031（非 compute 且无 panel）', a(who.nodeCompute, 'POST', '/api/nodes/invites', reachRules) === 'E4031');
+
+  // node（panel scope）：看 + 用，管理面 noPanel 一律拒
+  check('panel 发邀请码 → E4032（nodes.invites noPanel）', a(who.nodePanel, 'POST', '/api/nodes/invites') === 'E4032');
+  check('panel 改模型路由 → E4032（quota.write noPanel）', a(who.nodePanel, 'POST', '/api/quota') === 'E4032');
+  check('panel 列目录 → E4032（fs.dirs noPanel，GET 也拒）', a(who.nodePanel, 'GET', '/api/fs/dirs') === 'E4032');
+  check('panel 报到 compute 端点 → allow（panel 不丢 compute 归属）', a(who.nodePanel, 'POST', '/api/nodes/register', reachRules) === 'allow');
+
+  // revoked：一律 E4012
+  check('revoked 任意接口 → E4012', a(who.revoked, 'GET', '/api/state') === 'E4012');
+}
+
+/* ----------------------------------------------------- D. 真服务冒烟 */
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bandi-secpol-'));
-/*
- * 种总机形态（2026-11-02）：显式监听不再自动当总机 —— `acceptNodes` 没显式写过就跟随
- * `allowLan`（默认 false），发邀请码会 409 E1091、后面整条节点链全连锁崩。这里的用例
- * 就是要钉节点令牌的身份矩阵，所以先把 netmode.json 写成「总机 + 收节点」。
- */
-fs.writeFileSync(path.join(tmp, 'netmode.json'), JSON.stringify({ allowLan: true, acceptNodes: true }));
 let child = null;
 const started = [];
 function startSrv(extra = {}) {
   const c = spawn(process.execPath, [SERVER], {
-    cwd: path.join(here, '..', '..'),
-    env: { ...process.env, BANDI_PORT: String(PORT), BANDI_DATA: tmp, BANDI_DB: path.join(tmp, 'bandi.db'), ...extra },
+    cwd: repoRoot,
+    env: { ...process.env, BANDI_PORT: String(PORT), BANDI_DATA: tmp, BANDI_DB: path.join(tmp, 'bandi.db'), BANDI_HUB: 'off', ...extra },
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -127,8 +157,8 @@ async function waitUp(ms = 15000) {
   const until = Date.now() + ms;
   while (Date.now() < until) {
     try {
-      const r = await fetch(BASE + '/api/state', { signal: AbortSignal.timeout(800) });
-      if (r.status === 200 || r.status === 401) return true;
+      const r = await fetch(BASE + '/api/hello', { signal: AbortSignal.timeout(800) });
+      if (r.status === 200) return true;
     } catch { /* 还没起 */ }
     await sleep(200);
   }
@@ -138,8 +168,7 @@ async function killAll() {
   for (const c of started.splice(0)) { try { c.kill(); } catch { /* 已退 */ } }
   await sleep(600);
 }
-
-const call = async (method, p, { body, headers: extra = {}, noProxy } = {}) => {
+const call = async (method, p, { body, headers: extra = {} } = {}) => {
   const r = await fetch(BASE + p, {
     method,
     headers: { 'Content-Type': 'application/json', ...extra },
@@ -151,8 +180,6 @@ const call = async (method, p, { body, headers: extra = {}, noProxy } = {}) => {
   try { json = JSON.parse(raw); } catch { /* HTML */ }
   return { status: r.status, json, raw, setCookie: r.headers.get('set-cookie') ?? '' };
 };
-const OP_TOKEN = 'sec-pol-op-token';
-const OP = () => ({ 'X-Bandi-Token': OP_TOKEN });
 /** 单浏览器 cookie jar：bandi_sid + bandi_csrf 都记住、都回传（CSRF 双提交） */
 function jar() {
   const kv = {};
@@ -167,54 +194,72 @@ function jar() {
       }
       return r;
     },
+    /** 先 GET / 种 csrf 值，再走中枢表单登录换 bandi_sid */
+    async login(username, password) {
+      await this.call('GET', '/');
+      const lr = await hubLogin(BASE, { username, password, origin: BASE });
+      if (lr.status !== 302 || !lr.sid) return false;
+      kv.bandi_sid = lr.sid;
+      return true;
+    },
   };
 }
 
+const stub = await startHubStub({ deviceId: 'dev_self', accounts: { 甲: { password: '甲-pass-123' } } });
+
 try {
-  console.log('\nC. 真服务身份矩阵（0.0.0.0 服务器形态）');
-  startSrv({ BANDI_HOST: '0.0.0.0', BANDI_TOKEN: OP_TOKEN });
+  console.log('\nD. 真服务（回环形态 127.0.0.1 + BANDI_HUB=off，免鉴权 operator）');
+  startSrv({ BANDI_HOST: '127.0.0.1' });
   if (!(await waitUp())) throw new Error('服务没起来');
+
+  // 回环下无会话 cookie 的请求被标成 operator → 全通（不含只认登录会话的 /api/security/*）
+  check('/api/hello → 200（服务起来了）', (await call('GET', '/api/hello')).status === 200);
+  check('operator 读 /api/state → 200', (await call('GET', '/api/state')).status === 200);
+  check('operator 读 /api/users → 200（回环免登录）', (await call('GET', '/api/users')).status === 200);
+  const me = await call('GET', '/api/me');
+  check('operator /api/me → 200 且 kind=operator', me.status === 200 && me.json?.kind === 'operator', `${me.status} ${me.json?.kind ?? ''}`);
+
+  console.log('\nE. 真服务（0.0.0.0 服务器形态）：会话身份矩阵');
+  await killAll();
+  /*
+   * 种总机形态（2026-11-02）：显式监听不再自动当总机 —— `acceptNodes` 没显式写过就跟随
+   * `allowLan`（默认 false），发邀请码会 409 E1091、后面整条节点链全连锁崩。这里的用例
+   * 就是要钉节点令牌的身份矩阵，所以先把 netmode.json 写成「总机 + 收节点」。
+   */
+  fs.writeFileSync(path.join(tmp, 'netmode.json'), JSON.stringify({ allowLan: true, acceptNodes: true }));
+  const OP_TOKEN = 'sec-pol-op-token';
+  const OP = () => ({ 'X-Bandi-Token': OP_TOKEN });
+  startSrv({ BANDI_HOST: '0.0.0.0', BANDI_TOKEN: OP_TOKEN, BANDI_HUB: stub.url });
+  if (!(await waitUp())) throw new Error('服务器形态没起来');
 
   // ① operator（共享令牌）：清单内全通，未登记 404
   check('operator 读 /api/state → 200', (await call('GET', '/api/state', { headers: OP() })).status === 200);
   const nope = await call('GET', '/api/definitely/not/here', { headers: OP() });
   check('未登记路径 → 404 E4090（连 operator 也不存在"清单外接口"）', nope.status === 404 && nope.json?.code === 'E4090', `${nope.status} ${nope.json?.code}`);
 
-  // ② 建两个账号：admin 与成员（都带密码，登录换会话）。
-  // 服务器形态首账号要引导码（§8.6）：setup_code 在数据目录里，建成即删 —— 只对第一个账号带上。
-  const setupCode = () => { try { return fs.readFileSync(path.join(tmp, 'setup_code'), 'utf8').trim(); } catch { return ''; } };
-  const mk = async (name, admin) => call('POST', '/api/users', {
-    headers: { ...OP(), ...(setupCode() ? { 'X-Bandi-Setup': setupCode() } : {}) },
-    body: { name, password: `${name}-pass-123`, roleId: admin ? 'admin' : 'operator' },
-  });
-  check('建 admin 账号 → 201', (await mk('甲', true)).status === 201);
-  check('建成员账号 → 201', (await mk('乙', false)).status === 201);
-  const login = async (name) => {
-    const j = jar();
-    const r = await j.call('POST', '/api/login', { body: { name, password: `${name}-pass-123` } });
-    return r.status === 200 ? j : null;
-  };
-  const adminJ = await login('甲');
-  const memberJ = await login('乙');
-  check('两个账号都能登录', !!adminJ && !!memberJ);
+  // ② 登录用户（中枢会话）：登录即全权 —— 原来 admin 专属的管理面与审计口全开
+  const uj = jar();
+  check('中枢账号登录 → 302 换会话', await uj.login('甲', '甲-pass-123'));
+  const meR = await uj.call('GET', '/api/me');
+  check('GET /api/me → user 形态 {kind,user:{id,name}}（无 role/menuKeys）',
+    meR.status === 200 && meR.json?.kind === 'user' && !!meR.json?.user?.id && !!meR.json?.user?.name && !('role' in (meR.json?.user ?? {})),
+    `${meR.status} ${meR.raw?.slice(0, 80)}`);
+  check('登录用户读 /api/users → 200（原 admin 专属）', (await uj.call('GET', '/api/users')).status === 200);
+  check('登录用户建影子账号 → 201', (await uj.call('POST', '/api/users', { body: { name: '小张' } })).status === 201);
+  check('登录用户读审计 → 200（原 audit:read 敏感权）', (await uj.call('GET', '/api/security/audit')).status === 200);
+  check('登录用户导出审计 → 200', (await uj.call('GET', '/api/security/audit/export')).status === 200);
+  const clearR = await uj.call('POST', '/api/security/audit/clear');
+  check('登录用户清空审计 → 200（原 security:manage）', clearR.status === 200 && (clearR.json?.cleared ?? 0) >= 1, `${clearR.status} ${clearR.json?.code ?? ''}`);
+  const afterClear = await uj.call('GET', '/api/security/audit');
+  check('清空后主表只留 audit.clear 痕迹（append-only 口径）',
+    afterClear.status === 200 && (afterClear.json?.events ?? []).length === 1 && afterClear.json.events[0].kind === 'audit.clear',
+    JSON.stringify(afterClear.json?.events ?? []).slice(0, 120));
+  const anon = await call('GET', '/api/users');
+  check('匿名（无凭据）→ 401（全权≠免登录）', anon.status === 401, `${anon.status} ${anon.json?.code ?? ''}`);
+  const unregByUser = await uj.call('GET', '/api/users/whatever/none');
+  check('登录用户打未登记子路径 → 404 E4090（不是 403）', unregByUser.status === 404 && unregByUser.json?.code === 'E4090', `${unregByUser.status} ${unregByUser.json?.code}`);
 
-  // ③ 成员基线：能读总览，摸不到管理面
-  check('成员读 /api/state → 200（基线）', (await memberJ.call('GET', '/api/state')).status === 200);
-  const usersByMember = await memberJ.call('GET', '/api/users');
-  check('成员读 /api/users → 403 E4033（user:manage 不在基线）', usersByMember.status === 403 && usersByMember.json?.code === 'E4033', `${usersByMember.status} ${usersByMember.json?.code}`);
-  const rolesByMember = await memberJ.call('GET', '/api/roles');
-  check('成员读 /api/roles → 403 E4033', rolesByMember.status === 403 && rolesByMember.json?.code === 'E4033', String(rolesByMember.status));
-  const auditByMember = await memberJ.call('GET', '/api/security/audit');
-  check('成员读审计 → 403 E4033（audit:read 敏感权）', auditByMember.status === 403, String(auditByMember.status));
-  const mePw = await memberJ.call('POST', '/api/me/password', { body: { currentPassword: 'nope-wrong', newPassword: 'x-pass-123' } });
-  check('成员改自己密码不被 PDP 拦（业务层拒错密码即可）', mePw.status !== 403 && mePw.status !== 404, `${mePw.status} ${mePw.json?.code ?? ''}`);  const convByMember = await memberJ.call('GET', '/api/users/whatever/none');
-  check('成员打未登记子路径 → 404 E4090（不是 403）', convByMember.status === 404 && convByMember.json?.code === 'E4090', `${convByMember.status} ${convByMember.json?.code}`);
-
-  // ④ admin 直通
-  check('admin 读 /api/users → 200', (await adminJ.call('GET', '/api/users')).status === 200);
-  check('admin 读审计 → 200', (await adminJ.call('GET', '/api/security/audit')).status === 200);
-
-  // ⑤ compute 令牌：自端点可、管理面 E4031
+  // ③ compute 令牌：自端点可、管理面 E4031
   const inv = await call('POST', '/api/nodes/invites', { headers: OP() });
   check('发节点邀请码 → 201', inv.status === 201, String(inv.status));
   const joined = await call('POST', '/api/nodes/join', { body: { code: inv.json?.code, id: 'sp-node', label: 'x', hostname: 'x', platform: 'linux', runtimes: [] } });
@@ -228,7 +273,7 @@ try {
   const invByNode = await call('POST', '/api/nodes/invites', { headers: NB });
   check('compute 发邀请码 → 403 E4031（compute: true 之外一律拒）', invByNode.status === 403 && invByNode.json?.code === 'E4031', String(invByNode.status));
 
-  // ⑥ panel 令牌：开面板 scope 后，看可以、管理动作 E4032
+  // ④ panel 令牌：开面板 scope 后，看可以、管理动作 E4032
   const scopeR = await call('POST', '/api/nodes/sp-node/scope', { headers: OP(), body: { scope: ['compute', 'panel'] } });
   check('给节点开 panel scope → 2xx', scopeR.status < 300, `${scopeR.status} ${scopeR.json?.code ?? ''}`);
   check('panel 读 /api/state → 200', (await call('GET', '/api/state', { headers: NB })).status === 200);
@@ -239,7 +284,7 @@ try {
   const fsByPanel = await call('GET', '/api/fs/dirs', { headers: NB });
   check('panel 列目录 → 403 E4032', fsByPanel.status === 403 && fsByPanel.json?.code === 'E4032', String(fsByPanel.status));
 
-  // ⑦ device 令牌：配对 → 白名单基线（2026-11-01 起发的是 9 位数字邀请码 code）
+  // ⑤ device 令牌：配对 → 白名单基线（2026-11-01 起发的是 9 位数字邀请码 code）
   const pairCode = await call('POST', '/api/pair/tokens', { headers: OP() });
   const claim = await call('POST', '/api/pair/claim', { body: { code: pairCode.json?.code ?? '', name: '测试手机' } });
   const devTok = /bandi_token=([^;]+)/.exec(claim.setCookie)?.[1] ?? '';
@@ -247,42 +292,14 @@ try {
   const DB = { 'X-Bandi-Token': devTok };
   if (devTok) {
     check('device 读 /api/state → 200（白名单）', (await call('GET', '/api/state', { headers: DB })).status === 200);
+    check('device 读 /api/prefs → 200（白名单内）', (await call('GET', '/api/prefs', { headers: DB })).status === 200);
     const usersByDev = await call('GET', '/api/users', { headers: DB });
     check('device 读 /api/users → 403 E4033', usersByDev.status === 403 && usersByDev.json?.code === 'E4033', String(usersByDev.status));
-    const pwByDev = await call('POST', '/api/me/password', { headers: DB, body: { currentPassword: 'x', newPassword: 'y-pass-123' } });
-    check('device 改密码 → 403 E4033（member 不含 device）', pwByDev.status === 403 && pwByDev.json?.code === 'E4033', `${pwByDev.status} ${pwByDev.json?.code}`);
+    const prefsByDev = await call('PUT', '/api/prefs', { headers: DB, body: {} });
+    check('device 改偏好 → 403 E4033（PUT /api/prefs 没打 device 标）', prefsByDev.status === 403 && prefsByDev.json?.code === 'E4033', `${prefsByDev.status} ${prefsByDev.json?.code}`);
   }
 
-  // ⑧ role_permissions 解锁：授 machine:read → 成员可读状态台账；再授 user:manage
-  //    → 成员可读账号列表（Phase 3 收编后 handler 不再自带 mayManage，词表解锁端到端生效）
-  await killAll();
-  const db = new DatabaseSync(path.join(tmp, 'bandi.db'));
-  const memberRole = db.prepare("SELECT roleId FROM users WHERE name = '乙'").get()?.roleId;
-  check('成员乙的角色是 operator（内置）', memberRole === 'operator', String(memberRole));
-  db.prepare("INSERT OR IGNORE INTO role_permissions (roleId, permission) VALUES ('operator', 'machine:read')").run();
-  db.close();
-  startSrv({ BANDI_HOST: '0.0.0.0', BANDI_TOKEN: OP_TOKEN });
-  if (!(await waitUp())) throw new Error('二次没起来');
-  const j2 = await login('乙');
-  const ledgerR = await j2.call('GET', '/api/status/ledger');
-  check('授 machine:read 后成员读 /api/status/ledger → 200（roleHasPerm 生效）', ledgerR.status === 200, `${ledgerR.status} ${ledgerR.json?.code ?? ''}`);
-  const usersByPerm = await j2.call('GET', '/api/users');
-  check('user:manage 没授，/api/users 依旧 403 E4033（按权判定，不是整站放行）', usersByPerm.status === 403 && usersByPerm.json?.code === 'E4033', `${usersByPerm.status} ${usersByPerm.json?.code}`);
-
-  // ⑧b 收编验证：授 user:manage → 成员可读账号列表（handler 闸已摘，PDP 单门）
-  await killAll();
-  const db2 = new DatabaseSync(path.join(tmp, 'bandi.db'));
-  db2.prepare("INSERT OR IGNORE INTO role_permissions (roleId, permission) VALUES ('operator', 'user:manage')").run();
-  db2.close();
-  startSrv({ BANDI_HOST: '0.0.0.0', BANDI_TOKEN: OP_TOKEN });
-  if (!(await waitUp())) throw new Error('三次没起来');
-  const j3 = await login('乙');
-  const usersR = await j3.call('GET', '/api/users');
-  check('授 user:manage 后成员读 /api/users → 200（收编后词表解锁真正生效）', usersR.status === 200, `${usersR.status} ${usersR.json?.code ?? ''}`);
-  const delUser = await j3.call('DELETE', '/api/users/no-such-user');
-  check('成员删不存在的用户 → 404（过了 PDP，业务层照旧）', delUser.status === 404, `${delUser.status} ${delUser.json?.code ?? ''}`);
-
-  // ⑨ 撤销令牌：忘掉节点 → bn_ 变 revoked（E4012）
+  // ⑥ 撤销令牌：忘掉节点 → bn_ 变 revoked（E4012）
   await call('DELETE', '/api/nodes/sp-node', { headers: OP() });
   const hbAfterForget = await call('POST', '/api/nodes/sp-node/heartbeat', { headers: NB });
   check('忘掉后旧 bn_ → 401 E4012', hbAfterForget.status === 401 && hbAfterForget.json?.code === 'E4012', `${hbAfterForget.status} ${hbAfterForget.json?.code}`);
@@ -290,6 +307,7 @@ try {
   check('流程没抛异常', false, String(err?.message ?? err).slice(0, 300));
 } finally {
   await killAll();
+  try { await stub?.close(); } catch { /* 已退 */ }
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* 删不掉就算了 */ }
 }
 
