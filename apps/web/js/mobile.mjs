@@ -377,180 +377,38 @@ if (inputEl) {
 
 /* ---------------------------------------------------------------- ⑤ 401 引导 */
 
-/*
- * 手机形态（mb-tiny）下拦 401：E4010（无令牌/令牌失效）与 E4012（授权被撤销）都意味着
- * "这台手机的配对没了" —— 引导重新扫码，不甩裸登录页（PRD P0-3 用户已确认的口径）。
- * 拦在 fetch 上：ui.mjs 的 api() 底下就是 fetch，一处包装全站生效（含 EventSource 之外的
- * 所有口）；SSE 断流不走这条路 —— 那条是静默重连，401 时页面刷新自然会落到这里。
- */
-let relpairShown = false;
-let resumeTried = false;
-
-/** 在手机壳里？（壳会注入 __TAURI_INTERNALS__ / __TAURI__；浏览器 PWA 里没有） */
+/** 在原生手机壳里？（壳在 WebView 启动前就挂好了 `window.BandiShell`） */
 function inShell() {
-  return !!(window.__TAURI_INTERNALS__ || window.__TAURI__);
+  return typeof window.BandiShell !== 'undefined';
 }
 
-/**
- * 手机壳的本地页 origin（Tauri 的 app 协议，Android 上恒为 `http://tauri.localhost`）。
+/*
+ * 会话过期（绝对 12 小时 / 空闲 30 分钟两道闸）时，API 回 E4010 / E4012。
  *
- * 为什么写死：**远程 origin 调不了壳的自定义命令** —— Tauri v2 的 ACL 只对本地页开
- * app 命令，远程页 invoke 直接回 "not allowed. Plugin not found"（2026-11-01 真机实测）。
- * 而这个 origin 由壳的配置决定（tauri.conf.json 未开 useHttpsScheme），改了壳才需要改它。
- * 跳过去走的是壳的 on_navigation 白名单（tauri/http/https 全放行），不经 invoke。
- */
-const SHELL_ORIGIN = 'http://tauri.localhost';
-
-/**
- * 回壳的连接页（扫码 / 邀请码 / 已配对那三页）。
+ * 以前这里做的是「凭 clientKey 换一张新设备令牌，换不上就弹重新扫码遮罩」——
+ * 那套设备令牌 2026-11-07 整体退场了。现在的答案是**重载一次**：服务端发现没有
+ * 会话，直接把中枢登录页给过来，人重新输一次手机号密码就回到工作台。
  *
- * 连接页是**登录页**，不是工作台的上一级 —— 正常操作里根本走不回去（连上时壳用
- * location.replace 把它从历史里顶掉了；返回键在根页没得退，直接退出 App）。
- * 只有配对真的没了（电脑端断开 / 取消配对 / 换了另一台手机）才需要这条退路，
- * 所以按钮只长在 401 遮罩上。replace 同样顶替当前条目 —— 回到连接页后按返回键
- * 也不会退回那个已经失效的工作台。
+ * 只重载一次（10 秒内不重复）：服务端真出毛病时不至于来回刷屏。
  */
-function backToLauncher() {
-  location.replace(`${SHELL_ORIGIN}/`);
-}
-
-/**
- * 手机自己「断开连接」后的退场（2026-11-02，settings.mjs 的 openMe 派 `mb-left`）：
- *   · 壳里 → 回连接页（launcher 的已配对卡还在，点「连接」= /pair?resume=1 连回来）；
- *   · 浏览器 → 回配对页（没有壳，走不了 resume 那条入口）。
- * 与 401 那条 backToLauncher 同一套落点，别各写一份。
- */
-document.addEventListener('mb-left', () => {
-  if (inShell()) return backToLauncher();
-  location.replace('/pair');
-});
-
-/**
- * @param {'launcher'|'retry'} action 遮罩上的按钮：
- *   launcher = 回连接页重新扫码（配对没了）；retry = 再试一次连回来（别人在用）
- */
-function showRelpair(title, text, action = 'launcher') {
-  if (relpairShown) return;
-  relpairShown = true;
-  const mask = document.createElement('div');
-  mask.className = 'mb-relpair';
-  const canBack = action === 'launcher' && inShell();
-  /* 有按钮才说"点下面的按钮"；浏览器 PWA 里没有壳，只能回电脑上重新生成二维码 */
-  const body =
-    text ||
-    (canBack
-      ? '这台手机的配对已被移除或已过期。点下面的「重新连接」回到连接页，重新扫码（或在电脑上「设置 → 手机连接」生成新的邀请码）。'
-      : '这台手机的配对已被移除或已过期。请在电脑上打开「设置 → 手机连接」重新生成二维码，扫码即可恢复。');
-  mask.innerHTML = `
-    <div class="mb-relpair-card">
-      <div class="mb-relpair-logo">B</div>
-      <h2>${title || '登录已失效'}</h2>
-      <p>${body}</p>
-      ${
-        canBack
-          ? '<button type="button" class="mb-relpair-btn" data-relpair="launcher">重新连接</button>'
-          : action === 'retry'
-            ? '<button type="button" class="mb-relpair-btn" data-relpair="retry">再试一次</button>'
-            : ''
-      }
-    </div>`;
-  document.body.append(mask);
-  mask.querySelector('[data-relpair]')?.addEventListener('click', async (e) => {
-    const b = e.currentTarget;
-    if (b.dataset.relpair === 'retry') {
-      location.reload();
-      return;
-    }
-    b.disabled = true;
-    b.textContent = '正在回到连接页…';
-    backToLauncher(); // 页面随即被替换掉，后面几行只在跳失败时才看得到
-    setTimeout(() => {
-      if (!document.body.contains(b)) return;
-      b.disabled = false;
-      b.textContent = '重新连接';
-      const p = mask.querySelector('p');
-      if (p) p.textContent = '回不到连接页 —— 把 App 从后台划掉，重新打开就行。';
-    }, 1500);
-  });
-}
-
-/** localStorage 里那台手机的随机 ID（与 pair-claim.mjs 同一个键） */
-function clientKeyOf() {
-  try {
-    return localStorage.getItem('bandi.clientKey') || '';
-  } catch {
-    return '';
-  }
-}
-
-/** bandi_csrf 不是 HttpOnly，JS 读得到；resume 是写请求，要过 E4099 双提交闸 */
-function csrfOf() {
-  for (const part of String(document.cookie ?? '').split(';')) {
-    const i = part.indexOf('=');
-    if (i < 0) continue;
-    if (part.slice(0, i).trim() === 'bandi_csrf') {
-      try {
-        return decodeURIComponent(part.slice(i + 1).trim());
-      } catch {
-        return part.slice(i + 1).trim();
-      }
-    }
-  }
-  return '';
-}
-
-/**
- * 401 时先试「连回来」（2026-11-01 二刀）：手机被电脑端「断开连接」之后令牌没了，
- * 但 clientKey 还在 —— 没有别的手机在用就换一张新令牌，刷新即回工作台，不用重新扫码。
- * 返回 'ok' | 'busy' | 'fail'。用 origFetch 发（别让拦截器把自己再拦一遍）。
- */
-async function tryResume() {
-  const key = clientKeyOf();
-  if (!key) return 'fail';
-  try {
-    const r = await origFetch('/api/pair/resume', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Bandi': '1', 'X-Bandi-CSRF': csrfOf() },
-      body: JSON.stringify({ clientKey: key }),
-      credentials: 'same-origin',
-    });
-    if (r.ok) return 'ok';
-    const d = await r.json().catch(() => null);
-    return d?.code === 'E1705' ? 'busy' : 'fail';
-  } catch {
-    return 'fail';
-  }
-}
-
 const origFetch = window.fetch.bind(window);
 window.fetch = async (...args) => {
   const r = await origFetch(...args);
-  if (r.status === 401 && document.body.classList.contains('mb-tiny') && !relpairShown) {
-    let body = null;
-    try {
-      body = await r.clone().json();
-    } catch { /* 非 JSON 响应（登录页 HTML）不算 —— 那是桌面浏览器的事 */ }
-    if (body?.code !== 'E4010' && body?.code !== 'E4012') return r;
-    if (resumeTried) {
-      showRelpair();
-      return r;
-    }
-    resumeTried = true;
-    const how = await tryResume();
-    if (how === 'ok') {
-      location.reload(); // 新令牌已经种进 Cookie，重来一次就是工作台
-      return r;
-    }
-    if (how === 'busy') {
-      showRelpair(
-        '另一台手机正在使用',
-        '一台电脑同一时间只允许一台手机连接。想用这台，先在电脑上「设置 → 手机连接」把正在用的那台「断开连接」，然后回到这里点「再试一次」。',
-        'retry',
-      );
-      return r;
-    }
-    showRelpair();
-  }
+  if (r.status !== 401 || !document.body.classList.contains('mb-tiny')) return r;
+  let body = null;
+  try {
+    body = await r.clone().json();
+  } catch { /* 非 JSON（登录页 HTML）不算 */ }
+  if (body?.code !== 'E4010' && body?.code !== 'E4012') return r;
+  let last = 0;
+  try {
+    last = Number(sessionStorage.getItem('bandi.401reload') || 0);
+  } catch { /* 隐私模式：当 0 处理 */ }
+  if (Date.now() - last < 10_000) return r;
+  try {
+    sessionStorage.setItem('bandi.401reload', String(Date.now()));
+  } catch { /* 存不了就照刷，最多多刷一次 */ }
+  location.reload();
   return r;
 };
 
@@ -633,12 +491,15 @@ $('listBody').addEventListener(
  * 回登录页只剩「断开连接」和配对失效两条正路。
  */
 
-/** ⑦a 跨文档退回了班底自己的旧文档 —— 原地续连，不弹登录页也不复活旧会话。 */
+/**
+ * ⑦a 跨文档退回了班底自己的旧文档 —— 原地重载。
+ *
+ * 以前是 `location.replace('/pair?resume=1')` 去换一张新设备令牌；配对页已随
+ * 设备令牌体系退场，这里只重载当前文档：会话还在就照常渲染，没了就落登录页。
+ */
 function bounceBackArrival() {
   if (!inShell()) return;
-  // 用 clientKey 换张新令牌接着用；续不上（真断开了）落 /pair 的报错脸 ——
-  // 那才是唯一该见到连接页的形态
-  location.replace('/pair?resume=1');
+  location.reload();
 }
 
 const navType =

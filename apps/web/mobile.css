@@ -951,16 +951,14 @@
   .wb-page .wb-tile:active { background: var(--mb-press, var(--active)); }
 
   .wb-page .wb-name { font-size: 16px; }
-  /* 说明给两行：手机上 240px 的卡片宽度压成一列后，一行只能放十来个字，
-     截成一行就只剩"把所有项目的进度、发布…"，等于没写。 */
-  .wb-page .wb-desc {
-    font-size: 13px;
-    white-space: normal;
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
-  }
+  /*
+   * 说明行整条撤掉（2026-11-07 用户截图拍板：「去掉下面的说明文案」）。
+   * 手机上卡片已是一列一行、名字自己就够认；每格再压一到两行小字，既让卡变高、
+   * 一屏放不下几个入口，读起来也是一串重复的"这格是干嘛的"。
+   * 只藏不删：DOM 留在原位，`title` 还在按钮上（桌面临 >900px 那版照旧显示）。
+   * 上一版那条 line-clamp: 2 随之作废 —— 一条不显示的文本不需要截行。
+   */
+  .wb-page .wb-desc { display: none; }
 
   /* 卡片外面那圈"装不上台面"的错误条也跟着缩进 */
   .wb-page .plg-err { margin: 0 var(--mb-pad, 16px); }
@@ -1212,6 +1210,26 @@
     border-bottom: 0;
   }
   dialog[open]::backdrop { background: rgba(0, 0, 0, 0.45); }
+
+  /* 确认弹窗（#askDlg）→ 居中小卡片，不进抽屉（2026-11-07 用户："点击退出不要使用
+     抽屉，要使用弹窗"）：confirmDo 都是"一句话 + 两个按钮"的小确认，抽屉形态
+     又矮又贴底，按钮正好怼在导航栏上。ID 选择器(1,0,0) 压过上面的
+     dialog[open](0,1,0)，顺序无关；inset:0 + margin:auto 恢复居中，
+     height:fit-content 让卡片只有内容那么高。 */
+  #askDlg {
+    inset: 0;
+    margin: auto;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    width: min(420px, calc(100vw - 48px));
+    max-width: none;
+    height: fit-content;
+    max-height: 82vh;
+    border-radius: 16px;
+    border-bottom: 1px solid var(--line);
+  }
 
   /*
    * 建卡弹窗（#taskDlg）→ **全屏工作纸**（2026-11-03 实机："手机建卡没有完成按钮"）。
@@ -1494,56 +1512,6 @@ body.mb-chat .chat-head .mb-chat-back {
 }
 .mb-url.primary { border-color: var(--accent, #3b6ef5); }
 
-/* 设置分节里的设备**表**（2026-11-01 五改：卡片行改表格，见 style.css 的 .pair-table）——
-   窄屏下表太窄，横滚交给 .mb-pair-wrap（style.css）；这里只留按钮/胶囊/下拉的窄屏微调。 */
-.mb-pair-wrap { -webkit-overflow-scrolling: touch; }
-/* 危险色归位（2026-11-02 评审）：断开连接可逆 → 中性钮；取消配对删记录不可逆 → 红钮。
-   旧口径"踢出是危险的主动动作"作废 —— 踢出能连回来，真正回不来的是取消配对。 */
-.mb-pair-kick {
-  border: 1px solid var(--line, #26282c);
-  background: transparent;
-  color: var(--text, #3a3f47);
-  font: inherit;
-  font-size: 12.5px;
-  padding: 5px 12px;
-  border-radius: 8px;
-  cursor: pointer;
-  flex: none;
-}
-.mb-pair-kick:hover { background: var(--hover, rgba(0, 0, 0, .05)); }
-/* 已断开（2026-11-01 二刀）：行留着，靠这个胶囊和灰掉的行区分「取消配对」前的状态
-   （灰行在 style.css 的 .pair-table tr.off；这里的 margin-top 是卡片行遗留，表格里去掉） */
-.mb-pair-offtag {
-  display: inline-block;
-  margin-left: 2px;
-  padding: 0 6px;
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--dim, #7c8288) 16%, transparent);
-  font-size: 11.5px;
-}
-/* 面板角色下拉（2026-10-28 第四刀）：手机底部导航由总机分配的角色决定。
- * 全局 `input,select` 是 width:100%（style.css），这里要按内容定宽，不然它会撑满整行、
- * 把「断开连接」挤出屏幕。高度压到 30px —— 跟旁边那颗小按钮一个视觉重量。
- */
-.mb-pair-role { flex: 0 0 auto; }
-/* 取消配对（2026-11-01）：已踢出的行上的清理动作。
-   2026-11-02 评审改红：它是**删记录、不可逆**的那一个 —— 危险色归它，别再给可逆的断开。 */
-.mb-pair-forget {
-  border: 1px solid color-mix(in srgb, var(--bad, #c0504d) 45%, transparent);
-  background: transparent;
-  color: var(--bad, #c0504d);
-  font: inherit;
-  font-size: 12.5px;
-  padding: 5px 12px;
-  border-radius: 8px;
-  cursor: pointer;
-  flex: none;
-}
-.mb-pair-forget:hover {
-  border-color: var(--bad, #c0504d);
-  background: color-mix(in srgb, var(--bad, #c0504d) 12%, transparent);
-}
-
 /* ============================================================ 13. 对话富内容降级（P1-4） */
 
 /*
@@ -1566,54 +1534,6 @@ body.mb-chat .chat-head .mb-chat-back {
 .mb-fold:active { background: color-mix(in srgb, var(--accent, #3b6ef5) 16%, transparent); }
 .mb-fold-body { margin-top: 6px; }
 .mb-fold-body[hidden] { display: none; }
-
-/* ============================================================ 14. 401 全屏引导 */
-
-/* 手机形态下配对失效的全屏提示（js/mobile.mjs showRelpair）。覆盖一切，直到刷新。 */
-.mb-relpair {
-  position: fixed;
-  inset: 0;
-  z-index: 9999;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 28px;
-  background: var(--bg, #08090a);
-  text-align: center;
-}
-.mb-relpair-card { max-width: 340px; }
-.mb-relpair-logo {
-  width: 52px;
-  height: 52px;
-  border-radius: 13px;
-  margin: 0 auto 16px;
-  display: grid;
-  place-items: center;
-  font-size: 24px;
-  font-weight: 700;
-  color: #fff;
-  background: linear-gradient(135deg, #3b6ef5, #7b4df0);
-}
-.mb-relpair-card h2 { font-size: 18px; margin: 0 0 10px; color: var(--text, #e7e7e7); }
-.mb-relpair-card p { font-size: 13.5px; line-height: 1.8; color: var(--dim, #9aa0a6); margin: 0; }
-
-/*
- * 遮罩上的唯一动作（2026-11-01）：配对真没了才回连接页。
- * 工作台里没有"返回连接页"的入口 —— 那是登录页，不是上一级；按返回键是退出 App。
- */
-.mb-relpair-btn {
-  margin-top: 22px;
-  padding: 11px 26px;
-  border: 0;
-  border-radius: var(--mb-r-pill, 22px);
-  background: var(--accent, #3b6ef5);
-  color: #fff;
-  font: inherit;
-  font-size: 14.5px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.mb-relpair-btn:disabled { opacity: .6; }
 
 /* ============================================================ 15. 我的（个人中心） */
 
@@ -1846,9 +1766,16 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
 
   /* 退场行 iOS 读法：居中、加大、整行可点 —— "走人"的分量由居中红字给，
      不靠按钮色块；按压反馈照 App 的规矩来。17 = iOS 表格行字阶（2026-11-05
-     用户反馈"字体偏小"后从 16 提上来） */
+     用户反馈"字体偏小"后从 16 提上来）。高度与「主题」行同款 58px
+     （2026-11-08 用户：两行看着不一致、倾向高一些）—— 不靠 padding 碰运气，
+     min-height + flex 居中，和 .me-theme-row 一把尺子 */
   body.mb-narrow #settingsView .me-out {
-    padding: 15px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 58px;
+    padding: 8px 16px;
+    box-sizing: border-box;
     font-size: 17px;
     font-weight: 500;
     text-align: center;
@@ -1874,7 +1801,8 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    min-height: 52px;
+    /* 与「退出登录」行同款 58px（2026-11-08 用户：两行看着不一致、倾向高一些） */
+    min-height: 58px;
     padding: 8px 16px;
     box-sizing: border-box;
   }
@@ -1902,8 +1830,8 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     font: inherit;
     font-size: 13px;
     line-height: 1;
-    padding: 9px 13px;
-    min-height: 32px;
+    padding: 10px 13px;
+    min-height: 34px;
     box-sizing: border-box;
     cursor: pointer;
   }
@@ -1956,6 +1884,67 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     line-height: 1;
     transform: translateY(-1px);
   }
+}
+
+/* ── 15c. 「我的」页重设计补笔（2026-11-08，用户对着截图："这个页面重新设计一下"）
+   ──────────────────────────────────────────────────────────────────────────
+   上一版（§15b）骨架已经对（hero + 分组卡），这轮修的是截图里看得见的毛边：
+
+   ① 手机号头像换人形占位 —— "1526…" 的首字符是"1"，大蓝圈里孤零零一个数字，
+      既不是名字也没有含义（DOM 在 settings.mjs，这里只管图形尺寸）；
+   ② 值列统一"右对齐 + 超长省略"—— DESKTOP-ME3RQ97 这种长值会把 chevron 顶挤
+      参差（旧「当前设备」卡最明显）；桌面 .me-v 是 flex:1 + break-all，手机上
+      改成不换行省略，值与 chevron 的距离才稳定；
+   ③ 「外网访问」状态点 —— 机器卡新增一行（DOM 同在 settings.mjs），点色从
+      style.css 的语义 token 取（--ok/--warn/--bad），深浅主题都成立；
+   ④ 「当前设备」已并进「通用」卡（DOM 改动），这里只补 button 行的按压与
+      分割线衔接 —— .me-kv + .me-kv::before 对 button 形态同样生效，无需新规则。
+*/
+@media (max-width: 900px) {
+  /* ① 人形占位头像：图标居中、撑到与字母首字同视觉重量（桌面 .me-ava 56 → 手机 64） */
+  body.mb-narrow #settingsView .me-ava-glyph {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  body.mb-narrow #settingsView .me-ava-glyph svg {
+    width: 30px;
+    height: 30px;
+  }
+
+  /* ② 值列：右对齐保留（margin-left:auto 补回桌面 flex:1 的推挤），但不再
+        break-all（长主机名会在字母中间断行）—— 改单行省略，值与 chevron 的
+        间距从此稳定；短值贴右沿、长值向左生长到顶住标签为止 */
+  body.mb-narrow #settingsView .me-kv .me-k { flex: none; }
+  body.mb-narrow #settingsView .me-kv .me-v {
+    flex: 0 1 auto;
+    min-width: 0;
+    margin-left: auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* button 行（清除缓存 / 当前设备）的 me-k 也照此办理 —— 它们是 .me-kv 的变体 */
+  body.mb-narrow #settingsView button.me-cache-row .me-k { flex: none; }
+
+  /* ③ 外网访问状态点：8px 圆点 + 状态词，垂直居中（inline-flex 防止点被
+       line-height 顶偏）；dim 档给"未开通/未配置"这种中性事实 */
+  body.mb-narrow #settingsView .me-relay {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    white-space: nowrap;
+  }
+  body.mb-narrow #settingsView .me-dot {
+    flex: 0 0 auto;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--mb-text-3, var(--dim));
+  }
+  body.mb-narrow #settingsView .me-dot-ok { background: var(--ok, #3fb950); }
+  body.mb-narrow #settingsView .me-dot-wait { background: var(--warn, #d29922); }
+  body.mb-narrow #settingsView .me-dot-bad { background: var(--bad, #f85149); }
 }
 /*
  * ══════════════════════════════════════════════════════════════════════════════
@@ -2780,7 +2769,8 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
 
   /* 磁贴标题 16 → 17：卡里只有它担"标题"，跟列表行同档才不显小 */
   .wb-page .wb-name { font-size: 17px; }
-  .wb-page .wb-desc { color: var(--mb-text-2, var(--dim)); }
+  /* 说明行的颜色规则（原 .wb-desc color）随 §6 的 display:none 一起撤掉 —— 不显示的
+     文字染什么色都没意义，留着只会让后来的人以为它还在画。 */
 }
 
 /* ============================================================ 17.2 通讯录 */

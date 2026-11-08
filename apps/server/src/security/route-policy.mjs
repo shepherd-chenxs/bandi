@@ -10,12 +10,12 @@
  *                 拒绝仍由 decide()/handler 负责 —— 分两步收，一次全收必翻车）；
  *   · `auth`   —— `public`（guard 在认证前放行）/ `session`（要身份，按 kind 判）/
  *                 `local`（本机接口，handler 里走 authorizeLocal）；
- *   · `device` —— 手机设备令牌也可（设备白名单制，见 policy.mjs 的 device 分支）；
  *   · `noPanel`—— panel 令牌禁止（原 PANEL_FORBIDDEN 逐条迁进来：panel =「看 + 用」，
  *                 管理动作只有 operator/登录用户能做）。
  *
  * 2026-11-07：`perm` / `member` 字段与角色体系一起退场 —— 登录用户全权，
- * 分级只剩机器身份（operator / device / node）自己的边界。
+ * 分级只剩机器身份（operator / node）自己的边界。手机设备那条（`device` 标）随配对
+ * 体系同日退场：手机现在也是登录进来的 user。
  */
 
 /* ------------------------------------------------------------------ 助记 */
@@ -32,8 +32,6 @@ export const ROUTES = [
   /* ---------------------------------------------------- public（认证前放行） */
   { id: 'hello', m: ['GET'], path: p('/api/hello'), auth: 'public', note: '加入向导探测；披露字段与 UDP 应答同源，故意无秘密（§5.4）' },
   { id: 'nodes.join', m: ['POST'], path: p('/api/nodes/join'), auth: 'public', note: '新机器凭一次性邀请码加入' },
-  { id: 'pair.claim', m: ['POST'], path: p('/api/pair/claim'), auth: 'public', note: '手机扫码换码' },
-  { id: 'pair.resume', m: ['POST'], path: p('/api/pair/resume'), auth: 'public', note: '断开的手机凭 clientKey 连回来（一机一刀，有人在用则 409 E1705）' },
   { id: 'logout', m: ['POST'], path: p('/api/logout'), auth: 'public', note: '登出自检（有票才有的撤）' },
   { id: 'ai.image-config', m: ['GET', 'PUT'], path: p('/api/ai/image-config'), auth: 'public', note: 'guard 只对 source=loopback 豁免 GET；PUT 永远要身份' },
   { id: 'ai.image', m: ['POST'], path: p('/api/ai/image'), auth: 'public', note: '回环免令牌（本地模型探测）；network 不豁免' },
@@ -56,42 +54,40 @@ export const ROUTES = [
   { id: 'local.leave', m: ['POST'], path: p('/api/local/leave'), auth: 'local' },
 
   /* ------------------------------------------------- 登录用户与手机设备共用 */
-  { id: 'state.read', m: ['GET'], path: p('/api/state'), auth: 'session', device: true },
-  { id: 'me.read', m: ['GET'], path: p('/api/me'), auth: 'session', device: true, note: '「我是谁」—— 登录完第一件事' },
-  { id: 'skills.list', m: ['GET'], path: p('/api/skills'), auth: 'session', device: true },
-  { id: 'workflows.list', m: ['GET'], path: p('/api/workflows'), auth: 'session', device: true },
-  { id: 'projects.list', m: ['GET'], path: p('/api/projects'), auth: 'session', device: true },
-  { id: 'tasks.list', m: ['GET'], path: p('/api/tasks'), auth: 'session', device: true },
-  { id: 'pair.me', m: ['GET'], path: p('/api/pair/me'), auth: 'session', device: true },
-  { id: 'pair.leave', m: ['POST'], path: p('/api/pair/leave'), auth: 'session', device: true, noPanel: true, note: '手机自己断开与这台电脑的连接（收钥匙，记录留着，下次打开能连回来）' },
-  { id: 'web.version', m: ['GET'], path: p('/api/web-version'), auth: 'session', device: true, note: '60 秒版本指纹轮询，零敏感' },
-  { id: 'prefs.read', m: ['GET'], path: p('/api/prefs'), auth: 'session', device: true, note: '回复风格读：设备也放行（手机设置页要画）' },
+  { id: 'state.read', m: ['GET'], path: p('/api/state'), auth: 'session' },
+  { id: 'me.read', m: ['GET'], path: p('/api/me'), auth: 'session', note: '「我是谁」—— 登录完第一件事' },
+  { id: 'skills.list', m: ['GET'], path: p('/api/skills'), auth: 'session' },
+  { id: 'workflows.list', m: ['GET'], path: p('/api/workflows'), auth: 'session' },
+  { id: 'projects.list', m: ['GET'], path: p('/api/projects'), auth: 'session' },
+  { id: 'tasks.list', m: ['GET'], path: p('/api/tasks'), auth: 'session' },
+  { id: 'web.version', m: ['GET'], path: p('/api/web-version'), auth: 'session', note: '60 秒版本指纹轮询，零敏感' },
+  { id: 'prefs.read', m: ['GET'], path: p('/api/prefs'), auth: 'session', note: '回复风格读：设备也放行（手机设置页要画）' },
   // 2026-11-04 补登（用户实报 E4090）：v2.8 默认拒绝时漏了 PUT —— 设置 › 偏好的
   // 「言简意赅」开关点的就是它，一点就 404 E4090。语义：改**全体数字员工**的沟通
   // 偏好（存 config.json，下一轮派活生效），登录用户可改、设备不给 —— 与 settings.mjs
   // 「设备形态不渲染那一节」的前端口径对齐（设备打它 → E4033，不是 404）。
   { id: 'prefs.write', m: ['PUT'], path: p('/api/prefs'), auth: 'session', noPanel: true },
-  { id: 'events.sse', m: ['GET'], path: p('/api/events'), auth: 'session', device: true, noPanel: true, note: '全局 SSE；panel 禁（只许单运行流）' },
+  { id: 'events.sse', m: ['GET'], path: p('/api/events'), auth: 'session', noPanel: true, note: '全局 SSE；panel 禁（只许单运行流）' },
   { id: 'runtimes.list', m: ['GET'], path: p('/api/runtimes'), auth: 'session', note: '分机模式页要机器名/版本' },
   { id: 'local.status.forUser', m: ['GET'], path: p('/api/local/status'), auth: 'session', note: '与 local.status 同路径：登记处放行，handler 的 authorizeLocal 照旧把员外身份拦下（E4091）' },
-  { id: 'run.stream', m: ['GET'], path: p('/api/runs', id1, 'stream'), auth: 'session', device: true, note: '单运行事件流（SSE）' },
-  { id: 'conv.detail', m: ['GET'], path: p('/api/conversations', id1), auth: 'session', device: true },
-  { id: 'conv.send', m: ['POST'], path: p('/api/conversations', id1, 'messages'), auth: 'session', device: true },
-  { id: 'card.detail', m: ['GET'], path: p('/api/projects/tasks', id1), auth: 'session', device: true },
-  { id: 'card.patch', m: ['PATCH'], path: p('/api/projects/tasks', id1), auth: 'session', device: true, note: '手机审批只放 {status, note}（字段级闸在 project.mjs）' },
-  { id: 'card.comments', m: ['GET', 'POST'], path: p('/api/projects/tasks', id1, 'comments'), auth: 'session', device: true },
+  { id: 'run.stream', m: ['GET'], path: p('/api/runs', id1, 'stream'), auth: 'session', note: '单运行事件流（SSE）' },
+  { id: 'conv.detail', m: ['GET'], path: p('/api/conversations', id1), auth: 'session' },
+  { id: 'conv.send', m: ['POST'], path: p('/api/conversations', id1, 'messages'), auth: 'session' },
+  { id: 'card.detail', m: ['GET'], path: p('/api/projects/tasks', id1), auth: 'session' },
+  { id: 'card.patch', m: ['PATCH'], path: p('/api/projects/tasks', id1), auth: 'session', note: '手机审批只放 {status, note}（字段级闸在 project.mjs）' },
+  { id: 'card.comments', m: ['GET', 'POST'], path: p('/api/projects/tasks', id1, 'comments'), auth: 'session' },
   { id: 'card.files', m: ['GET', 'POST'], path: p('/api/projects/tasks', id1, 'files'), auth: 'session' },
   { id: 'card.pr', m: ['GET', 'POST'], path: p('/api/projects/tasks', id1, 'pr(?:/refresh|/create|/merge)?'), auth: 'session' },
-  { id: 'board', m: ['GET'], path: p('/api/projects', id1, 'tasks'), auth: 'session', device: true },
-  { id: 'card.create', m: ['POST'], path: p('/api/projects', id1, 'tasks'), auth: 'session', device: true,
+  { id: 'board', m: ['GET'], path: p('/api/projects', id1, 'tasks'), auth: 'session' },
+  { id: 'card.create', m: ['POST'], path: p('/api/projects', id1, 'tasks'), auth: 'session',
     note: '手机建卡（2026-11-03 实机放开）："人不在电脑前想起一件事要派下去"是手机端核心场景，绑人后建卡署名走 actorUser=归属人。只开**建**——删卡/改归属留在桌面；PATCH 的 {status, note} 字段级闸仍在 project.mjs' },
-  { id: 'persona.detail', m: ['GET'], path: p('/api/personas', id1), auth: 'session', device: true },
-  { id: 'persona.tasks', m: ['GET'], path: p('/api/personas', id1, 'tasks'), auth: 'session', device: true },
-  { id: 'group.detail', m: ['GET'], path: p('/api/groups', id1), auth: 'session', device: true },
-  { id: 'run.abort', m: ['POST'], path: p('/api/runs', id1, 'abort'), auth: 'session', device: true, note: '能派不能停 = 会话永远「正在输入」' },
+  { id: 'persona.detail', m: ['GET'], path: p('/api/personas', id1), auth: 'session' },
+  { id: 'persona.tasks', m: ['GET'], path: p('/api/personas', id1, 'tasks'), auth: 'session' },
+  { id: 'group.detail', m: ['GET'], path: p('/api/groups', id1), auth: 'session' },
+  { id: 'run.abort', m: ['POST'], path: p('/api/runs', id1, 'abort'), auth: 'session', note: '能派不能停 = 会话永远「正在输入」' },
 
   /* --------------------------------------- 需要权限（role_permissions 可扩） */
-  { id: 'conv.create', m: ['POST'], path: p('/api/conversations'), auth: 'session', device: true,
+  { id: 'conv.create', m: ['POST'], path: p('/api/conversations'), auth: 'session',
     note: '手机「发消息」的第一步（2026-11-03 实机：E4033）。通讯录点人进详情 → 详情点「发消息」→ 与这个人**还没聊过**时没有可复用的会话，必须先建一段（openDirectChat 的 ③ 分支）。原来没开 device，于是「先聊过的能发、没聊过的报 E4033」—— 看着像"发消息按钮坏了"。只开建：改名/删会话/不显示仍是桌面的事' },
   { id: 'conv.update', m: ['PUT'], path: p('/api/conversations', id1), auth: 'session' },
   { id: 'conv.delete', m: ['DELETE'], path: p('/api/conversations', id1), auth: 'session' },
@@ -100,20 +96,20 @@ export const ROUTES = [
   { id: 'conv.files', m: ['POST'], path: p('/api/conversations', id1, 'files'), auth: 'session' },
   { id: 'files.get', m: ['GET'], path: p('/api/files', id1, id1), auth: 'session' },
   { id: 'persona.create', m: ['POST'], path: p('/api/personas'), auth: 'session' },
-  { id: 'persona.update', m: ['PUT', 'PATCH'], path: p('/api/personas', id1), auth: 'session', device: true, note: '手机执行配置卡（2026-11-05）：设备只许改 runtime/model/showThinking/maxParallel 四项，身份字段以库中现值原样回填 —— 字段级闸在 persona.mjs' },
+  { id: 'persona.update', m: ['PUT', 'PATCH'], path: p('/api/personas', id1), auth: 'session', note: '手机执行配置卡（2026-11-05）：设备只许改 runtime/model/showThinking/maxParallel 四项，身份字段以库中现值原样回填 —— 字段级闸在 persona.mjs' },
   { id: 'persona.delete', m: ['DELETE'], path: p('/api/personas', id1), auth: 'session' },
   { id: 'persona.open', m: ['POST'], path: p('/api/personas', id1, 'open'), auth: 'session' },
   { id: 'persona.runtimeSkills', m: ['GET', 'PUT'], path: p('/api/personas', id1, 'runtime-skills'), auth: 'session' },
   { id: 'persona.skills', m: ['GET', 'POST'], path: p('/api/personas', id1, 'skills'), auth: 'session' },
   { id: 'persona.skill.one', m: ['PUT', 'DELETE'], path: p('/api/personas', id1, 'skills', id1), auth: 'session' },
   { id: 'persona.feishu', m: ['GET', 'PUT', 'POST'], path: p('/api/personas', id1, 'feishu(?:/test|/start|/stop)?'), auth: 'session' },
-  { id: 'group.create', m: ['POST'], path: p('/api/groups'), auth: 'session', device: true,
+  { id: 'group.create', m: ['POST'], path: p('/api/groups'), auth: 'session',
     note: '手机建群（2026-11-05 实机：E4033，与 conv.create 同一个坑——路由没打 device 标）。只开**建**：改名/解散/换群助手/踢人仍是桌面的事' },
   { id: 'group.update', m: ['PATCH', 'PUT'], path: p('/api/groups', id1), auth: 'session' },
   { id: 'group.delete', m: ['DELETE'], path: p('/api/groups', id1), auth: 'session' },
-  { id: 'group.sessions', m: ['POST'], path: p('/api/groups', id1, 'sessions'), auth: 'session', device: true,
+  { id: 'group.sessions', m: ['POST'], path: p('/api/groups', id1, 'sessions'), auth: 'session',
     note: '手机进群聊天要用（2026-11-05）：群是"一次任务一段"，没有可复用的空会话时前端会落一段新的（groups.mjs）；不开 device 手机上"点群进详情再进聊天"就 E4033' },
-  { id: 'group.members', m: ['POST'], path: p('/api/groups', id1, 'members'), auth: 'session', device: true,
+  { id: 'group.members', m: ['POST'], path: p('/api/groups', id1, 'members'), auth: 'session',
     note: '手机建完群选人拉进来要用（2026-11-05 实机又 E4033）：建群时只勾了一部分人，事后补拉是同一动作的后半截；踢人（group.member.one）仍留桌面' },
   { id: 'group.member.one', m: ['DELETE'], path: p('/api/groups', id1, 'members', id1), auth: 'session' },
   { id: 'project.create', m: ['POST'], path: p('/api/projects'), auth: 'session' },
@@ -123,7 +119,7 @@ export const ROUTES = [
   { id: 'project.repoCards', m: ['GET', 'POST'], path: p('/api/projects', id1, 'repo-cards'), auth: 'session' },
   { id: 'card.delete', m: ['DELETE'], path: p('/api/projects/tasks', id1), auth: 'session' },
   { id: 'workflow.create', m: ['POST'], path: p('/api/workflows'), auth: 'session' },
-  { id: 'wf.tpl.list', m: ['GET'], path: p('/api/workflows/templates'), auth: 'session', device: true,
+  { id: 'wf.tpl.list', m: ['GET'], path: p('/api/workflows/templates'), auth: 'session',
     note: '只读清单（名字 + 发布态）：手机建定时任务时「交给流程」要选一条，读不到就成了"一条都没有"的假空态' },
   { id: 'wf.tpl.create', m: ['POST'], path: p('/api/workflows/templates'), auth: 'session' },
   { id: 'wf.tpl.one', m: ['GET', 'PUT', 'POST', 'DELETE'], path: p('/api/workflows/templates', id1), auth: 'session' },
@@ -134,16 +130,10 @@ export const ROUTES = [
   { id: 'wf.run.one', m: ['GET', 'DELETE'], path: p('/api/workflows/runs', id1), auth: 'session' },
   { id: 'wf.run.act', m: ['POST'], path: p('/api/workflows/runs', id1, '(?:start|decide|retry|assign|status|abort)'), auth: 'session' },
   { id: 'wf.run.stepCard', m: ['POST'], path: p('/api/workflows/runs', id1, 'tasks', id1, 'card'), auth: 'session' },
-  /*
-   * 定时任务（2026-11-06 手机开入口）：四条一起打 `device` 标 —— 手机工作台宫格
-   * 摆了「定时任务」这一格，少打一条就是"格子点得进去、点一下就 E4033"，看起来像坏了。
-   * 这也是 schedule:* 唯一的一组口，设备放开的粒度就是这四条（没有""只读"的中间档：
-   * 列表页上就挂着启停/立即跑/编辑/删除，只开 GET 等于摆一堆假按钮）。
-   */
-  { id: 'schedule.list', m: ['GET'], path: p('/api/schedules'), auth: 'session', device: true },
-  { id: 'schedule.create', m: ['POST'], path: p('/api/schedules'), auth: 'session', device: true },
-  { id: 'schedule.one', m: ['PATCH', 'DELETE'], path: p('/api/schedules', id1), auth: 'session', device: true },
-  { id: 'schedule.run', m: ['POST'], path: p('/api/schedules', id1, 'run'), auth: 'session', device: true },
+  { id: 'schedule.list', m: ['GET'], path: p('/api/schedules'), auth: 'session' },
+  { id: 'schedule.create', m: ['POST'], path: p('/api/schedules'), auth: 'session' },
+  { id: 'schedule.one', m: ['PATCH', 'DELETE'], path: p('/api/schedules', id1), auth: 'session' },
+  { id: 'schedule.run', m: ['POST'], path: p('/api/schedules', id1, 'run'), auth: 'session' },
   { id: 'skill.create', m: ['POST'], path: p('/api/skills'), auth: 'session' },
   { id: 'skill.discover', m: ['POST'], path: p('/api/skills/discover'), auth: 'session', noPanel: true, note: 'body 里 root 是任意本机路径 —— 供应链投毒面，panel 收' },
   { id: 'skill.import', m: ['POST'], path: p('/api/skills/import'), auth: 'session', noPanel: true, note: '同上' },
@@ -232,7 +222,7 @@ export const ROUTES = [
   { id: 'runtime.detect', m: ['GET'], path: p('/api/runtimes/detect'), auth: 'session' },
   { id: 'runtime.test', m: ['POST'], path: p('/api/runtimes/test'), auth: 'session' },
   { id: 'runtime.families', m: ['GET'], path: p('/api/runtime-families'), auth: 'session' },
-  { id: 'runtime.models', m: ['GET'], path: p('/api/runtimes', id1, 'models'), auth: 'session', device: true, note: '只读模型清单（2026-11-05）：手机能设模型就得能读清单 —— 名字列表，无敏感' },
+  { id: 'runtime.models', m: ['GET'], path: p('/api/runtimes', id1, 'models'), auth: 'session', note: '只读模型清单（2026-11-05）：手机能设模型就得能读清单 —— 名字列表，无敏感' },
   { id: 'lan.read', m: ['GET'], path: p('/api/lan'), auth: 'session' },
   { id: 'lan.write', m: ['POST'], path: p('/api/lan'), auth: 'session', noPanel: true, note: '局域网开关' },
   { id: 'control.restart', m: ['POST'], path: p('/api/control-plane/restart'), auth: 'session', noPanel: true, note: '重启控制面（改了监听地址后生效；只给被 systemd/桌面壳监护的进程，E1061）' },
@@ -240,12 +230,6 @@ export const ROUTES = [
   { id: 'expert.hire', m: ['POST'], path: p('/api/experts', id1, 'hire'), auth: 'session' },
   { id: 'expert.fire', m: ['POST'], path: p('/api/experts', id1, 'fire'), auth: 'session' },
   { id: 'agent.cards', m: ['POST'], path: p('/api/agent/cards'), auth: 'session', note: '建卡权按岗位认：PM brief 注入 + 403 E2057 在 handler（agent-auth）' },
-  { id: 'pair.tokens', m: ['POST'], path: p('/api/pair/tokens'), auth: 'session', noPanel: true },
-  { id: 'pair.enabled', m: ['POST'], path: p('/api/pair/enabled'), auth: 'session', noPanel: true, note: '手机连接总开关（关 = 断开全部 + 拒绝配对，E1707）' },
-  { id: 'pair.devices', m: ['GET'], path: p('/api/pair/devices'), auth: 'session', noPanel: true },
-  { id: 'pair.device.disconnect', m: ['POST'], path: p('/api/pair/devices', id1, 'disconnect'), auth: 'session', noPanel: true, note: '断开连接（行留着，手机能连回来）' },
-  { id: 'pair.device.revoke', m: ['POST'], path: p('/api/pair/devices', id1, 'revoke'), auth: 'session', noPanel: true },
-  { id: 'pair.device.forget', m: ['POST'], path: p('/api/pair/devices', id1, 'forget'), auth: 'session', noPanel: true },
   { id: 'users.list', m: ['GET'], path: p('/api/users'), auth: 'session', noPanel: true },
   { id: 'users.create', m: ['POST'], path: p('/api/users'), auth: 'session', noPanel: true, note: '建影子账号（预占名字，等中枢账号首次登录时绑定）' },
   { id: 'users.one', m: ['GET', 'PATCH', 'DELETE'], path: p('/api/users', id1), auth: 'session', noPanel: true },
@@ -284,11 +268,11 @@ export function isRegistered(pathname, method) {
  *   · **session 条目优先** —— 同一路径可能有多条登记（`/api/local/status` 一条
  *     auth:'local'、一条给登录用户的 session 条目），判"这个**已认证**的身份
  *     能不能过"该看 session 那条；
- *   · **方法必须命中** —— 同一路径不同方法待遇不同（`GET /api/prefs` 设备可读、
- *     `PUT /api/prefs` 只给登录用户；`GET /api/quota` 只读、`POST /api/quota`
+ *   · **方法必须命中** —— 同一路径不同方法待遇不同（`GET /api/prefs` 与
+ *     `PUT /api/prefs` 不是一回事；`GET /api/quota` 只读、`POST /api/quota`
  *     是 noPanel 的管理动作）。带 method 时**只认方法命中的条目**，找不到就
  *     返回 null（v2.8 修正：旧版回落到同路径其它方法的条目，未登记的方法会
- *     借别的条目的 device:true 放行 —— 方法闸等于没有）。
+ *     借别的条目的宽松标放行 —— 方法闸等于没有）。
  */
 export function findRoute(pathname, method) {
   const p = String(pathname ?? '');

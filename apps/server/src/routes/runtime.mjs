@@ -122,7 +122,6 @@ export async function handleRuntime(req, res, url) {
       }
       const patch = {};
       if (typeof body?.acceptNodes === 'boolean') patch.acceptNodes = body.acceptNodes;
-      if (typeof body?.pairEnabled === 'boolean') patch.pairEnabled = body.pairEnabled;
       /*
        * 网络周界（2026-11-03，安全页「网络访问」卡）：授权 IP 白名单 + 域名绑定。
        * 名单**先整体校验再入库**（一条写错就整份不存 —— 存一半等于让人以为防住了）；
@@ -171,8 +170,6 @@ export async function handleRuntime(req, res, url) {
     const boundLan = !netmode.isLoopback(SERVER.boundHost); // 实际听着非回环吗（BANDI_HOST=127.0.0.1 调试时才是 false）
     return sendJson(res, 200, {
       acceptNodes: nm.acceptNodes,
-      // 手机连接总开关（2026-11-02，「手机连接」页顶那颗；关 = 不发码 + 拒绝配对 + 断开全部）
-      pairEnabled: nm.pairEnabled,
       // 网络周界（2026-11-03，安全页「网络访问」卡）。yourIp：界面提示"你会被自动加进名单"用
       whitelistEnabled: nm.whitelistEnabled,
       whitelistIps: nm.whitelistIps,

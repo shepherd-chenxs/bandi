@@ -5,7 +5,8 @@ import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { port, extraOrigins, lanOrigins } from './config.mjs';
+import { port, extraOrigins, lanOrigins, dataDir } from './config.mjs';
+import { relayHosts, relayOrigins } from './hub/relay.mjs';
 
 // 静态文件根：apps/web（serveStatic 用；路径深度与 server.mjs 同层）
 // **导出**：/api/web-version 的指纹也要 stat 这里的文件（server.mjs 引它），别再各算一份。
@@ -95,6 +96,13 @@ function localAddresses() {
         /* 非法来源在 config 解析时已有自己的校验，这里不重复报错 */
       }
     }
+    /*
+     * 中枢下发的隧道域名（2026-11-07 外网访问）：`<设备>.d.<域>` 是外网那一侧写进
+     * Host 的名字。它不在任何网卡上，凭 `BANDI_ORIGINS` 又只有"启动它的那个终端"知道
+     * —— 开机自启不带，重启一次就 403。所以按配置现算，与网卡地址同级放行。
+     * 放行的只是**这一个**中枢签发的名字，不是"任何域名"，DNS rebinding 的口子没开。
+     */
+    for (const h of relayHosts(dataDir)) localAddrs.add(h);
     localAddrsAt = now;
   }
   return localAddrs;
@@ -129,6 +137,9 @@ export function allowedOrigins() {
     `http://localhost:${port}`,
     ...extraOrigins,
     ...lanOrigins(),
+    // 隧道域名（中枢下发，见 hub/relay.mjs）。写请求的 Origin 就是它 —— 不在这里
+    // 放行的话，外网页面打得开、点一下全 403 E3001，看着像坏了。
+    ...relayOrigins(dataDir),
   ]);
 }
 

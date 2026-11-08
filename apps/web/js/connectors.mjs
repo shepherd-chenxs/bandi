@@ -4,6 +4,7 @@ import { esc, toast } from './shell.mjs';
 import { api, failHtml, initial, post } from './ui.mjs';
 import { setNav } from './state.mjs';
 import { openSettings } from './settings.mjs';
+import { mountRemoteAccessCard } from './securityadmin.mjs';
 import { confirmDo, paintLocalRuntimes, renderBackupSection, renderCliDetail, taskTail } from './machine.mjs';
 import { renderList } from './contacts.mjs';
 import { openProjectsPage, openTaskBoard } from './projects.mjs';
@@ -1106,6 +1107,11 @@ export async function renderDeviceList() {
            命令行（bandi nodes join，总机发码 bandi nodes invite）。 -->
       <!-- 「运行时」区（2026-11-01 七改，用户："把运行时放到这个页面的数据管理上面"）：
            本机的「已安装」长在这页，看运行时不用再点进本机详情（paintLocalRuntimes）。 -->
+      <!-- 「远程连接」卡（2026-11-07 从安全页迁来，用户："把远程连接放到这台设备里"）：
+           监听开关（开 = 0.0.0.0 局域网可连 / 关 = 只听本机），渲染+接线都在
+           securityadmin.mjs 的 mountRemoteAccessCard 里；非 admin 静默不画。
+           不 await：自己拉 /api/lan 自己画，别挡着下面两块先出来。 -->
+      <div id="remoteMount"></div>
       <div id="rtMount"></div>
       <!-- 「数据管理」区（2026-10-29 从设置独立分节降级成这页的一个区，用户："把数据管理
            作为这台机器的一个区域"）：不跟模式走 —— 模式切换只重画上面两块，这里原地不动。
@@ -1122,6 +1128,8 @@ export async function renderDeviceList() {
      的 #clBranchMount）—— 这页不再挂它，renderCollabSection / watchCollabSection 的
      import 一并撤了（collab.mjs 自己用，不再外借）。 */
 
+  /* 「远程连接」卡（2026-11-07 从安全页迁来）：页头下面第一块，不 await */
+  mountRemoteAccessCard($('remoteMount'));
   /* 「运行时」区（2026-11-01 七改）：本机的「已安装」长在这页 —— 数据管理上面。
      不 await：区块自己拉数据自己画，别挡着数据管理区先出来 */
   if (localDev) paintLocalRuntimes($('rtMount'), localDev.id).catch(() => {});

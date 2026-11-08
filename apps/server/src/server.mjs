@@ -36,7 +36,6 @@ import * as localSecret from './security/local-secret.mjs';
 import * as tlsCheck from './security/tls-check.mjs';
 import { isLoopbackHost } from './security/source.mjs';
 import { handleConversation } from './routes/conversation.mjs';
-import { handlePair } from './routes/pair.mjs';
 import { handleEvents } from './routes/events.mjs';
 import { handlePersona } from './routes/persona.mjs';
 import { handleAgentCards } from './routes/agent-cards.mjs';
@@ -68,6 +67,8 @@ import { handleLocal, supervisorModule } from './routes/local.mjs';
 // 身份中枢进门（2026-11-06）：`GET /hub/enter?ticket=…` —— 验票 → 查本地授权表 → 发会话
 import { handleHub } from './routes/hub.mjs';
 import * as hub from './hub/join.mjs';
+// 外网访问的机器侧一半（2026-11-07）：中枢下发 relay → 起 frpc 隧道。没配置时整个空转。
+import * as tunnel from './hub/tunnel.mjs';
 import { sendJson, fail, readBody, guardWrite, guardHost, serveStatic, BadRequest, allowedOrigins, webDir } from './http.mjs';
 import { SERVER } from './server-state.mjs';
 import { runtimeOptions, runtimesOk, withExternals } from './runtime-view.mjs';
@@ -119,7 +120,7 @@ function helloPayload() {
     /*
      * **机器角色**（2026-10-28 节点配置面）：`node` = 这台机器已加入某台总机；
      * `operator` = 未加入（本机单机版）。前端的菜单矩阵要它，跟"打开页面的人是谁"
-     * （`/api/pair/me` 的 operator/device）是**两个概念**，别混。
+     * （`/api/me` 的 operator/user）是**两个概念**，别混。
      *
      * ⚠️ 必须 `isJoined()` **每次现读 config.json**，不能用 `config.clientJoined` ——
      * 那是**模块求值时**拍下的快照，运行期"加入 / 退出总机"之后它就过期了
@@ -128,6 +129,25 @@ function helloPayload() {
     role: localMode.isJoined() ? 'node' : 'operator',
     // 能力声明：有这个才认得出 `scope` 字段（旧总机没有 → 加入方回 E2050，不静默降级）
     caps: ['scope'],
+    /*
+     * 外网访问（2026-11-08）：**只报门牌号和连接状态**。
+     *
+     * 这个响应是免令牌的（局域网探活、手机端探活都读它），所以字段要克制：
+     * 门牌号本身不是秘密（知道地址的人照样要先过中枢登录），但 token、pid、
+     * 可执行文件路径不是 —— 一律不外带。
+     *
+     * 为什么非得放这儿：朋友装完、出门，手机连不上时唯一能自查的地方就是这一行。
+     * 界面上没有它，"隧道在不在连"就只能靠远程看日志，等于把排查成本全推给用户。
+     */
+    relay: (() => {
+      const t = tunnel.status();
+      return {
+        // off：中枢没下发；unavailable：本机没有 frpc；up：已连；retrying / failed：在重连
+        state: t.state,
+        url: t.publicUrl ?? null,
+        since: t.since ?? null,
+      };
+    })(),
   };
 }
 
@@ -558,39 +578,19 @@ const server = http.createServer(async (req, res) => {
 
     if (!url.pathname.startsWith('/api/')) {
       /*
-       * CSRF 值的自愈补种（2026-11-01）：浏览器里可能只有 `bandi_sid`/`bandi_token`
-       * 而没有 `bandi_csrf`（老版本种的 Cookie、或用脚本/工具手工设过令牌），
-       * 这时所有写请求都会 E4099，用户看到的就是"按钮点了没反应"。
-       * 每个 HTML 页面响应顺手补一枚（已有就不动）—— 打开一次页面即自愈。
+       * CSRF 值的自愈补种（2026-11-01）：浏览器里可能只有 `bandi_sid` 而没有
+       * `bandi_csrf`（老版本种的 Cookie、或用脚本/工具手工设过令牌），这时所有写请求
+       * 都会 E4099，用户看到的就是"按钮点了没反应"。每个 HTML 页面响应顺手补一枚
+       * （已有就不动）—— 打开一次页面即自愈。
        *
-       * ⚠️ 必须放在 `/pair` 分支**前面**（2026-11-03 实机踩过 E4099）：`bandi_csrf`
-       * 只活 1 天（Max-Age=86400），而 bandi_sid / bandi_token 活 30 天 / 1 年 ——
-       * "凭据还在、csrf 先过期"是常态而非意外。这对 Cookie 一旦凑不齐，手机扫码
-       * 落地页的 claim 就是"带 Cookie 凭据的写请求"，直接 403 E4099（配对失败）。
-       * 最初补种写在 /pair 分支之后，而 /pair 提前 return 了，扫码页恰好是唯一
-       * 自愈不了、又偏偏最需要自愈的页面 —— 手机没有地址栏，用户只会"重新扫码"，
-       * 死循环。放在这里 = 任何 HTML 响应（含 /pair）都先补种再说话。
+       * 2026-11-07 起只有登录页和主页面两条 HTML 出口（扫码落地页随设备令牌体系退场），
+       * 这一层仍然要有：`bandi_csrf` 只活 1 天、`bandi_sid` 活 30 天，"凭据还在、
+       * csrf 先过期"是常态，不是意外。
        */
-      const wantsHtmlPage = url.pathname === '/' || url.pathname === '/pair' || url.pathname === '/pair.html'
+      const wantsHtmlPage = url.pathname === '/'
         || url.pathname.endsWith('.html')
         || String(req.headers.accept ?? '').includes('text/html');
       if (wantsHtmlPage && !csrf.valuesOf(req).cookie) res.setHeader('Set-Cookie', csrf.cookieFor(csrf.mint()));
-      /*
-       * 扫码落地页（2026-11 手机端增量）：`GET /pair?token=…` → apps/web/pair.html。
-       * 不能走 serveStatic('/pair') —— 它按路径找文件会 404；这里显式映射。
-       * 页面校验不做在这里：guard 已豁免这条路（免令牌），token 的校验在 claim 接口。
-       */
-      if (url.pathname === '/pair' || url.pathname === '/pair.html') {
-        try {
-          const buf = fs.readFileSync(path.join(webDir, 'pair.html'));
-          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
-          res.end(buf);
-        } catch {
-          res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
-          res.end('配对页还没就绪（apps/web/pair.html 不存在）');
-        }
-        return;
-      }
       if (serveStatic(res, url.pathname)) return;
       res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
       res.end('没有这个文件');
@@ -620,10 +620,6 @@ const server = http.createServer(async (req, res) => {
     // 全局 SSE（/api/events）：挂在链头 —— 长命连接，别让它在别的 handler 里排队
     const handledEvents = await handleEvents(req, res, url);
     if (handledEvents !== false) return;
-
-    // 手机配对与设备管理（2026-11 手机端增量）：自己判路径，放在会话链之前（设计 §2）
-    const handledPair = await handlePair(req, res, url);
-    if (handledPair !== false) return;
 
     const handledConversation = await handleConversation(req, res, url);
     if (handledConversation !== false) return;
@@ -939,11 +935,31 @@ server.listen(port, SERVER.boundHost, logListen);
  * 写进 hub.json 之后，最多 60 秒这边就跟上了，不用重启服务。
  */
 try {
-  if (hub.startHeartbeat({ dataDir, port, version: localMode.platformVersion() }).joined) {
+  if (hub.startHeartbeat({
+    dataDir,
+    port,
+    version: localMode.platformVersion(),
+    // 中枢在心跳里改派 / 撤销隧道时，这边 60 秒内自己跟上，不用重启服务
+    onBeat: () => tunnel.apply({ dataDir, port }),
+  }).joined) {
     console.log('[中枢] 已恢复心跳');
   }
 } catch (e) {
   console.warn(`[中枢] 心跳没起来（不影响本机使用）：${e?.message ?? e}`);
+}
+
+/*
+ * 外网访问（2026-11-07）：有 relay 配置就把隧道拉起来，没有就什么都不做。
+ *
+ * **失败不拦启动** —— frpc 不在、中枢没开通、家里断网，这台机器照样是完整的班底，
+ * 只是外面连不进来。所以这里连 `apply` 都不 await，更不 exit。
+ */
+try {
+  const t = tunnel.apply({ dataDir, port });
+  if (t.state === 'unavailable') console.log('[外网] 没装 frpc，仅本机/局域网可用');
+  else if (t.state !== 'off') console.log(`[外网] 隧道 ${t.state}${t.publicUrl ? ` ${t.publicUrl}` : ''}`);
+} catch (e) {
+  console.warn(`[外网] 隧道没起来（不影响本机使用）：${e?.message ?? e}`);
 }
 
 /**

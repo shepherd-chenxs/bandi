@@ -84,11 +84,21 @@ const HOST_ALLOW = [
   // 浏览器/编辑器不会去 GET 它；2026-10-20 新增独立图标母版 icons/icon.svg 时被误判成"外部地址"。
   'www.w3.org',
   // 身份中枢（2026-11-07 起 hub 化的唯一登录路径）：用户自建部署的官方中枢，
-  // 登录 / 名册 / 签票都直连它 —— 见 docs/现状.md §二十五、bandi-hub/contract.md。
+  // 登录 / 名册 / 签票都直连它 —— 见 bandi-hub/contract.md。
   'hub.yuancang.space',
   // Android XML 命名空间（AndroidManifest / 布局文件的 xmlns 声明）——
   // 不是网络地址，是每个 Android 工程文件的标准头（2026-11-07 原生壳 apps/mobile-native）。
   'schemas.android.com',
+  // frp 源码/发布包下载镜像（2026-11-08，apps/desktop/build-frpc.mjs 与 fetch-frpc.mjs）：
+  // 与上面 gh-proxy.com 同一类 —— GitHub 发布文件的中转，不是新的上游。
+  // 为什么敢用：产物有硬校验兜底（fetch 走官方 frp_sha256_checksums.txt、
+  // build 用官方 tar 包 + 本地编译），镜像改不了内容；不用它的话本机实测
+  // 直连 GitHub 40 秒只下 635KB、随机卡死。
+  'ghfast.top',
+  // Go 模块代理（2026-11-08，build-frpc.mjs 编译 frpc 时用）：goproxy.cn 是
+  // goproxy.io 的国内官方代理，只代理 `go mod download` 的模块，不承载我们的分发；
+  // 源码版本由 go.mod + 官方 tar 包锁定，模块被换也会编译失败或校验不过。
+  'goproxy.cn',
 ];
 
 /*
@@ -96,7 +106,7 @@ const HOST_ALLOW = [
  * 旧用例 / 旧断言，在这里登记 file → 理由（口径出处 + 新验收在哪）才放行；
  * 没登记的净删照拦 —— 这张表只豁免「口径变化带走的那批」，不是放松的口子。
  * 本批（2026-11-07）：本地账号体系 / 角色 / 协作中心退场 + 登录即放行改写，
- * 见 docs/现状.md §二十六 / §二十七 / §二十八；替代验收 = 各冒烟的 hub 登录路径
+ * 见 docs/形态决策.md §十五 ②③④；替代验收 = 各冒烟的 hub 登录路径
  * + run-smokes 全绿。
  */
 const ASSERT_WAIVERS = {
@@ -111,6 +121,11 @@ const ASSERT_WAIVERS = {
   'apps/server/src/smoke-proxy-auth.mjs': 'LAN 令牌段随「缺省对外 + 全要登录」退场（§二十六）',
   'apps/server/src/smoke-security-policy.mjs': '角色权限词表 / 最后一个管理员保护退场（§二十六）：机器身份边界保留',
   'apps/server/src/smoke-users.mjs': '影子账号从「收敛首账号」改「登录即放行各建影子」（§二十八），断言随口径重写',
+  // 本批（2026-11-08）：手机配对体系（扫码 / 邀请码 / 设备令牌）整体退场收尾，
+  // 见 docs/形态决策.md §十五 ④；替代验收 = 各冒烟的 hub 登录路径 + run-smokes 全绿。
+  'apps/server/src/smoke-pair.mjs': '配对链路整套退场（§十五 ④）：手机只走中枢账号登录；替代验收 smoke-hub / smoke-auth 的登录路径',
+  'apps/server/src/smoke-device-routes.mjs': 'device 身份与 device 白名单退场（§十五 ④）：无手机专属路由可测；机器身份边界仍在 smoke-security-policy',
+  'apps/server/src/smoke-lan-origin.mjs': 'LAN 令牌口径随「全部都要登录」退场（§十五 ④），断言改写为 hub 登录口径（改写保留 5 条，净减 1 条为删除令牌段用例）',
 };
 
 /*

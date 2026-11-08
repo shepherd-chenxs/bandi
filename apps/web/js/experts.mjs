@@ -567,16 +567,13 @@ export async function openPlugins() {
   }
   savePlace();             // 点一级栏 = 回宫格首页，这个位置也要记
   /*
-   * 设备形态（2026-10-28）：`/api/plugins` 不在白名单（插件目录含磁盘路径），
-   * 硬拉只会吃一条 403。设备端宫格由「项目 / 任务看板」两格组成（见 renderWorkbenchGrid）。
-   *
    * ⚠️ 手机形态功能子集（2026-11-03 用户拍板）：设备绑人之后手机以**真人账号**登录，
    * /api/plugins 也能拉到了 —— 但手机只要四 tab 核心，插件宫格整个是 PC 独有功能。
    * 窄屏（body.mb-narrow，mobile.mjs 维护）同样不拉清单：不渲染就不存在适配，
    * 也省一次带磁盘路径的请求。与设备形态殊途同归：宫格只留项目与看板。
    */
   const onPhone = document.body.classList.contains('mb-narrow');
-  if (S.isDevice || onPhone) {
+  if (onPhone) {
     S.plugins = [];
   } else {
     try {
@@ -622,12 +619,6 @@ export function renderWorkbenchGrid() {
   resetWbHues(); // 每次重画从头发色：分组顺序不变 → 颜色不变；顺序变了 → 颜色跟着重排（不追求跨次稳定）
   const list = usablePlugins();
   /*
-   * 设备形态（2026-10-28）：手机白名单里没有 `/api/plugins`，也没有代码托管/远程连接/
-   * 定时任务/工作流设计那几个口（全部 403）。宫格只留**真能用**的项目与任务看板两格，
-   * 否则用户点一个吃一个 E4033 —— 「没权限」看起来就像「坏了」。
-   */
-  const devMode = !!S.isDevice;
-  /*
    * 手机形态功能子集（2026-11-03 用户拍板"手机只要一部分功能，甚至是简化版"）：
    * 窄屏（body.mb-narrow，mobile.mjs 维护）宫格不画插件、研发、坏插件提示 ——
    * 插件、研发是 PC 独有功能，不是藏起来、是根本不进 DOM：
@@ -637,11 +628,11 @@ export function renderWorkbenchGrid() {
    * 2026-11-06 开放「定时任务」：手机上也能建/管定时任务。设备形态在 route-policy
    * 里给四条 schedule 路由打了 device 标。工作流设计器仍是 PC 独有。
    *
-   * 2026-11-07 起不再有"被角色砍过的账号"（登录即全权，角色体系已退场）——
-   * 宫格的收敛只剩设备形态与窄屏两种。
+   * 2026-11-07 起不再有"被角色砍过的账号"，也没有设备形态（登录即全权，两套体系都已退场）——
+   * 宫格的收敛只剩窄屏一种。
    */
   const onPhone = document.body.classList.contains('mb-narrow');
-  const gridLite = devMode || onPhone;
+  const gridLite = onPhone;
   /*
    * 手机宫格补「定时任务」一格（工作流设计器仍是 PC 独有：画布拖节点在窄屏没法用）。
    */
@@ -699,7 +690,7 @@ export function renderWorkbenchGrid() {
               ),
             )
             .join('')}
-          ${cat === '研发' && !devMode
+          ${cat === '研发'
             ? DEV_TILES.map(([name, desc, key, icon]) =>
                 wbCard('wb-tint', icon, name, desc, `data-wb-settings="${key}"`, icoStyle),
               ).join('')

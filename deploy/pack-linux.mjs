@@ -13,6 +13,7 @@
  *   bandi/skills                  技能（skillsRoot）
  *   bandi/plugins                 插件（pluginsRoot）
  *   bandi/deploy                  systemd 模板 / 用户态脚本 / README
+ *   bandi/vendor/frp/frpc         外网访问的隧道客户端（中枢下发 relay 后由控制面拉起）
  *   bandi/version.json            版本号（local-mode 在安装根找它，与 NSIS 同一约定）
  *   bandi/install.sh              安装脚本
  *
@@ -23,6 +24,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { fetchFrpc } from '../apps/desktop/fetch-frpc.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
@@ -97,6 +99,17 @@ fs.cpSync(path.join(root, 'apps/server/src'), path.join(pkg, 'apps/server/src'),
 
 // 版本号放安装根（local-mode 在 repoRoot/version.json 找它）
 fs.writeFileSync(path.join(pkg, 'version.json'), `${JSON.stringify({ version }, null, 2)}\n`);
+
+/*
+ * 外网访问要的 frpc（2026-11-08）：**固定取 linux-x64**，不管打包机是什么系统
+ * —— 这个包是给 Linux 服务器/台式机用的，取宿主那份等于打进去一个跑不起来的 exe。
+ * 落点 `bandi/vendor/frp/` 与控制面 `hub/tunnel.mjs#findBin()` 的
+ * `<repoRoot>/vendor/frp/frpc` 对齐（Linux 布局里 repoRoot 就是解压后的 bandi/）。
+ */
+const frpc = await fetchFrpc({ target: 'linux-x64', outDir: path.join(pkg, 'vendor', 'frp') });
+fs.chmodSync(frpc.bin, 0o755); // Windows 上打包没有 +x，tar 会原样带过去
+say(`frpc v${frpc.version} → vendor/frp/frpc`);
+
 // 安装脚本放包根（解压即见：cd bandi && sudo sh install.sh）
 fs.copyFileSync(path.join(root, 'deploy', 'install.sh'), path.join(pkg, 'install.sh'));
 

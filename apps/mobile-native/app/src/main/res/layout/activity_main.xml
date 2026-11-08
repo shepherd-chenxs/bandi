@@ -160,15 +160,34 @@
         android:orientation="vertical"
         android:visibility="gone">
 
-        <TextView
-            android:layout_width="wrap_content"
+        <!-- 标题行：标题占满，右上角「退出登录」图标（2026-11-08） -->
+        <LinearLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:paddingStart="24dp"
-            android:paddingEnd="24dp"
-            android:paddingTop="24dp"
-            android:textAppearance="?attr/textAppearanceHeadlineSmall"
-            android:textStyle="bold"
-            android:text="选择电脑" />
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingTop="24dp">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:paddingStart="24dp"
+                android:paddingEnd="24dp"
+                android:textAppearance="?attr/textAppearanceHeadlineSmall"
+                android:textStyle="bold"
+                android:text="选择电脑" />
+
+            <ImageButton
+                android:id="@+id/logoutBtn"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:layout_marginStart="8dp"
+                android:layout_marginEnd="16dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:src="@drawable/ic_logout"
+                android:contentDescription="退出登录" />
+        </LinearLayout>
 
         <TextView
             android:id="@+id/devSub"
@@ -220,5 +239,171 @@
             android:id="@+id/panelWebView"
             android:layout_width="match_parent"
             android:layout_height="match_parent" />
+
+        <!--
+            面板顶部的连接状态条（2026-11-08）：现在只在**恢复**时露一下脸（绿色「已恢复连接」，
+            1.4 秒后自动收起）；离线时由下面的 viewOffline 蒙版接管，不再用这条细条。
+            这一层只有壳能画：网页感知不到 TCP 已断（SSE 只会静默重连）。
+        -->
+        <LinearLayout
+            android:id="@+id/connBar"
+            android:layout_width="match_parent"
+            android:layout_height="44dp"
+            android:layout_gravity="top"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingStart="16dp"
+            android:paddingEnd="8dp"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/connText"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:textAppearance="?attr/textAppearanceBodyMedium"
+                android:maxLines="1"
+                android:ellipsize="end"
+                android:text="这台电脑已离线 · 正在重连…" />
+
+            <TextView
+                android:id="@+id/connAction"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:gravity="center"
+                android:paddingStart="12dp"
+                android:paddingEnd="12dp"
+                android:background="?attr/selectableItemBackground"
+                android:textAppearance="?attr/textAppearanceLabelLarge"
+                android:text="返回列表" />
+        </LinearLayout>
+
+        <!--
+            面板连不上机器时的兜底层（2026-11-08）：
+            机器掉线/睡眠时 WebView 自己会画系统错误页（"网页无法打开 net::ERR_…"），
+            那是 Android 的默认行为，不该露给用户 —— 主框架加载失败时盖住 WebView，
+            给一句人话 + 重试 + 回设备列表。成功加载后自动收掉（见 MainActivity）。
+        -->
+        <LinearLayout
+            android:id="@+id/viewPanelError"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="?attr/colorSurface"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:paddingStart="32dp"
+            android:paddingEnd="32dp"
+            android:visibility="gone">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textAppearance="?attr/textAppearanceHeadlineSmall"
+                android:textStyle="bold"
+                android:text="连不上这台机器" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:gravity="center"
+                android:textAppearance="?attr/textAppearanceBodyMedium"
+                android:textColor="?android:attr/textColorSecondary"
+                android:text="E0001 · 它可能关机了、睡着了，或手机不在同一个网络" />
+
+            <TextView
+                android:id="@+id/panelErrAddr"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:gravity="center"
+                android:textAppearance="?attr/textAppearanceBodySmall"
+                android:textColor="?android:attr/textColorSecondary"
+                android:typeface="monospace"
+                android:visibility="gone" />
+
+            <Button
+                android:id="@+id/panelRetryBtn"
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:layout_marginTop="32dp"
+                android:text="重试" />
+
+            <Button
+                android:id="@+id/panelBackBtn"
+                style="@style/Widget.Material3.Button.OutlinedButton"
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:layout_marginTop="10dp"
+                android:text="返回设备列表" />
+        </LinearLayout>
+
+        <!--
+            离线蒙版（2026-11-08，用户拍板）：既然电脑已经离线，在死页面上点来点去没有意义。
+            判定离线就整页盖住（页面本体留在原地，恢复后立刻接着用，不重新加载、不丢状态），
+            说清楚"等它回来"并给两条出路：立即重试 / 返回列表。
+            放在 viewPanelError 之后 = 压在最上层：离线时错误层、状态条都不必露脸。
+        -->
+        <LinearLayout
+            android:id="@+id/viewOffline"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="?attr/colorSurface"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:paddingStart="32dp"
+            android:paddingEnd="32dp"
+            android:visibility="gone">
+
+            <ProgressBar
+                android:layout_width="26dp"
+                android:layout_height="26dp"
+                android:indeterminate="true" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="18dp"
+                android:textAppearance="?attr/textAppearanceHeadlineSmall"
+                android:textStyle="bold"
+                android:text="这台电脑离线了" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:gravity="center"
+                android:textAppearance="?attr/textAppearanceBodyMedium"
+                android:textColor="?android:attr/textColorSecondary"
+                android:text="他那边断网、睡眠或关机了。恢复后会自动接上，刚才的页面还在。" />
+
+            <TextView
+                android:id="@+id/offlineAddr"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:gravity="center"
+                android:textAppearance="?attr/textAppearanceBodySmall"
+                android:textColor="?android:attr/textColorSecondary"
+                android:typeface="monospace"
+                android:visibility="gone" />
+
+            <Button
+                android:id="@+id/offlineRetryBtn"
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:layout_marginTop="28dp"
+                android:text="立即重试" />
+
+            <Button
+                android:id="@+id/offlineBackBtn"
+                style="@style/Widget.Material3.Button.OutlinedButton"
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:layout_marginTop="10dp"
+                android:text="返回设备列表" />
+        </LinearLayout>
     </FrameLayout>
 </FrameLayout>

@@ -35,7 +35,7 @@
 ### 4. 改了行为，就要一起改文档和注释（这条最容易欠账）
 
 **活文档**（行为变了必须同步，否则按缺陷算）：`README.md`、`SECURITY.md`、`CONTRIBUTING.md`、
-`docs/架构.md`、`docs/现状.md`（开发台账）、`docs/mobile/pwa-design.md`、`deploy/README.md`。
+`docs/架构.md`、`docs/形态决策.md`（含「已经撤掉过什么」）、`docs/mobile/pwa-design.md`、`deploy/README.md`。
 
 **时间点快照**（`docs/design/*`、`docs/prd/*`、`docs/mobile/pwa-prd.md`）：**不回写历史**，
 但新的决策文件里要写明取代了谁；活文档里提到它们时，注明"哪一版起变了"。

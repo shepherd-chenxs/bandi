@@ -63,7 +63,6 @@ export function principalKind(auth) {
   if (auth.kind === 'operator') return 'operator';
   // 登录用户 = 全权（2026-11-07 角色体系退场）：与 operator 同档对待
   if (auth.kind === 'user') return 'admin';
-  if (auth.kind === 'device') return 'device';
   if (auth.kind === 'node') {
     const scope = auth.scope instanceof Set ? auth.scope : new Set();
     return scope.has(SCOPE_PANEL) ? 'panel' : 'compute';

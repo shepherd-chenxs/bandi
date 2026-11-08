@@ -1,14 +1,14 @@
 /*
  * smoke-security-policy.mjs —— 2026-11-07 验收（hub-only 模型，删本地凭据层 + 角色/菜单权限体系）：
- *   · A. 清单纯逻辑校验（登记项 id 唯一、无 perm/member 残留、device/compute/noPanel 标记、
+ *   · A. 清单纯逻辑校验（登记项 id 唯一、无 perm/member/device 残留、compute/noPanel 标记、
  *        findRoute 优先级）；
  *   · B. 覆盖率扫描：routes/*.mjs + server.mjs 里出现的每个 /api 字面量必须已登记
  *     （"未登记即拒绝"的另一面 = "存在的接口必须登记"，漏登记 = 上线即 404 E4090）；
- *   · C. 身份 × 路由矩阵（调 PDP 纯函数 authorize）：operator / user / device / node / revoked
- *        五种身份对基线、管理面、节点自端点、设备白名单的判定；
+ *   · C. 身份 × 路由矩阵（调 PDP 纯函数 authorize）：operator / user / node / revoked
+ *        四种身份对基线、管理面、节点自端点的判定；
  *   · D. 起真服务（回环形态，免鉴权 operator）冒烟：/api/hello 起得来、operator 全通；
  *   · E. 服务器形态（0.0.0.0）的真会话矩阵：中枢登录的普通用户摸原来 admin 专属的
- *        管理面 / 审计口（登录即全权），compute / panel / device / revoked 照旧各自有边界。
+ *        管理面 / 审计口（登录即全权），compute / panel / revoked 照旧各自有边界。
  *
  * 跑法：`SMOKE_PORT=8908 node apps/server/src/smoke-security-policy.mjs`
  *   （端口从 process.env.SMOKE_PORT 派生，缺省 8908；D / E 先后共用同一端口）。
@@ -99,7 +99,6 @@ console.log('\nC. 身份 × 路由矩阵（PDP 纯函数 authorize）');
   const who = {
     operator: { kind: 'operator' },
     user: { kind: 'user' },
-    device: { kind: 'device' },
     nodeCompute: { kind: 'node', scope: new Set(['compute']), nodeId: 'sp-node' },
     nodePanel: { kind: 'node', scope: new Set(['panel']), nodeId: 'sp-node' },
     revoked: { kind: 'revoked' },
@@ -114,11 +113,6 @@ console.log('\nC. 身份 × 路由矩阵（PDP 纯函数 authorize）');
   // user（登录 = 全权，2026-11-07 起无角色闸）：连管理面 / 安全面都直接放行
   check('user 读 /api/users → allow（登录即全权）', a(who.user, 'GET', '/api/users') === 'allow');
   check('user 读 /api/security/audit → allow（无 roleHasPerm 闸）', a(who.user, 'GET', '/api/security/audit') === 'allow');
-
-  // device：白名单制（只认 device:true 的路由）
-  check('device 读 /api/state → allow（state.read 标 device）', a(who.device, 'GET', '/api/state') === 'allow');
-  check('device 读 /api/users → E4033（未标 device）', a(who.device, 'GET', '/api/users') === 'E4033');
-  check('device 写 /api/local/export → E4033（非白名单）', a(who.device, 'POST', '/api/local/export') === 'E4033');
 
   // node（compute scope）：只许"自己的活"
   check('compute 报到 → allow（nodes.register compute + 归属命中）', a(who.nodeCompute, 'POST', '/api/nodes/register', reachRules) === 'allow');
@@ -284,20 +278,8 @@ try {
   const fsByPanel = await call('GET', '/api/fs/dirs', { headers: NB });
   check('panel 列目录 → 403 E4032', fsByPanel.status === 403 && fsByPanel.json?.code === 'E4032', String(fsByPanel.status));
 
-  // ⑤ device 令牌：配对 → 白名单基线（2026-11-01 起发的是 9 位数字邀请码 code）
-  const pairCode = await call('POST', '/api/pair/tokens', { headers: OP() });
-  const claim = await call('POST', '/api/pair/claim', { body: { code: pairCode.json?.code ?? '', name: '测试手机' } });
-  const devTok = /bandi_token=([^;]+)/.exec(claim.setCookie)?.[1] ?? '';
-  check('手机配对换设备令牌 → 200', claim.status === 200 && !!devTok, `${claim.status} ${claim.raw.slice(0, 80)}`);
-  const DB = { 'X-Bandi-Token': devTok };
-  if (devTok) {
-    check('device 读 /api/state → 200（白名单）', (await call('GET', '/api/state', { headers: DB })).status === 200);
-    check('device 读 /api/prefs → 200（白名单内）', (await call('GET', '/api/prefs', { headers: DB })).status === 200);
-    const usersByDev = await call('GET', '/api/users', { headers: DB });
-    check('device 读 /api/users → 403 E4033', usersByDev.status === 403 && usersByDev.json?.code === 'E4033', String(usersByDev.status));
-    const prefsByDev = await call('PUT', '/api/prefs', { headers: DB, body: {} });
-    check('device 改偏好 → 403 E4033（PUT /api/prefs 没打 device 标）', prefsByDev.status === 403 && prefsByDev.json?.code === 'E4033', `${prefsByDev.status} ${prefsByDev.json?.code}`);
-  }
+  // ⑤ device 令牌那一段随手机配对体系退场（2026-11-07）：手机现在也是登录用户，
+  //    没有"设备白名单"这层要钉了。
 
   // ⑥ 撤销令牌：忘掉节点 → bn_ 变 revoked（E4012）
   await call('DELETE', '/api/nodes/sp-node', { headers: OP() });

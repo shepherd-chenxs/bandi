@@ -124,9 +124,9 @@ export async function handleHub(req, res, url, { dataDir, port }) {
 
   /*
    * 顺手清掉访问令牌 Cookie。guard 的顺序是**令牌优先、会话兜底**（那条不能动：
-   * 一个陈旧的会话不该把握着令牌的请求降权），所以浏览器里若还躺着上一次配对的
-   * `bd_` 设备令牌，它会压过刚发的会话，用户点进来却看到 403。
-   * 清掉只影响这一个源 —— 手机下次走老路扫码配对时会重新种一枚。
+   * 一个陈旧的会话不该把握着令牌的请求降权），所以浏览器里若还躺着旧版手机配对留下的
+   * `bd_` 设备令牌，它会压过刚发的会话，用户点进来却看到 403（甚至认不出是谁）。
+   * 设备令牌体系 2026-11-07 已退场，这枚 Cookie 只会是历史遗留 —— 一律清掉。
    */
   const cookies = [auth.sessionCookie(token)];
   if (String(req.headers.cookie ?? '').includes('bandi_token=')) cookies.push(auth.clearedTokenCookie());

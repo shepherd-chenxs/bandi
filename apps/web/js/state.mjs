@@ -78,25 +78,21 @@ export async function load(opts = {}) {
    * 每拍都问一遍没有意义（身份在会话期间不变）。
    *
    * 2026-11-07 起登录即全权：菜单不再按角色收敛（那套体系已退场），
-   * 这里只区分 operator / user / device 三种身份给「我的」页和退出按钮用。
+   * 这里只区分 operator / user 两种身份给「我的」页和退出按钮用。
+   * （第三种 `device` 随手机配对体系一起退场：手机也是登录进来的 user。）
    */
-  if (S.isDevice === undefined || S.auth === undefined) {
+  if (S.auth === undefined) {
     try {
       const me = await api('/api/me');
       S.auth = me ?? null;   // ⚠️ 不能叫 S.me —— 那个字段是「本机用户」(/api/state 的 me)，groups.mjs 在用
       if (me) markAppUrl();   // 认证通过：给壳层的返回键分流报"此刻在工作台"
-      S.isDevice = me?.kind === 'device';
-      S.device = me?.device ?? null;
       S.isUser = me?.kind === 'user';
-      S.isAdmin = !S.isDevice; // 登录即全权：operator 与登录用户都能看管理设置；手机设备只看设备设置
+      S.isAdmin = true; // 登录即全权：operator 与登录用户都能看管理设置
     } catch {
       S.auth = null;
-      S.isDevice = false;
-      S.device = null;
       S.isUser = false;
       S.isAdmin = true;
     }
-    document.body?.classList.toggle('mb-device', !!S.isDevice);
   }
   if (opts.dotsOnly) syncBusyDots();
   else renderList();

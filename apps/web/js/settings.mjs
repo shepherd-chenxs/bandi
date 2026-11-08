@@ -2,14 +2,12 @@
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
 import { esc, setRoute, setTheme, toast } from './shell.mjs';
 import { api, dt, failHtml, initial, post, showFail, wireDialogHead } from './ui.mjs';
-import { qrSvg } from './vendor/qrcode.mjs';
 import { headRow, renderPlugins, renderRuntimes, rtLoading } from './connectors.mjs';
 import { openRemotePage, setPluginRerender } from './experts.mjs';
 import { confirmDo } from './machine.mjs';
 import { renderList, showView } from './contacts.mjs';
 import { setListTitle } from './flowpages.mjs';
 import { openCodeRepoPage, renderSkillCards } from './skills.mjs';
-import { renderPairing } from './pairing.mjs';
 
 // 设置 › 安全（2026-10-31 IAM Phase 1）：我的会话 + 审计日志
 import { renderSecurity } from './securityadmin.mjs';
@@ -75,32 +73,25 @@ export async function openMe() {
   setListTitle('我的');
   const who = S.auth ?? null;
   const isUser = who?.kind === 'user';
-  const isDevice = who?.kind === 'device';
-  /*
-   * 账户为主（2026-11-03 三改）：身份卡的头像/名字取**账号**。设备绑了归属人
-   * 就显示归属账号；只有零账号形态的老设备才退回设备名兜底。
-   * 设备信息（型号 / 地址 / 时间）不进身份卡 —— 它是属性，在下面的「这台设备」卡。
-   */
-  const dev = who?.device ?? null;
   // 身份卡显示**中枢账号**（登录用的手机号）：本机名条只是实现细节（2026-11-07）
-  const name = isUser
-    ? (who?.user?.hub || who?.user?.name || '')
-    : isDevice
-      ? (who?.user?.hub || who?.user?.name || dev?.name || '这台设备')
-      : '未登录';
+  const name = isUser ? (who?.user?.hub || who?.user?.name || '') : '未登录';
   /*
    * 身份卡：一行说明。设备绑了账号时 meta 与登录账号同款（"班底账号"）—— 账号是标题，
    * 不用再解释"以谁的身份"；没绑账号的才需要一句话说清"现在是什么身份在用"。
    * （2026-11-07：身份章随角色体系一起退场 —— 登录即全权，没有"角色名"可标。）
    */
-  const meta = isUser
-    ? '中枢账号 · 手机号登录'
-    : isDevice
-      ? (who?.user?.hub ? '中枢账号 · 手机号登录' : '未绑定账号 · 以设备身份使用')
-      : '这台机器还没有登录账号';
-  // 配对时间给「这台设备」卡 —— dt() 按本机时区出「2026/11/03 19:39」
-  // （ISO 里存的是 UTC，手切字符串会差 8 小时，2026-11-03 实机踩过）
-  const pairedAt = dev?.pairedAt ? dt(dev.pairedAt) : '';
+  const meta = isUser ? '中枢账号 · 手机号登录' : '这台机器还没有登录账号';
+  /*
+   * 手机号当名字时的两件小事（2026-11-08 重设计，用户对着截图说"这个页面重新设计一下"）：
+   *   · 3-4-4 分组（152 6416 0947）—— 11 位连排没法扫读，运营商 / 银行 App 都这么排；
+   *   · 头像不再取首字符 —— "1526…" 的首字符是"1"，大蓝圈里孤零零一个数字既不是名字
+   *     也没有含义；换成中性的人形占位图标（iOS 联系人无头像时的同款读法）。
+   */
+  const isPhoneName = /^1\d{10}$/.test(name);
+  const displayName = isPhoneName ? name.replace(/^(\d{3})(\d{4})(\d{4})$/, '$1 $2 $3') : name;
+  const avaHtml = isPhoneName
+    ? `<span class="me-ava me-ava-glyph" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="8.2" r="3.6"/><path d="M4.8 19.4c1.5-3.3 4.1-5 7.2-5s5.7 1.7 7.2 5"/></svg></span>`
+    : `<span class="me-ava">${esc(initial(name))}</span>`;
   /*
    * 「有没有登录态可退」（2026-11-01 实报：回环形态点退出登录没反应）。
    *   · 登录账号 → 有；
@@ -145,11 +136,41 @@ export async function openMe() {
    *   班底 v1.5.x"，`.me-v` 是 break-all，硬挤会在内核号中间断字（iOS 设置页也是拆行的）。
    *   本机地址手机上不画：与「已配对到」同一个 location.host；实例标识是排查用的，同上。
    */
+  /**
+   * 外网访问（2026-11-08）：隧道到底通没通，只在这张机器卡里看得见。
+   *
+   * 状态词是服务端给的（`/api/hello` 的 `relay.state`，来自 frpc 子进程的真实状态），
+   * 界面**只翻译、不推断** —— "看起来应该能连"比什么都不说更害人：朋友出门连不上时，
+   * 会先怀疑自己网络，而真相是隧道压根没起来。
+   *
+   * 旧服务没有 `relay` 字段（不是 `state:'off'`）：此时整行不画，也别写"未开通"
+   * —— 那会把"这台机器版本老"说成"功能没开"。
+   */
+  const relayText = (() => {
+    const r = hello?.relay;
+    if (!r) return null;
+    const url = r.url || '';
+    switch (r.state) {
+      case 'up':
+        return url ? `已连 ${url}` : '已连';
+      case 'starting':
+        return url ? `连接中 ${url}` : '连接中';
+      case 'retrying':
+        return url ? `重连中 ${url}` : '重连中';
+      case 'failed':
+        return url ? `连不上 ${url}` : '连不上';
+      case 'unavailable':
+        return '本机缺少 frpc，外网连不进来';
+      default:
+        return '未开通';
+    }
+  })();
   const machineAll = hello
     ? [
         ['设备名', hello.hostname || hello.label || '—'],
         ['系统 / 版本', `${hello.os || '未知'}${hello.version ? ` · 班底 v${hello.version}` : ''}`],
         ['本机地址', location.host || '—'],
+        ...(relayText ? [['外网访问', relayText]] : []),
         ['实例标识', hello.instanceId || '—'],
       ]
     : [];
@@ -160,19 +181,41 @@ export async function openMe() {
         ['版本', hello.version ? `班底 v${hello.version}` : '未知'],
       ]
     : [];
+  /*
+   * 外网访问进手机机器卡（2026-11-08 重设计）：朋友"出门连不上"时，第一怀疑对象
+   * 总是自己的网络 —— 把服务端真实状态（relay.state）亮在这张卡里，一眼分清
+   * "机器不在了"还是"隧道断了"。桌面早就有这行（relayText 带完整 URL），手机窄屏
+   * 放不下长域名，只给 状态点 + 状态词。旧服务没有 relay 字段 → 整行不画。
+   */
+  const relayPhone = (() => {
+    const r = hello?.relay;
+    if (!r) return null;
+    switch (r.state) {
+      case 'up': return { tone: 'ok', label: '已连通' };
+      case 'starting': return { tone: 'wait', label: '连接中' };
+      case 'retrying': return { tone: 'wait', label: '重连中' };
+      case 'failed': return { tone: 'bad', label: '未连通' };
+      case 'unavailable': return { tone: 'dim', label: '未配置' };
+      case 'off': return { tone: 'dim', label: '未开通' };
+      default: return null;
+    }
+  })();
+  const relayPhoneRow = relayPhone
+    ? `<div class="me-kv"><span class="me-k">外网访问</span><span class="me-v me-relay"><i class="me-dot me-dot-${relayPhone.tone}" aria-hidden="true"></i>${relayPhone.label}</span></div>`
+    : '';
   const machineRowHtml = ([k, v]) =>
     `<div class="me-kv"><span class="me-k">${esc(k)}</span><span class="me-v ${k === '实例标识' ? 'me-v-mono' : ''}">${esc(v)}</span></div>`;
   const machineRows = machineAll.map(machineRowHtml).join('');
-  const phoneMachineRows = phoneMachineAll.map(machineRowHtml).join('');
+  const phoneMachineRows = phoneMachineAll.map(machineRowHtml).join('') + relayPhoneRow;
   $('settingsView').innerHTML = `
     ${headRow('<b>我的</b>')}
     <div class="detail-body me-body">
       <section class="set-sec me-hero-sec">
         <div class="me-hero-card">
-          <span class="me-ava">${esc(initial(name))}</span>
+          ${avaHtml}
           <div class="me-who">
             <div class="me-name">
-              <b>${esc(name)}</b>
+              <b>${esc(displayName)}</b>
             </div>
             ${meta ? `<span class="me-meta">${esc(meta)}</span>` : ''}
           </div>
@@ -219,20 +262,6 @@ export async function openMe() {
           : ''
       }
       ${
-        /* 「这台设备」属性卡（2026-11-03 账户为主）：设备是账号的一个属性，
-           不再占身份卡 —— 落成 label + value 的属性行。设备记录丢了就不画空卡。 */
-        isDevice && dev
-          ? `<section class="set-sec me-dev-sec">
-               <div class="set-head"><b>这台设备</b></div>
-               <div class="me-dev-box">
-                 <div class="me-kv"><span class="me-k">设备名</span><span class="me-v">${esc(dev.name || '—')}</span></div>
-                 <div class="me-kv"><span class="me-k">已配对到</span><span class="me-v me-v-mono">${esc(location.host)}</span></div>
-                 ${pairedAt ? `<div class="me-kv"><span class="me-k">配对时间</span><span class="me-v">${esc(pairedAt)}</span></div>` : ''}
-               </div>
-             </section>`
-          : ''
-      }
-      ${
         /* 手机窄屏的「这台机器」（2026-11-07 用户：「修改手机端」）：手机上"这台机器"
            指的是**被连接的那台班底机**（当前这个页面就是它服务的），与上面「这台设备」
            （手机自己）是两张卡、两件不同的事实 —— 分开摆，别混成一张。
@@ -246,13 +275,13 @@ export async function openMe() {
           : ''
       }
       ${
-        /* 「通用 · 清除缓存」（2026-11-06 用户：「手机端我的页面加一个清除缓存的功能」）：
-           只在手机形态画。清的是本机 Service Worker 的 bandi-static-* 静态缓存
-           （页面/脚本/样式），治"改了代码手机上看不到"—— 上一轮评论入口改版就靠
-           杀 App 重开才换新，有了这个入口在页面里就能自愈。登录态在 Cookie 里、
-           业务数据在服务端，都不在缓存里，所以清除不伤账号。
-           右侧常态显示缓存体积（异步算），点了走 confirmDo → 清缓存 + 注销 SW → 重载。
-           2026-11-07：挪到「这台机器」之后 —— 两张设备卡连在一起读，维护类入口收尾。 */
+        /* 「通用」（2026-11-08 重设计）：清除缓存与「当前设备」并进同一张卡。
+           原来当前设备是**孤零零一张无组头的卡**悬在两卡之间，右沿与邻卡参差、
+           行高也比邻居矮 —— 是整页最破的一处。两行同属"这台手机 ↔ 这台班底机"
+           的维护动作，收进一个分组正合适，分割线由 .me-kv + .me-kv 自动接上。
+           （当前设备 2026-11-07：只在壳里 + 中枢账号会话画 —— 面板和启动页是两个
+           origin，"设备列表"只存在于壳的启动页上；桥 = 导航回启动页带 #bandi-devices。）
+           值列超长（DESKTOP-ME3RQ97）由 15c 的省略规则兜住，不再顶挤 chevron。 */
         onPhone
           ? `<section class="set-sec me-cache-sec">
                <div class="set-head"><b>通用</b></div>
@@ -261,7 +290,15 @@ export async function openMe() {
                    <span class="me-k">清除缓存</span>
                    <span class="me-v" id="meCacheHint">计算中…</span>
                    <i class="me-chevron" aria-hidden="true">›</i>
-                 </button>
+                 </button>${
+                   shell && hello && isUser
+                     ? `<button type="button" class="me-kv me-cache-row" id="meSwitchDevice">
+                          <span class="me-k">当前设备</span>
+                          <span class="me-v">${esc(hello.label || hello.hostname || '—')}</span>
+                          <i class="me-chevron" aria-hidden="true">›</i>
+                        </button>`
+                     : ''
+                 }
                </div>
              </section>`
           : ''
@@ -287,25 +324,6 @@ export async function openMe() {
       </section>`
       }
       ${
-        /* 「当前设备」（2026-11-07 用户：「我的页面加一个当前设备菜单。点击之后进入
-           到设备列表页，选择之后进行切换」）：只在**壳里 + 中枢账号会话**画 ——
-           面板和启动页是两个 origin，"设备列表"只存在于壳的启动页上；桥 = 导航回
-           启动页并带上 #bandi-devices 意图（会话还活着，启动页开机自动进列表）。
-           扫码进来的设备身份没有中枢会话，列表对它无意义（2026-11-07 同日撤掉扫码，
-           老设备令牌到过期为止），不画这行。值显示这台面板是哪台机器（/api/hello）。 */
-        shell && onPhone && hello && isUser
-          ? `<section class="set-sec me-cache-sec">
-               <div class="me-dev-box">
-                 <button type="button" class="me-kv" id="meSwitchDevice">
-                   <span class="me-k">当前设备</span>
-                   <span class="me-v">${esc(hello.label || hello.hostname || '—')}</span>
-                   <i class="me-chevron" aria-hidden="true">›</i>
-                 </button>
-               </div>
-             </section>`
-          : ''
-      }
-      ${
         /* 退场动作整宽一行：个人中心的"走人"动作用整行 + 文字染色，比右下角一颗
            小按钮稳。退出登录染 --bad（"走人"的分量）；断开连接/去登录是中性动作，不染。
            （2026-11-07：账号安全双卡随本地密码/OTP 退场 —— 密码与动态验证都在中枢上管。） */
@@ -313,12 +331,7 @@ export async function openMe() {
            <div class="me-out-box">${
              canLogout
                ? '<button class="me-out me-out-danger" id="meLogout">退出登录</button>'
-               : isDevice
-                 ? /* 手机设备（2026-11-02 用户："手机端连接之后需要一个入口能够断开连接"）——
-                      与「退出登录」同位、同款：这是这台手机的"退出"。断开≠取消配对：
-                      记录留着，没有别的手机在用的时候打开 App 点「连接」就能回来。 */
-                   '<button class="me-out" id="meDisconnect">断开连接</button>'
-                 : '<button class="me-out" id="meGoLogin">去登录</button>'
+               : '<button class="me-out" id="meGoLogin">去登录</button>'
            }</div>
          </section>`
       }
@@ -395,28 +408,6 @@ export async function openMe() {
       location.reload();
     });
   }
-  /*
-   * 手机「断开连接」：调 /api/pair/leave（手机身份专属口），成功后派 `mb-left` 让
-   * mobile.mjs 决定落到哪儿 —— 壳里回连接页，浏览器里回配对页。
-   * 退场导航不在这一页写：SHELL_ORIGIN 是 mobile.mjs 的知识（远程页调不了壳命令那条注释），
-   * 这里 import 过去就和 settings → mobile 成环。
-   */
-  $('meDisconnect')?.addEventListener('click', async () => {
-    const ok = await confirmDo(
-      '断开后这台手机会立刻退出，但配对记录留着 —— 没有别的手机在用的时候，打开 App 点「连接」就能回来。',
-      { ok: '断开连接', danger: false },
-    );
-    if (!ok) return;
-    const b = $('meDisconnect');
-    if (b) b.disabled = true;
-    try {
-      await post('/api/pair/leave', {});
-      document.dispatchEvent(new CustomEvent('mb-left'));
-    } catch (e) {
-      if (b) b.disabled = false;
-      toast(e.message, 'error');
-    }
-  });
   // 兜底：正常进不到这个分支（面板门前移到登录页，见 auth.mjs 的 wantsPanelHtml），
   // 万一从令牌通道挤进来，至少给一条出路 —— 别再摆一段讲实现细节的说明。
   $('meGoLogin')?.addEventListener('click', () => location.reload());
@@ -458,9 +449,6 @@ export const SETTINGS_GROUPS = [
     icon: '<rect x="2" y="2.5" width="10" height="7" rx="1.5"/><path d="M5.5 12h3M7 9.5V12"/>',
     items: [
       ['runtimes', '这台机器', '运行时 · 数据管理'],
-      /* 「手机连接」（2026-11 手机端增量）：扫码连接手机 —— 对外服务形态才有意义。
-         2026-11-01 起模式卡长在这页顶上：回环时当场切成对外服务 + 重启即可 */
-      ['pairing', '手机连接', '模式 · 扫码连接手机'],
       /* 「协作中心」2026-11-07 随协作子系统整体退场（单兵作战，不再有分公司协作）。 */
     ],
   },
@@ -512,38 +500,19 @@ export const SETTINGS_GROUPS = [
  * renderBackupSection）、飞书（2026-10-29 起 = 员工详情 › 配置 tab › 「飞书」子页，chat.mjs
  * mountFeishuPanel）。`openSettings` 里留着对应 section 的旧路由转发，别删。
 
-/*
- * 手机设备（受限视图）的「我的」= 设备信息 + 可用设置（2026-10-28，设计 T04 第 1 条）。
- *
- * 为什么单独一份而不是在渲染里逐条 `if`：服务端白名单已经决定设备碰不到
- * 技能/连接器/插件/飞书/额度/数据管理/这台机器/手机连接 —— 左栏还把它们列出来，
- * 用户点一个吃一个 E4033 toast，等于把「没权限」包装成「这东西坏了」。
- * 设备端只留**真能用**的三节；`/api/pair/me` 就是「这台手机」那节的数据源。
- */
-export const DEVICE_SETTINGS_SECTIONS = [
-  ['device', '这台手机', '配对与连接'],
-  ['prefs', '偏好设置', '主题与外观'],
-  ['about', '关于', '版本与说明'],
-];
-
 /**
  * 当前身份能看到的设置分节（**平铺**）：openSettings 的兜底判断用这一份。
- * 桌面（登录即全权）= 分组拍平；设备 = 自己的小清单。
+ * 登录即全权（2026-11-07），只有这一份清单 —— 手机设备那套受限子集随设备令牌退场。
  */
 export function settingsSections() {
-  if (S.isDevice) return DEVICE_SETTINGS_SECTIONS;
   return SETTINGS_GROUPS.flatMap((g) => g.items);
 }
 
 /**
  * 左栏分组渲染用：`[{title, items}]`。
- *
- * **只有桌面画组头** —— 设备形态 3 节本来就短，再切一组反而是给短列表加噪音；
- * 这种形态 `title: null` = 渲染时不画组头。
  * 组内顺序即左栏顺序，`settingsSections()` 就是把它拍平的，两份永远同源。
  */
 export function settingsGroups() {
-  if (S.isDevice) return [{ title: null, items: DEVICE_SETTINGS_SECTIONS }];
   return SETTINGS_GROUPS;
 }
 
@@ -579,9 +548,7 @@ export function openSettings(section) {
      等于把右边页面的标题挂在左边的列表头上，切换分节时左栏标题跟着跳，列表反而不像导航了。 */
   setListTitle('设置');
   renderList();
-  if (S.settingsSection === 'device') return renderDeviceInfo();
   if (S.settingsSection === 'runtimes') return renderRuntimes();
-  if (S.settingsSection === 'pairing') return renderPairing();
   if (S.settingsSection === 'plugins') return renderPlugins();
   if (S.settingsSection === 'quota') return renderQuota();
   if (S.settingsSection === 'skills') return renderSkillCards();
@@ -620,8 +587,7 @@ export function openSettings(section) {
   $('themeSeg').querySelectorAll('[data-theme-opt]').forEach((el) => {
     el.onclick = () => setTheme(el.dataset.themeOpt);
   });
-  // 回复风格是「全体数字员工」的写设置（PUT 对设备 403）—— 设备形态不渲染那一节
-  if (!S.isDevice) loadReplyStyle().catch(() => {}); // 偏好里唯一要问服务端的一项（存在 config.json，跟设备走）
+  loadReplyStyle().catch(() => {}); // 偏好里唯一要问服务端的一项（存在 config.json，跟设备走）
 }
 
 /*
@@ -812,16 +778,6 @@ export async function renderImageAi() {
  * 数据口径：版本 / 实例 / 机器名全部来自 `/api/hello` —— 它是服务端自己的答案，
  * 界面不写死版本字面量（写死一份，升级时就出现"页面 1.1.0、服务 1.2.0"这种自相矛盾）。
  */
-/* ---------------------------------------------------------------- 这台手机（设备形态） */
-
-/**
- * 手机设备的「我的」页首节（2026-10-28）：配对信息只读。
- *
- * 数据来自 `/api/pair/me`（`load()` 里取过一次，存在 `S.device`）—— 不再打
- * `/api/pair/devices`：那是**操作员**的设备清单（含别的手机），设备令牌碰它 403。
- * 「断开连接 / 取消配对」只给指路：都是电脑端动作（设备令牌的白名单里没有它们，也不该有）。
- */
-
 /**
  * 退出登录（2026-11-07 从 useradmin.mjs 并入 —— 那一页删了）：删掉服务端那张会话票 +
  * **清掉两张 Cookie（登录票与访问令牌）**，然后整页重载。为什么要连令牌一起清：
@@ -830,12 +786,13 @@ export async function renderImageAi() {
  */
 async function logout() {
   /*
-   * 文案说「这台设备」而不是「这台浏览器」（2026-11-07 手机端实机截图）：同一个弹窗
-   * 桌面浏览器和手机壳里都会出现，写成浏览器在手机上就是错的；"设备"两边都读得通。
+   * 文案（2026-11-07 手机实机截图，用户定稿）：「是否确认退出当前账号？」——
+   * 一句话问完，不再解释登录票/访问令牌怎么清；`big` 把两颗按钮抬到拇指档。
    */
-  const ok = await confirmDo('退出登录？这台设备上的登录票和访问令牌都会清掉，下次进来走登录页。', {
+  const ok = await confirmDo('是否确认退出当前账号？', {
     title: '退出登录',
     ok: '退出',
+    big: true,
   });
   if (!ok) return;
   try {
@@ -853,10 +810,21 @@ async function logout() {
    *   · 原生壳 → BandiShell.onLoggedOut()：原生清中枢会话与 Cookie，回登录页；
    *   · 旧 Tauri 壳 → 启动页 #bandi-bye 意图（launcher.js boot 清中枢会话）。
    * 浏览器 / PWA 维持原样：重载走服务端的闸。
+   *
+   * ⚠️ 壳对象**必须在这里重新取**：`nativeShell` 是 openMe() 里的局部 const（见上），
+   * 而 logout() 是从 useradmin.mjs 并进来的**模块级**函数 —— 原先直接引用它，
+   * 严格模式下就是 `ReferenceError: nativeShell is not defined`：
+   * /api/logout 已经执行（会话真删了）、页面却没跳，用户看到的就是
+   * 「点击退出没有反应」（2026-11-07 实报）。桌面浏览器同样会走到这行，一并中。
    */
+  const nativeShell = typeof window.BandiShell !== 'undefined' ? window.BandiShell : null;
   if (nativeShell) {
-    nativeShell.onLoggedOut();
-    return;
+    try {
+      nativeShell.onLoggedOut();
+      return;
+    } catch {
+      /* 桥调用失败（壳版本老 / 方法没实现）→ 落到下面的重载，别把人卡在原地 */
+    }
   }
   const shellHome = window.__BANDI_SHELL__?.home;
   if (shellHome) {
@@ -864,31 +832,6 @@ async function logout() {
     return;
   }
   location.reload();
-}
-
-export function renderDeviceInfo() {
-  const d = S.device ?? {};
-  $('settingsView').innerHTML = `
-    ${headRow('<b>这台手机</b>')}
-    <div class="detail-body">
-      <section class="set-sec">
-        <div class="set-head"><b>配对信息</b><span class="set-tag">设备令牌</span></div>
-        <div class="set-box">
-          <div class="set-row">
-            <span class="set-label">名称</span>
-            <div class="machine-data">${esc(d.name ?? '手机设备')}</div>
-          </div>
-          <div class="set-row">
-            <span class="set-label">配对于</span>
-            <div class="machine-data">${esc(d.pairedAt ? dt(d.pairedAt) : '—')}</div>
-          </div>
-          <div class="set-row">
-            <span class="set-label">断开连接</span>
-            <div class="machine-data">在电脑上打开「设置 → 手机连接」，点这台手机的「断开连接」——断开后本机下次操作会掉线，但配对记录还在：没有别的手机在用的时候，本机打开班底会自己连回来，不用重新扫码。要彻底解绑用「取消配对」。</div>
-          </div>
-        </div>
-      </section>
-    </div>`;
 }
 
 export async function renderAbout() {

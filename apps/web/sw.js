@@ -2,12 +2,12 @@
  * sw.js —— Service Worker 缓存骨架（2026-11 手机端增量，P1-3）。
  *
  * 策略（设计 §5 T05 / §3.3.1.3）：
- *   · 安装期预缓存核心静态（`/`、CSS、入口 JS、**js/*.mjs 全量**、manifest、图标、配对落地页）；
+ *   · 安装期预缓存核心静态（`/`、CSS、入口 JS、**js/*.mjs 全量**、manifest、图标）；
  *   · 运行期对同源 GET 静态资源一律 **stale-while-revalidate**：先回缓存（弱网局域网
  *     二次加载明显快），后台再拉新版入库 —— 于是"改文件后刷新两次内拿到新版本"
  *     （第一刷：旧缓存先回、新版进库；第二刷：命中新版）；
  *   · **`/api/*` 一律放行不缓存** —— 本地优先产品，数据以服务端为准（PRD P1-3 的硬口径）；
- *   · `/pair`（落地页，地址里带着一次性 token）与 `/sw.js`（SW 自己）也永不缓存。
+ *   · `/sw.js`（SW 自己）永不缓存。
  *
  * 与 startVersionWatch 共存：SW 更新静态后 /api/web-version 的指纹照常变化，
  * 「刷新页面」提醒条机制不动（设计 §1.1）。缓存名里的 VERSION 是人工旋钮：
@@ -643,14 +643,54 @@
    __BANDI_SHELL__ hash 流保留作兜底，浏览器 / PWA 照旧走各自路径。settings.mjs 变了，进一版。
 
    v153（2026-11-07 实机截图）：退出登录的确认弹窗写着「这台浏览器上的登录票」——
-   同一个弹窗在手机壳里也出现，手机上叫"浏览器"是错的，改成「这台设备」。进一版逼客户端换。 */
-const VERSION = 'v153';
+   同一个弹窗在手机壳里也出现，手机上叫"浏览器"是错的，改成「这台设备」。进一版逼客户端换。
+
+   v154（2026-11-07 用户：「点击退出不要使用抽屉，要使用弹窗」）：移动端的确认弹窗
+   （#askDlg，confirmDo 共用）从底部抽屉改成居中小卡片 —— 确认框是"一句话 + 两个
+   按钮"的小东西，抽屉又矮又贴底，按钮正好怼在导航栏上。内容型弹窗仍是抽屉，
+   只有确认框改居中。mobile.css 变了，进一版。
+
+   v155（2026-11-07 用户：「文案改成：是否确认退出当前账号？取消和退出按钮做大一些」）：
+   退出登录的确认框正文收成一句问句（撤掉登录票/访问令牌那段解释），两颗按钮升到
+   44px 高的拇指档 —— 新开关 askDialog/confirmDo 的 `big`，挂 `#askDlg.ask-big`，
+   只有这个弹窗开。settings.mjs / machine.mjs / style.css 都变了，进一版。
+
+   v156（2026-11-07 用户发微信「账号设置 › 退出登录」截图：「参考这个改」）：`ask-big`
+   从"右对齐的两颗大按钮"改成参考图那张卡片 —— 标题 18px 居中、说明 15px 居中灰字、
+   两颗按钮**等宽铺满**、高 46px / 圆角 10px、弹窗 400px 窄卡片 + 20px 圆角 + 投影。
+   顺带把 #askBody 的字号行高从 index.html 的内联 style 搬进 style.css（内联压过
+   `.ask-big`，改不动），焦点环从浏览器默认的黑描边换成主题色。index.html /
+   style.css / sw.js 变了，进一版。
+
+   v157（2026-11-07 用户实机截图：「怎么跟你的展示图不一样」）：v156 的预览是静态
+   HTML，而真身里 `<b id="askTitle">` 会被 ui.mjs 的 wireDialogHead() 搬进 `.dlg-head`
+   （flex + 左对齐 + 左右 -20px 负边距 + 右上角 ×）—— 于是标题贴左、× 露出来，跟
+   参考图/展示图都不一样。补两条：`.dlg-head` 归零并居中（确认框没有长内容，不用吸顶）、
+   `.dlg-close` 藏掉（参考图没有关闭按钮）。style.css 变了，进一版。
+
+   v158（2026-11-07 用户：「点击退出没有反应」）：**真根因不是样式** —— logout() 从
+   useradmin.mjs 并进来后是模块级函数，却引用了 openMe() 里的局部 `const nativeShell`，
+   严格模式走到那行直接 `ReferenceError: nativeShell is not defined`：/api/logout 已经
+   执行（会话真删了）、页面却没跳 = 看着"没反应"。改成在 logout() 里按 `window.BandiShell`
+   现取一次，桥调用失败再兜底重载。settings.mjs 变了，进一版。
+
+   v159（2026-11-07 用户：「去掉下面的说明文案」）：手机工作台磁贴只留图标 + 名字 ——
+   `.wb-page .wb-desc { display: none }`（≤900 档），桌面 >900 那版照旧带说明；
+   17.1 段那条 .wb-desc 的 color 规则随之撤掉。mobile.css 变了，进一版。
+
+   v160（2026-11-07 用户：「老体系去掉」）：手机配对体系整体退场 —— 桌面端「手机连接」
+   分节（二维码 / 9 位邀请码 / 连接开关 / 已配对设备表）、扫码落地页 pair.html 与
+   pairing / pair-claim 两个模块、vendor/qrcode 一起删；「我的」页的「这台手机」卡与
+   「断开连接」按钮随之消失（手机就是登录进来的账号，退出走「退出登录」）。
+   手机端只剩一条路：中枢账号登录（App 里 WebView 带会话进门）。sw.js / settings /
+   state / mobile / experts 都变了，进一版。 */
+const VERSION = 'v160';
 const CACHE = `bandi-static-${VERSION}`;
 
 /*
  * 预缓存清单（SW 不能 glob，手工列 —— 设计 §3.3.1.3 第 1 条）：
  * **新增 js 模块时同步这份清单，并把 VERSION +1**，否则老客户端拿不到新模块（整页白）。
- * js/*.mjs 全部在局域网一次拉完，二十来个文件代价很小；vendor/ 也进（二维码是配对必需件）。
+ * js/*.mjs 全部在局域网一次拉完，二十来个文件代价很小。
  */
 const JS_MODULES = [
   '/js/chat.mjs',
@@ -665,8 +705,6 @@ const JS_MODULES = [
   '/js/machine.mjs',
   '/js/misc.mjs',
   '/js/mobile.mjs',
-  '/js/pair-claim.mjs',
-  '/js/pairing.mjs',
   '/js/plugin-data.mjs',
   '/js/projects.mjs',
   '/js/run-progress.mjs',
@@ -679,7 +717,6 @@ const JS_MODULES = [
   '/js/thinking-live.mjs',
   '/js/ui.mjs',
   '/js/workflows.mjs',
-  '/js/vendor/qrcode.mjs',
 ];
 
 const CORE = [
@@ -690,7 +727,6 @@ const CORE = [
   '/manifest.webmanifest',
   '/icons/icon-192.png',
   '/icons/icon-512.png',
-  '/pair.html',
   ...JS_MODULES,
 ];
 

@@ -336,7 +336,7 @@ export function renderNodeMode(st) {
           '只本机',
           row('当前监听', `<span class="machine-addr">${esc(listen)}</span>`, ICO.link) +
             row('对外开放', '否 <span class="sub">节点机不对局域网 / 公网开放</span>', ICO.shield),
-          `<div class="set-note">节点机不对外开放；要远程访问请用隧道（Cloudflare Tunnel / frp 之类），班底自己不提供。</div>`,
+          `<div class="set-note">节点机不对外开放；外网访问由中枢转发（登录中枢后自动建立隧道，不用配端口、域名或证书）。</div>`,
         )}
 
         ${sec(

@@ -4,6 +4,10 @@ Copyright 2026 牧羊人
 本产品由 牧羊人 开发。
 
 第三方说明：
+  · frp（https://github.com/fatedier/frp，Apache-2.0）—— 安装包随附的 `vendor/frp/bandi-tunnel`
+    是它的客户端二进制（源码未修改，从官方 v0.72.0 标签重新编译并改名，以避免杀软对官方
+    二进制的误报），外网访问（中枢转发）用它建立隧道。许可副本随二进制一起放在
+    `vendor/frp/frp-LICENSE.txt`；本产品与该项目无隶属关系，也不代表其背书。
   · 本仓库**不分发** Codex CLI / Claude Code / DeepSeek Harness 等 agent CLI ——
     由使用者自行安装、自备凭据，各自的许可与条款归各自。
   · magpie（本机模型网关）是**独立项目**，不随本仓库分发；
