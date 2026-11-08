@@ -363,6 +363,56 @@
   .item .who > .sub { font-size: 14px; margin-top: 3px; }
 
   /*
+   * 项目列表行（2026-11-08 重设计，用户：「重新设计一下」→「简洁一些」）。
+   * 这一页只有一个动作 —— 挑一个项目进去，所以行里只留三样：
+   *   名字（16/500）· 「内置」小签（1px 描边、11px，不像角标那样抢眼）· 右缘 chevron。
+   * 不加磁贴、不加副行（更新日期/目录都试过，都是给这一件事凑信息量）。
+   * chevron 直接照抄设置分节行那套 `::after` 斜角（同一个 App 里"能进去"的手势得长一样）。
+   */
+  .list-body .item.pj-row {
+    min-height: 56px;
+    padding: 0 var(--mb-pad, 16px);
+    padding-right: calc(var(--mb-pad, 16px) + 18px);
+    gap: 8px;
+  }
+  .pj-row .pj-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 16px;
+    font-weight: 500;
+    line-height: 1.35;
+    color: var(--text);
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .pj-row .pj-tag {
+    flex: none;
+    padding: 0 5px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    font-size: 11px;
+    font-style: normal;
+    font-weight: 400;
+    line-height: 16px;
+    color: var(--mb-text-3, var(--dim));
+  }
+  .pj-row::after {
+    content: '';
+    position: absolute;
+    right: 16px;
+    top: 50%;
+    width: 7px;
+    height: 7px;
+    margin-top: -4px;
+    border-right: 1.8px solid var(--dim);
+    border-bottom: 1.8px solid var(--dim);
+    transform: rotate(-45deg);
+    opacity: .5;
+    pointer-events: none;
+  }
+
+  /*
    * 行内那颗状态点（「● 10 人 · …」）：8px 圆点在 14px 文字里偏大且悬空，
    * 压到 7px 并以 inline-block 跟随文字基线 —— 桌面是 flex 子项，手机这里是文字流。
    */
@@ -1895,8 +1945,8 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
    ② 值列统一"右对齐 + 超长省略"—— DESKTOP-ME3RQ97 这种长值会把 chevron 顶挤
       参差（旧「当前设备」卡最明显）；桌面 .me-v 是 flex:1 + break-all，手机上
       改成不换行省略，值与 chevron 的距离才稳定；
-   ③ 「外网访问」状态点 —— 机器卡新增一行（DOM 同在 settings.mjs），点色从
-      style.css 的语义 token 取（--ok/--warn/--bad），深浅主题都成立；
+   ③ ~~「外网访问」状态点~~ —— 已随 frp 内置下线删除（2026-11-08）：进程不再归我们管，
+      没有真相可显示。这轮只剩 ①②④ 三条生效；
    ④ 「当前设备」已并进「通用」卡（DOM 改动），这里只补 button 行的按压与
       分割线衔接 —— .me-kv + .me-kv::before 对 button 形态同样生效，无需新规则。
 */
@@ -1927,25 +1977,46 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
   /* button 行（清除缓存 / 当前设备）的 me-k 也照此办理 —— 它们是 .me-kv 的变体 */
   body.mb-narrow #settingsView button.me-cache-row .me-k { flex: none; }
 
-  /* ③ 外网访问状态点：8px 圆点 + 状态词，垂直居中（inline-flex 防止点被
-       line-height 顶偏）；dim 档给"未开通/未配置"这种中性事实 */
-  body.mb-narrow #settingsView .me-relay {
+  /* ③ 外网访问状态点（.me-relay / .me-dot-*）已随 frp 内置下线删除（2026-11-08）。 */
+}
+
+/* ── 15d. 「我的 › 设置」子页 + 齿轮入口（2026-11-08） ──────────────────────
+   「我的」大标题右槽一颗齿轮 → 全屏「设置」子页（settings.mjs 的 meSetOpen），
+   「这台机器」「通用」两块从「我的」搬了进去。
+   子页本体复用 .kb-new 骨架类（元素上挂了 kb-new，fixed / 滑入 / hidden 全齐），
+   这里只补：齿轮按钮、开关态（body.me-set-open）两条 —— 与 body.kb-new-open 同款。 */
+
+@media (max-width: 900px) {
+  /* 齿轮按钮：44 热区，钉在大标题（30/700）的竖直中线上。
+     .me-head 是 display:block（§21 的双类提升那条），自己当定位父级。 */
+  body.mb-narrow #settingsView .me-head { position: relative; }
+  body.mb-narrow #settingsView .me-gear {
+    position: absolute;
+    right: 12px;
+    top: calc(env(safe-area-inset-top, 0px) + 23px);
+    transform: translateY(-50%);
+    width: 44px;
+    height: 44px;
     display: inline-flex;
     align-items: center;
-    gap: 7px;
-    white-space: nowrap;
+    justify-content: center;
+    padding: 0;
+    border: 0;
+    border-radius: 12px;
+    background: transparent;
+    /* 中性灰，不是 accent 蓝 —— 本页设计规则 ④「整页没有饱和色」：层级交给字号与
+       灰度，一颗蓝色按钮会变成全页最响的东西（2026-11-08 用户实拍指出「跟设计差很多」）。
+       iOS 的导航图标也是灰档，不是蓝。 */
+    color: var(--mb-text-2, var(--dim));
+    cursor: pointer;
   }
-  body.mb-narrow #settingsView .me-dot {
-    flex: 0 0 auto;
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: var(--mb-text-3, var(--dim));
-  }
-  body.mb-narrow #settingsView .me-dot-ok { background: var(--ok, #3fb950); }
-  body.mb-narrow #settingsView .me-dot-wait { background: var(--warn, #d29922); }
-  body.mb-narrow #settingsView .me-dot-bad { background: var(--bad, #f85149); }
+  body.mb-narrow #settingsView .me-gear:active { background: var(--mb-press, var(--active)); }
+  body.mb-narrow #settingsView .me-gear svg { width: 22px; height: 22px; }
 }
+
+/* 开关态：锁滚动 + 隐底部 tab —— 进子页时 tab 栏让位（进「新建任务」页同款两条） */
+body.me-set-open { overflow: hidden; }
+body.me-set-open .mb-tabbar { display: none; }
 /*
  * ══════════════════════════════════════════════════════════════════════════════
  * mobile-patch.css —— 消息页 iOS 化（视觉 Phase 1 + 体验 Phase 2）补丁片段
@@ -3422,12 +3493,30 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     flex: 1 1 auto;
     min-width: 0;
     display: flex;
-    gap: 8px;
+    gap: 6px;                 /* 8 → 6：390px 下多挤进半个胶囊，少一次横滑 */
     overflow-x: auto;
     padding: 6px 0;
     scrollbar-width: none;
   }
   .kb-l-tabs::-webkit-scrollbar { width: 0; height: 0; }
+  /*
+   * "右边还有 tab"的提示（2026-11-08 评审）：状态最多 9 个，390px 一屏只放得下 4 个，
+   * 而右端原来被刷新按钮封口，看着像"就这几个"。真的还有内容时给右缘一层渐隐
+   * （类名由 JS 按 scrollLeft 打，到尽头就撤 —— 不留一条永久毛边），左缘同理。
+   * 用 mask 而不是叠一个渐变块：渐隐要"透出"底下的页面色，叠块会盖住按压/焦点环。
+   */
+  .kb-l-tabs.can-more {
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent 100%);
+    mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent 100%);
+  }
+  .kb-l-tabs.can-prev {
+    -webkit-mask-image: linear-gradient(to right, transparent 0, #000 16px);
+    mask-image: linear-gradient(to right, transparent 0, #000 16px);
+  }
+  .kb-l-tabs.can-more.can-prev {
+    -webkit-mask-image: linear-gradient(to right, transparent 0, #000 16px, #000 calc(100% - 28px), transparent 100%);
+    mask-image: linear-gradient(to right, transparent 0, #000 16px, #000 calc(100% - 28px), transparent 100%);
+  }
   /*
    * tab 定死「填充胶囊」（不换 segmented、不用下划线）：段数在 2~9 之间浮动（全部 + 有卡的列），
    * segmented 要求段数固定等宽，8 段中文在 390px 下每段只剩约 40px，还放不下计数。
@@ -3439,7 +3528,7 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     align-items: center;
     gap: 6px;
     height: 32px;
-    padding: 0 14px;
+    padding: 0 12px;
     border: 0;
     border-radius: 999px;
     font: inherit;
@@ -3540,7 +3629,16 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     pointer-events: none;
   }
   .kb-l-row:active { background: var(--mb-press, var(--active)); }
+  /* 标题行：标题占左（可两行），状态（点+词）钉在右上角 —— 与标题首行齐顶 */
+  .kb-l-line {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    min-width: 0;
+  }
   .kb-l-title {
+    flex: 1 1 auto;
+    min-width: 0;
     font-size: 16px;
     font-weight: 500;
     line-height: 1.4;
@@ -3552,8 +3650,8 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     overflow: hidden;
   }
   /*
-   * 元信息行的收缩优先级（390px 下四段一定放不下，必须定死谁先让）：
-   *   时间 0 0 auto → 永不缩；状态点 + 状态词 0 0 auto → 永不缩（它是行的维度）；
+   * 元信息行的收缩优先级（390px 下最多四段，状态已挪去右上角）：
+   *   时间 0 0 auto → 永不缩；卡片类型签 0 0 auto → 永不缩（它是"这活谁推的"，缩掉就没意义了）；
    *   执行人 1 1 auto → 第一个被省略；项目 pill 0 1 auto + max-width 40% → 第二个被省略。
    */
   .kb-l-meta {
@@ -3572,7 +3670,29 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     border-radius: 50%;
     background: var(--st-c, var(--st-other));
   }
-  .kb-l-state { flex: 0 0 auto; color: var(--mb-text-2, var(--dim)); }   /* 状态词不上色 */
+  /*
+   * 状态胶囊（2026-11-08 评审定稿，替代原来的「6px 圆点 + 灰字」）：
+   * 底色取 `--st-*` 12% —— 正是那套色校对比度时用的底（style.css §状态色注释），
+   * 字取 `--st-*` 原值，浅/深主题各自成立，不新增 hex。
+   * **不再画点**：胶囊已经是"色 + 词"，再点一颗是把同一句话说两遍；
+   * 原来待办(青) 与已完成(绿) 在 6px 上几乎是同一颗色，胶囊化后靠底色面积分开了。
+   * 高 20 配标题首行（16×1.4≈22），margin-top 2 让两者视觉齐顶。
+   */
+  .kb-l-state {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    height: 20px;
+    padding: 0 8px;
+    margin-top: 2px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1;
+    white-space: nowrap;
+    color: var(--st-c, var(--st-other));
+    background: color-mix(in srgb, var(--st-c, var(--st-other)) 12%, transparent);
+  }
   .kb-l-pill {
     flex: 0 1 auto;
     max-width: 40%;
@@ -3587,6 +3707,32 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     background: var(--mb-fill, var(--active));
     color: var(--mb-text-2, var(--dim));
   }
+  /*
+   * 卡片类型小签（2026-11-08 用户要求：手机列表要显示卡片类型标签）。
+   * 与项目 pill **同高同圆角，但只描边不填底** —— 两个都填底会像并排两块按钮；
+   * 描边这枚读起来是"标签"，填底那个仍是"归属"。文字用中性灰（不抢右上角状态点，
+   * 那一点仍是行里唯一的实色）。「仓库值班」是机器写进来的，单独上暖色，扫列表时能分出来。
+   */
+  .kb-l-src {
+    flex: 0 0 auto;
+    padding: 2px 6px;
+    border-radius: 6px;
+    line-height: 16px;
+    font-size: 11px;
+    font-weight: 500;
+    white-space: nowrap;
+    color: var(--mb-text-2, var(--dim));
+    box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--text) 16%, transparent);
+  }
+  .kb-l-src.repo {
+    color: var(--warn);
+    box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--warn) 32%, transparent);
+  }
+  /*
+   * 执行人（2026-11-08 二次修订）：**纯文字**，不带首字头像 —— 用户实拍项目名一长时
+   * 来源签 / 项目 pill / 头像 / 名字挤一行就乱，头像是最先被牺牲的。
+   * 行里的彩色依旧只有右上角的状态胶囊。
+   */
   .kb-l-who {
     flex: 1 1 auto;
     min-width: 0;
@@ -3594,6 +3740,17 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--mb-text-2, var(--dim));
+  }
+  /* 未指派：虚线小框（服务端的「（没点名）」这类括号话换成这句，见 projects.mjs） */
+  .kb-l-none {
+    flex: 0 0 auto;
+    padding: 1px 7px;
+    border: 0.5px dashed color-mix(in srgb, var(--text) 24%, transparent);
+    border-radius: 999px;
+    font-size: 11.5px;
+    line-height: 15px;
+    white-space: nowrap;
+    color: var(--mb-text-3, var(--dim));
   }
   .kb-l-time {
     flex: 0 0 auto;
@@ -5314,4 +5471,189 @@ body.tc-sheet-open .tc-page.tc-m .tc-main-scroll { overflow: hidden; }
   /* 「单次」不再是自建日历浮层（2026-11-06 二改：与「每月」同构 = 日期行 + 时间行），
      所以这里原先那组 .sch-dt / .combo-btn 覆盖一并撤掉 —— 桌面的那颗还在
      mountSchRepeatCombos 里，只是手机上走不到了。 */
+}
+
+/* ============================================================ 24. 「我的」页重做（2026-11-08）
+
+   用户："我比较喜欢国外的 UI 设计，比如 Airbnb、Orbix Studio 那种。"
+
+   先说清这次改的是**什么**：不是把 Airbnb 的珊瑚红和大图片搬过来，而是把它的
+   **排版节奏**搬过来。全站主色仍是 --mb-tint 的蓝，色板一个值没动。
+
+   §15b 那版的问题不是"不好看"，是**没有锚点**：17px 的「我的」+ 一块蓝色 radial
+   辉光 hero，页面第一眼被那团光抓走，名字反而退到第二层；卡片 12px 圆角 + 每行
+   一条分割线，整页读起来是"等重的一条条"，从上到下没有起伏。
+
+   这一节按 Airbnb 个人页的语汇重排，六处改动都对着一句可复用的规则：
+
+   ① 大标题当锚点 —— 一页一个 30/700 左对齐标题，标题自己就是视觉重心，
+      于是 hero 不需要任何装饰性背景；
+   ② 去掉 radial 辉光 —— 那是"AI 生成页"最强的信号，也是整页唯一饱和色块。
+      Airbnb 的头像与名字直接放在页面底色上，层级由字号给，不由背景色给；
+   ③ 卡 12 → 16px、组间距 20 → 26px —— 卡片从"贴在页上"变成"浮在页上"；
+   ④ 彩色只给信息 —— 这一版原本靠「外网访问」那颗状态点承载唯一饱和色，那颗点已随
+      frp 下线删除（2026-11-08），于是整页**没有饱和色**：层级全交给字号与灰度。
+      Airbnb 的红只出现在 CTA 和 logo 上，"彩色少"才是高级感的来源；
+   ⑤ 字阶拉开三档（30 / 22 / 16 / 12.5）—— 现状 17/16/13 太挤，读不出层级；
+   ⑥ 退场按钮独立 —— 危险动作和普通列表行不该共用一套视觉语法（Airbnb 的
+      「退出」是浅红底胶囊，不是列表里的又一行）。
+
+   ⚠️ 只有手机端（@media ≤900px + body.mb-narrow），桌面「我的」页一位字节未动。
+
+   ⚠️ 圆角 16 先只落在本页（--me-r），没动全局 --mb-r-card（12）。§15b 自己的注释
+   写过"同一个软件里两套圆角比风格单调更糟"—— 所以这轮验收通过后，下一步应该是
+   把 --mb-r-card 全局提到 14~16，而不是让「我的」单独软一档。 */
+
+@media (max-width: 900px) {
+  /* ── 0. 页面骨架 ─────────────────────────────────────────────
+     左右 20、底 40：底部 tab 栏自己会盖住 56 + safe-area，这里的 40 只保证
+     最后一张卡不被 tab 栏压住（.detail-body 原来吃 20/24 的桌面 padding）。 */
+  body.mb-narrow #settingsView .me-body {
+    --me-r: 16px;      /* 本页卡面圆角（全局 --mb-r-card 是 12） */
+    --me-gap: 26px;    /* 组间距：现状 20，松一档才有"分组"这层关系 */
+    padding: 0 20px 40px;
+  }
+
+  /* ── ① 大标题 ─────────────────────────────────────────────
+     栏高从 52 压到 auto（标题自己撑），去玻璃底与发丝线 —— 标题是内容，不是导航栏。
+     左对齐靠 .head-title 的 justify-content（它本来就 flex:1，转左即可）。
+     30/700/-0.9：Airbnb 的一级页标题档；负字距让中文也不显得松散。 */
+  body.mb-narrow #settingsView .me-head {
+    height: auto;
+    min-height: 0;
+    padding: calc(env(safe-area-inset-top, 0px) + 6px) 20px 4px;
+    background: var(--mb-page, var(--bg));
+    border-bottom: 0;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  body.mb-narrow #settingsView .me-head::after { display: none; }
+  /* §3 那条 `#settingsView > .head-row:not(:has(.head-actions))` 是给设置**子页**去
+     重复标题的，但「我的」的大标题正是这条无动作 head-row —— 会被它整个藏掉。
+     双类提升特异性（1,3,1 > 1,3,0）压回来，只豁免本页这一行。 */
+  body.mb-narrow #settingsView .me-head.me-head { display: block; }
+  body.mb-narrow #settingsView .me-head .head-title { justify-content: flex-start; }
+  body.mb-narrow #settingsView .me-head .head-title > b {
+    font-size: 30px;
+    font-weight: 700;
+    letter-spacing: -0.9px;
+    line-height: 1.15;
+  }
+
+  /* ── ② 身份区：去渐变、去光环 ─────────────────────────────
+     通栏渐变 + 负 margin 全部退掉，改成页内一块普通内容（padding 26 0 30）。
+     §15b 靠"渐变铺到屏幕边"制造层次，现在层次由标题和留白给，不需要它了。 */
+  body.mb-narrow #settingsView .me-hero-sec {
+    margin: 0;
+    padding: 26px 0 30px;
+    background: none;
+  }
+  body.mb-narrow #settingsView .me-hero-sec .me-hero-card {
+    padding: 0;
+    gap: 14px;
+    align-items: center;
+    text-align: left;
+  }
+  /* 头像：蓝渐变 + accent 落影 → 中性填充 + 一圈 hairline。
+     蓝头像是"一个色块在说话"，而这一屏只需要名字说话。
+     58px：现状 64 是"头像即主角"的尺寸，58 让名字回到视觉第一顺位。 */
+  body.mb-narrow #settingsView .me-hero-sec .me-ava {
+    width: 58px;
+    height: 58px;
+    line-height: 58px;
+    font-size: 23px;
+    background: var(--mb-fill, rgba(120, 120, 128, 0.24));
+    color: var(--mb-text-2, var(--dim));
+    box-shadow: 0 0 0 0.5px var(--mb-hairline, var(--line));
+  }
+  body.mb-narrow #settingsView .me-hero-sec .me-ava-glyph svg { width: 27px; height: 27px; }
+  /* 名字 22/600/-0.5 + 等宽数字：3-4-4 分组的手机号只有在 tabular-nums 下
+     三个数字块才等宽，否则"1"比"5"窄，看上去像分错了组 */
+  body.mb-narrow #settingsView .me-hero-sec .me-name b {
+    font-size: 22px;
+    font-weight: 600;
+    letter-spacing: -0.5px;
+    line-height: 1.3;
+    font-variant-numeric: tabular-nums;
+  }
+  body.mb-narrow #settingsView .me-hero-sec .me-meta { font-size: 13.5px; }
+
+  /* ── ③ 分组、组头、卡面 ─────────────────────────────────── */
+  body.mb-narrow #settingsView .set-sec { margin: 0 0 var(--me-gap, 26px); }
+  body.mb-narrow #settingsView .set-head { margin: 0 0 9px 3px; }
+  /* 组头 13/400/--dim → 12.5/500/--mb-text-2 + 0.03em 字距：
+     现状组头和行内 16px 正文太近，读起来像同一层；拉开后"分组"这个结构自己成立。 */
+  body.mb-narrow #settingsView .set-head b {
+    font-size: 12.5px;
+    font-weight: 500;
+    letter-spacing: 0.03em;
+    color: var(--mb-text-2, var(--dim));
+  }
+  body.mb-narrow #settingsView .me-dev-box,
+  body.mb-narrow #settingsView .me-theme-box {
+    border: 0;
+    border-radius: var(--me-r, 16px);
+    background: var(--mb-surface, var(--side));
+    box-shadow: 0 0 0 0.5px var(--mb-card-edge, transparent);
+    overflow: hidden;
+  }
+  /* 退场卡的壳退掉：按钮自己带形状与底色，外面再套一层卡就是两层壳 */
+  body.mb-narrow #settingsView .me-out-sec .me-out-box {
+    background: transparent;
+    box-shadow: none;
+    border-radius: 0;
+    overflow: visible;
+  }
+
+  /* ── 行：56 高、左缩 18 的分割线 ──────────────────────────
+     52 → 56：一屏仍然放得下（这页总共十来行），但触控和呼吸都够；
+     分割线左缩从 16 → 18，与行内文字沿对齐（iOS 分组列表的读法）。 */
+  body.mb-narrow #settingsView .me-kv { min-height: 56px; padding: 8px 18px; }
+  body.mb-narrow #settingsView .me-k {
+    font-size: 16px;
+    letter-spacing: -0.1px;
+    color: var(--text);
+  }
+  body.mb-narrow #settingsView .me-v { font-size: 15px; color: var(--mb-text-2, var(--dim)); }
+  body.mb-narrow #settingsView .me-v-mono { font-size: 13.5px; }
+  body.mb-narrow #settingsView .me-kv + .me-kv::before {
+    left: 18px;
+    right: 0;
+    height: 0.5px;
+    background: var(--mb-hairline, var(--line));
+  }
+  /* 清除缓存 / 当前设备是 button 形态，行高与无箭头行对齐 */
+  body.mb-narrow #settingsView button.me-cache-row {
+    min-height: 56px;
+    padding: 8px 18px;
+  }
+
+  /* ── ⑦ 外观（挪到全页末尾后的行距校准）─────────────────── */
+  body.mb-narrow #settingsView .me-theme-row { min-height: 56px; padding: 8px 18px; }
+  body.mb-narrow #settingsView .me-theme-label { font-size: 16px; letter-spacing: -0.1px; }
+
+  /* ── ⑥ 退场按钮：浅红底胶囊，不是整行红字 ─────────────────
+     现状是"白卡里一行居中红字"，跟上面的设置行动作长得一样，只有颜色不同 ——
+     危险动作和普通动作共用一套语法，用户会当成列表里的又一项。
+     改独立按钮：52 高、16 圆角、11% 红底 —— 它是"离开"这个动作，不是一个设置项。 */
+  body.mb-narrow #settingsView .me-out {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 52px;
+    height: 52px;
+    padding: 0 16px;
+    box-sizing: border-box;
+    border-radius: var(--me-r, 16px);
+    background: color-mix(in srgb, var(--mb-unread, var(--bad)) 11%, transparent);
+    color: var(--mb-unread, var(--bad));
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: -0.1px;
+    text-align: center;
+  }
+  body.mb-narrow #settingsView .me-out:active { opacity: 0.72; }
+  body.mb-narrow #settingsView .me-out-danger:active {
+    background: color-mix(in srgb, var(--mb-unread, var(--bad)) 18%, transparent);
+  }
 }
