@@ -110,7 +110,8 @@ console.log('\n[2] 有配置 → 起隧道；frpc 崩一次 → 自动重连');
   const st = apply({ dataDir: tmp, port: PORT });
   check('状态进入启动中', st.state === 'starting' || st.state === 'up', st.state);
 
-  const ok = await waitFor(() => capture().length >= 2 && status().state === 'up', 6000);
+  // 宽限期 6 秒才判 up（spawn ≠ 登录成功，见 tunnel.mjs 的 UP_GRACE_MS）：窗口要盖过它
+  const ok = await waitFor(() => capture().length >= 2 && status().state === 'up', 12_000);
   const lines = capture();
   check('崩过一次后自己连回来了', ok, `尝试次数 ${lines.length}`);
   check('子域名/服务器写进了 toml', /subdomain = "dev-a1"/.test(lines.at(-1)?.conf ?? '') && /serverAddr = "relay.test"/.test(lines.at(-1)?.conf ?? ''));

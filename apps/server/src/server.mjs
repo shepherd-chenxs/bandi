@@ -129,6 +129,25 @@ function helloPayload() {
     role: localMode.isJoined() ? 'node' : 'operator',
     // 能力声明：有这个才认得出 `scope` 字段（旧总机没有 → 加入方回 E2050，不静默降级）
     caps: ['scope'],
+    /*
+     * 外网访问（2026-11-08）：**只报门牌号和连接状态**。
+     *
+     * 这个响应是免令牌的（局域网探活、手机端探活都读它），所以字段要克制：
+     * 门牌号本身不是秘密（知道地址的人照样要先过中枢登录），但 token、pid、
+     * 可执行文件路径不是 —— 一律不外带。
+     *
+     * 为什么非得放这儿：朋友装完、出门，手机连不上时唯一能自查的地方就是这一行。
+     * 界面上没有它，"隧道在不在连"就只能靠远程看日志，等于把排查成本全推给用户。
+     */
+    relay: (() => {
+      const t = tunnel.status();
+      return {
+        // off：中枢没下发；unavailable：本机没有 frpc；up：已连；retrying / failed：在重连
+        state: t.state,
+        url: t.publicUrl ?? null,
+        since: t.since ?? null,
+      };
+    })(),
   };
 }
 

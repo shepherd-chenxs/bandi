@@ -27,6 +27,7 @@
       "runtime/apps": "apps",
       "runtime/skills": "skills",
       "runtime/plugins": "plugins",
+      "runtime/vendor": "vendor",
       "runtime/LICENSE": "LICENSE",
       "runtime/NOTICE": "NOTICE",
       "runtime/node-LICENSE.txt": "node-LICENSE.txt"

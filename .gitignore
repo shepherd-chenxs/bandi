@@ -59,6 +59,10 @@ check.err
 # 随包分发的 Node 运行时（80 MB；打包前跑 node apps/desktop/fetch-node.mjs 取，绝不进版本控制）
 apps/desktop/binaries/
 
+# 随包分发的隧道客户端 frpc（约 15 MB；打包前跑 node apps/desktop/fetch-frpc.mjs 取）。
+# 不入库的原因和 node 一样：二进制不该进版本控制，而且平台不同取的那份也不同。
+vendor/frp/
+
 # 摊给安装包用的运行时副本（打包前跑 node apps/desktop/stage-runtime.mjs 生成；源头是 apps/ 与 skills/）
 apps/desktop/runtime/
 

@@ -29,6 +29,19 @@ import { readRelay } from './relay.mjs';
 const BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000, 60_000];
 
 /**
+ * 进程活了多久才算"真的连上"（毫秒）。
+ *
+ * frpc 的 `spawn` 只说明**进程起来了**，登录成功是之后的事；登录失败会立刻退出
+ * （`loginFailExit`）。2026-11-08 实测：中枢挂掉时拿 spawn 当"连上"，`retries` 每轮被
+ * 清零 → 退避永远停在 1 秒，一小时重试 2000+ 次、日志涨到 367KB。
+ * 撑过这个宽限期还在的，才是登录过了的——此时清零退避才成立。
+ */
+const UP_GRACE_MS = 6_000;
+
+/** 单个日志文件的上限；超了在下次起进程前滚成 `.1`（只留一代，够排查就行） */
+const LOG_MAX_BYTES = 4 * 1024 * 1024;
+
+/**
  * @type {{
  *   state: 'off'|'unavailable'|'starting'|'up'|'retrying'|'failed',
  *   child: import('node:child_process').ChildProcess|null,
@@ -39,6 +52,7 @@ const BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000, 60_000];
  *   since: number,
  *   retries: number,
  *   timer: NodeJS.Timeout|null,
+ *   upTimer: NodeJS.Timeout|null,
  *   lastError: string|null,
  *   bin: string|null,
  *   subdomain: string|null,
@@ -59,6 +73,7 @@ const S = {
   since: 0,
   retries: 0,
   timer: null,
+  upTimer: null,
   lastError: null,
   bin: null,
   warned: new Set(),
@@ -86,14 +101,35 @@ function logPath(dataDir) {
 /**
  * 找 frpc。顺序：`BANDI_FRPC` → 仓库内 `vendor/frp/` → PATH。
  *
+ * **自编译优先**（2026-11-08）：`bandi-tunnel` 是我们自己从 frp 源码编译、改名的产物
+ * （apps/desktop/build-frpc.mjs）。为什么改名：frp 是黑产滥用最多的隧道工具，官方
+ * 原版 frpc.exe 的哈希和文件名躺在各家杀软的特征库里，装了就报"木马"；自编译产物
+ * 哈希全新、名字不带 "frp"，哈希/名字两路特征都避开了（剩下的只有行为启发式）。
+ * 官方 frpc 仍保留在候选里 —— 自编译没就位时兜底（fetch-frpc.mjs 拉的那份）。
+ *
  * **找不到不算错**：安装包里没带 frpc 的开发机上，这个模块就该安静地空转。
  * 只提醒一次（`warnOnce`），别每 60 秒刷一行。
  */
 function findBin() {
   const explicit = String(process.env.BANDI_FRPC ?? '').trim();
-  const names = process.platform === 'win32' ? ['frpc.exe', 'frpc'] : ['frpc', 'frpc.exe'];
+  const names = process.platform === 'win32'
+    ? ['bandi-tunnel.exe', 'bandi-tunnel', 'frpc.exe', 'frpc']
+    : ['bandi-tunnel', 'bandi-tunnel.exe', 'frpc', 'frpc.exe'];
+
+  /*
+   * 显式指定 = **唯一凭据**：设了 BANDI_FRPC 就不再往 vendor/PATH 兜底。
+   * 指错了就该明说"找不到"（unavailable），而不是悄悄换成 vendor 里那份——
+   * 那种兜底正是"冒烟里假二进制被真二进制顶掉、断言全乱"的根源。
+   */
+  if (explicit) {
+    try {
+      if (fs.statSync(explicit).isFile()) return explicit;
+    } catch { /* 落到 unavailable */ }
+    warnOnce('bin', `[外网] BANDI_FRPC 指向的文件不存在：${explicit} —— 外网访问不可用，本机使用不受影响`);
+    return null;
+  }
+
   const candidates = [];
-  if (explicit) candidates.push(explicit);
   for (const n of names) candidates.push(path.join(repoRoot, 'vendor', 'frp', n));
 
   for (const c of candidates) {
@@ -202,7 +238,8 @@ function reapStale(dataDir) {
   if (Number.isInteger(pid) && pid > 0) {
     const info = processInfo(pid);
     const cmd = normPath(info?.cmd ?? '');
-    if (cmd && cmd.includes('frpc') && cmd.includes(normPath(dataDir))) {
+    // 自编译二进制叫 bandi-tunnel（防杀软），官方版叫 frpc —— 两个名字都得认
+    if (cmd && /frpc|bandi-tunnel/.test(cmd) && cmd.includes(normPath(dataDir))) {
       killPid(pid);
       console.warn(`[外网] 收掉上次没退干净的 frpc（pid ${pid}）`);
     }
@@ -231,6 +268,7 @@ function clearPidFile(dataDir) {
 
 function spawnFrpc(bin, conf, dataDir) {
   fs.mkdirSync(path.dirname(logPath(dataDir)), { recursive: true });
+  rotateLog(dataDir);
   const out = fs.openSync(logPath(dataDir), 'a');
 
   // 冒烟用假 frpc（`.mjs`）：用当前 node 跑它。真二进制直接执行。
@@ -252,6 +290,20 @@ function spawnFrpc(bin, conf, dataDir) {
     // 句柄已经交给子进程了；父进程这份不关，日志文件会一直被钉住
     try { fs.closeSync(out); } catch { /* 已经关了 */ }
   }
+}
+
+/**
+ * 日志轮转：文件超过 `LOG_MAX_BYTES` 就滚成 `.1`（覆盖上一代）。
+ *
+ * frpc 自己不会滚，而"中枢挂了"这种长期故障会持续追加——不滚就是无限增长。
+ * 失败**不算错**：滚不动最多是日志大一点，绝不能因此起不了隧道。
+ */
+function rotateLog(dataDir) {
+  const file = logPath(dataDir);
+  try {
+    const st = fs.statSync(file);
+    if (st.size > LOG_MAX_BYTES) fs.renameSync(file, `${file}.1`);
+  } catch { /* 还没有日志文件 / 被占用：下次再说 */ }
 }
 
 /** 子进程死一次就按退避重来；`stop()` 之后不会再重来（state 已经变了） */
@@ -319,12 +371,19 @@ function startProcess(cfg) {
      * 两条抢同一个子域名（2026-11-07 冒烟第一次就踩到：pid 被清成 null、日志里多连了一次）。
      */
     if (S.child !== child) return;
-    S.state = 'up';
-    S.since = Date.now();
-    S.retries = 0;
-    S.lastError = null;
+    // 先记 pid（收尸要用），但**不**在这里宣布 up：spawn 只代表进程起来了，
+    // 登录成功与否要等宽限期（见 UP_GRACE_MS 的注释）。
     if (S.pid) writePidFile(dataDir, S.pid);
-    console.log(`[外网] 隧道已连（${cfg.subdomain} → 本机 ${port}）${cfg.publicUrl ? ` ${cfg.publicUrl}` : ''}`);
+    if (S.upTimer) clearTimeout(S.upTimer);
+    S.upTimer = setTimeout(() => {
+      S.upTimer = null;
+      if (S.child !== child || S.state === 'off') return;
+      S.state = 'up';
+      S.since = Date.now();
+      S.retries = 0;
+      S.lastError = null;
+      console.log(`[外网] 隧道已连（${cfg.subdomain} → 本机 ${port}）${cfg.publicUrl ? ` ${cfg.publicUrl}` : ''}`);
+    }, UP_GRACE_MS);
   });
 
   child.on('error', (e) => {
@@ -336,6 +395,7 @@ function startProcess(cfg) {
 
   child.on('exit', (code, signal) => {
     if (S.child !== child) return; // 不是当前这条（stop() 收的 / 已换新进程）：状态不归它管
+    if (S.upTimer) { clearTimeout(S.upTimer); S.upTimer = null; } // 死在宽限期里：别让它稍后把状态诈成 up
     S.child = null;
     S.pid = null;
     clearPidFile(dataDir);
@@ -391,6 +451,10 @@ export function stop() {
   if (S.timer) {
     clearTimeout(S.timer);
     S.timer = null;
+  }
+  if (S.upTimer) {
+    clearTimeout(S.upTimer);
+    S.upTimer = null;
   }
   const was = S.state;
   const child = S.child;

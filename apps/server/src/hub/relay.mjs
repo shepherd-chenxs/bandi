@@ -111,8 +111,13 @@ export function relayTrust(dataDir) {
     hosts.push(u.hostname.toLowerCase());
     origins.push(`${u.protocol}//${u.host}`);
   } catch {
-    // 没给 publicUrl：只能按 subdomain 记一个主机名（来源白名单留空，写请求仍会被挡）
-    hosts.push(`${cfg.subdomain}.`);
+    /*
+     * 没给 publicUrl：**什么都不放行**。
+     * 早先这里写的是 `hosts.push(\`${cfg.subdomain}.\`)` —— 拼出来的是一个带尾点的
+     * 裸子域名（`ddev-x.`），既不是任何真实 Host，写来源那边还留空：等于记了一条
+     * 永远匹配不上、却让人以为"已经放行了"的东西。宁可继续走局域网 + 用户自己设
+     * `BANDI_ORIGINS`，也不要留一条假放行。
+     */
   }
   return { hosts, origins };
 }
