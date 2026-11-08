@@ -8,7 +8,7 @@
  *   · `acceptNodes` —— **角色**：收不收别的机器作为算力节点加入（总机 / 分机）。
  *     纯运行期判定，**改完立刻生效**。总机 = 收节点、发邀请码；分机 = 手机照连、
  *     不收节点。
- *   · `pairEnabled` —— **手机连接**总开关（「设置 → 手机连接」页顶那颗）。
+ *   · `pairEnabled` —— 已随手机配对体系整体退场（2026-11-07），老配置里留着也忽略。
  *
  * `acceptNodes` 没显式写过时回退看一眼老的 `allowLan`（true = 当年开过对外服务的总机）
  * —— 只为了升级那一刻：老配置文件（只有 allowLan:true）继续当总机，在跑的机器不降级。
@@ -45,12 +45,6 @@ export function readNetMode() {
   const acceptNodes =
     typeof j?.acceptNodes === 'boolean' ? j.acceptNodes : j?.allowLan === true;
   /*
-   * `pairEnabled`（2026-11-02）：**手机连接**总开关 —— 「设置 → 手机连接」页顶那颗。
-   * 没写过 = 开（老配置文件升级后行为不变：手机照连）。关掉后：不发邀请码、
-   * 手机 claim / resume 一律拒绝、已配对的手机当场全部断开（routes/pair.mjs）。
-   */
-  const pairEnabled = j?.pairEnabled !== false;
-  /*
    * `whitelistEnabled` / `whitelistIps`（2026-11-03，对齐 1Panel 安全页的「授权 IP」）：
    * **网络周界闸** —— 开启后名单之外的 IP 连不上（security/ipallow.mjs 的 E3003）。
    * 监听改成**永远对外**之后，这是令牌闸外面那道网络层的门。没写过 = 关（行为不变）。
@@ -60,21 +54,20 @@ export function readNetMode() {
   const whitelistEnabled = j?.whitelistEnabled === true;
   const whitelistIps = Array.isArray(j?.whitelistIps) ? j.whitelistIps.map((x) => String(x)) : [];
   const boundDomain = typeof j?.boundDomain === 'string' ? j.boundDomain : '';
-  const value = { acceptNodes, pairEnabled, whitelistEnabled, whitelistIps, boundDomain };
+  const value = { acceptNodes, whitelistEnabled, whitelistIps, boundDomain };
   if (st) cache = { mtimeMs: st.mtimeMs, value };
   return value;
 }
 
 /**
- * 写形态。只改显式给了的键（**部分更新**）—— 界面切角色只 POST `acceptNodes`、
- * 手机连接页只 POST `pairEnabled`、安全页只 POST 白名单/域名那几个键，
- * 谁也不许顺手动别人的键。
+ * 写形态。只改显式给了的键（**部分更新**）—— 网络页只 POST `acceptNodes`、
+ * 安全页只 POST 白名单/域名那几个键，谁也不许顺手动别人的键。
+ * （`pairEnabled` 随手机配对体系退场：老配置文件里若还留着这个键，读的时候直接忽略。）
  */
 export function writeNetMode(patch) {
   const cur = readNetMode();
   const next = {
     acceptNodes: typeof patch?.acceptNodes === 'boolean' ? patch.acceptNodes : cur.acceptNodes,
-    pairEnabled: typeof patch?.pairEnabled === 'boolean' ? patch.pairEnabled : cur.pairEnabled,
     whitelistEnabled:
       typeof patch?.whitelistEnabled === 'boolean' ? patch.whitelistEnabled : cur.whitelistEnabled,
     whitelistIps: Array.isArray(patch?.whitelistIps) ? patch.whitelistIps : cur.whitelistIps,

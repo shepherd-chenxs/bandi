@@ -182,8 +182,15 @@ export function rich(s) {
 
 
 
-export function askDialog({ title, body = '', field = false, value = '', placeholder = '', check = null, ok = '确定', danger = false }) {
+export function askDialog({ title, body = '', field = false, value = '', placeholder = '', check = null, ok = '确定', danger = false, big = false }) {
   const dlg = $('askDlg');
+  /*
+   * 大按钮档（2026-11-07 手机实机截图：「取消和退出按钮做大一些」）。
+   *
+   * 加在 dialog 上而不是给两颗按钮改内联样式：样式归 style.css，这里只挂一个开关，
+   * 以后别的"只有一个动作要人拍板"的确认框想变大，传 `big: true` 就够。
+   */
+  dlg.classList.toggle('ask-big', !!big);
   $('askTitle').textContent = title;
   const bodyEl = $('askBody');
   bodyEl.innerHTML = rich(body);
@@ -241,7 +248,7 @@ export const askConfirm = async (o) => (await askDialog({ ...o, field: false }))
  * 标题给个中性的「确认一下」。**调用处记得 `await`**（返回 Promise，不是布尔值）。
  */
 export const confirmDo = async (text, opts = {}) =>
-  askConfirm({ title: opts.title ?? '确认一下', body: String(text ?? ''), ok: opts.ok ?? '确定', danger: opts.danger ?? true });
+  askConfirm({ title: opts.title ?? '确认一下', body: String(text ?? ''), ok: opts.ok ?? '确定', danger: opts.danger ?? true, big: opts.big ?? false });
 
 
 

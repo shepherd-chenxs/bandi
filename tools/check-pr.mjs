@@ -84,7 +84,7 @@ const HOST_ALLOW = [
   // 浏览器/编辑器不会去 GET 它；2026-10-20 新增独立图标母版 icons/icon.svg 时被误判成"外部地址"。
   'www.w3.org',
   // 身份中枢（2026-11-07 起 hub 化的唯一登录路径）：用户自建部署的官方中枢，
-  // 登录 / 名册 / 签票都直连它 —— 见 docs/现状.md §二十五、bandi-hub/contract.md。
+  // 登录 / 名册 / 签票都直连它 —— 见 bandi-hub/contract.md。
   'hub.yuancang.space',
   // Android XML 命名空间（AndroidManifest / 布局文件的 xmlns 声明）——
   // 不是网络地址，是每个 Android 工程文件的标准头（2026-11-07 原生壳 apps/mobile-native）。
@@ -96,7 +96,7 @@ const HOST_ALLOW = [
  * 旧用例 / 旧断言，在这里登记 file → 理由（口径出处 + 新验收在哪）才放行；
  * 没登记的净删照拦 —— 这张表只豁免「口径变化带走的那批」，不是放松的口子。
  * 本批（2026-11-07）：本地账号体系 / 角色 / 协作中心退场 + 登录即放行改写，
- * 见 docs/现状.md §二十六 / §二十七 / §二十八；替代验收 = 各冒烟的 hub 登录路径
+ * 见 docs/形态决策.md §十五 ②③④；替代验收 = 各冒烟的 hub 登录路径
  * + run-smokes 全绿。
  */
 const ASSERT_WAIVERS = {

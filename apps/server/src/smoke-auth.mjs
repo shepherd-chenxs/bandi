@@ -335,9 +335,14 @@ try {
   const lanAnon = await get(lanUrl, '/api/state');
   check('从局域网地址进来同样要令牌（鉴权跟来源无关，只跟"对外"有关）', lanAnon.status === 401, String(lanAnon.status));
   check('局域网地址带令牌照常能读', (await get(lanUrl, '/api/state', { 'X-Bandi-Token': token })).status === 200);
-  const pairPage = await get(lanUrl, '/pair');
-  check('匿名能开配对页（手机扫码的第一步，不要求登录）', pairPage.status === 200 && /text\/html/.test(pairPage.headers.get('content-type') ?? ''), String(pairPage.status));
-  check('配对页响应带着补种的 CSRF Cookie（E4099 的病根钉住：所有 HTML 响应前必须补种）', /bandi_csrf=/.test(pairPage.headers.get('set-cookie') ?? ''), pairPage.headers.get('set-cookie') ?? '(无)');
+  /*
+   * 匿名抓首页 = 中枢账号登录页（2026-11-07：配对页随设备令牌体系退场，手机浏览器与
+   * 桌面走同一张登录页）。顺带钉住「所有 HTML 响应之前必须补种 CSRF Cookie」——
+   * 那是 E4099 的病根，与页面本身叫什么无关。
+   */
+  const loginPage = await get(lanUrl, '/');
+  check('匿名开首页 → 200 HTML 登录页', loginPage.status === 200 && /text\/html/.test(loginPage.headers.get('content-type') ?? ''), String(loginPage.status));
+  check('登录页响应带着补种的 CSRF Cookie（E4099 的病根钉住）', /bandi_csrf=/.test(loginPage.headers.get('set-cookie') ?? ''), loginPage.headers.get('set-cookie') ?? '(无)');
   check('匿名 POST 写接口也被挡（对外形态下写比读更不能裸）', (await send(lanUrl, '/api/projects', { headers: {} })).status === 401, '401 才对');
   /*
    * 老客户端（旧界面 / 旧脚本）可能还在发 `allowLan`。已删的键必须**写不回配置**

@@ -100,15 +100,6 @@ export async function handleProject(req, res, url) {
   if (req.method === 'PATCH' && taskOne) {
     const id = decodeURIComponent(taskOne[1]);
     const body = await readBody(req);
-    /*
-     * 手机设备令牌的**字段级闸**（2026-11 手机端增量，设计 §3.3）：body 只有 handler 看得见
-     * （auth.mjs 判不了），与 `PUT /api/personas/:id` 的 model/runtime 字段闸同一模式。
-     * 手机审批 = 只允许 {status, note} 两个键，多一个键就拒 —— 改标题/执行人是桌面端的事。
-     */
-    if (req.bandiAuth?.kind === 'device') {
-      const extra = Object.keys(body ?? {}).filter((k) => k !== 'status' && k !== 'note');
-      if (extra.length) return fail(res, 403, 'E3702', `手机端只能改卡票状态（多传了：${extra.join('、')}）`);
-    }
     try {
       const before = store.getProjectTask(id);
       // actorUser（2026-11-03 设备绑人后对设备返回归属人）→ 改状态就署到这个人头上，

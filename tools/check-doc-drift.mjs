@@ -67,7 +67,6 @@ const LIVE = [
   ['SECURITY.md', '安全默认与部署建议'],
   ['CONTRIBUTING.md', '开发约定（含注释规约）'],
   ['deploy/README.md', '部署手册：隧道、节点报到、排障'],
-  ['docs/现状.md', '台账：每一版装了什么（历史条目保留，现行口径看最新补记）'],
   ['docs/架构.md', '模块表与数据流'],
   ['docs/形态决策.md', '单机 / 总机 / 分机的取舍'],
   ['docs/契约.md', '接口契约'],
@@ -83,7 +82,10 @@ const LIVE = [
  * 值写清楚它是什么时间的什么决定 —— 有人想改它之前先看到这句。
  */
 const SNAPSHOT = {
-  'docs/mobile/pwa-prd.md': '2026-10 手机端 PRD（需求快照；实现口径见 pwa-design / 现状.md）',
+  'docs/mobile/pwa-prd.md': '2026-10 手机端 PRD（需求快照；实现口径见 pwa-design）',
+  // 配对体系（扫码/邀请码/设备令牌）2026-11-07 整体退场：pwa-design 里那些路径与
+  // smoke-pair / pairing.mjs 等文件名只作历史记录，不再拿"文件在不在"去判它。
+  'docs/mobile/pwa-design.md': '2026-11 手机配对体系设计快照（该体系 2026-11-07 整体退场，见 docs/形态决策.md §十五 ④）',
   'docs/PRD-2026-10-23-PR审阅与授权合并.md': '2026-10-23 需求快照',
   'docs/PRD-2026-10-23-项目面板改造.md': '2026-10-23 需求快照',
   'docs/交接-2026-10-18.md': '2026-10-18 交接快照',
@@ -93,7 +95,8 @@ const SNAPSHOT = {
  * **活注释**：代码里承担"文档职责"的那几个文件（文件头讲规则、讲取舍）。
  * 只扫陈旧结论，不扫引用完整性 —— 注释里提到路径常常是举例，判"文件不存在"会误伤。
  */
-const LIVE_CODE = ['apps/server/src/auth.mjs', 'apps/server/src/config.mjs', 'apps/server/src/store/devices.mjs'];
+const LIVE_CODE = ['apps/server/src/auth.mjs', 'apps/server/src/config.mjs'];
+// 原来还扫 store/devices.mjs —— 该文件 2026-11-07 随手机配对体系删除。
 
 /* ============================================================ 文件索引 */
 
@@ -220,7 +223,7 @@ function skipToken(t) {
   if (!t.includes('/') && /\.(json|service|cmd|vbs)$/.test(t)) return true;
   /*
    * 被忽略的目录（tmp / data / dist …）里本来就没有可校验的东西：
-   * `tmp/stop-keep-cdp.mjs` 就是"本地临时脚本、不随仓库提交"（docs/现状.md 原话），
+   * `tmp/stop-keep-cdp.mjs` 就是"本地临时脚本、不随仓库提交"，
    * 拿它判红属于冤枉人。
    */
   if (t.includes('/') && IGNORE_DIRS.has(t.split('/')[0])) return true;

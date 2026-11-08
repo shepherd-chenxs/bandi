@@ -5,7 +5,7 @@
  * （routes/hub.mjs 转给中枢），本文件不再管认证 —— 剩下的是影子账号的维护与"我是谁"：
  *
  *   POST   /api/logout       → 退出（**免令牌**，凭据就是那张会话票本身）
- *   GET    /api/me           → 我是谁（operator / user / device）
+ *   GET    /api/me           → 我是谁（operator / user）
  *   GET    /api/users        → 账号列表（**不含任何凭据字段**）
  *   POST   /api/users        → 建影子账号（预占名字，等中枢账号首次登录时绑定）
  *   PATCH  /api/users/:id    → 改名 / 启用禁用
@@ -170,22 +170,9 @@ export async function handleUsers(req, res, url) {
         return sendJson(res, 200, me), true;
       }
       /*
-       * 设备 / 节点令牌：回它们自己的身份。`/api/me` 是**给浏览器问"我是谁"**的，
-       * 前端 `load()` 现在只问这一条，所以设备详情也一起带上（原来在 /api/pair/me 里）。
+       * 到这儿只剩节点令牌（机器身份）：它没有"我是谁"可言 —— 前端问 /api/me 的只有
+       * 人和操作员。设备令牌那条 2026-11-07 随配对体系一起退场。
        */
-      if (who?.kind === 'device') {
-        const d = store.getDevice(who.deviceId);
-        /*
-         * 归属人（2026-11-03 设备绑人）：手机也要能回答"我是谁"。
-         * 现在带上它归属的账号（零账号形态的老设备可能是 null，前端按"未绑定"显示）。
-         */
-        const owner = who.userId ? store.getUser(who.userId) : null;
-        return sendJson(res, 200, {
-          kind: 'device',
-          device: d ? { id: d.id, name: d.name, pairedAt: d.pairedAt } : null,
-          user: owner ? { id: owner.id, name: owner.name } : null,
-        }), true;
-      }
       throw new UserError(401, 'E3810', '还没登录');
     }
 

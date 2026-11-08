@@ -110,7 +110,6 @@ bandi install-cli         # 重新注册全局命令（[--dir] [--path] [--remov
 | 想看什么 | 去哪 |
 | --- | --- |
 | 设计说明：主体功能、统一事件词汇、技术选型、两个适配器的不对称 | [docs/架构.md](docs/架构.md) |
-| 现在做到哪了、踩过哪些坑、每条怎么验收（开发台账） | [docs/现状.md](docs/现状.md) |
 | 为什么是这个形态（托管控制面 ＋ 出站节点） | [docs/形态决策.md](docs/形态决策.md) |
 | 部署、SSH 隧道访问、节点报到、备份与排障 | [deploy/README.md](deploy/README.md) |
 | 桌面壳与打包（三步、环境坑、卸载） | [apps/desktop/README.md](apps/desktop/README.md) |
@@ -124,7 +123,7 @@ bandi install-cli         # 重新注册全局命令（[--dir] [--path] [--remov
 （`build.rs` 读它编译进程序，并同步安装包名 —— **别在别处记第二个号**）。
 未及 `1.0.0` 之前的兼容承诺仍然有效：**不承诺兼容**，插件格式、流程模板、`status.yaml` 契约都还在动。
 发版：改 `version.json` → 提交 → 打 `v<版本>` tag 推上去，CI 自动出安装包并挂 Release。
-`1.0.0` 那次形变的来历、插件 / MCP 的另一套号，见 [docs/现状.md](docs/现状.md)「版本与台账」。
+`1.0.0` 那次形变的来历、插件 / MCP 的另一套号（都已作废），见 [docs/形态决策.md](docs/形态决策.md) §七。
 
 1
 

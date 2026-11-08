@@ -3337,8 +3337,8 @@ export async function paintTaskCardPage(taskId, opts = {}) {
                    <button type="button" class="tc-m-st" id="tcStatusChip" style="--st-c:var(--st-${esc(stKey)})" title="改状态">
                      <i aria-hidden="true"></i><span id="tcStatusText">${esc(task.status)}</span>
                    </button>
-                   <!-- 手机标题/描述只读：device 身份的 PATCH 只收 {status, note}（E3702），
-                        让人改了存不上比不让改更糟。要改内容去桌面，或在对话里让员工改。 -->
+                   <!-- 手机标题/描述只读：手机任务卡页是**审批视图**（2026-11-07 device 身份
+                        退场后这已是产品口径，不再是服务端闸）。要改内容去桌面，或在对话里让员工改。 -->
                    <h1 class="tc-title" id="tcTitleText">${esc(task.title)}</h1>
                    ${flowOnly
                      ? `<div class="tc-m-flownote">由流程「${esc(flowName)}」执行 —— 把状态改成「进行中」就发起；发起后往来在流程实例里看。</div>`
@@ -3347,8 +3347,8 @@ export async function paintTaskCardPage(taskId, opts = {}) {
                  </div>
                  <div class="tc-m-card">
                    ${
-                     /* 执行人行手机上**只读**：服务端字段级闸（routes/project.mjs）对 device 身份
-                        只放 {status, note}（E3702），改执行人是桌面端的事 —— 摆一行展示即可。 */
+                     /* 执行人行手机上**只读**：手机任务卡页只做审批，改执行人是桌面端的事
+                        —— 摆一行展示即可。 */
                      `<div class="tc-m-row"><span class="tc-m-k">执行人</span><span class="tc-m-v${flowOnly ? ' is-dim' : ''}">${esc(whoLabel)}</span></div>`
                    }
                    <div class="tc-m-row"><span class="tc-m-k">项目</span><span class="tc-m-v">${esc(proj?.name ?? '（项目已不在）')}</span></div>
@@ -3688,7 +3688,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
   /* 标题：h1 本身就可写（contenteditable）。**不换元素、不加边框** ——
      换 input 会改字号/行高/盒模型，页面会抖一下（2026-10-18 用户实报）。 */
   const titleEl = $('tcTitleText');
-  // 手机整页（mbTC）标题只读：device 身份的 PATCH 只收 {status, note}（E3702）。
+  // 手机整页（mbTC）标题只读：审批视图，改内容去桌面（界面本来就没给可写态）。
   if (mbTC) {
     titleEl.removeAttribute('contenteditable');
   }
@@ -3714,7 +3714,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     descHost.innerHTML = descVal ? renderMarkdown(descVal) : '<span class="dim">添加描述…</span>';
   };
   const startDescEdit = () => {
-    if (mbTC) return; // 手机端 device 只能改状态（E3702），点了也存不上
+    if (mbTC) return; // 手机端只做审批（改状态），描述不在手机上改
     if (descHost.classList.contains('editing')) return;
     descHost.classList.add('editing');
     descHost.setAttribute('contenteditable', 'plaintext-only'); // 不给边框，只给可写
@@ -3842,7 +3842,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
    * 手机：状态点开**全屏选择页**（mbOpenPicker，与员工详情的运行时/模型、
    * 新建任务的状态同一套 —— 开页压一格历史、返回收画面、防连点都 inside）。
    * 值的落地复用 statusCombo：setValue 存值，保存走 scheduleSave（手机 snapshot 只有 status）。
-   * 执行人不上选择页：device 身份改不了执行人（E3702），那行是只读展示。
+   * 执行人不上选择页：手机只做审批，那行是只读展示。
    */
   if (mbTC) {
     $('tcStatusChip')?.addEventListener('click', () => {
@@ -3861,8 +3861,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
   }
 
   const snapshot = () => ({
-    // 手机整页（device 身份）：服务端字段级闸只收 {status, note}（E3702），所以
-    // snapshot 只带状态 —— 标题/描述/执行人都不在手机上改（界面也是只读的）。
+    // 手机整页：审批视图只存状态 —— 标题/描述/执行人都不在手机上改（界面也是只读的）。
     // 桌面照旧：改了什么就存什么。
     ...(mbTC
       ? { status: statusCombo.value() }

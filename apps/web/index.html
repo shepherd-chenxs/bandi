@@ -463,8 +463,10 @@
 <dialog id="askDlg">
   <form method="dialog">
     <b id="askTitle">标题</b>
-    <!-- white-space:pre-line：说明文字里的 \n 要真的换行（改名那条就有两行） -->
-    <div id="askBody" class="dim" style="margin-top:8px;font-size:12.5px;line-height:1.75;white-space:pre-line"></div>
+    <!-- white-space:pre-line：说明文字里的 \n 要真的换行（改名那条就有两行）。
+         字号/行高搬到 style.css 的 #askDlg #askBody —— 内联压过类选择器，
+         `.ask-big`（退出登录那颗大按钮弹窗）要改字号就改不动。 -->
+    <div id="askBody" class="dim"></div>
     <div id="askField" style="margin-top:12px">
       <input id="askInput" spellcheck="false" />
     </div>

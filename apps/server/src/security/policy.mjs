@@ -11,8 +11,8 @@
  *
  * **登录用户 = 全权**（2026-11-07）：账号全在身份中枢，能过中枢登录这一关，
  * 本机就不再有第二道分级 —— 角色/菜单权限那套已整体退场。机器身份
- * （operator / device / node）的边界原样保留：机器不是人，不因为"人可以全权"
- * 就跟着放宽。
+ * （operator / node）的边界原样保留：机器不是人，不因为"人可以全权"
+ * 就跟着放宽。（`device` —— 手机配对设备令牌 —— 2026-11-07 随配对体系退场。）
  *
  * 为什么不 import auth.mjs：auth 要 import 本模块（decide 是 PDP 包装），
  * 反向引一次就是环。kind 级的归属判定（节点只认自己的端点等）由 auth.mjs
@@ -32,12 +32,6 @@ export function authorize({ who, method, pathname, rules = {} }) {
 
   // operator（回环 / 共享令牌）：清单内全通。清单本身在 guard 兜底（未登记 404）。
   if (who.kind === 'operator') return 'allow';
-
-  // 手机设备：白名单制（设备只认 device 那批路由）
-  if (who.kind === 'device') {
-    if (!api) return m === 'GET' || m === 'HEAD' ? 'allow' : 'E4033';
-    return route?.device ? 'allow' : 'E4033';
-  }
 
   // 登录用户：全放行（能过中枢登录这一关，本机不再有第二道分级）。
   if (who.kind === 'user') return 'allow';

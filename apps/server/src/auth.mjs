@@ -164,13 +164,14 @@ export function clearedTokenCookie() {
  * 这枚令牌**是谁的**（2026-10-16 加的，2026-10-20 带上 scope）。
  *
  * 原来是"一枚令牌走天下"：节点手上的就是总机那枚 master ✗ —— 一台节点被翻 = 整套被翻，
- * 而且「忘掉」踢不掉它（令牌还有效）。现在分四类身份（2026-11 手机端增量补了第三类）：
+ * 而且「忘掉」踢不掉它（令牌还有效）。现在分三类身份（手机设备令牌 2026-11-07 已退场）：
  *   · `operator` —— 总机那枚（脚本 / CLI / 运维，以及 `?token=` 首次进场；
  *                   **浏览器面板走账号会话**，见 `guard` 的回环分支）；
  *   · `node`     —— 每台机器**自己那枚**（邀请码换来的，见 store.issueNodeToken），
  *                  带 `scope: Set`（`compute` / `panel`）；
- *   · `device`   —— 手机设备令牌（`bd_` 前缀，2026-11 手机端增量；见下面 identify 里的注释），
- *                   2026-11-03 起带 `userId`（这部手机属于谁），但**权限仍是 device 白名单**；
+ *   · ~~`device`~~ —— 手机设备令牌**已整体退场**（2026-11-07 用户：「老体系去掉」）：
+ *                   手机只走中枢账号登录（`/hub/enter` → 本机会话）。老库里那三张
+ *                   `mobile_*` 表不再读写，存量 `bd_` 令牌一律认不出来 = 401 E4010。
  *   · `revoked`  —— **曾经是节点令牌、现在库里没有这行哈希**（唯一会删它的是
  *                  `store.revokeNodeTokens`，也就是总机上的「忘掉」）。
  *
@@ -183,20 +184,6 @@ export function identify(auth, token) {
   if (auth.token && timingSafeEqual(token, auth.token)) return { kind: 'operator' };
   const hit = store.nodeAuthByToken(token);
   if (hit) return { kind: 'node', nodeId: hit.nodeId, scope: hit.scope };
-  /*
-   * 第四类身份：手机设备令牌（`bd_` 前缀，2026-11 手机端增量）。
-   * 走 store.deviceAuthByToken（只存哈希的那张表）；不认识/已过期/被踢出/归属人被禁用
-   * 都返回 null，走下面的 401 E4010 —— **不学节点造 `revoked` 类**：设备被踢出的引导是
-   * "重新扫码"，与"需要令牌"在前端是同一条提示，不值得多一个身份类。
-   *
-   * `userId`（2026-11-03 设备绑人）：这部手机**属于谁**。以前设备是孤儿 —— 有身份
-   * （deviceId + 设备名）但不挂在任何人名下，于是手机上审批/发消息在事件流里只记
-   * 「一台设备」。现在把归属人一起带出来，`actorUser` 才能把它记到人头上。
-   * ⚠️ 带 userId ≠ 提权：`kind` 仍是 `device`，PDP 照走 device 白名单
-   * （security/policy.mjs），手机看不到比白名单更多的东西。
-   */
-  const dev = store.deviceAuthByToken(token);
-  if (dev) return { kind: 'device', deviceId: dev.deviceId, userId: dev.userId ?? null };
   if (String(token).startsWith('bn_')) return { kind: 'revoked' };
   return null;
 }
@@ -320,101 +307,6 @@ export function isPanelForbidden(method, pathname) {
 }
 
 /**
- * **设备令牌的权限边界**（2026-11 手机端增量，设计 §3.3 + **§3.3.1 增量修订优先**）：
- * /api 走**白名单制**（不在名单 = `E4033`），**同源静态无条件放行**。
- *
- * 口径（用户已确认）：手机端写操作只有"审卡票 + 给员工发消息"两类，其余只读 ——
- *   · 看：状态 / 技能 / 流程 / 项目与看板 / 卡详情与评论 / 会话 / 员工与群信息 / 我是谁 / 版本指纹；
- *   · 写：发消息（POST 会话消息）、留便签（POST 卡评论，仅 mode:'note' —— body 只有
- *     handler 看得见，字段级闸落在 routes/project.mjs）、审批（PATCH 卡，仅 {status, note}，
- *     字段级闸同样落在 routes/project.mjs）。
- *
- * 往里加路径之前先回答一句：手机**凭什么**需要它？白名单外的都是操作员的事 ——
- * 删任务、改员工、动连接器、踢设备，一台被翻的手机不该碰得到。
- *
- * ⚠️ **这个函数已经没有调用方了**（2026-11-03 核实）：Phase 2 PDP 收编后，设备能到哪儿
- * 由 `security/route-policy.mjs` 清单里的 `device: true` 标记说了算（policy.mjs 判定），
- * 这里的口径被逐条搬了过去。留着只为对照 v2.5 的历史口径 ——
- * **要改手机能干什么，去 route-policy 加 `device: true`，改这里一行用都没有**
- * （2026-11-03 手机建卡 403 排查时在这里白改了一轮，才发见判定根本不经过它）。
- */
-function deviceMayReach(method, pathname) {
-  /*
-   * 规则一（设计 §3.3.1.1）：白名单**只管 /api** —— 同源静态（HTML/JS/CSS/manifest/图标/SW，
-   * 也就是 server.mjs 里 serveStatic 覆盖的那些非 /api 路径）与 panel 同权、无条件放行。
-   * 理由：静态资源是公开代码，白名单管的是**数据**不是代码；把代码也管起来只会造成
-   * "扫上码但页面加载不出来"（QA 第 1 轮 P0 白屏）。GET/HEAD 之外的非 /api 请求仍被闸住
-   * （serveStatic 本身也只吃 GET，双保险）。
-   */
-  if (!pathname.startsWith('/api/')) return method === 'GET' || method === 'HEAD';
-
-  if (method === 'GET') {
-    /*
-     * 规则二（设计 §3.3.1.2）：受限视图**浏览**口径的完整 GET 表。
-     * 加一条之前先回答：手机**凭什么**需要它？表外的都是操作员的事（§3.3.1.2 的 403 清单）。
-     */
-    if (
-      [
-        '/api/state', // 工作台/会话/通讯录总览（启动必需）
-        '/api/skills', // 启动 load() 的 Promise.all 另一半 —— 缺了整页挂
-        '/api/workflows', // 工作台流程磁贴
-        '/api/projects', // 项目列表
-        '/api/tasks', // 全局任务 / 看板
-        '/api/pair/me', // 我是谁（设备名）
-        /*
-         * `/api/me`（2026-10-28 第三刀）：前端 `state.mjs` 用它一次问清"我是哪种身份 +
-         * 我该看哪些菜单"。手机也要问 —— 它回 `{kind:'device'}`（只读、零敏感），
-         * 设备端由此可以走同一条前端路径，不必为身份再分一套 if。
-         */
-        '/api/me',
-        '/api/web-version', // 60 秒版本指纹轮询（只回 mtime，零敏感）
-        '/api/prefs', // 「我的」页回复风格**读**（PUT 仍 403：那是改全体员工的沟通偏好）
-        /*
-         * 全局 SSE（2026-10-28 修）：`app.mjs` 的 `startEvents()` 是**每个页面**都会开的
-         * 一条订阅，它推的只是「哪个会话动了」的 `{type:'conv', id}`；设备已经能读全部
-         * 会话正文（`/api/conversations/:id`），这条通知不超出同一个读范围。
-         * 不放行的话手机端每页都挂一条 403 订阅，后台刷新也是死的。
-         */
-        '/api/events',
-      ].includes(pathname)
-    ) {
-      return true;
-    }
-    /*
-     * ⚠️ 这几条必须**按路径段精确匹配**，不能用前缀匹配：
-     * `/api/personas/:id` 前缀式会把 `/api/personas/:id/runtime-skills`（技能**编辑**视图）
-     * 一起放行 —— 那是 §3.3.1.2 明确要保持 403 的脸。
-     */
-    return (
-      /^\/api\/projects\/tasks\/[^/]+(\/comments)?$/.test(pathname) // 卡详情 / 卡评论
-      || /^\/api\/projects\/[^/]+\/tasks$/.test(pathname) // 项目看板
-      || /^\/api\/conversations\/[^/]+$/.test(pathname) // 会话详情 / 消息
-      || /^\/api\/personas\/[^/]+$/.test(pathname) // 员工详情（浏览口径）
-      || /^\/api\/personas\/[^/]+\/tasks$/.test(pathname) // 员工详情里的任务页签
-      || /^\/api\/groups\/[^/]+$/.test(pathname) // 群信息（成员列表）
-      /*
-       * 单运行的实时事件流（2026-10-28 修）：前端 `streamRun()` 靠它把「边跑边看」
-       * 画出来。设备既然能读这条会话（上一条 `/api/conversations/:id`）并能派活
-       * （POST messages），这条流的**内容就是那条会话的正文**，不额外扩读范围。
-       * 不放行的话：发完消息界面一直停在「正在输入」，回复要刷新才看得到。
-       */
-      || /^\/api\/runs\/[^/]+\/stream$/.test(pathname)
-    );
-  }
-  if (method === 'POST') {
-    return /^\/api\/conversations\/[^/]+\/messages$/.test(pathname)
-      || /^\/api\/projects\/tasks\/[^/]+\/comments$/.test(pathname)
-      /*
-       * 停止生成（2026-10-28 修）：与「发消息」是一对 —— 能派不能停，手机上那轮
-       * 会话就永远挂着「正在输入」（`chat.mjs` 的停止按钮走的就是这条）。
-       */
-      || /^\/api\/runs\/[^/]+\/abort$/.test(pathname);
-  }
-  if (method === 'PATCH') return /^\/api\/projects\/tasks\/[^/]+$/.test(pathname);
-  return false;
-}
-
-/**
  * **判定只有一处**（设计 §6.1）。`guard()` 里只调这一个函数，别的什么都不判。
  *
  * 判定逻辑本体在 `security/policy.mjs` 的 `authorize()`（**登录用户 = 全权**，
@@ -446,20 +338,15 @@ export function decide(who, method, pathname) {
  *   · 登录用户 → 他自己（多端各记各的，这是唯一精确的一档）；
  *   · operator（回环 / 共享令牌）→ **第一个用户**（"本机自动登录"：像一台共用电脑，
  *     没人显式登录时活都算机主的）。还没有任何用户 → null，调用方回落到 LOCAL_USER 占位；
- *   · 手机设备令牌 → **它归属的那个人**（2026-11-03 设备绑人）。在此之前这里返回 null，
- *     于是手机上批的卡、说的话在事件流里只有一个设备 id —— 和"人"是两套语义。
- *     没绑人（零账号形态的老设备）才回 null；
  *   · 节点令牌 → null（机器不是人，不冒充任何人）。
  *
  * 只用于**落数据**（署名），绝不用于鉴权 —— 权限判定仍然只看 `decide()`，两码事别混。
- * 手机也不因为带上了 userId 就拿到那个人的权限：它走的是 device 白名单。
  */
 export function actorUser(req) {
   const a = req?.bandiAuth;
   if (!a) return null;
   if (a.kind === 'user' && a.userId) return store.getUser(a.userId);
   if (a.kind === 'operator') return store.firstUser();
-  if (a.kind === 'device' && a.userId) return store.getUser(a.userId);
   return null;
 }
 
@@ -530,25 +417,10 @@ export function guard(auth, req, res, url) {
   if (req.method === 'GET' && url.pathname === '/api/hello') return true;
 
   /*
-   * 手机配对（2026-11 手机端增量，设计 §2）：落地页与换码接口必须免令牌 ——
-   * 手机此刻还**没有任何凭据**，配对码本身就是它的凭据（对齐上面 /api/nodes/join 的既有写法）。
-   * · `GET /pair`（及 `/pair.html`）＝ 扫码落地页：服务端不校验 token，校验在 claim；
-   * · `POST /api/pair/claim` ＝ 凭一次性码换长期设备令牌（guardWrite 的 CSRF 闸照常生效，
-   *   落地页的 fetch 自己带 X-Bandi: 1）。
-   */
-  if (req.method === 'GET' && (url.pathname === '/pair' || url.pathname === '/pair.html')) return true;
-  if (req.method === 'POST' && url.pathname === '/api/pair/claim') return true;
-  /*
-   * `POST /api/pair/resume`（2026-11-01 二刀）也免令牌：手机被「断开连接」后手里没有
-   * 能用的凭据了（令牌已吊销），它能出示的只有 localStorage 里的 clientKey ——
-   * 这正是它要干的事（换一张新令牌回来）。校验在 handler，与 claim 同一模式。
-   */
-  if (req.method === 'POST' && url.pathname === '/api/pair/resume') return true;
-  /*
    * **身份中枢进门**（2026-11-06）：`GET /hub/enter?ticket=…`。
    *
    * 此刻请求手上**只有一张中枢签的票** —— 那就是它的凭据（手机壳里没有"登录表单"
-   * 这一步，它只会打开一个 URL）。与上面 `/pair` 同一个模式：guard 只负责放它进来，
+   * 这一步，它只会打开一个 URL）。与 `/api/nodes/join` 同一个模式：guard 只负责放它进来，
    * 验票、查本地授权表、发本机会话全在 `routes/hub.mjs` 里 —— 别在这里提前判，
    * 也别让这里"看起来像"在做认证。
    *
@@ -567,12 +439,10 @@ export function guard(auth, req, res, url) {
    */
   if (req.method === 'POST' && url.pathname === '/api/logout') return true;
   /*
-   * 落地页的**静态依赖**也要免令牌（2026-10-28 修）：手机此刻没有任何凭据，
-   * `/js/pair-claim.mjs` 和图标走的是非 /api GET —— 不豁免时 guard 会回**登录页 HTML**
-   * （`Content-Type: text/html`），浏览器按 module 执行必然失败，页面就永远停在
-   * 「正在配对…」那一屏（实测复现）。这些是公开代码，不含任何数据或凭据。
+   * 图标是公开静态资源（登录页上就用着它们）：非 /api GET 若被挡成登录页 HTML，
+   * 浏览器拿到的是 `text/html`，图就裂了。与上面那条同一模式，只放行图标目录。
    */
-  if (req.method === 'GET' && (url.pathname === '/js/pair-claim.mjs' || url.pathname.startsWith('/icons/'))) return true;
+  if (req.method === 'GET' && url.pathname.startsWith('/icons/')) return true;
 
   /*
    * 数字员工的本机 AI 通道（2026-10-23，skills/bandi-avatar）：**真·回环**发起的 /api/ai/* 免令牌。
@@ -716,11 +586,6 @@ export function guard(auth, req, res, url) {
       return false;
     }
 
-    // 手机设备放行了才记"最近活跃"（60 秒节流，见 store.touchDevice 的注释）
-    if (who.kind === 'device') {
-      store.touchDevice(who.deviceId, req.socket?.remoteAddress ?? null);
-    }
-
     /*
      * 从地址栏进来的令牌：换成 Cookie 并**重定向掉**，免得它留在历史/Referer 里。
      * ⚠️ 只对**操作员**令牌做这件事：节点令牌要是也能换成 Cookie，就等于把 master 发给了浏览器 ✗
@@ -744,7 +609,8 @@ export function guard(auth, req, res, url) {
      * 带令牌抓首页（`?token=` 换完 Cookie 再进来、或手工填了 bandi_token）以前会直接
      * 进面板当"操作员"，于是「我的」页永远没有密码/动态验证。现在统一给登录/建号页；
      * 令牌继续管 **API**（脚本、CLI、节点、运维照旧 `X-Bandi-Token`，一个字没变）。
-     * 手机设备（device）不走这条：配对令牌就是它的登录。
+     * 手机也一样走这条（2026-11-07 设备令牌退场）：手机浏览器打开面板 = 登录页，
+     * App 里是 WebView 带中枢会话进来，两种都不是"令牌当登录"。
      */
     if (who.kind === 'operator' && wantsPanelHtml(req, url)) {
       const headers = { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' };
@@ -752,7 +618,7 @@ export function guard(auth, req, res, url) {
        * **顺手清掉这枚令牌 Cookie**（2026-11-01 实报：点了登录，输入框被刷空、还在登录页）。
        * 面板不再认令牌，而 `令牌优先于会话` 会让这枚陈年 Cookie 把刚登录的人一直压回
        * operator → 又挡回登录页 → 登录永远"没反应"。浏览器以会话为准，令牌只走请求头。
-       * 只清"确实是根令牌"的那枚：手机配对用的是同一个 Cookie 名（bd_），别误伤。
+       * 只清"确实是根令牌"的那枚（同名 Cookie 可能是别的东西，别误伤）。
        */
       const staleTok = String(parseCookies(req.headers.cookie)[COOKIE] || '');
       const dropToken = !!staleTok && !!auth.token && timingSafeEqual(staleTok, auth.token);
@@ -790,11 +656,11 @@ export function guard(auth, req, res, url) {
     if (!hadCsrf) setCookies.push(csrf.cookieFor(csrfVal));
     /*
      * 顺手扫掉**没法用的**访问令牌 Cookie（2026-11-01）：认不出来的根令牌 / 被吊销的
-     * 节点令牌留在浏览器里，只会在每次请求上添一次 401，还挡在"令牌优先"那条路上。
-     * 手机配对（bd_）不清 —— 那是它唯一的凭据。
+     * 节点令牌 / 早已退场的 `bd_` 配对令牌，留在浏览器里只会在每次请求上添一次 401，
+     * 还挡在"令牌优先"那条路上。到这一步说明它已经认不出来了，清掉是安全的。
      */
     const staleTok = String(parseCookies(req.headers.cookie)[COOKIE] || '');
-    if (staleTok && !staleTok.startsWith('bd_')) setCookies.push(clearedTokenCookie());
+    if (staleTok) setCookies.push(clearedTokenCookie());
     if (setCookies.length) headers['Set-Cookie'] = setCookies;
     res.writeHead(200, headers);
     res.end(loginPage({ mobile: isMobileUA(req), hub: hubOf(auth), csrf: csrfVal }));
@@ -822,13 +688,11 @@ export function guard(auth, req, res, url) {
  * 只认真正会渲染成文档的那几种：根路径 / `*.html` / `Accept: text/html`。
  * 不这么收窄的话，`/app.mjs`、`/style.css` 也会被当成"要页面"而吃到登录页 HTML
  * （浏览器那边表现成"脚本语法错误"，比登录页还难查）。
- * `/pair` 是扫码落地页，自己带令牌校验，别挡。
  */
 function wantsPanelHtml(req, url) {
   if (req.method !== 'GET' && req.method !== 'HEAD') return false;
   const p = url.pathname;
   if (p.startsWith('/api/')) return false;
-  if (p === '/pair' || p === '/pair.html') return false;
   if (p === '/' || p.endsWith('.html')) return true;
   return String(req.headers.accept ?? '').includes('text/html');
 }

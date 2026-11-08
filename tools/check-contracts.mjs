@@ -681,9 +681,7 @@ function registeredBy(raw) {
  * ⚠️ 不要往这里加"顺手能删但其实有人用"的条目 —— 这里只豁免 warning，不豁免 ①/②。
  */
 const ALLOW_ORPHANS = [
-  { id: 'pair.me', why: '旧手机客户端兼容垫片：新前端改问 /api/me（users.mjs 里带上了设备详情），这条留着给存量客户端' },
-  { id: 'pair.device.revoke', why: '兼容垫片：语义等同 disconnect（pair.mjs:366「老接口，保留兼容」），新前端只调 disconnect' },
-  { id: 'runtime.test', why: '契约保留、无 UI 消费（docs/现状.md:997）：原「按路径接入」弹窗撤了，接口按当时口径保留' },
+  { id: 'runtime.test', why: '契约保留、无 UI 消费：原「按路径接入」弹窗 2026-11-04 撤了（docs/形态决策.md §十五 ①），接口按当时口径保留' },
   { id: 'ai.image', why: '外部/临时生图工具回环直调（前端设置页只消费 image-config / image-test）；生图能力唯一的 HTTP 出口' },
   { id: 'files.get', why: '附件/图片 URL 由服务端响应里的 url 字段回传（conversation.mjs / project.mjs 拼），前端不拼字面量' },
   { id: 'ssh.list', why: 'SSH 是**外部件**：远程连接面板由运行时装的插件按 manifest.permissions 声明后发起，仓内没有字面量调用' },

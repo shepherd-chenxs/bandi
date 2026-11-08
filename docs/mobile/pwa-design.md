@@ -4,6 +4,11 @@
 > 已定决策不推翻：不做原生 APP / 不做外网中继 / 不做推送；复用 `apps/web` 响应式改造；无构建步骤贯穿所有选型；手机端 = 受限视图，服务端按设备令牌区分权限。
 > 本文所有引用的文件、函数名均为 2026-11 现仓库实际代码（已逐文件核实）。
 > **正文是手机端开工时的快照**；后续代码改动以带日期的行内批注为准，两者不一致时以代码与批注为准。
+>
+> **2026-11-07 整体退场**：扫码 / 邀请码 / 设备令牌这一整套（`store/devices.mjs`、`routes/pair.mjs`、
+> `pair.html`、`pairing.mjs`、`pair-claim.mjs`、`smoke-pair.mjs`、`device` 身份与 `device: true` 白名单）
+> 已全部删除，手机只走**中枢账号登录**（`/hub/login` 或 App 内会话 → `/hub/enter`）。
+> 本文保留原样只作历史记录，文中提到的这些文件**在仓库里已经不存在**。
 
 ---
 
@@ -53,7 +58,7 @@
 | `routes/pair.mjs` | 新增 | 配对与设备管理路由 handler：`POST /api/pair/tokens`、`POST /api/pair/claim`、`GET /api/pair/me`、`GET /api/pair/devices`、`POST /api/pair/devices/:id/revoke`、任务卡字段级权限闸（§3.3）。导出 `handlePair(req,res,url)`，返回 `false` 表示不归它管。 |
 | `auth.mjs` | 修改 | ① `guard()` 顶部免鉴权清单加两条：`GET /pair`（及 `/pair.html`）、`POST /api/pair/claim`（对齐 `/api/nodes/join`、`/api/hello` 的既有写法）；② `identify()` 追加 `device` 身份（`bd_` 前缀 → `store.deviceAuthByToken`）；③ `decide()` 追加 `device` 分支走 `deviceMayReach()` 白名单；④ 命中设备令牌时 `store.touchDevice(deviceId)` 记最近活跃。 |
 | `server.mjs` | 修改 | ① import 并挂 `handlePair`（放在 `handleConversation` 之前即可，它自己判路径）；② 非 `/api/` 分支里 `url.pathname === '/pair'` → 读 `apps/web/pair.html` 返回（不能依赖 `serveStatic`，它按路径找文件会 404）。 |
-| `smoke-pair.mjs` | 新增 | 配对链路冒烟（跑法对齐 `smoke-auth.mjs`：临时 `BANDI_DATA` + 独立端口）。 |
+| `smoke-pair.mjs` | 新增（**2026-11-07 已删**） | 配对链路冒烟（跑法对齐 `smoke-auth.mjs`：临时 `BANDI_DATA` + 独立端口）。 |
 
 ### 前端（`apps/web/`）
 
@@ -507,7 +512,7 @@ function deviceMayReach(method, pathname) {
 ### 3.3.1.3 次要两项裁定
 
 1. **sw.js 预缓存补 `/js/**`**：**补**。T05 设计原列了 `/js/**`，实现时漏了（CORE 只有 7 项）。运行期 stale-while-revalidate 虽会把访问过的文件入库，但首次弱网打开仍逐个回源。`js/*.mjs` 约 20+ 个、全在局域网一次拉完，代价小。无构建步骤 → 在 `sw.js` 的 `CORE` 里**手工列清单**（SW 无法 glob），并约定：新增 js 模块时同步清单 + `VERSION` +1。
-2. **`.pair-dev` / `.pair-kick` 补 `mb-` 前缀**：**改**。§8 共享知识第 3 条是自定硬约定（"移动端新组件类名一律 `mb-` 前缀，全部规则只写进 mobile.css"），这两个类是手机端新组件却破了纪律。改动面极小：`mobile.css:207-227` 两个选择器改名 + `pairing.mjs:173-178` 模板字符串同步（`mb-pair-dev` / `mb-pair-dev-main` / `mb-pair-kick`）。
+2. **`.pair-dev` / `.pair-kick` 补 `mb-` 前缀**：**改**。§8 共享知识第 3 条是自定硬约定（"移动端新组件类名一律 `mb-` 前缀，全部规则只写进 mobile.css"），这两个类是手机端新组件却破了纪律。改动面极小：`mobile.css:207-227` 两个选择器改名 + `pairing.mjs` 模板字符串同步（`mb-pair-dev` / `mb-pair-dev-main` / `mb-pair-kick`）。（`pairing.mjs` 已于 2026-11-07 随老配对体系删除，此处仅存历史记录，不再给行号。）
 
 ### 3.3.1.4 2026-10-28 修订（首轮实测后）
 

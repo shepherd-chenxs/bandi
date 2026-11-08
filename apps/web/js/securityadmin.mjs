@@ -1,11 +1,11 @@
 /* securityadmin.mjs —— 设置 › 安全（2026-10-31，IAM §9 / §11.2 Phase 1 收尾）。
  *
- * 三块（2026-11-03 起 admin 端改成 .tabs 页签横排，默认「网络访问」；非 admin 只有会话块）：
- *   · **网络访问**（仅管理员）—— 授权 IP 白名单 / 域名绑定（security/ipallow.mjs 的界面）。
+ * 两块（2026-11-07 起：远程连接卡迁去「这台机器」页、原「网络访问」卡删掉，只剩这两个）：
  *   · **我的会话** —— 在哪些设备上登着（指纹 / 时间 / IP），「踢掉其它设备」一键收权；
  *     每个登录账号都能看自己的（服务端只认会话里的 userId，不从参数拿）。
  *   · **审计日志**（仅管理员）—— 谁、什么时候、做了什么、成没成。策略层自动记
  *     （401/403 拒绝、写操作 pending→回填），这里只是查询窗口：按类型筛 + 游标翻页。
+ * 另导出 mountRemoteAccessCard（远程连接监听开关卡），由 connectors.mjs 的「这台机器」页挂载。
  *
  * 版式沿设置页的 set-sec 卡片；错误一律「码 + 中文」toast，不用 alert。
  */
@@ -61,16 +61,116 @@ const resultDot = (r) => `<span style="display:inline-block;width:8px;height:8px
   r === 'ok' ? 'var(--ok, #34a853)' : r === 'pending' ? 'var(--dim)' : '#d93025'
 }"></span>`;
 
+/*
+ * 远程连接卡（2026-11-07 二迁：原「监听地址」→ 安全页的开关卡 → 「这台机器」页顶。
+ * 用户："把远程连接放到这台设备里"）—— 渲染 + 接线都收在这一个入口，谁要挂谁调。
+ *
+ * 参考是网易UU远程那张「本设备 · 允许他人远程协助 [开关]」（2026-11-08 定稿：
+ * 一张单行卡，左标签「允许同账号设备连接」、右侧开关，跟「运行时」区同款；
+ * 常显说明文案删掉了，只有待重启 / 被 BANDI_HOST 钉住这两个异常态才追加说明行）。
+ * 监听地址本来就只有两个有意义的值，开关二态正好一一映射：
+ *   开 = 0.0.0.0（局域网和手机都能连） / 关 = 127.0.0.1（只听本机）。
+ * 拨动即保存，不需要单独的「保存」。
+ *
+ * 真源在数据目录的 `config.json.listenHost`（服务端 `writeListenHost`），**不是** systemd
+ * 单元：单元每次重装都会被 `deploy/install.sh` 重写，11-04 就是这么把 0.0.0.0 写回
+ * 127.0.0.1、局域网全断的。`BANDI_HOST` 环境变量钉着时开关只读并说清原因。
+ *
+ * 权限：POST /api/lan 要 machine:manage，非 admin 连 GET 都不保障 —— 拉不到就静默不画。
+ */
+export async function mountRemoteAccessCard(mount) {
+  if (!mount || !S.isAdmin) return;
+  const lan = await api('/api/lan').catch(() => null);
+  if (!lan?.listen) return;
+  const L = lan.listen;
+  const locked = L.editable === false;
+  const open = L.wanted !== '127.0.0.1'; // 开 = 对外；存过自定义 IP 也算开
+  const pending = L.needRestart
+    ? `<div class="set-row"><p class="hint" style="color:var(--warn)">已存成 <b>${esc(L.wanted)}</b>，但当前进程还听着 <b>${esc(L.host)}</b> —— 重启控制面才生效。</p></div>`
+    : '';
+  /* 2026-11-08 用户："左侧显示：允许同账号设备连接，开关放入卡片"，常显说明文案删掉 ——
+     跟下面「运行时」区同款：一张单行卡，左标签右开关。只有异常态（待重启 / 被 BANDI_HOST
+     钉住）才追加说明行，平时卡里就一行。 */
+  mount.innerHTML = `<section class="set-sec">
+    <div class="set-head"><b>远程连接</b><span class="set-tag">改了要重启控制面</span></div>
+    <div class="set-box">
+      <div class="set-row">
+        <span class="set-label">允许同账号设备连接</span>
+        <label class="switch" style="margin:0" title="${locked ? '被 BANDI_HOST 钉着，拨不动' : open ? '开着：局域网和手机都能连' : '关着：只有这台机器能打开'}">
+          <input type="checkbox" id="netRemoteSw" ${open ? 'checked' : ''} ${locked ? 'disabled' : ''} />
+          <span></span>
+        </label>
+      </div>
+      ${pending}
+      ${
+        locked
+          ? '<div class="set-row"><p class="hint">这台拨不动 —— 监听地址被启动参数 <code>BANDI_HOST</code> 占着。去掉那个变量（或 <code>bandi reset-host</code>）重启后，这里就能改了。</p></div>'
+          : ''
+      }
+      <div class="hint-line" id="netHostMsg" style="display:none"></div>
+    </div>
+  </section>`;
+
+  /*
+   * 接线：拨动即保存 → 需要时重启控制面 → 轮询等它回来。重启接口只给被 systemd / 桌面壳
+   * 监护的进程放行（E1061），无人看管的情况如实报错，让人用 `bandi restart`。
+   */
+  const remoteSw = $('netRemoteSw');
+  if (!remoteSw) return;
+  /* 提示行平时不占位（2026-11-08 用户："垂直居中"—— 空 hint-line 的 margin 会把行顶得偏上） */
+  const showMsg = (t) => {
+    const el = $('netHostMsg');
+    if (!el) return;
+    el.textContent = t;
+    el.style.display = t ? '' : 'none';
+  };
+  remoteSw.onchange = async () => {
+    const want = remoteSw.checked ? '0.0.0.0' : '127.0.0.1';
+    if (want === String(lan.listen?.wanted ?? '')) return; // 拨回原位，没有实际变化
+    /*
+     * 防呆：**从别的机器访问面板、又把开关关掉（只听本机）** —— 重启那一下你自己就
+     * 再也连不上了。本机直连不拦（那是正常用法），其它来源强确认（1Panel 也有同样的坑）。
+     */
+    const loopbackSrc = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(String(lan.yourIp ?? ''));
+    if (!remoteSw.checked && !loopbackSrc) {
+      const ok = await confirmDo(
+        `你现在是从 ${lan.yourIp} 远程打开这个页面的。关掉远程连接并重启后，这个地址就再也打不开了 —— 只能到那台机器上操作（或走 SSH 隧道）。确认？`,
+        { ok: '仍然关掉' },
+      );
+      if (!ok) {
+        remoteSw.checked = true; // 取消：开关弹回「开」
+        return;
+      }
+    }
+    remoteSw.disabled = true;
+    try {
+      const r = await post('/api/lan', { listenHost: want });
+      if (!r?.needRestart) {
+        toast('保存了 —— 当前就听着这个地址，不用重启');
+        remoteSw.disabled = false;
+        return;
+      }
+      showMsg('正在重启控制面…');
+      await post('/api/control-plane/restart', {});
+      await waitForRestart();
+    } catch (e) {
+      showMsg('');
+      toast(e.message, 'error');
+      remoteSw.checked = !remoteSw.checked; // 失败：开关拨回去
+      remoteSw.disabled = false;
+    }
+  };
+}
+
 export async function renderSecurity() {
   $('settingsView').innerHTML = `${head()}<div class="empty" style="padding:24px 4px">加载中…</div>`;
-  const isAdmin = !!S.isAdmin && !S.isDevice;
+  const isAdmin = !!S.isAdmin;
 
   /* 会话必加载；审计只有 admin 拉 —— 非 admin 不发那一条请求（发了也是 403 toast）。
-     网络访问（2026-11-03）：同样是 admin 的事（POST /api/lan 要 machine:manage），非 admin 不拉。 */
-  const [sess, audit, lan] = await Promise.all([
+     远程连接卡 2026-11-07 迁去「这台机器」页（mountRemoteAccessCard），安全页不再拉 /api/lan。 */
+  const [sess, audit] = await Promise.all([
     api('/api/security/sessions').catch(() => null),
     isAdmin ? api('/api/security/audit?limit=50').catch(() => null) : Promise.resolve(null),
-    isAdmin ? api('/api/lan').catch(() => null) : Promise.resolve(null),
   ]);
 
   const sessions = sess?.sessions ?? [];
@@ -109,111 +209,17 @@ export async function renderSecurity() {
       </section>`;
 
   /*
-   * 监听地址（2026-11-04，用户："监听由启动配置决定，界面不改"是实现时自作主张，
-   * 要做成 1Panel 那样 —— 面板里能改、改完重启生效、升级重装都不丢）。
-   *
-   * 真源在数据目录的 `config.json.listenHost`（服务端 `writeListenHost`），**不是** systemd
-   * 单元：单元每次重装都会被 `deploy/install.sh` 重写，11-04 就是这么把 0.0.0.0 写回
-   * 127.0.0.1、局域网全断的。`BANDI_HOST` 环境变量钉着时这里只读并说清原因。
-   */
-  const listenHtml = !isAdmin || !lan?.listen
-    ? ''
-    : (() => {
-        const L = lan.listen;
-        const locked = L.editable === false;
-        const srcText =
-          L.source === 'env'
-            ? '当前是被启动参数 <code>BANDI_HOST</code> 钉着的 —— 界面改不动它，要去掉那个变量（或终端敲 <code>bandi reset-host</code>）。'
-            : L.source === 'config'
-              ? '这个值存在数据目录的配置里，升级、重装都不会被改回去。'
-              : '还没人改过，用的是缺省值（对外服务 + 强制鉴权）。';
-        const pending = L.needRestart
-          ? `<div class="set-row"><p class="hint" style="color:var(--warn)">已存成 <b>${esc(L.wanted)}</b>，但当前进程还听着 <b>${esc(L.host)}</b> —— 重启控制面才生效。</p></div>`
-          : '';
-        return `<section class="set-sec">
-          <div class="set-head"><b>监听地址</b><span class="set-tag">改了要重启控制面</span></div>
-          <div class="set-box">
-            <div class="set-row">
-              <span class="set-label">监听</span>
-              <input id="netHost" style="flex:1;min-width:120px" value="${esc(L.wanted)}" placeholder="0.0.0.0" autocomplete="off" spellcheck="false" ${locked ? 'disabled' : ''} />
-              <div class="seg" id="netHostSeg">
-                <button type="button" data-host="0.0.0.0" class="${L.wanted === '0.0.0.0' ? 'on' : ''}" ${locked ? 'disabled' : ''}>所有网卡</button>
-                <button type="button" data-host="127.0.0.1" class="${L.wanted === '127.0.0.1' ? 'on' : ''}" ${locked ? 'disabled' : ''}>只听本机</button>
-              </div>
-            </div>
-            ${pending}
-            <div class="set-row"><p class="hint">现在实际监听 <b>${esc(L.host)}:${esc(String(L.port ?? ''))}</b>。
-            <code>0.0.0.0</code> = 局域网和手机都能连（要登录）；<code>127.0.0.1</code> = 只有这台机器能打开。
-            ${srcText}</p></div>
-            ${
-              locked
-                ? '<div class="set-row"><p class="hint">这台改不了 —— 监听地址被启动参数占着。去掉那个变量（或 <code>bandi reset-host</code>）重启后，这里就能改了。</p></div>'
-                : `<div class="set-row" style="justify-content:flex-end"><button class="primary" id="netHostSave">保存${L.needRestart ? '并重启' : ''}</button></div>`
-            }
-            <div class="hint-line" id="netHostMsg"></div>
-          </div>
-        </section>`;
-      })();
-
-  /*
-   * 网络访问（2026-11-03，对齐 1Panel 安全页的「授权 IP / 域名绑定」）：
-   * 网络周界闸（security/ipallow.mjs，E3003 / E3004）的界面。只做三件事：
-   * 把名单和域名摆出来让人改、把"你会被自动加进名单"说清楚、保存即生效。
-   * 监听地址不在这张卡里 —— 它在上面单独的「监听地址」卡（2026-11-04 改）。
-   */
-  const netHtml = !isAdmin
-    ? ''
-    : !lan
-      ? `<section class="set-sec">
-          <div class="set-head"><b>网络访问</b><span class="set-tag">仅管理员</span></div>
-          <div class="set-box"><div class="empty">拉不到网络状态（/api/lan），稍后再试。</div></div>
-        </section>`
-      : `<section class="set-sec">
-          <div class="set-head"><b>网络访问</b><span class="set-tag">网络周界 · 保存即生效</span></div>
-          <div class="set-box">
-            <div class="set-row">
-              <span class="set-label">可访问地址</span>
-              <div class="machine-data machine-addr">${
-                lan.boundLan
-                  ? (lan.urls ?? []).map(esc).join('<br />') || `${esc(String(lan.host ?? ''))}:${esc(String(lan.port ?? ''))}`
-                  : `只有这台机器：<br />http://127.0.0.1:${esc(String(lan.port ?? ''))}`
-              }<span class="sub">（监听 ${esc(String(lan.host ?? ''))}，要改看上面那张卡）</span></div>
-            </div>
-            <div class="set-row">
-              <span class="set-label">授权 IP 白名单</span>
-              <div class="seg" id="netWlSeg">
-                <button data-wl="1" class="${lan.whitelistEnabled ? 'on' : ''}">开启</button>
-                <button data-wl="0" class="${!lan.whitelistEnabled ? 'on' : ''}">关闭</button>
-              </div>
-            </div>
-            <div class="set-row" style="flex-direction:column;align-items:flex-start;gap:6px">
-              <span class="set-label">名单（每行一个 IP 或网段）</span>
-              <textarea id="netWlIps" rows="4" placeholder="192.168.5.9&#10;192.168.5.0/24" style="resize:vertical" spellcheck="false">${esc((lan.whitelistIps ?? []).join('\n'))}</textarea>
-            </div>
-            <div class="set-row">
-              <span class="set-label">域名绑定</span>
-              <input id="netDomain" style="flex:1;min-width:120px" value="${esc(lan.boundDomain ?? '')}" placeholder="如 pan.example.com（留空 = 不绑定）" autocomplete="off" spellcheck="false" />
-            </div>
-            <div class="set-row" style="justify-content:flex-end">
-              <button class="primary" id="netSave">保存</button>
-            </div>
-            <div class="set-row"><p class="hint">开启白名单后，名单之外的 IP 连登录页都摸不到（403）；本机直连永远放行，
-            开启时会自动把你现在的 IP（${esc(lan.yourIp || '未知')}）写进名单防锁死。设了域名绑定后，只有本机直连和用这个域名访问能打开面板。
-            配了可信反代（BANDI_TRUST_PROXY）时按 X-Forwarded-For 取真实来源，且反代必须覆写转发头。</p></div>
-            <div class="hint-line" id="netMsg"></div>
-          </div>
-        </section>`;
-
-  /*
-   * 页签（2026-11-03 用户："右边这个做成tab"）：admin 的三块内容（网络访问 / 我的会话 /
-   * 审计日志）竖着摆太长，改成 .tabs 页签横排，一次看一块。默认「网络访问」。
+   * 页签（2026-11-03 用户："右边这个做成tab"）：admin 的内容竖着摆太长，
+   * 改成 .tabs 页签横排，一次看一块。默认「我的会话」。
+   * （2026-11-07 用户："这个没啥用可以删掉了"—— 原「网络访问」卡（IP 白名单 / 域名绑定）
+   * 整张撤掉；同日「远程连接」卡迁去「这台机器」页（mountRemoteAccessCard）——
+   * 两张卡都走了，这里只剩「我的会话 / 审计日志」。服务端 ipallow 周界闸没动，只是没了界面。）
    * 非 admin 只有「我的会话」一块，不铺页签条。
    */
   const tabsHtml = !isAdmin
     ? ''
     : `<div class="tabs" id="secTabs">
-        <button class="tab on" data-tab="net" type="button">网络访问</button>
-        <button class="tab" data-tab="sess" type="button">我的会话</button>
+        <button class="tab on" data-tab="sess" type="button">我的会话</button>
         <button class="tab" data-tab="audit" type="button">审计日志</button>
       </div>`;
 
@@ -227,8 +233,7 @@ export async function renderSecurity() {
       ${head()}
       ${tabsHtml}
       <div class="detail-body sec-scroll">
-        <div id="secPanel-net" ${isAdmin ? '' : 'hidden'}>${isAdmin ? listenHtml + netHtml : ''}</div>
-        <div id="secPanel-sess" ${isAdmin ? 'hidden' : ''}>
+        <div id="secPanel-sess">
           <section class="set-sec">
             <div class="set-head"><b>我的会话</b><span class="set-tag">空闲 30 分钟 / 绝对 12 小时自动失效</span></div>
             <div class="set-box">
@@ -250,102 +255,12 @@ export async function renderSecurity() {
     tabbar.querySelectorAll('.tab').forEach((t) => {
       t.onclick = () => {
         tabbar.querySelectorAll('.tab').forEach((x) => x.classList.toggle('on', x === t));
-        ['net', 'sess', 'audit'].forEach((k) => {
+        ['sess', 'audit'].forEach((k) => {
           const p = $(`secPanel-${k}`);
           if (p) p.hidden = k !== t.dataset.tab;
         });
       };
     });
-  }
-
-  /* 网络访问卡的接线（admin 且拉到 lan 才有这些节点） */
-  if (isAdmin && lan) {
-    /*
-     * ---- 监听地址（2026-11-04）----
-     * 保存 → 需要时重启控制面 → 轮询等它回来。重启接口只给被 systemd / 桌面壳
-     * 监护的进程放行（E1061），无人看管的情况如实报错，让人用 `bandi restart`。
-     */
-    const hostInput = $('netHost');
-    if (hostInput) {
-      const hostSeg = $('netHostSeg');
-      const syncSeg = () =>
-        hostSeg.querySelectorAll('[data-host]').forEach((x) => x.classList.toggle('on', x.dataset.host === hostInput.value.trim()));
-      hostSeg.querySelectorAll('[data-host]').forEach((b) => {
-        b.onclick = () => {
-          hostInput.value = b.dataset.host;
-          syncSeg();
-        };
-      });
-      hostInput.oninput = syncSeg;
-
-      const saveBtn = $('netHostSave'); // 被启动参数钉着时不渲染这个按钮（文案代替），判空
-      if (saveBtn) saveBtn.onclick = async () => {
-        const want = hostInput.value.trim();
-        const msg = $('netHostMsg');
-        if (!want) return toast('给一个监听地址：0.0.0.0 / 127.0.0.1 / 具体 IP', 'error');
-        /*
-         * 防呆：**从别的机器访问面板、又改成只听本机** —— 重启那一下你自己就再也连不上了。
-         * 本机直连不拦（那是正常用法），其它来源强确认（1Panel 也有同样的坑）。
-         */
-        const loopbackSrc = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(String(lan.yourIp ?? ''));
-        if (want === '127.0.0.1' && !loopbackSrc) {
-          const ok = await confirmDo(
-            `你现在是从 ${lan.yourIp} 远程打开这个页面的。改成「只听本机」并重启后，这个地址就再也打不开了 —— 只能到那台机器上操作（或走 SSH 隧道）。确认？`,
-            { ok: '仍然改成只听本机' },
-          );
-          if (!ok) return;
-        }
-        saveBtn.disabled = true;
-        try {
-          const r = await post('/api/lan', { listenHost: want });
-          if (!r?.needRestart) {
-            toast('保存了 —— 当前就听着这个地址，不用重启');
-            saveBtn.disabled = false;
-            return;
-          }
-          msg.textContent = '正在重启控制面…';
-          await post('/api/control-plane/restart', {});
-          await waitForRestart();
-        } catch (e) {
-          msg.textContent = '';
-          toast(e.message, 'error');
-          saveBtn.disabled = false;
-        }
-      };
-    }
-
-    const wlSeg = $('netWlSeg');
-    wlSeg.querySelectorAll('[data-wl]').forEach((b) => {
-      b.onclick = () => {
-        wlSeg.querySelectorAll('[data-wl]').forEach((x) => x.classList.toggle('on', x === b));
-      };
-    });
-    $('netSave').onclick = async () => {
-      const enable = wlSeg.querySelector('[data-wl="1"]').classList.contains('on');
-      const ips = $('netWlIps').value.split('\n').map((s) => s.trim()).filter(Boolean);
-      const domain = $('netDomain').value.trim();
-      const msg = $('netMsg');
-      /*
-       * **首次开启要确认**：白名单是少数"存错了就把所有人关在门外"的开关 ——
-       * 服务端虽然会自动把当前 IP 写进名单，但多一次"知道自己在干什么"不过分。
-       */
-      if (enable && !lan.whitelistEnabled) {
-        const ok = await confirmDo(
-          `开启后，只有名单里的 IP（会自动加上你现在的 IP ${lan.yourIp || '未知'}）和本机直连能访问面板，其它一律 403。确认开启？`,
-          { ok: '开启白名单' },
-        );
-        if (!ok) return;
-      }
-      $('netSave').disabled = true;
-      try {
-        const r = await post('/api/lan', { whitelistEnabled: enable, whitelistIps: ips, boundDomain: domain });
-        toast(r?.addedYourIp ? `已保存，自动把你的 IP ${r.addedYourIp} 加进了名单` : '已保存', 'ok');
-        renderSecurity(); // 重画：名单归一化后的写法以服务端那份为准
-      } catch (e) {
-        toast(e.message, 'error');
-        $('netSave').disabled = false;
-      }
-    };
   }
 
 
