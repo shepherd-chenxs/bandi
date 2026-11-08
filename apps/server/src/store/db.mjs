@@ -85,8 +85,14 @@ db.exec(`PRAGMA busy_timeout = 5000;`);
  *   · 库比程序旧 → 交给下面那串幂等迁移，跑完把版本号推上去（见文件末尾）。
  *
  * ⚠️ 版本号是**单调递增的整数**，不是日期、不是程序版本号 —— 它只回答"迁移走到第几代"。
+ *
+ * 沿革：
+ *   · 1（2026-11-08）：版本号机制落地（此前全是幂等函数 + meta 标记位）。
+ *   · 2（2026-11-08）：回话消息清掉 `meta.progress`（历史过程收起行砍掉，见下方迁移）。
+ *   · 3（2026-11-08）：`users` 加 `nickname`（「我的」页昵称，与账号名分开；
+ *     迁移在 store/users.mjs，那边建 users 表并 ensureColumn）。
  */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 3;
 
 const dbVersion = Number(db.prepare('PRAGMA user_version').get()?.user_version ?? 0);
 if (dbVersion > SCHEMA_VERSION) {
@@ -277,8 +283,12 @@ export function ensureColumn(table, column, ddl) {
 
 ensureColumn('member_sessions', 'family', "family TEXT NOT NULL DEFAULT ''");
 
-// 「显示思考过程」：Codex 的 reasoning 事件关不掉（实测 summary=none / hide_agent_reasoning
-// / effort=minimal 都无效），所以这只能是平台层的显示开关。默认关：对话里只留他的回话。
+/*
+ * 「显示思考过程」（历史列，2026-11-08 晚起**不再读写**）：原来 Codex 的 reasoning 事件
+ * 关不掉（实测 summary=none / hide_agent_reasoning / effort=minimal 都无效），所以这只能是
+ * 平台层的显示开关。后来思考片段被并进实时气泡那行"在动"的日志里，配置项随之退场 ——
+ * 列留着不删（老库不做列重建的惯例，同 users 的 salt/hash），新代码一个字节都不碰它。
+ */
 
 ensureColumn('personas', 'showThinking', 'showThinking INTEGER NOT NULL DEFAULT 0');
 // 技能"暂停"状态：老库里挂上就是启用，补列即可
@@ -303,7 +313,7 @@ ensureColumn('personas', 'role', 'role TEXT');
  * 2026-10-23 前是秘书「喜儿」—— 名额换了人，机制没换）。
  *
  * 为什么用标记而不是"按名字认"：名字是给人看的，历史上有段时期用户还能改（"喜儿"改成"小秘"很正常）。
- * 系统要认的是"这一个"，所以认 id + 这个标记；改名不影响身份（跟参考产品的 system_key 同一个道理）。
+ * 系统要认的是"这一个"，所以认 id + 这个标记；改名不影响身份（与 system_key 同一个道理）。
  * （2026-10-22 收编后名字/岗位/指令也锁死了，路由层 E2055；store 层拦的只有"删"，语义同前：**不许丢**。）
  */
 
@@ -1084,7 +1094,32 @@ for (const t of [
   db.exec(`DROP TABLE IF EXISTS ${t}`);
 }
 
-/** 模块加载时跑一次：老技能名落到当前技能上（幂等，表里没有就什么都不做） */
+/*
+ * 2026-11-08：历史「过程收起行」整体砍掉（用户："运行进度卡是落库了吗？感觉也没啥用"）。
+ *
+ * 回话消息的 `meta.progress` 是服务端收尾时摘的运行快照（2026-11-05 加），界面拿它画
+ * 气泡顶上那行「✓ 意图 · N 步 · 用时 ▾」。现在渲染层和写入端都删了，老库里的副本
+ * 没有任何读者，留着只是让"这条消息的 meta 里到底有什么"多一层要人猜的历史层。
+ *
+ * 幂等：没有 progress 的行一行都不碰；`json_remove` 之后只剩空对象的直接把 meta 置 NULL
+ * （不然会留一堆 `'{}'`，读的时候还得判空）；meta 不是合法 JSON 的老脏行也跳过
+ * （`json_valid` 护栏 —— json_remove 遇到坏 JSON 会直接抛，迁移不能因为一行脏数据中断）。
+ */
+function migrateDropMessageProgress() {
+  const n = db
+    .prepare(
+      `UPDATE messages
+          SET meta = CASE WHEN json_remove(meta, '$.progress') = '{}' THEN NULL
+                          ELSE json_remove(meta, '$.progress') END
+        WHERE meta IS NOT NULL
+          AND json_valid(meta)
+          AND json_extract(meta, '$.progress') IS NOT NULL`,
+    )
+    .run();
+  if (n.changes) console.log(`[迁移] ${n.changes} 条回话消息清掉过程快照 meta.progress`);
+}
+
+migrateDropMessageProgress();
 
 /*
  * ------------------------------------------------------------------ 版本号落地
