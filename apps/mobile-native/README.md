@@ -14,7 +14,7 @@ Tauri 壳（`apps/mobile/`）的替代者。壳只干三件事，全部在原生
 存密码弹窗走凭据管理器，View 层排除标志（importantForAutofill /
 setSavePassword）与字段形态改造全部无效（小米密码保险箱 com.miui.passwords
 的系统悬浮窗，dumpsys autofill 请求历史可证）。登录搬到原生层后弹窗失去
-触发条件。完整决策记录见 `docs/现状.md` §二十八。
+触发条件。完整决策记录见 `docs/形态决策.md` §十五 ⑤。
 
 ## 构建
 
