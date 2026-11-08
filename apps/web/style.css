@@ -1288,6 +1288,10 @@ body:has(#pluginView.shown .fixed-head)::after {
           line-height: 56px; text-align: center; flex: none;
           background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 58%, #000));
           box-shadow: 0 2px 10px color-mix(in srgb, var(--accent) 30%, transparent); }
+/* 人形占位头像（2026-11-08）：手机号当名字时首字符是数字（"1"），没有含义 ——
+   换中性人形图标（DOM 在 settings.mjs）。桌面 26px 与 23px 字母同视觉重量。 */
+.me-ava-glyph { display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
+.me-ava-glyph svg { width: 26px; height: 26px; }
 .me-who { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .me-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .me-name b { font-size: 17px; font-weight: var(--w-title); line-height: 1.4;
@@ -1458,59 +1462,6 @@ body:has(#pluginView.shown .fixed-head)::after {
 .qt-group-head:first-child { margin-top: 0; }
 .qt-save { display: flex; justify-content: flex-end; margin-top: 12px; }
 .ms-dot-bad { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--bad); }
-
-/* ── 手机连接 · 已配对设备表（2026-11-01 五改：卡片行改表格）──
-   列齐了才扫得快：手机 / 状态 / 配对时间 / 最近活跃 / 面板角色 / 操作。
-   原来那套 .mb-pair-dev 卡片行样式在 mobile.css 的 ≤900px 媒体块里（桌面从来没有），
-   按钮和胶囊的类名沿用 —— 窄屏媒体块里的旧规则还能管到表里的这些元素。
-   min-width + 外层横滚：390px 的手机设置页里表太窄，宁可滚也不挤成竖条。 */
-.mb-pair-wrap { overflow-x: auto; }
-.pair-table { min-width: 620px; }
-.pair-table td { vertical-align: middle; }
-/* 操作列（2026-11-04 用户："改成左对齐看看"）：表头与按钮一起靠左，紧跟「面板角色」列成组。
-   原先是 td 右对齐（按钮贴表格右缘），2026-11-04 晚一度把表头也右拉对齐，用户要求改回左 ——
-   宁可按钮右边留白，也要表头和按钮贴在一起。 */
-.pair-table td.pair-act { text-align: left; white-space: nowrap; }
-.pair-table tr.off td { opacity: .55; }
-.pair-ontag {
-  display: inline-block;
-  padding: 0 8px;
-  border-radius: 6px;
-  font-size: 11.5px;
-  color: var(--ok);
-  background: color-mix(in srgb, var(--ok) 14%, transparent);
-}
-.pair-table .mb-pair-offtag {
-  display: inline-block;
-  padding: 0 8px;
-  border-radius: 6px;
-  font-size: 11.5px;
-  background: color-mix(in srgb, var(--dim) 16%, transparent);
-}
-.pair-table .mb-pair-role { width: 150px; height: 30px; font-size: 12.5px; padding: 0 8px; border-radius: 8px; }
-/* 危险色归位（2026-11-02 用户评审："断开是可逆的，红应该给不可逆的"）——
-   断开连接 = 可逆（手机能自己连回来）→ 中性钮；取消配对 = 删记录不可逆 → 红钮。 */
-.pair-table .mb-pair-kick {
-  border: 1px solid var(--line); background: transparent; color: var(--text);
-  font: inherit; font-size: 12.5px; padding: 5px 12px; border-radius: 8px; cursor: pointer;
-}
-.pair-table .mb-pair-kick:hover { background: var(--hover); }
-.pair-table .mb-pair-forget {
-  border: 1px solid color-mix(in srgb, var(--bad) 45%, transparent); background: transparent; color: var(--bad);
-  font: inherit; font-size: 12.5px; padding: 5px 12px; border-radius: 8px; cursor: pointer;
-}
-.pair-table .mb-pair-forget:hover {
-  border-color: var(--bad);
-  background: color-mix(in srgb, var(--bad) 12%, transparent);
-}
-
-/* ── 手机连接 · 分节头里的「连接」总开关（2026-11-02 加，2026-11-03 收进标题行）──
-   用户："邀请码改成连接，右边加开关，上面的可以去掉了" —— 页顶那张独立开关键卡删掉，
-   开关贴到分节标题最右边；关掉后卡片体换成一句提示（pairing.mjs）。
-   状态标签（已开启/已关闭）也在这里（2026-11-03 用户："标签放这里"）——
-   跟着标题走，开关用 margin-left:auto 推到最右。 */
-.set-head.pair-head { justify-content: flex-start; gap: 8px; }
-.set-head.pair-head .switch { margin-left: auto; }
 
 /* 小节标题行：左边标题，右边动作按钮 */
 /* 标题行定高（2026-10-21 用户："切换按钮，框的高度不要变"）：
@@ -3278,6 +3229,45 @@ dialog.sch-dlg > form { flex: 1 1 auto; min-height: 0; display: flex; flex-direc
            background: transparent; font-size: 13px; color: var(--text); }
 .dlg-box .combo-btn:hover { border: none; color: var(--accent); }
 .dlg-actions { margin-top: 18px; display: flex; gap: 8px; justify-content: flex-end; }
+/* 「问一句」弹窗的正文样式。原来写死在 index.html 的内联 style 上 —— 内联压过类选择器，
+   `.ask-big` 想改字号/行高就改不动（2026-11-07 撞到），所以搬进这里当默认值。 */
+#askDlg #askBody { margin-top: 8px; font-size: 12.5px; line-height: 1.75; white-space: pre-line; }
+/* 大按钮档确认框（2026-11-07 用户发来微信「账号设置 › 退出登录」的截图：「参考这个改」）。
+   参考图的五处规格，逐条落在这里：
+     · 弹窗窄而圆：约屏宽 88%、圆角 20px、有投影，像一张卡片浮着；
+     · 标题居中加粗（18px），说明文字居中、灰色、15px —— 不再是左对齐的一坨小字；
+     · 两颗按钮**等宽铺满**内容宽（各占一半）、高 46px、圆角 10px、16px 字；
+     · 取消是白底细边，退出是红底白字 —— 与全站 button.danger 同一套色，不另起色号；
+     · 上留白松（26px）、正文到按钮 22px，拇指按下去不会误触。
+   开关在 dialog 上（machine.mjs askDialog 的 `big`），只有退出登录这类"一句话要人拍板"
+   的确认框开；别的弹窗外观完全不动。 */
+#askDlg.ask-big {
+  width: min(400px, calc(100vw - 40px));
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, .18);
+}
+#askDlg.ask-big > form { padding: 26px 18px 18px; }
+/* ⚠️ 真身里 `<b id="askTitle">` 会被 ui.mjs 的 wireDialogHead() 搬进 `.dlg-head`
+   （display:flex + justify-content:flex-start + 左右 -20px 负边距 + 右上角 ×）——
+   预览页是静态 HTML、没跑那段 JS，所以第一版"看着居中、没有 ×"的截图是假的。
+   这里把头部归零：不留负边距、不吸顶（确认框没有长内容可滚）、内容居中；
+   × 一并藏掉 —— 参考图（微信）就没有关闭按钮，取消/返回都能退，不必多一颗。 */
+#askDlg.ask-big .dlg-head {
+  position: static; margin: 0; padding: 0;
+  background: transparent; justify-content: center;
+}
+#askDlg.ask-big .dlg-head .dlg-close { display: none; }
+#askDlg.ask-big #askTitle { display: block; text-align: center; font-size: 18px; font-weight: 700; }
+#askDlg.ask-big #askBody { margin-top: 10px; text-align: center; font-size: 15px; line-height: 1.6; }
+#askDlg.ask-big .dlg-actions { margin-top: 22px; gap: 12px; }
+#askDlg.ask-big .dlg-actions button {
+  flex: 1 1 0; min-width: 0; height: 46px; padding: 0 10px;
+  font-size: 16px; font-weight: 500; border-radius: 10px;
+}
+/* showModal 后焦点落在第一颗按钮上，不写这条就是浏览器默认的黑描边 —— 在参考图
+   那种白卡片上像给「取消」镶了道墨框。跟着全站口径走主题色 */
+#askDlg.ask-big .dlg-actions button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* 标题 + 按钮的吸顶头部（由 app.js 统一包出来，11 个对话框共用） */
 .dlg-head { position: sticky; top: 0; z-index: 3;
@@ -4636,38 +4626,6 @@ dialog.mg-dlg { width: 520px; }
 /* 卡底那截（「最新发布」）用一条细线跟上面隔开 —— 跟稿子一致 */
 .plg-card-foot { display: flex; flex-direction: column; gap: 3px;
                  border-top: 1px solid var(--line); padding-top: 9px; }
-
-/* ═══ 手机连接 · 2026-11-03 评审改版（pairing.mjs 配套） ═══
-   ① 页头状态标签：已开启（绿点）/ 已关闭（灰点），颜色只跟令牌走，深浅主题都成立 */
-.pair-state { display: inline-flex; align-items: center; gap: 5px; }
-.pair-state::before { content: ''; width: 6px; height: 6px; border-radius: 50%;
-  background: var(--dim); flex: 0 0 auto; }
-.pair-state.on { color: var(--ok);
-  border-color: color-mix(in srgb, var(--ok) 38%, transparent);
-  background: color-mix(in srgb, var(--ok) 10%, transparent); }
-.pair-state.on::before { background: var(--ok); }
-
-/* ② 关闭态引导卡：替换原来「一行灰字套空框」—— 空框看着像加载失败。
-   图标淡蓝圆底 + 标题 + 一句后果（打开动作就是分节头那颗开关，不另设按钮）。
-   set-box 原本就有卡底/描边，这里只管内容层的排版。
-   内边距 22/18 是按「两态等高」反推的：34/30 时卡高 247，比开态（邀请码卡 223）多 24px，
-   拨开关整页会跟着抖一下。 */
-.pair-off { text-align: center; padding: 22px 24px 18px; }
-.pair-off-ico { width: 46px; height: 46px; margin: 0 auto 12px; border-radius: 50%;
-  background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent);
-  display: grid; place-items: center; }
-.pair-off-ico svg { width: 22px; height: 22px; }
-.pair-off b { display: block; font-size: 14px; font-weight: var(--w-title, 600); margin-bottom: 4px; }
-.pair-off p { margin: 0 auto; max-width: 380px;
-  color: var(--dim); font-size: 12.5px; line-height: 1.7; }
-
-/* ②b 连接卡开 / 关两态等高（2026-11-03 用户："这两个框要一样大"）。
-   174 是去掉「邀请码 5 分钟内有效」提示行后开态卡（地址 + 邀请码 + 二维码）在 900px
-   内容宽下的实测高度（headless 探针，tmp/pairing-height/probe.html）；关态自然高 170，
-   差 4px 由 min-height 拉齐、引导卡 margin:auto 垂直居中。内容真变多（窄窗二维码竖排）
-   时 min-height 不拦，让它自己长。 */
-.pair-sec .set-box { min-height: 174px; display: flex; flex-direction: column; }
-.pair-sec .pair-off { margin: auto 0; }
 
 /* ③ 开关关闭态轨道加深一档：--line 在深底上对比不足 3:1（WCAG 1.4.11 非文本下限），
    看不出"这颗开关现在关着"。用 color-mix 把文字灰压进边框色，两种主题各自动适配。 */
