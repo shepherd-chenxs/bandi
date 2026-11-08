@@ -74,7 +74,7 @@
 | `index.html` | 修改 | ① `<link rel="manifest">`、`theme-color`、`apple-touch-icon`、`apple-mobile-web-app-*` meta、`viewport` 加 `viewport-fit=cover`；② 引 `mobile.css`（在 `style.css` 之后）；③ `<script>` 注册 SW（P1，功能开关内加）。 |
 | `manifest.webmanifest` | 新增 | PWA manifest：`name/short_name: 班底`、`display: standalone`、`background_color: #08090a`、`theme_color: #08090a`、`icons` 192/512。 |
 | `icons/icon-192.png` / `icons/icon-512.png` | 新增 | 从 `apps/desktop/icons/icon.svg`（index.html 里的 B 字母标同源几何）导出的 PNG。 |
-| `app.mjs` | 修改 | import `./js/mobile.mjs`、`./js/pairing.mjs`（加进既有拓扑 import 序列）。 |
+| `app.mjs` | 修改 | import `./js/mobile.mjs`、`./js/pairing.mjs`（加进既有拓扑 import 序列）。**`pairing.mjs` 已于 2026-11-07 随配对体系整体删除**（本表其余条目同理，只作当时记录）。 |
 | `js/settings.mjs` | 修改 | `SETTINGS_SECTIONS` 追加 `['pairing', '手机配对', '扫码连接手机']`；`openSettings()` 加渲染分支。 |
 | `sw.js` | 新增（P1） | Service Worker：静态资源 stale-while-revalidate 预缓存，`/api/*` 一律放行不缓存（§8）。 |
 | `js/chat.mjs` | 修改（P1-4） | 富交互（任务卡、技能调用结果块）窄屏降级：渲染时若 `body` 带 `mb-narrow` 类，默认输出折叠摘要条（"📋 任务卡：xxx · 点击展开"），点击内联展开。 |
