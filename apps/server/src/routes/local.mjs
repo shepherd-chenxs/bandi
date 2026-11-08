@@ -1,5 +1,6 @@
 /* routes/local.mjs —— 2026-10-22 由 server.mjs 按域拆出，handler 逻辑原样搬运。
- * 主分发顺序（先匹配先赢）见 ../server.mjs 的 CHAIN。 */
+ * **不在 routes/chain.mjs 上**：/api/local/* 判的是"本机身份"，排在认证之后、
+ * 正则链之前单独判一次（见 server.mjs 的 handleLocal）。登记仍在 route-policy 里。 */
 
 import fs from 'node:fs';
 import os from 'node:os';
@@ -42,11 +43,18 @@ import { sourceOf } from '../security/source.mjs';
  * **导出**：server.mjs 的启动段（已加入 → 直接进节点形态）也要用它，别再复制一份。
  */
 export async function supervisorModule() {
-  try {
-    return await import('./node-supervisor.mjs');
-  } catch {
-    return null;
-  }
+  /*
+   * **故意不接线**（2026-10 的决定，2026-11-08 复核仍成立）：
+   * 「加入即当算力」—— 在本机拉起常驻节点子进程 —— 产品还没定要不要留，
+   * 所以这里不 import 任何东西。
+   *
+   * 原来的路径少了一层（`./` 开头 → 会在 routes/ 里找）：文件其实在 `../`（src 层），
+   * 这个路径**从来没存在过**，import 必抛、被 catch 吞成 null —— 于是"没接线"和
+   * "接不上"混成同一件事，`NODE_WHY_NOT_WIRED` 那句提示看着像故障报告。
+   * 现在它是**显式的未接线**：返回 null 就是全部事实，不再假装去加载一个空路。
+   * （真要启用时改回 `../node-supervisor.mjs` 并补 smoke-lan-join 的 node.running 断言。）
+   */
+  return null;
 }
 
 /** 节点守护接不上时对用户说的话：`/status` 与 join 返回共用一句，免得两处漂移 */
@@ -390,7 +398,9 @@ export async function handleLocal(req, res, url) {
              *   · 再按锁里的 PID 停进程（Windows 的 remove 只删启动脚本，不停进程）。
              */
             try {
-              const auto = await import('./autostart.mjs');
+              // 同上：`../` 不能省。少了它这条 catch 一定命中 —— "退出总机"从来没能
+              // 摘掉开机自启，用户只看到一句"开机自启没移除成功"（2026-11-08 修）。
+              const auto = await import('../autostart.mjs');
               auto.remove('node');
               autoRemoved = true;
             } catch (e) {

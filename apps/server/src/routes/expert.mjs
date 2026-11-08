@@ -1,5 +1,5 @@
 /* routes/expert.mjs —— 2026-10-22 由 server.mjs 按域拆出，handler 逻辑原样搬运。
- * 主分发顺序（先匹配先赢）见 ../server.mjs 的 CHAIN。 */
+ * 主分发顺序（先匹配先赢）见 ./chain.mjs 的 CHAIN。 */
 
 import { sendJson, fail } from '../http.mjs';
 import * as experts from '../experts.mjs';

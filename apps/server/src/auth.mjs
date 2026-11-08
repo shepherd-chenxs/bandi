@@ -66,6 +66,20 @@ const SID_COOKIE = 'bandi_sid';
 /** 会话 Cookie 存活天数 —— 必须与 `store.SESSION_DAYS` 一致（两处一起改） */
 const SID_MAX_AGE = 30 * 86400;
 
+/**
+ * **壳的 WebView 标记**（2026-11-08）：原生壳在 UA 末尾追加 `BandiShell/<版本>`。
+ *
+ * 用途只有一个 —— 无会话抓面板 HTML 时区分"人"和"壳"（见 serveLoginOrReenter）。
+ * 它不参与任何鉴权判断：伪造它最坏的结果是自己看不到登录页。
+ */
+const SHELL_UA = /(^|\s)BandiShell\/\S+/;
+
+/**
+ * 壳的会话过期改道点。壳的 `shouldOverrideUrlLoading` 认这个路径去**静默重签票**，
+ * 不真的加载它；万一没接住，服务端回一张"正在重新连接"的静态页（routes/hub.mjs）。
+ */
+export const REENTER_PATH = '/hub/expired';
+
 
 /** 这个监听地址算不算"只有本机能访问" */
 // isLoopbackHost 现在住在 security/source.mjs（本文件上面 import 并原样导出，对外 API 不变）
@@ -428,6 +442,13 @@ export function guard(auth, req, res, url) {
    */
   if (req.method === 'GET' && url.pathname === '/hub/enter') return true;
   /*
+   * **壳的会话过期改道点**（2026-11-08）：面板 HTML 请求没会话时，带壳标记的请求会被
+   * 302 到这里（serveLoginOrReenter）。壳本该在 `shouldOverrideUrlLoading` 里接住、
+   * 不真加载；接不住时这一页只是"正在重新连接"的静态说明 —— 放行它，别让它掉进
+   * 登录页（那就又绕回原地了）。
+   */
+  if (req.method === 'GET' && url.pathname === REENTER_PATH) return true;
+  /*
    * **中枢账号登录**（2026-11-07）：`POST /hub/login`。
    * 此刻请求手上什么都没有（这正是它的作用），密码就是要验的东西 ——
    * guard 只管放行，认人在 handler（routes/hub.mjs → 中枢）。
@@ -482,18 +503,7 @@ export function guard(auth, req, res, url) {
      * 界面上当"我"的身份 —— 它没有 users 行，「我的」页画不出名字，用户看到的就是
      * 一个空页 + 一段解释。所以门前移：没会话就给登录页。
      */
-    if (wantsPanelHtml(req, url)) {
-      // 登录页顺手种 CSRF 双提交值：登录成功后所有带 Cookie 的写请求都要带上它。
-      // 值同时给到页面（中枢登录表单的隐藏域）：桌面壳的表单 POST 会带 Origin: null
-      // （2026-11-07 实报 E7006），/hub/login 的同源闸拿这对值兜底（routes/hub.mjs）。
-      const hadCsrf = csrf.valuesOf(req).cookie;
-      const csrfVal = hadCsrf || csrf.mint();
-      const headers = { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' };
-      if (!hadCsrf) headers['Set-Cookie'] = csrf.cookieFor(csrfVal);
-      res.writeHead(200, headers);
-      res.end(loginPage({ mobile: isMobileUA(req), hub: hubOf(auth), csrf: csrfVal }));
-      return false;
-    }
+    if (wantsPanelHtml(req, url)) return serveLoginOrReenter(req, res, auth);
     return true;
   }
 
@@ -613,7 +623,6 @@ export function guard(auth, req, res, url) {
      * App 里是 WebView 带中枢会话进来，两种都不是"令牌当登录"。
      */
     if (who.kind === 'operator' && wantsPanelHtml(req, url)) {
-      const headers = { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' };
       /*
        * **顺手清掉这枚令牌 Cookie**（2026-11-01 实报：点了登录，输入框被刷空、还在登录页）。
        * 面板不再认令牌，而 `令牌优先于会话` 会让这枚陈年 Cookie 把刚登录的人一直压回
@@ -622,15 +631,7 @@ export function guard(auth, req, res, url) {
        */
       const staleTok = String(parseCookies(req.headers.cookie)[COOKIE] || '');
       const dropToken = !!staleTok && !!auth.token && timingSafeEqual(staleTok, auth.token);
-      const hadCsrf = csrf.valuesOf(req).cookie;
-      const csrfVal = hadCsrf || csrf.mint();
-      const setCookies = [];
-      if (!hadCsrf) setCookies.push(csrf.cookieFor(csrfVal));
-      if (dropToken) setCookies.push(clearedTokenCookie());
-      if (setCookies.length) headers['Set-Cookie'] = setCookies;
-      res.writeHead(200, headers);
-      res.end(loginPage({ mobile: isMobileUA(req), hub: hubOf(auth), csrf: csrfVal }));
-      return false;
+      return serveLoginOrReenter(req, res, auth, dropToken ? [clearedTokenCookie()] : []);
     }
     req.bandiAuth = who; // 下游（比如"忘掉"、员工编辑的字段闸）据此知道这枚令牌是谁
     return true;
@@ -648,23 +649,13 @@ export function guard(auth, req, res, url) {
    */
   const wantsHtml = wantsPanelHtml(req, url);
   if (wantsHtml) {
-    // 同上：服务器形态的登录页也种 CSRF 值（登录成功后的写请求要带；值同样给到隐藏域）
-    const hadCsrf = csrf.valuesOf(req).cookie;
-    const csrfVal = hadCsrf || csrf.mint();
-    const headers = { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' };
-    const setCookies = [];
-    if (!hadCsrf) setCookies.push(csrf.cookieFor(csrfVal));
     /*
      * 顺手扫掉**没法用的**访问令牌 Cookie（2026-11-01）：认不出来的根令牌 / 被吊销的
      * 节点令牌 / 早已退场的 `bd_` 配对令牌，留在浏览器里只会在每次请求上添一次 401，
      * 还挡在"令牌优先"那条路上。到这一步说明它已经认不出来了，清掉是安全的。
      */
     const staleTok = String(parseCookies(req.headers.cookie)[COOKIE] || '');
-    if (staleTok) setCookies.push(clearedTokenCookie());
-    if (setCookies.length) headers['Set-Cookie'] = setCookies;
-    res.writeHead(200, headers);
-    res.end(loginPage({ mobile: isMobileUA(req), hub: hubOf(auth), csrf: csrfVal }));
-    return false;
+    return serveLoginOrReenter(req, res, auth, staleTok ? [clearedTokenCookie()] : []);
   }
 
   res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -695,6 +686,43 @@ function wantsPanelHtml(req, url) {
   if (p.startsWith('/api/')) return false;
   if (p === '/' || p.endsWith('.html')) return true;
   return String(req.headers.accept ?? '').includes('text/html');
+}
+
+/**
+ * 无会话抓面板 HTML 的出口：**人对登录页，壳对 302**（2026-11-08）。
+ *
+ * 壳（UA 带 `BandiShell/`）出现在这里，说明它手里那张**本机会话**过期了 —— 壳的
+ * 凭据在中枢（30 天），本机会话只有 12 小时绝对 / 30 分钟空闲（`store/users.mjs`），
+ * 两者本来就不该同步过期。这时把登录页画给壳，等于让用户用"浏览器的方式"解决
+ * "壳的问题"：他要的只是回到面板，而壳随时能用中枢会话重签一张票（`/hub/enter`）。
+ *
+ * 所以壳改道 {@link REENTER_PATH} 由壳静默重进；人照旧拿登录页 —— 浏览器没有签票
+ * 能力，输账号密码是它唯一能走的路。
+ *
+ * @param {string[]} extraCookies 调用方要顺手清掉的 Cookie（陈旧的访问令牌）
+ */
+function serveLoginOrReenter(req, res, auth, extraCookies = []) {
+  // 登录页顺手种 CSRF 双提交值：登录成功后所有带 Cookie 的写请求都要带上它。
+  // 值同时给到页面（中枢登录表单的隐藏域）：桌面壳的表单 POST 会带 Origin: null
+  // （2026-11-07 实报 E7006），/hub/login 的同源闸拿这对值兜底（routes/hub.mjs）。
+  const hadCsrf = csrf.valuesOf(req).cookie;
+  const csrfVal = hadCsrf || csrf.mint();
+  const setCookies = [...extraCookies];
+  if (!hadCsrf) setCookies.push(csrf.cookieFor(csrfVal));
+
+  if (SHELL_UA.test(String(req.headers['user-agent'] ?? ''))) {
+    const headers = { Location: REENTER_PATH, 'Cache-Control': 'no-store' };
+    if (setCookies.length) headers['Set-Cookie'] = setCookies;
+    res.writeHead(302, headers);
+    res.end();
+    return false;
+  }
+
+  const headers = { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' };
+  if (setCookies.length) headers['Set-Cookie'] = setCookies;
+  res.writeHead(200, headers);
+  res.end(loginPage({ mobile: isMobileUA(req), hub: hubOf(auth), csrf: csrfVal }));
+  return false;
 }
 
 function stripToken(params) {

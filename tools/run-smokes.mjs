@@ -83,6 +83,10 @@ const RUN = [
   'apps/server/src/smoke-runtime-detect.mjs',
   // 纯静态断言（不联网）：手机该走的路由必须带 device 标，桌面专属的必须没有
   'apps/server/src/smoke-users.mjs',
+  // 状态词表一致性（2026-11-08）：八态/运行态/节点态、状态⇄看板列、建表默认值。
+  // 纯数据 + 源码文本，不开库不起服务 —— 改状态相关代码后单独跑它最快
+  // （node apps/server/src/smoke-status-vocab.mjs）
+  'apps/server/src/smoke-status-vocab.mjs',
   'apps/server/src/smoke-schedules.mjs',
   'apps/server/src/smoke-steward.mjs',
   'apps/server/src/smoke-ssh.mjs',
@@ -216,6 +220,34 @@ if (!onlyArg) {
   });
   if (drift.status !== 0) {
     console.error('✗ 文档与代码对不上（见上）');
+    process.exit(1);
+  }
+
+  /*
+   * 再跑**分发链自检**（2026-11-08 加）：routes/*.mjs 的实现 ↔ routes/chain.mjs 的登记表。
+   * 加了一个路由模块忘了挂链，请求就是 404 —— 不报错、不崩、只有点到那条才发现；
+   * 而这条检查纯源码文本、几十毫秒，正好钉在唯一入口上。
+   */
+  const chain = spawnSync(process.execPath, [path.join(repo, 'tools', 'check-dispatch-chain.mjs')], {
+    cwd: repo,
+    stdio: 'inherit',
+  });
+  if (chain.status !== 0) {
+    console.error('✗ 分发链对不上（见上）');
+    process.exit(1);
+  }
+
+  /*
+   * 再跑**幽灵引用自检**（2026-11-08 加）：注释/文档里指向不存在文件的那类指路。
+   * 它不改任何行为，但会**骗人** —— 11-08 排查手机端登录页时，就是被"401 → 重新扫码"
+   * 这条过期注释带到了已退场的老壳上。机制退场时，指路也得跟着退场。
+   */
+  const ghosts = spawnSync(process.execPath, [path.join(repo, 'tools', 'check-ghost-refs.mjs')], {
+    cwd: repo,
+    stdio: 'inherit',
+  });
+  if (ghosts.status !== 0) {
+    console.error('✗ 有引用指向不存在的东西（见上）');
     process.exit(1);
   }
 

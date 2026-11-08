@@ -35,41 +35,18 @@ import * as lanAnnounce from './lan-announce.mjs';
 import * as localSecret from './security/local-secret.mjs';
 import * as tlsCheck from './security/tls-check.mjs';
 import { isLoopbackHost } from './security/source.mjs';
-import { handleConversation } from './routes/conversation.mjs';
-import { handleEvents } from './routes/events.mjs';
-import { handlePersona } from './routes/persona.mjs';
-import { handleAgentCards } from './routes/agent-cards.mjs';
-import { handleGroup } from './routes/group.mjs';
-import { handleExpert } from './routes/expert.mjs';
-import { handleSkill } from './routes/skill.mjs';
-import { handleConnector } from './routes/connector.mjs';
-import { handleNode } from './routes/node.mjs';
-import { handleNodeWork } from './routes/nodeWork.mjs';
-import { handleRuntime } from './routes/runtime.mjs';
-import { handlePluginAction } from './routes/plugin.mjs';
-import { handleProject } from './routes/project.mjs';
-// 账号与安全（影子账号）：/api/logout、/api/me、/api/users*、/api/security*
-import { handleUsers } from './routes/users.mjs';
-import { handleWorkspace } from './routes/workspace.mjs';
-import { handleStatus } from './routes/status.mjs';
-import { handleFs } from './routes/fs.mjs';
-import { handleWorkflow } from './routes/workflow.mjs';
-import { handleSsh } from './routes/ssh.mjs';
-import { handleGit } from './routes/git.mjs';
-import { handleImageAi } from './routes/imageai.mjs';
-import { handlePrefs } from './routes/prefs.mjs';
-// 飞书通道（2026-10-29 员工级：路由挂在 /api/personas/:id/feishu，设置级的旧路由已删）
-import { handleFeishu } from './routes/feishu.mjs';
+// 域模块（路由）**不在这里逐个 import**（2026-11-08）：谁先谁后、都有哪些，
+// 全在 routes/chain.mjs 那张表里 —— 顺序是契约，得能一眼审、能机器查。
+import { runChain } from './routes/chain.mjs';
+// 飞书通道的服务端本体（不是路由）：启动时要 bootSync 把旧配置迁给对应员工
 import * as feishu from './feishu.mjs';
-import { handleRun } from './routes/run.mjs';
-import { handleSchedules } from './routes/schedules.mjs';
 import { handleLocal, supervisorModule } from './routes/local.mjs';
 // 身份中枢进门（2026-11-06）：`GET /hub/enter?ticket=…` —— 验票 → 查本地授权表 → 发会话
 import { handleHub } from './routes/hub.mjs';
 import * as hub from './hub/join.mjs';
 // 外网访问的机器侧一半（2026-11-07）：中枢下发 relay → 起 frpc 隧道。没配置时整个空转。
 import * as tunnel from './hub/tunnel.mjs';
-import { sendJson, fail, readBody, guardWrite, guardHost, serveStatic, BadRequest, allowedOrigins, webDir } from './http.mjs';
+import { sendJson, fail, readBody, guardWrite, guardHost, serveStatic, BadRequest, allowedOrigins, webDir, cspHeader } from './http.mjs';
 import { SERVER } from './server-state.mjs';
 import { runtimeOptions, runtimesOk, withExternals } from './runtime-view.mjs';
 // CSRF 双提交（IAM §10.2，2026-10-31 Phase 1 收尾）：Cookie bandi_csrf 与请求头
@@ -490,6 +467,19 @@ if (localSecretDisabled) {
 
 const server = http.createServer(async (req, res) => {
   /*
+   * **安全响应头**（2026-11-08）：装在请求链最前面，**先于一切判断** ——
+   * 包括 Host 闸 / 网络周界闸拒绝的那几条 403（拒绝页也不该能跑脚本）。
+   *
+   * CSP 的来由见 security/csp.mjs 的文件头：界面靠 innerHTML 拼字符串 + 849 处 esc()，
+   * 漏一次就是存储型 XSS；CSP 把「漏转义」从必然出洞降级成被浏览器挡住。
+   * 它是兜底，不替代 esc() —— 两件事都要做。
+   *
+   * nosniff：静态文件按扩展名给 Content-Type，禁止浏览器自作聪明改写（MIME 嗅探 XSS）。
+   */
+  res.setHeader('Content-Security-Policy', cspHeader());
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+
+  /*
    * Host 守卫排在一切之前（含令牌闸）：rebind 页面的请求 Host 是攻击者域名，
    * 连"来源对不对"都不该让它摸到面板数据（http.mjs 的 guardHost 注释）。
    */
@@ -583,9 +573,10 @@ const server = http.createServer(async (req, res) => {
        * 都会 E4099，用户看到的就是"按钮点了没反应"。每个 HTML 页面响应顺手补一枚
        * （已有就不动）—— 打开一次页面即自愈。
        *
-       * 2026-11-07 起只有登录页和主页面两条 HTML 出口（扫码落地页随设备令牌体系退场），
-       * 这一层仍然要有：`bandi_csrf` 只活 1 天、`bandi_sid` 活 30 天，"凭据还在、
-       * csrf 先过期"是常态，不是意外。
+       * 2026-11-08 起 HTML 出口三条：登录页（`/hub/login`）、主页面、以及给壳的
+       * 会话过期兜底页（`/hub/expired`，壳正常会拦下它、不真加载）。扫码落地页早随
+       * 设备令牌体系退场了；这一层仍然要有：`bandi_csrf` 只活 1 天、`bandi_sid` 活
+       * 30 天，"凭据还在、csrf 先过期"是常态，不是意外。
        */
       const wantsHtmlPage = url.pathname === '/'
         || url.pathname.endsWith('.html')
@@ -617,85 +608,15 @@ const server = http.createServer(async (req, res) => {
 
     if (routes[key]) return await routes[key](req, res);
 
-    // 全局 SSE（/api/events）：挂在链头 —— 长命连接，别让它在别的 handler 里排队
-    const handledEvents = await handleEvents(req, res, url);
-    if (handledEvents !== false) return;
-
-    const handledConversation = await handleConversation(req, res, url);
-    if (handledConversation !== false) return;
-
-    const handledPersona = await handlePersona(req, res, url);
-    if (handledPersona !== false) return;
-
-    // 员工的"工作证"接口（建卡）：挂在 persona 之后，身份/权限自成一处（见 agent-auth）
-    const handledAgentCards = await handleAgentCards(req, res, url);
-    if (handledAgentCards !== false) return;
-
-    const handledExpert = await handleExpert(req, res, url);
-    if (handledExpert !== false) return;
-
-    // 账号与安全：/api/me 是"每个页面启动都会问一次"的接口，能早一步就早一步
-    const handledUsers = await handleUsers(req, res, url);
-    if (handledUsers !== false) return;
-
-    const handledProject = await handleProject(req, res, url);
-    if (handledProject !== false) return;
-
-    // 工作区文件口 + 系统浏览器打开（2026-10-24）：员工报的产出路径，点一下就能看
-    const handledWorkspace = await handleWorkspace(req, res, url);
-    if (handledWorkspace !== false) return;
-
-    const handledStatus = await handleStatus(req, res, url);
-    if (handledStatus !== false) return;
-
-    const handledFs = await handleFs(req, res, url);
-    if (handledFs !== false) return;
-
-    const handledGroup = await handleGroup(req, res, url);
-    if (handledGroup !== false) return;
-
-    const handledSkill = await handleSkill(req, res, url);
-    if (handledSkill !== false) return;
-
-    const handledConnector = await handleConnector(req, res, url);
-    if (handledConnector !== false) return;
-
-
-    const handledRuntime = await handleRuntime(req, res, url);
-    if (handledRuntime !== false) return;
-
-    const handledNode = await handleNode(req, res, url);
-    if (handledNode !== false) return;
-
-    const handledNodeWork = await handleNodeWork(req, res, url);
-    if (handledNodeWork !== false) return;
-
-    const handledPlugin = await handlePluginAction(req, res, url);
-    if (handledPlugin !== false) return;
-
-    const handledSsh = await handleSsh(req, res, url);
-    if (handledSsh !== false) return;
-
-    const handledWorkflow = await handleWorkflow(req, res, url);
-    if (handledWorkflow !== false) return;
-
-    const handledRun = await handleRun(req, res, url);
-    if (handledRun !== false) return;
-
-    const handledGit = await handleGit(req, res, url);
-    if (handledGit !== false) return;
-
-    const handledSchedules = await handleSchedules(req, res, url);
-    if (handledSchedules !== false) return;
-
-    const handledImageAi = await handleImageAi(req, res, url);
-    if (handledImageAi !== false) return;
-
-    const handledPrefs = await handlePrefs(req, res, url);
-    if (handledPrefs !== false) return;
-
-    const handledFeishu = await handleFeishu(req, res, url);
-    if (handledFeishu !== false) return;
+    /*
+     * **正则链**：所有带动态段的 /api 路径交给 routes/chain.mjs 那张表按顺序问一遍。
+     *
+     * 改造前这里是 25 段「`const handledX = await handleX(...); if (handledX !== false) return;`」
+     * —— 顺序只存在于书写顺序里，加模块要"插在对的位置"，而注释里到处写着的
+     * 「主分发顺序见 server.mjs 的 CHAIN」指的是一个**并不存在**的符号。
+     * 现在顺序是数组下标，漏挂/重挂由 tools/check-dispatch-chain.mjs 在 PR 门禁里查。
+     */
+    if (await runChain(req, res, url)) return;
 
     fail(res, 404, 'E2036', '没有这个接口');
   } catch (err) {

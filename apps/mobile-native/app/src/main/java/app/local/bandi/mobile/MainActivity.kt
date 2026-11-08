@@ -89,6 +89,24 @@ class MainActivity : AppCompatActivity() {
     private var pendingClearHistory = false
 
     /*
+     * **会话过期的静默重进**（2026-11-08）。
+     *
+     * 本机会话只有 12 小时绝对 / 30 分钟空闲（服务端 store/users.mjs），而壳自己的
+     * 中枢会话是 30 天 —— 两者不可能同步过期。过期后服务端对面板 HTML 只给登录页，
+     * 人就对着手机号输入框发呆（用户实报"遇到过好几次"）。
+     *
+     * 壳本来就有重进的钥匙（中枢会话 → /hub/enter），只是**没人叫它**。现在两条触发：
+     *   · 服务端在 UA 里认出壳 → 302 /hub/expired（shouldOverrideUrlLoading 接住）；
+     *   · 面板 JS 收到 E4010/E4012 → BandiShell.sessionExpired()。
+     * 两条都走 reenter()。
+     */
+    private var currentDeviceId: String? = null
+    /** 正在重进：/hub/expired 可能被连打，防重入 */
+    private var reentering = false
+    /** 连续失败次数：票签不出来说明中枢/账号那边真有事，两次就回列表 */
+    private var reenterFails = 0
+
+    /*
      * 面板连不上机器（2026-11-08）：机器掉线/睡眠时 WebView 会画系统错误页
      * （"网页无法打开 net::ERR_…"），那是 Android 的默认行为，不能露给用户 ——
      * 主框架加载失败时盖一层原生兜底页（layout 的 viewPanelError）。
@@ -662,8 +680,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun enterDevice(id: String) {
         val d = devices.find { it.id == id } ?: return
-        val session = SessionStore.session(this) ?: run { backToLogin(null); return }
+        val session = SessionStore.session(this) ?: run { reentering = false; backToLogin(null); return }
         val hub = SessionStore.hub(this)
+        currentDeviceId = id   // 会话过期时靠它重新签票（reenter）
         binding.devSub.text = "正在进入…"
         pool.execute {
             try {
@@ -671,35 +690,65 @@ class MainActivity : AppCompatActivity() {
                 val dev = devices.find { it.id == id } ?: d
                 val origin = reach[id] ?: dev.origins().firstOrNull()
                 if (origin == null) {
-                    runOnUiThread { binding.devSub.text = "这台电脑还没上报地址，先在它上面打开班底" }
+                    runOnUiThread {
+                        reentering = false
+                        binding.devSub.text = "这台电脑还没上报地址，先在它上面打开班底"
+                    }
                     return@execute
                 }
                 runOnUiThread {
                     binding.devSub.text = "点一台进去"
                     /*
-                     * 进门前清一遍 Cookie（2026-11-07 用户实报「我的页有两条设备卡」）：
-                     * 旧配对时代留下的 bd_ 设备令牌还在 Cookie 罐里，机器闸是「令牌优先、
-                     * 会话兜底」—— 旧令牌会把刚发的中枢会话压下去，人就以设备身份进了面板
-                     * （新代码的 /hub/enter 会顺手清 bd_，但旧版本机器进程没有这步）。
-                     * 每次进门都是一张新鲜票，旧 Cookie 没有存活价值：全清，落进来的
-                     * 一定是干净的中枢身份，「这台设备」配对卡随之消失。
+                     * **只精确清掉已退场的那枚令牌，不再整罐清**（2026-11-08 改）。
+                     *
+                     * 原来这里每次进门都 `removeAllCookies(null)`：那是**异步**任务，可能
+                     * 排在 /hub/enter 的 Set-Cookie 之后落地，把刚拿到的 bandi_sid 一起删掉
+                     * —— 表现就是"点进去直接是登录页"，且时灵时不灵（用户实报好几次）。
+                     *
+                     * 现在只删 bandi_token：设备令牌体系 2026-11-07 已退场，这枚只可能是
+                     * 升级前的残留；它和本次要发的会话是两个 key，先后顺序再怎么变都不会
+                     * 误删。服务端 /hub/enter 里也有同样的清理，这里只是兜住旧机器进程。
                      */
-                    CookieManager.getInstance().removeAllCookies(null)
-                    CookieManager.getInstance().flush()
+                    CookieManager.getInstance().setCookie(origin, "bandi_token=; Max-Age=0; Path=/")
                     pendingClearHistory = true
                     hidePanelError()   // 换一台机器是全新加载：上一台留下的错误层不跟着进门
                     showPanel(origin)  // 顺带盯着这台电脑在不在（离线时顶部出提示条）
                     // 机器验票后 302 到 / 并发会话 Cookie；CookieManager 默认接收，
                     // 后续面板请求自动带上
                     binding.panelWebView.loadUrl("$origin/hub/enter?ticket=${android.net.Uri.encode(ticket)}")
+                    // 注意：reentering 要等页面真的加载完（onPageFinished）再复位 ——
+                    // 这中间 WebView 若又被 302 到 /hub/expired，正是要拦掉的那种连打。
                 }
             } catch (e: Exception) {
                 runOnUiThread {
+                    reentering = false
                     binding.devSub.text = e.message ?: "签票失败"
                     if ((e as? HubException)?.status == 401) backToLogin("登录已过期，请重新登录")
                 }
             }
         }
+    }
+
+    /**
+     * 静默重进：用中枢会话重新签一张票，重新加载这台的 /hub/enter。
+     *
+     * 不弹任何东西、不经过设备列表 —— 用户手上的事还在 WebView 里，换张票就回来。
+     * 两次签不出来就不硬试了（中枢/账号那边真有事），回列表并把原因写在副标题上。
+     */
+    fun reenter() {
+        if (reentering) return
+        val id = currentDeviceId
+        // 名单里已经没有这台（人刚删掉/换了账号）：回列表比空转有用
+        if (id == null || devices.none { it.id == id }) { showDevicesFromPanel(); return }
+        if (reenterFails >= 2) {
+            reenterFails = 0
+            showDevicesFromPanel()
+            binding.devSub.text = "会话过期了，重新点一次这台电脑"
+            return
+        }
+        reenterFails++
+        reentering = true
+        enterDevice(id)
     }
 
     /* ------------------------------------------------------------ 面板 WebView */
@@ -708,10 +757,42 @@ class MainActivity : AppCompatActivity() {
     private fun setupWebView() {
         val wv = binding.panelWebView
         CookieManager.getInstance().setAcceptCookie(true)
+        /*
+         * **壳标记**（2026-11-08）：服务端靠 UA 末尾的 `BandiShell/<版本>` 分辨"人"和"壳" ——
+         * 面板请求没有会话时，浏览器给登录页，壳给 302 /hub/expired 让它静默重签票
+         * （server 的 auth.mjs → serveLoginOrReenter）。没有这一行，壳里会话一过期就必然
+         * 弹出中枢账号密码框，而壳其实随时能自己换一张票。
+         *
+         * 版本号取自 AndroidManifest 的 versionName（不引 BuildConfig：AGP 8 默认关着它，
+         * 为一个字符串去改构建配置不划算）。
+         */
+        @Suppress("DEPRECATION")
+        val appVer = runCatching { packageManager.getPackageInfo(packageName, 0).versionName }
+            .getOrNull() ?: "0"
+        val baseUa = wv.settings.userAgentString ?: ""
+        if (!baseUa.contains("BandiShell/")) {
+            wv.settings.userAgentString = "$baseUa BandiShell/$appVer"
+        }
         wv.settings.javaScriptEnabled = true
         wv.settings.domStorageEnabled = true
         wv.addJavascriptInterface(BandiShell(this), "BandiShell")
         wv.webViewClient = object : WebViewClient() {
+            /*
+             * **会话过期的改道点**（2026-11-08）：服务端认出壳、又没有会话，就 302 到这里。
+             * 接住它、不真加载 —— 用中枢会话重新签一张票进门，人看不到任何登录页。
+             * 返回 true 才是"我处理了"；别的 URL 一律交回 WebView。
+             */
+            override fun shouldOverrideUrlLoading(
+                view: WebView,
+                request: android.webkit.WebResourceRequest,
+            ): Boolean {
+                if (request.url.path == "/hub/expired") {
+                    reenter()
+                    return true
+                }
+                return false
+            }
+
             override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
                 // 新一次加载开始：先当它没失败。真失败时 onReceivedError 随后会把标记翻回来
                 panelErrorThisPage = false
@@ -724,6 +805,8 @@ class MainActivity : AppCompatActivity() {
             ) {
                 // 只拦主框架：面板里某个子资源（图标/图片）挂了不该把整页换成错误层
                 if (!request.isForMainFrame) return
+                // 主框架都没起来：这次重进到此为止（别把防重入卡死在 true 上）
+                reentering = false
                 panelErrorThisPage = true
                 val failing = request.url.toString()
                 // 细节按项目口径只落日志，界面只给错误码 + 人话（E0001 同 ui.mjs 口径）
@@ -732,6 +815,8 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun onPageFinished(view: WebView, url: String) {
+                // 这次加载收了尾：静默重进的防重入放开（换票后的那次加载到这里结束）
+                reentering = false
                 // 只在「刚进一台机器」的边界清一次历史：面板内部的 pushState 导航不受影响，
                 // 返回键从此不会摸到上一台机器的页面
                 if (pendingClearHistory) {
@@ -740,6 +825,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 // 加载成功收掉错误层；失败收场的那次留着（重试成功后自然走到这里收掉）
                 if (!panelErrorThisPage) {
+                    reenterFails = 0   // 面板真的出来了 = 票换成功，连败计数归零
                     hidePanelError()
                     /*
                      * 主框架加载成功 = 这台机器此刻确实活着。顺手把状态归位：

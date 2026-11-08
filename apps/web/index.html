@@ -36,13 +36,13 @@
   html[data-theme="light"] { background: #f7f8f9; color-scheme: light; }
 </style>
 <script>
-  // 在首次绘制之前就把主题定下来。放在这里而不是 app.js：styles.css 一加载就会画，
+  // 在首次绘制之前就把主题定下来。放在这里而不是 app.mjs：styles.css 一加载就会画，
   // 等到 body 末尾再改属性，浅色用户会先闪一下深色。
   try {
     var t = localStorage.getItem('bandi.theme') || 'system';
     document.documentElement.dataset.theme =
       t === 'system' ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : t;
-  } catch (e) { /* 读不了就算了，交给 app.js */ }
+  } catch (e) { /* 读不了就算了，交给 app.mjs */ }
 </script>
 <link rel="stylesheet" href="/style.css" />
 <!-- 移动端样式（2026-11 手机端增量）：全部新规则只在这个文件（style.css 不新增移动规则），
@@ -93,7 +93,7 @@
     </svg>
     <span>通讯录</span>
   </button>
-  <!-- 专家库（2026-10-22 补回）：app.js 整条链路早就备好了（ROUTES.experts、
+  <!-- 专家库（2026-10-22 补回）：app.mjs 整条链路早就备好了（ROUTES.experts、
        setNav('experts') 的分支、#expertsView 整页），唯独 rail 上这颗按钮一直没建 ——
        专家库没有入口，用户看到的就是"专家库没了"。放在通讯录与工作台之间。 -->
   <button class="nav-btn" data-nav="experts">
@@ -193,7 +193,7 @@
   <div id="detailView"></div>
   <div id="settingsView"></div>
   <div id="groupView"></div>
-  <!-- 专家库整页（2026-10-22 补）：app.js 的 showView / openExperts 都引用 #expertsView，
+  <!-- 专家库整页（2026-10-22 补）：app.mjs 的 showView / openExperts 都引用 #expertsView，
        但这个容器一直没建 —— 每次切页面 showView 在 $('expertsView').classList 上抛
        "Cannot read properties of null"，它后面的 pluginView 等切换和事件绑定全被跳过，
        工作台等页面因此白屏（2026-10-22 用户实报）。 -->
@@ -275,12 +275,12 @@
 <aside id="drawer"></aside>
 
 <!-- 列表项的右键菜单（删除 / 不显示）。单例：内容与位置每次换，节点本身不动，
-     所以挂在它上面的 click / keydown 只需在 boot 时注册一次（见 app.js 的 openCtxMenu） -->
+     所以挂在它上面的 click / keydown 只需在 boot 时注册一次（见 app.mjs 的 openCtxMenu） -->
 <div id="ctxMenu" class="ctx-menu" role="menu" hidden></div>
 
 <!-- 悬浮提示（自建，替原生 title）。原生 title 的框是系统画的：方角、灰底、悬停一秒才出，
      要圆角只能自己画一个。用法：元素上写 data-tip="文案"，读屏仍走 aria-label。
-     单例节点，位置每次现算（见 app.js 的 wireTip） -->
+     单例节点，位置每次现算（见 app.mjs 的 wireTip） -->
 <div id="tipPop" class="tip-pop" role="tooltip" hidden></div>
 
 <dialog id="memberDlg">

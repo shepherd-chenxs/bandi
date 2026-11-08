@@ -333,7 +333,7 @@ body.no-list .list-panel { display: none; }
                 max-content 撑开（实测 list-head 宽 353、盖到主区上），必须显式 min-width:0，
                 里面的 `.list-title` / 每段才会真的收缩 + 省略号。 */ min-width: 0; }
 .list-head b { font-size: var(--t-page); font-weight: var(--w-title); }
-/* 左栏标题：一路 `<b>`，现在是个容器（里面可能是一段面包屑，见 app.js 的 setListTitle）。
+/* 左栏标题：一路 `<b>`，现在是个容器（里面可能是一段面包屑，见 app.mjs 的 setListTitle）。
    `min-width:0 + 省略号`：流程名很长时别把它挤出左栏、也别把「＋」顶出去。
    `gap: 0`：段与段之间由 `.crumb-sep` 自己的左右 margin 撑开，跟别处的面包屑一致。 */
 .list-title { display: flex; align-items: center; gap: 0; min-width: 0; flex: 1; overflow: hidden; }
@@ -505,7 +505,7 @@ body.no-list .list-panel { display: none; }
    这里统一用 --chip 淡底 + --dim 字：名单靠"字 + 副标题"辨认已经够了，
    头像的作用只是让眼睛有个落点（密排风格自己也是这么做的）。 */
 /* 头像三种量级
-   ① `.avatar` 38px —— 列表行（通讯录 / 会话列表），配色由 app.js 的 `avatarStyle()` 内联给出
+   ① `.avatar` 38px —— 列表行（通讯录 / 会话列表），配色由 app.mjs 的 `avatarStyle()` 内联给出
       （按名字哈希取低饱和色，同一个人永远同色）。
    ② `.avatar.sm` 32px —— 对话行、群设置、任务评论里的小头像。
    ③ `.avatar.big` / `.p-head` / `.hero` 52~58px —— 详情页主标识。
@@ -740,7 +740,7 @@ main { min-height: 0; }
            overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wb-desc { font-size: 12px; color: var(--dim); line-height: 1.4;
            overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* 插件磁贴：**按分组取色**（颜色由 app.js 的 wbIcoStyle 内联给出，见那里的注释）。
+/* 插件磁贴：**按分组取色**（颜色由 app.mjs 的 wbIcoStyle 内联给出，见那里的注释）。
    兜底是品牌蓝 —— 万一哪天没带 --wb-1/--wb-2，磁贴也不会变成透明色块。 */
 .wb-ico.has-plug { background: linear-gradient(135deg,
                       var(--wb-1, var(--logo-1)), var(--wb-2, var(--logo-2))); }
@@ -1059,7 +1059,7 @@ body:has(#pluginView.shown .fixed-head)::after {
 .run-state + * { margin-top: 7px; }
 /* 时间轴末尾那条"到此结束"：它是结论，不是警告 —— 安静一行就够。 */
 .run-end { margin-top: 14px; font-size: 12.5px; color: var(--dim); line-height: 1.6; }
-/* 提示条：⚠️ **这个类原来一条样式都没有** —— app.js 里用了 4 处、CSS 里 0 条规则，
+/* 提示条：⚠️ **这个类原来一条样式都没有** —— app.mjs 里用了 4 处、CSS 里 0 条规则，
    设计页那处还自己塞了 inline display:flex 绕过（就是没样式才要绕）。
    实例页原来拿它当"页面顶部横幅"，三种提示全堆在那儿；现在按层级拆走了
    （现状→步骤行内、终态→时间轴末尾），只剩"没有当前这一步"那种数据异常还在顶上用它。 */
@@ -1569,7 +1569,7 @@ button.pill.gr-pr-task:hover { color: var(--accent); border-color: var(--accent)
 .row-item.off { opacity: .62; }
 
 /* 「设置 → 技能」主区的技能卡片：宫格，一张一个技能。
-   技能列表从左侧栏搬到了主区（见 app.js 的 renderSkillCards），所以它得是"卡片"而不是"行"。 */
+   技能列表从左侧栏搬到了主区（见 app.mjs 的 renderSkillCards），所以它得是"卡片"而不是"行"。 */
 .sk-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
 .sk-card { display: flex; align-items: flex-start; gap: 12px; padding: 14px;
            border: 1px solid var(--line); border-radius: 10px; background: var(--side); cursor: pointer; }
@@ -1594,11 +1594,11 @@ button.pill.gr-pr-task:hover { color: var(--accent); border-color: var(--accent)
    ② 物品类（CLI / 技能）：**淡底深字**。它们是"东西"不是"人"，颜色只是标识，
       不该抢行的注意力，所以反过来用浅底 + 品牌色字形（token 见文件头的 --tile-*）。
    一句话判断：**能聊天的走①，不能聊天的走②**。
-   两类的说明文字都在本段与 app.js 的 cliAvatar / avatarStyle 上，改之前先看这里。 */
+   两类的说明文字都在本段与 app.mjs 的 cliAvatar / avatarStyle 上，改之前先看这里。 */
 
 /* 运行时的图标块：颜色全部来自 --tile-* 一对 token（浅深两套主题都在文件头定义），
    JS 只负责给 data-brand —— **不再内联写颜色**（2026-10-20 收口的重点：
-   昨天那版把浅色调写进了 app.js，切深色主题就成了一排亮块）。 */
+   昨天那版把浅色调写进了 app.mjs，切深色主题就成了一排亮块）。 */
 .avatar.cli { background: var(--tile-cli-bg); color: var(--tile-cli-fg);
               border-color: transparent; font-size: 15px; font-weight: 600; border-radius: 10px; }
 .avatar.cli svg { width: 21px; height: 21px; display: block; }
@@ -1993,7 +1993,7 @@ input.locked:focus { outline: none; border-color: var(--line); }
 .sk-list { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); overflow: hidden; }
 /* 「从运行时继承」折叠面板（2026-10-19）：默认收起，整块可点展开。
    head 是行内布局，箭头随 data-open 转（JS 里切 ▸/▾）；
-   body 收起时 hidden，展开才挂列表（懒加载，见 app.js 的 setFold）。 */
+   body 收起时 hidden，展开才挂列表（懒加载，见 app.mjs 的 setFold）。 */
 /* 折叠面板（员工详情「从运行时继承」）2026-10-20 用户截图要求去掉外面那层卡片：
    外壳自己一圈边框，展开后里面的 .sk-list 又是一圈 —— 双层卡套着，外壳还是空的。
    现在外壳只留结构（无边框无底色），卡片感交给内层列表；标题行悬停自己带圆角底色。 */
@@ -2978,7 +2978,7 @@ label.check input { width: auto; margin-top: 3px; }
 label.check em { color: var(--dim); font-style: normal; }
 input, select, textarea { width: 100%; background: var(--input); color: var(--text);
       border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; font: inherit; }
-/* 原生 select 已经全部换成 .combo 组件（见 app.js 的 createCombo），这里不再需要样式覆盖 */
+/* 原生 select 已经全部换成 .combo 组件（见 app.mjs 的 createCombo），这里不再需要样式覆盖 */
 
 /* 自建下拉：原生 select 的弹出层高度不可控、也塞不进搜索框 */
 .combo { position: relative; }
@@ -3269,7 +3269,7 @@ dialog.sch-dlg > form { flex: 1 1 auto; min-height: 0; display: flex; flex-direc
    那种白卡片上像给「取消」镶了道墨框。跟着全站口径走主题色 */
 #askDlg.ask-big .dlg-actions button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-/* 标题 + 按钮的吸顶头部（由 app.js 统一包出来，11 个对话框共用） */
+/* 标题 + 按钮的吸顶头部（由 app.mjs 统一包出来，11 个对话框共用） */
 .dlg-head { position: sticky; top: 0; z-index: 3;
             margin: 0 -20px; padding: 20px 20px 6px;         /* 左右负边距铺满整宽 */
             display: flex; align-items: flex-start; gap: 12px;

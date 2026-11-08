@@ -71,6 +71,40 @@ db.exec(`PRAGMA journal_mode = WAL;`);
  */
 db.exec(`PRAGMA busy_timeout = 5000;`);
 
+/*
+ * ---------------------------------------------------------------- 库的版本号
+ *
+ * 2026-11-08 加。之前"这个库是哪一代"没有任何一处能回答：迁移是一串幂等函数，
+ * 靠 `PRAGMA table_info` 猜列、靠 meta 表里的手写标记位记"跑过没有"。能工作，
+ * 但出了事只能一条条读函数、猜顺序；**老程序打开新库更是毫无护栏** ——
+ * 它照常写，把新列/新表当不存在，静默产出半对的数据（这比报错难查得多）。
+ *
+ * `user_version` 是 SQLite 自带的 4 字节整数（不占表、不占行、不用迁移）。
+ * 规矩：**加一次迁移就把 SCHEMA_VERSION +1**。启动时只做两件事：
+ *   · 库比程序新 → 拒绝启动（写下去是事故，宁可让人先升级）；
+ *   · 库比程序旧 → 交给下面那串幂等迁移，跑完把版本号推上去（见文件末尾）。
+ *
+ * ⚠️ 版本号是**单调递增的整数**，不是日期、不是程序版本号 —— 它只回答"迁移走到第几代"。
+ */
+export const SCHEMA_VERSION = 1;
+
+const dbVersion = Number(db.prepare('PRAGMA user_version').get()?.user_version ?? 0);
+if (dbVersion > SCHEMA_VERSION) {
+  console.error(
+    [
+      '',
+      '班底：这个数据目录里的库比当前程序**新**，已停止启动以免写坏数据。',
+      `  库的版本：${dbVersion}    当前程序能处理的版本：${SCHEMA_VERSION}`,
+      `  数据目录：${dataDir}`,
+      '  处理办法（任选一条）：',
+      '    · 升级到新版班底再打开（推荐）；',
+      '    · 用 BANDI_DATA=<别的空目录> 先跑一份干净的，原数据留着不动。',
+      '',
+    ].join('\n'),
+  );
+  process.exit(1);
+}
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS personas (
     id            TEXT PRIMARY KEY,
@@ -1051,3 +1085,14 @@ for (const t of [
 }
 
 /** 模块加载时跑一次：老技能名落到当前技能上（幂等，表里没有就什么都不做） */
+
+/*
+ * ------------------------------------------------------------------ 版本号落地
+ *
+ * 放在**全部建表与迁移之后**：走到这里说明这一代迁移确实跑完了，再盖章。
+ * 只在真的变了时打印 —— 否则每次启动刷一行"0 → 1"，人就不看了。
+ */
+if (dbVersion < SCHEMA_VERSION) {
+  db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`); // 常量整数，不是外部输入
+  console.log(`[数据库] 结构版本 ${dbVersion} → ${SCHEMA_VERSION}`);
+}

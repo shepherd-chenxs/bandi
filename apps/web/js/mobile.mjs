@@ -7,8 +7,11 @@
  *      （body.mb-detail-open），顶部「← 返回」栏回列表，滚动位置保留；
  *   ③ 底部导航（P1-1）：≤900px 四 tab「工作台 / 通讯录 / 会话 / 我的」，详情页自动隐藏；
  *   ④ 键盘适配：visualViewport 高度喂给 --mb-vh，对话页输入栏不挡；
- *   ⑤ 401 引导（PRD P0-3）：手机形态下收到 E4010/E4012 → 全屏"重新扫码"提示，
- *      不做裸登录页；
+ *   ⑤ 401 引导（PRD P0-3）：会话失效（E4010/E4012）→ **壳里交给壳**静默重签票
+ *      （`BandiShell.sessionExpired`），浏览器才重载一次拿中枢登录页。
+ *      本机会话只有 12 小时绝对 / 30 分钟空闲（`store/users.mjs`），而壳的中枢会话是
+ *      30 天 —— 两者不同步，所以过期是常态；以前一律 reload，人就天天撞登录页。
+ *      扫码/设备令牌那套 2026-11-07 已整体退场，与这里无关；
  *   ⑥ 下拉刷新（P1-1）：列表一级页顶部下拉重拉 load()，节流；
  *   ⑦ 历史栈卫生（2026-11-05）：返回键永远摸不到登录页 —— 开机截断启动页残留的
  *      forward 层；跨文档退回旧文档时自动续连，不复活旧会话。
@@ -408,6 +411,15 @@ window.fetch = async (...args) => {
   try {
     sessionStorage.setItem('bandi.401reload', String(Date.now()));
   } catch { /* 存不了就照刷，最多多刷一次 */ }
+  /*
+   * **壳里绝不 reload**（2026-11-08）：reload 的唯一结果是服务端把中枢登录页给过来
+   * （没有会话 → 登录页），人就被丢进手机号输入框 —— 而壳手里握着 30 天的中枢会话，
+   * 随时能重签一张本机票（/hub/enter）。浏览器没有这个能力，才轮到人重新登录。
+   */
+  if (inShell() && typeof window.BandiShell.sessionExpired === 'function') {
+    window.BandiShell.sessionExpired();
+    return r;
+  }
   location.reload();
   return r;
 };

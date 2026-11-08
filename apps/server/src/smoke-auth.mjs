@@ -152,6 +152,23 @@ try {
     && page.text.includes('提交就自动创建') && !page.text.includes('value="register"'));
   check('不是面板（/app.mjs 不出现在登录页）', !page.text.includes('/app.mjs'));
   /*
+   * **壳不该看到登录页**（2026-11-08）：原生壳在 UA 末尾带 `BandiShell/<版本>`，
+   * 它出现在这里说明**本机会话过期了**（12 小时绝对 / 30 分钟空闲），而不是"有人要登录"。
+   * 壳握着 30 天的中枢会话，随时能重签一张票，所以服务端改道 /hub/expired 由壳静默重进。
+   *
+   * 钉三件事：① 带壳标记 → 302（不是 200 登录页）；② 落点能让壳认出来；
+   * ③ 兜底页本身能开（壳没接住时不至于 401/白屏）。浏览器那条路在上面已经钉住了。
+   */
+  const shellUa = 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/120 BandiShell/1.5.21';
+  const shellPage = await get(baseB, '/', { 'user-agent': shellUa, accept: 'text/html' });
+  check('壳要页面 → 302（不发登录页）', shellPage.status === 302, String(shellPage.status));
+  check('改道到哪里：/hub/expired', (shellPage.headers.get('location') ?? '') === '/hub/expired', String(shellPage.headers.get('location')));
+  const expiredPage = await get(baseB, '/hub/expired', { 'user-agent': shellUa, accept: 'text/html' });
+  check('兜底页能开、不要求登录（200 + 正在重新连接）',
+    expiredPage.status === 200 && expiredPage.text.includes('正在重新连接'),
+    `${expiredPage.status}`);
+  check('兜底页里没有登录表单（别在这儿把人拦下来）', !expiredPage.text.includes('action="/hub/login"'));
+  /*
    * ⚠️ 静态资源**不能**吃到登录页 HTML（2026-11-02 三十三改）：/app.mjs 这类非页面请求
    * 没有 Accept: text/html，落到 401 JSON —— 回成 HTML 的话浏览器按 module 执行必然报
    * 语法错误，看起来像"文件没部署上"，比 401 难查得多。

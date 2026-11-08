@@ -7,10 +7,24 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { port, extraOrigins, lanOrigins, dataDir } from './config.mjs';
 import { relayHosts, relayOrigins } from './hub/relay.mjs';
+import { policyFor as cspPolicyFor } from './security/csp.mjs';
 
 // 静态文件根：apps/web（serveStatic 用；路径深度与 server.mjs 同层）
 // **导出**：/api/web-version 的指纹也要 stat 这里的文件（server.mjs 引它），别再各算一份。
 export const webDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'web');
+
+/**
+ * 这一份策略**装在每一次响应上**（server.mjs 在请求链最前面 setHeader）。
+ *
+ * 为什么在链首一次装完、而不是在 serveStatic / 登录页各装一次：写两处就会漏第三处，
+ * 而漏掉的那处常是新加的出口。装在最前面还有个好处 —— Host 闸、网络周界闸拒绝的那几条
+ * 403 也带着策略（拒绝页同样不该跑脚本）。
+ *
+ * 策略本身与哈希缓存在 security/csp.mjs（含逐项理由与 CRLF 归一那条坑）。
+ */
+export function cspHeader() {
+  return cspPolicyFor(path.join(webDir, 'index.html'));
+}
 
 export function sendJson(res, code, body) {
   const text = JSON.stringify(body);

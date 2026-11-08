@@ -75,6 +75,47 @@ export async function handleHub(req, res, url, { dataDir, port }) {
     return true;
   }
 
+  /*
+   * **壳的会话过期改道点**（2026-11-08）。正常情况下壳在 `shouldOverrideUrlLoading`
+   * 里就把它接住了，这个页面根本不会渲染 —— 它不是给人看的入口，是**兜底**：
+   * 万一壳没接住（旧壳、拦截没生效），也得让人看到"正在重新连接"而不是登录页。
+   *
+   * 页面**没有一行脚本**：这条路径的意义就是"什么都别做，等壳来接管"；自动跳转
+   * 只会让人在两个页面之间来回弹。文案也不提"登录"—— 用户不该在这里输密码。
+   */
+  if (url.pathname === '/hub/expired') {
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      res.writeHead(405, { Allow: 'GET', 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('只用 GET');
+      return true;
+    }
+    res.writeHead(200, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'Referrer-Policy': 'no-referrer',
+    });
+    res.end(`<!doctype html>
+<html lang="zh-CN"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>正在重新连接 · 班底</title>
+<style>
+  :root{color-scheme:light dark}
+  body{margin:0;min-height:100vh;display:grid;place-items:center;padding:32px 22px;
+       font:15px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+  .box{max-width:340px;text-align:center;opacity:.75}
+  b{display:block;font-size:17px;margin-bottom:8px;opacity:.95}
+</style>
+</head><body>
+  <div class="box">
+    <b>正在重新连接…</b>
+    <p>这台手机上的会话到期了，正在自动换一张新的。</p>
+    <p>如果一直停在这一屏，回到设备列表重新点一次这台电脑。</p>
+  </div>
+</body></html>`);
+    return true;
+  }
+
   if (url.pathname !== '/hub/enter') return false;
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     // 票只在地址里出现一次，没有"提交"这回事

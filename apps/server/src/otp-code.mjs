@@ -62,7 +62,10 @@ export function totpAt(key, step) {
 
 /**
  * 某一时刻的码（给冒烟/调试用：自己算一个塞给接口，模拟验证器 App）。
- * 生产校验**不走这里** —— 那边要 ±1 窗口 + 常量时间比较，见 store/otp.mjs 的 verifyTotp。
+ *
+ * ⚠️ **这里只有"算码"，没有"验码"**（2026-11-08 核对）：生产校验需要 ±1 窗口 +
+ * 常量时间比较，仓库里没有这一层。原文注释指向 `store/otp.mjs` 的 verifyTotp ——
+ * 那个文件从来没存在过（动态口令这块 2026-11 前后退场了）。留个记号，别再来这儿找。
  */
 export function codeAt(base32Secret, atMs = Date.now()) {
   return totpAt(base32Decode(base32Secret), Math.floor(atMs / 1000 / STEP_SECONDS));

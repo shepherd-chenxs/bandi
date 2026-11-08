@@ -82,27 +82,40 @@ const RANK_OTHER = 8;
  * 因为生命周期上它更早——想法是"还没决定要不要做"，待办是"决定要做了"。
  * 这一列**只手工建卡**，不会有流程/聊天自动落进来（那两者跑起来时早过了"想法"这个阶段）。
  */
+/**
+ * 列的**文案**（这一版只留 label / hint —— 列有哪些、顺序如何，一律由 status.mjs 说了算）。
+ *
+ * 为什么把 key 列表挪走：原来这张表同时承担"有哪些列"和"列叫什么"，而 `COL_OF_FLOW` /
+ * `COL_OF_MANUAL` / `STATUS_OF_COL` / `MANUAL_STATUSES` 四张映射又在下面各写一份 ——
+ * 加一个状态要改五处，漏一处不报错，只是某张卡在某一列上"不见了"。
+ * 现在：`store/status.mjs` 是唯一词表，这里只负责"它长什么样"。
+ */
+const COL_FACE = {
+  idea: { label: '想法', hint: '还没决定要不要做' },
+  todo: { label: '待办' },
+  doing: { label: '进行中' },
+  review: { label: '待验收', hint: '干完了，等你点头' },
+  blocked: { label: '已阻塞', hint: '出了问题等人拍板' },
+  failed: { label: '失败' },
+  done: { label: '已完成' },
+  cancelled: { label: '已取消', hint: '决定不做，留个痕' },
+};
+
+/** 列顺序取自词表（TASK_COL_ORDER）；「其他」是兜底列，不挂状态，所以只在这里追加 */
 const COLUMNS = [
-  { key: 'idea', label: '想法', hint: '还没决定要不要做' },
-  { key: 'todo', label: '待办' },
-  { key: 'doing', label: '进行中' },
-  { key: 'review', label: '待验收', hint: '干完了，等你点头' },
-  { key: 'blocked', label: '已阻塞', hint: '出了问题等人拍板' },
-  { key: 'failed', label: '失败' },
-  { key: 'done', label: '已完成' },
-  { key: 'cancelled', label: '已取消', hint: '决定不做，留个痕' },
+  ...store.TASK_COL_ORDER.map((key) => ({ key, ...COL_FACE[key] })),
   { key: 'other', label: '其他' },
 ];
-const COL_OF_FLOW = { 待办: 'todo', 进行中: 'doing', 待验收: 'review', 已阻塞: 'blocked', 失败: 'failed', 已完成: 'done' };
-const COL_OF_CHAT = { 进行中: 'doing', 已完成: 'done', 失败: 'failed', 已停止: 'blocked' };
+const COL_OF_FLOW = store.FLOW_COL_OF;
+const COL_OF_CHAT = store.CHAT_COL_OF;
 /** 手工任务：状态直接用统一那套词，站列一一对应（「想法」「已取消」只可能手工来） */
-const COL_OF_MANUAL = { 想法: 'idea', 待办: 'todo', 进行中: 'doing', 待验收: 'review', 已阻塞: 'blocked', 失败: 'failed', 已完成: 'done', 已取消: 'cancelled' };
+const COL_OF_MANUAL = store.MANUAL_COL_OF;
 
 /** 看板列 → 新建任务时的默认状态（点哪一列的「＋」就默认落在哪一列） */
-export const STATUS_OF_COL = { idea: '想法', todo: '待办', doing: '进行中', review: '待验收', blocked: '已阻塞', failed: '失败', done: '已完成', cancelled: '已取消' };
+export const STATUS_OF_COL = store.TASK_STATUS_OF_COL;
 
 /** 聊天运行态 → 人看的说法（流程/手工卡那套用统一任务八态，不翻译） */
-const CHAT_STATUS_TEXT = { 跑中: '进行中', 完成: '已完成', 失败: '失败', 已停止: '已停止' };
+const CHAT_STATUS_TEXT = store.CHAT_RUN_TEXT;
 
 /** 一行备注的长度上限；行数上限（面板是给人看的，不是导出全量） */
 const NOTE_LIMIT = 90;
@@ -593,7 +606,7 @@ export function personaTasks(persona) {
  *   · 「想法」「已取消」只可能手工来（流程/聊天跑起来时早过了"想法"阶段，
  *     而机器不会替人决定"这事不做了"）。
  */
-const MANUAL_STATUSES = new Set(['想法', '待办', '进行中', '待验收', '已阻塞', '失败', '已完成', '已取消']);
+const MANUAL_STATUSES = new Set(store.MANUAL_STATUS);
 
 /**
  * 建卡时选的那条流程得**真能起**：存在、已发布、有节点。

@@ -1253,7 +1253,7 @@ export function artifactsOf(text) {
     const f = asFile(m[1]);
     if (f) add({ kind: 'file', target: f, label: f });
   }
-  // ④ 没被反引号包起来的路径：只认**带目录**的（`docs/x.md`），
+  // ④ 没被反引号包起来的路径：只认**带目录**的（形如“目录/文件.后缀”），
   //    不认光秃秃的文件名 —— 正文里"index.html"这种裸词经常只是顺口提一句
   for (const m of src.matchAll(/(?:^|[\s（(])([\w.@~\-/\\\u4e00-\u9fa5]*\/[\w.@~\-\\\u4e00-\u9fa5]+\.[A-Za-z0-9]{1,8})(?=$|[\s，。、；：）)】」》])/g)) {
     const f = asFile(m[1]);

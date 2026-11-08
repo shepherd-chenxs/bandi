@@ -16,6 +16,9 @@
  */
 
 export { newId, nowIso, getMetaValue, setMetaValue, backupTo } from './store/db.mjs';
+// 状态词表（2026-11-08）：任务是八态、运行是六态，列怎么分、聊天怎么翻译，全在这一处。
+// **纯数据、不碰库** —— 所以看板、流程、冒烟都能直接 import，不会因为"要开库"而复制一份。
+export * from './store/status.mjs';
 export * from './store/personas.mjs';
 export * from './store/personaSkills.mjs';
 export * from './store/conversations.mjs';
