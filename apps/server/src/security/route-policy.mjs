@@ -31,6 +31,14 @@ const p = (...parts) => new RegExp(`^${parts.map(seg).join('\\/')}$`);
 export const ROUTES = [
   /* ---------------------------------------------------- public（认证前放行） */
   { id: 'hello', m: ['GET'], path: p('/api/hello'), auth: 'public', note: '加入向导探测；披露字段与 UDP 应答同源，故意无秘密（§5.4）' },
+  /*
+   * **健康探测口**（2026-11-08）：桌面壳的 watch_service 每 1~2 秒探一次
+   * 「端口上有个班底在回话」。它在 server.mjs 里**排在认证之前**返回，所以这条登记
+   * 不改变任何行为 —— 登记的意义是把"故意免鉴权"写在清单上，而不是靠"它跑得早、
+   * 没人查得到"（覆盖率扫描 B 段正是拿这张表判每个 /api 字面量）。
+   * 响应只有 `{ ok, platform }`：platform 这个字段 401 响应体里本来就带，零新增暴露。
+   */
+  { id: 'ping', m: ['GET', 'HEAD'], path: p('/api/ping'), auth: 'public', note: '健康探测；认证之前返回，只回 {ok, platform}' },
   { id: 'nodes.join', m: ['POST'], path: p('/api/nodes/join'), auth: 'public', note: '新机器凭一次性邀请码加入' },
   { id: 'logout', m: ['POST'], path: p('/api/logout'), auth: 'public', note: '登出自检（有票才有的撤）' },
   { id: 'ai.image-config', m: ['GET', 'PUT'], path: p('/api/ai/image-config'), auth: 'public', note: 'guard 只对 source=loopback 豁免 GET；PUT 永远要身份' },

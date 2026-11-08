@@ -54,7 +54,15 @@ export function readNetMode() {
   const whitelistEnabled = j?.whitelistEnabled === true;
   const whitelistIps = Array.isArray(j?.whitelistIps) ? j.whitelistIps.map((x) => String(x)) : [];
   const boundDomain = typeof j?.boundDomain === 'string' ? j.boundDomain : '';
-  const value = { acceptNodes, whitelistEnabled, whitelistIps, boundDomain };
+  /*
+   * `remoteAccess`（2026-11-08）：「允许同账号设备连接」开关的**真源**。
+   * 关 = 非本机来源一律 403（E3005，guardNetwork 第一道），本机直连永远放行。
+   * **纯运行期判定，改完立刻生效** —— 这是它和 listenHost（bind 地址，重启才生效）
+   * 的本质区别：端口永远对外听着，放不放行是请求入口上一句话的事。
+   * 没写过 = true（行为不变，老配置文件里没有这个键）。
+   */
+  const remoteAccess = j?.remoteAccess !== false;
+  const value = { acceptNodes, whitelistEnabled, whitelistIps, boundDomain, remoteAccess };
   if (st) cache = { mtimeMs: st.mtimeMs, value };
   return value;
 }
@@ -72,6 +80,8 @@ export function writeNetMode(patch) {
       typeof patch?.whitelistEnabled === 'boolean' ? patch.whitelistEnabled : cur.whitelistEnabled,
     whitelistIps: Array.isArray(patch?.whitelistIps) ? patch.whitelistIps : cur.whitelistIps,
     boundDomain: typeof patch?.boundDomain === 'string' ? patch.boundDomain : cur.boundDomain,
+    remoteAccess:
+      typeof patch?.remoteAccess === 'boolean' ? patch.remoteAccess : cur.remoteAccess,
   };
   fs.mkdirSync(path.dirname(FILE), { recursive: true });
   fs.writeFileSync(FILE, JSON.stringify(next, null, 2), 'utf8');

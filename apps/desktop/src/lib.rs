@@ -732,14 +732,15 @@ fn service_alive(port: u16) -> bool {
     let _ = stream.set_write_timeout(Some(HEALTH_TIMEOUT));
 
     let request = format!(
-        "GET /api/state HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\
+        "GET /api/ping HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\
          User-Agent: bandi-desktop\r\nAccept: */*\r\nConnection: close\r\n\r\n"
     );
     if stream.write_all(request.as_bytes()).is_err() {
         return false;
     }
 
-    // 只要状态行就够了 —— 读一小块，别把 /api/state 的正文（可能几十 KB）拽进壳里
+    // 只要状态行就够了（2026-11-08 从 /api/state 改探 /api/ping：免鉴权的健康口 ——
+    // 原来每 1~2 秒一次的探测在开了鉴权的监听下全吃 401，审计里每分钟多几十条「拒绝访问」）
     let mut buf = [0u8; 256];
     match stream.read(&mut buf) {
         // 连上了却一句话不说：不是能给人看的服务，照"不可达"处理

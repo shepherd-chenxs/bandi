@@ -1107,8 +1107,8 @@ export async function renderDeviceList() {
            命令行（bandi nodes join，总机发码 bandi nodes invite）。 -->
       <!-- 「运行时」区（2026-11-01 七改，用户："把运行时放到这个页面的数据管理上面"）：
            本机的「已安装」长在这页，看运行时不用再点进本机详情（paintLocalRuntimes）。 -->
-      <!-- 「远程连接」卡（2026-11-07 从安全页迁来，用户："把远程连接放到这台设备里"）：
-           监听开关（开 = 0.0.0.0 局域网可连 / 关 = 只听本机），渲染+接线都在
+      <!-- 「远程连接」卡（2026-11-07 从安全页迁来；2026-11-08 起改**纯运行期开关**：
+           开/关 = netmode 的 remoteAccess 闸，立即生效不重启，渲染+接线都在
            securityadmin.mjs 的 mountRemoteAccessCard 里；非 admin 静默不画。
            不 await：自己拉 /api/lan 自己画，别挡着下面两块先出来。 -->
       <div id="remoteMount"></div>

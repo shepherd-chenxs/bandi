@@ -5,7 +5,8 @@
  *     每个登录账号都能看自己的（服务端只认会话里的 userId，不从参数拿）。
  *   · **审计日志**（仅管理员）—— 谁、什么时候、做了什么、成没成。策略层自动记
  *     （401/403 拒绝、写操作 pending→回填），这里只是查询窗口：按类型筛 + 游标翻页。
- * 另导出 mountRemoteAccessCard（远程连接监听开关卡），由 connectors.mjs 的「这台机器」页挂载。
+ * 另导出 mountRemoteAccessCard（远程连接开关卡，2026-11-08 起是**纯运行期开关、不重启**），
+ * 由 connectors.mjs 的「这台机器」页挂载。
  *
  * 版式沿设置页的 set-sec 卡片；错误一律「码 + 中文」toast，不用 alert。
  */
@@ -20,26 +21,90 @@ const head = (actions = '') =>
   }</div>`;
 
 /**
- * 等控制面重启回来，再整页刷新（2026-11-04，改监听地址后那一下）。
+ * 远程连接卡（2026-11-08 三改：从「改 bind 地址 + 重启控制面」降成**纯应用层开关**）。
  *
- * 用裸 `fetch` 而不是 `api()`：重启后会话可能失效，**401 也说明"服务已经活了"**，
- * 而 `api()` 会把 401 当错误抛出去 —— 那就永远等不到。判据只该是"端口能应答"。
- * 45 秒还没回来就如实报错，别无限转圈。
+ * 参考是 WorkBuddy 那张「允许同账号设备远程连接 [开关]」：拨一下立刻生效，不重启。
+ * 旧实现把开关映射到 `listen()` 的 bind 地址（0.0.0.0 / 127.0.0.1），bind 是进程启动
+ * 时定死的，所以每次都要重启 —— 用户 2026-11-08："这个不划算"。
+ *
+ * 新语义：bind **永远不动**（缺省 0.0.0.0），开关只控制 `netmode.json` 的
+ * `remoteAccess` —— 服务端 `guardNetwork` 在请求入口判这一个布尔：关 = 非本机来源
+ * 一律 403（E3005），本机直连永远放行。运行期判定，**立即生效**。
+ *
+ * 唯一拨不动的形态：进程的 bind 本身就在回环上（`BANDI_HOST=127.0.0.1` 或历史配置
+ * 把 listenHost 钉成了 127.0.0.1）—— 远程本来就进不来，开关没有可管的东西，禁用
+ * 并说清原因（`bandi reset-host` 或去掉环境变量重启后恢复）。
+ *
+ * 权限：POST /api/lan 要 machine:manage，非 admin 连 GET 都不保障 —— 拉不到就静默不画。
  */
-async function waitForRestart() {
-  toast('控制面在重启，稍等几秒页面会自己刷新…');
-  const t0 = Date.now();
-  while (Date.now() - t0 < 45000) {
-    await new Promise((r) => setTimeout(r, 1200));
-    try {
-      const r = await fetch('/api/state', { cache: 'no-store' });
-      if (r.ok || r.status === 401 || r.status === 403) {
-        location.reload();
+export async function mountRemoteAccessCard(mount) {
+  if (!mount || !S.isAdmin) return;
+  const lan = await api('/api/lan').catch(() => null);
+  if (!lan?.listen) return;
+  const open = lan.remoteAccess !== false;
+  /* bind 在回环上 = 远程物理上进不来，开关是摆设（调试场景才有，见上） */
+  const loopbackOnly = !lan.boundLan;
+  /* 2026-11-08 用户："就只是一个开关，像 WorkBuddy 那样"；同日："这个标签去掉" ——
+     卡头只剩「远程连接」四个字，平时卡里就一行 */
+  mount.innerHTML = `<section class="set-sec">
+    <div class="set-head"><b>远程连接</b></div>
+    <div class="set-box">
+      <div class="set-row">
+        <span class="set-label">允许同账号设备连接</span>
+        <label class="switch" style="margin:0" title="${loopbackOnly ? '这个进程只听本机，远程本来就进不来' : open ? '开着：局域网和手机都能连' : '关着：只有这台机器能打开'}">
+          <input type="checkbox" id="netRemoteSw" ${open ? 'checked' : ''} ${loopbackOnly ? 'disabled' : ''} />
+          <span></span>
+        </label>
+      </div>
+      ${
+        loopbackOnly
+          ? '<div class="set-row"><p class="hint">这个拨不动 —— 进程的监听地址被钉在了本机（<code>BANDI_HOST=127.0.0.1</code> 或历史配置），别的设备物理上进不来。去掉那个变量（或 <code>bandi reset-host</code>）重启后，这里就能管了。</p></div>'
+          : ''
+      }
+      <div class="hint-line" id="netHostMsg" style="display:none"></div>
+    </div>
+  </section>`;
+
+  const remoteSw = $('netRemoteSw');
+  if (!remoteSw) return;
+  /* 提示行平时不占位（空 hint-line 的 margin 会把行顶得偏上） */
+  const showMsg = (t) => {
+    const el = $('netHostMsg');
+    if (!el) return;
+    el.textContent = t;
+    el.style.display = t ? '' : 'none';
+  };
+  remoteSw.onchange = async () => {
+    const want = remoteSw.checked;
+    if (want === (lan.remoteAccess !== false)) return; // 拨回原位，没有实际变化
+    /*
+     * 防呆（旧实现就有，新语义下更得留）：**从别的机器访问面板、又把开关关掉** ——
+     * 保存成功那一刻你自己就被 E3005 拒之门外。本机直连不拦，其它来源强确认。
+     */
+    const loopbackSrc = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(String(lan.yourIp ?? ''));
+    if (!want && !loopbackSrc) {
+      const ok = await confirmDo(
+        `你现在是从 ${lan.yourIp} 远程打开这个页面的。关掉后这个地址立刻就连不上了 —— 只能到那台机器上操作（或走 SSH 隧道）。确认？`,
+        { ok: '仍然关掉' },
+      );
+      if (!ok) {
+        remoteSw.checked = true; // 取消：开关弹回「开」
         return;
       }
-    } catch { /* 还没起来，继续等 */ }
-  }
-  toast('45 秒还没等到它回来 —— 去终端看 bandi status / journalctl -u bandi -n 40', 'error');
+    }
+    remoteSw.disabled = true;
+    try {
+      await post('/api/lan', { remoteAccess: want });
+      lan.remoteAccess = want;
+      toast(want ? '已打开 —— 别的设备现在就能连' : '已关闭 —— 现在只有这台机器能访问', 'ok');
+    } catch (e) {
+      toast(e.message, 'error');
+      remoteSw.checked = !remoteSw.checked; // 失败：开关拨回去
+    } finally {
+      if (!loopbackOnly) remoteSw.disabled = false;
+      showMsg('');
+    }
+  };
 }
 
 /** 审计类型的中文名（与服务端 auditKindOf 同源，查询值直接用英文 kind） */const KIND_LABEL = {
@@ -60,107 +125,6 @@ const RESULT_LABEL = { ok: '成功', fail: '失败', deny: '已拦截', pending:
 const resultDot = (r) => `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;background:${
   r === 'ok' ? 'var(--ok, #34a853)' : r === 'pending' ? 'var(--dim)' : '#d93025'
 }"></span>`;
-
-/*
- * 远程连接卡（2026-11-07 二迁：原「监听地址」→ 安全页的开关卡 → 「这台机器」页顶。
- * 用户："把远程连接放到这台设备里"）—— 渲染 + 接线都收在这一个入口，谁要挂谁调。
- *
- * 参考是网易UU远程那张「本设备 · 允许他人远程协助 [开关]」（2026-11-08 定稿：
- * 一张单行卡，左标签「允许同账号设备连接」、右侧开关，跟「运行时」区同款；
- * 常显说明文案删掉了，只有待重启 / 被 BANDI_HOST 钉住这两个异常态才追加说明行）。
- * 监听地址本来就只有两个有意义的值，开关二态正好一一映射：
- *   开 = 0.0.0.0（局域网和手机都能连） / 关 = 127.0.0.1（只听本机）。
- * 拨动即保存，不需要单独的「保存」。
- *
- * 真源在数据目录的 `config.json.listenHost`（服务端 `writeListenHost`），**不是** systemd
- * 单元：单元每次重装都会被 `deploy/install.sh` 重写，11-04 就是这么把 0.0.0.0 写回
- * 127.0.0.1、局域网全断的。`BANDI_HOST` 环境变量钉着时开关只读并说清原因。
- *
- * 权限：POST /api/lan 要 machine:manage，非 admin 连 GET 都不保障 —— 拉不到就静默不画。
- */
-export async function mountRemoteAccessCard(mount) {
-  if (!mount || !S.isAdmin) return;
-  const lan = await api('/api/lan').catch(() => null);
-  if (!lan?.listen) return;
-  const L = lan.listen;
-  const locked = L.editable === false;
-  const open = L.wanted !== '127.0.0.1'; // 开 = 对外；存过自定义 IP 也算开
-  const pending = L.needRestart
-    ? `<div class="set-row"><p class="hint" style="color:var(--warn)">已存成 <b>${esc(L.wanted)}</b>，但当前进程还听着 <b>${esc(L.host)}</b> —— 重启控制面才生效。</p></div>`
-    : '';
-  /* 2026-11-08 用户："左侧显示：允许同账号设备连接，开关放入卡片"，常显说明文案删掉 ——
-     跟下面「运行时」区同款：一张单行卡，左标签右开关。只有异常态（待重启 / 被 BANDI_HOST
-     钉住）才追加说明行，平时卡里就一行。 */
-  mount.innerHTML = `<section class="set-sec">
-    <div class="set-head"><b>远程连接</b><span class="set-tag">改了要重启控制面</span></div>
-    <div class="set-box">
-      <div class="set-row">
-        <span class="set-label">允许同账号设备连接</span>
-        <label class="switch" style="margin:0" title="${locked ? '被 BANDI_HOST 钉着，拨不动' : open ? '开着：局域网和手机都能连' : '关着：只有这台机器能打开'}">
-          <input type="checkbox" id="netRemoteSw" ${open ? 'checked' : ''} ${locked ? 'disabled' : ''} />
-          <span></span>
-        </label>
-      </div>
-      ${pending}
-      ${
-        locked
-          ? '<div class="set-row"><p class="hint">这台拨不动 —— 监听地址被启动参数 <code>BANDI_HOST</code> 占着。去掉那个变量（或 <code>bandi reset-host</code>）重启后，这里就能改了。</p></div>'
-          : ''
-      }
-      <div class="hint-line" id="netHostMsg" style="display:none"></div>
-    </div>
-  </section>`;
-
-  /*
-   * 接线：拨动即保存 → 需要时重启控制面 → 轮询等它回来。重启接口只给被 systemd / 桌面壳
-   * 监护的进程放行（E1061），无人看管的情况如实报错，让人用 `bandi restart`。
-   */
-  const remoteSw = $('netRemoteSw');
-  if (!remoteSw) return;
-  /* 提示行平时不占位（2026-11-08 用户："垂直居中"—— 空 hint-line 的 margin 会把行顶得偏上） */
-  const showMsg = (t) => {
-    const el = $('netHostMsg');
-    if (!el) return;
-    el.textContent = t;
-    el.style.display = t ? '' : 'none';
-  };
-  remoteSw.onchange = async () => {
-    const want = remoteSw.checked ? '0.0.0.0' : '127.0.0.1';
-    if (want === String(lan.listen?.wanted ?? '')) return; // 拨回原位，没有实际变化
-    /*
-     * 防呆：**从别的机器访问面板、又把开关关掉（只听本机）** —— 重启那一下你自己就
-     * 再也连不上了。本机直连不拦（那是正常用法），其它来源强确认（1Panel 也有同样的坑）。
-     */
-    const loopbackSrc = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(String(lan.yourIp ?? ''));
-    if (!remoteSw.checked && !loopbackSrc) {
-      const ok = await confirmDo(
-        `你现在是从 ${lan.yourIp} 远程打开这个页面的。关掉远程连接并重启后，这个地址就再也打不开了 —— 只能到那台机器上操作（或走 SSH 隧道）。确认？`,
-        { ok: '仍然关掉' },
-      );
-      if (!ok) {
-        remoteSw.checked = true; // 取消：开关弹回「开」
-        return;
-      }
-    }
-    remoteSw.disabled = true;
-    try {
-      const r = await post('/api/lan', { listenHost: want });
-      if (!r?.needRestart) {
-        toast('保存了 —— 当前就听着这个地址，不用重启');
-        remoteSw.disabled = false;
-        return;
-      }
-      showMsg('正在重启控制面…');
-      await post('/api/control-plane/restart', {});
-      await waitForRestart();
-    } catch (e) {
-      showMsg('');
-      toast(e.message, 'error');
-      remoteSw.checked = !remoteSw.checked; // 失败：开关拨回去
-      remoteSw.disabled = false;
-    }
-  };
-}
 
 export async function renderSecurity() {
   $('settingsView').innerHTML = `${head()}<div class="empty" style="padding:24px 4px">加载中…</div>`;

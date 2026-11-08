@@ -130,6 +130,23 @@ try {
   check('Host 对但 IP 不在名单 → E3003', g?.code === 'E3003', JSON.stringify(g));
   g = guardNetwork(req({ ip: '203.0.113.7', host: 'pan.example.com' }));
   check('两道都过 → 放行', g === null, JSON.stringify(g));
+
+  /* ---------------- ⑩ 远程连接总闸（2026-11-08，E3005）：「允许同账号设备连接」 */
+  console.log('\n⑩ 闸 —— 远程连接总闸（remoteAccess，排在白名单之前）');
+  netmode.writeNetMode({ whitelistEnabled: false, boundDomain: '', remoteAccess: false });
+  g = guardNetwork(req({}));
+  check('关掉远程连接：外来 IP → E3005', g?.code === 'E3005', JSON.stringify(g));
+  check('关掉远程连接：本机直连永远放行（自救的门）', guardNetwork(req({ ip: '127.0.0.1' })) === null);
+  g = guardNetwork(req({ ip: '127.0.0.1', headers: { 'x-forwarded-for': '203.0.113.7' } }));
+  check('带转发头的回环不是本机直连：总闸照样拦（防伪装本机）', g?.code === 'E3005', JSON.stringify(g));
+  check('总闸关着时比白名单优先（先撞 E3005 而不是 E3003）',
+    guardNetwork(req({}))?.code === 'E3005');
+  netmode.writeNetMode({ whitelistEnabled: true, whitelistIps: ['192.168.5.0/24'], remoteAccess: false });
+  g = guardNetwork(req({ ip: '192.168.5.77' }));
+  check('名单内的来源也进不来（总闸是"来不来"，名单是"谁能来"）', g?.code === 'E3005', JSON.stringify(g));
+  netmode.writeNetMode({ remoteAccess: true });
+  check('重新打开：立刻恢复放行（立即生效，不重启）', guardNetwork(req({ ip: '192.168.5.77' })) === null);
+  check('没写过的老配置（无 remoteAccess 键）= 开', netmode.readNetMode().remoteAccess === true);
 } catch (err) {
   console.log('\n跑挂了：' + String(err?.stack ?? err));
   failed += 1;

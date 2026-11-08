@@ -123,6 +123,13 @@ export async function handleRuntime(req, res, url) {
       const patch = {};
       if (typeof body?.acceptNodes === 'boolean') patch.acceptNodes = body.acceptNodes;
       /*
+       * 远程连接总闸（2026-11-08）：「这台机器 → 允许同账号设备连接」。
+       * 关 = 非本机来源一律 403（E3005，guardNetwork 最先拦），本机直连不受影响。
+       * **立即生效、不重启** —— 它是请求入口的运行期判定，不碰 `listen()` 的 bind 地址
+       * （bind 仍由 listenHost / BANDI_HOST 管，那是另一回事，界面不再暴露）。
+       */
+      if (typeof body?.remoteAccess === 'boolean') patch.remoteAccess = body.remoteAccess;
+      /*
        * 网络周界（2026-11-03，安全页「网络访问」卡）：授权 IP 白名单 + 域名绑定。
        * 名单**先整体校验再入库**（一条写错就整份不存 —— 存一半等于让人以为防住了）；
        * 域名归一化到纯主机名，空串 = 清除绑定。
@@ -156,6 +163,9 @@ export async function handleRuntime(req, res, url) {
       if (typeof patch.whitelistEnabled === 'boolean') {
         console.log(`[网络] 授权 IP 白名单：${patch.whitelistEnabled ? '开' : '关'}（${now.whitelistIps.length} 条${addedMyIp ? `，已自动加入你的 IP ${addedMyIp}` : ''}）`);
       }
+      if (typeof patch.remoteAccess === 'boolean') {
+        console.log(`[网络] 远程连接总闸：${patch.remoteAccess ? '开（别的设备可以连）' : '关（只允许本机访问）'}（立即生效）`);
+      }
       if (patch.boundDomain !== undefined && patch.boundDomain !== '') {
         console.log(`[网络] 域名绑定：${patch.boundDomain}（仅本机直连与该域名可访问）`);
       }
@@ -170,6 +180,8 @@ export async function handleRuntime(req, res, url) {
     const boundLan = !netmode.isLoopback(SERVER.boundHost); // 实际听着非回环吗（BANDI_HOST=127.0.0.1 调试时才是 false）
     return sendJson(res, 200, {
       acceptNodes: nm.acceptNodes,
+      // 远程连接总闸（2026-11-08）：界面上「允许同账号设备连接」开关直读这一位
+      remoteAccess: nm.remoteAccess,
       // 网络周界（2026-11-03，安全页「网络访问」卡）。yourIp：界面提示"你会被自动加进名单"用
       whitelistEnabled: nm.whitelistEnabled,
       whitelistIps: nm.whitelistIps,

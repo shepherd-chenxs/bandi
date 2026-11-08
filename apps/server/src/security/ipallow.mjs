@@ -27,6 +27,7 @@ import * as netmode from '../netmode.mjs';
 /** 拒绝码：grep 编码就能落到这一行 */
 export const CODE_IP = 'E3003';
 export const CODE_DOMAIN = 'E3004';
+export const CODE_REMOTE = 'E3005';
 
 /* --------------------------------------------------------------- 名单条目 */
 
@@ -164,6 +165,16 @@ function isDirectLocal(req) {
 export function guardNetwork(req) {
   const nm = netmode.readNetMode();
   const local = isDirectLocal(req);
+  /*
+   * 远程连接总闸（2026-11-08，E3005）：「这台机器 → 允许同账号设备连接」关掉时，
+   * 非本机来源**最先**在这里被拒 —— 比白名单更根本（名单是"谁能来"，这个是"来不来"）。
+   * 本机直连永远放行（自救的门，与下面两道闸同一口径）；改开关立即生效、不重启，
+   * 因为它只是请求入口上的一个布尔判断，不碰 `listen()` 的 bind 地址。
+   */
+  if (nm.remoteAccess === false && !local) {
+    const ip = clientIpOf(req);
+    return { code: CODE_REMOTE, message: `远程连接已关闭：这台机器只允许本机访问（来源 ${ip || '未知'}）—— 到那台机器的面板上重新打开` };
+  }
   if (nm.whitelistEnabled && !local) {
     const ip = clientIpOf(req);
     if (!ipAllowed(ip, nm.whitelistIps)) {

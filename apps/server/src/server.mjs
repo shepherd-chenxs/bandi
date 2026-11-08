@@ -507,6 +507,20 @@ const server = http.createServer(async (req, res) => {
 
   const url = new URL(req.url, `http://${req.headers.host}`);
 
+  /*
+   * **健康探测口**（2026-11-08）：`GET /api/ping` —— 排在令牌闸**之前**、免鉴权、不记审计。
+   *
+   * 为什么必须有：桌面壳的健康巡检（lib.rs 的 watch_service，每 1~2 秒一次）以前探的是
+   * `/api/state`，监听 0.0.0.0 时鉴权全开，每次探测都吃 401 → 审计每分钟多出几十条
+   * 「拒绝访问」（2026-11-08 用户在审计页看到的成串 E4010 就是它）。探测只需要
+   * "端口上有个班底在回话"这一个比特，`{ ok, platform:'bandi' }` 之外什么都不带 ——
+   * 而 `platform` 这个字段 401 响应体里本来就带，这里零新增信息暴露。
+   * HEAD 也放行（探测方只看状态行时用得上）。
+   */
+  if (url.pathname === '/api/ping' && (req.method === 'GET' || req.method === 'HEAD')) {
+    return sendJson(res, 200, { ok: true, platform: 'bandi' });
+  }
+
   try {
     /*
      * 访问令牌：**排在来源闸前面** —— 没令牌的请求，连"来源对不对"都不该让它摸到。
