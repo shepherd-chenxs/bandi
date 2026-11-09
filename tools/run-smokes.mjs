@@ -74,6 +74,9 @@ const RUN = [
   // 不是不测 —— 已没有可测的东西：bandi 不再起隧道进程，只剩 hub/relay.mjs 读域名，
   // 那两道闸（Host / Origin）由 smoke-lan-origin.mjs 覆盖，别在这里补一个空壳。
   'apps/server/src/smoke-personas.mjs',
+  // 身份与职责检修 P0（2026-11-09）：身份卡只回答"我是谁"、平台契约/任务合同每轮注入。
+  // 纯静态 + 纯函数，不开服务。
+  'apps/server/src/smoke-persona-contract.mjs',
   'apps/server/src/smoke-plugin-blocks.mjs',
   'apps/server/src/smoke-pr-create.mjs',
   'apps/server/src/smoke-pr-link.mjs',
