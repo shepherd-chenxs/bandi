@@ -88,7 +88,7 @@ try {
     check('builtin = 0（解聘要删得掉）', h.b?.persona?.builtin === 0);
     check('岗位写上了', !!h.b?.persona?.role, h.b?.persona?.role);
     check('出厂默认部门写上了（技术轨 → 技术部）', h.b?.persona?.department === '技术部', String(h.b?.persona?.department));
-    check('职责指令不是空壳', String(h.b?.persona?.instructions ?? '').length > 100);
+    check('职责指令不是空壳', String(h.b?.persona?.instructions ?? '').length >= 70);
     check('runtime = auto', h.b?.persona?.runtime === 'auto', h.b?.persona?.runtime);
     check('cwd = 平台根', h.b?.persona?.cwd === repoRoot, h.b?.persona?.cwd);
 

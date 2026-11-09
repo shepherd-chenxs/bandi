@@ -44,21 +44,41 @@ export function completeMark(finalText) {
 
 /**
  * 这一轮的**交付声明**（平台落状态的唯一依据）：
- *   · `'done'`      第一行 `[完成]` —— 员工声明交了，卡可进「待验收」；
- *   · `'blocked'`   第一行 `[受阻]` —— 员工声明没干成/要拍板，卡进「已阻塞」；
+ *   · `'done'`      有 `[完成]` —— 员工声明交了，卡可进「待验收」；
+ *   · `'blocked'`   有 `[受阻]` —— 员工声明没干成/要拍板，卡进「已阻塞」；
  *   · `'silent'`    一个字都没说（空回话/纯空白） —— 连过程都没有；
  *   · `'unclaimed'` 说了话，但没有声明交付 —— 平台不认它是完成。
  * 区分 silent / unclaimed 只为让收尾说明说人话（"没回话" / "没交回结论"），落点一样。
+ *
+ * **声明位置：第一行或最后一行**（2026-11-09 P5 补最后一行）：问答题的第一行要留给答案
+ * （"你问 X，答案是 Y"），交付标记放**最后一行**；做事类沿用第一行。两处都只认行首，
+ * 正文中间提到 `[完成]` 不算。
  */
 export function claimOf(finalText) {
   const text = String(finalText ?? '');
   if (!text.trim()) return 'silent';
-  if (blockedMark(text)) return 'blocked';
-  if (completeMark(text)) return 'done';
+  const lines = text
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
+  for (const line of [lines[0], lines.at(-1)]) {
+    if (!line) continue;
+    if (line.startsWith(BLOCKED_MARK)) return 'blocked';
+    if (line.startsWith(DONE_MARK)) return 'done';
+  }
   return 'unclaimed';
 }
 
 /** 摘要里剥掉首行的声明标记：界面另标状态，正文不必再念一遍「[完成]」 */
 export function stripClaimMark(finalText) {
   return String(finalText ?? '').replace(/^\s*(\[完成\]|\[受阻\])\s*/, '');
+}
+
+/**
+ * 去掉**最后一行**单独的 `[完成]`（P5：问答类把交付标记放最后一行，别让雇主读到尾巴）。
+ * 只剥"整行就是标记"；行里还带正文不剥（那是正文在提"完成"）。`[受阻]` 保留 ——
+ * 它后面跟着原因，是给人看的。
+ */
+export function stripTrailingDoneMark(finalText) {
+  return String(finalText ?? '').replace(/(?:\r?\n)[ \t]*\[完成\][ \t]*(?:\r?\n)*$/, '');
 }

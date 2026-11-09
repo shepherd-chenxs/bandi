@@ -111,11 +111,17 @@ check('没标记的描述如实写「没有交回可验收的结论」',
 check('没标记的描述也不再出现「跑完了，等你验收」',
   !cNoMark2.description.includes('跑完了，等你验收'), JSON.stringify(cNoMark2.description));
 
-// 只认**第一个非空行**：标记放到第二行不算声明（防止正文里带一句 [完成] 就蒙混过关）
-const cSecondLine = makeRunningCard('标记在第二行的活', 'r-second-line');
-pt.onTaskRunFinished({ id: 'r-second-line', status: '完成', finalText: '部署做了一半。\n[完成] 这句是正文里顺手写的' });
-const cSecondLine2 = store.getProjectTask(cSecondLine.id);
-check('标记只在第二行 → 不算交付（只认第一个非空行）', cSecondLine2.status === '已阻塞', cSecondLine2.status);
+// P5（2026-11-09）：问答题的第一行要留给答案，交付标记放**最后一行** —— 两处都认。
+const cLastLine = makeRunningCard('标记在最后一行的活', 'r-last-line');
+pt.onTaskRunFinished({ id: 'r-last-line', status: '完成', finalText: '权限归平台，不归员工。\n\n依据：…\n\n[完成]' });
+const cLastLine2 = store.getProjectTask(cLastLine.id);
+check('标记放最后一行 → 待验收（问答类交付）', cLastLine2.status === '待验收', cLastLine2.status);
+
+// 正文中间提到 [完成] 不算（只认第一行/最后一行行首）
+const cMidLine = makeRunningCard('标记在正文中间的活', 'r-mid-line');
+pt.onTaskRunFinished({ id: 'r-mid-line', status: '完成', finalText: '部署做了一半。\n[完成] 这句是正文里顺手写的\n还没做完，等你拍板' });
+const cMidLine2 = store.getProjectTask(cMidLine.id);
+check('标记只在正文中间 → 不算交付（只认首行/末行）', cMidLine2.status === '已阻塞', cMidLine2.status);
 
 console.log('\n④ 人已经手动改过 → 不许覆盖（卡的状态是人的指令）');
 const d = makeRunningCard('人已经拖走的活', 'r-moved');

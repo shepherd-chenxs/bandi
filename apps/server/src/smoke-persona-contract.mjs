@@ -67,12 +67,13 @@ try {
     /(落源|出处)/.test(contract) && /文件:行/.test(contract) && /(接口|数据)/.test(contract) && /未验证/.test(contract) && /(几条|哪些)/.test(contract));
   check('③ 证据放运行事件或卡里（不贴在对话里）',
     /(运行事件|事件)/.test(contract) && /(卡片|卡里|卡上)/.test(contract));
-  // P4 交付声明协议（2026-11-09）：只认回话第一个非空行；P5 第 4 条字面保留「跑完 ≠ 完成」
-  check('④ 交付声明：跑完 ≠ 完成，只认第一行 [完成] / [受阻]',
-    /\[完成\]/.test(contract) && /\[受阻\]/.test(contract) && /跑完[^。\n]*≠/.test(contract) && /第一行/.test(contract),
+  // P4 交付声明协议（2026-11-09）：P5 起标记单独放**最后一行**（第一行留给答案/结果）。
+  check('④ 交付声明：跑完 ≠ 完成，标记单独放最后一行 [完成] / [受阻]',
+    /\[完成\]/.test(contract) && /\[受阻\]/.test(contract) && /跑完[^。\n]*≠/.test(contract) && /最后一行/.test(contract),
     contract.split('\n').find((l) => /\[完成\]/.test(l)) ?? '');
-  check('④ 交付声明：平台只按第一行判卡状态 / 没做完不许写 [完成] / 不许替雇主宣布验收通过',
-    /只按第一行判/.test(contract) && /卡/.test(contract) && /没做完不许写/.test(contract) && /不许替雇主宣布/.test(contract));
+  check('④ 交付声明：平台只按这个标记判卡状态 / 不写标记不进待验收 / 没做完不许写 / 不替雇主宣布',
+    /只按这个标记判/.test(contract) && /卡/.test(contract) && /不写标记/.test(contract) && /待验收/.test(contract) &&
+      /没做完不许写/.test(contract) && /不许替雇主宣布/.test(contract));
   check('⑤ 问进度只答台账（状态/更新/下一步，不追细节）', /只答台账/.test(contract) && /(不要|别)为了补细节/.test(contract));
   check('⑤ 够答即回（别为"更完整"继续翻）', /够答即回/.test(contract));
   check('⑥ 不空转（先做完再回话）+ Next: 禁令', /(不空转|先做完再回话)/.test(contract) && /Next:/.test(contract));

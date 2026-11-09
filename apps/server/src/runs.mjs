@@ -5,6 +5,7 @@ import * as connectors from './connectors.mjs';
 import { normalizeSandbox } from './sandbox.mjs';
 import { ADAPTERS } from './adapters.mjs';
 import { controlUrl, issueRunCredential, isPmRole, revokeRunCredential } from './agent-auth.mjs';
+import { stripTrailingDoneMark } from './delivery-claim.mjs';
 
 /**
  * 「这条会话在对面那个 CLI 里不存在」的报错特征。
@@ -602,11 +603,12 @@ function persistReply(run, text, meta = null) {
   const trigger = store.getMessageByRowid(run.conversationId, run.watermark);
   /*
    * P4 的交付声明是**给平台判卡状态的机器信号**，不是给雇主看的报告标题。
-   * 李俊那轮回话首行是 `[完成]`，人读到的是"他又交了一份报告"，而不是答案 ——
-   * 2026-11-09 P5 起：落库时剥掉首行的 `[完成]`（判据仍用 run.finalText 原文，
-   * 所以卡状态不受影响）；`[受阻]` 保留，它本身就是"卡住了"的明示。
+   * P5（2026-11-09）：问答题把标记放**最后一行**（第一行留给答案），落库时剥掉最后一行
+   * 单独的 `[完成]`；做事类沿用首行标记，也剥。判据仍用 run.finalText 原文，卡状态不受影响。
+   * `[受阻]` 保留 —— 它后面跟着原因，是给人看的。
    */
-  const shown = String(text).replace(/^\s*\[完成\][ \t]*(?:\r?\n)*/, '') || text;
+  const shown =
+    stripTrailingDoneMark(String(text).replace(/^\s*\[完成\][ \t]*(?:\r?\n)*/, '')) || text;
   store.addMessage({
     conversationId: run.conversationId,
     runId: run.id,
