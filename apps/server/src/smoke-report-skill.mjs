@@ -51,10 +51,14 @@ check('PM（贺韬）包里有 bandi-report', /skills: \['bandi-expert-pm'[^\]]*
 check('助理（喜儿）包里有 bandi-report', /skills: \['bandi-expert-secretary'[^\]]*'bandi-report'/.test(experts), '');
 
 console.log('\n④ 平台注入与 PM 技能都指向它（一处维护）');
-check('PM 首轮 brief 含结论先行与 Next 禁令', /结论先行/.test(dispatchSrc) && /Next:/.test(dispatchSrc) && /bandi-report/.test(dispatchSrc));
-check('每轮提醒含结论先行/已做完/Next 禁令', /结论先行|结论/.test(runsSrc) && /已做完/.test(runsSrc) && /Next:/.test(runsSrc));
-check('每轮提醒说了改卡权限（能闭环）', /改卡/.test(runsSrc) && /startNow/.test(runsSrc));
-check('PM 技能 §九 指向 bandi-report（不重复长文）', /bandi-report/.test(pmSkill), '');
+/*
+ * 2026-11-09 检修 P0：汇报格式从「PM 首轮 brief / PM 每轮钥匙提醒」搬进
+ * dispatch.platformContractBlock —— 所有员工每轮都拿得到，不再分岗位、不再靠首轮。
+ */
+check('每轮契约由 dispatch 统一产出（platformContractBlock）', /platformContractBlock/.test(dispatchSrc));
+check('契约含结论 / 已做完 / Next 禁令', /结论/.test(dispatchSrc) && /已做完/.test(dispatchSrc) && /Next:/.test(dispatchSrc));
+check('契约指向 bandi-report（全文入口，不重复长文）', /bandi-report/.test(dispatchSrc) && /bandi-report/.test(pmSkill));
+check('PM 每轮钥匙提醒不再重复汇报格式（只留建卡/改卡权限）', /改卡/.test(runsSrc) && /startNow/.test(runsSrc) && !/汇报（每轮都算/.test(runsSrc));
 
 console.log(failed ? `\n✗ ${failed} 项没过` : '\n✓ 全部通过');
 process.exit(failed ? 1 : 0);
