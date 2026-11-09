@@ -5,6 +5,8 @@
  *     每个登录账号都能看自己的（服务端只认会话里的 userId，不从参数拿）。
  *   · **审计日志**（仅管理员）—— 谁、什么时候、做了什么、成没成。策略层自动记
  *     （401/403 拒绝、写操作 pending→回填），这里只是查询窗口：按类型筛 + 游标翻页。
+ *     2026-11-09 降噪：静态资源 401 不再入审计；同 IP+动作的拒绝在 60 秒窗口内只落一行
+ *     （窗口过后补一句"另有 N 次"）；归档保留 1 个月（主表 90 天）。
  * 另导出 mountRemoteAccessCard（远程连接开关卡，2026-11-08 起是**纯运行期开关、不重启**），
  * 由 connectors.mjs 的「这台机器」页挂载。
  *
@@ -107,7 +109,7 @@ export async function mountRemoteAccessCard(mount) {
   };
 }
 
-/** 审计类型的中文名（与服务端 auditKindOf 同源，查询值直接用英文 kind） */const KIND_LABEL = {
+/** 审计类型的中文名（与服务端 auditKindOf / store/audit.mjs 同源，查询值直接用英文 kind） */const KIND_LABEL = {
   login: '登录',
   'session.revoke': '退出/踢下线',
   'user.change': '账号变更',
@@ -116,6 +118,7 @@ export async function mountRemoteAccessCard(mount) {
   write: '写操作',
   'authz.deny': '拒绝访问',
   'audit.archive': '归档',
+  'audit.prune': '归档清理',
   'audit.clear': '清空',
 };
 
@@ -157,7 +160,7 @@ export async function renderSecurity() {
     ? ''
     : `<section class="set-sec">
         <div class="set-head">
-          <b>审计日志</b><span class="set-tag">仅管理员 · 保留 90 天</span>
+          <b>审计日志</b><span class="set-tag">仅管理员 · 主表 90 天 / 归档 1 个月</span>
           <!-- 导出 / 清空（2026-11-03）：导出按当前类型筛选走全量；清空是破坏性动作，二次确认 -->
           <!-- 类型筛选（2026-11-03 用户：放标题行、用公共 createCombo，不再占一整行 set-row） -->
           <span class="sec-head-actions">

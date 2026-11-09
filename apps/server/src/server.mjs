@@ -529,7 +529,10 @@ const server = http.createServer(async (req, res) => {
     if (!auth.guard(SERVER.AUTH, req, res, url)) {
       // guard 拒绝的（401 / 403 / 受限会话…）它自己已经在响应里写好了状态码 ——
       // 这里只补审计；200 的假响应（登录页 HTML）不记。
-      if (res.statusCode >= 400) {
+      // **只记 API 口**（2026-11-09 降噪）：静态资源（/style.css、/js/*.mjs、/favicon、
+      // /manifest.webmanifest…）被 401 挡下不是安全事件，记了只会把审计刷成噪音
+      // （本机归档里 94% 是这类重复行）。Host / IP 周界那两道闸在更前面，照旧记。
+      if (res.statusCode >= 400 && url.pathname.startsWith('/api/')) {
         try {
           store.deny({ kind: 'authz.deny', action: `${req.method} ${url.pathname}`, reason: `HTTP ${res.statusCode}`, ip: clientIp(req), ua: req.headers['user-agent'] ?? '' });
         } catch { /* 不拖垮 */ }
@@ -718,6 +721,14 @@ try {
   if (archived) console.log(`[安全] 审计已归档 ${archived} 条（保留 90 天）`);
 } catch (err) {
   console.log(`审计归档失败（不影响启动）：${err?.message ?? err}`);
+}
+// 归档表保留期（2026-11-09，给增长封顶）：主表 90 天、归档 1 个月 —— 归档原先只增不减。
+// 跟主表归档一样**只在启动时跑一次**（没有定时器）；清理本身留一条 audit.prune 痕。
+try {
+  const prunedArchive = store.pruneArchive();
+  if (prunedArchive) console.log(`[安全] 审计归档已清理 ${prunedArchive} 条（归档保留 ${store.ARCHIVE_KEEP_DAYS} 天）`);
+} catch (err) {
+  console.log(`审计归档清理失败（不影响启动）：${err?.message ?? err}`);
 }
 runs.onRunFinish(workflows.onAgentRunFinished);
 // 任务卡同理（2026-10-17）：运行跑完/被停/跑挂了，卡不能永远挂在「进行中」——

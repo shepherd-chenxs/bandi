@@ -31,8 +31,10 @@ const errorTextOf = (res) =>
 const runs = new Map();
 const MAX_KEPT_RUNS = 50;
 
-/** 写一条 SSE。**必须带 `id:`** —— 浏览器重连时把它放进 `Last-Event-ID`，服务端才能只补缺口 */
-const sse = (res, evt, seq) => res.write(`id: ${seq}\ndata: ${JSON.stringify(evt)}\n\n`);
+/** 写一条 SSE，payload 是**已经序列化好的 JSON**（落库那份；超限已在 store 里截断）。**必须带 `id:`** —— 浏览器重连时把它放进 `Last-Event-ID`，服务端才能只补缺口 */
+const sseJson = (res, json, seq) => res.write(`id: ${seq}\ndata: ${json}\n\n`);
+/** 对象版（回放库里的事件时用）：序列化交给 JSON.stringify，不再二次截断 */
+const sse = (res, evt, seq) => sseJson(res, JSON.stringify(evt), seq);
 
 /** 这一行是不是终止事件 */
 function isDoneRow(row) {
@@ -121,9 +123,11 @@ function pushEvent(run, evt) {
    * 这样停止时留下的就是"他刚才对我说到哪儿"的原文，不另造一句话。
    */
   if (evt.type === 'text' && typeof evt.text === 'string' && evt.text) run.streamedText += evt.text;
-  store.appendRunEvent(run.id, run.seq, evt);
+  // 落库与广播用**同一份序列化结果**：超过 64 KB 的事件在 appendRunEvent 里被截断，
+  // 实时流也发截断后的那份 —— 否则实时看全文、刷新重放却是短的，像是丢了内容。
+  const stored = store.appendRunEvent(run.id, run.seq, evt);
   for (const s of run.subs) {
-    sse(s, evt, run.seq);
+    sseJson(s, stored, run.seq);
     /*
      * 背压（2026-10-28 性能审查）：write 返回 false 且写缓冲积过 1MB = 客户端
      * 已经慢到压不动了，断开让它重连 —— 订阅是按 Last-Event-ID 补缺口的，

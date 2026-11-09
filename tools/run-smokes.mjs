@@ -32,6 +32,9 @@ const RUN = [
   // （bootstrap 与票据两条随 2026-11-07 本地账号退场删除 —— 被测机制没了，用例跟着删）
   'apps/server/src/smoke-admin-invariant.mjs',
   'apps/server/src/smoke-audit.mjs',
+  // 数据增长封顶（2026-11-09）：运行事件单条 ≤64 KB / 同类拒绝窗口聚合 / 归档保留 1 个月。
+  // 纯库操作、不起服务；窗口用环境变量缩到 80ms，不拖慢 PR 闸门。
+  'apps/server/src/smoke-growth-caps.mjs',
   'apps/server/src/smoke-csrf.mjs',
   'apps/server/src/smoke-local-policy.mjs',
   // 网络周界闸（2026-11-03，对齐 1Panel 安全页）：授权 IP 白名单 E3003 / 域名绑定 E3004
