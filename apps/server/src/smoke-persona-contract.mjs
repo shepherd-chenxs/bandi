@@ -58,6 +58,10 @@ try {
   check('够答即回（别为"更完整"继续翻）', /够答即回/.test(contract));
   check('不猜接口（别 foreach 试路径）', /不猜接口/.test(contract) && /foreach/.test(contract));
   check('指向 bandi-report 模板（首轮技能清单在，这里给全文入口）', /bandi-report/.test(contract));
+  // P4 交付声明协议（2026-11-09）：平台不把"运行结束"当"干完了"，只认回话第一个非空行的标记
+  check('交付声明：跑完 ≠ 完成，只认第一行 [完成] / [受阻]',
+    /\[完成\]/.test(contract) && /\[受阻\]/.test(contract) && /跑完[^。\n]*≠/.test(contract),
+    contract.split('\n').find((l) => /\[完成\]|跑完/.test(l)) ?? '');
 
   console.log('\n③ 本轮任务合同（每轮注入，P1 起带结构化上下文）');
   const tc = dispatch.taskContractBlock();

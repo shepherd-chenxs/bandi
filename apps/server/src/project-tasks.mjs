@@ -42,6 +42,9 @@ import { isPmRole, roleHeadOf } from './agent-auth.mjs';
 // 「卡由流程执行」那条路要真的起一条实例 —— 跟工作台点流程走的是同一个引擎入口，
 // 不另造"从看板起流程"的第二套（引擎的口径只该有一处）
 import { startWorkflow, nodesOf } from './workflows.mjs';
+// 交付声明（2026-11-09 P4）：跑完 ≠ 完成 —— 卡落「待验收」只认员工第一行 `[完成]`，
+// 判据唯一实现在 delivery-claim.mjs（流程步骤用它的 `[受阻]` 那一半）。
+import { claimOf, stripClaimMark } from './delivery-claim.mjs';
 
 /** 排序权重：越小越"要人管"（平表用它；看板按列站队，不看这个） */
 const FLOW_RANK = { 已阻塞: 0, 失败: 1, 待验收: 2, 进行中: 3, 待办: 4, 已完成: 5, 已取消: 6, 想法: 7 };
@@ -1008,6 +1011,67 @@ export function startProjectTask(id, { allowIdea = false } = {}) {
   }
 }
 
+/* ------------------------------------------------ 跑完 ≠ 完成（2026-11-09 P4） */
+
+/**
+ * 这一轮员工最终说了什么 —— **交付声明只从这里读**。
+ *
+ * 两个调用方拿到的 run 形状不一样：收尾钩子 `onTaskRunFinished` 拿的是内存里的 run
+ * （`.finalText` 是刚跑出来的原文）；聊天立卡 `promoteConversationToCard` 拿的是库里那行
+ * runs —— 那张表**没有 finalText 列**，回话在 messages 里。两处必须走同一个判据，
+ * 所以读原文这件事只写这一处。
+ *
+ * 内存里 `finalText` 可能是空串（dsh 的 finalText 只来自 final 事件，被停/异常时没有），
+ * 那就按"空回话"算 —— 不要拿 streamedText 替它开脱：屏幕上的过程话不是交付。
+ */
+function finalReplyTextOf(run) {
+  if (run?.finalText != null) return String(run.finalText);
+  if (!run?.id || !run.conversationId) return '';
+  const reply = store
+    .listMessages(run.conversationId)
+    .filter((m) => m.role === 'assistant' && m.runId === run.id)
+    .at(-1);
+  return reply?.text ?? '';
+}
+
+/**
+ * 运行状态 + 交付声明 → 卡面状态（**唯一映射**，聊天立卡和卡收尾共用，别再两处各写一支三元）。
+ *
+ * `null` = 这次收尾**不改卡**（状态不认识，例如还没跑）；「中断」「待跑」也不在这里——
+ * 中断是服务重启后的补记，不经过收尾钩子。
+ */
+function cardStatusAfterRun(runStatus, claim) {
+  if (runStatus === '完成') return claim === 'done' ? '待验收' : '已阻塞';
+  if (runStatus === '已停止') return '已阻塞';
+  if (runStatus === '失败') return '失败';
+  return null;
+}
+
+/**
+ * 收尾说明（写进卡描述最后那段「[运行结束] …」）：只说这一轮**实际发生了什么**。
+ * 员工声明了完成才写"回报完成"；没声明就如实写"没交回结论"——不替员工宣布干完了。
+ * 受阻时把原因带进描述（第一行 `[受阻]` 后面那句话）：看板上一眼知道卡在哪，
+ * 别逼人去会话里翻（原因截 120 字，长文留在会话）。
+ */
+function endNoteOf(run, claim) {
+  if (run.status === '已停止') return '被人停掉了，等你处理';
+  if (run.status === '失败') {
+    const first = String(run.error ?? '').split('\n')[0].slice(0, 200);
+    return `跑挂了${first ? `：${first}` : ''}`;
+  }
+  if (claim === 'done') return '跑完了，员工回报完成（[完成]），等你验收';
+  if (claim === 'blocked') {
+    // 原因取第一行 `[受阻]` 后面那句话（剥掉标记），去掉句尾标点再拼，免得「。，等你拍板」
+    const reason = (stripClaimMark(finalReplyTextOf(run))
+      .split('\n')
+      .map((l) => l.trim())
+      .find(Boolean) ?? '').slice(0, 120).replace(/[。；;，,、\s]+$/, '');
+    return `跑完了，员工自报受阻（[受阻]）${reason ? `：${reason}` : ''}，等你拍板`;
+  }
+  if (claim === 'silent') return '跑完了，但这一轮没有回话 —— 没有交回可验收的结论（没有 [完成] 声明），卡停在「已阻塞」';
+  return '跑完了，但没有交回可验收的结论（没写 [完成]，也没写 [受阻]）—— 卡停在「已阻塞」';
+}
+
 /* ------------------------------------------------------------ 把会话立成卡 */
 
 /**
@@ -1022,9 +1086,10 @@ export function startProjectTask(id, { allowIdea = false } = {}) {
  *   · 项目照 `chatOwnership` 的归属规则认（会话挂了项目就是它；没挂就看执行人的
  *     目录落在哪个项目下）—— 手工卡必须挂项目，这条硬规矩不为立卡开口子；
  *   · 标题取最近一条用户消息（就是"派的活"），没有就退回会话标题；
- *   · 状态照最近一轮跑实的状态折成卡的状态：跑中→进行中、完成→**待验收**
- *     （等人验收，别替用户宣布"已完成"）、失败→失败、停止→已阻塞
- *     （跟 onTaskRunFinished 同一套落点规则，同一件事别两处两种落法）；
+ *   · 状态照最近一轮的**交付声明**折成卡的状态（2026-11-09 P4：跑完 ≠ 完成）：
+ *     跑中→进行中、失败→失败、停止→已阻塞、完成+第一行 `[完成]`→**待验收**、
+ *     完成+`[受阻]`/没声明/空回话→已阻塞（跟 onTaskRunFinished 同一套落点规则，
+ *     同一件事别两处两种落法；声明判据见 delivery-claim.mjs）；
  *   · **不派活**（`startNow` 恒 false）：活已经在会话里跑着或跑完了，再派一次
  *     等于同一件事两份执行。之后要返工，走卡详情页那条路（会另开工单会话）。
  */
@@ -1064,7 +1129,9 @@ export function promoteConversationToCard(convId) {
 
   const persona = chatRun.personaId ? store.getPersona(chatRun.personaId) : null;
   const lastUser = store.lastUserMessage(convId);
-  const status = chatRun.status === '跑中' ? '进行中' : chatRun.status === '完成' ? '待验收' : chatRun.status === '失败' ? '失败' : '已停止' ? '已阻塞' : '待办';
+  // 2026-11-09 P4：完成的轮次要读**交付声明**，不能因为"进程退出了"就折成待验收（见 delivery-claim.mjs）
+  const claim = claimOf(finalReplyTextOf(chatRun));
+  const status = chatRun.status === '跑中' ? '进行中' : cardStatusAfterRun(chatRun.status, claim) ?? '待办';
   const task = createProjectTask(project, {
     title: clip(lastUser || conv.title || '（没说做什么）', TASK_LIMIT),
     status,
@@ -1103,17 +1170,21 @@ export function retryQueuedTasks() {
 }
 
 /**
- * 运行跑完时把**卡片**的状态收一下（2026-10-17）。
+ * 运行跑完时把**卡片**的状态收一下（2026-10-17 建；2026-11-09 P4 改口径）。
  *
- * 为什么必须有这一步：原来卡片派活后状态永远停在「进行中」—— 人把运行停掉了，卡还写着「进行中」，
- * 看板上看不出"这活已经停了、在等人处理"。
+ * 为什么必须有这一步：卡片派活后状态会停在「进行中」—— 人把运行停掉了/跑完了，看板得
+ * 反映"这轮结束了、现在等谁"，否则一张卡永远挂着"进行中"。
  *
- * 落点（2026-10-24 状态重设计定稿，全套口径见 COLUMNS 的注释）：
- *   · 跑完了（`完成`）        → **待验收**：等经办人验收结果；
- *   · 人停的（`已停止`）      → **已阻塞**：进「已阻塞」，等人决定下一步；
- *   · 跑挂了（`失败`）        → **失败**：跟流程步骤同一落点（以前手工卡归「已阻塞」，
- *     两套来源两种落法）。它**不会**被自动重派 —— 重派只认「待办」+ queuedAt，
- *     所以这里不存在"失败一次再派一次"的死循环（那才是当初不敢用这态的原因）。
+ * 落点（2026-11-09 P4：**跑完 ≠ 完成**。判据唯一实现在 delivery-claim.mjs）：
+ *   · 完成 + 第一行 `[完成]`（员工声明交付）    → **待验收**：等人点头；
+ *   · 完成 + 第一行 `[受阻]`（员工声明没干成）  → **已阻塞**：等人拍板；
+ *   · 完成 + 没声明 / 空回话                    → **已阻塞**：没交回可验收结论。平台**不**
+ *     替员工宣布"干完了"——真实事故 pt-a6841a5b/r-551f01e3：进程正常退出但回话是空的，
+ *     卡却被自动推进「待验收」，用户判"这是在糊弄用户"；
+ *   · 人停的（`已停止`）                        → **已阻塞**：等人决定下一步；
+ *   · 跑挂了（`失败`）                          → **失败**：技术上跑挂，可重跑；
+ *   · **绝不回「待办」** —— 有些待办会被自动重新派活，失败一次再派一次 → 死循环
+ *     （「失败」「已阻塞」都不会被自动重派：重派只认「待办」+ queuedAt）。
  *
  * 只动"当前还是进行中"的卡：人已经手动改过状态（比如直接拖到已完成）就不覆盖 —— **卡的状态是人的指令**。
  */
@@ -1121,15 +1192,11 @@ export function onTaskRunFinished(run) {
   if (!run?.id) return;
   const task = store.getProjectTaskByRunId(run.id);
   if (!task || task.status !== '进行中') return;
-  const next =
-    run.status === '完成' ? '待验收' : run.status === '已停止' ? '已阻塞' : run.status === '失败' ? '失败' : null;
+  // 完成态还要看**交付声明**：进程退出码 0 只说明这一轮结束了，不说明活干成了
+  const claim = claimOf(finalReplyTextOf(run));
+  const next = cardStatusAfterRun(run.status, claim);
   if (!next) return;
-  const why =
-    run.status === '完成'
-      ? '跑完了，等你验收'
-      : run.status === '已停止'
-        ? '被人停掉了，等你处理'
-        : `跑挂了${run.error ? `：${String(run.error).split('\n')[0].slice(0, 200)}` : ''}`;
+  const why = endNoteOf(run, claim);
   const descr = `${task.description ?? ''}`.trim();
   const updated = store.updateProjectTask(task.id, {
     status: next,

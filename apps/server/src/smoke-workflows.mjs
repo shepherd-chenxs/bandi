@@ -267,6 +267,12 @@ check('产物认出文件（行号不被当成路径）', doneRes.artifacts.some
 check('产物认出链接', doneRes.artifacts.some((a) => a.kind === 'link' && /pull\/12$/.test(a.target)), JSON.stringify(doneRes.artifacts));
 check('一句话取第一行有内容的', /已在 index\.html 的卡片里加上这句话/.test(doneRes.summary ?? ''), doneRes.summary);
 
+// 交付声明标记（P4）由平台判状态用，界面摘要要剥掉前缀 —— 跟 [受阻] 一样，不然成 "[完成] [完成]…" 叠词
+const claimedRes = workflows.resultOf({ status: '完成', finalText: '[完成] 已修好。改动：src/app.js' });
+check('交付声明：摘要剥掉 [完成] 前缀（标记不重复出现在界面上）',
+  typeof claimedRes.summary === 'string' && claimedRes.summary.length > 0 && !claimedRes.summary.includes('[完成]'),
+  JSON.stringify(claimedRes.summary));
+
 const plainRes = workflows.resultOf({ status: '已完成', finalText: '好的，我先看了一下项目。\n\n这次只做了检查，没改任何文件。' });
 check('没产物 → artifacts 为空', plainRes.artifacts.length === 0, JSON.stringify(plainRes.artifacts));
 check('没产物 → 一句话跳过开场白', /只做了检查/.test(plainRes.summary ?? ''), plainRes.summary);

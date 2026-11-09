@@ -19,6 +19,10 @@ import * as runs from './runs.mjs';
 import * as cliModels from './cli-models.mjs';
 import * as runtimes from './runtimes.mjs';
 import { dispatchToThread, projectConstitutionBlock } from './dispatch.mjs';
+// 交付声明（2026-11-09 P4）：`[受阻]` 的判据搬去 delivery-claim.mjs（与卡落点共用一处），
+// 这里只保留同名导出，老调用方/冒烟（workflows.blockedMark）不用改。
+import { blockedMark, stripClaimMark } from './delivery-claim.mjs';
+export { blockedMark };
 
 /** 一步跑多久算「卡住」 */
 const STUCK_MS = 10 * 60 * 1000;
@@ -1318,21 +1322,13 @@ export function resultOf({ status, finalText = '', error = null } = {}) {
   const blocked = status === '受阻';
   return {
     state: stopped ? 'stopped' : blocked ? 'blocked' : 'done',
-    // 受阻的标记前缀在落库时剥掉 —— 界面上由 state 决定怎么标（红字"受阻："），
-    // 原文再带一个 [受阻] 就成 "[受阻] 受阻：[受阻]…" 的叠词了
-    summary: summaryOf(blocked ? String(finalText).replace(/^\s*\[受阻\]\s*/, '') : finalText),
+    // 声明标记（[完成] / [受阻]）在落库时剥掉 —— 界面上由 state 决定怎么标（红字"受阻："），
+    // 原文再带一个标记就成 "[完成] 已完成：[完成]…" 的叠词了。
+    // 2026-11-09 P4：[完成] 也进同一条剥离路径（协议见 delivery-claim.mjs）。
+    summary: summaryOf(stripClaimMark(finalText)),
     artifacts: artifactsOf(finalText),
     error: null,
   };
-}
-
-/**
- * 员工自报受阻的标记（2026-10-23）：回话**第一个非空行**以 `[受阻]` 开头。
- * 只认行首、只认第一行 —— 正文里提到"受阻"两个字不算（那可能是在转述别的事）。
- */
-export function blockedMark(finalText) {
-  const first = String(finalText ?? '').split('\n').find((l) => l.trim() !== '') ?? '';
-  return first.trimStart().startsWith('[受阻]');
 }
 
 /** 读库里的 result；老数据没这一列 → 拿 note 兜底（至少还能显示一句话/报错） */
