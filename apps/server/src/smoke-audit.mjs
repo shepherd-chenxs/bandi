@@ -190,8 +190,15 @@ try {
   const dup1 = await call('GET', '/api/users');
   const dup2 = await call('GET', '/api/users');
   check('匿名重复打同一个 API 口 → 仍 401', dup1.status === 401 && dup2.status === 401, `${dup1.status}/${dup2.status}`);
+  /* 版本指纹（2026-11-09 从 session 改 public）：旧页面会话失效后还在每 60 秒轮询它，
+     以前每次都吃 401、往审计里刷一条「拒绝访问」（用户截图问"这是什么"）；现在匿名也 200。 */
+  const wv = await call('GET', '/api/web-version');
   const denyRows2 = await call('GET', '/api/security/audit?kind=authz.deny', { cookie: sidA });
   const evDeny = denyRows2.body?.events ?? [];
+  check('匿名 GET /api/web-version → 200（版本探针免鉴权）',
+    wv.status === 200 && typeof wv.body?.v === 'string', `${wv.status} ${JSON.stringify(wv.body ?? {}).slice(0, 80)}`);
+  check('版本探针不进审计', !evDeny.some((e) => e.action === 'GET /api/web-version'),
+    JSON.stringify(evDeny.map((e) => e.action).slice(0, 6)));
   check('同类拒绝在窗口内只落一行（① 1 次 + 这里 2 次 = 1 行）',
     evDeny.filter((e) => e.action === 'GET /api/users' && /HTTP 401/.test(e.reason ?? '')).length === 1,
     `rows=${evDeny.filter((e) => e.action === 'GET /api/users').length}`);
