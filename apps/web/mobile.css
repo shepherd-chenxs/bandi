@@ -97,15 +97,13 @@
  * 骨架（index.html）是 body 网格：68px 图标栏 + 300px 列表 + 主区。
  * ≤900px：图标栏收掉（取简，底部导航接管一级切换）、单列铺满；
  * 列表与主区互斥铺满，谁在场由 body.mb-detail-open 说了算（手机上的两级导航）。
- * 例外三处要在窄屏下照常整页显示：
+ * 例外两处要在窄屏下照常整页显示：
  *   body.no-list    —— 工作台宫格 / 专家库（整页视图，本就没有左栏）；
- *   body.node-mode  —— 节点形态页（自有单列布局）；
  *   配对落地页      —— 独立 pair.html，根本不引本文件。
  */
 @media (max-width: 900px) {
   body,
-  body.no-list,
-  body.node-mode {
+  body.no-list {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr);
   }
@@ -124,7 +122,7 @@
   body.mb-detail-open main { grid-row: 2; }
 
   /* 没进详情时主区藏掉 —— 否则消息空态会和列表抢一层 */
-  body:not(.mb-detail-open):not(.no-list):not(.node-mode) main { display: none; }
+  body:not(.mb-detail-open):not(.no-list) main { display: none; }
 
   /*
    * 底部四 tab 在 **900 档**就接管一级导航（2026-10-28 修 P0）。
@@ -1655,7 +1653,7 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
   body.mb-narrow #settingsView .me-sec-grid { grid-template-columns: 1fr; gap: 10px; }
   body.mb-narrow #settingsView .me-sec-card { padding: 16px; gap: 10px; }
 
-  /* 退场整行：手机上加大点击高度与字号（替代旧 .machine-actions 那条） */
+  /* 退场整行：手机上加大点击高度与字号 */
   body.mb-narrow #settingsView .me-out {
     padding: 15px 16px;
     font-size: 15px;
@@ -1687,16 +1685,6 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     font-size: 20px;
     line-height: 1;
     transform: translateY(-1px);
-  }
-
-  /* 「我的」页底那两个按钮（退出登录 / 去登录）在手机上不该贴在右沿：
-     个人中心的动作用整宽按钮，比右下角一颗小按钮好点得多 */
-  body.mb-narrow #settingsView .machine-actions { justify-content: stretch; }
-  body.mb-narrow #settingsView .machine-actions .btn-sm {
-    flex: 1;
-    height: 46px;
-    font-size: 15px;
-    border-radius: var(--mb-r-ctl, 10px);
   }
 
   /* 设置列表顶上的「← 我的」行（contacts.mjs 画的）：图标 + 文字，跟 IM 列表行同高 */
@@ -4227,7 +4215,7 @@ body.kb-new-open .mb-tabbar { display: none; }   /* 进创建页隐底部 tab，
 
 /*
  * 2026-11-05 任务卡手机版：窄屏上原来就是"桌面页压小"——三级面包屑 + 标题/描述/讨论
- * 一列 + 桌面右栏属性表沉到讨论区底下 + PR 关联框（沿用桌面同款）。这轮按看板 v2 / 员工详情的
+ * 一列 + 桌面右栏属性表沉到讨论区底下 + 关联框（沿用桌面同款）。这轮按看板 v2 / 员工详情的
  * 同一套语汇重画：
  *   ① 导航栏（‹ / 任务卡）：§21 看板同款（.kb-l-navbtn / .kb-l-navtitle 直接复用）；
  *   ② 内容是一列连续的东西：状态胶囊 → 标题 → 描述 → 属性卡 → 讨论流，输入框吸底；

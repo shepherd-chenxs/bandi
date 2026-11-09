@@ -130,6 +130,16 @@ ensureColumn('project_tasks', 'queuedAt', 'queuedAt TEXT');
 // 人手建的卡是 null。只用来在详情页标「创建人」，不改卡的脾气 —— 照样能拖、能改、能派活。
 ensureColumn('project_tasks', 'createdBy', 'createdBy TEXT');
 
+/*
+ * 团队协作模式（2026-11-09）：
+ *   · `assigneeGroupId`：这张卡派给**哪个群**办（与 assigneePersonaId / assigneeUserId /
+ *     flowTemplateId 互斥）。卡上**不记协调人** —— 执行/派发/子卡授权/回执每次都现读
+ *     群上的 `assistantPersonaId`（群助手），换人自动跟随，不会出现"卡上写的协调人早退群了"。
+ *   · `parentTaskId`：协作子卡挂在哪个主卡下（只允许一层，子卡不能再拆）。
+ */
+ensureColumn('project_tasks', 'assigneeGroupId', 'assigneeGroupId TEXT');
+ensureColumn('project_tasks', 'parentTaskId', 'parentTaskId TEXT');
+
 // 「状态改动」归因（2026-11-03）：**最后一次由人改状态**是谁（users.id）、什么时候。
 // 只在 PATCH /api/projects/tasks/:id 这条人走的路写（project-tasks.mjs 的 updateProjectTask）；
 // 系统动作（跑完收状态、协作卡同步、PR 巡检）走 store 直写，不经过它 —— 不会把人的署名冲掉，

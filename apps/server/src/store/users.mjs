@@ -71,15 +71,26 @@ ensureColumn('user_sessions', 'absoluteExpiresAt', 'absoluteExpiresAt TEXT');
 ensureColumn('user_sessions', 'ip', 'ip TEXT');
 ensureColumn('user_sessions', 'ua', 'ua TEXT');
 
+/*
+ * 「昵称」（2026-11-08 用户："加一个昵称，'中枢账号 · 手机号登录'这个去掉"）。
+ *
+ * 跟 `name` **分开存**，不能合成一个：`name` 是中枢账号在本机的影子名（登录时按中枢
+ * 登录名建出来，手机号全局唯一；通讯录、消息署名都用它）。昵称只是"我想让人看见的名字"，
+ * 目前只用在「我的」页身份卡 —— 合成一个字段的话，改昵称就等于改账号名，署名跟着变，
+ * 改错了还找不回来。空 = 没设（界面退回手机号显示）。
+ */
+ensureColumn('users', 'nickname', 'nickname TEXT');
+
 /* ------------------------------------------------------------------ 读 */
 
-const PUBLIC_FIELDS = 'id, name, builtin, disabled, createdAt, updatedAt';
+const PUBLIC_FIELDS = 'id, name, nickname, builtin, disabled, createdAt, updatedAt';
 
 function shape(row) {
   if (!row) return null;
   return {
     id: row.id,
     name: row.name,
+    nickname: row.nickname ?? null,
     builtin: !!row.builtin,
     disabled: !!row.disabled,
     createdAt: row.createdAt ?? null,
@@ -150,6 +161,18 @@ export function renameUser(id, name) {
   const cur = getUser(id);
   if (!cur) return null;
   db.prepare('UPDATE users SET name = ?, updatedAt = ? WHERE id = ?').run(String(name).trim(), nowIso(), id);
+  return getUser(id);
+}
+
+/**
+ * 改昵称（2026-11-08）—— **只动展示名，不碰账号名**（见上面 nickname 列的说明）。
+ * 传空 / 全空白 = 清除（存 NULL，界面退回手机号）。长度校验在路由层。
+ */
+export function setNickname(id, nickname) {
+  const cur = getUser(id);
+  if (!cur) return null;
+  const v = String(nickname ?? '').replace(/\s+/g, ' ').trim() || null;
+  db.prepare('UPDATE users SET nickname = ?, updatedAt = ? WHERE id = ?').run(v, nowIso(), id);
   return getUser(id);
 }
 

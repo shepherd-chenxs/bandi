@@ -37,8 +37,7 @@ import { handleGroup } from './group.mjs';
 import { handleSkill } from './skill.mjs';
 import { handleConnector } from './connector.mjs';
 import { handleRuntime } from './runtime.mjs';
-import { handleNode } from './node.mjs';
-import { handleNodeWork } from './nodeWork.mjs';
+import { handleLocalTasks } from './localTasks.mjs';
 import { handlePluginAction } from './plugin.mjs';
 import { handleSsh } from './ssh.mjs';
 import { handleWorkflow } from './workflow.mjs';
@@ -73,10 +72,9 @@ export const CHAIN = [
   { id: 'connector', handle: handleConnector, note: '连接器（MCP 之类）' },
   { id: 'runtime', handle: handleRuntime, note: '运行时 / 模型清单' },
 
-  // ── 节点两半：node = 总机侧的节点管理，nodeWork = 节点自己干活的那半边。
-  //    两者路径前缀不同（/api/nodes 与 /api/node/...），但都窄，靠前靠后都不抢别人
-  { id: 'node', handle: handleNode, note: '总机侧：节点、任务下发、邀请码' },
-  { id: 'nodeWork', handle: handleNodeWork, note: '节点侧：领活、回执' },
+  // ── 本机安装任务：本机软件商店（apps/server/src/routes/localTasks.mjs）。
+  //    多机节点子系统（node / nodeWork）已于 2026-11-09 整体删除
+  { id: 'localTasks', handle: handleLocalTasks, note: '本机软件商店安装任务' },
 
   { id: 'plugin', handle: handlePluginAction, note: '插件装卸' },
   { id: 'ssh', handle: handleSsh, note: '远程机器（SSH）' },

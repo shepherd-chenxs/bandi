@@ -89,16 +89,12 @@ const HOST_ALLOW = [
   // Android XML 命名空间（AndroidManifest / 布局文件的 xmlns 声明）——
   // 不是网络地址，是每个 Android 工程文件的标准头（2026-11-07 原生壳 apps/mobile-native）。
   'schemas.android.com',
-  // frp 源码/发布包下载镜像（2026-11-08，apps/desktop/build-frpc.mjs 与 fetch-frpc.mjs）：
-  // 与上面 gh-proxy.com 同一类 —— GitHub 发布文件的中转，不是新的上游。
-  // 为什么敢用：产物有硬校验兜底（fetch 走官方 frp_sha256_checksums.txt、
-  // build 用官方 tar 包 + 本地编译），镜像改不了内容；不用它的话本机实测
-  // 直连 GitHub 40 秒只下 635KB、随机卡死。
+  // GitHub 发布文件的中转镜像（apps/server/src/externals.mjs 的 mirrors，取 Node 运行时用）：
+  // 与上面 gh-proxy.com 同一类 —— 不是新的上游。产物有硬校验兜底（sha256 对官方清单），
+  // 镜像改不了内容；不用它的话本机实测直连 GitHub 40 秒只下 635KB、随机卡死。
+  // 注：原先这里还挂着 frp 的编译链路（build-frpc.mjs 用 goproxy.cn），随 frp 内置
+  // 一起下线（2026-11-08），goproxy.cn 那条已删 —— 仓库里不再有 Go 构建。
   'ghfast.top',
-  // Go 模块代理（2026-11-08，build-frpc.mjs 编译 frpc 时用）：goproxy.cn 是
-  // goproxy.io 的国内官方代理，只代理 `go mod download` 的模块，不承载我们的分发；
-  // 源码版本由 go.mod + 官方 tar 包锁定，模块被换也会编译失败或校验不过。
-  'goproxy.cn',
 ];
 
 /*
@@ -126,6 +122,10 @@ const ASSERT_WAIVERS = {
   'apps/server/src/smoke-pair.mjs': '配对链路整套退场（§十五 ④）：手机只走中枢账号登录；替代验收 smoke-hub / smoke-auth 的登录路径',
   'apps/server/src/smoke-device-routes.mjs': 'device 身份与 device 白名单退场（§十五 ④）：无手机专属路由可测；机器身份边界仍在 smoke-security-policy',
   'apps/server/src/smoke-lan-origin.mjs': 'LAN 令牌口径随「全部都要登录」退场（§十五 ④），断言改写为 hub 登录口径（改写保留 5 条，净减 1 条为删除令牌段用例）',
+  // 本批（2026-11-08）：内置 frp 整块下线（用户决定：不内置，需要时另外装）。
+  // 隧道进程管理（tunnel.mjs）已删，这个冒烟**没有可测的对象**，不是"测试被放松"。
+  // 留下来的 hub/relay.mjs 只供两道闸认域名，闸的放行由 smoke-lan-origin 覆盖。
+  'apps/server/src/smoke-tunnel.mjs': '内置 frp 下线（2026-11-08 用户决定）：隧道进程层整体删除，无替代；两道闸由 smoke-lan-origin 覆盖',
 };
 
 /*

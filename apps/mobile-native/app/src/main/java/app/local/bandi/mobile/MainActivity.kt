@@ -947,7 +947,14 @@ class MainActivity : AppCompatActivity() {
         const val CONN_INTERVAL_FAST = 1_000L
         /** 已判离线后的间隔：5 秒一问，电脑回来几秒内就变绿 */
         const val CONN_INTERVAL_OFFLINE = 5_000L
-        /** 单次探测超时：必须短于所有间隔，否则一次没回来就会拖住下一轮 */
+        /**
+         * 单次探测超时：局域网地址用这一档（快了才判得出"真断了"）。
+         *
+         * ⚠️ 中转地址（https://）不吃这个值 —— `Probe` 内部会按 RELAY_TIMEOUT_MS（8 秒）
+         * 兜底。2026-11-08 实报：中转链路往返 2~4 秒，用 2 秒判断会一直显示离线。
+         * 探测是串行的（一次没回来不排下一次），所以超时变长不会堆积请求，
+         * 代价只是"真断了"要多等几秒才显示出来。
+         */
         const val CONN_TIMEOUT_MS = 2_000
         /** 连续几次不通才算离线：1 会把偶发丢包、息屏瞬间都报成掉线 */
         const val CONN_FAILS_TO_OFFLINE = 2

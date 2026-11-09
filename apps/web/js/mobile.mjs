@@ -35,7 +35,7 @@ function applyBreakpoints() {
   document.body.classList.toggle('mb-narrow', mqNarrow.matches);
   document.body.classList.toggle('mb-tiny', mqTiny.matches);
   // 折出窄屏时把详情展开态一并清掉：回宽屏后 main 是常驻的，不该还被折叠逻辑压着
-  if (!mqNarrow.matches) document.body.classList.remove('mb-detail-open');
+  if (!mqNarrow.matches) document.body.classList.remove('mb-detail-open', 'flow-direct-open');
 }
 mqNarrow.addEventListener('change', applyBreakpoints);
 mqTiny.addEventListener('change', applyBreakpoints);
@@ -74,6 +74,16 @@ function leaveDetail(alreadyPopped) {
   // 抽屉（聊天记录 / 群设置）是 fixed 覆盖层，不归详情态的折叠管 —— 不主动关掉，
   // 退回列表后它照样盖在屏幕上，看起来"还是聊天记录"（2026-11 用户实报）。
   closeDrawer();
+  /*
+   * 流程实例页「从别处点进来的整页」（flowpages.mjs 打 body.flow-direct-open）：
+   * 这一页的返回是**原来那一页**（看板 / 任务卡 / 会话），不是它自己左栏的「发起记录」
+   * —— 收场交给 flowpages（走事件，渲染模块不反向依赖本文件）。
+   * 2026-11-08 用户：「点返回还是能跳转到发起记录」——之前返回直接收折叠态，落到列表上。
+   */
+  if (document.body.classList.contains('flow-direct-open')) {
+    document.dispatchEvent(new CustomEvent('flow-direct-leave'));
+    return;
+  }
   if (!document.body.classList.contains('mb-detail-open')) return;
   document.body.classList.remove('mb-detail-open');
   // 聊天页自带的返回按钮（chat.mjs 的 .mb-chat-back）随页面一起退场
@@ -172,6 +182,11 @@ document.addEventListener('keydown', (e) => {
   if (document.body.classList.contains('tc-sheet-open')) return;
   if (document.body.classList.contains('mb-detail-open')) {
     e.preventDefault();
+    // 同上：流程实例页的收场归 flowpages（回上一层，不是翻出列表）
+    if (document.body.classList.contains('flow-direct-open')) {
+      document.dispatchEvent(new CustomEvent('flow-direct-leave'));
+      return;
+    }
     leaveDetail();
   }
 });
@@ -191,6 +206,9 @@ window.addEventListener('popstate', (e) => {
   // 漏了这行，返回键会把底下的卡页一起收掉 —— 一次返回从抽屉直接掉回看板（2026-11-05）
   if (document.body.classList.contains('tc-sheet-open')) return;
   if (isNarrow() && document.body.classList.contains('mb-detail-open')) {
+    // 流程实例页（从别处点进来的整页）：收场归 flowpages —— 退回去该是看板/任务卡/会话，
+    // 不是这页左栏的「发起记录」（2026-11-08 用户：「点返回还是能跳转到发起记录」）
+    if (document.body.classList.contains('flow-direct-open')) return;
     leaveDetail(true);
     return;
   }
@@ -280,6 +298,8 @@ tabbar.querySelectorAll('.mb-tab').forEach((b) => {
     const wasOpen = document.body.classList.contains('mb-detail-open');
     document.body.classList.remove('mb-detail-open');
     document.body.classList.remove('mb-chat');
+    // 流程实例页那套「整页」标记也一起收（flowpages.mjs）：换栏就是走了，别再让返回键往看板拽
+    document.body.classList.remove('flow-direct-open');
     if (wasOpen && history.state?.mbDetail) history.back();
     // 抽屉是 fixed 覆盖层，换一级页时必须一起关，否则新页面被旧抽屉盖住
     closeDrawer();
@@ -308,6 +328,7 @@ document.addEventListener('mb-nav', (e) => {
   // 历史格同 tab 那条规矩一起回收（见 tabbar click 的注释）
   const wasOpen = document.body.classList.contains('mb-detail-open');
   document.body.classList.remove('mb-detail-open');
+  document.body.classList.remove('flow-direct-open');
   if (wasOpen && history.state?.mbDetail) history.back();
   setNav(nav);
   syncTabs();

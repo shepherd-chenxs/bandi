@@ -255,7 +255,6 @@ export async function handlePersona(req, res, url) {
       sandbox: body.sandbox ? String(body.sandbox) : undefined,
       cwd: body.cwd ? String(body.cwd) : undefined,
       model: body.model === undefined ? undefined : String(body.model || '') || null,
-      showThinking: body.showThinking === undefined ? undefined : (body.showThinking ? 1 : 0),
       rootDirs: Array.isArray(body.rootDirs) ? body.rootDirs.map(String).filter((s) => s.trim()) : undefined,
       avatar: body.avatar === undefined ? undefined : (body.avatar ? String(body.avatar) : null),
       // 并发数（2026-10-24）：不传不动；传数字由 store 钳到 [1, 20]；传 null/空 = 恢复默认（6）

@@ -8,9 +8,10 @@
  *
  * 这一层**不碰 DOM**（纯逻辑），好处有两个：
  *   · 聊天页用它画实时状态；流程实例页的节点对话将来可以共用同一份；
- *   · 冒烟用例直接 import 它、喂真实事件序列断言，不需要浏览器；
- *   · 服务端收尾也算快照（runs.mjs 的 progressMeta 用 summarizeEvents 给回话消息
- *     落 meta.progress）—— 所以**永远别在这里碰 DOM / window**。
+ *   · 冒烟用例直接 import 它、喂真实事件序列断言，不需要浏览器。
+ * 只画直播 —— 2026-11-08 起不再有"收尾快照"（原来服务端用 summarizeEvents 把摘要
+ * 写进回话消息的 meta.progress，历史里画成可展开的收起行；用户实判没啥用，砍了）。
+ * 所以这里只服务"正在跑"的那一块，跑完 300ms 整页重画就没了，不需要收尾快照这条路。
  *
  * 四家 runtime 的词不一样，这里收敛成三种语义：
  *   · 阶段：status(phase) / thinking / text / error / __done
@@ -97,6 +98,22 @@ export function humanizeCommand(raw) {
 }
 
 /**
+ * MCP 调用的"名字里能读出来的那一段"（2026-11-08）。
+ * 两家给的形状不同：
+ *   · codex（`mcp_tool_call`）→ item 上有 `server` / `tool` 两个字段；
+ *   · claude → 工具名本身写成 `mcp__<server>__<tool>`。
+ * 以前这两种都落到"调用工具"四个字（没有目标），一跑十分钟同一句不变 ——
+ * 用户看到的就是"这块根本没在动"。读出 tool 名，日志才会一步步往前刷。
+ */
+function mcpLabel(name, d, p) {
+  const srv = String(d.server ?? p.server ?? '').trim();
+  const tool = String(d.tool ?? p.tool ?? '').trim();
+  if (tool) return srv ? `${srv} · ${tool}` : tool;
+  const m = /^mcp__(.+?)__(.+)$/.exec(String(name ?? ''));
+  return m ? m[2] : '';
+}
+
+/**
  * 把一次工具调用压成"动词 + 目标"。
  *
  * 目标从各 runtime 的输入字段里按优先级捡（命令 > 文件路径 > 搜索词 > URL > 描述）；
@@ -125,7 +142,10 @@ export function toolSummary(name, input, detail = null) {
     p.command, d.command,
     p.file_path, p.path, p.notebook_path, d.file_path,
     p.pattern, p.query, p.url, p.description, p.prompt,
+    d.query, d.pattern, d.url, d.prompt,
     p.changes, d.changes, d.path,
+    // MCP 排最后：它是"名字兜底"，前面那些字段有真东西时不该被工具名顶掉
+    mcpLabel(raw, d, p),
   );
   // 命令类目标走人话化（剥解释器全路径 / 双层转义归一）+ 保头保尾截断；
   // 其余（文件路径、搜索词、URL）保持普通截断 —— 路径的头才是信息量所在
@@ -397,55 +417,6 @@ export function progressView(state, now = Date.now()) {
     lastStep: last,
     lastAgoMs: lastRaw ? Math.max(0, now - lastRaw.at) : null,
     lastAction: last ? `${last.verb}${last.target ? ` ${last.target}` : ''}` : '',
-  };
-}
-
-/* ------------------------------------------------ 收尾快照（落库给历史用） */
-
-/**
- * 一次运行的事件流 → **收尾快照**（2026-11-05 评鉴落地）。
- *
- * 服务端收尾时调（runs.mjs 的 progressMeta），把快照写进回话消息的 meta.progress ——
- * 界面上"他到底查了啥"留一行可展开的收起行，不用回查 run_events。
- * 跟卡票同一哲学：**快照在落库时刻写死**，聊天一屏可能十几条回话，逐条回查太贵。
- *
- * 跟 progressView 的差别：收尾时不猜"进行中" —— 还没等到结果的一律收成「已发起」
- * （called），不硬猜成败。rows = [{ evt, at }]（store.listRunEvents 的行、evt 已
- * JSON.parse；at 是落库时刻，每步耗时靠它；缺了就退回上一条事件的时刻，耗时归零
- * 但步骤本身不丢）。
- *
- * 没调过工具的运行返回 null —— 纯聊天的回话不需要"过程收起行"。
- */
-export function summarizeEvents(rows, { status = '', elapsedMs = null, maxSteps = 30 } = {}) {
-  const state = createRunProgress({});
-  for (const r of rows ?? []) {
-    const evt = r?.evt;
-    if (!evt || typeof evt !== 'object') continue;
-    const t = Date.parse(r.at ?? '');
-    applyRunEvent(state, evt, Number.isFinite(t) ? t : state.lastEventAt);
-  }
-  if (!state.steps.length) return null;
-  closeRunning(state);
-  const list = state.steps.map((s) => {
-    const { verb, target } = toolSummary(s.name, s.input, s.detail);
-    return {
-      v: verb,
-      t: target,
-      ms: s.endedAt != null ? s.endedAt - s.at : null,
-      s: s.status, // called | done | error（收尾时不会有 running）
-    };
-  });
-  // 阶段分组（2026-11-05 二期）：分得出来快照带 phases（界面按段画），
-  // 分不出来 phases 缺省 —— 老快照/平铺回话的界面画法原样兼容
-  const grouped = withPhases(list, state.speech, state.intent.trim(), maxSteps);
-  return {
-    status,
-    intent: state.intent.trim() ? clip(state.intent.trim(), 120) : '',
-    steps: grouped.phases ? grouped.steps : list.slice(-maxSteps),
-    ...(grouped.phases
-      ? { phases: grouped.phases.map((g) => ({ t: g.title, i: g.i, n: g.n })) }
-      : {}),
-    elapsedMs: elapsedMs != null ? elapsedMs : Math.max(0, state.lastEventAt - state.startedAt),
   };
 }
 

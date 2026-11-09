@@ -6,7 +6,7 @@
  * （`GET /hub/enter`）。两条路最后都落到本机会话 `bandi_sid` —— 登录即全权，
  * 本机不再有第二套账号密码、角色或菜单权限（那两套已整体退场）。
  *
- * **机器**：`bandi_token`（operator）与节点/手机令牌，规则多年未变：
+ * **机器**：`bandi_token`（operator），规则多年未变：
  *
  *   · 只监听回环（桌面版 / 单机）→ **API 免鉴权**（脚本/冒烟/CLI 一个字节没变），
  *     但浏览器抓面板 HTML 要先有登录会话 —— API 的闸管机器和脚本，会话的闸管人；
@@ -22,7 +22,7 @@
  *
  * 三种带法都认，各有各的用处：
  *   · **Cookie** `bandi_token` —— 浏览器（历史配对遗留；登录会话走 `bandi_sid`）。
- *   · **头** `X-Bandi-Token` —— 节点与脚本。
+ *   · **头** `X-Bandi-Token` —— 脚本与运维。
  *   · **查询** `?token=` —— 首次进来那一下，随即换成 Cookie 并重定向掉，
  *     免得令牌留在地址栏与历史里。
  *
@@ -33,14 +33,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-// 每节点令牌存在库里（只存哈希）—— 认证层要能认出来"这是哪台机器的令牌"
 import * as store from './store.mjs';
+import { verifyRunCredential } from './agent-auth.mjs';
 /*
  * 「这个请求从哪来」的唯一判定点（IAM §5.2）。
  * 2026-10-31 起**本文件不再自己判 remoteAddress** —— 原来那句
  * `if (isLoopbackHost(host)) return { required:false }` 在反代部署下等于全站免登录。
  */
-import { classifySource, cfgNow, isLoopbackHost } from './security/source.mjs';
+import { classifySource, cfgNow, isLocalHost, isLoopbackAddr, isLoopbackHost } from './security/source.mjs';
 import * as policy from './security/policy.mjs';
 import { isRegistered } from './security/route-policy.mjs';
 import * as csrf from './security/csrf.mjs';
@@ -57,7 +57,7 @@ const HEADER = 'x-bandi-token';
  * **登录会话 Cookie**（2026-10-28 第三刀：账号、登录与角色分配）。
  *
  * 与 `bandi_token` 是**两条互不相干的路**：
- *   · `bandi_token` = 共享令牌（root / 节点 / 手机）—— 本刀一个字节没动；
+ *   · `bandi_token` = 共享令牌（root 操作员）—— 本刀一个字节没动；
  *   · `bandi_sid`   = 某个**人**登录后的会话票，只对非回环浏览器有意义。
  * 两条同时存在时**令牌优先**（见 guard 里的注释）：一个陈旧的会话 Cookie 不该
  * 把握着 root 令牌的请求降权成普通用户。
@@ -175,83 +175,51 @@ export function clearedTokenCookie() {
 
 
 /**
- * 这枚令牌**是谁的**（2026-10-16 加的，2026-10-20 带上 scope）。
+ * 这枚令牌**是谁的**（2026-10-16 加的，2026-11-09 再收）。
  *
- * 原来是"一枚令牌走天下"：节点手上的就是总机那枚 master ✗ —— 一台节点被翻 = 整套被翻，
- * 而且「忘掉」踢不掉它（令牌还有效）。现在分三类身份（手机设备令牌 2026-11-07 已退场）：
+ * 这里分二类身份（手机设备令牌 2026-11-07、节点令牌 2026-11-09 均已退场；登录会话
+ * `user` 不在这里判，由 `guard` 认 Cookie 后自己贴上去）：
  *   · `operator` —— 总机那枚（脚本 / CLI / 运维，以及 `?token=` 首次进场；
  *                   **浏览器面板走账号会话**，见 `guard` 的回环分支）；
- *   · `node`     —— 每台机器**自己那枚**（邀请码换来的，见 store.issueNodeToken），
- *                  带 `scope: Set`（`compute` / `panel`）；
- *   · ~~`device`~~ —— 手机设备令牌**已整体退场**（2026-11-07 用户：「老体系去掉」）：
- *                   手机只走中枢账号登录（`/hub/enter` → 本机会话）。老库里那三张
- *                   `mobile_*` 表不再读写，存量 `bd_` 令牌一律认不出来 = 401 E4010。
- *   · `revoked`  —— **曾经是节点令牌、现在库里没有这行哈希**（唯一会删它的是
- *                  `store.revokeNodeTokens`，也就是总机上的「忘掉」）。
+ *   · `run`      —— 数字员工进程的**运行钥匙**（`X-Bandi-Run-Token`：run 现发、收尾吊销，
+ *                  见 agent-auth.mjs）。它不是平台令牌 —— 只从"本机直连"认
+ *                  （`isDirectLocalRequest`），权限最小，见 policy.mjs 的 run 分支。
  *
- * ⚠️ `revoked` 只在令牌以 `bn_` 开头时才判（设计 §5.10）：那个前缀是节点令牌自己带的，
- * 于是"查不到"能确定是**被吊销**而不是"抄错了/操作员令牌删了"——
- * 后者必须还是 `E4010`（需要令牌），不能骗人说"你被撤销了"。
+ * 节点令牌 2026-11-09 随多机子系统整体删除，无存量机：`bn_` 前缀令牌一律认不出来，
+ * 与"抄错了/令牌删了"同样落到 E4010（需要令牌），不再有"被吊销"的中间态。
  */
-export function identify(auth, token) {
-  if (!token) return null;
-  if (auth.token && timingSafeEqual(token, auth.token)) return { kind: 'operator' };
-  const hit = store.nodeAuthByToken(token);
-  if (hit) return { kind: 'node', nodeId: hit.nodeId, scope: hit.scope };
-  if (String(token).startsWith('bn_')) return { kind: 'revoked' };
+export function identify(auth, token, runToken = '') {
+  if (token) {
+    if (auth.token && timingSafeEqual(token, auth.token)) return { kind: 'operator' };
+  }
+  /*
+   * 运行钥匙（2026-11-08 补）：**不走 tokenOf 的三路**（Cookie / X-Bandi-Token / ?token=）——
+   * 它是 agent 进程环境里的一次性钥匙，走独立的 `X-Bandi-Run-Token` 头。谁给的见 guard，
+   * 这里只回答"这枚钥匙是谁"；验不过 → 当没认出来（外层按"带了但无效"回 E2056）。
+   */
+  if (runToken) {
+    const hit = verifyRunCredential(runToken);
+    if (hit) return { kind: 'run', runId: hit.runId, personaId: hit.personaId };
+  }
   return null;
 }
 
 /**
- * **权限边界**：节点令牌只许碰"它自己那台"的节点接口。
+ * 运行钥匙**从哪来才算数**（2026-11-08，全员群 401 实报的修法之一）。
  *
- * 往里加路径之前先回答一句：节点**凭什么**需要它？现在这四条是它干活的最小集合 ——
- * 报到 / 心跳 / 领活 / 回执。别的一律 403，尤其是 /api/devices、对话、员工、删机器：
- * 那些是**操作员**的事，节点碰不到，一台被翻也就只丢它自己。
+ * 数字员工是控制面在本机起的子进程，连的是 `127.0.0.1`；但服务器形态监听 `0.0.0.0`
+ * —— `classifySource()` 会把"监听非回环"一律判成 network，拿它当门槛，这条通道在
+ * 真机上永远不通（这正是实报的病根：冒烟一直在回环免鉴权模式下跑，从没测过）。
+ *
+ * 这里要回答的其实只有"**请求有没有经过反代**"，判据与 source.mjs §5.2 同一套证据：
+ * peer 是回环 + 没带任何转发头 + Host 指向本机名 —— 只是不要求进程监听在回环上。
+ * 经过反代的请求带转发头、或 Host 是公网域名，一律不认（钥匙泄到外部也用不了）。
  */
-function nodeMayReach(nodeId, method, pathname) {
-  if (method !== 'POST') return false;
-  /*
-   * 报到是**共享**端点 —— id 在 **body** 里、不在路径里（`POST /api/nodes/register`）。
-   * 所以路径这一层挡不住"拿自己的令牌、报到成别人的 id" ✗ ——
-   * 那一条在 register 处理器里按 `req.bandiAuth` 判（见 server.mjs）。
-   *
-   * ⚠️ 这条是**真机迁移时才发现漏的**（2026-10-16）：白名单里我写的路径是
-   * `/api/nodes/<id>/register` —— 那个端点**根本不存在** ✗，于是节点连报到都过不去。
-   * 用例当时只测了心跳和领活，没测报到，所以没拦住 —— 现在补上了。
-   */
-  if (pathname === '/api/nodes/register') return true;
-  const id = String(nodeId);
-  const esc = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const own = ['/heartbeat', '/claim'].flatMap((tail) => [
-    `/api/nodes/${id}${tail}`,
-    `/api/nodes/${encodeURIComponent(id)}${tail}`,
-  ]);
-  return own.includes(pathname) || new RegExp(`^/api/nodes/(?:${esc}|${encodeURIComponent(id)})/tasks/[^/]+/report$`).test(pathname);
-}
-
-/**
- * **修正 2（设计 §2）：节点干活还会打这两条，今天在局域网总机上必然 403。**
- *
- * `POST /api/runs/:runId/events`（`node.mjs:199`，过程回传）与
- * `POST /api/runs/:runId/finish`（`node.mjs:332`，回执）**不在** `nodeMayReach` 的白名单里 ✗。
- * 今天没暴露，只是因为回环形态下 `auth.required === false`、整套节点越权检查根本不执行；
- * 而唯一的节点用例恰好是回环形态。**一旦总机开了局域网（鉴权开），远端节点的"过程回传"
- * 和"回执"全部 403** —— 而本需求的主场景正是"局域网总机 + 远端节点"。
- *
- * 判据是**这次运行是谁的活**：`store.getNodeJobByRun(runId).nodeId === who.nodeId`。
- * 协议一个字节不改，只补判定。
- */
-function runMayReach(nodeId, method, pathname) {
-  if (method !== 'POST') return false;
-  const m = /^\/api\/runs\/([^/]+)\/(?:events|finish)$/.exec(pathname);
-  if (!m) return false;
-  let runId = m[1];
-  try {
-    runId = decodeURIComponent(runId);
-  } catch { /* 编码坏了就按原样查，查不到自然拒绝 */ }
-  const job = store.getNodeJobByRun(runId);
-  return !!job && job.nodeId === nodeId;
+function isDirectLocalRequest(req) {
+  const h = req?.headers ?? {};
+  if (h['x-forwarded-for'] || h['x-real-ip'] || h['forwarded']) return false;
+  if (!isLoopbackAddr(req?.socket?.remoteAddress)) return false;
+  return isLocalHost(h.host);
 }
 
 /**
@@ -268,31 +236,24 @@ function runMayReach(nodeId, method, pathname) {
  *   设备**读**、`GET /api/lan`、`GET /api/state`、`/api/runs/<id>/stream`（SSE）。
  */
 const PANEL_FORBIDDEN = [
-  // 1 发邀请码                                        server.mjs:1188
-  { method: /^POST$/, path: /^\/api\/nodes\/invites$/ },
-  // 2 删 / 改设备
-  { method: /^DELETE$/, path: /^\/api\/nodes\/[^/]+$/ }, // 忘掉 = 吊销   server.mjs:1017
+  // 1 删 / 改设备
   { method: /^POST$/, path: /^\/api\/devices\/[^/]+\/rename$/ }, //             server.mjs:1496
   { method: /^POST$/, path: /^\/api\/devices\/[^/]+\/runtimes$/ }, //            server.mjs:1525
   { method: /^(PUT|PATCH)$/, path: /^\/api\/devices\/[^/]+\/runtimes\/[^/]+$/ }, // server.mjs:1534
   { method: /^DELETE$/, path: /^\/api\/devices\/[^/]+\/runtimes\/[^/]+$/ }, //    server.mjs:1546
-  //   让**别的机器**装东西（在别人机器上落代码，与"改设备"同级）   server.mjs:1117
-  { method: /^POST$/, path: /^\/api\/nodes\/[^/]+\/tasks$/ },
-  // 3 改连接器与凭据
+  // 2 改连接器与凭据
   { method: /^POST$/, path: /^\/api\/connectors$/ }, //                          server.mjs:939
   { method: /^(PUT|PATCH)$/, path: /^\/api\/connectors\/[^/]+$/ }, //            server.mjs:973
   { method: /^DELETE$/, path: /^\/api\/connectors\/[^/]+$/ }, //                 server.mjs:980
   { method: /^POST$/, path: /^\/api\/ssh\/servers$/ }, //（含私钥路径）           server.mjs:258
   { method: /^POST$/, path: /^\/api\/git\/token$/ }, //                          server.mjs:2208
   { method: /^DELETE$/, path: /^\/api\/git\/token$/ }, //                        server.mjs:2223
-  // 4 改模型路由（每模型限额就是路由约束）                                     server.mjs:392
+  // 3 改模型路由（每模型限额就是路由约束）                                     server.mjs:392
   { method: /^POST$/, path: /^\/api\/quota$/ },
   //   第 15 条 `PUT|PATCH /api/personas/:id` **且 body 带 model 或 runtime**
   //   是**字段级**的（readBody 只有 handler 里有）→ 落在 server.mjs 的 handler（用 mayManage）
-  // 5 局域网开关（角色 / 手机连接；监听地址不是可切的了，2026-11-03）
+  // 4 局域网开关（角色 / 手机连接；监听地址不是可切的了，2026-11-03）
   { method: /^POST$/, path: /^\/api\/lan$/ }, //（GET 允许 —— 只读）              server.mjs:1452
-  // — 权限本身：scope 只能总机侧改（决策 A 规则 2）                             本次新增
-  { method: /^POST$/, path: /^\/api\/nodes\/[^/]+\/scope$/ },
   /*
    * — **架构补充**：插件装卸 = 在总机上落代码，风险与"改连接器"同级
    *   （设计 §6.3 最后一行，别漏）                          server.mjs:1565 / 1578
@@ -324,25 +285,20 @@ export function isPanelForbidden(method, pathname) {
  * **判定只有一处**（设计 §6.1）。`guard()` 里只调这一个函数，别的什么都不判。
  *
  * 判定逻辑本体在 `security/policy.mjs` 的 `authorize()`（**登录用户 = 全权**，
- * 机器身份各有各的边界），这里只负责把本模块的归属判定
- * （节点只认自己的端点 —— 那两条要查库对 nodeId）作为 `rules` 注进去，
- * 顺便避免 security/ ↔ auth.mjs 的 import 环。
+ * 机器身份各有各的边界）。本函数只是 PDP 包装：判定只有这一个入口，
+ * import 保持单向（auth → policy），security/ ↔ auth.mjs 不成环。
+ * （原经 `rules` 注入的节点归属判定随多机子系统 2026-11-09 整体删除。）
  *
  * 三种令牌携带方式（Cookie / `X-Bandi-Token` / `?token=`）走的**都是这里** ——
  * `tokenOf()` 先统一取出令牌，`identify()` 再统一认出"是谁"。
  * 所以"面板令牌换个 Cookie 就变成操作员"这种事不会发生。
  *
- * 返回 `'allow' | 'E4012' | 'E4031' | 'E4032' | 'E4033'`。
+ * 返回 `'allow' | 'E4031' | 'E4033' | 'E4034'`。
  *
  * **不缓存**：每次请求现算，改完对下一次请求立即生效。
  */
 export function decide(who, method, pathname) {
-  return policy.authorize({
-    who,
-    method,
-    pathname,
-    rules: { nodeMayReach, runMayReach, touchNodeUsed: store.touchNodeUsed },
-  });
+  return policy.authorize({ who, method, pathname });
 }
 
 /**
@@ -351,8 +307,7 @@ export function decide(who, method, pathname) {
  * 四种答案：
  *   · 登录用户 → 他自己（多端各记各的，这是唯一精确的一档）；
  *   · operator（回环 / 共享令牌）→ **第一个用户**（"本机自动登录"：像一台共用电脑，
- *     没人显式登录时活都算机主的）。还没有任何用户 → null，调用方回落到 LOCAL_USER 占位；
- *   · 节点令牌 → null（机器不是人，不冒充任何人）。
+ *     没人显式登录时活都算机主的）。还没有任何用户 → null，调用方回落到 LOCAL_USER 占位。
  *
  * 只用于**落数据**（署名），绝不用于鉴权 —— 权限判定仍然只看 `decide()`，两码事别混。
  */
@@ -373,7 +328,7 @@ export function actorUser(req) {
  * ⚠️ 回环形态（单机 / 桌面版）下 `guard` 会把身份标成 operator（见下面那段），
  * 否则单机上点「改模型」会被自己的闸挡掉。
  *
- * 2026-11-07 起登录即全权，operator 与登录用户**都算**；node / device 令牌不算。
+ * 2026-11-07 起登录即全权，operator 与登录用户**都算**（运行钥匙不算）。
  */
 export function mayManage(req) {
   const a = req?.bandiAuth;
@@ -421,20 +376,17 @@ export function guard(auth, req, res, url) {
   }
 
   /*
-   * 免令牌的两条：
-   *   · 加入：这台机器**还没有令牌**，凭一次性的邀请码进来（邀请码就是它的凭据，见 /api/nodes/join）。
-   *   · `GET /api/hello`（2026-10-20）：加入向导"探这个地址"打的就是它。
-   *     它**故意不带任何秘密** —— 披露的字段与 UDP 应答完全同源（设计 §5.4）。
-   * 这两条必须在令牌检查之前放行，否则新机器永远进不来 / 永远探不到。
+   * 免令牌的一条：`GET /api/hello`（2026-10-20）—— 本机自检"探这个地址"打的就是它。
+   * 它**故意不带任何秘密**。必须在令牌检查之前放行。
+   * （原来并排的 `/api/nodes/join` 豁免随多机节点子系统 2026-11-09 整体删除。）
    */
-  if (req.method === 'POST' && url.pathname === '/api/nodes/join') return true;
   if (req.method === 'GET' && url.pathname === '/api/hello') return true;
 
   /*
    * **身份中枢进门**（2026-11-06）：`GET /hub/enter?ticket=…`。
    *
    * 此刻请求手上**只有一张中枢签的票** —— 那就是它的凭据（手机壳里没有"登录表单"
-   * 这一步，它只会打开一个 URL）。与 `/api/nodes/join` 同一个模式：guard 只负责放它进来，
+   * 这一步，它只会打开一个 URL）。guard 只负责放它进来，
    * 验票、查本地授权表、发本机会话全在 `routes/hub.mjs` 里 —— 别在这里提前判，
    * 也别让这里"看起来像"在做认证。
    *
@@ -508,7 +460,13 @@ export function guard(auth, req, res, url) {
   }
 
   const got = tokenOf(req, url);
-  let who = identify(auth, got);
+  /*
+   * **运行钥匙**（2026-11-08，全员群 401 实报的修法）：数字员工进程调平台专用口时带
+   * `X-Bandi-Run-Token`（runs.mjs 注入进程环境，一次 run 一把、收尾吊销）。只从
+   * "本机直连"认（见 isDirectLocalRequest 的说明）；反代进来的请求不认。
+   */
+  const runTok = isDirectLocalRequest(req) ? String(req.headers['x-bandi-run-token'] ?? '') : '';
+  let who = identify(auth, got, runTok);
 
   /*
    * **登录会话兜底**（2026-10-28 第三刀）。
@@ -540,19 +498,11 @@ export function guard(auth, req, res, url) {
      */
     const decision = decide(who, req.method, url.pathname);
 
-    if (decision === 'E4012') {
-      res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
-      res.end(
-        JSON.stringify({
-          error: '这台机器的授权已被总机撤销（面板上「忘掉」了），退出总机后重新加入',
-          code: 'E4012',
-          platform: 'bandi',
-          hint: '在总机上重新发一个邀请码；在这台机器上：设置 →「这台机器」→ 退出总机 → 再加入。',
-        }),
-      );
-      return false;
-    }
-
+    /*
+     * E4031 保留为 policy 的**兜底拒绝**（未知身份落这里）：现实中 identify() 只会
+     * 认出 operator / run、会话兜底只给 user，这个分支不该被走到 —— 留着它，
+     * 万一将来多出一种身份，默认是拒而不是放。
+     */
     if (decision === 'E4031') {
       res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
       res.end(
@@ -561,19 +511,6 @@ export function guard(auth, req, res, url) {
           code: 'E4031',
           platform: 'bandi',
           hint: '要看设备、对话、员工，请用操作员令牌（总机数据目录 token 文件里那枚），或让总机在设备详情里给这台机器开面板权限。',
-        }),
-      );
-      return false;
-    }
-
-    if (decision === 'E4032') {
-      res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
-      res.end(
-        JSON.stringify({
-          error: '面板权限不能做管理动作（发邀请码 / 删改设备 / 改连接器与凭据 / 改模型路由 / 重启与局域网开关）',
-          code: 'E4032',
-          platform: 'bandi',
-          hint: '这些要在总机那台机器上做（它握着 token 文件里的那枚操作员令牌）。',
         }),
       );
       return false;
@@ -591,6 +528,23 @@ export function guard(auth, req, res, url) {
           code: 'E4033',
           platform: 'bandi',
           hint: '请在桌面端操作。',
+        }),
+      );
+      return false;
+    }
+
+    if (decision === 'E4034') {
+      /*
+       * 运行钥匙（数字员工的"工作证"）只开放建卡通道与只读台账 —— 见 policy.mjs 的
+       * run 分支与 route-policy 的 `run: true` 标记（2026-11-08 实报修复）。
+       */
+      res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(
+        JSON.stringify({
+          error: '运行钥匙只开放建卡通道与只读台账（状态 / 任务 / 项目 / 运行时），这个操作不归它管',
+          code: 'E4034',
+          platform: 'bandi',
+          hint: '要立项就建卡（POST /api/agent/cards）；要动别的东西，请让雇主在面板上操作。',
         }),
       );
       return false;
@@ -647,12 +601,31 @@ export function guard(auth, req, res, url) {
    * 上面两处（回环分支 / 令牌分支）早就换成同一个判据，唯独这里漏了；
    * 静态资源现在走下面的 401 JSON（`E4010`），页面照旧给登录页。
    */
+  /*
+   * 带了运行钥匙却没认出来（run 已收尾吊销 / 伪造 / 抄错）：给一句能自己判断的话。
+   * 2026-11-08 全员群实报：两个员工都被笼统的 E4010 带到"重置 BANDI_RUN_TOKEN"这条死路 ——
+   * 那枚钥匙是**每次 run 现发**的，不存在可重置的长期值。
+   */
+  if (runTok) {
+    res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end(
+      JSON.stringify({
+        error: '运行钥匙无效或已过期（每次 run 现发、run 收尾即作废；不是权限问题）',
+        code: 'E2056',
+        platform: 'bandi',
+        hint: '用本进程环境变量 BANDI_RUN_TOKEN 现取重试（PowerShell 写 $env:BANDI_RUN_TOKEN）；别复制历史命令里的值——那多半是上一轮的旧钥匙。不需要、也没法"重置 token"。',
+      }),
+    );
+    return false;
+  }
+
   const wantsHtml = wantsPanelHtml(req, url);
   if (wantsHtml) {
     /*
-     * 顺手扫掉**没法用的**访问令牌 Cookie（2026-11-01）：认不出来的根令牌 / 被吊销的
-     * 节点令牌 / 早已退场的 `bd_` 配对令牌，留在浏览器里只会在每次请求上添一次 401，
-     * 还挡在"令牌优先"那条路上。到这一步说明它已经认不出来了，清掉是安全的。
+     * 顺手扫掉**没法用的**访问令牌 Cookie（2026-11-01）：认不出来的根令牌、早已退场的
+     * `bd_` 配对令牌、`bn_` 节点令牌（2026-11-09 随多机子系统删除），留在浏览器里只会
+     * 在每次请求上添一次 401，还挡在"令牌优先"那条路上。到这一步说明它已经认不出来了，
+     * 清掉是安全的。
      */
     const staleTok = String(parseCookies(req.headers.cookie)[COOKIE] || '');
     return serveLoginOrReenter(req, res, auth, staleTok ? [clearedTokenCookie()] : []);

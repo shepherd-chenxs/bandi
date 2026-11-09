@@ -62,6 +62,20 @@ function pmCardBrief() {
     '口径：可逆的活建「待办」+ 执行人 —— 建完自动派活，不用请示；要雇主拍板的（花钱/对外/改范围）',
     '建「想法」挂着等他，或只在群里说。干完的卡会回到雇主那里验收。',
     '环境变量里没有 BANDI_RUN_TOKEN，就说明这条通道这次没开，别硬造一个。',
+    '',
+    /*
+     * 2026-11-09 全员群实报（用户："汇报没有重点…说 next 我以为他会安排，结果停掉了"）：
+     * 汇报格式必须显式约束，否则模型会把过程、证据、待办糊成一段，最后留一句 "Next:" 收尾。
+     * 同时告诉他**他能闭环**（PATCH 改卡）—— 不然"退待办/重跑"只能写成空话。
+     */
+    '【汇报口径｜结论先行】你的回话就是给雇主的简报，按麦肯锡金字塔写（完整模板见 `bandi-report` 技能）：',
+    '1. 第一行 = **结论/状态**（做完没有？没做完卡在哪），别从过程讲起；',
+    '2. 下面最多 3 条 = **依据**，每条带证据（卡号 / 运行 id / 字段 / 时间），不写"应该、可能"；',
+    '3. 最后一行 = **这一轮已经做完的动作**（建了/派了/退了/重跑了/取消了）；需要雇主拍板的单列',
+    '   「需要你拍板：…（为什么只能你定）」。',
+    '',
+    '**收尾纪律**：这轮能做的动作先做完再回话 —— 不许写一句 "Next: …" 就停（那等于把活挂在半空）。',
+    `卡的管理你有权限：PATCH ${controlUrl}/api/projects/tasks/<卡id>（可改 status / description / assigneePersonaId；带 startNow:true = 重跑）—— 只对你建的卡、或你当群助手那张团队卡；范围、验收标准、流程归属仍归雇主（面板上改）。`,
   ].join('\n');
 }
 
@@ -92,10 +106,48 @@ export function projectConstitutionBlock(projectId) {
  * 第一次发言时把员工设定带进去 —— 让会话从此记住这个人是谁。
  * 后续消息就只发用户原话，靠 runtime 自己的会话续接保持上下文。
  */
+/**
+ * 员工宪法（2026-11-09）：**全体员工通用**的工作基线，首轮注入，排在身份设定**之前**。
+ *
+ * 为什么必须有这一层（2026-11-09「数据管理 54.2M」事故复盘）：
+ *   用户把一个测量问题（"数据管理 54.2M 是什么占的，用数据说话"）派给研发工程师，
+ *   嘉辉 22 次工具调用全是 `cat store/*.mjs`，零次查库、零次 du —— 用"代码结构介绍"
+ *   顶替了数据证据，最后还被验收栏盖了"活干完了"。复盘结论：**根源是身份设定的措辞
+ *   承担了它不该承担的职责**——所有员工 instructions 都写着"别的不要揽/你只管三件事"，
+ *   而平台没有任何对冲层，身份文本成了最高法律。
+ *
+ * 修法分两层（治本，不是修个案）：
+ *   ① 这里加通用基线：测量优先、证据交付、缺条件不停摆、专长是顺序不是边界；
+ *   ② 各员工出厂指令（experts.mjs / steward.mjs）把"别的不要揽"改写成专长表述。
+ *
+ * 为什么排第一、且声明"高于身份设定"：身份块接着就说"后续对话请一直保持"，
+ * 权重天然拉满；不把宪法放在它前面并写明优先级，四条基线就会被"别的不要揽"压住。
+ *
+ * 为什么只在首轮注（firstTime）：宪法与身份一样是稳定文本，每轮重注只会白吃 token；
+ * 首轮跟着身份走同一条成员会话生命周期（resetPersonaSessions 作废后重注）。
+ */
+export function constitutionBlock() {
+  return [
+    '【工作基线 · 平台注入，优先级高于下面任何身份设定里的"只管 / 不要揽"措辞】',
+    '',
+    '1. **测量优先**。凡"多少、多大、为什么涨、谁占的"这类问题，先用命令把分布量出来再回答。',
+    '   代码结构说明回答的是"有什么"，不是"占了多少"——除非量过，或问题本身就在问结构。',
+    '2. **证据交付**。结论要带可复现的证据（命令 + 输出）。跑过就是跑过，没跑就是没跑。',
+    '3. **缺条件不停摆**。没权限、缺数据、工具被挡时，一次说清三件事：缺什么、你已经试过什么、',
+    '   下一步有哪些选项（含"你来操作、我指路"的具体指令）。只回一句"没权限 / 你贴给我"不算完成回复。',
+    '4. **专长是顺序，不是边界**。身份设定决定你先做好什么、以什么为常项，不限定你能接什么。',
+    '   超出常项的活照接——先一句声明，做完照常给证据。确有安全红线（删数据、动生产、对外发布）的，',
+    '   列出清单请雇主确认，这不算拒绝干活。',
+    '',
+  ].join('\n');
+}
+
 export function buildDirectTask(thread, text, firstTime, skillLines = [], connLines = [], brief = '') {
   if (!firstTime) return text;
 
   const parts = [];
+  // 宪法必须在身份之前（见 constitutionBlock 注释：要压得住"后续对话请一直保持"的身份块）
+  parts.push(constitutionBlock());
   const rules = (thread.personaInstructions ?? '').trim();
   if (rules) parts.push('你在本次会话中的身份与职责设定如下（后续对话请一直保持）：', '', rules, '');
   if (skillLines.length) parts.push(...skillsBlock(skillLines));
@@ -242,6 +294,8 @@ export function buildGroupTask({ thread, member, trigger, contextMessages, first
 
   if (firstTime) {
     lines.push(`你在一个项目群里。群名：${thread.title}`, '');
+    // 宪法同样排在身份之前（同 buildDirectTask，见 constitutionBlock 注释）
+    lines.push(constitutionBlock());
     lines.push('你的职责与身份设定如下（后续对话请一直保持）：', (member.instructions ?? '').trim(), '');
     if (skillLines.length) lines.push(...skillsBlock(skillLines));
     if (connLines.length) lines.push(...connectionsBlock(connLines));

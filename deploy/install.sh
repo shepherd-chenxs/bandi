@@ -78,6 +78,12 @@ mkdir -p "$PREFIX"
 cp -a "$PWD"/. "$PREFIX"/
 chmod +x "$PREFIX/node"
 
+# 随包的隧道客户端（vendor/frp/frpc）已移除（2026-11-08）：不再内置 frp。
+# 原来这里要给它补 +x，因为 Windows 上打包的 chmodSync 是空操作、tar 打出 0644，
+# 解到 Linux 上 spawn 就 EACCES —— 症状是"页面全正常、只有外网访问永远起不来"。
+# 现在没有子进程可 spawn，这条也一并没了。
+# 若你自己装 frp：让它指向本机控制面端口，公网域名写进 <数据目录>/tunnel.json。
+
 # 3. 服务用户与数据目录
 id "$SVC_USER" >/dev/null 2>&1 || useradd -r -M -s /usr/sbin/nologin "$SVC_USER" 2>/dev/null || true
 mkdir -p "$DATA"

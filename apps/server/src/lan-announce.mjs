@@ -19,7 +19,8 @@ let httpPortOfHost = 0;
 
 /**
  * 按当前形态与实际监听地址"启停"（幂等）—— 现在恒为停。
- * 参数签名保留（`allowLan`/`explicit`/`acceptNodes`/`boundHost`/`httpPort`），调用方不用改。
+ * 参数签名保留（`allowLan`/`explicit`/`boundHost`/`httpPort`），调用方不用改。
+ * （`acceptNodes` 已随多机节点子系统于 2026-11-09 退场。）
  */
 export function sync({ httpPort } = {}) {
   const port = Number(httpPort) > 0 ? Math.round(Number(httpPort)) : 0;

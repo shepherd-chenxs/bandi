@@ -7,7 +7,7 @@
  * 的活，这里有自己的一套写库逻辑就会**双份真相**（谁最后写的算谁的，出问题说不清）。
  *
  * 三条铁律：
- *   ① **只调 lifecycle / node-supervisor 的共享函数**，不自己 taskkill、不自己拼 spawn。
+ *   ① **只调 lifecycle 的共享函数**，不自己 taskkill、不自己拼 spawn。
  *      起停逻辑只有一份，壳与命令行共用 —— 这条从 `lifecycle.mjs` 第一版就在，别破。
  *   ② **绝不 import `store.mjs`**：`bandi status` 必须在"库坏了 / 库被占着 / 库还没建"
  *      的时候也能说人话。一 import 就会开库，正好在最需要它的时候炸。
@@ -19,7 +19,6 @@
  *   bandi start | stop | restart [-y]
  *   bandi url [--open]
  *   bandi logs [-n 40] [-f]
- *   bandi node                 节点状态（只读）
  *   bandi mode                 模式说明（只读，改去页面）
  *   bandi install-cli [--dir D] [--path] [--remove] [--dry-run]
  *
@@ -39,7 +38,6 @@ import { repoRoot, dataDir, dbPath, port as defaultPort, host as listenHost, cle
 import { ensureRunning, stopRunning, isUp, listeners, urlOf, openUrl, sleep, processInfo } from './lifecycle.mjs';
 import { platformVersion } from './local-mode.mjs';
 import * as netmode from './netmode.mjs';
-import { readLock, lockPath } from './node-supervisor.mjs';
 
 /* ------------------------------------------------------------------ 样式 */
 
@@ -120,7 +118,6 @@ function fmtWhen(ms) {
 const LOG_FILE = path.join(dataDir, 'server.log');
 const SERVICE_FILE = path.join(dataDir, 'service.json');
 const PORT_FILE = path.join(dataDir, 'port');
-const CFG_FILE = path.join(dataDir, 'config.json');
 
 /**
  * 记下"这次用的是哪个端口"（`<数据目录>/port`，与桌面壳同一个约定、同一个文件）。
@@ -173,34 +170,17 @@ async function detect() {
 }
 
 /**
- * 这台机器是什么身份。判据与 `config.mjs` / `netmode.mjs` 同一套（别另立一套）。
+ * 这台机器的形态。多机节点子系统（总机/分机/节点身份）已整体删除 ——
+ * 这里只剩"单机"一种形态，唯一有信息量的是监听地址钉没钉在回环上。
  *
  * 2026-11-04 起监听地址是**三层取值**（`BANDI_HOST` 环境变量 > 数据目录 config.json 的
  * `listenHost` > 缺省 `0.0.0.0`）—— 这里必须用 `config.mjs` 算好的那个，别再自己
  * `process.env.BANDI_HOST ?? '0.0.0.0'`（那样界面上改过的地址在这边看不见）。
- * 钉在回环上是调试形态，照实说"只听本机"。
  */
 function modeOf() {
-  const cp = String(readJson(CFG_FILE)?.controlPlane ?? '').trim();
-  if (cp) return { id: 'client', label: '节点（这台机器已加入总机）', detail: cp };
-  const nm = netmode.readNetMode(); // 现读：角色是运行期可切的，别用启动快照
   const where = listenHost;
   if (netmode.isLoopback(where)) return { id: 'solo', label: '单机（只听本机）', detail: where };
-  if (nm.acceptNodes) return { id: 'host', label: '总机（收别的机器当节点）', detail: where };
-  return { id: 'branch', label: '分机（不收节点）', detail: where };
-}
-
-/** 执行节点（`node.mjs`）在这台机器上跑没跑 —— 只读锁文件，不碰进程 */
-function nodeOf() {
-  const lock = readLock();
-  const meta = readJson(lockPath()) ?? {};
-  return {
-    running: !!lock.running,
-    pid: lock.pid ?? null,
-    stale: !!lock.stale,
-    controlPlane: meta.controlPlane ?? null,
-    startedAt: meta.startedAt ?? null,
-  };
+  return { id: 'solo', label: '单机（对外监听）', detail: where };
 }
 
 async function snapshot() {
@@ -219,7 +199,6 @@ async function snapshot() {
     db: { path: dbPath, size: dbSize, mtime: dbMtime },
     service: await detect(),
     mode: modeOf(),
-    node: nodeOf(),
   };
 }
 
@@ -255,15 +234,6 @@ function renderStatus(s) {
 
   row('模式', s.mode.label);
   if (s.mode.detail) out.push(`  ${' '.repeat(L)}${dim(s.mode.detail)}`);
-
-  row(
-    '节点',
-    s.node.running
-      ? `${green('在跑')}  PID ${s.node.pid}${s.node.controlPlane ? dim(` → ${s.node.controlPlane}`) : ''}`
-      : s.node.stale
-        ? `${yellow('未运行')}${dim(`（锁是上次留下的，PID ${s.node.pid} 已经不在了）`)}`
-        : dim('未运行 —— 这台机器只当控制面'),
-  );
 
   row('数据目录', s.dataDir);
   const dbNote = s.db.size ? `${fmtSize(s.db.size)} · ${fmtWhen(s.db.mtime)} 最后写入` : dim('库还没建（第一次启动时创建）');
@@ -488,26 +458,13 @@ async function doLogs({ n = 40, follow = false } = {}) {
   }
 }
 
-function doNode() {
-  const s = nodeOf();
-  if (s.running) {
-    return [
-      `节点 ${green('在跑')} · PID ${s.pid}`,
-      s.controlPlane ? `  连的是 ${s.controlPlane}` : '  （锁里没记控制面地址）',
-      s.startedAt ? dim(`  起于 ${s.startedAt}`) : '',
-    ].filter(Boolean).join('\n');
-  }
-  if (s.stale) return `节点未运行${dim(`（锁是上次留下的，PID ${s.pid} 已经不在了；下次启动会自己清掉）`)}`;
-  return '节点未运行 —— 这台机器没在给别人当算力。\n' + dim('  要当节点：在控制面页面上「这台机器 → 加入总机」，或跑 autostart 装节点守护。');
-}
-
 function doMode() {
   const m = modeOf();
   const out = [`模式：${m.label}`];
   if (m.detail) out.push(dim(`  ${m.detail}`));
   out.push('');
-  out.push(dim('  改模式不在这儿 —— 去页面「设置 → 这台机器」，那里会把"要重启才生效"'));
-  out.push(dim('  和"切过去之后怎么连"一起说清楚。命令行里切监听地址，一断就没人救得回来。'));
+  out.push(dim('  监听地址在页面「设置 → 安全 → 监听地址」改；命令行里切监听地址，'));
+  out.push(dim('  一断就没人救得回来（救急用 bandi reset-host）。'));
   return out.join('\n');
 }
 
@@ -574,80 +531,6 @@ async function needService() {
 }
 
 const errText = (r) => (r.json?.code ? `${r.json.code}：${r.json.error}` : r.text || `HTTP ${r.status}`);
-
-/* ----------------------------------------------------------------- nodes */
-
-/**
- * `bandi nodes …`（IAM Phase 3 补，2026-10-31）：算力节点的终端入口。
- *
- * 为什么必须有它：前端「算力节点管理」的加入向导在**服务器形态**下不再渲染
- * （破坏性动作按 `state.localSecret` 显隐，IAM §10.1.3）—— 藏了按钮就得给终端一条路，
- * 否则服务器形态的算力加入就是死路。走 HTTP 不写库（单写者原则，同一套 `api()`，
- * 自动带 `X-Bandi-Token` / `X-Bandi-Local` 头，`/api/local/join` 的文件秘密闸（E4097）自然过）。
- *
- * 两边视角都覆盖：
- *   · **当节点**（这台机器去给别的总机打工）：status / join / leave —— 打本机 `/api/local/*`；
- *   · **当总机**（这台机器收节点）：list / invite —— 打 `/api/nodes*`（operator 待遇）。
- */
-async function cmdNodes(argv) {
-  const words = argv.filter((a) => !a.startsWith('-'));
-  const sub = words[1] ?? 'status';
-  const svc = await needService();
-  if (svc.error) return svc.error;
-
-  if (sub === 'status') {
-    const r = await api(svc.port, { path: '/api/local/status' });
-    if (r.status !== 200) return red(errText(r));
-    const c = r.json?.client ?? {};
-    if (!c.joined) {
-      return [
-        '这台机器没加入任何总机（独立运行）',
-        c.controlPlane === '' || c.controlPlane == null ? dim('  加入：bandi nodes join <总机地址> <邀请码>') : dim(`  上次加入的是 ${c.controlPlane}`),
-      ].join('\n');
-    }
-    return [
-      `已加入总机 ${green(c.hostLabel || c.controlPlane)}`,
-      `  总机  ${c.controlPlane ?? '?'}`,
-      `  权限  ${(c.scope ?? []).join(' + ') || '?'}`,
-      `  节点  ${c.node?.running ? green(`在跑（pid ${c.node.pid}）${c.node.external ? ' · 外部托管' : ''}`) : yellow('没在跑')}${c.node?.why ? dim(`（${c.node.why}）`) : ''}`,
-      `  加入于 ${c.since ?? '?'}`,
-    ].join('\n');
-  }
-
-  if (sub === 'leave') {
-    const r = await api(svc.port, { method: 'POST', path: '/api/local/leave' });
-    if (r.status !== 200) return red(errText(r));
-    return `${green('已退出总机')}（本地数据都在）`;
-  }
-
-  if (sub === 'list') {
-    // 总机视角：登记了哪些算力节点
-    const r = await api(svc.port, { path: '/api/nodes' });
-    if (r.status !== 200) return red(errText(r));
-    const list = r.json?.nodes ?? [];
-    if (!list.length) return '还没有登记任何算力节点（在那台机器上：bandi nodes join <本机地址> <邀请码>）';
-    return [
-      dim(`  心跳 ${r.json?.heartbeatSeconds ?? '?'}s · ${r.json?.offlineAfterSeconds ?? '?'}s 无心跳算离线`),
-      ...list.map((n) =>
-        `  ${n.online ? green('●') : yellow('○')} ${n.label ?? n.id}${n.hostname && n.hostname !== n.label ? dim(`（${n.hostname}）`) : ''} · ${(n.scope ?? '').trim() || dim('无令牌')}${n.pendingJobs ? ` · 队列 ${n.pendingJobs}` : ''}${n.lastSeenAt ? dim(` · 心跳 ${n.lastSeenAt}`) : ''}`,
-      ),
-    ].join('\n');
-  }
-
-  if (sub === 'invite') {
-    const r = await api(svc.port, { method: 'POST', path: '/api/nodes/invites' });
-    if (r.status !== 200 && r.status !== 201) return red(errText(r));
-    const inv = r.json ?? {};
-    const code = inv.code ?? inv.token ?? '?';
-    return [
-      `${green('邀请码已发')}（10 分钟内有效，只用一次）：`,
-      `  ${code}`,
-      dim('  到那台机器上执行：bandi nodes join <这台机器的地址> <邀请码>'),
-    ].join('\n');
-  }
-
-  return `不认识的子命令：nodes ${sub}\n（bandi nodes status | join <地址> <邀请码> | leave | list | invite）`;
-}
 
 /* ----------------------------------------------------------------- data */
 
@@ -766,9 +649,8 @@ const ITEMS = [
       return lines.length ? lines.join('\n') : '还没有日志。';
     },
   },
-  { k: '7', label: '节点状态', run: async () => doNode() },
-  { k: '8', label: '模式说明（怎么切总机）', run: async () => doMode() },
-  { k: '9', label: '重置监听（忽略 BANDI_HOST，回到对外 0.0.0.0）', run: async (promptOf) => doResetHost(promptOf) },
+  { k: '7', label: '重置监听（忽略 BANDI_HOST，回到对外 0.0.0.0）', run: async (promptOf) => doResetHost(promptOf) },
+  { k: '8', label: '模式说明', run: async () => doMode() },
   { k: '0', label: '退出', run: async () => '', exit: true },
 ];
 
@@ -826,14 +708,7 @@ const HELP = `班底 · 命令行
   bandi stop               停掉班底自己的服务（不碰别人的进程）
   bandi url [--open]       访问地址
   bandi logs [-n 40] [-f]  日志（-f 跟着走）
-  bandi node               执行节点状态（只读）
-  bandi mode               这台机器是什么身份（只读；改模式去页面）
-  bandi nodes [status]     算力节点：这台机器给哪台总机打工
-  bandi nodes join <总机地址> <邀请码>
-                           加入总机（只当算力；邀请码在总机上 bandi nodes invite 发）
-  bandi nodes leave        退出总机
-  bandi nodes list         （总机视角）登记了哪些算力节点、在不在线
-  bandi nodes invite       （总机视角）发一个一次性加入邀请码
+  bandi mode               这台机器的形态（只读；监听地址去页面改）
   bandi hub [status]       身份中枢：登录状态与影子账号绑定表
   bandi hub leave          退出中枢（本地数据一个字节没动）
   bandi data export [--dir 目录]
@@ -923,19 +798,9 @@ async function main() {
       return 0;
     }
 
-    case 'node':
-      console.log(doNode());
-      return 0;
-
     case 'mode':
       console.log(doMode());
       return 0;
-
-    case 'nodes': {
-      const out = await cmdNodes(argv);
-      console.log(out);
-      return /^用法|不认识的子命令/.test(out) ? 2 : 0;
-    }
 
     case 'hub': {
       const out = await cmdHub(argv);

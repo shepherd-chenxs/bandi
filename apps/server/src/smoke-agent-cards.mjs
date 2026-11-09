@@ -1,7 +1,7 @@
 /**
  * 项目经理「建卡通道」的验收（2026-10-24 主理人拍板：只有项目经理岗位能建卡）。
  *
- * 钉住五件事：
+ * 钉住这些事：
  *   ① 没钥匙 / 假钥匙 → 401（E2056）—— 通道不是谁都能敲；
  *   ② 项目经理建「想法」卡 → 建成、记创建人、不派活（等雇主拍板）；
  *   ③ 项目经理建「待办」+ 执行人 → 建成并**自动派活**，跑完收「待验收」；
@@ -10,7 +10,9 @@
  *   ⑤ 建卡走的是与人手建卡同一条链路（startProjectTask → dispatchToThread），
  *      所以 ③ 的执行痕迹、状态机与人建的卡一模一样；
  *   ⑥ 卡片回执（2026-10-24）：③ 的执行人跑完、卡收「待验收」时，建卡会话收到【卡片回执】
- *      且贺韬被唤醒 —— "有产出我再回你"的承诺有通道兑现。
+ *      且贺韬被唤醒 —— "有产出我再回你"的承诺有通道兑现；
+ *   ⑦ 幂等键（2026-11-09 重复建卡实报）：同一张卡重发 → 只建一张、第二次 200 dedup；
+ *   ⑧ 批量口：一次建一批、整批重发全部幂等、一张不合格整批拒（不留半批）。
  *
  * 用 fixtures/fake-agent.js 当运行时（BANDI_FAKE_CREATE_CARD=1 时遇【建卡】标记真调接口）。
  * 隔离：临时数据目录 + 临时端口 + 临时项目目录。
@@ -202,6 +204,55 @@ try {
   check('被拒（403 E2057）', /FAKE-CARD:403:E2057/.test(devTry.reply), devTry.reply.match(/FAKE-CARD:\S+/)?.[0] ?? devTry.reply.slice(-80));
   check('拒绝话里说清了找谁', devTry.reply.includes('只有项目经理岗位能建任务卡'), devTry.reply.match(/FAKE-CARD:\S+/)?.[0] ?? '');
   // 403 是服务端在 createProjectTask 之前就返回的 —— 卡根本没建，无需再查库
+
+  /*
+   * 2026-11-09 **重复建卡实报**的回归钉（贺韬一轮里把 5 张卡发了两遍，看板多出 10 张）：
+   * 病根是"建卡不幂等 + 没有批量口"，重试就重复。三条钉在这里：
+   *   ⑤ 单卡带 idempotencyKey 重发 → 只建一张、第二次回 200 dedup；
+   *   ⑥ 批量口一次建一批；整批重发全部命中幂等；
+   *   ⑦ 批量里一张不合格 → 整批拒，不留"半批"。
+   */
+  console.log('\n⑤ 幂等键：同一张卡重发 → 只建一张');
+  const idemBody = `{"title":"幂等卡甲","status":"想法","projectId":"${project.id}","idempotencyKey":"smoke-idem-a"}`;
+  const i1 = await talk(pmConv, `【建卡】${idemBody} 第一次`);
+  const i2 = await talk(pmConv, `【建卡】${idemBody} 重发一次`);
+  check('第一次建成（201）', /FAKE-CARD:201:pt-[a-z0-9]+:想法/.test(i1.reply), i1.reply.match(/FAKE-CARD:\S+/)?.[0] ?? '');
+  check('重发命中幂等（200 + dedup）', /FAKE-CARD:200:pt-[a-z0-9]+:想法:dedup/.test(i2.reply), i2.reply.match(/FAKE-CARD:\S+/)?.[0] ?? '');
+  const idemId1 = i1.reply.match(/FAKE-CARD:201:(pt-[a-z0-9]+)/)?.[1];
+  const idemId2 = i2.reply.match(/FAKE-CARD:200:(pt-[a-z0-9]+)/)?.[1];
+  check('两次返回的是同一张卡', !!idemId1 && idemId1 === idemId2, `${idemId1} / ${idemId2}`);
+  const idemOcc = ((await boardText(project.id)).match(new RegExp(`"manual_id":"${idemId1}"`, 'g')) ?? []).length;
+  check('看板上只有一张（没有重复建）', idemOcc === 2, `出现 ${idemOcc} 次（1 张卡 = 2 次）`);
+
+  console.log('\n⑥ 批量口：一次建一批，整批重发全部幂等');
+  const batchBody = {
+    projectId: project.id,
+    cards: [
+      { title: '批量卡甲', description: 'x', status: '想法', idempotencyKey: 'smoke-batch-a' },
+      { title: '批量卡乙', description: 'y', status: '想法', idempotencyKey: 'smoke-batch-b' },
+    ],
+  };
+  const b1 = await talk(pmConv, `【批量建卡】${JSON.stringify(batchBody)} 建两张`);
+  const b2 = await talk(pmConv, `【批量建卡】${JSON.stringify(batchBody)} 整批重发`);
+  check('批量建成（201，两张）', /FAKE-BATCH:201:2:0/.test(b1.reply), b1.reply.match(/FAKE-BATCH:\S+/)?.[0] ?? '');
+  check('整批重发命中幂等（200，2/2 去重）', /FAKE-BATCH:200:2:2/.test(b2.reply), b2.reply.match(/FAKE-BATCH:\S+/)?.[0] ?? '');
+  const bJson = await boardText(project.id);
+  // 看板里手工卡的标题字段是 `task`（不是 title，见 project-tasks.mjs 的 manualShape）
+  const occ = (s) => (bJson.match(new RegExp(`"task":"${s}"`, 'g')) ?? []).length;
+  check('两张卡各只建了一张', occ('批量卡甲') === 2 && occ('批量卡乙') === 2, `甲 ${occ('批量卡甲')} 次 / 乙 ${occ('批量卡乙')} 次（1 张 = 2 次）`);
+
+  console.log('\n⑦ 批量口：一张不合格 → 整批拒（不留半批）');
+  const badBatch = {
+    projectId: project.id,
+    cards: [
+      { title: '半批卡甲', status: '想法', idempotencyKey: 'smoke-bad-a' },
+      { title: '半批卡乙', status: '乱来状态', idempotencyKey: 'smoke-bad-b' },
+    ],
+  };
+  const bad = await talk(pmConv, `【批量建卡】${JSON.stringify(badBatch)} 建两张`);
+  check('整批被拒（400 E2058）', /FAKE-BATCH:400:0:0:E2058/.test(bad.reply), bad.reply.match(/FAKE-BATCH:\S+/)?.[0] ?? '');
+  check('不合格的是第 2 张', bad.reply.includes('第 2 张卡不合格'), bad.reply.match(/FAKE-BATCH:[^\n]*/)?.[0]?.slice(0, 160) ?? '');
+  check('第一张也没被建出来（整批回滚）', !(await boardText(project.id)).includes('半批卡甲'), '');
 } catch (err) {
   console.log('\n跑挂了：' + String(err?.message ?? err) + '\n' + slog.slice(-800));
   failed += 1;

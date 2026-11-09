@@ -27,6 +27,9 @@ const rel = (p) => path.relative(repo, p).split(path.sep).join('/');
 /** 要跑的：都不碰真实 data/、不要真实 CLI、不联网 */
 const RUN = [
   'apps/server/src/smoke-agent-cards.mjs',
+  // 运行钥匙（"工作证"）在**强制鉴权形态**下的建卡通道 + 只读台账（2026-11-08 实报补：
+  // 真机监听 0.0.0.0 时认证层不认 X-Bandi-Run-Token，PM/助理双双 401）。纯策略 + 端到端。
+  'apps/server/src/smoke-run-credential.mjs',
   // IAM 安全收编（Phase 1–3）的 6 个用例（2026-11-02 补登记）：策略表 / 审计 / CSRF /
   // 本机策略 / 反代鉴权 / 安全策略，全部临时数据目录、不联网
   // （bootstrap 与票据两条随 2026-11-07 本地账号退场删除 —— 被测机制没了，用例跟着删）
@@ -50,24 +53,26 @@ const RUN = [
   'apps/server/src/smoke-conversation-delete.mjs',
   'apps/server/src/smoke-events.mjs',
   'apps/server/src/smoke-data-dir.mjs',
+  // 数据库迁移（2026-11-08 结构版本号机制落地时补）：老库打开一次就收到当前形态、
+  // 再开一次什么都不变。第一条钉的是 v1→v2 清掉回话消息的 meta.progress（过程收起行砍掉）。
+  'apps/server/src/smoke-db-migration.mjs',
   'apps/server/src/smoke-experts.mjs',
   'apps/server/src/smoke-feishu.mjs',
   'apps/server/src/smoke-git-repos.mjs',
   'apps/server/src/smoke-group-dissolve.mjs',
   'apps/server/src/smoke-group-mentions.mjs',
-  'apps/server/src/smoke-lan-join.mjs',
+  // 团队协作（派给群）：群助手必须是 PM、动态现读群助手、子卡授权/回执（2026-11-09）
+  'apps/server/src/smoke-group-tasks.mjs',
+  // 汇报技能 bandi-report：结论先行口径、上游 MIT 出处、专家包默认挂载、平台注入指向它
+  'apps/server/src/smoke-report-skill.mjs',
   'apps/server/src/smoke-lan-origin.mjs',
   'apps/server/src/smoke-lifecycle.mjs',
-  'apps/server/src/smoke-node.mjs',
-  'apps/server/src/smoke-node-jobs.mjs',
-  'apps/server/src/smoke-node-panel.mjs',
-  'apps/server/src/smoke-node-task.mjs',
   // 身份中枢进门（2026-11-06）：验票九类负样本 + /hub/enter 正路 + 本地授权表 + 服务器形态
   // 不联网（票是本地现签的假票，只验"主机这一侧"的逻辑）
   'apps/server/src/smoke-hub.mjs',
-  // 外网访问的机器侧（2026-11-07）：relay 配置 → frpc.toml → 子进程生命周期 → 两道闸放行。
-  // 用假 frpc（.mjs）验，不联网、不装 frp
-  'apps/server/src/smoke-tunnel.mjs',
+  // 外网隧道（2026-11-07 接入 / 2026-11-08 下线）：smoke-tunnel.mjs 随 frp 内置一起删了。
+  // 不是不测 —— 已没有可测的东西：bandi 不再起隧道进程，只剩 hub/relay.mjs 读域名，
+  // 那两道闸（Host / Origin）由 smoke-lan-origin.mjs 覆盖，别在这里补一个空壳。
   'apps/server/src/smoke-personas.mjs',
   'apps/server/src/smoke-plugin-blocks.mjs',
   'apps/server/src/smoke-pr-create.mjs',

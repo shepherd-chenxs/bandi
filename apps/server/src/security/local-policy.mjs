@@ -12,10 +12,6 @@
  * 纯逻辑：不 import store、不写 SQL、不碰 DOM —— 所以可以被 smoke 用例直接穷举。
  */
 
-/** 与 `store.SCOPE_PANEL` 同一个字面量。**故意不 import store**：那个模块一加载就开库，
- *  这条判定不该为了一个字符串把数据库拖进来（smoke 用例也要能在空目录里跑）。 */
-const SCOPE_PANEL = 'panel';
-
 /**
  * `secret` 三档（与 IAM §8.3 一致，和来源正交）：
  *   · `'never'`   —— 只读接口，任何来源都不要秘密；
@@ -50,8 +46,6 @@ export const LOCAL_POLICY = [
   { method: 'POST', path: '/api/local/hosts/test', principals: ['operator', 'admin'], secret: 'network' },
   { method: 'POST', path: '/api/local/hosts/remove', principals: ['operator', 'admin'], secret: 'network' },
   { method: 'POST', path: '/api/local/probe', principals: ['operator', 'admin'], secret: 'network' },
-  { method: 'POST', path: '/api/local/join', principals: ['operator', 'admin'], secret: 'network' },
-  { method: 'POST', path: '/api/local/leave', principals: ['operator', 'admin'], secret: 'network' },
 ];
 
 /**
@@ -63,10 +57,6 @@ export function principalKind(auth) {
   if (auth.kind === 'operator') return 'operator';
   // 登录用户 = 全权（2026-11-07 角色体系退场）：与 operator 同档对待
   if (auth.kind === 'user') return 'admin';
-  if (auth.kind === 'node') {
-    const scope = auth.scope instanceof Set ? auth.scope : new Set();
-    return scope.has(SCOPE_PANEL) ? 'panel' : 'compute';
-  }
   return 'anonymous';
 }
 

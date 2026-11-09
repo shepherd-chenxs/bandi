@@ -86,33 +86,58 @@ description: 项目经理的岗位方法论 —— 拆活、盯进度、验收�
 - `BANDI_CONTROL_URL`：控制面地址；
 - `BANDI_RUN_TOKEN`：这次运行的钥匙（run 结束就作废；没有它 = 这条通道这次没开，别硬造）。
 
-**怎么建**（两步走，请求体必须落成文件）：
+> **每轮现取，不许抄死**（2026-11-08 实报）：钥匙每轮都换，上一轮的已经作废。命令里写
+> `$env:BANDI_RUN_TOKEN`（PowerShell）/ `$BANDI_RUN_TOKEN`（bash）**现场取** —— 别把上一次命令
+> 里出现的字面值复制回来。看到 `401 E2056` = 用了旧/错钥匙：重取一次重试即可，
+> **不是没权限，也不要让雇主"重置 token"**（那东西不能重置）。`403 E4034` = 这个接口不归
+> 运行钥匙管（只有建卡和只读台账可以）。
 
-第 1 步，用**写文件工具**把请求体存成 UTF-8 的 JSON 文件（放系统临时目录，发完删掉）：
+**怎么建（2026-11-09 起：一次一批 + 幂等键）**：
+
+拆完一批活，**一次请求建一批**；每张卡带一个稳定的 `idempotencyKey`（同一件事每次重发都用同一个值，比如 `code-comments-english`）。同一项目下同一个 key = 同一张卡：重发只会返回已有卡（`deduped: true`），**不会建出第二张**。
+
+第 1 步，用**写文件工具**把整批请求体存成 UTF-8（无 BOM）的 JSON 文件（放临时目录，发完删掉）：
 
 ```json
-{ "projectId": "…", "title": "一句话说清要做什么",
-  "description": "边界、做成什么样算完、参照哪个文件",
-  "assigneePersonaId": "…（可省略）", "status": "待办" 或 "想法" }
+{ "projectId": "…",
+  "cards": [
+    { "title": "一句话说清要做什么", "description": "边界、做成什么样算完、参照哪个文件",
+      "assigneePersonaId": "…（可省略）", "status": "待办" 或 "想法",
+      "idempotencyKey": "code-comments-english" }
+  ] }
 ```
 
-第 2 步，从文件原样发送：
+第 2 步，从文件原样发送（**按你所在的 shell 选一种**）：
 
+```powershell
+# PowerShell（Windows）：-InFile 原样上传字节，不会按代码页转码
+Invoke-WebRequest -Uri "$env:BANDI_CONTROL_URL/api/agent/cards/batch" -Method POST `
+  -Headers @{ 'X-Bandi-Run-Token' = $env:BANDI_RUN_TOKEN; 'X-Bandi' = '1'; 'Content-Type' = 'application/json; charset=utf-8' } `
+  -InFile "$env:TEMP\cards.json" -UseBasicParsing
 ```
-curl -s -X POST "$BANDI_CONTROL_URL/api/agent/cards" \
-  -H "X-Bandi-Run-Token: <你的 BANDI_RUN_TOKEN>" \
-  -H "Content-Type: application/json" \
-  --data-binary @card.json
+
+```bash
+# bash / git-bash
+curl -s -X POST "$BANDI_CONTROL_URL/api/agent/cards/batch" \
+  -H "X-Bandi-Run-Token: $BANDI_RUN_TOKEN" -H "Content-Type: application/json" \
+  --data-binary @cards.json
 ```
 
-**为什么必须走文件**：把中文直接写进命令行参数（`curl -d '{"title":"…中文…"}'`），Windows 的
-cmd/PowerShell 会按本地代码页转码，中文全变「?」—— 卡面就花了，还救不回来。
-`--data-binary @文件` 是原样上传字节，不走这条坑。
+单张卡也可以走 `POST /api/agent/cards`（body 就是一张卡的字段，同样收 `idempotencyKey`）。一批最多 20 张。
 
-**自检**：回包里 `task.title` 出现「?」＝ 请求体被转码了，确认走的是文件方式再重发；
-卡已建重复的话删掉多余那张。
+**为什么必须走文件**：把中文直接塞进命令行参数，Windows 会按本地代码页转码，中文全变「?」。
+另外**别用 `Out-File -Encoding utf8` 写这个文件**（PowerShell 5.x 会加 BOM，服务端解析 body 会直接 400）——
+用平台的写文件工具，它写的是无 BOM UTF-8。
 
-项目清单用 `GET /api/projects`（拿 id / 目录 / 成员）。
+**报错了怎么办（2026-11-09 实报教训：一轮里整批发了两遍，多出 10 张卡）**：
+
+- 先读响应体的 `code` 再动手：`E2058` = 状态不对（只能「待办」「想法」）；`E2059` = 项目 / 标题 / 执行人不对；`E2057` = 你的岗位不能建卡（找项目经理）。
+- **400 之后不要整批重发**：客户端报错 ≠ 服务端没建。先 `GET /api/tasks` 或 `GET /api/projects/<id>/tasks` 查那批卡在不在。
+- 真要重发，**同一批 `idempotencyKey` 再发一次是安全的**（命中幂等、不会多建）——所以每张卡必须带稳定 key，这是你重试的底气。
+- 批量校验是**整批**的：一批里有一张不合格（状态 / 项目 / 执行人），整批都不会建；改好再发。
+- 回包里 `tasks[].deduped: true` / `deduped: N` = 这些是幂等命中，**不是新卡**，汇报时别当成新建立。
+
+项目清单用 `curl -s -H "X-Bandi-Run-Token: $BANDI_RUN_TOKEN" "$BANDI_CONTROL_URL/api/projects"`（拿 id / 目录 / 成员；同样是这次运行的钥匙）。
 
 **口径（跟拍板阶梯一回事）**：
 
@@ -122,3 +147,24 @@ cmd/PowerShell 会按本地代码页转码，中文全变「?」—— 卡面就
 4. 干完的卡自动回到「待确认」等雇主验收 —— 你不用替他点通过，也不许。
 
 **建完之后**：卡的状态、执行痕迹都在看板上，盯进度就拿卡说话（见二）。群里只报一行 —— 建了 N 张、分别给谁；拆活细节都在卡上，**不要在聊天里复述一遍**。
+
+**团队协作（2026-11-09）**：一张卡也可以**派给一个群**（建卡时带 `assigneeGroupId`，不指定执行人）——
+执行时由那个群的**群助手**（必须项目经理岗，平台现读、换人自动跟随）承接：它拆子卡（带
+`parentTaskId`，只能派本群成员、不能派给自己）、盯回执、把结果汇总回主卡。子卡到「待验收/阻塞/失败」
+会唤醒群助手，不叫醒建卡人。
+
+## 九、汇报：结论先行，别把活挂在"Next"（2026-11-09 实报）
+
+> 完整模板、坏例/好例、常见错误在技能 **`bandi-report`**（专家包默认已挂）；下面是硬规则摘要。
+
+给雇主/群的回话是**简报**，不是日志。按麦肯锡金字塔写：
+
+1. **第一行 = 结论**：做完没有？没做完卡在哪（一句话说清，别从过程讲起）。
+2. **中间最多 3 条 = 依据**，每条带证据（卡号、运行 id、字段、时间）；不写"应该/可能/大概"。
+3. **最后一行 = 动作**：只列**这一轮你已经做完**的（建了/派了/退了/重跑了/取消了）。
+   需要雇主拍板的单列：「需要你拍板：…（为什么只能你定）」。
+4. **不允许以 "Next:" 收尾**：这轮能做的动作先做完；真做不了就写"做不了：…（缺什么）"，
+   要等就写"在等：…（等什么、下一轮盯什么）"——不许默默停。
+
+**你有权闭环**：`PATCH /api/projects/tasks/<卡id>`（可改 `status` / `description` / `assigneePersonaId`；
+带 `startNow:true` = 重跑）—— 只对你建的卡、或你当群助手那张团队卡；范围、验收标准、流程归属仍归雇主。

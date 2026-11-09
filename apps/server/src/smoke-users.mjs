@@ -8,9 +8,10 @@
  *   ① 登录页只有一张：中枢账号密码表单（action="/hub/login"），零账号也是它；
  *   ② 首次登录：中枢认人 → 绑本机用户 → 发 bandi_sid（ hub 这条路是**唯一**真路，
  *      用假中枢 hub-stub.mjs 起一个，把 hub.json 指过去）；
- *   ③ /api/me = { kind:'user', user:{id,name} } —— 没有任何角色 / 菜单字段；
+ *   ③ /api/me = { kind:'user', user:{id,name,nickname,hub} } —— 没有任何角色 / 菜单字段；
  *   ④ 本地账号只是影子：POST /api/users 只收 name，第一个账号自动 builtin；
- *      PATCH 只认 name / disabled；内置账号不可删不可禁（E3808）；
+ *      PATCH 只认 name / nickname / disabled；内置账号不可删不可禁（E3808）；
+ *   ⑤ 昵称：PATCH 改 / 清空（空白 = 清除）/ 超长拦下，且**不动账号名**（署名不受影响）；
  *   ⑤ 退出登录：会话真删（回环退回 operator，不是还挂着一个 user）；
  *   ⑥ 安全接口只认会话里的身份 —— operator（机器凭据）打 /api/security/* → 401 E3810；
  *   ⑦ 会话落库：重启（顺手换成服务器形态）后原 Cookie 仍有效，死票 / 伪造票一律 401。
@@ -188,8 +189,8 @@ try {
   check('GET /api/users → 200（回环 operator 免登录）', users0.status === 200, String(users0.status));
   check('hasUsers:true，正好两个账号', users0.body?.hasUsers === true && users0.body?.users?.length === 2,
     JSON.stringify(users0.body?.users?.map((u) => u.name)));
-  const ALLOWED = new Set(['id', 'name', 'builtin', 'disabled', 'createdAt', 'updatedAt']);
-  check('列表字段只有 id/name/builtin/disabled/createdAt/updatedAt（无凭据字段）',
+  const ALLOWED = new Set(['id', 'name', 'nickname', 'builtin', 'disabled', 'createdAt', 'updatedAt']);
+  check('列表字段只有 id/name/nickname/builtin/disabled/createdAt/updatedAt（无凭据字段）',
     (users0.body?.users ?? []).every((u) => Object.keys(u).every((k) => ALLOWED.has(k))),
     JSON.stringify(Object.keys(users0.body?.users?.[0] ?? {})));
 
@@ -238,12 +239,13 @@ try {
   const meA = await call('GET', '/api/me', { cookie: sidA });
   check('/api/me → kind:user', meA.body?.kind === 'user', `${meA.status} ${JSON.stringify(meA.body ?? {})}`);
   // 本机名条的名字**随中枢对齐**（登录时自动改名）：老板 → 甲；hub = 绑着的中枢账号
-  check('user = id + name + hub（名字已对齐中枢，无角色 / 凭据字段）', (() => {
+  check('user = id + name + nickname + hub（名字已对齐中枢，无角色 / 凭据字段）', (() => {
     const u = meA.body?.user;
     if (!u) return false;
     const ks = Object.keys(u);
-    return ks.length === 3 && ks.includes('id') && ks.includes('name') && ks.includes('hub')
-      && u.name === '甲' && u.hub === '甲';
+    return ks.length === 4 && ks.includes('id') && ks.includes('name')
+      && ks.includes('nickname') && ks.includes('hub')
+      && u.name === '甲' && u.hub === '甲' && u.nickname === null;
   })(), JSON.stringify(meA.body?.user ?? {}));
   const meAId = meA.body?.user?.id;
 
@@ -259,6 +261,26 @@ try {
   check('不回中枢侧凭据（无 deviceToken / publicKey 之类）',
     !!hub0?.[0] && !Object.keys(hub0[0]).some((k) => /token|secret|key/i.test(k)),
     JSON.stringify(Object.keys(hub0?.[0] ?? {})));
+
+  /* ============ ⑤c 昵称：PATCH 改 / 清空 / 超长，且不动账号名 ============ */
+  console.log('\n⑤c 昵称：PATCH 改 / 清空 / 超长拦下，账号名与署名不受影响');
+  const nick1 = await call('PATCH', `/api/users/${encodeURIComponent(meAId)}`, { cookie: sidA, body: { nickname: '  老  板  ' } });
+  check('PATCH nickname → 200，空白归一成「老 板」', nick1.status === 200 && nick1.body?.user?.nickname === '老 板',
+    `${nick1.status} ${JSON.stringify(nick1.body?.user?.nickname ?? null)}`);
+  const meNick = await call('GET', '/api/me', { cookie: sidA });
+  check('/api/me 带出昵称（「我的」页身份卡的数据源）', meNick.body?.user?.nickname === '老 板',
+    JSON.stringify(meNick.body?.user ?? {}));
+  check('昵称**不改账号名**（名字还是甲，署名不受影响）', meNick.body?.user?.name === '甲',
+    String(meNick.body?.user?.name));
+  const nickLong = await call('PATCH', `/api/users/${encodeURIComponent(meAId)}`, { cookie: sidA, body: { nickname: '一'.repeat(21) } });
+  check('超过 20 个字 → 400 E3813', nickLong.status === 400 && nickLong.body?.code === 'E3813',
+    `${nickLong.status} ${nickLong.body?.code ?? ''}`);
+  const nickClear = await call('PATCH', `/api/users/${encodeURIComponent(meAId)}`, { cookie: sidA, body: { nickname: '   ' } });
+  check('空白 = 清除（nickname 落成 null，界面退回手机号）', nickClear.status === 200 && nickClear.body?.user?.nickname === null,
+    `${nickClear.status} ${JSON.stringify(nickClear.body?.user?.nickname ?? null)}`);
+  const meAfterClear = await call('GET', '/api/me', { cookie: sidA });
+  check('清空后 /api/me 的 nickname 也是 null', meAfterClear.body?.user?.nickname === null,
+    String(meAfterClear.body?.user?.nickname));
 
   /* ============ ⑥ 退出登录 ============ */
   console.log('\n⑥ 退出登录：会话真删（回环退回 operator）');

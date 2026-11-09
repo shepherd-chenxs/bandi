@@ -1,8 +1,8 @@
 /**
- * 「开机自启」的验收（2026-10-16）。
+ * 「开机自启」的验收（2026-10-16；2026-11-09 多机子系统删除后只剩 control-plane 一个目标）。
  *
- * **跨平台的契约**：装了什么、能不能删、幂等、不认的目标要报错、节点用**它自己的**数据目录、
- * 没令牌要警告、status 报的是**已装的那份**而不是按环境变量现算。
+ * **跨平台的契约**：装了什么、能不能删、幂等、不认的目标要报错、数据目录写死进脚本、
+ * status 报的是**已装的那份**而不是按环境变量现算。
  * 平台特有的部分（Windows 的 .vbs/.cmd 与 ASCII 坑、Linux 的 systemd 单元）各按分支验。
  *
  * 为什么强调跨平台：第一版只写了 Windows 分支，拿到 ThinkPad（Linux）上一跑 5 项红 ——
@@ -26,17 +26,13 @@ const MAC = process.platform === 'darwin';
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bandi-autostart-'));
 const HOME = path.join(tmp, 'home');
 const DATA = path.join(tmp, 'data');
-const NDATA = path.join(tmp, 'ndata');
 fs.mkdirSync(HOME, { recursive: true });
-// 节点的数据目录不跟着 home 走（它属于"这台机器"），要指进临时目录就用官方开关
-process.env.BANDI_NODE_DATA = NDATA;
-const CP = 'http://10.0.0.9:8787';
 /*
- * ⚠️ `noSystem: true` 是**必须的**（2026-10-16 踩到）：单元名是固定的 `bandi-node.service`，
- * 用例里一跑 `systemctl --user disable --now bandi-node`，就会把**这台机器上真正在跑的服务停掉** ——
+ * ⚠️ `noSystem: true` 是**必须的**（2026-10-16 踩到）：单元名是固定的 `bandi-control-plane.service`，
+ * 用例里一跑 `systemctl --user disable --now bandi-control-plane`，就会把**这台机器上真正在跑的服务停掉** ——
  * 验证代码顺手把生产环境改了。开了这个开关，用例只生成文件，不碰系统。
  */
-const opt = { home: HOME, dataDir: DATA, repoRoot: process.cwd(), nodeBin: process.execPath, controlPlane: CP, noSystem: true };
+const opt = { home: HOME, dataDir: DATA, repoRoot: process.cwd(), nodeBin: process.execPath, noSystem: true };
 
 let failed = 0;
 const check = (label, ok, detail = '') => {
@@ -76,45 +72,44 @@ try {
   let st = autostart.status(opt);
   check('状态报"未装"', st.targets.every((t) => !t.installed), st.targets.map((t) => `${t.id}=${t.installed}`).join(' '));
   check('说清了走哪种方式', !!st.backend, st.backend);
+  check('目标清单只剩 control-plane（节点自启随多机子系统删了）',
+    autostart.TARGETS.length === 1 && autostart.TARGETS[0] === 'control-plane', autostart.TARGETS.join(','));
 
-  console.log('\n② 装两个目标');
+  console.log('\n② 装目标（all = control-plane 一份）');
   const done = autostart.install('all', opt);
-  check('两个都装了', done.length === 2, done.map((d) => d.id).join(','));
+  check('装了', done.length === 1 && done[0].id === 'control-plane', done.map((d) => d.id).join(','));
   st = autostart.status(opt);
-  check('status 也认（两个都 installed）', st.targets.every((t) => t.installed), st.targets.map((t) => `${t.id}=${t.installed}`).join(' '));
+  check('status 也认（installed）', st.targets.every((t) => t.installed), st.targets.map((t) => `${t.id}=${t.installed}`).join(' '));
   check('给出了装在哪', st.targets.every((t) => t.where && t.where.length > 5), st.targets[0].where);
   // 文件层面的存在性：按后端分支
   if (WIN) {
-    check('两份 .cmd 都在', ['node', 'control-plane'].every((id) => fs.existsSync(winCmd(id))));
-    check('两个 .vbs 进了 Startup', ['node', 'control-plane'].every((id) => fs.existsSync(winVbs(id))));
+    check('.cmd 在', fs.existsSync(winCmd('control-plane')));
+    check('.vbs 进了 Startup', fs.existsSync(winVbs('control-plane')));
   } else if (MAC) {
-    check('plist 都在', ['node', 'control-plane'].every((id) => fs.existsSync(macPlist(id))));
+    check('plist 在', fs.existsSync(macPlist('control-plane')));
   } else if (st.backend === 'systemd-user') {
-    check('两个 systemd 单元都在', ['node', 'control-plane'].every((id) => fs.existsSync(unitPath(id))));
+    check('systemd 单元在', fs.existsSync(unitPath('control-plane')));
   } else {
-    check('两个 crontab 兜底脚本都在', ['node', 'control-plane'].every((id) => fs.existsSync(cronScript(id))));
-    check('crontab 里两条都在', ['node', 'control-plane'].every((id) => crontabHas(id)));
+    check('crontab 兜底脚本在', fs.existsSync(cronScript('control-plane')));
+    check('crontab 里有一条', crontabHas('control-plane'));
   }
 
   console.log('\n③ 内容：路径、环境、重启策略');
-  const nodeText = contentOf('node', st.backend);
-  check('指向这台机器的 node', nodeText.includes(process.execPath));
-  check('指向本仓的 node.mjs', nodeText.includes(path.join('apps', 'server', 'src', 'node.mjs')));
-  check('带上了控制面地址', nodeText.includes(CP));
+  const cpText = contentOf('control-plane', st.backend);
+  check('指向这台机器的 node', cpText.includes(process.execPath));
+  check('入口是本仓的 start.mjs', cpText.includes('start.mjs'));
   /*
-   * ⚠️ 节点用的是**它自己的**数据目录，不是控制面那个 —— 2026-10-16 实测：
-   * 一开始两者共用一个目录，节点在仓库 data/ 里找不到令牌，一起来就被 401 挡回去。
+   * ⚠️ **数据目录必须写死进脚本**（2026-10-16 修的真 bug）：不写的话自启那份控制面
+   * 会落回仓库默认 data/，与桌面壳的目录分裂成两个实例、两个库。
    */
-  const dataLine = (nodeText.match(/BANDI_DATA=.*/) ?? [''])[0];
-  check('节点用**自己的**数据目录（不是控制面那个）', !nodeText.includes(`BANDI_DATA=${DATA}`), dataLine.trim());
-  check('走的是 BANDI_NODE_DATA 指的那个目录', nodeText.includes(`BANDI_DATA=${NDATA}`), dataLine.trim());
+  const dataLine = (cpText.match(/BANDI_DATA=.*/) ?? [''])[0];
+  check('数据目录写死为传入的那份（不是仓库默认）', cpText.includes(`BANDI_DATA=${DATA}`), dataLine.trim());
   if (WIN) {
-    check('有重启循环（cmd 里 :again / goto）', /:again/.test(nodeText) && /goto again/.test(nodeText));
-    check('控制面那条带 BANDI_NO_BROWSER=1（开机别弹浏览器）', contentOf('control-plane', st.backend).includes('BANDI_NO_BROWSER=1'));
+    check('控制面那条带 BANDI_NO_BROWSER=1（开机别弹浏览器）', cpText.includes('BANDI_NO_BROWSER=1'));
   } else if (st.backend === 'systemd-user') {
-    check('systemd 单元有 Restart=always（崩了自己回来）', /Restart=always/.test(nodeText));
-    check('systemd 单元有 RestartSec', /RestartSec=\d+/.test(nodeText));
-    check('控制面那条带 BANDI_NO_BROWSER=1', contentOf('control-plane', st.backend).includes('BANDI_NO_BROWSER=1'));
+    check('systemd 单元有 Restart=always（崩了自己回来）', /Restart=always/.test(cpText));
+    check('systemd 单元有 RestartSec', /RestartSec=\d+/.test(cpText));
+    check('控制面那条带 BANDI_NO_BROWSER=1', cpText.includes('BANDI_NO_BROWSER=1'));
   }
 
   /*
@@ -123,59 +118,42 @@ try {
    */
   if (WIN) {
     console.log('\n④ 生成物必须**纯 ASCII**（不然 wscript 会吃掉换行、自启静默失效）');
-    for (const id of ['node', 'control-plane']) {
-      check(`${id}.cmd 无非 ASCII 字节`, nonAscii(winCmd(id)) === 0, String(nonAscii(winCmd(id))));
-      check(`${id}.vbs 无非 ASCII 字节`, nonAscii(winVbs(id)) === 0, String(nonAscii(winVbs(id))));
-      check(`${id}.vbs 指向对应的 cmd`, read(winVbs(id)).includes(winCmd(id)));
-      check(`${id}.vbs 是隐藏窗口、不等它`, /, 0, False/.test(read(winVbs(id))));
-    }
+    const id = 'control-plane';
+    check(`${id}.cmd 无非 ASCII 字节`, nonAscii(winCmd(id)) === 0, String(nonAscii(winCmd(id))));
+    check(`${id}.vbs 无非 ASCII 字节`, nonAscii(winVbs(id)) === 0, String(nonAscii(winVbs(id))));
+    check(`${id}.vbs 指向对应的 cmd`, read(winVbs(id)).includes(winCmd(id)));
+    check(`${id}.vbs 是隐藏窗口、不等它`, /, 0, False/.test(read(winVbs(id))));
   } else {
     console.log('\n④ ASCII 那条只在 Windows 上有意义（这里是 UTF-8，跳过）');
     check('非 Windows 平台不做 ASCII 限制', true, `平台 ${process.platform}`);
   }
 
-  /*
-   * 没令牌就得先说 —— 否则节点一起来被 401 挡回去，人只能对着日志猜。
-   * 放上令牌后这条警告要消失，否则就成了"狼来了"。
-   */
-  const warnOf = () => autostart.install('node', opt).find((d) => d.id === 'node')?.warn ?? '';
-  check('没令牌时明确警告', /还没有令牌/.test(warnOf()), warnOf().slice(0, 40));
-  fs.mkdirSync(NDATA, { recursive: true });
-  fs.writeFileSync(path.join(NDATA, 'token'), 'x'.repeat(32) + '\n', 'utf8');
-  check('放了令牌之后不再警告', warnOf() === '', warnOf().slice(0, 40));
-  fs.rmSync(path.join(NDATA, 'token'), { force: true });
-
   console.log('\n⑤ 幂等：再装一遍，内容一模一样');
-  const before = ['node', 'control-plane'].map((id) => contentOf(id, st.backend));
+  const before = contentOf('control-plane', st.backend);
   autostart.install('all', opt);
-  const after = ['node', 'control-plane'].map((id) => contentOf(id, st.backend));
-  check('第二次装不会改内容', before.every((b, i) => b === after[i]));
+  const after = contentOf('control-plane', st.backend);
+  check('第二次装不会改内容', before === after);
 
   console.log('\n⑥ status 报的是**已装的那份**，不是按当前环境现算');
-  const stOther = autostart.status({ ...opt, controlPlane: 'http://别的地址:1' });
   check(
-    '不受当前环境变量影响',
-    /10\.0\.0\.9/.test(stOther.targets.find((t) => t.id === 'node')?.note ?? ''),
-    stOther.targets.find((t) => t.id === 'node')?.note,
+    '不受当前环境变量影响（换个数据目录问，仍报已装）',
+    autostart.status({ ...opt, dataDir: path.join(tmp, 'other-data') }).targets[0].installed === true,
   );
   check('换了台机器（另一个 home）就报未装', autostart.status({ ...opt, home: path.join(tmp, 'other') }).targets.every((t) => !t.installed));
 
-  console.log('\n⑦ 只装一个 / 删干净');
-  autostart.remove('node', opt);
-  check('node 那份删了', !autostart.status(opt).targets.find((t) => t.id === 'node').installed);
-  check('control-plane 的还在（没被误删）', autostart.status(opt).targets.find((t) => t.id === 'control-plane').installed);
+  console.log('\n⑦ 删干净');
   autostart.remove('all', opt);
-  check('两个都删干净', autostart.status(opt).targets.every((t) => !t.installed));
-  if (!WIN && st.backend === 'crontab') check('crontab 里也清掉了', !crontabHas('node') && !crontabHas('control-plane'));
+  check('删干净', autostart.status(opt).targets.every((t) => !t.installed));
+  if (!WIN && st.backend === 'crontab') check('crontab 里也清掉了', !crontabHas('control-plane'));
 
   console.log('\n⑧ 不认的目标要报错，不能默默什么都不做');
   let threw = '';
   try {
-    autostart.install('随便什么', opt);
+    autostart.install('node', opt);
   } catch (e) {
     threw = String(e?.message ?? e);
   }
-  check('报错并说清可选值', /不认识的目标/.test(threw) && /node/.test(threw), threw);
+  check('已删的 node 目标也报错并说清可选值', /不认识的目标/.test(threw) && /control-plane/.test(threw), threw);
 } catch (err) {
   console.log('\n跑挂了：' + String(err?.message ?? err));
   failed += 1;

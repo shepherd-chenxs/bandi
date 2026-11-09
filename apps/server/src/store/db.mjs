@@ -91,8 +91,13 @@ db.exec(`PRAGMA busy_timeout = 5000;`);
  *   · 2（2026-11-08）：回话消息清掉 `meta.progress`（历史过程收起行砍掉，见下方迁移）。
  *   · 3（2026-11-08）：`users` 加 `nickname`（「我的」页昵称，与账号名分开；
  *     迁移在 store/users.mjs，那边建 users 表并 ensureColumn）。
+ *   · 4（2026-11-09）：`project_tasks` 加 `assigneeGroupId` / `parentTaskId`
+ *     （团队协作模式：卡派给一个群，群助手动态承接；协作子卡挂主卡；
+ *     迁移在 store/projects.mjs，那边建 project_tasks 表并 ensureColumn）。
+ *   · 5（2026-11-09）：多机节点子系统删除，老库 DROP nodes / node_tokens /
+ *     node_invites / node_jobs / node_paths（无存量机；`node_tasks` 保留）。
  */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 5;
 
 const dbVersion = Number(db.prepare('PRAGMA user_version').get()?.user_version ?? 0);
 if (dbVersion > SCHEMA_VERSION) {
@@ -834,103 +839,6 @@ function migrateAddExecConversation() {
 }
 migrateAddExecConversation();
 
-/** 取（或建）某条工单的会话。kind='exec' + execScope 唯一，标题跟着源头刷新 */
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS nodes (
-    id           TEXT PRIMARY KEY,
-    label        TEXT NOT NULL,
-    platform     TEXT,
-    runtimes     TEXT,
-    registeredAt TEXT NOT NULL,
-    lastSeenAt   TEXT NOT NULL
-  );
-`);
-
-/*
- * `hostname` ＝ 那台机器**自报的事实**（`os.hostname()`）；`label` ＝ **人给它的称呼**。
- *
- * 为什么要分开（2026-10-16 加"重命名机器"时定的）：合成一个字段的后果是 ——
- * 用户把「DESKTOP-XXXXXXX」改叫「我的笔记本」，那台机器下次报到时又把自己的主机名顶上来，
- * 名字白改了。分开之后：主机名每次报到都更新，名字只在**没人起过名**时才跟着走。
- */
-
-ensureColumn('nodes', 'hostname', 'hostname TEXT');
-
-ensureColumn('nodes', 'renamed', 'renamed INTEGER NOT NULL DEFAULT 0');
-/*
- * `externals` ＝ 那台机器上"班底之外还要有的东西"的现状（现在只有 magpie：装了没、网关端口通不通）。
- * 跟 `runtimes` 一样**节点自己报** —— 那台机器上的事实，控制面判不了。
- */
-
-ensureColumn('nodes', 'externals', 'externals TEXT');
-/*
- * `lastUsedAt` ＝ 这台机器**最近一次真的用面板**是什么时候（2026-10-20，P1-3「最近使用」）。
- *
- * 为什么不用 `lastSeenAt`：那是**心跳**时间（15 秒一跳，只能说明进程活着）。
- * 「最近使用」问的是"人什么时候在这台机器上动过面板"，所以写点只有一个：
- * 一个 `panel` scope 的请求被放行时，**节流**写一次（`auth.decide` → 本文件 `touchNodeUsed`）。
- */
-
-ensureColumn('nodes', 'lastUsedAt', 'lastUsedAt TEXT');
-
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS node_jobs (
-    id        TEXT PRIMARY KEY,
-    runId     TEXT NOT NULL,
-    nodeId    TEXT NOT NULL,
-    family    TEXT NOT NULL,
-    model     TEXT,
-    sandbox   TEXT,
-    cwd       TEXT,
-    task      TEXT NOT NULL,
-    sessionId TEXT,
-    status    TEXT NOT NULL DEFAULT '待领',
-    createdAt TEXT NOT NULL,
-    claimedAt TEXT,
-    endedAt   TEXT,
-    progressAt TEXT
-  );
-  CREATE INDEX IF NOT EXISTS idx_node_jobs_queue ON node_jobs (nodeId, status, createdAt);
-`);
-
-/*
- * 这个活最后一次**有动静**是什么时候（节点每 2 秒的空批次也会刷新它）。
- * 掉线清扫靠它区分两件差别很大的事：
- *   · 一次都没动静 → 那边根本没开张，**放回队列**重派是安全的；
- *   · 有动静之后才断 → 副作用可能已经发生了一半，**不能**悄悄重跑。
- */
-
-ensureColumn('node_jobs', 'progressAt', 'progressAt TEXT');
-
-/*
- * 工作空间（2026-10-22）：这个活要用的 git 仓库，JSON `{fullName, branch}`。
- * 控制面发现 cwd 在某个已接入仓库里就把它记上 —— 节点拿到后**自己** clone/pull 到
- * 它数据目录的 repos/ 里干活。只发仓库全名与分支名，**不发总机的令牌、不发路径**：
- * 凭据各机各配（跟"连接器不下发"同一条安全线）。
- */
-
-ensureColumn('node_jobs', 'repo', 'repo TEXT');
-
-/*
- * 「这台机器上，总机的那个目录对应我哪儿的目录」——**非 git 项目**的工作空间映射表。
- * git 项目不用配（节点自动 clone）；普通文件夹项目（D 盘上随手建的一个目录）两边
- * 路径对不上，派活前控制面按这张表把 cwd 换成那台机器上的本地路径。
- * 映射存在**总机的库里**（nodeId 维度）：配置动作发生在控制面面板上，节点是只报事实的。
- */
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS node_paths (
-    nodeId     TEXT NOT NULL,
-    remotePath TEXT NOT NULL,
-    localPath  TEXT NOT NULL,
-    createdAt  TEXT NOT NULL,
-    PRIMARY KEY (nodeId, remotePath)
-  );
-`);
-
-
 db.exec(`
   CREATE TABLE IF NOT EXISTS node_tasks (
     id        TEXT PRIMARY KEY,
@@ -1072,6 +980,20 @@ db.prepare("UPDATE schedule_jobs SET repeat = 'interval' WHERE repeat IS NULL").
 export function backupTo(file) {
   db.exec(`VACUUM INTO '${String(file).replace(/'/g, "''")}'`);
   return file;
+}
+
+/*
+ * 2026-11-09：多机节点子系统彻底删除（用户拍板：无存量机）。
+ * 建表语句已随 store/nodes.mjs 一起删掉，老库里的残留表在这里清掉 —— 幂等，没有就跳过：
+ *   nodes        机器登记 / 心跳
+ *   node_tokens  每节点令牌（含 scope）
+ *   node_invites 一次性邀请码
+ *   node_jobs    派给节点的运行队列
+ *   node_paths   远程路径 ↔ 本机路径映射
+ * `node_tasks` **不动**：本机软件商店一键安装仍走这张表（nodeId 恒为 'local'）。
+ */
+for (const t of ['nodes', 'node_tokens', 'node_invites', 'node_jobs', 'node_paths']) {
+  db.exec(`DROP TABLE IF EXISTS ${t}`);
 }
 
 /*

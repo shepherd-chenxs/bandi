@@ -23,6 +23,11 @@ export function createProjectTask({
   // 人手建卡的是哪位真人（2026-10-31；员工经接口建的卡是 null）
   createdByUserId = null,
   creatorConvId = null,
+  // 团队协作（2026-11-09）：派给哪个群办（与 assigneePersonaId / assigneeUserId / flow 互斥）；
+  // 卡上不记协调人 —— 群助手每次现读 group.assistantPersonaId
+  assigneeGroupId = null,
+  // 协作子卡：挂在哪个主卡下（只允许一层）
+  parentTaskId = null,
 }) {
   const ts = nowIso();
   const row = {
@@ -48,13 +53,16 @@ export function createProjectTask({
     createdByUserId,
     // 建卡那次运行所在的会话（PM 在哪个群里建的卡，回执就送回哪儿；人手建是 null）
     creatorConvId,
+    // 团队协作 / 协作子卡（2026-11-09，见 store/projects.mjs 的 ensureColumn 注释）
+    assigneeGroupId,
+    parentTaskId,
     createdAt: ts,
     updatedAt: ts,
   };
   db.prepare(
     `INSERT INTO project_tasks
-       (id, projectId, title, description, status, assigneePersonaId, assigneeUserId, conversationId, runId, source, externalKey, sourceKey, sourceRunId, flowTemplateId, flowRunId, createdBy, createdByUserId, creatorConvId, createdAt, updatedAt)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, projectId, title, description, status, assigneePersonaId, assigneeUserId, conversationId, runId, source, externalKey, sourceKey, sourceRunId, flowTemplateId, flowRunId, createdBy, createdByUserId, creatorConvId, assigneeGroupId, parentTaskId, createdAt, updatedAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     row.id,
     row.projectId,
@@ -74,6 +82,8 @@ export function createProjectTask({
     row.createdBy,
     row.createdByUserId,
     row.creatorConvId,
+    row.assigneeGroupId,
+    row.parentTaskId,
     row.createdAt,
     row.updatedAt,
   );
@@ -155,6 +165,14 @@ export function getProjectTask(id) {
   return db.prepare('SELECT * FROM project_tasks WHERE id = ?').get(id) ?? null;
 }
 
+/** 一张主卡下的协作子卡（2026-11-09：团队协作拆出来的活；只一层，子卡不会再拆） */
+export function listSubtasks(parentTaskId) {
+  if (!parentTaskId) return [];
+  return db
+    .prepare('SELECT * FROM project_tasks WHERE parentTaskId = ? ORDER BY createdAt')
+    .all(parentTaskId);
+}
+
 /** 只覆盖传进来的字段（undefined 不覆盖） */
 
 export function updateProjectTask(id, fields) {
@@ -169,6 +187,7 @@ export function updateProjectTask(id, fields) {
             prCheckedAt = ?, queuedAt = ?, sourceKey = ?, sourceRunId = ?,
             flowTemplateId = ?, flowRunId = ?,
             creatorConvId = ?, notifiedFor = ?,
+            assigneeGroupId = ?, parentTaskId = ?,
             statusByUserId = ?, statusAt = ?, updatedAt = ?
       WHERE id = ?`,
   ).run(
@@ -192,6 +211,9 @@ export function updateProjectTask(id, fields) {
     next.flowRunId ?? null,
     next.creatorConvId ?? null,
     next.notifiedFor ?? null,
+    // 团队协作 / 协作子卡（2026-11-09）：同 sourceKey 那两条一样，老行是 NULL，写回 null 幂等
+    next.assigneeGroupId ?? null,
+    next.parentTaskId ?? null,
     // 「状态改动」归因（2026-11-03）：store 层只透传，谁写进来由 project-tasks.mjs 那层
     // （人走的路）带；系统动作（跑完收状态等）不传这两列 —— `next` 是 cur 的浅拷贝，
     // 不传就原样写回，**不会把上一次人的署名冲掉**。

@@ -109,7 +109,7 @@ export function getConversation(id) {
       .prepare(
         `SELECT c.*, p.name AS personaName, p.instructions AS personaInstructions,
                 p.runtime AS runtime, p.sandbox AS personaSandbox, p.cwd AS personaCwd,
-                p.model AS personaModel, p.showThinking AS showThinking, p.rootDirs AS personaRootDirs,
+                p.model AS personaModel, p.rootDirs AS personaRootDirs,
                 p.builtin AS personaBuiltin
            FROM conversations c LEFT JOIN personas p ON p.id = c.personaId
           WHERE c.id = ?`,

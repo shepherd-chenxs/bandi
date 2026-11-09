@@ -3,6 +3,7 @@
 
 import path from 'node:path';
 import fs from 'node:fs';
+import zlib from 'node:zlib';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { port, extraOrigins, lanOrigins, dataDir } from './config.mjs';
@@ -256,25 +257,147 @@ export function mimeOf(file) {
 }
 
 /** 只服务 apps/web 下的静态文件；路径解析后必须仍在 webDir 里 */
-export function serveStatic(res, pathname) {
+export function serveStatic(req, res, pathname) {
   const rel = pathname === '/' ? 'index.html' : decodeURIComponent(pathname).replace(/^\/+/, '');
-  const file = path.resolve(webDir, rel);
+  let file = path.resolve(webDir, rel);
   if (!file.startsWith(webDir + path.sep)) {
     res.writeHead(403).end('forbidden');
     return true;
   }
+
+  /*
+   * 头像：按 Accept 换 WebP（2026-11-08）。
+   *
+   * 背景：avatars/ 里是 23 张 256² PNG，平均 93 KB —— 但页面最大只显示 58px。
+   * 照片存 PNG 压不动（无损格式），`tools/avatar-webp.mjs` 在旁边生成了同名 .webp
+   * （160px，合计 2.1 MB → 58 KB）。**原 PNG 一个字节没删**：`personas.avatar` 存的是
+   * 文件名，数据库里引用的还是 `.png`，前端 `onerror` 兜底也靠它。
+   *
+   * 所以换格式这件事必须发生在这里：请求 `/avatars/x.png`，客户端说它要 webp、
+   * 且旁边真有 x.webp，就发 webp。老客户端（或 webp 文件缺失）原样拿 PNG，
+   * 上层 JS、数据库、缓存键一个字都不用改。
+   *
+   * 为什么值得单独写一段：走中转时一屏 20 张头像 1.86 MB ≈ 5 秒，
+   * 比整个应用外壳（brotli 595 KB）还贵，而且每进一次列表重来一遍。
+   */
+  const isAvatar = /^\/avatars\/[^/]+\.(?:png|jpe?g)$/i.test(pathname);
+  let variesOnAccept = false;
+  if (isAvatar) {
+    const wp = file.replace(/\.(png|jpe?g)$/i, '.webp');
+    if (fs.existsSync(wp)) {
+      /*
+       * 只要 webp 版本存在，两种响应都挂 Vary: Accept —— 哪怕这次发的是 PNG。
+       * 少了这一条，中间缓存（nginx / 未来可能加的 CDN）会把不带 Vary 的 PNG
+       * 存下来发给所有人，webp 就白做了。
+       */
+      variesOnAccept = true;
+      if (/image\/webp/i.test(req?.headers?.accept ?? '')) file = wp;
+    }
+  }
+
   try {
     const buf = fs.readFileSync(file);
-    res.writeHead(200, {
-      'Content-Type': MIME[path.extname(file).toLowerCase()] ?? 'application/octet-stream',
-      'Cache-Control': 'no-store',
-    });
-    res.end(buf);
+    const type = MIME[path.extname(file).toLowerCase()] ?? 'application/octet-stream';
+    const headers = {
+      'Content-Type': type,
+      /*
+       * 头像可以缓存一天：它们**不是代码**，改一次头像的代价是"明天才看到新的"，
+       * 而代价的另一面是每进一次列表重下 1.8 MB。代码类仍然是 no-store
+       * （那边靠 SW 的版本指纹管更新，语义不同，别混）。
+       */
+      'Cache-Control': isAvatar ? 'public, max-age=86400' : 'no-store',
+    };
+    if (variesOnAccept) headers.Vary = 'Accept';
+
+    /*
+     * 2026-11-08：静态响应开始压缩，因为**外网直连要自己扛带宽了**。
+     *
+     * 这首屏有多大：style.css 356K + mobile.css 231K + js/*.mjs 1354K
+     * （app.mjs 一次性 import 二十来个模块）≈ 1.9MB 明文。以前走 Cloudflare，
+     * CF 在边缘替我们压了，所以这个问题从来没露头；换成自建服务器直连
+     * （阿里云 3Mbps = 375KB/s）就是 5 秒起步，而这种"慢"在用户那里会被读成
+     * "服务挂了"或"网断了"—— 正是这一轮排查里反复出现的那种误判。
+     *
+     * 为什么压在这一层、而不是让反向代理压：局域网直连不经过任何代理。
+     * 压在有文件的地方，手机上连家里 Wi-Fi 和走外网两条路同时受益。
+     *
+     * br 优先（比 gzip 再小 12~20%），不支持才退 gzip。质量取 9 不是 11：
+     * 356K 的 CSS 在 q11 要 466ms、q9 只要 27ms，体积差 6K —— 首字节多等
+     * 半秒换 6K，在 3Mbps 上不划算。压缩结果按 mtime 缓存，一个文件一辈子压一次。
+     */
+    const enc = COMPRESSIBLE.test(type) && buf.length >= COMPRESS_MIN ? pickEncoding(req) : '';
+    let body = buf;
+    if (enc) {
+      const key = `${file}|${safeMtime(file)}|${buf.length}|${enc}`;
+      let hit = compressCache.get(key);
+      if (!hit) {
+        hit = compressBuf(buf, enc);
+        if (compressCache.size >= COMPRESS_CACHE_MAX) compressCache.clear();
+        compressCache.set(key, hit);
+      }
+      body = hit;
+      headers['Content-Encoding'] = enc;
+      headers['Content-Length'] = body.length;
+      // 必须带 Vary：否则反向代理/CDN 会把压过的版本发给不接受 br 的客户端
+      // （头像那段可能已经挂了 Vary: Accept —— 两个维度都要留着，别互相覆盖）
+      headers.Vary = headers.Vary ? `${headers.Vary}, Accept-Encoding` : 'Accept-Encoding';
+    } else {
+      headers['Content-Length'] = body.length;
+    }
+
+    res.writeHead(200, headers);
+    // HEAD 只回头不回体（浏览器预检和部分代理会发），少传 700K 也算数
+    res.end(req?.method === 'HEAD' ? undefined : body);
     return true;
   } catch {
     return false;
   }
 }
+
+/* --------------------------------------------------------------- 静态压缩 */
+
+/** 值得压的类型。图片/字体已经在自己的格式里压过了，再压只浪费 CPU */
+const COMPRESSIBLE = /^(?:text\/|application\/(?:json|xml|javascript|manifest\+json)|image\/svg)/;
+
+/** 1KB 以下压了反而变大（gzip 头 20 字节 + 字典开销），直接放行 */
+const COMPRESS_MIN = 1024;
+
+const COMPRESS_CACHE_MAX = 64;
+/** key = 文件路径 | mtime | 字节数 | 编码 —— 文件一改 mtime 就变，旧条目自然失效 */
+const compressCache = new Map();
+
+function safeMtime(file) {
+  try {
+    return fs.statSync(file).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * 挑编码。只认 br / gzip —— deflate 早年被 IE 的错误实现坑过，
+ * 现在也没人靠它省那点字节，不给自己加分支。
+ */
+function pickEncoding(req) {
+  const ae = String(req?.headers?.['accept-encoding'] ?? '').toLowerCase();
+  if (ae.includes('br')) return 'br';
+  if (ae.includes('gzip')) return 'gzip';
+  return '';
+}
+
+function compressBuf(buf, enc) {
+  if (enc === 'br') {
+    return zlib.brotliCompressSync(buf, {
+      params: {
+        // 大文件降质量：>512K 时 q9 的边际收益抵不上 CPU
+        [zlib.constants.BROTLI_PARAM_QUALITY]: buf.length > 512 * 1024 ? 5 : 9,
+        [zlib.constants.BROTLI_PARAM_SIZE_HINT]: buf.length,
+      },
+    });
+  }
+  return zlib.gzipSync(buf, { level: 6 });
+}
+
 
 /* --------------------------------------------------------------- 访问令牌 */
 

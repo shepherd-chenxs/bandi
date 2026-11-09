@@ -12,8 +12,9 @@
  *      陌生来源仍然 403 E3001（安全没放宽）；
  *   ③ 静态资源（图标）不受数据面闸影响；配对落地页 `/pair` 已随设备令牌体系退场 → 404。
  *
- * 写请求的靶子用 `POST /api/nodes/join`（public、假码只会 4xx 业务错误）——
- * 原来的靶子是 `/api/pair/claim`，那条端点 2026-11-07 随配对体系删了。
+ * 写请求的靶子用 `POST /api/logout`（public、无会话就是空撤一回，零状态零副作用）——
+ * 原来的靶子是 `/api/nodes/join`，那条端点 2026-11-09 随多机节点子系统删了；
+ * 再往前是 `/api/pair/claim`，2026-11-07 随配对体系删了。
  *
  * 本机拿不到局域网 IPv4（无网卡 / 全 internal）时 skip（打印说明、算通过）。
  * 隔离：临时数据目录 + 8799 端口，跑完全删。
@@ -89,18 +90,18 @@ async function waitUp(ms = 15000) {
 
 /**
  * 用真实浏览器形态发一次写请求：带 Origin + X-Bandi。
- * 靶子是 `POST /api/nodes/join` —— public、假邀请码只会 4xx 业务错误，不会留下任何状态。
- * 断言只看"有没有被来源闸拦成 E3001"：被拦 = 失败，别的 4xx = 到了业务层 = 通过。
+ * 靶子是 `POST /api/logout` —— public、没票就是空撤一回，不会留下任何状态。
+ * 断言只看"有没有被来源闸拦成 E3001"：被拦 = 失败，别的 4xx/2xx = 到了业务层 = 通过。
  */
 async function writeFrom(origin) {
-  const r = await fetch(BASE + '/api/nodes/join', {
+  const r = await fetch(BASE + '/api/logout', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'X-Bandi': '1',
       ...(origin ? { Origin: origin } : {}),
     },
-    body: JSON.stringify({ code: 'ZZZZZZZZ', name: '回归测试节点' }),
+    body: JSON.stringify({}),
     signal: AbortSignal.timeout(3000),
   });
   const text = await r.text();

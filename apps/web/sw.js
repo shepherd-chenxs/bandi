@@ -19,7 +19,7 @@
  * 这个文件原来是 837 行里 722 行注释 —— 改缓存策略前得先翻过 160 个版本。
  * 改法不变：动静态清单就 VERSION +1，并去那边补一条"为什么进这一版"。
  */
-const VERSION = 'v160';
+const VERSION = 'v192';
 const CACHE = `bandi-static-${VERSION}`;
 
 /*
@@ -42,6 +42,7 @@ const JS_MODULES = [
   '/js/mobile.mjs',
   '/js/plugin-data.mjs',
   '/js/projects.mjs',
+  '/js/run-live.mjs',
   '/js/run-progress.mjs',
   '/js/run-progress-card.mjs',
   '/js/settings.mjs',
@@ -49,7 +50,6 @@ const JS_MODULES = [
   '/js/shell.mjs',
   '/js/skills.mjs',
   '/js/state.mjs',
-  '/js/thinking-live.mjs',
   '/js/ui.mjs',
   '/js/workflows.mjs',
 ];
@@ -138,23 +138,58 @@ self.addEventListener('fetch', (e) => {
 
   e.respondWith(
     (async () => {
-      const cache = await caches.open(CACHE);
+      let cache = await caches.open(CACHE);
 
-      if (isCode) {
+      /*
+       * 2026-11-08：代码类资源从「网络优先」改回「缓存优先 + 后台更新」。
+       *
+       * 11-05 改成网络优先是为了治「改完看不到」，当时的判断是
+       * 「局域网里那点往返根本不算事」—— 在局域网（1ms）这句是对的。
+       * 但走中枢中转时**每个请求 2~5 秒**（实测 style.css TTFB 5.4s、总计 8.8s），
+       * 于是每次打开都要把 23 个文件重新下一遍；HTTP/1.1 同域只并发 6 条，
+       * 23 ÷ 6 × 2.5s ≈ 10 秒起步。用户实报「还是慢」，根子在这。
+       *
+       * 而「改完看不到」**本来就已经有独立兜底**：startVersionWatch 每 60 秒
+       * 对一次 /api/web-version 的指纹，变了就弹「代码有更新」提示条
+       * （misc.mjs:505，2026-10-17 一天踩两回后加的）。SW 不必再当第二道保险，
+       * 它付出的代价是慢链路上缓存全废。
+       *
+       * 主动刷新的语义必须保住：用户点了「刷新页面」= 「我知道有新版，给我新的」。
+       * 那时导航请求的 request.cache === 'reload'，走下面 forceNet 分支 ——
+       * **连整个静态缓存一起清掉**再拉。只清 HTML 不够：HTML 换新了、js 还是
+       * 缓存里那份旧的，新结构配旧脚本才会真的白屏。宁可慢一次，给一套完整的。
+       */
+      const forceNet = isNav && e.request.cache === 'reload';
+
+      if (forceNet) {
+        cache = await (async () => {
+          await caches.delete(CACHE);
+          return caches.open(CACHE);
+        })();
         try {
-          /*
-           * cache: 'no-store' 是必需的（2026-11-05 实测踩到）：只把 SW 改成网络优先还不够，
-           * 浏览器自己的 HTTP 缓存层会拿 If-Modified-Since 换来一个 304，把旧文件继续喂回来。
-           * 服务端（http.mjs）本来就发 Cache-Control: no-store，这里再钉一次，
-           * 免得换个静态服务器（python -m http.server 之类）就退化。
-           */
           const r = await fetch(e.request, { cache: 'no-store' });
           if (r && r.ok) cache.put(e.request, r.clone());
           return r;
         } catch {
-          const hit = (await cache.match(e.request)) ?? (isNav ? await cache.match('/') : null);
-          return hit ?? new Response('', { status: 504, statusText: 'offline' });
+          return (await cache.match('/')) ?? new Response('', { status: 504, statusText: 'offline' });
         }
+      }
+
+      if (isCode) {
+        const hit = await cache.match(e.request);
+        // 后台更新：先把请求踢出去，再用它刷新缓存（命中时不等它，不阻塞这一屏）
+        const refresh = fetch(e.request)
+          .then((r) => {
+            if (r && r.ok) cache.put(e.request, r.clone());
+            return r;
+          })
+          .catch(() => null);
+        if (hit) return hit;
+        return (
+          (await refresh) ??
+          (isNav ? await cache.match('/') : null) ??
+          new Response('', { status: 504, statusText: 'offline' })
+        );
       }
 
       const hit = await cache.match(e.request);

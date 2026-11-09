@@ -36,7 +36,7 @@ export function memberGridHTML(thread) {
       const p = pById.get(m.personaId);
       const img =
         p?.avatar && AVATAR_FILE.test(String(p.avatar))
-          ? `<img class="av-img" src="/avatars/${encodeURIComponent(String(p.avatar))}" alt="" onerror="this.remove()">`
+          ? `<img class="av-img" src="/avatars/${encodeURIComponent(String(p.avatar))}" alt="" loading="lazy" decoding="async" onerror="this.remove()">`
           : '';
       return `<div class="mtile${removable ? ' removable' : ''}"
                    title="${esc(m.name)}${p?.role ? ` · ${esc(String(p.role).split(' · ')[0])}` : ''}"

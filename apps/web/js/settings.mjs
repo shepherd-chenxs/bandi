@@ -4,7 +4,7 @@ import { esc, setRoute, setTheme, toast } from './shell.mjs';
 import { api, dt, failHtml, initial, post, showFail, wireDialogHead } from './ui.mjs';
 import { headRow, renderPlugins, renderRuntimes, rtLoading } from './connectors.mjs';
 import { openRemotePage, setPluginRerender } from './experts.mjs';
-import { confirmDo } from './machine.mjs';
+import { askText, confirmDo } from './machine.mjs';
 import { renderList, showView } from './contacts.mjs';
 import { setListTitle } from './flowpages.mjs';
 import { openCodeRepoPage, renderSkillCards } from './skills.mjs';
@@ -76,22 +76,30 @@ export async function openMe() {
   // 身份卡显示**中枢账号**（登录用的手机号）：本机名条只是实现细节（2026-11-07）
   const name = isUser ? (who?.user?.hub || who?.user?.name || '') : '未登录';
   /*
-   * 身份卡：一行说明。设备绑了账号时 meta 与登录账号同款（"班底账号"）—— 账号是标题，
-   * 不用再解释"以谁的身份"；没绑账号的才需要一句话说清"现在是什么身份在用"。
-   * （2026-11-07：身份章随角色体系一起退场 —— 登录即全权，没有"角色名"可标。）
+   * 昵称（2026-11-08 用户："加一个昵称，'中枢账号 · 手机号登录'这个去掉"）。
+   *
+   * 身份卡两行现在是：**第一行昵称、第二行手机号**。
+   *   · 设了昵称 → 标题用昵称，副行给 3-4-4 分组的手机号；
+   *   · 没设昵称 → 标题退回手机号（页面不至于空着），副行给一个「＋ 设置昵称」入口；
+   *   · 没登录 → 标题「未登录」，副行保留原来那句说明（这句话只在这种情况才该出现）。
+   * 昵称存在 users.nickname（服务端 /api/me 带出），**不是账号名** —— 改它不动署名。
    */
-  const meta = isUser ? '中枢账号 · 手机号登录' : '这台机器还没有登录账号';
+  const nick = isUser ? String(who?.user?.nickname ?? '').trim() : '';
   /*
    * 手机号当名字时的两件小事（2026-11-08 重设计，用户对着截图说"这个页面重新设计一下"）：
    *   · 3-4-4 分组（152 6416 0947）—— 11 位连排没法扫读，运营商 / 银行 App 都这么排；
    *   · 头像不再取首字符 —— "1526…" 的首字符是"1"，大蓝圈里孤零零一个数字既不是名字
    *     也没有含义；换成中性的人形占位图标（iOS 联系人无头像时的同款读法）。
+   * 有了昵称之后头像取昵称首字（跟"有名字的人"同款读法）。
    */
   const isPhoneName = /^1\d{10}$/.test(name);
-  const displayName = isPhoneName ? name.replace(/^(\d{3})(\d{4})(\d{4})$/, '$1 $2 $3') : name;
-  const avaHtml = isPhoneName
-    ? `<span class="me-ava me-ava-glyph" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="8.2" r="3.6"/><path d="M4.8 19.4c1.5-3.3 4.1-5 7.2-5s5.7 1.7 7.2 5"/></svg></span>`
-    : `<span class="me-ava">${esc(initial(name))}</span>`;
+  const phoneText = isPhoneName ? name.replace(/^(\d{3})(\d{4})(\d{4})$/, '$1 $2 $3') : name;
+  const displayName = nick || phoneText;
+  const avaHtml = nick
+    ? `<span class="me-ava">${esc(initial(nick))}</span>`
+    : isPhoneName
+      ? `<span class="me-ava me-ava-glyph" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="8.2" r="3.6"/><path d="M4.8 19.4c1.5-3.3 4.1-5 7.2-5s5.7 1.7 7.2 5"/></svg></span>`
+      : `<span class="me-ava">${esc(initial(name))}</span>`;
   /*
    * 「有没有登录态可退」（2026-11-01 实报：回环形态点退出登录没反应）。
    *   · 登录账号 → 有；
@@ -136,41 +144,15 @@ export async function openMe() {
    *   班底 v1.5.x"，`.me-v` 是 break-all，硬挤会在内核号中间断字（iOS 设置页也是拆行的）。
    *   本机地址手机上不画：与「已配对到」同一个 location.host；实例标识是排查用的，同上。
    */
-  /**
-   * 外网访问（2026-11-08）：隧道到底通没通，只在这张机器卡里看得见。
-   *
-   * 状态词是服务端给的（`/api/hello` 的 `relay.state`，来自 frpc 子进程的真实状态），
-   * 界面**只翻译、不推断** —— "看起来应该能连"比什么都不说更害人：朋友出门连不上时，
-   * 会先怀疑自己网络，而真相是隧道压根没起来。
-   *
-   * 旧服务没有 `relay` 字段（不是 `state:'off'`）：此时整行不画，也别写"未开通"
-   * —— 那会把"这台机器版本老"说成"功能没开"。
+  /*
+   * 外网访问（2026-11-08 接入，同日随 frp 内置下线删除）：隧道归外部管之后，
+   * 服务端无从知道它通不通，继续画就是猜 —— 状态行整块退场。
    */
-  const relayText = (() => {
-    const r = hello?.relay;
-    if (!r) return null;
-    const url = r.url || '';
-    switch (r.state) {
-      case 'up':
-        return url ? `已连 ${url}` : '已连';
-      case 'starting':
-        return url ? `连接中 ${url}` : '连接中';
-      case 'retrying':
-        return url ? `重连中 ${url}` : '重连中';
-      case 'failed':
-        return url ? `连不上 ${url}` : '连不上';
-      case 'unavailable':
-        return '本机缺少 frpc，外网连不进来';
-      default:
-        return '未开通';
-    }
-  })();
   const machineAll = hello
     ? [
         ['设备名', hello.hostname || hello.label || '—'],
         ['系统 / 版本', `${hello.os || '未知'}${hello.version ? ` · 班底 v${hello.version}` : ''}`],
         ['本机地址', location.host || '—'],
-        ...(relayText ? [['外网访问', relayText]] : []),
         ['实例标识', hello.instanceId || '—'],
       ]
     : [];
@@ -181,32 +163,10 @@ export async function openMe() {
         ['版本', hello.version ? `班底 v${hello.version}` : '未知'],
       ]
     : [];
-  /*
-   * 外网访问进手机机器卡（2026-11-08 重设计）：朋友"出门连不上"时，第一怀疑对象
-   * 总是自己的网络 —— 把服务端真实状态（relay.state）亮在这张卡里，一眼分清
-   * "机器不在了"还是"隧道断了"。桌面早就有这行（relayText 带完整 URL），手机窄屏
-   * 放不下长域名，只给 状态点 + 状态词。旧服务没有 relay 字段 → 整行不画。
-   */
-  const relayPhone = (() => {
-    const r = hello?.relay;
-    if (!r) return null;
-    switch (r.state) {
-      case 'up': return { tone: 'ok', label: '已连通' };
-      case 'starting': return { tone: 'wait', label: '连接中' };
-      case 'retrying': return { tone: 'wait', label: '重连中' };
-      case 'failed': return { tone: 'bad', label: '未连通' };
-      case 'unavailable': return { tone: 'dim', label: '未配置' };
-      case 'off': return { tone: 'dim', label: '未开通' };
-      default: return null;
-    }
-  })();
-  const relayPhoneRow = relayPhone
-    ? `<div class="me-kv"><span class="me-k">外网访问</span><span class="me-v me-relay"><i class="me-dot me-dot-${relayPhone.tone}" aria-hidden="true"></i>${relayPhone.label}</span></div>`
-    : '';
   const machineRowHtml = ([k, v]) =>
     `<div class="me-kv"><span class="me-k">${esc(k)}</span><span class="me-v ${k === '实例标识' ? 'me-v-mono' : ''}">${esc(v)}</span></div>`;
   const machineRows = machineAll.map(machineRowHtml).join('');
-  const phoneMachineRows = phoneMachineAll.map(machineRowHtml).join('') + relayPhoneRow;
+  const phoneMachineRows = phoneMachineAll.map(machineRowHtml).join('');
   $('settingsView').innerHTML = `
     ${headRow('<b>我的</b>')}
     <div class="detail-body me-body">
@@ -216,8 +176,27 @@ export async function openMe() {
           <div class="me-who">
             <div class="me-name">
               <b>${esc(displayName)}</b>
+              ${
+                /* 昵称入口（2026-11-08）：常驻小铅笔（55% 透明，不抢身份卡的戏）。
+                   不做 hover 才显形 —— 手机上没有 hover，藏了就等于没有。 */
+                isUser
+                  ? `<button type="button" class="me-edit" id="meNickEdit" title="${nick ? '改昵称' : '设置昵称'}" aria-label="${nick ? '改昵称' : '设置昵称'}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 19.5h4l9.6-9.6a2.1 2.1 0 0 0-3-3L5.5 16.5v3z"/><path d="M13.8 7.2l3 3"/></svg></button>`
+                  : ''
+              }
             </div>
-            ${meta ? `<span class="me-meta">${esc(meta)}</span>` : ''}
+            ${
+              /*
+               * 副行（原「中枢账号 · 手机号登录」已删，2026-11-08 用户要求）：
+               *   登录 + 有昵称 → 手机号（账号身份还在，只是退到第二行）；
+               *   登录 + 没昵称 → 「＋ 设置昵称」，比一行灰字更说明下一步能干什么；
+               *   没登录       → 保留原来那句说明。
+               */
+              !isUser
+                ? `<span class="me-meta">这台机器还没有登录账号</span>`
+                : nick
+                  ? `<span class="me-meta">${esc(phoneText)}</span>`
+                  : `<button type="button" class="me-meta me-nick-set" id="meNickSet">＋ 设置昵称</button>`
+            }
           </div>
         </div>
       </section>
@@ -351,6 +330,43 @@ export async function openMe() {
     });
   }
   $('meLogout')?.addEventListener('click', () => void logout());
+  /*
+   * 昵称保存（2026-11-08）：走账号接口既有的 PATCH /api/users/:id，只改 users.nickname。
+   * 弹窗用全站统一的那个（askText ← askDialog），不用原生 prompt（浏览器画的框跟班底不是
+   * 一个东西）。留空 = 清除，界面退回手机号；保存完就地重画这一页（S.auth 里的值先更新）。
+   */
+  const editNick = async () => {
+    if (!isUser) return;
+    const v = await askText({
+      title: '设置昵称',
+      body: '昵称只显示在「我的」页，不影响账号名和消息里的署名。留空 = 清除。',
+      value: nick,
+      placeholder: '最多 20 个字',
+      ok: '保存',
+    });
+    if (v === null) return; // 取消
+    const t = String(v).replace(/\s+/g, ' ').trim();
+    if ([...t].length > 20) { toast('昵称最多 20 个字', 'error'); return; }
+    try {
+      const d = await api(`/api/users/${encodeURIComponent(who.user.id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nickname: t }),
+      });
+      /*
+       * 旧服务端的兜底：它不认识 nickname，会「200 + 原样回 user」—— 不判这一下就会
+       * 弹"已保存"却什么都没发生（前端先换了、服务端还没重启的那一小段窗口）。
+       * 用 `in` 判而不是判 null：null 是"已清空"的合法值。
+       */
+      const u = d?.user ?? {};
+      if (!('nickname' in u)) { toast('服务端还是旧版本：重启班底后再改昵称', 'error'); return; }
+      if (S.auth?.user) S.auth.user.nickname = u.nickname ?? null;
+      toast(t ? '昵称已保存' : '昵称已清除');
+      await openMe();
+    } catch (e) { toast(e.message, 'error'); }
+  };
+  $('meNickEdit')?.addEventListener('click', () => void editNick());
+  $('meNickSet')?.addEventListener('click', () => void editNick());
   /*
    * 当前设备 → 回壳的设备列表（2026-11-07）：只在壳里渲染（见上面 shell）。
    * 原生壳直接调 BandiShell.openDeviceList()；旧 Tauri 壳走启动页意图 hash。

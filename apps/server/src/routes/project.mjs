@@ -71,6 +71,11 @@ export async function handleProject(req, res, url) {
         // 派给真人（2026-10-31 用户概念落地）：与 personaId 同一条"执行人"格子的另一档。
         // 真人执行 = 卡挂在他名下（看板署名、筛选都认），**不起会话不派活**。
         assigneeUserId: body.assigneeUserId ?? null,
+        /*
+         * 团队协作（2026-11-09）：派给一个**群**办 —— 执行时现读群助手（必须是 PM 岗）承接。
+         * 与上面三档互斥；群不存在 / 群助手不是 PM 会在 createProjectTask 里被 400 挡掉。
+         */
+        assigneeGroupId: body.assigneeGroupId ?? null,
         startNow: body.startNow === true,
         // 人手建卡也记是谁建的（2026-10-31）：登录用户是他自己，回环操作员是第一个用户
         createdByUserId: auth.actorUser(req)?.id ?? null,
@@ -100,6 +105,29 @@ export async function handleProject(req, res, url) {
   if (req.method === 'PATCH' && taskOne) {
     const id = decodeURIComponent(taskOne[1]);
     const body = await readBody(req);
+    /*
+     * **运行钥匙改卡**（2026-11-09 全员群实报）：项目经理在群里干活时只能"建卡 + 读台账"，
+     * 想退待办/重跑/改派/取消却没有通道 —— 回话里就只剩一句 "Next: …" 然后停住，活半途而废。
+     * 现在按**卡归属**放行：只改"他建的卡"或"他当群助手那张团队卡"，且只放行下面四样；
+     * 范围、验收标准、流程归属仍归人（面板上改）。
+     */
+    const who = req.bandiAuth;
+    if (who?.kind === 'run') {
+      const runPersona = store.getPersona(who.personaId);
+      const card = store.getProjectTask(id);
+      if (card) {
+        const g = card.assigneeGroupId ? store.getGroup(card.assigneeGroupId) : null;
+        const mine = !!runPersona && (card.createdBy === runPersona.id || g?.assistantPersonaId === runPersona.id);
+        if (!mine) {
+          return fail(res, 403, 'E4034', '运行钥匙只能改你建的卡，或你当群助手那张团队卡的卡；别的卡请让雇主在面板上改');
+        }
+        const allowed = new Set(['status', 'description', 'assigneePersonaId', 'startNow']);
+        const bad = Object.keys(body ?? {}).filter((k) => !allowed.has(k));
+        if (bad.length) {
+          return fail(res, 403, 'E4034', `运行钥匙改卡只开放 状态 / 描述 / 执行人 / 重跑（收到：${bad.join('、')}）；范围、验收、流程归属请让雇主在面板上改`);
+        }
+      }
+    }
     try {
       const before = store.getProjectTask(id);
       // actorUser（2026-11-03 设备绑人后对设备返回归属人）→ 改状态就署到这个人头上，
@@ -163,6 +191,7 @@ export async function handleProject(req, res, url) {
     const id = decodeURIComponent(taskFiles[1]);
     const task = store.getProjectTask(id);
     if (!task) return fail(res, 404, 'E2039', '任务不存在');
+    if (task.assigneeGroupId) return fail(res, 400, 'E1061', '这张卡是团队协作（派给群）—— 往来在群里跟群助手说；卡评论区只留给指定了执行人的卡');
     if (!task.assigneePersonaId) return fail(res, 400, 'E1061', '先指定执行人 —— 评论区是跟他讨论的');
     const persona = store.getPersona(task.assigneePersonaId);
     if (!persona) return fail(res, 400, 'E1062', '指定的执行人不在了');
@@ -208,6 +237,7 @@ export async function handleProject(req, res, url) {
      * 档位归一在下面照常做：mode 三档全认，老客户端的 note:true 也照旧认。
      */
     const text = String(body.text ?? '').trim();
+    if (task.assigneeGroupId) return fail(res, 400, 'E1061', '这张卡是团队协作（派给群）—— 往来在群里跟群助手说；卡评论区只留给指定了执行人的卡');
     if (!task.assigneePersonaId) return fail(res, 400, 'E1061', '先指定执行人 —— 评论区是跟他讨论的');
     const persona = store.getPersona(task.assigneePersonaId);
     if (!persona) return fail(res, 400, 'E1062', '指定的执行人不在了');

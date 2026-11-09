@@ -430,7 +430,7 @@ async function installSoftware(id, btn) {
   if (btn) btn.disabled = true;
   toast('在装了 —— 安装窗口弹出来后，按它的界面点完就行。');
   try {
-    const r = await post('/api/nodes/local/tasks', { kind: 'external-install', family: id });
+    const r = await post('/api/install/tasks', { kind: 'external-install', family: id });
     if (!r.task?.id) throw new Error('任务没排上');
     await renderPlugins(); // 立刻重画：卡片这会儿就该变成「安装中」，不等轮询
     renderList();
@@ -594,7 +594,7 @@ export function openPlgDetail(kind, id) {
             // 让这台机器自己把 exe 拉起来（命令出自服务端那张表，这里只发 id 与步骤）
             el.disabled = true;
             try {
-              await post('/api/nodes/local/tasks', { kind: 'external-open', family: id });
+              await post('/api/install/tasks', { kind: 'external-open', family: id });
               dlg.close();
               toast('打开了 —— 它的面板窗口应该已经弹出来（没看见就去任务栏找）。');
             } catch (err) {
@@ -607,7 +607,7 @@ export function openPlgDetail(kind, id) {
              起完面板端口就在了 —— 重新点开这里就能直接打开。 */
           el.disabled = true;
           try {
-            await post('/api/nodes/local/tasks', { kind: 'external-serve', family: id });
+            await post('/api/install/tasks', { kind: 'external-serve', family: id });
             dlg.close();
             toast('在起它的面板了 —— 起好后重新点开这个软件，就能直接打开面板。');
             await renderPlugins();
@@ -823,7 +823,7 @@ function watchBusySoftware() {
     for (const [family, t] of busy) {
       let next = null;
       try {
-        next = (await api(`/api/nodes/local/tasks/${encodeURIComponent(t.id)}`)).task;
+        next = (await api(`/api/install/tasks/${encodeURIComponent(t.id)}`)).task;
       } catch {
         continue; // 抖一下等下一轮
       }
@@ -1054,13 +1054,8 @@ export async function renderRuntimes() {
 
 
 
-/* ① 模式页 —— **2026-10-21 五改：模式卡收成一行**（用户："上面那一块可以简化。
-   一个开关，一个重启按钮就可以了"）——
-   单机/总机分段 + 说明行 + 连接行全部收掉，只剩「总机」开关（开=总机、关=单机）+ 常显重启按钮。
-   真加入成功之后整站换成节点页（renderNodeMode），那台机器上这页都进不去了，没有"模式"可切。
-   「接入总机」原是页面最底一节 —— **2026-11-01 晚整节撤掉**（用户："这个是干嘛的？历史遗留？"）：
-   本机加入别的总机当算力节点的 UI 不再画，命令行 bandi nodes join 顶上；后端全留。
-   备份/导出导入 2026-10-29 起也长回这页底下（「数据管理」区，见 dmMount）。 */
+/* 「这台机器」页 —— 运行时（识别 / 接入）+ 远程连接 + 数据管理。
+   设备详情页与多机协同节都已撤掉，这页不再有设备清单或节点入口。 */
 
 export async function renderDeviceList() {
   S.rtLevel = 'devices';
@@ -1076,35 +1071,12 @@ export async function renderDeviceList() {
     $('settingsView').innerHTML = `${headRow('<b>这台机器</b>')}<div class="empty">${failHtml(err)}</div>`;
     return;
   }
-  // 网络现状 2026-11-01 晚不再读：模式卡搬去了「手机连接」页、「多机协同」节也撤了，
-  // 这页没有再关心 lan 的地方（要加回来先想清楚谁消费）。
-
-  /*
-   * 形态的事实源（2026-11-03 终稿）：只剩 `netmode.acceptNodes` 一个运行期开关 ——
-   * 角色：总机（收别的机器当节点）/ 分机（不收）。监听永远对外（`BANDI_HOST` 可钉
-   * 具体地址），是启动配置的事，界面上没有开关（`allowLan` 已删）。
-   * 收过的设备不算模式。
-   */
-
-  /*
-   * ⚠️ 2026-11-01 撤掉「添加设备」（用户："总机-节点就算有的话，我也没办法让它干活"）：
-   * 发邀请码改走命令行 `bandi nodes invite`；后端 `POST /api/nodes/invites` 与领活通道保留。
-   *
-   * ⚠️ 同日八改撤掉「设备」节 + 设备详情页（用户截图圈红"去掉这个模块和对应的页面"）：
-   * 单机常态下那节只有「本机」一行，点进去的详情页（已安装/未安装/外部件）已全部并入
-   * 下面的「运行时」区（paintLocalRuntimes）—— 模块和页面都成了多余的中间层。
-   * 远程节点的详情页（renderNodeDetail）随之删除：设备节是它唯一的入口。
-   * （节点态走的是另一套整页 renderNodeMode，不受影响。）
-   */
+  // 这页不直接读 /api/lan：网络现状归「远程连接」卡（securityadmin.mjs）自己管。
   const localDev = list.find((d) => d.kind === 'local');
 
   $('settingsView').innerHTML = `
     ${headRow('<b>这台机器</b>')}
     <div class="detail-body">
-      <!-- 2026-11-01 八改：设备节撤了；同日晚「多机协同」节也撤（用户："这个是干嘛的？历史遗留？"）——
-           2026-11-02 二十三改：「协作」分节也搬去「协作中心」页（用户："把这个协作移到协作中心，
-           通过分机和总机开关控制显示和隐藏"）—— 这页 = 运行时 / 数据管理。加入算力节点只剩
-           命令行（bandi nodes join，总机发码 bandi nodes invite）。 -->
       <!-- 「运行时」区（2026-11-01 七改，用户："把运行时放到这个页面的数据管理上面"）：
            本机的「已安装」长在这页，看运行时不用再点进本机详情（paintLocalRuntimes）。 -->
       <!-- 「远程连接」卡（2026-11-07 从安全页迁来；2026-11-08 起改**纯运行期开关**：
@@ -1114,19 +1086,10 @@ export async function renderDeviceList() {
       <div id="remoteMount"></div>
       <div id="rtMount"></div>
       <!-- 「数据管理」区（2026-10-29 从设置独立分节降级成这页的一个区，用户："把数据管理
-           作为这台机器的一个区域"）：不跟模式走 —— 模式切换只重画上面两块，这里原地不动。
-           数据自己拉（状态 + backups 列表），拉完才画，失败各有兜底。 -->
+           作为这台机器的一个区域"）：不跟模式走，数据自己拉（状态 + backups 列表），
+           拉完才画，失败各有兜底。 -->
       <div id="dmMount"></div>
     </div>`;
-
-  /* 「多机协同」节 2026-11-01 晚整节撤掉（用户："这个是干嘛的？现在还在用吗，还是历史遗留？"）：
-     本机加入别的总机当算力节点的 UI 不再画 —— 线上没一个节点登记过，用户跨机走的是协作中心。
-     与设备详情页同口径：只撤界面，后端 /api/local/hosts/*、discover、nodes join/leave 全留，
-     要用走命令行 bandi nodes join <总机地址> <邀请码>。 */
-
-  /* 「协作」分节 2026-11-02 二十三改搬去「协作中心」页（collab.mjs renderCollabCenter
-     的 #clBranchMount）—— 这页不再挂它，renderCollabSection / watchCollabSection 的
-     import 一并撤了（collab.mjs 自己用，不再外借）。 */
 
   /* 「远程连接」卡（2026-11-07 从安全页迁来）：页头下面第一块，不 await */
   mountRemoteAccessCard($('remoteMount'));
@@ -1136,11 +1099,3 @@ export async function renderDeviceList() {
   /* 数据管理区：进页挂一次（里面的导出/导入按钮和快照列表跟模式无关，重挂反而白拉一遍接口） */
   renderBackupSection($('dmMount'));
 }
-
-
-
-/*
- * 2026-11-01 删除「让一台新机器加入」弹窗（原 openJoinDialog）：
- * 它只发邀请码、不发活 —— 收进来的机器没有派活入口（节点态整页见 renderNodeMode）。
- * 发码改命令行 `bandi nodes invite`；后端 `POST /api/nodes/invites` 不动。
- */

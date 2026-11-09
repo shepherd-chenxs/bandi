@@ -10,7 +10,7 @@
  *      - 带转发头的 /api/state、/api/local/status、/api/local/export、/api/ai/*、/api/events
  *        **全部 401**（一个都不许过）；
  *      - 带 root 令牌照样能用（proves setup 在 trustProxy 下也加载/生成了 token）；
- *      - 破坏性动作（算力节点 join）带令牌但**不带 X-Bandi-Local** → E4097，带了才到业务层。
+ *      - 秘密闸动作（本机 probe）带令牌但**不带 X-Bandi-Local** → E4097，带了才过闸。
  *   ② **裸反代漏配**：`BANDI_HOST=127.0.0.1`、不设 trustProxy、不设转发头，只把 Host
  *      换成外部域名（并在 BANDI_ORIGINS 里声明，否则先被 Host 守卫 403）→ **必须 401**（Host 兜底）；
  *      同一台机器上用 `Host: 127.0.0.1` 仍然 200（单机行为一行没变）。
@@ -135,27 +135,27 @@ console.log('\n[1] BANDI_HOST=127.0.0.1 + BANDI_TRUST_PROXY=1（声明在代理�
     check('带转发头 + 令牌 → /api/state 200（认证不被误杀）', okProxyState.status === 200, String(okProxyState.status));
 
     // 破坏性动作：位置对了、身份对了，还缺"我在本机"的证明
-    // （E4097 的样本用还是 network 档的算力节点 join）
+    // （E4097 的样本用还是 network 档的本机 probe —— 原 join 靶子随多机子系统删了）
     const secretPath = path.join(data, 'local_secret');
     check('启动了 local_secret（0600）', fs.existsSync(secretPath));
     const secret = fs.existsSync(secretPath) ? fs.readFileSync(secretPath, 'utf8').trim() : '';
 
     const noSecret = await raw(port, {
       method: 'POST',
-      path: '/api/local/join',
+      path: '/api/local/probe',
       headers: { ...viaProxy, 'X-Bandi-Token': token, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: 'http://127.0.0.1:1', code: 'x' }),
+      body: JSON.stringify({ url: '' }),
     });
     check('网络 + 令牌 + 无 X-Bandi-Local → E4097', noSecret.status === 403 && codeOf(noSecret) === 'E4097', `${noSecret.status} ${codeOf(noSecret)}`);
 
     const withSecret = await raw(port, {
       method: 'POST',
-      path: '/api/local/join',
+      path: '/api/local/probe',
       headers: { ...viaProxy, 'X-Bandi-Token': token, 'X-Bandi-Local': secret, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: 'http://127.0.0.1:1', code: 'x' }),
+      body: JSON.stringify({ url: '' }),
     });
     check(
-      '网络 + 令牌 + X-Bandi-Local → 过闸（业务失败，不是 4097）',
+      '网络 + 令牌 + X-Bandi-Local → 过闸（不是 4097）',
       withSecret.status !== 403 && codeOf(withSecret) !== 'E4097',
       `${withSecret.status} ${codeOf(withSecret)}`,
     );
@@ -165,9 +165,9 @@ console.log('\n[1] BANDI_HOST=127.0.0.1 + BANDI_TRUST_PROXY=1（声明在代理�
     //    所以 CLI 在本机也要读 local_secret 带头，这是设计如此。
     const localNoSecret = await raw(port, {
       method: 'POST',
-      path: '/api/local/join',
+      path: '/api/local/probe',
       headers: { ...base, 'X-Bandi-Token': token, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: 'http://127.0.0.1:1', code: 'x' }),
+      body: JSON.stringify({ url: '' }),
     });
     check(
       'trustProxy 下连本机也要秘密 → E4097（不是漏洞，是口径）',
@@ -177,9 +177,9 @@ console.log('\n[1] BANDI_HOST=127.0.0.1 + BANDI_TRUST_PROXY=1（声明在代理�
 
     const localWithSecret = await raw(port, {
       method: 'POST',
-      path: '/api/local/join',
+      path: '/api/local/probe',
       headers: { ...base, 'X-Bandi-Token': token, 'X-Bandi-Local': secret, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: 'http://127.0.0.1:1', code: 'x' }),
+      body: JSON.stringify({ url: '' }),
     });
     check(
       '本机 + 令牌 + 秘密 → 过闸（CLI 的执行路径）',

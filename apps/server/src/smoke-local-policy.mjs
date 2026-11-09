@@ -2,16 +2,15 @@
  * `security/policy.mjs` 的 `authorize` 穷举用例（姊妹文档 §3，2026-11-07 登录即全权模型）。
  *
  * 为什么单独一个文件、不起服务：`authorize` 是纯函数（只 import `route-policy.mjs` 的
- * 静态路由表，不碰 store、不读库、不开进程），所以可以在这里把 身份 × 来源 × 每条策略
+ * 静态路由表，不碰 store、不读库、不开进程），所以可以在这里把 身份 × 每条策略
  * 全跑一遍，且能在空目录里直接 `node` 跑。
  *
- * 三件事必须钉住（2026-11-07 角色/菜单权限体系退场后）：
+ * 两件事必须钉住：
  *   ① 机器身份 vs 人：operator / 登录用户（kind:'user'）一律全权；
- *      node 按 compute/panel 收敛；revoked 一律 `E4012`（先判这一个，排在所有人/机器之前）；
- *      （`device` 身份 2026-11-07 随配对体系整体退场，矩阵里不再有这一列）
- *   ② 节点令牌边界：compute 只许"自己的活"（归属判定由 rules.nodeMayReach 注入，
- *      本测试用桩函数喂），panel 命中 `noPanel` 路由给 `E4032`；
- *   ③ 覆盖：样例路径必须能在 `ROUTES` 命中（漏登记 = 路由表腐化）。
+ *      run（运行钥匙）只许清单标 `run: true` 的那几扇门，其余 `E4034`；
+ *      （node / revoked 身份 2026-11-09 随多机子系统整体删除，矩阵里不再有这两列 ——
+ *        伪造出来的会落兜底 E4031，smoke-security-policy 已钉。）
+ *   ② 覆盖：样例路径必须能在 `ROUTES` 命中（漏登记 = 路由表腐化）。
  *
  * 跑法：node apps/server/src/smoke-local-policy.mjs
  *       或：SMOKE_PORT=8907 node apps/server/src/smoke-local-policy.mjs
@@ -29,77 +28,57 @@ const check = (label, ok, detail = '') => {
 const WHO = {
   operator: { kind: 'operator' },
   user: { kind: 'user' },
-  nodeCompute: { kind: 'node', nodeId: 'n1', scope: new Set(['compute']) },
-  nodePanel: { kind: 'node', nodeId: 'p1', scope: new Set(['panel']) },
-  revoked: { kind: 'revoked' },
+  run: { kind: 'run' },
 };
 
-const verdict = (who, method, path, rules = {}) =>
-  authorize({ who, method, pathname: path, rules });
+const verdict = (who, method, path) => authorize({ who, method, pathname: path });
 
 console.log('\n[1] 身份形状（kind 归一）');
 check('operator.kind === operator', WHO.operator.kind === 'operator');
 check('user.kind === user（登录即全权，不再分级）', WHO.user.kind === 'user');
-check('node 带 scope（compute）', WHO.nodeCompute.kind === 'node' && WHO.nodeCompute.scope.has('compute'));
-check('node 带 scope（panel）', WHO.nodePanel.kind === 'node' && WHO.nodePanel.scope.has('panel'));
-check('revoked.kind === revoked', WHO.revoked.kind === 'revoked');
+check('run.kind === run（运行钥匙，边界收在清单标记上）', WHO.run.kind === 'run');
 
 console.log('\n[2] 矩阵（身份 × 路由）');
 /**
  * 每条 case 给一个 (method, path) 与预期：每个身份应得到的判定（'allow' 或错误码）。
- * rules 仅给需要归属判定的 compute 用例喂桩。
  */
 const CASES = [
   {
-    // 普通可读路由（GET /api/me）：panel 节点可读（非 noPanel），compute 节点不沾（E4031）
+    // 普通可读路由（GET /api/me）：人全通；运行钥匙没被标 run:true → E4034
     tag: '可读路由（GET /api/me）',
     method: 'GET', path: '/api/me',
-    expect: {
-      operator: 'allow', user: 'allow',
-      nodeCompute: 'E4031', nodePanel: 'allow', revoked: 'E4012',
-    },
+    expect: { operator: 'allow', user: 'allow', run: 'E4034' },
   },
   {
-    // noPanel 管理路由：panel 节点命中 noPanel → E4032
-    tag: 'noPanel 管理路由（GET /api/users）',
+    // 管理路由：登录用户也全权（2026-11-07 角色体系退场）；运行钥匙照样进不来
+    tag: '管理路由（GET /api/users）',
     method: 'GET', path: '/api/users',
-    expect: {
-      operator: 'allow', user: 'allow',
-      nodeCompute: 'E4031', nodePanel: 'E4032', revoked: 'E4012',
-    },
+    expect: { operator: 'allow', user: 'allow', run: 'E4034' },
   },
   {
-    // compute 自端点、归属命中：compute 节点 allow；panel 节点（非 noPanel）allow
-    tag: 'compute 自端点（POST /api/nodes/register）— 归属命中',
-    method: 'POST', path: '/api/nodes/register', rules: { nodeMayReach: () => true },
-    expect: {
-      operator: 'allow', user: 'allow',
-      nodeCompute: 'allow', nodePanel: 'allow', revoked: 'E4012',
-    },
+    // 运行钥匙的专用口（建卡通道，route-policy 标 run:true）：机器身份里只有它过
+    tag: '运行钥匙专用口（POST /api/agent/cards，run:true）',
+    method: 'POST', path: '/api/agent/cards',
+    expect: { operator: 'allow', user: 'allow', run: 'allow' },
   },
   {
-    // compute 自端点、归属未命中：compute 节点落 E4031；其余同上
-    tag: 'compute 自端点（POST /api/nodes/register）— 归属未命中',
-    method: 'POST', path: '/api/nodes/register', rules: { nodeMayReach: () => false },
-    expect: {
-      operator: 'allow', user: 'allow',
-      nodeCompute: 'E4031', nodePanel: 'allow', revoked: 'E4012',
-    },
+    // 只读台账（GET /api/tasks，run:true）：秘书台账给运行钥匙开
+    tag: '运行钥匙专用口（GET /api/tasks，run:true）',
+    method: 'GET', path: '/api/tasks',
+    expect: { operator: 'allow', user: 'allow', run: 'allow' },
   },
   {
-    // 非 /api 页面：compute 节点无归属 → E4031；panel 节点（非 noPanel）放行
+    // 非 /api 页面：人与 operator 不拦（登录页/静态资源另有闸管）；
+    // 运行钥匙是纯 API 身份，非 /api 一律 E4034
     tag: '非 /api 页面（GET /index.html）',
     method: 'GET', path: '/index.html',
-    expect: {
-      operator: 'allow', user: 'allow',
-      nodeCompute: 'E4031', nodePanel: 'allow', revoked: 'E4012',
-    },
+    expect: { operator: 'allow', user: 'allow', run: 'E4034' },
   },
 ];
 
 for (const c of CASES) {
   for (const [whoKey, expected] of Object.entries(c.expect)) {
-    const got = verdict(WHO[whoKey], c.method, c.path, c.rules);
+    const got = verdict(WHO[whoKey], c.method, c.path);
     const ok = got === expected;
     check(
       `${whoKey} · ${c.method} ${c.path} → ${expected}`,

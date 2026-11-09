@@ -1,0 +1,447 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>「我的」页重设计 · 对照</title>
+<!--
+  「我的」页重设计 · 真机尺寸对照稿（2026-11-08）
+
+  左：现状（apps/web/mobile.css §15b 的 iOS 风试点：蓝 radial 辉光 hero + 12px 卡 + 58px 行）
+  右：重做（Airbnb 语汇：去渐变、大标题做锚点、16px 卡、三档字阶、彩色只给信息）
+
+  这是**设计原型**，不是产品代码。定了再落到 settings.mjs + mobile.css。
+
+  为什么改这几处，逐条写在 .phone[data-variant="new"] 的样式注释里。
+-->
+<style>
+/* ───────────────────────── 基础 ───────────────────────── */
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
+               "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  background: #ececeb;
+  color: #16181c;
+  -webkit-font-smoothing: antialiased;
+  padding: 28px 24px 60px;
+}
+html[data-theme="dark"] body { background: #0e0e10; color: #e8e9ea; }
+
+/* ───────────────────────── 工具条 ───────────────────────── */
+.bar {
+  max-width: 980px; margin: 0 auto 26px;
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+}
+.bar h2 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: -.01em; }
+.bar .sp { flex: 1; }
+.seg {
+  display: inline-flex; padding: 3px; gap: 2px;
+  border-radius: 10px; background: rgba(0,0,0,.055);
+}
+html[data-theme="dark"] .seg { background: rgba(255,255,255,.07); }
+.seg button {
+  border: 0; background: transparent; color: inherit; cursor: pointer;
+  font: inherit; font-size: 12.5px; padding: 6px 13px; border-radius: 7px;
+  opacity: .62; transition: .16s;
+}
+.seg button.on {
+  background: #fff; opacity: 1; box-shadow: 0 1px 3px rgba(0,0,0,.14);
+  font-weight: 500;
+}
+html[data-theme="dark"] .seg button.on { background: #33353a; box-shadow: none; }
+
+/* ───────────────────────── 舞台 ───────────────────────── */
+.stage { display: flex; gap: 40px; justify-content: center; align-items: flex-start; flex-wrap: wrap; }
+figure { margin: 0; display: flex; flex-direction: column; align-items: center; gap: 12px; }
+figcaption {
+  font-size: 12px; letter-spacing: .04em; text-transform: uppercase;
+  opacity: .45; font-weight: 600;
+}
+.stage[data-focus="new"] figure[data-k="old"],
+.stage[data-focus="old"] figure[data-k="new"] { display: none; }
+
+/* ───────────────────────── 手机框 ───────────────────────── */
+.phone {
+  --pg: #08090a; --sf: #141519; --sf2: #1c1d21;
+  --ln: rgba(255,255,255,.075);
+  --tx: #e8e9ea; --dim: #9b9ea3; --dim2: #6f7378;
+  --ac: #0a84ff; --dg: #f85149; --ok: #3fb950;
+  position: relative;
+  width: 390px; height: 844px;
+  border-radius: 44px;
+  background: var(--pg);
+  box-shadow: 0 0 0 1px rgba(0,0,0,.10), 0 30px 60px -20px rgba(0,0,0,.4),
+              0 0 0 10px #1b1c1f, 0 0 0 11px #2c2e33;
+  overflow: hidden;
+  color: var(--tx);
+  font-size: 16px;
+}
+html[data-theme="light"] .phone {
+  --pg: #f4f4f2; --sf: #fff; --sf2: #eeeef0;
+  --ln: rgba(0,0,0,.072);
+  --tx: #16181c; --dim: #74797f; --dim2: #9aa0a6;
+  --ac: #0a7cff; --dg: #d92d20; --ok: #1a8a3c;
+  box-shadow: 0 0 0 1px rgba(0,0,0,.08), 0 30px 60px -20px rgba(0,0,0,.22),
+              0 0 0 10px #fdfdfd, 0 0 0 11px #d8d8d8;
+}
+
+/* 假状态栏 */
+.sbar {
+  height: 54px; padding: 0 30px 0 34px;
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 15px; font-weight: 600; letter-spacing: .01em;
+  position: relative; z-index: 3;
+}
+.sbar .icons { display: flex; align-items: center; gap: 6px; opacity: .95; }
+
+/* 滚动区 */
+.scr {
+  height: calc(844px - 54px);
+  overflow-y: auto; overflow-x: hidden;
+  scrollbar-width: none;
+}
+.scr::-webkit-scrollbar { display: none; }
+
+/* ══════════════════════════════════════════════════════════
+   A · 现状（近似复刻 mobile.css §15b）
+   ══════════════════════════════════════════════════════════ */
+.phone[data-variant="old"] .hd {
+  padding: 4px 20px 10px; font-size: 17px; font-weight: 600;
+}
+.phone[data-variant="old"] .hero {
+  margin: 0 -20px 0; padding: 26px 20px 52px;
+  display: flex; align-items: center; gap: 14px;
+  background:
+    radial-gradient(90% 76% at 80% -14%, rgba(10,132,255,.16), transparent 60%),
+    radial-gradient(130% 90% at 20% -22%, rgba(10,132,255,.24), transparent 56%),
+    var(--pg);
+}
+.phone[data-variant="old"] .hero-ava {
+  width: 64px; height: 64px; border-radius: 50%; flex: none;
+  background: linear-gradient(160deg, #3f9bff, #0a6ce0);
+  display: grid; place-items: center; color: #fff;
+  box-shadow: 0 0 0 4px rgba(255,255,255,.10), 0 8px 22px rgba(10,132,255,.45);
+}
+.phone[data-variant="old"] .hero-t b { display: block; font-size: 21px; font-weight: 600; letter-spacing: -.2px; }
+.phone[data-variant="old"] .hero-t span { display: block; margin-top: 3px; font-size: 13.5px; color: var(--dim); }
+.phone[data-variant="old"] .body { padding: 0 20px 40px; }
+.phone[data-variant="old"] .body > .card:first-child { margin-top: -36px; position: relative; }
+.phone[data-variant="old"] .gl {
+  font-size: 13px; font-weight: 400; color: var(--dim);
+  margin: 0 0 7px 2px;
+}
+.phone[data-variant="old"] .grp { margin-bottom: 20px; }
+.phone[data-variant="old"] .card {
+  background: var(--sf); border-radius: 12px; overflow: hidden;
+  box-shadow: 0 0 0 1px var(--ln);
+}
+.phone[data-variant="old"] .row {
+  display: flex; align-items: center; gap: 12px;
+  min-height: 58px; padding: 8px 16px;
+  position: relative;
+}
+.phone[data-variant="old"] .row + .row::before {
+  content: ""; position: absolute; top: 0; left: 16px; right: 0; height: 1px; background: var(--ln);
+}
+.phone[data-variant="old"] .k { font-size: 16px; flex: none; }
+.phone[data-variant="old"] .v {
+  margin-left: auto; font-size: 15px; color: var(--dim);
+  text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.phone[data-variant="old"] .v.mono { font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: 14px; }
+.phone[data-variant="old"] .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); margin-right: 6px; vertical-align: 1px; }
+.phone[data-variant="old"] .chev { color: var(--dim2); font-size: 17px; margin-left: 6px; font-style: normal; }
+.phone[data-variant="old"] .tseg {
+  display: flex; gap: 0; margin-left: auto; padding: 2px; border-radius: 8px; background: var(--sf2);
+}
+.phone[data-variant="old"] .tseg span {
+  font-size: 13px; padding: 5px 11px; border-radius: 6px; color: var(--dim);
+}
+.phone[data-variant="old"] .tseg span.on { background: var(--ac); color: #fff; }
+.phone[data-variant="old"] .out {
+  display: flex; align-items: center; justify-content: center;
+  min-height: 58px; font-size: 17px; font-weight: 500; color: var(--dg);
+  background: var(--sf); border-radius: 12px; box-shadow: 0 0 0 1px var(--ln);
+}
+
+/* ══════════════════════════════════════════════════════════
+   B · 重做（Airbnb 语汇）
+   ══════════════════════════════════════════════════════════ */
+.phone[data-variant="new"] .pg { padding: 0 22px 44px; }
+
+/* ① 大标题当锚点
+   现状顶部是一行 17px「我的」，紧接着一块彩色 hero —— 页面第一眼没有层级，
+   视线被蓝色辉光抓走。改成一页一个 30px 标题：Airbnb 每个一级页都是
+   大号左对齐标题（Explore / Saved / Profile 同款），标题本身就是锚点，
+   下面不再需要任何装饰性背景。 */
+.phone[data-variant="new"] .htop {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 0 2px;
+}
+.phone[data-variant="new"] .htop h1 {
+  margin: 0; font-size: 30px; font-weight: 700; letter-spacing: -.9px; line-height: 1.15;
+}
+.phone[data-variant="new"] .ico {
+  width: 38px; height: 38px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--sf); box-shadow: 0 0 0 1px var(--ln);
+  color: var(--tx); opacity: .9;
+}
+
+/* ② 身份区：去掉渐变与光环
+   现状的 radial 双辉光是"AI 生成页"最强的信号，也是整页唯一饱和色块；
+   它抢的是头衔的注意力，不是名字的。Airbnb 的个人页把头像和名字直接放在
+   页面底色上，靠 32px 留白隔开 —— 层级由字号给，不由背景色给。 */
+.phone[data-variant="new"] .who {
+  display: flex; align-items: center; gap: 14px;
+  padding: 26px 0 30px;
+}
+.phone[data-variant="new"] .ava {
+  width: 58px; height: 58px; border-radius: 50%; flex: none;
+  background: var(--sf2); color: var(--dim);
+  display: grid; place-items: center;
+  box-shadow: 0 0 0 1px var(--ln);
+}
+.phone[data-variant="new"] .who-t { min-width: 0; }
+.phone[data-variant="new"] .who-t b {
+  display: block; font-size: 22px; font-weight: 600;
+  letter-spacing: -.5px; font-variant-numeric: tabular-nums;
+}
+.phone[data-variant="new"] .who-t span {
+  display: block; margin-top: 4px; font-size: 13.5px; color: var(--dim);
+}
+
+/* ③ 分组：卡外小字 + 16px 圆角
+   现状 12px 圆角 + 每行 1px 内环，卡"贴"在页面上；16px 配 26px 组间距让卡
+   "浮"起来。组头降成 12.5px/500 大写感小字（Airbnb 的 section label），
+   和行内 16px 正文拉开一档 —— 现状组头 13px/400 和正文 16px 太近，读起来
+   像同一层。 */
+.phone[data-variant="new"] .grp { margin-bottom: 26px; }
+.phone[data-variant="new"] .gl {
+  font-size: 12.5px; font-weight: 500; letter-spacing: .03em;
+  color: var(--dim); margin: 0 0 9px 3px;
+}
+.phone[data-variant="new"] .card {
+  background: var(--sf); border-radius: 16px; overflow: hidden;
+  box-shadow: 0 0 0 1px var(--ln);
+}
+.phone[data-variant="new"] .row {
+  display: flex; align-items: center; gap: 12px;
+  min-height: 56px; padding: 8px 18px; position: relative;
+}
+.phone[data-variant="new"] .row + .row::before {
+  content: ""; position: absolute; top: 0; left: 18px; right: 0; height: 1px; background: var(--ln);
+}
+.phone[data-variant="new"] .k { font-size: 16px; flex: none; letter-spacing: -.1px; }
+.phone[data-variant="new"] .v {
+  margin-left: auto; font-size: 15px; color: var(--dim);
+  text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.phone[data-variant="new"] .v.mono {
+  font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: 13.5px;
+}
+/* ④ 彩色只给信息
+   全页唯一饱和色 = 外网访问那颗状态点。Airbnb 的红只出现在 CTA 和 logo 上，
+   其余全是中性色 —— "彩色少"才是高级感的来源，不是"用它的红"。 */
+.phone[data-variant="new"] .dot {
+  display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--ok); margin-right: 7px; vertical-align: 1px;
+}
+
+/* ⑤ 分段控件：选中项"浮起"，不靠主色铺底
+   现状选中态是整块 --ac 蓝底 —— 一屏里出现两块蓝，页面就有了两个焦点。
+   改成 iOS/Airbnb 通行的做法：控件底槽 + 选中项白（深色下为浅灰）底 + 轻投影。 */
+.phone[data-variant="new"] .tseg {
+  display: flex; margin-left: auto; padding: 3px; border-radius: 10px;
+  background: var(--sf2);
+}
+html[data-theme="light"] .phone[data-variant="new"] .tseg { background: #eeeeef; }
+.phone[data-variant="new"] .tseg span {
+  font-size: 12.5px; padding: 6px 12px; border-radius: 8px; color: var(--dim);
+  transition: .16s;
+}
+.phone[data-variant="new"] .tseg span.on {
+  background: var(--sf); color: var(--tx); font-weight: 500;
+  box-shadow: 0 1px 3px rgba(0,0,0,.16);
+}
+html[data-theme="light"] .phone[data-variant="new"] .tseg span.on { background: #fff; }
+
+/* ⑥ 危险动作：浅红底按钮，不是整行红字
+   现状"退出登录"是一整条白卡里的居中红字，跟上面的设置行长得一样，
+   只有颜色区别 —— 危险动作和普通动作共用同一套视觉语法是 iOS 的旧惯例。
+   改成独立按钮（16px 圆角、浅红底、深红字），跟上面的分组卡断开 12px：
+   它是"离开"这个动作，不是列表里的又一项。 */
+.phone[data-variant="new"] .out {
+  display: flex; align-items: center; justify-content: center;
+  height: 52px; margin-top: 4px;
+  font-size: 16px; font-weight: 600; letter-spacing: -.1px;
+  color: var(--dg); background: color-mix(in srgb, var(--dg) 11%, transparent);
+  border-radius: 16px;
+}
+html[data-theme="light"] .phone[data-variant="new"] .out { background: #fdf0ef; }
+
+/* 底部安全区提示条 */
+.hbar { width: 132px; height: 5px; border-radius: 3px; background: currentColor; opacity: .22; margin: 14px auto 0; }
+</style>
+</head>
+<body>
+
+<div class="bar">
+  <h2>「我的」页 · 手机端重设计</h2>
+  <div class="sp"></div>
+  <div class="seg" id="focus">
+    <button data-f="both" class="on">并排对照</button>
+    <button data-f="old">现状</button>
+    <button data-f="new">重做后</button>
+  </div>
+  <div class="seg" id="theme">
+    <button data-t="dark" class="on">深色</button>
+    <button data-t="light">浅色</button>
+  </div>
+</div>
+
+<div class="stage" id="stage" data-focus="both">
+
+  <!-- ═════════ A · 现状 ═════════ -->
+  <figure data-k="old">
+    <div class="phone" data-variant="old">
+      <div class="sbar">
+        <span>19:09</span>
+        <span class="icons">
+          <svg width="17" height="11" viewBox="0 0 17 11" fill="currentColor"><rect x="0" y="7" width="3" height="4" rx="1"/><rect x="4.5" y="5" width="3" height="6" rx="1"/><rect x="9" y="2.5" width="3" height="8.5" rx="1"/><rect x="13.5" y="0" width="3" height="11" rx="1"/></svg>
+          <svg width="16" height="11" viewBox="0 0 16 11" fill="currentColor"><path d="M8 10.2 5.6 7.6a3.5 3.5 0 0 1 4.8 0L8 10.2Zm-4.3-4.5-1.5-1.7a8.4 8.4 0 0 1 11.6 0l-1.5 1.7a6.2 6.2 0 0 0-8.6 0Z"/></svg>
+          <svg width="25" height="12" viewBox="0 0 25 12" fill="none"><rect x=".6" y=".6" width="21" height="10.8" rx="3.2" stroke="currentColor" stroke-opacity=".4"/><rect x="2.4" y="2.4" width="16" height="7.2" rx="2" fill="currentColor"/><path d="M23 4v4a2.2 2.2 0 0 0 0-4Z" fill="currentColor" fill-opacity=".5"/></svg>
+        </span>
+      </div>
+      <div class="scr">
+        <div class="hd">我的</div>
+        <div class="hero">
+          <div class="hero-ava">
+            <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="8.2" r="3.6"/><path d="M4.8 19.4c1.5-3.3 4.1-5 7.2-5s5.7 1.7 7.2 5"/></svg>
+          </div>
+          <div class="hero-t">
+            <b>152 6416 0947</b>
+            <span>中枢账号 · 手机号登录</span>
+          </div>
+        </div>
+        <div class="body">
+          <div class="grp">
+            <div class="gl">外观</div>
+            <div class="card">
+              <div class="row">
+                <span class="k">主题</span>
+                <div class="tseg"><span>浅色</span><span class="on">深色</span><span>跟随</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="grp">
+            <div class="gl">这台机器</div>
+            <div class="card">
+              <div class="row"><span class="k">设备名</span><span class="v">DESKTOP-ME3RQ97</span></div>
+              <div class="row"><span class="k">系统</span><span class="v">Windows 11</span></div>
+              <div class="row"><span class="k">版本</span><span class="v">班底 v1.5.3</span></div>
+              <div class="row"><span class="k">外网访问</span><span class="v"><i class="dot"></i>已连通</span></div>
+            </div>
+          </div>
+          <div class="grp">
+            <div class="gl">通用</div>
+            <div class="card">
+              <div class="row"><span class="k">清除缓存</span><span class="v">2.4 MB</span><i class="chev">›</i></div>
+              <div class="row"><span class="k">当前设备</span><span class="v">DESKTOP-ME3RQ97</span><i class="chev">›</i></div>
+            </div>
+          </div>
+          <div class="out">退出登录</div>
+        </div>
+      </div>
+    </div>
+    <figcaption>现状</figcaption>
+  </figure>
+
+  <!-- ═════════ B · 重做 ═════════ -->
+  <figure data-k="new">
+    <div class="phone" data-variant="new">
+      <div class="sbar">
+        <span>19:09</span>
+        <span class="icons">
+          <svg width="17" height="11" viewBox="0 0 17 11" fill="currentColor"><rect x="0" y="7" width="3" height="4" rx="1"/><rect x="4.5" y="5" width="3" height="6" rx="1"/><rect x="9" y="2.5" width="3" height="8.5" rx="1"/><rect x="13.5" y="0" width="3" height="11" rx="1"/></svg>
+          <svg width="16" height="11" viewBox="0 0 16 11" fill="currentColor"><path d="M8 10.2 5.6 7.6a3.5 3.5 0 0 1 4.8 0L8 10.2Zm-4.3-4.5-1.5-1.7a8.4 8.4 0 0 1 11.6 0l-1.5 1.7a6.2 6.2 0 0 0-8.6 0Z"/></svg>
+          <svg width="25" height="12" viewBox="0 0 25 12" fill="none"><rect x=".6" y=".6" width="21" height="10.8" rx="3.2" stroke="currentColor" stroke-opacity=".4"/><rect x="2.4" y="2.4" width="16" height="7.2" rx="2" fill="currentColor"/><path d="M23 4v4a2.2 2.2 0 0 0 0-4Z" fill="currentColor" fill-opacity=".5"/></svg>
+        </span>
+      </div>
+      <div class="scr">
+        <div class="pg">
+          <div class="htop">
+            <h1>我的</h1>
+            <span class="ico">
+              <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.1"/><path d="M19.4 14.5a1.6 1.6 0 0 0 .32 1.77l.06.06a1.94 1.94 0 1 1-2.75 2.75l-.06-.06a1.6 1.6 0 0 0-1.77-.32 1.6 1.6 0 0 0-.97 1.47V20a1.94 1.94 0 1 1-3.88 0v-.1a1.6 1.6 0 0 0-1.05-1.47 1.6 1.6 0 0 0-1.77.32l-.06.06a1.94 1.94 0 1 1-2.75-2.75l.06-.06a1.6 1.6 0 0 0 .32-1.77 1.6 1.6 0 0 0-1.47-.97H4a1.94 1.94 0 1 1 0-3.88h.1a1.6 1.6 0 0 0 1.47-1.05 1.6 1.6 0 0 0-.32-1.77l-.06-.06a1.94 1.94 0 1 1 2.75-2.75l.06.06a1.6 1.6 0 0 0 1.77.32h.08A1.6 1.6 0 0 0 11.9 4.1V4a1.94 1.94 0 1 1 3.88 0v.1a1.6 1.6 0 0 0 .97 1.47 1.6 1.6 0 0 0 1.77-.32l.06-.06a1.94 1.94 0 1 1 2.75 2.75l-.06.06a1.6 1.6 0 0 0-.32 1.77v.08a1.6 1.6 0 0 0 1.47.97H20a1.94 1.94 0 1 1 0 3.88h-.1a1.6 1.6 0 0 0-1.47.97z"/></svg>
+            </span>
+          </div>
+
+          <div class="who">
+            <div class="ava">
+              <svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="12" cy="8.2" r="3.6"/><path d="M4.8 19.4c1.5-3.3 4.1-5 7.2-5s5.7 1.7 7.2 5"/></svg>
+            </div>
+            <div class="who-t">
+              <b>152 6416 0947</b>
+              <span>中枢账号 · 手机号登录</span>
+            </div>
+          </div>
+
+          <div class="grp">
+            <div class="gl">这台机器</div>
+            <div class="card">
+              <div class="row"><span class="k">设备名</span><span class="v">DESKTOP-ME3RQ97</span></div>
+              <div class="row"><span class="k">系统</span><span class="v">Windows 11</span></div>
+              <div class="row"><span class="k">版本</span><span class="v">班底 v1.5.3</span></div>
+              <div class="row"><span class="k">外网访问</span><span class="v"><i class="dot"></i>已连通</span></div>
+            </div>
+          </div>
+
+          <div class="grp">
+            <div class="gl">通用</div>
+            <div class="card">
+              <div class="row"><span class="k">清除缓存</span><span class="v">2.4 MB</span></div>
+              <div class="row"><span class="k">当前设备</span><span class="v">DESKTOP-ME3RQ97</span></div>
+            </div>
+          </div>
+
+          <div class="grp">
+            <div class="gl">外观</div>
+            <div class="card">
+              <div class="row">
+                <span class="k">主题</span>
+                <div class="tseg"><span>浅色</span><span class="on">深色</span><span>跟随</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="out">退出登录</div>
+        </div>
+      </div>
+    </div>
+    <figcaption>重做后</figcaption>
+  </figure>
+
+</div>
+
+<script>
+  const stage = document.getElementById('stage');
+  document.getElementById('focus').addEventListener('click', (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    document.querySelectorAll('#focus button').forEach(x => x.classList.toggle('on', x === b));
+    stage.dataset.focus = b.dataset.f;
+  });
+  document.getElementById('theme').addEventListener('click', (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    document.querySelectorAll('#theme button').forEach(x => x.classList.toggle('on', x === b));
+    document.documentElement.dataset.theme = b.dataset.t;
+  });
+  // 预览辅助：#light 直接进浅色（供截图脚本用）
+  if (location.hash === '#light') {
+    document.documentElement.dataset.theme = 'light';
+    document.querySelectorAll('#theme button').forEach(x => x.classList.toggle('on', x.dataset.t === 'light'));
+  }
+</script>
+</body>
+</html>

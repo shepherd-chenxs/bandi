@@ -4,7 +4,7 @@ import { esc, toast } from './shell.mjs';
 import { api, avatarStyle, hhmm, initial, post } from './ui.mjs';
 import { load, setNav } from './state.mjs';
 import { confirmDo } from './machine.mjs';
-import { renderList } from './contacts.mjs';
+import { renderList, showView } from './contacts.mjs';
 import { setListTitle } from './flowpages.mjs';
 import { openConversation, setComposer } from './chat.mjs';
 import { gidOf } from './groups.mjs';
@@ -332,6 +332,14 @@ export async function removeConversationForever(c) {
  *    （工作台卡片 / 任务卡 / 流程实例），那样就是超范围改动。
  */
 export async function openConversationSafe(id) {
+  /*
+   * 先切视图（2026-11-09 用户实报「点左侧的消息没有反应」）：
+   * 主区此刻可能停在**员工详情页**（聊天页头点名字/头像进去的，S.nav 还是 messages），
+   * 而 `openConversation` 只往 #chat / #chatHead 里写、**不切视图**（看板上踩过，
+   * wirePersonaTaskLinks / projects.mjs 里都是先切再开）—— 不切的话内容写进隐藏页，
+   * 用户看到的就是"点了没反应"。showView('chat') 顺带 flush 详情页的自动保存。
+   */
+  showView('chat');
   try {
     await openConversation(id);
   } catch (err) {

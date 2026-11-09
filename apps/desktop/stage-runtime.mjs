@@ -64,30 +64,13 @@ for (const d of ['skills', 'plugins']) {
 }
 
 /**
- * 外网访问要的 frpc（2026-11-08）。`tauri.conf.json` 把它映射成安装目录的 `vendor/`，
- * 与控制面 `hub/tunnel.mjs#findBin()` 的 `<repoRoot>/vendor/frp/frpc` 对齐。
+ * 外网隧道客户端（frpc）**不再随包分发**（2026-11-08 用户决定：需要时另外装，不内置）。
  *
- * 两个名字都认（tunnel.mjs#findBin 同序）：
- *   · `bandi-tunnel(.exe)` —— 自编译产物（build-frpc.mjs），防杀软误报，**优先用**；
- *   · `frpc(.exe)` —— 官方原版（fetch-frpc.mjs 的兜底），哈希在杀软特征库里，装了可能报"木马"。
- *
- * 缺了**不算失败**：这台机器就只是"外面连不进来"，本机使用一切照旧 —— 这与代码里
- * `state: 'unavailable'` 的降级口径一致。但必须喊出来：不喊的话，症状是用户装完
- * 一切正常、出门才发现手机连不上，而日志里只有一行"没找到 frpc"。
+ * 原来的做法是把 vendor/frp 拷进安装目录的 vendor/，控制面再 spawn 它。现在节点侧
+ * 一行进程管理都没有了 —— 装出来的版本不会带任何隧道二进制，也不会去 PATH 里找。
+ * 要外网访问，自己装一套 frp 指向本机控制面端口即可（域名写进 <数据目录>/tunnel.json
+ * 让 Host/Origin 闸认它）。
  */
-const frpcSrc = path.join(repo, 'vendor', 'frp');
-const frpcDst = path.join(out, 'vendor', 'frp');
-fs.mkdirSync(frpcDst, { recursive: true });
-if (fs.existsSync(frpcSrc)) {
-  copyTree(frpcSrc, frpcDst);
-  const has = fs.readdirSync(frpcDst).some((n) => /^(frpc|bandi-tunnel)(\.exe)?$/i.test(n));
-  if (!has) console.warn('⚠️ vendor/frp 里没有隧道可执行文件 —— 装出来的版本外网访问不可用');
-  else if (!fs.readdirSync(frpcDst).some((n) => /^bandi-tunnel(\.exe)?$/i.test(n))) {
-    console.warn('⚠️ 只有官方 frpc，没有自编译 bandi-tunnel —— 用户装完可能被杀软报"木马"。先跑 `node apps/desktop/build-frpc.mjs`');
-  }
-} else {
-  console.warn('⚠️ 没有 vendor/frp —— 先跑 `node apps/desktop/build-frpc.mjs`（或 fetch-frpc.mjs），否则装出来的版本外网访问不可用');
-}
 
 /**
  * 随包分发的许可文本 —— **这三份一个都不能少**，它们在 `tauri.conf.json` 的
@@ -120,7 +103,6 @@ for (const line of [
   '  apps/web       界面',
   '  apps/desktop/shell.mjs  壳的 Node 半',
   '  skills, plugins',
-  '  vendor/frp     frpc（外网访问用；缺了只是连不进来）',
   '  LICENSE, NOTICE, node-LICENSE.txt  随包分发的许可文本',
 ]) {
   console.log(line);

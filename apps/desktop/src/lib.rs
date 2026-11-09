@@ -175,6 +175,18 @@ pub fn run() {
                  */
                 .maximized(true)
                 /*
+                 * 关掉壳层的文件拖放接管（2026-11-08 修「看板拖卡拖不动」）。
+                 *
+                 * Tauri 2 在 Windows 上默认给 WebView2 换上自己的 IDropTarget（用来发
+                 * DragDropEvent 文件拖入事件），这一换把 WebView2 原生的 HTML5 拖拽
+                 * 整个压掉了 —— dragstart/dragover/drop 一个都不触发，看板拖卡在壳里
+                 * 完全失灵（浏览器里正常，所以此前没暴露）。面板从头到尾没用过 Tauri
+                 * 的文件拖入事件（web/js 里 grep 不到一处），关掉是纯赚。
+                 * Tauri 文档原文：disable it "to use HTML5 drag and drop APIs on the
+                 * frontend on Windows since we replace the drag drop handler of WebView2"。
+                 */
+                .disable_drag_drop_handler()
+                /*
                  * **先藏起来，等页面画完再露脸。**
                  *
                  * 窗口一创建就可见的话，从创建到 WebView 画出第一帧之间的那一小段，

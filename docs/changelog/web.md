@@ -680,4 +680,278 @@ v13（2026-11-01 七改）：设备行加「取消配对」（已踢出行的清
    「断开连接」按钮随之消失（手机就是登录进来的账号，退出走「退出登录」）。
    手机端只剩一条路：中枢账号登录（App 里 WebView 带会话进门）。sw.js / settings /
    state / mobile / experts 都变了，进一版。
+
+   v161（2026-11-08 用户：「导航栏统一一下。+号去掉。」）：手机端项目页导航栏不再放
+   「＋ 新建项目」那颗钮（#listAction 窄屏隐藏，桌面端原样保留）—— 消息 / 工作台 /
+   我的这些手机页导航栏都是干净的，就项目页多一颗，看着不统一。空态文案随之收掉
+   「点右上角 ＋ 新建一个」的引导（手机上没有那颗钮）。projects.mjs 变了，进一版。
+
+   v162（2026-11-08 用户：「标题直接使用项目就可以」）：手机端项目页导航栏标题不再写
+   「工作台 › 项目」面包屑，只写「项目」—— 回宫格走底部导航（工作台 tab），面包屑
+   不用兼任入口；桌面端保留完整两级。projects.mjs 变了，进一版。
+
+   v163（2026-11-08 用户：「手机端的基础信息、项目规章去掉」）：手机端项目详情页只留
+   「项目成员」一个页签（默认激活），基础信息 / 项目规章两个页签不输出 —— 大表单与
+   低频编辑适合电脑上做。面板 DOM 仍渲染（hidden 不删）：自动保存 collect() 照常取值，
+   服务端字段不缺。projects.mjs 变了，进一版。
+
+   v164（2026-11-08 用户：「这一行去掉」）：手机端项目详情页整行页头（名称 / 目录 pill /
+   任务 / 删除）不输出 —— 名称顶部导航栏（‹ 项目名）已有，任务 / 删除是低频操作留给
+   电脑。#pjTasks 绑定补了可选链（元素可能不存在）。projects.mjs 变了，进一版。
+
+   v165（2026-11-08 用户：「目录去掉」）：手机端项目列表行不再显示目录路径（.line2）——
+   路径太长挤占一行；搜索仍按目录命中，只是不展示。桌面端原样。projects.mjs 变了，进一版。
+
+   v166（2026-11-08 用户：「这个怎么点不开」）：修任务看板**卡片点不开** —— 任务卡整页
+   渲染里还留着一处 `isCollab` 引用（协作中心 2026-11-07 整体退场时删了变量、漏了这一处），
+   openTaskCardPage 抛 ReferenceError，表现就是点了卡片毫无反应、页面停在看板。
+   删掉「总公司」那一支（来源只剩 流程 / 仓库值班 / 手动建卡）。projects.mjs 变了，进一版。
+
+   v167（2026-11-08 用户圈了执行人问「这是一个流程项目。不应该是这个卡吧」）：**还没发起的
+   流程卡改成「发起台」形态** —— ① 执行人从"只有一个选项的假下拉"改成纯文本「由流程执行」
+   （执行人由流程当前节点决定，服务端本来就拒绝改派，摆下拉只会让人以为能选）；② 讨论
+   区 / 输入条 / PR 区不渲染（发起前没有经办人、没开工，这两块只会是空的）；③ 说明行旁
+   加「发起流程」按钮（确认后等价于状态改「进行中」，走同一条保存管道，发起后自动带去
+   流程实例页）。已发起的流程卡照旧直达实例页，普通手工卡一律不变。projects.mjs 变了，进一版。
+
+   v168（2026-11-08 用户：「右边加一块固定面板。用来展示各种状态的数量，当前是全部项目
+   还是某个项目」）：任务看板右侧加**固定统计面板** —— 标题写当前范围（全局面板「全部项目」
+   / 项目看板写项目名），下面按状态列数量（跟列头同一套状态色），底部合计。数字取筛选前的
+   真实分布（列头上的才是筛后），拖卡/建卡删卡后随 kbRepaint 一起刷新；面板钉在右边，
+   不随列横向滚。两块看板（全局 / 项目）共用。projects.mjs + style.css 变了，进一版。
+
+   v169（2026-11-08 用户：「点击应该直接进度到任务卡，不应该有中间那个」）：手机上看板点
+   **流程卡**不再经过「发起记录」列表页 —— 带着具体实例跳进 openFlowRun 时（pickRunId 有值）
+   窄屏直接派 mb-detail 铺开实例页 + 顶上返回栏；返回落在发起记录列表（它就是上一级）。
+   从「发起记录」入口浏览着进的仍先看列表。flowpages.mjs 变了，进一版。
+
+   v170（2026-11-08 用户：「点返回还是能跳转到发起记录」）：手机直达实例页（上一条）返回时
+   不再落到这页左栏的「发起记录」，改成画回**点进来的那一页**（看板 / 项目 / 任务卡 / 会话）；
+   来路存进当前那格历史（flowDirect），刷新后还认得回去，拿不到来路就回看板。界面态
+   body.flow-direct-open：mobile.mjs 的「‹ 返回」/ Esc / 手势返回看到它就把收场交给
+   flowpages（leaveDetail 走 flow-direct-leave 事件）。flowpages.mjs + mobile.mjs 变了，进一版。
 ```
++
++   v171（2026-11-08 用户圈了状态词：「状态放卡片右上角」）：窄屏看板行的状态（点+词）从
++   元信息行挪到**标题行右上角**，与标题首行齐顶（词 12.5px 抬 2px 对齐 16px 标题）——
++   竖列表扫状态视线路径最短。元信息行剩 项目 pill / 执行人 / 时间 三段（收缩优先级注释
++   随之更新：执行人先让、pill 后让）。kbMobileRow + mobile.css 变了，进一版。
++
++   v172（2026-11-08 用户圈了「（没派活）」：「要能选人」）：手机任务卡页的执行人行从只读
++   改成**可点行**（带 chevron）—— 点开全屏选择页（mbOpenPicker，与状态胶囊同一套），选项
++   与桌面 combo 同口径（不指定 / 真人 u: 前缀 / 数字员工，带搜索）；选中立刻刷行上名字并
++   落库（待办+人 = 自动开工，同桌面）。手机 snapshot 随之带上执行人字段；还没发起的流程卡
++   保持只读（服务端本来就拒绝改派）。projects.mjs 变了，进一版。
+
+   v173（2026-11-08 用户圈了看板工具栏的「刷新 PR」：「去掉，放在这里不伦不类的」）：
+   任务看板工具栏的「刷新 PR（n）」按钮**整颗移除**（kbPrRefreshHtml + 点击绑定一并删，
+   工具栏回到 筛选 / 列设置 / 刷新 三件）。PR 状态更新能力不受影响：单卡详情里的
+   「刷新状态」照旧，服务端 `POST /api/git/prs/refresh` 保留。projects.mjs 变了，进一版。
+
+   v174（2026-11-08 修 v168 引入的语法错误）：openBoardPage 收尾的 `}` 在加 wireKbStats()
+   那次编辑里被吃掉了 —— 模块整个 parse 失败，SPA 起不来，表现是**全页点不动**（消息页
+   空列表、导航无响应）。补回闭合括号。诊断教训：`--input-type=module --check`（stdin）
+   是可靠语法闸；报错行只是第一个撞上的 export，真正失衡点在它之前的函数体里。
+
+   v175（2026-11-08 用户圈了页头「筛选 / 列设置 / 刷新」三颗钮：「改成图标，不要文字」）：
+   任务看板页头三颗钮改**纯图标**（icon 15px、padding 收成方钮），文字含义挪进
+   title / aria-label；筛选的   计数角标保留（有筛选时图标旁仍带数字）。kbFilterBar /
+   kbColsSettingHtml + style.css 变了，进一版。
+
+   v176（2026-11-08 用户圈了刷新图标：「这个刷新按钮是不是没有用啊」）：按钮本身**有用**
+   （CDP 实测点击确实重抓 /api/tasks 重画整页 —— AI/别的设备改的任务不实时推过来，这是
+   唯一入口），但数据没变时画面一动不动、又没有反馈，看起来像死的。点下去加转圈反馈
+   （只转图标，尺寸不动，同手机端 .kb-l-refresh 的 spinning）。projects.mjs + style.css
+   变了，进一版。
+
+   v177（2026-11-08 用户：「还是慢」）：**代码类资源从网络优先改回缓存优先**
+   （sw.js fetch 的 isCode 分支）。11-05 改成网络优先治的是"改完看不到"，理由是
+   "局域网里那点往返不算事"——局域网成立，走中枢中转不成立：实测 style.css
+   TTFB 5.4s / 总计 8.8s、app.mjs 2.9s，23 个文件按 HTTP/1.1 同域 6 并发算
+   ≈ 10 秒起步，每次打开全部重下，SW 缓存等于废掉。
+   现在：命中缓存直接回、后台悄悄换新（stale-while-revalidate）；
+   **主动刷新（导航 request.cache === 'reload'）仍然全量走网络，并且先清空
+   整个静态缓存**——只换 HTML 不换 js 会出现"新结构配旧脚本"，宁慢一次给一整套。
+   "改完看不到"由 startVersionWatch 的 /api/web-version 指纹提示条兜底（misc.mjs:505），
+   不需要 SW 再当第二道保险。仅 sw.js 变；VERSION v176 → v177 逼客户端换新 SW。
+
+   v178（2026-11-08 头像瘦身 + 懒加载，3M 带宽前置准备）：avatars/ 里 23 张 **256² PNG
+   平均 93 KB**，而页面最大只显示 58px —— 照片存 PNG（无损）压不动，是格式选错。
+   走中转/3Mbps 时一屏 20 张 ≈ 1.86 MB ≈ 5 秒，比整个应用外壳（brotli 595 KB）还贵，
+   且每进一次列表重来一遍（头像不在 SW 预缓存清单）。
+   ① `tools/avatar-webp.mjs`（需 `npm i --no-save sharp`）生成同名 .webp：160px/q82，
+      合计 2139 KB → **58 KB（-97%）**，3M 下满屏头像 5.7s → 0.2s；原 PNG 一张没删。
+   ② `http.mjs serveStatic` 按 `Accept: image/webp` 内容协商换发 webp；**只要 webp 存在
+      两种响应都挂 Vary: Accept**（中间缓存把无 Vary 的 PNG 存下来发给所有人，webp 就白做）。
+      头像 Cache-Control 放宽为 `public, max-age=86400`（改头像代价 = 明天才看到；
+      代码类仍 no-store，语义不同别混）。personas.avatar 存的文件名、onerror 兜底全不动。
+   ③ ui.mjs / chat.mjs / groups.mjs 的头像 <img> 加 `loading="lazy" decoding="async"`
+      —— 屏幕外的不拉，首屏列表只付可见部分的流量。
+
+   v179（2026-11-08 frp 不再内置，隧道层整块下线）：用户决定「把 frp 从 bandi 里移掉，
+   不内置，以后需要我自己装」。所以删的不是一个二进制，而是**这层能力**：
+   ① `hub/tunnel.mjs`（生 frpc.toml / 起停 / 重连 / 收尸）、`vendor/frp/`（17 MB exe）、
+      `apps/desktop/fetch-frpc.mjs`、`build-frpc.mjs`、`smoke-tunnel.mjs`、`deploy/relay-aliyun/` 全删；
+   ② `/api/hello` 的 `relay` 字段、「我的」页桌面/手机两处外网状态行 + `.me-relay/.me-dot` 样式删；
+      状态行没有真相可显示了 —— 进程不归我们管，编个状态比不显示更害人；
+   ③ 打包链路：`stage-runtime.mjs` 不再拷 `vendor/frp`，`tauri.conf.json` 去掉 `runtime/vendor → vendor`
+      映射（不删它，桌面打包会因「资源路径不存在」直接失败 —— 删 `runtime/vendor` 后才暴露，
+      所以是**先删映射再删目录**），`pack-linux.mjs` / `install.sh` 的 frpc 取包与 chmod 一并撤；
+   ④ **`hub/relay.mjs` 保留，故意的**：它不只喂隧道进程，还给 `http.mjs` 供 Host 守卫与写请求
+      Origin 白名单。自己装 frp 后域名照样打进来，这两闸不认它就是「页面能开、改任何设置都 403」。
+      自建路径写进 `<数据目录>/tunnel.json`（或等中枢心跳下发）。
+   顺带：`run-smokes` 去掉 smoke-tunnel 条目（不删会让整条冒烟因文件不存在而红）；
+   `check-pr` 白名单去掉只服务于 frp 编译的 `goproxy.cn`，`ghfast.top` 留着（取 Node 仍在用）；
+   smoke-tunnel 的删除登记进 ASSERT_WAIVERS（写明「无替代」，不是放松闸门）。
+   **影响**：本机重启后隧道不再自动起 —— 手机/外网这次真的断了，要自己装 frp 才回来。
+
+   v180（2026-11-08 头像外圈"黑边"根修）：那不是 border（avatarStyle 的 inline 早已把
+   border-color 设 transparent），是 `overflow:hidden + border-radius` 裁切的**抗锯齿渗边**——
+   图片边缘落在非整数设备像素上时，裁切边把图与垫底的 hsl(hue 34% 26%) 深色字母底混出
+   1px 暗环；框色随人变（张坤 rgb(89,44,66)=hsl335°、贺韬 rgb(44,44,89)=hsl235°）就是铁证，
+   素材 PNG/WebP 四边逐像素扫过均无描边。修法：`.avatar .av-img` 外扩 1px
+   （inset:-1px + calc(100%+2px)），裁切边落在图片内部像素上，底色不参与混色；
+   cover 多裁 2px 源图，38px 显示尺寸下不可见。`.mavatar`（群磁贴，不裁切、图自身圆角）
+   与 `.mp-avatar` 未动，那边没有这个现象。
+
+   v181（2026-11-08 v180 头像改动整体回退，用户要求"回退成原来的样子"）：
+   v180 的"外扩 1px"没解决问题（对比渲染证明新旧两格暗环一模一样），真正的成因是
+   `background-clip` 默认 `border-box` —— 深色字母底画进了 1px 边框区，而图片只铺
+   padding-box，永远盖不住那圈，于是透出一圈随人变色的暗环（控制变量实验：去背景消失、
+   去 border 仍在、`background-clip:padding-box` 消失）。但该修法让图片顶到外沿、
+   视觉上"贴边了"，用户不接受，故 **`style.css` / `ui.mjs` 与头像有关的改动全部还原为
+   HEAD 状态**（`.avatar`、`.avatar.sm`、`avatarStyle()` 行内样式、`.av-img` 均无 diff）。
+   头像的 `loading="lazy" decoding="async"`（v178）与 WebP 内容协商不动 —— 那是另一笔账。
+   结论留档：外圈暗环 = 深色字母底从透明边框透出，不是素材描边、不是 border、不是裁切。
+
+   v183（2026-11-08 历史"过程收起行"砍掉，用户："运行进度卡是落库了吗？感觉也没啥用"）：
+   回话气泡顶上那行「✓ 意图 · N 步 · 用时 ▾」连同展开明细整个删掉，服务端也不再给
+   回话消息摘 meta.progress 快照；**实时进度卡（调用工具 N 步 / 停止按钮 / 卡住判定）
+   原样保留**。砍的理由：这边跑的 codex 系 runtime 不发工具结果事件，快照里 174/174
+   个步骤状态都是「已发起」、耗时全 null，展开只剩一串截断的命令 —— 既不知道成没成、
+   也不知道单步多久；真正有用的"走到哪步、卡没卡、能不能停"本来只活在直播里、不进历史。
+   run_events 仍全量落库（重连重放 / 排错用），只是不再给回话消息摘快照。
+   老消息里已有的 meta.progress 由**数据库迁移**清掉（结构版本 1→2，见 store/db.mjs 的
+   migrateDropMessageProgress）：只动有 progress 的行、清完只剩空对象就把 meta 置 NULL、
+   坏 JSON 跳过；本机实测清 32 条，`stopped` 等兄弟字段原样保留。
+   改动：runs.mjs（progressMeta/replyMeta 收成只记 stopped）、chat.mjs（删
+   progressNoteHtml 与 data-rp-note 接线）、run-progress.mjs（删 summarizeEvents）、
+   style.css（删 .rp-note* 与 .rp-note-arrow 组合选择器）、smoke-run-progress.mjs
+   （断言改成「不再渲染 / 不再落库」）、store/db.mjs（SCHEMA_VERSION 1→2 + 迁移）、
+   smoke-db-migration.mjs（新用例，已登记 run-smokes）。仅内容改动，预缓存清单没动，
+   但 VERSION 仍 +1：js/css 都变了，逼客户端整包换新。
+   v184（2026-11-08 「我的」页恢复定稿版式，用户拍板）：今晚两轮改动整体撤回 ——
+   ① 齿轮 + 「我的 › 设置」子页（meSetOpen，把这台机器/通用搬进子页）；
+   ② mobile.css §24 的 Airbnb 重排（去渐变 hero、大标题锚点、主题挪页尾、退出改浅红胶囊）。
+   两轮都是未提交的工作区改动，定稿版式在 HEAD（6bdd441）里 —— settings.mjs / mobile.css
+   的 me 部分整体回到 HEAD，只保留 frp 下线必须删的外网状态行（relayText / relayPhone）。
+   mobile.mjs 的两行 me-set popstate/Esc 守卫一并撤。齿轮改动留档在 git stash（stash@{0}），
+   哪天要再上齿轮/子页从那里取。教训照旧：**设计定稿之后不要再"顺手"改版式** ——
+   每次重排都要过用户。
+   v185（2026-11-08 「我的」页加昵称，删掉「中枢账号 · 手机号登录」，用户拍板）：
+   身份卡改成两行 —— **第一行昵称、第二行手机号**。没设昵称时标题退回手机号（页面不至于
+   空着）、副行给一个「＋ 设置昵称」入口；右侧常驻小铅笔（55% 透明不抢戏，**不做 hover
+   才显形**：手机没有 hover）。点开用全站统一的 askText 弹窗改，留空 = 清除。
+   昵称存 `users.nickname`（结构版本 2→3），**与账号名分开**：name 是中枢影子名
+   （通讯录 / 消息署名用它），改昵称只动展示名、不动署名 —— 合成一个字段的话，改昵称
+   就等于改账号名，改错了还找不回来。
+   服务端：/api/me 的 user 多一个 nickname（null = 没设）；PATCH /api/users/:id 接受
+   nickname（空白 = 清除，超过 20 字 E3813）；smoke-users 加 ⑤c 钉「改 / 清空 / 超长 /
+   不动账号名」，③ 的字段集与 ⑤ 的 /api/me 形状断言同步更新。
+   改动：settings.mjs（身份卡两行 + 编辑接线）、style.css（.me-edit / .me-nick-set）、
+   mobile.css（铅笔触控区 34px）、store/users.mjs（nickname 列 + setNickname）、
+   store/db.mjs（SCHEMA_VERSION 2→3）、routes/users.mjs（meOf + PATCH nickname）。
+   ⚠️ 服务端要重启一次（加列 + 新接口）才生效；前端刷新即可看到新身份卡。
+   v186（2026-11-08 运行进度卡改成「单行气泡刷日志」，用户："这个看着不好看，
+   我觉得改成单行气泡刷日志更好看 —— 重要的不是显示的是什么，是在动"）：
+   运行中的那块从**多行小卡**压成**一行**：日志写"此刻正在做的那一件事"（跑着的那个
+   工具，codex 系没有结果事件时退到最后一步），新动作到了上滑换掉；步数与用时收到右端，
+   中间用 1px 竖线隔开（不加的话"搜索 xxx 10 步"会连读成一句）；停止钮缩成同高的小 chip
+   （描边压到 line 的 78%，一行的尽头必须有出口，但不该比日志亮）。
+   **不给自己加边框和底色**：这块本来就在 .bubble 里，再套一颗胶囊就是框里套框 ——
+   用户截图那块丑，一半来自这两层框。所以气泡本身就是那颗单行泡。
+   "在动"的三层信号：点的呼吸 + 从点上荡开的细圈（不看事件、一直在走，模型憋 40 秒不
+   说话时全靠它）、日志行上滑（只在文字真变时播，每秒重画不重放动画）、秒数在走。
+   卡住的判断直接写进日志行（"可能卡住了 · 最后动静 N 分钟前"），不再单独占一行；
+   步骤明细保留，收尾后点这一行展开（任务卡页没有整页重画，那里还要能回看）。
+   失败时错误原文露在下面一行红字（步骤级 error 也认 —— codex 系多半只有它）。
+   改动：run-progress-card.mjs（DOM 一行化 + setLog 的换行动画 + 收尾折叠进日志槽，
+   运行中不再每秒重画 8 行步骤）、style.css（.rp 整段重写：去外壳、点扩散圈、
+   .rp-roll、竖线、chip 停止钮、窄屏只藏步数）。仅前端改动，VERSION 仍 +1。
+
+   v187（2026-11-08 用户实拍对比："我的是这个效果，跟你的图不太一样"）：单行气泡一版
+   在真站里没成立，两个根因都不是配色 ——
+   ① **位置**：进度那一行 append 在正文 `.bubble` **里面**，回话一长气泡就被撑成一大块，
+      那行只剩"小字标题"的观感，跟预览里那颗独立小泡完全不是一回事；
+   ② **内容不动**：日志挂在"最后一步"上，而 codex/claude 的 MCP 调用（`mcp_tool_call` /
+      `mcp__server__tool`）以前只能出"调用工具"四个字、没有目标 —— 一跑几分钟同一句，
+      看着像死在那儿（下面正文其实早就在流）。
+   改法是**换 DOM 而不是换皮**：chat.mjs 的正在跑那行多一层 `.live-col`，进度卡与 `.bubble`
+   成了兄弟节点 —— 进度自己一颗 30px 高的胶囊（`.rp-head` 加回描边/底色/999px 圆角，
+   宽度上限跟气泡同档 90%；手机 82%、无描边，跟 iMessage 那套一致），回话另起一颗气泡。
+   日志同时修正：`toolSummary` 从 `detail.server/tool` 或名字 `mcp__server__tool` 里把工具名
+   读出来当目标（"调用工具 aliyun · DescribeInstances"）；且只有**真在跑**或**刚落下去
+   20 秒内**的工具才占这一行，其余时间报阶段（写回话 / 思考中），不再挂着旧工具名撒谎。
+   步骤明细、收尾折叠、错误原文那一行都不变。
+   改动：chat.mjs（.live-col + insertBefore）、style.css（.live-col、.rp-head 胶囊化、
+   三态描边）、mobile.css（手机胶囊无描边 + 82%）、run-progress.mjs（mcpLabel + detail 字段）、
+   run-progress-card.mjs（日志的 20 秒新鲜度）。smoke-run-progress ⑥ 换新断言、
+   ③ 补两条 MCP。仅前端改动，刷新即可（SW v187 逼客户端换缓存）。
+   v188（2026-11-08 实时气泡改回**一颗泡**：日志行被正文原地顶掉，用户拍板 A）：
+   用户口径：「单行气泡刷日志，显示什么不重要，重要的是在动；真正的回复出来后
+   代替这个单行日志气泡」。三版落实：
+   · chat.mjs 只建**一颗** .bubble（先挂 .live-line：泡自己不画框），进度胶囊住在里面；
+     真正的回复一到 → enterAnswer 移除胶囊、摘掉 .live-line，同一个泡原地变回话泡 ——
+     日志泡和回话泡不会并排出现（二版是 .live-col 下两颗兄弟泡，用户实拍还是两块）；
+   · 工具之前的正文只是「中间话」：先攒着不画，第一件工具一到就丢；纯聊天（整轮没工具）
+     在 turn_end 时画回来，回话不丢；
+   · 思考片段也刷在这一行（「思考过程」开着时）：优先级 报错/卡住 > 思考片段 > 正在跑的
+     工具 > 阶段词。原来那块"思考直播"灰字块与 .think 样式随之退场；
+   · 「真正的回复」判据按用户口径 A：工具之后的正文一开流就顶掉日志行（不是等整轮跑完）。
+   改动：chat.mjs（单泡 + enterAnswer/pendingText）、run-progress-card.mjs（showThinking +
+   日志行优先级）、style.css（.bubble.live-line，删 .think）、sw.js（预缓存清单去掉
+   thinking-live.mjs，VERSION v187 → v188）、smoke-run-progress.mjs（三版断言）。
+
+   v189（2026-11-08 「思考过程」配置退场，用户："上一个改动还有一个小尾巴，把这个配置去掉吧，没啥用了"）：
+   员工配置里那个「思考过程」开关整个删掉（桌面 配置 › 执行配置 + 手机员工详情两处），
+   showThinking 也从 persona 建/改接口退场（老库 personas.showThinking 列留着不读，
+   同 users 的死列惯例；接口收到这个字段会被当未知字段忽略）。
+   理由：实时气泡已经收成"一行在动"的日志，显示什么不重要（思考片段/工具/阶段轮着刷就行），
+   再留一个"内容显不显示"的配置没有意义。
+   行为变化：思考片段**固定**刷在那一行（原来只在开关开着时进），工具/正文一到就换掉。
+   改动：chat.mjs（去两处开关与保存字段）、run-progress-card.mjs（去 showThinking，
+   思考固定进日志行）、mobile.css（去该开关的 iOS 尺寸规则）、routes/persona.mjs /
+   server.mjs / store/personas.mjs / store/conversations.mjs（去 showThinking 读写）、
+   route-policy.mjs（设备可改字段 4→3）、smoke-run-progress.mjs（断言改成"思考固定进这一行、
+   开关已退场"）。VERSION v188 → v189。
+   v190（2026-11-09 单气泡直播收进共用状态机，任务卡讨论区补上；英文中间话不再铺段落）：
+   用户实拍（沈丹青任务卡讨论区）：进度胶囊下面堆了十几段英文中间话 —— 讨论区没接
+   聊天页那套「单行日志 → 回复顶掉」的设计，把每个 text 事件当正文一段段 add 了。
+   另外英文工作流会在**每次工具调用之间**"解说"一句，这些 text 在事件流里跟真回复长得
+   一样，按旧规则（工具之后的正文=回复）会提前把日志行顶掉、中间话照样铺开。
+   收口成一份共用状态机 `js/run-live.mjs`（chat.mjs / projects.mjs 共用）：
+   · 跑着时只留那一行日志（思考片段 / 工具 / 阶段轮着刷）；
+   · text 一律不直播，先攒着；后面又来了工具事件 → 那段是中间话，丢弃；
+   · turn_end / 收尾时还没被工具顶掉的，才是真正的回复 → 顶掉日志行、落进同一颗泡。
+   代价（明确接受）：回复不再逐字流、收尾时整段出现 —— 换来"整轮只有一行在动"。
+   改动：新增 run-live.mjs；chat.mjs（去内联状态机改用它）；projects.mjs（讨论区接入）；
+   sw.js（预缓存清单 + VERSION v189 → v190）；smoke-run-progress.mjs（断言改钉共用状态机）。   v191（2026-11-09 团队协作：任务卡可派给群，群助手（必须 PM 岗）动态承接）：
+  看板建卡弹窗的「执行人」多第三档：团队协作 · 群名（只列群助手是项目经理的群；后端建卡/派发
+  还会再校验一次）。卡上不记协调人 —— 派发、子卡授权、回执都现读群上的群助手，换人自动跟随。
+  群助手可拆子卡（parentTaskId，一层、派本群成员、不能派给自己），子卡回执唤醒群助手；
+  群卡片详情执行人一栏显示「团队协作 · 群名」，可改回派人/真人（改派走同一条 PATCH）。
+  改动：projects.mjs（建卡/详情执行人清单接入团队协作、快照发 assigneeGroupId）；
+  sw.js（VERSION v190 → v191）。后端改动见 store/db.mjs（结构版本 4）、project-tasks.mjs、
+  routes/agent-cards.mjs、routes/project.mjs；新增 smoke-group-tasks.mjs（已登记）。
+
+   v192（2026-11-09 多机协同 / 算力节点子系统彻底删除，用户拍板：无存量机）：
+  服务端节点端点全删；本机软件商店安装任务端点从 /api/nodes/local/tasks 改挂
+  /api/local/tasks（POST 下发、GET 列表、GET /:tid 查询，响应形状不变）。
+  前端跟着清：
+  · misc.mjs 删掉节点状态页 renderNodeMode 与 boot 的 client.joined 分岔 —— 所有机器都走正常面板；
+  · connectors.mjs 四处安装任务改走 /api/local/tasks，模式页 / 邀请码 / 加入的历史注释块清干净；
+  · machine.mjs 去掉 nodeOnline 离线标注，设备详情的任务进度轮询改走 /api/local/tasks/:tid；
+  · style.css / mobile.css 删 node-mode、#nodeView、joinwiz、machine-* 等无人使用的死代码；
+  · core.mjs 的本机身份注释改成与本机安装任务相符的说法。
+  改动：misc.mjs / machine.mjs / connectors.mjs / core.mjs / style.css / mobile.css；
+  sw.js（VERSION v191 → v192）。
