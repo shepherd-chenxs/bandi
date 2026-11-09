@@ -126,6 +126,22 @@ const ASSERT_WAIVERS = {
   // 隧道进程管理（tunnel.mjs）已删，这个冒烟**没有可测的对象**，不是"测试被放松"。
   // 留下来的 hub/relay.mjs 只供两道闸认域名，闸的放行由 smoke-lan-origin 覆盖。
   'apps/server/src/smoke-tunnel.mjs': '内置 frp 下线（2026-11-08 用户决定）：隧道进程层整体删除，无替代；两道闸由 smoke-lan-origin 覆盖',
+  // 本批（2026-11-09）：**多机协同 / 算力节点子系统整体删除**（用户拍板"无存量机"，
+  // 见 docs/形态决策.md「2026-11-09 彻底删除」）——节点报到 / 派活 / 面板 / 邀请码加入
+  // 连同被测对象一起退场，留下的本机路径另有覆盖（autostart 只剩 control-plane、
+  // 安装任务通道改 /api/local/tasks 由 smoke-local-tasks 覆盖）。不是"测试被放松"。
+  'apps/server/src/smoke-node.mjs': '节点报到随多机子系统删除（形态决策 2026-11-09）：无替代对象',
+  'apps/server/src/smoke-node-jobs.mjs': '节点派活随多机子系统删除（形态决策 2026-11-09）：无替代对象',
+  'apps/server/src/smoke-node-panel.mjs': '节点面板随多机子系统删除（形态决策 2026-11-09）：无替代对象',
+  'apps/server/src/smoke-node-task.mjs': '节点任务协议随多机子系统删除（形态决策 2026-11-09）：无替代对象；本机任务改 /api/local/tasks 由 smoke-local-tasks 覆盖',
+  'apps/server/src/smoke-lan-join.mjs': '邀请码加入分机随多机子系统删除（形态决策 2026-11-09）：无替代场景',
+  'apps/server/src/smoke-stop-watchdog.mjs': '远端运行看门狗场景随多机删除（无 remote run / abortRemote）；本机 watchdog 两条场景保留',
+  // 其余两处是**口径改写**（不是删覆盖）：自启目标从 node+control-plane 收成一个；
+  // 进度卡从"过程快照收起行"改成"单行气泡 + 共用 run-live 状态机"（v176–v190），
+  // 旧断言逐条换成了新断言，替代验收见同文件新增断言与 v186–v190 实机截图。
+  'apps/server/src/smoke-autostart.mjs': '自启目标只剩 control-plane（节点自启随多机删除）：目标清单/安装/状态仍有覆盖',
+  'apps/server/src/smoke-conversation-delete.mjs': 'node_jobs 远程执行台账随多机删除，删掉 1 条相关断言；会话删除语义断言（含四列置空）不变',
+  'apps/server/src/smoke-run-progress.mjs': '过程快照/进度卡重做为单行气泡 + 共用 run-live 状态机（v176–v190）：旧断言改写为新断言，非放松',
 };
 
 /*
@@ -205,7 +221,18 @@ const removed = new Map();
   for (const raw of diff.split('\n')) {
     if (raw.startsWith('+++ ')) {
       const p = raw.slice(4);
-      if (p === '/dev/null') continue; // 删除文件：没有"新增行"可归
+      if (p === '/dev/null') {
+        /*
+         * 删除文件：**必须把 file 摘掉**（2026-11-09 PR #64 抓到）——
+         * 原来这里只 continue、file 还停在上一个文件，被删文件里的所有 `-` 行
+         * 都被算到**前一个文件**头上；断言完整性于是把好文件报成"净删几十条断言"
+         * （实测 smoke-lan-join 的 24 条算给了 smoke-growth-caps、node-* 的 116 条
+         * 算给了 smoke-network）。被删文件由下面 nameStatus 的 D 分支单独判，
+         * 这里只需让它的逐行内容不归任何人。
+         */
+        file = null;
+        continue;
+      }
       file = unquoteDiffPath(p);
       if (!added.has(file)) added.set(file, []);
       if (!removed.has(file)) removed.set(file, []);
