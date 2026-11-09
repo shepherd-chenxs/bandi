@@ -92,7 +92,8 @@ export function platformContractBlock() {
     '2. 证据不贴在对话里：命令 / 输出 / 数据放进运行事件或卡片的描述/评论，回复里只引用出处。',
     '3. 不空转：这一轮能做的动作先做完再回话；不许以 "Next: …" 收尾；做不完就写清在等什么、下一轮盯什么。',
     '4. 不编数：没有出处的数不写；不确定就说不确定 + 怎么确认。',
-    '5. 红线：删数据 / 动生产 / 对外发布，先列清单请雇主拍板，再动手。',
+    '5. 问进度 / 找活：先看【本轮任务合同】里的「你的任务台账」；要查全部卡或别人的卡，用运行钥匙调平台接口，**不要去仓库里 grep 源码找答案**。',
+    '6. 红线：删数据 / 动生产 / 对外发布，先列清单请雇主拍板，再动手。',
   ].join('\n');
 }
 
@@ -106,7 +107,7 @@ export function platformContractBlock() {
  *   · `workflow`（流程派活，dispatch 用 opts.taskId 现查 workflow_tasks）：节点名 + 第几次到站 + 本步要求；
  *   · `project`（普通聊天带了项目）：只补一句项目名，其余仍以用户原话为准。
  */
-export function taskContractBlock({ card = null, workflow = null, project = null } = {}) {
+export function taskContractBlock({ card = null, workflow = null, project = null, tasks = [] } = {}) {
   const lines = ['【本轮任务合同】'];
   const cardTitle = String(card?.title ?? '').trim();
   lines.push(`- 目标：${cardTitle ? `「${cardTitle}」` : ''}上面这条消息要办的事（用户原话为准，不扩范围）。`);
@@ -116,6 +117,19 @@ export function taskContractBlock({ card = null, workflow = null, project = null
     lines.push(`- 流程节点：${workflow.nodeName}${workflow.visit ? `（第 ${workflow.visit} 次到站）` : ''}`);
     const detail = String(workflow.detail ?? '').trim();
     if (detail) lines.push(`  - 本步要求：${detail.slice(0, 300)}${detail.length > 300 ? '…' : ''}`);
+  }
+  /*
+   * 任务台账（2026-11-09 P3a）：把"他名下还在办的卡"每轮带进合同。
+   * 问进度时他不需要任何工具就能答；也堵住"去仓库里 grep 源码找接口"这条错误路径。
+   */
+  if (tasks.length) {
+    lines.push('- 你的任务台账（问进度先看这里，别去仓库里翻源码）：');
+    for (const t of tasks) {
+      const at = String(t.updatedAt ?? '').slice(0, 16).replace('T', ' ');
+      lines.push(`  · ${t.id} · ${t.title} · ${t.status}${at ? ` · 更新于 ${at}` : ''}`);
+    }
+  } else {
+    lines.push('- 你的任务台账：当前没有未完的卡（要查全部卡用运行钥匙调 GET /api/tasks）。');
   }
   lines.push('- 受众：雇主本人（不是同事）；他要看完能拍板。');
   lines.push('- 交付：按【本轮契约】的一屏简报。');
@@ -504,9 +518,11 @@ function startMemberRun(thread, member, opts, trigger) {
    */
   const workflowTask = opts.taskId ? store.getWorkflowTask(opts.taskId) : null;
   const project = !opts.card?.projectName && opts.projectId ? store.getProject(opts.projectId) : null;
+  // 他名下未完的卡：问进度时先看这里（2026-11-09 P3a，跨会话也不丢上下文）
+  const myTasks = store.listMyOpenTasks(member.personaId, 5);
   const contractBlock = [
     platformContractBlock(),
-    taskContractBlock({ card: opts.card, workflow: workflowTask, project }),
+    taskContractBlock({ card: opts.card, workflow: workflowTask, project, tasks: myTasks }),
   ].join('\n\n');
   const fullTask = [cardBlock, task, attBlock, stylePrefBlock(), contractBlock].filter(Boolean).join('\n\n');
 

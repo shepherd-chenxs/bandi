@@ -150,6 +150,33 @@ export function listProjectTasks(projectId) {
 }
 
 /**
+ * **某人的未完任务台账**（2026-11-09 检修 P3a）：每轮派活注入，问进度先看这里。
+ *
+ * 为什么要有（真实事故）：用户在 1:1 里问"我之前派给你的卡进度怎么样了"，员工在
+ * 仓库里 `rg` 搜接口定义搜了三分多钟、最后被停掉（"这一轮没有回话"）——卡其实早已
+ * 「待验收」。根因之一是**跨会话没有任务上下文**：卡只在卡评论区派活时注入。
+ *
+ * 口径：
+ *   · 执行人 = 本人（`assigneePersonaId`）；
+ *   · 或 本人当群助手的那张团队卡（`assigneeGroupId` ∈ 他当助手的群）；
+ *   · 排除已完成 / 已取消（"还在办"的才值得每轮注入）；
+ *   · 最近更新的在前，最多 N 张 —— 台账是提示，不是把看板搬进 prompt。
+ */
+export function listMyOpenTasks(personaId, limit = 5) {
+  if (!personaId) return [];
+  const n = Math.min(Math.max(Number(limit) || 5, 1), 20);
+  return db
+    .prepare(
+      `SELECT id, title, status, projectId, updatedAt FROM project_tasks
+        WHERE status NOT IN ('已完成', '已取消')
+          AND (assigneePersonaId = ?
+               OR assigneeGroupId IN (SELECT id FROM groups WHERE assistantPersonaId = ?))
+        ORDER BY updatedAt DESC LIMIT ?`,
+    )
+    .all(personaId, personaId, n);
+}
+
+/**
  * 排队中的卡：撞上"人满了 / 项目正忙"被退回「待办」、但标了 queuedAt 的那些。
  * 30 秒节拍按先进先出重试（谁先排谁先试）。
  */
