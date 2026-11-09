@@ -15,7 +15,7 @@
  *   · 人已经手动改过状态（比如直接拖到「已完成」）→ **不覆盖**（卡的状态是人的指令）
  *
  * 这个收尾挂在 `runs.onRunFinish` 上（finish() 是所有运行的唯一终点），本用例直接调那个函数。
- * `run` 对象从 P4 起带 `finalText`（员工最终回话）—— 判交付声明只看它第一个非空行。
+ * `run` 对象从 P4 起带 `finalText`（员工最终回话）—— 判交付声明看它第一个/最后一个非空行。
  * 跑法：node apps/server/src/smoke-task-run-sync.mjs
  */
 import fs from 'node:fs';
@@ -83,6 +83,19 @@ check('描述里写明"员工自报受阻"（平台不替他宣布干完了）',
   /受阻/.test(cBlocked2.description) && !/等你验收/.test(cBlocked2.description), JSON.stringify(cBlocked2.description));
 check('受阻原因带进卡描述（看板一眼知道卡在哪，不用翻会话）',
   /\[受阻\]）：/.test(cBlocked2.description) && cBlocked2.description.includes('SSH'), JSON.stringify(cBlocked2.description));
+
+// P5：标记也可以放最后一行（问答题第一行留给答案）—— 原因要取末行那句，不能拿答案首行充数
+const cBlockedLast = makeRunningCard('末行报受阻的活', 'r-blocked-last');
+pt.onTaskRunFinished({
+  id: 'r-blocked-last',
+  status: '完成',
+  finalText: '现状：服务器能连上，但生产库写权限没批。\n\n[受阻] 需要你批生产库写权限',
+});
+const cBlockedLast2 = store.getProjectTask(cBlockedLast.id);
+check('完成 + 末行 [受阻] → 已阻塞', cBlockedLast2.status === '已阻塞', cBlockedLast2.status);
+check('末行受阻：原因取末行那句（不是答案首行）',
+  /\[受阻\]）：/.test(cBlockedLast2.description) && cBlockedLast2.description.includes('生产库写权限') &&
+    !cBlockedLast2.description.includes('现状：服务器能连上'), JSON.stringify(cBlockedLast2.description));
 
 // 空回话：运行结束但一个字没交回 —— 这正是事故形态，必须如实写清楚
 const cEmpty = makeRunningCard('空回话的活', 'r-empty');

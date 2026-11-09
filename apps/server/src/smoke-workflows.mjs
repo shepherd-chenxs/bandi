@@ -32,6 +32,7 @@ process.env.BANDI_DB = path.join(tmp, 'bandi.db');
 // ⚠️ 必须在设好 BANDI_DATA / BANDI_DB 之后再 import —— config 在模块加载时读环境变量
 const store = await import('./store.mjs');
 const workflows = await import('./workflows.mjs');
+const deliveryClaim = await import('./delivery-claim.mjs');
 
 let failed = 0;
 const check = (label, ok, detail = '') => {
@@ -303,16 +304,20 @@ const legacyRes = (workflows.getWorkflowView(resRun.id).tasks ?? [])[0]?.result 
 check('老数据：用 note 兜底出产物', (legacyRes.artifacts ?? []).some((a) => a.target === 'docs/需求.md'), JSON.stringify(legacyRes));
 
 /*
- * ⑬ 员工自报受阻（2026-10-23）：回话第一行 `[受阻]` = 这一步没干成。
+ * ⑬ 员工自报受阻（2026-10-23）：回话的 `[受阻]` = 这一步没干成。
  * 引擎必须把这一步转「已阻塞」（等人），**不能**当"干完了"放行 ——
  * 起因：项目面板改造那条流程，员工写文件被权限挡了只在散文里提了一句，
  * 流程照样绿灯走完，用户全程无感知。
+ * 2026-11-09 P5：标记位置改成"第一行或最后一行"（问答题第一行留给答案）——
+ * 两条路径都要认，否则员工按新契约放末行，引擎会当成功自动推进。
  */
-console.log('\n⑬ 受阻协议：[受阻] 开头 → 已阻塞，不放行');
+console.log('\n⑬ 受阻协议：[受阻] 在首行或末行 → 已阻塞，不放行');
 check('blockedMark：第一行 [受阻] 认', workflows.blockedMark('[受阻] docs/ 写权限被拒\n\n能干的部分…') === true);
 check('blockedMark：正文里提受阻不算', workflows.blockedMark('干完了，中间有个文件一度受阻，已解决') === false);
-check('blockedMark：第二行的 [受阻] 不算（只认第一行）', workflows.blockedMark('干完了\n[受阻] 伪标记') === false);
+check('blockedMark（兼容老口径）：第二行的 [受阻] 不算', workflows.blockedMark('干完了\n[受阻] 伪标记') === false);
 check('resultOf：受阻 → state = blocked', workflows.resultOf({ status: '受阻', finalText: '[受阻] 原因' }).state === 'blocked');
+check('claimOf：最后一行 [受阻] → blocked（P5 新口径）',
+  deliveryClaim.claimOf('干了大半。\n\n[受阻] 需要你批权限') === 'blocked');
 
 oneNode('t-blocked', false); // 故意非 manual：受阻必须比"自动流转"优先，否则又绿灯走完
 const blkRun = workflows.startWorkflow({ templateId: 't-blocked', title: '受阻用例', autoStart: false });
@@ -331,6 +336,22 @@ check('受阻：result.state = blocked', blkRes.state === 'blocked', blkOut?.res
 check('受阻：原因在小结里（界面上要显）', /写权限没批/.test(blkRes.summary ?? ''), blkRes.summary);
 const blkView = workflows.getWorkflowView(blkRun.id);
 check('受阻：视图 stuck（列表红标「已阻塞」）', blkView.stuck != null, JSON.stringify(blkView.stuck));
+
+// P5：员工按新契约把 [受阻] 放**最后一行** —— 引擎必须同样转已阻塞、不自动流转
+oneNode('t-blocked-last', false); // 非 manual：末行受阻也必须优先于自动流转
+const blkRun2 = workflows.startWorkflow({ templateId: 't-blocked-last', title: '末行受阻用例', autoStart: false });
+const blkTask2 = store.listWorkflowTasks(blkRun2.id)[0];
+store.updateWorkflowTask(blkTask2.id, { status: '进行中', agentRunId: 'ar-blocked-last' });
+workflows.onAgentRunFinished({
+  id: 'ar-blocked-last',
+  status: '已完成',
+  finalText: '干了大部分：已建库、已传包。\n\n[受阻] 需要你批生产库的写权限',
+});
+const blkOut2 = store.getWorkflowTask(blkRun2.id, 'n1', 1);
+check('末行受阻：任务转「已阻塞」而不是「待验收」', blkOut2?.status === '已阻塞', String(blkOut2?.status));
+check('末行受阻：流程不自动流转（还停在这一步）', store.getWorkflowRun(blkRun2.id)?.status === '进行中', String(store.getWorkflowRun(blkRun2.id)?.status));
+check('末行受阻：原因进了小结（取标记后面那句，不是正文首行）',
+  /批生产库的写权限/.test(JSON.parse(blkOut2?.result ?? '{}').summary ?? ''), blkOut2?.result);
 
 try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* 临时目录，删不掉就算了 */ }
 console.log(`\n结论：${failed ? '有 ' + failed + ' 项没通过' : '全通过'}`);

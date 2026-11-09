@@ -44,7 +44,7 @@ import { isPmRole, roleHeadOf } from './agent-auth.mjs';
 import { startWorkflow, nodesOf } from './workflows.mjs';
 // 交付声明（2026-11-09 P4）：跑完 ≠ 完成 —— 卡落「待验收」只认员工第一行 `[完成]`，
 // 判据唯一实现在 delivery-claim.mjs（流程步骤用它的 `[受阻]` 那一半）。
-import { claimOf, stripClaimMark } from './delivery-claim.mjs';
+import { claimOf, blockedReasonOf } from './delivery-claim.mjs';
 
 /** 排序权重：越小越"要人管"（平表用它；看板按列站队，不看这个） */
 const FLOW_RANK = { 已阻塞: 0, 失败: 1, 待验收: 2, 进行中: 3, 待办: 4, 已完成: 5, 已取消: 6, 想法: 7 };
@@ -1098,11 +1098,8 @@ function endNoteOf(run, claim) {
   }
   if (claim === 'done') return '跑完了，员工回报完成（[完成]），等你验收';
   if (claim === 'blocked') {
-    // 原因取第一行 `[受阻]` 后面那句话（剥掉标记），去掉句尾标点再拼，免得「。，等你拍板」
-    const reason = (stripClaimMark(finalReplyTextOf(run))
-      .split('\n')
-      .map((l) => l.trim())
-      .find(Boolean) ?? '').slice(0, 120).replace(/[。；;，,、\s]+$/, '');
+    // 原因取 `[受阻]` 后面那句话（首行/末行都认，P5 问答题常放末行）；去掉句尾标点再拼，免得「。，等你拍板」
+    const reason = blockedReasonOf(finalReplyTextOf(run)).slice(0, 120).replace(/[。；;，,、\s]+$/, '');
     return `跑完了，员工自报受阻（[受阻]）${reason ? `：${reason}` : ''}，等你拍板`;
   }
   if (claim === 'silent') return '跑完了，但这一轮没有回话 —— 没有交回可验收的结论（没有 [完成] 声明），卡停在「已阻塞」';

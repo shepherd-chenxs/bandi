@@ -109,7 +109,7 @@ export function platformContractBlock() {
  *
  * 口径：问句词多于动作词 → 'answer'；动作词多于问句词 → 'do'；两者都少/相当 → null。
  */
-const QUESTION_RE = /[?？]|为什么|谁|什么|哪些|哪个|怎么|如何|是否|能不能|有没有|多少|归谁|属于|还是|吗|呢|吧|\b(?:who|what|which|why|how|whether|can|could|is|are|do|does)\b/gi;
+const QUESTION_RE = /[?？]|为什么|谁|什么|哪些|哪个|怎么|如何|是否|能不能|有没有|多少|归谁|属于|还是|吗|呢|\b(?:who|what|which|why|how|whether|can|could|is|are|do|does)\b/gi;
 const ACTION_RE = /实现|改|修|写|做|部署|发布|提交|创建|新建|删除|清理|生成|画|设计|安装|配置|跑|验证|复现|重构|升级|迁移|合并|接入|拆分|上线|调整|替换|补充|换/g;
 
 export function guessDeliveryKind(text) {
