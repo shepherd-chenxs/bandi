@@ -776,7 +776,7 @@ export function bubble(role, text, name, who, showName = false, at = '', atts = 
  * 工具名/目标（截 200 字）、错误、事件数/时长。完整事件仍可回放（/stream）。
  * 只回摘要的原因：一跑上千条事件、单条能到 64 KB，界面不需要也不该吃整份。
  */
-function evidenceChipHtml(runId) {
+export function evidenceChipHtml(runId) {
   return `<button type="button" class="evi-chip" data-evi="${esc(runId)}" title="这一轮调了什么工具、错在哪（完整事件在运行记录里）">证据</button><div class="evi-body" hidden></div>`;
 }
 

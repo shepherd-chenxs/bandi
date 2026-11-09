@@ -183,6 +183,9 @@ try {
     /data-evi=/.test(chatSrc) && /\/api\/runs\/\$\{encodeURIComponent\(btn\.dataset\.evi\)\}\/evidence/.test(chatSrc));
   const cssSrc = fs.readFileSync(new URL('../../web/style.css', import.meta.url), 'utf8');
   check('证据展开区有样式（不是裸按钮）', /\.evi-chip\b/.test(cssSrc) && /\.evi-body\b/.test(cssSrc));
+  const projSrc = fs.readFileSync(new URL('../../web/js/projects.mjs', import.meta.url), 'utf8');
+  check('任务卡讨论区也挂同一个「证据」入口（不另写一套）',
+    /evidenceChipHtml\(m\.runId\)/.test(projSrc) && /from '\.\/chat\.mjs'/.test(projSrc));
 
   /* ------------------------------------------------------------------ ⑦ 真派一次活 */
   console.log('\n⑦ 真派一次活：走真实 HTTP 链路，覆盖"还在内存里 + 已结束"这条分支');
