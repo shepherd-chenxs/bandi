@@ -264,16 +264,74 @@ async function checkRemoteFingerprint(entry, timeoutMs) {
   return fingerprintVerdict(local, r.out);
 }
 
+/**
+ * 把 ssh 的原始报错翻译成人话（2026-11-09）：连通性检查失败时，用户看到的是
+ * OpenSSH 的大段英文横幅 —— `REMOTE HOST IDENTIFICATION HAS CHANGED!` 外加一圈
+ * @@@@ 装饰，吓人且看不懂。这里按模式识别最常见几类，给「发生了什么 + 怎么办」。
+ * （初版还附原始输出当排查材料，用户拍板：弹窗不是给排查用的，砍掉——要看原始
+ * 报错去服务器日志。）识别不了的返回 null，走通用提示。
+ *
+ * 两道关的口径（跟用户解释时用）：第一关验「对方是不是那台真服务器」（主机指纹，
+ * 存在你电脑的 known_hosts 里）；第二关验「你是谁」（你的私钥 vs 服务器的
+ * authorized_keys）。引导里装公钥修的是第二关 —— 指纹报错卡在第一关，装公钥救不了。
+ * 注意弹窗不渲染 markdown，别用 ** 加粗。
+ */
+function explainSshFailure(entry, errText) {
+  const t = String(errText ?? '');
+  const { host } = entry;
+  const where = `${entry.user}@${host}:${entry.port || 22}`;
+  if (/REMOTE HOST IDENTIFICATION HAS CHANGED|Host key verification failed/i.test(t)) {
+    return [
+      `❌ 连接失败（${where}）：服务器的主机密钥指纹与本机记录不一致。`,
+      '',
+      '常见原因：服务器重装过系统，主机密钥已重新生成，与登录密钥无关。',
+    ].join('\n');
+  }
+  if (/Permission denied/i.test(t)) {
+    return [
+      `❌ 连接失败（${where}）：服务器拒绝了本次登录。`,
+      '',
+      '· 公钥未安装到服务器的 authorized_keys（见引导第 2 步）',
+      '· 或公钥安装在其他账户名下 / 本机私钥路径不正确；密码认证则为密码错误',
+      '',
+      '安装公钥后重试。',
+    ].join('\n');
+  }
+  if (/Connection refused/i.test(t)) {
+    return [
+      `❌ 连接失败（${where}）：端口 ${entry.port || 22} 无服务应答。`,
+      '',
+      '可能原因：sshd 未运行、SSH 端口已更改、防火墙拦截。',
+    ].join('\n');
+  }
+  if (/Connection timed out|No route to host|Connection reset/i.test(t)) {
+    return [
+      `❌ 连接失败（${where}）：网络不可达。`,
+      '',
+      '请检查 IP 地址是否正确、云安全组是否放行 SSH 端口、实例是否在运行。',
+    ].join('\n');
+  }
+  if (/Could not resolve hostname/i.test(t)) {
+    return [`❌ 连接失败：主机地址 "${host}" 无法解析，请检查登记表中的主机名/IP。`].join('\n');
+  }
+  return null;
+}
+
 /** 跑一次连通性探测 + 指纹核对，把结果整理成一段人能看的话 */
 export async function testConnection(entry, timeoutMs = TIMEOUT_MS) {
   const r = await sshRun(entry, SSH_TEST_COMMAND, timeoutMs);
   const where = `${entry.user}@${entry.host}:${entry.port || 22}`;
   if (!r.ok) {
+    const rawErr = [r.out, r.error ?? r.err].filter(Boolean).join('\n');
+    const friendly = explainSshFailure(entry, rawErr);
+    // hostKeyChanged：给界面用的信号 —— 弹窗里据此出「更新指纹并重试」按钮
+    const hostKeyChanged = /REMOTE HOST IDENTIFICATION HAS CHANGED|Host key verification failed/i.test(rawErr);
     return {
       ok: false,
       fingerprint: null,
-      detail: [
-        `❌ 连不上（${where}）`,
+      hostKeyChanged,
+      detail: friendly ?? [
+        `❌ 连接失败（${where}）`,
         r.out ? `输出：\n${r.out}` : '',
         `错误：${r.error ?? r.err ?? '未知'}`,
         '',
@@ -301,10 +359,47 @@ export async function testConnection(entry, timeoutMs = TIMEOUT_MS) {
   // 解析不出来（换了 sshd、命令被拦）就把原始输出摊出来，别把信息吞掉
   if (!facts.length && r.out) facts.push(r.out);
 
+  // 指纹核对「通过」不显示 —— 能连上就说明核对通过了；只有不通过/跳过才值得提醒
+  const fpLine = fp.state === 'match' ? '' : fp.line;
   return {
     ok: true,
     fingerprint: fp.state,
-    detail: [`✅ 连上了 ${where}`, '', ...facts, '', fp.line].join('\n'),
+    detail: [`✅ 连上了 ${where}`, '', ...facts, fpLine].filter(Boolean).join('\n'),
+  };
+}
+
+/**
+ * 清掉本机对这台服务器的主机指纹，然后立刻重测（2026-11-09，给弹窗的「更新指纹并重试」）。
+ *
+ * 等价于用户手跑 `ssh-keygen -R`，但不要用户碰命令行。两种记录形式都清：
+ * 端口 22 记 `host`，非 22 记 `[host]:port` —— 只清一种会留下半套旧指纹，
+ * 下次连接照样报错（实测过：假指纹改短一行 ssh 会跳过，但改对形式很重要）。
+ * 清完重测走 accept-new：新指纹自动接受并写回 known_hosts，用户无感。
+ *
+ * ⚠️ 这是"我确认过这台服务器换过身份"的操作 —— 调用方（界面按钮）必须把
+ * "没重装过就别点" 说清楚，这是这道闸存在的全部意义。
+ */
+export async function refreshHostKey(entry, timeoutMs = TIMEOUT_MS) {
+  const host = String(entry.host ?? '').trim();
+  const port = Number(entry.port) || 22;
+  if (!host) throw new Error('登记表里没有主机地址');
+  const r1 = spawnSync(sshKeygenBin(), ['-R', host], { encoding: 'utf8', windowsHide: true });
+  const r2 =
+    port === 22
+      ? null
+      : spawnSync(sshKeygenBin(), ['-R', `[${host}]:${port}`], { encoding: 'utf8', windowsHide: true });
+  const wiped = [r1, r2].filter(Boolean).some((r) => /updated|old/i.test(`${r.stdout ?? ''}${r.stderr ?? ''}`));
+  const r = await testConnection(entry, timeoutMs);
+  return {
+    ...r,
+    wiped,
+    detail: [
+      r.ok
+        ? `✅ 指纹已更新，连接正常。`
+        : r.detail,
+      '',
+      `（本机已清除 ${host} 的旧主机指纹${port === 22 ? '' : `（[host]:${port} 形式一并清除）`}，重测时自动接受了新指纹。）`,
+    ].join('\n'),
   };
 }
 
