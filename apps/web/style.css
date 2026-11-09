@@ -1240,6 +1240,10 @@ body:has(#pluginView.shown .fixed-head)::after {
                   padding: 9px 10px 9px 14px; border-bottom: 1px solid var(--line); }
 .plg-toast-head b { flex: 1; font-size: var(--t-sec); font-weight: var(--w-title); }
 .plg-toast .plg-code { border: 0; border-radius: 0; max-height: none; flex: 1; min-height: 0; }
+/* 弹窗底部的动态动作行（连通性失败里的「更新指纹并重试」） */
+.plg-toast-act { display: flex; align-items: center; gap: 10px; flex: 0 0 auto;
+                 padding: 10px 14px; border-top: 1px solid var(--line); }
+.plg-toast-act .dim { font-size: var(--t-dim, 12px); }
 
 /* 「开发中」占位 */
 .wip { padding: 150px 20px; text-align: center; color: var(--dim); font-size: 14px; }
@@ -4573,3 +4577,17 @@ dialog.mg-dlg { width: 520px; }
 /* ③ 开关关闭态轨道加深一档：--line 在深底上对比不足 3:1（WCAG 1.4.11 非文本下限），
    看不出"这颗开关现在关着"。用 color-mix 把文字灰压进边框色，两种主题各自动适配。 */
 .switch > span { background: color-mix(in srgb, var(--dim) 45%, var(--line)); }
+
+/* ===== 证据（2026-11-09 检修 P2）：回话气泡里的一颗入口 + 按需展开的运行摘要 =====
+   为什么做成气泡内联展开、不做弹窗：它是"这句话凭什么这么说"的脚注，跟着这条消息读；
+   弹窗会把人从对话里拽走（同卡票/流程实例的取舍，2026-10-26 已定成弹窗的只有整卡详情）。 */
+.evi-chip { margin: 6px 0 0 4px; padding: 1px 8px; font-size: 11px; line-height: 1.6;
+            color: var(--dim); background: transparent; border: 1px solid var(--line);
+            border-radius: 999px; cursor: pointer; }
+.evi-chip:hover { color: var(--text); border-color: color-mix(in srgb, var(--dim) 55%, var(--line)); }
+.evi-body { margin-top: 6px; padding: 8px 10px; border-radius: 8px;
+            background: color-mix(in srgb, var(--panel) 70%, transparent);
+            border: 1px solid var(--line); font-size: 12px; line-height: 1.55;
+            color: var(--dim); max-height: 240px; overflow: auto;
+            white-space: pre-wrap; overflow-wrap: anywhere; }
+.evi-body > div + div { margin-top: 2px; }

@@ -188,6 +188,49 @@ export function lastRunEvent(runId) {
 }
 
 /**
+ * **一次运行的证据摘要**（2026-11-09 检修 P2：证据与对话分离）。
+ *
+ * 为什么要在服务端出一份"摘要"：回话正文不该再贴命令/输出（那是运行事件的内容），
+ * 前端给一颗「证据」就能展开看"这轮调了什么工具、成没成、错在哪"。
+ * 但**不能把完整事件流怼给界面**（一跑上千条、单条能到 64 KB），所以这里只抽：
+ * 状态/时长/事件数 + 前 20 条工具（名字 + 目标，目标截 200 字）+ 前 5 条错误。
+ * 细节要追溯到原始事件，仍走 `/api/runs/:id/stream`（回放），这里只做"索引"。
+ */
+export function compactRunEvidence(runId) {
+  const run = getRunRow(runId);
+  if (!run) return null;
+  const rows = db.prepare('SELECT seq, evt FROM run_events WHERE runId = ? ORDER BY seq').all(runId);
+  const tools = [];
+  const errors = [];
+  for (const r of rows) {
+    let evt;
+    try {
+      evt = JSON.parse(r.evt);
+    } catch {
+      continue; // 坏行跳过，别为一条脏数据把索引弄挂
+    }
+    if (evt?.type === 'tool') {
+      const d = evt.detail ?? {};
+      const target =
+        d.command ?? d.path ?? d.file ?? d.url ?? (d.server && d.tool ? `${d.server} · ${d.tool}` : '') ?? '';
+      tools.push({ seq: r.seq, name: String(evt.name ?? 'tool'), target: String(target).slice(0, 200) });
+    } else if (evt?.type === 'error') {
+      errors.push(String(evt.message ?? evt.text ?? '').slice(0, 300));
+    }
+  }
+  return {
+    runId,
+    status: run.status,
+    startedAt: run.startedAt,
+    endedAt: run.endedAt,
+    events: rows.length,
+    toolCount: tools.length,
+    tools: tools.slice(-20), // 尾部更接近"最后干了什么"；前面的是索引，不是流水账
+    errors: errors.slice(0, 5),
+  };
+}
+
+/**
  * 这次运行**尾部** n 条事件（seq 倒序）。
  * 给 `errorForDisplay`（apps/server/src/runs.mjs）用：失败原因总在事件流末尾
  * （error / final 都是终止事件），别为了补一句话把整段事件流（可能上千行）读出来再丢掉 99%。
