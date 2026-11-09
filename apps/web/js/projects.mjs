@@ -8,7 +8,7 @@ import { confirmDo, askText } from './machine.mjs';
 import { detailSave, showView } from './contacts.mjs';
 import { wbCard } from './workflows.mjs';
 import { hint, openFlowRun, paintRun, setListTitle } from './flowpages.mjs';
-import { attsHtmlOf, firstMeaningfulLine, isNarrowPh, mbOpenPicker, openConversation, openDetail, streamRun, timelineOf } from './chat.mjs';
+import { attsHtmlOf, evidenceChipHtml, firstMeaningfulLine, isNarrowPh, mbOpenPicker, openConversation, openDetail, streamRun, timelineOf } from './chat.mjs';
 // 运行进度卡：对话页那一套（阶段/步数/用时/卡住提醒/停止生成）搬进任务卡讨论区 —— 2026-10-29 用户："对话里的那一套搬过来用"
 import { createProgressCard } from './run-progress-card.mjs';
 import { createLiveAnswer } from './run-live.mjs';
@@ -3153,7 +3153,9 @@ export async function paintTaskCardPage(taskId, opts = {}) {
         ? '<div class="step stop">已停止生成' + esc(dur) + '（这一轮没有回话）</div>'
         : `<div class="step bad">没跑成：${esc(firstMeaningfulLine(r.error) || '运行失败（这次没留下原因）')}</div>`;
     } else {
-      main = `<div class="tc-cmt-text">${renderMarkdown(m.text)}${attsHtmlOf(m.atts)}</div>`;
+      // 证据入口（2026-11-09 P2b）：任务卡讨论区跟聊天页用同一个组件/同一个接口 ——
+      // 回话正文不贴命令/输出，点「证据」看这一轮的工具与错误摘要（完整事件仍可回放）。
+      main = `<div class="tc-cmt-text">${renderMarkdown(m.text)}${attsHtmlOf(m.atts)}${m.runId ? evidenceChipHtml(m.runId) : ''}</div>`;
     }
     // 「重跑一次」：失败轮的回话（或没落回话的失败占位）脚上带一颗 —— multica 同款（2026-10-30）
     const failedRid = m.pseudo === 'fail' ? m.run?.id : (m.runId && failedRunIds.has(m.runId) ? m.runId : null);

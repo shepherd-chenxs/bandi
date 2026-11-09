@@ -41,9 +41,15 @@ const msgs = all("SELECT text, personaId FROM messages WHERE role = 'assistant'"
 const lens = msgs.map((m) => String(m.text ?? '').length).sort((a, b) => a - b);
 const at = (q) => (lens.length ? lens[Math.min(lens.length - 1, Math.floor(q * (lens.length - 1)))] : 0);
 const classify = (t) => {
-  const first = String(t ?? '').trim().split('\n').find((l) => l.trim()) ?? '';
+  const s = String(t ?? '');
+  const first = s.trim().split('\n').find((l) => l.trim()) ?? '';
   const judgment = /结论|完成|做完|没做完|卡在|需要你拍板|建议/.test(first);
-  return { firstLen: first.length, judgment, next: /Next:/i.test(String(t ?? '')) };
+  /*
+   * 「正文里贴命令/代码块」的粗判（P2 计划里的"先统计再定阈值"）：代码围栏，或行首像命令。
+   * 不是在抓违规——回话本身也可能是贴代码的教学内容；用它看趋势，决定要不要硬判。
+   */
+  const pasted = /```|(^|\n)\s*(?:[$#>]\s|node\s|npm\s|git\s|SELECT\s|curl\s|cd\s|dir\s|powershell\s|Get-ChildItem\s)/i.test(s);
+  return { firstLen: first.length, judgment, next: /Next:/i.test(s), pasted };
 };
 const classes = msgs.map((m) => classify(m.text));
 
@@ -61,6 +67,7 @@ const summary = {
     firstLineShort: classes.filter((c) => c.firstLen <= 80).length,
     conclusionFirst: classes.filter((c) => c.judgment).length,
     nextRate: classes.filter((c) => c.next).length,
+    pasted: classes.filter((c) => c.pasted).length,
   },
   byPersona: all(
     `SELECT COALESCE(p.name, '(未知)') AS who, COUNT(*) AS n,
@@ -93,7 +100,7 @@ console.log(`库：${dbPath}`);
 console.log(`\n回话 ${r.total} 条：均值 ${r.avg} 字 · P50 ${r.p50} · P90 ${r.p90} · 最长 ${r.max}`);
 console.log(`  >500 字 ${r.over500} 条（${pct(r.over500, r.total)}%）· >1000 字 ${r.over1000} 条（${pct(r.over1000, r.total)}%）`);
 console.log(`  首行 ≤80 字 ${r.firstLineShort} 条（${pct(r.firstLineShort, r.total)}%）· 首行是判断（结论/完成/卡在/拍板）${r.conclusionFirst} 条（${pct(r.conclusionFirst, r.total)}%）`);
-console.log(`  出现 Next: ${r.nextRate} 条（${pct(r.nextRate, r.total)}%）`);
+console.log(`  出现 Next: ${r.nextRate} 条（${pct(r.nextRate, r.total)}%）· 正文像贴命令/代码块 ${r.pasted} 条（${pct(r.pasted, r.total)}%）`);
 
 console.log('\n按员工：');
 for (const p of summary.byPersona) {
