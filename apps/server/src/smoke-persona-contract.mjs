@@ -73,12 +73,39 @@ try {
   const src = fs.readFileSync(new URL('./dispatch.mjs', import.meta.url), 'utf8');
   check('按 opts.taskId 现查 workflow_tasks（流程节点进入合同）', /opts\.taskId \? store\.getWorkflowTask\(opts\.taskId\)/.test(src));
   check('startMemberRun 拼了 platformContractBlock + 结构化 taskContractBlock',
-    /const contractBlock = \[[\s\S]*platformContractBlock\(\),[\s\S]*taskContractBlock\(\{ card: opts\.card, workflow: workflowTask, project \}\)/.test(src));
+    /const contractBlock = \[[\s\S]*platformContractBlock\(\),[\s\S]*taskContractBlock\(\{ card: opts\.card, workflow: workflowTask, project, tasks: myTasks \}\)/.test(src));
   check('契约进了 fullTask（每轮交给运行时）', /fullTask = \[[^\]]*contractBlock/.test(src));
+  check('每轮按本人查未完成任务台账（P3a，所有员工通用）', /store\.listMyOpenTasks\(member\.personaId, 5\)/.test(src));
   check('旧的"汇报口径"不再只写在 PM 首轮 brief 里', !/【汇报口径｜结论先行】/.test(src));
 
   const runsSrc = fs.readFileSync(new URL('./runs.mjs', import.meta.url), 'utf8');
   check('运行钥匙提醒里不再重复汇报格式（已在平台契约里）', !/汇报（每轮都算/.test(runsSrc));
+  check('运行钥匙提醒给了查台账的明确动作（问进度别 grep 源码）', /查台账/.test(runsSrc) && /api\/tasks/.test(runsSrc));
+  console.log('\n⑤ 任务台账：每个员工都能看到自己未完的卡（P3a，不是只给某个人）');
+  const store = await import('./store.mjs');
+  const dev = store.createPersona({ name: '台账测试员', runtime: 'codex', cwd: tmp, instructions: '' });
+  const other = store.createPersona({ name: '另一个员工', runtime: 'codex', cwd: tmp, instructions: '' });
+  const proj = store.createProject({ name: '台账项目', root: tmp });
+  const mk = (title, status, assigneePersonaId = dev.id) =>
+    store.createProjectTask({ projectId: proj.id, title, status, assigneePersonaId });
+  mk('卡A（待办）', '待办');
+  mk('卡B（进行中）', '进行中');
+  mk('已完成卡', '已完成');
+  mk('已取消卡', '已取消');
+  mk('别人的卡', '待办', other.id);
+  const rows = store.listMyOpenTasks(dev.id, 5);
+  check('只列自己的未完卡（排除已完成/已取消/别人的）',
+    rows.length === 2 && rows.every((r) => r.title.startsWith('卡')), JSON.stringify(rows.map((r) => r.title)));
+  const g = store.createGroup({ title: '台账群', assistantPersonaId: dev.id });
+  // createGroup 返回的是群的**会话行**（建群顺手建一段群会话）；群本身的 id 在 groupId
+  store.createProjectTask({ projectId: proj.id, title: '团队卡', status: '待办', assigneeGroupId: g.groupId });
+  const rows2 = store.listMyOpenTasks(dev.id, 5);
+  check('群助手看得到自己群的团队卡', rows2.some((r) => r.title === '团队卡'), JSON.stringify(rows2.map((r) => r.title)));
+  const ledger = dispatch.taskContractBlock({ tasks: rows2 });
+  check('任务台账进了合同（卡号 / 标题 / 状态）',
+    /你的任务台账/.test(ledger) && /团队卡/.test(ledger) && /待办/.test(ledger) && /pt-/.test(ledger));
+  const emptyLedger = dispatch.taskContractBlock({ tasks: [] });
+  check('没有未完卡时也说清楚（不让去仓库翻）', /当前没有未完的卡/.test(emptyLedger));
 } catch (err) {
   failed += 1;
   console.error('\n✗ 冒烟跑挂了：', err?.message ?? err);
