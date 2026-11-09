@@ -9,6 +9,18 @@ import * as status from '../status.mjs';
 export async function handleRun(req, res, url) {
   const stream = /^\/api\/runs\/([^/]+)\/stream$/.exec(url.pathname);
   const abort = /^\/api\/runs\/([^/]+)\/abort$/.exec(url.pathname);
+  const evidence = /^\/api\/runs\/([^/]+)\/evidence$/.exec(url.pathname);
+
+  /*
+   * 证据索引（2026-11-09 检修 P2）：回话正文不贴命令/输出，前端「证据」按钮点它拿
+   * 一份**摘要**（工具名/目标/错误/时长），完整细节仍走 /stream 回放。
+   * 只读、只回索引，不把上千条事件或大段输出怼给界面。
+   */
+  if (req.method === 'GET' && evidence) {
+    const ev = store.compactRunEvidence(decodeURIComponent(evidence[1]));
+    if (!ev) return fail(res, 404, 'E2036', '这次运行不存在（或已被清理）');
+    return sendJson(res, 200, ev), true;
+  }
 
   if (req.method === 'GET' && stream) {
     /*

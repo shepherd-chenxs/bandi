@@ -162,6 +162,28 @@ try {
   console.log('\n⑥ 序号是每次运行各自的，不是全局的');
   check('三条运行都从 1 起', idsOf(a0.body)[0] === 1 && idsOf(c0.body)[0] === 1);
 
+  /*
+   * ⑥b 证据索引（2026-11-09 检修 P2）：聊天回话里不再贴命令/输出，给一颗「证据」——
+   * 点它拿运行摘要（工具名/目标/错误/时长），完整细节仍走 /stream 回放。
+   * 这里钉住：摘要是 200、带工具名；不存在的运行回 404 E2036（不是空 200）。
+   */
+  console.log('\n⑥b 运行证据摘要（「证据」按钮的接口）');
+  const eviRes = await fetch(`${base2}/api/runs/${encodeURIComponent(DONE_RUN)}/evidence`);
+  const evi = await eviRes.json().catch(() => null);
+  check('证据摘要 → 200 且带 runId / 事件数 / 工具数组',
+    eviRes.status === 200 && evi?.runId === DONE_RUN && typeof evi.events === 'number' && Array.isArray(evi.tools),
+    JSON.stringify(evi ?? {}).slice(0, 120));
+  check('工具索引带名字（只给索引，不搬完整输出）',
+    (evi?.tools ?? []).some((t) => t.name === 'shell'), JSON.stringify(evi?.tools ?? []).slice(0, 120));
+  const evi404 = await fetch(`${base2}/api/runs/${encodeURIComponent('r-根本没有')}/evidence`);
+  check('不存在的运行 → 404 E2036', evi404.status === 404 && (await evi404.json().catch(() => ({}))).code === 'E2036', String(evi404.status));
+  // 界面那一半：聊天气泡里有入口，点开才按需拉摘要（静态断言，防"接口通了没人用"）
+  const chatSrc = fs.readFileSync(new URL('../../web/js/chat.mjs', import.meta.url), 'utf8');
+  check('聊天页挂了「证据」入口且点它才拉摘要',
+    /data-evi=/.test(chatSrc) && /\/api\/runs\/\$\{encodeURIComponent\(btn\.dataset\.evi\)\}\/evidence/.test(chatSrc));
+  const cssSrc = fs.readFileSync(new URL('../../web/style.css', import.meta.url), 'utf8');
+  check('证据展开区有样式（不是裸按钮）', /\.evi-chip\b/.test(cssSrc) && /\.evi-body\b/.test(cssSrc));
+
   /* ------------------------------------------------------------------ ⑦ 真派一次活 */
   console.log('\n⑦ 真派一次活：走真实 HTTP 链路，覆盖"还在内存里 + 已结束"这条分支');
   const jpost = async (p, body) => {

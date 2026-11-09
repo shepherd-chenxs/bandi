@@ -88,6 +88,9 @@ export const ROUTES = [
   { id: 'runtimes.list', m: ['GET'], path: p('/api/runtimes'), auth: 'session', run: true, note: '分机模式页要机器名/版本；运行钥匙可读（值班手册：CLI 配没配好）' },
   { id: 'local.status.forUser', m: ['GET'], path: p('/api/local/status'), auth: 'session', note: '与 local.status 同路径：登记处放行，handler 的 authorizeLocal 照旧把员外身份拦下（E4091）' },
   { id: 'run.stream', m: ['GET'], path: p('/api/runs', id1, 'stream'), auth: 'session', note: '单运行事件流（SSE）' },
+  // 证据索引（2026-11-09 检修 P2）：聊天里「证据」按钮点它 —— 只回工具/错误/时长摘要，
+  // 完整事件仍走 stream 回放。只读、不新增任何写面。
+  { id: 'run.evidence', m: ['GET'], path: p('/api/runs', id1, 'evidence'), auth: 'session', note: '运行证据摘要（工具/错误/时长）；细节走 stream' },
   { id: 'conv.detail', m: ['GET'], path: p('/api/conversations', id1), auth: 'session' },
   { id: 'conv.send', m: ['POST'], path: p('/api/conversations', id1, 'messages'), auth: 'session' },
   { id: 'card.detail', m: ['GET'], path: p('/api/projects/tasks', id1), auth: 'session' },
@@ -202,6 +205,7 @@ export const ROUTES = [
   { id: 'ssh.one', m: ['DELETE', 'PUT'], path: p('/api/ssh/servers', id1), auth: 'session', noPanel: true },
   { id: 'ssh.key', m: ['GET', 'POST'], path: p('/api/ssh/servers', id1, 'key'), auth: 'session', noPanel: true, note: 'GET=读公钥/引导步骤（详情页），POST=生成密钥对' },
   { id: 'ssh.test', m: ['POST'], path: p('/api/ssh/servers', id1, 'test'), auth: 'session' },
+  { id: 'ssh.hostkey', m: ['POST'], path: p('/api/ssh/servers', id1, 'hostkey'), auth: 'session', noPanel: true, note: '清本机主机指纹并重测（弹窗「更新指纹并重试」按钮）；这是"我确认服务器换过身份"的操作' },
   { id: 'workspace.file', m: ['GET', 'POST'], path: p('/api/workspace/file'), auth: 'session' },
   { id: 'open.path', m: ['POST'], path: p('/api/open'), auth: 'session' },
   { id: 'fs.dirs', m: ['GET'], path: p('/api/fs/dirs'), auth: 'session', noPanel: true, note: '任意目录列举 = 摸操作员整块磁盘' },
