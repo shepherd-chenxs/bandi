@@ -56,16 +56,24 @@ try {
   check('不编数 + 删数据/生产/对外发布红线', /不编数/.test(contract) && /删数据/.test(contract) && /对外发布/.test(contract));
   check('指向 bandi-report 模板（首轮技能清单在，这里给全文入口）', /bandi-report/.test(contract));
 
-  console.log('\n③ 本轮任务合同（每轮注入）');
+  console.log('\n③ 本轮任务合同（每轮注入，P1 起带结构化上下文）');
   const tc = dispatch.taskContractBlock();
   check('有目标 / 受众 / 交付 / 验收四段', /目标/.test(tc) && /受众/.test(tc) && /交付/.test(tc) && /验收/.test(tc));
   check('验收钉"结论先行、依据可核、可拍板"', /结论先行/.test(tc) && /可核/.test(tc) && /可拍板/.test(tc));
-  const tcc = dispatch.taskContractBlock({ card: { title: '修首页文案' } });
-  check('卡评论区派活带上卡标题', /本卡：修首页文案/.test(tcc), tcc.split('\n').pop());
+  const tcc = dispatch.taskContractBlock({ card: { title: '修首页文案', description: '标题改短', status: '进行中', projectName: '班底' } });
+  check('卡评论区派活带卡标题 + 项目', /「修首页文案」/.test(tcc) && /项目：班底/.test(tcc), tcc.split('\n').slice(0, 3).join(' / '));
+  check('卡验收指向卡描述（不复制长文）', /按【你正在办的任务卡】里的任务描述逐条验/.test(tcc) && !/标题改短/.test(tcc));
+  const tcw = dispatch.taskContractBlock({ workflow: { nodeName: '写代码', visit: 2, detail: '按验收标准实现并通过自测' } });
+  check('流程派活带节点名 / 第几次到站 / 本步要求',
+    /流程节点：写代码/.test(tcw) && /第 2 次到站/.test(tcw) && /本步要求：按验收标准实现/.test(tcw), tcw.split('\n').slice(2, 4).join(' / '));
+  const tcp = dispatch.taskContractBlock({ project: { name: '甲项目' } });
+  check('普通聊天带项目名', /项目：甲项目/.test(tcp));
 
   console.log('\n④ 挂线：每轮派活都拼契约（不是首轮/不是 PM 专属）');
   const src = fs.readFileSync(new URL('./dispatch.mjs', import.meta.url), 'utf8');
-  check('startMemberRun 拼了 platformContractBlock + taskContractBlock', /const contractBlock = \[platformContractBlock\(\), taskContractBlock\(\{ card: opts\.card \}\)\]/.test(src));
+  check('按 opts.taskId 现查 workflow_tasks（流程节点进入合同）', /opts\.taskId \? store\.getWorkflowTask\(opts\.taskId\)/.test(src));
+  check('startMemberRun 拼了 platformContractBlock + 结构化 taskContractBlock',
+    /const contractBlock = \[[\s\S]*platformContractBlock\(\),[\s\S]*taskContractBlock\(\{ card: opts\.card, workflow: workflowTask, project \}\)/.test(src));
   check('契约进了 fullTask（每轮交给运行时）', /fullTask = \[[^\]]*contractBlock/.test(src));
   check('旧的"汇报口径"不再只写在 PM 首轮 brief 里', !/【汇报口径｜结论先行】/.test(src));
 

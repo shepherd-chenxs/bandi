@@ -97,22 +97,33 @@ export function platformContractBlock() {
 }
 
 /**
- * **本轮任务合同**（2026-11-09 P0）：每轮告诉员工"这一轮要交什么、按什么验收"。
+ * **本轮任务合同**（2026-11-09 P1：结构化）。
  *
  * 身份文本回答"我是谁"，但不该承担"这次做成什么样算完"——那是任务合同的事。
- * 卡评论区派活时带上卡标题与验收标准（卡描述就是验收标准，见 docs/契约.md）。
+ * 三处来源各带一点信息，拼成这一轮的"合同"：
+ *   · `card`（卡评论区派活，project.mjs 传）：目标=卡标题，项目=卡所属项目；
+ *     验收=按卡片描述逐条验（描述就是验收标准，见 docs/契约.md），不再把长描述复制一遍；
+ *   · `workflow`（流程派活，dispatch 用 opts.taskId 现查 workflow_tasks）：节点名 + 第几次到站 + 本步要求；
+ *   · `project`（普通聊天带了项目）：只补一句项目名，其余仍以用户原话为准。
  */
-export function taskContractBlock({ card = null } = {}) {
-  const lines = [
-    '【本轮任务合同】',
-    '- 目标：上面这条消息要办的事（用户原话为准，不扩范围）。',
-    '- 受众：雇主本人（不是同事）；他要看完能拍板。',
-    '- 交付：按【本轮契约】的一屏简报。',
-    '- 验收：结论先行、每条依据可核、给出可拍板选项 —— 做不到这三条算没交付。',
-  ];
-  if (card?.title) {
-    lines.push(`- 本卡：${card.title}（验收标准见卡描述）`);
+export function taskContractBlock({ card = null, workflow = null, project = null } = {}) {
+  const lines = ['【本轮任务合同】'];
+  const cardTitle = String(card?.title ?? '').trim();
+  lines.push(`- 目标：${cardTitle ? `「${cardTitle}」` : ''}上面这条消息要办的事（用户原话为准，不扩范围）。`);
+  const projectName = String(card?.projectName ?? project?.name ?? '').trim();
+  if (projectName) lines.push(`- 项目：${projectName}`);
+  if (workflow?.nodeName) {
+    lines.push(`- 流程节点：${workflow.nodeName}${workflow.visit ? `（第 ${workflow.visit} 次到站）` : ''}`);
+    const detail = String(workflow.detail ?? '').trim();
+    if (detail) lines.push(`  - 本步要求：${detail.slice(0, 300)}${detail.length > 300 ? '…' : ''}`);
   }
+  lines.push('- 受众：雇主本人（不是同事）；他要看完能拍板。');
+  lines.push('- 交付：按【本轮契约】的一屏简报。');
+  lines.push(
+    card
+      ? '- 验收：按【你正在办的任务卡】里的任务描述逐条验（每条能判过/不过）；结论先行、依据可核、给拍板选项。'
+      : '- 验收：结论先行、每条依据可核、给出可拍板选项 —— 做不到这三条算没交付。',
+  );
   return lines.join('\n');
 }
 
@@ -483,13 +494,20 @@ function startMemberRun(thread, member, opts, trigger) {
   // 任务卡锚点（2026-10-23）：卡评论区派活必须带上"你在办哪张卡"，问进度才不会答偏。
   const cardBlock = opts.card ? taskCardBlock(opts.card) : '';
   /*
-   * **每轮都注入的「平台契约 + 任务合同」**（2026-11-09 全面检修 P0）。
+   * **每轮都注入的「平台契约 + 任务合同」**（2026-11-09 检修 P0/P1）。
    *
    * 以前这两样只活在前缀里：汇报口径写在 PM 首轮 brief、证据纪律写在身份文本；
    * 默认形态下每轮只剩用户消息 → 模型拿首轮身份当行为法。现在改成每轮都在，
-   * 身份文本只回答"我是谁"。顺序放在雇主风格之后：风格可以改口吻，但契约是底线。
+   * 身份文本只回答"我是谁"。合同带结构化上下文：卡（标题/项目/按描述验收）、
+   * 流程（节点名/第几次到站/本步要求）、普通聊天（项目名）。
+   * 顺序放在雇主风格之后：风格可以改口吻，但契约是底线。
    */
-  const contractBlock = [platformContractBlock(), taskContractBlock({ card: opts.card })].join('\n\n');
+  const workflowTask = opts.taskId ? store.getWorkflowTask(opts.taskId) : null;
+  const project = !opts.card?.projectName && opts.projectId ? store.getProject(opts.projectId) : null;
+  const contractBlock = [
+    platformContractBlock(),
+    taskContractBlock({ card: opts.card, workflow: workflowTask, project }),
+  ].join('\n\n');
   const fullTask = [cardBlock, task, attBlock, stylePrefBlock(), contractBlock].filter(Boolean).join('\n\n');
 
   return runs.startRun({

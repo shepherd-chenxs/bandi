@@ -239,7 +239,21 @@ try {
   const swapped = await req('PATCH', `/api/groups/${encodeURIComponent(group.id)}`, { assistantPersonaId: pm2.id });
   check('群助手换成沈丹青', swapped.status === 200, `${swapped.status} ${swapped.body.error ?? ''}`);
   const started = await req('PATCH', `/api/projects/tasks/${card2.id}`, { startNow: true });
-  check('派发出去了（换人后仍能派）', started.status === 200 && !!started.body.task?.runId, `${started.status} ${started.body.error ?? ''}`);
+  /*
+   * 群助手刚被换掉时，新助手可能还在跑上一条（⑦b 的派活）：这时平台按既有口径
+   * 「排上队、稍后自动重派」返回 400 —— 那是正确行为，不是"派不出去"。
+   * CI 比本机慢，这里改成等它真派出去（最多 8 秒），别把正确的排队判成失败。
+   */
+  let dispatched = started.status === 200 && !!started.body.task?.runId;
+  if (!dispatched && /排上队/.test(started.body?.error ?? '')) {
+    const until = Date.now() + 8000;
+    while (Date.now() < until) {
+      await sleep(250);
+      const t = await getTask(card2.id);
+      if (t?.runId || t?.status === '进行中') { dispatched = true; break; }
+    }
+  }
+  check('派发出去了（换人后仍能派）', dispatched, `${started.status} ${started.body.error ?? ''}`);
   const d6 = await waitAllDone(groupConv);
   check('跑的是新群助手（沈丹青）', (d6.runs ?? []).some((r) => r.personaId === pm2.id), '');
   const ticket6 = (d6.messages ?? []).find((m) => m.meta?.type === 'card' && m.meta?.cardId === card2.id);
