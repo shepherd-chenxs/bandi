@@ -1043,10 +1043,27 @@ export function startProjectTask(id, { allowIdea = false } = {}) {
  *
  * 内存里 `finalText` 可能是空串（dsh 的 finalText 只来自 final 事件，被停/异常时没有），
  * 那就按"空回话"算 —— 不要拿 streamedText 替它开脱：屏幕上的过程话不是交付。
+ *
+ * P5（2026-11-09）：落库的回话会剥掉首行 `[完成]`（那是机器信号、不给雇主看，见
+ * runs.persistReply），所以 "promote 聊天立卡" 这条读库的路径要优先读 **run_events 的
+ * `__done.finalText` 原文**；别拿剥过的消息当判据（否则 [完成] 永远判不出来）。
  */
 function finalReplyTextOf(run) {
   if (run?.finalText != null) return String(run.finalText);
-  if (!run?.id || !run.conversationId) return '';
+  if (!run?.id) return '';
+  const done = store
+    .listRunEvents(run.id)
+    .map((e) => {
+      try {
+        return JSON.parse(e.evt);
+      } catch {
+        return null;
+      }
+    })
+    .filter((j) => j?.type === '__done')
+    .at(-1);
+  if (done && typeof done.finalText === 'string') return done.finalText;
+  if (!run.conversationId) return '';
   const reply = store
     .listMessages(run.conversationId)
     .filter((m) => m.role === 'assistant' && m.runId === run.id)

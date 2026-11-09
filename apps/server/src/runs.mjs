@@ -600,11 +600,18 @@ function replyMeta({ stopped = false } = {}) {
 function persistReply(run, text, meta = null) {
   if (!text || run.replyPersisted) return;
   const trigger = store.getMessageByRowid(run.conversationId, run.watermark);
+  /*
+   * P4 的交付声明是**给平台判卡状态的机器信号**，不是给雇主看的报告标题。
+   * 李俊那轮回话首行是 `[完成]`，人读到的是"他又交了一份报告"，而不是答案 ——
+   * 2026-11-09 P5 起：落库时剥掉首行的 `[完成]`（判据仍用 run.finalText 原文，
+   * 所以卡状态不受影响）；`[受阻]` 保留，它本身就是"卡住了"的明示。
+   */
+  const shown = String(text).replace(/^\s*\[完成\][ \t]*(?:\r?\n)*/, '') || text;
   store.addMessage({
     conversationId: run.conversationId,
     runId: run.id,
     role: 'assistant',
-    text,
+    text: shown,
     personaId: run.personaId,
     // ⚠️ 回复也要带上这一步的标记：不带的话，流程面板按 taskId 筛时
     //    就只剩"我"这侧的消息，他的回话整段看不见（用户实报）
