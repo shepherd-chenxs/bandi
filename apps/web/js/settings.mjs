@@ -83,6 +83,8 @@ export async function openMe() {
    *   · 没设昵称 → 标题退回手机号（页面不至于空着），副行给一个「＋ 设置昵称」入口；
    *   · 没登录 → 标题「未登录」，副行保留原来那句说明（这句话只在这种情况才该出现）。
    * 昵称存在 users.nickname（服务端 /api/me 带出），**不是账号名** —— 改它不动署名。
+   * 2026-11-09 起昵称是**全端显示名**（通讯录 / 聊天署名 / 派活选人都先看它，见 shell.mjs
+   * 的 userLabel）—— 身份卡只是它的入口，不再是它的全部生效范围。
    */
   const nick = isUser ? String(who?.user?.nickname ?? '').trim() : '';
   /*
@@ -334,12 +336,14 @@ export async function openMe() {
    * 昵称保存（2026-11-08）：走账号接口既有的 PATCH /api/users/:id，只改 users.nickname。
    * 弹窗用全站统一的那个（askText ← askDialog），不用原生 prompt（浏览器画的框跟班底不是
    * 一个东西）。留空 = 清除，界面退回手机号；保存完就地重画这一页（S.auth 里的值先更新）。
+   * 2026-11-09 昵称全端生效：名册（S.users）里自己那条也同步改 —— 派活选人立等可见，
+   * 不等下一次 /api/state；通讯录不摆自己，不用管。
    */
   const editNick = async () => {
     if (!isUser) return;
     const v = await askText({
       title: '设置昵称',
-      body: '昵称只显示在「我的」页，不影响账号名和消息里的署名。留空 = 清除。',
+      body: '昵称是全端的显示名：通讯录、聊天署名、派活选人都会用它。账号名和署名匹配不受影响。留空 = 清除。',
       value: nick,
       placeholder: '最多 20 个字',
       ok: '保存',
@@ -361,6 +365,8 @@ export async function openMe() {
       const u = d?.user ?? {};
       if (!('nickname' in u)) { toast('服务端还是旧版本：重启班底后再改昵称', 'error'); return; }
       if (S.auth?.user) S.auth.user.nickname = u.nickname ?? null;
+      const mine = (S.users ?? []).find((x) => x.id === u.id);
+      if (mine) mine.nickname = u.nickname ?? null;
       toast(t ? '昵称已保存' : '昵称已清除');
       await openMe();
     } catch (e) { toast(e.message, 'error'); }

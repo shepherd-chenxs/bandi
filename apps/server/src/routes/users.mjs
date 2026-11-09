@@ -62,7 +62,8 @@ function meOf(who) {
   if (!u) return null;
   // hub = 这个本机名条绑着的**中枢账号**（登录用的手机号）——「我的」页身份卡用它；
   // 本机名条的名字随每次登录与中枢对齐（routes/hub.mjs），所以 name 一般就等于 hub。
-  // nickname（2026-11-08）= 「我的」页显示的昵称，没设是 null（界面退回手机号）——
+  // nickname（2026-11-08）= 显示用昵称，没设是 null —— **全端显示名**（2026-11-09 起
+  // 通讯录 / 聊天署名 / 派活选人都先看它，不再只限「我的」页），没设退回账号名；
   // 与账号名分开存：改昵称不改署名（理由见 store/users.mjs 的 nickname 列注释）。
   const link = store.listHubLinks().find((l) => l.userId === u.id);
   return { kind: 'user', user: { id: u.id, name: u.name, nickname: u.nickname ?? null, hub: link?.login ?? null } };

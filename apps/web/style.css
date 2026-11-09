@@ -1793,8 +1793,10 @@ dialog.pj-add-dlg .dlg-head { margin: 0 -20px; padding: 14px 12px 6px 20px; }
 .sec-head-actions .combo-btn { width: auto; border: none; background: transparent; padding: 4px 2px; }
 .sec-head-actions .combo-btn:hover { border: none; background: var(--input); }
 
-/* 员工详情「任务」页（2026-10-18）：竖着分堆，卡片直接复用看板那张（.kb-card）。
-   不铺六列是因为这一页是主区的一栏，放不下；堆的**顺序**照看板的生命周期走。 */
+/* 员工详情「任务」页（2026-11-09 用户：「任务做成表格」「按照日期来」「上方加状态筛选」）——
+   原来是竖着摞的看板卡片（.kb-card）。卡片在看板上是对的（列里能拖、一叠一叠看），
+   到了这一页就不合适：主区一栏宽、又不给拖，"面"只是白占纵向空间，十件活要滚三屏。
+   现在是表格：一行一件事，任务 / 状态 / 时间三列对齐；表按天分段，状态筛选在表头上。 */
 .pt-head { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
 .pt-head button { margin-left: auto; flex: 0 0 auto; }
 /* 任务页的「刷新」点下去会把文案换成「刷新中…」：它是右对齐的，宽度一变左边缘就跟着跳，
@@ -1802,22 +1804,79 @@ dialog.pj-add-dlg .dlg-head { margin: 0 -20px; padding: 14px 12px 6px 20px; }
 .pt-head #dTasksRefresh { min-width: 88px; }
 .pt-sum { font-size: 12.5px; color: var(--dim); }
 .pt-sum b { color: var(--text); font-size: 13.5px; }
+/* 状态筛选条（2026-11-09 用户：「不要单独列出来，而是在上方加状态筛选」）——
+   上一版把「要人管」钉成表头一个跨天段：既占掉小半屏，又和日期段抢同一批行。
+   现在它是一颗筛选胶囊，表格严格按天分组；只看卡着的活点一下就行。 */
+.pt-filters { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+.pt-filter { display: inline-flex; align-items: center; gap: 6px; line-height: 1.5;
+             border: 1px solid transparent; background: var(--chip); color: var(--dim);
+             border-radius: 99px; padding: 4px 11px; font-size: 12px; cursor: pointer;
+             transition: color .12s ease, background .12s ease, border-color .12s ease; }
+.pt-filter:hover { color: var(--text); }
+.pt-filter.on { background: var(--panel); border-color: var(--line); color: var(--text);
+                font-weight: 500; box-shadow: 0 1px 2px var(--shadow); }
+.pt-fnum { font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; }
+.pt-filter.on .pt-fnum { color: var(--text); }
+/* 筛空时那句"看全部 N 件"是**动作**、不是筛选档 —— 不做成胶囊，免得看着像一颗没选中的档 */
+.pt-reset { border: 0; background: none; padding: 2px 0; font-size: 12.5px; color: var(--accent); cursor: pointer; }
+.pt-reset:hover { text-decoration: underline; }
 .pt-num { font-size: 11px; font-weight: 400; color: var(--dim); background: var(--chip);
           border-radius: 99px; padding: 2px 7px; margin-left: 7px; }
-.pt-hint { font-weight: 400; font-size: 11.5px; color: var(--dim); margin-left: 8px; }
-.pt-cards { display: flex; flex-direction: column; gap: 8px; }
-.pt-note { font-size: 12px; color: var(--dim); line-height: 1.8; }
+.pt-note { font-size: 12px; color: var(--dim); line-height: 1.8; margin-top: 14px; }
 .pt-note b { color: var(--text); font-weight: 500; }
+
+.pt-tbl { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 12.5px; }
+/* 状态、时间两列定宽，剩下的全给任务列。时间只有 HH:mm（日期在分组标题里，见
+   chat.mjs 的 taskDayLabel），所以这一列能压得很窄；用 px 不用百分比，
+   窄屏下任务标题宁肯多换一行，也不该把时间挤没了 */
+.pt-col-state { width: 76px; }
+.pt-col-at { width: 60px; }
+.pt-tbl th { text-align: left; font-weight: 400; font-size: 11.5px; color: var(--dim);
+             padding: 0 10px 7px; border-bottom: 1px solid var(--line); }
+.pt-tbl td { padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+/* 每段最后一行不留线：段与段之间由分段行的上边线分开，两条线挨着就是双线 */
+.pt-tbl tbody tr:last-child td { border-bottom: 0; }
+/* 分段行：段名 + 件数 + 一句"这段里都是些什么状态"（跨三列，列宽跟下面的行同一套） */
+.pt-sec td { padding: 16px 10px 7px; border-bottom: 0; }
+.pt-tbl tbody + tbody .pt-sec td { border-top: 1px solid var(--line); padding-top: 15px; }
+.pt-sec-name { font-size: var(--t-sec); font-weight: var(--w-title); }
+.pt-row { cursor: pointer; }
+.pt-row td { transition: background .12s ease; }
+.pt-row:hover td { background: var(--hover); }
+/* 手工建的卡不再画左侧那条蓝竖条（2026-11-09 用户：截图圈住它「这个去掉，不好看」）。
+   那标记本来是从看板卡上抄来的；到了表格里，连续几行的手工卡竖条首尾相接，
+   看着像一条贯穿整段的装饰线，而不是"这一行是人加的"。身份由标题下那颗「手动」标签说清。 */
+.pt-title { font-size: 13px; line-height: 1.45; word-break: break-word; }
+.pt-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 5px; }
+.pt-state { font-size: 11.5px; white-space: nowrap; }
+/* 状态色照看板列（跟 .ct-status 同一套 token）：颜色跟着**列**走，不按中文词面自己猜 */
+.pt-state.idea { color: var(--st-idea); }
+.pt-state.todo { color: var(--st-todo); }
+.pt-state.doing { color: var(--st-doing); }
+.pt-state.review { color: var(--st-review); }
+.pt-state.blocked { color: var(--st-blocked); }
+.pt-state.failed { color: var(--st-failed); }
+.pt-state.done { color: var(--st-done); }
+.pt-state.cancelled { color: var(--st-cancelled); }
+.pt-state.other { color: var(--st-other); }
+/* 时间靠右（浏览器历史那一栏也是右对齐的）：眼睛沿右边缘就能扫出"哪件是刚动的" */
+.pt-td-at { font-size: 11.5px; color: var(--dim); white-space: nowrap; text-align: right;
+            font-variant-numeric: tabular-nums; }
+.pt-tbl th.pt-th-at { text-align: right; }
+/* 手机整页（≤560px）：两列定宽各收一档，内边距也压一压 —— 360 宽的屏上
+   任务列还能剩到 ~180px，标题不至于一字一行 */
+@media (max-width: 560px) {
+  .pt-col-state { width: 66px; }
+  .pt-col-at { width: 52px; }
+  .pt-tbl th, .pt-tbl td { padding-left: 7px; padding-right: 7px; }
+  .pt-tags { margin-top: 4px; }
+}
 
 .group-title { font-size: var(--t-sec); font-weight: var(--w-title); margin: 0 0 8px; }
 /* `min-width: 0` 是给 grid/flex 父级留的：`.group` 一旦被当成 flex item 放进窄列，
    默认的"最小内容宽"会让里面那句不换行的长文**把整块撑出容器**（实测浅色下右边被截掉半句）。 */
 .group { border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
          padding: 2px 16px; margin-bottom: 22px; min-width: 0; }
-/* 员工任务页的分堆**不再套外面这层卡片**：里面装的本来就是一张张 .kb-card，
-   外面再包一个带边框底色的盒子就成了"卡中卡"（2026-10-20 用户截图：去掉外面这个卡片）。
-   写成 .group.pt-group 压在上面的 .group 之后，且只影响这一页（.group 别处在用，不能动）。 */
-.group.pt-group { border: 0; background: none; border-radius: 0; padding: 0; }
 .form-row { display: grid; grid-template-columns: 132px minmax(0, 1fr);
             gap: 16px; align-items: center; padding: 13px 0; border-top: 1px solid var(--line); }
 .form-row:first-child { border-top: 0; }

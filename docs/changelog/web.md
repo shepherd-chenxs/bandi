@@ -955,3 +955,47 @@ v13（2026-11-01 七改）：设备行加「取消配对」（已踢出行的清
   · core.mjs 的本机身份注释改成与本机安装任务相符的说法。
   改动：misc.mjs / machine.mjs / connectors.mjs / core.mjs / style.css / mobile.css；
   sw.js（VERSION v191 → v192）。
+
+   v194（2026-11-09 员工详情「任务」页：卡片 → 表格 → **按日期分组** → **顶部状态筛选**，
+   用户三连拍板「任务做成表格」「任务记录参考浏览器这种方式，按照日期来」
+   「不要单独列出来。而是在上方加状态筛选」）：
+   ① 原来是竖着摞一串看板卡（.kb-card）。那形状在看板上是对的（列里能拖、一叠一叠看），
+      到了员工详情就不合适 —— 主区一栏宽、又不给拖，卡片的"面"只是白占纵向高度，
+      手上十件活要滚三屏。改成表格：一行一件事，**任务（标题 + 项目/来源/PR 标签）/ 状态 / 时间**。
+   ② 分堆从"生命周期"换成**按天分组**（照浏览器历史那套）：「今天 · 2026年11月9日 星期一」
+      「昨天 · …」「2026年11月7日 星期六」…；日期进了段标题，行里只留 HH:mm（右对齐，
+      完整时间在 title 上）。新的在前，日期用行上的 `at`（服务端 stamp() 的本地时间）。
+   ③ 「要人管」（已阻塞 / 失败 / 待验收）**不再单独成段**：它曾经钉在表头当跨天收件箱，
+      既占掉小半屏又和日期段抢同一批行。现在是一颗**筛选胶囊**（全部 / 要人管 / 进行中 /
+      待办 / 已完成 / 已取消，各带件数），表格因此严格按天分组、只有一套排序。
+      筛选是纯前端 —— 不重新请求；件数为 0 的档不画（当前选中的那档除外，否则筛空后
+      连自己在哪一档都看不出来）；筛空时给一句「看全部 N 件」。
+   ④ 顺手去掉手工卡那行左侧的 2px 蓝竖条（用户圈图「这个去掉，不好看」）：它本来是从看板
+      卡上抄来的身份标记，可表格里连续几行手工卡一画，竖条首尾相接成了一条贯穿整段的
+      装饰线 —— 反倒不像"这一行是人加的"。身份交给标题下面那颗「手动」标签说。
+   状态那一格的颜色按**看板列**上色（--st-*，跟列头同一套），不按中文词面猜。
+   改动：chat.mjs（personaTaskCard → personaTaskRow、personaTasksHtml 加 filter 入参并铺 <table>、
+   新增 TASK_FILTERS / filterOfCol / ymdOf / taskDayLabel，筛选点击委托在 #dTasksBody 上；
+   PERSONA_TASK_GROUPS / PERSONA_URGENT_COLS 退场）；
+   style.css（.pt-cards / .pt-group / .pt-hint / .pt-at-day 退场，新增 .pt-tbl / .pt-sec / .pt-row /
+   .pt-filters / .pt-filter / .pt-fnum / .pt-reset 等，含 ≤560px 的收窄）；sw.js（VERSION v193 → v194）。
+
+
+   v195（2026-11-09 昵称全端生效，用户："用户的昵称不能只在我的页面里生效"）：
+   昵称之前只在「我的」身份卡活着，其它显示真人的地方（通讯录成员、聊天里别人的署名、
+   派活选真人、任务指派人）走的还是账号影子名 —— 等于白设。收口成一个口径：
+   **昵称 = 全端显示名，账号名 = 身份口径**（「是不是自己」的判断、署名存储一字不动，
+   只换"画出来叫什么"）：
+   · 服务端 listUserBriefs（/api/state 的 users 名册）带上 nickname —— 通讯录成员段、
+     派活选真人、任务执行人的数据源一次喂齐；
+   · 别人的真人署名按昵称画：chat.mjs 新增 senderNickOf（按 senderUserId 从名册查昵称，
+     走 opts.senderNick 进 bubble）；projects.mjs 的 humanOf 同口径；认人仍按
+     senderUserName（账号名）比，检测逻辑一个字没动；
+   · contacts.mjs 成员行名字 / 头像首字吃昵称（跟「我的」身份卡同款读法），搜索账号名、
+     昵称都命中；
+   · shell.mjs 新增 userLabel（昵称优先，没设退账号名，查无此人 → null 好接 ?? 兜底），
+     projects.mjs 派活选人、任务执行人、状态改动显示全走它；
+   · settings.mjs 弹窗文案改成"全端显示名"，保存后同步名册里自己那条（派活选人立等可见）。
+   改动：store/users.mjs（briefs + nickname 列注释改口径）、routes/users.mjs（meOf 注释）、
+   shell.mjs、chat.mjs、contacts.mjs、projects.mjs、settings.mjs；smoke-users.mjs（⑤c 加钉：
+   /api/state 名册带昵称且不改账号名）；sw.js（VERSION v194 → v195）。

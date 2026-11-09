@@ -6,7 +6,7 @@
  * 手机那种 ABC 的"）：上方一组入口（群聊 / 部门，点进去是各自的列表），下方全部员工
  * 按拼音首字母 A–Z 分组 + 右侧索引条。**只走窄屏**，桌面仍是部门分组。
  * A–Z 的首字母判定沿用 2026-10-20 那版的边界字方案（见 nameInitial 注释）。 */
-import { esc, personSubtitle, saveCollapsed, toast } from './shell.mjs';
+import { esc, personSubtitle, saveCollapsed, toast, userLabel } from './shell.mjs';
 import { ICON_CLOUD, ICON_FOLDER, cut, hhmm, initial, personaAvatar, plain } from './ui.mjs';
 import { openSettings, settingsGroups } from './settings.mjs';
 import { archivedEntryHTML, closeCtxMenu, convDisplayName, enterArchiveView, openConversationSafe, renderArchiveList } from './listmenu.mjs';
@@ -512,7 +512,7 @@ export function renderList() {
   // 自己不摆进来（2026-11-04 用户实报"用户不要显示在这里"）：通讯录是找别人的名册，
   // 自己（me = 回环 / 令牌的本机自动登录用户，或登录用户本人）摆在里面没有意义。
   // 只过滤通讯录这一处 —— 看板派活那些读的是全量 S.users，自己给自己派活是合法操作。
-  const users = (S.users ?? []).filter((u) => u.id !== S.me?.id && match(u.name));
+  const users = (S.users ?? []).filter((u) => u.id !== S.me?.id && (match(u.name) || match(u.nickname)));
   // 名册里除了自己还有没有别人：单人部署时「成员」段整段不画 ——
   // 摆一个"成员 0 · 还没有成员"反而误导（人其实有，就是自己）。
   const hasOtherUsers = (S.users ?? []).some((u) => u.id !== S.me?.id);
@@ -600,14 +600,16 @@ const personRowHTML = (p) => `<div class="item ${S.persona && S.persona.id === p
 /**
  * 真人行（2026-10-31 用户概念落地）：只摆名字 —— 成员没有会话、没有忙闲，
  * 点不出详情页（要管账号去「设置 → 用户」），所以不给 data-* 也不绑点击。
+ * 昵称全端生效（2026-11-09 用户："昵称不能只在我的页面里生效"）：这里画的是昵称
+ * （没设退回账号名），头像也取昵称首字 —— 跟「我的」身份卡同一个读法；搜索两边都能搜到。
  * ⚠️ 但要给 `data-nodetail`（2026-11-03）：mobile.mjs 的列表点击委托兜着 `.item`，
  * 不标记的话手机上点成员行会进一个**空的详情态**（主区摆出来却没人往里画 ——
  * 用户实报"详情页空白"的另一半）。
  */
 const userRowHTML = (u) => `<div class="item" data-nodetail>
-        <div class="avatar">${esc(initial(u.name))}</div>
+        <div class="avatar">${esc(initial(userLabel(u)))}</div>
         <div class="who">
-          <div class="line1"><b>${esc(u.name)}</b></div>
+          <div class="line1"><b>${esc(userLabel(u))}</b></div>
           ${u.builtin ? '<div class="line2">管理员</div>' : ''}
         </div>
       </div>`;

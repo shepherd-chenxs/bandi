@@ -75,9 +75,10 @@ ensureColumn('user_sessions', 'ua', 'ua TEXT');
  * 「昵称」（2026-11-08 用户："加一个昵称，'中枢账号 · 手机号登录'这个去掉"）。
  *
  * 跟 `name` **分开存**，不能合成一个：`name` 是中枢账号在本机的影子名（登录时按中枢
- * 登录名建出来，手机号全局唯一；通讯录、消息署名都用它）。昵称只是"我想让人看见的名字"，
- * 目前只用在「我的」页身份卡 —— 合成一个字段的话，改昵称就等于改账号名，署名跟着变，
- * 改错了还找不回来。空 = 没设（界面退回手机号显示）。
+ * 登录名建出来，手机号全局唯一；身份匹配、消息署名存储用它）。昵称是"我想让人看见的名字"，
+ * **全端显示名**（2026-11-09 用户："昵称不能只在我的页面里生效"）——通讯录成员、聊天里
+ * 别人的署名、派活选人、任务指派人都先看它，没设再退回账号名。合成一个字段的话，改昵称
+ * 就等于改账号名，署名匹配跟着乱，改错了还找不回来。空 = 没设（各处退回账号名）。
  */
 ensureColumn('users', 'nickname', 'nickname TEXT');
 
@@ -107,14 +108,15 @@ export function listUsers() {
 }
 
 /**
- * 账号名册：**所有能进面板的身份都能看**的极简版 —— 只有 id / 名字 / 是不是内置。
- * 给通讯录的「成员」段与看板派活选真人用。
+ * 账号名册：**所有能进面板的身份都能看**的极简版 —— 只有 id / 名字 / 昵称 / 是不是内置。
+ * 给通讯录的「成员」段与看板派活选真人用。昵称（2026-11-09）跟着名册走：显示名是
+ * "团队里有谁"的一部分，跟名字一样不算秘密；改/清昵称仍只在 mayManage 后面（PATCH）。
  */
 export function listUserBriefs() {
   return db
-    .prepare('SELECT id, name, builtin FROM users ORDER BY builtin DESC, createdAt ASC, id ASC')
+    .prepare('SELECT id, name, nickname, builtin FROM users ORDER BY builtin DESC, createdAt ASC, id ASC')
     .all()
-    .map((r) => ({ id: r.id, name: r.name, builtin: !!r.builtin }));
+    .map((r) => ({ id: r.id, name: r.name, nickname: r.nickname ?? null, builtin: !!r.builtin }));
 }
 
 export function getUser(id) {

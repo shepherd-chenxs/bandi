@@ -718,6 +718,11 @@ export function stampOf(iso) {
 
 
 
+/** 真人昵称（2026-11-09 昵称全端生效）：按 senderUserId 从名册（S.users）取昵称；
+ *  没带 id / 没设 / 查无此人 → ''。只管显示 —— 「是不是自己」仍按 senderUserName（账号名）认。 */
+const senderNickOf = (m) =>
+  m?.senderUserId ? String((S.users ?? []).find((u) => u.id === m.senderUserId)?.nickname ?? '') : '';
+
 export function bubble(role, text, name, who, showName = false, at = '', atts = null, meta = null, senderName = null, opts = null) {
   /*
    * 真人署名（2026-10-31 用户概念落地）：消息带 senderUserName 且**不是自己** → 按别人画
@@ -726,7 +731,9 @@ export function bubble(role, text, name, who, showName = false, at = '', atts = 
    */
   const otherHuman = role === 'user' && senderName && senderName !== (S.me?.name ?? '我');
   const mine = role === 'user' && !otherHuman;
-  const label = mine ? '我' : otherHuman ? senderName : (who || name || '数字员工');
+  // 昵称全端生效（2026-11-09 用户："昵称不能只在我的页面里生效"）：别人的署名按昵称画
+  // （调用方从名册解析好放 opts.senderNick），认人仍按账号名 —— 上面那行一个字没动。
+  const label = mine ? '我' : otherHuman ? (opts?.senderNick || senderName) : (who || name || '数字员工');
   // 头像带图（2026-10-22）：优先按名字找员工；群聊消息有 personaName 直接命中，
   // 1:1 改过名时名字可能对不上，再兜一层会话的 personaId
   const p = mine ? null
@@ -1099,7 +1106,7 @@ export function drawMessages(msgs, name, isGroup = false, runs = []) {
           prevT = t;
           prevKey = keyOf;
           return sep + (it.kind === 'msg'
-            ? bubble(it.m.role, it.m.text, name, it.m.personaName, isGroup, it.m.createdAt, it.m.atts, it.m.meta, it.m.senderUserName, { ...(opts ?? {}), runId: it.m.runId })
+            ? bubble(it.m.role, it.m.text, name, it.m.personaName, isGroup, it.m.createdAt, it.m.atts, it.m.meta, it.m.senderUserName, { ...(opts ?? {}), runId: it.m.runId, senderNick: senderNickOf(it.m) })
             : it.kind === 'stop' ? stopBlock(it.r, isGroup) : failBlock(it.r, isGroup));
         })
         .join('')
@@ -1705,30 +1712,76 @@ export const SKILL_ICON = '<svg viewBox="0 0 24 24" width="15" height="15" fill=
 /**
  * 员工详情里的任务页：**只读**，数据跟任务看板**同一批行**（服务端 `personaTasks` 按人筛过）。
  *
- * 为什么不照看板那样横着铺六列：这一页是主区的一栏，宽度放不下；
- * 所以竖着分成几堆，但**堆的顺序照看板的生命周期**（要人管在前、已完成在后）——
- * 人在这页要回答的问题就一句："他现在手上有什么、哪件卡着"。
+ * 形状是三次拍板定下来的（2026-11-09）：
+ *   ① 用户「任务做成表格」—— 不再是竖着摞的 `.kb-card`。卡片在看板上是对的（列里能拖、
+ *      一眼看成一叠），到了这一页就不合适：主区一栏宽、又不给拖，"面"只是白占纵向空间。
+ *   ② 用户「任务记录参考浏览器这种方式，按照日期来」—— 分堆从"生命周期"换成**按天分组**：
+ *      「今天 · 2026年11月9日 星期一」「昨天 · …」「2026年11月7日 星期六」……
+ *      日期进了标题，行里就只留 HH:mm（浏览器历史那一套）。
+ *   ③ 用户「不要单独列出来。而是在上方加状态筛选」—— 上一版的「要人管」是钉在表头的
+ *      一个跨天段，既占掉小半屏，又和日期段抢同一批行的位置。现在它是一个**筛选档**：
+ *      表只按天分组（严格照 ②），"现在有哪几件卡着"改成顶上点一下 —— 想全看、想看某一档，
+ *      都只有一套排序。筛选是**纯前端**的事，不重新请求。
  */
-export const PERSONA_TASK_GROUPS = [
-  { label: '要人管', hint: '已阻塞 · 失败 · 待验收', cols: ['blocked', 'failed', 'review'] },
-  { label: '进行中', cols: ['doing'] },
-  { label: '还没开跑', hint: '待办 · 想法', cols: ['todo', 'idea'] },
-  { label: '收场', hint: '已完成 · 已取消', cols: ['done', 'cancelled'] },
-  { label: '其他', cols: ['other'] },
+
+/**
+ * 状态筛选档。`cols` = 归进这一档的看板列（一个列**只归一档**，所以各档相加正好等于总数）。
+ * 不认识的列 key 只出现在「全部」里 —— 宁可这一档漏筛，不能把行丢了。
+ */
+const TASK_FILTERS = [
+  { key: 'all', label: '全部' },
+  { key: 'urgent', label: '要人管', cols: ['blocked', 'failed', 'review'] },
+  { key: 'doing', label: '进行中', cols: ['doing'] },
+  { key: 'wait', label: '待办', cols: ['todo', 'idea'] },
+  { key: 'done', label: '已完成', cols: ['done'] },
+  { key: 'cancelled', label: '已取消', cols: ['cancelled'] },
+  { key: 'other', label: '其他', cols: ['other'] },
 ];
+
+const TASK_FILTER_OF_COL = new Map(TASK_FILTERS.flatMap((f) => (f.cols ?? []).map((c) => [c, f.key])));
+
+/** 看板列 → 筛选档 key（不认识的列给 ''，只进「全部」） */
+const filterOfCol = (colKey) => TASK_FILTER_OF_COL.get(colKey) || '';
+
+const WEEKDAYS = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
+
+/** 本地日期 → 'YYYY-MM-DD'。**不能用 toISOString**：那是 UTC，东八区晚 8 点以后会差一天 */
+function ymdOf(d) {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/** 'YYYY-MM-DD' →「今天 · 2026年11月9日 星期一」/「昨天 · …」/「2026年11月7日 星期六」 */
+function taskDayLabel(day, today, yesterday) {
+  if (!day) return '没记时间';
+  const [y, m, d] = day.split('-').map(Number);
+  const full = `${y}年${m}月${d}日 ${WEEKDAYS[new Date(y, m - 1, d).getDay()]}`;
+  if (day === today) return `今天 · ${full}`;
+  if (day === yesterday) return `昨天 · ${full}`;
+  return full;
+}
 
 
 
 /**
- * 一张卡：长相跟看板那张**一样**（同一套 `.kb-card` 样式），但**不给拖、不给删**。
- * 员工详情回答的是"他手上有什么"，改状态、删卡该回看板去做 —— 两处都能改就会互相打脸。
+ * 一行：任务（标题 + 项目/来源/PR 小标签）、状态、时间。
  *
- * 卡片上不写执行人：这一页里的每一张都是他的。
+ * 标签留在标题下面、不各占一列：这一页最窄的时候（手机整页）五列会把标题挤成
+ * 两三个字一行 —— 标签本来就是补充说明，贴着它那件事走才对。
+ *
+ * 一样**不给拖、不给删**：员工详情回答的是"他手上有什么"，改状态、删卡该回看板去做 ——
+ * 两处都能改就会互相打脸。
+ *
+ * `colKey` = 这张卡所在的看板列（`blocked` / `review` / …）：状态那格的颜色按**列**上色
+ * （`--st-*`，跟看板列头同一套），不按中文词面自己猜 —— 「已停止」落在 `blocked` 列，
+ * 词面里压根没有"阻塞"两个字。
+ *
+ * 时间只画 HH:mm：日期在分组标题里（浏览器历史也是这么排的），完整时间留在 `title` 上，
+ * 鼠标停一下还能看见年月日。
  */
-export function personaTaskCard(r) {
-  const local = r.source === 'manual' || r.source === 'repo';
-  const srcCls = r.source === 'chat' ? ' chat' : r.source === 'repo' ? ' repo' : local ? ' manual' : '';
-  // 点卡片去哪儿：流程 → 那条实例；有会话 → 那场对话；手工卡没派活 → 它所在项目的看板
+export function personaTaskRow(r, colKey = '') {
+  const srcCls = r.source === 'chat' ? ' chat' : r.source === 'repo' ? ' repo' : r.source === 'manual' ? ' manual' : '';
+  // 点这行去哪儿：流程 → 那条实例；有会话 → 那场对话；手工卡没派活 → 它所在项目的看板
   const attr = r.source === 'flow'
     ? ` data-pt-flow="${esc(r.flow_id)}" data-pt-tpl="${esc(r.template_id || '')}"`
     : r.conversation_id
@@ -1740,21 +1793,34 @@ export function personaTaskCard(r) {
   const proj = r.project_id
     ? `<span class="kb-tag proj" title="属于哪个项目">${esc(r.project_name)}</span>`
     : '<span class="kb-tag" title="没挂项目也没落在任何项目目录下">未归属</span>';
-  return `<article class="kb-card${local ? ' manual' : ''}"${attr} title="${esc(r.note || '')}">
-    <div class="kb-card-top">${proj}<span class="kb-tag${srcCls}">${esc(r.source_text)}</span>${prPillOf(r)}
-      <span class="kb-state">${esc(r.status)}</span></div>
-    <div class="kb-card-title">${esc(r.task)}</div>
-    <div class="kb-card-foot"><span>${esc(r.at)}</span></div>
-  </article>`;
+  const at = String(r.at ?? '');
+  const hhmm = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(at) ? at.slice(11, 16) : '—';
+  // 行上不再挂 `manual` class（2026-11-09 用户去掉左侧蓝竖条）：来源由标题下那颗标签说，
+  // 连续几行手工卡各画一条竖条会连成一条贯穿整段的装饰线，反倒看不出"这一行是人加的"。
+  return `<tr class="pt-row"${attr} title="${esc(r.note || '')}">
+    <td class="pt-td-task">
+      <div class="pt-title">${esc(r.task)}</div>
+      <div class="pt-tags">${proj}<span class="kb-tag${srcCls}">${esc(r.source_text)}</span>${prPillOf(r)}</div>
+    </td>
+    <td class="pt-td-state"><span class="pt-state ${esc(colKey)}">${esc(r.status)}</span></td>
+    <td class="pt-td-at" title="${esc(at)}">${esc(hhmm)}</td>
+  </tr>`;
 }
 
 
 
 /**
  * 任务页的正文（不含合计那行）。`b` = `/api/personas/:id/tasks` 的返回，
- * 形状跟任务看板一模一样（`board()` 的产物），所以这里只做"重新分堆"这一件事。
+ * 形状跟任务看板一模一样（`board()` 的产物），所以这里只做三件事：
+ * 按状态筛选 → 按天分组 → 铺成表。
+ *
+ * `filter` = 选中的筛选档 key（见 TASK_FILTERS）。认不出来的值一律当「全部」——
+ * 刷新后某一档空了、或者旧链接带了个退役的 key，都不该整页空白。
+ *
+ * 每个日期是一个 `<tbody>`：表头只画一次，段名做成跨三列的段行 ——
+ * 这样各段的任务/状态/时间仍然对齐在同一组列宽上（各段各开一张表就会各自算宽）。
  */
-export function personaTasksHtml(b) {
+export function personaTasksHtml(b, filter = 'all') {
   if (!b) return '<div class="empty" style="padding:26px 4px">任务取不到</div>';
   if (b.error) return `<div class="empty" style="padding:26px 4px">任务取不到：${esc(b.error)}</div>`;
   if (!b.total) {
@@ -1763,19 +1829,65 @@ export function personaTasksHtml(b) {
       <span class="dim">看板上建的卡指定他做、流程走到点他名的节点、或者他直接在会话里接了活 —— 都会算在这里。</span>
     </div>`;
   }
-  const cols = new Map((b.columns ?? []).map((c) => [c.key, c]));
-  const blocks = PERSONA_TASK_GROUPS.map((g) => {
-    const cards = g.cols.flatMap((k) => cols.get(k)?.cards ?? []);
-    if (!cards.length) return '';
-    return `<div class="group-title">${esc(g.label)}<span class="pt-num">${cards.length}</span>${
-      g.hint ? `<span class="pt-hint">${esc(g.hint)}</span>` : ''
-    }</div>
-    <div class="group pt-group"><div class="pt-cards">${cards.map(personaTaskCard).join('')}</div></div>`;
-  }).join('');
-  return `${blocks}
+
+  // 一行 = 一张卡 + 它所在的看板列（状态色按列走，见 personaTaskRow）。新→旧排一次，
+  // 后面的筛选和按天分组都沿用这个次序（浏览器历史也是时间倒序）。
+  const all = (b.columns ?? [])
+    .flatMap((c) => (c.cards ?? []).map((r) => ({ r, colKey: c.key })))
+    .sort((x, y) => String(y.r.at || '').localeCompare(String(x.r.at || '')));
+
+  // 各档件数：筛选条上既是"有没有这一档"，也是"这一档几件"。
+  const nOf = new Map(TASK_FILTERS.map((f) => [f.key, 0]));
+  for (const x of all) {
+    nOf.set('all', nOf.get('all') + 1);
+    const k = filterOfCol(x.colKey);
+    if (k) nOf.set(k, (nOf.get(k) || 0) + 1);
+  }
+
+  const active = TASK_FILTERS.some((f) => f.key === filter) ? filter : 'all';
+  const rows = active === 'all' ? all : all.filter((x) => filterOfCol(x.colKey) === active);
+
+  // 筛选条：件数为 0 的档不画（点进去是空的，白占位置）；但**当前选中的那档永远画**，
+  // 否则刷新后它变空了，人连"自己在看哪一档"都看不出来，也没法点回「全部」。
+  const bar = `<div class="pt-filters">${TASK_FILTERS
+    .filter((f) => f.key === 'all' || nOf.get(f.key) || f.key === active)
+    .map((f) => `<button type="button" class="pt-filter${f.key === active ? ' on' : ''}"
+      data-pt-filter="${f.key}">${esc(f.label)}<span class="pt-fnum">${nOf.get(f.key) || 0}</span></button>`)
+    .join('')}</div>`;
+
+  // 按天分堆。Map 保留插入顺序 = 时间倒序，所以日期段天然是新的在前。
+  // `at` 是服务端 `stamp()` 格式化过的本地时间「YYYY-MM-DD HH:mm」，前 10 位就是日期。
+  const byDay = new Map();
+  for (const x of rows) {
+    const day = /^\d{4}-\d{2}-\d{2}/.test(String(x.r.at ?? '')) ? String(x.r.at).slice(0, 10) : '';
+    if (!byDay.has(day)) byDay.set(day, []);
+    byDay.get(day).push(x);
+  }
+
+  const now = new Date();
+  const today = ymdOf(now);
+  const yesterday = ymdOf(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1));
+  const sections = [...byDay].map(([day, list]) => `<tbody>
+      <tr class="pt-sec"><td colspan="3"><span class="pt-sec-name">${esc(taskDayLabel(day, today, yesterday))}</span><span class="pt-num">${list.length}</span></td></tr>
+      ${list.map((x) => personaTaskRow(x.r, x.colKey)).join('')}
+    </tbody>`).join('');
+
+  // 筛空了：说清"是筛的，不是没有"，并给一颗回全部的按钮（省得人去找顶上那条）
+  const body = sections
+    ? `<table class="pt-tbl">
+      <colgroup><col /><col class="pt-col-state" /><col class="pt-col-at" /></colgroup>
+      <thead><tr><th>任务</th><th>状态</th><th class="pt-th-at">时间</th></tr></thead>
+      ${sections}
+    </table>`
+    : `<div class="empty" style="padding:28px 4px;line-height:1.9">
+        这一档现在没有任务
+        <div style="margin-top:8px"><button type="button" class="pt-reset" data-pt-filter="all">看全部 ${nOf.get('all') || 0} 件</button></div>
+      </div>`;
+
+  return `${bar}${body}
     <div class="pt-note">跟任务看板同源：<b>流程的每次办理</b> + <b>聊天最近一轮</b> + <b>一张手工卡</b>，各算一件。
       聊天派活不进看板 —— 想让某轮活进看板，在聊天页头把它<b>立成卡</b>（这一页照收）。
-      点卡片能跳到它本身（流程实例 / 会话 / 项目看板）。</div>`;
+      点一行能跳到它本身（流程实例 / 会话 / 项目看板）。</div>`;
 }
 
 
@@ -3081,8 +3193,12 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
    * 任务页：数据是**打开这一页那一刻**取的快照（跟「运行记录」一样）。
    * 「刷新」只换这一页里的三块（合计 / 列表 / 标签上的数），**不重画整页** ——
    * 重画会把标签弹回「概览」，人刚翻到任务页就被弹走，比不刷新更烦。
+   *
+   * 状态筛选也走这条重画路（只重画 #dTasksBody）：数据不动，换的只是"哪些行进表"。
+   * 筛选状态留在闭包里，所以「刷新」之后人还在自己看的那一档上。
    */
   let tasksData = taskBoard;
+  let tasksFilter = 'all';
   const paintTasks = () => {
     const sum = $('dTasksSum');
     if (sum) {
@@ -3091,12 +3207,23 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
         : `共 <b>${tasksData.total ?? 0}</b> 件${tasksData.project_count ? ` · 分布在 ${tasksData.project_count} 个项目` : ''}`;
     }
     const body = $('dTasksBody');
-    if (body) body.innerHTML = personaTasksHtml(tasksData);
+    if (body) body.innerHTML = personaTasksHtml(tasksData, tasksFilter);
     const n = $('dTasksN');
     if (n) n.textContent = String(tasksData?.error ? '—' : (tasksData?.total ?? 0));
     wirePersonaTaskLinks();
   };
   paintTasks();
+
+  // 筛选条是**委托**在 #dTasksBody 上的：表格每次重画都会换掉里面的按钮，
+  // 一个个 addEventListener 存不住；委托一次，重画多少次都还在。
+  $('dTasksBody')?.addEventListener('click', (e) => {
+    const chip = e.target?.closest?.('[data-pt-filter]');
+    if (!chip) return;
+    const next = chip.dataset.ptFilter || 'all';
+    if (next === tasksFilter) return;
+    tasksFilter = next;
+    paintTasks();
+  });
 
   $('dTasksRefresh')?.addEventListener('click', async (e) => {
     e.preventDefault();

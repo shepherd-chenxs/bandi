@@ -272,6 +272,16 @@ try {
     JSON.stringify(meNick.body?.user ?? {}));
   check('昵称**不改账号名**（名字还是甲，署名不受影响）', meNick.body?.user?.name === '甲',
     String(meNick.body?.user?.name));
+  /*
+   * 名册也带昵称（2026-11-09 昵称全端生效）：通讯录成员段、聊天里别人的署名、
+   * 派活选真人读的都是 /api/state 的 users（listUserBriefs）—— 它不带昵称的话，
+   * 昵称就还是只活在「我的」页，正是用户点名要改掉的那个状态。
+   */
+  const stNick = await call('GET', '/api/state', { cookie: sidA });
+  const briefNick = (stNick.body?.users ?? []).find((u) => u.id === meAId);
+  check('/api/state 名册带昵称（通讯录 / 署名 / 派活选人的显示名源）',
+    stNick.status === 200 && briefNick?.nickname === '老 板' && briefNick?.name === '甲',
+    JSON.stringify(briefNick ?? null));
   const nickLong = await call('PATCH', `/api/users/${encodeURIComponent(meAId)}`, { cookie: sidA, body: { nickname: '一'.repeat(21) } });
   check('超过 20 个字 → 400 E3813', nickLong.status === 400 && nickLong.body?.code === 'E3813',
     `${nickLong.status} ${nickLong.body?.code ?? ''}`);
