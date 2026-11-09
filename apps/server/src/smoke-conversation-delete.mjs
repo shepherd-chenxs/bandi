@@ -5,7 +5,7 @@
  *   · 删除 = 物理删除：会话、消息、运行、运行事件、成员会话状态全部抹掉，**不可恢复**；
  *   · 引用过它的**任务卡 / 流程办理记录必须留着**，只是 `conversationId` 变空
  *     —— 删会话不能顺手删别人的卡；只动四列（workflow_runs.threadId / workflow_steps /
- *     workflow_tasks / project_tasks 的 conversationId），`node_jobs` 与 schedule 配置一概不动；
+ *     workflow_tasks / project_tasks 的 conversationId），schedule 配置一概不动；
  *   · `direct` / `group` 都能删；群删的是**这一段会话**（2026-10-20 用户定：
  *     「删除不是删除群，是删除这次会话」），删到零段才连空群一起收掉；
  *     exec 归任务卡/流程；
@@ -68,7 +68,7 @@ fs.mkdirSync(projRoot, { recursive: true });
 const dev = store.createPersona({ name: '波哥', runtime: 'codex', cwd: projRoot, instructions: '' });
 const proj = store.createProject({ name: '甲项目', root: projRoot });
 
-// ① 要被删的那段 1:1：两条消息 + 一次跑完的运行 + 两条运行事件 + 一个远程节点活
+// ① 要被删的那段 1:1：两条消息 + 一次跑完的运行 + 两条运行事件
 const doomed = store.createConversation({ title: '和 波哥', personaId: dev.id });
 store.addMessage({ conversationId: doomed.id, role: 'user', text: '把首页那句文案改掉，顺便把按钮颜色也换一下' });
 const doomedRun = store.createRun({ conversationId: doomed.id, runtime: 'codex', personaId: dev.id });
@@ -76,7 +76,6 @@ store.appendRunEvent(doomedRun.id, 1, { type: 'text', text: '开始改' });
 store.appendRunEvent(doomedRun.id, 2, { type: 'text', text: '改完了' });
 store.finishRun(doomedRun.id, { status: '完成', exitCode: 0 });
 store.addMessage({ conversationId: doomed.id, runId: doomedRun.id, role: 'assistant', text: '改好了' });
-const nodeJob = store.enqueueNodeJob({ runId: doomedRun.id, nodeId: 'nd-smoke', family: 'codex', task: '跑一下' });
 
 // ② 同一段会话被三张卡 / 一条流程实例引用（这些行必须留着）
 const card = store.createProjectTask({
@@ -175,11 +174,6 @@ check('步骤的 conversationId 变 NULL', wsAfter?.conversationId === null, Str
 const wfRunAfter = rowOf(db1, 'SELECT * FROM workflow_runs WHERE id = ?', wfRun.id);
 check('流程实例还在', !!wfRunAfter, wfRun.id);
 check('流程实例的 threadId 变 NULL', wfRunAfter?.threadId === null, String(wfRunAfter?.threadId));
-check(
-  'node_jobs 保持不动（远程执行台账，不连带删）',
-  countOf(db1, 'SELECT COUNT(*) c FROM node_jobs WHERE id = ?', nodeJob.id) === 1,
-  nodeJob.id,
-);
 db1.close();
 
 console.log('\n⑤ 同一人的其它会话不受影响');

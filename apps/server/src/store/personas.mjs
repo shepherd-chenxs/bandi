@@ -53,12 +53,11 @@ export function getPersona(id) {
 }
 
 
-export function createPersona({ id = null, name, role = null, department = null, instructions = '', runtime = 'codex', sandbox = 'danger-full-access', cwd = null, model = null, showThinking = 0, rootDirs = [], builtin = 0, avatar = null, maxParallel = null }) {
+export function createPersona({ id = null, name, role = null, department = null, instructions = '', runtime = 'codex', sandbox = 'danger-full-access', cwd = null, model = null, rootDirs = [], builtin = 0, avatar = null, maxParallel = null }) {
   const row = {
     // 内置员工要**固定 id**（seed 幂等靠它）；普通员工仍自动生成
     id: id || newId('p'),
     name, role, department, instructions, runtime, sandbox, cwd, model,
-    showThinking: showThinking ? 1 : 0,
     rootDirs: Array.isArray(rootDirs) && rootDirs.length ? JSON.stringify(rootDirs) : null,
     builtin: builtin ? 1 : 0,
     avatar: avatar || null,
@@ -66,11 +65,11 @@ export function createPersona({ id = null, name, role = null, department = null,
     createdAt: nowIso(),
   };
   db.prepare(
-    `INSERT INTO personas (id, name, role, department, instructions, runtime, sandbox, cwd, model, showThinking, rootDirs, builtin, avatar, maxParallel, createdAt)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO personas (id, name, role, department, instructions, runtime, sandbox, cwd, model, rootDirs, builtin, avatar, maxParallel, createdAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     row.id, row.name, row.role, row.department, row.instructions, row.runtime, row.sandbox, row.cwd, row.model,
-    row.showThinking, row.rootDirs, row.builtin, row.avatar, row.maxParallel, row.createdAt,
+    row.rootDirs, row.builtin, row.avatar, row.maxParallel, row.createdAt,
   );
   return row;
 }
@@ -157,7 +156,6 @@ export function updatePersona(id, fields) {
     cwd: fields.cwd ?? current.cwd,
     // 注意这里不能用 ??：null 是"显式清空"（选回「用 CLI 默认」），undefined 才是"没提供"
     model: fields.model === undefined ? current.model : fields.model,
-    showThinking: fields.showThinking === undefined ? current.showThinking : (fields.showThinking ? 1 : 0),
     rootDirs:
       fields.rootDirs === undefined
         ? current.rootDirs
@@ -174,11 +172,11 @@ export function updatePersona(id, fields) {
             : null),
   };
   db.prepare(
-    `UPDATE personas SET name = ?, role = ?, department = ?, instructions = ?, runtime = ?, sandbox = ?, cwd = ?, model = ?, showThinking = ?, rootDirs = ?, avatar = ?, maxParallel = ?
+    `UPDATE personas SET name = ?, role = ?, department = ?, instructions = ?, runtime = ?, sandbox = ?, cwd = ?, model = ?, rootDirs = ?, avatar = ?, maxParallel = ?
       WHERE id = ?`,
   ).run(
     next.name, next.role, next.department, next.instructions, next.runtime, next.sandbox, next.cwd, next.model,
-    next.showThinking, next.rootDirs, next.avatar, next.maxParallel, id,
+    next.rootDirs, next.avatar, next.maxParallel, id,
   );
   // 指令真的改了 → 作废他的成员会话：身份只在会话第一次建立时注入，
   // 不清的话他带着旧指令继续跑（自建员工走详情页改指令的这条路，专家走 syncHiredExperts）

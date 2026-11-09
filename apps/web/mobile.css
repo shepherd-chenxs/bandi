@@ -97,15 +97,13 @@
  * 骨架（index.html）是 body 网格：68px 图标栏 + 300px 列表 + 主区。
  * ≤900px：图标栏收掉（取简，底部导航接管一级切换）、单列铺满；
  * 列表与主区互斥铺满，谁在场由 body.mb-detail-open 说了算（手机上的两级导航）。
- * 例外三处要在窄屏下照常整页显示：
+ * 例外两处要在窄屏下照常整页显示：
  *   body.no-list    —— 工作台宫格 / 专家库（整页视图，本就没有左栏）；
- *   body.node-mode  —— 节点形态页（自有单列布局）；
  *   配对落地页      —— 独立 pair.html，根本不引本文件。
  */
 @media (max-width: 900px) {
   body,
-  body.no-list,
-  body.node-mode {
+  body.no-list {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr);
   }
@@ -124,7 +122,7 @@
   body.mb-detail-open main { grid-row: 2; }
 
   /* 没进详情时主区藏掉 —— 否则消息空态会和列表抢一层 */
-  body:not(.mb-detail-open):not(.no-list):not(.node-mode) main { display: none; }
+  body:not(.mb-detail-open):not(.no-list) main { display: none; }
 
   /*
    * 底部四 tab 在 **900 档**就接管一级导航（2026-10-28 修 P0）。
@@ -361,6 +359,56 @@
   /* 简写行（直接 b + .sub）也要跟标准行长得一样，否则同一列表里两套排版 */
   .item .who > b { font-size: 17px; font-weight: 600; }
   .item .who > .sub { font-size: 14px; margin-top: 3px; }
+
+  /*
+   * 项目列表行（2026-11-08 重设计，用户：「重新设计一下」→「简洁一些」）。
+   * 这一页只有一个动作 —— 挑一个项目进去，所以行里只留三样：
+   *   名字（16/500）· 「内置」小签（1px 描边、11px，不像角标那样抢眼）· 右缘 chevron。
+   * 不加磁贴、不加副行（更新日期/目录都试过，都是给这一件事凑信息量）。
+   * chevron 直接照抄设置分节行那套 `::after` 斜角（同一个 App 里"能进去"的手势得长一样）。
+   */
+  .list-body .item.pj-row {
+    min-height: 56px;
+    padding: 0 var(--mb-pad, 16px);
+    padding-right: calc(var(--mb-pad, 16px) + 18px);
+    gap: 8px;
+  }
+  .pj-row .pj-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 16px;
+    font-weight: 500;
+    line-height: 1.35;
+    color: var(--text);
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .pj-row .pj-tag {
+    flex: none;
+    padding: 0 5px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    font-size: 11px;
+    font-style: normal;
+    font-weight: 400;
+    line-height: 16px;
+    color: var(--mb-text-3, var(--dim));
+  }
+  .pj-row::after {
+    content: '';
+    position: absolute;
+    right: 16px;
+    top: 50%;
+    width: 7px;
+    height: 7px;
+    margin-top: -4px;
+    border-right: 1.8px solid var(--dim);
+    border-bottom: 1.8px solid var(--dim);
+    transform: rotate(-45deg);
+    opacity: .5;
+    pointer-events: none;
+  }
 
   /*
    * 行内那颗状态点（「● 10 人 · …」）：8px 圆点在 14px 文字里偏大且悬空，
@@ -1583,6 +1631,8 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
   body.mb-narrow #settingsView .me-who { gap: 1px; }
   body.mb-narrow #settingsView .me-name b { font-size: 20px; line-height: 1.45; font-weight: 600; }
   body.mb-narrow #settingsView .me-meta { font-size: 13px; line-height: 1.6; }
+  /* 昵称铅笔（2026-11-08）：28px 低于手指触控区，手机上加到 34（图标仍是 14px） */
+  body.mb-narrow #settingsView .me-edit { width: 34px; height: 34px; }
 
   /* 「这台设备」属性卡（2026-11-03 账户为主）：与页上其它卡同款分组卡语汇。
      行 52px、标签左值右 —— iOS 设置页"标签 + 详情"的双栏读法；地址行给等宽。 */
@@ -1603,7 +1653,7 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
   body.mb-narrow #settingsView .me-sec-grid { grid-template-columns: 1fr; gap: 10px; }
   body.mb-narrow #settingsView .me-sec-card { padding: 16px; gap: 10px; }
 
-  /* 退场整行：手机上加大点击高度与字号（替代旧 .machine-actions 那条） */
+  /* 退场整行：手机上加大点击高度与字号 */
   body.mb-narrow #settingsView .me-out {
     padding: 15px 16px;
     font-size: 15px;
@@ -1635,16 +1685,6 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     font-size: 20px;
     line-height: 1;
     transform: translateY(-1px);
-  }
-
-  /* 「我的」页底那两个按钮（退出登录 / 去登录）在手机上不该贴在右沿：
-     个人中心的动作用整宽按钮，比右下角一颗小按钮好点得多 */
-  body.mb-narrow #settingsView .machine-actions { justify-content: stretch; }
-  body.mb-narrow #settingsView .machine-actions .btn-sm {
-    flex: 1;
-    height: 46px;
-    font-size: 15px;
-    border-radius: var(--mb-r-ctl, 10px);
   }
 
   /* 设置列表顶上的「← 我的」行（contacts.mjs 画的）：图标 + 文字，跟 IM 列表行同高 */
@@ -1895,8 +1935,8 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
    ② 值列统一"右对齐 + 超长省略"—— DESKTOP-ME3RQ97 这种长值会把 chevron 顶挤
       参差（旧「当前设备」卡最明显）；桌面 .me-v 是 flex:1 + break-all，手机上
       改成不换行省略，值与 chevron 的距离才稳定；
-   ③ 「外网访问」状态点 —— 机器卡新增一行（DOM 同在 settings.mjs），点色从
-      style.css 的语义 token 取（--ok/--warn/--bad），深浅主题都成立；
+   ③ ~~「外网访问」状态点~~ —— 已随 frp 内置下线删除（2026-11-08）：进程不再归我们管，
+      没有真相可显示。这轮只剩 ①②④ 三条生效；
    ④ 「当前设备」已并进「通用」卡（DOM 改动），这里只补 button 行的按压与
       分割线衔接 —— .me-kv + .me-kv::before 对 button 形态同样生效，无需新规则。
 */
@@ -1927,27 +1967,10 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
   /* button 行（清除缓存 / 当前设备）的 me-k 也照此办理 —— 它们是 .me-kv 的变体 */
   body.mb-narrow #settingsView button.me-cache-row .me-k { flex: none; }
 
-  /* ③ 外网访问状态点：8px 圆点 + 状态词，垂直居中（inline-flex 防止点被
-       line-height 顶偏）；dim 档给"未开通/未配置"这种中性事实 */
-  body.mb-narrow #settingsView .me-relay {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    white-space: nowrap;
-  }
-  body.mb-narrow #settingsView .me-dot {
-    flex: 0 0 auto;
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: var(--mb-text-3, var(--dim));
-  }
-  body.mb-narrow #settingsView .me-dot-ok { background: var(--ok, #3fb950); }
-  body.mb-narrow #settingsView .me-dot-wait { background: var(--warn, #d29922); }
-  body.mb-narrow #settingsView .me-dot-bad { background: var(--bad, #f85149); }
+  /* ③ 外网访问状态点（.me-relay / .me-dot-*）已随 frp 内置下线删除（2026-11-08）。 */
 }
+
 /*
- * ══════════════════════════════════════════════════════════════════════════════
  * mobile-patch.css —— 消息页 iOS 化（视觉 Phase 1 + 体验 Phase 2）补丁片段
  * ══════════════════════════════════════════════════════════════════════════════
  *
@@ -2483,6 +2506,16 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     color: var(--mb-on-bubble, var(--on-solid));
   }
 
+  /* 进度胶囊跟手机气泡同一套语言：无描边、走气泡底色。
+     桌面那圈 1px 线在 iMessage 式的手机上显得脏（这边所有气泡都不描边）。
+     宽度上限也跟着气泡的 82%，不然长命令的胶囊会比正文泡还宽。 */
+  .rp { max-width: 82%; }
+  .rp-head {
+    border-color: transparent;
+    background: var(--mb-bubble-them, var(--panel));
+    border-radius: 999px;
+  }
+
   /* 正文段落贴住气泡（真实现是 renderMarkdown 出的 <p>，浏览器默认 1em 上下边距） */
   .bubble p { margin: 0; }
   .bubble > p:last-child { margin-bottom: 0; }
@@ -2697,7 +2730,7 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
 /*
  * v79 只把「消息页」的语汇钉住了；通讯录、工作台、我的（含设置）还在吃 §0 的旧值。
  * 这一档**不改任何选择器结构**，只把同名 token 换成 iOS 分组页口径 ——
- * 跟 yaojian 那次改版同一手法：换值不换名，几十条引用自动跟上。
+ * 换值不换名：几十条引用自动跟上。
  *
  *   · --mb-cvbg：分组页页底。旧值 #050506 / #eceef1 是"近黑 / 蓝灰"，
  *     iOS grouped 是 #000 / #F2F2F7 —— 浅色那档差得最明显（旧值偏蓝，白卡压上去发脏）。
@@ -3002,11 +3035,6 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     color: var(--mb-text, var(--text));
     text-align: right;
   }
-  /* 思考过程开关抬到 iOS 标准尺寸（51×31 的近似档），拇指好拨 */
-  body.mb-narrow #detailView .switch.sm { width: 46px; height: 28px; }
-  body.mb-narrow #detailView .switch.sm > span { border-radius: 14px; }
-  body.mb-narrow #detailView .switch.sm > span::after { width: 24px; height: 24px; top: 2px; left: 2px; }
-  body.mb-narrow #detailView .switch.sm input:checked + span::after { transform: translateX(18px); }
 
   /* ── ③ 主动作通栏 ── */
   body.mb-narrow #detailView .mb-msg-btn {
@@ -3422,12 +3450,30 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     flex: 1 1 auto;
     min-width: 0;
     display: flex;
-    gap: 8px;
+    gap: 6px;                 /* 8 → 6：390px 下多挤进半个胶囊，少一次横滑 */
     overflow-x: auto;
     padding: 6px 0;
     scrollbar-width: none;
   }
   .kb-l-tabs::-webkit-scrollbar { width: 0; height: 0; }
+  /*
+   * "右边还有 tab"的提示（2026-11-08 评审）：状态最多 9 个，390px 一屏只放得下 4 个，
+   * 而右端原来被刷新按钮封口，看着像"就这几个"。真的还有内容时给右缘一层渐隐
+   * （类名由 JS 按 scrollLeft 打，到尽头就撤 —— 不留一条永久毛边），左缘同理。
+   * 用 mask 而不是叠一个渐变块：渐隐要"透出"底下的页面色，叠块会盖住按压/焦点环。
+   */
+  .kb-l-tabs.can-more {
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent 100%);
+    mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent 100%);
+  }
+  .kb-l-tabs.can-prev {
+    -webkit-mask-image: linear-gradient(to right, transparent 0, #000 16px);
+    mask-image: linear-gradient(to right, transparent 0, #000 16px);
+  }
+  .kb-l-tabs.can-more.can-prev {
+    -webkit-mask-image: linear-gradient(to right, transparent 0, #000 16px, #000 calc(100% - 28px), transparent 100%);
+    mask-image: linear-gradient(to right, transparent 0, #000 16px, #000 calc(100% - 28px), transparent 100%);
+  }
   /*
    * tab 定死「填充胶囊」（不换 segmented、不用下划线）：段数在 2~9 之间浮动（全部 + 有卡的列），
    * segmented 要求段数固定等宽，8 段中文在 390px 下每段只剩约 40px，还放不下计数。
@@ -3439,7 +3485,7 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     align-items: center;
     gap: 6px;
     height: 32px;
-    padding: 0 14px;
+    padding: 0 12px;
     border: 0;
     border-radius: 999px;
     font: inherit;
@@ -3540,7 +3586,16 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     pointer-events: none;
   }
   .kb-l-row:active { background: var(--mb-press, var(--active)); }
+  /* 标题行：标题占左（可两行），状态（点+词）钉在右上角 —— 与标题首行齐顶 */
+  .kb-l-line {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    min-width: 0;
+  }
   .kb-l-title {
+    flex: 1 1 auto;
+    min-width: 0;
     font-size: 16px;
     font-weight: 500;
     line-height: 1.4;
@@ -3552,8 +3607,8 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     overflow: hidden;
   }
   /*
-   * 元信息行的收缩优先级（390px 下四段一定放不下，必须定死谁先让）：
-   *   时间 0 0 auto → 永不缩；状态点 + 状态词 0 0 auto → 永不缩（它是行的维度）；
+   * 元信息行的收缩优先级（390px 下最多四段，状态已挪去右上角）：
+   *   时间 0 0 auto → 永不缩；卡片类型签 0 0 auto → 永不缩（它是"这活谁推的"，缩掉就没意义了）；
    *   执行人 1 1 auto → 第一个被省略；项目 pill 0 1 auto + max-width 40% → 第二个被省略。
    */
   .kb-l-meta {
@@ -3572,7 +3627,29 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     border-radius: 50%;
     background: var(--st-c, var(--st-other));
   }
-  .kb-l-state { flex: 0 0 auto; color: var(--mb-text-2, var(--dim)); }   /* 状态词不上色 */
+  /*
+   * 状态胶囊（2026-11-08 评审定稿，替代原来的「6px 圆点 + 灰字」）：
+   * 底色取 `--st-*` 12% —— 正是那套色校对比度时用的底（style.css §状态色注释），
+   * 字取 `--st-*` 原值，浅/深主题各自成立，不新增 hex。
+   * **不再画点**：胶囊已经是"色 + 词"，再点一颗是把同一句话说两遍；
+   * 原来待办(青) 与已完成(绿) 在 6px 上几乎是同一颗色，胶囊化后靠底色面积分开了。
+   * 高 20 配标题首行（16×1.4≈22），margin-top 2 让两者视觉齐顶。
+   */
+  .kb-l-state {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    height: 20px;
+    padding: 0 8px;
+    margin-top: 2px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1;
+    white-space: nowrap;
+    color: var(--st-c, var(--st-other));
+    background: color-mix(in srgb, var(--st-c, var(--st-other)) 12%, transparent);
+  }
   .kb-l-pill {
     flex: 0 1 auto;
     max-width: 40%;
@@ -3587,6 +3664,32 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     background: var(--mb-fill, var(--active));
     color: var(--mb-text-2, var(--dim));
   }
+  /*
+   * 卡片类型小签（2026-11-08 用户要求：手机列表要显示卡片类型标签）。
+   * 与项目 pill **同高同圆角，但只描边不填底** —— 两个都填底会像并排两块按钮；
+   * 描边这枚读起来是"标签"，填底那个仍是"归属"。文字用中性灰（不抢右上角状态点，
+   * 那一点仍是行里唯一的实色）。「仓库值班」是机器写进来的，单独上暖色，扫列表时能分出来。
+   */
+  .kb-l-src {
+    flex: 0 0 auto;
+    padding: 2px 6px;
+    border-radius: 6px;
+    line-height: 16px;
+    font-size: 11px;
+    font-weight: 500;
+    white-space: nowrap;
+    color: var(--mb-text-2, var(--dim));
+    box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--text) 16%, transparent);
+  }
+  .kb-l-src.repo {
+    color: var(--warn);
+    box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--warn) 32%, transparent);
+  }
+  /*
+   * 执行人（2026-11-08 二次修订）：**纯文字**，不带首字头像 —— 用户实拍项目名一长时
+   * 来源签 / 项目 pill / 头像 / 名字挤一行就乱，头像是最先被牺牲的。
+   * 行里的彩色依旧只有右上角的状态胶囊。
+   */
   .kb-l-who {
     flex: 1 1 auto;
     min-width: 0;
@@ -3594,6 +3697,17 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--mb-text-2, var(--dim));
+  }
+  /* 未指派：虚线小框（服务端的「（没点名）」这类括号话换成这句，见 projects.mjs） */
+  .kb-l-none {
+    flex: 0 0 auto;
+    padding: 1px 7px;
+    border: 0.5px dashed color-mix(in srgb, var(--text) 24%, transparent);
+    border-radius: 999px;
+    font-size: 11.5px;
+    line-height: 15px;
+    white-space: nowrap;
+    color: var(--mb-text-3, var(--dim));
   }
   .kb-l-time {
     flex: 0 0 auto;
@@ -4101,7 +4215,7 @@ body.kb-new-open .mb-tabbar { display: none; }   /* 进创建页隐底部 tab，
 
 /*
  * 2026-11-05 任务卡手机版：窄屏上原来就是"桌面页压小"——三级面包屑 + 标题/描述/讨论
- * 一列 + 桌面右栏属性表沉到讨论区底下 + PR 关联框照搬。这轮按看板 v2 / 员工详情的
+ * 一列 + 桌面右栏属性表沉到讨论区底下 + 关联框（沿用桌面同款）。这轮按看板 v2 / 员工详情的
  * 同一套语汇重画：
  *   ① 导航栏（‹ / 任务卡）：§21 看板同款（.kb-l-navbtn / .kb-l-navtitle 直接复用）；
  *   ② 内容是一列连续的东西：状态胶囊 → 标题 → 描述 → 属性卡 → 讨论流，输入框吸底；
@@ -5315,3 +5429,4 @@ body.tc-sheet-open .tc-page.tc-m .tc-main-scroll { overflow: hidden; }
      所以这里原先那组 .sch-dt / .combo-btn 覆盖一并撤掉 —— 桌面的那颗还在
      mountSchRepeatCombos 里，只是手机上走不到了。 */
 }
+

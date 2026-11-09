@@ -22,7 +22,6 @@ import {
   humanizeCommand,
   progressView,
   STALL_MS,
-  summarizeEvents,
   toolSummary,
 } from '../../web/js/run-progress.mjs';
 
@@ -111,8 +110,15 @@ console.log('\n③ codex：工具名是 item 类型，目标在 detail 里');
   check('command_execution → 运行命令 + 命令内容', s1.verb === '运行命令' && s1.target === 'npm run check', `${s1.verb} ${s1.target}`);
   const s2 = toolSummary('file_change', { changes: [{ path: 'apps/web/app.mjs' }] });
   check('file_change → 改文件 + 文件路径', s2.verb === '改文件' && s2.target.includes('apps/web/app.mjs'), `${s2.verb} ${s2.target}`);
-  const s3 = toolSummary('mcp_tool_call', { server: 'github', tool: 'search' });
-  check('mcp 调用 → 调用工具（不硬编动词）', s3.verb === '调用工具', s3.verb);
+  /*
+   * MCP（2026-11-08 二版）：以前只出"调用工具"四个字、没有目标 —— 一跑几分钟同一句不变，
+   * 用户看到的就是"这块根本没在动"。现在从 item 的 server/tool（codex）或
+   * `mcp__server__tool` 名字里（claude）把工具名读出来当目标。
+   */
+  const s3 = toolSummary('mcp_tool_call', null, { server: 'github', tool: 'search' });
+  check('mcp 调用 → 调用工具 + server·tool', s3.verb === '调用工具' && s3.target === 'github · search', `${s3.verb} ${s3.target}`);
+  const s4 = toolSummary('mcp__aliyun__DescribeInstances', null);
+  check('claude 的 mcp__server__tool → 目标取工具名', s4.target === 'DescribeInstances', s4.target);
 }
 
 /* --------------------------------------------------- ④ 卡住判定 */
@@ -164,7 +170,8 @@ console.log('\n⑥ 聊天页接线（静态断言，防"归约器写了没人用
   // 「停止生成 / 等结果」的落点跟着搬进组件 —— 断言改成两头都钉：组件里有这颗钮/这档状态，
   // chat.mjs 确实把组件接上了并传了 onStop，少一头都算红。
   const cardSrc = fs.readFileSync(new URL('../../web/js/run-progress-card.mjs', import.meta.url), 'utf8');
-  // 2026-11-05：过程快照的服务端半边（runs.mjs 收尾时把摘要落进回话消息的 meta.progress）
+  const liveSrc = fs.readFileSync(new URL('../../web/js/run-live.mjs', import.meta.url), 'utf8');
+  const projSrc = fs.readFileSync(new URL('../../web/js/projects.mjs', import.meta.url), 'utf8');
   const runsSrc = fs.readFileSync(new URL('./runs.mjs', import.meta.url), 'utf8');
   check('chat.mjs 引用了 run-progress.mjs', /from '\.\/run-progress\.mjs'/.test(chatSrc));
   check('streamRun 把每个原始事件交给 onEvent', /h\.onEvent\?\.\(evt\)/.test(chatSrc));
@@ -174,15 +181,49 @@ console.log('\n⑥ 聊天页接线（静态断言，防"归约器写了没人用
   // 2026-11-05 评鉴：停止钮从"卡住才出现"改成**常驻卡头**（收尾才隐掉），打断是第一类操作
   check('停止钮常驻卡头（收尾才隐掉）', /class="rp-stop" title="停止生成" hidden/.test(cardSrc) && /createProgressCard\(\{[\s\S]*?onStop/.test(chatSrc));
   check('卡住的步骤有「等结果」状态（不再假装进行中）', /waiting/.test(cardSrc) && /已等/.test(cardSrc));
-  check('进度卡拿意图当标题', /showIntent/.test(cardSrc));
-  check('开场白在第一件工具到来时收进标题', /preface\.splice\(0\)/.test(chatSrc));
-  check('跑过工具的回话气泡带过程收起行', /progressNoteHtml\(meta\)/.test(chatSrc) && /data-rp-note/.test(chatSrc));
-  check('服务端收尾把过程快照落进 meta.progress', /function progressMeta\(/.test(runsSrc) && /replyMeta\(run, \{ stopped, status \}\)/.test(runsSrc));
-  // 2026-11-05 二期：阶段分组要两头都接上 —— 实时卡按段画、历史收起行认快照里的 phases
+  /*
+   * 2026-11-08 改成**单行气泡**（用户："重要的不是显示的是什么，是在动"）：
+   * 标题不再是"意图"那句人话（太长、也太旧），而是**此刻正在做的那件事**——
+   * 意图降级成悬停提示；步骤明细运行中也不再摊开（收尾点这一行才展开回看）。
+   * 二版钉过"日志只认真在跑/刚落地 20 秒内的工具"：否则模型转去写回话了，这行还挂着旧工具名。
+   */
+  check('日志行写当前动作，意图只做 title',
+    /const live = v\.currentStep \|\| \(v\.phase === 'tool' && fresh \? v\.lastStep : null\)/.test(cardSrc) &&
+    /\.rp-phase'\)\.title = v\.intent/.test(cardSrc));
+  /*
+   * 2026-11-08 三版 + 2026-11-09 收口（用户："单行气泡刷日志…真正的回复出来后代替这个
+   * 单行日志气泡"；英文运行实拍："单气泡刷进行时的设计不管用了"）：
+   *   · 一轮只占**一颗** .bubble：跑着时挂 .live-line、里面只有进度胶囊；
+   *   · 直播回话状态机收在 **run-live.mjs**，chat.mjs 与任务卡讨论区（projects.mjs）共用：
+   *     text 一律不直播（先攒），后面来了工具事件就作废（中间话），turn_end/收尾时才顶掉
+   *     日志行落成回复 —— 英文 agent"每调一次工具解说一句"不再铺成段落；
+   *   · 钉"共用"这件事：讨论区漏接是 2026-11-09 实拍，别再各写一套。
+   */
+  check('单行日志泡 = 那颗 .bubble（不再是两颗泡）',
+    /class="bubble live-line"/.test(chatSrc) && /body\.appendChild\(card\.el\)/.test(chatSrc) && !/live-col/.test(chatSrc));
+  check('直播回话状态机收在共用模块（聊天页 + 任务卡讨论区共用）',
+    /from '\.\/run-live\.mjs'/.test(chatSrc) && /from '\.\/run-live\.mjs'/.test(projSrc) &&
+    /createLiveAnswer/.test(liveSrc) && !/pendingText/.test(chatSrc));
+  check('真正的回复顶掉日志行（enterAnswer 移除胶囊）',
+    /const enterAnswer = \(\) => \{/.test(liveSrc) && /card\?\.el\?\.remove/.test(liveSrc) &&
+    /body\.classList\.remove\('live-line'\)/.test(chatSrc));
+  check('text 不直播：中间话见工具就作废、收尾才落成回复',
+    /pending \+= chunk/.test(liveSrc) && /pending = ''/.test(liveSrc) && /flushPending/.test(liveSrc) &&
+    /live\.pushText\(chunk\)/.test(projSrc) && /live\.flushPending\(\)/.test(projSrc));
+  check('思考片段固定刷在这一行（「思考过程」开关已退场）',
+    /note = '思考：'/.test(cardSrc) && !/showThinking/.test(cardSrc) && !/dThink/.test(chatSrc));
+  check('步骤明细运行中收起', /stepsEl\.hidden = true/.test(cardSrc));
+  /*
+   * 2026-11-08 **砍掉历史过程收起行**（用户实判"没啥用"）：实时卡保留，但不再给回话
+   * 消息摘快照（codex 系不发工具结果事件，快照里步骤全是「已发起」、没有成败与耗时）。
+   * 这里钉两头：前端不再渲染、服务端不再落库 —— 谁想加回来，先看这条用例和理由。
+   */
+  check('历史回话不再画过程收起行', !/progressNoteHtml|data-rp-note/.test(chatSrc));
+  check('服务端收尾不再写过程快照', !/progressMeta|summarizeEvents/.test(runsSrc));
+  // 2026-11-05 二期：阶段分组要两头都接上 —— 实时卡按段画（历史快照那条腿已随收起行砍掉）
   check('实时进度卡按阶段画步骤', /rp-ph/.test(cardSrc) && /v\.phases/.test(cardSrc));
-  check('历史收起行认快照里的 phases（老快照平铺兜底）', /p\.phases/.test(chatSrc));
   // 2026-11-05 实测（用户截图）：display:flex 的作者样式压过 UA 的 [hidden]{display:none}，
-  // 收起行明细永远摊开、实时卡收尾收不起来 —— 全局 reset 是这条链路能收起的前提
+  // 折叠明细永远摊开、实时卡收尾收不起来 —— 全局 reset 是这条链路能收起的前提
   const styleSrc = fs.readFileSync(new URL('../../web/style.css', import.meta.url), 'utf8');
   check('全局 [hidden] reset 在（display 类压不过它）', /\[hidden\]\s*\{\s*display:\s*none\s*!important/.test(styleSrc));
 }
@@ -224,28 +265,8 @@ console.log('\n⑧ 命令人话化：剥解释器全路径 / 双层转义归一 
   check('长命令保头保尾：尾也在（管道是信息量）', long.endsWith(' | wc -l'), long);
 }
 
-/* --------------------------------------------------- ⑨ 收尾快照（2026-11-05 评鉴） */
-console.log('\n⑨ 收尾快照：summarizeEvents → 回话消息的 meta.progress');
-{
-  const rows = [
-    { evt: { type: 'text', text: '我先看仓库结构' }, at: '2026-11-05T00:00:00.000Z' },
-    { evt: { type: 'tool_call', callId: 'c1', tool: 'shell', input: { command: 'git ls-files' } }, at: '2026-11-05T00:00:02.000Z' },
-    { evt: { type: 'tool_result', callId: 'c1', status: 'completed' }, at: '2026-11-05T00:00:04.000Z' },
-    { evt: { type: 'tool', name: 'Bash', input: { command: 'powershell.exe -Command "wc -l"' } }, at: '2026-11-05T00:00:05.000Z' },
-  ];
-  const snap = summarizeEvents(rows, { status: '完成', elapsedMs: 19100 });
-  check('纯聊天返回 null（不落收起行）',
-    summarizeEvents([{ evt: { type: 'text', text: 'hi' }, at: '2026-11-05T00:00:00.000Z' }]) === null, '');
-  check('快照带状态/意图/用时',
-    snap.status === '完成' && snap.intent === '我先看仓库结构' && snap.elapsedMs === 19100,
-    JSON.stringify({ status: snap.status, intent: snap.intent, elapsedMs: snap.elapsedMs }));
-  check('第一步带真实耗时（靠事件落库时刻）', snap.steps[0].ms === 2000 && snap.steps[0].s === 'done', JSON.stringify(snap.steps[0]));
-  check('没等到结果的一步收成「已发起」，不硬猜成败', snap.steps[1].s === 'called' && snap.steps[1].ms === null, JSON.stringify(snap.steps[1]));
-  check('快照里的命令也是人话', snap.steps[1].t === 'wc -l', snap.steps[1].t);
-}
-
-/* --------------------------------------------------- ⑩ 阶段分组（2026-11-05 二期） */
-console.log('\n⑩ 阶段分组：工具之间的正文 = 下一批工具的段标题');
+/* --------------------------------------------------- ⑨ 阶段分组（2026-11-05 二期） */
+console.log('\n⑨ 阶段分组：工具之间的正文 = 下一批工具的段标题');
 {
   const f = feeder();
   f.feed({ type: 'text', text: '我先看看技能安装手册，再去 GitHub 上找。' });
@@ -281,33 +302,6 @@ console.log('\n⑩ 阶段分组：工具之间的正文 = 下一批工具的段�
   check('同一批前的分块正文并成一条段标题',
     f3.view().phases?.length === 2 && f3.view().phases[1].title === '工作区是脏的，先提交再继续。',
     f3.view().phases?.[1]?.title);
-
-  // 收尾快照也带 phases（服务端 progressMeta → meta.progress → 历史收起行按段画）
-  const rows = [
-    { evt: { type: 'text', text: '我先看仓库结构' }, at: '2026-11-05T00:00:00.000Z' },
-    { evt: { type: 'tool_call', callId: 'c1', tool: 'shell', input: { command: 'git ls-files' } }, at: '2026-11-05T00:00:02.000Z' },
-    { evt: { type: 'tool_result', callId: 'c1', status: 'completed' }, at: '2026-11-05T00:00:04.000Z' },
-    { evt: { type: 'text', text: '结构清楚了，数一下行数。' }, at: '2026-11-05T00:00:05.000Z' },
-    { evt: { type: 'tool', name: 'Bash', input: { command: 'powershell.exe -Command "wc -l"' } }, at: '2026-11-05T00:00:06.000Z' },
-  ];
-  const snap = summarizeEvents(rows, { status: '完成', elapsedMs: 19100 });
-  check('快照带阶段（标题 + 步数区间）',
-    Array.isArray(snap.phases) && snap.phases.length === 2 &&
-    snap.phases[0].t === '我先看仓库结构' && snap.phases[1].t === '结构清楚了，数一下行数。' &&
-    snap.phases[0].i === 0 && snap.phases[0].n === 1 && snap.phases[1].i === 1 && snap.phases[1].n === 1,
-    JSON.stringify(snap.phases));
-  check('超过 30 步的分组快照区间跟着平移（不出负数、不丢段）', (() => {
-    const many = [{ evt: { type: 'text', text: '开场' }, at: '2026-11-05T00:00:00.000Z' }];
-    for (let i = 0; i < 35; i++) {
-      many.push({ evt: { type: 'tool', name: 'Bash', input: { command: `cmd ${i}` } }, at: `2026-11-05T00:00:${String(i + 1).padStart(2, '0')}.000Z` });
-      if (i === 20) many.push({ evt: { type: 'text', text: '后半段开始。' }, at: `2026-11-05T00:00:${String(i + 1).padStart(2, '0')}.500Z` });
-    }
-    const s = summarizeEvents(many, { status: '完成', elapsedMs: 36000 });
-    const okShape = s.phases?.length === 2 && s.steps.length === 30 &&
-      s.phases.every((g) => g.i >= 0 && g.i + g.n <= 30) &&
-      s.phases[0].i + s.phases[0].n === s.phases[1].i;
-    return okShape;
-  })(), '');
 }
 
 console.log(`\n结论：${failed ? `${failed} 项没过` : '全通过'}`);

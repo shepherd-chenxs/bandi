@@ -55,12 +55,16 @@ export const STEWARD_SKILL = 'bandi-secretary';
 /**
  * 岗位指令。
  *
- * 写法上刻意「窄」：只给两件事 + 一条边界。给管家列十条职责，他会什么都做一点、
+ * 写法上刻意「窄」：只给两件事 + 一条分寸。给管家列十条职责，他会什么都做一点、
  * 什么都不做透 —— 而用户真正要的是「机器坏了有人管、要建人有人教」。
+ *
+ * 措辞治理（2026-11-09）：去掉"你只管两件事，别的不要揽 / 越界就停"这类能力封条
+ * （同 experts.mjs 的措辞治理，起因见那边注释）。平台层的对冲是
+ * `dispatch.constitutionBlock()`（员工宪法，注入时排在身份之前）。
  */
 export const STEWARD_INSTRUCTIONS = `你是「崔老三」，这台机器上的系统管家 —— 服务一装好，你就是他第一个能说话的人。
 
-你只管两件事，别的不要揽：
+你的核心两件事：
 
 1. **看家**。这套服务起没起来、连的是哪个数据库、agent CLI 配好没有、日志里有没有报错、谁在跑什么。
    看出问题就直说「哪儿坏了」，再给一条能照着做的修法；要动机器上的东西，先说一句再动。
@@ -68,7 +72,7 @@ export const STEWARD_INSTRUCTIONS = `你是「崔老三」，这台机器上的�
 2. **帮手**。帮他建、改数字员工（名字、岗位职责、用哪个 CLI、工作目录、挂哪些技能）；
    帮他把第一条流程跑起来、把第一次对话说通。
 
-边界（越界就停）：
+分寸（以下是"先说一句再做"，不是"拒绝干活"；真红线——删数据、动生产——列出清单等雇主点头）：
 - 不替任何人派活、不起流程实例、不写业务代码、不改项目仓库里的东西。
 - 用户要干活了，你告诉他「去哪儿点、选谁」，让他自己发起 —— 你不代劳。
 - 不猜。看日志、调接口、读数据库，拿到结果再说话；拿不到就说拿不到。
@@ -215,7 +219,14 @@ export function syncSteward() {
   if (p.name !== STEWARD_IDENTITY.name) changed.push('name');
   if ((p.role ?? null) !== (STEWARD_IDENTITY.role ?? null)) changed.push('role');
   if (p.instructions !== STEWARD_IDENTITY.instructions) changed.push('instructions');
-  if (changed.length) store.updatePersona(STEWARD_ID, { ...STEWARD_IDENTITY });
+  if (changed.length) {
+    store.updatePersona(STEWARD_ID, { ...STEWARD_IDENTITY });
+    // 身份真的变了 → 作废他的成员会话（2026-11-09，与 syncHiredExperts 同一条规矩）：
+    // 身份只在成员会话第一次建立时注入，库里刷成新出厂而会话里烙的还是旧指令，
+    // 他就带着旧身份干活（实踩：嘉辉的"别的不要揽"改掉了，旧会话里照样说"别的不要揽"）。
+    const n = store.resetPersonaSessions(STEWARD_ID);
+    if (n) console.log(`[内置管家] 身份刷回出厂，已作废 ${n} 节成员会话（下次派活按新身份重开）`);
+  }
 
   const pkg = skills.getSkill(STEWARD_SKILL) ? [STEWARD_SKILL] : [];
   const before = store.listPersonaSkillLinks(STEWARD_ID);

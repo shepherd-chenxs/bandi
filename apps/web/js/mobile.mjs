@@ -7,8 +7,11 @@
  *      （body.mb-detail-open），顶部「← 返回」栏回列表，滚动位置保留；
  *   ③ 底部导航（P1-1）：≤900px 四 tab「工作台 / 通讯录 / 会话 / 我的」，详情页自动隐藏；
  *   ④ 键盘适配：visualViewport 高度喂给 --mb-vh，对话页输入栏不挡；
- *   ⑤ 401 引导（PRD P0-3）：手机形态下收到 E4010/E4012 → 全屏"重新扫码"提示，
- *      不做裸登录页；
+ *   ⑤ 401 引导（PRD P0-3）：会话失效（E4010/E4012）→ **壳里交给壳**静默重签票
+ *      （`BandiShell.sessionExpired`），浏览器才重载一次拿中枢登录页。
+ *      本机会话只有 12 小时绝对 / 30 分钟空闲（`store/users.mjs`），而壳的中枢会话是
+ *      30 天 —— 两者不同步，所以过期是常态；以前一律 reload，人就天天撞登录页。
+ *      扫码/设备令牌那套 2026-11-07 已整体退场，与这里无关；
  *   ⑥ 下拉刷新（P1-1）：列表一级页顶部下拉重拉 load()，节流；
  *   ⑦ 历史栈卫生（2026-11-05）：返回键永远摸不到登录页 —— 开机截断启动页残留的
  *      forward 层；跨文档退回旧文档时自动续连，不复活旧会话。
@@ -32,7 +35,7 @@ function applyBreakpoints() {
   document.body.classList.toggle('mb-narrow', mqNarrow.matches);
   document.body.classList.toggle('mb-tiny', mqTiny.matches);
   // 折出窄屏时把详情展开态一并清掉：回宽屏后 main 是常驻的，不该还被折叠逻辑压着
-  if (!mqNarrow.matches) document.body.classList.remove('mb-detail-open');
+  if (!mqNarrow.matches) document.body.classList.remove('mb-detail-open', 'flow-direct-open');
 }
 mqNarrow.addEventListener('change', applyBreakpoints);
 mqTiny.addEventListener('change', applyBreakpoints);
@@ -71,6 +74,16 @@ function leaveDetail(alreadyPopped) {
   // 抽屉（聊天记录 / 群设置）是 fixed 覆盖层，不归详情态的折叠管 —— 不主动关掉，
   // 退回列表后它照样盖在屏幕上，看起来"还是聊天记录"（2026-11 用户实报）。
   closeDrawer();
+  /*
+   * 流程实例页「从别处点进来的整页」（flowpages.mjs 打 body.flow-direct-open）：
+   * 这一页的返回是**原来那一页**（看板 / 任务卡 / 会话），不是它自己左栏的「发起记录」
+   * —— 收场交给 flowpages（走事件，渲染模块不反向依赖本文件）。
+   * 2026-11-08 用户：「点返回还是能跳转到发起记录」——之前返回直接收折叠态，落到列表上。
+   */
+  if (document.body.classList.contains('flow-direct-open')) {
+    document.dispatchEvent(new CustomEvent('flow-direct-leave'));
+    return;
+  }
   if (!document.body.classList.contains('mb-detail-open')) return;
   document.body.classList.remove('mb-detail-open');
   // 聊天页自带的返回按钮（chat.mjs 的 .mb-chat-back）随页面一起退场
@@ -169,6 +182,11 @@ document.addEventListener('keydown', (e) => {
   if (document.body.classList.contains('tc-sheet-open')) return;
   if (document.body.classList.contains('mb-detail-open')) {
     e.preventDefault();
+    // 同上：流程实例页的收场归 flowpages（回上一层，不是翻出列表）
+    if (document.body.classList.contains('flow-direct-open')) {
+      document.dispatchEvent(new CustomEvent('flow-direct-leave'));
+      return;
+    }
     leaveDetail();
   }
 });
@@ -188,6 +206,9 @@ window.addEventListener('popstate', (e) => {
   // 漏了这行，返回键会把底下的卡页一起收掉 —— 一次返回从抽屉直接掉回看板（2026-11-05）
   if (document.body.classList.contains('tc-sheet-open')) return;
   if (isNarrow() && document.body.classList.contains('mb-detail-open')) {
+    // 流程实例页（从别处点进来的整页）：收场归 flowpages —— 退回去该是看板/任务卡/会话，
+    // 不是这页左栏的「发起记录」（2026-11-08 用户：「点返回还是能跳转到发起记录」）
+    if (document.body.classList.contains('flow-direct-open')) return;
     leaveDetail(true);
     return;
   }
@@ -277,6 +298,8 @@ tabbar.querySelectorAll('.mb-tab').forEach((b) => {
     const wasOpen = document.body.classList.contains('mb-detail-open');
     document.body.classList.remove('mb-detail-open');
     document.body.classList.remove('mb-chat');
+    // 流程实例页那套「整页」标记也一起收（flowpages.mjs）：换栏就是走了，别再让返回键往看板拽
+    document.body.classList.remove('flow-direct-open');
     if (wasOpen && history.state?.mbDetail) history.back();
     // 抽屉是 fixed 覆盖层，换一级页时必须一起关，否则新页面被旧抽屉盖住
     closeDrawer();
@@ -305,6 +328,7 @@ document.addEventListener('mb-nav', (e) => {
   // 历史格同 tab 那条规矩一起回收（见 tabbar click 的注释）
   const wasOpen = document.body.classList.contains('mb-detail-open');
   document.body.classList.remove('mb-detail-open');
+  document.body.classList.remove('flow-direct-open');
   if (wasOpen && history.state?.mbDetail) history.back();
   setNav(nav);
   syncTabs();
@@ -408,6 +432,15 @@ window.fetch = async (...args) => {
   try {
     sessionStorage.setItem('bandi.401reload', String(Date.now()));
   } catch { /* 存不了就照刷，最多多刷一次 */ }
+  /*
+   * **壳里绝不 reload**（2026-11-08）：reload 的唯一结果是服务端把中枢登录页给过来
+   * （没有会话 → 登录页），人就被丢进手机号输入框 —— 而壳手里握着 30 天的中枢会话，
+   * 随时能重签一张本机票（/hub/enter）。浏览器没有这个能力，才轮到人重新登录。
+   */
+  if (inShell() && typeof window.BandiShell.sessionExpired === 'function') {
+    window.BandiShell.sessionExpired();
+    return r;
+  }
   location.reload();
   return r;
 };

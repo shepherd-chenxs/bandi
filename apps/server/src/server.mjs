@@ -35,41 +35,16 @@ import * as lanAnnounce from './lan-announce.mjs';
 import * as localSecret from './security/local-secret.mjs';
 import * as tlsCheck from './security/tls-check.mjs';
 import { isLoopbackHost } from './security/source.mjs';
-import { handleConversation } from './routes/conversation.mjs';
-import { handleEvents } from './routes/events.mjs';
-import { handlePersona } from './routes/persona.mjs';
-import { handleAgentCards } from './routes/agent-cards.mjs';
-import { handleGroup } from './routes/group.mjs';
-import { handleExpert } from './routes/expert.mjs';
-import { handleSkill } from './routes/skill.mjs';
-import { handleConnector } from './routes/connector.mjs';
-import { handleNode } from './routes/node.mjs';
-import { handleNodeWork } from './routes/nodeWork.mjs';
-import { handleRuntime } from './routes/runtime.mjs';
-import { handlePluginAction } from './routes/plugin.mjs';
-import { handleProject } from './routes/project.mjs';
-// 账号与安全（影子账号）：/api/logout、/api/me、/api/users*、/api/security*
-import { handleUsers } from './routes/users.mjs';
-import { handleWorkspace } from './routes/workspace.mjs';
-import { handleStatus } from './routes/status.mjs';
-import { handleFs } from './routes/fs.mjs';
-import { handleWorkflow } from './routes/workflow.mjs';
-import { handleSsh } from './routes/ssh.mjs';
-import { handleGit } from './routes/git.mjs';
-import { handleImageAi } from './routes/imageai.mjs';
-import { handlePrefs } from './routes/prefs.mjs';
-// 飞书通道（2026-10-29 员工级：路由挂在 /api/personas/:id/feishu，设置级的旧路由已删）
-import { handleFeishu } from './routes/feishu.mjs';
+// 域模块（路由）**不在这里逐个 import**（2026-11-08）：谁先谁后、都有哪些，
+// 全在 routes/chain.mjs 那张表里 —— 顺序是契约，得能一眼审、能机器查。
+import { runChain } from './routes/chain.mjs';
+// 飞书通道的服务端本体（不是路由）：启动时要 bootSync 把旧配置迁给对应员工
 import * as feishu from './feishu.mjs';
-import { handleRun } from './routes/run.mjs';
-import { handleSchedules } from './routes/schedules.mjs';
-import { handleLocal, supervisorModule } from './routes/local.mjs';
+import { handleLocal } from './routes/local.mjs';
 // 身份中枢进门（2026-11-06）：`GET /hub/enter?ticket=…` —— 验票 → 查本地授权表 → 发会话
 import { handleHub } from './routes/hub.mjs';
 import * as hub from './hub/join.mjs';
-// 外网访问的机器侧一半（2026-11-07）：中枢下发 relay → 起 frpc 隧道。没配置时整个空转。
-import * as tunnel from './hub/tunnel.mjs';
-import { sendJson, fail, readBody, guardWrite, guardHost, serveStatic, BadRequest, allowedOrigins, webDir } from './http.mjs';
+import { sendJson, fail, readBody, guardWrite, guardHost, serveStatic, BadRequest, allowedOrigins, webDir, cspHeader } from './http.mjs';
 import { SERVER } from './server-state.mjs';
 import { runtimeOptions, runtimesOk, withExternals } from './runtime-view.mjs';
 // CSRF 双提交（IAM §10.2，2026-10-31 Phase 1 收尾）：Cookie bandi_csrf 与请求头
@@ -92,16 +67,15 @@ function auditKindOf(pathname) {
 
 
 function helloPayload() {
-  const me = localMode.nodeIdentity();
-  const nm = netmode.readNetMode();
+  const hostname = os.hostname() || '未命名机器';
   return {
     platform: 'bandi',
     proto: 1,
     // 版本读 apps/desktop/version.json（运行期读一次缓存；读不到给 null，不编一个）
     version: localMode.platformVersion(),
     instanceId: localMode.instanceId(),
-    label: me.label,
-    hostname: me.hostname,
+    label: hostname,
+    hostname,
     /*
      * 这台机器**自己的**操作系统（2026-11-07）：「我的」页的「系统 / 版本」原先取
      * `navigator.platform` —— 那是**看页面那台电脑**的平台（Windows 上远程看 Linux
@@ -111,50 +85,24 @@ function helloPayload() {
     os: `${os.type()} ${os.release()} ${os.arch()}`.replace(/^Windows_NT/, 'Windows'),
     httpPort: port,
     /*
-     * 角色位（2026-11-01 晚）：true = 总机（收别的机器当节点），false = 分机
-     * （对外服务照旧、手机照连，但不发邀请码、别的机器加不上去）。
-     * 跟 `joinable` 的区别：joinable 还要乘上"实际听着非回环"这个必要条件。
-     */
-    acceptNodes: nm.acceptNodes,
-    joinable: netmode.isJoinable({ acceptNodes: nm.acceptNodes, boundHost: SERVER.boundHost }),
-    /*
-     * **机器角色**（2026-10-28 节点配置面）：`node` = 这台机器已加入某台总机；
-     * `operator` = 未加入（本机单机版）。前端的菜单矩阵要它，跟"打开页面的人是谁"
-     * （`/api/me` 的 operator/user）是**两个概念**，别混。
+     * 2026-11-08：`relay` 字段**已下线**。
      *
-     * ⚠️ 必须 `isJoined()` **每次现读 config.json**，不能用 `config.clientJoined` ——
-     * 那是**模块求值时**拍下的快照，运行期"加入 / 退出总机"之后它就过期了
-     * （同一类坑见 `config.mjs` 里 `lanOrigins()` 的注释）。本字段免令牌、不带秘密。
-     */
-    role: localMode.isJoined() ? 'node' : 'operator',
-    // 能力声明：有这个才认得出 `scope` 字段（旧总机没有 → 加入方回 E2050，不静默降级）
-    caps: ['scope'],
-    /*
-     * 外网访问（2026-11-08）：**只报门牌号和连接状态**。
+     * 它原本上报 frpc 子进程的真实状态（off / unavailable / up / retrying / failed），
+     * 前提是隧道由 bandi 自己拉起。用户决定不再内置 frp —— 进程归外部管，
+     * 这里就无从知道它通不通，硬留着只会给出半真半假的状态。宁可没有。
      *
-     * 这个响应是免令牌的（局域网探活、手机端探活都读它），所以字段要克制：
-     * 门牌号本身不是秘密（知道地址的人照样要先过中枢登录），但 token、pid、
-     * 可执行文件路径不是 —— 一律不外带。
-     *
-     * 为什么非得放这儿：朋友装完、出门，手机连不上时唯一能自查的地方就是这一行。
-     * 界面上没有它，"隧道在不在连"就只能靠远程看日志，等于把排查成本全推给用户。
+     * 注意：`hub/relay.mjs` 仍然活着，但它现在只服务一件事 —— 让 http.mjs 的
+     * Host 守卫与写请求 Origin 白名单认识那个公网域名（见该文件头注释）。
+     * 自己装 frp 的人把域名写进 `<数据目录>/tunnel.json`，闸门就放行；
+     * 不写也不会坏，只是从公网进来的写请求会被 403。
      */
-    relay: (() => {
-      const t = tunnel.status();
-      return {
-        // off：中枢没下发；unavailable：本机没有 frpc；up：已连；retrying / failed：在重连
-        state: t.state,
-        url: t.publicUrl ?? null,
-        since: t.since ?? null,
-      };
-    })(),
   };
 }
 
 /**
  * 给一台设备补上「外部件」（班底之外还要有的东西，现在只有 magpie）。
  *
- * **本机现探**（那台机器就是控制面自己），**节点用自报的**（心跳里带上来的 —— 本机判不了）。
+ * **本机现探**（那台机器就是控制面自己）。
  * `catalog` 是那张说明表：界面靠它把"没装"的东西也画出来（不然一片空白，用户不知道缺什么）。
  */
 
@@ -162,7 +110,7 @@ const routes = {
   /**
    * **免令牌**（见 auth.mjs 里 guard 顶部那条放行）：加入向导"探这个地址"打的就是它。
    *
-   * 披露的东西与 UDP 应答同源 —— 机器名 / 主机名 / 端口 / 能不能加入 / 版本 / 能力。
+   * 披露的东西与 UDP 应答同源 —— 机器名 / 主机名 / 端口 / 版本。
    * 故意不带任何秘密（设计 §5.4），所以它不需要令牌也不会漏东西。
    */
   'GET /api/hello': async (req, res) => {
@@ -319,7 +267,6 @@ const routes = {
       sandbox: String(body.sandbox ?? 'danger-full-access'),
       cwd: body.cwd ? String(body.cwd) : repoRoot,
       model: body.model ? String(body.model) : null,
-      showThinking: body.showThinking === undefined ? 0 : (body.showThinking ? 1 : 0),
       rootDirs: Array.isArray(body.rootDirs) ? body.rootDirs.map(String).filter((s) => s.trim()) : [],
     });
     sendJson(res, 201, { persona });
@@ -478,17 +425,20 @@ if (localSecretDisabled) {
 
 
 
-/* ------------------------------------------------- 节点形态（2026-10-21 拍板） */
-
-/*
- * **节点不做「看总机面板」** —— 瘦客户端反代（client-proxy.mjs）整体移除。
- * 加入后本机服务照常答自己的 UI 与 API；app.js 读 `/api/local/status` 发现已加入
- * 就渲染节点状态页（`renderNodeMode`）。总机的面板只存在于总机上。
- * 总机侧的 scope 机制（`auth.decide` 的 E4031 等）**保留**：存量令牌与设备详情还认它，
- * 它仍是「compute 令牌摸面板 → 403」的那道闸。
- */
-
 const server = http.createServer(async (req, res) => {
+  /*
+   * **安全响应头**（2026-11-08）：装在请求链最前面，**先于一切判断** ——
+   * 包括 Host 闸 / 网络周界闸拒绝的那几条 403（拒绝页也不该能跑脚本）。
+   *
+   * CSP 的来由见 security/csp.mjs 的文件头：界面靠 innerHTML 拼字符串 + 849 处 esc()，
+   * 漏一次就是存储型 XSS；CSP 把「漏转义」从必然出洞降级成被浏览器挡住。
+   * 它是兜底，不替代 esc() —— 两件事都要做。
+   *
+   * nosniff：静态文件按扩展名给 Content-Type，禁止浏览器自作聪明改写（MIME 嗅探 XSS）。
+   */
+  res.setHeader('Content-Security-Policy', cspHeader());
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+
   /*
    * Host 守卫排在一切之前（含令牌闸）：rebind 页面的请求 Host 是攻击者域名，
    * 连"来源对不对"都不该让它摸到面板数据（http.mjs 的 guardHost 注释）。
@@ -517,6 +467,20 @@ const server = http.createServer(async (req, res) => {
 
   const url = new URL(req.url, `http://${req.headers.host}`);
 
+  /*
+   * **健康探测口**（2026-11-08）：`GET /api/ping` —— 排在令牌闸**之前**、免鉴权、不记审计。
+   *
+   * 为什么必须有：桌面壳的健康巡检（lib.rs 的 watch_service，每 1~2 秒一次）以前探的是
+   * `/api/state`，监听 0.0.0.0 时鉴权全开，每次探测都吃 401 → 审计每分钟多出几十条
+   * 「拒绝访问」（2026-11-08 用户在审计页看到的成串 E4010 就是它）。探测只需要
+   * "端口上有个班底在回话"这一个比特，`{ ok, platform:'bandi' }` 之外什么都不带 ——
+   * 而 `platform` 这个字段 401 响应体里本来就带，这里零新增信息暴露。
+   * HEAD 也放行（探测方只看状态行时用得上）。
+   */
+  if (url.pathname === '/api/ping' && (req.method === 'GET' || req.method === 'HEAD')) {
+    return sendJson(res, 200, { ok: true, platform: 'bandi' });
+  }
+
   try {
     /*
      * 访问令牌：**排在来源闸前面** —— 没令牌的请求，连"来源对不对"都不该让它摸到。
@@ -525,7 +489,10 @@ const server = http.createServer(async (req, res) => {
     if (!auth.guard(SERVER.AUTH, req, res, url)) {
       // guard 拒绝的（401 / 403 / 受限会话…）它自己已经在响应里写好了状态码 ——
       // 这里只补审计；200 的假响应（登录页 HTML）不记。
-      if (res.statusCode >= 400) {
+      // **只记 API 口**（2026-11-09 降噪）：静态资源（/style.css、/js/*.mjs、/favicon、
+      // /manifest.webmanifest…）被 401 挡下不是安全事件，记了只会把审计刷成噪音
+      // （本机归档里 94% 是这类重复行）。Host / IP 周界那两道闸在更前面，照旧记。
+      if (res.statusCode >= 400 && url.pathname.startsWith('/api/')) {
         try {
           store.deny({ kind: 'authz.deny', action: `${req.method} ${url.pathname}`, reason: `HTTP ${res.statusCode}`, ip: clientIp(req), ua: req.headers['user-agent'] ?? '' });
         } catch { /* 不拖垮 */ }
@@ -544,7 +511,7 @@ const server = http.createServer(async (req, res) => {
       auditId = store.add({
         kind: auditKindOf(url.pathname),
         actorKind: actor.kind ?? null,
-        actorId: actor.userId ?? actor.deviceId ?? actor.nodeId ?? null,
+        actorId: actor.userId ?? actor.deviceId ?? null,
         action: `${req.method} ${url.pathname}`,
         ip: clientIp(req),
         ua: req.headers['user-agent'] ?? '',
@@ -583,15 +550,16 @@ const server = http.createServer(async (req, res) => {
        * 都会 E4099，用户看到的就是"按钮点了没反应"。每个 HTML 页面响应顺手补一枚
        * （已有就不动）—— 打开一次页面即自愈。
        *
-       * 2026-11-07 起只有登录页和主页面两条 HTML 出口（扫码落地页随设备令牌体系退场），
-       * 这一层仍然要有：`bandi_csrf` 只活 1 天、`bandi_sid` 活 30 天，"凭据还在、
-       * csrf 先过期"是常态，不是意外。
+       * 2026-11-08 起 HTML 出口三条：登录页（`/hub/login`）、主页面、以及给壳的
+       * 会话过期兜底页（`/hub/expired`，壳正常会拦下它、不真加载）。扫码落地页早随
+       * 设备令牌体系退场了；这一层仍然要有：`bandi_csrf` 只活 1 天、`bandi_sid` 活
+       * 30 天，"凭据还在、csrf 先过期"是常态，不是意外。
        */
       const wantsHtmlPage = url.pathname === '/'
         || url.pathname.endsWith('.html')
         || String(req.headers.accept ?? '').includes('text/html');
       if (wantsHtmlPage && !csrf.valuesOf(req).cookie) res.setHeader('Set-Cookie', csrf.cookieFor(csrf.mint()));
-      if (serveStatic(res, url.pathname)) return;
+      if (serveStatic(req, res, url.pathname)) return;
       res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
       res.end('没有这个文件');
       return;
@@ -617,85 +585,15 @@ const server = http.createServer(async (req, res) => {
 
     if (routes[key]) return await routes[key](req, res);
 
-    // 全局 SSE（/api/events）：挂在链头 —— 长命连接，别让它在别的 handler 里排队
-    const handledEvents = await handleEvents(req, res, url);
-    if (handledEvents !== false) return;
-
-    const handledConversation = await handleConversation(req, res, url);
-    if (handledConversation !== false) return;
-
-    const handledPersona = await handlePersona(req, res, url);
-    if (handledPersona !== false) return;
-
-    // 员工的"工作证"接口（建卡）：挂在 persona 之后，身份/权限自成一处（见 agent-auth）
-    const handledAgentCards = await handleAgentCards(req, res, url);
-    if (handledAgentCards !== false) return;
-
-    const handledExpert = await handleExpert(req, res, url);
-    if (handledExpert !== false) return;
-
-    // 账号与安全：/api/me 是"每个页面启动都会问一次"的接口，能早一步就早一步
-    const handledUsers = await handleUsers(req, res, url);
-    if (handledUsers !== false) return;
-
-    const handledProject = await handleProject(req, res, url);
-    if (handledProject !== false) return;
-
-    // 工作区文件口 + 系统浏览器打开（2026-10-24）：员工报的产出路径，点一下就能看
-    const handledWorkspace = await handleWorkspace(req, res, url);
-    if (handledWorkspace !== false) return;
-
-    const handledStatus = await handleStatus(req, res, url);
-    if (handledStatus !== false) return;
-
-    const handledFs = await handleFs(req, res, url);
-    if (handledFs !== false) return;
-
-    const handledGroup = await handleGroup(req, res, url);
-    if (handledGroup !== false) return;
-
-    const handledSkill = await handleSkill(req, res, url);
-    if (handledSkill !== false) return;
-
-    const handledConnector = await handleConnector(req, res, url);
-    if (handledConnector !== false) return;
-
-
-    const handledRuntime = await handleRuntime(req, res, url);
-    if (handledRuntime !== false) return;
-
-    const handledNode = await handleNode(req, res, url);
-    if (handledNode !== false) return;
-
-    const handledNodeWork = await handleNodeWork(req, res, url);
-    if (handledNodeWork !== false) return;
-
-    const handledPlugin = await handlePluginAction(req, res, url);
-    if (handledPlugin !== false) return;
-
-    const handledSsh = await handleSsh(req, res, url);
-    if (handledSsh !== false) return;
-
-    const handledWorkflow = await handleWorkflow(req, res, url);
-    if (handledWorkflow !== false) return;
-
-    const handledRun = await handleRun(req, res, url);
-    if (handledRun !== false) return;
-
-    const handledGit = await handleGit(req, res, url);
-    if (handledGit !== false) return;
-
-    const handledSchedules = await handleSchedules(req, res, url);
-    if (handledSchedules !== false) return;
-
-    const handledImageAi = await handleImageAi(req, res, url);
-    if (handledImageAi !== false) return;
-
-    const handledPrefs = await handlePrefs(req, res, url);
-    if (handledPrefs !== false) return;
-
-    const handledFeishu = await handleFeishu(req, res, url);
-    if (handledFeishu !== false) return;
+    /*
+     * **正则链**：所有带动态段的 /api 路径交给 routes/chain.mjs 那张表按顺序问一遍。
+     *
+     * 改造前这里是 25 段「`const handledX = await handleX(...); if (handledX !== false) return;`」
+     * —— 顺序只存在于书写顺序里，加模块要"插在对的位置"，而注释里到处写着的
+     * 「主分发顺序见 server.mjs 的 CHAIN」指的是一个**并不存在**的符号。
+     * 现在顺序是数组下标，漏挂/重挂由 tools/check-dispatch-chain.mjs 在 PR 门禁里查。
+     */
+    if (await runChain(req, res, url)) return;
 
     fail(res, 404, 'E2036', '没有这个接口');
   } catch (err) {
@@ -784,6 +682,14 @@ try {
 } catch (err) {
   console.log(`审计归档失败（不影响启动）：${err?.message ?? err}`);
 }
+// 归档表保留期（2026-11-09，给增长封顶）：主表 90 天、归档 1 个月 —— 归档原先只增不减。
+// 跟主表归档一样**只在启动时跑一次**（没有定时器）；清理本身留一条 audit.prune 痕。
+try {
+  const prunedArchive = store.pruneArchive();
+  if (prunedArchive) console.log(`[安全] 审计归档已清理 ${prunedArchive} 条（归档保留 ${store.ARCHIVE_KEEP_DAYS} 天）`);
+} catch (err) {
+  console.log(`审计归档清理失败（不影响启动）：${err?.message ?? err}`);
+}
 runs.onRunFinish(workflows.onAgentRunFinished);
 // 任务卡同理（2026-10-17）：运行跑完/被停/跑挂了，卡不能永远挂在「进行中」——
 // 完成 → 待验收；人停的 → 已阻塞、跑挂的 → 失败（都不回「待办」，否则会被自动重新派活 → 死循环）
@@ -816,49 +722,6 @@ for (const t of stuckTasks) {
 }
 if (stuckTasks.length) console.log(`收了 ${stuckTasks.length} 个被中断的工作流任务`);
 
-/* ------------------------------------------------------------------ 掉线清扫 */
-
-/**
- * 活被某个节点领走了，而那个节点**掉线了** —— 那次运行不能永远挂在"跑中"。
- *
- * 判据是**节点离线**（三个心跳周期没有消息），**不是"跑了多久"**：
- * 一个半小时的重构活，只要节点还在心跳就绝不能被打断。节点在跑活时是并发心跳的，
- * 所以这条判据是准的。
- *
- * 为什么不是"重新排一次队"：这次执行的**副作用可能已经发生了一半**（改了文件、提交了），
- * 悄悄重跑比说清楚更危险。重派是"中断续跑"那一步的事，这里先如实判中断。
- */
-const SWEEP_MS = 15000;
-const sweep = setInterval(() => {
-  const now = Date.now();
-  for (const job of store.listRunningNodeJobs()) {
-    const n = store.getNode(job.nodeId);
-    if (n && now - Date.parse(n.lastSeenAt) < runtimes.NODE_OFFLINE_AFTER_MS) continue;
-
-    /*
-     * 节点没了，但**"能不能重派"取决于副作用发生过没有**：
-     *   · 一次动静都没有（`progressAt` 空）→ 那边根本没开张，**放回队列**，换个时机再跑；
-     *   · 有动静之后才断 → 副作用可能已经发生了一半（改了文件、提交了），
-     *     悄悄重跑比说清楚危险得多 —— 如实判**中断**。
-     */
-    if (!job.progressAt) {
-      store.releaseNodeJob(job.id);
-      console.log(`[节点] ${job.nodeId} 掉线 —— 那个还没开张的活已放回队列`);
-      continue;
-    }
-    store.finishNodeJob(job.id, '已中断');
-    const done = runs.finishRemote(job.runId, {
-      status: '中断',
-      exitCode: null,
-      error: `节点「${n?.label ?? job.nodeId}」掉线了，这次执行被中断（那台机器上的进程可能还在跑）`,
-    });
-    console.log(
-      `[节点] ${job.nodeId} 掉线 —— 把它正在跑的活判为中断${done ? '' : '（运行已不在内存里，只收了队列行）'}`,
-    );
-  }
-}, SWEEP_MS);
-sweep.unref(); // 别让这个定时器拖着进程不退出
-
 /*
  * 定时任务的心跳（2026-10-17）：30 秒一跳，挑**到点的**任务串行跑。
  * 只读动作（PR 巡检）第一条；它会自己去 GitHub 拉清单，所以这里不预判网络、令牌 ——
@@ -872,35 +735,6 @@ schedules.start();
  * 起不来只 warn 不拦启动 —— 通道是外部的，班底该照常开张。
  */
 feishu.bootSync();
-
-/*
- * **启动即已加入 → 直接进入节点形态**（2026-10-21 拍板：只当算力，无反代无面板）。
- * 本机 UI/API 照常服务（app.js 会渲染节点状态页）；这里只负责把节点进程拉起来。
- * supervisor 见到 autostart 的常驻在跑会直接认领（external），不会双起。
- */
-if (localMode.isJoined()) {
-  const joined = localMode.readClientConfig();
-  console.log(
-    `[本机] 已加入「${joined.hostLabel || joined.hostHostname || joined.controlPlane}」（${joined.controlPlane}）` +
-      ` —— 节点形态：只出算力，本机数据原样（从未被写过）`,
-  );
-  if (String(joined.scope ?? 'compute').split(/[\s,]+/).includes('compute')) {
-    void (async () => {
-      const sup = await supervisorModule();
-      if (!sup) return;
-      try {
-        const r = sup.start();
-        console.log(
-          r.external
-            ? `[本机] 节点已在跑（pid ${r.pid}，外部拉起的常驻）—— 不另起一个`
-            : `[本机] 已拉起节点进程（pid ${r.pid}）`,
-        );
-      } catch (e) {
-        console.warn(`[本机] 节点进程没起来（不影响面板，下次重启会再试）：${e?.message ?? e}`);
-      }
-    })();
-  }
-}
 
 /*
  * **明文检测**（IAM §10.1.1）：监听非回环、没声明反代、也没配 TLS → 告警；
@@ -939,8 +773,6 @@ try {
     dataDir,
     port,
     version: localMode.platformVersion(),
-    // 中枢在心跳里改派 / 撤销隧道时，这边 60 秒内自己跟上，不用重启服务
-    onBeat: () => tunnel.apply({ dataDir, port }),
   }).joined) {
     console.log('[中枢] 已恢复心跳');
   }
@@ -949,18 +781,18 @@ try {
 }
 
 /*
- * 外网访问（2026-11-07）：有 relay 配置就把隧道拉起来，没有就什么都不做。
+ * 外网隧道（2026-11-07 接入，2026-11-08 下线）：**不再由 bandi 起 frpc**。
  *
- * **失败不拦启动** —— frpc 不在、中枢没开通、家里断网，这台机器照样是完整的班底，
- * 只是外面连不进来。所以这里连 `apply` 都不 await，更不 exit。
+ * 原因：frp 是黑产滥用最多的隧道工具，内置一份二进制（哪怕改名成 bandi-tunnel 绕杀软）
+ * 意味着每个装班底的人都多背一个 17MB 的可疑文件，且它要常驻、要联网、要往中枢报身份。
+ * 用户决定「需要时另外装，不内置」——这条路干净得多，也把"隧道不通"和"班底坏了"
+ * 彻底分开：服务起不来一定是代码问题，不会是 frpc 没权限。
+ *
+ * 出去的那半边现在只做两件不需要进程的事：
+ *   ① `hub/relay.mjs` 读配置（中枢下发或手写 tunnel.json），供 http.mjs 的
+ *      Host 守卫 / Origin 白名单认域名；
+ *   ② 什么都不起。自己装的 frpc 直接连本机 18787 即可。
  */
-try {
-  const t = tunnel.apply({ dataDir, port });
-  if (t.state === 'unavailable') console.log('[外网] 没装 frpc，仅本机/局域网可用');
-  else if (t.state !== 'off') console.log(`[外网] 隧道 ${t.state}${t.publicUrl ? ` ${t.publicUrl}` : ''}`);
-} catch (e) {
-  console.warn(`[外网] 隧道没起来（不影响本机使用）：${e?.message ?? e}`);
-}
 
 /**
  * 启动横幅（listen 回调里打一遍；没有"原地重启"了，监听整个进程生命周期不变）。
@@ -1000,7 +832,7 @@ function logListen() {
      * 登录页上也写着同一句话 ✓。要换地方就用 BANDI_TOKEN 自己指定、让它别落盘。
      */
     console.log(`访问令牌：在数据目录的 token 文件里（0600，不打印到日志）· 来自 ${SERVER.AUTH.from}${SERVER.AUTH.created ? '，本次新生成' : ''}`);
-    console.log('要求令牌：浏览器打开首页填一次（会记进 Cookie），节点/脚本用 X-Bandi-Token 头。');
+    console.log('要求令牌：浏览器打开首页填一次（会记进 Cookie），脚本用 X-Bandi-Token 头。');
   } else {
     /*
      * 回环监听有三种来源（2026-11-04 起监听地址可以存在数据目录里了）：环境变量钉的、

@@ -810,7 +810,7 @@ applyTheme();
 
 boot();
 
-// rail 标下面那行版本号（/api/hello，拿不到就藏）—— 独立于 boot 分岔：节点页、面板页都要有
+// rail 标下面那行版本号（/api/hello，拿不到就藏）—— 启动即填，不依赖面板数据
 initRailVersion();
 
 

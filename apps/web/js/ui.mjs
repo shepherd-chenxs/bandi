@@ -994,8 +994,14 @@ export function smAvatar(name, extra = '', persona = null) {
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 9973;
   const tone = AV_TONES[h % AV_TONES.length];
   const file = persona?.avatar;
+  /*
+   * 2026-11-08：加 loading=lazy + decoding=async。
+   * 一屏通讯录/专家列表动辄二三十个头像，走中转时"先解析完布局再按需拉图"
+   * 能省掉大量屏幕外流量（3Mbps 下这一条就是好几秒）。lazy 在桌面滚动容器
+   * 里同样生效，只在真正接近视口时才发请求。
+   */
   const img = file && AVATAR_FILE.test(String(file))
-    ? `<img class="av-img" src="/avatars/${encodeURIComponent(String(file))}" alt="" onerror="this.remove()">`
+    ? `<img class="av-img" src="/avatars/${encodeURIComponent(String(file))}" alt="" loading="lazy" decoding="async" onerror="this.remove()">`
     : '';
   return `<div class="avatar sm${extra ? ' ' + extra : ''}" data-tone="${tone}">${esc(initial(s))}${img}</div>`;
 }

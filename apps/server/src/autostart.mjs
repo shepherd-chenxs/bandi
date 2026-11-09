@@ -6,13 +6,12 @@
  * 这件事应该是一条命令：
  *
  *     node apps/server/src/autostart.mjs status
- *     node apps/server/src/autostart.mjs install            # 两个守护都装上
- *     node apps/server/src/autostart.mjs install node       # 只装执行节点
+ *     node apps/server/src/autostart.mjs install
  *     node apps/server/src/autostart.mjs remove
  *
- * 两个目标（target）：
- *   · `node`            —— 这台机器作为**执行节点**（连出到控制面）。干活的机器装它。
+ * 目标（target）只有一个：
  *   · `control-plane`   —— 这台机器作为**控制面**。托管的那台装它。
+ *     （曾经的 `node` 执行节点守护随多机节点子系统整体删除，2026-11-09。）
  *
  * 各平台走什么（**优先正规做法，退化才用土办法**）：
  *
@@ -33,64 +32,33 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
-import { repoRoot, dataDir, port as defaultPort } from './config.mjs';
+import { repoRoot, dataDir } from './config.mjs';
 
-export const TARGETS = ['node', 'control-plane'];
+export const TARGETS = ['control-plane'];
 
 /** 生成的启动脚本放这儿（跟数据目录一起走） */
 const scriptDir = (o) => path.join(o.dataDir, 'autostart');
-
-/**
- * 节点**自己的**数据目录 —— 跟控制面的 `dataDir` 是**两回事**，别合成一个。
- *
- * 为什么（2026-10-16 实测踩到）：控制面那份装的是**编排数据**（库、导入的会话）＋
- * **它自己的**访问令牌；节点这份装的是**它的身份**（`node.json`）＋
- * **连控制面用的**令牌。合成一个目录会串味三处：
- *   · 一台纯 worker 机器上会莫名其妙多出一个库；
- *   · "用哪枚令牌"变得含糊（控制面自己的 vs 别人家的）；
- *   · 身份文件跟着挪窝 → 控制面上**多出一台僵尸设备**。
- * 第一次生成就是这样：节点拿仓库 `data/` 当数据目录，找不到令牌，报到被拒 401。
- *
- * 默认与手工部署时用的位置一致（Windows `%APPDATA%\bandi-node`、Linux `~/.bandi-node`），
- * 所以已经跑着的机器换过来**身份和令牌都不动**。
- */
-function nodeDataDir(o) {
-  if (process.env.BANDI_NODE_DATA) return process.env.BANDI_NODE_DATA;
-  if (process.platform === 'win32') {
-    return path.join(process.env.APPDATA ?? path.join(o.home, 'AppData', 'Roaming'), 'bandi-node');
-  }
-  if (process.platform === 'darwin') return path.join(o.home, 'Library', 'Application Support', 'bandi-node');
-  return path.join(o.home, '.bandi-node');
-}
 
 /**
  * 一份完整的"装什么"描述。**所有平台分支都从这里取路径与命令** ——
  * 免得三套后端各拼一份，日子一长就各说各话。
  */
 function plan(o = {}) {
-  /*
-   * "地址是**显式给的**吗" —— 参数里传了，或者环境变量里有，都算。
-   * 只有显式给了才写进单元（理由见 node target 的 env 那段：写死会盖掉节点自己 config.json 里的地址）。
-   */
-  const controlPlaneGiven = o.controlPlane !== undefined || !!process.env.BANDI_CONTROL_PLANE;
   const opt = {
     repoRoot,
     dataDir,
     nodeBin: process.execPath,
-    controlPlane: String(process.env.BANDI_CONTROL_PLANE ?? `http://127.0.0.1:${defaultPort}`).replace(/\/+$/, ''),
-    controlPlaneGiven,
     home: os.homedir(),
     /*
      * `noSystem`：**只用例用** —— 跳过 `systemctl` / `launchctl` / `crontab` 这些系统级动作，
-     * 只生成文件。为什么必须有它（2026-10-16 实测踩到）：单元名是固定的 `bandi-node.service`，
-     * 用例一跑 `systemctl --user disable --now bandi-node` 就会**停掉这台机器上真正在跑的那个服务** ——
+     * 只生成文件。为什么必须有它（2026-10-16 实测踩到）：单元名是固定的 `bandi-control-plane.service`，
+     * 用例一跑 `systemctl --user disable --now bandi-control-plane` 就会**停掉这台机器上真正在跑的那个服务** ——
      * 验证代码把生产环境改了，这不能接受。真实安装**不要**开这个开关。
      */
     noSystem: false,
     ...o,
   };
   const wins = process.platform === 'win32';
-  const nodeLog = path.join(nodeDataDir(opt), 'node.log');
   const cpLog = path.join(opt.dataDir, 'server.log');
   /*
    * ⚠️ **启动脚本自己的输出，不能重定向到应用自己的日志文件**。
@@ -105,34 +73,6 @@ function plan(o = {}) {
   return {
     opt,
     targets: {
-      node: {
-        id: 'node',
-        label: '执行节点',
-        // Linux/macOS：直接跑 node；Windows：命令行拼在 .cmd 里
-        entry: [opt.nodeBin, path.join(opt.repoRoot, 'apps', 'server', 'src', 'node.mjs')],
-        env: {
-          // ⚠️ 节点用**自己的**数据目录（身份 + 令牌），不是控制面的那个 —— 见 nodeDataDir
-          BANDI_DATA: nodeDataDir(opt),
-          /*
-           * ⚠️ **只在调用方显式给了才写进单元**（2026-10-16 改）。
-           *
-           * 原来是无论如何都把地址写进单元（没给就用默认 `127.0.0.1:18787`）✗ ——
-           * 而节点读配置的优先级是**环境变量 > `config.json`** ✗，于是：
-           * 一台用邀请码加入**远程总机**的新机器，装完常驻之后，单元里那句默认地址
-           * 会把刚写好的 config.json 盖掉 ✗✗ —— 节点从此对着本机 127.0.0.1 说话，
-           * 界面上显示"离线"，谁都想不出为什么。
-           *
-           * 现在：地址归它自己数据目录里的 `config.json` 管（加入时写的那份 ✓）；
-           * 单元里不写死，换总机也就只是改一个文件 ✓。
-           */
-          ...(opt.controlPlaneGiven ? { BANDI_CONTROL_PLANE: opt.controlPlane } : {}),
-        },
-        tokenFile: path.join(nodeDataDir(opt), 'token'),
-        // 节点把自己的日志打到 stdout，没有"应用自己的文件"，所以两者可以是同一个
-        appLog: nodeLog,
-        outLog: nodeLog,
-        note: opt.controlPlaneGiven ? `连出到 ${opt.controlPlane}` : '连出到它自己 config.json 里写的那个控制面',
-      },
       'control-plane': {
         id: 'control-plane',
         label: '控制面',
@@ -167,19 +107,6 @@ function ascii(text, where) {
   const bad = [...text].filter((c) => c.charCodeAt(0) > 127);
   if (bad.length) throw new Error(`${where} 里出现了非 ASCII 字符：${bad.slice(0, 5).join('')}`);
   return text;
-}
-
-/**
- * 节点装好了但令牌还没放：**先说好**，别让它一起来就被 401 挡回去、人对着日志猜
- * （2026-10-16 实测踩到：节点用错数据目录 → 找不到令牌 → 报到被拒）。
- */
-function tokenHint(t) {
-  if (!t.tokenFile || fs.existsSync(t.tokenFile)) return {};
-  return {
-    warn:
-      `还没有令牌 —— 把控制面的令牌写到 ${t.tokenFile}\n` +
-      `   （节点从那儿读；不写进脚本，因为脚本会被同步、被备份）`,
-  };
 }
 
 /* ------------------------------------------------------------------ Linux */
@@ -329,25 +256,6 @@ ${env}
 `;
 }
 
-/**
- * 从那份**已经装进去的**文件里读出控制面地址。
- *
- * 为什么要读文件而不是拿当前环境变量现算（2026-10-16 发现的真 bug）：
- * `status` 的职责就是"说清装了什么"。拿环境变量现算，会报出一个**跟实际装的不一样**的地址 ——
- * 实测就是这样：装的时候指了云端，之后不带环境变量跑 `status`，它说"连出到 127.0.0.1:18787"，
- * 看着像配错了，其实文件里是对的。
- */
-function readInstalledControlPlane(file) {
-  try {
-    const text = fs.readFileSync(file, 'utf8');
-    // cmd 里是 `set X=Y`，systemd 单元里是 `Environment=X=Y` —— 都取等号右边那个值
-    const m = text.match(/BANDI_CONTROL_PLANE=([^\s"']+)/);
-    return m ? m[1] : null;
-  } catch {
-    return null;
-  }
-}
-
 /* --------------------------------------------------------------- 对外三个动作 */
 
 /** 这台机器上现在装了什么、怎么装的 */
@@ -379,21 +287,14 @@ export function status(opts = {}) {
         where = `${CRON_TAG} ${id}`;
         installed = cron.includes(`${CRON_TAG} ${id}`);
       }
-      // 节点这条：报**装进去的那个**控制面地址（不是按当前环境变量现算 —— 见 readInstalledControlPlane）
-      const cpInstalled =
-        id === 'node' && installed
-          ? readInstalledControlPlane(wins ? path.join(scriptDir(opt), 'node.cmd') : where)
-          : null;
       return {
         id,
         label: t.label,
-        note: cpInstalled ? `连出到 ${cpInstalled}` : t.note,
+        note: t.note,
         installed,
         where,
-        // 给人看的是**应用自己的**日志（控制面是 server.log）；启动脚本那条重定向是另一回事
+        // 给人看的是**应用自己的**日志（server.log）；启动脚本那条重定向是另一回事
         log: t.appLog,
-        // 节点那条：令牌在不在（不在的话它一起来就被 401 挡回去，先说好）
-        token: t.tokenFile ? { file: t.tokenFile, present: fs.existsSync(t.tokenFile) } : null,
       };
     }),
   };
@@ -419,7 +320,7 @@ export function install(which = 'all', opts = {}) {
       const startup = winStartup(opt);
       fs.mkdirSync(startup, { recursive: true });
       fs.writeFileSync(path.join(startup, `bandi-${id}.vbs`), winVbs(t, opt), 'ascii');
-      done.push({ id, how: 'startup-folder', where: path.join(startup, `bandi-${id}.vbs`), ...tokenHint(t) });
+      done.push({ id, how: 'startup-folder', where: path.join(startup, `bandi-${id}.vbs`) });
       continue;
     }
 
@@ -430,7 +331,7 @@ export function install(which = 'all', opts = {}) {
       fs.writeFileSync(f, plistText(t, opt), 'utf8');
       sh('launchctl', ['unload', f]);
       const r = opt.noSystem ? { ok: true, out: '' } : sh('launchctl', ['load', '-w', f]);
-      done.push({ id, how: 'launchd', where: f, warn: r.ok ? '' : r.out, ...tokenHint(t) });
+      done.push({ id, how: 'launchd', where: f, warn: r.ok ? '' : r.out });
       continue;
     }
 
@@ -453,7 +354,6 @@ export function install(which = 'all', opts = {}) {
         where: f,
         warn: r.ok ? '' : r.out,
         note: linger.ok ? '已开 linger（开机不必先登录）' : '⚠️ 开 linger 失败：开机后要先登录一次它才起 —— ' + linger.out,
-        ...tokenHint(t),
       });
       continue;
     }
@@ -469,7 +369,7 @@ export function install(which = 'all', opts = {}) {
       const marker = `${CRON_TAG} ${id}`;
       writeCrontab([kept, `${marker} (${t.note})`, cronLine(t, opt), ''].filter(Boolean).join('\n'));
     }
-    done.push({ id, how: 'crontab', where: s, note: '@reboot 在 cron 启动时跑一次', ...tokenHint(t) });
+    done.push({ id, how: 'crontab', where: s, note: '@reboot 在 cron 启动时跑一次' });
   }
   return done;
 }
@@ -545,7 +445,7 @@ if (isMain) {
       }
       if (cmd === 'install') say('\n看状态：node apps/server/src/autostart.mjs status');
     } else {
-      say('用法：node apps/server/src/autostart.mjs <status|install|remove> [node|control-plane|all]');
+      say('用法：node apps/server/src/autostart.mjs <status|install|remove> [control-plane|all]');
       process.exitCode = 2;
     }
   } catch (e) {

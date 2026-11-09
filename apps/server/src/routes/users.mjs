@@ -8,7 +8,7 @@
  *   GET    /api/me           → 我是谁（operator / user）
  *   GET    /api/users        → 账号列表（**不含任何凭据字段**）
  *   POST   /api/users        → 建影子账号（预占名字，等中枢账号首次登录时绑定）
- *   PATCH  /api/users/:id    → 改名 / 启用禁用
+ *   PATCH  /api/users/:id    → 改名 / 改昵称 / 启用禁用
  *   DELETE /api/users/:id    → 删账号
  *   GET    /api/security/*   → 会话列表 / 审计日志（只认会话里的身份）
  *
@@ -24,6 +24,7 @@
  *   E3808 内置账号不可禁用 / 不可删        （403）
  *   E3810 还没登录                         （401）
  *   E3812 账号接口不支持这个方法           （405）
+ *   E3813 昵称最多 20 个字                 （400）
  */
 
 import { sendJson, fail, readBody } from '../http.mjs';
@@ -32,6 +33,8 @@ import * as store from '../store.mjs';
 import * as csrf from '../security/csrf.mjs';
 
 const NAME_MAX = 20;
+/** 昵称长度上限（与账号名同一档：20 个字，超了界面上也放不下） */
+const NICK_MAX = 20;
 
 /** 内置账号 = 第一个账号（判据只在这里和 store 里各一处） */
 const isBuiltin = (u) => !!u?.builtin;
@@ -59,8 +62,10 @@ function meOf(who) {
   if (!u) return null;
   // hub = 这个本机名条绑着的**中枢账号**（登录用的手机号）——「我的」页身份卡用它；
   // 本机名条的名字随每次登录与中枢对齐（routes/hub.mjs），所以 name 一般就等于 hub。
+  // nickname（2026-11-08）= 「我的」页显示的昵称，没设是 null（界面退回手机号）——
+  // 与账号名分开存：改昵称不改署名（理由见 store/users.mjs 的 nickname 列注释）。
   const link = store.listHubLinks().find((l) => l.userId === u.id);
-  return { kind: 'user', user: { id: u.id, name: u.name, hub: link?.login ?? null } };
+  return { kind: 'user', user: { id: u.id, name: u.name, nickname: u.nickname ?? null, hub: link?.login ?? null } };
 }
 
 /* ------------------------------------------------------------------ 主体 */
@@ -224,6 +229,15 @@ export async function handleUsers(req, res, url) {
         const name = checkName(body.name);
         if (store.nameTaken(name, id)) throw new UserError(409, 'E3802', `用户名「${name}」已经有人用了`);
         out = store.renameUser(id, name) ?? out;
+      }
+      /*
+       * 昵称（2026-11-08）：只改展示名，「我的」页身份卡用；与账号名（署名）分开。
+       * 空白 = 清除（存 null，界面退回手机号）；不查重 —— 昵称重名是允许的。
+       */
+      if (body?.nickname !== undefined) {
+        const nick = String(body.nickname ?? '').replace(/\s+/g, ' ').trim();
+        if ([...nick].length > NICK_MAX) throw new UserError(400, 'E3813', `昵称最多 ${NICK_MAX} 个字`);
+        out = store.setNickname(id, nick) ?? out;
       }
       if (body?.disabled !== undefined) {
         const want = !!body.disabled;

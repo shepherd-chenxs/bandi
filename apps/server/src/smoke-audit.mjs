@@ -2,7 +2,9 @@
  * smoke-audit.mjs —— 安全审计（2026-11-07 中枢一刀之后的形状）。
  *
  * 新世界：本地凭据层 + 角色/菜单权限全删了，登录只有中枢账号表单（POST /hub/login），
- * 「登录即全权」。这份冒烟钉的是 IAM §11.2 的核心承诺 —— **每一笔写都有主，每一次拒都有痕**：
+ * 「登录即全权」。这份冒烟钉的是 IAM §11.2 的核心承诺 —— **每一笔写都有主，每一次拒都有痕**
+ * （2026-11-09 起同类拒绝按 60 秒窗口合并：一个窗口只落一行、并记"另有 N 次"，
+ *  "痕"仍在，只是不再一行一次——见 ④ 里的两条降噪断言）。
  *
  *   ① 起假中枢（hub-stub.mjs），BANDI_HUB 指过去；服务器形态（0.0.0.0 + BANDI_TOKEN）起服务 ——
  *      匿名请求真的会吃 401（回环形态下没凭据 = operator，造不出拒绝样本）；
@@ -175,6 +177,26 @@ try {
     && denyRows.body.events.every((e) => e.kind === 'authz.deny')
     && denyRows.body.events.some((e) => /HTTP 401/.test(e.reason ?? '')),
     JSON.stringify(denyRows.body?.events?.slice(0, 2) ?? []).slice(0, 160));
+
+  /*
+   * 降噪两条（2026-11-09）：
+   *   · 静态资源被 401 挡下**不算安全事件**（/style.css、/js/*.mjs、/favicon… 以前每条都记，
+   *     本机归档里 94% 就是这么来的）——闸照旧挡，只是不落审计；
+   *   · 同一个 (IP, 动作, 原因) 的拒绝在 60 秒窗口内只落一行 —— ① 那笔已经落过了，
+   *     这里再打两次同一个口，应该**看不到新行**。
+   */
+  const staticDenied = await call('GET', '/style.css');
+  check('匿名取静态资源 → 仍被闸挡下（401）', staticDenied.status === 401, String(staticDenied.status));
+  const dup1 = await call('GET', '/api/users');
+  const dup2 = await call('GET', '/api/users');
+  check('匿名重复打同一个 API 口 → 仍 401', dup1.status === 401 && dup2.status === 401, `${dup1.status}/${dup2.status}`);
+  const denyRows2 = await call('GET', '/api/security/audit?kind=authz.deny', { cookie: sidA });
+  const evDeny = denyRows2.body?.events ?? [];
+  check('同类拒绝在窗口内只落一行（① 1 次 + 这里 2 次 = 1 行）',
+    evDeny.filter((e) => e.action === 'GET /api/users' && /HTTP 401/.test(e.reason ?? '')).length === 1,
+    `rows=${evDeny.filter((e) => e.action === 'GET /api/users').length}`);
+  check('静态资源 401 不进审计', !evDeny.some((e) => /\.(css|js|ico|webmanifest)$/.test(e.action ?? '')),
+    JSON.stringify(evDeny.map((e) => e.action).slice(0, 6)));
 
   /* ============ ⑤ 退出登录：会话真删；痕迹仍是本人的 ============ */
   console.log('\n⑤ 退出登录：会话真删（服务器形态下死票吃 401）');

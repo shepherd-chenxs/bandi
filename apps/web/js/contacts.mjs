@@ -13,7 +13,7 @@ import { archivedEntryHTML, closeCtxMenu, convDisplayName, enterArchiveView, ope
 import { renderFlowList } from './workflows.mjs';
 import { renderRunList } from './flowpages.mjs';
 import { newSkill, openGitPickDialog, openImportDialog } from './skills.mjs';
-import { convUnread, openConversation, openDetail } from './chat.mjs';
+import { convUnread, openDetail } from './chat.mjs';
 import { gidOf, openGroupDetail } from './groups.mjs';
 import { $, S } from './core.mjs';
 import { openProjectsPage, renderProjectList } from './projects.mjs';
@@ -616,7 +616,9 @@ const userRowHTML = (u) => `<div class="item" data-nodetail>
 function bindContactRows() {
   const body = $('listBody');
   body.querySelectorAll('[data-conv]').forEach((el) => {
-    el.onclick = () => openConversation(el.dataset.conv).catch((e) => toast(e.message, 'error'));
+    // 走 openConversationSafe：这段可能刚被另一个窗口删掉（E2047 → 说人话 + 收拾界面）；
+    // 它也会先把主区切回聊天视图（主区可能停在详情/占位页上，openConversation 不切视图）
+    el.onclick = () => openConversationSafe(el.dataset.conv);
   });
   // 通讯录点群聊 = **看群详情**（右侧），不跳对话。
   // 要聊，去详情里点「发消息」。

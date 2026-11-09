@@ -37,6 +37,8 @@
 import path from 'node:path';
 import * as store from './store.mjs';
 import { dispatchToThread, dispatchEventToThread, projectConstitutionBlock } from './dispatch.mjs';
+// 岗位判定（「项目经理 · 职责」第一段才是岗位）与运行钥匙共用同一处口径 —— 别再各写一份
+import { isPmRole, roleHeadOf } from './agent-auth.mjs';
 // 「卡由流程执行」那条路要真的起一条实例 —— 跟工作台点流程走的是同一个引擎入口，
 // 不另造"从看板起流程"的第二套（引擎的口径只该有一处）
 import { startWorkflow, nodesOf } from './workflows.mjs';
@@ -82,27 +84,40 @@ const RANK_OTHER = 8;
  * 因为生命周期上它更早——想法是"还没决定要不要做"，待办是"决定要做了"。
  * 这一列**只手工建卡**，不会有流程/聊天自动落进来（那两者跑起来时早过了"想法"这个阶段）。
  */
+/**
+ * 列的**文案**（这一版只留 label / hint —— 列有哪些、顺序如何，一律由 status.mjs 说了算）。
+ *
+ * 为什么把 key 列表挪走：原来这张表同时承担"有哪些列"和"列叫什么"，而 `COL_OF_FLOW` /
+ * `COL_OF_MANUAL` / `STATUS_OF_COL` / `MANUAL_STATUSES` 四张映射又在下面各写一份 ——
+ * 加一个状态要改五处，漏一处不报错，只是某张卡在某一列上"不见了"。
+ * 现在：`store/status.mjs` 是唯一词表，这里只负责"它长什么样"。
+ */
+const COL_FACE = {
+  idea: { label: '想法', hint: '还没决定要不要做' },
+  todo: { label: '待办' },
+  doing: { label: '进行中' },
+  review: { label: '待验收', hint: '干完了，等你点头' },
+  blocked: { label: '已阻塞', hint: '出了问题等人拍板' },
+  failed: { label: '失败' },
+  done: { label: '已完成' },
+  cancelled: { label: '已取消', hint: '决定不做，留个痕' },
+};
+
+/** 列顺序取自词表（TASK_COL_ORDER）；「其他」是兜底列，不挂状态，所以只在这里追加 */
 const COLUMNS = [
-  { key: 'idea', label: '想法', hint: '还没决定要不要做' },
-  { key: 'todo', label: '待办' },
-  { key: 'doing', label: '进行中' },
-  { key: 'review', label: '待验收', hint: '干完了，等你点头' },
-  { key: 'blocked', label: '已阻塞', hint: '出了问题等人拍板' },
-  { key: 'failed', label: '失败' },
-  { key: 'done', label: '已完成' },
-  { key: 'cancelled', label: '已取消', hint: '决定不做，留个痕' },
+  ...store.TASK_COL_ORDER.map((key) => ({ key, ...COL_FACE[key] })),
   { key: 'other', label: '其他' },
 ];
-const COL_OF_FLOW = { 待办: 'todo', 进行中: 'doing', 待验收: 'review', 已阻塞: 'blocked', 失败: 'failed', 已完成: 'done' };
-const COL_OF_CHAT = { 进行中: 'doing', 已完成: 'done', 失败: 'failed', 已停止: 'blocked' };
+const COL_OF_FLOW = store.FLOW_COL_OF;
+const COL_OF_CHAT = store.CHAT_COL_OF;
 /** 手工任务：状态直接用统一那套词，站列一一对应（「想法」「已取消」只可能手工来） */
-const COL_OF_MANUAL = { 想法: 'idea', 待办: 'todo', 进行中: 'doing', 待验收: 'review', 已阻塞: 'blocked', 失败: 'failed', 已完成: 'done', 已取消: 'cancelled' };
+const COL_OF_MANUAL = store.MANUAL_COL_OF;
 
 /** 看板列 → 新建任务时的默认状态（点哪一列的「＋」就默认落在哪一列） */
-export const STATUS_OF_COL = { idea: '想法', todo: '待办', doing: '进行中', review: '待验收', blocked: '已阻塞', failed: '失败', done: '已完成', cancelled: '已取消' };
+export const STATUS_OF_COL = store.TASK_STATUS_OF_COL;
 
 /** 聊天运行态 → 人看的说法（流程/手工卡那套用统一任务八态，不翻译） */
-const CHAT_STATUS_TEXT = { 跑中: '进行中', 完成: '已完成', 失败: '失败', 已停止: '已停止' };
+const CHAT_STATUS_TEXT = store.CHAT_RUN_TEXT;
 
 /** 一行备注的长度上限；行数上限（面板是给人看的，不是导出全量） */
 const NOTE_LIMIT = 90;
@@ -139,8 +154,18 @@ function clip(text, max) {
   const s = String(text ?? '').replace(/\s+/g, ' ').trim();
   return s.length > max ? s.slice(0, max) + '…' : s;
 }
+/**
+ * 时间戳 → 人看的「YYYY-MM-DD HH:mm」，**按本机时区**。
+ *
+ * 原来是 `iso.replace('T',' ').slice(0,16)` —— 切的是 ISO 串里的 **UTC 墙钟**，
+ * 在 UTC+8 上整整慢 8 小时（2026-11-08 用户实拍：刚建的卡显示成"几小时前"那一档）。
+ * 列表按 `at` 的字典序排，补零的本地时间照样单调、照样能排，不受影响。
+ */
 function stamp(iso) {
-  return String(iso ?? '').replace('T', ' ').slice(0, 16);
+  const d = new Date(iso ?? '');
+  if (Number.isNaN(d.getTime())) return '';
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
 /* ------------------------------------------------------------ 三个来源的行 */
@@ -160,10 +185,13 @@ function flowRows(run) {
       status: String(t.status || ''),
       col: COL_OF_FLOW[t.status] ?? 'other',
       rank: FLOW_RANK[t.status] ?? RANK_OTHER,
-      assignee: persona?.name ?? '（没点名）',
+      assignee: persona?.name ?? '未分配',
       // 执行人的 **id**，不只是名字：员工详情要按人筛（改名不跑、撞名不串，见 personaTasks）
       assignee_id: t.assigneePersonaId ?? null,
       at: stamp(t.endedAt ?? t.startedAt ?? run.updatedAt),
+      // 这行"什么时候有的"：流程实例的建单时间（`at` 是最后动静，两回事 ——
+      // 列表上写"创建时间"就得给创建时间，2026-11-08 用户要绝对时间时定的口径）
+      created: stamp(run.createdAt ?? t.startedAt),
       note: t.note ? clip(t.note, NOTE_LIMIT) : `流程${run.status === '进行中' ? '进行中' : `已${run.status.replace(/^已/, '')}`}`,
       flow_id: run.id,
       flow_title: run.title,
@@ -239,10 +267,12 @@ function flowCardRow(run, card) {
     status,
     col: COL_OF_MANUAL[status] ?? 'other',
     rank: FLOW_RANK[status] ?? RANK_OTHER,
-    // 「没点名」是流程自己的事实（节点故意留空），别写成"没人干"
-    assignee: persona?.name ?? (task ? '（没点名）' : '（流程没起跑）'),
+    // 「未分配」是流程自己的事实（节点故意留空等人指派），别写成"没人干"
+    assignee: persona?.name ?? (task ? '未分配' : '（流程没起跑）'),
     assignee_id: task?.assigneePersonaId ?? null,
     at: stamp(run.updatedAt ?? card.updatedAt),
+    // 卡的建档时间（`at` 是流程实例的动静时间）
+    created: stamp(card.createdAt ?? run.createdAt),
     note: task?.note ? clip(`${note} · ${task.note}`, NOTE_LIMIT) : clip(note, NOTE_LIMIT),
     flow_id: run.id,
     flow_title: run.title,
@@ -267,9 +297,17 @@ function manualRows(t) {
   /*
    * 真人执行人（2026-10-31）：卡派给了 users 表里的人 —— 挂名负责，不起会话。
    * `assignee_id` 给执行人筛选用，真人带 `u:` 前缀（员工的 id 都是 `p-` 系，撞不了车）；
-   * 删了的真人名字留空，回落「（没派活）」—— 留的是"当时是谁"，删号不追改历史卡。
+   * 删了的真人名字留空，回落「未分配」—— 留的是"当时是谁"，删号不追改历史卡。
    */
   const user = t.assigneeUserId ? store.getUser(t.assigneeUserId) : null;
+  /*
+   * 团队协作（2026-11-09）：卡派给一个**群**办，协调人 = 群上的群助手（现读，不落卡）。
+   * 看板行的执行人格写「团队协作 · 群名」，筛选值带 `g:` 前缀（人 `u:` / 员工 `p-` 系都不撞）。
+   */
+  const group = t.assigneeGroupId ? store.getGroup(t.assigneeGroupId) : null;
+  const assistant = group?.assistantPersonaId ? store.getPersona(group.assistantPersonaId) : null;
+  // 协作子卡：挂在哪张主卡下（只一层；子卡不会再拆）
+  const parent = t.parentTaskId ? store.getProjectTask(t.parentTaskId) : null;
   const source = t.source ?? 'manual';
   /*
    * 「选了流程、还没发起」的卡（「想法」列建的那种）与"实例已经不在了"的孤儿卡，
@@ -289,11 +327,29 @@ function manualRows(t) {
     rank: FLOW_RANK[t.status] ?? RANK_OTHER,
     assignee: persona?.name
       ?? user?.name
-      ?? (t.flowTemplateId && !t.flowRunId ? '（还没发起）' : '（没派活）'),
-    assignee_id: t.assigneePersonaId ?? (t.assigneeUserId ? `u:${t.assigneeUserId}` : null),
+      ?? (group ? `团队协作 · ${group.title}` : (t.flowTemplateId && !t.flowRunId ? '（还没发起）' : '未分配')),
+    assignee_id: t.assigneePersonaId ?? (t.assigneeUserId ? `u:${t.assigneeUserId}` : null) ?? (group ? `g:${group.id}` : null),
     assignee_user_id: t.assigneeUserId ?? null,
+    // 团队协作：执行群与当前群助手（现读；群助手换人后看板行也跟着变）—— 卡上不存协调人
+    assignee_group_id: group?.id ?? null,
+    assignee_group_title: group?.title ?? null,
+    assignee_group_assistant: assistant?.name ?? null,
+    // 协作子卡：父卡 id / 标题（点进详情能认出它是谁拆出来的）
+    parent_id: parent?.id ?? null,
+    parent_title: parent?.title ?? null,
     at: stamp(t.updatedAt),
-    note: clip([t.description ? clip(t.description, NOTE_LIMIT) : '手工建的任务', flowWhy].filter(Boolean).join(' · '), NOTE_LIMIT),
+    created: stamp(t.createdAt),
+    note: clip(
+      [
+        t.description ? clip(t.description, NOTE_LIMIT) : '手工建的任务',
+        group ? `团队协作 · 群「${group.title}」${assistant ? `（群助手 ${assistant.name} 承接）` : ''}` : '',
+        parent ? `协作子卡 · 主卡「${parent.title}」` : '',
+        flowWhy,
+      ]
+        .filter(Boolean)
+        .join(' · '),
+      NOTE_LIMIT,
+    ),
     // 行 id：拖拽 / 改状态 / 删卡都走它（手工卡与仓库值班卡共用这一套）
     manual_id: t.id,
     // 选了流程的卡：前端据此把"拖到进行中=发起流程"这件事说清楚（看板弹窗之外的地方也用得上）
@@ -381,6 +437,7 @@ function chatRows(projects, scope) {
       // 聊天行的"执行人"是**真正跑这一轮的人**（群里 @ 谁就是谁），不是会话归属人
       assignee_id: chatRun.personaId ?? null,
       at: stamp(chatRun.endedAt ?? chatRun.startedAt ?? conv.updatedAt),
+      created: stamp(conv.createdAt),
       note: `会话：${conv.title}${conv.kind === 'group' ? '（群）' : ''}${how}`,
       conversation_id: conv.id,
       conversation_title: conv.title,
@@ -593,7 +650,7 @@ export function personaTasks(persona) {
  *   · 「想法」「已取消」只可能手工来（流程/聊天跑起来时早过了"想法"阶段，
  *     而机器不会替人决定"这事不做了"）。
  */
-const MANUAL_STATUSES = new Set(['想法', '待办', '进行中', '待验收', '已阻塞', '失败', '已完成', '已取消']);
+const MANUAL_STATUSES = new Set(store.MANUAL_STATUS);
 
 /**
  * 建卡时选的那条流程得**真能起**：存在、已发布、有节点。
@@ -656,6 +713,26 @@ function startCardFlow(cardId) {
  * ⚠️ 手工卡**必须挂在某个项目下**（表里 projectId 非空、没有它看板也不认）——
  * 全局面板里点某一列的「＋」时，弹窗会让人先选一个项目，就是为这个。
  */
+
+/**
+ * **团队协作的建卡预检**（2026-11-09 用户定）：群在、群助手在、群助手是**项目经理岗**、群助手在群里。
+ *
+ * 建卡 / 改派 / 派发三处共用这一份判据（别各写一份）。执行时 `startCardInGroup` 还会再读一次 ——
+ * 群助手可能被换人/退群，那时要在执行那一刻拒绝，而不是拿建卡时的结论硬跑。
+ * 卡上**不记协调人**：协调人就是"此刻这个群的群助手"，现读现用。
+ */
+export function assertTeamGroup(groupId) {
+  const group = store.getGroup(String(groupId));
+  if (!group || group.dissolvedAt) throw new Error('选的那个群已经不在了');
+  const assistant = group.assistantPersonaId ? store.getPersona(group.assistantPersonaId) : null;
+  if (!assistant) throw new Error('这个群没有群助手 —— 团队协作要有群助手承接；先去群设置里指定一个');
+  if (!isPmRole(assistant.role)) {
+    throw new Error(`这个群的群助手不是项目经理（「${roleHeadOf(assistant.role) || '未设岗位'}」）—— 团队协作要项目经理承接，先去群设置里换一个 PM 当群助手`);
+  }
+  if (!group.members.some((m) => m.personaId === assistant.id)) throw new Error('这个群的群助手已经不在群成员里了');
+  return group;
+}
+
 export function createProjectTask(project, {
   title,
   description = '',
@@ -668,10 +745,28 @@ export function createProjectTask(project, {
   createdBy = null,
   createdByUserId = null,
   creatorConvId = null,
+  /*
+   * 外部来源的稳定键（2026-11-09 起也是**幂等键**的落点）：同一项目下同一 externalKey
+   * = 同一张卡。数字员工经"工作证"建卡时用它做去重（重试不会再建一张重复卡）——
+   * 需要方先自己查过（store.getProjectTaskByExternalKey），这里只负责写进去。
+   */
+  externalKey = null,
+  /*
+   * **团队协作模式**（2026-11-09 用户定）：派给一个**群**办，协调人是群上的群助手
+   * （`groups.assistantPersonaId`，必须是项目经理岗），**卡上不记协调人** ——
+   * 派发 / 子卡授权 / 回执每次都现读群助手，换人自动跟随。
+   * 与 personaId / assigneeUserId / flowTemplateId 互斥（执行方式只能选一个）。
+   */
+  assigneeGroupId = null,
+  // 协作子卡：挂在哪张主卡下（必须是一张团队协作的主卡；只允许一层，子卡不能再拆）
+  parentTaskId = null,
 } = {}) {
   const name = String(title ?? '').trim();
   if (!name) throw new Error('任务得有标题');
   const st = MANUAL_STATUSES.has(status) ? status : '待办';
+  if (assigneeGroupId && (personaId || flowTemplateId || assigneeUserId)) {
+    throw new Error('执行方式只能选一个：派给数字员工、派给真人、由流程执行，或者派给一个群（团队协作）');
+  }
   if (personaId && flowTemplateId) throw new Error('执行方式只能选一个：派给人，或者由流程执行');
   if (personaId && assigneeUserId) throw new Error('执行人只能选一个：数字员工或真人');
   if (flowTemplateId && assigneeUserId) throw new Error('执行方式只能选一个：派给真人，或者由流程执行');
@@ -680,6 +775,28 @@ export function createProjectTask(project, {
   const theUser = assigneeUserId ? store.getUser(assigneeUserId) : null;
   if (assigneeUserId && !theUser) throw new Error('选的这个真人不在了');
   const flowTpl = flowTemplateId ? assertRunnableFlow(flowTemplateId) : null;
+  /*
+   * 团队协作的**建卡时预检**（2026-11-09）：群在、群助手在、群助手是项目经理、群助手在群里。
+   * 执行时还会**再读一次**（群助手可能被换）—— 这里先挡掉"建出来注定派不出去"的卡。
+   */
+  let group = null;
+  if (assigneeGroupId) group = assertTeamGroup(assigneeGroupId);
+  /*
+   * 协作子卡（2026-11-09）：数据层不变式 —— 挂团队协作主卡、同项目、同群、只一层、必须派人。
+   * "是不是本群**当前**群助手"这条权限校验在 agent-cards 那条口（它才知道请求人是谁）。
+   */
+  let parent = null;
+  if (parentTaskId) {
+    parent = store.getProjectTask(String(parentTaskId));
+    if (!parent) throw new Error('要挂的主卡不在了');
+    if (parent.projectId !== project.id) throw new Error('协作子卡必须和主卡在同一个项目');
+    if (!parent.assigneeGroupId) throw new Error('这张主卡不是团队协作模式（没派给群），不能拆子卡');
+    if (parent.parentTaskId) throw new Error('子卡不能再拆子卡（只允许一层）');
+    if (assigneeGroupId) throw new Error('协作子卡派给具体的人，不再派给群');
+    if (!personaId) throw new Error('协作子卡要指定执行人（派给群里的人）');
+    const pg = store.getGroup(parent.assigneeGroupId);
+    if (!pg?.members?.some((m) => m.personaId === personaId)) throw new Error('子卡的执行人不在主卡那个群里');
+  }
 
   const row = store.createProjectTask({
     projectId: project.id,
@@ -695,12 +812,18 @@ export function createProjectTask(project, {
     createdByUserId,
     // 建卡那次运行所在的会话（PM 在哪个群里建的卡，回执就送回哪儿；人手建是 null）
     creatorConvId,
+    // 幂等键 / 外部来源键（2026-11-09）：数字员工建卡去重靠它
+    externalKey,
+    // 团队协作 / 协作子卡（2026-11-09）
+    assigneeGroupId: group?.id ?? null,
+    parentTaskId: parent?.id ?? null,
   });
 
   // 「想法」不该被立刻派活/起流程 —— 它是"还没决定要不要做"，谈不上开始；
   // 真派了的话卡刚建完就被转成「进行中」，那一列等于白建。
   // 前端也会把那个勾选框灰掉，但**判据放服务端**才作数（接口谁都能直接调）。
-  if ((!persona && !flowTpl) || !startNow || st === '想法') return store.getProjectTask(row.id);
+  // 团队协作（群）也算"有执行方式"：待办 + 立即开始 → 派进群、由群助手承接。
+  if ((!persona && !flowTpl && !group) || !startNow || st === '想法') return store.getProjectTask(row.id);
 
   try {
     return startProjectTask(row.id);
@@ -744,6 +867,71 @@ const PACE_BLOCK = [
   '· 要并行也只并行一件：派了子调查员，就别自己再通读一遍。',
   '· 交不了就直说：做到哪、缺什么、要谁定 —— 比拖到最后说"做不完"强。',
 ].join('\n');
+/**
+ * **团队协作的派发**（2026-11-09 用户定）：把卡派进它挂的那个群，由**群助手**承接。
+ *
+ * 三条口径：
+ *   · **卡上不记协调人** —— 每次派发/授权/回执都现读 `groups.assistantPersonaId`，
+ *     群助手换人自动跟随（用户："执行时根据群动态取群助手，这样更准确"）；
+ *   · **群助手必须是项目经理岗** —— 用户定的规则：拆卡人如果自己也是执行者，
+ *     很容易"自己等自己"把任务卡死。岗位这道闸同时把"谁负责"钉死；
+ *   · 派发落地 = 群里一条**可见派活票**（带卡号，可点开）+ 一条**不可见唤醒**给群助手
+ *     （跟卡片回执同一口径：票给人看、silent 指令给 agent）。
+ *
+ * 群助手正忙/会话被占用时不硬塞：卡退回「待办」+ 排队标记，30 秒节拍重试（同直接派活）。
+ */
+function startCardInGroup(row, project) {
+  const group = store.getGroup(row.assigneeGroupId);
+  if (!group || group.dissolvedAt) throw new Error('这张卡挂的群已经不在了');
+  const assistant = group.assistantPersonaId ? store.getPersona(group.assistantPersonaId) : null;
+  if (!assistant) throw new Error('这个群没有群助手 —— 团队协作要群助手承接；先去群设置里指定一个');
+  if (!isPmRole(assistant.role)) {
+    throw new Error(`这个群现在的群助手不是项目经理（「${roleHeadOf(assistant.role) || '未设岗位'}」）—— 团队协作要项目经理承接，先去群设置里换一个 PM 当群助手`);
+  }
+  if (!group.members?.some((m) => m.personaId === assistant.id)) throw new Error('这个群的群助手已经不在群里了');
+  // 落到这个群**最新的一段会话**（一段没有就开一段）：派活票与唤醒都进群聊，雇主看得见
+  const session = store.listGroupSessions(group.id)[0] ?? store.createGroupSession(group.id);
+  if (!session) throw new Error('这个群的会话开不出来');
+  const text = [
+    projectConstitutionBlock(project.id),
+    `【任务 · ${project.name || project.id}】${row.title}（${row.id}）`,
+    row.description ? `\n${row.description}` : '',
+    '\n这是「团队协作」模式的卡：你是本群的群助手（项目经理），负责把活拆给群成员（子卡）、盯回执、把进度汇总回这张卡。',
+    '拆子卡走建卡通道，带上 parentTaskId；子卡只能派给本群成员，别派给自己。',
+    '\n' + PACE_BLOCK,
+    '做完 / 需要拍板时把卡推进到「待验收」或说明卡在哪。',
+  ]
+    .filter(Boolean)
+    .join('\n');
+  // 可见派活票：群里人看得到"这张卡派进本群了、谁承接"，点开直达卡详情
+  store.addMessage({
+    conversationId: session.id,
+    role: 'assistant',
+    personaId: assistant.id,
+    text: `【任务卡】「${row.title}」—— 派到本群（团队协作），由群助手 ${assistant.name} 协调。`,
+    meta: { type: 'card', cardId: row.id, title: row.title, status: row.status, assignee: null, mode: 'group' },
+  });
+  const res = dispatchEventToThread(session.id, `@${assistant.name} ${text}`, {
+    personaId: assistant.id,
+    projectId: project.id,
+    // silent：派活票给人看，这条唤醒是指令 —— 界面上不重复画（同卡片回执）
+    meta: { silent: true },
+  });
+  if (!res) throw new Error('派不进这个群（会话或成员状态异常）');
+  if (!res.run) {
+    // 群助手正忙 / 会话被占：同直接派活 —— 退待办 + 排队标记，节拍重试
+    store.updateProjectTask(row.id, { status: '待办', runId: null, queuedAt: store.nowIso() });
+    throw Object.assign(new Error('群助手正忙，排上队了（会自动再试，不用管）'), { code: 'busy' });
+  }
+  return store.updateProjectTask(row.id, {
+    status: '进行中',
+    conversationId: session.id,
+    runId: res.run.id,
+    queuedAt: null,
+    notifiedFor: null, // 重新开跑 = 会有新产出：上一轮回执标记清掉
+  });
+}
+
 export function startProjectTask(id, { allowIdea = false } = {}) {
   const row = store.getProjectTask(id);
   if (!row) throw new Error('任务不存在');
@@ -758,6 +946,15 @@ export function startProjectTask(id, { allowIdea = false } = {}) {
   if (row.flowTemplateId) {
     if (!allowIdea && row.status === '想法') throw new Error('「想法」还没决定要不要做，先挪到「待办」再发起');
     return startCardFlow(row.id);
+  }
+  /*
+   * **团队协作（派给群）**（2026-11-09）：不落执行人 1:1 工单会话，派进群、由群助手承接。
+   * 群助手**现读**（执行时动态取，见 startCardInGroup 的注释），所以这里先判状态闸。
+   */
+  if (row.assigneeGroupId) {
+    if (!allowIdea && row.status === '想法') throw new Error('「想法」还没决定要不要做，先挪到「待办」再开始');
+    if (row.status === '进行中' && row.runId) throw new Error('这张卡已经在跑了');
+    return startCardInGroup(row, project);
   }
   if (!row.assigneePersonaId) throw new Error('先指定执行人，再开始');
   const persona = store.getPersona(row.assigneePersonaId);
@@ -990,7 +1187,53 @@ function conversationOfPersona(personaId) {
   return direct?.id ?? null;
 }
 
+/**
+ * **协作子卡的回执**（2026-11-09）：子卡到「待验收/阻塞/失败」时，叫醒的是**主卡执行群的
+ * 当前群助手**（不是建卡人）—— 它负责把结果汇总回主卡。
+ *
+ * 与 notifyCardOwner 同一套"票给人看、silent 指令给 agent"的口径：群里落一条可见的子卡回执，
+ * 再 silently 唤醒群助手。群助手拿不到（退群/换人成非 PM）就放弃 —— 回执是尽力而为，
+ * 卡状态本身已经落库；子卡的状态变化该由群助手在群里处理。
+ */
+function notifyParentCoordinator(task, why) {
+  if (task.notifiedFor === task.status) return;
+  const parent = store.getProjectTask(task.parentTaskId);
+  if (!parent?.assigneeGroupId) return;
+  const group = store.getGroup(parent.assigneeGroupId);
+  const assistant = group?.assistantPersonaId ? store.getPersona(group.assistantPersonaId) : null;
+  if (!assistant) return;
+  const session = store.listGroupSessions(group.id)[0] ?? null;
+  if (!session) return;
+  const assignee = task.assigneePersonaId ? store.getPersona(task.assigneePersonaId) : null;
+  store.addMessage({
+    conversationId: session.id,
+    role: 'assistant',
+    personaId: assignee?.id ?? null,
+    text: `【子卡回执】「${task.title}」（${task.id}）到「${task.status}」了 —— ${why}`,
+    meta: {
+      type: 'card',
+      cardId: task.id,
+      title: task.title,
+      status: task.status,
+      assignee: assignee?.name ?? null,
+      parentId: parent.id,
+    },
+  });
+  const res = dispatchEventToThread(
+    session.id,
+    `@${assistant.name} 【子卡回执】你拆的子卡「${task.title}」（${task.id}）到「${task.status}」了 —— ${why}。` +
+      `请汇总到主卡「${parent.title}」（${parent.id}），并推进下一步。`,
+    { personaId: assistant.id, projectId: parent.projectId, sandbox: 'plan', meta: { silent: true } },
+  );
+  if (res) {
+    store.updateProjectTask(task.id, { notifiedFor: task.status });
+    console.log(`[子卡回执] ${task.id} 「${task.status}」已通知群助手 ${assistant.name}`);
+  }
+}
+
 function notifyCardOwner(task, why) {
+  // 协作子卡走"群助手"那条（2026-11-09，见上）；普通卡照旧回建卡人
+  if (task.parentTaskId) return notifyParentCoordinator(task, why);
   if (task.notifiedFor === task.status) return; // 这个状态已经报过
   if (task.createdBy === task.assigneePersonaId) return; // 自己派的活自己干，不用自己通知自己
   const project = store.getProject(task.projectId);
@@ -1124,14 +1367,33 @@ export function updateProjectTask(id, fields = {}, { autoStart = true, actorUser
   if (fields.personaId !== undefined) {
     if (fields.personaId && !store.getPersona(fields.personaId)) throw new Error('选的这个人不在了');
     patch.assigneePersonaId = fields.personaId || null;
-    // 执行人一格二选一（2026-10-31）：选了员工就清掉真人，别让一张卡挂着两个执行人
+    // 执行人一格二选一（2026-10-31）：选了员工就清掉真人，别让一张卡挂着两个执行人；
+    // 2026-11-09 起还可能是"从团队协作改回派人" —— 群那格也一并清掉（清成未分配同理）
     if (patch.assigneePersonaId) patch.assigneeUserId = null;
+    patch.assigneeGroupId = null;
   }
   if (fields.assigneeUserId !== undefined) {
     // 派给真人 = 只挂名（不起会话、不派活）；与员工执行人互斥
     if (fields.assigneeUserId && !store.getUser(fields.assigneeUserId)) throw new Error('选的这个真人不在了');
     patch.assigneeUserId = fields.assigneeUserId || null;
     if (patch.assigneeUserId) patch.assigneePersonaId = null;
+    patch.assigneeGroupId = null;
+  }
+  /*
+   * 团队协作（2026-11-09）：改派给群 / 改回给人。执行方式一格三选一，别同时给两种
+   * （不然一张卡既有人又有群，派发时会两套逻辑各跑一遍）。
+   */
+  if (fields.assigneeGroupId !== undefined) {
+    if (fields.personaId !== undefined || fields.assigneeUserId !== undefined) {
+      throw new Error('执行方式只能选一个：派给人，或者派给群（团队协作），别同时给');
+    }
+    const gid = fields.assigneeGroupId ? String(fields.assigneeGroupId) : null;
+    if (gid) assertTeamGroup(gid);
+    patch.assigneeGroupId = gid;
+    if (gid) {
+      patch.assigneePersonaId = null;
+      patch.assigneeUserId = null;
+    }
   }
 
   /*
@@ -1139,11 +1401,11 @@ export function updateProjectTask(id, fields = {}, { autoStart = true, actorUser
    * 推进去实例页点通过/驳回/终止；看板上这张卡也不给拖 —— 两本账各写一份就会互相覆盖。
    * 卡本身还是"这件事的说明"：标题、描述照常能改。
    */
-  if (cur.flowRunId && (patch.status !== undefined || fields.personaId !== undefined || fields.assigneeUserId !== undefined)) {
+  if (cur.flowRunId && (patch.status !== undefined || fields.personaId !== undefined || fields.assigneeUserId !== undefined || fields.assigneeGroupId !== undefined)) {
     throw new Error('这张卡由流程执行 —— 状态/执行人跟着流程走，去流程实例里推进或终止');
   }
   // 已经选了流程、还没发起的卡也不能改派给人（员工或真人一样）：执行方式在建卡时就定了，要换就删了重建
-  if (cur.flowTemplateId && !cur.flowRunId && (fields.personaId !== undefined || fields.assigneeUserId !== undefined)) {
+  if (cur.flowTemplateId && !cur.flowRunId && (fields.personaId !== undefined || fields.assigneeUserId !== undefined || fields.assigneeGroupId !== undefined)) {
     throw new Error('这张卡已经选了由流程执行 —— 要改回派人，删掉这张卡重新建');
   }
 
@@ -1169,7 +1431,9 @@ export function updateProjectTask(id, fields = {}, { autoStart = true, actorUser
   // 「拖进进行中」这一下要不要顺便开工 —— 看**改完之后**有没有执行人（本次改的优先）
   const toDoing = autoStart && patch.status === '进行中' && cur.status !== '进行中';
   const whoId = patch.assigneePersonaId !== undefined ? patch.assigneePersonaId : cur.assigneePersonaId;
-  if (toDoing && whoId) {
+  // 团队协作的卡没有 assigneePersonaId —— "拖进进行中 = 开工"这条同样适用（派进群）
+  const groupId = patch.assigneeGroupId !== undefined ? patch.assigneeGroupId : cur.assigneeGroupId;
+  if (toDoing && (whoId || groupId)) {
     delete patch.status; // 状态交给 startProjectTask 一起落（进行中 + runId）
     // 归因同上撤掉：这一下是"开工"，状态由 startProjectTask 写，不算人改状态
     delete patch.statusByUserId;
@@ -1194,9 +1458,12 @@ export function updateProjectTask(id, fields = {}, { autoStart = true, actorUser
    * 「想法」阶段不跑（还没决定要不要做）；没指定人也不跑（那只是停车场）。
    */
   const nextStatus = patch.status !== undefined ? patch.status : cur.status;
-  const becameTodo = autoStart && nextStatus === '待办' && !!whoId && (
+  const becameTodo = autoStart && nextStatus === '待办' && (!!whoId || !!groupId) && (
     (patch.status === '待办' && cur.status !== '待办' && cur.status !== '进行中') ||
-    (cur.status === '待办' && patch.assigneePersonaId !== undefined && !!patch.assigneePersonaId && patch.assigneePersonaId !== cur.assigneePersonaId)
+    (cur.status === '待办' && (
+      (patch.assigneePersonaId !== undefined && !!patch.assigneePersonaId && patch.assigneePersonaId !== cur.assigneePersonaId) ||
+      (patch.assigneeGroupId !== undefined && !!patch.assigneeGroupId && patch.assigneeGroupId !== cur.assigneeGroupId)
+    ))
   );
   if (becameTodo) {
     const saved = store.updateProjectTask(id, patch); // 先落「待办」：startProjectTask 会把它推进「进行中」

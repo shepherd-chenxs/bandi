@@ -71,6 +71,51 @@ db.exec(`PRAGMA journal_mode = WAL;`);
  */
 db.exec(`PRAGMA busy_timeout = 5000;`);
 
+/*
+ * ---------------------------------------------------------------- 库的版本号
+ *
+ * 2026-11-08 加。之前"这个库是哪一代"没有任何一处能回答：迁移是一串幂等函数，
+ * 靠 `PRAGMA table_info` 猜列、靠 meta 表里的手写标记位记"跑过没有"。能工作，
+ * 但出了事只能一条条读函数、猜顺序；**老程序打开新库更是毫无护栏** ——
+ * 它照常写，把新列/新表当不存在，静默产出半对的数据（这比报错难查得多）。
+ *
+ * `user_version` 是 SQLite 自带的 4 字节整数（不占表、不占行、不用迁移）。
+ * 规矩：**加一次迁移就把 SCHEMA_VERSION +1**。启动时只做两件事：
+ *   · 库比程序新 → 拒绝启动（写下去是事故，宁可让人先升级）；
+ *   · 库比程序旧 → 交给下面那串幂等迁移，跑完把版本号推上去（见文件末尾）。
+ *
+ * ⚠️ 版本号是**单调递增的整数**，不是日期、不是程序版本号 —— 它只回答"迁移走到第几代"。
+ *
+ * 沿革：
+ *   · 1（2026-11-08）：版本号机制落地（此前全是幂等函数 + meta 标记位）。
+ *   · 2（2026-11-08）：回话消息清掉 `meta.progress`（历史过程收起行砍掉，见下方迁移）。
+ *   · 3（2026-11-08）：`users` 加 `nickname`（「我的」页昵称，与账号名分开；
+ *     迁移在 store/users.mjs，那边建 users 表并 ensureColumn）。
+ *   · 4（2026-11-09）：`project_tasks` 加 `assigneeGroupId` / `parentTaskId`
+ *     （团队协作模式：卡派给一个群，群助手动态承接；协作子卡挂主卡；
+ *     迁移在 store/projects.mjs，那边建 project_tasks 表并 ensureColumn）。
+ *   · 5（2026-11-09）：多机节点子系统删除，老库 DROP nodes / node_tokens /
+ *     node_invites / node_jobs / node_paths（无存量机；`node_tasks` 保留）。
+ */
+export const SCHEMA_VERSION = 5;
+
+const dbVersion = Number(db.prepare('PRAGMA user_version').get()?.user_version ?? 0);
+if (dbVersion > SCHEMA_VERSION) {
+  console.error(
+    [
+      '',
+      '班底：这个数据目录里的库比当前程序**新**，已停止启动以免写坏数据。',
+      `  库的版本：${dbVersion}    当前程序能处理的版本：${SCHEMA_VERSION}`,
+      `  数据目录：${dataDir}`,
+      '  处理办法（任选一条）：',
+      '    · 升级到新版班底再打开（推荐）；',
+      '    · 用 BANDI_DATA=<别的空目录> 先跑一份干净的，原数据留着不动。',
+      '',
+    ].join('\n'),
+  );
+  process.exit(1);
+}
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS personas (
     id            TEXT PRIMARY KEY,
@@ -243,8 +288,12 @@ export function ensureColumn(table, column, ddl) {
 
 ensureColumn('member_sessions', 'family', "family TEXT NOT NULL DEFAULT ''");
 
-// 「显示思考过程」：Codex 的 reasoning 事件关不掉（实测 summary=none / hide_agent_reasoning
-// / effort=minimal 都无效），所以这只能是平台层的显示开关。默认关：对话里只留他的回话。
+/*
+ * 「显示思考过程」（历史列，2026-11-08 晚起**不再读写**）：原来 Codex 的 reasoning 事件
+ * 关不掉（实测 summary=none / hide_agent_reasoning / effort=minimal 都无效），所以这只能是
+ * 平台层的显示开关。后来思考片段被并进实时气泡那行"在动"的日志里，配置项随之退场 ——
+ * 列留着不删（老库不做列重建的惯例，同 users 的 salt/hash），新代码一个字节都不碰它。
+ */
 
 ensureColumn('personas', 'showThinking', 'showThinking INTEGER NOT NULL DEFAULT 0');
 // 技能"暂停"状态：老库里挂上就是启用，补列即可
@@ -269,7 +318,7 @@ ensureColumn('personas', 'role', 'role TEXT');
  * 2026-10-23 前是秘书「喜儿」—— 名额换了人，机制没换）。
  *
  * 为什么用标记而不是"按名字认"：名字是给人看的，历史上有段时期用户还能改（"喜儿"改成"小秘"很正常）。
- * 系统要认的是"这一个"，所以认 id + 这个标记；改名不影响身份（跟参考产品的 system_key 同一个道理）。
+ * 系统要认的是"这一个"，所以认 id + 这个标记；改名不影响身份（与 system_key 同一个道理）。
  * （2026-10-22 收编后名字/岗位/指令也锁死了，路由层 E2055；store 层拦的只有"删"，语义同前：**不许丢**。）
  */
 
@@ -790,103 +839,6 @@ function migrateAddExecConversation() {
 }
 migrateAddExecConversation();
 
-/** 取（或建）某条工单的会话。kind='exec' + execScope 唯一，标题跟着源头刷新 */
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS nodes (
-    id           TEXT PRIMARY KEY,
-    label        TEXT NOT NULL,
-    platform     TEXT,
-    runtimes     TEXT,
-    registeredAt TEXT NOT NULL,
-    lastSeenAt   TEXT NOT NULL
-  );
-`);
-
-/*
- * `hostname` ＝ 那台机器**自报的事实**（`os.hostname()`）；`label` ＝ **人给它的称呼**。
- *
- * 为什么要分开（2026-10-16 加"重命名机器"时定的）：合成一个字段的后果是 ——
- * 用户把「DESKTOP-XXXXXXX」改叫「我的笔记本」，那台机器下次报到时又把自己的主机名顶上来，
- * 名字白改了。分开之后：主机名每次报到都更新，名字只在**没人起过名**时才跟着走。
- */
-
-ensureColumn('nodes', 'hostname', 'hostname TEXT');
-
-ensureColumn('nodes', 'renamed', 'renamed INTEGER NOT NULL DEFAULT 0');
-/*
- * `externals` ＝ 那台机器上"班底之外还要有的东西"的现状（现在只有 magpie：装了没、网关端口通不通）。
- * 跟 `runtimes` 一样**节点自己报** —— 那台机器上的事实，控制面判不了。
- */
-
-ensureColumn('nodes', 'externals', 'externals TEXT');
-/*
- * `lastUsedAt` ＝ 这台机器**最近一次真的用面板**是什么时候（2026-10-20，P1-3「最近使用」）。
- *
- * 为什么不用 `lastSeenAt`：那是**心跳**时间（15 秒一跳，只能说明进程活着）。
- * 「最近使用」问的是"人什么时候在这台机器上动过面板"，所以写点只有一个：
- * 一个 `panel` scope 的请求被放行时，**节流**写一次（`auth.decide` → 本文件 `touchNodeUsed`）。
- */
-
-ensureColumn('nodes', 'lastUsedAt', 'lastUsedAt TEXT');
-
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS node_jobs (
-    id        TEXT PRIMARY KEY,
-    runId     TEXT NOT NULL,
-    nodeId    TEXT NOT NULL,
-    family    TEXT NOT NULL,
-    model     TEXT,
-    sandbox   TEXT,
-    cwd       TEXT,
-    task      TEXT NOT NULL,
-    sessionId TEXT,
-    status    TEXT NOT NULL DEFAULT '待领',
-    createdAt TEXT NOT NULL,
-    claimedAt TEXT,
-    endedAt   TEXT,
-    progressAt TEXT
-  );
-  CREATE INDEX IF NOT EXISTS idx_node_jobs_queue ON node_jobs (nodeId, status, createdAt);
-`);
-
-/*
- * 这个活最后一次**有动静**是什么时候（节点每 2 秒的空批次也会刷新它）。
- * 掉线清扫靠它区分两件差别很大的事：
- *   · 一次都没动静 → 那边根本没开张，**放回队列**重派是安全的；
- *   · 有动静之后才断 → 副作用可能已经发生了一半，**不能**悄悄重跑。
- */
-
-ensureColumn('node_jobs', 'progressAt', 'progressAt TEXT');
-
-/*
- * 工作空间（2026-10-22）：这个活要用的 git 仓库，JSON `{fullName, branch}`。
- * 控制面发现 cwd 在某个已接入仓库里就把它记上 —— 节点拿到后**自己** clone/pull 到
- * 它数据目录的 repos/ 里干活。只发仓库全名与分支名，**不发总机的令牌、不发路径**：
- * 凭据各机各配（跟"连接器不下发"同一条安全线）。
- */
-
-ensureColumn('node_jobs', 'repo', 'repo TEXT');
-
-/*
- * 「这台机器上，总机的那个目录对应我哪儿的目录」——**非 git 项目**的工作空间映射表。
- * git 项目不用配（节点自动 clone）；普通文件夹项目（D 盘上随手建的一个目录）两边
- * 路径对不上，派活前控制面按这张表把 cwd 换成那台机器上的本地路径。
- * 映射存在**总机的库里**（nodeId 维度）：配置动作发生在控制面面板上，节点是只报事实的。
- */
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS node_paths (
-    nodeId     TEXT NOT NULL,
-    remotePath TEXT NOT NULL,
-    localPath  TEXT NOT NULL,
-    createdAt  TEXT NOT NULL,
-    PRIMARY KEY (nodeId, remotePath)
-  );
-`);
-
-
 db.exec(`
   CREATE TABLE IF NOT EXISTS node_tasks (
     id        TEXT PRIMARY KEY,
@@ -1031,6 +983,20 @@ export function backupTo(file) {
 }
 
 /*
+ * 2026-11-09：多机节点子系统彻底删除（用户拍板：无存量机）。
+ * 建表语句已随 store/nodes.mjs 一起删掉，老库里的残留表在这里清掉 —— 幂等，没有就跳过：
+ *   nodes        机器登记 / 心跳
+ *   node_tokens  每节点令牌（含 scope）
+ *   node_invites 一次性邀请码
+ *   node_jobs    派给节点的运行队列
+ *   node_paths   远程路径 ↔ 本机路径映射
+ * `node_tasks` **不动**：本机软件商店一键安装仍走这张表（nodeId 恒为 'local'）。
+ */
+for (const t of ['nodes', 'node_tokens', 'node_invites', 'node_jobs', 'node_paths']) {
+  db.exec(`DROP TABLE IF EXISTS ${t}`);
+}
+
+/*
  * 2026-11-07：本地账号凭据层与角色/菜单体系整体退场（账号挪到身份中枢，登录即全权）。
  * 这些表的建表语句随模块一起删掉了，老库里还躺着的副本在这里清掉 —— 幂等，没有就跳过：
  *   roles / role_menus / role_permissions   角色与菜单（授权改为「登录即全权」）
@@ -1050,4 +1016,40 @@ for (const t of [
   db.exec(`DROP TABLE IF EXISTS ${t}`);
 }
 
-/** 模块加载时跑一次：老技能名落到当前技能上（幂等，表里没有就什么都不做） */
+/*
+ * 2026-11-08：历史「过程收起行」整体砍掉（用户："运行进度卡是落库了吗？感觉也没啥用"）。
+ *
+ * 回话消息的 `meta.progress` 是服务端收尾时摘的运行快照（2026-11-05 加），界面拿它画
+ * 气泡顶上那行「✓ 意图 · N 步 · 用时 ▾」。现在渲染层和写入端都删了，老库里的副本
+ * 没有任何读者，留着只是让"这条消息的 meta 里到底有什么"多一层要人猜的历史层。
+ *
+ * 幂等：没有 progress 的行一行都不碰；`json_remove` 之后只剩空对象的直接把 meta 置 NULL
+ * （不然会留一堆 `'{}'`，读的时候还得判空）；meta 不是合法 JSON 的老脏行也跳过
+ * （`json_valid` 护栏 —— json_remove 遇到坏 JSON 会直接抛，迁移不能因为一行脏数据中断）。
+ */
+function migrateDropMessageProgress() {
+  const n = db
+    .prepare(
+      `UPDATE messages
+          SET meta = CASE WHEN json_remove(meta, '$.progress') = '{}' THEN NULL
+                          ELSE json_remove(meta, '$.progress') END
+        WHERE meta IS NOT NULL
+          AND json_valid(meta)
+          AND json_extract(meta, '$.progress') IS NOT NULL`,
+    )
+    .run();
+  if (n.changes) console.log(`[迁移] ${n.changes} 条回话消息清掉过程快照 meta.progress`);
+}
+
+migrateDropMessageProgress();
+
+/*
+ * ------------------------------------------------------------------ 版本号落地
+ *
+ * 放在**全部建表与迁移之后**：走到这里说明这一代迁移确实跑完了，再盖章。
+ * 只在真的变了时打印 —— 否则每次启动刷一行"0 → 1"，人就不看了。
+ */
+if (dbVersion < SCHEMA_VERSION) {
+  db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`); // 常量整数，不是外部输入
+  console.log(`[数据库] 结构版本 ${dbVersion} → ${SCHEMA_VERSION}`);
+}

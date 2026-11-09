@@ -86,15 +86,8 @@ await sleep(runs.STOP_WATCHDOG_MS + 1200);
 check('子进程 300ms 后正常退 → 状态同样落「已停止」', store.getRunStatus(r2.id)?.status === '已停止', store.getRunStatus(r2.id)?.status);
 check('这次也只有一条终止事件（看门狗没有重复收尾）', store.listRunEvents(r2.id, 0).filter((e) => JSON.parse(e.evt)?.type === '__done').length === 1);
 
-/* ===== 场景三：远端运行，节点不回执 → 看门狗同样兜底 ===== */
-ADAPTERS.codex = () => new Promise(() => {});
-const r3 = runs.startRun({ thread, member, task: '三', watermark: 0 });
-// 手工摆成远端形态：活已发出去、没有子进程可掐
-r3.remote = true;
-r3.abortController = null;
-runs.abortRemote(r3.id);
-await sleep(runs.STOP_WATCHDOG_MS + 1200);
-check('远端节点不回执也被看门狗收尾', store.getRunStatus(r3.id)?.status === '已停止', store.getRunStatus(r3.id)?.status);
+/* 场景三（远端运行/节点不回执）随多机节点子系统 2026-11-09 整体删除：
+ * 已无 remote run 与 abortRemote，看门狗只剩本机这一条路。 */
 
 try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* 临时目录，删不掉就算了 */ }
 console.log(failed ? `\n${failed} 项没过` : '\n全过');

@@ -1,6 +1,8 @@
 /* flowpages.mjs —— 起流程、流程实例页（流转记录）、节点栏（页面里的第二栏）、流程设计器（纵向）、设计器草稿（防意外关闭）。
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
-import { esc, personLabel, savePlace, setRoute, toast } from './shell.mjs';
+// openRoute：手机「直达实例页」返回时按来路画回上一层（见 flowDirectLeave）。
+// shell.mjs 也 import 本文件（ROUTES.flowRun）—— 本来就是环，两边都是函数声明，调用时才取。
+import { esc, openRoute, personLabel, savePlace, setRoute, toast } from './shell.mjs';
 import { api, createCombo, renderMarkdown, wireDialogHead } from './ui.mjs';
 import { load, setNav } from './state.mjs';
 import { headRow } from './connectors.mjs';
@@ -172,10 +174,73 @@ export function setListTitle(t) {
 /* -------------------------------------------------- 流程实例页（流转记录） */
 
 /**
+ * 手机「直达实例页」的来路：`{ view, ...params }`，拿不到就是 null。
+ *
+ * 2026-11-08 用户：「点返回还是能跳转到发起记录」—— 从看板 / 任务卡 / 会话带着具体
+ * 实例点进来时，这一页在手机上就是**整页**，返回该回**原来那一页**；不标记的话，
+ * mobile.mjs 的 leaveDetail 一收折叠态，人就落到这页左栏那份「发起记录」列表上，
+ * 平白多一个中间页。界面态用 `body.flow-direct-open` 让 mobile.mjs 给路，来路也写进
+ * 当前这格历史（`flowDirect`），刷新后依旧认得回去。
+ */
+let flFrom = null;
+
+/**
+ * 收「直达实例页」：画回上一层，再收拾折叠态。
+ *
+ * 两处顺序都有讲究：
+ *   · 先画、后摘 `mb-detail-open` —— 先摘的话，等上一层数据回来的那几十毫秒里，
+ *     屏幕上会闪一下这页的「发起记录」列表（正是要去掉的那个中间页）。
+ *   · 会话页**不摘**：聊天页靠 `mb-detail-open` 才让 main 露出来（见 mobile.css 的
+ *     `body:not(.mb-detail-open)... main { display:none }`），摘了就是一张空白页。
+ *     其余去处（看板 / 项目 / 任务卡）都是满屏页，留着它顶上反而多一条返回栏。
+ */
+async function flowDirectLeave() {
+  const from = flFrom;
+  flFrom = null;
+  const dest = from?.view && from.view !== 'flowRun' ? from : { view: 'taskBoard' };
+  // 来路不明（刷新直达 / 冷启动）也回看板 —— 别把人丢到中间那个列表上
+  const keepOpen = dest.view === 'conversation';
+  try {
+    await openRoute(dest);
+  } catch {
+    // 上一层画不出来也不能把人困在实例页：退回工作台
+    try { setNav('workbench'); } catch { /* 再不行就停在这儿 */ }
+  } finally {
+    document.body.classList.remove('flow-direct-open');
+    // mb-chat 是来路是会话时留下的（聊天页渲染时打上的），去看板不摘会歪
+    if (!keepOpen) document.body.classList.remove('mb-detail-open', 'mb-chat');
+  }
+}
+
+/*
+ * 「‹ 返回」/ Esc：mobile.mjs 看到 `flow-direct-open` 就把收场交给这里（见 leaveDetail 与
+ * popstate 的两处让路）。有自己压的那一格就退格 —— popstate 里统一收场，栈里不留幽灵格。
+ */
+document.addEventListener('flow-direct-leave', () => {
+  if (history.state?.flowDirect) { history.back(); return; }
+  flowDirectLeave().catch(() => {});
+});
+
+/* 手势返回 / 系统返回键：退掉了实例页那一格 = 回上一层 */
+window.addEventListener('popstate', () => {
+  if (!document.body.classList.contains('flow-direct-open')) return;
+  // 落点的 state 还带 flowDirect —— 是抽屉/选择页收掉自己那格，实例页还开着，放行
+  if (history.state?.flowDirect) return;
+  // 与任务卡同因：mobile.mjs 的 popstate 先注册，让它先把栈料理完再画
+  setTimeout(() => { flowDirectLeave().catch(() => {}); }, 0);
+});
+
+/**
  * 一条流程的实例页：**左边是发起记录，右边是流转节点记录**。
  * 要一眼看出三件事：走到哪个节点了、谁在干活、卡在哪了。
  */
 export async function openFlowRun(templateId, pickRunId) {
+  /*
+   * 来路，必须在下面 setRoute 之前读 —— 读完 S.route 就被改成 flowRun 了。
+   * 已经是 flowRun 的不算来路（页内点左栏「发起记录」那一行、发起完落回实例页）：
+   * 那些场景返回本来就该回列表本身。
+   */
+  const prevRoute = S.route && S.route.view !== 'flowRun' ? { ...S.route } : null;
   S.flowMode = 'run';
   S.flowTemplate = templateId ?? null;
   if (pickRunId) S.flowRunId = pickRunId;
@@ -209,6 +274,28 @@ export async function openFlowRun(templateId, pickRunId) {
   renderRunList();
   if (S.flowRunId) await paintRun(S.flowRunId);
   else renderRunEmpty();
+  // 手机直达实例页（2026-11-08 用户：「点击应该直接进度到任务卡，不应该有中间那个」）：
+  // 从看板/任务卡带着具体实例跳进来时，窄屏下列表和主区互斥、main 平时是藏的 ——
+  // 不处理的话人先看到「发起记录」列表、再点一行才能到实例，凭空多一步。
+  // 派 mb-detail 让 mobile.mjs 折叠列表、顶上出返回栏；浏览着进的（没带 pickRunId，
+  // 从「发起记录」入口进来）仍按老样子先看列表 —— 那本来就是这页的正面。
+  if (pickRunId && S.flowRunId && document.body.classList.contains('mb-narrow')) {
+    document.dispatchEvent(
+      new CustomEvent('mb-detail', { detail: { title: S.flowRun?.title || tpl?.name || '流程实例' } }),
+    );
+    /*
+     * 再把它标成「手机上的一整页」（2026-11-08 用户：「点返回还是能跳转到发起记录」）：
+     * 返回的目标是**点进来的那一页**（看板 / 任务卡 / 会话），不是这页左栏的「发起记录」。
+     * 来路优先取这次进来之前的 route；刷新恢复时 prevRoute 是空的，退回上一次存进历史格的来路。
+     */
+    const from = prevRoute ?? history.state?.flowDirect ?? null;
+    if (from) {
+      flFrom = from;
+      document.body.classList.add('flow-direct-open');
+      // mbDetail 照旧留着：别的层（抽屉 / 选择页）收自己那格时，界面态判断还认它
+      history.replaceState({ ...(history.state ?? {}), mbDetail: true, flowDirect: from }, '');
+    }
+  }
 }
 
 
@@ -1070,7 +1157,7 @@ export let ncStream = null;
 
  // 这一步正在跑的那次运行的实时流（app.js 里共用的 streamRun）
 
-/** 亮/灭「正在输入中」——**仿微信**：做成左边一个气泡（三个点依次跳），
+/** 亮/灭「正在输入中」：做成左边一个气泡（三个点依次跳），
  *  不是顶栏上的一行字。列表每次重画就被冲掉，所以这里每次重新插。 */
 export function setTyping(on) {
   // 他在办 → 发送键变成 DSH 那颗「停止生成」（方块）
@@ -1505,7 +1592,7 @@ export function nodeOf(id) {
 /**
  * 「谁来办」显示成什么：
  *   · 点名了人 → 人名
- *   · 没点名 → `未指定`（这一步到站就阻塞，等人指派；**不按技能顶人**）
+ *   · 没点名 → `未分配`（这一步到站就阻塞，等人指派；**不按技能顶人**）
  *
  * 节点上不再有"技能"这一维：技能是员工身上的能力，不是流程的路由键。
  * 而且不是每个节点都有对应技能 —— 所以这里连提示都不显示。
@@ -1516,7 +1603,7 @@ export function assigneeLabel(n, bare = false) {
     const p = (S.personas ?? []).find((x) => x.id === n.personaId);
     return p ? p.name : bare ? '' : '（点名的人不在了）';
   }
-  return bare ? '' : '未指定';
+  return bare ? '' : '未分配';
 }
 
 
@@ -1539,7 +1626,7 @@ export function mountAssigneePicker(view, sel) {
     placeholder: '搜名字…',
     empty: '没有匹配的人',
     value: sel.personaId || '',
-    items: [{ id: '', label: '不指定' }].concat((S.personas ?? []).map((p) => ({ id: p.id, label: personLabel(p) }))),
+    items: [{ id: '', label: '未分配' }].concat((S.personas ?? []).map((p) => ({ id: p.id, label: personLabel(p) }))),
     onChange: (id) => {
       const n = nodeOf(S.designerSel);
       if (!n) return;

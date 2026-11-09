@@ -14,9 +14,9 @@ import { $, S } from './core.mjs';
 import { SANDBOX_LABEL, sandboxItems } from './misc.mjs';
 // 运行进度：纯逻辑在 run-progress.mjs（冒烟在 Node 里测）；画卡片这一层在 run-progress-card.mjs
 // （对话页 / 任务卡讨论区共用同一份，2026-10-29 用户："对话里的那一套搬过来用"）
-import { fmtElapsed, fmtStepDur } from './run-progress.mjs';
+import { fmtElapsed } from './run-progress.mjs';
 import { createProgressCard } from './run-progress-card.mjs';
-import { createThinkingLive } from './thinking-live.mjs';
+import { createLiveAnswer } from './run-live.mjs';
 
 
 
@@ -742,8 +742,6 @@ export function bubble(role, text, name, who, showName = false, at = '', atts = 
   const attsHtml = attsHtmlOf(atts);
   // 卡票（2026-10-24）：PM 建卡 / 卡片回执这类消息带 meta，气泡顶上画一张可点的票
   const ticket = cardTicketHtml(meta);
-  // 过程收起行（2026-11-05）：跑过工具的回话，气泡顶上留一行「✓ 意图 · N 步 · 用时」
-  const progressNote = progressNoteHtml(meta);
   /*
    * 停止生成（2026-10-29 用户实报「点停止生成，对方的消息完全消失」）：
    * 人停的那一轮，回话是**掐在半句上**的（服务端带 meta.stopped 落库，见 runs.mjs 的 persistReply）。
@@ -758,53 +756,9 @@ export function bubble(role, text, name, who, showName = false, at = '', atts = 
     return `<div class="row ${mine ? 'me' : ''}${opts?.tight ? ' tight' : ''}${opts?.hideTime ? ' nt' : ''}">
     ${mine ? smAvatar('我', 'me') : smAvatar(label, '', p)}
     ${nameLine
-      ? `<div class="msg-main">${nameLine}<div class="bubble">${ticket}${progressNote}${renderMarkdown(text)}${attsHtml}${stoppedNote}</div></div>`
-      : `<div class="bubble">${ticket}${progressNote}${renderMarkdown(text)}${attsHtml}${stoppedNote}</div>`}
+      ? `<div class="msg-main">${nameLine}<div class="bubble">${ticket}${renderMarkdown(text)}${attsHtml}${stoppedNote}</div></div>`
+      : `<div class="bubble">${ticket}${renderMarkdown(text)}${attsHtml}${stoppedNote}</div>`}
     ${t ? `<div class="btime">${esc(t)}</div>` : ''}
-  </div>`;
-}
-
-/**
- * 过程收起行（2026-11-05 评鉴落地）：跑过工具的回话，气泡顶上一行
- * 「✓ 数代码量 · 2 步 · 19s ▾」，点开看每步（动词 + 目标 + 耗时/成败）——
- * "他到底查了啥"留在记录里，不用翻事件流。2026-11-05 二期起快照带 phases
- * （工具之间的正文当段标题），展开体按段画；老快照平铺，形状兼容。
- *
- * 数据是服务端收尾时写进 meta.progress 的快照（runs.mjs 的 progressMeta，
- * run_events 原样重放）—— 跟卡票同一哲学：快照在落库时刻写死，界面上不回查。
- * 没调过工具的回话没有这行（服务端就不落 progress）。
- * 展开体的行画法复用进度卡的 .rp-step 那套，形状跟实时卡片收尾那行一致。
- */
-function progressNoteHtml(meta) {
-  const p = meta?.progress;
-  if (!p || !Array.isArray(p.steps) || !p.steps.length) return '';
-  const cls = p.status === '失败' ? 'bad' : p.status === '已停止' ? 'warn' : 'ok';
-  const ico = p.status === '失败' ? '✗' : p.status === '已停止' ? '⏹' : '✓';
-  const title = p.intent ? (p.intent.length > 48 ? `${p.intent.slice(0, 48)}…` : p.intent) : p.status || '已结束';
-  const row = (s) => {
-    const sic = s.s === 'done' ? '✓' : s.s === 'error' ? '✗' : '·';
-    return `<div class="rp-step ${esc(s.s || '')}"><span class="rp-ic">${sic}</span><span class="rp-act">${esc(s.v)}${s.t ? ` <code>${esc(s.t)}</code>` : ''}</span>${s.ms != null ? `<span class="rp-dur">${fmtStepDur(s.ms)}</span>` : ''}</div>`;
-  };
-  /*
-   * 阶段分组（2026-11-05 二期）：快照带 phases（服务端 summarizeEvents 落的）就按段画，
-   * 段头一句人话 + "N 步"；老快照没有 phases → 平铺老路，形状照旧。
-   * 展开体只有一层（收起行 → 全部阶段），不再嵌套点击 —— 历史记录是翻的，不是盯的。
-   */
-  const phases = Array.isArray(p.phases) && p.phases.length >= 2 ? p.phases : null;
-  const metaTxt = phases
-    ? `${p.phases.length} 阶段 · ${p.steps.length} 步${p.elapsedMs != null ? ` · ${fmtElapsed(p.elapsedMs)}` : ''}`
-    : `${p.steps.length} 步${p.elapsedMs != null ? ` · ${fmtElapsed(p.elapsedMs)}` : ''}`;
-  const body = phases
-    ? phases
-        .map((g) => {
-          const t = g.t || '调用工具';
-          return `<div class="rp-ph"><span class="rp-ph-t" title="${esc(t)}">${esc(t)}</span><span class="rp-ph-n">${g.n} 步</span></div>${p.steps.slice(g.i, g.i + g.n).map(row).join('')}`;
-        })
-        .join('')
-    : p.steps.map(row).join('');
-  return `<div class="rp-note ${cls}">
-    <button type="button" class="rp-note-line" data-rp-note>${ico} <span class="rp-note-title">${esc(title)}</span><span class="rp-note-meta">${metaTxt}</span><span class="rp-note-arrow"></span></button>
-    <div class="rp-note-body" hidden>${body}</div>
   </div>`;
 }
 
@@ -850,8 +804,7 @@ export function cardTicketHtml(meta) {
   return inner;
 }
 
-/** 给画出来的卡票接上点击：主点击**在弹窗里**打开卡，「看板」进任务看板；窄屏摘要条管展开。
- *  顺带把气泡顶上别的可点附属物也接了 —— 过程收起行（data-rp-note）点行展开每步明细。 */
+/** 给画出来的卡票接上点击：主点击**在弹窗里**打开卡，「看板」进任务看板；窄屏摘要条管展开。 */
 export function wireCardTickets(root) {
   /*
    * 窄屏折叠摘要条（P1-4）：点摘要 → 内联展开/收起正文（就是下面那张完整的卡票，
@@ -864,17 +817,6 @@ export function wireCardTickets(root) {
       bodyEl.hidden = !bodyEl.hidden;
       const hint = f.querySelector('[data-mb-fold-hint]');
       if (hint) hint.textContent = bodyEl.hidden ? ' · 点击展开' : ' · 收起';
-    };
-  });
-  // 过程收起行（2026-11-05）：点行 → 展开/收起每步明细，跟窄屏卡票摘要条同一套交互
-  (root ?? $('chat')).querySelectorAll('[data-rp-note]').forEach((f) => {
-    f.onclick = () => {
-      const bodyEl = f.nextElementSibling;
-      if (!bodyEl) return;
-      bodyEl.hidden = !bodyEl.hidden;
-      // 箭头只切类：CSS 里 mask 的 chevron 转 -90°=收起朝右 / 0°=展开朝下（2026-11-05 用户拍板方向）
-      const arrow = f.querySelector('.rp-note-arrow');
-      if (arrow) arrow.classList.toggle('is-open', !bodyEl.hidden);
     };
   });
   (root ?? $('chat')).querySelectorAll('[data-card-ticket]').forEach((el) => {
@@ -1325,51 +1267,46 @@ export function attachStream(runId, whoName = '', startedAt = null) {
   const name = whoName || S.conversation.personaName || S.persona?.name || '数字员工';
   const convId = S.conversation.id;
   const id = 'live-' + runId;
-  /*
-   * 运行进度（2026-10-26）：原来这里只有一个"三个点"的 typing 气泡，人只能看出
-   * "他在动"，看不出走到哪、是不是卡住了。现在换成一块状态卡：
-   *   · 头一行：阶段 + 第几步 + 总用时（每秒走）；
-   *   · 第二行：最近一次工具动作 + 多久以前；无动静超过 5 分钟就变"可能卡住了"；
-   *   · 下面是工具卡片（第 N 步 · 动词 · 目标 · 耗时/成败）。
-   * 数据全部来自事件流（跟 `run_events` 同一份），刷新/重连时服务端会重放，不用另存。
-   */
   const begun = typeof startedAt === 'string' ? Date.parse(startedAt) : startedAt;
+  /*
+   * **一颗气泡**（2026-11-08 三版）：跑着的时候这颗泡里只有一行日志（run-progress-card 的
+   * 单行胶囊），真正的回复一到就原地顶掉它 —— 不再像二版那样"日志一颗粒 + 正文一颗泡"。
+   * 用户口径：「单行气泡刷日志，显示什么不重要，重要的是在动；真正的回复出来后代替它」。
+   * 做法：气泡先挂 .live-line（自己无框无底色，里面只放那颗胶囊）；正文进来时摘掉这个类、
+   * 移除胶囊，同一个 .bubble 就成了回话泡 —— 日志泡和回话泡是同一个元素，不并排出现。
+   */
   $('chat').insertAdjacentHTML('beforeend',
     `<div class="row" id="${id}">
        ${smAvatar(name, '', personaByName(name))}
-       <div class="bubble"></div>
+       <div class="bubble live-line"></div>
      </div>`);
   scrollDown();
 
   const body = document.querySelector('#' + id + ' .bubble');
   /*
-   * 运行进度（2026-10-26）：原来这里只有一个"三个点"的 typing 气泡，人只能看出
-   * "他在动"，看不出走到哪、是不是卡住了。现在是一块状态卡：
-   *   · 头一行：阶段 + 第几步 + 总用时（每秒走）；
-   *   · 第二行：最近一次工具动作 + 多久以前；无动静超过 5 分钟就变"可能卡住了"；
-   *   · 下面是工具卡片（第 N 步 · 动词 · 目标 · 耗时/成败）。
-   * 画卡片的代码 2026-10-29 拆成共用组件（run-progress-card.mjs）—— 任务卡讨论区
-   * 用的是同一套，别处再要"看得见他在干嘛"也接这一个。
-   * 数据全部来自事件流（跟 `run_events` 同一份），刷新/重连时服务端会重放，不用另存。
+   * 画卡片这一层 2026-10-29 拆成共用组件（run-progress-card.mjs）—— 任务卡讨论区用的是
+   * 同一套，别处再要"看得见他在干嘛"也接这一个；形状是那颗 30px 的单行胶囊（见 style.css
+   * 的 .rp 段）。数据全部来自事件流（跟 `run_events` 同一份），刷新/重连时服务端会重放。
+   * 思考片段固定也刷在这一行里（2026-11-08 晚：「思考过程」开关退场 —— 这一行显示什么
+   * 不重要，在动就行，所以不再给人留一个"内容显不显示"的配置）。
    */
   const card = createProgressCard({
     startedAt: Number.isFinite(begun) ? begun : Date.now(),
     onStop: () => stopChatRun().catch(() => {}),
   });
-  body.appendChild(card.el);
+  body.appendChild(card.el); // 胶囊就住在这颗泡里（泡此时是 .live-line，自己不画框）
   /*
-   * 开场白 = 意图（2026-11-05 评鉴落地）：第一件工具之前的回话是"他要干嘛"的人话
-   * （"我先看仓库结构，再数代码量"），进度卡拿它当标题（归约器里攒成 intent）。
-   * 它在正文里照常先流出来（不耽误看），第一件工具一到就整段收进标题 ——
-   * 不然同一句话说两遍；一次工具都没调（纯聊天）就一直在正文里，跟从前一字不差。
+   * 直播回话状态机（2026-11-08 起共用 run-live.mjs）：跑着时只留这一行日志；text 先攒着，
+   * 后面又来了工具事件就说明那段是"中间话"、丢掉；收尾时才是真正的回复 —— 由它顶掉日志行、
+   * 落进同一颗泡。任务卡讨论区接的是**同一份**（别再各写一套，2026-11-09 英文运行实报收口）。
    */
-  let sawTool = false;
-  const preface = [];
-  // 思考过程开关跟随**这轮的执行者**（2026-10-24 修群聊失效）：
-  // 会话上的 showThinking 是拿 conversations.personaId JOIN 员工表带出来的 ——
-  // 单聊有值；群建会话时 personaId 故意置空（见 store/conversations.mjs），JOIN 出来是
-  // NULL，以前这里就恒为 false，群里永远不显示。现在 NULL 时按正在干活的那个人的开关来。
-  const showThinking = (S.conversation?.showThinking ?? personaByName(name)?.showThinking) === 1;
+  const live = createLiveAnswer({
+    card,
+    host: body,
+    render: renderMarkdown,
+    onScroll: scrollDown,
+    onEnterAnswer: () => body.classList.remove('live-line'),
+  });
   const add = (cls, text, asHtml = false) => {
     const d = document.createElement('div');
     d.className = 'step ' + cls;
@@ -1379,10 +1316,6 @@ export function attachStream(runId, whoName = '', startedAt = null) {
   };
 
   let stopped = false;
-  // 思考直播块（thinking-live.mjs，2026-11-04）：首段思考到了才建（不开这个开关就
-  // 一行都不占）。原来每段思考 add 一行「· 思考：…」，模型的原始思维流四五段整段
-  // 摞在进度卡下面，把回话正文顶走（用户："这个看着怎么有点乱"）。
-  let think = null;
   const tick = setInterval(() => { if (!stopped) card.paint(); }, 1000);
 
   /**
@@ -1409,35 +1342,20 @@ export function attachStream(runId, whoName = '', startedAt = null) {
   S.es = streamRun(runId, {
     // 每个原始事件都喂给进度卡：dsh 的 tool_call/tool_result、codex 的 tool、
     // claude 的 status 都靠它 —— 旧的 onText/onTool 只覆盖了其中一部分。
-    onEvent: (evt) => {
-      if (!sawTool && (evt.type === 'tool' || evt.type === 'tool_call')) {
-        sawTool = true;
-        // 开场白收进卡片标题（它已经作为 intent 攒在归约器里），正文从现在起
-        // 只流工具之后的回话
-        preface.splice(0).forEach((d) => d.remove());
-      }
-      card.applyEvent(evt);
-    },
-    onText: (chunk) => {
-      const d = document.createElement('div');
-      d.className = 'step text';
-      d.innerHTML = renderMarkdown(chunk);
-      body.appendChild(d);
-      if (!sawTool) preface.push(d);
-      scrollDown();
-    },
-    onRunError: (msg) => { add('bad', '· ' + firstMeaningfulLine(msg)); card.paint(); },
-    onThinking: (t) => {
-      if (!showThinking) return;
-      if (!think) { think = createThinkingLive(); body.appendChild(think.el); }
-      think.push(t);
+    onEvent: (evt) => { live.applyEvent(evt); card.applyEvent(evt); },
+    onText: (chunk) => live.pushText(chunk),
+    onRunError: (msg) => {
+      live.enterAnswer(); // 报错也要露在明面上，不能藏在日志泡里
+      add('bad', '· ' + firstMeaningfulLine(msg));
       card.paint();
     },
     onDone: (evt) => {
+      live.flushPending();
       // 这一行只是"立刻给你一句"；跑完 300ms 后整页从库里重画，
       // 那时由 failBlock 把它**留在回话里**（见 timelineOf 的注释）
       if (evt.status !== '完成') {
         const why = firstMeaningfulLine(evt.error) || '运行失败';
+        if (!live.answerMode) live.enterAnswer();
         add('bad', `${why}（退出码 ${evt.exitCode}）`);
       }
       stop(evt.status);
@@ -1587,7 +1505,7 @@ export function updateMentionPop() {
         const p = (S.personas ?? []).find((x) => x.id === m.personaId);
         const img =
           p?.avatar && AVATAR_FILE.test(String(p.avatar))
-            ? `<img class="av-img" src="/avatars/${encodeURIComponent(String(p.avatar))}" alt="" onerror="this.remove()">`
+            ? `<img class="av-img" src="/avatars/${encodeURIComponent(String(p.avatar))}" alt="" loading="lazy" decoding="async" onerror="this.remove()">`
             : '';
         return `<div class="mp-item${i === mentionPop.index ? ' active' : ''}" data-i="${i}">
           <div class="mp-avatar">${esc(initial(m.name))}${img}</div>
@@ -2217,12 +2135,6 @@ function renderDetailMobile(persona, runtimes) {
                  value="${persona.maxParallel ?? ''}"
                  placeholder="6" />
         </div>
-        <div class="form-row">
-          <div class="row-label">思考过程</div>
-          <label class="switch sm">
-            <input type="checkbox" id="dThink" ${persona.showThinking ? 'checked' : ''} /><span></span>
-          </label>
-        </div>
       </div>
 
       <!-- 主动作通栏（§20.3）：桌面那颗挤在头右上角的小蓝钮在手机上又重又挤，
@@ -2397,7 +2309,7 @@ function renderDetailMobile(persona, runtimes) {
    *   · name 必填（缺了直接 E1011 拒掉）；
    *   · instructions 在路由里是无条件 `String(body.instructions ?? '')` —— 缺省会被兜成
    *     空串**清空职责设定**。
-   * 所以身份资料必须从现值原样带回；runtime / model / showThinking / maxParallel 四个才是
+   * 所以身份资料必须从现值原样带回；runtime / model / maxParallel 三个才是
    * 精简表单真正能改的字段（model 与桌面同一字段名：'' = 交给 CLI 自己的默认）。
    */
   const collect = () => ({
@@ -2407,7 +2319,6 @@ function renderDetailMobile(persona, runtimes) {
     instructions: persona.instructions ?? '',
     runtime: curRuntime,
     model: curModel,
-    showThinking: $('dThink').checked,
     // 空着 = 恢复默认（null）；数字服务端会钳位，这里只管传
     maxParallel: $('dMaxParallel').value.trim() === '' ? null : Number($('dMaxParallel').value),
   });
@@ -2454,7 +2365,6 @@ function renderDetailMobile(persona, runtimes) {
 
   $('dMaxParallel')?.addEventListener('input', () => scheduleSave(700));
   $('dMaxParallel')?.addEventListener('blur', () => saveNow());
-  $('dThink')?.addEventListener('change', () => scheduleSave(200));
 
   // 「发消息 / 回到聊天」：先落盘再跳（通讯录进来没有未保存表单，saveNow 按 lastSaved 直接跳过）
   $('dMsg').onclick = async () => { await saveNow(); openDirectChat(persona); };
@@ -2988,14 +2898,6 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
                          style="width:120px;text-align:center" value="${persona.maxParallel ?? ''}"
                          placeholder="6" />
                 </div>
-                <div class="form-row">
-                  <div class="row-label">思考过程</div>
-                  <!-- 开关（2026-10-20 用户："改成开关，文案不要"；"鼠标悬停提示去掉"）：
-                       开关本身就是状态，卡面与悬停都不留说明文字 -->
-                  <label class="switch sm">
-                    <input type="checkbox" id="dThink" ${persona.showThinking ? 'checked' : ''} /><span></span>
-                  </label>
-                </div>
               </div>
             </section>
 
@@ -3401,7 +3303,6 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
     model: modelCombo.value(),
     cwd: $('dCwd').value,
     rootDirs: $('dRoots').value.split('\n').map((s) => s.trim()).filter(Boolean),
-    showThinking: $('dThink').checked,
     // 空着 = 恢复默认（null）；数字服务端会钳位，这里只管传
     maxParallel: $('dMaxParallel').value.trim() === '' ? null : Number($('dMaxParallel').value),
   });
@@ -3470,7 +3371,6 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
     $(id)?.addEventListener('input', () => scheduleSave(700));
     $(id)?.addEventListener('blur', () => saveNow?.());
   }
-  $('dThink')?.addEventListener('change', () => scheduleSave(200));
 
   /* 更多操作（⋯）：点开才露删除。删除是破坏性动作，平时收起来，别让它跟「发消息」平起平坐 */
   $('dMore')?.addEventListener('click', (e) => {

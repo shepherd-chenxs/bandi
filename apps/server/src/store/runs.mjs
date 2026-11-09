@@ -100,20 +100,73 @@ export function finishRun(id, { status, exitCode = null, error = null, usage = n
 /* ---------------------------------------------------- 运行事件流（落库那份） */
 
 /**
+ * 单条运行事件的落库上限（2026-11-09，给增长封顶）。
+ *
+ * 为什么要有：`run_events` 是**整条工具输出原样落库**的（`detail.aggregated_output`），
+ * 一次 `dir /s` / `Get-ChildItem -Recurse` 就能到 1.2 MB；本机 3,925 条事件里前 10 条
+ * 就占了 3.6 MB。事件流是用来"看清他在干什么"的，不是归档日志原文的 —— 64 KB 已经
+ * 远超界面一屏（前端本来也是折叠展示）。超了就把长字符串截断，**仍是合法 JSON**
+ * （重放/SSE 都按 JSON 解析，不能把结构切坏）。
+ *
+ * 截断策略：先按 8 KB / 2 KB / 256 B 三档逐级压每个字符串字段；还超就退成
+ * `{type, truncated, originalBytes, note}` 的壳（至少还能看出"这是什么事件、被截了"）。
+ */
+export const RUN_EVENT_MAX_BYTES = 64 * 1024;
+const RUN_EVENT_TRUNC = '\n…（事件过大，已截断）';
+
+const byteLen = (s) => Buffer.byteLength(s);
+
+/** 深拷贝并把每个字符串压到 maxLen —— 只用于超限事件，正常事件不进来 */
+function capStrings(v, maxLen) {
+  if (typeof v === 'string') return v.length > maxLen ? v.slice(0, maxLen) + RUN_EVENT_TRUNC : v;
+  if (Array.isArray(v)) return v.map((x) => capStrings(x, maxLen));
+  if (v && typeof v === 'object') {
+    const out = {};
+    for (const k of Object.keys(v)) out[k] = capStrings(v[k], maxLen);
+    return out;
+  }
+  return v;
+}
+
+/**
+ * 序列化一条事件（超限则截断）。**落库和 SSE 广播共用这一份结果** ——
+ * 两边不一样的话，实时看到的是全文、刷新重放却是截断版，用户会以为丢了东西。
+ */
+export function stringifyRunEvent(evt) {
+  const full = JSON.stringify(evt);
+  if (byteLen(full) <= RUN_EVENT_MAX_BYTES) return full;
+  for (const cap of [8192, 2048, 256]) {
+    const json = JSON.stringify(capStrings(evt, cap));
+    if (byteLen(json) <= RUN_EVENT_MAX_BYTES) return json;
+  }
+  const bytes = byteLen(full);
+  return JSON.stringify({
+    type: String(evt?.type ?? 'raw'),
+    truncated: true,
+    originalBytes: bytes,
+    note: `事件过大（${bytes} 字节），内容已省略`,
+  });
+}
+
+/**
  * 落一条事件。`seq` 由调用方给（runs.mjs 在内存里递增，新运行从 1 起）。
  *
  * 用 `INSERT OR REPLACE` 而不是裸 `INSERT`：这条路径在**热路径**上
  * （适配器每吐一行 JSON 就走一次），抛异常会把整次运行的收尾带崩；
  * 而重复的 seq 在正常流程里不可能出现 —— 它就等于内存里那个计数器。
+ *
+ * 返回**真正落库的那份 JSON**（超限已截断）：广播要用同一份，见 stringifyRunEvent。
  */
 
 export function appendRunEvent(runId, seq, evt) {
+  const json = stringifyRunEvent(evt);
   db.prepare('INSERT OR REPLACE INTO run_events (runId, seq, evt, at) VALUES (?, ?, ?, ?)').run(
     runId,
     seq,
-    JSON.stringify(evt),
+    json,
     nowIso(),
   );
+  return json;
 }
 
 /**

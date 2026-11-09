@@ -5,13 +5,10 @@
  *     手机 / 浏览器永远连得进来；这是启动配置（部署 / 桌面壳）的事，界面上没有开关、
  *     没有「重启生效」、没有「只在本机使用」—— 曾经的 `allowLan` 键连同那套
  *     "改了还没生效"机制一起删掉了（配置总会有遗漏，漏出来的必须是安全的那边）。
- *   · `acceptNodes` —— **角色**：收不收别的机器作为算力节点加入（总机 / 分机）。
- *     纯运行期判定，**改完立刻生效**。总机 = 收节点、发邀请码；分机 = 手机照连、
- *     不收节点。
  *   · `pairEnabled` —— 已随手机配对体系整体退场（2026-11-07），老配置里留着也忽略。
  *
- * `acceptNodes` 没显式写过时回退看一眼老的 `allowLan`（true = 当年开过对外服务的总机）
- * —— 只为了升级那一刻：老配置文件（只有 allowLan:true）继续当总机，在跑的机器不降级。
+ * 多机节点子系统（`acceptNodes` 总机/分机角色）已于 2026-11-09 整体删除 ——
+ * 老配置文件里若还留着 `acceptNodes` 键，读的时候直接忽略。
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -33,7 +30,7 @@ export function readNetMode() {
   try {
     st = fs.statSync(FILE);
   } catch {
-    st = null; // 没这个文件 = 默认（分机、手机可配对）
+    st = null; // 没这个文件 = 默认
   }
   if (cache && st && cache.mtimeMs === st.mtimeMs) return cache.value;
   let j = {};
@@ -42,8 +39,6 @@ export function readNetMode() {
   } catch {
     j = {}; // 坏了 = 默认，口径与"没有文件"一致
   }
-  const acceptNodes =
-    typeof j?.acceptNodes === 'boolean' ? j.acceptNodes : j?.allowLan === true;
   /*
    * `whitelistEnabled` / `whitelistIps`（2026-11-03，对齐 1Panel 安全页的「授权 IP」）：
    * **网络周界闸** —— 开启后名单之外的 IP 连不上（security/ipallow.mjs 的 E3003）。
@@ -54,24 +49,33 @@ export function readNetMode() {
   const whitelistEnabled = j?.whitelistEnabled === true;
   const whitelistIps = Array.isArray(j?.whitelistIps) ? j.whitelistIps.map((x) => String(x)) : [];
   const boundDomain = typeof j?.boundDomain === 'string' ? j.boundDomain : '';
-  const value = { acceptNodes, whitelistEnabled, whitelistIps, boundDomain };
+  /*
+   * `remoteAccess`（2026-11-08）：「允许同账号设备连接」开关的**真源**。
+   * 关 = 非本机来源一律 403（E3005，guardNetwork 第一道），本机直连永远放行。
+   * **纯运行期判定，改完立刻生效** —— 这是它和 listenHost（bind 地址，重启才生效）
+   * 的本质区别：端口永远对外听着，放不放行是请求入口上一句话的事。
+   * 没写过 = true（行为不变，老配置文件里没有这个键）。
+   */
+  const remoteAccess = j?.remoteAccess !== false;
+  const value = { whitelistEnabled, whitelistIps, boundDomain, remoteAccess };
   if (st) cache = { mtimeMs: st.mtimeMs, value };
   return value;
 }
 
 /**
- * 写形态。只改显式给了的键（**部分更新**）—— 网络页只 POST `acceptNodes`、
- * 安全页只 POST 白名单/域名那几个键，谁也不许顺手动别人的键。
- * （`pairEnabled` 随手机配对体系退场：老配置文件里若还留着这个键，读的时候直接忽略。）
+ * 写形态。只改显式给了的键（**部分更新**）—— 安全页只 POST 白名单/域名/远程连接那几个键，
+ * 谁也不许顺手动别人的键。
+ * （`pairEnabled` / `acceptNodes` 已退场：老配置文件里若还留着这些键，读的时候直接忽略。）
  */
 export function writeNetMode(patch) {
   const cur = readNetMode();
   const next = {
-    acceptNodes: typeof patch?.acceptNodes === 'boolean' ? patch.acceptNodes : cur.acceptNodes,
     whitelistEnabled:
       typeof patch?.whitelistEnabled === 'boolean' ? patch.whitelistEnabled : cur.whitelistEnabled,
     whitelistIps: Array.isArray(patch?.whitelistIps) ? patch.whitelistIps : cur.whitelistIps,
     boundDomain: typeof patch?.boundDomain === 'string' ? patch.boundDomain : cur.boundDomain,
+    remoteAccess:
+      typeof patch?.remoteAccess === 'boolean' ? patch.remoteAccess : cur.remoteAccess,
   };
   fs.mkdirSync(path.dirname(FILE), { recursive: true });
   fs.writeFileSync(FILE, JSON.stringify(next, null, 2), 'utf8');
@@ -129,26 +133,4 @@ export function publicOrigin(req) {
 export function isLoopback(host) {
   const h = String(host ?? '').trim().toLowerCase();
   return h === '127.0.0.1' || h === 'localhost' || h === '::1';
-}
-
-/**
- * 这台机器**能不能被别的机器加入**（2026-10-20 增量 1；2026-11-01 晚改为角色驱动 —— 唯一判定）。
- *
- * `joinable = acceptNodes && !isLoopback(boundHost)`
- *
- *   · **角色**（`acceptNodes`）是主动的那一半：分机形态下不论监听什么地址，一律 false ——
- *     这台自己不收徒弟（不发邀请码、探测回来也是"不开放加入"），但照样对外服务、
- *     手机照样能连 ✓（用户 2026-11-01 定的形态）；
- *   · **可达**（`!isLoopback`）只是必要条件：监听被 `BANDI_HOST=127.0.0.1` 钉在回环上时
- *     别人根本连不进来，宣布可加入是说谎 ✗（调试场景才有的形态，2026-11-03 起默认就是 0.0.0.0）。
- *
- * 两个出口共用本函数、**不许各自再写一份**：`GET /api/hello`（server.mjs）与
- * `/api/lan`/模式卡（前端）。UDP 应答器已下线（2026-11-02，lan-announce.mjs 只剩状态存根）。
- *
- * @param {object} o
- * @param {boolean} o.acceptNodes 角色位（`netmode.readNetMode().acceptNodes`）：true=总机
- * @param {string}  o.boundHost   进程**现在实际**监听的地址（模块级 `boundHost`，现读）
- */
-export function isJoinable({ acceptNodes, boundHost } = {}) {
-  return acceptNodes === true && !isLoopback(boundHost);
 }

@@ -10,6 +10,8 @@
  *   · 回填语句固定带 `AND result='pending'`（并发下的幂等保证）；
  *   · 清理走 `archive()`：临时 DROP 删除触发器 → 搬 archive 表 → 删旧行 → 重建触发器，
  *     并往主表留一条 `kind='audit.archive'`。**不支持就地 UPDATE 改写历史。**
+ *   · 增长封顶（2026-11-09）：同类拒绝窗口内聚合（`deny()`，默认 60 秒）；
+ *     归档表按事件时间留 1 个月（`pruneArchive()`，启动时跑一次，留 `audit.prune` 痕）。
  *
  * 记录责任划分（§11.2）：
  *   · 401 / 403 拒绝 —— 策略层（guard / guardWrite / CSRF 闸）当场 `deny()`，handler 不参与；
@@ -76,8 +78,44 @@ export function add({ kind, actorKind = null, actorId = null, action = null, res
   return id;
 }
 
+/**
+ * 同类拒绝聚合（2026-11-09，降噪）。
+ *
+ * 为什么要有：401/403 是**按请求**记的，一个客户端只要在鉴权失效后还不停轮询
+ * （2026-11-08 前桌面壳探活打 `/api/state` 那种），5 天就能刷出 22 万行、占 25 MB。
+ * 真实的安全信号不是"同一件事重复了多少次"，而是"谁在打哪个口"——同一 (ip, 动作, 原因)
+ * 在窗口内只落**一行**，窗口过后再落一行并带上"期间还有 N 次"。
+ *
+ * 窗口内被压掉的次数记在内存里，进程重启归零 —— 审计是"请求级证据"，
+ * 不承诺跨重启的精确计数（要精确计数得给表加列，而主表是 append-only，改列不值当）。
+ * `BANDI_AUDIT_DENY_WINDOW_MS` 只给冒烟用（默认 60 秒）；设 0 = 关闭聚合。
+ */
+const DENY_WINDOW_MS = (() => {
+  const raw = Number(process.env.BANDI_AUDIT_DENY_WINDOW_MS);
+  if (!Number.isFinite(raw) || raw < 0) return 60_000;
+  return raw;
+})();
+/** 防内存无界：最多记这么多组 key，超了丢最老的（丢了顶多下一行不被合并，不会丢审计） */
+const DENY_SEEN_MAX = 2000;
+const denySeen = new Map();
+
 /** 拒绝类：当场写死 result='deny'（401/403/429 这类策略层拒绝） */
 export function deny(info) {
+  if (!DENY_WINDOW_MS) return add({ ...info, result: 'deny' });
+  const key = [info?.kind ?? '', info?.ip ?? '', info?.action ?? '', info?.reason ?? ''].join('\u0001');
+  const now = Date.now();
+  const hit = denySeen.get(key);
+  if (hit) {
+    if (now - hit.at < DENY_WINDOW_MS) {
+      hit.skipped += 1;
+      return null; // 窗口内：只计数，不落库
+    }
+    denySeen.delete(key);
+    const merged = hit.skipped ? `（窗口内另有 ${hit.skipped} 次同类拒绝）` : '';
+    return add({ ...info, result: 'deny', reason: info?.reason ? `${info.reason}${merged}` : merged || null });
+  }
+  denySeen.set(key, { at: now, skipped: 0 });
+  if (denySeen.size > DENY_SEEN_MAX) denySeen.delete(denySeen.keys().next().value);
   return add({ ...info, result: 'deny' });
 }
 
@@ -143,6 +181,32 @@ export function archive(days = 90) {
     restoreDeleteTrigger();
   }
   add({ kind: 'audit.archive', action: `archived ${n} events older than ${days}d`, result: 'ok' });
+  return n;
+}
+
+/**
+ * 归档表保留期（2026-11-09，给增长封顶）：搬进 archive 的行原先**永远不删** ——
+ * 主表有 90 天这条线，归档没有，于是它只增不减（本机 25.7 MB 里 94% 是 401 噪音）。
+ * 现在按事件时间留 **1 个月**（用户 2026-11-09 定）超了直接删；删完往主表留一条
+ * `audit.prune` 痕迹，跟 archive()/clearAll() 一样：**清理本身要可追溯**。
+ *
+ * 为什么 30 天：主表本身就留 90 天，所以归档主要服务的是「清空审计时的留档」——
+ * 90 天归档搬过去的老行会在同一次启动的 prune 里被删掉（>90 天必然 >30 天），符合预期：
+ * **超过 3 个月的数据不再保存**，别让归档变成第二份永久的库。
+ *
+ * 为什么 archive 表可以直接 DELETE：append-only 的两条触发器只装在**主表**
+ * （security_events）上；归档表本来就是"留档区"，没有触发器挡着（见文件头）。
+ */
+export const ARCHIVE_KEEP_DAYS = 30;
+
+export function pruneArchive(days = ARCHIVE_KEEP_DAYS) {
+  const keep = Math.max(1, Number(days) || ARCHIVE_KEEP_DAYS);
+  const cutoff = new Date(Date.now() - keep * 86400_000).toISOString();
+  // 老库第一次跑时 archive 表由建表语句建出来，这里不用再兜底
+  const n = db.prepare('SELECT COUNT(*) AS n FROM security_events_archive WHERE at < ?').get(cutoff).n;
+  if (!n) return 0;
+  db.prepare('DELETE FROM security_events_archive WHERE at < ?').run(cutoff);
+  add({ kind: 'audit.prune', action: `pruned ${n} archived events older than ${keep}d`, result: 'ok' });
   return n;
 }
 

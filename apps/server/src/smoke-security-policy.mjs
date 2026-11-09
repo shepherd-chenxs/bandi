@@ -4,11 +4,11 @@
  *        findRoute 优先级）；
  *   · B. 覆盖率扫描：routes/*.mjs + server.mjs 里出现的每个 /api 字面量必须已登记
  *     （"未登记即拒绝"的另一面 = "存在的接口必须登记"，漏登记 = 上线即 404 E4090）；
- *   · C. 身份 × 路由矩阵（调 PDP 纯函数 authorize）：operator / user / node / revoked
- *        四种身份对基线、管理面、节点自端点的判定；
+ *   · C. 身份 × 路由矩阵（调 PDP 纯函数 authorize）：operator / user / run 三种身份
+ *        对基线、管理面、运行钥匙专用口的判定；
  *   · D. 起真服务（回环形态，免鉴权 operator）冒烟：/api/hello 起得来、operator 全通；
  *   · E. 服务器形态（0.0.0.0）的真会话矩阵：中枢登录的普通用户摸原来 admin 专属的
- *        管理面 / 审计口（登录即全权），compute / panel / revoked 照旧各自有边界。
+ *        管理面 / 审计口（登录即全权），未登记路径照旧 404；本机安装任务通道可用。
  *
  * 跑法：`SMOKE_PORT=8908 node apps/server/src/smoke-security-policy.mjs`
  *   （端口从 process.env.SMOKE_PORT 派生，缺省 8908；D / E 先后共用同一端口）。
@@ -54,12 +54,13 @@ console.log('\nA. 清单与 PDP 的纯逻辑校验');
   check('清单无 perm/member/role 字段残留', stray.length === 0, stray.join(', '));
 }
 {
-  // 节点自端点必须排在通配 :id 条目之前（smoke-auth ⑥ 的教训：register 被 :id 抢走）
-  const idx = (id) => ROUTES.findIndex((r) => r.id === id);
-  check('nodes.register 登记在 nodes.one（/api/nodes/:id）之前', idx('nodes.register') < idx('nodes.one'), `${idx('nodes.register')} vs ${idx('nodes.one')}`);
-  check('/api/nodes/register 解析到 compute 条目', findRoute('/api/nodes/register', 'POST')?.id === 'nodes.register');
+  // 同一路径多方法/多登记时的优先级（smoke-auth ⑥ 的教训：方法感知别丢）
   check('/api/local/status 解析到 session 条目（分机状态页）', findRoute('/api/local/status', 'GET')?.id === 'local.status.forUser');
   check('POST /api/quota 解析到 noPanel 条目（方法感知）', findRoute('/api/quota', 'POST')?.id === 'quota.write' && findRoute('/api/quota', 'GET')?.id === 'quota.read');
+  check('本机安装任务三条都登记（原 nodes.dispatch 改挂 /api/install/tasks）',
+    findRoute('/api/install/tasks', 'POST')?.id === 'localTasks.dispatch'
+    && findRoute('/api/install/tasks', 'GET')?.id === 'localTasks.list'
+    && !!findRoute('/api/install/tasks/sp-t1', 'GET'));
 }
 
 /* ------------------------------------------------- B. 覆盖率扫描（静态） */
@@ -99,13 +100,9 @@ console.log('\nC. 身份 × 路由矩阵（PDP 纯函数 authorize）');
   const who = {
     operator: { kind: 'operator' },
     user: { kind: 'user' },
-    nodeCompute: { kind: 'node', scope: new Set(['compute']), nodeId: 'sp-node' },
-    nodePanel: { kind: 'node', scope: new Set(['panel']), nodeId: 'sp-node' },
-    revoked: { kind: 'revoked' },
+    run: { kind: 'run' },
   };
-  // compute 端点要过归属判定（nodeMayReach / runMayReach），这里给"自己能碰自己"的正样本
-  const reachRules = { nodeMayReach: () => true, runMayReach: () => true };
-  const a = (w, method, pathname, rules = {}) => authorize({ who: w, method, pathname, rules });
+  const a = (w, method, pathname) => authorize({ who: w, method, pathname });
 
   // operator：清单内全通（未登记由 guard 兜 404，PDP 不再二次挡）
   check('operator 读 /api/state → allow', a(who.operator, 'GET', '/api/state') === 'allow');
@@ -114,19 +111,15 @@ console.log('\nC. 身份 × 路由矩阵（PDP 纯函数 authorize）');
   check('user 读 /api/users → allow（登录即全权）', a(who.user, 'GET', '/api/users') === 'allow');
   check('user 读 /api/security/audit → allow（无 roleHasPerm 闸）', a(who.user, 'GET', '/api/security/audit') === 'allow');
 
-  // node（compute scope）：只许"自己的活"
-  check('compute 报到 → allow（nodes.register compute + 归属命中）', a(who.nodeCompute, 'POST', '/api/nodes/register', reachRules) === 'allow');
-  check('compute 心跳（自己 id）→ allow', a(who.nodeCompute, 'POST', '/api/nodes/sp-node/heartbeat', reachRules) === 'allow');
-  check('compute 发邀请码 → E4031（非 compute 且无 panel）', a(who.nodeCompute, 'POST', '/api/nodes/invites', reachRules) === 'E4031');
+  // run（运行钥匙）：只许清单标 run:true 的那几扇门
+  check('run 建卡 → allow（agent.cards run:true）', a(who.run, 'POST', '/api/agent/cards') === 'allow');
+  check('run 读台账 → allow（tasks.list run:true）', a(who.run, 'GET', '/api/tasks') === 'allow');
+  check('run 读用户 → E4034（users.list 没标 run）', a(who.run, 'GET', '/api/users') === 'E4034');
 
-  // node（panel scope）：看 + 用，管理面 noPanel 一律拒
-  check('panel 发邀请码 → E4032（nodes.invites noPanel）', a(who.nodePanel, 'POST', '/api/nodes/invites') === 'E4032');
-  check('panel 改模型路由 → E4032（quota.write noPanel）', a(who.nodePanel, 'POST', '/api/quota') === 'E4032');
-  check('panel 列目录 → E4032（fs.dirs noPanel，GET 也拒）', a(who.nodePanel, 'GET', '/api/fs/dirs') === 'E4032');
-  check('panel 报到 compute 端点 → allow（panel 不丢 compute 归属）', a(who.nodePanel, 'POST', '/api/nodes/register', reachRules) === 'allow');
-
-  // revoked：一律 E4012
-  check('revoked 任意接口 → E4012', a(who.revoked, 'GET', '/api/state') === 'E4012');
+  // 节点 / revoked 身份随多机子系统整体删除（2026-11-09）：identify 不会再吐出来，
+  // 真有人伪造 → 落兜底 E4031。
+  check('伪造 node 身份 → 兜底 E4031', authorize({ who: { kind: 'node' }, method: 'GET', pathname: '/api/state' }) === 'E4031');
+  check('伪造 revoked 身份 → 兜底 E4031', authorize({ who: { kind: 'revoked' }, method: 'GET', pathname: '/api/state' }) === 'E4031');
 }
 
 /* ----------------------------------------------------- D. 真服务冒烟 */
@@ -215,12 +208,6 @@ try {
 
   console.log('\nE. 真服务（0.0.0.0 服务器形态）：会话身份矩阵');
   await killAll();
-  /*
-   * 种总机形态（2026-11-02）：显式监听不再自动当总机 —— `acceptNodes` 没显式写过就跟随
-   * `allowLan`（默认 false），发邀请码会 409 E1091、后面整条节点链全连锁崩。这里的用例
-   * 就是要钉节点令牌的身份矩阵，所以先把 netmode.json 写成「总机 + 收节点」。
-   */
-  fs.writeFileSync(path.join(tmp, 'netmode.json'), JSON.stringify({ allowLan: true, acceptNodes: true }));
   const OP_TOKEN = 'sec-pol-op-token';
   const OP = () => ({ 'X-Bandi-Token': OP_TOKEN });
   startSrv({ BANDI_HOST: '0.0.0.0', BANDI_TOKEN: OP_TOKEN, BANDI_HUB: stub.url });
@@ -253,38 +240,26 @@ try {
   const unregByUser = await uj.call('GET', '/api/users/whatever/none');
   check('登录用户打未登记子路径 → 404 E4090（不是 403）', unregByUser.status === 404 && unregByUser.json?.code === 'E4090', `${unregByUser.status} ${unregByUser.json?.code}`);
 
-  // ③ compute 令牌：自端点可、管理面 E4031
-  const inv = await call('POST', '/api/nodes/invites', { headers: OP() });
-  check('发节点邀请码 → 201', inv.status === 201, String(inv.status));
-  const joined = await call('POST', '/api/nodes/join', { body: { code: inv.json?.code, id: 'sp-node', label: 'x', hostname: 'x', platform: 'linux', runtimes: [] } });
-  const bn = joined.json?.token ?? '';
-  check('节点加入 → 201 bn_ 令牌', joined.status === 201 && bn.startsWith('bn_'), String(joined.status));
-  const NB = { 'X-Bandi-Token': bn };
-  check('compute 报到 → 201', (await call('POST', '/api/nodes/register', { headers: NB, body: { id: 'sp-node', label: 'x', hostname: 'x', platform: 'linux', runtimes: [] } })).status === 201);
-  check('compute 心跳（自己的 id）→ 200', (await call('POST', '/api/nodes/sp-node/heartbeat', { headers: NB })).status === 200);
-  const devByNode = await call('GET', '/api/devices', { headers: NB });
-  check('compute 读设备 → 403 E4031', devByNode.status === 403 && devByNode.json?.code === 'E4031', `${devByNode.status} ${devByNode.json?.code}`);
-  const invByNode = await call('POST', '/api/nodes/invites', { headers: NB });
-  check('compute 发邀请码 → 403 E4031（compute: true 之外一律拒）', invByNode.status === 403 && invByNode.json?.code === 'E4031', String(invByNode.status));
+  // ③ 本机软件商店安装任务通道（原 /api/nodes/local/tasks 改挂，nodeId 恒 'local'）：
+  //    operator 的请求能进 handler（鉴权接缝钉住）。不真排任务 —— 用不认识的
+  //    外部件 id 打到 E1045 这一步（命令表查无此物，在入队之前就拒），零副作用。
+  const dispatch = await call('POST', '/api/install/tasks', { headers: OP(), body: { kind: 'external-install', family: 'smoke-不存在的部件' } });
+  check('operator 打安装任务通道 → 400 E1045（进到 handler、命令表查无此物）',
+    dispatch.status === 400 && dispatch.json?.code === 'E1045', `${dispatch.status} ${dispatch.json?.code ?? ''}`);
+  const badKind = await call('POST', '/api/install/tasks', { headers: OP(), body: { kind: '瞎写的', family: 'x' } });
+  check('不认识的 kind → 400 E1043', badKind.status === 400 && badKind.json?.code === 'E1043', String(badKind.json?.code));
+  const taskList = await call('GET', '/api/install/tasks', { headers: OP() });
+  check('安装任务列表可查 → 200', taskList.status === 200 && Array.isArray(taskList.json?.tasks), `${taskList.status}`);
 
-  // ④ panel 令牌：开面板 scope 后，看可以、管理动作 E4032
-  const scopeR = await call('POST', '/api/nodes/sp-node/scope', { headers: OP(), body: { scope: ['compute', 'panel'] } });
-  check('给节点开 panel scope → 2xx', scopeR.status < 300, `${scopeR.status} ${scopeR.json?.code ?? ''}`);
-  check('panel 读 /api/state → 200', (await call('GET', '/api/state', { headers: NB })).status === 200);
-  const invByPanel = await call('POST', '/api/nodes/invites', { headers: NB });
-  check('panel 发邀请码 → 403 E4032（noPanel）', invByPanel.status === 403 && invByPanel.json?.code === 'E4032', `${invByPanel.status} ${invByPanel.json?.code}`);
-  const quotaByPanel = await call('POST', '/api/quota', { headers: NB, body: {} });
-  check('panel 改模型路由 → 403 E4032', quotaByPanel.status === 403 && quotaByPanel.json?.code === 'E4032', String(quotaByPanel.status));
-  const fsByPanel = await call('GET', '/api/fs/dirs', { headers: NB });
-  check('panel 列目录 → 403 E4032', fsByPanel.status === 403 && fsByPanel.json?.code === 'E4032', String(fsByPanel.status));
+  // ④ 节点令牌体系整体删除（2026-11-09）：bn_ 令牌与任何错令牌同罪（401 E4010），
+  //    节点端点整条 404 E4090（默认拒绝 —— 接口不存在，不是权限不够）。
+  const bnCall = await call('GET', '/api/state', { headers: { 'X-Bandi-Token': 'bn_dead-prefix-token' } });
+  check('bn_ 假令牌 → 401 E4010', bnCall.status === 401 && bnCall.json?.code === 'E4010', `${bnCall.status} ${bnCall.json?.code ?? ''}`);
+  const deadJoin = await call('POST', '/api/nodes/join', { body: { code: 'bj_x', id: 'x' } });
+  check('POST /api/nodes/join → 404 E4090（端点已删）', deadJoin.status === 404 && deadJoin.json?.code === 'E4090', `${deadJoin.status} ${deadJoin.json?.code ?? ''}`);
 
   // ⑤ device 令牌那一段随手机配对体系退场（2026-11-07）：手机现在也是登录用户，
   //    没有"设备白名单"这层要钉了。
-
-  // ⑥ 撤销令牌：忘掉节点 → bn_ 变 revoked（E4012）
-  await call('DELETE', '/api/nodes/sp-node', { headers: OP() });
-  const hbAfterForget = await call('POST', '/api/nodes/sp-node/heartbeat', { headers: NB });
-  check('忘掉后旧 bn_ → 401 E4012', hbAfterForget.status === 401 && hbAfterForget.json?.code === 'E4012', `${hbAfterForget.status} ${hbAfterForget.json?.code}`);
 } catch (err) {
   check('流程没抛异常', false, String(err?.message ?? err).slice(0, 300));
 } finally {

@@ -11,6 +11,9 @@ desktop.ini
 __pycache__/
 *.py[cod]
 
+# Node 依赖目录（本仓库零依赖、正常不需要它；本机跑工具时若生成了也不入库）
+node_modules/
+
 # 本地试跑残留
 *.log
 tmp/
@@ -59,9 +62,7 @@ check.err
 # 随包分发的 Node 运行时（80 MB；打包前跑 node apps/desktop/fetch-node.mjs 取，绝不进版本控制）
 apps/desktop/binaries/
 
-# 随包分发的隧道客户端 frpc（约 15 MB；打包前跑 node apps/desktop/fetch-frpc.mjs 取）。
-# 不入库的原因和 node 一样：二进制不该进版本控制，而且平台不同取的那份也不同。
-vendor/frp/
+# （vendor/frp/ 已于 2026-11-08 移除：隧道客户端不再内置，需要时另外装）
 
 # 摊给安装包用的运行时副本（打包前跑 node apps/desktop/stage-runtime.mjs 生成；源头是 apps/ 与 skills/）
 apps/desktop/runtime/

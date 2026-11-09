@@ -12,8 +12,22 @@ description: 班底平台的值班手册 —— 服务起没起来、连的是�
 任何判断之前先取一次真实状态。**不要凭印象说"应该是……"**：
 
 ```bash
-curl -s --noproxy '*' "http://127.0.0.1:${BANDI_PORT:-18787}/api/state"
+curl -s --noproxy '*' -H "X-Bandi-Run-Token: ${BANDI_RUN_TOKEN}" \
+  "http://127.0.0.1:${BANDI_PORT:-18787}/api/state"
 ```
+
+> **带上运行钥匙**（2026-11-08 起）：服务端监听对外时会强制鉴权，本机 agent 进程拿环境变量
+> 里的 `BANDI_RUN_TOKEN`（每次 run 现发、收尾即作废）当凭据 —— 下文**每个平台请求**都要加
+> `-H "X-Bandi-Run-Token: ${BANDI_RUN_TOKEN}"`。**没有这个变量** = 你是远端节点上跑的活，
+> 够不着这台机器的台账，别硬造、直接说"够不着"。
+>
+> 运行钥匙只开放**只读台账**（状态 / 任务 / 项目 / 运行时 / 单人任务）与**建卡通道**；
+> 「建员工 / 改配置 / 停服务」这类写动作要**雇主在面板上做**（见 §四、§五）。
+>
+> **每轮现取，不许抄死**（2026-11-08 实报）：钥匙每轮都换，上一轮的已经作废。命令里写
+> `$env:BANDI_RUN_TOKEN`（PowerShell）/ `$BANDI_RUN_TOKEN`（bash）**现场取**，别把上一次
+> 命令里出现的字面值复制回来。看到 `401 E2056` = 用了旧/错钥匙：重取一次重试即可，
+> **不是没权限，也不要让雇主"重置 token"**（那东西不能重置）。
 
 > `--noproxy '*'` 不是可选。开发机上常常有全局代理，`curl` 访问回环地址也会走代理，
 > 拿回来的是 502 —— 那不是服务挂了，是请求根本没到。**去掉它报 502、加上它正常**，
@@ -38,7 +52,7 @@ curl -s --noproxy '*' "http://127.0.0.1:${BANDI_PORT:-18787}/api/state"
 
 按顺序排，不要跳步：
 
-1. **端口上有没有人**：`curl -s --noproxy '*' -o /dev/null -w '%{http_code}\n' "http://127.0.0.1:${BANDI_PORT:-18787}/api/state"`
+1. **端口上有没有人**：`curl -s --noproxy '*' -H "X-Bandi-Run-Token: ${BANDI_RUN_TOKEN}" -o /dev/null -w '%{http_code}\n' "http://127.0.0.1:${BANDI_PORT:-18787}/api/state"`
    - 返回 `200` → 服务活着，问题在界面或浏览器缓存，让他刷新（`Ctrl+F5`）。
    - 连接被拒 → 服务没起。往下走。
 2. **看日志尾巴**：数据目录下的 `server.log`（路径见首轮注入给你的「机器现状」）。
@@ -64,7 +78,8 @@ curl -s --noproxy '*' "http://127.0.0.1:${BANDI_PORT:-18787}/api/state"
 ## 三、agent CLI 没配好（能建人、不能干活）
 
 ```bash
-curl -s --noproxy '*' "http://127.0.0.1:${BANDI_PORT:-18787}/api/runtimes"
+curl -s --noproxy '*' -H "X-Bandi-Run-Token: ${BANDI_RUN_TOKEN}" \
+  "http://127.0.0.1:${BANDI_PORT:-18787}/api/runtimes"
 ```
 
 逐个看：
@@ -78,16 +93,22 @@ curl -s --noproxy '*' "http://127.0.0.1:${BANDI_PORT:-18787}/api/runtimes"
 
 ## 四、建一个数字员工
 
+> ⚠️ 强制鉴权形态下（服务端监听对外，默认就是），**运行钥匙只读**：建人 / 改人要由
+> 雇主在面板上操作；你负责把"要建谁、怎么配"讲清楚，别自己 POST/PUT —— 那会 403。
+> 回环免鉴权形态（本机桌面版）下你才真能建。
+
 顺序不能反：**先看有什么引擎，再定这个人怎么配**。
 
 ```bash
 # 1) 看引擎：记下可用的 id（enabled=true 且 blocked=false）
-curl -s --noproxy '*' "http://127.0.0.1:${BANDI_PORT:-18787}/api/runtimes"
+curl -s --noproxy '*' -H "X-Bandi-Run-Token: ${BANDI_RUN_TOKEN}" \
+  "http://127.0.0.1:${BANDI_PORT:-18787}/api/runtimes"
 
 # 2) 看技能库：这个人的活有没有现成的技能可挂
-curl -s --noproxy '*' "http://127.0.0.1:${BANDI_PORT:-18787}/api/skills"
+curl -s --noproxy '*' -H "X-Bandi-Run-Token: ${BANDI_RUN_TOKEN}" \
+  "http://127.0.0.1:${BANDI_PORT:-18787}/api/skills"
 
-# 3) 建人
+# 3) 建人（强制鉴权形态下需要雇主操作；回环形态才轮得到你）
 curl -s --noproxy '*' -X POST "http://127.0.0.1:${BANDI_PORT:-18787}/api/personas" \
   -H 'Content-Type: application/json' \
   -d '{"name":"小周","role":"前端","instructions":"你是这个团队的前端工程师……","runtime":"<上一步的 id>","sandbox":"danger-full-access","cwd":"<项目目录>"}'
@@ -102,9 +123,9 @@ curl -s --noproxy '*' -X POST "http://127.0.0.1:${BANDI_PORT:-18787}/api/persona
 
 **流程节点上点谁的名字，是流程的事，不是员工的事。** 建完人不等于他会自动接活。
 
-## 五、不许做的事
+## 五、分寸
 
-越界就停，把话交回给人：
+下面这些是"先说一句再做"，不是"拒绝干活"的借口（2026-11-09 措辞治理：原"越界就停"会把职责外的请求整体推掉，见 dispatch.constitutionBlock 的复盘注释）：
 
 - **不替任何人派活、不起流程实例。** 用户要干活，告诉他「去流程页发起、选谁」，让他自己点。
 - **不写业务代码、不改项目仓库里的东西。** 那是员工在流程里干的活。

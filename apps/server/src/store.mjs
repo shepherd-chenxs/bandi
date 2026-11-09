@@ -10,12 +10,15 @@
  *
  * 域地图：db=连接/建表/迁移 · personas=数字员工 · personaSkills=技能挂载 ·
  * conversations/messages/groups=会话与消息 · runs=一次执行及事件流 ·
- * projects/projectTasks=项目与看板卡 · nodes=节点/任务/作业/令牌 · workflows=流程引擎 ·
+ * projects/projectTasks=项目与看板卡 · nodeTasks=本机安装任务 · workflows=流程引擎 ·
  * quota=额度 · gitRepos=仓库 · schedules=定时任务 ·
  * users=账号与登录会话（2026-11-07 起只是中枢账号的本机影子，无密码）。
  */
 
 export { newId, nowIso, getMetaValue, setMetaValue, backupTo } from './store/db.mjs';
+// 状态词表（2026-11-08）：任务是八态、运行是六态，列怎么分、聊天怎么翻译，全在这一处。
+// **纯数据、不碰库** —— 所以看板、流程、冒烟都能直接 import，不会因为"要开库"而复制一份。
+export * from './store/status.mjs';
 export * from './store/personas.mjs';
 export * from './store/personaSkills.mjs';
 export * from './store/conversations.mjs';
@@ -24,7 +27,7 @@ export * from './store/groups.mjs';
 export * from './store/runs.mjs';
 export * from './store/projects.mjs';
 export * from './store/projectTasks.mjs';
-export * from './store/nodes.mjs';
+export * from './store/nodeTasks.mjs';
 export * from './store/workflows.mjs';
 export * from './store/quota.mjs';
 export * from './store/gitRepos.mjs';

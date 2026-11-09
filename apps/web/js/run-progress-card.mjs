@@ -30,6 +30,25 @@
  *     **阶段标题** —— 步骤列表从命令流水账变成"读手册 → 查官方库 → 搜社区"；
  *     分不出阶段（全程没说话）平铺老路，不为分组硬编故事。分组逻辑在
  *     run-progress.mjs 的 phaseGroups/withPhases（纯逻辑，冒烟能测）。
+ * 2026-11-08 单行气泡（用户："这个看着不好看，改成单行气泡刷日志更好看 ——
+ *   重要的不是显示的是什么，是在动"）：
+ *   · 多行卡（标题 + 阶段/步数 + 用时 + 摊开的步骤行）压成**一行**：日志写"此刻正在做
+ *     的那件事"，新动作到了上滑换掉 —— 视觉重心从"读信息"换回"他还在动"；
+ *   · 步数/用时/停止收到这一行的右端；卡住的原话（"最后动静 N 分钟前"）直接写进日志，
+ *     不再另起一行；
+ *   · 步骤明细没删：收尾后点这一行展开（任务卡页没有整页重画，那里还要能回看）。
+ * 2026-11-08 二版（用户实拍："我的是这个效果，跟你的图不一样"）：
+ *   · 一版只改皮、不换 DOM，卡片还 append 在正文气泡**里** —— 回话一长，那行就成了
+ *     "小字标题"。二版曾把卡片挂在 `.bubble` **前面**（`.live-col` 下两颗兄弟泡），
+ *     卡片自己才真的是一颗单行气泡；三版又收回同一颗泡里（见下）；
+ *   · 日志不再无条件挂"最后一步"：只有真在跑、或 20 秒内刚落下去的工具才占这一行，
+ *     否则报阶段（写回话 / 思考中）—— 以前模型早转去写回话了，这行还挂着上一个工具名。
+ * 2026-11-08 三版（用户："单行气泡刷日志…真正的回复出来后代替这个单行日志气泡"）：
+ *   · 胶囊就是**那颗泡**：chat.mjs 把它放进唯一一颗 `.bubble.live-line` 里，泡自己不画框；
+ *     真正的回复一到，chat.mjs 移除胶囊、摘掉 .live-line —— 同一个元素原地变回话泡；
+ *   · 日志内容优先级：报错/卡住 > 思考片段 > 正在跑的工具 > 阶段。思考不再另开灰字块，
+ *     就刷这一行（原来的思考直播块随之退场）；2026-11-08 晚「思考过程」开关也退场了 ——
+ *     这一行显示什么不重要、在动就行，不再留"内容显不显示"的配置给用户配。
  */
 import { esc } from './shell.mjs';
 import { applyRunEvent, clipEnds, createRunProgress, fmtAgo, fmtElapsed, fmtStepDur, progressView } from './run-progress.mjs';
@@ -42,9 +61,10 @@ export function createProgressCard({ startedAt = Date.now(), onStop = null } = {
   el.dataset.rp = '';
   el.innerHTML = `
     <div class="rp-head">
-      <span class="rp-dot"></span><span class="rp-phase">准备中</span>
+      <span class="rp-dot"></span>
+      <span class="rp-log"><span class="rp-phase">准备中</span></span>
       <span class="rp-meta"></span><span class="rp-time">00:00</span>
-      <button type="button" class="rp-stop" title="停止生成" hidden>■ 停止</button>
+      <button type="button" class="rp-stop" title="停止生成" hidden>停止</button>
     </div>
     <div class="rp-last" hidden></div>
     <div class="rp-steps"></div>`;
@@ -98,6 +118,33 @@ export function createProgressCard({ startedAt = Date.now(), onStop = null } = {
 
   /** 画一帧（调用方每秒也走一次：总用时、单步耗时、"多久没动静"都靠它） */
   let finishedPainted = false;
+  /**
+   * 日志行：只有**文字真变了**才换（2026-11-08）。
+   * 每秒重画一次是给计时用的，不是刷新文案 —— 同一句话重放动画，看着像界面在抽。
+   * 换的时候给新文字一个上滑淡入（.rp-roll）：胶囊高 32px、日志槽 overflow:hidden，
+   * 文字从下往上钻出来，就是"日志又刷了一行"的体感；这比多写两行信息有用得多。
+   */
+  let lastLogText = '';
+  /** 思考片段（三版）：thinking 事件到了就顶到日志行上，直到下一个工具/正文来把它换掉 */
+  let note = '';
+  const setLog = (text) => {
+    // 收尾那一帧把日志槽换成了折叠按钮；万一又要画回运行态（重连重放之类的边角），
+    // 把日志节点补回来，别让日志行整个消失
+    const wrap = el.querySelector('.rp-log');
+    if (wrap && !wrap.querySelector('.rp-phase')) {
+      wrap.innerHTML = '<span class="rp-phase"></span>';
+      lastLogText = '';
+    }
+    if (text === lastLogText) return;
+    lastLogText = text;
+    const n = el.querySelector('.rp-phase');
+    if (!n) return;
+    n.textContent = text;
+    n.classList.remove('rp-roll');
+    void n.offsetWidth; // 强制回流：同名类重加不会重播动画
+    n.classList.add('rp-roll');
+  };
+
   const paint = () => {
     const v = progressView(progress, Date.now());
     if (v.done) {
@@ -109,82 +156,94 @@ export function createProgressCard({ startedAt = Date.now(), onStop = null } = {
     finishedPainted = false;
     el.classList.toggle('warn', v.stalled);
     el.classList.toggle('done', false);
+    el.classList.toggle('error', !!v.error);
 
-    const phaseEl = el.querySelector('.rp-phase');
     /*
-     * 意图做标题（2026-11-05）：有意图且已经开跑工具才顶替机器词 ——
-     * 纯聊天（还没调工具）时正文正在下面流，标题再念一遍就是同一句话说两遍。
+     * 只有"真的在跑"的工具有资格占这一行（2026-11-08 二版）：
+     *   · currentStep = 有工具在跑，直接写它；
+     *   · 没有在跑的工具时，最后一步必须在**20 秒内**落下去过 —— 否则模型已经转去写回话、
+     *     想下一步了，这行还挂着上一个工具名，整块就像死在那儿
+     *     （用户实拍：日志写着"调用工具"廿四秒不动，下面正文早就在一行行流了）。
+     *     这时改报阶段（写回话 / 思考中），"在动"交给下面正在流的正文和呼吸点。
+     * 卡住时把判断直接写进这一行（旧版它单独占一行，胶囊里没那个地方）。
      */
-    const showIntent = !!(v.intent && v.stepCount);
-    phaseEl.textContent = showIntent ? v.intent : v.stalled ? '可能卡住了' : v.phaseText;
-    phaseEl.title = showIntent ? v.intent : '';
+    const fresh = v.lastAgoMs == null || v.lastAgoMs < 20000;
+    const live = v.currentStep || (v.phase === 'tool' && fresh ? v.lastStep : null);
+    const actOf = (s) => `${s.verb}${s.target ? ` ${s.target}` : ''}`;
+    /*
+     * 这一行的内容优先级（2026-11-08 三版）：报错/卡住 > 思考片段 > 正在跑的工具 > 阶段词。
+     * 用户口径："不一定是日志，可以是思考过程，可以是执行过程，显示什么不重要，在动就行" ——
+     * 所以哪个最新就报哪个，不存在"该显示哪一个"的纠结。
+     */
+    let logText;
+    if (v.stalled) logText = `可能卡住了 · 最后动静 ${fmtAgo(v.idleMs)}`;
+    else if (note) logText = note;
+    else if (live) logText = actOf(live);
+    else if (v.elapsedMs > 60000) logText = '还没有输出，模型可能还在排队';
+    else logText = v.phaseText;
+    setLog(logText);
+    // 意图（开场白）从标题降级成悬停提示：单行里它比"正在做的那件事"更长也更旧
+    el.querySelector('.rp-phase').title = v.intent || logText;
     el.querySelector('.rp-time').textContent = fmtElapsed(v.elapsedMs);
     // 停止钮常驻（收尾才隐掉）：打断是第一类操作，不等卡住 5 分钟才给
     el.querySelector('.rp-stop').hidden = false;
-    const meta = [];
-    if (v.stepCount) {
-      // 分得出来阶段时连段数一起报 —— "3 阶段 · 13 步"比光秃秃的"13 步"更像在说一件事
-      const phased = v.phases && v.phases.length >= 2;
-      meta.push(phased ? `${v.phases.length} 阶段 · ${v.stepCount} 步` : `${v.stepCount} 步`);
-    }
-    if (v.stalled) meta.push(`最后动静 ${fmtAgo(v.idleMs)}`);
-    el.querySelector('.rp-meta').textContent = meta.join(' · ');
+    el.querySelector('.rp-meta').textContent = v.stepCount ? `${v.stepCount} 步` : '';
 
     const lastEl = el.querySelector('.rp-last');
-    let lastText = '';
     /*
-     * "最近动作"行撤了（2026-11-05）：那行拼的就是最后一步（progressView 的 lastAction），
-     * 下面步骤列表里就有它 —— 只有一步时整行复读。留三个真正有信息量的分支：
-     * 卡住 / 出错 / 一分钟没动静。
+     * 第二行只留给"说不清就不该丢"的两种：出错原因 / 运行时给的原话。
+     * "最近动作"、"可能卡住了"、"一分钟没输出" 三个分支都进了上面那行日志 ——
+     * 正常跑动时整块**恒为一行**，这是这次改版的本体。
      */
-    if (v.stalled) {
-      // 停止钮已经在右上常驻，这里只把话说到：可以再等等
-      lastText = `可能卡住了：最后动静 ${fmtAgo(v.idleMs)}${v.lastAction ? `（${v.lastAction}）` : ''} —— 可以再等等，要停就点右上角`;
-    } else if (v.error) {
-      lastText = esc(v.error);
-    } else if (v.info) {
-      lastText = esc(v.info);
-    } else if (v.elapsedMs > 60000) {
-      // 一分多钟还没任何输出：模型首包本来就慢，但得让人知道不是界面坏了
-      lastText = '还没有任何输出（模型还在想，或者运行时在排队）';
-    }
+    let lastText = '';
+    if (v.error) lastText = esc(v.error);
+    else if (v.info) lastText = esc(v.info);
     lastEl.hidden = !lastText;
     lastEl.innerHTML = lastText;
     lastEl.classList.toggle('warn', v.stalled);
 
+    // 明细运行中一律收起（2026-11-08 单行气泡）：胶囊只报"此刻在做什么"，
+    // 想回看每步是收尾之后点胶囊的事 —— 也省掉每秒重画 8 行 DOM
     const stepsEl = el.querySelector('.rp-steps');
-    stepsEl.hidden = false;
-    stepsEl.innerHTML = stepsHtml(v);
+    stepsEl.hidden = true;
   };
 
   /**
-   * 收尾 = 收起成一行（2026-11-05）："✓ 意图 · N 步 · 用时 ▾"，点开看每步。
-   * 以前收尾把整卡定格摊开 —— 聊天页 300ms 后整页重画把它抹掉还好，
-   * 任务卡页没有重画，dead 卡片就一直占地方。收起行跟聊天记录里持久化的
-   * 那一行（meta.progress，见 chat.mjs 的 progressNoteHtml）是同一个形状。
+   * 收尾 = 胶囊原地定格成「✓ 意图 · N 步 ⌄」，用时留在右侧，点展开每步。
+   * 这一步只活在收尾到重画之间的那一瞬（聊天记录里**不再**持久化过程行，2026-11-08 v183）。
    */
   const paintFinished = (v) => {
-    el.classList.toggle('warn', false);
-    el.classList.toggle('done', true);
-    const phaseEl = el.querySelector('.rp-phase');
-    phaseEl.textContent = v.status || '已结束';
-    phaseEl.title = '';
+    el.classList.remove('warn');
+    el.classList.add('done');
+    const bad = v.phase === 'error';
+    el.classList.toggle('error', bad);
+    const n = v.steps.length;
+    const ico = bad ? '✗' : v.status === '已停止' ? '⏹' : '✓';
+    const label = bad ? '出错了' : (v.intent && n ? clipEnds(v.intent, 30) : v.status || '已结束');
+    const phCount = v.phases && v.phases.length >= 2 ? `${v.phases.length} 阶段 · ` : '';
+    /*
+     * 折叠头直接占日志槽（2026-11-08）：胶囊里没有第二行的位置。
+     * 箭头留在尾巴里不拆行（跟卡片时代同一条纪律：标签可以省，步数/箭头必须完整）。
+     */
+    el.querySelector('.rp-log').innerHTML =
+      `<button type="button" class="rp-fold" data-rp-fold><span class="rp-ic-t">${ico}</span>` +
+      `<span class="rp-fold-t">${esc(label)}</span>` +
+      `<span class="rp-fold-tail">${n ? `· ${phCount}${n} 步` : ''}<span class="rp-fold-arrow"></span></span></button>`;
+    lastLogText = '';
     el.querySelector('.rp-time').textContent = fmtElapsed(v.elapsedMs);
     el.querySelector('.rp-stop').hidden = true;
     el.querySelector('.rp-meta').textContent = '';
 
+    /*
+     * 失败时错误原文**要露在明面上**（2026-11-08）：胶囊只有"✗ 出错了"五个字，
+     * 原因折在明细里等于没说 —— 这条第二行是仅剩的例外，异常才破一次"恒为一行"。
+     * 两级来源都认：运行级 error 事件，或者某一步自己的报错（codex 系多半只有后者）。
+     */
+    const errText = v.error || (v.steps.find((s) => s.error)?.error ?? '');
     const lastEl = el.querySelector('.rp-last');
-    const n = v.steps.length;
-    const ico = v.phase === 'error' ? '✗' : v.status === '已停止' ? '⏹' : '✓';
-    const label = v.intent && n ? clipEnds(v.intent, 48) : v.status || '已结束';
-    const phCount = v.phases && v.phases.length >= 2 ? `${v.phases.length} 阶段 · ` : '';
-    lastEl.innerHTML =
-      `<button type="button" class="rp-fold" data-rp-fold>${ico} ${esc(label)}` +
-      // "· N 步 · 用时 ▾"包成一个不拆行的尾巴（2026-11-05）：标签可以换行，
-      // 步数/用时断在 token 中间是挤竖的另一种丑法 —— 跟头部 rp-meta/rp-time 同一条纪律
-      `<span class="rp-fold-tail">${n ? ` · ${phCount}${n} 步` : ''} · ${fmtElapsed(v.elapsedMs)}<span class="rp-fold-arrow"></span></span></button>`;
-    lastEl.hidden = false;
-    lastEl.classList.toggle('warn', false);
+    lastEl.innerHTML = errText ? `出错：${esc(errText)}` : '';
+    lastEl.hidden = !errText;
+    lastEl.classList.toggle('bad', !!errText);
 
     const stepsEl = el.querySelector('.rp-steps');
     // 步骤按**收尾时刻**重画一遍再收起来 —— 上一帧可能还没等到最后一步的结果
@@ -210,7 +269,21 @@ export function createProgressCard({ startedAt = Date.now(), onStop = null } = {
   });
 
   /** 每个原始事件喂进来（SSE 的 onEvent 原样转发即可） */
-  const applyEvent = (evt) => { applyRunEvent(progress, evt); paint(); };
+  const applyEvent = (evt) => {
+    applyRunEvent(progress, evt);
+    /*
+     * 思考片段进日志行（2026-11-08）：固定进 —— 这一行的职责是"看得见在动"，不挑内容。
+     * 工具/正文一到就把这个临时覆盖清掉，回到执行过程。原始思维流也就活在这一行里，
+     * 不再单独占版面（思考直播块与「思考过程」开关都已退场）。
+     */
+    if (evt && evt.type === 'thinking') {
+      const t = String(evt.text ?? '').replace(/\s+/g, ' ').trim();
+      if (t) note = '思考：' + clipEnds(t, 88);
+    } else if (evt && (evt.type === 'tool' || evt.type === 'tool_call' || evt.type === 'text')) {
+      note = '';
+    }
+    paint();
+  };
 
   /** 收尾定格："完成 / 已停止 / 失败 + 状态"，之后调用方自己停表 */
   const finish = (status) => {

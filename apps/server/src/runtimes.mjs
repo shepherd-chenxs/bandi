@@ -3,7 +3,6 @@ import path from 'node:path';
 import os from 'node:os';
 import { dataDir } from './config.mjs';
 import { pathDirs, wellKnownBins } from './path-env.mjs';
-import { listNodes, countNodeJobs, getNode, renameNode, scopeOfNode } from './store.mjs';
 import * as codex from './codex.mjs';
 import * as claude from './claude.mjs';
 import * as dsh from './dsh.mjs';
@@ -169,20 +168,8 @@ export function loadDevices() {
    */
   healLocalRuntimes(runtimes);
 
-  /*
-   * 已报到的节点也进这个列表 —— 它们的运行时**可以被派活**（2026-10-15 起领活做了）。
-   *
-   * ⚠️ 但它们是 `remote: true` 的：`runs.startRun` 见到这个标记就**不会在本机 spawn**，
-   * 而是把活放进队列等那台机器来领。这条分支就是当初那个"远程运行时不许进 loadDevices()"
-   * 的守卫的正式替代 —— 守卫是为了"别拿着别人的路径在本机起进程"，现在由分支保证同一件事，
-   * 而且不必再把节点挡在门外。
-   */
-  return [{ ...localDevice(saved), runtimes }, ...listNodes().map(nodeAsDevice)];
+  return [{ ...localDevice(saved), runtimes }];
 }
-
-/** 心跳节奏与掉线判据：15 秒一次，三个周期收不到就算掉线。**只在这里定义一次** */
-export const NODE_HEARTBEAT_SEC = 15;
-export const NODE_OFFLINE_AFTER_MS = NODE_HEARTBEAT_SEC * 3 * 1000;
 
 /**
  * **路径自愈**：控制面记的是"接进来那一刻的路径"，探测却每次重算。
@@ -213,7 +200,7 @@ function healLocalRuntimes(runtimes) {
     let saved = null;
     let changed = false;
     for (const r of runtimes) {
-      if (!r.enabled || r.remote) continue;
+      if (!r.enabled) continue;
       if (exists(r.path) && launchable(r.family, r.path)) continue;
       const ok = detectFamily(r.family).find((c) => c.usable);
       if (!ok || ok.path === r.path) continue;
@@ -239,104 +226,6 @@ function healLocalRuntimes(runtimes) {
 
 /** 防重入：见 healLocalRuntimes 里那个递归的注释 */
 let healing = false;
-
-/** 节点在不在线：三个心跳周期收不到就算掉线 */
-function nodeOnline(n, now = Date.now()) {
-  return now - Date.parse(n.lastSeenAt) < NODE_OFFLINE_AFTER_MS;
-}
-
-/** 节点 → 设备形状（内部用，带 runtimes；对外由 publicDevice 抹平） */
-function nodeAsDevice(n) {
-  const online = nodeOnline(n);
-  const declared = declaredRuntimesOf(n);
-  const runtimes = declared.map((r, i) => {
-    const fam = FAMILIES[r.family];
-    return {
-      id: `${n.id}:${r.family}${i ? `-${i}` : ''}`,
-      family: r.family,
-      adapter: fam?.adapter ?? r.family,
-      /*
-       * ⚠️ 名字里**必须带机器名**：不然两台机器都叫「Codex CLI」，
-       * 员工那个下拉里根本分不出活会落在哪台机器上（2026-10-14 实测踩到）。
-       */
-      label: `${r.label ?? fam?.label ?? r.family}（${n.label}）`,
-      // 节点不在线也**照样可派** —— 活排队等它回来，这就是"离线排队"
-      enabled: true,
-      remote: true,
-      deviceId: n.id,
-      deviceLabel: n.label,
-      nodeOnline: online,
-      // 路径是**那台机器上的事实**，本机判不了：用节点自报的，别在这儿 existsSync
-      path: r.path ?? '',
-      pathExists: r.usable !== false,
-      launchable: r.usable !== false,
-      sandboxes: fam?.sandboxes ?? [],
-      blocked: fam?.blocked ?? [],
-      note: '远程节点自报',
-      builtIn: false,
-    };
-  });
-  return {
-    id: n.id,
-    kind: 'node',
-    label: n.label,
-    // 主机名单独留着：标题给人起的名字，小字回真实主机名 —— 两台机器重名时才分得清谁是谁
-    hostname: n.hostname ?? n.label,
-    // 这个名字是不是人起的（决定那台机器下次报到时会不会被它自己的主机名顶掉）
-    renamed: !!n.renamed,
-    platform: n.platform,
-    host: null,
-    port: null,
-    user: null,
-    keyPath: null,
-    note: '远程节点（主动连出）',
-    online,
-    lastSeenAt: n.lastSeenAt,
-    /*
-     * **权限 scope**（2026-10-20，决策 A / P1-3）：设备详情那一行「这台能看到面板」用它。
-     * 来源是**令牌**（`node_tokens.scope`），不是 nodes 表 —— 多枚令牌取并集；
-     * `null` = 一枚有效令牌都没有（被「忘掉」过），那时它什么也做不了。
-     */
-    scope: scopeOfNode(n.id),
-    // 总机给这台机器指定的面板角色（空 = 用默认 node-ops）；设备详情那个下拉框要靠它回显
-    roleId: n.roleId ?? null,
-    // 「最近使用」= 真的用面板的时间（心跳是 lastSeenAt，两件事别混）
-    lastUsedAt: n.lastUsedAt ?? null,
-    heartbeatSeconds: NODE_HEARTBEAT_SEC,
-    // 队列里还压着多少活 —— 节点离线时这个数会一直涨，那就是"离线排队"看得见的样子
-    pendingJobs: countNodeJobs(n.id),
-    runtimes,
-    // 那台机器上"班底之外还要有的东西"的现状（它自己报的）—— 说明表与判定在 server 层配
-    externalsProbed: declaredExternalsOf(n),
-  };
-}
-
-/**
- * 节点清单（带运行时与队列深度）—— `/api/nodes` 用它。
- * 与 `/api/devices` 是**同一份映射**：节点出现在哪都长一个样，别各写一套。
- */
-export function publicNodes() {
-  return listNodes().map((n) => publicDevice(nodeAsDevice(n)));
-}
-
-function declaredRuntimesOf(n) {
-  try {
-    const a = JSON.parse(n.runtimes || '[]');
-    return Array.isArray(a) ? a : [];
-  } catch {
-    return [];
-  }
-}
-
-/** 那台机器自报的「外部件」现状（装了没、网关通不通）。**跟 runtimes 一样是它自己的事实** */
-function declaredExternalsOf(n) {
-  try {
-    const a = JSON.parse(n.externals || '[]');
-    return Array.isArray(a) ? a : [];
-  } catch {
-    return [];
-  }
-}
 
 export function getDevice(id) {
   return loadDevices().find((d) => d.id === id) ?? null;
@@ -371,10 +260,9 @@ export function resolveForRun(runtimeId) {
   return null;
 }
 
-/** 现在就能起活吗：启用的、有路径的、班底起得来的（远端那台能不能起是它自己的事） */
+/** 现在就能起活吗：启用的、有路径的、班底起得来的 */
 function usableNow(r) {
   if (!r || !r.enabled) return false;
-  if (r.remote) return true;
   return !!r.path && launchable(r.family, r.path);
 }
 
@@ -390,24 +278,19 @@ function ensureScoped(saved, deviceId) {
  *
  * 主机名（`os.hostname()`）是那台机器的事实；机器名是人给它的称呼（比如「我的笔记本」）。
  * 混成一个字段的后果：改完名，那台机器下次报到又把自己的主机名顶上来，白改。
- * 所以本机那份存在 `runtimes.json` 的 `devices.local.label`；节点那份存在控制面的 `nodes` 表
- * （那台机器下次报到也不会顶掉，见 `store.upsertNode` 里那条 CASE）。
+ * 所以本机那份存在 `runtimes.json` 的 `devices.local.label`。
  *
  * **传空 = 恢复默认**（回到主机名）。
  */
 export function renameDevice(deviceId, label) {
   const name = String(label ?? '').trim();
-  if (deviceId === LOCAL_ID) {
-    const saved = readSaved();
-    ensureScoped(saved, LOCAL_ID);
-    if (name) saved.devices[LOCAL_ID].label = name;
-    else delete saved.devices[LOCAL_ID].label;
-    writeSaved(saved);
-    return publicDeviceById(LOCAL_ID);
-  }
-  if (!getNode(deviceId)) return null; // 节点才允许这么改
-  renameNode(deviceId, name);
-  return publicDeviceById(deviceId);
+  if (deviceId !== LOCAL_ID) return null; // 现在只有本机一台设备
+  const saved = readSaved();
+  ensureScoped(saved, LOCAL_ID);
+  if (name) saved.devices[LOCAL_ID].label = name;
+  else delete saved.devices[LOCAL_ID].label;
+  writeSaved(saved);
+  return publicDeviceById(LOCAL_ID);
 }
 
 /** 本机设备：名字可以是人起过的（`devices.local.label`），主机名永远是 `os.hostname()` */
@@ -560,26 +443,16 @@ function publicRuntime(r) {
      * 这个实例记的那个文件还在不在。**和族级探测是两件事**：
      * 探测回答"这台机器上装了什么"，这一列回答"我记的这个位置还有效吗" ——
      * 用户手动指过路径、或那个 CLI 后来被卸载了，都会让它是 false。
-     *
-     * ⚠️ 远端运行时（`remote: true`）的路径在**那台机器**上，本机判不了 ——
-     * 那种情况用节点自报的值，绝不在这儿 existsSync。
-     *
-     * 这一条 2026-10-16 才补上：注释早就这么写着，代码却在下面**照样本机判** ——
-     * 于是控制面在火山（Linux）上，看着笔记本报来的 `D:\AppData\...`，
-     * `existsSync` 必然 false，三个运行时全被标成「班底起不来」。
-     * 本机看是好的（两边路径恰好都存在），一放到云端就露馅。
      */
-    pathExists: r.remote ? r.pathExists !== false : exists(r.path),
+    pathExists: exists(r.path),
     /*
      * 文件在，但**班底起不来**（比如指到了 .cmd shim）—— 和 `pathExists` 是两件事：
      * 前者只回答"文件在不在"，这一列回答"点了派活能不能真的跑起来"。
      * 纯扩展名判断，很便宜，所以能跟着列表一起发；界面据此在行上标出来，
      * 不用点进详情页才靠「检测」发现（2026-10-15 用户实报的正是这种：
      * 列表看着正常，点进去一检测就是 EINVAL）。
-     *
-     * 远端同理：**能不能起来是那台机器的事**，控制面只能信它自报的 `usable`。
      */
-    launchable: r.remote ? r.launchable !== false : launchable(r.family, r.path),
+    launchable: launchable(r.family, r.path),
     // 这条路径是**自动更正**过来的（旧的不能用了，见 healLocalRuntimes）—— 界面据此标一下
     ...(r.healedFrom ? { healedFrom: r.healedFrom } : {}),
     sandboxes: r.sandboxes,
@@ -587,8 +460,6 @@ function publicRuntime(r) {
     note: r.note,
     builtIn: r.builtIn,
     deviceId: r.deviceId,
-    // 远端那台机器上的运行时：可派活，但**控制面不 spawn 它**（见 runs.startRun 的分支）
-    ...(r.remote ? { remote: true, deviceLabel: r.deviceLabel, nodeOnline: r.nodeOnline } : {}),
   };
 }
 
@@ -607,25 +478,6 @@ function publicDevice(d, { withRuntimes = true } = {}) {
     keyPath: d.keyPath,
     note: d.note,
     runtimeCount: d.runtimes.length,
-    // 节点才有的几项：在不在线、上次心跳、队列里压着几个活
-    ...(d.kind === 'node'
-      ? {
-          online: d.online,
-          lastSeenAt: d.lastSeenAt,
-          /*
-           * 权限与"最近使用"（2026-10-20）：设备详情那一行「这台能看到面板 · 最近使用 …」。
-           * `scope` 是规范串（`'compute panel'` / `'compute'` / `'panel'`），`null` = 没有有效令牌。
-           */
-          scope: d.scope ?? null,
-          // 面板角色（2026-10-28 第四刀）：显示在设备详情那一行的下拉框里（`null` = 默认）
-          roleId: d.roleId ?? null,
-          lastUsedAt: d.lastUsedAt ?? null,
-          heartbeatSeconds: d.heartbeatSeconds,
-          pendingJobs: d.pendingJobs,
-          // 它自报的「外部件」现状 —— server 层会配上说明表一起发（见 withExternals）
-          externalsProbed: d.externalsProbed ?? [],
-        }
-      : {}),
     ...(withRuntimes ? { runtimes: d.runtimes.map(publicRuntime) } : {}),
   };
 }
@@ -642,9 +494,7 @@ export function publicDeviceById(id) {
 /**
  * 运行时的扁平清单 —— 员工配置里的「Runtime」下拉用它。
  *
- * 2026-10-15 起**远端节点的运行时也在这里**：于是"把这个人派到那台机器上"就是
- * 在下拉里选一个带节点前缀的 id（如 `node-abc:codex`），不用另造一套"指派机器"的交互 ——
- * 员工本来就绑 runtime，多机只是 runtime 多了一种。
+ * 员工本来就绑 runtime，设备只是 runtime 的归属（现在只有本机一台）。
  */
 export function publicList() {
   return loadDevices().flatMap((d) => d.runtimes.map(publicRuntime));

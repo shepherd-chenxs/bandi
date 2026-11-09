@@ -1,17 +1,15 @@
 /* routes/local.mjs —— 2026-10-22 由 server.mjs 按域拆出，handler 逻辑原样搬运。
- * 主分发顺序（先匹配先赢）见 ../server.mjs 的 CHAIN。 */
+ * **不在 routes/chain.mjs 上**：/api/local/* 判的是"本机身份"，排在认证之后、
+ * 正则链之前单独判一次（见 server.mjs 的 handleLocal）。登记仍在 route-policy 里。 */
 
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { sendJson, fail, readBody, readRawBody } from '../http.mjs';
-import { port, host, dataDir, dbPath } from '../config.mjs';
-import * as netmode from '../netmode.mjs';
+import { dataDir, dbPath } from '../config.mjs';
 import * as store from '../store.mjs';
-import * as runtimes from '../runtimes.mjs';
 import * as externals from '../externals.mjs';
-import * as status from '../status.mjs';
 import * as localMode from '../local-mode.mjs';
 // 本机接口的**接口级授权**（2026-10-31 IAM §8.5 / 姊妹文档 v5）：声明式、默认拒绝
 import { authorizeLocal } from '../security/local-policy.mjs';
@@ -24,60 +22,6 @@ import { sourceOf } from '../security/source.mjs';
  * 来源判定现在只有一处：`security/source.mjs` 的 `classifySource()`（guard 已经把结果挂在
  * `req.bandiSource` 上，`sourceOf(req)` 直接读它，不重算）。
  */
-
-/**
- * 节点守护进程（T03 的 `node-supervisor.mjs`）：起停与状态。
- *
- * 加载不到时返回 `null`，`/api/local/*` 照样能用（只是 `node.running:false`）——
- * 不让"少一个文件"变成整个本机接口 500。
- *
- * ⚠️ 现状（2026-11-04 记录）：模块其实在**上一层**（`apps/server/src/node-supervisor.mjs`），
- * 下面这行写的是 `'./'`，少一层 `../` —— 所以恒落 catch、**恒返回 null**，节点进程从来起不来。
- * 这是 2026-10-22「服务端按域拆分」把它搬进 `routes/` 时漏改路径留下的，**不是"模块还没落地"**。
- * **为什么暂不修**：修好等于恢复「加入即当算力」的真实行为 —— 会在本机拉起一个常驻节点
- * 子进程，属行为变化而不是修 bug。要先确认产品是否还留这条，再补 `smoke-lan-join` 的
- * `node.running` 断言（它现在不断言，所以从没红过），并走一轮实机验收（join → status → leave）。
- * 现状已如实回报：`/api/local/status` 的 `node.why` 会给出原因，不再静默。
- *
- * **导出**：server.mjs 的启动段（已加入 → 直接进节点形态）也要用它，别再复制一份。
- */
-export async function supervisorModule() {
-  try {
-    return await import('./node-supervisor.mjs');
-  } catch {
-    return null;
-  }
-}
-
-/** 节点守护接不上时对用户说的话：`/status` 与 join 返回共用一句，免得两处漂移 */
-const NODE_WHY_NOT_WIRED = '节点守护还没接上：配置已写，节点不会自己起';
-
-/** 节点进程现在在不在跑（`external:true` = 是 autostart 拉起的那个，不是我们起的） */
-async function localNodeStatus() {
-  const sup = await supervisorModule();
-  if (!sup) return { running: false, pid: null, external: false, why: NODE_WHY_NOT_WIRED };
-  try {
-    return sup.status();
-  } catch (e) {
-    return { running: false, pid: null, external: false, why: String(e?.message ?? e) };
-  }
-}
-
-/**
- * 这台机器上探到的 agent CLI（加入时随 body 报给总机）。
- *
- * 为什么在 server 侧算：`local-mode.mjs` **不许 import runtimes.mjs**（后者 import store，
- * 节点进程会因此去打开控制面库）。本函数与 `node.mjs` 的 `declared()` 同源、同形状。
- */
-function localDeclared() {
-  const out = [];
-  for (const fam of runtimes.detectAll()) {
-    const best = fam.candidates?.[0];
-    if (!best) continue;
-    out.push({ family: fam.id, label: fam.label, path: best.path, usable: !!best.usable });
-  }
-  return out;
-}
 
 /** 本机库的"路径 / 大小 / 最后修改 / 各有几条"（PRD P0-5：设置页常显这些东西） */
 function localDataInfo() {
@@ -102,41 +46,6 @@ function localDataInfo() {
       projects: store.listProjects().length,
     },
   };
-}
-
-/**
- * 「另一个数据目录里也有节点常驻」这条**预警**（设计 §14 第 1 条，产品已确认只提示不处理）。
- *
- * 由来：`autostart` 装的节点用 `%APPDATA%\bandi-node`，而瘦客户端的 `config.json` 在
- * `%APPDATA%\bandi` —— 两个 `node.json` 不同 → 总机上会出现**两台设备**，单实例锁也管不到
- * （不同目录，锁是每数据目录一把）。本次处置：**不迁移、不自动卸载**，只说一声。
- */
-function siblingDataDir() {
-  const guess =
-    process.platform === 'win32'
-      ? path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'bandi-node')
-      : path.join(path.dirname(dataDir), 'bandi-node');
-  return path.resolve(guess) === path.resolve(dataDir) ? null : guess;
-}
-
-function localWarnings() {
-  const out = [];
-  const mine = String(localMode.readClientConfig().controlPlane ?? '').trim();
-  const sibling = siblingDataDir();
-  if (!mine || !sibling) return out;
-  try {
-    const j = JSON.parse(fs.readFileSync(path.join(sibling, 'config.json'), 'utf8'));
-    const other = String(j?.controlPlane ?? '').trim();
-    if (other && other === mine) {
-      out.push(
-        `另一个数据目录（${sibling}）里也有一个节点常驻，它会让总机上多出一台设备。` +
-          '清理：node apps/server/src/autostart.mjs remove node',
-      );
-    }
-  } catch {
-    /* 没那个目录 / 没那个文件 / 坏了 —— 都不算问题 */
-  }
-  return out;
 }
 
 /** 导出落点的三级兜底：桌面 → 下载 → `<数据目录>/exports/`（逐级看是否真存在） */
@@ -217,10 +126,8 @@ function validateSnapshot(buf) {
 /**
  * `/api/local/*` —— **这台机器自己**的接口（2026-10-20，设计 §5.1-§5.7）。
  *
- * 为什么由本机处理：它读写的是**本机**的事实（`config.json`、本机库），总机那边没有这些；
- * 加入/退出两个入口也在它里面（client 形态已随反代移除，本机接口永远是本机答）。
- *
- * 六条：`GET status`、`POST probe / join / leave / export / import`（discover 已随 UDP 发现一并下线，2026-11-02）。
+ * 多机节点子系统（probe / hosts 通讯录 / join / leave）已于 2026-11-09 整体删除。
+ * 剩下：`GET status`、`GET externals`、`GET backups`、`POST export / import`。
  * **准入统一走 `security/local-policy.mjs`**（2026-10-31 起）：原来那句
  * `if (!isLoopbackRemote(...)) E1094` 既不分身份也不分动作，反代下还形同虚设。
  */
@@ -248,16 +155,15 @@ export async function handleLocal(req, res, url) {
   try {
     /* ---------------------------------------------------------------- 本机身份的唯一读数 */
     if (req.method === 'GET' && url.pathname === '/api/local/status') {
-      const st = localMode.status();
-      st.client.node = await localNodeStatus(); // 真实状态（未加入时永远是"没在跑"）
-      st.local = localDataInfo();
-      st.warnings = localWarnings();
-      return sendJson(res, 200, st), true;
+      return sendJson(res, 200, {
+        instanceId: localMode.instanceId(),
+        local: localDataInfo(),
+      }), true;
     }
 
     /* ------------------------------------------- 外部件（2026-11-04：插件页「软件」商店条目）
      * catalog = 界面要画的清单（含装法说明与官方下载口），probed = 这台机器的**现状**
-     * （装没装、网关/面板通不通）。只读 —— 安装不在这里排：走 /api/nodes/local/tasks
+     * （装没装、网关/面板通不通）。只读 —— 安装不在这里排：走 /api/install/tasks
      * 那条既有通路，命令仍只出自 externals 那张表（边界不变）。
      * tasks（2026-11-04 用户："点击之后显示安装状态"）＝ 每个软件**最近一次**装/起任务。
      * 进度只活在浏览器轮询里、一刷新就没 —— 这坑 2026-10-16 在运行时那侧踩过一次
@@ -276,151 +182,6 @@ export async function handleLocal(req, res, url) {
         catalog: externals.publicExternals(`${process.platform} ${process.arch}`),
         tasks,
       }), true;
-    }
-
-    /* ------------------------------------------------------------------------ 探一个地址 */
-    if (req.method === 'POST' && url.pathname === '/api/local/probe') {
-      const body = await readBody(req);
-      const host = await localMode.probe(body?.url); // 失败抛 LocalError（E1090/E1091/E1092/E2050）
-      return sendJson(res, 200, { host }), true;
-    }
-
-    /* ------------------------------------------- 主机列表（2026-10-21 增量：列表模型）
-     * add = 填了就入列（不拦探测；行上的「测试」负责验连接，2026-10-21 用户定）；
-     * test = 探一次，在列的顺带刷新该行；remove = 从通讯录移除。
-     * 三条都在上面那道**接口准入**之后（`security/local-policy.mjs`：operator/admin +
-     * 网络来源要 `X-Bandi-Local`），局域网里任何人改不了这台机器的通讯录。 */
-    if (req.method === 'POST' && url.pathname === '/api/local/hosts/add') {
-      const body = await readBody(req);
-      return sendJson(res, 201, await localMode.addHost(body?.url)), true;
-    }
-    if (req.method === 'POST' && url.pathname === '/api/local/hosts/test') {
-      const body = await readBody(req);
-      return sendJson(res, 200, await localMode.testHost(body?.url)), true;
-    }
-    if (req.method === 'POST' && url.pathname === '/api/local/hosts/remove') {
-      const body = await readBody(req);
-      return sendJson(res, 200, localMode.removeHost(body?.url)), true;
-    }
-
-    /* -------------------------------------------------------------------------- 加入 */
-    if (req.method === 'POST' && url.pathname === '/api/local/join') {
-      const body = await readBody(req);
-      /*
-       * 2026-10-21 拍板：**节点一律只当算力** —— 不信任前端的 scope，写死 compute。
-       * 总机侧的 scope 机制保留（存量令牌、设备详情还认它），但「加入」这条路不再产生 panel 令牌；
-       * 反代已整体移除，节点机的界面就是本地那份节点状态页。
-       */
-      const scopes = 'compute';
-      /*
-       * 顺序即设计 §5.5：已加入 → E1093；探地址（复用它那四个失败码）；换令牌；
-       * 写 `config.json`（写不进去 = 500 E1097，**此时还没动任何既有状态**）。
-       */
-      const joined = await localMode.join({
-        url: body?.url,
-        code: body?.code,
-        scopes,
-        runtimes: localDeclared(),
-        externals: await externals.declared(),
-      });
-
-      /*
-       * 第 6 步：**只有含 `compute` 才起节点**（写死 compute 后恒真；保留判据是防
-       * 旧配置里存过 panel-only 的 scope —— 那种机器不接活，不该被拉起节点）。
-       * spawn 失败**不回滚**：加入本身已经成功了（令牌拿到了、配置写好了），
-       * 返回 201 + `node:{running:false, why}`，节点下次会自己起。
-       */
-      let node = { running: false, pid: null, external: false };
-      if (joined.scope.includes(store.SCOPE_COMPUTE)) {
-        const sup = await supervisorModule();
-        if (sup) {
-          try {
-            node = sup.start();
-          } catch (e) {
-            node = { running: false, pid: null, external: false, why: String(e?.message ?? e) };
-          }
-        } else {
-          node = { running: false, pid: null, external: false, why: NODE_WHY_NOT_WIRED };
-        }
-      }
-
-      /*
-       * 加入 = 放弃本机总机角色（角色位关掉、立即生效）。监听地址**不动** ——
-       * 对外服务由部署配置钉死（2026-11-03 起），分机照样界面照开、手机照连。
-       */
-      try {
-        netmode.writeNetMode({ acceptNodes: false });
-      } catch (e) {
-        console.warn(`[本机] 加入后收起总机角色失败：${e?.message ?? e}`);
-      }
-      console.log(`[本机] 加入了「${joined.hostLabel}」（${joined.controlPlane}）· 只当算力（${joined.scope.join('+')}）`);
-      return sendJson(res, 201, {
-        ok: true,
-        hostLabel: joined.hostLabel,
-        hostHostname: joined.hostHostname,
-        controlPlane: joined.controlPlane,
-        scope: joined.scope,
-        node,
-      }), true;
-    }
-
-    /* ---------------------------------------------------------------------- 退出总机 */
-    if (req.method === 'POST' && url.pathname === '/api/local/leave') {
-      if (!localMode.isJoined()) {
-        return fail(res, 400, 'E1098', '这台机器还没加入任何总机'), true;
-      }
-      /*
-       * **先停节点，再清配置**（顺序不能反）：反过来的话，那个还活着的节点进程会拿着
-       * 刚被清掉的令牌再请求一次（401 `E4012`），日志里就是一堆看不懂的红字。
-       */
-      let killed = false;
-      let note = null;
-      let autoRemoved = false;
-      const sup = await supervisorModule();
-      if (sup) {
-        try {
-          const r = sup.stop();
-          killed = !!(r && (r.killed ?? r.stopped ?? r.ok));
-          if (r?.external && r?.stopped === false) {
-            /*
-             * 2026-10-21 修：开机自启拉起的节点原来只留一句提示 —— 界面照样说"退出成功"，
-             * 节点却拿着刚清掉的令牌空转（用户实报）。「退出总机」就是不再当节点，
-             * 所以这里**连自启一起收掉**：
-             *   · 先移除自启登记（Linux 那套 systemd remove 会顺手 --now 停掉）；
-             *   · 再按锁里的 PID 停进程（Windows 的 remove 只删启动脚本，不停进程）。
-             */
-            try {
-              const auto = await import('./autostart.mjs');
-              auto.remove('node');
-              autoRemoved = true;
-            } catch (e) {
-              note = `开机自启没移除成功：${e?.message ?? e}（手动：node apps/server/src/autostart.mjs remove node）`;
-            }
-            try {
-              const r2 = sup.stopExternal?.();
-              if (r2?.stopped) killed = true;
-              else if (r2?.mismatch) note = (note ? note + '；' : '') + '锁里的进程不是节点，没动它';
-              else if (r2?.running && !note) note = '节点进程没停掉；下次开机不会再自启';
-            } catch (e) {
-              note = (note ? note + '；' : '') + `停自启节点出错：${e?.message ?? e}`;
-            }
-          }
-        } catch (e) {
-          console.warn(`[本机] 停节点时出错（继续退出总机）：${e?.message ?? e}`);
-        }
-      }
-      const out = localMode.leave(); // 只清 config.json 里那七个字段，node.json 保留
-      /*
-       * 退出后**一定回分机**（角色位关掉、立即生效）——「退出总机，回到本机」：
-       * 本机数据原样、界面照开、手机照连，只是不再当任何总机的节点、也不收节点。
-       */
-      try {
-        netmode.writeNetMode({ acceptNodes: false });
-      } catch (e) {
-        console.warn(`[本机] 退出后收起总机角色失败：${e?.message ?? e}`);
-      }
-      console.log('[本机] 已退出总机 —— 本机数据原样（从来没被写过）');
-      return sendJson(res, 200, { ok: true, killed, autoRemoved, note, local: localDataInfo(), nodeId: out.nodeId }), true;
     }
 
     /* ------------------------------------------------------------------------ 导出 */

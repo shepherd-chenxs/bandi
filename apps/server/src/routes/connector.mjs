@@ -1,5 +1,5 @@
 /* routes/connector.mjs —— 2026-10-22 由 server.mjs 按域拆出，handler 逻辑原样搬运。
- * 主分发顺序（先匹配先赢）见 ../server.mjs 的 CHAIN。 */
+ * 主分发顺序（先匹配先赢）见 ./chain.mjs 的 CHAIN。 */
 
 import { sendJson, fail, readBody } from '../http.mjs';
 import * as runtimes from '../runtimes.mjs';
@@ -73,14 +73,3 @@ export async function handleConnector(req, res, url) {
 
   return false;
 }
-
-
-/* ------------------------------------------------------------------ 执行节点 */
-
-/*
- * 「节点 → 设备」的映射**只有一份**，在 `runtimes.mjs`（`nodeAsDevice` / `publicNodes`）。
- * 这里以前也写过一份 —— 于是同一个节点在设备列表里出现两次、两份逻辑还会各自漂。
- * 2026-10-15 收掉了：节点长什么样，只在那一处定义。
- */
-
-/** 节点接口：报到 / 心跳 / 清单 */

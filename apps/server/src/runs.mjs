@@ -2,13 +2,9 @@ import * as store from './store.mjs';
 import * as runtimes from './runtimes.mjs';
 import * as cliModels from './cli-models.mjs';
 import * as connectors from './connectors.mjs';
-import * as gitRepos from './git-repos.mjs';
 import { normalizeSandbox } from './sandbox.mjs';
 import { ADAPTERS } from './adapters.mjs';
-import { controlUrl, issueRunCredential, revokeRunCredential } from './agent-auth.mjs';
-// 收尾快照的归约器跟界面进度卡是同一份（apps/web/js/run-progress.mjs 刻意不碰 DOM，
-// 冒烟用例一直在 Node 里 import 它；服务端算 meta.progress 也用它 —— 别在那边碰 DOM）
-import { summarizeEvents } from '../../web/js/run-progress.mjs';
+import { controlUrl, issueRunCredential, isPmRole, revokeRunCredential } from './agent-auth.mjs';
 
 /**
  * 「这条会话在对面那个 CLI 里不存在」的报错特征。
@@ -31,8 +27,10 @@ const errorTextOf = (res) =>
 const runs = new Map();
 const MAX_KEPT_RUNS = 50;
 
-/** 写一条 SSE。**必须带 `id:`** —— 浏览器重连时把它放进 `Last-Event-ID`，服务端才能只补缺口 */
-const sse = (res, evt, seq) => res.write(`id: ${seq}\ndata: ${JSON.stringify(evt)}\n\n`);
+/** 写一条 SSE，payload 是**已经序列化好的 JSON**（落库那份；超限已在 store 里截断）。**必须带 `id:`** —— 浏览器重连时把它放进 `Last-Event-ID`，服务端才能只补缺口 */
+const sseJson = (res, json, seq) => res.write(`id: ${seq}\ndata: ${json}\n\n`);
+/** 对象版（回放库里的事件时用）：序列化交给 JSON.stringify，不再二次截断 */
+const sse = (res, evt, seq) => sseJson(res, JSON.stringify(evt), seq);
 
 /** 这一行是不是终止事件 */
 function isDoneRow(row) {
@@ -121,9 +119,11 @@ function pushEvent(run, evt) {
    * 这样停止时留下的就是"他刚才对我说到哪儿"的原文，不另造一句话。
    */
   if (evt.type === 'text' && typeof evt.text === 'string' && evt.text) run.streamedText += evt.text;
-  store.appendRunEvent(run.id, run.seq, evt);
+  // 落库与广播用**同一份序列化结果**：超过 64 KB 的事件在 appendRunEvent 里被截断，
+  // 实时流也发截断后的那份 —— 否则实时看全文、刷新重放却是短的，像是丢了内容。
+  const stored = store.appendRunEvent(run.id, run.seq, evt);
   for (const s of run.subs) {
-    sse(s, evt, run.seq);
+    sseJson(s, stored, run.seq);
     /*
      * 背压（2026-10-28 性能审查）：write 返回 false 且写缓冲积过 1MB = 客户端
      * 已经慢到压不动了，断开让它重连 —— 订阅是按 Last-Event-ID 补缺口的，
@@ -180,6 +180,41 @@ export function subscribe(runId, res, sinceSeq = 0) {
 }
 
 /**
+ * **运行钥匙的每轮提醒**（2026-11-08 全员群实报补）。
+ *
+ * 员工 CLI 的会话是续接的（codex resume / claude --resume），上一轮它可能把自己那次
+ * 用过的钥匙**字面值**写进了历史命令；而钥匙每轮现发、上一轮收尾即作废。真机实报：
+ * 贺韬把 15:49 那把 `rt-…` 抄进了命令，之后每轮的 `GET /api/projects` 都带着死钥匙
+ * → 401 E2056，他还判断成"通道没恢复、要雇主重置 token"。历史上下文改不了，所以每轮
+ * 都在任务**末尾**贴一句：现取环境变量、别抄旧值；顺便把两个错误码的意思说死。
+ */
+function runCredentialBrief(pm = false) {
+  return [
+    '【平台接口 · 运行钥匙】本轮环境变量 `BANDI_RUN_TOKEN` 是**这次运行现发**的钥匙（run 收尾作废，每轮都换）。',
+    '调平台接口（建卡 / 只读台账）时现场取：PowerShell 用 `$env:BANDI_RUN_TOKEN`，bash 用 `$BANDI_RUN_TOKEN`，请求头写 `X-Bandi-Run-Token: <这个值>`；',
+    '**不要把值抄进命令，也不要沿用历史命令里记得的旧值** —— 旧钥匙一定已作废。',
+    '错误码：`401 E2056` = 用了旧/错钥匙（重取一次重试，不是权限问题，不要让人重置 token）；`403 E4034` = 这个接口不归运行钥匙管。',
+    /*
+     * 项目经理的建卡口径（2026-11-09 重复建卡实报后每轮提醒）：
+     * 技能只在会话**首轮**注入，续接的会话读不到新技能 —— 贺韬那轮就是在旧会话里
+     * 把 5 张卡重发了遍、多出 10 张。所以每轮贴一句：走批量口 + 每张卡带稳定幂等键，
+     * 重发天然安全（同一 key 只会返回已有卡，不会多建）。
+     */
+    ...(pm
+      ? [
+          '建卡：走 `POST /api/agent/cards/batch`（一次一批，最多 20 张），**每张卡带稳定的 `idempotencyKey`** —— 重发命中幂等、不会建出第二张；别一张张发，也别怕重发前先查台账。',
+          /*
+           * 2026-11-09 实报（用户："汇报没有重点…说 next 我以为他会安排，结果停掉了"）：
+           * 汇报格式必须每轮都讲（技能只在会话首轮注入）；同时告诉他**他能闭环**（PATCH 改卡）。
+           */
+          '汇报（每轮都算，模板见 `bandi-report` 技能）：第一行给**结论**（做完没 / 卡在哪）→ 最多 3 条**带证据**的依据（卡号、运行 id、字段）→ 末行只写**这一轮已做完的动作**；要人拍板的单列「需要你拍板：…（为什么只能你定）」。**别写完 "Next:" 就停** —— 这轮能做的（改卡退待办/重跑/改派/取消、建卡）先做完；实在要等就写清在等什么、下一轮盯什么。',
+          '改卡：`PATCH $BANDI_CONTROL_URL/api/projects/tasks/<卡id>`（status / description / assigneePersonaId / startNow=true 重跑）—— 只对你建的卡，或你当群助手那张团队卡。',
+        ]
+      : []),
+  ].join('\n');
+}
+
+/**
  * 起一次运行。排队式：一个会话同一时间只允许一次运行（在 server 层拦）。
  *
  * @param thread     会话（1:1 或群）行
@@ -233,7 +268,7 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
     // 这次执行的 session 作用域（'' = 普通会话；'wf:<流程实例id>' = 某条流程）。
     // 发起新流程 = 换作用域 = 从零开一条会话（见 dispatch.sessionScopeOf）
     sessionScope,
-    // 读到的那条消息的水位线，跑完回写（远端那条路要留着，收尾时用）
+    // 读到的那条消息的水位线，跑完回写
     watermark,
     status: '跑中',
     // 事件序号（SSE 的 `id:`）。**每次运行自己从 1 起**，不是全局计数器 ——
@@ -260,7 +295,7 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
     /* auto 挑不到时说人话：不是"auto 不存在"，是这台机器上还没有一个能用的运行时
        （用户看到的旧文案是「运行时「auto」不存在」，对着设置页根本找不到叫 auto 的东西） */
     const err = !rt && runtime === 'auto'
-      ? '自动：这台机器上还没有能用的运行时 —— 去「设置 → 运行时」接一个（本机或节点都行）'
+      ? '自动：这台机器上还没有能用的运行时 —— 去「设置 → 运行时」接一个'
       : `运行时「${runtime}」${rt ? '已被停用' : '不存在'} —— 去「设置 → 运行时」看看`;
     finish(run, {
       status: '失败',
@@ -271,22 +306,14 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
   }
 
   /*
-   * 远端节点：**控制面一个子进程都不起** —— 把活放进队列，等那台机器的节点来领。
-   *
-   * 这一步就是"多台电脑一起干活"的落点，也是"离线排队"的**全部实现**：
-   * 节点不在线时，活就一直躺在队列里（见 store 里 `node_jobs` 那段注释）。
-   * 排在"按协议族选适配器"之前：远端用什么路径、起不起得来，是**那台机器**的事，
-   * 控制面既不知道也不该猜。
+   * **工作证**（agent-auth，2026-10-24）：本地跑的运行发一把一次性钥匙，agent 凭它
+   * 调专用接口（现在是建卡，见 routes/agent-cards.mjs）。钥匙在 run 收尾时吊销。
    */
-  if (rt.remote) {
-    return queueRemoteRun(run, { thread, rt, task, member });
-  }
-
-  // **工作证**（agent-auth，2026-10-24）：本地跑的运行发一把一次性钥匙，agent 凭它
-  // 调专用接口（现在是建卡，见 routes/agent-cards.mjs）。钥匙在 run 收尾时吊销。
-  // 远端节点的活不发 —— agent 不在本机，控制面的回环地址对它没意义。
   const cred = issueRunCredential(run.id, personaId, { local: true });
   run.agentEnv = cred ? { BANDI_CONTROL_URL: controlUrl, BANDI_RUN_TOKEN: cred.token } : {};
+  // 每轮把"钥匙现取、别抄旧值"贴在任务末尾（见 runCredentialBrief 的说明）；
+  // PM 再多一句建卡口径（续接会话读不到新技能，这行每轮都在）
+  const agentTask = cred ? `${task}\n\n${runCredentialBrief(isPmRole(store.getPersona(personaId)?.role))}` : task;
 
   // 按**协议族**选适配器：同一族下可以有多个实例，它们共用一套事件解析
   const adapter = ADAPTERS[rt.adapter];
@@ -371,7 +398,7 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
   const runOnce = (sid) => {
     const held = [];
     const p = adapter({
-      task,
+      task: agentTask,
       sessionId: sid,
       cwd: member.cwd || undefined,
       roots: member.roots ?? [],
@@ -469,9 +496,8 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
       const ok = !res.isError && (res.exitCode == null || res.exitCode === 0);
       const status = stopped ? '已停止' : ok ? '完成' : '失败';
 
-      // 回话落库（见 persistReply）。人停的那一轮也要落 —— 带 meta.stopped 给界面标「已停止生成」；
-      // 跑过工具的带 meta.progress（过程快照，界面在气泡顶上收成一行）
-      persistReply(run, run.finalText, replyMeta(run, { stopped, status }));
+      // 回话落库（见 persistReply）。人停的那一轮也要落 —— 带 meta.stopped 给界面标「已停止生成」
+      persistReply(run, run.finalText, replyMeta({ stopped }));
 
       finish(run, {
         status,
@@ -508,140 +534,6 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
     });
 
   return run;
-}
-
-/* --------------------------------------------------------- 远端节点那条路 */
-
-/**
- * 把这次执行交给某台机器：**放进队列**，等那台机器的节点来领（长轮询，不引 WebSocket）。
- *
- * 控制面这边**照样建一个内存里的 run 对象** —— 于是事件广播、SSE 的 `id:`、落库后的回放、
- * 收尾那一整套全都**复用本机那条路**，只是事件从 HTTP 来、不是从子进程来。
- * 少一套"远端专用"的管线，就少一处只有多机才暴露的坑。
- */
-function queueRemoteRun(run, { thread, rt, task, member }) {
-  const ms = store.getMemberSession(thread.id, run.personaId, run.sessionScope);
-  // 同上：那个 sessionId 是**记录里那个族**的，由别的族来 resume 必然找不到
-  const remoteSession = ms?.sessionId && (!ms.family || ms.family === rt.family) ? ms.sessionId : null;
-
-  /*
-   * 工作空间（2026-10-22）：`member.cwd` 是**这台机器**的路径，节点那台未必有。
-   * 两步收敛，都是同步的（查库 / 读 .git/HEAD），不拖慢派活：
-   *   ① cwd 落在某个**已接入仓库**里 → 记下 `{fullName, branch}`，节点自己 clone/pull
-   *      到它数据目录的 repos/ 里干 —— 文件内容跟着仓库走，这是"算力总有地方干活"的正解；
-   *   ② 不是 git 仓库 → 查这台设备的**路径映射表**，把 cwd 换成那台机器上的本地路径；
-   *   ③ 两样都没有 → 原样传过去，节点发现目录不存在会报人话（"要么两边路径弄成一样…"）。
-   * 员工没绑目录（纯聊天）→ cwd 为 null，节点会落到它自己的 scratch 目录。
-   */
-  let cwd = member.cwd ?? null;
-  let repo = null;
-  if (cwd) {
-    repo = gitRepos.repoForCwd(cwd);
-    if (!repo) {
-      const mapped = store.lookupNodePath(rt.deviceId, cwd);
-      if (mapped) cwd = mapped.localPath;
-    }
-  }
-
-  const job = store.enqueueNodeJob({
-    runId: run.id,
-    nodeId: rt.deviceId,
-    family: rt.family,
-    model: run.model,
-    // 权限模式同样要换成那台机器上那个 CLI 认得的写法
-    sandbox: normalizeSandbox(rt.family, member.sandbox),
-    cwd,
-    repo,
-    task,
-    // 续接用：**那台机器上**那个 CLI 的会话 id（空 = 让它在那边新开一条）
-    sessionId: remoteSession,
-  });
-  run.remote = true;
-  run.nodeId = rt.deviceId;
-  run.jobId = job.id;
-  pushEvent(run, {
-    type: 'status',
-    phase: 'queued',
-    nodeId: rt.deviceId,
-    text: `已排进「${rt.deviceLabel ?? rt.deviceId}」的队列，等它来领`,
-  });
-  return run;
-}
-
-/**
- * 节点回传一批事件。
- * 返回 `{ ok, stop }` —— `stop: true` 是**反向的控制通道**：
- * 人点了停止，靠下一个事件批次的响应把话带过去，不用另开一条连接。
- */
-export function ingestEvent(runId, evt) {
-  const run = runs.get(runId);
-  if (!run) return { ok: false, error: '这次运行不在内存里（服务重启过？）' };
-  pushEvent(run, evt);
-  return { ok: true, seq: run.seq, stop: !!(run.stoppedByUser || run.finished) };
-}
-
-/**
- * 节点报回执：这次执行在那边结束了。
- * 走的是**与本机同一个 `finish()`** —— 消息落库、会话状态、流程推进、终止事件全都一样。
- */
-export function finishRemote(
-  runId,
-  { status, exitCode = null, error = null, usage = null, sessionId = null, finalText = '' },
-) {
-  const run = runs.get(runId);
-  if (!run) return false;
-  // 已经收过尾（比如人先点了停止）→ 别覆盖事实
-  if (run.finished) return true;
-  if (sessionId) {
-    run.sessionId = sessionId;
-    // 远端那条路也要记族：这个 id 是**那台机器上那个 CLI**给的，换运行时后同样不能硬 resume
-    let fam = '';
-    try {
-      fam = runtimes.resolveForRun(run.runtime)?.family ?? '';
-    } catch {
-      /* 查不到就记空 —— 只是少一层保护，不影响这次收尾 */
-    }
-    store.setMemberSession(run.conversationId, run.personaId, sessionId, run.sessionScope, fam);
-  }
-  if (finalText) {
-    run.finalText = finalText;
-    store.addMessage({
-      conversationId: run.conversationId,
-      runId: run.id,
-      role: 'assistant',
-      text: finalText,
-      personaId: run.personaId,
-      taskId: run.workflowTaskId ?? null,
-      // 远端那台机器上被停的也一样：留个标记，界面上认得出「这不是他说完的」
-      // （一个字都没回来的那种由 finish() 用已经流过来的 text 事件兜底）
-      meta: replyMeta(run, { stopped: status === '已停止', status }),
-    });
-    run.replyPersisted = true;
-  }
-  if (run.watermark) store.setMemberWatermark(run.conversationId, run.personaId, run.watermark);
-  finish(run, { status, exitCode, error, usage });
-  return true;
-}
-
-/**
- * 人在界面上点了停止，而这次跑在远端。
- * 还没被领走的**直接撤掉**（不然那台机器一上线就会把它跑一遍）；已经在跑的，
- * 等它下一个事件批次的响应里带回 `stop`，由节点自己掐。
- */
-export function abortRemote(runId) {
-  const run = runs.get(runId);
-  if (!run?.remote) return false;
-  run.stoppedByUser = true;
-  const job = store.getNodeJobByRun(runId);
-  if (job && job.status === '待领') {
-    store.finishNodeJob(job.id, '已取消');
-    finish(run, { status: '已停止', exitCode: null, error: null });
-    return true;
-  }
-  // 活已经发到节点上了：把停止的话带给节点（下一个事件批次的响应里带回 stop），
-  // 同时**上看门狗** —— 节点要是永远不回执（下线了、崩了），这边也不能永远挂在「跑中」
-  armStopWatchdog(run);
-  return true;
 }
 
 /**
@@ -692,33 +584,17 @@ export function onRunFinish(fn) {
 }
 
 /**
- * 过程快照（2026-11-05 评鉴落地）：跑过工具的回话，气泡顶上留一行
- * 「✓ 意图 · N 步 · 用时」，点开看每步干了啥 —— "他到底查了啥"不用再翻事件流。
+ * 回话消息的 meta：只记「人停的」这一种标记（界面标「已停止生成」）。
  *
- * 数据就是 run_events 原样重放（界面进度卡的同一套归约器，见顶部 import）。
- * 快照在落库时刻写死 —— 跟卡票同一哲学：聊天一屏可能十几条回话，逐条回查太贵。
- * 纯聊天（一次工具都没调）返回 null，那种回话不需要"过程收起行"。
- * 摘要是锦上添花：任何意外都不能把落库本身带崩，所以整段兜底。
+ * 2026-11-08 **砍掉过程快照**（原来的 meta.progress + 气泡顶上那行过程收起行），
+ * 用户实判"没啥用"。证据也摆着：这边跑的 codex 系 runtime 不发工具结果事件，
+ * 快照里 174/174 个步骤状态都是「已发起」、耗时全 null，展开只剩一串截断的命令；
+ * 真正有用的那部分（走到哪步、卡没卡、能不能停）本来只活在直播里，不进历史。
+ * `run_events` 仍全量落库（重连重放 / 排错用），只是不再给回话消息摘快照。
+ * 老库里已有的副本由 store/db.mjs 的数据迁移清掉（结构版本 1→2）。
  */
-function progressMeta(runId, status) {
-  try {
-    const rows = store
-      .listRunEvents(runId)
-      .map((r) => {
-        try { return { evt: JSON.parse(r.evt), at: r.at }; } catch { return null; }
-      })
-      .filter(Boolean);
-    return summarizeEvents(rows, { status });
-  } catch {
-    return null;
-  }
-}
-
-/** 回话消息的 meta：人停的标记 + 过程快照（两样都没有就给 null，别落个空对象） */
-function replyMeta(run, { stopped = false, status = '' } = {}) {
-  const prog = progressMeta(run.id, status);
-  if (!stopped && !prog) return null;
-  return { ...(stopped ? { stopped: true } : {}), ...(prog ? { progress: prog } : {}) };
+function replyMeta({ stopped = false } = {}) {
+  return stopped ? { stopped: true } : null;
 }
 
 /**
@@ -730,8 +606,7 @@ function replyMeta(run, { stopped = false, status = '' } = {}) {
  * 顶层评论（parentId 为空）的回复挂到**这条评论自己**：只靠"时序"归组的话，
  * 过几天回到旧议题补一句、中间又插了新议题时，回复会认到错的议题下。
  *
- * `meta`：人点停止的那一轮带 `{ stopped: true }`，界面据此在气泡上标「已停止生成」；
- * 跑过工具的带 `progress`（过程快照，见 progressMeta）。
+ * `meta`：人点停止的那一轮带 `{ stopped: true }`，界面据此在气泡上标「已停止生成」。
  * 重复调用是安全空操作（`replyPersisted` 记住已经落过的那一次）。
  */
 function persistReply(run, text, meta = null) {
@@ -777,7 +652,7 @@ function finish(run, { status, exitCode = null, error = null, usage = null, elap
    */
   if (status === '已停止' && !run.replyPersisted && run.streamedText) {
     if (!run.finalText) run.finalText = run.streamedText;
-    persistReply(run, run.streamedText, replyMeta(run, { stopped: true, status }));
+    persistReply(run, run.streamedText, replyMeta({ stopped: true }));
   }
 
   store.finishRun(run.id, { status, exitCode, error, usage });

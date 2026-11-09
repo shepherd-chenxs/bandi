@@ -6,9 +6,9 @@ export const $ = (id) => document.getElementById(id);
 
 
 /*
- * 本机身份（2026-10-21 拍板：**节点只当算力，不做「看总机面板」**）。
- * 旧的反代注入（`__BANDI_CLIENT__`）已随 client-proxy 移除 —— 加入状态不再从 HTML 里来，
- * 统一读 `/api/local/status`（服务端答案， boot 处判一次；「这台机器」分区也读它）。
+ * 本机接口前缀（/api/local）：本机状态、数据导入导出等。
+ * 多机节点子系统已删除 —— 不再有「本机 = 算力节点」的身份与启动分岔；
+ * 本机软件商店安装任务改挂 /api/install/tasks（原节点任务路径已删，响应形状不变）。
  */
 export const LOCAL_BASE = '/api/local';
 

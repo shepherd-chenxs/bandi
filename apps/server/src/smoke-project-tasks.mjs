@@ -130,7 +130,7 @@ check('员工详情里聊天行标「聊天派活」', mineDev.rows.find((r) => 
 check('员工详情里聊天行写清执行人', mineDev.rows.find((r) => r.source === 'chat')?.assignee === '波哥', mineDev.rows.find((r) => r.source === 'chat')?.assignee);
 check('员工详情里聊天行的任务名 = 最后一句用户话', mineDev.rows.find((r) => r.source === 'chat')?.task === '把首页那句文案改掉', mineDev.rows.find((r) => r.source === 'chat')?.task);
 check('流程行带流程名与节点', data.rows.some((r) => r.task.startsWith('添加测试 · 测试')), data.rows.map((r) => r.task).join(' | '));
-check('没点名的那行执行人写「（没点名）」', data.rows.find((r) => r.status === '已阻塞')?.assignee === '（没点名）', data.rows.find((r) => r.status === '已阻塞')?.assignee);
+check('没点名的那行执行人写「未分配」', data.rows.find((r) => r.status === '已阻塞')?.assignee === '未分配', data.rows.find((r) => r.status === '已阻塞')?.assignee);
 
 console.log('\n② 排序：要人管的在最前');
 const ranks = data.rows.map((r) => r.rank);
@@ -266,7 +266,7 @@ try {
   const card = board1.rows.find((r) => r.manual_id === tid);
   check('卡在平表里，来源标「手动」', card?.source === 'manual' && card?.source_text === '手动', JSON.stringify(card?.source_text));
   check('落在「待办」列', card?.col === 'todo', String(card?.col));
-  check('没派人时写「（没派活）」', card?.assignee === '（没派活）', String(card?.assignee));
+  check('没派人时写「未分配」', card?.assignee === '未分配', String(card?.assignee));
   check('看板那列里也有它', board1.columns.find((c) => c.key === 'todo')?.cards.some((c) => c.manual_id === tid));
   check('概览数字带 manual_count', board1.manual_count === 1, String(board1.manual_count));
   const gBoard = (await api('/api/tasks')).body;

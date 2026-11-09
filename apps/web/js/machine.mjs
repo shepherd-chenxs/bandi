@@ -152,14 +152,6 @@ export async function renderBackupSection(mount) {
 
 
 /**
- * 远程节点的详情页 —— **一颗能按的按钮都不给**。
- *
- * 为什么不让它走下面那套本机交互：那一页上每颗开关干的都是"改**这台机器**上的运行时配置"
- * （写的是控制面进程所在的 `data/runtimes.json`）。对着一个远程节点按下去，
- * 改的其实是控制面这台机器，而界面上写的是那台机器 —— 语义就错了。
- * 所以这一版只回答两件事：它是什么、它自报装了什么。
- */
-/**
  * 班的「问一句」/「确认一下」—— 替代原生 `prompt()` / `confirm()`。
  *
  * 为什么不用原生的（2026-10-16 用户指着改名那个框说"改成弹窗组件"）：原生框是**浏览器**画的，
@@ -265,11 +257,9 @@ export const askCheckbox = (o) => askDialog({ ...o, field: false });
 /**
  * 一个运行时的**健康度** —— 同类产品那张表叫「健康度」，这里按机器诚实分：
  *
- *   · **本机**运行时：健康 = **这个 CLI 现在能不能起**（文件在、班底起得来、已接入）。
+ *   本机运行时：健康 = **这个 CLI 现在能不能起**（文件在、班底起得来、已接入）。
  *     标签统一走「在线/离线」一套词（2026-10-21 用户："可用改成在线，不可用改成离线"）——
  *     原先"本机没有在线这回事"的讲究让位给词汇一致：状态列只有一套语言最好读。
- *   · **远程**运行时：健康 = **那台机器在不在线**（心跳新鲜）＋ 它自报这个 CLI 能不能用。
- *     这个才是用户真正要看的：选了一个离线节点的运行时，活不会立刻跑，而是排进队列等它回来。
  *
  * `showPath`：**要不要把那行路径摆出来**。只有"路径本身出问题"才摆（2026-10-16 用户提的：
  * 健康时那行长路径是纯噪音）。「已停用 / 还没接入」也不摆 —— 要不要接看的是右边那个开关，
@@ -279,7 +269,7 @@ export const askCheckbox = (o) => askDialog({ ...o, field: false });
  * 健康的行全染红（这条真踩过，见 git 历史里 rowOfRuntime 那段注释）。
  *
  * ⚠️ 这两个函数必须放在**模块作用域**（2026-10-16 踩到）：我一度把它们插进了
- * `renderDeviceDetail` 的函数体里 —— 本机页能用，**节点页直接 `runtimeHealth is not defined`**，
+ * `renderDeviceDetail` 的函数体里 —— 本机页能用，**别处直接 `runtimeHealth is not defined`**，
  * 而页面只是停在"加载中"，从截图上根本看不出抛了什么（`--dump-dom` 里 `<title>` 才看到）。
  */
 export function runtimeHealth(r) {
@@ -296,11 +286,6 @@ export function runtimeHealth(r) {
     };
   }
   if (!r.enabled) return { text: '已停用', cls: 'tag-warn', why: '关掉了就不派活给它' };
-  if (r.remote) {
-    return r.nodeOnline === false
-      ? { text: '离线', cls: 'tag-warn', why: '那台机器没有心跳 —— 派给它的活会排队等它回来，不会立刻跑' }
-      : { text: '在线', cls: 'tag-ok', why: '那台机器在心跳，派活会立刻被它领走' };
-  }
   return { text: '在线', cls: 'tag-ok', why: '文件在、班底起得来 —— 控制面就在这台机器上，本机运行时只有"离线"的反面' };
 }
 
@@ -345,6 +330,7 @@ export function taskTail(task) {
  * 进度是**一小段文字**的事，就只改那一小段文字：`textContent` 换掉，别的一动不动。
  * 只有**做完**那一刻才整页重画一次。安装入口已撤（2026-11-04 用户定：班底只识别、不代装，
  * 因为"替用户装东西"遇到的坑太多），这里只剩兜底：升级前留下的旧任务还在跑时，进度照样能接上。
+ * 任务表挂在本机（nodeId 恒为 'local'），查询走 /api/install/tasks/:tid。
  */
 export function scheduleTaskPoll(dev) {
   const t = dev?.task;
@@ -357,7 +343,7 @@ export function scheduleTaskPoll(dev) {
     let next;
     try {
       // 只取这一件活的进度（一条小请求），不重画整页
-      next = (await api(`/api/nodes/${encodeURIComponent(dev.id)}/tasks/${encodeURIComponent(t.id)}`)).task;
+      next = (await api(`/api/install/tasks/${encodeURIComponent(t.id)}`)).task;
     } catch {
       return;
     }
@@ -366,7 +352,7 @@ export function scheduleTaskPoll(dev) {
       renderRuntimes(); // 做完才整页重画：那一行要挪位置、按钮要换
       return;
     }
-    const text = `${next.running ? '进行中… ' : '排队中… '}${taskTail(next) || '（等那台机器来领）'}`;
+    const text = `${next.running ? '进行中… ' : '排队中… '}${taskTail(next) || '（等本机空出手）'}`;
     for (const el of document.querySelectorAll(`[data-task-line="${t.id}"]`)) el.textContent = text;
     scheduleTaskPoll({ ...dev, task: next }); // 接着盯
   }, 1500);
@@ -376,7 +362,7 @@ export function scheduleTaskPoll(dev) {
 
 /* 「外部件」段已删（2026-11-01 用户定：没啥用）。它只剩 magpie 一个条目、
    又只在「这台机器」页露面 —— 拆掉后 dev.externals 无人消费，
-   服务端 externals.mjs / 节点上报那套就闲置着（节点侧老客户端还在报，接口兼容收下即存）。
+   服务端 externals.mjs 那一套就闲置着（老客户端还在报，接口兼容收下即存）。
    要找回这段从 git 找：本文件历史里的 externalsHtml()。 */
 
 
@@ -384,8 +370,7 @@ export function scheduleTaskPoll(dev) {
 /* 「在这台机器上安装」已撤（2026-11-04 用户定：班底**只识别，不代装** ——
    替用户跑安装命令遇到的坑太多：npm 不在 PATH、spawn ENOENT、装完路径对不上…）。
    一键安装 / 复制命令 / 安装任务排队那套（wireInstallRuntime / runNodeTask）整体删除；
-   同日下午：服务端的 install-runtime 通路（runtimes 的安装命令表、本机/节点两个执行器、
-   POST /api/nodes/:id/tasks 的分支）也一并清了 —— 界面、协议、执行三层都不留残骸。
+   服务端的 install-runtime 通路也一并清了 —— 界面、协议、执行三层都不留残骸。
    magpie 的安装不走这里：那是外部件（externals.commandFor），在插件页「软件」条目。
    要找回从 git 找：本文件历史里的 wireInstallRuntime()。 */
 
@@ -448,7 +433,7 @@ export async function paintLocalRuntimes(mount, deviceId, { onChange } = {}) {
 
   const render = () => {
     /* 空态（一条都没有）用引导卡：原来两行灰字看着像页面坏了，
-       现在给出「去哪点、点了会发生什么」；有内容时 scan===null 才留一行补版本号的提示 */
+       现在给出「去哪点、点了会发生什么」；有内容时不加任何提示（2026-11-08 用户："去掉"） */
     const nAny = dev.runtimes.length + notYet.length;
     mount.innerHTML = `
       <section class="fx">
@@ -460,9 +445,7 @@ export async function paintLocalRuntimes(mount, deviceId, { onChange } = {}) {
         ${notYet.map(rowOfNotYet).join('')}
         ${
           nAny
-            ? scan === null
-              ? '<div class="rt-hint">点「识别本机运行时」可以补上版本号。</div>'
-              : ''
+            ? '' /* 2026-11-08 用户："去掉" —— 「可以补上版本号」那行提示删了，按钮 title 里还留着说明 */
             : `<div class="rt-empty">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m21 21-4.3-4.3"></path></svg>
                 <b>这台机器上还没识别到 agent CLI</b>

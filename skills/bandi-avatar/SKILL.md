@@ -21,6 +21,15 @@ curl -s --noproxy '*' "http://127.0.0.1:${BANDI_PORT:-18787}/api/ai/image-config
 - 回 `configured: false` → 生图服务没配（设置页「生图服务」卡片没填），**停下来告诉用户**："先到 设置 → 生图服务 填好地址和 Key，我再帮你生成。"不要硬试。
 
 > `--noproxy '*'` 必带：开发机常有全局代理，回环请求走了代理会拿到 502，那不是服务挂了。
+>
+> **运行钥匙**（2026-11-08 起）：服务端监听对外时强制鉴权，本机 agent 进程调平台接口要带
+> `-H "X-Bandi-Run-Token: $BANDI_RUN_TOKEN"`（环境变量里，每次 run 现发、收尾作废）；
+> 没有这个变量 = 你是远端节点跑的活，够不着这台机器。运行钥匙**只读** —— 绑头像那步
+> （`PUT /api/personas`）要雇主在面板上做。`/api/ai/*` 若回 401：如实告诉雇主，
+> 让他用回环免鉴权的桌面版来生图，别反复重试。
+>
+> 钥匙**每轮现取、不许抄死**：命令里用 `$env:BANDI_RUN_TOKEN` 现读，别复制历史命令里
+> 的字面值（上一轮的已作废）；`401 E2056` = 用错钥匙，重取重试，不要让人"重置 token"。
 
 ## 一、写 prompt（风格锁定，别自创）
 
@@ -30,7 +39,7 @@ curl -s --noproxy '*' "http://127.0.0.1:${BANDI_PORT:-18787}/api/ai/image-config
 <repoRoot>/docs/头像生成规范.md
 ```
 
-`repoRoot` 从 `curl -s --noproxy '*' "http://127.0.0.1:${BANDI_PORT:-18787}/api/state"` 里拿。下面是两条模板的骨架：
+`repoRoot` 从 `curl -s --noproxy '*' -H "X-Bandi-Run-Token: $BANDI_RUN_TOKEN" "http://127.0.0.1:${BANDI_PORT:-18787}/api/state"` 里拿。下面是两条模板的骨架：
 
 **新建头像（文生图）**——厚涂软阴影卡通风，中景半身，头约占画面一半：
 

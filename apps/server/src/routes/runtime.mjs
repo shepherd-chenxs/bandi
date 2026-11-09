@@ -1,5 +1,5 @@
 /* routes/runtime.mjs —— 2026-10-22 由 server.mjs 按域拆出，handler 逻辑原样搬运。
- * 主分发顺序（先匹配先赢）见 ../server.mjs 的 CHAIN。 */
+ * 主分发顺序（先匹配先赢）见 ./chain.mjs 的 CHAIN。 */
 
 import path from 'node:path';
 import { sendJson, fail, readBody } from '../http.mjs';
@@ -7,7 +7,6 @@ import { withExternals } from '../runtime-view.mjs';
 import { SERVER } from '../server-state.mjs';
 import { port, host, hostSource, writeListenHost, normalizeListenHost } from '../config.mjs';
 import * as netmode from '../netmode.mjs';
-import * as store from '../store.mjs';
 import * as runtimes from '../runtimes.mjs';
 import * as cliModels from '../cli-models.mjs';
 import * as lanAnnounce from '../lan-announce.mjs';
@@ -88,8 +87,8 @@ export async function handleRuntime(req, res, url) {
    *
    *   · 监听地址 —— **永远对外**（`BANDI_HOST` 可覆盖，缺省 `0.0.0.0`），是启动配置的事，
    *     界面上没有开关、没有「重启」。曾经管这个的 `allowLan` 键与 `/api/restart` 已删。
-   *   · `acceptNodes` —— **角色**：总机（收别的机器当节点）/ 分机（不收）。**立刻生效**。
-   *     分机照样对外服务、手机照样能连，只是不发邀请码、`/api/hello` 的 `joinable` 为 false。
+   *
+   * 多机节点的角色位（`acceptNodes`，总机/分机）已随多机节点子系统于 2026-11-09 删除。
    *
    * 真值存在数据目录的 `netmode.json` 里（`netmode.mjs`）。
    */
@@ -121,7 +120,13 @@ export async function handleRuntime(req, res, url) {
         return sendJson(res, 200, { ok: true, listenHost: want, needRestart: want !== SERVER.boundHost });
       }
       const patch = {};
-      if (typeof body?.acceptNodes === 'boolean') patch.acceptNodes = body.acceptNodes;
+      /*
+       * 远程连接总闸（2026-11-08）：「这台机器 → 允许同账号设备连接」。
+       * 关 = 非本机来源一律 403（E3005，guardNetwork 最先拦），本机直连不受影响。
+       * **立即生效、不重启** —— 它是请求入口的运行期判定，不碰 `listen()` 的 bind 地址
+       * （bind 仍由 listenHost / BANDI_HOST 管，那是另一回事，界面不再暴露）。
+       */
+      if (typeof body?.remoteAccess === 'boolean') patch.remoteAccess = body.remoteAccess;
       /*
        * 网络周界（2026-11-03，安全页「网络访问」卡）：授权 IP 白名单 + 域名绑定。
        * 名单**先整体校验再入库**（一条写错就整份不存 —— 存一半等于让人以为防住了）；
@@ -150,11 +155,11 @@ export async function handleRuntime(req, res, url) {
       }
       if (Object.keys(patch).length) netmode.writeNetMode(patch);
       const now = netmode.readNetMode();
-      if (typeof patch.acceptNodes === 'boolean') {
-        console.log(`[网络] 角色：${patch.acceptNodes ? '总机（收节点）' : '分机（不收节点）'}（立即生效）`);
-      }
       if (typeof patch.whitelistEnabled === 'boolean') {
         console.log(`[网络] 授权 IP 白名单：${patch.whitelistEnabled ? '开' : '关'}（${now.whitelistIps.length} 条${addedMyIp ? `，已自动加入你的 IP ${addedMyIp}` : ''}）`);
+      }
+      if (typeof patch.remoteAccess === 'boolean') {
+        console.log(`[网络] 远程连接总闸：${patch.remoteAccess ? '开（别的设备可以连）' : '关（只允许本机访问）'}（立即生效）`);
       }
       if (patch.boundDomain !== undefined && patch.boundDomain !== '') {
         console.log(`[网络] 域名绑定：${patch.boundDomain}（仅本机直连与该域名可访问）`);
@@ -169,14 +174,13 @@ export async function handleRuntime(req, res, url) {
     const nm = netmode.readNetMode();
     const boundLan = !netmode.isLoopback(SERVER.boundHost); // 实际听着非回环吗（BANDI_HOST=127.0.0.1 调试时才是 false）
     return sendJson(res, 200, {
-      acceptNodes: nm.acceptNodes,
+      // 远程连接总闸（2026-11-08）：界面上「允许同账号设备连接」开关直读这一位
+      remoteAccess: nm.remoteAccess,
       // 网络周界（2026-11-03，安全页「网络访问」卡）。yourIp：界面提示"你会被自动加进名单"用
       whitelistEnabled: nm.whitelistEnabled,
       whitelistIps: nm.whitelistIps,
       boundDomain: nm.boundDomain,
       yourIp: clientIpOf(req),
-      // 给界面直读的角色名（省得每处自己 if）
-      role: nm.acceptNodes ? 'hub' : 'branch',
       host: SERVER.boundHost, // **实际**听着的
       /*
        * 监听地址的完整状态（2026-11-04，界面「监听地址」卡直接用这一块）：
@@ -202,7 +206,6 @@ export async function handleRuntime(req, res, url) {
   }
 
   if (req.method === 'GET' && devices) {
-    // 本机 + 已报到的节点。**两边是同一份映射**（都在 runtimes.mjs 里），别再各自拼一份
     return sendJson(res, 200, { devices: await Promise.all(runtimes.publicDevices().map(withExternals)) });
   }
 
@@ -215,7 +218,7 @@ export async function handleRuntime(req, res, url) {
    * 给一台机器起名（「重命名机器」）。
    *
    * 改的是**机器名**，不动**主机名** —— 主机名是那台机器自报的事实，改不了也不该改。
-   * 本机那份存在 `runtimes.json`，节点那份存在控制面；两边都传空字符串就恢复默认（回主机名）。
+   * 存在 `runtimes.json`；传空字符串就恢复默认（回主机名）。
    * body：`{ label }`。
    */
   if (req.method === 'POST' && renameDevice) {
@@ -227,29 +230,9 @@ export async function handleRuntime(req, res, url) {
     return sendJson(res, 200, { device: d });
   }
 
-  /**
-   * 节点设备上的运行时**不能从控制面改** —— 它们在**那台机器**上（`runtimes.json` / 它的设置页）。
-   *
-   * 注意这跟"能不能派活给它"是两件事：**现在能派**（绑到 `node-xxx:族` 上就行，
-   * 见 smoke-node-jobs.mjs）。这里拦的是"编辑"，不拦"使用"。
-   * 不拦的话，界面上那几颗开关会打到一个不存在的本机运行时上，报错还看不出为什么。
-   */
-  const rejectIfNode = (did) => {
-    if (!store.getNode(did)) return false;
-    fail(
-      res,
-      400,
-      'E1041',
-      '这是远程节点：它的运行时在**那台机器**上（runtimes.json / 它的设置页），控制面这头只读。' +
-        '要派活给它，是把它绑成员工的 runtime（node-xxx:族），不是在这儿改。',
-    );
-    return true;
-  };
-
   // 加一个运行时实例
   if (req.method === 'POST' && addOne) {
     const did = decodeURIComponent(addOne[1]);
-    if (rejectIfNode(did)) return true;
     const body = await readBody(req);
     const r = runtimes.addRuntime(did, body);
     if (r.error) return fail(res, 400, 'E1020', r.error);
@@ -258,7 +241,6 @@ export async function handleRuntime(req, res, url) {
 
   if ((req.method === 'PUT' || req.method === 'PATCH') && oneRuntime) {
     const did = decodeURIComponent(oneRuntime[1]);
-    if (rejectIfNode(did)) return true;
     const rid = decodeURIComponent(oneRuntime[2]);
     const body = await readBody(req);
     const next = runtimes.saveRuntime(did, rid, body);
@@ -270,7 +252,6 @@ export async function handleRuntime(req, res, url) {
 
   if (req.method === 'DELETE' && oneRuntime) {
     const did = decodeURIComponent(oneRuntime[1]);
-    if (rejectIfNode(did)) return true;
     const rid = decodeURIComponent(oneRuntime[2]);
     const r = runtimes.removeRuntime(did, rid);
     if (r.error) return fail(res, 400, 'E1022', r.error);

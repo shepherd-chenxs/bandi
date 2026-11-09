@@ -1,5 +1,5 @@
 /* routes/git.mjs —— 2026-10-22 由 server.mjs 按域拆出，handler 逻辑原样搬运。
- * 主分发顺序（先匹配先赢）见 ../server.mjs 的 CHAIN。
+ * 主分发顺序（先匹配先赢）见 ./chain.mjs 的 CHAIN。
  * 2026-10-25 加了写侧出口（建 PR / 列 open PR / 手动合并）；编排本体在 ../git-repos.mjs，
  * 这里只做"取那一条记录 + 把错误说人话 + 回写卡片"。 */
 

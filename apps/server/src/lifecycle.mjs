@@ -35,8 +35,12 @@ export const urlOf = (port) => `http://127.0.0.1:${port}`;
  * 探一个**只有班底才有的接口**，而不是只看首页 200。
  * 只看 200 的话，任何别的 HTTP 服务都会被误判成"平台已经在跑"。
  *
- * ⚠️ 这里问的是"**端口上坐着一个班底控制面吗**"，不是"我们能不能读它的状态"。
- * 所以 **401 / 403 也都算"是"**：
+ * **2026-11-08 起先探 `/api/ping`**（免鉴权健康口，server.mjs）：回 `{ ok, platform:'bandi' }`，
+ * 200 + platform 对上就是自己人 —— 判活的比特一个不少，却**不再吃 401**。
+ * （此前探 `/api/state`：鉴权全开的监听下每次探测都 401，桌面壳的看门狗每 1~2 秒一次，
+ * 审计里每分钟多出几十条「拒绝访问」—— 2026-11-08 用户在审计页看到的成串 E4010 就是它。）
+ *
+ * **老服务端没有 `/api/ping`（404）时退回老口径**（`/api/state`，401 / 403 也都算"是"）：
  *   · 401 = 开了鉴权的控制面，把 `/api/state` 挡成要令牌；
  *   · 403 = 这台机器已经是某台总机的**算力节点**（`scope` 只有 compute），
  *     总机按令牌权限把面板请求挡成 `403 E4031`。服务还活得好好的 —— 只是不给看面板。
@@ -46,10 +50,14 @@ export const urlOf = (port) => `http://127.0.0.1:${port}`;
  */
 export async function isUp(port, timeoutMs = 1500) {
   try {
-    const r = await fetch(urlOf(port) + '/api/state', { signal: AbortSignal.timeout(timeoutMs) });
-    const j = await r.json().catch(() => null);
-    if (r.status === 401 || r.status === 403) return j?.platform === 'bandi';
-    if (!r.ok) return false;
+    const r = await fetch(urlOf(port) + '/api/ping', { signal: AbortSignal.timeout(timeoutMs) });
+    if (r.ok) return (await r.json().catch(() => null))?.platform === 'bandi';
+    if (r.status !== 404) return false; // 新服务端只可能 200（是）或连不上（不是）
+    /* 退路：老服务端没有 /api/ping —— 按 /api/state 的老口径判（升级过渡期才走得到） */
+    const s = await fetch(urlOf(port) + '/api/state', { signal: AbortSignal.timeout(timeoutMs) });
+    const j = await s.json().catch(() => null);
+    if (s.status === 401 || s.status === 403) return j?.platform === 'bandi';
+    if (!s.ok) return false;
     return Array.isArray(j?.personas);
   } catch {
     return false;

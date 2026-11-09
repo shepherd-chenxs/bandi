@@ -10,6 +10,9 @@
  *   · openDeviceList()  面板「当前设备」→ 回原生设备列表，选另一台即切换
  *   · onLoggedOut()     面板「退出登录」（机器会话已由面板自己 /api/logout 清掉）
  *                       → 原生清中枢会话 + 机器 Cookie，落回登录页
+ *   · sessionExpired()  面板发现本机会话过期（API 回 E4010/E4012）→ 壳用中枢会话
+ *                       重新签票进门（2026-11-08）。**这不是退出登录**：中枢会话还在，
+ *                       换的只是这台机器的那张票
  */
 package app.local.bandi.mobile
 
@@ -25,5 +28,16 @@ class BandiShell(private val host: MainActivity) {
     @JavascriptInterface
     fun onLoggedOut() {
         host.runOnUiThread { host.onPanelLoggedOut() }
+    }
+
+    /**
+     * 本机会话过期（12 小时绝对 / 30 分钟空闲）—— 静默换一张票，别把登录页画给人。
+     *
+     * 与服务端那条 302 `/hub/expired` 是**同一件事的两个触发点**：页面还没加载完就被
+     * 401 打回来时，走这条；整页加载时没有会话，走那条。
+     */
+    @JavascriptInterface
+    fun sessionExpired() {
+        host.runOnUiThread { host.reenter() }
     }
 }
