@@ -202,12 +202,24 @@ export async function initRailVersion() {
 export function startVersionWatch() {
   let known = null;
   let told = false; // 同一轮变更只提醒一次，别每 60 秒都弹
+  let timer = null;
   const check = async () => {
     let v;
     try {
       v = (await api('/api/web-version')).v;
-    } catch {
-      return; // 服务没起来 / 正在重启：下轮再说，别报错打扰人
+    } catch (e) {
+      /*
+       * 401/403 = 这个页面的会话已经没了（被踢 / 过期）：它已经是"死页面"，
+       * 再轮询只会每分钟往审计里留一条 401（2026-11-09 用户实拍：本机旧标签页
+       * 一直开着就是这么刷的）。停掉，别让一个没人看的页面持续制造噪音；
+       * 其它错误（服务没起来 / 正在重启）继续下轮再说，不打扰人。
+       */
+      if (e?.status === 401 || e?.status === 403) {
+        if (timer) clearInterval(timer);
+        timer = null;
+        return;
+      }
+      return;
     }
     if (v == null) return;
     if (known === null) {
@@ -229,5 +241,5 @@ export function startVersionWatch() {
     }
   };
   check();
-  setInterval(check, 60000);
+  timer = setInterval(check, 60000);
 }

@@ -46,6 +46,12 @@ export const ROUTES = [
    * 响应只有 `{ ok, platform }`：platform 这个字段 401 响应体里本来就带，零新增暴露。
    */
   { id: 'ping', m: ['GET', 'HEAD'], path: p('/api/ping'), auth: 'public', note: '健康探测；认证之前返回，只回 {ok, platform}' },
+  /*
+   * 版本指纹（2026-11-09 从 session 改 public）：只回前端文件指纹，零敏感 ——
+   * 旧页面（会话失效后）每 60 秒轮询一次，原先每次 401 都进审计，刷成噪音；
+   * 改成跟 /api/ping / /api/hello 一样的免鉴权探活口径（guard 里放行）。
+   */
+  { id: 'web.version', m: ['GET'], path: p('/api/web-version'), auth: 'public', note: '60 秒版本指纹轮询，零敏感；免鉴权（避免旧页面轮询刷 401 审计）' },
   { id: 'logout', m: ['POST'], path: p('/api/logout'), auth: 'public', note: '登出自检（有票才有的撤）' },
   { id: 'ai.image-config', m: ['GET', 'PUT'], path: p('/api/ai/image-config'), auth: 'public', note: 'guard 只对 source=loopback 豁免 GET；PUT 永远要身份' },
   { id: 'ai.image', m: ['POST'], path: p('/api/ai/image'), auth: 'public', note: '回环免令牌（本地模型探测）；network 不豁免' },
@@ -72,7 +78,6 @@ export const ROUTES = [
   { id: 'workflows.list', m: ['GET'], path: p('/api/workflows'), auth: 'session' },
   { id: 'projects.list', m: ['GET'], path: p('/api/projects'), auth: 'session', run: true, note: '运行钥匙可读（PM brief：拿项目 id / 目录；秘书台账）' },
   { id: 'tasks.list', m: ['GET'], path: p('/api/tasks'), auth: 'session', run: true, note: '运行钥匙可读（秘书台账：全部任务卡）' },
-  { id: 'web.version', m: ['GET'], path: p('/api/web-version'), auth: 'session', note: '60 秒版本指纹轮询，零敏感' },
   { id: 'prefs.read', m: ['GET'], path: p('/api/prefs'), auth: 'session', note: '回复风格读：设备也放行（手机设置页要画）' },
   // 2026-11-04 补登（用户实报 E4090）：v2.8 默认拒绝时漏了 PUT —— 设置 › 偏好的
   // 「言简意赅」开关点的就是它，一点就 404 E4090。语义：改**全体数字员工**的沟通

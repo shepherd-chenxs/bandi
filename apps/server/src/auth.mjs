@@ -383,6 +383,14 @@ export function guard(auth, req, res, url) {
   if (req.method === 'GET' && url.pathname === '/api/hello') return true;
 
   /*
+   * **版本指纹也免令牌**（2026-11-09）：`GET /api/web-version` 只回一个前端文件指纹
+   * （`{v:'js-<mtime+size 之和>'}`），零敏感 —— 但它会被**没登录的旧页面**每 60 秒
+   * 轮询一次，每次都吃 401，审计里刷成一串「拒绝访问」（用户截图问"这是什么"）。
+   * 跟 `/api/ping` 同一类"探活"口径：故意无秘密，放行在令牌检查之前。
+   */
+  if (req.method === 'GET' && url.pathname === '/api/web-version') return true;
+
+  /*
    * **身份中枢进门**（2026-11-06）：`GET /hub/enter?ticket=…`。
    *
    * 此刻请求手上**只有一张中枢签的票** —— 那就是它的凭据（手机壳里没有"登录表单"
