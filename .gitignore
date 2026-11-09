@@ -11,6 +11,9 @@ desktop.ini
 __pycache__/
 *.py[cod]
 
+# Node 依赖目录（本仓库零依赖、正常不需要它；本机跑工具时若生成了也不入库）
+node_modules/
+
 # 本地试跑残留
 *.log
 tmp/
