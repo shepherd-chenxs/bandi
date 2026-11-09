@@ -54,6 +54,9 @@ try {
   check('结论先行 + ≤3 条依据 + 证据去处 + 已做动作', /结论/.test(contract) && /3 条依据/.test(contract) && /证据不贴在对话里/.test(contract) && /已做完/.test(contract));
   check('Next: 禁令与不空转纪律', /Next:/.test(contract) && /先做完再回话/.test(contract));
   check('不编数 + 删数据/生产/对外发布红线', /不编数/.test(contract) && /删数据/.test(contract) && /对外发布/.test(contract));
+  check('问进度只答台账（状态/更新/下一步，不追细节）', /只答台账/.test(contract) && /不要为了补细节/.test(contract));
+  check('够答即回（别为"更完整"继续翻）', /够答即回/.test(contract));
+  check('不猜接口（别 foreach 试路径）', /不猜接口/.test(contract) && /foreach/.test(contract));
   check('指向 bandi-report 模板（首轮技能清单在，这里给全文入口）', /bandi-report/.test(contract));
 
   console.log('\n③ 本轮任务合同（每轮注入，P1 起带结构化上下文）');
