@@ -56,9 +56,11 @@ console.log('\n④ 平台注入与 PM 技能都指向它（一处维护）');
  * dispatch.platformContractBlock —— 所有员工每轮都拿得到，不再分岗位、不再靠首轮。
  */
 check('每轮契约由 dispatch 统一产出（platformContractBlock）', /platformContractBlock/.test(dispatchSrc));
-check('契约含结论 / 已做完 / Next 禁令', /结论/.test(dispatchSrc) && /已做完/.test(dispatchSrc) && /Next:/.test(dispatchSrc));
+// P5 后第 1 条先判交付形态（问答/做事），"已做完"这类汇报措辞挪进了任务合同的做事分支
+check('契约含结论 / 不空转 / Next 禁令 / 交付形态', /结论/.test(dispatchSrc) && /不空转/.test(dispatchSrc) && /Next:/.test(dispatchSrc) && /交付形态/.test(dispatchSrc));
 check('契约指向 bandi-report（全文入口，不重复长文）', /bandi-report/.test(dispatchSrc) && /bandi-report/.test(pmSkill));
-check('PM 每轮钥匙提醒不再重复汇报格式（只留建卡/改卡权限）', /改卡/.test(runsSrc) && /startNow/.test(runsSrc) && !/汇报（每轮都算/.test(runsSrc));
+// P5 压缩了运行钥匙提醒（操作说明只留怎么用钥匙；建卡/改卡口径在 PM 首轮 brief 与 PM 技能里）
+check('运行钥匙提醒只讲怎么用钥匙（不重复汇报/建卡口径）', /BANDI_RUN_TOKEN/.test(runsSrc) && /E2056/.test(runsSrc) && !/汇报（每轮都算/.test(runsSrc) && !/查台账：问进度/.test(runsSrc));
 
 console.log(failed ? `\n✗ ${failed} 项没过` : '\n✓ 全部通过');
 process.exit(failed ? 1 : 0);

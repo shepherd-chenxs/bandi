@@ -1,6 +1,6 @@
 ---
 name: brainstorming
-description: "You MUST use this before any creative work - creating features, building components, adding functionality, modifying behavior, or planning anything new, in software or out of it (a talk, a business, a renovation)."
+description: "创作型工作（做新功能 / 改行为 / 策划新东西）开工前用它发散再收敛；问答、查证、排障、执行既有步骤不需要它。"
 ---
 
 # Brainstorming

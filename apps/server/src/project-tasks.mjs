@@ -902,7 +902,7 @@ function startCardInGroup(row, project) {
     '\n这是「团队协作」模式的卡：你是本群的群助手（项目经理），负责把活拆给群成员（子卡）、盯回执、把进度汇总回这张卡。',
     '拆子卡走建卡通道，带上 parentTaskId；子卡只能派给本群成员，别派给自己。',
     '\n' + PACE_BLOCK,
-    '做完 / 需要拍板时把卡推进到「待验收」或说明卡在哪。',
+    '交付形态按【本轮任务合同】判断；收尾按【本轮契约】的交付声明写 [完成] / [受阻]，平台据此收卡。',
   ]
     .filter(Boolean)
     .join('\n');
@@ -917,6 +917,14 @@ function startCardInGroup(row, project) {
   const res = dispatchEventToThread(session.id, `@${assistant.name} ${text}`, {
     personaId: assistant.id,
     projectId: project.id,
+    // 卡带进合同（P5）：交付形态/验收按这张卡来；source:'group' 让 dispatch 不加"评论区"锚点块
+    card: {
+      title: row.title,
+      description: row.description,
+      status: row.status,
+      projectName: project.name,
+      source: 'group',
+    },
     // silent：派活票给人看，这条唤醒是指令 —— 界面上不重复画（同卡片回执）
     meta: { silent: true },
   });
@@ -984,12 +992,24 @@ export function startProjectTask(id, { allowIdea = false } = {}) {
     row.description ? `\n${row.description}` : '',
     `\n工作目录就是这个项目的目录：${project.root}`,
     `\n${PACE_BLOCK}`,
-    '做完直接说明结果即可。',
   ]
     .filter(Boolean)
     .join('\n');
   try {
-    const { run } = dispatchToThread(conv, text, { projectId: project.id });
+    /*
+     * 卡带进合同（2026-11-09 P5）：目标/交付形态/验收按这张卡来，别只剩一句"上面这条消息要办的事"。
+     * `source:'board'` = 看板派活 —— dispatch 据此不加"来自评论区"的锚点块（那是评论场景专用）。
+     */
+    const { run } = dispatchToThread(conv, text, {
+      projectId: project.id,
+      card: {
+        title: row.title,
+        description: row.description,
+        status: row.status,
+        projectName: project.name,
+        source: 'board',
+      },
+    });
     return store.updateProjectTask(row.id, {
       status: '进行中',
       conversationId: conv,
