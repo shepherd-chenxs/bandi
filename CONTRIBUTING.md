@@ -8,7 +8,8 @@
 
 所以**执行路径的改动请先开 issue 说一声**，不要直接提 PR。具体是这些地方：
 
-- `apps/server/src/node.mjs` —— `runTask` / `spawn` / `binSearchDirs`（节点在本机起进程）
+- `apps/server/src/codex.mjs` / `dsh.mjs` —— `runTask` / `spawn`（起 agent CLI 进程；
+  `node.mjs` 那条分机执行链已随多机子系统 2026-11-09 删除）
 - `apps/server/src/externals.mjs` —— `commandFor` / `mirrors`（外部件的命令与镜像）
 - `apps/web/js/*.mjs` —— 任何把字符串拼进 `data-*` 再执行的写法（前端已拆原生 ESM，无打包器）
 
@@ -67,9 +68,9 @@ node tools/run-smokes.mjs                 # 门禁跑的就是这条，里面已
 ## 怎么跑
 
 ```sh
-# 全套（15 条，几分钟）
-node apps/server/src/smoke-auth.mjs     # 认证 / 每节点令牌 / 缺省对外监听 / 登录页（/api/restart 已删）
-node apps/server/src/smoke-node-task.mjs # 节点任务协议 / 安全边界 / 镜像校验
+# 全套（几十条，几分钟；权威清单在 tools/run-smokes.mjs）
+node apps/server/src/smoke-auth.mjs      # 鉴权 / 缺省对外监听 / 登录页（/api/restart 已删）
+node apps/server/src/smoke-security-policy.mjs  # 身份边界 / 路由权限
 node apps/server/src/smoke-runtime-heal.mjs
 node apps/server/src/smoke-autostart.mjs
 # …… 其余见 apps/server/src/smoke-*.mjs、apps/desktop/smoke-shell.mjs
