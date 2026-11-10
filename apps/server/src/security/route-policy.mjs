@@ -250,7 +250,7 @@ export const ROUTES = [
   { id: 'security.revokeOthers', m: ['POST'], path: p('/api/security/sessions/revoke-others'), auth: 'session', note: '踢自己的其它会话，本人操作不算管理' },
   { id: 'security.audit', m: ['GET'], path: p('/api/security/audit'), auth: 'session' },
   { id: 'security.auditExport', m: ['GET'], path: p('/api/security/audit/export'), auth: 'session', noPanel: true, note: '审计日志全量导出（2026-11-03）；读的是同一份数据，权限同 audit' },
-  { id: 'security.auditClear', m: ['POST'], path: p('/api/security/audit/clear'), auth: 'session', noPanel: true, note: '清空审计日志（先归档再删，留 audit.clear 痕迹）；破坏性动作，走 security:manage 而不是 audit:read' },
+  { id: 'security.auditClear', m: ['POST'], path: p('/api/security/audit/clear'), auth: 'session', noPanel: true, note: '彻底清空审计日志（主表+归档一起删、不留痕迹；破坏性动作，走 security:manage 而不是 audit:read）' },
 ];
 
 /* ------------------------------------------------------------------ 查询 */

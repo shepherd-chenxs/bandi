@@ -7,6 +7,7 @@
  *     （401/403 拒绝、写操作 pending→回填），这里只是查询窗口：按类型筛 + 游标翻页。
  *     2026-11-09 降噪：静态资源 401 不再入审计；同 IP+动作的拒绝在 60 秒窗口内只落一行
  *     （窗口过后补一句"另有 N 次"）；归档保留 1 个月（主表 90 天）。
+ *     2026-11-10：清空改为**彻底删除**（主表 + 归档一起删、不留 audit.clear 痕迹；确认文案写明不可恢复）。
  * 另导出 mountRemoteAccessCard（远程连接开关卡，2026-11-08 起是**纯运行期开关、不重启**），
  * 由 connectors.mjs 的「这台机器」页挂载。
  *
@@ -160,8 +161,8 @@ export async function renderSecurity() {
     ? ''
     : `<section class="set-sec">
         <div class="set-head">
-          <b>审计日志</b><span class="set-tag">仅管理员 · 主表 90 天 / 归档 1 个月</span>
-          <!-- 导出 / 清空（2026-11-03）：导出按当前类型筛选走全量；清空是破坏性动作，二次确认 -->
+          <b>审计日志</b><span class="set-tag">仅管理员 · 主表 90 天 / 归档 1 个月 · 清空=彻底删除</span>
+          <!-- 导出 / 清空（2026-11-03；2026-11-10 清空改为真删除）：导出按当前类型筛选走全量；清空是破坏性动作，二次确认 -->
           <!-- 类型筛选（2026-11-03 用户：放标题行、用公共 createCombo，不再占一整行 set-row） -->
           <span class="sec-head-actions">
             <span id="auditKindMount"></span>
@@ -343,17 +344,22 @@ export async function renderSecurity() {
     }
   };
 
-  /* 清空：服务端先归档再删，主表会留一条「清空」痕迹 —— 刷新后仍能看到这一行，别当成没清掉 */
+  /*
+   * 清空（2026-11-10 用户口径：真清空、不留备份）：
+   * 二次确认 → 服务端把主表 + 归档表一起删（不留 audit.clear 痕迹），
+   * 再 WAL checkpoint + VACUUM 回收旧页。确认文案必须把"不可恢复"说清楚。
+   */
   $('auditClear').onclick = async () => {
     const ok = await confirmDo(
-      '清空全部审计日志？记录会先搬进归档表（仍可事后追溯），主表只留一条「清空」痕迹。',
-      { ok: '清空' },
+      '彻底清空全部审计日志？\n\n主表和归档会一起删除，' +
+        '删除后不可恢复、也不留「清空」痕迹。',
+      { ok: '彻底清空' },
     );
     if (!ok) return;
     $('auditClear').disabled = true;
     try {
       const r = await post('/api/security/audit/clear', {});
-      toast(`已清空 ${r?.cleared ?? 0} 条审计日志`, 'ok');
+      toast(`已彻底清空 ${r?.cleared ?? 0} 条（含归档 ${r?.archived ?? 0} 条）`, 'ok');
       await loadEvents();
     } catch (e) {
       toast(e.message, 'error');

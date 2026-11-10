@@ -211,21 +211,35 @@ export function pruneArchive(days = ARCHIVE_KEEP_DAYS) {
 }
 
 /**
- * 清空（2026-11-03，审计页「清空」按钮）：**先归档再删** —— 行不能在主表里凭空消失
- * （append-only 的口径），搬进 security_events_archive 仍可事后查；搬完往主表留一条
- * `kind='audit.clear'` 的痕迹，说清楚"是谁在什么时候清了 N 条"。
- * 所以清空之后列表里还剩这一条 —— 这是**故意**的。
+ * 清空（2026-11-10 用户口径：**真清空，不留备份**）。
+ *
+ * 旧方案（2026-11-03）：先归档再删、主表留一条 `audit.clear` 痕迹 —— 相当于"清空"只是
+ * 搬进归档表，还能事后追溯。用户明确否掉：点「清空」+确认之后就要**真的清除**，
+ * 不要归档、不要痕迹、不要能恢复的备份。
+ *
+ * 做法：摘掉删除触发器 → `DELETE` 主表 + `DELETE` 归档表 → 装回触发器 →
+ * 清掉拒绝聚合的内存窗口；最后 `wal_checkpoint(TRUNCATE)` + `VACUUM`，
+ * 让旧数据页从库文件里真正回收（不留半份旧页在 WAL/空闲页里）。
+ * 返回 `{ events, archived }`：这次各删掉多少行（给界面回执用）。
  */
-export function clearAll({ actorKind = null, actorId = null, ip = null } = {}) {
-  const n = db.prepare('SELECT COUNT(*) AS n FROM security_events').get().n;
-  if (!n) return 0;
+export function clearAll() {
+  const events = db.prepare('SELECT COUNT(*) AS n FROM security_events').get().n;
+  const archived = db.prepare('SELECT COUNT(*) AS n FROM security_events_archive').get().n;
+  if (!events && !archived) return { events: 0, archived: 0 };
   db.exec('DROP TRIGGER IF EXISTS trg_events_no_delete;');
   try {
-    db.prepare('INSERT INTO security_events_archive SELECT * FROM security_events').run();
     db.prepare('DELETE FROM security_events').run();
+    db.prepare('DELETE FROM security_events_archive').run();
   } finally {
     restoreDeleteTrigger();
   }
-  add({ kind: 'audit.clear', actorKind, actorId, ip, action: `cleared ${n} events`, result: 'ok' });
-  return n;
+  // 拒绝聚合窗口是进程内存里的"60 秒内同类只落一行"状态；清空后一并归零，别让旧窗口影响新行
+  denySeen.clear();
+  try {
+    db.exec('PRAGMA wal_checkpoint(TRUNCATE);');
+  } catch { /* 有并发读者时 checkpoint 可能拿不到锁：不影响"已删"，只是 WAL 稍后自然回收 */ }
+  try {
+    db.exec('VACUUM;');
+  } catch { /* 同上；删已经删了，回收失败只是文件暂时不缩 */ }
+  return { events, archived };
 }

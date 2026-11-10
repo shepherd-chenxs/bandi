@@ -12,7 +12,7 @@
  *   ③ 中枢表单登录换 bandi_sid，以登录用户身份做一串写操作；
  *   ④ 读审计：user.change 都有 actorKind='user' + actorId=本人；operator 令牌的写
  *      actorKind='operator'、actorId=null（机器不是人，不冒充任何账号）；
- *   ⑤ kind 筛选、全量导出、清空（先归档再删，主表留 audit.clear 痕迹）都对会话开放；
+ *   ⑤ kind 筛选、全量导出、清空（2026-11-10 起：主表+归档一起真删、不留痕迹）都对会话开放；
  *   ⑥ 停服务直接开库：append-only 触发器（v2.4 口径）+ 90 天归档。
  *
  * 审计的事件 kind 是 server.mjs `auditKindOf` 写死的：
@@ -224,21 +224,30 @@ try {
   check("退出登录记成 kind='session.revoke'（actorId=null，logout 本身免令牌）", revoke.length >= 1,
     `session.revoke(null actorId)=${revoke.length} / total=${evAfter.length}`);
 
-  /* ============ ⑥ 导出与清空：同一套筛选、全量；清空留 audit.clear 痕迹 ============ */
-  console.log('\n⑥ 导出（不吃 200 上限）与清空（先归档再删，主表留痕）');
+  /* ============ ⑥ 导出与清空：同一套筛选、全量；清空=彻底删除（主表+归档，不留痕迹） ============ */
+  console.log('\n⑥ 导出（不吃 200 上限）与清空（彻底删除主表+归档，不留痕）');
   const exp = await call('GET', '/api/security/audit/export?kind=user.change', { cookie: sidB });
   check('导出 → 200 且全量（≥ 列表里看到的 user.change 数）',
     exp.status === 200 && (exp.body?.events ?? []).length >= (byKind.body?.events ?? []).length
     && exp.body.events.every((e) => e.kind === 'user.change'),
     `export=${exp.body?.events?.length}`);
   const clear = await call('POST', '/api/security/audit/clear', { cookie: sidB });
-  check('清空 → 200 且清掉 ≥1 条', clear.status === 200 && (clear.body?.cleared ?? 0) >= 1, `${clear.status} ${clear.raw?.slice(0, 100)}`);
+  check('清空 → 200 且回执带删除数', clear.status === 200 && (clear.body?.cleared ?? 0) >= 1, `${clear.status} ${clear.raw?.slice(0, 120)}`);
   const afterClear = await call('GET', '/api/security/audit', { cookie: sidB });
-  check('清空后主表只留一条 audit.clear（署名=清空的这个人）',
-    afterClear.status === 200 && (afterClear.body?.events ?? []).length === 1
-    && afterClear.body.events[0].kind === 'audit.clear'
-    && afterClear.body.events[0].actorKind === 'user' && afterClear.body.events[0].actorId === actorId,
-    JSON.stringify(afterClear.body?.events ?? []).slice(0, 160));
+  check('清空后主表为空（不再留 audit.clear 痕迹）',
+    afterClear.status === 200 && (afterClear.body?.events ?? []).length === 0,
+    `${(afterClear.body?.events ?? []).length} 条`);
+  {
+    // 归档表也必须空 —— 读只读连接看库（服务还活着，WAL 允许读）
+    const { DatabaseSync } = await import('node:sqlite');
+    const dbr = new DatabaseSync(DB, { readOnly: true });
+    const arc = dbr.prepare('SELECT COUNT(*) AS n FROM security_events_archive').get().n;
+    dbr.close();
+    check('清空后归档表也为空（不留备份）', arc === 0, `${arc} 条`);
+  }
+  // 清空之后审计照常工作：一次成功的写操作应该重新落一条 ok（⑦ 的触发器用例要用）
+  const writeAfter = await call('POST', '/api/security/sessions/revoke-others', { cookie: sidB });
+  check('清空后写操作照常落审计', writeAfter.status === 200, `${writeAfter.status}`);
 
   /* ---- 阶段 2：停服务，直接开库测触发器与归档 ---- */
   console.log('\n⑦ append-only 触发器（v2.4 口径，直接开库验证）');

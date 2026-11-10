@@ -232,8 +232,8 @@ try {
   const clearR = await uj.call('POST', '/api/security/audit/clear');
   check('登录用户清空审计 → 200（原 security:manage）', clearR.status === 200 && (clearR.json?.cleared ?? 0) >= 1, `${clearR.status} ${clearR.json?.code ?? ''}`);
   const afterClear = await uj.call('GET', '/api/security/audit');
-  check('清空后主表只留 audit.clear 痕迹（append-only 口径）',
-    afterClear.status === 200 && (afterClear.json?.events ?? []).length === 1 && afterClear.json.events[0].kind === 'audit.clear',
+  check('清空后主表为空（彻底删除，不留 audit.clear 痕迹）',
+    afterClear.status === 200 && (afterClear.json?.events ?? []).length === 0,
     JSON.stringify(afterClear.json?.events ?? []).slice(0, 120));
   const anon = await call('GET', '/api/users');
   check('匿名（无凭据）→ 401（全权≠免登录）', anon.status === 401, `${anon.status} ${anon.json?.code ?? ''}`);

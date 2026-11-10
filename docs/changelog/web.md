@@ -999,3 +999,16 @@ v13（2026-11-01 七改）：设备行加「取消配对」（已踢出行的清
    改动：store/users.mjs（briefs + nickname 列注释改口径）、routes/users.mjs（meOf 注释）、
    shell.mjs、chat.mjs、contacts.mjs、projects.mjs、settings.mjs；smoke-users.mjs（⑤c 加钉：
    /api/state 名册带昵称且不改账号名）；sw.js（VERSION v194 → v195）。
+
+
+  v196（2026-11-10 审计「清空」改成真删除，用户口径：不要备份、不要留痕）：
+  用户原话："我不喜欢现在的清空的做法，我想要的清空是真的清空，不留备份的那种。点击清空，出一个确认窗口，确认了就真的清除。"
+  旧行为（2026-11-03）：先归档再删 + 主表留一条 audit.clear 痕迹 —— 清空后列表里还剩一行、
+  归档表里还留一份，等于"能恢复的备份"，被否。
+  新行为：确认窗口文案写明"不可恢复"；确认后服务端把主表 + 归档表一起 DELETE（临时摘删除触发器，
+  删完装回），清空拒绝聚合内存窗口，再 WAL checkpoint(TRUNCATE) + VACUUM 回收旧页；不留任何痕迹。
+  改动：store/audit.mjs（clearAll 改真删，返回 {events, archived}）、routes/users.mjs（回执带 archived）、
+  securityadmin.mjs（确认文案/按钮"彻底清空"/标题提示"清空=彻底删除"）、route-policy 注释、
+  smoke-audit.mjs（断言主表+归档都空、清空后审计照常工作）、smoke-security-policy.mjs（同口径）；
+  sw.js（VERSION v195 → v196）。
+

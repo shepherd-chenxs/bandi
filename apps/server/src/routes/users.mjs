@@ -104,7 +104,7 @@ export async function handleUsers(req, res, url) {
      *   POST /api/security/sessions/revoke-others → 踢掉我其它设备（保留当前这张票）
      *   GET  /api/security/audit                  → 审计日志（kind/limit 游标翻页）
      *   GET  /api/security/audit/export           → 审计日志全量导出
-     *   POST /api/security/audit/clear            → 清空（先归档再删，留 audit.clear 痕迹）
+     *   POST /api/security/audit/clear            → 彻底清空（主表+归档一起删，不留痕迹；2026-11-10 定）
      */
     if (p.startsWith('/api/security')) {
       const who = req.bandiAuth;
@@ -144,16 +144,12 @@ export async function handleUsers(req, res, url) {
       }
 
       /*
-       * 清空：先归档再删，主表留一条 audit.clear 痕迹 ——
-       * "清空"不等于"抹掉证据"，搬进 archive 表的行仍然可事后查。
+       * 清空（2026-11-10 改）：**真清空、不留备份** —— 主表和归档表一起删，不留 audit.clear 痕迹。
+       * 旧做法（先归档再删 + 留痕）被用户否掉：确认过之后就要真的清除，不要能恢复的"备份"。
        */
       if (method === 'POST' && p === '/api/security/audit/clear') {
-        const cleared = store.clearAll({
-          actorKind: who.kind,
-          actorId: who.userId ?? null,
-          ip: String(req.socket?.remoteAddress ?? '').replace(/^::ffff:/, ''),
-        });
-        return sendJson(res, 200, { ok: true, cleared }), true;
+        const { events, archived } = store.clearAll();
+        return sendJson(res, 200, { ok: true, cleared: events, archived }), true;
       }
 
       throw new UserError(405, 'E3812', '安全接口不支持这个方法');
