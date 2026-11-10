@@ -1012,3 +1012,29 @@ v13（2026-11-01 七改）：设备行加「取消配对」（已踢出行的清
   smoke-audit.mjs（断言主表+归档都空、清空后审计照常工作）、smoke-security-policy.mjs（同口径）；
   sw.js（VERSION v195 → v196）。
 
+
+
+  v197（2026-11-10 删掉气泡里的「证据」按钮，用户口径：证据留后台、界面不体现）：
+  用户原话："证据没啥用，用户不会去看"；"如果是留了痕的，在后台就行，不需要在界面里体现"；
+  "如果出了问题，我只会让AI去帮我查原因，我自己是不会去的。"
+  改动：聊天气泡与任务卡讨论区不再挂「证据」入口（删 data-evi / evidenceChipHtml / 点击展开逻辑），
+  style.css 删 .evi-chip / .evi-body；后台一律不动：/api/runs/:id/evidence、/stream 运行事件、
+  审计痕迹照旧。smoke-run-events 改成钉"界面没有入口、接口照旧可用"；
+  sw.js VERSION v196 → v197。
+
+
+
+  v198（2026-11-10 「我的」页加「修改密码」，用户："加个修改密码的功能"）：
+  密码在中枢上（本机不存），所以这是一条三层链：中枢 bandi-hub 新端点 `POST /v1/auth/password`
+  （设备凭据 `Device <token>` 代绑定账号办事：验旧密码、写新 salt 的新派生值；拒绝面 H2004 /
+  H1004 / H3001）→ 班底服务端 `POST /api/me/password`（只认会话 user，读 hub.json 拿设备凭据
+  转发；route-policy 登记为 me.password；错误码 E3814/E3815/E3816，中枢原话带回）→
+  「我的」页入口（桌面 isUser 才画，与「设置」并成一张卡两行）+ 三栏弹窗（当前密码 / 新密码 /
+  确认，gr-conn-dlg 同款，form 不设 method='dialog' —— 回车要走提交）。
+  已登录的会话与其它设备不吊销：下次登录用新密码。
+  改动：bandi-hub（src/db.mjs 加 getDeviceVerified / getLocalCredentialByAccount /
+  updateLocalCredential、src/index.mjs 加端点、contract.md §三 补一行、
+  test/password-change.test.mjs 新建）；apps/server（hub/client.mjs 加 changePassword、
+  hub-stub.mjs 加同语义假端点、routes/users.mjs 加转发、security/route-policy.mjs 登记）；
+  apps/web（settings.mjs 入口行 + openPasswordDialog）；smoke-users.mjs 加 ⑤d（改密全链 +
+  新旧密码登录进退）；sw.js VERSION v197 → v198。

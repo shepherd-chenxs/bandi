@@ -8,7 +8,7 @@ import { confirmDo, askText } from './machine.mjs';
 import { detailSave, showView } from './contacts.mjs';
 import { wbCard } from './workflows.mjs';
 import { hint, openFlowRun, paintRun, setListTitle } from './flowpages.mjs';
-import { attsHtmlOf, evidenceChipHtml, firstMeaningfulLine, isNarrowPh, mbOpenPicker, openConversation, openDetail, streamRun, timelineOf } from './chat.mjs';
+import { attsHtmlOf, firstMeaningfulLine, isNarrowPh, mbOpenPicker, openConversation, openDetail, streamRun, timelineOf } from './chat.mjs';
 // 运行进度卡：对话页那一套（阶段/步数/用时/卡住提醒/停止生成）搬进任务卡讨论区 —— 2026-10-29 用户："对话里的那一套搬过来用"
 import { createProgressCard } from './run-progress-card.mjs';
 import { createLiveAnswer } from './run-live.mjs';
@@ -974,6 +974,17 @@ export async function openBoardPage({ project = null } = {}) {
     return;
   }
 
+  /*
+   * 横向滚动位置要跨重画留住（2026-11-10 用户报告"删一张卡就弹回最左边"）：
+   * 删卡 / 拖卡 / 建卡 / 刷新按钮都走 refresh() → 这里整页重画，view.innerHTML 重建后
+   * #kbCols 的 scrollLeft 归零 —— 列一多（已完成/已取消在最右），人正看着最右那列，
+   * 删一张卡整个看板弹回最左。重画前若摆着的是**同一块**看板（同 isAll / 同 project），
+   * 把 scrollLeft 带回来；从别的页进来或跨看板跳转不带（那本来就该从头看）。
+   */
+  const sameBoard = S.kbLast != null
+    && (isAll ? S.kbLast.project == null : S.kbLast.project?.id === project.id);
+  const kbScrollLeft = sameBoard ? ($('kbCols')?.scrollLeft ?? 0) : 0;
+
   view.innerHTML = `
     ${headRow(isAll
       ? breadcrumb([{ label: '工作台', to: 'workbench' }, { label: '任务看板' }])
@@ -1021,6 +1032,8 @@ export async function openBoardPage({ project = null } = {}) {
     },
   };
   wireBoard(view, S.kbLast.wire);
+  // 重画完把横向滚动位置还回去（见上面 sameBoard 的说明）；取数失败没有 #kbCols，跳过
+  if (kbScrollLeft) $('kbCols') && ($('kbCols').scrollLeft = kbScrollLeft);
   wireKbFilter();
   wireKbColsSetting();
   wireKbStats(); // 统计面板行可点：定位到对应列
@@ -3201,9 +3214,8 @@ export async function paintTaskCardPage(taskId, opts = {}) {
         ? '<div class="step stop">已停止生成' + esc(dur) + '（这一轮没有回话）</div>'
         : `<div class="step bad">没跑成：${esc(firstMeaningfulLine(r.error) || '运行失败（这次没留下原因）')}</div>`;
     } else {
-      // 证据入口（2026-11-09 P2b）：任务卡讨论区跟聊天页用同一个组件/同一个接口 ——
-      // 回话正文不贴命令/输出，点「证据」看这一轮的工具与错误摘要（完整事件仍可回放）。
-      main = `<div class="tc-cmt-text">${renderMarkdown(m.text)}${attsHtmlOf(m.atts)}${m.runId ? evidenceChipHtml(m.runId) : ''}</div>`;
+      // 2026-11-10 用户口径：证据留后台（运行记录/事件流），界面不体现 —— 任务卡讨论区的「证据」入口已移除。
+      main = `<div class="tc-cmt-text">${renderMarkdown(m.text)}${attsHtmlOf(m.atts)}</div>`;
     }
     // 「重跑一次」：失败轮的回话（或没落回话的失败占位）脚上带一颗 —— multica 同款（2026-10-30）
     const failedRid = m.pseudo === 'fail' ? m.run?.id : (m.runId && failedRunIds.has(m.runId) ? m.runId : null);

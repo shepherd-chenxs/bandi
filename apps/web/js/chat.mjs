@@ -756,11 +756,10 @@ export function bubble(role, text, name, who, showName = false, at = '', atts = 
    */
   const stoppedNote = meta?.stopped ? '<div class="bubble-note">已停止生成</div>' : '';
   /*
-   * 「证据」（2026-11-09 检修 P2）：回话正文不贴命令/输出，运行证据留在事件流里；
-   * 这里只挂一颗小按钮，点开按需拉**摘要**（工具名/目标/错误/时长）。
-   * 没有 runId 的消息（手工消息、失败块）不挂。
+   * 「证据」按钮（2026-11-09 P2）已于 2026-11-10 按用户口径移除：
+   * 证据是给**后台/AI 查原因**用的（运行事件、`/api/runs/:id/evidence` 都还在），
+   * 不在界面里体现 —— 气泡只放结论，不再挂按钮。
    */
-  const evi = role !== 'user' && opts?.runId ? evidenceChipHtml(opts.runId) : '';
     /* 手机端消息流降噪（2026-11-05 用户：「聊天页 UI 重新设计」）：
        · nt = 3 分钟内不重复挂时间戳（时间只留在每组第一条下面，微信/iMessage 同口径；
          桌面不受影响 —— .nt 的显示规则只写在 mobile.css 的 ≤900px 档里）；
@@ -769,50 +768,11 @@ export function bubble(role, text, name, who, showName = false, at = '', atts = 
     return `<div class="row ${mine ? 'me' : ''}${opts?.tight ? ' tight' : ''}${opts?.hideTime ? ' nt' : ''}">
     ${mine ? smAvatar('我', 'me') : smAvatar(label, '', p)}
     ${nameLine
-      ? `<div class="msg-main">${nameLine}<div class="bubble">${ticket}${renderMarkdown(text)}${attsHtml}${stoppedNote}${evi}</div></div>`
-      : `<div class="bubble">${ticket}${renderMarkdown(text)}${attsHtml}${stoppedNote}${evi}</div>`}
+      ? `<div class="msg-main">${nameLine}<div class="bubble">${ticket}${renderMarkdown(text)}${attsHtml}${stoppedNote}</div></div>`
+      : `<div class="bubble">${ticket}${renderMarkdown(text)}${attsHtml}${stoppedNote}</div>`}
     ${t ? `<div class="btime">${esc(t)}</div>` : ''}
   </div>`;
 }
-
-/**
- * 「证据」小按钮 + 展开区（2026-11-09 检修 P2）。
- *
- * 用户口径：回话只放结论，命令/输出/数据别糊在对话里 —— 但"他说干了什么"要能核。
- * 所以正文只挂一颗按钮，点开按需拉 `/api/runs/:id/evidence` 的**摘要**：
- * 工具名/目标（截 200 字）、错误、事件数/时长。完整事件仍可回放（/stream）。
- * 只回摘要的原因：一跑上千条事件、单条能到 64 KB，界面不需要也不该吃整份。
- */
-export function evidenceChipHtml(runId) {
-  return `<button type="button" class="evi-chip" data-evi="${esc(runId)}" title="这一轮调了什么工具、错在哪（完整事件在运行记录里）">证据</button><div class="evi-body" hidden></div>`;
-}
-
-/* 事件委托一次就够：消息会重画，按钮不用逐个绑；只在点击时拉数据。 */
-document.addEventListener('click', async (e) => {
-  const btn = e.target?.closest?.('[data-evi]');
-  if (!btn) return;
-  const body = btn.nextElementSibling;
-  if (!body || !body.classList.contains('evi-body')) return;
-  if (!body.hidden) { body.hidden = true; return; }
-  body.hidden = false;
-  if (body.dataset.loaded) return;
-  body.dataset.loaded = '1';
-  body.textContent = '加载中…';
-  try {
-    const ev = await api(`/api/runs/${encodeURIComponent(btn.dataset.evi)}/evidence`);
-    const lines = [`运行 ${ev.runId} · ${ev.status} · ${ev.events} 条事件`];
-    if (ev.toolCount) lines.push(`工具 ${ev.toolCount} 次（最近 ${ev.tools.length} 条）`);
-    for (const t of ev.tools) lines.push(`· ${t.name}${t.target ? '：' + t.target : ''}`);
-    for (const er of ev.errors) lines.push(`× ${er}`);
-    body.replaceChildren(...lines.map((line) => {
-      const div = document.createElement('div');
-      div.textContent = line;
-      return div;
-    }));
-  } catch (err) {
-    body.textContent = err?.message ?? '证据加载失败';
-  }
-});
 
 /*
  * 卡票（2026-10-24）：`meta = {type:'card', cardId, title, status, assignee}` 的消息，

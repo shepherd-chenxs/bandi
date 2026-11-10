@@ -177,15 +177,17 @@ try {
     (evi?.tools ?? []).some((t) => t.name === 'shell'), JSON.stringify(evi?.tools ?? []).slice(0, 120));
   const evi404 = await fetch(`${base2}/api/runs/${encodeURIComponent('r-根本没有')}/evidence`);
   check('不存在的运行 → 404 E2036', evi404.status === 404 && (await evi404.json().catch(() => ({}))).code === 'E2036', String(evi404.status));
-  // 界面那一半：聊天气泡里有入口，点开才按需拉摘要（静态断言，防"接口通了没人用"）
+  /*
+   * 界面那一半（2026-11-10 用户口径：证据留后台、界面不体现）：
+   * 接口照旧在、运行事件照旧存；但聊天气泡 / 任务卡讨论区**不再挂**「证据」按钮，
+   * 样式也一并删掉 —— 这里钉"没有入口"，防止哪天又被人加回去变成气泡噪音。
+   */
   const chatSrc = fs.readFileSync(new URL('../../web/js/chat.mjs', import.meta.url), 'utf8');
-  check('聊天页挂了「证据」入口且点它才拉摘要',
-    /data-evi=/.test(chatSrc) && /\/api\/runs\/\$\{encodeURIComponent\(btn\.dataset\.evi\)\}\/evidence/.test(chatSrc));
+  check('聊天气泡不再挂「证据」按钮（证据只在后台）', !/data-evi=/.test(chatSrc) && !/evidenceChipHtml/.test(chatSrc));
   const cssSrc = fs.readFileSync(new URL('../../web/style.css', import.meta.url), 'utf8');
-  check('证据展开区有样式（不是裸按钮）', /\.evi-chip\b/.test(cssSrc) && /\.evi-body\b/.test(cssSrc));
+  check('「证据」按钮/展开区样式已删', !/\.evi-chip\b/.test(cssSrc) && !/\.evi-body\b/.test(cssSrc));
   const projSrc = fs.readFileSync(new URL('../../web/js/projects.mjs', import.meta.url), 'utf8');
-  check('任务卡讨论区也挂同一个「证据」入口（不另写一套）',
-    /evidenceChipHtml\(m\.runId\)/.test(projSrc) && /from '\.\/chat\.mjs'/.test(projSrc));
+  check('任务卡讨论区也不再挂「证据」入口', !/evidenceChipHtml/.test(projSrc) && !/data-evi=/.test(projSrc));
 
   /* ------------------------------------------------------------------ ⑦ 真派一次活 */
   console.log('\n⑦ 真派一次活：走真实 HTTP 链路，覆盖"还在内存里 + 已结束"这条分支');
