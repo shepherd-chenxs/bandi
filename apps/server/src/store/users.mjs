@@ -229,7 +229,9 @@ export function createSession(userId, { ip = null, ua = null, kind = 'hub' } = {
   const shell = kind === 'shell';
   const expires = new Date(ts + (shell ? SHELL_SESSION_DAYS : SESSION_DAYS) * 86400_000).toISOString();
   const idle = new Date(ts + (shell ? SHELL_IDLE_DAYS * 86400_000 : IDLE_MINUTES * 60_000)).toISOString();
-  const absolute = new Date(ts + (shell ? SHELL_SESSION_DAYS : ABSOLUTE_HOURS) * 86400_000).toISOString();
+  // ⚠️ 单位别混：hub 的绝对闸是 ABSOLUTE_HOURS 小时（12h），shell 的绝对闸是天（180d）。
+  // （2026-11-10 复审抓过一次：写成 (… : ABSOLUTE_HOURS) * 86400_000 → 12 天，所有 hub 会话的绝对闸 ×24。）
+  const absolute = new Date(ts + (shell ? SHELL_SESSION_DAYS * 86400_000 : ABSOLUTE_HOURS * 3600_000)).toISOString();
   db.prepare(
     'INSERT INTO user_sessions (tokenHash, userId, createdAt, expiresAt, lastSeenAt, kind, idleExpiresAt, absoluteExpiresAt, ip, ua) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
   ).run(sha256(token), String(userId), created, expires, created, String(kind), idle, absolute, ip, String(ua ?? '').slice(0, 200));

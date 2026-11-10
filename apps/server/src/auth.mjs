@@ -40,7 +40,7 @@ import { verifyRunCredential } from './agent-auth.mjs';
  * 2026-10-31 起**本文件不再自己判 remoteAddress** —— 原来那句
  * `if (isLoopbackHost(host)) return { required:false }` 在反代部署下等于全站免登录。
  */
-import { classifySource, cfgNow, isLocalHost, isLoopbackAddr, isLoopbackHost } from './security/source.mjs';
+import { classifySource, cfgNow, hostnameOf, isLocalHost, isLoopbackAddr, isLoopbackHost } from './security/source.mjs';
 import * as policy from './security/policy.mjs';
 import { isRegistered } from './security/route-policy.mjs';
 import * as csrf from './security/csrf.mjs';
@@ -449,7 +449,7 @@ export function guard(auth, req, res, url) {
    * 要页面 → 登录页；要 API → 401。
    */
   if (req.method === 'GET' && url.pathname === SHELL_ENTER_PATH) {
-    if (handleShellEnter(req, res, url)) return false;
+    if (handleShellEnter(req, res, auth, url)) return false;
   }
 
   /*
@@ -710,8 +710,12 @@ function wantsPanelHtml(req, url) {
  * 注意**不是**"有 secret 就登"：必须同时满足本机直连（反代后面 peer 也是 127.0.0.1，
  * 但会带转发头 / Host 不是本机名 —— `isDirectLocalRequest` 那三道就是干这个的）。
  */
-function handleShellEnter(req, res, url) {
+function handleShellEnter(req, res, auth, url) {
+  // 回环免鉴权形态：壳不会走这条路（它探测到 200 就直开原地址），别在"本来就不用登录"的机器上多发一张会话
+  if (!auth?.required) return false;
   if (!isDirectLocalRequest(req)) return false;
+  // Host 收紧到回环字面量：壳在 127.0.0.1 上开窗口；本机网卡名/Host 改写不认（缩小隧道+改 Host 的组合面）
+  if (!isLoopbackHost(hostnameOf(req.headers.host))) return false;
   const got = String(url.searchParams.get('secret') ?? '').trim();
   if (!got) return false;
   const expected = localSecret.ensure();

@@ -110,31 +110,49 @@ try {
 
   /*
    * ② 会话是 shell 档：空闲闸按天（不是 30 分钟）—— 用户"过一晚回来"还能用
+   *   顺带钉住 hub 档没被 shell 档带偏（2026-11-10 复审抓过：hub 绝对闸被写成 12 天）。
    */
   const { DatabaseSync } = await import('node:sqlite');
   const db = new DatabaseSync(path.join(tmp, 'bandi.db'), { readOnly: true });
-  const row = db.prepare("SELECT kind, idleExpiresAt, absoluteExpiresAt FROM user_sessions ORDER BY createdAT DESC LIMIT 1").get();
+  const shellRow = db.prepare("SELECT kind, idleExpiresAt, absoluteExpiresAt FROM user_sessions WHERE kind = 'shell' ORDER BY createdAt DESC LIMIT 1").get();
+  const hubSession = store.createSession(store.firstUser().id, { kind: 'hub' });
+  const hubRow = db.prepare("SELECT kind, idleExpiresAt, absoluteExpiresAt FROM user_sessions WHERE kind = 'hub' ORDER BY createdAt DESC LIMIT 1").get();
   db.close();
-  const idleDays = row ? (Date.parse(row.idleExpiresAt) - Date.now()) / 86400_000 : -1;
-  check('会话 kind=shell', row?.kind === 'shell', JSON.stringify(row));
-  check('空闲闸按天（> 6 天，不是 30 分钟）', idleDays > 6, idleDays.toFixed(1) + ' 天');
+  const days = (iso) => (Date.parse(iso) - Date.now()) / 86400_000;
+  check('会话 kind=shell', shellRow?.kind === 'shell', JSON.stringify(shellRow));
+  check('shell：空闲闸按天（> 6 天，不是 30 分钟）', days(shellRow?.idleExpiresAt) > 6, days(shellRow?.idleExpiresAt).toFixed(1) + ' 天');
+  check('shell：绝对闸 180 天', Math.abs(days(shellRow?.absoluteExpiresAt) - 180) < 1, days(shellRow?.absoluteExpiresAt).toFixed(1) + ' 天');
+  check('hub 会话绝对闸仍是 12 小时（没被 shell 档带偏）',
+    !!hubSession.token && Math.abs(days(hubRow?.absoluteExpiresAt) * 24 - 12) < 0.2,
+    (days(hubRow?.absoluteExpiresAt) * 24).toFixed(1) + ' 小时');
+  check('hub 会话空闲闸仍是 30 分钟', Math.abs(days(hubRow?.idleExpiresAt) * 24 * 60 - 30) < 2,
+    (days(hubRow?.idleExpiresAt) * 24 * 60).toFixed(0) + ' 分钟');
 
   /*
    * ③ 错 secret 不进；且文案不再说"不是从本机直接发起的"（本机 peer 的实情是"要登录"）
    */
-  console.log('\n③ 错 secret：不进；本机请求的 E4010 文案不撒谎');
+  console.log('\n③ 错 secret / 空 secret / 非 GET：都不进；本机请求的 E4010 文案不撒谎');
   const bad = await get('/shell/enter?secret=wrong-secret');
   check('错 secret → 401 E4010（不发会话）', bad.status === 401 && bad.json?.code === 'E4010' && !/bandi_sid=/.test(String(bad.headers.get('set-cookie'))), `${bad.status} ${bad.json?.code ?? ''}`);
   check('本机请求的文案不再说"不是从本机直接发起的"',
     /需要登录/.test(String(bad.json?.error)) && !/不是从本机直接发起的/.test(String(bad.json?.error)), String(bad.json?.error));
+  const empty = await get('/shell/enter?secret=');
+  check('空 secret → 不进', empty.status === 401 && !/bandi_sid=/.test(String(empty.headers.get('set-cookie'))), `${empty.status}`);
+  const noParam = await get('/shell/enter');
+  check('缺参数 → 不进', noParam.status === 401 && !/bandi_sid=/.test(String(noParam.headers.get('set-cookie'))), `${noParam.status}`);
+  // POST 单独打一枪，确认只开 GET（get() 固定 GET）
+  const postRes = await fetch(BASE + `/shell/enter?secret=${encodeURIComponent(SECRET)}`, { method: 'POST', redirect: 'manual' });
+  check('POST 不进门（只开 GET）', postRes.status !== 302, `${postRes.status}`);
 
   /*
-   * ④ 反代形态（带 X-Forwarded-For）即使知道 secret 也不认 —— secret 只在本机直连时算数
+   * ④ 反代形态（X-Forwarded-For / X-Real-IP / Forwarded）即使知道 secret 也不认
    */
   console.log('\n④ 反代进来的请求：有 secret 也不认');
-  const proxied = await get(`/shell/enter?secret=${encodeURIComponent(SECRET)}`, { 'X-Forwarded-For': '203.0.113.9' });
-  check('反代 + 对 secret → 不 302、不发会话',
-    proxied.status !== 302 && !/bandi_sid=/.test(String(proxied.headers.get('set-cookie'))), `${proxied.status}`);
+  for (const header of ['X-Forwarded-For', 'X-Real-IP', 'Forwarded']) {
+    const proxied = await get(`/shell/enter?secret=${encodeURIComponent(SECRET)}`, { [header]: header === 'Forwarded' ? 'for=203.0.113.9' : '203.0.113.9' });
+    check(`${header} + 对 secret → 不 302、不发会话`,
+      proxied.status !== 302 && !/bandi_sid=/.test(String(proxied.headers.get('set-cookie'))), `${proxied.status}`);
+  }
 
   /*
    * ⑤ 老路径不受影响：令牌照旧能过 API
