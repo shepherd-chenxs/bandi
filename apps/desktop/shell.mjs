@@ -1053,10 +1053,14 @@ if (r.action === 'failed' && Number(r.pid) > 0 && listeners(PORT).includes(Numbe
  * 窗口该开在哪个地址。
  *
  * ⚠️ 开了「允许局域网内的机器加入」之后，控制面就**要求令牌**了（"只看监听地址"那条规则 ✓）——
- * 于是桌面版自己那个窗口也会撞上登录页 ✗。壳能读到同一台机器上的令牌文件，
- * 所以直接把令牌带上：`?token=…` 会让服务端设好 Cookie 再跳回干净地址 ✓（那正是它的用途 ✓）。
+ * 于是桌面版自己那个窗口也会撞上登录页 ✗。壳能读同一台机器上的 `local_secret`，
+ * 所以把窗口开到 `/shell/enter?secret=…`：服务端核过 secret + 本机直连后发一张
+ * **本机会话**（7 天空闲 / 180 天绝对，见 store/users.mjs 的 SHELL_IDLE_DAYS）再跳回面板。
+ * 这是"这台机器上的应用"的凭据，不是把 operator 令牌塞进地址栏（2026-11-10 改：
+ * 之前带 `?token=`，令牌不是人 → 面板 HTML 会给登录页，结果壳每次开都落在登录页）。
  *
- * 只在**真被要求**时才带（拿 401 试探一下 ✓）：回环模式下带上它，地址栏里会留一串没用的令牌 ✗。
+ * 只在**真被要求**时才带（拿 401 试探一下 ✓）：回环模式下 `local_secret` 不是必需的
+ * （那会是回环免鉴权形态），多带一个密钥进地址栏不合适。
  */
 async function windowUrl(url) {
   try {
@@ -1064,6 +1068,16 @@ async function windowUrl(url) {
     if (probe.status !== 401) return url;
   } catch {
     return url; // 探测不了就按原样开，别把壳卡在这儿
+  }
+  /*
+   * 本机密钥自动进门（2026-11-10 主路径）。`local_secret` 由服务端在数据目录生成（0600），
+   * 壳和服务端同机同用户，读得到。
+   */
+  try {
+    const secret = fs.readFileSync(path.join(DATA, 'local_secret'), 'utf8').trim();
+    if (secret) return `${url.replace(/\/$/, '')}/shell/enter?secret=${encodeURIComponent(secret)}`;
+  } catch {
+    /* 没有 local_secret（老数据目录 / 只读盘）：退回下面的令牌路径 */
   }
   try {
     const token = fs.readFileSync(path.join(DATA, 'token'), 'utf8').trim();
@@ -1075,7 +1089,7 @@ async function windowUrl(url) {
 }
 
 const WINDOW_URL = r.url ? await windowUrl(r.url) : '';
-if (WINDOW_URL !== r.url) log('这次要令牌（局域网模式）—— 已把令牌带进窗口地址，免登录');
+if (WINDOW_URL !== r.url) log('这次要鉴权（对外监听）—— 用本机密钥自动进门（窗口开到 /shell/enter）');
 
 if (r.action === 'already') {
   const alive = aliveClients();

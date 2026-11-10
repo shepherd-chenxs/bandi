@@ -47,6 +47,8 @@ const RUN = [
   'apps/server/src/smoke-proxy-auth.mjs',
   'apps/server/src/smoke-security-policy.mjs',
   'apps/server/src/smoke-auth.mjs',
+  // 本机壳子自动进门（2026-11-10）：/shell/enter 核 local_secret + 本机直连 → 本机会话
+  'apps/server/src/smoke-shell-enter.mjs',
   'apps/server/src/smoke-autostart.mjs',
   'apps/server/src/smoke-chat-to-board.mjs',
   'apps/server/src/smoke-connectors.mjs',

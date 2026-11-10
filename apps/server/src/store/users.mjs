@@ -31,6 +31,19 @@ export const IDLE_MINUTES = 30;
 /** 绝对超时：12 小时后必须重新登录 */
 export const ABSOLUTE_HOURS = 12;
 
+/**
+ * **本机壳子的会话**（2026-11-10）：桌面壳用数据目录里的 `local_secret` 自动进门，
+ * 换来的会话走更宽的闸。
+ *
+ * 为什么不能沿用"空闲 30 分钟 / 绝对 12 小时"：这条会话的凭据是**本机文件**
+ * （`local_secret`，0600，和 `bandi_token` 同一档信任 —— 能读它的进程本来就能改库），
+ * 不是人手输的密码；而桌面壳的用户离开一会儿回来就掉线、发消息报 E4010（2026-11-10 实报）。
+ * 桌面上这个壳**没有地方让人重新输密码**（窗口里只有面板），所以必须给一台"这台机器
+ * 的会话"该有的寿命：7 天空闲、180 天绝对；壳重新打开/`local_secret` 变了就重新签。
+ */
+export const SHELL_IDLE_DAYS = 7;
+export const SHELL_SESSION_DAYS = 180;
+
 /** 名字归一：去首尾空白 + 折叠内部空白 + 忽略大小写 —— "张三"和" 张三 "是同一个人 */
 export function normName(name) {
   return String(name ?? '')
@@ -212,9 +225,11 @@ export function createSession(userId, { ip = null, ua = null, kind = 'hub' } = {
   const token = crypto.randomBytes(32).toString('base64url');
   const ts = Date.now();
   const created = new Date(ts).toISOString();
-  const expires = new Date(ts + SESSION_DAYS * 86400_000).toISOString();
-  const idle = new Date(ts + IDLE_MINUTES * 60_000).toISOString();
-  const absolute = new Date(ts + ABSOLUTE_HOURS * 3600_000).toISOString();
+  // 本机壳子的会话：见 SHELL_IDLE_DAYS / SHELL_SESSION_DAYS 的注释（凭据是本机文件，不是密码）
+  const shell = kind === 'shell';
+  const expires = new Date(ts + (shell ? SHELL_SESSION_DAYS : SESSION_DAYS) * 86400_000).toISOString();
+  const idle = new Date(ts + (shell ? SHELL_IDLE_DAYS * 86400_000 : IDLE_MINUTES * 60_000)).toISOString();
+  const absolute = new Date(ts + (shell ? SHELL_SESSION_DAYS : ABSOLUTE_HOURS) * 86400_000).toISOString();
   db.prepare(
     'INSERT INTO user_sessions (tokenHash, userId, createdAt, expiresAt, lastSeenAt, kind, idleExpiresAt, absoluteExpiresAt, ip, ua) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
   ).run(sha256(token), String(userId), created, expires, created, String(kind), idle, absolute, ip, String(ua ?? '').slice(0, 200));
@@ -255,7 +270,8 @@ export function userBySession(token) {
   if (!u || u.disabled) return null;
   if (!row.lastSeenAt || now - Date.parse(row.lastSeenAt) > 60_000) {
     const ts = new Date(now).toISOString();
-    const idle = new Date(now + IDLE_MINUTES * 60_000).toISOString();
+    // 本机壳子的会话按天续，别按 30 分钟（见 SHELL_IDLE_DAYS 的注释）
+    const idle = new Date(now + ((row.kind === 'shell' ? SHELL_IDLE_DAYS * 86400_000 : IDLE_MINUTES * 60_000))).toISOString();
     db.prepare('UPDATE user_sessions SET lastSeenAt = ?, idleExpiresAt = ? WHERE tokenHash = ?').run(ts, idle, row.tokenHash);
   }
   return { tokenHash: row.tokenHash, user: u, kind: row.kind ?? 'hub' };
