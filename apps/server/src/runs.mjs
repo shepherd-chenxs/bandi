@@ -4,8 +4,11 @@ import * as cliModels from './cli-models.mjs';
 import * as connectors from './connectors.mjs';
 import { normalizeSandbox } from './sandbox.mjs';
 import { ADAPTERS } from './adapters.mjs';
-import { controlUrl, issueRunCredential, isPmRole, revokeRunCredential } from './agent-auth.mjs';
+import { controlUrl, issueRunCredential, revokeRunCredential } from './agent-auth.mjs';
+// 建卡口径的判据（2026-11-11）：有建卡权限的岗位才多注入一段，见 roles.mjs
+import { can } from './roles.mjs';
 import { stripTrailingDoneMark } from './delivery-claim.mjs';
+import { acquirePowerLock, releasePowerLock } from './power-lock.mjs';
 
 /**
  * 「这条会话在对面那个 CLI 里不存在」的报错特征。
@@ -198,7 +201,10 @@ function runCredentialBrief(pm = false) {
     '调平台接口时现场取（PowerShell `$env:BANDI_RUN_TOKEN`），请求头 `X-Bandi-Run-Token`；**不要抄历史命令里的旧值**。',
     '`401 E2056` = 旧/错钥匙（重取一次重试，不是权限问题）；`403 E4034` = 这个接口不归运行钥匙管。',
     ...(pm
-      ? ['建卡走 `POST /api/agent/cards/batch`（每张带稳定 `idempotencyKey`，重发命中幂等）；改卡 `PATCH /api/projects/tasks/<id>`（只对你建的卡 / 你当群助手那张）。']
+      ? [
+          '建卡走 `POST /api/agent/cards/batch`：体 `{cards:[…]}`、裸数组、单张卡都认；项目可省略（群派活默认用群关联项目）；失败先读 `{code,error}` 按提示改，**最多 2 次**，别整批重发；2 次仍失败就按【统筹职责】降级（群里 @ 人 + 报群主），不许自己写代码。',
+          '补卡（补记已经发生的活）：同接口带 `"backfill": true` + 实际状态（待验收 / 已阻塞 / 已完成 / 已取消 / 失败），补记不重跑；改卡走 `PATCH /api/projects/tasks/<id>`（只对你建的卡 / 你当群助手那张）。',
+        ]
       : []),
   ].join('\n');
 }
@@ -301,8 +307,8 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
   const cred = issueRunCredential(run.id, personaId, { local: true });
   run.agentEnv = cred ? { BANDI_CONTROL_URL: controlUrl, BANDI_RUN_TOKEN: cred.token } : {};
   // 每轮把"钥匙现取、别抄旧值"贴在任务末尾（见 runCredentialBrief 的说明）；
-  // PM 再多一句建卡口径（续接会话读不到新技能，这行每轮都在）
-  const agentTask = cred ? `${task}\n\n${runCredentialBrief(isPmRole(store.getPersona(personaId)?.role))}` : task;
+  // 有建卡权限的岗位（现在只有项目经理）再多一句建卡口径（续接会话读不到新技能，这行每轮都在）
+  const agentTask = cred ? `${task}\n\n${runCredentialBrief(can(store.getPersona(personaId), 'card.create'))}` : task;
 
   // 按**协议族**选适配器：同一族下可以有多个实例，它们共用一套事件解析
   const adapter = ADAPTERS[rt.adapter];
@@ -421,6 +427,13 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
   };
 
   let first;
+  /*
+   * 电源锁（pt-bfe8e476）：有活才向系统申报"别睡"（详见 power-lock.mjs 头注）。
+   * 挂在 runOnce 之前 —— 含 retryFresh 重跑的那条路；起不来的同步 throw 也会走
+   * finish() 把锁还掉。失败降级在模块内部，这里不感知、不挡活。
+   */
+  run.powerLock = true;
+  acquirePowerLock();
   try {
     first = runOnce(resumeId);
   } catch (err) {
@@ -655,6 +668,13 @@ function finish(run, { status, exitCode = null, error = null, usage = null, elap
   store.finishRun(run.id, { status, exitCode, error, usage });
   store.setConversationStatus(run.conversationId, status);
   revokeRunCredential(run.id); // 钥匙跟活走：run 收尾就作废，agent 不能在活干完之后再建卡
+
+  // 电源锁跟活走：finish 是所有运行的唯一终点（正常收尾/停止/看门狗强杀都路过这里），
+  // 在这儿还锁才不会漏。releasePowerLock 幂等，多还无害。
+  if (run.powerLock) {
+    run.powerLock = false;
+    releasePowerLock();
+  }
 
   // 钩子出错不能影响执行本身的收尾 —— 否则一条流程的推进逻辑会把发言也搞挂
   for (const fn of finishHooks) {

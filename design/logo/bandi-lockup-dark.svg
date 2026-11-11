@@ -1,0 +1,12 @@
+<svg width="570" height="240" viewBox="0 0 190 80" xmlns="http://www.w3.org/2000/svg">
+  <title>班底 · 横向组合（墨底）</title>
+  <!-- mark 与 bandi-icon-dark.svg 同几何；中文标准字为字库渲染（PingFang/思源黑），
+       正式印刷与商标申请前必须转曲定稿，不得直接以系统字体文件作为 logo 资产。 -->
+  <rect width="190" height="80" rx="14" fill="#12161A"/>
+  <g transform="translate(43 40) scale(0.5) translate(-50 -49.8)">
+    <path d="M47 4.11 A40 40 0 0 0 47 83.89 Z" fill="#F2F1ED"/>
+    <path d="M53 4.11 A40 40 0 0 1 53 83.89 Z" fill="#5FB3A3" transform="translate(0 12)"/>
+  </g>
+  <text x="88" y="48" font-family="'PingFang SC','Microsoft YaHei','Noto Sans CJK SC',sans-serif" font-size="34" font-weight="700" letter-spacing="1" fill="#F2F1ED">班底</text>
+  <text x="89" y="66" font-family="Inter,'Segoe UI',sans-serif" font-size="11" font-weight="500" letter-spacing="4.5" fill="#5FB3A3">BANDI</text>
+</svg>

@@ -109,6 +109,11 @@ try {
   const baseA = `http://127.0.0.1:${P_LOOP}`;
   if (!(await waitUp(baseA))) throw new Error('回环那台没起来：' + a.log().slice(-400));
   check('不带令牌也能读状态', (await get(baseA, '/api/state')).status === 200);
+  /* 壳的 windowUrl 靠它决定要不要自动进门（2026-11-10 晚）：回环形态不需要 */
+  const pingLoop = await get(baseA, '/api/ping');
+  check('/api/ping 回 authRequired=false（回环免鉴权形态）',
+    pingLoop.status === 200 && pingLoop.json?.authRequired === false,
+    `${pingLoop.status} ${JSON.stringify(pingLoop.json)}`);
   check('日志说清了"免鉴权"', /免鉴权/.test(a.log()), (a.log().match(/只监听回环.*/) ?? ['(没有)'])[0]);
   check('回环模式下不生成令牌文件', !fs.existsSync(TOKEN_FILE), TOKEN_FILE);
   check('isUp 认它是"起来了"', await isUp(P_LOOP));
@@ -121,6 +126,11 @@ try {
   if (!(await waitUp(baseB))) throw new Error('非回环那台没起来：' + b.log().slice(-400));
   const token = fs.readFileSync(TOKEN_FILE, 'utf8').trim();
   check('令牌落盘了', token.length > 20, `${token.slice(0, 6)}…（${token.length} 字符）`);
+  /* 同一个探活口在对外监听形态下要说"要进门"（壳据此走 /shell/enter） */
+  const pingOpen = await get(baseB, '/api/ping');
+  check('/api/ping 回 authRequired=true（对外监听）',
+    pingOpen.status === 200 && pingOpen.json?.authRequired === true,
+    `${pingOpen.status} ${JSON.stringify(pingOpen.json)}`);
   /*
    * ⚠️ 这一条**反过来**了（2026-10-16）：原来是"日志里打了令牌，与文件一致" ——
    * 理由当时是"自托管单操作员，打出来才找得到"。但日志的真实命运是被贴进聊天、被备份、被同步 ✗，

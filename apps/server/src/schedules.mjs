@@ -22,6 +22,7 @@ import * as store from './store.mjs';
 import { prScan } from './pr-watch.mjs';
 import { backupDb } from './db-backup.mjs';
 import { runPersonaTask, validatePersonaTask, describePersonaTask } from './persona-task.mjs';
+import { runTeamTask, validateTeamTask, describeTeamTask } from './team-task.mjs';
 import { runWorkflowTask, validateWorkflowTask, describeWorkflowTask } from './workflow-task.mjs';
 import { retryPendingSteps } from './workflows.mjs';
 import { retryQueuedTasks } from './project-tasks.mjs';
@@ -47,21 +48,26 @@ const clip = (s, n) => {
  *
  * 动作**自己声明参数**（`fields`），界面照声明渲染，不认任何具体动作的字段名 ——
  * 所以 PR 巡检的「仓库 / 项目」只是它自己的参数，不是弹窗里写死的两个下拉。
- * 参数类型：`repo`（已接入仓库）/ `project`（项目）/ `persona`（数字员工）/ `flow`（已发布的流程）
- * / `number` / `text` / `textarea`。
+ * 参数类型：`repo`（已接入仓库）/ `project`（项目）/ `persona`（数字员工）/ `group`（群，群助手
+ * 必须是项目经理岗）/ `flow`（已发布的流程）/ `number` / `text` / `textarea`。
+ *
+ * 每个动作还带 `kind`（2026-11-11 执行方式改版）：`mode` = 三种执行方式
+ * （指派人 / 团队协作 / 流程任务，弹窗里排前面、占主位），`system` = 内置系统动作
+ * （PR 巡检 / 备份，弹窗里收进「系统动作」一组 —— 选它们的人少，别占着第一屏）。
  *
  * 动作还可以声明 `describe(config)`：卡片上那一行"它到底要干什么"也归动作自己说
  * （`lead`，见 routes/schedules.mjs 的 view）—— 否则前端就得按 action 名字写 if。
  */
 export const ACTIONS = {
   /*
-   * 排第一位 = 默认动作：定时任务最常见的样子是「到点把一句话交给某个人」，
-   * 而不是「跑某条写死的巡检」。PR 巡检、备份是内置动作，只是其中两种。
+   * 排第一位 = 默认动作：定时任务最常见的样子是「到点把一句话指派给某个人」，
+   * 而不是「跑某条写死的巡检」。团队协作、流程任务、PR 巡检、备份是其余几种。
    * 两个字段都来自声明（textarea / persona），弹窗本身不认识它们。
    */
   'persona-task': {
     id: 'persona-task',
-    label: '交给数字员工',
+    kind: 'mode',
+    label: '指派人',
     hint: '到点把你说的话发给他，他照自己的权限去做；每个任务有自己的一条会话，结果在那儿看',
     defaultName: '定时派活',
     fields: [
@@ -74,7 +80,7 @@ export const ACTIONS = {
         requiredText: '「做什么」还没写 —— 到点了得知道让它干什么',
         placeholder: '到点让它干什么？说清楚一点，例如：看一下今天的 PR，把需要我审的整理成一条消息发我',
       },
-      { key: 'personaId', label: '交给谁', type: 'persona', empty: '选一个人', required: true, requiredText: '还没选「交给谁」' },
+      { key: 'personaId', label: '执行对象', type: 'persona', empty: '选一个人', required: true, requiredText: '还没选「执行对象」（选一个人）' },
       /*
        * 关联项目 = 这次派活的工作空间（用户的叫法照截图：「关联项目」）。
        * 不给这个参数时，他会落到**自己那个默认目录**（六个员工常常指着同一个目录），
@@ -94,15 +100,55 @@ export const ACTIONS = {
     run: ({ job, config }) => runPersonaTask({ job, config }),
   },
   /*
-   * 「交给流程」：到点**发起一条流程实例**，不是把话发给某个人（2026-10-29）。
+   * 「团队协作」：到点把活**派进一个群**，由群助手（项目经理岗）承接、拆子卡、盯回执
+   * （2026-11-11，执行方式三选一；参考任务面板同名的那个）。
    *
-   * 跟上面那个是同一件事的两种执行者 —— 定时任务最自然的两种样子就是
-   * "到点提醒某个人去做" 和 "到点把流水线跑一遍"（发版检查、周报汇总、依赖巡检）。
-   * 只认**已发布**的流程：发布 = "这条流程可以真跑"，跟看板建卡同一口径。
+   * 执行对象 = 群（`groupId`）：只有**群助手是项目经理岗**的群才进得了清单 —— 拆卡人
+   * 自己也是执行者会"自己等自己"，岗位这道闸同时把责任钉死（与看板建卡同一份判据）。
+   * 每次触发在看板落一张卡（「关联项目」必填），派群、子卡、回执全走看板现成的链路。
+   */
+  'team-task': {
+    id: 'team-task',
+    kind: 'mode',
+    label: '团队协作',
+    hint: '到点把活派进群，由群助手（项目经理）承接：拆子卡、盯回执；每次触发在看板建一张卡',
+    defaultName: '定时协作',
+    fields: [
+      {
+        key: 'instruction',
+        label: '做什么',
+        type: 'textarea',
+        rows: 4,
+        required: true,
+        requiredText: '「做什么」还没写 —— 到点了得知道给团队派什么活',
+        placeholder: '到点让团队干什么？说清楚一点，例如：把这周合并的 PR 按模块分工过一遍，问题汇总发我',
+      },
+      { key: 'groupId', label: '执行对象', type: 'group', empty: '选一个群', required: true, requiredText: '还没选「执行对象」（选一个群）' },
+      {
+        key: 'projectId',
+        label: '关联项目',
+        type: 'project',
+        empty: '选一个项目',
+        required: true,
+        requiredText: '团队协作的每次触发都要在看板落一张卡 —— 先选「关联项目」',
+      },
+    ],
+    validate: (config) => validateTeamTask(config),
+    describe: (config) => describeTeamTask(config),
+    run: ({ job, config }) => runTeamTask({ job, config }),
+  },
+  /*
+   * 「流程任务」：到点**发起一条流程实例**，不是把话发给某个人（2026-10-29；2026-11-11 改名）。
+   *
+   * 跟指派人 / 团队协作是同一件事的三种执行者 —— 定时任务最自然的三种样子就是
+   * "到点指派某个人去做"、"到点把活派进群让人拆"、"到点把流水线跑一遍"
+   * （发版检查、周报汇总、依赖巡检）。只认**已发布**的流程：发布 = "这条流程可以真跑"，
+   * 跟看板建卡同一口径。
    */
   'run-workflow': {
     id: 'run-workflow',
-    label: '交给流程',
+    kind: 'mode',
+    label: '流程任务',
     hint: '到点发起一条流程实例，按模板节点自己往下走；只列已发布的流程（去工作台 › 工作流里发布）',
     defaultName: '定时起流程',
     fields: [
@@ -115,7 +161,7 @@ export const ACTIONS = {
         requiredText: '「做什么」还没写 —— 到点了得知道拿什么事去起这条流程',
         placeholder: '这次要办的那件事。它会发给第一个节点的人，例如：把本周合并的 PR 汇总成一份周报',
       },
-      { key: 'templateId', label: '哪条流程', type: 'flow', empty: '选一条流程', required: true, requiredText: '还没选「哪条流程」' },
+      { key: 'templateId', label: '执行对象', type: 'flow', empty: '选一条流程', required: true, requiredText: '还没选「执行对象」（选一条流程）' },
       {
         key: 'projectId',
         label: '关联项目',
@@ -130,6 +176,7 @@ export const ACTIONS = {
   },
   'pr-scan': {
     id: 'pr-scan',
+    kind: 'system',
     label: 'PR / Issue 巡检',
     hint: '拉已接入仓库的 open PR / issue 写成值班卡，并刷新已关联卡上的 PR 状态（合并 → 待验收）',
     defaultName: 'PR 巡检',
@@ -141,6 +188,7 @@ export const ACTIONS = {
   },
   'backup-db': {
     id: 'backup-db',
+    kind: 'system',
     label: '备份数据库',
     hint: '把 bandi.db 导出一份到数据目录的 backups/，只留最近 N 份（跟 PR 无关，纯粹是数据安全）',
     defaultName: '数据库备份',
@@ -151,7 +199,14 @@ export const ACTIONS = {
 
 /** 给界面用的动作清单（不带 run，别把函数发到浏览器；fields 是渲染弹窗的唯一依据） */
 export function actionCatalogue() {
-  return Object.values(ACTIONS).map(({ id, label, hint, defaultName, fields }) => ({ id, label, hint, defaultName, fields: fields ?? [] }));
+  return Object.values(ACTIONS).map(({ id, kind, label, hint, defaultName, fields }) => ({
+    id,
+    kind: kind ?? 'system',
+    label,
+    hint,
+    defaultName,
+    fields: fields ?? [],
+  }));
 }
 
 /** 任务卡上的 `config` 是 JSON 字符串（动作自己解释），这里只负责安全地解析 */

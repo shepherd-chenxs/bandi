@@ -1,6 +1,6 @@
 /* skills.mjs —— 技能、从 GitHub 挑仓库（放进弹窗里）、定时任务、从本地导入、技能 → 发给数字员工（反方向挂载）。
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
-import { esc, mdRender, savePlace, setRoute, toast } from './shell.mjs';
+import { esc, mdRender, personaCan, roleNameOf, savePlace, setRoute, toast } from './shell.mjs';
 import { ICON_BRANCH, ICON_CLOUD, ICON_COMMIT, ICON_EDIT, ICON_FOLDER, ICON_GEAR, ICON_PLAY, ICON_PUSH, ICON_SYNC, ICON_TAG, ICON_TRASH, api, createCombo, createDateTimePick, cut, failHtml, initial, openCtxMenu, post, wireDialogHead } from './ui.mjs';
 import { load, setNav } from './state.mjs';
 import { openSettings } from './settings.mjs';
@@ -1278,14 +1278,15 @@ export async function renderGitRepos(root = $('pluginView')) {
     dlg.id = 'repoGateDlg';
     dlg.className = 'gr-gate-dlg';
 
-    /* 处理人排序：研发 → 测试 → 运维 → 其它，能修代码的排最上面（默认就选它） */
-    const rank = (role) => {
-      const s = String(role ?? '');
-      return s.startsWith('研发') ? 0 : s.startsWith('测试') ? 1 : s.startsWith('运维') ? 2 : 3;
+    /* 处理人排序：研发 → 测试 → 运维 → 其它，能修代码的排最上面（默认就选它）。
+       2026-11-11 起岗位固定，按 roleKey 排，不再匹配 role 文本。 */
+    const rank = (p) => {
+      const k = String(p?.roleKey ?? '');
+      return k === 'dev' ? 0 : k === 'test' ? 1 : k === 'ops' ? 2 : 3;
     };
-    const people = [...(S.personas ?? [])].sort((a, b) => rank(a.role) - rank(b.role));
+    const people = [...(S.personas ?? [])].sort((a, b) => rank(a) - rank(b));
     const opts = people
-      .map((p) => `<option value="${esc(p.id)}">${esc(p.name)}${p.role ? ` · ${esc(String(p.role).split(' · ')[0])}` : ''}</option>`)
+      .map((p) => `<option value="${esc(p.id)}">${esc(p.name)}${roleNameOf(p) ? ` · ${esc(roleNameOf(p))}` : ''}</option>`)
       .join('');
 
     dlg.innerHTML = `
@@ -2805,14 +2806,18 @@ export function mountSchRepeatPicks(mode, job) {
 
 
 /** 这几种字段是下拉，值由 .combo 组件持有（不是 DOM 里的原生 <select>） */
-export const SCH_COMBO_TYPES = ['repo', 'project', 'persona', 'flow'];
+export const SCH_COMBO_TYPES = ['repo', 'project', 'persona', 'group', 'flow'];
 
 /**
  * 一个选择字段的选项清单。第一项永远是「留空」那一档 —— 它的文案由动作自己给
- * （`empty`：全部 / 自动 / 选一个人 / 选一条流程），"可留空"才不是一句空话。
+ * （`empty`：全部 / 自动 / 选一个人 / 选一个群 / 选一条流程），"可留空"才不是一句空话。
  * 桌面下拉（.combo）与手机选择页（mbOpenPicker）共用这一份，不许各造一套。
+ *
+ * `group`（2026-11-11 执行方式改版；2026-11-11 起判据换成岗位权限）只列**群助手能承接
+ * 团队协作卡**的群 —— 与任务面板团队协作同一份判据（`personaCan(a, 'team.coordinate')`，
+ * 现在是项目经理岗）；一个都没有时给一行说明，跟流程那条"还没有已发布的流程"同一个口径。
  */
-export function schComboItems(f, repos, projects, personas, flows) {
+export function schComboItems(f, repos, projects, personas, flows, groups) {
   if (f.type === 'repo') return [{ id: '', label: f.empty ?? '全部' }, ...(repos ?? []).map((r) => ({ id: r.fullName, label: r.fullName }))];
   if (f.type === 'project') return [{ id: '', label: f.empty ?? '自动' }, ...(projects ?? []).map((p) => ({ id: p.id, label: p.name }))];
   if (f.type === 'flow') {
@@ -2820,6 +2825,15 @@ export function schComboItems(f, repos, projects, personas, flows) {
     return (flows ?? []).length
       ? [{ id: '', label: f.empty ?? '选一条流程' }, ...(flows ?? []).map((x) => ({ id: x.id, label: x.name }))]
       : [{ id: '', label: '还没有已发布的流程' }];
+  }
+  if (f.type === 'group') {
+    const ok = (groups ?? [])
+      .map((g) => ({ g, a: (personas ?? []).find((p) => p.id === g.assistantPersonaId) }))
+      .filter(({ g, a }) => a && personaCan(a, 'team.coordinate') && !g.dissolvedAt)
+      .map(({ g, a }) => ({ id: g.id, label: `${g.title}（群助手 ${a.name}）` }));
+    return ok.length
+      ? [{ id: '', label: f.empty ?? '选一个群' }, ...ok]
+      : [{ id: '', label: '还没有群助手能承接团队协作的群' }];
   }
   return [{ id: '', label: f.empty ?? '选一个人' }, ...(personas ?? []).map((p) => ({ id: p.id, label: p.name }))];
 }
@@ -2887,21 +2901,21 @@ export function schConfigFields(action, cfg) {
  *
  * `flows` 只装**已发布**的流程模板（定时任务只跑已发布的，跟看板建卡同一口径）。
  */
-export function mountSchConfigCombos(action, cfg, repos, projects, personas, flows) {
+export function mountSchConfigCombos(action, cfg, repos, projects, personas, flows, groups) {
   const map = new Map();
   for (const f of action?.fields ?? []) {
     if (!SCH_COMBO_TYPES.includes(f.type)) continue;
     // ⚠️ 只找挂载点 `.sch-cfg`：`[data-cfg]` 也挂在输入框上，直接选会选错元素
     const mount = document.querySelector(`#schFields .sch-cfg[data-cfg="${f.key}"]`);
     if (!mount) continue;
-    const items = schComboItems(f, repos, projects, personas, flows);
+    const items = schComboItems(f, repos, projects, personas, flows, groups);
     map.set(
       f.key,
       createCombo({
         mount,
         items,
         value: String(cfg?.[f.key] ?? ''),
-        // 仓库可能有几十个，给个搜索框；人和项目一般几个，不用
+        // 仓库可能有几十个，给个搜索框；人 / 群 / 项目一般几个，不用
         search: f.type === 'repo' && items.length > 12,
         placeholder: f.type === 'repo' ? '找仓库…' : '搜…',
       }),
@@ -2963,11 +2977,11 @@ export function schConfigFieldsPhone(action, cfg) {
  * `root` 是弹窗本身：行是在 `#schRightFields` 里现画的，得从弹窗这层找（`document` 也能找，
  * 但弹窗关掉之前它可能同时存在两份，闭包里锁死本弹窗这一份更稳）。
  */
-export function mountSchConfigPicks(action, cfg, repos, projects, personas, flows, root) {
+export function mountSchConfigPicks(action, cfg, repos, projects, personas, flows, groups, root) {
   const map = new Map();
   for (const f of action?.fields ?? []) {
     if (!SCH_COMBO_TYPES.includes(f.type)) continue;
-    const items = schComboItems(f, repos, projects, personas, flows);
+    const items = schComboItems(f, repos, projects, personas, flows, groups);
     const blank = items[0]?.label ?? '未选择';
     let v = String(cfg?.[f.key] ?? '');
     const row = root?.querySelector(`.sch-pick[data-pick="${f.key}"]`);
@@ -2990,7 +3004,15 @@ export function mountSchConfigPicks(action, cfg, repos, projects, personas, flow
           value: v,
           search: items.length > 12 || f.type === 'persona',
           searchPlaceholder:
-            f.type === 'repo' ? '搜仓库…' : f.type === 'project' ? '搜项目名…' : f.type === 'flow' ? '搜流程名…' : '搜名字或岗位…',
+            f.type === 'repo'
+              ? '搜仓库…'
+              : f.type === 'project'
+                ? '搜项目名…'
+                : f.type === 'flow'
+                  ? '搜流程名…'
+                  : f.type === 'group'
+                    ? '搜群名…'
+                    : '搜名字或岗位…',
           onPick: (nv) => {
             v = nv;
             paint();
@@ -3650,6 +3672,15 @@ export async function scheduleDialog(job) {
    */
   const phone = window.matchMedia('(max-width: 600px)').matches;
   const fieldsOf = (action) => (phone ? schConfigFieldsPhone(action, cfg) : schConfigFields(action, cfg));
+  /*
+   * 「执行方式」（2026-11-11 从「做法」改来，对齐任务面板的三选一）：
+   *   · kind = 'mode' 的三种 —— 指派人 / 团队协作 / 流程任务 —— 占主位；
+   *   · kind = 'system' 的内置动作（PR 巡检 / 备份）收进「系统动作」一组：
+   *     选它们的人少，别在第一屏跟三种执行方式抢地方。
+   */
+  const acts = meta.actions ?? [];
+  const modeItems = acts.filter((a) => a.kind !== 'system').map((a) => ({ id: a.id, label: a.label }));
+  const sysItems = acts.filter((a) => a.kind === 'system').map((a) => ({ id: a.id, label: a.label }));
   const nameInput = `<input id="schName" value="${esc(job?.name ?? curAction?.defaultName ?? '定时任务')}" placeholder="给它起个名字" />`;
   const repeatBodyOf = (mode) => (phone ? schRepeatBodyPhone(mode, job, min) : schRepeatBody(mode, job, min));
   /* 重复区：桌面是「重复」下拉 + 右侧参数框；手机是一行菜单（点开底部抽屉选方式） */
@@ -3684,8 +3715,11 @@ export async function scheduleDialog(job) {
   /* 手机：表单内容只到「启用」为止 —— 标题在页头，主按钮在页脚（贴键盘上沿） */
   const phoneBody = `
       <div class="sch-m" id="schFields">
-        <!-- 做法：4 种，排成一排按钮。换一种做法，下面的参数跟着换 -->
-        <div class="sch-seg" id="schActionSeg" role="radiogroup" aria-label="做法"></div>
+        <!-- 执行方式：三种方式一排按钮，内置系统动作（PR 巡检 / 备份）收进下面一排小的。
+             换一种执行方式，下面的参数跟着换 -->
+        <label>执行方式</label>
+        <div class="sch-seg three" id="schActionSeg" role="radiogroup" aria-label="执行方式"></div>
+        ${sysItems.length ? '<div class="sch-seg sch-seg-sys" id="schSysSeg" role="radiogroup" aria-label="系统动作"></div>' : ''}
         <label for="schName">名字</label>
         ${nameInput}
         <div id="schLeftFields">${f0.left}</div>
@@ -3702,10 +3736,11 @@ export async function scheduleDialog(job) {
           <div class="sch-left-fields" id="schLeftFields">${f0.left}</div>
         </div>
         <div class="sch-right" id="schRight">
-          <!-- 「做法」是个小开关：绝大多数任务就是「说一句话交给谁」，
-               换内置动作（PR 巡检 / 备份）的人才需要碰它。下拉用全站 .combo 组件。 -->
-          <label>做法</label>
-          <span id="schActionMount" title="换一种做法"></span>
+          <!-- 「执行方式」（2026-11-11 从「做法」改来，对齐任务面板三选一）：绝大多数任务
+               就是「指派人 / 团队协作 / 流程任务」，内置动作（PR 巡检 / 备份）收进
+               「系统动作」一组。下拉用全站 .combo 组件。 -->
+          <label>执行方式</label>
+          <span id="schActionMount" title="换一种执行方式"></span>
           <div id="schRightFields">${f0.right}</div>
           ${repeatRow}
         </div>
@@ -3728,22 +3763,41 @@ export async function scheduleDialog(job) {
     schPageDirty = () => schSnapshot() !== snap;
     closeForm = () => schClosePage();
   } else {
+    /* 清场：手机页还开着（窗口从窄拉宽等边缘态）就先收掉 —— 两份同 id 的表单共存时，
+       applyAction / $('schOk') 这些全局查找会命中先出现的那份，屏幕上这页"点了没反应"。
+       再清 sch-dlg 尸体：close 事件在个别内核/壳上**不派发**（实测裸 <dialog> 也不派），
+       光靠 `close → remove` 会留尸体，下一个弹窗的全局查找照样指错。 */
+    schPageEl && !schPageEl.hidden && schClosePage(true);
+    document.querySelectorAll('dialog.sch-dlg').forEach((d) => d.remove());
     dlg = document.createElement('dialog');
     dlg.className = 'sch-dlg';
     dlg.innerHTML = desktopForm;
     document.body.append(dlg);
     wireDialogHead(dlg.querySelector('form'));
+    // 收尸双保险：close 事件在个别内核/壳上**不派发**（实测裸 <dialog> 也不派），
+    // 光挂 `close → remove` 会留下一具带全套 id 的尸体 —— 跟手机整页（或下一颗弹窗）
+    // 同开时，applyAction / $('schOk') 这些全局查找就会命中尸体，屏幕上这页"点了没反应"。
+    // 改盯 **open 属性**本身：× / 取消 / Esc / closeForm 哪条路关的都躲不过属性翻转，
+    // MutationObserver 不依赖事件派发，哪个壳上都作数。remove 幂等，多路触发无妨。
+    new MutationObserver(() => {
+      if (!dlg.open) dlg.remove();
+    }).observe(dlg, { attributes: true, attributeFilter: ['open'] });
     dlg.addEventListener('close', () => dlg.remove());
     root = dlg;
-    closeForm = () => dlg.close();
+    // 同步 remove：保存路径不等任何事件
+    closeForm = () => {
+      dlg.close();
+      dlg.remove();
+    };
   }
 
-  // 参数区里的选择（仓库 / 项目 / 选人 / 流程）：桌面是 .combo 下拉，手机是一行菜单 + 选择页。
+  // 参数区里的选择（仓库 / 项目 / 选人 / 选群 / 流程）：桌面是 .combo 下拉，手机是一行菜单 + 选择页。
   // 两边都收在 Map<key, {value()}> 里 —— 读值那段（readSchConfig）不知道这一层差别。
+  const groups = S.groups ?? [];
   const mountFields = (action) =>
     phone
-      ? mountSchConfigPicks(action, cfg, repos, projects, S.personas ?? [], flows, root)
-      : mountSchConfigCombos(action, cfg, repos, projects, S.personas ?? [], flows);
+      ? mountSchConfigPicks(action, cfg, repos, projects, S.personas ?? [], flows, groups, root)
+      : mountSchConfigCombos(action, cfg, repos, projects, S.personas ?? [], flows, groups);
   let cfgCombos = mountFields(curAction);
   let repeatCombos = phone ? mountSchRepeatPicks(repeat0, job) : mountSchRepeatCombos(repeat0, job);
 
@@ -3763,30 +3817,32 @@ export async function scheduleDialog(job) {
     cfgCombos = mountFields(curAction);
   };
 
-  // 「做法」：桌面是下拉；手机是一排选项按钮（当前那颗 .on）
-  const actionItems = (meta.actions ?? []).map((a) => ({ id: a.id, label: a.label }));
+  // 「执行方式」：桌面是下拉（系统动作一组收在下面）；手机是两排选项按钮（当前那颗 .on）
   let actionCombo = null;
   if (phone) {
     const seg = $('schActionSeg');
+    const sysSeg = $('schSysSeg');
+    const btnOf = (a) => `<button type="button" class="sch-seg-btn${a.id === curAction?.id ? ' on' : ''}"
+            role="radio" aria-checked="${a.id === curAction?.id}" data-act="${esc(a.id)}">${esc(a.label)}</button>`;
     const paintSeg = () => {
-      seg.innerHTML = actionItems
-        .map(
-          (a) => `<button type="button" class="sch-seg-btn${a.id === curAction?.id ? ' on' : ''}"
-            role="radio" aria-checked="${a.id === curAction?.id}" data-act="${esc(a.id)}">${esc(a.label)}</button>`,
-        )
-        .join('');
+      seg.innerHTML = modeItems.map(btnOf).join('');
+      // 系统动作那排随选中态一起重画（编辑 PR 巡检时 .on 落在这排）
+      if (sysSeg) sysSeg.innerHTML = sysItems.map(btnOf).join('');
     };
     paintSeg();
-    seg.onclick = (e) => {
+    const onAct = (e) => {
       const btn = e.target.closest('[data-act]');
       if (!btn || btn.dataset.act === curAction?.id) return;
       applyAction(btn.dataset.act);
       paintSeg();   // 重画是因为 applyAction 可能把名字也换了；选中态跟着当前动作走
     };
+    seg.onclick = onAct;
+    if (sysSeg) sysSeg.onclick = onAct;
   } else {
     actionCombo = createCombo({
       mount: $('schActionMount'),
-      items: actionItems,
+      // 分组标题（{header}）只在无搜索的下拉里显示 —— 这颗没有搜索，正好
+      items: [...modeItems, ...(sysItems.length ? [{ header: '系统动作' }, ...sysItems] : [])],
       value: curAction?.id ?? '',
       onChange: applyAction,
     });

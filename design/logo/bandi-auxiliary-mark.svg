@@ -1,0 +1,11 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <title>班底 · 辅助图形「合」（交付态 / 空状态 / 加载完成用）</title>
+  <!-- 分玉的两片合拢成整圆，只留一道发丝缝。
+       与 bandi-icon-*.svg 构成一套语法：分开=派活，合拢=交付。
+       加载动效即在这两态之间做两片位移，只用 transform，不做透明度闪烁。 -->
+  <rect width="512" height="512" rx="36" fill="#12161A"/>
+  <g transform="translate(256 256) scale(3.6) translate(-50 -49.8)">
+    <path d="M48.5 4.03 A40 40 0 0 0 48.5 83.97 Z" fill="#F2F1ED"/>
+    <path d="M51.5 4.03 A40 40 0 0 1 51.5 83.97 Z" fill="#5FB3A3"/>
+  </g>
+</svg>

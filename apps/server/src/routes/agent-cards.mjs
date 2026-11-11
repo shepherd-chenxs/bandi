@@ -4,9 +4,10 @@
  * 注入进程环境的一次性钥匙（agent-auth）验证 —— 冒名者拿不到别人进程里的环境变量。
  * 钥匙在 run 收尾时吊销，活干完了就再也不能建卡。
  *
- * 权限：**只有项目经理岗位**能建卡（主理人 2026-10-24 拍板"只有固定的角色身份可以建卡，
- * 不然谁都能建卡就乱套了"）。岗位取 role 的第一段（「岗位 · 职责」口径，同前端 personLabel）。
- * 没钥匙 / 钥匙过期 → E2056；岗位不对 → E2057；卡体不对（状态/项目/标题/派的人）→ E2058/E2059。
+ * 权限：**只有带「建卡」权限的岗位**能建卡（主理人 2026-10-24 拍板"只有固定的角色身份可以建卡，
+ * 不然谁都能建卡就乱套了"）。2026-11-11 起权限挂在内置岗位上（roles.mjs），判据是
+ * `roles.can(persona, 'card.create')` —— **不再解析 role 文本**（打四个字就拿权限的洞已堵）。
+ * 没钥匙 / 钥匙过期 → E2056；权限不对 → E2057；卡体不对（状态/项目/标题/派的人）→ E2058/E2059。
  *
  * 2026-11-09 **重复建卡实报**（贺韬一轮里把 5 张卡发了两遍，看板多出 10 张）：根因是
  * 建卡接口**不幂等**、也**没有批量口** —— 5 张卡 = 5 个独立 POST，客户端一旦把"部分成功"
@@ -26,10 +27,18 @@ import crypto from 'node:crypto';
 import { sendJson, fail, readBody } from '../http.mjs';
 import * as store from '../store.mjs';
 import { createProjectTask, startProjectTask, assertTeamGroup } from '../project-tasks.mjs';
-import { isPmRole, verifyRunCredential } from '../agent-auth.mjs';
+import { verifyRunCredential } from '../agent-auth.mjs';
+// 权限判定（2026-11-11）：只认内置岗位的权限位，不再解析 role 文本 —— 见 roles.mjs
+import { can, roleNameOf } from '../roles.mjs';
 
 /** agent 建卡只许这两种状态：「待办」= 可逆的活，建完直接干；「想法」= 要雇主拍板，先挂着 */
 const AGENT_STATUSES = new Set(['想法', '待办']);
+/*
+ * **补记**（2026-11-11）：建卡通道坏过一段时间、活改成群里 @ 人干完了 —— 恢复后要把这件事
+ * 补成卡。补记卡允许**一步写成最终状态**，且**不自动派活**（否则等于把干完的活重跑一遍）。
+ * 只有建卡人（= 派活人 = 验收人）能写；主卡归雇主验收，见 routes/project.mjs 的闸。
+ */
+const BACKFILL_STATUSES = new Set(['待验收', '已阻塞', '已完成', '已取消', '失败']);
 /** 一批最多建几张（再多说明拆活方式不对，回去重新拆，别拿批量口当搬运工） */
 const BATCH_MAX = 20;
 /** 幂等键最长长度（落 externalKey 用；超了直接拒，别悄悄截断成另一个键） */
@@ -66,6 +75,21 @@ function resolveProject(body) {
 }
 
 /**
+ * 群派活**默认用群关联的项目**（2026-11-11）：群已经和项目绑定（一项目一群），
+ * 建卡不必再让模型先查项目 id —— 少一个遗忘点。1:1 或群没关联项目时返回 null。
+ */
+function projectOfRunConversation(convId) {
+  if (!convId) return null;
+  try {
+    const conv = store.getConversation(convId);
+    const g = conv?.groupId ? store.getGroup(conv.groupId) : null;
+    return g?.projectId ? store.getProject(g.projectId) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * 幂等键 → `externalKey`。
  *   · 显式 `idempotencyKey`：跨运行也去重（同一件事重发不重建）；
  *   · 省略：`run:<runId>:<项目+标题>` —— 只兜"同一轮里的重发"（这次实报的形态）。
@@ -77,10 +101,25 @@ function externalKeyOf(cred, project, card) {
 }
 
 /** 单张卡归一/校验（单卡与批量共用；不合格抛 `{code,message}`，调用方翻成 HTTP） */
-function normalizeCard(body, project) {
+function normalizeCard(body, project, { allowBackfill = false } = {}) {
   const status = String(body?.status ?? '待办').trim();
-  if (!AGENT_STATUSES.has(status)) {
-    throw Object.assign(new Error(`建卡状态只能是「待办」（建完自动派活）或「想法」（等雇主拍板），不能是「${status}」`), { code: 'E2058' });
+  const backfill = body?.backfill === true;
+  if (backfill) {
+    // 补记：只允许写"这件事现在实际是什么状态"，不允许待办/想法（那两种不是补记）
+    if (!BACKFILL_STATUSES.has(status)) {
+      throw Object.assign(
+        new Error(`补记只能写成「待验收 / 已阻塞 / 已完成 / 已取消 / 失败」，不能是「${status}」`),
+        { code: 'E2058' },
+      );
+    }
+  } else if (!AGENT_STATUSES.has(status)) {
+    throw Object.assign(
+      new Error(`建卡状态只能是「待办」（建完自动派活）或「想法」（等雇主拍板），不能是「${status}」——写最终状态要带 "backfill": true（补记）`),
+      { code: 'E2058' },
+    );
+  }
+  if (backfill && !allowBackfill) {
+    throw Object.assign(new Error('这个口不支持补记'), { code: 'E2058' });
   }
   const title = String(body?.title ?? '').trim().slice(0, TITLE_MAX);
   if (!title) throw Object.assign(new Error('任务得有标题（一句话说清要做什么）'), { code: 'E2059' });
@@ -97,6 +136,8 @@ function normalizeCard(body, project) {
     // 团队协作（2026-11-09）：派给群 / 协作子卡挂主卡。互斥；详细校验在下面两个函数里
     assigneeGroupId: body?.assigneeGroupId ? String(body.assigneeGroupId) : null,
     parentTaskId: body?.parentTaskId ? String(body.parentTaskId) : null,
+    // 补记（2026-11-11）：建最终状态、不自动派活（见 BACKFILL_STATUSES 的注释）
+    backfill: backfill && BACKFILL_STATUSES.has(status),
     idempotencyKey: explicitKey,
   };
 }
@@ -131,8 +172,8 @@ function requireSubCard({ persona, card }) {
   if (parent.parentTaskId) throw Object.assign(new Error('子卡不能再拆子卡（只允许一层）'), { code: 'E2059' });
   const group = store.getGroup(parent.assigneeGroupId);
   if (!group || group.dissolvedAt) throw Object.assign(new Error('主卡挂的群已经不在了'), { code: 'E2059' });
-  if (!isPmRole(persona.role)) {
-    throw Object.assign(new Error('拆子卡要项目经理岗位 —— 团队协作的子卡由主卡执行群的群助手（PM）来拆'), { code: 'E2057' });
+  if (!can(persona, 'card.split')) {
+    throw Object.assign(new Error('拆子卡要「拆子卡」权限（现在只有项目经理岗位有）—— 团队协作的子卡由主卡执行群的群助手来拆'), { code: 'E2057' });
   }
   if (group.assistantPersonaId !== persona.id) {
     throw Object.assign(new Error('子卡只能由这张主卡执行群的**当前群助手**（项目经理）来拆；你可能是别的 PM，但这张卡不归你协调'), { code: 'E2057' });
@@ -153,8 +194,9 @@ function requireSubCard({ persona, card }) {
 /**
  * 建一张（含幂等命中）。返回 `{ task, deduped }`。
  * `startNow` 允许调用方推迟派活（批量口先建完一批、再统一开跑）。
+ * **补记卡永远不派活**（`backfill`）—— 活已经干过了，建卡只是补账，重跑等于再干一遍。
  */
-function createOne({ cred, persona, convId, card, startNow = card.status === '待办' && !!(card.assignee || card.assigneeGroupId) }) {
+function createOne({ cred, persona, convId, card, startNow = !card.backfill && card.status === '待办' && !!(card.assignee || card.assigneeGroupId) }) {
   const externalKey = externalKeyOf(cred, card.project, card);
   const existed = store.getProjectTaskByExternalKey(card.project.id, externalKey);
   if (existed) return { task: existed, deduped: true };
@@ -165,7 +207,9 @@ function createOne({ cred, persona, convId, card, startNow = card.status === '�
     personaId: card.assignee,
     assigneeGroupId: card.assigneeGroupId,
     parentTaskId: card.parentTaskId,
-    startNow,
+    startNow: card.backfill ? false : startNow,
+    // 补记卡打来源戳：看板上能一眼分清"正常卡"和"事后补的账"（SOURCE_TEXT 里有「补记」）
+    source: card.backfill ? 'backfill' : null,
     // 建卡那次运行所在的会话 = PM 跟雇主说话的地方（群或 1:1）。
     // 记下来是为了卡片回执（project-tasks.mjs notifyCardCreator）：卡到「待验收」「已阻塞」
     // 「失败」时往这里投一条回执并唤醒他 —— 他答应雇主"有产出我再回你"，得给他兑现承诺的通道。
@@ -189,23 +233,46 @@ function createOne({ cred, persona, convId, card, startNow = card.status === '�
 function announceCard(convId, persona, task) {
   if (!convId) return;
   const assigneeName = task.assigneePersonaId ? (store.getPersona(task.assigneePersonaId)?.name ?? null) : null;
+  const backfill = task.source === 'backfill';
   store.addMessage({
     conversationId: convId,
     role: 'assistant',
     personaId: persona.id,
-    text: `【任务卡】${task.title} —— 已建立（${task.status}${assigneeName ? `，交给了 ${assigneeName}` : ''}）`,
+    text: `【${backfill ? '补记' : '任务卡'}】${task.title} —— 已建立（${task.status}${assigneeName ? `，交给了 ${assigneeName}` : ''}）`,
     meta: {
       type: 'card',
       cardId: task.id,
       title: task.title,
       status: task.status,
       assignee: assigneeName,
+      ...(backfill ? { backfill: true } : {}),
     },
   });
 }
 
 /** 一组卡里有没有"还没跑、但有执行方式"的卡 —— 批量口用它决定建完要不要开跑 */
 const needsStart = (task) => task.status === '待办' && !!(task.assigneePersonaId || task.assigneeGroupId);
+
+/**
+ * 建卡失败写「信箱」（2026-11-11 用户拍板：左栏一级「信箱」）。
+ * 机器侧事实原样落库：错误码 / runId / 员工 / 会话都在，人点开知道"哪一轮、什么错、重试几次"。
+ * 同轮同码去重、次数累加（3 次重试不会 3 条红点）。写信箱失败绝不影响建卡响应。
+ */
+function noticeCardFailure({ cred, persona, convId, code, message }) {
+  try {
+    store.addNotice({
+      kind: 'card.create.failed',
+      severity: 'warn',
+      code: code ?? 'E2059',
+      title: `建卡失败：${code ?? 'E2059'}`,
+      detail: String(message ?? ''),
+      personaId: persona?.id ?? null,
+      conversationId: convId ?? null,
+      runId: cred?.runId ?? null,
+      dedupeKey: `card:${cred?.runId ?? 'no-run'}:${code ?? 'E2059'}`,
+    });
+  } catch { /* 信箱写失败不影响建卡响应 */ }
+}
 
 export async function handleAgentCards(req, res, url) {
   const one = /^\/api\/agent\/cards$/.exec(url.pathname);
@@ -221,27 +288,34 @@ export async function handleAgentCards(req, res, url) {
       '建卡要带有效的运行钥匙（X-Bandi-Run-Token）—— 钥匙每轮现发、收尾作废，值取自本进程环境变量 BANDI_RUN_TOKEN；别用历史命令里记得的旧值'), true;
   }
   const persona = store.getPersona(cred.personaId);
-  if (!persona) return fail(res, 401, 'E2056', '这把钥匙对应的员工已经不在了'), true;
+  if (!persona) {
+    noticeCardFailure({ cred, code: 'E2056', message: '这把钥匙对应的员工已经不在了' });
+    return fail(res, 401, 'E2056', '这把钥匙对应的员工已经不在了'), true;
+  }
 
-  // 岗位不对 → 403（认出来了，但没这个权）
-  if (!isPmRole(persona.role)) {
+  // 权限不对 → 403（认出来了，但没这个权）
+  if (!can(persona, 'card.create')) {
+    noticeCardFailure({ cred, persona, code: 'E2057', message: '岗位没有建卡权限' });
     return fail(res, 403, 'E2057',
-      '只有项目经理岗位能建任务卡 —— 你的岗位是「' + String(persona.role ?? '').split(' · ')[0] + '」。要立项的活，把需求和理由说给项目经理或雇主。'), true;
+      '只有带「建卡」权限的岗位能建任务卡（现在只有项目经理）—— 你的岗位是「' + (roleNameOf(persona.roleKey) ?? '未设岗位') + '」。要立项的活，把需求和理由说给项目经理或雇主。'), true;
   }
 
   const convId = originConversationOf(cred);
   const body = await readBody(req);
+  // 群派活默认项目 = 这个群关联的项目（省掉"先查项目 id"这一步；1:1 仍是 null）
+  const defaultProject = resolveProject(Array.isArray(body) ? {} : body) ?? projectOfRunConversation(convId);
 
   /* ---------------------------------------------------------------- 单卡 */
   if (one) {
-    const cardProject = resolveProject(body);
+    const cardProject = resolveProject(Array.isArray(body) ? {} : body) ?? defaultProject;
     let card;
     try {
-      if (!cardProject) throw Object.assign(new Error('建卡得指明挂哪个项目 —— 传 projectId 或 projectRoot（项目清单：GET /api/projects）'), { code: 'E2059' });
-      card = normalizeCard(body, cardProject);
+      if (!cardProject) throw Object.assign(new Error('建卡得指明挂哪个项目 —— 传 projectId 或 projectRoot（群派活会自动用群关联的项目；项目清单：GET /api/projects）'), { code: 'E2059' });
+      card = normalizeCard(body, cardProject, { allowBackfill: true });
       validateGroupCard(card);
       requireSubCard({ persona, card });
     } catch (e) {
+      noticeCardFailure({ cred, persona, convId, code: e.code ?? 'E2059', message: e.message });
       return fail(res, e.code === 'E2057' ? 403 : 400, e.code ?? 'E2059', e.message), true;
     }
     try {
@@ -250,28 +324,40 @@ export async function handleAgentCards(req, res, url) {
       return sendJson(res, out.deduped ? 200 : 201, { task: out.task, deduped: out.deduped }), true;
     } catch (e) {
       // 派活失败时卡已经建好了 —— 把 id 带回去，界面才能说清"卡在、但没跑起来"
+      noticeCardFailure({ cred, persona, convId, code: 'E2059', message: `建了卡但没派出去：${String(e.message ?? e)}` });
       return fail(res, 400, 'E2059', String(e.message ?? e), { taskId: e.taskId ?? null }), true;
     }
   }
 
   /* ---------------------------------------------------------------- 批量 */
-  const cards = Array.isArray(body?.cards) ? body.cards : null;
-  if (!cards || !cards.length) return fail(res, 400, 'E2059', '批量建卡要带 cards 数组（1~20 张）'), true;
-  if (cards.length > BATCH_MAX) return fail(res, 400, 'E2059', `一次最多建 ${BATCH_MAX} 张卡 —— 再多说明活还没拆明白`), true;
+  /*
+   * 认三种写法（2026-11-11 实报：模型第二次尝试发了裸数组，被 400 挡回）：
+   *   { cards: [...] }（标准）/ 裸数组 [...] / 单张卡对象（等价于一次建一张）。
+   * 写法不该决定成败 —— 校验仍然照做，只是不再因为"外壳不对"拒掉整批。
+   */
+  const cards = Array.isArray(body) ? body : Array.isArray(body?.cards) ? body.cards : body?.title ? [body] : null;
+  if (!cards || !cards.length) {
+    noticeCardFailure({ cred, persona, convId, code: 'E2059', message: '批量建卡没带 cards 数组' });
+    return fail(res, 400, 'E2059', '批量建卡要带 cards 数组（1~20 张）；也接受裸数组或单张卡对象'), true;
+  }
+  if (cards.length > BATCH_MAX) {
+    noticeCardFailure({ cred, persona, convId, code: 'E2059', message: `一次建了 ${cards.length} 张，超过上限 ${BATCH_MAX}` });
+    return fail(res, 400, 'E2059', `一次最多建 ${BATCH_MAX} 张卡 —— 再多说明活还没拆明白`), true;
+  }
 
   // 先全量校验：有一张不合格就整批拒（不留"建了半批"的烂摊子）
-  const defaultProject = resolveProject(body);
   const plan = [];
   for (let i = 0; i < cards.length; i += 1) {
     const raw = cards[i] ?? {};
     const project = resolveProject(raw) ?? defaultProject;
     try {
-      if (!project) throw Object.assign(new Error('没指明挂哪个项目（projectId 或 projectRoot）'), { code: 'E2059' });
-      const card = normalizeCard(raw, project);
+      if (!project) throw Object.assign(new Error('没指明挂哪个项目（projectId 或 projectRoot；群派活默认用群关联的项目）'), { code: 'E2059' });
+      const card = normalizeCard(raw, project, { allowBackfill: true });
       validateGroupCard(card);
       requireSubCard({ persona, card });
       plan.push(card);
     } catch (e) {
+      noticeCardFailure({ cred, persona, convId, code: e.code ?? 'E2059', message: `第 ${i + 1} 张卡不合格：${e.message}` });
       return fail(res, e.code === 'E2057' ? 403 : 400, e.code ?? 'E2059', `第 ${i + 1} 张卡不合格：${e.message}`), true;
     }
   }
@@ -282,6 +368,7 @@ export async function handleAgentCards(req, res, url) {
     for (const card of plan) out.push(createOne({ cred, persona, convId, card, startNow: false }));
   } catch (e) {
     const created = out.filter((x) => !x.deduped).map((x) => x.task.id);
+    noticeCardFailure({ cred, persona, convId, code: 'E2059', message: `建卡中断：${String(e.message ?? e)}` });
     return fail(res, 400, 'E2059', `建卡中断：${String(e.message ?? e)}${created.length ? `（已建好 ${created.length} 张：${created.join('、')}）` : ''}`), true;
   }
 

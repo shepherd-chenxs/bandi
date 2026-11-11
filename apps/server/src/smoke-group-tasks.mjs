@@ -156,7 +156,7 @@ try {
   const bad = await req('POST', `/api/projects/${project.id}/tasks`, {
     title: '不该建出来的团队卡', status: '待办', assigneeGroupId: badGroup.id,
   });
-  check('被 400 拒掉且说清原因', bad.status === 400 && /群助手不是项目经理/.test(String(bad.body.error ?? '')), `${bad.status} ${bad.body.error ?? ''}`);
+  check('被 400 拒掉且说清原因', bad.status === 400 && /不能承接团队协作卡/.test(String(bad.body.error ?? '')), `${bad.status} ${bad.body.error ?? ''}`);
   check('卡确实没建出来', !(await boardText(project.id)).includes('不该建出来的团队卡'), '');
 
   console.log('\n③ 群助手拆子卡 → 允许；跑完回执唤醒群助手');

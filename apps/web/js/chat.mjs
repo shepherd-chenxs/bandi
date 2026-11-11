@@ -1,6 +1,6 @@
 /* chat.mjs —— 进对话、发消息、输入框里的 @ 选人、员工详情、员工详情 →「任务」、关联技能。
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
-import { esc, mdRender, savePlace, setRoute, toast } from './shell.mjs';
+import { esc, mdRender, roleNameOf, savePlace, setRoute, toast } from './shell.mjs';
 import { TYPING, AVATAR_FILE, api, createCombo, cut, dt, failHtml, initial, personaAvatar, personaByName, post, renderMarkdown, setHeaderBadge, smAvatar } from './ui.mjs';
 import { load, setNav } from './state.mjs';
 import { confirmDo } from './machine.mjs';
@@ -8,7 +8,7 @@ import { convDisplayName, openConversationSafe, toastConvErr } from './listmenu.
 import { detailSave, refreshDeptSuggest, renderList, showView } from './contacts.mjs';
 import { COL_STATUS, openProjectDetail, openTaskBoard, openTaskCardDialog, prPillOf } from './projects.mjs';
 import { openFlowRun, setListTitle } from './flowpages.mjs';
-import { openChatLogDrawer, openGroupDrawer } from './groups.mjs';
+import { groupProjectOf, openChatLogDrawer, openGroupDrawer } from './groups.mjs';
 import { closeDrawer, fireExpert } from './experts.mjs';
 import { $, S } from './core.mjs';
 import { SANDBOX_LABEL, sandboxItems } from './misc.mjs';
@@ -490,13 +490,22 @@ export async function openConversation(id) {
      * 名字再长也只挤自己，把人数和徽章保住；实在窄到放不下时，先截名字。
      */
     const metaSub = dissolved ? '已解散' : `${d.conversation.members.length} 人`;
+    /*
+     * 关联项目（2026-11-11）：只读的**身份铭牌**，跟在人数后面同一行。
+     * 它不是动作 —— 入口仍在群设置里（点群名进抽屉），群头一颗按钮都不加：
+     * 这一行已经有返回/群名/人数/徽章/两颗钮，再加东西只会挤掉群名。
+     * 解散的群不给（项目对它已经没意义了，而且群设置也进不去）。
+     */
+    const proj = dissolved ? null : groupProjectOf(d.conversation);
+    const projTag = proj
+      ? `<span class="head-proj" title="关联项目：${esc(proj.name)}">· ${esc(proj.name)}</span>`
+      : '';
     $('chatHead').innerHTML = `
       ${mbBackBtn}
-      <div class="avatar grp sm head-avatar">${esc(initial(d.conversation.title))}</div>
       <div class="meta">
         <div>${dissolved
           ? `<b class="head-name-static">${esc(d.conversation.title)}</b> <span class="sub">${metaSub}</span>`
-          : `<b class="head-name" title="群设置">${esc(d.conversation.title)}</b> <span class="sub">${metaSub}</span> ${badge}`}</div>
+          : `<b class="head-name" title="群设置">${esc(d.conversation.title)}</b> <span class="sub">${metaSub}</span> ${projTag} ${badge}`}</div>
       </div>
       <button class="icon-btn" id="toNewConv" title="给这个群开一段新会话（一次任务一段；旧段留在聊天记录里）">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
@@ -532,14 +541,13 @@ export async function openConversation(id) {
      * 会张冠李戴），退回这段会话自己的标题（convDisplayName 会剥掉「和 」前缀，
      * 不然页头会出现「和 和贺韬」这种叠字）；连标题都没有才写「员工已删」。
      * 头像同理：员工没了就别给「点进员工详情」的入口（点开是 404）。
+     *
+     * 群头/单聊头都不再放头像（2026-11-11 用户要求）：
+     * 「查看TA的资料」的入口在**名字**上（data-detail 委托），头像只是重复的一颗装饰。
      */
     const name = convDisplayName(d.conversation);
-    const pHere = personaGone ? null : ((S.personas ?? []).find((x) => x.id === d.conversation.personaId) ?? null);
     $('chatHead').innerHTML = `
       ${mbBackBtn}
-      ${smAvatar(name, personaGone
-        ? 'head-avatar'
-        : `head-avatar clickable" data-detail="${esc(d.conversation.personaId)}" title="配置他的 agent CLI`, pHere)}
       <div class="meta">
         <div>${personaGone
           ? `<b>${esc(name)}</b>`
@@ -563,7 +571,7 @@ export async function openConversation(id) {
           <path d="M12 8v4.4l3 1.8" />
         </svg>
       </button>`;
-    // 头像（桌面保留）和名字（手机端的唯一入口）都指向员工详情
+    // 名字是详情的唯一入口（2026-11-11 头像整颗撤掉后）：桌面上点名字也进详情
     $('chatHead').querySelectorAll('[data-detail]').forEach((el) => {
       el.onclick = () => openDetail(d.conversation.personaId);
     });
@@ -1521,7 +1529,7 @@ export function updateMentionPop() {
             : '';
         return `<div class="mp-item${i === mentionPop.index ? ' active' : ''}" data-i="${i}">
           <div class="mp-avatar">${esc(initial(m.name))}${img}</div>
-          <div class="mp-name">${esc(m.name)}${p?.role ? `<span class="mp-role">${esc(String(p.role).split(' · ')[0].trim())}</span>` : ''}</div>
+          <div class="mp-name">${esc(m.name)}${roleNameOf(p) ? `<span class="mp-role">${esc(roleNameOf(p))}</span>` : ''}</div>
           ${isAssistant ? '<span class="mp-tag">群助手</span>' : ''}
         </div>`;
       })
@@ -2220,7 +2228,7 @@ function renderDetailMobile(persona, runtimes) {
       <div class="p-head">
         ${personaAvatar(persona)}
         <div class="p-head-main">
-          <h2><span id="dNameText">${esc(persona.name)}</span>${persona.builtin ? '<span class="pill builtin" title="出厂就在的员工：名字、岗位与职责身份随平台固定，不能删">内置</span>' : ''}<span class="pill role" id="dRolePill"${persona.role ? '' : ' style="display:none"'}>${esc(persona.role || '')}</span>${
+          <h2><span id="dNameText">${esc(persona.name)}</span>${persona.builtin ? '<span class="pill builtin" title="出厂就在的员工：名字、岗位与职责身份随平台固定，不能删">内置</span>' : ''}<span class="pill role" id="dRolePill"${roleNameOf(persona) ? '' : ' style="display:none"'}>${esc(roleNameOf(persona))}</span>${
             persona.busy
               ? `<span class="pill busy" id="dBusy" title="${esc(persona.busyLabel ?? '正在干活')}">${
                   persona.busyLabel ? '工作中·' + esc(persona.busyLabel) : '工作中'
@@ -2431,7 +2439,7 @@ function renderDetailMobile(persona, runtimes) {
    */
   const collect = () => ({
     name: persona.name,
-    role: persona.role ?? null,
+    // 岗位不可改（2026-11-11 用户拍板）：不往回送 role —— 服务端对"岗位变了"直接 E2055 拒
     department: persona.department ?? null,
     instructions: persona.instructions ?? '',
     runtime: curRuntime,
@@ -2852,7 +2860,7 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
       <div class="p-head">
         ${personaAvatar(persona)}
         <div class="p-head-main">
-          <h2><span id="dNameText">${esc(persona.name)}</span>${persona.builtin ? '<span class="pill builtin" title="出厂就在的员工：名字、岗位与职责身份随平台固定，不能删">内置</span>' : ''}<span class="pill role" id="dRolePill"${persona.role ? '' : ' style="display:none"'}>${esc(persona.role || '')}</span>${
+          <h2><span id="dNameText">${esc(persona.name)}</span>${persona.builtin ? '<span class="pill builtin" title="出厂就在的员工：名字、岗位与职责身份随平台固定，不能删">内置</span>' : ''}<span class="pill role" id="dRolePill"${roleNameOf(persona) ? '' : ' style="display:none"'}>${esc(roleNameOf(persona))}</span>${
             persona.busy
               ? `<span class="pill busy" id="dBusy" title="${esc(persona.busyLabel ?? '正在干活')}">${
                   persona.busyLabel ? '工作中·' + esc(persona.busyLabel) : '工作中'
@@ -2915,7 +2923,9 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
                 <div class="form-row">
                   <div class="row-label">岗位</div>
                   <div>
-                    <input id="dRole" list="roleSuggest" placeholder="比如：研发（留空也行）" value="${esc(persona.role || '')}" ${identityLocked ? `readonly title="${expertLocked ? '雇佣员工的岗位随专家包固定' : '内置员工的岗位随平台固定'}"` : ''} />
+                    <!-- 岗位固定（2026-11-11 用户拍板：不允许调岗）：只读展示。
+                         岗位决定权限，换岗 = 解聘后重新雇佣；服务端对"岗位变了"也直接拒（E2055）。 -->
+                    <div class="ro" id="dRoleText">${esc(roleNameOf(persona) || '未设岗位')}</div>
                   </div>
                 </div>
                 <div class="form-row">
@@ -3427,7 +3437,7 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
    */
   const collect = () => ({
     name: $('dName').value,
-    role: $('dRole').value,
+    // 岗位不可改（2026-11-11 用户拍板）：详情页不再有岗位输入框，PUT 也不带 role/roleKey
     department: $('dDept').value,
     instructions: $('dInstr').value,
     runtime: rtCombo.value(),
@@ -3469,7 +3479,7 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
         const nameEl = $('dNameText');
         if (nameEl) nameEl.textContent = p.name;
         const roleEl = $('dRolePill');
-        if (roleEl) { roleEl.textContent = p.role || ''; roleEl.style.display = p.role ? '' : 'none'; }
+        if (roleEl) { const rn = roleNameOf(p); roleEl.textContent = rn; roleEl.style.display = rn ? '' : 'none'; }
         const av = $('detailView')?.querySelector('.p-head .avatar');
         // 整体重建而不是改 textContent：头像里除了字母还有**图片层**（<img class="av-img">，
         // 2026-10-22 加），`textContent =` 会把子节点全清掉 —— 切运行时触发自动保存，

@@ -1,13 +1,13 @@
 /* groups.mjs —— 群成员宫格、群设置抽屉、聊天记录抽屉、群详情页、群加人。
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
-import { esc, setRoute, toast } from './shell.mjs';
+import { esc, personaCan, roleNameOf, setRoute, toast, userLabel } from './shell.mjs';
 import { api, cut, hhmm, initial, plain, post, AVATAR_FILE } from './ui.mjs';
 import { load, setNav } from './state.mjs';
 import { confirmDo } from './machine.mjs';
 import { openConversationSafe, resetChatPane, toastConvErr, wipeScopeOf } from './listmenu.mjs';
 import { renderList, showView } from './contacts.mjs';
 import { setListTitle } from './flowpages.mjs';
-import { closeDrawer, dissolveGroup, kickMember, renameGroup } from './experts.mjs';
+import { closeDrawer, dissolveGroup, kickMember, refreshGroup, renameGroup } from './experts.mjs';
 import { $, S } from './core.mjs';
 import { openAssistantDialog } from './misc.mjs';
 
@@ -39,7 +39,7 @@ export function memberGridHTML(thread) {
           ? `<img class="av-img" src="/avatars/${encodeURIComponent(String(p.avatar))}" alt="" loading="lazy" decoding="async" onerror="this.remove()">`
           : '';
       return `<div class="mtile${removable ? ' removable' : ''}"
-                   title="${esc(m.name)}${p?.role ? ` · ${esc(String(p.role).split(' · ')[0])}` : ''}"
+                   title="${esc(m.name)}${roleNameOf(p) ? ` · ${esc(roleNameOf(p))}` : ''}"
                    ${removable ? `data-kick="${esc(m.personaId)}" data-name="${esc(m.name)}"` : ''}>
         <div class="mavatar">
           ${esc(initial(m.name))}
@@ -97,6 +97,39 @@ export const gidOf = (t) => t?.groupId || t?.id;
 
 
 
+/* ------------------------------------------------------- 群的项目（工作区） */
+
+/**
+ * 这个群挂在哪个项目上（2026-11-11「一项目一群 + 可空可换」）。
+ *
+ * 取数顺序：**先 `S.groups`（列表，最新）**，再用对象自带的 `projectId` 兜底。
+ * 反过来是不行的：聊天头部拿到的只有**会话**（会话上没有这一列），
+ * 而抽屉里的群对象可能是改项目之前抓的那一份 —— 列表永远比某一份快照新。
+ *
+ * 不缓存，也别缓存：改完项目 `refreshGroup()` 会 `load()`，群头跟着重画。
+ *
+ * @returns {null | {id: string, name: string, root?: string}}
+ */
+export function groupProjectOf(thread) {
+  const gid = gidOf(thread);
+  const pid = (S.groups ?? []).find((g) => g.id === gid)?.projectId ?? thread?.projectId ?? '';
+  if (!pid) return null;
+  return (S.projects ?? []).find((p) => p.id === pid) ?? { id: pid, name: pid };
+}
+
+
+
+/**
+ * 项目被哪个**别的**群占着（一项目一群的判据；已解散的群不在 S.groups 里，天然释放）。
+ * @returns {null | {id: string, title: string}}
+ */
+function projectOwner(pid, selfGid) {
+  if (!pid) return null;
+  return (S.groups ?? []).find((g) => g.projectId === pid && g.id !== selfGid) ?? null;
+}
+
+
+
 /**
  * 开「群设置」抽屉。
  *
@@ -146,6 +179,18 @@ export function openGroupDrawer(thread) {
  */
 export function groupSettingsHTML(thread, opts = {}) {
   const assistant = thread.members.find((m) => m.personaId === thread.assistantPersonaId);
+  /*
+   * 群助手能不能承接团队协作卡（2026-11-11 Phase 2）：**只提示、不拦**（用户拍板选 A）——
+   * 接话与承接团队卡是两件事：谁都能接话，团队卡要有「承接团队卡」权限（目前是项目经理岗）。
+   * 判据从 S.personas 的 roleKey 来（thread.members 可能没带 roleKey）。
+   */
+  const assistantPersona = assistant ? (S.personas ?? []).find((p) => p.id === assistant.personaId) : null;
+  const assistantCanTeam = personaCan(assistantPersona, 'team.coordinate');
+  const proj = groupProjectOf(thread);
+  // 群主显示名（2026-11-10 用户实报「没改成昵称」）：S.me 是 /api/state 的 {id, name}，
+  // name 是**账号名**（手机号）；全端显示名走 userLabel（昵称优先，见 shell.mjs），
+  // 去 S.users 名册里找回自己的昵称，找不到（LOCAL_USER 占位）再退账号名。
+  const meLabel = userLabel((S.users ?? []).find((u) => u.id === S.me?.id)) ?? S.me?.name ?? '我';
   const q = S.memberQuery.trim().toLowerCase();
   const visible = q ? thread.members.filter((m) => m.name.toLowerCase().includes(q)) : thread.members;
   const overflow = visible.length > MEMBER_TILE_LIMIT;
@@ -169,11 +214,22 @@ export function groupSettingsHTML(thread, opts = {}) {
       <div class="info-row clickable" id="rowRename">
         <span>群名称</span><b>${esc(thread.title)}</b><span class="chev">›</span>
       </div>
-      <div class="info-row"><span>群主</span><b>${esc(S.me?.name ?? '我')}（创建人）</b></div>
+      ${/* 关联项目紧挨群名称（2026-11-11）：两者回答的是同一件事 —— "这是什么群"。
+             值用主文本色、未关联用更弱一档的灰；不做开关、不做图标，一行一件地改。 */ ''}
+      <div class="info-row clickable" id="rowProject">
+        <span>关联项目</span><b class="${proj ? '' : 'none'}">${esc(proj ? proj.name : '未关联')}</b><span class="chev">›</span>
+      </div>
       <div class="info-row clickable" id="rowAssistant">
         <span>群助手</span><b>${esc(assistant?.name ?? '还没选')}</b><span class="chev">›</span>
       </div>
+      ${assistant && !assistantCanTeam ? '<div class="hint-line warn-line">这个群助手不能承接团队协作卡 —— 派给这个群的团队卡会被拒；换一个有「承接团队卡」权限的人（目前是项目经理岗）。</div>' : ''}
+      <div class="info-row"><span>群主</span><b>${esc(meLabel)}（创建人）</b></div>
       <div class="info-row"><span>成员数</span><b>${thread.members.length} 人</b></div>
+      <div class="hint-line">
+        ${proj
+          ? `群里的活都在 <b>${esc(proj.name)}</b> 的目录里干；派给群的卡直接落它的看板。`
+          : '不关联也能聊。关联后，群里派的活才落到某个项目的目录里。'}
+      </div>
     </div>
 
     ${opts.noDissolve ? '' : `
@@ -201,6 +257,8 @@ export function wireGroupSettings(thread, repaint, root) {
   if (rn) rn.onclick = () => renameGroup(thread);
   const ra = q('#rowAssistant');
   if (ra) ra.onclick = () => openAssistantDialog(thread);
+  const rp = q('#rowProject');
+  if (rp) rp.onclick = () => openProjectLinkDialog(thread);
   const rd = q('#rowDissolve');
   if (rd) rd.onclick = () => dissolveGroup(thread);
   wireMemberGrid(thread, repaint, root);
@@ -220,6 +278,71 @@ export function wireGroupSettings(thread, repaint, root) {
   if (more) more.onclick = () => { S.membersExpanded = true; repaint(); };
   const less = q('#drawerLess');
   if (less) less.onclick = () => { S.membersExpanded = false; repaint(); };
+}
+
+
+
+/**
+ * 选择「这个群挂在哪个项目上」（2026-11-11 用户拍板：一项目一群 + 可空可换）。
+ *
+ * 手感跟 keeperDlg（选管理员）/ assistantDlg（换群助手）一套：**点哪行选哪行、选完即关**，
+ * 没有确认按钮 —— 选错再点一次就行。
+ *
+ * 三件事必须在这儿说清（后端也有对应的闸，前端只是别让人白点）：
+ *   ① **一项目一群**：已被别的群占着的项目**置灰并写出占用群**，不给"顶掉" ——
+ *      顶掉意味着另一个群的工作区被静默夺走，而那边毫不知情；
+ *   ② **可空**：「不关联」是正经选项，选中 = 解除，群里派活回落到成员各自的目录；
+ *   ③ 数据要新鲜：打开前 `load()` 一次，否则占用信息还是上一拍的（同聊天记录抽屉的做法）。
+ */
+export async function openProjectLinkDialog(thread) {
+  const gid = gidOf(thread);
+  try { await load(); } catch { /* 拉不动就用现有快照，别挡着人看 */ }
+
+  const cur = (S.groups ?? []).find((g) => g.id === gid)?.projectId ?? thread?.projectId ?? '';
+  const projects = S.projects ?? [];
+
+  const rows = projects
+    .map((p) => {
+      const owner = projectOwner(p.id, gid);
+      const picked = p.id === cur;
+      const note = owner ? `已被「${owner.title}」关联` : p.root ?? '';
+      return `<button type="button" class="k-row${picked ? ' on' : ''}" data-pid="${esc(p.id)}"${
+        owner ? ' disabled title="一个项目只归一个群；要换先去那个群解除关联"' : ''
+      }>
+        <span>${esc(p.name || p.id)}</span>
+        <em>${esc(note)}</em>
+        ${picked ? '<span class="k-ok">✓</span>' : ''}
+      </button>`;
+    })
+    .join('');
+
+  $('pList').innerHTML =
+    (rows || '<div class="dim" style="padding:10px 2px">还没有项目 —— 先去工作台建一个</div>') +
+    '<div class="k-sep"></div>' +
+    '<button type="button" class="k-row" data-pid=""><span>不关联</span><em>群里派活用成员各自的目录</em></button>';
+
+  $('pList').querySelectorAll('.k-row').forEach((b) => {
+    if (b.disabled) return;
+    b.onclick = async () => {
+      const pid = b.dataset.pid || '';
+      $('projLinkDlg').close();
+      if (pid === cur) return; // 点的就是当前这项：关掉即可，别白跑一次请求
+      try {
+        await api('/api/groups/' + encodeURIComponent(gid), {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ projectId: pid }),
+        });
+        // 改完统一走 refreshGroup：它会 load()、重画抽屉/群详情，正在看这段群会话时连群头一起重画
+        await refreshGroup(gid);
+        const p = projects.find((x) => x.id === pid);
+        toast(pid ? `已关联「${p?.name ?? pid}」` : '已解除关联');
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    };
+  });
+  $('projLinkDlg').showModal();
 }
 
 
@@ -688,7 +811,7 @@ export function renderMemberCandidates() {
         .map(
           (p) => `<label class="member">
             <input type="checkbox" value="${p.id}" ${memberPicked.has(p.id) ? 'checked' : ''} />
-            <span>${esc(p.name)}</span><em>${esc(String(p.role ?? '').split(' · ')[0].trim() || '—')}</em>
+            <span>${esc(p.name)}</span><em>${esc(roleNameOf(p) || '—')}</em>
           </label>`,
         )
         .join('')

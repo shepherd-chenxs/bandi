@@ -1,14 +1,11 @@
 <svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
-  <rect width="512" height="512" rx="96" fill="#4F46E5"/>
-  <!-- 主干 -->
-  <rect x="154" y="138" width="72" height="236" rx="34" fill="#fff"/>
-  <!-- 上鼓包（左端深入主干，底边下沉覆盖腰部） -->
-  <path d="M194,156 C272,142 338,168 338,208 C338,248 288,268 194,264 Z" fill="#fff"/>
-  <!-- 下鼓包（顶部上提与上鼓包重叠） -->
-  <path d="M194,282 C284,276 348,306 348,340 C348,372 288,388 194,382 Z" fill="#fff"/>
-  <!-- 左下圆顶凸起 -->
-  <rect x="172" y="336" width="70" height="52" rx="26" fill="#fff"/>
-  <!-- 靛紫负形孔 -->
-  <ellipse cx="268" cy="206" rx="36" ry="29" fill="#4F46E5"/>
-  <ellipse cx="274" cy="340" rx="40" ry="31" fill="#4F46E5"/>
+  <!-- 班底标（2026-11-10 第四次定稿「分玉」）：整圆被竖直弦切成两片，右片下沉错位。
+       《说文》「班，分瑞玉也，从珏从刀」——分玉而后成班，即"把活切开派下去"。
+       几何与 design/logo/bandi-icon-dark.svg、apps/desktop/make-icon.py 三处一致，
+       改形状要三处一起改（脚本不解析 SVG）。 -->
+  <rect width="512" height="512" rx="110" fill="#12161A"/>
+  <g transform="translate(256 256) scale(3.25) translate(-50 -49.8)">
+    <path d="M47 4.11 A40 40 0 0 0 47 83.89 Z" fill="#F2F1ED"/>
+    <path d="M53 4.11 A40 40 0 0 1 53 83.89 Z" fill="#5FB3A3" transform="translate(0 12)"/>
+  </g>
 </svg>

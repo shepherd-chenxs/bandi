@@ -215,6 +215,24 @@ export async function openMe() {
           : ''
       }
       ${
+        /* 修改密码（2026-11-10 二次安家）：桌面「我的」页的独立入口。
+           最初放进下面的 me-entry-sec（与「设置」同卡），但「设置进左栏」那轮改版在
+           mobile.css 里 `body:not(.mb-narrow) .me-entry-sec { display:none }` 把整卡
+           在桌面藏死了 —— 用户两报「入口呢」。这里自立一张卡：类名避开 me-entry-sec，
+           绕开那条隐藏规则；行用桌面原生的 .set-row + 按钮（.me-entry 系只有窄屏才有
+           样式，桌面裸奔）。手机形态白名单仍不含改密码，故依旧 !onPhone。 */
+        !onPhone && isUser
+          ? `<section class="set-sec me-pwd-sec">
+               <div class="set-box">
+                 <div class="set-row">
+                   <span class="set-label">登录密码</span>
+                   <button type="button" id="mePassword">修改密码</button>
+                 </div>
+               </div>
+             </section>`
+          : ''
+      }
+      ${
         /*
          * 外观（2026-11-05 用户：「我的页面加一个主题选择的功能。可以选深色、浅色那种」）。
          * 只在手机形态画：桌面有 设置 › 偏好 › 主题 那一处，再摆一份是重复入口。
@@ -433,6 +451,15 @@ export async function openMe() {
   // 兜底：正常进不到这个分支（面板门前移到登录页，见 auth.mjs 的 wantsPanelHtml），
   // 万一从令牌通道挤进来，至少给一条出路 —— 别再摆一段讲实现细节的说明。
   $('meGoLogin')?.addEventListener('click', () => location.reload());
+  // 修改密码（2026-11-10）：只发起，表单与提交在 openPasswordDialog（模块级，见文件尾）
+  const goPwd = () => void openPasswordDialog();
+  $('mePassword')?.addEventListener('click', goPwd);
+  $('mePassword')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      goPwd();
+    }
+  });
   // 设置入口：交给 mobile.mjs 转一次 setNav（反向 import 会成环，见上面的注释）
   const goSet = () => document.dispatchEvent(new CustomEvent('mb-nav', { detail: { nav: 'settings' } }));
   $('meSettings')?.addEventListener('click', goSet);
@@ -443,6 +470,84 @@ export async function openMe() {
     }
   });
 }
+/* ---------------------------------------------------------------- 设置 */
+/**
+ * 修改密码（2026-11-10）：「我的 › 修改密码」的表单弹窗。
+ *
+ * 密码存在**中枢**上（本机不存，见 hub/config.mjs 那段），这里只把三栏输入交给
+ * 本机 `POST /api/me/password`，由它转发中枢 `/v1/auth/password`（设备凭据代账号办事）。
+ * 成功后只 toast + 关弹窗：本机会话 / 其它已登录设备都不受影响，下次登录用新密码。
+ *
+ * 弹窗形态照 GitHub 连接那个（`gr-conn-dlg` + wireDialogHead，动态建、关即删）；
+ * ⚠️ form **不设** `method='dialog'`（那是 git 弹窗的写法，submit 直接关窗）——
+ * 这里回车要走「提交」，由 submit 监听器自己 preventDefault。
+ */
+function openPasswordDialog() {
+  const dlg = document.createElement('dialog');
+  dlg.className = 'gr-conn-dlg pw-dlg'; // pw-dlg：标签列钉宽，三栏输入框对齐（style.css 同名规则）
+  const form = document.createElement('form');
+  form.innerHTML = `
+    <b>修改密码</b>
+    <div class="gr-dlg-body">
+      <div class="gr-dlg-row">
+        <span class="row-label">当前密码</span>
+        <input id="pwOld" type="password" autocomplete="current-password" />
+      </div>
+      <div class="gr-dlg-row">
+        <span class="row-label">新密码</span>
+        <input id="pwNew" type="password" placeholder="至少 8 位" autocomplete="new-password" />
+      </div>
+      <div class="gr-dlg-row">
+        <span class="row-label">确认新密码</span>
+        <input id="pwNew2" type="password" autocomplete="new-password" />
+      </div>
+      <div class="gr-dlg-help">密码存在中枢账号上：改完之后，所有设备下次登录都用新密码；已经登录的设备不受影响。</div>
+      <div class="gr-conn-actions">
+        <span class="gr-dlg-status" id="pwMsg"></span>
+        <button type="submit" class="primary" id="pwSave">确认修改</button>
+      </div>
+    </div>`;
+  dlg.append(form);
+  document.body.append(dlg);
+  wireDialogHead(form); // 动态建的弹窗自己包一次吸顶头（标题 + ×）
+  dlg.addEventListener('close', () => dlg.remove());
+
+  const say = (text, bad = true) => {
+    const el = form.querySelector('#pwMsg');
+    el.textContent = text;
+    el.style.color = bad ? 'var(--bad)' : 'var(--ok)';
+  };
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const oldPassword = form.querySelector('#pwOld').value;
+    const newPassword = form.querySelector('#pwNew').value;
+    if (!oldPassword) return say('先填当前密码');
+    if (newPassword.length < 8) return say('新密码至少 8 位');
+    if (newPassword.length > 128) return say('新密码最多 128 位');
+    if (newPassword !== form.querySelector('#pwNew2').value) return say('两次输入的新密码不一样');
+    const btn = form.querySelector('#pwSave');
+    btn.disabled = true;
+    btn.textContent = '提交中…';
+    try {
+      await api('/api/me/password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ oldPassword, newPassword }),
+      });
+      toast('密码已修改，下次登录用新密码');
+      dlg.close();
+    } catch (err) {
+      say(err?.message ?? '改密码没成功');
+      btn.disabled = false;
+      btn.textContent = '确认修改';
+    }
+  });
+
+  dlg.showModal();
+  setTimeout(() => form.querySelector('#pwOld').focus(), 30);
+}
+
 /* ---------------------------------------------------------------- 设置 */
 
 /**

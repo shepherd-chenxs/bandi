@@ -1038,3 +1038,171 @@ v13（2026-11-01 七改）：设备行加「取消配对」（已踢出行的清
   hub-stub.mjs 加同语义假端点、routes/users.mjs 加转发、security/route-policy.mjs 登记）；
   apps/web（settings.mjs 入口行 + openPasswordDialog）；smoke-users.mjs 加 ⑤d（改密全链 +
   新旧密码登录进退）；sw.js VERSION v197 → v198。
+
+
+  v199（2026-11-10 换新标「b·i」，品牌重设计定稿）：
+  bandi 读作 b and i：b=班底里的数字员工、i=你，中间铜金点(#B08D57)是 & 的最简形式。
+  字形全部自绘几何（圆角竖笔 + 整圆碗圈 + 圆点），无字体依赖；旧的「鼓包 B」退役。
+  index.html：左栏 rail 内联 SVG 换 b·i 光学参数（22px 下铜点 1px 会糊，不带）；
+  favicon 从 icon-192 换成 favicon-32/16 两档，apple-touch-icon 换 icon-180（iOS 自己裁圆角）。
+  光栅产物全部由重写的 apps/desktop/make-icon.py 生成：desktop(ico/png)、web(512/192/180/32/16)、
+  mobile-native（tauri 资源 + Square*/StoreLogo + icns）、安卓五档 mipmap（含 round/foreground）；
+  矢量源 apps/desktop/icons/icon.svg 与 design/logo/*.svg 同一套几何。sw.js 预缓存补
+  favicon-32/16，VERSION v198 → v199。
+
+
+  v199 附记（同日 18:50 修改密码入口搬家）：首次实现把入口放进「我的」页 me-entry-sec
+  （与「设置」同卡），但「设置进左栏」改版在 mobile.css 里
+  `body:not(.mb-narrow) .me-entry-sec { display:none }` 把整卡在桌面藏死 ——
+  桌面上永远看不见（用户两报「入口呢」）。现改为「我的」页独立一张卡
+  （me-pwd-sec，.set-row + 按钮，桌面原生样式，类名绕开隐藏规则），
+  me-entry-sec 恢复原样；sw.js 已在 v199（随未提交的改版工作），本改动搭车发布。
+
+
+  v200（2026-11-10 18:56 改密弹窗标签对齐）：三栏标签（当前密码 / 新密码 / 确认新密码）
+  宽度钉死 72px（取最宽的「确认新密码」），输入框左缘对齐。作用域收在新增的
+  pw-dlg 类（gr-conn-dlg.pw-dlg .row-label），不影响 GitHub 连接弹窗。
+
+
+  v201（2026-11-10 18:5x 应用图标换「牛头」，品牌二次定稿）：用户圈了任务栏里喜鹊/鲸鱼两个
+  图标指定风格 —— 深炭动物剪影 + 白色圆角方块底。牛 = 实干的班底，铜金鼻环 (#B08D57) =
+  「你牵着它走」（≥128px 才画，小尺寸会糊）。字形全部自绘贝塞尔，无字体/素材版权；
+  ≤48px 自动切光学小版（去耳/眼/鼻孔/鼻环，整组放大 1.18，口鼻负形加大）。
+  index.html 左栏 rail 内联 SVG 换反白牛头（口鼻 evenodd 镂空透栏底色）；图标光栅产物
+  全部由重写的 apps/desktop/make-icon.py 再生成（desktop/web/mobile/android 全目标，
+  文件名不变）；矢量源 apps/desktop/icons/icon.svg 与 design/logo/bandi-icon-*.svg 同步。
+  「b·i」字标资产保留在 design/logo/ 作字标用。本条仅内容替换、预缓存清单未动，
+  VERSION 仍随发布 +1（v200 → v201）强制整包重建，避免新旧标混用。
+
+
+  v202（2026-11-10 19:0x 应用图标三次定稿「全身牛 · 简笔画」）：用户指定要**全身**且走
+  简笔画线描（此前二次稿是实心牛头剪影）。圆头细线（笔画 18/512）勾出侧视全身牛，
+  白瓷底磁贴不变；铜金鼻环 (#B08D57) ≥64px 才画。≤64px 切光学小版：去远侧腿/四蹄/鼻孔、
+  笔画 18→32、整组放大 1.16（中心 296,300）。make-icon.py 画笔从 d.line(joint=curve)
+  改成**偏移轮廓多边形**（梳齿毛刺修复）。index.html 左栏 rail 内联 SVG 换反白线描
+  （笔画 40 再加粗，22px 下不带眼/鼻环）；矢量源 icon.svg 与 design/logo/bandi-icon-*.svg
+  同步（mono 版天然单色、favicon 版为光学小版）。VERSION v201 → v202。
+
+
+  v203（2026-11-10 20:1x 应用图标四次定稿「分玉」，整代换标）：用户要求不参考现行标重做。
+  终稿「分玉」——整圆被竖直弦切开、右片下沉错位（《说文》「班，分瑞玉也，从珏从刀」，
+  分玉成班 = 把活切开派下去；圆=完整的活，缝=随时可插手的切口，错位=成员不在同一进度）。
+  色系弃 AI 蓝：墨 #12161A / 玉青 #2F7E74（深底浅玉 #5FB3A3）/ 朱砂 #C8402F 只给"人"。
+  make-icon.py 几何换代（弓形解析解 + 三档光学参数：缝 6/12/18，小尺寸重绘不缩放，
+  ≤32px 单色）；save_ico 改手拼 PNG-in-ICO 每档单独重绘；跑完自动顶 build.rs mtime。
+  index.html 左栏 rail 换反白极小版内联 SVG，.rail-logo 底改墨色（弃蓝渐变）；
+  design/logo/bandi-icon-*.svg 与 bandi-brand.md（v2.0 规范）同步重写。
+  本条仅内容替换、预缓存清单未动，VERSION v202 → v203 强制整包重建。
+
+
+  v204（2026-11-10 20:3x rail 标与任务栏图标一致性修正）：用户截图对比发现左栏 rail
+  的 mark 在 34px 方块里只占 ~41% 宽（svg 只有 22px 塞在 tile 里、scale 0.8），而
+  任务栏 exe 图标 ≤32px 极小版 mark 占 ~58%——同一颗标两处大小不一。改为 svg 铺满
+  34px tile、scale 0.73（mark 宽 19.9px / 高 24.8px，与 make-icon.py 极小版
+  0.546×80/86×1.15 同比例），缝 18 / 错位 22 参数不变。仅 index.html 内容替换，
+  VERSION v203 → v204 强制整包重建。
+
+
+  v205（2026-11-10 20:4x 修正 make-icon.py 弦位反转 bug）：_piece() 左右两片的弦
+  位置写反（左片弦在 CX+gap、右片弦在 CX-gap），两片在中缝重叠 2×gap，缝永远被
+  盖死——ico/全部位图里"分玉"实际是无缝双拼，仅手写 SVG（rail/favicon）有缝，
+  造成 rail 与任务栏图标不一致的观感。修正弦位后全目标重生成，缝隙在 16~256px
+  全档可见。VERSION v204 → v205。
+
+
+  v205（2026-11-10 20:4x 修正 make-icon.py 弦位反转 bug）：_piece() 左右两片的弦
+  位置写反（左片弦在 CX+gap、右片弦在 CX-gap），两片在中缝重叠 2×gap，缝永远被
+  盖死——ico/全部位图里"分玉"实际是无缝双拼，仅手写 SVG（rail/favicon）有缝，
+  造成 rail 与任务栏图标不一致的观感。修正弦位后全目标重生成，缝隙在 16~256px
+  全档可见。VERSION v204 → v205。
+
+
+  v206（2026-11-10 20:5x rail 标改双色调）：用户圈选主用图标配色，要求 rail 同款。
+  rail-logo 从单色骨白改为 SCHEMES.dark 双色（左片 #F2F1ED / 右片 #5FB3A3），
+  与任务栏 exe 图标同配色；34px 实测两色可辨。仅 index.html，VERSION v205 → v206。
+
+
+  v206（2026-11-10 20:5x rail 标改双色调）：用户圈选主用图标配色，要求 rail 同款。
+  rail-logo 从单色骨白改为 SCHEMES.dark 双色（左片 #F2F1ED / 右片 #5FB3A3），
+  与任务栏 exe 图标同配色；34px 实测两色可辨。仅 index.html，VERSION v205 → v206。
+
+
+  v207（2026-11-10 20:5x 小图标档放开双色）：取消 ≤32px 强制单色（弦位修正后
+  16px 每片 ~7px 宽，骨白/浅玉可辨），标题栏/任务栏/favicon 与主图标配色统一；
+  安卓自适应前景层仍为单色剪影。全目标重生成，VERSION v206 → v207。
+
+
+  v207（2026-11-10 20:5x 小图标档放开双色）：取消 ≤32px 强制单色（弦位修正后
+  16px 每片 ~7px 宽，骨白/浅玉可辨），标题栏/任务栏/favicon 与主图标配色统一；
+  安卓自适应前景层仍为单色剪影。全目标重生成，VERSION v206 → v207。
+
+
+  v208（2026-11-10 20:58 rail 试验「班」字印）：用户要求左栏改"班字印看看"。
+  rail-logo 从分玉 mark 换为墨底白文印（骨白班字，Noto Sans SC/YaHei 900、22px）。
+  仅 rail 试验位，分玉仍是正式标（exe/favicon/design/logo 未动）；确认方向后再
+  决定回退或转正（转正需 make-icon.py 加字印档 + design/logo 加字印版）。
+  VERSION v207 → v208。
+
+
+  v208（2026-11-10 20:58 rail 试验「班」字印）：用户要求左栏改"班字印看看"。
+  rail-logo 从分玉 mark 换为墨底白文印（骨白班字，Noto Sans SC/YaHei 900、22px）。
+  仅 rail 试验位，分玉仍是正式标（exe/favicon/design/logo 未动）；确认方向后再
+  决定回退或转正（转正需 make-icon.py 加字印档 + design/logo 加字印版）。
+  VERSION v207 → v208。
+
+
+  v209（2026-11-10 21:01 撤掉左栏品牌块）：标题栏已有应用图标 + 「班底」文字，
+  左栏再挂一颗标 = 同一身份说两遍。删除 .rail-brand/.rail-logo 及其 CSS
+  （无 JS 引用），rail padding 12px → 10px/12px 保持首项节奏。应用标只留在
+  exe 图标、favicon、design/logo 与对外物料。VERSION v208 → v209。
+
+
+  v209（2026-11-10 21:01 撤掉左栏品牌块）：标题栏已有应用图标 + 「班底」文字，
+  左栏再挂一颗标 = 同一身份说两遍。删除 .rail-brand/.rail-logo 及其 CSS
+  （无 JS 引用），rail padding 12px → 10px/12px 保持首项节奏。应用标只留在
+  exe 图标、favicon、design/logo 与对外物料。VERSION v208 → v209。
+
+
+  v210（2026-11-10 21:09 左栏顶部字标定稿）：用户拍板撤掉图形标后顶部改放纯文字
+  字标——「班底」（15px/600）+ BANDI（9px/字距 3px），无底色块，颜色走 --text/--dim
+  随深浅主题；rail padding-top 10 → 14。应用图形标（分玉）仍只在 exe/favicon/
+  design/logo。VERSION v209 → v210。
+
+
+  v211（2026-11-11 17:xx Phase 2 · 岗位固定落到界面）：
+  ① 撤「新建员工」入口：联系人「＋」里删「添加数字员工」，删 personaDlg 与 #roleSuggest，
+     misc.mjs 的新建员工整段（pRuntime/pSandbox 下拉、openPersonaDialog）拆掉 ——
+     用户拍板不保留自建员工（岗位固定、只能从专家库雇佣），自建私有专家入口以后单独做；
+  ② 员工详情「岗位」改只读展示（.ro），不再有输入框；详情 PUT 不再带 role/roleKey
+     （服务端对"岗位变了"直接 E2055 拒，不允许调岗）；手机精简版页头的岗位章改从 roleKey 取；
+  ③ /api/state 下发 roles/permissions（S.roles）：人名标签、通讯录副标题、@ 选人、项目成员、
+     群成员、换群助手弹窗里的岗位名统一从 roleKey 取，不再自己拆「岗位 · 职责」；
+  ④ 团队协作可选群（建卡弹窗 + 定时任务执行方式）改按「承接团队卡」权限筛；
+     群设置里群助手不具备该权限时挂一条 warn-line 提醒（只提示不拦，用户拍板选 A）。
+  VERSION v210 → v211。
+
+
+  v212（2026-11-11 18:xx Phase 3 · 组织架构 + 岗位技能包）：
+  ① 左侧一级栏新增「组织架构」（data-nav="org"，图标=三层组织树），左栏二级菜单为
+     「岗位权限清单」；右区只读表格：岗位 / 类型 / 在岗 / 权限 / 技能包 —— 新增 js/org.mjs，
+     index.html 加 #orgView，style.css 加 .org-table 系列，state/shell/contacts 接上路由与列表；
+  ② 技能包从专家包移到**岗位**上（服务端 roles.mjs 的 skills），雇佣/同步按岗位自动挂载，
+     experts.mjs 不再各写一份清单；岗位权限清单页把技能列出来（悬停看技能描述）。
+  VERSION v211 → v212。
+
+
+  v213（2026-11-11 19:xx 看板「只看我的 / 全量」+ 验收人）：
+  ① 任务看板筛选条新增「只看我的 / 全量」开关（默认只看我的，记进位置；「我的」= 我派的卡
+     + 指定我执行的卡）；看板行带 created_by_user_id / created_by；
+  ② 验收人 = 派活人：不是我派的卡拖到「已完成」/ 在卡详情改「已完成」时，先弹一句代验收确认；
+     「待验收」的文案从"等你点头"改成"等验收人点头"；补记卡（source=backfill）也能拖能开。
+  VERSION v212 → v213。
+
+
+  v214（2026-11-11 20:xx 左栏「信箱」）：
+  ① 左栏最上面新增一级栏「信箱」（信箱图标 + 未读角标），整页通知列表
+     （js/inbox.mjs + #inboxView + .inbox-* 样式 + state/shell/contacts 接路由）；
+  ② 只读平台事实：建卡失败等由服务端写 notices 表；本页可「全部 / 未读」切换、点一条标已读、
+     「全部已读」；不做弹框、不往群里播报（用户拍板）；
+  ③ 未读数随 /api/state 下发 + 30 秒一次轻量轮询刷新角标。
+  VERSION v213 → v214。

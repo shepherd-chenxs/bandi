@@ -93,6 +93,27 @@ export function startHubStub({ keyPair = generateKeyPair(), deviceId = 'dev_self
         });
       }
 
+      /*
+       * 改密码（2026-11-10，契约同 bandi-hub /v1/auth/password）：设备凭据对上 +
+       * 旧密码验得过才放行。stub 里账号表没有按设备归属建（一台假中枢一个设备身份），
+       * 旧密码直接对账号表全表验 —— 测试只关心"转发与放行/拒绝的形状"。
+       */
+      if (req.method === 'POST' && req.url === '/v1/auth/password') {
+        const authz = String(req.headers.authorization ?? '');
+        if (String(body?.deviceId ?? '') !== deviceId || authz !== `Device ${deviceToken}`) {
+          return reply(401, { error: { code: 'H2004', message: '设备凭据无效' } });
+        }
+        const oldPassword = String(body?.oldPassword ?? '');
+        const newPassword = String(body?.newPassword ?? '');
+        const acct = Object.values(accounts).find((a) => a.password === oldPassword);
+        if (!acct) return reply(401, { error: { code: 'H1004', message: '手机号或密码不对' } });
+        if (newPassword.length < 8) {
+          return reply(400, { error: { code: 'H3001', message: '新密码至少 8 位' } });
+        }
+        acct.password = newPassword;
+        return reply(200, { ok: true });
+      }
+
       // 心跳 / 名册：测试里不需要它们说什么，但别让连接挂着。
       // 带 relay 时一并下发 —— 覆盖"开通/换子域名/吊销(null)"这一整条改派路径。
       if (req.method === 'POST' && (req.url ?? '').startsWith('/v1/devices/')) {

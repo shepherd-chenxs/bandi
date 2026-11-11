@@ -25,7 +25,7 @@ const clip = (s, n) => {
 /** 建任务/改任务时能提前拦下的错，就不该等到半夜跑的时候才写进 lastError */
 export function validateWorkflowTask(config = {}) {
   const templateId = String(config.templateId ?? '').trim();
-  if (!templateId) return '还没选「哪条流程」';
+  if (!templateId) return '还没选「执行对象」（选一条流程）';
   const tpl = store.getWorkflowTemplate(templateId);
   if (!tpl) return '选的那条流程已经不在了，换一条';
   if (!tpl.publishedAt) return `流程「${tpl.name}」还没发布 —— 去工作台 › 工作流里发布一下，定时任务只跑已发布的`;
@@ -42,7 +42,7 @@ export function describeWorkflowTask(config = {}) {
   const tpl = config.templateId ? store.getWorkflowTemplate(String(config.templateId)) : null;
   const proj = config.projectId ? store.getProject(String(config.projectId)) : null;
   const intent = clip(config.intent, 44);
-  const head = `交给流程${tpl ? `「${tpl.name}」` : ''}${proj ? `（在「${proj.name}」）` : ''}`;
+  const head = `流程「${tpl ? tpl.name : '?'}」${proj ? `（在「${proj.name}」）` : ''}`;
   return intent ? `${head}：${intent}` : head;
 }
 

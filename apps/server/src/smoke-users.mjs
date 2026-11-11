@@ -292,6 +292,29 @@ try {
   check('清空后 /api/me 的 nickname 也是 null', meAfterClear.body?.user?.nickname === null,
     String(meAfterClear.body?.user?.nickname));
 
+  /* ============ ⑤d 修改密码：本机只转发，真验证在中枢 ============ */
+  console.log('\n⑤d 修改密码：/api/me/password 转发中枢 /v1/auth/password（假中枢同语义）');
+  const pwAnon = await call('POST', '/api/me/password', { body: { oldPassword: '甲-pass-123', newPassword: 'new-pass-456' } });
+  check('没登录 → 401 E3810（operator 没有中枢账号可改）',
+    pwAnon.status === 401 && pwAnon.body?.code === 'E3810', `${pwAnon.status} ${pwAnon.body?.code ?? ''}`);
+  const pwShort = await call('POST', '/api/me/password', { cookie: sidA, body: { oldPassword: '甲-pass-123', newPassword: 'short' } });
+  check('新密码太短 → 400 E3814（本机先拦，不出网）',
+    pwShort.status === 400 && pwShort.body?.code === 'E3814', `${pwShort.status} ${pwShort.body?.code ?? ''}`);
+  const pwWrongOld = await call('POST', '/api/me/password', { cookie: sidA, body: { oldPassword: 'wrong-pass-1', newPassword: 'new-pass-456' } });
+  check('旧密码错 → 400 H1004（中枢原话带回来）',
+    pwWrongOld.status === 400 && pwWrongOld.body?.code === 'H1004', `${pwWrongOld.status} ${pwWrongOld.body?.code ?? ''}`);
+  const pwOk = await call('POST', '/api/me/password', { cookie: sidA, body: { oldPassword: '甲-pass-123', newPassword: 'new-pass-456' } });
+  check('旧密码对 → 200 ok', pwOk.status === 200 && pwOk.body?.ok === true, `${pwOk.status} ${pwOk.raw?.slice(0, 60)}`);
+  const reloginNew = await hubLogin(BASE, { username: '甲', password: 'new-pass-456', origin: BASE });
+  check('新密码真的能登录（中枢侧生效，不靠本机记着）', reloginNew.status === 302 && !!reloginNew.sid,
+    `HTTP ${reloginNew.status}`);
+  const reloginOld = await hubLogin(BASE, { username: '甲', password: '甲-pass-123', origin: BASE });
+  check('旧密码从此进不来', reloginOld.status === 401, `HTTP ${reloginOld.status}`);
+  // 改回去：后面 ⑥~⑨ 还拿 甲-pass-123 当甲的密码用
+  const sidNew = `bandi_sid=${reloginNew.sid}`;
+  const pwBack = await call('POST', '/api/me/password', { cookie: sidNew, body: { oldPassword: 'new-pass-456', newPassword: '甲-pass-123' } });
+  check('再改回去 → 200（后续段落照旧用原密码）', pwBack.status === 200 && pwBack.body?.ok === true, String(pwBack.status));
+
   /* ============ ⑥ 退出登录 ============ */
   console.log('\n⑥ 退出登录：会话真删（回环退回 operator）');
   const lo = await call('POST', '/api/logout', { cookie: sidA });

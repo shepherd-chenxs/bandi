@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 任务看板的数据：把「有哪些活、都什么状态」汇成一张平表 + 一套看板列。
  *
  * 为什么要有它：流程的状态只在「实例页」一条条点得开，按项目横向看"哪些活卡住了"没地方看；
@@ -38,7 +38,7 @@ import path from 'node:path';
 import * as store from './store.mjs';
 import { dispatchToThread, dispatchEventToThread, projectConstitutionBlock } from './dispatch.mjs';
 // 岗位判定（「项目经理 · 职责」第一段才是岗位）与运行钥匙共用同一处口径 —— 别再各写一份
-import { isPmRole, roleHeadOf } from './agent-auth.mjs';
+import { can, roleNameOf } from './roles.mjs';
 // 「卡由流程执行」那条路要真的起一条实例 —— 跟工作台点流程走的是同一个引擎入口，
 // 不另造"从看板起流程"的第二套（引擎的口径只该有一处）
 import { startWorkflow, nodesOf } from './workflows.mjs';
@@ -99,7 +99,7 @@ const COL_FACE = {
   idea: { label: '想法', hint: '还没决定要不要做' },
   todo: { label: '待办' },
   doing: { label: '进行中' },
-  review: { label: '待验收', hint: '干完了，等你点头' },
+  review: { label: '待验收', hint: '干完了，等验收人点头' },
   blocked: { label: '已阻塞', hint: '出了问题等人拍板' },
   failed: { label: '失败' },
   done: { label: '已完成' },
@@ -293,7 +293,7 @@ function flowCardRow(run, card) {
  * 本地卡（存在 `project_tasks` 里的）：人在列头「＋」建的手工卡，与**仓库值班**写进来的卡。
  * 同一族、同一张表 —— 都能拖（**卡的状态就是人给它的指令**）、都能删。
  */
-const SOURCE_TEXT = { manual: '手动', repo: '仓库值班' };
+const SOURCE_TEXT = { manual: '手动', repo: '仓库值班', backfill: '补记' };
 
 function manualRows(t) {
   const persona = t.assigneePersonaId ? store.getPersona(t.assigneePersonaId) : null;
@@ -340,6 +340,12 @@ function manualRows(t) {
     // 协作子卡：父卡 id / 标题（点进详情能认出它是谁拆出来的）
     parent_id: parent?.id ?? null,
     parent_title: parent?.title ?? null,
+    /*
+     * 派活人（2026-11-11 验收人 = 派活人）：看板的「只看我的」靠这两个字段筛
+     * —— 前端拿 S.me.id 比 created_by_user_id；员工（PM）建的卡 created_by 是 persona id。
+     */
+    created_by: t.createdBy ?? null,
+    created_by_user_id: t.createdByUserId ?? null,
     at: stamp(t.updatedAt),
     created: stamp(t.createdAt),
     note: clip(
@@ -729,8 +735,8 @@ export function assertTeamGroup(groupId) {
   if (!group || group.dissolvedAt) throw new Error('选的那个群已经不在了');
   const assistant = group.assistantPersonaId ? store.getPersona(group.assistantPersonaId) : null;
   if (!assistant) throw new Error('这个群没有群助手 —— 团队协作要有群助手承接；先去群设置里指定一个');
-  if (!isPmRole(assistant.role)) {
-    throw new Error(`这个群的群助手不是项目经理（「${roleHeadOf(assistant.role) || '未设岗位'}」）—— 团队协作要项目经理承接，先去群设置里换一个 PM 当群助手`);
+  if (!can(assistant, 'team.coordinate')) {
+    throw new Error(`这个群的群助手岗位是「${roleNameOf(assistant.roleKey) ?? '未设岗位'}」，不能承接团队协作卡 —— 团队协作要有「承接团队卡」权限的人当群助手，先去群设置里换一个`);
   }
   if (!group.members.some((m) => m.personaId === assistant.id)) throw new Error('这个群的群助手已经不在群成员里了');
   return group;
@@ -754,6 +760,11 @@ export function createProjectTask(project, {
    * 需要方先自己查过（store.getProjectTaskByExternalKey），这里只负责写进去。
    */
   externalKey = null,
+  /*
+   * 卡来源（2026-11-11）：正常人手卡 = null（store 默认 'manual'）；
+   * 员工经建卡通道**补记**已发生的活 = 'backfill'（看板上标「补记」，且永不自动派活）。
+   */
+  source = null,
   /*
    * **团队协作模式**（2026-11-09 用户定）：派给一个**群**办，协调人是群上的群助手
    * （`groups.assistantPersonaId`，必须是项目经理岗），**卡上不记协调人** ——
@@ -817,6 +828,8 @@ export function createProjectTask(project, {
     creatorConvId,
     // 幂等键 / 外部来源键（2026-11-09）：数字员工建卡去重靠它
     externalKey,
+    // 来源（2026-11-11）：补记卡标 backfill；不传走 store 默认 'manual'
+    ...(source ? { source } : {}),
     // 团队协作 / 协作子卡（2026-11-09）
     assigneeGroupId: group?.id ?? null,
     parentTaskId: parent?.id ?? null,
@@ -888,8 +901,8 @@ function startCardInGroup(row, project) {
   if (!group || group.dissolvedAt) throw new Error('这张卡挂的群已经不在了');
   const assistant = group.assistantPersonaId ? store.getPersona(group.assistantPersonaId) : null;
   if (!assistant) throw new Error('这个群没有群助手 —— 团队协作要群助手承接；先去群设置里指定一个');
-  if (!isPmRole(assistant.role)) {
-    throw new Error(`这个群现在的群助手不是项目经理（「${roleHeadOf(assistant.role) || '未设岗位'}」）—— 团队协作要项目经理承接，先去群设置里换一个 PM 当群助手`);
+  if (!can(assistant, 'team.coordinate')) {
+    throw new Error(`这个群现在的群助手岗位是「${roleNameOf(assistant.roleKey) ?? '未设岗位'}」，不能承接团队协作卡 —— 去群设置里换一个有「承接团队卡」权限的人当群助手`);
   }
   if (!group.members?.some((m) => m.personaId === assistant.id)) throw new Error('这个群的群助手已经不在群里了');
   // 落到这个群**最新的一段会话**（一段没有就开一段）：派活票与唤醒都进群聊，雇主看得见
@@ -1188,7 +1201,10 @@ export function promoteConversationToCard(convId) {
 export function retryQueuedTasks() {
   const started = [];
   for (const t of store.listQueuedProjectTasks()) {
-    if (!t.assigneePersonaId) {
+    // 真人执行（2026-10-31）：挂名、不起会话，谈不上重派 —— 摘掉标记，别让它挂着排队。
+    // （群卡 / 流程卡也排得上队：startProjectTask 自己会按执行方式分流 —— 群卡走
+    // startCardInGroup，正是 2026-11-09 那条"群助手正忙 → 排队 → 节拍重试"的承诺。）
+    if (t.assigneeUserId) {
       store.updateProjectTask(t.id, { queuedAt: null });
       continue;
     }

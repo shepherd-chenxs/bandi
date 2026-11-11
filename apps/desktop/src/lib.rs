@@ -38,6 +38,18 @@ use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 /// 版本真源经 build.rs 注入的编译期常量。标题上的版本号只认它。
 const APP_VERSION: &str = env!("APP_VERSION");
 
+/// 窗口标题：`班底 v1.5.21`，需要后缀时拼 `班底 v1.5.21 · 没起来`。
+///
+/// 2026-11-10 用户拍板：版本号从左边栏品牌标下面挪到标题栏「班底」后面 ——
+/// 原生标题栏里只能整串设文字，所以版本直接编在标题里（`suffix` 为空时不带那个点）。
+fn window_title(suffix: &str) -> String {
+    if suffix.is_empty() {
+        format!("班底 v{APP_VERSION}")
+    } else {
+        format!("班底 v{APP_VERSION} · {suffix}")
+    }
+}
+
 /// 「页面加载完后再等多久才露脸」。
 ///
 /// `PageLoadEvent::Finished` = WebView2 的 `NavigationCompleted` = 文档 `onload`，
@@ -144,9 +156,9 @@ pub fn run() {
             let app_url: tauri::Url = url.clone();
 
             let title = if ready {
-                "班底".to_string()
+                window_title("")
             } else {
-                "班底 · 没起来".to_string()
+                window_title("没起来")
             };
 
             let win = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
@@ -808,7 +820,7 @@ fn watch_service(win: tauri::WebviewWindow, app_url: tauri::Url, port: u16) {
                     match win.navigate(app_url.clone()) {
                         Ok(()) => {
                             offline = false;
-                            let _ = win.set_title("班底");
+                            let _ = win.set_title(&window_title(""));
                         }
                         Err(e) => eprintln!("[壳] 导航回控制面失败：{e} —— 巡检下一轮再试"),
                     }
@@ -840,7 +852,7 @@ fn watch_service(win: tauri::WebviewWindow, app_url: tauri::Url, port: u16) {
             match win.navigate(url) {
                 Ok(()) => {
                     offline = true;
-                    let _ = win.set_title("班底 · 正在恢复连接");
+                    let _ = win.set_title(&window_title("正在恢复连接"));
                     eprintln!("[壳] 已切到兜底页，等服务恢复（巡检每 {}s 一次）", HEALTH_INTERVAL_OFFLINE.as_secs());
                 }
                 // **不翻状态**：没导航成功就当没发生，下一轮重来（旧版在这里把用户永久卡在错误页）

@@ -1050,25 +1050,54 @@ if (r.action === 'failed' && Number(r.pid) > 0 && listeners(PORT).includes(Numbe
 }
 
 /**
+ * **这次要不要自动进门**（`true` / `false` / `null` = 判不出来）。
+ *
+ * 首选 `/api/ping`（2026-11-08 的免鉴权健康口；2026-11-10 晚起带 `authRequired`）：
+ * 这一问**不记审计**，所以壳启动一次 401 都不会打。
+ * 以前只能裸打 `/api/state`、拿 401 反推 —— 每开一次壳就在「安全 → 审计日志」里
+ * 留一行「拒绝访问 GET /api/state」，用户以为有人在扫面板（2026-11-10 实拍问过）。
+ *
+ * 判不出来（老服务端没有这个字段 / 不是班底 / 网络错误）返回 `null`，由 `windowUrl()`
+ * 退回旧探测 —— 不能在这儿猜：升级过渡期「新壳 + 老服务端」很常见，猜错会把窗口开到
+ * 一个不存在的 `/shell/enter` 上（老服务端没有这条路由）。
+ */
+async function authRequired(url) {
+  try {
+    const r = await fetch(`${url}/api/ping`, { signal: AbortSignal.timeout(3000) });
+    const j = r.ok ? await r.json().catch(() => null) : null;
+    if (j?.platform === 'bandi' && typeof j.authRequired === 'boolean') return j.authRequired;
+  } catch {
+    /* 连不上 / 超时：交给下面的旧探测 */
+  }
+  return null;
+}
+
+/**
  * 窗口该开在哪个地址。
  *
- * ⚠️ 开了「允许局域网内的机器加入」之后，控制面就**要求令牌**了（"只看监听地址"那条规则 ✓）——
+ * ⚠️ 控制面**对外监听**（默认 0.0.0.0）时，本机请求也要凭据（IAM §5.2 的有意选择）——
  * 于是桌面版自己那个窗口也会撞上登录页 ✗。壳能读同一台机器上的 `local_secret`，
  * 所以把窗口开到 `/shell/enter?secret=…`：服务端核过 secret + 本机直连后发一张
  * **本机会话**（7 天空闲 / 180 天绝对，见 store/users.mjs 的 SHELL_IDLE_DAYS）再跳回面板。
  * 这是"这台机器上的应用"的凭据，不是把 operator 令牌塞进地址栏（2026-11-10 改：
  * 之前带 `?token=`，令牌不是人 → 面板 HTML 会给登录页，结果壳每次开都落在登录页）。
  *
- * 只在**真被要求**时才带（拿 401 试探一下 ✓）：回环模式下 `local_secret` 不是必需的
- * （那会是回环免鉴权形态），多带一个密钥进地址栏不合适。
+ * 只在**真被要求**时才带：回环免鉴权形态（`authRequired=false`）不该把密钥塞进地址栏。
+ * 判断走 `authRequired()`：先问 `/api/ping`（不记审计），问不出来才退回裸探 `/api/state`
+ * 看 401（2026-11-10 晚改 —— 以前每次启动都要吃一次 401，审计里多一行"拒绝访问"）。
  */
 async function windowUrl(url) {
-  try {
-    const probe = await fetch(`${url}/api/state`, { signal: AbortSignal.timeout(3000) });
-    if (probe.status !== 401) return url;
-  } catch {
-    return url; // 探测不了就按原样开，别把壳卡在这儿
+  let needEnter = await authRequired(url);
+  if (needEnter === null) {
+    /* 升级过渡期（新壳 + 老服务端）：沿用老口径。这条 401 仍会落一行审计，认了。 */
+    try {
+      const probe = await fetch(`${url}/api/state`, { signal: AbortSignal.timeout(3000) });
+      needEnter = probe.status === 401;
+    } catch {
+      return url; // 探测不了就按原样开，别把壳卡在这儿
+    }
   }
+  if (!needEnter) return url;
   /*
    * 本机密钥自动进门（2026-11-10 主路径）。`local_secret` 由服务端在数据目录生成（0600），
    * 壳和服务端同机同用户，读得到。

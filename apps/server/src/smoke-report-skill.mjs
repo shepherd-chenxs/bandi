@@ -29,6 +29,7 @@ const check = (label, ok, detail = '') => {
 const skill = read('skills/bandi-report/SKILL.md');
 const notice = read('skills/bandi-report/NOTICE.md');
 const experts = read('apps/server/src/experts.mjs');
+const roles = read('apps/server/src/roles.mjs');
 const dispatchSrc = read('apps/server/src/dispatch.mjs');
 const runsSrc = read('apps/server/src/runs.mjs');
 const pmSkill = read('skills/bandi-expert-pm/SKILL.md');
@@ -46,9 +47,11 @@ check('NOTICE 带 MIT License 全文', /MIT License/.test(notice) && /Permission
 check('NOTICE 链接 minto-pyramid 上游', /millwright-labs\/minto-pyramid-skill/.test(notice));
 check('NOTICE 链接 pyramid-principle-for-operators 上游', /wilsonwu-ai\/pyramid-principle-for-operators/.test(notice));
 
-console.log('\n③ 专家包默认挂载（不需要人工去技能库点）');
-check('PM（贺韬）包里有 bandi-report', /skills: \['bandi-expert-pm'[^\]]*'bandi-report'/.test(experts), '');
-check('助理（喜儿）包里有 bandi-report', /skills: \['bandi-expert-secretary'[^\]]*'bandi-report'/.test(experts), '');
+console.log('\n③ 岗位技能包默认挂载（不需要人工去技能库点）');
+// 2026-11-11 Phase 3：技能清单从专家包搬到**岗位**上（roles.mjs），雇佣/同步时自动挂载。
+check('PM 岗位技能包里有 bandi-report', /key: 'pm'[\s\S]*?skills: \[[^\]]*'bandi-report'/.test(roles), '');
+check('助理岗位技能包里有 bandi-report', /key: 'assistant'[\s\S]*?skills: \[[^\]]*'bandi-report'/.test(roles), '');
+check('专家包不再各写一份技能清单（单一来源在 roles.mjs）', !/^\s*skills: \[/m.test(experts), '');
 
 console.log('\n④ 平台注入与 PM 技能都指向它（一处维护）');
 /*

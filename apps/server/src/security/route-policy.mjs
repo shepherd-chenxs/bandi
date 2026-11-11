@@ -43,9 +43,11 @@ export const ROUTES = [
    * 「端口上有个班底在回话」。它在 server.mjs 里**排在认证之前**返回，所以这条登记
    * 不改变任何行为 —— 登记的意义是把"故意免鉴权"写在清单上，而不是靠"它跑得早、
    * 没人查得到"（覆盖率扫描 B 段正是拿这张表判每个 /api 字面量）。
-   * 响应只有 `{ ok, platform }`：platform 这个字段 401 响应体里本来就带，零新增暴露。
+   * 响应只有 `{ ok, platform, authRequired }`：platform 这个字段 401 响应体里本来就带，
+   * authRequired 与"任何 /api 有没有凭据都试得出来"同信息量 —— 零新增暴露
+   * （2026-11-10 晚加，给桌面壳决定要不要走 /shell/enter，免得每次开壳都裸打 /api/state 吃 401）。
    */
-  { id: 'ping', m: ['GET', 'HEAD'], path: p('/api/ping'), auth: 'public', note: '健康探测；认证之前返回，只回 {ok, platform}' },
+  { id: 'ping', m: ['GET', 'HEAD'], path: p('/api/ping'), auth: 'public', note: '健康探测；认证之前返回，只回 {ok, platform, authRequired}' },
   /*
    * 版本指纹（2026-11-09 从 session 改 public）：只回前端文件指纹，零敏感 ——
    * 旧页面（会话失效后）每 60 秒轮询一次，原先每次 401 都进审计，刷成噪音；
@@ -74,7 +76,16 @@ export const ROUTES = [
   /* ------------------------------------------------- 登录用户与手机设备共用 */
   { id: 'state.read', m: ['GET'], path: p('/api/state'), auth: 'session', run: true, note: '运行钥匙可读（秘书台账：谁在忙 / 有哪些会话）' },
   { id: 'me.read', m: ['GET'], path: p('/api/me'), auth: 'session', note: '「我是谁」—— 登录完第一件事' },
+  // 改中枢密码（2026-11-10）：只认会话里的 user（operator 没有中枢账号），
+  // handler 里再判 kind —— 这里登记的是"存在"。真验证在中枢（/v1/auth/password）。
+  { id: 'me.password', m: ['POST'], path: p('/api/me/password'), auth: 'session', noPanel: true, note: '「我的 › 修改密码」：转发中枢，本机不存密码' },
   { id: 'skills.list', m: ['GET'], path: p('/api/skills'), auth: 'session' },
+  // 信箱（2026-11-11）：列表 / 未读数 / 标记已读 —— 都是登录用户自己的界面状态
+  { id: 'notices.list', m: ['GET'], path: p('/api/notices'), auth: 'session' },
+  { id: 'notices.unread', m: ['GET'], path: p('/api/notices/unread'), auth: 'session' },
+  { id: 'notices.read', m: ['POST'], path: p('/api/notices/read'), auth: 'session' },
+  // 岗位清单（2026-11-11）：岗位系统内置、权限挂在岗位上 —— 只读下发，界面画岗位下拉与权限矩阵
+  { id: 'roles.list', m: ['GET'], path: p('/api/roles'), auth: 'session' },
   { id: 'workflows.list', m: ['GET'], path: p('/api/workflows'), auth: 'session' },
   { id: 'projects.list', m: ['GET'], path: p('/api/projects'), auth: 'session', run: true, note: '运行钥匙可读（PM brief：拿项目 id / 目录；秘书台账）' },
   { id: 'tasks.list', m: ['GET'], path: p('/api/tasks'), auth: 'session', run: true, note: '运行钥匙可读（秘书台账：全部任务卡）' },

@@ -11,6 +11,8 @@ import * as status from '../status.mjs';
 import { projectTasks, allTasks, createProjectTask, updateProjectTask, startProjectTask, afterMerged, upsertRepoCard } from '../project-tasks.mjs';
 import * as git from '../git-repos.mjs';
 import { verifyRunCredential } from '../agent-auth.mjs';
+// 岗位权限（2026-11-11）：运行钥匙能改哪些卡，除了归属还要看岗位有没有 card.advance
+import { can } from '../roles.mjs';
 import { ATT_MAX, safeName, validateAtts, uploadsRoot } from './conversation.mjs';
 
 export async function handleProject(req, res, url) {
@@ -108,7 +110,8 @@ export async function handleProject(req, res, url) {
     /*
      * **运行钥匙改卡**（2026-11-09 全员群实报）：项目经理在群里干活时只能"建卡 + 读台账"，
      * 想退待办/重跑/改派/取消却没有通道 —— 回话里就只剩一句 "Next: …" 然后停住，活半途而废。
-     * 现在按**卡归属**放行：只改"他建的卡"或"他当群助手那张团队卡"，且只放行下面四样；
+     * 现在按**卡归属 + 岗位权限**放行：只改"他建的卡"或"他当群助手那张团队卡"，且岗位要有
+     * 「改卡」权限（现在只有项目经理），只放行下面四样；
      * 范围、验收标准、流程归属仍归人（面板上改）。
      */
     const who = req.bandiAuth;
@@ -117,7 +120,10 @@ export async function handleProject(req, res, url) {
       const card = store.getProjectTask(id);
       if (card) {
         const g = card.assigneeGroupId ? store.getGroup(card.assigneeGroupId) : null;
-        const mine = !!runPersona && (card.createdBy === runPersona.id || g?.assistantPersonaId === runPersona.id);
+        const mine =
+          !!runPersona &&
+          can(runPersona, 'card.advance') &&
+          (card.createdBy === runPersona.id || g?.assistantPersonaId === runPersona.id);
         if (!mine) {
           return fail(res, 403, 'E4034', '运行钥匙只能改你建的卡，或你当群助手那张团队卡的卡；别的卡请让雇主在面板上改');
         }
@@ -125,6 +131,15 @@ export async function handleProject(req, res, url) {
         const bad = Object.keys(body ?? {}).filter((k) => !allowed.has(k));
         if (bad.length) {
           return fail(res, 403, 'E4034', `运行钥匙改卡只开放 状态 / 描述 / 执行人 / 重跑（收到：${bad.join('、')}）；范围、验收、流程归属请让雇主在面板上改`);
+        }
+        /*
+         * **验收人 = 派活人**（2026-11-11 用户定）：
+         *   · 你（项目经理）派的活（卡上 createdBy = 你）→ 你验收，可以写「已完成」；
+         *   · 雇主派给你的主卡（团队协作）→ 你只能提交「待验收」，**不能替雇主点完成**。
+         * 补记接口里建的卡 createdBy 一定是你，所以补记可以写「已完成」——这是同一条规则。
+         */
+        if (String(body?.status ?? '') === '已完成' && card.createdBy !== runPersona.id) {
+          return fail(res, 403, 'E4034', '这张卡是雇主派的（主卡）—— 你只能提交「待验收」等雇主验收，不能替他点「已完成」');
         }
       }
     }

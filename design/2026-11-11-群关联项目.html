@@ -1,0 +1,560 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>群聊 · 关联项目 · 形态稿</title>
+<style>
+/* 2026-11-11 · 群的「关联项目」形态稿
+   口径（用户已拍板）：**一项目一群 + 可空可换**。
+   视觉沿用产品现有密排风格：1px 细线分层、6px(行/控件) 与 10px(面) 两档圆角、
+   字号 11.5 / 12 / 13.5、不用彩色底块区分层级。
+   变量值直接照搬 apps/web/style.css，别在这里另造一套。*/
+
+:root {
+  color-scheme: light;
+  --bg: #ffffff;
+  --side: #f6f7f8;
+  --panel: #ffffff;
+  --line: #e5e6e9;
+  --line-soft: #eef0f2;
+  --text: #1a1c1f;
+  --dim: #6b7076;
+  --dim-2: #9aa0a6;
+  --accent: #0071e3;
+  --accent-soft: rgba(0, 113, 227, .08);
+  --hover: #f1f2f4;
+  --chip: #f1f2f4;
+  --ok: #1a7f37;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Microsoft YaHei", "Source Han Sans SC", sans-serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+  --shadow: 0 14px 40px rgba(16, 18, 22, .09);
+}
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #08090a;
+  --side: #0d0e10;
+  --panel: #111214;
+  --line: #202225;
+  --line-soft: #191a1d;
+  --text: #e8e9ea;
+  --dim: #9b9ea3;
+  --dim-2: #6d7278;
+  --accent: #0a84ff;
+  --accent-soft: rgba(10, 132, 255, .14);
+  --hover: #16171a;
+  --chip: #1a1b1e;
+  --ok: #3fb950;
+  --shadow: 0 18px 48px rgba(0, 0, 0, .55);
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--side); color: var(--text); font-family: var(--font);
+  font-size: 13px; line-height: 1.5; -webkit-font-smoothing: antialiased;
+  font-variant-numeric: tabular-nums;
+}
+.doc { max-width: 1300px; margin: 0 auto; padding: 24px 24px 80px; }
+.doc-head { margin-bottom: 20px; }
+.doc-head h1 { margin: 0 0 6px; font-size: 20px; font-weight: 650; letter-spacing: -.01em; }
+.doc-head p { margin: 0; color: var(--dim); font-size: 12.5px; max-width: 880px; }
+.doc-head p + p { margin-top: 5px; }
+.doc-head b { color: var(--text); font-weight: 600; }
+
+.canvas { display: flex; flex-wrap: wrap; gap: 26px; align-items: flex-start; }
+.artboard { margin: 0; flex: 0 0 auto; }
+.artboard figcaption { margin: 0 0 8px; font-size: 12px; color: var(--dim-2); display: flex; gap: 8px; align-items: baseline; }
+.artboard figcaption .k { font-weight: 600; color: var(--text); }
+.screen {
+  overflow: hidden; background: var(--bg); border: 1px solid var(--line);
+  border-radius: 10px; box-shadow: var(--shadow);
+}
+
+/* ══════════════ 群头 ══════════════ */
+.chat-head {
+  display: flex; align-items: center; gap: 10px;
+  height: 58px; padding: 0 12px 0 14px;
+  border-bottom: 1px solid var(--line); background: var(--bg);
+}
+.avatar {
+  width: 30px; height: 30px; flex: 0 0 30px; border-radius: 6px;
+  display: grid; place-items: center; font-size: 13px; font-weight: 600;
+  background: var(--chip); color: var(--dim); border: 1px solid var(--line);
+}
+.avatar.grp { border-radius: 8px; }
+.avatar.big { width: 52px; height: 52px; flex-basis: 52px; font-size: 20px; }
+.chat-head .meta { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; }
+.head-name {
+  font-size: 13.5px; font-weight: 600; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto;
+}
+.sub { color: var(--dim); font-size: 12px; white-space: nowrap; flex: none; }
+/* 项目铭牌 · 方案一：accent 纯文字，前带分隔点（无底无框，不抢群名）
+   ⚠️ flex:none：铭牌**自己**按 max-width 截断，不参与分摊收缩 ——
+   群名是这行里唯一可收缩的（对齐 mobile.css §16.8 现有口径），
+   两个都能缩的结果就是群名先被截（第一版稿在 390px 板上实际翻过车）。 */
+.proj {
+  color: var(--accent); font-size: 12px; white-space: nowrap;
+  flex: 0 0 auto; overflow: hidden; text-overflow: ellipsis; max-width: 132px;
+}
+/* 项目铭牌 · 方案二：1px 描边小签（弱化成"属性"，存在感更低） */
+.proj-tag {
+  font-size: 11px; line-height: 16px; color: var(--dim); white-space: nowrap;
+  border: 1px solid var(--line); border-radius: 4px; padding: 0 5px;
+  flex: 0 0 auto; overflow: hidden; text-overflow: ellipsis; max-width: 116px;
+}
+.badge {
+  font-size: 11px; line-height: 16px; padding: 0 6px; border-radius: 4px;
+  background: var(--accent-soft); color: var(--accent); flex: none; font-weight: 500;
+}
+.chat-head .spacer { flex: 1; }
+.icon-btn {
+  width: 30px; height: 30px; flex: none; display: grid; place-items: center;
+  border: 0; border-radius: 6px; background: none; color: var(--dim); cursor: pointer;
+}
+.icon-btn:hover { background: var(--hover); color: var(--text); }
+.icon-btn svg { width: 18px; height: 18px; }
+
+/* 群头下面的消息区切片（只为交代"群头在整页里的位置"，不是重点） */
+.msgs { padding: 14px 16px 18px; background: var(--bg); height: 92px; overflow: hidden; }
+.msg { display: flex; gap: 8px; margin-bottom: 12px; }
+.msg .av { width: 24px; height: 24px; border-radius: 6px; background: var(--chip);
+           border: 1px solid var(--line); flex: none; }
+.msg .b { background: var(--chip); border-radius: 6px; height: 26px; width: 232px; }
+.msg.me { flex-direction: row-reverse; }
+.msg.me .b { background: var(--accent-soft); width: 186px; }
+
+/* ══════════════ 手机群头 ══════════════ */
+.phone { width: 390px; }
+.phone .chat-head { height: 54px; padding: 0 6px 0 4px; gap: 6px; }
+.phone .head-name { font-size: 15px; font-weight: 600; }
+.phone .avatar { width: 28px; height: 28px; flex-basis: 28px; }
+.phone .icon-btn { width: 34px; height: 34px; }
+.back {
+  width: 36px; height: 36px; flex: none; display: grid; place-items: center;
+  color: var(--text); background: none; border: 0;
+}
+.cut { color: var(--dim-2); }
+
+/* ══════════════ 抽屉 ══════════════ */
+.drawer { width: 380px; background: var(--side); }
+.drawer-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 16px; border-bottom: 1px solid var(--line); background: var(--side);
+}
+.drawer-head b { font-size: 14px; font-weight: 600; }
+.drawer-body { padding: 14px; }
+.dcard {
+  background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+  padding: 14px; margin-bottom: 12px;
+}
+.dcard h4 { margin: 0 0 10px; font-size: 13px; font-weight: 500;
+            display: flex; justify-content: space-between; align-items: center; }
+.dcard h4 .count { color: var(--dim); font-weight: 400; font-size: 12px; }
+.group-card { display: flex; gap: 12px; align-items: center; }
+.group-card h3 { margin: 0; font-size: 15px; font-weight: 600; }
+.group-card .sub { margin-top: 3px; }
+
+/* 群成员宫格（简化：只为交代上下文） */
+.mgrid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px 6px; }
+.mtile { display: grid; gap: 5px; justify-items: center; }
+.mavatar {
+  width: 40px; height: 40px; border-radius: 8px; display: grid; place-items: center;
+  background: var(--chip); border: 1px solid var(--line); color: var(--dim);
+  font-size: 14px; font-weight: 600; position: relative;
+}
+.mname { font-size: 11.5px; color: var(--dim); white-space: nowrap; }
+.mbadge {
+  position: absolute; left: 50%; bottom: -7px; transform: translateX(-50%);
+  font-size: 9px; line-height: 12px; padding: 0 3px; border-radius: 3px;
+  background: var(--accent-soft); color: var(--accent); white-space: nowrap;
+  border: 1px solid var(--bg);
+}
+
+/* 信息行：沿用 .info-row（左标签 / 右值 / chevron） */
+.info-row {
+  display: flex; align-items: center; gap: 10px; padding: 11px 2px;
+  border-top: 1px solid var(--line); font-size: 13.5px;
+}
+.info-row:first-child { border-top: 0; }
+.info-row > span:first-child { color: var(--dim); flex: 0 0 auto; }
+.info-row > b {
+  flex: 1; text-align: right; font-weight: 400;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.info-row .chev { color: var(--dim-2); font-size: 14px; }
+.info-row.clickable { cursor: pointer; }
+.info-row.clickable:hover > b { color: var(--accent); }
+.info-row > b.none { color: var(--dim-2); }
+/* 刚关联上的那一行：加一条左侧 2px 竖线做"落点提示"，2 秒后自行消失（实现用 class 切换） */
+.info-row.is-new { position: relative; }
+.info-row.is-new::before {
+  content: ""; position: absolute; left: -14px; top: 8px; bottom: 8px;
+  width: 2px; border-radius: 2px; background: var(--accent);
+}
+.hint-line { font-size: 11.5px; color: var(--dim-2); line-height: 1.6; margin-top: 8px; }
+.hint-line b { color: var(--dim); font-weight: 500; }
+.proj-path { font-family: var(--mono); font-size: 11px; color: var(--dim-2); }
+
+/* ══════════════ 选择弹窗 ══════════════ */
+.dlg {
+  width: 480px; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 10px; box-shadow: var(--shadow); overflow: hidden;
+}
+.dlg-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 16px; border-bottom: 1px solid var(--line);
+}
+.dlg-head b { font-size: 14px; font-weight: 600; }
+.dlg-body { padding: 6px 8px 8px; }
+.dlg-note {
+  font-size: 11.5px; color: var(--dim); padding: 8px 8px 10px; line-height: 1.6;
+}
+.dlg-note b { color: var(--text); font-weight: 500; }
+.p-row {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 9px 10px; border: 0; border-radius: 7px; background: none;
+  color: var(--text); font: inherit; font-size: 13px; cursor: pointer; text-align: left;
+}
+.p-row:hover { background: var(--hover); }
+.p-row .p-main { flex: 1; min-width: 0; }
+.p-row .p-name { font-weight: 500; display: flex; align-items: center; gap: 6px; }
+.p-row .p-path { font-family: var(--mono); font-size: 11px; color: var(--dim-2);
+                 overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
+.p-row .p-ok { color: var(--accent); font-weight: 600; font-size: 12px; flex: none; }
+.p-row .p-taken { color: var(--dim-2); font-size: 11.5px; flex: none; }
+.p-row[disabled] { cursor: default; opacity: .55; }
+.p-row[disabled]:hover { background: none; }
+.tag-builtin {
+  font-size: 10.5px; line-height: 15px; padding: 0 4px; border-radius: 3px;
+  border: 1px solid var(--line); color: var(--dim); font-weight: 400;
+}
+.p-sep { height: 1px; background: var(--line); margin: 6px 4px; }
+.dlg-foot {
+  display: flex; justify-content: flex-end; gap: 8px;
+  padding: 10px 16px 14px; border-top: 1px solid var(--line-soft);
+}
+.btn {
+  height: 30px; padding: 0 14px; border-radius: 6px; border: 1px solid var(--line);
+  background: var(--bg); color: var(--text); font: inherit; font-size: 12.5px; cursor: pointer;
+}
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+/* ══════════════ 说明 ══════════════ */
+.notes {
+  list-style: none; margin: 14px 0 0; padding: 12px 15px; max-width: 1010px;
+  border-left: 2px solid var(--accent); background: var(--panel);
+  border-radius: 0 8px 8px 0; border-top: 1px solid var(--line);
+  border-right: 1px solid var(--line); border-bottom: 1px solid var(--line);
+}
+.notes li { font-size: 12px; color: var(--dim); margin: 5px 0; line-height: 1.7; }
+.notes li b { color: var(--text); font-weight: 600; }
+.notes code {
+  font-family: var(--mono); font-size: 11px; background: var(--chip);
+  padding: 1px 4px; border-radius: 3px; color: var(--text);
+}
+
+.theme-btn {
+  position: fixed; right: 18px; bottom: 18px; z-index: 9;
+  height: 32px; padding: 0 14px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--panel); color: var(--dim);
+  font: inherit; font-size: 12px; cursor: pointer; box-shadow: var(--shadow);
+}
+</style>
+</head>
+<body>
+<div class="doc">
+
+  <div class="doc-head">
+    <h1>群聊 · 关联项目</h1>
+    <p>口径：<b>一项目一群、可空可换</b>。挂上之后，群里派的活直接在那个项目的目录里干、看板卡自动落它，不用每次手选。</p>
+    <p>设计上只守一条：<b>群头不许再多一颗按钮</b>。项目名是"我们在哪儿干活"的身份，不是动作 —— 出现，但不抢群名。</p>
+  </div>
+
+  <div class="canvas">
+
+    <!-- ══ A1 群头 · 方案一 ══ -->
+    <figure class="artboard">
+      <figcaption><span class="k">A1</span> 群头 · 项目名（accent 纯文字）</figcaption>
+      <div class="screen" style="width:760px">
+        <div class="chat-head">
+          <div class="avatar grp">产</div>
+          <div class="meta">
+            <b class="head-name">产品组</b>
+            <span class="sub">7 人</span>
+            <span class="proj">· 班底</span>
+            <span class="badge">跑中</span>
+          </div>
+          <button class="icon-btn" title="给这个群开一段新会话">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20 11.5c0 3.3-3.6 6-8 6-1.2 0-2.3-.2-3.3-.6L4 19l1.2-3.4C4.4 14.6 4 13.1 4 11.5c0-3.3 3.6-6 8-6s8 2.7 8 6z" />
+              <path d="M12 9v5M9.5 11.5h5" />
+            </svg>
+          </button>
+          <button class="icon-btn" title="聊天记录">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3.6 12a8.4 8.4 0 1 0 2.6-6.1" /><path d="M3.6 4.6V10H9" />
+              <path d="M12 8v4.4l3 1.8" />
+            </svg>
+          </button>
+        </div>
+        <div class="msgs">
+          <div class="msg"><div class="av"></div><div class="b"></div></div>
+          <div class="msg me"><div class="av"></div><div class="b"></div></div>
+        </div>
+      </div>
+    </figure>
+
+    <!-- ══ A2 群头 · 方案二 ══ -->
+    <figure class="artboard">
+      <figcaption><span class="k">A2</span> 群头 · 项目名（描边小签）</figcaption>
+      <div class="screen" style="width:760px">
+        <div class="chat-head">
+          <div class="avatar grp">产</div>
+          <div class="meta">
+            <b class="head-name">产品组</b>
+            <span class="sub">7 人</span>
+            <span class="proj-tag">班底</span>
+            <span class="badge">跑中</span>
+          </div>
+          <button class="icon-btn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20 11.5c0 3.3-3.6 6-8 6-1.2 0-2.3-.2-3.3-.6L4 19l1.2-3.4C4.4 14.6 4 13.1 4 11.5c0-3.3 3.6-6 8-6s8 2.7 8 6z" />
+              <path d="M12 9v5M9.5 11.5h5" />
+            </svg>
+          </button>
+          <button class="icon-btn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3.6 12a8.4 8.4 0 1 0 2.6-6.1" /><path d="M3.6 4.6V10H9" />
+              <path d="M12 8v4.4l3 1.8" />
+            </svg>
+          </button>
+        </div>
+        <div class="msgs">
+          <div class="msg"><div class="av"></div><div class="b"></div></div>
+          <div class="msg me"><div class="av"></div><div class="b"></div></div>
+        </div>
+      </div>
+    </figure>
+
+    <!-- ══ B 手机群头 ══ -->
+    <figure class="artboard">
+      <figcaption><span class="k">B</span> 手机群头 · 长项目名怎么让位</figcaption>
+      <div class="screen phone">
+        <div class="chat-head">
+          <button class="back" aria-label="返回">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M15 5l-7 7 7 7" />
+            </svg>
+          </button>
+          <div class="avatar grp">产</div>
+          <div class="meta">
+            <b class="head-name">产品组</b>
+            <span class="sub">7 人</span>
+            <span class="proj" style="max-width:78px">· 官网改版…</span>
+          </div>
+          <button class="icon-btn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20 11.5c0 3.3-3.6 6-8 6-1.2 0-2.3-.2-3.3-.6L4 19l1.2-3.4C4.4 14.6 4 13.1 4 11.5c0-3.3 3.6-6 8-6s8 2.7 8 6z" />
+              <path d="M12 9v5M9.5 11.5h5" />
+            </svg>
+          </button>
+          <button class="icon-btn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3.6 12a8.4 8.4 0 1 0 2.6-6.1" /><path d="M3.6 4.6V10H9" />
+              <path d="M12 8v4.4l3 1.8" />
+            </svg>
+          </button>
+        </div>
+        <div class="msgs" style="height:80px">
+          <div class="msg"><div class="av"></div><div class="b" style="width:200px"></div></div>
+          <div class="msg me"><div class="av"></div><div class="b" style="width:150px"></div></div>
+        </div>
+      </div>
+    </figure>
+
+    <!-- ══ C 群设置抽屉 · 已关联 ══ -->
+    <figure class="artboard">
+      <figcaption><span class="k">C1</span> 群设置 · 已关联</figcaption>
+      <div class="screen drawer">
+        <div class="drawer-head">
+          <b>群设置</b>
+          <button class="icon-btn" style="width:24px;height:24px">×</button>
+        </div>
+        <div class="drawer-body">
+          <div class="dcard group-card">
+            <div class="avatar grp big">产</div>
+            <div>
+              <h3>产品组</h3>
+              <div class="sub">群助手：许清楚 · 7 人</div>
+            </div>
+          </div>
+
+          <div class="dcard">
+            <div class="info-row">
+              <span>群名称</span><b>产品组</b><span class="chev">›</span>
+            </div>
+            <div class="info-row clickable is-new">
+              <span>关联项目</span><b>班底</b><span class="chev">›</span>
+            </div>
+            <div class="info-row clickable">
+              <span>群助手</span><b>许清楚</b><span class="chev">›</span>
+            </div>
+            <div class="info-row"><span>群主</span><b>沈丹青（创建人）</b></div>
+            <div class="info-row"><span>成员数</span><b>7 人</b></div>
+            <div class="hint-line">
+              群里的活都在 <b>班底</b> 的目录里干；派给群的卡直接落它的看板。
+            </div>
+          </div>
+
+          <div class="dcard">
+            <h4>群成员 <span class="count">7</span></h4>
+            <div class="mgrid">
+              <div class="mtile"><div class="mavatar">许<span class="mbadge">群助手</span></div><div class="mname">许清楚</div></div>
+              <div class="mtile"><div class="mavatar">贺</div><div class="mname">贺韬</div></div>
+              <div class="mtile"><div class="mavatar">马</div><div class="mname">马超</div></div>
+              <div class="mtile"><div class="mavatar">沈</div><div class="mname">沈丹青</div></div>
+              <div class="mtile"><div class="mavatar">林</div><div class="mname">林一</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </figure>
+
+    <!-- ══ C 群设置抽屉 · 未关联 ══ -->
+    <figure class="artboard">
+      <figcaption><span class="k">C2</span> 群设置 · 未关联（空态）</figcaption>
+      <div class="screen drawer">
+        <div class="drawer-head">
+          <b>群设置</b>
+          <button class="icon-btn" style="width:24px;height:24px">×</button>
+        </div>
+        <div class="drawer-body">
+          <div class="dcard group-card">
+            <div class="avatar grp big">闲</div>
+            <div>
+              <h3>闲聊群</h3>
+              <div class="sub">群助手：许清楚 · 3 人</div>
+            </div>
+          </div>
+
+          <div class="dcard">
+            <div class="info-row">
+              <span>群名称</span><b>闲聊群</b><span class="chev">›</span>
+            </div>
+            <div class="info-row clickable">
+              <span>关联项目</span><b class="none">未关联</b><span class="chev">›</span>
+            </div>
+            <div class="info-row clickable">
+              <span>群助手</span><b>许清楚</b><span class="chev">›</span>
+            </div>
+            <div class="info-row"><span>群主</span><b>沈丹青（创建人）</b></div>
+            <div class="info-row"><span>成员数</span><b>3 人</b></div>
+            <div class="hint-line">
+              不关联也能聊。关联后，群里派的活才落到某个项目的目录里。
+            </div>
+          </div>
+
+          <div class="dcard">
+            <h4>群成员 <span class="count">3</span></h4>
+            <div class="mgrid">
+              <div class="mtile"><div class="mavatar">许<span class="mbadge">群助手</span></div><div class="mname">许清楚</div></div>
+              <div class="mtile"><div class="mavatar">贺</div><div class="mname">贺韬</div></div>
+              <div class="mtile"><div class="mavatar">沈</div><div class="mname">沈丹青</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </figure>
+
+    <!-- ══ D 选择项目 ══ -->
+    <figure class="artboard">
+      <figcaption><span class="k">D</span> 选择项目 · 单选即选即关</figcaption>
+      <div class="screen dlg">
+        <div class="dlg-head">
+          <b>关联项目</b>
+          <button class="icon-btn" style="width:24px;height:24px">×</button>
+        </div>
+        <div class="dlg-body">
+          <div class="dlg-note">
+            关联后，群里 @ 谁干活，他就在那个项目的<b>目录</b>里干，派的卡直接落它的<b>看板</b>。
+            一个项目只归一个群。
+          </div>
+
+          <button class="p-row">
+            <div class="p-main">
+              <div class="p-name">班底 <span class="tag-builtin">内置</span></div>
+              <div class="p-path">E:\CodeSpace\github\bandi</div>
+            </div>
+            <span class="p-ok">✓ 当前</span>
+          </button>
+
+          <button class="p-row" disabled>
+            <div class="p-main">
+              <div class="p-name">官网改版</div>
+              <div class="p-path">E:\work\site-redesign</div>
+            </div>
+            <span class="p-taken">已被「设计组」关联</span>
+          </button>
+
+          <button class="p-row">
+            <div class="p-main">
+              <div class="p-name">数据中台</div>
+              <div class="p-path">D:\work\data-platform</div>
+            </div>
+          </button>
+
+          <div class="p-sep"></div>
+
+          <button class="p-row">
+            <div class="p-main">
+              <div class="p-name" style="color:var(--dim)">不关联</div>
+              <div class="p-path" style="font-family:var(--font)">群里派活用成员各自的目录</div>
+            </div>
+          </button>
+        </div>
+        <div class="dlg-foot">
+          <button class="btn">取消</button>
+        </div>
+      </div>
+    </figure>
+
+  </div>
+
+  <ul class="notes">
+    <li><b>入口只有一个</b>：群设置里的「关联项目」行。宽屏抽屉和群详情页共用 <code>groupSettingsHTML()</code>，改这一处两处都有；群头**不再加齿轮/按钮**（2026-11-05 已经因为挤把齿轮挪到群名上了）。</li>
+    <li><b>A1 / A2 二选一</b>：A1 用 accent 色，扫一眼能分清"群名 / 人数 / 项目"三层；A2 小签更退后，但和「内置」签长得像，容易被当成属性标。我倾向 <b>A1</b>。</li>
+    <li><b>行序</b>：群名称 → <b>关联项目</b> → 群助手 → 群主 → 成员数。项目紧挨群名，因为两者回答的是同一件事："这是什么群"。</li>
+    <li><b>短了谁让位</b>：群名优先（可截断），人数不让，项目名其次（4–6 字后省略），最后才截群名。手机 320px 以下整块项目名隐藏 —— 抽屉里永远能看到，不必在群头硬塞。</li>
+    <li><b>换绑规则</b>：选另一个项目＝直接换（旧的自动释放）；选「不关联」＝清空，派活回落到成员各自目录。<b>被别人占用的项目置灰</b>并标出占用群，不做"顶掉"—— 一项目一群靠这条守住。</li>
+    <li><b>数据侧</b>（给开发）：<code>groups.projectId</code>（可空）+ 群会话派活时把它当 <code>opts.projectId</code> 传下去，<code>dispatch.mjs</code> 里 cwd / 项目宪法 / 看板卡归属就全自动了。未关联＝不传，行为与现在一致。</li>
+  </ul>
+
+</div>
+
+<button class="theme-btn" id="themeBtn">切深色</button>
+<script>
+  const root = document.documentElement;
+  const btn = document.getElementById('themeBtn');
+  // 截图用：?theme=dark 直接出深色稿（无头截图点不了按钮）
+  if (new URLSearchParams(location.search).get('theme') === 'dark') {
+    root.dataset.theme = 'dark';
+    if (btn) btn.textContent = '切浅色';
+  }
+  btn.onclick = () => {
+    const dark = root.dataset.theme === 'dark';
+    root.dataset.theme = dark ? 'light' : 'dark';
+    btn.textContent = dark ? '切深色' : '切浅色';
+  };
+</script>
+</body>
+</html>

@@ -7,11 +7,15 @@
  * （secret = 数据目录 `local_secret`），服务端核"本机直连 + 文件秘密"后发一张
  * 本机会话（kind='shell'，7 天空闲 / 180 天绝对），302 回面板。
  *
- * 这条用例钉四件事：
+ * 这条用例钉七件事：
  *   ① 本机直连 + 对 secret → 302 + `bandi_sid`，带 Cookie 能打开面板；
  *   ② 会话是 shell 档（空闲闸按天，不是 30 分钟）——"过一晚回来还能用"；
  *   ③ 错 secret 不进（401 E4010，且文案不再说"不是从本机直接发起的"）；
- *   ④ 反代形态（带 X-Forwarded-For）即使知道 secret 也不认。
+ *   ④ 反代形态（带 X-Forwarded-For）即使知道 secret 也不认；
+ *   ⑤ 老路径不受影响：令牌照旧能过 API；
+ *   ⑥ `/api/ping` 带 `authRequired`（壳据此决定要不要进门）且**不记审计**；
+ *   ⑦ 真桌面壳启动：窗口开到 `/shell/enter`，审计里**一条「拒绝访问」都不多**
+ *      （2026-11-10 晚补：以前壳每次启动裸打 `/api/state` 吃 401，审计里一行/次）。
  *
  * 隔离：临时数据目录 + 临时端口；自己造一个用户（firstUser 就是机主）。
  * 跑法：node apps/server/src/smoke-shell-enter.mjs
@@ -34,6 +38,7 @@ process.env.BANDI_DB = path.join(tmp, 'bandi.db');
 const { repoRoot } = await import('./config.mjs');
 const { stopRunning, sleep } = await import('./lifecycle.mjs');
 const store = await import('./store.mjs');
+const { DatabaseSync } = await import('node:sqlite');
 
 const SECRET = 'smoke-local-secret-0123456789';
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -42,6 +47,23 @@ let failed = 0;
 const check = (label, ok, detail = '') => {
   console.log(`  ${ok ? '✓' : '✗'} ${label}${detail ? '  — ' + detail : ''}`);
   if (!ok) failed += 1;
+};
+
+/**
+ * 数一下审计里的「拒绝访问」。壳的探活**不该让它涨** —— 这是 ⑦ 的判据
+ * （2026-11-10 晚：壳改问 /api/ping，不再裸打 /api/state 吃 401）。
+ * 只读打开（服务端正拿这个库跑着 WAL），与下面读会话表同一个写法。
+ */
+const auditDenies = () => {
+  const db = new DatabaseSync(path.join(tmp, 'bandi.db'), { readOnly: true });
+  try {
+    return {
+      all: db.prepare("SELECT COUNT(*) AS n FROM security_events WHERE kind = 'authz.deny'").get().n,
+      state: db.prepare("SELECT COUNT(*) AS n FROM security_events WHERE kind = 'authz.deny' AND action = 'GET /api/state'").get().n,
+    };
+  } finally {
+    db.close();
+  }
 };
 
 const get = async (p, headers = {}) => {
@@ -79,7 +101,11 @@ let childLog = '';
 child.stdout.on('data', (d) => (childLog += d));
 child.stderr.on('data', (d) => (childLog += d));
 
+/** ⑦ 的桌面壳子进程（用例中途起、退出时收） */
+let shellKid = null;
+
 const cleanup = async () => {
+  try { shellKid?.kill(); } catch { /* 已退 */ }
   try { child.kill(); } catch { /* 已退 */ }
   await sleep(300);
   try { stopRunning(PORT); } catch { /* 没在跑 */ }
@@ -112,7 +138,6 @@ try {
    * ② 会话是 shell 档：空闲闸按天（不是 30 分钟）—— 用户"过一晚回来"还能用
    *   顺带钉住 hub 档没被 shell 档带偏（2026-11-10 复审抓过：hub 绝对闸被写成 12 天）。
    */
-  const { DatabaseSync } = await import('node:sqlite');
   const db = new DatabaseSync(path.join(tmp, 'bandi.db'), { readOnly: true });
   const shellRow = db.prepare("SELECT kind, idleExpiresAt, absoluteExpiresAt FROM user_sessions WHERE kind = 'shell' ORDER BY createdAt DESC LIMIT 1").get();
   const hubSession = store.createSession(store.firstUser().id, { kind: 'hub' });
@@ -159,6 +184,61 @@ try {
    */
   const token = fs.readFileSync(path.join(tmp, 'token'), 'utf8').trim();
   check('operator 令牌照旧能读 /api/state', (await get('/api/state', { 'X-Bandi-Token': token })).status === 200);
+
+  /*
+   * ⑥ 壳的探活口（2026-11-10 晚）：`/api/ping` 免鉴权、带 `authRequired`、**不记审计**。
+   *    壳靠它决定要不要自动进门，从而不再裸打 `/api/state` 吃 401。
+   */
+  console.log('\n⑥ 壳的探活口：/api/ping 带 authRequired，且不进审计');
+  const deniesBeforePing = auditDenies();
+  const ping = await get('/api/ping');
+  check('/api/ping 免鉴权 + platform=bandi + authRequired=true',
+    ping.status === 200 && ping.json?.platform === 'bandi' && ping.json?.authRequired === true,
+    `${ping.status} ${JSON.stringify(ping.json)}`);
+  await get('/api/ping');
+  await get('/api/ping');
+  const deniesAfterPing = auditDenies();
+  check('/api/ping 不记审计（探活不该出现在「拒绝访问」里）',
+    deniesAfterPing.all === deniesBeforePing.all && deniesAfterPing.state === deniesBeforePing.state,
+    `全部 ${deniesBeforePing.all} → ${deniesAfterPing.all}`);
+
+  /*
+   * ⑦ 真桌面壳启动（端到端）：它问 `/api/ping` 拿到 authRequired=true → 窗口直接开到
+   *    `/shell/enter?secret=…`；审计里**一条新的「拒绝访问」都不该出现**
+   *    （以前是裸打 `/api/state` 401，每开一次壳多一行 —— 用户 2026-11-10 就是看到那一串问的）。
+   *
+   * 壳复用一个已经在跑的控制面（我们这个测试进程起的），所以 READY 末尾标记是 0；
+   * 它不会收掉这个服务（service.json 里没有"壳起的"记录）。
+   */
+  console.log('\n⑦ 桌面壳启动：靠 /api/ping 决定进门，审计里不再多出「拒绝访问」');
+  const deniesBeforeShell = auditDenies();
+  shellKid = spawn(process.execPath, [path.join(repoRoot, 'apps', 'desktop', 'shell.mjs')], {
+    cwd: repoRoot,
+    env: { ...process.env, BANDI_DATA: tmp, BANDI_DB: path.join(tmp, 'bandi.db'), BANDI_PORT: String(PORT) },
+    windowsHide: true,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  let shellOut = '';
+  shellKid.stdout.setEncoding('utf8');
+  shellKid.stdout.on('data', (d) => (shellOut += d));
+  const readyLine = await (async () => {
+    const until = Date.now() + 20000;
+    while (Date.now() < until) {
+      const line = shellOut.split('\n').find((l) => l.startsWith('BANDI_SHELL READY '));
+      if (line) return line.trim();
+      await sleep(150);
+    }
+    return null;
+  })();
+  check('壳报 READY，窗口直接开到 /shell/enter?secret=…',
+    !!readyLine && /\/shell\/enter\?secret=/.test(readyLine) && readyLine.endsWith(' 0'),
+    String(readyLine));
+  try { shellKid.stdin.write('STOP\n'); } catch { /* 已退 */ }
+  await Promise.race([new Promise((r) => shellKid.on('exit', r)), sleep(6000)]);
+  const deniesAfterShell = auditDenies();
+  check('壳启动没有在审计里留「拒绝访问」（不再裸打 /api/state）',
+    deniesAfterShell.all === deniesBeforeShell.all && deniesAfterShell.state === deniesBeforeShell.state,
+    `全部 ${deniesBeforeShell.all} → ${deniesAfterShell.all}，其中 /api/state ${deniesBeforeShell.state} → ${deniesAfterShell.state}`);
 } catch (err) {
   console.log('\n跑挂了：' + String(err?.message ?? err));
   if (childLog) console.log('--- 服务端日志尾部 ---\n' + childLog.slice(-800));

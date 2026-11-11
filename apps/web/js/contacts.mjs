@@ -17,7 +17,10 @@ import { convUnread, openDetail } from './chat.mjs';
 import { gidOf, openGroupDetail } from './groups.mjs';
 import { $, S } from './core.mjs';
 import { openProjectsPage, renderProjectList } from './projects.mjs';
-import { openGroupDialog, openPersonaDialog } from './misc.mjs';
+import { openGroupDialog } from './misc.mjs';
+// 组织架构（2026-11-11 Phase 3）：左栏子菜单与右区页面；两者互相 import 但只在运行时调用
+// （settings ↔ contacts 早就是同一个模式，函数声明提升保证了初始化顺序）
+import { openOrg, renderOrgList } from './org.mjs';
 
 
 
@@ -155,10 +158,10 @@ const isNarrowScreen = () => MQ_NARROW.matches;
 
 
 /**
- * 部门建议列表（#deptSuggest，新建对话框与员工详情共用一个 datalist）：
+ * 部门建议列表（#deptSuggest，员工详情用它）：
  * 库里已有哪些部门就建议哪些，按拼音排。
  * 自由文本字段最怕「技术部 / 技术 部」散成两个组 —— 建议列表是唯一的防手滑手段，
- * 每次开对话框 / 开详情前刷一遍（新建员工之后列表就多一个可选项）。
+ * 每次开详情前刷一遍（部门改了之后列表就多一个可选项）。
  */
 export function refreshDeptSuggest() {
   const dl = $('deptSuggest');
@@ -191,6 +194,8 @@ export function renderList() {
    * 清一下按钮就没一次。别的分支照旧"先清后画"。
    */
   if (S.nav === 'plugins' && S.route?.view === 'codeRepos') return;
+  // 信箱（2026-11-11）：整页通知列表，左栏列表不归它（no-list 已把整列收掉）
+  if (S.nav === 'inbox') return;
   /*
    * 左栏底部固定条（#listFoot）每次重画都先清空：它挂的是「已归档」这种**跨列表**的入口，
    * 不该跟着某一份数据残留到通讯录/设置页上。哪个分支需要，自己再往里写。
@@ -199,6 +204,12 @@ export function renderList() {
   if (foot) foot.innerHTML = '';
   const q = S.filter.trim().toLowerCase();
   const match = (name) => !q || String(name || '').toLowerCase().includes(q);
+
+  // 组织架构（2026-11-11 Phase 3）：左栏是它的子菜单；右区由 openOrg 画
+  if (S.nav === 'org') {
+    renderOrgList();
+    return;
+  }
 
   /* 「已移除的会话」子视图已随归档功能一并删除（2026-10-20，用户要求）：
      「不显示」不再往某个归档列表里放，它的记录只在「聊天记录」抽屉里可见；
@@ -1067,10 +1078,11 @@ export function openAddMenu(items, anchor = null, opts = {}) {
 
 
 
-/** 通讯录的「＋」：建群还是建员工 */
+/** 通讯录的「＋」：发起群聊。
+ *  「添加数字员工」入口 2026-11-11 撤掉（用户拍板：不保留新建员工，岗位固定、只能从专家库雇佣；
+ *  自建私有专家的入口以后单独做）。 */
 export const contactAddItems = () => [
   { label: '发起群聊', hint: '拉几个人组个项目群，@ 谁谁接话', icon: ICON_CHAT, run: openGroupDialog },
-  { label: '添加数字员工', hint: '配一个 agent CLI 当同事', icon: ICON_PERSON, run: openPersonaDialog },
 ];
 
 
@@ -1125,6 +1137,8 @@ export function showView(which) {
   // 只损失那一页，不该把整个 showView 炸掉连累所有页面白屏
   on('detailView', which === 'detail');
   on('settingsView', which === 'settings');
+  on('orgView', which === 'org');
+  on('inboxView', which === 'inbox');
   on('groupView', which === 'group');
   on('expertsView', which === 'experts');
   on('pluginView', which === 'plugin');

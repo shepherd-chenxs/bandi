@@ -13,6 +13,8 @@ import crypto from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 
 import { dataDir, dbPath } from '../config.mjs';
+// 岗位 key 的旧文本映射（2026-11-11）：迁移时用，本模块保持与 roles.mjs 同一份口径
+import { legacyRoleKey } from '../roles.mjs';
 
 fs.mkdirSync(dataDir, { recursive: true });
 
@@ -96,8 +98,11 @@ db.exec(`PRAGMA busy_timeout = 5000;`);
  *     迁移在 store/projects.mjs，那边建 project_tasks 表并 ensureColumn）。
  *   · 5（2026-11-09）：多机节点子系统删除，老库 DROP nodes / node_tokens /
  *     node_invites / node_jobs / node_paths（无存量机；`node_tasks` 保留）。
+ *   · 6（2026-11-11）：`personas` 加 `roleKey`（岗位固定与权限模型：权限挂在
+ *     系统内置岗位上，判据不再解析 role 文本；迁移在本文件 ensureColumn 之后回填）。
+ *   · 7（2026-11-11）：新表 `notices`（左栏「信箱」：平台事实落库，先接建卡失败）。
  */
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 7;
 
 const dbVersion = Number(db.prepare('PRAGMA user_version').get()?.user_version ?? 0);
 if (dbVersion > SCHEMA_VERSION) {
@@ -230,6 +235,38 @@ db.exec(`
   );
 `);
 
+/*
+ * **信箱**（2026-11-11 用户拍板：左栏一级「信箱」，未来还要接别的通知）：
+ * 平台事实的**落库账本** —— 建卡失败这类"机器侧出了事"先写这里，再决定怎么提醒人。
+ * 设计要点：
+ *   · 结构化：kind / severity / code / runId / persona / conversation / project 都留着，
+ *     点进去能回到出事那一轮；**不让数字员工转述事实**（会被改写）；
+ *   · `dedupeKey` 去重：同一轮同一个错误码重试 3 次只记 1 条、次数累加（见 store/notices.mjs）；
+ *   · `readAt` 为 NULL = 未读，左栏徽标数它。
+ * 新表用 CREATE TABLE IF NOT EXISTS，老库启动即补；加表要同步 SCHEMA_VERSION。
+ */
+db.exec(`
+  CREATE TABLE IF NOT EXISTS notices (
+    id             TEXT PRIMARY KEY,
+    kind           TEXT NOT NULL,
+    severity       TEXT NOT NULL DEFAULT 'warn',
+    code           TEXT,
+    title          TEXT NOT NULL,
+    detail         TEXT,
+    personaId      TEXT,
+    conversationId TEXT,
+    projectId      TEXT,
+    runId          TEXT,
+    dedupeKey      TEXT,
+    count          INTEGER NOT NULL DEFAULT 1,
+    readAt         TEXT,
+    createdAt      TEXT NOT NULL,
+    updatedAt      TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_notices_unread ON notices (readAt, updatedAt);
+  CREATE INDEX IF NOT EXISTS idx_notices_dedupe ON notices (dedupeKey);
+`);
+
 // 轻量迁移：老库补列（store/ 内共用；门面不转发它，对外不可见）
 export function ensureColumn(table, column, ddl) {
   const cols = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
@@ -351,6 +388,31 @@ ensureColumn('personas', 'department', 'department TEXT');
 ensureColumn('personas', 'maxParallel', 'maxParallel INTEGER');
 
 /*
+ * **岗位 key**（2026-11-11）：权限挂在内置岗位上，人是"被聘用到某个岗位"。
+ *
+ * 老库只有自由文本 `role`（「岗位 · 职责」两段）。这里补列并**一次性**把能认出来的
+ * 文本映射成 key（映射表在 roles.mjs 的 legacyRoleKey）；认不出来的留 NULL
+ * —— 没岗位 = 没有任何权限，界面提示重新选岗，**不猜**（猜错比空着危险）。
+ * 幂等：只处理 roleKey 还是 NULL 的行；映射不上的下次启动再试（仍空、仍不猜）。
+ * 权限判定不再读 role 文本，见 roles.can()。
+ */
+ensureColumn('personas', 'roleKey', 'roleKey TEXT');
+
+function migratePersonaRoleKeys() {
+  const rows = db.prepare('SELECT id, role FROM personas WHERE roleKey IS NULL').all();
+  let n = 0;
+  for (const r of rows) {
+    const key = legacyRoleKey(r.role);
+    if (!key) continue;
+    db.prepare('UPDATE personas SET roleKey = ? WHERE id = ?').run(key, r.id);
+    n += 1;
+  }
+  if (n) console.log(`[迁移] ${n} 位员工的岗位文本映射成内置岗位 key`);
+}
+
+migratePersonaRoleKeys();
+
+/*
  * 这次运行**实际用的模型**。
  *
  * 为什么非要落库：额度是**按模型**算的（限额挂在模型上，因为贵/便宜分在模型 id 上，
@@ -451,6 +513,20 @@ db.exec(`
 // `conversations.groupId`：这段会话属于哪个群。空 = 不是群会话。
 
 ensureColumn('conversations', 'groupId', 'groupId TEXT');
+
+/*
+ * `groups.projectId`：这个群挂在哪个项目上（2026-11-11 用户拍板「一项目一群 + 可空可换」）。
+ *
+ * 为什么要这一列：群里的活原本用成员各自的 cwd 跑，项目目录/项目宪法/看板卡归属全靠人自觉；
+ * 挂上项目之后，群会话派活时把这个 projectId 当 `opts.projectId` 传下去（见 dispatch.mjs），
+ * 上面那三样就全自动了。
+ *
+ * **可空**：不关联就是纯聊天群，行为与从前一字不差（不传 projectId）。
+ * **一群最多一个项目、一个项目最多归一个群**：唯一性在写入口（routes/group.mjs）挡，
+ * 不建唯一索引 —— 已解散的群会释放项目，SQLite 的部分索引条件写起来比一处校验更绕。
+ */
+
+ensureColumn('groups', 'projectId', 'projectId TEXT');
 
 /*
  * 迁移老数据（幂等）：以前「群 = 一行 conversations」。

@@ -22,6 +22,8 @@ import path from 'node:path';
 import { dataDir, dbPath, port, repoRoot } from './config.mjs';
 import * as store from './store.mjs';
 import * as skills from './skills.mjs';
+// 岗位技能包（2026-11-11 Phase 3）：系统管家的技能清单挂在 steward 岗位上，不再单独维护
+import { roleSkills } from './roles.mjs';
 
 /*
  * 固定 id：seed 幂等就靠它（`personas.id` 是主键）。
@@ -98,6 +100,8 @@ export function stewardBrief() {
 export const STEWARD_IDENTITY = {
   name: STEWARD_NAME,
   role: STEWARD_ROLE,
+  // 岗位 key（2026-11-11）：系统管家是内置岗位，权限判定只认 roleKey
+  roleKey: 'steward',
   instructions: STEWARD_INSTRUCTIONS,
 };
 
@@ -181,8 +185,10 @@ export function ensureSteward() {
     builtin: 1,
   });
 
-  // 技能只在**新建那一次**挂；之后由 syncSteward 保持与出厂清单一致
-  if (skills.getSkill(STEWARD_SKILL)) store.linkPersonaSkill(STEWARD_ID, STEWARD_SKILL);
+  // 技能只在**新建那一次**挂；之后由 syncSteward 保持与岗位技能包一致（2026-11-11 Phase 3）
+  for (const n of roleSkills(STEWARD_IDENTITY.roleKey)) {
+    if (skills.getSkill(n)) store.linkPersonaSkill(STEWARD_ID, n);
+  }
 
   return { created: true, persona };
 }
@@ -203,6 +209,8 @@ export function syncSteward() {
   const changed = [];
   if (p.name !== STEWARD_IDENTITY.name) changed.push('name');
   if ((p.role ?? null) !== (STEWARD_IDENTITY.role ?? null)) changed.push('role');
+  // 岗位 key 也随平台固定（2026-11-11）：权限判定读它，不读 role 文本
+  if ((p.roleKey ?? null) !== (STEWARD_IDENTITY.roleKey ?? null)) changed.push('roleKey');
   if (p.instructions !== STEWARD_IDENTITY.instructions) changed.push('instructions');
   if (changed.length) {
     store.updatePersona(STEWARD_ID, { ...STEWARD_IDENTITY });
@@ -213,7 +221,7 @@ export function syncSteward() {
     if (n) console.log(`[内置管家] 身份刷回出厂，已作废 ${n} 节成员会话（下次派活按新身份重开）`);
   }
 
-  const pkg = skills.getSkill(STEWARD_SKILL) ? [STEWARD_SKILL] : [];
+  const pkg = roleSkills(STEWARD_IDENTITY.roleKey).filter((n) => skills.getSkill(n));
   const before = store.listPersonaSkillLinks(STEWARD_ID);
   for (const l of before) if (!pkg.includes(l.name)) store.unlinkPersonaSkill(STEWARD_ID, l.name);
   for (const n of pkg) {

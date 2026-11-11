@@ -30,6 +30,8 @@ import * as git from './git-repos.mjs';
 import * as schedules from './schedules.mjs';
 import * as steward from './steward.mjs';
 import * as experts from './experts.mjs';
+// 岗位与权限（2026-11-11）：岗位系统内置、权限挂在岗位上（见 roles.mjs / 设计文档）
+import * as roles from './roles.mjs';
 import * as localMode from './local-mode.mjs';
 import * as lanAnnounce from './lan-announce.mjs';
 import * as localSecret from './security/local-secret.mjs';
@@ -149,6 +151,15 @@ const routes = {
        * salt/hash 与增删改仍在 mayManage 后面（/api/users）。
        */
       users: store.listUserBriefs(),
+      // 信箱未读数（2026-11-11）：左栏「信箱」徽标；页面打开时 /api/notices 会再给一份
+      noticesUnread: store.countUnreadNotices(),
+      /*
+       * 岗位与权限（2026-11-11，Phase 2）：岗位是系统内置的，前端画岗位名、筛"能承接
+       * 团队协作的群"都要用它 —— 跟 /api/state 一起下发，免得 5 秒轮询再单开一个接口。
+       * 只读快照：权限定义在 roles.mjs，改口径只能发版。
+       */
+      roles: roles.publicRoles(),
+      permissions: roles.PERMISSIONS,
       // 带上"忙不忙"：通讯录里要一眼看出谁能马上接活
       // busyLabel：**他在干什么** —— 光一个"工作中"没用，得知道是哪条流程的哪一步
       // （运行上挂的 workflowTask 就是答案；不属于任何流程的就是普通对话）
@@ -187,6 +198,30 @@ const routes = {
       source: req.bandiSource ?? 'loopback',
       localSecret: localSecret.mode(),
     });
+  },
+
+  /**
+   * 信箱（2026-11-11 用户拍板）：左栏一级栏，先接"建卡失败"这类平台事实，以后还能接别的通知。
+   * GET 列表按更新时间倒序（同一件事重试了会冒到最上面）；未读数给左栏徽标。
+   */
+  'GET /api/notices': async (req, res) => {
+    sendJson(res, 200, { notices: store.listNotices({ limit: 100 }), unread: store.countUnreadNotices() });
+  },
+
+  /** 徽标轮询用的轻量口：只回未读数 */
+  'GET /api/notices/unread': async (req, res) => {
+    sendJson(res, 200, { unread: store.countUnreadNotices() });
+  },
+
+  /** 标记已读：body { id } 单条，或 { all: true } 全部；回剩余未读数 */
+  'POST /api/notices/read': async (req, res) => {
+    const body = await readBody(req);
+    const unread = body?.all === true
+      ? store.markAllNoticesRead()
+      : body?.id
+        ? store.markNoticeRead(String(body.id))
+        : store.countUnreadNotices();
+    sendJson(res, 200, { unread });
   },
 
   /** 插件市场：可装的 ＋ 已装的，每条带 installed/enabled —— 界面据此显示"安装"还是"停用/卸载" */
@@ -254,12 +289,22 @@ const routes = {
     const name = String(body.name ?? '').trim();
     if (!name) return fail(res, 400, 'E1002', '员工需要名字');
     const runtime = runtimesOk(body.runtime) ? body.runtime : 'codex';
+    /*
+     * 岗位 key（2026-11-11）：权限只认它，**只收内置清单里的 key**。
+     * 没带就按旧 role 文本映射一次（store.createPersona 兜底）—— 过渡期兼容
+     * 老前端与冒烟；Phase 2 前端换成岗位下拉后，这条兜底删掉。
+     */
+    const roleKey = body.roleKey ? String(body.roleKey).trim() : null;
+    if (roleKey && !roles.isRoleKey(roleKey)) {
+      return fail(res, 400, 'E1014', `岗位不在内置清单里：「${roleKey}」—— 岗位是系统内置的，只能从清单里选`);
+    }
     // 模型名**不再校验**：以前要对着账本查"有没有这个模型"，账本已经下架了。
     // 现在的权威是 CLI 自己 —— 名字填错了它会报，班底替它把关只会把新模型挡在门外。
     const persona = store.createPersona({
       name,
-      // 岗位：自由文本、可空。**只用于看人/辨认，不参与派活**（引擎只认节点上点的名）
+      // 岗位文本：自由展示用（Phase 2 前端改成岗位下拉），权限判定不读它
       role: String(body.role ?? '').trim() || null,
+      roleKey,
       // 部门：跟岗位一个口径 —— 自由文本、可空，只用于通讯录按部门分组
       department: String(body.department ?? '').trim() || null,
       instructions: String(body.instructions ?? ''),
@@ -279,6 +324,14 @@ const routes = {
    */
   'GET /api/experts': async (req, res) => {
     sendJson(res, 200, { experts: experts.listExperts() });
+  },
+
+  /**
+   * 岗位清单（2026-11-11）：岗位是系统内置的，权限挂在岗位上（见 roles.mjs / 设计文档）。
+   * 只读一下发：界面据此画岗位下拉与"这个岗能干什么"的只读矩阵；改口径只能发版。
+   */
+  'GET /api/roles': async (req, res) => {
+    sendJson(res, 200, { roles: roles.publicRoles(), permissions: roles.PERMISSIONS });
   },
 
   'POST /api/conversations': async (req, res) => {
@@ -476,9 +529,17 @@ const server = http.createServer(async (req, res) => {
    * "端口上有个班底在回话"这一个比特，`{ ok, platform:'bandi' }` 之外什么都不带 ——
    * 而 `platform` 这个字段 401 响应体里本来就带，这里零新增信息暴露。
    * HEAD 也放行（探测方只看状态行时用得上）。
+   *
+   * **2026-11-10 晚加 `authRequired`**：桌面壳的 `windowUrl()` 原来只能裸打 `/api/state`、
+   * 拿 401 反推"这次要不要自动进门" —— 每开一次壳就在审计里留一行「拒绝访问」，
+   * 与真的有人在扫面板分不开（用户当晚截图问"这个拒绝访问是不是有问题"）。
+   * 这个字段就是"鉴权闸开没开"的一个比特：**信息量等于 401 状态码本身**
+   * （拿任意 `/api/*` 试一下有没有凭据都看得出来），不是秘密。壳拿到 false 直接开窗口，
+   * 拿到 true 才走 `/shell/enter` —— 壳启动不再产生 401，审计里那类噪音归零。
+   * 老客户端（Rust 看门狗 / `lifecycle.isUp`）只读 `platform`，多一个字段不影响。
    */
   if (url.pathname === '/api/ping' && (req.method === 'GET' || req.method === 'HEAD')) {
-    return sendJson(res, 200, { ok: true, platform: 'bandi' });
+    return sendJson(res, 200, { ok: true, platform: 'bandi', authRequired: !!SERVER.AUTH.required });
   }
 
   try {

@@ -1,6 +1,6 @@
 /* projects.mjs —— 项目。
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
-import { esc, mdRender, personLabel, runtimeLabel, savePlace, setRoute, toast, userLabel } from './shell.mjs';
+import { esc, mdRender, personLabel, personaCan, roleNameOf, runtimeLabel, savePlace, setRoute, toast, userLabel } from './shell.mjs';
 import { ICON_FOLDER, ICON_WB_BOARD, ICON_WB_CLOCK, ICON_WB_FLOW, api, createCombo, handleCopyPaths, post, personaAvatar, personaByName, renderMarkdown, smAvatar, wireDialogHead } from './ui.mjs';
 import { setNav } from './state.mjs';
 import { breadcrumb, headRow } from './connectors.mjs';
@@ -38,7 +38,7 @@ export function workbenchAutoSection({ schedulesOnly = false } = {}) {
   return `
     <div class="wb-sec">自动化</div>
     <div class="wb-grid">
-      ${wbCard('cron', ICON_WB_CLOCK, '定时任务', '到点自动做一件事：干什么、交给谁、多久一次', 'data-schedules')}
+      ${wbCard('cron', ICON_WB_CLOCK, '定时任务', '到点自动做一件事：指派人 / 团队协作 / 流程任务', 'data-schedules')}
       ${schedulesOnly ? '' : wbCard('flow', ICON_WB_FLOW, '工作流', '画流程：节点、指派、发布', 'data-flow-design')}
     </div>`;
 }
@@ -258,7 +258,7 @@ function memberRowHtml(id) {
     ${personaAvatar(who)}
     <div class="mbr-main">
       <span class="mbr-name">${esc(who.name)}</span>
-      <span class="pill role">${esc(String(who.role ?? '').split(' · ')[0].trim() || '—')}</span>
+      <span class="pill role">${esc(roleNameOf(who) || '—')}</span>
       <span class="dot${who.busy ? ' busy' : ''}" title="${who.busy ? '正在干活' : '现在闲着'}"></span>
       ${rt ? `<span class="pill mbr-runtime">${esc(rt)}</span>` : ''}
     </div>
@@ -833,13 +833,13 @@ export async function renderProjDetail(p) {
     };
     const paint = () => {
       const q = (search.value || '').trim().toLowerCase();
-      const hit = candidates.filter((x) => !q || `${x.name}${x.role ?? ''}`.toLowerCase().includes(q));
+      const hit = candidates.filter((x) => !q || `${x.name}${roleNameOf(x)}`.toLowerCase().includes(q));
       list.innerHTML = hit.length
         ? hit.map((x) => `
             <label class="member">
               <input type="checkbox" value="${esc(x.id)}" ${picked.has(x.id) ? 'checked' : ''} />
               <span>${esc(x.name)}</span>
-              <em>${esc(String(x.role ?? '').split(' · ')[0].trim() || '—')}</em>
+              <em>${esc(roleNameOf(x) || '—')}</em>
             </label>`).join('')
         : `<div class="pj-add-empty">${candidates.length ? '没有匹配的人' : '没有可以加的人 —— 员工都在成员里了'}</div>`;
     };
@@ -1516,15 +1516,15 @@ function openKbNewPage({ project = null, isAll = false } = {}) {
 }
 
 /**
- * 团队协作可选的群（2026-11-09 规则）：**群助手必须是项目经理岗** ——
- * 拆卡人如果自己也是执行者，容易"自己等自己"把任务卡死；岗位这道闸把责任也钉死。
- * 群助手不是 PM / 没群助手的群不出现在清单里（后端建卡/派发还会再校验一次）。
+ * 团队协作可选的群（2026-11-09 规则，2026-11-11 改判据）：**群助手要有「承接团队卡」权限**
+ * （现在只有项目经理岗有）。拆卡人如果自己也是执行者，容易"自己等自己"把任务卡死。
+ * 判据走岗位权限（S.roles 下发的 roleKey），不再按 role 文本认"是不是项目经理"；
+ * 后端建卡/派发还会再校验一次。
  */
 function teamGroupItems() {
-  const head = (role) => String(role ?? '').split(' · ')[0].trim();
   return (S.groups ?? [])
     .map((g) => ({ g, a: (S.personas ?? []).find((p) => p.id === g.assistantPersonaId) }))
-    .filter(({ a }) => a && head(a.role) === '项目经理')
+    .filter(({ a }) => a && personaCan(a, 'team.coordinate'))
     .map(({ g, a }) => ({ id: `g:${g.id}`, label: `团队协作 · ${g.title}（群助手 ${a.name}）` }));
 }
 
@@ -2160,7 +2160,8 @@ export function kbFilterCount(scope) {
 
 /** 现在有没有在筛（某一维一个都不勾 = 那一维不设限；三维全空 = 看全部） */
 export function kbFilterActive(scope) {
-  return kbFilterCount(scope) > 0;
+  // 「只看我的」也算一种收窄：列该跟着裁空，不然满屏空列
+  return S.kbMine !== false || kbFilterCount(scope) > 0;
 }
 
 
@@ -2177,6 +2178,14 @@ export function kbFilterActive(scope) {
  */
 export function kbWhyHidden(card, scope) {
   const f = S.kbFilter ?? {};
+  /*
+   * 「只看我的」（2026-11-11 用户定）：验收人 = 派活人。我派的卡才进我的默认视图；
+   * 贺韬派的卡/子卡归他验收，留在「全量」里看。没登录人（拿不到 me）时不筛，宁可全看。
+   */
+  if (S.kbMine !== false) {
+    const me = S.me?.id ?? null;
+    if (me && !(card?.created_by_user_id === me || card?.assignee_user_id === me)) return 'mine';
+  }
   if (f.statuses?.length && !f.statuses.includes(card?.status)) return 'status';
   if (f.assignees?.length && !f.assignees.includes(card?.assignee_id ?? '')) return 'who';
   if (scope === 'all' && f.projects?.length && !f.projects.includes(card?.project_id ?? '')) return 'proj';
@@ -2368,7 +2377,10 @@ export function kbFilterBar(data) {
        <div class="kbf-foot">点一行进去选；不同组之间 = 同时满足</div>`;
 
   return `<div class="kbf" id="kbFilter">
-    <span class="kbf-info">${n ? `显示 ${kbFilterCols(data).reduce((a, c) => a + c.count, 0)} / 共 ${data?.total ?? 0}` : ''}</span>
+    <span class="kbf-info">${n || S.kbMine !== false ? `显示 ${kbFilterCols(data).reduce((a, c) => a + c.count, 0)} / 共 ${data?.total ?? 0}` : ''}</span>
+    <button type="button" class="kbf-btn${S.kbMine !== false ? ' on' : ''}" id="kbMineBtn"
+            title="${S.kbMine !== false ? '现在只看我派的卡（我验收的）；点一下看全量' : '现在看全量；点一下只看我派的卡（我验收的）'}"
+            aria-label="只看我的 / 全量">${S.kbMine !== false ? '只看我的' : '全量'}</button>
     <button type="button" class="kbf-btn${n ? ' on' : ''}" id="kbFilterBtn" title="按状态 / 负责人 / 项目 / 来源筛选" aria-label="筛选">
       <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round">
         <path d="M4 6.5h16M7 12h10M10 17.5h4" />
@@ -2577,6 +2589,16 @@ export function kbRepaintRows() {
  * 状态放在 `S.kbPane` 里，所以重画之后还停在原来那一级。
  */
 export function wireKbFilter() {
+  // 「只看我的 / 全量」（2026-11-11）：切换即重画（列、计数、提示都跟着变），并记进位置
+  const mineBtn = $('kbMineBtn');
+  if (mineBtn) {
+    mineBtn.onclick = (e) => {
+      e.stopPropagation();
+      S.kbMine = S.kbMine === false; // 切换：当前是全量 → 只看我的；当前只看我的 → 全量
+      savePlace();
+      kbRepaint();
+    };
+  }
   const btn = $('kbFilterBtn');
   const pop = $('kbFilterPop');
   if (!btn || !pop) return;
@@ -2797,6 +2819,14 @@ export function wireBoard(view, { refresh, taskProject = () => null }) {
       if (!taskId || !card) return; // 拖的不是手工卡
       const toStatus = COL_STATUS[colEl.dataset.kbCol];
       if (!toStatus || card.dataset.col === colEl.dataset.kbCol) return;
+      /*
+       * 代验收确认（2026-11-11 用户定：验收人 = 派活人）：这张卡不是我派的（贺韬派的/子卡），
+       * 我拖到「已完成」= 替他点头。给一句确认，别让管理兜底权悄悄越权。
+       */
+      const mine = !!S.me?.id && card.dataset.createdByUser === S.me.id;
+      if (toStatus === '已完成' && !mine) {
+        if (!(await confirmDo('这张卡不是你派的（由派活人验收）—— 确定代他点「已完成」？', { title: '代验收？', ok: '代他完成' }))) return;
+      }
       try {
         const res = await api(`/api/projects/tasks/${encodeURIComponent(taskId)}`, {
           method: 'PATCH',
@@ -3330,7 +3360,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     const last = runs.filter((r) => r.endedAt).sort((a, b) => String(b.endedAt).localeCompare(String(a.endedAt)))[0];
     const when = last?.endedAt ? `（${esc(cmtTime(last.endedAt))} 收工）` : '';
     if (st === '待验收')
-      return `<div class="tc-statebar ok"><b>✅ 活干完了</b> —— 等你验收${when}。上面他最后一句话就是结论。</div>`;
+      return `<div class="tc-statebar ok"><b>✅ 活干完了</b> —— 等验收人验收${when}。上面他最后一句话就是结论。</div>`;
     if (st === '失败')
       return `<div class="tc-statebar bad"><b>这轮没跑成</b> —— 没干完。他消息脚上有「↻ 重跑一次」，点一下接着来。</div>`;
     if (st === '已阻塞')
@@ -3734,7 +3764,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
                  <button class="primary" id="tcPrLink">关联</button>
                   <button id="tcPrCreate" title="把项目目录里的改动提交成新分支并开 PR（前提：这个目录是已接入仓库的克隆）">建 PR</button>
                </div>
-               <div class="counter left">合并后这张卡会转到「待验收」——不自动「已完成」，等你点头。</div>`
+               <div class="counter left">合并后这张卡会转到「待验收」——不自动「已完成」，等验收人点头。</div>`
         }`}
 
         <h3>详情</h3>
@@ -4089,7 +4119,20 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     mount: $('tcStatusMount'),
     items: ['想法', '待办', '进行中', '待验收', '已阻塞', '失败', '已完成', '已取消'].map((s) => ({ id: s, label: s })),
     value: task.status,
-    onChange: (st) => { syncMobileStatus(st); scheduleSave(0); }, // 改状态立刻存：待办+人 = 开工（服务端负责）
+    /*
+     * 代验收确认（2026-11-11 用户定：验收人 = 派活人）：不是我派的卡（贺韬派的/子卡），
+     * 我点「已完成」= 替他点头，先问一句；取消就把下拉拨回原状态。
+     */
+    onChange: (st) => {
+      if (st === '已完成' && (task.createdByUserId ?? null) !== (S.me?.id ?? null)) {
+        confirmDo('这张卡不是你派的（由派活人验收）—— 确定代他点「已完成」？', { title: '代验收？', ok: '代他完成' }).then((ok) => {
+          if (ok) { syncMobileStatus(st); scheduleSave(0); }
+          else { statusCombo.setValue(task.status); syncMobileStatus(task.status); }
+        });
+        return;
+      }
+      syncMobileStatus(st); scheduleSave(0); // 改状态立刻存：待办+人 = 开工（服务端负责）
+    },
   });
   /*
    * 执行人那一格：还没发起的流程卡**不上控件**（2026-11-08「发起台形态」）。
@@ -5209,7 +5252,7 @@ export function kbCard(r) {
    * 同一族：都能拖（**拖到哪一列就是人给的指令**）、都能删（＝忽略）。
    * 流程卡与聊天卡的状态归平台管，拖不动。
    */
-  const local = r.source === 'manual' || r.source === 'repo';
+  const local = r.source === 'manual' || r.source === 'repo' || r.source === 'backfill';
   const jump = r.source === 'flow'
     ? `data-kb-flow="${esc(r.flow_id)}" data-kb-tpl="${esc(r.template_id || '')}"`
     : r.conversation_id
@@ -5226,7 +5269,7 @@ export function kbCard(r) {
     ? `<span class="kb-tag proj" title="属于哪个项目">${esc(r.project_name)}</span>`
     : '';
   const srcCls = r.source === 'chat' ? ' chat' : r.source === 'repo' ? ' repo' : local ? ' manual' : '';
-  return `<article class="kb-card ${local ? 'manual' : ''}" ${jump} ${drag}${local ? ` data-kb-open="${esc(r.manual_id)}" tabindex="0"` : ''} data-col="${esc(r.col)}" title="${esc(r.note || '')}">
+  return `<article class="kb-card ${local ? 'manual' : ''}" ${jump} ${drag}${local ? ` data-kb-open="${esc(r.manual_id)}" tabindex="0"` : ''} data-col="${esc(r.col)}"${r.created_by_user_id ? ` data-created-by-user="${esc(r.created_by_user_id)}"` : ''} title="${esc(r.note || '')}">
     <div class="kb-card-top">
       ${proj}<span class="kb-tag${srcCls}">${esc(r.source_text)}</span>${prPillOf(r)}
       <span class="kb-state">${esc(r.status)}</span>
@@ -5265,30 +5308,38 @@ export function taskDialog(project, colKey) {
    * 状态那格只有 6 个固定值，继续用原生 select。
    */
   /*
-   * 轻快风（2026-10-26 用户给了截图「我想要这种效果」）：左上角一条小面包屑，
-   * 下面直接就是大标题输入框和描述（都没有边框），所有字段收成底部一排胶囊，
-   * 动作条（继续创建 / 创建任务 Ctrl+Enter）压在最底下。
-   * 胶囊里只有值没有字段名 —— 状态/执行方式/人名/项目名各自能看懂自己是谁。
+   * 两栏风（2026-11-11 用户：照「新建定时任务」弹窗改成左右两栏）：
+   * 左 = 要**写**的（任务标题 + 描述，描述撑满高度）；右 = 要**选**的（状态 / 执行方式 /
+   * 执行对象 / 关联项目），竖着排、每格带字段名。骨架直接复用 .sch-cols 那套
+   * （定时任务弹窗的注释见 style.css dialog.sch-dlg 一节），字段接线（各 *Mount id）不变。
    */
-  const pick = !project ? '<span class="tk-chip" id="tkProjMount"></span>' : '';
+  const pick = !project ? '<label>关联项目</label><span id="tkProjMount"></span>' : '';
   dlg.innerHTML = `
     <form method="dialog">
       <b class="tk-crumb">${project ? `${esc(project.name)} › ` : ''}手动创建</b>
-      <input id="tkTitle" placeholder="任务标题" />
-      <textarea id="tkDesc" rows="7" placeholder="添加描述..."></textarea>
-      <!-- 执行人 / 群 / 流程**按执行方式三选一显示**（服务端也是互斥的，见 routes/project.mjs 的 400）：
-           两个都摆出来会让人以为"人再挂条流程"也能行。 -->
-      <div class="tk-meta-row">
-        <span class="tk-chip" id="tkStatusMount"></span>
-        <span class="tk-chip" id="tkModeMount"></span>
-        <span class="tk-chip" id="tkWhoMount"></span>
-        <span class="tk-chip" id="tkGroupMount" hidden></span>
-        <span class="tk-chip" id="tkFlowMount" hidden></span>
-        ${pick}
+      <div class="sch-cols">
+        <div class="sch-left">
+          <label>任务标题</label>
+          <input id="tkTitle" placeholder="任务标题" />
+          <textarea id="tkDesc" placeholder="添加描述..."></textarea>
+        </div>
+        <div class="sch-right">
+          <!-- 执行人 / 群 / 流程**按执行方式三选一显示**（服务端也是互斥的，见 routes/project.mjs 的 400）：
+               两个都摆出来会让人以为"人再挂条流程"也能行。 -->
+          <label>状态</label>
+          <span id="tkStatusMount"></span>
+          <label>执行方式</label>
+          <span id="tkModeMount"></span>
+          <label>执行对象</label>
+          <span id="tkWhoMount"></span>
+          <span id="tkGroupMount" hidden></span>
+          <span id="tkFlowMount" hidden></span>
+          <div class="dim" id="tkFlowEmpty" style="font-size:12px" hidden>还没有已发布的流程 —— 先去工作台 → 流程 里发布一条</div>
+          <div class="dim" id="tkGroupEmpty" style="font-size:12px" hidden>还没有群助手是项目经理的群 —— 团队协作的活得由群助手（PM）承接</div>
+          ${pick}
+          <div class="dim" id="tkFilterHint" style="font-size:12px" hidden></div>
+        </div>
       </div>
-      <div class="dim" id="tkFlowEmpty" style="font-size:12px" hidden>还没有已发布的流程 —— 先去工作台 → 流程 里发布一条</div>
-      <div class="dim" id="tkGroupEmpty" style="font-size:12px" hidden>还没有群助手是项目经理的群 —— 团队协作的活得由群助手（PM）承接</div>
-      <div class="dim" id="tkFilterHint" style="font-size:12px" hidden></div>
       <div class="tk-foot">
         <label class="kb-check"><input type="checkbox" id="tkStart" checked /> <span id="tkStartText">创建后立即开始工作</span></label>
         <div class="tk-foot-actions">
@@ -5520,7 +5571,8 @@ export function taskDialog(project, colKey) {
   const syncMode = () => {
     const flow = flowMode();
     const group = groupMode();
-    // 轻快风：执行人 / 群 / 流程是三颗胶囊，切显隐（各档选好的值都留着 —— 来回切不用重选）
+    // 两栏风：执行对象 / 群 / 流程三个挂载点在右栏「执行对象」一格下面切显隐
+    // （各档选好的值都留着 —— 来回切不用重选）
     $('tkWhoMount').hidden = flow || group;
     $('tkGroupMount').hidden = !group;
     $('tkFlowMount').hidden = !flow;

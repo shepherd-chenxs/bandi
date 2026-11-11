@@ -14,7 +14,10 @@ import * as skills from './skills.mjs';
 import * as runtimes from './runtimes.mjs';
 import * as connectors from './connectors.mjs';
 import * as steward from './steward.mjs';
-import { controlUrl, isPmRole } from './agent-auth.mjs';
+import { controlUrl } from './agent-auth.mjs';
+// 建卡通道的判据（2026-11-11）：只给**有建卡权限的岗位**（现在只有项目经理），
+// 不再解析 role 文本 —— 见 roles.mjs / 设计文档
+import { can, roleOf } from './roles.mjs';
 
 /** 带 code 的错误：路由按它决定 400 还是 409 */
 const fail = (message, code = 'bad') => Object.assign(new Error(message), { code });
@@ -39,37 +42,78 @@ export function sessionScopeOf(opts = {}) {
 }
 
 /**
- * 项目经理的「建卡通道」注入块（2026-10-24）：首轮派活时告诉他怎么把活立成卡。
- * 只给项目经理岗位（isPmRole）；钥匙在环境变量里，这里只教用法 —— 远端节点跑的活
- * 没有这两个环境变量，让他见了空值就别用（钥匙不发就是不发，不是丢了）。
+ * 项目经理的「建卡通道」注入块（2026-10-24，2026-11-11 重写）：首轮派活时告诉他怎么把活立成卡。
+ * 只给**有建卡权限的岗位**（roles.can(persona, 'card.create')；现在只有项目经理）。
+ *
+ * 2026-11-11 重写的起因（实报）：贺韬连试三次全 400 —— PowerShell 写 UTF-16、批量口发裸数组、
+ * 文件带 BOM，而 PowerShell 又把 400 的响应体吞了，他读不到错误 → 判定通道坏了 → 自己上手。
+ * 现在接口侧已经认 UTF-16/BOM/裸数组/群关联项目（平台兜住"手滑"），这里只教**最小必要**：
+ * 一条能抄的命令、错误怎么看、重试上限、补记写法。
  */
 function pmCardBrief() {
   return [
     '【建卡通道】你可以把拆出来的活直接立成任务卡（全平台只有项目经理岗位能这么做）：',
     '',
-    `POST \${BANDI_CONTROL_URL}/api/agent/cards   （\${BANDI_CONTROL_URL} = ${controlUrl}，你的环境变量里有）`,
-    '请求头：X-Bandi-Run-Token: 你环境变量里的 BANDI_RUN_TOKEN',
-    '请求体：{ "projectId": "…", "title": "一句话说清要做什么", "description": "边界、做成什么样算完",',
-    '          "assigneePersonaId": "…或省略", "status": "待办" 或 "想法" }',
+    `POST \${BANDI_CONTROL_URL}/api/agent/cards/batch    （\${BANDI_CONTROL_URL} = ${controlUrl}，环境变量里有）`,
+    '请求头：X-Bandi-Run-Token = 环境变量 BANDI_RUN_TOKEN（**每轮现取，别抄旧值**）',
+    '请求体：{ "cards": [ { "title": "一句话说清要做什么", "description": "边界、做成什么样算完、证据要求",',
+    '                      "assigneePersonaId": "派给谁", "status": "待办" } ] }',
     '',
-    '**请求体必须走文件**：先用写文件工具把 JSON 存成 UTF-8 文件（系统临时目录，发完删），再',
-    '`curl -s -X POST "$BANDI_CONTROL_URL/api/agent/cards" -H "X-Bandi-Run-Token: …" \\',
-    '  -H "Content-Type: application/json" --data-binary @card.json`',
-    '别把中文直接写进命令行参数 —— Windows 的 cmd/PowerShell 按本地代码页转码，中文全变「?」，',
-    '卡面就花了。发完看回包里的 title：出现「?」就是被转码了，确认走的是文件方式再重发。',
-    '项目清单：GET /api/projects（拿 id 和目录）。',
+    '宽口径（平台兜住常见手滑，不用纠结格式）：',
+    '- 项目 id **可省略**：群派活默认用群关联的项目；',
+    '- 体可以是 {cards:[…]}、裸数组 […] 或单张卡对象；UTF-8 / UTF-16 / 带 BOM 都认；',
+    '- 每张卡带稳定的 idempotencyKey（同一件事重发只建一张）。',
     '',
-    '口径：可逆的活建「待办」+ 执行人 —— 建完自动派活，不用请示；要雇主拍板的（花钱/对外/改范围）',
-    '建「想法」挂着等他，或只在群里说。干完的卡会回到雇主那里验收。',
-    '环境变量里没有 BANDI_RUN_TOKEN，就说明这条通道这次没开，别硬造一个。',
+    '出错怎么改（接口会回 { code, error }）：',
+    '- 先读 code（E1044 = JSON 不合法；E2058 = 状态不对；E2059 = 项目/执行人/标题不对），**按提示改参数后再试**；',
+    '- **最多改 2 次**；400 之后不要整批重发 —— 先 GET /api/tasks 确认卡在不在；',
+    '- 2 次仍失败 = 通道不可用：停止重试，按【统筹职责】降级（群里 @ 人 + 报群主），不许自己写代码。',
     '',
-    /*
-     * 2026-11-09 P0 检修：汇报口径不再写在「身份/建卡通道」里，改到每轮的
-     * platformContractBlock()（所有员工都拿得到，不依赖首轮、不依赖岗位）。
-     * 这里只留"他能闭环"的卡片管理权限 —— 那是 PM 独有的能力，不是通用格式。
-     */
+    '补卡（通道恢复后，补记群里已经干完/卡住的活）：同一接口，每张卡带 "backfill": true，',
+    'status 写实际状态（待验收 / 已阻塞 / 已完成 / 已取消 / 失败）——补记**不会重跑**；',
+    '描述里写清谁做的、证据在哪。',
+    '',
     `卡的管理你有权限：PATCH ${controlUrl}/api/projects/tasks/<卡id>（可改 status / description / assigneePersonaId；带 startNow:true = 重跑）—— 只对你建的卡、或你当群助手那张团队卡；范围、验收标准、流程归属仍归雇主（面板上改）。`,
     '汇报与收尾按平台每轮的【本轮契约】执行，不在身份里重复。',
+  ].join('\n');
+}
+
+/**
+ * **项目经理的统筹职责**（2026-11-11 每轮注入，实报后的行为层修法）。
+ *
+ * 事故：群里给了开发需求，他三次建卡 400 后判定通道坏了，直接自己改仓库写代码。
+ * 根因有两层：① 建卡通道太脆（工具层已修）；② 首轮之后**没有任何"你是统筹"的约束** ——
+ * 「继续」那一轮连身份与建卡通道都不再注入，平台契约也只管交付形态、不管调度纪律；
+ * 身份卡里那句"专长之外的活也接"反而给了他"自己上手"的授权。
+ *
+ * 这个块**每轮都注入**（放契约层，不动身份卡）：先判问答/做事 → 拆卡派活 → 失败降级
+ * （@ 人 + 报群主 + 补卡）→ 验收自己派的活 → 不许自己改仓库。只给有建卡权限的岗位。
+ */
+/** 群成员的岗位名（给统筹职责里"派给谁"用；群成员接口带 roleKey，老数据回落 role 文本） */
+function memberRoleName(m) {
+  const byKey = roleOf(m?.roleKey)?.name;
+  if (byKey) return byKey;
+  return String(m?.role ?? '').split(' · ')[0].trim() || '未设岗位';
+}
+
+function pmDispatchBlock({ persona, thread, project } = {}) {
+  const members =
+    thread?.kind === 'group' && Array.isArray(thread.members)
+      ? thread.members
+          .filter((m) => m.personaId !== persona?.id)
+          .map((m) => `${m.name}（${memberRoleName(m)}）`)
+          .join('、')
+      : '';
+  return [
+    '【统筹职责 · 你是项目经理，本轮有效】',
+    '1. **先判这一轮要交什么**：问问题 → 直接答；让你做事 → 拆成能独立验收的卡，派出去。',
+    `2. **派活**：用建卡通道建卡（见首轮【建卡通道】），派给对应岗位的人${members ? `—— 群里可用：${members}` : ''}${project?.name ? `；项目「${project.name}」` : ''}。群里只回 ≤5 行简报（建了几张、给谁），细节写进卡。`,
+    '3. **建卡失败**：看回包 code 改参数重试，**最多 2 次**；仍失败就停止重试，按顺序做三件事：',
+    '   ① 在群里 @ 具体执行人接活（写清交付物和验收标准，别只说"大家看一下"）；',
+    '   ② 一句话报群主：错误码 + 已重试几次 + 看板暂无卡 + 恢复后补卡；',
+    '   ③ **不许自己改仓库、不许写代码**——你是统筹，不是执行人（"专长之外的活也接"不改变这一条）。',
+    '4. **你派的活你验收**：你建的卡/子卡到「待验收」→ 看证据，通过就把状态改「已完成」；不通过就退回执行人重跑（PATCH status=待办 + startNow:true，并说清退回原因）。**雇主派给你的主卡你只能提交「待验收」，不能替雇主点「已完成」**。',
+    '5. **补卡**：通道恢复后，把这段时间群里已经干完/卡住的活补成卡（backfill:true + 实际状态），让看板账对得上；补记不重跑。',
   ].join('\n');
 }
 
@@ -530,7 +574,7 @@ function startMemberRun(thread, member, opts, trigger) {
   const p = store.getPersona(member.personaId);
   const brief = [
     p?.builtin ? steward.stewardBrief() : '',
-    p && isPmRole(p.role) ? pmCardBrief() : '',
+    p && can(p, 'card.create') ? pmCardBrief() : '',
   ].filter(Boolean).join('\n\n');
 
   // **这次派活属于哪个 session 作用域**：带流程 runId → 这条流程实例自己的一条
@@ -587,10 +631,13 @@ function startMemberRun(thread, member, opts, trigger) {
   const project = !opts.card?.projectName && opts.projectId ? store.getProject(opts.projectId) : null;
   // 他名下未完的卡：问进度时先看这里（2026-11-09 P3a，跨会话也不丢上下文）
   const myTasks = store.listMyOpenTasks(member.personaId, 5);
+  // 统筹职责（2026-11-11）：只给有建卡权限的岗位（项目经理）——每轮都注入，见 pmDispatchBlock
+  const pmBlock = p && can(p, 'card.create') ? pmDispatchBlock({ persona: p, thread, project }) : '';
   const contractBlock = [
     platformContractBlock(),
+    pmBlock,
     taskContractBlock({ card: opts.card, workflow: workflowTask, project, tasks: myTasks }),
-  ].join('\n\n');
+  ].filter(Boolean).join('\n\n');
   const fullTask = [cardBlock, task, attBlock, stylePrefBlock(), contractBlock].filter(Boolean).join('\n\n');
 
   return runs.startRun({
@@ -651,6 +698,25 @@ export function drainAllGroupQueues() {
 }
 
 /**
+ * 群挂了项目 = 这个群的派活默认在那个项目里干（2026-11-11 用户拍板「一项目一群」）。
+ *
+ * 为什么在这里补、而不是只在前端传：群里派活有**好几条入口**（聊天框 @、流程回复、
+ * 卡票回执走 dispatchEventToThread —— 它最后也进 dispatchToThread、队列补派），
+ * 每处各写一遍迟早漏一处。补在入口这一层，`ensureDispatchable`（项目并上限）、
+ * `startMemberRun` 的 cwd 覆盖、`projectConstitutionBlock` 的宪法注入就自动同源。
+ *
+ * **显式优先**：调用方已经带了 projectId（流程实例选了项目）就原样返回 ——
+ * 流程是比"群默认"更强的意图；群没关联项目也不传，行为与从前一字不差。
+ *
+ * 导出是给 `smoke-group-project.mjs` 验这条规则用的（起真 agent 派活太慢，规则本身是纯函数）。
+ */
+export function withGroupProject(thread, opts) {
+  if (opts?.projectId || thread?.kind !== 'group' || !thread.groupId) return opts;
+  const g = store.getGroup(thread.groupId);
+  return g?.projectId ? { ...opts, projectId: g.projectId } : opts;
+}
+
+/**
  * 往某个会话派一次活。
  * 返回 `{ run, member, mentions, queued }`；派不出去抛错（err.code: busy / bad）。
  * `queued` = 这条消息 @ 了但**还没派**的人（群里 @ 多人时排队等前一个跑完）。
@@ -661,6 +727,9 @@ export function drainAllGroupQueues() {
 export function dispatchToThread(threadId, text, opts = {}) {
   const thread = store.getConversation(threadId);
   if (!thread) throw fail('会话不存在');
+
+  // 群挂了项目 → 这次派活就在那个项目里干（见 withGroupProject）
+  opts = withGroupProject(thread, opts);
 
   if (store.activeRun(threadId)) throw fail('他还在跑上一条，等它说完', 'busy');
 

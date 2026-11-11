@@ -185,8 +185,26 @@ export function readBody(req) {
       chunks.push(c);
     });
     req.on('end', () => {
-      // 攒够 Buffer 一次性按 UTF-8 解码 —— 逐块 toString 会把跨块的多字节字符（中文）解碎成 �
-      const raw = Buffer.concat(chunks).toString('utf8');
+      /*
+       * 攒够 Buffer 一次性解码。**先认 BOM**（2026-11-11 建卡通道实报）：
+       * agent 用 PowerShell 写 JSON 时，`>` / `Out-File` 会写成 UTF-16（`bytes` 以 FF FE 开头）
+       * 或带 UTF-8 BOM —— 以前一律按 UTF-8 解 + JSON.parse，中文变乱码/解析失败，回 400。
+       * 调用方（模型）只看到"400"，白白浪费一轮。这里直接把常见编码认下来，JSON 解析不再挑写法。
+       */
+      const buf = Buffer.concat(chunks);
+      let raw;
+      try {
+        if (buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xfe) {
+          raw = buf.toString('utf16le'); // UTF-16LE（PowerShell 重定向的默认编码）
+        } else if (buf.length >= 2 && buf[0] === 0xfe && buf[1] === 0xff) {
+          raw = new TextDecoder('utf-16be').decode(buf); // UTF-16BE（少见，但认了不亏）
+        } else {
+          raw = buf.toString('utf8');
+        }
+      } catch {
+        raw = buf.toString('utf8'); // TextDecoder 缺编码之类的兜底：按老口径
+      }
+      raw = raw.replace(/^\uFEFF/, ''); // 再剥 UTF-8 BOM / 解码后的 BOM
       if (!raw.trim()) return resolve({});
       try {
         resolve(JSON.parse(raw));

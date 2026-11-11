@@ -65,6 +65,8 @@ const RUN = [
   'apps/server/src/smoke-group-mentions.mjs',
   // 团队协作（派给群）：群助手必须是 PM、动态现读群助手、子卡授权/回执（2026-11-09）
   'apps/server/src/smoke-group-tasks.mjs',
+  // 群关联项目（2026-11-11「一项目一群」）：群挂了项目 = 派活默认在那个项目里干（纯函数规则）
+  'apps/server/src/smoke-group-project.mjs',
   // 汇报技能 bandi-report：结论先行口径、上游 MIT 出处、专家包默认挂载、平台注入指向它
   'apps/server/src/smoke-report-skill.mjs',
   'apps/server/src/smoke-lan-origin.mjs',
@@ -76,6 +78,14 @@ const RUN = [
   // 不是不测 —— 已没有可测的东西：bandi 不再起隧道进程，只剩 hub/relay.mjs 读域名，
   // 那两道闸（Host / Origin）由 smoke-lan-origin.mjs 覆盖，别在这里补一个空壳。
   'apps/server/src/smoke-personas.mjs',
+  // 岗位固定与权限模型（2026-11-11）：岗位系统内置、权限挂在岗位上；旧 role 文本一次性
+  // 映射成 roleKey；can() 只认 roleKey（不许再解析 role 文本）。纯库 + 纯函数，不起服务。
+  'apps/server/src/smoke-roles.mjs',
+  // 建卡通道（2026-11-11 实报后）：UTF-16 请求体 / 裸数组 / 群项目兜底 / 补记 / 验收人闸
+  // ⚠️ 它自己把监听改成 0.0.0.0 跑「鉴权形态」—— 验收人闸只在运行身份下才走得到
+  'apps/server/src/smoke-card-channel.mjs',
+  // 信箱（2026-11-11 用户拍板）：建卡失败落库、同轮同码去重、已读/未读、角标口径
+  'apps/server/src/smoke-inbox.mjs',
   // 身份与职责检修 P0（2026-11-09）：身份卡只回答"我是谁"、平台契约/任务合同每轮注入。
   // 纯静态 + 纯函数，不开服务。
   'apps/server/src/smoke-persona-contract.mjs',
