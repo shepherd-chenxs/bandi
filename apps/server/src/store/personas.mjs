@@ -4,6 +4,8 @@ import { db, newId, nowIso } from './db.mjs';
 import { purgeConversation } from './conversations.mjs';
 import { activeRun } from './runs.mjs';
 import { dissolveGroup, listMembers, purgeDissolvedGroup } from './groups.mjs';
+// 岗位 key（2026-11-11）：建人/改人时从旧 role 文本兜底映射一次（迁移期过渡，Phase 2 删）
+import { legacyRoleKey } from '../roles.mjs';
 
 /**
  * 并发数的**默认值 / 最高值**（2026-10-24 用户定，参照同类产品的"每个虚拟员工可配并行数"）：
@@ -53,11 +55,13 @@ export function getPersona(id) {
 }
 
 
-export function createPersona({ id = null, name, role = null, department = null, instructions = '', runtime = 'codex', sandbox = 'danger-full-access', cwd = null, model = null, rootDirs = [], builtin = 0, avatar = null, maxParallel = null }) {
+export function createPersona({ id = null, name, role = null, roleKey = null, department = null, instructions = '', runtime = 'codex', sandbox = 'danger-full-access', cwd = null, model = null, rootDirs = [], builtin = 0, avatar = null, maxParallel = null }) {
   const row = {
     // 内置员工要**固定 id**（seed 幂等靠它）；普通员工仍自动生成
     id: id || newId('p'),
     name, role, department, instructions, runtime, sandbox, cwd, model,
+    // 岗位 key（2026-11-11）：权限只认它；内存/路由层不传时按旧 role 文本映射一次（过渡期）
+    roleKey: roleKey ?? legacyRoleKey(role),
     rootDirs: Array.isArray(rootDirs) && rootDirs.length ? JSON.stringify(rootDirs) : null,
     builtin: builtin ? 1 : 0,
     avatar: avatar || null,
@@ -65,10 +69,10 @@ export function createPersona({ id = null, name, role = null, department = null,
     createdAt: nowIso(),
   };
   db.prepare(
-    `INSERT INTO personas (id, name, role, department, instructions, runtime, sandbox, cwd, model, rootDirs, builtin, avatar, maxParallel, createdAt)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO personas (id, name, role, roleKey, department, instructions, runtime, sandbox, cwd, model, rootDirs, builtin, avatar, maxParallel, createdAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
-    row.id, row.name, row.role, row.department, row.instructions, row.runtime, row.sandbox, row.cwd, row.model,
+    row.id, row.name, row.role, row.roleKey, row.department, row.instructions, row.runtime, row.sandbox, row.cwd, row.model,
     row.rootDirs, row.builtin, row.avatar, row.maxParallel, row.createdAt,
   );
   return row;
@@ -144,10 +148,19 @@ export function deletePersona(id) {
 export function updatePersona(id, fields) {
   const current = getPersona(id);
   if (!current) return null;
+  // 岗位文本（展示用）与岗位 key（权限用）分开算：2026-11-11 起权限只看 key
+  const nextRole = fields.role === undefined ? current.role : (String(fields.role ?? '').trim() || null);
   const next = {
     name: fields.name ?? current.name,
-    // 岗位：跟 model 一个口径 —— undefined = 没提供；空串/null = 显式清掉
-    role: fields.role === undefined ? current.role : (String(fields.role ?? '').trim() || null),
+    role: nextRole,
+    /*
+     * 岗位 key：显式给（Phase 2 前端岗位下拉走这条）；没给但改了 role 文本时，
+     * 按旧文本映射一次 —— 过渡期兜底（接口还是自由文本输入），Phase 2 换下拉后删掉。
+     */
+    roleKey:
+      fields.roleKey === undefined
+        ? (fields.role === undefined ? current.roleKey : legacyRoleKey(nextRole))
+        : (String(fields.roleKey ?? '').trim() || null),
     // 部门：同岗位的口径（undefined = 没提供；空白 = 显式清掉，清掉就落「未分配」）
     department: fields.department === undefined ? current.department : (String(fields.department ?? '').trim() || null),
     instructions: fields.instructions ?? current.instructions,
@@ -172,10 +185,10 @@ export function updatePersona(id, fields) {
             : null),
   };
   db.prepare(
-    `UPDATE personas SET name = ?, role = ?, department = ?, instructions = ?, runtime = ?, sandbox = ?, cwd = ?, model = ?, rootDirs = ?, avatar = ?, maxParallel = ?
+    `UPDATE personas SET name = ?, role = ?, roleKey = ?, department = ?, instructions = ?, runtime = ?, sandbox = ?, cwd = ?, model = ?, rootDirs = ?, avatar = ?, maxParallel = ?
       WHERE id = ?`,
   ).run(
-    next.name, next.role, next.department, next.instructions, next.runtime, next.sandbox, next.cwd, next.model,
+    next.name, next.role, next.roleKey, next.department, next.instructions, next.runtime, next.sandbox, next.cwd, next.model,
     next.rootDirs, next.avatar, next.maxParallel, id,
   );
   // 指令真的改了 → 作废他的成员会话：身份只在会话第一次建立时注入，

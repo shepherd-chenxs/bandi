@@ -223,6 +223,7 @@
     "DELETE:/api/ssh/servers/{alias}",
     "GET:/api/ssh/servers/{alias}/key",
     "POST:/api/ssh/servers/{alias}/key",
-    "POST:/api/ssh/servers/{alias}/test"
+    "POST:/api/ssh/servers/{alias}/test",
+    "POST:/api/ssh/servers/{alias}/hostkey"
   ]
 }

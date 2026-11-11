@@ -40,8 +40,9 @@ export function revokeRunCredential(runId) {
   }
 }
 
-/** 岗位判定：role 是「岗位 · 职责」两段（前端 personLabel 同一个口径），第一段才是岗位 */
-export const roleHeadOf = (role) => String(role ?? '').split(' · ')[0].trim();
-
-/** 只有项目经理岗位能建卡（2026-10-24 主理人拍板：干活的岗位不许越权立项） */
-export const isPmRole = (role) => roleHeadOf(role) === '项目经理';
+/*
+ * 岗位判定（2026-11-11 移出）：以前这里是 `roleHeadOf` / `isPmRole` —— 按
+ * 「岗位 · 职责」文本取第一段判"是不是项目经理"。那是"打四个字就拿到建卡权、
+ * 改个写法就静默失去"的根。现在权限挂在内置岗位上，判定一律走
+ * `roles.can(persona, '<权限>')`（见 roles.mjs / 设计文档），本模块只发钥匙。
+ */

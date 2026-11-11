@@ -38,10 +38,13 @@ import path from 'node:path';
 import * as store from './store.mjs';
 import { dispatchToThread, dispatchEventToThread, projectConstitutionBlock } from './dispatch.mjs';
 // 岗位判定（「项目经理 · 职责」第一段才是岗位）与运行钥匙共用同一处口径 —— 别再各写一份
-import { isPmRole, roleHeadOf } from './agent-auth.mjs';
+import { can, roleNameOf } from './roles.mjs';
 // 「卡由流程执行」那条路要真的起一条实例 —— 跟工作台点流程走的是同一个引擎入口，
 // 不另造"从看板起流程"的第二套（引擎的口径只该有一处）
 import { startWorkflow, nodesOf } from './workflows.mjs';
+// 交付声明（2026-11-09 P4）：跑完 ≠ 完成 —— 卡落「待验收」只认员工首行/末行 `[完成]`，
+// 判据唯一实现在 delivery-claim.mjs（流程步骤用它的 `[受阻]` 那一半）。
+import { claimOf, blockedReasonOf } from './delivery-claim.mjs';
 
 /** 排序权重：越小越"要人管"（平表用它；看板按列站队，不看这个） */
 const FLOW_RANK = { 已阻塞: 0, 失败: 1, 待验收: 2, 进行中: 3, 待办: 4, 已完成: 5, 已取消: 6, 想法: 7 };
@@ -96,7 +99,7 @@ const COL_FACE = {
   idea: { label: '想法', hint: '还没决定要不要做' },
   todo: { label: '待办' },
   doing: { label: '进行中' },
-  review: { label: '待验收', hint: '干完了，等你点头' },
+  review: { label: '待验收', hint: '干完了，等验收人点头' },
   blocked: { label: '已阻塞', hint: '出了问题等人拍板' },
   failed: { label: '失败' },
   done: { label: '已完成' },
@@ -290,7 +293,7 @@ function flowCardRow(run, card) {
  * 本地卡（存在 `project_tasks` 里的）：人在列头「＋」建的手工卡，与**仓库值班**写进来的卡。
  * 同一族、同一张表 —— 都能拖（**卡的状态就是人给它的指令**）、都能删。
  */
-const SOURCE_TEXT = { manual: '手动', repo: '仓库值班' };
+const SOURCE_TEXT = { manual: '手动', repo: '仓库值班', backfill: '补记' };
 
 function manualRows(t) {
   const persona = t.assigneePersonaId ? store.getPersona(t.assigneePersonaId) : null;
@@ -337,6 +340,12 @@ function manualRows(t) {
     // 协作子卡：父卡 id / 标题（点进详情能认出它是谁拆出来的）
     parent_id: parent?.id ?? null,
     parent_title: parent?.title ?? null,
+    /*
+     * 派活人（2026-11-11 验收人 = 派活人）：看板的「只看我的」靠这两个字段筛
+     * —— 前端拿 S.me.id 比 created_by_user_id；员工（PM）建的卡 created_by 是 persona id。
+     */
+    created_by: t.createdBy ?? null,
+    created_by_user_id: t.createdByUserId ?? null,
     at: stamp(t.updatedAt),
     created: stamp(t.createdAt),
     note: clip(
@@ -726,8 +735,8 @@ export function assertTeamGroup(groupId) {
   if (!group || group.dissolvedAt) throw new Error('选的那个群已经不在了');
   const assistant = group.assistantPersonaId ? store.getPersona(group.assistantPersonaId) : null;
   if (!assistant) throw new Error('这个群没有群助手 —— 团队协作要有群助手承接；先去群设置里指定一个');
-  if (!isPmRole(assistant.role)) {
-    throw new Error(`这个群的群助手不是项目经理（「${roleHeadOf(assistant.role) || '未设岗位'}」）—— 团队协作要项目经理承接，先去群设置里换一个 PM 当群助手`);
+  if (!can(assistant, 'team.coordinate')) {
+    throw new Error(`这个群的群助手岗位是「${roleNameOf(assistant.roleKey) ?? '未设岗位'}」，不能承接团队协作卡 —— 团队协作要有「承接团队卡」权限的人当群助手，先去群设置里换一个`);
   }
   if (!group.members.some((m) => m.personaId === assistant.id)) throw new Error('这个群的群助手已经不在群成员里了');
   return group;
@@ -751,6 +760,11 @@ export function createProjectTask(project, {
    * 需要方先自己查过（store.getProjectTaskByExternalKey），这里只负责写进去。
    */
   externalKey = null,
+  /*
+   * 卡来源（2026-11-11）：正常人手卡 = null（store 默认 'manual'）；
+   * 员工经建卡通道**补记**已发生的活 = 'backfill'（看板上标「补记」，且永不自动派活）。
+   */
+  source = null,
   /*
    * **团队协作模式**（2026-11-09 用户定）：派给一个**群**办，协调人是群上的群助手
    * （`groups.assistantPersonaId`，必须是项目经理岗），**卡上不记协调人** ——
@@ -814,6 +828,8 @@ export function createProjectTask(project, {
     creatorConvId,
     // 幂等键 / 外部来源键（2026-11-09）：数字员工建卡去重靠它
     externalKey,
+    // 来源（2026-11-11）：补记卡标 backfill；不传走 store 默认 'manual'
+    ...(source ? { source } : {}),
     // 团队协作 / 协作子卡（2026-11-09）
     assigneeGroupId: group?.id ?? null,
     parentTaskId: parent?.id ?? null,
@@ -885,8 +901,8 @@ function startCardInGroup(row, project) {
   if (!group || group.dissolvedAt) throw new Error('这张卡挂的群已经不在了');
   const assistant = group.assistantPersonaId ? store.getPersona(group.assistantPersonaId) : null;
   if (!assistant) throw new Error('这个群没有群助手 —— 团队协作要群助手承接；先去群设置里指定一个');
-  if (!isPmRole(assistant.role)) {
-    throw new Error(`这个群现在的群助手不是项目经理（「${roleHeadOf(assistant.role) || '未设岗位'}」）—— 团队协作要项目经理承接，先去群设置里换一个 PM 当群助手`);
+  if (!can(assistant, 'team.coordinate')) {
+    throw new Error(`这个群现在的群助手岗位是「${roleNameOf(assistant.roleKey) ?? '未设岗位'}」，不能承接团队协作卡 —— 去群设置里换一个有「承接团队卡」权限的人当群助手`);
   }
   if (!group.members?.some((m) => m.personaId === assistant.id)) throw new Error('这个群的群助手已经不在群里了');
   // 落到这个群**最新的一段会话**（一段没有就开一段）：派活票与唤醒都进群聊，雇主看得见
@@ -899,7 +915,7 @@ function startCardInGroup(row, project) {
     '\n这是「团队协作」模式的卡：你是本群的群助手（项目经理），负责把活拆给群成员（子卡）、盯回执、把进度汇总回这张卡。',
     '拆子卡走建卡通道，带上 parentTaskId；子卡只能派给本群成员，别派给自己。',
     '\n' + PACE_BLOCK,
-    '做完 / 需要拍板时把卡推进到「待验收」或说明卡在哪。',
+    '交付形态按【本轮任务合同】判断；收尾按【本轮契约】的交付声明写 [完成] / [受阻]，平台据此收卡。',
   ]
     .filter(Boolean)
     .join('\n');
@@ -914,6 +930,14 @@ function startCardInGroup(row, project) {
   const res = dispatchEventToThread(session.id, `@${assistant.name} ${text}`, {
     personaId: assistant.id,
     projectId: project.id,
+    // 卡带进合同（P5）：交付形态/验收按这张卡来；source:'group' 让 dispatch 不加"评论区"锚点块
+    card: {
+      title: row.title,
+      description: row.description,
+      status: row.status,
+      projectName: project.name,
+      source: 'group',
+    },
     // silent：派活票给人看，这条唤醒是指令 —— 界面上不重复画（同卡片回执）
     meta: { silent: true },
   });
@@ -981,12 +1005,24 @@ export function startProjectTask(id, { allowIdea = false } = {}) {
     row.description ? `\n${row.description}` : '',
     `\n工作目录就是这个项目的目录：${project.root}`,
     `\n${PACE_BLOCK}`,
-    '做完直接说明结果即可。',
   ]
     .filter(Boolean)
     .join('\n');
   try {
-    const { run } = dispatchToThread(conv, text, { projectId: project.id });
+    /*
+     * 卡带进合同（2026-11-09 P5）：目标/交付形态/验收按这张卡来，别只剩一句"上面这条消息要办的事"。
+     * `source:'board'` = 看板派活 —— dispatch 据此不加"来自评论区"的锚点块（那是评论场景专用）。
+     */
+    const { run } = dispatchToThread(conv, text, {
+      projectId: project.id,
+      card: {
+        title: row.title,
+        description: row.description,
+        status: row.status,
+        projectName: project.name,
+        source: 'board',
+      },
+    });
     return store.updateProjectTask(row.id, {
       status: '进行中',
       conversationId: conv,
@@ -1008,6 +1044,81 @@ export function startProjectTask(id, { allowIdea = false } = {}) {
   }
 }
 
+/* ------------------------------------------------ 跑完 ≠ 完成（2026-11-09 P4） */
+
+/**
+ * 这一轮员工最终说了什么 —— **交付声明只从这里读**。
+ *
+ * 两个调用方拿到的 run 形状不一样：收尾钩子 `onTaskRunFinished` 拿的是内存里的 run
+ * （`.finalText` 是刚跑出来的原文）；聊天立卡 `promoteConversationToCard` 拿的是库里那行
+ * runs —— 那张表**没有 finalText 列**，回话在 messages 里。两处必须走同一个判据，
+ * 所以读原文这件事只写这一处。
+ *
+ * 内存里 `finalText` 可能是空串（dsh 的 finalText 只来自 final 事件，被停/异常时没有），
+ * 那就按"空回话"算 —— 不要拿 streamedText 替它开脱：屏幕上的过程话不是交付。
+ *
+ * P5（2026-11-09）：落库的回话会剥掉首行 `[完成]`（那是机器信号、不给雇主看，见
+ * runs.persistReply），所以 "promote 聊天立卡" 这条读库的路径要优先读 **run_events 的
+ * `__done.finalText` 原文**；别拿剥过的消息当判据（否则 [完成] 永远判不出来）。
+ */
+function finalReplyTextOf(run) {
+  if (run?.finalText != null) return String(run.finalText);
+  if (!run?.id) return '';
+  const done = store
+    .listRunEvents(run.id)
+    .map((e) => {
+      try {
+        return JSON.parse(e.evt);
+      } catch {
+        return null;
+      }
+    })
+    .filter((j) => j?.type === '__done')
+    .at(-1);
+  if (done && typeof done.finalText === 'string') return done.finalText;
+  if (!run.conversationId) return '';
+  const reply = store
+    .listMessages(run.conversationId)
+    .filter((m) => m.role === 'assistant' && m.runId === run.id)
+    .at(-1);
+  return reply?.text ?? '';
+}
+
+/**
+ * 运行状态 + 交付声明 → 卡面状态（**唯一映射**，聊天立卡和卡收尾共用，别再两处各写一支三元）。
+ *
+ * `null` = 这次收尾**不改卡**（状态不认识，例如还没跑）；「中断」「待跑」也不在这里——
+ * 中断是服务重启后的补记，不经过收尾钩子。
+ */
+function cardStatusAfterRun(runStatus, claim) {
+  if (runStatus === '完成') return claim === 'done' ? '待验收' : '已阻塞';
+  if (runStatus === '已停止') return '已阻塞';
+  if (runStatus === '失败') return '失败';
+  return null;
+}
+
+/**
+ * 收尾说明（写进卡描述最后那段「[运行结束] …」）：只说这一轮**实际发生了什么**。
+ * 员工声明了完成才写"回报完成"；没声明就如实写"没交回结论"——不替员工宣布干完了。
+ * 受阻时把原因带进描述（首行/末行 `[受阻]` 后面那句话）：看板上一眼知道卡在哪，
+ * 别逼人去会话里翻（原因截 120 字，长文留在会话）。
+ */
+function endNoteOf(run, claim) {
+  if (run.status === '已停止') return '被人停掉了，等你处理';
+  if (run.status === '失败') {
+    const first = String(run.error ?? '').split('\n')[0].slice(0, 200);
+    return `跑挂了${first ? `：${first}` : ''}`;
+  }
+  if (claim === 'done') return '跑完了，员工回报完成（[完成]），等你验收';
+  if (claim === 'blocked') {
+    // 原因取 `[受阻]` 后面那句话（首行/末行都认，P5 问答题常放末行）；去掉句尾标点再拼，免得「。，等你拍板」
+    const reason = blockedReasonOf(finalReplyTextOf(run)).slice(0, 120).replace(/[。；;，,、\s]+$/, '');
+    return `跑完了，员工自报受阻（[受阻]）${reason ? `：${reason}` : ''}，等你拍板`;
+  }
+  if (claim === 'silent') return '跑完了，但这一轮没有回话 —— 没有交回可验收的结论（没有 [完成] 声明），卡停在「已阻塞」';
+  return '跑完了，但没有交回可验收的结论（没写 [完成]，也没写 [受阻]）—— 卡停在「已阻塞」';
+}
+
 /* ------------------------------------------------------------ 把会话立成卡 */
 
 /**
@@ -1022,9 +1133,10 @@ export function startProjectTask(id, { allowIdea = false } = {}) {
  *   · 项目照 `chatOwnership` 的归属规则认（会话挂了项目就是它；没挂就看执行人的
  *     目录落在哪个项目下）—— 手工卡必须挂项目，这条硬规矩不为立卡开口子；
  *   · 标题取最近一条用户消息（就是"派的活"），没有就退回会话标题；
- *   · 状态照最近一轮跑实的状态折成卡的状态：跑中→进行中、完成→**待验收**
- *     （等人验收，别替用户宣布"已完成"）、失败→失败、停止→已阻塞
- *     （跟 onTaskRunFinished 同一套落点规则，同一件事别两处两种落法）；
+ *   · 状态照最近一轮的**交付声明**折成卡的状态（2026-11-09 P4：跑完 ≠ 完成）：
+ *     跑中→进行中、失败→失败、停止→已阻塞、完成+首行/末行 `[完成]`→**待验收**、
+ *     完成+`[受阻]`/没声明/空回话→已阻塞（跟 onTaskRunFinished 同一套落点规则，
+ *     同一件事别两处两种落法；声明判据见 delivery-claim.mjs）；
  *   · **不派活**（`startNow` 恒 false）：活已经在会话里跑着或跑完了，再派一次
  *     等于同一件事两份执行。之后要返工，走卡详情页那条路（会另开工单会话）。
  */
@@ -1064,7 +1176,9 @@ export function promoteConversationToCard(convId) {
 
   const persona = chatRun.personaId ? store.getPersona(chatRun.personaId) : null;
   const lastUser = store.lastUserMessage(convId);
-  const status = chatRun.status === '跑中' ? '进行中' : chatRun.status === '完成' ? '待验收' : chatRun.status === '失败' ? '失败' : '已停止' ? '已阻塞' : '待办';
+  // 2026-11-09 P4：完成的轮次要读**交付声明**，不能因为"进程退出了"就折成待验收（见 delivery-claim.mjs）
+  const claim = claimOf(finalReplyTextOf(chatRun));
+  const status = chatRun.status === '跑中' ? '进行中' : cardStatusAfterRun(chatRun.status, claim) ?? '待办';
   const task = createProjectTask(project, {
     title: clip(lastUser || conv.title || '（没说做什么）', TASK_LIMIT),
     status,
@@ -1087,7 +1201,10 @@ export function promoteConversationToCard(convId) {
 export function retryQueuedTasks() {
   const started = [];
   for (const t of store.listQueuedProjectTasks()) {
-    if (!t.assigneePersonaId) {
+    // 真人执行（2026-10-31）：挂名、不起会话，谈不上重派 —— 摘掉标记，别让它挂着排队。
+    // （群卡 / 流程卡也排得上队：startProjectTask 自己会按执行方式分流 —— 群卡走
+    // startCardInGroup，正是 2026-11-09 那条"群助手正忙 → 排队 → 节拍重试"的承诺。）
+    if (t.assigneeUserId) {
       store.updateProjectTask(t.id, { queuedAt: null });
       continue;
     }
@@ -1103,17 +1220,21 @@ export function retryQueuedTasks() {
 }
 
 /**
- * 运行跑完时把**卡片**的状态收一下（2026-10-17）。
+ * 运行跑完时把**卡片**的状态收一下（2026-10-17 建；2026-11-09 P4 改口径）。
  *
- * 为什么必须有这一步：原来卡片派活后状态永远停在「进行中」—— 人把运行停掉了，卡还写着「进行中」，
- * 看板上看不出"这活已经停了、在等人处理"。
+ * 为什么必须有这一步：卡片派活后状态会停在「进行中」—— 人把运行停掉了/跑完了，看板得
+ * 反映"这轮结束了、现在等谁"，否则一张卡永远挂着"进行中"。
  *
- * 落点（2026-10-24 状态重设计定稿，全套口径见 COLUMNS 的注释）：
- *   · 跑完了（`完成`）        → **待验收**：等经办人验收结果；
- *   · 人停的（`已停止`）      → **已阻塞**：进「已阻塞」，等人决定下一步；
- *   · 跑挂了（`失败`）        → **失败**：跟流程步骤同一落点（以前手工卡归「已阻塞」，
- *     两套来源两种落法）。它**不会**被自动重派 —— 重派只认「待办」+ queuedAt，
- *     所以这里不存在"失败一次再派一次"的死循环（那才是当初不敢用这态的原因）。
+ * 落点（2026-11-09 P4：**跑完 ≠ 完成**。判据唯一实现在 delivery-claim.mjs）：
+ *   · 完成 + 首行/末行 `[完成]`（员工声明交付）    → **待验收**：等人点头；
+ *   · 完成 + 首行/末行 `[受阻]`（员工声明没干成）  → **已阻塞**：等人拍板；
+ *   · 完成 + 没声明 / 空回话                    → **已阻塞**：没交回可验收结论。平台**不**
+ *     替员工宣布"干完了"——真实事故 pt-a6841a5b/r-551f01e3：进程正常退出但回话是空的，
+ *     卡却被自动推进「待验收」，用户判"这是在糊弄用户"；
+ *   · 人停的（`已停止`）                        → **已阻塞**：等人决定下一步；
+ *   · 跑挂了（`失败`）                          → **失败**：技术上跑挂，可重跑；
+ *   · **绝不回「待办」** —— 有些待办会被自动重新派活，失败一次再派一次 → 死循环
+ *     （「失败」「已阻塞」都不会被自动重派：重派只认「待办」+ queuedAt）。
  *
  * 只动"当前还是进行中"的卡：人已经手动改过状态（比如直接拖到已完成）就不覆盖 —— **卡的状态是人的指令**。
  */
@@ -1121,15 +1242,11 @@ export function onTaskRunFinished(run) {
   if (!run?.id) return;
   const task = store.getProjectTaskByRunId(run.id);
   if (!task || task.status !== '进行中') return;
-  const next =
-    run.status === '完成' ? '待验收' : run.status === '已停止' ? '已阻塞' : run.status === '失败' ? '失败' : null;
+  // 完成态还要看**交付声明**：进程退出码 0 只说明这一轮结束了，不说明活干成了
+  const claim = claimOf(finalReplyTextOf(run));
+  const next = cardStatusAfterRun(run.status, claim);
   if (!next) return;
-  const why =
-    run.status === '完成'
-      ? '跑完了，等你验收'
-      : run.status === '已停止'
-        ? '被人停掉了，等你处理'
-        : `跑挂了${run.error ? `：${String(run.error).split('\n')[0].slice(0, 200)}` : ''}`;
+  const why = endNoteOf(run, claim);
   const descr = `${task.description ?? ''}`.trim();
   const updated = store.updateProjectTask(task.id, {
     status: next,

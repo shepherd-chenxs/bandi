@@ -14,7 +14,10 @@ import * as skills from './skills.mjs';
 import * as runtimes from './runtimes.mjs';
 import * as connectors from './connectors.mjs';
 import * as steward from './steward.mjs';
-import { controlUrl, isPmRole } from './agent-auth.mjs';
+import { controlUrl } from './agent-auth.mjs';
+// 建卡通道的判据（2026-11-11）：只给**有建卡权限的岗位**（现在只有项目经理），
+// 不再解析 role 文本 —— 见 roles.mjs / 设计文档
+import { can, roleOf } from './roles.mjs';
 
 /** 带 code 的错误：路由按它决定 400 还是 409 */
 const fail = (message, code = 'bad') => Object.assign(new Error(message), { code });
@@ -39,78 +42,177 @@ export function sessionScopeOf(opts = {}) {
 }
 
 /**
- * 项目经理的「建卡通道」注入块（2026-10-24）：首轮派活时告诉他怎么把活立成卡。
- * 只给项目经理岗位（isPmRole）；钥匙在环境变量里，这里只教用法 —— 远端节点跑的活
- * 没有这两个环境变量，让他见了空值就别用（钥匙不发就是不发，不是丢了）。
+ * 项目经理的「建卡通道」注入块（2026-10-24，2026-11-11 重写）：首轮派活时告诉他怎么把活立成卡。
+ * 只给**有建卡权限的岗位**（roles.can(persona, 'card.create')；现在只有项目经理）。
+ *
+ * 2026-11-11 重写的起因（实报）：贺韬连试三次全 400 —— PowerShell 写 UTF-16、批量口发裸数组、
+ * 文件带 BOM，而 PowerShell 又把 400 的响应体吞了，他读不到错误 → 判定通道坏了 → 自己上手。
+ * 现在接口侧已经认 UTF-16/BOM/裸数组/群关联项目（平台兜住"手滑"），这里只教**最小必要**：
+ * 一条能抄的命令、错误怎么看、重试上限、补记写法。
  */
 function pmCardBrief() {
   return [
     '【建卡通道】你可以把拆出来的活直接立成任务卡（全平台只有项目经理岗位能这么做）：',
     '',
-    `POST \${BANDI_CONTROL_URL}/api/agent/cards   （\${BANDI_CONTROL_URL} = ${controlUrl}，你的环境变量里有）`,
-    '请求头：X-Bandi-Run-Token: 你环境变量里的 BANDI_RUN_TOKEN',
-    '请求体：{ "projectId": "…", "title": "一句话说清要做什么", "description": "边界、做成什么样算完",',
-    '          "assigneePersonaId": "…或省略", "status": "待办" 或 "想法" }',
+    `POST \${BANDI_CONTROL_URL}/api/agent/cards/batch    （\${BANDI_CONTROL_URL} = ${controlUrl}，环境变量里有）`,
+    '请求头：X-Bandi-Run-Token = 环境变量 BANDI_RUN_TOKEN（**每轮现取，别抄旧值**）',
+    '请求体：{ "cards": [ { "title": "一句话说清要做什么", "description": "边界、做成什么样算完、证据要求",',
+    '                      "assigneePersonaId": "派给谁", "status": "待办" } ] }',
     '',
-    '**请求体必须走文件**：先用写文件工具把 JSON 存成 UTF-8 文件（系统临时目录，发完删），再',
-    '`curl -s -X POST "$BANDI_CONTROL_URL/api/agent/cards" -H "X-Bandi-Run-Token: …" \\',
-    '  -H "Content-Type: application/json" --data-binary @card.json`',
-    '别把中文直接写进命令行参数 —— Windows 的 cmd/PowerShell 按本地代码页转码，中文全变「?」，',
-    '卡面就花了。发完看回包里的 title：出现「?」就是被转码了，确认走的是文件方式再重发。',
-    '项目清单：GET /api/projects（拿 id 和目录）。',
+    '宽口径（平台兜住常见手滑，不用纠结格式）：',
+    '- 项目 id **可省略**：群派活默认用群关联的项目；',
+    '- 体可以是 {cards:[…]}、裸数组 […] 或单张卡对象；UTF-8 / UTF-16 / 带 BOM 都认；',
+    '- 每张卡带稳定的 idempotencyKey（同一件事重发只建一张）。',
     '',
-    '口径：可逆的活建「待办」+ 执行人 —— 建完自动派活，不用请示；要雇主拍板的（花钱/对外/改范围）',
-    '建「想法」挂着等他，或只在群里说。干完的卡会回到雇主那里验收。',
-    '环境变量里没有 BANDI_RUN_TOKEN，就说明这条通道这次没开，别硬造一个。',
+    '出错怎么改（接口会回 { code, error }）：',
+    '- 先读 code（E1044 = JSON 不合法；E2058 = 状态不对；E2059 = 项目/执行人/标题不对），**按提示改参数后再试**；',
+    '- **最多改 2 次**；400 之后不要整批重发 —— 先 GET /api/tasks 确认卡在不在；',
+    '- 2 次仍失败 = 通道不可用：停止重试，按【统筹职责】降级（群里 @ 人 + 报群主），不许自己写代码。',
     '',
-    /*
-     * 2026-11-09 P0 检修：汇报口径不再写在「身份/建卡通道」里，改到每轮的
-     * platformContractBlock()（所有员工都拿得到，不依赖首轮、不依赖岗位）。
-     * 这里只留"他能闭环"的卡片管理权限 —— 那是 PM 独有的能力，不是通用格式。
-     */
+    '补卡（通道恢复后，补记群里已经干完/卡住的活）：同一接口，每张卡带 "backfill": true，',
+    'status 写实际状态（待验收 / 已阻塞 / 已完成 / 已取消 / 失败）——补记**不会重跑**；',
+    '描述里写清谁做的、证据在哪。',
+    '',
     `卡的管理你有权限：PATCH ${controlUrl}/api/projects/tasks/<卡id>（可改 status / description / assigneePersonaId；带 startNow:true = 重跑）—— 只对你建的卡、或你当群助手那张团队卡；范围、验收标准、流程归属仍归雇主（面板上改）。`,
     '汇报与收尾按平台每轮的【本轮契约】执行，不在身份里重复。',
   ].join('\n');
 }
 
 /**
- * **平台行为契约**（2026-11-09 全面检修 P0）：**每一轮派活都注入**，优先级声明高于身份设定。
+ * **项目经理的统筹职责**（2026-11-11 每轮注入，实报后的行为层修法）。
+ *
+ * 事故：群里给了开发需求，他三次建卡 400 后判定通道坏了，直接自己改仓库写代码。
+ * 根因有两层：① 建卡通道太脆（工具层已修）；② 首轮之后**没有任何"你是统筹"的约束** ——
+ * 「继续」那一轮连身份与建卡通道都不再注入，平台契约也只管交付形态、不管调度纪律；
+ * 身份卡里那句"专长之外的活也接"反而给了他"自己上手"的授权。
+ *
+ * 这个块**每轮都注入**（放契约层，不动身份卡）：先判问答/做事 → 拆卡派活 → 失败降级
+ * （@ 人 + 报群主 + 补卡）→ 验收自己派的活 → 不许自己改仓库。只给有建卡权限的岗位。
+ */
+/** 群成员的岗位名（给统筹职责里"派给谁"用；群成员接口带 roleKey，老数据回落 role 文本） */
+function memberRoleName(m) {
+  const byKey = roleOf(m?.roleKey)?.name;
+  if (byKey) return byKey;
+  return String(m?.role ?? '').split(' · ')[0].trim() || '未设岗位';
+}
+
+function pmDispatchBlock({ persona, thread, project } = {}) {
+  const members =
+    thread?.kind === 'group' && Array.isArray(thread.members)
+      ? thread.members
+          .filter((m) => m.personaId !== persona?.id)
+          .map((m) => `${m.name}（${memberRoleName(m)}）`)
+          .join('、')
+      : '';
+  return [
+    '【统筹职责 · 你是项目经理，本轮有效】',
+    '1. **先判这一轮要交什么**：问问题 → 直接答；让你做事 → 拆成能独立验收的卡，派出去。',
+    `2. **派活**：用建卡通道建卡（见首轮【建卡通道】），派给对应岗位的人${members ? `—— 群里可用：${members}` : ''}${project?.name ? `；项目「${project.name}」` : ''}。群里只回 ≤5 行简报（建了几张、给谁），细节写进卡。`,
+    '3. **建卡失败**：看回包 code 改参数重试，**最多 2 次**；仍失败就停止重试，按顺序做三件事：',
+    '   ① 在群里 @ 具体执行人接活（写清交付物和验收标准，别只说"大家看一下"）；',
+    '   ② 一句话报群主：错误码 + 已重试几次 + 看板暂无卡 + 恢复后补卡；',
+    '   ③ **不许自己改仓库、不许写代码**——你是统筹，不是执行人（"专长之外的活也接"不改变这一条）。',
+    '4. **你派的活你验收**：你建的卡/子卡到「待验收」→ 看证据，通过就把状态改「已完成」；不通过就退回执行人重跑（PATCH status=待办 + startNow:true，并说清退回原因）。**雇主派给你的主卡你只能提交「待验收」，不能替雇主点「已完成」**。',
+    '5. **补卡**：通道恢复后，把这段时间群里已经干完/卡住的活补成卡（backfill:true + 实际状态），让看板账对得上；补记不重跑。',
+  ].join('\n');
+}
+
+/**
+ * **平台行为契约**（2026-11-09 全面检修 P0；P5 按"交付形态"重写）：**每一轮派活都注入**，
+ * 优先级声明高于身份设定。
  *
  * 为什么要独立成一层（这是"身份设定反作用"的修法）：原先汇报格式、证据去处、收尾纪律
  * 散在「经理的建卡通道」和「运行时钥匙提醒」里，且只对 PM / 只首轮生效；默认形态下
  * 每轮除了用户消息没有任何平台规则 —— 模型就拿首轮的身份文本当行为法，越聊越像"按人设表演"。
  * 身份只该回答"我是谁"，行为规则必须每轮由平台说一遍。
  *
- * 模板与 skills/bandi-report 同源（结论先行 / ≤3 条依据 / 证据去处 / 不写 "Next:"）。
+ * P5 改写的起因（真实事故 pt-7c6d4229）：旧第 1 条「交付物是给雇主的一屏简报」是**做事**档，
+ * 被无差别套到问答卡上 —— 李俊把"API 权限归谁"答成了"钥匙怎么发"的工作报告，4 处事实错。
+ * 所以现在第 1 条先判**交付形态**（问问题→直接答；做事→结果/卡点），后面补上
+ * 多问拆答、权责四层、每个判断落源（这三样是那次事故的直接缺口）。
  */
 export function platformContractBlock() {
   return [
-    '【本轮契约 · 平台注入，优先级高于身份设定与技能】',
-    '1. 交付物是给雇主的一屏简报（完整写法见 `bandi-report` 技能），不是工作日志：第一行结论（做完没 / 卡在哪 / 要他拍板什么）；',
-    '   最多 3 条依据，每条带出处（卡号 / 运行 id / 文件:行 / 时间）；最后一行只写这一轮**已做完**的动作；',
-    '   需要他拍板的单列「需要你拍板：…（为什么只能你定）」。',
-    '2. 证据不贴在对话里：命令 / 输出 / 数据放进运行事件或卡片的描述/评论，回复里只引用出处。',
-    '3. 不空转：这一轮能做的动作先做完再回话；不许以 "Next: …" 收尾；做不完就写清在等什么、下一轮盯什么。',
-    '4. 不编数：没有出处的数不写；不确定就说不确定 + 怎么确认。',
-    '5. 问进度 / 找活：先看【本轮任务合同】里的「你的任务台账」；要查全部卡或别人的卡，用运行钥匙调平台接口，**不要去仓库里 grep 源码找答案**。',
-    '6. **问「进度 / 怎么样了」时只答台账**：状态 + 更新时间 + 在等谁 / 下一步 —— 不要为了补细节去翻部署日志、源码、目录或历史记忆；他要细节会追问。',
-    '7. **够答即回**：已经能回答雇主的问题就先回话，别为了"更完整"继续翻（一轮里调工具越久，他越只能干等）。',
-    '8. **不猜接口**：平台接口只用你知道的；试不通就直说"这个口不存在 / 我没权限"，别 foreach 猜一串路径浪费时间。',
-    '9. 红线：删数据 / 动生产 / 对外发布，先列清单请雇主拍板，再动手。',
+    '【本轮契约 · 平台注入，优先级高于身份设定、技能与回复风格】',
+    '1. **先判这一轮要交什么**：用户在**问问题**（要答案 / 判断 / 说明）→ 第一行直接回答被问的那件事（谁 / 哪个 / 能不能 / 归谁），再给依据；问“归谁”就先给**归属判断**（归平台 / 归员工 / 归岗位 / 归哪份配置），不是只描述机制；**不要**用“我查到了… / 已完成…”的工作报告代替答案。用户在**让你做事** → 第一行给结果或卡点。做事类交差的完整写法见 `bandi-report` 技能。',
+    '2. **多问拆答、权责分层**：一句话里问了多件事，先列出来逐条答；问“归谁 / 谁能 / 谁定”要分清四层——归属方、授予方、持有者、能改的人。问“能力 / 权限是不是全员一样”，先分开说**能力面**（同一身份类别的接口白名单是不是一致）和**业务闸**（handler 里按岗位 / 归属判的额外门槛），别压成一句“按角色分层”。问“谁有钥匙 / 谁能拿到”，要说清签发者、怎么交给执行者（进程环境）、绑定什么、何时失效、什么请求才认它。注意“**有钥匙 ≠ 有权限**”：持有者是那一次运行的进程，签发者是控制面——这两个都不是“权限归谁”的答案。',
+    '3. **每个判断都要落源**：回答里的“能 / 不能 / 归谁 / 几条 / 哪些”都要能指到出处（文件:行 / 接口 / 数据）；**行号要能照着翻到**，拿不准就只写文件 + 函数名，不写估算行号；没查到的写“未验证”。**只引真源**：平台代码以 `apps/server/src`、前端以 `apps/web` 为准；`apps/desktop/runtime/**`、`target/`、`dist/` 是打包产物、可能是旧版，不拿来当依据。局部代码只能说明局部，整体结论要看完决定性的那一处（路由白名单 ≠ 业务权限）。完整证据放运行事件或卡里，回复只引用出处。',
+    '4. **跑完 ≠ 完成**：交付标记**单独放回话最后一行** —— 真交付了写一行「[完成]」；没干成 / 要雇主拍板，写「[受阻] 一句话原因」。**第一行留给答案或结果**。平台只按这个标记判**卡**的状态：不写标记 = 卡不会进「待验收」；没做完不许写「[完成]」，不许替雇主宣布验收通过。',
+    '5. **问进度只答台账、够答即回**：问“进度 / 怎么样了”就给状态 + 更新时间 + 在等谁；能答就先回，别为了补细节去翻源码 / 日志 / 历史。',
+    '6. **不空转、不编数、不猜接口**：这一轮能做的先做完再回话，不许以 "Next: …" 收尾；没出处的数不写；接口试不通就直说“不存在 / 没权限”，别 foreach 猜一串路径。',
+    '7. **红线**：删数据 / 动生产 / 对外发布，先列清单请雇主拍板，再动手。',
   ].join('\n');
 }
 
 /**
- * **本轮任务合同**（2026-11-09 P1：结构化）。
+ * **这一轮是问答还是做事**（2026-11-09 P5）：给任务合同一个提示，别让模型猜。
+ *
+ * 事故（pt-7c6d4229）：卡描述明明是一串问题（"能调用哪些 api / 是给特定数字员工的还是
+ * 全员平权"），平台却按"做事"给了汇报模板 → 交回一份工作报告。这里用**问句词 vs 动作词**
+ * 的粗判只做"提示"：判不准就返回 null，合同写"先判"，由模型自己定；判错也不会锁死行为。
+ *
+ * 口径：问句词多于动作词 → 'answer'；动作词多于问句词 → 'do'；两者都少/相当 → null。
+ */
+const QUESTION_RE = /[?？]|为什么|谁|什么|哪些|哪个|怎么|如何|是否|能不能|有没有|多少|归谁|属于|还是|吗|呢|\b(?:who|what|which|why|how|whether|can|could|is|are|do|does)\b/gi;
+const ACTION_RE = /实现|改|修|写|做|部署|发布|提交|创建|新建|删除|清理|生成|画|设计|安装|配置|跑|验证|复现|重构|升级|迁移|合并|接入|拆分|上线|调整|替换|补充|换/g;
+
+export function guessDeliveryKind(text) {
+  const s = String(text ?? '').trim();
+  if (!s) return null;
+  const q = (s.match(QUESTION_RE) ?? []).length;
+  const a = (s.match(ACTION_RE) ?? []).length;
+  if (!q && !a) return null;
+  if (!a) return 'answer'; // 只是提问
+  if (!q) return 'do'; // 只是动作
+  if (q > a + 1) return 'answer';
+  if (a > q + 1) return 'do';
+  return null; // 混合：交给合同里的"先判"
+}
+
+/** 交付形态提示（任务合同里那一段；answer/do/未知三种写法） */
+function deliveryShapeLines(kind) {
+  if (kind === 'answer') {
+    return [
+      '- 交付形态：**问答** —— 用户在问问题：第一行直接给答案（回答被问的判断），再给依据；**不要交工作简报**。',
+      '- 交付：答案本身（覆盖用户原话里每一问）+ 每个判断的出处。',
+    ];
+  }
+  if (kind === 'do') {
+    return [
+      '- 交付形态：**做事** —— 用户要的是改动 / 产物：第一行给结果或卡点，再给依据。',
+      '- 交付：一屏简报（完整写法见 `bandi-report`）：第一行结果 / 卡点 + ≤3 条依据 + 这一轮已做的动作。',
+    ];
+  }
+  return [
+    '- 交付形态：先判 —— 问问题 → 直接答；要改动 → 给结果 / 卡点。',
+    '- 交付：按【本轮契约】交付（问答先答问题，做事给简报）。',
+  ];
+}
+
+/** 验收提示：按交付形态给判据；评论卡还要落到"按卡描述逐条验" */
+function acceptanceLine(kind, commentCard) {
+  const byKind =
+    kind === 'answer'
+      ? '用户原话里每一问都有直接回答、每个判断有出处（文件:行 / 接口 / 数据）；缺一条算没交付。'
+      : kind === 'do'
+        ? '结论先行、每条依据可核、给出可拍板选项 —— 做不到这三条算没交付。'
+        : '用户原话里每一件事都有交代、依据可核。';
+  return commentCard
+    ? `- 验收：按【你正在办的任务卡】里的任务描述逐条验；${byKind}`
+    : `- 验收：${byKind}`;
+}
+
+/**
+ * **本轮任务合同**（2026-11-09 P1；P5 按交付形态分型）。
  *
  * 身份文本回答"我是谁"，但不该承担"这次做成什么样算完"——那是任务合同的事。
  * 三处来源各带一点信息，拼成这一轮的"合同"：
- *   · `card`（卡评论区派活，project.mjs 传）：目标=卡标题，项目=卡所属项目；
- *     验收=按卡片描述逐条验（描述就是验收标准，见 docs/契约.md），不再把长描述复制一遍；
+ *   · `card`（卡评论区派活 project.mjs 传；P5 起看板/群派活也传，带 `source:'board'|'group'`）：
+ *     目标=卡标题、项目=卡项目、交付形态=从标题+描述粗判（问答/做事）、验收按形态判；
  *   · `workflow`（流程派活，dispatch 用 opts.taskId 现查 workflow_tasks）：节点名 + 第几次到站 + 本步要求；
  *   · `project`（普通聊天带了项目）：只补一句项目名，其余仍以用户原话为准。
  */
-export function taskContractBlock({ card = null, workflow = null, project = null, tasks = [] } = {}) {
+export function taskContractBlock({ card = null, workflow = null, project = null, tasks = [], delivery = null } = {}) {
   const lines = ['【本轮任务合同】'];
   const cardTitle = String(card?.title ?? '').trim();
   lines.push(`- 目标：${cardTitle ? `「${cardTitle}」` : ''}上面这条消息要办的事（用户原话为准，不扩范围）。`);
@@ -121,6 +223,13 @@ export function taskContractBlock({ card = null, workflow = null, project = null
     const detail = String(workflow.detail ?? '').trim();
     if (detail) lines.push(`  - 本步要求：${detail.slice(0, 300)}${detail.length > 300 ? '…' : ''}`);
   }
+  /*
+   * 交付形态（2026-11-09 P5）：**这一轮要交什么**先定下来，别让所有任务都套工作报告。
+   * card 带 source='board'/'group' 的是看板/群派活（没有"评论区"锚点块）；其余 card 是评论卡。
+   */
+  const kind = delivery ?? (card ? guessDeliveryKind(`${card.title ?? ''}\n${card.description ?? ''}`) : null);
+  const commentCard = !!card && card.source !== 'board' && card.source !== 'group';
+  lines.push(...deliveryShapeLines(kind));
   /*
    * 任务台账（2026-11-09 P3a）：把"他名下还在办的卡"每轮带进合同。
    * 问进度时他不需要任何工具就能答；也堵住"去仓库里 grep 源码找接口"这条错误路径。
@@ -135,12 +244,7 @@ export function taskContractBlock({ card = null, workflow = null, project = null
     lines.push('- 你的任务台账：当前没有未完的卡（要查全部卡用运行钥匙调 GET /api/tasks）。');
   }
   lines.push('- 受众：雇主本人（不是同事）；他要看完能拍板。');
-  lines.push('- 交付：按【本轮契约】的一屏简报。');
-  lines.push(
-    card
-      ? '- 验收：按【你正在办的任务卡】里的任务描述逐条验（每条能判过/不过）；结论先行、依据可核、给拍板选项。'
-      : '- 验收：结论先行、每条依据可核、给出可拍板选项 —— 做不到这三条算没交付。',
-  );
+  lines.push(acceptanceLine(kind, commentCard));
   return lines.join('\n');
 }
 
@@ -224,9 +328,11 @@ export function buildDirectTask(thread, text, firstTime, skillLines = [], connLi
   return parts.join('\n');
 }
 
-/** 只给「名字 + 一句话 + 路径」，正文让它按需去读 —— 渐进披露，别把 context 塞满 */
+/** 只给「名字 + 一句话 + 路径」，正文让它按需去读 —— 渐进披露，别把 context 塞满。
+ *  P5 补一句"技能是方法不是任务模式"：李俊那次就是被 brainstorming 的 "MUST use before
+ *  any creative work" 劫持成创作模式的 —— 技能不能决定这一轮交什么。 */
 function skillsBlock(lines) {
-  return ['你的技能（相关时先读这些文件，不要凭印象猜）：', '', ...lines, ''];
+  return ['你的技能（是"怎么做"的方法，不是任务模式、不决定这一轮交什么；只在这轮需要时读正文）：', '', ...lines, ''];
 }
 
 /**
@@ -468,7 +574,7 @@ function startMemberRun(thread, member, opts, trigger) {
   const p = store.getPersona(member.personaId);
   const brief = [
     p?.builtin ? steward.stewardBrief() : '',
-    p && isPmRole(p.role) ? pmCardBrief() : '',
+    p && can(p, 'card.create') ? pmCardBrief() : '',
   ].filter(Boolean).join('\n\n');
 
   // **这次派活属于哪个 session 作用域**：带流程 runId → 这条流程实例自己的一条
@@ -509,7 +615,9 @@ function startMemberRun(thread, member, opts, trigger) {
   // CLI 的沙箱只限**写**，读全盘不受限，给路径就够了。
   const attBlock = attsBlock(opts.atts);
   // 任务卡锚点（2026-10-23）：卡评论区派活必须带上"你在办哪张卡"，问进度才不会答偏。
-  const cardBlock = opts.card ? taskCardBlock(opts.card) : '';
+  // P5（2026-11-09）：看板/群派活也把卡带进合同（目标/验收更准），但**不加**"来自评论区"
+  // 这个锚点块 —— 那是评论场景专用的，加到看板派活上会说错场景。用 source 区分。
+  const cardBlock = opts.card && opts.card.source !== 'board' && opts.card.source !== 'group' ? taskCardBlock(opts.card) : '';
   /*
    * **每轮都注入的「平台契约 + 任务合同」**（2026-11-09 检修 P0/P1）。
    *
@@ -523,10 +631,13 @@ function startMemberRun(thread, member, opts, trigger) {
   const project = !opts.card?.projectName && opts.projectId ? store.getProject(opts.projectId) : null;
   // 他名下未完的卡：问进度时先看这里（2026-11-09 P3a，跨会话也不丢上下文）
   const myTasks = store.listMyOpenTasks(member.personaId, 5);
+  // 统筹职责（2026-11-11）：只给有建卡权限的岗位（项目经理）——每轮都注入，见 pmDispatchBlock
+  const pmBlock = p && can(p, 'card.create') ? pmDispatchBlock({ persona: p, thread, project }) : '';
   const contractBlock = [
     platformContractBlock(),
+    pmBlock,
     taskContractBlock({ card: opts.card, workflow: workflowTask, project, tasks: myTasks }),
-  ].join('\n\n');
+  ].filter(Boolean).join('\n\n');
   const fullTask = [cardBlock, task, attBlock, stylePrefBlock(), contractBlock].filter(Boolean).join('\n\n');
 
   return runs.startRun({
@@ -587,6 +698,25 @@ export function drainAllGroupQueues() {
 }
 
 /**
+ * 群挂了项目 = 这个群的派活默认在那个项目里干（2026-11-11 用户拍板「一项目一群」）。
+ *
+ * 为什么在这里补、而不是只在前端传：群里派活有**好几条入口**（聊天框 @、流程回复、
+ * 卡票回执走 dispatchEventToThread —— 它最后也进 dispatchToThread、队列补派），
+ * 每处各写一遍迟早漏一处。补在入口这一层，`ensureDispatchable`（项目并上限）、
+ * `startMemberRun` 的 cwd 覆盖、`projectConstitutionBlock` 的宪法注入就自动同源。
+ *
+ * **显式优先**：调用方已经带了 projectId（流程实例选了项目）就原样返回 ——
+ * 流程是比"群默认"更强的意图；群没关联项目也不传，行为与从前一字不差。
+ *
+ * 导出是给 `smoke-group-project.mjs` 验这条规则用的（起真 agent 派活太慢，规则本身是纯函数）。
+ */
+export function withGroupProject(thread, opts) {
+  if (opts?.projectId || thread?.kind !== 'group' || !thread.groupId) return opts;
+  const g = store.getGroup(thread.groupId);
+  return g?.projectId ? { ...opts, projectId: g.projectId } : opts;
+}
+
+/**
  * 往某个会话派一次活。
  * 返回 `{ run, member, mentions, queued }`；派不出去抛错（err.code: busy / bad）。
  * `queued` = 这条消息 @ 了但**还没派**的人（群里 @ 多人时排队等前一个跑完）。
@@ -597,6 +727,9 @@ export function drainAllGroupQueues() {
 export function dispatchToThread(threadId, text, opts = {}) {
   const thread = store.getConversation(threadId);
   if (!thread) throw fail('会话不存在');
+
+  // 群挂了项目 → 这次派活就在那个项目里干（见 withGroupProject）
+  opts = withGroupProject(thread, opts);
 
   if (store.activeRun(threadId)) throw fail('他还在跑上一条，等它说完', 'busy');
 

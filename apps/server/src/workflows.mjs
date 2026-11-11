@@ -19,6 +19,10 @@ import * as runs from './runs.mjs';
 import * as cliModels from './cli-models.mjs';
 import * as runtimes from './runtimes.mjs';
 import { dispatchToThread, projectConstitutionBlock } from './dispatch.mjs';
+// 交付声明（2026-11-09 P4/P5）：标记的判据统一在 delivery-claim.mjs（首行/末行都认）；
+// 这里保留 blockedMark 同名导出（老调用方/冒烟兼容），引擎自己的受阻判定改用 claimOf。
+import { blockedMark, blockedReasonOf, claimOf, stripClaimMarks } from './delivery-claim.mjs';
+export { blockedMark };
 
 /** 一步跑多久算「卡住」 */
 const STUCK_MS = 10 * 60 * 1000;
@@ -509,10 +513,11 @@ export function startCurrentStep(runId, { force = false } = {}) {
     task.detail,
     '',
     '做完直接说明结果即可；流程的推进由平台负责，你不用去开下一步。',
-    // **受阻协议**（2026-10-23）：硬阻碍必须亮牌，不许拿"说明一下"蒙混成办完。
-    // 平台认「[受阻]」开头的第一行 → 这一步转已阻塞等人，用户拍板后能接着办。
+    // **受阻协议**（2026-10-23；2026-11-09 P5 标记位置与平台契约对齐）：
+    // 硬阻碍必须亮牌，不许拿"说明一下"蒙混成办完。平台认**最后一行**（或第一行）的
+    // 「[受阻]」→ 这一步转已阻塞等人；第一行留给答案/结果。
     '遇到干不下去的硬阻碍（权限被拒 / 文件写不进去 / 缺必要决策 / 依赖缺失），'
-      + '回话第一行写「[受阻] 一句话原因」，然后说清卡在哪、需要什么（比如申请可写某个目录）；'
+      + '把「[受阻] 一句话原因」单独写在回话**最后一行**（第一行也认），然后说清卡在哪、需要什么（比如申请可写某个目录）；'
       + '能干的部分照常说明、产物照常列。不许硬编一个结果交差。',
   ]
     .filter((x) => x !== '')
@@ -669,12 +674,12 @@ export function onAgentRunFinished(run) {
       result: JSON.stringify(resultOf({ status: '失败', error: run.error })),
       endedAt: store.nowIso(),
     });
-  } else if (blockedMark(run.finalText)) {
+  } else if (claimOf(run.finalText) === 'blocked') {
     /*
      * **员工自报受阻**（2026-10-23，起因：项目面板改造那条流程 —
      *   员工遇到 docs/ 写权限被拒，只能把这事写在小结的散文里，流程照样绿灯走完，
      *   用户全程无感知 —— 「干了一半但报完成」比「失败」更危险，失败会停，这种不会）。
-     * 协议：回话**第一行**以 `[受阻]` 开头 = 这一步没干成，原因跟在后面。
+     * 协议（2026-11-09 P5）：`[受阻]` 在**最后一行或第一行**都认（与平台契约一致）；
      * 引擎认到标记：这一步转「已阻塞」（等人处理，不自动流转、不重试），
      * 全文照存 —— 用户在实例页看到红标 + 原因，拍板后再派。
      */
@@ -1316,23 +1321,18 @@ export function resultOf({ status, finalText = '', error = null } = {}) {
   }
   const stopped = status === '已停止';
   const blocked = status === '受阻';
+  // 受阻时小结优先放"原因"：P5 起标记可能在末行，正文首行不再是原因，直接取标记后面那句
+  const blockedReason = blocked ? blockedReasonOf(finalText) : '';
   return {
     state: stopped ? 'stopped' : blocked ? 'blocked' : 'done',
-    // 受阻的标记前缀在落库时剥掉 —— 界面上由 state 决定怎么标（红字"受阻："），
-    // 原文再带一个 [受阻] 就成 "[受阻] 受阻：[受阻]…" 的叠词了
-    summary: summaryOf(blocked ? String(finalText).replace(/^\s*\[受阻\]\s*/, '') : finalText),
+    // 声明标记（[完成] / [受阻]）在落库时剥掉 —— 界面上由 state 决定怎么标（红字"受阻："）。
+    // 2026-11-09 P5：标记可能在首行也可能在末行（问答题第一行留给答案），用 stripClaimMarks 两头都剥。
+    summary: blockedReason
+      ? blockedReason.slice(0, 90)
+      : summaryOf(stripClaimMarks(finalText)),
     artifacts: artifactsOf(finalText),
     error: null,
   };
-}
-
-/**
- * 员工自报受阻的标记（2026-10-23）：回话**第一个非空行**以 `[受阻]` 开头。
- * 只认行首、只认第一行 —— 正文里提到"受阻"两个字不算（那可能是在转述别的事）。
- */
-export function blockedMark(finalText) {
-  const first = String(finalText ?? '').split('\n').find((l) => l.trim() !== '') ?? '';
-  return first.trimStart().startsWith('[受阻]');
 }
 
 /** 读库里的 result；老数据没这一列 → 拿 note 兜底（至少还能显示一句话/报错） */

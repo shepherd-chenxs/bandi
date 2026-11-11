@@ -43,6 +43,11 @@ export const S = {
   membersExpanded: false,
   memberQuery: '',
   settingsSection: 'prefs',
+  // 组织架构（2026-11-11 Phase 3）：当前选中的子菜单（现在只有 'roles' = 岗位权限清单）
+  orgSection: 'roles',
+  // 岗位与权限（/api/state 下发；roles.mjs 是唯一事实源）
+  roles: [],
+  permissions: {},
   pluginTab: 'installed',   // installed | catalog | personal
   connectors: [],
   catalog: [],
@@ -114,6 +119,14 @@ export const S = {
   // 切页面、刷新重画都不丢 —— 它就存在这儿。
   kbFilter: { statuses: [], assignees: [], projects: [], sources: [] },
   kbHiddenCols: [],         // 「列设置」里整列藏掉的状态列（列 key）。跟筛选一样两块看板共用一套
+  /*
+   * 「只看我的 / 全量」（2026-11-11 用户定）：默认只看**我派的卡**（我建的/派的 + 指定我执行的）。
+   * 验收人 = 派活人：我派的卡我验收；贺韬派的卡（含子卡）归他验收，默认不进我的视图。
+   */
+  // 信箱（2026-11-11）：未读数给左栏徽标；列表页里选「全部 / 未读」
+  noticesUnread: 0,
+  inboxFilter: 'all',
+  kbMine: true,
   kbPane: '',               // 筛选弹层停在哪一维（二级）；空串 = 一级（维度清单）。只在这一次开合里有效
   kbSearch: '',             // 二级里的搜索词（只有负责人/项目有搜索框）；换维、返回、重开都清掉
   kbLast: null,             // 最后一次画出来的看板数据 + 重画回调（筛选变了原地重画用）

@@ -54,7 +54,12 @@ import { esc } from './shell.mjs';
 import { applyRunEvent, clipEnds, createRunProgress, fmtAgo, fmtElapsed, fmtStepDur, progressView } from './run-progress.mjs';
 
 export function createProgressCard({ startedAt = Date.now(), onStop = null } = {}) {
-  const progress = createRunProgress({ startedAt: Number.isFinite(startedAt) ? startedAt : Date.now() });
+  // startedAt 可能是服务端 run 行的 ISO 字符串（重新打开页面接上跑中的运行时走这条路）——
+  // 不先解析的话 Number.isFinite 落空、回落到 Date.now()，每刷一次页面计时就清零
+  // （2026-11-09 用户实报：任务卡讨论区的用时每次重开页面都重新算）。
+  // 主聊天页早就在调用侧 Date.parse 过（chat.mjs attachStream），这里收口到组件里兜底。
+  const began = typeof startedAt === 'string' ? Date.parse(startedAt) : startedAt;
+  const progress = createRunProgress({ startedAt: Number.isFinite(began) ? began : Date.now() });
 
   const el = document.createElement('div');
   el.className = 'rp';

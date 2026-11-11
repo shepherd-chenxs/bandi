@@ -87,7 +87,7 @@ try {
   a = startShell();
   if (!(await waitFor(a, (s) => !!readyOf(s)))) throw new Error('壳 A 没报 READY：' + a.err.slice(-400));
   const ra = readyOf(a);
-  /* URL 可带 `/?token=…`（对外监听后窗口地址带令牌，见 onPort 的注释）—— 只钉骨架格式 */
+  /* URL 可带 `/shell/enter?secret=…`（对外监听后壳自带本机密钥自动进门，见 onPort 的注释）—— 只钉骨架格式 */
   check('协议行格式对', /^BANDI_SHELL READY http:\/\/127\.0\.0\.1:\d+\S* [01]$/.test(ra), ra);
   check('末尾标记 = 1（我们起的，退出要收）', ra.endsWith(' 1'), ra);
   check('控制面真的活着', await isUp(PORT));

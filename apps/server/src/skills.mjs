@@ -252,13 +252,19 @@ export function removeSkill(name) {
 /**
  * 首轮注入给模型的那几行。
  * 只给「名字 + 一句话 + 路径」——不塞正文。正文让它按需去读（渐进披露）。
+ *
+ * P5（2026-11-09）：描述截到 48 字。原样全量注入时，李俊那 3 个技能光清单就 959 字，
+ * 而且 brainstorming 的完整描述是命令式（"You MUST use this before any creative work"），
+ * 直接把问答卡劫持成创作题。清单只该回答"这技能是干什么的"，正文里才写怎么用。
  */
 export function skillDigest(names) {
   const lines = [];
   for (const n of names) {
     const s = getSkill(n);
     if (!s) continue; // 文件被删了，静默跳过，不要让运行挂掉
-    lines.push(`- ${s.name}：${s.description || '（未写描述）'} —— 读文件 ${s.file}`);
+    const desc = String(s.description ?? '').replace(/\s+/g, ' ').trim();
+    const brief = desc.length > 48 ? desc.slice(0, 48).replace(/[，,。；;：:、\s]+$/, '') + '…' : desc;
+    lines.push(`- ${s.name}：${brief || '（未写描述）'} —— 读文件 ${s.file}`);
   }
   return lines;
 }

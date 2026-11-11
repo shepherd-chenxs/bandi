@@ -199,7 +199,7 @@ try {
   check('续接轮再次建卡/探针都正常（钥匙是本轮的新值）',
     /FAKE-PROBE:/.test(reply2) && /FAKE-PROBE:\{"projects":200/.test(reply2), reply2.slice(-160));
   check('任务末尾有「运行钥匙」每轮提醒', /平台接口 · 运行钥匙/.test(reply2), '');
-  check('提醒里写明"现取、别抄旧值"', /BANDI_RUN_TOKEN/.test(reply2) && /不要?把值抄进命令|别.{0,6}抄/.test(reply2), '');
+  check('提醒里写明"现取、别抄旧值"', /BANDI_RUN_TOKEN/.test(reply2) && /不要?把值抄进命令|不要?抄历史|别.{0,6}抄/.test(reply2), '');
 } catch (err) {
   console.log('\n跑挂了：' + String(err?.message ?? err));
   if (slog) console.log('—— 服务端日志尾部 ——\n' + slog.slice(-1200));

@@ -7,6 +7,8 @@ import { closeAddMenu, renderList, showContactsHome, showView } from './contacts
 import { openWorkflows } from './workflows.mjs';
 import { closeRunStream, setListTitle } from './flowpages.mjs';
 import { openExperts, openPlugins } from './experts.mjs';
+import { openOrg } from './org.mjs';
+import { openInbox, paintInboxBadge } from './inbox.mjs';
 import { $, S } from './core.mjs';
 
 
@@ -45,6 +47,10 @@ export async function load(opts = {}) {
   const [s, sk] = await Promise.all([api('/api/state'), api('/api/skills')]);
   S.runtimes = s.runtimes;
   S.personas = s.personas;
+  // 岗位与权限（2026-11-11 Phase 2）：岗位名与"能不能承接团队协作"都从这里来，
+  // 权限口径在服务端 roles.mjs，前端只读。必须赶在 renderList 之前落进 S。
+  S.roles = s.roles ?? [];
+  S.permissions = s.permissions ?? {};
   S.conversations = s.conversations;
   S.repoRoot = s.repoRoot;
   S.me = s.me;
@@ -56,6 +62,9 @@ export async function load(opts = {}) {
   S.bandiSource = s.source ?? 'loopback';
   // 真人名册（2026-10-31 用户概念落地）：通讯录「成员」段与看板派活选真人用
   S.users = s.users ?? [];
+  // 信箱未读数（2026-11-11）：左栏徽标；收件箱页面自己再拉一次列表
+  S.noticesUnread = s.noticesUnread ?? 0;
+  paintInboxBadge();
   S.skills = sk.skills;
   S.skillsRoot = sk.skillsRoot;
   S.hiddenConversations = s.hiddenConversations ?? [];
@@ -195,7 +204,9 @@ export function setNav(nav, opts = {}) {
   document.querySelectorAll('.nav-btn').forEach((b) => b.classList.toggle('active', b.dataset.nav === hl));
   setListTitle(
     nav === 'messages' ? '消息'
+    : nav === 'inbox' ? '信箱'
     : nav === 'contacts' ? '通讯录'
+    : nav === 'org' ? '组织架构'
     : nav === 'workflows' ? '工作流'
     : nav === 'plugins' ? '工作台'
     : nav === 'experts' ? '专家库'
@@ -208,11 +219,11 @@ export function setNav(nav, opts = {}) {
   // 消息页没有"新建"：发起群聊的入口在通讯录（那里能一次选"群聊 or 员工"）
   $('listAction').classList.toggle(
     'hidden',
-    nav === 'settings' || nav === 'workflows' || nav === 'messages' || nav === 'plugins' || nav === 'experts' || nav === 'me',
+    nav === 'settings' || nav === 'org' || nav === 'inbox' || nav === 'workflows' || nav === 'messages' || nav === 'plugins' || nav === 'experts' || nav === 'me',
   );
   // 工作台：宫格首页左栏整个收掉；进插件后左栏让位给插件自己的列表（搜索框对插件没用）。
   // 专家库是整页卡片墙，搜索框同样没用 —— 一起收掉。我的页同理（整页，见 settings.mjs openMe）。
-  $('search').closest('.list-search')?.classList.toggle('hidden', nav === 'plugins' || nav === 'experts' || nav === 'me');
+  $('search').closest('.list-search')?.classList.toggle('hidden', nav === 'plugins' || nav === 'experts' || nav === 'me' || nav === 'org' || nav === 'inbox');
   // 换栏顺手清搜索（2026-10-29）：旧关键词是上一个栏的语境（在代码托管搜仓库名，
   // 切到消息不该还滤着）。只在**真的换了栏**时清 —— 同栏内点行重摆（通讯录点员工详情
   // 也是一遍 setNav('contacts')）不能把用户正打着字的搜索框清掉。
@@ -223,7 +234,7 @@ export function setNav(nav, opts = {}) {
   }
   closeAddMenu();
   // 工作台是整页宫格，二级列表栏在那儿没用 —— 整列收掉（见 CSS 的 body.no-list）。专家库、我的页同理。
-  document.body.classList.toggle('no-list', nav === 'plugins' || nav === 'experts' || nav === 'me');
+  document.body.classList.toggle('no-list', nav === 'plugins' || nav === 'experts' || nav === 'me' || nav === 'inbox');
   /*
    * 占位文案按栏回落（2026-11-02）：各页在自己的 renderList 分支里改 placeholder
    * （搜流程 / 搜项目名 / 搜索设置 …），换栏时先归位默认值，否则从设置切回消息，
@@ -250,6 +261,8 @@ export function setNav(nav, opts = {}) {
   else if (nav === 'workflows') openWorkflows().catch((e) => toast(e.message, 'error'));
   else if (nav === 'plugins') openPlugins().catch((e) => toast(e.message, 'error'));
   else if (nav === 'experts') openExperts().catch((e) => toast(e.message, 'error'));
+  else if (nav === 'org') openOrg(S.orgSection);
+  else if (nav === 'inbox') openInbox();
   // 通讯录（2026-10-24 对齐微信）：切过来先落在空态上，不残留上一段聊天 ——
   // 点左栏的群/员工才进详情。聊天归消息页，这两个模块的主区不共用了。
   else if (nav === 'contacts') showContactsHome();

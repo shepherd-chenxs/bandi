@@ -27,7 +27,7 @@ export function validatePersonaTask(config = {}) {
   const instruction = String(config.instruction ?? '').trim();
   if (!instruction) return '「做什么」还没写 —— 到点了得知道让它干什么';
   const personaId = String(config.personaId ?? '').trim();
-  if (!personaId) return '还没选「交给谁」';
+  if (!personaId) return '还没选「执行对象」（选一个人）';
   if (!store.getPersona(personaId)) return '选的那个人已经不在了，换一个';
   // 工作空间是选填的；填了就得是真项目，别等半夜跑的时候才发现"项目没了"
   const projectId = String(config.projectId ?? '').trim();
@@ -40,7 +40,7 @@ export function describePersonaTask(config = {}) {
   const instr = clip(config.instruction, 44);
   const who = config.personaId ? store.getPersona(String(config.personaId))?.name : null;
   const proj = config.projectId ? store.getProject(String(config.projectId))?.name : null;
-  const head = `交给${who ? `「${who}」` : '员工'}${proj ? `（在「${proj}」）` : ''}`;
+  const head = `指派${who ? `「${who}」` : '员工'}${proj ? `（在「${proj}」）` : ''}`;
   return instr ? `${head}：${instr}` : head;
 }
 

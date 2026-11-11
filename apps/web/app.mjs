@@ -25,7 +25,7 @@ import './js/misc.mjs';
 // 而脚本是 defer 的 module，此刻 body 已经解析完，安全。
 import './js/mobile.mjs';
 
-import { ROLE_SUGGEST, THEME_KEY, applyTheme, esc, readCollapsed, toast } from './js/shell.mjs';
+import { THEME_KEY, applyTheme, esc, readCollapsed, toast } from './js/shell.mjs';
 import { api, closeHelpPop, hideTip, openCombo, post, showTip, tipAnchor, tipTimer, wireDialogHead } from './js/ui.mjs';
 import { load, setNav } from './js/state.mjs';
 import { openSettings } from './js/settings.mjs';
@@ -41,7 +41,7 @@ import { deleteSessionFromLog, memberPicked, renderMemberCandidates } from './js
 import { applyFormDefaults, closeDrawer, pluginMust, refreshGroup, rerenderPanel, runFormFollow } from './js/experts.mjs';
 import { startEvents } from './js/events.mjs';
 import { $, S } from './js/core.mjs';
-import { boot, gAssistantCombo, initRailVersion, openGroupDialog, openPluginAdd, pRuntimeCombo, pSandboxCombo, startVersionWatch } from './js/misc.mjs';
+import { boot, gAssistantCombo, openGroupDialog, openPluginAdd, startVersionWatch } from './js/misc.mjs';
 
 
 
@@ -52,11 +52,8 @@ window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', ()
 
 
 
-// 建议列表只此一份：填进 #roleSuggest（新建对话框与员工详情共用一个 datalist）
-{
-  const dl = document.getElementById('roleSuggest');
-  if (dl) dl.innerHTML = ROLE_SUGGEST.map((r) => `<option value="${esc(r)}"></option>`).join('');
-}
+// 2026-11-11 Phase 2：岗位改成系统内置的固定清单、详情页只读展示 —— 原来的 #roleSuggest
+// 建议列表（新建对话框与员工详情共用）随「新建员工」一起撤掉，这里不再填它。
 
 
 
@@ -713,22 +710,8 @@ $('listAction').onclick = () =>
   : openGroupDialog();
 
 
-// （Runtime 换值 → 同步沙箱选项，由 pRuntimeCombo 的 onChange 负责）
-
-$('pOk').onclick = async (e) => {
-  e.preventDefault();
-  try {
-    const d = await post('/api/personas', {
-      name: $('pName').value, role: $('pRole').value, department: $('pDept').value, instructions: $('pInstr').value,
-      runtime: pRuntimeCombo.value(), sandbox: pSandboxCombo.value(), cwd: $('pCwd').value,
-    });
-    $('personaDlg').close();
-    $('pName').value = ''; $('pRole').value = ''; $('pDept').value = ''; $('pInstr').value = '';
-    await load();
-    // 建完停在详情，好让人接着配他（要聊再点「发消息」）
-    await openDetail(d.persona.id);
-  } catch (err) { toast(err.message, 'error'); }
-};
+// 2026-11-11 Phase 2：新建员工整段撤掉（岗位固定、只能从专家库雇佣），
+// 原来的「创建并进入对话」提交（pOk）随 personaDlg 一起删。
 
 
 
@@ -810,8 +793,8 @@ applyTheme();
 
 boot();
 
-// rail 标下面那行版本号（/api/hello，拿不到就藏）—— 启动即填，不依赖面板数据
-initRailVersion();
+// 版本号在**窗口标题栏**里（壳的 window_title()，见 apps/desktop/src/lib.rs）；
+// 左栏不再挂版本号，前端这里没有要填的东西。
 
 
 // 全局事件流（SSE）：后台有人往任何会话说话，开着的窗口和左栏立刻跟上（见 js/events.mjs）

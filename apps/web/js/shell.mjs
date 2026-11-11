@@ -9,6 +9,7 @@ import { openSchedules, openSkill, openCodeRepoPage } from './skills.mjs';
 import { openConversation, openDetail } from './chat.mjs';
 import { openGroupDetail } from './groups.mjs';
 import { openExperts, openPlugins, openRemotePage, renderPluginPanel } from './experts.mjs';
+import { openInbox } from './inbox.mjs';
 import { S } from './core.mjs';
 
 
@@ -83,6 +84,8 @@ export function savePlace() {
         kbSources: S.kbFilter?.sources ?? [],
         // 「列设置」藏掉的列（2026-10-28）：也是刷新后该保持的界面状态
         kbHiddenCols: S.kbHiddenCols ?? [],
+        // 「只看我的 / 全量」（2026-11-11）：默认只看我派的卡；切到全量也记着
+        kbMine: S.kbMine !== false,
       }),
     );
   } catch { /* 隐私模式下写不了就算了，不影响用 */ }
@@ -114,6 +117,11 @@ export function readPlace() {
 export const ROUTES = {
   messages: () => setNav('messages'),
   contacts: () => setNav('contacts'),
+  // 信箱（2026-11-11）：一级栏整页（平台事实账本）
+  inbox: () => {
+    setNav('inbox', { skipOpen: true });
+    return openInbox();
+  },
   me: () => setNav('me'),
   settings: ({ section } = {}) => {
     // 定时任务已搬去工作台（2026-10-17）：存着的旧位置（settings/schedules）还认，
@@ -147,6 +155,11 @@ export const ROUTES = {
   experts: () => {
     setNav('experts', { skipOpen: true });
     return openExperts();
+  },
+  // 组织架构（2026-11-11 Phase 3）：一级栏 + 左栏子菜单；右区是岗位权限清单（只读）
+  org: ({ section } = {}) => {
+    if (section) S.orgSection = section;
+    return setNav('org');
   },
   workflows: ({ template } = {}) => {
     setNav('workflows', { skipOpen: true });
@@ -253,6 +266,8 @@ export async function restorePlace() {
   if (Array.isArray(p?.kbProjects)) S.kbFilter.projects = p.kbProjects.filter((x) => typeof x === 'string');
   if (Array.isArray(p?.kbSources)) S.kbFilter.sources = p.kbSources.filter((x) => typeof x === 'string');
   if (Array.isArray(p?.kbHiddenCols)) S.kbHiddenCols = p.kbHiddenCols.filter((x) => typeof x === 'string');
+  // 「只看我的 / 全量」：没存过（老位置记录）就按默认「只看我的」
+  if (typeof p?.kbMine === 'boolean') S.kbMine = p.kbMine;
   const route = p?.route && typeof p.route.view === 'string' ? p.route : null;
   if (!route) return setNav('messages');
   try {
@@ -495,33 +510,45 @@ export function toast(msg, kind = 'info') {
 
 
 /*
- * 岗位（2026-10-17）：这人在团队里**是什么**，跟"他会干什么"（技能）是两件事。
- *   · 一个值、可空、自由文本（表单给建议列表，不锁枚举 —— 组织会变）；
- *   · 用在看人、看板、**人工指派时辨认**这几处；
- *   · **引擎不读它** —— 派活仍只认流程节点上点的名（见 workflows.assigneeFor）。
- * 这里只放"怎么显示/怎么拼标签"两件小事，判断逻辑一律在服务端。
+ * 岗位（2026-11-11 Phase 2）：岗位是**系统内置的固定岗位**，权限挂在岗位上（见 roles.mjs）。
+ * 前端只做两件事：**显示岗位名**、**按权限筛**（团队协作群清单、群助手警告）。
+ * 判定口径一律从 /api/state 下发的 `S.roles` 来 —— 不再自己拆 `role` 文本拼名字。
  */
-export const ROLE_SUGGEST = ['产品', '研发', '测试', '运维', '架构', '设计', '项目'];
+export const roleNameOf = (p) => {
+  const key = p?.roleKey ? String(p.roleKey) : '';
+  const hit = key ? (S.roles ?? []).find((r) => r.key === key) : null;
+  if (hit) return hit.name;
+  // 旧数据兜底（迁移前 / 接口没带 roleKey）：`岗位 · 职责` 取第一段
+  return String(p?.role ?? '').split(' · ')[0].trim();
+};
 
+/** 这个岗位有没有某条权限（`perm` 见 roles.mjs 的 PERMISSIONS） */
+export const roleCan = (roleKey, perm) => {
+  const role = (S.roles ?? []).find((r) => r.key === roleKey);
+  return !!role && (role.permissions ?? []).includes(perm);
+};
 
+/** 这个人有没有某条权限（群成员接口可能没带 roleKey → 回落到 role 文本认不出，返回 false） */
+export const personaCan = (p, perm) => roleCan(p?.roleKey, perm);
 
-/** 人员下拉里的标签（2026-10-23 用户拍板）：`李俊（产品经理）` —— 姓名在前，括号里只留岗位。
- *  岗位字段本身是「岗位 · 职责」两段（如「产品经理 · 理需求与写文档」），职责不上标签；
- *  没岗位的人只有名字。 */
+/** 人员下拉里的标签（2026-10-23 用户拍板）：`李俊（产品经理）` —— 姓名在前，括号里只留岗位名；
+ *  没岗位的人只有名字。岗位名从 roleKey 取（岗位固定之后不再拼「岗位 · 职责」）。 */
 export const personLabel = (p) => {
-  const role = String(p.role ?? '').split(' · ')[0].trim();
+  const role = roleNameOf(p);
   return role ? `${p.name}（${role}）` : p.name;
 };
 
+/** 真人显示名（2026-11-09 用户："昵称不能只在我的页面里生效"）：昵称优先，没设退回账号名，
+ *  查无此人 → null（调用方好接 `??` 兜底）。账号名仍是**身份口径** —— 「是不是自己」的
+ *  判断、署名匹配都拿它比；这里只管"画出来叫什么"，不管认人。 */
+export const userLabel = (u) => u?.nickname || u?.name || null;
 
 
-/** 通讯录那一行的副标题：只显示岗位（sandbox/运行时是技术细节，只在详情页看） */
+
+/** 通讯录那一行的副标题：只显示岗位名（sandbox/运行时是技术细节，只在详情页看） */
 // 2026-10-23 用户拍板：运行时 id（rt-xxx）对人没有意义，不再上列表；
 // 没岗位的人退回「自动」——只保留这一个人类能读懂的运行时值，其余一律不显示
-export const personSubtitle = (p) => {
-  if (p.role) return String(p.role);
-  return p.runtime === 'auto' ? '自动' : '';
-};
+export const personSubtitle = (p) => roleNameOf(p) || (p.runtime === 'auto' ? '自动' : '');
 
 /** 列表里单独摆一格「运行时」时的文案（项目成员 tab，2026-10-24）：
  *  口径跟 personSubtitle 后半截是同一条 —— **只有 auto 能上列表**，显示「自动」；

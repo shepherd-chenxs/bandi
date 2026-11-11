@@ -272,6 +272,16 @@ try {
     JSON.stringify(meNick.body?.user ?? {}));
   check('昵称**不改账号名**（名字还是甲，署名不受影响）', meNick.body?.user?.name === '甲',
     String(meNick.body?.user?.name));
+  /*
+   * 名册也带昵称（2026-11-09 昵称全端生效）：通讯录成员段、聊天里别人的署名、
+   * 派活选真人读的都是 /api/state 的 users（listUserBriefs）—— 它不带昵称的话，
+   * 昵称就还是只活在「我的」页，正是用户点名要改掉的那个状态。
+   */
+  const stNick = await call('GET', '/api/state', { cookie: sidA });
+  const briefNick = (stNick.body?.users ?? []).find((u) => u.id === meAId);
+  check('/api/state 名册带昵称（通讯录 / 署名 / 派活选人的显示名源）',
+    stNick.status === 200 && briefNick?.nickname === '老 板' && briefNick?.name === '甲',
+    JSON.stringify(briefNick ?? null));
   const nickLong = await call('PATCH', `/api/users/${encodeURIComponent(meAId)}`, { cookie: sidA, body: { nickname: '一'.repeat(21) } });
   check('超过 20 个字 → 400 E3813', nickLong.status === 400 && nickLong.body?.code === 'E3813',
     `${nickLong.status} ${nickLong.body?.code ?? ''}`);
@@ -281,6 +291,29 @@ try {
   const meAfterClear = await call('GET', '/api/me', { cookie: sidA });
   check('清空后 /api/me 的 nickname 也是 null', meAfterClear.body?.user?.nickname === null,
     String(meAfterClear.body?.user?.nickname));
+
+  /* ============ ⑤d 修改密码：本机只转发，真验证在中枢 ============ */
+  console.log('\n⑤d 修改密码：/api/me/password 转发中枢 /v1/auth/password（假中枢同语义）');
+  const pwAnon = await call('POST', '/api/me/password', { body: { oldPassword: '甲-pass-123', newPassword: 'new-pass-456' } });
+  check('没登录 → 401 E3810（operator 没有中枢账号可改）',
+    pwAnon.status === 401 && pwAnon.body?.code === 'E3810', `${pwAnon.status} ${pwAnon.body?.code ?? ''}`);
+  const pwShort = await call('POST', '/api/me/password', { cookie: sidA, body: { oldPassword: '甲-pass-123', newPassword: 'short' } });
+  check('新密码太短 → 400 E3814（本机先拦，不出网）',
+    pwShort.status === 400 && pwShort.body?.code === 'E3814', `${pwShort.status} ${pwShort.body?.code ?? ''}`);
+  const pwWrongOld = await call('POST', '/api/me/password', { cookie: sidA, body: { oldPassword: 'wrong-pass-1', newPassword: 'new-pass-456' } });
+  check('旧密码错 → 400 H1004（中枢原话带回来）',
+    pwWrongOld.status === 400 && pwWrongOld.body?.code === 'H1004', `${pwWrongOld.status} ${pwWrongOld.body?.code ?? ''}`);
+  const pwOk = await call('POST', '/api/me/password', { cookie: sidA, body: { oldPassword: '甲-pass-123', newPassword: 'new-pass-456' } });
+  check('旧密码对 → 200 ok', pwOk.status === 200 && pwOk.body?.ok === true, `${pwOk.status} ${pwOk.raw?.slice(0, 60)}`);
+  const reloginNew = await hubLogin(BASE, { username: '甲', password: 'new-pass-456', origin: BASE });
+  check('新密码真的能登录（中枢侧生效，不靠本机记着）', reloginNew.status === 302 && !!reloginNew.sid,
+    `HTTP ${reloginNew.status}`);
+  const reloginOld = await hubLogin(BASE, { username: '甲', password: '甲-pass-123', origin: BASE });
+  check('旧密码从此进不来', reloginOld.status === 401, `HTTP ${reloginOld.status}`);
+  // 改回去：后面 ⑥~⑨ 还拿 甲-pass-123 当甲的密码用
+  const sidNew = `bandi_sid=${reloginNew.sid}`;
+  const pwBack = await call('POST', '/api/me/password', { cookie: sidNew, body: { oldPassword: 'new-pass-456', newPassword: '甲-pass-123' } });
+  check('再改回去 → 200（后续段落照旧用原密码）', pwBack.status === 200 && pwBack.body?.ok === true, String(pwBack.status));
 
   /* ============ ⑥ 退出登录 ============ */
   console.log('\n⑥ 退出登录：会话真删（回环退回 operator）');

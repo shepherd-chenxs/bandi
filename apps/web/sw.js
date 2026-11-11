@@ -19,7 +19,7 @@
  * 这个文件原来是 837 行里 722 行注释 —— 改缓存策略前得先翻过 160 个版本。
  * 改法不变：动静态清单就 VERSION +1，并去那边补一条"为什么进这一版"。
  */
-const VERSION = 'v192';
+const VERSION = 'v214';
 const CACHE = `bandi-static-${VERSION}`;
 
 /*
@@ -62,6 +62,8 @@ const CORE = [
   '/manifest.webmanifest',
   '/icons/icon-192.png',
   '/icons/icon-512.png',
+  '/icons/favicon-32.png',
+  '/icons/favicon-16.png',
   ...JS_MODULES,
 ];
 

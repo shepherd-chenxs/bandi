@@ -6,7 +6,7 @@
  * 手机那种 ABC 的"）：上方一组入口（群聊 / 部门，点进去是各自的列表），下方全部员工
  * 按拼音首字母 A–Z 分组 + 右侧索引条。**只走窄屏**，桌面仍是部门分组。
  * A–Z 的首字母判定沿用 2026-10-20 那版的边界字方案（见 nameInitial 注释）。 */
-import { esc, personSubtitle, saveCollapsed, toast } from './shell.mjs';
+import { esc, personSubtitle, saveCollapsed, toast, userLabel } from './shell.mjs';
 import { ICON_CLOUD, ICON_FOLDER, cut, hhmm, initial, personaAvatar, plain } from './ui.mjs';
 import { openSettings, settingsGroups } from './settings.mjs';
 import { archivedEntryHTML, closeCtxMenu, convDisplayName, enterArchiveView, openConversationSafe, renderArchiveList } from './listmenu.mjs';
@@ -17,7 +17,10 @@ import { convUnread, openDetail } from './chat.mjs';
 import { gidOf, openGroupDetail } from './groups.mjs';
 import { $, S } from './core.mjs';
 import { openProjectsPage, renderProjectList } from './projects.mjs';
-import { openGroupDialog, openPersonaDialog } from './misc.mjs';
+import { openGroupDialog } from './misc.mjs';
+// 组织架构（2026-11-11 Phase 3）：左栏子菜单与右区页面；两者互相 import 但只在运行时调用
+// （settings ↔ contacts 早就是同一个模式，函数声明提升保证了初始化顺序）
+import { openOrg, renderOrgList } from './org.mjs';
 
 
 
@@ -155,10 +158,10 @@ const isNarrowScreen = () => MQ_NARROW.matches;
 
 
 /**
- * 部门建议列表（#deptSuggest，新建对话框与员工详情共用一个 datalist）：
+ * 部门建议列表（#deptSuggest，员工详情用它）：
  * 库里已有哪些部门就建议哪些，按拼音排。
  * 自由文本字段最怕「技术部 / 技术 部」散成两个组 —— 建议列表是唯一的防手滑手段，
- * 每次开对话框 / 开详情前刷一遍（新建员工之后列表就多一个可选项）。
+ * 每次开详情前刷一遍（部门改了之后列表就多一个可选项）。
  */
 export function refreshDeptSuggest() {
   const dl = $('deptSuggest');
@@ -191,6 +194,8 @@ export function renderList() {
    * 清一下按钮就没一次。别的分支照旧"先清后画"。
    */
   if (S.nav === 'plugins' && S.route?.view === 'codeRepos') return;
+  // 信箱（2026-11-11）：整页通知列表，左栏列表不归它（no-list 已把整列收掉）
+  if (S.nav === 'inbox') return;
   /*
    * 左栏底部固定条（#listFoot）每次重画都先清空：它挂的是「已归档」这种**跨列表**的入口，
    * 不该跟着某一份数据残留到通讯录/设置页上。哪个分支需要，自己再往里写。
@@ -199,6 +204,12 @@ export function renderList() {
   if (foot) foot.innerHTML = '';
   const q = S.filter.trim().toLowerCase();
   const match = (name) => !q || String(name || '').toLowerCase().includes(q);
+
+  // 组织架构（2026-11-11 Phase 3）：左栏是它的子菜单；右区由 openOrg 画
+  if (S.nav === 'org') {
+    renderOrgList();
+    return;
+  }
 
   /* 「已移除的会话」子视图已随归档功能一并删除（2026-10-20，用户要求）：
      「不显示」不再往某个归档列表里放，它的记录只在「聊天记录」抽屉里可见；
@@ -512,7 +523,7 @@ export function renderList() {
   // 自己不摆进来（2026-11-04 用户实报"用户不要显示在这里"）：通讯录是找别人的名册，
   // 自己（me = 回环 / 令牌的本机自动登录用户，或登录用户本人）摆在里面没有意义。
   // 只过滤通讯录这一处 —— 看板派活那些读的是全量 S.users，自己给自己派活是合法操作。
-  const users = (S.users ?? []).filter((u) => u.id !== S.me?.id && match(u.name));
+  const users = (S.users ?? []).filter((u) => u.id !== S.me?.id && (match(u.name) || match(u.nickname)));
   // 名册里除了自己还有没有别人：单人部署时「成员」段整段不画 ——
   // 摆一个"成员 0 · 还没有成员"反而误导（人其实有，就是自己）。
   const hasOtherUsers = (S.users ?? []).some((u) => u.id !== S.me?.id);
@@ -600,14 +611,16 @@ const personRowHTML = (p) => `<div class="item ${S.persona && S.persona.id === p
 /**
  * 真人行（2026-10-31 用户概念落地）：只摆名字 —— 成员没有会话、没有忙闲，
  * 点不出详情页（要管账号去「设置 → 用户」），所以不给 data-* 也不绑点击。
+ * 昵称全端生效（2026-11-09 用户："昵称不能只在我的页面里生效"）：这里画的是昵称
+ * （没设退回账号名），头像也取昵称首字 —— 跟「我的」身份卡同一个读法；搜索两边都能搜到。
  * ⚠️ 但要给 `data-nodetail`（2026-11-03）：mobile.mjs 的列表点击委托兜着 `.item`，
  * 不标记的话手机上点成员行会进一个**空的详情态**（主区摆出来却没人往里画 ——
  * 用户实报"详情页空白"的另一半）。
  */
 const userRowHTML = (u) => `<div class="item" data-nodetail>
-        <div class="avatar">${esc(initial(u.name))}</div>
+        <div class="avatar">${esc(initial(userLabel(u)))}</div>
         <div class="who">
-          <div class="line1"><b>${esc(u.name)}</b></div>
+          <div class="line1"><b>${esc(userLabel(u))}</b></div>
           ${u.builtin ? '<div class="line2">管理员</div>' : ''}
         </div>
       </div>`;
@@ -1065,10 +1078,11 @@ export function openAddMenu(items, anchor = null, opts = {}) {
 
 
 
-/** 通讯录的「＋」：建群还是建员工 */
+/** 通讯录的「＋」：发起群聊。
+ *  「添加数字员工」入口 2026-11-11 撤掉（用户拍板：不保留新建员工，岗位固定、只能从专家库雇佣；
+ *  自建私有专家的入口以后单独做）。 */
 export const contactAddItems = () => [
   { label: '发起群聊', hint: '拉几个人组个项目群，@ 谁谁接话', icon: ICON_CHAT, run: openGroupDialog },
-  { label: '添加数字员工', hint: '配一个 agent CLI 当同事', icon: ICON_PERSON, run: openPersonaDialog },
 ];
 
 
@@ -1123,6 +1137,8 @@ export function showView(which) {
   // 只损失那一页，不该把整个 showView 炸掉连累所有页面白屏
   on('detailView', which === 'detail');
   on('settingsView', which === 'settings');
+  on('orgView', which === 'org');
+  on('inboxView', which === 'inbox');
   on('groupView', which === 'group');
   on('expertsView', which === 'experts');
   on('pluginView', which === 'plugin');

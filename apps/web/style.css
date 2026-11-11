@@ -288,30 +288,26 @@ body.no-list { grid-template-columns: 68px minmax(0, 1fr); }
 body.no-list .list-panel { display: none; }
 
 /* ---------- 一级：图标栏 ---------- */
+/* 顶部字标（2026-11-10）：纯文字「班底」+ BANDI，无底色块——图形标与标题栏图标重复，
+   字标补住顶部空白又不抢戏。颜色走 --text/--dim，深浅主题自动适配。 */
 .rail { background: var(--rail); border-right: 1px solid var(--line);
-        display: flex; flex-direction: column; align-items: center; padding: 12px 0; gap: 6px; }
-/* 品牌块：标 + 版本号。原来标自己带 margin-bottom，现在整块一起下压 10px，
-   版本号出现/消失都不会把下面的按钮顶得忽高忽低。 */
-.rail-brand { display: grid; justify-items: center; gap: 5px; margin-bottom: 10px; }
-.rail-logo { width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center;
-             font-weight: 700; color: var(--on-solid); background: linear-gradient(135deg, var(--logo-1), var(--logo-2)); }
-/* 版本号（2026-11-05 加回）：rail 标下面那行小字。
-   10px / --dim：深浅两套底上都过 4.5:1（#5f646c on #f0f1f3 ≈ 5.2，#9b9ea3 on #0b0b0d ≈ 7.2），
-   比导航标签（11px）小一档但不发虚；tabular-nums 让 1 和 5 不等宽时也不会左右跳。
-   负外边距把命中区撑到 14px 高而不占布局 —— 它是可点的（复制版本号），不是死字。 */
-.rail-ver { border: 0; background: transparent; padding: 2px 4px; margin: -2px -4px;
-            font: inherit; font-size: 10px; line-height: 1.2; letter-spacing: .2px;
-            font-variant-numeric: tabular-nums; white-space: nowrap;
-            color: var(--dim); cursor: pointer; border-radius: 4px; }
-.rail-ver:hover { color: var(--text); background: var(--rail-hover); }
-.rail-ver:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.rail-ver[hidden] { display: none; }
+        display: flex; flex-direction: column; align-items: center; padding: 14px 0 12px; gap: 6px; }
+.rail-brand { display: grid; justify-items: center; gap: 4px; margin-bottom: 12px;
+              line-height: 1; user-select: none; }
+.rail-brand-zh { font-size: 15px; font-weight: 600; letter-spacing: 2px; text-indent: 2px; color: var(--text); }
+.rail-brand-en { font-size: 9px; font-weight: 500; letter-spacing: 3px; text-indent: 3px; color: var(--dim); }
 .nav-btn { width: 56px; border: 0; background: transparent; color: var(--dim); cursor: pointer;
            display: grid; justify-items: center; gap: 3px; padding: 8px 0; border-radius: 10px;
            font: inherit; font-size: 11px; }
 .nav-btn:hover { background: var(--rail-hover); color: var(--text); }
 .nav-btn.active { color: var(--accent); background: var(--rail-active); }
 .nav-btn svg { width: 22px; height: 22px; }
+/* 信箱未读角标（2026-11-11）：左栏一级栏上的小圆点数字；0 时 JS 把它藏起来 */
+.nav-btn { position: relative; }
+.rail-badge { position: absolute; top: 4px; right: 7px; min-width: 16px; height: 16px; padding: 0 4px;
+              border-radius: 8px; background: var(--bad); color: #fff; font-size: 10px; line-height: 16px;
+              text-align: center; font-weight: 600; }
+.rail-badge[hidden] { display: none; }
 
 /* ---------- 二级：列表 ---------- */
 /* 列表栏底色用 --card 而不是 --side：iOS 里"列表"是浮在页面底上的那张卡，
@@ -644,6 +640,14 @@ main { min-height: 0; }
    （技能页 2026-10-15 搬进「设置 → 技能」，主区就是 #settingsView，原来那条 #skillView 删了。） */
 #settingsView { display: none; height: 100%; overflow: auto; padding-bottom: 40px; background: var(--side); }
 #settingsView.shown { display: block; }
+/* 组织架构（2026-11-11 Phase 3）：右侧整页 + 左栏子菜单（与设置页同一形态，不走 no-list） */
+#orgView { display: none; height: 100%; overflow: auto; padding-bottom: 40px; background: var(--side); }
+#orgView.shown { display: block; }
+#orgView .detail-body { max-width: 1200px; }
+/* 信箱（2026-11-11）：整页通知列表（左栏整列收掉，同专家库/我的） */
+#inboxView { display: none; height: 100%; overflow: auto; padding-bottom: 40px; background: var(--side); }
+#inboxView.shown { display: block; }
+#inboxView .detail-body { max-width: 980px; }
 #placeholderView { display: none; height: 100%; overflow: auto; padding-bottom: 40px; }
 #placeholderView.shown { display: block; }
 #groupView { display: none; height: 100%; overflow: auto; padding-bottom: 40px; background: var(--side); }
@@ -661,7 +665,7 @@ main { min-height: 0; }
    ⚠️ #pluginView 2026-10-27 摘出来（用户实报"导航条右边空一块"）：fixed-head 导航条的
    负 margin 只能铺到 .detail-body 边缘，够不着 gutter —— 槽位常驻 = 条右边永远一条空。
    插件系页面切页都是整页重画，滚动条出现/消失的 11px 位移只发生在切换瞬间，可接受。 */
-#detailView, #settingsView, #groupView, #placeholderView { scrollbar-gutter: stable; }
+#detailView, #settingsView, #orgView, #inboxView, #groupView, #placeholderView { scrollbar-gutter: stable; }
 #pluginView.shown { display: block; }
 #pluginView .detail-body { max-width: 1400px; }
 /* ⚠️ 新加视图**必须**在这里登记：没有 height:100%，高内容会把整页撑开
@@ -1793,8 +1797,10 @@ dialog.pj-add-dlg .dlg-head { margin: 0 -20px; padding: 14px 12px 6px 20px; }
 .sec-head-actions .combo-btn { width: auto; border: none; background: transparent; padding: 4px 2px; }
 .sec-head-actions .combo-btn:hover { border: none; background: var(--input); }
 
-/* 员工详情「任务」页（2026-10-18）：竖着分堆，卡片直接复用看板那张（.kb-card）。
-   不铺六列是因为这一页是主区的一栏，放不下；堆的**顺序**照看板的生命周期走。 */
+/* 员工详情「任务」页（2026-11-09 用户：「任务做成表格」「按照日期来」「上方加状态筛选」）——
+   原来是竖着摞的看板卡片（.kb-card）。卡片在看板上是对的（列里能拖、一叠一叠看），
+   到了这一页就不合适：主区一栏宽、又不给拖，"面"只是白占纵向空间，十件活要滚三屏。
+   现在是表格：一行一件事，任务 / 状态 / 时间三列对齐；表按天分段，状态筛选在表头上。 */
 .pt-head { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
 .pt-head button { margin-left: auto; flex: 0 0 auto; }
 /* 任务页的「刷新」点下去会把文案换成「刷新中…」：它是右对齐的，宽度一变左边缘就跟着跳，
@@ -1802,22 +1808,79 @@ dialog.pj-add-dlg .dlg-head { margin: 0 -20px; padding: 14px 12px 6px 20px; }
 .pt-head #dTasksRefresh { min-width: 88px; }
 .pt-sum { font-size: 12.5px; color: var(--dim); }
 .pt-sum b { color: var(--text); font-size: 13.5px; }
+/* 状态筛选条（2026-11-09 用户：「不要单独列出来，而是在上方加状态筛选」）——
+   上一版把「要人管」钉成表头一个跨天段：既占掉小半屏，又和日期段抢同一批行。
+   现在它是一颗筛选胶囊，表格严格按天分组；只看卡着的活点一下就行。 */
+.pt-filters { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+.pt-filter { display: inline-flex; align-items: center; gap: 6px; line-height: 1.5;
+             border: 1px solid transparent; background: var(--chip); color: var(--dim);
+             border-radius: 99px; padding: 4px 11px; font-size: 12px; cursor: pointer;
+             transition: color .12s ease, background .12s ease, border-color .12s ease; }
+.pt-filter:hover { color: var(--text); }
+.pt-filter.on { background: var(--panel); border-color: var(--line); color: var(--text);
+                font-weight: 500; box-shadow: 0 1px 2px var(--shadow); }
+.pt-fnum { font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; }
+.pt-filter.on .pt-fnum { color: var(--text); }
+/* 筛空时那句"看全部 N 件"是**动作**、不是筛选档 —— 不做成胶囊，免得看着像一颗没选中的档 */
+.pt-reset { border: 0; background: none; padding: 2px 0; font-size: 12.5px; color: var(--accent); cursor: pointer; }
+.pt-reset:hover { text-decoration: underline; }
 .pt-num { font-size: 11px; font-weight: 400; color: var(--dim); background: var(--chip);
           border-radius: 99px; padding: 2px 7px; margin-left: 7px; }
-.pt-hint { font-weight: 400; font-size: 11.5px; color: var(--dim); margin-left: 8px; }
-.pt-cards { display: flex; flex-direction: column; gap: 8px; }
-.pt-note { font-size: 12px; color: var(--dim); line-height: 1.8; }
+.pt-note { font-size: 12px; color: var(--dim); line-height: 1.8; margin-top: 14px; }
 .pt-note b { color: var(--text); font-weight: 500; }
+
+.pt-tbl { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 12.5px; }
+/* 状态、时间两列定宽，剩下的全给任务列。时间只有 HH:mm（日期在分组标题里，见
+   chat.mjs 的 taskDayLabel），所以这一列能压得很窄；用 px 不用百分比，
+   窄屏下任务标题宁肯多换一行，也不该把时间挤没了 */
+.pt-col-state { width: 76px; }
+.pt-col-at { width: 60px; }
+.pt-tbl th { text-align: left; font-weight: 400; font-size: 11.5px; color: var(--dim);
+             padding: 0 10px 7px; border-bottom: 1px solid var(--line); }
+.pt-tbl td { padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+/* 每段最后一行不留线：段与段之间由分段行的上边线分开，两条线挨着就是双线 */
+.pt-tbl tbody tr:last-child td { border-bottom: 0; }
+/* 分段行：段名 + 件数 + 一句"这段里都是些什么状态"（跨三列，列宽跟下面的行同一套） */
+.pt-sec td { padding: 16px 10px 7px; border-bottom: 0; }
+.pt-tbl tbody + tbody .pt-sec td { border-top: 1px solid var(--line); padding-top: 15px; }
+.pt-sec-name { font-size: var(--t-sec); font-weight: var(--w-title); }
+.pt-row { cursor: pointer; }
+.pt-row td { transition: background .12s ease; }
+.pt-row:hover td { background: var(--hover); }
+/* 手工建的卡不再画左侧那条蓝竖条（2026-11-09 用户：截图圈住它「这个去掉，不好看」）。
+   那标记本来是从看板卡上抄来的；到了表格里，连续几行的手工卡竖条首尾相接，
+   看着像一条贯穿整段的装饰线，而不是"这一行是人加的"。身份由标题下那颗「手动」标签说清。 */
+.pt-title { font-size: 13px; line-height: 1.45; word-break: break-word; }
+.pt-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 5px; }
+.pt-state { font-size: 11.5px; white-space: nowrap; }
+/* 状态色照看板列（跟 .ct-status 同一套 token）：颜色跟着**列**走，不按中文词面自己猜 */
+.pt-state.idea { color: var(--st-idea); }
+.pt-state.todo { color: var(--st-todo); }
+.pt-state.doing { color: var(--st-doing); }
+.pt-state.review { color: var(--st-review); }
+.pt-state.blocked { color: var(--st-blocked); }
+.pt-state.failed { color: var(--st-failed); }
+.pt-state.done { color: var(--st-done); }
+.pt-state.cancelled { color: var(--st-cancelled); }
+.pt-state.other { color: var(--st-other); }
+/* 时间靠右（浏览器历史那一栏也是右对齐的）：眼睛沿右边缘就能扫出"哪件是刚动的" */
+.pt-td-at { font-size: 11.5px; color: var(--dim); white-space: nowrap; text-align: right;
+            font-variant-numeric: tabular-nums; }
+.pt-tbl th.pt-th-at { text-align: right; }
+/* 手机整页（≤560px）：两列定宽各收一档，内边距也压一压 —— 360 宽的屏上
+   任务列还能剩到 ~180px，标题不至于一字一行 */
+@media (max-width: 560px) {
+  .pt-col-state { width: 66px; }
+  .pt-col-at { width: 52px; }
+  .pt-tbl th, .pt-tbl td { padding-left: 7px; padding-right: 7px; }
+  .pt-tags { margin-top: 4px; }
+}
 
 .group-title { font-size: var(--t-sec); font-weight: var(--w-title); margin: 0 0 8px; }
 /* `min-width: 0` 是给 grid/flex 父级留的：`.group` 一旦被当成 flex item 放进窄列，
    默认的"最小内容宽"会让里面那句不换行的长文**把整块撑出容器**（实测浅色下右边被截掉半句）。 */
 .group { border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
          padding: 2px 16px; margin-bottom: 22px; min-width: 0; }
-/* 员工任务页的分堆**不再套外面这层卡片**：里面装的本来就是一张张 .kb-card，
-   外面再包一个带边框底色的盒子就成了"卡中卡"（2026-10-20 用户截图：去掉外面这个卡片）。
-   写成 .group.pt-group 压在上面的 .group 之后，且只影响这一页（.group 别处在用，不能动）。 */
-.group.pt-group { border: 0; background: none; border-radius: 0; padding: 0; }
 .form-row { display: grid; grid-template-columns: 132px minmax(0, 1fr);
             gap: 16px; align-items: center; padding: 13px 0; border-top: 1px solid var(--line); }
 .form-row:first-child { border-top: 0; }
@@ -2142,6 +2205,11 @@ input.locked:focus { outline: none; border-color: var(--line); }
 /* 「连接 GitHub」跟输入框同一行、贴在行尾（2026-10-26 七改，用户："按钮放到输入框后面"）；
    输入框 flex:1 吃掉剩余宽度，按钮不缩。 */
 .gr-dlg-row .primary { padding: 0 18px; }
+/* 修改密码弹窗（2026-11-10 用户："标签长度一致，后面的输入框对齐"）：
+   三栏标签宽度钉死取最宽的「确认新密码」，输入框左缘对齐。
+   作用域收在 pw-dlg —— GitHub 连接弹窗（gr-conn-dlg 裸类）标签短、行里还带按钮，
+   不跟着变宽。 */
+.gr-conn-dlg.pw-dlg .row-label { flex: 0 0 72px; }
 /* 弹窗里的只读令牌框（2026-10-26 十二改，用户："凸显输入框，弱化提示"）：
    input.locked 公共类是"灰底灰字"的禁用相（设置页 AI Key 也在用，不动公共类），
    本弹窗覆盖成白底 + 正文色 + 等宽字 —— 掩码值读起来像真实令牌，是这块的主角。 */
@@ -2468,6 +2536,12 @@ button.gr-pr-check:hover { background: var(--side); }
 .k-row em { font-style: normal; color: var(--dim); font-size: 11.5px;
             margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .k-row .k-ok { color: var(--accent); flex: none; font-weight: 600; }
+
+/* 群 · 关联项目弹窗（2026-11-11）：沿用 .k-row；只补"被别的群占着"的禁用态和一条分隔线。
+   禁用行必须**看得出不能点** —— 光靠 title 提示，手一滑就点下去然后发现没反应。 */
+.k-row[disabled] { opacity: .5; cursor: default; }
+.k-row[disabled]:hover { background: none; }
+.k-sep { height: 1px; background: var(--line); margin: 6px 4px; }
 
 /* 小号图标按钮：模型行、技能行、toast 共用，别比整行信息更抢眼 */
 .mini.sm { width: 20px; height: 20px; font-size: 11.5px; border-radius: 5px;
@@ -3171,23 +3245,25 @@ dialog > form { padding: 0 20px 20px; }
    dialog 默认的滚动区会把它直接裁掉（撞过）。这个弹窗要 overflow: visible。
    教训：对话框里放下拉，别把它放在最后一个字段，否则得单独开这个口子。 */
 #flowStartDlg { width: 520px; overflow: visible; }
-/* 新建任务：项目 / 执行人两个下拉在弹窗里，展开时会超出底边 ——
-   dialog 默认的滚动区会把它直接裁掉（同 flowStartDlg，撞过）。
-   宽度比默认 480 宽一档（2026-10-26 用户："这个框宽一些"）：标题、描述、状态/执行方式两列、
-   执行人/流程都是整行控件，480 的时候两列下拉和描述框都挤成窄条。 */
-#taskDlg { width: 640px; overflow: visible; }
-/* 轻快风（2026-10-26 用户给了截图「我想要这种效果」）：大标题、无边框描述、
-   字段收成底部一排胶囊、动作条（继续创建 / 创建任务 Ctrl↵）压底。 */
+/* 新建任务（2026-11-11 用户：照「新建定时任务」弹窗改成左右两栏）：
+   骨架直接复用 .sch-cols（见下面 dialog.sch-dlg 一节的说明）——
+   左 = 要写的（任务标题 + 描述，描述撑满高度）；右 = 要选的（状态 / 执行方式 / 执行对象 / 关联项目）。
+   尺寸也照定时任务：定宽定高、里面 flex 分配 —— 换执行方式（执行对象那格换挂载）时窗口不跳。
+   ⚠️ overflow: visible —— 下拉是 .combo 自绘浮层，dialog 默认 overflow:auto 会把
+   往外伸的那截裁掉，看着就是"点了没反应"。 */
+#taskDlg {
+  width: 920px;
+  height: min(660px, 88vh);
+  display: flex;
+  flex-direction: column;
+  overflow: visible;
+}
+#taskDlg > form { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 #taskDlg .tk-crumb { font-size: 12px; font-weight: 400; color: var(--dim); }
-#taskDlg #tkTitle { font-size: 17px; font-weight: 700; border: none; background: none; padding: 0; }
-#taskDlg #tkDesc { border: none; background: none; padding: 0; resize: vertical;
-  min-height: 110px; line-height: 1.6; }
-/* 胶囊：圆边框包住 combo 按钮；按钮自己不再带边框底色 —— 一颗胶囊 = 一个字段值。
-   胶囊里只有值没有字段名（状态/执行方式/人名/项目名各自能看懂自己是谁）。 */
-#taskDlg .tk-meta-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
-#taskDlg .tk-chip { border: 1px solid var(--line); border-radius: 999px; }
-#taskDlg .tk-chip .combo-btn { width: auto; border: none; background: none; border-radius: 999px;
-  padding: 5px 9px 5px 12px; font-size: 12px; gap: 6px; }
+#taskDlg .sch-cols { margin-top: 10px; }
+/* 左栏：名字用大字（对齐定时任务「名字」的观感），描述吃掉剩余高度 */
+#taskDlg .sch-left #tkTitle { font-size: var(--t-page); font-weight: var(--w-title); }
+#taskDlg .sch-left #tkDesc { flex: 1 1 auto; min-height: 0; margin-top: 12px; line-height: 1.6; resize: none; }
 /* 底部动作条：左边「立即开始」的长说明自己换行，右边继续创建 + 创建任务压住不动 */
 #taskDlg .tk-foot { display: flex; align-items: flex-start; gap: 12px; margin-top: 12px;
   border-top: 1px solid var(--line); padding-top: 12px; }
@@ -3195,12 +3271,10 @@ dialog > form { padding: 0 20px 20px; }
 #taskDlg .tk-foot-actions { display: flex; align-items: center; gap: 14px; flex: 0 0 auto; }
 #taskDlg #tkOk kbd { font-size: 11px; font-weight: 400; border: 1px solid var(--line);
   border-radius: 4px; padding: 1px 5px; opacity: .8; margin-left: 2px; }
-/* 「放大成抽屉」（2026-10-26 用户点了 ⤢ 后效果不对）：通用的 dialog.full 只有 0-1-1 权重，
-   宽度被 #taskDlg（1-0-0）压住 —— 结果宽没变、高却撑到 94vh，内容全挤在顶上。
-   这里用同权重的 #taskDlg.full 才打得开；form 转列布局让描述吃掉中间空档、动作条钉底。 */
+/* 「放大成抽屉」（带 data-max 的弹窗才有这颗按钮）：两栏骨架已经在 flex 上，
+   .full 只要接管尺寸，描述会自己吃掉多出来的高度。 */
 #taskDlg.full { width: 96vw; max-width: 96vw; height: 94vh; max-height: 94vh; }
 #taskDlg.full > form { display: flex; flex-direction: column; height: 100%; }
-#taskDlg.full #tkDesc { flex: 1 1 auto; min-height: 110px; }
 dialog::backdrop { background: var(--scrim); }
 
 /* ---------- 任务卡弹窗（2026-10-19） ----------
@@ -3400,6 +3474,10 @@ dialog.sch-dlg > form { flex: 1 1 auto; min-height: 0; display: flex; flex-direc
             color: var(--dim); font-size: 12.5px; cursor: pointer; }
 .more-row:hover { color: var(--text); }
 .hint-line { margin-top: 11px; font-size: 11.5px; color: var(--dim); }
+/* 岗位固定（2026-11-11 Phase 2）：员工详情的岗位是只读展示（岗位不能改、权限跟着岗位走） */
+.ro { padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--readonly); color: var(--text); font-size: 13px; }
+/* 群设置：群助手不能承接团队协作卡时提醒（只提示、不拦 —— 用户 2026-11-11 拍板选 A） */
+.hint-line.warn-line { color: var(--warn); }
 /* 提示里嵌的命令/键名（`-c`、`--patch`）：给个浅底，免得跟正文糊成一片 */
 .hint-line code { background: var(--input); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
 
@@ -3485,6 +3563,8 @@ dialog.sch-dlg > form { flex: 1 1 auto; min-height: 0; display: flex; flex-direc
 .info-row > b { flex: 1; text-align: right; font-weight: 400; overflow: hidden;
                 text-overflow: ellipsis; white-space: nowrap; }
 .info-row .chev { color: var(--dim); }
+/* 「未关联」这类"还没有"的值：弱一档，但整行照样是入口（别做成 disabled 的样子） */
+.info-row > b.none { color: var(--dim); }
 .info-row.clickable { cursor: pointer; }
 .info-row.clickable:hover > b { color: var(--accent); }
 /* 解散群这类破坏性入口：整行红字（跟 button.danger 一个语义）。
@@ -3503,6 +3583,14 @@ dialog.sch-dlg > form { flex: 1 1 auto; min-height: 0; display: flex; flex-direc
              flex: 0 0 auto; }
 .head-pill:hover { color: var(--text); }
 .head-pill:disabled { opacity: 0.45; cursor: default; }
+
+/* 群头里的关联项目（2026-11-11）：跟在群名+人数后面、同一行，回答"这个群在哪儿干活"。
+   是**身份**不是动作 —— 不给按钮、不加边框，只用 accent 一点点颜色跟人数分开。
+   ⚠️ `flex: 0 0 auto`：铭牌自己按 max-width 截断，不参与分摊收缩。
+      群名是这行里唯一可收缩的（mobile.css §16.8 的口径）；两个都能缩的话，
+      窄屏上先被截的是群名（390px 真机宽度上实测过）。 */
+.head-proj { color: var(--accent); font-size: 12px; white-space: nowrap;
+             flex: 0 0 auto; overflow: hidden; text-overflow: ellipsis; max-width: 132px; }
 
 /* ---------- 群 ---------- */
 /* 群聊头像。类名用 grp 而不是 group：后者是表单卡片的类，
@@ -4578,16 +4666,49 @@ dialog.mg-dlg { width: 520px; }
    看不出"这颗开关现在关着"。用 color-mix 把文字灰压进边框色，两种主题各自动适配。 */
 .switch > span { background: color-mix(in srgb, var(--dim) 45%, var(--line)); }
 
-/* ===== 证据（2026-11-09 检修 P2）：回话气泡里的一颗入口 + 按需展开的运行摘要 =====
-   为什么做成气泡内联展开、不做弹窗：它是"这句话凭什么这么说"的脚注，跟着这条消息读；
-   弹窗会把人从对话里拽走（同卡票/流程实例的取舍，2026-10-26 已定成弹窗的只有整卡详情）。 */
-.evi-chip { margin: 6px 0 0 4px; padding: 1px 8px; font-size: 11px; line-height: 1.6;
-            color: var(--dim); background: transparent; border: 1px solid var(--line);
-            border-radius: 999px; cursor: pointer; }
-.evi-chip:hover { color: var(--text); border-color: color-mix(in srgb, var(--dim) 55%, var(--line)); }
-.evi-body { margin-top: 6px; padding: 8px 10px; border-radius: 8px;
-            background: color-mix(in srgb, var(--panel) 70%, transparent);
-            border: 1px solid var(--line); font-size: 12px; line-height: 1.55;
-            color: var(--dim); max-height: 240px; overflow: auto;
-            white-space: pre-wrap; overflow-wrap: anywhere; }
-.evi-body > div + div { margin-top: 2px; }
+/* 「证据」气泡按钮的样式随按钮一起移除（2026-11-10 用户口径：留后台、界面不体现）。 */
+
+/* ---------- 组织架构 › 岗位权限清单（2026-11-11 Phase 3） ----------
+   只读表格：岗位 / 类型 / 在岗 / 权限 / 技能包。窄屏横向滚动，不把列压成两字换行。 */
+.org-scroll { margin-top: 12px; overflow-x: auto; background: var(--panel);
+              border: 1px solid var(--line); border-radius: 10px; }
+.org-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.org-table th { text-align: left; font-weight: 500; color: var(--dim); font-size: 11.5px;
+                padding: 10px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.org-table td { padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.org-table tbody tr:last-child td { border-bottom: 0; }
+.org-role b { display: block; font-size: 13px; font-weight: 600; }
+.org-role .dim { font-size: 11px; }
+.org-chip { display: inline-block; margin: 0 4px 4px 0; padding: 1px 7px; border-radius: 999px;
+            border: 1px solid var(--line); background: var(--input); font-size: 11.5px;
+            color: var(--dim); white-space: nowrap; }
+/* 权限章比技能章重一档：权限决定"能不能干"，是最要紧的一列 */
+.org-chip.perm { color: var(--text); background: transparent;
+                 border-color: color-mix(in srgb, var(--text) 22%, var(--line)); }
+
+/* ---------- 信箱（2026-11-11 用户拍板：一级栏，先接建卡失败等平台事实） ---------- */
+.inbox-tabs { display: flex; gap: 4px; margin-right: 8px; }
+.inbox-tab { border: 1px solid transparent; background: transparent; color: var(--dim);
+             padding: 3px 9px; border-radius: 7px; font: inherit; font-size: 12px; cursor: pointer; }
+.inbox-tab:hover { background: var(--hover); color: var(--text); }
+.inbox-tab.on { background: var(--input); color: var(--text); border-color: var(--line); }
+.inbox-n { margin-left: 4px; font-size: 10.5px; color: var(--dim); }
+.inbox-list { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+.inbox-row { display: flex; gap: 10px; padding: 12px 14px; border: 1px solid var(--line);
+             border-radius: 10px; background: var(--panel); cursor: pointer; }
+.inbox-row:hover { background: var(--hover); }
+.inbox-row.unread { border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+                    background: color-mix(in srgb, var(--accent) 5%, var(--panel)); }
+.inbox-ico { width: 22px; height: 22px; border-radius: 50%; flex: none; display: flex;
+             align-items: center; justify-content: center; font-size: 12px; font-weight: 700; }
+.inbox-ico.info { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
+.inbox-ico.warn { background: color-mix(in srgb, var(--warn) 22%, transparent); color: var(--warn); }
+.inbox-ico.blocking { background: color-mix(in srgb, var(--bad) 22%, transparent); color: var(--bad); }
+.inbox-main { min-width: 0; }
+.inbox-title { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 13.5px; }
+.inbox-title b { font-weight: 600; }
+.inbox-code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px;
+              color: var(--dim); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+.inbox-new { font-size: 10px; color: #fff; background: var(--accent); border-radius: 8px; padding: 0 5px; }
+.inbox-detail { margin-top: 4px; font-size: 12.5px; color: var(--text); word-break: break-word; }
+.inbox-meta { margin-top: 6px; font-size: 11px; color: var(--dim); }

@@ -29,6 +29,7 @@ const check = (label, ok, detail = '') => {
 const skill = read('skills/bandi-report/SKILL.md');
 const notice = read('skills/bandi-report/NOTICE.md');
 const experts = read('apps/server/src/experts.mjs');
+const roles = read('apps/server/src/roles.mjs');
 const dispatchSrc = read('apps/server/src/dispatch.mjs');
 const runsSrc = read('apps/server/src/runs.mjs');
 const pmSkill = read('skills/bandi-expert-pm/SKILL.md');
@@ -46,9 +47,11 @@ check('NOTICE 带 MIT License 全文', /MIT License/.test(notice) && /Permission
 check('NOTICE 链接 minto-pyramid 上游', /millwright-labs\/minto-pyramid-skill/.test(notice));
 check('NOTICE 链接 pyramid-principle-for-operators 上游', /wilsonwu-ai\/pyramid-principle-for-operators/.test(notice));
 
-console.log('\n③ 专家包默认挂载（不需要人工去技能库点）');
-check('PM（贺韬）包里有 bandi-report', /skills: \['bandi-expert-pm'[^\]]*'bandi-report'/.test(experts), '');
-check('助理（喜儿）包里有 bandi-report', /skills: \['bandi-expert-secretary'[^\]]*'bandi-report'/.test(experts), '');
+console.log('\n③ 岗位技能包默认挂载（不需要人工去技能库点）');
+// 2026-11-11 Phase 3：技能清单从专家包搬到**岗位**上（roles.mjs），雇佣/同步时自动挂载。
+check('PM 岗位技能包里有 bandi-report', /key: 'pm'[\s\S]*?skills: \[[^\]]*'bandi-report'/.test(roles), '');
+check('助理岗位技能包里有 bandi-report', /key: 'assistant'[\s\S]*?skills: \[[^\]]*'bandi-report'/.test(roles), '');
+check('专家包不再各写一份技能清单（单一来源在 roles.mjs）', !/^\s*skills: \[/m.test(experts), '');
 
 console.log('\n④ 平台注入与 PM 技能都指向它（一处维护）');
 /*
@@ -56,9 +59,11 @@ console.log('\n④ 平台注入与 PM 技能都指向它（一处维护）');
  * dispatch.platformContractBlock —— 所有员工每轮都拿得到，不再分岗位、不再靠首轮。
  */
 check('每轮契约由 dispatch 统一产出（platformContractBlock）', /platformContractBlock/.test(dispatchSrc));
-check('契约含结论 / 已做完 / Next 禁令', /结论/.test(dispatchSrc) && /已做完/.test(dispatchSrc) && /Next:/.test(dispatchSrc));
+// P5 后第 1 条先判交付形态（问答/做事），"已做完"这类汇报措辞挪进了任务合同的做事分支
+check('契约含结论 / 不空转 / Next 禁令 / 交付形态', /结论/.test(dispatchSrc) && /不空转/.test(dispatchSrc) && /Next:/.test(dispatchSrc) && /交付形态/.test(dispatchSrc));
 check('契约指向 bandi-report（全文入口，不重复长文）', /bandi-report/.test(dispatchSrc) && /bandi-report/.test(pmSkill));
-check('PM 每轮钥匙提醒不再重复汇报格式（只留建卡/改卡权限）', /改卡/.test(runsSrc) && /startNow/.test(runsSrc) && !/汇报（每轮都算/.test(runsSrc));
+// P5 压缩了运行钥匙提醒（操作说明只留怎么用钥匙；建卡/改卡口径在 PM 首轮 brief 与 PM 技能里）
+check('运行钥匙提醒只讲怎么用钥匙（不重复汇报/建卡口径）', /BANDI_RUN_TOKEN/.test(runsSrc) && /E2056/.test(runsSrc) && !/汇报（每轮都算/.test(runsSrc) && !/查台账：问进度/.test(runsSrc));
 
 console.log(failed ? `\n✗ ${failed} 项没过` : '\n✓ 全部通过');
 process.exit(failed ? 1 : 0);

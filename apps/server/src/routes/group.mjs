@@ -26,13 +26,21 @@ export async function handleGroup(req, res, url) {
     const id = decodeURIComponent(one[1]);
     const g = store.getGroup(id);
     if (!g) return fail(res, 404, 'E2011', '群不存在');
+    // 解散的群只读：成员、助手都清了，再改设置没有意义（与「解散的群不开群设置抽屉」同一口径）
+    if (g.dissolvedAt) return fail(res, 400, 'E2050', '这个群已经解散了，改不了设置');
 
     const body = await readBody(req);
     const title = String(body.title ?? '').trim();
     const nextAssistant = body.assistantPersonaId ? String(body.assistantPersonaId) : '';
+    /*
+     * 「关联项目」（2026-11-11）：空值是**合法指令**（解除关联），
+     * 所以判"有没有提这一项"而不是判真值 —— 跟 title/assistant 的写法不同，别照抄。
+     */
+    const touchProject = Object.prototype.hasOwnProperty.call(body, 'projectId');
+    const nextProject = touchProject ? String(body.projectId ?? '').trim() : '';
 
-    if (!title && !nextAssistant) {
-      return fail(res, 400, 'E1039', '这次请求没说改哪一项 —— 这个接口只能改「群名称」(title) 或「群助手」(assistantPersonaId)');
+    if (!title && !nextAssistant && !touchProject) {
+      return fail(res, 400, 'E1039', '这次请求没说改哪一项 —— 这个接口只能改「群名称」(title)、「群助手」(assistantPersonaId) 或「关联项目」(projectId)');
     }
     if (nextAssistant) {
       if (!store.getPersona(nextAssistant)) return fail(res, 400, 'E1012', '这个数字员工不存在');
@@ -40,8 +48,30 @@ export async function handleGroup(req, res, url) {
         return fail(res, 400, 'E1013', '群助手得先是群里的人');
       }
     }
+    /*
+     * 一项目一群：该项目已经归别的群 → 拒绝，**不给"顶掉"**。
+     * （顶掉意味着另一个群的工作区被静默夺走，而那边毫不知情。）
+     * 错误码 E2068/E2069 是群域往后顺位新占的，grep 确认全仓无撞号。
+     */
+    if (nextProject) {
+      const proj = store.getProject(nextProject);
+      if (!proj) return fail(res, 404, 'E2068', '这个项目已经不在了，刷新一下再选');
+      const owner = store.getGroupByProject(nextProject);
+      if (owner && owner.id !== id) {
+        return fail(
+          res,
+          409,
+          'E2069',
+          `「${proj.name || proj.id}」已经归群「${owner.title}」了。一个项目只归一个群，先去那边解除关联。`,
+        );
+      }
+    }
     // 群级改 + 同步到每一段会话（列表/聊天头部读的是会话上的镜像字段）
-    const next = store.updateGroup(id, { title: title || '', assistantPersonaId: nextAssistant || '' });
+    const next = store.updateGroup(id, {
+      title: title || '',
+      assistantPersonaId: nextAssistant || '',
+      ...(touchProject ? { projectId: nextProject } : {}),
+    });
     return sendJson(res, 200, { group: next });
   }
 

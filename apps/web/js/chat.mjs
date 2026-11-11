@@ -1,6 +1,6 @@
 /* chat.mjs —— 进对话、发消息、输入框里的 @ 选人、员工详情、员工详情 →「任务」、关联技能。
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
-import { esc, mdRender, savePlace, setRoute, toast } from './shell.mjs';
+import { esc, mdRender, roleNameOf, savePlace, setRoute, toast } from './shell.mjs';
 import { TYPING, AVATAR_FILE, api, createCombo, cut, dt, failHtml, initial, personaAvatar, personaByName, post, renderMarkdown, setHeaderBadge, smAvatar } from './ui.mjs';
 import { load, setNav } from './state.mjs';
 import { confirmDo } from './machine.mjs';
@@ -8,7 +8,7 @@ import { convDisplayName, openConversationSafe, toastConvErr } from './listmenu.
 import { detailSave, refreshDeptSuggest, renderList, showView } from './contacts.mjs';
 import { COL_STATUS, openProjectDetail, openTaskBoard, openTaskCardDialog, prPillOf } from './projects.mjs';
 import { openFlowRun, setListTitle } from './flowpages.mjs';
-import { openChatLogDrawer, openGroupDrawer } from './groups.mjs';
+import { groupProjectOf, openChatLogDrawer, openGroupDrawer } from './groups.mjs';
 import { closeDrawer, fireExpert } from './experts.mjs';
 import { $, S } from './core.mjs';
 import { SANDBOX_LABEL, sandboxItems } from './misc.mjs';
@@ -490,13 +490,22 @@ export async function openConversation(id) {
      * 名字再长也只挤自己，把人数和徽章保住；实在窄到放不下时，先截名字。
      */
     const metaSub = dissolved ? '已解散' : `${d.conversation.members.length} 人`;
+    /*
+     * 关联项目（2026-11-11）：只读的**身份铭牌**，跟在人数后面同一行。
+     * 它不是动作 —— 入口仍在群设置里（点群名进抽屉），群头一颗按钮都不加：
+     * 这一行已经有返回/群名/人数/徽章/两颗钮，再加东西只会挤掉群名。
+     * 解散的群不给（项目对它已经没意义了，而且群设置也进不去）。
+     */
+    const proj = dissolved ? null : groupProjectOf(d.conversation);
+    const projTag = proj
+      ? `<span class="head-proj" title="关联项目：${esc(proj.name)}">· ${esc(proj.name)}</span>`
+      : '';
     $('chatHead').innerHTML = `
       ${mbBackBtn}
-      <div class="avatar grp sm head-avatar">${esc(initial(d.conversation.title))}</div>
       <div class="meta">
         <div>${dissolved
           ? `<b class="head-name-static">${esc(d.conversation.title)}</b> <span class="sub">${metaSub}</span>`
-          : `<b class="head-name" title="群设置">${esc(d.conversation.title)}</b> <span class="sub">${metaSub}</span> ${badge}`}</div>
+          : `<b class="head-name" title="群设置">${esc(d.conversation.title)}</b> <span class="sub">${metaSub}</span> ${projTag} ${badge}`}</div>
       </div>
       <button class="icon-btn" id="toNewConv" title="给这个群开一段新会话（一次任务一段；旧段留在聊天记录里）">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
@@ -532,14 +541,13 @@ export async function openConversation(id) {
      * 会张冠李戴），退回这段会话自己的标题（convDisplayName 会剥掉「和 」前缀，
      * 不然页头会出现「和 和贺韬」这种叠字）；连标题都没有才写「员工已删」。
      * 头像同理：员工没了就别给「点进员工详情」的入口（点开是 404）。
+     *
+     * 群头/单聊头都不再放头像（2026-11-11 用户要求）：
+     * 「查看TA的资料」的入口在**名字**上（data-detail 委托），头像只是重复的一颗装饰。
      */
     const name = convDisplayName(d.conversation);
-    const pHere = personaGone ? null : ((S.personas ?? []).find((x) => x.id === d.conversation.personaId) ?? null);
     $('chatHead').innerHTML = `
       ${mbBackBtn}
-      ${smAvatar(name, personaGone
-        ? 'head-avatar'
-        : `head-avatar clickable" data-detail="${esc(d.conversation.personaId)}" title="配置他的 agent CLI`, pHere)}
       <div class="meta">
         <div>${personaGone
           ? `<b>${esc(name)}</b>`
@@ -563,7 +571,7 @@ export async function openConversation(id) {
           <path d="M12 8v4.4l3 1.8" />
         </svg>
       </button>`;
-    // 头像（桌面保留）和名字（手机端的唯一入口）都指向员工详情
+    // 名字是详情的唯一入口（2026-11-11 头像整颗撤掉后）：桌面上点名字也进详情
     $('chatHead').querySelectorAll('[data-detail]').forEach((el) => {
       el.onclick = () => openDetail(d.conversation.personaId);
     });
@@ -718,6 +726,11 @@ export function stampOf(iso) {
 
 
 
+/** 真人昵称（2026-11-09 昵称全端生效）：按 senderUserId 从名册（S.users）取昵称；
+ *  没带 id / 没设 / 查无此人 → ''。只管显示 —— 「是不是自己」仍按 senderUserName（账号名）认。 */
+const senderNickOf = (m) =>
+  m?.senderUserId ? String((S.users ?? []).find((u) => u.id === m.senderUserId)?.nickname ?? '') : '';
+
 export function bubble(role, text, name, who, showName = false, at = '', atts = null, meta = null, senderName = null, opts = null) {
   /*
    * 真人署名（2026-10-31 用户概念落地）：消息带 senderUserName 且**不是自己** → 按别人画
@@ -726,7 +739,9 @@ export function bubble(role, text, name, who, showName = false, at = '', atts = 
    */
   const otherHuman = role === 'user' && senderName && senderName !== (S.me?.name ?? '我');
   const mine = role === 'user' && !otherHuman;
-  const label = mine ? '我' : otherHuman ? senderName : (who || name || '数字员工');
+  // 昵称全端生效（2026-11-09 用户："昵称不能只在我的页面里生效"）：别人的署名按昵称画
+  // （调用方从名册解析好放 opts.senderNick），认人仍按账号名 —— 上面那行一个字没动。
+  const label = mine ? '我' : otherHuman ? (opts?.senderNick || senderName) : (who || name || '数字员工');
   // 头像带图（2026-10-22）：优先按名字找员工；群聊消息有 personaName 直接命中，
   // 1:1 改过名时名字可能对不上，再兜一层会话的 personaId
   const p = mine ? null
@@ -749,11 +764,10 @@ export function bubble(role, text, name, who, showName = false, at = '', atts = 
    */
   const stoppedNote = meta?.stopped ? '<div class="bubble-note">已停止生成</div>' : '';
   /*
-   * 「证据」（2026-11-09 检修 P2）：回话正文不贴命令/输出，运行证据留在事件流里；
-   * 这里只挂一颗小按钮，点开按需拉**摘要**（工具名/目标/错误/时长）。
-   * 没有 runId 的消息（手工消息、失败块）不挂。
+   * 「证据」按钮（2026-11-09 P2）已于 2026-11-10 按用户口径移除：
+   * 证据是给**后台/AI 查原因**用的（运行事件、`/api/runs/:id/evidence` 都还在），
+   * 不在界面里体现 —— 气泡只放结论，不再挂按钮。
    */
-  const evi = role !== 'user' && opts?.runId ? evidenceChipHtml(opts.runId) : '';
     /* 手机端消息流降噪（2026-11-05 用户：「聊天页 UI 重新设计」）：
        · nt = 3 分钟内不重复挂时间戳（时间只留在每组第一条下面，微信/iMessage 同口径；
          桌面不受影响 —— .nt 的显示规则只写在 mobile.css 的 ≤900px 档里）；
@@ -762,50 +776,11 @@ export function bubble(role, text, name, who, showName = false, at = '', atts = 
     return `<div class="row ${mine ? 'me' : ''}${opts?.tight ? ' tight' : ''}${opts?.hideTime ? ' nt' : ''}">
     ${mine ? smAvatar('我', 'me') : smAvatar(label, '', p)}
     ${nameLine
-      ? `<div class="msg-main">${nameLine}<div class="bubble">${ticket}${renderMarkdown(text)}${attsHtml}${stoppedNote}${evi}</div></div>`
-      : `<div class="bubble">${ticket}${renderMarkdown(text)}${attsHtml}${stoppedNote}${evi}</div>`}
+      ? `<div class="msg-main">${nameLine}<div class="bubble">${ticket}${renderMarkdown(text)}${attsHtml}${stoppedNote}</div></div>`
+      : `<div class="bubble">${ticket}${renderMarkdown(text)}${attsHtml}${stoppedNote}</div>`}
     ${t ? `<div class="btime">${esc(t)}</div>` : ''}
   </div>`;
 }
-
-/**
- * 「证据」小按钮 + 展开区（2026-11-09 检修 P2）。
- *
- * 用户口径：回话只放结论，命令/输出/数据别糊在对话里 —— 但"他说干了什么"要能核。
- * 所以正文只挂一颗按钮，点开按需拉 `/api/runs/:id/evidence` 的**摘要**：
- * 工具名/目标（截 200 字）、错误、事件数/时长。完整事件仍可回放（/stream）。
- * 只回摘要的原因：一跑上千条事件、单条能到 64 KB，界面不需要也不该吃整份。
- */
-export function evidenceChipHtml(runId) {
-  return `<button type="button" class="evi-chip" data-evi="${esc(runId)}" title="这一轮调了什么工具、错在哪（完整事件在运行记录里）">证据</button><div class="evi-body" hidden></div>`;
-}
-
-/* 事件委托一次就够：消息会重画，按钮不用逐个绑；只在点击时拉数据。 */
-document.addEventListener('click', async (e) => {
-  const btn = e.target?.closest?.('[data-evi]');
-  if (!btn) return;
-  const body = btn.nextElementSibling;
-  if (!body || !body.classList.contains('evi-body')) return;
-  if (!body.hidden) { body.hidden = true; return; }
-  body.hidden = false;
-  if (body.dataset.loaded) return;
-  body.dataset.loaded = '1';
-  body.textContent = '加载中…';
-  try {
-    const ev = await api(`/api/runs/${encodeURIComponent(btn.dataset.evi)}/evidence`);
-    const lines = [`运行 ${ev.runId} · ${ev.status} · ${ev.events} 条事件`];
-    if (ev.toolCount) lines.push(`工具 ${ev.toolCount} 次（最近 ${ev.tools.length} 条）`);
-    for (const t of ev.tools) lines.push(`· ${t.name}${t.target ? '：' + t.target : ''}`);
-    for (const er of ev.errors) lines.push(`× ${er}`);
-    body.replaceChildren(...lines.map((line) => {
-      const div = document.createElement('div');
-      div.textContent = line;
-      return div;
-    }));
-  } catch (err) {
-    body.textContent = err?.message ?? '证据加载失败';
-  }
-});
 
 /*
  * 卡票（2026-10-24）：`meta = {type:'card', cardId, title, status, assignee}` 的消息，
@@ -1099,7 +1074,7 @@ export function drawMessages(msgs, name, isGroup = false, runs = []) {
           prevT = t;
           prevKey = keyOf;
           return sep + (it.kind === 'msg'
-            ? bubble(it.m.role, it.m.text, name, it.m.personaName, isGroup, it.m.createdAt, it.m.atts, it.m.meta, it.m.senderUserName, { ...(opts ?? {}), runId: it.m.runId })
+            ? bubble(it.m.role, it.m.text, name, it.m.personaName, isGroup, it.m.createdAt, it.m.atts, it.m.meta, it.m.senderUserName, { ...(opts ?? {}), runId: it.m.runId, senderNick: senderNickOf(it.m) })
             : it.kind === 'stop' ? stopBlock(it.r, isGroup) : failBlock(it.r, isGroup));
         })
         .join('')
@@ -1554,7 +1529,7 @@ export function updateMentionPop() {
             : '';
         return `<div class="mp-item${i === mentionPop.index ? ' active' : ''}" data-i="${i}">
           <div class="mp-avatar">${esc(initial(m.name))}${img}</div>
-          <div class="mp-name">${esc(m.name)}${p?.role ? `<span class="mp-role">${esc(String(p.role).split(' · ')[0].trim())}</span>` : ''}</div>
+          <div class="mp-name">${esc(m.name)}${roleNameOf(p) ? `<span class="mp-role">${esc(roleNameOf(p))}</span>` : ''}</div>
           ${isAssistant ? '<span class="mp-tag">群助手</span>' : ''}
         </div>`;
       })
@@ -1705,30 +1680,76 @@ export const SKILL_ICON = '<svg viewBox="0 0 24 24" width="15" height="15" fill=
 /**
  * 员工详情里的任务页：**只读**，数据跟任务看板**同一批行**（服务端 `personaTasks` 按人筛过）。
  *
- * 为什么不照看板那样横着铺六列：这一页是主区的一栏，宽度放不下；
- * 所以竖着分成几堆，但**堆的顺序照看板的生命周期**（要人管在前、已完成在后）——
- * 人在这页要回答的问题就一句："他现在手上有什么、哪件卡着"。
+ * 形状是三次拍板定下来的（2026-11-09）：
+ *   ① 用户「任务做成表格」—— 不再是竖着摞的 `.kb-card`。卡片在看板上是对的（列里能拖、
+ *      一眼看成一叠），到了这一页就不合适：主区一栏宽、又不给拖，"面"只是白占纵向空间。
+ *   ② 用户「任务记录参考浏览器这种方式，按照日期来」—— 分堆从"生命周期"换成**按天分组**：
+ *      「今天 · 2026年11月9日 星期一」「昨天 · …」「2026年11月7日 星期六」……
+ *      日期进了标题，行里就只留 HH:mm（浏览器历史那一套）。
+ *   ③ 用户「不要单独列出来。而是在上方加状态筛选」—— 上一版的「要人管」是钉在表头的
+ *      一个跨天段，既占掉小半屏，又和日期段抢同一批行的位置。现在它是一个**筛选档**：
+ *      表只按天分组（严格照 ②），"现在有哪几件卡着"改成顶上点一下 —— 想全看、想看某一档，
+ *      都只有一套排序。筛选是**纯前端**的事，不重新请求。
  */
-export const PERSONA_TASK_GROUPS = [
-  { label: '要人管', hint: '已阻塞 · 失败 · 待验收', cols: ['blocked', 'failed', 'review'] },
-  { label: '进行中', cols: ['doing'] },
-  { label: '还没开跑', hint: '待办 · 想法', cols: ['todo', 'idea'] },
-  { label: '收场', hint: '已完成 · 已取消', cols: ['done', 'cancelled'] },
-  { label: '其他', cols: ['other'] },
+
+/**
+ * 状态筛选档。`cols` = 归进这一档的看板列（一个列**只归一档**，所以各档相加正好等于总数）。
+ * 不认识的列 key 只出现在「全部」里 —— 宁可这一档漏筛，不能把行丢了。
+ */
+const TASK_FILTERS = [
+  { key: 'all', label: '全部' },
+  { key: 'urgent', label: '要人管', cols: ['blocked', 'failed', 'review'] },
+  { key: 'doing', label: '进行中', cols: ['doing'] },
+  { key: 'wait', label: '待办', cols: ['todo', 'idea'] },
+  { key: 'done', label: '已完成', cols: ['done'] },
+  { key: 'cancelled', label: '已取消', cols: ['cancelled'] },
+  { key: 'other', label: '其他', cols: ['other'] },
 ];
+
+const TASK_FILTER_OF_COL = new Map(TASK_FILTERS.flatMap((f) => (f.cols ?? []).map((c) => [c, f.key])));
+
+/** 看板列 → 筛选档 key（不认识的列给 ''，只进「全部」） */
+const filterOfCol = (colKey) => TASK_FILTER_OF_COL.get(colKey) || '';
+
+const WEEKDAYS = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
+
+/** 本地日期 → 'YYYY-MM-DD'。**不能用 toISOString**：那是 UTC，东八区晚 8 点以后会差一天 */
+function ymdOf(d) {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/** 'YYYY-MM-DD' →「今天 · 2026年11月9日 星期一」/「昨天 · …」/「2026年11月7日 星期六」 */
+function taskDayLabel(day, today, yesterday) {
+  if (!day) return '没记时间';
+  const [y, m, d] = day.split('-').map(Number);
+  const full = `${y}年${m}月${d}日 ${WEEKDAYS[new Date(y, m - 1, d).getDay()]}`;
+  if (day === today) return `今天 · ${full}`;
+  if (day === yesterday) return `昨天 · ${full}`;
+  return full;
+}
 
 
 
 /**
- * 一张卡：长相跟看板那张**一样**（同一套 `.kb-card` 样式），但**不给拖、不给删**。
- * 员工详情回答的是"他手上有什么"，改状态、删卡该回看板去做 —— 两处都能改就会互相打脸。
+ * 一行：任务（标题 + 项目/来源/PR 小标签）、状态、时间。
  *
- * 卡片上不写执行人：这一页里的每一张都是他的。
+ * 标签留在标题下面、不各占一列：这一页最窄的时候（手机整页）五列会把标题挤成
+ * 两三个字一行 —— 标签本来就是补充说明，贴着它那件事走才对。
+ *
+ * 一样**不给拖、不给删**：员工详情回答的是"他手上有什么"，改状态、删卡该回看板去做 ——
+ * 两处都能改就会互相打脸。
+ *
+ * `colKey` = 这张卡所在的看板列（`blocked` / `review` / …）：状态那格的颜色按**列**上色
+ * （`--st-*`，跟看板列头同一套），不按中文词面自己猜 —— 「已停止」落在 `blocked` 列，
+ * 词面里压根没有"阻塞"两个字。
+ *
+ * 时间只画 HH:mm：日期在分组标题里（浏览器历史也是这么排的），完整时间留在 `title` 上，
+ * 鼠标停一下还能看见年月日。
  */
-export function personaTaskCard(r) {
-  const local = r.source === 'manual' || r.source === 'repo';
-  const srcCls = r.source === 'chat' ? ' chat' : r.source === 'repo' ? ' repo' : local ? ' manual' : '';
-  // 点卡片去哪儿：流程 → 那条实例；有会话 → 那场对话；手工卡没派活 → 它所在项目的看板
+export function personaTaskRow(r, colKey = '') {
+  const srcCls = r.source === 'chat' ? ' chat' : r.source === 'repo' ? ' repo' : r.source === 'manual' ? ' manual' : '';
+  // 点这行去哪儿：流程 → 那条实例；有会话 → 那场对话；手工卡没派活 → 它所在项目的看板
   const attr = r.source === 'flow'
     ? ` data-pt-flow="${esc(r.flow_id)}" data-pt-tpl="${esc(r.template_id || '')}"`
     : r.conversation_id
@@ -1740,21 +1761,34 @@ export function personaTaskCard(r) {
   const proj = r.project_id
     ? `<span class="kb-tag proj" title="属于哪个项目">${esc(r.project_name)}</span>`
     : '<span class="kb-tag" title="没挂项目也没落在任何项目目录下">未归属</span>';
-  return `<article class="kb-card${local ? ' manual' : ''}"${attr} title="${esc(r.note || '')}">
-    <div class="kb-card-top">${proj}<span class="kb-tag${srcCls}">${esc(r.source_text)}</span>${prPillOf(r)}
-      <span class="kb-state">${esc(r.status)}</span></div>
-    <div class="kb-card-title">${esc(r.task)}</div>
-    <div class="kb-card-foot"><span>${esc(r.at)}</span></div>
-  </article>`;
+  const at = String(r.at ?? '');
+  const hhmm = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(at) ? at.slice(11, 16) : '—';
+  // 行上不再挂 `manual` class（2026-11-09 用户去掉左侧蓝竖条）：来源由标题下那颗标签说，
+  // 连续几行手工卡各画一条竖条会连成一条贯穿整段的装饰线，反倒看不出"这一行是人加的"。
+  return `<tr class="pt-row"${attr} title="${esc(r.note || '')}">
+    <td class="pt-td-task">
+      <div class="pt-title">${esc(r.task)}</div>
+      <div class="pt-tags">${proj}<span class="kb-tag${srcCls}">${esc(r.source_text)}</span>${prPillOf(r)}</div>
+    </td>
+    <td class="pt-td-state"><span class="pt-state ${esc(colKey)}">${esc(r.status)}</span></td>
+    <td class="pt-td-at" title="${esc(at)}">${esc(hhmm)}</td>
+  </tr>`;
 }
 
 
 
 /**
  * 任务页的正文（不含合计那行）。`b` = `/api/personas/:id/tasks` 的返回，
- * 形状跟任务看板一模一样（`board()` 的产物），所以这里只做"重新分堆"这一件事。
+ * 形状跟任务看板一模一样（`board()` 的产物），所以这里只做三件事：
+ * 按状态筛选 → 按天分组 → 铺成表。
+ *
+ * `filter` = 选中的筛选档 key（见 TASK_FILTERS）。认不出来的值一律当「全部」——
+ * 刷新后某一档空了、或者旧链接带了个退役的 key，都不该整页空白。
+ *
+ * 每个日期是一个 `<tbody>`：表头只画一次，段名做成跨三列的段行 ——
+ * 这样各段的任务/状态/时间仍然对齐在同一组列宽上（各段各开一张表就会各自算宽）。
  */
-export function personaTasksHtml(b) {
+export function personaTasksHtml(b, filter = 'all') {
   if (!b) return '<div class="empty" style="padding:26px 4px">任务取不到</div>';
   if (b.error) return `<div class="empty" style="padding:26px 4px">任务取不到：${esc(b.error)}</div>`;
   if (!b.total) {
@@ -1763,19 +1797,65 @@ export function personaTasksHtml(b) {
       <span class="dim">看板上建的卡指定他做、流程走到点他名的节点、或者他直接在会话里接了活 —— 都会算在这里。</span>
     </div>`;
   }
-  const cols = new Map((b.columns ?? []).map((c) => [c.key, c]));
-  const blocks = PERSONA_TASK_GROUPS.map((g) => {
-    const cards = g.cols.flatMap((k) => cols.get(k)?.cards ?? []);
-    if (!cards.length) return '';
-    return `<div class="group-title">${esc(g.label)}<span class="pt-num">${cards.length}</span>${
-      g.hint ? `<span class="pt-hint">${esc(g.hint)}</span>` : ''
-    }</div>
-    <div class="group pt-group"><div class="pt-cards">${cards.map(personaTaskCard).join('')}</div></div>`;
-  }).join('');
-  return `${blocks}
+
+  // 一行 = 一张卡 + 它所在的看板列（状态色按列走，见 personaTaskRow）。新→旧排一次，
+  // 后面的筛选和按天分组都沿用这个次序（浏览器历史也是时间倒序）。
+  const all = (b.columns ?? [])
+    .flatMap((c) => (c.cards ?? []).map((r) => ({ r, colKey: c.key })))
+    .sort((x, y) => String(y.r.at || '').localeCompare(String(x.r.at || '')));
+
+  // 各档件数：筛选条上既是"有没有这一档"，也是"这一档几件"。
+  const nOf = new Map(TASK_FILTERS.map((f) => [f.key, 0]));
+  for (const x of all) {
+    nOf.set('all', nOf.get('all') + 1);
+    const k = filterOfCol(x.colKey);
+    if (k) nOf.set(k, (nOf.get(k) || 0) + 1);
+  }
+
+  const active = TASK_FILTERS.some((f) => f.key === filter) ? filter : 'all';
+  const rows = active === 'all' ? all : all.filter((x) => filterOfCol(x.colKey) === active);
+
+  // 筛选条：件数为 0 的档不画（点进去是空的，白占位置）；但**当前选中的那档永远画**，
+  // 否则刷新后它变空了，人连"自己在看哪一档"都看不出来，也没法点回「全部」。
+  const bar = `<div class="pt-filters">${TASK_FILTERS
+    .filter((f) => f.key === 'all' || nOf.get(f.key) || f.key === active)
+    .map((f) => `<button type="button" class="pt-filter${f.key === active ? ' on' : ''}"
+      data-pt-filter="${f.key}">${esc(f.label)}<span class="pt-fnum">${nOf.get(f.key) || 0}</span></button>`)
+    .join('')}</div>`;
+
+  // 按天分堆。Map 保留插入顺序 = 时间倒序，所以日期段天然是新的在前。
+  // `at` 是服务端 `stamp()` 格式化过的本地时间「YYYY-MM-DD HH:mm」，前 10 位就是日期。
+  const byDay = new Map();
+  for (const x of rows) {
+    const day = /^\d{4}-\d{2}-\d{2}/.test(String(x.r.at ?? '')) ? String(x.r.at).slice(0, 10) : '';
+    if (!byDay.has(day)) byDay.set(day, []);
+    byDay.get(day).push(x);
+  }
+
+  const now = new Date();
+  const today = ymdOf(now);
+  const yesterday = ymdOf(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1));
+  const sections = [...byDay].map(([day, list]) => `<tbody>
+      <tr class="pt-sec"><td colspan="3"><span class="pt-sec-name">${esc(taskDayLabel(day, today, yesterday))}</span><span class="pt-num">${list.length}</span></td></tr>
+      ${list.map((x) => personaTaskRow(x.r, x.colKey)).join('')}
+    </tbody>`).join('');
+
+  // 筛空了：说清"是筛的，不是没有"，并给一颗回全部的按钮（省得人去找顶上那条）
+  const body = sections
+    ? `<table class="pt-tbl">
+      <colgroup><col /><col class="pt-col-state" /><col class="pt-col-at" /></colgroup>
+      <thead><tr><th>任务</th><th>状态</th><th class="pt-th-at">时间</th></tr></thead>
+      ${sections}
+    </table>`
+    : `<div class="empty" style="padding:28px 4px;line-height:1.9">
+        这一档现在没有任务
+        <div style="margin-top:8px"><button type="button" class="pt-reset" data-pt-filter="all">看全部 ${nOf.get('all') || 0} 件</button></div>
+      </div>`;
+
+  return `${bar}${body}
     <div class="pt-note">跟任务看板同源：<b>流程的每次办理</b> + <b>聊天最近一轮</b> + <b>一张手工卡</b>，各算一件。
       聊天派活不进看板 —— 想让某轮活进看板，在聊天页头把它<b>立成卡</b>（这一页照收）。
-      点卡片能跳到它本身（流程实例 / 会话 / 项目看板）。</div>`;
+      点一行能跳到它本身（流程实例 / 会话 / 项目看板）。</div>`;
 }
 
 
@@ -2148,7 +2228,7 @@ function renderDetailMobile(persona, runtimes) {
       <div class="p-head">
         ${personaAvatar(persona)}
         <div class="p-head-main">
-          <h2><span id="dNameText">${esc(persona.name)}</span>${persona.builtin ? '<span class="pill builtin" title="出厂就在的员工：名字、岗位与职责身份随平台固定，不能删">内置</span>' : ''}<span class="pill role" id="dRolePill"${persona.role ? '' : ' style="display:none"'}>${esc(persona.role || '')}</span>${
+          <h2><span id="dNameText">${esc(persona.name)}</span>${persona.builtin ? '<span class="pill builtin" title="出厂就在的员工：名字、岗位与职责身份随平台固定，不能删">内置</span>' : ''}<span class="pill role" id="dRolePill"${roleNameOf(persona) ? '' : ' style="display:none"'}>${esc(roleNameOf(persona))}</span>${
             persona.busy
               ? `<span class="pill busy" id="dBusy" title="${esc(persona.busyLabel ?? '正在干活')}">${
                   persona.busyLabel ? '工作中·' + esc(persona.busyLabel) : '工作中'
@@ -2359,7 +2439,7 @@ function renderDetailMobile(persona, runtimes) {
    */
   const collect = () => ({
     name: persona.name,
-    role: persona.role ?? null,
+    // 岗位不可改（2026-11-11 用户拍板）：不往回送 role —— 服务端对"岗位变了"直接 E2055 拒
     department: persona.department ?? null,
     instructions: persona.instructions ?? '',
     runtime: curRuntime,
@@ -2780,7 +2860,7 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
       <div class="p-head">
         ${personaAvatar(persona)}
         <div class="p-head-main">
-          <h2><span id="dNameText">${esc(persona.name)}</span>${persona.builtin ? '<span class="pill builtin" title="出厂就在的员工：名字、岗位与职责身份随平台固定，不能删">内置</span>' : ''}<span class="pill role" id="dRolePill"${persona.role ? '' : ' style="display:none"'}>${esc(persona.role || '')}</span>${
+          <h2><span id="dNameText">${esc(persona.name)}</span>${persona.builtin ? '<span class="pill builtin" title="出厂就在的员工：名字、岗位与职责身份随平台固定，不能删">内置</span>' : ''}<span class="pill role" id="dRolePill"${roleNameOf(persona) ? '' : ' style="display:none"'}>${esc(roleNameOf(persona))}</span>${
             persona.busy
               ? `<span class="pill busy" id="dBusy" title="${esc(persona.busyLabel ?? '正在干活')}">${
                   persona.busyLabel ? '工作中·' + esc(persona.busyLabel) : '工作中'
@@ -2843,7 +2923,9 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
                 <div class="form-row">
                   <div class="row-label">岗位</div>
                   <div>
-                    <input id="dRole" list="roleSuggest" placeholder="比如：研发（留空也行）" value="${esc(persona.role || '')}" ${identityLocked ? `readonly title="${expertLocked ? '雇佣员工的岗位随专家包固定' : '内置员工的岗位随平台固定'}"` : ''} />
+                    <!-- 岗位固定（2026-11-11 用户拍板：不允许调岗）：只读展示。
+                         岗位决定权限，换岗 = 解聘后重新雇佣；服务端对"岗位变了"也直接拒（E2055）。 -->
+                    <div class="ro" id="dRoleText">${esc(roleNameOf(persona) || '未设岗位')}</div>
                   </div>
                 </div>
                 <div class="form-row">
@@ -3081,8 +3163,12 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
    * 任务页：数据是**打开这一页那一刻**取的快照（跟「运行记录」一样）。
    * 「刷新」只换这一页里的三块（合计 / 列表 / 标签上的数），**不重画整页** ——
    * 重画会把标签弹回「概览」，人刚翻到任务页就被弹走，比不刷新更烦。
+   *
+   * 状态筛选也走这条重画路（只重画 #dTasksBody）：数据不动，换的只是"哪些行进表"。
+   * 筛选状态留在闭包里，所以「刷新」之后人还在自己看的那一档上。
    */
   let tasksData = taskBoard;
+  let tasksFilter = 'all';
   const paintTasks = () => {
     const sum = $('dTasksSum');
     if (sum) {
@@ -3091,12 +3177,23 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
         : `共 <b>${tasksData.total ?? 0}</b> 件${tasksData.project_count ? ` · 分布在 ${tasksData.project_count} 个项目` : ''}`;
     }
     const body = $('dTasksBody');
-    if (body) body.innerHTML = personaTasksHtml(tasksData);
+    if (body) body.innerHTML = personaTasksHtml(tasksData, tasksFilter);
     const n = $('dTasksN');
     if (n) n.textContent = String(tasksData?.error ? '—' : (tasksData?.total ?? 0));
     wirePersonaTaskLinks();
   };
   paintTasks();
+
+  // 筛选条是**委托**在 #dTasksBody 上的：表格每次重画都会换掉里面的按钮，
+  // 一个个 addEventListener 存不住；委托一次，重画多少次都还在。
+  $('dTasksBody')?.addEventListener('click', (e) => {
+    const chip = e.target?.closest?.('[data-pt-filter]');
+    if (!chip) return;
+    const next = chip.dataset.ptFilter || 'all';
+    if (next === tasksFilter) return;
+    tasksFilter = next;
+    paintTasks();
+  });
 
   $('dTasksRefresh')?.addEventListener('click', async (e) => {
     e.preventDefault();
@@ -3340,7 +3437,7 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
    */
   const collect = () => ({
     name: $('dName').value,
-    role: $('dRole').value,
+    // 岗位不可改（2026-11-11 用户拍板）：详情页不再有岗位输入框，PUT 也不带 role/roleKey
     department: $('dDept').value,
     instructions: $('dInstr').value,
     runtime: rtCombo.value(),
@@ -3382,7 +3479,7 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
         const nameEl = $('dNameText');
         if (nameEl) nameEl.textContent = p.name;
         const roleEl = $('dRolePill');
-        if (roleEl) { roleEl.textContent = p.role || ''; roleEl.style.display = p.role ? '' : 'none'; }
+        if (roleEl) { const rn = roleNameOf(p); roleEl.textContent = rn; roleEl.style.display = rn ? '' : 'none'; }
         const av = $('detailView')?.querySelector('.p-head .avatar');
         // 整体重建而不是改 textContent：头像里除了字母还有**图片层**（<img class="av-img">，
         // 2026-10-22 加），`textContent =` 会把子节点全清掉 —— 切运行时触发自动保存，

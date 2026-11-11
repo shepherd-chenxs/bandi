@@ -31,6 +31,19 @@ export const IDLE_MINUTES = 30;
 /** 绝对超时：12 小时后必须重新登录 */
 export const ABSOLUTE_HOURS = 12;
 
+/**
+ * **本机壳子的会话**（2026-11-10）：桌面壳用数据目录里的 `local_secret` 自动进门，
+ * 换来的会话走更宽的闸。
+ *
+ * 为什么不能沿用"空闲 30 分钟 / 绝对 12 小时"：这条会话的凭据是**本机文件**
+ * （`local_secret`，0600，和 `bandi_token` 同一档信任 —— 能读它的进程本来就能改库），
+ * 不是人手输的密码；而桌面壳的用户离开一会儿回来就掉线、发消息报 E4010（2026-11-10 实报）。
+ * 桌面上这个壳**没有地方让人重新输密码**（窗口里只有面板），所以必须给一台"这台机器
+ * 的会话"该有的寿命：7 天空闲、180 天绝对；壳重新打开/`local_secret` 变了就重新签。
+ */
+export const SHELL_IDLE_DAYS = 7;
+export const SHELL_SESSION_DAYS = 180;
+
 /** 名字归一：去首尾空白 + 折叠内部空白 + 忽略大小写 —— "张三"和" 张三 "是同一个人 */
 export function normName(name) {
   return String(name ?? '')
@@ -75,9 +88,10 @@ ensureColumn('user_sessions', 'ua', 'ua TEXT');
  * 「昵称」（2026-11-08 用户："加一个昵称，'中枢账号 · 手机号登录'这个去掉"）。
  *
  * 跟 `name` **分开存**，不能合成一个：`name` 是中枢账号在本机的影子名（登录时按中枢
- * 登录名建出来，手机号全局唯一；通讯录、消息署名都用它）。昵称只是"我想让人看见的名字"，
- * 目前只用在「我的」页身份卡 —— 合成一个字段的话，改昵称就等于改账号名，署名跟着变，
- * 改错了还找不回来。空 = 没设（界面退回手机号显示）。
+ * 登录名建出来，手机号全局唯一；身份匹配、消息署名存储用它）。昵称是"我想让人看见的名字"，
+ * **全端显示名**（2026-11-09 用户："昵称不能只在我的页面里生效"）——通讯录成员、聊天里
+ * 别人的署名、派活选人、任务指派人都先看它，没设再退回账号名。合成一个字段的话，改昵称
+ * 就等于改账号名，署名匹配跟着乱，改错了还找不回来。空 = 没设（各处退回账号名）。
  */
 ensureColumn('users', 'nickname', 'nickname TEXT');
 
@@ -107,14 +121,15 @@ export function listUsers() {
 }
 
 /**
- * 账号名册：**所有能进面板的身份都能看**的极简版 —— 只有 id / 名字 / 是不是内置。
- * 给通讯录的「成员」段与看板派活选真人用。
+ * 账号名册：**所有能进面板的身份都能看**的极简版 —— 只有 id / 名字 / 昵称 / 是不是内置。
+ * 给通讯录的「成员」段与看板派活选真人用。昵称（2026-11-09）跟着名册走：显示名是
+ * "团队里有谁"的一部分，跟名字一样不算秘密；改/清昵称仍只在 mayManage 后面（PATCH）。
  */
 export function listUserBriefs() {
   return db
-    .prepare('SELECT id, name, builtin FROM users ORDER BY builtin DESC, createdAt ASC, id ASC')
+    .prepare('SELECT id, name, nickname, builtin FROM users ORDER BY builtin DESC, createdAt ASC, id ASC')
     .all()
-    .map((r) => ({ id: r.id, name: r.name, builtin: !!r.builtin }));
+    .map((r) => ({ id: r.id, name: r.name, nickname: r.nickname ?? null, builtin: !!r.builtin }));
 }
 
 export function getUser(id) {
@@ -210,9 +225,13 @@ export function createSession(userId, { ip = null, ua = null, kind = 'hub' } = {
   const token = crypto.randomBytes(32).toString('base64url');
   const ts = Date.now();
   const created = new Date(ts).toISOString();
-  const expires = new Date(ts + SESSION_DAYS * 86400_000).toISOString();
-  const idle = new Date(ts + IDLE_MINUTES * 60_000).toISOString();
-  const absolute = new Date(ts + ABSOLUTE_HOURS * 3600_000).toISOString();
+  // 本机壳子的会话：见 SHELL_IDLE_DAYS / SHELL_SESSION_DAYS 的注释（凭据是本机文件，不是密码）
+  const shell = kind === 'shell';
+  const expires = new Date(ts + (shell ? SHELL_SESSION_DAYS : SESSION_DAYS) * 86400_000).toISOString();
+  const idle = new Date(ts + (shell ? SHELL_IDLE_DAYS * 86400_000 : IDLE_MINUTES * 60_000)).toISOString();
+  // ⚠️ 单位别混：hub 的绝对闸是 ABSOLUTE_HOURS 小时（12h），shell 的绝对闸是天（180d）。
+  // （2026-11-10 复审抓过一次：写成 (… : ABSOLUTE_HOURS) * 86400_000 → 12 天，所有 hub 会话的绝对闸 ×24。）
+  const absolute = new Date(ts + (shell ? SHELL_SESSION_DAYS * 86400_000 : ABSOLUTE_HOURS * 3600_000)).toISOString();
   db.prepare(
     'INSERT INTO user_sessions (tokenHash, userId, createdAt, expiresAt, lastSeenAt, kind, idleExpiresAt, absoluteExpiresAt, ip, ua) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
   ).run(sha256(token), String(userId), created, expires, created, String(kind), idle, absolute, ip, String(ua ?? '').slice(0, 200));
@@ -253,7 +272,8 @@ export function userBySession(token) {
   if (!u || u.disabled) return null;
   if (!row.lastSeenAt || now - Date.parse(row.lastSeenAt) > 60_000) {
     const ts = new Date(now).toISOString();
-    const idle = new Date(now + IDLE_MINUTES * 60_000).toISOString();
+    // 本机壳子的会话按天续，别按 30 分钟（见 SHELL_IDLE_DAYS 的注释）
+    const idle = new Date(now + ((row.kind === 'shell' ? SHELL_IDLE_DAYS * 86400_000 : IDLE_MINUTES * 60_000))).toISOString();
     db.prepare('UPDATE user_sessions SET lastSeenAt = ?, idleExpiresAt = ? WHERE tokenHash = ?').run(ts, idle, row.tokenHash);
   }
   return { tokenHash: row.tokenHash, user: u, kind: row.kind ?? 'hub' };

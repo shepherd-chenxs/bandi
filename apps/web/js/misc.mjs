@@ -1,15 +1,15 @@
-/* misc.mjs —— 新建员工、新建群、换群助手、绑定、列表项右键菜单（绑定）、版本提醒。
- * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
-import { esc, personLabel, personSubtitle, restorePlace, toast } from './shell.mjs';
-import { api, copyPlainText, createCombo } from './ui.mjs';
+/* misc.mjs —— 新建群、换群助手、绑定、列表项右键菜单（绑定）、版本提醒。
+ * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。
+ * 2026-11-11 起「新建员工」整段撤掉（用户拍板：不保留自建员工，岗位固定、只能从专家库雇佣）。 */
+import { esc, personLabel, personSubtitle, restorePlace, roleNameOf, toast } from './shell.mjs';
+import { api, createCombo } from './ui.mjs';
 import { load } from './state.mjs';
 import { openPluginForm, pluginFormId } from './experts.mjs';
-import { refreshDeptSuggest } from './contacts.mjs';
 import { $, S } from './core.mjs';
 
 
 
-/* -------------------------------------------------------------- 新建员工 */
+/* ------------------------------------------------- 沙箱 / 权限的中文名（员工详情共用） */
 
 /** 沙箱选项。带 blocked 的那两档实测在 headless 下跑不了命令，必须在界面上说清楚 */
 /**
@@ -35,36 +35,6 @@ export function sandboxItems(runtime) {
   // 名字自己说得清，括号里的补充是噪音；全站统一（主聊天框、员工详情、流程对话栏都走这儿）。
   const list = runtime?.sandboxes ?? ['danger-full-access'];
   return list.map((s) => ({ id: s, label: SANDBOX_LABEL[s] ?? s }));
-}
-
-
-
-// 新建员工对话框里的两个下拉：实例常驻、选项随运行时变（选项少，不带搜索）
-export const pRuntimeCombo = createCombo({ mount: $('pRuntimeMount'), search: false, onChange: () => syncSandboxes() });
-
-
-export const pSandboxCombo = createCombo({ mount: $('pSandboxMount'), search: false });
-
-
-
-export function syncSandboxes() {
-  const r = S.runtimes.find((x) => x.id === pRuntimeCombo.value());
-  const items = sandboxItems(r);
-  const keep = items.some((it) => it.id === pSandboxCombo.value()) ? pSandboxCombo.value() : items[0]?.id ?? '';
-  pSandboxCombo.setItems(items, false);
-  pSandboxCombo.setValue(keep);
-}
-
-
-
-export function openPersonaDialog() {
-  pRuntimeCombo.setItems(S.runtimes.map((r) => ({ id: r.id, label: r.label })), false);
-  pRuntimeCombo.setValue(S.runtimes[0]?.id ?? '');
-  $('pCwd').value = S.repoRoot || '';
-  $('pDept').value = '';
-  refreshDeptSuggest(); // 建议列表跟着库里已用的部门走（contacts.mjs 填的 #deptSuggest）
-  syncSandboxes();
-  $('personaDlg').showModal();
 }
 
 
@@ -117,7 +87,7 @@ export function openAssistantDialog(thread) {
       (m) => `<label class="member">
         <input type="radio" name="assistant" value="${m.personaId}"
                ${m.personaId === thread.assistantPersonaId ? 'checked' : ''} />
-        <span>${esc(m.name)}</span><em>${esc(String(m.role ?? '').split(' · ')[0].trim() || '—')}</em>
+        <span>${esc(m.name)}</span><em>${esc(roleNameOf(m) || '—')}</em>
       </label>`,
     )
     .join('');
@@ -154,39 +124,6 @@ export async function boot() {
     .then(() => restorePlace())
     .catch((e) => { $('chat').innerHTML = '<div class="empty">' + esc(e.message) + '</div>'; });
   startVersionWatch();
-}
-
-
-
-/* ------------------------------------------------------- 版本号（rail 标的下一行） */
-
-/**
- * rail 里品牌标下面那行小字（2026-11-05 用户：「原来这里有个版本号，去掉了，加回来」）。
- * 版本只有 `/api/hello` 知道（服务端读 apps/desktop/version.json，见 server.mjs 的 helloPayload）。
- *
- * 三条口径：
- *  - 拿不到就**继续藏着** —— 不编 "v0.0.0"，也不留空档把下面的导航顶下去；
- *  - 点一下复制整串版本号：报障时用户第一句就是版本，能直接粘出去；
- *  - 只填一次，不轮询：版本是随进程读的，页面活着的这一轮里不会变。
- */
-export async function initRailVersion() {
-  const el = $('railVer');
-  if (!el) return;
-  let ver = '';
-  try {
-    ver = String((await api('/api/hello'))?.version ?? '').trim();
-  } catch {
-    return; // 服务没起来：留空，别在标下面挂个假版本
-  }
-  if (!ver) return;
-  el.textContent = 'v' + ver;
-  el.title = `班底 v${ver} · 点击复制版本号`;
-  el.setAttribute('aria-label', `版本 v${ver}，点击复制`);
-  el.hidden = false;
-  el.addEventListener('click', async () => {
-    const ok = await copyPlainText(ver);
-    toast(ok ? `已复制 v${ver}` : `版本号 v${ver}`);
-  });
 }
 
 

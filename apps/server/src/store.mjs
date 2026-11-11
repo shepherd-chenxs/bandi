@@ -27,6 +27,8 @@ export * from './store/groups.mjs';
 export * from './store/runs.mjs';
 export * from './store/projects.mjs';
 export * from './store/projectTasks.mjs';
+// 信箱（2026-11-11）：平台事实的落库账本 —— 建卡失败等事件先记这儿，界面与以后的摘要都读它
+export * from './store/notices.mjs';
 export * from './store/nodeTasks.mjs';
 export * from './store/workflows.mjs';
 export * from './store/quota.mjs';

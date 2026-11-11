@@ -53,7 +53,7 @@ export function getGroup(id) {
 export function listGroupMembers(groupId) {
   return db
     .prepare(
-      `SELECT gm.personaId, gm.joinedAt, p.name, p.runtime, p.sandbox, p.cwd, p.model, p.instructions, p.rootDirs,
+      `SELECT gm.personaId, gm.joinedAt, p.name, p.role, p.roleKey, p.runtime, p.sandbox, p.cwd, p.model, p.instructions, p.rootDirs,
               p.builtin
          FROM group_members gm JOIN personas p ON p.id = gm.personaId
         WHERE gm.groupId = ? ORDER BY gm.joinedAt, p.name`,
@@ -84,7 +84,7 @@ export function listGroupSessions(groupId) {
 export function listGroups() {
   return db
     .prepare(
-      `SELECT g.id, g.title, g.assistantPersonaId, g.createdAt, g.updatedAt,
+      `SELECT g.id, g.title, g.assistantPersonaId, g.projectId, g.createdAt, g.updatedAt,
               (SELECT COUNT(*) FROM group_members m WHERE m.groupId = g.id) AS memberCount,
               (SELECT MAX(c.updatedAt) FROM conversations c WHERE c.groupId = g.id) AS lastActiveAt
          FROM groups g
@@ -92,6 +92,24 @@ export function listGroups() {
         ORDER BY COALESCE((SELECT MAX(c.updatedAt) FROM conversations c WHERE c.groupId = g.id), g.updatedAt) DESC`,
     )
     .all();
+}
+
+/**
+ * 某个项目被哪个**还没解散**的群占着（一项目一群的唯一性判据，2026-11-11）。
+ *
+ * 为什么要排除已解散的群：解散是"这个群结束了"，它占着项目不放，项目就再也挂不上任何群了。
+ * 已解散的群在写入口本来也改不了（走不到 updateGroup 那条路），这里再兜一层。
+ *
+ * @returns {null | {id: string, title: string}}
+ */
+export function getGroupByProject(projectId) {
+  const p = String(projectId ?? '').trim();
+  if (!p) return null;
+  return (
+    db
+      .prepare('SELECT id, title FROM groups WHERE projectId = ? AND dissolvedAt IS NULL LIMIT 1')
+      .get(p) ?? null
+  );
 }
 
 /**
@@ -140,11 +158,21 @@ export function createGroupSession(groupId) {
 }
 
 /**
- * 改群名 / 换群助手。**群级改完再同步到每一段会话**：
+ * 改群名 / 换群助手 / 换关联项目。**群级改完再同步到每一段会话**：
  * 消息列表、聊天头部、抽屉读的都是会话上的镜像字段，不同步就会出现"群里叫 A、列表还叫 B"。
+ *
+ * `projectId` 与另外两项的取值规则不同：**空值是合法指令**（解除关联），
+ * 所以不能按真值判断"改不改"，得看这次 patch 有没有提这一项。
+ * （title / assistant 空值仍按"没提"处理，保持原语义不动。）
+ *
+ * `projectId` **不同步到会话**：关联是群级属性，会话上没有这一列，
+ * 也不该有 —— 一段会话的"项目"跟着群走，群换了项目，历史会话说的也是新项目。
  */
 
-export function updateGroup(groupId, { title, assistantPersonaId } = {}) {
+export function updateGroup(groupId, patch = {}) {
+  const { title, assistantPersonaId } = patch;
+  const touchProject = Object.prototype.hasOwnProperty.call(patch, 'projectId');
+  const nextProject = touchProject ? String(patch.projectId ?? '').trim() || null : null;
   const ts = nowIso();
   db.exec('BEGIN');
   try {
@@ -152,6 +180,9 @@ export function updateGroup(groupId, { title, assistantPersonaId } = {}) {
     if (assistantPersonaId) {
       db.prepare('UPDATE groups SET assistantPersonaId = ?, updatedAt = ? WHERE id = ?')
         .run(assistantPersonaId, ts, groupId);
+    }
+    if (touchProject) {
+      db.prepare('UPDATE groups SET projectId = ?, updatedAt = ? WHERE id = ?').run(nextProject, ts, groupId);
     }
     if (title) {
       db.prepare('UPDATE conversations SET title = ?, updatedAt = ? WHERE groupId = ?').run(title, ts, groupId);
@@ -243,7 +274,7 @@ export function removeMember(threadId, personaId) {
 export function listMembers(threadId) {
   return db
     .prepare(
-      `SELECT tm.personaId, tm.joinedAt, p.name, p.role, p.runtime, p.sandbox, p.cwd, p.model, p.instructions, p.rootDirs,
+      `SELECT tm.personaId, tm.joinedAt, p.name, p.role, p.roleKey, p.runtime, p.sandbox, p.cwd, p.model, p.instructions, p.rootDirs,
               p.builtin
          FROM thread_members tm JOIN personas p ON p.id = tm.personaId
         WHERE tm.threadId = ? ORDER BY tm.joinedAt, p.name`,

@@ -66,6 +66,14 @@ async function main() {
   const head = task.replace(/\s+/g, ' ').trim().slice(0, 60);
   const echo = process.env.BANDI_FAKE_ECHO === 'full' ? task.replace(/\s+/g, ' ').trim() : head;
 
+  /*
+   * 交付声明（2026-11-09 P4，判据见 apps/server/src/delivery-claim.mjs）：假 CLI 默认演
+   * "干完了"，所以回话第一个非空行带 `[完成]` —— 否则按新口径，所有卡都会被如实收成
+   * 「已阻塞」（没交回可验收结论），原来那批验"跑完收待验收"的用例就全红了，测的却不是
+   * 它们要测的事。要演"这轮没交回结论"，用 `BANDI_FAKE_NO_CLAIM=1`。
+   */
+  const claim = process.env.BANDI_FAKE_NO_CLAIM === '1' ? '' : '[完成] ';
+
   // 「工作证」建卡（见上面的开关说明）：真的去调控制面，结果回进回复文本里给冒烟断言
   let cardNote = '';
   if (process.env.BANDI_FAKE_CREATE_CARD === '1') {
@@ -160,7 +168,7 @@ async function main() {
     probeNote = ' FAKE-PROBE:' + JSON.stringify(got);
   }
 
-  out({ type: 'item.completed', item: { type: 'agent_message', text: `FAKE-OK：${echo}${cardNote}${probeNote}` } });
+  out({ type: 'item.completed', item: { type: 'agent_message', text: `${claim}FAKE-OK：${echo}${cardNote}${probeNote}` } });
   out({ type: 'turn.completed', usage: { input_tokens: 11, output_tokens: 22, cached_input_tokens: 3 } });
   process.exit(0);
 }

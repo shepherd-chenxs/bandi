@@ -202,7 +202,7 @@ try {
   console.log('\n④ 非项目经理岗位带钥匙来建 → 403（干活的岗位不许越权立项）');
   const devTry = await talk(devConv, `【建卡】{"title":"嘉辉想自己立项","status":"待办","projectId":"${project.id}"} 试着立这张卡`);
   check('被拒（403 E2057）', /FAKE-CARD:403:E2057/.test(devTry.reply), devTry.reply.match(/FAKE-CARD:\S+/)?.[0] ?? devTry.reply.slice(-80));
-  check('拒绝话里说清了找谁', devTry.reply.includes('只有项目经理岗位能建任务卡'), devTry.reply.match(/FAKE-CARD:\S+/)?.[0] ?? '');
+  check('拒绝话里说清了找谁', devTry.reply.includes('只有带「建卡」权限的岗位能建任务卡'), devTry.reply.match(/FAKE-CARD:\S+/)?.[0] ?? '');
   // 403 是服务端在 createProjectTask 之前就返回的 —— 卡根本没建，无需再查库
 
   /*

@@ -76,7 +76,21 @@ export async function handleSsh(req, res, url) {
     const s = sshRegistry.getServer(alias);
     if (!s) return fail(res, 404, 'E2034', '登记表里没有这台机器');
     const r = await sshExec.testConnection(s);
-    return sendJson(res, 200, { alias: s.alias, ok: r.ok, detail: r.detail, fingerprint: r.fingerprint });
+    return sendJson(res, 200, { alias: s.alias, ok: r.ok, detail: r.detail, fingerprint: r.fingerprint, hostKeyChanged: !!r.hostKeyChanged });
+  }
+
+  /** 清主机指纹并重测（弹窗「更新指纹并重试」按钮）：
+   *  等价于 ssh-keygen -R + 重测（accept-new 自动接受新指纹）。用户自己不用碰命令行。 */
+  if (req.method === 'POST' && /^\/api\/ssh\/servers\/([^/]+)\/hostkey$/.test(url.pathname)) {
+    const alias = decodeURIComponent(/^\/api\/ssh\/servers\/([^/]+)\/hostkey$/.exec(url.pathname)[1]);
+    const s = sshRegistry.getServer(alias);
+    if (!s) return fail(res, 404, 'E2035', '登记表里没有这台机器');
+    try {
+      const r = await sshExec.refreshHostKey(s);
+      return sendJson(res, 200, { alias: s.alias, ok: r.ok, detail: r.detail, fingerprint: r.fingerprint, hostKeyChanged: !!r.hostKeyChanged });
+    } catch (e) {
+      return fail(res, 400, 'E1037', String(e?.message ?? e));
+    }
   }
 
   return false;

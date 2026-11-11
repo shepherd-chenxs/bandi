@@ -1,6 +1,6 @@
 /* projects.mjs —— 项目。
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
-import { esc, mdRender, personLabel, runtimeLabel, savePlace, setRoute, toast } from './shell.mjs';
+import { esc, mdRender, personLabel, personaCan, roleNameOf, runtimeLabel, savePlace, setRoute, toast, userLabel } from './shell.mjs';
 import { ICON_FOLDER, ICON_WB_BOARD, ICON_WB_CLOCK, ICON_WB_FLOW, api, createCombo, handleCopyPaths, post, personaAvatar, personaByName, renderMarkdown, smAvatar, wireDialogHead } from './ui.mjs';
 import { setNav } from './state.mjs';
 import { breadcrumb, headRow } from './connectors.mjs';
@@ -8,7 +8,7 @@ import { confirmDo, askText } from './machine.mjs';
 import { detailSave, showView } from './contacts.mjs';
 import { wbCard } from './workflows.mjs';
 import { hint, openFlowRun, paintRun, setListTitle } from './flowpages.mjs';
-import { attsHtmlOf, evidenceChipHtml, firstMeaningfulLine, isNarrowPh, mbOpenPicker, openConversation, openDetail, streamRun, timelineOf } from './chat.mjs';
+import { attsHtmlOf, firstMeaningfulLine, isNarrowPh, mbOpenPicker, openConversation, openDetail, streamRun, timelineOf } from './chat.mjs';
 // 运行进度卡：对话页那一套（阶段/步数/用时/卡住提醒/停止生成）搬进任务卡讨论区 —— 2026-10-29 用户："对话里的那一套搬过来用"
 import { createProgressCard } from './run-progress-card.mjs';
 import { createLiveAnswer } from './run-live.mjs';
@@ -38,7 +38,7 @@ export function workbenchAutoSection({ schedulesOnly = false } = {}) {
   return `
     <div class="wb-sec">自动化</div>
     <div class="wb-grid">
-      ${wbCard('cron', ICON_WB_CLOCK, '定时任务', '到点自动做一件事：干什么、交给谁、多久一次', 'data-schedules')}
+      ${wbCard('cron', ICON_WB_CLOCK, '定时任务', '到点自动做一件事：指派人 / 团队协作 / 流程任务', 'data-schedules')}
       ${schedulesOnly ? '' : wbCard('flow', ICON_WB_FLOW, '工作流', '画流程：节点、指派、发布', 'data-flow-design')}
     </div>`;
 }
@@ -258,7 +258,7 @@ function memberRowHtml(id) {
     ${personaAvatar(who)}
     <div class="mbr-main">
       <span class="mbr-name">${esc(who.name)}</span>
-      <span class="pill role">${esc(String(who.role ?? '').split(' · ')[0].trim() || '—')}</span>
+      <span class="pill role">${esc(roleNameOf(who) || '—')}</span>
       <span class="dot${who.busy ? ' busy' : ''}" title="${who.busy ? '正在干活' : '现在闲着'}"></span>
       ${rt ? `<span class="pill mbr-runtime">${esc(rt)}</span>` : ''}
     </div>
@@ -833,13 +833,13 @@ export async function renderProjDetail(p) {
     };
     const paint = () => {
       const q = (search.value || '').trim().toLowerCase();
-      const hit = candidates.filter((x) => !q || `${x.name}${x.role ?? ''}`.toLowerCase().includes(q));
+      const hit = candidates.filter((x) => !q || `${x.name}${roleNameOf(x)}`.toLowerCase().includes(q));
       list.innerHTML = hit.length
         ? hit.map((x) => `
             <label class="member">
               <input type="checkbox" value="${esc(x.id)}" ${picked.has(x.id) ? 'checked' : ''} />
               <span>${esc(x.name)}</span>
-              <em>${esc(String(x.role ?? '').split(' · ')[0].trim() || '—')}</em>
+              <em>${esc(roleNameOf(x) || '—')}</em>
             </label>`).join('')
         : `<div class="pj-add-empty">${candidates.length ? '没有匹配的人' : '没有可以加的人 —— 员工都在成员里了'}</div>`;
     };
@@ -974,6 +974,17 @@ export async function openBoardPage({ project = null } = {}) {
     return;
   }
 
+  /*
+   * 横向滚动位置要跨重画留住（2026-11-10 用户报告"删一张卡就弹回最左边"）：
+   * 删卡 / 拖卡 / 建卡 / 刷新按钮都走 refresh() → 这里整页重画，view.innerHTML 重建后
+   * #kbCols 的 scrollLeft 归零 —— 列一多（已完成/已取消在最右），人正看着最右那列，
+   * 删一张卡整个看板弹回最左。重画前若摆着的是**同一块**看板（同 isAll / 同 project），
+   * 把 scrollLeft 带回来；从别的页进来或跨看板跳转不带（那本来就该从头看）。
+   */
+  const sameBoard = S.kbLast != null
+    && (isAll ? S.kbLast.project == null : S.kbLast.project?.id === project.id);
+  const kbScrollLeft = sameBoard ? ($('kbCols')?.scrollLeft ?? 0) : 0;
+
   view.innerHTML = `
     ${headRow(isAll
       ? breadcrumb([{ label: '工作台', to: 'workbench' }, { label: '任务看板' }])
@@ -1021,6 +1032,8 @@ export async function openBoardPage({ project = null } = {}) {
     },
   };
   wireBoard(view, S.kbLast.wire);
+  // 重画完把横向滚动位置还回去（见上面 sameBoard 的说明）；取数失败没有 #kbCols，跳过
+  if (kbScrollLeft) $('kbCols') && ($('kbCols').scrollLeft = kbScrollLeft);
   wireKbFilter();
   wireKbColsSetting();
   wireKbStats(); // 统计面板行可点：定位到对应列
@@ -1410,7 +1423,7 @@ function kbEnsureNew() {
     if (gopick && kbNewState) {
       e.preventDefault();
       const which = gopick.dataset.kbGopick ?? '';
-      kbNewState.mode = which === 'flow' ? 'flow' : 'person';
+      kbNewState.mode = which === 'flow' || which === 'group' ? which : 'person';
       paintKbNew();
       kbNewPick(which);
       return;
@@ -1467,6 +1480,7 @@ function openKbNewPage({ project = null, isAll = false } = {}) {
     colKey: startCol,
     mode: 'person',
     who: '',                                        // '' = 不派活（与 taskDialog 同口径）
+    groupId: '',                                    // 团队协作：选中的群（`g:` 前缀，'' = 没选）
     projId: '',                                     // 手机看不见左栏，**不预选**第一个项目
     flowId: (S.flowPublished ?? [])[0]?.id ?? '',
     startNow: false,                                // 「立即开始」的用户意愿（勾选框常显）
@@ -1502,29 +1516,31 @@ function openKbNewPage({ project = null, isAll = false } = {}) {
 }
 
 /**
- * 团队协作可选的群（2026-11-09 规则）：**群助手必须是项目经理岗** ——
- * 拆卡人如果自己也是执行者，容易"自己等自己"把任务卡死；岗位这道闸把责任也钉死。
- * 群助手不是 PM / 没群助手的群不出现在清单里（后端建卡/派发还会再校验一次）。
+ * 团队协作可选的群（2026-11-09 规则，2026-11-11 改判据）：**群助手要有「承接团队卡」权限**
+ * （现在只有项目经理岗有）。拆卡人如果自己也是执行者，容易"自己等自己"把任务卡死。
+ * 判据走岗位权限（S.roles 下发的 roleKey），不再按 role 文本认"是不是项目经理"；
+ * 后端建卡/派发还会再校验一次。
  */
 function teamGroupItems() {
-  const head = (role) => String(role ?? '').split(' · ')[0].trim();
   return (S.groups ?? [])
     .map((g) => ({ g, a: (S.personas ?? []).find((p) => p.id === g.assistantPersonaId) }))
-    .filter(({ a }) => a && head(a.role) === '项目经理')
+    .filter(({ a }) => a && personaCan(a, 'team.coordinate'))
     .map(({ g, a }) => ({ id: `g:${g.id}`, label: `团队协作 · ${g.title}（群助手 ${a.name}）` }));
 }
 
-/** 执行人清单：与 taskDialog 同口径（`u:` 前缀 = 真人），分组标题让 30+ 个人不至于排成一坨 */
+/** 团队协作的群名回显（清单 id 已带 `g:` 前缀） */
+const kbNewGroupLabel = (id) => kbNewItemLabel(teamGroupItems(), id);
+
+/** 执行人清单：与 taskDialog 同口径（`u:` 前缀 = 真人），分组标题让 30+ 个人不至于排成一坨。
+ *  团队协作的群**不在这份清单里**（2026-11-09 用户：「群聊混在指派人里」）—— 它有自己的
+ *  执行方式卡（mode = 'group'），派给群和派给人是两条路，塞一个清单里人选完才知道选错了。 */
 function kbNewWhoItems() {
-  const groups = teamGroupItems();
   return [
     { id: '', label: '未分配' },
     { header: '真人' },
-    ...(S.users ?? []).map((u) => ({ id: `u:${u.id}`, label: u.name })),
+    ...(S.users ?? []).map((u) => ({ id: `u:${u.id}`, label: userLabel(u) })),
     { header: '数字员工' },
     ...(S.personas ?? []).map((p) => ({ id: p.id, label: personLabel(p) })),
-    // 团队协作（2026-11-09）：派给群，由群助手（PM）拆子卡、盯进度 —— 只列合规的群
-    ...(groups.length ? [{ header: '团队协作（群）' }, ...groups] : []),
   ];
 }
 
@@ -1555,7 +1571,6 @@ function kbNewRowHtml(key, label, value, empty = false) {
 function kbStartState(st) {
   const idea = (COL_STATUS[st.colKey] ?? '待办') === KB_NEW_IDEA;
   const isUser = String(st.who).startsWith('u:');
-  const isGroup = String(st.who).startsWith('g:');
   if (st.mode === 'flow') {
     const picked = !!st.flowId;
     return {
@@ -1566,18 +1581,28 @@ function kbStartState(st) {
           : '选了流程就立即发起；想先挂着就把状态改成「想法」',
     };
   }
+  // 团队协作（2026-11-09）：派进群，由群助手（当前 PM 岗）拆子卡、盯回执 —— 选了群才谈得上派
+  if (st.mode === 'group') {
+    const picked = !!st.groupId;
+    return {
+      can: picked && !idea,
+      lockOn: false,
+      why: !picked ? '先选一个群 —— 群助手是项目经理的群才能接团队协作的活'
+        : idea ? '「想法」先不派活，想做的时候拖到「进行中」'
+          : '建好就派进群，由群助手（项目经理）承接、拆子卡',
+    };
+  }
   if (isUser) return { can: false, lockOn: false, why: '真人执行：卡挂在他名下，不开会话、不派活' };
   if (!st.who) return { can: false, lockOn: false, why: '未派活：卡先挂着，谁也不会被叫醒' };
   if (idea) return { can: false, lockOn: false, why: '「想法」先不派活，想做的时候拖到「进行中」' };
-  // 团队协作（2026-11-09）：派进群，由群助手（当前 PM 岗）拆子卡、盯回执
-  if (isGroup) return { can: true, lockOn: false, why: '建好就派进群，由群助手（项目经理）承接、拆子卡' };
   return { can: true, lockOn: false, why: '建好就派到他的会话，工作目录是这个项目' };
 }
 
 /**
  * 画创建页主体（2026-11-06 再设计，方案 A「卡片预览式重排」）。
  *
- * 信息分层照建卡的思考顺序：**怎么干**（两张大卡二选一，选中的人/流程回显在卡上）
+ * 信息分层照建卡的思考顺序：**怎么干**（三张大卡二选一：派给他 / 团队协作 / 由流程执行，
+ * 选中的人/群/流程回显在卡上）
  * → **更多设置**（状态/项目/立即开始，直接铺开 —— 2026-11-06 三改：折叠摘要撤掉，
  * 页面本来就短，收起来反而多一跳）。
  * 原来的「执行配置」一张长表在手机上读起来像填设置；再设计时中段的「派给谁」chips /
@@ -1610,16 +1635,19 @@ function kbNewGroupHtml(st, ss) {
         <span class="kb-new-rpick${echoOn ? ' is-on' : ''}">${esc(echo)}</span>
         <span class="kb-new-rsub">${esc(sub)}</span>
       </span>
-      ${disabled ? '' : goPick(val === 'person' ? 'who' : 'flow', val === 'person' ? '选执行人' : '选流程')}
+      ${disabled ? '' : (val === 'person' ? goPick('who', '选执行人') : val === 'group' ? goPick('group', '选群') : goPick('flow', '选流程'))}
     </label>`;
 
   const parts = [];
+  const groups = teamGroupItems();
 
-  /* ── 怎么干：执行方式两张大卡，选中的人/流程回显在第三行 ── */
+  /* ── 怎么干：执行方式三张大卡（2026-11-09 加团队协作），选中的人/群/流程回显在第三行 ── */
   parts.push(sec('怎么干'));
   parts.push(card(
     mode('person', '派给他', '发到他的会话里去做，进展在那条会话里看',
       st.who ? kbNewItemLabel(kbNewWhoItems(), st.who) : '未分配', !!st.who) +
+    mode('group', '团队协作', groups.length ? '派进群聊里执行，群助手（PM）拆子卡盯进度' : '还没有群助手是项目经理的群',
+      st.groupId ? kbNewGroupLabel(st.groupId) : '未选择', !!st.groupId, !groups.length) +
     mode('flow', '由流程执行', published.length ? '卡跟着流程走，按步骤办' : '还没有已发布的流程',
       st.flowId ? kbNewItemLabel(kbNewFlowItems(), st.flowId) : '未选择', !!st.flowId, !published.length),
     'kb-new-modes',
@@ -1748,6 +1776,20 @@ function kbNewPick(which) {
     });
     return;
   }
+  if (which === 'group') {
+    // 团队协作（2026-11-09）：只列群助手是项目经理的群（teamGroupItems 已滤）；没合规群时
+    // 这张卡是置灰的（goPick 不画），走不到这里
+    mbOpenPicker({
+      title: '团队协作 · 选群',
+      items: teamGroupItems(),
+      value: st.groupId,
+      search: true,
+      searchPlaceholder: '搜群名…',
+      note: teamGroupItems().length ? '' : '还没有群助手是项目经理的群',
+      onPick: (v) => { st.groupId = v; paintKbNew(); },
+    });
+    return;
+  }
   if (which === 'flow') {
     mbOpenPicker({
       title: '流程',
@@ -1775,8 +1817,9 @@ const kbHasDraft = () => !!(String($('kbNewTitle')?.value ?? '').trim() || Strin
 
 /**
  * 提交（字段口径照 taskDialog，**不复制**那份弹窗代码）：只发标题/描述/状态，
- * 执行方式二选一（流程不带执行人 —— 服务端把"两个都给"当 400 挡），`startNow` 照抄桌面算法
- * `flow ? 状态 !== '想法' : (!isUser && !!执行人 && 勾选)`，不在手机端另算一套。
+ * 执行方式三选一（2026-11-09 加团队协作；流程不带执行人 —— 服务端把"两个都给"当 400 挡），
+ * `startNow` 照抄桌面算法 `flow ? 状态 !== '想法' : group ? 选了群 && 非「想法」 && 勾选 : (!isUser && !!执行人 && 勾选)`，
+ * 不在手机端另算一套。
  */
 async function kbNewSubmit() {
   const st = kbNewState;
@@ -1803,6 +1846,12 @@ async function kbNewSubmit() {
     kbNewEl?.querySelector('[data-kb-modecard="flow"]')?.focus();
     return;
   }
+  const groupMode = st.mode === 'group';
+  if (groupMode && !st.groupId) {
+    toast('先选一个群 —— 群助手是项目经理的群才能接团队协作的活');
+    kbNewEl?.querySelector('[data-kb-modecard="group"]')?.focus();
+    return;
+  }
 
   const statusText = COL_STATUS[st.colKey] ?? '待办';
   const whoVal = String(st.who);
@@ -1826,15 +1875,19 @@ async function kbNewSubmit() {
         title,
         description: String($('kbNewDesc')?.value ?? '').trim(),
         status: statusText,
+        // 执行方式三选一（2026-11-09 加团队协作）：流程不带执行人（服务端把"两个都给"当 400 挡）
         ...(flow
           ? { flowTemplateId: st.flowId }
-          : isUser
-            ? { assigneeUserId: whoVal.slice(2) }
-            : whoVal.startsWith('g:')
-              // 团队协作（2026-11-09）：派给群 → 执行时现读群助手（PM）承接
-              ? { assigneeGroupId: whoVal.slice(2) }
+          : groupMode
+            ? { assigneeGroupId: String(st.groupId).slice(2) }
+            : isUser
+              ? { assigneeUserId: whoVal.slice(2) }
               : { personaId: whoVal || null }),
-        startNow: flow ? statusText !== KB_NEW_IDEA : (!isUser && !!whoVal && startChecked),
+        startNow: flow
+          ? statusText !== KB_NEW_IDEA
+          : groupMode
+            ? (!!st.groupId && statusText !== KB_NEW_IDEA && startChecked)
+            : (!isUser && !!whoVal && startChecked),
       }),
     });
     /*
@@ -1851,7 +1904,10 @@ async function kbNewSubmit() {
     kbCloseNew();
     // 成功反馈带结果对象（交互规格 §3.3 D4）：只说"这一次建出来的东西走到了哪"
     if (res?.task?.flowRunId) toast('流程已经起来了 —— 到流程实例里看每一步');
-    else if (!flow && !isUser && !!whoVal && startChecked) {
+    // 团队协作的回显要用群名（st.who 是执行人清单的值，团队协作模式下它跟这张卡无关）
+    else if (groupMode && !!st.groupId && startChecked) {
+      toast(`已创建，${kbNewGroupLabel(st.groupId)}这就开始`, 'ok');
+    } else if (!flow && !groupMode && !isUser && !!whoVal && startChecked) {
       toast(`已创建，${kbNewItemLabel(kbNewWhoItems(), whoVal)}这就开始`, 'ok');
     } else toast('已创建', 'ok');
     await onDone?.();
@@ -2104,7 +2160,8 @@ export function kbFilterCount(scope) {
 
 /** 现在有没有在筛（某一维一个都不勾 = 那一维不设限；三维全空 = 看全部） */
 export function kbFilterActive(scope) {
-  return kbFilterCount(scope) > 0;
+  // 「只看我的」也算一种收窄：列该跟着裁空，不然满屏空列
+  return S.kbMine !== false || kbFilterCount(scope) > 0;
 }
 
 
@@ -2121,6 +2178,14 @@ export function kbFilterActive(scope) {
  */
 export function kbWhyHidden(card, scope) {
   const f = S.kbFilter ?? {};
+  /*
+   * 「只看我的」（2026-11-11 用户定）：验收人 = 派活人。我派的卡才进我的默认视图；
+   * 贺韬派的卡/子卡归他验收，留在「全量」里看。没登录人（拿不到 me）时不筛，宁可全看。
+   */
+  if (S.kbMine !== false) {
+    const me = S.me?.id ?? null;
+    if (me && !(card?.created_by_user_id === me || card?.assignee_user_id === me)) return 'mine';
+  }
   if (f.statuses?.length && !f.statuses.includes(card?.status)) return 'status';
   if (f.assignees?.length && !f.assignees.includes(card?.assignee_id ?? '')) return 'who';
   if (scope === 'all' && f.projects?.length && !f.projects.includes(card?.project_id ?? '')) return 'proj';
@@ -2312,7 +2377,10 @@ export function kbFilterBar(data) {
        <div class="kbf-foot">点一行进去选；不同组之间 = 同时满足</div>`;
 
   return `<div class="kbf" id="kbFilter">
-    <span class="kbf-info">${n ? `显示 ${kbFilterCols(data).reduce((a, c) => a + c.count, 0)} / 共 ${data?.total ?? 0}` : ''}</span>
+    <span class="kbf-info">${n || S.kbMine !== false ? `显示 ${kbFilterCols(data).reduce((a, c) => a + c.count, 0)} / 共 ${data?.total ?? 0}` : ''}</span>
+    <button type="button" class="kbf-btn${S.kbMine !== false ? ' on' : ''}" id="kbMineBtn"
+            title="${S.kbMine !== false ? '现在只看我派的卡（我验收的）；点一下看全量' : '现在看全量；点一下只看我派的卡（我验收的）'}"
+            aria-label="只看我的 / 全量">${S.kbMine !== false ? '只看我的' : '全量'}</button>
     <button type="button" class="kbf-btn${n ? ' on' : ''}" id="kbFilterBtn" title="按状态 / 负责人 / 项目 / 来源筛选" aria-label="筛选">
       <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round">
         <path d="M4 6.5h16M7 12h10M10 17.5h4" />
@@ -2521,6 +2589,16 @@ export function kbRepaintRows() {
  * 状态放在 `S.kbPane` 里，所以重画之后还停在原来那一级。
  */
 export function wireKbFilter() {
+  // 「只看我的 / 全量」（2026-11-11）：切换即重画（列、计数、提示都跟着变），并记进位置
+  const mineBtn = $('kbMineBtn');
+  if (mineBtn) {
+    mineBtn.onclick = (e) => {
+      e.stopPropagation();
+      S.kbMine = S.kbMine === false; // 切换：当前是全量 → 只看我的；当前只看我的 → 全量
+      savePlace();
+      kbRepaint();
+    };
+  }
   const btn = $('kbFilterBtn');
   const pop = $('kbFilterPop');
   if (!btn || !pop) return;
@@ -2741,6 +2819,14 @@ export function wireBoard(view, { refresh, taskProject = () => null }) {
       if (!taskId || !card) return; // 拖的不是手工卡
       const toStatus = COL_STATUS[colEl.dataset.kbCol];
       if (!toStatus || card.dataset.col === colEl.dataset.kbCol) return;
+      /*
+       * 代验收确认（2026-11-11 用户定：验收人 = 派活人）：这张卡不是我派的（贺韬派的/子卡），
+       * 我拖到「已完成」= 替他点头。给一句确认，别让管理兜底权悄悄越权。
+       */
+      const mine = !!S.me?.id && card.dataset.createdByUser === S.me.id;
+      if (toStatus === '已完成' && !mine) {
+        if (!(await confirmDo('这张卡不是你派的（由派活人验收）—— 确定代他点「已完成」？', { title: '代验收？', ok: '代他完成' }))) return;
+      }
       try {
         const res = await api(`/api/projects/tasks/${encodeURIComponent(taskId)}`, {
           method: 'PATCH',
@@ -3107,7 +3193,8 @@ export async function paintTaskCardPage(taskId, opts = {}) {
   // 跑挂了的运行 id 集合：这些轮次的回话/占位行带「重跑一次」按钮（2026-10-30 用户："失败了可以再让它重新跑一次"）。
   // threadsHtml 每次重画会按最新 runs 重算 —— 重跑后新回话属于新 run，旧失败轮的按钮留着无妨（multica 同款）。
   let failedRunIds = new Set((conv?.runs ?? []).filter((r) => r.status === '失败').map((r) => r.id));
-  let whoName = conv?.conversation?.personaName ?? assignee?.name ?? '执行人';
+  let whoName = conv?.conversation?.personaName ?? assignee?.name
+    ?? (task.assigneeGroupId ? `团队协作 · ${(S.groups ?? []).find((g) => g.id === task.assigneeGroupId)?.title ?? '群'}` : '执行人');
 
   /**
    * 评论区（2026-10-18）：**一条顶层评论 = 一个议题**，回复挂在它下面。
@@ -3127,8 +3214,12 @@ export async function paintTaskCardPage(taskId, opts = {}) {
 
   // 真人署名（2026-10-31 用户概念落地）：消息带 senderUserName 且**不是自己** → 返回名字。
   // 卡评论区谁留的言各归各；没署名（员工/回执）或就是自己 → null，一切照旧。
-  const humanOf = (m) =>
-    m.role === 'user' && m.senderUserName && m.senderUserName !== (S.me?.name ?? '我') ? m.senderUserName : null;
+  // 昵称全端生效（2026-11-09）：画出来按昵称（名册里按 senderUserId 查），认人仍按账号名。
+  const humanOf = (m) => {
+    if (!(m.role === 'user' && m.senderUserName && m.senderUserName !== (S.me?.name ?? '我'))) return null;
+    const u = (S.users ?? []).find((x) => x.id === m.senderUserId);
+    return u?.nickname || m.senderUserName;
+  };
 
   // 我自己的评论不再重复写名字 —— 头像上那个「我」就是名字，写两遍是噪声（他的回话仍然带名字）
   // 时间放回复下面（2026-10-29 用户："时间放回复下面"）；自己的评论头一行**整行不画** ——
@@ -3153,9 +3244,8 @@ export async function paintTaskCardPage(taskId, opts = {}) {
         ? '<div class="step stop">已停止生成' + esc(dur) + '（这一轮没有回话）</div>'
         : `<div class="step bad">没跑成：${esc(firstMeaningfulLine(r.error) || '运行失败（这次没留下原因）')}</div>`;
     } else {
-      // 证据入口（2026-11-09 P2b）：任务卡讨论区跟聊天页用同一个组件/同一个接口 ——
-      // 回话正文不贴命令/输出，点「证据」看这一轮的工具与错误摘要（完整事件仍可回放）。
-      main = `<div class="tc-cmt-text">${renderMarkdown(m.text)}${attsHtmlOf(m.atts)}${m.runId ? evidenceChipHtml(m.runId) : ''}</div>`;
+      // 2026-11-10 用户口径：证据留后台（运行记录/事件流），界面不体现 —— 任务卡讨论区的「证据」入口已移除。
+      main = `<div class="tc-cmt-text">${renderMarkdown(m.text)}${attsHtmlOf(m.atts)}</div>`;
     }
     // 「重跑一次」：失败轮的回话（或没落回话的失败占位）脚上带一颗 —— multica 同款（2026-10-30）
     const failedRid = m.pseudo === 'fail' ? m.run?.id : (m.runId && failedRunIds.has(m.runId) ? m.runId : null);
@@ -3270,7 +3360,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     const last = runs.filter((r) => r.endedAt).sort((a, b) => String(b.endedAt).localeCompare(String(a.endedAt)))[0];
     const when = last?.endedAt ? `（${esc(cmtTime(last.endedAt))} 收工）` : '';
     if (st === '待验收')
-      return `<div class="tc-statebar ok"><b>✅ 活干完了</b> —— 等你验收${when}。上面他最后一句话就是结论。</div>`;
+      return `<div class="tc-statebar ok"><b>✅ 活干完了</b> —— 等验收人验收${when}。上面他最后一句话就是结论。</div>`;
     if (st === '失败')
       return `<div class="tc-statebar bad"><b>这轮没跑成</b> —— 没干完。他消息脚上有「↻ 重跑一次」，点一下接着来。</div>`;
     if (st === '已阻塞')
@@ -3437,13 +3527,17 @@ export async function paintTaskCardPage(taskId, opts = {}) {
    */
   const mbTC = !dlg && document.body.classList.contains('mb-narrow');
   const stKey = Object.keys(COL_STATUS).find((k) => COL_STATUS[k] === task.status) ?? 'other';
-  // 团队协作（2026-11-09）：卡派给群时，执行人一栏显示群名（协调人 = 群助手，现读不落卡）
+  // 团队协作（2026-11-09）：群**单独一行**，不再混进「执行人」（2026-11-09 用户：「群聊混在指派人里」）
   const groupAssignee = task.assigneeGroupId ? (S.groups ?? []).find((g) => g.id === task.assigneeGroupId) : null;
   const whoLabel = flowOnly
     ? '（由流程执行）'
     : assignee?.name
-      ?? (S.users ?? []).find((u) => u.id === task.assigneeUserId)?.name
-      ?? (groupAssignee ? `团队协作 · ${groupAssignee.title}` : '未分配');
+      ?? userLabel((S.users ?? []).find((u) => u.id === task.assigneeUserId))
+      ?? '未分配';
+  const groupLabel = groupAssignee ? `团队协作 · ${groupAssignee.title}` : '未选择';
+  // 执行方式 / 执行对象两格（2026-11-09 用户定名）：方式 = 派给人 | 团队协作；对象跟着方式换清单
+  const howLabel = groupAssignee ? '团队协作' : '派给人';
+  const targetLabel = groupAssignee ? groupLabel : whoLabel;
 
   /*
    * 讨论条数（2026-11-05）：导航栏那颗气泡上的角标、抽屉标题上的数字。
@@ -3557,9 +3651,13 @@ export async function paintTaskCardPage(taskId, opts = {}) {
                         （与状态胶囊同一套 mbOpenPicker），选中立刻落库 —— 「待办」+人 = 自动开工。
                         还没发起的流程卡保持只读：执行人由流程当前节点决定，服务端也拒绝改派。 */
                      flowOnly
-                       ? `<div class="tc-m-row"><span class="tc-m-k">执行人</span><span class="tc-m-v is-dim">${esc(whoLabel)}</span></div>`
-                       : `<button type="button" class="tc-m-row" id="tcWhoRow" aria-label="改执行人，当前${esc(whoLabel)}">
-                            <span class="tc-m-k">执行人</span><span class="tc-m-v" id="tcWhoText">${esc(whoLabel)}</span><i class="tc-m-chev" aria-hidden="true"></i>
+                       ? `<div class="tc-m-row"><span class="tc-m-k">执行方式</span><span class="tc-m-v is-dim">${esc(whoLabel)}</span></div>`
+                       : `<button type="button" class="tc-m-row" id="tcHowRow" aria-label="改执行方式，当前${esc(howLabel)}">
+                            <span class="tc-m-k">执行方式</span><span class="tc-m-v" id="tcHowText">${esc(howLabel)}</span><i class="tc-m-chev" aria-hidden="true"></i>
+                          </button>
+                          <!-- 执行对象跟着执行方式换清单（2026-11-09）：派给人 → 人，团队协作 → 群 -->
+                          <button type="button" class="tc-m-row" id="tcTargetRow" aria-label="改执行对象，当前${esc(targetLabel)}">
+                            <span class="tc-m-k">执行对象</span><span class="tc-m-v" id="tcTargetText">${esc(targetLabel)}</span><i class="tc-m-chev" aria-hidden="true"></i>
                           </button>`
                    }
                    <div class="tc-m-row"><span class="tc-m-k">项目</span><span class="tc-m-v">${esc(proj?.name ?? '（项目已不在）')}</span></div>
@@ -3623,18 +3721,18 @@ export async function paintTaskCardPage(taskId, opts = {}) {
                     整个 aside 不显示。删了它 createCombo 就没地方挂了。 -->
                <div id="tcStatusMount"></div>
                <div id="tcWhoMount"></div>
+               <div id="tcGroupMount"></div>
              </aside>`
           : `<aside class="tc-side">
         <h3>属性</h3>
         <div class="tc-prop"><span class="tc-prop-k">状态</span><div id="tcStatusMount"></div></div>
-        <!-- 执行人（2026-11-08 用户圈了这格问「不应该是这个卡吧」）：还没发起的流程卡不上控件 ——
-             执行人由流程当前节点决定，服务端也拒绝改派；原来是颗只有一个选项的假下拉，
-             长得跟能选的一样，误导。改成纯文本。 -->
-        <div class="tc-prop"><span class="tc-prop-k">执行人</span>${
-          flowOnly
-            ? '<span class="tc-prop-v">由流程执行<span class="dim"> · 发起后由流程当前节点决定</span></span>'
-            : '<div id="tcWhoMount"></div>'
-        }</div>
+        <!-- 执行方式 / 执行对象两格（2026-11-09 用户定名）：方式选"派给人 | 团队协作"，
+             对象跟着方式换清单（人 / 群）。还没发起的流程卡不上控件（2026-11-08）——
+             执行人由流程当前节点决定，服务端也拒绝改派。 -->
+        ${flowOnly
+          ? '<div class="tc-prop"><span class="tc-prop-k">执行方式</span><span class="tc-prop-v">由流程执行<span class="dim"> · 发起后由流程当前节点决定</span></span></div>'
+          : `<div class="tc-prop"><span class="tc-prop-k">执行方式</span><div id="tcHowMount"></div></div>
+        <div class="tc-prop"><span class="tc-prop-k">执行对象</span><div id="tcWhoMount"></div><div id="tcGroupMount"></div></div>`}
         ${flowOnly
           ? `<div class="tc-prop"><span class="tc-prop-k">流程</span><span class="tc-prop-v">${esc(flowName)} <span class="dim">· 还没发起</span></span></div>`
           : ''}
@@ -3666,7 +3764,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
                  <button class="primary" id="tcPrLink">关联</button>
                   <button id="tcPrCreate" title="把项目目录里的改动提交成新分支并开 PR（前提：这个目录是已接入仓库的克隆）">建 PR</button>
                </div>
-               <div class="counter left">合并后这张卡会转到「待验收」——不自动「已完成」，等你点头。</div>`
+               <div class="counter left">合并后这张卡会转到「待验收」——不自动「已完成」，等验收人点头。</div>`
         }`}
 
         <h3>详情</h3>
@@ -3677,7 +3775,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
           /* 状态改动归因（2026-11-03）：谁最后一次由人改的状态、什么时候。
              只在**人**改过状态后才有（系统收状态不冒充人）；老卡两列是 NULL 就不显示这行。 */
           task.statusByUserId
-            ? `<div class="tc-prop"><span class="tc-prop-k">状态改动</span><span class="tc-prop-v">${esc((S.users ?? []).find((u) => u.id === task.statusByUserId)?.name ?? '那个人已经不在了')}<span class="dim"> · ${esc(String(task.statusAt ?? '').replace('T', ' ').slice(0, 16))}</span></span></div>`
+            ? `<div class="tc-prop"><span class="tc-prop-k">状态改动</span><span class="tc-prop-v">${esc(userLabel((S.users ?? []).find((u) => u.id === task.statusByUserId)) ?? '那个人已经不在了')}<span class="dim"> · ${esc(String(task.statusAt ?? '').replace('T', ' ').slice(0, 16))}</span></span></div>`
             : ''
         }
       </aside>`
@@ -3998,13 +4096,14 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     // 还没发起的流程卡没有"选人"这回事（执行人由流程当前步骤定），提示得换说法，
     // 不然右边明明写着「由流程执行」、底下却叫着"快选执行人"，两句话打架。
     // whoCombo 在流程卡上是 null（2026-11-08 起不再摆假下拉），必须可选链。
-    hint2.textContent = (whoCombo?.value() ?? '')
+    // 团队协作的卡（群那行有值）也不再催"选执行人" —— 它有自己的承接方式。
+    hint2.textContent = ((whoCombo?.value() ?? '') || (groupCombo?.value() ?? ''))
       ? ''
       : flowOnly
         ? `这张卡由流程「${flowName}」执行 —— 发起后在流程实例里跟当前经办人往来。`
         : isNarrowPh()
-          ? '先指定执行人，再发送。'
-          : '先在右边选执行人，再发送。';
+          ? '先指定执行对象，再发送。'
+          : '先在右边指定执行对象，再发送。';
   };
 
   /* 手机行上的状态展示（#tcStatusChip/#tcStatusText；桌面没有这两个节点，函数空转） */
@@ -4020,7 +4119,20 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     mount: $('tcStatusMount'),
     items: ['想法', '待办', '进行中', '待验收', '已阻塞', '失败', '已完成', '已取消'].map((s) => ({ id: s, label: s })),
     value: task.status,
-    onChange: (st) => { syncMobileStatus(st); scheduleSave(0); }, // 改状态立刻存：待办+人 = 开工（服务端负责）
+    /*
+     * 代验收确认（2026-11-11 用户定：验收人 = 派活人）：不是我派的卡（贺韬派的/子卡），
+     * 我点「已完成」= 替他点头，先问一句；取消就把下拉拨回原状态。
+     */
+    onChange: (st) => {
+      if (st === '已完成' && (task.createdByUserId ?? null) !== (S.me?.id ?? null)) {
+        confirmDo('这张卡不是你派的（由派活人验收）—— 确定代他点「已完成」？', { title: '代验收？', ok: '代他完成' }).then((ok) => {
+          if (ok) { syncMobileStatus(st); scheduleSave(0); }
+          else { statusCombo.setValue(task.status); syncMobileStatus(task.status); }
+        });
+        return;
+      }
+      syncMobileStatus(st); scheduleSave(0); // 改状态立刻存：待办+人 = 开工（服务端负责）
+    },
   });
   /*
    * 执行人那一格：还没发起的流程卡**不上控件**（2026-11-08「发起台形态」）。
@@ -4037,11 +4149,42 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     const p = isUser || isGroup ? null : (S.personas ?? []).find((x) => x.id === id) ?? null;
     const u = isUser ? (S.users ?? []).find((x) => x.id === id.slice(2)) : null;
     const g = isGroup ? (S.groups ?? []).find((x) => x.id === id.slice(2)) : null;
-    if (p || u || g) whoName = p?.name ?? u?.name ?? `团队协作 · ${g.title}`;
-    const whoText = $('tcWhoText');
-    if (whoText) whoText.textContent = p?.name ?? u?.name ?? (g ? `团队协作 · ${g.title}` : '未分配');
+    if (p || u || g) whoName = p?.name ?? userLabel(u) ?? `团队协作 · ${g.title}`;
+    targetText();
     syncComposer();
     scheduleSave(0); // 指定人立刻存：卡在「待办」时这一下就会自动开工（真人执行不开工，见服务端）
+  };
+  // 换群 / 清群（服务端会把人那维清掉，回包后 refreshHeader 再对齐）
+  const onGroupChange = (id) => {
+    const g = String(id).startsWith('g:') ? (S.groups ?? []).find((x) => x.id === String(id).slice(2)) : null;
+    if (g) whoName = `团队协作 · ${g.title}`;
+    targetText();
+    scheduleSave(0); // 「待办」+群同样自动开工（派进群，服务端同一套）
+  };
+  /* 执行对象那格的行上回显（手机 tcTargetText；桌面没有这个节点，空转）。
+     桌面回显由 combo 自己画，这里只伺候手机那一行。 */
+  const targetText = () => {
+    const el = $('tcTargetText');
+    if (!el) return;
+    if ((howCombo?.value() ?? 'person') === 'group') {
+      const g = String(groupCombo?.value() ?? '').startsWith('g:')
+        ? (S.groups ?? []).find((x) => x.id === String(groupCombo.value()).slice(2)) : null;
+      el.textContent = g ? `团队协作 · ${g.title}` : '未选择';
+      return;
+    }
+    const wv = String(whoCombo?.value() ?? '');
+    const p = wv && !wv.startsWith('u:') ? (S.personas ?? []).find((x) => x.id === wv) ?? null : null;
+    const u = wv.startsWith('u:') ? (S.users ?? []).find((x) => x.id === wv.slice(2)) : null;
+    el.textContent = p?.name ?? userLabel(u) ?? '未分配';
+  };
+  /* 执行方式切档：执行对象那格换挂载（桌面）+ 手机行回显。切方式本身**不落库** ——
+     只有对象真的换了（assigneePatch 对照服务端现值）才会 PATCH。 */
+  const syncHowTarget = () => {
+    const group = (howCombo?.value() ?? 'person') === 'group';
+    const show = (el, on) => { if (el) el.style.display = on ? '' : 'none'; };
+    show($('tcWhoMount'), !group);
+    show($('tcGroupMount'), group);
+    targetText();
   };
   const whoCombo = flowOnly
     ? null
@@ -4051,20 +4194,51 @@ export async function paintTaskCardPage(taskId, opts = {}) {
          * 执行人一格二选一（2026-10-31 用户概念落地）：数字员工（会派活起会话）或
          * **真人**（挂名负责，不起会话）——真人的选项 id 带 `u:` 前缀，提交时换成
          * assigneeUserId（员工的 id 都是 `p-` 系，前缀撞不了车）。
-         * 2026-11-09 起多第三档：**团队协作**（`g:` 前缀 = 派给群，由群助手承接）。
+         * 团队协作的群**不在这份清单里**（2026-11-09 用户：「群聊混在指派人里」）——
+         * 它在「团队协作」方式下的同一格（groupCombo）。
          */
         items: [
           { id: '', label: '未分配' },
-          ...(S.users ?? []).map((u) => ({ id: `u:${u.id}`, label: u.name })),
+          ...(S.users ?? []).map((u) => ({ id: `u:${u.id}`, label: userLabel(u) })),
           ...(S.personas ?? []).map((p) => ({ id: p.id, label: personLabel(p) })),
-          ...teamGroupItems(),
         ],
-        value: task.assigneePersonaId || (task.assigneeUserId ? `u:${task.assigneeUserId}` : (task.assigneeGroupId ? `g:${task.assigneeGroupId}` : '')),
+        value: task.assigneePersonaId || (task.assigneeUserId ? `u:${task.assigneeUserId}` : ''),
         search: true,
         placeholder: '搜名字或岗位…',
         empty: '没有匹配的人',
         onChange: onWhoChange,
       });
+  /*
+   * 团队协作的群清单（2026-11-09）：只列群助手是项目经理的群（teamGroupItems 已滤），
+   * `g:` 前缀提交时换成 assigneeGroupId。服务端把"人/群同时给"当 400 挡，
+   * 所以提交只发**变了的**那一维（见 snapshot 的 assigneePatch）。
+   */
+  const groupCombo = flowOnly
+    ? null
+    : createCombo({
+        mount: $('tcGroupMount'),
+        // 「不派群」= 清掉团队协作那维（服务端只清群、不动人）—— 群卡想退回未分配走这里
+        items: [{ id: '', label: '不派群' }, ...teamGroupItems()],
+        value: task.assigneeGroupId ? `g:${task.assigneeGroupId}` : '',
+        search: true,
+        placeholder: '搜群名…',
+        blank: '未选择',
+        empty: '没有匹配的群',
+        onChange: onGroupChange,
+      });
+  /*
+   * 执行方式（2026-11-09 用户定名，与新建弹窗的执行方式同口径）：派给人 / 团队协作。
+   * 档位从卡现值读（派了群 = 团队协作）。切档只换"执行对象"那格的清单，本身不落库。
+   */
+  const howCombo = flowOnly
+    ? null
+    : createCombo({
+        mount: $('tcHowMount'),
+        items: [{ id: 'person', label: '派给人' }, { id: 'group', label: '团队协作' }],
+        value: task.assigneeGroupId ? 'group' : 'person',
+        onChange: () => syncHowTarget(),
+      });
+  syncHowTarget();
   syncComposer();
 
   /*
@@ -4087,19 +4261,44 @@ export async function paintTaskCardPage(taskId, opts = {}) {
         },
       });
     });
-    $('tcWhoRow')?.addEventListener('click', () => {
-      const cur = whoCombo?.value() ?? '';
+    $('tcHowRow')?.addEventListener('click', () => {
       mbOpenPicker({
-        title: '执行人',
+        title: '执行方式',
+        items: [{ id: 'person', label: '派给人' }, { id: 'group', label: '团队协作' }],
+        value: howCombo?.value() ?? 'person',
+        onPick: (v) => {
+          howCombo?.setValue(v);
+          syncHowTarget(); // 换"执行对象"那行的清单与回显；切方式本身不落库（对象换了才存）
+        },
+      });
+    });
+    $('tcTargetRow')?.addEventListener('click', () => {
+      const group = (howCombo?.value() ?? 'person') === 'group';
+      if (group) {
+        mbOpenPicker({
+          title: '团队协作 · 选群',
+          search: true,
+          searchPlaceholder: '搜群名…',
+          items: [{ id: '', label: '不派群' }, ...teamGroupItems()],
+          value: groupCombo?.value() ?? '',
+          onPick: (id) => {
+            groupCombo?.setValue(id);
+            onGroupChange(id); // 行上群名立刻刷 + 立刻存（待办+群 = 派进群，同桌面）
+          },
+        });
+        return;
+      }
+      mbOpenPicker({
+        title: '执行对象 · 选人',
         search: true,
         searchPlaceholder: '搜名字或岗位…',
+        // 团队协作的群不在这里（执行方式切到「团队协作」才是群清单）
         items: [
           { id: '', label: '未分配' },
-          ...(S.users ?? []).map((u) => ({ id: `u:${u.id}`, label: u.name })),
+          ...(S.users ?? []).map((u) => ({ id: `u:${u.id}`, label: userLabel(u) })),
           ...(S.personas ?? []).map((p) => ({ id: p.id, label: personLabel(p) })),
-          ...teamGroupItems(),
         ],
-        value: cur,
+        value: whoCombo?.value() ?? '',
         onPick: (id) => {
           whoCombo?.setValue(id);
           onWhoChange(id); // 行上名字立刻刷 + 立刻存（待办+人 = 自动开工，同桌面）
@@ -4108,6 +4307,23 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     });
   }
 
+  /*
+   * 执行人 / 团队协作**两行分开**（2026-11-09）：提交只发**变了的**那一维 ——
+   * 服务端把"同时给人和群"当 400 挡（updateProjectTask 的互斥校验），而没变的那一维
+   * 发上去既无意义又正好撞枪口。`task` 随每次保存回包刷新，这里比较的就是服务端现值。
+   */
+  const assigneePatch = () => {
+    if (flowOnly) return {};
+    const wv = String(whoCombo?.value() ?? '');
+    const gv = String(groupCombo?.value() ?? '');
+    const wantGroup = gv ? gv.slice(2) : null;
+    if (wantGroup !== (task.assigneeGroupId ?? null)) return { assigneeGroupId: wantGroup };
+    const wantUser = wv.startsWith('u:') ? wv.slice(2) : null;
+    if (wantUser !== (task.assigneeUserId ?? null)) return { assigneeUserId: wantUser };
+    const wantPersona = wv && !wv.startsWith('u:') ? wv : null;
+    if (wantPersona !== (task.assigneePersonaId ?? null)) return { personaId: wantPersona };
+    return {};
+  };
   const snapshot = () => ({
     // 手机整页（2026-11-08 起）：存状态 + 执行人（「要能选人」）—— 标题/描述仍在手机上只读。
     // 桌面照旧：改了什么就存什么。
@@ -4115,14 +4331,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
       ? {
           status: statusCombo.value(),
           // 还没发起的流程卡不能带执行人：服务端看到"流程卡改执行人"会把整个 PATCH 400 掉。
-          // 执行人二选一：`u:` 前缀 = 真人（assigneeUserId），否则 = 数字员工（personaId）。
-          ...(flowOnly
-            ? {}
-            : String(whoCombo?.value() ?? '').startsWith('u:')
-              ? { assigneeUserId: String(whoCombo.value()).slice(2) }
-              : String(whoCombo?.value() ?? '').startsWith('g:')
-                ? { assigneeGroupId: String(whoCombo.value()).slice(2) } // 团队协作：派给群
-                : { personaId: whoCombo.value() }),
+          ...assigneePatch(),
         }
       : {
           title: titleVal,
@@ -4130,14 +4339,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
           status: statusCombo.value(),
           // 还没发起的流程卡**不能带执行人**：服务端看到"流程卡改执行人"会把整个 PATCH 400 掉
           // （连改标题/描述都一起被挡），而这张卡本来就没有人选。
-          // 执行人二选一：`u:` 前缀 = 真人（assigneeUserId），否则 = 数字员工（personaId）。
-          ...(flowOnly
-            ? {}
-            : String(whoCombo.value()).startsWith('u:')
-              ? { assigneeUserId: String(whoCombo.value()).slice(2) }
-              : String(whoCombo.value()).startsWith('g:')
-                ? { assigneeGroupId: String(whoCombo.value()).slice(2) } // 团队协作：派给群
-                : { personaId: whoCombo.value() }),
+          ...assigneePatch(),
         }),
   });
   let lastSaved = JSON.stringify(snapshot());
@@ -4157,13 +4359,14 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     syncMobileStatus(task.status);
     const wv = task.assigneePersonaId || (task.assigneeUserId ? `u:${task.assigneeUserId}` : '');
     whoCombo?.setValue(wv);
-    // 手机行上的执行人名跟着刷（combo.setValue 不走 onChange，行不会自己动）
+    // 执行方式 / 执行对象跟着服务端现值对齐（改派给群/改回给人的回包都会走到这）
+    groupCombo?.setValue(task.assigneeGroupId ? `g:${task.assigneeGroupId}` : '');
+    howCombo?.setValue(task.assigneeGroupId ? 'group' : 'person');
+    syncHowTarget();
+    // 手机行上的回显跟着刷（combo.setValue 不走 onChange，行不会自己动）
     if (mbTC) {
-      const isUser = String(wv).startsWith('u:');
-      const wp = isUser ? null : (S.personas ?? []).find((x) => x.id === wv) ?? null;
-      const wu = isUser ? (S.users ?? []).find((x) => x.id === String(wv).slice(2)) : null;
-      const wt = $('tcWhoText');
-      if (wt) wt.textContent = wp?.name ?? wu?.name ?? (flowOnly ? '（由流程执行）' : '未分配');
+      const ht = $('tcHowText');
+      if (ht) ht.textContent = task.assigneeGroupId ? '团队协作' : '派给人';
     }
     if (document.activeElement !== descHost) {
       descVal = task.description || '';
@@ -4859,7 +5062,9 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     const text = $('tcInput').value.trim();
     if (!text && !pendingAtts.length) return;
     if (attSending) return;
-    if (!whoCombo.value()) {
+    // 团队协作的卡（群那行有值）也不再拦"先选执行人"—— 点发送会吃到服务端那句
+    // 「往来在群里跟群助手说」的 400，比前端替服务端撒谎强。
+    if (!whoCombo.value() && !groupCombo?.value()) {
       // 还没发起的流程卡没有执行人可讨论（右边只有「（由流程执行）」一项）——
       // 照着老文案叫他"选执行人"等于指路指到死胡同。
       toast(flowOnly
@@ -4875,6 +5080,12 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     const whoVal = String(whoCombo.value());
     if (whoVal.startsWith('u:')) {
       toast('这张卡派给了真人 —— 评论区是跟数字员工讨论的；要让员工接手，把执行人改成他');
+      return;
+    }
+    // 团队协作的卡（2026-11-09 两行分开展示后 whoCombo 上不再有群）：评论区走不通，
+    // 直说别让服务端代言 —— 也别把空 personaId 落库（那会把群那维一并清掉）。
+    if (!whoVal && groupCombo?.value()) {
+      toast('这张卡是团队协作（派给群）—— 往来在群里跟群助手说；卡评论区只留给指定了执行人的卡');
       return;
     }
     let sent = false;   // 真发出去了没有：决定收尾是"收键盘"还是"留着改"
@@ -5041,7 +5252,7 @@ export function kbCard(r) {
    * 同一族：都能拖（**拖到哪一列就是人给的指令**）、都能删（＝忽略）。
    * 流程卡与聊天卡的状态归平台管，拖不动。
    */
-  const local = r.source === 'manual' || r.source === 'repo';
+  const local = r.source === 'manual' || r.source === 'repo' || r.source === 'backfill';
   const jump = r.source === 'flow'
     ? `data-kb-flow="${esc(r.flow_id)}" data-kb-tpl="${esc(r.template_id || '')}"`
     : r.conversation_id
@@ -5058,7 +5269,7 @@ export function kbCard(r) {
     ? `<span class="kb-tag proj" title="属于哪个项目">${esc(r.project_name)}</span>`
     : '';
   const srcCls = r.source === 'chat' ? ' chat' : r.source === 'repo' ? ' repo' : local ? ' manual' : '';
-  return `<article class="kb-card ${local ? 'manual' : ''}" ${jump} ${drag}${local ? ` data-kb-open="${esc(r.manual_id)}" tabindex="0"` : ''} data-col="${esc(r.col)}" title="${esc(r.note || '')}">
+  return `<article class="kb-card ${local ? 'manual' : ''}" ${jump} ${drag}${local ? ` data-kb-open="${esc(r.manual_id)}" tabindex="0"` : ''} data-col="${esc(r.col)}"${r.created_by_user_id ? ` data-created-by-user="${esc(r.created_by_user_id)}"` : ''} title="${esc(r.note || '')}">
     <div class="kb-card-top">
       ${proj}<span class="kb-tag${srcCls}">${esc(r.source_text)}</span>${prPillOf(r)}
       <span class="kb-state">${esc(r.status)}</span>
@@ -5074,9 +5285,11 @@ export function kbCard(r) {
 /**
  * 新建手工任务的弹窗（参照同类产品 的「＋」那个框）。
  *
- * 只有标题是必填。执行方式二选一（2026-10-26）：
+ * 只有标题是必填。执行方式三选一（2026-10-26 两选一，2026-11-09 加团队协作）：
  *   · 派给人：选了执行人就能勾「创建后立即开始工作」——那会**真的派活**
  *     （发到他的 1:1 会话，工作目录是这个项目），所以框里明写出来，别让人意外；
+ *   · 团队协作：选一个群（群助手是项目经理的群），卡派进群聊里执行 ——
+ *     群助手承接、拆子卡；勾了「立即开始」且不是「想法」就建卡即派进群；
  *   · 由流程执行：选一条**已发布**的流程，卡建完立刻发起一条实例、卡绑住它（flowRunId）。
  *     这种情况下状态不是「想法」就一定会发起，所以那个勾是锁死的（见 syncStart 的注释）。
  *
@@ -5095,28 +5308,38 @@ export function taskDialog(project, colKey) {
    * 状态那格只有 6 个固定值，继续用原生 select。
    */
   /*
-   * 轻快风（2026-10-26 用户给了截图「我想要这种效果」）：左上角一条小面包屑，
-   * 下面直接就是大标题输入框和描述（都没有边框），所有字段收成底部一排胶囊，
-   * 动作条（继续创建 / 创建任务 Ctrl+Enter）压在最底下。
-   * 胶囊里只有值没有字段名 —— 状态/执行方式/人名/项目名各自能看懂自己是谁。
+   * 两栏风（2026-11-11 用户：照「新建定时任务」弹窗改成左右两栏）：
+   * 左 = 要**写**的（任务标题 + 描述，描述撑满高度）；右 = 要**选**的（状态 / 执行方式 /
+   * 执行对象 / 关联项目），竖着排、每格带字段名。骨架直接复用 .sch-cols 那套
+   * （定时任务弹窗的注释见 style.css dialog.sch-dlg 一节），字段接线（各 *Mount id）不变。
    */
-  const pick = !project ? '<span class="tk-chip" id="tkProjMount"></span>' : '';
+  const pick = !project ? '<label>关联项目</label><span id="tkProjMount"></span>' : '';
   dlg.innerHTML = `
     <form method="dialog">
       <b class="tk-crumb">${project ? `${esc(project.name)} › ` : ''}手动创建</b>
-      <input id="tkTitle" placeholder="任务标题" />
-      <textarea id="tkDesc" rows="7" placeholder="添加描述..."></textarea>
-      <!-- 执行人 / 流程**二选一显示**（服务端也是二选一，见 routes/project.mjs 的 400）：
-           两个都摆出来会让人以为"人再挂条流程"也能行。 -->
-      <div class="tk-meta-row">
-        <span class="tk-chip" id="tkStatusMount"></span>
-        <span class="tk-chip" id="tkModeMount"></span>
-        <span class="tk-chip" id="tkWhoMount"></span>
-        <span class="tk-chip" id="tkFlowMount" hidden></span>
-        ${pick}
+      <div class="sch-cols">
+        <div class="sch-left">
+          <label>任务标题</label>
+          <input id="tkTitle" placeholder="任务标题" />
+          <textarea id="tkDesc" placeholder="添加描述..."></textarea>
+        </div>
+        <div class="sch-right">
+          <!-- 执行人 / 群 / 流程**按执行方式三选一显示**（服务端也是互斥的，见 routes/project.mjs 的 400）：
+               两个都摆出来会让人以为"人再挂条流程"也能行。 -->
+          <label>状态</label>
+          <span id="tkStatusMount"></span>
+          <label>执行方式</label>
+          <span id="tkModeMount"></span>
+          <label>执行对象</label>
+          <span id="tkWhoMount"></span>
+          <span id="tkGroupMount" hidden></span>
+          <span id="tkFlowMount" hidden></span>
+          <div class="dim" id="tkFlowEmpty" style="font-size:12px" hidden>还没有已发布的流程 —— 先去工作台 → 流程 里发布一条</div>
+          <div class="dim" id="tkGroupEmpty" style="font-size:12px" hidden>还没有群助手是项目经理的群 —— 团队协作的活得由群助手（PM）承接</div>
+          ${pick}
+          <div class="dim" id="tkFilterHint" style="font-size:12px" hidden></div>
+        </div>
       </div>
-      <div class="dim" id="tkFlowEmpty" style="font-size:12px" hidden>还没有已发布的流程 —— 先去工作台 → 流程 里发布一条</div>
-      <div class="dim" id="tkFilterHint" style="font-size:12px" hidden></div>
       <div class="tk-foot">
         <label class="kb-check"><input type="checkbox" id="tkStart" checked /> <span id="tkStartText">创建后立即开始工作</span></label>
         <div class="tk-foot-actions">
@@ -5168,10 +5391,10 @@ export function taskDialog(project, colKey) {
      */
     items: [
       { id: '', label: '未分配' },
-      ...(S.users ?? []).map((u) => ({ id: `u:${u.id}`, label: u.name })),
+      ...(S.users ?? []).map((u) => ({ id: `u:${u.id}`, label: userLabel(u) })),
       ...(S.personas ?? []).map((p) => ({ id: p.id, label: personLabel(p) })),
-      // 团队协作（2026-11-09）：派给群，由群助手（PM）承接 —— 只列群助手是 PM 的群
-      ...teamGroupItems(),
+      // 团队协作的群**不在这份清单里**（2026-11-09 用户：「群聊混在指派人里」）——
+      // 它是执行方式的第三档（mode = 'group'），派给群和派给人是两条路
     ],
     value: '',
     search: true,
@@ -5185,19 +5408,25 @@ export function taskDialog(project, colKey) {
   });
 
   /*
-   * 执行方式：**派给人 / 由流程执行**（2026-10-26 用户定）。
-   * 为什么做成显式的两选一、而不是"执行人下拉里多一项流程"：
-   * 这两条路后面发生的事完全不同（一个是派活到会话，一个是发起一整条流程、卡跟着流程走），
+   * 执行方式：**派给人 / 团队协作 / 由流程执行**（2026-10-26 两选一，2026-11-09 用户加了第三档）。
+   * 为什么做成显式的多选一、而不是"执行人下拉里多一项"：
+   * 这几条路后面发生的事完全不同（派活到会话 / 派进群由群助手拆卡 / 发起一整条流程），
    * 塞进同一个下拉里，人选完才知道"哦这不是一个人"。
-   * 选项只有两个 → 不传 search（组件的约定：选项多的才给搜索）。
+   * 团队协作那格只列合规的群（群助手是项目经理，teamGroupItems 已滤）。
+   * 选项只有三个 → 不传 search（组件的约定：选项多的才给搜索）。
    */
   const modeCombo = createCombo({
     mount: $('tkModeMount'),
-    items: [{ id: 'person', label: '派给人' }, { id: 'flow', label: '由流程执行' }],
+    items: [
+      { id: 'person', label: '派给人' },
+      { id: 'group', label: '团队协作' },
+      { id: 'flow', label: '由流程执行' },
+    ],
     value: 'person',
     onChange: () => syncMode(),
   });
   const flowMode = () => modeCombo.value() === 'flow';
+  const groupMode = () => modeCombo.value() === 'group';
   /*
    * 流程那格只列**已发布**的（`S.flowPublished`，项目启动时 load() 就取回来了）：
    * 草稿态的流程发不起来，列出来只会让人选了再吃一个 400（服务端 `assertRunnableFlow` 也这么挡）。
@@ -5214,6 +5443,22 @@ export function taskDialog(project, colKey) {
       syncFilterHint();
     },
   });
+  /*
+   * 团队协作那格（mode = 'group'）：清单就是 teamGroupItems（id 自带 `g:` 前缀，
+   * 提交时去掉前缀换 assigneeGroupId）。跟执行人下拉一样给搜索 —— 群一多翻不动。
+   */
+  const groupCombo = createCombo({
+    mount: $('tkGroupMount'),
+    items: teamGroupItems(),
+    value: '',
+    search: true,
+    placeholder: '搜群名…',
+    empty: '没有匹配的群',
+    onChange: () => {
+      syncStart();
+      syncFilterHint();
+    },
+  });
 
   // 「执行设备」下拉（2026-11-01「派到分公司」）2026-11-07 随协作子系统整体退场 ——
   // 任务只在本机建、本机跑。老看板里的协作存量卡照常显示，只是不会再有新的。
@@ -5221,6 +5466,7 @@ export function taskDialog(project, colKey) {
   /*
    * 「立即开始」什么时候不该给勾 / 什么时候不给改：
    *   · 派给人：没选执行人 = 勾了也没人可派；状态是「想法」= 还没决定要不要做，谈不上开始。
+   *   · 团队协作：没选群 = 没地方派；「想法」同上。
    *   · 由流程执行：选了流程、状态又不是「想法」，建卡就**一定**发起（见下面 POST 的 startNow）——
    *     所以这个勾在流程模式下是**锁死的**：它不是给人改的，只用来表示"会发生什么"。
    *     想先挂着就放到「想法」列（那一列不发起，之后拖进「进行中」再发起）。
@@ -5231,15 +5477,6 @@ export function taskDialog(project, colKey) {
     const wrap = box.closest('.kb-check');
     const text = $('tkStartText');
     const idea = statusCombo.value() === '想法';
-    // 真人执行（2026-10-31）：挂名负责，没有"开始工作"这件事 —— 勾锁死在取消上
-    if (String(whoCombo.value()).startsWith('u:')) {
-      box.disabled = true;
-      box.checked = false;
-      wrap.style.opacity = '.5';
-      text.textContent = '真人执行 —— 卡挂在他名下，不起会话也不派活';
-      wrap.title = '真人执行的卡不会自动开跑；要让员工干，执行人选数字员工';
-      return;
-    }
     if (flowMode()) {
       const picked = !!flowCombo.value();
       const on = picked && !idea; // 定了流程且不是「想法」→ 锁在勾上；否则锁在取消
@@ -5258,15 +5495,38 @@ export function taskDialog(project, colKey) {
           : '选了流程就立即发起；想先挂着就放到「想法」';
       return;
     }
+    // 团队协作（2026-11-09）：没选群 / 状态是「想法」都不派，口径与"派给人"一致
+    if (groupMode()) {
+      const picked = !!groupCombo.value();
+      const on = picked && !idea;
+      box.disabled = !on;
+      if (!on) box.checked = false;
+      wrap.style.opacity = on ? '1' : '.5';
+      text.textContent = !picked
+        ? '创建后立即派进群（先选一个群）'
+        : idea
+          ? '先不派 —— 状态是「想法」；拖到「进行中」才派进群'
+          : '创建后立即派进群（由群助手承接、拆子卡）';
+      wrap.title = !picked ? '先选一个群' : idea ? '「想法」是还没决定要不要做，先不派活' : '';
+      return;
+    }
+    // 派给人：真人执行（2026-10-31）挂名负责，没有"开始工作"这件事 —— 勾锁死在取消上。
+    // 这档判断要放在流程 / 团队协作**之后**：各档选好的值都留着（来回切不重选），
+    // who 里留着的真人不能窜到别的档的文案上（2026-11-09 前它排在最前面，是颗雷）。
+    if (String(whoCombo.value()).startsWith('u:')) {
+      box.disabled = true;
+      box.checked = false;
+      wrap.style.opacity = '.5';
+      text.textContent = '真人执行 —— 卡挂在他名下，不起会话也不派活';
+      wrap.title = '真人执行的卡不会自动开跑；要让员工干，执行人选数字员工';
+      return;
+    }
     const has = !!whoCombo.value();
-    const isGroup = String(whoCombo.value()).startsWith('g:');
     const on = has && !idea;
     box.disabled = !on;
     if (!on) box.checked = false;
     wrap.style.opacity = on ? '1' : '.5';
-    text.textContent = isGroup
-      ? '创建后立即派进群（由群助手承接、拆子卡）'
-      : '创建后立即开始工作（派到他的会话，工作目录就是这个项目）';
+    text.textContent = '创建后立即开始工作（派到他的会话，工作目录就是这个项目）';
     wrap.title = idea ? '「想法」是还没决定要不要做，先不派活' : has ? '' : '先选一个执行人';
   };
   /*
@@ -5286,10 +5546,11 @@ export function taskDialog(project, colKey) {
      */
     const why = flowMode()
       ? ((S.kbFilter?.statuses?.length ?? 0) > 0 && !S.kbFilter.statuses.includes(st) ? 'status' : '')
-      // 派给人：拿一张"将要建出来的卡"去试 —— 状态是选的那个，人是选的那个人，项目是这一页定的那个；
-      // 来历就是"手动建卡"（这个弹窗只能建出这种卡）
+      // 派给人 / 团队协作：拿一张"将要建出来的卡"去试 —— 状态是选的那个，
+      // 负责人是选的那个人（团队协作是 `g:` 前缀的群 id，与看板行的 assignee_id 同口径），
+      // 项目是这一页定的那个；来历就是"手动建卡"（这个弹窗只能建出这种卡）
       : kbWhyHidden(
-          { status: st, assignee_id: whoCombo.value() || '', project_id: project?.id ?? projCombo?.value() ?? '', source: 'manual' },
+          { status: st, assignee_id: (groupMode() ? groupCombo.value() : whoCombo.value()) || '', project_id: project?.id ?? projCombo?.value() ?? '', source: 'manual' },
           S.boardAll ? 'all' : undefined,
         );
     el.hidden = !why;
@@ -5304,15 +5565,19 @@ export function taskDialog(project, colKey) {
             : '注意：当前筛选只看别的项目 —— 这张卡建完会留在看板外面（点「清除」能看到）。';
   };
   /*
-   * 切执行方式只换**显示**：两边已经选好的值（人 / 流程）都留着 ——
-   * 来回切多半是"看看有没有能用的流程"，切回来还得重选一遍人就很烦。
+   * 切执行方式只换**显示**：各档已经选好的值（人 / 群 / 流程）都留着 ——
+   * 来回切多半是"看看有没有能用的流程/群"，切回来还得重选一遍就很烦。
    */
   const syncMode = () => {
     const flow = flowMode();
-    // 轻快风：执行人 / 流程是两颗胶囊，切显隐（两边选好的值都留着 —— 来回切不用重选）
-    $('tkWhoMount').hidden = flow;
+    const group = groupMode();
+    // 两栏风：执行对象 / 群 / 流程三个挂载点在右栏「执行对象」一格下面切显隐
+    // （各档选好的值都留着 —— 来回切不用重选）
+    $('tkWhoMount').hidden = flow || group;
+    $('tkGroupMount').hidden = !group;
     $('tkFlowMount').hidden = !flow;
     $('tkFlowEmpty').hidden = !flow || published.length > 0;
+    $('tkGroupEmpty').hidden = !group || teamGroupItems().length > 0;
     syncStart();
     syncFilterHint();
   };
@@ -5330,8 +5595,12 @@ export function taskDialog(project, colKey) {
     if (flow && !flowId) {
       return toast('先选一条流程 —— 还没有已发布的流程就去工作台 → 流程 里发布一条');
     }
+    const groupVal = String(groupCombo.value());
+    if (groupMode() && !groupVal) {
+      return toast('先选一个群 —— 群助手是项目经理的群才能接团队协作的活');
+    }
     const st = statusCombo.value();
-    // 执行人二选一的提交形态：`u:` 前缀 = 真人（assigneeUserId，绝不 startNow），否则 = 员工
+    // 提交形态跟执行方式走：`u:` 前缀 = 真人（assigneeUserId，绝不 startNow），否则 = 员工
     const whoVal = String(whoCombo.value());
     const isUser = whoVal.startsWith('u:');
     try {
@@ -5342,17 +5611,22 @@ export function taskDialog(project, colKey) {
           title,
           description: $('tkDesc').value.trim(),
           status: st,
-          // 执行方式二选一：流程模式**不带执行人**（服务端把"两个都给"当 400 挡，见 routes/project.mjs）
+          // 执行方式三选一：流程模式**不带执行人**（服务端把"两个都给"当 400 挡，见 routes/project.mjs）
           ...(flow
             ? { flowTemplateId: flowId }
-            : isUser
-              ? { assigneeUserId: whoVal.slice(2) }
-              : whoVal.startsWith('g:')
-                // 团队协作（2026-11-09）：派给群 → 执行时现读群助手（PM）承接
-                ? { assigneeGroupId: whoVal.slice(2) }
+            : groupMode()
+              // 团队协作（2026-11-09）：派给群 → 执行时现读群助手（PM）承接
+              ? { assigneeGroupId: groupVal.slice(2) }
+              : isUser
+                ? { assigneeUserId: whoVal.slice(2) }
                 : { personaId: whoVal || null }),
-          // 流程模式：状态不是「想法」就发起（跟 syncStart 锁死的那个勾是同一份口径）
-          startNow: flow ? st !== '想法' : (!isUser && !!whoVal && $('tkStart').checked),
+          // 流程模式：状态不是「想法」就发起；团队协作：选了群、不是想法、勾了才派进群
+          // （跟 syncStart 的口径是同一份）
+          startNow: flow
+            ? st !== '想法'
+            : groupMode()
+              ? (!!groupVal && st !== '想法' && $('tkStart').checked)
+              : (!isUser && !!whoVal && $('tkStart').checked),
         }),
       });
       const again = $('tkAgain').checked;

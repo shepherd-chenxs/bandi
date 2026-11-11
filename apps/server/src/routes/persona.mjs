@@ -12,6 +12,8 @@ import * as runtimes from '../runtimes.mjs';
 import { personaRoots } from '../dispatch.mjs';
 import { personaTasks } from '../project-tasks.mjs';
 import * as experts from '../experts.mjs';
+// 岗位与权限（2026-11-11）：岗位是内置清单，roleKey 是权限判据 —— 见 roles.mjs
+import * as roles from '../roles.mjs';
 // 飞书员工级配置（2026-10-29）：删员工要顺手清掉他的飞书配置并停通道。
 // 清理放**路由层**而不进 store.deletePersona —— feishu 依赖 store，store 反向依赖就是环
 import * as feishu from '../feishu.mjs';
@@ -193,6 +195,14 @@ export async function handlePersona(req, res, url) {
     if (!before) return fail(res, 404, 'E2009', '员工不存在');
     const body = await readBody(req);
     /*
+     * 岗位 key（2026-11-11）：权限只认它。这里只收**内置清单里的 key** ——
+     * 自由写一个 key 就是自造权限，必须挡在路由层（store 层只存值，不判合法性）。
+     */
+    const roleKeyInput = body.roleKey === undefined ? undefined : String(body.roleKey ?? '').trim() || null;
+    if (roleKeyInput && !roles.isRoleKey(roleKeyInput)) {
+      return fail(res, 400, 'E1014', `岗位不在内置清单里：「${roleKeyInput}」—— 岗位是系统内置的，只能从清单里选`);
+    }
+    /*
      * **字段级闸**：改员工的「模型」或「运行时」= 改**模型路由**，那是五类管理动作之一
      * （设计 §6.3 第 15 条 / 决策 A 规则 1）。面板令牌能改名字、职责、技能、权限，
      * 但**改不了这两项** —— 否则一台被翻的瘦客户端能把活悄悄导到别的机器/别的模型上。
@@ -227,12 +237,28 @@ export async function handlePersona(req, res, url) {
      */
     if (lockKind) {
       const role = body.role === undefined ? before.role : String(body.role ?? '').trim() || null;
+      const roleKey = roleKeyInput === undefined ? before.roleKey : roleKeyInput;
       if (
         String(body.name ?? '').trim() !== String(before.name ?? '') ||
         (role ?? null) !== (before.role ?? null) ||
+        (roleKey ?? null) !== (before.roleKey ?? null) ||
         String(body.instructions ?? '') !== String(before.instructions ?? '')
       ) {
         return fail(res, 403, 'E2055', `${LOCK_MSG[lockKind].identity}，不能改 —— ${LOCK_MSG[lockKind].hint}`);
+      }
+    }
+    /*
+     * **不允许调岗**（2026-11-11 用户拍板）：岗位固定之后岗位就是权限 —— 让人随手把
+     * 「项目经理」改成「研发工程师」，他手上的建卡权、群助手资格会当场消失，那个群的
+     * 团队协作卡就没人接了。换岗的口径是**解聘后重新雇佣**，不是改字段。
+     * 判"值真的变了"（同 E2055/E4032 的先例）：详情页自动保存会把整份表单发上来。
+     * 上面那条是身份锁（管被锁的员工）；这条管所有人（含以后可能出现的自建员工）。
+     */
+    {
+      const role = body.role === undefined ? before.role : String(body.role ?? '').trim() || null;
+      const roleKey = roleKeyInput === undefined ? before.roleKey : roleKeyInput;
+      if ((role ?? null) !== (before.role ?? null) || (roleKey ?? null) !== (before.roleKey ?? null)) {
+        return fail(res, 403, 'E2055', '岗位不能改 —— 岗位固定、权限跟着岗位走；要换岗请解聘后重新雇佣');
       }
     }
     const name = String(body.name ?? '').trim();
@@ -247,6 +273,8 @@ export async function handlePersona(req, res, url) {
       name,
       // undefined = 这次没带这个字段；空串 = 显式清掉岗位
       role: body.role === undefined ? undefined : String(body.role ?? '').trim() || null,
+      // 岗位 key（2026-11-11）：没带就不动（store 层在只改 role 文本时按旧文本映射一次，过渡期）
+      roleKey: roleKeyInput,
       // 部门：同岗位口径。**不进 E2055 身份锁** —— 组织归属是用户的权，
       // 专家包只给出厂默认（雇佣时写入），之后用户随便调（见 experts.mjs 的回填说明）
       department: body.department === undefined ? undefined : String(body.department ?? '').trim() || null,

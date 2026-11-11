@@ -202,6 +202,73 @@ const noIntentRun = await schedules.runNow(noIntentJob.id);
 check('没写「做什么」→ 跑不起来（发起必须有起因）', noIntentRun.ok === false && /做什么/.test(noIntentRun.error ?? ''), noIntentRun.error);
 for (const j of [flowJob, badFlowJob, noIntentJob]) store.deleteSchedule(j.id);
 
+/* ----------------- ②d 「团队协作」：执行方式三选一（2026-11-11），到点建卡派进群 */
+console.log('\n②d 执行方式之三「团队协作」：建卡 → 派进群 → 群助手忙了排队（节拍自己再试）');
+const cat2 = schedules.actionCatalogue();
+check(
+  '执行方式三种都在（指派人 / 团队协作 / 流程任务），内置动作收进「系统动作」',
+  cat2.find((a) => a.id === 'persona-task')?.label === '指派人' &&
+    cat2.find((a) => a.id === 'team-task')?.label === '团队协作' &&
+    cat2.find((a) => a.id === 'run-workflow')?.label === '流程任务' &&
+    cat2.find((a) => a.id === 'team-task')?.kind === 'mode' &&
+    cat2.find((a) => a.id === 'persona-task')?.kind === 'mode' &&
+    cat2.find((a) => a.id === 'run-workflow')?.kind === 'mode' &&
+    cat2.find((a) => a.id === 'pr-scan')?.kind === 'system' &&
+    cat2.find((a) => a.id === 'backup-db')?.kind === 'system',
+  JSON.stringify(cat2.map((a) => [a.id, a.label, a.kind])),
+);
+check(
+  '团队协作的参数是「做什么 + 选群 + 选项目」，三个都必填',
+  (cat2.find((a) => a.id === 'team-task').fields ?? [])
+    .map((f) => `${f.type}:${!!f.required}`)
+    .join(',') === 'textarea:true,group:true,project:true',
+  JSON.stringify(cat2.find((a) => a.id === 'team-task')?.fields?.map((f) => [f.type, f.required])),
+);
+check('没写做什么 → 拦下并说人话', /做什么/.test(schedules.ACTIONS['team-task'].validate({ groupId: 'g-x', projectId: 'p-x' }) ?? ''));
+check('没选群 → 拦下并说人话', /执行对象/.test(schedules.ACTIONS['team-task'].validate({ instruction: '干活', projectId: 'p-x' }) ?? ''));
+check('没选项目 → 拦下（每次触发都要落一张卡）', /关联项目/.test(schedules.ACTIONS['team-task'].validate({ instruction: '干活', groupId: 'g-x' }) ?? ''));
+
+// 造一个合规的群：群助手是项目经理岗（与任务面板团队协作同一份判据）。
+// ⚠️ createGroup 返回的是**群会话行**（kind:'group'），真正的群 id 在 `.groupId` 上。
+const pmSmoke = store.createPersona({ name: '协作经理', role: '项目经理', runtime: 'codex', cwd: tmp, instructions: '' });
+const mateSmoke = store.createPersona({ name: '组员小陈', runtime: 'codex', cwd: tmp, instructions: '' });
+const grpConv = store.createGroup({ title: '冒烟协作群', assistantPersonaId: pmSmoke.id, memberIds: [mateSmoke.id] });
+const grpId = grpConv.groupId ?? grpConv.id;
+const projSmoke = store.createProject({ name: '协作冒烟项目', root: path.join(tmp, 'proj-team') });
+check(
+  '合规的群能过预检；不存在的群过不了',
+  schedules.ACTIONS['team-task'].validate({ instruction: '干活', groupId: grpId, projectId: projSmoke.id }) === null &&
+    /不在了/.test(schedules.ACTIONS['team-task'].validate({ instruction: '干活', groupId: 'g-nope', projectId: projSmoke.id }) ?? ''),
+);
+check(
+  '卡片说明照新口径拼（团队协作 · 群名）',
+  /团队协作 · 群「冒烟协作群」/.test(
+    schedules.ACTIONS['team-task'].describe({ instruction: '把本周的 PR 过一遍', groupId: grpId, projectId: projSmoke.id }),
+  ),
+);
+
+const teamJob = store.createSchedule({
+  name: '定时协作',
+  action: 'team-task',
+  everyMinutes: 30,
+  config: { instruction: '把本周的 PR 按模块分工过一遍', groupId: grpId, projectId: projSmoke.id },
+});
+// 让群助手正忙（群会话里挂一条「跑中」）→ 派发必须退回排队，而不是硬塞
+const sessSmoke = store.listGroupSessions(grpId)[0];
+store.createRun({ conversationId: sessSmoke.id, runtime: 'codex', personaId: pmSmoke.id });
+const teamRun = await schedules.runNow(teamJob.id);
+check('群助手正忙 → 这次没派出去，原话如实记', teamRun.ok === false && /排上队了/.test(teamRun.error ?? ''), teamRun.error ?? teamRun.summary);
+const teamCard = store.listProjectTasks(projSmoke.id).find((t) => t.assigneeGroupId === grpId);
+check(
+  '卡建出来了：挂在群上、标题是任务名、退回「待办」且标了排队',
+  !!teamCard && teamCard.title === '定时协作' && teamCard.status === '待办' && !!teamCard.queuedAt,
+  JSON.stringify({ status: teamCard?.status, q: teamCard?.queuedAt }),
+);
+// 节拍扫过一遍：群卡的排队标记必须还在 —— 2026-11-11 修的回归点（原来群卡会被摘掉标记、再也不试）
+await schedules.tick({ actions: {} });
+check('节拍扫过之后群卡还在排队（不是被摘掉标记装没事）', !!store.getProjectTask(teamCard.id)?.queuedAt, store.getProjectTask(teamCard.id)?.status);
+store.deleteSchedule(teamJob.id);
+
 /* ------------------------------------------- ③ PR 巡检：假 fetch 喂 GitHub，验"卡怎么写、状态怎么收" */
 console.log('\n③ PR 巡检：新 PR → 值班卡；合并 → 卡片跟着收');
 const project = store.listProjects().find((p) => p.builtIn) ?? store.listProjects()[0];
@@ -397,7 +464,7 @@ try {
      */
     const catalogue = (await req('/api/schedules')).b.actions;
     const ptask = catalogue.find((a) => a.id === 'persona-task');
-    check('动作清单里有「交给数字员工」', !!ptask, catalogue.map((a) => a.id).join(','));
+    check('动作清单里有「指派人」', !!ptask, catalogue.map((a) => a.id).join(','));
     check(
       '它的参数就是「输入区 + 选人 + 选填的项目」',
       ptask?.fields?.[0]?.type === 'textarea' &&
@@ -407,7 +474,7 @@ try {
     );
     // 前两个必填（做事 + 人）；**项目选填** —— 有些活得先问清在哪儿做，指派时定不下来
     check(
-      '「做什么」「交给谁」必填，项目选填',
+      '「做什么」「执行对象」必填，项目选填',
       ptask?.fields?.[0]?.required === true && ptask?.fields?.[1]?.required === true && !ptask?.fields?.[2]?.required,
       JSON.stringify(ptask?.fields?.map((f) => !!f.required)),
     );
@@ -462,6 +529,30 @@ try {
         body: JSON.stringify({ name: '派活', action: 'persona-task', everyMinutes: 30, config: { instruction: '看看今天的 PR', personaId: pid, projectId: 'p-nope' } }),
       })).status === 400,
     );
+
+    /*
+     * 「团队协作」（2026-11-11 执行方式三选一）：HTTP 层只验配错会被拦 ——
+     * 真派发（建卡 + 派群 + 忙了排队）在 ②d 用临时库验过，这里真跑会起真运行。
+     */
+    const teamNoGroup = await req('/api/schedules', {
+      method: 'POST',
+      body: JSON.stringify({ name: '协作', action: 'team-task', everyMinutes: 30, config: { instruction: '过一遍 PR' } }),
+    });
+    check('团队协作没选群 → 400 且说清原因', teamNoGroup.status === 400 && /执行对象/.test(teamNoGroup.b?.error ?? ''), teamNoGroup.b?.error);
+    check(
+      '团队协作没选项目 → 400（每次触发都要落一张卡）',
+      (await req('/api/schedules', {
+        method: 'POST',
+        body: JSON.stringify({ name: '协作', action: 'team-task', everyMinutes: 30, config: { instruction: '过一遍 PR', groupId: 'g-nope' } }),
+      })).status === 400,
+    );
+    check(
+      '团队协作选了不存在的群 → 400',
+      (await req('/api/schedules', {
+        method: 'POST',
+        body: JSON.stringify({ name: '协作', action: 'team-task', everyMinutes: 30, config: { instruction: '过一遍 PR', groupId: 'g-nope', projectId: projId } }),
+      })).status === 400,
+    );
     const withProj = await req('/api/schedules', {
       method: 'POST',
       body: JSON.stringify({
@@ -490,7 +581,7 @@ try {
      * **不真跑** —— 同 persona-task：真跑会起实例、真派活，那是「立即跑」按钮的事（store 层已验过）。
      */
     const rw = (await req('/api/schedules')).b.actions.find((a) => a.id === 'run-workflow');
-    check('动作清单里有「交给流程」', !!rw, (await req('/api/schedules')).b.actions.map((a) => a.id).join(','));
+    check('动作清单里有「流程任务」', !!rw, (await req('/api/schedules')).b.actions.map((a) => a.id).join(','));
     check(
       '它的参数是「输入区 + 选流程 + 选填的项目」，前两个必填',
       rw?.fields?.map((f) => f.type).join(',') === 'textarea,flow,project' &&

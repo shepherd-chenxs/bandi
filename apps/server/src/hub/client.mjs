@@ -23,6 +23,7 @@ const PATHS = {
   heartbeat: (deviceId) => `/${HUB_API_VERSION}/devices/${encodeURIComponent(deviceId)}/heartbeat`,
   pubkey: `/${HUB_API_VERSION}/pubkey`,
   deviceLogin: `/${HUB_API_VERSION}/auth/device-login`,
+  changePassword: `/${HUB_API_VERSION}/auth/password`,
 };
 
 /** 握手与心跳都不该拖住进程：一次请求最长 10 秒 */
@@ -183,6 +184,31 @@ export async function deviceLogin(baseUrl, input) {
       port: input.port,
     },
     // 人正在等这一下，比心跳多给几秒（PBKDF2 + 一次 D1 写）
+    timeoutMs: 15_000,
+  });
+}
+
+/**
+ * 改中枢账号的密码（2026-11-10）。
+ *
+ * 「我的 › 修改密码」转到这里：主机拿自己 0600 落盘的**设备凭据**（deviceId +
+ * deviceToken）替绑定的中枢账号办事 —— 中枢验旧密码、写新密码，主机不碰明文以外
+ * 的任何东西。会话/票据中枢不吊销：已进门的人不受影响，新登录用新密码。
+ *
+ * @param {string} baseUrl
+ * @param {{ deviceId: string, deviceToken: string, oldPassword: string, newPassword: string }} input
+ * @returns {Promise<{ ok: true }>}
+ */
+export async function changePassword(baseUrl, input) {
+  return call(baseUrl, PATHS.changePassword, {
+    method: 'POST',
+    headers: input.deviceToken ? { authorization: `Device ${input.deviceToken}` } : {},
+    body: {
+      deviceId: input.deviceId,
+      oldPassword: input.oldPassword,
+      newPassword: input.newPassword,
+    },
+    // 人正在等：旧密码一次 PBKDF2 验证 + 新密码一次 PBKDF2 派生 + 一次 D1 写
     timeoutMs: 15_000,
   });
 }

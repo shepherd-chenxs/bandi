@@ -6,7 +6,10 @@
  *   ① 14 个专家 + 系统管家的出厂身份卡只回答"我是谁"（≤240 字，不写边界/流程/禁令）；
  *   ② 平台行为契约（platformContractBlock）每轮注入，优先级声明高于身份；
  *   ③ 本轮任务合同（taskContractBlock）每轮注入，卡评论区带上卡标题与验收标准；
- *   ④ 汇报口径不再只给项目经理（旧 pmCardBrief 里的那段已搬走）。
+ *   ④ 汇报口径不再只给项目经理（旧 pmCardBrief 里的那段已搬走）；
+ *   ⑤ P5 交付形态（2026-11-09）：问问题先直接回答（多问拆答、权责分层、每个判断落源），
+ *      任务合同按形态给交付/验收（问答 → 答案/每一问；做事 → 结论先行/可核/可拍板）。
+ *      真实事故：pt-7c6d4229「数字员工的权限问题」被答成"钥匙怎么发"的工作报告 + 4 处事实错。
  *
  * 隔离：临时数据目录 + 临时库，不起服务、不碰真实 data/。
  * 跑法：node apps/server/src/smoke-persona-contract.mjs
@@ -48,43 +51,94 @@ try {
   check('系统管家身份卡也 ≤200 字', steward.STEWARD_INSTRUCTIONS.length <= 200, `${steward.STEWARD_INSTRUCTIONS.length} 字`);
   check('系统管家身份卡没有边界话术', !BANNED.test(steward.STEWARD_INSTRUCTIONS));
 
-  console.log('\n② 平台行为契约（每轮注入，优先级高于身份）');
+  console.log('\n② 平台行为契约（每轮注入，优先级高于身份；P5 重写为 7 条）');
   const contract = dispatch.platformContractBlock();
   check('有"优先级高于身份设定"的声明', /优先级高于身份设定/.test(contract));
-  check('结论先行 + ≤3 条依据 + 证据去处 + 已做动作', /结论/.test(contract) && /3 条依据/.test(contract) && /证据不贴在对话里/.test(contract) && /已做完/.test(contract));
-  check('Next: 禁令与不空转纪律', /Next:/.test(contract) && /先做完再回话/.test(contract));
-  check('不编数 + 删数据/生产/对外发布红线', /不编数/.test(contract) && /删数据/.test(contract) && /对外发布/.test(contract));
-  check('问进度只答台账（状态/更新/下一步，不追细节）', /只答台账/.test(contract) && /不要为了补细节/.test(contract));
-  check('够答即回（别为"更完整"继续翻）', /够答即回/.test(contract));
-  check('不猜接口（别 foreach 试路径）', /不猜接口/.test(contract) && /foreach/.test(contract));
-  check('指向 bandi-report 模板（首轮技能清单在，这里给全文入口）', /bandi-report/.test(contract));
+  check('① 先判这一轮要交什么：问问题还是做事',
+    /先判/.test(contract) && /(问问题|问答)/.test(contract) && /(做事|办事)/.test(contract));
+  check('① 问问题 → 第一行直接回答（谁 / 哪个 / 能不能 / 归谁）',
+    /第一行/.test(contract) && /直接回答/.test(contract) && /谁/.test(contract) && /哪个/.test(contract) && /能不能/.test(contract) && /归谁/.test(contract),
+    contract.split('\n').find((l) => /直接回答/.test(l)) ?? '');
+  check('① 问答题不许拿工作报告顶替答案 + 指向 bandi-report',
+    /答案/.test(contract) && /(工作报告|工作汇报)/.test(contract) && /bandi-report/.test(contract));
+  check('② 多问拆答 + 权责四层（归属方 / 授予方 / 持有者 / 能改的人）',
+    /(多问|拆答|拆开|逐问|一问一答)/.test(contract) && /归属方/.test(contract) && /授予方/.test(contract) && /持有者/.test(contract) && /能改的人/.test(contract));
+  check('③ 每个判断落源（文件:行 / 接口 / 数据）+ 查不到写"未验证"',
+    /(落源|出处)/.test(contract) && /文件:行/.test(contract) && /(接口|数据)/.test(contract) && /未验证/.test(contract) && /(几条|哪些)/.test(contract));
+  check('③ 证据放运行事件或卡里（不贴在对话里）',
+    /(运行事件|事件)/.test(contract) && /(卡片|卡里|卡上)/.test(contract));
+  // P4 交付声明协议（2026-11-09）：P5 起标记单独放**最后一行**（第一行留给答案/结果）。
+  check('④ 交付声明：跑完 ≠ 完成，标记单独放最后一行 [完成] / [受阻]',
+    /\[完成\]/.test(contract) && /\[受阻\]/.test(contract) && /跑完[^。\n]*≠/.test(contract) && /最后一行/.test(contract),
+    contract.split('\n').find((l) => /\[完成\]/.test(l)) ?? '');
+  check('④ 交付声明：平台只按这个标记判卡状态 / 不写标记不进待验收 / 没做完不许写 / 不替雇主宣布',
+    /只按这个标记判/.test(contract) && /卡/.test(contract) && /不写标记/.test(contract) && /待验收/.test(contract) &&
+      /没做完不许写/.test(contract) && /不许替雇主宣布/.test(contract));
+  check('⑤ 问进度只答台账（状态/更新/下一步，不追细节）', /只答台账/.test(contract) && /(不要|别)为了补细节/.test(contract));
+  check('⑤ 够答即回（别为"更完整"继续翻）', /够答即回/.test(contract));
+  check('⑥ 不空转（先做完再回话）+ Next: 禁令', /(不空转|先做完再回话)/.test(contract) && /Next:/.test(contract));
+  check('⑥ 不编数 + 不猜接口（别 foreach 试路径）', /不编数/.test(contract) && /不猜接口/.test(contract) && /foreach/.test(contract));
+  check('⑦ 红线：删数据 / 动生产 / 对外发布', /删数据/.test(contract) && /(动生产|生产)/.test(contract) && /对外发布/.test(contract));
 
-  console.log('\n③ 本轮任务合同（每轮注入，P1 起带结构化上下文）');
+  console.log('\n③ 交付形态判定（P5 新增 dispatch.guessDeliveryKind：问答 → answer / 做事 → do / 判不了 → null）');
+  check('guessDeliveryKind 是导出函数', typeof dispatch.guessDeliveryKind === 'function');
+  const kindOf = (t) => dispatch.guessDeliveryKind(t);
+  const permQ = '关于数字员工的权限问题（数字员工能调用哪些api，分别是什么权限），是给特定数字员工的还是全员平权';
+  check('权限多问 → answer（不是"发钥匙"式的做事）', kindOf(permQ) === 'answer', String(kindOf(permQ)));
+  check('修时区（改代码 + 提交）→ do',
+    kindOf('修时区：任务卡页时间显示慢8小时（projects.mjs 共8处）…改完提交') === 'do',
+    String(kindOf('修时区：任务卡页时间显示慢8小时（projects.mjs 共8处）…改完提交')));
+  check('部署 → do', kindOf('把爻鉴部署到阿里云服务器') === 'do', String(kindOf('把爻鉴部署到阿里云服务器')));
+  check('"为什么…？" → answer', kindOf('为什么时间会慢8小时？') === 'answer', String(kindOf('为什么时间会慢8小时？')));
+  check('"怎么改这个bug？" → null（形态混合/判不了，不硬猜）', kindOf('怎么改这个bug？') === null, String(kindOf('怎么改这个bug？')));
+  check('空串 → null', kindOf('') === null, String(kindOf('')));
+
+  console.log('\n④ 本轮任务合同（每轮注入；P5 起按交付形态给交付与验收）');
   const tc = dispatch.taskContractBlock();
-  check('有目标 / 受众 / 交付 / 验收四段', /目标/.test(tc) && /受众/.test(tc) && /交付/.test(tc) && /验收/.test(tc));
-  check('验收钉"结论先行、依据可核、可拍板"', /结论先行/.test(tc) && /可核/.test(tc) && /可拍板/.test(tc));
+  check('无参：仍有目标 / 受众 / 交付 / 验收四段', /目标/.test(tc) && /受众/.test(tc) && /交付/.test(tc) && /验收/.test(tc));
+  check('无参：默认验收不把"结论先行"硬塞给问答题',
+    !/结论先行/.test(tc) && /(逐条|依据可核|有交代)/.test(tc), tc.split('\n').find((l) => /验收/.test(l)) ?? '');
+  const answerCard = {
+    title: '数字员工的权限问题',
+    description: '关于数字员工的权限问题（数字员工能调用哪些api，分别是什么权限），是给特定数字员工的还是全员平权',
+    status: '进行中',
+    projectName: '班底',
+    source: 'board',
+  };
+  const tca = dispatch.taskContractBlock({ card: answerCard });
+  check('answer 卡：目标带卡标题 + 项目', /目标：「数字员工的权限问题」/.test(tca) && /项目：班底/.test(tca), tca.split('\n').slice(0, 3).join(' / '));
+  check('answer 卡：交付形态 = 问答（第一行直接回答）', /交付形态/.test(tca) && /(问答|回答)/.test(tca) && /第一行/.test(tca));
+  check('answer 卡：交付要"答案"、验收要"每一问"', /答案/.test(tca) && /每一问/.test(tca), tca.split('\n').filter((l) => /交付|验收/.test(l)).join(' / '));
+  const tcd = dispatch.taskContractBlock({ card: { title: '修时区', description: '修时区，改完提交', source: 'board' } });
+  check('do 卡：验收仍钉"结论先行、依据可核、可拍板"',
+    /结论先行/.test(tcd) && /可核/.test(tcd) && /可拍板/.test(tcd), tcd.split('\n').find((l) => /验收/.test(l)) ?? '');
   const tcc = dispatch.taskContractBlock({ card: { title: '修首页文案', description: '标题改短', status: '进行中', projectName: '班底' } });
-  check('卡评论区派活带卡标题 + 项目', /「修首页文案」/.test(tcc) && /项目：班底/.test(tcc), tcc.split('\n').slice(0, 3).join(' / '));
-  check('卡验收指向卡描述（不复制长文）', /按【你正在办的任务卡】里的任务描述逐条验/.test(tcc) && !/标题改短/.test(tcc));
+  check('评论卡（非 board）：仍带卡标题 + 项目', /「修首页文案」/.test(tcc) && /项目：班底/.test(tcc));
+  check('评论卡：验收仍指向卡描述逐条验（不复制长文）', /按【你正在办的任务卡】里的任务描述逐条验/.test(tcc) && !/标题改短/.test(tcc));
+  check('评论卡：也带交付形态提示', /交付形态/.test(tcc));
   const tcw = dispatch.taskContractBlock({ workflow: { nodeName: '写代码', visit: 2, detail: '按验收标准实现并通过自测' } });
   check('流程派活带节点名 / 第几次到站 / 本步要求',
     /流程节点：写代码/.test(tcw) && /第 2 次到站/.test(tcw) && /本步要求：按验收标准实现/.test(tcw), tcw.split('\n').slice(2, 4).join(' / '));
   const tcp = dispatch.taskContractBlock({ project: { name: '甲项目' } });
   check('普通聊天带项目名', /项目：甲项目/.test(tcp));
 
-  console.log('\n④ 挂线：每轮派活都拼契约（不是首轮/不是 PM 专属）');
+  console.log('\n⑤ 挂线：每轮派活都拼契约（不是首轮/不是 PM 专属）');
   const src = fs.readFileSync(new URL('./dispatch.mjs', import.meta.url), 'utf8');
   check('按 opts.taskId 现查 workflow_tasks（流程节点进入合同）', /opts\.taskId \? store\.getWorkflowTask\(opts\.taskId\)/.test(src));
-  check('startMemberRun 拼了 platformContractBlock + 结构化 taskContractBlock',
-    /const contractBlock = \[[\s\S]*platformContractBlock\(\),[\s\S]*taskContractBlock\(\{ card: opts\.card, workflow: workflowTask, project, tasks: myTasks \}\)/.test(src));
+  check('startMemberRun 拼了 platformContractBlock + 结构化 taskContractBlock（卡/流程/项目/台账都传）',
+    /const contractBlock = \[[\s\S]*?platformContractBlock\(\),[\s\S]*?taskContractBlock\(\{[\s\S]{0,200}?card: opts\.card[\s\S]{0,200}?workflow: workflowTask[\s\S]{0,200}?project[\s\S]{0,200}?tasks: myTasks[\s\S]{0,120}?\}\)/.test(src));
   check('契约进了 fullTask（每轮交给运行时）', /fullTask = \[[^\]]*contractBlock/.test(src));
   check('每轮按本人查未完成任务台账（P3a，所有员工通用）', /store\.listMyOpenTasks\(member\.personaId, 5\)/.test(src));
   check('旧的"汇报口径"不再只写在 PM 首轮 brief 里', !/【汇报口径｜结论先行】/.test(src));
 
   const runsSrc = fs.readFileSync(new URL('./runs.mjs', import.meta.url), 'utf8');
   check('运行钥匙提醒里不再重复汇报格式（已在平台契约里）', !/汇报（每轮都算/.test(runsSrc));
-  check('运行钥匙提醒给了查台账的明确动作（问进度别 grep 源码）', /查台账/.test(runsSrc) && /api\/tasks/.test(runsSrc));
-  console.log('\n⑤ 任务台账：每个员工都能看到自己未完的卡（P3a，不是只给某个人）');
+  // P5（2026-11-09）：这层是**操作说明**，不是权限/交付说明 —— 查台账那段与平台契约重复，
+  // 且被问"权限归谁"时模型会把它当答案素材复读。只留"怎么用钥匙"，故断言它不再带台账口径。
+  const briefSrc = runsSrc.match(/function runCredentialBrief[\s\S]*?\n\}/)?.[0] ?? '';
+  check('运行钥匙提醒只讲"怎么用钥匙"（P5 起不再复读查台账）',
+    /BANDI_RUN_TOKEN/.test(briefSrc) && /不要抄历史命令/.test(briefSrc) && !/api\/tasks/.test(briefSrc));
+  console.log('\n⑥ 任务台账：每个员工都能看到自己未完的卡（P3a，不是只给某个人）');
   const store = await import('./store.mjs');
   const dev = store.createPersona({ name: '台账测试员', runtime: 'codex', cwd: tmp, instructions: '' });
   const other = store.createPersona({ name: '另一个员工', runtime: 'codex', cwd: tmp, instructions: '' });

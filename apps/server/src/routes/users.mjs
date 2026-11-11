@@ -6,6 +6,7 @@
  *
  *   POST   /api/logout       → 退出（**免令牌**，凭据就是那张会话票本身）
  *   GET    /api/me           → 我是谁（operator / user）
+ *   POST   /api/me/password  → 改中枢账号的密码（转发中枢 /v1/auth/password，2026-11-10）
  *   GET    /api/users        → 账号列表（**不含任何凭据字段**）
  *   POST   /api/users        → 建影子账号（预占名字，等中枢账号首次登录时绑定）
  *   PATCH  /api/users/:id    → 改名 / 改昵称 / 启用禁用
@@ -25,12 +26,18 @@
  *   E3810 还没登录                         （401）
  *   E3812 账号接口不支持这个方法           （405）
  *   E3813 昵称最多 20 个字                 （400）
+ *   E3814 密码不能为空 / 新密码至少 8 位   （400）
+ *   E3815 这台机器还没在中枢上登录过       （400）
+ *   E3816 改密码转发失败                   （502）
  */
 
 import { sendJson, fail, readBody } from '../http.mjs';
 import * as auth from '../auth.mjs';
 import * as store from '../store.mjs';
 import * as csrf from '../security/csrf.mjs';
+import { dataDir } from '../config.mjs';
+import { readHubConfig, hubBaseUrl } from '../hub/config.mjs';
+import { changePassword, HubError } from '../hub/client.mjs';
 
 const NAME_MAX = 20;
 /** 昵称长度上限（与账号名同一档：20 个字，超了界面上也放不下） */
@@ -62,7 +69,8 @@ function meOf(who) {
   if (!u) return null;
   // hub = 这个本机名条绑着的**中枢账号**（登录用的手机号）——「我的」页身份卡用它；
   // 本机名条的名字随每次登录与中枢对齐（routes/hub.mjs），所以 name 一般就等于 hub。
-  // nickname（2026-11-08）= 「我的」页显示的昵称，没设是 null（界面退回手机号）——
+  // nickname（2026-11-08）= 显示用昵称，没设是 null —— **全端显示名**（2026-11-09 起
+  // 通讯录 / 聊天署名 / 派活选人都先看它，不再只限「我的」页），没设退回账号名；
   // 与账号名分开存：改昵称不改署名（理由见 store/users.mjs 的 nickname 列注释）。
   const link = store.listHubLinks().find((l) => l.userId === u.id);
   return { kind: 'user', user: { id: u.id, name: u.name, nickname: u.nickname ?? null, hub: link?.login ?? null } };
@@ -74,7 +82,11 @@ export async function handleUsers(req, res, url) {
   const method = req.method;
   const p = url.pathname;
   const touched =
-    p === '/api/logout' || p === '/api/me' || p.startsWith('/api/users') || p.startsWith('/api/security');
+    p === '/api/logout' ||
+    p === '/api/me' ||
+    p === '/api/me/password' ||
+    p.startsWith('/api/users') ||
+    p.startsWith('/api/security');
   if (!touched) return false;
 
   try {
@@ -103,7 +115,7 @@ export async function handleUsers(req, res, url) {
      *   POST /api/security/sessions/revoke-others → 踢掉我其它设备（保留当前这张票）
      *   GET  /api/security/audit                  → 审计日志（kind/limit 游标翻页）
      *   GET  /api/security/audit/export           → 审计日志全量导出
-     *   POST /api/security/audit/clear            → 清空（先归档再删，留 audit.clear 痕迹）
+     *   POST /api/security/audit/clear            → 彻底清空（主表+归档一起删，不留痕迹；2026-11-10 定）
      */
     if (p.startsWith('/api/security')) {
       const who = req.bandiAuth;
@@ -143,16 +155,12 @@ export async function handleUsers(req, res, url) {
       }
 
       /*
-       * 清空：先归档再删，主表留一条 audit.clear 痕迹 ——
-       * "清空"不等于"抹掉证据"，搬进 archive 表的行仍然可事后查。
+       * 清空（2026-11-10 改）：**真清空、不留备份** —— 主表和归档表一起删，不留 audit.clear 痕迹。
+       * 旧做法（先归档再删 + 留痕）被用户否掉：确认过之后就要真的清除，不要能恢复的"备份"。
        */
       if (method === 'POST' && p === '/api/security/audit/clear') {
-        const cleared = store.clearAll({
-          actorKind: who.kind,
-          actorId: who.userId ?? null,
-          ip: String(req.socket?.remoteAddress ?? '').replace(/^::ffff:/, ''),
-        });
-        return sendJson(res, 200, { ok: true, cleared }), true;
+        const { events, archived } = store.clearAll();
+        return sendJson(res, 200, { ok: true, cleared: events, archived }), true;
       }
 
       throw new UserError(405, 'E3812', '安全接口不支持这个方法');
@@ -179,6 +187,45 @@ export async function handleUsers(req, res, url) {
        * 人和操作员。设备令牌那条 2026-11-07 随配对体系一起退场。
        */
       throw new UserError(401, 'E3810', '还没登录');
+    }
+
+    /* ------------------------------------------------ 改中枢密码（2026-11-10） */
+    /*
+     * `POST /api/me/password`：只认**会话里的 user**（operator 没有中枢账号可改）。
+     * 验参 → 读 hub.json 拿设备凭据 → 转发中枢 `/v1/auth/password`（真验证在中枢：
+     * 主机不存密码，这里也只过手明文一次，不落日志）。会话/票据不吊销 ——
+     * 已登录的设备不受影响，下次登录用新密码。
+     */
+    if (method === 'POST' && p === '/api/me/password') {
+      const who = req.bandiAuth;
+      if (who?.kind !== 'user') throw new UserError(401, 'E3810', '还没登录');
+      const body = await readBody(req);
+      const oldPassword = String(body?.oldPassword ?? '');
+      const newPassword = String(body?.newPassword ?? '');
+      if (!oldPassword) throw new UserError(400, 'E3814', '请填写当前密码');
+      if (newPassword.length < 8) throw new UserError(400, 'E3814', '新密码至少 8 位');
+      if (newPassword.length > 128) throw new UserError(400, 'E3814', '新密码最多 128 位');
+      const cfg = readHubConfig(dataDir);
+      if (!cfg?.deviceId || !cfg?.deviceToken) {
+        throw new UserError(400, 'E3815', '这台机器还没在中枢上登录过，改不了密码');
+      }
+      try {
+        await changePassword(hubBaseUrl(dataDir), {
+          deviceId: cfg.deviceId,
+          deviceToken: cfg.deviceToken,
+          oldPassword,
+          newPassword,
+        });
+      } catch (e) {
+        if (e instanceof HubError) {
+          // E71xx = 网络层没到中枢（连不上/超时/不是 JSON），是服务侧的问题给 502；
+          // 其余（H1004 旧密码错、H3001 新密码不合规…）是用户能改的，原样带话给 400。
+          const status = String(e.code ?? '').startsWith('E71') ? 502 : 400;
+          throw new UserError(status, e.code ?? 'E3816', e.message);
+        }
+        throw new UserError(502, 'E3816', `改密码没成功：${e?.message ?? e}`);
+      }
+      return sendJson(res, 200, { ok: true }), true;
     }
 
     /* ------------------------------------------------ 账号 CRUD（登录即全权） */

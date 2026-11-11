@@ -535,6 +535,13 @@ export const pluginTabPick = new Map();
  */
 export let pluginResult = {};
 
+/**
+ * button 块的**完整响应**（同一把 key）。pluginResult 只存 resultField 那个字符串，
+ * 但有的弹窗要根据响应里的标记出动态按钮（如连通性失败里的「更新指纹并重试」）。
+ * 生命周期与 pluginResult 完全一致：换机器各自一份，关弹窗一起清。
+ */
+export let pluginToastRes = {};
+
 
 
 /**
@@ -1694,12 +1701,21 @@ export async function renderSplitDetail(plugin, split, m, sel) {
           const key = `${b.__i}:${S.pluginRow ?? ''}`;
           const out = pluginResult[key] ?? '';
           if (!out) return '';
+          // 主机指纹变更 → 弹窗里出「更新指纹并重试」：等价于清旧指纹 + 重测（accept-new 自动认新），
+          // 用户不用碰命令行。未重装过就别点 —— 这道闸的全部意义就在这句提醒里。
+          const hkApi = (b.action?.api ?? '').replace(/\/test$/, '/hostkey');
+          const refreshUrl = hkApi && hkApi !== b.action.api ? tplUrl(hkApi, sel) : '';
+          const refreshBtn =
+            pluginToastRes[key]?.hostKeyChanged && refreshUrl
+              ? `<div class="plg-toast-act"><button class="primary" data-toast-refresh="${esc(key)}" data-toast-refresh-url="${esc(refreshUrl)}">更新指纹并重试</button><span class="dim">确认近期重装过这台服务器再点</span></div>`
+              : '';
           return `<div class="plg-toast">
             <div class="plg-toast-head">
               <b>${esc(tpl(b.resultTitle || b.label, sel))}</b>
               <button class="mini sm" data-toast-x="${esc(key)}" title="关闭">×</button>
             </div>
             <pre class="plg-code">${esc(out)}</pre>
+            ${refreshBtn}
           </div>`;
         })
         .join('')
@@ -1873,7 +1889,28 @@ function finishPluginPanel(plugin, allBlocks, root = $('plgPanel'), rerender = r
   root.querySelectorAll('[data-toast-x]').forEach((el) => {
     el.onclick = () => {
       delete pluginResult[el.dataset.toastX];
+      delete pluginToastRes[el.dataset.toastX];
       el.closest('.plg-toast')?.remove();
+    };
+  });
+
+  // 悬浮提示里的「更新指纹并重试」：清本机旧主机指纹 + 重测（accept-new 自动认新指纹）。
+  // 打的接口在 manifest permissions 里（POST:/api/ssh/servers/{alias}/hostkey），pluginMust 照查。
+  root.querySelectorAll('[data-toast-refresh]').forEach((el) => {
+    el.onclick = async () => {
+      const key = el.dataset.toastRefresh;
+      const url = el.dataset.toastRefreshUrl;
+      el.disabled = true;
+      try {
+        pluginMust(plugin, 'POST', url);
+        const res = await api(url, { method: 'POST' });
+        pluginResult[key] = String(res?.detail ?? '');
+        pluginToastRes[key] = res;
+        await rerender();
+      } catch (err) {
+        toast(err.message, 'error');
+        el.disabled = false;
+      }
     };
   });
 
@@ -1956,7 +1993,11 @@ function finishPluginPanel(plugin, allBlocks, root = $('plgPanel'), rerender = r
         }
         const res = await api(target, opts);
         // resultField：结果记在 state 里（不是 DOM），重画后还在；换机器会显示各自的那份
-        if (b.resultField) pluginResult[`${b.__i}:${S.pluginRow ?? ''}`] = String(res?.[b.resultField] ?? '');
+        if (b.resultField) {
+          const key = `${b.__i}:${S.pluginRow ?? ''}`;
+          pluginResult[key] = String(res?.[b.resultField] ?? '');
+          pluginToastRes[key] = res;
+        }
         S.pluginData = {};
         await rerender();   // 重新取数并重画
       } catch (err) {

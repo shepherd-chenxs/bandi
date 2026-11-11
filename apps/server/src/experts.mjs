@@ -21,6 +21,8 @@
 import { repoRoot } from './config.mjs';
 import * as store from './store.mjs';
 import * as skills from './skills.mjs';
+// 岗位 key 的合法清单（2026-11-11）：每个专家包都必须对上一个内置岗位
+import { isRoleKey, roleOf, roleSkills } from './roles.mjs';
 
 /**
  * 出厂目录（就这十四位，不做成配置 —— 岗位指令是跟代码一起审的，进配置反而没人管）。
@@ -77,6 +79,8 @@ export const EXPERTS = [
     id: 'p-expert-hetao',
     name: '贺韬',
     role: '项目经理',
+    // 岗位 key（2026-11-11）：权限挂在内置岗位上，见 roles.mjs。所有包都必须有。
+    roleKey: 'pm',
     // 出厂默认部门（2026-10-25）：雇佣那一刻写快照 + 存量为空时回填，之后归用户调（不进 E2055 身份锁）
     department: '技术部',
     intro: '把一句话拆成能派出去的活，谁在干什么、卡在哪，随时说得清。',
@@ -87,95 +91,94 @@ export const EXPERTS = [
     // 嘉辉跑的、张坤核的、QA 验的，最后都由他写进方案派活。他一旦凭印象转述，错一个 base
     // 整队人就在错方向上干一天（实踩：他把 C 段 base 写成 c6039d1，143 文件看成 4 文件，
     // 据此定的"拆三段"整个走不通）。这条铁律是给转述者上的闸，不是让他自己下场验证。
-    skills: ['bandi-expert-pm', 'verification-before-completion', 'bandi-report'],
-    instructions: `你是「贺韬」，项目经理。擅长：把一句话拆成能派出去的活、盯进度盯到落地、把验收转交 QA。专长之外的活也接——先说一句这不是你的常项，再照常做完。说话先结论后依据，交付格式按平台每轮的【本轮契约】；拆活细节写进卡的描述，不在对话里铺开。`,
+    instructions: `你是「贺韬」，项目经理。擅长：把一句话拆成能派出去的活、盯进度盯到落地、把验收转交 QA。专长之外的活也接，先声明再照常做完。语气：先结论后依据，不铺垫。`,
   },
   {
     key: 'lijun',
     id: 'p-expert-lijun',
     name: '李俊',
     role: '产品经理',
+    roleKey: 'product',
     // 出厂默认部门（2026-10-25）：雇佣那一刻写快照 + 存量为空时回填，之后归用户调（不进 E2055 身份锁）
     department: '技术部',
     intro: '把"我想要个东西"问成能动手的需求，先发散再收敛，文档和用户一起写。',
     cwd: repoRoot,
-    skills: ['bandi-expert-product', 'brainstorming', 'doc-coauthoring'],
-    instructions: `你是「李俊」，产品经理。擅长：把模糊想法问成可验收的需求、给两三个候选方案并写清代价、主动砍第一版范围。专长之外的活也接，先声明再照常做完。说话先给一个最关键的问题或两三个选项，不写长篇；交付按平台每轮的【本轮契约】。`,
+    instructions: `你是「李俊」，产品经理。擅长：把模糊想法问成可验收的需求、砍第一版范围、写清方案代价。专长之外的活也接，先声明再照常做完。语气：短、直接，不写长篇。`,
   },
   {
     key: 'architect',
     id: 'p-expert-architect',
     name: '高进',
     role: '架构师',
+    roleKey: 'architect',
     // 出厂默认部门（2026-10-25）：雇佣那一刻写快照 + 存量为空时回填，之后归用户调（不进 E2055 身份锁）
     department: '技术部',
     intro: '把需求翻成能落地的技术方案，模块怎么分、接口怎么定、风险在哪，先画清楚再动工。',
     cwd: repoRoot,
     // brainstorming：方案先发散再收敛；requesting-code-review：设计要被评审过才算落定
-    skills: ['bandi-expert-architect', 'brainstorming', 'requesting-code-review'],
-    instructions: `你是「高进」，架构师。擅长：出两三个技术方案并写清代价与风险、定模块与接口边界、评审方案时先问"什么情况下这个方案会错"。专长之外的活也接，先声明再照常做完。说话先结论再列关键取舍；方案细节落到文档，不在对话里堆。`,
+    instructions: `你是「高进」，架构师。擅长：出技术方案并写清代价与风险、定模块与接口边界、拆系统分层。专长之外的活也接，先声明再照常做完。语气：先结论再列取舍。`,
   },
   {
     key: 'ui',
     id: 'p-expert-ui',
     name: '沈丹青',
     role: 'UI 设计师',
+    roleKey: 'ui',
     // 出厂默认部门（2026-10-25）：雇佣那一刻写快照 + 存量为空时回填，之后归用户调（不进 E2055 身份锁）
     department: '技术部',
     intro: '把需求画成能直接开发的界面稿，状态画全、规范定死，再谈好看不好看。',
     cwd: repoRoot,
     // 通用技能库里没有设计类方法论，挂不相干的反而误导 —— 宁缺毋滥，只挂岗位技能
-    skills: ['bandi-expert-ui'],
-    instructions: `你是「沈丹青」，UI 设计师。擅长：把需求画成能直接开发的界面稿、把空态/加载/报错/超长都画全、定视觉规范。专长之外的活也接，先声明再照常做完。交付默认单文件 HTML（样式内联、按真实视口）；说话先给设计决策再给稿，不念设计理论。`,
+    instructions: `你是「沈丹青」，UI 设计师。擅长：把需求画成能直接开发的界面稿、把空态/加载/报错/超长都画全、定视觉规范。专长之外的活也接，先声明再照常做完。语气：先给设计决策再给稿，不念理论。`,
   },
   {
     key: 'jiahui',
     id: 'p-expert-jiahui',
     name: '嘉辉',
     role: '研发工程师',
+    roleKey: 'dev',
     // 出厂默认部门（2026-10-25）：雇佣那一刻写快照 + 存量为空时回填，之后归用户调（不进 E2055 身份锁）
     department: '技术部',
     intro: '接需求先问清验收标准，先写测试再动手，交付前自己跑过一遍。',
     cwd: repoRoot,
-    skills: ['bandi-expert-dev', 'bandi-repo', 'test-driven-development', 'systematic-debugging', 'verification-before-completion'],
-    instructions: `你是「嘉辉」，研发工程师。擅长：写代码、修 Bug（先复现再定位再改）、交付前自己跑一遍验证。专长之外的活也接，先声明再照常做完。说话先结论再给关键改动点；命令与输出放进运行事件或卡里，对话里只引用出处，交付按平台每轮的【本轮契约】。`,
+    instructions: `你是「嘉辉」，研发工程师。擅长：写代码、修 Bug（先复现再定位再改）、交付前自己跑一遍验证。专长之外的活也接，先声明再照常做完。语气：先结论再给关键改动点，不贴长命令。`,
   },
   {
     key: 'guoshuai',
     id: 'p-expert-guoshuai',
     name: '郭帅',
     role: '测试工程师',
+    roleKey: 'test',
     // 出厂默认部门（2026-10-25）：雇佣那一刻写快照 + 存量为空时回填，之后归用户调（不进 E2055 身份锁）
     department: '技术部',
     intro: '真开页面真点真跑，按验收标准逐条过，问题给复现步骤不给形容词。',
     cwd: repoRoot,
-    skills: ['bandi-expert-test', 'bandi-repo', 'webapp-testing', 'systematic-debugging'],
-    instructions: `你是「郭帅」，测试工程师。擅长：按验收标准逐条验、真开页面真跑、把问题写成可复现的三段（做了什么/期望什么/实际什么）。专长之外的活也接，先声明再照常做完。说话先给结论（过了/没过/测不了）再给证据，不复述测试过程。`,
+    instructions: `你是「郭帅」，测试工程师。擅长：按验收标准逐条验、真开页面真跑、把问题写成可复现的三段。专长之外的活也接，先声明再照常做完。语气：先给结论（过了/没过/测不了）再给证据。`,
   },
   {
     key: 'machao',
     id: 'p-expert-machao',
     name: '马超',
     role: '运维工程师',
+    roleKey: 'ops',
     // 出厂默认部门（2026-10-25）：雇佣那一刻写快照 + 存量为空时回填，之后归用户调（不进 E2055 身份锁）
     department: '技术部',
     intro: '服务起没起、日志里有什么、哪儿坏了怎么修 —— 先定位再动手，动前先备份。',
     cwd: repoRoot,
-    skills: ['bandi-expert-ops', 'systematic-debugging', 'verification-before-completion'],
-    instructions: `你是「马超」，运维工程师。擅长：查服务/端口/日志状态、分层定位故障、动手前备份并留回滚办法。专长之外的活也接，先声明再照常做完。说话先报现状再报打算；日志只贴关键行，不复述全文；危险操作先说一句再动。`,
+    instructions: `你是「马超」，运维工程师。擅长：查服务/端口/日志状态、分层定位故障、动手前备份并留回滚办法。专长之外的活也接，先声明再照常做完。语气：先报现状再报打算，日志只贴关键行。`,
   },
   {
     key: 'qa',
     id: 'p-expert-qa',
     name: '杜衡',
     role: 'QA 工程师',
+    roleKey: 'qa',
     // 出厂默认部门（2026-10-25）：雇佣那一刻写快照 + 存量为空时回填，之后归用户调（不进 E2055 身份锁）
     department: '技术部',
     intro: '立验收标准、定回归口径、守发布关口 —— 质量不靠个人自觉，靠体系兜底。',
     cwd: repoRoot,
     // verification-before-completion：放行前必须有证据；webapp-testing：抽查验真时能自己真跑一把
-    skills: ['bandi-expert-qa', 'verification-before-completion', 'webapp-testing'],
-    instructions: `你是「杜衡」，QA 工程师。擅长：立可判定的验收标准、维护回归口径、把发布关（证据不全不放行）。和郭帅分工：他执行测试，你守体系。专长之外的活也接，先声明再照常做完。说话先给结论（放行/缓发/不放行）再列缺口。`,
+    instructions: `你是「杜衡」，QA 工程师。擅长：立可判定的验收标准、维护回归口径、把发布关（证据不全不放行）。和郭帅分工：他执行测试，你守体系。专长之外的活也接，先声明再照常做完。语气：先给结论（放行/缓发/不放行）再列缺口。`,
   },
 
   /*
@@ -196,13 +199,13 @@ export const EXPERTS = [
     // 只动叫法，职责与方法论一字未改；技能 key（bandi-expert-secretary）也不动，
     // 那是文件和锁的标识，不是给人看的名字。
     role: '助理',
+    roleKey: 'assistant',
     // 出厂默认部门（2026-10-25）：雇佣那一刻写快照 + 存量为空时回填，之后归用户调（不进 E2055 身份锁）
     department: '行政部',
     intro: '盯全队的活儿：几件在跑、几件卡着、几件等你拍板；汇总、催办、提醒，替你管住每天的节奏。',
     cwd: repoRoot,
     // 回复风格走「偏好设置」全员注入（同贺韬那条注释）
-    skills: ['bandi-expert-secretary', 'bandi-report'],
-    instructions: `你是「喜儿」，雇主的助理。擅长：拿台账盯进度、把散在各处的进展汇总成一段、把该他拍板的事带建议列出来。机器的事归崔老三。专长之外的活也接，先声明再照常做完。说话先报数再列清单，不写客套话；交付按平台每轮的【本轮契约】。`,
+    instructions: `你是「喜儿」，雇主的助理。擅长：拿台账盯进度、把散在各处的进展汇总、把该他拍板的事带建议列出来。机器的事归崔老三。专长之外的活也接，先声明再照常做完。语气：先报数再列清单，不写客套话。`,
   },
 
   /* ── 内容轨五位（2026-10-23 扩编；2026-10-23 晚间季风改派：改名崔老三顶替
@@ -219,63 +222,80 @@ export const EXPERTS = [
     id: 'p-expert-zhangkun',
     name: '张坤',
     role: '仓库管家',
+    roleKey: 'repo-keeper',
     // 出厂默认部门（2026-10-25）：雇佣那一刻写快照 + 存量为空时回填，之后归用户调（不进 E2055 身份锁）
     department: '内容部',
     intro: '仓库接进来、PR 有人盯：新改动他先读一遍，干了什么、有没有风险、是不是垃圾，给你个结论。',
     cwd: repoRoot,
-    skills: ['bandi-expert-keeper', 'bandi-git', 'verification-before-completion'],
-    instructions: `你是「张坤」，仓库管家。擅长：接仓库、盯 PR、给结论（值得合/垃圾/拿不准）。专长之外的活也接，先声明再照常做完。一个 PR 只回三行：干了什么、风险在哪、结论是什么；拿不准就明说拿不准，审查不替作者改稿。`,
+    instructions: `你是「张坤」，仓库管家。擅长：接仓库、盯 PR、给结论（值得合/垃圾/拿不准）。专长之外的活也接，先声明再照常做完。语气：短、直接，拿不准就明说。`,
   },
   {
     key: 'editor',
     id: 'p-expert-editor',
     name: '秦简',
     role: '内容主编',
+    roleKey: 'editor',
     // 出厂默认部门（2026-10-25）：雇佣那一刻写快照 + 存量为空时回填，之后归用户调（不进 E2055 身份锁）
     department: '内容部',
     intro: '选题方向他定、内容标准他立，稿子过不过他一句话说清为什么。',
     cwd: repoRoot,
-    skills: ['bandi-expert-editor', 'brainstorming'],
-    instructions: `你是「秦简」，内容主编。擅长：定方向与选题、立可照做的内容标准、终审稿件并给出句子级的修改点。专长之外的活也接，先声明再照常做完。说话先给结论（过/改/毙）再给最要紧的一两条修改，每条都给到具体句子的改法，不批没有落点的意见。`,
+    instructions: `你是「秦简」，内容主编。擅长：定方向与选题、立可照做的内容标准、终审稿件并给句子级修改点。专长之外的活也接，先声明再照常做完。语气：先给结论（过/改/毙）再给最要紧的一两条修改。`,
   },
   {
     key: 'copywriter',
     id: 'p-expert-copywriter',
     name: '陆言',
     role: '文案策划',
+    roleKey: 'copywriter',
     // 出厂默认部门（2026-10-25）：雇佣那一刻写快照 + 存量为空时回填，之后归用户调（不进 E2055 身份锁）
     department: '内容部',
     intro: '图文和口播稿交稿就能用，标题一次给一排备选，各自注明路数。',
     cwd: repoRoot,
-    skills: ['bandi-expert-copywriter', 'doc-coauthoring'],
-    instructions: `你是「陆言」，文案策划。擅长：按 brief 写图文/口播稿、一次给至少五个标题备选并标注路数、按修改意见改稿（先复述理解再动手）。专长之外的活也接，先声明再照常做完。说话先交稿，再用一句话说清这版主打什么。`,
+    instructions: `你是「陆言」，文案策划。擅长：按 brief 写图文/口播稿、拆解参考风格、按修改意见改稿。专长之外的活也接，先声明再照常做完。语气：先交稿，再用一句话说清这版主打什么。`,
   },
   {
     key: 'analyst',
     id: 'p-expert-analyst',
     name: '钱进',
     role: '数据运营',
+    roleKey: 'analyst',
     // 出厂默认部门（2026-10-25）：雇佣那一刻写快照 + 存量为空时回填，之后归用户调（不进 E2055 身份锁）
     department: '内容部',
     intro: '数据他来算、结论他来证：哪类内容值得加码，给依据不给玄学。',
     cwd: repoRoot,
     // verification-before-completion：数据结论必须带证据口径，与这位的本分同一条铁律
-    skills: ['bandi-expert-analyst', 'verification-before-completion'],
-    instructions: `你是「钱进」，数据运营。擅长：先对口径再算数、按「发了什么/表现如何/跟上期比/下一步」四段做复盘、拿数据验证判断。专长之外的活也接，先声明再照常做完。说话先一句结论再给两三条依据，每个数字都带口径；样本不够就直说样本不够。`,
+    instructions: `你是「钱进」，数据运营。擅长：先对口径再算数、按四段做复盘、拿数据验证判断。专长之外的活也接，先声明再照常做完。语气：先一句结论再给两三条依据，每个数字都带口径。`,
   },
   {
     key: 'director',
     id: 'p-expert-director',
     name: '高帧',
     role: '短视频编导',
+    roleKey: 'director',
     // 出厂默认部门（2026-10-25）：雇佣那一刻写快照 + 存量为空时回填，之后归用户调（不进 E2055 身份锁）
     department: '内容部',
     intro: '从选题到分镜一条龙，脚本写到开机就能拍，关键结构给两个方向让他挑。',
     cwd: repoRoot,
-    skills: ['bandi-expert-director', 'brainstorming'],
-    instructions: `你是「高帧」，短视频编导。擅长：出选题与钩子、写能开机的镜头级脚本、备拍摄清单。专长之外的活也接，先声明再照常做完。说话先用一句话说清这条视频讲什么，再交脚本；脚本后面附拍摄清单，拿着清单就能开机，不承诺爆款。`,
+    instructions: `你是「高帧」，短视频编导。擅长：出选题与钩子、写能开机的镜头级脚本、备拍摄清单。专长之外的活也接，先声明再照常做完。语气：先用一句话说清这条视频讲什么，再交脚本；不承诺爆款。`,
   },
 ];
+
+/*
+ * 加载期自检（2026-11-11 岗位固定）：每个专家包都必须对上一个**合法**的内置岗位 key，
+ * 且那个岗位要带**技能包**（Phase 3 起技能挂在岗位上，包里不再各写一份清单）。
+ * 漏写 / 写错 key 的后果是"这个人雇回来没有任何权限/技能"，要等到真去建卡才暴露 ——
+ * 那太晚；启动就炸，改的人当场知道。判据与 roles.mjs 同一份。
+ */
+{
+  const bad = EXPERTS.filter((x) => !isRoleKey(x.roleKey));
+  if (bad.length) {
+    throw new Error(`experts.mjs：这些专家包没有合法的岗位 key（见 roles.mjs）—— ${bad.map((x) => x.key).join('、')}`);
+  }
+  const noSkills = EXPERTS.filter((x) => !(roleOf(x.roleKey)?.skills ?? []).length);
+  if (noSkills.length) {
+    throw new Error(`experts.mjs：这些专家包对应的岗位没有技能包（见 roles.mjs 的 skills）—— ${noSkills.map((x) => x.key).join('、')}`);
+  }
+}
 
 /** 按 key 找目录项。找不到返回 null —— 调用方（路由层）负责把话说成 404 */
 export function getExpert(key) {
@@ -298,13 +318,15 @@ export function listExperts() {
       id: x.id,
       name: x.name,
       role: x.role,
+      // 岗位 key（2026-11-11）：前端据此显示只读权限清单 / 岗位下拉的预选
+      roleKey: x.roleKey,
       // 出厂默认部门 + 雇着的话他**实际**的部门（用户可能改过，界面要显示改后的）
       department: x.department ?? '',
       intro: x.intro,
       // 岗位说明全文（2026-10-25）：卡片墙上只有一句话 intro，前端点人物卡弹的
       // 详情卡要给全文 —— 指令本来就跟代码一起审，给前端看不算泄密。
       instructions: x.instructions ?? '',
-      skills: x.skills.map((n) => {
+      skills: roleSkills(x.roleKey).map((n) => {
         const s = skills.getSkill(n);
         return { name: n, description: s?.description ?? '' };
       }),
@@ -347,6 +369,8 @@ export function hireExpert(key) {
     id: x.id,
     name: x.name,
     role: x.role,
+    // 岗位 key（2026-11-11）：权限只认它；与 role 文本一起写，展示看 role、判定看 roleKey
+    roleKey: x.roleKey,
     // 出厂默认部门（快照）：跟 role 同待遇 —— 雇佣那一刻写进去，之后归用户调。
     // **不进 E2055 身份锁、也不进 syncExpertIdentity**：部门是用户的组织权，
     // 把贺韬调去「项目一组」是正常操作，不该被启动同步刷回出厂。
@@ -362,8 +386,8 @@ export function hireExpert(key) {
     avatar: expertAvatarFile(x.key),
   });
 
-  // 技能库里真有才挂 —— 目录引用了被删掉的技能时不该把雇佣整个弄挂
-  for (const s of x.skills) {
+  // 技能库里真有才挂 —— 岗位技能包引用了被删掉的技能时不该把雇佣整个弄挂
+  for (const s of roleSkills(x.roleKey)) {
     if (skills.getSkill(s)) store.linkPersonaSkill(x.id, s);
   }
 
@@ -450,7 +474,7 @@ export function isLockedPersonaId(id) {
 export function syncExpertSkills(id) {
   const x = EXPERTS.find((e) => e.id === id);
   if (!x || !store.getPersona(id)) return null;
-  const pkg = x.skills.filter((n) => skills.getSkill(n));
+  const pkg = roleSkills(x.roleKey).filter((n) => skills.getSkill(n));
   for (const l of store.listPersonaSkillLinks(id)) {
     if (!pkg.includes(l.name)) store.unlinkPersonaSkill(id, l.name);
   }
@@ -476,8 +500,10 @@ export function syncExpertIdentity(id) {
   const changed = [];
   if (p.name !== x.name) changed.push('name');
   if ((p.role ?? null) !== (x.role ?? null)) changed.push('role');
+  // 岗位 key 也随专家包固定（2026-11-11）：权限判定读它，不读 role 文本
+  if ((p.roleKey ?? null) !== (x.roleKey ?? null)) changed.push('roleKey');
   if (p.instructions !== x.instructions) changed.push('instructions');
-  if (changed.length) store.updatePersona(id, { name: x.name, role: x.role, instructions: x.instructions });
+  if (changed.length) store.updatePersona(id, { name: x.name, role: x.role, roleKey: x.roleKey, instructions: x.instructions });
   return changed;
 }
 

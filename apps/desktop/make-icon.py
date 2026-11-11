@@ -1,198 +1,271 @@
 #!/usr/bin/env python3
-"""生成桌面版图标：任务栏、窗口、exe、安装包都用这一份。
+"""生成班底的**全部**图标：桌面（窗口/任务栏/exe/安装包）、Web（PWA/favicon）、
+移动壳（tauri 资源 + Windows Store 资产）、安卓 mipmap。
 
 **为什么要有这个脚本**：图标必须只有一个生成入口，不能靠谁手里那张图
 （v1.0.0 时代吃过亏：图标是一次性做的，产品改名后没人改得动它）。
 
-**现在的标是什么（2026-10-26 定稿）**：「B 字母标」—— bandi 的字母 B，
-粗壮几何块面：竖直主干 + 上下两个圆润鼓包，左下一个圆顶小凸起，靛紫平涂。
-纯几何贝塞尔，**不再光栅化字体** —— 旧做法（把微软雅黑里的「班」画进位图）
-除了小尺寸糊，还有授权悬案：字形的许可归字体管（见 git 历史里那版脚本的警告）。
-几何标是我们自己画的，没有这个问题。
+**这一版是什么（2026-11-10 第四次定稿，换代）**：「分玉」—— 整圆被一道竖直切口
+分成两片，右片下沉错位。取《说文》「班，分瑞玉也，从珏从刀」：把一块玉分开、
+人手各执其一，正是「派活」的汉字原型。圆 = 一件完整的活/一个完整班底；
+缝 = 随时可插手的切口；错位 = 成员处在不同进度。详见 design/logo/bandi-brand.md。
+（前一版「简笔画全身牛」已整代退场，几何在 git 历史里。）
 
-**为什么用 Python**：桌面构建链上 Pillow 是现成的；ICO 容器、多尺寸缩放
-（LANCZOS）它都顺手。贝塞尔鼓包用采样多边形填充，不需要字体、不需要浏览器。
+**几何以 100 单位坐标系为准**（与 design/logo/bandi-icon-*.svg 完全一致，改形状两处一起改）：
+    圆：r=40，圆心 (50,44)
+    缝：弦在 x=50±gap，半缝 gap 全版 3 / 小版 6
+    错位：右片沿 +y 偏移，全版 12 / 小版 16
+    两片 = 圆被弦切开后的弓形（圆弧 + 直弦闭合的多边形）
+
+**小尺寸不是缩放，是重绘**（<64px）：缝 3→6、错位 12→16、整体放大 1.07，
+且去第二色只留米白（16px 下玉青与米白分不出，形状比配色重要）。
 
 跑法：
-    python apps/desktop/make-icon.py            # 出「B 字母标」（默认）
-    python apps/desktop/make-icon.py --preview  # 额外出 16/32/64 预览（看小尺寸糊不糊）
-    python apps/desktop/make-icon.py --glyph 班 # 旧的字标（v1.0.1 及以前），留着备用
-
-矢量母版在 `icons/icon.svg` —— 改形状先改 SVG、再把贝塞尔控制点抄进下面的
-BLOB，两处必须一致（脚本不解析 SVG，别让它们悄悄分叉）。
+    python apps/desktop/make-icon.py             # 生成全部目标
+    python apps/desktop/make-icon.py --preview    # 额外出预览条（看小尺寸糊不糊）
+    python apps/desktop/make-icon.py --only web   # 只出某一类：desktop|web|mobile|android
 """
 import argparse
+import io
+import math
 import os
+import struct
 import sys
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 
-HERE = Path(__file__).resolve().parent
-ICONS = HERE / "icons"
-PNG_OUT = ICONS / "icon.png"      # 512×512，窗口/关于页用
-ICO_OUT = ICONS / "icon.ico"      # Windows：exe 嵌入、任务栏、安装包
+ROOT = Path(__file__).resolve().parents[2]          # 仓库根
+DESKTOP_ICONS = ROOT / "apps/desktop/icons"
+WEB_ICONS = ROOT / "apps/web/icons"
+MOBILE_ICONS = ROOT / "apps/mobile-native/icons"
+ANDROID_RES = ROOT / "apps/mobile-native/app/src/main/res"
+BUILD_RS = ROOT / "apps/desktop/build.rs"
 
-SIZE = 512
-RADIUS = 96                        # 圆角半径，沿用旧图标量出来的值
+# 标准色（与 design/logo/bandi-brand.md 一致，改色两处一起改）
+INK = "#12161A"          # 墨 · 主色
+PAPER = "#F7F7F4"        # 浅底
+BONE = "#F2F1ED"         # 深底上的亮片
+JADE = "#2F7E74"         # 玉青 · 标准色（浅底用）
+JADE_LIGHT = "#5FB3A3"   # 浅玉（深底用；深底上玉青会闷）
 
-# ── 「B 字母标」的几何（2026-10-26 定稿，与 icons/icon.svg 一致）─────────────
-# 底色：靛紫平涂 #4F46E5（不再用旧版蓝渐变）。
-BG = (0x4F, 0x46, 0xE5, 255)
-FG = (255, 255, 255, 255)
+SS = 4                   # 超采样倍数
 
-# 三次贝塞尔采样：p0→c1→c2→p3，返回多边形点列。
-def cubic(p0, c1, c2, p3, n=48):
+# ── 分玉几何（100 单位坐标系）────────────────────────────────────────────
+R = 40.0
+CX, CY = 50.0, 44.0
+# 三档光学参数：缝太细会在抗锯齿里糊成实心圆，小尺寸必须重绘而不是缩放
+GAP_FULL, OFF_FULL = 3.0, 12.0    # ≥128px：缝 6 宽 / 错位 12（100 单位）
+GAP_OPT, OFF_OPT = 6.0, 16.0      # 33~127px：缝 12 / 错位 16
+GAP_TINY, OFF_TINY = 9.0, 22.0    # ≤32px：缝 18 / 错位 22（16px 上仍有 ~2px 缝）
+MARK_W = 86.0                     # 两片合起来的外接宽（= 2R + 缝两侧留量）
+RATIO = 0.546                     # 图标内 mark 宽度占画布比（512 上约 280）
+RATIO_GLYPH = 0.560               # 安卓自适应前景层（安全区 66/108，留够）
+
+SCHEMES = {
+    "dark": (BONE, JADE_LIGHT),
+    "light": (INK, JADE),
+    "mono": (BONE, BONE),
+    "mono-ink": (INK, INK),
+}
+
+
+def _piece(gap: float, off: float, side: int, n: int = 300):
+    """圆被竖直弦切下的一片（弓形），返回多边形顶点（含错位）。
+
+    side=-1 取左片：弦在 x=CX-gap，φ 从 π-acos(gap/R) 递增到 π+acos(gap/R)，经过 π
+    side=+1 取右片：弦在 x=CX+gap，φ 从 -acos(gap/R) 递增到 +acos(gap/R)，经过 0
+    （弦端点必须满足 cos φ = ±gap/R —— 2026-11-10 修正：旧版左右弦位写反，
+      两片在中缝重叠 gap*2，缝永远被盖死。）
+    """
+    a = math.acos(max(-1.0, min(1.0, gap / R)))
+    p0, p1 = (math.pi - a, math.pi + a) if side < 0 else (-a, a)
     pts = []
     for i in range(n + 1):
-        t = i / n
-        mt = 1 - t
-        x = mt**3 * p0[0] + 3 * mt**2 * t * c1[0] + 3 * mt * t**2 * c2[0] + t**3 * p3[0]
-        y = mt**3 * p0[1] + 3 * mt**2 * t * c1[1] + 3 * mt * t**2 * c2[1] + t**3 * p3[1]
-        pts.append((x, y))
+        phi = p0 + (p1 - p0) * i / n
+        pts.append((CX + R * math.cos(phi), CY + R * math.sin(phi) + off))
     return pts
 
-# 上鼓包：顶弧 + 底弧，左边竖直收口（藏进主干，消除拼接缝）。
-UPPER = (
-    cubic((194, 156), (272, 142), (338, 168), (338, 208))
-    + cubic((338, 208), (338, 248), (288, 268), (194, 264))
-    + [(194, 156)]
-)
-# 下鼓包：顶弧 + 底弧，顶部上提与上鼓包重叠覆盖腰部。
-LOWER = (
-    cubic((194, 282), (284, 276), (348, 306), (348, 340))
-    + cubic((348, 340), (348, 372), (288, 388), (194, 382))
-    + [(194, 282)]
-)
-# 主干（左竖条）、左下圆顶凸起、两个靛紫负形孔，坐标与 SVG 一致。
-TRUNK = (154, 138, 226, 374, 34)          # x0,y0,x1,y1,圆角
-DOME = (172, 336, 242, 388, 26)           # 左下圆顶凸起
-HOLES = [
-    (268, 206, 36, 29),                   # 上孔 cx,cy,rx,ry
-    (274, 340, 40, 31),                   # 下孔
-]
 
-ICO_SIZES = [16, 24, 32, 48, 64, 128, 256]
-
-# ── 旧字标（--glyph）用的常量，原样保留 ─────────────────────────────────
-BG_GLYPH = (32, 34, 40, 255)
-FG_GLYPH = (110, 168, 254, 255)
-TARGET_INK_H = 256
-FONT_CANDIDATES = [
-    r"C:\Windows\Fonts\msyh.ttc",      # 微软雅黑
-    r"C:\Windows\Fonts\msyhbd.ttc",
-    r"C:\Windows\Fonts\simhei.ttf",    # 黑体
-    "/System/Library/Fonts/PingFang.ttc",
-    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-]
-
-
-def pick_font(size):
-    for p in FONT_CANDIDATES:
-        if os.path.exists(p):
-            try:
-                return ImageFont.truetype(p, size)
-            except OSError:
-                continue
-    raise SystemExit(
-        "找不到可用的中文字体。Windows 上应该有 C:\\Windows\\Fonts\\msyh.ttc；"
-        "别的机器请把字体路径加进 FONT_CANDIDATES。"
-    )
-
-
-def render_glyph(ch, font):
-    """把一个字画在透明层上，返回 (图层, 墨迹框) —— 便于按**墨迹**而不是按 em 框居中。"""
-    layer = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
-    d = ImageDraw.Draw(layer)
-    d.text((SIZE // 2, SIZE // 2), ch, font=font, fill=(255, 255, 255, 255), anchor="mm")
-    return layer, layer.getchannel("A").getbbox()
-
-
-def flat_bg():
-    """靛紫平涂圆角方块（替换旧版竖直蓝渐变）。"""
-    out = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
-    mask = Image.new("L", (SIZE, SIZE), 0)
-    ImageDraw.Draw(mask).rounded_rectangle([0, 0, SIZE - 1, SIZE - 1], radius=RADIUS, fill=255)
-    out.paste(Image.new("RGBA", (SIZE, SIZE), BG), (0, 0), mask)
-    return out
-
-
-def render_mark():
-    """「B 字母标」：靛紫平涂底 + 白色贝塞尔 B。数值与 icons/icon.svg 一一对应。"""
-    out = flat_bg()
-    layer = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
-    d = ImageDraw.Draw(layer)
-    # 主干
-    d.rounded_rectangle([TRUNK[0], TRUNK[1], TRUNK[2], TRUNK[3]], radius=TRUNK[4], fill=FG)
-    # 上下鼓包（贝塞尔采样多边形）
-    d.polygon(UPPER, fill=FG)
-    d.polygon(LOWER, fill=FG)
-    # 左下圆顶凸起
-    d.rounded_rectangle([DOME[0], DOME[1], DOME[2], DOME[3]], radius=DOME[4], fill=FG)
-    # 靛紫负形孔
-    for cx, cy, rx, ry in HOLES:
-        d.ellipse([cx - rx, cy - ry, cx + rx, cy + ry], fill=BG)
-    out.alpha_composite(layer)
-    return out
-
-
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--glyph", metavar="字", help="改出旧的字标（如 --glyph 班）。默认出「B 字母标」")
-    ap.add_argument("--preview", action="store_true", help="额外出 16/32/64 预览，看小尺寸糊不糊")
-    args = ap.parse_args()
-
-    if args.glyph:
-        # 旧字标：深灰底 + 蓝字，v1.0.1 及以前的样式（留着备用，别删 —— 改主意时还能回来）
-        layer, box = render_glyph(args.glyph, pick_font(256))
-        ink_h = box[3] - box[1] + 1
-        # 字号：让墨迹高度对上目标 —— 换字之后视觉重量不变
-        best = None
-        for size in range(120, 340, 2):
-            l, b = render_glyph(args.glyph, pick_font(size))
-            if not b:
-                continue
-            diff = abs((b[3] - b[1] + 1) - TARGET_INK_H)
-            if best is None or diff < best[0]:
-                best = (diff, size, l, b)
-        _, fsize, layer, box = best
-        print(f"glyph mode font={fsize}px")
-        out = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
-        ImageDraw.Draw(out).rounded_rectangle([0, 0, SIZE - 1, SIZE - 1], radius=RADIUS, fill=BG_GLYPH)
-        ink = Image.new("RGBA", layer.size, FG_GLYPH)
-        ink.putalpha(layer.getchannel("A"))
-        cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
-        out.alpha_composite(ink, (int(SIZE / 2 - cx), int(SIZE / 2 - cy)))
+def _glyph(img: Image.Image, canvas: int, *, tiny: bool = False,
+           small: bool = False, style: str = "dark", ratio: float = RATIO) -> None:
+    d = ImageDraw.Draw(img)
+    k = canvas * ratio / MARK_W * (1.15 if tiny else 1.07 if small else 1.0)
+    if tiny:
+        gap, off = GAP_TINY, OFF_TINY
+    elif small:
+        gap, off = GAP_OPT, OFF_OPT
     else:
-        out = render_mark()
+        gap, off = GAP_FULL, OFF_FULL
+    # 错位让内容重心下移（约 off/2），整体回抬保证光学居中
+    cy_mark = CY + off / 2.0 - 0.2
+    ox = oy = canvas / 2.0
 
-    ICONS.mkdir(parents=True, exist_ok=True)
-    out.save(PNG_OUT)
-    # ICO 多尺寸一起出：Windows 会按 DPI/位置自己挑合适的那个
-    out.save(ICO_OUT, sizes=[(s, s) for s in ICO_SIZES])
-    print(f"OK {PNG_OUT.name}  {PNG_OUT.stat().st_size // 1024} KB")
-    print(f"OK {ICO_OUT.name}  {ICO_OUT.stat().st_size // 1024} KB  sizes={ICO_SIZES}")
+    def xf(p):
+        return (ox + (p[0] - CX) * k, oy + (p[1] - cy_mark) * k)
 
-    # 把 build.rs 的 mtime 顶一下 —— 这一下是**必需的**，不是讲究。
-    #
-    # Windows 上 exe 的图标是 `build.rs`（`tauri_build::build()`）那次跑的时候
-    # 生成 `resource.rc` 并嵌进去的。而它的 `rerun-if-changed` **不盯 icon.ico**：
-    # 只换图标、不动 `build.rs` 与 `tauri.conf.json`，cargo 就认为 build 脚本没变、
-    # 不重跑，于是 exe 里**还是旧图标**（2026-10-15 实测：图标文件 23:49 换的，
-    # `.rc` 还是 23:42 那份，把嵌入图标抽出来一看仍是「本」）。
-    #
-    # `build.rs` 自身永远算 build 脚本的输入，碰它一定触发重跑。
-    build_rs = HERE / "build.rs"
-    if build_rs.exists():
-        os.utime(build_rs, None)
-        print("touched build.rs (forces the icon to be re-embedded)")
+    left, right = SCHEMES[style]
+    d.polygon([xf(p) for p in _piece(gap, 0.0, -1)], fill=left)
+    d.polygon([xf(p) for p in _piece(gap, off, +1)], fill=right)
 
-    if args.preview:
-        for s in (16, 32, 64):
-            p = HERE / f"icon-preview-{s}.png"
-            out.resize((s, s), Image.LANCZOS).save(p)
-            print(f"   preview {s}px -> {p.name}")
-    print("next: cd apps/desktop && npx --yes @tauri-apps/cli@2 build")
+
+def render(size: int, *, square: bool = False, bleed: bool = False,
+           glyph_only: bool = False, theme: str = "dark") -> Image.Image:
+    """出一张 size×size 图标。
+
+    square     True=直角底（交给系统自己裁，如 iOS 主屏）；默认圆角方块（rx≈21.5%）
+    bleed      True=圆形底（安卓 ic_launcher_round）
+    glyph_only True=透明底只画图形（安卓自适应图标前景层，恒用小版+单色）
+    theme      dark=墨底反白（默认，app 图标主用）/ light=浅底全色
+    """
+    tiny = size <= 32 or glyph_only
+    small = tiny or size < 128
+    s = size * SS
+    img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+
+    style = theme
+    if glyph_only:
+        style = "mono"
+    # 2026-11-10 20:54：取消 ≤32px 强制单色——弦位修正后 16px 每片约 7px 宽，
+    # 骨白/浅玉两色可辨，标题栏/任务栏小图标与主图标配色统一（用户要求）。
+
+    if not glyph_only:
+        bg = INK if theme == "dark" else PAPER
+        if bleed:
+            d.ellipse([0, 0, s - 1, s - 1], fill=bg)
+        elif square:
+            d.rectangle([0, 0, s - 1, s - 1], fill=bg)
+        else:
+            d.rounded_rectangle([0, 0, s - 1, s - 1], radius=round(s * 110 / 512), fill=bg)
+
+    _glyph(img, s, tiny=tiny, small=small, style=style,
+           ratio=RATIO_GLYPH if glyph_only else RATIO)
+    return img.resize((size, size), Image.LANCZOS)
+
+
+def save_png(img: Image.Image, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    img.save(path, "PNG", optimize=True)
+    print(f"  png  {path.relative_to(ROOT)}  {img.width}x{img.height}")
+
+
+def save_ico(path: Path, sizes=(16, 24, 32, 48, 64, 128, 256)) -> None:
+    """手拼 ICO：每个尺寸**单独重绘**再打包（PNG-in-ICO）。
+
+    交给 Pillow 从大图缩，16px 那张会是糊的 —— 小尺寸要走小版几何。
+    """
+    entries, datas, offset = b"", [], 6 + 16 * len(sizes)
+    for n in sizes:
+        buf = io.BytesIO()
+        render(n).save(buf, "PNG")
+        data = buf.getvalue()
+        datas.append(data)
+        entries += struct.pack("<BBBBHHII", n % 256, n % 256, 0, 0, 1, 32, len(data), offset)
+        offset += len(data)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(struct.pack("<HHH", 0, 1, len(sizes)) + entries + b"".join(datas))
+    print(f"  ico  {path.relative_to(ROOT)}  {list(sizes)}")
+
+
+def save_icns(path: Path, sizes=((b"icp4", 16), (b"icp5", 32), (b"icp6", 64),
+                                 (b"ic07", 128), (b"ic08", 256), (b"ic09", 512))) -> None:
+    """自己拼 icns 容器：头 + 若干 (4字节类型, 4字节长度, PNG) —— Pillow 只会读不会写。"""
+    body = b""
+    for tag, n in sizes:
+        buf = io.BytesIO()
+        render(n).save(buf, "PNG")
+        data = buf.getvalue()
+        body += tag + struct.pack(">I", len(data) + 8) + data
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"icns" + struct.pack(">I", len(body) + 8) + body)
+    print(f"  icns {path.relative_to(ROOT)}  {[n for _, n in sizes]}")
+
+
+def do_desktop() -> None:
+    print("[desktop]")
+    save_png(render(512), DESKTOP_ICONS / "icon.png")
+    save_ico(DESKTOP_ICONS / "icon.ico")
+
+
+def do_web() -> None:
+    print("[web]")
+    save_png(render(512), WEB_ICONS / "icon-512.png")
+    save_png(render(192), WEB_ICONS / "icon-192.png")
+    save_png(render(180, square=True), WEB_ICONS / "icon-180.png")     # iOS 主屏自己裁圆角
+    save_png(render(32), WEB_ICONS / "favicon-32.png")
+    save_png(render(16), WEB_ICONS / "favicon-16.png")
+
+
+def do_mobile() -> None:
+    print("[mobile]")
+    for n in (32, 64, 128):
+        save_png(render(n), MOBILE_ICONS / f"{n}x{n}.png")
+    save_png(render(256), MOBILE_ICONS / "128x128@2x.png")
+    save_png(render(512), MOBILE_ICONS / "icon.png")
+    save_ico(MOBILE_ICONS / "icon.ico")
+    save_icns(MOBILE_ICONS / "icon.icns")
+    # Windows Store 资产（bundler 用不到，但别留旧标在里面）
+    for n in (30, 44, 71, 89, 107, 142, 150, 284, 310):
+        save_png(render(n), MOBILE_ICONS / f"Square{n}x{n}Logo.png")
+    save_png(render(50), MOBILE_ICONS / "StoreLogo.png")
+
+
+def do_android() -> None:
+    print("[android]")
+    # 密度 → 启动图标边长（48dp 基准）；前景层画布 108dp = 2.25 倍
+    for name, n in (("mdpi", 48), ("hdpi", 72), ("xhdpi", 96),
+                    ("xxhdpi", 144), ("xxxhdpi", 192)):
+        d = ANDROID_RES / f"mipmap-{name}"
+        save_png(render(n), d / "ic_launcher.png")
+        save_png(render(n, bleed=True), d / "ic_launcher_round.png")
+        save_png(render(round(n * 2.25), glyph_only=True), d / "ic_launcher_foreground.png")
+
+
+def preview() -> None:
+    """把关键尺寸并排拼一张，肉眼检查小尺寸糊不糊；附深底实景一行。"""
+    sizes = [256, 128, 64, 48, 32, 24, 16]
+    pad, gap = 16, 16
+    top = pad * 2 + max(sizes)
+    w = pad * 2 + sum(sizes) + gap * (len(sizes) - 1)
+    h = top + 90
+    sheet = Image.new("RGBA", (w, h), (233, 230, 223, 255))
+    x = pad
+    for n in sizes:
+        sheet.alpha_composite(render(n), (x, pad + (max(sizes) - n) // 2))
+        x += n + gap
+    darkbar = Image.new("RGBA", (w, 90), (24, 24, 24, 255))
+    sheet.alpha_composite(darkbar, (0, top))
+    x = pad
+    for n in (16, 32, 48, 64):
+        sheet.alpha_composite(render(n), (x, top + (90 - n) // 2))
+        x += n + 28
+    out = ROOT / "tmp/logo-test/icon-preview.png"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    sheet.convert("RGB").save(out, "PNG")
+    print(f"  preview {out.relative_to(ROOT)}  ({' / '.join(map(str, sizes))})")
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--preview", action="store_true", help="额外出预览条")
+    ap.add_argument("--only", choices=["desktop", "web", "mobile", "android"])
+    a = ap.parse_args()
+    jobs = {"desktop": do_desktop, "web": do_web, "mobile": do_mobile, "android": do_android}
+    for name, fn in jobs.items():
+        if a.only and name != a.only:
+            continue
+        fn()
+    if a.preview:
+        print("[preview]")
+        preview()
+    # 顶一下 build.rs 的 mtime：它的 rerun-if-changed 不盯 icon.ico，
+    # 只换图标文件 cargo 不会重跑 build 脚本，exe 里还是旧图标（2026-10-15 实测）
+    if (not a.only or a.only in ("desktop", "mobile")) and BUILD_RS.exists():
+        os.utime(BUILD_RS, None)
+        print(f"  touch {BUILD_RS.relative_to(ROOT)}（强制 build 脚本重跑）")
+    print("done")
+    return 0
 
 
 if __name__ == "__main__":

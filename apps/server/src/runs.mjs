@@ -4,7 +4,11 @@ import * as cliModels from './cli-models.mjs';
 import * as connectors from './connectors.mjs';
 import { normalizeSandbox } from './sandbox.mjs';
 import { ADAPTERS } from './adapters.mjs';
-import { controlUrl, issueRunCredential, isPmRole, revokeRunCredential } from './agent-auth.mjs';
+import { controlUrl, issueRunCredential, revokeRunCredential } from './agent-auth.mjs';
+// 建卡口径的判据（2026-11-11）：有建卡权限的岗位才多注入一段，见 roles.mjs
+import { can } from './roles.mjs';
+import { stripTrailingDoneMark } from './delivery-claim.mjs';
+import { acquirePowerLock, releasePowerLock } from './power-lock.mjs';
 
 /**
  * 「这条会话在对面那个 CLI 里不存在」的报错特征。
@@ -180,32 +184,26 @@ export function subscribe(runId, res, sinceSeq = 0) {
 }
 
 /**
- * **运行钥匙的每轮提醒**（2026-11-08 全员群实报补）。
+ * **运行钥匙的每轮提醒**（2026-11-08 全员群实报补；2026-11-09 P5 压缩）。
  *
  * 员工 CLI 的会话是续接的（codex resume / claude --resume），上一轮它可能把自己那次
  * 用过的钥匙**字面值**写进了历史命令；而钥匙每轮现发、上一轮收尾即作废。真机实报：
  * 贺韬把 15:49 那把 `rt-…` 抄进了命令，之后每轮的 `GET /api/projects` 都带着死钥匙
  * → 401 E2056，他还判断成"通道没恢复、要雇主重置 token"。历史上下文改不了，所以每轮
  * 都在任务**末尾**贴一句：现取环境变量、别抄旧值；顺便把两个错误码的意思说死。
+ *
+ * P5 压缩（922→约 330 字）：这层是**操作说明**，不是权限/交付说明 —— 原来的"查台账"那段
+ * 与平台契约重复，删掉；被问"权限归谁"时模型曾把这段当答案素材复读，所以只留"怎么用钥匙"。
  */
 function runCredentialBrief(pm = false) {
   return [
-    '【平台接口 · 运行钥匙】本轮环境变量 `BANDI_RUN_TOKEN` 是**这次运行现发**的钥匙（run 收尾作废，每轮都换）。',
-    '调平台接口（建卡 / 只读台账）时现场取：PowerShell 用 `$env:BANDI_RUN_TOKEN`，bash 用 `$BANDI_RUN_TOKEN`，请求头写 `X-Bandi-Run-Token: <这个值>`；',
-    '**不要把值抄进命令，也不要沿用历史命令里记得的旧值** —— 旧钥匙一定已作废。',
-    '错误码：`401 E2056` = 用了旧/错钥匙（重取一次重试，不是权限问题，不要让人重置 token）；`403 E4034` = 这个接口不归运行钥匙管。',
-    '查台账：问进度 / 找自己的卡先看本轮任务合同里的「你的任务台账」；要查全部卡或别人的卡，用 `GET ${controlUrl}/api/tasks`（带 `X-Bandi-Run-Token`），**不要去仓库里 grep 源码找答案**。',
-    /*
-     * 项目经理的建卡口径（2026-11-09 重复建卡实报后每轮提醒）：
-     * 技能只在会话**首轮**注入，续接的会话读不到新技能 —— 贺韬那轮就是在旧会话里
-     * 把 5 张卡重发了遍、多出 10 张。所以每轮贴一句：走批量口 + 每张卡带稳定幂等键，
-     * 重发天然安全（同一 key 只会返回已有卡，不会多建）。
-     * 汇报格式已收进平台的每轮契约（dispatch.platformContractBlock），这里不再重复。
-     */
+    '【平台接口 · 运行钥匙】本轮环境变量 `BANDI_RUN_TOKEN` 是这次运行**现发**的钥匙（收尾作废、每轮都换）：',
+    '调平台接口时现场取（PowerShell `$env:BANDI_RUN_TOKEN`），请求头 `X-Bandi-Run-Token`；**不要抄历史命令里的旧值**。',
+    '`401 E2056` = 旧/错钥匙（重取一次重试，不是权限问题）；`403 E4034` = 这个接口不归运行钥匙管。',
     ...(pm
       ? [
-          '建卡：走 `POST /api/agent/cards/batch`（一次一批，最多 20 张），**每张卡带稳定的 `idempotencyKey`** —— 重发命中幂等、不会建出第二张；别一张张发，也别怕重发前先查台账。',
-          '改卡：`PATCH $BANDI_CONTROL_URL/api/projects/tasks/<卡id>`（status / description / assigneePersonaId / startNow=true 重跑）—— 只对你建的卡，或你当群助手那张团队卡。',
+          '建卡走 `POST /api/agent/cards/batch`：体 `{cards:[…]}`、裸数组、单张卡都认；项目可省略（群派活默认用群关联项目）；失败先读 `{code,error}` 按提示改，**最多 2 次**，别整批重发；2 次仍失败就按【统筹职责】降级（群里 @ 人 + 报群主），不许自己写代码。',
+          '补卡（补记已经发生的活）：同接口带 `"backfill": true` + 实际状态（待验收 / 已阻塞 / 已完成 / 已取消 / 失败），补记不重跑；改卡走 `PATCH /api/projects/tasks/<id>`（只对你建的卡 / 你当群助手那张）。',
         ]
       : []),
   ].join('\n');
@@ -309,8 +307,8 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
   const cred = issueRunCredential(run.id, personaId, { local: true });
   run.agentEnv = cred ? { BANDI_CONTROL_URL: controlUrl, BANDI_RUN_TOKEN: cred.token } : {};
   // 每轮把"钥匙现取、别抄旧值"贴在任务末尾（见 runCredentialBrief 的说明）；
-  // PM 再多一句建卡口径（续接会话读不到新技能，这行每轮都在）
-  const agentTask = cred ? `${task}\n\n${runCredentialBrief(isPmRole(store.getPersona(personaId)?.role))}` : task;
+  // 有建卡权限的岗位（现在只有项目经理）再多一句建卡口径（续接会话读不到新技能，这行每轮都在）
+  const agentTask = cred ? `${task}\n\n${runCredentialBrief(can(store.getPersona(personaId), 'card.create'))}` : task;
 
   // 按**协议族**选适配器：同一族下可以有多个实例，它们共用一套事件解析
   const adapter = ADAPTERS[rt.adapter];
@@ -429,6 +427,13 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
   };
 
   let first;
+  /*
+   * 电源锁（pt-bfe8e476）：有活才向系统申报"别睡"（详见 power-lock.mjs 头注）。
+   * 挂在 runOnce 之前 —— 含 retryFresh 重跑的那条路；起不来的同步 throw 也会走
+   * finish() 把锁还掉。失败降级在模块内部，这里不感知、不挡活。
+   */
+  run.powerLock = true;
+  acquirePowerLock();
   try {
     first = runOnce(resumeId);
   } catch (err) {
@@ -609,11 +614,19 @@ function replyMeta({ stopped = false } = {}) {
 function persistReply(run, text, meta = null) {
   if (!text || run.replyPersisted) return;
   const trigger = store.getMessageByRowid(run.conversationId, run.watermark);
+  /*
+   * P4 的交付声明是**给平台判卡状态的机器信号**，不是给雇主看的报告标题。
+   * P5（2026-11-09）：问答题把标记放**最后一行**（第一行留给答案），落库时剥掉最后一行
+   * 单独的 `[完成]`；做事类沿用首行标记，也剥。判据仍用 run.finalText 原文，卡状态不受影响。
+   * `[受阻]` 保留 —— 它后面跟着原因，是给人看的。
+   */
+  const shown =
+    stripTrailingDoneMark(String(text).replace(/^\s*\[完成\][ \t]*(?:\r?\n)*/, '')) || text;
   store.addMessage({
     conversationId: run.conversationId,
     runId: run.id,
     role: 'assistant',
-    text,
+    text: shown,
     personaId: run.personaId,
     // ⚠️ 回复也要带上这一步的标记：不带的话，流程面板按 taskId 筛时
     //    就只剩"我"这侧的消息，他的回话整段看不见（用户实报）
@@ -655,6 +668,13 @@ function finish(run, { status, exitCode = null, error = null, usage = null, elap
   store.finishRun(run.id, { status, exitCode, error, usage });
   store.setConversationStatus(run.conversationId, status);
   revokeRunCredential(run.id); // 钥匙跟活走：run 收尾就作废，agent 不能在活干完之后再建卡
+
+  // 电源锁跟活走：finish 是所有运行的唯一终点（正常收尾/停止/看门狗强杀都路过这里），
+  // 在这儿还锁才不会漏。releasePowerLock 幂等，多还无害。
+  if (run.powerLock) {
+    run.powerLock = false;
+    releasePowerLock();
+  }
 
   // 钩子出错不能影响执行本身的收尾 —— 否则一条流程的推进逻辑会把发言也搞挂
   for (const fn of finishHooks) {

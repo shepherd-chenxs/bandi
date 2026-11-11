@@ -40,10 +40,11 @@ import { verifyRunCredential } from './agent-auth.mjs';
  * 2026-10-31 起**本文件不再自己判 remoteAddress** —— 原来那句
  * `if (isLoopbackHost(host)) return { required:false }` 在反代部署下等于全站免登录。
  */
-import { classifySource, cfgNow, isLocalHost, isLoopbackAddr, isLoopbackHost } from './security/source.mjs';
+import { classifySource, cfgNow, hostnameOf, isLocalHost, isLoopbackAddr, isLoopbackHost } from './security/source.mjs';
 import * as policy from './security/policy.mjs';
 import { isRegistered } from './security/route-policy.mjs';
 import * as csrf from './security/csrf.mjs';
+import * as localSecret from './security/local-secret.mjs';
 // 只读 `<数据目录>/hub.json`：登录页据此显示中枢域名与设备名。中枢地址永远有值
 // （内置默认），这里不存在"没配中枢"的分支。
 import { DEFAULT_HUB_URL, hubBaseUrl, readHubConfig } from './hub/config.mjs';
@@ -79,6 +80,21 @@ const SHELL_UA = /(^|\s)BandiShell\/\S+/;
  * 不真的加载它；万一没接住，服务端回一张"正在重新连接"的静态页（routes/hub.mjs）。
  */
 export const REENTER_PATH = '/hub/expired';
+
+/**
+ * **本机壳子自动进门**（2026-11-10）：桌面壳（`apps/desktop/shell.mjs`）启动窗口时
+ * 带上数据目录里 `local_secret` 的地址，服务端核过就发一张本机会话（`bandi_sid`），
+ * 窗口直接是面板，不再落到登录页。
+ *
+ * 为什么要有这条路：控制面一旦对外监听（`BANDI_HOST=0.0.0.0`，桌面版默认），
+ * **本机请求也要求鉴权**（IAM §5.2 的有意选择）—— 但桌面壳是"这台机器上的应用"，
+ * 凭据就是本机文件，不该让人在壳里反复输中枢账号密码。2026-11-10 实报：
+ * 壳里放了一晚回来发消息，回的是 E4010「不是从本机直接发起的」。
+ *
+ * 只认**本机直连**（`isDirectLocalRequest`：peer 回环、无转发头、Host 是本机名）——
+ * 反代/局域网里来的请求即使知道 secret 也不认（secret 本来就不该出这台机器）。
+ */
+export const SHELL_ENTER_PATH = '/shell/enter';
 
 
 /** 这个监听地址算不算"只有本机能访问" */
@@ -153,9 +169,10 @@ export function sessionTokenOf(req) {
   return String(parseCookies(req.headers.cookie)[SID_COOKIE] || '');
 }
 
-/** 给登录成功用：`Set-Cookie` 的值（HttpOnly：JS 读不到，XSS 偷不走） */
-export function sessionCookie(token) {
-  return `${SID_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SID_MAX_AGE}`;
+/** 给登录成功用：`Set-Cookie` 的值（HttpOnly：JS 读不到，XSS 偷不走）
+ * `maxAge` 秒：缺省跟浏览器侧的会话 Cookie 保存期；本机壳子用更长的（见 SHELL_ENTER_PATH）。 */
+export function sessionCookie(token, maxAge = SID_MAX_AGE) {
+  return `${SID_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`;
 }
 
 /** 给退出登录用：让浏览器立刻丢掉这张票（Max-Age=0） */
@@ -426,6 +443,16 @@ export function guard(auth, req, res, url) {
   if (req.method === 'GET' && url.pathname.startsWith('/icons/')) return true;
 
   /*
+   * **本机壳子自动进门**（2026-11-10）：桌面壳启动时把窗口开到 `SHELL_ENTER_PATH?secret=…`，
+   * 这里核 `local_secret` + 本机直连，发一张本机会话后 302 回面板。
+   * 接不住（没 secret / 不是本机直连 / 还没有任何账号）就照常往下走：
+   * 要页面 → 登录页；要 API → 401。
+   */
+  if (req.method === 'GET' && url.pathname === SHELL_ENTER_PATH) {
+    if (handleShellEnter(req, res, auth, url)) return false;
+  }
+
+  /*
    * 数字员工的本机 AI 通道（2026-10-23，skills/bandi-avatar）：**真·回环**发起的 /api/ai/* 免令牌。
    * 员工跑在 CLI 里，拿不到平台令牌，让技能教它 curl 时无凭据可用 —— 通道自身有
    * 来源校验 + CSRF 闸双保险（routes/imageai.mjs）。
@@ -639,11 +666,18 @@ export function guard(auth, req, res, url) {
     return serveLoginOrReenter(req, res, auth, staleTok ? [clearedTokenCookie()] : []);
   }
 
+  /*
+   * 文案要分清"从哪来"：`source === 'network'` 包含**本机直连但控制面在对外监听**
+   * （2026-11-03 起本机也要鉴权）—— 这时再说"不是从本机直接发起的"是假话
+   * （2026-11-10 用户实拍本机壳子发消息收到这句，以为被当成外部请求）。
+   */
+  const localPeer = isDirectLocalRequest(req);
   res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
   res.end(
     JSON.stringify({
-      error:
-        source === 'network'
+      error: localPeer
+        ? '需要登录（本机请求也要账号会话；桌面壳会自动重新进门）'
+        : source === 'network'
           ? '需要登录或访问令牌（这个请求不是从本机直接发起的）'
           : '需要访问令牌（这个控制面没有监听回环地址）',
       code: 'E4010',
@@ -667,6 +701,44 @@ function wantsPanelHtml(req, url) {
   if (p.startsWith('/api/')) return false;
   if (p === '/' || p.endsWith('.html')) return true;
   return String(req.headers.accept ?? '').includes('text/html');
+}
+
+/**
+ * 本机壳子进门（`SHELL_ENTER_PATH`）：核 `local_secret` + 本机直连 → 发一张本机会话。
+ *
+ * 返回 `true` = 已经回过响应；`false` = 没接住，交给 guard 后面的常规路径。
+ * 注意**不是**"有 secret 就登"：必须同时满足本机直连（反代后面 peer 也是 127.0.0.1，
+ * 但会带转发头 / Host 不是本机名 —— `isDirectLocalRequest` 那三道就是干这个的）。
+ */
+function handleShellEnter(req, res, auth, url) {
+  // 回环免鉴权形态：壳不会走这条路（它探测到 200 就直开原地址），别在"本来就不用登录"的机器上多发一张会话
+  if (!auth?.required) return false;
+  if (!isDirectLocalRequest(req)) return false;
+  // Host 收紧到回环字面量：壳在 127.0.0.1 上开窗口；本机网卡名/Host 改写不认（缩小隧道+改 Host 的组合面）
+  if (!isLoopbackHost(hostnameOf(req.headers.host))) return false;
+  const got = String(url.searchParams.get('secret') ?? '').trim();
+  if (!got) return false;
+  const expected = localSecret.ensure();
+  if (!expected) return false;
+  const a = Buffer.from(got);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return false;
+  const owner = store.firstUser();
+  if (!owner || owner.disabled) return false;
+  const { token } = store.createSession(owner.id, {
+    ip: req.socket?.remoteAddress ?? null,
+    ua: req.headers['user-agent'] ?? '',
+    kind: 'shell',
+  });
+  res.writeHead(302, {
+    // Cookie 寿命与 store 里这张会话一致（180 天）；壳重开也会再进一次，这里只是兜底
+    'Set-Cookie': sessionCookie(token, store.SHELL_SESSION_DAYS * 86400),
+    Location: '/',
+    'Cache-Control': 'no-store',
+    'Referrer-Policy': 'no-referrer',
+  });
+  res.end();
+  return true;
 }
 
 /**

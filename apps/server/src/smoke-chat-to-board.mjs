@@ -113,6 +113,15 @@ try {
   const conv = (await req('POST', '/api/conversations', { personaId: dev.id })).body.conversation.id;
   await talk(conv, '把首页那句文案改掉');
 
+  console.log('\n⓪ 交付标记不给雇主看（P5：假 CLI 回话带 [完成] 前缀，落库要剥掉）');
+  const convMsgs = (await req('GET', `/api/conversations/${conv}`)).body.messages ?? [];
+  const asstMsgs = convMsgs.filter((m) => m.role === 'assistant');
+  check('assistant 回话存在', asstMsgs.length > 0, String(asstMsgs.length));
+  check('首行 [完成] 已从雇主可见回话里剥掉',
+    asstMsgs.length > 0 && asstMsgs.every((m) => !String(m.text ?? '').trimStart().startsWith('[完成]')),
+    JSON.stringify(asstMsgs.map((m) => String(m.text ?? '').slice(0, 24))));
+  check('回话正文还在（FAKE-OK 没被一起剥掉）', asstMsgs.some((m) => String(m.text ?? '').includes('FAKE-OK')));
+
   console.log('\n① 聊天派活不进看板（没有开关可开），员工详情照收');
   check('项目看板没有聊天行', (await boardSources(`/api/projects/${project.id}/tasks`)).chat === 0);
   check('全局面板没有聊天行', (await boardSources('/api/tasks')).chat === 0);

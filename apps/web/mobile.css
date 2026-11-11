@@ -2397,11 +2397,8 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
    * 一行里原来有五个东西：← 头像 名字 状态字 ＋钮 ⟲钮 —— 390px 上名字只剩一百来像素，
    * 稍长就换行，整条头忽高忽低。这一版按 iOS/微信的语法收成三个：
    *   ←（44）+ 名字（可点，进详情）+ ＋/⟲（两颗 44 热区、纯图标）。
-   * 头像只在桌面保留（那边横向空间够，头像也是"点进详情"的老入口）。
+   * 桌面端 2026-11-11 也撤了头像（详情的入口本来就在名字上），两边都不再有 .head-avatar。
    */
-
-  /* 头像：手机上撤掉，名字接管详情入口 */
-  body.mb-chat .chat-head > .head-avatar { display: none; }
 
   /*
    * 名字 = 详情入口。第一行做成 flex：名字可收缩截断（长群名不把徽章挤到第二行），
@@ -2439,6 +2436,17 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     line-height: 15px;
     color: var(--mb-text-2, var(--dim));
     white-space: nowrap;
+  }
+  /*
+   * 关联项目铭牌（2026-11-11）：手机上先让它让位 —— max-width 收到 84px（约四个字 + 省略号），
+   * 但**不参与收缩**（flex:none 在 style.css 里），群名照样是唯一可缩的那个。
+   * 320px 以下的极限屏它是第一个被牺牲的：真挤到放不下时宁可整块不显示，
+   * 也不必在群头硬塞 —— 抽屉里永远看得到。
+   */
+  body.mb-chat .chat-head .head-proj {
+    max-width: 84px;
+    font-size: 12px;
+    line-height: 15px;
   }
   /* 解散的群：群名不可点（无 head-name 的事件与热区），但同样要能截断不让整行溢出 */
   body.mb-chat .chat-head .head-name-static {
@@ -5275,9 +5283,13 @@ body.tc-sheet-open .tc-page.tc-m .tc-main-scroll { overflow: hidden; }
   .sch-m textarea { min-height: 108px; line-height: 1.6; resize: none; }
   .sch-m #schRightFields { margin-top: 14px; }
 
-  /* ---- 做法：一排选项按钮 ----
-     4 种固定两两成行（flex 换行时 3+1 那种孤行很难看）；等宽网格读起来也更快 */
+  /* ---- 执行方式：选项按钮（2026-11-11 从「做法」改来，对齐任务面板三选一）----
+     三种方式一行放得下（指派人 / 团队协作 / 流程任务都是 3-4 个字）；
+     内置系统动作（PR 巡检 / 备份）收进第二排小的，不跟执行方式抢主位 */
   .sch-seg { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 0; }
+  .sch-seg.three { grid-template-columns: repeat(3, 1fr); }
+  .sch-seg-sys { margin-top: 8px; }
+  .sch-seg-sys .sch-seg-btn { height: 32px; font-size: 12px; color: var(--dim); border-style: dashed; }
   .sch-seg-btn {
     width: 100%;
     height: 36px;

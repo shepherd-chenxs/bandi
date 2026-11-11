@@ -18,8 +18,9 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="apple-mobile-web-app-title" content="班底" />
 <link rel="manifest" href="/manifest.webmanifest" />
-<link rel="apple-touch-icon" href="/icons/icon-192.png" />
-<link rel="icon" href="/icons/icon-192.png" />
+<link rel="apple-touch-icon" href="/icons/icon-180.png" />
+<link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png" />
+<link rel="icon" type="image/png" sizes="16x16" href="/icons/favicon-16.png" />
 <!--
   启动底色（2026-10-22，治"打开时黑边一闪"）：
   WebView2 在**文档还没画第一帧**之前，窗口里是一片系统默认底色 —— 浅色主题下就是一道
@@ -53,31 +54,24 @@
 
 <!-- 一级：图标栏 -->
 <nav class="rail">
-  <!-- 应用标（2026-10-26 定稿「B 字母标」：bandi 的 B，主干+上下鼓包+左下圆顶）。
-       与 apps/desktop/icons/icon.svg 同一套几何 —— 改形状两处要一起改，
-       贝塞尔控制点在 make-icon.py 的 UPPER/LOWER。两个负形孔用 mask 镂空，透出下方渐变。 -->
-  <!-- 品牌块（2026-11-05）：标 + 版本号一组。版本号在标下面那行小字，
-       值由 app.mjs 的 initRailVersion() 从 /api/hello 填，拿不到就整行藏起来。 -->
-  <div class="rail-brand">
-    <div class="rail-logo" aria-label="班底">
-      <svg viewBox="0 0 512 512" width="22" height="22" aria-hidden="true">
-        <defs>
-          <mask id="bandi-b-hole">
-            <rect width="512" height="512" fill="#fff"/>
-            <ellipse cx="268" cy="206" rx="36" ry="29" fill="#000"/>
-            <ellipse cx="274" cy="340" rx="40" ry="31" fill="#000"/>
-          </mask>
-        </defs>
-        <g mask="url(#bandi-b-hole)" fill="#fff">
-          <rect x="154" y="138" width="72" height="236" rx="34"/>
-          <path d="M194,156 C272,142 338,168 338,208 C338,248 288,268 194,264 Z"/>
-          <path d="M194,282 C284,276 348,306 348,340 C348,372 288,388 194,382 Z"/>
-          <rect x="172" y="336" width="70" height="52" rx="26"/>
-        </g>
-      </svg>
-    </div>
-    <button type="button" class="rail-ver" id="railVer" hidden></button>
+  <!-- 左栏顶部字标（2026-11-10 21:09 用户定稿）：撤掉图形标后顶部空，改用**纯文字字标**
+       「班底」+ BANDI，无底色块、不与标题栏图标重复；颜色走 --text/--dim 随深浅主题。
+       注意：这是字标不是应用图标——应用标（分玉）只在 exe/favicon/design/logo。 -->
+  <div class="rail-brand" aria-label="班底 BANDI">
+    <span class="rail-brand-zh">班底</span>
+    <span class="rail-brand-en">BANDI</span>
   </div>
+  <!-- 信箱（2026-11-11 用户拍板）：左栏最上面的一级栏，先接"建卡失败"这类平台事实，
+       以后别的通知也进这里。未读数用角标，消息里不播报（用户：不要弹框、不要群里说）。 -->
+  <button class="nav-btn" data-nav="inbox">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="3" y="5.5" width="18" height="13" rx="2" />
+      <path d="M3.6 6.6 12 13l8.4-6.4" />
+      <path d="M3 16.5l5.4-4.2M21 16.5l-5.4-4.2" />
+    </svg>
+    <span>信箱</span>
+    <span class="rail-badge" id="inboxBadge" hidden></span>
+  </button>
   <button class="nav-btn active" data-nav="messages">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round">
       <path d="M4 5.5h16v10H9l-5 4z" />
@@ -92,6 +86,17 @@
       <path d="M15.8 19.2c0-2.2 1-3.7 2.8-4.2" />
     </svg>
     <span>通讯录</span>
+  </button>
+  <!-- 组织架构（2026-11-11 Phase 3）：岗位是系统内置的固定清单，权限与技能包挂在岗位上。
+       这一栏放"组织长什么样"的常驻视图，第一个子菜单 = 岗位权限清单（见 js/org.mjs）。 -->
+  <button class="nav-btn" data-nav="org">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="9" y="3" width="6" height="5" rx="1.2" />
+      <rect x="3" y="16" width="6" height="5" rx="1.2" />
+      <rect x="15" y="16" width="6" height="5" rx="1.2" />
+      <path d="M12 8v4M6 16v-2.4h12V16M12 12v1.6" />
+    </svg>
+    <span>组织架构</span>
   </button>
   <!-- 专家库（2026-10-22 补回）：app.mjs 整条链路早就备好了（ROUTES.experts、
        setNav('experts') 的分支、#expertsView 整页），唯独 rail 上这颗按钮一直没建 ——
@@ -192,6 +197,10 @@
   </div>
   <div id="detailView"></div>
   <div id="settingsView"></div>
+  <!-- 信箱（2026-11-11）：整页通知列表，左栏一级栏进来 -->
+  <div id="inboxView"></div>
+  <!-- 组织架构（2026-11-11 Phase 3）：一级栏 + 左栏子菜单，右区是岗位权限清单 -->
+  <div id="orgView"></div>
   <div id="groupView"></div>
   <!-- 专家库整页（2026-10-22 补）：app.mjs 的 showView / openExperts 都引用 #expertsView，
        但这个容器一直没建 —— 每次切页面 showView 在 $('expertsView').classList 上抛
@@ -203,26 +212,8 @@
   <div id="placeholderView"></div>
 </main>
 
-<dialog id="personaDlg">
-  <form method="dialog">
-    <b>新建数字员工</b>
-    <label>名字</label><input id="pName" placeholder="例如：老周" />
-    <label>岗位</label><input id="pRole" list="roleSuggest" placeholder="比如：研发（留空也行）" />
-    <label>部门</label><input id="pDept" list="deptSuggest" placeholder="比如：技术部（留空 = 未分配）" />
-    <label>职责与身份设定（作为这段对话的设定带进去）</label>
-    <textarea id="pInstr" style="height:92px" placeholder="你是这个项目的研发。一次只推进一步，做完汇报。"></textarea>
-    <div class="grid2">
-      <div><label>Runtime</label><div id="pRuntimeMount"></div></div>
-      <div><label>权限（沙箱）</label><div id="pSandboxMount"></div></div>
-    </div>
-    <label>工作目录</label><input id="pCwd" />
-    <div class="dlg-actions">
-      <button type="button" value="cancel">取消</button>
-      <button class="primary" id="pOk" value="ok">创建并进入对话</button>
-    </div>
-  </form>
-</dialog>
-
+<!-- 新建数字员工弹窗 2026-11-11 撤掉：用户拍板不保留自建员工（岗位固定、只能从专家库雇佣），
+     自建私有专家的入口以后单独做。 -->
 <!-- 专家详情（2026-10-25）：点专家库的人物卡弹出 —— 卡片墙一格只有一句话简介 + 技能名，
      岗位说明全文、技能描述、雇佣/解聘都在这扇弹窗里。空壳：内容每次现画进 #exdBody。 -->
 <dialog id="expertDlg">
@@ -318,6 +309,19 @@
     <div class="dlg-actions">
       <button type="button" value="cancel">取消</button>
       <button class="primary" id="aOk" value="ok">就他了</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- 群 · 关联项目（2026-11-11）：一项目一群、可空可换。点行即选即关，同 keeperDlg 的手感。
+     已被别的群占着的项目在列表里置灰并写出占用群，不给"顶掉"。 -->
+<dialog id="projLinkDlg">
+  <form method="dialog">
+    <b>关联项目</b>
+    <div class="dim" style="font-size:12px;margin-top:2px">关联后，群里 @ 谁干活，他就在那个项目的目录里干，派的卡直接落它的看板。一个项目只归一个群。</div>
+    <div id="pList" class="members" style="margin-top:12px"></div>
+    <div class="dlg-actions">
+      <button type="button" value="cancel">取消</button>
     </div>
   </form>
 </dialog>
@@ -490,8 +494,8 @@
 <!-- 2026-11-01 撤掉「让一台新机器加入」弹窗：只发码不派活（说明见 js/connectors.mjs
      的 renderBody）。发码改 `bandi nodes invite`。 -->
 
-<!-- 岗位的建议列表：内容由 js/misc.mjs 从 ROLE_SUGGEST 填（一处定义，别在 HTML 里再抄一份） -->
-<datalist id="roleSuggest"></datalist>
+<!-- 岗位不建议列表（2026-11-11）：岗位是系统内置的固定清单，详情页只读展示，
+     不再有自由输入 —— 原 #roleSuggest 随「新建员工」一起撤掉。 -->
 <!-- 部门的建议列表（2026-10-25）：没有出厂清单 —— 由 js/contacts.mjs 的 refreshDeptSuggest
      按库里已用的部门名现填（自由文本字段，靠建议列表防止同一个部门写出两个名字） -->
 <datalist id="deptSuggest"></datalist>
