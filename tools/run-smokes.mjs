@@ -130,9 +130,15 @@ const RUN = [
   'apps/server/src/smoke-task-comments.mjs',
   'apps/server/src/smoke-task-flow.mjs',
   'apps/server/src/smoke-task-run-sync.mjs',
+  // 步骤档案卡与节点同状态（2026-11-13 实报「卡改成进行中、实例页还是 failed」）：
+  // 节点变 → 卡跟着变、没建卡不炸、人手改档案卡被拒。纯库，不起服务。
+  'apps/server/src/smoke-step-card-sync.mjs',
   'apps/server/src/smoke-workflows.mjs',
   'apps/desktop/smoke-shell.mjs',
   'tools/smoke-help-pop.mjs',
+  // 「重跑这一步」按钮（2026-11-13 实报后加回）：只在失败/已阻塞出现、走 /retry 同一条路、
+  // 状态下拉没被动。纯源码断言（前端无构建步骤），几十毫秒。
+  'tools/smoke-run-retry-btn.mjs',
   // 2026-10-30：分支行尾那颗 `›` 的链路（menu → folderize → combo → combo-menu → 菜单）。
   // 这条链任何一手漏了都不报错、只是箭头不见了，所以必须钉住。
   'tools/smoke-branch-menu.mjs',

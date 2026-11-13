@@ -316,6 +316,21 @@ export function countNodeVisits(runId, nodeId) {
  * 以后往这儿加字段，记得同时加到 SET 里。
  */
 
+/*
+ * **步骤状态变化的外部镜像**（2026-11-13，实报"卡改成进行中、实例页还是 failed"）。
+ *
+ * 流程某一步的档案卡（`ensureTaskCardForStep` 建的那张）以前只在建卡那一刻拍张照，
+ * 之后节点跑了/挂了卡不知道 —— 卡和实例页各说各话。`updateWorkflowTask` 是节点状态的
+ * **唯一收口**（引擎、PR 审阅、人工接口全走这儿），状态真变了就在这儿发一炮；
+ * 谁来接（project-tasks 里把卡同步过去）由监听器决定 —— store 层不能反向 import
+ * 业务层，所以只留这个注册口。没人注册就是老行为，冒烟互不干扰。
+ */
+const workflowTaskStatusListeners = new Set();
+export function onWorkflowTaskStatusChanged(fn) {
+  workflowTaskStatusListeners.add(fn);
+  return () => workflowTaskStatusListeners.delete(fn);
+}
+
 export function updateWorkflowTask(id, fields) {
   const cur = db.prepare('SELECT * FROM workflow_tasks WHERE id = ?').get(id);
   if (!cur) return null;
@@ -339,7 +354,13 @@ export function updateWorkflowTask(id, fields) {
     next.endedAt,
     id,
   );
-  return db.prepare('SELECT * FROM workflow_tasks WHERE id = ?').get(id);
+  const updated = db.prepare('SELECT * FROM workflow_tasks WHERE id = ?').get(id);
+  if (updated.status !== cur.status) {
+    for (const fn of workflowTaskStatusListeners) {
+      try { fn(updated, cur); } catch { /* 镜像失败不连坐流程引擎 —— 卡同步是尽力而为 */ }
+    }
+  }
+  return updated;
 }
 
 /** 实例当前停在哪个节点（v2 的核心：推进 = 换 currentNodeId） */

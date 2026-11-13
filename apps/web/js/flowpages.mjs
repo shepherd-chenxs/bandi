@@ -542,7 +542,14 @@ export function runHTML(v) {
   const b = runBadge(v);
   const curNode = (v.nodes ?? []).find((n) => n.id === v.currentNodeId) ?? null;
   // **没执行人 = 停在这儿**，这是要一眼看出来的阻塞
-  const blocked = v.status === 'doing' && curNode && !curNode.assigneeName;
+  //
+  // ⚠️ 判据必须是**当前任务实际的经办人**（`v.assigneePersonaId`，派活时落到任务上的那个），
+  //    不能看模板节点有没有人名（`curNode.assigneeName`）—— 2026-11-13 实报：
+  //    按岗位自动指派的节点（`roleKey`）模板里**本来就不写人名**，`assigneeFor()` 当场查岗位，
+  //    于是 `curNode.assigneeName` 恒为 null ⇒ blocked 恒为 true ⇒ 行内动作（含「重跑这一步」
+  //    和通过/驳回）全被吞掉，而界面上明明写着经办人是张坤。模板点没点名是"谁该来"，
+  //    任务上的人才是"现在谁在办"。
+  const blocked = v.status === 'doing' && !v.assigneePersonaId;
 
   const acts = [];
   if (v.status === 'doing') {
@@ -573,15 +580,31 @@ export function runHTML(v) {
     // 停在待办的步骤会被调度节拍自动派出（他正忙就 30 秒后再试），人没什么可点的。
     // 留一行说明代替按钮：不解释的话，"这步怎么不动"又得靠猜。
     if (v.taskStatus === 'todo') inlineActs.push('<span class="dim">待办 —— 马上自动派活，不用点任何东西（他正忙就 30 秒内再试）</span>');
+    /*
+     * 「重跑这一步」（2026-11-13 **加回来**）。
+     *
+     * 2026-10-18 曾删掉这颗、让"改状态成待办"代替（同一件事不留两个入口）。实测下来那条路
+     * 不成立：入口藏在「状态」那颗字里，而失败时下拉里连 `failed` 都不出现（选项只有
+     * 待办/已阻塞/已完成）—— 人看到的是一排"改哪个都不对"的选项（用户 2026-11-13 实报）。
+     * 「失败后再办一次」是高频快乐路径，就得有一颗明说的按钮。
+     *
+     * 接口仍是同一个 `/retry`（= setStepStatus 'todo'，改回待办并立刻派活），不是新实现。
+     * ⚠️ 状态下拉**原样不动**：那套状态牵扯"想法拖进待办就自动开工"等多处，要统一规划。
+     */
+    // 额度拦下的那一步不摆这颗：重跑会先改回待办、再撞一次同一道额度闸、又写一遍同样的
+    // 备注 —— 那是空转。它有自己的「继续一次」（见下面），别让人在两个按钮之间猜。
+    if (!v.quotaBlocked && (v.taskStatus === 'failed' || v.taskStatus === 'blocked')) {
+      const why = v.taskStatus === 'failed' ? '这一步上次失败了' : '这一步被标成已阻塞';
+      inlineActs.push(
+        `<button class="primary" data-run-retry title="${why} —— 会重新派给经办人再办一次">重跑这一步</button>`,
+      );
+    }
     if (v.taskStatus === 'review') {
       if (v.outlets?.approve) {
         inlineActs.push(`<button class="primary" data-run-decide="通过">确认这一步完成 → ${esc(v.outlets.approveTo ?? '')}</button>`);
       }
       if (v.outlets?.reject) inlineActs.push(`<button data-run-decide="驳回">驳回 → ${esc(v.outlets.rejectTo ?? '')}</button>`);
     }
-    // 「重跑这一步」已删（2026-10-18 用户要求）：把状态改成「待办」就是重跑
-    //（setStepStatus 的语义：待办 = 直接派活），同一件事不留两个入口。
-    //
     // **额度拦下的只给「继续一次」**：它走的不是"改回待办"（那会又撞一次额度闸、
     // 又写一遍同样的备注），而是带 force 直接派 —— 这颗没别的路能替代，留着。
     if (v.quotaBlocked) {
@@ -690,7 +713,8 @@ export function runHTML(v) {
               : '打开对话'}">${talkText}</button>`
           : '<span class="dim">先派活才能对话</span>'
         }</div>`;
-      // 行内**只放快乐路径**（派活 / 通过 / 驳回）；重跑已删 —— 改状态成「待办」就是重跑。
+      // 行内放**当前这一步的动作**：通过的快乐路径 + 失败/受阻后的「重跑这一步」；
+      // 改指派、改状态仍是上一行那两个入口（点「经办人」/点「状态」）。
       // 「没人可派」那种不在这儿再摆一颗"指派给谁" —— 上一行「经办人」本身就是入口，
       // 摆两颗是同一个动作两个按钮。
       const inline = isCur && inlineActs.length ? `<div class="run-acts">${inlineActs.join('')}</div>` : '';
@@ -1121,9 +1145,30 @@ export function wireRun(v) {
       toast(e.message, 'error');
     }
   };
+  /*
+   * 「重跑这一步」：失败/受阻之后再办一次。
+   *
+   * 走 `/retry`（服务端 `retryCurrentStep` = `setStepStatus 'todo'` + 立刻派活）——
+   * 跟「把状态改成待办」**完全同一条路**，这里只是把入口显式化（2026-11-13 用户定）。
+   * 点了先禁用：重跑会真派活（action 节点会真去建 PR），连点两下没有意义；
+   * 成功与否都以 paintRun 重新拉到的实例为准，失败就把按钮放开让人能再试。
+   */
+  const retryBtn = view.querySelector('[data-run-retry]');
+  if (retryBtn) {
+    retryBtn.onclick = async () => {
+      retryBtn.disabled = true;
+      try {
+        await api(`/api/workflows/runs/${encodeURIComponent(v.id)}/retry`, { method: 'POST' });
+        await paintRun(v.id);
+      } catch (e) {
+        toast(e.message, 'error');
+        retryBtn.disabled = false;
+      }
+    };
+  }
   // （那枚推拉列表面板的按钮 2026-10-19 撤了 —— 接线跟着删，见 runHTML 里的说明）
   // 「指派」「改状态」现在都长在时间轴"当前这一步"那一行里 —— 任务卡已撤；
-  // 「重跑」也删了（改状态成「待办」就是重跑）。行内只剩：通过 / 驳回（快乐路径）。
+  // 「重跑这一步」2026-11-13 加回来了（理由见 runHTML 里那颗按钮的注释）。
   view.querySelectorAll('[data-run-decide]').forEach((el) => {
     el.onclick = async () => {
       const decision = el.dataset.runDecide;

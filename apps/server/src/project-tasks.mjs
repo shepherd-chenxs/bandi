@@ -661,6 +661,35 @@ export function personaTasks(persona) {
  */
 const MANUAL_STATUSES = new Set(store.MANUAL_STATUS);
 
+/* ---------------------------------------------------------------- 步骤档案卡与节点同状态（2026-11-13） */
+
+/*
+ * 流程某一步的档案卡（`ensureTaskCardForStep` 建，`sourceKey = flow:<runId>:<nodeId>:<visit>`）
+ * 是"这一笔办理的档案"，状态**跟着节点走** —— 以前只在建卡那一刻拍张照，之后节点跑了/
+ * 挂了/被人重跑，卡不知道，就出现"卡上「进行中」、实例页 failed"这种两本账打架
+ * （2026-11-13 用户实报）。两半一起修：
+ *
+ *   · **节点 → 卡**：`store.updateWorkflowTask` 是节点状态的唯一收口，状态真变了发事件，
+ *     这里注册监听把卡同步过去（store 层不能反向 import 业务层，所以走注册口）。
+ *     卡还没建（人没在流程页点过「任务」）就什么都不做 —— 卡保持"点开才建"的原设计；
+ *     同步走 store 直写：这是系统动作，不算"人改状态"，也别触发开工那套。
+ *   · **卡 → 节点 禁止**：人手改档案卡的状态等于对引擎撒谎（写「已完成」流程也不会推进），
+ *     人改卡的唯一入口 `updateProjectTask` 里挡掉（见函数里那条闸），口径与
+ *     "由流程执行的卡"（flowRunId 卡）一致 —— 那条的注释写全了为什么不能给两本账。
+ *
+ * 监听器注册在模块加载时（谁 import 本模块谁就有同步）；没人 import 就是没有，
+ * 纯 store 的冒烟不受影响。
+ */
+store.onWorkflowTaskStatusChanged((next, prev) => {
+  if (!next?.runId || !next?.nodeId || !next?.status) return;
+  if (next.status === prev?.status) return;
+  // 节点六态（todo/doing/blocked/failed/done/review）是任务八态的子集，恒等映射；
+  // 这里仍认一遍码表，万一将来节点冒出新码，宁可不同步也别往卡上写垃圾
+  if (!Object.values(store.TASK_STATUS).includes(next.status)) return;
+  const card = store.getProjectTaskBySourceKey(`flow:${next.runId}:${next.nodeId}:${next.visit ?? 1}`);
+  if (card && card.status !== next.status) store.updateProjectTask(card.id, { status: next.status });
+});
+
 /**
  * 建卡时选的那条流程得**真能起**：存在、已发布、有节点。
  * 界面只列已发布的，但接口谁都能直接调 —— 判据在服务端也要写一遍（跟「想法不派活」同一个道理）。
@@ -1538,6 +1567,18 @@ export function updateProjectTask(id, fields = {}, { autoStart = true, actorUser
    */
   if (cur.flowRunId && (patch.status !== undefined || fields.personaId !== undefined || fields.assigneeUserId !== undefined || fields.assigneeGroupId !== undefined)) {
     throw new Error('这张卡由流程执行 —— 状态/执行人跟着流程走，去流程实例里推进或终止');
+  }
+  /*
+   * **流程某一步的档案卡**（sourceKey = flow:…，见 ensureTaskCardForStep）同一条规矩：
+   * 状态/执行人是引擎的，卡上改了也不会推进流程，只会造出"卡进行中、实例页 failed"
+   * 的两本账（2026-11-13 用户实报）。正向的同步（节点变 → 卡跟着变）在文件头
+   * 「步骤档案卡与节点同状态」那段；这里堵的是人手上半截。标题、描述照常能改。
+   */
+  if (
+    String(cur.sourceKey ?? '').startsWith('flow:') &&
+    (patch.status !== undefined || fields.personaId !== undefined || fields.assigneeUserId !== undefined || fields.assigneeGroupId !== undefined)
+  ) {
+    throw new Error('这张卡是流程某一步的档案 —— 状态/执行人跟着流程走，去流程实例里推进或重跑');
   }
   // 已经选了流程、还没发起的卡也不能改派给人（员工或真人一样）：执行方式在建卡时就定了，要换就删了重建
   if (cur.flowTemplateId && !cur.flowRunId && (fields.personaId !== undefined || fields.assigneeUserId !== undefined || fields.assigneeGroupId !== undefined)) {

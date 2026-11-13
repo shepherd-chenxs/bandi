@@ -1,0 +1,1 @@
+﻿{"cards":[{"title":"自主迭代「班底」项目并排查设计漏洞","description":"用 bandi-self-delivery 自主流程：PM→架构师→研发→测试 自动流转、跑完提交 PR、PM 写汇报进信箱。范围：迭代「班底」项目（pj-14ac8283）并排查设计漏洞；验收：产出设计漏洞清单/整改方案 + 提交 PR + 汇报进信箱。不含部署/合并（雇主择时）。","projectId":"pj-14ac8283","flowTemplateId":"bandi-self-delivery","status":"todo"}]}
