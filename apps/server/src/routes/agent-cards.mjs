@@ -7,7 +7,8 @@
  * 权限：**只有带「建卡」权限的岗位**能建卡（主理人 2026-10-24 拍板"只有固定的角色身份可以建卡，
  * 不然谁都能建卡就乱套了"）。2026-11-11 起权限挂在内置岗位上（roles.mjs），判据是
  * `roles.can(persona, 'card.create')` —— **不再解析 role 文本**（打四个字就拿权限的洞已堵）。
- * 没钥匙 / 钥匙过期 → E2056；权限不对 → E2057；卡体不对（状态/项目/标题/派的人）→ E2058/E2059。
+ * 没钥匙 / 钥匙过期 → E2056；权限不对 → E2057；卡体不对（状态/项目/标题/派的人）→ E2058/E2059；
+ * 标题/描述里的中文在到服务端之前就被 shell 压成「?」（2026-11-12 实报）→ E2075。
  *
  * 2026-11-09 **重复建卡实报**（贺韬一轮里把 5 张卡发了两遍，看板多出 10 张）：根因是
  * 建卡接口**不幂等**、也**没有批量口** —— 5 张卡 = 5 个独立 POST，客户端一旦把"部分成功"
@@ -30,15 +31,23 @@ import { createProjectTask, startProjectTask, assertTeamGroup } from '../project
 import { verifyRunCredential } from '../agent-auth.mjs';
 // 权限判定（2026-11-11）：只认内置岗位的权限位，不再解析 role 文本 —— 见 roles.mjs
 import { can, roleNameOf } from '../roles.mjs';
+// 中文被 shell 压成问号（2026-11-12 实报）→ 400 E2075，别建出看不懂的卡
+import { assertReadableText } from '../text-guard.mjs';
 
 /** agent 建卡只许这两种状态：「待办」= 可逆的活，建完直接干；「想法」= 要雇主拍板，先挂着 */
-const AGENT_STATUSES = new Set(['想法', '待办']);
+const AGENT_STATUSES = new Set([store.TASK_STATUS.IDEA, store.TASK_STATUS.TODO]);
 /*
  * **补记**（2026-11-11）：建卡通道坏过一段时间、活改成群里 @ 人干完了 —— 恢复后要把这件事
  * 补成卡。补记卡允许**一步写成最终状态**，且**不自动派活**（否则等于把干完的活重跑一遍）。
  * 只有建卡人（= 派活人 = 验收人）能写；主卡归雇主验收，见 routes/project.mjs 的闸。
  */
-const BACKFILL_STATUSES = new Set(['待验收', '已阻塞', '已完成', '已取消', '失败']);
+const BACKFILL_STATUSES = new Set([
+  store.TASK_STATUS.REVIEW,
+  store.TASK_STATUS.BLOCKED,
+  store.TASK_STATUS.DONE,
+  store.TASK_STATUS.CANCELLED,
+  store.TASK_STATUS.FAILED,
+]);
 /** 一批最多建几张（再多说明拆活方式不对，回去重新拆，别拿批量口当搬运工） */
 const BATCH_MAX = 20;
 /** 幂等键最长长度（落 externalKey 用；超了直接拒，别悄悄截断成另一个键） */
@@ -102,19 +111,31 @@ function externalKeyOf(cred, project, card) {
 
 /** 单张卡归一/校验（单卡与批量共用；不合格抛 `{code,message}`，调用方翻成 HTTP） */
 function normalizeCard(body, project, { allowBackfill = false } = {}) {
-  const status = String(body?.status ?? '待办').trim();
+  const status = String(body?.status ?? 'todo').trim();
   const backfill = body?.backfill === true;
+  /*
+   * 只收**码**（2026-11-12）：中文是显示名，写到入参里一律 400 并告诉他该写哪个码。
+   * 以前接口收中文，于是同一个状态在库里/接口里/前端各有一种写法 —— 一次是中文被
+   * shell 打烂成 `??`（重试 9 次全废），一次是模型写成 `todo`（那会儿只认中文）。
+   * 现在码是唯一真身；这里给"写错成显示名"的人一句精确的改法，不猜、不兼容。
+   */
+  const labelHit = Object.entries(store.TASK_LABEL).find(([, label]) => label === status);
+  const codeHint = labelHit ? `（「${status}」是显示名，接口只收码 —— 请写 "${labelHit[0]}"）` : '';
   if (backfill) {
     // 补记：只允许写"这件事现在实际是什么状态"，不允许待办/想法（那两种不是补记）
     if (!BACKFILL_STATUSES.has(status)) {
       throw Object.assign(
-        new Error(`补记只能写成「待验收 / 已阻塞 / 已完成 / 已取消 / 失败」，不能是「${status}」`),
+        new Error(
+          `补记只收码：${[...BACKFILL_STATUSES].join(' / ')}（依次是 待验收 / 已阻塞 / 已完成 / 已取消 / 失败），收到「${status}」${codeHint}`,
+        ),
         { code: 'E2058' },
       );
     }
   } else if (!AGENT_STATUSES.has(status)) {
     throw Object.assign(
-      new Error(`建卡状态只能是「待办」（建完自动派活）或「想法」（等雇主拍板），不能是「${status}」——写最终状态要带 "backfill": true（补记）`),
+      new Error(
+        `建卡状态只收码：todo（建完自动派活）或 idea（等雇主拍板），收到「${status}」${codeHint}——写最终状态要带 "backfill": true（补记，收 ${[...BACKFILL_STATUSES].join(' / ')}）`,
+      ),
       { code: 'E2058' },
     );
   }
@@ -123,6 +144,15 @@ function normalizeCard(body, project, { allowBackfill = false } = {}) {
   }
   const title = String(body?.title ?? '').trim().slice(0, TITLE_MAX);
   if (!title) throw Object.assign(new Error('任务得有标题（一句话说清要做什么）'), { code: 'E2059' });
+  const description = String(body?.description ?? '').trim().slice(0, DESC_MAX);
+  /*
+   * 「??????(ui ??? temperature ??)」这类**整段中文变成问号**的请求，2026-11-12 实报过一次：
+   * 调用方（PowerShell 5.1 的 Invoke-RestMethod）没带 charset，body 按 ASCII 编了出去，
+   * 中文在**到达服务端之前**就没了。这种请求最坑的地方是"看起来成功"——卡建出来了、
+   * 只是谁都看不懂，只能事后人工改。所以这里直接挡回去，让他当场换写法（见 text-guard.mjs）。
+   */
+  assertReadableText(title, '标题');
+  assertReadableText(description, '描述');
   const assignee = body?.assigneePersonaId ? String(body.assigneePersonaId) : null;
   if (assignee && !store.getPersona(assignee)) throw Object.assign(new Error('这张卡要派的人已经不在了'), { code: 'E2059' });
   const explicitKey = String(body?.idempotencyKey ?? '').trim();
@@ -130,7 +160,7 @@ function normalizeCard(body, project, { allowBackfill = false } = {}) {
   return {
     project,
     title,
-    description: String(body?.description ?? '').trim().slice(0, DESC_MAX),
+    description,
     status,
     assignee,
     // 团队协作（2026-11-09）：派给群 / 协作子卡挂主卡。互斥；详细校验在下面两个函数里
@@ -196,7 +226,7 @@ function requireSubCard({ persona, card }) {
  * `startNow` 允许调用方推迟派活（批量口先建完一批、再统一开跑）。
  * **补记卡永远不派活**（`backfill`）—— 活已经干过了，建卡只是补账，重跑等于再干一遍。
  */
-function createOne({ cred, persona, convId, card, startNow = !card.backfill && card.status === '待办' && !!(card.assignee || card.assigneeGroupId) }) {
+function createOne({ cred, persona, convId, card, startNow = !card.backfill && card.status === 'todo' && !!(card.assignee || card.assigneeGroupId) }) {
   const externalKey = externalKeyOf(cred, card.project, card);
   const existed = store.getProjectTaskByExternalKey(card.project.id, externalKey);
   if (existed) return { task: existed, deduped: true };
@@ -238,7 +268,7 @@ function announceCard(convId, persona, task) {
     conversationId: convId,
     role: 'assistant',
     personaId: persona.id,
-    text: `【${backfill ? '补记' : '任务卡'}】${task.title} —— 已建立（${task.status}${assigneeName ? `，交给了 ${assigneeName}` : ''}）`,
+    text: `【${backfill ? '补记' : '任务卡'}】${task.title} —— 已建立（${store.taskLabel(task.status)}${assigneeName ? `，交给了 ${assigneeName}` : ''}）`,
     meta: {
       type: 'card',
       cardId: task.id,
@@ -251,7 +281,7 @@ function announceCard(convId, persona, task) {
 }
 
 /** 一组卡里有没有"还没跑、但有执行方式"的卡 —— 批量口用它决定建完要不要开跑 */
-const needsStart = (task) => task.status === '待办' && !!(task.assigneePersonaId || task.assigneeGroupId);
+const needsStart = (task) => task.status === 'todo' && !!(task.assigneePersonaId || task.assigneeGroupId);
 
 /**
  * 建卡失败写「信箱」（2026-11-11 用户拍板：左栏一级「信箱」）。

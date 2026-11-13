@@ -95,8 +95,30 @@ store.upsertWorkflowTemplate({
 workflows.ensureBuiltInTemplate(); // 顺带保证内建模板也不会因为岗位而变
 const run2 = workflows.startWorkflow({ templateId: 't-role2', title: '留空用例', autoStart: false });
 const t2 = store.listWorkflowTasks(run2.id)[0];
-check('留空 → 已阻塞，原因是「没点名经办人」', t2.status === '已阻塞' && /没点名经办人/.test(t2.note ?? ''), t2.note);
+check('留空 → 已阻塞，原因是「没点名经办人」', t2.status === 'blocked' && /没点名经办人/.test(t2.note ?? ''), t2.note);
 check('原因里不含任何岗位名', !/研发|测试|架构/.test(t2.note ?? ''), t2.note);
+
+console.log('\n⑥ 改运行时/权限档 → 成员会话连带作废（2026-11-13 实报）');
+// 旧 CLI 会话的记忆里堆着旧权限档下的失败结论；不清的话模型 --resume 续上来
+// 把旧账当现状复述（马超 r-97f4c37c：已经完全权限，零工具调用回"再试了，还是连不上"）
+const mx = store.createPersona({ name: '马工', role: '运维', runtime: 'codex', cwd: tmp, instructions: '身份卡A' });
+const conv = store.ensureConversationForPersona(mx.id);
+store.setMemberSession(conv.id, mx.id, 'sess-old-1', '', 'codex');
+check('成员会话先立住了', !!store.getMemberSession(conv.id, mx.id, ''), '前置');
+// 改别的字段（名字）不动会话
+store.updatePersona(mx.id, { name: '马工2' });
+check('只改名不清会话', !!store.getMemberSession(conv.id, mx.id, ''), '不该清');
+// 改权限档 → 清
+store.updatePersona(mx.id, { sandbox: 'bypassPermissions' });
+check('改权限档 → 会话作废', store.getMemberSession(conv.id, mx.id, '') === null, '已清');
+store.setMemberSession(conv.id, mx.id, 'sess-old-2', '', 'codex');
+// 改运行时 → 清
+store.updatePersona(mx.id, { runtime: 'claude' });
+check('改运行时 → 会话作废', store.getMemberSession(conv.id, mx.id, '') === null, '已清');
+store.setMemberSession(conv.id, mx.id, 'sess-old-3', '', 'claude');
+// 改指令照旧要清（老口径别被这次改动弄丢）
+store.updatePersona(mx.id, { instructions: '身份卡B' });
+check('改指令 → 会话作废（老口径不变）', store.getMemberSession(conv.id, mx.id, '') === null, '已清');
 
 try {
   fs.rmSync(tmp, { recursive: true, force: true });

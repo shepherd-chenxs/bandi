@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 任务卡「运行结束」后状态怎么收（2026-10-17 建；2026-10-24 状态重设计；2026-11-09 P4 交付声明）。
  *
  * 落点口径（2026-10-24 定稿 / 2026-11-09 补「交付声明」，与流程步骤同一套）：
@@ -29,6 +29,7 @@ process.env.BANDI_DB = path.join(tmp, 'bandi.db');
 // ⚠️ 必须在设好环境变量之后再 import（config 在模块加载时读）
 const store = await import('./store.mjs');
 const pt = await import('./project-tasks.mjs');
+const status = await import('./store/status.mjs');
 
 let failed = 0;
 const check = (label, ok, detail = '') => {
@@ -40,45 +41,45 @@ const project = store.listProjects()[0];
 
 /** 造一张"正在跑"的卡，并把它和某个 runId 绑上 */
 function makeRunningCard(title, runId) {
-  const row = store.createProjectTask({ projectId: project.id, title, status: '进行中' });
+  const row = store.createProjectTask({ projectId: project.id, title, status: 'doing' });
   store.updateProjectTask(row.id, { runId });
   return store.getProjectTask(row.id);
 }
 
 console.log('① 人把运行停掉 → 卡进「已阻塞」（不是待办）');
 const a = makeRunningCard('人停的活', 'r-stopped');
-pt.onTaskRunFinished({ id: 'r-stopped', status: '已停止' });
+pt.onTaskRunFinished({ id: 'r-stopped', status: 'stopped' });
 const a2 = store.getProjectTask(a.id);
-check('状态 = 已阻塞', a2.status === '已阻塞', a2.status);
+check('状态 = 已阻塞', a2.status === 'blocked', a2.status);
 check('描述里留了收尾说明', /\n\[运行结束\]/.test(a2.description) && a2.description.includes('停'), JSON.stringify(a2.description));
-check('没有回「待办」（那会被自动重新派活 → 死循环）', a2.status !== '待办');
+check('没有回「待办」（那会被自动重新派活 → 死循环）', a2.status !== 'todo');
 
 console.log('\n② 跑挂了 → 失败（跟流程跑挂同一落点），并带上失败原因');
 const b = makeRunningCard('跑挂的活', 'r-failed');
-pt.onTaskRunFinished({ id: 'r-failed', status: '失败', error: '起不来：spawn ENOENT\nmore lines' });
+pt.onTaskRunFinished({ id: 'r-failed', status: 'failed', error: '起不来：spawn ENOENT\nmore lines' });
 const b2 = store.getProjectTask(b.id);
-check('状态 = 失败', b2.status === '失败', b2.status);
+check('状态 = 失败', b2.status === 'failed', b2.status);
 check('原因只取第一行（不把整段 stderr 灌进卡片）', b2.description.includes('spawn ENOENT') && !b2.description.includes('more lines'));
 
 console.log('\n③ 跑完 ≠ 干完了：只认回话首行/末行的 [完成] / [受阻]');
 const c = makeRunningCard('跑完的活', 'r-done');
 pt.onTaskRunFinished({
   id: 'r-done',
-  status: '完成',
+  status: 'done',
   finalText: '[完成] 部署完成：服务已起在 127.0.0.1:3000，healthz 返回 200。',
 });
 const c2 = store.getProjectTask(c.id);
-check('完成 + 第一行 [完成] → 待验收', c2.status === '待验收', c2.status);
+check('完成 + 第一行 [完成] → 待验收', c2.status === 'review', c2.status);
 
 // 员工自己说"没干成" → 平台必须按受阻落，不能因为进程正常退出就放行
 const cBlocked = makeRunningCard('被安全策略挡住的活', 'r-blocked');
 pt.onTaskRunFinished({
   id: 'r-blocked',
-  status: '完成',
+  status: 'done',
   finalText: '[受阻] SSH 被安全策略挡住：10.0.0.8 连不上，需要你批密钥或改端口。\n\n部署命令已备好，批了我再跑。',
 });
 const cBlocked2 = store.getProjectTask(cBlocked.id);
-check('完成 + 第一行 [受阻] → 已阻塞（不是待验收）', cBlocked2.status === '已阻塞', cBlocked2.status);
+check('完成 + 第一行 [受阻] → 已阻塞（不是待验收）', cBlocked2.status === 'blocked', cBlocked2.status);
 check('描述里写明"员工自报受阻"（平台不替他宣布干完了）',
   /受阻/.test(cBlocked2.description) && !/等你验收/.test(cBlocked2.description), JSON.stringify(cBlocked2.description));
 check('受阻原因带进卡描述（看板一眼知道卡在哪，不用翻会话）',
@@ -88,37 +89,37 @@ check('受阻原因带进卡描述（看板一眼知道卡在哪，不用翻会�
 const cBlockedLast = makeRunningCard('末行报受阻的活', 'r-blocked-last');
 pt.onTaskRunFinished({
   id: 'r-blocked-last',
-  status: '完成',
+  status: 'done',
   finalText: '现状：服务器能连上，但生产库写权限没批。\n\n[受阻] 需要你批生产库写权限',
 });
 const cBlockedLast2 = store.getProjectTask(cBlockedLast.id);
-check('完成 + 末行 [受阻] → 已阻塞', cBlockedLast2.status === '已阻塞', cBlockedLast2.status);
+check('完成 + 末行 [受阻] → 已阻塞', cBlockedLast2.status === 'blocked', cBlockedLast2.status);
 check('末行受阻：原因取末行那句（不是答案首行）',
   /\[受阻\]）：/.test(cBlockedLast2.description) && cBlockedLast2.description.includes('生产库写权限') &&
     !cBlockedLast2.description.includes('现状：服务器能连上'), JSON.stringify(cBlockedLast2.description));
 
 // 空回话：运行结束但一个字没交回 —— 这正是事故形态，必须如实写清楚
 const cEmpty = makeRunningCard('空回话的活', 'r-empty');
-pt.onTaskRunFinished({ id: 'r-empty', status: '完成', finalText: '' });
+pt.onTaskRunFinished({ id: 'r-empty', status: 'done', finalText: '' });
 const cEmpty2 = store.getProjectTask(cEmpty.id);
-check('完成 + 空回话 → 已阻塞（没交回可验收的结论）', cEmpty2.status === '已阻塞', cEmpty2.status);
+check('完成 + 空回话 → 已阻塞（没交回可验收的结论）', cEmpty2.status === 'blocked', cEmpty2.status);
 check('空回话的描述写明「没有交回可验收的结论」/「没有回话」',
   /(没有|没)交回可验收的结论|(没有|没)回话/.test(cEmpty2.description), JSON.stringify(cEmpty2.description));
 check('空回话不再写「跑完了，等你验收」', !cEmpty2.description.includes('跑完了，等你验收'), JSON.stringify(cEmpty2.description));
 
 // 纯空白 = 同样什么都没交回（"\n\n\n" 不是回话）
 const cBlank = makeRunningCard('纯空白的活', 'r-blank');
-pt.onTaskRunFinished({ id: 'r-blank', status: '完成', finalText: '\n\n\n' });
+pt.onTaskRunFinished({ id: 'r-blank', status: 'done', finalText: '\n\n\n' });
 const cBlank2 = store.getProjectTask(cBlank.id);
-check('完成 + 纯空白（\\n\\n\\n）→ 已阻塞', cBlank2.status === '已阻塞', cBlank2.status);
+check('完成 + 纯空白（\\n\\n\\n）→ 已阻塞', cBlank2.status === 'blocked', cBlank2.status);
 check('纯空白不算 [完成]（没有回话就不进待验收）',
-  !cBlank2.description.includes('跑完了，等你验收') && cBlank2.status !== '待验收', JSON.stringify(cBlank2.description));
+  !cBlank2.description.includes('跑完了，等你验收') && cBlank2.status !== 'review', JSON.stringify(cBlank2.description));
 
 // 说了"已改好"但没写标记：平台不知道这算不算交回结论 → 不许替员工猜成待验收
 const cNoMark = makeRunningCard('没写标记的活', 'r-nomark');
-pt.onTaskRunFinished({ id: 'r-nomark', status: '完成', finalText: '已改好，但 Next: 还要等部署审批。' });
+pt.onTaskRunFinished({ id: 'r-nomark', status: 'done', finalText: '已改好，但 Next: 还要等部署审批。' });
 const cNoMark2 = store.getProjectTask(cNoMark.id);
-check('完成 + 没有标记（哪怕写了「已改好」）→ 已阻塞', cNoMark2.status === '已阻塞', cNoMark2.status);
+check('完成 + 没有标记（哪怕写了「已改好」）→ 已阻塞', cNoMark2.status === 'blocked', cNoMark2.status);
 check('没标记的描述如实写「没有交回可验收的结论」',
   /(没有|没)交回可验收的结论/.test(cNoMark2.description), JSON.stringify(cNoMark2.description));
 check('没标记的描述也不再出现「跑完了，等你验收」',
@@ -126,29 +127,46 @@ check('没标记的描述也不再出现「跑完了，等你验收」',
 
 // P5（2026-11-09）：问答题的第一行要留给答案，交付标记放**最后一行** —— 两处都认。
 const cLastLine = makeRunningCard('标记在最后一行的活', 'r-last-line');
-pt.onTaskRunFinished({ id: 'r-last-line', status: '完成', finalText: '权限归平台，不归员工。\n\n依据：…\n\n[完成]' });
+pt.onTaskRunFinished({ id: 'r-last-line', status: 'done', finalText: '权限归平台，不归员工。\n\n依据：…\n\n[完成]' });
 const cLastLine2 = store.getProjectTask(cLastLine.id);
-check('标记放最后一行 → 待验收（问答类交付）', cLastLine2.status === '待验收', cLastLine2.status);
+check('标记放最后一行 → 待验收（问答类交付）', cLastLine2.status === 'review', cLastLine2.status);
 
-// 正文中间提到 [完成] 不算（只认第一行/最后一行行首）
+// 正文里提到 [完成]（标记后面跟正文，不是整行）不算
 const cMidLine = makeRunningCard('标记在正文中间的活', 'r-mid-line');
-pt.onTaskRunFinished({ id: 'r-mid-line', status: '完成', finalText: '部署做了一半。\n[完成] 这句是正文里顺手写的\n还没做完，等你拍板' });
+pt.onTaskRunFinished({ id: 'r-mid-line', status: 'done', finalText: '部署做了一半。\n[完成] 这句是正文里顺手写的\n还没做完，等你拍板' });
 const cMidLine2 = store.getProjectTask(cMidLine.id);
-check('标记只在正文中间 → 不算交付（只认首行/末行）', cMidLine2.status === '已阻塞', cMidLine2.status);
+check('标记混在正文行里（[完成]+正文）→ 不算交付', cMidLine2.status === 'blocked', cMidLine2.status);
+
+// 2026-11-12 实报（pt-aebb66e2）：标记**单独成行**、后面还列明细 → 算交付
+const cDoneLine = makeRunningCard('完成标记单独一行的活', 'r-done-line');
+pt.onTaskRunFinished({
+  id: 'r-done-line',
+  status: 'done',
+  finalText: 'Backend healthy, login flow works.\n\n[完成]\n\n- 修 SQL：19 值→20 列不匹配，已改用显式列名\n- 执行结果：菜单 120/1060-1064 与 role_menu 授权已进库',
+});
+const cDoneLine2 = store.getProjectTask(cDoneLine.id);
+check('完成标记单独一行（后面还有明细）→ 待验收', cDoneLine2.status === 'review', cDoneLine2.status);
 
 console.log('\n④ 人已经手动改过 → 不许覆盖（卡的状态是人的指令）');
 const d = makeRunningCard('人已经拖走的活', 'r-moved');
-store.updateProjectTask(d.id, { status: '已完成' });
-pt.onTaskRunFinished({ id: 'r-moved', status: '已停止' });
-check('还是「已完成」', store.getProjectTask(d.id).status === '已完成', store.getProjectTask(d.id).status);
+store.updateProjectTask(d.id, { status: 'done' });
+pt.onTaskRunFinished({ id: 'r-moved', status: 'stopped' });
+check('还是「已完成」', store.getProjectTask(d.id).status === 'done', store.getProjectTask(d.id).status);
 
 console.log('\n⑤ 对不上的 runId / 已经收过尾的卡 → 什么都不做');
-pt.onTaskRunFinished({ id: 'r-不存在', status: '已停止' });
-pt.onTaskRunFinished({ id: 'r-done', status: '完成', finalText: '[完成] 再声明一次' }); // 第二次
+pt.onTaskRunFinished({ id: 'r-不存在', status: 'stopped' });
+pt.onTaskRunFinished({ id: 'r-done', status: 'done', finalText: '[完成] 再声明一次' }); // 第二次
 check('未知 run 不炸', true);
 // 卡已经是「待验收」，第二次收尾必须直接返回 —— 描述里的 [运行结束] 不能被堆成两段
 const finishMarks = (store.getProjectTask(c.id).description.match(/\[运行结束\]/g) ?? []).length;
 check('重复收尾不会把描述越堆越长', finishMarks === 1, String(finishMarks));
+
+console.log('\n⑥ 空回话的显示口径（2026-11-11 实报：空白气泡 + 会话还写着「完成」）');
+check('完成 + 空回话 → 会话状态落「已阻塞」', status.conversationStatusFor('done', '') === 'blocked', status.conversationStatusFor('done', ''));
+check('完成 + 纯空白（\\n\\n\\n）→ 会话状态落「已阻塞」', status.conversationStatusFor('done', '\n\n\n') === 'blocked');
+check('完成 + 有回话 → 仍是「完成」', status.conversationStatusFor('done', '好了') === 'done');
+check('人停的 / 失败的 → 原样（不改成阻塞）', status.conversationStatusFor('stopped', '') === 'stopped' && status.conversationStatusFor('failed', '') === 'failed');
+check('空回话占位文案带「没有回话」', String(status.EMPTY_REPLY_TEXT).includes('没有回话'));
 
 try {
   fs.rmSync(tmp, { recursive: true, force: true });

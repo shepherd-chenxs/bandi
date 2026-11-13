@@ -15,6 +15,13 @@ import { DatabaseSync } from 'node:sqlite';
 import { dataDir, dbPath } from '../config.mjs';
 // 岗位 key 的旧文本映射（2026-11-11）：迁移时用，本模块保持与 roles.mjs 同一份口径
 import { legacyRoleKey } from '../roles.mjs';
+// 状态老值 → 码（2026-11-12）：只在本模块的迁移里用，业务代码别碰（见 status.mjs 文件头）
+import {
+  LEGACY_TASK_STATUS,
+  LEGACY_RUN_STATUS,
+  LEGACY_NODE_JOB_STATUS,
+  LEGACY_WORKFLOW_RUN_STATUS,
+} from './status.mjs';
 
 fs.mkdirSync(dataDir, { recursive: true });
 
@@ -101,8 +108,10 @@ db.exec(`PRAGMA busy_timeout = 5000;`);
  *   · 6（2026-11-11）：`personas` 加 `roleKey`（岗位固定与权限模型：权限挂在
  *     系统内置岗位上，判据不再解析 role 文本；迁移在本文件 ensureColumn 之后回填）。
  *   · 7（2026-11-11）：新表 `notices`（左栏「信箱」：平台事实落库，先接建卡失败）。
+ *   · 8（2026-11-11）：`member_sessions` 加 `startedAt`（上下文预算：这条 CLI 会话从哪一刻开始，
+ *     轮次/年龄/累计 token 超限就轮换，见 session-budget.mjs）。
  */
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 9;
 
 const dbVersion = Number(db.prepare('PRAGMA user_version').get()?.user_version ?? 0);
 if (dbVersion > SCHEMA_VERSION) {
@@ -138,7 +147,7 @@ db.exec(`
     title         TEXT NOT NULL,
     personaId     TEXT NOT NULL,
     sessionId     TEXT,
-    status        TEXT NOT NULL DEFAULT '待跑',
+    status        TEXT NOT NULL DEFAULT 'pending',
     createdAt     TEXT NOT NULL,
     updatedAt     TEXT NOT NULL
   );
@@ -324,6 +333,13 @@ export function ensureColumn(table, column, ddl) {
  */
 
 ensureColumn('member_sessions', 'family', "family TEXT NOT NULL DEFAULT ''");
+
+/*
+ * member_sessions.startedAt：这条 sessionId 是哪一刻建立/续上的（2026-11-11 上下文预算）。
+ * 用它算"这段会话开了多久"和"这段会话跑了几轮"（runs.startedAt ≥ startedAt 的这些行）；
+ * 轮换 = sessionId 清空 + startedAt 清空，下一轮 firstTime 重开（见 dispatch 的会话预算段）。
+ */
+ensureColumn('member_sessions', 'startedAt', 'startedAt TEXT');
 
 /*
  * 「显示思考过程」（历史列，2026-11-08 晚起**不再读写**）：原来 Codex 的 reasoning 事件
@@ -626,7 +642,7 @@ db.exec(`
     id          TEXT PRIMARY KEY,
     templateId  TEXT NOT NULL,
     title       TEXT NOT NULL,
-    status      TEXT NOT NULL DEFAULT '进行中',
+    status      TEXT NOT NULL DEFAULT 'doing',
     currentStep INTEGER NOT NULL DEFAULT 0,
     note        TEXT,
     createdAt   TEXT NOT NULL,
@@ -641,7 +657,7 @@ db.exec(`
     detail             TEXT NOT NULL DEFAULT '',
     assigneePersonaId  TEXT,
     mode               TEXT NOT NULL DEFAULT 'confirm',
-    status             TEXT NOT NULL DEFAULT '待办',
+    status             TEXT NOT NULL DEFAULT 'todo',
     note               TEXT,
     conversationId     TEXT,
     agentRunId         TEXT,
@@ -677,7 +693,7 @@ db.exec(`
     visit              INTEGER NOT NULL DEFAULT 1,
     detail             TEXT NOT NULL DEFAULT '',
     assigneePersonaId  TEXT,
-    status             TEXT NOT NULL DEFAULT '待办',
+    status             TEXT NOT NULL DEFAULT 'todo',
     decision           TEXT,
     note               TEXT,
     conversationId     TEXT,
@@ -728,7 +744,7 @@ db.exec(`UPDATE workflow_tasks
  */
 
 for (const t of ['workflow_tasks', 'workflow_steps']) {
-  db.prepare(`UPDATE ${t} SET status = '待办' WHERE status = '待开始'`).run();
+  db.prepare(`UPDATE ${t} SET status = 'todo' WHERE status = '待开始'`).run();
 }
 
 /*
@@ -741,7 +757,7 @@ for (const t of ['workflow_tasks', 'workflow_steps']) {
  */
 
 for (const t of ['workflow_tasks', 'workflow_steps']) {
-  db.prepare(`UPDATE ${t} SET status = '待验收' WHERE status = '待确认'`).run();
+  db.prepare(`UPDATE ${t} SET status = 'review' WHERE status = '待确认'`).run();
 }
 
 
@@ -882,7 +898,7 @@ migrateAddConversationSandbox();
  */
 
 function migrateTaskStatusToConfirm() {
-  const n = db.prepare("UPDATE workflow_tasks SET status = '待验收' WHERE status = '待审批'").run();
+  const n = db.prepare("UPDATE workflow_tasks SET status = 'review' WHERE status = '待审批'").run();
   if (n.changes) console.log(`[迁移] ${n.changes} 条任务状态：待审批 → 待验收`);
 }
 
@@ -921,7 +937,7 @@ db.exec(`
     nodeId    TEXT NOT NULL,
     kind      TEXT NOT NULL,
     family    TEXT NOT NULL,
-    status    TEXT NOT NULL DEFAULT '待领',
+    status    TEXT NOT NULL DEFAULT 'pending',
     output    TEXT NOT NULL DEFAULT '',
     createdAt TEXT NOT NULL,
     claimedAt TEXT,
@@ -1118,6 +1134,52 @@ function migrateDropMessageProgress() {
 }
 
 migrateDropMessageProgress();
+
+/*
+ * **状态值统一成码**（2026-11-12，用户拍板"系统里永远只能有状态码，不能既有状态码又有其他"）。
+ *
+ * 之前状态的真身是中文（`project_tasks.status = '待办'`），同一个状态在别处又有 `todo` /
+ * 数字等写法，接口/库/前端各认一套 —— 数字员工建卡连续 400 E2058 就是这么来的
+ * （`??` 是被 shell 打烂的中文，`todo` 是模型猜的另一种写法）。现在码是唯一真身，
+ * 中文退成 label（`store/status.mjs`）。这条迁移把**老库里已经落下的中文值**一次性换成码。
+ *
+ * 幂等：只有命中老中文值才改（改完再跑一次 changes=0）；认不出的值一根手指都不碰
+ * —— 宁可留一条脏数据让人看见，也不要猜着改。
+ */
+function migrateStatusValuesToCodes() {
+  // 几套词表的旧值并成一张表用：彼此没有"同一个词对应两个码"的冲突
+  // （`失败`/`完成` 在任务态与运行态里落点一致），所以不必按列挑表。
+  const legacy = {
+    ...LEGACY_TASK_STATUS,
+    ...LEGACY_RUN_STATUS,
+    ...LEGACY_NODE_JOB_STATUS,
+    ...LEGACY_WORKFLOW_RUN_STATUS,
+  };
+  const columns = [
+    ['project_tasks', 'status'],
+    ['workflow_tasks', 'status'],
+    ['workflow_steps', 'status'], // 旧表（v1），只在迁移时还读得到
+    ['workflow_runs', 'status'],
+    ['runs', 'status'],
+    ['conversations', 'status'],
+    ['node_tasks', 'status'],
+  ];
+  let total = 0;
+  const hasTable = (t) =>
+    !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(t);
+  for (const [table, col] of columns) {
+    // 有的表不归本文件建（`project_tasks` 在 store/projects.mjs）—— 全新库这时还没有它，
+    // 那就没有老值可迁，跳过即可（别为了一条 UPDATE 去猜建表顺序）。
+    if (!hasTable(table)) continue;
+    const stmt = db.prepare(`UPDATE ${table} SET ${col} = ? WHERE ${col} = ?`);
+    for (const [from, to] of Object.entries(legacy)) {
+      total += Number(stmt.run(to, from).changes ?? 0);
+    }
+  }
+  if (total) console.log(`[迁移] ${total} 条状态值：中文 → 码（idea / todo / doing / …）`);
+}
+
+migrateStatusValuesToCodes();
 
 /*
  * ------------------------------------------------------------------ 版本号落地

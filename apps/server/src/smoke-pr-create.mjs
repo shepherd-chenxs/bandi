@@ -478,7 +478,7 @@ try {
     console.log('\n⑦ HTTP：卡上建 PR → 提交推送 + 建出来 + 自动挂回这张卡');
     const project = store.createProject({ name: '冒烟仓库项目', root: work });
     fs.writeFileSync(path.join(work, 'ship.js'), 'export const ship = true;\n');
-    const card = store.createProjectTask({ projectId: project.id, title: '把建 PR 接上界面', status: '进行中' });
+    const card = store.createProjectTask({ projectId: project.id, title: '把建 PR 接上界面', status: 'doing' });
     const cid = encodeURIComponent(card.id);
     const created = await req(`/api/projects/tasks/${cid}/pr/create`, {
       method: 'POST',
@@ -505,7 +505,7 @@ try {
     check('200 且 merged=true', merged.status === 200 && merged.b.merged === true, JSON.stringify({ s: merged.status, m: merged.b?.merged }));
     const after = store.getProjectTask(card.id);
     check('卡上 prState=merged', after.prState === 'merged', String(after.prState));
-    check('「进行中」→「待验收」（不自动已完成）', after.status === '待验收', after.status);
+    check('「进行中」→「待验收」（不自动已完成）', after.status === 'review', after.status);
     check(
       '卡上合并后本地也收尾了（切回 main，不再停在 PR 分支）',
       merged.b.local?.settled === true && g(['-C', work, 'branch', '--show-current'], work) === 'main',
@@ -516,7 +516,7 @@ try {
     check('已经合过的再点 → already=true + 说"已经合过了"，不当失败', again2.status === 200 && again2.b.already === true && /合过/.test(String(again2.b.note ?? '')), JSON.stringify({ a: again2.b?.already, n: again2.b?.note }));
 
     const draftRepo = gh.seed('smoke/demo', { number: 88, title: '草稿', head: 'bandi/d', base: 'main', draft: true });
-    const draftTask = store.createProjectTask({ projectId: project.id, title: '挂着草稿的卡', status: '进行中' });
+    const draftTask = store.createProjectTask({ projectId: project.id, title: '挂着草稿的卡', status: 'doing' });
     store.updateProjectTask(draftTask.id, { prRepo: 'smoke/demo', prNumber: draftRepo.number, prState: 'open' });
     const draftMerge = await req(`/api/projects/tasks/${encodeURIComponent(draftTask.id)}/pr/merge`, { method: 'POST', body: JSON.stringify({}) });
     check('草稿 PR 拒绝合并并说明为什么', draftMerge.status === 400 && /草稿/.test(draftMerge.b?.error ?? ''), draftMerge.b?.error);
@@ -524,11 +524,11 @@ try {
 
     /* ---------------- ⑨ 前置条件不满足：说清缺哪一环 ---------------- */
     console.log('\n⑨ 前置条件不满足时：说清缺哪一环，绝不当成"建好了"');
-    const noCard = store.createProjectTask({ projectId: project.id, title: '这张卡没关联 PR', status: '待办' });
+    const noCard = store.createProjectTask({ projectId: project.id, title: '这张卡没关联 PR', status: 'todo' });
     const badMerge = await req(`/api/projects/tasks/${encodeURIComponent(noCard.id)}/pr/merge`, { method: 'POST', body: JSON.stringify({}) });
     check('没关联 PR 就合并 → 400「这张卡还没关联 PR」', badMerge.status === 400 && /还没关联/.test(badMerge.b?.error ?? ''), String(badMerge.status));
 
-    const orphan = store.createProjectTask({ projectId: project.id, title: '项目行没了的卡', status: '待办' });
+    const orphan = store.createProjectTask({ projectId: project.id, title: '项目行没了的卡', status: 'todo' });
     // `project_tasks.projectId` 是 NOT NULL，正常口子造不出"没挂项目的卡"；
     // 能造出来的是**项目行没了、卡还在**这种残缺（绕过 deleteProject 直接删项目行才模拟得出）
     const { db } = await import('./store/db.mjs');
@@ -539,7 +539,7 @@ try {
 
     const offRepo = store.createProject({ name: '不在仓库里的项目', root: path.join(tmp, 'plain-dir-not-a-repo') });
     fs.mkdirSync(offRepo.root, { recursive: true });
-    const offCard = store.createProjectTask({ projectId: offRepo.id, title: '目录不是已接入仓库', status: '待办' });
+    const offCard = store.createProjectTask({ projectId: offRepo.id, title: '目录不是已接入仓库', status: 'todo' });
     const notRepo = await req(`/api/projects/tasks/${encodeURIComponent(offCard.id)}/pr/create`, { method: 'POST', body: JSON.stringify({ title: 'x' }) });
     check('项目目录不在任何已接入仓库 → 400 指路去接入', notRepo.status === 400 && /不在任何已接入的仓库/.test(notRepo.b?.error ?? ''), notRepo.b?.error);
 
@@ -643,7 +643,7 @@ try {
     const devTask = store.listWorkflowTasks(flowRun.id)[0];
     check('流程从「开发完成」起步', devTask?.nodeId === 'n1', devTask?.nodeId);
     store.updateWorkflowTask(devTask.id, {
-      status: '待验收',
+      status: 'review',
       result: JSON.stringify({ state: 'done', summary: '写完了', finalText: '写完了' }),
     });
     workflows.decide(flowRun.id, '通过');
@@ -674,7 +674,7 @@ try {
     );
 
     const reviewTask2 = store.listWorkflowTasks(flowRun.id).find((t) => t.nodeId === 'n3');
-    check('审阅那一步没被乱派：仓库没绑管理员 → 阻塞等人（不是静默卡死）', reviewTask2?.status === '已阻塞', reviewTask2?.status);
+    check('审阅那一步没被乱派：仓库没绑管理员 → 阻塞等人（不是静默卡死）', reviewTask2?.status === 'blocked', reviewTask2?.status);
     check('审阅材料已经写进这一步（管理员一上手就有判断依据）', /【审阅材料】/.test(reviewTask2?.detail ?? ''), String(reviewTask2?.detail).slice(0, 40));
     check('阻塞原因说清怎么补管理员', /没绑管理员/.test(reviewTask2?.note ?? ''), String(reviewTask2?.note).slice(0, 60));
 
@@ -683,12 +683,12 @@ try {
 
     gh.seedChecks('smoke/demo', flowPr.headSha, 'success'); // CI 全绿，四闸才有机会全过
     store.updateWorkflowTask(reviewTask2.id, {
-      status: '待验收',
+      status: 'review',
       result: JSON.stringify({ state: 'done', summary: '结论：值得合', finalText: '改动就一个文件，没风险。\n结论：值得合' }),
     });
     workflows.decide(flowRun.id, '通过');
 
-    const mergedFlow = await waitFor(() => store.getWorkflowRun(flowRun.id)?.status === '已完成');
+    const mergedFlow = await waitFor(() => store.getWorkflowRun(flowRun.id)?.status === 'done');
     check('「合并」动作节点到站自动执行 → 流程收尾', mergedFlow, store.getWorkflowRun(flowRun.id)?.status);
     const flowMergeCall = gh.lastHit(new RegExp(`PUT /repos/smoke/demo/pulls/${flowRow.prNumber}/merge$`));
     check('自动合并带上了审阅时的 head sha（乐观锁）', flowMergeCall?.body?.sha === flowPr.headSha, JSON.stringify(flowMergeCall?.body));
@@ -712,7 +712,7 @@ try {
       autoStart: false,
     });
     const dev2 = store.listWorkflowTasks(flowRun2.id)[0];
-    store.updateWorkflowTask(dev2.id, { status: '待验收', result: JSON.stringify({ state: 'done', finalText: '写完了' }) });
+    store.updateWorkflowTask(dev2.id, { status: 'review', result: JSON.stringify({ state: 'done', finalText: '写完了' }) });
     workflows.decide(flowRun2.id, '通过');
     const ready2 = await waitFor(() => store.getWorkflowRun(flowRun2.id)?.currentNodeId === 'n3');
     const row2 = store.getWorkflowRun(flowRun2.id);
@@ -723,12 +723,12 @@ try {
     gh.seedChecks('smoke/demo', 'sha-after-review', 'success'); // 新 head 的 CI 是绿的：拦下合并的不是 CI 闸
     flowPr2.headSha = 'sha-after-review'; // 审阅之后有人推了一提交
     store.updateWorkflowTask(review2.id, {
-      status: '待验收',
+      status: 'review',
       result: JSON.stringify({ state: 'done', summary: '结论：值得合', finalText: '结论：值得合' }),
     });
     workflows.decide(flowRun2.id, '通过');
 
-    const mergeTask2 = await waitFor(() => store.listWorkflowTasks(flowRun2.id).at(-1)?.status === '失败');
+    const mergeTask2 = await waitFor(() => store.listWorkflowTasks(flowRun2.id).at(-1)?.status === 'failed');
     const failedTask = store.listWorkflowTasks(flowRun2.id).at(-1);
     check('审阅后被推新提交 → 自动合并撞 409 停下（不合没看过的）', mergeTask2, failedTask?.status);
     check('失败原因说"被人推了新提交"', /新提交/.test(failedTask?.note ?? ''), String(failedTask?.note).slice(0, 80));
@@ -806,7 +806,7 @@ try {
     const brief = String(trow.description ?? '');
     check(
       '卡挂在选的人名下、已经开工（进行中 + 有 runId）',
-      trow.assigneePersonaId === fx.b?.personaId && trow.status === '进行中' && !!trow.runId,
+      trow.assigneePersonaId === fx.b?.personaId && trow.status === 'doing' && !!trow.runId,
       JSON.stringify({ st: trow.status, a: trow.assigneePersonaId, run: trow.runId }),
     );
     check(

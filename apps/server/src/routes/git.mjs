@@ -476,7 +476,7 @@ export async function handleGit(req, res, url) {
       const task = createProjectTask(project, {
         title: `修 PR #${number} 的自动检查`,
         description: gateFixBrief({ repo: row.fullName, row, pull, detail }),
-        status: '待办',
+        status: 'todo',
         personaId: who.id,
         startNow: true,   // 2026-10-30 用户："嘉辉为啥没干活啊" —— 建卡即开工。开的是**任务卡自己的工单会话**（不出消息列表），不是聊天
       });

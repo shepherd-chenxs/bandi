@@ -96,7 +96,7 @@ async function waitAllDone(convId, ms = 30000) {
   let d = await getConv(convId);
   while (Date.now() < until) {
     d = await getConv(convId);
-    if ((d.runs ?? []).length > 0 && (d.runs ?? []).every((x) => x.status !== '跑中')) return d;
+    if ((d.runs ?? []).length > 0 && (d.runs ?? []).every((x) => x.status !== 'running')) return d;
     await sleep(150);
   }
   return d;
@@ -127,7 +127,7 @@ try {
   check('第一个开跑的是沈丹青', send1.body.personaName === '沈丹青', send1.body.personaName);
   check('响应带回排队名单（嘉辉）', Array.isArray(send1.body.queued) && send1.body.queued.join() === '嘉辉',
     JSON.stringify(send1.body.queued));
-  check('此刻会话里有且只有一次 run', ((await getConv(convId)).runs ?? []).filter((r) => r.status === '跑中').length === 1);
+  check('此刻会话里有且只有一次 run', ((await getConv(convId)).runs ?? []).filter((r) => r.status === 'running').length === 1);
 
   console.log('\n② 会话一次只跑一个：排队期间再发消息照样 409');
   const busy = await req('POST', `/api/conversations/${convId}/messages`, { text: '插一句' });
@@ -143,7 +143,7 @@ try {
   const runs = done.runs ?? [];
   check('一共两次 run', runs.length === 2, String(runs.length));
   check('两次都是不同的人、都跑完',
-    runs.filter((r) => r.status === '完成').length === 2 &&
+    runs.filter((r) => r.status === 'done').length === 2 &&
     new Set(runs.map((r) => r.personaId)).size === 2,
     JSON.stringify(runs.map((r) => ({ p: r.personaId, s: r.status }))));
   const jiaRun = runs.find((r) => r.personaId === jia.id);

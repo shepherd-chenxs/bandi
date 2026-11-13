@@ -17,6 +17,13 @@ export const LOCAL_BASE = '/api/local';
 export const S = {
   nav: 'messages',          // messages | contacts | skills | settings
   /*
+   * 状态字典（2026-11-12）：**状态只有码**，中文名是码的 label，由服务端 `/api/state`
+   * 的 `statusDict` 下发（唯一一份在 `apps/server/src/store/status.mjs`）。
+   * 前端**不许自己写一张中文状态表** —— 那正是这次要根除的"同一个状态两套写法"。
+   * 渲染一律走 `statusText(code)`；拿不到字典时退回码本身（宁可难看，不可猜错）。
+   */
+  statusDict: null,
+  /*
    * **整站只有一个"我在哪儿"**（2026-10-17 统一路由）。形状：{ view, ...params }。
    * 以前每加一个页面都要在 savePlace（逐字段）和 restorePlace（逐页 if/else）各登记一次，
    * 忘了就"刷新记不住位置"—— 项目页 / 任务看板 / 流程实例 / 任务卡，四次都是这个病。
@@ -151,3 +158,10 @@ export const S = {
   // 服务端给的今日用量（GET /api/quota 那一整份）——实例页顶栏那句"今天已用 X"用它。
   // 每次 paintRun 重新取：刚跑完的那一步花的 token 要立刻算进去。
 };
+
+/**
+ * 状态码 → 显示名。**全前端唯一一处翻译**（字典来自服务端 statusDict）。
+ * kind：task（默认）/ run / workflow / node —— 四套词表各有各的码。
+ * 认不出就返回码本身：界面难看一点，也好过在 JS 里再写一张中文表。
+ */
+export const statusText = (code, kind = 'task') => S.statusDict?.[kind]?.[code] ?? String(code ?? '');

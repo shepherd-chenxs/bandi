@@ -93,22 +93,22 @@ wf.registerActionNode('smoke-fake', {
 });
 const run1 = wf.startWorkflow({ templateId: tplId, title: '动作节点', intent: '', autoStart: false });
 let t1 = store.listWorkflowTasks(run1.id)[0];
-check('动作节点到站是「待办」而不是「已阻塞」', t1?.status === '待办', t1?.status);
+check('动作节点到站是「待办」而不是「已阻塞」', t1?.status === 'todo', t1?.status);
 
 console.log('\n⑥ 引擎：动作节点的「通过」是**授权执行**，不是放行下一步');
-store.updateWorkflowTask(t1.id, { status: '待验收' });
+store.updateWorkflowTask(t1.id, { status: 'review' });
 wf.decide(run1.id, '通过');
 check('拍板钩子被调到（decision=通过）', seenDecide === '通过');
 const runAfter = store.getWorkflowRun(run1.id);
-check('引擎没有自己收尾（推进权交给了 handler）', runAfter.status === '进行中', runAfter.status);
+check('引擎没有自己收尾（推进权交给了 handler）', runAfter.status === 'doing', runAfter.status);
 
 const run2 = wf.startWorkflow({ templateId: tplId, title: '动作节点 2', intent: '', autoStart: false });
 const t2 = store.listWorkflowTasks(run2.id)[0];
 seenDecide = null;
-store.updateWorkflowTask(t2.id, { status: '待验收' });
+store.updateWorkflowTask(t2.id, { status: 'review' });
 wf.decide(run2.id, '驳回');
 check('驳回不触发执行（handler 征询了但拒绝接手）', seenDecide === '驳回');
-check('驳回走引擎默认出口 → 流程收尾', store.getWorkflowRun(run2.id).status === '已完成', store.getWorkflowRun(run2.id).status);
+check('驳回走引擎默认出口 → 流程收尾', store.getWorkflowRun(run2.id).status === 'done', store.getWorkflowRun(run2.id).status);
 
 console.log('\n⑦ 仓库值班设置：绑定 / 解绑 / 授权开关都存得住');
 const repo = store.addGitRepo({ fullName: 'a/b', owner: 'a', name: 'b', localPath: tmp });
@@ -182,11 +182,11 @@ let autoRuns = 0;
 wf.registerActionNode('smoke-auto', { run: async () => { autoRuns += 1; } });
 const autoRun = wf.startWorkflow({ templateId: 'smoke-auto-tpl', title: '到站自动开跑', autoStart: false });
 const autoFirst = store.listWorkflowTasks(autoRun.id)[0];
-store.updateWorkflowTask(autoFirst.id, { status: '待验收' });
+store.updateWorkflowTask(autoFirst.id, { status: 'review' });
 wf.decide(autoRun.id, '通过');
 await new Promise((r) => setTimeout(r, 50));
 check('流程走到动作节点 → 自己开跑（不再永远停在待办）', autoRuns === 1, `runs=${autoRuns}`);
-check('动作节点任务进入「进行中」', store.listWorkflowTasks(autoRun.id).at(-1)?.status === '进行中');
+check('动作节点任务进入「进行中」', store.listWorkflowTasks(autoRun.id).at(-1)?.status === 'doing');
 
 // 节拍那一路：起始就是动作节点、autoStart=false 时，仍要能补跑
 store.upsertWorkflowTemplate({
@@ -199,7 +199,7 @@ const pendingRun = wf.startWorkflow({ templateId: 'smoke-pending-tpl', title: '�
 const picked = wf.retryPendingSteps();
 await new Promise((r) => setTimeout(r, 50)); // handler 是异步调的（见 startCurrentStep 的动作节点分支）
 check('30 秒节拍也会捡起没有经办人的动作节点', picked.includes('平台动作') && autoRuns === 2, JSON.stringify({ picked, runs: autoRuns }));
-check('那个动作任务已经进入「进行中」', store.listWorkflowTasks(pendingRun.id).at(-1)?.status === '进行中');
+check('那个动作任务已经进入「进行中」', store.listWorkflowTasks(pendingRun.id).at(-1)?.status === 'doing');
 
 console.log(`\n${failed ? `✗ ${failed} 项没过` : '✓ 全部通过'}`);
 process.exit(failed ? 1 : 0);

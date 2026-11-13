@@ -14,6 +14,12 @@ import { openCodeRepoPage, openSchedules } from './skills.mjs';
 import { setBusy, setComposer } from './chat.mjs';
 import { gidOf, paintDrawer, paintGroupDetail } from './groups.mjs';
 import { $, S } from './core.mjs';
+import { registerUp } from './navstack.mjs';
+
+/* 下钻页的上一层（navstack.mjs，2026-11-11）：远程连接 / 插件页都从工作台宫格进来，
+   上一层就是宫格 —— 与桌面面包屑第一段同一个去处。 */
+registerUp('remote', () => setNav('plugins'));
+registerUp('plugin', () => setNav('plugins'));
 import { applySource, calcVars } from './plugin-data.mjs';
 
 

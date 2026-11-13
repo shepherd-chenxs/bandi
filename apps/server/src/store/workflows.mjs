@@ -76,7 +76,7 @@ export function createWorkflowRun({
   const id = newId('wf');
   db.prepare(
     `INSERT INTO workflow_runs (id, templateId, title, status, currentStep, threadId, intent, note, projectId, prRepo, prNumber, createdAt, updatedAt)
-     VALUES (?, ?, ?, '进行中', 0, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, 'doing', 0, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(id, templateId, title, threadId, intent, note, projectId, prRepo, prNumber, now, now);
   return getWorkflowRun(id);
 }
@@ -162,19 +162,19 @@ export function listWorkflowRuns({ limit = 100 } = {}) {
   return db
     .prepare(
       `SELECT * FROM workflow_runs
-        ORDER BY CASE status WHEN '进行中' THEN 0 ELSE 1 END, updatedAt DESC LIMIT ?`,
+        ORDER BY CASE status WHEN 'doing' THEN 0 ELSE 1 END, updatedAt DESC LIMIT ?`,
     )
     .all(limit);
 }
 
 /**
  * 只捞「进行中」的实例 —— 给 30 秒节拍的 `retryPendingSteps`（apps/server/src/workflows.mjs）用。
- * 那里只关心还在跑的：原来全量捞 100 条（绝大多数是已完结）再逐条 `status !== '进行中'` 跳过，
+ * 那里只关心还在跑的：原来全量捞 100 条（绝大多数是已完结）再逐条 `status !== 'doing'` 跳过，
  * 空闲进程每 30 秒白做一轮。一条 WHERE 的事，别让节拍器付全量价。
  */
 export function listActiveWorkflowRuns() {
   return db
-    .prepare("SELECT * FROM workflow_runs WHERE status = '进行中' ORDER BY updatedAt DESC")
+    .prepare("SELECT * FROM workflow_runs WHERE status = 'doing' ORDER BY updatedAt DESC")
     .all();
 }
 /**
@@ -259,7 +259,7 @@ export function createWorkflowTask(row) {
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id, row.runId, row.nodeId, row.nodeName, row.visit ?? 1, row.detail ?? '',
-    row.assigneePersonaId ?? null, row.status ?? '待办',
+    row.assigneePersonaId ?? null, row.status ?? 'todo',
     row.decision ?? null, row.note ?? null, row.conversationId ?? null,
     row.agentRunId ?? null, row.startedAt ?? null, row.endedAt ?? null,
   );
@@ -342,7 +342,7 @@ export function createWorkflowStep(row) {
     row.detail ?? '',
     row.assigneePersonaId ?? null,
     row.mode ?? 'confirm',
-    row.status ?? '待办',
+    row.status ?? 'todo',
     row.note ?? null,
     row.conversationId ?? null,
     row.agentRunId ?? null,

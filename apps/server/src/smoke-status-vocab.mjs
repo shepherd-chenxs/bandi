@@ -31,6 +31,11 @@ import {
   MANUAL_STATUS,
   RUN_STATUS,
   NODE_JOB_STATUS,
+  TASK_LABEL,
+  WORKFLOW_RUN_STATUS,
+  LEGACY_TASK_STATUS,
+  LEGACY_RUN_STATUS,
+  LEGACY_WORKFLOW_RUN_STATUS,
 } from './store/status.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -40,8 +45,8 @@ const check = (label, ok, detail = '') => {
   if (!ok) failed += 1;
 };
 
-/** 聊天行的卡面可以写「已停止」—— 它不是八态之一，但确实是卡面上会出现的一个词 */
-const CARD_FACE_ONLY = ['已停止'];
+/** 聊天行的卡面可以写 stopped（人停的）—— 它不是任务八态之一，但确实是卡面上会出现的一个码 */
+const CARD_FACE_ONLY = ['stopped'];
 const cardFaces = new Set([...Object.values(TASK_STATUS), ...CARD_FACE_ONLY]);
 const runFaces = new Set(Object.values(RUN_STATUS));
 
@@ -52,6 +57,31 @@ console.log('状态词表：');
 const taskValues = Object.values(TASK_STATUS);
 check('八态值互不重复', new Set(taskValues).size === taskValues.length, taskValues.join(' / '));
 check('八态恰好八个', taskValues.length === 8, `实际 ${taskValues.length}`);
+/*
+ * **状态只有码**（2026-11-12 用户拍板）：值必须是纯 ASCII slug —— 中文是 label，
+ * 一旦有人把中文写回状态值，这条立刻红（它正是 `??` 乱码与 "todo vs 待办" 两套并存的源头）。
+ */
+check(
+  '八态全是 ASCII 码（中文只是 label）',
+  taskValues.every((v) => /^[a-z][a-z-]*$/.test(v)),
+  taskValues.join(' / '),
+);
+check(
+  '每个码都有中文 label，且不多不少',
+  Object.keys(TASK_LABEL).length === taskValues.length && taskValues.every((v) => !!TASK_LABEL[v]),
+  Object.keys(TASK_LABEL).join(' / '),
+);
+check(
+  'label 互不重复',
+  new Set(Object.values(TASK_LABEL)).size === taskValues.length,
+  Object.values(TASK_LABEL).join(' / '),
+);
+check(
+  '老值迁移表只指向认识的码',
+  Object.values(LEGACY_TASK_STATUS).every((v) => taskValues.includes(v)) &&
+    Object.values(LEGACY_RUN_STATUS).every((v) => Object.values(RUN_STATUS).includes(v)) &&
+    Object.values(LEGACY_WORKFLOW_RUN_STATUS).every((v) => Object.values(WORKFLOW_RUN_STATUS).includes(v)),
+);
 
 /* ------------------------------------------------------------ 状态 ⇄ 看板列 */
 

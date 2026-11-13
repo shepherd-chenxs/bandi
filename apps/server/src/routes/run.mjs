@@ -46,8 +46,8 @@ export async function handleRun(req, res, url) {
       //    但它状态已经是 完成/已停止 —— 再盖成「中断」就是篡改事实（踩过：
       //    人点了停止，结果状态显示"中断"，还把这一步永远留在「进行中」）。
       const row = store.getRunStatus(runId);
-      if (row?.status === '跑中') {
-        store.finishRun(runId, { status: '中断', error: '运行已不在（服务重启或进程退出）' });
+      if (row?.status === 'running') {
+        store.finishRun(runId, { status: 'interrupted', error: '运行已不在（服务重启或进程退出）' });
         return sendJson(res, 200, { ok: true, note: '那次运行已经不在内存里了，已标记为中断' });
       }
       return sendJson(res, 200, { ok: true, note: '这次运行已经结束了' });

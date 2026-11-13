@@ -51,6 +51,11 @@ export async function load(opts = {}) {
   // 权限口径在服务端 roles.mjs，前端只读。必须赶在 renderList 之前落进 S。
   S.roles = s.roles ?? [];
   S.permissions = s.permissions ?? {};
+  /*
+   * 状态字典（2026-11-12）：状态只有码，中文名只在服务端词表里存一份，随 /api/state 下发。
+   * 必须在任何渲染之前落进 S —— 下面那些 render* 就是按 `statusText()` 查表的。
+   */
+  S.statusDict = s.statusDict ?? S.statusDict;
   S.conversations = s.conversations;
   S.repoRoot = s.repoRoot;
   S.me = s.me;
@@ -223,7 +228,8 @@ export function setNav(nav, opts = {}) {
   );
   // 工作台：宫格首页左栏整个收掉；进插件后左栏让位给插件自己的列表（搜索框对插件没用）。
   // 专家库是整页卡片墙，搜索框同样没用 —— 一起收掉。我的页同理（整页，见 settings.mjs openMe）。
-  $('search').closest('.list-search')?.classList.toggle('hidden', nav === 'plugins' || nav === 'experts' || nav === 'me' || nav === 'org' || nav === 'inbox');
+  // 信箱（2026-11-12）：通知多了翻着找费劲，搜索框放开 —— 过滤在 inbox.mjs 自己做。
+  $('search').closest('.list-search')?.classList.toggle('hidden', nav === 'plugins' || nav === 'experts' || nav === 'me' || nav === 'org');
   // 换栏顺手清搜索（2026-10-29）：旧关键词是上一个栏的语境（在代码托管搜仓库名，
   // 切到消息不该还滤着）。只在**真的换了栏**时清 —— 同栏内点行重摆（通讯录点员工详情
   // 也是一遍 setNav('contacts')）不能把用户正打着字的搜索框清掉。
@@ -234,7 +240,8 @@ export function setNav(nav, opts = {}) {
   }
   closeAddMenu();
   // 工作台是整页宫格，二级列表栏在那儿没用 —— 整列收掉（见 CSS 的 body.no-list）。专家库、我的页同理。
-  document.body.classList.toggle('no-list', nav === 'plugins' || nav === 'experts' || nav === 'me' || nav === 'inbox');
+  // 信箱（2026-11-11 用户："改成左侧列表，右边详情"）：左栏不再收掉，清单就住在二级列表里。
+  document.body.classList.toggle('no-list', nav === 'plugins' || nav === 'experts' || nav === 'me');
   /*
    * 占位文案按栏回落（2026-11-02）：各页在自己的 renderList 分支里改 placeholder
    * （搜流程 / 搜项目名 / 搜索设置 …），换栏时先归位默认值，否则从设置切回消息，

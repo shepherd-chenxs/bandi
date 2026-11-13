@@ -211,7 +211,7 @@ try {
     body: JSON.stringify(cardBody({ pr: { url: 'https://github.com/smoke/demo/pull/42', title: '改了点东西', state: 'merged' } })),
   });
   check('报 merged → prState=merged', c4.b.task?.prState === 'merged', String(c4.b.task?.prState));
-  check('卡在「待办」→ 状态不动（人还没看）', c4.b.task?.status === '待办', String(c4.b.task?.status));
+  check('卡在「待办」→ 状态不动（人还没看）', c4.b.task?.status === 'todo', String(c4.b.task?.status));
   // 没带 pr 的 issue 卡：四个 PR 字段保持空，别凭空长出一个 PR
   const i1 = await req(`/api/projects/${encodeURIComponent(proj.id)}/repo-cards`, {
     method: 'POST',

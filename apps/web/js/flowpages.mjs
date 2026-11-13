@@ -11,7 +11,8 @@ import { ICON_FILE, ICON_LINK, showView } from './contacts.mjs';
 import { openWorkflows, renderFlowList } from './workflows.mjs';
 import { openTaskCardDialog } from './projects.mjs';
 import { convPermCombo, isNarrowPh, streamRun } from './chat.mjs';
-import { $, S } from './core.mjs';
+import { $, S, statusText } from './core.mjs';
+import { registerLayer, registerUp } from './navstack.mjs';
 
 
 
@@ -221,6 +222,23 @@ document.addEventListener('flow-direct-leave', () => {
   flowDirectLeave().catch(() => {});
 });
 
+/* 返回键的层级（navstack.mjs，2026-11-11）：流程实例整页是详情/会话的下一级（level 40），
+   收场动作就是上面那一条事件 —— 同一个出口，不另写一份。 */
+registerLayer({
+  name: 'flow-direct',
+  level: 40,
+  cell: 'flowDirect',
+  active: () => document.body.classList.contains('flow-direct-open'),
+  close: () => document.dispatchEvent(new CustomEvent('flow-direct-leave')),
+});
+
+/* 下钻页的上一层（navstack.mjs，2026-11-11）：
+   · 发起记录 —— 注释里写死了「上一级只是工作台」（2026-10-19 口径），回宫格；
+   · 设计器 —— 上一级是工作流清单。退出不丢东西：草稿一直在本地存着，
+     重开时自动恢复并提示"已恢复"（openDesigner 的既定口径）。 */
+registerUp('flowRun', () => setNav('plugins'));
+registerUp('designer', () => void openWorkflows());
+
 /* 手势返回 / 系统返回键：退掉了实例页那一格 = 回上一层 */
 window.addEventListener('popstate', () => {
   if (!document.body.classList.contains('flow-direct-open')) return;
@@ -306,12 +324,12 @@ export function runBadge(r) {
   //
   // 颜色：完成=绿、阻塞=红、终止=灰（灰就是列表里状态字的默认色，见 .item .line1 span；
   // 这里明写一个 gray 只是让读代码的人知道"这个不是漏了"，CSS 里不必再写一条同色规则）。
-  if (r.status === '已终止') return { text: '已终止', cls: 'gray' };
-  if (r.status === '已完成') return { text: '已完成', cls: 'ok' };
+  if (r.status === 'terminated') return { text: '已终止', cls: 'gray' };
+  if (r.status === 'done') return { text: '已完成', cls: 'ok' };
   // 叫「已阻塞」而不是「卡住」：服务端给的 stuck 理由本来就写着「部署」已阻塞，等人处理，
   // 同一个状态在列表上却叫另一个名字。措辞跟服务端对齐。
   if (r.stuck) return { text: '已阻塞', cls: 'bad' };
-  if (r.taskStatus === '待验收') return { text: '等你验收', cls: '' };
+  if (r.taskStatus === 'review') return { text: '等你验收', cls: '' };
   return { text: r.taskStatus ?? r.status, cls: '' };
 }
 
@@ -493,10 +511,10 @@ export function durText(ms) {
  */
 export function stepOutcome(t) {
   const decision = t.decision ?? null;
-  if (decision === '终止' && t.status !== '已完成') {
-    return { status: `${t.status}时被终止`, decision: null, terminal: true };
+  if (decision === '终止' && t.status !== 'done') {
+    return { status: `${statusText(t.status)}时被终止`, decision: null, terminal: true };
   }
-  const implied = t.status === '已完成' && decision === '通过';
+  const implied = t.status === 'done' && decision === '通过';
   return { status: t.status, decision: implied ? null : decision, terminal: false };
 }
 
@@ -524,10 +542,10 @@ export function runHTML(v) {
   const b = runBadge(v);
   const curNode = (v.nodes ?? []).find((n) => n.id === v.currentNodeId) ?? null;
   // **没执行人 = 停在这儿**，这是要一眼看出来的阻塞
-  const blocked = v.status === '进行中' && curNode && !curNode.assigneeName;
+  const blocked = v.status === 'doing' && curNode && !curNode.assigneeName;
 
   const acts = [];
-  if (v.status === '进行中') {
+  if (v.status === 'doing') {
     // （顶部只放"对整条流程"的操作 —— 步骤级的动作都在下面时间轴那一步的行里，
     //   混在一起会点错。用户要求去掉顶部这个。）
     //
@@ -550,12 +568,12 @@ export function runHTML(v) {
    *     而这块信息本来就属于那一步。历史步骤那几行是纯文本（服务端只认当前任务）。
    */
   const inlineActs = [];
-  if (v.status === '进行中' && !blocked) {
+  if (v.status === 'doing' && !blocked) {
     // 「派活，开始这一步」这颗按钮去掉了（2026-10-17 对齐同类产品：待办即执行）——
     // 停在待办的步骤会被调度节拍自动派出（他正忙就 30 秒后再试），人没什么可点的。
     // 留一行说明代替按钮：不解释的话，"这步怎么不动"又得靠猜。
-    if (v.taskStatus === '待办') inlineActs.push('<span class="dim">待办 —— 马上自动派活，不用点任何东西（他正忙就 30 秒内再试）</span>');
-    if (v.taskStatus === '待验收') {
+    if (v.taskStatus === 'todo') inlineActs.push('<span class="dim">待办 —— 马上自动派活，不用点任何东西（他正忙就 30 秒内再试）</span>');
+    if (v.taskStatus === 'review') {
       if (v.outlets?.approve) {
         inlineActs.push(`<button class="primary" data-run-decide="通过">确认这一步完成 → ${esc(v.outlets.approveTo ?? '')}</button>`);
       }
@@ -601,13 +619,13 @@ export function runHTML(v) {
    */
   const curNodeName = v.tasks?.find((t) => t.id === lastTaskId)?.nodeName ?? '当前这一步';
   const orphan =
-    v.status === '进行中' && !curNode
+    v.status === 'doing' && !curNode
       ? `「${curNodeName}」这一步在流程模板里已经没有了 —— 指派也没用。` +
         '把状态改成「已完成」可以直接收尾（流程完成）；要接着往下走，就去「工作流」把它补回模板。'
       : '';
   // 终态：它是"到此结束"的结论，属于时间轴尾部，不属于开篇。
   const endedHint =
-    v.status === '进行中'
+    v.status === 'doing'
       ? ''
       : `<div class="run-end">这条流程已经「${esc(v.status)}」，不能再流转了。
            要再跑一遍，用左栏顶部的「＋」发起一条新的。</div>`;
@@ -621,7 +639,7 @@ export function runHTML(v) {
    * 「已终止」是"没走到终点就散了"：这时不把它画成已到达，灰着就好（上面 endedHint 会说明原因）。
    */
   const endFrom = (v.nodes ?? []).filter((n) => n.approve === 'end').map((n) => n.name);
-  const reachedEnd = v.status === '已完成';
+  const reachedEnd = v.status === 'done';
   const endStep = `<div class="run-step end ${reachedEnd ? 'done' : 'ahead'}">
         <span class="run-dot"></span>
         <div class="run-step-head"><b>结束</b>${reachedEnd ? '<span class="run-st">已完成</span>' : ''}</div>
@@ -642,9 +660,9 @@ export function runHTML(v) {
       // 蓝点会让它看着像"还在进行中"，而这条流程早就停了。
       const cls = oc.terminal
         ? 'gone'
-        : t.status === '已完成' ? 'done'
-        : (t.status === '失败' || t.status === '已阻塞') ? 'fail'
-        : t.status === '待验收' ? 'wait'
+        : t.status === 'done' ? 'done'
+        : (t.status === 'failed' || t.status === 'blocked') ? 'fail'
+        : t.status === 'review' ? 'wait'
         : 'run';
       const meta = [t.assigneeName ?? '没人', t.visit > 1 ? `第 ${t.visit} 次` : '', durText(t.elapsedMs)]
         .filter(Boolean)
@@ -652,7 +670,7 @@ export function runHTML(v) {
       // 流程页**不铺对话**：只显示有多少条 + 一个「对话」按钮，点开才是面板。
       // 这样对话被锚定在这一个节点上，时间轴也不会被长对话淹掉。
       const n = (t.messages ?? []).length;
-      const canTalk = !!t.conversationId && t.status !== '待办';
+      const canTalk = !!t.conversationId && t.status !== 'todo';
       // 能不能通到任务卡：服务端给了「已有卡」或「能现开」之一就行（见 viewTask 的说明）
       const canOpenCard = !!t.projectTaskId || t.canOpenTaskCard === true;
       // 这一步的记录（状态 / 经办人 / 第几次 / 时间 / 耗时）现在全在这一行的属性行里，
@@ -702,7 +720,7 @@ export function runHTML(v) {
       // **当前这一步能改，历史步骤不能**（服务端只认"当前任务"，见 setStepStatus/assignCurrentStep）。
       // 能改的做成选择器（点一下弹选项）；不能改的退回纯文本 ——
       // 不做成禁用态：既占地方，又让人以为是坏了。
-      const alive = v.status === '进行中';
+      const alive = v.status === 'doing';
       const canStatus = isCur && alive && (v.statusChoices ?? []).length > 0;
       const canAssign = isCur && alive && (S.personas ?? []).length > 0;
       // 经办人后面**不再摆按钮**（2026-10-21）：那颗气泡 2026-10-19 起开的是任务卡，
@@ -985,7 +1003,7 @@ export function wireRun(v) {
    * 不然界面上会留着一个"看起来改了、其实没改"的值。
    */
   const cur = (v.tasks ?? [])[v.tasks.length - 1] ?? null;
-  const alive = v.status === '进行中';
+  const alive = v.status === 'doing';
   const assignMount = view.querySelector('#runAssigneeMount');
   if (assignMount && cur) {
     let assignCombo = null;
@@ -1031,7 +1049,7 @@ export function wireRun(v) {
     let statusCombo = null;
     statusCombo = createCombo({
       mount: statusMount,
-      items: (v.statusChoices ?? []).map((s) => ({ id: s, label: s })),
+      items: (v.statusChoices ?? []).map((s) => ({ id: s, label: statusText(s) })),
       value: cur.status,
       search: false,
       placeholder: '选一个',

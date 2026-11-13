@@ -344,7 +344,7 @@ function createTask(runId, node, visit) {
     // 谁办：**只认点名**（见 assigneeFor）。没点名就留空，
     // 紧接着那条 if 会把它标成「已阻塞」——那是**故意留空**，不是缺人。
     assigneePersonaId: assigneeFor(node),
-    status: '待办',
+    status: 'todo',
   });
   // **到站即知**：这一步没点名的话，立刻标「已阻塞」，别让它显示成"待办"等人点一下派活
   // 才发现（用户实报："这种没人的情况应该是阻塞状态"）。
@@ -352,7 +352,7 @@ function createTask(runId, node, visit) {
   // ⚠️ **动作节点没有经办人是正常的**（干活的是平台自己），不适用这条 —— 见 ACTION_NODES。
   if (!task.assigneePersonaId && !node.action) {
     store.updateWorkflowTask(task.id, {
-      status: '已阻塞',
+      status: 'blocked',
       note: `${noAssigneeWhy(node, node.name)}。点上面「经办人」那儿选一个人就能接着办`,
       endedAt: store.nowIso(),
     });
@@ -388,11 +388,11 @@ function modelOfTask(task) {
 export function startCurrentStep(runId, { force = false } = {}) {
   const run = store.getWorkflowRun(runId);
   if (!run) throw new Error('流程不存在');
-  if (run.status !== '进行中') throw new Error(`流程已经「${run.status}」了`);
+  if (run.status !== 'doing') throw new Error(`流程已经「${store.workflowLabel(run.status)}」了`);
 
   const task = currentTask(run);
   if (!task) throw new Error('找不到当前任务');
-  if (task.status === '进行中') throw new Error('这一步已经在跑了');
+  if (task.status === 'doing') throw new Error('这一步已经在跑了');
 
   const stepNode = nodeById(store.getWorkflowTemplate(run.templateId), task.nodeId);
 
@@ -406,7 +406,7 @@ export function startCurrentStep(runId, { force = false } = {}) {
     const handler = ACTION_NODES[stepNode.action];
     if (!handler?.run) {
       store.updateWorkflowTask(task.id, {
-        status: '失败',
+        status: 'failed',
         note: `不认识的动作节点：${stepNode.action}（平台版本没跟上模板？）`,
         endedAt: store.nowIso(),
       });
@@ -414,7 +414,7 @@ export function startCurrentStep(runId, { force = false } = {}) {
       return viewRun(store.getWorkflowRun(runId));
     }
     store.updateWorkflowTask(task.id, {
-      status: '进行中',
+      status: 'doing',
       startedAt: store.nowIso(),
       endedAt: null,
       note: null,
@@ -426,7 +426,7 @@ export function startCurrentStep(runId, { force = false } = {}) {
       .then(() => handler.run({ runId, task, node: stepNode }))
       .catch((e) => {
         store.updateWorkflowTask(task.id, {
-          status: '失败',
+          status: 'failed',
           note: String(e?.message ?? e).slice(0, 300),
           endedAt: store.nowIso(),
         });
@@ -451,11 +451,11 @@ export function startCurrentStep(runId, { force = false } = {}) {
    *   · `force: true` 是「继续一次」：明确知道要超支，放这一步过去（不循环拦）
    *   · 不打断**正在跑**的那一次 —— 只在派活前拦
    */
-  if (!force && task.status !== '已阻塞') {
+  if (!force && task.status !== 'blocked') {
     const why = quota.overQuotaFor(modelOfTask(task).id);
     if (why) {
       store.updateWorkflowTask(task.id, {
-        status: '已阻塞',
+        status: 'blocked',
         // 出路那句从 quota 导出：实例页要拿**同一句**来认"这是额度拦的"（quotaBlocked）
         note: `${why}。${quota.CONTINUE_HINT}`,
         endedAt: store.nowIso(),
@@ -473,7 +473,7 @@ export function startCurrentStep(runId, { force = false } = {}) {
     const node = nodeById(store.getWorkflowTemplate(run.templateId), task.nodeId);
     const why = noAssigneeWhy(node, task.nodeName);
     store.updateWorkflowTask(task.id, {
-      status: '已阻塞',
+      status: 'blocked',
       note: `${why}。点上面「经办人」那儿选一个人就能接着办`,
       endedAt: task.endedAt ?? store.nowIso(),
     });
@@ -481,7 +481,7 @@ export function startCurrentStep(runId, { force = false } = {}) {
   }
 
   store.updateWorkflowTask(task.id, {
-    status: '进行中',
+    status: 'doing',
     startedAt: store.nowIso(),
     endedAt: null,
     note: null,
@@ -543,13 +543,13 @@ export function startCurrentStep(runId, { force = false } = {}) {
     // **「他正忙」不算失败**（2026-10-17）：忙是暂时的，步骤退回「待办」，
     // 重试节拍（30 秒一次）会再派 —— 人不用管。别的错（没这个运行时、网络…）才是真失败。
     if (e?.code === 'busy') {
-      store.updateWorkflowTask(task.id, { status: '待办', agentRunId: null, endedAt: null });
+      store.updateWorkflowTask(task.id, { status: 'todo', agentRunId: null, endedAt: null });
       throw e;
     }
     store.updateWorkflowTask(task.id, {
-      status: '失败',
+      status: 'failed',
       note: String(e.message ?? e),
-      result: JSON.stringify(resultOf({ status: '失败', error: String(e.message ?? e) })),
+      result: JSON.stringify(resultOf({ status: 'failed', error: String(e.message ?? e) })),
       endedAt: store.nowIso(),
     });
     throw e;
@@ -563,12 +563,12 @@ export function startCurrentStep(runId, { force = false } = {}) {
  */
 export function attachRound(workflowRunId, agentRunId) {
   const run = store.getWorkflowRun(workflowRunId);
-  if (!run || run.status !== '进行中') return null;
+  if (!run || run.status !== 'doing') return null;
   const task = currentTask(run);
-  if (!task || task.status === '已完成') return null;
+  if (!task || task.status === 'done') return null;
   store.updateWorkflowTask(task.id, {
     agentRunId,
-    status: '进行中',
+    status: 'doing',
     // ⚠️ **不要重置 startedAt**：它的意思是"这一步什么时候开始办的"，而往来
     // 正是按它切片显示的（见 viewTask）。每轮都重置的话，刚发一句就把这一步
     // 之前的往来整个切出窗口 —— 界面显示"还没聊过"（用户实报）。
@@ -591,14 +591,14 @@ export function attachRound(workflowRunId, agentRunId) {
 export function assignCurrentStep(runId, personaId) {
   const run = store.getWorkflowRun(runId);
   if (!run) throw new Error('流程不存在');
-  if (run.status !== '进行中') throw new Error(`流程已经「${run.status}」了`);
+  if (run.status !== 'doing') throw new Error(`流程已经「${store.workflowLabel(run.status)}」了`);
   const task = currentTask(run);
   if (!task) throw new Error('找不到当前任务');
   const p = store.getPersona(personaId);
   if (!p) throw new Error('这个人不在了');
   store.updateWorkflowTask(task.id, {
     assigneePersonaId: p.id,
-    status: '待办', // 指派完回到待办，接着走正常的派活
+    status: 'todo', // 指派完回到待办，接着走正常的派活
     note: null,
     result: null,
     endedAt: null,
@@ -651,27 +651,27 @@ export function onAgentRunFinished(run) {
   const task = store.getWorkflowTaskByAgentRun(run.id);
   if (!task) return;
   const wf = store.getWorkflowRun(task.runId);
-  if (!wf || wf.status !== '进行中') return;
+  if (!wf || wf.status !== 'doing') return;
 
   // **人主动"停止生成"**：既不是失败（没出错），也不是办完（不许往下流转）——
   // 停在「已阻塞」等人处理：想接着办就再派活/在对话里补一句，想推倒就改回待办。
-  if (run.status === '已停止') {
+  if (run.status === 'stopped') {
     store.updateWorkflowTask(task.id, {
-      status: '已阻塞',
+      status: 'blocked',
       note: run.finalText ? summarize(run.finalText) : '已停止生成',
       // 执行结果按**全文**拆好存下来（note 是截断过的，产物常在截断之后）
-      result: JSON.stringify(resultOf({ status: '已停止', finalText: run.finalText })),
+      result: JSON.stringify(resultOf({ status: 'stopped', finalText: run.finalText })),
       endedAt: store.nowIso(),
     });
     store.touchWorkflowRun(task.runId);
     return;
   }
 
-  if (run.status === '失败') {
+  if (run.status === 'failed') {
     store.updateWorkflowTask(task.id, {
-      status: '失败',
+      status: 'failed',
       note: run.error || '执行失败',
-      result: JSON.stringify(resultOf({ status: '失败', error: run.error })),
+      result: JSON.stringify(resultOf({ status: 'failed', error: run.error })),
       endedAt: store.nowIso(),
     });
   } else if (claimOf(run.finalText) === 'blocked') {
@@ -684,9 +684,9 @@ export function onAgentRunFinished(run) {
      * 全文照存 —— 用户在实例页看到红标 + 原因，拍板后再派。
      */
     store.updateWorkflowTask(task.id, {
-      status: '已阻塞',
+      status: 'blocked',
       note: summarize(run.finalText),
-      result: JSON.stringify(resultOf({ status: '受阻', finalText: run.finalText })),
+      result: JSON.stringify(resultOf({ status: 'blocked', finalText: run.finalText })),
       endedAt: store.nowIso(),
     });
     store.touchWorkflowRun(task.runId);
@@ -696,7 +696,7 @@ export function onAgentRunFinished(run) {
     //   · manual = true  → 待验收，等用户拍板（需求那种"聊明白了我才放行"）
     //   · 否则           → 干完自动往下走（默认）
     store.updateWorkflowTask(task.id, {
-      status: '待验收',
+      status: 'review',
       note: summarize(run.finalText),
       result: JSON.stringify(resultOf({ status: run.status, finalText: run.finalText })),
     });
@@ -725,7 +725,7 @@ export function onAgentRunFinished(run) {
 export function decide(runId, decision) {
   const run = store.getWorkflowRun(runId);
   if (!run) throw new Error('流程不存在');
-  if (run.status !== '进行中') throw new Error(`流程已经「${run.status}」了`);
+  if (run.status !== 'doing') throw new Error(`流程已经「${store.workflowLabel(run.status)}」了`);
 
   const task = currentTask(run);
   if (!task) throw new Error('找不到当前任务');
@@ -735,18 +735,18 @@ export function decide(runId, decision) {
   // 「通过/驳回」才受限制（它们是"放行/打回"，没开始就没有可放行的东西）。
   if (decision === '终止') {
     store.updateWorkflowTask(task.id, {
-      status: task.status === '进行中' ? '已完成' : task.status,
+      status: task.status === 'doing' ? 'done' : task.status,
       decision: '终止',
       endedAt: task.endedAt ?? store.nowIso(),
     });
     // 正在跑的那次执行不去杀它：它跑完时 onAgentRunFinished 会看到流程已终止而直接返回，
     // 不会把流程再推起来。硬杀反而可能留下半个文件。
-    return viewRun(store.setWorkflowRunStatus(runId, '已终止', `在「${task.nodeName}」终止`));
+    return viewRun(store.setWorkflowRunStatus(runId, 'terminated', `在「${task.nodeName}」终止`));
   }
 
-  if (task.status === '待办') throw new Error(`「${task.nodeName}」还没开跑 —— 它马上会被自动派活，稍等一下；不想等就终止流程`);
-  if (task.status === '进行中') throw new Error(`「${task.nodeName}」还在跑，等它说完`);
-  if (task.status === '失败') throw new Error(`「${task.nodeName}」失败了 —— 先重跑，或终止流程`);
+  if (task.status === 'todo') throw new Error(`「${task.nodeName}」还没开跑 —— 它马上会被自动派活，稍等一下；不想等就终止流程`);
+  if (task.status === 'doing') throw new Error(`「${task.nodeName}」还在跑，等它说完`);
+  if (task.status === 'failed') throw new Error(`「${task.nodeName}」失败了 —— 先重跑，或终止流程`);
 
   const tpl = store.getWorkflowTemplate(run.templateId);
   const node = nodeById(tpl, task.nodeId);
@@ -780,12 +780,12 @@ export function decide(runId, decision) {
   if (!target) {
     if (!node && decision === '通过') {
       store.updateWorkflowTask(task.id, {
-        status: '已完成',
+        status: 'done',
         decision: '通过',
         endedAt: task.endedAt ?? store.nowIso(),
       });
       return viewRun(
-        store.setWorkflowRunStatus(runId, '已完成', `「${task.nodeName}」已不在模板里，人工放行后收尾`),
+        store.setWorkflowRunStatus(runId, 'done', `「${task.nodeName}」已不在模板里，人工放行后收尾`),
       );
     }
     throw new Error(
@@ -796,7 +796,7 @@ export function decide(runId, decision) {
   }
 
   store.updateWorkflowTask(task.id, {
-    status: '已完成',
+    status: 'done',
     decision,
     endedAt: task.endedAt ?? store.nowIso(),
   });
@@ -812,12 +812,12 @@ export function decide(runId, decision) {
  */
 export function finishActionTask(runId, task, { ok, result = null, note = null }) {
   const run = store.getWorkflowRun(runId);
-  if (!run || run.status !== '进行中') return null;
+  if (!run || run.status !== 'doing') return null;
   const tpl = store.getWorkflowTemplate(run.templateId);
   const node = nodeById(tpl, task.nodeId);
   if (ok) {
     store.updateWorkflowTask(task.id, {
-      status: '已完成',
+      status: 'done',
       decision: '通过',
       result: result ? JSON.stringify(result) : null,
       note,
@@ -826,7 +826,7 @@ export function finishActionTask(runId, task, { ok, result = null, note = null }
     return goto(runId, node?.approve ?? END, `「${task.nodeName}」完成`);
   }
   store.updateWorkflowTask(task.id, {
-    status: '失败',
+    status: 'failed',
     result: result ? JSON.stringify(result) : null,
     note,
     endedAt: store.nowIso(),
@@ -838,22 +838,22 @@ export function finishActionTask(runId, task, { ok, result = null, note = null }
 /** 重跑当前这一步（失败后，或人想重来） */export function retryCurrentStep(runId) {
   const run = store.getWorkflowRun(runId);
   if (!run) throw new Error('流程不存在');
-  if (run.status !== '进行中') throw new Error(`流程已经「${run.status}」了`);
+  if (run.status !== 'doing') throw new Error(`流程已经「${store.workflowLabel(run.status)}」了`);
   const task = currentTask(run);
   if (!task) throw new Error('找不到当前任务');
-  if (task.status === '进行中') throw new Error('这一步正在跑，别重复派');
+  if (task.status === 'doing') throw new Error('这一步正在跑，别重复派');
   /*
    * 「重跑」就是「改成待办」—— 而改成待办现在**本身就会派活**（见 setStepStatus，
    * 2026-10-17 用户定：待办即执行），所以这里只管改状态，不再自己调 startCurrentStep
    * （调两次的话第二遍会撞上"这一步已经在跑了"）。
    */
-  return setStepStatus(runId, '待办');
+  return setStepStatus(runId, 'todo');
 }
 
 export function abortWorkflow(runId, note = '人工终止') {
   const run = store.getWorkflowRun(runId);
   if (!run) throw new Error('流程不存在');
-  return viewRun(store.setWorkflowRunStatus(runId, '已终止', note));
+  return viewRun(store.setWorkflowRunStatus(runId, 'terminated', note));
 }
 
 /**
@@ -862,7 +862,7 @@ export function abortWorkflow(runId, note = '人工终止') {
  */
 function goto(runId, target, why) {
   if (target === END) {
-    return viewRun(store.setWorkflowRunStatus(runId, '已完成', why));
+    return viewRun(store.setWorkflowRunStatus(runId, 'done', why));
   }
   const run = store.getWorkflowRun(runId);
   const tpl = store.getWorkflowTemplate(run.templateId);
@@ -873,7 +873,7 @@ function goto(runId, target, why) {
   if (visit > MAX_VISITS) {
     // 来回打回太多轮：**停下来说清楚**，别让它无限转
     return viewRun(
-      store.setWorkflowRunStatus(runId, '已终止', `「${node.name}」被打回 ${MAX_VISITS} 次以上，停下来等人处理`),
+      store.setWorkflowRunStatus(runId, 'terminated', `「${node.name}」被打回 ${MAX_VISITS} 次以上，停下来等人处理`),
     );
   }
 
@@ -960,17 +960,17 @@ export function viewRun(run, { withTasks = false, cache = null } = {}) {
    *      · 实例页当前那一步：行标题就是节点名 → 名字上下挨着说两遍
    *    服务端负责说"怎么了"，"是谁"由界面按它自己的排版权重去标注。
    */
-  if (run.status === '进行中') {
+  if (run.status === 'doing') {
     if (!cur) stuck = '找不到当前任务';
-    else if (cur.status === '已阻塞' && !cur.assigneePersonaId) {
+    else if (cur.status === 'blocked' && !cur.assigneePersonaId) {
       waiting = '没人办，等你指派';
-    } else if (cur.status === '已阻塞') stuck = '等人处理';
-    else if (cur.status === '失败') stuck = '等人处理';
-    else if (cur.status === '进行中' && elapsed > STUCK_MS) {
+    } else if (cur.status === 'blocked') stuck = '等人处理';
+    else if (cur.status === 'failed') stuck = '等人处理';
+    else if (cur.status === 'doing' && elapsed > STUCK_MS) {
       stuck = `超过 ${Math.round(STUCK_MS / 60000)} 分钟没结果`;
-    }     else if (cur.status === '待验收') waiting = '等你验收';
-    else if (cur.status === '待办') waiting = '马上自动派活（30 秒内）';
-    else if (cur.status === '进行中') waiting = '正在跑';
+    }     else if (cur.status === 'review') waiting = '等你验收';
+    else if (cur.status === 'todo') waiting = '马上自动派活（30 秒内）';
+    else if (cur.status === 'doing') waiting = '正在跑';
   }
 
   return {
@@ -1025,19 +1025,19 @@ export function viewRun(run, { withTasks = false, cache = null } = {}) {
      * 所以这里不是在匹配一段随手写的文案。
      */
     quotaBlocked:
-      cur?.status === '已阻塞' && String(cur.note ?? '').includes(quota.CONTINUE_HINT),
+      cur?.status === 'blocked' && String(cur.note ?? '').includes(quota.CONTINUE_HINT),
     // 人能把这一步改成哪些状态（待办 / 已阻塞 / 已完成）。
     // **状态只在这一处定义**，界面照着渲染，不再各写一套判断。
     // 终态流程不给；当前已经是某个状态就不重复给那个。
     statusChoices:
-      run.status !== '进行中' || !cur
+      run.status !== 'doing' || !cur
         ? []
-        : ['待办', '已阻塞', '已完成'].filter(
+        : ['todo', 'blocked', 'done'].filter(
             (s) =>
               s !==
-              (cur.status === '待办' ? '待办'
-              : cur.status === '已阻塞' ? '已阻塞'
-              : cur.status === '已完成' ? '已完成'
+              (cur.status === 'todo' ? 'todo'
+              : cur.status === 'blocked' ? 'blocked'
+              : cur.status === 'done' ? 'done'
               : null),
           ),
     ...(withTasks
@@ -1316,11 +1316,11 @@ function clipError(raw, max = 500) {
 
 /** 把一次执行拆成界面要的三样东西（见上面的说明） */
 export function resultOf({ status, finalText = '', error = null } = {}) {
-  if (status === '失败' || error) {
+  if (status === 'failed' || error) {
     return { state: 'error', summary: null, artifacts: [], error: clipError(error || '执行失败') };
   }
-  const stopped = status === '已停止';
-  const blocked = status === '受阻';
+  const stopped = status === 'stopped';
+  const blocked = status === 'blocked';
   // 受阻时小结优先放"原因"：P5 起标记可能在末行，正文首行不再是原因，直接取标记后面那句
   const blockedReason = blocked ? blockedReasonOf(finalText) : '';
   return {
@@ -1347,7 +1347,7 @@ function parseResult(row) {
   }
   const note = String(row?.note ?? '').trim();
   if (!note) return null;
-  const failed = row?.status === '失败';
+  const failed = row?.status === 'failed';
   return {
     state: failed ? 'error' : 'done',
     // 兜底也走同一个"取一句话"，别把 160 字的截断串原样贴回去
@@ -1378,13 +1378,13 @@ function parseResult(row) {
 export function setStepStatus(runId, wanted) {
   const run = store.getWorkflowRun(runId);
   if (!run) throw new Error('流程不存在');
-  if (run.status !== '进行中') throw new Error(`流程已经「${run.status}」了，改不了状态`);
+  if (run.status !== 'doing') throw new Error(`流程已经「${store.workflowLabel(run.status)}」了，改不了状态`);
   const task = currentTask(run);
   if (!task) throw new Error('找不到当前任务');
 
-  if (wanted === '待办') {
+  if (wanted === 'todo') {
     store.updateWorkflowTask(task.id, {
-      status: '待办',
+      status: 'todo',
       agentRunId: null,
       decision: null,
       // ⚠️ **不清 note**：它记的是"这一步上次干出来什么"，是**历史事实**。
@@ -1403,9 +1403,9 @@ export function setStepStatus(runId, wanted) {
     }
   }
 
-  if (wanted === '已阻塞') {
+  if (wanted === 'blocked') {
     store.updateWorkflowTask(task.id, {
-      status: '已阻塞',
+      status: 'blocked',
       note: '人工标为已阻塞',
       endedAt: store.nowIso(),
     });
@@ -1413,30 +1413,30 @@ export function setStepStatus(runId, wanted) {
     return viewRun(store.getWorkflowRun(runId), { withTasks: true });
   }
 
-  if (wanted === '已完成') {
+  if (wanted === 'done') {
     store.updateWorkflowTask(task.id, {
-      status: '待验收',
+      status: 'review',
       endedAt: task.endedAt ?? store.nowIso(),
       note: task.note ?? '人工标为已完成',
     });
     return decide(runId, '通过');
   }
 
-  throw new Error(`不认识的状态「${wanted}」（只有 待办 / 已阻塞 / 已完成）`);
+  throw new Error(`不认识的状态「${wanted}」（只收码：todo / blocked / done）`);
 }
 
 /** 这一步允许被改成哪些状态（前端据此决定给不给那个下拉）—— 状态只在这一处定义 */
 export function stepStatusChoices(runId) {
   const run = store.getWorkflowRun(runId);
-  if (!run || run.status !== '进行中') return [];
+  if (!run || run.status !== 'doing') return [];
   const task = currentTask(run);
   if (!task) return [];
   const cur =
-    task.status === '待办' ? '待办'
-    : task.status === '已阻塞' ? '已阻塞'
-    : task.status === '已完成' ? '已完成'
+    task.status === 'todo' ? 'todo'
+    : task.status === 'blocked' ? 'blocked'
+    : task.status === 'done' ? 'done'
     : null;
-  return ['待办', '已阻塞', '已完成'].filter((s) => s !== cur);
+  return ['todo', 'blocked', 'done'].filter((s) => s !== cur);
 }
 
 /**
@@ -1454,7 +1454,7 @@ export function retryPendingSteps() {
   // 只捞「进行中」的（SQL 下推）：全量捞再逐条跳过，空闲时每 30 秒白扫一轮完结实例
   for (const run of store.listActiveWorkflowRuns()) {
     const task = currentTask(run);
-    if (!task || task.status !== '待办') continue;
+    if (!task || task.status !== 'todo') continue;
     /*
      * **动作节点没有经办人是正常的**（干活的是平台自己，见 ACTION_NODES）：
      * 只认"有经办人"会把中间的动作节点永远漏掉 —— 与 goto 里那条到站即跑同一条判据。

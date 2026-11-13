@@ -254,7 +254,7 @@ async function runCreateNode({ runId, task }) {
    */
   try {
     const after = store.getWorkflowRun(runId);
-    if (!after || after.status !== '进行中' || after.currentNodeId !== REVIEW_NODE_ID) return;
+    if (!after || after.status !== 'doing' || after.currentNodeId !== REVIEW_NODE_ID) return;
     const reviewTask = store.listWorkflowTasks(runId).at(-1);
     if (!reviewTask) return;
 

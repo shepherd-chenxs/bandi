@@ -188,6 +188,11 @@
           </div>
           <input type="file" id="filePick" multiple hidden />
           <div id="dPermMount"></div>
+          <!-- 上下文占用环（2026-11-12）：单轮上下文 ÷ 预算上限（session-budget 的 maxTurnTokens）。
+               摆在模型选择器**左边**（2026-11-12 用户定）：模型上的 margin-left:auto 会把
+               [环][模型][发送] 一起推到行尾。内容由 chat.mjs 的 refreshContextRing 画
+               （服务端 /context 接口算好），默认藏着。 -->
+          <div class="cring is-hidden" id="ctxRing"></div>
           <div id="dModelMount"></div>
           <button class="primary" id="send">发送</button>
         </div>
@@ -197,7 +202,9 @@
   </div>
   <div id="detailView"></div>
   <div id="settingsView"></div>
-  <!-- 信箱（2026-11-11）：整页通知列表，左栏一级栏进来 -->
+  <!-- 信箱（2026-11-11）：一级栏进来是**主从页** —— 左栏（#listBody）放通知清单，
+       右区这个容器放选中那条的详情（2026-11-11 用户："改成左侧列表，右边详情"）。
+       空态/「全部已读」等交互都在右区和左栏底部固定条里，见 js/inbox.mjs。 -->
   <div id="inboxView"></div>
   <!-- 组织架构（2026-11-11 Phase 3）：一级栏 + 左栏子菜单，右区是岗位权限清单 -->
   <div id="orgView"></div>

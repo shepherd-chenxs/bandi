@@ -625,8 +625,8 @@ body.no-list .list-panel { display: none; }
 /* 工单会话（流程 / 任务卡）的头像：跟"人"和"群"都不一样，一眼分出是平台派出去的活 */
 .avatar.exec { background: var(--chip); color: var(--accent); font-size: 13px; }
 .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
-.dot.跑中 { background: var(--warn); } .dot.完成 { background: var(--ok); }
-.dot.失败 { background: var(--bad); } .dot.待跑 { background: var(--dim); }
+.dot.running { background: var(--warn); } .dot.done { background: var(--ok); }
+.dot.failed { background: var(--bad); } .dot.pending { background: var(--dim); }
 
 /* ---------- 三级：内容 ---------- */
 main { min-height: 0; }
@@ -644,7 +644,8 @@ main { min-height: 0; }
 #orgView { display: none; height: 100%; overflow: auto; padding-bottom: 40px; background: var(--side); }
 #orgView.shown { display: block; }
 #orgView .detail-body { max-width: 1200px; }
-/* 信箱（2026-11-11）：整页通知列表（左栏整列收掉，同专家库/我的） */
+/* 信箱（2026-11-11 主从改版）：左栏（二级列表）放通知清单，右区放选中那条的详情 ——
+   跟组织架构同一形态，不走 no-list；清单行由 .inbox-item 在左栏里画。 */
 #inboxView { display: none; height: 100%; overflow: auto; padding-bottom: 40px; background: var(--side); }
 #inboxView.shown { display: block; }
 #inboxView .detail-body { max-width: 980px; }
@@ -2637,14 +2638,37 @@ button.gr-pr-check:hover { background: var(--side); }
 .chat-head .head-name:hover { color: var(--accent); }
 .chat-head .sub { font-size: 12px; color: var(--dim); }
 .badge { font-size: 11px; padding: 1px 8px; border-radius: 99px; border: 1px solid var(--line); color: var(--dim); }
-.badge.跑中 { color: var(--warn); border-color: var(--warn); }
-.badge.完成 { color: var(--ok); border-color: var(--ok); }
-.badge.失败 { color: var(--bad); border-color: var(--bad); }
+.badge.running { color: var(--warn); border-color: var(--warn); }
+.badge.done { color: var(--ok); border-color: var(--ok); }
+.badge.failed { color: var(--bad); border-color: var(--bad); }
+/* 空回话（2026-11-11）：会话状态从「完成」改落「已阻塞」—— 跟看板阻塞同色（橙） */
+.badge.blocked { color: var(--st-blocked); border-color: var(--st-blocked); }
 
 /* 密排风格（v1.0.1 收口，2026-10-19 用户要求"全部密排风格"）：
    对话区**跟页面同一个底色**，不另造一层暗底 —— 分层靠 1px 细线和间距，不靠底色差。
    iOS 那套"对话区最暗、卡片浮起"在这里整体去掉了。 */
 .chat { overflow-y: auto; overflow-x: hidden; padding: 20px 24px; background: var(--bg); }
+/* 「有新回复 ↓」胶囊（2026-11-12 实报「回答被遮挡」配套）：用户翻上去读历史时
+   来了新回复，不再硬拽到底 —— 胶囊挂在 #chat 流末尾，sticky 悬在聊天区下沿，
+   点一下回底。回到底部（手动滚或点击）由 chat.mjs 负责摘掉。 */
+.new-msg-pill {
+  position: sticky;
+  bottom: 10px;
+  display: block;
+  width: fit-content;
+  margin-left: auto;
+  margin-right: 6px;
+  padding: 6px 14px;
+  border: none;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .18);
+  z-index: 5;
+}
 /* 两侧对称：对方的行右侧留 42px（我的头像位），我的行左侧留 42px（对方头像位）——
    这样两边气泡都只活在 434~969 这条走廊里，谁也压不到对方的头像区。 */
 .row { display: flex; gap: 10px; margin-bottom: 16px; max-width: 920px; min-width: 0; padding-right: 42px; }   /* 一行别拉太长，长句子读起来累 */
@@ -2672,6 +2696,10 @@ button.gr-pr-check:hover { background: var(--side); }
 /* 直播中的气泡一开始是空的（正文还没流出来）：一个空盒子会画成"一条 1px 细线的窄条"，
    看着像这儿有个没加载出来的东西。:empty 只在真一个节点都没有时命中，不影响正常气泡 */
 .bubble:empty { display: none; }
+/* 空回话占位（2026-11-11 实报）：正文为空/纯空白时画一句人话，别留一条空白气泡 */
+.bubble-empty { color: var(--dim); font-style: italic; }
+/* 会话轮换的聊天灰字（2026-11-11）：一行居中说明，不占气泡 —— 用户点名"这事太小" */
+.sys-line { text-align: center; color: var(--dim); font-size: 11.5px; padding: 4px 0 8px; }
 /* 正在跑的那一轮：**一颗泡**，跑着时里面只有一行日志（2026-11-08 三版）。
    二版是"胶囊 + 正文"两颗兄弟泡，用户实拍还是两块；三版让 chat.mjs 把胶囊放进唯一那颗
    .bubble 里，泡自己摘掉框和底色，只留胶囊 —— 真正的回复一到，chat.mjs 移除胶囊、
@@ -4672,43 +4700,157 @@ dialog.mg-dlg { width: 520px; }
    只读表格：岗位 / 类型 / 在岗 / 权限 / 技能包。窄屏横向滚动，不把列压成两字换行。 */
 .org-scroll { margin-top: 12px; overflow-x: auto; background: var(--panel);
               border: 1px solid var(--line); border-radius: 10px; }
-.org-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.org-table { width: 100%; table-layout: fixed; min-width: 630px;
+             border-collapse: collapse; font-size: 12.5px; }
+/* 列宽（2026-11-11 用户："技能包列窄一些"）：原来是 auto 布局 —— 里面全是 nowrap 的
+   技能章，浏览器按内容给宽度，于是**最长的那个技能名说了算**，技能包一列吃掉右半边
+   （787px 的表里占 400px，一半还多），权限反而被挤成一团（162px）。
+   改成固定布局、按百分比排：技能包只留「最长那条技能名 verification-before-completion
+   （172px）+ 内边距」的宽度（787px 下 252px），腾出来的给权限（205px）。多出来的技能章
+   在**章与章之间**换行，行会高一点，但每行读起来是「岗位 → 权限 → 技能」三截，
+   不再被技能包拖成一条长尾。
+   630px 是这五列都不夹字的底线（再窄就横向滚，见上面 .org-scroll 的 overflow-x）。 */
+.org-table th:nth-child(1) { width: 16%; }
+.org-table th:nth-child(2) { width: 12.5%; }
+.org-table th:nth-child(3) { width: 13.5%; }
+.org-table th:nth-child(4) { width: 26%; }
+.org-table th:nth-child(5) { width: 32%; }
 .org-table th { text-align: left; font-weight: 500; color: var(--dim); font-size: 11.5px;
                 padding: 10px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
 .org-table td { padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
 .org-table tbody tr:last-child td { border-bottom: 0; }
 .org-role b { display: block; font-size: 13px; font-weight: 600; }
 .org-role .dim { font-size: 11px; }
-.org-chip { display: inline-block; margin: 0 4px 4px 0; padding: 1px 7px; border-radius: 999px;
+/* 前三列都是两个字起步的短词（项目经理 / 专家岗 / 沈丹青）：折行只会在**词中间**断开
+   ——「专家 / 岗」「研发工程 / 师」，比窄一档还难读（2026-11-11 用户圈过「类型」列），
+   所以这三列 nowrap。固定布局下单元格不会自己撑开，因此超长的要**截断**而不是溢到
+   下一列：在岗那列可能是「贺韬、杜衡」一串人名（title 里已有全量），技能章里最长的
+   是 verification-before-completion —— 真挤不下时给省略号，别让两列文字叠在一起。 */
+.org-role b, .org-role .dim, .org-table td .pill, .org-duty { white-space: nowrap; }
+.org-table td { overflow: hidden; }
+.org-duty { text-overflow: ellipsis; }
+.org-chip { display: inline-block; max-width: 100%; margin: 0 4px 4px 0; padding: 1px 7px; border-radius: 999px;
             border: 1px solid var(--line); background: var(--input); font-size: 11.5px;
-            color: var(--dim); white-space: nowrap; }
+            color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+            vertical-align: top; }
 /* 权限章比技能章重一档：权限决定"能不能干"，是最要紧的一列 */
 .org-chip.perm { color: var(--text); background: transparent;
                  border-color: color-mix(in srgb, var(--text) 22%, var(--line)); }
 
-/* ---------- 信箱（2026-11-11 用户拍板：一级栏，先接建卡失败等平台事实） ---------- */
-.inbox-tabs { display: flex; gap: 4px; margin-right: 8px; }
+/* ---------- 信箱（2026-11-11 用户拍板：一级栏） ----------
+ * 2026-11-11 用户："改成左侧列表，右边详情" —— 这一页从"整页单列清单"改回骨架的
+ * 三级语法：左栏（300px 二级列表）放通知清单，右区放选中那条的全文和事实。
+ * 所以清单行要按**左栏行**的密度来写（两行字 + 一截灰字），不再是整页那种大卡片；
+ * 右区是详情页，标题/正文/事实表各一档，跟别的详情页同一套字号。
+ */
+
+/* 左侧筛选（全部 / 未读）：钉在清单顶上（.list-body 自己滚，tab 不跟着跑） */
+.inbox-tabs { position: sticky; top: 0; z-index: 1; display: flex; gap: 4px;
+              padding: 4px 4px 8px; background: var(--side); }
 .inbox-tab { border: 1px solid transparent; background: transparent; color: var(--dim);
              padding: 3px 9px; border-radius: 7px; font: inherit; font-size: 12px; cursor: pointer; }
 .inbox-tab:hover { background: var(--hover); color: var(--text); }
 .inbox-tab.on { background: var(--input); color: var(--text); border-color: var(--line); }
 .inbox-n { margin-left: 4px; font-size: 10.5px; color: var(--dim); }
-.inbox-list { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
-.inbox-row { display: flex; gap: 10px; padding: 12px 14px; border: 1px solid var(--line);
-             border-radius: 10px; background: var(--panel); cursor: pointer; }
-.inbox-row:hover { background: var(--hover); }
-.inbox-row.unread { border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
-                    background: color-mix(in srgb, var(--accent) 5%, var(--panel)); }
+
+/* 清单行：行高/悬停/按压/分割线全用 .item 的那套，这里只补信箱自己的排版 */
+.inbox-item { align-items: flex-start; }
+.inbox-item .inbox-ico { margin-top: 1px; }
+.inbox-item .who { min-width: 0; }
+.inbox-item .line1 b { min-width: 0; }
+.inbox-item .line2 { margin-top: 2px; }
+/* 未读：标题加重 + 行底压一层极淡的 accent（跟角标同色系）。
+   不描边 —— 左栏是一叠连续的行，描边会把它变回一张张卡片。 */
+.inbox-item.unread { background: color-mix(in srgb, var(--accent) 5%, transparent); }
+.inbox-item.unread .line1 b { font-weight: 600; }
+.inbox-item.unread:hover { background: color-mix(in srgb, var(--accent) 9%, transparent); }
+/* 选中态压过未读底色：位置记忆恢复时可能"选中的那条还没标已读"（只有点开才算读），
+   两种底色同时存在时以选中为准，否则看不出右区这条是从左栏哪一行来的 */
+.inbox-item.active, .inbox-item.unread.active:hover { background: var(--sel); }
+/* 未读「新」角标（第一行时间旁；详情页元信息里也用它） */
+.inbox-new { flex: none; font-size: 10px; line-height: 15px; color: #fff; background: var(--accent);
+             border-radius: 8px; padding: 0 5px; }
+
+/* 严重度小圆标（清单行 / 详情页共用）：info 蓝、warn 黄、blocking 红 */
 .inbox-ico { width: 22px; height: 22px; border-radius: 50%; flex: none; display: flex;
              align-items: center; justify-content: center; font-size: 12px; font-weight: 700; }
 .inbox-ico.info { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
 .inbox-ico.warn { background: color-mix(in srgb, var(--warn) 22%, transparent); color: var(--warn); }
 .inbox-ico.blocking { background: color-mix(in srgb, var(--bad) 22%, transparent); color: var(--bad); }
-.inbox-main { min-width: 0; }
-.inbox-title { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 13.5px; }
-.inbox-title b { font-weight: 600; }
+.inbox-ico.big { width: 34px; height: 34px; font-size: 16px; }
 .inbox-code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px;
               color: var(--dim); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
-.inbox-new { font-size: 10px; color: #fff; background: var(--accent); border-radius: 8px; padding: 0 5px; }
-.inbox-detail { margin-top: 4px; font-size: 12.5px; color: var(--text); word-break: break-word; }
-.inbox-meta { margin-top: 6px; font-size: 11px; color: var(--dim); }
+
+/* 左栏底部固定条（#listFoot）：普通态 = 管理 + 全部已读；管理模式 = 全选 / 删除所选 / 完成。
+   低频维护动作，同一档轻重，不抢清单的注意力（2026-11-12 批量删除进来后从单按钮改成一排） */
+.inbox-foot-row { display: flex; gap: 6px; }
+.inbox-foot-btn { flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px;
+                  padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px;
+                  background: transparent; color: var(--dim); font: inherit; font-size: 12.5px;
+                  cursor: pointer; white-space: nowrap; }
+.inbox-foot-btn:hover { color: var(--text); background: var(--hover); }
+.inbox-foot-btn:disabled { opacity: .45; cursor: default; }
+.inbox-foot-btn:disabled:hover { color: var(--dim); background: transparent; }
+.inbox-foot-btn.danger { color: var(--bad); }
+.inbox-foot-btn.danger:hover { background: color-mix(in srgb, var(--bad) 8%, transparent); }
+.inbox-foot-btn svg { flex: 0 0 auto; opacity: .8; }
+
+/* 管理模式下每行行首的勾选圆点：空心圈 / 勾中变实心 accent（跟「新」角标同色系） */
+.inbox-check { width: 22px; height: 22px; border-radius: 50%; flex: none; margin-top: 1px;
+               display: flex; align-items: center; justify-content: center;
+               border: 1.5px solid var(--line); color: #fff; }
+.inbox-check.on { background: var(--accent); border-color: var(--accent); }
+.inbox-check svg { width: 13px; height: 13px; }
+
+/* 详情页右上角的「删除」：平时是颗灰字按钮，悬停才染红（低频动作，别抢标题的视线） */
+.inbox-del { margin-left: auto; flex: none; padding: 5px 12px; border: 1px solid var(--line);
+             border-radius: 8px; background: transparent; color: var(--dim);
+             font: inherit; font-size: 12px; cursor: pointer; }
+.inbox-del:hover { color: var(--bad); border-color: var(--bad);
+                   background: color-mix(in srgb, var(--bad) 8%, transparent); }
+
+/* 右区空态：清单里没东西 / 有东西但没选，两句话各说各的（这是账本，不摆欢迎页） */
+.inbox-empty { margin: 64px auto 0; max-width: 380px; text-align: center; color: var(--dim); }
+.inbox-empty svg { width: 64px; height: 64px; opacity: .35; }
+.inbox-empty-title { margin-top: 12px; font-size: 14px; color: var(--text); }
+.inbox-empty-sub { margin-top: 4px; font-size: 12px; line-height: 1.7; }
+
+/* 右区详情：标题 + 灰字元信息 + 正文 + 事实表 */
+.inbox-detail { max-width: 760px; }
+.inbox-d-head { display: flex; align-items: flex-start; gap: 12px; }
+.inbox-d-head-main { min-width: 0; }
+.inbox-d-title { margin: 0; font-size: 18px; font-weight: 600; line-height: 1.45; word-break: break-word; }
+.inbox-d-meta { margin-top: 5px; font-size: 12px; color: var(--dim); }
+.inbox-d-text { margin: 18px 0 0; font-size: 13.5px; line-height: 1.8; color: var(--text);
+                word-break: break-word; white-space: pre-wrap; }
+/* 平台事实表：两列（名/值），一行一条 —— 靠细线分区，不靠大留白 */
+.inbox-facts { margin: 22px 0 0; padding: 0; border-top: 1px solid var(--line); }
+.inbox-fact { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 10px;
+              padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 12.5px; }
+.inbox-fact dt { color: var(--dim); }
+.inbox-fact dd { margin: 0; color: var(--text); word-break: break-word; }
+
+/* ═══ 上下文占用环（2026-11-12）═══════════════════════════════════════
+   输入区 input-tools 行、模型选择器与发送之间：20px 圆环 + 环心百分数。
+   数据来自 GET /api/conversations/:id/context（session-budget 的口径服务端算），
+   阈值色跟预算模块对齐：≥70% --warn 黄、≥90% --bad 红。平时 --dim 灰，
+   存在但不抢戏；解释全在 hover 弹层里，平时零文字（密排风格不留闲话的位置）。
+   环心**不放数字**（2026-11-12 用户：不要百分比，通过环能看出来）—— 精确值在弹层里。 */
+.cring { position: relative; width: 20px; height: 20px; flex: none; cursor: default; }
+.cring svg { display: block; width: 20px; height: 20px; transform: rotate(-90deg); }
+.cring .cring-track { stroke: var(--line); }
+.cring .cring-val { stroke: var(--dim); stroke-linecap: round;
+                    transition: stroke-dashoffset .3s, stroke .3s; }
+.cring.warn .cring-val { stroke: var(--warn); }
+.cring.bad  .cring-val { stroke: var(--bad); }
+/* hover 弹层：跟全站弹层同一套语汇（panel 底 + 1px 细线 + 小投影），箭头朝下指着环 */
+.cring .cring-tip { position: absolute; bottom: 26px; left: 50%; transform: translateX(-50%);
+                    background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+                    box-shadow: 0 4px 14px var(--shadow); padding: 7px 10px; white-space: nowrap;
+                    font-size: 12px; line-height: 1.5; color: var(--text); z-index: 30;
+                    opacity: 0; pointer-events: none; transition: opacity .12s; }
+.cring:hover .cring-tip { opacity: 1; }
+.cring .cring-tip::after { content: ""; position: absolute; top: 100%; left: 50%; margin-left: -5px;
+                           border: 5px solid transparent; border-top-color: var(--line); }
+.cring .cring-tip .t-main { font-weight: 600; }
+.cring .cring-tip .t-sub { color: var(--dim); font-size: 11px; margin-top: 1px; }

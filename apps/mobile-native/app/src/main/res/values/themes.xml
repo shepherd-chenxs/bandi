@@ -2,5 +2,13 @@
 <resources>
     <style name="Theme.Bandi" parent="Theme.Material3.DayNight.NoActionBar">
         <!-- 无 ActionBar：三个视图各自带标题，导航栏由系统给 -->
+
+        <!-- 页面底：Material3 默认 surface 是 #FFFBFE（白里掺紫，看着发粉），
+             换成网页同一档 #F7F8F9 —— 见 colors.xml 的注释 -->
+        <item name="android:windowBackground">@color/bandi_page</item>
+        <item name="android:colorBackground">@color/bandi_page</item>
+
+        <!-- 主按钮：Material3 默认紫 #6750A4 → bandi 蓝 #0066CC -->
+        <item name="colorPrimary">@color/bandi_primary</item>
     </style>
 </resources>

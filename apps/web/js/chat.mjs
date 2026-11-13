@@ -1,7 +1,7 @@
 /* chat.mjs —— 进对话、发消息、输入框里的 @ 选人、员工详情、员工详情 →「任务」、关联技能。
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
 import { esc, mdRender, roleNameOf, savePlace, setRoute, toast } from './shell.mjs';
-import { TYPING, AVATAR_FILE, api, createCombo, cut, dt, failHtml, initial, personaAvatar, personaByName, post, renderMarkdown, setHeaderBadge, smAvatar } from './ui.mjs';
+import { AVATAR_FILE, api, createCombo, cut, dt, failHtml, headerBadgeHtml, initial, personaAvatar, personaByName, post, renderMarkdown, setHeaderBadge, smAvatar } from './ui.mjs';
 import { load, setNav } from './state.mjs';
 import { confirmDo } from './machine.mjs';
 import { convDisplayName, openConversationSafe, toastConvErr } from './listmenu.mjs';
@@ -10,7 +10,8 @@ import { COL_STATUS, openProjectDetail, openTaskBoard, openTaskCardDialog, prPil
 import { openFlowRun, setListTitle } from './flowpages.mjs';
 import { groupProjectOf, openChatLogDrawer, openGroupDrawer } from './groups.mjs';
 import { closeDrawer, fireExpert } from './experts.mjs';
-import { $, S } from './core.mjs';
+import { $, S, statusText } from './core.mjs';
+import { registerLayer } from './navstack.mjs';
 import { SANDBOX_LABEL, sandboxItems } from './misc.mjs';
 // 运行进度：纯逻辑在 run-progress.mjs（冒烟在 Node 里测）；画卡片这一层在 run-progress-card.mjs
 // （对话页 / 任务卡讨论区共用同一份，2026-10-29 用户："对话里的那一套搬过来用"）
@@ -314,6 +315,82 @@ export function renderComposerModel(d) {
 
 
 
+/* ------------------------------------------------ 上下文占用环（2026-11-12） */
+
+/*
+ * 输入区那颗 20px 圆环：**真实上下文 ÷ 模型窗口**（2026-11-12 改对口径）。
+ *
+ * 服务端给的 turn 是"最后一调的输入"、window 是模型自报的窗口（如 95 万），
+ * 都来自 Codex 自己的会话转录（context-probe.mjs）；探不到时服务端退回旧口径
+ * （perTurnTokens ÷ maxTurnTokens），环照样能画，只是数字偏大。
+ * 为什么数由服务端给（GET /api/conversations/:id/context）：轮换判据（member_sessions、
+ * usage）全在服务端 —— 前端自己从 runs 猜，口径一定跟 dispatch 走样。
+ * 刷新点：进会话（openConversation）+ 每轮跑完的整页重画（stop() 里那个 openConversation），
+ * 所以环天然跟着每轮更新；轮换发生后环归零，用户能"看见"换过会话。
+ * 阈值色：≥70% --warn 黄、≥90% --bad 红（样式在 style.css 的 .cring 段）。
+ */
+const RING_CIRC = 2 * Math.PI * 8;
+
+/** 33000 → '3.3万'；100000 → '10万' —— 环心与弹层都按"万"说，跟预算模块同一口径 */
+const wan = (n) => (n / 10000).toFixed(1).replace(/\.0$/, '') + '万';
+
+function ringHtml() {
+  // 环心不放数字（2026-11-12 用户：不要百分比，通过环能看出来）—— 精确值在 hover 弹层里
+  return `<svg viewBox="0 0 20 20" aria-hidden="true">
+      <circle class="cring-track" cx="10" cy="10" r="8" fill="none" stroke-width="2.5"/>
+      <circle class="cring-val" cx="10" cy="10" r="8" fill="none" stroke-width="2.5"/>
+    </svg>
+    <div class="cring-tip"><div class="t-main"></div><div class="t-sub"></div></div>`;
+}
+
+function paintContextRing(d) {
+  const el = $('ctxRing');
+  if (!el) return;
+  el.innerHTML = ringHtml();
+  el.classList.remove('is-hidden', 'warn', 'bad');
+  const val = el.querySelector('.cring-val');
+  val.style.strokeDasharray = RING_CIRC;
+  const tip = el.querySelector('.cring-tip');
+  const main = tip.querySelector('.t-main');
+  const sub = tip.querySelector('.t-sub');
+  // 分母优先用模型真实窗口（服务端探测到才有）；探不到退回预算里的 maxTurnTokens
+  const max = Number(d.usage?.window) || Number(d.budget?.maxTurnTokens) || 0;
+  if (!d.session?.active) {
+    // 这段还没有自己的 CLI 会话（没派过活 / 刚轮换清掉了）：环空着，说清"下一轮从零开始"
+    val.style.strokeDashoffset = RING_CIRC;
+    main.textContent = '还没有在跑的会话';
+    sub.textContent = '下一轮会新开一条，上下文从零开始';
+    return;
+  }
+  const turn = Number(d.usage?.turn) || 0;
+  const pct = max > 0 ? Math.min(100, Math.round((turn / max) * 100)) : 0;
+  val.style.strokeDashoffset = RING_CIRC * (1 - pct / 100);
+  const lv = pct >= 90 ? 'bad' : pct >= 70 ? 'warn' : '';
+  if (lv) el.classList.add(lv);
+  main.textContent = `单轮上下文 ${wan(turn)} / ${wan(max)}`;
+  main.style.color = lv === 'bad' ? 'var(--bad)' : lv === 'warn' ? 'var(--warn)' : '';
+  sub.textContent =
+    pct >= 90 ? '上下文即将满，将自动开新会话'
+    : pct >= 70 ? '上下文偏满，重要结论先落到消息里'
+    : `满 ${wan(max)} 自动换新会话，交接最近消息`;
+}
+
+async function refreshContextRing(conv) {
+  const el = $('ctxRing');
+  if (!el || !conv?.id) return;
+  const convId = conv.id;
+  el.classList.add('is-hidden');
+  try {
+    const d = await api('/api/conversations/' + encodeURIComponent(convId) + '/context');
+    // 回来时可能已经换了会话：环是"当前正开着这段"的，别把 A 的画到 B 上
+    if (S.conversation?.id !== convId) return;
+    if (!d?.target) return; // 没有目标人（解散的群等）：环保持藏
+    paintContextRing(d);
+  } catch { /* 拿不到就藏着 —— 环是锦上添花，不能因为它报错 */ }
+}
+
+
+
 /**
  * 输入区的显隐。没选会话时收起来 —— 那时候敲字也发不出去，
  * 摆一个能打字、按了没反应的输入框是误导。
@@ -430,6 +507,9 @@ export async function openConversation(id) {
   // 只在**真换了**会话时才清：同一段会话跑完的自动重开（收尾 300ms 后）不能把人正打着的字抹掉。
   if (S.conversation?.id !== id) $('input').value = '';
 
+  // 真换了会话才无条件滚到底（换会话是新语境，人预期看到最新一条）；
+  // 同一段会话的重画（run 收尾 300ms / 全局事件）走贴底状态机 —— 翻着历史时不拽（见 drawMessages）。
+  const switched = S.conversation?.id !== id;
   const d = await api('/api/conversations/' + encodeURIComponent(id));
   S.conversation = d.conversation;
   markConvSeen(id, d.conversation.updatedAt);   // 进来看了 = 本设备已读（见 SEEN_KEY 那段）
@@ -463,8 +543,11 @@ export async function openConversation(id) {
   S.groupThreadId = null;
 
   const isGroup = d.conversation.kind === 'group';
-  const running = d.conversation.status === '跑中';
-  const badge = `<span class="badge ${esc(d.conversation.status)}">${esc(running ? TYPING : d.conversation.status)}</span>`;
+  /*
+   * 页头徽章只画结果态（完成/停止/失败）：跑中不画（2026-11-11 用户：
+   * 「对方正在输入去掉，因为下面有了思考过程」）。同源逻辑在 ui.mjs 的 headerBadgeHtml。
+   */
+  const badge = headerBadgeHtml(d.conversation.status);
   /*
    * 窄屏下聊天头自己带一个返回按钮（2026-11 用户要求）：
    * 返回、人名、新会话/聊天记录要挤在**同一行**，所以通用返回栏
@@ -594,13 +677,14 @@ export async function openConversation(id) {
 
   renderComposerPerm(d);
   renderComposerModel(d);
+  refreshContextRing(d.conversation); // 上下文占用环：进会话刷一次；每轮跑完 stop() 会重开本函数，自动跟更
 
   // 把 `runs` 一起给它：失败的运行在库里**没有消息**，只画 messages 就会"说了句话然后没了"
-  drawMessages(d.messages, d.conversation.personaName || '', isGroup, d.runs);
+  drawMessages(d.messages, d.conversation.personaName || '', isGroup, d.runs, { forceScroll: switched });
   const last = d.runs[0];
   // 把这次运行的**开始时间**一起带过去：刷新/重进会话时，"已跑多久"要按真实起点算，
   // 不能从"我打开这一页"开始算（用户 2026-10-26 要看的就是"跑了多久、到哪一步"）
-  if (last && last.status === '跑中') attachStream(last.id, last.personaName, last.startedAt);
+  if (last && last.status === 'running') attachStream(last.id, last.personaName, last.startedAt);
   renderList();
 }
 
@@ -764,6 +848,14 @@ export function bubble(role, text, name, who, showName = false, at = '', atts = 
    */
   const stoppedNote = meta?.stopped ? '<div class="bubble-note">已停止生成</div>' : '';
   /*
+   * 空回话（2026-11-11 实报）：finalText 只剩 `"\n\n\n"` 时以前画出来是一条**空白气泡**，
+   * 看着像界面坏了。服务端落库时已换占位文案，这里再兜一层 —— 老库里已存在的空白消息
+   * 也照样能看清"这一轮没回话"。
+   */
+  const bodyHtml = String(text ?? '').trim()
+    ? renderMarkdown(text)
+    : '<span class="bubble-empty">（这一轮没有回话 —— 模型输出为空或运行被中断，可以让他重跑一次）</span>';
+  /*
    * 「证据」按钮（2026-11-09 P2）已于 2026-11-10 按用户口径移除：
    * 证据是给**后台/AI 查原因**用的（运行事件、`/api/runs/:id/evidence` 都还在），
    * 不在界面里体现 —— 气泡只放结论，不再挂按钮。
@@ -776,8 +868,8 @@ export function bubble(role, text, name, who, showName = false, at = '', atts = 
     return `<div class="row ${mine ? 'me' : ''}${opts?.tight ? ' tight' : ''}${opts?.hideTime ? ' nt' : ''}">
     ${mine ? smAvatar('我', 'me') : smAvatar(label, '', p)}
     ${nameLine
-      ? `<div class="msg-main">${nameLine}<div class="bubble">${ticket}${renderMarkdown(text)}${attsHtml}${stoppedNote}</div></div>`
-      : `<div class="bubble">${ticket}${renderMarkdown(text)}${attsHtml}${stoppedNote}</div>`}
+      ? `<div class="msg-main">${nameLine}<div class="bubble">${ticket}${bodyHtml}${attsHtml}${stoppedNote}</div></div>`
+      : `<div class="bubble">${ticket}${bodyHtml}${attsHtml}${stoppedNote}</div>`}
     ${t ? `<div class="btime">${esc(t)}</div>` : ''}
   </div>`;
 }
@@ -805,7 +897,7 @@ export function cardTicketHtml(meta) {
   const inner = `<div class="card-ticket" data-card-ticket="${esc(meta.cardId)}" title="打开任务卡详情">
     <i class="ct-spine ${esc(col)}"></i>
     <div class="ct-head">
-      <span class="ct-ico">📋</span><span class="ct-kind">任务卡</span><span class="ct-sep">·</span><span class="ct-status ${esc(col)}">${esc(meta.status || '')}</span>${meta.assignee ? `<span class="ct-sep">·</span><span class="ct-assignee">@${esc(meta.assignee)}</span>` : ''}
+      <span class="ct-ico">📋</span><span class="ct-kind">任务卡</span><span class="ct-sep">·</span><span class="ct-status ${esc(col)}">${esc(statusText(meta.status || ''))}</span>${meta.assignee ? `<span class="ct-sep">·</span><span class="ct-assignee">@${esc(meta.assignee)}</span>` : ''}
       <button type="button" class="ct-board" data-card-board="${esc(meta.cardId)}" title="在任务看板里看它">看板 ↗</button>
     </div>
     <div class="ct-row">
@@ -901,7 +993,7 @@ export function timelineOf(msgs, runs) {
   for (const r of runs ?? []) {
     /* 失败/中断也认「已有回话」：有的运行时会把报错本身当成回话落库（带 runId）——
        这时占位行就是同一件事说第二遍（2026-10-30 用户实报"为啥会有两条失败"）。 */
-    if ((r.status === '失败' || r.status === '中断') && !repliedRuns.has(r.id)) {
+    if ((r.status === 'failed' || r.status === 'interrupted') && !repliedRuns.has(r.id)) {
       items.push({ at: String(r.endedAt ?? r.startedAt ?? ''), kind: 'fail', r });
       continue;
     }
@@ -912,7 +1004,7 @@ export function timelineOf(msgs, runs) {
      * 现在：有回话的靠气泡上的「已停止生成」标记；一个字都没有的，留一条安静的状态行说明
      * 「这一轮确实跑了 N 分钟、是被掐掉的」，别让人对着空白猜。
      */
-    if (r.status === '已停止' && !repliedRuns.has(r.id)) {
+    if (r.status === 'stopped' && !repliedRuns.has(r.id)) {
       items.push({ at: String(r.endedAt ?? r.startedAt ?? ''), kind: 'stop', r });
     }
   }
@@ -1013,7 +1105,7 @@ export function stopBlock(r, showName = false) {
 
 
 
-export function drawMessages(msgs, name, isGroup = false, runs = []) {
+export function drawMessages(msgs, name, isGroup = false, runs = [], opts = {}) {
   /*
    * `meta.silent` 的消息**不画**（2026-10-24）：那是平台给 agent 的唤醒指令
    * （卡片回执里 @建卡人"去跟进"那条）—— 它是 run 的触发器，得落库、agent 得读到，
@@ -1073,6 +1165,13 @@ export function drawMessages(msgs, name, isGroup = false, runs = []) {
             : null;
           prevT = t;
           prevKey = keyOf;
+          /*
+           * 会话轮换（2026-11-11 上下文预算）：同一段聊天里他内部的 CLI 会话被换掉了。
+           * 用户要求只在聊天里留一行灰字（不走信箱）：不占气泡、不算回话，居中一行说明。
+           */
+          if (it.kind === 'msg' && it.m.meta?.type === 'session-rotated') {
+            return sep + `<div class="sys-line">${esc(it.m.text || '（上下文过长，已开新会话）')}</div>`;
+          }
           return sep + (it.kind === 'msg'
             ? bubble(it.m.role, it.m.text, name, it.m.personaName, isGroup, it.m.createdAt, it.m.atts, it.m.meta, it.m.senderUserName, { ...(opts ?? {}), runId: it.m.runId, senderNick: senderNickOf(it.m) })
             : it.kind === 'stop' ? stopBlock(it.r, isGroup) : failBlock(it.r, isGroup));
@@ -1080,11 +1179,74 @@ export function drawMessages(msgs, name, isGroup = false, runs = []) {
         .join('')
     : '';
   wireCardTickets(); // 画完顺手接上卡票的点击（票是 innerHTML 画出来的，得逐张绑）
-  scrollDown();
+  /* innerHTML 一换，上一颗「有新回复」胶囊就被连根拔了（它是 #chat 的子节点），
+   * 引用还指着游离节点的话 showNewMsgPill 会以为还在、永远不再画 —— 先松手。 */
+  newMsgPill = null;
+  /* 整页重画后的滚动口径（2026-11-12 实报「回答被遮挡」）：
+   * 换会话（forceScroll）或用户本来贴着底 → 滚到底；用户正翻着历史 → 不拽，弹胶囊。
+   * 图片加载完的长高由下面 capture 委托补滚，这里不用管。 */
+  if (opts.forceScroll || chatPinned) scrollDown();
+  else showNewMsgPill();
 }
 
 
-export const scrollDown = () => { $('chat').scrollTop = $('chat').scrollHeight; };
+/*
+ * 贴底滚动状态机（2026-11-12 实报「嘉辉回答之后聊天没滚动，回答被遮挡」收口）。
+ *
+ * 查下来 scrollDown 一直都在调，漏滚的是**时序**：repaint 后 scrollDown 跑在
+ * 图片加载前 —— 头像/消息截图一加载完内容长高，回答就被顶出屏外。所以贴底
+ * 不能是"画完滚一把"的一次性动作，得跟着内容长高走：
+ *   · chatPinned：用户没主动往上翻（最后一次 scroll 事件时离底 ≤ PIN_GAP）就记着贴底；
+ *     内容再长高（图片加载、markdown 渲染、胶囊变化）都跟到底。
+ *     内容长高**不触发 scroll 事件**，所以这个标志只能在 scroll 事件里刷新 ——
+ *     正是靠它，图片加载完才知道"该不该跟"。
+ *   · 图片 load 不冒泡，委托只能走 capture（祖先上的 capture 监听抓得到）。
+ *   · 用户真翻上去了（离底 > PIN_GAP）：不再硬拽，弹「有新回复 ↓」胶囊，
+ *     点一下回底。读历史不被打断，新回复也不至于无声无息。
+ */
+const PIN_GAP = 60;
+let chatPinned = true;
+let newMsgPill = null;
+
+function chatNearBottom(gap = PIN_GAP) {
+  const el = $('chat');
+  return el.scrollHeight - el.scrollTop - el.clientHeight <= gap;
+}
+
+function hideNewMsgPill() {
+  newMsgPill?.remove();
+  newMsgPill = null;
+}
+
+function showNewMsgPill() {
+  if (newMsgPill) return;
+  newMsgPill = document.createElement('button');
+  newMsgPill.type = 'button';
+  newMsgPill.className = 'new-msg-pill';
+  newMsgPill.textContent = '有新回复 ↓';
+  newMsgPill.onclick = () => scrollDown();
+  $('chat').appendChild(newMsgPill);
+}
+
+// #chat 是 index.html 里的常驻节点，模块加载时就挂好，整页重画（innerHTML）也不受影响
+$('chat').addEventListener('scroll', () => {
+  if (chatNearBottom()) {
+    chatPinned = true;
+    hideNewMsgPill();
+  } else {
+    chatPinned = false;
+  }
+}, { passive: true });
+
+$('chat').addEventListener('load', (e) => {
+  if (e.target instanceof HTMLImageElement && chatPinned) scrollDown();
+}, true);
+
+export const scrollDown = () => {
+  $('chat').scrollTop = $('chat').scrollHeight;
+  chatPinned = true;
+  hideNewMsgPill();
+};
 
 
 
@@ -1239,7 +1401,7 @@ export async function stopChatRun() {
   S.running = false;
   chatRunningId = null;
   setBusy(false);
-  setHeaderBadge('已停止');
+  setHeaderBadge('stopped');
   try {
     await api(`/api/runs/${encodeURIComponent(id)}/abort`, { method: 'POST' });
   } catch (e) {
@@ -1279,7 +1441,7 @@ export function attachStream(runId, whoName = '', startedAt = null) {
   S.running = true;
   chatRunningId = runId;
   setBusy(true);
-  setHeaderBadge('跑中', TYPING);
+  setHeaderBadge('running'); // 跑中不挂徽章（下面有「思考中」进度卡，见 ui.mjs headerBadgeHtml）
 
   // 打字气泡的头像按名字找人（2026-10-23 修正）：群聊会话上没有 personaName，
   // 得用这次运行自己的执行者（POST 回体 / 运行记录 join 出来的 personaName），
@@ -1300,7 +1462,9 @@ export function attachStream(runId, whoName = '', startedAt = null) {
        ${smAvatar(name, '', personaByName(name))}
        <div class="bubble live-line"></div>
      </div>`);
-  scrollDown();
+  // 日志行只是"在动"，不算新回复：贴底才跟（重画后 attachStream 重接时 drawMessages 已滚过），
+  // 翻着历史时不拽 —— 见贴底状态机（scrollDown 上面那段）。
+  if (chatPinned) scrollDown();
 
   const body = document.querySelector('#' + id + ' .bubble');
   /*
@@ -1324,7 +1488,9 @@ export function attachStream(runId, whoName = '', startedAt = null) {
     card,
     host: body,
     render: renderMarkdown,
-    onScroll: scrollDown,
+    // 回答正文落泡：贴底就跟到底；用户翻上去读历史就不拽、弹「有新回复 ↓」——
+    // 这是"回答被遮挡"实报的正面修复（2026-11-12）。
+    onScroll: () => { if (chatPinned) scrollDown(); else showNewMsgPill(); },
     onEnterAnswer: () => body.classList.remove('live-line'),
   });
   const add = (cls, text, asHtml = false) => {
@@ -1332,7 +1498,7 @@ export function attachStream(runId, whoName = '', startedAt = null) {
     d.className = 'step ' + cls;
     if (asHtml) d.innerHTML = text; else d.textContent = text;
     body.appendChild(d);
-    scrollDown();
+    if (chatPinned) scrollDown();
   };
 
   let stopped = false;
@@ -1373,7 +1539,7 @@ export function attachStream(runId, whoName = '', startedAt = null) {
       live.flushPending();
       // 这一行只是"立刻给你一句"；跑完 300ms 后整页从库里重画，
       // 那时由 failBlock 把它**留在回话里**（见 timelineOf 的注释）
-      if (evt.status !== '完成') {
+      if (evt.status !== 'done') {
         const why = firstMeaningfulLine(evt.error) || '运行失败';
         if (!live.answerMode) live.enterAnswer();
         add('bad', `${why}（退出码 ${evt.exitCode}）`);
@@ -1387,7 +1553,7 @@ export function attachStream(runId, whoName = '', startedAt = null) {
       if (stopped) return;
       try {
         const d = await api('/api/conversations/' + encodeURIComponent(convId));
-        if (d.conversation.status !== '跑中') stop(d.conversation.status);
+        if (d.conversation.status !== 'running') stop(d.conversation.status);
       } catch { /* 服务不可达：让 EventSource 自己继续重试 */ }
     },
   });
@@ -2188,6 +2354,16 @@ export function mbClosePicker(alreadyPopped = false) {
 window.addEventListener('popstate', () => {
   if (!document.body.classList.contains('mb-picker-open')) return;
   setTimeout(() => mbClosePicker(true), 0);
+});
+
+/* 返回键的层级（navstack.mjs）：选择页在弹窗之上（level 100 > mobile.mjs 的 dialog 90）
+   —— 全屏选择页可以挂在弹窗里，先收它才是"退一层"。 */
+registerLayer({
+  name: 'picker',
+  level: 100,
+  cell: 'mbPicker',
+  active: () => document.body.classList.contains('mb-picker-open'),
+  close: () => mbClosePicker(true),
 });
 
 // Esc：选择页是详情页的下一级，先收它；弹窗开着时让人家自己吃（同 mobile.mjs 的规矩）

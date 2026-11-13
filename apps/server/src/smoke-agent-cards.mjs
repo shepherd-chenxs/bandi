@@ -12,7 +12,8 @@
  *   ⑥ 卡片回执（2026-10-24）：③ 的执行人跑完、卡收「待验收」时，建卡会话收到【卡片回执】
  *      且贺韬被唤醒 —— "有产出我再回你"的承诺有通道兑现；
  *   ⑦ 幂等键（2026-11-09 重复建卡实报）：同一张卡重发 → 只建一张、第二次 200 dedup；
- *   ⑧ 批量口：一次建一批、整批重发全部幂等、一张不合格整批拒（不留半批）。
+ *   ⑧ 批量口：一次建一批、整批重发全部幂等、一张不合格整批拒（不留半批）；
+ *   ⑨ 中文被 shell 压成问号的请求体 → 400 E2075（2026-11-12 乱码卡实报），正常英文不错杀。
  *
  * 用 fixtures/fake-agent.js 当运行时（BANDI_FAKE_CREATE_CARD=1 时遇【建卡】标记真调接口）。
  * 隔离：临时数据目录 + 临时端口 + 临时项目目录。
@@ -23,6 +24,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { mangledMessage } from './text-guard.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..', '..', '..');
@@ -92,7 +94,7 @@ async function waitAllDone(convId, ms = 30000) {
   let d = await getConv(convId);
   while (Date.now() < until) {
     d = await getConv(convId);
-    if ((d.runs ?? []).length > 0 && (d.runs ?? []).every((x) => x.status !== '跑中')) return d;
+    if ((d.runs ?? []).length > 0 && (d.runs ?? []).every((x) => x.status !== 'running')) return d;
     await sleep(150);
   }
   return d;
@@ -131,16 +133,16 @@ try {
   check('假钥匙 → 401 E2056', badKey.status === 401 && badKey.body.code === 'E2056', `${badKey.status} ${badKey.body.code}`);
 
   console.log('\n② 项目经理建「想法」卡：建成、记创建人、不派活');
-  const idea = await talk(pmConv, `【建卡】{"title":"重做登录页","description":"先出两版候选","status":"想法","projectId":"${project.id}"} 上面是你今天要立的卡`);
-  check('接口收下（201）且是想法态', /FAKE-CARD:201:pt-[a-z0-9]+:想法/.test(idea.reply), idea.reply.match(/FAKE-CARD:\S+/)?.[0] ?? idea.reply.slice(-80));
+  const idea = await talk(pmConv, `【建卡】{"title":"重做登录页","description":"先出两版候选","status":"idea","projectId":"${project.id}"} 上面是你今天要立的卡`);
+  check('接口收下（201）且是想法态', /FAKE-CARD:201:pt-[a-z0-9]+:idea/.test(idea.reply), idea.reply.match(/FAKE-CARD:\S+/)?.[0] ?? idea.reply.slice(-80));
   const ideaId = idea.reply.match(/FAKE-CARD:201:(pt-[a-z0-9]+)/)?.[1];
   const ideaCard = ideaId ? await getTask(ideaId) : null;
   check('卡真的在看板上', !!ideaCard, ideaId ?? '没拿到卡 id');
   check('创建人记的是贺韬', ideaCard?.createdBy === pm.id, String(ideaCard?.createdBy));
-  check('想法不派活（没 run）', !!ideaCard && !ideaCard.runId && ideaCard.status === '想法', `${ideaCard?.status}/${ideaCard?.runId}`);
+  check('想法不派活（没 run）', !!ideaCard && !ideaCard.runId && ideaCard.status === 'idea', `${ideaCard?.status}/${ideaCard?.runId}`);
 
   console.log('\n③ 项目经理建「待办」+ 执行人：建成并自动派活，跑完收「待验收」');
-  const work = await talk(pmConv, `【建卡】{"title":"修列表样式","description":"跑绿 tools/smoke-help-pop.mjs 算完","status":"待办","projectId":"${project.id}","assigneePersonaId":"${dev.id}"} 立这张卡`);
+  const work = await talk(pmConv, `【建卡】{"title":"修列表样式","description":"跑绿 tools/smoke-help-pop.mjs 算完","status":"todo","projectId":"${project.id}","assigneePersonaId":"${dev.id}"} 立这张卡`);
   const workId = work.reply.match(/FAKE-CARD:201:(pt-[a-z0-9]+)/)?.[1];
   check('接口收下（201）', !!workId, work.reply.match(/FAKE-CARD:\S+/)?.[0] ?? work.reply.slice(-80));
   let workCard = workId ? await getTask(workId) : null;
@@ -151,13 +153,13 @@ try {
    */
   check(
     '建完自动派活（有 run）',
-    !!workCard?.runId && ['进行中', '待验收'].includes(workCard?.status),
+    !!workCard?.runId && ['doing', 'review'].includes(workCard?.status),
     `${workCard?.status}/${workCard?.runId}`,
   );
   const devDone = await waitAllDone(workCard?.conversationId);
-  check('执行人（嘉辉）真跑完了', (devDone.runs ?? []).some((r) => r.personaId === dev.id && r.status === '完成'));
+  check('执行人（嘉辉）真跑完了', (devDone.runs ?? []).some((r) => r.personaId === dev.id && r.status === 'done'));
   workCard = await getTask(workId);
-  check('跑完收「待验收」等雇主', workCard?.status === '待验收', String(workCard?.status));
+  check('跑完收「待验收」等雇主', workCard?.status === 'review', String(workCard?.status));
   // 一张卡在看板 JSON 里出现两次（columns[].cards 与 rows 各一份，同一个对象）—— 4 次才是多建了一张。
   // ⚠️ 不能数裸 id：PM 的会话在看板上本有一张「聊天派活」行，行名跟随最新一条消息 ——
   // 回执消息里带着卡号，裸 id 会被它误伤（2026-10-24 回执上线时踩到）。按 manual_id 数才准。
@@ -177,7 +179,7 @@ try {
   let receipt = null;
   for (let i = 0; i < 40 && !receipt; i++) {
     const d = await getConv(pmConv);
-    receipt = (d.messages ?? []).find((m) => m.role === 'assistant' && m.meta?.type === 'card' && m.meta?.cardId === workId && m.meta?.status === '待验收');
+    receipt = (d.messages ?? []).find((m) => m.role === 'assistant' && m.meta?.type === 'card' && m.meta?.cardId === workId && m.meta?.status === 'review');
     if (!receipt) await sleep(150);
   }
   check('回执是执行人（嘉辉）名义的汇报', receipt?.personaId === dev.id && receipt?.role === 'assistant', `${receipt?.role}/${receipt?.personaId}`);
@@ -187,7 +189,7 @@ try {
   const wake = (pmAfter.messages ?? []).find((m) => m.role === 'user' && m.meta?.silent && m.text.includes('【卡片回执】'));
   check('唤醒触发落了（silent，界面不画）', !!wake, wake?.text?.slice(0, 60) ?? '没找到');
   check('贺韬被回执唤醒（他多跑了一轮）', (pmAfter.runs ?? []).length >= 3, `pmConv 共 ${(pmAfter.runs ?? []).length} 轮（②③各一 + 回执）`);
-  check('卡记下已回执状态（去重标记）', (await getTask(workId))?.notifiedFor === '待验收', String((await getTask(workId))?.notifiedFor));
+  check('卡记下已回执状态（去重标记）', (await getTask(workId))?.notifiedFor === 'review', String((await getTask(workId))?.notifiedFor));
 
   /*
    * 卡票消息（2026-10-24）：建卡那一刻，服务端以 PM 的名义往建卡会话落一条
@@ -200,7 +202,7 @@ try {
   check('卡票 meta 带标题与状态快照', ticket?.meta?.title === '修列表样式' && !!ticket?.meta?.status, JSON.stringify(ticket?.meta ?? null));
 
   console.log('\n④ 非项目经理岗位带钥匙来建 → 403（干活的岗位不许越权立项）');
-  const devTry = await talk(devConv, `【建卡】{"title":"嘉辉想自己立项","status":"待办","projectId":"${project.id}"} 试着立这张卡`);
+  const devTry = await talk(devConv, `【建卡】{"title":"嘉辉想自己立项","status":"todo","projectId":"${project.id}"} 试着立这张卡`);
   check('被拒（403 E2057）', /FAKE-CARD:403:E2057/.test(devTry.reply), devTry.reply.match(/FAKE-CARD:\S+/)?.[0] ?? devTry.reply.slice(-80));
   check('拒绝话里说清了找谁', devTry.reply.includes('只有带「建卡」权限的岗位能建任务卡'), devTry.reply.match(/FAKE-CARD:\S+/)?.[0] ?? '');
   // 403 是服务端在 createProjectTask 之前就返回的 —— 卡根本没建，无需再查库
@@ -213,11 +215,11 @@ try {
    *   ⑦ 批量里一张不合格 → 整批拒，不留"半批"。
    */
   console.log('\n⑤ 幂等键：同一张卡重发 → 只建一张');
-  const idemBody = `{"title":"幂等卡甲","status":"想法","projectId":"${project.id}","idempotencyKey":"smoke-idem-a"}`;
+  const idemBody = `{"title":"幂等卡甲","status":"idea","projectId":"${project.id}","idempotencyKey":"smoke-idem-a"}`;
   const i1 = await talk(pmConv, `【建卡】${idemBody} 第一次`);
   const i2 = await talk(pmConv, `【建卡】${idemBody} 重发一次`);
-  check('第一次建成（201）', /FAKE-CARD:201:pt-[a-z0-9]+:想法/.test(i1.reply), i1.reply.match(/FAKE-CARD:\S+/)?.[0] ?? '');
-  check('重发命中幂等（200 + dedup）', /FAKE-CARD:200:pt-[a-z0-9]+:想法:dedup/.test(i2.reply), i2.reply.match(/FAKE-CARD:\S+/)?.[0] ?? '');
+  check('第一次建成（201）', /FAKE-CARD:201:pt-[a-z0-9]+:idea/.test(i1.reply), i1.reply.match(/FAKE-CARD:\S+/)?.[0] ?? '');
+  check('重发命中幂等（200 + dedup）', /FAKE-CARD:200:pt-[a-z0-9]+:idea:dedup/.test(i2.reply), i2.reply.match(/FAKE-CARD:\S+/)?.[0] ?? '');
   const idemId1 = i1.reply.match(/FAKE-CARD:201:(pt-[a-z0-9]+)/)?.[1];
   const idemId2 = i2.reply.match(/FAKE-CARD:200:(pt-[a-z0-9]+)/)?.[1];
   check('两次返回的是同一张卡', !!idemId1 && idemId1 === idemId2, `${idemId1} / ${idemId2}`);
@@ -228,8 +230,8 @@ try {
   const batchBody = {
     projectId: project.id,
     cards: [
-      { title: '批量卡甲', description: 'x', status: '想法', idempotencyKey: 'smoke-batch-a' },
-      { title: '批量卡乙', description: 'y', status: '想法', idempotencyKey: 'smoke-batch-b' },
+      { title: '批量卡甲', description: 'x', status: 'idea', idempotencyKey: 'smoke-batch-a' },
+      { title: '批量卡乙', description: 'y', status: 'idea', idempotencyKey: 'smoke-batch-b' },
     ],
   };
   const b1 = await talk(pmConv, `【批量建卡】${JSON.stringify(batchBody)} 建两张`);
@@ -245,7 +247,7 @@ try {
   const badBatch = {
     projectId: project.id,
     cards: [
-      { title: '半批卡甲', status: '想法', idempotencyKey: 'smoke-bad-a' },
+      { title: '半批卡甲', status: 'idea', idempotencyKey: 'smoke-bad-a' },
       { title: '半批卡乙', status: '乱来状态', idempotencyKey: 'smoke-bad-b' },
     ],
   };
@@ -253,6 +255,24 @@ try {
   check('整批被拒（400 E2058）', /FAKE-BATCH:400:0:0:E2058/.test(bad.reply), bad.reply.match(/FAKE-BATCH:\S+/)?.[0] ?? '');
   check('不合格的是第 2 张', bad.reply.includes('第 2 张卡不合格'), bad.reply.match(/FAKE-BATCH:[^\n]*/)?.[0]?.slice(0, 160) ?? '');
   check('第一张也没被建出来（整批回滚）', !(await boardText(project.id)).includes('半批卡甲'), '');
+
+  /*
+   * 2026-11-12 **乱码卡实报**的回归钉：贺韬用 PowerShell 5.1 的 Invoke-RestMethod 发建卡请求，
+   * 没带 -ContentType，body 按 ASCII 编了出去 —— 中文在**到达服务端之前**就全变成「?」，
+   * 卡却建成功了（标题 `??????(ui ??? temperature ??)`），只能事后人工改。
+   * 现在服务端直接 400 E2075 打回去，并给出"写进文件、按 UTF-8 原样上传"的改法。
+   */
+  console.log('\n⑨ 中文在发出来之前就被压成问号 → 400 E2075（不许建看不懂的卡）');
+  const mangledTitle = '??????(ui ??? temperature ??)';
+  const mangled = await talk(pmConv, `【建卡】{"title":"${mangledTitle}","description":"??:yaojian-ui ??,?????????? temperature ?????","status":"idea","projectId":"${project.id}"} 这张卡的中文在发出来之前就没了`);
+  check('被拒（400 E2075）', /FAKE-CARD:400:E2075/.test(mangled.reply), mangled.reply.match(/FAKE-CARD:\S+/)?.[0] ?? mangled.reply.slice(-80));
+  // 假运行时只把错误话截到 100 字回显（见 fake-agent.js），所以"改法"那半段单独按原文钉
+  check('错误话点名了原因（被压成「?」）', mangled.reply.includes('压成「?」') && mangled.reply.includes('ASCII'), '');
+  check('改法能照抄（-InFile / --data-binary）', /-InFile/.test(mangledMessage('标题')) && /--data-binary/.test(mangledMessage('标题')), '');
+  check('看板上没有这张乱码卡', !(await boardText(project.id)).includes(mangledTitle), '');
+  // 别把正常英文错杀：带连续问号的英文标题照旧放行（判据只在"整串没有一个汉字"时才疑心）
+  const english = await talk(pmConv, `【建卡】{"title":"Why?? hmm","description":"ascii only","status":"idea","projectId":"${project.id}"} 英文标题`);
+  check('正常英文不被错杀（201）', /FAKE-CARD:201:pt-[a-z0-9]+:idea/.test(english.reply), english.reply.match(/FAKE-CARD:\S+/)?.[0] ?? '');
 } catch (err) {
   console.log('\n跑挂了：' + String(err?.message ?? err) + '\n' + slog.slice(-800));
   failed += 1;
