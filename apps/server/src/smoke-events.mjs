@@ -47,7 +47,7 @@ const dev = store.createPersona({ name: '冒烟员', runtime: 'codex', cwd: proj
 const task = store.createProjectTask({
   projectId: proj.id,
   title: '等一条便签的卡',
-  status: '想法', // 想法 = 停车场：不会自动派活
+  status: 'idea', // 想法 = 停车场：不会自动派活
   assigneePersonaId: dev.id,
 });
 

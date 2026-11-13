@@ -47,7 +47,7 @@ import { startWorkflow, nodesOf } from './workflows.mjs';
 import { claimOf, blockedReasonOf } from './delivery-claim.mjs';
 
 /** 排序权重：越小越"要人管"（平表用它；看板按列站队，不看这个） */
-const FLOW_RANK = { 已阻塞: 0, 失败: 1, 待验收: 2, 进行中: 3, 待办: 4, 已完成: 5, 已取消: 6, 想法: 7 };
+const FLOW_RANK = { blocked: 0, failed: 1, review: 2, doing: 3, todo: 4, done: 5, cancelled: 6, idea: 7 };
 
 /**
  * 看板上**不要**把「流程的一步」开出来的那张卡再算一行（2026-10-19）。
@@ -63,7 +63,7 @@ const FLOW_RANK = { 已阻塞: 0, 失败: 1, 待验收: 2, 进行中: 3, 待办:
  * ⚠️ 只认 `sourceKey`，**不按标题猜** —— 人手建一张正好重名的卡是合法的，不能吞掉。
  */
 const notFlowCard = (t) => !t.sourceKey;
-const CHAT_RANK = { 失败: 1, 已停止: 2, 跑中: 3, 完成: 5 };
+const CHAT_RANK = { failed: 1, stopped: 2, running: 3, done: 5 };
 const RANK_OTHER = 8;
 
 /**
@@ -96,14 +96,14 @@ const RANK_OTHER = 8;
  * 现在：`store/status.mjs` 是唯一词表，这里只负责"它长什么样"。
  */
 const COL_FACE = {
-  idea: { label: '想法', hint: '还没决定要不要做' },
-  todo: { label: '待办' },
-  doing: { label: '进行中' },
-  review: { label: '待验收', hint: '干完了，等验收人点头' },
-  blocked: { label: '已阻塞', hint: '出了问题等人拍板' },
-  failed: { label: '失败' },
-  done: { label: '已完成' },
-  cancelled: { label: '已取消', hint: '决定不做，留个痕' },
+  idea: { label: store.TASK_LABEL.idea, hint: '还没决定要不要做' },
+  todo: { label: store.TASK_LABEL.todo },
+  doing: { label: store.TASK_LABEL.doing },
+  review: { label: store.TASK_LABEL.review, hint: '干完了，等验收人点头' },
+  blocked: { label: store.TASK_LABEL.blocked, hint: '出了问题等人拍板' },
+  failed: { label: store.TASK_LABEL.failed },
+  done: { label: store.TASK_LABEL.done },
+  cancelled: { label: store.TASK_LABEL.cancelled, hint: '决定不做，留个痕' },
 };
 
 /** 列顺序取自词表（TASK_COL_ORDER）；「其他」是兜底列，不挂状态，所以只在这里追加 */
@@ -195,7 +195,7 @@ function flowRows(run) {
       // 这行"什么时候有的"：流程实例的建单时间（`at` 是最后动静，两回事 ——
       // 列表上写"创建时间"就得给创建时间，2026-11-08 用户要绝对时间时定的口径）
       created: stamp(run.createdAt ?? t.startedAt),
-      note: t.note ? clip(t.note, NOTE_LIMIT) : `流程${run.status === '进行中' ? '进行中' : `已${run.status.replace(/^已/, '')}`}`,
+      note: t.note ? clip(t.note, NOTE_LIMIT) : `流程${store.runLabel(run.status)}`,
       flow_id: run.id,
       flow_title: run.title,
       template_id: run.templateId,
@@ -236,10 +236,10 @@ function currentFlowTask(run) {
  * 定过的规矩一致：两个账本，各记各的；但"这件事现在什么状态"只有一个答案。
  */
 function flowCardStatus(run, task) {
-  if (!run) return '待办';
-  if (run.status === '已完成') return '已完成';
-  if (run.status === '已终止') return '已取消';
-  return task?.status ?? '待办';
+  if (!run) return 'todo';
+  if (run.status === 'done') return 'done';
+  if (run.status === 'terminated') return 'cancelled';
+  return task?.status ?? 'todo';
 }
 
 /** 卡上那行备注：这条流程走到第几步、当前节点叫什么（模板被删了就只说实例名） */
@@ -490,9 +490,9 @@ function board(rows, extra = {}) {
     // 跟看板「已阻塞」那一列**同一个口径**：那一列收流程的「已阻塞」和聊天的「已停止」
     // （平台语义上它们同类，见上面 COLUMNS 的注释）。口径不一致的话，
     // 概览写 1、列里站着 1 张却是"已停止"，人就会怀疑哪边错了
-    blocked_count: count((r) => r.status === '已阻塞' || r.status === '已停止'),
-    failed_count: count((r) => r.status === '失败'),
-    waiting_count: count((r) => r.status === '待验收'),
+    blocked_count: count((r) => r.status === 'blocked' || r.status === 'stopped'),
+    failed_count: count((r) => r.status === 'failed'),
+    waiting_count: count((r) => r.status === 'review'),
     columns,
     rows: sorted,
   };
@@ -606,9 +606,9 @@ export function allTasks() {
       project_name: name,
       total: mine.length,
       // 跟概览的 blocked_count / 看板「已阻塞」那一列同一个口径
-      blocked: mine.filter((r) => r.status === '已阻塞' || r.status === '已停止').length,
-      waiting: mine.filter((r) => r.status === '待验收').length,
-      failed: mine.filter((r) => r.status === '失败').length,
+      blocked: mine.filter((r) => r.status === 'blocked' || r.status === 'stopped').length,
+      waiting: mine.filter((r) => r.status === 'review').length,
+      failed: mine.filter((r) => r.status === 'failed').length,
     };
   };
   const byProject = [
@@ -745,7 +745,7 @@ export function assertTeamGroup(groupId) {
 export function createProjectTask(project, {
   title,
   description = '',
-  status = '待办',
+  status = 'todo',
   personaId = null,
   flowTemplateId = null,
   // 派给真人（2026-10-31）：与 personaId / flowTemplateId 互斥；真人执行 = 挂名，不起会话
@@ -777,7 +777,7 @@ export function createProjectTask(project, {
 } = {}) {
   const name = String(title ?? '').trim();
   if (!name) throw new Error('任务得有标题');
-  const st = MANUAL_STATUSES.has(status) ? status : '待办';
+  const st = MANUAL_STATUSES.has(status) ? status : 'todo';
   if (assigneeGroupId && (personaId || flowTemplateId || assigneeUserId)) {
     throw new Error('执行方式只能选一个：派给数字员工、派给真人、由流程执行，或者派给一个群（团队协作）');
   }
@@ -839,7 +839,7 @@ export function createProjectTask(project, {
   // 真派了的话卡刚建完就被转成「进行中」，那一列等于白建。
   // 前端也会把那个勾选框灰掉，但**判据放服务端**才作数（接口谁都能直接调）。
   // 团队协作（群）也算"有执行方式"：待办 + 立即开始 → 派进群、由群助手承接。
-  if ((!persona && !flowTpl && !group) || !startNow || st === '想法') return store.getProjectTask(row.id);
+  if ((!persona && !flowTpl && !group) || !startNow || st === 'idea') return store.getProjectTask(row.id);
 
   try {
     return startProjectTask(row.id);
@@ -944,11 +944,11 @@ function startCardInGroup(row, project) {
   if (!res) throw new Error('派不进这个群（会话或成员状态异常）');
   if (!res.run) {
     // 群助手正忙 / 会话被占：同直接派活 —— 退待办 + 排队标记，节拍重试
-    store.updateProjectTask(row.id, { status: '待办', runId: null, queuedAt: store.nowIso() });
+    store.updateProjectTask(row.id, { status: 'todo', runId: null, queuedAt: store.nowIso() });
     throw Object.assign(new Error('群助手正忙，排上队了（会自动再试，不用管）'), { code: 'busy' });
   }
   return store.updateProjectTask(row.id, {
-    status: '进行中',
+    status: 'doing',
     conversationId: session.id,
     runId: res.run.id,
     queuedAt: null,
@@ -968,7 +968,7 @@ export function startProjectTask(id, { allowIdea = false } = {}) {
    */
   if (row.flowRunId) throw new Error('这张卡由流程执行 —— 推进/终止去流程实例里，这里不用再派');
   if (row.flowTemplateId) {
-    if (!allowIdea && row.status === '想法') throw new Error('「想法」还没决定要不要做，先挪到「待办」再发起');
+    if (!allowIdea && row.status === 'idea') throw new Error('「想法」还没决定要不要做，先挪到「待办」再发起');
     return startCardFlow(row.id);
   }
   /*
@@ -976,15 +976,15 @@ export function startProjectTask(id, { allowIdea = false } = {}) {
    * 群助手**现读**（执行时动态取，见 startCardInGroup 的注释），所以这里先判状态闸。
    */
   if (row.assigneeGroupId) {
-    if (!allowIdea && row.status === '想法') throw new Error('「想法」还没决定要不要做，先挪到「待办」再开始');
-    if (row.status === '进行中' && row.runId) throw new Error('这张卡已经在跑了');
+    if (!allowIdea && row.status === 'idea') throw new Error('「想法」还没决定要不要做，先挪到「待办」再开始');
+    if (row.status === 'doing' && row.runId) throw new Error('这张卡已经在跑了');
     return startCardInGroup(row, project);
   }
   if (!row.assigneePersonaId) throw new Error('先指定执行人，再开始');
   const persona = store.getPersona(row.assigneePersonaId);
   if (!persona) throw new Error('指定的执行人不在了');
-  if (!allowIdea && row.status === '想法') throw new Error('「想法」还没决定要不要做，先挪到「待办」再开始');
-  if (row.status === '进行中' && row.runId) throw new Error('这张卡已经在跑了');
+  if (!allowIdea && row.status === 'idea') throw new Error('「想法」还没决定要不要做，先挪到「待办」再开始');
+  if (row.status === 'doing' && row.runId) throw new Error('这张卡已经在跑了');
 
   /*
    * **这张卡自己的工单会话**（2026-10-18）：一条卡一条，返工续它。
@@ -1024,7 +1024,7 @@ export function startProjectTask(id, { allowIdea = false } = {}) {
       },
     });
     return store.updateProjectTask(row.id, {
-      status: '进行中',
+      status: 'doing',
       conversationId: conv,
       runId: run.id,
       queuedAt: null,
@@ -1037,7 +1037,7 @@ export function startProjectTask(id, { allowIdea = false } = {}) {
      * 别的错（运行时不可用之类）才是真失败，交给上层报出去。
      */
     if (e?.code === 'busy') {
-      store.updateProjectTask(row.id, { status: '待办', runId: null, queuedAt: store.nowIso() });
+      store.updateProjectTask(row.id, { status: 'todo', runId: null, queuedAt: store.nowIso() });
       throw Object.assign(new Error(`排上队了：${e.message}（会自动再试，不用管）`), { code: 'busy' });
     }
     throw e;
@@ -1091,9 +1091,9 @@ function finalReplyTextOf(run) {
  * 中断是服务重启后的补记，不经过收尾钩子。
  */
 function cardStatusAfterRun(runStatus, claim) {
-  if (runStatus === '完成') return claim === 'done' ? '待验收' : '已阻塞';
-  if (runStatus === '已停止') return '已阻塞';
-  if (runStatus === '失败') return '失败';
+  if (runStatus === 'done') return claim === 'done' ? 'review' : 'blocked';
+  if (runStatus === 'stopped') return 'blocked';
+  if (runStatus === 'failed') return 'failed';
   return null;
 }
 
@@ -1104,8 +1104,8 @@ function cardStatusAfterRun(runStatus, claim) {
  * 别逼人去会话里翻（原因截 120 字，长文留在会话）。
  */
 function endNoteOf(run, claim) {
-  if (run.status === '已停止') return '被人停掉了，等你处理';
-  if (run.status === '失败') {
+  if (run.status === 'stopped') return '被人停掉了，等你处理';
+  if (run.status === 'failed') {
     const first = String(run.error ?? '').split('\n')[0].slice(0, 200);
     return `跑挂了${first ? `：${first}` : ''}`;
   }
@@ -1178,7 +1178,7 @@ export function promoteConversationToCard(convId) {
   const lastUser = store.lastUserMessage(convId);
   // 2026-11-09 P4：完成的轮次要读**交付声明**，不能因为"进程退出了"就折成待验收（见 delivery-claim.mjs）
   const claim = claimOf(finalReplyTextOf(chatRun));
-  const status = chatRun.status === '跑中' ? '进行中' : cardStatusAfterRun(chatRun.status, claim) ?? '待办';
+  const status = chatRun.status === 'running' ? 'doing' : cardStatusAfterRun(chatRun.status, claim) ?? 'todo';
   const task = createProjectTask(project, {
     title: clip(lastUser || conv.title || '（没说做什么）', TASK_LIMIT),
     status,
@@ -1241,7 +1241,7 @@ export function retryQueuedTasks() {
 export function onTaskRunFinished(run) {
   if (!run?.id) return;
   const task = store.getProjectTaskByRunId(run.id);
-  if (!task || task.status !== '进行中') return;
+  if (!task || task.status !== 'doing') return;
   // 完成态还要看**交付声明**：进程退出码 0 只说明这一轮结束了，不说明活干成了
   const claim = claimOf(finalReplyTextOf(run));
   const next = cardStatusAfterRun(run.status, claim);
@@ -1263,8 +1263,8 @@ export function onTaskRunFinished(run) {
  */
 export function afterMerged(task) {
   if (!task) return task;
-  if (task.prState === 'merged' && task.status === '进行中') {
-    const updated = store.updateProjectTask(task.id, { status: '待验收' });
+  if (task.prState === 'merged' && task.status === 'doing') {
+    const updated = store.updateProjectTask(task.id, { status: 'review' });
     notifyCardOwner(updated, 'PR 合并了，产出在卡上等你验收');
     return updated;
   }
@@ -1291,7 +1291,11 @@ export function afterMerged(task) {
  *
  * 护栏：通知对象 = 执行人自己跳过（自己的活自己知道）；`notifiedFor` 按状态去重
  * （同一张卡收成同一状态只报一次；重新开跑会清掉，见 startProjectTask）。
- * 唤醒走讨论档（只读）：他要的是派 QA 验收、汇报、安排下一步 —— 动手活他会再派，这是 PM 的本分。
+ *
+ * **唤醒给正常执行档（2026-11-12 修）**：以前扣 `sandbox: 'plan'`（只读），本意"只调度别动手"；
+ * 但只读沙箱连命令通道都挡 —— 卡阻塞后 PM 连 GET 台账 / PATCH 卡都调不通，只能来问雇主
+ * （实报：贺韬说"沙箱把命令全挡了，要么你本地查、要么你判迁移成没成"）。现在正常档：
+ * 他能查台账、建卡、改卡、验收；"不许自己改仓库/部署"由身份卡与每轮合同约束。
  */
 function conversationOfPersona(personaId) {
   // 群优先：他在哪个群里说话，回执就落哪个群（雇主看得到）；没有群退他的 1:1
@@ -1326,7 +1330,7 @@ function notifyParentCoordinator(task, why) {
     conversationId: session.id,
     role: 'assistant',
     personaId: assignee?.id ?? null,
-    text: `【子卡回执】「${task.title}」（${task.id}）到「${task.status}」了 —— ${why}`,
+    text: `【子卡回执】「${task.title}」（${task.id}）到「${store.taskLabel(task.status)}」了 —— ${why}`,
     meta: {
       type: 'card',
       cardId: task.id,
@@ -1338,9 +1342,9 @@ function notifyParentCoordinator(task, why) {
   });
   const res = dispatchEventToThread(
     session.id,
-    `@${assistant.name} 【子卡回执】你拆的子卡「${task.title}」（${task.id}）到「${task.status}」了 —— ${why}。` +
+    `@${assistant.name} 【子卡回执】你拆的子卡「${task.title}」（${task.id}）到「${store.taskLabel(task.status)}」了 —— ${why}。` +
       `请汇总到主卡「${parent.title}」（${parent.id}），并推进下一步。`,
-    { personaId: assistant.id, projectId: parent.projectId, sandbox: 'plan', meta: { silent: true } },
+    { personaId: assistant.id, projectId: parent.projectId, meta: { silent: true } },
   );
   if (res) {
     store.updateProjectTask(task.id, { notifiedFor: task.status });
@@ -1370,7 +1374,7 @@ function notifyCardOwner(task, why) {
     conversationId: convId,
     role: 'assistant',
     personaId: assignee?.id ?? null,
-    text: `【卡片回执】「${task.title}」（${task.id}）到「${task.status}」了 —— ${why}`,
+    text: `【卡片回执】「${task.title}」（${task.id}）到「${store.taskLabel(task.status)}」了 —— ${why}`,
     meta: {
       type: 'card',
       cardId: task.id,
@@ -1381,15 +1385,18 @@ function notifyCardOwner(task, why) {
   });
 
   // ② 唤醒建卡人（不可见触发）：上面那条是给人的，这条是给他的指令。
-  //    文案跟他的职责对齐（2026-10-24 定口径：PM 的本分是调度）—— 写"验收产出"他会真的
-  //    去翻产出找证据，思考巨长还没干本职；写成"派 QA 验收"，他的动作就是转交 + 收结论。
+  //    文案跟他的职责对齐（2026-10-24 定口径：PM 的本分是调度；2026-11-12 改成"建卡人=验收人"）。
+  //    ⚠️ 2026-11-12 修：这里以前扣 `sandbox: 'plan'`（只读），本意是"只调度别动手"——但只读沙箱
+  //    连命令通道都挡，他连 GET 台账 / PATCH 卡都调不通（实报：卡阻塞后 PM 只能干看着，让雇主来点）。
+  //    现在给正常档：他能查、能建卡、能改卡；"不许自己改仓库/部署"由身份卡与每轮合同约束。
   const text =
-    `@${persona.name} 【卡片回执】你建的卡「${task.title}」（${task.id}）到「${task.status}」了 —— ${why}。` +
-    '请按你对雇主的承诺跟进：派 QA 验收、汇报进展、或安排下一步。';
+    `@${persona.name} 【卡片回执】你建的卡「${task.title}」（${task.id}）到「${store.taskLabel(task.status)}」了 —— ${why}。` +
+    '请按你对雇主的承诺跟进：**你是这张卡的验收人** —— 看执行人交回的结论/证据；' +
+    '没交结论就把卡退回执行人补（PATCH status=待办 + startNow:true），或看证据直接判；' +
+    '需要补跑就派回去。**不要自己改仓库/部署/改配置**。';
   const res = dispatchEventToThread(convId, text, {
     personaId: persona.id,
     projectId: task.projectId,
-    sandbox: 'plan',
     // silent：这条是平台给 agent 的唤醒指令，不是人说的话 —— 界面上不画（见上面的注释）
     meta: { silent: true },
   });
@@ -1433,7 +1440,7 @@ export function upsertRepoCard({ projectId, key, title, description = '', pr = n
     const next = changed ? store.updateProjectTask(existing.id, patch) : existing;
     return { task: changed ? afterMerged(next) : next, created: false, changed };
   }
-  const task = store.createProjectTask({ projectId, title, description, status: '待办', source: 'repo', externalKey: key });
+  const task = store.createProjectTask({ projectId, title, description, status: 'todo', source: 'repo', externalKey: key });
   const withPr = patchPr ? store.updateProjectTask(task.id, patchPr) : task;
   return { task: patchPr ? afterMerged(withPr) : withPr, created: true, changed: true };
 }
@@ -1467,7 +1474,18 @@ export function updateProjectTask(id, fields = {}, { autoStart = true, actorUser
   }
   if (fields.description !== undefined) patch.description = String(fields.description).trim();
   if (fields.status !== undefined) {
-    if (!MANUAL_STATUSES.has(fields.status)) throw new Error(`不认识的状态：${fields.status}`);
+    if (!MANUAL_STATUSES.has(fields.status)) {
+      // 状态只收码（2026-11-12）：写中文名 / 别的写法一律拒，并告诉他该写哪个码（别猜、别静默吞）
+      const hit = Object.entries(store.TASK_LABEL).find(([, label]) => label === String(fields.status).trim());
+      throw Object.assign(
+        new Error(
+          `状态只收码（${Object.keys(store.TASK_LABEL).join(' / ')}），收到「${fields.status}」${
+            hit ? ` —— 「${fields.status}」是显示名，请写 "${hit[0]}"` : ''
+          }`,
+        ),
+        { code: 'E2058' },
+      );
+    }
     patch.status = fields.status;
     /*
      * 「状态改动」归因（2026-11-03，补设备绑人的另一半）：谁改的状态记谁。
@@ -1531,7 +1549,7 @@ export function updateProjectTask(id, fields = {}, { autoStart = true, actorUser
    * 跟"待办 + 人 = 自动开工"同一个手感：状态就是指令。
    * 发起失败就不写状态（catch 里抛）—— 卡要是留在「进行中」却没起流程，看板上就是一句假话。
    */
-  if (cur.flowTemplateId && !cur.flowRunId && patch.status === '进行中' && autoStart) {
+  if (cur.flowTemplateId && !cur.flowRunId && patch.status === 'doing' && autoStart) {
     delete patch.status; // 状态交给 startCardFlow 落初值
     // 归因也撤掉（上面记的是"人改状态"，但这一下真正发生的动作是**发起流程**，
     // 状态由引擎写 —— 别让详情页显示"张三 改状态"，他点的是"发起"）
@@ -1546,7 +1564,7 @@ export function updateProjectTask(id, fields = {}, { autoStart = true, actorUser
   }
 
   // 「拖进进行中」这一下要不要顺便开工 —— 看**改完之后**有没有执行人（本次改的优先）
-  const toDoing = autoStart && patch.status === '进行中' && cur.status !== '进行中';
+  const toDoing = autoStart && patch.status === 'doing' && cur.status !== 'doing';
   const whoId = patch.assigneePersonaId !== undefined ? patch.assigneePersonaId : cur.assigneePersonaId;
   // 团队协作的卡没有 assigneePersonaId —— "拖进进行中 = 开工"这条同样适用（派进群）
   const groupId = patch.assigneeGroupId !== undefined ? patch.assigneeGroupId : cur.assigneeGroupId;
@@ -1575,9 +1593,9 @@ export function updateProjectTask(id, fields = {}, { autoStart = true, actorUser
    * 「想法」阶段不跑（还没决定要不要做）；没指定人也不跑（那只是停车场）。
    */
   const nextStatus = patch.status !== undefined ? patch.status : cur.status;
-  const becameTodo = autoStart && nextStatus === '待办' && (!!whoId || !!groupId) && (
-    (patch.status === '待办' && cur.status !== '待办' && cur.status !== '进行中') ||
-    (cur.status === '待办' && (
+  const becameTodo = autoStart && nextStatus === 'todo' && (!!whoId || !!groupId) && (
+    (patch.status === 'todo' && cur.status !== 'todo' && cur.status !== 'doing') ||
+    (cur.status === 'todo' && (
       (patch.assigneePersonaId !== undefined && !!patch.assigneePersonaId && patch.assigneePersonaId !== cur.assigneePersonaId) ||
       (patch.assigneeGroupId !== undefined && !!patch.assigneeGroupId && patch.assigneeGroupId !== cur.assigneeGroupId)
     ))
@@ -1648,7 +1666,7 @@ export function ensureTaskCardForStep(run, task) {
     projectId: project.id,
     title: stepCardTitle(run, task),
     description: stepCardDescription(run, task),
-    status: MANUAL_STATUSES.has(task.status) ? task.status : '待办',
+    status: MANUAL_STATUSES.has(task.status) ? task.status : 'todo',
     assigneePersonaId: task.assigneePersonaId ?? null,
     // ⚠️ sourceKey 必须**跟建卡同一条 INSERT**，不能建完再 update：
     //    中间崩一下就会留一张没有身份的卡，下次点进来又建一张（node:sqlite 没有
@@ -1667,7 +1685,7 @@ function stepCardTitle(run, task) {
 /** 卡描述：把这一步的起因写清楚 —— 打开卡的人（哪怕是几天后的自己）得知道它在哪条流程上 */
 function stepCardDescription(run, task) {
   return [
-    `流程：${run.title}（${run.status}）`,
+    `流程：${run.title}（${store.workflowLabel(run.status)}）`,
     `这一步：${task.nodeName}${task.visit > 1 ? `（第 ${task.visit} 次办理）` : ''}`,
     run.intent ? `\n起因：${run.intent}` : '',
   ].join('\n').trim();

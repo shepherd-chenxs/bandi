@@ -77,3 +77,21 @@ export function markAllNoticesRead() {
   db.prepare('UPDATE notices SET readAt = ? WHERE readAt IS NULL').run(nowIso());
   return countUnreadNotices();
 }
+
+/**
+ * 删除通知（2026-11-12 用户："加删除功能，支持批量删除"）。
+ * `ids` 数组一条也行多条也行；`all: true` 清空整箱。返回 { removed, unread }。
+ * 删了就是删了（账本条目，不进回收站）—— 确认动作在前端做，这里不拦。
+ */
+export function deleteNotices({ ids = null, all = false } = {}) {
+  if (all === true) {
+    const removed = db.prepare('DELETE FROM notices').run().changes;
+    return { removed, unread: countUnreadNotices() };
+  }
+  const list = (Array.isArray(ids) ? ids : []).map((v) => String(v ?? '')).filter(Boolean);
+  if (!list.length) return { removed: 0, unread: countUnreadNotices() };
+  const del = db.prepare('DELETE FROM notices WHERE id = ?');
+  let removed = 0;
+  for (const id of list) removed += del.run(id).changes;
+  return { removed, unread: countUnreadNotices() };
+}

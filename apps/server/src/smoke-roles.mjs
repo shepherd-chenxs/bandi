@@ -181,6 +181,34 @@ try {
     .filter((f) => /isPmRole\(|roleHeadOf\(/.test(fs.readFileSync(f, 'utf8')))
     .map((f) => path.relative(repo, f).split(path.sep).join('/'));
   check('apps/server/src 里没有 isPmRole( / roleHeadOf( 的调用', !offenders.length, offenders.join(','));
+
+  console.log('\n⑧ 源码守卫：项目经理不许自己执行（2026-11-11 实报：SSH 装 Maven）');
+  const expertsSrc = fs.readFileSync(path.join(SRC, 'experts.mjs'), 'utf8');
+  const dispatchSrc = fs.readFileSync(path.join(SRC, 'dispatch.mjs'), 'utf8');
+  /*
+   * 身份卡那句「专长之外的活也接，先声明再照常做完」是"PM 自己上手"的直接授权：
+   * 用户让他更新 thinkpad，他 SSH 装 Maven，运维（马超）在群也没派。改成"先建卡派给对应岗位"。
+   */
+  const hetaoLine = expertsSrc.split(/\r?\n/).find((l) => l.includes('你是「贺韬」')) ?? '';
+  check('贺韬身份卡不再写「专长之外的活也接」', !hetaoLine.includes('专长之外的活也接'), hetaoLine.slice(0, 120));
+  check('贺韬身份卡写明「派给对应岗位」', /派给对应岗位/.test(hetaoLine), hetaoLine.slice(0, 120));
+  check('贺韬身份卡写明「信息咨询直接答」', /信息咨询/.test(hetaoLine) && /不建卡/.test(hetaoLine), hetaoLine.slice(0, 160));
+  check('贺韬身份卡写明「没有能干这个的人」就报雇主', /没有能干这个的人|没有人能干/.test(hetaoLine), hetaoLine.slice(0, 160));
+  /*
+   * 每轮「统筹职责」：2026-11-12 用户口径——先分三类（咨询 / 派活 / 无对口岗位），
+   * 并给"只读查询可自己做、有副作用必须派"的边界。
+   */
+  const pmBlock = dispatchSrc.slice(dispatchSrc.indexOf('function pmDispatchBlock'));
+  check('统筹合同写明运维 / 部署 → 派运维岗位', /派运维岗位/.test(pmBlock), pmBlock.slice(0, 120));
+  check('统筹合同禁止登服务器 / 部署 / 装环境', /不登服务器/.test(pmBlock) && /不部署/.test(pmBlock) && /不装环境/.test(pmBlock));
+  check('统筹合同先分三类（信息咨询 → 查台账直接答）', /信息咨询/.test(pmBlock) && /不建卡、不派活/.test(pmBlock));
+  check('统筹合同写明「团队没有对应岗位的人」就报雇主', /没有能干这个的人/.test(pmBlock));
+  check('统筹合同写明「只读查询可自己做、有副作用必须派」', /只读查询/.test(pmBlock) && /有副作用的操作/.test(pmBlock));
+  check('统筹合同：普通执行任务默认 todo，不许用 idea 让雇主点状态', /一律建 `todo`（待办）/.test(pmBlock) && /不要建 `idea`/.test(pmBlock));
+  check('统筹合同：雇主已授权可逆执行动作', /被雇主授权/.test(pmBlock));
+  check('建卡通道：只收码、省略 = todo、idea 只用于真拍板', /status 只收码/.test(dispatchSrc) && /省略 = `todo`/.test(dispatchSrc) && /`idea` 只用于真正要雇主定的/.test(dispatchSrc));
+  check('平台契约：例行部署/迁移不用等雇主拍板', /例行部署 \/ 迁移/.test(dispatchSrc));
+  check('员工宪法对 PM 有统筹岗特别约定（覆盖"超常项照接"）', /统筹岗的特别约定/.test(dispatchSrc) && /constitutionBlock\(\{ roleKey/.test(dispatchSrc));
 } finally {
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* 删不掉就算了 */ }
 }

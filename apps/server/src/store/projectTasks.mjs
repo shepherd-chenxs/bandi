@@ -6,7 +6,7 @@ export function createProjectTask({
   projectId,
   title,
   description = '',
-  status = '待办',
+  status = 'todo',
   assigneePersonaId = null,
   // 派给真人（2026-10-31）：与 assigneePersonaId 互斥，真人执行不起会话不派活
   assigneeUserId = null,
@@ -168,7 +168,7 @@ export function listMyOpenTasks(personaId, limit = 5) {
   return db
     .prepare(
       `SELECT id, title, status, projectId, updatedAt FROM project_tasks
-        WHERE status NOT IN ('已完成', '已取消')
+        WHERE status NOT IN ('done', 'cancelled')
           AND (assigneePersonaId = ?
                OR assigneeGroupId IN (SELECT id FROM groups WHERE assistantPersonaId = ?))
         ORDER BY updatedAt DESC LIMIT ?`,
@@ -183,7 +183,7 @@ export function listMyOpenTasks(personaId, limit = 5) {
 
 export function listQueuedProjectTasks() {
   return db
-    .prepare("SELECT * FROM project_tasks WHERE queuedAt IS NOT NULL AND status = '待办' ORDER BY queuedAt")
+    .prepare("SELECT * FROM project_tasks WHERE queuedAt IS NOT NULL AND status = 'todo' ORDER BY queuedAt")
     .all();
 }
 

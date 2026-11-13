@@ -491,14 +491,16 @@ const clip = (s, n) => {
 };
 
 /**
- * 进度卡。状态词与颜色：排队=grey，进行中=blue，已完成=green，失败=red，已停止=grey。
- * v1 不带按钮（拍板按钮第二版），elements 只有一块 markdown + 一行 note。
+ * 进度卡。**入参 status 是码**（2026-11-12 起状态只有码），标题上渲染它的显示名。
+ * 颜色：done=green，failed=red，doing=running=blue，其余（stopped/收到…）=grey。
  */
+const STATUS_TEXT = (code) => store.TASK_LABEL[code] ?? store.RUN_LABEL[code] ?? String(code ?? '');
+
 function buildCard({ personaName, status, detail }) {
-  const tpl = status === '已完成' ? 'green' : status === '失败' ? 'red' : status === '进行中' ? 'blue' : 'grey';
+  const tpl = status === 'done' ? 'green' : status === 'failed' ? 'red' : status === 'doing' || status === 'running' ? 'blue' : 'grey';
   return {
     config: { wide_screen_mode: true },
-    header: { template: tpl, title: { tag: 'plain_text', content: `${personaName} · ${status}` } },
+    header: { template: tpl, title: { tag: 'plain_text', content: `${personaName} · ${STATUS_TEXT(status)}` } },
     elements: [
       { tag: 'markdown', content: detail },
       { tag: 'hr' },
@@ -556,7 +558,7 @@ function trackRun({ ch, run, chatId, personaName, instruction }) {
   };
   tracked.set(run.id, entry);
   // 先发初始卡；message_id 回来才开始 PATCH（发失败就只留日志，不拦派活本身）
-  sendCard(ch, chatId, buildCard({ personaName, status: '进行中', detail: progressDetail(instruction, progressView(entry.state)) }))
+  sendCard(ch, chatId, buildCard({ personaName, status: 'doing', detail: progressDetail(instruction, progressView(entry.state)) }))
     .then((id) => {
       entry.messageId = id;
       entry.lastSentAt = Date.now();
@@ -590,9 +592,9 @@ async function pollRun(runId) {
       tracked.delete(runId);
       if (!entry.messageId) return;
       const st = String(entry.state.status ?? '');
-      const status = st === '完成' ? '已完成' : st === '已停止' ? '已停止' : '失败';
+      const status = st === 'done' ? 'done' : st === 'stopped' ? 'stopped' : 'failed';
       let detail = `**指令**：${clip(entry.instruction, 200)}\n`;
-      if (status === '已完成') detail += `**结果**：\n${clip(entry.finalText, 800) || '（没有正文，到会话里看）'}`;
+      if (status === 'done') detail += `**结果**：\n${clip(entry.finalText, 800) || '（没有正文，到会话里看）'}`;
       else detail += `**原因**：${clip(entry.finalError || entry.finalText || entry.state.error || '到会话里看详情', 400)}`;
       await updateCard(entry.ch, entry.messageId, buildCard({ personaName: entry.personaName, status, detail }));
       return;
@@ -605,7 +607,7 @@ async function pollRun(runId) {
     entry.lastSentAt = Date.now();
     entry.sending = true;
     try {
-      await updateCard(entry.ch, entry.messageId, buildCard({ personaName: entry.personaName, status: '进行中', detail: progressDetail(entry.instruction, view) }));
+      await updateCard(entry.ch, entry.messageId, buildCard({ personaName: entry.personaName, status: 'doing', detail: progressDetail(entry.instruction, view) }));
     } finally {
       entry.sending = false;
     }

@@ -609,7 +609,10 @@ $('drawer').addEventListener('contextmenu', (e) => {
 
 // 点菜单外面收起。用 `mousedown` 而不是 `click`：项自己的 click 里已经先关了，
 // 用 click 会跟它抢顺序（有时先关、有时后关，表现为"点了一下什么都没发生"）
+// 蒙层 #ctxScrim 要跳过：它自己在 click 里关（mousedown 就关的话，紧跟着的 click
+// 会落到蒙层下面那一层页面上，等于"关弹窗顺手点开了底下那一条"）。
 document.addEventListener('mousedown', (e) => {
+  if (e.target.closest?.('#ctxScrim')) return;
   if (!e.target.closest?.('#ctxMenu')) closeCtxMenu();
 });
 

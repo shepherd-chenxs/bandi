@@ -10,6 +10,10 @@
  *   ⑤ P5 交付形态（2026-11-09）：问问题先直接回答（多问拆答、权责分层、每个判断落源），
  *      任务合同按形态给交付/验收（问答 → 答案/每一问；做事 → 结论先行/可核/可拍板）。
  *      真实事故：pt-7c6d4229「数字员工的权限问题」被答成"钥匙怎么发"的工作报告 + 4 处事实错。
+ *   ⑥ **2026-11-12 反向修正**：⑤ 里"每个判断落源"把堵错的成本转嫁成了回复体积（用户实报
+ *      "每个人回复都是一大堆依据"）。依据降为兜底（默认不写，只在追问 / 改变决定 / 不可逆确认时附，
+ *      一行以内），第一行改三态结论（顺利 / 有问题 / 卡住），并要求交代"要不要他动手"；
+ *      验收同步改为"用过程代替结论算没交付"。防错的底线（真源 / 未验证 / 不编数）保留在第 4 条。
  *
  * 隔离：临时数据目录 + 临时库，不起服务、不碰真实 data/。
  * 跑法：node apps/server/src/smoke-persona-contract.mjs
@@ -51,22 +55,31 @@ try {
   check('系统管家身份卡也 ≤200 字', steward.STEWARD_INSTRUCTIONS.length <= 200, `${steward.STEWARD_INSTRUCTIONS.length} 字`);
   check('系统管家身份卡没有边界话术', !BANNED.test(steward.STEWARD_INSTRUCTIONS));
 
-  console.log('\n② 平台行为契约（每轮注入，优先级高于身份；P5 重写为 7 条）');
+  console.log('\n② 平台行为契约（每轮注入，优先级高于身份；2026-11-12 改为 10 条 + 三态结论）');
   const contract = dispatch.platformContractBlock();
   check('有"优先级高于身份设定"的声明', /优先级高于身份设定/.test(contract));
-  check('① 先判这一轮要交什么：问问题还是做事',
-    /先判/.test(contract) && /(问问题|问答)/.test(contract) && /(做事|办事)/.test(contract));
+  check('总纲：每轮只办"结果是什么 + 要不要他出手"',
+    /三秒内知道/.test(contract) && /(要不要他出手|要不要他动手)/.test(contract));
+  check('① 第一行 = 结论，按三态写（顺利 / 有问题 / 卡住）',
+    /第一行\s*=\s*结论/.test(contract) && /顺利/.test(contract) && /有问题/.test(contract) && /卡住/.test(contract),
+    contract.split('\n').find((l) => /三态/.test(l)) ?? '');
   check('① 问问题 → 第一行直接回答（谁 / 哪个 / 能不能 / 归谁）',
     /第一行/.test(contract) && /直接回答/.test(contract) && /谁/.test(contract) && /哪个/.test(contract) && /能不能/.test(contract) && /归谁/.test(contract),
     contract.split('\n').find((l) => /直接回答/.test(l)) ?? '');
   check('① 问答题不许拿工作报告顶替答案 + 指向 bandi-report',
-    /答案/.test(contract) && /(工作报告|工作汇报)/.test(contract) && /bandi-report/.test(contract));
-  check('② 多问拆答 + 权责四层（归属方 / 授予方 / 持有者 / 能改的人）',
-    /(多问|拆答|拆开|逐问|一问一答)/.test(contract) && /归属方/.test(contract) && /授予方/.test(contract) && /持有者/.test(contract) && /能改的人/.test(contract));
-  check('③ 每个判断落源（文件:行 / 接口 / 数据）+ 查不到写"未验证"',
-    /(落源|出处)/.test(contract) && /文件:行/.test(contract) && /(接口|数据)/.test(contract) && /未验证/.test(contract) && /(几条|哪些)/.test(contract));
-  check('③ 证据放运行事件或卡里（不贴在对话里）',
-    /(运行事件|事件)/.test(contract) && /(卡片|卡里|卡上)/.test(contract));
+    /(答案|结论)/.test(contract) && /(工作报告|工作汇报)/.test(contract) && /bandi-report/.test(contract));
+  check('② 必须交代归谁动手（明说不用你动 / 说清要他做什么）',
+    /(不用你动)/.test(contract) && /(给权限|拍板)/.test(contract) && /(那我要干嘛|没交付)/.test(contract),
+    contract.split('\n').find((l) => /交代归谁动手/.test(l)) ?? '');
+  check('③ 依据默认不写，只三种情况附（追问 / 改变决定 / 不可逆确认）',
+    /依据默认不写/.test(contract) && /为什么/.test(contract) && /改变他的决定/.test(contract) && /确认/.test(contract),
+    contract.split('\n').find((l) => /依据默认不写/.test(l)) ?? '');
+  check('③ 依据不进第一行、附就一行以内；整轮超过 5 行先删依据',
+    /(一行以内|一行内)/.test(contract) && /超过 5 行/.test(contract) && /先删依据/.test(contract));
+  check('④ 要附就附真的：真源 + 行号可翻 + 未验证（防 pt-7c6d4229 复发）',
+    /只引真源/.test(contract) && /未验证/.test(contract) && /(函数名|不写估算行号)/.test(contract) && /apps\/desktop\/runtime/.test(contract));
+  check('⑤ 多问拆答，但每问一句（不再摊四层机制）',
+    /(多问|拆答)/.test(contract) && /逐条答/.test(contract) && /(每问一句|每条一个结论)/.test(contract) && !/归属方/.test(contract));
   // P4 交付声明协议（2026-11-09）：P5 起标记单独放**最后一行**（第一行留给答案/结果）。
   check('④ 交付声明：跑完 ≠ 完成，标记单独放最后一行 [完成] / [受阻]',
     /\[完成\]/.test(contract) && /\[受阻\]/.test(contract) && /跑完[^。\n]*≠/.test(contract) && /最后一行/.test(contract),
@@ -101,7 +114,7 @@ try {
   const answerCard = {
     title: '数字员工的权限问题',
     description: '关于数字员工的权限问题（数字员工能调用哪些api，分别是什么权限），是给特定数字员工的还是全员平权',
-    status: '进行中',
+    status: 'doing',
     projectName: '班底',
     source: 'board',
   };
@@ -110,9 +123,9 @@ try {
   check('answer 卡：交付形态 = 问答（第一行直接回答）', /交付形态/.test(tca) && /(问答|回答)/.test(tca) && /第一行/.test(tca));
   check('answer 卡：交付要"答案"、验收要"每一问"', /答案/.test(tca) && /每一问/.test(tca), tca.split('\n').filter((l) => /交付|验收/.test(l)).join(' / '));
   const tcd = dispatch.taskContractBlock({ card: { title: '修时区', description: '修时区，改完提交', source: 'board' } });
-  check('do 卡：验收仍钉"结论先行、依据可核、可拍板"',
-    /结论先行/.test(tcd) && /可核/.test(tcd) && /可拍板/.test(tcd), tcd.split('\n').find((l) => /验收/.test(l)) ?? '');
-  const tcc = dispatch.taskContractBlock({ card: { title: '修首页文案', description: '标题改短', status: '进行中', projectName: '班底' } });
+  check('do 卡：验收钉"第一行结果/卡点 + 说清要不要他动手"',
+    /第一行/.test(tcd) && /(结果|卡点)/.test(tcd) && /动手/.test(tcd) && /用过程代替结论/.test(tcd), tcd.split('\n').find((l) => /验收/.test(l)) ?? '');
+  const tcc = dispatch.taskContractBlock({ card: { title: '修首页文案', description: '标题改短', status: 'doing', projectName: '班底' } });
   check('评论卡（非 board）：仍带卡标题 + 项目', /「修首页文案」/.test(tcc) && /项目：班底/.test(tcc));
   check('评论卡：验收仍指向卡描述逐条验（不复制长文）', /按【你正在办的任务卡】里的任务描述逐条验/.test(tcc) && !/标题改短/.test(tcc));
   check('评论卡：也带交付形态提示', /交付形态/.test(tcc));
@@ -145,17 +158,17 @@ try {
   const proj = store.createProject({ name: '台账项目', root: tmp });
   const mk = (title, status, assigneePersonaId = dev.id) =>
     store.createProjectTask({ projectId: proj.id, title, status, assigneePersonaId });
-  mk('卡A（待办）', '待办');
-  mk('卡B（进行中）', '进行中');
-  mk('已完成卡', '已完成');
-  mk('已取消卡', '已取消');
-  mk('别人的卡', '待办', other.id);
+  mk('卡A（待办）', 'todo');
+  mk('卡B（进行中）', 'doing');
+  mk('已完成卡', 'done');
+  mk('已取消卡', 'cancelled');
+  mk('别人的卡', 'todo', other.id);
   const rows = store.listMyOpenTasks(dev.id, 5);
   check('只列自己的未完卡（排除已完成/已取消/别人的）',
     rows.length === 2 && rows.every((r) => r.title.startsWith('卡')), JSON.stringify(rows.map((r) => r.title)));
   const g = store.createGroup({ title: '台账群', assistantPersonaId: dev.id });
   // createGroup 返回的是群的**会话行**（建群顺手建一段群会话）；群本身的 id 在 groupId
-  store.createProjectTask({ projectId: proj.id, title: '团队卡', status: '待办', assigneeGroupId: g.groupId });
+  store.createProjectTask({ projectId: proj.id, title: '团队卡', status: 'todo', assigneeGroupId: g.groupId });
   const rows2 = store.listMyOpenTasks(dev.id, 5);
   check('群助手看得到自己群的团队卡', rows2.some((r) => r.title === '团队卡'), JSON.stringify(rows2.map((r) => r.title)));
   const ledger = dispatch.taskContractBlock({ tasks: rows2 });

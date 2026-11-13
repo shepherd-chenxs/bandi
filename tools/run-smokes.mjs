@@ -52,6 +52,10 @@ const RUN = [
   'apps/server/src/smoke-autostart.mjs',
   'apps/server/src/smoke-chat-to-board.mjs',
   'apps/server/src/smoke-connectors.mjs',
+  // 连接器接线层与权限档位（2026-11-13）：claude 族 --mcp-config 接线、promptLines
+  // 以 resolve 结果为准（没接线不许注入提示词骗模型）、claude blocked 存量迁移。
+  // 纯函数 + 临时账本，不起服务不联网。
+  'apps/server/src/smoke-connector-wiring.mjs',
   'apps/server/src/smoke-conversation-delete.mjs',
   'apps/server/src/smoke-events.mjs',
   'apps/server/src/smoke-data-dir.mjs',
@@ -63,6 +67,8 @@ const RUN = [
   'apps/server/src/smoke-git-repos.mjs',
   'apps/server/src/smoke-group-dissolve.mjs',
   'apps/server/src/smoke-group-mentions.mjs',
+  // 成员回复接力（2026-11-12 实报「群里没人理他」）：成员回话里 @ 谁就唤醒谁，带回打保护
+  'apps/server/src/smoke-reply-chain.mjs',
   // 团队协作（派给群）：群助手必须是 PM、动态现读群助手、子卡授权/回执（2026-11-09）
   'apps/server/src/smoke-group-tasks.mjs',
   // 群关联项目（2026-11-11「一项目一群」）：群挂了项目 = 派活默认在那个项目里干（纯函数规则）
@@ -86,6 +92,11 @@ const RUN = [
   'apps/server/src/smoke-card-channel.mjs',
   // 信箱（2026-11-11 用户拍板）：建卡失败落库、同轮同码去重、已读/未读、角标口径
   'apps/server/src/smoke-inbox.mjs',
+  // 完全自主交付（2026-11-13）：无人工闸模板、按岗位指派、自动流转、终态/受阻写信箱、
+  // 普通人工流程不受影响。临时库 + 假 run 钩子 + 同进程控制面，不起真 CLI、不烧模型。
+  'apps/server/src/smoke-self-delivery.mjs',
+  // 上下文预算（2026-11-11 实报：会话跑 8 小时 / 3000 万 input 后空回话）——纯函数，不碰库
+  'apps/server/src/smoke-session-budget.mjs',
   // 身份与职责检修 P0（2026-11-09）：身份卡只回答"我是谁"、平台契约/任务合同每轮注入。
   // 纯静态 + 纯函数，不开服务。
   'apps/server/src/smoke-persona-contract.mjs',

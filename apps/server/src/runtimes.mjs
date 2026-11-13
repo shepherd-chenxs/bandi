@@ -38,8 +38,16 @@ const FAMILIES = {
     adapter: 'claude',
     // Claude 没有"沙箱"，对应概念是 --permission-mode
     sandboxes: claude.PERMISSION_MODES,
-    blocked: [],
-    note: '权限对应 --permission-mode；--resume 能续接会话记忆。',
+    /*
+     * blocked（2026-11-13 实报补上，与 codex 同一个口径）：headless 无人审批时，
+     * default 档每条命令都要批、永远没人批 → 全拒；plan 档只读，命令/编辑一样过不了。
+     * 2026-11-12 马超三轮（r-40546dd1/r-3aa03079/r-93a93cb1，CLI 实报 permissionMode:default）
+     * 就废在这上面，模型还把"命令被拒"误诊成"沙箱拦网络、本机没工具"。
+     * acceptEdits 不进 blocked：它自动放行文件编辑，只读+改文件的活真干得动，
+     * 只有命令类动作要批 —— 收进 blocked 会把还能用的档也禁了。
+     */
+    blocked: ['default', 'plan'],
+    note: '权限对应 --permission-mode；--resume 能续接会话记忆。无人审批下只有「完全权限」跑得动命令；acceptEdits 只自动接受编辑，命令仍要审批。',
     /*
      * 安装（2026-11-04 定稿）：**班底不装 agent CLI，只识别**。npm 那条一键安装
      * （`npm install -g @anthropic-ai/claude-code`）随整个 install-runtime 通路一起拆了 ——
@@ -113,6 +121,21 @@ function savedRuntimesFor(saved, deviceId) {
 }
 
 /**
+ * blocked 的**旧默认迁移**（2026-11-13）：blocked 建运行时那一刻会随实例存进
+ * runtimes.json，代码里改了族默认，**已存盘的实例不会跟着变**（savedEntry 优先）。
+ * claude 这次把 default/plan 补进 blocked，而老库里 claude 实例存的正是当时的旧默认 `[]` ——
+ * 存的值与旧默认完全一致的（= 用户从没动过），跟随新口径；用户自己改过的原样保留。
+ */
+const BLOCKED_OLD_DEFAULTS = { claude: [] };
+
+function savedBlockedFor(familyId, savedEntry, fallback) {
+  if (!Array.isArray(savedEntry.blocked)) return fallback;
+  const old = BLOCKED_OLD_DEFAULTS[familyId];
+  if (old && JSON.stringify(savedEntry.blocked.map(String)) === JSON.stringify(old)) return fallback;
+  return savedEntry.blocked.map(String);
+}
+
+/**
  * 族默认值 ← 保存的覆盖。id 和族由调用方给。
  *
  * ⚠️ `path` **没有默认值**：以前这里会退回 `f.defaultPath`（一个写死的开发机路径）。
@@ -132,7 +155,7 @@ function makeRuntime(familyId, id, label, savedEntry = {}) {
     path: savedEntry.path ?? '',
     sandboxes:
       Array.isArray(savedEntry.sandboxes) && savedEntry.sandboxes.length ? savedEntry.sandboxes : f.sandboxes,
-    blocked: Array.isArray(savedEntry.blocked) ? savedEntry.blocked.map(String) : f.blocked,
+    blocked: savedBlockedFor(familyId, savedEntry, f.blocked),
     builtIn: SEEDED.includes(id),
     deviceId: LOCAL_ID,
   };

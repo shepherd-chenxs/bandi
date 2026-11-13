@@ -92,7 +92,7 @@ async function waitAllDone(convId, ms = 30000) {
   while (Date.now() < until) {
     d = await getConv(convId);
     const runs = d.runs ?? [];
-    if (runs.length && runs.every((x) => x.status !== '跑中')) return d;
+    if (runs.length && runs.every((x) => x.status !== 'running')) return d;
     await sleep(150);
   }
   return d;
@@ -136,7 +136,7 @@ try {
 
   console.log('\n① 建卡派给群 → 派活票进群、群助手起跑、卡转「进行中」');
   const c1 = await req('POST', `/api/projects/${project.id}/tasks`, {
-    title: '团队卡：拆活给研发', status: '待办', assigneeGroupId: group.id, startNow: true,
+    title: '团队卡：拆活给研发', status: 'todo', assigneeGroupId: group.id, startNow: true,
   });
   check('建卡成功', c1.status === 201 && c1.body.task?.assigneeGroupId === group.id, `${c1.status} ${c1.body.error ?? ''}`);
   const card1Id = c1.body.task?.id;
@@ -146,27 +146,27 @@ try {
   check('群里落了带卡号的派活票', !!ticket, ticket?.text?.slice(0, 60) ?? '没找到');
   const card1 = await getTask(card1Id);
   // 假 agent 秒完成：收尾钩子可能已经把卡收成「待验收」了 —— 钉"派活生效 + 挂到群会话"
-  check('卡派活生效并挂到群会话', ['进行中', '待验收'].includes(card1?.status) && card1?.conversationId === groupConv, `${card1?.status}/${card1?.conversationId}`);
+  check('卡派活生效并挂到群会话', ['doing', 'review'].includes(card1?.status) && card1?.conversationId === groupConv, `${card1?.status}/${card1?.conversationId}`);
   // 跑完收「待验收」：靠 run 收尾钩子认卡（runId 落在卡上）
   const c1After = await getTask(card1Id);
-  check('跑完收「待验收」（run 收尾钩子认得出这张卡）', c1After?.status === '待验收', String(c1After?.status));
+  check('跑完收「待验收」（run 收尾钩子认得出这张卡）', c1After?.status === 'review', String(c1After?.status));
 
   console.log('\n② 群助手不是项目经理 → 建卡直接 400（不建注定派不出去的卡）');
   const badGroup = (await req('POST', '/api/groups', { title: '没有PM的群', assistantPersonaId: dev.id, memberIds: [pm.id] })).body.group;
   const bad = await req('POST', `/api/projects/${project.id}/tasks`, {
-    title: '不该建出来的团队卡', status: '待办', assigneeGroupId: badGroup.id,
+    title: '不该建出来的团队卡', status: 'todo', assigneeGroupId: badGroup.id,
   });
   check('被 400 拒掉且说清原因', bad.status === 400 && /不能承接团队协作卡/.test(String(bad.body.error ?? '')), `${bad.status} ${bad.body.error ?? ''}`);
   check('卡确实没建出来', !(await boardText(project.id)).includes('不该建出来的团队卡'), '');
 
   console.log('\n③ 群助手拆子卡 → 允许；跑完回执唤醒群助手');
   const parent = (await req('POST', `/api/projects/${project.id}/tasks`, {
-    title: '团队卡：要拆给两个人', status: '待办', assigneeGroupId: group.id,
+    title: '团队卡：要拆给两个人', status: 'todo', assigneeGroupId: group.id,
   })).body.task;
-  check('主卡建成（待办、先不派）', parent?.status === '待办' && !!parent?.assigneeGroupId, `${parent?.status}`);
+  check('主卡建成（待办、先不派）', parent?.status === 'todo' && !!parent?.assigneeGroupId, `${parent?.status}`);
   const r3 = await sayInGroup(groupConv,
     `@${pm.name} 【批量建卡】${JSON.stringify({ projectId: project.id, cards: [
-      { title: '子卡：研发实现', description: '拆出来的活', status: '待办', assigneePersonaId: dev.id, parentTaskId: parent.id, idempotencyKey: 'team-sub-1' },
+      { title: '子卡：研发实现', description: '拆出来的活', status: 'todo', assigneePersonaId: dev.id, parentTaskId: parent.id, idempotencyKey: 'team-sub-1' },
     ] })} 拆一下`);
   check('子卡建成（201）', /FAKE-BATCH:201:1:0/.test(r3), r3.match(/FAKE-BATCH:\S+/)?.[0] ?? r3.slice(-120));
   const board1 = await boardText(project.id);
@@ -188,34 +188,34 @@ try {
   // （真模型也会，所以负面用例必须给它一段干净上下文才测得准）
   const negConv1 = (await req('POST', `/api/groups/${encodeURIComponent(group.id)}/sessions`, {})).body.conversation.id;
   const r4 = await sayInGroup(negConv1,
-    `@${pm2.name} 【建卡】${JSON.stringify({ title: '越权子卡', status: '待办', projectId: project.id, assigneePersonaId: dev.id, parentTaskId: parent.id })} 试着拆`);
+    `@${pm2.name} 【建卡】${JSON.stringify({ title: '越权子卡', status: 'todo', projectId: project.id, assigneePersonaId: dev.id, parentTaskId: parent.id })} 试着拆`);
   check('被拒 403 E2057', /FAKE-CARD:403:E2057/.test(r4), r4.match(/FAKE-CARD:\S+/)?.[0] ?? r4.slice(-120));
   check('越权子卡没建出来', !(await boardText(project.id)).includes('越权子卡'), '');
 
   console.log('\n⑤ 群助手把子卡派给自己 → 400 E2059（自拆自接会把任务卡死）');
   const negConv2 = (await req('POST', `/api/groups/${encodeURIComponent(group.id)}/sessions`, {})).body.conversation.id;
   const r5 = await sayInGroup(negConv2,
-    `@${pm.name} 【建卡】${JSON.stringify({ title: '自己拆给自己', status: '待办', projectId: project.id, assigneePersonaId: pm.id, parentTaskId: parent.id })} 试着拆`);
+    `@${pm.name} 【建卡】${JSON.stringify({ title: '自己拆给自己', status: 'todo', projectId: project.id, assigneePersonaId: pm.id, parentTaskId: parent.id })} 试着拆`);
   check('被拒 400 E2059 且说清原因', /FAKE-CARD:400:E2059/.test(r5) && /派给自己/.test(r5), r5.match(/FAKE-CARD:\S+/)?.[0] ?? r5.slice(-120));
 
   console.log('\n⑦ 运行钥匙改卡：自己建的卡 / 自己当群助手的卡能改；别人不能（PM 能闭环 "Next"）');
   // 7a. 群助手（当前群助手=贺韬）改一张**团队的卡**：允许
   const manage1 = (await req('POST', `/api/projects/${project.id}/tasks`, {
-    title: '待取消卡', status: '想法', assigneeGroupId: group.id,
+    title: '待取消卡', status: 'idea', assigneeGroupId: group.id,
   })).body.task;
   const convM1 = (await req('POST', `/api/groups/${encodeURIComponent(group.id)}/sessions`, {})).body.conversation.id;
-  const r7a = await sayInGroup(convM1, `@${pm.name} 【改卡】${JSON.stringify({ id: manage1.id, body: { status: '已取消' } })} 取消它`);
-  check('群助手能改团队的卡（取消）', /FAKE-PATCH:200::已取消/.test(r7a), r7a.match(/FAKE-PATCH:\S+/)?.[0] ?? r7a.slice(-120));
-  check('卡真的被取消了', (await getTask(manage1.id))?.status === '已取消', String((await getTask(manage1.id))?.status));
+  const r7a = await sayInGroup(convM1, `@${pm.name} 【改卡】${JSON.stringify({ id: manage1.id, body: { status: 'cancelled' } })} 取消它`);
+  check('群助手能改团队的卡（取消）', /FAKE-PATCH:200::cancelled/.test(r7a), r7a.match(/FAKE-PATCH:\S+/)?.[0] ?? r7a.slice(-120));
+  check('卡真的被取消了', (await getTask(manage1.id))?.status === 'cancelled', String((await getTask(manage1.id))?.status));
 
   // 7b. 别的 PM（还不是本群群助手）改团队的卡：403
   const manage2 = (await req('POST', `/api/projects/${project.id}/tasks`, {
-    title: '不该被改的卡', status: '想法', assigneeGroupId: group.id,
+    title: '不该被改的卡', status: 'idea', assigneeGroupId: group.id,
   })).body.task;
   const convM2 = (await req('POST', `/api/groups/${encodeURIComponent(group.id)}/sessions`, {})).body.conversation.id;
-  const r7b = await sayInGroup(convM2, `@${pm2.name} 【改卡】${JSON.stringify({ id: manage2.id, body: { status: '已取消' } })} 取消它`);
+  const r7b = await sayInGroup(convM2, `@${pm2.name} 【改卡】${JSON.stringify({ id: manage2.id, body: { status: 'cancelled' } })} 取消它`);
   check('别的 PM 改不了（403 E4034）', /FAKE-PATCH:403:E4034/.test(r7b), r7b.match(/FAKE-PATCH:\S+/)?.[0] ?? r7b.slice(-120));
-  check('卡没被改动', (await getTask(manage2.id))?.status === '想法', String((await getTask(manage2.id))?.status));
+  check('卡没被改动', (await getTask(manage2.id))?.status === 'idea', String((await getTask(manage2.id))?.status));
 
   // 7c. 运行钥匙改卡只开放四样字段（范围 / 验收 / 流程归属仍归人）
   const convM3 = (await req('POST', `/api/groups/${encodeURIComponent(group.id)}/sessions`, {})).body.conversation.id;
@@ -228,14 +228,14 @@ try {
   const subId = sub?.manual_id;
   check('找得到 ③ 拆出来的子卡', !!subId, String(subId ?? ''));
   const convM4 = (await req('POST', `/api/groups/${encodeURIComponent(group.id)}/sessions`, {})).body.conversation.id;
-  const r7d = await sayInGroup(convM4, `@${pm.name} 【改卡】${JSON.stringify({ id: subId, body: { status: '待办' } })} 退回去返工`);
+  const r7d = await sayInGroup(convM4, `@${pm.name} 【改卡】${JSON.stringify({ id: subId, body: { status: 'todo' } })} 退回去返工`);
   check('建卡人（PM）能把自己建的卡退回待办/重跑', /FAKE-PATCH:200:/.test(r7d), r7d.match(/FAKE-PATCH:\S+/)?.[0] ?? r7d.slice(-120));
 
   console.log('\n⑥ 动态取群助手：换群助手后，派已建的卡跟着**新**群助手走');
   const card2 = (await req('POST', `/api/projects/${project.id}/tasks`, {
-    title: '团队卡：换人后再派', status: '待办', assigneeGroupId: group.id,
+    title: '团队卡：换人后再派', status: 'todo', assigneeGroupId: group.id,
   })).body.task;
-  check('卡先建着（待办、不派）', card2?.status === '待办', String(card2?.status));
+  check('卡先建着（待办、不派）', card2?.status === 'todo', String(card2?.status));
   const swapped = await req('PATCH', `/api/groups/${encodeURIComponent(group.id)}`, { assistantPersonaId: pm2.id });
   check('群助手换成沈丹青', swapped.status === 200, `${swapped.status} ${swapped.body.error ?? ''}`);
   const started = await req('PATCH', `/api/projects/tasks/${card2.id}`, { startNow: true });
@@ -250,7 +250,7 @@ try {
     while (Date.now() < until) {
       await sleep(250);
       const t = await getTask(card2.id);
-      if (t?.runId || t?.status === '进行中') { dispatched = true; break; }
+      if (t?.runId || t?.status === 'doing') { dispatched = true; break; }
     }
   }
   check('派发出去了（换人后仍能派）', dispatched, `${started.status} ${started.body.error ?? ''}`);

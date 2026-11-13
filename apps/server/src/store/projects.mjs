@@ -98,7 +98,7 @@ function ensureProjects() {
       projectId          TEXT NOT NULL,
       title              TEXT NOT NULL,
       description        TEXT NOT NULL DEFAULT '',
-      status             TEXT NOT NULL DEFAULT '待办',
+      status             TEXT NOT NULL DEFAULT 'todo',
       assigneePersonaId  TEXT,
       conversationId     TEXT,
       runId              TEXT,
@@ -170,7 +170,7 @@ ensureColumn('project_tasks', 'notifiedFor', 'notifiedFor TEXT');
  * 任务状态更名（2026-10-24 状态体系重设计）：「待确认」→「待验收」，workflow_tasks
  * 那张表的同一条迁移在 store/db.mjs（来龙去脉写在那边）。幂等：改过之后匹配不到，重启不再动。
  */
-db.prepare(`UPDATE project_tasks SET status = '待验收' WHERE status = '待确认'`).run();
+db.prepare(`UPDATE project_tasks SET status = 'review' WHERE status = '待确认'`).run();
 
 /*
  * 流程的一步 ↔ 一张卡（2026-10-19）：`sourceKey` = `flow:<runId>:<nodeId>:<visit>`，

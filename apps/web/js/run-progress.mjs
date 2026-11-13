@@ -285,7 +285,7 @@ export function applyRunEvent(state, evt, now = Date.now()) {
     case '__done': {
       state.done = true;
       state.status = String(evt.status ?? '');
-      state.phase = evt.status === '失败' ? 'error' : 'done';
+      state.phase = evt.status === 'failed' ? 'error' : 'done';
       if (Number.isFinite(evt.elapsedMs)) state.finalElapsedMs = evt.elapsedMs;
       closeRunning(state);
       break;

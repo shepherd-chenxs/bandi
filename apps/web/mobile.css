@@ -89,6 +89,22 @@
   html { -webkit-tap-highlight-color: transparent; }
   /* 去掉 300ms 点击延迟（配合上面的按压态，点击才"跟手"） */
   a, button, .item, .wb-tile, .mb-tab { touch-action: manipulation; }
+
+  /* 主区滚动容器**不预留滚动条槽位**（2026-11-11 用户截图："右边空了一块"）。
+     style.css 给这几个容器加了 `scrollbar-gutter: stable`，为桌面防"滚动条出现/
+     消失把内容挤一下"；它是**常驻预留**（跟有没有滚动条无关），11px。手机上滚动条
+     本来就是 overlay，这 11px 纯属白占 —— 一旦页面把背景画在子元素上（如「我的」的
+     `.me-body` 铺白 + 渐变），右边就露一条页底灰，从上贯穿到底。"导航条右边空一块"
+     那个老 bug（#pluginView 因此被摘出这条规则）是同一个病。
+     手机上不要槽位、也不要可见滚动条：宽度恒定，滚不滚都不会挤内容，
+     老规则本来要防的抖动也就不存在了。 */
+  #detailView, #settingsView, #orgView, #inboxView, #groupView, #placeholderView {
+    scrollbar-gutter: auto;
+    scrollbar-width: none;
+  }
+  #detailView::-webkit-scrollbar, #settingsView::-webkit-scrollbar,
+  #orgView::-webkit-scrollbar, #inboxView::-webkit-scrollbar,
+  #groupView::-webkit-scrollbar, #placeholderView::-webkit-scrollbar { width: 0; height: 0; }
 }
 
 /* ============================================================ 2. 900px 档：主从折叠 */
@@ -125,7 +141,9 @@
   body:not(.mb-detail-open):not(.no-list) main { display: none; }
 
   /*
-   * 底部四 tab 在 **900 档**就接管一级导航（2026-10-28 修 P0）。
+   * 底部 tab 在 **900 档**就接管一级导航（2026-10-28 修 P0）。
+   * 四颗：工作台 / 通讯录 / 会话 / 我的。（2026-11-11：信箱试过第 5 颗，用户拍板
+   * 挪到「我的」页里当一行入口，tab 栏保持四颗 —— 别再补回来。）
    *
    * 原来 tabbar 只在 600 档出现，而 `.rail` 在 900 档就收掉了 —— 于是 601–900
    * （iPad 竖屏 768、手机横屏 844/932、桌面半屏窗口）这一段**一个一级导航都没有**，
@@ -1227,7 +1245,7 @@
 
 @media (max-width: 600px) {
   /*
-   * 底部四 tab 的**显示**在 900 档（见上面那条 P0 修复注释）；
+   * 底部 tab 的**显示**在 900 档（见上面那条 P0 修复注释）；
    * 这一档只做紧凑化。详情页照旧自动隐藏（mb-detail-open 的行模板里没有它）。
    */
 
@@ -1728,45 +1746,101 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
         竖排居中 hero 改成横排 —— 渐变只做一层薄薄的背景，头像贴左、身份信息贴右，
         高度收掉（78 头像+双行 → 64 头像单行块），页面更早进入卡片列表，不再一屏
         只看到一个大头像。 */
+  /* ① 通栏英雄区（**2026-11-11 深夜第三版**）。
+        上一版（方案 B「档案卡」）在对照稿里成立，用户拿真机一看："这个页面卡片式
+        布局，在真机上不好看，很小家子气"。原因不在配色，在**卡的语法本身**：
+        左右各留 20px 的圆角小盒 + 一圈投影，内容又只有三行 —— 页面被切成"两个
+        浮在灰底上的盒子"，读起来像组件库 demo，不像一整页。
+        这一版把卡整个拆掉：整页一片 surface（见 .me-body），辉光直接铺在这片面
+        上、通栏到底，列表也通栏、只用 hairline 分行。这是微信「我」/ Telegram
+        设置页的语法 —— 没有卡边、圆角、投影，页面才立得住。 */
   body.mb-narrow #settingsView .me-hero-sec {
-    margin: -20px -24px 0;
-    padding: calc(20px + env(safe-area-inset-top, 0px)) 20px 52px;
-    background:
-      radial-gradient(90% 76% at 80% -14%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 60%),
-      radial-gradient(130% 90% at 20% -20%, color-mix(in srgb, var(--accent) 24%, transparent), transparent 56%),
-      var(--mb-cvbg, var(--mb-page, var(--bg)));
+    margin: 0;
+    padding: 0;
+    background: none;
   }
-
-  /* 身份信息横排：头像在左，姓名/身份章/说明贴右、左对齐（iOS 设置页个人资料行
-     的读法；桌面 .me-hero-card 本来就是这个结构，这里不再改成竖排） */
   body.mb-narrow #settingsView .me-hero-sec .me-hero-card {
     border: 0;
     border-radius: 0;
-    background: transparent;
-    box-shadow: none;
-    align-items: center;
-    gap: 14px;
-    padding: 2px 0 0;
+    /* 2026-11-11 深夜第五版：顶部那片空不要了（用户圈图："这个上面太空了"）。
+       上一版是"封面式"读法 —— min-height 248 + `align-content:end` 把三行压到下缘，
+       头上留 ~78px 纯辉光。在对照稿里那叫留白，在真机 390 上就是**状态栏到头像
+       之间一大段什么都没有**，页面像没加载完。
+       现在改成微信「我」的紧凑度：hero 高度由内容决定，上留 34（够让辉光探出
+       一点、又不跟状态栏挤在一起），头像顶对齐、下面紧接 chip 行，
+       hero 总高 ~188 —— 视觉重心回到头像本身，而不是头像上方那片空。 */
+    min-height: 0;
+    padding: calc(34px + env(safe-area-inset-top, 0px)) 20px 28px;
     text-align: left;
+    background: none;
+    box-shadow: none;
   }
-  body.mb-narrow #settingsView .me-hero-sec .me-ava {
-    width: 64px;
-    height: 64px;
-    line-height: 64px;
-    font-size: 26px;
-    /* 光环：一圈极淡的"环"压在头像外 —— 把头像从渐变底上托出来，深浅主题
-       都成立；落影给"浮在页上"的立体感 */
+  /* 卡内网格：头像 / 身份 / 信箱 一行，chip 行跨满整行。
+     用 grid 而不是继续 flex + wrap：信箱按钮要稳定停在右上角（flex 里它会被
+     chip 行挤下去），而 chip 行必须从左边沿起排。 */
+  body.mb-narrow #settingsView .me-hc {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: start;
+    /* 内容顶对齐（2026-11-11 第五版：原 `align-content:end` 让 hero 上半段空着，
+       就是用户圈的那块）。grid 的 align-content 只在容器有余高时才起作用，
+       hero 已改成内容定高，这里保留 start 兜底，免得以后又有人加 min-height。 */
+    align-content: start;
+    column-gap: 16px;
+  }
+  body.mb-narrow #settingsView .me-hc .me-ava {
+    width: 84px;
+    height: 84px;
+    line-height: 84px;
+    font-size: 33px;
+    /* 光环：一圈极淡的"环"压在头像外，把它从辉光上托出来；落影给"浮在页上"的
+       立体感 —— 没有卡了，这点层次得由头像自己给 */
     box-shadow: 0 0 0 4px color-mix(in srgb, var(--text) 8%, transparent),
-                0 8px 22px color-mix(in srgb, var(--accent) 30%, transparent);
+                0 10px 26px color-mix(in srgb, var(--accent) 28%, transparent);
   }
-  body.mb-narrow #settingsView .me-hero-sec .me-who { align-items: flex-start; gap: 3px; }
-  body.mb-narrow #settingsView .me-hero-sec .me-name { justify-content: flex-start; }
-  body.mb-narrow #settingsView .me-hero-sec .me-name b { font-size: 21px; }
+  body.mb-narrow #settingsView .me-hc .me-who { align-items: flex-start; gap: 3px; padding-top: 12px; }
+  body.mb-narrow #settingsView .me-hc .me-name { justify-content: flex-start; }
+  body.mb-narrow #settingsView .me-hc .me-name b { font-size: 27px; letter-spacing: -.015em; }
   /* 2026-11-05 用户："字体粗细呢" —— 身份章 400 → 500：主流 App 的 badge 都是
      中黑档，400 在深色底上发飘；名字 600 / 行文字 400 是 iOS 档，不动 */
   body.mb-narrow #settingsView .me-hero-sec .me-role { font-weight: 500; }
-  /* 说明行：13.5 次色一行 —— 横排后它是姓名底下的副行，比竖排时代的 14 收半档 */
-  body.mb-narrow #settingsView .me-hero-sec .me-meta { font-size: 13.5px; }
+  body.mb-narrow #settingsView .me-hc .me-meta { font-size: 15px; }
+  /* chip 行：整行铺开（含头像下方），不缩在第 2 列 —— 第 2 列只有 ~200px，
+     设备名那一枚会被挤到第二行，身份区凭空多出一行碎块。 */
+  body.mb-narrow #settingsView .me-chips {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 15px;
+  }
+  body.mb-narrow #settingsView .me-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 27px;
+    padding: 0 10px;
+    border-radius: 7px;
+    font-size: 12px;
+    color: var(--mb-text-2, var(--dim));
+    background: color-mix(in srgb, var(--text) 6%, transparent);
+  }
+  body.mb-narrow #settingsView .me-chip svg { width: 12px; height: 12px; flex: none; }
+  body.mb-narrow #settingsView .me-chip.ac {
+    color: var(--mb-tint, var(--accent));
+    background: color-mix(in srgb, var(--mb-tint, var(--accent)) 12%, transparent);
+    font-weight: 500;
+  }
+  /* 信箱从"裸图标"变圆形钮：白面上一颗 40px 的圆面，未读角标压在它外缘 ——
+     位置稳定，也不用靠颜色提示"这里能点"。 */
+  body.mb-narrow #settingsView .me-hc .me-inbox-icon {
+    align-self: start;
+    width: 40px;
+    height: 40px;
+    margin-left: 0;
+    border-radius: 50%;
+    background: var(--mb-press, var(--active));
+  }
 
   /* 字阶对齐主流 App（同上反馈）：属性行 15/14 → 16/15（微信/美团"标签+详情"
      行的读法，iOS 表格行是 17），等宽地址 13 → 14 —— 再大就顶到换行了 */
@@ -1774,12 +1848,74 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
   body.mb-narrow #settingsView .me-v { font-size: 15px; }
   body.mb-narrow #settingsView .me-v-mono { font-size: 14px; }
 
-  /* ② 卡片上浮：hero 之后的第一张卡（设备形态 = 「这台设备」，账号形态 = 退场行）
-     压上渐变下缘（20px 分节距 - 36px 负 margin = 净上浮 16px）；relative 把它
-     抬到 hero 背景之上 */
+  /* ② 第一节清单与英雄区的接缝：没有卡了，两者都贴在同一个 surface 上，
+        分界只靠一条通栏 hairline —— 这也正是 iOS / Telegram 设置页的分节法。 */
   body.mb-narrow #settingsView .me-hero-sec + .set-sec {
     position: relative;
-    margin-top: -36px;
+    margin-top: 0;
+  }
+
+  /* ②b 设置清单（2026-11-11 深夜第四版：按「微信 · 我」的分组语法重排）
+        微信那一页不是"卡"，是**分组块**：一块满宽、无圆角、无描边、无投影的白，
+        与上一块之间隔 10px 页底灰，块内行与行之间一条内缩 20 的 hairline。
+        和第三版被否掉的"12px 圆角小盒子"是两回事 —— 那个输在"小 + 浮"，
+        这个赢在"满宽 + 只靠灰间隔分组"（用户 23:1x 截图："参考微信我的页面的布局"）。 */
+  body.mb-narrow #settingsView .me-one-sec { margin-top: 10px; }
+  /* 上面那句会被 `#settingsView .me-hero-sec + .set-sec { margin-top:0 }` 压掉
+     （那条多一个类，特异性更高）—— 分组块的 10px 灰间隔得自己再抬一档。 */
+  body.mb-narrow #settingsView .me-hero-sec + .me-one-sec { margin-top: 10px; }
+  body.mb-narrow #settingsView .me-one-box {
+    border: 0;
+    border-radius: 0;
+    /* 白块浮在页底灰上 —— 块与块之间那道 10px 灰才是分组信号，不再靠描边 */
+    background: var(--mb-surface, var(--side));
+    box-shadow: none;
+    overflow: hidden;
+  }
+  /* 行的左右留白自己给（20 = 页面左右留白，与 hero 的 20 一条线）；
+     64 是微信表格行的档（56 在 17px 字下偏挤，72 又太松） */
+  body.mb-narrow #settingsView .me-one-box .me-kv {
+    min-height: 64px;
+    padding: 12px 20px;
+  }
+  body.mb-narrow #settingsView .me-one-box .me-k { font-size: 17px; }
+  body.mb-narrow #settingsView .me-one-box .me-v { font-size: 15.5px; }
+  /* 整页一片 surface（2026-11-11 深夜第三版）：没有卡之后，页面本身就得是那张
+     "面" —— 否则 hero 与列表浮在灰底上，还是两个盒子。`min-height:100%` 让这片白
+     一路铺到视口底（内容不到一屏时下方不是"空洞"，是页面），版本行由 auto 推到
+     底部收口。
+     `:has(.me-body)` 那一条把 #settingsView 的 40px 底部内边距退掉 —— 留着它白底
+     会在最后一屏上方 40px 处断掉，露出一条灰边。:has 在本仓已用过（§手机设置页）。 */
+  body.mb-narrow #settingsView:has(.me-hero-sec) { padding-bottom: 0; }
+  /* 右侧那条缝（2026-11-11 23:1x 用户截图圈出）由 §1 统一处理：手机形态所有主区
+     滚动容器都不预留 `scrollbar-gutter` 槽位。这里只补背景兜底 —— 万一别的浏览器
+     仍要占位，露出来的也是同一片页底灰而不是更亮的一条白。 */
+  body.mb-narrow #settingsView:has(.me-hero-sec) { background: var(--mb-cvbg, var(--mb-page, var(--bg))); }
+  /* ⚠️ 只认带 .me-hero-sec 的那个 me-body ——「我的 › 设置」子页（openMeSet）也用
+     `detail-body me-body`，但它要的是"灰底 + 分组卡"，被这条通栏规则套上就散了。 */
+  body.mb-narrow #settingsView .me-body:has(> .me-hero-sec) {
+    display: flex;
+    flex-direction: column;
+    min-height: 100%;
+    /* 反吃 .detail-body 的 20/24 内边距：hero 与列表都通栏，左右留白由各自给 */
+    padding: 0;
+    /* 整页一层极淡的 tint：从顶部右上角铺开、到 ~70% 高度化尽。
+       2026-11-11 第四版：底下那层从 surface 换成**页底灰** —— 微信「我」就是灰底，
+       白只留给分组块（封面区那点渐变落在灰上也不脏，反而比落在纯白上柔和）。 */
+    background:
+      radial-gradient(140% 78% at 96% -12%, color-mix(in srgb, var(--mb-tint, var(--accent)) 25%, transparent), transparent 60%),
+      radial-gradient(120% 66% at -4% -18%, color-mix(in srgb, var(--mb-tint, var(--accent)) 13%, transparent), transparent 58%),
+      var(--mb-cvbg, var(--mb-page, var(--bg)));
+  }
+  body.mb-narrow #settingsView .me-body > .set-sec { flex: none; }
+  body.mb-narrow #settingsView .me-foot {
+    margin: 26px 0 0;
+    padding-bottom: 8px;
+    text-align: center;
+    font-size: 12px;
+    letter-spacing: .02em;
+    font-variant-numeric: tabular-nums;
+    color: var(--mb-text-3, var(--dim));
   }
 
   /* ③ 组头改"卡外灰小字"：跟设置页 .mb-set-head 同字阶 —— 它是分组名，
@@ -1798,7 +1934,7 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     content: '';
     position: absolute;
     top: 0;
-    left: 16px;
+    left: 20px;
     right: 0;
     height: 1px;
     background: var(--line);
@@ -1806,9 +1942,9 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
 
   /* 退场行 iOS 读法：居中、加大、整行可点 —— "走人"的分量由居中红字给，
      不靠按钮色块；按压反馈照 App 的规矩来。17 = iOS 表格行字阶（2026-11-05
-     用户反馈"字体偏小"后从 16 提上来）。高度与「主题」行同款 58px
-     （2026-11-08 用户：两行看着不一致、倾向高一些）—— 不靠 padding 碰运气，
-     min-height + flex 居中，和 .me-theme-row 一把尺子 */
+     用户反馈"字体偏小"后从 16 提上来）。高度 58：它现在是「我的 › 设置」子页的
+     最后一行（2026-11-11 起「我的」页不再有主题行可对齐），不靠 padding 碰运气，
+     min-height + flex 居中。 */
   body.mb-narrow #settingsView .me-out {
     display: flex;
     align-items: center;
@@ -1825,69 +1961,12 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     background: color-mix(in srgb, var(--bad) 10%, transparent);
   }
 
-  /* ④ 外观卡（2026-11-05 用户：「我的页面加一个主题选择的功能」，同日改：
-        「也改成这种选项卡的方式」= 桌面偏好设置那张「主题 + 分段选项卡」的截图）。
-        卡面与「这台设备」同款；一行 layout：左标签 16px、右侧 .seg 分段 ——
-        结构与桌面 .set-row + .seg 完全一致，只是尺寸按手机档放大。 */
-  body.mb-narrow #settingsView .me-theme-box {
-    border: 0;
-    border-radius: var(--mb-r-card, 12px);
-    background: var(--mb-surface, var(--side));
-    box-shadow: 0 0 0 0.5px color-mix(in srgb, var(--text) 9%, transparent);
-    overflow: hidden;
-  }
-  body.mb-narrow #settingsView .me-theme-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    /* 与「退出登录」行同款 58px（2026-11-08 用户：两行看着不一致、倾向高一些） */
-    min-height: 58px;
-    padding: 8px 16px;
-    box-sizing: border-box;
-  }
-  body.mb-narrow #settingsView .me-theme-label {
-    font-size: 16px;
-    line-height: 1.35;
-    color: var(--text);
-    flex: none;
-  }
-  /* 分段控件：底座 = 按压色一档灰（比卡面沉一点），选中格 = 卡面白浮起 ——
-     桌面 .seg 同一读法；触控目标压到 32 高（行 52 里上下留白，热区不小） */
-  body.mb-narrow #settingsView .me-theme-seg {
-    flex: none;
-    gap: 2px;
-    padding: 2px;
-    border: 0;
-    border-radius: 9px;
-    background: var(--mb-press, var(--active));
-  }
-  body.mb-narrow #settingsView .me-theme-seg button {
-    border: 0;
-    border-radius: 7px;
-    background: transparent;
-    color: var(--mb-text-2, var(--dim));
-    font: inherit;
-    font-size: 13px;
-    line-height: 1;
-    padding: 10px 13px;
-    min-height: 34px;
-    box-sizing: border-box;
-    cursor: pointer;
-  }
-  body.mb-narrow #settingsView .me-theme-seg button:active { opacity: .6; }
-  body.mb-narrow #settingsView .me-theme-seg button.on {
-    background: var(--mb-surface, var(--panel));
-    color: var(--text);
-    font-weight: 500;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.14);
-  }
-  body.mb-narrow #settingsView .me-theme-sec .set-head { margin-bottom: 7px; }
-  body.mb-narrow #settingsView .me-theme-sec .set-head b {
-    font-size: 13px;
-    font-weight: 400;
-    color: var(--dim);
-  }
+  /* ④ 外观卡（2026-11-05）—— **2026-11-11 深夜第四版整段退场**：
+        当时是「左标签 + 右侧分段选项卡」（用户在桌面偏好设置那张截图上一眼拍的）。
+        现在这一行按「微信 · 我」的语法收成「主题 ‹值› ›」，点整行弹底部选择
+        （见 settings.mjs `#meThemeRow`）；分段控件在手机「我的」页不再出现。
+        DOM 已改，这里的 .me-theme-box / -row / -label / -seg / -sec 全部没有引用，
+        删掉而不是留着 —— 留着下次会有人照着它改。 */
 
   /* ⑤ 通用 · 清除缓存（2026-11-06）：卡面复用「这台设备」的 .me-dev-box，
         行是 .me-kv 的 button 形态 —— 按钮默认样式全退掉，触控目标抬到 52 高，
@@ -1970,6 +2049,108 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
   /* ③ 外网访问状态点（.me-relay / .me-dot-*）已随 frp 内置下线删除（2026-11-08）。 */
 }
 
+/* ── 15d. 「我的 › 设置」子页导航栏（2026-11-11，用户："设置页加一个导航栏。
+   返回按钮放到导航栏左侧，使用图标按钮"）─────────────────────────────────
+   旧版返回是一张「‹ 返回」卡（.me-set-back-sec，已删），看着像多了一行内容 ——
+   收进导航栏。规格照整页头（body.no-list .detail-head，§3 同一把尺子）：
+   --mb-nav 高 + safe-area、玻璃底 + 0.5px hairline、sticky 吸顶；
+   返回 = 左侧纯图标钮（.mb-back 同款 accent chevron，22px）；
+   标题「设置」居中 17/600 —— 三列 grid（48/1fr/48）让图标钮不挤偏标题。
+   全部关在 mb-narrow + #settingsView 里，桌面一个像素不动。 */
+@media (max-width: 900px) {
+  body.mb-narrow #settingsView .me-set-nav {
+    position: sticky;
+    top: 0;
+    z-index: 30;
+    display: grid;
+    grid-template-columns: 48px 1fr 48px;
+    align-items: center;
+    height: calc(var(--mb-nav, 52px) + env(safe-area-inset-top, 0px));
+    padding: env(safe-area-inset-top, 0px) 0 0;
+    box-sizing: border-box;
+    background: var(--mb-nav-glass, var(--side));
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    backdrop-filter: blur(20px) saturate(180%);
+  }
+  /* hairline：与列表页/聊天头/整页头同一条 0.5px 线（sticky 定位元素，::after 贴底） */
+  body.mb-narrow #settingsView .me-set-nav::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 0.5px;
+    background: var(--mb-hairline, var(--line));
+    pointer-events: none;
+  }
+  body.mb-narrow #settingsView .me-set-back {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    margin-left: 2px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--accent, #3b6ef5);
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  body.mb-narrow #settingsView .me-set-back:active { opacity: .5; }
+  body.mb-narrow #settingsView .me-set-back svg { width: 22px; height: 22px; }
+  body.mb-narrow #settingsView .me-set-title {
+    min-width: 0;
+    text-align: center;
+    font-size: 17px;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* ── 「我的」hero 右缘的信箱图标钮（2026-11-11，用户："在信息区加一个信箱图标，
+     点击之后跳转到信箱页面"）─────────────────────────────────────────────
+     hero 是 flex 横排（头像 + 身份信息），图标钮 margin-left:auto 推到右缘、
+     垂直居中（红框位置）。触控 36px、图标 22px、颜色跟 hero 行文字一档（--mb-text-2）；
+     右上角未读红点（accent 红药丸）压在图标外缘 —— 与左栏角标同源同读法。 */
+  body.mb-narrow #settingsView .me-inbox-icon {
+    position: relative;
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    margin-left: auto;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--mb-text-2, var(--dim));
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  body.mb-narrow #settingsView .me-inbox-icon:active { opacity: .5; }
+  body.mb-narrow #settingsView .me-inbox-icon svg { width: 22px; height: 22px; }
+  body.mb-narrow #settingsView .me-inbox-dot {
+    position: absolute;
+    top: -2px;
+    right: -4px;
+    min-width: 16px;
+    height: 16px;
+    box-sizing: border-box;
+    padding: 0 4px;
+    border-radius: 999px;
+    background: var(--bad, #e5484d);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 16px;
+    text-align: center;
+  }
+  body.mb-narrow #settingsView .me-inbox-dot[hidden] { display: none; }
+}
+
 /*
  * mobile-patch.css —— 消息页 iOS 化（视觉 Phase 1 + 体验 Phase 2）补丁片段
  * ══════════════════════════════════════════════════════════════════════════════
@@ -2016,6 +2197,15 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     --mb-fill: rgba(120, 120, 128, 0.24);
     --mb-press: rgba(120, 120, 128, 0.36);
     --mb-chatbg: #000000;
+    /*
+     * 底部 tab 栏的**实色**（2026-11-11 用户："底部导航栏跟系统导航栏改成一个颜色"）。
+     * 原来 tab 栏是 72% 的玻璃，压在页面底上合成出 ~#F5F5F9；而 Android 15
+     * edge-to-edge 下系统导航栏那条带（WebView 之外、由窗口背景上色）是纯白 ——
+     * 一灰一白，屏幕最底部永远有一道缝。
+     * 现在给一个不透明的 token，tab 栏用它；壳那边通过 BandiShell.setSystemBarColor
+     * 拿到同一个值去刷窗口背景（见 shell.mjs applyTheme）—— 两边同源，才不会又飘。
+     */
+    --mb-chrome: #1C1C1E;
     --mb-nav-glass: rgba(28, 28, 30, 0.72);
     --mb-hairline: rgba(84, 84, 88, 0.65);
     --mb-text: #FFFFFF;
@@ -2060,6 +2250,12 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     --mb-fill: rgba(118, 118, 128, 0.12);
     --mb-press: rgba(118, 118, 128, 0.22);
     --mb-chatbg: #FFFFFF;
+    /* 底部 tab 栏实色（浅色）：2026-11-11 深夜用户拍了纯白（"改成白色，看看效果"）——
+       原来那档 iOS 系统灰（#F2F2F7）跟页面底灰一个色，栏"消失"在页面里，只有一根
+       hairline 分界；白色则让栏从灰底上浮起来，图标也更亮。
+       系统导航栏那条带由壳刷成同一个值 —— 见 shell.mjs applyTheme 与
+       BandiShell.setSystemBarColor。 */
+    --mb-chrome: #FFFFFF;
     --mb-nav-glass: rgba(242, 242, 247, 0.72);
     --mb-hairline: rgba(60, 60, 67, 0.12);
     --mb-text: #000000;
@@ -2312,11 +2508,12 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
 
 @media (max-width: 900px) {
   .mb-tabbar {
-    background: var(--mb-nav-glass, var(--side));
+    /* 实色（2026-11-11）：原来这里是 --mb-nav-glass 玻璃 —— 底下透内容、合成出来
+       比纯白的系统导航栏带灰一档，屏幕最底下就有一条色差。玻璃的观感收益本来也
+       只剩"滚动时透一点点列表"，值不上这条缝；改成 ops 实色，跟原生那条带同值。 */
+    background: var(--mb-chrome, var(--side));
     border-top: 0;
     position: relative;
-    -webkit-backdrop-filter: blur(20px) saturate(180%);
-    backdrop-filter: blur(20px) saturate(180%);
   }
   /* 顶边 hairline：跟导航栏/输入条对称，三条栏都用同一种线 */
   .mb-tabbar::before {
@@ -2642,6 +2839,10 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
  *
  * 菜单项：不显示（可逆）/ 删除会话（不可逆，红字）—— 危险色只给不可逆的那一个。
  */
+
+/* 桌面：右键菜单是跟光标走的小浮层，没有蒙层（也不需要"点外面收起"的视觉块） */
+.ctx-scrim { display: none; }
+
 @media (max-width: 900px) {
   .ctx-menu {
     position: fixed;
@@ -2662,14 +2863,18 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     animation: mb-sheet-up .2s ease-out;
   }
 
-  /* 蒙层用菜单自己的 ::before（伪元素不是事件目标，点蒙层的 target 落回菜单本体，
-     跟 #attachMenu 的收起判定同一条路 —— app.mjs 那边已经按这个写过一次） */
-  .ctx-menu::before {
-    content: '';
+  /* 蒙层（2026-11-11 从 `.ctx-menu::before` 改成**真元素** `#ctxScrim`）。
+     原来那个 ::before 带 z-index:-1，是想"画在菜单背后"—— 但 `.ctx-menu` 本身是
+     `position:fixed` + `z-index:70`，**自成一个层叠上下文**；在这个上下文里，负 z-index
+     的子元素画在"自己的背景之上、内容之下"，于是那层 40% 的黑把整张 sheet 的白底压成了
+     #999（用户 23:45 截图："这个窗口怎么这么不明显"）—— 弹窗和蒙层糊成一片，看不出来
+     是个弹窗。真元素挂 body 下、z-index 69，天然在菜单下面，也不需要什么技巧。 */
+  .ctx-scrim {
+    display: block;
     position: fixed;
     inset: 0;
+    z-index: 69;                 /* 压过 tabbar/backbar（60），压在菜单（70）下面 */
     background: var(--mb-scrim, rgb(0 0 0 / .45));
-    z-index: -1;
     animation: mb-attach-fade .2s ease-out;
   }
 
@@ -2856,13 +3061,12 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     background: color-mix(in srgb, var(--mb-unread, var(--bad)) 10%, transparent);
   }
 
-  /* hero 辉光跟 tint 走（§15b 写的时候还是桌面 --accent，色相偏深发闷） */
-  body.mb-narrow #settingsView .me-hero-sec {
-    background:
-      radial-gradient(90% 76% at 80% -14%, color-mix(in srgb, var(--mb-tint, var(--accent)) 16%, transparent), transparent 60%),
-      radial-gradient(130% 90% at 20% -20%, color-mix(in srgb, var(--mb-tint, var(--accent)) 24%, transparent), transparent 56%),
-      var(--mb-cvbg, var(--mb-page, var(--bg)));
-  }
+  /* hero 辉光跟 tint 走（§15b 写的时候还是桌面 --accent，色相偏深发闷）。
+     2026-11-11 深夜第三版：卡拆掉、辉光回到通栏 `.me-hero-sec` 自己身上 ——
+     它现在铺在整页那片 surface 上（见 §15b 的 .me-body），底就是 surface。
+     ⚠️ 别再挂到 `.me-hero-card`：那张"卡"已经是透明壳，挂上去会重新长出一块
+     带底的矩形，通栏就断了。 */
+  body.mb-narrow #settingsView .me-hero-sec { background: none; }
 
   /* 属性行分割线与其它卡内线同档：0.5px hairline */
   body.mb-narrow #settingsView .me-kv + .me-kv::before { height: 0.5px; background: var(--mb-hairline, var(--line)); }
@@ -3362,7 +3566,22 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
  */
 @media (max-width: 900px) {
   /* ── §1 顶部导航栏 ──
-     高度 / 玻璃底 / hairline 全部沿用 `body.no-list .detail-head`（§3），这里只定内容层 */
+     高度 / 玻璃底 / hairline 沿用 `body.no-list .detail-head`（§3）；但这一栏**要自己钉死**，
+     不能只靠那一档 —— 2026-11-11 用户截图：标题「任务看板」压在状态 tab 上、返回箭头压着
+     「全部」胶囊、＋ 压着「已阻塞」。病根不是高度写错，是 flex：
+       `#pluginView.kb-page` 是 flex 列，这一栏是 flex 项、默认 flex-shrink:1；
+       下面 `.detail-body` 的基准高是整张列表（几十行、几千 px），容器一装不下就开始收缩，
+       收缩量按基准高比例摊 —— 这一栏的内容全是绝对定位（自身内容高 = 0），
+       于是被一路压到十几像素，标题/两颗钮溢出到底下的筛选条上（高度是"看着还有 52"，
+       实际盒子只剩十几 —— 量渲染盒就知道）。
+     补 `flex:0 0 auto` 让它不参与收缩，高度/安全区顺手自己写一遍：
+     `no-list` 不在时（刷新恢复、转屏）也不塌，与 `.tc-m-head` / `.kb-new-bar` 同一笔账。 */
+  #pluginView .detail-head.kb-l-head {
+    flex: 0 0 auto;
+    height: calc(var(--mb-nav, 52px) + env(safe-area-inset-top, 0px));
+    box-sizing: border-box;
+    padding-top: env(safe-area-inset-top, 0px);
+  }
   .kb-l-navbtn {
     width: 44px;
     height: 44px;
@@ -3548,6 +3767,7 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
   #pluginView.kb-page .detail-body {
     display: flex;
     flex-direction: column;
+    flex: 1 1 auto;      /* 吃掉顶栏/筛选条之外的全部高度 —— 别靠"收缩到正好"（见 §1 那段） */
     min-height: 0;
     overflow: hidden;
     padding: 0;
@@ -5442,3 +5662,74 @@ body.tc-sheet-open .tc-page.tc-m .tc-main-scroll { overflow: hidden; }
      mountSchRepeatCombos 里，只是手机上走不到了。 */
 }
 
+/* ============================================================ 24. 信箱（2026-11-11 主从改版） */
+
+/*
+ * 信箱在手机上就是标准两级导航：左栏清单（第 4 节的通栏行）→ 点一条进详情，
+ * 展开态与「← 返回」栏由 mobile.mjs 的通用主从折叠接管（行有 .item、标题在 .line1 b，
+ * 不用给信箱单独写一套折叠逻辑）。
+ *
+ * 这里只补三处，别把桌面那套左栏间距/字号原样搬到手机上：
+ *   ① 清单行：未读再加一档、第三行灰字按手机字号；
+ *   ② 详情页：`← 返回` 栏已经写着是哪条通知，main 里那条 `.detail-head` 就是重复导航 —— 收掉；
+ *   ③ 详情正文/事实表按手机字阶放大，别用桌面的 13.5px。
+ */
+@media (max-width: 900px) {
+  /* 顶部筛选：跟通栏行同一条左沿（.list-body 在手机上 padding 归零） */
+  .inbox-tabs { padding: 8px var(--mb-pad, 16px) 8px; background: var(--mb-surface, var(--side)); }
+  .inbox-tab { min-height: 34px; padding: 4px 12px; font-size: 13px; }
+
+  /* 未读行：手机上底色比桌面淡一点（一屏行多，重了像整片都选中），
+     靠标题加重 + 「新」标认；选中态/按压态仍归 .item 那套变量。 */
+  .inbox-item.unread { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+  .inbox-item.unread .line1 b { font-weight: 600; }
+  .inbox-item.unread:active { background: var(--mb-press, var(--active)); }
+  .inbox-item.active, .inbox-item.unread.active:hover { background: var(--mb-fill, var(--sel)); }
+  .inbox-item .inbox-sub { margin-top: 3px; font-size: 12px; }
+
+  /* 详情页：返回栏已经写着通知标题，页内那条 50px 的详情头是重复导航 */
+  body.mb-narrow #inboxView .detail-head { display: none; }
+  body.mb-narrow #inboxView .detail-body { padding: 16px var(--mb-pad, 16px) 32px; }
+  body.mb-narrow .inbox-d-title { font-size: 20px; line-height: 1.4; }
+  body.mb-narrow .inbox-d-meta { font-size: 13px; }
+  body.mb-narrow .inbox-d-text { margin-top: 16px; font-size: 16px; line-height: 1.75; }
+  body.mb-narrow .inbox-fact { grid-template-columns: 76px minmax(0, 1fr);
+                               padding: 12px 0; font-size: 14px; }
+  body.mb-narrow .inbox-empty { margin-top: 72px; }
+}
+
+
+
+
+/* ============================================================ 25. 顶部导航栏拍白（2026-11-11） */
+
+/*
+ * 用户："顶部导航栏也改成白色，跟底部导航栏一个色"。
+ *
+ * 顶部这一排栏（列表页头 / 整页头 / 详情返回栏 / 设置子页头 / 全屏选择页头 /
+ * 创建页头 / 任务卡页头）原来都吃 `--mb-nav-glass` —— 浅色下是
+ * rgba(242,242,247,.72) 的玻璃，压在页面底上合成出 #F5F5F9。tab 栏 v240 拍白以后，
+ * 一上一下两种白，页面又被切成"灰头 + 白脚"。
+ *
+ * 口径：顶部这些栏 = `--mb-chrome`（v237 起就是底部 tab 栏那一档，现在是纯白）。
+ * 一个 token 管上下两头，以后调色只改 `--mb-chrome` 一处。
+ *
+ * 底不透明了，blur 就没东西可糊（列表页本来就是"栏一行 / 列表一行"，内容压根
+ * 滚不到栏下面 —— 见 §16.2 那段现状说明），一并摘掉省一层合成。
+ *
+ * 写在文件末尾：上面七条各自的原规则分散在 §4/§15b/§16.2/§20/§21 里，
+ * 同特异性靠"后来赢"，放这儿不用逐条回去改。
+ */
+@media (max-width: 900px) {
+  .list-head,
+  body.no-list .detail-head,
+  body.mb-detail-open .mb-backbar,
+  body.mb-narrow #settingsView .me-set-nav,
+  #mbPicker .mb-picker-bar,
+  .kb-new .kb-new-bar,
+  #pluginView .tc-m-head {
+    background: var(--mb-chrome, var(--mb-surface, var(--side)));
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}

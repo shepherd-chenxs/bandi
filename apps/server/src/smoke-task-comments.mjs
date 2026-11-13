@@ -97,7 +97,7 @@ async function waitRunDone(convId, runId, ms = 20000) {
   while (Date.now() < until) {
     const d = await getConv(convId);
     const r = (d.runs ?? []).find((x) => x.id === runId);
-    if (r && r.status !== '跑中') return r;
+    if (r && r.status !== 'running') return r;
     await sleep(150);
   }
   return null;
@@ -124,16 +124,16 @@ try {
     name: '波哥', runtime: rtId, sandbox: 'danger-full-access', cwd: projRoot, instructions: '你是测试员工。',
   })).body.persona;
   const task = (await req('POST', `/api/projects/${project.id}/tasks`, {
-    title: '写一个网站', description: '', status: '想法', personaId: persona.id,
+    title: '写一个网站', description: '', status: 'idea', personaId: persona.id,
   })).body.task;
-  check('卡建在「想法」', task.status === '想法', task.status);
+  check('卡建在「想法」', task.status === 'idea', task.status);
 
   console.log('\n① 想法阶段发评论：他会回复，但卡不动');
   const d1 = await comment(task.id, '用什么技术方案？');
   check('评论发出去了、起了一次 run', d1.res.status === 202 && !!d1.res.body.runId, String(d1.res.status));
-  check('他那次真跑完了', d1.run?.status === '完成', String(d1.run?.status));
+  check('他那次真跑完了', d1.run?.status === 'done', String(d1.run?.status));
   let t = await getTask(task.id);
-  check('卡还停在「想法」', t.status === '想法', t.status);
+  check('卡还停在「想法」', t.status === 'idea', t.status);
   check('没登记 runId（讨论不是"卡片在跑"）', !t.runId, String(t.runId));
   const msg1 = d1.messages.find((m) => m.role === 'user' && m.text === '用什么技术方案？');
   const reply1 = d1.messages.find((m) => m.role === 'assistant' && m.runId === d1.res.body.runId);
@@ -143,7 +143,7 @@ try {
 
   console.log('\n② 再开一个议题：又聊一波');
   const d2 = await comment(task.id, '网站具体功能是什么？');
-  check('第二议题起了一次 run 并跑完', d2.res.status === 202 && d2.run?.status === '完成', `${d2.res.status}/${d2.run?.status}`);
+  check('第二议题起了一次 run 并跑完', d2.res.status === 202 && d2.run?.status === 'done', `${d2.res.status}/${d2.run?.status}`);
   const all2 = d2.messages;
   const topics2 = all2.filter((m) => m.role === 'user' && !m.parentId);
   check('现在有两个顶层议题', topics2.length === 2, String(topics2.length));
@@ -153,12 +153,12 @@ try {
 
   console.log('\n③ 过几天回到第一个议题补一句（中间已隔了别的议题）');
   const d3 = await comment(task.id, '补充：技术上有个漏洞，发布前要处理', { parentId: msg1.id });
-  check('第三轮 run 跑完', d3.res.status === 202 && d3.run?.status === '完成', `${d3.res.status}/${d3.run?.status}`);
+  check('第三轮 run 跑完', d3.res.status === 202 && d3.run?.status === 'done', `${d3.res.status}/${d3.run?.status}`);
   const msg3 = d3.messages.find((m) => m.role === 'user' && m.text === '补充：技术上有个漏洞，发布前要处理');
   const reply3 = d3.messages.find((m) => m.role === 'assistant' && m.runId === d3.res.body.runId);
   check('我的补充挂在第一议题下', !!msg3 && msg3.parentId === msg1.id, `${msg3?.parentId} vs ${msg1?.id}`);
   check('他的回复也挂在第一议题下（不是最新那条）', !!reply3 && reply3.parentId === msg1.id, `${reply3?.parentId} vs ${msg1?.id}`);
-  check('卡还是「想法」', (await getTask(task.id)).status === '想法');
+  check('卡还是「想法」', (await getTask(task.id)).status === 'idea');
 
   console.log('\n④「只留言，不叫醒他」：只落一条，不起 run');
   const note = await req('POST', `/api/projects/tasks/${task.id}/comments`, { text: '只记一句：周五前别动', note: true, parentId: msg1.id });
@@ -167,37 +167,37 @@ try {
   check('留言落在议题下', afterNote.messages.some((m) => m.text === '只记一句：周五前别动' && m.parentId === msg1.id));
 
   console.log('\n⑤ 想法成熟：状态改成「待办」+ 已指定执行人 → 自动开工');
-  const toTodo = await req('PATCH', `/api/projects/tasks/${task.id}`, { status: '待办' });
+  const toTodo = await req('PATCH', `/api/projects/tasks/${task.id}`, { status: 'todo' });
   check('PATCH 200 且真的派活了（started）', toTodo.status === 200 && toTodo.body.started === true, `${toTodo.status} started=${toTodo.body.started}`);
   check(
     '状态自动推进到「进行中」并登记 runId',
-    toTodo.body.task?.status === '进行中' && !!toTodo.body.task?.runId,
+    toTodo.body.task?.status === 'doing' && !!toTodo.body.task?.runId,
     JSON.stringify(toTodo.body.task && { s: toTodo.body.task.status, r: toTodo.body.task.runId }),
   );
   const execRun = await waitRunDone(toTodo.body.task.conversationId, toTodo.body.task.runId);
-  check('执行 run 跑完', execRun?.status === '完成', String(execRun?.status));
+  check('执行 run 跑完', execRun?.status === 'done', String(execRun?.status));
   t = await getTask(task.id);
-  check('跑完收成「待验收」', t.status === '待验收', t.status);
+  check('跑完收成「待验收」', t.status === 'review', t.status);
   check('执行收尾写进描述（[运行结束]）', String(t.description || '').includes('[运行结束]'), JSON.stringify(t.description));
 
   console.log('\n⑥ 没指定人时改「待办」：只停车不跑；事后补上执行人 → 自动开工');
-  const t2 = (await req('POST', `/api/projects/${project.id}/tasks`, { title: '再写一个站', status: '想法' })).body.task;
-  const toTodo2 = await req('PATCH', `/api/projects/tasks/${t2.id}`, { status: '待办' });
-  check('「待办」但没人 → 不跑、停在待办', toTodo2.status === 200 && !toTodo2.body.started && toTodo2.body.task?.status === '待办',
+  const t2 = (await req('POST', `/api/projects/${project.id}/tasks`, { title: '再写一个站', status: 'idea' })).body.task;
+  const toTodo2 = await req('PATCH', `/api/projects/tasks/${t2.id}`, { status: 'todo' });
+  check('「待办」但没人 → 不跑、停在待办', toTodo2.status === 200 && !toTodo2.body.started && toTodo2.body.task?.status === 'todo',
     `${toTodo2.status} started=${toTodo2.body.started} status=${toTodo2.body.task?.status}`);
   const assign = await req('PATCH', `/api/projects/tasks/${t2.id}`, { personaId: persona.id });
-  check('补上执行人 → 自动开工', assign.status === 200 && assign.body.started === true && assign.body.task?.status === '进行中',
+  check('补上执行人 → 自动开工', assign.status === 200 && assign.body.started === true && assign.body.task?.status === 'doing',
     `${assign.status} ${JSON.stringify(assign.body.task && { s: assign.body.task.status, r: assign.body.task.runId })}`);
   await waitRunDone(assign.body.task.conversationId, assign.body.task.runId);
-  check('第二张卡跑完也收成「待验收」', (await getTask(t2.id)).status === '待验收', (await getTask(t2.id)).status);
+  check('第二张卡跑完也收成「待验收」', (await getTask(t2.id)).status === 'review', (await getTask(t2.id)).status);
 
   console.log('\n⑦ 「想法」+ 指定执行人：不跑（还没决定要不要做）');
-  const t3 = (await req('POST', `/api/projects/${project.id}/tasks`, { title: '第三个想法', status: '想法' })).body.task;
+  const t3 = (await req('POST', `/api/projects/${project.id}/tasks`, { title: '第三个想法', status: 'idea' })).body.task;
   const assignIdea = await req('PATCH', `/api/projects/tasks/${t3.id}`, { personaId: persona.id });
-  check('想法阶段指定人 → 还是想法、没起 run', assignIdea.status === 200 && assignIdea.body.task?.status === '想法' && !assignIdea.body.task?.runId,
+  check('想法阶段指定人 → 还是想法、没起 run', assignIdea.status === 200 && assignIdea.body.task?.status === 'idea' && !assignIdea.body.task?.runId,
     JSON.stringify(assignIdea.body.task && { s: assignIdea.body.task.status, r: assignIdea.body.task.runId }));
   console.log('\n⑧ 三档评论：便签给人看 / 讨论只读 / 执行动手（2026-10-19 用户定）');
-  const t4 = (await req('POST', `/api/projects/${project.id}/tasks`, { title: '三档评论的卡', status: '想法' })).body.task;
+  const t4 = (await req('POST', `/api/projects/${project.id}/tasks`, { title: '三档评论的卡', status: 'idea' })).body.task;
   await req('PATCH', `/api/projects/tasks/${t4.id}`, { personaId: persona.id });
 
   // 便签：只落一条、不起 run；agent 不读（下一次派活**不**把它带进 prompt）
@@ -211,13 +211,13 @@ try {
 
   // 讨论：起 run（假 CLI 回显）。这一轮任务文本里**不该**出现便签内容（便签只给人看）
   const disc = await comment(t4.id, '讨论一句：首页要做什么？', { mode: 'discuss' });
-  check('讨论起 run 且跑完', disc.res.status === 202 && disc.run?.status === '完成', `${disc.res.status}/${disc.run?.status}`);
+  check('讨论起 run 且跑完', disc.res.status === 202 && disc.run?.status === 'done', `${disc.res.status}/${disc.run?.status}`);
   const discEcho = disc.messages.find((m) => m.role === 'assistant' && m.runId === disc.res.body.runId)?.text ?? '';
   check('讨论这轮**没**把便签塞给他', !/便签一句|便签二|老客户端发的便签/.test(discEcho), discEcho.slice(0, 120));
 
   // 执行：起 run（同样的默认链路）
   const exec = await comment(t4.id, '执行一句：开写首页', { mode: 'execute' });
-  check('执行起 run 且跑完', exec.res.status === 202 && exec.run?.status === '完成', `${exec.res.status}/${exec.run?.status}`);
+  check('执行起 run 且跑完', exec.res.status === 202 && exec.run?.status === 'done', `${exec.res.status}/${exec.run?.status}`);
 
   // 便签仍留在会话里给**人**看（不是被删）
   const after = (await getConv(disc.convId)).messages ?? [];
@@ -231,7 +231,7 @@ try {
     normalizeSandbox('codex', 'danger-full-access'));
 
   console.log('\n⑩ 评论附件：上传 + 随评论回显（2026-10-23 用户要求「像聊天面板那样带文件/贴图」）');
-  const t5 = (await req('POST', `/api/projects/${project.id}/tasks`, { title: '带附件的卡', status: '想法' })).body.task;
+  const t5 = (await req('POST', `/api/projects/${project.id}/tasks`, { title: '带附件的卡', status: 'idea' })).body.task;
   await req('PATCH', `/api/projects/tasks/${t5.id}`, { personaId: persona.id });
 
   // 第一次上传会懒建工单会话，返回会话 id 与落盘文件
@@ -265,11 +265,11 @@ try {
 
   console.log('\n⑪ 任务卡锚点：评论区派活必须带上"你在办哪张卡"（2026-10-23 事故：问进度答成了别的任务的 PRD）');
   const t6 = (await req('POST', `/api/projects/${project.id}/tasks`, {
-    title: '锚点验证卡', description: '把归档按钮挪到列表右上角', status: '想法',
+    title: '锚点验证卡', description: '把归档按钮挪到列表右上角', status: 'idea',
   })).body.task;
   await req('PATCH', `/api/projects/tasks/${t6.id}`, { personaId: persona.id });
   const anchor = await comment(t6.id, '任务执行到什么进度了？');
-  check('锚点卡的讨论跑完', anchor.res.status === 202 && anchor.run?.status === '完成', `${anchor.res.status}/${anchor.run?.status}`);
+  check('锚点卡的讨论跑完', anchor.res.status === 202 && anchor.run?.status === 'done', `${anchor.res.status}/${anchor.run?.status}`);
   const anchorEcho = anchor.messages.find((m) => m.role === 'assistant' && m.runId === anchor.res.body.runId)?.text ?? '';
   check('prompt 里有卡片标题锚点', anchorEcho.includes('锚点验证卡'), anchorEcho.slice(0, 160));
   check('prompt 里有任务描述', anchorEcho.includes('把归档按钮挪到列表右上角'));

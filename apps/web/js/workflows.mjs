@@ -7,6 +7,11 @@ import { askText, confirmDo } from './machine.mjs';
 import { showView } from './contacts.mjs';
 import { openDesigner, setListTitle } from './flowpages.mjs';
 import { $, S } from './core.mjs';
+import { registerUp } from './navstack.mjs';
+
+/* 下钻页的上一层（navstack.mjs，2026-11-11）：工作流清单回工作台宫格
+   （左栏面包屑 工作台 › 工作流 同一个去处）。 */
+registerUp('workflows', () => setNav('plugins'));
 
 
 

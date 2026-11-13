@@ -56,7 +56,7 @@ const gid = g.groupId;
 const seg1 = g.id;
 store.addMessage({ conversationId: seg1, role: 'user', text: '第一段：说句话' });
 const run1 = store.createRun({ conversationId: seg1, runtime: 'codex', personaId: dev.id });
-store.finishRun(run1.id, { status: '完成', exitCode: 0 });
+store.finishRun(run1.id, { status: 'done', exitCode: 0 });
 
 const seg2 = store.createGroupSession(gid).id;
 store.addMessage({ conversationId: seg2, role: 'user', text: '第二段：也说一句' });

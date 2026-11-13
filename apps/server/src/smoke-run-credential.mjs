@@ -164,14 +164,14 @@ try {
     for (;;) {
       d = (await req('GET', `/api/conversations/${encodeURIComponent(convId)}`)).body;
       const runs = d?.runs ?? [];
-      if (runs.length && runs.every((x) => x.status !== '跑中')) break;
+      if (runs.length && runs.every((x) => x.status !== 'running')) break;
       if (Date.now() >= until) break;
       await sleep(150);
     }
     return (d?.messages ?? []).filter((m) => m.role === 'assistant').map((m) => m.text).join('\n');
   };
 
-  const reply = await talk(`【建卡】{"title":"验收建卡","description":"验证运行钥匙","status":"想法","projectId":"${project.id}"} 立卡`);
+  const reply = await talk(`【建卡】{"title":"验收建卡","description":"验证运行钥匙","status":"idea","projectId":"${project.id}"} 立卡`);
   check('假 agent 的回复拿得到', !!reply, reply.slice(-140));
   check('PM 的每轮提醒带上批量建卡口径', /\/api\/agent\/cards\/batch/.test(reply) && /idempotencyKey/.test(reply), '');
   check('运行钥匙建卡 → 201', /FAKE-CARD:201:pt-/.test(reply), (reply.match(/FAKE-CARD:\S+/) ?? [])[0] ?? reply.slice(-120));
