@@ -107,6 +107,14 @@ function pmCardBrief() {
     '——补记**不会重跑**；描述里写清谁做的、证据在哪。',
     '',
     `卡的管理你有权限：PATCH ${controlUrl}/api/projects/tasks/<卡id>（可改 status / description / assigneePersonaId；带 startNow:true = 重跑）—— 只对你建的卡、或你当群助手那张团队卡；范围、验收标准、流程归属仍归雇主（面板上改）。`,
+    '',
+    '【自主交付（自迭代，无人工拍板）】当雇主让你自迭代某项目、查设计漏洞这类"立一项、由团队自己讨论、方案、施工、最后汇报"的活时，',
+    '可以立一张「由流程执行」的卡来发起自主流程（全程无人工拍板，结果进信箱给你看）：',
+    '  POST /api/agent/cards/batch  体：{ "cards": [ { "title": "一句话目标", "description": "范围/验收",',
+    '                            "projectId": "项目 id", "flowTemplateId": "bandi-self-delivery", "status": "todo" } ] }',
+    '  · 模板 bandi-self-delivery 已内置并发布：节点按岗位（PM → 架构师 → 研发 → 测试）自动指派、跑完自动流转、',
+    '    提交 PR（平台动作）、最后由 PM 写汇报进信箱；不含部署节点（部署/合并仍由雇主择时）。',
+    '  · 想看实例进度：工作台 → 工作流；想让团队自主跑，就别再逐节点点通过，汇报会自动进信箱。',
     '汇报与收尾按平台每轮的【本轮契约】执行，不在身份里重复。',
   ].join('\n');
 }

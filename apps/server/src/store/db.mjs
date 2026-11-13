@@ -110,8 +110,11 @@ db.exec(`PRAGMA busy_timeout = 5000;`);
  *   · 7（2026-11-11）：新表 `notices`（左栏「信箱」：平台事实落库，先接建卡失败）。
  *   · 8（2026-11-11）：`member_sessions` 加 `startedAt`（上下文预算：这条 CLI 会话从哪一刻开始，
  *     轮次/年龄/累计 token 超限就轮换，见 session-budget.mjs）。
+ *   · 9（2026-11-12）：状态词表统一成码（migrateStatusValuesToCodes：老库里的中文状态值一次性换码）。
+ *   · 10（2026-11-13）：`workflow_templates` 加 `autonomous`（自主交付模板：无人工闸节点，实例终态与受阻
+ *     自动写信箱汇报给人，让「数字员工自主跑完→汇报」而不让人逐步拍板）。
  */
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 
 const dbVersion = Number(db.prepare('PRAGMA user_version').get()?.user_version ?? 0);
 if (dbVersion > SCHEMA_VERSION) {
@@ -769,6 +772,8 @@ ensureColumn('workflow_templates', 'startNode', 'startNode TEXT');
 ensureColumn('workflow_templates', 'publishedAt', 'publishedAt TEXT');
 // 归档：null = 在清单里；有值 = 收起来了（模板不删、历史实例原样留着）
 ensureColumn('workflow_templates', 'archivedAt', 'archivedAt TEXT');
+// 自主交付：null/0 = 普通流程（人可逐步拍板）；1 = 自主模板（无 manual 节点，实例跑完/受阻自动汇报信箱）
+ensureColumn('workflow_templates', 'autonomous', 'autonomous INTEGER DEFAULT 0');
 // 场地：这个单子挂在哪个会话里跑（项目群 / 某个数字员工的会话）
 
 ensureColumn('workflow_runs', 'threadId', 'threadId TEXT');

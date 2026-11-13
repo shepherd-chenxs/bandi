@@ -29,6 +29,7 @@ import { $, S } from './core.mjs';
 
 const KIND_LABEL = {
   'card.create.failed': '建卡失败',
+  'workflow.delivery.report': '自主交付报告',
 };
 const SEV_LABEL = { info: '提示', warn: '注意', blocking: '阻塞' };
 /** 严重度只用一个符号（跟改版前的圆点一致）：机器事实，不用 emoji 也不分"好消息/坏消息" */

@@ -229,7 +229,7 @@ function requireSubCard({ persona, card }) {
  * `startNow` 允许调用方推迟派活（批量口先建完一批、再统一开跑）。
  * **补记卡永远不派活**（`backfill`）—— 活已经干过了，建卡只是补账，重跑等于再干一遍。
  */
-function createOne({ cred, persona, convId, card, startNow = !card.backfill && card.status === 'todo' && !!(card.assignee || card.assigneeGroupId) }) {
+function createOne({ cred, persona, convId, card, startNow = !card.backfill && card.status === 'todo' && !!(card.assignee || card.assigneeGroupId || card.flowTemplateId) }) {
   const externalKey = externalKeyOf(cred, card.project, card);
   const existed = store.getProjectTaskByExternalKey(card.project.id, externalKey);
   if (existed) return { task: existed, deduped: true };
@@ -285,8 +285,10 @@ function announceCard(convId, persona, task) {
   });
 }
 
-/** 一组卡里有没有"还没跑、但有执行方式"的卡 —— 批量口用它决定建完要不要开跑 */
-const needsStart = (task) => task.status === 'todo' && !!(task.assigneePersonaId || task.assigneeGroupId);
+/** 一组卡里有没有"还没跑、但有执行方式"的卡 —— 批量口用它决定建完要不要开跑。
+ *  「由流程执行」也算一种执行方式（2026-11-13）：不补这一项的话 PM 立的自主交付卡
+ *  建完停在待办，永远不会起实例。 */
+const needsStart = (task) => task.status === 'todo' && !!(task.assigneePersonaId || task.assigneeGroupId || task.flowTemplateId);
 
 /**
  * 建卡失败写「信箱」（2026-11-11 用户拍板：左栏一级「信箱」）。

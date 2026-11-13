@@ -10,7 +10,7 @@ export function getWorkflowTemplate(id) {
   return db.prepare('SELECT * FROM workflow_templates WHERE id = ?').get(id) ?? null;
 }
 
-export function upsertWorkflowTemplate({ id, name, nodes, steps, start, builtIn = false }) {
+export function upsertWorkflowTemplate({ id, name, nodes, steps, start, builtIn = false, autonomous = false }) {
   const now = nowIso();
   const sid = id || newId('wt');
   // v2 用 nodes（节点+连线）；steps 是 v1 的线性步骤，这里同步写一份纯粹为了兼容旧读法
@@ -18,13 +18,13 @@ export function upsertWorkflowTemplate({ id, name, nodes, steps, start, builtIn 
   const nodesPayload = nodes ? payload : null;
   const startNode = start ?? (nodes?.length ? nodes[0].id : null);
   db.prepare(
-    `INSERT INTO workflow_templates (id, name, steps, nodes, startNode, builtIn, createdAt, updatedAt)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO workflow_templates (id, name, steps, nodes, startNode, builtIn, autonomous, createdAt, updatedAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET name = excluded.name, steps = excluded.steps,
        nodes = COALESCE(excluded.nodes, workflow_templates.nodes),
        startNode = COALESCE(excluded.startNode, workflow_templates.startNode),
        updatedAt = excluded.updatedAt`,
-  ).run(sid, name, payload, nodesPayload, startNode, builtIn ? 1 : 0, now, now);
+  ).run(sid, name, payload, nodesPayload, startNode, builtIn ? 1 : 0, autonomous ? 1 : 0, now, now);
   return getWorkflowTemplate(sid);
 }
 
@@ -46,9 +46,9 @@ export function renameWorkflowTemplate(oldId, newId) {
   db.exec('BEGIN');
   try {
     db.prepare(
-      `INSERT INTO workflow_templates (id, name, steps, nodes, startNode, publishedAt, builtIn, createdAt, updatedAt)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(newId, from.name, from.steps, from.nodes, from.startNode, from.publishedAt, from.builtIn, from.createdAt, now);
+      `INSERT INTO workflow_templates (id, name, steps, nodes, startNode, publishedAt, builtIn, autonomous, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(newId, from.name, from.steps, from.nodes, from.startNode, from.publishedAt, from.builtIn, from.autonomous ?? 0, from.createdAt, now);
     db.prepare('DELETE FROM workflow_templates WHERE id = ?').run(oldId);
     db.prepare('UPDATE workflow_runs SET templateId = ? WHERE templateId = ?').run(newId, oldId);
     db.exec('COMMIT');
@@ -80,8 +80,17 @@ export function createWorkflowRun({
   ).run(id, templateId, title, threadId, intent, note, projectId, prRepo, prNumber, now, now);
   return getWorkflowRun(id);
 }
-/** 发布 / 下架。**草稿能编，发布的才能在工作台点开起流程** */
+/** 只补自主标记（内建模板升级用）。SQL 只留在 store/ 内；传 0/1，不接外部字符串。 */
+export function setTemplateAutonomous(id, on = true) {
+  db.prepare('UPDATE workflow_templates SET autonomous = ?, updatedAt = ? WHERE id = ?').run(
+    on ? 1 : 0,
+    nowIso(),
+    id,
+  );
+  return getWorkflowTemplate(id);
+}
 
+/** 发布 / 下架。**草稿能编，发布的才能在工作台点开起流程** */
 export function setTemplatePublished(id, on = true) {
   db.prepare('UPDATE workflow_templates SET publishedAt = ?, updatedAt = ? WHERE id = ?').run(
     on ? nowIso() : null,

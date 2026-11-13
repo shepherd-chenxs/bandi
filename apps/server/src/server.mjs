@@ -23,6 +23,7 @@ import { ensureCliInstalled } from './cli-install.mjs';
 import * as workflows from './workflows.mjs';
 import * as prReview from './pr-review.mjs';
 import * as prCreate from './pr-create.mjs';
+import * as selfDelivery from './self-delivery.mjs';
 import * as quota from './quota.mjs';
 import * as status from './status.mjs';
 import { projectTasks, allTasks, personaTasks, createProjectTask, updateProjectTask, startProjectTask, onTaskRunFinished, afterMerged, upsertRepoCard, ensureTaskCardForStep } from './project-tasks.mjs';
@@ -694,6 +695,8 @@ workflows.ensureBuiltInTemplate();
 prReview.ensurePrReviewTemplate();
 // PR 交付流程（2026-10-25）：pr-create.mjs 在 import 时注册动作节点（pr-create），这里保证模板在
 prCreate.ensurePrDeliveryTemplate();
+// 自主交付流程（2026-11-13）：保证内建模板存在并发布，全程无人工拍板节点
+selfDelivery.ensureSelfDeliveryTemplate();
 // 出厂就有一个人能说话：内置系统管家「崔老三」（2026-10-23 前是秘书「喜儿」；幂等，已有则只补 builtin 标记）
 // **部署即装**（2026-10-22）：不管谁部署、用什么方式起（安装包 / 源码 start.cmd /
 // systemd / 开机自启），服务起来那一刻「bandi」全局命令就在。幂等 —— 装好了什么都不写。

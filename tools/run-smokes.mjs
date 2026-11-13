@@ -92,6 +92,9 @@ const RUN = [
   'apps/server/src/smoke-card-channel.mjs',
   // 信箱（2026-11-11 用户拍板）：建卡失败落库、同轮同码去重、已读/未读、角标口径
   'apps/server/src/smoke-inbox.mjs',
+  // 完全自主交付（2026-11-13）：无人工闸模板、按岗位指派、自动流转、终态/受阻写信箱、
+  // 普通人工流程不受影响。临时库 + 假 run 钩子 + 同进程控制面，不起真 CLI、不烧模型。
+  'apps/server/src/smoke-self-delivery.mjs',
   // 上下文预算（2026-11-11 实报：会话跑 8 小时 / 3000 万 input 后空回话）——纯函数，不碰库
   'apps/server/src/smoke-session-budget.mjs',
   // 身份与职责检修 P0（2026-11-09）：身份卡只回答"我是谁"、平台契约/任务合同每轮注入。

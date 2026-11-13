@@ -44,6 +44,7 @@ const END = 'end';
  *   · 到站执行：startCurrentStep 碰到动作节点 → 调 handler.run（异步，不挡调用方）；
  *   · 等人拍板：handler 自己把任务标「待验收」就是等人（与 manual 节点同一语义），
  *     人点「通过」→ decide 钩子 handler.onDecide → 它决定是执行还是收尾；
+ *   · 失败也走 finishActionTask：handler 抛错或自报 ok:false 都只在这一处写自主汇报 ——
  *   · 收尾走老路：finishActionTask 复用 goto/decide 同一条推进单行道 ——
  *     **动作节点不发明第二套流转逻辑**，这是它和"在巡检里私接一套状态机"的本质区别。
  */
@@ -213,15 +214,25 @@ function firstLine(text, max = 24) {
 }
 
 /**
- * 这一步派给谁：**只认节点上点名的人**（`personaId`）。
+ * 这一步派给谁：**只认节点上点名的人**（`personaId`）或**点名的岗位**（`roleKey`）。
  *
  * 没点名不是"等人顶上"，是**故意留空**（用户 2026-10-14 定）：到站即标「已阻塞」，
  * 等人来指派。理由：技能是"这个人会干什么"，不是"这一步该谁办"——
  * 而且**不是每个节点都有对应技能**；引擎自己按技能挑一个顶上，
  * 等于把用户没做的决定替他做了。所以节点上连 skill 都不再声明（见 BUILT_IN_TEMPLATE）。
+ *
+ * 2026-11-13 自主交付：`roleKey` 是「点岗位」，不是按技能找人——岗位是系统内置对象，
+ * 找一个该岗位的员工办；这个岗位没人配，照样留空阻塞。
  */
 export function assigneeFor(node) {
-  return node?.personaId && store.getPersona(node.personaId) ? node.personaId : null;
+  if (node?.personaId && store.getPersona(node.personaId)) return node.personaId;
+  // 按岗位自动指派（2026-11-13 自主交付）：节点声明 roleKey，找一个该岗位的员工办。
+  // 忙了按现有逻辑退回待办，30 秒节拍重试；不指派任何人 = 故意留空，标「已阻塞」等人。
+  if (node?.roleKey) {
+    const person = store.listPersonas().find((p) => p.roleKey === node.roleKey);
+    if (person) return person.id;
+  }
+  return null;
 }
 
 /* ------------------------------------------------------------------ 发布 */
@@ -351,11 +362,14 @@ function createTask(runId, node, visit) {
   // 之前只在"点派活"那一步才发现没人，于是节点到站时看着像随时会开跑 —— 但它永远不会自己动。
   // ⚠️ **动作节点没有经办人是正常的**（干活的是平台自己），不适用这条 —— 见 ACTION_NODES。
   if (!task.assigneePersonaId && !node.action) {
+    const why = `${noAssigneeWhy(node, node.name)}。点上面「经办人」那儿选一个人就能接着办`;
     store.updateWorkflowTask(task.id, {
       status: 'blocked',
-      note: `${noAssigneeWhy(node, node.name)}。点上面「经办人」那儿选一个人就能接着办`,
+      note: why,
       endedAt: store.nowIso(),
     });
+    // 自主交付不找人顶上：这一步没人 = 流程停住，雇主得在信箱看到「卡住了」。
+    notifyDeliveryReport(store.getWorkflowRun(runId), why, 'blocked');
   }
   return store.getWorkflowTask(runId, node.id, visit) ?? task;
 }
@@ -405,12 +419,15 @@ export function startCurrentStep(runId, { force = false } = {}) {
   if (stepNode?.action) {
     const handler = ACTION_NODES[stepNode.action];
     if (!handler?.run) {
+      const why = `不认识的动作节点：${stepNode.action}（平台版本没跟上模板？）`;
       store.updateWorkflowTask(task.id, {
         status: 'failed',
-        note: `不认识的动作节点：${stepNode.action}（平台版本没跟上模板？）`,
+        note: why,
+        result: JSON.stringify(resultOf({ status: 'failed', error: why })),
         endedAt: store.nowIso(),
       });
       store.touchWorkflowRun(runId);
+      notifyDeliveryReport(store.getWorkflowRun(runId), why, 'failed');
       return viewRun(store.getWorkflowRun(runId));
     }
     store.updateWorkflowTask(task.id, {
@@ -425,12 +442,19 @@ export function startCurrentStep(runId, { force = false } = {}) {
     Promise.resolve()
       .then(() => handler.run({ runId, task, node: stepNode }))
       .catch((e) => {
-        store.updateWorkflowTask(task.id, {
-          status: 'failed',
-          note: String(e?.message ?? e).slice(0, 300),
-          endedAt: store.nowIso(),
+        const why = String(e?.message ?? e).slice(0, 300);
+        // handler 自己已经用 finishActionTask(ok:false) 收过尾就别再写一遍、再报一遍。
+        const settled = store.listWorkflowTasks(runId).find((t) => t.id === task.id);
+        if (settled?.status === 'failed' && settled?.result) {
+          console.warn(`动作节点「${stepNode.name}」执行失败：${e?.message ?? e}`);
+          return;
+        }
+        // 失败也走 finishActionTask 这一个收口：状态和自主汇报只由它写，别散两处。
+        finishActionTask(runId, task, {
+          ok: false,
+          result: resultOf({ status: 'failed', error: why }),
+          note: why,
         });
-        store.touchWorkflowRun(runId);
         console.warn(`动作节点「${stepNode.name}」执行失败：${e?.message ?? e}`);
       });
     return viewRun(store.getWorkflowRun(runId));
@@ -461,6 +485,7 @@ export function startCurrentStep(runId, { force = false } = {}) {
         endedAt: store.nowIso(),
       });
       store.touchWorkflowRun(runId);
+      notifyDeliveryReport(store.getWorkflowRun(runId), `${why}。${quota.CONTINUE_HINT}`, 'blocked');
       throw new Error(why);
     }
   }
@@ -470,6 +495,7 @@ export function startCurrentStep(runId, { force = false } = {}) {
     //   · "等指派"本来就是"等人处理"的一种，不该另立一个状态 ——
     //     状态一多就会出现"没人管的状态"（用户指出：没人的情况应该就是阻塞）
     //   · 没点名是**用户故意留空**，所以这里不是兜底，是照办
+    if (task.status === 'blocked') throw new Error(task.note || '没点名经办人'); // createTask 已写过汇报，别重复报
     const node = nodeById(store.getWorkflowTemplate(run.templateId), task.nodeId);
     const why = noAssigneeWhy(node, task.nodeName);
     store.updateWorkflowTask(task.id, {
@@ -477,6 +503,7 @@ export function startCurrentStep(runId, { force = false } = {}) {
       note: `${why}。点上面「经办人」那儿选一个人就能接着办`,
       endedAt: task.endedAt ?? store.nowIso(),
     });
+    notifyDeliveryReport(store.getWorkflowRun(runId), why, 'blocked');
     throw new Error(`${why}。点上面「经办人」那儿选一个人就能接着办`);
   }
 
@@ -500,30 +527,35 @@ export function startCurrentStep(runId, { force = false } = {}) {
    * 只能干一件活（忙判定按会话算）。现在一条流程一套会话：上下文连续、执行槽独立，
    * 消息列表里不出现（从工作台 / 流程页进去），不再淹没人和员工的对话。
    */
-  const conv = runConversation(run, task.assigneePersonaId);
-  store.setWorkflowRunThread(runId, conv); // 记下"这一步在哪个会话"：删会话时凭它把流程实例的会话指针归零
-  const at = store.getConversation(conv)?.kind === 'group' ? `@${store.getPersona(task.assigneePersonaId)?.name} ` : '';
-  // 发起时填的「想法」就是发给第一个人的第一句 —— 后面几步也带上，作为起因的上下文
-  const constitution = projectConstitutionBlock(run.projectId);
-  const text = [
-    constitution,
-    `${at}【流程 · ${run.title}】`,
-    run.intent ? `\n起因（发起人说的）：${run.intent}` : '',
-    `\n这一步（第 ${task.visit} 次办理）：${task.nodeName}`,
-    task.detail,
-    '',
-    '做完直接说明结果即可；流程的推进由平台负责，你不用去开下一步。',
-    // **受阻协议**（2026-10-23；2026-11-09 P5 标记位置与平台契约对齐）：
-    // 硬阻碍必须亮牌，不许拿"说明一下"蒙混成办完。平台认**最后一行**（或第一行）的
-    // 「[受阻]」→ 这一步转已阻塞等人；第一行留给答案/结果。
-    '遇到干不下去的硬阻碍（权限被拒 / 文件写不进去 / 缺必要决策 / 依赖缺失），'
-      + '把「[受阻] 一句话原因」单独写在回话**最后一行**（第一行也认），然后说清卡在哪、需要什么（比如申请可写某个目录）；'
-      + '能干的部分照常说明、产物照常列。不许硬编一个结果交差。',
-  ]
-    .filter((x) => x !== '')
-    .join('\n');
-
+  /*
+   * try 从「找工单会话」就开始，不是从 dispatchToThread 才开始：会话、宪法、@ 名
+   * 这些准备动作也会抛（比如点名的人中途离职），早先它们会把任务留在「进行中」
+   * 而没有任何收尾 —— 自主流程就那样静默卡住。失败收口只留一处，别再漏一个挂点。
+   */
   try {
+    const conv = runConversation(run, task.assigneePersonaId);
+    store.setWorkflowRunThread(runId, conv); // 记下"这一步在哪个会话"：删会话时凭它把流程实例的会话指针归零
+    const at = store.getConversation(conv)?.kind === 'group' ? `@${store.getPersona(task.assigneePersonaId)?.name} ` : '';
+    // 发起时填的「想法」就是发给第一个人的第一句 —— 后面几步也带上，作为起因的上下文
+    const constitution = projectConstitutionBlock(run.projectId);
+    const text = [
+      constitution,
+      `${at}【流程 · ${run.title}】`,
+      run.intent ? `\n起因（发起人说的）：${run.intent}` : '',
+      `\n这一步（第 ${task.visit} 次办理）：${task.nodeName}`,
+      task.detail,
+      '',
+      '做完直接说明结果即可；流程的推进由平台负责，你不用去开下一步。',
+      // **受阻协议**（2026-10-23；2026-11-09 P5 标记位置与平台契约对齐）：
+      // 硬阻碍必须亮牌，不许拿"说明一下"蒙混成办完。平台认**最后一行**（或第一行）的
+      // 「[受阻]」→ 这一步转已阻塞等人；第一行留给答案/结果。
+      '遇到干不下去的硬阻碍（权限被拒 / 文件写不进去 / 缺必要决策 / 依赖缺失），'
+        + '把「[受阻] 一句话原因」单独写在回话**最后一行**（第一行也认），然后说清卡在哪、需要什么（比如申请可写某个目录）；'
+        + '能干的部分照常说明、产物照常列。不许硬编一个结果交差。',
+    ]
+      .filter((x) => x !== '')
+      .join('\n');
+
     const { run: agentRun } = dispatchToThread(conv, text, {
       runId: run.id,
       // 这一步的标记：往来按它归属（不再靠时间窗口）
@@ -546,12 +578,15 @@ export function startCurrentStep(runId, { force = false } = {}) {
       store.updateWorkflowTask(task.id, { status: 'todo', agentRunId: null, endedAt: null });
       throw e;
     }
+    const why = String(e.message ?? e);
     store.updateWorkflowTask(task.id, {
       status: 'failed',
-      note: String(e.message ?? e),
-      result: JSON.stringify(resultOf({ status: 'failed', error: String(e.message ?? e) })),
+      note: why,
+      result: JSON.stringify(resultOf({ status: 'failed', error: why })),
       endedAt: store.nowIso(),
     });
+    // 派不出去 = 自主交付停在这步，信箱得同步说清；普通流程由 notify 自己拦掉。
+    notifyDeliveryReport(store.getWorkflowRun(runId), why, 'failed');
     throw e;
   }
 }
@@ -664,6 +699,7 @@ export function onAgentRunFinished(run) {
       endedAt: store.nowIso(),
     });
     store.touchWorkflowRun(task.runId);
+    notifyDeliveryReport(wf, run.finalText ? summarize(run.finalText) : '已停止生成', 'blocked');
     return;
   }
 
@@ -674,6 +710,7 @@ export function onAgentRunFinished(run) {
       result: JSON.stringify(resultOf({ status: 'failed', error: run.error })),
       endedAt: store.nowIso(),
     });
+    notifyDeliveryReport(wf, run.error || '执行失败', 'failed');
   } else if (claimOf(run.finalText) === 'blocked') {
     /*
      * **员工自报受阻**（2026-10-23，起因：项目面板改造那条流程 —
@@ -690,18 +727,28 @@ export function onAgentRunFinished(run) {
       endedAt: store.nowIso(),
     });
     store.touchWorkflowRun(task.runId);
+    notifyDeliveryReport(wf, summarize(run.finalText), 'blocked');
     return;
   } else {
     // 干完了。**停不停，看节点上的开关**：
     //   · manual = true  → 待验收，等用户拍板（需求那种"聊明白了我才放行"）
     //   · 否则           → 干完自动往下走（默认）
+    const tpl = store.getWorkflowTemplate(wf.templateId);
+    const node = nodeById(tpl, task.nodeId);
+    const result = resultOf({ status: run.status, finalText: run.finalText });
+    /*
+     * 自主交付的**最后一步**（出口指向 end）是 PM 写交付汇报：把全文留一份给信箱报告。
+     * 平常的 result 只留「一句话 + 产物」给时间轴；这里额外留 report，普通流程一行都不改。
+     */
+    if (tpl?.autonomous && node?.approve === END) {
+      result.report = String(stripClaimMarks(run.finalText)).trim().slice(0, 4000);
+    }
     store.updateWorkflowTask(task.id, {
       status: 'review',
       note: summarize(run.finalText),
-      result: JSON.stringify(resultOf({ status: run.status, finalText: run.finalText })),
+      result: JSON.stringify(result),
     });
     store.touchWorkflowRun(task.runId);
-    const node = nodeById(store.getWorkflowTemplate(wf.templateId), task.nodeId);
     if (!node?.manual) {
       try {
         // 跟人手点「通过」走同一条路：**推进 + 到站即派活**（见 goto 里的说明）。
@@ -741,7 +788,7 @@ export function decide(runId, decision) {
     });
     // 正在跑的那次执行不去杀它：它跑完时 onAgentRunFinished 会看到流程已终止而直接返回，
     // 不会把流程再推起来。硬杀反而可能留下半个文件。
-    return viewRun(store.setWorkflowRunStatus(runId, 'terminated', `在「${task.nodeName}」终止`));
+    return viewRun(settleRun(runId, 'terminated', `在「${task.nodeName}」终止`));
   }
 
   if (task.status === 'todo') throw new Error(`「${task.nodeName}」还没开跑 —— 它马上会被自动派活，稍等一下；不想等就终止流程`);
@@ -785,7 +832,7 @@ export function decide(runId, decision) {
         endedAt: task.endedAt ?? store.nowIso(),
       });
       return viewRun(
-        store.setWorkflowRunStatus(runId, 'done', `「${task.nodeName}」已不在模板里，人工放行后收尾`),
+        settleRun(runId, 'done', `「${task.nodeName}」已不在模板里，人工放行后收尾`),
       );
     }
     throw new Error(
@@ -832,6 +879,13 @@ export function finishActionTask(runId, task, { ok, result = null, note = null }
     endedAt: store.nowIso(),
   });
   store.touchWorkflowRun(runId);
+  // 动作节点自己兜住异常、回报 ok:false 也走这一处：自主交付不能静默停在「失败」。
+  // 同一实例同一状态按 dedupeKey 合并，不额外刷屏。
+  const why = note || (() => {
+    try { return JSON.parse(result || 'null')?.error || '平台动作执行失败'; }
+    catch { return '平台动作执行失败'; }
+  })();
+  notifyDeliveryReport(store.getWorkflowRun(runId), why, 'failed');
   return viewRun(store.getWorkflowRun(runId));
 }
 
@@ -850,10 +904,94 @@ export function finishActionTask(runId, task, { ok, result = null, note = null }
   return setStepStatus(runId, 'todo');
 }
 
+/** 自主交付汇报用的状态字典：除了实例终态，还有「任务受阻/失败」这两个非实例状态 */
+const DELIVERY_STATUS = {
+  done: { label: '已完成', code: 'WF_DONE', severity: 'info', title: '自主交付完成' },
+  terminated: { label: '已终止', code: 'WF_STOPPED', severity: 'blocking', title: '自主交付停止' },
+  failed: { label: '执行失败', code: 'WF_FAILED', severity: 'warn', title: '自主交付失败' },
+  blocked: { label: '受阻', code: 'WF_BLOCKED', severity: 'blocking', title: '自主交付受阻' },
+  doing: { label: '进行中', code: 'WF_DOING', severity: 'blocking', title: '自主交付受阻' },
+};
+
+/**
+ * 自主交付模板：实例到终态、或某步受阻/失败，自动写一条信箱汇报给雇主。
+ * 只对 `autonomous` 模板生效；普通人工流程完全不动；写失败不影响流程。
+ *
+ * `asStatus` 用于任务级受阻/失败：那时实例还是 `doing`（不自动流转），
+ * 汇报却要说清「卡住了」，不能等实例状态改了才说。
+ */
+function notifyDeliveryReport(wf, why = '', asStatus = null) {
+  if (!wf) return;
+  const tpl = store.getWorkflowTemplate(wf.templateId);
+  if (!tpl || !tpl.autonomous) return;
+  try {
+    const status = asStatus || wf.status;
+    const meta = DELIVERY_STATUS[status] ?? DELIVERY_STATUS.doing;
+    const tail = status === 'done'
+      ? '数字员工已按自主交付模板自动办完全部步骤（无人工拍板）。如需合并/上线，由您在面板上择时操作；完整办理痕迹在「工作台 › 工作流」的实例页。'
+      : status === 'terminated'
+        ? '这条自主交付已停止，未再自动流转。详情请到「工作台 › 工作流」看实例页；如已有 PR，仍由您在面板上择时处理。'
+        : '流程停在这一步等人处理，不会自动往下走。原因请到「工作台 › 工作流」看实例页；如已有 PR，仍由您在面板上择时处理。';
+    // 完成报告要把「PM 汇报」那一步的正文带给雇主：人收结果，不该还要自己翻实例页。
+    // report 只在自主模板「出口指向 end」的那一步落库；取不到就退回一句话摘要。
+    const delivery = status === 'done' ? store.listWorkflowTasks(wf.id).reverse().find((t) => t.result) : null;
+    const reportBody = (() => {
+      if (!delivery?.result) return '';
+      try {
+        const r = JSON.parse(delivery.result);
+        return String(r.report ?? r.summary ?? '').trim().slice(0, 4000);
+      } catch {
+        return String(delivery.result).slice(0, 4000);
+      }
+    })();
+    // PR 链接可能在汇报正文里，也可能只在 pr-create 动作节点的产物里（PM 没抄全时兜住）。
+    const prLinks = status === 'done'
+      ? store.listWorkflowTasks(wf.id).flatMap((t) => {
+          try {
+            const r = JSON.parse(t.result || 'null');
+            return (Array.isArray(r?.artifacts) ? r.artifacts : [])
+              .map((a) => (typeof a === 'string' ? a : a?.target))
+              .filter((u) => /^https?:\/\//i.test(String(u ?? '')));
+          } catch {
+            return [];
+          }
+        })
+      : [];
+    const detail = [
+      `流程：「${wf.title}」（${wf.id}）`,
+      `状态：${meta.label}`,
+      why ? `原因：${why}` : '',
+      reportBody ? `\n交付汇报：\n${reportBody}` : '',
+      prLinks.length ? `\nPR：\n${[...new Set(prLinks)].join('\n')}` : '',
+      '',
+      tail,
+    ].filter(Boolean).join('\n');
+    store.addNotice({
+      kind: 'workflow.delivery.report',
+      severity: meta.severity,
+      code: meta.code,
+      title: `${meta.title}：「${wf.title}」`,
+      detail,
+      projectId: wf.projectId ?? null,
+      // runId 是「哪一轮 agent 执行」，流程实例不是一轮执行 —— 实例 id 已在 detail / dedupeKey 里
+      dedupeKey: `wf:${wf.id}:${status}`,
+    });
+  } catch {
+    /* 汇报写失败不影响流程本身 */
+  }
+}
+
+/** 实例落终态 +（仅自主模板）写信箱汇报。流转收口在这一处，别让每个挂点各写一遍。 */
+function settleRun(runId, status, why = '') {
+  const run = store.setWorkflowRunStatus(runId, status, why);
+  notifyDeliveryReport(run, why, status);
+  return run;
+}
+
 export function abortWorkflow(runId, note = '人工终止') {
   const run = store.getWorkflowRun(runId);
   if (!run) throw new Error('流程不存在');
-  return viewRun(store.setWorkflowRunStatus(runId, 'terminated', note));
+  return viewRun(settleRun(runId, 'terminated', note));
 }
 
 /**
@@ -862,7 +1000,7 @@ export function abortWorkflow(runId, note = '人工终止') {
  */
 function goto(runId, target, why) {
   if (target === END) {
-    return viewRun(store.setWorkflowRunStatus(runId, 'done', why));
+    return viewRun(settleRun(runId, 'done', why));
   }
   const run = store.getWorkflowRun(runId);
   const tpl = store.getWorkflowTemplate(run.templateId);
@@ -873,7 +1011,7 @@ function goto(runId, target, why) {
   if (visit > MAX_VISITS) {
     // 来回打回太多轮：**停下来说清楚**，别让它无限转
     return viewRun(
-      store.setWorkflowRunStatus(runId, 'terminated', `「${node.name}」被打回 ${MAX_VISITS} 次以上，停下来等人处理`),
+      settleRun(runId, 'terminated', `「${node.name}」被打回 ${MAX_VISITS} 次以上，停下来等人处理`),
     );
   }
 
@@ -1201,6 +1339,8 @@ function summarize(text, max = 160) {
  *
  * 格式（存 `workflow_tasks.result`，JSON）：
  *   { state: 'done' | 'stopped' | 'error', summary, artifacts: [{kind,target,label}], error }
+ *   自主交付模板的最后一步另带 `report`（PM 交付汇报全文），供终态信箱报告使用；
+ *   时间轴仍只认上面四样，不展示这个字段。
  */
 
 // 认得出的产物类型。**只认带扩展名的**：`deploy.sh` 是产物，`npm test` 不是。
