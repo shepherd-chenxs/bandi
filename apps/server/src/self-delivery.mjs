@@ -64,7 +64,9 @@ export const SELF_DELIVERY_TEMPLATE = {
     },
     {
       id: 'n3', name: '设计评审（找设计漏洞）', x: 620, y: 60,
-      roleKey: 'dev',
+      // L-01：评审与施工不可同岗（原 roleKey 'dev' 与 n4 施工同岗 → 自评自查）。
+      // 设计评审改由架构师岗办，与 n4 施工（dev）拉开岗位独立性。
+      roleKey: 'architect',
       detail: EVAL_DETAIL,
       approve: 'n4', reject: 'n2',
     },
@@ -157,6 +159,13 @@ export function ensureSelfDeliveryTemplate() {
     }
     return next;
   });
+  // L-07：模板版本升级时新增节点补入（只加不改，保留用户已改节点），避免运行时节点悬空。
+  const curIds = new Set(nodes.map((n) => n.id));
+  const missing = SELF_DELIVERY_TEMPLATE.nodes.filter((ref) => !curIds.has(ref.id));
+  if (missing.length) {
+    nodes.push(...missing.map((ref) => ({ ...ref })));
+    touched = true;
+  }
   if (touched) store.upsertWorkflowTemplate({ id: cur.id, name: cur.name, nodes, builtIn: !!cur.builtIn });
   return store.getWorkflowTemplate(SELF_DELIVERY_TEMPLATE_ID);
 }

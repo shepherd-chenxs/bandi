@@ -50,6 +50,14 @@ const END = 'end';
  */
 const ACTION_NODES = {};
 
+/*
+ * L-04：动作节点（如 pr-create）一次性失败即停，可恢复抖动（网络/凭据）变成人工干预点。
+ * 这里给有限次自动重试：同一动作任务最多重试 MAX_ACTION_RETRIES 次，每次退避 RETRY_BACKOFF_MS，
+ * 耗尽仍失败才走 finishActionTask(ok:false) 收尾。重试次数记在任务的 note 里，避免再查一遍 store。
+ */
+const MAX_ACTION_RETRIES = 3;
+const RETRY_BACKOFF_MS = 2000;
+
 /** 业务模块注册动作节点 handler：`{ run(ctx), onDecide?(ctx) }`，ctx = { runId, task, node } */
 export function registerActionNode(kind, handler) {
   ACTION_NODES[kind] = handler;
@@ -439,24 +447,38 @@ export function startCurrentStep(runId, { force = false } = {}) {
       decision: null,
     });
     store.touchWorkflowRun(runId);
-    Promise.resolve()
-      .then(() => handler.run({ runId, task, node: stepNode }))
-      .catch((e) => {
-        const why = String(e?.message ?? e).slice(0, 300);
-        // handler 自己已经用 finishActionTask(ok:false) 收过尾就别再写一遍、再报一遍。
+    // L-04：有限次自动重试（网络/凭据抖动这类可恢复失败不该变人工干预点）。
+    // 重试轮次记在 note 里，避免再查一遍 store；handler 自己收尾(ok:false)的不再重试/报告。
+    const runActionWithRetry = async (attempt) => {
+      try {
+        await handler.run({ runId, task, node: stepNode });
+      } catch (e) {
         const settled = store.listWorkflowTasks(runId).find((t) => t.id === task.id);
         if (settled?.status === 'failed' && settled?.result) {
           console.warn(`动作节点「${stepNode.name}」执行失败：${e?.message ?? e}`);
+          return; // handler 已收尾，不再重复写/报
+        }
+        if (attempt < MAX_ACTION_RETRIES) {
+          console.warn(`动作节点「${stepNode.name}」第 ${attempt} 次失败，将在 ${RETRY_BACKOFF_MS}ms 后重试：${e?.message ?? e}`);
+          store.updateWorkflowTask(task.id, {
+            status: 'doing',
+            note: `动作节点自动重试中（第 ${attempt}/${MAX_ACTION_RETRIES} 次失败后）`,
+            endedAt: null,
+          });
+          store.touchWorkflowRun(runId);
+          setTimeout(() => { void runActionWithRetry(attempt + 1); }, RETRY_BACKOFF_MS);
           return;
         }
-        // 失败也走 finishActionTask 这一个收口：状态和自主汇报只由它写，别散两处。
+        const why = String(e?.message ?? e).slice(0, 300);
         finishActionTask(runId, task, {
           ok: false,
           result: resultOf({ status: 'failed', error: why }),
-          note: why,
+          note: `${why}（已自动重试 ${MAX_ACTION_RETRIES} 次仍失败）`,
         });
-        console.warn(`动作节点「${stepNode.name}」执行失败：${e?.message ?? e}`);
-      });
+        console.warn(`动作节点「${stepNode.name}」自动重试耗尽，最终失败：${e?.message ?? e}`);
+      }
+    };
+    Promise.resolve().then(() => runActionWithRetry(1));
     return viewRun(store.getWorkflowRun(runId));
   }
   /*
@@ -957,11 +979,26 @@ function notifyDeliveryReport(wf, why = '', asStatus = null) {
           }
         })
       : [];
+    // L-05：受阻/失败时把该步最近产出带上，雇主收到"受阻"不仅知原因，还知道该步已完成什么。
+    const stepOutputBody = (() => {
+      if (!['failed', 'blocked'].includes(status)) return '';
+      const cur = store.listWorkflowTasks(wf.id)
+        .filter((t) => t.status === 'failed' || t.status === 'blocked')
+        .sort((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0))[0];
+      if (!cur?.result) return '';
+      try {
+        const r = JSON.parse(cur.result);
+        return String(r.summary ?? r.error ?? '').trim().slice(0, 400);
+      } catch {
+        return String(cur.result).slice(0, 400);
+      }
+    })();
     const detail = [
       `流程：「${wf.title}」（${wf.id}）`,
       `状态：${meta.label}`,
       why ? `原因：${why}` : '',
       reportBody ? `\n交付汇报：\n${reportBody}` : '',
+      stepOutputBody ? `\n该步产出摘要：\n${stepOutputBody}` : '',
       prLinks.length ? `\nPR：\n${[...new Set(prLinks)].join('\n')}` : '',
       '',
       tail,
@@ -976,8 +1013,9 @@ function notifyDeliveryReport(wf, why = '', asStatus = null) {
       // runId 是「哪一轮 agent 执行」，流程实例不是一轮执行 —— 实例 id 已在 detail / dedupeKey 里
       dedupeKey: `wf:${wf.id}:${status}`,
     });
-  } catch {
-    /* 汇报写失败不影响流程本身 */
+  } catch (e) {
+    // L-06：汇报写失败不再静默吞掉——自主交付的核心承诺（跑完/卡住必汇报）不能无声失效。
+    console.warn(`自主交付汇报写失败：${String(e?.message ?? e).slice(0, 300)}`);
   }
 }
 
@@ -1554,11 +1592,26 @@ export function setStepStatus(runId, wanted) {
   }
 
   if (wanted === 'done') {
-    store.updateWorkflowTask(task.id, {
-      status: 'review',
-      endedAt: task.endedAt ?? store.nowIso(),
-      note: task.note ?? '人工标为已完成',
-    });
+    const tpl = store.getWorkflowTemplate(run.templateId);
+    const node = nodeById(tpl, task.nodeId);
+    const reportBody = String(stripClaimMarks(task.note ?? '')).trim().slice(0, 4000);
+    // L-08：人工标 done 时不经过 onAgentRunFinished，result.report 不会写；
+    // 在自主交付出口节点（approve 指向 end）把人工汇报落进 result，避免信箱 done 报告缺 PM 汇报正文。
+    if (reportBody && tpl?.autonomous && node?.approve === END) {
+      const existing = JSON.parse(task.result || 'null');
+      store.updateWorkflowTask(task.id, {
+        status: 'review',
+        endedAt: task.endedAt ?? store.nowIso(),
+        note: task.note ?? '人工标为已完成',
+        result: JSON.stringify({ ...existing, report: reportBody }),
+      });
+    } else {
+      store.updateWorkflowTask(task.id, {
+        status: 'review',
+        endedAt: task.endedAt ?? store.nowIso(),
+        note: task.note ?? '人工标为已完成',
+      });
+    }
     return decide(runId, '通过');
   }
 

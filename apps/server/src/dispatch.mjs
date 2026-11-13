@@ -762,7 +762,7 @@ function startMemberRun(thread, member, opts, trigger) {
    * 流程（节点名/第几次到站/本步要求）、普通聊天（项目名）。
    * 顺序放在雇主风格之后：风格可以改口吻，但契约是底线。
    */
-  const workflowTask = opts.taskId ? store.getWorkflowTask(opts.taskId) : null;
+  const workflowTask = opts.taskId ? store.getWorkflowTaskById(opts.taskId) : null;
   const project = !opts.card?.projectName && opts.projectId ? store.getProject(opts.projectId) : null;
   // 他名下未完的卡：问进度时先看这里（2026-11-09 P3a，跨会话也不丢上下文）
   const myTasks = store.listMyOpenTasks(member.personaId, 5);

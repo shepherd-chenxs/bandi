@@ -330,7 +330,7 @@ export function runBadge(r) {
   // 同一个状态在列表上却叫另一个名字。措辞跟服务端对齐。
   if (r.stuck) return { text: '已阻塞', cls: 'bad' };
   if (r.taskStatus === 'review') return { text: '等你验收', cls: '' };
-  return { text: r.taskStatus ?? r.status, cls: '' };
+  return { text: statusText(r.taskStatus ?? r.status), cls: '' };
 }
 
 
@@ -782,7 +782,7 @@ export function runHTML(v) {
                这原来长在任务卡里，任务卡撤了之后搬回行内。 */
             canStatus
               ? '<span class="run-st run-pick" id="runStatusMount"></span>'
-              : `<span class="run-st">${esc(oc.status)}</span>`
+              : `<span class="run-st">${esc(statusText(oc.status))}</span>`
           }
           ${oc.decision ? `<span class="run-dec">${esc(oc.decision)}</span>` : ''}
         </div>

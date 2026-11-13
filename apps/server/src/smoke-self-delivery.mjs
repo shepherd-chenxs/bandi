@@ -147,7 +147,13 @@ actionTpl('t-self-action-throw', 'self-delivery-throw');
 workflows.registerActionNode('self-delivery-throw', { run: () => { throw new Error('建 PR 的凭据掉了'); } });
 const throwing = workflows.startWorkflow({ templateId: 't-self-action-throw', title: '动作抛错', autoStart: false });
 workflows.startCurrentStep(throwing.id);
-await new Promise((r) => setImmediate(r));
+// 失败后有最多 3 次自动重试（每次 2s），等重试耗尽再断言。
+const deadline = Date.now() + 9000;
+while (Date.now() < deadline) {
+  await new Promise((r) => setTimeout(r, 500));
+  const st = store.getWorkflowTask(throwing.id, 'n1', 1)?.status;
+  if (st === 'failed') break;
+}
 check('动作节点抛错 → 任务 failed', store.getWorkflowTask(throwing.id, 'n1', 1)?.status === 'failed', String(store.getWorkflowTask(throwing.id, 'n1', 1)?.status));
 const throwNotice = onlyReport(throwing);
 check('动作节点抛错 → 一条 WF_FAILED 汇报', throwNotice.list.length === 1 && throwNotice.one?.code === 'WF_FAILED' && (throwNotice.one?.detail ?? '').includes('建 PR 的凭据掉了'), JSON.stringify(throwNotice.list.map((n) => n.code)));

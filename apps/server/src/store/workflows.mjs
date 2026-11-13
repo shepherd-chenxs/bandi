@@ -286,6 +286,20 @@ export function getWorkflowTask(runId, nodeId, visit = 1) {
     .get(runId, nodeId, visit) ?? null;
 }
 
+/**
+ * 按任务**主键 id** 取一行（dispatch 注入「任务合同」用）。
+ *
+ * 与 getWorkflowTask(runId, nodeId, visit) 是两件事：派活那一刻手上只有
+ * `opts.taskId`（= workflow_tasks.id，流程引擎派活时带着的那一步标记），
+ * 没有 runId/nodeId/visit 可拼。以前误把 getWorkflowTask 当一个参数用，
+ * nodeId 成了 undefined → node:sqlite 抛「parameter 2 绑不上」，
+ * 整条自主交付的第一步当场失败（2026-11-13 实报）。
+ */
+export function getWorkflowTaskById(id) {
+  if (!id) return null;
+  return db.prepare('SELECT * FROM workflow_tasks WHERE id = ?').get(id) ?? null;
+}
+
 export function getWorkflowTaskByAgentRun(agentRunId) {
   if (!agentRunId) return null;
   return db.prepare('SELECT * FROM workflow_tasks WHERE agentRunId = ?').get(agentRunId) ?? null;
