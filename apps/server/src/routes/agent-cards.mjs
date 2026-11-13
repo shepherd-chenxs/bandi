@@ -166,6 +166,9 @@ function normalizeCard(body, project, { allowBackfill = false } = {}) {
     // 团队协作（2026-11-09）：派给群 / 协作子卡挂主卡。互斥；详细校验在下面两个函数里
     assigneeGroupId: body?.assigneeGroupId ? String(body.assigneeGroupId) : null,
     parentTaskId: body?.parentTaskId ? String(body.parentTaskId) : null,
+    // 由流程执行（2026-11-13 自主交付）：与 assignee/assigneeGroupId 互斥（校验在 project-tasks assertRunnableFlow / createProjectTask）。
+    // PM 用建卡通道立一张“由流程执行”的卡（带 flowTemplateId + status: todo），建完即发起一条流程实例，由节点点名的员工自动办理、自动流转。
+    flowTemplateId: body?.flowTemplateId ? String(body.flowTemplateId) : null,
     // 补记（2026-11-11）：建最终状态、不自动派活（见 BACKFILL_STATUSES 的注释）
     backfill: backfill && BACKFILL_STATUSES.has(status),
     idempotencyKey: explicitKey,
@@ -245,6 +248,8 @@ function createOne({ cred, persona, convId, card, startNow = !card.backfill && c
     // 「失败」时往这里投一条回执并唤醒他 —— 他答应雇主"有产出我再回你"，得给他兑现承诺的通道。
     createdBy: persona.id,
     creatorConvId: convId,
+    // 由流程执行（2026-11-13 自主交付）：与 personaId/assigneeGroupId 互斥，校验在 createProjectTask。
+    flowTemplateId: card.flowTemplateId ?? null,
     externalKey,
   });
   return { task, deduped: false };
