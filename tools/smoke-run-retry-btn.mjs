@@ -70,14 +70,18 @@ check(
   '点下去先禁用（重跑会真派活 / action 节点会真去建 PR，防连点）',
 );
 
-console.log('\n③ 状态下拉原样不动（这次只加入口）');
+console.log('\n③ 状态字只显示、不可改（2026-11-13 晚用户拍板：这里不要修改状态了）');
 check(
-  /runs\/\$\{encodeURIComponent\(v\.id\)\}\/status/.test(src),
-  '状态下拉仍走 /status（没有被顺手改成 retry）',
+  !/id="runStatusMount"|querySelector\('#runStatusMount'\)/.test(src),
+  '行内状态选择器（runStatusMount）已整段撤掉（挂载点和接线都不许留）',
 );
 check(
-  src.includes("statusChoices") || src.includes('v.statusChoices'),
-  '状态下拉的选项仍由服务端给（v.statusChoices，前端不自己编）',
+  !/runs\/\$\{encodeURIComponent\(v\.id\)\}\/status/.test(src),
+  '前端不再调 /status 改这一步的状态（接口本身保留，等状态那套统一规划）',
+);
+check(
+  /状态\*\*只显示、不改\*\*|状态只显示、不可改/.test(src),
+  '原地留了注释，说明为什么状态归流程引擎管、别再摆编辑入口',
 );
 check(!src.includes('「重跑这一步」已删'), '旧的"已删"注释没留下 —— 它会把人带错路');
 
