@@ -691,9 +691,6 @@ export function runHTML(v) {
       const meta = [t.assigneeName ?? '没人', t.visit > 1 ? `第 ${t.visit} 次` : '', durText(t.elapsedMs)]
         .filter(Boolean)
         .join(' · ');
-      // 流程页**不铺对话**：只显示有多少条 + 一个「对话」按钮，点开才是面板。
-      // 这样对话被锚定在这一个节点上，时间轴也不会被长对话淹掉。
-      const n = (t.messages ?? []).length;
       const canTalk = !!t.conversationId && t.status !== 'todo';
       // 能不能通到任务卡：服务端给了「已有卡」或「能现开」之一就行（见 viewTask 的说明）
       const canOpenCard = !!t.projectTaskId || t.canOpenTaskCard === true;
@@ -702,20 +699,19 @@ export function runHTML(v) {
       const isCur = t.id === lastTaskId;
       // 改指派就是上面那行本身（点经办人），这里不再摆第二套；状态只显示、不可改（2026-11-13 拍板）。
       /*
-       * **任务卡入口收进属性行**（2026-11-14 用户要求重新设计）：原来单独一行飘一个
-       * 蓝链接（「已往来 N 条」），上下都不挨着，看着像掉出来的东西。现在并进属性行 ——
-       * 「任务卡 | 已往来 N 条 / 还没聊过」，点值开卡，跟经办人/耗时同一套排版；
-       * 流程没挂项目（开不了卡）时退回对话栏（三条路的接线共用，见下方 data-run-card）。
+       * **任务卡入口 = 节点名后面的「查看」图标**（2026-11-14 用户拍板，第三次改）：
+       * 「已往来 N 条」那个数数的是流程对话里的系统消息（派活 / 完成通知），
+       * 卡上的评论一条不数 —— 数字和卡对不上，不如不写。现在只剩一颗安静的卡片图标
+       * （开的就是「任务卡」，图形即语义；眼睛撞了密码显隐的形，气泡又回到老的错位），
+       * 点开任务卡；流程没挂项目（开不了卡）时退回对话栏
+       * （三条路的接线共用，见下方 data-run-card）。通不到任何地方就不画按钮。
        */
       const talkable = canOpenCard || canTalk;
-      const talkText = canTalk ? (n ? `已往来 ${n} 条` : '还没聊过') : '还没聊过';
-      const talkRow = `<span><i>任务卡</i>${
-        talkable
-          ? `<button type="button" class="run-card-link" data-run-card data-task="${esc(t.id)}" title="${canOpenCard
-              ? (t.projectTaskId ? '打开这一步的任务卡' : '打开任务卡（第一次点会建一张）')
-              : '打开对话'}">${talkText}</button>`
-          : '<span class="dim">先派活才能对话</span>'
-        }</span>`;
+      const cardView = talkable
+        ? `<button type="button" class="run-card-view" data-run-card data-task="${esc(t.id)}" title="${canOpenCard
+            ? (t.projectTaskId ? '打开这一步的任务卡' : '打开任务卡（第一次点会建一张）')
+            : '打开对话'}" aria-label="查看这一步的任务卡"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="5" width="16" height="14" rx="2.5"></rect><path d="M8.5 10h7M8.5 13.5h4.5"></path></svg></button>`
+        : '';
       // 行内放**当前这一步的动作**：通过的快乐路径 + 失败/受阻后的「重跑这一步」；
       // 改指派仍是上一行的入口（点「经办人」）；状态没有编辑入口（2026-11-13 拍板）。
       // 「没人可派」那种不在这儿再摆一颗"指派给谁" —— 上一行「经办人」本身就是入口，
@@ -750,7 +746,7 @@ export function runHTML(v) {
       const alive = v.status === 'doing';
       const canAssign = isCur && alive && (S.personas ?? []).length > 0;
       // 经办人后面**不再摆按钮**（2026-10-21）：那颗气泡 2026-10-19 起开的是任务卡，
-      // 气泡图标语义错位 —— 入口是下面独立的「任务卡」属性行（见 talkRow）。
+      // 气泡图标语义错位 —— 入口是节点名后面的「查看」眼睛（见 cardView）。
       const who = `<div class="run-who">
           <span><i>经办人</i>${
             canAssign ? '<span class="run-pick" id="runAssigneeMount"></span>' : esc(t.assigneeName ?? '没人')
@@ -759,7 +755,6 @@ export function runHTML(v) {
             t.startedAt ? esc(new Date(t.startedAt).toLocaleString('zh-CN')) : '—'
           }</span>
           <span><i>耗时</i>${esc(durText(t.elapsedMs) || '—')}</span>
-          ${talkRow}
         </div>`;
       /*
        * 「执行结果」—— 标题就用**任务卡里那个字段名**（用户当时定的），
@@ -805,6 +800,7 @@ export function runHTML(v) {
         <span class="run-dot"></span>
         <div class="run-step-head">
           <b>${esc(t.nodeName)}</b>
+          ${cardView}
           ${/* 勾了「需要人工确认完成」的节点在这儿挂个标签：一眼看出"这步跑完会停下来等人"。
                 跟设计器里节点卡上那个是同一个标签、同一套 .tag-inline 药丸。 */ ''}
           ${manualNodes.has(t.nodeId) ? '<em class="tag-inline" title="办完停住，等你确认才往下走">需人工确认</em>' : ''}

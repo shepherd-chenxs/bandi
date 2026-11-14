@@ -1109,14 +1109,15 @@ body:has(#pluginView.shown .fixed-head)::after {
 .run-acts { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
 .run-acts button { font-size: 12px; padding: 3px 10px; }
 
-/* 「任务卡」属性行的值 = 这一步任务卡的入口（2026-10-21 用户拍板；2026-11-14 收进
-   属性行 —— 原来单独一行飘蓝链接，跟属性行排版不搭）。长得像链接，点开任务卡
-   （流程没挂项目时退回对话栏，同一段 data-run-card 接线）。
-   字号随所在行继承（属性行是 12px），别写死。 */
-.run-card-link { border: 0; background: none; padding: 0; font: inherit;
-                 color: var(--accent); cursor: pointer; }
-.run-card-link:hover { text-decoration: underline; }
-.run-card-link[disabled] { opacity: .45; cursor: default; text-decoration: none; }
+/* 节点名后面的「查看」眼睛 = 这一步任务卡的入口（2026-11-14 用户拍板，第三次改）：
+   「已往来 N 条」数的是流程对话里的系统消息，跟卡上的评论对不上 —— 数字撤了，
+   只剩一颗安静的眼睛（描边风格跟左侧导航同一套），悬停才亮色。
+   点击的三条路接线（开卡 / 现开卡 / 退回对话栏）不动，data-run-card 照旧。
+   align-self:center：标题行是 baseline 对齐，svg 没有基线，硬跟会把图标压到字底下去。 */
+.run-card-view { display: inline-flex; align-items: center; border: 0; background: none;
+                 padding: 0; color: var(--dim); cursor: pointer; align-self: center; }
+.run-card-view svg { display: block; }
+.run-card-view:hover { color: var(--accent); }
 
 /* 对话栏里的消息（第二栏，不是弹窗）。
    署名在**气泡外**（气泡上方），气泡本身是 .nc-text —— 名字不该被框进去。 */
