@@ -781,9 +781,14 @@ export function runHTML(v) {
           : '';
       // 有产物就不再补一句话：用户要"有产物展示产物"，两样并排等于又说一遍
       const line = !err && !arts.length ? (r?.summary ?? '') : '';
+      /*
+       * 「执行结果」跟上面三行属性（经办人 / 经办时间 / 耗时）**同一套排版**：
+       * 标签定宽在左、值占右边其余 —— 结果框不再整行另起（用户要求跟其他属性统一）。
+       * 框里装什么（现状 / 报错 / 产物 / 一句话）不变，只是挪进了"值"的位置。
+       */
       const result =
         now || err || arts.length || line
-          ? `<div class="run-note-label">执行结果</div><div class="run-note">${
+          ? `<div class="run-note-row"><div class="run-note-label">执行结果</div><div class="run-note">${
               now
                 ? `<div class="run-state ${v.stuck || orphan ? 'bad' : 'quiet'}">${
                     v.stuck || orphan ? '⚠️ ' : ''
@@ -791,7 +796,7 @@ export function runHTML(v) {
                 : ''
             }${err ? `<div class="run-err">${esc(err)}</div>` : ''}${
               arts.length ? `<div class="run-arts">${arts.map(artChipHtml).join('')}</div>` : ''
-            }${line ? `<div class="run-sum">${esc(line)}</div>` : ''}</div>`
+            }${line ? `<div class="run-sum">${esc(line)}</div>` : ''}</div></div>`
           : '';
       return `<div class="run-step ${cls}${isCur ? ' cur' : ''}">
         <span class="run-dot"></span>

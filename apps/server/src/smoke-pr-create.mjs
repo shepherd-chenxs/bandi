@@ -142,6 +142,24 @@ const gateClass = secretPaths.classifySecretSuspects(['.env', 'id_rsa', 'src/sec
 check('分档：实锤档（.env / id_rsa）直接拦，判据代码 / token-bucket / pem 归内容说了算', JSON.stringify(gateClass.keyfiles) === '[".env","id_rsa"]' && JSON.stringify(gateClass.wordy) === '["src/secret-paths.mjs","a/token-bucket.mjs","cert.pem"]', JSON.stringify(gateClass));
 check('内容扫描：私钥块与已知令牌命中', secretPaths.scanContentForSecrets('k.pem', '-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n') === '私钥块（PEM/OpenSSH 等）' && secretPaths.scanContentForSecrets('token.json', '{"token": "sk-proj-abcdefghijklmnopqrstuvwx"}') === 'OpenAI 风格密钥（sk-…）');
 check('内容扫描：占位值 / 测试豁免位算干净（拦测试假密钥等于逼人搬走测试）', secretPaths.scanContentForSecrets('token.json', '{"token": "占位值待填"}') === null && secretPaths.scanContentForSecrets('tests/fixtures/token.json', '{"token": "sk-proj-abcdefghijklmnopqrstuvwx"}') === null);
+/* 报错规范（2026-11-14，docs/契约.md「十一」）：常见错 = 错误码 + 一句人话 + 出路，原始信息垫底 */
+check('推送翻译：代理没通 → E1204 连不上 GitHub（curl 原文只垫底）', (() => {
+  const t = git.translatePushFailure("fatal: unable to access 'https://github.com/shepherd-chenxs/bandi.git/': Failed to connect to github.com:443 over proxy 127.0.0.1 after 0 ms: Could not connect to server");
+  return t.code === 'E1204' && /连接不上 github\.com/.test(t.text) && /代理 127\.0\.0\.1/.test(t.text) && /原始信息：/.test(t.text);
+})(), JSON.stringify(git.translatePushFailure('Failed to connect to github.com:443 over proxy 127.0.0.1: x')));
+check('推送翻译五档全带码', (() => {
+  const a = git.translatePushFailure('! [remote rejected] main -> main (push declined due to repository rule violations)');
+  const b = git.translatePushFailure('! [rejected] feat/x -> feat/x (non-fast-forward)');
+  const c = git.translatePushFailure('remote: Permission denied to shepherd-chenxs/bandi.git');
+  const d = git.translatePushFailure('some totally unknown git complaint');
+  const e = git.translatePushFailure('fatal: Could not resolve host: github.com');
+  return a.code === 'E1201' && b.code === 'E1202' && c.code === 'E1203' && d.code === 'E1299' && e.code === 'E1204';
+})());
+check('网络识别独立可用（fetch / clone / pull 共用一份）', /连接不上/.test(git.gitNetworkFailure('fatal: Could not resolve host: github.com')) && git.gitNetworkFailure('everything fine, no error here') === null);
+check('GitError 带码（路由 failWith 透传 e.code，路由码只兜底）', (() => {
+  const e = new git.GitError('E1204', '连接不上 github.com');
+  return e.code === 'E1204' && e instanceof Error && /连接不上/.test(e.message);
+})());
 check('status -z：带空格的路径不被切两半', JSON.stringify(git.parseStatusZ(' M src/a b.ts\0')) === '[{"status":" M","path":"src/a b.ts"}]');
 check('status -z：重命名连着读（下一条是源路径）', JSON.stringify(git.parseStatusZ('R  new/n.ts\0old/n.ts\0?? x.md\0')) === '[{"status":"R ","path":"new/n.ts","from":"old/n.ts"},{"status":"??","path":"x.md"}]', JSON.stringify(git.parseStatusZ('R  new/n.ts\0old/n.ts\0?? x.md\0')));
 check('status -z：**未暂存**重命名（` R`）也连着读源路径', JSON.stringify(git.parseStatusZ(' R b.txt\0a.txt\0')) === '[{"status":" R","path":"b.txt","from":"a.txt"}]', JSON.stringify(git.parseStatusZ(' R b.txt\0a.txt\0')));

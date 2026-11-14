@@ -17,6 +17,13 @@ import * as patrol from '../repo-patrol.mjs';
  * 默认值写在这儿而不是 git-repos 里，因为"标题从哪来"是**入口**的事：
  * 仓库行上标题就是人敲的那句，卡上则卡标题就是最自然的默认标题。
  */
+
+/**
+ * catch 出口统一走这里（2026-11-14 报错规范，见 docs/契约.md「报错规范」）：领域错（GitError 等）自带
+ * 更准的码（E12xx 一类），**优先透传**它的 —— 路由的码只做兜底。文案不动，人话在领域层已经写好。
+ */
+const failWith = (res, fallbackCode, e) => fail(res, 400, e?.code ?? fallbackCode, String(e?.message ?? e));
+
 function prRequestOf(body = {}, task = null) {
   const title = String(body.title ?? task?.title ?? '').trim();
   return {
@@ -224,7 +231,7 @@ export async function handleGit(req, res, url) {
     try {
       me = await git.verifyToken(token);
     } catch (e) {
-      return fail(res, 400, 'E1062', String(e.message ?? e)), true;
+      return failWith(res, 'E1062', e), true;
     }
     git.saveToken(token);
     git.rememberLogin(me.login); // 刚验过，页面下次打开就能立刻显示 @名字
@@ -242,7 +249,7 @@ export async function handleGit(req, res, url) {
       const connected = new Set(git.listConnected().map((r) => r.fullName));
       return sendJson(res, 200, { repos: list.map((r) => ({ ...r, connected: connected.has(r.fullName) })) }), true;
     } catch (e) {
-      return fail(res, 400, 'E1063', String(e.message ?? e)), true;
+      return failWith(res, 'E1063', e), true;
     }
   }
 
@@ -264,7 +271,7 @@ export async function handleGit(req, res, url) {
         : await git.connectRepo(String(body.fullName ?? ''), null, body.localPath ? String(body.localPath) : null);
       return sendJson(res, 201, out), true;
     } catch (e) {
-      return fail(res, 400, 'E1064', String(e.message ?? e)), true;
+      return failWith(res, 'E1064', e), true;
     }
   }
 
@@ -306,7 +313,7 @@ export async function handleGit(req, res, url) {
       const view = patrol.setPreset(row, String(body.preset ?? ''));
       return sendJson(res, 200, { repo: row, patrol: view }), true;
     } catch (e) {
-      return fail(res, 400, 'E1119', String(e?.message ?? e)), true;
+      return failWith(res, 'E1119', e), true;
     }
   }
 
@@ -323,7 +330,7 @@ export async function handleGit(req, res, url) {
     try {
       out = await patrol.runNow(row);
     } catch (e) {
-      return fail(res, 400, 'E1120', String(e?.message ?? e)), true;
+      return failWith(res, 'E1120', e), true;
     }
     return sendJson(res, 200, out), true;
   }
@@ -343,7 +350,7 @@ export async function handleGit(req, res, url) {
     try {
       return sendJson(res, 200, { state: await git.workState(row) }), true;
     } catch (e) {
-      return fail(res, 400, 'E1079', String(e.message ?? e)), true;
+      return failWith(res, 'E1079', e), true;
     }
   }
 
@@ -377,7 +384,7 @@ export async function handleGit(req, res, url) {
         );
         return sendJson(res, 200, { prs: enriched, base: row.defaultBranch ?? null }), true;
       } catch (e) {
-        return fail(res, 400, 'E1079', String(e.message ?? e)), true;
+        return failWith(res, 'E1079', e), true;
       }
     }
     if (req.method === 'POST') {
@@ -389,7 +396,7 @@ export async function handleGit(req, res, url) {
            而这两颗按钮的契约是"点一下就该有 PR"，推的是刚提交/已提交的东西，不能让人自己去推送区补一刀。 */
         return sendJson(res, 201, await git.openPr(row, { ...prRequestOf(body), includeDirty: false, push: true })), true;
       } catch (e) {
-        return fail(res, 400, 'E1078', String(e.message ?? e)), true;
+        return failWith(res, 'E1078', e), true;
       }
     }
     return fail(res, 405, 'E1089', '这个地址只认 GET（列开着的 PR）和 POST（建 PR）'), true;
@@ -404,7 +411,7 @@ export async function handleGit(req, res, url) {
     try {
       return sendJson(res, 200, await mergeOne(row.fullName, Number(repoMergePr[2]), body)), true;
     } catch (e) {
-      return fail(res, 400, 'E1088', String(e.message ?? e)), true;
+      return failWith(res, 'E1088', e), true;
     }
   }
 
@@ -425,7 +432,7 @@ export async function handleGit(req, res, url) {
         return sendJson(res, 200, await git.rerunGate(row.fullName, pull.headSha)), true;
       }
     } catch (e) {
-      return fail(res, 400, 'E1079', String(e.message ?? e)), true;
+      return failWith(res, 'E1079', e), true;
     }
     return fail(res, 405, 'E1089', '这个地址只认 GET（gate 明细）和 POST /rerun（重跑失败的检查）'), true;
   }
@@ -496,7 +503,7 @@ export async function handleGit(req, res, url) {
     } catch (e) {
       // busy：他手上有活 —— 409 让界面说"他还在忙"，别当成失败
       if (e?.code === 'busy') return fail(res, 409, 'E1126', String(e.message ?? e)), true;
-      return fail(res, 400, 'E1127', String(e.message ?? e)), true;
+      return failWith(res, 'E1127', e), true;
     }
   }
 
@@ -533,7 +540,7 @@ export async function handleGit(req, res, url) {
         });
         return sendJson(res, 201, { task: afterMerged(next), pr: out.pr, created: out.created, branch: out.branch, base: out.base, commit: out.committed }), true;
       } catch (e) {
-        return fail(res, 400, 'E1078', String(e.message ?? e)), true;
+        return failWith(res, 'E1078', e), true;
       }
     }
 
@@ -545,7 +552,7 @@ export async function handleGit(req, res, url) {
       try {
         return sendJson(res, 200, await mergeOne(task.prRepo, task.prNumber, body, taskId)), true;
       } catch (e) {
-        return fail(res, 400, 'E1088', String(e.message ?? e)), true;
+        return failWith(res, 'E1088', e), true;
       }
     }
 
@@ -638,7 +645,7 @@ export async function handleGit(req, res, url) {
     try {
       return sendJson(res, 200, { repo: await git.syncRepo(decodeURIComponent(syncOne[1])) }), true;
     } catch (e) {
-      return fail(res, 400, 'E1065', String(e.message ?? e)), true;
+      return failWith(res, 'E1065', e), true;
     }
   }
 
@@ -655,7 +662,7 @@ export async function handleGit(req, res, url) {
       const local = await git.settleAfterMerge(row.fullName, { base: row.defaultBranch });
       return sendJson(res, 200, { repo: row, local }), true;
     } catch (e) {
-      return fail(res, 400, 'E1100', String(e.message ?? e)), true;
+      return failWith(res, 'E1100', e), true;
     }
   }
 
@@ -671,7 +678,7 @@ export async function handleGit(req, res, url) {
     try {
       return sendJson(res, 200, await git.listBranches(row)), true;
     } catch (e) {
-      return fail(res, 400, 'E1101', String(e.message ?? e)), true;
+      return failWith(res, 'E1101', e), true;
     }
   }
 
@@ -683,7 +690,7 @@ export async function handleGit(req, res, url) {
     try {
       return sendJson(res, 200, await git.checkoutBranch(row, String(body.branch ?? ''))), true;
     } catch (e) {
-      return fail(res, 400, 'E1102', String(e.message ?? e)), true;
+      return failWith(res, 'E1102', e), true;
     }
   }
 
@@ -696,7 +703,7 @@ export async function handleGit(req, res, url) {
     try {
       return sendJson(res, 200, await git.createBranch(row, String(body.name ?? ''))), true;
     } catch (e) {
-      return fail(res, 400, 'E1109', String(e.message ?? e)), true;
+      return failWith(res, 'E1109', e), true;
     }
   }
 
@@ -714,7 +721,7 @@ export async function handleGit(req, res, url) {
         branch: body.branch ? String(body.branch) : null,
       })), true;
     } catch (e) {
-      return fail(res, 400, 'E1103', String(e.message ?? e)), true;
+      return failWith(res, 'E1103', e), true;
     }
   }
 
@@ -730,7 +737,7 @@ export async function handleGit(req, res, url) {
         paths: Array.isArray(body.paths) ? body.paths.map(String) : null,
       })), true;
     } catch (e) {
-      return fail(res, 400, 'E1113', String(e.message ?? e)), true;
+      return failWith(res, 'E1113', e), true;
     }
   }
 
@@ -743,7 +750,7 @@ export async function handleGit(req, res, url) {
     try {
       return sendJson(res, 200, await commitMsg.suggestPrDraft(row)), true;
     } catch (e) {
-      return fail(res, 400, 'E1114', String(e.message ?? e)), true;
+      return failWith(res, 'E1114', e), true;
     }
   }
 
@@ -754,7 +761,7 @@ export async function handleGit(req, res, url) {
     try {
       return sendJson(res, 200, await git.pushCurrent(row)), true;
     } catch (e) {
-      return fail(res, 400, 'E1104', String(e.message ?? e)), true;
+      return failWith(res, 'E1104', e), true;
     }
   }
 
@@ -765,7 +772,7 @@ export async function handleGit(req, res, url) {
     try {
       return sendJson(res, 200, await git.fetchRepo(row)), true;
     } catch (e) {
-      return fail(res, 400, 'E1105', String(e.message ?? e)), true;
+      return failWith(res, 'E1105', e), true;
     }
   }
 
@@ -776,7 +783,7 @@ export async function handleGit(req, res, url) {
     try {
       return sendJson(res, 200, await git.recentLog(row)), true;
     } catch (e) {
-      return fail(res, 400, 'E1106', String(e.message ?? e)), true;
+      return failWith(res, 'E1106', e), true;
     }
   }
 
@@ -787,7 +794,7 @@ export async function handleGit(req, res, url) {
     try {
       return sendJson(res, 200, await git.fileDiff(row, url.searchParams.get('path'))), true;
     } catch (e) {
-      return fail(res, 400, 'E1107', String(e.message ?? e)), true;
+      return failWith(res, 'E1107', e), true;
     }
   }
 
@@ -799,7 +806,7 @@ export async function handleGit(req, res, url) {
     try {
       return sendJson(res, 200, await git.discardPaths(row, body.paths)), true;
     } catch (e) {
-      return fail(res, 400, 'E1108', String(e.message ?? e)), true;
+      return failWith(res, 'E1108', e), true;
     }
   }
 
@@ -821,7 +828,7 @@ export async function handleGit(req, res, url) {
         base: url.searchParams.get('base'),
       })), true;
     } catch (e) {
-      return fail(res, 400, 'E1110', String(e.message ?? e)), true;
+      return failWith(res, 'E1110', e), true;
     }
   }
 
@@ -836,7 +843,7 @@ export async function handleGit(req, res, url) {
         path: url.searchParams.get('path'),
       })), true;
     } catch (e) {
-      return fail(res, 400, 'E1111', String(e.message ?? e)), true;
+      return failWith(res, 'E1111', e), true;
     }
   }
 
@@ -852,7 +859,7 @@ export async function handleGit(req, res, url) {
         base: body.base ?? null,
       })), true;
     } catch (e) {
-      return fail(res, 400, 'E1112', String(e.message ?? e)), true;
+      return failWith(res, 'E1112', e), true;
     }
   }
 
