@@ -11,6 +11,7 @@ import { stripTrailingDoneMark } from './delivery-claim.mjs';
 import { conversationStatusFor, EMPTY_REPLY_TEXT } from './store/status.mjs';
 import { codexContextOf } from './context-probe.mjs';
 import { acquirePowerLock, releasePowerLock } from './power-lock.mjs';
+import { agentGitEnv, gitAbilityBrief } from './agent-git.mjs';
 
 /**
  * 「这条会话在对面那个 CLI 里不存在」的报错特征。
@@ -307,7 +308,18 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
    * 调专用接口（现在是建卡，见 routes/agent-cards.mjs）。钥匙在 run 收尾时吊销。
    */
   const cred = issueRunCredential(run.id, personaId, { local: true });
-  run.agentEnv = cred ? { BANDI_CONTROL_URL: controlUrl, BANDI_RUN_TOKEN: cred.token } : {};
+  /*
+   * **git 能力**（2026-11-13 试点）：研发岗的运行动拿一把"能推但受闸"的能力。
+   * 以前这里只有工作证（不能 git），员工失败只能等人救；现在给凭据 + 钩子，
+   * 规则（不直推 main / 不改写历史 / 不推凭据文件）在 apps/server/src/git-hooks/pre-push.mjs 里。
+   * 合并顺序要紧：agentGitEnv 里的 GIT_CONFIG_* 必须盖在 agentEnv() 的删除之后（见 run.agentEnv 的用法）。
+   */
+  const persona = store.getPersona(personaId);
+  const gitEnv = agentGitEnv({ runId: run.id, personaId, roleKey: persona?.roleKey ?? '', cwd: member.cwd ?? '' });
+  run.agentEnv = {
+    ...(cred ? { BANDI_CONTROL_URL: controlUrl, BANDI_RUN_TOKEN: cred.token } : {}),
+    ...gitEnv,
+  };
   // 每轮把"钥匙现取、别抄旧值"贴在任务末尾（见 runCredentialBrief 的说明）；
   // 有建卡权限的岗位（现在只有项目经理）再多一句建卡口径（续接会话读不到新技能，这行每轮都在）
   /*
@@ -327,6 +339,8 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
   }
   const agentTask =
     (cred ? `${task}\n\n${runCredentialBrief(can(store.getPersona(personaId), 'card.create'))}` : task) +
+    // 真发了 git 能力才说 —— 没说等于让它继续以为"代码动作归平台、我推不了"
+    (Object.keys(gitEnv).length ? `\n\n${gitAbilityBrief()}` : '') +
     (sandboxBlocked
       ? `\n\n（权限提醒：你当前的权限档是「${effSandbox}」，这种档在无人审批的运行方式下跑不动命令 —— ` +
         `需要执行命令/改文件的动作这轮都会被拒。这不是网络或环境故障，别往"连不上/没工具"的方向诊断；` +

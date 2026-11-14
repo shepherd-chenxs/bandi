@@ -18,6 +18,8 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { dataDir, repoRoot } from './config.mjs';
 import * as store from './store.mjs';
+// 凭据闸的判据单一来源（钩子也要用，见 secret-paths.mjs 头注释）
+import { classifySecretSuspects, findSecretPaths, scanContentForSecrets } from './secret-paths.mjs';
 
 const TOKEN_FILE = path.join(dataDir, 'github-token');
 const REPOS_DIR = path.join(dataDir, 'repos');
@@ -872,9 +874,76 @@ export async function checkoutBranch(row, name) {
   return { switched: true, branch: target };
 }
 
+/* ------------------------------------------------------- 凭据闸 v2（2026-11-13） */
+
+/**
+ * 读出能扫的文本；null = 没法扫（不存在/已删除、二进制、超过 1MB）。
+ * 扫不了 ≠ 有问题：凭据是文本（env/pem/json…），二进制这条链路本来也挡在 keyfile 档的扩展名上。
+ */
+function readScanText(cwd, relPath) {
+  try {
+    const full = path.join(cwd, relPath);
+    const stat = fs.statSync(full);
+    if (!stat.isFile() || stat.size > 1024 * 1024) return null;
+    const buf = fs.readFileSync(full);
+    if (buf.subarray(0, 8000).includes(0)) return null; // 有 NUL = 二进制
+    return buf.toString('utf8');
+  } catch {
+    return null; // 已删除的文件没有内容可泄，读不到就当干净
+  }
+}
+
+const secretList = (paths) =>
+  `${paths.slice(0, 4).join('、')}${paths.length > 4 ? ` 等 ${paths.length} 个` : ''}`;
+
+/**
+ * 凭据闸 v2（2026-11-13，用户实报："作为用户我根本不知道为什么会失败，不应该让用户来处理"）。
+ *
+ * 文件名只做初筛，命中的分两档 —— 让平台自己消化掉"像"，只把"是"端给人
+ * （判据与两档定义见 secret-paths.mjs，钩子走同一份）：
+ *   · **实锤档**（.env 本体 / id_rsa / .npmrc…）：按约定就该是凭据，直接拦，
+ *     **不问"要不要提交"、没有放行口令** —— `allowSecrets`（界面上那颗危险确认）对这一档
+ *     无效：推上去收不回来的东西，确认也不该推。出路是把文件移出改动/改成模板名。
+ *   · **像凭据档**（名字带 token/secret/…，如 secret-paths.mjs / token-bucket.mjs）：
+ *     内容扫一遍 —— 干净就**自动放行**，用户无感（v1 把自家判据文件都拦下来"等人处理"，
+ *     那次教训：机器能判的别甩给人）；扫出密钥特征才拦，报错里带命中原因与出路，
+ *     雇主显式确认（allowSecrets）可以放 —— 这才是配得上人工决策的灰区。
+ *
+ * 返回放行备注（给界面/流程结果留痕）；该拦的直接 throw。
+ */
+async function secretGate(cwd, entries, { allowSecrets = false } = {}) {
+  const { keyfiles, wordy } = classifySecretSuspects(entries.map((f) => f.path));
+  const notes = [];
+  const hits = [];
+  for (const p of wordy) {
+    const text = readScanText(cwd, p);
+    if (text === null) {
+      notes.push(`${p} 文件名像凭据，但内容没法扫（二进制/太大/已删除）—— 按名字放行，自己把关`);
+      continue;
+    }
+    const why = scanContentForSecrets(p, text);
+    if (why) hits.push(`${p}（${why}）`);
+    else notes.push(`${p} 文件名像凭据，内容扫描没有密钥特征，已放行`);
+  }
+  if (keyfiles.length) {
+    throw new Error(
+      `改动里有按约定就该是凭据的文件：${secretList(keyfiles)} —— 这一档推上去就收不回来，平台不提供放行口令。` +
+        '把它移出这次改动（要提交模板就改名成 .env.example 这类）；里面的密钥要是已经泄露过，先去轮换再动',
+    );
+  }
+  if (hits.length && !allowSecrets) {
+    throw new Error(
+      `内容扫描发现像真实密钥的东西：${secretList(hits)} —— 提交即泄露。` +
+        '移出改动、挪进 tests/fixtures 这类豁免位、或改成明显的占位值；雇主也可以在界面上显式确认放行',
+    );
+  }
+  return notes;
+}
+
 /**
  * 普通提交（**不建 PR、不推送**）：把工作区改动收到分支上。
- * 与建 PR 共用凭据闸 —— 界面上"就是要提交"和建 PR 弹窗里那颗是一个意思。
+ * 与建 PR 共用凭据闸（`secretGate` v2）：名字像凭据的先扫内容，干净自动放行；
+ * 实锤档与内容实锤才拦 —— 只有内容灰区那档才轮到界面上那颗危险确认。
  *
  * ⚠️ 站在 base（main）上提交会自动先拉一条分支（`autoBranch` 如实回给界面）：
  * 主分支只接受 PR 合进来，不接受本地提交 —— 2026-10-29 定下的规矩。
@@ -892,10 +961,7 @@ export async function commitAll(row, { message, allowSecrets = false, paths = nu
   if (subset && picked.length !== paths.length) {
     throw new Error('选中的文件和工作区对不上了（期间有人动过）—— 重新看一次改动再提交');
   }
-  const secrets = findSecretPaths(picked.map((f) => f.path));
-  if (secrets.length && !allowSecrets) {
-    throw new Error(`改动里有看着像凭据的文件：${secrets.slice(0, 4).join('、')}${secrets.length > 4 ? ` 等 ${secrets.length} 个` : ''} —— 一旦提交就进历史了。确认可以提交，再带上"就是要提交"`);
-  }
+  const secretNotes = await secretGate(row.localPath, picked, { allowSecrets });
 
   /*
    * **主分支闸**（2026-10-29 用户："main 不应该直接提交 —— 提交时就该检查，在 main 上就提示新建分支"）。
@@ -936,7 +1002,7 @@ export async function commitAll(row, { message, allowSecrets = false, paths = nu
   const commit = await gitIn(row.localPath, [...idArgs, 'commit', '-m', msg]);
   if (commit.code !== 0) throw new Error(`提交没成：${commit.out.split('\n').slice(-4).join(' ')}`);
   const sha = await gitIn(row.localPath, ['rev-parse', 'HEAD']);
-  return { committed: { sha: sha.code === 0 ? sha.out : null, subject: msg }, branch: onBranch, files: picked.length, autoBranch };
+  return { committed: { sha: sha.code === 0 ? sha.out : null, subject: msg }, branch: onBranch, files: picked.length, autoBranch, secretNotes };
 }
 
 /**
@@ -1766,21 +1832,13 @@ async function assertNameForCreate(cwd, name, { repoName = '' } = {}) {
   if (await branchExists(cwd, b)) return b;
   return assertNewBranchName(b, { repoName });
 }
-/**
+/*
  * **凭据闸**（推上去就收不回来：git 历史里的 secret 只能靠强推抹，公开仓库抹不掉）。
  *
- * 与 `pr-review.mjs` 的 `SENSITIVE_RE` 不是一回事：那条管"自动合并要严"（CI 配置也算敏感），
- * 这条管"别把私钥推到公开仓库"。`.github/workflows/` 在这条里**不算**凭据 —— 那是正常改动。
+ * 判据已抽到 `secret-paths.mjs`（2026-11-13）：agent 的 pre-push 钩子也要挡同一批文件，
+ * 两处必须用**同一份正则** —— 详见那个文件的头注释。
  */
-const SECRET_PATH_RE =
-  /(^|\/)\.env(\.|$)|\.(pem|p12|pfx|key|kdbx|keystore)$|(^|\/)(id_rsa|id_ecdsa|id_ed25519|\.npmrc|\.netrc)(\.|$)|[\w.-]*(token|secret|credential|passwd|password)[\w.-]*$/i;
-/** 模板类放过：`.env.example` 是要提交的东西，拦它等于逼人绕开平台 */
-const SECRET_EXEMPT_RE = /\.(example|sample|template|dist|txt|md)$/i;
-
-/** 这批路径里哪些像凭据（返回路径清单；空数组 = 干净） */
-export function findSecretPaths(paths) {
-  return (paths ?? []).map((p) => String(p ?? '')).filter((p) => p && SECRET_PATH_RE.test(p) && !SECRET_EXEMPT_RE.test(p));
-}
+export { findSecretPaths };
 
 /**
  * 解析 `git status --porcelain -z`。
@@ -1833,11 +1891,34 @@ async function commitIdentityArgs(cwd) {
 
 /** base 分支：库里的 defaultBranch → origin/HEAD → main（都拿不到就说清楚，不猜） */
 async function resolveBase(row, askedBase) {
-  if (askedBase) return assertBranchName(askedBase);
-  if (row.defaultBranch) return row.defaultBranch;
+  let name = null;
+  if (askedBase) name = assertBranchName(askedBase);
+  else if (row.defaultBranch) name = row.defaultBranch;
+  else {
+    const head = await gitIn(row.localPath, ['symbolic-ref', '--short', '-q', 'refs/remotes/origin/HEAD']);
+    if (head.code === 0 && head.out) name = head.out.replace(/^origin\//, '');
+  }
+  if (!name) {
+    throw new Error('不知道要合进哪个分支（仓库没记默认分支、本地也没有 origin/HEAD）——在弹窗里填一个 base');
+  }
+  /*
+   * **自愈**（2026-11-13 实报）：登记的默认分支名可能已经不存在（比如登记当天的工作分支后来删了），
+   * 这时以前直接抛"本地还没有 origin/xxx 这个引用"——员工和人都被卡住，只能人肉查库。
+   * 现在两级兜底：① 先 `git fetch origin --prune` 拉一次（引用缺了多半是没同步）；
+   * ② 还缺就退 `origin/HEAD`（真正的默认分支）并**在日志里写明换了**，别静默改目标。
+   */
+  const hasRef = async (n) =>
+    (await gitIn(row.localPath, ['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${n}`], { timeoutMs: GIT_FAST_MS })).code === 0;
+  if (await hasRef(name)) return name;
+  await gitIn(row.localPath, ['fetch', 'origin', '--prune'], { timeoutMs: GIT_PUSH_MS });
+  if (await hasRef(name)) return name;
   const head = await gitIn(row.localPath, ['symbolic-ref', '--short', '-q', 'refs/remotes/origin/HEAD']);
-  if (head.code === 0 && head.out) return head.out.replace(/^origin\//, '');
-  throw new Error('不知道要合进哪个分支（仓库没记默认分支、本地也没有 origin/HEAD）——在弹窗里填一个 base');
+  const fallback = head.code === 0 && head.out ? head.out.replace(/^origin\//, '') : 'main';
+  if (fallback !== name && (await hasRef(fallback))) {
+    console.warn(`[git] base 分支 ${name} 在远端不存在（登记的信息过时了）—— 这次改用 ${fallback}；建议去「代码托管」把默认分支改对`);
+    return fallback;
+  }
+  throw new Error(`本地和远端都没有分支 ${name}（拉过一次也没有）——去「代码托管」检查默认分支，或在弹窗里换个 base`);
 }
 
 /**
@@ -1930,6 +2011,7 @@ export async function workState(row) {
     unpulled,
     dirty,
     dirtyCount: dirty.length,
+    // 名字初筛的"嫌疑名单"（界面提前提示用）—— 真闸在 secretGate：内容说了算，别拿这份当结论
     secrets: findSecretPaths(dirty.map((f) => f.path)),
     /*
      * 默认分支名由服务端给（`<type>/<短描述>`，规则只留一处，界面和人敲的是同一套）。
@@ -1982,7 +2064,8 @@ function addTargetsOf(entries) {
  * 三条硬规矩（都是"推上去收不回来"那一类）：
  *   · 只在新分支上提交，绝不往 base 上提交（`assertBranchName` + base 同名直接拒）；
  *   · 推不上去就**说清楚**，绝不 `--force`（远端同名分支不是你的，多半是别人的活）；
- *   · 看着像凭据的文件先挡住，除非调用方明说 `allowSecrets`（界面上那颗"就是要提交"）。
+ *   · 凭据闸 v2（`secretGate`）：名字像凭据的先扫内容，干净自动放行；实锤档没有口令通道，
+ *     内容实锤要雇主显式确认（`allowSecrets`）—— 界面上那颗危险确认只管这一档灰区。
  */
 export async function commitAndPush(row, { branch = null, message = null, paths = null, allowSecrets = false, base = null, pushOnly = false } = {}) {
   const st = await workState(row);
@@ -1995,10 +2078,7 @@ export async function commitAndPush(row, { branch = null, message = null, paths 
   if (!pushOnly && Array.isArray(paths) && paths.length && picked.length !== paths.length) {
     throw new Error('选中的文件和工作区对不上了（期间有人动过）—— 重新看一次改动再提交');
   }
-  const secrets = findSecretPaths(picked.map((f) => f.path));
-  if (secrets.length && !allowSecrets) {
-    throw new Error(`改动里有看着像凭据的文件：${secrets.slice(0, 4).join('、')}${secrets.length > 4 ? ` 等 ${secrets.length} 个` : ''} —— 推上去就收不回来。确认那是可以公开的（例如 .env.example），再带上"就是要提交"`);
-  }
+  const secretNotes = await secretGate(row.localPath, picked, { allowSecrets });
 
   const targetBase = await resolveBase(row, base);
   let branchName = branch ? await assertNameForCreate(row.localPath, branch, { repoName: row.name }) : null;
@@ -2061,7 +2141,7 @@ export async function commitAndPush(row, { branch = null, message = null, paths 
     );
   }
 
-  return { branch: branchName, base: targetBase, committed, files: picked };
+  return { branch: branchName, base: targetBase, committed, files: picked, secretNotes };
 }
 
 /**

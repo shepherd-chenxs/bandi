@@ -61,6 +61,7 @@ const RUN = [
   'apps/server/src/smoke-data-dir.mjs',
   // 数据库迁移（2026-11-08 结构版本号机制落地时补）：老库打开一次就收到当前形态、
   // 再开一次什么都不变。第一条钉的是 v1→v2 清掉回话消息的 meta.progress（过程收起行砍掉）。
+  'apps/server/src/smoke-agent-git.mjs',
   'apps/server/src/smoke-db-migration.mjs',
   'apps/server/src/smoke-experts.mjs',
   'apps/server/src/smoke-feishu.mjs',
@@ -136,9 +137,12 @@ const RUN = [
   'apps/server/src/smoke-workflows.mjs',
   'apps/desktop/smoke-shell.mjs',
   'tools/smoke-help-pop.mjs',
-  // 「重跑这一步」按钮（2026-11-13 实报后加回）：只在失败/已阻塞出现、走 /retry 同一条路、
-  // 状态下拉没被动。纯源码断言（前端无构建步骤），几十毫秒。
+  // 「重跑这一步」按钮（2026-11-13 实报后加回）：只在失败/已阻塞出现、走 /retry 同一条路；
+  // 状态字只显示不可改（2026-11-13 晚拍板，编辑入口已撤）。纯源码断言（前端无构建步骤），几十毫秒。
   'tools/smoke-run-retry-btn.mjs',
+  // 数字员工拿回 git 能力之后的三条闸（2026-11-13 试点）：真的推一遍临时 bare 仓库，
+  // 直推 main / 带 .env / 正常分支三种情况都要判对 —— 判错不报错，东西就已经推上 GitHub 了。
+  'tools/smoke-prepush-guard.mjs',
   // 2026-10-30：分支行尾那颗 `›` 的链路（menu → folderize → combo → combo-menu → 菜单）。
   // 这条链任何一手漏了都不报错、只是箭头不见了，所以必须钉住。
   'tools/smoke-branch-menu.mjs',

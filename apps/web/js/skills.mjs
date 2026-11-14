@@ -1808,7 +1808,9 @@ export async function renderGitRepos(root = $('pluginView')) {
         await refresh();
       } catch (e) {
         commitBtn.disabled = false;
-        if (!allowSecrets && /凭据/.test(String(e.message ?? e))) {
+        // 凭据闸 v2：只有"内容扫出密钥"那档灰区才弹危险确认（报错里带「显式确认放行」才弹）；
+        // .env 本体/私钥那档直接拦死、没有口令通道 —— 弹窗只会误导人去确认一个不该确认的东西。
+        if (!allowSecrets && /显式确认放行/.test(String(e.message ?? e))) {
           if (await confirmDo(String(e.message ?? e), { ok: '就是要提交', danger: true })) await doCommit(true);
         } else {
           toast(e.message, 'error');

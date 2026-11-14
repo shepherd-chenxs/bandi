@@ -137,7 +137,8 @@ try {
 
   console.log('\n⑤ 挂线：每轮派活都拼契约（不是首轮/不是 PM 专属）');
   const src = fs.readFileSync(new URL('./dispatch.mjs', import.meta.url), 'utf8');
-  check('按 opts.taskId 现查 workflow_tasks（流程节点进入合同）', /opts\.taskId \? store\.getWorkflowTask\(opts\.taskId\)/.test(src));
+  // getWorkflowTaskById：2026-11-13 交接快照记的修复（dispatch 改用按主键查的那个函数），断言跟着对齐
+  check('按 opts.taskId 现查 workflow_tasks（流程节点进入合同）', /opts\.taskId \? store\.getWorkflowTaskById\(opts\.taskId\)/.test(src));
   check('startMemberRun 拼了 platformContractBlock + 结构化 taskContractBlock（卡/流程/项目/台账都传）',
     /const contractBlock = \[[\s\S]*?platformContractBlock\(\),[\s\S]*?taskContractBlock\(\{[\s\S]{0,200}?card: opts\.card[\s\S]{0,200}?workflow: workflowTask[\s\S]{0,200}?project[\s\S]{0,200}?tasks: myTasks[\s\S]{0,120}?\}\)/.test(src));
   check('契约进了 fullTask（每轮交给运行时）', /fullTask = \[[^\]]*contractBlock/.test(src));

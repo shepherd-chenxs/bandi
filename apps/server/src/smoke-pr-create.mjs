@@ -136,6 +136,12 @@ check('短描述等于仓库名 → 拒', rejectedNew([`chore/v${V}-bandi`]).len
 check('「平台建的分支」= 老 bandi/ 或新 <type>/x（feature/x 是人的分支）', git.isPlatformBranchName('bandi/old') && git.isPlatformBranchName('fix/demo') && !git.isPlatformBranchName('feature/human') && !git.isPlatformBranchName('main'));
 check('凭据闸抓住 .env / 私钥 / token 文件', JSON.stringify(git.findSecretPaths(['.env', 'id_rsa', 'a/b/token.json', 'k.pem'])) === '[".env","id_rsa","a/b/token.json","k.pem"]');
 check('模板类放过（.env.example 本来就该提交）', JSON.stringify(git.findSecretPaths(['.env.example', 'config.sample.ts', 'README.md'])) === '[]');
+/* 凭据闸 v2（2026-11-13）：名字只做初筛，命中的分两档 —— 判据代码自己也长"凭据脸"，别再凭名字拦它 */
+const secretPaths = await import('./secret-paths.mjs');
+const gateClass = secretPaths.classifySecretSuspects(['.env', 'id_rsa', 'src/secret-paths.mjs', 'a/token-bucket.mjs', 'cert.pem', '.env.example']);
+check('分档：实锤档（.env / id_rsa）直接拦，判据代码 / token-bucket / pem 归内容说了算', JSON.stringify(gateClass.keyfiles) === '[".env","id_rsa"]' && JSON.stringify(gateClass.wordy) === '["src/secret-paths.mjs","a/token-bucket.mjs","cert.pem"]', JSON.stringify(gateClass));
+check('内容扫描：私钥块与已知令牌命中', secretPaths.scanContentForSecrets('k.pem', '-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n') === '私钥块（PEM/OpenSSH 等）' && secretPaths.scanContentForSecrets('token.json', '{"token": "sk-proj-abcdefghijklmnopqrstuvwx"}') === 'OpenAI 风格密钥（sk-…）');
+check('内容扫描：占位值 / 测试豁免位算干净（拦测试假密钥等于逼人搬走测试）', secretPaths.scanContentForSecrets('token.json', '{"token": "占位值待填"}') === null && secretPaths.scanContentForSecrets('tests/fixtures/token.json', '{"token": "sk-proj-abcdefghijklmnopqrstuvwx"}') === null);
 check('status -z：带空格的路径不被切两半', JSON.stringify(git.parseStatusZ(' M src/a b.ts\0')) === '[{"status":" M","path":"src/a b.ts"}]');
 check('status -z：重命名连着读（下一条是源路径）', JSON.stringify(git.parseStatusZ('R  new/n.ts\0old/n.ts\0?? x.md\0')) === '[{"status":"R ","path":"new/n.ts","from":"old/n.ts"},{"status":"??","path":"x.md"}]', JSON.stringify(git.parseStatusZ('R  new/n.ts\0old/n.ts\0?? x.md\0')));
 check('status -z：**未暂存**重命名（` R`）也连着读源路径', JSON.stringify(git.parseStatusZ(' R b.txt\0a.txt\0')) === '[{"status":" R","path":"b.txt","from":"a.txt"}]', JSON.stringify(git.parseStatusZ(' R b.txt\0a.txt\0')));
@@ -200,8 +206,43 @@ try {
 } catch (e) {
   blocked = e.message;
 }
-check('改动里有 .env → 拒绝推送，并说清为什么', /看着像凭据/.test(blocked) && /\.env/.test(blocked), blocked.slice(0, 70));
+check('改动里有 .env → 拒绝推送，并说清为什么', /按约定就该是凭据/.test(blocked) && /\.env/.test(blocked) && /不提供放行口令/.test(blocked), blocked.slice(0, 70));
 check('被拦下时没有产生提交（工作树还是那三个文件）', g(['-C', work, 'log', '--oneline'], work).split('\n').length === 1 && (await git.workState(row)).dirtyCount === 3);
+
+/*
+ * 凭据闸 v2（2026-11-13 实报：secret-paths.mjs 自己被自己的名字拦了，流程卡在「提交 PR」
+ * 等人处理）：文件名只做初筛，命中的分两档 ——
+ *   · 名字像凭据、内容干净 → **自动放行**，结果里留一句备注（用户无感，不再"等人处理"）；
+ *   · 内容扫出密钥 → 拦，雇主显式确认（allowSecrets）能放 —— 这才是配得上人工决策的灰区；
+ *   · .env 本体 → 拦死，allowSecrets 也无效（实锤档没有口令通道）。
+ */
+const gate = makeRepo('gate');
+fs.mkdirSync(path.join(gate.work, 'apps', 'server', 'src'), { recursive: true });
+fs.writeFileSync(path.join(gate.work, 'apps', 'server', 'src', 'secret-paths.mjs'), 'const RE = /token/;\nexport const clean = true;\n');
+const gateRow = (await git.connectRepo('smoke/gate', null, gate.work)).repo;
+const gatePush = await git.commitAndPush(gateRow, { branch: 'fix/v1.4.0-gate-clean', message: 'feat: 判据模块' });
+check('名字像凭据、内容干净 → 自动放行（不再等人处理）', gatePush.branch === 'fix/v1.4.0-gate-clean', JSON.stringify(gatePush.branch));
+check('放行时留了备注（谁被扫过、结论是什么）', (gatePush.secretNotes ?? []).some((s) => /secret-paths\.mjs/.test(s) && /已放行/.test(s)), JSON.stringify(gatePush.secretNotes));
+
+fs.writeFileSync(path.join(gate.work, 'token-store.json'), '{"token": "sk-proj-abcdefghijklmnopqrstuvwx"}\n');
+let hitBlocked = '';
+try {
+  await git.commitAndPush(gateRow, { branch: 'fix/v1.4.0-gate-hit', message: 'feat: token store' });
+} catch (e) {
+  hitBlocked = e.message;
+}
+check('内容扫出密钥 → 拦，报错带着命中原因', /内容扫描/.test(hitBlocked) && /token-store\.json/.test(hitBlocked), hitBlocked.slice(0, 90));
+const hitPass = await git.commitAndPush(gateRow, { branch: 'fix/v1.4.0-gate-hit', message: 'feat: token store', allowSecrets: true });
+check('内容实锤 + 雇主显式确认 → 放行（灰区配得上人工决策）', hitPass.branch === 'fix/v1.4.0-gate-hit', JSON.stringify(hitPass.branch));
+
+fs.writeFileSync(path.join(gate.work, '.env'), 'API_KEY=x\n');
+let envBlocked = '';
+try {
+  await git.commitAndPush(gateRow, { branch: 'fix/v1.4.0-gate-env', message: 'feat: env', allowSecrets: true });
+} catch (e) {
+  envBlocked = e.message;
+}
+check('.env 本体：allowSecrets 也拦（实锤档没有口令通道）', /不提供放行口令/.test(envBlocked) && /\.env/.test(envBlocked), envBlocked.slice(0, 90));
 
 const pushed = await git.commitAndPush(row, {
   message: 'feat: 加一个功能',
