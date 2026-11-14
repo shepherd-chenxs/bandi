@@ -91,7 +91,7 @@ try {
 
   console.log('① 请求体编码：UTF-16LE + BOM（PowerShell 重定向写出来的那种）');
   {
-    const json = JSON.stringify({ cards: [card({ status: '想法', assigneePersonaId: dev.id, idempotencyKey: 'p2-utf16' })] });
+    const json = JSON.stringify({ cards: [card({ status: 'idea', assigneePersonaId: dev.id, idempotencyKey: 'p2-utf16' })] });
     const body = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(json, 'utf16le')]);
     const r = await post('/api/agent/cards/batch', body);
     check('UTF-16LE → 201', r.status === 201 && r.body.tasks?.length === 1, `${r.status} ${r.body.error ?? ''}`);
@@ -99,44 +99,44 @@ try {
 
   console.log('\n② 请求体形状：裸数组；项目省略 → 用群关联项目');
   {
-    const r = await post('/api/agent/cards/batch', JSON.stringify([card({ status: '想法', assigneePersonaId: dev.id, idempotencyKey: 'p2-array' })]));
+    const r = await post('/api/agent/cards/batch', JSON.stringify([card({ status: 'idea', assigneePersonaId: dev.id, idempotencyKey: 'p2-array' })]));
     check('裸数组 → 201', r.status === 201 && r.body.tasks?.length === 1, `${r.status} ${r.body.error ?? ''}`);
     check('省略项目 → 群关联项目', r.body.tasks?.[0]?.projectId === project.id, `${r.body.tasks?.[0]?.projectId} / ${project.id}`);
   }
 
   console.log('\n③ 补记：一步写成实际状态、不重跑、来源 backfill');
   {
-    const r = await post('/api/agent/cards/batch', JSON.stringify({ cards: [card({ title: '补记：登录页已改完', status: '已完成', backfill: true, assigneePersonaId: dev.id, description: '补记：嘉辉在群里改完，证据见群记录', idempotencyKey: 'p2-backfill' })] }));
+    const r = await post('/api/agent/cards/batch', JSON.stringify({ cards: [card({ title: '补记：登录页已改完', status: 'done', backfill: true, assigneePersonaId: dev.id, description: '补记：嘉辉在群里改完，证据见群记录', idempotencyKey: 'p2-backfill' })] }));
     const t = r.body.tasks?.[0];
-    check('补记 → 201 且状态「已完成」', r.status === 201 && t?.status === '已完成', `${r.status} ${t?.status}`);
+    check('补记 → 201 且状态「已完成」', r.status === 201 && t?.status === 'done', `${r.status} ${t?.status}`);
     check('补记不重跑（runId 为空）', t && !t.runId, String(t?.runId));
     check('补记来源 = backfill', t?.source === 'backfill', String(t?.source));
   }
 
   console.log('\n④ 补记只写最终状态：带「待办」不是补记 → 400 E2058');
   {
-    const r = await post('/api/agent/cards/batch', JSON.stringify({ cards: [card({ title: '假补记', status: '待办', backfill: true })] }));
+    const r = await post('/api/agent/cards/batch', JSON.stringify({ cards: [card({ title: '假补记', status: 'todo', backfill: true })] }));
     check('补记 + 待办 → 400 E2058', r.status === 400 && r.body.code === 'E2058', `${r.status} ${r.body.code}`);
   }
 
   console.log('\n⑤ 验收人 = 派活人：雇主的卡 PM 只能提交待验收');
   {
-    const ownerCard = pt.createProjectTask(project, { title: '雇主派的主卡', status: '待验收', assigneeGroupId: groupId });
-    const bad = await patch(`/api/projects/tasks/${ownerCard.id}`, { status: '已完成' });
+    const ownerCard = pt.createProjectTask(project, { title: '雇主派的主卡', status: 'review', assigneeGroupId: groupId });
+    const bad = await patch(`/api/projects/tasks/${ownerCard.id}`, { status: 'done' });
     check('PM 把主卡改「已完成」→ 403 E4034', bad.status === 403 && bad.body.code === 'E4034', `${bad.status} ${bad.body.code}`);
-    const ok = await patch(`/api/projects/tasks/${ownerCard.id}`, { status: '待验收' });
+    const ok = await patch(`/api/projects/tasks/${ownerCard.id}`, { status: 'review' });
     check('提交「待验收」不受影响 → 200', ok.status === 200, String(ok.status));
   }
 
   console.log('\n⑥ PM 自己派的卡：能自己验收，也能退回执行人重跑');
   {
-    const own = await post('/api/agent/cards', JSON.stringify(card({ title: 'PM 自己派的卡', status: '想法', assigneePersonaId: dev.id, idempotencyKey: 'p2-own' })));
+    const own = await post('/api/agent/cards', JSON.stringify(card({ title: 'PM 自己派的卡', status: 'idea', assigneePersonaId: dev.id, idempotencyKey: 'p2-own' })));
     const id = own.body.task?.id;
-    const done = await patch(`/api/projects/tasks/${id}`, { status: '已完成' });
-    check('自己建的卡改「已完成」→ 200', done.status === 200 && done.body.task?.status === '已完成', `${done.status} ${done.body.task?.status ?? done.body.error}`);
+    const done = await patch(`/api/projects/tasks/${id}`, { status: 'done' });
+    check('自己建的卡改「已完成」→ 200', done.status === 200 && done.body.task?.status === 'done', `${done.status} ${done.body.task?.status ?? done.body.error}`);
     // 验收不通过：退回执行人重跑（回待办 → 服务端自动开工）
-    const back = await patch(`/api/projects/tasks/${id}`, { status: '待办' });
-    check('退回执行人重跑 → 200（待办/进行中）', back.status === 200 && ['待办', '进行中'].includes(back.body.task?.status), `${back.status} ${back.body.task?.status ?? ''}`);
+    const back = await patch(`/api/projects/tasks/${id}`, { status: 'todo' });
+    check('退回执行人重跑 → 200（待办/进行中）', back.status === 200 && ['todo', 'doing'].includes(back.body.task?.status), `${back.status} ${back.body.task?.status ?? ''}`);
   }
 
   console.log('\n⑦ 看板行带派活人字段（「只看我的」筛选用）');

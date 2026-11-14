@@ -1,7 +1,7 @@
 /* settings.mjs —— 设置、关于、额度。
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
 import { esc, setRoute, setTheme, toast } from './shell.mjs';
-import { api, dt, failHtml, initial, post, showFail, wireDialogHead } from './ui.mjs';
+import { api, dt, failHtml, initial, openCtxMenu, post, showFail, wireDialogHead } from './ui.mjs';
 import { headRow, renderPlugins, renderRuntimes, rtLoading } from './connectors.mjs';
 import { openRemotePage, setPluginRerender } from './experts.mjs';
 import { askText, confirmDo } from './machine.mjs';
@@ -12,6 +12,7 @@ import { openCodeRepoPage, renderSkillCards } from './skills.mjs';
 // 设置 › 安全（2026-10-31 IAM Phase 1）：我的会话 + 审计日志
 import { renderSecurity } from './securityadmin.mjs';
 import { $, S } from './core.mjs';
+import { registerLayer } from './navstack.mjs';
 
 
 
@@ -65,8 +66,39 @@ const THEME_OPTS = [
   ['dark', '深色'],
   ['system', '跟随系统'],
 ];
+/** 主题当前值的中文名（手机「我的」页那行显示"深色"，不显示 dark） */
+const themeLabel = (v) => (THEME_OPTS.find(([k]) => k === v) ?? THEME_OPTS[2])[1];
+
+/*
+ * 机器信息行渲染（2026-11-11 收拢到模块级）：「我的」页的桌面「这台机器」卡
+ * 与手机「我的 › 设置」子页的「这台机器」卡共用同一行写法，别再各抄一份。
+ * 「实例标识」给等宽（.me-v-mono）—— 排查用的 id，换行难读。
+ */
+const machineRowHtml = ([k, v]) =>
+  `<div class="me-kv"><span class="me-k">${esc(k)}</span><span class="me-v ${k === '实例标识' ? 'me-v-mono' : ''}">${esc(v)}</span></div>`;
+
+/*
+ * 手机端「这台机器」三行（2026-11-07）：系统 / 版本**分开** —— 窄屏一行放不下
+ * "Linux 6.8.0-138-generic x64 · 班底 v1.5.x"，`.me-v` 是省略，硬挤会把内核号截掉。
+ * 2026-11-11 起这三行搬进「我的 › 设置」子页（openMeSet），「我的」页不再画。
+ */
+const phoneMachineAll = (hello) =>
+  hello
+    ? [
+        ['设备名', hello.hostname || hello.label || '—'],
+        ['系统', hello.os || '未知'],
+        ['版本', hello.version ? `班底 v${hello.version}` : '未知'],
+      ]
+    : [];
 
 export async function openMe() {
+  /*
+   * 「我的 › 设置」子页自愈（2026-11-11）：openMe 是"回到个人中心"的唯一渲染口 ——
+   * 换 tab / mb-nav / 子页自己的返回都会落到这里，子页的视觉态必须跟着收干净，
+   * 不然画面在「我的」、body 上还挂着子页标记，Esc/返回的判断就会错拍。
+   */
+  meSetOpen = false;
+  document.body.classList.remove('mb-me-set');
   setRoute('me');
   setPluginRerender(null);
   showView('settings');
@@ -127,6 +159,8 @@ export async function openMe() {
    * 「系统」也用 `hello.os`（2026-11-07 用户实报）：原来取 `navigator.platform`，
    * 那是**看页面那台电脑**的平台 —— 在 Windows 上远程看 Linux 主机会显示 Win32，
    * 跟这张卡「这台机器」的名头对不上。系统只有服务端自己知道，由它报。
+   * 桌面四行里系统与版本并成一行（卡宽够）；手机的三行版式见模块级 phoneMachineAll
+   * （2026-11-11 起随「这台机器」卡搬进「我的 › 设置」子页，「我的」页只留桌面版）。
    */
   const hello = await api('/api/hello').catch(() => null);
   /*
@@ -142,9 +176,8 @@ export async function openMe() {
   /*
    * 机器信息两套行（2026-11-07）：
    *   桌面 —— 四行，系统与版本并成一行（卡宽够，"Linux 6.x x64 · 班底 v1.5.x"一行读得完）；
-   *   手机 —— 三行，系统 / 版本**分开**：窄屏一行放不下"Linux 6.8.0-138-generic x64 ·
-   *   班底 v1.5.x"，`.me-v` 是 break-all，硬挤会在内核号中间断字（iOS 设置页也是拆行的）。
-   *   本机地址手机上不画：与「已配对到」同一个 location.host；实例标识是排查用的，同上。
+   *   手机 —— 三行版式（模块级 phoneMachineAll）随「这台机器」卡搬进了「我的 › 设置」
+   *   子页，这里不再算手机那一份。
    */
   /*
    * 外网访问（2026-11-08 接入，同日随 frp 内置下线删除）：隧道归外部管之后，
@@ -158,22 +191,27 @@ export async function openMe() {
         ['实例标识', hello.instanceId || '—'],
       ]
     : [];
-  const phoneMachineAll = hello
-    ? [
-        ['设备名', hello.hostname || hello.label || '—'],
-        ['系统', hello.os || '未知'],
-        ['版本', hello.version ? `班底 v${hello.version}` : '未知'],
-      ]
-    : [];
-  const machineRowHtml = ([k, v]) =>
-    `<div class="me-kv"><span class="me-k">${esc(k)}</span><span class="me-v ${k === '实例标识' ? 'me-v-mono' : ''}">${esc(v)}</span></div>`;
   const machineRows = machineAll.map(machineRowHtml).join('');
-  const phoneMachineRows = phoneMachineAll.map(machineRowHtml).join('');
+  /* 信箱未读数：hero 右上角那颗红点（me-inbox-dot）用；与左栏角标同源（S.noticesUnread） */
+  const inboxUnread = Number(S.noticesUnread) || 0;
+  /*
+   * 身份卡的两枚 chip（2026-11-11 方案 B「档案卡」）：**中枢账号** + **这台机器**。
+   * 它们回答的是"我是谁 / 我在哪台机器"—— 原来这两件事只靠一层全宽渐变和一行
+   * 灰字暗示，收成 chip 才有"档案"的读法。设备名取 hello.label/hostname，
+   * 与「当前设备」行同源；没登录 / 拉不到 hello 就不画那一枚。
+   */
+  const devName = hello ? hello.label || hello.hostname || '' : '';
+  const heroChips = [
+    isUser
+      ? '<span class="me-chip ac"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3.2 19 6v5.4c0 4.2-2.8 7.4-7 9.4-4.2-2-7-5.2-7-9.4V6z"/></svg>中枢账号</span>'
+      : '',
+    devName ? `<span class="me-chip">${esc(devName)}</span>` : '',
+  ].join('');
   $('settingsView').innerHTML = `
     ${headRow('<b>我的</b>')}
     <div class="detail-body me-body">
       <section class="set-sec me-hero-sec">
-        <div class="me-hero-card">
+        <div class="me-hero-card${onPhone ? ' me-hc' : ''}">
           ${avaHtml}
           <div class="me-who">
             <div class="me-name">
@@ -200,12 +238,30 @@ export async function openMe() {
                   : `<button type="button" class="me-meta me-nick-set" id="meNickSet">＋ 设置昵称</button>`
             }
           </div>
+          ${
+            /* 信箱图标（2026-11-11 用户："在信息区加一个信箱图标，点击之后跳转到
+               信箱页面"）：hero 右缘的一颗图标钮 —— 身份区里放得下、不用钻清单；
+             * 行为与下面「平台通知」行同一把 mb-nav（窄屏才画，桌面左栏已有信箱）。
+             * 右上角未读红点（me-inbox-dot）与行尾读数同源（S.noticesUnread），
+             * inbox.mjs 的 paintInboxBadge 会一并刷新 —— 0 未读时隐藏，>99 折成 99+。
+               图形 = 信箱页空态那只信封（rect + 双折线），线宽 1.8 同 hero 铅笔。 */
+            onPhone
+              ? `<button type="button" class="me-inbox-icon" id="meInboxIcon" aria-label="信箱">
+                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                     <rect x="3" y="5.5" width="18" height="13" rx="2"/>
+                     <path d="M3.6 6.6 12 13l8.4-6.4"/>
+                     <path d="M3 16.5l5.4-4.2M21 16.5l-5.4-4.2"/>
+                   </svg><i class="me-inbox-dot" id="meInboxDot"${inboxUnread ? '' : ' hidden'}>${inboxUnread > 99 ? '99+' : inboxUnread}</i>
+                 </button>`
+              : ''
+          }
+          ${onPhone && heroChips ? `<div class="me-chips">${heroChips}</div>` : ''}
         </div>
       </section>
       ${
         /* 当前机器（2026-11-07）：这台电脑的名字 / 系统 / 实例标识 —— 「我的」页原本
-           只有账号没有机器，用户问"这台设备呢"。桌面画全四行；手机窄屏另有一张
-           同名卡（下面 phoneMachineRows 那段），但只留两行 —— 手机上"这台机器"
+           只有账号没有机器，用户问"这台设备呢"。桌面画全四行；手机窄屏的同名三行卡
+           2026-11-11 起搬进「我的 › 设置」子页（openMeSet）—— 手机上"这台机器"
            指的是**连过去的那台班底机**，跟"这台设备"（手机自己）不是一回事。 */
         !onPhone && machineRows
           ? `<section class="set-sec me-dev-sec">
@@ -234,70 +290,45 @@ export async function openMe() {
       }
       ${
         /*
-         * 外观（2026-11-05 用户：「我的页面加一个主题选择的功能。可以选深色、浅色那种」）。
-         * 只在手机形态画：桌面有 设置 › 偏好 › 主题 那一处，再摆一份是重复入口。
-         * 位置紧贴 hero —— 它正好吃 §15b 的 `.me-hero-sec + .set-sec { margin-top:-36px }`
-         * 上浮规则，成为"渐变头 + 白卡上浮"里的第一张卡。
-         * 控件形态（同日晚用户拍板：「也改成这种选项卡的方式」，指桌面偏好设置那张截图）：
-         * 一行「主题 + 分段选项卡」，与桌面 .seg 同一结构 —— 不做三行单选了。
-         * 右对齐的分段不占整行宽（三格总宽 ~240px），390px 放得下，不会出现
-         * 当初担心的"跟随系统挤成两行"。
+         * 「我的」页的分组清单（2026-11-11 深夜第四版，用户："这个页面可以参考微信
+         * 我的页面的布局"）。
+         *
+         * 微信那边不是"卡"，是**分组块**：一块满宽、无圆角、无描边、无投影的白，
+         * 与上一块之间隔 10px 页底灰；块内行与行之间一条内缩 20 的 hairline。
+         * 三行完全同构 —— 左边名称 17，右边值 15.5 灰 + ›。
+         *
+         * 主题行因此从"行内分段选项卡"（2026-11-05 的形态）改成"值 + 箭头"：
+         * 分段铺在行里是三个里唯一一个"控件"，跟微信的读法不是一套；点整行弹底部
+         * 选择（复用 #ctxMenu 的手机 sheet 形态），与 iOS「设置 › 显示与亮度」同一个
+         * 交互 —— 值在行上永远看得见，改一次也只多一次点击。
+         *
+         * 「当前设备」行条件沿用上一版：只在壳里 + 中枢账号会话画 —— 面板和启动页是
+         * 两个 origin，"设备列表"只存在于壳的启动页上；桥 = 导航回启动页带
+         * #bandi-devices（原生壳直接调 BandiShell）。
+         * 桌面不画这一块：桌面左栏有「设置」，主题在 设置 › 偏好，重复入口没有意义。
          */
         onPhone
-          ? `<section class="set-sec me-theme-sec">
-               <div class="set-head"><b>外观</b></div>
-               <div class="me-theme-box" id="meThemeBox">
-                 <div class="me-theme-row">
-                   <span class="me-theme-label">主题</span>
-                   <div class="seg me-theme-seg">
-                     ${THEME_OPTS.map(
-                       ([v, label]) =>
-                         `<button type="button" class="${S.theme === v ? ' on' : ''}" data-theme-opt="${v}">${label}</button>`,
-                     ).join('')}
-                   </div>
-                 </div>
-               </div>
-             </section>`
-          : ''
-      }
-      ${
-        /* 手机窄屏的「这台机器」（2026-11-07 用户：「修改手机端」）：手机上"这台机器"
-           指的是**被连接的那台班底机**（当前这个页面就是它服务的），与上面「这台设备」
-           （手机自己）是两张卡、两件不同的事实 —— 分开摆，别混成一张。
-           只画「设备名 + 系统 / 版本」两行：本机地址与「已配对到」重复，实例标识是
-           排查才用的，窄屏一屏放得下两条就够回答"我连的是哪台机、跑的哪版"。 */
-        onPhone && phoneMachineRows
-          ? `<section class="set-sec me-dev-sec">
-               <div class="set-head"><b>这台机器</b></div>
-               <div class="me-dev-box">${phoneMachineRows}</div>
-             </section>`
-          : ''
-      }
-      ${
-        /* 「通用」（2026-11-08 重设计）：清除缓存与「当前设备」并进同一张卡。
-           原来当前设备是**孤零零一张无组头的卡**悬在两卡之间，右沿与邻卡参差、
-           行高也比邻居矮 —— 是整页最破的一处。两行同属"这台手机 ↔ 这台班底机"
-           的维护动作，收进一个分组正合适，分割线由 .me-kv + .me-kv 自动接上。
-           （当前设备 2026-11-07：只在壳里 + 中枢账号会话画 —— 面板和启动页是两个
-           origin，"设备列表"只存在于壳的启动页上；桥 = 导航回启动页带 #bandi-devices。）
-           值列超长（DESKTOP-ME3RQ97）由 15c 的省略规则兜住，不再顶挤 chevron。 */
-        onPhone
-          ? `<section class="set-sec me-cache-sec">
-               <div class="set-head"><b>通用</b></div>
-               <div class="me-dev-box">
-                 <button type="button" class="me-kv me-cache-row" id="meClearCache">
-                   <span class="me-k">清除缓存</span>
-                   <span class="me-v" id="meCacheHint">计算中…</span>
+          ? `<section class="set-sec me-one-sec">
+               <div class="me-one-box" id="meOneBox">
+                 <button type="button" class="me-kv me-cache-row" id="meThemeRow">
+                   <span class="me-k">主题</span>
+                   <span class="me-v" id="meThemeVal">${esc(themeLabel(S.theme))}</span>
                    <i class="me-chevron" aria-hidden="true">›</i>
-                 </button>${
+                 </button>
+                 ${
                    shell && hello && isUser
                      ? `<button type="button" class="me-kv me-cache-row" id="meSwitchDevice">
                           <span class="me-k">当前设备</span>
-                          <span class="me-v">${esc(hello.label || hello.hostname || '—')}</span>
+                          <span class="me-v">${esc(devName || '—')}</span>
                           <i class="me-chevron" aria-hidden="true">›</i>
                         </button>`
                      : ''
                  }
+                 <button type="button" class="me-kv me-cache-row" id="meSetEntry">
+                   <span class="me-k">设置</span>
+                   <span class="me-v">机器 · 缓存 · 退出</span>
+                   <i class="me-chevron" aria-hidden="true">›</i>
+                 </button>
                </div>
              </section>`
           : ''
@@ -325,8 +356,13 @@ export async function openMe() {
       ${
         /* 退场动作整宽一行：个人中心的"走人"动作用整行 + 文字染色，比右下角一颗
            小按钮稳。退出登录染 --bad（"走人"的分量）；断开连接/去登录是中性动作，不染。
-           （2026-11-07：账号安全双卡随本地密码/OTP 退场 —— 密码与动态验证都在中枢上管。） */
-        `<section class="set-sec me-out-sec">
+           （2026-11-07：账号安全双卡随本地密码/OTP 退场 —— 密码与动态验证都在中枢上管。）
+           2026-11-11 用户："退出按钮放到设置页面" —— 手机上这一行搬进「我的 › 设置」
+           子页底部（openMeSet 同款模板），「我的」页只留身份/外观/设备/设置入口；
+           桌面不动（桌面没有子页，这行仍是「我的」页的收尾）。 */
+        onPhone
+          ? ''
+          : `<section class="set-sec me-out-sec">
            <div class="me-out-box">${
              canLogout
                ? '<button class="me-out me-out-danger" id="meLogout">退出登录</button>'
@@ -334,20 +370,38 @@ export async function openMe() {
            }</div>
          </section>`
       }
+      ${/* 版本行收口（2026-11-11 方案 B）：两张卡之后页面原来剩一段空白，看着像"没画完"。
+           一行 11.5px 的版本号把它收住 —— 空白变成呼吸，也顺手回答了"我这是哪一版"。
+           只在手机形态画；桌面那张「这台机器」卡里已经有版本行。 */ ''}
+      ${onPhone && hello?.version ? `<div class="me-foot">班底 v${esc(hello.version)}</div>` : ''}
     </div>`;
   /*
-   * 外观选择（2026-11-05）：setTheme 默认会重绘「设置 › 偏好」那一页 ——
-   * 手机上那页根本不存在，点一下就被踢出「我的」。keepPage 让它只存值 + 换肤，
-   * 选中态就在原地toggle（不整页重绘，也就不会闪一下、不会滚回顶部）。
+   * 主题（2026-11-11 第四版）：这一行改成「值 + 箭头」，点整行弹底部选择 ——
+   * 手机形态下 #ctxMenu 本来就是贴底 sheet（mobile.css §16.12），跟长按会话那个
+   * 菜单是同一套语言，用户不用学第二遍；选中项前面点一个 ✓，当前值在行上其实也
+   * 一直看得见。
+   * setTheme 仍带 keepPage：手机上「设置 › 偏好」那一页根本不存在，不 keepPage
+   * 会被踢出「我的」再弹回来（2026-11-05 踩过）。
    */
-  const themeBox = $('meThemeBox');
-  if (themeBox) {
-    themeBox.querySelectorAll('[data-theme-opt]').forEach((b) => {
-      b.onclick = () => {
-        setTheme(b.dataset.themeOpt, { keepPage: true });
-        themeBox.querySelectorAll('[data-theme-opt]').forEach((x) => x.classList.toggle('on', x === b));
-      };
-    });
+  const themeRow = $('meThemeRow');
+  if (themeRow) {
+    themeRow.onclick = () => {
+      const r = themeRow.getBoundingClientRect();
+      openCtxMenu(
+        r.left,
+        r.bottom + 6,
+        THEME_OPTS.map(([v, label]) => ({
+          /* 只有当前项带 ✓（三项都带前缀符号时，居中排版会被那个符号推歪半格，
+             看着像每行都"少了一点"）；选中即生效，不需要"确定" */
+          label: `${S.theme === v ? '✓ ' : ''}${label}`,
+          run: () => {
+            setTheme(v, { keepPage: true });
+            const val = $('meThemeVal');
+            if (val) val.textContent = label;
+          },
+        })),
+      );
+    };
   }
   $('meLogout')?.addEventListener('click', () => void logout());
   /*
@@ -392,64 +446,34 @@ export async function openMe() {
   $('meNickEdit')?.addEventListener('click', () => void editNick());
   $('meNickSet')?.addEventListener('click', () => void editNick());
   /*
-   * 当前设备 → 回壳的设备列表（2026-11-07）：只在壳里渲染（见上面 shell）。
-   * 原生壳直接调 BandiShell.openDeviceList()；旧 Tauri 壳走启动页意图 hash。
+   * 信箱入口（2026-11-11 手机端）：hero 右上角那颗信封图标。走 mb-nav 事件让
+   * mobile.mjs 统一 setNav —— 跟下面设置入口（goSet）同一条解环路子，
+   * settings 不直接 import state.mjs。（原「平台通知」行入口已删 —— 图标足够，
+   * 2026-11-11 用户："这个去掉"。）
+   */
+  $('meInboxIcon')?.addEventListener('click', () => {
+    document.dispatchEvent(new CustomEvent('mb-nav', { detail: { nav: 'inbox' } }));
+  });
+  /*
+   * 当前设备 → 回壳的设备列表（2026-11-07，2026-11-11 挪回「我的」页）：
+   * 只在壳里渲染（见上面 shell）。原生壳直接调 BandiShell.openDeviceList()；
+   * 旧 Tauri 壳走启动页意图 hash。
    */
   $('meSwitchDevice')?.addEventListener('click', () => {
     if (nativeShell) { nativeShell.openDeviceList(); return; }
     if (shell?.home) location.href = shell.home + '#bandi-devices';
   });
   /*
-   * 清除缓存（2026-11-06）：进页先异步算一遍 bandi-static-* 缓存体积亮在行尾；
-   * 点击 → confirmDo → 清掉全部 Cache Storage + 注销 Service Worker → location.reload()。
-   * 注销而不是只删缓存：SW 注销后这次重载直连网络，index.html 会重新注册出
-   * 一个"只装新文件"的 SW —— 相当于把"杀 App 重开"压进一个按钮里。
-   * 任何一步失败都不拦重载（清不掉就硬刷，网络优先的 SW 本来也会拿新文件）。
+   * 「设置」入口（2026-11-11）：打开「我的 › 设置」子页（openMeSet）。
+   * 子页不开新的一级栏（S.nav 仍是 'me'，底部 tab 亮「我的」，与信箱同理），
+   * 所以不走 mb-nav，直接在本模块内换内容 —— hello 带过去，子页的
+   * 「这台机器」三行要用。
    */
-  const cacheRow = $('meClearCache');
-  if (cacheRow) {
-    const hint = $('meCacheHint');
-    const fmtBytes = (n) =>
-      n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.ceil(n / 1024))} KB`;
-    const hasCaches = 'caches' in window;
-    (async () => {
-      /*
-       * 没有 caches = 非安全上下文（手机走 http://192.168.5.x 明文 HTTP，Cache Storage /
-       * Service Worker 这对安全上下文专属 API 浏览器不给）。没有 SW 就没有 SW 缓存，
-       * 页面资源每次都从服务器现拉 —— 无东西可清，行尾说"无需清除"，下面也不绑点击
-       * （2026-11-06 用户看到"不支持"问为什么：那话听着像坏了，其实是"没有缓存"）。
-       */
-      if (!hasCaches) { hint.textContent = '无需清除'; return; }
-      let bytes = 0;
-      for (const key of await caches.keys()) {
-        const store = await caches.open(key);
-        for (const req of await store.keys()) {
-          const res = await store.match(req);
-          if (res) bytes += (await res.blob()).size;
-        }
-      }
-      hint.textContent = bytes ? fmtBytes(bytes) : '无缓存';
-    })().catch(() => { hint.textContent = ''; });
-    if (!hasCaches) return;   // 没有可清的东西，这行不是按钮 —— 点了只会空转重载
-    cacheRow.addEventListener('click', async () => {
-      const ok = await confirmDo(
-        '清掉手机上缓存的页面资源，然后重新拉最新版。登录状态和数据不受影响。',
-        { ok: '清除并刷新', danger: false },
-      );
-      if (!ok) return;
-      try {
-        if ('caches' in window) {
-          for (const key of await caches.keys()) await caches.delete(key);
-        }
-        if (navigator.serviceWorker?.getRegistrations) {
-          for (const reg of await navigator.serviceWorker.getRegistrations()) await reg.unregister();
-        }
-      } catch { /* 清不掉就直接刷 */ }
-      location.reload();
-    });
-  }
-  // 兜底：正常进不到这个分支（面板门前移到登录页，见 auth.mjs 的 wantsPanelHtml），
-  // 万一从令牌通道挤进来，至少给一条出路 —— 别再摆一段讲实现细节的说明。
+  $('meSetEntry')?.addEventListener('click', () => void openMeSet({ hello, canLogout }));
+  /*
+   * 兜底：正常进不到这个分支（面板门前移到登录页，见 auth.mjs 的 wantsPanelHtml），
+   * 万一从令牌通道挤进来，至少给一条出路 —— 别再摆一段讲实现细节的说明。
+   */
   $('meGoLogin')?.addEventListener('click', () => location.reload());
   // 修改密码（2026-11-10）：只发起，表单与提交在 openPasswordDialog（模块级，见文件尾）
   const goPwd = () => void openPasswordDialog();
@@ -470,6 +494,176 @@ export async function openMe() {
     }
   });
 }
+
+/* ---------------------------------------------------------------- 我的 › 设置 */
+
+/*
+ * 「我的 › 设置」子页（2026-11-11 用户："做一个设置菜单，把这两个放到设置页面去"）：
+ * 「我的」页上的「这台机器」「通用」两张卡整体搬进这一页，「我的」只留一行入口。
+ * （「当前设备」行同日晚些时候又挪回「我的」页 —— 切设备是高频动作，用户拍板。）
+ *
+ * 为什么不开 setNav 的新一级栏：设置页整页是 PC 独有的（2026-11-03 白名单拍板），
+ * 手机不该被整页设置重新暴露；这一页是「我的」的下一级，S.nav 仍是 'me'，
+ * 底部 tab 亮「我的」（与信箱入口同理）。hello 由入口行带进来 ——
+ * 「这台机器」三行要用它，子页自己不再拉一遍接口。
+ *
+ * 历史栈照"详情压一格"的老规矩（与 kb-new / sch-page 同款：自己收自己那一格）：
+ *   · 进来 pushState({mbMeSet:1}) 一格 —— 手势/返回键退这一格回「我的」；
+ *   · 行按钮 / Esc 也走同一把 closeMeSet：按钮路径自己退格（alreadyPopped=false），
+ *     手势路径历史已退（alreadyPopped=true）只收画面；
+ *   · mobile.mjs 对 body.mb-me-set 放行（Esc 派 mb-me-set-leave、popstate 不抢），
+ *     渲染模块不反向 import 本文件 —— 走事件，本站既有的解环手法。
+ */
+let meSetOpen = false;    // 子页视觉态开关（唯一判据；历史格标记只做清理，不判它）
+let meSetPopping = false; // 自己 history.back() 触发的 popstate，别当手势再收一次画面
+
+function openMeSet({ hello, canLogout }) {
+  meSetOpen = true;
+  document.body.classList.add('mb-me-set');
+  const phoneRows = phoneMachineAll(hello).map(machineRowHtml).join('');
+  $('settingsView').innerHTML = `
+    ${
+      /* 导航栏（2026-11-11 用户："设置页加一个导航栏。返回按钮放到导航栏左侧，
+         使用图标按钮"）：替代旧版那张「‹ 返回」卡。规格照整页头（body.no-list
+         .detail-head，mobile.css §3）：--mb-nav 高 + 玻璃底 + 0.5px hairline，
+         sticky 吸顶；返回 = 左侧纯图标钮（.mb-back 同款 accent chevron），
+         标题「设置」居中（17/600）—— 三列 grid 让图标钮不挤偏标题。 */
+      `<header class="me-set-nav">
+         <button type="button" class="me-set-back" id="meSetBack" aria-label="返回">
+           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>
+         </button>
+         <span class="me-set-title">设置</span>
+         <span aria-hidden="true"></span>
+       </header>`
+    }
+    <div class="detail-body me-body">
+      ${
+        /* 「这台机器」（2026-11-07 手机端起的卡）：设备名 / 系统 / 版本 —— 手机上
+           "这台机器"指**被连接的那台班底机**（当前这个页面就是它服务的）。
+           本机地址与「已配对到」重复、实例标识是排查才用的，窄屏不画。 */
+        phoneRows
+          ? `<section class="set-sec me-dev-sec">
+               <div class="set-head"><b>这台机器</b></div>
+               <div class="me-dev-box">${phoneRows}</div>
+             </section>`
+          : ''
+      }
+      <section class="set-sec me-cache-sec">
+        <div class="set-head"><b>通用</b></div>
+        <div class="me-dev-box">
+          <button type="button" class="me-kv me-cache-row" id="meClearCache">
+            <span class="me-k">清除缓存</span>
+            <span class="me-v" id="meCacheHint">计算中…</span>
+            <i class="me-chevron" aria-hidden="true">›</i>
+          </button>
+        </div>
+      </section>
+      ${
+        /* 退场行（2026-11-11 用户："退出按钮放到设置页面"）：与「我的」页桌面版
+           同一套 DOM（.me-out-box + .me-out），从主页搬进来 —— 手机上"走人"是
+           低频且不可逆的动作，收到设置最底下，别摆在每次都会看的地方。
+           canLogout 由入口带进来（回环操作员没有可退的登录态，画「去登录」）。 */
+        `<section class="set-sec me-out-sec">
+           <div class="me-out-box">${
+             canLogout
+               ? '<button class="me-out me-out-danger" id="meLogout">退出登录</button>'
+               : '<button class="me-out" id="meGoLogin">去登录</button>'
+           }</div>
+         </section>`
+      }
+    </div>`;
+  /* 历史格：当前格已带标记（reload 直落的场景）就复用，不重压 —— 多压一格，
+     返回就得多按一次空的（详情页那条同款教训）。 */
+  if (!history.state?.mbMeSet) history.pushState({ mbMeSet: 1 }, '');
+  $('meSetBack')?.addEventListener('click', () => void closeMeSet(false));
+  $('meLogout')?.addEventListener('click', () => void logout());
+  $('meGoLogin')?.addEventListener('click', () => location.reload());
+  wireCacheRow();
+}
+
+/** 收子页回「我的」：alreadyPopped = 手势/返回键的 popstate 已经替我们退过格 */
+async function closeMeSet(alreadyPopped) {
+  if (!meSetOpen) return;
+  meSetOpen = false;
+  document.body.classList.remove('mb-me-set');
+  if (!alreadyPopped && history.state?.mbMeSet) {
+    meSetPopping = true;
+    history.back();
+  }
+  await openMe();
+}
+
+/* 手势 / 浏览器返回：只收画面，不再退格（那格历史系统已经退了）。
+   ⚠️ 要同时看类标记：tab / mb-nav 换栏时 mobile.mjs 已把类摘掉、自己退了格 ——
+   那条路的 popstate 不该再被当成"手势退子页"把画面拽回「我的」（2026-11-11）。 */
+window.addEventListener('popstate', () => {
+  if (meSetPopping) { meSetPopping = false; return; }
+  if (meSetOpen && document.body.classList.contains('mb-me-set')) void closeMeSet(true);
+});
+/* Esc：mobile.mjs 的 keydown 对 mb-me-set 放行时派这个事件（弹窗开着时不派） */
+document.addEventListener('mb-me-set-leave', () => void closeMeSet(false));
+
+/* 返回键的层级（navstack.mjs，2026-11-11）：「设置」子页在「我的」之上，收它回「我的」。 */
+registerLayer({
+  name: 'me-set',
+  level: 50,
+  cell: 'mbMeSet',
+  active: () => document.body.classList.contains('mb-me-set'),
+  close: () => void closeMeSet(true),
+});
+
+/*
+ * 清除缓存行（2026-11-06，原在 openMe，随「通用」卡搬进子页）：
+ * 进页先异步算一遍 bandi-static-* 缓存体积亮在行尾；
+ * 点击 → confirmDo → 清掉全部 Cache Storage + 注销 Service Worker → location.reload()。
+ * 注销而不是只删缓存：SW 注销后这次重载直连网络，index.html 会重新注册出
+ * 一个"只装新文件"的 SW —— 相当于把"杀 App 重开"压进一个按钮里。
+ * 任何一步失败都不拦重载（清不掉就硬刷，网络优先的 SW 本来也会拿新文件）。
+ */
+function wireCacheRow() {
+  const cacheRow = $('meClearCache');
+  if (!cacheRow) return;
+  const hint = $('meCacheHint');
+  const fmtBytes = (n) =>
+    n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.ceil(n / 1024))} KB`;
+  const hasCaches = 'caches' in window;
+  (async () => {
+    /*
+     * 没有 caches = 非安全上下文（手机走 http://192.168.5.x 明文 HTTP，Cache Storage /
+     * Service Worker 这对安全上下文专属 API 浏览器不给）。没有 SW 就没有 SW 缓存，
+     * 页面资源每次都从服务器现拉 —— 无东西可清，行尾说"无需清除"，下面也不绑点击
+     * （2026-11-06 用户看到"不支持"问为什么：那话听着像坏了，其实是"没有缓存"）。
+     */
+    if (!hasCaches) { hint.textContent = '无需清除'; return; }
+    let bytes = 0;
+    for (const key of await caches.keys()) {
+      const store = await caches.open(key);
+      for (const req of await store.keys()) {
+        const res = await store.match(req);
+        if (res) bytes += (await res.blob()).size;
+      }
+    }
+    hint.textContent = bytes ? fmtBytes(bytes) : '无缓存';
+  })().catch(() => { hint.textContent = ''; });
+  if (!hasCaches) return;   // 没有可清的东西，这行不是按钮 —— 点了只会空转重载
+  cacheRow.addEventListener('click', async () => {
+    const ok = await confirmDo(
+      '清掉手机上缓存的页面资源，然后重新拉最新版。登录状态和数据不受影响。',
+      { ok: '清除并刷新', danger: false },
+    );
+    if (!ok) return;
+    try {
+      if ('caches' in window) {
+        for (const key of await caches.keys()) await caches.delete(key);
+      }
+      if (navigator.serviceWorker?.getRegistrations) {
+        for (const reg of await navigator.serviceWorker.getRegistrations()) await reg.unregister();
+      }
+    } catch { /* 清不掉就直接刷 */ }
+    location.reload();
+  });
+}
+
 /* ---------------------------------------------------------------- 设置 */
 /**
  * 修改密码（2026-11-10）：「我的 › 修改密码」的表单弹窗。

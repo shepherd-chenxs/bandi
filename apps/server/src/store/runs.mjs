@@ -4,7 +4,7 @@ import { db, newId, nowIso } from './db.mjs';
 
 export function countActiveRunsForPersona(personaId) {
   return (
-    db.prepare("SELECT COUNT(*) AS n FROM runs WHERE personaId = ? AND status = '跑中'").get(personaId)?.n ?? 0
+    db.prepare("SELECT COUNT(*) AS n FROM runs WHERE personaId = ? AND status = 'running'").get(personaId)?.n ?? 0
   );
 }
 
@@ -13,7 +13,7 @@ export function countActiveRunsForPersona(personaId) {
 export function activeRunForProject(projectId) {
   if (!projectId) return null;
   return (
-    db.prepare("SELECT * FROM runs WHERE projectId = ? AND status = '跑中' ORDER BY startedAt DESC").get(projectId) ??
+    db.prepare("SELECT * FROM runs WHERE projectId = ? AND status = 'running' ORDER BY startedAt DESC").get(projectId) ??
     null
   );
 }
@@ -26,7 +26,7 @@ export function activeRunForProject(projectId) {
 export function countActiveRunsForProject(projectId) {
   if (!projectId) return 0;
   return (
-    db.prepare("SELECT COUNT(*) AS n FROM runs WHERE projectId = ? AND status = '跑中'").get(projectId)?.n ?? 0
+    db.prepare("SELECT COUNT(*) AS n FROM runs WHERE projectId = ? AND status = 'running'").get(projectId)?.n ?? 0
   );
 }
 
@@ -57,7 +57,7 @@ export function createRun({ conversationId, runtime, personaId = null, model = n
     taskId,
     // 这次在哪个项目里干活（项目互斥靠它判：同一目录同时只许一个 run）
     projectId,
-    status: '跑中',
+    status: 'running',
     exitCode: null,
     error: null,
     usage: null,
@@ -95,6 +95,36 @@ export function finishRun(id, { status, exitCode = null, error = null, usage = n
     nowIso(),
     id,
   );
+}
+
+/**
+ * 这段 CLI 会话里已经跑了几轮（2026-11-11 上下文预算）：runs.startedAt ≥ 会话起点。
+ * 轮换后 member_sessions.startedAt 清空，下一轮重开时重新记 —— 计数自然从零开始。
+ */
+export function countRunsSince(conversationId, personaId, sinceIso) {
+  if (!sinceIso) return 0;
+  return Number(
+    db
+      .prepare('SELECT COUNT(*) AS c FROM runs WHERE conversationId = ? AND personaId = ? AND startedAt >= ?')
+      .get(conversationId, personaId, sinceIso)?.c ?? 0,
+  );
+}
+
+/**
+ * 这条会话最近几轮的 usage（新的在前；没有 usage 的跳过）。
+ * dsh 的 usage 是**会话累计**（inputTokens 单调增）→ 预算模块用相邻两轮的差值估算"这一轮的上下文"；
+ * 单轮型运行时（codex/claude）则直接拿最近一轮的 inputTokens。
+ */
+export function listRecentRunUsage(conversationId, personaId, limit = 2) {
+  const n = Math.max(1, Math.min(Number(limit) || 2, 10));
+  return db
+    .prepare(
+      `SELECT usage, startedAt FROM runs
+        WHERE conversationId = ? AND personaId = ? AND usage IS NOT NULL
+        ORDER BY startedAt DESC LIMIT ?`,
+    )
+    .all(conversationId, personaId, n)
+    .map((r) => ({ usage: r.usage ? JSON.parse(r.usage) : null, startedAt: r.startedAt }));
 }
 
 /* ---------------------------------------------------- 运行事件流（落库那份） */
@@ -318,7 +348,7 @@ export function lastUserMessage(conversationId) {
 
 export function activeRun(conversationId) {
   return (
-    db.prepare("SELECT * FROM runs WHERE conversationId = ? AND status = '跑中' ORDER BY startedAt DESC").get(conversationId) ??
+    db.prepare("SELECT * FROM runs WHERE conversationId = ? AND status = 'running' ORDER BY startedAt DESC").get(conversationId) ??
     null
   );
 }
@@ -336,7 +366,7 @@ export function activeRun(conversationId) {
 export function activeRunForPersona(personaId) {
   return (
     db
-      .prepare("SELECT * FROM runs WHERE personaId = ? AND status = '跑中' ORDER BY startedAt DESC LIMIT 1")
+      .prepare("SELECT * FROM runs WHERE personaId = ? AND status = 'running' ORDER BY startedAt DESC LIMIT 1")
       .get(personaId) ?? null
   );
 }
@@ -349,11 +379,11 @@ export function activeRunForPersona(personaId) {
  */
 
 export function reapStaleRuns() {
-  const stale = db.prepare("SELECT id, conversationId FROM runs WHERE status = '跑中'").all();
+  const stale = db.prepare("SELECT id, conversationId FROM runs WHERE status = 'running'").all();
   for (const r of stale) {
     const note = '服务重启，这次运行被中断';
-    db.prepare("UPDATE runs SET status = '失败', error = ?, endedAt = ? WHERE id = ?").run(note, nowIso(), r.id);
-    db.prepare("UPDATE conversations SET status = '失败', updatedAt = ? WHERE id = ?").run(nowIso(), r.conversationId);
+    db.prepare("UPDATE runs SET status = 'failed', error = ?, endedAt = ? WHERE id = ?").run(note, nowIso(), r.id);
+    db.prepare("UPDATE conversations SET status = 'failed', updatedAt = ? WHERE id = ?").run(nowIso(), r.conversationId);
 
     /*
      * 还要给它补一条**终止事件**（2026-10-15）。
@@ -365,7 +395,7 @@ export function reapStaleRuns() {
     appendRunEvent(r.id, maxRunSeq(r.id) + 1, {
       type: '__done',
       runId: r.id,
-      status: '失败',
+      status: 'failed',
       exitCode: null,
       error: note,
       usage: null,

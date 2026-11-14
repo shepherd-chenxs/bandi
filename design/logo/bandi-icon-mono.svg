@@ -1,9 +1,10 @@
 <svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
   <title>班底 · 分玉单色标识（透明底，currentColor 随场景染色）</title>
-  <!-- 单色时不靠两色区分——靠那道缝。切缝是标识的全部识别力，任何底色下都必须留住。
+  <!-- 单色时靠错位读形——右片下沉，轮廓上下沿各留一级台阶。
+       错位是单色版全部的识别力，任何底色下都必须留住。
        深底场景把 currentColor 设为 #F2F1ED。 -->
   <g transform="translate(256 256) scale(3.25) translate(-50 -49.8)" fill="currentColor">
-    <path d="M47 4.11 A40 40 0 0 0 47 83.89 Z"/>
-    <path d="M53 4.11 A40 40 0 0 1 53 83.89 Z" transform="translate(0 12)"/>
+    <path d="M50 4 A40 40 0 0 0 50 84 Z"/>
+    <path d="M50 4 A40 40 0 0 1 50 84 Z" transform="translate(0 12)"/>
   </g>
 </svg>

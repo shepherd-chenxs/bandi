@@ -13,7 +13,8 @@ import { attsHtmlOf, firstMeaningfulLine, isNarrowPh, mbOpenPicker, openConversa
 import { createProgressCard } from './run-progress-card.mjs';
 import { createLiveAnswer } from './run-live.mjs';
 import { fmtElapsed } from './run-progress.mjs';
-import { $, S } from './core.mjs';
+import { $, S, statusText } from './core.mjs';
+import { registerLayer, registerUp } from './navstack.mjs';
 
 
 
@@ -1195,7 +1196,7 @@ function renderBoardMobile(view, data, { project = null, isAll = false, err = ''
   // 当前 tab 是合法列 key、但这一版数据里没有这一列（换了板）：按列序插回去，别让它静默消失
   if (curTab !== 'all' && !tabs.some((t) => t.key === curTab)) {
     const at = tabs.findIndex((t) => t.key !== 'all' && orderIdx(t.key) > orderIdx(curTab));
-    tabs.splice(at < 0 ? tabs.length : at, 0, { key: curTab, label: COL_STATUS[curTab] ?? curTab, count: 0 });
+    tabs.splice(at < 0 ? tabs.length : at, 0, { key: curTab, label: statusText(curTab), count: 0 });
   }
 
   /*
@@ -1314,7 +1315,7 @@ export function kbMobileRow(r, isAll) {
    * 双主题校准过，再乘个 60~70% 会让浅色档糊在灰底上）。列 key 优先用行自带的 `col`
    * （桌面 kbCard 也用它），老数据没有就按状态词反查 COL_STATUS。
    */
-  const colKey = r.col || Object.keys(COL_STATUS).find((k) => COL_STATUS[k] === r.status) || 'other';
+  const colKey = r.col || r.status || 'other';
   // 全局面板的行才带 project_name（项目看板的行服务端已经摘掉了）
   const proj = isAll && r.project_name
     ? `<span class="kb-l-pill">${esc(r.project_name)}</span>`
@@ -1349,10 +1350,10 @@ export function kbMobileRow(r, isAll) {
   const at = r.created || r.at || '';
   // `title`（原来放 note）在触屏上永远看不到 —— 换 aria-label，读屏才拿得到同样的信息
   return `<article class="kb-l-row" style="--st-c: var(--st-${esc(colKey)})" ${jump} ${open}
-      aria-label="${esc(`${r.task}，${r.status}，${who}${r.source_text ? `，${r.source_text}` : ''}${at ? `，${at}` : ''}`)}">
+      aria-label="${esc(`${r.task}，${statusText(r.status)}，${who}${r.source_text ? `，${r.source_text}` : ''}${at ? `，${at}` : ''}`)}">
     <div class="kb-l-line">
       <div class="kb-l-title">${esc(r.task)}</div>
-      <span class="kb-l-state">${esc(r.status)}</span>
+      <span class="kb-l-state">${esc(statusText(r.status))}</span>
     </div>
     <div class="kb-l-meta">
       ${src}${proj}
@@ -1382,7 +1383,7 @@ let kbNewClosing = false;   // 已经在退格（防连点：第二下不能再�
 let kbNewAbandon = false;   // 用户已确认放弃 → 下一次 popstate 直接收画面，不再问
 let kbFlashId = '';         // 刚建出来的那张卡：下一次画列表时给它 1.6s 高亮
 
-const KB_NEW_IDEA = '想法';
+const KB_NEW_IDEA = 'idea'; // 码（2026-11-12 起状态只有码）
 
 /** 首次开页才建 DOM（懒到真用的时候；桌面永远走不到这里） */
 function kbEnsureNew() {
@@ -1569,7 +1570,7 @@ function kbNewRowHtml(key, label, value, empty = false) {
  * 已被 chips 取代的清单位置；改说这件事现在的实际后果。
  */
 function kbStartState(st) {
-  const idea = (COL_STATUS[st.colKey] ?? '待办') === KB_NEW_IDEA;
+  const idea = (st.colKey ?? 'todo') === KB_NEW_IDEA;
   const isUser = String(st.who).startsWith('u:');
   if (st.mode === 'flow') {
     const picked = !!st.flowId;
@@ -1661,7 +1662,7 @@ function kbNewGroupHtml(st, ss) {
   /* ── 建好之后：状态 / 项目 / 立即开始 直接铺开（2026-11-06 三改：不再折叠；D1 改名）── */
   const more = [
     // 状态选项带 6px --st-* 圆点：颜色是"是哪一类活"的编码
-    kbNewRowHtml('status', '状态', COL_STATUS[st.colKey] ?? '待办'),
+    kbNewRowHtml('status', '状态', statusText(st.colKey ?? 'todo')),
   ];
   // 项目行只在全局面板出现（项目看板的项目已经定死了）
   if (st.isAll) {
@@ -1747,7 +1748,7 @@ function kbNewPick(which) {
     // 只有 8 项 → 不给搜索；行首带状态色圆点
     mbOpenPicker({
       title: '状态',
-      items: Object.keys(COL_STATUS).map((k) => ({ id: k, label: COL_STATUS[k], dot: `var(--st-${k})` })),
+      items: Object.keys(COL_STATUS).map((k) => ({ id: k, label: statusText(k), dot: `var(--st-${k})` })),
       value: st.colKey,
       onPick: (v) => { st.colKey = v; paintKbNew(); },
     });
@@ -1818,7 +1819,7 @@ const kbHasDraft = () => !!(String($('kbNewTitle')?.value ?? '').trim() || Strin
 /**
  * 提交（字段口径照 taskDialog，**不复制**那份弹窗代码）：只发标题/描述/状态，
  * 执行方式三选一（2026-11-09 加团队协作；流程不带执行人 —— 服务端把"两个都给"当 400 挡），
- * `startNow` 照抄桌面算法 `flow ? 状态 !== '想法' : group ? 选了群 && 非「想法」 && 勾选 : (!isUser && !!执行人 && 勾选)`，
+ * `startNow` 照抄桌面算法 `flow ? 状态 !== 'idea' : group ? 选了群 && 非「想法」 && 勾选 : (!isUser && !!执行人 && 勾选)`，
  * 不在手机端另算一套。
  */
 async function kbNewSubmit() {
@@ -1853,7 +1854,7 @@ async function kbNewSubmit() {
     return;
   }
 
-  const statusText = COL_STATUS[st.colKey] ?? '待办';
+  const statusWord = statusText(st.colKey ?? 'todo');
   const whoVal = String(st.who);
   const isUser = whoVal.startsWith('u:');
   const startChecked = !!st.startNow;   // 意愿记在状态里（勾选框收起时不在 DOM，不能从 DOM 读）
@@ -1874,7 +1875,7 @@ async function kbNewSubmit() {
       body: JSON.stringify({
         title,
         description: String($('kbNewDesc')?.value ?? '').trim(),
-        status: statusText,
+        status: statusWord,
         // 执行方式三选一（2026-11-09 加团队协作）：流程不带执行人（服务端把"两个都给"当 400 挡）
         ...(flow
           ? { flowTemplateId: st.flowId }
@@ -1884,9 +1885,9 @@ async function kbNewSubmit() {
               ? { assigneeUserId: whoVal.slice(2) }
               : { personaId: whoVal || null }),
         startNow: flow
-          ? statusText !== KB_NEW_IDEA
+          ? statusWord !== KB_NEW_IDEA
           : groupMode
-            ? (!!st.groupId && statusText !== KB_NEW_IDEA && startChecked)
+            ? (!!st.groupId && statusWord !== KB_NEW_IDEA && startChecked)
             : (!isUser && !!whoVal && startChecked),
       }),
     });
@@ -1983,6 +1984,25 @@ window.addEventListener('popstate', () => {
 });
 
 /*
+ * 返回键的层级（navstack.mjs，2026-11-11）：新建任务页 / 任务卡 / 讨论抽屉三层各自登记，
+ * 各模块只报自己的状态、只调自己的收场函数 —— 壳那边不再猜 WebView 的历史。
+ */
+registerLayer({
+  name: 'kb-new',
+  level: 70,
+  cell: 'kbNew',
+  active: () => document.body.classList.contains('kb-new-open'),
+  close: () => kbCloseNew(true),
+});
+
+/* 下钻页的上一层（navstack.mjs，2026-11-11）：与各页页内 ‹ / 面包屑同一个去处。
+   项目清单页手机上没有可见的返回钮（页头只写「项目」），系统返回键是唯一的回宫格路 ——
+   不登记的话按返回直接退 App（用户实报）。 */
+registerUp('projects', () => setNav('plugins'));
+registerUp('project', () => void openProjectsPage());
+registerUp('taskBoard', () => (S.boardAll ? setNav('plugins') : void openProjectsPage()));
+
+/*
  * 手机整页的任务卡（openTaskCardPage 压的 {tcCard:true} 那格）退回来了 = 离开这张卡。
  * 两个早退与上面几条监听同一套：
  *   · 落点的 state 还带 tcCard —— 是选择页/别的层收掉自己那格，卡还开着，放行；
@@ -2030,7 +2050,11 @@ document.addEventListener('keydown', (e) => {
 
 
 /** 看板列 → 新建任务时的默认状态（点哪一列的「＋」就默认落在哪一列；拖列也用它换算） */
-export const COL_STATUS = { idea: '想法', todo: '待办', doing: '进行中', review: '待验收', blocked: '已阻塞', failed: '失败', done: '已完成', cancelled: '已取消' };
+/*
+ * 看板列 key → 状态**码**（2026-11-12：列 key 就是码，映射恒等）。
+ * 中文名一律用 `statusText()` 查服务端字典 —— 这里**不再存第二份中文状态表**。
+ */
+export const COL_STATUS = Object.freeze({ idea: 'idea', todo: 'todo', doing: 'doing', review: 'review', blocked: 'blocked', failed: 'failed', done: 'done', cancelled: 'cancelled' });
 
 
 
@@ -2206,7 +2230,7 @@ export function kbMatch(card, scope) {
 
 /** 弹层要列的状态：本板有的，加上"记着但本板没有"的那些（张数 0）。顺序跟着列走，**不按名字排** */
 export function kbFilterOptions(data) {
-  const opts = kbStatusOptions(data).map((o) => ({ id: o.status, name: o.status, count: o.count }));
+  const opts = kbStatusOptions(data).map((o) => ({ id: o.status, name: statusText(o.status), count: o.count }));
   return withGhosts(new Map(opts.map((o) => [o.id, o])), S.kbFilter?.statuses, () => '（本板没有）', false);
 }
 
@@ -2817,14 +2841,14 @@ export function wireBoard(view, { refresh, taskProject = () => null }) {
       const taskId = e.dataTransfer.getData('text/plain');
       const card = view.querySelector(`[data-kb-manual="${CSS.escape(taskId)}"]`);
       if (!taskId || !card) return; // 拖的不是手工卡
-      const toStatus = COL_STATUS[colEl.dataset.kbCol];
+      const toStatus = colEl.dataset.kbCol; // 列 key 就是状态码
       if (!toStatus || card.dataset.col === colEl.dataset.kbCol) return;
       /*
        * 代验收确认（2026-11-11 用户定：验收人 = 派活人）：这张卡不是我派的（贺韬派的/子卡），
        * 我拖到「已完成」= 替他点头。给一句确认，别让管理兜底权悄悄越权。
        */
       const mine = !!S.me?.id && card.dataset.createdByUser === S.me.id;
-      if (toStatus === '已完成' && !mine) {
+      if (toStatus === 'done' && !mine) {
         if (!(await confirmDo('这张卡不是你派的（由派活人验收）—— 确定代他点「已完成」？', { title: '代验收？', ok: '代他完成' }))) return;
       }
       try {
@@ -2851,7 +2875,7 @@ export function wireBoard(view, { refresh, taskProject = () => null }) {
         } else if (started) {
           const who = (S.personas ?? []).find((p) => p.id === res.task?.assigneePersonaId)?.name;
           hint(`已经派给${who ? `「${who}」` : '执行人'}开跑了 —— 进展在他那条会话里看`);
-        } else if (toStatus === '进行中') {
+        } else if (toStatus === 'doing') {
           // 真人执行的卡（2026-10-31）：有执行人、但不起会话 —— 别说成"没有执行人"
           hint((S.users ?? []).some((u) => u.id === res.task?.assigneeUserId)
             ? '卡移到「进行中」了；这张卡派给了真人，不起会话也不自动开跑'
@@ -2948,6 +2972,15 @@ let tcCardLeave = null;
  * 页面每次重画都挂一遍监听的话，同一屏上会叠出好几份，一次返回关几层。
  */
 let tcSheetClose = null;
+/* 返回键的层级（navstack.mjs）：讨论抽屉在卡页之上（level 80 > kb-new 70）。
+   钩子是渲染时赋的，没渲染（桌面 / 弹窗那条路）就是 null —— active 也不会成立。 */
+registerLayer({
+  name: 'tc-sheet',
+  level: 80,
+  cell: 'tcSheet',
+  active: () => document.body.classList.contains('tc-sheet-open'),
+  close: () => tcSheetClose?.(true),
+});
 /*
  * 讨论抽屉是不是铺满整屏了（2026-11-05 用户要的「最大化」）。
  * 存模块级而不是只挂 class：页面重画（换卡 / 跨断点）会整块重建 DOM，
@@ -3189,10 +3222,10 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     try { conv = await api(`/api/conversations/${encodeURIComponent(task.conversationId)}`); } catch { conv = null; }
   }
   if (stale()) return; // 会话在途中人换页了：往下整页 innerHTML 会把旧卡的内容盖到新卡上
-  const runningRun = (conv?.runs ?? []).find((r) => r.status === '跑中') ?? null;
+  const runningRun = (conv?.runs ?? []).find((r) => r.status === 'running') ?? null;
   // 跑挂了的运行 id 集合：这些轮次的回话/占位行带「重跑一次」按钮（2026-10-30 用户："失败了可以再让它重新跑一次"）。
   // threadsHtml 每次重画会按最新 runs 重算 —— 重跑后新回话属于新 run，旧失败轮的按钮留着无妨（multica 同款）。
-  let failedRunIds = new Set((conv?.runs ?? []).filter((r) => r.status === '失败').map((r) => r.id));
+  let failedRunIds = new Set((conv?.runs ?? []).filter((r) => r.status === 'failed').map((r) => r.id));
   let whoName = conv?.conversation?.personaName ?? assignee?.name
     ?? (task.assigneeGroupId ? `团队协作 · ${(S.groups ?? []).find((g) => g.id === task.assigneeGroupId)?.title ?? '群'}` : '执行人');
 
@@ -3355,17 +3388,17 @@ export async function paintTaskCardPage(taskId, opts = {}) {
   const stateBanner = (d) => {
     const st = task.status;
     const runs = d?.runs ?? [];
-    const live = runs.some((r) => r.status === '跑中');
+    const live = runs.some((r) => r.status === 'running');
     if (live) return '';
     const last = runs.filter((r) => r.endedAt).sort((a, b) => String(b.endedAt).localeCompare(String(a.endedAt)))[0];
     const when = last?.endedAt ? `（${esc(cmtTime(last.endedAt))} 收工）` : '';
-    if (st === '待验收')
+    if (st === 'review')
       return `<div class="tc-statebar ok"><b>✅ 活干完了</b> —— 等验收人验收${when}。上面他最后一句话就是结论。</div>`;
-    if (st === '失败')
+    if (st === 'failed')
       return `<div class="tc-statebar bad"><b>这轮没跑成</b> —— 没干完。他消息脚上有「↻ 重跑一次」，点一下接着来。</div>`;
-    if (st === '已阻塞')
+    if (st === 'blocked')
       return `<div class="tc-statebar warn"><b>他停在这等你拿主意</b> —— 卡点就是上面最后一条，回他一句或改状态。</div>`;
-    if (st === '进行中')
+    if (st === 'doing')
       return `<div class="tc-statebar idle"><b>还没干完</b> —— 他在这两轮之间（上一轮刚收尾，下一轮还没起）。说句话或等他自己继续${when}。</div>`;
     return '';
   };
@@ -3377,7 +3410,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     }
     const banner = stateBanner(d);
     // 时间线 = 消息 + 没跑成的那几轮运行（中断/停止的占位也按时间排进去，见 topicsOf）
-    failedRunIds = new Set((d?.runs ?? []).filter((r) => r.status === '失败').map((r) => r.id));
+    failedRunIds = new Set((d?.runs ?? []).filter((r) => r.status === 'failed').map((r) => r.id));
     const topics = topicsOf(timelineOf(msgs, d?.runs ?? []));
     // 首屏先把库里已有的都记"见过"：高亮只给**这一页打开之后**新到的回话，
     // 不然每次进卡满屏蓝，跟没折一样。
@@ -3526,7 +3559,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
    * 弹窗那条路（流程步骤 / 会话卡票）不算手机整页：弹窗有自己的头，结构不动。
    */
   const mbTC = !dlg && document.body.classList.contains('mb-narrow');
-  const stKey = Object.keys(COL_STATUS).find((k) => COL_STATUS[k] === task.status) ?? 'other';
+  const stKey = task.status ?? 'other';
   // 团队协作（2026-11-09）：群**单独一行**，不再混进「执行人」（2026-11-09 用户：「群聊混在指派人里」）
   const groupAssignee = task.assigneeGroupId ? (S.groups ?? []).find((g) => g.id === task.assigneeGroupId) : null;
   const whoLabel = flowOnly
@@ -3635,7 +3668,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
               ? `<div class="tc-m-hero">
                    ${fromFlowBar}
                    <button type="button" class="tc-m-st" id="tcStatusChip" style="--st-c:var(--st-${esc(stKey)})" title="改状态">
-                     <i aria-hidden="true"></i><span id="tcStatusText">${esc(task.status)}</span>
+                     <i aria-hidden="true"></i><span id="tcStatusText">${esc(statusText(task.status))}</span>
                    </button>
                    <!-- 手机标题/描述只读：手机任务卡页是**审批视图**（2026-11-07 device 身份
                         退场后这已是产品口径，不再是服务端闸）。要改内容去桌面，或在对话里让员工改。 -->
@@ -3849,6 +3882,9 @@ export async function paintTaskCardPage(taskId, opts = {}) {
   tcCardLeave = backTo;
   // 手机导航栏那颗 ‹：与系统返回键同一条路（有自己压的那格就退格，popstate 统一画回上一级）
   host.querySelector('[data-tc-back]')?.addEventListener('click', () => { leaveTo().catch((e) => toast(e.message, 'error')); });
+  /* 系统返回键也走这一颗 ‹ 的同一个动作（navstack.mjs，2026-11-11）：
+     有 tcCard 那格就退格；清过历史没格了（换机器）就直接画回上一级 —— 不会再退 App。 */
+  registerUp('taskCard', () => { leaveTo().catch((e) => toast(e.message, 'error')); });
 
   // 「来自流程」那行：点一下回那条流程的时间轴（跟删完卡之后回的是同一个地方）
   $('tcFromFlow')?.addEventListener('click', () => { leaveTo().catch((e) => toast(e.message, 'error')); });
@@ -4110,21 +4146,20 @@ export async function paintTaskCardPage(taskId, opts = {}) {
   const syncMobileStatus = (st = task.status) => {
     const el = $('tcStatusText');
     if (!el) return;
-    el.textContent = st;
-    const k = Object.keys(COL_STATUS).find((x) => COL_STATUS[x] === st);
-    $('tcStatusChip')?.style.setProperty('--st-c', `var(--st-${k ?? 'other'})`);
+    el.textContent = statusText(st);
+    $('tcStatusChip')?.style.setProperty('--st-c', `var(--st-${st ?? 'other'})`);
   };
 
   const statusCombo = createCombo({
     mount: $('tcStatusMount'),
-    items: ['想法', '待办', '进行中', '待验收', '已阻塞', '失败', '已完成', '已取消'].map((s) => ({ id: s, label: s })),
+    items: Object.keys(COL_STATUS).map((k) => ({ id: k, label: statusText(k) })),
     value: task.status,
     /*
      * 代验收确认（2026-11-11 用户定：验收人 = 派活人）：不是我派的卡（贺韬派的/子卡），
      * 我点「已完成」= 替他点头，先问一句；取消就把下拉拨回原状态。
      */
     onChange: (st) => {
-      if (st === '已完成' && (task.createdByUserId ?? null) !== (S.me?.id ?? null)) {
+      if (st === 'done' && (task.createdByUserId ?? null) !== (S.me?.id ?? null)) {
         confirmDo('这张卡不是你派的（由派活人验收）—— 确定代他点「已完成」？', { title: '代验收？', ok: '代他完成' }).then((ok) => {
           if (ok) { syncMobileStatus(st); scheduleSave(0); }
           else { statusCombo.setValue(task.status); syncMobileStatus(task.status); }
@@ -4251,12 +4286,11 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     $('tcStatusChip')?.addEventListener('click', () => {
       mbOpenPicker({
         title: '状态',
-        items: Object.keys(COL_STATUS).map((k) => ({ id: k, label: COL_STATUS[k], dot: `var(--st-${k})` })),
-        value: Object.keys(COL_STATUS).find((k) => COL_STATUS[k] === statusCombo.value()) ?? '',
+        items: Object.keys(COL_STATUS).map((k) => ({ id: k, label: statusText(k), dot: `var(--st-${k})` })),
+        value: statusCombo.value() ?? '',
         onPick: (k) => {
-          const label = COL_STATUS[k] ?? k;
-          statusCombo.setValue(label);
-          syncMobileStatus(label);
+          statusCombo.setValue(k);
+          syncMobileStatus(k);
           scheduleSave(0);
         },
       });
@@ -4471,7 +4505,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
   // 重画时 paintTaskCardPage 看到 flowRunId 有值，直接带去流程实例页。
   $('tcFlowStart')?.addEventListener('click', async () => {
     if (!(await confirmDo(`发起流程「${flowName}」？发起后按流程当前节点派给经办人。`))) return;
-    statusCombo.setValue('进行中');
+    statusCombo.setValue('doing');
     scheduleSave(0);
   });
 
@@ -4507,7 +4541,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     try {
       const r = await api(`/api/projects/tasks/${encodeURIComponent(taskId)}/pr/refresh`, { method: 'POST' });
       await paintTaskCardPage(taskId, opts);
-      toast(`PR 现在：${prStateText(r.pr.state)}${r.task?.status === '待验收' ? '（卡已转到「待验收」）' : ''}`);
+      toast(`PR 现在：${prStateText(r.pr.state)}${r.task?.status === 'review' ? '（卡已转到「待验收」）' : ''}`);
     } catch (err) {
       btn.disabled = false;
       btn.textContent = '刷新状态';
@@ -5272,7 +5306,7 @@ export function kbCard(r) {
   return `<article class="kb-card ${local ? 'manual' : ''}" ${jump} ${drag}${local ? ` data-kb-open="${esc(r.manual_id)}" tabindex="0"` : ''} data-col="${esc(r.col)}"${r.created_by_user_id ? ` data-created-by-user="${esc(r.created_by_user_id)}"` : ''} title="${esc(r.note || '')}">
     <div class="kb-card-top">
       ${proj}<span class="kb-tag${srcCls}">${esc(r.source_text)}</span>${prPillOf(r)}
-      <span class="kb-state">${esc(r.status)}</span>
+      <span class="kb-state">${esc(statusText(r.status))}</span>
       ${del}
     </div>
     <div class="kb-card-title">${esc(r.task)}</div>
@@ -5359,7 +5393,7 @@ export function taskDialog(project, colKey) {
   // 状态那格：只有 6 个固定值，**不传 search**（组件的约定是选项多的才给搜索）
   const statusCombo = createCombo({
     mount: $('tkStatusMount'),
-    items: ['想法', '待办', '进行中', '待验收', '已阻塞', '失败', '已完成', '已取消'].map((s) => ({ id: s, label: s })),
+    items: Object.keys(COL_STATUS).map((k) => ({ id: k, label: statusText(k) })),
     value: status,
     // 这两件事都定义在下面 —— 点选时才跑，那时它们早就绪了（顺序是有意的）
     onChange: () => {
@@ -5476,7 +5510,7 @@ export function taskDialog(project, colKey) {
     const box = $('tkStart');
     const wrap = box.closest('.kb-check');
     const text = $('tkStartText');
-    const idea = statusCombo.value() === '想法';
+    const idea = statusCombo.value() === 'idea';
     if (flowMode()) {
       const picked = !!flowCombo.value();
       const on = picked && !idea; // 定了流程且不是「想法」→ 锁在勾上；否则锁在取消
@@ -5623,9 +5657,9 @@ export function taskDialog(project, colKey) {
           // 流程模式：状态不是「想法」就发起；团队协作：选了群、不是想法、勾了才派进群
           // （跟 syncStart 的口径是同一份）
           startNow: flow
-            ? st !== '想法'
+            ? st !== 'idea'
             : groupMode()
-              ? (!!groupVal && st !== '想法' && $('tkStart').checked)
+              ? (!!groupVal && st !== 'idea' && $('tkStart').checked)
               : (!isUser && !!whoVal && $('tkStart').checked),
         }),
       });

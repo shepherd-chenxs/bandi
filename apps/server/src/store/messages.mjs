@@ -13,9 +13,14 @@ ensureColumn('messages', 'senderUserId', 'senderUserId TEXT');
 
 export function getMessageByRowid(conversationId, rowid) {
   if (!rowid) return null;
+  /*
+   * **必须显式带上 rowid**（2026-11-12 修）：`SELECT *` 只给声明的列，SQLite 的隐式
+   * rowid 不在里面。补派（群队列）拿这条消息当触发的 run，`trigger.rowid` 一直是 undefined ——
+   * 水位线算错、接力账本也记不下"这批人"。
+   */
   return (
     db
-      .prepare('SELECT * FROM messages WHERE conversationId = ? AND rowid = ?')
+      .prepare('SELECT *, rowid AS rowid FROM messages WHERE conversationId = ? AND rowid = ?')
       .get(conversationId, rowid) ?? null
   );
 }

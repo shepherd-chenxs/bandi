@@ -18,6 +18,7 @@ import { controlUrl } from './agent-auth.mjs';
 // 建卡通道的判据（2026-11-11）：只给**有建卡权限的岗位**（现在只有项目经理），
 // 不再解析 role 文本 —— 见 roles.mjs / 设计文档
 import { can, roleOf } from './roles.mjs';
+import { shouldRotate } from './session-budget.mjs';
 
 /** 带 code 的错误：路由按它决定 400 还是 409 */
 const fail = (message, code = 'bad') => Object.assign(new Error(message), { code });
@@ -42,6 +43,30 @@ export function sessionScopeOf(opts = {}) {
 }
 
 /**
+ * 会话轮换后的「上下文交接」（2026-11-11 上下文预算）。
+ *
+ * 换会话 = 他把上下文全忘了。为了让新会话一开口就知道刚才在聊什么，
+ * 平台把最近几条消息**本地整理**成一小段带过去 —— 不花模型、不改事实；
+ * 每条截断，交接块本身不能再变成大上下文。
+ */
+function sessionHandoffBlock(thread, reasons) {
+  let recent = [];
+  try {
+    recent = store.listMessages(thread.id).slice(-8);
+  } catch { /* 拿不到就不带 */ }
+  const oneLine = (t) => String(t ?? '').replace(/\s+/g, ' ').trim().slice(0, 160);
+  const lines = recent
+    .filter((m) => m.role === 'user' || m.role === 'assistant')
+    .map((m) => `${m.role === 'user' ? '雇主' : '你'}：${oneLine(m.text) || '（空回话）'}`)
+    .join('\n');
+  return [
+    `【上下文交接】上一段会话过长，平台已换了一条新会话（${reasons.join('；')}）。`,
+    '最近几条消息（平台整理，供续接；细节以聊天记录为准）：',
+    lines || '（最近没有可交接的消息）',
+  ].join('\n');
+}
+
+/**
  * 项目经理的「建卡通道」注入块（2026-10-24，2026-11-11 重写）：首轮派活时告诉他怎么把活立成卡。
  * 只给**有建卡权限的岗位**（roles.can(persona, 'card.create')；现在只有项目经理）。
  *
@@ -57,23 +82,39 @@ function pmCardBrief() {
     `POST \${BANDI_CONTROL_URL}/api/agent/cards/batch    （\${BANDI_CONTROL_URL} = ${controlUrl}，环境变量里有）`,
     '请求头：X-Bandi-Run-Token = 环境变量 BANDI_RUN_TOKEN（**每轮现取，别抄旧值**）',
     '请求体：{ "cards": [ { "title": "一句话说清要做什么", "description": "边界、做成什么样算完、证据要求",',
-    '                      "assigneePersonaId": "派给谁", "status": "待办" } ] }',
+    '                      "assigneePersonaId": "派给谁", "status": "todo" } ] }',
     '',
     '宽口径（平台兜住常见手滑，不用纠结格式）：',
     '- 项目 id **可省略**：群派活默认用群关联的项目；',
     '- 体可以是 {cards:[…]}、裸数组 […] 或单张卡对象；UTF-8 / UTF-16 / 带 BOM 都认；',
     '- 每张卡带稳定的 idempotencyKey（同一件事重发只建一张）。',
     '',
+    '卡状态口径（2026-11-12 用户："我是甲方，我只要结果，我不去参与他们的工作"）：',
+    '- **status 只收码**（2026-11-12 起）：`todo` = 待办、`idea` = 想法。**写中文会 400**。',
+    '- **status 省略 = `todo`**：普通执行任务（部署/迁移/开发/测试…，可逆或有备份回滚）一律建 `todo` + 执行人，',
+    '  建完自动开跑，**不要建 `idea` 让雇主点状态**；',
+    '- `idea` 只用于真正要雇主定的：花钱 / 对外发布 / 删数据或不可逆操作 / 改需求或范围；',
+    '  即使有这种，也先把不受影响的部分派下去，别整单停摆。',
+    '- **雇主已授权**：本项目内可逆、有回滚、不花钱、不对外、不改范围的执行动作，你直接定。',
+    '',
     '出错怎么改（接口会回 { code, error }）：',
-    '- 先读 code（E1044 = JSON 不合法；E2058 = 状态不对；E2059 = 项目/执行人/标题不对），**按提示改参数后再试**；',
+    '- 先读 code（E1044 = JSON 不合法；E2058 = 状态码不对；E2059 = 项目/执行人/标题不对），**按提示改参数后再试**；',
     '- **最多改 2 次**；400 之后不要整批重发 —— 先 GET /api/tasks 确认卡在不在；',
     '- 2 次仍失败 = 通道不可用：停止重试，按【统筹职责】降级（群里 @ 人 + 报群主），不许自己写代码。',
     '',
     '补卡（通道恢复后，补记群里已经干完/卡住的活）：同一接口，每张卡带 "backfill": true，',
-    'status 写实际状态（待验收 / 已阻塞 / 已完成 / 已取消 / 失败）——补记**不会重跑**；',
-    '描述里写清谁做的、证据在哪。',
+    'status 写实际状态的**码**：`review` 待验收 / `blocked` 已阻塞 / `done` 已完成 / `cancelled` 已取消 / `failed` 失败',
+    '——补记**不会重跑**；描述里写清谁做的、证据在哪。',
     '',
     `卡的管理你有权限：PATCH ${controlUrl}/api/projects/tasks/<卡id>（可改 status / description / assigneePersonaId；带 startNow:true = 重跑）—— 只对你建的卡、或你当群助手那张团队卡；范围、验收标准、流程归属仍归雇主（面板上改）。`,
+    '',
+    '【自主交付（自迭代，无人工拍板）】当雇主让你自迭代某项目、查设计漏洞这类"立一项、由团队自己讨论、方案、施工、最后汇报"的活时，',
+    '可以立一张「由流程执行」的卡来发起自主流程（全程无人工拍板，结果进信箱给你看）：',
+    '  POST /api/agent/cards/batch  体：{ "cards": [ { "title": "一句话目标", "description": "范围/验收",',
+    '                            "projectId": "项目 id", "flowTemplateId": "bandi-self-delivery", "status": "todo" } ] }',
+    '  · 模板 bandi-self-delivery 已内置并发布：节点按岗位（PM → 架构师 → 研发 → 测试）自动指派、跑完自动流转、',
+    '    提交 PR（平台动作）、最后由 PM 写汇报进信箱；不含部署节点（部署/合并仍由雇主择时）。',
+    '  · 想看实例进度：工作台 → 工作流；想让团队自主跑，就别再逐节点点通过，汇报会自动进信箱。',
     '汇报与收尾按平台每轮的【本轮契约】执行，不在身份里重复。',
   ].join('\n');
 }
@@ -84,7 +125,9 @@ function pmCardBrief() {
  * 事故：群里给了开发需求，他三次建卡 400 后判定通道坏了，直接自己改仓库写代码。
  * 根因有两层：① 建卡通道太脆（工具层已修）；② 首轮之后**没有任何"你是统筹"的约束** ——
  * 「继续」那一轮连身份与建卡通道都不再注入，平台契约也只管交付形态、不管调度纪律；
- * 身份卡里那句"专长之外的活也接"反而给了他"自己上手"的授权。
+ * 身份卡里那句"专长之外的活也接"反而给了他"自己上手"的授权（2026-11-11 实报：
+ * 用户让他更新 thinkpad，他 SSH 装 Maven 自己干，群里运维马超在列也没派；
+ * 身份卡已同步改成"专长之外的活不自己上手，先派给对应岗位"）。
  *
  * 这个块**每轮都注入**（放契约层，不动身份卡）：先判问答/做事 → 拆卡派活 → 失败降级
  * （@ 人 + 报群主 + 补卡）→ 验收自己派的活 → 不许自己改仓库。只给有建卡权限的岗位。
@@ -106,14 +149,24 @@ function pmDispatchBlock({ persona, thread, project } = {}) {
       : '';
   return [
     '【统筹职责 · 你是项目经理，本轮有效】',
-    '1. **先判这一轮要交什么**：问问题 → 直接答；让你做事 → 拆成能独立验收的卡，派出去。',
-    `2. **派活**：用建卡通道建卡（见首轮【建卡通道】），派给对应岗位的人${members ? `—— 群里可用：${members}` : ''}${project?.name ? `；项目「${project.name}」` : ''}。群里只回 ≤5 行简报（建了几张、给谁），细节写进卡。`,
-    '3. **建卡失败**：看回包 code 改参数重试，**最多 2 次**；仍失败就停止重试，按顺序做三件事：',
+    '0. **先判这一轮是哪一类**（最重要的判断）：',
+    '   A. **信息咨询 / 进度查询**（"谁手上有任务""项目成员进度""某张卡到哪了""某人在干嘛"，或纯闲聊）',
+    '      → **你自己查台账/看板，直接回答**；不建卡、不派活、不动手。查不到就说查不到，别猜。',
+    '   B. **需要专业执行的活**（部署 / 写代码 / 做设计 / 改配置 / 测试 / 运维……）',
+    '      → 建卡派给对应岗位的人（见下方归属与群里可用的人）。',
+    '   C. **团队里没有对应岗位的人** → 直接汇报雇主：「团队目前没有能干这个的人（缺 X 岗）」，',
+    '      给一句建议；**不许自己顶上、不许凑合派给不对口的人**。',
+    '   D. **闲聊** → 正常接话，别硬塞任务。',
+    `1. **派活（B 类）**：用建卡通道建卡（见首轮【建卡通道】），写清交付物和验收标准，派给对应岗位的人${members ? `—— 群里可用：${members}` : ''}${project?.name ? `；项目「${project.name}」` : ''}。群里只回 ≤5 行简报（建了几张、给谁），细节写进卡。**归属**：运维 / 部署 / 改环境 / 动服务器 → 派运维岗位；写代码 / 改仓库 → 派研发岗位；设计 → 派 UI 岗；需求 / 范围 → 派产品岗；测试 → 派测试岗。`,
+    '2. **别让雇主点状态（2026-11-12 用户口径：甲方只要结果）**：普通执行任务（部署 / 迁移 / 开发 / 测试…，可逆或有备份回滚）**一律建 `todo`（待办）+ 执行人**，建完自动开跑；**不要建 `idea`（想法）让雇主改状态**。`idea` 只用于花钱 / 对外发布 / 删数据或不可逆 / 改需求或范围。**就算有需要上报的决策，也先把不受影响的部分派下去，别整单停摆**。',
+    '   **你被雇主授权**：本项目内可逆、有回滚、不花钱、不对外、不改范围的执行动作，你直接定，不用请示。',
+    '3. **能自己做的只有只读查询**：读台账 / 看板 / 状态、跑只读命令。**任何有副作用的操作都不许自己做**——不改仓库、不写代码、不登服务器、不部署、不装环境、不启停服务、不改配置；哪怕你觉得顺手、哪怕身份卡说"专长之外的活"（2026-11-11 实报：让你更新 thinkpad，你 SSH 装 Maven 自己干了）。',
+    '4. **建卡失败**：看回包 code 改参数重试，**最多 2 次**；仍失败就停止重试，按顺序做三件事：',
     '   ① 在群里 @ 具体执行人接活（写清交付物和验收标准，别只说"大家看一下"）；',
     '   ② 一句话报群主：错误码 + 已重试几次 + 看板暂无卡 + 恢复后补卡；',
-    '   ③ **不许自己改仓库、不许写代码**——你是统筹，不是执行人（"专长之外的活也接"不改变这一条）。',
-    '4. **你派的活你验收**：你建的卡/子卡到「待验收」→ 看证据，通过就把状态改「已完成」；不通过就退回执行人重跑（PATCH status=待办 + startNow:true，并说清退回原因）。**雇主派给你的主卡你只能提交「待验收」，不能替雇主点「已完成」**。',
-    '5. **补卡**：通道恢复后，把这段时间群里已经干完/卡住的活补成卡（backfill:true + 实际状态），让看板账对得上；补记不重跑。',
+    '   ③ 仍是"不许自己执行"：不改仓库、不写代码、不登服务器、不部署、不装环境、不启停服务。',
+    '5. **你派的活你验收**：你建的卡/子卡到「待验收」→ 看证据，通过就把状态改「已完成」；不通过就退回执行人重跑（PATCH status=待办 + startNow:true，并说清退回原因）。**雇主派给你的主卡你只能提交「待验收」，不能替雇主点「已完成」**。',
+    '6. **补卡**：通道恢复后，把这段时间群里已经干完/卡住的活补成卡（backfill:true + 实际状态），让看板账对得上；补记不重跑。',
   ].join('\n');
 }
 
@@ -130,17 +183,34 @@ function pmDispatchBlock({ persona, thread, project } = {}) {
  * 被无差别套到问答卡上 —— 李俊把"API 权限归谁"答成了"钥匙怎么发"的工作报告，4 处事实错。
  * 所以现在第 1 条先判**交付形态**（问问题→直接答；做事→结果/卡点），后面补上
  * 多问拆答、权责四层、每个判断落源（这三样是那次事故的直接缺口）。
+ *
+ * **2026-11-12 反向修正**（用户实报：「每个人回复我都是一大堆，讲什么依据」「我要依据有个屁用」）：
+ * P5 为了堵 pt-7c6d4229 的事实错写了「每个判断都要落源」，代价是**每一轮回复都必须带出处**——
+ * 堵错的成本被转嫁成了回复的体积，且风格层被本契约的优先级声明压住，挂什么风格都不生效。
+ * 现在把依据从「必带」降为「兜底」：默认不写，只在他追问原因 / 坏消息原因会改变他的决定 /
+ * 不可逆操作要他确认这三种情况附，一行以内；第一行改成三态结论（顺利・有问题・卡住），
+ * 并要求交代「要不要他动手」。第 1 行的优先级声明同时改成只裁决「交什么」，长短语气交还风格层。
+ *
+ * 底线的缺口没放开：不编数、不猜接口、没查到写"未验证"仍在第 4 条 —— 删掉的是「默认展示依据」，
+ * 不是「依据要真」；第 5 条也保留"问归谁先给归属判断"，只是不再要求摊成四层机制。
  */
 export function platformContractBlock() {
   return [
-    '【本轮契约 · 平台注入，优先级高于身份设定、技能与回复风格】',
-    '1. **先判这一轮要交什么**：用户在**问问题**（要答案 / 判断 / 说明）→ 第一行直接回答被问的那件事（谁 / 哪个 / 能不能 / 归谁），再给依据；问“归谁”就先给**归属判断**（归平台 / 归员工 / 归岗位 / 归哪份配置），不是只描述机制；**不要**用“我查到了… / 已完成…”的工作报告代替答案。用户在**让你做事** → 第一行给结果或卡点。做事类交差的完整写法见 `bandi-report` 技能。',
-    '2. **多问拆答、权责分层**：一句话里问了多件事，先列出来逐条答；问“归谁 / 谁能 / 谁定”要分清四层——归属方、授予方、持有者、能改的人。问“能力 / 权限是不是全员一样”，先分开说**能力面**（同一身份类别的接口白名单是不是一致）和**业务闸**（handler 里按岗位 / 归属判的额外门槛），别压成一句“按角色分层”。问“谁有钥匙 / 谁能拿到”，要说清签发者、怎么交给执行者（进程环境）、绑定什么、何时失效、什么请求才认它。注意“**有钥匙 ≠ 有权限**”：持有者是那一次运行的进程，签发者是控制面——这两个都不是“权限归谁”的答案。',
-    '3. **每个判断都要落源**：回答里的“能 / 不能 / 归谁 / 几条 / 哪些”都要能指到出处（文件:行 / 接口 / 数据）；**行号要能照着翻到**，拿不准就只写文件 + 函数名，不写估算行号；没查到的写“未验证”。**只引真源**：平台代码以 `apps/server/src`、前端以 `apps/web` 为准；`apps/desktop/runtime/**`、`target/`、`dist/` 是打包产物、可能是旧版，不拿来当依据。局部代码只能说明局部，整体结论要看完决定性的那一处（路由白名单 ≠ 业务权限）。完整证据放运行事件或卡里，回复只引用出处。',
-    '4. **跑完 ≠ 完成**：交付标记**单独放回话最后一行** —— 真交付了写一行「[完成]」；没干成 / 要雇主拍板，写「[受阻] 一句话原因」。**第一行留给答案或结果**。平台只按这个标记判**卡**的状态：不写标记 = 卡不会进「待验收」；没做完不许写「[完成]」，不许替雇主宣布验收通过。',
-    '5. **问进度只答台账、够答即回**：问“进度 / 怎么样了”就给状态 + 更新时间 + 在等谁；能答就先回，别为了补细节去翻源码 / 日志 / 历史。',
-    '6. **不空转、不编数、不猜接口**：这一轮能做的先做完再回话，不许以 "Next: …" 收尾；没出处的数不写；接口试不通就直说“不存在 / 没权限”，别 foreach 猜一串路径。',
-    '7. **红线**：删数据 / 动生产 / 对外发布，先列清单请雇主拍板，再动手。',
+    '【本轮契约 · 平台注入，优先级高于身份设定与技能；与回复风格冲突时，本契约只管「交什么、归谁动手」，长短与语气服从回复风格】',
+    '**总纲：每一轮只办一件事 —— 让他三秒内知道「结果是什么」和「要不要他出手」。** 过程、依据、检查记录都不是交付物，是内部动作。',
+    '1. **第一行 = 结论，按三态写**：问进度 / 怎么样 / 能不能 / 归谁 → 第一行直接给判断，用这三句式之一：①「顺利，不用你动」；②「有问题：X 连不上，我来处理，稍等」；③「卡住了：我没权限，你给我开 X」。**不要**用“我查到了… / 已完成…”的工作报告代替结论。问问题 → 第一行直接回答被问的那件事（谁 / 哪个 / 能不能 / 归谁），问“归谁”先给**归属判断**（归平台 / 归员工 / 归岗位 / 归哪份配置），不是只描述机制。做事类交差的完整写法见 `bandi-report` 技能。',
+    '2. **必须交代归谁动手**：要么明说「不用你动」，要么说清要他做什么（给权限 / 拍板 / 看一眼）。含糊到要他反问「那我要干嘛」= 这轮没交付。',
+    '3. **依据默认不写**。只在三种情况附，且附在结论之后、一行以内：① 他问「为什么 / 依据 / 怎么得出」；② 坏消息的原因**会改变他的决定**（例：连不上是对方在维护，明天才恢复）；③ 不可逆操作要他确认。其余情况写依据 = 把判断推回给他自己做，算没交付。**整轮超过 5 行，先删依据再删别的。**',
+    '4. **要附就附真的**：只引真源（平台代码以 `apps/server/src`、前端以 `apps/web` 为准；`apps/desktop/runtime/**`、`target/`、`dist/` 是打包产物、可能是旧版，不拿来当依据）；行号要能照着翻到，拿不准只写文件 + 函数名，不写估算行号；没查到写「未验证」。**不编数、不猜接口**：接口试不通就直说“不存在 / 没权限”，别 foreach 猜一串路径。',
+    '5. **多问拆答，每问一句**：一句话问了多件事 → 逐条答，每条一个结论；需要机制细节时才补一句（如「有钥匙 ≠ 有权限：持有者是运行进程，签发者是控制面」）。**不要**把权责摊成四层讲机制。',
+    '6. **跑完 ≠ 完成**：交付标记**单独放回话最后一行** —— 真交付了写一行「[完成]」；没干成 / 要雇主拍板，写「[受阻] 一句话原因」。**第一行留给结论**。平台只按这个标记判**卡**的状态：不写标记 = 卡不会进「待验收」；没做完不许写「[完成]」，不许替雇主宣布验收通过。',
+    '7. **问进度只答台账、够答即回**：给状态 + 更新时间 + 在等谁；能答就先回，别为了补细节去翻源码 / 日志 / 历史。**手上的活超过 20 秒没结果，先打一行进度** —— 沉默会被当成卡死，他会来问，那次追问比这一行贵。',
+    '8. **不空转**：这一轮能做的先做完再回话，不许以 "Next: …" 收尾。',
+    '9. **红线**：删数据 / 无备份覆盖生产 / 对外发布 / 花钱 / 改范围或需求 → 先列清单请雇主拍板，再动手；',
+    '   **例行部署 / 迁移 / 迭代（有备份、可回滚）是团队职责，直接做，不用等雇主拍板**（2026-11-12 用户：甲方只要结果）。',
+    '10. **群里的 @ 是派活信号，双向生效（2026-11-12）**：人 @ 你就叫醒你；**你的回话里 @ 到谁，平台也会把谁叫起来**。',
+    '   所以 @ 只有两种用法 —— 真让某人接活、真让某人看这段话；别在总结里随手 @ 一串人（每一下都是别人的一次真实开销）。',
+    '   一条回话只接力**第一个**被 @ 的人，其余排队；同一个人不会被重复叫醒，刚叫你的人你 @ 他也不算数。',
   ].join('\n');
 }
 
@@ -173,14 +243,14 @@ export function guessDeliveryKind(text) {
 function deliveryShapeLines(kind) {
   if (kind === 'answer') {
     return [
-      '- 交付形态：**问答** —— 用户在问问题：第一行直接给答案（回答被问的判断），再给依据；**不要交工作简报**。',
-      '- 交付：答案本身（覆盖用户原话里每一问）+ 每个判断的出处。',
+      '- 交付形态：**问答** —— 用户在问问题：第一行直接给判断（顺利 / 有什么问题 / 卡在谁那儿），**不要交工作简报**。',
+      '- 交付：答案本身（覆盖用户原话里每一问）；依据默认不写，命中契约第 3 条那三种情况才附。',
     ];
   }
   if (kind === 'do') {
     return [
-      '- 交付形态：**做事** —— 用户要的是改动 / 产物：第一行给结果或卡点，再给依据。',
-      '- 交付：一屏简报（完整写法见 `bandi-report`）：第一行结果 / 卡点 + ≤3 条依据 + 这一轮已做的动作。',
+      '- 交付形态：**做事** —— 用户要的是改动 / 产物：第一行给结果或卡点。',
+      '- 交付：结果 / 卡点 + 这一轮已做的动作（≤3 行）；依据默认不写，命中契约第 3 条那三种情况才附（完整写法见 `bandi-report`）。',
     ];
   }
   return [
@@ -193,10 +263,10 @@ function deliveryShapeLines(kind) {
 function acceptanceLine(kind, commentCard) {
   const byKind =
     kind === 'answer'
-      ? '用户原话里每一问都有直接回答、每个判断有出处（文件:行 / 接口 / 数据）；缺一条算没交付。'
+      ? '用户原话里每一问都有直接回答，且第一行就是结论；把依据铺满、结论要人自己总结的，算没交付。'
       : kind === 'do'
-        ? '结论先行、每条依据可核、给出可拍板选项 —— 做不到这三条算没交付。'
-        : '用户原话里每一件事都有交代、依据可核。';
+        ? '第一行给结果或卡点、并说清要不要他动手；用过程代替结论的，算没交付。'
+        : '用户原话里每一件事都有交代，且看完第一行知道要不要他动手。';
   return commentCard
     ? `- 验收：按【你正在办的任务卡】里的任务描述逐条验；${byKind}`
     : `- 验收：${byKind}`;
@@ -295,28 +365,54 @@ export function projectConstitutionBlock(projectId) {
  * 为什么只在首轮注（firstTime）：宪法与身份一样是稳定文本，每轮重注只会白吃 token；
  * 首轮跟着身份走同一条成员会话生命周期（resetPersonaSessions 作废后重注）。
  */
-export function constitutionBlock() {
-  return [
+export function constitutionBlock({ roleKey = '' } = {}) {
+  const lines = [
     '【工作基线 · 平台注入，优先级高于下面任何身份设定里的"只管 / 不要揽"措辞】',
     '',
     '1. **测量优先**。凡"多少、多大、为什么涨、谁占的"这类问题，先用命令把分布量出来再回答。',
     '   代码结构说明回答的是"有什么"，不是"占了多少"——除非量过，或问题本身就在问结构。',
-    '2. **证据交付**。结论要带可复现的证据（命令 + 输出）。跑过就是跑过，没跑就是没跑。',
+    '2. **证据兜底，不是默认**。凡"多少、多大、为什么涨、谁占的"这类**量化 / 归因**结论，要带可复现的证据（命令 + 输出）；',
+    '   **进度、状态、有没有、能不能、归谁这类问题不必附证据** —— 直接给判断，他追问再给。跑过就是跑过，没跑就是没跑。',
     '3. **缺条件不停摆**。没权限、缺数据、工具被挡时，一次说清三件事：缺什么、你已经试过什么、',
     '   下一步有哪些选项（含"你来操作、我指路"的具体指令）。只回一句"没权限 / 你贴给我"不算完成回复。',
     '4. **专长是顺序，不是边界**。身份设定决定你先做好什么、以什么为常项，不限定你能接什么。',
-    '   超出常项的活照接——先一句声明，做完照常给证据。确有安全红线（删数据、动生产、对外发布）的，',
-    '   列出清单请雇主确认，这不算拒绝干活。',
+    '   超出常项的活照接——先一句声明，做完照常给证据。确有**不可逆 / 要雇主担责**的（删数据、无备份覆盖生产、',
+    '   对外发布、花钱、改范围或需求）才列清单请雇主确认；**例行部署 / 迁移 / 迭代（有备份、可回滚）是团队职责，直接做**。',
     '',
-  ].join('\n');
+  ];
+  /*
+   * **统筹岗（项目经理）的特别约定**（2026-11-12 用户明确需求）：第 4 条是给执行岗的
+   * （"专长是顺序不是边界，超常项照接"）；对项目经理，这条会被误读成"自己上手"的授权
+   * （2026-11-11 实报：让 PM 更新 thinkpad，他 SSH 装 Maven 自己干，运维就在群）。
+   *
+   * 所以对管理岗在第 4 条之后**显式覆盖**：先分三类（信息咨询 / 派活 / 无对口岗位），
+   * 只读查询可以自己做，有副作用的操作必须派出去。这是首轮注入；每轮还有 pmDispatchBlock 兜一层。
+   */
+  if (roleKey === 'pm') {
+    lines.push(
+      '5. **统筹岗的特别约定（项目经理，优先于第 4 条）**：你的交付是"判断 + 派活 + 验收"，不是自己执行。',
+      '   · **信息咨询 / 进度查询**（谁手上有任务、项目进度、某张卡到哪了）：自己查台账/看板，直接回答；',
+      '     **不建卡、不派活、不动手**；查不到就说查不到，别猜。',
+      '   · **需要专业执行的活**（部署 / 写代码 / 做设计 / 测试 / 运维…）：建卡派给对应岗位的人。',
+      '   · **团队里没有对应岗位的人**：直接汇报雇主"团队目前没有能干这个的人（缺 X 岗）"，',
+      '     给一句建议；**不许自己顶上、不许凑合派给不对口的人**。',
+      '   · **只读查询可以自己做**；任何**有副作用的操作**（写文件 / 改配置 / 部署 / 启停服务 /',
+      '     登服务器动手）都必须派出去。',
+      '   · **任务卡默认建 `todo`（待办）+ 执行人**（建完自动开跑），**不要建 `idea`（想法）让雇主点状态**；',
+      '     「想法」只用于不可逆 / 花钱 / 对外 / 改范围。',
+      '   · **你被雇主授权**：本项目内可逆、有回滚、不花钱、不对外、不改范围的执行动作，你直接定，不用请示。',
+      '',
+    );
+  }
+  return lines.join('\n');
 }
 
-export function buildDirectTask(thread, text, firstTime, skillLines = [], connLines = [], brief = '') {
+export function buildDirectTask(thread, text, firstTime, skillLines = [], connLines = [], brief = '', roleKey = '') {
   if (!firstTime) return text;
 
   const parts = [];
   // 宪法必须在身份之前（见 constitutionBlock 注释：要压得住"后续对话请一直保持"的身份块）
-  parts.push(constitutionBlock());
+  parts.push(constitutionBlock({ roleKey }));
   const rules = (thread.personaInstructions ?? '').trim();
   if (rules) parts.push('你在本次会话中的身份与职责设定如下（后续对话请一直保持）：', '', rules, '');
   if (skillLines.length) parts.push(...skillsBlock(skillLines));
@@ -460,13 +556,13 @@ export function resolveTarget(thread, members, text) {
  * 只喂增量（水位线之后），且不喂它自己说过的话（它自己的会话里已经有了）——
  * 否则每轮把整段群聊塞进 prompt，token 会爆。
  */
-export function buildGroupTask({ thread, member, trigger, contextMessages, firstTime, skillLines = [], connLines = [], brief = '' }) {
+export function buildGroupTask({ thread, member, trigger, contextMessages, firstTime, skillLines = [], connLines = [], brief = '', roleKey = '' }) {
   const lines = [];
 
   if (firstTime) {
     lines.push(`你在一个项目群里。群名：${thread.title}`, '');
     // 宪法同样排在身份之前（同 buildDirectTask，见 constitutionBlock 注释）
-    lines.push(constitutionBlock());
+    lines.push(constitutionBlock({ roleKey }));
     lines.push('你的职责与身份设定如下（后续对话请一直保持）：', (member.instructions ?? '').trim(), '');
     if (skillLines.length) lines.push(...skillsBlock(skillLines));
     if (connLines.length) lines.push(...connectionsBlock(connLines));
@@ -572,7 +668,7 @@ function startMemberRun(thread, member, opts, trigger) {
    *     不告诉他通道在哪，权限就是空话。钥匙在环境变量里（BANDI_RUN_TOKEN），run 收尾作废。
    */
   const p = store.getPersona(member.personaId);
-  const brief = [
+  let brief = [
     p?.builtin ? steward.stewardBrief() : '',
     p && can(p, 'card.create') ? pmCardBrief() : '',
   ].filter(Boolean).join('\n\n');
@@ -582,7 +678,45 @@ function startMemberRun(thread, member, opts, trigger) {
   const sessionScope = sessionScopeOf(opts);
 
   // 这个作用域下他有没有自己的会话 + 他读到哪儿了
-  const ms = store.getMemberSession(threadId, member.personaId, sessionScope);
+  let ms = store.getMemberSession(threadId, member.personaId, sessionScope);
+  /*
+   * **上下文预算 / 会话轮换**（2026-11-11 实报）：同一段 CLI 会话跑太久，上下文越滚越大，
+   * 最后模型把工具调用写成正文、空回话（群「爻鉴」r-f0512961：会话 8 小时、累计 3000 万 input）。
+   * 超限就作废这条 sessionId → 下一轮按 firstTime 重开，并把最近几条消息作为「交接」带过去。
+   * 判据见 session-budget.mjs（轮数 / 年龄 / 累计 tokens / 单轮上下文，四个都可 env 覆盖）。
+   */
+  let rotated = null;
+  if (ms?.sessionId) {
+    const startedMs = ms.startedAt ? Date.parse(ms.startedAt) : 0;
+    const recent = store.listRecentRunUsage(threadId, member.personaId, 2);
+    const verdict = shouldRotate({
+      rounds: startedMs ? store.countRunsSince(threadId, member.personaId, ms.startedAt) : 0,
+      ageMs: startedMs ? Date.now() - startedMs : 0,
+      usage: recent[0]?.usage ?? null,
+      prevUsage: recent[1]?.usage ?? null,
+    });
+    if (verdict.rotate) {
+      const why = verdict.reasons.join('；');
+      console.log(`[会话预算] 轮换 ${member.name ?? member.personaId}@${threadId}/${sessionScope || '默认'}：${why}`);
+      store.setMemberSession(threadId, member.personaId, null, sessionScope, '');
+      /*
+       * 聊天里留一行灰字（2026-11-11 用户：「这事太小，直接在聊天里加一行灰字就可以，不要通过信箱发我」）：
+       * 同一段聊天里换掉了他内部的上下文，人得知道为什么他突然忘了早前的事。
+       * 落一条 role=system + meta 的消息，由 chat.mjs 画成居中灰字（不占气泡、不算回话）。
+       */
+      try {
+        store.addMessage({
+          conversationId: threadId,
+          role: 'system',
+          text: '（上下文过长，已开新会话；最近进展已交接）',
+          meta: { type: 'session-rotated', reasons: verdict.reasons },
+        });
+      } catch { /* 记不上也不影响派活 */ }
+      rotated = verdict.reasons;
+      ms = store.getMemberSession(threadId, member.personaId, sessionScope) ?? null;
+    }
+  }
+  if (rotated) brief = [sessionHandoffBlock(thread, rotated), brief].filter(Boolean).join('\n\n');
   // 水位线（"他读到哪条消息了"）**不跟着 session 作用域走**：它记的是这个人在
   // 这个会话里的阅读位置，跟 runtime 有没有另开一条会话是两件事。流程作用域下
   // 要看主行，否则新流程会以为"他什么都没读过"，把整段群历史灌进 prompt。
@@ -605,11 +739,12 @@ function startMemberRun(thread, member, opts, trigger) {
         skillLines,
         connLines,
         brief,
+        roleKey: member.roleKey ?? '',
         contextMessages: store
           .listMessagesSince(threadId, watermark, trigger.id)
           .filter((m) => m.personaId !== member.personaId),
       })
-    : buildDirectTask(thread, trigger.text, firstTime, skillLines, connLines, brief);
+    : buildDirectTask(thread, trigger.text, firstTime, skillLines, connLines, brief, p?.roleKey ?? '');
 
   // 附件（2026-10-23）：文件已落在本机 uploads/ 下 —— 告诉员工绝对路径让它自己读。
   // CLI 的沙箱只限**写**，读全盘不受限，给路径就够了。
@@ -627,7 +762,7 @@ function startMemberRun(thread, member, opts, trigger) {
    * 流程（节点名/第几次到站/本步要求）、普通聊天（项目名）。
    * 顺序放在雇主风格之后：风格可以改口吻，但契约是底线。
    */
-  const workflowTask = opts.taskId ? store.getWorkflowTask(opts.taskId) : null;
+  const workflowTask = opts.taskId ? store.getWorkflowTaskById(opts.taskId) : null;
   const project = !opts.card?.projectName && opts.projectId ? store.getProject(opts.projectId) : null;
   // 他名下未完的卡：问进度时先看这里（2026-11-09 P3a，跨会话也不丢上下文）
   const myTasks = store.listMyOpenTasks(member.personaId, 5);
@@ -640,7 +775,7 @@ function startMemberRun(thread, member, opts, trigger) {
   ].filter(Boolean).join('\n\n');
   const fullTask = [cardBlock, task, attBlock, stylePrefBlock(), contractBlock].filter(Boolean).join('\n\n');
 
-  return runs.startRun({
+  const run = runs.startRun({
     thread,
     member,
     task: fullTask,
@@ -651,6 +786,14 @@ function startMemberRun(thread, member, opts, trigger) {
     // 项目归属要记在 run 上（项目安全网按它数并发，见 ensureDispatchable）
     projectId: opts.projectId ?? null,
   });
+  // 接力账本（见 dispatchReplyMentions）：这次跑是第几跳、被谁叫醒的
+  runChain.set(run.id, {
+    depth: opts.chainDepth ?? 0,
+    from: opts.fromPersonaId ?? null,
+    triggerRowid: trigger.rowid,
+  });
+  markBatch(trigger.rowid, [member.personaId]);
+  return run;
 }
 
 /**
@@ -696,6 +839,121 @@ export function drainAllGroupQueues() {
   }
   return started;
 }
+
+/* ---------------------------------------------------------------- 成员回复接力（2026-11-12）
+ *
+ * 实报：贺韬在群里 @马超 派活，马超一动不动 —— 库里 0 run、0 通知。
+ * 原因不是谁偷懒：派活只认「**人**发的消息」（POST 那个入口）与卡票回执，
+ * 成员自己的回复落库之后根本没人扫 @（runs.mjs 里一条 mentions 处理都没有）。
+ * 而合同（下面的 pmDispatchBlock）白纸黑字写着「在群里 @ 具体执行人接活」——
+ * 合同让人去 @，引擎不认 @，那句合同就是在教人喊空气。
+ *
+ * 所以补上接力：**群里成员的回复里 @ 到的成员，会被唤醒**。
+ *
+ * 三条防环，缺一条就会两个 agent 自己聊到天亮（它们的回复里天然带着对方的名字）：
+ *   ① **跳数上限**（默认 2）：人发消息 = 第 0 跳，A 的回话能叫醒 B（1 跳），
+ *      B 的回话能叫醒 C（2 跳），到顶就停。`BANDI_CHAIN_DEPTH=0` 可整体关掉；
+ *   ② **不回打**：刚叫醒你的那个人，你这轮 @ 他不算数 —— A@B 之后 B@A 这种乒乓，
+ *      在真群里就是一句"收到"，没有新信息；
+ *   ③ **一条回复只接力一次**，且只认第一个 @ 到的人；其余进群队列（沿用 @ 多人的排队），
+ *      不并发、不抢同一段群聊。
+ *
+ * 唤醒**只入队不直接起跑**：接力发生在上一轮收尾那一刻，会话还占着；
+ * 交给 `drainGroupQueue`（run 收尾钩子 + 30 秒节拍）去做并发判定与补派，
+ * 与"@ 多人"走完全相同的路 —— 两套并发判定迟早打架。
+ */
+const CHAIN_MAX_DEPTH = Number.isFinite(Number(process.env.BANDI_CHAIN_DEPTH))
+  ? Number(process.env.BANDI_CHAIN_DEPTH)
+  : 2;
+const runChain = new Map(); // runId -> { depth, from, triggerRowid }（内存级：重启后接力链从 0 重算，这是有意的）
+
+/*
+ * **同一批人**（2026-11-12，实跑出来才发现的噪声）：一条消息 @ 了几个人，他们就拿到了
+ * 同一份上下文 —— 其中一个人回话时 @ 另一个人（"沈丹青那边做A，我做了B"这种引用），
+ * 把刚跑完、已经看过同一份任务的人再叫一遍，纯属浪费。
+ * 所以记一笔「这条触发消息派过谁」，接力时跳过同一批的人。
+ */
+const dispatchBatch = new Map(); // triggerRowid -> Set<personaId>
+const BATCH_KEEP = 200;
+function markBatch(triggerRowid, personaIds) {
+  if (!triggerRowid || !personaIds?.length) return;
+  const set = dispatchBatch.get(triggerRowid) ?? new Set();
+  for (const id of personaIds) if (id) set.add(id);
+  dispatchBatch.set(triggerRowid, set);
+  while (dispatchBatch.size > BATCH_KEEP) dispatchBatch.delete(dispatchBatch.keys().next().value);
+}
+
+/** 取这次 run 的接力账（取完即焚：一条回话只用一次账） */
+export function runChainOf(runId) {
+  const v = runChain.get(runId);
+  runChain.delete(runId);
+  return v ?? { depth: 0, from: null, triggerRowid: null };
+}
+
+/**
+ * 一条**成员回复**落下之后：看它 @ 了谁，把那个人排进群队列。
+ *
+ * 返回 `{ queued, personaId }`（进了队列）或 `null`（不是群 / 没 @ 到人 / 到顶）。
+ * 不抛错 —— 调用方是"回复已经落库"的收尾路径，接力失败不该把这一轮判成失败。
+ */
+export function dispatchReplyMentions({ threadId, fromPersonaId, message, text, chain = {} } = {}) {
+  const thread = store.getConversation(threadId);
+  if (!thread || thread.kind !== 'group') return null;
+
+  const depth = chain.depth ?? 0;
+  if (depth >= CHAIN_MAX_DEPTH) {
+    console.log(`[接力] 到顶（${depth} 跳 / 上限 ${CHAIN_MAX_DEPTH}），不再喊人（会话 ${threadId}）`);
+    return null;
+  }
+
+  const members = thread.members ?? [];
+  const batch = chain.triggerRowid ? dispatchBatch.get(chain.triggerRowid) : null;
+  const hits = parseMentions(String(text ?? ''), members).filter(
+    (m) => m.personaId !== fromPersonaId && m.personaId !== chain.from && !batch?.has(m.personaId),
+  );
+  if (!hits.length) return null;
+
+  const [target, ...rest] = hits;
+  // 触发消息就是**刚落下那条回复**：被叫醒的人从它开始读（水位线 = 它的 rowid），
+  // 不需要再往群里塞一条"替贺韬说话"的假用户消息 —— 那会让同一句话在界面上出现两遍。
+  const triggerRowid = message?.rowid;
+  if (!triggerRowid) return null;
+
+  const baseOpts = withGroupProject(thread, { chainDepth: depth + 1, fromPersonaId });
+  const q = groupQueues.get(threadId) ?? [];
+  // 同一个人已经排着就不再重复排（agent 爱把对方名字连写两遍）
+  for (const m of [target, ...rest]) {
+    if (m.personaId === fromPersonaId) continue;
+    if (q.some((e) => e.member.personaId === m.personaId)) continue;
+    q.push({
+      member: { ...m },
+      opts: { ...baseOpts, runId: null, taskId: null },
+      triggerRowid,
+    });
+  }
+  groupQueues.set(threadId, q);
+  console.log(
+    `[接力] ${fromPersonaId} 的回话 @${target.name} → 进队列（第 ${depth + 1} 跳，会话 ${threadId}，排 ${q.length} 个）`,
+  );
+  drainGroupQueue(threadId); // 会话要是已经空了就当场起跑，不白等一拍
+  return { queued: true, personaId: target.personaId };
+}
+
+/*
+ * 订阅"回话已落库"。挂在这里而不是 server.mjs：这是派活模块自己的规则，
+ * 挂到进程装配处的话，凡是直接 import dispatch 的入口（工作流、冒烟）就漏了。
+ */
+runs.onReplyPersisted(({ run, message, text }) => {
+  const chain = runChainOf(run.id);
+  dispatchReplyMentions({
+    threadId: run.conversationId,
+    fromPersonaId: run.personaId,
+    message,
+    text,
+    chain,
+  });
+});
+
 
 /**
  * 群挂了项目 = 这个群的派活默认在那个项目里干（2026-11-11 用户拍板「一项目一群」）。

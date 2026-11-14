@@ -18,6 +18,8 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { dataDir, repoRoot } from './config.mjs';
 import * as store from './store.mjs';
+// 凭据闸的判据单一来源（钩子也要用，见 secret-paths.mjs 头注释）
+import { classifySecretSuspects, findSecretPaths, scanContentForSecrets } from './secret-paths.mjs';
 
 const TOKEN_FILE = path.join(dataDir, 'github-token');
 const REPOS_DIR = path.join(dataDir, 'repos');
@@ -225,13 +227,21 @@ const ghFetch = async (pathname, { token, method = 'GET', body, timeoutMs = GH_T
     // 原来调用方用「消息里有没有 '403' 这几个字符」判 —— 那太脆：GitHub 的 404 消息里
     // 完全可能出现一串数字（sha、限额、issue 号），误判就会把"没权限"这种要人换令牌的信号
     // 报成别的原因。文案照旧给人看，`status` 给代码看。
+    //
+    // **404 带上下文**（2026-11-14 流程「提交 PR」实报）：仓库级资源的 404，最常见的原因是
+    // **令牌看不到这个仓库**（fine-grained PAT 只对勾选过的仓库有权限，GitHub 对看不到的
+    // 资源一律回 Not Found，不区分"没有"和"没权限"）—— 用户对着一句干巴巴的 Not Found
+    // 猜不出来在说谁。路径里认得出 owner/name 就把仓库点名、指路令牌设置。
+    const repo404 = r.status === 404 ? String(pathname).match(/^\/repos\/([^/?#]+\/[^/?#]+)/) : null;
     const err = new Error(
       r.status === 401
         ? '令牌无效或已过期（401）'
         : r.status === 403
           ? `这个令牌没有权限做这件事（403）：${msg}`
           : r.status === 404
-            ? `没找到（404）：${msg}`
+            ? repo404
+              ? `没找到（404）：${msg} —— GitHub 上访问不了仓库 ${repo404[1]}。最常见的原因是令牌没勾选这个仓库（fine-grained PAT 只对勾选过的仓库有权限），去「工作台 → 研发 → 代码托管」检查令牌的仓库授权；也可能是仓库或对应资源（分支 / PR）已改名、删除`
+              : `没找到（404）：${msg}`
             : `GitHub ${r.status}：${msg}`,
     );
     err.status = r.status;
@@ -469,7 +479,11 @@ export async function connectByRemoteUrl(remoteUrl, localPath = null) {
   let note = '';
   if (isGitRepo(dir)) {
     const r = await run('git', [...auth, 'fetch', '--prune', 'origin'], { cwd: dir, env: GIT_ENV });
-    if (r.code !== 0) throw new Error(`本地已有目录、但拉取失败：${r.out.split('\n').slice(-3).join(' ')}`);
+    if (r.code !== 0) {
+      const net = gitNetworkFailure(r.out);
+      if (net) throw new GitError('E1204', net);
+      throw new Error(`本地已有目录、但拉取失败：${r.out.split('\n').slice(-3).join(' ')}`);
+    }
     note = '本地已有克隆，已拉取';
   } else if (fs.existsSync(dir) && fs.readdirSync(dir).filter((n) => n !== '.DS_Store' && n !== 'Thumbs.db').length) {
     throw new Error(`目录已存在但不是 git 仓库：${dir}（手动挪走再试）`);
@@ -599,13 +613,21 @@ export async function connectRepo(fullName, info = null, localPath = null) {
   let note = '';
   if (isGitRepo(dir)) {
     const r = await run('git', [...gitAuthArgs(), 'fetch', '--prune', 'origin'], { cwd: dir, env: GIT_ENV });
-    if (r.code !== 0) throw new Error(`本地已有目录、但拉取失败：${r.out.split('\n').slice(-3).join(' ')}`);
+    if (r.code !== 0) {
+      const net = gitNetworkFailure(r.out);
+      if (net) throw new GitError('E1204', net);
+      throw new Error(`本地已有目录、但拉取失败：${r.out.split('\n').slice(-3).join(' ')}`);
+    }
     note = '本地已有克隆，已拉取';
   } else if (fs.existsSync(dir) && fs.readdirSync(dir).filter((n) => n !== '.DS_Store' && n !== 'Thumbs.db').length) {
     throw new Error(`目录已存在但不是 git 仓库：${dir}（手动挪走再试）`);
   } else {
     const r = await run('git', [...gitAuthArgs(), 'clone', '--quiet', url, dir], { env: GIT_ENV });
-    if (r.code !== 0) throw new Error(`克隆失败：${r.out.split('\n').slice(-3).join(' ')}`);
+    if (r.code !== 0) {
+      const net = gitNetworkFailure(r.out);
+      if (net) throw new GitError('E1204', net);
+      throw new Error(`克隆失败：${r.out.split('\n').slice(-3).join(' ')}`);
+    }
     note = emptyDirTarget ? '已克隆到你选的目录' : '已克隆';
   }
 
@@ -627,6 +649,8 @@ export async function syncRepo(id) {
     if (/not possible to fast-forward|divergent/i.test(out)) {
       throw new Error('本地和远端分叉了（各有各的提交），拉不动 —— 先把你的提交推出去，或去那个目录把历史理一下');
     }
+    const net = gitNetworkFailure(out);
+    if (net) throw new GitError('E1204', net);
     throw new Error(`拉取没成功：${out.split('\n').slice(-4).join(' ')}`);
   }
   return store.touchGitRepoSync(row.id);
@@ -872,9 +896,76 @@ export async function checkoutBranch(row, name) {
   return { switched: true, branch: target };
 }
 
+/* ------------------------------------------------------- 凭据闸 v2（2026-11-13） */
+
+/**
+ * 读出能扫的文本；null = 没法扫（不存在/已删除、二进制、超过 1MB）。
+ * 扫不了 ≠ 有问题：凭据是文本（env/pem/json…），二进制这条链路本来也挡在 keyfile 档的扩展名上。
+ */
+function readScanText(cwd, relPath) {
+  try {
+    const full = path.join(cwd, relPath);
+    const stat = fs.statSync(full);
+    if (!stat.isFile() || stat.size > 1024 * 1024) return null;
+    const buf = fs.readFileSync(full);
+    if (buf.subarray(0, 8000).includes(0)) return null; // 有 NUL = 二进制
+    return buf.toString('utf8');
+  } catch {
+    return null; // 已删除的文件没有内容可泄，读不到就当干净
+  }
+}
+
+const secretList = (paths) =>
+  `${paths.slice(0, 4).join('、')}${paths.length > 4 ? ` 等 ${paths.length} 个` : ''}`;
+
+/**
+ * 凭据闸 v2（2026-11-13，用户实报："作为用户我根本不知道为什么会失败，不应该让用户来处理"）。
+ *
+ * 文件名只做初筛，命中的分两档 —— 让平台自己消化掉"像"，只把"是"端给人
+ * （判据与两档定义见 secret-paths.mjs，钩子走同一份）：
+ *   · **实锤档**（.env 本体 / id_rsa / .npmrc…）：按约定就该是凭据，直接拦，
+ *     **不问"要不要提交"、没有放行口令** —— `allowSecrets`（界面上那颗危险确认）对这一档
+ *     无效：推上去收不回来的东西，确认也不该推。出路是把文件移出改动/改成模板名。
+ *   · **像凭据档**（名字带 token/secret/…，如 secret-paths.mjs / token-bucket.mjs）：
+ *     内容扫一遍 —— 干净就**自动放行**，用户无感（v1 把自家判据文件都拦下来"等人处理"，
+ *     那次教训：机器能判的别甩给人）；扫出密钥特征才拦，报错里带命中原因与出路，
+ *     雇主显式确认（allowSecrets）可以放 —— 这才是配得上人工决策的灰区。
+ *
+ * 返回放行备注（给界面/流程结果留痕）；该拦的直接 throw。
+ */
+async function secretGate(cwd, entries, { allowSecrets = false } = {}) {
+  const { keyfiles, wordy } = classifySecretSuspects(entries.map((f) => f.path));
+  const notes = [];
+  const hits = [];
+  for (const p of wordy) {
+    const text = readScanText(cwd, p);
+    if (text === null) {
+      notes.push(`${p} 文件名像凭据，但内容没法扫（二进制/太大/已删除）—— 按名字放行，自己把关`);
+      continue;
+    }
+    const why = scanContentForSecrets(p, text);
+    if (why) hits.push(`${p}（${why}）`);
+    else notes.push(`${p} 文件名像凭据，内容扫描没有密钥特征，已放行`);
+  }
+  if (keyfiles.length) {
+    throw new Error(
+      `改动里有按约定就该是凭据的文件：${secretList(keyfiles)} —— 这一档推上去就收不回来，平台不提供放行口令。` +
+        '把它移出这次改动（要提交模板就改名成 .env.example 这类）；里面的密钥要是已经泄露过，先去轮换再动',
+    );
+  }
+  if (hits.length && !allowSecrets) {
+    throw new Error(
+      `内容扫描发现像真实密钥的东西：${secretList(hits)} —— 提交即泄露。` +
+        '移出改动、挪进 tests/fixtures 这类豁免位、或改成明显的占位值；雇主也可以在界面上显式确认放行',
+    );
+  }
+  return notes;
+}
+
 /**
  * 普通提交（**不建 PR、不推送**）：把工作区改动收到分支上。
- * 与建 PR 共用凭据闸 —— 界面上"就是要提交"和建 PR 弹窗里那颗是一个意思。
+ * 与建 PR 共用凭据闸（`secretGate` v2）：名字像凭据的先扫内容，干净自动放行；
+ * 实锤档与内容实锤才拦 —— 只有内容灰区那档才轮到界面上那颗危险确认。
  *
  * ⚠️ 站在 base（main）上提交会自动先拉一条分支（`autoBranch` 如实回给界面）：
  * 主分支只接受 PR 合进来，不接受本地提交 —— 2026-10-29 定下的规矩。
@@ -892,10 +983,7 @@ export async function commitAll(row, { message, allowSecrets = false, paths = nu
   if (subset && picked.length !== paths.length) {
     throw new Error('选中的文件和工作区对不上了（期间有人动过）—— 重新看一次改动再提交');
   }
-  const secrets = findSecretPaths(picked.map((f) => f.path));
-  if (secrets.length && !allowSecrets) {
-    throw new Error(`改动里有看着像凭据的文件：${secrets.slice(0, 4).join('、')}${secrets.length > 4 ? ` 等 ${secrets.length} 个` : ''} —— 一旦提交就进历史了。确认可以提交，再带上"就是要提交"`);
-  }
+  const secretNotes = await secretGate(row.localPath, picked, { allowSecrets });
 
   /*
    * **主分支闸**（2026-10-29 用户："main 不应该直接提交 —— 提交时就该检查，在 main 上就提示新建分支"）。
@@ -936,7 +1024,7 @@ export async function commitAll(row, { message, allowSecrets = false, paths = nu
   const commit = await gitIn(row.localPath, [...idArgs, 'commit', '-m', msg]);
   if (commit.code !== 0) throw new Error(`提交没成：${commit.out.split('\n').slice(-4).join(' ')}`);
   const sha = await gitIn(row.localPath, ['rev-parse', 'HEAD']);
-  return { committed: { sha: sha.code === 0 ? sha.out : null, subject: msg }, branch: onBranch, files: picked.length, autoBranch };
+  return { committed: { sha: sha.code === 0 ? sha.out : null, subject: msg }, branch: onBranch, files: picked.length, autoBranch, secretNotes };
 }
 
 /**
@@ -982,10 +1070,53 @@ export async function changeDigest(row, { paths = null, maxDiffChars = 4000 } = 
 }
 
 /**
- * 把 `git push` 的失败输出翻译成人话（**纯函数**，冒烟直接钉）。
+ * 带错误码的领域错（docs/契约.md「报错规范」，2026-11-14）。
  *
- * 2026-10-27 实报：人往 `main` 直接推，被 GitHub 规则集拒了，应用却按"非快进"那档说
- * 「远端有本地没有的提交 —— 先点同步」，完全反了（本地其实是领先的）。原始输出长这样：
+ * 文案自带 `[码]` 前缀 —— 流程卡、信箱、toast 这些**不经过路由**的出口，直接显示就是
+ * 合规形态（码 + 人话一起到，用户不用在别处查这个错是什么）；`.code` 是给程序用的：
+ * 路由 catch 优先透传它（不再盖一层路由自己的码），流程引擎/审计按码归类常见错。
+ */
+export class GitError extends Error {
+  constructor(code, message) {
+    super(`[${code}] ${String(message ?? '')}`);
+    this.name = 'GitError';
+    this.code = code;
+  }
+}
+
+/**
+ * 「连不上远端」的识别与翻译（push / fetch / clone 共用，**纯函数**，E1204）。
+ * 命中返回一句人话（原始信息垫底），没命中返回 null —— 调用方照旧走自己的报错路。
+ */
+export function gitNetworkFailure(text) {
+  const t = String(text ?? '');
+  if (!/Failed to connect|Could not resolve host|Connection (timed out|refused)|connect(?:ion)? timed out|over proxy|SSL certificate problem/i.test(t)) return null;
+  const raw = t.split('\n').map((l) => l.trim()).filter(Boolean).slice(-2).join(' ');
+  const host = t.match(/(?:Failed to connect to|Could not resolve host:)\s*([^\s:]+)/i)?.[1] ?? 'github.com';
+  const proxy = t.match(/over proxy ([^\s]+)/i)?.[1];
+  return proxy
+    ? `连接不上 ${host}（代理 ${proxy} 没通 —— 代理没开或端口变了）。检查网络/代理，恢复后重试。原始信息：${raw}`
+    : `连接不上 ${host}（网络不通，或域名解析不了）。检查网络后重试。原始信息：${raw}`;
+}
+
+/**
+ * 把 `git push` 的失败输出翻译成**报错规范**的形态（**纯函数**，冒烟直接钉）。
+ *
+ * 报错规范（2026-11-14 定，全文见 docs/契约.md「报错规范」）：
+ * 每条面向人的错 = **错误码 + 一句结论 + 出路**，原始输出永远垫底 —— 排障要它，但它不该抢第一眼。
+ * 2026-11-14 实报：代理没通时，用户在流程卡上看到的是一整条 curl 原文
+ * （"Failed to connect to github.com:443 over proxy 127.0.0.1 …"）。这属于**常见报错**，
+ * 该有码有人话（"连接不上 GitHub"），而不是每次都让人自己读 fatal。
+ *
+ * git 域码表（E12xx，对齐 http.mjs 的分段）：
+ *   E1201 分支保护规则挡的   E1202 历史/同名分支冲突   E1203 令牌权限不够
+ *   E1204 连不上远端（网络/代理/DNS）                  E1299 没认出来的推送失败
+ *
+ * 返回 `{ code, text }`；调用方用 `GitError` 抛 —— 文案直接进界面，`.code` 供路由/程序透传。
+ *
+ * 2026-10-27 实报（翻译为什么先认"保护规则"）：人往 `main` 直接推，被 GitHub 规则集拒了，
+ * 应用却按"非快进"那档说「远端有本地没有的提交 —— 先点同步」，完全反了（本地其实是领先的）。
+ * 原始输出长这样：
  *
  *   remote: - Changes must be made through a pull request.
  *   remote: - Required status check "gate" is expected.
@@ -1007,24 +1138,31 @@ export function translatePushFailure(out, { branch = null, remote = 'origin', ba
     .slice(0, 3);
   const rules = ruleLines.length ? `（${ruleLines.join('；')}）` : '';
 
-  // ① 分支保护 / ruleset —— 不是"你落后了"，是"这个分支不许直接推"
+  // ① 分支保护 / ruleset —— 不是"你落后了"，是"这个分支不许直接推"（E1201）
   if (/push declined due to repository rule|must be made through a pull request|protected branch|required status check|GH006/i.test(text)) {
     const who = `${remote}${branch ? ` 的 ${branch}` : ''}`;
     return base && branch === base
-      ? `推不上去：${who} 是 base 分支、有保护规则${rules} —— 不能直接推。改成切一条新分支推上去、建 PR，等 gate 检查绿了再合并。平台**不会强推**，也绕不过保护。原始信息：${raw}`
-      : `推不上去：${who} 分支有保护规则${rules} —— 不能直接推。改成推一条新分支、建 PR（平台不会强推，也绕不过保护）。原始信息：${raw}`;
+      ? { code: 'E1201', text: `推不上去：${who} 是 base 分支、有保护规则${rules} —— 不能直接推。改成切一条新分支推上去、建 PR，等 gate 检查绿了再合并。平台**不会强推**，也绕不过保护。原始信息：${raw}` }
+      : { code: 'E1201', text: `推不上去：${who} 分支有保护规则${rules} —— 不能直接推。改成推一条新分支、建 PR（平台不会强推，也绕不过保护）。原始信息：${raw}` };
   }
-  // ② 快进不了：远端有你本地没有的提交（这才是"先更新"那种）
+  // ② 快进不了：远端有你本地没有的提交（这才是"先更新"那种）（E1202）
   if (/rejected|non-fast-forward/i.test(text)) {
-    return rejectedHint === 'rename'
-      ? `远端已经有一个不同的 ${branch ?? '同名'} 分支（推送被拒）。平台**不会强推** —— 换一个分支名，或先在那个目录把分支理干净。原始信息：${raw}`
-      : `远端有本地没有的提交（推送被拒）。平台**不会强推** —— 点开分支下拉的「更新项目」拉一次再推；分叉了拉不动就去那个目录理历史。原始信息：${raw}`;
+    return {
+      code: 'E1202',
+      text: rejectedHint === 'rename'
+        ? `远端已经有一个不同的 ${branch ?? '同名'} 分支（推送被拒）。平台**不会强推** —— 换一个分支名，或先在那个目录把分支理干净。原始信息：${raw}`
+        : `远端有本地没有的提交（推送被拒）。平台**不会强推** —— 点开分支下拉的「更新项目」拉一次再推；分叉了拉不动就去那个目录理历史。原始信息：${raw}`,
+    };
   }
-  // ③ 权限
+  // ③ 权限（E1203）
   if (/Permission denied|403|Authentication failed|invalid credentials|Write access/i.test(text)) {
-    return `推不上去：这个令牌对 ${remote} 没有 Contents: write（或在 Repository access 里没选中它）。原始信息：${raw}`;
+    return { code: 'E1203', text: `推不上去：这个令牌对 ${remote} 没有 Contents: write（或在 Repository access 里没选中它）。原始信息：${raw}` };
   }
-  return `推送失败：${text.trim() || 'git 没给原因'}`;
+  // ④ 连不上远端（网络 / 代理 / DNS）—— 最高频的一档，curl 原文不糊脸上（E1204）
+  const net = gitNetworkFailure(text);
+  if (net) return { code: 'E1204', text: net };
+  // ⑤ 没认出来的也带码（E1299）：排障时能和"常见档"区分开，原文附上
+  return { code: 'E1299', text: `推送失败（没认出的原因）：${text.trim() || 'git 没给原因'}` };
 }
 
 /**
@@ -1039,9 +1177,8 @@ export async function pushCurrent(row) {
   if (st.detached) throw new Error('当前不在任何分支上（detached HEAD）—— 先 checkout 回一个分支再推');
   const push = await gitIn(row.localPath, [...gitAuthArgs(), 'push', '--set-upstream', 'origin', `refs/heads/${st.branch}:refs/heads/${st.branch}`], { timeoutMs: GIT_PUSH_MS });
   if (push.code !== 0) {
-    throw new Error(
-      translatePushFailure(String(push.out ?? ''), { branch: st.branch, base: row.defaultBranch ?? null }),
-    );
+    const t = translatePushFailure(String(push.out ?? ''), { branch: st.branch, base: row.defaultBranch ?? null });
+    throw new GitError(t.code, t.text);
   }
   return { pushed: st.branch };
 }
@@ -1050,7 +1187,11 @@ export async function pushCurrent(row) {
 export async function fetchRepo(row) {
   if (!isGitRepo(row.localPath)) throw new Error(`本地目录不是 git 仓库（没有 .git）：${row.localPath}`);
   const r = await gitIn(row.localPath, [...gitAuthArgs(), 'fetch', '--prune', 'origin'], { timeoutMs: GIT_PUSH_MS });
-  if (r.code !== 0) throw new Error(`拉取没成功：${r.out.split('\n').slice(-3).join(' ')}`);
+  if (r.code !== 0) {
+    // 连不上是 fetch 的最高频失败（和推送同一张码表，E1204），别把 curl 原文糊给人
+    const net = gitNetworkFailure(r.out);
+    throw net ? new GitError('E1204', net) : new Error(`拉取没成功：${r.out.split('\n').slice(-3).join(' ')}`);
+  }
   return { fetched: true };
 }
 
@@ -1766,21 +1907,13 @@ async function assertNameForCreate(cwd, name, { repoName = '' } = {}) {
   if (await branchExists(cwd, b)) return b;
   return assertNewBranchName(b, { repoName });
 }
-/**
+/*
  * **凭据闸**（推上去就收不回来：git 历史里的 secret 只能靠强推抹，公开仓库抹不掉）。
  *
- * 与 `pr-review.mjs` 的 `SENSITIVE_RE` 不是一回事：那条管"自动合并要严"（CI 配置也算敏感），
- * 这条管"别把私钥推到公开仓库"。`.github/workflows/` 在这条里**不算**凭据 —— 那是正常改动。
+ * 判据已抽到 `secret-paths.mjs`（2026-11-13）：agent 的 pre-push 钩子也要挡同一批文件，
+ * 两处必须用**同一份正则** —— 详见那个文件的头注释。
  */
-const SECRET_PATH_RE =
-  /(^|\/)\.env(\.|$)|\.(pem|p12|pfx|key|kdbx|keystore)$|(^|\/)(id_rsa|id_ecdsa|id_ed25519|\.npmrc|\.netrc)(\.|$)|[\w.-]*(token|secret|credential|passwd|password)[\w.-]*$/i;
-/** 模板类放过：`.env.example` 是要提交的东西，拦它等于逼人绕开平台 */
-const SECRET_EXEMPT_RE = /\.(example|sample|template|dist|txt|md)$/i;
-
-/** 这批路径里哪些像凭据（返回路径清单；空数组 = 干净） */
-export function findSecretPaths(paths) {
-  return (paths ?? []).map((p) => String(p ?? '')).filter((p) => p && SECRET_PATH_RE.test(p) && !SECRET_EXEMPT_RE.test(p));
-}
+export { findSecretPaths };
 
 /**
  * 解析 `git status --porcelain -z`。
@@ -1833,11 +1966,34 @@ async function commitIdentityArgs(cwd) {
 
 /** base 分支：库里的 defaultBranch → origin/HEAD → main（都拿不到就说清楚，不猜） */
 async function resolveBase(row, askedBase) {
-  if (askedBase) return assertBranchName(askedBase);
-  if (row.defaultBranch) return row.defaultBranch;
+  let name = null;
+  if (askedBase) name = assertBranchName(askedBase);
+  else if (row.defaultBranch) name = row.defaultBranch;
+  else {
+    const head = await gitIn(row.localPath, ['symbolic-ref', '--short', '-q', 'refs/remotes/origin/HEAD']);
+    if (head.code === 0 && head.out) name = head.out.replace(/^origin\//, '');
+  }
+  if (!name) {
+    throw new Error('不知道要合进哪个分支（仓库没记默认分支、本地也没有 origin/HEAD）——在弹窗里填一个 base');
+  }
+  /*
+   * **自愈**（2026-11-13 实报）：登记的默认分支名可能已经不存在（比如登记当天的工作分支后来删了），
+   * 这时以前直接抛"本地还没有 origin/xxx 这个引用"——员工和人都被卡住，只能人肉查库。
+   * 现在两级兜底：① 先 `git fetch origin --prune` 拉一次（引用缺了多半是没同步）；
+   * ② 还缺就退 `origin/HEAD`（真正的默认分支）并**在日志里写明换了**，别静默改目标。
+   */
+  const hasRef = async (n) =>
+    (await gitIn(row.localPath, ['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${n}`], { timeoutMs: GIT_FAST_MS })).code === 0;
+  if (await hasRef(name)) return name;
+  await gitIn(row.localPath, ['fetch', 'origin', '--prune'], { timeoutMs: GIT_PUSH_MS });
+  if (await hasRef(name)) return name;
   const head = await gitIn(row.localPath, ['symbolic-ref', '--short', '-q', 'refs/remotes/origin/HEAD']);
-  if (head.code === 0 && head.out) return head.out.replace(/^origin\//, '');
-  throw new Error('不知道要合进哪个分支（仓库没记默认分支、本地也没有 origin/HEAD）——在弹窗里填一个 base');
+  const fallback = head.code === 0 && head.out ? head.out.replace(/^origin\//, '') : 'main';
+  if (fallback !== name && (await hasRef(fallback))) {
+    console.warn(`[git] base 分支 ${name} 在远端不存在（登记的信息过时了）—— 这次改用 ${fallback}；建议去「代码托管」把默认分支改对`);
+    return fallback;
+  }
+  throw new Error(`本地和远端都没有分支 ${name}（拉过一次也没有）——去「代码托管」检查默认分支，或在弹窗里换个 base`);
 }
 
 /**
@@ -1930,6 +2086,7 @@ export async function workState(row) {
     unpulled,
     dirty,
     dirtyCount: dirty.length,
+    // 名字初筛的"嫌疑名单"（界面提前提示用）—— 真闸在 secretGate：内容说了算，别拿这份当结论
     secrets: findSecretPaths(dirty.map((f) => f.path)),
     /*
      * 默认分支名由服务端给（`<type>/<短描述>`，规则只留一处，界面和人敲的是同一套）。
@@ -1948,6 +2105,46 @@ export async function workState(row) {
     // 「现在就能建 PR」= 有东西进 PR 且已经推到远端 —— 推送和建 PR 拆开后的闸（2026-10-29）
     canPrNow: (ahead ?? 0) > 0 && !!upstream && (unpushed ?? 0) === 0,
   };
+}
+
+/**
+ * 「提交 PR」流程节点的**无事可做**判定（2026-11-14）：工作区干净、分支也不领先 base ——
+ * 这时建 PR 无事可做，原因是"没有新提交"，不是出了故障。流程里要照实说一句
+ * 「不需要建 PR」并照常往下走，不能标红失败等人重跑（用户："已经没有新提交的代码，
+ * 不用建 PR 了，那应该告诉用户"）。
+ *
+ * 返回原因一句话（给人看），有东西可交 / 状态算不出来时返回 null（让 commitAndPush
+ * 按它自己的闸报：detached、没 origin、base 引用没拉过……各有各的说法，不在这里抢）。
+ */
+export function nothingNewForPr(st) {
+  if (!st || typeof st !== 'object') return null;
+  if ((st.dirty?.length ?? 0) > 0 || (st.ahead ?? 0) > 0) return null; // 脏文件会被收进提交；领先 base 的提交能进 PR
+  if (!st.baseKnown) return null; // 连 origin/<base> 都没有 → 是"没同步过"，不是"没东西"
+  return st.onBase
+    ? `工作区干净、还在 base（${st.base}）上 —— 没有要提交的改动，也就没有 PR 可建`
+    : `工作区干净、当前分支也没有领先 base（${st.base}）的提交 —— 改动可能已经进了 base（刚合并过），或这一步之前没产生新改动`;
+}
+
+/**
+ * GitHub API 用的仓库引用（`owner/name`）。
+ *
+ * 「本地代码托管」接进来的行（2026-11-14 流程实报）：fullName 只记了目录名（`bandi`），
+ * 没有 owner 段 —— 推送走 origin 没事，API 却按 `/repos/{fullName}/...` 拼，
+ * `/repos/bandi/pulls` 在 GitHub 上必然 404，换什么令牌都救不了
+ * （这个 404 之前一直被误判成"令牌没授权这个仓库"）。
+ * 行里没 owner 段就从本地 origin 解出真身；解不出（没有 origin / 不是 GitHub 地址）
+ * 原样返回 —— 让后续的 404 文案去说话，这里不猜。
+ */
+export async function githubRefOf(row) {
+  const name = String(row?.fullName ?? '');
+  if (name.includes('/')) return name;
+  try {
+    const r = await gitIn(row.localPath, ['remote', 'get-url', 'origin']);
+    if (r.code !== 0) return name;
+    const m = String(r.out ?? '').trim().match(/github\.com[/:]([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/i);
+    if (m) return `${m[1]}/${m[2]}`;
+  } catch { /* origin 读不到就原样返回 */ }
+  return name;
 }
 
 /**
@@ -1982,7 +2179,8 @@ function addTargetsOf(entries) {
  * 三条硬规矩（都是"推上去收不回来"那一类）：
  *   · 只在新分支上提交，绝不往 base 上提交（`assertBranchName` + base 同名直接拒）；
  *   · 推不上去就**说清楚**，绝不 `--force`（远端同名分支不是你的，多半是别人的活）；
- *   · 看着像凭据的文件先挡住，除非调用方明说 `allowSecrets`（界面上那颗"就是要提交"）。
+ *   · 凭据闸 v2（`secretGate`）：名字像凭据的先扫内容，干净自动放行；实锤档没有口令通道，
+ *     内容实锤要雇主显式确认（`allowSecrets`）—— 界面上那颗危险确认只管这一档灰区。
  */
 export async function commitAndPush(row, { branch = null, message = null, paths = null, allowSecrets = false, base = null, pushOnly = false } = {}) {
   const st = await workState(row);
@@ -1995,10 +2193,7 @@ export async function commitAndPush(row, { branch = null, message = null, paths 
   if (!pushOnly && Array.isArray(paths) && paths.length && picked.length !== paths.length) {
     throw new Error('选中的文件和工作区对不上了（期间有人动过）—— 重新看一次改动再提交');
   }
-  const secrets = findSecretPaths(picked.map((f) => f.path));
-  if (secrets.length && !allowSecrets) {
-    throw new Error(`改动里有看着像凭据的文件：${secrets.slice(0, 4).join('、')}${secrets.length > 4 ? ` 等 ${secrets.length} 个` : ''} —— 推上去就收不回来。确认那是可以公开的（例如 .env.example），再带上"就是要提交"`);
-  }
+  const secretNotes = await secretGate(row.localPath, picked, { allowSecrets });
 
   const targetBase = await resolveBase(row, base);
   let branchName = branch ? await assertNameForCreate(row.localPath, branch, { repoName: row.name }) : null;
@@ -2052,16 +2247,15 @@ export async function commitAndPush(row, { branch = null, message = null, paths 
 
   const push = await gitIn(row.localPath, [...gitAuthArgs(), 'push', '--set-upstream', 'origin', `refs/heads/${branchName}:refs/heads/${branchName}`], { timeoutMs: GIT_PUSH_MS });
   if (push.code !== 0) {
-    throw new Error(
-      translatePushFailure(String(push.out ?? ''), {
-        branch: branchName,
-        base: targetBase,
-        rejectedHint: 'rename',
-      }),
-    );
+    const t = translatePushFailure(String(push.out ?? ''), {
+      branch: branchName,
+      base: targetBase,
+      rejectedHint: 'rename',
+    });
+    throw new GitError(t.code, t.text);
   }
 
-  return { branch: branchName, base: targetBase, committed, files: picked };
+  return { branch: branchName, base: targetBase, committed, files: picked, secretNotes };
 }
 
 /**
@@ -2175,9 +2369,12 @@ export async function openPr(row, { title, body, base, branch, message, draft, p
     }
     pushed = { branch: st.branch, base: await resolveBase(row, base), committed: null, files: [] };
   }
-  const existing = await findOpenPullForHead(row.fullName, pushed.branch, row.owner);
+  // API 用的仓库引用：本地托管行 fullName 可能没有 owner 段，从 origin 解（见 githubRefOf）。
+  // 解不出来就原样 —— 那时的 404 文案会如实说"访问不了这个仓库"。
+  const repoRef = await githubRefOf(row);
+  const existing = await findOpenPullForHead(repoRef, pushed.branch, row.owner);
   if (existing) return { pr: existing, created: false, ...pushed };
-  const out = await createPull(row.fullName, {
+  const out = await createPull(repoRef, {
     head: pushed.branch,
     base: pushed.base,
     title: title || pushed.branch,

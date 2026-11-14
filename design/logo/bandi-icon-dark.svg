@@ -1,11 +1,12 @@
 <svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
   <title>班底 · 分玉应用图标（墨底反白，主用版）</title>
-  <!-- 2026-11-10 第四次定稿「分玉」：圆被竖直弦切开、右片下沉。
+  <!-- 2026-11-12 去缝修订（2026-11-10 第四次定稿「分玉」）：圆沿竖直直径切成两片、
+       两片贴合、右片下沉。分色与错位承担全部识别力。
        《说文》「班，分瑞玉也，从珏从刀」——把一块玉分开、人手各执其一 = 派活。
        与 apps/desktop/make-icon.py 的 GAP_FULL/OFF_FULL 同一套几何。 -->
   <rect width="512" height="512" rx="110" fill="#12161A"/>
   <g transform="translate(256 256) scale(3.25) translate(-50 -49.8)">
-    <path d="M47 4.11 A40 40 0 0 0 47 83.89 Z" fill="#F2F1ED"/>
-    <path d="M53 4.11 A40 40 0 0 1 53 83.89 Z" fill="#5FB3A3" transform="translate(0 12)"/>
+    <path d="M50 4 A40 40 0 0 0 50 84 Z" fill="#F2F1ED"/>
+    <path d="M50 4 A40 40 0 0 1 50 84 Z" fill="#5FB3A3" transform="translate(0 12)"/>
   </g>
 </svg>

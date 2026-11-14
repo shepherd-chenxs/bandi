@@ -1,11 +1,11 @@
 <svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
-  <title>班底 · 分玉小尺寸光学版（≤48px 用：缝 6→18、错位 12→22、放大 1.15、单色）</title>
-  <!-- 不要用缩放代替重绘：全版的 6 单位缝在 16px 上只有 1.2px，抗锯齿一糊就成了实心圆。
-       这一版缝宽 18 单位、错位 22、整体放大 1.15，16px 上仍留 ~2px 缝。
+  <title>班底 · 分玉小尺寸光学版（≤48px 用：错位 12→22、放大 1.15、单色、无缝）</title>
+  <!-- 不要用缩放代替重绘：去缝定稿后小尺寸靠错位与分色读形，
+       这一版错位 22、整体放大 1.15，16px 上台阶仍有 ~2px 可辨。
        与 apps/desktop/make-icon.py 的 GAP_TINY/OFF_TINY 同参数。 -->
   <rect width="512" height="512" rx="110" fill="#12161A"/>
   <g transform="translate(256 256) scale(3.737) translate(-50 -54.8)" fill="#F2F1ED">
-    <path d="M41 5.03 A40 40 0 0 0 41 82.97 Z"/>
-    <path d="M59 5.03 A40 40 0 0 1 59 82.97 Z" transform="translate(0 22)"/>
+    <path d="M50 4 A40 40 0 0 0 50 84 Z"/>
+    <path d="M50 4 A40 40 0 0 1 50 84 Z" transform="translate(0 22)"/>
   </g>
 </svg>

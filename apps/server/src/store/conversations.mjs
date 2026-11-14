@@ -9,7 +9,16 @@ import { createWorkflowRun } from './workflows.mjs';
 import { emitConv } from '../events.mjs';
 
 export function setConversationSandbox(id, sandbox) {
-  db.prepare('UPDATE conversations SET sandbox = ? WHERE id = ?').run(sandbox || null, id);
+  const prev = getConversation(id)?.sandbox ?? null;
+  const next = sandbox || null;
+  db.prepare('UPDATE conversations SET sandbox = ? WHERE id = ?').run(next, id);
+  /*
+   * 覆盖真的变了 → 作废这条会话的**全部成员会话**（2026-11-13，与员工权限档同理）：
+   * 覆盖每轮 spawn 都按新值传（CLI 侧立刻生效），但旧 CLI 会话的记忆里堆着旧档下的
+   * 失败结论（"命令被拒"、"连不上"）—— 不清的话模型 --resume 续上来，把旧账当现状
+   * 复述，权限升了也"还是连不上"。
+   */
+  if (prev !== next) db.prepare('DELETE FROM member_sessions WHERE threadId = ?').run(id);
   return getConversation(id);
 }
 
@@ -49,7 +58,7 @@ export function ensureExecConversation({ personaId, scope, title, projectId = nu
   };
   db.prepare(
     `INSERT INTO conversations (id, title, personaId, sessionId, status, kind, projectId, execScope, createdAt, updatedAt)
-     VALUES (?, ?, ?, NULL, '待跑', 'exec', ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, NULL, 'pending', 'exec', ?, ?, ?, ?)`,
   ).run(row.id, row.title, row.personaId, row.projectId, row.execScope, ts, ts);
   return getConversation(row.id);
 }
@@ -137,7 +146,7 @@ export const LOCAL_USER = { id: 'local-user', name: '我' };
 
 export function createConversation({ title, personaId }) {
   const ts = nowIso();
-  const row = { id: newId('c'), title, personaId, sessionId: null, status: '待跑', createdAt: ts, updatedAt: ts };
+  const row = { id: newId('c'), title, personaId, sessionId: null, status: 'pending', createdAt: ts, updatedAt: ts };
   db.prepare(
     `INSERT INTO conversations (id, title, personaId, sessionId, status, createdAt, updatedAt)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,

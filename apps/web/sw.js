@@ -19,7 +19,7 @@
  * 这个文件原来是 837 行里 722 行注释 —— 改缓存策略前得先翻过 160 个版本。
  * 改法不变：动静态清单就 VERSION +1，并去那边补一条"为什么进这一版"。
  */
-const VERSION = 'v214';
+const VERSION = 'v246';
 const CACHE = `bandi-static-${VERSION}`;
 
 /*
@@ -40,6 +40,7 @@ const JS_MODULES = [
   '/js/machine.mjs',
   '/js/misc.mjs',
   '/js/mobile.mjs',
+  '/js/navstack.mjs',
   '/js/plugin-data.mjs',
   '/js/projects.mjs',
   '/js/run-live.mjs',

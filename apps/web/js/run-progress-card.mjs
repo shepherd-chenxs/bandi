@@ -223,7 +223,7 @@ export function createProgressCard({ startedAt = Date.now(), onStop = null } = {
     const bad = v.phase === 'error';
     el.classList.toggle('error', bad);
     const n = v.steps.length;
-    const ico = bad ? '✗' : v.status === '已停止' ? '⏹' : '✓';
+    const ico = bad ? '✗' : v.status === 'stopped' ? '⏹' : '✓';
     const label = bad ? '出错了' : (v.intent && n ? clipEnds(v.intent, 30) : v.status || '已结束');
     const phCount = v.phases && v.phases.length >= 2 ? `${v.phases.length} 阶段 · ` : '';
     /*
@@ -294,7 +294,7 @@ export function createProgressCard({ startedAt = Date.now(), onStop = null } = {
   const finish = (status) => {
     progress.done = true;
     progress.status = status;
-    progress.phase = status === '失败' ? 'error' : 'done';
+    progress.phase = status === 'failed' ? 'error' : 'done';
     paint();
   };
 

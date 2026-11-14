@@ -59,16 +59,16 @@ ADAPTERS.codex = ({ signal }) =>
   }); // 永不 resolve
 
 const r1 = runs.startRun({ thread, member, task: '一', watermark: 0 });
-check('运行起步是「跑中」', store.getRunStatus(r1.id)?.status === '跑中', store.getRunStatus(r1.id)?.status);
+check('运行起步是「跑中」', store.getRunStatus(r1.id)?.status === 'running', store.getRunStatus(r1.id)?.status);
 
 const stopRes = runs.requestStop(r1.id);
 check('requestStop 认得这笔运行并置了"人停的"标记', !!stopRes && stopRes.stoppedByUser === true);
 check('abort 信号发出去了', aborted1 === 1);
 
 await sleep(runs.STOP_WATCHDOG_MS + 1200);
-check(`看门狗 ${runs.STOP_WATCHDOG_MS}ms 后强制收尾成「已停止」`, store.getRunStatus(r1.id)?.status === '已停止', store.getRunStatus(r1.id)?.status);
+check(`看门狗 ${runs.STOP_WATCHDOG_MS}ms 后强制收尾成「已停止」`, store.getRunStatus(r1.id)?.status === 'stopped', store.getRunStatus(r1.id)?.status);
 check('库里终止事件恰好一条（防重入，没两头写）', store.listRunEvents(r1.id, 0).filter((e) => JSON.parse(e.evt)?.type === '__done').length === 1);
-check('会话状态不再挂着「跑中」', store.listConversations().find((c) => c.id === thread.id)?.status !== '跑中');
+check('会话状态不再挂着「跑中」', store.listConversations().find((c) => c.id === thread.id)?.status !== 'running');
 
 /* ===== 场景二：收尾在超时前来得及 → 正常收尾赢，看门狗不补刀 ===== */
 let aborted2 = 0;
@@ -83,7 +83,7 @@ ADAPTERS.codex = ({ signal }) =>
 const r2 = runs.startRun({ thread, member, task: '二', watermark: 0 });
 runs.requestStop(r2.id);
 await sleep(runs.STOP_WATCHDOG_MS + 1200);
-check('子进程 300ms 后正常退 → 状态同样落「已停止」', store.getRunStatus(r2.id)?.status === '已停止', store.getRunStatus(r2.id)?.status);
+check('子进程 300ms 后正常退 → 状态同样落「已停止」', store.getRunStatus(r2.id)?.status === 'stopped', store.getRunStatus(r2.id)?.status);
 check('这次也只有一条终止事件（看门狗没有重复收尾）', store.listRunEvents(r2.id, 0).filter((e) => JSON.parse(e.evt)?.type === '__done').length === 1);
 
 /* 场景三（远端运行/节点不回执）随多机节点子系统 2026-11-09 整体删除：

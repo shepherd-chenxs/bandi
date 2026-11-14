@@ -24,7 +24,7 @@ export function enqueueNodeTask({ nodeId, kind, family, arg = null }) {
   const id = newId('nt');
   db.prepare(
     `INSERT INTO node_tasks (id, nodeId, kind, family, status, output, arg, createdAt)
-     VALUES (?, ?, ?, ?, '待领', '', ?, ?)`,
+     VALUES (?, ?, ?, ?, 'pending', '', ?, ?)`,
   ).run(id, nodeId, kind, family, arg ? String(arg) : null, nowIso());
   return getNodeTask(id);
 }
@@ -38,11 +38,11 @@ export function getNodeTask(id) {
 
 export function claimNodeTask(nodeId) {
   const row = db
-    .prepare("SELECT id FROM node_tasks WHERE nodeId = ? AND status = '待领' ORDER BY createdAt LIMIT 1")
+    .prepare("SELECT id FROM node_tasks WHERE nodeId = ? AND status = 'pending' ORDER BY createdAt LIMIT 1")
     .get(nodeId);
   if (!row) return null;
   const up = db
-    .prepare("UPDATE node_tasks SET status = '执行中', claimedAt = ? WHERE id = ? AND status = '待领'")
+    .prepare("UPDATE node_tasks SET status = 'running', claimedAt = ? WHERE id = ? AND status = 'pending'")
     .run(nowIso(), row.id);
   if (!up.changes) return null;
   return getNodeTask(row.id);
@@ -55,7 +55,7 @@ export function claimNodeTask(nodeId) {
 
 export function claimNodeTaskById(id) {
   const up = db
-    .prepare("UPDATE node_tasks SET status = '执行中', claimedAt = ? WHERE id = ? AND status = '待领'")
+    .prepare("UPDATE node_tasks SET status = 'running', claimedAt = ? WHERE id = ? AND status = 'pending'")
     .run(nowIso(), id);
   if (!up.changes) return null;
   return getNodeTask(id);
@@ -75,7 +75,7 @@ export function appendNodeTaskOutput(id, chunk) {
 }
 
 
-export function finishNodeTask(id, status = '完成') {
+export function finishNodeTask(id, status = 'done') {
   db.prepare('UPDATE node_tasks SET status = ?, endedAt = ? WHERE id = ?').run(status, nowIso(), id);
   return getNodeTask(id);
 }
@@ -96,10 +96,10 @@ export function listNodeTasks(nodeId, limit = 5) {
  */
 export function reapOrphanLocalTasks() {
   const rows = db
-    .prepare("SELECT id, family, status FROM node_tasks WHERE nodeId = 'local' AND status IN ('待领','执行中')")
+    .prepare("SELECT id, family, status FROM node_tasks WHERE nodeId = 'local' AND status IN ('pending','running')")
     .all();
   for (const t of rows) {
-    db.prepare("UPDATE node_tasks SET status = '失败', endedAt = ? WHERE id = ?").run(nowIso(), t.id);
+    db.prepare("UPDATE node_tasks SET status = 'failed', endedAt = ? WHERE id = ?").run(nowIso(), t.id);
     db.prepare("UPDATE node_tasks SET output = output || ? WHERE id = ?").run(
       '\n班底重启时这件活还在跑 —— 执行进程已经没了，按失败算；要装再点一次。',
       t.id,
@@ -124,7 +124,7 @@ export function publicNodeTask(t) {
     output: t.output,
     createdAt: t.createdAt,
     endedAt: t.endedAt,
-    running: t.status === '执行中',
-    done: t.status === '完成' || t.status === '失败',
+    running: t.status === 'running',
+    done: t.status === 'done' || t.status === 'failed',
   };
 }

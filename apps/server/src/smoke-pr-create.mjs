@@ -136,6 +136,30 @@ check('短描述等于仓库名 → 拒', rejectedNew([`chore/v${V}-bandi`]).len
 check('「平台建的分支」= 老 bandi/ 或新 <type>/x（feature/x 是人的分支）', git.isPlatformBranchName('bandi/old') && git.isPlatformBranchName('fix/demo') && !git.isPlatformBranchName('feature/human') && !git.isPlatformBranchName('main'));
 check('凭据闸抓住 .env / 私钥 / token 文件', JSON.stringify(git.findSecretPaths(['.env', 'id_rsa', 'a/b/token.json', 'k.pem'])) === '[".env","id_rsa","a/b/token.json","k.pem"]');
 check('模板类放过（.env.example 本来就该提交）', JSON.stringify(git.findSecretPaths(['.env.example', 'config.sample.ts', 'README.md'])) === '[]');
+/* 凭据闸 v2（2026-11-13）：名字只做初筛，命中的分两档 —— 判据代码自己也长"凭据脸"，别再凭名字拦它 */
+const secretPaths = await import('./secret-paths.mjs');
+const gateClass = secretPaths.classifySecretSuspects(['.env', 'id_rsa', 'src/secret-paths.mjs', 'a/token-bucket.mjs', 'cert.pem', '.env.example']);
+check('分档：实锤档（.env / id_rsa）直接拦，判据代码 / token-bucket / pem 归内容说了算', JSON.stringify(gateClass.keyfiles) === '[".env","id_rsa"]' && JSON.stringify(gateClass.wordy) === '["src/secret-paths.mjs","a/token-bucket.mjs","cert.pem"]', JSON.stringify(gateClass));
+check('内容扫描：私钥块与已知令牌命中', secretPaths.scanContentForSecrets('k.pem', '-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n') === '私钥块（PEM/OpenSSH 等）' && secretPaths.scanContentForSecrets('token.json', '{"token": "sk-proj-abcdefghijklmnopqrstuvwx"}') === 'OpenAI 风格密钥（sk-…）');
+check('内容扫描：占位值 / 测试豁免位算干净（拦测试假密钥等于逼人搬走测试）', secretPaths.scanContentForSecrets('token.json', '{"token": "占位值待填"}') === null && secretPaths.scanContentForSecrets('tests/fixtures/token.json', '{"token": "sk-proj-abcdefghijklmnopqrstuvwx"}') === null);
+/* 报错规范（2026-11-14，docs/契约.md「十一」）：常见错 = 错误码 + 一句人话 + 出路，原始信息垫底 */
+check('推送翻译：代理没通 → E1204 连不上 GitHub（curl 原文只垫底）', (() => {
+  const t = git.translatePushFailure("fatal: unable to access 'https://github.com/shepherd-chenxs/bandi.git/': Failed to connect to github.com:443 over proxy 127.0.0.1 after 0 ms: Could not connect to server");
+  return t.code === 'E1204' && /连接不上 github\.com/.test(t.text) && /代理 127\.0\.0\.1/.test(t.text) && /原始信息：/.test(t.text);
+})(), JSON.stringify(git.translatePushFailure('Failed to connect to github.com:443 over proxy 127.0.0.1: x')));
+check('推送翻译五档全带码', (() => {
+  const a = git.translatePushFailure('! [remote rejected] main -> main (push declined due to repository rule violations)');
+  const b = git.translatePushFailure('! [rejected] feat/x -> feat/x (non-fast-forward)');
+  const c = git.translatePushFailure('remote: Permission denied to shepherd-chenxs/bandi.git');
+  const d = git.translatePushFailure('some totally unknown git complaint');
+  const e = git.translatePushFailure('fatal: Could not resolve host: github.com');
+  return a.code === 'E1201' && b.code === 'E1202' && c.code === 'E1203' && d.code === 'E1299' && e.code === 'E1204';
+})());
+check('网络识别独立可用（fetch / clone / pull 共用一份）', /连接不上/.test(git.gitNetworkFailure('fatal: Could not resolve host: github.com')) && git.gitNetworkFailure('everything fine, no error here') === null);
+check('GitError 带码（文案自带 [码] 前缀，路由 failWith 透传 e.code，路由码只兜底）', (() => {
+  const e = new git.GitError('E1204', '连接不上 github.com');
+  return e.code === 'E1204' && e instanceof Error && /^\[E1204\] 连接不上/.test(e.message);
+})());
 check('status -z：带空格的路径不被切两半', JSON.stringify(git.parseStatusZ(' M src/a b.ts\0')) === '[{"status":" M","path":"src/a b.ts"}]');
 check('status -z：重命名连着读（下一条是源路径）', JSON.stringify(git.parseStatusZ('R  new/n.ts\0old/n.ts\0?? x.md\0')) === '[{"status":"R ","path":"new/n.ts","from":"old/n.ts"},{"status":"??","path":"x.md"}]', JSON.stringify(git.parseStatusZ('R  new/n.ts\0old/n.ts\0?? x.md\0')));
 check('status -z：**未暂存**重命名（` R`）也连着读源路径', JSON.stringify(git.parseStatusZ(' R b.txt\0a.txt\0')) === '[{"status":" R","path":"b.txt","from":"a.txt"}]', JSON.stringify(git.parseStatusZ(' R b.txt\0a.txt\0')));
@@ -162,6 +186,63 @@ st = await git.workState(row);
 check('改完文件：dirtyCount=3（含未跟踪与带空格的路径）', st.dirtyCount === 3, JSON.stringify(st.dirty.map((f) => f.path)));
 check('canShip 变 true', st.canShip === true);
 check('凭据闸在状态里就报出来（让人点之前就看见）', JSON.stringify(st.secrets) === '[".env"]', JSON.stringify(st.secrets));
+
+/*
+ * 「提交 PR」流程节点的**无事可做**判定（2026-11-14 流程实报：没有新提交也被标成失败，
+ * 用户对着红字猜不出原因 —— "已经没有新提交的代码，不用建 PR 了，那应该告诉用户"）。
+ */
+check(
+  'nothingNewForPr：干净 + 在 base 上 → 说"没有要提交的改动"（流程里这不算失败）',
+  /没有要提交的改动/.test(git.nothingNewForPr({ dirty: [], ahead: 0, baseKnown: true, base: 'main', onBase: true }) ?? ''),
+  git.nothingNewForPr({ dirty: [], ahead: 0, baseKnown: true, base: 'main', onBase: true }) ?? '',
+);
+check(
+  'nothingNewForPr：干净分支不领先 base → 提示"可能刚合并过"',
+  /合并/.test(git.nothingNewForPr({ dirty: [], ahead: 0, baseKnown: true, base: 'main', onBase: false }) ?? ''),
+  git.nothingNewForPr({ dirty: [], ahead: 0, baseKnown: true, base: 'main', onBase: false }) ?? '',
+);
+check(
+  'nothingNewForPr：有脏文件 / 有领先提交 / base 没拉过 → 都不算"没事"（各归各的闸报）',
+  git.nothingNewForPr({ dirty: [{ status: ' M', path: 'a' }], ahead: 0, baseKnown: true }) === null
+    && git.nothingNewForPr({ dirty: [], ahead: 2, baseKnown: true }) === null
+    && git.nothingNewForPr({ dirty: [], ahead: null, baseKnown: false }) === null,
+  JSON.stringify({
+    dirty: git.nothingNewForPr({ dirty: [{ status: ' M', path: 'a' }], ahead: 0, baseKnown: true }),
+    ahead: git.nothingNewForPr({ dirty: [], ahead: 2, baseKnown: true }),
+    unknown: git.nothingNewForPr({ dirty: [], ahead: null, baseKnown: false }),
+  }),
+);
+check('nothingNewForPr：眼下这个脏工作区不算"没事"（闸照旧）', git.nothingNewForPr(st) === null, String(git.nothingNewForPr(st)));
+
+/*
+ * githubRefOf（2026-11-14 流程实报）：「本地代码托管」接的行 fullName 只有目录名（bandi），
+ * API 却按 /repos/{fullName}/... 拼 —— /repos/bandi/pulls 必 404，换什么令牌都没用。
+ * 没 owner 段就从 origin 解出真身；解不出原样返回。⚠️ origin 是后面 ③ 的推送目标，测完必须还原。
+ */
+const localRow = { fullName: 'bandi', localPath: work };
+g(['-C', work, 'remote', 'set-url', 'origin', 'https://github.com/octo/demo.git']);
+check(
+  'githubRefOf：https origin 解出 owner/name',
+  await git.githubRefOf(localRow) === 'octo/demo',
+  await git.githubRefOf(localRow),
+);
+g(['-C', work, 'remote', 'set-url', 'origin', 'git@github.com:octo/demo.git']);
+check(
+  'githubRefOf：ssh origin 也认',
+  await git.githubRefOf(localRow) === 'octo/demo',
+  await git.githubRefOf(localRow),
+);
+g(['-C', work, 'remote', 'set-url', 'origin', bare]);
+check(
+  'githubRefOf：origin 不是 GitHub 地址 → 原样返回（不猜）',
+  await git.githubRefOf(localRow) === 'bandi',
+  await git.githubRefOf(localRow),
+);
+check(
+  'githubRefOf：fullName 已带 owner → 原样返回（不碰 git）',
+  await git.githubRefOf({ fullName: 'octo/demo', localPath: 'Z:\\no-such-dir' }) === 'octo/demo',
+  await git.githubRefOf({ fullName: 'octo/demo', localPath: 'Z:\\no-such-dir' }),
+);
 
 /*
  * **回归（2026-10-25 用户实报）**：工作区第一条改动是「 M」（已跟踪文件被改）时，
@@ -200,8 +281,43 @@ try {
 } catch (e) {
   blocked = e.message;
 }
-check('改动里有 .env → 拒绝推送，并说清为什么', /看着像凭据/.test(blocked) && /\.env/.test(blocked), blocked.slice(0, 70));
+check('改动里有 .env → 拒绝推送，并说清为什么', /按约定就该是凭据/.test(blocked) && /\.env/.test(blocked) && /不提供放行口令/.test(blocked), blocked.slice(0, 70));
 check('被拦下时没有产生提交（工作树还是那三个文件）', g(['-C', work, 'log', '--oneline'], work).split('\n').length === 1 && (await git.workState(row)).dirtyCount === 3);
+
+/*
+ * 凭据闸 v2（2026-11-13 实报：secret-paths.mjs 自己被自己的名字拦了，流程卡在「提交 PR」
+ * 等人处理）：文件名只做初筛，命中的分两档 ——
+ *   · 名字像凭据、内容干净 → **自动放行**，结果里留一句备注（用户无感，不再"等人处理"）；
+ *   · 内容扫出密钥 → 拦，雇主显式确认（allowSecrets）能放 —— 这才是配得上人工决策的灰区；
+ *   · .env 本体 → 拦死，allowSecrets 也无效（实锤档没有口令通道）。
+ */
+const gate = makeRepo('gate');
+fs.mkdirSync(path.join(gate.work, 'apps', 'server', 'src'), { recursive: true });
+fs.writeFileSync(path.join(gate.work, 'apps', 'server', 'src', 'secret-paths.mjs'), 'const RE = /token/;\nexport const clean = true;\n');
+const gateRow = (await git.connectRepo('smoke/gate', null, gate.work)).repo;
+const gatePush = await git.commitAndPush(gateRow, { branch: 'fix/v1.4.0-gate-clean', message: 'feat: 判据模块' });
+check('名字像凭据、内容干净 → 自动放行（不再等人处理）', gatePush.branch === 'fix/v1.4.0-gate-clean', JSON.stringify(gatePush.branch));
+check('放行时留了备注（谁被扫过、结论是什么）', (gatePush.secretNotes ?? []).some((s) => /secret-paths\.mjs/.test(s) && /已放行/.test(s)), JSON.stringify(gatePush.secretNotes));
+
+fs.writeFileSync(path.join(gate.work, 'token-store.json'), '{"token": "sk-proj-abcdefghijklmnopqrstuvwx"}\n');
+let hitBlocked = '';
+try {
+  await git.commitAndPush(gateRow, { branch: 'fix/v1.4.0-gate-hit', message: 'feat: token store' });
+} catch (e) {
+  hitBlocked = e.message;
+}
+check('内容扫出密钥 → 拦，报错带着命中原因', /内容扫描/.test(hitBlocked) && /token-store\.json/.test(hitBlocked), hitBlocked.slice(0, 90));
+const hitPass = await git.commitAndPush(gateRow, { branch: 'fix/v1.4.0-gate-hit', message: 'feat: token store', allowSecrets: true });
+check('内容实锤 + 雇主显式确认 → 放行（灰区配得上人工决策）', hitPass.branch === 'fix/v1.4.0-gate-hit', JSON.stringify(hitPass.branch));
+
+fs.writeFileSync(path.join(gate.work, '.env'), 'API_KEY=x\n');
+let envBlocked = '';
+try {
+  await git.commitAndPush(gateRow, { branch: 'fix/v1.4.0-gate-env', message: 'feat: env', allowSecrets: true });
+} catch (e) {
+  envBlocked = e.message;
+}
+check('.env 本体：allowSecrets 也拦（实锤档没有口令通道）', /不提供放行口令/.test(envBlocked) && /\.env/.test(envBlocked), envBlocked.slice(0, 90));
 
 const pushed = await git.commitAndPush(row, {
   message: 'feat: 加一个功能',
@@ -392,6 +508,20 @@ try {
 }
 check('403 → 指明要 Pull requests: Read and write，并说现在挂的是哪个令牌', /Pull requests: Read and write/.test(noScope) && /\*{6}/.test(noScope), noScope.slice(0, 100));
 
+gh.failWith(/^POST \/repos\/smoke\/demo\/pulls$/, 404, 'Not Found');
+let nf = null;
+try {
+  await git.createPull('smoke/demo', { head: 'bandi/n404', base: 'main', title: '令牌看不到仓库' });
+} catch (e) {
+  nf = e;
+}
+check(
+  '404 → 点名仓库 + 指路令牌授权（不再是一句干巴巴的 Not Found，2026-11-14 流程实报）',
+  !!nf && /访问不了仓库 smoke\/demo/.test(nf.message) && /仓库授权/.test(nf.message) && /Not Found/.test(nf.message),
+  String(nf?.message ?? nf).slice(0, 140),
+);
+check('404 的 status 照旧挂在错误上（程序判定走 status，不走文案）', nf?.status === 404 && nf?.githubMessage === 'Not Found', JSON.stringify({ s: nf?.status, g: nf?.githubMessage }));
+
 /* --------------------------------------------------- ⑤ mergePull：乐观锁 */
 console.log('\n⑤ 合并：拿看过的那个 sha 去合，期间有人推提交就撞 409');
 
@@ -478,7 +608,7 @@ try {
     console.log('\n⑦ HTTP：卡上建 PR → 提交推送 + 建出来 + 自动挂回这张卡');
     const project = store.createProject({ name: '冒烟仓库项目', root: work });
     fs.writeFileSync(path.join(work, 'ship.js'), 'export const ship = true;\n');
-    const card = store.createProjectTask({ projectId: project.id, title: '把建 PR 接上界面', status: '进行中' });
+    const card = store.createProjectTask({ projectId: project.id, title: '把建 PR 接上界面', status: 'doing' });
     const cid = encodeURIComponent(card.id);
     const created = await req(`/api/projects/tasks/${cid}/pr/create`, {
       method: 'POST',
@@ -505,7 +635,7 @@ try {
     check('200 且 merged=true', merged.status === 200 && merged.b.merged === true, JSON.stringify({ s: merged.status, m: merged.b?.merged }));
     const after = store.getProjectTask(card.id);
     check('卡上 prState=merged', after.prState === 'merged', String(after.prState));
-    check('「进行中」→「待验收」（不自动已完成）', after.status === '待验收', after.status);
+    check('「进行中」→「待验收」（不自动已完成）', after.status === 'review', after.status);
     check(
       '卡上合并后本地也收尾了（切回 main，不再停在 PR 分支）',
       merged.b.local?.settled === true && g(['-C', work, 'branch', '--show-current'], work) === 'main',
@@ -516,7 +646,7 @@ try {
     check('已经合过的再点 → already=true + 说"已经合过了"，不当失败', again2.status === 200 && again2.b.already === true && /合过/.test(String(again2.b.note ?? '')), JSON.stringify({ a: again2.b?.already, n: again2.b?.note }));
 
     const draftRepo = gh.seed('smoke/demo', { number: 88, title: '草稿', head: 'bandi/d', base: 'main', draft: true });
-    const draftTask = store.createProjectTask({ projectId: project.id, title: '挂着草稿的卡', status: '进行中' });
+    const draftTask = store.createProjectTask({ projectId: project.id, title: '挂着草稿的卡', status: 'doing' });
     store.updateProjectTask(draftTask.id, { prRepo: 'smoke/demo', prNumber: draftRepo.number, prState: 'open' });
     const draftMerge = await req(`/api/projects/tasks/${encodeURIComponent(draftTask.id)}/pr/merge`, { method: 'POST', body: JSON.stringify({}) });
     check('草稿 PR 拒绝合并并说明为什么', draftMerge.status === 400 && /草稿/.test(draftMerge.b?.error ?? ''), draftMerge.b?.error);
@@ -524,11 +654,11 @@ try {
 
     /* ---------------- ⑨ 前置条件不满足：说清缺哪一环 ---------------- */
     console.log('\n⑨ 前置条件不满足时：说清缺哪一环，绝不当成"建好了"');
-    const noCard = store.createProjectTask({ projectId: project.id, title: '这张卡没关联 PR', status: '待办' });
+    const noCard = store.createProjectTask({ projectId: project.id, title: '这张卡没关联 PR', status: 'todo' });
     const badMerge = await req(`/api/projects/tasks/${encodeURIComponent(noCard.id)}/pr/merge`, { method: 'POST', body: JSON.stringify({}) });
     check('没关联 PR 就合并 → 400「这张卡还没关联 PR」', badMerge.status === 400 && /还没关联/.test(badMerge.b?.error ?? ''), String(badMerge.status));
 
-    const orphan = store.createProjectTask({ projectId: project.id, title: '项目行没了的卡', status: '待办' });
+    const orphan = store.createProjectTask({ projectId: project.id, title: '项目行没了的卡', status: 'todo' });
     // `project_tasks.projectId` 是 NOT NULL，正常口子造不出"没挂项目的卡"；
     // 能造出来的是**项目行没了、卡还在**这种残缺（绕过 deleteProject 直接删项目行才模拟得出）
     const { db } = await import('./store/db.mjs');
@@ -539,7 +669,7 @@ try {
 
     const offRepo = store.createProject({ name: '不在仓库里的项目', root: path.join(tmp, 'plain-dir-not-a-repo') });
     fs.mkdirSync(offRepo.root, { recursive: true });
-    const offCard = store.createProjectTask({ projectId: offRepo.id, title: '目录不是已接入仓库', status: '待办' });
+    const offCard = store.createProjectTask({ projectId: offRepo.id, title: '目录不是已接入仓库', status: 'todo' });
     const notRepo = await req(`/api/projects/tasks/${encodeURIComponent(offCard.id)}/pr/create`, { method: 'POST', body: JSON.stringify({ title: 'x' }) });
     check('项目目录不在任何已接入仓库 → 400 指路去接入', notRepo.status === 400 && /不在任何已接入的仓库/.test(notRepo.b?.error ?? ''), notRepo.b?.error);
 
@@ -643,7 +773,7 @@ try {
     const devTask = store.listWorkflowTasks(flowRun.id)[0];
     check('流程从「开发完成」起步', devTask?.nodeId === 'n1', devTask?.nodeId);
     store.updateWorkflowTask(devTask.id, {
-      status: '待验收',
+      status: 'review',
       result: JSON.stringify({ state: 'done', summary: '写完了', finalText: '写完了' }),
     });
     workflows.decide(flowRun.id, '通过');
@@ -674,7 +804,7 @@ try {
     );
 
     const reviewTask2 = store.listWorkflowTasks(flowRun.id).find((t) => t.nodeId === 'n3');
-    check('审阅那一步没被乱派：仓库没绑管理员 → 阻塞等人（不是静默卡死）', reviewTask2?.status === '已阻塞', reviewTask2?.status);
+    check('审阅那一步没被乱派：仓库没绑管理员 → 阻塞等人（不是静默卡死）', reviewTask2?.status === 'blocked', reviewTask2?.status);
     check('审阅材料已经写进这一步（管理员一上手就有判断依据）', /【审阅材料】/.test(reviewTask2?.detail ?? ''), String(reviewTask2?.detail).slice(0, 40));
     check('阻塞原因说清怎么补管理员', /没绑管理员/.test(reviewTask2?.note ?? ''), String(reviewTask2?.note).slice(0, 60));
 
@@ -683,12 +813,12 @@ try {
 
     gh.seedChecks('smoke/demo', flowPr.headSha, 'success'); // CI 全绿，四闸才有机会全过
     store.updateWorkflowTask(reviewTask2.id, {
-      status: '待验收',
+      status: 'review',
       result: JSON.stringify({ state: 'done', summary: '结论：值得合', finalText: '改动就一个文件，没风险。\n结论：值得合' }),
     });
     workflows.decide(flowRun.id, '通过');
 
-    const mergedFlow = await waitFor(() => store.getWorkflowRun(flowRun.id)?.status === '已完成');
+    const mergedFlow = await waitFor(() => store.getWorkflowRun(flowRun.id)?.status === 'done');
     check('「合并」动作节点到站自动执行 → 流程收尾', mergedFlow, store.getWorkflowRun(flowRun.id)?.status);
     const flowMergeCall = gh.lastHit(new RegExp(`PUT /repos/smoke/demo/pulls/${flowRow.prNumber}/merge$`));
     check('自动合并带上了审阅时的 head sha（乐观锁）', flowMergeCall?.body?.sha === flowPr.headSha, JSON.stringify(flowMergeCall?.body));
@@ -712,7 +842,7 @@ try {
       autoStart: false,
     });
     const dev2 = store.listWorkflowTasks(flowRun2.id)[0];
-    store.updateWorkflowTask(dev2.id, { status: '待验收', result: JSON.stringify({ state: 'done', finalText: '写完了' }) });
+    store.updateWorkflowTask(dev2.id, { status: 'review', result: JSON.stringify({ state: 'done', finalText: '写完了' }) });
     workflows.decide(flowRun2.id, '通过');
     const ready2 = await waitFor(() => store.getWorkflowRun(flowRun2.id)?.currentNodeId === 'n3');
     const row2 = store.getWorkflowRun(flowRun2.id);
@@ -723,12 +853,12 @@ try {
     gh.seedChecks('smoke/demo', 'sha-after-review', 'success'); // 新 head 的 CI 是绿的：拦下合并的不是 CI 闸
     flowPr2.headSha = 'sha-after-review'; // 审阅之后有人推了一提交
     store.updateWorkflowTask(review2.id, {
-      status: '待验收',
+      status: 'review',
       result: JSON.stringify({ state: 'done', summary: '结论：值得合', finalText: '结论：值得合' }),
     });
     workflows.decide(flowRun2.id, '通过');
 
-    const mergeTask2 = await waitFor(() => store.listWorkflowTasks(flowRun2.id).at(-1)?.status === '失败');
+    const mergeTask2 = await waitFor(() => store.listWorkflowTasks(flowRun2.id).at(-1)?.status === 'failed');
     const failedTask = store.listWorkflowTasks(flowRun2.id).at(-1);
     check('审阅后被推新提交 → 自动合并撞 409 停下（不合没看过的）', mergeTask2, failedTask?.status);
     check('失败原因说"被人推了新提交"', /新提交/.test(failedTask?.note ?? ''), String(failedTask?.note).slice(0, 80));
@@ -806,7 +936,7 @@ try {
     const brief = String(trow.description ?? '');
     check(
       '卡挂在选的人名下、已经开工（进行中 + 有 runId）',
-      trow.assigneePersonaId === fx.b?.personaId && trow.status === '进行中' && !!trow.runId,
+      trow.assigneePersonaId === fx.b?.personaId && trow.status === 'doing' && !!trow.runId,
       JSON.stringify({ st: trow.status, a: trow.assigneePersonaId, run: trow.runId }),
     );
     check(

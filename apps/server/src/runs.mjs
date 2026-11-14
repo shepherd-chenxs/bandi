@@ -8,7 +8,10 @@ import { controlUrl, issueRunCredential, revokeRunCredential } from './agent-aut
 // 建卡口径的判据（2026-11-11）：有建卡权限的岗位才多注入一段，见 roles.mjs
 import { can } from './roles.mjs';
 import { stripTrailingDoneMark } from './delivery-claim.mjs';
+import { conversationStatusFor, EMPTY_REPLY_TEXT } from './store/status.mjs';
+import { codexContextOf } from './context-probe.mjs';
 import { acquirePowerLock, releasePowerLock } from './power-lock.mjs';
+import { agentGitEnv, gitAbilityBrief } from './agent-git.mjs';
 
 /**
  * 「这条会话在对面那个 CLI 里不存在」的报错特征。
@@ -71,7 +74,7 @@ export function errorForDisplay(run) {
    */
   const noise = /^(success|ok|error|运行出错)$/i;
   const bare = !raw || /^退出码\s*-?\d+$/.test(raw) || noise.test(raw);
-  if (!bare || run?.status !== '失败') return raw;
+  if (!bare || run?.status !== 'failed') return raw;
   /*
    * 只读事件流**尾部** 50 条（tailRunEvents，seq 倒序）：error / final 都是终止事件，
    * 必在末尾 —— 老写法 listRunEvents(id, 0) 是把整段事件流（CLI 输出一行一条，
@@ -203,7 +206,7 @@ function runCredentialBrief(pm = false) {
     ...(pm
       ? [
           '建卡走 `POST /api/agent/cards/batch`：体 `{cards:[…]}`、裸数组、单张卡都认；项目可省略（群派活默认用群关联项目）；失败先读 `{code,error}` 按提示改，**最多 2 次**，别整批重发；2 次仍失败就按【统筹职责】降级（群里 @ 人 + 报群主），不许自己写代码。',
-          '补卡（补记已经发生的活）：同接口带 `"backfill": true` + 实际状态（待验收 / 已阻塞 / 已完成 / 已取消 / 失败），补记不重跑；改卡走 `PATCH /api/projects/tasks/<id>`（只对你建的卡 / 你当群助手那张）。',
+          '补卡（补记已经发生的活）：同接口带 `"backfill": true` + 实际状态的**码**（`review` 待验收 / `blocked` 已阻塞 / `done` 已完成 / `cancelled` 已取消 / `failed` 失败），补记不重跑；改卡走 `PATCH /api/projects/tasks/<id>`（只对你建的卡 / 你当群助手那张）。状态**只收码**，写中文会 400。',
         ]
       : []),
   ].join('\n');
@@ -265,7 +268,7 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
     sessionScope,
     // 读到的那条消息的水位线，跑完回写
     watermark,
-    status: '跑中',
+    status: 'running',
     // 事件序号（SSE 的 `id:`）。**每次运行自己从 1 起**，不是全局计数器 ——
     // 全局的会让重连时"补到哪儿"的边界对错人。新运行的库里没有事件，所以是 0。
     seq: store.maxRunSeq(row.id),
@@ -283,7 +286,7 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
     connectors: null,
   };
   runs.set(run.id, run);
-  store.setConversationStatus(thread.id, '跑中');
+  store.setConversationStatus(thread.id, 'running');
 
   // 运行时被停用就别硬跑 —— 报清楚，别让人对着空白发呆
   if (!rt || !rt.enabled) {
@@ -293,7 +296,7 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
       ? '自动：这台机器上还没有能用的运行时 —— 去「设置 → 运行时」接一个'
       : `运行时「${runtime}」${rt ? '已被停用' : '不存在'} —— 去「设置 → 运行时」看看`;
     finish(run, {
-      status: '失败',
+      status: 'failed',
       exitCode: null,
       error: err,
     });
@@ -305,16 +308,50 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
    * 调专用接口（现在是建卡，见 routes/agent-cards.mjs）。钥匙在 run 收尾时吊销。
    */
   const cred = issueRunCredential(run.id, personaId, { local: true });
-  run.agentEnv = cred ? { BANDI_CONTROL_URL: controlUrl, BANDI_RUN_TOKEN: cred.token } : {};
+  /*
+   * **git 能力**（2026-11-13 试点）：研发岗的运行动拿一把"能推但受闸"的能力。
+   * 以前这里只有工作证（不能 git），员工失败只能等人救；现在给凭据 + 钩子，
+   * 规则（不直推 main / 不改写历史 / 不推凭据文件）在 apps/server/src/git-hooks/pre-push.mjs 里。
+   * 合并顺序要紧：agentGitEnv 里的 GIT_CONFIG_* 必须盖在 agentEnv() 的删除之后（见 run.agentEnv 的用法）。
+   */
+  const persona = store.getPersona(personaId);
+  const gitEnv = agentGitEnv({ runId: run.id, personaId, roleKey: persona?.roleKey ?? '', cwd: member.cwd ?? '' });
+  run.agentEnv = {
+    ...(cred ? { BANDI_CONTROL_URL: controlUrl, BANDI_RUN_TOKEN: cred.token } : {}),
+    ...gitEnv,
+  };
   // 每轮把"钥匙现取、别抄旧值"贴在任务末尾（见 runCredentialBrief 的说明）；
   // 有建卡权限的岗位（现在只有项目经理）再多一句建卡口径（续接会话读不到新技能，这行每轮都在）
-  const agentTask = cred ? `${task}\n\n${runCredentialBrief(can(store.getPersona(personaId), 'card.create'))}` : task;
+  /*
+   * 权限档是这一族**实测跑不动命令**的档位（blocked，2026-11-13 claude 的 default/plan
+   * 补进来了）时，把话说破 —— 不悄悄换档（提权出错看不见，sandbox.mjs 的口径），
+   * 也不让它白跑还误诊：任务里告诉员工"命令被拒不是环境故障"。
+   * 2026-11-13 实报：马超在 default 档把"命令全拒"诊断成"本机无 git/ssh、沙箱拦网络"，
+   * 把能干的部署活判成"无通道可用"。codex 的 workspace-write/read-only 是同一处境
+   * （runtimes.mjs 的实测注释），这条对两族一视同仁。
+   */
+  const effSandbox = normalizeSandbox(rt.family, member.sandbox) ?? 'danger-full-access';
+  const sandboxBlocked = Array.isArray(rt.blocked) && rt.blocked.includes(effSandbox);
+  if (sandboxBlocked) {
+    console.warn(
+      `[权限] ${rt.label}：员工的权限档「${effSandbox}」在无人审批下跑不动命令（blocked 档），这轮照跑，命令类动作会被拒`,
+    );
+  }
+  const agentTask =
+    (cred ? `${task}\n\n${runCredentialBrief(can(store.getPersona(personaId), 'card.create'))}` : task) +
+    // 真发了 git 能力才说 —— 没说等于让它继续以为"代码动作归平台、我推不了"
+    (Object.keys(gitEnv).length ? `\n\n${gitAbilityBrief()}` : '') +
+    (sandboxBlocked
+      ? `\n\n（权限提醒：你当前的权限档是「${effSandbox}」，这种档在无人审批的运行方式下跑不动命令 —— ` +
+        `需要执行命令/改文件的动作这轮都会被拒。这不是网络或环境故障，别往"连不上/没工具"的方向诊断；` +
+        `只读类动作仍可做。请在回话里向雇主说明权限档不足，请他到「员工详情」把权限档放开（这一族能跑命令的是"完全权限"那档）后重派。）`
+      : '');
 
   // 按**协议族**选适配器：同一族下可以有多个实例，它们共用一套事件解析
   const adapter = ADAPTERS[rt.adapter];
   if (!adapter) {
     finish(run, {
-      status: '失败',
+      status: 'failed',
       exitCode: null,
       error: `运行时「${rt.label}」的协议族「${rt.family}」没有适配器`,
     });
@@ -324,7 +361,7 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
   // 没路径就别往下走了。以前这里会一路走到适配器里，被写死的默认值接住（或者直接抛）
   if (!rt.path) {
     finish(run, {
-      status: '失败',
+      status: 'failed',
       exitCode: null,
       error: `运行时「${rt.label}」没有可执行路径 —— 去「设置 → 运行时」点「识别本机运行时」接一个`,
     });
@@ -399,7 +436,9 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
       roots: member.roots ?? [],
       // 权限模式按**当前运行时族**换算：这个值挂在员工身上，可能是上一个运行时留下的词
       // （Claude 的 bypassPermissions 喂给 Codex 会让它读配置就报错退出）。
-      sandbox: normalizeSandbox(rt.family, member.sandbox) ?? 'danger-full-access',
+      // 换算结果在上一段已经算过一遍（effSandbox，blocked 提醒用它）—— 用同一个值，
+      // 别两处各算各的，将来一处改了另一处漏
+      sandbox: effSandbox,
       // 模型传**解析出来的那个**（不只是员工绑的）：账上记的、传给 CLI 的必须是同一个，
       // 否则按模型限额会盯错人（员工没绑时，实际用的是 CLI 默认值）
       model: eff.id,
@@ -443,7 +482,7 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
      * 这一句以前没有兜 —— 异常冒到路由就是 HTTP 500，用户看到"服务器错误"，
      * 而不是"这个运行时起不来"。运行失败要记成**这一次运行失败**，不是服务器崩了。
      */
-    finish(run, { status: '失败', exitCode: null, error: `起不来：${err?.message ?? err}` });
+    finish(run, { status: 'failed', exitCode: null, error: `起不来：${err?.message ?? err}` });
     return run;
   }
 
@@ -483,8 +522,13 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
        * 用户屏幕上看到的就是这些字，丢掉它等于"对方刚说的话凭空消失"。
        */
       const kept = text || (stopped ? run.streamedText : '');
-      // 跨运行时（或自动重开）时，先说一句"上下文带不过来"，再接他的回话
-      run.finalText = kept ? memoryNote + kept : kept;
+      // 跨运行时（或自动重开）时，先说一句"上下文带不过来"；权限档跑不动命令时，
+      // 再提醒雇主一句（2026-11-13）—— 这轮八成白跑，别让他以为是员工"又连不上了"
+      const blockedUserNote = sandboxBlocked
+        ? `（这个员工的权限档「${effSandbox}」在无人审批的运行方式下跑不动命令，这轮命令类动作都会被拒 —— ` +
+          `去「员工详情」把权限档放开（"完全权限"那档）再派。）\n\n`
+        : '';
+      run.finalText = kept ? memoryNote + blockedUserNote + kept : kept;
       run.exitCode = res.exitCode;
 
       // sessionId 写回**本作用域**那一行；水位线仍写主行（'' ）——
@@ -496,10 +540,26 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
       // 成功的判据：没标错，且没有非零退出码。
       // claude 在收到 result 就结算，不给 exitCode —— 所以不能只看 exitCode === 0。
       const ok = !res.isError && (res.exitCode == null || res.exitCode === 0);
-      const status = stopped ? '已停止' : ok ? '完成' : '失败';
+      const status = stopped ? 'stopped' : ok ? 'done' : 'failed';
 
       // 回话落库（见 persistReply）。人停的那一轮也要落 —— 带 meta.stopped 给界面标「已停止生成」
       persistReply(run, run.finalText, replyMeta({ stopped }));
+
+      /*
+       * **真实上下文**（2026-11-12，用户实报「一个会话上下文就爆了」后加）：
+       * `res.usage.inputTokens` 是**整轮所有 API 调用求和**（工具活每步都重发上下文、缓存反复命中），
+       * 拿它当"单轮上下文"会把一次重活判成 234 万 —— 实际最后一调才 6 万（窗口 95 万）。
+       * Codex 自己的会话转录里记着真数，收尾时读一次挂进 usage，轮换判据和上下文环都用它。
+       * 探不到就不挂（回退旧口径），探测失败绝不能影响 run 收尾。
+       */
+      const ctx = rt.family === 'codex' ? codexContextOf(res.sessionId) : null;
+      /*
+       * runtimeFamily 一起记：轮换判据要知道"这个 usage 是哪种运行时给的" ——
+       * 多调用型（codex/dsh）的 inputTokens 是整轮求和，**不能**当窗口用；
+       * 单轮型才可用 perTurnTokens 兜底（见 session-budget.mjs 的 shouldRotate）。
+       * 老数据没这个字段 → 判据按"未知"保守处理。
+       */
+      const usage = res.usage || ctx ? { ...(res.usage ?? {}), ...(ctx ?? {}), runtimeFamily: rt.family } : null;
 
       finish(run, {
         status,
@@ -509,7 +569,7 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
           : ok
             ? null
             : res.error?.message || res.error || res.stderr?.trim() || res.turnReason?.error?.message || lastErrMsg || `退出码 ${res.exitCode}`,
-        usage: res.usage ?? null,
+        usage,
         elapsedMs: Date.now() - startedAt,
       });
     })
@@ -528,7 +588,7 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
       const neverStarted = run.seq === 0 && /EINVAL|ENOENT|EACCES|EPERM/.test(msg);
       finish(run, {
         // 掐子进程会让 promise 以异常收尾 —— 人主动停的不算失败
-        status: ctl.signal.aborted || run.stoppedByUser ? '已停止' : '失败',
+        status: ctl.signal.aborted || run.stoppedByUser ? 'stopped' : 'failed',
         exitCode: null,
         error: ctl.signal.aborted ? null : neverStarted ? `起不来：${msg}` : msg,
         elapsedMs: Date.now() - startedAt,
@@ -554,7 +614,7 @@ function armStopWatchdog(run) {
   run.stopWatchdog = setTimeout(() => {
     run.stopWatchdog = null;
     if (run.finished) return;
-    finish(run, { status: '已停止', exitCode: null, error: null, elapsedMs: null });
+    finish(run, { status: 'stopped', exitCode: null, error: null, elapsedMs: null });
   }, STOP_WATCHDOG_MS);
   // 别让这颗定时器拖着进程不退
   run.stopWatchdog.unref?.();
@@ -586,6 +646,19 @@ export function onRunFinish(fn) {
 }
 
 /**
+ * 回话**落库之后**的回调（2026-11-12）。与 `onRunFinish` 的区别是它拿得到
+ * "刚落下的那条消息"本身 —— 群里成员回复 @ 谁就唤醒谁（接力）要用它的 rowid 当水位线，
+ * 光有 run 拿不到。
+ *
+ * 为什么不在 `dispatch.mjs` 里直接 import 本模块来回调：那边已经 import 了 runs，
+ * 反向再 import 就是一个循环。用钩子注册，谁需要谁来挂，模块依赖仍是单向的。
+ */
+const replyHooks = [];
+export function onReplyPersisted(fn) {
+  replyHooks.push(fn);
+}
+
+/**
  * 回话消息的 meta：只记「人停的」这一种标记（界面标「已停止生成」）。
  *
  * 2026-11-08 **砍掉过程快照**（原来的 meta.progress + 气泡顶上那行过程收起行），
@@ -612,7 +685,7 @@ function replyMeta({ stopped = false } = {}) {
  * 重复调用是安全空操作（`replyPersisted` 记住已经落过的那一次）。
  */
 function persistReply(run, text, meta = null) {
-  if (!text || run.replyPersisted) return;
+  if (run.replyPersisted) return;
   const trigger = store.getMessageByRowid(run.conversationId, run.watermark);
   /*
    * P4 的交付声明是**给平台判卡状态的机器信号**，不是给雇主看的报告标题。
@@ -620,9 +693,24 @@ function persistReply(run, text, meta = null) {
    * 单独的 `[完成]`；做事类沿用首行标记，也剥。判据仍用 run.finalText 原文，卡状态不受影响。
    * `[受阻]` 保留 —— 它后面跟着原因，是给人看的。
    */
-  const shown =
-    stripTrailingDoneMark(String(text).replace(/^\s*\[完成\][ \t]*(?:\r?\n)*/, '')) || text;
-  store.addMessage({
+  const raw = String(text ?? '');
+  /*
+   * **人停的、一个字都没说过 → 一条都不落**（跟 finish() 里那句"不硬造消息"同一个口径）：
+   * 界面那边会画一条安静的「已停止」状态行。空白占位只属于"跑完了却什么都没交回"那一档，
+   * 两件事混起来，用户会看到一条"他说没回话"的假回话（本用例 ③ 就是盯这个）。
+   */
+  if (!raw.trim() && meta?.stopped) return;
+  /*
+   * 空回话兜底（2026-11-11 实报，见 store/status.mjs 末段）：finalText 只有 `"\n\n\n"` 时
+   * 以前也照样落一条消息 → 界面上就是**空白气泡**。这里换成人话占位，至少能看出"这轮没回话"。
+   * 只动消息文本，`run.finalText` 保持原样（判卡状态 / 证据仍按原文）。
+   */
+  const blank = !raw.trim();
+  const shown = blank
+    ? EMPTY_REPLY_TEXT
+    : stripTrailingDoneMark(raw.replace(/^\s*\[完成\][ \t]*(?:\r?\n)*/, '')) || raw;
+  const finalMeta = blank ? { ...(meta ?? {}), emptyReply: true } : meta;
+  const msg = store.addMessage({
     conversationId: run.conversationId,
     runId: run.id,
     role: 'assistant',
@@ -632,9 +720,26 @@ function persistReply(run, text, meta = null) {
     //    就只剩"我"这侧的消息，他的回话整段看不见（用户实报）
     taskId: run.workflowTaskId ?? null,
     parentId: trigger?.parentId ?? trigger?.id ?? null,
-    meta,
+    meta: finalMeta,
   });
   run.replyPersisted = true;
+
+  /*
+   * 回话落地后通知订阅方（2026-11-12，群里成员 @ 谁就唤醒谁）。
+   *
+   * 人停的那一轮不发：那半句话不是"他要谁接活"，拿去接力只会把人叫起来看半截。
+   * 空占位也不发：那是"这轮没回话"，里面没有任何人的名字可接。
+   * 订阅方自己扛错：接力失败不能让一条已经落库的回话变成"运行失败"。
+   */
+  if (!meta?.stopped && !blank) {
+    for (const fn of replyHooks) {
+      try {
+        fn({ run, message: msg, text: shown });
+      } catch (e) {
+        console.error(`[回复落库钩子] 失败（run ${run.id}）：${e?.message ?? e}`);
+      }
+    }
+  }
 }
 
 function finish(run, { status, exitCode = null, error = null, usage = null, elapsedMs = null }) {
@@ -660,13 +765,18 @@ function finish(run, { status, exitCode = null, error = null, usage = null, elap
    * 这里是**所有运行的唯一终点**，所以兜底放在这儿：停止的收尾把已经流出去的回话落库，
    * 一个字都没有的就不硬造消息（界面那边另画一条安静的状态行，见 chat.mjs 的 stopBlock）。
    */
-  if (status === '已停止' && !run.replyPersisted && run.streamedText) {
+  if (status === 'stopped' && !run.replyPersisted && run.streamedText) {
     if (!run.finalText) run.finalText = run.streamedText;
     persistReply(run, run.streamedText, replyMeta({ stopped: true }));
   }
 
   store.finishRun(run.id, { status, exitCode, error, usage });
-  store.setConversationStatus(run.conversationId, status);
+  /*
+   * 空回话不装作「完成」（2026-11-11 实报）：run 自身状态如实记「完成」（进程正常退出），
+   * 但**会话**上什么都没交回来 → 标「已阻塞」，头部的状态胶囊不再显示绿色「完成」。
+   * 已停止 / 失败不受影响（那两种缺回话是意料之中）。
+   */
+  store.setConversationStatus(run.conversationId, conversationStatusFor(status, run.finalText ?? run.streamedText));
   revokeRunCredential(run.id); // 钥匙跟活走：run 收尾就作废，agent 不能在活干完之后再建卡
 
   // 电源锁跟活走：finish 是所有运行的唯一终点（正常收尾/停止/看门狗强杀都路过这里），

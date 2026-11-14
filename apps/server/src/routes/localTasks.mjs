@@ -41,7 +41,7 @@ async function runLocalExternal(taskId) {
   });
   if (!spec) {
     store.appendNodeTaskOutput(task.id, '这台机器上的班底不认识这个外部件，或者这一步在这里没法一键做\n');
-    return store.finishNodeTask(task.id, '失败');
+    return store.finishNodeTask(task.id, 'failed');
   }
   const isWin = process.platform === 'win32';
   const file = spec.raw ? spec.bin : isWin ? process.env.ComSpec || 'cmd.exe' : spec.bin;
@@ -71,7 +71,7 @@ async function runLocalExternal(taskId) {
     });
   } catch (e) {
     store.appendNodeTaskOutput(task.id, `起不来：${[e?.code, e?.message].filter(Boolean).join(' ')}\n`);
-    return store.finishNodeTask(task.id, '失败');
+    return store.finishNodeTask(task.id, 'failed');
   }
   const onData = (c) => {
     buf += String(c);
@@ -100,12 +100,12 @@ async function runLocalExternal(taskId) {
   }, 15 * 60 * 1000);
   killer.unref();
   child.on('error', (e) => {
-    finish('失败', `起不来：${e?.message ?? e}\n`);
+    finish('failed', `起不来：${e?.message ?? e}\n`);
     console.log(`[本机] 外部件 ${task.family} ${step} 失败：${e?.message ?? e}`);
   });
   child.on('close', (code) => {
     const ok = code === 0;
-    finish(ok ? '完成' : '失败', ok ? '\n好了。\n' : `\n（${spec.bin} 退出码 ${code}）\n`);
+    finish(ok ? 'done' : 'failed', ok ? '\n好了。\n' : `\n（${spec.bin} 退出码 ${code}）\n`);
     console.log(`[本机] 外部件 ${task.family} ${step}${ok ? '好了' : `失败了（退出码 ${code}）`}`);
   });
 }

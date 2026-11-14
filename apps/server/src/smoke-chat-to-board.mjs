@@ -78,7 +78,7 @@ async function waitAllDone(convId, ms = 30000) {
   let d = (await req('GET', `/api/conversations/${convId}`)).body;
   while (Date.now() < until) {
     d = (await req('GET', `/api/conversations/${convId}`)).body;
-    if ((d.runs ?? []).length > 0 && (d.runs ?? []).every((x) => x.status !== '跑中')) return d;
+    if ((d.runs ?? []).length > 0 && (d.runs ?? []).every((x) => x.status !== 'running')) return d;
     await sleep(150);
   }
   return d;
@@ -137,7 +137,7 @@ try {
   const t = card.body.task ?? {};
   check('卡指向这场会话', t.conversationId === conv, String(t.conversationId));
   check('标题取最近一句用户话', t.title === '把首页那句文案改掉', String(t.title));
-  check('状态折成「待验收」（跑完等人验收）', t.status === '待验收', String(t.status));
+  check('状态折成「待验收」（跑完等人验收）', t.status === 'review', String(t.status));
   check('执行人是跑这轮的人', t.assigneePersonaId === dev.id, String(t.assigneePersonaId));
   check('挂在项目上', t.projectId === project.id, String(t.projectId));
   const afterCard = await boardSources(`/api/projects/${project.id}/tasks`);

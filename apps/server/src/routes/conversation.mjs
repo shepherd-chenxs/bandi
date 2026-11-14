@@ -11,6 +11,7 @@ import * as runs from '../runs.mjs';
 import { dispatchToThread } from '../dispatch.mjs';
 import * as workflows from '../workflows.mjs';
 import { promoteConversationToCard } from '../project-tasks.mjs';
+import { SESSION_BUDGET, perTurnTokens, shouldRotate } from '../session-budget.mjs';
 
 /* --------------------------------------------------- 附件（2026-10-23） */
 
@@ -114,6 +115,8 @@ export async function handleConversation(req, res, url) {
   const card = /^\/api\/conversations\/([^/]+)\/card$/.exec(url.pathname);
   // 附件：上传（原始二进制，一次一个文件）与回显（GET /api/files/...）
   const upload = /^\/api\/conversations\/([^/]+)\/files$/.exec(url.pathname);
+  // 上下文占用环（2026-11-12）：单轮上下文 ÷ 预算上限，给输入区那颗环供数
+  const ctx = /^\/api\/conversations\/([^/]+)\/context$/.exec(url.pathname);
   const fileGet = /^\/api\/files\/([^/]+)\/([^/]+)$/.exec(url.pathname);
 
   /*
@@ -261,6 +264,57 @@ export async function handleConversation(req, res, url) {
     } catch (e) {
       return fail(res, e.code === 'E2047' ? 404 : 400, e.code ?? 'E2059', e.message);
     }
+  }
+
+  /*
+   * 上下文占用（2026-11-12）：给输入区的「上下文占用环」供数。
+   *
+   * 为什么由服务端算：轮换的判据（member_sessions 的 sessionId/startedAt、相邻两轮
+   * usage 差值）全在这边 —— 前端自己从 runs 里猜，口径一定会跟 dispatch 的轮换走样。
+   * 这里就是把 startMemberRun 里那套 shouldRotate 的输入**原样**摆出来给界面看：
+   *   · 单轮上下文 turn = perTurnTokens(最近一轮, 上一轮)（dsh 累计口径做差、单轮型直取）；
+   *   · 预算 budget = SESSION_BUDGET（四个阈值都给，界面当前只用 maxTurnTokens）；
+   *   · rotate = 现在派活会不会轮换（预览，给人看原因）。
+   *
+   * 目标人：单聊 = 对面员工；群 = 群助手（不 @ 时的默认接话人）。@ 了别人的那轮
+   * 环不跟着换 —— 环是"这段会话的常态"，不是"下一条消息的预报"。
+   */
+  if (req.method === 'GET' && ctx) {
+    const id = decodeURIComponent(ctx[1]);
+    const conversation = store.getConversation(id);
+    if (!conversation) return fail(res, 404, 'E2047', '这段会话已经不在了（可能刚被删过）');
+    const personaId =
+      conversation.kind === 'group' ? conversation.assistantPersonaId : conversation.personaId;
+    if (!personaId) return sendJson(res, 200, { target: null, budget: SESSION_BUDGET });
+    const ms = store.getMemberSession(id, personaId, ''); // 手动聊天的默认作用域（dispatch 的 sessionScopeOf('')）
+    const recent = store.listRecentRunUsage(id, personaId, 2);
+    const u = recent[0]?.usage ?? null;
+    /*
+     * 真实上下文优先（2026-11-12）：codex 族的 usage 收尾时挂了 contextTokens / contextWindow
+     * （见 context-probe.mjs）—— 环的分子分母都用它。探不到才退回旧口径（perTurnTokens ÷ maxTurnTokens），
+     * 那种情况下环显示的"单轮"其实是整轮求和，偏大，但至少方向没错。
+     */
+    const ctxTokens = Number(u?.contextTokens ?? 0) || 0;
+    const ctxWindow = Number(u?.contextWindow ?? 0) || 0;
+    const turn = ctxTokens || perTurnTokens(u, recent[1]?.usage ?? null);
+    const startedMs = ms?.startedAt ? Date.parse(ms.startedAt) : 0;
+    const verdict = shouldRotate({
+      rounds: startedMs ? store.countRunsSince(id, personaId, ms.startedAt) : 0,
+      ageMs: startedMs ? Date.now() - startedMs : 0,
+      usage: recent[0]?.usage ?? null,
+      prevUsage: recent[1]?.usage ?? null,
+    });
+    const name =
+      conversation.kind === 'group'
+        ? (conversation.members ?? []).find((m) => m.personaId === personaId)?.name ?? ''
+        : conversation.personaName ?? '';
+    return sendJson(res, 200, {
+      target: { personaId, name },
+      session: { active: !!ms?.sessionId, startedAt: ms?.startedAt ?? null },
+      usage: { turn, window: ctxWindow || null, total: Number(recent[0]?.usage?.inputTokens ?? 0) || 0 },
+      budget: SESSION_BUDGET,
+      rotate: verdict,
+    });
   }
 
   if (req.method === 'GET' && detail) {

@@ -52,17 +52,24 @@ const RUN = [
   'apps/server/src/smoke-autostart.mjs',
   'apps/server/src/smoke-chat-to-board.mjs',
   'apps/server/src/smoke-connectors.mjs',
+  // 连接器接线层与权限档位（2026-11-13）：claude 族 --mcp-config 接线、promptLines
+  // 以 resolve 结果为准（没接线不许注入提示词骗模型）、claude blocked 存量迁移。
+  // 纯函数 + 临时账本，不起服务不联网。
+  'apps/server/src/smoke-connector-wiring.mjs',
   'apps/server/src/smoke-conversation-delete.mjs',
   'apps/server/src/smoke-events.mjs',
   'apps/server/src/smoke-data-dir.mjs',
   // 数据库迁移（2026-11-08 结构版本号机制落地时补）：老库打开一次就收到当前形态、
   // 再开一次什么都不变。第一条钉的是 v1→v2 清掉回话消息的 meta.progress（过程收起行砍掉）。
+  'apps/server/src/smoke-agent-git.mjs',
   'apps/server/src/smoke-db-migration.mjs',
   'apps/server/src/smoke-experts.mjs',
   'apps/server/src/smoke-feishu.mjs',
   'apps/server/src/smoke-git-repos.mjs',
   'apps/server/src/smoke-group-dissolve.mjs',
   'apps/server/src/smoke-group-mentions.mjs',
+  // 成员回复接力（2026-11-12 实报「群里没人理他」）：成员回话里 @ 谁就唤醒谁，带回打保护
+  'apps/server/src/smoke-reply-chain.mjs',
   // 团队协作（派给群）：群助手必须是 PM、动态现读群助手、子卡授权/回执（2026-11-09）
   'apps/server/src/smoke-group-tasks.mjs',
   // 群关联项目（2026-11-11「一项目一群」）：群挂了项目 = 派活默认在那个项目里干（纯函数规则）
@@ -86,6 +93,11 @@ const RUN = [
   'apps/server/src/smoke-card-channel.mjs',
   // 信箱（2026-11-11 用户拍板）：建卡失败落库、同轮同码去重、已读/未读、角标口径
   'apps/server/src/smoke-inbox.mjs',
+  // 完全自主交付（2026-11-13）：无人工闸模板、按岗位指派、自动流转、终态/受阻写信箱、
+  // 普通人工流程不受影响。临时库 + 假 run 钩子 + 同进程控制面，不起真 CLI、不烧模型。
+  'apps/server/src/smoke-self-delivery.mjs',
+  // 上下文预算（2026-11-11 实报：会话跑 8 小时 / 3000 万 input 后空回话）——纯函数，不碰库
+  'apps/server/src/smoke-session-budget.mjs',
   // 身份与职责检修 P0（2026-11-09）：身份卡只回答"我是谁"、平台契约/任务合同每轮注入。
   // 纯静态 + 纯函数，不开服务。
   'apps/server/src/smoke-persona-contract.mjs',
@@ -119,9 +131,18 @@ const RUN = [
   'apps/server/src/smoke-task-comments.mjs',
   'apps/server/src/smoke-task-flow.mjs',
   'apps/server/src/smoke-task-run-sync.mjs',
+  // 步骤档案卡与节点同状态（2026-11-13 实报「卡改成进行中、实例页还是 failed」）：
+  // 节点变 → 卡跟着变、没建卡不炸、人手改档案卡被拒。纯库，不起服务。
+  'apps/server/src/smoke-step-card-sync.mjs',
   'apps/server/src/smoke-workflows.mjs',
   'apps/desktop/smoke-shell.mjs',
   'tools/smoke-help-pop.mjs',
+  // 「重跑这一步」按钮（2026-11-13 实报后加回）：只在失败/已阻塞出现、走 /retry 同一条路；
+  // 状态字只显示不可改（2026-11-13 晚拍板，编辑入口已撤）。纯源码断言（前端无构建步骤），几十毫秒。
+  'tools/smoke-run-retry-btn.mjs',
+  // 数字员工拿回 git 能力之后的三条闸（2026-11-13 试点）：真的推一遍临时 bare 仓库，
+  // 直推 main / 带 .env / 正常分支三种情况都要判对 —— 判错不报错，东西就已经推上 GitHub 了。
+  'tools/smoke-prepush-guard.mjs',
   // 2026-10-30：分支行尾那颗 `›` 的链路（menu → folderize → combo → combo-menu → 菜单）。
   // 这条链任何一手漏了都不报错、只是箭头不见了，所以必须钉住。
   'tools/smoke-branch-menu.mjs',

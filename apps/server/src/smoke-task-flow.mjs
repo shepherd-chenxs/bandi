@@ -114,19 +114,19 @@ check('实例指向选中的模板', runA?.templateId === TPL, String(runA?.temp
 check('实例挂在卡所在的项目下', runA?.projectId === proj.id, String(runA?.projectId));
 const stepsA = store.listWorkflowTasks(runA?.id ?? '');
 check('实例建出了第 1 步', stepsA.length === 1, `${stepsA.length} 步`);
-check('第 1 步没点名 → 已阻塞（没有真叫起 agent）', stepsA[0]?.status === '已阻塞', String(stepsA[0]?.status));
+check('第 1 步没点名 → 已阻塞（没有真叫起 agent）', stepsA[0]?.status === 'blocked', String(stepsA[0]?.status));
 
 const board1 = board();
 const rowA = board1.rows.filter((r) => r.flow_id === runA.id);
 check('看板里这张卡只有一行（该实例的分步行不再单独出现）', rowA.length === 1, `同一实例的行数：${rowA.length}`);
 check('这一行来源标「流程」', rowA[0]?.source === 'flow' && rowA[0]?.source_text === '流程', `${rowA[0]?.source} / ${rowA[0]?.source_text}`);
 check('行标题就是卡标题（不是「实例名 · 节点名」那种写法）', rowA[0]?.task === '把导出功能做出来', String(rowA[0]?.task));
-check('状态 = 流程当前步骤的「已阻塞」', rowA[0]?.status === '已阻塞', String(rowA[0]?.status));
+check('状态 = 流程当前步骤的「已阻塞」', rowA[0]?.status === 'blocked', String(rowA[0]?.status));
 check('备注带「第 1/N 步」', /第 1\/3 步/.test(String(rowA[0]?.note)), String(rowA[0]?.note));
 check('备注带当前节点名', String(rowA[0]?.note).includes('需求'), String(rowA[0]?.note));
 check(
   '行上带 flow_id / template_id / flow_status（点得进实例）',
-  rowA[0]?.flow_id === runA.id && rowA[0]?.template_id === TPL && rowA[0]?.flow_status === '进行中',
+  rowA[0]?.flow_id === runA.id && rowA[0]?.template_id === TPL && rowA[0]?.flow_status === 'doing',
   JSON.stringify({ f: rowA[0]?.flow_id, t: rowA[0]?.template_id, s: rowA[0]?.flow_status }),
 );
 check('看板上没有这张卡的「手动」重影行', board1.rows.filter((r) => r.task === '把导出功能做出来').length === 1, String(board1.rows.filter((r) => r.task === '把导出功能做出来').length));
@@ -151,11 +151,11 @@ console.log('\n③ 「想法」里建卡：只记模板；发起后才绑定实�
 const cardB = createProjectTask(projectRow(), {
   title: '先挂着的流程卡',
   flowTemplateId: ONE,
-  status: '想法',
+  status: 'idea',
   startNow: false,
 });
 check('卡只记了模板，还没有实例', cardB?.flowTemplateId === ONE && !cardB?.flowRunId, `${cardB?.flowTemplateId} / ${cardB?.flowRunId}`);
-check('状态还是「想法」', cardB?.status === '想法', String(cardB?.status));
+check('状态还是「想法」', cardB?.status === 'idea', String(cardB?.status));
 
 const waitingRow = board().rows.find((r) => r.manual_id === cardB.id);
 check('看板上先按手工卡一行（source = manual）', waitingRow?.source === 'manual', String(waitingRow?.source));
@@ -168,15 +168,15 @@ let ideaErr = '';
 try { startProjectTask(cardB.id); } catch (e) { ideaErr = e.message; }
 check('「想法」里直接 startProjectTask 仍被拦（要先拖出「想法」）', /想法/.test(ideaErr), ideaErr);
 
-const startedB = updateProjectTask(cardB.id, { status: '进行中' });
+const startedB = updateProjectTask(cardB.id, { status: 'doing' });
 check('拖进「进行中」= 发起 → 卡绑上实例', !!startedB?.flowRunId, String(startedB?.flowRunId));
-check('卡状态跟着流程当前步骤（已阻塞）', startedB?.status === '已阻塞', String(startedB?.status));
+check('卡状态跟着流程当前步骤（已阻塞）', startedB?.status === 'blocked', String(startedB?.status));
 const runB = store.getWorkflowRun(startedB?.flowRunId ?? '');
 check('实例记下了所属项目', runB?.projectId === proj.id, String(runB?.projectId));
 
 const rowB = rowsOfRun(runB?.id ?? '')[0];
 check('看板行改由流程派生（source = flow）', rowB?.source === 'flow', String(rowB?.source));
-check('看板行状态 = 已阻塞', rowB?.status === '已阻塞', String(rowB?.status));
+check('看板行状态 = 已阻塞', rowB?.status === 'blocked', String(rowB?.status));
 check(
   '看板上只剩这一行（原来的「手动」行被流程行替换，不是两行并存）',
   board().rows.filter((r) => r.flow_id === runB.id || r.manual_id === cardB.id).length === 1,
@@ -187,12 +187,12 @@ check(
 console.log('\n④ 状态派生：改实例当前步骤，看板行跟着变');
 const stepB = store.listWorkflowTasks(runB.id)[0];
 const statusOfB = () => rowsOfRun(runB.id)[0]?.status;
-store.updateWorkflowTask(stepB.id, { status: '待验收' });
-check('步骤改成「待验收」→ 卡行也是「待验收」', statusOfB() === '待验收', String(statusOfB()));
-store.updateWorkflowTask(stepB.id, { status: '失败' });
-check('步骤改成「失败」→ 卡行也是「失败」', statusOfB() === '失败', String(statusOfB()));
-store.updateWorkflowTask(stepB.id, { status: '已完成' });
-check('步骤改成「已完成」→ 卡行也是「已完成」', statusOfB() === '已完成', String(statusOfB()));
+store.updateWorkflowTask(stepB.id, { status: 'review' });
+check('步骤改成「待验收」→ 卡行也是「待验收」', statusOfB() === 'review', String(statusOfB()));
+store.updateWorkflowTask(stepB.id, { status: 'failed' });
+check('步骤改成「失败」→ 卡行也是「失败」', statusOfB() === 'failed', String(statusOfB()));
+store.updateWorkflowTask(stepB.id, { status: 'done' });
+check('步骤改成「已完成」→ 卡行也是「已完成」', statusOfB() === 'done', String(statusOfB()));
 
 store.updateWorkflowTask(stepB.id, { assigneePersonaId: worker.id });
 const rowW = rowsOfRun(runB.id)[0];
@@ -200,14 +200,14 @@ check('指派经办人 → 看板行 assignee_id 跟着变', rowW?.assignee_id =
 check('指派经办人 → 看板行 assignee_name 跟着变', (rowW?.assignee_name ?? rowW?.assignee) === worker.name, String(rowW?.assignee_name ?? rowW?.assignee));
 
 store.setWorkflowRunStatus(runB.id, '已完成');
-check('实例「已完成」→ 卡行「已完成」', statusOfB() === '已完成', String(statusOfB()));
-store.setWorkflowRunStatus(runB.id, '已终止');
-check('实例「已终止」→ 卡行「已取消」', statusOfB() === '已取消', String(statusOfB()));
+check('实例「已完成」→ 卡行「已完成」', statusOfB() === 'done', String(statusOfB()));
+store.setWorkflowRunStatus(runB.id, 'terminated');
+check('实例「已终止」→ 卡行「已取消」', statusOfB() === 'cancelled', String(statusOfB()));
 
 /* ------------------------------------- ⑤ 去重：同一实例三步办理 → 看板 1 行 */
 console.log('\n⑤ 去重：同一实例三步办理，看板仍只有 1 行');
-store.createWorkflowTask({ runId: runA.id, nodeId: 'n2', nodeName: '实现', visit: 1, detail: '', status: '待办' });
-store.createWorkflowTask({ runId: runA.id, nodeId: 'n3', nodeName: '验收', visit: 1, detail: '', status: '待办' });
+store.createWorkflowTask({ runId: runA.id, nodeId: 'n2', nodeName: '实现', visit: 1, detail: '', status: 'todo' });
+store.createWorkflowTask({ runId: runA.id, nodeId: 'n3', nodeName: '验收', visit: 1, detail: '', status: 'todo' });
 check('实例里现在有 3 步办理记录', store.listWorkflowTasks(runA.id).length === 3, String(store.listWorkflowTasks(runA.id).length));
 const boardD = board();
 check('看板里同一实例仍然只有 1 行', boardD.rows.filter((r) => r.flow_id === runA.id).length === 1, String(boardD.rows.filter((r) => r.flow_id === runA.id).length));
@@ -224,7 +224,7 @@ check('概览里这个人的流程实例数按他真办的实例算 = 1', mine.f
 /* --------------------------- ⑦ 已绑实例的卡：手工改状态 / 换人 / 二次发起都被拒 */
 console.log('\n⑦ 已绑实例的卡：状态归流程，手工改一律拒绝');
 let e1 = '';
-try { updateProjectTask(cardB.id, { status: '已完成' }); } catch (e) { e1 = e.message; }
+try { updateProjectTask(cardB.id, { status: 'done' }); } catch (e) { e1 = e.message; }
 check('手工改状态被拒，并说清状态归流程', /流程/.test(e1), e1);
 let e2 = '';
 try { updateProjectTask(cardB.id, { personaId: other.id }); } catch (e) { e2 = e.message; }
@@ -280,14 +280,14 @@ try {
   const draftApi = await postTask({ title: '接口：未发布模板', flowTemplateId: 't-card-draft', startNow: true });
   check('未发布模板建卡 → 400', draftApi.status === 400, `${draftApi.status} ${JSON.stringify(draftApi.body?.error ?? '')}`);
 
-  const wait = await postTask({ title: '接口：先挂着的流程卡', flowTemplateId: ONE, status: '想法' });
+  const wait = await postTask({ title: '接口：先挂着的流程卡', flowTemplateId: ONE, status: 'idea' });
   check('先挂着的流程卡 201 且还没实例', wait.status === 201 && !wait.body?.task?.flowRunId, `${wait.status} / ${wait.body?.task?.flowRunId}`);
 
-  const go = await patchTask(wait.body?.task?.id ?? '', { status: '进行中' });
+  const go = await patchTask(wait.body?.task?.id ?? '', { status: 'doing' });
   check('PATCH 状态 → 进行中：200 且 started:true', go.status === 200 && go.body?.started === true, `${go.status} / ${JSON.stringify(go.body?.started ?? go.body?.error ?? '')}`);
   check('发起后卡上绑了 flowRunId', !!go.body?.task?.flowRunId, String(go.body?.task?.flowRunId));
 
-  const bound = await patchTask(go.body?.task?.id ?? '', { status: '已完成' });
+  const bound = await patchTask(go.body?.task?.id ?? '', { status: 'done' });
   check('已绑实例的卡走接口改状态 → 400', bound.status === 400, `${bound.status} ${JSON.stringify(bound.body?.error ?? '')}`);
 } catch (err) {
   check('接口这一段没跑挂', false, String(err?.message ?? err));

@@ -36,13 +36,17 @@ export function launchCommand(pathOverride) {
   return { file: p, args: [], env: {} };
 }
 
-export function buildArgs({ sessionId = null, model = null, sandbox = null, roots = [] } = {}) {
+export function buildArgs({ sessionId = null, model = null, sandbox = null, roots = [], connectorArgs = [] } = {}) {
   const args = ['-p', '--output-format', 'stream-json', '--verbose'];
   if (sessionId) args.push('--resume', sessionId);
   if (model) args.push('--model', model);
   // 员工的 sandbox 是从别的 runtime 带过来的值时（比如 codex 的 danger-full-access），
   // 不认识的模式就不传，让 Claude 用它自己的设置，别把任务打挂
   if (sandbox && PERMISSION_MODES.includes(sandbox)) args.push('--permission-mode', sandbox);
+  // 连接器参数（--mcp-config <文件>，connectors.resolve('claude') 生成）。
+  // ⚠️ 必须排在 --add-dir **之前**：--add-dir 是变参，排在它后面的旗标会被当成
+  // 又一个目录吃掉，--mcp-config 就静默丢了（2026-11-13，与 codexArgs 的教训同款）
+  args.push(...connectorArgs);
   // --add-dir 是变参，放最后，避免把后面的参数吃掉
   if (roots.length) args.push('--add-dir', ...roots);
   return args;
@@ -112,12 +116,13 @@ export function runTask({
   sandbox = null,
   model = null,
   cliPath = null,
+  connectorArgs = [],
   env = {},
   onEvent = () => {},
   signal = null,
 }) {
   return new Promise((resolve, reject) => {
-    const args = buildArgs({ sessionId, model, sandbox, roots });
+    const args = buildArgs({ sessionId, model, sandbox, roots, connectorArgs });
     const launch = launchCommand(cliPath);
 
     const child = spawn(launch.file, [...launch.args, ...args], {

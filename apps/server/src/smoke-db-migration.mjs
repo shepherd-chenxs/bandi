@@ -49,7 +49,7 @@ function bootOnce(dbPath, dataDir) {
 }
 
 const PROGRESS = JSON.stringify({
-  status: '完成',
+  status: 'done',
   intent: '',
   steps: [{ v: '运行命令', t: 'git describe --tags', ms: null, s: 'called' }],
   elapsedMs: 27000,

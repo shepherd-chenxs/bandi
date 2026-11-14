@@ -11,7 +11,8 @@ import { ICON_FILE, ICON_LINK, showView } from './contacts.mjs';
 import { openWorkflows, renderFlowList } from './workflows.mjs';
 import { openTaskCardDialog } from './projects.mjs';
 import { convPermCombo, isNarrowPh, streamRun } from './chat.mjs';
-import { $, S } from './core.mjs';
+import { $, S, statusText } from './core.mjs';
+import { registerLayer, registerUp } from './navstack.mjs';
 
 
 
@@ -221,6 +222,23 @@ document.addEventListener('flow-direct-leave', () => {
   flowDirectLeave().catch(() => {});
 });
 
+/* 返回键的层级（navstack.mjs，2026-11-11）：流程实例整页是详情/会话的下一级（level 40），
+   收场动作就是上面那一条事件 —— 同一个出口，不另写一份。 */
+registerLayer({
+  name: 'flow-direct',
+  level: 40,
+  cell: 'flowDirect',
+  active: () => document.body.classList.contains('flow-direct-open'),
+  close: () => document.dispatchEvent(new CustomEvent('flow-direct-leave')),
+});
+
+/* 下钻页的上一层（navstack.mjs，2026-11-11）：
+   · 发起记录 —— 注释里写死了「上一级只是工作台」（2026-10-19 口径），回宫格；
+   · 设计器 —— 上一级是工作流清单。退出不丢东西：草稿一直在本地存着，
+     重开时自动恢复并提示"已恢复"（openDesigner 的既定口径）。 */
+registerUp('flowRun', () => setNav('plugins'));
+registerUp('designer', () => void openWorkflows());
+
 /* 手势返回 / 系统返回键：退掉了实例页那一格 = 回上一层 */
 window.addEventListener('popstate', () => {
   if (!document.body.classList.contains('flow-direct-open')) return;
@@ -306,13 +324,13 @@ export function runBadge(r) {
   //
   // 颜色：完成=绿、阻塞=红、终止=灰（灰就是列表里状态字的默认色，见 .item .line1 span；
   // 这里明写一个 gray 只是让读代码的人知道"这个不是漏了"，CSS 里不必再写一条同色规则）。
-  if (r.status === '已终止') return { text: '已终止', cls: 'gray' };
-  if (r.status === '已完成') return { text: '已完成', cls: 'ok' };
+  if (r.status === 'terminated') return { text: '已终止', cls: 'gray' };
+  if (r.status === 'done') return { text: '已完成', cls: 'ok' };
   // 叫「已阻塞」而不是「卡住」：服务端给的 stuck 理由本来就写着「部署」已阻塞，等人处理，
   // 同一个状态在列表上却叫另一个名字。措辞跟服务端对齐。
   if (r.stuck) return { text: '已阻塞', cls: 'bad' };
-  if (r.taskStatus === '待验收') return { text: '等你验收', cls: '' };
-  return { text: r.taskStatus ?? r.status, cls: '' };
+  if (r.taskStatus === 'review') return { text: '等你验收', cls: '' };
+  return { text: statusText(r.taskStatus ?? r.status), cls: '' };
 }
 
 
@@ -493,10 +511,10 @@ export function durText(ms) {
  */
 export function stepOutcome(t) {
   const decision = t.decision ?? null;
-  if (decision === '终止' && t.status !== '已完成') {
-    return { status: `${t.status}时被终止`, decision: null, terminal: true };
+  if (decision === '终止' && t.status !== 'done') {
+    return { status: `${statusText(t.status)}时被终止`, decision: null, terminal: true };
   }
-  const implied = t.status === '已完成' && decision === '通过';
+  const implied = t.status === 'done' && decision === '通过';
   return { status: t.status, decision: implied ? null : decision, terminal: false };
 }
 
@@ -524,10 +542,17 @@ export function runHTML(v) {
   const b = runBadge(v);
   const curNode = (v.nodes ?? []).find((n) => n.id === v.currentNodeId) ?? null;
   // **没执行人 = 停在这儿**，这是要一眼看出来的阻塞
-  const blocked = v.status === '进行中' && curNode && !curNode.assigneeName;
+  //
+  // ⚠️ 判据必须是**当前任务实际的经办人**（`v.assigneePersonaId`，派活时落到任务上的那个），
+  //    不能看模板节点有没有人名（`curNode.assigneeName`）—— 2026-11-13 实报：
+  //    按岗位自动指派的节点（`roleKey`）模板里**本来就不写人名**，`assigneeFor()` 当场查岗位，
+  //    于是 `curNode.assigneeName` 恒为 null ⇒ blocked 恒为 true ⇒ 行内动作（含「重跑这一步」
+  //    和通过/驳回）全被吞掉，而界面上明明写着经办人是张坤。模板点没点名是"谁该来"，
+  //    任务上的人才是"现在谁在办"。
+  const blocked = v.status === 'doing' && !v.assigneePersonaId;
 
   const acts = [];
-  if (v.status === '进行中') {
+  if (v.status === 'doing') {
     // （顶部只放"对整条流程"的操作 —— 步骤级的动作都在下面时间轴那一步的行里，
     //   混在一起会点错。用户要求去掉顶部这个。）
     //
@@ -543,27 +568,44 @@ export function runHTML(v) {
    * 那条的问题不是审美：时间轴最后一行**本来就是"当前这一步"**，底部再摆一遍
    * 等于同一个东西两个家；而且按钮离它作用的那个节点很远。
    *
-   *   · 快乐路径（派活 / 通过 / 驳回）→ 直接长在**当前那一步的行内**，还是 1 次点击
-   *   · 收拾类（改指派 / 改状态）→ **也长在"当前这一步"那一行里**：
-   *     点「状态」那颗字弹状态、点「经办人」弹人选人。
+   *   · 快乐路径（通过 / 驳回 / 失败后的重跑）→ 直接长在**当前那一步的行内**，还是 1 次点击
+   *   · 收拾类（改指派）→ **也长在"当前这一步"那一行里**：点「经办人」弹人选人。
    *     以前这些在右侧栏的「任务卡」标签里，任务卡**已经撤掉** —— 为了改个状态要先开个面板，
    *     而这块信息本来就属于那一步。历史步骤那几行是纯文本（服务端只认当前任务）。
+   *   · 改状态**没有入口**（2026-11-13 用户拍板）：状态字只显示，归流程引擎管 ——
+   *     失败点「重跑」、待验收走「通过/驳回」，手改状态只会造两本账。
    */
   const inlineActs = [];
-  if (v.status === '进行中' && !blocked) {
+  if (v.status === 'doing' && !blocked) {
     // 「派活，开始这一步」这颗按钮去掉了（2026-10-17 对齐同类产品：待办即执行）——
     // 停在待办的步骤会被调度节拍自动派出（他正忙就 30 秒后再试），人没什么可点的。
     // 留一行说明代替按钮：不解释的话，"这步怎么不动"又得靠猜。
-    if (v.taskStatus === '待办') inlineActs.push('<span class="dim">待办 —— 马上自动派活，不用点任何东西（他正忙就 30 秒内再试）</span>');
-    if (v.taskStatus === '待验收') {
+    if (v.taskStatus === 'todo') inlineActs.push('<span class="dim">待办 —— 马上自动派活，不用点任何东西（他正忙就 30 秒内再试）</span>');
+    /*
+     * 「重跑这一步」（2026-11-13 **加回来**）。
+     *
+     * 2026-10-18 曾删掉这颗、让"改状态成待办"代替（同一件事不留两个入口）。实测下来那条路
+     * 不成立：入口藏在「状态」那颗字里，而失败时下拉里连 `failed` 都不出现（选项只有
+     * 待办/已阻塞/已完成）—— 人看到的是一排"改哪个都不对"的选项（用户 2026-11-13 实报）。
+     * 「失败后再办一次」是高频快乐路径，就得有一颗明说的按钮。
+     *
+     * 接口仍是同一个 `/retry`（= setStepStatus 'todo'，改回待办并立刻派活），不是新实现。
+     * ⚠️ 状态下拉**原样不动**：那套状态牵扯"想法拖进待办就自动开工"等多处，要统一规划。
+     */
+    // 额度拦下的那一步不摆这颗：重跑会先改回待办、再撞一次同一道额度闸、又写一遍同样的
+    // 备注 —— 那是空转。它有自己的「继续一次」（见下面），别让人在两个按钮之间猜。
+    if (!v.quotaBlocked && (v.taskStatus === 'failed' || v.taskStatus === 'blocked')) {
+      const why = v.taskStatus === 'failed' ? '这一步上次失败了' : '这一步被标成已阻塞';
+      inlineActs.push(
+        `<button class="primary" data-run-retry title="${why} —— 会重新派给经办人再办一次">重跑这一步</button>`,
+      );
+    }
+    if (v.taskStatus === 'review') {
       if (v.outlets?.approve) {
         inlineActs.push(`<button class="primary" data-run-decide="通过">确认这一步完成 → ${esc(v.outlets.approveTo ?? '')}</button>`);
       }
       if (v.outlets?.reject) inlineActs.push(`<button data-run-decide="驳回">驳回 → ${esc(v.outlets.rejectTo ?? '')}</button>`);
     }
-    // 「重跑这一步」已删（2026-10-18 用户要求）：把状态改成「待办」就是重跑
-    //（setStepStatus 的语义：待办 = 直接派活），同一件事不留两个入口。
-    //
     // **额度拦下的只给「继续一次」**：它走的不是"改回待办"（那会又撞一次额度闸、
     // 又写一遍同样的备注），而是带 force 直接派 —— 这颗没别的路能替代，留着。
     if (v.quotaBlocked) {
@@ -601,13 +643,13 @@ export function runHTML(v) {
    */
   const curNodeName = v.tasks?.find((t) => t.id === lastTaskId)?.nodeName ?? '当前这一步';
   const orphan =
-    v.status === '进行中' && !curNode
+    v.status === 'doing' && !curNode
       ? `「${curNodeName}」这一步在流程模板里已经没有了 —— 指派也没用。` +
         '把状态改成「已完成」可以直接收尾（流程完成）；要接着往下走，就去「工作流」把它补回模板。'
       : '';
   // 终态：它是"到此结束"的结论，属于时间轴尾部，不属于开篇。
   const endedHint =
-    v.status === '进行中'
+    v.status === 'doing'
       ? ''
       : `<div class="run-end">这条流程已经「${esc(v.status)}」，不能再流转了。
            要再跑一遍，用左栏顶部的「＋」发起一条新的。</div>`;
@@ -621,7 +663,7 @@ export function runHTML(v) {
    * 「已终止」是"没走到终点就散了"：这时不把它画成已到达，灰着就好（上面 endedHint 会说明原因）。
    */
   const endFrom = (v.nodes ?? []).filter((n) => n.approve === 'end').map((n) => n.name);
-  const reachedEnd = v.status === '已完成';
+  const reachedEnd = v.status === 'done';
   const endStep = `<div class="run-step end ${reachedEnd ? 'done' : 'ahead'}">
         <span class="run-dot"></span>
         <div class="run-step-head"><b>结束</b>${reachedEnd ? '<span class="run-st">已完成</span>' : ''}</div>
@@ -642,37 +684,36 @@ export function runHTML(v) {
       // 蓝点会让它看着像"还在进行中"，而这条流程早就停了。
       const cls = oc.terminal
         ? 'gone'
-        : t.status === '已完成' ? 'done'
-        : (t.status === '失败' || t.status === '已阻塞') ? 'fail'
-        : t.status === '待验收' ? 'wait'
+        : t.status === 'done' ? 'done'
+        : (t.status === 'failed' || t.status === 'blocked') ? 'fail'
+        : t.status === 'review' ? 'wait'
         : 'run';
       const meta = [t.assigneeName ?? '没人', t.visit > 1 ? `第 ${t.visit} 次` : '', durText(t.elapsedMs)]
         .filter(Boolean)
         .join(' · ');
-      // 流程页**不铺对话**：只显示有多少条 + 一个「对话」按钮，点开才是面板。
-      // 这样对话被锚定在这一个节点上，时间轴也不会被长对话淹掉。
-      const n = (t.messages ?? []).length;
-      const canTalk = !!t.conversationId && t.status !== '待办';
+      const canTalk = !!t.conversationId && t.status !== 'todo';
       // 能不能通到任务卡：服务端给了「已有卡」或「能现开」之一就行（见 viewTask 的说明）
       const canOpenCard = !!t.projectTaskId || t.canOpenTaskCard === true;
       // 这一步的记录（状态 / 经办人 / 第几次 / 时间 / 耗时）现在全在这一行的属性行里，
       // 不用再开一个面板 —— 任务卡就是为此撤掉的。
       const isCur = t.id === lastTaskId;
-      // 改状态 / 改指派就是上面那两行本身（点状态、点经办人），这里不再摆第二套。
-      // **任务卡入口长在这儿**（2026-10-21 用户拍板）：原来是经办人后面那颗对话气泡，
-      // 但它 2026-10-19 起开的已经是任务卡，气泡图标语义错位。现在收进这行字 ——
-      // 「已往来 N 条 / 还没聊过」本身就是入口说明，点它开任务卡；
-      // 流程没挂项目（开不了卡）时退回对话栏（三条路的接线共用，见下方 data-run-card）。
+      // 改指派就是上面那行本身（点经办人），这里不再摆第二套；状态只显示、不可改（2026-11-13 拍板）。
+      /*
+       * **任务卡入口 = 节点名后面的「查看」图标**（2026-11-14 用户拍板，第三次改）：
+       * 「已往来 N 条」那个数数的是流程对话里的系统消息（派活 / 完成通知），
+       * 卡上的评论一条不数 —— 数字和卡对不上，不如不写。现在只剩一颗安静的卡片图标
+       * （开的就是「任务卡」，图形即语义；眼睛撞了密码显隐的形，气泡又回到老的错位），
+       * 点开任务卡；流程没挂项目（开不了卡）时退回对话栏
+       * （三条路的接线共用，见下方 data-run-card）。通不到任何地方就不画按钮。
+       */
       const talkable = canOpenCard || canTalk;
-      const talkText = canTalk ? (n ? `已往来 ${n} 条` : '还没聊过') : '还没聊过';
-      const talk = `<div class="run-talk">${
-        talkable
-          ? `<button type="button" class="run-card-link" data-run-card data-task="${esc(t.id)}" title="${canOpenCard
-              ? (t.projectTaskId ? '打开这一步的任务卡' : '打开任务卡（第一次点会建一张）')
-              : '打开对话'}">${talkText}</button>`
-          : '<span class="dim">先派活才能对话</span>'
-        }</div>`;
-      // 行内**只放快乐路径**（派活 / 通过 / 驳回）；重跑已删 —— 改状态成「待办」就是重跑。
+      const cardView = talkable
+        ? `<button type="button" class="run-card-view" data-run-card data-task="${esc(t.id)}" title="${canOpenCard
+            ? (t.projectTaskId ? '打开这一步的任务卡' : '打开任务卡（第一次点会建一张）')
+            : '打开对话'}" aria-label="查看这一步的任务卡"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="5" width="16" height="14" rx="2.5"></rect><path d="M8.5 10h7M8.5 13.5h4.5"></path></svg></button>`
+        : '';
+      // 行内放**当前这一步的动作**：通过的快乐路径 + 失败/受阻后的「重跑这一步」；
+      // 改指派仍是上一行的入口（点「经办人」）；状态没有编辑入口（2026-11-13 拍板）。
       // 「没人可派」那种不在这儿再摆一颗"指派给谁" —— 上一行「经办人」本身就是入口，
       // 摆两颗是同一个动作两个按钮。
       const inline = isCur && inlineActs.length ? `<div class="run-acts">${inlineActs.join('')}</div>` : '';
@@ -699,14 +740,13 @@ export function runHTML(v) {
        * 缺的字段用「—」而不是整条藏掉：一眼看得出"这三样本来就该有"，
        * 而不是"这一步少了点什么"。
        */
-      // **当前这一步能改，历史步骤不能**（服务端只认"当前任务"，见 setStepStatus/assignCurrentStep）。
-      // 能改的做成选择器（点一下弹选项）；不能改的退回纯文本 ——
+      // **当前这一步能改指派，历史步骤不能**（服务端只认"当前任务"，见 assignCurrentStep）。
+      // 经办人做成选择器（点一下弹选项）；不能改的退回纯文本 ——
       // 不做成禁用态：既占地方，又让人以为是坏了。
-      const alive = v.status === '进行中';
-      const canStatus = isCur && alive && (v.statusChoices ?? []).length > 0;
+      const alive = v.status === 'doing';
       const canAssign = isCur && alive && (S.personas ?? []).length > 0;
       // 经办人后面**不再摆按钮**（2026-10-21）：那颗气泡 2026-10-19 起开的是任务卡，
-      // 气泡图标语义错位 —— 入口挪到了下面「已往来 N 条」那行字上（见 talk）。
+      // 气泡图标语义错位 —— 入口是节点名后面的「查看」眼睛（见 cardView）。
       const who = `<div class="run-who">
           <span><i>经办人</i>${
             canAssign ? '<span class="run-pick" id="runAssigneeMount"></span>' : esc(t.assigneeName ?? '没人')
@@ -739,9 +779,14 @@ export function runHTML(v) {
           : '';
       // 有产物就不再补一句话：用户要"有产物展示产物"，两样并排等于又说一遍
       const line = !err && !arts.length ? (r?.summary ?? '') : '';
+      /*
+       * 「执行结果」跟上面三行属性（经办人 / 经办时间 / 耗时）**同一套排版**：
+       * 标签定宽在左、值占右边其余 —— 结果框不再整行另起（用户要求跟其他属性统一）。
+       * 框里装什么（现状 / 报错 / 产物 / 一句话）不变，只是挪进了"值"的位置。
+       */
       const result =
         now || err || arts.length || line
-          ? `<div class="run-note-label">执行结果</div><div class="run-note">${
+          ? `<div class="run-note-row"><div class="run-note-label">执行结果</div><div class="run-note">${
               now
                 ? `<div class="run-state ${v.stuck || orphan ? 'bad' : 'quiet'}">${
                     v.stuck || orphan ? '⚠️ ' : ''
@@ -749,28 +794,27 @@ export function runHTML(v) {
                 : ''
             }${err ? `<div class="run-err">${esc(err)}</div>` : ''}${
               arts.length ? `<div class="run-arts">${arts.map(artChipHtml).join('')}</div>` : ''
-            }${line ? `<div class="run-sum">${esc(line)}</div>` : ''}</div>`
+            }${line ? `<div class="run-sum">${esc(line)}</div>` : ''}</div></div>`
           : '';
       return `<div class="run-step ${cls}${isCur ? ' cur' : ''}">
         <span class="run-dot"></span>
         <div class="run-step-head">
           <b>${esc(t.nodeName)}</b>
+          ${cardView}
           ${/* 勾了「需要人工确认完成」的节点在这儿挂个标签：一眼看出"这步跑完会停下来等人"。
                 跟设计器里节点卡上那个是同一个标签、同一套 .tag-inline 药丸。 */ ''}
           ${manualNodes.has(t.nodeId) ? '<em class="tag-inline" title="办完停住，等你确认才往下走">需人工确认</em>' : ''}
           ${
-            /* 状态：当前这一步**本身就是选择器**（点它弹选项，选完立刻改）。
-               能改哪几个由服务端给（v.statusChoices），前端不自己判断 —— 状态只有一个定义处。
-               这原来长在任务卡里，任务卡撤了之后搬回行内。 */
-            canStatus
-              ? '<span class="run-st run-pick" id="runStatusMount"></span>'
-              : `<span class="run-st">${esc(oc.status)}</span>`
+            /* 状态**只显示、不改**（2026-11-13 用户拍板）：状态跟着流程引擎走 ——
+               失败了点「重跑这一步」、干完了走「通过/驳回」，人手改状态只会造成
+               "卡一个状态、实例另一个状态"的两本账（当天上午刚修过一回）。
+               服务端 /status 接口和 statusChoices 原样保留，等状态那套统一规划。 */
+            `<span class="run-st">${esc(statusText(oc.status))}</span>`
           }
           ${oc.decision ? `<span class="run-dec">${esc(oc.decision)}</span>` : ''}
         </div>
         ${who}
         ${result}
-        ${talk}
         ${inline}
       </div>`;
     })
@@ -893,8 +937,8 @@ export function runHTML(v) {
           </div>
         </div>
         <!-- 任务卡（#ncTask）原来在这儿：当前这一步的状态/经办人/重跑。
-             状态和经办人现在全在时间轴那一步的行里（点状态、点经办人），
-             重跑也删了（把状态改成「待办」就是重跑），所以这一块连同标签一起撤了。 -->
+             状态和经办人现在全在时间轴那一步的行里（状态只显示 2026-11-13 拍板；
+             重跑 2026-11-13 也加回了行内），所以这一块连同标签一起撤了。 -->
       </div>
     </div>`;
 }
@@ -985,7 +1029,7 @@ export function wireRun(v) {
    * 不然界面上会留着一个"看起来改了、其实没改"的值。
    */
   const cur = (v.tasks ?? [])[v.tasks.length - 1] ?? null;
-  const alive = v.status === '进行中';
+  const alive = v.status === 'doing';
   const assignMount = view.querySelector('#runAssigneeMount');
   if (assignMount && cur) {
     let assignCombo = null;
@@ -1021,44 +1065,14 @@ export function wireRun(v) {
     });
   }
   /*
-   * 「状态」那个字**就是**改状态的入口：点它弹出选项，选完立刻改。
-   * 能改哪几个由服务端给（v.statusChoices），前端不自己判断 —— 状态只有一个定义处。
-   * value 传**当前状态**：它不在选项里，所以按钮显示的是"现在的状态"、列表里也不会出现它，
-   * 一眼就知道"点这儿能改"而不是"这里已经选好了"。
+   * 「状态」**不再可改**（2026-11-13 用户拍板）：这一行的状态字退回纯显示。
+   * 原来的选择器（点状态弹 待办/已阻塞/已完成，选完 POST /status）整段撤了 ——
+   * 它跟「重跑这一步」「通过/驳回」干的是同一件事，而且人手把状态改成「已完成」
+   * 会造成"这里显示完成了、引擎里那一步还挂着"的两本账。状态归流程引擎管，
+   * 人的动作只有三个：重跑（失败/受阻）、通过/驳回（待验收）、改经办人。
+   * 服务端 `/status` 接口与 `statusChoices` 原样保留 —— 状态那套要统一规划（用户原话），
+   * 这儿只是不再摆入口。
    */
-  const statusMount = view.querySelector('#runStatusMount');
-  if (statusMount && cur) {
-    let statusCombo = null;
-    statusCombo = createCombo({
-      mount: statusMount,
-      items: (v.statusChoices ?? []).map((s) => ({ id: s, label: s })),
-      value: cur.status,
-      search: false,
-      placeholder: '选一个',
-      // 这枚状态就贴在页面右边：浮层要**往左展开**，否则顶出视口（用户 2026-10-17 实报）
-      right: true,
-      onChange: async (picked) => {
-        if (!picked) return;
-        const hint = {
-          待办: '回到「待办」：这一步的往来和执行痕迹会清掉，之后可以重新派活。确定吗？',
-          已阻塞: '标成「已阻塞」：出了问题等人拍板，不会再派活。确定吗？',
-          已完成: '标成「已完成」：等于「通过」，会按通过出口走到下一步。确定吗？',
-        }[picked];
-        if (hint && !(await confirmDo(hint))) return statusCombo.setValue(cur.status);
-        try {
-          await api(`/api/workflows/runs/${encodeURIComponent(v.id)}/status`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ status: picked }),
-          });
-          await paintRun(v.id);
-        } catch (e) {
-          toast(e.message, 'error');
-          statusCombo.setValue(cur.status);
-        }
-      },
-    });
-  }
   /*
    * 「继续一次」：这一步被**额度**拦下了，你明确知道要超支，放它过去。
    *
@@ -1103,9 +1117,31 @@ export function wireRun(v) {
       toast(e.message, 'error');
     }
   };
+  /*
+   * 「重跑这一步」：失败/受阻之后再办一次。
+   *
+   * 走 `/retry`（服务端 `retryCurrentStep` = `setStepStatus 'todo'` + 立刻派活）——
+   * 跟「把状态改成待办」**完全同一条路**，这里只是把入口显式化（2026-11-13 用户定）。
+   * 点了先禁用：重跑会真派活（action 节点会真去建 PR），连点两下没有意义；
+   * 成功与否都以 paintRun 重新拉到的实例为准，失败就把按钮放开让人能再试。
+   */
+  const retryBtn = view.querySelector('[data-run-retry]');
+  if (retryBtn) {
+    retryBtn.onclick = async () => {
+      retryBtn.disabled = true;
+      try {
+        await api(`/api/workflows/runs/${encodeURIComponent(v.id)}/retry`, { method: 'POST' });
+        await paintRun(v.id);
+      } catch (e) {
+        toast(e.message, 'error');
+        retryBtn.disabled = false;
+      }
+    };
+  }
   // （那枚推拉列表面板的按钮 2026-10-19 撤了 —— 接线跟着删，见 runHTML 里的说明）
-  // 「指派」「改状态」现在都长在时间轴"当前这一步"那一行里 —— 任务卡已撤；
-  // 「重跑」也删了（改状态成「待办」就是重跑）。行内只剩：通过 / 驳回（快乐路径）。
+  // 「指派」长在时间轴"当前这一步"那一行里 —— 任务卡已撤；
+  // 「重跑这一步」2026-11-13 加回来了（理由见 runHTML 里那颗按钮的注释）。
+  // 「改状态」的接线 2026-11-13 撤了（入口没了，见 runStatusMount 原位置那段说明）。
   view.querySelectorAll('[data-run-decide]').forEach((el) => {
     el.onclick = async () => {
       const decision = el.dataset.runDecide;
