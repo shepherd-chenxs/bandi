@@ -205,14 +205,19 @@ async function runCreateNode({ runId, task }) {
       return;
     }
     const out = await git.openPr(row, { title: prTitleOf(run), body: prBodyOf(run), push: true });
+    /*
+     * 记 PR 归属用 **openPr 回传的仓库引用**（out.pr.repo），不是 row.fullName ——
+     * 本地托管行的 fullName 可能没有 owner 段（只有目录名），后续查 PR / 合并 / 取材料
+     * 都拿它拼 /repos/{repo}/...，存了没 owner 的值，下一步照样 404（2026-11-14 实报）。
+     */
     pr = {
-      repo: row.fullName,
+      repo: out.pr.repo,
       number: out.pr.number,
       title: out.pr.title || prTitleOf(run),
       url: out.pr.url,
     };
     created = out.created;
-    store.setWorkflowRunPr(runId, { repo: row.fullName, number: out.pr.number });
+    store.setWorkflowRunPr(runId, { repo: out.pr.repo, number: out.pr.number });
   }
   const title = pr.title || prTitleOf(run);
 
@@ -241,7 +246,7 @@ async function runCreateNode({ runId, task }) {
   // 审阅材料现在取：给管理员的是"这一刻的 PR"；取不到就照实写进材料里，别让审阅变成瞎猜
   let material = '';
   try {
-    const review = await pullReviewMaterial(row.fullName, pr.number);
+    const review = await pullReviewMaterial(pr.repo, pr.number);
     material = review.material;
     // 自动合并的 SHA 锁只认**管理员看的那一份**（与巡检派审阅同一个写法，见 pr-review.rememberReviewedSha）
     rememberReviewedSha(runId, review.pull.headSha);

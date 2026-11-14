@@ -215,6 +215,36 @@ check(
 check('nothingNewForPr：眼下这个脏工作区不算"没事"（闸照旧）', git.nothingNewForPr(st) === null, String(git.nothingNewForPr(st)));
 
 /*
+ * githubRefOf（2026-11-14 流程实报）：「本地代码托管」接的行 fullName 只有目录名（bandi），
+ * API 却按 /repos/{fullName}/... 拼 —— /repos/bandi/pulls 必 404，换什么令牌都没用。
+ * 没 owner 段就从 origin 解出真身；解不出原样返回。⚠️ origin 是后面 ③ 的推送目标，测完必须还原。
+ */
+const localRow = { fullName: 'bandi', localPath: work };
+g(['-C', work, 'remote', 'set-url', 'origin', 'https://github.com/octo/demo.git']);
+check(
+  'githubRefOf：https origin 解出 owner/name',
+  await git.githubRefOf(localRow) === 'octo/demo',
+  await git.githubRefOf(localRow),
+);
+g(['-C', work, 'remote', 'set-url', 'origin', 'git@github.com:octo/demo.git']);
+check(
+  'githubRefOf：ssh origin 也认',
+  await git.githubRefOf(localRow) === 'octo/demo',
+  await git.githubRefOf(localRow),
+);
+g(['-C', work, 'remote', 'set-url', 'origin', bare]);
+check(
+  'githubRefOf：origin 不是 GitHub 地址 → 原样返回（不猜）',
+  await git.githubRefOf(localRow) === 'bandi',
+  await git.githubRefOf(localRow),
+);
+check(
+  'githubRefOf：fullName 已带 owner → 原样返回（不碰 git）',
+  await git.githubRefOf({ fullName: 'octo/demo', localPath: 'Z:\\no-such-dir' }) === 'octo/demo',
+  await git.githubRefOf({ fullName: 'octo/demo', localPath: 'Z:\\no-such-dir' }),
+);
+
+/*
  * **回归（2026-10-25 用户实报）**：工作区第一条改动是「 M」（已跟踪文件被改）时，
  * `git status -z` 的原始输出以空格开头；run() 默认 trim 会吃掉它，记录错位后
  * `slice(3)` 把路径首字母切掉（弹窗显示 `pps/server/...`，提交时 git add 报 pathspec 不存在）。

@@ -2126,6 +2126,28 @@ export function nothingNewForPr(st) {
 }
 
 /**
+ * GitHub API 用的仓库引用（`owner/name`）。
+ *
+ * 「本地代码托管」接进来的行（2026-11-14 流程实报）：fullName 只记了目录名（`bandi`），
+ * 没有 owner 段 —— 推送走 origin 没事，API 却按 `/repos/{fullName}/...` 拼，
+ * `/repos/bandi/pulls` 在 GitHub 上必然 404，换什么令牌都救不了
+ * （这个 404 之前一直被误判成"令牌没授权这个仓库"）。
+ * 行里没 owner 段就从本地 origin 解出真身；解不出（没有 origin / 不是 GitHub 地址）
+ * 原样返回 —— 让后续的 404 文案去说话，这里不猜。
+ */
+export async function githubRefOf(row) {
+  const name = String(row?.fullName ?? '');
+  if (name.includes('/')) return name;
+  try {
+    const r = await gitIn(row.localPath, ['remote', 'get-url', 'origin']);
+    if (r.code !== 0) return name;
+    const m = String(r.out ?? '').trim().match(/github\.com[/:]([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/i);
+    if (m) return `${m[1]}/${m[2]}`;
+  } catch { /* origin 读不到就原样返回 */ }
+  return name;
+}
+
+/**
  * 把工作区条目变成 `git add -A --` 的 pathspec（2026-10-25）。
  *
  * 不能无脑把 `path` 和 `from` 都塞进去 —— 用户实报过一次：
@@ -2347,9 +2369,12 @@ export async function openPr(row, { title, body, base, branch, message, draft, p
     }
     pushed = { branch: st.branch, base: await resolveBase(row, base), committed: null, files: [] };
   }
-  const existing = await findOpenPullForHead(row.fullName, pushed.branch, row.owner);
+  // API 用的仓库引用：本地托管行 fullName 可能没有 owner 段，从 origin 解（见 githubRefOf）。
+  // 解不出来就原样 —— 那时的 404 文案会如实说"访问不了这个仓库"。
+  const repoRef = await githubRefOf(row);
+  const existing = await findOpenPullForHead(repoRef, pushed.branch, row.owner);
   if (existing) return { pr: existing, created: false, ...pushed };
-  const out = await createPull(row.fullName, {
+  const out = await createPull(repoRef, {
     head: pushed.branch,
     base: pushed.base,
     title: title || pushed.branch,
