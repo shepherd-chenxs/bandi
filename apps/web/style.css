@@ -1109,9 +1109,9 @@ body:has(#pluginView.shown .fixed-head)::after {
 .run-acts { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
 .run-acts button { font-size: 12px; padding: 3px 10px; }
 
-/* 节点名后面的「查看」眼睛 = 这一步任务卡的入口（2026-11-14 用户拍板，第三次改）：
+/* 节点名后面的卡片图标 = 这一步任务卡的入口（2026-11-14 用户拍板，第三次改）：
    「已往来 N 条」数的是流程对话里的系统消息，跟卡上的评论对不上 —— 数字撤了，
-   只剩一颗安静的眼睛（描边风格跟左侧导航同一套），悬停才亮色。
+   剩一颗安静的卡片图形（开的就是任务卡；眼睛撞密码显隐、气泡撞老的语义错位，都弃了）。
    点击的三条路接线（开卡 / 现开卡 / 退回对话栏）不动，data-run-card 照旧。
    align-self:center：标题行是 baseline 对齐，svg 没有基线，硬跟会把图标压到字底下去。 */
 .run-card-view { display: inline-flex; align-items: center; border: 0; background: none;
