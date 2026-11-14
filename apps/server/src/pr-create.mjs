@@ -188,6 +188,22 @@ async function runCreateNode({ runId, task }) {
       url: `https://github.com/${run.prRepo}/pull/${n}`,
     };
   } else {
+    /*
+     * **没有东西可交就不是失败**（2026-11-14 用户："已经没有新提交的代码，不用建 PR 了，
+     * 那应该告诉用户"）：工作区干净、分支也不领先 base —— 建不出 PR 的原因是"没有新提交"，
+     * 不是故障。照实说清、照常往下走（汇报），别让一次空跑把流程标红、卡在等人重跑上
+     * （PR 已经建过的情况在上面沿用了，轮不到这里）。
+     */
+    const st = await git.workState(row).catch(() => null);
+    const nothing = st ? git.nothingNewForPr(st) : null;
+    if (nothing) {
+      finishActionTask(runId, task, {
+        ok: true,
+        result: { state: 'done', summary: '没有新提交 —— 不需要建 PR', artifacts: [], error: null },
+        note: `没有新提交，不需要建 PR（${nothing}）。流程继续往下走（汇报）。`,
+      });
+      return;
+    }
     const out = await git.openPr(row, { title: prTitleOf(run), body: prBodyOf(run), push: true });
     pr = {
       repo: row.fullName,

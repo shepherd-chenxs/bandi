@@ -1051,7 +1051,7 @@ body:has(#pluginView.shown .fixed-head)::after {
 .run-who span { display: flex; gap: 10px; }
 .run-who i { flex: 0 0 60px; font-style: normal; color: var(--dim); }
 /* 经办人后面**不再有按钮**（2026-10-21）：对话气泡早就开的是任务卡，图标语义错位，
-   入口挪到下面 `.run-talk` 那行字上 —— 原来这里的 .run-chat 规则随之删除。 */
+   入口是下面独立的「任务卡」属性行 —— 原来这里的 .run-chat 规则随之删除。 */
 /* 「执行结果」整行：跟上面属性行（.run-who）同一套排版 —— 标签定宽 60px 在左、
    结果框占右边其余（2026-11-14 用户要求：结果框别整行另起，跟其他属性统一）。
    标签字号跟 .run-who i 一样是 12px；补 8px 上内边距 = 框的描边 1px + 内边距 7px，
@@ -1109,16 +1109,14 @@ body:has(#pluginView.shown .fixed-head)::after {
 .run-acts { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
 .run-acts button { font-size: 12px; padding: 3px 10px; }
 
-/* 「已往来 N 条 / 还没聊过」= 这一步任务卡的入口（2026-10-21 用户拍板）：
-   原来是经办人后面的对话气泡图标，但那颗 2026-10-19 起开的已经是任务卡，
-   气泡语义错位。文字本身就是入口说明 —— 长得像链接，点开任务卡
-   （流程没挂项目时退回对话栏，同一段 data-run-card 接线）。 */
-.run-talk { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
-.run-card-link { border: 0; background: none; padding: 0; font-size: 11.5px;
+/* 「任务卡」属性行的值 = 这一步任务卡的入口（2026-10-21 用户拍板；2026-11-14 收进
+   属性行 —— 原来单独一行飘蓝链接，跟属性行排版不搭）。长得像链接，点开任务卡
+   （流程没挂项目时退回对话栏，同一段 data-run-card 接线）。
+   字号随所在行继承（属性行是 12px），别写死。 */
+.run-card-link { border: 0; background: none; padding: 0; font: inherit;
                  color: var(--accent); cursor: pointer; }
 .run-card-link:hover { text-decoration: underline; }
 .run-card-link[disabled] { opacity: .45; cursor: default; text-decoration: none; }
-.run-talk .dim { font-size: 11.5px; color: var(--dim); }
 
 /* 对话栏里的消息（第二栏，不是弹窗）。
    署名在**气泡外**（气泡上方），气泡本身是 .nc-text —— 名字不该被框进去。 */

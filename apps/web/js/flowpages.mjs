@@ -701,19 +701,21 @@ export function runHTML(v) {
       // 不用再开一个面板 —— 任务卡就是为此撤掉的。
       const isCur = t.id === lastTaskId;
       // 改指派就是上面那行本身（点经办人），这里不再摆第二套；状态只显示、不可改（2026-11-13 拍板）。
-      // **任务卡入口长在这儿**（2026-10-21 用户拍板）：原来是经办人后面那颗对话气泡，
-      // 但它 2026-10-19 起开的已经是任务卡，气泡图标语义错位。现在收进这行字 ——
-      // 「已往来 N 条 / 还没聊过」本身就是入口说明，点它开任务卡；
-      // 流程没挂项目（开不了卡）时退回对话栏（三条路的接线共用，见下方 data-run-card）。
+      /*
+       * **任务卡入口收进属性行**（2026-11-14 用户要求重新设计）：原来单独一行飘一个
+       * 蓝链接（「已往来 N 条」），上下都不挨着，看着像掉出来的东西。现在并进属性行 ——
+       * 「任务卡 | 已往来 N 条 / 还没聊过」，点值开卡，跟经办人/耗时同一套排版；
+       * 流程没挂项目（开不了卡）时退回对话栏（三条路的接线共用，见下方 data-run-card）。
+       */
       const talkable = canOpenCard || canTalk;
       const talkText = canTalk ? (n ? `已往来 ${n} 条` : '还没聊过') : '还没聊过';
-      const talk = `<div class="run-talk">${
+      const talkRow = `<span><i>任务卡</i>${
         talkable
           ? `<button type="button" class="run-card-link" data-run-card data-task="${esc(t.id)}" title="${canOpenCard
               ? (t.projectTaskId ? '打开这一步的任务卡' : '打开任务卡（第一次点会建一张）')
               : '打开对话'}">${talkText}</button>`
           : '<span class="dim">先派活才能对话</span>'
-        }</div>`;
+        }</span>`;
       // 行内放**当前这一步的动作**：通过的快乐路径 + 失败/受阻后的「重跑这一步」；
       // 改指派仍是上一行的入口（点「经办人」）；状态没有编辑入口（2026-11-13 拍板）。
       // 「没人可派」那种不在这儿再摆一颗"指派给谁" —— 上一行「经办人」本身就是入口，
@@ -748,7 +750,7 @@ export function runHTML(v) {
       const alive = v.status === 'doing';
       const canAssign = isCur && alive && (S.personas ?? []).length > 0;
       // 经办人后面**不再摆按钮**（2026-10-21）：那颗气泡 2026-10-19 起开的是任务卡，
-      // 气泡图标语义错位 —— 入口挪到了下面「已往来 N 条」那行字上（见 talk）。
+      // 气泡图标语义错位 —— 入口是下面独立的「任务卡」属性行（见 talkRow）。
       const who = `<div class="run-who">
           <span><i>经办人</i>${
             canAssign ? '<span class="run-pick" id="runAssigneeMount"></span>' : esc(t.assigneeName ?? '没人')
@@ -757,6 +759,7 @@ export function runHTML(v) {
             t.startedAt ? esc(new Date(t.startedAt).toLocaleString('zh-CN')) : '—'
           }</span>
           <span><i>耗时</i>${esc(durText(t.elapsedMs) || '—')}</span>
+          ${talkRow}
         </div>`;
       /*
        * 「执行结果」—— 标题就用**任务卡里那个字段名**（用户当时定的），
@@ -816,7 +819,6 @@ export function runHTML(v) {
         </div>
         ${who}
         ${result}
-        ${talk}
         ${inline}
       </div>`;
     })

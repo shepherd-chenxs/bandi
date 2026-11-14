@@ -156,9 +156,9 @@ check('推送翻译五档全带码', (() => {
   return a.code === 'E1201' && b.code === 'E1202' && c.code === 'E1203' && d.code === 'E1299' && e.code === 'E1204';
 })());
 check('网络识别独立可用（fetch / clone / pull 共用一份）', /连接不上/.test(git.gitNetworkFailure('fatal: Could not resolve host: github.com')) && git.gitNetworkFailure('everything fine, no error here') === null);
-check('GitError 带码（路由 failWith 透传 e.code，路由码只兜底）', (() => {
+check('GitError 带码（文案自带 [码] 前缀，路由 failWith 透传 e.code，路由码只兜底）', (() => {
   const e = new git.GitError('E1204', '连接不上 github.com');
-  return e.code === 'E1204' && e instanceof Error && /连接不上/.test(e.message);
+  return e.code === 'E1204' && e instanceof Error && /^\[E1204\] 连接不上/.test(e.message);
 })());
 check('status -z：带空格的路径不被切两半', JSON.stringify(git.parseStatusZ(' M src/a b.ts\0')) === '[{"status":" M","path":"src/a b.ts"}]');
 check('status -z：重命名连着读（下一条是源路径）', JSON.stringify(git.parseStatusZ('R  new/n.ts\0old/n.ts\0?? x.md\0')) === '[{"status":"R ","path":"new/n.ts","from":"old/n.ts"},{"status":"??","path":"x.md"}]', JSON.stringify(git.parseStatusZ('R  new/n.ts\0old/n.ts\0?? x.md\0')));
@@ -186,6 +186,33 @@ st = await git.workState(row);
 check('改完文件：dirtyCount=3（含未跟踪与带空格的路径）', st.dirtyCount === 3, JSON.stringify(st.dirty.map((f) => f.path)));
 check('canShip 变 true', st.canShip === true);
 check('凭据闸在状态里就报出来（让人点之前就看见）', JSON.stringify(st.secrets) === '[".env"]', JSON.stringify(st.secrets));
+
+/*
+ * 「提交 PR」流程节点的**无事可做**判定（2026-11-14 流程实报：没有新提交也被标成失败，
+ * 用户对着红字猜不出原因 —— "已经没有新提交的代码，不用建 PR 了，那应该告诉用户"）。
+ */
+check(
+  'nothingNewForPr：干净 + 在 base 上 → 说"没有要提交的改动"（流程里这不算失败）',
+  /没有要提交的改动/.test(git.nothingNewForPr({ dirty: [], ahead: 0, baseKnown: true, base: 'main', onBase: true }) ?? ''),
+  git.nothingNewForPr({ dirty: [], ahead: 0, baseKnown: true, base: 'main', onBase: true }) ?? '',
+);
+check(
+  'nothingNewForPr：干净分支不领先 base → 提示"可能刚合并过"',
+  /合并/.test(git.nothingNewForPr({ dirty: [], ahead: 0, baseKnown: true, base: 'main', onBase: false }) ?? ''),
+  git.nothingNewForPr({ dirty: [], ahead: 0, baseKnown: true, base: 'main', onBase: false }) ?? '',
+);
+check(
+  'nothingNewForPr：有脏文件 / 有领先提交 / base 没拉过 → 都不算"没事"（各归各的闸报）',
+  git.nothingNewForPr({ dirty: [{ status: ' M', path: 'a' }], ahead: 0, baseKnown: true }) === null
+    && git.nothingNewForPr({ dirty: [], ahead: 2, baseKnown: true }) === null
+    && git.nothingNewForPr({ dirty: [], ahead: null, baseKnown: false }) === null,
+  JSON.stringify({
+    dirty: git.nothingNewForPr({ dirty: [{ status: ' M', path: 'a' }], ahead: 0, baseKnown: true }),
+    ahead: git.nothingNewForPr({ dirty: [], ahead: 2, baseKnown: true }),
+    unknown: git.nothingNewForPr({ dirty: [], ahead: null, baseKnown: false }),
+  }),
+);
+check('nothingNewForPr：眼下这个脏工作区不算"没事"（闸照旧）', git.nothingNewForPr(st) === null, String(git.nothingNewForPr(st)));
 
 /*
  * **回归（2026-10-25 用户实报）**：工作区第一条改动是「 M」（已跟踪文件被改）时，
@@ -450,6 +477,20 @@ try {
   noScope = e.message;
 }
 check('403 → 指明要 Pull requests: Read and write，并说现在挂的是哪个令牌', /Pull requests: Read and write/.test(noScope) && /\*{6}/.test(noScope), noScope.slice(0, 100));
+
+gh.failWith(/^POST \/repos\/smoke\/demo\/pulls$/, 404, 'Not Found');
+let nf = null;
+try {
+  await git.createPull('smoke/demo', { head: 'bandi/n404', base: 'main', title: '令牌看不到仓库' });
+} catch (e) {
+  nf = e;
+}
+check(
+  '404 → 点名仓库 + 指路令牌授权（不再是一句干巴巴的 Not Found，2026-11-14 流程实报）',
+  !!nf && /访问不了仓库 smoke\/demo/.test(nf.message) && /仓库授权/.test(nf.message) && /Not Found/.test(nf.message),
+  String(nf?.message ?? nf).slice(0, 140),
+);
+check('404 的 status 照旧挂在错误上（程序判定走 status，不走文案）', nf?.status === 404 && nf?.githubMessage === 'Not Found', JSON.stringify({ s: nf?.status, g: nf?.githubMessage }));
 
 /* --------------------------------------------------- ⑤ mergePull：乐观锁 */
 console.log('\n⑤ 合并：拿看过的那个 sha 去合，期间有人推提交就撞 409');

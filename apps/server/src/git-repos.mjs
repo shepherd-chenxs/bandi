@@ -227,13 +227,21 @@ const ghFetch = async (pathname, { token, method = 'GET', body, timeoutMs = GH_T
     // 原来调用方用「消息里有没有 '403' 这几个字符」判 —— 那太脆：GitHub 的 404 消息里
     // 完全可能出现一串数字（sha、限额、issue 号），误判就会把"没权限"这种要人换令牌的信号
     // 报成别的原因。文案照旧给人看，`status` 给代码看。
+    //
+    // **404 带上下文**（2026-11-14 流程「提交 PR」实报）：仓库级资源的 404，最常见的原因是
+    // **令牌看不到这个仓库**（fine-grained PAT 只对勾选过的仓库有权限，GitHub 对看不到的
+    // 资源一律回 Not Found，不区分"没有"和"没权限"）—— 用户对着一句干巴巴的 Not Found
+    // 猜不出来在说谁。路径里认得出 owner/name 就把仓库点名、指路令牌设置。
+    const repo404 = r.status === 404 ? String(pathname).match(/^\/repos\/([^/?#]+\/[^/?#]+)/) : null;
     const err = new Error(
       r.status === 401
         ? '令牌无效或已过期（401）'
         : r.status === 403
           ? `这个令牌没有权限做这件事（403）：${msg}`
           : r.status === 404
-            ? `没找到（404）：${msg}`
+            ? repo404
+              ? `没找到（404）：${msg} —— GitHub 上访问不了仓库 ${repo404[1]}。最常见的原因是令牌没勾选这个仓库（fine-grained PAT 只对勾选过的仓库有权限），去「工作台 → 研发 → 代码托管」检查令牌的仓库授权；也可能是仓库或对应资源（分支 / PR）已改名、删除`
+              : `没找到（404）：${msg}`
             : `GitHub ${r.status}：${msg}`,
     );
     err.status = r.status;
@@ -1064,12 +1072,13 @@ export async function changeDigest(row, { paths = null, maxDiffChars = 4000 } = 
 /**
  * 带错误码的领域错（docs/契约.md「报错规范」，2026-11-14）。
  *
- * 文案里**已经**带码（界面任何出口直接显示就是合规形态），`.code` 是给程序用的：
+ * 文案自带 `[码]` 前缀 —— 流程卡、信箱、toast 这些**不经过路由**的出口，直接显示就是
+ * 合规形态（码 + 人话一起到，用户不用在别处查这个错是什么）；`.code` 是给程序用的：
  * 路由 catch 优先透传它（不再盖一层路由自己的码），流程引擎/审计按码归类常见错。
  */
 export class GitError extends Error {
   constructor(code, message) {
-    super(message);
+    super(`[${code}] ${String(message ?? '')}`);
     this.name = 'GitError';
     this.code = code;
   }
@@ -2096,6 +2105,24 @@ export async function workState(row) {
     // 「现在就能建 PR」= 有东西进 PR 且已经推到远端 —— 推送和建 PR 拆开后的闸（2026-10-29）
     canPrNow: (ahead ?? 0) > 0 && !!upstream && (unpushed ?? 0) === 0,
   };
+}
+
+/**
+ * 「提交 PR」流程节点的**无事可做**判定（2026-11-14）：工作区干净、分支也不领先 base ——
+ * 这时建 PR 无事可做，原因是"没有新提交"，不是出了故障。流程里要照实说一句
+ * 「不需要建 PR」并照常往下走，不能标红失败等人重跑（用户："已经没有新提交的代码，
+ * 不用建 PR 了，那应该告诉用户"）。
+ *
+ * 返回原因一句话（给人看），有东西可交 / 状态算不出来时返回 null（让 commitAndPush
+ * 按它自己的闸报：detached、没 origin、base 引用没拉过……各有各的说法，不在这里抢）。
+ */
+export function nothingNewForPr(st) {
+  if (!st || typeof st !== 'object') return null;
+  if ((st.dirty?.length ?? 0) > 0 || (st.ahead ?? 0) > 0) return null; // 脏文件会被收进提交；领先 base 的提交能进 PR
+  if (!st.baseKnown) return null; // 连 origin/<base> 都没有 → 是"没同步过"，不是"没东西"
+  return st.onBase
+    ? `工作区干净、还在 base（${st.base}）上 —— 没有要提交的改动，也就没有 PR 可建`
+    : `工作区干净、当前分支也没有领先 base（${st.base}）的提交 —— 改动可能已经进了 base（刚合并过），或这一步之前没产生新改动`;
 }
 
 /**
