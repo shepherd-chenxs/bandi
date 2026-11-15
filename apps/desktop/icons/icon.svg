@@ -1,11 +1,12 @@
 <svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
-  <!-- 班底标（2026-11-10 第四次定稿「分玉」）：整圆被竖直弦切成两片，右片下沉错位。
+  <!-- 班底标（2026-11-12 去缝修订；2026-11-10 第四次定稿「分玉」）：整圆沿竖直直径切成
+       两片、两片贴合、右片下沉错位。
        《说文》「班，分瑞玉也，从珏从刀」——分玉而后成班，即"把活切开派下去"。
        几何与 design/logo/bandi-icon-dark.svg、apps/desktop/make-icon.py 三处一致，
        改形状要三处一起改（脚本不解析 SVG）。 -->
   <rect width="512" height="512" rx="110" fill="#12161A"/>
   <g transform="translate(256 256) scale(3.25) translate(-50 -49.8)">
-    <path d="M47 4.11 A40 40 0 0 0 47 83.89 Z" fill="#F2F1ED"/>
-    <path d="M53 4.11 A40 40 0 0 1 53 83.89 Z" fill="#5FB3A3" transform="translate(0 12)"/>
+    <path d="M50 4 A40 40 0 0 0 50 84 Z" fill="#F2F1ED"/>
+    <path d="M50 4 A40 40 0 0 1 50 84 Z" fill="#5FB3A3" transform="translate(0 12)"/>
   </g>
 </svg>

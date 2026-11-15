@@ -1,7 +1,7 @@
 /* ui.mjs —— 对话框通用件、标题旁的「?」说明（2026-10-17）、悬浮提示（自建 data-tip）、自建下拉（全站公共组件）。
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
 import { esc, toast } from './shell.mjs';
-import { $, S } from './core.mjs';
+import { $, S, statusText } from './core.mjs';
 
 
 
@@ -634,6 +634,7 @@ export function createCombo({
 export function openCtxMenu(x, y, items) {
   const menu = $('ctxMenu');
   if (!menu || !items?.length) return;
+  showCtxScrim();
   menu.innerHTML = items
     .map(
       (it, i) =>
@@ -672,11 +673,32 @@ export function openCtxMenu(x, y, items) {
 /** 收起右键菜单。可以随便多调 —— 已经收起时直接返回（滚动/失焦/重画都会调到它） */
 export function closeCtxMenu() {
   const menu = $('ctxMenu');
+  document.getElementById('ctxScrim')?.remove();
   if (!menu || menu.hidden) return;
   menu.hidden = true;
   menu.innerHTML = '';
   // 触发行的高亮一并摘掉（combo 行开二级菜单时挂的 menu-open，见 fireItemMenu）
   document.querySelectorAll('.combo-item.menu-open').forEach((el) => el.classList.remove('menu-open'));
+}
+
+/**
+ * 手机端 action sheet 的蒙层（`#ctxScrim`，样式见 mobile.css §16.12）。
+ *
+ * 为什么是**真元素**而不是菜单的 `::before`：`.ctx-menu` 是 `position:fixed` + `z-index`
+ * 自成的层叠上下文，负 z-index 的伪元素会画在它**自己的背景之上** —— 白底被自己的蒙层
+ * 压成 #999，弹窗跟背景糊成一片（2026-11-11 用户："这个窗口怎么这么不明显"）。
+ *
+ * 收起走 `click` 而不是 `mousedown`：mousedown 就摘掉的话，紧接着那一下 click 会落到底下
+ * 的页面上（看着像"关弹窗顺手点开了某个条目"）。mousedown 全局收起那条见 app.mjs，
+ * 那边也要跳过 #ctxScrim，别抢在它前面。
+ */
+function showCtxScrim() {
+  if (document.getElementById('ctxScrim')) return;
+  const el = document.createElement('div');
+  el.id = 'ctxScrim';
+  el.className = 'ctx-scrim';
+  el.addEventListener('click', () => closeCtxMenu());
+  document.body.append(el);
 }
 
 export function createDateTimePick({ mount, value = '', onChange = () => {} }) {
@@ -797,16 +819,24 @@ export function createDateTimePick({ mount, value = '', onChange = () => {} }) {
 }
 
 
-/** 跑着的时候，顶部不显示枚举值「跑中」，显示成人话 */
-export const TYPING = '对方正在输入…';
-
-
+/*
+ * 页头徽章只显示**结果态**（完成 / 停止 / 失败），跑中一律不画（2026-11-11 用户：
+ * 「对方正在输入去掉，因为下面有了思考过程」）。
+ * 正在跑的时候，正文里那张「思考中 · 00:07」进度卡已经在实时说这一轮干到哪一步，
+ * 页头再挂一句同义的「对方正在输入…」只是把群名那行挤窄 —— 同一件事说两遍。
+ * 所以两处同源：画页头用 headerBadgeHtml（跑中返回 ''），跑起来后更新用 setHeaderBadge
+ * （跑中把已有徽章摘掉），别只改一处、留下"刷新前还在"的残影。
+ */
+export const headerBadgeHtml = (status) =>
+  !status || status === 'running' ? '' : `<span class="badge ${esc(status)}">${esc(statusText(status, 'run'))}</span>`;
 
 export function setHeaderBadge(status, label) {
-  const el = $('chatHead').querySelector('.badge');
+  const el = $('chatHead')?.querySelector('.badge');
+  if (status === 'running') { if (el) el.remove(); return; }
+  // 跑中时徽章已被摘掉，收尾这一刻（重画之前）没有节点可改 —— 300ms 后整页重画会补上
   if (!el) return;
   el.className = 'badge ' + status;
-  el.textContent = label ?? status;
+  el.textContent = label ?? statusText(status, 'run');
 }
 
 

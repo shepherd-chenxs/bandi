@@ -135,6 +135,29 @@ try {
     `${panel.status} ${panel.text.includes('/app.mjs') ? 'app' : 'login?'}`);
 
   /*
+   * ①-b 进门带 `to`（2026-11-14）：签票后 302 直达目标 —— 「聊天点文件 pill → 系统浏览器
+   * 没有会话票」的修法，/api/open 把目标包进进门链。`to` 只认**本站相对路径**：
+   * // 开头的外站、绕回进门路径自身，一律回落 /（开放重定向闸）。
+   * 已带有效会话的浏览器 → 只 302 不再发新票（/api/open 每次点击都走这条链，别灌会话表）。
+   */
+  console.log('\n①-b 进门带 to：直达目标；外站 / 绕回进门回落 /；已有票不重复发');
+  const fileTarget = '/api/workspace/file?path=.workbuddy%2Fpreview%2Fyuancang-hi.html';
+  const enterTo = await get(`/shell/enter?secret=${encodeURIComponent(SECRET)}&to=${encodeURIComponent(fileTarget)}`,
+    { Cookie: `bandi_sid=${sid}` });
+  check('带票进门 → 302 去目标（原样带 query）、不再发新票',
+    enterTo.status === 302 && enterTo.headers.get('location') === fileTarget &&
+    !/bandi_sid=/.test(String(enterTo.headers.get('set-cookie'))),
+    `${enterTo.status} ${enterTo.headers.get('location')}`);
+  const openRedir = await get(`/shell/enter?secret=${encodeURIComponent(SECRET)}&to=${encodeURIComponent('//evil.example')}`,
+    { Cookie: `bandi_sid=${sid}` });
+  check('// 开头（外站）→ 回落 /', openRedir.status === 302 && openRedir.headers.get('location') === '/',
+    openRedir.headers.get('location'));
+  const selfRedir = await get(`/shell/enter?secret=${encodeURIComponent(SECRET)}&to=${encodeURIComponent('/shell/enter?secret=again')}`,
+    { Cookie: `bandi_sid=${sid}` });
+  check('绕回进门路径自身 → 回落 /', selfRedir.status === 302 && selfRedir.headers.get('location') === '/',
+    selfRedir.headers.get('location'));
+
+  /*
    * ② 会话是 shell 档：空闲闸按天（不是 30 分钟）—— 用户"过一晚回来"还能用
    *   顺带钉住 hub 档没被 shell 档带偏（2026-11-10 复审抓过：hub 绝对闸被写成 12 天）。
    */
@@ -168,6 +191,36 @@ try {
   // POST 单独打一枪，确认只开 GET（get() 固定 GET）
   const postRes = await fetch(BASE + `/shell/enter?secret=${encodeURIComponent(SECRET)}`, { method: 'POST', redirect: 'manual' });
   check('POST 不进门（只开 GET）', postRes.status !== 302, `${postRes.status}`);
+
+  /*
+   * ③-b /api/open 的本机闸（2026-11-14 修）：默认 0.0.0.0 绑定**也算本机** ——
+   * 旧守卫只认 127.0.0.1/localhost，桌面点文件 pill 全被误判 E2060「服务不在本机」。
+   * 带会话 POST：先撞"URL 不合法 / 非班底地址"（说明过了本机闸、落到参数校验，
+   * 不会真拉起浏览器）；真开浏览器那步不端到端跑 —— 冒烟不该开窗。
+   */
+  console.log('\n③-b /api/open：0.0.0.0 绑定算本机（旧守卫在这里误判 E2060）');
+  const CSRF = 'smoke-csrf-value';
+  const postOpen = async (url) => {
+    const r = await fetch(BASE + '/api/open', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Cookie: `bandi_sid=${sid}; bandi_csrf=${CSRF}`,
+        'x-bandi-csrf': CSRF,
+        'X-Bandi': '1',
+      },
+      body: JSON.stringify({ url }),
+      signal: AbortSignal.timeout(8000),
+    });
+    return { status: r.status, json: await r.json().catch(() => null) };
+  };
+  const badUrl = await postOpen('');
+  check('空 URL → 过了本机闸、落到 400 参数校验（不是 403 服务不在本机）',
+    badUrl.status === 400 && badUrl.json?.code === 'E2060' && /URL 不合法/.test(badUrl.json?.error ?? ''),
+    JSON.stringify(badUrl.json));
+  const evil = await postOpen('http://evil.example/x');
+  check('非班底地址 → 400 只许开自己的（也不真开）',
+    evil.status === 400 && /只允许打开班底自己的地址/.test(evil.json?.error ?? ''), JSON.stringify(evil.json));
 
   /*
    * ④ 反代形态（X-Forwarded-For / X-Real-IP / Forwarded）即使知道 secret 也不认

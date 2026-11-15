@@ -193,7 +193,19 @@ export function updatePersona(id, fields) {
   );
   // 指令真的改了 → 作废他的成员会话：身份只在会话第一次建立时注入，
   // 不清的话他带着旧指令继续跑（自建员工走详情页改指令的这条路，专家走 syncHiredExperts）
-  if (next.instructions !== current.instructions) resetPersonaSessions(id);
+  //
+  // 运行时 / 权限档真的变了 → 同样作废（2026-11-13 实报）：权限档每轮 spawn 都按新值传
+  //（CLI 侧立刻生效），但旧 CLI 会话的记忆里堆着**旧档下的失败结论**（"命令被拒"、
+  // "没有工具"、"连不上"）——--resume 续上来，模型把这些旧账当现状复述，权限升了也
+  // "还是连不上"（马超 r-97f4c37c：已经 bypassPermissions，零工具调用回旧话）。
+  // 会话清掉，下一轮按 firstTime 重开，身份/合同按新档重新注入。
+  if (
+    next.instructions !== current.instructions ||
+    next.runtime !== current.runtime ||
+    next.sandbox !== current.sandbox
+  ) {
+    resetPersonaSessions(id);
+  }
   return { ...current, ...next };
 }
 

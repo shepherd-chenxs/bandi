@@ -261,7 +261,7 @@ check('群助手正忙 → 这次没派出去，原话如实记', teamRun.ok ===
 const teamCard = store.listProjectTasks(projSmoke.id).find((t) => t.assigneeGroupId === grpId);
 check(
   '卡建出来了：挂在群上、标题是任务名、退回「待办」且标了排队',
-  !!teamCard && teamCard.title === '定时协作' && teamCard.status === '待办' && !!teamCard.queuedAt,
+  !!teamCard && teamCard.title === '定时协作' && teamCard.status === 'todo' && !!teamCard.queuedAt,
   JSON.stringify({ status: teamCard?.status, q: teamCard?.queuedAt }),
 );
 // 节拍扫过一遍：群卡的排队标记必须还在 —— 2026-11-11 修的回归点（原来群卡会被摘掉标记、再也不试）
@@ -310,7 +310,7 @@ try {
   const pr12 = store.getProjectTaskByExternalKey(project.id, 'pr:12');
   const is5 = store.getProjectTaskByExternalKey(project.id, 'issue:5');
   check('PR 卡存在且带 pr 字段', !!pr11 && pr11.prRepo === 'smoke/demo' && pr11.prNumber === 11 && pr11.prState === 'open');
-  check('卡上标明是值班卡 + 待办', pr11?.source === 'repo' && pr11?.status === '待办');
+  check('卡上标明是值班卡 + 待办', pr11?.source === 'repo' && pr11?.status === 'todo');
   check('标题/描述写清是谁提的、该跑什么', /alice/.test(pr11?.description ?? '') && /check-pr/.test(pr11?.description ?? ''));
   check('草稿也标出来', /草稿/.test(pr12?.description ?? ''), pr12?.description?.split('\n')[0]);
   check('issue 卡没有 PR 字段', !!is5 && !is5.prRepo);
@@ -321,12 +321,12 @@ try {
   check('再巡检一次：不重复建卡、也不算更新', out2.created === 0 && out2.updated === 0, out2.summary);
 
   // 人把卡拖到「进行中」→ PR 被合并 → 巡检应该把它收成「待验收」
-  store.updateProjectTask(pr11.id, { status: '进行中' });
+  store.updateProjectTask(pr11.id, { status: 'doing' });
   merged = true;
   const out3 = await prWatch.prScan({ config: {} });
   const after = store.getProjectTask(pr11.id);
   check('合并后 prState 变 merged', after.prState === 'merged', String(after.prState));
-  check('「进行中」→「待验收」（不直接已完成）', after.status === '待验收', after.status);
+  check('「进行中」→「待验收」（不直接已完成）', after.status === 'review', after.status);
   check('结论里报了状态变化', /PR 状态变化 1 张/.test(out3.summary), out3.summary);
   check('已合并的 PR 不会因为不在 open 列表里就被删卡', !!store.getProjectTask(pr11.id));
 

@@ -1,0 +1,414 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>「我的」页重设计 · 2026-11-11</title>
+<!--
+  「我的」页（手机形态）重设计 · 三方对照稿（2026-11-11 22:1x 用户："这个页面重新设计一下"）
+
+  左：现状（≈ apps/web/mobile.css §15b + settings.mjs openMe 当前线上）
+  中：方案 A「两组一页」—— 渐变头保留，三张单行卡收成两张，页脚收尾
+  右：方案 B「档案卡」—— 身份做成一张卡（账号/设备成 chip），设置全部收进一张卡
+
+  这是**设计原型**，不是产品代码。定了再落到 settings.mjs + mobile.css。
+
+  现状的六个问题（改法逐条对应到方案里）：
+    ① 三个「组头 + 单行卡」重复三次，每张卡只有一行，页面被切碎、密度极低；
+    ② 「设置」当组名又当行名，同一个词在相邻两行写了两遍；
+    ③ 信箱是一颗 24px 裸图标孤悬右上，跟文字块没有任何关系 —— 看不出它是按钮，
+       也没有未读锚点（只有一个 6px 点）；
+    ④ 主题分段挤在右端（三格各 ~52px），label 与控件像两件事，触控格偏小；
+    ⑤ 页面下方 40% 是空白，没有收尾（没有版本、没有退出），像没画完；
+    ⑥ 全页只有头像一处彩色，其余灰白，层级全靠留白撑。
+-->
+<style>
+/* ───────────────────────── 基础 ───────────────────────── */
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
+               "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  background: #ececea;
+  color: #16181c;
+  -webkit-font-smoothing: antialiased;
+  padding: 26px 24px 60px;
+}
+html[data-theme="dark"] body { background: #0d0e10; color: #e8e9ea; }
+
+/* ───────────────────────── 工具条 ───────────────────────── */
+.bar {
+  max-width: 1320px; margin: 0 auto 24px;
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+}
+.bar h1 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: -.01em; }
+.bar .sub { font-size: 12.5px; opacity: .5; }
+.bar .sp { flex: 1; }
+.segbtn { display: inline-flex; padding: 3px; gap: 2px; border-radius: 10px; background: rgba(0,0,0,.06); }
+html[data-theme="dark"] .segbtn { background: rgba(255,255,255,.08); }
+.segbtn button {
+  border: 0; background: transparent; color: inherit; cursor: pointer;
+  font: inherit; font-size: 12.5px; padding: 6px 13px; border-radius: 7px; opacity: .6;
+}
+.segbtn button.on { background: #fff; opacity: 1; box-shadow: 0 1px 3px rgba(0,0,0,.14); font-weight: 500; }
+html[data-theme="dark"] .segbtn button.on { background: #33353a; box-shadow: none; }
+
+/* ───────────────────────── 舞台 ───────────────────────── */
+.stage { display: flex; gap: 44px; justify-content: center; align-items: flex-start; flex-wrap: wrap; }
+figure { margin: 0; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+figcaption { font-size: 12px; letter-spacing: .06em; font-weight: 600; opacity: .62; }
+figcaption em { font-style: normal; opacity: .6; font-weight: 400; letter-spacing: 0; margin-left: 6px; }
+.notes { width: 390px; margin: 2px 0 0; padding: 0 2px; list-style: none; }
+.notes li {
+  font-size: 12.5px; line-height: 1.75; opacity: .62; padding-left: 12px; position: relative;
+}
+.notes li::before { content: ""; position: absolute; left: 0; top: 9px; width: 4px; height: 4px; border-radius: 50%; background: currentColor; opacity: .5; }
+
+/* ───────────────────────── 手机框 ───────────────────────── */
+.phone {
+  --pg: #f2f3f5; --sf: #fff; --sf2: rgba(120,128,142,.10);
+  --ln: rgba(20,22,26,.075); --ln2: rgba(20,22,26,.05);
+  --tx: #15171b; --dim: #8890a0; --dim2: #b3b9c4;
+  --ac: #2f62f0; --ac-soft: rgba(47,98,240,.10); --ava: #1c50b4; --bad: #e5484d;
+  position: relative; width: 390px; height: 844px; border-radius: 40px;
+  background: var(--pg); color: var(--tx); overflow: hidden;
+  box-shadow: 0 0 0 1px rgba(0,0,0,.08), 0 28px 56px -22px rgba(0,0,0,.28),
+              0 0 0 9px #fdfdfd, 0 0 0 10px #d9d9d9;
+}
+html[data-theme="dark"] .phone {
+  --pg: #0f1116; --sf: #191c22; --sf2: rgba(255,255,255,.075);
+  --ln: rgba(255,255,255,.08); --ln2: rgba(255,255,255,.05);
+  --tx: #e9eaec; --dim: #8d93a0; --dim2: #5d636e;
+  --ac: #5b8bff; --ac-soft: rgba(91,139,255,.14); --ava: #2a5fbf;
+  box-shadow: 0 0 0 1px rgba(255,255,255,.06), 0 28px 56px -22px rgba(0,0,0,.6),
+              0 0 0 9px #1b1c1f, 0 0 0 10px #2c2e33;
+}
+
+/* 状态栏 + 底部 tab（只为"像真机"，不参与设计） */
+.sbar {
+  height: 46px; padding: 0 24px 0 26px; display: flex; align-items: center;
+  justify-content: space-between; font-size: 14px; font-weight: 600; position: relative; z-index: 4;
+}
+.sbar .ic { display: flex; align-items: center; gap: 6px; opacity: .92; }
+.sbar .bat { width: 22px; height: 11px; border-radius: 3px; border: 1.2px solid currentColor; position: relative; }
+.sbar .bat::after { content: ""; position: absolute; left: 1.4px; top: 1.4px; bottom: 1.4px; width: 72%; border-radius: 1.5px; background: currentColor; }
+.tabs {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 66px;
+  display: grid; grid-template-columns: repeat(4, 1fr); align-items: center;
+  background: color-mix(in srgb, var(--sf) 88%, transparent);
+  border-top: 0.5px solid var(--ln);
+  -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px);
+  font-size: 10px; color: var(--dim); z-index: 3;
+}
+.tabs i { display: flex; flex-direction: column; align-items: center; gap: 3px; font-style: normal; }
+.tabs i.on { color: var(--ac); }
+.tabs svg { width: 22px; height: 22px; }
+
+/* ══════════════════════════════════════════════════════════
+   现状 · 尽量贴当前线上
+   ══════════════════════════════════════════════════════════ */
+.old .hero {
+  padding: 14px 20px 50px; display: flex; align-items: center; gap: 14px;
+  background:
+    radial-gradient(90% 76% at 80% -14%, rgba(47,98,240,.14), transparent 60%),
+    radial-gradient(130% 90% at 20% -22%, rgba(47,98,240,.22), transparent 56%),
+    var(--pg);
+}
+.ava { width: 64px; height: 64px; border-radius: 50%; flex: none; display: grid; place-items: center;
+       background: var(--ava); color: #fff; font-size: 26px; font-weight: 500; }
+.old .ava { box-shadow: 0 0 0 4px rgba(20,22,26,.07), 0 8px 22px rgba(28,80,180,.28); }
+.who { min-width: 0; }
+.who .nm { display: flex; align-items: center; gap: 8px; }
+.who .nm b { font-size: 21px; font-weight: 600; letter-spacing: -.2px; }
+.who .nm svg { width: 14px; height: 14px; color: var(--dim); opacity: .55; }
+.who .tel { display: block; margin-top: 3px; font-size: 13.5px; color: var(--dim);
+            font-variant-numeric: tabular-nums; letter-spacing: .3px; }
+.old .inbox { margin-left: auto; width: 30px; height: 30px; display: grid; place-items: center;
+              color: var(--dim); align-self: center; position: relative; }
+.old .inbox svg { width: 22px; height: 22px; }
+.old .inbox .dot { position: absolute; top: 3px; right: 4px; width: 6px; height: 6px; border-radius: 50%; background: var(--ac); }
+
+.body { padding: 0 20px; }
+.grp { margin-bottom: 22px; }
+.grp.lead { margin-top: -36px; }
+.gl { font-size: 13px; color: var(--dim); margin: 0 0 7px 2px; }
+.card { background: var(--sf); border-radius: 12px; overflow: hidden; box-shadow: 0 0 0 1px var(--ln); }
+.row { display: flex; align-items: center; gap: 12px; min-height: 58px; padding: 8px 16px; position: relative; }
+.row + .row::before { content: ""; position: absolute; top: 0; left: 16px; right: 0; height: 0.5px; background: var(--ln); }
+.k { font-size: 16px; flex: none; }
+.v { margin-left: auto; font-size: 15px; color: var(--dim); white-space: nowrap; overflow: hidden;
+     text-overflow: ellipsis; max-width: 60%; }
+.v.mono { font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: 13.5px; letter-spacing: -.2px; }
+.chev { margin-left: 4px; color: var(--dim2); font-size: 18px; line-height: 1; font-style: normal; }
+.tseg { margin-left: auto; display: flex; gap: 2px; padding: 2px; border-radius: 9px; background: var(--sf2); }
+.tseg span { font-size: 13px; line-height: 1; padding: 10px 11px; border-radius: 7px; color: var(--dim); }
+.tseg span.on { background: var(--sf); color: var(--tx); font-weight: 500; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+
+/* ══════════════════════════════════════════════════════════
+   方案 A · 两组一页
+   ══════════════════════════════════════════════════════════ */
+.a .hero {
+  padding: 14px 20px 54px; display: flex; align-items: center; gap: 14px;
+  background:
+    radial-gradient(90% 76% at 80% -14%, rgba(47,98,240,.14), transparent 60%),
+    radial-gradient(130% 90% at 20% -22%, rgba(47,98,240,.22), transparent 56%),
+    var(--pg);
+}
+/* ① 信箱：裸图标 → 胶囊按钮
+   一颗 22px 的图标贴在渐变上，既不像按钮也没有"有几条"的信息。改成
+   surface 底 + hairline 的胶囊（图标 18 + 未读数），与卡面同一套语汇，
+   一眼是"能点的东西"，未读为 0 时只剩图标、宽度自适应收起。 */
+.a .inbox-pill {
+  margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 5px;
+  height: 34px; padding: 0 11px 0 9px; border-radius: 999px;
+  background: color-mix(in srgb, var(--sf) 84%, transparent);
+  box-shadow: 0 0 0 0.5px var(--ln), 0 2px 8px rgba(20,22,26,.05);
+  color: var(--tx); font-size: 12.5px; font-weight: 600;
+}
+.a .inbox-pill svg { width: 18px; height: 18px; opacity: .8; }
+.a .inbox-pill b { font-variant-numeric: tabular-nums; color: var(--ac); }
+
+/* ② 外观卡：label 收窄，分段吃掉剩余宽度（三格等宽 ≈ 88px，比原来 52px 好点得多） */
+.a .theme-row { display: flex; align-items: center; gap: 14px; padding: 12px 14px 12px 16px; }
+.a .theme-row .k { font-size: 15px; color: var(--dim); flex: none; }
+.a .tseg.wide { margin-left: 0; flex: 1; display: grid; grid-template-columns: repeat(3, 1fr); }
+.a .tseg.wide span { text-align: center; padding: 9px 0; font-size: 13px; }
+.a .gl.tight { margin: 0 0 7px 2px; }
+.a .foot { position: absolute; left: 0; right: 0; bottom: 84px; text-align: center; font-size: 11.5px; color: var(--dim2);
+           letter-spacing: .02em; font-variant-numeric: tabular-nums; }
+
+/* ══════════════════════════════════════════════════════════
+   方案 B · 档案卡
+   ══════════════════════════════════════════════════════════ */
+/* ③ 身份做成一张卡：渐变收到卡内上半，头像 56 挪到卡内左上，
+   名字 22 起第二行，账号与设备落成两枚 chip —— "我是谁 / 我在哪台机器"
+   变成一张可读的档案，不再靠一层全宽辉光暗示。 */
+.b .hero-card {
+  margin: 10px 0 0; border-radius: 18px; overflow: hidden; position: relative;
+  background:
+    radial-gradient(120% 100% at 88% -30%, rgba(47,98,240,.18), transparent 62%),
+    var(--sf);
+  box-shadow: 0 0 0 0.5px var(--ln), 0 10px 30px -18px rgba(20,22,26,.35);
+  padding: 16px;
+}
+.b .hc-top { display: flex; align-items: flex-start; gap: 13px; }
+.b .ava.sm { width: 56px; height: 56px; font-size: 23px; }
+.b .who .nm b { font-size: 22px; }
+.b .chips { display: flex; gap: 6px; margin-top: 13px; flex-wrap: wrap; }
+.chip { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px;
+        border-radius: 7px; font-size: 11.5px; color: var(--dim); background: var(--sf2); }
+.chip.ac { color: var(--ac); background: var(--ac-soft); font-weight: 500; }
+.chip svg { width: 12px; height: 12px; }
+.b .inbox-pill {
+  margin-left: auto; flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 36px; height: 36px; border-radius: 50%; color: var(--tx); position: relative;
+  background: color-mix(in srgb, var(--sf) 70%, transparent); box-shadow: 0 0 0 0.5px var(--ln);
+}
+.b .inbox-pill svg { width: 19px; height: 19px; opacity: .85; }
+.b .inbox-pill b {
+  position: absolute; top: -3px; right: -3px; min-width: 16px; height: 16px; padding: 0 4px;
+  border-radius: 999px; background: var(--bad); color: #fff; font-size: 10px; line-height: 16px;
+  text-align: center; font-weight: 600;
+}
+.b .one { margin-top: 16px; }
+/* 主题行不是 .row，卡内第一条 hairline 要自己补（否则主题与"当前设备"之间是虚的） */
+.b .one .theme-row { position: relative; }
+.b .one .theme-row::after { content: ""; position: absolute; left: 14px; right: 0; bottom: 0; height: 0.5px; background: var(--ln); }
+.b .theme-row { display: flex; align-items: center; gap: 12px; padding: 11px 14px; }
+.b .theme-row .k { font-size: 15px; }
+.b .tseg.wide { margin-left: auto; display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px;
+                padding: 2px; border-radius: 9px; background: var(--sf2); }
+.b .tseg.wide span { text-align: center; padding: 8px 12px; font-size: 12.5px; }
+.b .foot { position: absolute; left: 0; right: 0; bottom: 84px; text-align: center; font-size: 11.5px; color: var(--dim2); }
+</style>
+</head>
+<body>
+
+<div class="bar">
+  <h1>「我的」页重设计</h1>
+  <span class="sub">手机形态 · 390×844 · 2026-11-11</span>
+  <span class="sp"></span>
+  <div class="segbtn" id="themeBtn">
+    <button data-t="light" class="on">浅色</button>
+    <button data-t="dark">深色</button>
+  </div>
+</div>
+
+<div class="stage">
+
+  <!-- ───────────── 现状 ───────────── -->
+  <figure>
+    <figcaption>现状<em>当前线上</em></figcaption>
+    <div class="phone old">
+      <div class="sbar"><span>22:14</span><span class="ic"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9a15 15 0 0 1 18 0M6 13a10 10 0 0 1 12 0M9.5 16.5a5 5 0 0 1 5 0"/></svg><span class="bat"></span></span></div>
+
+      <div class="hero">
+        <div class="ava">陈</div>
+        <div class="who">
+          <div class="nm"><b>陈向森</b>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4.5 19.5h4l9.6-9.6a2.1 2.1 0 0 0-3-3L5.5 16.5v3z"/></svg>
+          </div>
+          <span class="tel">152 6416 0947</span>
+        </div>
+        <span class="inbox">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5.5" width="18" height="13" rx="2"/><path d="M3.6 6.6 12 13l8.4-6.4"/><path d="M3 16.5l5.4-4.2M21 16.5l-5.4-4.2"/></svg>
+          <i class="dot"></i>
+        </span>
+      </div>
+
+      <div class="body">
+        <div class="grp lead">
+          <div class="gl">外观</div>
+          <div class="card">
+            <div class="row"><span class="k">主题</span>
+              <span class="tseg"><span>浅色</span><span>深色</span><span class="on">跟随系统</span></span>
+            </div>
+          </div>
+        </div>
+        <div class="grp">
+          <div class="gl">设备</div>
+          <div class="card">
+            <div class="row"><span class="k">当前设备</span><span class="v mono">DESKTOP-ME3RQ97</span><i class="chev">›</i></div>
+          </div>
+        </div>
+        <div class="grp">
+          <div class="gl">设置</div>
+          <div class="card">
+            <div class="row"><span class="k">设置</span><i class="chev">›</i></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="tabs">
+        <i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3.5" y="3.5" width="7" height="7" rx="1.6"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.6"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.6"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.6"/></svg>工作台</i>
+        <i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="9" cy="8.2" r="3.2"/><path d="M3.6 19c0-2.9 2.4-5 5.4-5s5.4 2.1 5.4 5"/><circle cx="17.2" cy="9.4" r="2.3"/></svg>通讯录</i>
+        <i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 5.5h16v10H9l-5 4z"/></svg>会话</i>
+        <i class="on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="3.6"/><path d="M4.9 20.2c.7-3.6 3.6-5.5 7.1-5.5s6.4 1.9 7.1 5.5"/></svg>我的</i>
+      </div>
+    </div>
+    <ul class="notes">
+      <li>三段「组头 + 单行卡」，页面被切成三截，卡内只有一行</li>
+      <li>「设置」写了两遍：上面是组名，下面又是行名</li>
+      <li>信箱是 22px 裸图标，悬在右上角，不像按钮</li>
+    </ul>
+  </figure>
+
+  <!-- ───────────── 方案 A ───────────── -->
+  <figure>
+    <figcaption>方案 A<em>两组一页 · 改动最小</em></figcaption>
+    <div class="phone a">
+      <div class="sbar"><span>22:14</span><span class="ic"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9a15 15 0 0 1 18 0M6 13a10 10 0 0 1 12 0M9.5 16.5a5 5 0 0 1 5 0"/></svg><span class="bat"></span></span></div>
+
+      <div class="hero">
+        <div class="ava">陈</div>
+        <div class="who">
+          <div class="nm"><b>陈向森</b>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4.5 19.5h4l9.6-9.6a2.1 2.1 0 0 0-3-3L5.5 16.5v3z"/></svg>
+          </div>
+          <span class="tel">152 6416 0947</span>
+        </div>
+        <button class="inbox-pill">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5.5" width="18" height="13" rx="2"/><path d="M3.6 6.6 12 13l8.4-6.4"/><path d="M3 16.5l5.4-4.2M21 16.5l-5.4-4.2"/></svg>
+          <b>2</b>
+        </button>
+      </div>
+
+      <div class="body">
+        <div class="grp lead">
+          <div class="card">
+            <div class="theme-row">
+              <span class="k">主题</span>
+              <span class="tseg wide"><span>浅色</span><span>深色</span><span class="on">跟随系统</span></span>
+            </div>
+          </div>
+        </div>
+        <div class="grp">
+          <div class="gl tight">通用</div>
+          <div class="card">
+            <div class="row"><span class="k">当前设备</span><span class="v mono">DESKTOP-ME3RQ97</span><i class="chev">›</i></div>
+            <div class="row"><span class="k">设置</span><span class="v">机器 · 缓存 · 退出</span><i class="chev">›</i></div>
+          </div>
+        </div>
+        <div class="foot">班底 v1.5.21</div>
+      </div>
+
+      <div class="tabs">
+        <i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3.5" y="3.5" width="7" height="7" rx="1.6"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.6"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.6"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.6"/></svg>工作台</i>
+        <i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="9" cy="8.2" r="3.2"/><path d="M3.6 19c0-2.9 2.4-5 5.4-5s5.4 2.1 5.4 5"/><circle cx="17.2" cy="9.4" r="2.3"/></svg>通讯录</i>
+        <i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 5.5h16v10H9l-5 4z"/></svg>会话</i>
+        <i class="on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="3.6"/><path d="M4.9 20.2c.7-3.6 3.6-5.5 7.1-5.5s6.4 1.9 7.1 5.5"/></svg>我的</i>
+      </div>
+    </div>
+    <ul class="notes">
+      <li>设备 + 设置并成一张「通用」卡，组名只说一次</li>
+      <li>信箱变胶囊按钮（图标 + 未读数），未读 0 时收起为纯图标</li>
+      <li>主题分段吃掉整行剩余宽度，三格各 ≈ 88px，比 52px 好点</li>
+      <li>页脚一行版本号，给页面收口，空白不再是"没画完"</li>
+    </ul>
+  </figure>
+
+  <!-- ───────────── 方案 B ───────────── -->
+  <figure>
+    <figcaption>方案 B<em>档案卡 · 一次改到位</em></figcaption>
+    <div class="phone b">
+      <div class="sbar"><span>22:14</span><span class="ic"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9a15 15 0 0 1 18 0M6 13a10 10 0 0 1 12 0M9.5 16.5a5 5 0 0 1 5 0"/></svg><span class="bat"></span></span></div>
+
+      <div class="body">
+        <div class="hero-card">
+          <div class="hc-top">
+            <div class="ava sm">陈</div>
+            <div class="who">
+              <div class="nm"><b>陈向森</b>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4.5 19.5h4l9.6-9.6a2.1 2.1 0 0 0-3-3L5.5 16.5v3z"/></svg>
+              </div>
+              <span class="tel">152 6416 0947</span>
+            </div>
+            <button class="inbox-pill">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5.5" width="18" height="13" rx="2"/><path d="M3.6 6.6 12 13l8.4-6.4"/><path d="M3 16.5l5.4-4.2M21 16.5l-5.4-4.2"/></svg>
+              <b>2</b>
+            </button>
+          </div>
+          <div class="chips">
+            <span class="chip ac"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3.2 19 6v5.4c0 4.2-2.8 7.4-7 9.4-4.2-2-7-5.2-7-9.4V6z"/></svg>中枢账号</span>
+            <span class="chip">DESKTOP-ME3RQ97</span>
+          </div>
+        </div>
+
+        <div class="card one">
+          <div class="theme-row">
+            <span class="k">主题</span>
+            <span class="tseg wide"><span>浅色</span><span>深色</span><span class="on">跟随系统</span></span>
+          </div>
+          <div class="row"><span class="k">当前设备</span><span class="v mono">DESKTOP-ME3RQ97</span><i class="chev">›</i></div>
+          <div class="row"><span class="k">设置</span><span class="v">机器 · 缓存 · 退出</span><i class="chev">›</i></div>
+        </div>
+
+        <div class="foot">班底 v1.5.21</div>
+      </div>
+
+      <div class="tabs">
+        <i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3.5" y="3.5" width="7" height="7" rx="1.6"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.6"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.6"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.6"/></svg>工作台</i>
+        <i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="9" cy="8.2" r="3.2"/><path d="M3.6 19c0-2.9 2.4-5 5.4-5s5.4 2.1 5.4 5"/><circle cx="17.2" cy="9.4" r="2.3"/></svg>通讯录</i>
+        <i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 5.5h16v10H9l-5 4z"/></svg>会话</i>
+        <i class="on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="3.6"/><path d="M4.9 20.2c.7-3.6 3.6-5.5 7.1-5.5s6.4 1.9 7.1 5.5"/></svg>我的</i>
+      </div>
+    </div>
+    <ul class="notes">
+      <li>身份做成一张卡：渐变收进卡内，账号 / 设备落成两枚 chip</li>
+      <li>设置全部收进一张卡（主题 · 当前设备 · 设置），没有组头</li>
+      <li>信箱是圆形按钮 + 未读角标，压住卡角，位置稳定</li>
+      <li>三行一眼看完，页面不再有三段空隙</li>
+    </ul>
+  </figure>
+
+</div>
+
+<script>
+  document.getElementById('themeBtn').addEventListener('click', (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    document.documentElement.dataset.theme = b.dataset.t;
+    [...e.currentTarget.children].forEach((x) => x.classList.toggle('on', x === b));
+  });
+</script>
+</body>
+</html>

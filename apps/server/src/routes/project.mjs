@@ -13,6 +13,8 @@ import * as git from '../git-repos.mjs';
 import { verifyRunCredential } from '../agent-auth.mjs';
 // 岗位权限（2026-11-11）：运行钥匙能改哪些卡，除了归属还要看岗位有没有 card.advance
 import { can } from '../roles.mjs';
+// 中文被 shell 压成问号（2026-11-12 实报）：卡评论区和建卡通道同一套判据
+import { looksMangled, mangledMessage } from '../text-guard.mjs';
 import { ATT_MAX, safeName, validateAtts, uploadsRoot } from './conversation.mjs';
 
 export async function handleProject(req, res, url) {
@@ -56,6 +58,26 @@ export async function handleProject(req, res, url) {
      * 就认下他是谁、记下他建卡时所在的会话，卡片回执（notifyCardOwner）才有"该通知谁"的依据。
      * 人从浏览器建卡没有钥匙 → 两列留空，行为与从前一字不差。
      */
+    /* 中文被 shell 压成问号（2026-11-12 实报）：走这条口的员工也会中招（同一个 PowerShell 坑），
+     * 所以这里同样挡 —— 不然乱码卡只是换了个入口照旧建出来。 */
+    if (looksMangled(body?.title)) return fail(res, 400, 'E2075', mangledMessage('标题', '建卡'));
+    if (looksMangled(body?.description)) return fail(res, 400, 'E2075', mangledMessage('描述', '建卡'));
+    /*
+     * **状态只收码**（2026-11-12）：以前 `createProjectTask` 对不认识的状态**静默落回 `todo`**
+     * —— 现在状态只有码，中文名写进来会被悄悄吞成「待办」（把一张「已完成」建成待办，比 400 更坏）。
+     * 所以在这一层就挡：认不出 → 400，并告诉他该写哪个码。
+     */
+    if (body?.status != null && body.status !== '' && !store.isTaskStatus(body.status)) {
+      const hit = Object.entries(store.TASK_LABEL).find(([, label]) => label === String(body.status).trim());
+      return fail(
+        res,
+        400,
+        'E2058',
+        `状态只收码（idea / todo / doing / review / blocked / failed / done / cancelled），收到「${body.status}」${
+          hit ? ` —— 「${body.status}」是显示名，请写 "${hit[0]}"` : ''
+        }`,
+      );
+    }
     const cred = verifyRunCredential(req.headers['x-bandi-run-token']);
     const originRun = cred ? store.getRunRow(cred.runId) : null;
     try {
@@ -107,6 +129,9 @@ export async function handleProject(req, res, url) {
   if (req.method === 'PATCH' && taskOne) {
     const id = decodeURIComponent(taskOne[1]);
     const body = await readBody(req);
+    // 同一类坑（2026-11-12）：改卡也会把中文换成问号 —— 别让一张好卡被"改成看不懂"
+    if (looksMangled(body?.title)) return fail(res, 400, 'E2075', mangledMessage('标题', '改卡'));
+    if (looksMangled(body?.description)) return fail(res, 400, 'E2075', mangledMessage('描述', '改卡'));
     /*
      * **运行钥匙改卡**（2026-11-09 全员群实报）：项目经理在群里干活时只能"建卡 + 读台账"，
      * 想退待办/重跑/改派/取消却没有通道 —— 回话里就只剩一句 "Next: …" 然后停住，活半途而废。
@@ -138,7 +163,7 @@ export async function handleProject(req, res, url) {
          *   · 雇主派给你的主卡（团队协作）→ 你只能提交「待验收」，**不能替雇主点完成**。
          * 补记接口里建的卡 createdBy 一定是你，所以补记可以写「已完成」——这是同一条规则。
          */
-        if (String(body?.status ?? '') === '已完成' && card.createdBy !== runPersona.id) {
+        if (String(body?.status ?? '') === 'done' && card.createdBy !== runPersona.id) {
           return fail(res, 403, 'E4034', '这张卡是雇主派的（主卡）—— 你只能提交「待验收」等雇主验收，不能替他点「已完成」');
         }
       }
@@ -252,6 +277,12 @@ export async function handleProject(req, res, url) {
      * 档位归一在下面照常做：mode 三档全认，老客户端的 note:true 也照旧认。
      */
     const text = String(body.text ?? '').trim();
+    /*
+     * 同一类坑（2026-11-12 建卡实报）：调用方把中文塞进命令行、按 ASCII 编 body，中文全变「?」。
+     * 评论区也会中招（员工用 PowerShell 给卡回话），一段看不懂的问号投给执行人比拒掉更糟 ——
+     * 这里和建卡通道用同一个判据、同一个错误码（E2075），改法写在错误话里。
+     */
+    if (looksMangled(text)) return fail(res, 400, 'E2075', mangledMessage('评论', '发言'));
     if (task.assigneeGroupId) return fail(res, 400, 'E1061', '这张卡是团队协作（派给群）—— 往来在群里跟群助手说；卡评论区只留给指定了执行人的卡');
     if (!task.assigneePersonaId) return fail(res, 400, 'E1061', '先指定执行人 —— 评论区是跟他讨论的');
     const persona = store.getPersona(task.assigneePersonaId);

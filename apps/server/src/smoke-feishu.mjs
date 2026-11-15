@@ -198,7 +198,7 @@ await wait(120);
 const after = msgs(daliangConvId());
 check('私聊 → 直接落进大梁的 1:1 会话', after.length === before + 1, `before=${before} after=${after.length}`);
 check('原文照落（不含 @占位符）', after[after.length - 1]?.text === '看看今天的 PR，整理成一句话', after[after.length - 1]?.text);
-check('派出去了一次运行（撞了无运行时，当场失败收尾）', store.getConversation(daliangConvId())?.status === '失败', store.getConversation(daliangConvId())?.status);
+check('派出去了一次运行（撞了无运行时，当场失败收尾）', store.getConversation(daliangConvId())?.status === 'failed', store.getConversation(daliangConvId())?.status);
 check('事件帧回了 ack（payload {code:200}）', lastFakeWS.sent.slice(1).some((b) => { const f = feishu.decodeFrame(b); return f.headers.some((x) => x.key === 'type' && x.value === 'event') && Buffer.from(f.payload ?? []).toString().includes('"code":200'); }), String(lastFakeWS.sent.length));
 check('发了初始卡（进行中 · 大梁）', cards().some((c) => c.body?.receive_id === 'oc_dm' && JSON.parse(c.body.content).header.title.content === '大梁 · 进行中'), JSON.stringify(cards().map((c) => c.body?.receive_id)));
 check('凭据没进过 OpenAPI 请求（端点请求体里才有）', calls.every((c) => !(c.url.includes('/im/v1') && JSON.stringify(c.body ?? {}).includes('sk-abcdef'))));
@@ -245,7 +245,7 @@ const busyMsgs = msgs(daliangConvId());
 check('忙 → 消息照落库（不 409 丢消息）', busyMsgs.length === busyBefore + 1 && busyMsgs.at(-1)?.text === '这件等他忙完再干');
 check('忙 → 卡片说「已排队」', cards().some((c) => c.body?.content?.includes('已排队')), JSON.stringify(cards().at(-1)?.body?.content ?? '').slice(0, 120));
 check('忙 → 进了补派队列（会话空出来会自动开跑）', dispatch.queuedCountOf(daliangConvId()) === 1, String(dispatch.queuedCountOf(daliangConvId())));
-store.finishRun(busyRun.id, { status: '已停止' });
+store.finishRun(busyRun.id, { status: 'stopped' });
 
 /* 白名单：每个 bot 用**自己的** allowOpenIds 过滤 */
 feishu.savePersonaConfig(daliang.id, { appId: 'cli_0123456789abcdef', appSecret: '', enabled: false, allowOpenIds: ['ou_ok'] });

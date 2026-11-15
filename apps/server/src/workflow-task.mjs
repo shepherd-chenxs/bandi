@@ -64,7 +64,7 @@ export function runWorkflowTask({ job, config }) {
    */
   const step = started?.nodeName ? `第 ${started.visit ?? 1} 步「${started.nodeName}」` : '第一步';
   const how =
-    started?.taskStatus === '已阻塞' || started?.taskStatus === '失败'
+    started?.taskStatus === 'blocked' || started?.taskStatus === 'failed'
       ? `${step}卡住了：${clip(started.lastNote ?? '等人处理', 60)}`
       : started?.waiting && started.waiting !== '正在跑'
         ? `${step}${started.waiting}`

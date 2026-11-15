@@ -59,7 +59,10 @@ export function memberGridHTML(thread) {
     </div>`;
 
   const noHit = q && !list.length ? '<div class="mgrid-empty">没找到这个人</div>' : '';
-  return noHit + `<div class="mgrid" id="mgrid">${tiles}${tiles2}</div>`;
+  // 「没找到」和宫格包进同一个壳再整体输出（wireGroupSettings 的搜索只换这个壳）——
+  // 裸拼接的话 noHit 插在 #mgrid 前面，搜索时只换 #mgrid，旧的那条留在原地，
+  // 每敲一笔就多堆一条「没找到这个人」（2026-11-15 用户实报）。
+  return `<div id="mgridWrap">${noHit}<div class="mgrid" id="mgrid">${tiles}${tiles2}</div></div>`;
 }
 
 
@@ -224,12 +227,6 @@ export function groupSettingsHTML(thread, opts = {}) {
       </div>
       ${assistant && !assistantCanTeam ? '<div class="hint-line warn-line">这个群助手不能承接团队协作卡 —— 派给这个群的团队卡会被拒；换一个有「承接团队卡」权限的人（目前是项目经理岗）。</div>' : ''}
       <div class="info-row"><span>群主</span><b>${esc(meLabel)}（创建人）</b></div>
-      <div class="info-row"><span>成员数</span><b>${thread.members.length} 人</b></div>
-      <div class="hint-line">
-        ${proj
-          ? `群里的活都在 <b>${esc(proj.name)}</b> 的目录里干；派给群的卡直接落它的看板。`
-          : '不关联也能聊。关联后，群里派的活才落到某个项目的目录里。'}
-      </div>
     </div>
 
     ${opts.noDissolve ? '' : `
@@ -263,13 +260,15 @@ export function wireGroupSettings(thread, repaint, root) {
   if (rd) rd.onclick = () => dissolveGroup(thread);
   wireMemberGrid(thread, repaint, root);
 
-  // 搜索只重画宫格 —— 整块重画会把光标从搜索框里踢出去
+  // 搜索只重画宫格 —— 整块重画会把光标从搜索框里踢出去。
+  // 换的是 #mgridWrap（「没找到」+ 宫格的壳）：noHit 在 #mgrid **前面**，
+  // 只换 #mgrid 的话旧提示永远摘不掉，越搜堆得越多。
   const search = q('#drawerSearch');
   if (search) {
     search.oninput = (e) => {
       S.memberQuery = e.target.value;
-      const grid = q('#mgrid');
-      if (grid) grid.outerHTML = memberGridHTML(thread);
+      const wrap = q('#mgridWrap');
+      if (wrap) wrap.outerHTML = memberGridHTML(thread);
       wireMemberGrid(thread, repaint, root);
     };
   }
@@ -301,51 +300,67 @@ export async function openProjectLinkDialog(thread) {
   const cur = (S.groups ?? []).find((g) => g.id === gid)?.projectId ?? thread?.projectId ?? '';
   const projects = S.projects ?? [];
 
-  const rows = projects
-    .map((p) => {
-      const owner = projectOwner(p.id, gid);
-      const picked = p.id === cur;
-      const note = owner ? `已被「${owner.title}」关联` : p.root ?? '';
-      return `<button type="button" class="k-row${picked ? ' on' : ''}" data-pid="${esc(p.id)}"${
-        owner ? ' disabled title="一个项目只归一个群；要换先去那个群解除关联"' : ''
-      }>
-        <span>${esc(p.name || p.id)}</span>
-        <em>${esc(note)}</em>
-        ${picked ? '<span class="k-ok">✓</span>' : ''}
-      </button>`;
-    })
-    .join('');
+  /*
+   * 提示词撤了，换**搜索框**（2026-11-15）：项目一多，滚动找不如打两个字。
+   * 过滤只看项目名；已点选的 radio 在重画时不丢（pickedNow 跟着 change 走）；
+   * 「不关联」是特殊选项，永远固定在列表末尾，不参与过滤。
+   */
+  let pickedNow = cur;
+  const paintList = (q) => {
+    const query = String(q ?? '').trim().toLowerCase();
+    const hits = projects.filter((p) => !query || String(p.name || p.id).toLowerCase().includes(query));
+    const rows = hits
+      .map((p) => {
+        const owner = projectOwner(p.id, gid);
+        const note = owner ? `已被「${owner.title}」关联` : p.root ?? '';
+        return `<label class="member${owner ? ' off' : ''}">
+          <input type="radio" name="proj" value="${esc(p.id)}" ${p.id === pickedNow ? 'checked' : ''} ${owner ? 'disabled' : ''} />
+          <span>${esc(p.name || p.id)}</span><em>${esc(note)}</em>
+        </label>`;
+      })
+      .join('');
+    $('pList').innerHTML =
+      (rows || '<div class="dim" style="padding:10px 2px">没有名字带这个的项目</div>') +
+      '<label class="member"><input type="radio" name="proj" value="" /><span>不关联</span><em>群里派活用成员各自的目录</em></label>';
+  };
+  paintList('');
 
-  $('pList').innerHTML =
-    (rows || '<div class="dim" style="padding:10px 2px">还没有项目 —— 先去工作台建一个</div>') +
-    '<div class="k-sep"></div>' +
-    '<button type="button" class="k-row" data-pid=""><span>不关联</span><em>群里派活用成员各自的目录</em></button>';
-
-  $('pList').querySelectorAll('.k-row').forEach((b) => {
-    if (b.disabled) return;
-    b.onclick = async () => {
-      const pid = b.dataset.pid || '';
-      $('projLinkDlg').close();
-      if (pid === cur) return; // 点的就是当前这项：关掉即可，别白跑一次请求
-      try {
-        await api('/api/groups/' + encodeURIComponent(gid), {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ projectId: pid }),
-        });
-        // 改完统一走 refreshGroup：它会 load()、重画抽屉/群详情，正在看这段群会话时连群头一起重画
-        await refreshGroup(gid);
-        const p = projects.find((x) => x.id === pid);
-        toast(pid ? `已关联「${p?.name ?? pid}」` : '已解除关联');
-      } catch (err) {
-        toast(err.message, 'error');
-      }
-    };
+  // 选择跟着 change 走：搜索重画时不丢已点中的那个
+  $('pList').addEventListener('change', (e) => {
+    if (e.target.name === 'proj') pickedNow = e.target.value;
   });
+  $('projSearch').oninput = (e) => paintList(e.target.value);
+
+  /*
+   * **提交接线**（2026-11-15，改造成与换群助手同一套手感）：radio 选、「就它了」提交 ——
+   * 以前是点行即关，但 k-row 一条 CSS 都没有，弹窗里就是一列裸文本（用户实报"美化一下"）。
+   * 被占用的项目 disabled 不可选（占用群写在行说明里）。
+   */
+  $('pOk').onclick = async () => {
+    const pid = $('pList').querySelector('input[name="proj"]:checked')?.value ?? '';
+    $('projLinkDlg').close();
+    if (pid === cur) return; // 点的就是当前这项：关掉即可，别白跑一次请求
+    try {
+      await api('/api/groups/' + encodeURIComponent(gid), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId: pid }),
+      });
+      // 改完统一走 refreshGroup：它会 load()、重画抽屉/群详情，正在看这段群会话时连群头一起重画
+      await refreshGroup(gid);
+      const p = projects.find((x) => x.id === pid);
+      toast(pid ? `已关联「${p?.name ?? pid}」` : '已解除关联');
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  };
   $('projLinkDlg').showModal();
+  $('projSearch').focus(); // 打开就落在搜索框 —— 项目多的时候直接打字，不用先滚
 }
 
 
+
+let drawerMoreOutside = null; // 抽屉「⋯」点外面收起的监听（paintDrawer 每次重画先摘再挂）
 
 export function paintDrawer() {
   // 「聊天记录」和「群设置」共用这一个抽屉容器 —— 分流只在这一行。
@@ -355,8 +370,6 @@ export function paintDrawer() {
   const thread = S.drawerThread;
   if (!thread) return;
 
-  const assistant = thread.members.find((m) => m.personaId === thread.assistantPersonaId);
-
   $('drawer').innerHTML = `
     <div class="drawer-head">
       <b>群设置</b>
@@ -365,15 +378,38 @@ export function paintDrawer() {
     <div class="drawer-body">
       <div class="dcard group-card">
         <div class="avatar grp big">${esc(initial(thread.title))}</div>
+        <!-- 「群助手：X · N 人」去掉（2026-11-15 用户实报）：助手和人数在下面的
+             「群成员 N」「群助手」行里都有，三个地方说同一件事，纯重复。 -->
         <div class="who">
           <h3>${esc(thread.title)}</h3>
-          <div class="sub">群助手：${esc(assistant?.name ?? '—')} · ${thread.members.length} 人</div>
+        </div>
+        <!-- 「⋯」收解散入口（2026-11-15）：与群详情页的 hero-more 同一个模式 ——
+             破坏性动作收进菜单，点开才露；底部那行解散区随之隐藏（noDissolve）。 -->
+        <div class="hero-more">
+          <button type="button" class="hero-more-btn" id="drawerGMore" title="更多操作">⋯</button>
+          <div class="hero-more-menu" id="drawerGMoreMenu" hidden>
+            <button class="danger" id="drawerGDissolve">解散群聊</button>
+          </div>
         </div>
       </div>
-      ${groupSettingsHTML(thread)}
+      ${groupSettingsHTML(thread, { noDissolve: true })}
     </div>`;
 
   $('drawerClose').onclick = closeDrawer;
+  // 「⋯」菜单：点按钮开合；点菜单/按钮之外收起。抽屉每次重画都会重新接线 ——
+  // document 级的"点外面收起"监听先摘再挂，别一层层堆积。
+  const closeMore = () => { const m = $('drawerGMoreMenu'); if (m) m.hidden = true; };
+  $('drawerGMore').addEventListener('click', (e) => {
+    e.stopPropagation();
+    const m = $('drawerGMoreMenu');
+    if (m) m.hidden = !m.hidden;
+  });
+  if (drawerMoreOutside) document.removeEventListener('click', drawerMoreOutside);
+  drawerMoreOutside = (e) => {
+    if (!e.target.closest?.('.hero-more')) closeMore();
+  };
+  document.addEventListener('click', drawerMoreOutside);
+  $('drawerGDissolve').onclick = () => { closeMore(); dissolveGroup(thread); };
   wireGroupSettings(thread, paintDrawer, $('drawer'));
 }
 
@@ -673,17 +709,17 @@ export async function deleteSessionFromLog(c) {
 export function paintGroupDetail(group) {
   S.groupThread = group;
   S.groupThreadId = group.id;
-  // 左栏标题固定「通讯录」（不做面包屑，2026-10-20；右页头已去掉，名字/群助手/人数都在正文的 hero 里）
+  // 左栏标题固定「通讯录」（不做面包屑，2026-10-20；右页头已去掉，名字都在正文的 hero 里）
   setListTitle('通讯录');
-  const assistant = group.members.find((m) => m.personaId === group.assistantPersonaId);
 
   $('groupView').innerHTML = `
     <div class="detail-body">
       <div class="hero">
         <div class="avatar grp big">${esc(initial(group.title))}</div>
+        <!-- 「群助手：X · N 人」去掉（2026-11-15 用户实报，与群设置抽屉同一条口径）：
+             助手和人数在下面的「群成员 N」「群助手」行里都有，纯重复。 -->
         <div>
           <h2>${esc(group.title)}</h2>
-          <div class="sub">群助手：${esc(assistant?.name ?? '—')} · ${group.members.length} 人</div>
         </div>
         <!-- 「⋯」收解散入口（2026-10-20 用户要求）：破坏性动作别跟「发消息」平起平坐，
              也别平铺在页面底部 —— 收进菜单，点开才露。样式/交互沿用员工详情那套 hero-more -->

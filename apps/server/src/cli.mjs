@@ -341,7 +341,7 @@ async function doStop(promptOf = null) {
   if (!(await waitStopped())) {
     return yellow(`收掉了 ${r.stopped} 个进程，但端口 ${s.port} 还在应答 —— 可能刚被别的东西接手了，看一眼：bandi status`);
   }
-  return `${green('已停止')}（收了 ${r.stopped} 个进程）`;
+  return `${green('stopped')}（收了 ${r.stopped} 个进程）`;
 }
 
 async function doRestart(promptOf = null, { assumeYes = false } = {}) {

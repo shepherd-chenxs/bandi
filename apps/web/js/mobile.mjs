@@ -22,6 +22,7 @@
 import { load, setNav } from './state.mjs';
 import { $, S } from './core.mjs';
 import { closeDrawer } from './experts.mjs';
+import { back as stackBack, canGoUp, registerHomeUp, registerLayer } from './navstack.mjs';
 
 /* ---------------------------------------------------------------- ① 断点 */
 
@@ -124,7 +125,13 @@ $('listBody').addEventListener('click', (e) => {
   // 让它们走折叠的话，列表会被藏起来换成一页空的主区（2026-10-31）。
   // 设置页顶部那条「← 我的」同理（2026-11-01）：它是回上一级，不是进详情。
   if (row.matches('[data-cv], [data-cv-dept], [data-me-back]')) return;
-  const title = rowTitle(row);
+  /*
+   * 信箱通知（`[data-notice]`）的返回栏写「详情」（2026-11-11 用户截图）。
+   * 通知标题是整句告警，塞进返回栏只会被截成半句、正文里又原样重复一次；
+   * 返回栏这一格回答的是"你在哪一层"，不是"这是哪一条"。
+   * 会话/员工/群那几类照旧用人名或标题 —— 那是用户自己要求放上去的。
+   */
+  const title = row.matches('[data-notice]') ? '详情' : rowTitle(row);
   requestAnimationFrame(() => enterDetail(title));
 });
 
@@ -180,6 +187,13 @@ document.addEventListener('keydown', (e) => {
   // 任务卡的「讨论抽屉」（projects.mjs 的 .tc-sheet）同理：它是卡页的下一级，
   // 退回来只该收它自己 —— 这里放行，由 projects.mjs 的 Esc 监听收（2026-11-05）
   if (document.body.classList.contains('tc-sheet-open')) return;
+  // 「我的 › 设置」子页（settings.mjs 的 openMeSet）也是"自己收自己那一格"：
+  // 走事件回去（渲染模块不反向 import 本文件），这里只认领 Esc 别落到详情态上
+  if (document.body.classList.contains('mb-me-set')) {
+    e.preventDefault();
+    document.dispatchEvent(new CustomEvent('mb-me-set-leave'));
+    return;
+  }
   if (document.body.classList.contains('mb-detail-open')) {
     e.preventDefault();
     // 同上：流程实例页的收场归 flowpages（回上一层，不是翻出列表）
@@ -205,6 +219,9 @@ window.addEventListener('popstate', (e) => {
   // 同上：任务卡的讨论抽屉（.tc-sheet）也自己收自己那一格（projects.mjs 的 popstate）。
   // 漏了这行，返回键会把底下的卡页一起收掉 —— 一次返回从抽屉直接掉回看板（2026-11-05）
   if (document.body.classList.contains('tc-sheet-open')) return;
+  // 同上：「我的 › 设置」子页（settings.mjs 的 popstate）也自己收自己那一格。
+  // 漏了这行，退回「我的」后 ⑦c 会把这格当"退到根页"再压一格井 —— 多按一次才出去。
+  if (document.body.classList.contains('mb-me-set')) return;
   if (isNarrow() && document.body.classList.contains('mb-detail-open')) {
     // 流程实例页（从别处点进来的整页）：收场归 flowpages —— 退回去该是看板/任务卡/会话，
     // 不是这页左栏的「发起记录」（2026-11-08 用户：「点返回还是能跳转到发起记录」）
@@ -228,6 +245,50 @@ window.addEventListener('popstate', (e) => {
    */
   if (inShell() && !e.state?.mbBoot) history.pushState({ mbBoot: 1 }, '');
 });
+
+/* ---------------------------------------------------------------- ②d 返回键的层级真源
+ *
+ * 系统返回键（Android 键 / 手势）不再问 WebView「canGoBack」—— 那个答案会撒谎：
+ * 换机器时壳 clearHistory() 会把上面 ⑦b 那格井一起抹掉，从此任何页面按返回都退后台
+ * （用户实报「定时任务页按返回直接退出 APP」）。现在壳问网页：bandiCanGoUp / bandiBack，
+ * 答案由 navstack.mjs 统一给出，各层由**它们的主人**自己登记（见各模块 ✓ 处）。
+ *
+ * 这里登记本文件拥有的两层 + 一级栏的「家」：
+ *   · detail —— 主从折叠（含聊天页）。level 最小 = 最外层，最后才收；
+ *   · dialog —— 原生 <dialog> / 贴底动作面板。**必须排在所有页面之上**：
+ *     弹窗盖着页面时按返回先去页面，人看到的是"弹了半天的框退不掉、页面却翻了一页"。
+ *     全屏选择页（picker）在它里面，level 更高，先收它（见 chat.mjs）。
+ */
+registerLayer({
+  name: 'detail',
+  level: 10,
+  cell: 'mbDetail',
+  active: () => document.body.classList.contains('mb-detail-open'),
+  close: () => leaveDetail(true),
+});
+registerLayer({
+  name: 'dialog',
+  level: 90,
+  active: () => !!document.querySelector('dialog[open]'),
+  close: () => {
+    const ds = document.querySelectorAll('dialog[open]');
+    ds[ds.length - 1]?.close();   // 叠了多张就收最上面那张（close 事件会让各自的清理跑起来）
+  },
+});
+/*
+ * 非首页 tab 按返回 = 回工作台（Android / 微信同款：通讯录、会话、我的都不是"根"）。
+ * 不登记的话这些 tab 按返回直接退后台 —— 那不是"退出 App 的自由"，是"回不去了"。
+ */
+registerHomeUp('plugins', () => setNav('plugins'));
+
+/*
+ * 挂给壳（app.local.bandi.mobile 的 BandiShell 之外，直接 evaluateJavascript 调）：
+ *   bandiCanGoUp() → true/false
+ *   bandiBack()    → 退一层，返回是否真退了
+ * 没有这两个钩子的页面（旧缓存）壳会退回 canGoBack 那套老逻辑，见 MainActivity.webBack()。
+ */
+window.bandiCanGoUp = () => canGoUp();
+window.bandiBack = () => stackBack();
 $('listBody').addEventListener(
   'click',
   (e) => {
@@ -258,6 +319,10 @@ $('listBody').addEventListener(
  * 「通讯录」是 2026-11 移动端增量加的第 4 个 tab（手机上找人聊天，跟微信一致）：
  * 高亮同步机制不用改 —— 桌面左栏本就有 data-nav="contacts" 的导航按钮，
  * setNav('contacts') 会把它点亮，syncTabs 按 .nav-btn.active 对齐自然命中新 tab。
+ *
+ * 信箱（2026-11-11）**不进 tab 栏**：用户拍板把入口放到「我的」页（settings.mjs 的 openMe，
+ * 窄屏才画那一行），tab 栏保持四颗。这里只留注释说明来过又撤掉的那一版 ——
+ * 别再当"漏了信箱"给补回来。
  *
  * 「我的」（2026-11-01 改）：以前这个 tab 直接 `setNav('settings')` 进设置页，
  * 手机上点"我的"看到的是一串开关，没有"我是谁"。现在进的是 openMe 的个人中心
@@ -296,11 +361,16 @@ tabbar.querySelectorAll('.mb-tab').forEach((b) => {
     // 手势返回先无声吞掉一格，再按就跨文档退出去。tab 明确换栏，不走 leaveDetail
     // 的"来源栏回跳"（S.mbBackNav），只做格子回收。
     const wasOpen = document.body.classList.contains('mb-detail-open');
+    // 「我的 › 设置」子页（settings.mjs）：换栏就是走了，子页视觉态跟折叠态一起收，
+    // 它压的那格历史也跟着回收（同 mbDetail 的规矩：只摘类不退格 = 幽灵格）
+    const wasMeSet = document.body.classList.contains('mb-me-set');
     document.body.classList.remove('mb-detail-open');
     document.body.classList.remove('mb-chat');
+    document.body.classList.remove('mb-me-set');
     // 流程实例页那套「整页」标记也一起收（flowpages.mjs）：换栏就是走了，别再让返回键往看板拽
     document.body.classList.remove('flow-direct-open');
     if (wasOpen && history.state?.mbDetail) history.back();
+    if (wasMeSet && history.state?.mbMeSet) history.back();
     // 抽屉是 fixed 覆盖层，换一级页时必须一起关，否则新页面被旧抽屉盖住
     closeDrawer();
     // 手动换栏就不再是"从通讯录进来又返回"那条路了，来源标记作废
@@ -325,11 +395,15 @@ document.addEventListener('mb-nav', (e) => {
   const nav = e.detail?.nav;
   if (!nav) return;
   // 互跳是换一级页：详情折叠态要先收掉，否则新页面被压在折叠态后面。
-  // 历史格同 tab 那条规矩一起回收（见 tabbar click 的注释）
+  // 历史格同 tab 那条规矩一起回收（见 tabbar click 的注释）；
+  // 「我的 › 设置」子页（settings.mjs）同款：换栏收子页 + 退它压的那格。
   const wasOpen = document.body.classList.contains('mb-detail-open');
+  const wasMeSet = document.body.classList.contains('mb-me-set');
   document.body.classList.remove('mb-detail-open');
+  document.body.classList.remove('mb-me-set');
   document.body.classList.remove('flow-direct-open');
   if (wasOpen && history.state?.mbDetail) history.back();
+  if (wasMeSet && history.state?.mbMeSet) history.back();
   setNav(nav);
   syncTabs();
 });
@@ -342,8 +416,10 @@ function syncTabs() {
       activeNav === b.dataset.tab ||
       (b.dataset.tab === 'plugins' && activeNav === 'workflows') ||
       // 设置页是「我的」的下一级（2026-11-01）：停在设置上时 tab 仍亮「我的」。
-      // 不然手机上从「我的」点进设置后，底部四个 tab 一个都不亮 —— 看着像"哪儿都没选中"。
-      (b.dataset.tab === 'me' && activeNav === 'settings');
+      // 不然手机上从「我的」点进设置后，底部 tab 一个都不亮 —— 看着像"哪儿都没选中"。
+      // 信箱（2026-11-11 起入口在「我的」页）同理：它现在是「我的」的下一级，
+      // 进去之后底部仍亮「我的」，用户按 tab 也就回到了来源那一栏。
+      (b.dataset.tab === 'me' && (activeNav === 'settings' || activeNav === 'inbox'));
     b.classList.toggle('active', hit);
   });
 }

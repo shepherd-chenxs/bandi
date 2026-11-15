@@ -21,6 +21,8 @@ import { openGroupDialog } from './misc.mjs';
 // 组织架构（2026-11-11 Phase 3）：左栏子菜单与右区页面；两者互相 import 但只在运行时调用
 // （settings ↔ contacts 早就是同一个模式，函数声明提升保证了初始化顺序）
 import { openOrg, renderOrgList } from './org.mjs';
+// 信箱（2026-11-11 主从改版）：左栏清单归 inbox.mjs 画；两边互相 import，同样只在运行时调用
+import { renderInboxList } from './inbox.mjs';
 
 
 
@@ -194,8 +196,12 @@ export function renderList() {
    * 清一下按钮就没一次。别的分支照旧"先清后画"。
    */
   if (S.nav === 'plugins' && S.route?.view === 'codeRepos') return;
-  // 信箱（2026-11-11）：整页通知列表，左栏列表不归它（no-list 已把整列收掉）
-  if (S.nav === 'inbox') return;
+  // 信箱（2026-11-11 主从改版）：左栏是通知清单（全部/未读 + 一行一条），右区是选中详情；
+  // 清单归 inbox.mjs 画，右区不归这里管（跟组织架构同一个分工）
+  if (S.nav === 'inbox') {
+    renderInboxList();
+    return;
+  }
   /*
    * 左栏底部固定条（#listFoot）每次重画都先清空：它挂的是「已归档」这种**跨列表**的入口，
    * 不该跟着某一份数据残留到通讯录/设置页上。哪个分支需要，自己再往里写。
@@ -594,7 +600,7 @@ const groupRowHTML = (g) => {
         <div class="avatar grp">${esc(initial(g.title))}</div>
         <div class="who">
           <div class="line1"><b>${esc(g.title)}</b></div>
-          <div class="line2"><span class="dot ${esc(c?.status ?? '待跑')}"></span>${g.memberCount} 人 · ${esc(preview || '还没聊过')}</div>
+          <div class="line2"><span class="dot ${esc(c?.status ?? 'pending')}"></span>${g.memberCount} 人 · ${esc(preview || '还没聊过')}</div>
         </div>
       </div>`;
 };

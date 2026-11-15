@@ -25,7 +25,7 @@ import { runPersonaTask, validatePersonaTask, describePersonaTask } from './pers
 import { runTeamTask, validateTeamTask, describeTeamTask } from './team-task.mjs';
 import { runWorkflowTask, validateWorkflowTask, describeWorkflowTask } from './workflow-task.mjs';
 import { retryPendingSteps } from './workflows.mjs';
-import { retryQueuedTasks } from './project-tasks.mjs';
+import { retryQueuedTasks, escalateStaleCards } from './project-tasks.mjs';
 import { drainAllGroupQueues } from './dispatch.mjs';
 
 /** 间隔下限：再密就是拿 GitHub 的速率上限换"更实时"，而 PR 从来不是秒级的事 */
@@ -402,6 +402,13 @@ export async function tick({ now = Date.now(), actions = ACTIONS } = {}) {
     retryQueuedTasks();
   } catch (e) {
     console.warn('[看板] 排队中的卡没能重派：', e?.message ?? e);
+  }
+  // 卡停留超时的升级提醒（2026-11-14）：待验收 / 已阻塞停久了没人管，信箱催一把
+  // —— 内部自节流 10 分钟一次，这里每拍调不会刷屏。
+  try {
+    escalateStaleCards();
+  } catch (e) {
+    console.warn('[看板] 卡停留升级提醒没跑成：', e?.message ?? e);
   }
   // 群里 @ 多人的排队（2026-10-24）：run 收尾钩子是主流，这里兜住撞了
   // 项目互斥/个人并发而退回的 —— 跟上面两条一个待遇，出错不外抛。

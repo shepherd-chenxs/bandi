@@ -725,6 +725,29 @@ function handleShellEnter(req, res, auth, url) {
   if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return false;
   const owner = store.firstUser();
   if (!owner || owner.disabled) return false;
+  /*
+   * 进门后去哪（2026-11-14）：默认回面板 `/`；带 `to` 就直接送去那 ——
+   * 「聊天里点文件 pill → 系统浏览器没有会话票」的修法：`/api/open` 把目标包进
+   * 进门链（见 routes/workspace.mjs），进门签票后 302 直达文件。
+   * `to` 只认**本站相对路径**（/ 开头、且不是 //）—— 别的形态一律回落 `/`，
+   * 这条 302 绝不往站外送（开放重定向闸）；也不能绕回进门路径自己（死循环）。
+   */
+  let to = String(url.searchParams.get('to') ?? '/');
+  if (!/^\/(?!\/)/.test(to) || to.split('?')[0] === SHELL_ENTER_PATH) to = '/';
+  /*
+   * **已经带票的浏览器不再重复签发**（2026-11-14）：`/api/open` 的"先进门再看"每次点击
+   * 都会走这条链 —— 浏览器里已经躺着有效的 `bandi_sid` 时，再发一张 180 天会话只会把
+   * 会话表灌爆。有票 → 直接 302 去目标。
+   */
+  const sidIn = sessionTokenOf(req);
+  if (sidIn) {
+    const hit = store.userBySession(sidIn);
+    if (hit) {
+      res.writeHead(302, { Location: to, 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' });
+      res.end();
+      return true;
+    }
+  }
   const { token } = store.createSession(owner.id, {
     ip: req.socket?.remoteAddress ?? null,
     ua: req.headers['user-agent'] ?? '',
@@ -733,7 +756,7 @@ function handleShellEnter(req, res, auth, url) {
   res.writeHead(302, {
     // Cookie 寿命与 store 里这张会话一致（180 天）；壳重开也会再进一次，这里只是兜底
     'Set-Cookie': sessionCookie(token, store.SHELL_SESSION_DAYS * 86400),
-    Location: '/',
+    Location: to,
     'Cache-Control': 'no-store',
     'Referrer-Policy': 'no-referrer',
   });

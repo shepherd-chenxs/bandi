@@ -4,7 +4,7 @@
 import { esc, personLabel, personSubtitle, restorePlace, roleNameOf, toast } from './shell.mjs';
 import { api, createCombo } from './ui.mjs';
 import { load } from './state.mjs';
-import { openPluginForm, pluginFormId } from './experts.mjs';
+import { openPluginForm, pluginFormId, refreshGroup } from './experts.mjs';
 import { $, S } from './core.mjs';
 
 
@@ -82,17 +82,53 @@ export function openGroupDialog() {
 /* ------------------------------------------------------------ 换群助手 */
 
 export function openAssistantDialog(thread) {
-  $('aList').innerHTML = thread.members
-    .map(
-      (m) => `<label class="member">
-        <input type="radio" name="assistant" value="${m.personaId}"
-               ${m.personaId === thread.assistantPersonaId ? 'checked' : ''} />
-        <span>${esc(m.name)}</span><em>${esc(roleNameOf(m) || '—')}</em>
-      </label>`,
-    )
-    .join('');
+  /*
+   * 说明行换搜索框（2026-11-15 用户实报）：「群助手是…」那句删掉，成员多时直接打字找人。
+   * 口径与「拉人进群」的 #mSearch / 抽屉的「搜索群成员」一致：只按名字过滤。
+   * 搜索只重画 #aList —— radio 选中态由 assistantPersonaId 现算，重画不丢；
+   * 选中的人被滤走也没关系，:checked 不在 DOM 里，提交时「没选 = 取消」的口径不变。
+   */
+  const paint = () => {
+    const q = ($('aSearch').value || '').trim().toLowerCase();
+    const rows = thread.members.filter((m) => !q || m.name.toLowerCase().includes(q));
+    $('aList').innerHTML = rows.length
+      ? rows
+          .map(
+            (m) => `<label class="member">
+              <input type="radio" name="assistant" value="${m.personaId}"
+                     ${m.personaId === thread.assistantPersonaId ? 'checked' : ''} />
+              <span>${esc(m.name)}</span><em>${esc(roleNameOf(m) || '—')}</em>
+            </label>`,
+          )
+          .join('')
+      : '<div class="dim" style="padding:10px 2px">没找到</div>';
+  };
+  $('aSearch').value = '';
+  paint();
+  $('aSearch').oninput = paint;
   $('assistantDlg').dataset.thread = thread.id;
+  /*
+   * **提交接线**（2026-11-15 修的缺口）：以前这个弹窗只有 radios 和关闭 ——
+   * 「就他了」点了只是关弹窗，选了等于没选，群助手原地不动（实报）。
+   * 现在点他就真把选中的员工 PATCH 成群助手；弹窗由 form method=dialog 自己关。
+   */
+  $('aOk').onclick = async () => {
+    const picked = $('aList').querySelector('input[name="assistant"]:checked')?.value;
+    if (!picked) return; // 没选就点 = 取消
+    const threadId = $('assistantDlg').dataset.thread;
+    try {
+      await api('/api/groups/' + encodeURIComponent(threadId), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ assistantPersonaId: picked }),
+      });
+      await refreshGroup(threadId); // load + 重画抽屉 / 群详情，群助手行跟着变
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  };
   $('assistantDlg').showModal();
+  $('aSearch').focus(); // 打开就落在搜索框 —— 同 projLinkDlg 的手感，成员多时直接打字
 }
 
 

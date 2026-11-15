@@ -1206,3 +1206,511 @@ v13（2026-11-01 七改）：设备行加「取消配对」（已踢出行的清
      「全部已读」；不做弹框、不往群里播报（用户拍板）；
   ③ 未读数随 /api/state 下发 + 30 秒一次轻量轮询刷新角标。
   VERSION v213 → v214。
+
+
+  v215（2026-11-11 21:xx 信箱改主从：左侧列表 / 右侧详情，用户："改成左侧列表，右边详情"）：
+  旧版把整页通知清单铺在主区（inbox 挂 no-list，左栏整列收掉），一条条是整页大卡片 ——
+  视觉上"只有清单、没有详情"，全文/错误码/员工/次数挤在同一张卡里，一屏也放不下几条。
+  改回骨架的三级语法（跟通讯录、组织架构同一套），不再走 no-list：
+  ① 左栏二级列表 = 通知清单（js/inbox.mjs 新增 renderInboxList）：全部/未读两颗 tab 钉在
+     清单顶上，一行一条（严重度圆标 + 标题/时间 + 摘要 + 类型·员工·×次数 + 未读「新」标）；
+     「全部已读」收进左栏底部固定条 #listFoot（有未读才占高度，跟消息/工作流的「已归档」同位）。
+  ② 右区 #inboxView = 选中那条的详情：标题、类型/严重度/最近发生、全文、平台事实表
+     （错误码 / 员工 / 次数 / 已读状态）；没选中时是说明性空态（保留"这里放需要你知道、
+     但不该打断你的事…"那句，多一句"在左侧选一条通知，查看详情"）。
+  ③ 已读语义不变（点开一条 = 这条已读、全部已读 = 清零，服务端接口一字未动）；
+     交互改成"先本地画、后请求"：点一下右区立刻出内容，标已读失败也不影响读。
+  ④ 路由 setRoute('inbox', { id })：刷新后回到原来那条详情；窄屏沿用 mobile.mjs 的通用主从
+     折叠（点行展开、返回栏显示通知标题），刷新直达详情时派 mb-detail 补折叠态。
+  改动：inbox.mjs（主从重写：数据缓存 + 左栏渲染 + 详情/空态）、state.mjs（inbox 不挂
+  no-list，左栏保留、搜索框仍收掉 —— 筛选归两颗 tab）、contacts.mjs（renderList 的 inbox
+  分支接 renderInboxList，原先是直接 return）、shell.mjs（ROUTES.inbox 认 id）、
+  index.html（#inboxView 注释）、style.css（.inbox-* 整组重写 + 详情/空态样式，删旧整页
+  卡片样式）、mobile.css（§24 手机档：清单行/详情页字阶、页内重复页头收掉）；
+  sw.js（VERSION v214 → v215）。
+
+
+  v216（2026-11-11 22:xx 手机端补「信箱」入口，用户："更新手机端"）：
+  上一版把信箱改成"左列表 + 右详情"只在桌面成立 —— 窄屏（≤900px）左栏整列被收掉、
+  底部四 tab 里没有信箱，手机用户**根本进不去**这一页（未读角标也无处显示）。
+  按手机端的白名单口径把这一栏放行：
+  ① mobile.mjs 底部导航补第 5 颗 tab「信箱」（图标同桌面左栏那枚信封，排在会话与我的之间），
+     映射 setNav('inbox')；高亮仍走 syncTabs 的 .nav-btn.active 对齐，不用另写一套；
+  ② tab 上挂未读角标 #mbInboxBadge：数字与桌面左栏 #inboxBadge 同源（S.noticesUnread），
+     0 藏、>99 显示 99+，syncTabs 的 1s 轮询顺手同步；
+  ③ 信箱页本身不用改：窄屏沿用通用主从折叠（列表 → 点行进详情 → 返回栏回列表，
+     刷新直达详情时 inbox.mjs 派 mb-detail 补折叠态）。
+  改动：mobile.mjs（第 5 颗 tab + syncInboxTabBadge）、mobile.css（.mb-tab-badge 角标 +
+  "四 tab"注释改"五 tab"）；sw.js（VERSION v215 → v216）。
+
+
+  v217（2026-11-11 22:xx 手机端信箱入口改到「我的」页，用户："手机端把信箱入口做到我的页面"）：
+  v216 把信箱做成底部第 5 颗 tab，用户改口径：入口放进「我的」页，tab 栏保持四颗。改法：
+  ① mobile.mjs 撤掉第 5 颗 tab 与 syncInboxTabBadge（tab 栏回到 工作台/通讯录/会话/我的），
+     mobile.css 删 .mb-tab-badge 角标样式 —— 上一版的东西一件不留；
+  ② 「我的」页窄屏新增一张「信箱」卡（set-head「信箱」+ 一行 button.me-kv.me-cache-row：
+     「平台通知 / N 条未读 / ›」），点它派 mb-nav 事件让 mobile.mjs 统一 setNav('inbox')；
+     桌面不画这一行（左栏一级栏已有信箱，重复入口没必要）；
+  ③ 行尾读数与左栏角标同源（S.noticesUnread）：inbox.mjs 的 paintInboxBadge 顺手刷新
+     #meInboxCount —— 页面开着时读掉一条，「我的」那一行不用重进也会变；
+  ④ 进入信箱后底部仍亮「我的」（跟设置页同一条规则）：它是「我的」的下一级，
+     不然底部一个 tab 都不亮，看着像"哪儿都没选中"。
+  改动：mobile.mjs、mobile.css、settings.mjs（openMe 的 me-inbox-sec + meInbox 点击）、
+  inbox.mjs（paintInboxBadge 同步「我的」页读数）；sw.js（VERSION v216 → v217）。
+
+
+  v218（2026-11-11 「我的 › 设置」子页，用户："做一个设置菜单，把这两个放到设置页面去"）：
+  手机「我的」页上的「这台机器」「通用」两张卡整体搬进新的设置子页，「我的」页
+  只留一行「设置」入口（卡面与「信箱」入口同款：button.me-kv.me-cache-row +
+  chevron，me-set-sec）。改法：
+  ① settings.mjs 新增 openMeSet / closeMeSet（模块级，入口行点击时把 hello / 壳标记 /
+     isUser 带进去，子页不重拉接口）：子页 = 「‹ 返回」行 + 「这台机器」三行卡
+     （phoneMachineAll 提为模块级，machineRowHtml 收拢共用）+「通用」卡（清除缓存 +
+     当前设备，wireCacheRow 原样搬）；桌面「我的」页的「这台机器」四行卡不动；
+  ② 页面级子页不开新一级栏：S.nav 仍是 'me'，底部 tab 亮「我的」（与信箱同理）；
+  ③ 历史栈照"详情压一格"老规矩（kb-new / sch-page 同款，自己收自己那一格）：
+     进来 pushState({mbMeSet:1})；返回行/Esc（mobile.mjs 放行派 mb-me-set-leave）/
+     手势（settings.mjs 的 popstate，alreadyPopped 只收画面）都走 closeMeSet 回
+     openMe；tab / mb-nav 换栏时连类带历史格一起收（幽灵格规矩）。
+  改动：settings.mjs（openMe 撤两张卡 + meSetEntry 入口 + 子页三函数）、mobile.mjs
+  （Esc / popstate / tab / mb-nav 四处守卫）；sw.js（VERSION v217 → v218）。
+
+
+  v219（2026-11-11 19:5x 设置子页导航栏，用户："设置页加一个导航栏。返回按钮放到导航栏左侧，使用图标按钮"）：
+  「我的 › 设置」子页顶部那张「‹ 返回」卡（.me-set-back-sec）撤掉，换成一条导航栏 ——
+  规格照整页头（body.no-list .detail-head，§3 同一把尺子）：--mb-nav 高 + safe-area、
+  玻璃底 + 0.5px hairline、sticky 吸顶；返回 = 左侧纯图标钮（.mb-back 同款 accent
+  chevron 22px，aria-label="返回"），标题「设置」居中 17/600（三列 grid 48/1fr/48，
+  图标钮不挤偏标题）。样式 §15d，全部关在 body.mb-narrow #settingsView 里，桌面不动。
+  返回接线不变（仍 #meSetBack → closeMeSet(false)）。
+  改动：settings.mjs（openMeSet 模板换 me-set-nav）、mobile.css（§15d）；sw.js
+  （VERSION v218 → v219）。
+
+
+  v220（2026-11-11 20:0x 「当前设备」挪回「我的」页，用户："把这个当前设备切换菜单放到我的页面"）：
+  设置子页「通用」卡里的「当前设备」行（回壳设备列表的桥）挪回「我的」页 —— 切设备
+  是手机上的高频动作，不值得为一行钻进设置二级页。改法：
+  ① 「我的」页窄屏新增「设备」卡（set-head「设备」+ 一行 button.me-kv.me-cache-row，
+     me-devswitch-sec），位置在「外观」与「设置」之间；显示条件与原行同口径
+     （壳里 + 中枢账号会话），点击 = BandiShell.openDeviceList() / 启动页
+     #bandi-devices（接线随行挪回 openMe）；
+  ② 设置子页「通用」卡只剩「清除缓存」一行，openMeSet 签名收窄成 { hello }
+     （shell / nativeShell / isUser 不再被子页用）。
+  改动：settings.mjs；sw.js（VERSION v219 → v220）。
+
+
+  v221（2026-11-11 20:1x 「我的」hero 加信箱图标，用户："在信息区加一个信箱图标，点击之后跳转到信箱页面"）：
+  身份卡右缘加一颗信箱图标钮（me-inbox-icon，红框位置）—— 信封线稿（信箱页空态同款
+  图形，线宽 1.8 同 hero 铅笔）、36px 触控、margin-left:auto 推到右缘垂直居中；
+  右上角未读红点（me-inbox-dot，--bad 药丸，0 未读隐藏、>99 折 99+）。改法：
+  ① settings.mjs：openMe 的 hero 模板窄屏追加图标钮（onPhone 才画，桌面左栏已有信箱），
+     点击派 mb-nav inbox —— 与下面「平台通知」行同一把 setNav 路子；
+  ② inbox.mjs：paintInboxBadge 顺手刷 #meInboxDot —— 读掉条数不重进「我的」，
+     红点也跟着藏/显（与 #meInboxCount 同源）；
+  ③ mobile.css §15d 追加 .me-inbox-icon / .me-inbox-dot（全关在 mb-narrow + settingsView）。
+  改动：settings.mjs、inbox.mjs、mobile.css；sw.js（VERSION v220 → v221）。
+
+
+  v222（2026-11-11 20:5x 信箱页头返回钮，用户："加一个返回图标按钮"）：
+  手机信箱列表页头（.list-head）左侧加返回图标钮 —— 信箱在手机上是「我的」的
+  下一级（tab 高亮同款规矩），页头给实体返回钮，与通讯录子页的「←」同一个类
+  （.mb-head-back：absolute 钉左缘、accent chevron 22px、44px 触控、标题照旧居中）。
+  点击派 mb-nav {nav:'me'} 回「我的」（mobile.mjs 统一转 setNav）。改法：
+  ① inbox.mjs 新增 paintHeadBack()，paintList 顶部调 —— 只在 body.mb-narrow 挂
+     （桌面信箱是一级栏，没有"回来"的概念）；renderList 每次重画先摘 .mb-head-back
+     （contacts.mjs 通用清扫），所以每次 paintList 重挂，挂前查重防
+     paintListKeepScroll（筛选切换不走 renderList）时叠两颗；
+  ② 样式零新增：.mb-head-back 的规则 mobile.css §5/§17.2 里已有。
+  改动：inbox.mjs；sw.js（VERSION v221 → v222）。
+
+
+  v223（2026-11-11 20:5x 「我的」页撤信箱入口行，用户："这个去掉"）：
+  「我的」页窄屏那张「信箱 / 平台通知」卡（me-inbox-sec，行尾未读读数）整卡撤掉 ——
+  hero 右上角已有信箱图标（带未读红点），这一行成了重复入口。改法：
+  ① settings.mjs：删 inboxEntry 模板与 #meInbox 接线；inboxUnread 保留（hero 红点
+     的初始值还要用）；
+  ② inbox.mjs：paintInboxBadge 里刷 #meInboxCount 的那段随之退场（元素没了），
+     只刷左栏角标 + #meInboxDot。
+  桌面端不受影响（那行本来 onPhone 才画）。
+  改动：settings.mjs、inbox.mjs；sw.js（VERSION v222 → v223）。
+
+
+  v224（2026-11-11 21:0x 退出按钮搬进设置子页，用户："退出按钮放到设置页面"）：
+  手机「我的」页底部那行「退出登录」搬进「我的 › 设置」子页末尾（「通用」卡之后，
+  同款 .me-out-box + .me-out 整宽行）；「我的」页瘦成 身份卡 + 外观 + 设备 + 设置。
+  改法：
+  ① settings.mjs openMe：me-out-sec 加 onPhone 判 —— 窄屏不画，桌面照旧（桌面
+     没有设置子页，这行仍是「我的」页的收尾）；
+  ② openMeSet 签名加 canLogout（入口行从 openMe 带进来），模板末尾追加退场行，
+     接线同主页：meLogout → logout()、meGoLogin → location.reload()（回环操作员
+     没有可退的登录态，画「去登录」的老口径不变）。
+  样式零新增（mobile.css 的 .me-out 规则本来就关在 #settingsView + mb-narrow 里）。
+  改动：settings.mjs；sw.js（VERSION v223 → v224）。
+
+
+  v225（2026-11-11 21:1x 壳 · 设备列表按来源分两套按钮，用户："这个页面是登录页面后跳转的
+  页面，如果是登录跳转的，就要维持现在这个样子"）：选择电脑页不再一套按钮走到底 ——
+  · 登录后 / 冷启动进来（根页面）：维持原样，右上角「退出登录」，无返回；
+  · 面板里点「当前设备」进来（下级页面）：左上角「返回」回面板，不画退出。
+  实现（App 侧，改完要重装 APK）：
+  ① MainActivity.showDevices(fromPanel = false)：入口带来源，按来源切
+     devBackBtn / logoutBtn 的显隐，并把标题左内边距在"有返回钮"时收成 0（标题不右移）；
+     showDevicesFromPanel() 传 true；
+  ② 新增 lastPanelOrigin —— showDevices() 的 stopConnWatch() 会把 connOrigin 清掉
+     （离开面板停探活），返回需要"刚才在谁那儿"这份独立记忆；backToPanel() = showPanel(lastPanelOrigin)，
+     WebView 一直没卸载，回去是原样（不重载、不丢状态）；
+  ③ 系统返回键同一语义：设备列表 + devicesFromPanel → 回面板（原来会直接退回桌面）；
+  ④ 布局 activity_main.xml 标题行加 devBackBtn（gone 起步）、标题补 id；新增 ic_back.xml。
+  改动：apps/mobile-native（MainActivity.kt / activity_main.xml / drawable/ic_back.xml）。
+
+
+  v226（2026-11-11 21:4x 返回键改「问网页」，用户拍板上 B 方案）：
+  起因（用户实报"定时任务页按系统返回直接退出 APP"）：壳的返回键问 WebView canGoBack ——
+  那是浏览器历史不是 App 层级。换机器时 onPageFinished 的 clearHistory() 把网页开机种的
+  "井"（mobile.mjs ⑦b）一起抹掉，从此 canGoBack 恒 false，**任何页面**按返回都退后台；
+  反过来不压格的页面（定时任务等下钻页）按返回只有"没反应"。历史还是共享状态，为此已经
+  打了七八处"幽灵格"补丁。这次换成：**壳问网页，网页答唯一真源** ——
+  ① 新增 js/navstack.mjs（叶子模块，只依赖 core）：registerLayer（浮层/子页，level 越大
+     越靠内；cell=它压的那格历史标记，格在就退历史让各模块 popstate 收画面，格没了
+     （clearHistory 后）就直调 close）、registerUp（下钻页的上一层 = 页内 ‹ 同一个函数）、
+     registerHomeUp（非首页 tab 回工作台）。判断链：栈顶层 → 下钻页 → 回家 → 交还壳。
+  ② 各层的主人自己登记（谁的状态谁报）：mobile.mjs（detail L10 / dialog L90 / 家）、
+     chat.mjs（picker L100）、projects.mjs（tc-sheet L80 / kb-new L70 / taskCard 下钻）、
+     skills.mjs（sch-sheet L66 / sch-page L65 / schedules 下钻 → 工作台）、
+     settings.mjs（me-set L50）、flowpages.mjs（flow-direct L40）。
+  ③ mobile.mjs 挂 window.bandiCanGoUp / bandiBack；根页返回不再吞掉 —— 退到桌面
+     （Android 标准，原先靠"井"做成"按了没反应"）。
+  ④ 壳 MainActivity.webBack()：evaluateJavascript 问 bandiCanGoUp —— true → bandiBack()；
+     false → moveTaskToBack；'legacy'（旧缓存没钩子）→ 退回 canGoBack 老逻辑。
+  ⑤ 根页井（⑦b/⑦c）保留：它只服务浏览器手势返回，壳不再消费它。
+  新增行为：定时任务页按返回 → 回工作台（schBackToWorkbench，页内 ‹ 同一函数）；任务卡、
+  新建任务、定时任务编辑页、讨论抽屉、设置子页、选择页、弹窗、流程实例页 → 各自退一层；
+  非首页 tab（通讯录/会话/我的）→ 回工作台；工作台根页 → 退后台。
+  验证：node --check 全过；navstack 行为冒烟 13 项全过（含 clearHistory 后 length=1 的
+  收画面路径、active 抛错不卡链、level 优先级）；assembleDebug 通过并已装机；真机返回键
+  语义待用户手动过一遍（本机 adb 注入按键被 INJECT_EVENTS 拒）。
+  改动：js/navstack.mjs（新）、mobile/chat/projects/skills/settings/flowpages.mjs（登记）、
+  sw.js（+navstack 预缓存，VERSION v224 → v226，v225 是壳专属条目不动静态）、
+  apps/mobile-native/MainActivity.kt（webBack）。
+
+
+  v227（2026-11-11 21:4x 补齐其余下钻页的上一层，用户实报"任务看板按返回直接退出了"）：
+  v226 只登记了定时任务 / 任务卡两处下钻，任务看板等项目页一按返回还是退后台。这次把
+  全部下钻页的上层补齐 —— 每处都与该页页内 ‹ / 面包屑**同一个去处**，不另造一份：
+  · projects.mjs：projects → 工作台（手机上项目清单页头只写「项目」，系统返回键是唯一
+    回宫格的路）；project → 项目清单；taskBoard → 全局看板回工作台 / 项目看板回清单
+    （按 S.boardAll 分流，与 data-kb-back 同一把 if）；
+  · skills.mjs：codeRepos → 工作台；skill → 「设置 › 技能」清单（openSettings('skills')）；
+  · experts.mjs：remote / plugin → 工作台宫格；
+  · workflows.mjs：workflows → 工作台宫格；
+  · flowpages.mjs：flowRun → 工作台（2026-10-19 口径「上一级只是工作台」）；
+    designer → 工作流清单（退出不丢东西：草稿一直在本地，重开自动恢复并提示）。
+  至此路由表 21 个 view 全部有交代：12 个下钻页走 registerUp，会话/人物/群聊等走
+  mb-detail 层，非首页 tab 走 registerHomeUp，剩下的就是工作台宫格根页（退后台）。
+  改动：projects/skills/experts/workflows/flowpages.mjs（各 1-4 行登记）；sw.js
+  （VERSION v226 → v227）。纯网页改动，壳不用重装。
+
+
+  v228（2026-11-11 21:5x 修「侧边栏点击不动了」）：v227 给 flowpages.mjs 补了
+  `registerUp('flowRun' | 'designer', …)` 两行，却只 import 了 registerLayer ——
+  **registerUp 未定义**。ESM 模块图在求值 flowpages.mjs 那一格就抛
+  `ReferenceError: registerUp is not defined`，而 app.mjs 的 boot 语句（含
+  `document.querySelectorAll('.nav-btn').forEach(b => b.onclick = …)`）排在所有
+  import 之后 —— 一抛，整个面板只剩静态骨架：**一级栏 8 颗按钮全部点不动**，
+  也不是"某颗按钮的 handler 写错了"。页面无任何可见报错，最容易被当成 CSS / 遮罩问题。
+  改法：flowpages.mjs 的 import 补上 registerUp（一行）。教训：`node --check` 只查语法，
+  **查不出未定义的标识符** —— 这类改动必须真开一次页面看控制台。
+  验证：无头 Edge 挂本机会话跑真实面板，8 颗按钮逐颗点击，视图切换全部正确
+  （inbox/chat/org/experts/plugin/settings/me），boot 无异常。
+  改动：js/flowpages.mjs（import 一行）；sw.js（VERSION v227 → v228，把撞上坏版本的
+  客户端整包换掉）。
+
+
+  v229（2026-11-11 22:0x 岗位表列宽，用户："技能包列窄一些"）：auto 布局下技能章是
+  nowrap 的，浏览器按内容给宽度 —— **最长的那个技能名说了算**，技能包一列吃掉右半边
+  （630px 的表里 ~420px），权限被挤成一团。改成 `table-layout: fixed` + 按百分比定列
+  （16 / 12.5 / 13.5 / 26 / 32），技能包只留「最长一条技能名 verification-before-
+  completion ≈ 172px」+ 内边距的宽度（202px），腾出来的给权限。多出来的章在章与章之间
+  换行，技能包内不做截断（`max-width:100%` + 省略号只作窄屏兜底）。表补 `min-width:
+  630px`（五列都不夹字的底线，再窄就横向滚，.org-scroll 本来就 overflow-x:auto）。
+  验证：真面板 1093×760 —— 表宽 = 容器 630、无横向滚、五列 101/79/85/164/202、
+  零截断、最长技能名完整显示；390×844 窄屏走横向滚。
+  改动：style.css（岗位表那一段）。
+
+  v230（2026-11-11 22:2x 空回话兜底，用户实报「空白气泡，还以为界面坏了」）：
+  群「爻鉴」r-f0512961：模型把工具调用写成 `<dots_function_call><invoke …>` 正文文本、turn
+  直接 completed，`finalText` 只剩 `"\n\n\n"` —— 界面是一条空白气泡，会话头还写着绿色「完成」。
+  ① 气泡：正文为空/纯空白时显示「（这一轮没有回话 —— 模型输出为空或运行被中断，可以让他
+     重跑一次）」；老库里已有的空白消息同样生效（chat.mjs 的 bubble 兜底）；
+  ② 会话状态：`完成 + 空回话` 落「已阻塞」（store/status.mjs 的 conversationStatusFor），
+     不再显示「完成」；新增 `.badge.已阻塞` 橙色；
+  ③ 服务端同步：新回话落库时空白正文换成同一句占位、带 meta.emptyReply；
+     `run.finalText` 保持原样（卡状态/证据仍按原文判）。
+  VERSION v229 → v230。
+
+  v230（2026-11-11 22:4x 「我的」页方案 B「档案卡」上线）：用户对着 A/B 两稿拍了 B。
+  手机形态从「通栏渐变头 + 三张组头卡 + 一长条空白」改成**两张卡**：
+    · 身份卡：渐变从通栏收进卡内右上角，头像 56 / 名字 22，账号与设备落成两枚 chip，
+      信箱从裸图标变 36px 圆形钮（未读角标压在它外缘）；
+    · 设置卡：主题 / 当前设备 / 设置三行**一张卡、无组头** —— 原来「外观 / 设备 / 设置」
+      三张单行卡把页面切成三段，"设置"还既当组名又当行名；主题分段这次吃掉整行剩余宽度
+      （每格 47 → ~100px）；
+    · 页脚一行版本号，`.me-body` 改 flex 列 + `min-height:100%`，`margin-top:auto`
+      把它钉在视口底部 —— 内容比一屏短时空白才像"呼吸"，不像"没画完"。
+  桌面零改动（全部挂 body.mb-narrow）。`sw.js` VERSION v229 → v230。
+  改动：js/settings.mjs（hero 加 .me-hc + chips、三个移动端 section 并成 .me-one-sec、
+  版本行）；mobile.css（§15b ① 重写 + ②b 新增、§17.3 的 hero 辉光改挂卡片）。
+
+
+  v231（2026-11-11 23:0x 「我的」页去卡片，用户：\"卡片式布局在真机上不好看，很小家子气\"）：
+  方案 B 的\"两张卡\"在对照稿里成立、上真机就散了 —— 病根不在配色，在**卡的语法**：
+  左右各留 20px 的圆角小盒 + 一圈投影，内容又只有三行，页面被切成\"两个浮在灰底上的
+  盒子\"，读起来像组件库 demo。这一版把卡整个拆掉：
+    · 整页一片 surface（`.me-body:has(> .me-hero-sec)` 通栏 + min-height:100%，退掉
+      detail-body 的 20/24 内边距），一层从顶部右上铺开的淡 tint 贯穿到 ~70% 高度 ——
+      稀疏页面用颜色占位，不用空白占位；
+    · 身份区升格为\"封面\"：min-height 292，内容压在下缘（grid align-content:end），
+      头像 76→84、名字 22→27、chip 行改为整行铺开（原来挤在第 2 列会把设备名顶到
+      第二行）；
+    · 清单三行**通栏**、无圆角无投影，行高 56→72、字号 16/15→17/15.5，分割线内缩 20；
+    · 版本行从\"钉在视口底\"改为紧跟清单（钉底会变成一段白里的一颗孤字）。
+  桌面零改动（全部 body.mb-narrow）。⚠️「我的 › 设置」子页也用 `detail-body me-body`，
+  通栏规则必须用 `:has(> .me-hero-sec)` 限定，否则子页的灰底分组卡会被一起摊平。
+  `sw.js` VERSION v230 → v231。改动：mobile.css（§15b ① / ②b / .me-body / .me-foot、
+  §17.3 的 hero 辉光回到通栏）。
+
+
+  v233（2026-11-11 23:4x 会话轮换的聊天灰字，用户："这事太小，直接在聊天里加一行灰字就可以"）：
+  上下文预算超限、同一段聊天里换掉员工内部 CLI 会话时，聊天区落一行居中灰字
+  「（上下文过长，已开新会话；最近进展已交接）」——`role=system` + `meta.type=session-rotated`，
+  chat.mjs 渲染成 `.sys-line`，不占气泡、不算回话、**不进信箱**（原方案是信箱 info，用户否掉）。
+  改动：chat.mjs（timeline 渲染）、style.css（.sys-line）、dispatch.mjs（落消息）；
+  `sw.js` VERSION v232 → v233。
+
+  v234（2026-11-11 23:2x 修「右边空了一块」）：截图右侧那条从上贯穿到底的白/灰带，
+  是 `#settingsView` 的 `scrollbar-gutter: stable`（style.css 里为桌面防抖加的）在
+  **常驻预留 11px 滚动条槽位**；而这一版的整页白底 + 渐变画在 `.me-body` 上、宽度只到
+  content box —— 右边那 11px 露出的是页底 `--mb-cvbg` 灰（真机 DPR 放大成视觉上明显
+  的一条带）。同一个坑早就在 #pluginView 上踩过一次（那条注释还留着）。
+  改法（落在 §1 全局触感，一处管全部）：手机形态（≤900px）下 `#detailView /
+  #settingsView / #orgView / #inboxView / #groupView / #placeholderView` 一律
+  `scrollbar-gutter:auto` + 不画可见滚动条（`scrollbar-width:none` +
+  `::-webkit-scrollbar{width:0}`）—— 宽度恒定、滚不滚都不挤内容，老规则要防的抖动
+  也就不存在了；「我的」页再补一层同色背景兜底。顺带修好「我的 › 设置」子页卡片
+  左右不对称（左 24 / 右 35 → 两侧均 24）。
+  验证：390×844 真视口 —— `#settingsView` clientWidth 379 → 390、`.me-body` 宽 390、
+  右缘三列像素与渐变连续（无 #f2f2f7 灰带）；深色同；子页卡片 24 / 342 / 24；1440
+  桌面零改动（`narrow:false`，滚条槽位照旧）。改动：mobile.css（§1 新增一条；
+  §15b 旧的单点补丁只留背景兜底）。`sw.js` → v234（v233 已被会话轮换那条占用）。
+
+
+  v235（2026-11-11 23:3x 「我的」页按「微信 · 我」的分组语法重排，用户："这个页面可以
+  参考微信我的页面的布局"）：
+    · 三行从"整页一片白 + 行间 hairline"改成**分组块**：一块满宽、无圆角、无描边、
+      无投影的白，与封面之间隔 10px 页底灰（页底从 surface 换成 `--mb-cvbg`）；
+      行高 72 → 64（17px 字下的微信档），分割线仍内缩 20；
+    · 主题行从"行内分段选项卡"（2026-11-05 的形态）改成**值与箭头**：右边显示
+      「深色 ›」，点整行弹底部三选（复用 #ctxMenu 的手机 sheet，当前项带 ✓），
+      选中即换肤、弹层收起 —— 与 iOS「设置 › 显示与亮度」同一个读法。
+      三行至此完全同构（名称 17 / 值 15.5 灰 / ›），不再有一个"控件"夹在表格里。
+      分段控件在手机「我的」页退场（`.me-theme-*` 那 60 行样式一并删除，DOM 已无引用）。
+    · `.me-hero-sec + .me-one-sec` 的 10px 要单独写一条：`… + .set-sec { margin-top:0 }`
+      多一个类，特异性更高，会把间隔压成 0（第一版实测 margin-top 计算值 0px）。
+  验证：390×844 真视口 —— 块 top 258（= 封面底 248 + 10）、三行各 64、左右顶到边；
+  点行弹 sheet（浅色/✓深色/跟随系统）、选浅色后值就地变「浅色」且留在「我的」；
+  深色下块与页底分得开、分割线可见；360 窄屏值不折行；「我的 › 设置」子页与 1440
+  桌面零改动。改动：js/settings.mjs（主题行 + openCtxMenu）、mobile.css §15b。
+  `sw.js` → v235。
+
+## v236（2026-11-11 深夜）「我的」：顶部那片空收掉
+
+用户圈图："这个上面太空了" —— 状态栏到头像之间 ~78px 什么也没有。
+
+原因不在留白值，在**结构**：上一版是"封面式 hero"，`min-height:248px` +
+`.me-hc { align-content:end }` 把三行内容压到封面下缘，头上那段是留给辉光的。
+在对照稿（宽屏、旁边有别的元素）里成立，真机 390 上就成了"页面没加载完"。
+
+改法（`mobile.css` §15b）：
+- `.me-hero-card`：`min-height:248px → 0`（高度由内容定），
+  `padding: 30px…30px → 34px…28px`；
+- `.me-hc`：`align-content:end → start`（保留兜底，别再靠余高排版）。
+
+量值（390×844）：hero 248→202，头像 top 78→34，chip 底 174，分组块 top 212
+（原 258）。深色、360×780、「我的 › 设置」子页、1440 桌面均回归通过。
+`sw.js` → v236。
+
+## v237（2026-11-11 深夜）底部 tab 栏与系统导航栏同色
+
+用户截图（红框圈住 tab 栏 + 导航键区）："底部导航栏跟系统导航栏改成一个颜色"。
+
+根因不是配色偏好，是**两块不同的面**：Android 15+ 强制 edge-to-edge，壳把 WebView
+用 `padding-bottom = 导航栏 inset` 抬上去（§返回键/键盘那套），屏幕最底下那条带露的是
+**窗口背景**（主题纯白/纯黑），网页画不到；而 tab 栏是 `--mb-nav-glass` 的 72% 玻璃，
+压在页面上合成出 ~#F5F5F9 —— 一灰一白，永远一道缝。
+
+改法：颜色只留一份来源，两边都取它。
+
+- `mobile.css`：新增 `--mb-chrome`（浅 `#F2F2F7` / 深 `#1C1C1E`）；`.mb-tabbar`
+  改实色 `var(--mb-chrome)`，顺手摘掉已经没意义的 `backdrop-filter`（不透明后只剩 GPU 开销）。
+- `shell.mjs`：`applyTheme()` 末尾调 `syncShellBar()` —— 把 `--mb-chrome` 报给
+  `window.BandiShell.setSystemBarColor()`；再挂一个 body class 的 MutationObserver，
+  页面切进/切出详情页（tab 栏显隐变了）也重报一次。**没有 tab 栏的页面报空串**，
+  壳收起色块恢复窗口背景 —— 详情/聊天页页面自己铺到底，本来就没有缝，别硬塞一条灰。
+- `mobile-native`：`BandiShell.setSystemBarColor(css)` → `MainActivity.applySystemBarColor()`，
+  在 DecorView 上贴一条只有导航键区那么高的色块（高度跟 insets 走，键盘弹起时 navBottom=0
+  自己收起），并按亮度反着设 `isAppearanceLightNavigationBars`（深底画深色键 = 没有键）。
+  登录页/设备列表 `resetSystemBarColor()`。
+  ⚠️ 没改窗口背景：那会把顶部状态栏那条带也染色，hero 渐变上会多一条灰边。
+
+验证（真机 3330495e，色值取自 adb screencap）：浅色下 tab 栏与导航键区同为
+`#F2F2F7`、深色同为 `#1C1C1E`，中间只剩 tab 栏自己那根 hairline。
+桌面/无壳环境：`BandiShell` 不存在，功能检测跳过，行为不变。`sw.js` → v237。
+
+## v238（2026-11-11 深夜）底部选择面板被自己的蒙层压暗
+
+用户截图（主题 浅色/深色/跟随系统 那个底部 sheet）："这个窗口怎么这么不明显"。
+不是配色选得浅，是**蒙层画在了面板上面**：
+
+`.ctx-menu::before` 用 `z-index:-1` 想画到菜单背后，可 `.ctx-menu` 自己是
+`position:fixed` + `z-index:70`，**自成一个层叠上下文** —— 在这个上下文里负 z-index
+的子元素画在"元素背景之上、内容之下"，于是那层 40% 的黑正正好压在 sheet 的白底上：
+白 → #999，弹窗和背后的暗页糊成一片，只剩按钮（内容层）浮着。
+
+改法：蒙层换成真元素 `#ctxScrim`（挂 body 下，`z-index:69`，压在菜单 70 下面）：
+- `ui.mjs`：`openCtxMenu` 建它、`closeCtxMenu` 摘它；收起走 `click` 不走 `mousedown`
+  （mousedown 就摘的话，紧跟的 click 会落到蒙层下面那一层页面上）；
+- `app.mjs`：全局 mousedown 那条跳过 `#ctxScrim`，别抢在它前面关；
+- `mobile.css` §16.12：删 `.ctx-menu::before`，新增 `.ctx-scrim`（桌面 `display:none`）。
+
+验证（390×844）：sheet 底色取回 `#FFFFFF`（原来采样 #949496），背后页面压暗到 #999；
+点蒙层 → 菜单关、`#ctxScrim` 一并摘除；深色下 sheet `#1C1C1E` 同样分得开。
+`sw.js` → v238。
+
+## v239（2026-11-11 深夜）信箱详情返回栏标题改「详情」
+
+用户截图："导航栏标题改成详情"。
+
+原来返回栏取的是行标题 —— 通知的标题是**整句告警**（"会话已轮换（上下文过长）"），
+塞进那一格被省略号截成半句，而正文里紧接着又原样写了一遍：同一句话出现两次，还一次是残的。
+
+改法：只在信箱通知这一类（`[data-notice]`）把标题定成「详情」：
+- `mobile.mjs` 行点击委托：`row.matches('[data-notice]') ? '详情' : rowTitle(row)`；
+- `inbox.mjs` 刷新后从位置记忆直达详情那条路（派 `mb-detail` 事件）同样传「详情」。
+
+会话 / 员工 / 群那几类不动：返回栏显示人名或标题是用户先前明确要的。
+验证（390×844）：点一条通知 → `.mb-back-title` = 详情，正文标题照旧。
+`sw.js` → v239。
+
+## v240（2026-11-11 深夜）底部 tab 栏改纯白
+
+用户圈住 tab 栏 + 导航键区："改成白色，看看效果"。
+
+只动一个值：`--mb-chrome` 浅色 `#F2F2F7` → `#FFFFFF`（`mobile.css` §16 的浅色 token 块）。
+v237 起这个 token 就是唯一来源 —— tab 栏用它、壳拿它刷系统导航栏那条带，所以改一处两边一起变。
+深色不动（`#1C1C1E`，深色下白栏会刺眼）。
+
+效果（390×844，工作台）：页面底 `#F7F8F9`，白栏从灰底上浮起来，栏顶那条 hairline 是唯一分界；
+图标在纯白上更亮。代价是**会话列表那种白底页**上栏与内容同色，只剩一根线。
+验证：真机 strip 取色 `#FFFEFF`（= 网页报过去的 `#FFFFFF`）。`sw.js` → v240。
+
+## v241（2026-11-11 深夜）顶部导航栏拍白，跟底部同色
+
+用户："顶部导航栏也改成白色，跟底部导航栏一个色"。
+
+顶部这一排栏原来都吃 `--mb-nav-glass`（浅色 rgba(242,242,247,.72) 玻璃，合成 ~#F5F5F9），
+v240 把 tab 栏拍白以后，页面成了"灰头 + 白脚"。这轮把七条顶部栏统一到 `--mb-chrome`：
+
+- `.list-head`（列表页头）
+- `body.no-list .detail-head`（整页头）
+- `body.mb-detail-open .mb-backbar`（详情返回栏）
+- `body.mb-narrow #settingsView .me-set-nav`（设置子页头）
+- `#mbPicker .mb-picker-bar`（全屏选择页头）
+- `.kb-new .kb-new-bar`（创建页头）
+- `#pluginView .tc-m-head`（任务卡页头）
+
+新增 `mobile.css §25` 一条合并规则（放文件末尾，同特异性靠后来赢 —— 原规则散在
+§4/§15b/§16.2/§20/§21，不必逐条回去改），并把已经不透明的 `backdrop-filter` 摘掉。
+底部两条 compositor（`.composer` / `.tc-composer`）仍是玻璃，不在"顶栏"范围里。
+
+验证（390×844）：工作台 / 我的 / 设置子页，`.list-head` 与 `.me-set-nav` 计算值
+`rgb(255,255,255)`、`backdrop-filter: none`，与 `.mb-tabbar` 一致；页面底灰
+`#F7F8F9` 仍是分界来源。深色下随 `--mb-chrome` 变 `#1C1C1E`。`sw.js` → v241。
+
+## v242（2026-11-12 凌晨）「选择电脑」页发粉：原生页底色归到网页那一档
+
+用户截图（选择电脑页）："这个怎么看着有点粉，跟其他页风格不同"。
+
+不是谁调了色 —— 是**没人调过**：壳的主题一直是 Material3 默认（`Theme.Material3.DayNight`），
+它的 baseline surface 是 `#FFFBFE`（白里掺紫），而网页那套页面底是 `#F7F8F9`。两套色板并排，
+原生页就"粉"了；卡片在代码里写死纯白，压在粉底上几乎浮不起来。
+
+改法（`apps/mobile-native`）：
+
+- 新增 `values/colors.xml`：`bandi_page #F7F8F9`、`bandi_primary #0066CC`；
+- `themes.xml`：`android:windowBackground` / `android:colorBackground` → `@color/bandi_page`，
+  `colorPrimary` → `@color/bandi_primary`（Material3 默认紫 `#6750A4` 的「刷新」按钮也一并归队）；
+- `activity_main.xml`：两处 `?attr/colorSurface`（连不上兜底 / 离线蒙版）→ `@color/bandi_page`；
+- `MainActivity`：
+  · `window.isNavigationBarContrastEnforced = false` —— 3-button 模式下系统会在导航键区盖一层
+    半透明白把底下往白里拉（页面底 `#F7F8F9` 被抬成 `#FEFEFE`），v237 那套色块其实一直没画到，
+    看着"像生效"只是因为白色本来就接近 scrim 的结果。关掉后画什么是什么；
+  · 原生页新增 `paintSystemBarPage()`（登录 / 设备列表用它把导航键区刷成页面底色），
+    `resetSystemBarColor()` 保留给"网页页自己没有底栏"的情形。
+
+`shell.mjs`：没有 tab 栏的页面（详情 / 聊天 / 看板）不再报空串，改报**页面自己的底色**
+（`pageBottomColor()`：body → html 的 computed background，非实色才退空串）——
+聊天页纯黑底时最底那条带不会再镶一圈浅灰。
+
+验证（真机 3330495e，`adb exec-out screencap` + `tmp/scan.mjs` 逐列断色）：
+- 选择电脑页：整页到最底 `#F7F8F9`（原来内容 `#F7F8F9`、最底一条 `#FEFEFE`），
+  卡片纯白、按钮 `#0066CC`；
+- 面板页：tab 栏与导航键区同为 `#FFFFFF`，中间无过渡带。
+`sw.js` → v242。
+
+## v245（2026-11-12 凌晨）状态栏那条带跟顶栏同色
+
+用户截图（工作台，红框圈住状态栏 + 标题栏）："这两个统一一下颜色" ——
+状态栏那一行（0:14、电量）是浅灰 `#F2F2F7`，紧挨着的「工作台」标题栏是白的。
+
+跟底部同一个病根、同一套解法：Android 15+ edge-to-edge 下，壳给根内容视图补了
+`padding-top = 状态栏 inset`，WebView 落在安全区里，**那条带露的是窗口背景**（页面底色）。
+v241 把七条顶部栏拍白之后，页内是白的、带是灰的，反而更刺眼。
+
+- `BandiShell.setTopBarColor(css)` → `MainActivity.applyTopBarColor()`：在 DecorView 顶上
+  贴一条状态栏那么高的色块（高度跟 `statusInset` 走），并按亮度调状态栏图标明暗。
+  原生页由 `paintSystemBarPage()` 一并刷成 `@color/bandi_page`。
+- `shell.mjs` 新增 `topBarColor()`：**问"视口顶端那 1px 是谁"**（`elementFromPoint`，
+  再往上找第一个不透明底色），比枚举 `.list-head / .mb-backbar…` 准 —— 同一个
+  `.mb-backbar` 在 DOM 里可能有几份（详情层、聊天层各一个），按选择器取到的是第一个，
+  深色聊天页就报过 `#1C1C1E` 而头顶其实是纯黑。取不到再退回选择器、最后 `--mb-chrome`。
+- 首次上报补了 `load` + 0.6s + 1.6s 三次重报（清缓存值强制重发）：`applyTheme` 跑在 boot
+  早期，那时「我的」页的顶栏还没套上样式，`elementFromPoint` 落到 `#settingsView`，
+  报的是页面底色 `#F2F2F7`，画完其实是白栏 —— 之后 class 不变就再没机会纠正。
+- `showPanel()` 进面板前把两条带都清掉（颜色交回网页），别让人在半路看到原生页的灰。
+
+顺带：debug 包的 `setupWebView` 里开了 `WebView.setWebContentsDebuggingEnabled`，
+配 `adb forward tcp:9222 localabstract:webview_devtools_remote_<pid>` 就能从电脑端
+CDP 进壳里的页面（这台手机 `adb shell input` 被系统禁掉，点不动卡片 —— 以前只能
+改代码重编一轮看一张图，现在直接点、直接读计算样式）。
+
+真机取色（`adb exec-out screencap` + `tmp/scan.mjs` 逐列断色）：
+浅色工作台 / 我的：状态栏带到顶栏一整片 `#FFFFFF`；深色工作台：`#1C1C1E` 一整个；
+深色聊天页：顶部 `#000000`（chat-head 黑）、底部 `#070809`（body 底）。
+`sw.js` → v245。
+
+## v246（2026-11-12 夜）状态只存码，中文退成显示名
+
+用户拍板：「系统里永远只能有状态码，不能既有状态码又有其他」。起因是数字员工建卡连续
+两次 400 E2058 —— 一次中文状态被 shell 打烂成 `??`（重试 9 次全废），一次模型改写成
+`todo` 而接口只认「待办」。同一个状态有两套写法，就一定有人写第二套。
+
+- 词表（`apps/server/src/store/status.mjs`）：任务八态 = `idea/todo/doing/review/blocked/failed/done/cancelled`，
+  运行七码 = `pending/running/done/failed/stopped/interrupted/blocked`，流程三码在 `WORKFLOW_RUN_STATUS`；
+  中文只留在 `TASK_LABEL` / `RUN_LABEL` / `WORKFLOW_RUN_LABEL`，**全系统仅此一份**。
+- 库：老库启动一次性把 323 条中文状态换成码（`migrateStatusValuesToCodes`，幂等）；建表默认值改码。
+- 接口：入参只收码。写中文名 400 `E2058`，报错直接告诉他该写哪个码（`「待办」是显示名，请写 "todo"`）；
+  建卡口以前会**静默落回 todo**，现在先挡（把「已完成」悄悄建成待办比 400 更坏）。
+- 前端：`S.statusDict` 随 `/api/state` 下发，渲染统一走 `statusText(code)`；
+  看板/流程/卡票/CSS 状态类全部改码；本模块里不再写第二份中文状态表。
+
+`sw.js` → v246（js/style 都动了，逼客户端整包重建）。

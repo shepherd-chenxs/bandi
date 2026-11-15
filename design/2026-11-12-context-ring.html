@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>上下文占用环 · 输入区稿（2026-11-12）</title>
+<style>
+  /* ── bandi 设计 token（对齐 style.css v1.0.1 密排风格）── */
+  :root {
+    --bg: #08090a; --panel: #111214; --side: #0d0e10;
+    --line: #202225; --text: #e8e9ea; --dim: #9b9ea3;
+    --accent: #0a84ff; --ok: #3fb950; --bad: #f85149; --warn: #d29922;
+    --input: #0d0e10; --bubble: #16171a;
+    --r-row: 6px; --r-face: 10px;
+  }
+  .light {
+    --bg: #f7f8f9; --panel: #ffffff; --side: #f0f1f3;
+    --line: #d9dce1; --text: #1a1b1e; --dim: #6b7075;
+    --accent: #0066cc; --ok: #1a7f37; --bad: #d1242f; --warn: #9a6700;
+    --input: #ffffff; --bubble: #f0f1f3;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #101113; color: #e8e9ea;
+    font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif;
+    padding: 40px 24px 80px;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; }
+  h1 { font-size: 20px; font-weight: 600; margin-bottom: 4px; }
+  .sub { color: #9b9ea3; font-size: 13px; margin-bottom: 28px; }
+  h2 { font-size: 13px; font-weight: 600; color: #9b9ea3; margin: 36px 0 12px;
+       text-transform: none; letter-spacing: .02em; }
+
+  /* ── 决策摘要 ── */
+  .decisions { background: #16171a; border: 1px solid #26282c; border-radius: 10px;
+               padding: 14px 16px; margin-bottom: 8px; font-size: 13px; }
+  .decisions b { color: #e8e9ea; font-weight: 600; }
+  .decisions li { margin: 6px 0 6px 18px; color: #b8bbc0; }
+  .decisions li::marker { color: #9b9ea3; }
+
+  /* ── 稿子画布：模拟 bandi 消息页输入区 ── */
+  .canvas { border: 1px solid #26282c; border-radius: 10px; overflow: hidden; }
+  .canvas-bar { padding: 5px 12px; font-size: 12px; color: #9b9ea3;
+                background: #0b0c0e; border-bottom: 1px solid #26282c; }
+
+  .theme { padding: 18px; }
+  .theme.light { background: var(--bg); }
+
+  /* bandi 消息流示意（只摆两条，撑出场景） */
+  .msgs { padding: 14px 18px 6px; display: flex; flex-direction: column; gap: 10px; }
+  .msg { max-width: 78%; font-size: 13px; border-radius: 6px; padding: 7px 10px; }
+  .msg.me { align-self: flex-end; background: var(--bubble-me, #17233f); border: 1px solid #23375a; }
+  .theme.light .msg.me { background: #e3ecfb; border-color: #c5d9f5; }
+  .msg.ai { align-self: flex-start; background: var(--bubble); border: 1px solid var(--line); }
+  .msg .who { font-size: 11px; color: var(--dim); margin-bottom: 2px; }
+
+  /* 输入区（对齐 index.html .composer 结构） */
+  .composer { padding: 10px 18px 16px; }
+  .input-wrap { background: var(--input); border: 1px solid var(--line); border-radius: 6px; }
+  .input-wrap textarea { display: block; width: 100%; background: none; border: 0; outline: 0;
+                         resize: none; color: var(--text); font: inherit; font-size: 13px;
+                         padding: 9px 10px 2px; height: 40px; }
+  .input-tools { display: flex; align-items: center; gap: 8px; padding: 4px 8px 8px; }
+  .tool-btn { height: 26px; min-width: 26px; padding: 0 8px; border-radius: 6px;
+              border: 1px solid var(--line); background: none; color: var(--dim);
+              font: inherit; font-size: 12px; cursor: default; }
+  .tool-btn.model { color: var(--text); }
+  .send { margin-left: auto; height: 26px; padding: 0 14px; border-radius: 6px; border: 0;
+          background: var(--accent); color: #fff; font: inherit; font-size: 12px; font-weight: 600; }
+  .theme.light .send { color: #fff; }
+
+  /* ── 上下文占用环 ── */
+  .cring { position: relative; width: 20px; height: 20px; flex: none; cursor: default; }
+  .cring svg { display: block; width: 20px; height: 20px; transform: rotate(-90deg); }
+  .cring .track { stroke: var(--line); }
+  .cring .val { transition: stroke-dashoffset .3s, stroke .3s; stroke-linecap: round; }
+  /* 环心不放数字（2026-11-12 用户定稿：不要百分比，通过环能看出来）—— 精确值在弹层里 */
+  .cring.warn .val { stroke: var(--warn); }
+  .cring.bad .val { stroke: var(--bad); }
+
+  /* hover 提示（bandi 弹层语汇：panel 底 + 1px 线 + 小阴影） */
+  .tip { position: absolute; bottom: 28px; left: 50%; transform: translateX(-50%);
+         background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+         box-shadow: 0 4px 14px rgba(0,0,0,.35); padding: 8px 10px; white-space: nowrap;
+         font-size: 12px; color: var(--text); opacity: 0; pointer-events: none;
+         transition: opacity .12s; z-index: 5; }
+  .cring:hover .tip { opacity: 1; }
+  .tip .t-main { font-weight: 600; }
+  .tip .t-sub { color: var(--dim); font-size: 11px; margin-top: 2px; }
+  .tip.bad .t-main { color: var(--bad); }
+  .tip::after { content: ""; position: absolute; top: 100%; left: 50%; margin-left: -5px;
+                border: 5px solid transparent; border-top-color: var(--line); }
+
+  /* ── 四状态一览 ── */
+  .states { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .state { background: #16171a; border: 1px solid #26282c; border-radius: 10px;
+           padding: 16px 12px 12px; text-align: center; }
+  .state .demo { display: flex; justify-content: center; margin-bottom: 10px; }
+  .state .cap { font-size: 12px; color: #e8e9ea; font-weight: 600; }
+  .state .note { font-size: 11px; color: #9b9ea3; margin-top: 4px; line-height: 1.5; }
+  .light-canvas { background: #f7f8f9; }
+  .light-canvas .canvas-bar { background: #eceef1; border-color: #d9dce1; color: #6b7075; }
+  .light-canvas .canvas { border-color: #d9dce1; }
+
+  /* ── 交互试玩 ── */
+  .play { background: #16171a; border: 1px solid #26282c; border-radius: 10px; padding: 18px; }
+  .play input[type=range] { width: 100%; accent-color: #0a84ff; }
+  .play .row { display: flex; align-items: center; gap: 14px; }
+  .play .readout { font-size: 12px; color: #9b9ea3; min-width: 200px; }
+  .play .readout b { color: #e8e9ea; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>上下文占用环 · 输入区稿</h1>
+  <div class="sub">2026-11-12 · 叠在 bandi 消息页现状上 · 数据源 session-budget.mjs 的 maxTurnTokens（10 万）</div>
+
+  <div class="decisions">
+    <b>设计决策</b>
+    <li><b>位置</b>：input-tools 行、模型选择器**左边**（2026-11-12 用户定稿；初版在模型与发送之间，实机看过挪了）。</li>
+    <li><b>形态</b>：20px 圆环，环心**不放数字**（2026-11-12 定稿：通过环能看出来），精确值收进 hover 弹层；分母固定 10 万。</li>
+    <li><b>阈值色</b>：≥70% 变 --warn 黄、≥90% 变 --bad 红（红 = 快强制轮换了）。</li>
+    <li><b>解释藏在 hover</b>：默认零文字，悬停出弹层讲「单轮上下文 / 满 10 万自动换新会话」——不占密排空间。</li>
+    <li><b>轮换即归零</b>：换会话后环回 0%，用户从环的变化能「看见」轮换发生过。</li>
+  </div>
+
+  <h2>一 · 深色主题 · 现状输入区 + 环（33%，悬停可看弹层）</h2>
+  <div class="canvas">
+    <div class="canvas-bar">消息页 · 群「项目全员群1」</div>
+    <div class="theme" style="background:var(--bg)">
+      <div class="msgs">
+        <div class="msg me">评论区这个「每次回复都要点回复按钮」的摩擦，转给负责交互的人处理一下</div>
+        <div class="msg ai"><div class="who">爻鉴</div>好，已经在这张卡的评论区留言给交互负责的同事，附了复现路径。</div>
+      </div>
+      <div class="composer">
+        <div class="input-wrap">
+          <textarea readonly>说点什么…（Enter 发送，Shift+Enter 换行）</textarea>
+          <div class="input-tools">
+            <button class="tool-btn">＋</button>
+            <button class="tool-btn">权限</button>
+            <div class="cring" id="demoRing">
+              <svg viewBox="0 0 20 20"><circle class="track" cx="10" cy="10" r="8" fill="none" stroke-width="2.5"/><circle class="val" cx="10" cy="10" r="8" fill="none" stroke-width="2.5"/></svg>
+              <span class="pct" hidden></span>
+              <div class="tip">
+                <div class="t-main">单轮上下文 3.3万 / 10万</div>
+                <div class="t-sub">满 10 万自动换新会话，交接最近消息</div>
+              </div>
+            </div>
+            <button class="tool-btn model">快速 ▾</button>
+            <button class="send">发送</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h2>二 · 四个状态</h2>
+  <div class="states" id="states"></div>
+
+  <h2>三 · 浅色主题 · 同位置（93% 红档）</h2>
+  <div class="light-canvas">
+    <div class="canvas">
+      <div class="canvas-bar">消息页 · 群「项目全员群1」</div>
+      <div class="theme light">
+        <div class="msgs">
+          <div class="msg me">把这三个修复一起提个 PR</div>
+          <div class="msg ai"><div class="who">爻鉴</div>已建 fix/reset-member-sessions，包含回复风格、专家详情卡、目录挪位三处。</div>
+        </div>
+        <div class="composer">
+          <div class="input-wrap">
+            <textarea readonly>说点什么…（Enter 发送，Shift+Enter 换行）</textarea>
+            <div class="input-tools">
+              <button class="tool-btn">＋</button>
+              <button class="tool-btn">权限</button>
+              <div class="cring bad" data-pct="93">
+                <svg viewBox="0 0 20 20"><circle class="track" cx="10" cy="10" r="8" fill="none" stroke-width="2.5"/><circle class="val" cx="10" cy="10" r="8" fill="none" stroke-width="2.5"/></svg>
+                <span class="pct" hidden></span>
+                <div class="tip bad">
+                  <div class="t-main">单轮上下文 9.3万 / 10万</div>
+                  <div class="t-sub">上下文即将满，将自动开新会话</div>
+                </div>
+              </div>
+              <button class="tool-btn model">快速 ▾</button>
+              <button class="send">发送</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h2>四 · 试玩（拖动看环和弹层怎么变）</h2>
+  <div class="play">
+    <div class="row" style="margin-bottom:14px">
+      <div class="cring" id="playRing" style="width:32px;height:32px">
+        <svg viewBox="0 0 20 20" style="width:32px;height:32px"><circle class="track" cx="10" cy="10" r="8" fill="none" stroke-width="2.5"/><circle class="val" cx="10" cy="10" r="8" fill="none" stroke-width="2.5"/></svg>
+        <span class="pct" hidden style="font-size:9px"></span>
+        <div class="tip">
+          <div class="t-main" id="playMain"></div>
+          <div class="t-sub" id="playSub"></div>
+        </div>
+      </div>
+      <div class="readout" id="playRead"></div>
+    </div>
+    <input type="range" id="playRange" min="0" max="100" value="33">
+  </div>
+</div>
+
+<script>
+  // 阈值与 bandi 侧一致：70% 黄、90% 红；分母 = maxTurnTokens 100_000
+  var CIRC = 2 * Math.PI * 8;
+  var MAX = 100000;
+
+  function level(p) { return p >= 90 ? 'bad' : p >= 70 ? 'warn' : ''; }
+
+  function paint(ring, p) {
+    var val = ring.querySelector('.val');
+    val.style.strokeDasharray = CIRC;
+    val.style.strokeDashoffset = CIRC * (1 - p / 100);
+    ring.classList.remove('warn', 'bad');
+    var lv = level(p);
+    if (lv) ring.classList.add(lv);
+    var tip = ring.querySelector('.tip');
+    tip.classList.remove('bad');
+    if (lv === 'bad') tip.classList.add('bad');
+    tip.querySelector('.t-main').textContent = '单轮上下文 ' + (MAX * p / 100 / 10000).toFixed(1) + '万 / 10万';
+    tip.querySelector('.t-main').style.color = lv === 'bad' ? 'var(--bad)' : lv === 'warn' ? 'var(--warn)' : '';
+    tip.querySelector('.t-sub').textContent =
+      p >= 90 ? '上下文即将满，将自动开新会话'
+      : p >= 70 ? '上下文偏满，重要结论先落到消息里'
+      : '满 10 万自动换新会话，交接最近消息';
+  }
+
+  // 四状态一览
+  var states = [
+    { p: 8,  cap: '刚开 / 刚轮换', note: '轮换后归零，从环能看见"换过会话"' },
+    { p: 33, cap: '日常', note: '灰环，存在但不抢戏' },
+    { p: 74, cap: '偏满（黄）', note: '≥70% 变 --warn，提示先落结论' },
+    { p: 93, cap: '将轮换（红）', note: '≥90% 变 --bad，预告"下条可能换手"' },
+  ];
+  var host = document.getElementById('states');
+  states.forEach(function (s) {
+    var d = document.createElement('div');
+    d.className = 'state';
+    d.innerHTML = '<div class="demo"><div class="cring" data-pct="' + s.p + '">' +
+      '<svg viewBox="0 0 20 20"><circle class="track" cx="10" cy="10" r="8" fill="none" stroke-width="2.5"/><circle class="val" cx="10" cy="10" r="8" fill="none" stroke-width="2.5"/></svg>' +
+      '<span class="pct"></span><div class="tip"><div class="t-main"></div><div class="t-sub"></div></div></div></div>' +
+      '<div class="cap">' + s.cap + '</div><div class="note">' + s.note + '</div>';
+    host.appendChild(d);
+    paint(d.querySelector('.cring'), s.p);
+  });
+
+  // 首屏两处
+  paint(document.getElementById('demoRing'), 33);
+  var lightRing = document.querySelector('.theme.light .cring');
+  paint(lightRing, 93);
+
+  // 试玩
+  var range = document.getElementById('playRange');
+  var playRing = document.getElementById('playRing');
+  var read = document.getElementById('playRead');
+  function play() {
+    var p = +range.value;
+    paint(playRing, p);
+    read.innerHTML = '占用 <b>' + p + '%</b> ≈ <b>' + Math.round(MAX * p / 100).toLocaleString() + '</b> tokens / 100,000';
+  }
+  range.addEventListener('input', play);
+  play();
+</script>
+</body>
+</html>

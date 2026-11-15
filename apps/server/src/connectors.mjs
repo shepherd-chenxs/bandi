@@ -12,7 +12,14 @@ import { dataDir, repoRoot } from './config.mjs';
  *   ① 登记：它从哪来、要什么凭据、给哪些运行时用（这就是"账本"）
  *   ② 接线：把这条登记翻译成每个 agent CLI 能吃的启动参数
  * 代码在它自己的进程里跑，班底既不 import 它、也不监督它 —— 隔离是白捡的。
- * 代价：能力边界取决于 CLI 支持什么（下面 `codexArgs` / `writeDshPatch` 的不对称就是这代价）。
+ * 代价：能力边界取决于 CLI 支持什么（三家怎么吃 MCP 各不相同 ——
+ * codex 走 `-c`、dsh 走 `--patch`、claude 走 `--mcp-config`，下面三节各写各的）。
+ *
+ * ⚠️ **接线与提示词必须同进退**（2026-11-13 实报）：`promptLines` 往员工首轮注入
+ * "你有 ssh 连接器"的前提是 `resolve(family)` 真的生成了启动参数。账本上有、参数
+ * 没生成（族没接、写文件失败），提示词就得缩回去 —— 不然模型会拿提示词去找一个
+ * 不存在的工具，搜不到就下结论"没有远程通道"（马超的 claude 会话就是这么被
+ * "有 ssh 连接器"的提示带偏的：mcp__* 里根本没有，ToolSearch 也搜不到）。
  *
  * 现在只有一种 kind：`mcp`（stdio / streamable-http）。
  * 以后要加别的 kind（比如 codex / dsh 自己的插件包），在这里加一个 resolve 分支，
@@ -378,6 +385,69 @@ function writeDshPatch(entries) {
   return file;
 }
 
+/* ------------------------------------------------------------ 接线：claude */
+
+/**
+ * claude：走 `--mcp-config <文件>`（官方口子：一个 JSON，根键 `mcpServers`）。
+ *
+ * 与 dsh 同款思路：整份配置落一个**内容寻址**的文件，不碰用户自己的
+ * `~/.claude.json` —— 用户在 claude 里自己配的 MCP 照常加载，这份是叠上去的
+ * （**不加** `--strict-mcp-config`，那是"只用这一份"的开关，替用户做减法的事不干）。
+ *
+ * `env:NAME` 引用在这里的处境介于 codex 与 dsh 之间：
+ *   · 文件里只能写字面量（claude 不会帮我们解 `!!js`，dsh 那种"引用留在文件里、
+ *     运行时才解析"表达不了），所以**从本进程环境解析后落字面量** —— 密钥会进
+ *     生成的文件（在班底数据目录里、不进 shell 历史与命令行，比 codex 内联进
+ *     命令行好一点，但仍然落盘，这点不藏着）。
+ *   · 引用的变量本进程没有 → 丢掉这个键。`resolve()` 顶上已经对缺引用统一记了
+ *     note（"引用了环境变量 X，但当前进程环境里没有它"），这里不重复说。
+ */
+function renderClaudeConfig(entries, notes) {
+  const servers = {};
+  for (const e of entries) {
+    const resolveRef = (v) => (isRef(v) ? process.env[refName(v)] : v);
+    if (e.transport === 'stdio') {
+      const l = launcher(e);
+      const server = { command: l.command };
+      if (l.args.length) server.args = l.args;
+      if (e.cwd) notes.push(`${e.id}：claude 的 MCP 配置不吃 cwd，已跳过；dsh 那边有`);
+      const env = {};
+      for (const [k, v] of Object.entries(e.env)) {
+        const val = resolveRef(v);
+        if (val !== undefined && val !== '') env[k] = String(val);
+      }
+      if (Object.keys(env).length) server.env = env;
+      servers[e.id] = server;
+    } else {
+      const server = { type: 'http', url: e.url };
+      const headers = {};
+      for (const [k, v] of Object.entries(e.headers)) {
+        const val = resolveRef(v);
+        if (val !== undefined && val !== '') headers[k] = String(val);
+      }
+      // bearerTokenEnv：claude 的 mcp 配置没有 bearer_token_env_var 这个概念
+      //（那是 codex 的），等价物是 Authorization 头 —— 解析得出来就替它带上
+      if (e.bearerTokenEnv && process.env[e.bearerTokenEnv]) {
+        headers.Authorization = `Bearer ${process.env[e.bearerTokenEnv]}`;
+      }
+      if (Object.keys(headers).length) server.headers = headers;
+      servers[e.id] = server;
+    }
+  }
+  return JSON.stringify({ mcpServers: servers }, null, 2) + '\n';
+}
+
+/** 同 dsh 的内容寻址写法：同内容只写一次，运行期不互相踩 */
+function writeClaudeConfig(entries, notes) {
+  const json = renderClaudeConfig(entries, notes);
+  const hash = crypto.createHash('sha1').update(json).digest('hex').slice(0, 12);
+  const dir = patchDir();
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `claude-mcp-${hash}.json`);
+  if (!fs.existsSync(file)) fs.writeFileSync(file, json, 'utf8');
+  return file;
+}
+
 /* ------------------------------------------------------------------ 实探 */
 
 /**
@@ -485,9 +555,18 @@ export function activeFor(family) {
  *
  * 为什么必须有一段提示词：codex 把外部工具放在 **tool_search 后面**，不在预置工具列表里 ——
  * 实测里模型会直接说"没有 echo 工具"。不告诉它去搜，"装上了"就只是账本上的一行。
- * dsh 那边工具是直接列出来的，命名是 mcp__<连接器>__<工具>，所以只提一句。
+ * dsh / claude 那边工具是直接列出来的（claude 开了 tool_search 时会延迟暴露），
+ * 命名都是 mcp__<连接器>__<工具>，所以只提一句。
+ *
+ * ⚠️ 以 **resolve 的结果**为准，不看账本开关：args 真的生成了才算"这轮有连接器"。
+ * 2026-11-13 实报：claude 族还没接线时，这里照注入"你有 ssh 连接器"，模型拿着提示
+ * 去 mcp__* 里找、ToolSearch 里搜，搜不到就下结论"没有远程通道" —— 提示词在骗它。
  */
 export function promptLines(family) {
+  // 闸门看 resolve（参数真生成了才算接线成功），文案取 activeFor（完整条目对象；
+  // resolve 的 active 是 **id 串**，给运行记录/界面用的，形状不同别拿错）
+  const wiring = resolve(family);
+  if (!wiring.args.length) return [];
   const active = activeFor(family);
   if (!active.length) return [];
   const example = active[0].id;
@@ -529,6 +608,12 @@ export function resolve(family) {
       const file = writeDshPatch(entries);
       out.files = [file];
       out.args = ['--patch', file];
+    } else if (family === 'claude') {
+      // 2026-11-13 接上（此前一直走上面的"还没接"分支）：马超在 claude 上搜不到
+      // mcp__ssh__* 就是这一行缺了 —— 连接器账本开着、提示词也注入了，工具却没挂
+      const file = writeClaudeConfig(entries, out.notes);
+      out.files = [file];
+      out.args = ['--mcp-config', file];
     } else {
       out.notes.push(`协议族 ${family} 还没接连接器，${entries.length} 条登记这次没生效`);
     }

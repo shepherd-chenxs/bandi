@@ -384,7 +384,7 @@ function swCardHTML(e, probedList) {
     installed ? '<span class="set-tag">已安装</span>' : '',
     installed && p.gateway ? '<span class="set-tag">网关在跑</span>' : '',
     busy ? `<span class="set-tag">${t.running ? '安装中…' : '排队中…'}</span>` : '',
-    !installed && t?.status === '失败' ? '<span class="set-tag">上次没装成</span>' : '',
+    !installed && t?.status === 'failed' ? '<span class="set-tag">上次没装成</span>' : '',
   ]
     .filter(Boolean)
     .join('');
@@ -547,9 +547,9 @@ export function openPlgDetail(kind, id) {
     const busy = !p?.installed && !!t && !t.done;
     if (busy) {
       bits.push(`<div class="plg-meta" data-ext-tail="${esc(id)}">${t.running ? '安装中…' : '排队中…'} ${esc(taskTail(t))}</div>`);
-    } else if (t?.status === '失败') {
+    } else if (t?.status === 'failed') {
       bits.push(`<div class="plg-warn">上次安装没成：${esc(taskTail(t) || t.output?.slice(-200) || '（没有输出）')}</div>`);
-    } else if (t?.status === '完成' && !p?.installed) {
+    } else if (t?.status === 'done' && !p?.installed) {
       bits.push('<div class="plg-warn">上次任务报了「完成」，但这台机器上没认出它装好了 —— 点安装可以再来一遍。</div>');
     }
     /* 打开面板：桌面形态（Windows）→ 拉起它自己的窗口；网页形态（Linux）→ **只在面板起着时**
@@ -830,7 +830,7 @@ function watchBusySoftware() {
       if (!next) continue;
       if (next.done) {
         dirty = true; // 做完/失败 —— 交给整页重画（探针也会跟着更新）
-        if (next.status === '完成') S.pluginTab = 'installed';
+        if (next.status === 'done') S.pluginTab = 'installed';
         else toast(`「${family}」没装成：${taskTail(next) || '看服务端日志'}`, 'error');
       } else {
         const line = `${next.running ? '安装中…' : '排队中…'} ${taskTail(next)}`.trim();

@@ -10,7 +10,7 @@ export function getWorkflowTemplate(id) {
   return db.prepare('SELECT * FROM workflow_templates WHERE id = ?').get(id) ?? null;
 }
 
-export function upsertWorkflowTemplate({ id, name, nodes, steps, start, builtIn = false }) {
+export function upsertWorkflowTemplate({ id, name, nodes, steps, start, builtIn = false, autonomous = false }) {
   const now = nowIso();
   const sid = id || newId('wt');
   // v2 用 nodes（节点+连线）；steps 是 v1 的线性步骤，这里同步写一份纯粹为了兼容旧读法
@@ -18,13 +18,13 @@ export function upsertWorkflowTemplate({ id, name, nodes, steps, start, builtIn 
   const nodesPayload = nodes ? payload : null;
   const startNode = start ?? (nodes?.length ? nodes[0].id : null);
   db.prepare(
-    `INSERT INTO workflow_templates (id, name, steps, nodes, startNode, builtIn, createdAt, updatedAt)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO workflow_templates (id, name, steps, nodes, startNode, builtIn, autonomous, createdAt, updatedAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET name = excluded.name, steps = excluded.steps,
        nodes = COALESCE(excluded.nodes, workflow_templates.nodes),
        startNode = COALESCE(excluded.startNode, workflow_templates.startNode),
        updatedAt = excluded.updatedAt`,
-  ).run(sid, name, payload, nodesPayload, startNode, builtIn ? 1 : 0, now, now);
+  ).run(sid, name, payload, nodesPayload, startNode, builtIn ? 1 : 0, autonomous ? 1 : 0, now, now);
   return getWorkflowTemplate(sid);
 }
 
@@ -46,9 +46,9 @@ export function renameWorkflowTemplate(oldId, newId) {
   db.exec('BEGIN');
   try {
     db.prepare(
-      `INSERT INTO workflow_templates (id, name, steps, nodes, startNode, publishedAt, builtIn, createdAt, updatedAt)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(newId, from.name, from.steps, from.nodes, from.startNode, from.publishedAt, from.builtIn, from.createdAt, now);
+      `INSERT INTO workflow_templates (id, name, steps, nodes, startNode, publishedAt, builtIn, autonomous, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(newId, from.name, from.steps, from.nodes, from.startNode, from.publishedAt, from.builtIn, from.autonomous ?? 0, from.createdAt, now);
     db.prepare('DELETE FROM workflow_templates WHERE id = ?').run(oldId);
     db.prepare('UPDATE workflow_runs SET templateId = ? WHERE templateId = ?').run(newId, oldId);
     db.exec('COMMIT');
@@ -76,12 +76,21 @@ export function createWorkflowRun({
   const id = newId('wf');
   db.prepare(
     `INSERT INTO workflow_runs (id, templateId, title, status, currentStep, threadId, intent, note, projectId, prRepo, prNumber, createdAt, updatedAt)
-     VALUES (?, ?, ?, '进行中', 0, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, 'doing', 0, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(id, templateId, title, threadId, intent, note, projectId, prRepo, prNumber, now, now);
   return getWorkflowRun(id);
 }
-/** 发布 / 下架。**草稿能编，发布的才能在工作台点开起流程** */
+/** 只补自主标记（内建模板升级用）。SQL 只留在 store/ 内；传 0/1，不接外部字符串。 */
+export function setTemplateAutonomous(id, on = true) {
+  db.prepare('UPDATE workflow_templates SET autonomous = ?, updatedAt = ? WHERE id = ?').run(
+    on ? 1 : 0,
+    nowIso(),
+    id,
+  );
+  return getWorkflowTemplate(id);
+}
 
+/** 发布 / 下架。**草稿能编，发布的才能在工作台点开起流程** */
 export function setTemplatePublished(id, on = true) {
   db.prepare('UPDATE workflow_templates SET publishedAt = ?, updatedAt = ? WHERE id = ?').run(
     on ? nowIso() : null,
@@ -162,19 +171,19 @@ export function listWorkflowRuns({ limit = 100 } = {}) {
   return db
     .prepare(
       `SELECT * FROM workflow_runs
-        ORDER BY CASE status WHEN '进行中' THEN 0 ELSE 1 END, updatedAt DESC LIMIT ?`,
+        ORDER BY CASE status WHEN 'doing' THEN 0 ELSE 1 END, updatedAt DESC LIMIT ?`,
     )
     .all(limit);
 }
 
 /**
  * 只捞「进行中」的实例 —— 给 30 秒节拍的 `retryPendingSteps`（apps/server/src/workflows.mjs）用。
- * 那里只关心还在跑的：原来全量捞 100 条（绝大多数是已完结）再逐条 `status !== '进行中'` 跳过，
+ * 那里只关心还在跑的：原来全量捞 100 条（绝大多数是已完结）再逐条 `status !== 'doing'` 跳过，
  * 空闲进程每 30 秒白做一轮。一条 WHERE 的事，别让节拍器付全量价。
  */
 export function listActiveWorkflowRuns() {
   return db
-    .prepare("SELECT * FROM workflow_runs WHERE status = '进行中' ORDER BY updatedAt DESC")
+    .prepare("SELECT * FROM workflow_runs WHERE status = 'doing' ORDER BY updatedAt DESC")
     .all();
 }
 /**
@@ -259,7 +268,7 @@ export function createWorkflowTask(row) {
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id, row.runId, row.nodeId, row.nodeName, row.visit ?? 1, row.detail ?? '',
-    row.assigneePersonaId ?? null, row.status ?? '待办',
+    row.assigneePersonaId ?? null, row.status ?? 'todo',
     row.decision ?? null, row.note ?? null, row.conversationId ?? null,
     row.agentRunId ?? null, row.startedAt ?? null, row.endedAt ?? null,
   );
@@ -277,6 +286,20 @@ export function getWorkflowTask(runId, nodeId, visit = 1) {
     .get(runId, nodeId, visit) ?? null;
 }
 
+/**
+ * 按任务**主键 id** 取一行（dispatch 注入「任务合同」用）。
+ *
+ * 与 getWorkflowTask(runId, nodeId, visit) 是两件事：派活那一刻手上只有
+ * `opts.taskId`（= workflow_tasks.id，流程引擎派活时带着的那一步标记），
+ * 没有 runId/nodeId/visit 可拼。以前误把 getWorkflowTask 当一个参数用，
+ * nodeId 成了 undefined → node:sqlite 抛「parameter 2 绑不上」，
+ * 整条自主交付的第一步当场失败（2026-11-13 实报）。
+ */
+export function getWorkflowTaskById(id) {
+  if (!id) return null;
+  return db.prepare('SELECT * FROM workflow_tasks WHERE id = ?').get(id) ?? null;
+}
+
 export function getWorkflowTaskByAgentRun(agentRunId) {
   if (!agentRunId) return null;
   return db.prepare('SELECT * FROM workflow_tasks WHERE agentRunId = ?').get(agentRunId) ?? null;
@@ -292,6 +315,21 @@ export function countNodeVisits(runId, nodeId) {
  * 踩过：`assigneePersonaId` 传进来以为改了，其实 SQL 没写它，改派一直不生效。
  * 以后往这儿加字段，记得同时加到 SET 里。
  */
+
+/*
+ * **步骤状态变化的外部镜像**（2026-11-13，实报"卡改成进行中、实例页还是 failed"）。
+ *
+ * 流程某一步的档案卡（`ensureTaskCardForStep` 建的那张）以前只在建卡那一刻拍张照，
+ * 之后节点跑了/挂了卡不知道 —— 卡和实例页各说各话。`updateWorkflowTask` 是节点状态的
+ * **唯一收口**（引擎、PR 审阅、人工接口全走这儿），状态真变了就在这儿发一炮；
+ * 谁来接（project-tasks 里把卡同步过去）由监听器决定 —— store 层不能反向 import
+ * 业务层，所以只留这个注册口。没人注册就是老行为，冒烟互不干扰。
+ */
+const workflowTaskStatusListeners = new Set();
+export function onWorkflowTaskStatusChanged(fn) {
+  workflowTaskStatusListeners.add(fn);
+  return () => workflowTaskStatusListeners.delete(fn);
+}
 
 export function updateWorkflowTask(id, fields) {
   const cur = db.prepare('SELECT * FROM workflow_tasks WHERE id = ?').get(id);
@@ -316,7 +354,13 @@ export function updateWorkflowTask(id, fields) {
     next.endedAt,
     id,
   );
-  return db.prepare('SELECT * FROM workflow_tasks WHERE id = ?').get(id);
+  const updated = db.prepare('SELECT * FROM workflow_tasks WHERE id = ?').get(id);
+  if (updated.status !== cur.status) {
+    for (const fn of workflowTaskStatusListeners) {
+      try { fn(updated, cur); } catch { /* 镜像失败不连坐流程引擎 —— 卡同步是尽力而为 */ }
+    }
+  }
+  return updated;
 }
 
 /** 实例当前停在哪个节点（v2 的核心：推进 = 换 currentNodeId） */
@@ -342,7 +386,7 @@ export function createWorkflowStep(row) {
     row.detail ?? '',
     row.assigneePersonaId ?? null,
     row.mode ?? 'confirm',
-    row.status ?? '待办',
+    row.status ?? 'todo',
     row.note ?? null,
     row.conversationId ?? null,
     row.agentRunId ?? null,

@@ -98,7 +98,7 @@ try {
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 2000));
     detail = (await api(`/api/conversations/${encodeURIComponent(id)}`)).body;
-    if (detail?.conversation?.status !== '跑中') break;
+    if (detail?.conversation?.status !== 'running') break;
   }
   const run = detail?.runs?.[0] ?? null;
   const answer = [...(detail?.messages ?? [])].reverse().find((m) => m.role === 'assistant')?.text ?? '';
@@ -106,7 +106,7 @@ try {
   console.log('  回答 :', JSON.stringify(answer.slice(0, 200)));
   if (run?.error) console.log('  错误 :', JSON.stringify(String(run.error).slice(0, 300)));
 
-  check('这次运行成功了', run?.status === '完成', String(run?.error ?? '').slice(0, 160));
+  check('这次运行成功了', run?.status === 'done', String(run?.error ?? '').slice(0, 160));
   check('数字员工自己找到了工具并回了正确内容', /echo:\s*班底/.test(answer), JSON.stringify(answer.slice(0, 120)));
 } catch (err) {
   console.log('\n跑挂了：' + String(err?.message ?? err));

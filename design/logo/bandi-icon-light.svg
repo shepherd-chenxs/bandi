@@ -1,9 +1,10 @@
 <svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
   <title>班底 · 分玉应用图标（浅底全色，浅色环境用）</title>
-  <!-- 2026-11-10 第四次定稿「分玉」。浅底上玉青用 #2F7E74（深底才提亮到 #5FB3A3）。 -->
+  <!-- 2026-11-12 去缝修订（2026-11-10 第四次定稿「分玉」）：圆沿竖直直径切成两片、
+       两片贴合、右片下沉。浅底上玉青用 #2F7E74（深底才提亮到 #5FB3A3）。 -->
   <rect width="512" height="512" rx="110" fill="#F7F7F4" stroke="#E3E3DE" stroke-width="2"/>
   <g transform="translate(256 256) scale(3.25) translate(-50 -49.8)">
-    <path d="M47 4.11 A40 40 0 0 0 47 83.89 Z" fill="#12161A"/>
-    <path d="M53 4.11 A40 40 0 0 1 53 83.89 Z" fill="#2F7E74" transform="translate(0 12)"/>
+    <path d="M50 4 A40 40 0 0 0 50 84 Z" fill="#12161A"/>
+    <path d="M50 4 A40 40 0 0 1 50 84 Z" fill="#2F7E74" transform="translate(0 12)"/>
   </g>
 </svg>

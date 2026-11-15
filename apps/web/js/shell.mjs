@@ -117,10 +117,10 @@ export function readPlace() {
 export const ROUTES = {
   messages: () => setNav('messages'),
   contacts: () => setNav('contacts'),
-  // 信箱（2026-11-11）：一级栏整页（平台事实账本）
-  inbox: () => {
+  // 信箱（2026-11-11）：一级栏，左栏列表 + 右区详情；`id` 是刷新前选中的那条通知
+  inbox: ({ id } = {}) => {
     setNav('inbox', { skipOpen: true });
-    return openInbox();
+    return openInbox(id);
   },
   me: () => setNav('me'),
   settings: ({ section } = {}) => {
@@ -296,6 +296,145 @@ export function applyTheme() {
     const win = window.__TAURI__?.window?.getCurrentWindow?.();
     win?.setTheme?.(S.theme === 'system' ? null : resolved);
   } catch { /* 浏览器里没有 __TAURI__；壳被旧版 exe 带着跑时 IPC 可能没开 —— 都不影响网页本身 */ }
+  syncShellBar();
+}
+
+/**
+ * 把「底部那条栏的颜色」报给 Android 壳（2026-11-11 用户："底部导航栏跟系统导航栏
+ * 改成一个颜色"）。
+ *
+ * 为什么会差一色：Android 15+ 强制 edge-to-edge，WebView 被壳的 padding 抬到系统
+ * 导航栏之上，屏幕最底下那条带（导航键区）是**窗口背景**在画 —— 网页管不到，
+ * 它只会是主题的纯白/纯黑。而 tab 栏原来是 72% 玻璃，压在页面上合成出 #F5F5F9，
+ * 一灰一白，永远一道缝。
+ *
+ * 口径：颜色只有一份来源 —— CSS 的 `--mb-chrome`（浅 #F2F2F7 / 深 #1C1C1E）。
+ * tab 栏用它，这里把同一个值报给壳去画那条带。
+ *
+ * 只在**有 tab 栏的页面**报 --mb-chrome（工作台/通讯录/会话列表/我的）：进详情、聊天页
+ * 时 tab 栏撤了，页面自己铺到底，这时改报页面自己的底色（见 pageBottomColor）——
+ * 浅色详情是白、聊天是黑，那条带跟着页面走；实在读不到实色才报空串，让壳收起色块。
+ *
+ * 桌面 / PWA / 旧 Tauri 壳上没有 BandiShell，函数检测式跳过，行为一个字节不变。
+ */
+let lastShellBar;   // 上一次报出去的值（'' = 收起）；没变就不重复跨进程调用
+let lastShellTop;   // 顶栏那条带（状态栏）上一次报出去的值
+
+/** `rgb()/rgba()` → `#rrggbb`；半透明 / 别的色系一律返回空串（壳只能画实色） */
+function toHex(css) {
+  const m = /^rgba?\(([^)]+)\)$/.exec(css || '');
+  if (!m) return '';
+  const p = m[1].split(',').map((s) => parseFloat(s));
+  if (p.length > 3 && p[3] < 1) return '';   // 半透明合成不了，别硬报
+  return '#' + p.slice(0, 3).map((v) => Math.round(v).toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * 页面自己的底色 —— 没有 tab 栏的页面（详情 / 聊天 / 看板）报这一档。
+ *
+ * 2026-11-12 补：原来"没有 tab 栏就报空串"让壳收起色块、露出**窗口背景**
+ * （@color/bandi_page 那一档浅灰）。浅色页面上没问题，可聊天页是纯黑底 ——
+ * 页面铺到最底下，屏幕最底那 40dp 却露一条浅灰，等于给聊天页镶了个白边。
+ * 现在读 body（再退到 html）的实际底色报过去，页面铺到哪儿、那条带就跟到哪儿。
+ * 读不到实色（透明 / 半透明 / 渐变）时仍然报空串，交给壳的窗口背景兜底。
+ */
+function pageBottomColor() {
+  return toHex(getComputedStyle(document.body).backgroundColor)
+    || toHex(getComputedStyle(document.documentElement).backgroundColor);
+}
+
+/**
+ * 页面最上面那条栏的颜色 —— 报给壳去画**状态栏**那条带（2026-11-12 用户截图
+ * "这两个统一一下颜色"：状态栏一行是浅灰、紧挨着的「工作台」标题栏是白的）。
+ *
+ * 跟底部一个病根：WebView 被壳的 top padding 压到状态栏下面，那条带露的是窗口背景
+ * （= 页面底色 #F7F8F9），网页的顶栏画不到它。v241 把七条顶部栏统一成 --mb-chrome
+ * 之后，页面里是白的、带是灰的，反而更明显。
+ *
+ * 口径：**谁挨着那条带就报谁** —— 在已知顶栏里挑第一个贴在视口顶上的（top≈0）。
+ * 都不在（登录页 / 空态 / 顶栏本身透明）就用 --mb-chrome 兜底，与 v241 同一个来源。
+ */
+const TOP_BAR_SEL = '.list-head, .mb-backbar, .mb-picker-bar, .kb-new-bar, .tc-m-head, .detail-head, .me-set-nav';
+
+function topBarColor() {
+  /*
+   * 首选"视口顶端那 1px 是谁"：直接问 elementFromPoint，再往上找第一个**不透明**的底色。
+   * 比枚举选择器准 —— 同一个 .mb-backbar 在 DOM 里可能有好几份（详情层、聊天层各一个，
+   * 只有一个在顶上），按选择器取到的是第一个，深色聊天页就报过 #1C1C1E 而头顶其实是纯黑。
+   * WebView 的视口从状态栏下面开始（壳给了 top padding），所以 y=1 就是页面第一行像素。
+   */
+  for (const x of [innerWidth / 2, 8, innerWidth - 8]) {
+    let el = document.elementFromPoint(x, 1);
+    while (el && el !== document.documentElement) {
+      const c = toHex(getComputedStyle(el).backgroundColor);
+      if (c) return c;
+      el = el.parentElement;
+    }
+  }
+  // 兜底：已知顶栏里挑第一个贴在视口顶上的（顶栏透明 / 背景下在父层的情况）
+  for (const el of document.querySelectorAll(TOP_BAR_SEL)) {
+    const r = el.getBoundingClientRect();
+    if (r.height < 8 || r.top > 4 || r.bottom < 8) continue;   // 没贴在顶上的不算
+    const c = toHex(getComputedStyle(el).backgroundColor);
+    if (c) return c;
+  }
+  return getComputedStyle(document.documentElement).getPropertyValue('--mb-chrome').trim();
+}
+
+function syncShellBar() {
+  const shell = window.BandiShell;
+  if (!shell) return;
+  if (shell.setTopBarColor) {
+    const top = topBarColor();
+    if (top && top !== lastShellTop) {
+      lastShellTop = top;
+      try { shell.setTopBarColor(top); } catch { /* 浏览器里没有这个接口 */ }
+    }
+  }
+  if (!shell.setSystemBarColor) return;
+  const bar = document.querySelector('.mb-tabbar');
+  const shown = !!bar && getComputedStyle(bar).display !== 'none';
+  const css = shown
+    ? getComputedStyle(document.documentElement).getPropertyValue('--mb-chrome').trim()
+    : pageBottomColor();
+  if (css === lastShellBar) return;
+  lastShellBar = css;
+  try { shell.setSystemBarColor(css); } catch { /* 浏览器里没有这个接口 */ }
+}
+
+/*
+ * 页面切来切去（mb-detail-open 的加减）会换掉底部那条是谁 —— 盯着 body 的 class
+ * 重报一次，别指望每条路由都记得调 syncShellBar。读一次 computedStyle 很便宜，
+ * 再用一个微任务合帧，连续几次 class 变更只算一次。
+ */
+let shellBarQueued = false;
+function queueSyncShellBar() {
+  if (shellBarQueued) return;
+  shellBarQueued = true;
+  queueMicrotask(() => { shellBarQueued = false; syncShellBar(); });
+}
+if (typeof MutationObserver !== 'undefined' && document.body) {
+  new MutationObserver(queueSyncShellBar)
+    .observe(document.body, { attributes: true, attributeFilter: ['class'] });
+}
+
+/*
+ * 首次上报要等页面**画完**（2026-11-12 真机踩到）：
+ * applyTheme 在 boot 早期就调 syncShellBar，那一刻「我的」页的 .list-head 还没套上样式，
+ * elementFromPoint 落到 #settingsView 上，报到的是页面底色 #F2F2F7 —— 而画完其实是白栏。
+ * 之后只要 body class 不变就没有第二次机会，状态栏那条带就一直灰着。
+ * 所以在 load、以及 0.6s / 1.6s 各补一次（异步渲染、字体回流都在这之后）。
+ * 缓存变量先清空，否则会被"颜色没变"短路掉。
+ */
+function kickShellBar() {
+  lastShellTop = undefined;
+  lastShellBar = undefined;
+  syncShellBar();
+}
+if (typeof window !== 'undefined') {
+  window.addEventListener('load', kickShellBar, { once: true });
+  setTimeout(kickShellBar, 600);
+  setTimeout(kickShellBar, 1600);
 }
 
 

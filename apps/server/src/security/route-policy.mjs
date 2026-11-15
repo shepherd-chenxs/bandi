@@ -84,6 +84,8 @@ export const ROUTES = [
   { id: 'notices.list', m: ['GET'], path: p('/api/notices'), auth: 'session' },
   { id: 'notices.unread', m: ['GET'], path: p('/api/notices/unread'), auth: 'session' },
   { id: 'notices.read', m: ['POST'], path: p('/api/notices/read'), auth: 'session' },
+  // 删除通知（2026-11-12）：单条 / 批量（ids 数组）/ 清空（all）—— 与 read 同一类"自己箱子的维护动作"
+  { id: 'notices.delete', m: ['POST'], path: p('/api/notices/delete'), auth: 'session' },
   // 岗位清单（2026-11-11）：岗位系统内置、权限挂在岗位上 —— 只读下发，界面画岗位下拉与权限矩阵
   { id: 'roles.list', m: ['GET'], path: p('/api/roles'), auth: 'session' },
   { id: 'workflows.list', m: ['GET'], path: p('/api/workflows'), auth: 'session' },
@@ -103,6 +105,9 @@ export const ROUTES = [
   // 完整事件仍走 stream 回放。只读、不新增任何写面。
   { id: 'run.evidence', m: ['GET'], path: p('/api/runs', id1, 'evidence'), auth: 'session', note: '运行证据摘要（工具/错误/时长）；细节走 stream' },
   { id: 'conv.detail', m: ['GET'], path: p('/api/conversations', id1), auth: 'session' },
+  // 上下文占用环（2026-11-12）：只读摘要（单轮上下文 / 预算阈值 / 轮换预览），无写面。
+  // 与 conv.detail 同档 —— 输入区那颗环跟会话详情一起可见。
+  { id: 'conv.context', m: ['GET'], path: p('/api/conversations', id1, 'context'), auth: 'session' },
   { id: 'conv.send', m: ['POST'], path: p('/api/conversations', id1, 'messages'), auth: 'session' },
   { id: 'card.detail', m: ['GET'], path: p('/api/projects/tasks', id1), auth: 'session' },
   { id: 'card.patch', m: ['PATCH'], path: p('/api/projects/tasks', id1), auth: 'session', run: true, note: '手机审批只放 {status, note}（字段级闸在 project.mjs）；2026-11-09 起运行钥匙可改**自己建的/自己当群助手的**卡（让 PM 能退待办/重跑/取消，不把活留成空话）' },

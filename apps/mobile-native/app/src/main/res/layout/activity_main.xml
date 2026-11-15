@@ -160,7 +160,12 @@
         android:orientation="vertical"
         android:visibility="gone">
 
-        <!-- 标题行：标题占满，右上角「退出登录」图标（2026-11-08） -->
+        <!--
+          标题行（2026-11-11）：两种来源、两套按钮 ——
+            · 登录后进来（这一页是根）：右上角「退出登录」，没有返回（无处可回）；
+            · 面板「当前设备」进来（这一页是下级）：左上角「返回」回面板，不画退出。
+          两个图标的显隐在 MainActivity.showDevices(fromPanel) 里切。
+        -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -168,7 +173,18 @@
             android:gravity="center_vertical"
             android:paddingTop="24dp">
 
+            <ImageButton
+                android:id="@+id/devBackBtn"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:layout_marginStart="8dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:src="@drawable/ic_back"
+                android:contentDescription="返回"
+                android:visibility="gone" />
+
             <TextView
+                android:id="@+id/devTitle"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
@@ -288,7 +304,7 @@
             android:id="@+id/viewPanelError"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:background="?attr/colorSurface"
+            android:background="@color/bandi_page"
             android:gravity="center"
             android:orientation="vertical"
             android:paddingStart="32dp"
@@ -348,7 +364,7 @@
             android:id="@+id/viewOffline"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:background="?attr/colorSurface"
+            android:background="@color/bandi_page"
             android:clickable="true"
             android:focusable="true"
             android:gravity="center"

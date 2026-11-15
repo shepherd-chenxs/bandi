@@ -211,7 +211,7 @@ try {
     body: JSON.stringify(cardBody({ pr: { url: 'https://github.com/smoke/demo/pull/42', title: '改了点东西', state: 'merged' } })),
   });
   check('报 merged → prState=merged', c4.b.task?.prState === 'merged', String(c4.b.task?.prState));
-  check('卡在「待办」→ 状态不动（人还没看）', c4.b.task?.status === '待办', String(c4.b.task?.status));
+  check('卡在「待办」→ 状态不动（人还没看）', c4.b.task?.status === 'todo', String(c4.b.task?.status));
   // 没带 pr 的 issue 卡：四个 PR 字段保持空，别凭空长出一个 PR
   const i1 = await req(`/api/projects/${encodeURIComponent(proj.id)}/repo-cards`, {
     method: 'POST',
@@ -347,16 +347,20 @@ try {
     'error: failed to push some refs to https://github.com/shepherd-chenxs/bandi.git',
   ].join('\n');
   const protMsg = tpf(protOut, { branch: 'main', base: 'main' });
-  check('规则集拒推 → 说"有保护规则、走 PR"（不再叫人去同步）', /保护规则/.test(protMsg) && /PR/.test(protMsg) && !/先点「同步」/.test(protMsg), protMsg.slice(0, 140));
-  check('把 remote: 里的规则原话带上（PR / gate）', /pull request/i.test(protMsg) && /required status check/i.test(protMsg), protMsg.slice(0, 220));
-  check('base 分支被拒时明确"切一条新分支"', /新分支/.test(protMsg), protMsg.slice(0, 220));
+  // 2026-11-14 起返回 { code, text }（报错规范，docs/契约.md「十一」）—— 码和人话分开钉
+  check('规则集拒推 → E1201，说"有保护规则、走 PR"（不再叫人去同步）', protMsg.code === 'E1201' && /保护规则/.test(protMsg.text) && /PR/.test(protMsg.text) && !/先点「同步」/.test(protMsg.text), String(protMsg.text).slice(0, 140));
+  check('把 remote: 里的规则原话带上（PR / gate）', /pull request/i.test(protMsg.text) && /required status check/i.test(protMsg.text), String(protMsg.text).slice(0, 220));
+  check('base 分支被拒时明确"切一条新分支"', /新分支/.test(protMsg.text), String(protMsg.text).slice(0, 220));
   const ffMsg = tpf(' ! [rejected] main -> main (non-fast-forward)\nerror: failed to push some refs', { branch: 'main' });
-  check('普通非快进指向分支下拉的「更新项目」（「同步」按钮早就没了，文案不能再指它）',
-    /更新项目/.test(ffMsg) && !/「同步」/.test(ffMsg), ffMsg.slice(0, 100));
+  check('普通非快进 → E1202，指向分支下拉的「更新项目」（「同步」按钮早就没了，文案不能再指它）',
+    ffMsg.code === 'E1202' && /更新项目/.test(ffMsg.text) && !/「同步」/.test(ffMsg.text), String(ffMsg.text).slice(0, 100));
   const renameMsg = tpf(' ! [rejected] bandi/x -> bandi/x (non-fast-forward)', { branch: 'bandi/x', rejectedHint: 'rename' });
-  check('建 PR 的新分支撞名 → 说"换个分支名、不强推"', /换一个分支名/.test(renameMsg) && /强推/.test(renameMsg), renameMsg.slice(0, 100));
+  check('建 PR 的新分支撞名 → 说"换个分支名、不强推"', /换一个分支名/.test(renameMsg.text) && /强推/.test(renameMsg.text), String(renameMsg.text).slice(0, 100));
   const permMsg = tpf('remote: Permission denied\nfatal: unable to access', { branch: 'x' });
-  check('权限不够 → 指向 Contents: write', /Contents: write/.test(permMsg), permMsg.slice(0, 100));
+  check('权限不够 → E1203，指向 Contents: write', permMsg.code === 'E1203' && /Contents: write/.test(permMsg.text), String(permMsg.text).slice(0, 100));
+  const netMsg = tpf("fatal: unable to access 'https://github.com/x/y.git/': Failed to connect to github.com:443 over proxy 127.0.0.1 after 0 ms: Could not connect to server");
+  check('代理没通 → E1204 连不上 GitHub（2026-11-14 实报那一档，curl 原文只垫底）',
+    netMsg.code === 'E1204' && /连接不上 github\.com/.test(netMsg.text) && /代理 127\.0\.0\.1/.test(netMsg.text) && /原始信息：/.test(netMsg.text), String(netMsg.text).slice(0, 120));
 
   console.log('\n⑨ 已提交没推送：workState 的上游 / unpushed（分支按钮上的 ↑N 吃它）');
   const upBare = path.join(tmp, 'up-bare.git');

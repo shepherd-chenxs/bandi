@@ -275,7 +275,7 @@ async function runMergeNode({ runId, task }) {
   /* 🗑️ 垃圾：不进「待验收」列，实例直接终止（PRD 第六节判定表第一行） */
   if (verdict === 'spam') {
     store.updateWorkflowTask(task.id, {
-      status: '已完成',
+      status: 'done',
       decision: '通过',
       note: '管理员结论：垃圾，不合并',
       endedAt: store.nowIso(),
@@ -287,7 +287,7 @@ async function runMergeNode({ runId, task }) {
   /* ⚠️ 拿不准 / 闸没过 / 没授权：一律停在「待验收」，等人拍板 */
   if (verdict === 'unsure') {
     store.updateWorkflowTask(task.id, {
-      status: '待验收',
+      status: 'review',
       note: '管理员拿不准，请你过目（卡上有它的分析）。点「通过」合并，点「驳回」不合并',
       endedAt: null,
     });
@@ -296,7 +296,7 @@ async function runMergeNode({ runId, task }) {
   }
   if (!gates.pass) {
     store.updateWorkflowTask(task.id, {
-      status: '待验收',
+      status: 'review',
       note: `管理员觉得值得合，但自动合并的闸没过：${gates.reasons.join('；')}。你确认没问题就点「通过」`,
       endedAt: null,
     });
@@ -306,7 +306,7 @@ async function runMergeNode({ runId, task }) {
   const repoRow = store.getGitRepoByFullName(repo);
   if (!repoRow?.autoMerge) {
     store.updateWorkflowTask(task.id, {
-      status: '待验收',
+      status: 'review',
       note: '审阅通过、四条闸全过。点「通过」就合并；想全自动，去「工作台 → 研发 → 代码托管」给这个仓库勾上「自动合并」',
       endedAt: null,
     });
@@ -410,11 +410,11 @@ function onMergeDecide({ runId, task, decision }) {
   const run = store.getWorkflowRun(runId);
   const repo = run?.prRepo;
   const number = Number(run?.prNumber);
-  store.updateWorkflowTask(task.id, { status: '进行中', decision: null, note: null, endedAt: null });
+  store.updateWorkflowTask(task.id, { status: 'doing', decision: null, note: null, endedAt: null });
   store.touchWorkflowRun(runId);
   doMerge({ runId, task, repo, number, byHuman: true }).catch((e) => {
     store.updateWorkflowTask(task.id, {
-      status: '失败',
+      status: 'failed',
       note: `合并没成：${String(e?.message ?? e).slice(0, 240)}`,
       endedAt: store.nowIso(),
     });

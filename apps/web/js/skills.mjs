@@ -13,6 +13,7 @@ import { pickLocalDir, openProjectDetail, openTaskCardDialog, KB_ICON_BACK, KB_I
 import { mbClosePicker, mbOpenPicker } from './chat.mjs';
 
 import { $, S } from './core.mjs';
+import { registerLayer, registerUp } from './navstack.mjs';
 
 /* 提交卡两组文件的折叠态（模块级 —— renderGitRepos 每次刷新重建 fillChanges，
  * 状态放这儿才能跨刷新保留；false = 展开，默认全展开） */
@@ -1807,7 +1808,9 @@ export async function renderGitRepos(root = $('pluginView')) {
         await refresh();
       } catch (e) {
         commitBtn.disabled = false;
-        if (!allowSecrets && /凭据/.test(String(e.message ?? e))) {
+        // 凭据闸 v2：只有"内容扫出密钥"那档灰区才弹危险确认（报错里带「显式确认放行」才弹）；
+        // .env 本体/私钥那档直接拦死、没有口令通道 —— 弹窗只会误导人去确认一个不该确认的东西。
+        if (!allowSecrets && /显式确认放行/.test(String(e.message ?? e))) {
           if (await confirmDo(String(e.message ?? e), { ok: '就是要提交', danger: true })) await doCommit(true);
         } else {
           toast(e.message, 'error');
@@ -2342,6 +2345,18 @@ export function openRepoPrDialog(repo, onDone) {
  * 以前挂在「设置」里，但它不是"配置"，是"让谁到点去干活"：跟看板同一类东西。
  * 放在设置里还有个副作用 —— 人得先想到"去设置找"，才找得到。
  */
+
+/*
+ * 定时任务页的上一层 = 工作台宫格。页内那颗 ‹ 与**系统返回键**共用这一个函数
+ * （navstack.mjs 的 registerUp，2026-11-11）：两处若各写一份，早晚会漂成两个去处。
+ */
+const schBackToWorkbench = () => setNav('plugins');
+registerUp('schedules', schBackToWorkbench);
+/* 其余两处下钻（2026-11-11）：代码托管回宫格（面包屑 工作台 › 代码托管 同款）；
+   技能详情回「设置 › 技能」清单（编辑器页头面包屑 to:'skills' 同一个去处）。 */
+registerUp('codeRepos', () => setNav('plugins'));
+registerUp('skill', () => void openSettings('skills'));
+
 export async function openSchedules() {
   setRoute('schedules');
   // 它是工作台里的页面，不是插件也不是某个项目的看板 —— 清掉那几条路，
@@ -2475,7 +2490,7 @@ export async function renderSchedules() {
     </div>`;
 
   // 返回只有一层含义（与看板同一口径）：定时任务 → 工作台
-  view.querySelector('[data-sch-back]')?.addEventListener('click', () => setNav('plugins'));
+  view.querySelector('[data-sch-back]')?.addEventListener('click', schBackToWorkbench);
   $('schNew')?.addEventListener('click', () => scheduleDialog(null));
   view.querySelectorAll('[data-sch-run]').forEach((el) => {
     el.onclick = async () => {
@@ -3458,6 +3473,22 @@ function schClosePage(alreadyPopped = false) {
   if (document.body.classList.contains('sch-sheet-open')) schCloseSheet(true);
   if (document.body.classList.contains('mb-picker-open')) mbClosePicker();
 }
+
+/* 返回键的层级（navstack.mjs，2026-11-11）：抽屉在新建/编辑页之上（66 > 65）。 */
+registerLayer({
+  name: 'sch-page',
+  level: 65,
+  cell: 'schPage',
+  active: () => document.body.classList.contains('sch-page-open'),
+  close: () => schClosePage(true),
+});
+registerLayer({
+  name: 'sch-sheet',
+  level: 66,
+  cell: 'schSheet',
+  active: () => document.body.classList.contains('sch-sheet-open'),
+  close: () => schCloseSheet(true),
+});
 
 /*
  * 返回手势 / 返回键：这一格是这张页自己压的。三条与 kb-new 完全同因：

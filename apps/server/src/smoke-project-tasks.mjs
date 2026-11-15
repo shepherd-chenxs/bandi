@@ -67,15 +67,15 @@ store.upsertWorkflowTemplate({ id: 't-smoke', name: '交付流程', start: 'n1',
 ] });
 store.createWorkflowRun({ templateId: 't-smoke', title: '添加测试', intent: '给首页加一句话', projectId: proj.id });
 const flowRun = store.listWorkflowRuns().find((r) => r.projectId === proj.id);
-store.createWorkflowTask({ runId: flowRun.id, nodeId: 'n1', nodeName: '写代码', visit: 1, detail: '', assigneePersonaId: dev.id, status: '已完成' });
-store.createWorkflowTask({ runId: flowRun.id, nodeId: 'n2', nodeName: '测试', visit: 1, detail: '', assigneePersonaId: null, status: '已阻塞', note: '「测试」没点名经办人' });
-store.createWorkflowTask({ runId: flowRun.id, nodeId: 'n3', nodeName: '部署', visit: 1, detail: '', assigneePersonaId: dev.id, status: '待验收', note: '做完了，等人放行' });
+store.createWorkflowTask({ runId: flowRun.id, nodeId: 'n1', nodeName: '写代码', visit: 1, detail: '', assigneePersonaId: dev.id, status: 'done' });
+store.createWorkflowTask({ runId: flowRun.id, nodeId: 'n2', nodeName: '测试', visit: 1, detail: '', assigneePersonaId: null, status: 'blocked', note: '「测试」没点名经办人' });
+store.createWorkflowTask({ runId: flowRun.id, nodeId: 'n3', nodeName: '部署', visit: 1, detail: '', assigneePersonaId: dev.id, status: 'review', note: '做完了，等人放行' });
 
 // ② 聊天派活（本项目，靠执行人的工作目录归属）：会话没挂项目
 const chatConv = store.createConversation({ title: '和 波哥', personaId: dev.id });
 store.addMessage({ conversationId: chatConv.id, role: 'user', text: '把首页那句文案改掉' });
 const chatRun = store.createRun({ conversationId: chatConv.id, runtime: 'codex', personaId: dev.id });
-store.finishRun(chatRun.id, { status: '完成', exitCode: 0 });
+store.finishRun(chatRun.id, { status: 'done', exitCode: 0 });
 store.addMessage({ conversationId: chatConv.id, runId: chatRun.id, role: 'assistant', text: '改好了' });
 
 // ③ 一个"全被流程占用"的会话：它的最近一次执行是流程的一步 → 不算聊天派活
@@ -87,14 +87,14 @@ store.addMessage({ conversationId: flowConv.id, runId: flowTurn.id, role: 'assis
 const orphanConv = store.createConversation({ title: '和 李俊', personaId: qa.id });
 store.addMessage({ conversationId: orphanConv.id, role: 'user', text: '【流程 · 端到端】第 1 次办理：谈需求', runId: 'wf-some-flow', taskId: null });
 const orphanTurn = store.createRun({ conversationId: orphanConv.id, runtime: 'codex', personaId: qa.id });
-store.finishRun(orphanTurn.id, { status: '失败', exitCode: 1 });
+store.finishRun(orphanTurn.id, { status: 'failed', exitCode: 1 });
 
 // ④ 别的项目下的聊天派活 → 不该出现在本项目。**停下来等人的那种**（已停止），
 //    顺带验「已阻塞」那一列/那枚数字的口径（2026-10-15）
 const convB = store.createConversation({ title: '和 星宇', personaId: qa.id });
 store.setConversationProject(convB.id, projB.id);
 const runB = store.createRun({ conversationId: convB.id, runtime: 'codex', personaId: qa.id });
-store.finishRun(runB.id, { status: '已停止', exitCode: 1 });
+store.finishRun(runB.id, { status: 'stopped', exitCode: 1 });
 store.addMessage({ conversationId: convB.id, role: 'user', text: '乙项目的活' });
 
 // ⑤ 谁都不认领的聊天派活：执行人的工作目录不在任何项目根下
@@ -103,7 +103,7 @@ const strayPersona = store.createPersona({ name: '崔老三', runtime: 'codex', 
 const strayConv = store.createConversation({ title: '和 崔老三', personaId: strayPersona.id });
 store.addMessage({ conversationId: strayConv.id, role: 'user', text: '顺手看看这个' });
 const strayRun = store.createRun({ conversationId: strayConv.id, runtime: 'codex', personaId: strayPersona.id });
-store.finishRun(strayRun.id, { status: '完成', exitCode: 0 });
+store.finishRun(strayRun.id, { status: 'done', exitCode: 0 });
 
 // ⑥ 执行人已经不在的会话：**不能**因为"服务进程的 cwd 恰好等于某个项目根"就被算进那个项目
 //    （`path.resolve('')` 返回进程 cwd 的坑；服务端是以 repoRoot 为 cwd 起的，见下面 spawn）
@@ -111,7 +111,7 @@ const ghostProj = store.createProject({ name: '同根项目', root: repoRoot });
 const ghostConv = store.createConversation({ title: '和 已删除的人', personaId: 'p-不存在' });
 store.addMessage({ conversationId: ghostConv.id, role: 'user', text: '这个人的账号已经没了' });
 const ghostRun = store.createRun({ conversationId: ghostConv.id, runtime: 'codex', personaId: 'p-不存在' });
-store.finishRun(ghostRun.id, { status: '完成', exitCode: 0 });
+store.finishRun(ghostRun.id, { status: 'done', exitCode: 0 });
 
 /* ------------------------------------------------------------ ① 模块层 */
 console.log('⓪ 口径（2026-10-24 用户定的）：聊天派活不进看板，员工详情照收');
@@ -130,12 +130,12 @@ check('员工详情里聊天行标「聊天派活」', mineDev.rows.find((r) => 
 check('员工详情里聊天行写清执行人', mineDev.rows.find((r) => r.source === 'chat')?.assignee === '波哥', mineDev.rows.find((r) => r.source === 'chat')?.assignee);
 check('员工详情里聊天行的任务名 = 最后一句用户话', mineDev.rows.find((r) => r.source === 'chat')?.task === '把首页那句文案改掉', mineDev.rows.find((r) => r.source === 'chat')?.task);
 check('流程行带流程名与节点', data.rows.some((r) => r.task.startsWith('添加测试 · 测试')), data.rows.map((r) => r.task).join(' | '));
-check('没点名的那行执行人写「未分配」', data.rows.find((r) => r.status === '已阻塞')?.assignee === '未分配', data.rows.find((r) => r.status === '已阻塞')?.assignee);
+check('没点名的那行执行人写「未分配」', data.rows.find((r) => r.status === 'blocked')?.assignee === '未分配', data.rows.find((r) => r.status === 'blocked')?.assignee);
 
 console.log('\n② 排序：要人管的在最前');
 const ranks = data.rows.map((r) => r.rank);
 check('rank 单调不减', ranks.every((v, i) => i === 0 || ranks[i - 1] <= v), ranks.join(','));
-check('第一条就是「已阻塞」', data.rows[0]?.status === '已阻塞', data.rows[0]?.status);
+check('第一条就是「已阻塞」', data.rows[0]?.status === 'blocked', data.rows[0]?.status);
 
 console.log('\n③ 不能算错的会话（聊天行看员工详情那一页）');
 const mineQa = personaTasks(store.getPersona(qa.id));
@@ -151,9 +151,9 @@ check('待验收 1 条', data.waiting_count === 1, String(data.waiting_count));
 console.log('\n⑤ 看板列（项目详情页按它画看板）');
 const colOf = (key) => data.columns.find((c) => c.key === key);
 check('列从左到右按生命周期（「想法」在最左，它比"待办"还早）', data.columns.map((c) => c.key).join('>').startsWith('idea>todo>doing>review>blocked>failed>done>cancelled'), data.columns.map((c) => c.key).join('>'));
-check('阻塞那列的列名就是状态名（不再叫「停下等人」）', colOf('blocked')?.label === '已阻塞', colOf('blocked')?.label);
-check('已阻塞那张卡在「已阻塞」列里', colOf('blocked')?.cards.some((c) => c.status === '已阻塞'));
-check('待验收那张卡在「待验收」列里', colOf('review')?.cards.some((c) => c.status === '待验收'));
+check('阻塞那列显示「已阻塞」（列 key 是码 blocked）', colOf('blocked')?.label === '已阻塞', colOf('blocked')?.label);
+check('已阻塞那张卡在「已阻塞」列里', colOf('blocked')?.cards.some((c) => c.status === 'blocked'));
+check('待验收那张卡在「待验收」列里', colOf('review')?.cards.some((c) => c.status === 'review'));
 check('卡数之和 = 平表行数', data.columns.reduce((n, c) => n + c.count, 0) === data.rows.length, `${data.columns.reduce((n, c) => n + c.count, 0)} vs ${data.rows.length}`);
 check('每张卡都带列 key', data.rows.every((r) => !!r.col));
 check('流程卡带 template_id（点得进实例）', data.rows.filter((r) => r.source === 'flow').every((r) => !!r.template_id));
@@ -259,7 +259,7 @@ try {
   const mk = (body) => api(`/api/projects/${encodeURIComponent(proj.id)}/tasks`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   });
-  const made = await mk({ title: '手工卡：写一版首页文案', description: '三句话以内', status: '待办' });
+  const made = await mk({ title: '手工卡：写一版首页文案', description: '三句话以内', status: 'todo' });
   check('建卡 201', made.status === 201, `${made.status} ${JSON.stringify(made.body?.error ?? '')}`);
   const tid = made.body?.task?.id ?? '';
   const board1 = (await api(`/api/projects/${encodeURIComponent(proj.id)}/tasks`)).body;
@@ -277,7 +277,7 @@ try {
   check('空标题 400', badTitle.status === 400, String(badTitle.status));
 
   // 「想法」列（最左）：只可能手工来，而且**不该被立刻派活**
-  const idea = await mk({ title: '手工卡：也许可以做个导出', status: '想法' });
+  const idea = await mk({ title: '手工卡：也许可以做个导出', status: 'idea' });
   check('「想法」能建（201）', idea.status === 201, `${idea.status} ${JSON.stringify(idea.body?.error ?? '')}`);
   const ideaBoard = (await api(`/api/projects/${encodeURIComponent(proj.id)}/tasks`)).body;
   const ideaCard = ideaBoard.rows.find((r) => r.manual_id === idea.body?.task?.id);
@@ -287,16 +287,16 @@ try {
   // 「想法」+ 派人 + 立即开始 → 仍然**留在想法**（不派活，否则那列刚建完就被转走）
   const ideaStart = await mk({
     title: '手工卡：想法不该被立刻开始',
-    status: '想法',
+    status: 'idea',
     personaId: (data.personas ?? [])[0]?.id ?? null,
     startNow: true,
   });
-  check('「想法」+ startNow 也不会跳列', ideaStart.body?.task?.status === '想法', String(ideaStart.body?.task?.status));
+  check('「想法」+ startNow 也不会跳列', ideaStart.body?.task?.status === 'idea', String(ideaStart.body?.task?.status));
 
   const patched = await api(`/api/projects/tasks/${encodeURIComponent(tid)}`, {
-    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: '进行中' }),
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'doing' }),
   });
-  check('拖列 = 改状态（PATCH 200）', patched.status === 200 && patched.body?.task?.status === '进行中', JSON.stringify(patched.body));
+  check('拖列 = 改状态（PATCH 200）', patched.status === 200 && patched.body?.task?.status === 'doing', JSON.stringify(patched.body));
   const board2 = (await api(`/api/projects/${encodeURIComponent(proj.id)}/tasks`)).body;
   check('改完状态它站到「进行中」列', board2.rows.find((r) => r.manual_id === tid)?.col === 'doing');
   const badStatus = await api(`/api/projects/tasks/${encodeURIComponent(tid)}`, {
@@ -324,14 +324,14 @@ try {
   const autoCard = await mk({ title: '手工卡：拖进进行中就开工', personaId: dev.id });
   const autoId = autoCard.body?.task?.id ?? '';
   const auto = await api(`/api/projects/tasks/${encodeURIComponent(autoId)}`, {
-    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: '进行中' }),
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'doing' }),
   });
   check(
     '有执行人 + 拖进「进行中」→ 真去派活（他正忙 → 400 并说清原因）',
     auto.status === 400 && /没开工/.test(String(auto.body?.error ?? '')),
     `${auto.status} ${JSON.stringify(auto.body?.error ?? '')}`,
   );
-  check('派不出去时状态不动，卡还留在「待办」', store.getProjectTask(autoId)?.status === '待办', String(store.getProjectTask(autoId)?.status));
+  check('派不出去时状态不动，卡还留在「待办」', store.getProjectTask(autoId)?.status === 'todo', String(store.getProjectTask(autoId)?.status));
   check('派不出去也不会留下 runId（看板不会显示"在跑"）', !store.getProjectTask(autoId)?.runId, String(store.getProjectTask(autoId)?.runId));
   check('撞忙要落排队标记（节拍会自己再试）', !!store.getProjectTask(autoId)?.queuedAt, String(store.getProjectTask(autoId)?.queuedAt));
   store.updateProjectTask(autoId, { queuedAt: null }); // 别给后面的用例留下会自动开工的卡
@@ -366,11 +366,11 @@ try {
   }
   // 判"是不是人满了"只看措辞（人数会随着前面的用例变），不钉死数字
   check('并发到顶：再派一件被挡（busy）', capErr?.code === 'busy' && /件活在跑/.test(String(capErr.message ?? '')), String(capErr?.message ?? '没挡住'));
-  store.finishRun(r1.id, { status: '完成' });
+  store.finishRun(r1.id, { status: 'done' });
 
   // 任务卡的工单会话（kind=exec）里派活，**不该**投影成「聊天派活」卡 —— 它自己就是那张任务卡（2026-10-19）
   const execRun = store.createRun({ conversationId: execB.id, runtime: 'codex', personaId: dev.id });
-  store.finishRun(execRun.id, { status: '完成', exitCode: 0 });
+  store.finishRun(execRun.id, { status: 'done', exitCode: 0 });
   const afterExec = projectTasks(proj);
   check('任务卡工单会话不投影成聊天派活卡', !afterExec.rows.some((r) => r.conversation_id === execB.id),
     String(afterExec.rows.filter((r) => r.source === 'chat').map((r) => r.conversation_id).join(',')));

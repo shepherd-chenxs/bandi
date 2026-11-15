@@ -93,7 +93,7 @@ const seedEvent = (db, id, seq, evt) =>
     .prepare('INSERT INTO run_events (runId, seq, evt, at) VALUES (?, ?, ?, ?)')
     .run(id, seq, JSON.stringify(evt), new Date().toISOString());
 
-const doneEvt = (runId, status = '完成', error = null) => ({
+const doneEvt = (runId, status = 'done', error = null) => ({
   type: '__done', runId, status, exitCode: 0, error, usage: null,
   sessionId: 's-1', finalText: '好了', elapsedMs: 12, connectors: null,
 });
@@ -226,7 +226,7 @@ try {
       check('流是 200', d0.status === 200, String(d0.status));
       check('带 `id: 1`', idsOf(d0.body).join(',') === '1', '实际 ' + idsOf(d0.body).join(','));
       check('最后一条是终止事件', de.at(-1)?.type === '__done');
-      check('判成失败（起不来）', de.at(-1)?.status === '失败', String(de.at(-1)?.status));
+      check('判成失败（起不来）', de.at(-1)?.status === 'failed', String(de.at(-1)?.status));
       check('原因写清了是起不来', String(de.at(-1)?.error ?? '').includes('起不来'), String(de.at(-1)?.error ?? '').slice(0, 80));
       check('重连只补缺口在真派活上也成立', idsOf((await readStream(base2, sent.body.runId, 1)).body).length === 0);
     }

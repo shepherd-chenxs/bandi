@@ -125,14 +125,14 @@ function insertGroupSession(groupId, { title, assistantPersonaId }) {
   /*
    * 参数顺序必须与列顺序逐位对齐，这里最容易错位：
    *   id, title, personaId=''(字面量，群不带 personaId), ownerPersonaId, ownerUserId,
-   *   assistantPersonaId, kind='group'(字面量), sessionId=NULL, status='待跑', createdAt, updatedAt, groupId
+   *   assistantPersonaId, kind='group'(字面量), sessionId=NULL, status='pending', createdAt, updatedAt, groupId
    * 曾经把 ownerUserId 和 assistantPersonaId 写反过一次 —— 后果是每段群会话的群助手
    * 变成 `local-user`，一发言就报「群里没有群助手」，而且建群那一刻看不出来。
    */
   db.prepare(
     `INSERT INTO conversations
        (id, title, personaId, ownerPersonaId, ownerUserId, assistantPersonaId, kind, sessionId, status, createdAt, updatedAt, groupId)
-     VALUES (?, ?, '', ?, ?, ?, 'group', NULL, '待跑', ?, ?, ?)`,
+     VALUES (?, ?, '', ?, ?, ?, 'group', NULL, 'pending', ?, ?, ?)`,
   ).run(id, title, assistantPersonaId, LOCAL_USER.id, assistantPersonaId, ts, ts, groupId);
   const members = db.prepare('SELECT personaId FROM group_members WHERE groupId = ? ORDER BY joinedAt').all(groupId);
   for (const m of members) addMember(id, m.personaId);
@@ -367,7 +367,7 @@ export function dissolveGroup(groupId) {
       // 只打 dissolvedAt；hiddenAt **不动**（原来被「不显示」的保持隐藏，可见的保持可见）
       db.prepare(
         `UPDATE conversations
-            SET dissolvedAt = ?, assistantPersonaId = NULL, status = '待跑', updatedAt = ?
+            SET dissolvedAt = ?, assistantPersonaId = NULL, status = 'pending', updatedAt = ?
           WHERE id = ?`,
       ).run(ts, ts, s.id);
     }
@@ -407,12 +407,23 @@ export function getMemberSession(threadId, personaId, scope = '') {
  */
 
 export function setMemberSession(threadId, personaId, sessionId, scope = '', family = '') {
+  const has = !!(sessionId && String(sessionId).trim());
+  /*
+   * 上下文轮换（2026-11-11）：传空 sessionId = 作废这段 CLI 会话。起点一并清掉 ——
+   * 下一轮 firstTime 重开会重新记 startedAt，预算从零算。
+   */
+  if (!has) {
+    db.prepare('UPDATE member_sessions SET sessionId = NULL, startedAt = NULL WHERE threadId = ? AND personaId = ? AND scope = ?')
+      .run(threadId, personaId, scope);
+    return;
+  }
   db.prepare(
-    `INSERT INTO member_sessions (threadId, personaId, scope, sessionId, lastSeenRowid, family) VALUES (?, ?, ?, ?, 0, ?)
+    `INSERT INTO member_sessions (threadId, personaId, scope, sessionId, lastSeenRowid, family, startedAt) VALUES (?, ?, ?, ?, 0, ?, ?)
      ON CONFLICT(threadId, personaId, scope) DO UPDATE SET
        sessionId = excluded.sessionId,
-       family    = COALESCE(NULLIF(excluded.family, ''), member_sessions.family)`,
-  ).run(threadId, personaId, scope, sessionId, family ?? '');
+       family    = COALESCE(NULLIF(excluded.family, ''), member_sessions.family),
+       startedAt = COALESCE(member_sessions.startedAt, excluded.startedAt)`,
+  ).run(threadId, personaId, scope, sessionId, family ?? '', nowIso());
 }
 
 

@@ -105,6 +105,17 @@ class MainActivity : AppCompatActivity() {
     private var reentering = false
     /** 连续失败次数：票签不出来说明中枢/账号那边真有事，两次就回列表 */
     private var reenterFails = 0
+    /**
+     * 设备列表是从面板进来的（2026-11-11）：左上角「返回」回面板，右上角不画退出。
+     * 从登录页 / 冷启动进来时为 false —— 那一页是根，没有可回的地方。
+     */
+    private var devicesFromPanel = false
+    /**
+     * 上一次进面板的 origin：设备列表的「返回」靠它切回 WebView。
+     * showDevices() 会 stopConnWatch() 把 connOrigin 清掉（离开面板就停探活），
+     * 所以这两份不能是同一个字段 —— 一个是"正在盯着谁"，一个是"刚才在谁那儿"。
+     */
+    private var lastPanelOrigin: String? = null
 
     /*
      * 面板连不上机器（2026-11-08）：机器掉线/睡眠时 WebView 会画系统错误页
@@ -125,6 +136,20 @@ class MainActivity : AppCompatActivity() {
         setContentView(binding.root)
 
         /*
+         * 关掉系统给导航栏加的那层"对比度保护"scrim（2026-11-12）。
+         *
+         * 3-button 模式下系统会在导航键区盖一层半透明白，把下面画的东西往白里拉：
+         * 页面底 #F7F8F9 会被抬成 #FEFEFE —— 于是原生页最底下永远比上面亮一档，
+         * 我们用 DecorView 贴的色块也被它盖住（v237 那套"网页报色、壳画条"看着像生效了，
+         * 其实只是白色底本来就接近 scrim 的结果）。
+         *
+         * 关掉之后导航键区画什么就是什么：色块（面板页报来的 --mb-chrome）和页面底色
+         * （原生页的 @color/bandi_page）都能一路通到底。导航键的明暗我们自己按亮度调，
+         * 不靠系统这层保护。
+         */
+        window.isNavigationBarContrastEnforced = false
+
+        /*
          * Android 15+（本机是 Android 16）强制 edge-to-edge：WebView 的内容会画到
          * 状态栏和导航栏下面，而 Android WebView 的 env(safe-area-inset-*) 恒为 0，
          * 网页自己的安全区 padding 不起作用 —— 面板里底部固定的按钮（抽屉 / 弹窗）
@@ -142,6 +167,10 @@ class MainActivity : AppCompatActivity() {
             val navBottom = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.navigationBars()).bottom
             val imeBottom = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.ime()).bottom
             view.setPadding(0, top, 0, maxOf(navBottom, imeBottom))
+            navInset = navBottom
+            applySysBarStrip()
+            statusInset = top
+            applyTopBarStrip()
             insets
         }
 
@@ -219,7 +248,149 @@ class MainActivity : AppCompatActivity() {
 
     /* ------------------------------------------------------------ 视图切换 */
 
+    /*
+     * 系统导航栏那条带跟着网页 tab 栏一个色（2026-11-11 用户截图："底部导航栏跟系统
+     * 导航栏改成一个颜色"）。
+     *
+     * 为什么会有那条带：Android 15+ 强制 edge-to-edge，系统导航键区露的是**窗口背景**，
+     * 网页画不到（WebView 被 padding 抬到它上面）。窗口背景只有主题给的纯白/纯黑，
+     * 而 tab 栏是一层带灰的栏 —— 屏幕最底部永远一道色差。
+     *
+     * 做法：不去改窗口背景（那会把顶部状态栏那条带也染色，hero 渐变上会多一条灰边），
+     * 而是在 DecorView 上贴一条只有导航键区那么高的色块，高度跟 insets 走（键盘弹起时
+     * navBottom=0，条自己收起）。颜色由网页给 —— CSS 的 `--mb-chrome`，主题一变就重报
+     * （shell.mjs applyTheme → BandiShell.setSystemBarColor）。导航键的明暗按亮度反着调，
+     * 否则深底上画深色键等于没有键。
+     *
+     * 原生页（登录 / 设备列表 / 兜底）没有网页来报色，由 paintSystemBarPage() 把它
+     * 设成页面底色 `@color/bandi_page`（2026-11-12 修正：原来直接 GONE，露出的是系统
+     * 导航栏自己那层 97% 白的 scrim，比页面底亮一档，底部还是一道 #FEFEFE 的缝）。
+     */
+    private var sysBarStrip: View? = null
+    private var sysBarColor: Int? = null
+    private var navInset = 0
+
+    /*
+     * 顶部同理（2026-11-12 用户截图："这两个统一一下颜色"）：状态栏那一行是浅灰
+     * （窗口背景 = 页面底色 #F7F8F9），紧挨着的「工作台」标题栏是白的（v241 拍白），
+     * 一条明显的两截。
+     *
+     * 照底部的解法再画一条：DecorView 顶上贴一条状态栏那么高的色块，颜色由网页报 ——
+     * 报的是"贴着视口顶上的那条栏"的实色（shell.mjs topBarColor），所以工作台的
+     * 白顶栏、详情页的白返回栏、深色下的 #1C1C1E 都对得上。原生页刷页面底色。
+     */
+    private var topBarStrip: View? = null
+    private var topBarColor: Int? = null
+    private var statusInset = 0
+
+    fun applySystemBarColor(css: String) {
+        val c = runCatching { android.graphics.Color.parseColor(css.trim()) }.getOrNull()
+        if (c == null) { resetSystemBarColor(); return }   // 空串 = 当前页没有底栏，收起
+        sysBarColor = c
+        applySysBarStrip()
+        val luma = (0.299 * android.graphics.Color.red(c) +
+            0.587 * android.graphics.Color.green(c) +
+            0.114 * android.graphics.Color.blue(c)) / 255.0
+        androidx.core.view.WindowInsetsControllerCompat(window, window.decorView)
+            .isAppearanceLightNavigationBars = luma > 0.6
+    }
+
+    /** 网页报空串时用：页面自己铺到底（详情 / 聊天），别在底下垫一条灰 */
+    fun resetSystemBarColor() {
+        sysBarColor = null
+        sysBarStrip?.visibility = View.GONE
+        val night = (resources.configuration.uiMode and
+            android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+            android.content.res.Configuration.UI_MODE_NIGHT_YES
+        androidx.core.view.WindowInsetsControllerCompat(window, window.decorView)
+            .isAppearanceLightNavigationBars = !night
+    }
+
+    /** 原生页用：导航键区 + 状态栏都刷成页面底色，跟内容连成一片 */
+    private fun paintSystemBarPage() {
+        val page = androidx.core.content.ContextCompat.getColor(this, R.color.bandi_page)
+        sysBarColor = page
+        applySysBarStrip()
+        androidx.core.view.WindowInsetsControllerCompat(window, window.decorView)
+            .isAppearanceLightNavigationBars = true
+        topBarColor = page
+        applyTopBarStrip()
+        androidx.core.view.WindowInsetsControllerCompat(window, window.decorView)
+            .isAppearanceLightStatusBars = true
+    }
+
+    /*
+     * 接缝盖布（2026-11-12 用户截图红框："这个线能去掉吗"）。
+     *
+     * 实测（截图逐像素采样）：WebView 底边与色带顶边的交界处有一整行 ~#FAFAFA 的
+     * 淡灰线 —— WebView 是独立 surface，边缘合成时和窗口背景 #F7F8F9 混出 1~2px 的缝。
+     * 色带颜色本来就是网页报的、和贴着它的那条栏同色，所以向上多盖 2dp 把缝压住，
+     * 多盖的部分盖的也是同色栏，肉眼不可见。顶部色带对称处理（向下多盖 2dp）。
+     */
+
+    /** 把色块贴上/更新高度。没颜色（网页页自己没有底栏）或导航键区为 0（键盘弹起）时收起 */
+    private fun applySysBarStrip() {
+        val c = sysBarColor ?: return
+        val v = sysBarStrip ?: View(this).also {
+            (window.decorView as android.view.ViewGroup).addView(
+                it,
+                android.widget.FrameLayout.LayoutParams(
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                    0,
+                    android.view.Gravity.BOTTOM,
+                ),
+            )
+            sysBarStrip = it
+        }
+        val lp = v.layoutParams as android.widget.FrameLayout.LayoutParams
+        val h = navInset + dp(2)
+        if (lp.height != h) {
+            lp.height = h
+            v.layoutParams = lp
+        }
+        v.setBackgroundColor(c)
+        v.visibility = if (navInset > 0) View.VISIBLE else View.GONE
+    }
+
+    /* ---------------- 顶部状态栏那条带（网页报"贴着顶上的那条栏"的实色） ---------------- */
+
+    fun applyTopBarColor(css: String) {
+        val c = runCatching { android.graphics.Color.parseColor(css.trim()) }.getOrNull()
+        if (c == null) { topBarColor = null; topBarStrip?.visibility = View.GONE; return }
+        topBarColor = c
+        applyTopBarStrip()
+        val luma = (0.299 * android.graphics.Color.red(c) +
+            0.587 * android.graphics.Color.green(c) +
+            0.114 * android.graphics.Color.blue(c)) / 255.0
+        androidx.core.view.WindowInsetsControllerCompat(window, window.decorView)
+            .isAppearanceLightStatusBars = luma > 0.6
+    }
+
+    private fun applyTopBarStrip() {
+        val c = topBarColor ?: return
+        val v = topBarStrip ?: View(this).also {
+            (window.decorView as android.view.ViewGroup).addView(
+                it,
+                android.widget.FrameLayout.LayoutParams(
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                    0,
+                    android.view.Gravity.TOP,
+                ),
+            )
+            topBarStrip = it
+        }
+        val lp = v.layoutParams as android.widget.FrameLayout.LayoutParams
+        val h = statusInset + dp(2)
+        if (lp.height != h) {
+            lp.height = h
+            v.layoutParams = lp
+        }
+        v.setBackgroundColor(c)
+        v.visibility = if (statusInset > 0) View.VISIBLE else View.GONE
+    }
+
     private fun showLogin() {
+        paintSystemBarPage()
         binding.viewLogin.visibility = View.VISIBLE
         binding.viewDevices.visibility = View.GONE
         binding.viewPanel.visibility = View.GONE
@@ -228,19 +399,50 @@ class MainActivity : AppCompatActivity() {
         binding.hubInput.setText(SessionStore.hub(this).let { if (it == SessionStore.DEFAULT_HUB) "" else it })
     }
 
-    fun showDevices() {
+    /**
+     * 设备列表。
+     *
+     * `fromPanel = true` 表示这一页是**面板的下级**（面板里点「当前设备」进来的）：
+     * 左上角给「返回」回面板，右上角的退出图标不画 —— 站在这里退出登录意味着
+     * "我看完列表顺手把号退了"，不是这个动作的语义（2026-11-11 用户拍板：
+     * "这个页面切换设备，不需要退出按钮，但是需要一个返回按钮"）。
+     *
+     * 登录后 / 冷启动进来（默认）时它是**根页面**：没有"回来"的地方，所以不画返回，
+     * 保留右上角退出 —— 这时退出是唯一能换账号的出口。
+     */
+    fun showDevices(fromPanel: Boolean = false) {
+        paintSystemBarPage()
+        devicesFromPanel = fromPanel
         binding.viewLogin.visibility = View.GONE
         binding.viewDevices.visibility = View.VISIBLE
         binding.viewPanel.visibility = View.GONE
+        binding.devBackBtn.visibility = if (fromPanel) View.VISIBLE else View.GONE
+        binding.logoutBtn.visibility = if (fromPanel) View.GONE else View.VISIBLE
+        // 返回钮出现时标题不跟着右移：把标题左内边距收掉（40 钮 + 8 边距已给出左沿）
+        binding.devTitle.setPadding(if (fromPanel) 0 else dp(24), 0, dp(24), 0)
         stopConnWatch()   // 离开面板就停探活，别在后台白耗流量
         loadDevices()
     }
 
     private fun showPanel(origin: String? = null) {
+        // 面板是网页画的，两条系统栏带都交给它报色 —— 先把原生页留下的底色条清掉，
+        // 页面加载完（ShellBar 上报）再画回去。别让人在半路看到原生的灰。
+        topBarColor = null
+        topBarStrip?.visibility = View.GONE
+        sysBarColor = null
+        sysBarStrip?.visibility = View.GONE
         binding.viewLogin.visibility = View.GONE
         binding.viewDevices.visibility = View.GONE
         binding.viewPanel.visibility = View.VISIBLE
-        if (origin != null) startConnWatch(origin) else stopConnWatch()
+        if (origin != null) {
+            lastPanelOrigin = origin
+            startConnWatch(origin)
+        } else stopConnWatch()
+    }
+
+    /** 设备列表的「返回」：回面板。WebView 里的页面一直没卸载，切回来即原样（不重载） */
+    private fun backToPanel() {
+        showPanel(lastPanelOrigin)
     }
 
     /* -------------------------------------------------- 面板在线状态（connBar） */
@@ -442,7 +644,10 @@ class MainActivity : AppCompatActivity() {
     private fun setupDevicesView() {
         binding.refreshBtn.setOnClickListener { loadDevices() }
         // 右上角的退出图标：与面板里的「退出登录」同一条路（清中枢会话 + 机器 Cookie → 落登录页）
+        // 只在"从登录页进来的这一页"上出现（见 showDevices 的 fromPanel）。
         binding.logoutBtn.setOnClickListener { onPanelLoggedOut() }
+        // 左上角的返回：面板里点「当前设备」进来时才出现，回面板（WebView 原样，不重载）
+        binding.devBackBtn.setOnClickListener { backToPanel() }
     }
 
     private fun loadDevices() {
@@ -756,6 +961,17 @@ class MainActivity : AppCompatActivity() {
     @SuppressLint("SetJavaScriptEnabled")
     private fun setupWebView() {
         val wv = binding.panelWebView
+        /*
+         * 调试包开 WebView 远程调试（2026-11-12）：这台手机 `adb shell input` 被系统禁掉
+         * （INJECT_EVENTS），点不动卡片就进不了面板 —— 只能靠临时代码改一遍、编一遍
+         * （27 秒一轮）再去截图。开了之后：
+         *   adb forward tcp:9222 localabstract:webview_devtools_remote_<pid>
+         * 就能从电脑端 CDP 进壳里的网页，点按钮、切页面、读计算样式。
+         * 只在 DEBUG 包里开：release 包不带调试端口。
+         */
+        if ((applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+            android.webkit.WebView.setWebContentsDebuggingEnabled(true)
+        }
         CookieManager.getInstance().setAcceptCookie(true)
         /*
          * **壳标记**（2026-11-08）：服务端靠 UA 末尾的 `BandiShell/<版本>` 分辨"人"和"壳" ——
@@ -845,9 +1061,12 @@ class MainActivity : AppCompatActivity() {
         setupPanelErrorActions()
     }
 
-    /** 面板里的「当前设备」→ 回原生设备列表（WebView 实例留着，切机器时复用） */
+    /**
+     * 面板里的「当前设备」→ 回原生设备列表（WebView 实例留着，切机器时复用）。
+     * 传 true：这一页此刻是面板的下级 —— 左上角给「返回」，不给退出。
+     */
     fun showDevicesFromPanel() {
-        showDevices()
+        showDevices(fromPanel = true)
     }
 
     /* -------------------------------------------------------- 离线蒙版的动作 */
@@ -928,16 +1147,42 @@ class MainActivity : AppCompatActivity() {
                     // 蒙版挡着时，页面本身没法操作（返回键改页面用户也看不见），
                     // 所以返回 = 蒙版上「返回设备列表」那颗按钮，语义一致、不会"按了没反应"
                     binding.viewOffline.visibility == View.VISIBLE -> showDevicesFromPanel()
+                    // 设备列表是面板的下级（面板里点「当前设备」进来的）→ 返回键回面板，
+                    // 跟左上角那颗「返回」一个语义（2026-11-11）。从登录页进来的列表是根，
+                    // 落到下面的 else（退回桌面），别把人莫名其妙丢回一个面板。
+                    binding.viewDevices.visibility == View.VISIBLE && devicesFromPanel -> backToPanel()
                     binding.viewPanel.visibility == View.VISIBLE -> {
-                        // 面板：网页自己的栈先退（看板详情等），退无可退退到后台 ——
-                        // 不回设备列表（「切换」只走面板里的「当前设备」菜单）
-                        if (binding.panelWebView.canGoBack()) binding.panelWebView.goBack()
-                        else moveTaskToBack(true)
+                        // 面板：先问网页「还有上一层吗」（2026-11-11）—— 不再问 canGoBack
+                        webBack()
                     }
                     else -> moveTaskToBack(true)
                 }
             }
         })
+    }
+
+    /**
+     * 面板返回（2026-11-11 用户实报「定时任务页按返回直接退出 APP」）。
+     *
+     * 以前这里问 `canGoBack()` —— 那是**浏览器历史**，不是 App 的层级：
+     *   · 换机器时 onPageFinished 会 clearHistory()，把网页开机种的那格「井」一起抹掉，
+     *     从此 canGoBack 恒 false，**任何页面**按返回都退后台；
+     *   · 反过来，有些页面压根不压格，按返回也只是"没反应"。
+     * 现在问网页自己：`bandiCanGoUp()`（navstack.mjs 给的唯一真源）。
+     *   true  → `bandiBack()` 退一层（浮层 → 下钻页 → 非首页 tab 回工作台）
+     *   false → 已经在根页，退到桌面（Android 标准，腾讯系 App 也是这个手感）
+     *   legacy（旧缓存脚本没这两个钩子）→ 退回老逻辑，别把旧页面卡死。
+     * 注意结果要 trim 引号：字符串 'legacy' 回包是带引号的，布尔是裸的 true/false。
+     */
+    private fun webBack() {
+        val web = binding.panelWebView
+        web.evaluateJavascript("(typeof bandiCanGoUp === 'function') ? bandiCanGoUp() : 'legacy'") { raw ->
+            when (raw?.trim()?.trim('"')) {
+                "true" -> web.evaluateJavascript("bandiBack()", null)
+                "legacy" -> if (web.canGoBack()) web.goBack() else moveTaskToBack(true)
+                else -> moveTaskToBack(true)
+            }
+        }
     }
 
     private companion object {

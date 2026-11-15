@@ -28,7 +28,7 @@ const check = (label, ok, detail = '') => {
 
 const project = store.listProjects()[0];
 const mkCard = (title, extra = {}) => {
-  const row = store.createProjectTask({ projectId: project.id, title, status: '进行中' });
+  const row = store.createProjectTask({ projectId: project.id, title, status: 'doing' });
   store.updateProjectTask(row.id, extra);
   return store.getProjectTask(row.id);
 };
@@ -51,20 +51,20 @@ check('没 PR 的卡不在批量清单里', store.listProjectTasksWithPr().every
 
 console.log('\n③ 合并后：**进行中 → 待验收**，别的一律不动（卡的状态是人的指令）');
 const b = mkCard('进行中 + PR 已合并', { prState: 'merged' });
-check('进行中 → 待验收', pt.afterMerged(b).status === '待验收', pt.afterMerged(b).status);
+check('进行中 → 待验收', pt.afterMerged(b).status === 'review', pt.afterMerged(b).status);
 
 const c = mkCard('已完成 + PR 已合并', { prState: 'merged' });
-store.updateProjectTask(c.id, { status: '已完成' });
-check('已完成不被覆盖', pt.afterMerged(store.getProjectTask(c.id)).status === '已完成');
+store.updateProjectTask(c.id, { status: 'done' });
+check('已完成不被覆盖', pt.afterMerged(store.getProjectTask(c.id)).status === 'done');
 
 const d = mkCard('进行中 + PR 还开着', { prState: 'open' });
-check('PR 还开着 → 不动', pt.afterMerged(d).status === '进行中');
+check('PR 还开着 → 不动', pt.afterMerged(d).status === 'doing');
 
 const e = mkCard('进行中 + PR 已关闭（没合并）', { prState: 'closed' });
-check('PR 关掉但没合并 → 不动', pt.afterMerged(e).status === '进行中');
+check('PR 关掉但没合并 → 不动', pt.afterMerged(e).status === 'doing');
 
 const f = mkCard('进行中 + 没有 PR');
-check('没有 PR → 不动', pt.afterMerged(f).status === '进行中');
+check('没有 PR → 不动', pt.afterMerged(f).status === 'doing');
 
 console.log('\n④ 取消关联：四个字段一起清掉（不留半截状态）');
 store.updateProjectTask(a.id, { prRepo: null, prNumber: null, prState: null, prTitle: null, prCheckedAt: null });
@@ -90,7 +90,7 @@ const g2 = git.prFieldsOf({ url: 'https://github.com/smoke/demo/pull/43/files', 
 check('带 /files 尾巴也认', g2?.prNumber === 43 && g2?.prState === 'open', JSON.stringify(g2?.prNumber));
 
 console.log('\n⑥ 值班卡（source=repo）落库后：进得了「刷新 PR」的批量清单、看板行上带得出 pr');
-const repoCard = store.createProjectTask({ projectId: project.id, title: 'PR #42 待审：x', status: '待办', source: 'repo', externalKey: 'pr:42' });
+const repoCard = store.createProjectTask({ projectId: project.id, title: 'PR #42 待审：x', status: 'todo', source: 'repo', externalKey: 'pr:42' });
 store.updateProjectTask(repoCard.id, g1);
 const rc = store.getProjectTask(repoCard.id);
 check('值班卡带上了 PR 字段', rc.prNumber === 42 && rc.prState === 'merged', `${rc.prRepo}#${rc.prNumber} ${rc.prState}`);
@@ -98,7 +98,7 @@ check('批量清单收得到值班卡（=「刷新 PR」能刷到它）', store.
 const board = pt.projectTasks(project);
 const boardRow = (board?.columns ?? []).flatMap((c) => c.cards ?? []).find((r) => r.source === 'repo' && r.pr);
 check('看板行里带 pr（卡片标签吃这个字段）', !!boardRow && boardRow.pr.number === 42, JSON.stringify(boardRow?.pr));
-check('合并了，但卡在「待办」→ afterMerged 也不动（人还没看）', pt.afterMerged(store.getProjectTask(repoCard.id)).status === '待办');
+check('合并了，但卡在「待办」→ afterMerged 也不动（人还没看）', pt.afterMerged(store.getProjectTask(repoCard.id)).status === 'todo');
 
 try {
   fs.rmSync(tmp, { recursive: true, force: true });

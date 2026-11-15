@@ -168,7 +168,16 @@ async function main() {
     probeNote = ' FAKE-PROBE:' + JSON.stringify(got);
   }
 
-  out({ type: 'item.completed', item: { type: 'agent_message', text: `${claim}FAKE-OK：${echo}${cardNote}${probeNote}` } });
+  /*
+   * `BANDI_FAKE_SAY`（2026-11-12）：回话末尾追加一句指定的话。
+   *
+   * 为什么要它：验「成员回复里 @ 谁就唤醒谁」时，需要**回复本身**提到某人，
+   * 而默认的"回声任务"会把用户原话一起带回来 —— 用户原话里的 @ 是"人发的派活"，
+   * 两条路会混在一起，测出来的是另一件事（`smoke-reply-chain`）。
+   */
+  const say = process.env.BANDI_FAKE_SAY ? ' ' + process.env.BANDI_FAKE_SAY : '';
+
+  out({ type: 'item.completed', item: { type: 'agent_message', text: `${claim}FAKE-OK：${echo}${cardNote}${probeNote}${say}` } });
   out({ type: 'turn.completed', usage: { input_tokens: 11, output_tokens: 22, cached_input_tokens: 3 } });
   process.exit(0);
 }

@@ -2,7 +2,7 @@
  * delivery-claim.mjs —— 「交付声明」协议（2026-11-09 P4）：**跑完 ≠ 完成**。
  *
  * 为什么单独一个文件：卡 / 流程步骤 / 聊天投影都要回答同一句话 ——「这一轮到底交没交付？」
- * 而它此前被各条链路各自猜：`project-tasks.mjs` 把 `run.status === '完成'` 当"干完了"，
+ * 而它此前被各条链路各自猜：`project-tasks.mjs` 把 `run.status === 'done'` 当"干完了"，
  * `workflows.mjs` 只认 `[受阻]`、别的一律 done。同一件事两处各判一次，迟早给出两种答案。
  *
  * 真实事故（2026-11-09，pt-a6841a5b「爻鉴部署」）：运行 r-551f01e3 正常退出（exit 0），
@@ -66,6 +66,18 @@ export function claimOf(finalText) {
     if (!line) continue;
     if (line.startsWith(BLOCKED_MARK)) return 'blocked';
     if (line.startsWith(DONE_MARK)) return 'done';
+  }
+  /*
+   * 2026-11-12 实报修正（pt-aebb66e2）：马超把 `[完成]` **单独写成一行**，后面又列了明细
+   * （"- 修 SQL … - 执行结果 …"）—— 按旧规则"只认首行/末行"被判成 `unclaimed`，卡被误判
+   * 「已阻塞」，实际迁移已完成。**整行就是一个标记**的声明，无论在哪儿都算；
+   * 但"正文里顺手提到标记"（`[完成] 这句是正文…`）仍然不算，避免把普通叙述误判成交付。
+   * 多标记冲突时**以最后出现的为准**（后写的更接近收尾结论）。
+   */
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i];
+    if (line.startsWith(BLOCKED_MARK)) return 'blocked';
+    if (line === DONE_MARK) return 'done';
   }
   return 'unclaimed';
 }

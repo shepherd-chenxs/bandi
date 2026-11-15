@@ -11,6 +11,8 @@ import * as auth from './auth.mjs';
 import * as runs from './runs.mjs';
 import * as skills from './skills.mjs';
 import * as runtimes from './runtimes.mjs';
+import * as taskClaimAudit from './task-claim-audit.mjs';
+import * as freshness from './freshness.mjs';
 import * as externals from './externals.mjs';
 import * as plugins from './plugins.mjs';
 import * as sshRegistry from './ssh-registry.mjs';
@@ -23,6 +25,7 @@ import { ensureCliInstalled } from './cli-install.mjs';
 import * as workflows from './workflows.mjs';
 import * as prReview from './pr-review.mjs';
 import * as prCreate from './pr-create.mjs';
+import * as selfDelivery from './self-delivery.mjs';
 import * as quota from './quota.mjs';
 import * as status from './status.mjs';
 import { projectTasks, allTasks, personaTasks, createProjectTask, updateProjectTask, startProjectTask, onTaskRunFinished, afterMerged, upsertRepoCard, ensureTaskCardForStep } from './project-tasks.mjs';
@@ -160,6 +163,12 @@ const routes = {
        */
       roles: roles.publicRoles(),
       permissions: roles.PERMISSIONS,
+      /*
+       * 状态字典（2026-11-12）：状态只有码，中文名是码的 label。前端**不自己写一份**
+       * （那就是第二套状态表），跟着 /api/state 一起拿，渲染时查表。
+       * 键是码、值是显示名：{ task: {todo:'待办',…}, run: {…}, workflow: {…}, node: {…} }
+       */
+      statusDict: store.statusDictionary(),
       // 带上"忙不忙"：通讯录里要一眼看出谁能马上接活
       // busyLabel：**他在干什么** —— 光一个"工作中"没用，得知道是哪条流程的哪一步
       // （运行上挂的 workflowTask 就是答案；不属于任何流程的就是普通对话）
@@ -222,6 +231,16 @@ const routes = {
         ? store.markNoticeRead(String(body.id))
         : store.countUnreadNotices();
     sendJson(res, 200, { unread });
+  },
+
+  /**
+   * 删除通知（2026-11-12 用户："加删除功能，支持批量删除"）：
+   * body { ids: [...] }（一条也行多条也行）或 { all: true } 清空；回 { removed, unread }。
+   * 确认弹窗在前端做（confirmDo），服务端只认单据不拦人。
+   */
+  'POST /api/notices/delete': async (req, res) => {
+    const body = await readBody(req);
+    sendJson(res, 200, store.deleteNotices({ ids: body?.ids, all: body?.all === true }));
   },
 
   /** 插件市场：可装的 ＋ 已装的，每条带 installed/enabled —— 界面据此显示"安装"还是"停用/卸载" */
@@ -678,6 +697,8 @@ workflows.ensureBuiltInTemplate();
 prReview.ensurePrReviewTemplate();
 // PR 交付流程（2026-10-25）：pr-create.mjs 在 import 时注册动作节点（pr-create），这里保证模板在
 prCreate.ensurePrDeliveryTemplate();
+// 自主交付流程（2026-11-13）：保证内建模板存在并发布，全程无人工拍板节点
+selfDelivery.ensureSelfDeliveryTemplate();
 // 出厂就有一个人能说话：内置系统管家「崔老三」（2026-10-23 前是秘书「喜儿」；幂等，已有则只补 builtin 标记）
 // **部署即装**（2026-10-22）：不管谁部署、用什么方式起（安装包 / 源码 start.cmd /
 // systemd / 开机自启），服务起来那一刻「bandi」全局命令就在。幂等 —— 装好了什么都不写。
@@ -710,6 +731,18 @@ try {
   if (reset?.length) console.log(`内置员工已重置回出厂（${reset.join(' / ')}）`);
 } catch (err) {
   console.log(`内置员工同步失败（不影响启动）：${err?.message ?? err}`);
+}
+// 员工沙箱档统一到「完全权限」（2026-11-14 用户口径：所有数字员工权限设为完全权限，
+// "默认"这类无人审批跑不动命令的档不再出现 —— 下拉里也已滤掉，见 runtimes.makeRuntime）。
+// 幂等：已是对的员工不会写。放在 steward seed / 同步之后 —— 内置员工也要被覆盖到。
+try {
+  const moved = runtimes.migratePersonaSandboxesToFull({
+    listPersonas: () => store.listPersonas(),
+    updatePersona: (id, patch) => store.updatePersona(id, patch),
+  });
+  if (moved) console.log(`已把 ${moved} 个数字员工的权限档统一为「完全权限」`);
+} catch (err) {
+  console.log(`员工权限档迁移失败（不影响启动）：${err?.message ?? err}`);
 }
 // 内置连接器（2026-10-26）：SSH 工具随「工作台 → 研发 → 远程连接」出厂自带（幂等，已有只补 builtin 标记）
 try {
@@ -755,6 +788,10 @@ runs.onRunFinish(workflows.onAgentRunFinished);
 // 任务卡同理（2026-10-17）：运行跑完/被停/跑挂了，卡不能永远挂在「进行中」——
 // 完成 → 待验收；人停的 → 已阻塞、跑挂的 → 失败（都不回「待办」，否则会被自动重新派活 → 死循环）
 runs.onRunFinish(onTaskRunFinished);
+// 台账核对（2026-11-14 用户拍板）：回话声称的卡号 / 状态和台账对，不符就跟平台更正。
+// 注册在 onTaskRunFinished **之后**（finishHooks 先来先到）—— 先让 [完成] 标记把卡状态
+// 流转完再核对，避免"员工刚声明交付、卡还在待验收"的假阳性。机制见 task-claim-audit.mjs。
+runs.onRunFinish((run) => taskClaimAudit.reconcile({ run }));
 // 群里 @ 多人的排队（2026-10-24）：会话一次只跑一个 —— 前一个收尾，队里下一个立刻补上。
 // 挂在流程/任务卡钩子之后：它们推进的是各自 exec 会话的活，跟群排队互不挡道。
 runs.onRunFinish((run) => {
@@ -768,15 +805,15 @@ runs.onRunFinish((run) => {
 // 那条任务就永远卡住了。所以启动时把这类任务也收尾，别让人对着一个假"进行中"等。
 const stuckTasks = store
   .listWorkflowRuns()
-  .filter((r) => r.status === '进行中')
+  .filter((r) => r.status === 'doing')
   .flatMap((r) => store.listWorkflowTasks(r.id))
-  .filter((t) => t.status === '进行中');
+  .filter((t) => t.status === 'doing');
 for (const t of stuckTasks) {
   store.updateWorkflowTask(t.id, {
     // **「已阻塞」不是「进行中」**：进程重启后这次执行已经没了，
     // 还写"进行中"的话界面上计时器继续走、徽标说在跑 —— 但它永远不会自己动（用户实报）。
     // 已阻塞 = "卡住了、等人处理"，跟"跑挂了（失败）"也不一样：失败的可以重跑，这个要先决定怎么办。
-    status: '已阻塞',
+    status: 'blocked',
     note: '服务重启，这一步被中断',
     endedAt: store.nowIso(),
   });

@@ -9,7 +9,7 @@
  *   · `direct` / `group` 都能删；群删的是**这一段会话**（2026-10-20 用户定：
  *     「删除不是删除群，是删除这次会话」），删到零段才连空群一起收掉；
  *     exec 归任务卡/流程；
- *   · 有 `status='跑中'` 的 run 时拒绝（409 + E4002，不是 500），且**库内数据完整**；
+ *   · 有 `status='running'` 的 run 时拒绝（409 + E4002，不是 500），且**库内数据完整**；
  *   · **不新增只读接口**：聊天记录用 `/api/state` 里现成的 conversations 过滤（反向断言住在 ②）。
  *
  * 隔离：临时数据库、临时数据目录、临时端口 —— 不碰 data/ 里的真账。
@@ -74,7 +74,7 @@ store.addMessage({ conversationId: doomed.id, role: 'user', text: '把首页那�
 const doomedRun = store.createRun({ conversationId: doomed.id, runtime: 'codex', personaId: dev.id });
 store.appendRunEvent(doomedRun.id, 1, { type: 'text', text: '开始改' });
 store.appendRunEvent(doomedRun.id, 2, { type: 'text', text: '改完了' });
-store.finishRun(doomedRun.id, { status: '完成', exitCode: 0 });
+store.finishRun(doomedRun.id, { status: 'done', exitCode: 0 });
 store.addMessage({ conversationId: doomed.id, runId: doomedRun.id, role: 'assistant', text: '改好了' });
 
 // ② 同一段会话被三张卡 / 一条流程实例引用（这些行必须留着）
@@ -200,7 +200,7 @@ const rollbackConv = store.createConversation({ title: '和 波哥', personaId: 
 store.addMessage({ conversationId: rollbackConv.id, role: 'user', text: '这段要验回滚' });
 const rollbackRun = store.createRun({ conversationId: rollbackConv.id, runtime: 'codex', personaId: dev.id });
 store.appendRunEvent(rollbackRun.id, 1, { type: 'text', text: '会留下的一条事件' });
-store.finishRun(rollbackRun.id, { status: '完成', exitCode: 0 });
+store.finishRun(rollbackRun.id, { status: 'done', exitCode: 0 });
 
 let boom = null;
 try {
@@ -263,7 +263,7 @@ check('拒绝路径不写库：跑中那段 runs 一行没少',
 db4.close();
 
 // 收尾：把这段跑中的运行结掉，别让后面的接口用例被它挡住
-store.finishRun(busyRun.id, { status: '已停止', exitCode: 1 });
+store.finishRun(busyRun.id, { status: 'stopped', exitCode: 1 });
 
 /* ------------------------- ⑦b 群会话可以删（2026-10-20 新口径：删**这段**，不是删群） */
 console.log('\n⑦b 群会话删除：删一段只没这一段，群/成员/别的段不动；删到零段群才一并收掉');
@@ -271,7 +271,7 @@ const dev2 = store.createPersona({ name: '群员甲', runtime: 'codex' });
 const delGroup = store.createGroup({ title: '待删群', assistantPersonaId: dev.id, memberIds: [dev2.id] });
 store.addMessage({ conversationId: delGroup.id, role: 'user', text: '第一段的话' });
 const groupRun = store.createRun({ conversationId: delGroup.id, runtime: 'codex', personaId: dev.id });
-store.finishRun(groupRun.id, { status: '完成', exitCode: 0 });
+store.finishRun(groupRun.id, { status: 'done', exitCode: 0 });
 // 这个群的第二段会话（删第一段不能把它带走）
 const groupSeg2 = store.createGroupSession(delGroup.groupId ?? delGroup.id);
 store.addMessage({ conversationId: groupSeg2.id, role: 'user', text: '第二段的话' });
@@ -450,7 +450,7 @@ try {
   check('接口拒绝后跑中那段数据完整（runs 还在）',
     countOf(db5, 'SELECT COUNT(*) c FROM runs WHERE conversationId = ?', apiBusy.id) === 1);
   db5.close();
-  store.finishRun(apiBusyRun.id, { status: '已停止', exitCode: 1 });
+  store.finishRun(apiBusyRun.id, { status: 'stopped', exitCode: 1 });
 
   /*
    * 反向断言：v1.1 砍掉了「聊天记录」专用接口，前端改从 `/api/state` 的
@@ -533,7 +533,7 @@ try {
   store.addMessage({ conversationId: goneA.id, role: 'user', text: '第一段' });
   const goneRun = store.createRun({ conversationId: goneA.id, runtime: 'codex', personaId: goneEmp.id });
   store.appendRunEvent(goneRun.id, 1, { type: 'text', text: '干过的活' });
-  store.finishRun(goneRun.id, { status: '完成', exitCode: 0 });
+  store.finishRun(goneRun.id, { status: 'done', exitCode: 0 });
   const goneB = store.createConversation({ title: '和 已走的人', personaId: goneEmp.id });
   store.addMessage({ conversationId: goneB.id, role: 'user', text: '第二段' });
   const goneC = store.createConversation({ title: '和 已走的人', personaId: goneEmp.id });
@@ -564,7 +564,7 @@ try {
   const goneLeft = countOf(dbR, "SELECT COUNT(*) c FROM conversations WHERE kind = 'direct' AND personaId = ?", goneEmp.id);
   dbR.close();
   check('拒绝路径零写入：三段一段没少', goneLeft === 3, String(goneLeft));
-  store.finishRun(goneBusyRun.id, { status: '已停止', exitCode: 1 });
+  store.finishRun(goneBusyRun.id, { status: 'stopped', exitCode: 1 });
 
   const wipe = await api(`/api/conversations/${encodeURIComponent(goneA.id)}`, { method: 'DELETE' });
   check('跑完之后删任一段 → 200', wipe.status === 200, `${wipe.status} ${JSON.stringify(wipe.body?.code ?? '')}`);

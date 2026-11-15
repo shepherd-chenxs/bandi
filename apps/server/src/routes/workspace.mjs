@@ -23,11 +23,20 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
 import { sendJson, fail, readBody, mimeOf } from '../http.mjs';
-import { host, port } from '../config.mjs';
+import { host, port, dataDir, trustProxy } from '../config.mjs';
 import * as store from '../store.mjs';
+import * as auth from '../auth.mjs';
+import * as localSecret from '../security/local-secret.mjs';
+
+/*
+ * 会话票要不要（与 server.mjs 启动时**同一套输入、同一个 setup**，判定必然一致）：
+ * 账号模式下系统浏览器没有会话，开文件口前要先走 /shell/enter 进门（见 /api/open）。
+ * setup 里的 ensureToken 幂等 —— 启动时已经建好，这里只是复读。
+ */
+const AUTH = auth.setup({ host, dataDir, envToken: process.env.BANDI_TOKEN, trustProxy });
 
 /** 候选根：这段会话里谁在干活（他们的工作目录）→ 全部项目根 → 全部员工的工作目录 */
-function candidateRoots(convId) {
+export function candidateRoots(convId) {
   const roots = [];
   const push = (r) => {
     const dir = String(r ?? '').trim();
@@ -45,7 +54,7 @@ function candidateRoots(convId) {
 }
 
 /** 在候选根里解析员工报的相对路径：命中（且是真文件、没穿出根）返回绝对路径 */
-function resolveInRoots(rel, roots) {
+export function resolveInRoots(rel, roots) {
   for (const r of roots) {
     const abs = path.resolve(r.abs, rel);
     if (!abs.startsWith(r.abs + path.sep)) continue; // 路径闸：不许穿出候选根
@@ -54,6 +63,23 @@ function resolveInRoots(rel, roots) {
     if (st.isFile()) return abs;
   }
   return null;
+}
+
+/**
+ * 「替你开浏览器」只在服务真的**就在这台机器上**时才有意义。判据是**绑定的监听地址**：
+ *   · `0.0.0.0` / `::` —— 所有网卡（**含回环**）：是本机，允许；
+ *   · `127.*` / `::1` / `localhost` —— 回环单绑：是本机，允许；
+ *   · 其它（明确的局域网/外网地址）—— 服务只长在那块网卡上，客户端多半在别的机器，
+ *     替人开浏览器没有意义 → 拒（界面本来就是普通网页，自己 window.open）。
+ *
+ * ⚠️ 别把 `0.0.0.0` 当成"不在本机"（2026-11-14 实报）：**默认监听就是 0.0.0.0**，
+ * 旧守卫只认 127.0.0.1/localhost —— 桌面端点聊天里的文件 pill → `/api/open` 全被
+ * 误判成 E2060「服务不在本机」，其实服务就跑在本机。
+ */
+export function localBind(h) {
+  const s = String(h ?? '').toLowerCase();
+  return s === '0.0.0.0' || s === '::' || s === 'localhost'
+    || s === '::1' || s.startsWith('127.') || s.startsWith('[::1');
 }
 
 export async function handleWorkspace(req, res, url) {
@@ -82,9 +108,9 @@ export async function handleWorkspace(req, res, url) {
 
   /* ------------------------------------------------ ② 系统浏览器打开 */
   if (req.method === 'POST' && url.pathname === '/api/open') {
-    // 仅本机模式：服务在别的机器上时，"替你打开"发生在那台机器，没有意义
-    if (host !== '127.0.0.1' && host !== 'localhost') {
-      return fail(res, 403, 'E2060', '服务不在本机 —— 请直接新标签打开文件地址（界面上点路径就是）');
+    // 仅在服务**真的绑在某个局域网地址**上时拒：替人开浏览器发生在另一台机器，没有意义
+    if (!localBind(host)) {
+      return fail(res, 403, 'E2060', '服务绑在局域网地址上，不在这台机器 —— 请直接新标签打开文件地址（界面上点路径就是）');
     }
     const body = await readBody(req);
     let u;
@@ -94,8 +120,30 @@ export async function handleWorkspace(req, res, url) {
       return fail(res, 400, 'E2060', '只允许打开班底自己的地址');
     }
     const cmd = process.platform === 'win32' ? 'cmd.exe' : process.platform === 'darwin' ? 'open' : 'xdg-open';
-    const args = process.platform === 'win32' ? ['/c', 'start', '', u.href] : [u.href];
-    spawn(cmd, args, { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+    /*
+     * 账号模式下（auth.required，监听地址非回环或挂了反代），**系统浏览器没有班底的
+     * 会话票** —— 直接开文件口会撞 E4010「需要登录」（2026-11-14 实报：点聊天里的
+     * 文件 pill，系统浏览器拿到一坨 401 JSON）。包一层**先进门再看**：目标换成
+     * `/shell/enter?secret=…&to=<目标>` —— 进门核 local_secret + 本机直连（桌面壳同一条
+     * 通道）签票后 302 直达文件；这张浏览器之后都有票，再点不用再进。
+     * 回环免鉴权形态（auth.required=false）不用包：本来就免登录，开了直接看。
+     */
+    const target = AUTH.required
+      ? `http://127.0.0.1:${port}${auth.SHELL_ENTER_PATH}?secret=${encodeURIComponent(localSecret.ensure())}&to=${encodeURIComponent(u.pathname + u.search)}`
+      : u.href;
+    const args = process.platform === 'win32'
+      ? /*
+         * Windows 的 start 走 cmd 解析：**裸 `&` 是命令分隔符** —— 目标里的 `&to=…`
+         * 在 & 处断掉，浏览器拿到没有 to 的进门链 → 302 回面板，用户看到的是班底
+         * 网页而不是文件（2026-11-14 实报）。整段目标**自带引号**交给 start（第一个
+         * 引号参数是窗口标题，所以空标题 "" 必须还在），并开 verbatim 让 Node
+         * 别二次加工（无空格参数 Node 不引号，手工引号又会被它转义弄坏，实测踩过）。
+         */
+        ['/c', 'start', '""', `"${target}"`]
+      : [target];
+    const spawnOpts = { detached: true, stdio: 'ignore', windowsHide: true };
+    if (process.platform === 'win32') spawnOpts.windowsVerbatimArguments = true;
+    spawn(cmd, args, spawnOpts).unref();
     return sendJson(res, 200, { opened: true });
   }
 

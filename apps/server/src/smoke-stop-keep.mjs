@@ -74,7 +74,7 @@ const r1 = runs.startRun({ thread, member, task: '一', watermark: 0 });
 runs.requestStop(r1.id);
 await sleep(runs.STOP_WATCHDOG_MS + 1200);
 
-check('这一轮收在「已停止」', store.getRunStatus(r1.id)?.status === '已停止', store.getRunStatus(r1.id)?.status);
+check('这一轮收在「已停止」', store.getRunStatus(r1.id)?.status === 'stopped', store.getRunStatus(r1.id)?.status);
 const m1 = repliesOf(r1.id);
 check('已经说出口的话落成了一条 assistant 消息', m1.length === 1, `${m1.length} 条`);
 check(
@@ -126,7 +126,7 @@ runs.requestStop(r3.id);
 await sleep(900);
 
 check('没有回话就一条消息都不落（"没说过"不等于"说了空话"）', repliesOf(r3.id).length === 0, String(repliesOf(r3.id).length));
-check('状态仍是「已停止」（界面靠 run 行画状态行）', store.getRunStatus(r3.id)?.status === '已停止', store.getRunStatus(r3.id)?.status);
+check('状态仍是「已停止」（界面靠 run 行画状态行）', store.getRunStatus(r3.id)?.status === 'stopped', store.getRunStatus(r3.id)?.status);
 
 /* ===== 场景四：跑挂的那一轮不受影响 —— 半截话不冒充"回话" ===== */
 console.log('\n④ 跑挂的那一轮：仍走「没跑成」，半截话不落成回话');
@@ -138,7 +138,7 @@ ADAPTERS.codex = ({ onEvent }) => {
 const r4 = runs.startRun({ thread, member, task: '四', watermark: 0 });
 await sleep(600);
 
-check('状态是「失败」而不是「已停止」', store.getRunStatus(r4.id)?.status === '失败', store.getRunStatus(r4.id)?.status);
+check('状态是「失败」而不是「已停止」', store.getRunStatus(r4.id)?.status === 'failed', store.getRunStatus(r4.id)?.status);
 check('没有落半截回话（失败那一路由「没跑成」气泡说明原因）', repliesOf(r4.id).length === 0, String(repliesOf(r4.id).length));
 
 try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* 临时目录，删不掉就算了 */ }

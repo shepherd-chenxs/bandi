@@ -76,7 +76,7 @@ export const STEWARD_INSTRUCTIONS = `你是「崔老三」，这台机器上的�
 export function stewardBrief() {
   const personas = store.listPersonas();
   const runs = store.listWorkflowRuns();
-  const running = runs.filter((r) => r.status === '进行中').length;
+  const running = runs.filter((r) => r.status === 'doing').length;
   const base = `http://127.0.0.1:${port}`;
 
   return [

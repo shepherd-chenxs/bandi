@@ -80,8 +80,8 @@ console.log('① dsh 事件序列：turn/step + tool_call → tool_result');
   v = f.feed({ type: 'status', phase: 'turn_end' });
   check('turn_end → 收尾中', v.phaseText === '收尾中', v.phaseText);
 
-  v = f.feed({ type: '__done', status: '完成' });
-  check('__done → 已完成', v.done === true && v.status === '完成', `${v.done}/${v.status}`);
+  v = f.feed({ type: '__done', status: 'done' });
+  check('__done → 已完成', v.done === true && v.status === 'done', `${v.done}/${v.status}`);
   // 1000+1000+1000+2000+1000+1000+1000 = 8s（每一步喂事件都往后跳了时间）
   check('总用时按开始时间算', v.elapsedMs === 8000, String(v.elapsedMs));
 }
@@ -139,7 +139,7 @@ console.log('\n④ 卡住判定：5 分钟没有新事件');
   check('卡住时仍说得出最后动作', /改文件/.test(v2.lastAction), v2.lastAction);
   check('"已等多久"还在（供卡片显示）', v2.steps[0]?.durMs === STALL_MS, String(v2.steps[0]?.durMs));
 
-  applyRunEvent(st, { type: '__done', status: '完成' }, STALL_MS + 1);
+  applyRunEvent(st, { type: '__done', status: 'done' }, STALL_MS + 1);
   check('跑完以后不再报卡住', progressView(st, STALL_MS * 10).stalled === false);
 }
 
@@ -158,8 +158,8 @@ console.log('\n⑤ 格式化 / 容错');
 
   const v = f.feed({ type: 'error', message: 'Not logged in · Please run /login' });
   check('error → 阶段「出错了」并记下原因', v.phaseText === '出错了' && /Not logged in/.test(v.error), v.error);
-  const v2 = f.feed({ type: '__done', status: '失败' });
-  check('__done 失败 → 状态「失败」', v2.done && v2.status === '失败', v2.status);
+  const v2 = f.feed({ type: '__done', status: 'failed' });
+  check('__done 失败 → 状态「失败」', v2.done && v2.status === 'failed', v2.status);
 }
 
 /* --------------------------------------------------- ⑥ 界面接线（静态） */

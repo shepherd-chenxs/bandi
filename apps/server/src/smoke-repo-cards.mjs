@@ -76,7 +76,7 @@ try {
   check('建卡 201', c1.status === 201 && c1.b.created === true, `status=${c1.status} created=${c1.b?.created}`);
   check('来源标成 repo', c1.b.task?.source === 'repo', String(c1.b.task?.source));
   check('去重键存下来了', c1.b.task?.externalKey === 'pr:3', String(c1.b.task?.externalKey));
-  check('初始状态是「待办」', c1.b.task?.status === '待办', String(c1.b.task?.status));
+  check('初始状态是「待办」', c1.b.task?.status === 'todo', String(c1.b.task?.status));
 
   const board1 = (await req(`/api/projects/${encodeURIComponent(pid)}/tasks`)).b;
   const card1 = board1.rows.find((r) => r.manual_id === c1.b.task.id);
@@ -114,11 +114,11 @@ try {
   check('看板上执行人跟着变', boardWho?.assignee === '测试执行人', String(boardWho?.assignee));
 
   console.log('\n④ 人把它拖到「已完成」→ 巡检再写一次，状态不许被弹回去');
-  const moved = await req(`/api/projects/tasks/${encodeURIComponent(c1.b.task.id)}`, { method: 'PATCH', body: JSON.stringify({ status: '已完成' }) });
-  check('拖到「已完成」', moved.b?.task?.status === '已完成', String(moved.b?.task?.status));
+  const moved = await req(`/api/projects/tasks/${encodeURIComponent(c1.b.task.id)}`, { method: 'PATCH', body: JSON.stringify({ status: 'done' }) });
+  check('拖到「已完成」', moved.b?.task?.status === 'done', String(moved.b?.task?.status));
   const body3 = { ...body1, title: 'PR #3 待审：标题又改了', body: '结论：待审（第三次巡检）' };
   const c3 = await req(`/api/projects/${encodeURIComponent(pid)}/repo-cards`, { method: 'POST', body: JSON.stringify(body3) });
-  check('状态还是「已完成」（人的指令优先）', c3.b?.task?.status === '已完成', String(c3.b?.task?.status));
+  check('状态还是「已完成」（人的指令优先）', c3.b?.task?.status === 'done', String(c3.b?.task?.status));
   check('标题跟着更新了', c3.b?.task?.title === body3.title, String(c3.b?.task?.title));
 
   console.log('\n⑤ 必填校验与清理');

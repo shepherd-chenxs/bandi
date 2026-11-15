@@ -60,11 +60,11 @@ console.log('① 没点名 → 到站即阻塞，不顶上人');
 const run = workflows.startWorkflow({ templateId: 't-assign', title: '用例' });
 const first = run.tasks?.[0] ?? null;
 check('第一步任务建出来了', !!first, first?.status);
-check('状态是「已阻塞」', first?.status === '已阻塞', first?.status);
+check('状态是「已阻塞」', first?.status === 'blocked', first?.status);
 check('没有指派任何人（技能没被用来顶人）', !first?.assigneePersonaId, String(first?.assigneePersonaId));
 check('原因就是「没点名经办人」', first?.note?.startsWith('「测试」没点名经办人'), first?.note);
 check('原因里不含技能名（哪怕有人挂着 webapp-testing）', !/webapp-testing|技能/.test(first?.note ?? ''), first?.note);
-check('流程照样建出来', run?.status === '进行中', run?.status);
+check('流程照样建出来', run?.status === 'doing', run?.status);
 
 console.log('\n② 没点名的步骤不能直接派活');
 let threw = '';
@@ -82,7 +82,7 @@ store.upsertWorkflowTemplate({
 const run2 = workflows.startWorkflow({ templateId: 't-named', title: '用例2', autoStart: false });
 const t2 = run2.tasks?.[0] ?? null;
 check('经办人 = 点名的那个', t2?.assigneePersonaId === noSkills.id, String(t2?.assigneePersonaId));
-check('没被标成阻塞', t2?.status !== '已阻塞', t2?.status);
+check('没被标成阻塞', t2?.status !== 'blocked', t2?.status);
 
 console.log('\n④ 解析规则：不认技能，只认人');
 const tpl = store.getWorkflowTemplate('t-assign');
@@ -125,9 +125,9 @@ tplLive([
   { id: 'n1', name: '第一步', personaId: qa.id, approve: 'n2', reject: 'end' }, // 出口 end → n2
   { id: 'n2', name: '第二步', approve: 'end', reject: 'end' },
 ]);
-store.updateWorkflowTask(step1.id, { status: '待验收' });
+store.updateWorkflowTask(step1.id, { status: 'review' });
 const after = workflows.decide(liveRun.id, '通过');
-check('改模板的出口 → 老实例立刻走到新节点', after?.currentNodeId === 'n2' && after?.status === '进行中', `${after?.currentNodeId} / ${after?.status}`);
+check('改模板的出口 → 老实例立刻走到新节点', after?.currentNodeId === 'n2' && after?.status === 'doing', `${after?.currentNodeId} / ${after?.status}`);
 
 tplLive([{ id: 'n1', name: '第一步', personaId: qa.id, approve: 'end', reject: 'end' }]); // n2 被删
 let delErr = '';
@@ -137,7 +137,7 @@ const orphanView = workflows.getWorkflowView(liveRun.id);
 check('界面据此能认出"当前节点悬空"', !orphanView.nodes.some((n) => n.id === orphanView.currentNodeId), `${orphanView.currentNodeId} vs ${orphanView.nodes.map((n) => n.id).join(',')}`);
 // 通过放行 = 收尾：不能让人卡在一个"没有任何出路"的状态里（用户实报过）
 const closed = workflows.decide(liveRun.id, '通过');
-check('节点被删 → 通过可以收尾（流程已完成）', closed?.status === '已完成', `${closed?.status} / ${closed?.note}`);
+check('节点被删 → 通过可以收尾（流程已完成）', closed?.status === 'done', `${closed?.status} / ${closed?.note}`);
 check('收尾写明了原因（可追溯，不是静默跳过）', /已不在模板里/.test(closed?.note ?? ''), closed?.note);
 
 console.log('\n⑦ 数据形状：库里不再有 skill 列');
@@ -220,16 +220,16 @@ const oneNode = (id, manual) => store.upsertWorkflowTemplate({
 const finishWith = (templateId, agentRunId) => {
   const r = workflows.startWorkflow({ templateId, title: templateId, autoStart: false });
   const t = store.listWorkflowTasks(r.id)[0];
-  store.updateWorkflowTask(t.id, { status: '进行中', agentRunId });
-  workflows.onAgentRunFinished({ id: agentRunId, status: '已完成', finalText: '干完了' });
+  store.updateWorkflowTask(t.id, { status: 'doing', agentRunId });
+  workflows.onAgentRunFinished({ id: agentRunId, status: 'done', finalText: '干完了' });
   return { run: store.getWorkflowRun(r.id), task: store.getWorkflowTask(t.runId, 'n1', 1) };
 };
 oneNode('t-pause', true);
 const paused = finishWith('t-pause', 'ar-pause');
-check('manual：停在「待验收」，流程还卡在这一步', paused.task?.status === '待验收' && paused.run?.status === '进行中', `${paused.task?.status} / ${paused.run?.status}`);
+check('manual：停在「待验收」，流程还卡在这一步', paused.task?.status === 'review' && paused.run?.status === 'doing', `${paused.task?.status} / ${paused.run?.status}`);
 oneNode('t-auto', false);
 const auto = finishWith('t-auto', 'ar-auto');
-check('非 manual：自动往下走，approve=end → 流程收尾', auto.run?.status === '已完成', `${auto.task?.status} / ${auto.run?.status}`);
+check('非 manual：自动往下走，approve=end → 流程收尾', auto.run?.status === 'done', `${auto.task?.status} / ${auto.run?.status}`);
 
 /*
  * ⑪ 内建模板的 detail 随平台更新（产物模板 / 收敛检查写进节点提示词）＋ 项目宪法的注入块。
@@ -260,7 +260,7 @@ check('updateProject 把空串归一成 NULL', store.getProject(pj.id).constitut
  */
 console.log('\n⑫ 执行结果：有产物列产物 / 没产物一句话 / 失败给原文');
 const doneRes = workflows.resultOf({
-  status: '已完成',
+  status: 'done',
   finalText: '已在 `index.html` 的卡片里加上这句话。\n\n改动：`index.html:6`，见 https://github.com/acme/web/pull/12',
 });
 check('完成 → state = done', doneRes.state === 'done', doneRes.state);
@@ -269,16 +269,16 @@ check('产物认出链接', doneRes.artifacts.some((a) => a.kind === 'link' && /
 check('一句话取第一行有内容的', /已在 index\.html 的卡片里加上这句话/.test(doneRes.summary ?? ''), doneRes.summary);
 
 // 交付声明标记（P4）由平台判状态用，界面摘要要剥掉前缀 —— 跟 [受阻] 一样，不然成 "[完成] [完成]…" 叠词
-const claimedRes = workflows.resultOf({ status: '完成', finalText: '[完成] 已修好。改动：src/app.js' });
+const claimedRes = workflows.resultOf({ status: 'done', finalText: '[完成] 已修好。改动：src/app.js' });
 check('交付声明：摘要剥掉 [完成] 前缀（标记不重复出现在界面上）',
   typeof claimedRes.summary === 'string' && claimedRes.summary.length > 0 && !claimedRes.summary.includes('[完成]'),
   JSON.stringify(claimedRes.summary));
 
-const plainRes = workflows.resultOf({ status: '已完成', finalText: '好的，我先看了一下项目。\n\n这次只做了检查，没改任何文件。' });
+const plainRes = workflows.resultOf({ status: 'done', finalText: '好的，我先看了一下项目。\n\n这次只做了检查，没改任何文件。' });
 check('没产物 → artifacts 为空', plainRes.artifacts.length === 0, JSON.stringify(plainRes.artifacts));
 check('没产物 → 一句话跳过开场白', /只做了检查/.test(plainRes.summary ?? ''), plainRes.summary);
 
-const badRes = workflows.resultOf({ status: '失败', error: '退出码 1：ENOENT 找不到 dist/index.html' });
+const badRes = workflows.resultOf({ status: 'failed', error: '退出码 1：ENOENT 找不到 dist/index.html' });
 check('失败 → state = error 且带原文', badRes.state === 'error' && /ENOENT/.test(badRes.error ?? ''), JSON.stringify(badRes));
 check('失败 → 不硬凑一句话', badRes.summary === null, String(badRes.summary));
 
@@ -286,10 +286,10 @@ check('失败 → 不硬凑一句话', badRes.summary === null, String(badRes.su
 oneNode('t-result', true);
 const resRun = workflows.startWorkflow({ templateId: 't-result', title: '结果', autoStart: false });
 const resTask = store.listWorkflowTasks(resRun.id)[0];
-store.updateWorkflowTask(resTask.id, { status: '进行中', agentRunId: 'ar-result' });
+store.updateWorkflowTask(resTask.id, { status: 'doing', agentRunId: 'ar-result' });
 workflows.onAgentRunFinished({
   id: 'ar-result',
-  status: '已完成',
+  status: 'done',
   finalText: '改完了。\n\n- `src/app.js` 新增一个按钮\n- `README.md` 补了用法',
 });
 const resView = workflows.getWorkflowView(resRun.id);
@@ -315,22 +315,22 @@ console.log('\n⑬ 受阻协议：[受阻] 在首行或末行 → 已阻塞，�
 check('blockedMark：第一行 [受阻] 认', workflows.blockedMark('[受阻] docs/ 写权限被拒\n\n能干的部分…') === true);
 check('blockedMark：正文里提受阻不算', workflows.blockedMark('干完了，中间有个文件一度受阻，已解决') === false);
 check('blockedMark（兼容老口径）：第二行的 [受阻] 不算', workflows.blockedMark('干完了\n[受阻] 伪标记') === false);
-check('resultOf：受阻 → state = blocked', workflows.resultOf({ status: '受阻', finalText: '[受阻] 原因' }).state === 'blocked');
+check('resultOf：受阻 → state = blocked', workflows.resultOf({ status: 'blocked', finalText: '[受阻] 原因' }).state === 'blocked');
 check('claimOf：最后一行 [受阻] → blocked（P5 新口径）',
   deliveryClaim.claimOf('干了大半。\n\n[受阻] 需要你批权限') === 'blocked');
 
 oneNode('t-blocked', false); // 故意非 manual：受阻必须比"自动流转"优先，否则又绿灯走完
 const blkRun = workflows.startWorkflow({ templateId: 't-blocked', title: '受阻用例', autoStart: false });
 const blkTask = store.listWorkflowTasks(blkRun.id)[0];
-store.updateWorkflowTask(blkTask.id, { status: '进行中', agentRunId: 'ar-blocked' });
+store.updateWorkflowTask(blkTask.id, { status: 'doing', agentRunId: 'ar-blocked' });
 workflows.onAgentRunFinished({
   id: 'ar-blocked',
-  status: '已完成', // 员工进程本身是"正常结束"的 —— 受阻信息全靠回话里的标记
+  status: 'done', // 员工进程本身是"正常结束"的 —— 受阻信息全靠回话里的标记
   finalText: '[受阻] docs/项目文档 的写权限没批，需求文档没落盘。\n\n已起草好要点，等你批了写权限我就写入。',
 });
 const blkOut = store.getWorkflowTask(blkRun.id, 'n1', 1);
-check('受阻：任务转「已阻塞」而不是「待验收」', blkOut?.status === '已阻塞', String(blkOut?.status));
-check('受阻：流程不自动流转（还停在这一步）', store.getWorkflowRun(blkRun.id)?.status === '进行中', String(store.getWorkflowRun(blkRun.id)?.status));
+check('受阻：任务转「已阻塞」而不是「待验收」', blkOut?.status === 'blocked', String(blkOut?.status));
+check('受阻：流程不自动流转（还停在这一步）', store.getWorkflowRun(blkRun.id)?.status === 'doing', String(store.getWorkflowRun(blkRun.id)?.status));
 const blkRes = JSON.parse(blkOut?.result ?? '{}');
 check('受阻：result.state = blocked', blkRes.state === 'blocked', blkOut?.result);
 check('受阻：原因在小结里（界面上要显）', /写权限没批/.test(blkRes.summary ?? ''), blkRes.summary);
@@ -341,15 +341,15 @@ check('受阻：视图 stuck（列表红标「已阻塞」）', blkView.stuck !=
 oneNode('t-blocked-last', false); // 非 manual：末行受阻也必须优先于自动流转
 const blkRun2 = workflows.startWorkflow({ templateId: 't-blocked-last', title: '末行受阻用例', autoStart: false });
 const blkTask2 = store.listWorkflowTasks(blkRun2.id)[0];
-store.updateWorkflowTask(blkTask2.id, { status: '进行中', agentRunId: 'ar-blocked-last' });
+store.updateWorkflowTask(blkTask2.id, { status: 'doing', agentRunId: 'ar-blocked-last' });
 workflows.onAgentRunFinished({
   id: 'ar-blocked-last',
-  status: '已完成',
+  status: 'done',
   finalText: '干了大部分：已建库、已传包。\n\n[受阻] 需要你批生产库的写权限',
 });
 const blkOut2 = store.getWorkflowTask(blkRun2.id, 'n1', 1);
-check('末行受阻：任务转「已阻塞」而不是「待验收」', blkOut2?.status === '已阻塞', String(blkOut2?.status));
-check('末行受阻：流程不自动流转（还停在这一步）', store.getWorkflowRun(blkRun2.id)?.status === '进行中', String(store.getWorkflowRun(blkRun2.id)?.status));
+check('末行受阻：任务转「已阻塞」而不是「待验收」', blkOut2?.status === 'blocked', String(blkOut2?.status));
+check('末行受阻：流程不自动流转（还停在这一步）', store.getWorkflowRun(blkRun2.id)?.status === 'doing', String(store.getWorkflowRun(blkRun2.id)?.status));
 check('末行受阻：原因进了小结（取标记后面那句，不是正文首行）',
   /批生产库的写权限/.test(JSON.parse(blkOut2?.result ?? '{}').summary ?? ''), blkOut2?.result);
 

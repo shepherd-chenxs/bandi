@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      原生页（选择电脑 / 登录 / 连不上兜底）的底色。
+
+      为什么不吃主题的 colorSurface（2026-11-12 用户："这个怎么看着有点粉，跟其他页风格不同"）：
+      Material3 的 baseline 色板 surface 是 #FFFBFE —— 白里掺一点紫，正是"粉"的来源。
+      网页那套是 #F7F8F9（页面底 bg）+ #FFFFFF（卡片），白卡浮在浅灰上分层。
+      这里取同一个页面底色，卡片（代码里写死白）才浮得起来，壳里的原生页和 WebView 里的
+      页面看起来才是同一个产品。
+
+      深色：网页的页面底色是 #08090A。壳目前只做了浅色（卡片/文字都写死浅色档），
+      所以深色下也保持浅底，别把一页写死浅色的控件压到黑底上。
+    -->
+    <color name="bandi_page">#FFF7F8F9</color>
+
+    <!-- 主按钮：网页主色（浅色档） #0066CC（Material3 默认的 #6750A4 紫是另一套风格） -->
+    <color name="bandi_primary">#FF0066CC</color>
+</resources>
