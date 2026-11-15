@@ -101,7 +101,7 @@ export function claimedExecCommands(text) {
  */
 function filePathTokens(text) {
   const out = new Set();
-  for (const raw of String(text ?? '').split(/[^\w\u4e00-\u9fa5.:\\/+\-]/)) {
+  for (const raw of String(text ?? '').split(/[^\w\u4e00-\u9fa5.:\\/+~\-]/)) {
     let s = raw.trim();
     if (/^https?:/i.test(s) || s.includes('?') || s.includes(' ')) continue;
     if (/^pt-[0-9a-f]/i.test(s)) continue;
