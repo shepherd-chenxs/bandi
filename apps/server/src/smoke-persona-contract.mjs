@@ -93,6 +93,21 @@ try {
   check('⑥ 不编数 + 不猜接口（别 foreach 试路径）', /不编数/.test(contract) && /不猜接口/.test(contract) && /foreach/.test(contract));
   check('⑦ 红线：删数据 / 动生产 / 对外发布', /删数据/.test(contract) && /(动生产|生产)/.test(contract) && /对外发布/.test(contract));
 
+  console.log('\n②-b 过程决策是本职（2026-11-14 甲方口径：我只要结果，别拿过程问我）');
+  check('⑪ 方案 / 设计 / 实现 / 派下一张卡 = 自己定，不问雇主',
+    /过程决策是你的本职/.test(contract) && /要不要给下游派下一张卡/.test(contract) && /不要拿这些问雇主/.test(contract));
+  check('⑪ 中间产物最多一行路径，不许"你先看看"',
+    /落盘归档/.test(contract) && /最多一行路径/.test(contract) && /你先看看/.test(contract));
+  check('⑪ 只剩三种情况找雇主：红线 / 真阻塞 / 交验收',
+    /三种情况找他/.test(contract) && /真阻塞/.test(contract) && /交验收/.test(contract));
+  check('⑪ "要不要我继续 / 要不要我派 / 你先看文档吗" = 没交付',
+    /要不要我继续/.test(contract) && /算没交付/.test(contract));
+
+  console.log('\n②-c 统筹块：派下一张卡不用请示（PM 本职，2026-11-14 李俊实报）');
+  const pm = dispatch.pmDispatchBlock({ persona: { id: 'p-pm' }, thread: { kind: 'group', members: [] }, project: { name: 'x' } });
+  check('⑦ 方案定了直接建卡派下游（统筹本职）', /派下一张卡不用请示/.test(pm) && /统筹本职/.test(pm), pm.split('\n').at(-1) ?? '');
+  check('⑦ 不问"要不要派 / 你先看文档吗"；设计稿是执行人的功课', /要不要派/.test(pm) && /你先看文档吗/.test(pm) && /功课/.test(pm));
+
   console.log('\n③ 交付形态判定（P5 新增 dispatch.guessDeliveryKind：问答 → answer / 做事 → do / 判不了 → null）');
   check('guessDeliveryKind 是导出函数', typeof dispatch.guessDeliveryKind === 'function');
   const kindOf = (t) => dispatch.guessDeliveryKind(t);
@@ -139,8 +154,10 @@ try {
   const src = fs.readFileSync(new URL('./dispatch.mjs', import.meta.url), 'utf8');
   // getWorkflowTaskById：2026-11-13 交接快照记的修复（dispatch 改用按主键查的那个函数），断言跟着对齐
   check('按 opts.taskId 现查 workflow_tasks（流程节点进入合同）', /opts\.taskId \? store\.getWorkflowTaskById\(opts\.taskId\)/.test(src));
-  check('startMemberRun 拼了 platformContractBlock + 结构化 taskContractBlock（卡/流程/项目/台账都传）',
-    /const contractBlock = \[[\s\S]*?platformContractBlock\(\),[\s\S]*?taskContractBlock\(\{[\s\S]{0,200}?card: opts\.card[\s\S]{0,200}?workflow: workflowTask[\s\S]{0,200}?project[\s\S]{0,200}?tasks: myTasks[\s\S]{0,120}?\}\)/.test(src));
+  check('startMemberRun 拼了 taskContractBlock（卡/流程/项目/台账都传）',
+    /taskContractBlock\(\{[\s\S]{0,200}?card: opts\.card[\s\S]{0,200}?workflow: workflowTask[\s\S]{0,200}?project[\s\S]{0,200}?tasks: myTasks[\s\S]{0,120}?\}\)/.test(src));
+  check('platformContractBlock 拆进 standing（out-of-band，不再混任务文本）',
+    /const standing = \[[\s\S]*?platformContractBlock\(\)/.test(src) && /standing,/.test(src));
   check('契约进了 fullTask（每轮交给运行时）', /fullTask = \[[^\]]*contractBlock/.test(src));
   check('每轮按本人查未完成任务台账（P3a，所有员工通用）', /store\.listMyOpenTasks\(member\.personaId, 5\)/.test(src));
   check('旧的"汇报口径"不再只写在 PM 首轮 brief 里', !/【汇报口径｜结论先行】/.test(src));

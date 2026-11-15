@@ -1,5 +1,7 @@
 import { agentEnv } from './git-repos.mjs';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { runCwd } from './config.mjs';
 
@@ -36,13 +38,16 @@ export function launchCommand(pathOverride) {
   return { file: p, args: [], env: {} };
 }
 
-export function buildArgs({ sessionId = null, model = null, sandbox = null, roots = [], connectorArgs = [] } = {}) {
+export function buildArgs({ sessionId = null, model = null, sandbox = null, roots = [], connectorArgs = [], systemPromptFile = null } = {}) {
   const args = ['-p', '--output-format', 'stream-json', '--verbose'];
   if (sessionId) args.push('--resume', sessionId);
   if (model) args.push('--model', model);
   // 员工的 sandbox 是从别的 runtime 带过来的值时（比如 codex 的 danger-full-access），
   // 不认识的模式就不传，让 Claude 用它自己的设置，别把任务打挂
   if (sandbox && PERMISSION_MODES.includes(sandbox)) args.push('--permission-mode', sandbox);
+  // out-of-band 不变量（平台契约 + 统筹块，2026-11-15）：走 system-prompt 通道而不是
+  // 混进任务文本 —— resume 会话里不随历史积累，稳定前缀吃得进缓存
+  if (systemPromptFile) args.push('--append-system-prompt-file', systemPromptFile);
   // 连接器参数（--mcp-config <文件>，connectors.resolve('claude') 生成）。
   // ⚠️ 必须排在 --add-dir **之前**：--add-dir 是变参，排在它后面的旗标会被当成
   // 又一个目录吃掉，--mcp-config 就静默丢了（2026-11-13，与 codexArgs 的教训同款）
@@ -120,9 +125,28 @@ export function runTask({
   env = {},
   onEvent = () => {},
   signal = null,
+  systemPrompt = null,
 }) {
   return new Promise((resolve, reject) => {
-    const args = buildArgs({ sessionId, model, sandbox, roots, connectorArgs });
+    /*
+     * out-of-band 不变量（2026-11-15，借鉴 Cumora 的 standing prompt）：
+     * 平台契约这类**每轮一模一样**的文本走 `--append-system-prompt-file`，不混进任务
+     * 文本 —— resume 会话里不随历史积累（不然每轮任务都躺在 transcript 里越滚越大），
+     * 稳定前缀吃得进缓存。临时文件 run 结束就删；写不进/删不掉都不挡运行。
+     */
+    let standingFile = null;
+    let taskText = task;
+    if (systemPrompt) {
+      try {
+        standingFile = path.join(os.tmpdir(), `bandi-standing-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.md`);
+        fs.writeFileSync(standingFile, String(systemPrompt), { encoding: 'utf8', mode: 0o600 });
+      } catch {
+        // 临时文件写不进 → 退回任务文本通道（与 codex/dsh 行为一致），契约不丢
+        taskText = `${String(systemPrompt)}\n\n${task}`;
+        standingFile = null;
+      }
+    }
+    const args = buildArgs({ sessionId, model, sandbox, roots, connectorArgs, systemPromptFile: standingFile });
     const launch = launchCommand(cliPath);
 
     const child = spawn(launch.file, [...launch.args, ...args], {
@@ -130,6 +154,10 @@ export function runTask({
       windowsHide: true,
       env: { ...agentEnv(), ...launch.env, ...env },
       stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    child.on('close', () => {
+      if (standingFile) { try { fs.unlinkSync(standingFile); } catch { /* 删不掉就算了 */ } }
     });
 
     let buf = '';
@@ -275,6 +303,6 @@ export function runTask({
     }
 
     child.stdin.on('error', () => {}); // 进程提前退出时 stdin 可能报 EPIPE，忽略
-    child.stdin.end(task);
+    child.stdin.end(taskText);
   });
 }

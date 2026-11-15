@@ -2634,17 +2634,6 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     color: var(--mb-text-2, var(--dim));
     white-space: nowrap;
   }
-  /*
-   * 关联项目铭牌（2026-11-11）：手机上先让它让位 —— max-width 收到 84px（约四个字 + 省略号），
-   * 但**不参与收缩**（flex:none 在 style.css 里），群名照样是唯一可缩的那个。
-   * 320px 以下的极限屏它是第一个被牺牲的：真挤到放不下时宁可整块不显示，
-   * 也不必在群头硬塞 —— 抽屉里永远看得到。
-   */
-  body.mb-chat .chat-head .head-proj {
-    max-width: 84px;
-    font-size: 12px;
-    line-height: 15px;
-  }
   /* 解散的群：群名不可点（无 head-name 的事件与热区），但同样要能截断不让整行溢出 */
   body.mb-chat .chat-head .head-name-static {
     min-width: 0;

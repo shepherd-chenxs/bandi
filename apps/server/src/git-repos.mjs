@@ -20,9 +20,12 @@ import { dataDir, repoRoot } from './config.mjs';
 import * as store from './store.mjs';
 // 凭据闸的判据单一来源（钩子也要用，见 secret-paths.mjs 头注释）
 import { classifySecretSuspects, findSecretPaths, scanContentForSecrets } from './secret-paths.mjs';
+// agent 子进程的 PATH 要拼上"此刻"的机器 PATH —— 见 agentEnv() 里的说明
+import { pathDirs } from './path-env.mjs';
 
 const TOKEN_FILE = path.join(dataDir, 'github-token');
 const REPOS_DIR = path.join(dataDir, 'repos');
+const WIN = process.platform === 'win32';
 
 /** 已接入的仓库清单 */
 export function listConnected() {
@@ -1445,9 +1448,22 @@ export function agentEnv() {
    * 不动系统环境。
    */
   const nodeDir = path.dirname(process.execPath);
-  if (!String(env.PATH ?? '').split(path.delimiter).includes(nodeDir)) {
-    env.PATH = nodeDir + path.delimiter + (env.PATH ?? '');
+  /*
+   * PATH 并上**注册表此刻**的系统/用户 PATH（2026-11-15 用户实报「环境找不到 git」）。
+   *
+   * agent 子进程的 PATH 继承的是班底进程启动那一刻的快照 —— 装完 git（或任何 CLI）
+   * 之后只重起 agent / 只重起服务都不够，只要桌面壳那个父进程还活着，快照就是旧的，
+   * 子进程里 `git` / `node` 一律"命令不可用"，而人查注册表明明是装好的。
+   * path-env.mjs 探测 CLI 时早就解过同一类问题（"装完即见，不用重启"），但只管
+   * **班底自己找可执行文件**这一层；agent 子进程里的工具解析（git/gh/…）是另一层，
+   * 这儿把同一份 `pathDirs()` 并进 PATH 才算补齐。探测与子进程环境从此一个口径：
+   * 机器上此刻装了的，agent 就用得到。5 秒记忆化在 path-env.mjs 里，spawn 频率吃不到它。
+   */
+  const dirs = pathDirs();
+  if (!dirs.some((d) => (WIN ? d.toLowerCase() : d) === (WIN ? nodeDir.toLowerCase() : nodeDir))) {
+    dirs.unshift(nodeDir);
   }
+  env.PATH = dirs.join(path.delimiter);
   return env;
 }
 

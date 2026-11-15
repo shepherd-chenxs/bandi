@@ -173,7 +173,7 @@
       <div class="sticky-mention" id="stickyMention" hidden></div>
       <div class="input-wrap">
         <div class="mention-pop" id="mentionPop"></div>
-        <textarea id="input" placeholder="说点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
+        <textarea id="input" placeholder="说点什么…"></textarea>
         <div class="att-strip is-hidden" id="attStrip"></div>
         <div class="input-tools">
           <div class="att-wrap">
@@ -311,8 +311,10 @@
 <dialog id="assistantDlg">
   <form method="dialog">
     <b>换群助手</b>
-    <div class="dim" style="font-size:12px;margin-top:2px">群助手是没人被 @ 时接话的那个数字员工，必须是群成员。</div>
-    <div id="aList" class="members" style="margin-top:12px"></div>
+    <!-- 说明行换搜索框（2026-11-15 用户实报）：成员多时直接打字找人，
+         布局/手感与「拉人进群」的 #mSearch 同一套。 -->
+    <input id="aSearch" placeholder="搜索群成员" style="margin-top:12px" />
+    <div id="aList" class="members" style="margin-top:10px"></div>
     <div class="dlg-actions">
       <button type="button" value="cancel">取消</button>
       <button class="primary" id="aOk" value="ok">就他了</button>
@@ -325,10 +327,11 @@
 <dialog id="projLinkDlg">
   <form method="dialog">
     <b>关联项目</b>
-    <div class="dim" style="font-size:12px;margin-top:2px">关联后，群里 @ 谁干活，他就在那个项目的目录里干，派的卡直接落它的看板。一个项目只归一个群。</div>
-    <div id="pList" class="members" style="margin-top:12px"></div>
+    <input id="projSearch" class="dcard-search" placeholder="搜项目" autocomplete="off" />
+    <div id="pList" class="members"></div>
     <div class="dlg-actions">
       <button type="button" value="cancel">取消</button>
+      <button class="primary" id="pOk" value="ok">就它了</button>
     </div>
   </form>
 </dialog>

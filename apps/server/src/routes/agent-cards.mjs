@@ -27,7 +27,7 @@
 import crypto from 'node:crypto';
 import { sendJson, fail, readBody } from '../http.mjs';
 import * as store from '../store.mjs';
-import { createProjectTask, startProjectTask, assertTeamGroup } from '../project-tasks.mjs';
+import { createProjectTask, startProjectTask, assertTeamGroup, findRecentSameTitle } from '../project-tasks.mjs';
 import { verifyRunCredential } from '../agent-auth.mjs';
 // 权限判定（2026-11-11）：只认内置岗位的权限位，不再解析 role 文本 —— 见 roles.mjs
 import { can, roleNameOf } from '../roles.mjs';
@@ -229,6 +229,21 @@ function requireSubCard({ persona, card }) {
  * `startNow` 允许调用方推迟派活（批量口先建完一批、再统一开跑）。
  * **补记卡永远不派活**（`backfill`）—— 活已经干过了，建卡只是补账，重跑等于再干一遍。
  */
+/** 同题去重（2026-11-15，借鉴 Cumora recently-created dedup）：15 分钟内**别人**刚建了同题卡，
+ * 第二个人再建就是重复产出（实报：嘉辉建了元仓设计稿、贺韬不知道又建了一份）。补记卡
+ * （backfill）和本人重建不算 —— 补账是有意的。整批校验阶段就拒，不留半批。
+ */
+function assertNoSameTitle({ persona, card }) {
+  if (card.backfill) return;
+  const dup = findRecentSameTitle({ projectId: card.project.id, title: card.title, exceptPersonaId: persona.id });
+  if (!dup) return;
+  const who = store.getPersona(dup.createdBy)?.name ?? '同事';
+  throw Object.assign(
+    new Error(`15 分钟内 ${who} 刚建了同题卡「${String(dup.title).slice(0, 40)}」（${dup.id}，${dup.status}）—— 先去看那张卡；确属另一件事，换个更具体的标题再建`),
+    { code: 'E2059' },
+  );
+}
+
 function createOne({ cred, persona, convId, card, startNow = !card.backfill && card.status === 'todo' && !!(card.assignee || card.assigneeGroupId || card.flowTemplateId) }) {
   const externalKey = externalKeyOf(cred, card.project, card);
   const existed = store.getProjectTaskByExternalKey(card.project.id, externalKey);
@@ -351,6 +366,7 @@ export async function handleAgentCards(req, res, url) {
       card = normalizeCard(body, cardProject, { allowBackfill: true });
       validateGroupCard(card);
       requireSubCard({ persona, card });
+      assertNoSameTitle({ persona, card });
     } catch (e) {
       noticeCardFailure({ cred, persona, convId, code: e.code ?? 'E2059', message: e.message });
       return fail(res, e.code === 'E2057' ? 403 : 400, e.code ?? 'E2059', e.message), true;
@@ -392,6 +408,7 @@ export async function handleAgentCards(req, res, url) {
       const card = normalizeCard(raw, project, { allowBackfill: true });
       validateGroupCard(card);
       requireSubCard({ persona, card });
+      assertNoSameTitle({ persona, card });
       plan.push(card);
     } catch (e) {
       noticeCardFailure({ cred, persona, convId, code: e.code ?? 'E2059', message: `第 ${i + 1} 张卡不合格：${e.message}` });

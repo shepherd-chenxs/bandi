@@ -11,6 +11,8 @@ import * as auth from './auth.mjs';
 import * as runs from './runs.mjs';
 import * as skills from './skills.mjs';
 import * as runtimes from './runtimes.mjs';
+import * as taskClaimAudit from './task-claim-audit.mjs';
+import * as freshness from './freshness.mjs';
 import * as externals from './externals.mjs';
 import * as plugins from './plugins.mjs';
 import * as sshRegistry from './ssh-registry.mjs';
@@ -730,6 +732,18 @@ try {
 } catch (err) {
   console.log(`内置员工同步失败（不影响启动）：${err?.message ?? err}`);
 }
+// 员工沙箱档统一到「完全权限」（2026-11-14 用户口径：所有数字员工权限设为完全权限，
+// "默认"这类无人审批跑不动命令的档不再出现 —— 下拉里也已滤掉，见 runtimes.makeRuntime）。
+// 幂等：已是对的员工不会写。放在 steward seed / 同步之后 —— 内置员工也要被覆盖到。
+try {
+  const moved = runtimes.migratePersonaSandboxesToFull({
+    listPersonas: () => store.listPersonas(),
+    updatePersona: (id, patch) => store.updatePersona(id, patch),
+  });
+  if (moved) console.log(`已把 ${moved} 个数字员工的权限档统一为「完全权限」`);
+} catch (err) {
+  console.log(`员工权限档迁移失败（不影响启动）：${err?.message ?? err}`);
+}
 // 内置连接器（2026-10-26）：SSH 工具随「工作台 → 研发 → 远程连接」出厂自带（幂等，已有只补 builtin 标记）
 try {
   const seeded = connectors.ensureBuiltinConnectors();
@@ -774,6 +788,10 @@ runs.onRunFinish(workflows.onAgentRunFinished);
 // 任务卡同理（2026-10-17）：运行跑完/被停/跑挂了，卡不能永远挂在「进行中」——
 // 完成 → 待验收；人停的 → 已阻塞、跑挂的 → 失败（都不回「待办」，否则会被自动重新派活 → 死循环）
 runs.onRunFinish(onTaskRunFinished);
+// 台账核对（2026-11-14 用户拍板）：回话声称的卡号 / 状态和台账对，不符就跟平台更正。
+// 注册在 onTaskRunFinished **之后**（finishHooks 先来先到）—— 先让 [完成] 标记把卡状态
+// 流转完再核对，避免"员工刚声明交付、卡还在待验收"的假阳性。机制见 task-claim-audit.mjs。
+runs.onRunFinish((run) => taskClaimAudit.reconcile({ run }));
 // 群里 @ 多人的排队（2026-10-24）：会话一次只跑一个 —— 前一个收尾，队里下一个立刻补上。
 // 挂在流程/任务卡钩子之后：它们推进的是各自 exec 会话的活，跟群排队互不挡道。
 runs.onRunFinish((run) => {

@@ -29,6 +29,7 @@ process.env.BANDI_CONNECTORS_DIR = path.join(tmp, 'generated');
 // ⚠️ 必须在设好环境变量之后再 import —— config 在模块加载时读环境变量
 const connectors = await import('./connectors.mjs');
 const runtimes = await import('./runtimes.mjs');
+const claudeAdapter = await import('./claude.mjs');
 
 let failed = 0;
 const check = (label, ok, detail = '') => {
@@ -120,7 +121,39 @@ check('族默认 = [default, plan]', JSON.stringify(pub['rt-claude-c']?.blocked)
 check('存的旧默认 [] 迁移到新口径', JSON.stringify(pub['rt-claude-a']?.blocked) === JSON.stringify(['default', 'plan']), JSON.stringify(pub['rt-claude-a']?.blocked));
 check('用户改过的 [plan] 原样保留', JSON.stringify(pub['rt-claude-b']?.blocked) === JSON.stringify(['plan']), JSON.stringify(pub['rt-claude-b']?.blocked));
 check('codex 的 blocked 口径不变', JSON.stringify(Object.values(pub).find((r) => r.family === 'codex')?.blocked) === JSON.stringify(['workspace-write', 'read-only']), '');
-check('claude 的 sandboxes 仍是四档', pub['rt-claude-c']?.sandboxes?.length === 4, JSON.stringify(pub['rt-claude-c']?.sandboxes));
+check('claude 的可选项滤掉 blocked 档（默认 / 计划模式不再可选，2026-11-14 用户口径）',
+  JSON.stringify(pub['rt-claude-c']?.sandboxes) === JSON.stringify(['acceptEdits', 'bypassPermissions']),
+  JSON.stringify(pub['rt-claude-c']?.sandboxes));
+check('codex 的可选项只剩完全权限（workspace-write / read-only 也是 blocked 档）',
+  JSON.stringify(Object.values(pub).find((r) => r.family === 'codex')?.sandboxes) === JSON.stringify(['danger-full-access']),
+  JSON.stringify(Object.values(pub).find((r) => r.family === 'codex')?.sandboxes));
+check('各族「完全权限」的写法：claude → bypassPermissions / codex → danger-full-access',
+  runtimes.fullSandboxFor('rt-claude-c') === 'bypassPermissions' && runtimes.fullSandboxFor('rt-codex-a') === 'danger-full-access',
+  `${runtimes.fullSandboxFor('rt-claude-c')}/${runtimes.fullSandboxFor('rt-codex-a')}`);
+
+console.log('\n⑤-b out-of-band 不变量：claude 的 --append-system-prompt-file（2026-11-15）');
+const oaArgs = claudeAdapter.buildArgs({ systemPromptFile: 'C:/tmp/standing.md' });
+check('--append-system-prompt-file 进命令行（排在 --add-dir 之前）',
+  oaArgs.includes('--append-system-prompt-file') && oaArgs.includes('C:/tmp/standing.md') &&
+    (!oaArgs.includes('--add-dir') || oaArgs.indexOf('--append-system-prompt-file') < oaArgs.indexOf('--add-dir')),
+  JSON.stringify(oaArgs));
+check('不传 standing → 不出 flag（codex/dsh 旧路径不受影响）',
+  !claudeAdapter.buildArgs({}).includes('--append-system-prompt-file'), '');
+check('统一迁移：把员工的沙箱档搬到本族完全权限（幂等，已是对的不再写）',
+  (() => {
+    const personas = [
+      { id: 'p1', runtime: 'rt-claude-c', sandbox: 'default' },
+      { id: 'p2', runtime: 'rt-codex-a', sandbox: 'workspace-write' },
+      { id: 'p3', runtime: 'rt-claude-c', sandbox: 'bypassPermissions' },
+    ];
+    const written = [];
+    const moved = runtimes.migratePersonaSandboxesToFull({
+      listPersonas: () => personas,
+      updatePersona: (id, patch) => written.push([id, patch.sandbox]),
+    });
+    return moved === 2 && JSON.stringify(written) === JSON.stringify([['p1', 'bypassPermissions'], ['p2', 'danger-full-access']]);
+  })(),
+  '');
 
 try {
   fs.rmSync(tmp, { recursive: true, force: true });

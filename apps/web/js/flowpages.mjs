@@ -411,7 +411,16 @@ export async function paintRun(id) {
   if (at >= 0) S.flowRuns[at] = v;
   else S.flowRuns = [v, ...(S.flowRuns ?? [])];
   renderRunList();
+  /*
+   * **滚动位置跟着内容一起保留**（2026-11-14 用户实报：点「重跑这一步」页面跳回最顶上，
+   * 时间轴长的流程得重新滚下来找那一步）。滚的容器是 `.run-wrap`，整块 innerHTML 重建时
+   * 它一起被换新、scrollTop 归零 —— 换之前抄下来、换完还回去（新内容更矮时浏览器会自己
+   * 收敛到合法值）。重跑 / 通过 / 驳回 / 实时刷新都走 paintRun，一处修复全覆盖。
+   */
+  const keepScroll = $('flowView').querySelector('.run-wrap')?.scrollTop ?? 0;
   $('flowView').innerHTML = runHTML(v);
+  const scroller = $('flowView').querySelector('.run-wrap');
+  if (scroller && keepScroll) scroller.scrollTop = keepScroll;
   S.view = 'flow';
   showView('flow');
   wireRun(v);

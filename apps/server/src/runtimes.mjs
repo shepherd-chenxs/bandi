@@ -30,6 +30,8 @@ const FAMILIES = {
     sandboxes: ['danger-full-access', 'workspace-write', 'read-only'],
     // 实测：headless 无人审批时，开了沙箱的命令全被拒。所以这两档等于"禁用工具"。
     blocked: ['workspace-write', 'read-only'],
+    // 本族"完全权限"的写法（2026-11-14 员工沙箱统一迁移用）
+    fullSandbox: 'danger-full-access',
     note: '只有 danger-full-access 在无人审批下跑得动命令。',
   },
   claude: {
@@ -41,12 +43,13 @@ const FAMILIES = {
     /*
      * blocked（2026-11-13 实报补上，与 codex 同一个口径）：headless 无人审批时，
      * default 档每条命令都要批、永远没人批 → 全拒；plan 档只读，命令/编辑一样过不了。
-     * 2026-11-12 马超三轮（r-40546dd1/r-3aa03079/r-93a93cb1，CLI 实报 permissionMode:default）
+     * 2026-11-12 马超三轮（r-40546dd1/r-2aa03079/r-93a93cb1，CLI 实报 permissionMode:default）
      * 就废在这上面，模型还把"命令被拒"误诊成"沙箱拦网络、本机没工具"。
      * acceptEdits 不进 blocked：它自动放行文件编辑，只读+改文件的活真干得动，
      * 只有命令类动作要批 —— 收进 blocked 会把还能用的档也禁了。
      */
     blocked: ['default', 'plan'],
+    fullSandbox: 'bypassPermissions',
     note: '权限对应 --permission-mode；--resume 能续接会话记忆。无人审批下只有「完全权限」跑得动命令；acceptEdits 只自动接受编辑，命令仍要审批。',
     /*
      * 安装（2026-11-04 定稿）：**班底不装 agent CLI，只识别**。npm 那条一键安装
@@ -62,6 +65,7 @@ const FAMILIES = {
     adapter: 'dsh',
     sandboxes: ['workspace-write'],
     blocked: [],
+    fullSandbox: 'workspace-write',
     note: 'dsh.cmd 不在 PATH 上，路径必须是绝对路径。这个 CLI 是 Windows 桌面端自带的 —— 要用就装桌面端。',
   },
 };
@@ -145,6 +149,16 @@ function savedBlockedFor(familyId, savedEntry, fallback) {
 function makeRuntime(familyId, id, label, savedEntry = {}) {
   const f = FAMILIES[familyId];
   if (!f) return null;
+  /*
+   * 可选档位清单（2026-11-14 用户口径）：**blocked 档不再作为选项给出** ——
+   * "默认"这类无人审批跑不动命令的档，选了就是给自己埋坑（马超 / 李俊 / 杜衡三轮实报）。
+   * 可选 = 清单 − blocked；万一全被筛没（用户手填过奇怪清单），原样保留，别造出空下拉。
+   * 已设成 blocked 档的存量员工，由启动时的 migratePersonaSandboxesToFull 一次搬干净。
+   */
+  const blocked = savedBlockedFor(familyId, savedEntry, f.blocked);
+  const savedSandboxes =
+    Array.isArray(savedEntry.sandboxes) && savedEntry.sandboxes.length ? savedEntry.sandboxes : f.sandboxes;
+  const usableSandboxes = savedSandboxes.filter((s) => !blocked.map(String).includes(String(s)));
   return {
     id,
     family: familyId,
@@ -153,8 +167,7 @@ function makeRuntime(familyId, id, label, savedEntry = {}) {
     note: savedEntry.note ?? f.note,
     enabled: savedEntry.enabled !== false,
     path: savedEntry.path ?? '',
-    sandboxes:
-      Array.isArray(savedEntry.sandboxes) && savedEntry.sandboxes.length ? savedEntry.sandboxes : f.sandboxes,
+    sandboxes: usableSandboxes.length ? usableSandboxes : savedSandboxes,
     blocked: savedBlockedFor(familyId, savedEntry, f.blocked),
     builtIn: SEEDED.includes(id),
     deviceId: LOCAL_ID,
@@ -256,6 +269,35 @@ export function getDevice(id) {
 
 export function getRuntime(deviceId, runtimeId) {
   return getDevice(deviceId)?.runtimes.find((r) => r.id === runtimeId) ?? null;
+}
+
+/**
+ * 这个运行时族「完全权限」的写法（2026-11-14 用户口径：所有数字员工权限设为完全权限）。
+ * 运行时认不出来（被删了 / 传了 auto 都能解）落到 codex 的写法 —— spawn 的兜底也是它。
+ */
+export function fullSandboxFor(runtimeId) {
+  const rt = resolveForRun(runtimeId);
+  return FAMILIES[rt?.family]?.fullSandbox ?? FAMILIES.codex.fullSandbox;
+}
+
+/**
+ * **员工沙箱档统一到完全权限**（2026-11-14 用户口径）。启动时跑一遍，幂等：
+ *   · 已是完全权限的员工不写；
+ *   · 挂在 'default' / 'plan' / 只读这类档上的，按各自运行时族一次搬到该族的完全权限
+ *     （claude → bypassPermissions，codex → danger-full-access）—— 这些档无人审批跑不动
+ *     命令，马超 / 李俊 / 杜衡轮着踩过；下拉里也不再提供（makeRuntime 已滤）。
+ * listPersonas / updatePersona 由调用方注入（store 层会经 runs 反向依赖本模块，直接 import 成环）。
+ */
+export function migratePersonaSandboxesToFull({ listPersonas, updatePersona }) {
+  let moved = 0;
+  for (const p of listPersonas()) {
+    const full = fullSandboxFor(p.runtime);
+    if (full && p.sandbox !== full) {
+      updatePersona(p.id, { sandbox: full });
+      moved += 1;
+    }
+  }
+  return moved;
 }
 
 /**

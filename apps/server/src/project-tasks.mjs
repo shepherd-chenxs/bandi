@@ -1249,6 +1249,72 @@ export function retryQueuedTasks() {
 }
 
 /**
+ * 卡停留超时的**升级提醒**（2026-11-14 用户口径：程序管过程，不等大模型自觉）。
+ *
+ * 起因：pt-41cda6ce 停在「待验收」一下午没人管 —— 验收人忘了、平台不吭声，
+ * 雇主肉眼对账才发现。这类"停住没人推"的账，程序必须自己盯：
+ *   · 「待验收」停过 reviewHours（默认 4h）→ 信箱催验收人：看证据点通过 / 退回；
+ *   · 「已阻塞」停过 blockedHours（默认 24h）→ 信箱升级雇主：给输入或改派。
+ *
+ * 同一轮停留只提醒一次（内存 Set 记 key，key 带卡 updatedAt —— 卡被再动过 =
+ * 新一轮停留重新计时）；重启后仍停着的卡会再催一次，算合理的重新可见。
+ * 节流 10 分钟扫一次（外层节拍 30 秒，别每拍都全表扫）。
+ */
+let lastStaleSweepAt = 0;
+const escalatedKeys = new Set();
+
+export function escalateStaleCards({ reviewHours = 4, blockedHours = 24 } = {}) {
+  if (Date.now() - lastStaleSweepAt < 10 * 60 * 1000) return [];
+  lastStaleSweepAt = Date.now();
+  const out = [];
+  for (const project of store.listProjects()) {
+    for (const t of store.listProjectTasks(project.id)) {
+      if (t.status !== 'review' && t.status !== 'blocked') continue;
+      const hours = (Date.now() - Date.parse(t.updatedAt)) / 3600_000;
+      const limit = t.status === 'review' ? reviewHours : blockedHours;
+      if (!Number.isFinite(hours) || hours < limit) continue;
+      const key = `${t.status}:${t.id}:${t.updatedAt}`;
+      if (escalatedKeys.has(key)) continue;
+      escalatedKeys.add(key);
+      const label = t.status === 'review' ? '待验收' : '已阻塞';
+      const who = t.assigneePersonaId
+        ? (store.getPersona(t.assigneePersonaId)?.name ?? '执行人')
+        : '未指派';
+      const notice = store.addNotice({
+        kind: 'escalate',
+        severity: 'warn',
+        title: `卡「${String(t.title ?? '').slice(0, 40)}」停在「${label}」已 ${hours.toFixed(1)} 小时`,
+        detail: `卡号 ${t.id} · 执行人 ${who} · 最后动静 ${t.updatedAt}。${
+          t.status === 'review' ? '该验收了：看证据，通过就标完成，不通过就退回。' : '该拍板了：给输入，或改派。'
+        }`,
+        projectId: t.projectId ?? null,
+        personaId: t.assigneePersonaId ?? null,
+        conversationId: t.conversationId ?? null,
+      });
+      out.push(notice);
+    }
+  }
+  return out;
+}
+
+/**
+ * 同题去重查询（2026-11-15，借鉴 Cumora COORDINATION.md 5e recently-created dedup）：
+ * 15 分钟内**别人**建的同题卡 —— 第二个人再建就是重复产出（实报：嘉辉建了元仓设计稿、
+ * 贺韬不知道又建了一份）。人自己建的、补记卡不算（有意为之）；已取消的卡不算。
+ * 返回命中的那张卡（调用方指路），没有返回 null。
+ */
+export function findRecentSameTitle({ projectId, title, exceptPersonaId, withinMin = 15 } = {}) {
+  const norm = (s) => String(s ?? '').replace(/[\s\u3000]+/g, '').toLowerCase();
+  for (const t of store.listProjectTasks(projectId)) {
+    if (t.status === 'cancelled') continue;
+    if (!t.createdBy || t.createdBy === exceptPersonaId) continue;
+    if (Date.now() - Date.parse(t.createdAt) > withinMin * 60 * 1000) continue;
+    if (norm(t.title) && norm(t.title) === norm(title)) return t;
+  }
+  return null;
+}
+
+/**
  * 运行跑完时把**卡片**的状态收一下（2026-10-17 建；2026-11-09 P4 改口径）。
  *
  * 为什么必须有这一步：卡片派活后状态会停在「进行中」—— 人把运行停掉了/跑完了，看板得

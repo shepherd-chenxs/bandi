@@ -172,6 +172,48 @@ try {
   check('没 @ → 群助手（贺韬）接', noAt.status === 202 && noAt.body.personaName === '贺韬',
     `${noAt.status} ${noAt.body.personaName}`);
   await waitAllDone(convId);
+
+  console.log('\n⑥ 会话级权限覆盖（2026-11-14 群聊输入框的权限下拉）：覆盖群 → 每个成员的 spawn 都按它走');
+  // 盖成「仅可查看」（codex blocked 档）→ 任务里会注入权限提醒 —— 假 agent 全文回显任务，
+  // 所以回话里断言到提醒 = 覆盖真的穿到了 spawn（而不是只存进库）。
+  const setSb = await req('PUT', `/api/conversations/${convId}`, { sandbox: 'read-only' });
+  check('群里设「仅可查看」→ 会话存下覆盖', setSb.status === 200 && setSb.body.conversation?.sandbox === 'read-only',
+    JSON.stringify({ s: setSb.status, sb: setSb.body.conversation?.sandbox }));
+  const ov = await req('POST', `/api/conversations/${convId}/messages`, { text: '@嘉辉 只读档下跑一轮' });
+  check('覆盖中派活 → 202', ov.status === 202, String(ov.status));
+  const ovDone = await waitAllDone(convId);
+  const ovReply = (ovDone.messages ?? []).filter((m) => m.role === 'assistant' && m.personaId === jia.id).at(-1)?.text ?? '';
+  check('覆盖穿到了 spawn：回话里带权限提醒（read-only 是 blocked 档）',
+    ovReply.includes('权限档是「read-only」'), ovReply.slice(-140));
+
+  // 提权到完全权限（非 blocked）→ 任务里注入**正向的权限更新**注脚：续接的会话里躺着
+  // 上一轮的"权限不足"提醒，员工照旧账自报"跑不动命令"（2026-11-14 李俊实报）——
+  // 得把话说破。assert「权限更新」出现（本轮首次出现，历史里没有这个短语，不受污染）。
+  const elev = await req('PUT', `/api/conversations/${convId}`, { sandbox: 'danger-full-access' });
+  check('群里改设「完全权限」→ 覆盖更新', elev.status === 200 && elev.body.conversation?.sandbox === 'danger-full-access',
+    JSON.stringify({ sb: elev.body.conversation?.sandbox }));
+  const beforeElev = slog.length;
+  const e0 = await req('POST', `/api/conversations/${convId}/messages`, { text: '@嘉辉 完全权限下再跑一轮' });
+  check('提权后派活 → 202', e0.status === 202, String(e0.status));
+  await waitAllDone(convId);
+  const eReply = (await getConv(convId)).messages.filter((m) => m.role === 'assistant' && m.personaId === jia.id).at(-1)?.text ?? '';
+  check('提权轮注入「权限更新」注脚（不是 blocked 档的权限提醒）',
+    eReply.includes('权限更新') && eReply.includes('danger-full-access'), eReply.slice(-160));
+  check('提权轮不在 blocked 档（服务端不打 [权限] 警告）', !slog.slice(beforeElev).includes('[权限]'), slog.slice(beforeElev).slice(-120));
+
+  // 收回（选回「跟随员工默认」）→ 回到员工默认（danger-full-access，不在 blocked 里）。
+  // ⚠️ 断言不能用"回话里没有提醒字样"：假 agent 全文回显**群历史**，上一轮的提醒已经
+  // 落进历史、会被原样引用 —— 历史是污染源。改看服务端 spawn 时打的 [权限] 警告
+  // （blocked 档才打）：收回后这一轮的日志增量里不该再有它。
+  const clear = await req('PUT', `/api/conversations/${convId}`, { sandbox: null });
+  check('选回「跟随员工默认」→ 覆盖清掉', clear.status === 200 && clear.body.conversation?.sandbox == null,
+    JSON.stringify({ sb: clear.body.conversation?.sandbox }));
+  const beforeBack = slog.length;
+  const back = await req('POST', `/api/conversations/${convId}/messages`, { text: '@嘉辉 默认档下跑一轮' });
+  check('收回后派活 → 202', back.status === 202, String(back.status));
+  await waitAllDone(convId);
+  check('收回后 spawn 不再是 blocked 档（服务端不再打 [权限] 警告）',
+    !slog.slice(beforeBack).includes('[权限]'), slog.slice(beforeBack).slice(-120));
 } catch (err) {
   console.log('\n跑挂了：' + String(err?.message ?? err) + '\n' + slog.slice(-800));
   failed += 1;

@@ -139,7 +139,7 @@ function memberRoleName(m) {
   return String(m?.role ?? '').split(' · ')[0].trim() || '未设岗位';
 }
 
-function pmDispatchBlock({ persona, thread, project } = {}) {
+export function pmDispatchBlock({ persona, thread, project } = {}) {
   const members =
     thread?.kind === 'group' && Array.isArray(thread.members)
       ? thread.members
@@ -167,6 +167,7 @@ function pmDispatchBlock({ persona, thread, project } = {}) {
     '   ③ 仍是"不许自己执行"：不改仓库、不写代码、不登服务器、不部署、不装环境、不启停服务。',
     '5. **你派的活你验收**：你建的卡/子卡到「待验收」→ 看证据，通过就把状态改「已完成」；不通过就退回执行人重跑（PATCH status=待办 + startNow:true，并说清退回原因）。**雇主派给你的主卡你只能提交「待验收」，不能替雇主点「已完成」**。',
     '6. **补卡**：通道恢复后，把这段时间群里已经干完/卡住的活补成卡（backfill:true + 实际状态），让看板账对得上；补记不重跑。',
+    '7. **派下一张卡不用请示（2026-11-14 甲方口径）**：方案定了 / 评审过了 → 直接建卡派给下游（第 1 条），这是统筹本职；向雇主只报结果与新卡简报（建了什么、派给谁、卡号），**不要问"要不要派 / 你先看文档吗"**——设计稿、方案 doc 是给执行人和看板用的，不是给雇主的功课。',
   ].join('\n');
 }
 
@@ -211,6 +212,7 @@ export function platformContractBlock() {
     '10. **群里的 @ 是派活信号，双向生效（2026-11-12）**：人 @ 你就叫醒你；**你的回话里 @ 到谁，平台也会把谁叫起来**。',
     '   所以 @ 只有两种用法 —— 真让某人接活、真让某人看这段话；别在总结里随手 @ 一串人（每一下都是别人的一次真实开销）。',
     '   一条回话只接力**第一个**被 @ 的人，其余排队；同一个人不会被重复叫醒，刚叫你的人你 @ 他也不算数。',
+    '11. **过程决策是你的本职，中间产物不上抛（2026-11-14 甲方口径：我是甲方，我只要结果）**：方案取舍、设计/实现怎么选、文档写什么、**要不要给下游派下一张卡** —— 自己定、自己推进，**不要拿这些问雇主**。设计稿 / 方案 doc / 过程文档落盘归档，回话里最多一行路径，不许加"你先看看 / 你先过目"。只有三种情况找他：① 红线（第 9 条）；② 真阻塞（缺权限 / 缺资源 / 等外部输入）；③ 结果好了交验收。**"要不要我继续 / 要不要我派 / 你先看文档吗"这类问句 = 把本职推回给他，算没交付。** 有歧义自己按最合理的一种做，关键假设一行写进回话。**执行声明必须真的调过工具**：说"已执行 / 已部署 / 已设置"的前提是你这一轮真的调用过工具并看到了结果 —— 想到了命令 ≠ 执行了命令；平台拿本轮运行事件核对，声称与事件对不上会跟更正并打回（2026-11-14 实报：崔老三没调工具就报"已执行 shutdown"，机器根本没关）。',
   ].join('\n');
 }
 
@@ -729,6 +731,17 @@ function startMemberRun(thread, member, opts, trigger) {
   // 这里把员工的沙箱临时盖成 `plan`（统一语义），runs 里 `normalizeSandbox` 会按运行时族
   // 换算成各族自己的只读写法（codex `read-only` / claude `plan`）。不传 = 员工默认（可写）。
   if (opts.sandbox) member.sandbox = opts.sandbox;
+  // **会话级权限覆盖**（2026-11-14 群聊输入框加了权限下拉）：群也存 conversations.sandbox。
+  // 群里成员可能跨运行时，存的是**通用三档**（danger-full-access / workspace-write / read-only），
+  // runs 里 `normalizeSandbox` 会按每个人自己的运行时族换算（claude 那边对应
+  // bypassPermissions / acceptEdits / plan）。程序化的 opts.sandbox（讨论模式）优先级更高 ——
+  // 它是安全约束，不该被会话提权顶掉。1:1 那条路 directMember 已带同款覆盖，这里重写一次等值。
+  // sandboxFromConv 是给 runs 的记号：提权后要在任务里说一句"权限已更新"——
+  // 不然续接的会话里躺着早前的"权限不足"提醒，员工照旧账继续自报跑不动（李俊实报）。
+  else if (thread.sandbox) {
+    member.sandbox = thread.sandbox;
+    member.sandboxFromConv = true;
+  }
 
   const task = thread.kind === 'group'
     ? buildGroupTask({
@@ -768,17 +781,24 @@ function startMemberRun(thread, member, opts, trigger) {
   const myTasks = store.listMyOpenTasks(member.personaId, 5);
   // 统筹职责（2026-11-11）：只给有建卡权限的岗位（项目经理）——每轮都注入，见 pmDispatchBlock
   const pmBlock = p && can(p, 'card.create') ? pmDispatchBlock({ persona: p, thread, project }) : '';
-  const contractBlock = [
-    platformContractBlock(),
-    pmBlock,
-    taskContractBlock({ card: opts.card, workflow: workflowTask, project, tasks: myTasks }),
-  ].filter(Boolean).join('\n\n');
+  /*
+   * **不变量拆分**（2026-11-15，借鉴 Cumora 的 out-of-band standing prompt）：
+   * 平台契约 + PM 统筹块是**每轮一模一样**的不变量，却一直混在任务文本里 ——
+   * resume 会话下它随历史越积越多，每轮还全价重发。拆出来单独传：
+   * claude 族走 `--append-system-prompt-file`（out-of-band，稳定前缀吃得进缓存）；
+   * codex / dsh 没有等价 flag，由 runs 按族原样拼回（行为不变）。
+   * 动态部分（本轮活 / 台账 / 卡 / 风格）照旧走任务文本。
+   */
+  const standing = [platformContractBlock(), pmBlock].filter(Boolean).join('\n\n');
+  const contractBlock = taskContractBlock({ card: opts.card, workflow: workflowTask, project, tasks: myTasks });
   const fullTask = [cardBlock, task, attBlock, stylePrefBlock(), contractBlock].filter(Boolean).join('\n\n');
 
   const run = runs.startRun({
     thread,
     member,
     task: fullTask,
+    // 不变量单独带（claude 走 out-of-band；codex/dsh 由 runs 拼回任务文本）
+    standing,
     watermark: trigger.rowid,
     workflowTaskId: opts.taskId ?? null,
     // 把作用域带进执行层：sessionId 按 (会话 × 人 × 作用域) 存取

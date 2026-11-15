@@ -220,14 +220,67 @@ function runCredentialBrief(pm = false) {
  * @param task       交给 runtime 的任务文本
  * @param watermark  本次运行"读到"的最后一条消息 rowid，跑完写回水位线
  */
-export function startRun({ thread, member, task, watermark = 0, workflowTaskId = null, sessionScope = '', projectId = null }) {
+/*
+ * **进门排队**（2026-11-15，借鉴 Cumora docs/COORDINATION.md 的三件套）。
+ *
+ * 起因：群派多个员工、多条流程同时收尾时，所有 CLI **同一秒**齐撞供应商——
+ * Cumora 实测 7 人同醒、17 分钟 130 次限流。三件套（全部确定性，不靠 AI 自觉）：
+ *   ① **全局并发帽**：同一瞬间最多 MAX_CONCURRENT 个 CLI 在跑，满了 FIFO 等空位；
+ *   ② **spawn 间距**：相邻两次启动至少隔 MIN_SPAWN_INTERVAL_MS —— "随机抖动"不行，
+ *      4 个同时唤醒可以全掷出低值还是齐撞；间距闸把突发速率硬性钉成 1/间隔；
+ *   ③ **限流冷却**：撞了限流的运行时静默冷却 RATE_LIMIT_COOLDOWN_MS —— 供应商限流
+ *      不是平台的失败，不该在群里报错刷屏；busy 语义交给上层（卡回待办排队重试）。
+ *
+ * 排队期间 run 已经是 running 态，事件流里有一条 queued 事件，台账可见 —— 不是瞎等。
+ */
+const MAX_CONCURRENT = Number(process.env.BANDI_MAX_CONCURRENT_RUNS ?? 6);
+const MIN_SPAWN_INTERVAL_MS = Number(process.env.BANDI_MIN_SPAWN_INTERVAL_MS ?? 500);
+const RATE_LIMIT_COOLDOWN_MS = Number(process.env.BANDI_RATE_LIMIT_COOLDOWN_MS ?? 60_000);
+const RATE_LIMIT_RE = /(rate.?limit|429|temporarily limiting|使用量已达上限|请求过于频繁|限流)/i;
+let activeSpawns = 0;
+let lastSpawnAt = 0;
+let spawnChain = Promise.resolve();
+const backoffUntil = new Map(); // runtimeId → 限流冷却截止时刻
+
+/** 过闸：等并发空位 + 间距，全过了才放行去 spawn。限流冷却期内的运行时直接拒（busy）。 */
+function acquireSpawnGate(run, rt) {
+  const mine = spawnChain.then(async () => {
+    const until = backoffUntil.get(rt.id) ?? 0;
+    if (Date.now() < until) {
+      const e = new Error(
+        `「${rt.label}」刚撞过限流，冷却中（${Math.ceil((until - Date.now()) / 1000)} 秒后自动重试）`,
+      );
+      e.code = 'busy';
+      throw e;
+    }
+    while (activeSpawns >= MAX_CONCURRENT) {
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    const gap = MIN_SPAWN_INTERVAL_MS - (Date.now() - lastSpawnAt);
+    if (gap > 0) await new Promise((r) => setTimeout(r, gap));
+    lastSpawnAt = Date.now();
+    activeSpawns += 1;
+    run.spawnSlotAcquired = true;
+  });
+  spawnChain = mine.catch(() => {}); // 链继续，不因单个失败断掉
+  return mine;
+}
+
+export function startRun({ thread, member, task, standing = null, watermark = 0, workflowTaskId = null, sessionScope = '', projectId = null }) {
   const runtime = member.runtime ?? 'codex';
   const personaId = member.personaId;
 
   // 运行时先解析：**这一列的模型得在落库那一刻就知道**（见下）
   // 注意用 resolveForRun：员工只记 runtime id，设备由这里挑（将来多设备时的决策点）
   const rt = runtimes.resolveForRun(runtime);
-
+  /*
+   * **不变量与任务分家**（2026-11-15，借鉴 Cumora 的 out-of-band standing prompt）：
+   * `standing`（平台契约 + PM 统筹块，每轮一模一样）在 claude 族走
+   * `--append-system-prompt-file`（out-of-band：不占任务文本、resume 会话里不积累、
+   * 稳定前缀吃得进缓存）；codex / dsh 没有等价 flag，拼回任务文本，行为与从前一字不差。
+   */
+  const useOutOfBand = standing && rt?.family === 'claude';
+  const baseTask = standing && !useOutOfBand ? `${standing}\n\n${task}` : task;
   /*
    * 这一次**实际用哪个模型**。
    *
@@ -258,6 +311,7 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
     personaId,
     projectId,
     runtime,
+    runtimeId: rt?.id ?? null,
     // 这次跑的是哪个模型（界面/额度要显示它），以及"从哪来的"（员工绑的 / CLI 默认）
     model: eff.id,
     modelFrom: eff.from,
@@ -338,14 +392,23 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
     );
   }
   const agentTask =
-    (cred ? `${task}\n\n${runCredentialBrief(can(store.getPersona(personaId), 'card.create'))}` : task) +
+    (cred ? `${baseTask}\n\n${runCredentialBrief(can(store.getPersona(personaId), 'card.create'))}` : baseTask) +
     // 真发了 git 能力才说 —— 没说等于让它继续以为"代码动作归平台、我推不了"
     (Object.keys(gitEnv).length ? `\n\n${gitAbilityBrief()}` : '') +
     (sandboxBlocked
       ? `\n\n（权限提醒：你当前的权限档是「${effSandbox}」，这种档在无人审批的运行方式下跑不动命令 —— ` +
         `需要执行命令/改文件的动作这轮都会被拒。这不是网络或环境故障，别往"连不上/没工具"的方向诊断；` +
         `只读类动作仍可做。请在回话里向雇主说明权限档不足，请他到「员工详情」把权限档放开（这一族能跑命令的是"完全权限"那档）后重派。）`
-      : '');
+      : member.sandboxFromConv
+        ? /*
+           * 会话级覆盖的**正向 counterpart**（2026-11-14 李俊实报）：提权后员工看不见
+           * "权限已经变了"—— 续接的会话里躺着早前的"权限不足"提醒，照着旧账继续
+           * 自报"我跑不动命令"，明明已经在完全权限档上。非 blocked 档时补一句把话说破；
+           * blocked 那边上面的提醒已经说清，不叠加。
+           */
+          `\n\n（权限更新：这个会话给当前派活统一设了权限档「${effSandbox}」—— ` +
+          `之前收到的"权限不足 / 跑不动命令"提醒不再适用，命令与文件操作按这个档执行，别再引用旧提醒。）`
+        : '');
 
   // 按**协议族**选适配器：同一族下可以有多个实例，它们共用一套事件解析
   const adapter = ADAPTERS[rt.adapter];
@@ -431,6 +494,9 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
     const held = [];
     const p = adapter({
       task: agentTask,
+      // out-of-band 不变量（平台契约 + PM 统筹）：claude 走 --append-system-prompt-file；
+      // codex / dsh 没有等价 flag，standing 已在上方拼回任务文本（行为不变）
+      systemPrompt: useOutOfBand ? standing : null,
       sessionId: sid,
       cwd: member.cwd || undefined,
       roots: member.roots ?? [],
@@ -465,27 +531,22 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
     return { p, held };
   };
 
-  let first;
+  let first = null;
   /*
-   * 电源锁（pt-bfe8e476）：有活才向系统申报"别睡"（详见 power-lock.mjs 头注）。
-   * 挂在 runOnce 之前 —— 含 retryFresh 重跑的那条路；起不来的同步 throw 也会走
-   * finish() 把锁还掉。失败降级在模块内部，这里不感知、不挡活。
+   * **过闸后才开始 spawn**（进门排队见上方 acquireSpawnGate）。原来的写法是
+   * 同步 `try { first = runOnce(...) }` —— 现在闸要等（并发帽 / 间距 / 冷却），
+   * spawn 整体挪进闸的 promise 链：适配器的**同步**抛（launchCommand 起不来）
+   * 也落进同一条 catch，finish 语义不变；`run.seq === 0` 的续接失败重跑
+   * （retryFresh）在闸后执行，一样成立。
+   * 排队时先落一条 queued 事件 —— 台账/直播里能看出"在排队"，不是瞎等。
+   */
+  pushEvent(run, { type: 'queued', behind: activeSpawns });
+  /*
+   * 电源锁（pt-bfe8e476）：有活才向系统申报"别睡"。排队期间也算有活（马上就要跑），
+   * 所以在过闸**之前**就申报；起不来的 throw 会走 finish() 把锁还掉，语义不变。
    */
   run.powerLock = true;
   acquirePowerLock();
-  try {
-    first = runOnce(resumeId);
-  } catch (err) {
-    /*
-     * ⚠️ 适配器会**同步**抛：`launchCommand()` 在返回 promise 之前就跑
-     * （dsh / claude / codex 都是这个结构），路径起不来时直接 throw。
-     * 这一句以前没有兜 —— 异常冒到路由就是 HTTP 500，用户看到"服务器错误"，
-     * 而不是"这个运行时起不来"。运行失败要记成**这一次运行失败**，不是服务器崩了。
-     */
-    finish(run, { status: 'failed', exitCode: null, error: `起不来：${err?.message ?? err}` });
-    return run;
-  }
-
   /** 续不上就重开一条：同一轮任务在**新会话**里重跑一次，成功即照常收尾 */
   const retryFresh = async () => {
     memoryNote ||=
@@ -497,8 +558,12 @@ export function startRun({ thread, member, task, watermark = 0, workflowTaskId =
       return { isError: true, error: `重开会话也起不来：${err?.message ?? err}`, exitCode: null };
     }
   };
-
-  first.p
+  acquireSpawnGate(run, rt)
+    .then(() => runOnce(resumeId))
+    .then((r) => {
+      first = r;
+      return r.p;
+    })
     .then(async (res) => {
       // 续接失败且原因是"这条会话不在"→ 自动新开一条重跑；其它错照原样往上走。
       // `run.seq === 0`：**这一轮还什么都没推出去**才敢重跑 —— 已经出过话再重跑，
@@ -750,6 +815,19 @@ function finish(run, { status, exitCode = null, error = null, usage = null, elap
   if (run.stopWatchdog) {
     clearTimeout(run.stopWatchdog);
     run.stopWatchdog = null;
+  }
+  // 过了门的 run 收尾时把**并发名额**还掉（进门排队见 acquireSpawnGate）
+  if (run.spawnSlotAcquired) {
+    run.spawnSlotAcquired = false;
+    activeSpawns = Math.max(0, activeSpawns - 1);
+  }
+  /*
+   * 限流冷却（进门排队第 ③ 件）：这次失败的**真因**是供应商限流 → 这个运行时
+   * 静默冷却 RATE_LIMIT_COOLDOWN_MS，冷却期内的新 spawn 直接拒（busy → 上层排队
+   * 自动重试）。供应商限流不是平台的失败，不该在群里报错刷屏。
+   */
+  if (status === 'failed' && run.runtimeId && RATE_LIMIT_RE.test(String(error ?? ''))) {
+    backoffUntil.set(run.runtimeId, Date.now() + RATE_LIMIT_COOLDOWN_MS);
   }
   run.status = status;
   run.exitCode = exitCode;

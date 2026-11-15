@@ -8,7 +8,7 @@ import { convDisplayName, openConversationSafe, toastConvErr } from './listmenu.
 import { detailSave, refreshDeptSuggest, renderList, showView } from './contacts.mjs';
 import { COL_STATUS, openProjectDetail, openTaskBoard, openTaskCardDialog, prPillOf } from './projects.mjs';
 import { openFlowRun, setListTitle } from './flowpages.mjs';
-import { groupProjectOf, openChatLogDrawer, openGroupDrawer } from './groups.mjs';
+import { openChatLogDrawer, openGroupDrawer } from './groups.mjs';
 import { closeDrawer, fireExpert } from './experts.mjs';
 import { $, S, statusText } from './core.mjs';
 import { registerLayer } from './navstack.mjs';
@@ -91,19 +91,87 @@ export function convPermCombo({ mount, conversationId, runtime, value, personaSa
 
 
 
+/**
+ * **群聊**的权限下拉（2026-11-14 用户要求加回来）。
+ *
+ * 群和 1:1 不一样：成员可能跨运行时，员工详情那套"运行时方言"清单没法共用。
+ * 这里给**通用三档**（canonical id，存 conversations.sandbox），派活时 runs 里的
+ * `normalizeSandbox` 会按每个成员自己的运行时族换算 —— 完全权限 → codex `danger-full-access` /
+ * claude `bypassPermissions`，工作区内读写 → `workspace-write` / `acceptEdits`，
+ * 仅可查看 → `read-only` / `plan`。
+ *
+ * 语义与 1:1 的会话级覆盖同一条路：覆盖的是**这个群里派的活**，不动员工本身；
+ * 选回「跟随员工默认」= 收回。程序化的只读约束（讨论模式）优先级更高，不受提权影响。
+ */
+export function groupPermCombo({ mount, conversationId, value, onDone }) {
+  const items = [
+    { id: '', label: '跟随员工默认' },
+    { id: 'danger-full-access', label: SANDBOX_LABEL['danger-full-access'] },
+    { id: 'workspace-write', label: SANDBOX_LABEL['workspace-write'] },
+    { id: 'read-only', label: SANDBOX_LABEL['read-only'] },
+  ];
+  const labelOf = (id) => (items.find((it) => it.id === id) ?? {}).label ?? String(id ?? '');
+  const combo = createCombo({
+    mount,
+    items,
+    value: value ?? '',
+    search: false,
+    buttonText: (id) => (id ? labelOf(id) : '各随员工默认'),
+    onChange: async (id) => {
+      try {
+        await api('/api/conversations/' + encodeURIComponent(conversationId), {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sandbox: id || null }),
+        });
+        paint(id);
+        onDone?.();
+      } catch (err) {
+        toast(err.message, 'error');
+        onDone?.();
+      }
+    },
+  });
+  const paint = (id) => {
+    combo.el.classList.toggle('elevated', !!id);
+    combo.el.title = id
+      ? `这个群里派活统一按「${labelOf(id)}」跑 —— 用完点这里选回「跟随员工默认」收回`
+      : '没覆盖：@ 谁就按谁自己的员工默认权限跑 —— 想统一设就点开选';
+  };
+  paint(combo.value());
+  combo.el.classList.add('up'); // 往上弹（在输入区底部，往下弹会被切掉）
+  return combo;
+}
+
+
+
 export function renderComposerPerm(d) {
   const mount = $('dPermMount');
   if (!mount) return;
   mount.innerHTML = '';
-  if (d.conversation.kind === 'group') return;
-  const rt = S.runtimes.find((x) => x.id === d.conversation.runtime) ?? null;
+  const conv = d.conversation;
+  /*
+   * 群聊也放权限下拉（2026-11-14 用户要求；原来"群里每个人权限不同，放个假的没意义"直接不放）。
+   * 放的**不是假的**：它写 conversations.sandbox，派活时 dispatch 会拿它盖过每个成员的默认 ——
+   * 见 dispatch.startMemberRun 的会话级覆盖。
+   */
+  if (conv.kind === 'group') {
+    groupPermCombo({
+      mount,
+      conversationId: conv.id,
+      value: conv.sandbox,
+      onDone: () => openConversation(conv.id),
+    });
+    return;
+  }
+  const rt = S.runtimes.find((x) => x.id === conv.runtime) ?? null;
   convPermCombo({
     mount,
-    conversationId: d.conversation.id,
+    conversationId: conv.id,
     runtime: rt,
-    value: d.conversation.sandbox,
-    personaSandbox: d.conversation.personaSandbox,
-    onDone: () => openConversation(d.conversation.id),
+    value: conv.sandbox,
+    personaSandbox: conv.personaSandbox,
+    onDone: () => openConversation(conv.id),
   });
 }
 
@@ -423,15 +491,14 @@ export const READONLY_WHY = {
 
 
 /*
- * 输入框占位文案（2026-11 第三版）：手机上完全不显示 —— 屏幕本来就小，胶囊里还垫着
- * 一句提示词很难看（2026-11-04 用户要求去掉，含忙态的"他还在说…"）；桌面原样不动。
- * isNarrowPh 导出给 projects.mjs（议题聊天）与 flowpages.mjs（节点聊天）用同一把尺子。
+ * 输入框占位文案：手机上完全不显示 —— 屏幕本来就小，胶囊里还垫着
+ * 一句提示词很难看（2026-11-04 用户要求去掉，含忙态的"他还在说…"）；桌面只留「说点什么…」
+ * —— 括号里的说明也摘了（2026-11-15 用户实报）：@ 与发送键的用法靠输入框教不完，
+ * 真要用的时候自然会发现。isNarrowPh 导出给 projects.mjs（议题聊天）与 flowpages.mjs（节点聊天）用同一把尺子。
  */
 export const isNarrowPh = () => window.matchMedia('(max-width: 900px)').matches;
 
-const phChat = (group) => (isNarrowPh()
-  ? ''
-  : (group ? '说点什么…（@某人 让他干活；不 @ 就找群主）' : '说点什么…（Enter 发送，Shift+Enter 换行）'));
+const phChat = () => (isNarrowPh() ? '' : '说点什么…');
 
 
 export function setComposerReadonly(on, reason = 'gone') {
@@ -442,7 +509,7 @@ export function setComposerReadonly(on, reason = 'gone') {
   if (box) box.classList.toggle('is-readonly', on);
   if (input) {
     input.disabled = on;
-    input.placeholder = on ? READONLY_WHY[reason] ?? READONLY_WHY.gone : phChat(S.conversation?.kind === 'group');
+    input.placeholder = on ? READONLY_WHY[reason] ?? READONLY_WHY.gone : phChat();
   }
   if (send) send.disabled = on;
   if (h) {
@@ -573,22 +640,14 @@ export async function openConversation(id) {
      * 名字再长也只挤自己，把人数和徽章保住；实在窄到放不下时，先截名字。
      */
     const metaSub = dissolved ? '已解散' : `${d.conversation.members.length} 人`;
-    /*
-     * 关联项目（2026-11-11）：只读的**身份铭牌**，跟在人数后面同一行。
-     * 它不是动作 —— 入口仍在群设置里（点群名进抽屉），群头一颗按钮都不加：
-     * 这一行已经有返回/群名/人数/徽章/两颗钮，再加东西只会挤掉群名。
-     * 解散的群不给（项目对它已经没意义了，而且群设置也进不去）。
-     */
-    const proj = dissolved ? null : groupProjectOf(d.conversation);
-    const projTag = proj
-      ? `<span class="head-proj" title="关联项目：${esc(proj.name)}">· ${esc(proj.name)}</span>`
-      : '';
+    // 关联项目不再上群头（2026-11-15 用户实报）：一行里有群名/人数/徽章/动作钮，
+    // 名牌是第四样东西挤群名；要看/换项目走群设置的「关联项目」行，入口不变。
     $('chatHead').innerHTML = `
       ${mbBackBtn}
       <div class="meta">
         <div>${dissolved
           ? `<b class="head-name-static">${esc(d.conversation.title)}</b> <span class="sub">${metaSub}</span>`
-          : `<b class="head-name" title="群设置">${esc(d.conversation.title)}</b> <span class="sub">${metaSub}</span> ${projTag} ${badge}`}</div>
+          : `<b class="head-name" title="群设置">${esc(d.conversation.title)}</b> <span class="sub">${metaSub}</span> ${badge}`}</div>
       </div>
       <button class="icon-btn" id="toNewConv" title="给这个群开一段新会话（一次任务一段；旧段留在聊天记录里）">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
@@ -1633,7 +1692,7 @@ export function setBusy(busy) {
   $('input').placeholder = busy
     // 2026-11-05 评鉴：原来是"他还在说…"—— 跑工具的时候他不是在说，是在干活
     ? (isNarrowPh() ? '' : '他还在干活…（要打断就点「停止生成」）')
-    : phChat(isGroup);
+    : phChat();
   $('hint').textContent = busy
     ? (isNarrowPh() ? '' : '一次只跑一条。要打断就点「停止生成」。')
     : '';
@@ -1936,7 +1995,7 @@ export function personaTaskRow(r, colKey = '') {
       <div class="pt-title">${esc(r.task)}</div>
       <div class="pt-tags">${proj}<span class="kb-tag${srcCls}">${esc(r.source_text)}</span>${prPillOf(r)}</div>
     </td>
-    <td class="pt-td-state"><span class="pt-state ${esc(colKey)}">${esc(r.status)}</span></td>
+    <td class="pt-td-state"><span class="pt-state ${esc(colKey)}">${esc(statusText(r.status))}</span></td>
     <td class="pt-td-at" title="${esc(at)}">${esc(hhmm)}</td>
   </tr>`;
 }
@@ -2018,10 +2077,9 @@ export function personaTasksHtml(b, filter = 'all') {
         <div style="margin-top:8px"><button type="button" class="pt-reset" data-pt-filter="all">看全部 ${nOf.get('all') || 0} 件</button></div>
       </div>`;
 
-  return `${bar}${body}
-    <div class="pt-note">跟任务看板同源：<b>流程的每次办理</b> + <b>聊天最近一轮</b> + <b>一张手工卡</b>，各算一件。
-      聊天派活不进看板 —— 想让某轮活进看板，在聊天页头把它<b>立成卡</b>（这一页照收）。
-      点一行能跳到它本身（流程实例 / 会话 / 项目看板）。</div>`;
+  // 2026-11-14 用户口径：底下的口径说明（"跟任务看板同源…"）撤了 —— 说明是给设计者看的，
+  // 不是给用户的；这页的交互自解释（点行跳转、筛空了有回全部的按钮）。
+  return `${bar}${body}`;
 }
 
 
@@ -3015,11 +3073,6 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
   const expertLocked = String(persona.id || '').startsWith('p-expert-');
   const builtinLocked = !expertLocked && !!persona.builtin;
   const identityLocked = expertLocked || builtinLocked;
-  const lockHint = expertLocked
-    ? '雇佣员工的名字、岗位与职责身份随专家包固定，不能修改 —— 想定制就解聘后自建一个员工。'
-    : '内置员工的名字、岗位与职责身份随平台固定，不能修改 —— 想按自己的需要定制，就另建一个员工。';
-  let extraRoots = [];
-  try { extraRoots = JSON.parse(persona.rootDirs || '[]'); } catch { extraRoots = []; }
   const runRows = runs.length
     ? runs.map((r) => `<tr>
         <td>${dt(r.startedAt)}</td>
@@ -3087,11 +3140,9 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
           <div class="ov-body">
             <section class="ov-panel" data-ov-panel="profile">
               <div class="group">
-                ${
-                  identityLocked
-                    ? `<div class="hint-line">${lockHint}</div>`
-                    : ''
-                }
+                <!-- 「名字/岗位…随平台固定」提示条摘掉（2026-11-15 用户实报）：
+                     锁定这件事输入框的 readonly + 悬停 title 已经说了，横幅纯属重复。
+                     内置和专家包雇佣两个分支共用它，一并去掉。 -->
                 <div class="form-row">
                   <div class="row-label">名字</div>
                   <input id="dName" value="${esc(persona.name)}" ${identityLocked ? `readonly title="${expertLocked ? '雇佣员工的名字随专家包固定' : '内置员工的名字随平台固定'}"` : ''} />
@@ -3183,16 +3234,14 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
                   </div>
                 </div>
                 <div class="form-row">
-                  <div class="row-label">工作目录（主）</div>
+                  <!-- 附加目录摘掉后没有「主/附加」之分了，「（主）」随之去掉（2026-11-15） -->
+                  <div class="row-label">工作目录</div>
                   <input id="dCwd" value="${esc(persona.cwd || '')}" />
                 </div>
-                <div class="form-row top">
-                  <div class="row-label">附加目录</div>
-                  <div>
-                    <textarea id="dRoots" style="height:56px" placeholder="一行一个路径，例如 E:\\CodeSpace\\myproj">${esc(extraRoots.join('\n'))}</textarea>
-                    <div class="counter">平台根自动附加，不用写：<code>${esc(platformRoot || '')}</code>；只有切回沙箱模式后这几行才真的有约束力。</div>
-                  </div>
-                </div>
+                <!-- 附加目录输入框摘掉（2026-11-15 用户实报「没啥用」）：完全权限模式下
+                     这几行本来就没约束力，只有切回沙箱才有意义。已存的 rootDirs **保留在库里**：
+                     collect() 不再传这个字段，服务端「不传不动」；将来要恢复沙箱编辑再把这个
+                     form-row 加回来即可。 -->
                 <div class="form-row">
                   <div class="row-label">并发数</div>
                   <!-- 并发数（2026-10-24，参照同类产品）：这一个人名下同时最多几个活在跑。
@@ -3620,7 +3669,8 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
     sandbox: sbCombo.value(),
     model: modelCombo.value(),
     cwd: $('dCwd').value,
-    rootDirs: $('dRoots').value.split('\n').map((s) => s.trim()).filter(Boolean),
+    // 附加目录不再从 UI 收（2026-11-15 摘掉输入框）：**不传 = 服务端不动库里原值**，
+    // 已配置过的 rootDirs 原样保留，不会被这次保存清掉
     // 空着 = 恢复默认（null）；数字服务端会钳位，这里只管传
     maxParallel: $('dMaxParallel').value.trim() === '' ? null : Number($('dMaxParallel').value),
   });
@@ -3685,7 +3735,8 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
   detailSave.flush = (opts) => saveNow(opts);
 
   // 输入框：敲字防抖；失焦立刻存（没改动时 saveNow 按 lastSaved 直接跳过）
-  for (const id of ['dName', 'dRole', 'dDept', 'dInstr', 'dCwd', 'dRoots', 'dMaxParallel']) {
+  // dRoots 已摘（2026-11-15），不在列表里
+  for (const id of ['dName', 'dRole', 'dDept', 'dInstr', 'dCwd', 'dMaxParallel']) {
     $(id)?.addEventListener('input', () => scheduleSave(700));
     $(id)?.addEventListener('blur', () => saveNow?.());
   }
