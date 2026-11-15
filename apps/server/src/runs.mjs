@@ -221,7 +221,7 @@ function runCredentialBrief(pm = false) {
  * @param watermark  本次运行"读到"的最后一条消息 rowid，跑完写回水位线
  */
 /*
- * **进门排队**（2026-11-15，借鉴 Cumora docs/COORDINATION.md 的三件套）。
+ * **进门排队**（2026-11-15，借鉴 Cumora 协调机制的三件套）。
  *
  * 起因：群派多个员工、多条流程同时收尾时，所有 CLI **同一秒**齐撞供应商——
  * Cumora 实测 7 人同醒、17 分钟 130 次限流。三件套（全部确定性，不靠 AI 自觉）：
@@ -558,13 +558,14 @@ export function startRun({ thread, member, task, standing = null, watermark = 0,
       return { isError: true, error: `重开会话也起不来：${err?.message ?? err}`, exitCode: null };
     }
   };
-  acquireSpawnGate(run, rt)
-    .then(() => runOnce(resumeId))
-    .then((r) => {
-      first = r;
-      return r.p;
-    })
-    .then(async (res) => {
+  // 同步 spawn：保证 adapter 注册 abort 监听在 requestStop() 之前，否则 abort 丢失（见 smoke-stop-watchdog 竞态）
+  try {
+    first = runOnce(resumeId);
+  } catch (err) {
+    finish(run, { status: 'failed', exitCode: null, error: `起不来：${err?.message ?? err}` });
+    return run;
+  }
+  first.p.then(async (res) => {
       // 续接失败且原因是"这条会话不在"→ 自动新开一条重跑；其它错照原样往上走。
       // `run.seq === 0`：**这一轮还什么都没推出去**才敢重跑 —— 已经出过话再重跑，
       // 用户会看到同一件事被说两遍（会话找不到是启动即失败，正常情况下 seq 就是 0）。

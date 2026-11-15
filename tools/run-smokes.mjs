@@ -49,6 +49,10 @@ const RUN = [
   'apps/server/src/smoke-auth.mjs',
   // 本机壳子自动进门（2026-11-10）：/shell/enter 核 local_secret + 本机直连 → 本机会话
   'apps/server/src/smoke-shell-enter.mjs',
+  // 2026-11-15：/api/open 按监听地址判本机（0.0.0.0 / 回环放行、局域网地址拒）—— 纯函数形态矩阵
+  'apps/server/src/smoke-workspace-open.mjs',
+  // 2026-11-15：回话声称的卡号 / 执行 / 文件路径与台账/文件对账 —— 临时库，不联网不起服务
+  'apps/server/src/smoke-task-claim-audit.mjs',
   'apps/server/src/smoke-autostart.mjs',
   'apps/server/src/smoke-chat-to-board.mjs',
   'apps/server/src/smoke-connectors.mjs',
