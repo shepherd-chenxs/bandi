@@ -41,6 +41,10 @@
   // 等到 body 末尾再改属性，浅色用户会先闪一下深色。
   try {
     var t = localStorage.getItem('bandi.theme') || 'system';
+    // 手机形态砍掉「跟随系统」（2026-11-17）：窄屏下 system 按浅色落地，避免原生壳里
+    // 被 uiMode 钉死的 matchMedia 让首帧闪一下深色。桌面宽屏三档不变。这里刷不到 body，
+    // 用与 mobile.mjs / shell.mjs 同源的 900px 判据。不写回存储，桌面读同一值照旧跟随。
+    if (t === 'system' && matchMedia('(max-width: 900px)').matches) t = 'light';
     document.documentElement.dataset.theme =
       t === 'system' ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : t;
   } catch (e) { /* 读不了就算了，交给 app.mjs */ }
@@ -177,13 +181,9 @@
         <div class="att-strip is-hidden" id="attStrip"></div>
         <div class="input-tools">
           <div class="att-wrap">
-            <button class="ghost att-add" id="attach" title="上传文件 / 把这轮活立成任务卡">＋</button>
-            <!-- 两项菜单（2026-10-24）：上传文件走原路；任务卡 = 原页头「立成卡」搬进来的。
-                 工单会话（kind='exec'）自己就是任务卡，开菜单时 app.mjs 按 kind 收掉这项。 -->
+            <button class="ghost att-add" id="attach" title="上传文件">＋</button>
             <div class="attach-menu" id="attachMenu" hidden>
               <button type="button" class="item" id="attFile">上传文件</button>
-              <button type="button" class="item" id="attCard"
-                      title="把这场会话最近一轮派的活立成任务卡 —— 看板上好管状态、加描述、关联 PR；聊天派的活只有立成卡才进看板">任务卡</button>
             </div>
           </div>
           <input type="file" id="filePick" multiple hidden />
@@ -242,11 +242,11 @@
 <dialog id="flowStartDlg">
   <form method="dialog">
     <b>发起流程</b>
-    <label>流程名称</label><input id="fsTitle" placeholder="起个名字（会显示在发起记录里；不填就取想法的第一行）" />
-    <label>项目（AI 就在这个目录里干活）</label>
+    <label>流程名称</label><input id="fsTitle" />
+    <label>项目</label>
     <div id="fsProjectMount"></div>
     <div class="dim" id="fsProjectPath" style="font-size:12px;margin-top:4px"></div>
-    <label>想法</label><textarea id="fsIntent" rows="5" placeholder="要干什么？说清楚一点 —— 这段话会发给第一个节点的人"></textarea>
+    <label>想法</label><textarea id="fsIntent" rows="5"></textarea>
     <div class="dlg-actions">
       <button type="button" value="cancel">取消</button>
       <button class="primary" id="fsOk" value="ok">发起</button>

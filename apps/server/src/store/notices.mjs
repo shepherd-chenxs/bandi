@@ -47,6 +47,12 @@ export function addNotice({
   return getNotice(id);
 }
 
+export function findNoticeByDedupeKey(key) {
+  if (!key) return null;
+  const row = db.prepare('SELECT * FROM notices WHERE dedupeKey = ? ORDER BY rowid DESC LIMIT 1').get(String(key)) ?? null;
+  return row;
+}
+
 export function getNotice(id) {
   return db
     .prepare('SELECT n.*, p.name AS personaName FROM notices n LEFT JOIN personas p ON p.id = n.personaId WHERE n.id = ?')

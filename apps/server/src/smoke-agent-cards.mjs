@@ -183,8 +183,9 @@ try {
     if (!receipt) await sleep(150);
   }
   check('回执是执行人（嘉辉）名义的汇报', receipt?.personaId === dev.id && receipt?.role === 'assistant', `${receipt?.role}/${receipt?.personaId}`);
-  check('回执里带卡号与状态', !!receipt?.text?.includes(workId) && !!receipt?.text?.includes('待验收'), '');
-  check('回执带卡票 meta 快照', receipt?.meta?.title === '修列表样式' && receipt?.meta?.assignee === '嘉辉', JSON.stringify(receipt?.meta ?? null));
+  // 2026-11-16 口径：正文只有 "@建卡人 请验收"，卡号/状态/执行人不复述 —— 都在卡票 meta 上。
+  check('回执正文是 @建卡人请验收（不再复述卡号与状态）', /^@.+ 请验收$/.test(String(receipt?.text ?? '')), receipt?.text ?? '没找到');
+  check('回执带卡票 meta 快照 + 文本在前标记', receipt?.meta?.title === '修列表样式' && receipt?.meta?.assignee === '嘉辉' && receipt?.meta?.mentionFirst === true, JSON.stringify(receipt?.meta ?? null));
   const pmAfter = await getConv(pmConv);
   const wake = (pmAfter.messages ?? []).find((m) => m.role === 'user' && m.meta?.silent && m.text.includes('【卡片回执】'));
   check('唤醒触发落了（silent，界面不画）', !!wake, wake?.text?.slice(0, 60) ?? '没找到');

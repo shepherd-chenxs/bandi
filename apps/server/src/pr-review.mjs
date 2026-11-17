@@ -34,7 +34,7 @@ export const REVIEW_MARK = '【管理员审阅】';
 export const PR_REVIEW_TEMPLATE_ID = 'pr-review';
 
 /** 审阅节点给管理员的指令（模板 detail = 平台写的提示词，随内建模板更新）。
- *  **导出**是因为「开发完成 → 建 PR → 审阅 → 合并」那条内建流程也用它（pr-create.mjs）——
+ *  **导出**是因为「PR 交付」那条内建流程也用它（pr-create.mjs）——
  *  提示词只能有一份，两处各写一份迟早说两种话。 */
 export const REVIEW_DETAIL = [
   '你是这个仓库的值班管理员。根据下面的材料审这个 PR：它干了什么、有没有风险、是不是垃圾。',
@@ -54,7 +54,7 @@ export const REVIEW_DETAIL = [
 
 export const PR_REVIEW_TEMPLATE = {
   id: PR_REVIEW_TEMPLATE_ID,
-  name: 'PR 审阅与合并',
+  name: 'PR审查',
   builtIn: true,
   start: 'n1',
   nodes: [
@@ -74,7 +74,12 @@ export const PR_REVIEW_TEMPLATE = {
   ],
 };
 
-/** 幂等：没有就建；是内建的就把审阅指令刷成最新（连线/坐标是用户的，永不覆盖） */
+/**
+ * 幂等：没有就建；是内建的就把**出厂名 + 审阅指令**刷成最新（连线/坐标是用户的，永不覆盖）。
+ * 名字也刷（2026-11-16 用户："名字改成 PR审查"）—— 内建模板的名字跟指令一样属于平台口径，
+ * 不能在老库里停留于旧名。字样/坐标仍是用户的：nodes 从库里读出来只改 detail 那一步，
+ * 连线和位置原样写回；哪天 builtIn 被清掉（用户接管），下面的 return 就不再覆盖。
+ */
 export function ensurePrReviewTemplate() {
   const cur = store.getWorkflowTemplate(PR_REVIEW_TEMPLATE_ID);
   if (!cur) {
@@ -83,6 +88,7 @@ export function ensurePrReviewTemplate() {
   }
   if (!cur.builtIn) return; // 用户改过/接管了，别动
   let touched = false;
+  if (cur.name !== PR_REVIEW_TEMPLATE.name) touched = true; // 老库里的旧名 → 出厂名
   const nodes = JSON.parse(cur.nodes || '[]').map((n) => {
     if (n.id === 'n1' && n.detail !== REVIEW_DETAIL) {
       touched = true;
@@ -90,7 +96,7 @@ export function ensurePrReviewTemplate() {
     }
     return n;
   });
-  if (touched) store.upsertWorkflowTemplate({ id: cur.id, name: cur.name, nodes, builtIn: true });
+  if (touched) store.upsertWorkflowTemplate({ id: cur.id, name: PR_REVIEW_TEMPLATE.name, nodes, builtIn: true });
 }
 
 /* ---------------------------------------------------------- 纯函数（冒烟直接钉） */
@@ -199,7 +205,7 @@ export async function startPrReview({ repo, pr, projectId }) {
  * 从**这一步之前最近一次有产出的办理**里拿管理员全文（result 是 resultOf 的 JSON，见 workflows.resultOf）。
  *
  * 原来写死 `nodeId === 'n1'`（只认「PR 审阅」模板）。2026-10-25 加了第二条内建流程
- * 「开发完成 → 建 PR → 审阅 → 合并」：那条流程的审阅节点叫 n3，合并节点还是这一颗 ——
+ * 「PR 交付」：那条流程的审阅节点叫 n3，合并节点还是这一颗 ——
  * 合并逻辑凭什么要认识别人的节点 id？所以改成**按时间倒着找最近一份带 result 的办理**：
  * 合并节点自己是"当前这一步"，没有 result；再往前就是刚刚办完的审阅。
  * 这样模板怎么改名/换 id，合并都只认"上一个办完的人说了什么"。

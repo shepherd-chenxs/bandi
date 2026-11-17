@@ -71,4 +71,21 @@ class BandiShell(private val host: MainActivity) {
     fun setTopBarColor(css: String) {
         host.runOnUiThread { host.applyTopBarColor(css) }
     }
+
+    /**
+     * 面板主题（已解析成深 / 浅）→ 壳（2026-11-17 用户："改了深色主题，到选择电脑这一步
+     * 时是浅色的"）。
+     *
+     * 之前壳只吃两条 bar 色（setSystemBarColor / setTopBarColor），原生屏（登录 / 设备
+     * 列表）自己不知道面板是深是浅 —— 一深一浅两截。现在面板 applyTheme 时把解析后的
+     * 深浅报过来，壳存进 SessionStore（SessionStore.setThemeDark），下一次画原生屏
+     * 就按它铺。报**布尔**而不是 light/dark/system 三态：「跟系统」那一档网页已经用
+     * prefers-color-scheme 解析完了，壳再猜一遍系统答案只会猜错。
+     * 面板每次 boot 与用户换主题时都会报；壳侧没变就空转（MainActivity.applyPanelTheme）。
+     * 老壳没有这个方法：网页侧 typeof 检测式调用，没有就跳过，行为不变。
+     */
+    @JavascriptInterface
+    fun setTheme(dark: Boolean) {
+        host.runOnUiThread { host.applyPanelTheme(dark) }
+    }
 }

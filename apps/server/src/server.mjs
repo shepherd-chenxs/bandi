@@ -26,7 +26,6 @@ import * as workflows from './workflows.mjs';
 import * as prReview from './pr-review.mjs';
 import * as prCreate from './pr-create.mjs';
 import * as selfDelivery from './self-delivery.mjs';
-import * as quota from './quota.mjs';
 import * as status from './status.mjs';
 import { projectTasks, allTasks, personaTasks, createProjectTask, updateProjectTask, startProjectTask, onTaskRunFinished, afterMerged, upsertRepoCard, ensureTaskCardForStep } from './project-tasks.mjs';
 import * as git from './git-repos.mjs';
@@ -434,35 +433,6 @@ const routes = {
     sendJson(res, 201, { group: store.getGroup(group.groupId), conversation: store.getConversation(group.id) });
   },
 
-  /*
-   * 额度：**每个模型**每天最多用多少 token。
-   *
-   * 为什么按模型不按供应商：贵/便宜的分界线在**模型 id** 上，不在供应商上 ——
-   * 本机 codex / dsh 只配了一个供应商（magpie 网关），
-   * `group/auto-deepseek-v4-1-flash` 和 `opencode-zen-free/*` 都是它名下的模型。
-   * 按供应商设额度 = 给 magpie 设一个数，会把免费的和收费的一起管住。
-   *
-   * 两条都返回同一份 quotaStatus()（今天的总量 + 每个模型一行：限额/用量/超没超）——
-   * 界面拿到的必须是同一次读数，不然"已用"和"超了没"会对不上。
-   */
-  'GET /api/quota': async (req, res) => {
-    sendJson(res, 200, await quota.quotaStatus());
-  },
-
-  /**
-   * 存限额。body：`{ limits: { 模型id: { dailyTokens, dailyRuns } } }`。
-   *
-   * **整表替换**：传进来就是全部，没提到的模型一律回到"不限制"（界面上是一个「保存」，
-   * 把一个上限清空 = 这个模型不管了，那一下必须真的落下去）。
-   * 数字不合法 / 留空 / 0 都当成"不限制"，不报错：界面上那就是清空一个输入框，
-   * 不该因为一个手滑的字符弹红。要真拦，闸在派活那一步（workflows.startCurrentStep）。
-   */
-  'POST /api/quota': async (req, res) => {
-    const body = await readBody(req);
-    const limits = body?.limits && typeof body.limits === 'object' ? body.limits : {};
-    quota.setQuotas(limits);
-    sendJson(res, 200, await quota.quotaStatus());
-  },
 };
 
 /** 带路径参数的路由单独处理 */
@@ -693,7 +663,7 @@ if (reaped) console.log(`清理了 ${reaped} 条被中断的运行`);
 
 // 工作流：内建模板保证存在；**把引擎挂在 run 完成点上** —— 推进由平台做，不靠数字员工自觉
 workflows.ensureBuiltInTemplate();
-// PR 审阅与合并（2026-10-23）：pr-review.mjs 在 import 时注册动作节点（pr-merge），这里保证内建模板在
+// PR审查（模板出厂名 2026-11-16 改；原「PR 审阅与合并」）：pr-review.mjs 在 import 时注册动作节点（pr-merge），这里保证内建模板在
 prReview.ensurePrReviewTemplate();
 // PR 交付流程（2026-10-25）：pr-create.mjs 在 import 时注册动作节点（pr-create），这里保证模板在
 prCreate.ensurePrDeliveryTemplate();

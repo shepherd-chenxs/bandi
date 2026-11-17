@@ -408,14 +408,14 @@ function chatOwnership(conv, chatRun, projects) {
  * 行上**总是**带 `project_id` / `project_name`（没人认领就是 `NO_PROJECT`）。
  *
  * **聊天行只进员工详情，不进看板**（2026-10-24 用户定的，先做过会话级「上板」开关后否掉）：
- * 看板收的是正式的活 —— 流程、手工卡、仓库值班、PM 建的卡；聊天派的活想进看板，
- * 走「立成卡」转正。所以看板那些调用方（projectTasks / allTasks）根本不调这里，
- * 只有 personaTasks（"他手上有什么"）要它 —— 那页按人筛过，不算噪音。
+ * 看板收的是正式的活 —— 流程、手工卡、仓库值班、PM 建的卡。所以看板那些调用方
+ * （projectTasks / allTasks）根本不调这里，只有 personaTasks（"他手上有什么"）要它
+ * —— 那页按人筛过，不算噪音。2026-11-16 聊天立卡功能撤了，这条口径不变。
  */
 function chatRows(projects, scope) {
   const rows = [];
-  // 已经**立成卡**的会话不再投影：卡进员工详情代表这件事，再投一张「聊天派活」是重复。
-  // 这是上面 exec 会话那条规则的推广 —— 工单会话"自己就是卡"，这里是"被立了卡的聊天"。
+  // 存量库里**历史上立过卡**的会话仍不再投影：卡进员工详情代表这件事，再投一张
+  // 「聊天派活」是重复。立卡功能 2026-11-16 撤了，但老库里那些卡还在，去重得留着。
   const withCards = store.conversationIdsWithCards();
   for (const conv of store.listConversations()) {
     // 任务卡的工单会话（kind='exec'）**不算「聊天派活」**：它自己就是那张任务卡，
@@ -577,7 +577,7 @@ function allRows(projects, byId, runs, { withChat = false } = {}) {
  * 每行只算一次：流程行按实例算，手工卡按卡算 ——
  * 所以全局的 total 不会因为"归属算了两遍"而虚高。
  *
- * **聊天派活不进看板**（2026-10-24 用户定的）：看板收正式的活，聊天派的想进来就立成卡。
+ * **聊天派活不进看板**（2026-10-24 用户定的）：看板收正式的活。
  * 员工详情（personaTasks）才收聊天行 —— 那页按人筛过。
  */
 export function allTasks() {
@@ -1076,19 +1076,15 @@ export function startProjectTask(id, { allowIdea = false } = {}) {
 /* ------------------------------------------------ 跑完 ≠ 完成（2026-11-09 P4） */
 
 /**
- * 这一轮员工最终说了什么 —— **交付声明只从这里读**。
+ * 这一轮员工最终说了什么 —— **交付声明只从这里读**（收尾钩子 `onTaskRunFinished` 用）。
  *
- * 两个调用方拿到的 run 形状不一样：收尾钩子 `onTaskRunFinished` 拿的是内存里的 run
- * （`.finalText` 是刚跑出来的原文）；聊天立卡 `promoteConversationToCard` 拿的是库里那行
- * runs —— 那张表**没有 finalText 列**，回话在 messages 里。两处必须走同一个判据，
- * 所以读原文这件事只写这一处。
- *
- * 内存里 `finalText` 可能是空串（dsh 的 finalText 只来自 final 事件，被停/异常时没有），
+ * 内存里的 `finalText` 可能是空串（dsh 的 finalText 只来自 final 事件，被停/异常时没有），
  * 那就按"空回话"算 —— 不要拿 streamedText 替它开脱：屏幕上的过程话不是交付。
  *
  * P5（2026-11-09）：落库的回话会剥掉首行 `[完成]`（那是机器信号、不给雇主看，见
- * runs.persistReply），所以 "promote 聊天立卡" 这条读库的路径要优先读 **run_events 的
- * `__done.finalText` 原文**；别拿剥过的消息当判据（否则 [完成] 永远判不出来）。
+ * runs.persistReply），所以读库的路径要优先读 **run_events 的 `__done.finalText` 原文**；
+ * 别拿剥过的消息当判据（否则 [完成] 永远判不出来）。2026-11-16 聊天立卡撤掉后，
+ * 这里只剩收尾钩子一条路，读库兜底仍留着（重启后补记会用到）。
  */
 function finalReplyTextOf(run) {
   if (run?.finalText != null) return String(run.finalText);
@@ -1114,7 +1110,7 @@ function finalReplyTextOf(run) {
 }
 
 /**
- * 运行状态 + 交付声明 → 卡面状态（**唯一映射**，聊天立卡和卡收尾共用，别再两处各写一支三元）。
+ * 运行状态 + 交付声明 → 卡面状态（收尾钩子用；状态只在这一个地方折，别另写三元）。
  *
  * `null` = 这次收尾**不改卡**（状态不认识，例如还没跑）；「中断」「待跑」也不在这里——
  * 中断是服务重启后的补记，不经过收尾钩子。
@@ -1146,78 +1142,6 @@ function endNoteOf(run, claim) {
   }
   if (claim === 'silent') return '跑完了，但这一轮没有回话 —— 没有交回可验收的结论（没有 [完成] 声明），卡停在「已阻塞」';
   return '跑完了，但没有交回可验收的结论（没写 [完成]，也没写 [受阻]）—— 卡停在「已阻塞」';
-}
-
-/* ------------------------------------------------------------ 把会话立成卡 */
-
-/**
- * 把一场聊天会话**立成任务卡**（2026-10-24，聊天页头的「立成卡」按钮）。
- *
- * 背景：聊天派活**不进看板**（2026-10-24 用户定的）—— 闲聊一句就派活，每场会话都
- * 自动投影一张「聊天派活」，看板很快糊掉。用户想把某轮活转正时点这颗按钮：
- * 真卡进看板管起来（状态、描述、PR、讨论区都是一等公民），员工详情里聊天投影让位（chatRows 去重）。
- *
- * 口径：
- *   · **幂等** —— 已立过就原样带回（`created: false`），不报错、不建第二张；
- *   · 项目照 `chatOwnership` 的归属规则认（会话挂了项目就是它；没挂就看执行人的
- *     目录落在哪个项目下）—— 手工卡必须挂项目，这条硬规矩不为立卡开口子；
- *   · 标题取最近一条用户消息（就是"派的活"），没有就退回会话标题；
- *   · 状态照最近一轮的**交付声明**折成卡的状态（2026-11-09 P4：跑完 ≠ 完成）：
- *     跑中→进行中、失败→失败、停止→已阻塞、完成+首行/末行 `[完成]`→**待验收**、
- *     完成+`[受阻]`/没声明/空回话→已阻塞（跟 onTaskRunFinished 同一套落点规则，
- *     同一件事别两处两种落法；声明判据见 delivery-claim.mjs）；
- *   · **不派活**（`startNow` 恒 false）：活已经在会话里跑着或跑完了，再派一次
- *     等于同一件事两份执行。之后要返工，走卡详情页那条路（会另开工单会话）。
- */
-export function promoteConversationToCard(convId) {
-  const conv = store.getConversation(convId);
-  if (!conv) {
-    const e = new Error('这段会话已经不在了（可能刚被删过）');
-    e.code = 'E2047';
-    throw e;
-  }
-  if (conv.kind === 'exec') {
-    const e = new Error('工单会话本身就是任务卡，不用再立');
-    e.code = 'E2047';
-    throw e;
-  }
-  const existing = store.getProjectTaskByConversation(convId);
-  if (existing) return { task: existing, created: false };
-
-  const runs = store.listRuns(convId); // 已按开始时间倒序
-  const chatRun = runs.find((r) => !store.runBelongsToWorkflow(r));
-  if (!chatRun) {
-    const e = new Error('这场会话还没派过活，没东西可立');
-    e.code = 'E2059';
-    throw e;
-  }
-
-  const projects = store.listProjects();
-  const own = chatOwnership(conv, chatRun, projects);
-  const project = own?.project ?? null;
-  if (!project) {
-    const e = new Error(
-      '这场会话没挂项目，执行人的工作目录也没落在任何项目下 —— 先给会话或员工配上项目，再立卡',
-    );
-    e.code = 'E2059';
-    throw e;
-  }
-
-  const persona = chatRun.personaId ? store.getPersona(chatRun.personaId) : null;
-  const lastUser = store.lastUserMessage(convId);
-  // 2026-11-09 P4：完成的轮次要读**交付声明**，不能因为"进程退出了"就折成待验收（见 delivery-claim.mjs）
-  const claim = claimOf(finalReplyTextOf(chatRun));
-  const status = chatRun.status === 'running' ? 'doing' : cardStatusAfterRun(chatRun.status, claim) ?? 'todo';
-  const task = createProjectTask(project, {
-    title: clip(lastUser || conv.title || '（没说做什么）', TASK_LIMIT),
-    status,
-    personaId: persona?.id ?? null,
-    startNow: false,
-    createdBy: null, // 人点的按钮，不是 agent 建的（agent 建卡走 agent-cards 那条口）
-  });
-  // createProjectTask 不收 conversationId/runId（那两个字段归派活链路写）—— 这里指向这场会话本身
-  const linked = store.updateProjectTask(task.id, { conversationId: convId, runId: chatRun.id });
-  return { task: linked ?? task, created: true };
 }
 
 /**
@@ -1263,18 +1187,24 @@ export function retryQueuedTasks() {
 let lastStaleSweepAt = 0;
 const escalatedKeys = new Set();
 
-export function escalateStaleCards({ reviewHours = 4, blockedHours = 24 } = {}) {
-  if (Date.now() - lastStaleSweepAt < 10 * 60 * 1000) return [];
-  lastStaleSweepAt = Date.now();
+export function escalateStaleCards({ reviewHours = 4, blockedHours = 24, nowMs = Date.now() } = {}) {
+  // 节流与停留时长都按调用方给的 nowMs 算 —— 冒烟能拨时钟测"跨节流窗口的去重"
+  if (nowMs - lastStaleSweepAt < 10 * 60 * 1000) return [];
+  lastStaleSweepAt = nowMs;
   const out = [];
   for (const project of store.listProjects()) {
     for (const t of store.listProjectTasks(project.id)) {
       if (t.status !== 'review' && t.status !== 'blocked') continue;
-      const hours = (Date.now() - Date.parse(t.updatedAt)) / 3600_000;
+      const hours = (nowMs - Date.parse(t.updatedAt)) / 3600_000;
       const limit = t.status === 'review' ? reviewHours : blockedHours;
       if (!Number.isFinite(hours) || hours < limit) continue;
       const key = `${t.status}:${t.id}:${t.updatedAt}`;
+      // 同一轮停留只催一次：内存 Set 挡同进程的重扫；**信箱里这条升级已存在也跳过** ——
+      // 应用重启会清空内存集合，没有信箱层这一道，重启后的第一次清扫就把同一轮
+      // 停留再发一条（2026-11-15 实报：一张卡夜里发了 4 条）。卡被再动过（updatedAt
+      // 变了）= 新一轮停留，重新计时再催。
       if (escalatedKeys.has(key)) continue;
+      if (store.findNoticeByDedupeKey(`escalate:${key}`)) continue;
       escalatedKeys.add(key);
       const label = t.status === 'review' ? '待验收' : '已阻塞';
       const who = t.assigneePersonaId
@@ -1290,6 +1220,10 @@ export function escalateStaleCards({ reviewHours = 4, blockedHours = 24 } = {}) 
         projectId: t.projectId ?? null,
         personaId: t.assigneePersonaId ?? null,
         conversationId: t.conversationId ?? null,
+        // ⚠️ dedupeKey 必须带：内存 Set 一重启就清空 —— 没有它，重启后的第一次清扫
+        // 会把同一轮停留再发一条（2026-11-15 实报：一张卡夜里发了 4 条）。
+        // key 带卡 updatedAt：卡被再动过 = 新一轮停留，重新计时再催。
+        dedupeKey: `escalate:${key}`,
       });
       out.push(notice);
     }
@@ -1464,18 +1398,27 @@ function notifyCardOwner(task, why) {
   }
   // ① 执行人汇报（可见）：他干的活，由他说"到什么状态了"。带卡票，点进去验收。
   //    执行人查不到（被删了）也照样发 —— personaId 落 null，界面用默认头像名，话还是那句。
+  /*
+   * 卡票形态对齐派活卡（2026-11-16 用户定）：**@建卡人 + 一句请验收 + 卡票在后** ——
+   * 卡到待验收就是叫建卡人来拍板，一句就够；原先那串
+   * 「【卡片回执】「标题」（id）到「…」了 —— 跑完了…等你验收」太长，票上已有标题/状态/
+   * 执行人，不必复述。mentionFirst 让气泡把这句画在卡票上面（chat.mjs 认这个标记）。
+   * 状态不是待验收（阻塞/失败）时说"请跟进"，别对着坏消息说验收。
+   */
   const assignee = task.assigneePersonaId ? store.getPersona(task.assigneePersonaId) : null;
+  const ask = task.status === 'review' ? '请验收' : '请跟进';
   store.addMessage({
     conversationId: convId,
     role: 'assistant',
     personaId: assignee?.id ?? null,
-    text: `【卡片回执】「${task.title}」（${task.id}）到「${store.taskLabel(task.status)}」了 —— ${why}`,
+    text: `@${persona.name} ${ask}`,
     meta: {
       type: 'card',
       cardId: task.id,
       title: task.title,
       status: task.status,
       assignee: assignee?.name ?? null,
+      mentionFirst: true,
     },
   });
 

@@ -3755,6 +3755,7 @@ export async function scheduleDialog(job) {
         ${nameInput}
         <div id="schLeftFields">${f0.left}</div>
         <div id="schRightFields">${f0.right}</div>
+        <label>重复与时间</label>
         ${repeatRow}`;
   const desktopForm = `
     <form method="dialog">
@@ -3773,6 +3774,7 @@ export async function scheduleDialog(job) {
           <label>执行方式</label>
           <span id="schActionMount" title="换一种执行方式"></span>
           <div id="schRightFields">${f0.right}</div>
+          <label>重复与时间</label>
           ${repeatRow}
         </div>
       </div>

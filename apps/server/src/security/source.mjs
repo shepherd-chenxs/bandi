@@ -1,7 +1,7 @@
 /* security/source.mjs —— 「这个请求从哪来」的**唯一判定点**（IAM §5.2 / §5.3）。
  *
- * 为什么必须有这个模块：原来全仓有四处各判各的回环
- *   `auth.mjs`（整站免鉴权）、`auth.mjs`（/api/ai 免令牌）、`routes/local.mjs`、`routes/imageai.mjs`，
+ * 为什么必须有这个模块：原来全仓有多处各判各的回环
+ *   `auth.mjs`（整站免鉴权）、`routes/local.mjs`，
  * 判据都是 `req.socket.remoteAddress`。而 nginx / cloudflared / frp 反向代理到本机时，
  * **所有外部请求的 remoteAddress 都是 127.0.0.1** —— 一上反代，`/api/local/export` 与
  * 整个面板就等于是挂在公网上的（IAM §5.3 的 P0）。

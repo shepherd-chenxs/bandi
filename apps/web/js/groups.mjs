@@ -253,9 +253,9 @@ export function wireGroupSettings(thread, repaint, root) {
   const rn = q('#rowRename');
   if (rn) rn.onclick = () => renameGroup(thread);
   const ra = q('#rowAssistant');
-  if (ra) ra.onclick = () => openAssistantDialog(thread);
+  if (ra) ra.onclick = () => (isPhoneGroup() ? openAssistantPickerPhone(thread) : openAssistantDialog(thread));
   const rp = q('#rowProject');
-  if (rp) rp.onclick = () => openProjectLinkDialog(thread);
+  if (rp) rp.onclick = () => (isPhoneGroup() ? openProjectPickerPhone(thread) : openProjectLinkDialog(thread));
   const rd = q('#rowDissolve');
   if (rd) rd.onclick = () => dissolveGroup(thread);
   wireMemberGrid(thread, repaint, root);
@@ -356,6 +356,100 @@ export async function openProjectLinkDialog(thread) {
   };
   $('projLinkDlg').showModal();
   $('projSearch').focus(); // 打开就落在搜索框 —— 项目多的时候直接打字，不用先滚
+}
+
+
+
+/* ---------------------------------------------------------- 手机端选择页 */
+
+/*
+ * 「关联项目」「群助手」在手机上的形态（2026-11-17 用户："管理项目、群助手点击跳转到
+ * 页面进行操作"）：桌面的两个 <dialog>（#projLinkDlg / #assistantDlg）在手机上是一块
+ * 居中浮卡、选完还要点「就它了」二次确认；窄屏改成**全屏选择页** —— 复用 chat.mjs 的
+ * mbOpenPicker（「新建任务」四个选择项、通讯录搜索页都是这一张页）：顶上是标题 + 搜索，
+ * 下面一列行，点行即生效并退回群详情页，没有二次确认。
+ *
+ * ⚠️ chat.mjs 静态导入了本文件（openGroupDrawer 等），这里只能动态 import：
+ * 反过来静态引会成 ESM 环 —— 函数声明虽能活，但依赖方向从此双向，谁都不敢动。
+ */
+const isPhoneGroup = () => window.matchMedia('(max-width: 900px)').matches;
+
+/** 手机端「关联项目」选择页（口径同 openProjectLinkDialog：一项目一群、可空） */
+async function openProjectPickerPhone(thread) {
+  const { mbOpenPicker } = await import('./chat.mjs');
+  const gid = gidOf(thread);
+  try { await load(); } catch { /* 拉不动就用现有快照，别挡着人看 */ }
+  const cur = (S.groups ?? []).find((g) => g.id === gid)?.projectId ?? thread?.projectId ?? '';
+  const items = (S.projects ?? []).map((p) => {
+    const owner = projectOwner(p.id, gid);
+    return {
+      id: p.id,
+      label: p.name || p.id,
+      // 占用说明写在副标题里：行灰掉但不藏 —— 看得见才知道为什么点不动
+      sub: owner ? `已被「${owner.title}」关联` : p.root ?? '',
+      disabled: !!owner,
+    };
+  });
+  items.push({ id: '', label: '不关联', sub: '群里派活用成员各自的目录' });
+  mbOpenPicker({
+    title: '关联项目',
+    note: '一个项目只能挂一个群；已被别的群占用的项目不可选',
+    items,
+    value: cur,
+    search: true,
+    searchPlaceholder: '搜项目名…',
+    onPick: async (pid) => {
+      const next = pid ?? '';
+      if (next === cur) return; // 点的就是当前这项：不白跑一次请求
+      try {
+        await api('/api/groups/' + encodeURIComponent(gid), {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ projectId: next }),
+        });
+        // 改完统一走 refreshGroup：它会 load()、重画抽屉/群详情
+        await refreshGroup(gid);
+        const p = items.find((x) => x.id === next);
+        toast(next ? `已关联「${p?.label ?? next}」` : '已解除关联');
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    },
+  });
+}
+
+/** 手机端「群助手」选择页（候选 = 群成员，口径同 openAssistantDialog） */
+async function openAssistantPickerPhone(thread) {
+  const { mbOpenPicker } = await import('./chat.mjs');
+  const gid = gidOf(thread);
+  const cur = thread.assistantPersonaId ?? '';
+  const items = thread.members.map((m) => ({
+    id: m.personaId,
+    label: m.name,
+    sub: roleNameOf(m) || '',
+  }));
+  mbOpenPicker({
+    title: '群助手',
+    note: '从群成员里选一位接话的人',
+    items,
+    value: cur,
+    search: true,
+    searchPlaceholder: '搜名字或岗位…',
+    onPick: async (pid) => {
+      if (!pid || pid === cur) return; // 没选 / 选的就是现任：不动
+      try {
+        await api('/api/groups/' + encodeURIComponent(gid), {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ assistantPersonaId: pid }),
+        });
+        await refreshGroup(gid); // load + 重画群详情，群助手行跟着变
+        toast('已更换群助手');
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    },
+  });
 }
 
 

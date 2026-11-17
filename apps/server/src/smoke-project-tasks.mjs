@@ -1,7 +1,8 @@
 /**
  * 任务看板的验收：`GET /api/projects/{id}/tasks`（项目）与 `GET /api/tasks`（全局）
  *
- * 验的是用户定的两条（2026-10-24 改过口径：聊天派活**不进看板**，想进就立成卡）：
+ * 验的是用户定的两条（2026-10-24 改过口径：聊天派活**不进看板**；
+ * 2026-11-16 立成卡撤了，看板口径不变）：
  *   · 看板上的任务 = **流程的每一次办理** + **手工卡**（含仓库值班 / PM 建），各一行；
  *     排序按"要不要人管"（已阻塞 → 失败 → 待验收 → …）；
  *     聊天派的活只在**员工详情**（personaTasks）里出现，那页注明来源、写清执行人；
@@ -105,13 +106,8 @@ store.addMessage({ conversationId: strayConv.id, role: 'user', text: '顺手看�
 const strayRun = store.createRun({ conversationId: strayConv.id, runtime: 'codex', personaId: strayPersona.id });
 store.finishRun(strayRun.id, { status: 'done', exitCode: 0 });
 
-// ⑥ 执行人已经不在的会话：**不能**因为"服务进程的 cwd 恰好等于某个项目根"就被算进那个项目
-//    （`path.resolve('')` 返回进程 cwd 的坑；服务端是以 repoRoot 为 cwd 起的，见下面 spawn）
-const ghostProj = store.createProject({ name: '同根项目', root: repoRoot });
-const ghostConv = store.createConversation({ title: '和 已删除的人', personaId: 'p-不存在' });
-store.addMessage({ conversationId: ghostConv.id, role: 'user', text: '这个人的账号已经没了' });
-const ghostRun = store.createRun({ conversationId: ghostConv.id, runtime: 'codex', personaId: 'p-不存在' });
-store.finishRun(ghostRun.id, { status: 'done', exitCode: 0 });
+/* 原⑥「执行人已删除的会话立卡不能被同根项目捡走」随立卡功能 2026-11-16 撤了。
+   ghostProj/ghostConv/ghostRun 那三条 setup 只服务那条断言，一并删。 */
 
 /* ------------------------------------------------------------ ① 模块层 */
 console.log('⓪ 口径（2026-10-24 用户定的）：聊天派活不进看板，员工详情照收');
@@ -234,10 +230,6 @@ try {
   check('接口也带概览数字（聊天派活不进看板）', res.body?.flow_count === 1 && res.body?.chat_count === 0, JSON.stringify({ f: res.body?.flow_count, c: res.body?.chat_count }));
   check('员工任务接口里聊天行标了来源（GET /api/personas/:id/tasks）',
     (await api(`/api/personas/${encodeURIComponent(dev.id)}/tasks`)).body?.rows?.some((r) => r.source_text === '聊天派活'));
-  // 执行人已经不在的会话：立卡必须被拒，且不能因为"进程 cwd 恰好是同根项目"被算进那个项目
-  const ghostCard = await api(`/api/conversations/${encodeURIComponent(ghostConv.id)}/card`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Bandi': '1' }, body: '{}' });
-  check('执行人查不到的会话立卡 → 400（同根项目捡不走它）', ghostCard.status === 400 && /项目/.test(ghostCard.body?.error ?? ''), `${ghostCard.status} ${ghostCard.body?.error ?? ''}`);
-
   const old = await api(`/api/status/projects/${encodeURIComponent(proj.id)}/tasks`);
   check('旧插件路径已撤（/api/status/... 404）', old.status === 404, String(old.status));
 

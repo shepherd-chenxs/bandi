@@ -7,7 +7,7 @@
  *   ③ 非 manual 节点跑完自动流转，走到 end 时流程收尾并写信箱「自主交付完成」，
  *      完成报告带最后一个节点的交付汇报正文与 PR 链接；
  *   ④ 任务 [受阻] / 失败 / 人工终止 → 各写一条汇报（severity/code 区分）；
- *   ⑤ 平台自己卡住也汇报：未知动作、动作抛错 / 自报失败、派活失败、额度闸都不静默且只报一条；
+ *   ⑤ 平台自己卡住也汇报：未知动作、动作抛错 / 自报失败、派活失败都不静默且只报一条；
  *   ⑥ 普通人工流程（autonomous=0）的行为不变：manual 仍停在「待验收」、不写任何汇报；
  *   ⑦ PM 经运行钥匙走批量建卡口带 flowTemplateId → 卡真起了一条自主流程实例。
  *
@@ -29,7 +29,6 @@ process.env.BANDI_PORT = String(PORT);
 const store = await import('./store.mjs');
 const workflows = await import('./workflows.mjs');
 const selfDelivery = await import('./self-delivery.mjs');
-const quota = await import('./quota.mjs');
 
 let failed = 0;
 const check = (label, ok, detail = '') => {
@@ -55,6 +54,18 @@ check('驳回一律回到前面的节点或直接结束（不往前跳、不指�
 const again = selfDelivery.ensureSelfDeliveryTemplate();
 check('幂等：再播种一次不丢 autonomous / 发布态', Number(again?.autonomous) === 1 && !!again?.publishedAt, `${again?.autonomous}/${again?.publishedAt}`);
 check('幂等：节点没有被重复写坏', workflows.nodesOf(again).length === 7, String(workflows.nodesOf(again).length));
+
+// 老库迁移：旧名 + 用户拖过的坐标 → ensure 刷成出厂名，坐标/发布态/自主标记原样留住
+{
+  const old = store.getWorkflowTemplate(selfDelivery.SELF_DELIVERY_TEMPLATE_ID);
+  const oldNodes = workflows.nodesOf(old).map((n) => (n.id === 'n3' ? { ...n, x: 777, y: 666 } : n));
+  store.upsertWorkflowTemplate({ id: old.id, name: '自主交付（自迭代，无人工拍板）', nodes: oldNodes, builtIn: true });
+  selfDelivery.ensureSelfDeliveryTemplate();
+  const after = store.getWorkflowTemplate(selfDelivery.SELF_DELIVERY_TEMPLATE_ID);
+  check('老库旧名 → 刷成「自主交付」', after.name === '自主交付', String(after.name));
+  check('刷名不覆盖用户拖过的坐标', workflows.nodesOf(after).find((n) => n.id === 'n3')?.x === 777, '');
+  check('刷名不丢发布态 / 自主标记', !!after.publishedAt && Number(after.autonomous) === 1, `${!!after.publishedAt}/${after.autonomous}`);
+}
 
 // 按岗位指派需要库里真有这几个岗位的员工；不 hire 专家（那会带一堆内建会话），直接建最小人
 const people = {};
@@ -129,7 +140,7 @@ check('人工终止：流程 terminated', store.getWorkflowRun(rAbort.id)?.statu
 const abortNotices = noticesOf(rAbort.id);
 check('终止汇报一条，code=WF_STOPPED、severity=blocking', abortNotices.length === 1 && abortNotices[0]?.code === 'WF_STOPPED' && abortNotices[0]?.severity === 'blocking', JSON.stringify(abortNotices.map((n) => [n.code, n.severity])));
 
-console.log('\n⑤ 平台自己卡住也不静默：动作节点 / 派活准备 / 额度闸');
+console.log('\n⑤ 平台自己卡住也不静默：动作节点 / 派活准备');
 const onlyReport = (r) => {
   const list = noticesOf(r.id);
   return { list, one: list.length === 1 ? list[0] : null };
@@ -188,24 +199,6 @@ check('派活失败 → 一条 WF_FAILED 汇报', orphanNotice.list.length === 1
 // 后续用例还要用研发岗，补回同一 id 的最小员工
 store.createPersona({ id: devId, name: '验收研发', roleKey: 'dev', runtime: 'codex', cwd: tmp, instructions: '' });
 check('补回研发岗后按岗位仍能指派', !!store.getPersona(devId), String(store.getPersona(devId)?.id));
-
-// 额度闸：给一个绑了固定模型的研发岗员工设「今天 1 次」；已有运行记录把额度占满
-const quotaPersona = store.createPersona({ name: '额度验收研发', roleKey: 'dev', runtime: 'codex', cwd: tmp, instructions: '', model: 'smoke/self-delivery' });
-autoTpl('t-self-quota', [{ id: 'n1', name: '第一步', personaId: quotaPersona.id, approve: 'end', reject: 'end' }]);
-const quotaConv = store.createConversation({ title: '额度账本', personaId: quotaPersona.id });
-const used = store.createRun({ conversationId: quotaConv.id, runtime: 'codex', personaId: quotaPersona.id, model: 'smoke/self-delivery' });
-store.finishRun(used.id, { status: 'done', usage: JSON.stringify({ totalTokens: 1 }) });
-quota.setQuotas({ 'smoke/self-delivery': { dailyRuns: 1 } });
-const capped = workflows.startWorkflow({ templateId: 't-self-quota', title: '额度卡住', autoStart: false });
-try {
-  workflows.startCurrentStep(capped.id);
-} catch (e) {
-  check('额度闸拦下并以错误抛出（不是静默改状态）', /次数用完|额度用完/.test(String(e?.message ?? e)), String(e?.message ?? e));
-}
-check('额度闸 → 任务 blocked', store.getWorkflowTask(capped.id, 'n1', 1)?.status === 'blocked', String(store.getWorkflowTask(capped.id, 'n1', 1)?.status));
-const quotaNotice = onlyReport(capped);
-check('额度闸 → 一条 WF_BLOCKED 汇报', quotaNotice.list.length === 1 && quotaNotice.one?.code === 'WF_BLOCKED' && (quotaNotice.one?.detail ?? '').includes('继续一次'), JSON.stringify(quotaNotice.list.map((n) => n.code)));
-quota.setQuotas({});
 
 console.log('\n⑥ 普通流程完全不受影响');
 plainTpl('t-plain-manual', true);

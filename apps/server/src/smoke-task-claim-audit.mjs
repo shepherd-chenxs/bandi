@@ -116,6 +116,13 @@ const escalated = pt.escalateStaleCards({ reviewHours: 4, blockedHours: 24 });
 check('review 停 6 小时 → 信箱升级一条', escalated.length === 1 && /停在「待验收」/.test(escalated[0]?.title ?? ''),
   JSON.stringify(escalated.map((n) => n.title)));
 check('节流：10 分钟内再扫 → 不重复', pt.escalateStaleCards({ reviewHours: 4, blockedHours: 24 }).length === 0, '');
+// 跨节流窗口 + 跨重启的去重：dedupeKey 落在通知上（同 key 合并成一条，count 叠加）
+const laterSweep = pt.escalateStaleCards({ reviewHours: 4, blockedHours: 24, nowMs: Date.now() + 11 * 60 * 1000 });
+check('跨节流窗口再扫 → 同一轮停留不重复发（escalatedKeys 挡住）', laterSweep.length === 0, JSON.stringify(laterSweep));
+check('升级通知带 dedupeKey（跨重启也合并，不刷屏）',
+  (escalated[0]?.dedupeKey ?? '').startsWith('escalate:review:'), escalated[0]?.dedupeKey ?? '');
+check('信箱里这条升级已存在 → 再扫也不再发（跨重启的重复也挡住）',
+  pt.escalateStaleCards({ reviewHours: 4, blockedHours: 24, nowMs: Date.now() + 21 * 60 * 1000 }).length === 0, '');
 
 console.log('\n⑤ 同题去重：15 分钟内别人刚建的同题卡 → 指路（贺韬/嘉辉实报）');
 const fresh = store.createProjectTask({ projectId: project.id, title: '元仓页视觉与信息架构改版方案', status: 'todo', createdBy: other.id });

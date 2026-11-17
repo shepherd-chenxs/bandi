@@ -194,6 +194,18 @@ document.addEventListener('keydown', (e) => {
     document.dispatchEvent(new CustomEvent('mb-me-set-leave'));
     return;
   }
+  // 「我的 › 更改昵称」子页（settings.mjs 的 openNickEdit）比个人资料页更内层，先认领
+  if (document.body.classList.contains('mb-me-nickedit')) {
+    e.preventDefault();
+    document.dispatchEvent(new CustomEvent('mb-me-nickedit-leave'));
+    return;
+  }
+  // 「我的 › 个人资料」子页（settings.mjs 的 openMeProfile）同 me-set：自己收自己那一格
+  if (document.body.classList.contains('mb-me-profile')) {
+    e.preventDefault();
+    document.dispatchEvent(new CustomEvent('mb-me-profile-leave'));
+    return;
+  }
   if (document.body.classList.contains('mb-detail-open')) {
     e.preventDefault();
     // 同上：流程实例页的收场归 flowpages（回上一层，不是翻出列表）
@@ -202,6 +214,12 @@ document.addEventListener('keydown', (e) => {
       return;
     }
     leaveDetail();
+  }
+  // 通讯录子页（contacts.mjs 的 .mb-cv-sub）：在详情之下、列表之上 —— Esc 先收详情，
+  // 详情关完才轮到它。走事件回去（contacts.mjs 不反向 import 本文件），自己收自己那一格
+  if (document.body.classList.contains('mb-cv-sub')) {
+    e.preventDefault();
+    document.dispatchEvent(new CustomEvent('mb-cv-sub-leave'));
   }
 });
 
@@ -222,6 +240,9 @@ window.addEventListener('popstate', (e) => {
   // 同上：「我的 › 设置」子页（settings.mjs 的 popstate）也自己收自己那一格。
   // 漏了这行，退回「我的」后 ⑦c 会把这格当"退到根页"再压一格井 —— 多按一次才出去。
   if (document.body.classList.contains('mb-me-set')) return;
+  // 「我的 › 更改昵称」/「个人资料」子页同款：自己收自己那一格，别被当根页重压井
+  if (document.body.classList.contains('mb-me-nickedit')) return;
+  if (document.body.classList.contains('mb-me-profile')) return;
   if (isNarrow() && document.body.classList.contains('mb-detail-open')) {
     // 流程实例页（从别处点进来的整页）：收场归 flowpages —— 退回去该是看板/任务卡/会话，
     // 不是这页左栏的「发起记录」（2026-11-08 用户：「点返回还是能跳转到发起记录」）
@@ -229,6 +250,10 @@ window.addEventListener('popstate', (e) => {
     leaveDetail(true);
     return;
   }
+  // 通讯录子页（contacts.mjs 的 .mb-cv-sub）：自己收自己那一格（contacts.mjs 的 popstate
+  // 看落地格的 mbCvSub 标记收画面）。放行必须排在详情检查**之后**：子页上盖着详情时，
+  // 这次 popstate 是退详情那格的，放行会把它整个吞掉、详情关不上（2026-11-17）。
+  if (document.body.classList.contains('mb-cv-sub')) return;
   // 详情没开却退到一格带 mbDetail 标记的 = 上一场会话 / reload 前攒下的幽灵格：
   // 标记就地清掉，免得下次 leaveDetail 把它错当成"自己压的格"又多退一格
   if (e.state?.mbDetail) {
@@ -276,7 +301,7 @@ registerLayer({
   },
 });
 /*
- * 非首页 tab 按返回 = 回工作台（Android / 微信同款：通讯录、会话、我的都不是"根"）。
+ * 非首页 tab 按返回 = 回工作台（Android / 主流手机 App 同款：通讯录、会话、我的都不是"根"）。
  * 不登记的话这些 tab 按返回直接退后台 —— 那不是"退出 App 的自由"，是"回不去了"。
  */
 registerHomeUp('plugins', () => setNav('plugins'));
@@ -316,7 +341,7 @@ $('listBody').addEventListener(
 
 /*
  * 四 tab：工作台 / 通讯录 / 会话 / 我的 —— 映射 setNav('plugins' | 'contacts' | 'messages' | 'me')。
- * 「通讯录」是 2026-11 移动端增量加的第 4 个 tab（手机上找人聊天，跟微信一致）：
+ * 「通讯录」是 2026-11 移动端增量加的第 4 个 tab（手机上找人聊天，主流手机 App 的通行结构）：
  * 高亮同步机制不用改 —— 桌面左栏本就有 data-nav="contacts" 的导航按钮，
  * setNav('contacts') 会把它点亮，syncTabs 按 .nav-btn.active 对齐自然命中新 tab。
  *
@@ -364,13 +389,26 @@ tabbar.querySelectorAll('.mb-tab').forEach((b) => {
     // 「我的 › 设置」子页（settings.mjs）：换栏就是走了，子页视觉态跟折叠态一起收，
     // 它压的那格历史也跟着回收（同 mbDetail 的规矩：只摘类不退格 = 幽灵格）
     const wasMeSet = document.body.classList.contains('mb-me-set');
+    // 「我的 › 个人资料 / 更改昵称」子页（settings.mjs）：换栏同设置子页收法
+    const wasMeProfile = document.body.classList.contains('mb-me-profile');
+    const wasNickEdit = document.body.classList.contains('mb-me-nickedit');
+    // 通讯录子页（contacts.mjs）：换栏就是走了，视觉态跟历史格一起收（同 me-set 规矩）
+    const wasCvSub = document.body.classList.contains('mb-cv-sub');
     document.body.classList.remove('mb-detail-open');
     document.body.classList.remove('mb-chat');
     document.body.classList.remove('mb-me-set');
+    document.body.classList.remove('mb-me-profile');
+    document.body.classList.remove('mb-me-nickedit');
+    document.body.classList.remove('mb-cv-sub');
     // 流程实例页那套「整页」标记也一起收（flowpages.mjs）：换栏就是走了，别再让返回键往看板拽
     document.body.classList.remove('flow-direct-open');
     if (wasOpen && history.state?.mbDetail) history.back();
     if (wasMeSet && history.state?.mbMeSet) history.back();
+    if (wasCvSub && history.state?.mbCvSub) history.back();
+    // 当前在更改昵称页：state 是 mbNickEdit，profile 那格还压在下面 —— 换栏要两格一起退，
+    // 否则回到别的 tab 后历史里还埋着 profile 格，按返回会"没反应"（幽灵格）。
+    if (wasNickEdit && history.state?.mbNickEdit) history.go(-2);
+    else if (wasMeProfile && history.state?.mbMeProfile) history.back();
     // 抽屉是 fixed 覆盖层，换一级页时必须一起关，否则新页面被旧抽屉盖住
     closeDrawer();
     // 手动换栏就不再是"从通讯录进来又返回"那条路了，来源标记作废
@@ -378,6 +416,8 @@ tabbar.querySelectorAll('.mb-tab').forEach((b) => {
     // 点「通讯录」= 明确要回一级页：通知通讯录把手机端的子页（部门/群聊）退掉。
     // 走事件而不是 import，避免 contacts.mjs 反向依赖本文件。
     if (b.dataset.tab === 'contacts') document.dispatchEvent(new CustomEvent('mb-cv-home'));
+    // 点「消息」同理：停在搜索页时点 tab = 退回会话列表（2026-11-17 消息搜索页）
+    if (b.dataset.tab === 'messages') document.dispatchEvent(new CustomEvent('mb-msg-home'));
     setNav(b.dataset.tab);
     syncTabs();
   });
@@ -399,11 +439,22 @@ document.addEventListener('mb-nav', (e) => {
   // 「我的 › 设置」子页（settings.mjs）同款：换栏收子页 + 退它压的那格。
   const wasOpen = document.body.classList.contains('mb-detail-open');
   const wasMeSet = document.body.classList.contains('mb-me-set');
+  const wasMeProfile = document.body.classList.contains('mb-me-profile');
+  const wasNickEdit = document.body.classList.contains('mb-me-nickedit');
+  // 通讯录子页同款：换栏收视觉态 + 退它压的那格历史
+  const wasCvSub = document.body.classList.contains('mb-cv-sub');
   document.body.classList.remove('mb-detail-open');
   document.body.classList.remove('mb-me-set');
+  document.body.classList.remove('mb-me-profile');
+  document.body.classList.remove('mb-me-nickedit');
+  document.body.classList.remove('mb-cv-sub');
   document.body.classList.remove('flow-direct-open');
   if (wasOpen && history.state?.mbDetail) history.back();
   if (wasMeSet && history.state?.mbMeSet) history.back();
+  if (wasCvSub && history.state?.mbCvSub) history.back();
+  // 更改昵称页换栏：把 nickedit + profile 两格一起退，别埋幽灵格（与 tabbar 同款）
+  if (wasNickEdit && history.state?.mbNickEdit) history.go(-2);
+  else if (wasMeProfile && history.state?.mbMeProfile) history.back();
   setNav(nav);
   syncTabs();
 });
@@ -653,7 +704,7 @@ if (
  * 拦截放 capture 阶段并且只拦一次 —— 否则下一次正常点击也会被吃掉。
  */
 if ($('listBody')) {
-  const LONG = 500;     // 触发时长：微信/Telegram 都是 0.5s 左右，更短容易和滚动打架
+  const LONG = 500;     // 触发时长：主流 App 都在 0.5s 左右，更短容易和滚动打架
   const SLOP = 10;      // 手指抖动容忍：超过 10px 就认定用户在滚列表，取消长按
   let timer = 0;
   let startX = 0;

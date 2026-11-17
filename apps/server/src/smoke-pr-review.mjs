@@ -67,10 +67,23 @@ pr.ensurePrReviewTemplate();
 const tpl = store.getWorkflowTemplate(pr.PR_REVIEW_TEMPLATE_ID);
 const nodes = JSON.parse(tpl?.nodes ?? '[]');
 check('模板建出来了', !!tpl);
+check('出厂名是「PR审查」', tpl?.name === 'PR审查', String(tpl?.name));
 check('审阅 + 合并 两个节点', nodes.length === 2, nodes.map((n) => n.name).join('/'));
 check('合并节点是动作节点', nodes.find((n) => n.id === 'n2')?.action === 'pr-merge');
 check('审阅节点**不点名**经办人（派给谁是仓库说了算）', nodes.find((n) => n.id === 'n1')?.personaId === undefined);
 check('幂等：再 ensure 一次还是两份节点', (pr.ensurePrReviewTemplate(), JSON.parse(store.getWorkflowTemplate(pr.PR_REVIEW_TEMPLATE_ID).nodes).length === 2));
+
+// 老库迁移：旧名 + 用户拖过的坐标 → ensure 把名字刷成出厂名，坐标原样留住
+{
+  const old = store.getWorkflowTemplate(pr.PR_REVIEW_TEMPLATE_ID);
+  const oldNodes = JSON.parse(old.nodes).map((n) => (n.id === 'n2' ? { ...n, x: 999, y: 888 } : n));
+  store.upsertWorkflowTemplate({ id: old.id, name: 'PR 审阅与合并', nodes: oldNodes, builtIn: true });
+  pr.ensurePrReviewTemplate();
+  const after = store.getWorkflowTemplate(pr.PR_REVIEW_TEMPLATE_ID);
+  const afterNodes = JSON.parse(after.nodes);
+  check('老库旧名 → 刷成「PR审查」', after.name === 'PR审查', String(after.name));
+  check('刷名不覆盖用户拖过的坐标', afterNodes.find((n) => n.id === 'n2')?.x === 999, JSON.stringify(afterNodes.find((n) => n.id === 'n2')));
+}
 
 console.log('\n⑤ 引擎：动作节点没经办人**不标阻塞**（与人工节点相反）');
 const tplId = 'smoke-action-tpl';

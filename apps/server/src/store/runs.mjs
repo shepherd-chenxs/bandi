@@ -422,10 +422,6 @@ export function reapStaleRuns() {
  * 否则控制面会拿着一个只有那台机器才有的路径，在本机去 spawn。
  */
 
-export function listRunUsageSince(sinceIso) {
-  return db.prepare('SELECT model, usage FROM runs WHERE startedAt >= ?').all(sinceIso);
-}
-
 /** 一次运行的状态。以前调用方是直接伸进 db 查的 —— 外面不该有 SQL */
 
 export function getRunStatus(runId) {

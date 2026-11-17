@@ -10,7 +10,6 @@ import * as auth from '../auth.mjs';
 import * as runs from '../runs.mjs';
 import { dispatchToThread } from '../dispatch.mjs';
 import * as workflows from '../workflows.mjs';
-import { promoteConversationToCard } from '../project-tasks.mjs';
 import { SESSION_BUDGET, perTurnTokens, shouldRotate } from '../session-budget.mjs';
 
 /* --------------------------------------------------- 附件（2026-10-23） */
@@ -111,8 +110,6 @@ export async function handleConversation(req, res, url) {
   const detail = /^\/api\/conversations\/([^/]+)$/.exec(url.pathname);
   const send = /^\/api\/conversations\/([^/]+)\/messages$/.exec(url.pathname);
   const hide = /^\/api\/conversations\/([^/]+)\/hide$/.exec(url.pathname);
-  // 立成任务卡（2026-10-24）：把这场会话最近一轮派的活转正成看板上的真卡
-  const card = /^\/api\/conversations\/([^/]+)\/card$/.exec(url.pathname);
   // 附件：上传（原始二进制，一次一个文件）与回显（GET /api/files/...）
   const upload = /^\/api\/conversations\/([^/]+)\/files$/.exec(url.pathname);
   // 上下文占用环（2026-11-12）：单轮上下文 ÷ 预算上限，给输入区那颗环供数
@@ -248,22 +245,6 @@ export async function handleConversation(req, res, url) {
     if (wantsSandbox) conversation = store.setConversationSandbox(id, body.sandbox ? String(body.sandbox) : null);
     if (wantsModel) conversation = store.setConversationModel(id, body.model ? String(body.model) : null);
     return sendJson(res, 200, { conversation });
-  }
-
-  /*
-   * 立成任务卡（2026-10-24）：把这场会话最近一轮派的活转正成看板上的真卡。
-   * 逻辑都在 project-tasks.promoteConversationToCard（幂等、归属、状态折算看那边的注释）；
-   * 这里只管 404 与把错误翻译成带码的 400。立过卡不算错 —— 原样带回，前端好提示"已经立过"。
-   */
-  if (req.method === 'POST' && card) {
-    const id = decodeURIComponent(card[1]);
-    if (!store.getConversation(id)) return fail(res, 404, 'E2047', '这段会话已经不在了（可能刚被删过）');
-    try {
-      const out = promoteConversationToCard(id);
-      return sendJson(res, out.created ? 201 : 200, out);
-    } catch (e) {
-      return fail(res, e.code === 'E2047' ? 404 : 400, e.code ?? 'E2059', e.message);
-    }
   }
 
   /*

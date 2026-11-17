@@ -55,9 +55,6 @@ export const ROUTES = [
    */
   { id: 'web.version', m: ['GET'], path: p('/api/web-version'), auth: 'public', note: '60 秒版本指纹轮询，零敏感；免鉴权（避免旧页面轮询刷 401 审计）' },
   { id: 'logout', m: ['POST'], path: p('/api/logout'), auth: 'public', note: '登出自检（有票才有的撤）' },
-  { id: 'ai.image-config', m: ['GET', 'PUT'], path: p('/api/ai/image-config'), auth: 'public', note: 'guard 只对 source=loopback 豁免 GET；PUT 永远要身份' },
-  { id: 'ai.image', m: ['POST'], path: p('/api/ai/image'), auth: 'public', note: '回环免令牌（本地模型探测）；network 不豁免' },
-  { id: 'ai.image-test', m: ['POST'], path: p('/api/ai/image-test'), auth: 'public', note: '同上' },
 
   /* ------------------------------------------------------------ 本机接口 */
   // auth:'local' = handler 里 authorizeLocal() 说了算（§8.5 矩阵 / 姊妹文档）；
@@ -128,7 +125,6 @@ export const ROUTES = [
   { id: 'conv.update', m: ['PUT'], path: p('/api/conversations', id1), auth: 'session' },
   { id: 'conv.delete', m: ['DELETE'], path: p('/api/conversations', id1), auth: 'session' },
   { id: 'conv.hide', m: ['POST'], path: p('/api/conversations', id1, 'hide'), auth: 'session' },
-  { id: 'conv.card', m: ['POST'], path: p('/api/conversations', id1, 'card'), auth: 'session' },
   { id: 'conv.files', m: ['POST'], path: p('/api/conversations', id1, 'files'), auth: 'session' },
   { id: 'files.get', m: ['GET'], path: p('/api/files', id1, id1), auth: 'session' },
   { id: 'persona.create', m: ['POST'], path: p('/api/personas'), auth: 'session' },
@@ -180,8 +176,6 @@ export const ROUTES = [
   { id: 'connector.create', m: ['POST'], path: p('/api/connectors'), auth: 'session', noPanel: true },
   { id: 'connector.one', m: ['PUT', 'PATCH', 'DELETE'], path: p('/api/connectors', id1), auth: 'session', noPanel: true },
   { id: 'connector.probe', m: ['POST'], path: p('/api/connectors', id1, 'probe'), auth: 'session' },
-  { id: 'quota.read', m: ['GET'], path: p('/api/quota'), auth: 'session' },
-  { id: 'quota.write', m: ['POST'], path: p('/api/quota'), auth: 'session', noPanel: true, note: '每模型限额就是路由约束' },
   { id: 'git.status', m: ['GET'], path: p('/api/git/status'), auth: 'session' },
   { id: 'git.whoami', m: ['GET'], path: p('/api/git/whoami'), auth: 'session' },
   { id: 'git.available', m: ['GET'], path: p('/api/git/available'), auth: 'session' },
@@ -245,8 +239,7 @@ export const ROUTES = [
   { id: 'devices.one', m: ['GET', 'DELETE'], path: p('/api/devices', id1), auth: 'session', noPanel: true },
   { id: 'devices.rename', m: ['POST'], path: p('/api/devices', id1, 'rename'), auth: 'session', noPanel: true },
   { id: 'devices.runtimes', m: ['POST'], path: p('/api/devices', id1, 'runtimes'), auth: 'session', noPanel: true },
-  { id: 'devices.runtime.one', m: ['PUT', 'PATCH', 'DELETE'], path: p('/api/devices', id1, 'runtimes', id1), auth: 'session', noPanel: true },
-  { id: 'devices.runtime.probe', m: ['POST'], path: p('/api/devices', id1, 'runtimes', id1, 'probe'), auth: 'session' },
+  { id: 'devices.runtime.one', m: ['PATCH'], path: p('/api/devices', id1, 'runtimes', id1), auth: 'session', noPanel: true },
   { id: 'runtime.detect', m: ['GET'], path: p('/api/runtimes/detect'), auth: 'session' },
   { id: 'runtime.test', m: ['POST'], path: p('/api/runtimes/test'), auth: 'session' },
   { id: 'runtime.families', m: ['GET'], path: p('/api/runtime-families'), auth: 'session' },
@@ -296,7 +289,7 @@ export function isRegistered(pathname, method) {
  *     auth:'local'、一条给登录用户的 session 条目），判"这个**已认证**的身份
  *     能不能过"该看 session 那条；
  *   · **方法必须命中** —— 同一路径不同方法待遇不同（`GET /api/prefs` 与
- *     `PUT /api/prefs` 不是一回事；`GET /api/quota` 只读、`POST /api/quota`
+ *     `PUT /api/prefs` 不是一回事；`GET /api/lan` 只读、`POST /api/lan`
  *     是 noPanel 的管理动作）。带 method 时**只认方法命中的条目**，找不到就
  *     返回 null（v2.8 修正：旧版回落到同路径其它方法的条目，未登记的方法会
  *     借别的条目的宽松标放行 —— 方法闸等于没有）。

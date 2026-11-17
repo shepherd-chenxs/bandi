@@ -74,7 +74,7 @@ export async function load(opts = {}) {
   S.skillsRoot = sk.skillsRoot;
   S.hiddenConversations = s.hiddenConversations ?? [];
   S.groups = s.groups ?? [];
-  // 已发布的流程（建任务时「执行方式 = 由流程执行」的下拉要用；工作台不再摆它们的磁贴）。
+  // 已发布的流程（建任务「由流程执行」的下拉 + 工作台「自动化」区的流程磁贴都要用）。
   // 拿不到就当没有，别让整个 load 挂掉
   try {
     S.flowPublished = (await api('/api/workflows')).published ?? [];
@@ -270,7 +270,7 @@ export function setNav(nav, opts = {}) {
   else if (nav === 'experts') openExperts().catch((e) => toast(e.message, 'error'));
   else if (nav === 'org') openOrg(S.orgSection);
   else if (nav === 'inbox') openInbox();
-  // 通讯录（2026-10-24 对齐微信）：切过来先落在空态上，不残留上一段聊天 ——
+  // 通讯录（2026-10-24 对齐主流通讯录 App）：切过来先落在空态上，不残留上一段聊天 ——
   // 点左栏的群/员工才进详情。聊天归消息页，这两个模块的主区不共用了。
   else if (nav === 'contacts') showContactsHome();
   else showView('chat');

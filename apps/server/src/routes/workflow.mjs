@@ -226,7 +226,7 @@ export async function handleWorkflow(req, res, url) {
         if (task?.agentRunId) runs.requestStop(task.agentRunId);
       }
       const r =
-        act[2] === 'start' ? workflows.startCurrentStep(id, { force: body.force === true })
+        act[2] === 'start' ? workflows.startCurrentStep(id)
         : act[2] === 'decide' ? workflows.decide(id, body.decision)
         : act[2] === 'retry' ? workflows.retryCurrentStep(id)
         : act[2] === 'assign' ? workflows.assignCurrentStep(id, body.personaId)

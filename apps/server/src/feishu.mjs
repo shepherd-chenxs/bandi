@@ -23,7 +23,7 @@
  *   · 断线重连带随机抖动、按服务端下发的次数上限。
  * WebSocket 客户端用 Node 22 自带的全局 WebSocket。
  *
- * 存储口径（对齐 imagegen / git-token）：存数据目录 `feishu-apps.json`（0600 尽力），
+ * 存储口径（对齐 git-token）：存数据目录 `feishu-apps.json`（0600 尽力），
  * 结构 `{ [personaId]: { appId, appSecret, enabled, allowOpenIds } }` —— **不进库、不进日志、
  * 不回显**，接口只回掩码；保存时 secret 留空 = 保留原值。
  * 旧的单通道 `feishu.json` 启动时迁移一次（落到 p2pPersonaId 指向的员工，没人就落系统管家），
@@ -152,7 +152,7 @@ export function migrateLegacyConfig() {
 }
 
 /**
- * 保存一个员工的配置。appSecret 语义与 imagegen 一致：**键存在且非空才覆盖**
+ * 保存一个员工的配置。appSecret 语义：**键存在且非空才覆盖**
  * （留空 = 保留原值），改白名单不用重贴 secret。allowOpenIds 收字符串数组或
  * 逗号/空白分隔的一段。员工必须存在（E2067）。
  */

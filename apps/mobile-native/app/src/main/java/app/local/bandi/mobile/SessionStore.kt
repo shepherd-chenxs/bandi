@@ -14,6 +14,7 @@ object SessionStore {
     private const val K_HUB = "hub.base"
     private const val K_SESSION = "hub.session"
     private const val K_ACCOUNT = "hub.account"
+    private const val K_THEME_DARK = "panel.theme.dark"
 
     const val DEFAULT_HUB = "https://hub.yuancang.space"
 
@@ -45,6 +46,24 @@ object SessionStore {
             if (account == null) remove(K_ACCOUNT) else putString(K_ACCOUNT, account)
             apply()
         }
+    }
+
+    /**
+     * 面板主题（已解析成深 / 浅）：true=深、false=浅、null=面板还没报过（新装壳）→ 跟系统。
+     *
+     * 面板 applyTheme 时把解析结果报给壳（BandiShell.setTheme），存这里 —— 原生屏
+     * （登录 / 设备列表）按它铺，跟面板不再一深一浅两截。存的是**解析后的布尔**而不是
+     * light/dark/system 三态：「跟系统」那一档网页已经用 prefers-color-scheme 解析完了，
+     * 壳再猜一遍系统答案只会猜错。主题不是会话数据，退出登录不清（跟中枢地址同等待遇）。
+     */
+    fun themeDark(ctx: Context): Boolean? = when (prefs(ctx).getString(K_THEME_DARK, null)) {
+        "dark" -> true
+        "light" -> false
+        else -> null
+    }
+
+    fun setThemeDark(ctx: Context, dark: Boolean) {
+        prefs(ctx).edit().putString(K_THEME_DARK, if (dark) "dark" else "light").apply()
     }
 
     /** 退出登录：只清会话与账号名（中枢地址留着，下次登录少打一次） */

@@ -21,8 +21,12 @@
 package app.local.bandi.mobile
 
 import android.annotation.SuppressLint
+import android.app.Dialog
+import android.content.res.Configuration
+import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.view.ContextThemeWrapper
 import android.view.View
 import android.webkit.CookieManager
 import android.webkit.WebView
@@ -42,6 +46,22 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
     private val pool = Executors.newFixedThreadPool(6)
+
+    /*
+     * 壳跟面板的主题（2026-11-17，docs/形态决策.md §⑩）。
+     *
+     *   panelDark     面板报来的已解析主题（true=深 / false=浅 / null=还没报过 → 跟系统），
+     *                 内存缓存 SessionStore 那份，onCreate 读一次、面板报话时更新；
+     *   inflatedDark  原生屏此刻是按哪一档铺的 —— 面板报话只存不铺（报话时面板正露着），
+     *                 重铺推迟到下一次 showLogin / showDevices（ensureThemeLayout），
+     *                 两个值对不上才整层重铺；
+     *   themeCtx      带主题配置的 Context：原生屏的视图与程序化取色都从它解析 ——
+     *                 主题 attr 只认 Activity 的系统深浅，壳要跟面板（面板深、系统浅
+     *                 完全合法），所以单独造一份配置，见 buildBinding。
+     */
+    private var panelDark: Boolean? = null
+    private var inflatedDark = false
+    private lateinit var themeCtx: ContextThemeWrapper
 
     /** 名册（原样解析）与探活结果：reach[id] = 探通的 origin */
     private data class DeviceRow(
@@ -129,11 +149,52 @@ class MainActivity : AppCompatActivity() {
     private var panelErrorShown = false
     private var panelErrorThisPage = false
 
+    /** 返回键回调：主题重铺会重挂，存引用才能先摘旧的（见 setupBackHandler） */
+    private var backCallback: androidx.activity.OnBackPressedCallback? = null
+
+    /*
+     * 面板里的 <input type=file>（2026-11-17 用户实报「点上传文件没反应」）。
+     *
+     * Android WebView 的文件选择**必须壳来接**：不实现
+     * WebChromeClient.onShowFileChooser() 时，网页里点文件入口什么都不会发生
+     * （WebView 不会自己弹文件管理器）——原生壳一直没挂 WebChromeClient，
+     * 所以浏览器里能用的上传，进壳就哑了。
+     *
+     * 结果交回网页回调前要做 MULTI 收拢：EXTRA_ALLOW_MULTIPLE 时系统选择器
+     * 把多选放在 ClipData 里，单选才走 data.getData()。
+     */
+    private var fileChooserCallback: android.webkit.ValueCallback<Array<android.net.Uri>>? = null
+    private val fileChooserLauncher =
+        registerForActivityResult(
+            androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult(),
+        ) { result ->
+            val cb = fileChooserCallback
+            fileChooserCallback = null
+            if (cb == null) return@registerForActivityResult
+            val uris = ArrayList<android.net.Uri>()
+            val data = result.data
+            if (data?.clipData != null) {
+                val clip = data.clipData!!
+                for (i in 0 until clip.itemCount) uris.add(clip.getItemAt(i).uri)
+            } else if (data?.data != null) {
+                uris.add(data.data!!)
+            }
+            cb.onReceiveValue(uris.toTypedArray())
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
-        binding = ActivityMainBinding.inflate(layoutInflater)
-        setContentView(binding.root)
+
+        /*
+         * 先定主题再铺视图（2026-11-17）：面板报过主题就按面板的来（存着的），没报过
+         * 跟系统。视图、取色、窗口背景全从同一份配置解析 —— 登录 / 设备列表跟面板
+         * 一深一浅两截的问题从根上没了。
+         */
+        panelDark = SessionStore.themeDark(this)
+        inflatedDark = darkNow()
+        buildBinding()
+        paintWindowBackground()
 
         /*
          * 关掉系统给导航栏加的那层"对比度保护"scrim（2026-11-12）。
@@ -148,31 +209,7 @@ class MainActivity : AppCompatActivity() {
          * 不靠系统这层保护。
          */
         window.isNavigationBarContrastEnforced = false
-
-        /*
-         * Android 15+（本机是 Android 16）强制 edge-to-edge：WebView 的内容会画到
-         * 状态栏和导航栏下面，而 Android WebView 的 env(safe-area-inset-*) 恒为 0，
-         * 网页自己的安全区 padding 不起作用 —— 面板里底部固定的按钮（抽屉 / 弹窗）
-         * 会被系统导航栏挡住（用户实报）。修法与 Tauri 壳同款：给根内容视图补上
-         * 「状态栏 + 刘海」的顶部 padding，「导航栏」与「键盘」取较大者的底部 padding
-         * （键盘弹起时导航栏 inset 变 0，取 max 才不会一开一关抖一下）—— WebView
-         * 整个落在安全区里，网页以为的高度就是真实可用高度。
-         */
-        val content = findViewById<View>(android.R.id.content)
-        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(content) { view, insets ->
-            val top = insets.getInsets(
-                androidx.core.view.WindowInsetsCompat.Type.statusBars()
-                    or androidx.core.view.WindowInsetsCompat.Type.displayCutout(),
-            ).top
-            val navBottom = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.navigationBars()).bottom
-            val imeBottom = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.ime()).bottom
-            view.setPadding(0, top, 0, maxOf(navBottom, imeBottom))
-            navInset = navBottom
-            applySysBarStrip()
-            statusInset = top
-            applyTopBarStrip()
-            insets
-        }
+        attachInsets()
 
         setupWebView()
         setupBackHandler()
@@ -246,6 +283,134 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
     }
 
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        /*
+         * 「跟系统」档（面板还没报过主题）下系统深浅翻转 → 原生屏按新档重铺一次。
+         * 面板报过主题之后系统翻转不归壳管 —— 壳认面板那份，面板下次 boot 会重报。
+         * （manifest 声明了 configChanges=uiMode，系统翻转走这里而不是重建 Activity。）
+         */
+        if (panelDark == null && binding.viewPanel.visibility != View.VISIBLE) {
+            ensureThemeLayout()
+        }
+    }
+
+    /* ------------------------------------------------------ 主题（壳跟面板） */
+
+    /** 面板报过主题就按面板的，没报过跟系统 */
+    private fun darkNow(): Boolean = panelDark ?: systemDark()
+
+    private fun systemDark(): Boolean =
+        (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+            Configuration.UI_MODE_NIGHT_YES
+
+    /** 程序化取色也走 themeCtx：跟视图同一份配置，浅深不会各说各话 */
+    private fun themeColor(res: Int): Int = ContextCompat.getColor(themeCtx, res)
+
+    private fun lumaOf(c: Int): Double =
+        (0.299 * android.graphics.Color.red(c) +
+            0.587 * android.graphics.Color.green(c) +
+            0.114 * android.graphics.Color.blue(c)) / 255.0
+
+    /**
+     * 面板报主题进来（BandiShell.setTheme —— 面板每次 boot 与用户换主题时都报）。
+     *
+     * 只存不铺：报话的时候面板正露着，WebView 里已经是新主题；原生屏等下一次
+     * showLogin / showDevices 时按新主题重铺（ensureThemeLayout）—— 那些时刻面板
+     * 不在前台，重铺（会重建 WebView）不丢任何页面状态。
+     */
+    fun applyPanelTheme(dark: Boolean) {
+        if (panelDark == dark) return
+        panelDark = dark
+        SessionStore.setThemeDark(this, dark)
+    }
+
+    /** 原生屏要露脸了：主题翻过档就整层重铺，没翻就地不动（不重建任何东西） */
+    private fun ensureThemeLayout() {
+        if (inflatedDark == darkNow()) return
+        relayoutNative()
+    }
+
+    /**
+     * 按当前主题整层重铺：视图、取色、WebView、返回键、insets 全部重建。
+     *
+     * 为什么重建而不是原地改色：布局里全是 ?attr 主题属性，inflated 那一刻就解析完了，
+     * 原地改色要逐个控件补一遍，TextInputLayout 这类复合控件根本补不齐 —— 重建便宜
+     * 且确定。代价是 WebView 重建（老页面状态丢），所以只在原生屏露脸的流程里走
+     * （调用方保证：showLogin / showDevices 开头）；从面板进设备列表撞上翻档时，
+     * backToPanel 会检出空 WebView 静默重签票原样进回去。
+     */
+    private fun relayoutNative() {
+        // 旧 WebView 先安静退场：about:blank 停掉页面脚本，detach 后 destroy（防泄漏）
+        val oldWv = binding.panelWebView
+        oldWv.loadUrl("about:blank")
+        (oldWv.parent as? android.view.ViewGroup)?.removeView(oldWv)
+        oldWv.destroy()
+
+        inflatedDark = darkNow()
+        buildBinding()
+        paintWindowBackground()
+        setupWebView()
+        setupBackHandler()
+        setupLoginView()
+        setupDevicesView()
+        setupOfflineActions()
+        attachInsets()
+
+        // 兜底层的显示状态跟着视图重建归零（下次真失败时 onReceivedError 会再盖）
+        panelErrorShown = false
+        panelErrorThisPage = false
+        if (connState != ConnState.HIDDEN) connState = ConnState.HIDDEN
+    }
+
+    /** 三个视图全按当前主题的配置铺（themeCtx 携带深 / 浅，视图里的 ?attr 跟着解析） */
+    private fun buildBinding() {
+        val conf = Configuration(resources.configuration)
+        conf.uiMode = (conf.uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or
+            (if (darkNow()) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO)
+        themeCtx = ContextThemeWrapper(this, R.style.Theme_Bandi).apply {
+            applyOverrideConfiguration(conf)
+        }
+        binding = ActivityMainBinding.inflate(layoutInflater.cloneInContext(themeCtx))
+        setContentView(binding.root)
+    }
+
+    /** 窗口背景跟页面底色 —— 主题 attr 只认系统深浅，壳跟面板，这里程序化盖一层 */
+    private fun paintWindowBackground() {
+        window.setBackgroundDrawable(ColorDrawable(themeColor(R.color.bandi_page)))
+    }
+
+    /**
+     * 安全区 padding 的挂接（Android 15+ 强制 edge-to-edge）：WebView 的内容会画到
+     * 状态栏和导航栏下面，而 Android WebView 的 env(safe-area-inset-*) 恒为 0，
+     * 网页自己的安全区 padding 不起作用 —— 面板里底部固定的按钮（抽屉 / 弹窗）
+     * 会被系统导航栏挡住（用户实报）。修法与 Tauri 壳同款：给根内容视图补上
+     * 「状态栏 + 刘海」的顶部 padding，「导航栏」与「键盘」取较大者的底部 padding
+     * （键盘弹起时导航栏 inset 变 0，取 max 才不会一开一关抖一下）—— WebView
+     * 整个落在安全区里，网页以为的高度就是真实可用高度。
+     *
+     * 主题重铺会换掉整个 content 视图，监听要在新的 content 上重挂，并主动
+     * requestApplyInsets 补一次分发 —— 初始 inset 事件早发过了，不主动要就不会再来。
+     */
+    private fun attachInsets() {
+        val content = findViewById<View>(android.R.id.content)
+        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(content) { view, insets ->
+            val top = insets.getInsets(
+                androidx.core.view.WindowInsetsCompat.Type.statusBars()
+                    or androidx.core.view.WindowInsetsCompat.Type.displayCutout(),
+            ).top
+            val navBottom = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.navigationBars()).bottom
+            val imeBottom = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.ime()).bottom
+            view.setPadding(0, top, 0, maxOf(navBottom, imeBottom))
+            navInset = navBottom
+            applySysBarStrip()
+            statusInset = top
+            applyTopBarStrip()
+            insets
+        }
+        androidx.core.view.ViewCompat.requestApplyInsets(content)
+    }
+
     /* ------------------------------------------------------------ 视图切换 */
 
     /*
@@ -288,35 +453,32 @@ class MainActivity : AppCompatActivity() {
         if (c == null) { resetSystemBarColor(); return }   // 空串 = 当前页没有底栏，收起
         sysBarColor = c
         applySysBarStrip()
-        val luma = (0.299 * android.graphics.Color.red(c) +
-            0.587 * android.graphics.Color.green(c) +
-            0.114 * android.graphics.Color.blue(c)) / 255.0
         androidx.core.view.WindowInsetsControllerCompat(window, window.decorView)
-            .isAppearanceLightNavigationBars = luma > 0.6
+            .isAppearanceLightNavigationBars = lumaOf(c) > 0.6
     }
 
     /** 网页报空串时用：页面自己铺到底（详情 / 聊天），别在底下垫一条灰 */
     fun resetSystemBarColor() {
         sysBarColor = null
         sysBarStrip?.visibility = View.GONE
-        val night = (resources.configuration.uiMode and
-            android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
-            android.content.res.Configuration.UI_MODE_NIGHT_YES
+        // 页面此刻是深是浅以面板报来的主题为准（darkNow），不是系统配置
         androidx.core.view.WindowInsetsControllerCompat(window, window.decorView)
-            .isAppearanceLightNavigationBars = !night
+            .isAppearanceLightNavigationBars = !darkNow()
     }
 
     /** 原生页用：导航键区 + 状态栏都刷成页面底色，跟内容连成一片 */
     private fun paintSystemBarPage() {
-        val page = androidx.core.content.ContextCompat.getColor(this, R.color.bandi_page)
+        val page = themeColor(R.color.bandi_page)
         sysBarColor = page
         applySysBarStrip()
-        androidx.core.view.WindowInsetsControllerCompat(window, window.decorView)
-            .isAppearanceLightNavigationBars = true
         topBarColor = page
         applyTopBarStrip()
+        // 导航键 / 状态栏图标的明暗跟页面底色的亮度走（深色页面配浅色图标），不再写死浅色档
+        val light = lumaOf(page) > 0.6
         androidx.core.view.WindowInsetsControllerCompat(window, window.decorView)
-            .isAppearanceLightStatusBars = true
+            .isAppearanceLightNavigationBars = light
+        androidx.core.view.WindowInsetsControllerCompat(window, window.decorView)
+            .isAppearanceLightStatusBars = light
     }
 
     /*
@@ -359,11 +521,8 @@ class MainActivity : AppCompatActivity() {
         if (c == null) { topBarColor = null; topBarStrip?.visibility = View.GONE; return }
         topBarColor = c
         applyTopBarStrip()
-        val luma = (0.299 * android.graphics.Color.red(c) +
-            0.587 * android.graphics.Color.green(c) +
-            0.114 * android.graphics.Color.blue(c)) / 255.0
         androidx.core.view.WindowInsetsControllerCompat(window, window.decorView)
-            .isAppearanceLightStatusBars = luma > 0.6
+            .isAppearanceLightStatusBars = lumaOf(c) > 0.6
     }
 
     private fun applyTopBarStrip() {
@@ -390,6 +549,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showLogin() {
+        ensureThemeLayout()   // 主题翻过档就整层重铺（在摆可见性之前）
         paintSystemBarPage()
         binding.viewLogin.visibility = View.VISIBLE
         binding.viewDevices.visibility = View.GONE
@@ -411,6 +571,7 @@ class MainActivity : AppCompatActivity() {
      * 保留右上角退出 —— 这时退出是唯一能换账号的出口。
      */
     fun showDevices(fromPanel: Boolean = false) {
+        ensureThemeLayout()   // 主题翻过档就整层重铺（在摆可见性之前）
         paintSystemBarPage()
         devicesFromPanel = fromPanel
         binding.viewLogin.visibility = View.GONE
@@ -442,6 +603,15 @@ class MainActivity : AppCompatActivity() {
 
     /** 设备列表的「返回」：回面板。WebView 里的页面一直没卸载，切回来即原样（不重载） */
     private fun backToPanel() {
+        /*
+         * 主题翻档重铺过的话 WebView 是新建的空壳（relayoutNative），老页面没了 ——
+         * 静默重签票原样进回去，代价只是滚动位置和没发出去的输入。只有「面板开着时
+         * 用户改了主题、再点『当前设备』」这一个 rare 路径会走到（2026-11-17）。
+         */
+        if (binding.panelWebView.url.isNullOrEmpty() && currentDeviceId != null) {
+            reenter()
+            return
+        }
         showPanel(lastPanelOrigin)
     }
 
@@ -567,8 +737,8 @@ class MainActivity : AppCompatActivity() {
         if (recovered) {
             binding.viewOffline.visibility = View.GONE
             binding.connBar.visibility = View.VISIBLE
-            binding.connBar.setBackgroundColor(0xFFE7F6EA.toInt())
-            binding.connText.setTextColor(0xFF1F6E33.toInt())
+            binding.connBar.setBackgroundColor(themeColor(R.color.bandi_conn_ok_bg))
+            binding.connText.setTextColor(themeColor(R.color.bandi_conn_ok_fg))
             binding.connText.text = "已恢复连接"
             binding.connAction.visibility = View.GONE
         } else {
@@ -659,6 +829,13 @@ class MainActivity : AppCompatActivity() {
         binding.devSub.text = "正在读取名册…"
         binding.deviceList.removeAllViews()
         probed.clear()          // 新一轮探活：整表先回到「检测中」，别把上一轮的结果顶在屏幕上
+        /*
+         * reach 也要跟着清（2026-11-17 实报）：探活失败时 probeDevices 只在
+         * `found != null` 时才写 reach，**不会移除旧值** —— 不清的话，上一轮探通的
+         * 地址会一直留着，机器停掉后点「刷新」照样显示「在线」（且能点进去撞白屏）。
+         * "每轮刷新 = 一切重新探"，这里就是那一轮的起跑线。
+         */
+        reach.clear()
         val round = probeRound.incrementAndGet()
         pool.execute {
             try {
@@ -684,7 +861,7 @@ class MainActivity : AppCompatActivity() {
                 devices = rows
                 runOnUiThread {
                     if (round != probeRound.get()) return@runOnUiThread
-                    binding.devSub.text = if (rows.isEmpty()) "这个账号名下还没有电脑 —— 先在电脑上打开班底，用同一个手机号登录一次" else "点一台进去"
+                    binding.devSub.text = if (rows.isEmpty()) "这个账号名下还没有电脑 —— 先在电脑上打开班底，用同一个手机号登录一次" else "点一台进去 · 长按可删除一台"
                     renderDevices(round)
                     probeDevices(round)
                 }
@@ -739,21 +916,133 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /* ---------------- ③ 删设备（2026-11-17 手机端删设备） */
+
+    /**
+     * 长按卡片 → 自画确认框（2026-11-17 用户发来面板「退出登录」弹窗截图：「参考这个」）。
+     *
+     * 规格逐条抄网页版 `#askDlg.ask-big`（style.css，当初就是同一张参考图定的）：
+     * 宽 = 屏宽-40（≤400dp）、圆角 20、标题居中 18sp/加粗、正文居中灰 15sp、
+     * 按钮等宽铺满高 46dp 圆角 10dp、取消透明细边、危险动作红底白字
+     * （色号对齐全站 --bad = bandi_danger，不另起色号）。
+     * Material3 默认弹窗是"文本按钮 + 左对齐"形态，与参考图对不上，所以整张自画。
+     */
+    private fun confirmRemoveDevice(d: DeviceRow) {
+        val m = resources.displayMetrics
+        fun dp(v: Int) = (v * m.density).toInt()
+
+        val card = LinearLayout(themeCtx).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(26), dp(26), dp(18), dp(18))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(20).toFloat()
+                setColor(themeColor(R.color.bandi_card))
+                setStroke(dp(1), themeColor(R.color.bandi_stroke))
+            }
+        }
+
+        val title = TextView(themeCtx).apply {
+            text = "删掉这台电脑？"
+            textSize = 18f
+            setTextColor(themeColor(R.color.bandi_text))
+            gravity = android.view.Gravity.CENTER
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+        }
+        val body = TextView(themeCtx).apply {
+            text = "是否确认删除「${d.name}」？"
+            textSize = 15f
+            setTextColor(themeColor(R.color.bandi_text_dim))
+            gravity = android.view.Gravity.CENTER
+            setLineSpacing(0f, 1.6f)
+        }
+        card.addView(title, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        card.addView(body, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT,
+        ).apply { topMargin = dp(10) })
+
+        val acts = LinearLayout(themeCtx).apply { setPadding(0, dp(22), 0, 0) }
+        val stroke = GradientDrawable().apply {
+            cornerRadius = dp(10).toFloat()
+            setColor(android.graphics.Color.TRANSPARENT)
+            setStroke(dp(1), themeColor(R.color.bandi_stroke))
+        }
+        val danger = GradientDrawable().apply {
+            cornerRadius = dp(10).toFloat()
+            setColor(themeColor(R.color.bandi_danger))
+        }
+        fun pill(text: String, bg: android.graphics.drawable.Drawable, fg: Int, onClick: () -> Unit) =
+            Button(themeCtx).apply {
+                this.text = text
+                textSize = 16f
+                setTextColor(themeColor(fg))
+                isAllCaps = false
+                background = bg
+                setOnClickListener { onClick() }
+            }
+        acts.addView(pill("取消", stroke, R.color.bandi_text) { dlg?.dismiss() },
+            LinearLayout.LayoutParams(0, dp(46), 1f).apply { marginEnd = dp(12) })
+        acts.addView(pill("删掉", danger, R.color.bandi_on_danger) {
+            dlg?.dismiss()
+            removeDevice(d)
+        }, LinearLayout.LayoutParams(0, dp(46), 1f))
+        card.addView(acts, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+
+        val dialog = Dialog(this).apply {
+            requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
+            setContentView(card)
+            window?.apply {
+                setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
+                setLayout(minOf(m.widthPixels - dp(40), dp(400)), android.view.WindowManager.LayoutParams.WRAP_CONTENT)
+            }
+        }
+        dlg = dialog
+        dialog.show()
+    }
+
+    /** 当前打开的删除确认框（取消/删掉都要收它；一次最多一张） */
+    private var dlg: Dialog? = null
+
+    /** 确认后调中枢 DELETE，成了就重载名册（探活随 loadDevices 自带，reach/probed 已清）。 */
+    private fun removeDevice(d: DeviceRow) {
+        val session = SessionStore.session(this) ?: run {
+            showLogin()
+            return
+        }
+        val hub = SessionStore.hub(this)
+        pool.execute {
+            try {
+                HubApi.remove(hub, session, d.id)
+                runOnUiThread {
+                    Toast.makeText(this, "已删掉 ${d.name}", Toast.LENGTH_SHORT).show()
+                    loadDevices()
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    Toast.makeText(this, e.message ?: "删除失败", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
     private fun deviceCard(d: DeviceRow, reachedOrigin: String?, probing: Boolean): View {
-        val card = com.google.android.material.card.MaterialCardView(this)
+        // 视图从 themeCtx 建：主题 attr / 资源色按当前档解析（浅深两套，见 colors.xml）
+        val card = com.google.android.material.card.MaterialCardView(themeCtx)
         card.layoutParams = LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT,
         ).apply { setMargins(0, 8, 0, 8) }
         /*
-         * 卡片**自己指定白底 + 1dp 发丝边**，不再吃主题的 colorSurface（2026-11-07 实机
+         * 卡片**自己指定底色 + 1dp 发丝边**，不再吃主题的 colorSurface（2026-11-07 实机
          * 装机发现）：Material3 的 colorSurface 与窗口底色是同一个值（本机实测都是
          * #FEF7FF），卡片和页面糊成一片，只剩 1dp elevation 的阴影 —— 换台机器就完全
-         * 看不见"这是一个能点的卡"。白底 + #14000000 的边在任何浅色板上都立得住，
-         * 也和本壳写死的 primary_text_light 正文色是同一套假设（壳本来就只做了浅色）。
+         * 看不见"这是一个能点的卡"。浅色白卡 + 8% 黑边、深色 #111214 卡 + #202225 边，
+         * 都在页面底上立得住（色值对齐网页 --panel/--line，见 colors.xml；
+         * 2026-11-17 起浅深两档，壳跟面板主题）。
          */
-        card.setCardBackgroundColor(0xFFFFFFFF.toInt())
+        card.setCardBackgroundColor(themeColor(R.color.bandi_card))
         card.strokeWidth = dp(1)
-        card.strokeColor = 0x14000000
+        card.strokeColor = themeColor(R.color.bandi_stroke)
         card.cardElevation = dp(1).toFloat()
         card.radius = resources.displayMetrics.density * 16
         /*
@@ -769,31 +1058,39 @@ class MainActivity : AppCompatActivity() {
          * 一起淡了，一排机器看着像整页失效。状态已经由右边的胶囊说清楚了（离线/检测中），
          * 卡片保持原样反而更像一张"清单"，而不是一排坏掉的按钮。
          *   1. isClickable / isFocusable = false —— 水波纹和按下态没了，点了确实没反应；
-         *   2. isEnabled = false —— 只给无障碍用：TalkBack 会报"已停用"，不再承诺可操作。
+         *   2. ~~isEnabled = false~~（2026-11-17 实报作废）：View 源码 onTouchEvent 对
+         *      DISABLED 状态**提前 return**，连长按回调都不排程 —— 离线卡就长按不出
+         *      删除框了。"暂不可进"的语义由 contentDescription 文字承担即可。
          * 检测中也走这一支：它此刻确实进不去，等结果回来重绘时才变成可点。
          */
         val online = !probing && reachedOrigin != null
         card.isClickable = online
         card.isFocusable = online
-        card.isEnabled = online
         if (online) {
             card.setOnClickListener { enterDevice(d.id) }
         } else {
             card.contentDescription = "${d.name}，${if (probing) "正在检测" else "离线"}，暂时无法进入"
         }
+        /*
+         * 长按删设备（2026-11-17 手机端删设备）。卡片视觉**不加删除钮**：名册是清单
+         * 不是操作台，右上加图标会挤掉状态章的呼吸位；长按是 Android 清单删除的
+         * 通行手势（桌面上"右键 → 删除"的同位操作），发现性由页面副标题一句话承担。
+         * 在线/离线/检测中都允许长按 —— 删的是中枢名册里的记录，与这台此刻通不通无关。
+         */
+        card.setOnLongClickListener { confirmRemoveDevice(d); true }
 
-        val box = LinearLayout(this)
+        val box = LinearLayout(themeCtx)
         box.orientation = LinearLayout.VERTICAL
         box.setPadding(40, 28, 40, 28)
 
-        val nameLine = LinearLayout(this)
+        val nameLine = LinearLayout(themeCtx)
         nameLine.orientation = LinearLayout.HORIZONTAL
         nameLine.gravity = android.view.Gravity.CENTER_VERTICAL
 
-        val name = TextView(this)
+        val name = TextView(themeCtx)
         name.text = d.name
         name.textSize = 17f
-        name.setTextColor(ContextCompat.getColor(this, android.R.color.primary_text_light))
+        name.setTextColor(themeColor(R.color.bandi_text))
         name.layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
 
         /*
@@ -813,17 +1110,27 @@ class MainActivity : AppCompatActivity() {
              * 检测中**不画胶囊**（底色透明）：胶囊＝"已经有结论"，这是这套状态语言里
              * 唯一的形状规则。刚进页面时整表都是两三百毫秒的检测中，一堆灰胶囊反而比
              * 一个素字更吵；等结果回来，它才"长出"底色，状态变化也更显眼。
+             * 色值浅深两档在 colors.xml（bandi_chip_*），这里只管取。
              */
-            probing -> statusChip("检测中", 0xFF64748B.toInt(), 0x00000000, 0xFFCBD5E1.toInt())
-            reachedOrigin != null -> statusChip("在线", 0xFF15803D.toInt(), 0xFFECFDF5.toInt(), 0xFF22C55E.toInt())
-            else -> statusChip("离线", 0xFF64748B.toInt(), 0xFFF1F5F9.toInt(), 0xFF94A3B8.toInt())
+            probing -> statusChip(
+                "检测中", themeColor(R.color.bandi_chip_wait_fg), 0x00000000,
+                themeColor(R.color.bandi_chip_wait_dot),
+            )
+            reachedOrigin != null -> statusChip(
+                "在线", themeColor(R.color.bandi_chip_ok_fg),
+                themeColor(R.color.bandi_chip_ok_bg), themeColor(R.color.bandi_chip_ok_dot),
+            )
+            else -> statusChip(
+                "离线", themeColor(R.color.bandi_chip_off_fg),
+                themeColor(R.color.bandi_chip_off_bg), themeColor(R.color.bandi_chip_off_dot),
+            )
         }
         nameLine.addView(name)
         nameLine.addView(badge)
 
-        val meta = TextView(this)
+        val meta = TextView(themeCtx)
         meta.textSize = 13f
-        meta.setTextColor(ContextCompat.getColor(this, android.R.color.secondary_text_light))
+        meta.setTextColor(themeColor(R.color.bandi_text_dim))
         meta.text = reachedOrigin ?: run {
             val ver = if (d.version.isNotEmpty()) "v${d.version}" else ""
             listOf(d.platform, ver).filter { it.isNotEmpty() }.joinToString(" · ").ifEmpty { "—" }
@@ -848,7 +1155,7 @@ class MainActivity : AppCompatActivity() {
      * 这样 intrinsic size 就是我们要的直径，不用额外 setBounds。
      */
     private fun statusChip(label: String, textColor: Int, bgColor: Int, dotColor: Int): TextView {
-        val tv = TextView(this)
+        val tv = TextView(themeCtx)
         tv.text = label
         tv.textSize = 12f
         tv.gravity = android.view.Gravity.CENTER
@@ -873,10 +1180,10 @@ class MainActivity : AppCompatActivity() {
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 
     private fun emptyNote(text: String): TextView {
-        val t = TextView(this)
+        val t = TextView(themeCtx)
         t.text = text
         t.textSize = 14f
-        t.setTextColor(ContextCompat.getColor(this, android.R.color.secondary_text_light))
+        t.setTextColor(themeColor(R.color.bandi_text_dim))
         t.setPadding(16, 32, 16, 32)
         return t
     }
@@ -902,7 +1209,7 @@ class MainActivity : AppCompatActivity() {
                     return@execute
                 }
                 runOnUiThread {
-                    binding.devSub.text = "点一台进去"
+                    binding.devSub.text = "点一台进去 · 长按可删除一台"
                     /*
                      * **只精确清掉已退场的那枚令牌，不再整罐清**（2026-11-08 改）。
                      *
@@ -961,6 +1268,12 @@ class MainActivity : AppCompatActivity() {
     @SuppressLint("SetJavaScriptEnabled")
     private fun setupWebView() {
         val wv = binding.panelWebView
+        /*
+         * WebView 的底色跟页面底色同档（浅 #F7F8F9 / 深 #08090A）：进门冷加载的那几帧
+         * 露的是 WebView 自己的背景（默认纯白），深色面板从纯白闪到近黑 —— 最重的一口
+         * "网页感"。跟主题走之后，第一帧就是页面自己的颜色（2026-11-17）。
+         */
+        wv.setBackgroundColor(themeColor(R.color.bandi_page))
         /*
          * 调试包开 WebView 远程调试（2026-11-12）：这台手机 `adb shell input` 被系统禁掉
          * （INJECT_EVENTS），点不动卡片就进不了面板 —— 只能靠临时代码改一遍、编一遍
@@ -1058,6 +1371,36 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+        /*
+         * 文件选择器（2026-11-17）：网页点 <input type=file> → 这里接到，
+         * 弹系统的文档选择器，选完把 Uri 交回网页回调。webChromeClient 和
+         * webViewClient 是两套独立回调，挂它不影响上面的导航/报错逻辑。
+         */
+        wv.webChromeClient = object : android.webkit.WebChromeClient() {
+            override fun onShowFileChooser(
+                webView: WebView,
+                filePathCallback: android.webkit.ValueCallback<Array<android.net.Uri>>,
+                fileChooserParams: FileChooserParams,
+            ): Boolean {
+                // 上一次的回调还在（选择器没回来又点了一次）：先作废旧回调，防泄漏
+                fileChooserCallback?.onReceiveValue(null)
+                fileChooserCallback = filePathCallback
+                val intent = fileChooserParams.createIntent()
+                if (fileChooserParams.mode == FileChooserParams.MODE_OPEN_MULTIPLE) {
+                    intent.putExtra(android.content.Intent.EXTRA_ALLOW_MULTIPLE, true)
+                }
+                return try {
+                    fileChooserLauncher.launch(intent)
+                    true
+                } catch (e: Exception) {
+                    // 没有文档选择器可用（极少数精简系统）：告诉网页"取消"了
+                    fileChooserCallback = null
+                    filePathCallback.onReceiveValue(null)
+                    android.util.Log.w("BandiPanel", "E0002 file chooser launch failed", e)
+                    false
+                }
+            }
+        }
         setupPanelErrorActions()
     }
 
@@ -1141,7 +1484,9 @@ class MainActivity : AppCompatActivity() {
     /* ------------------------------------------------------------ 返回键 */
 
     private fun setupBackHandler() {
-        onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
+        // 主题重铺会重跑本函数：先摘旧的再挂新的，不然回调一层层堆（一次返回键两次处理）
+        backCallback?.remove()
+        backCallback = object : androidx.activity.OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 when {
                     // 蒙版挡着时，页面本身没法操作（返回键改页面用户也看不见），
@@ -1158,7 +1503,8 @@ class MainActivity : AppCompatActivity() {
                     else -> moveTaskToBack(true)
                 }
             }
-        })
+        }
+        onBackPressedDispatcher.addCallback(this, backCallback!!)
     }
 
     /**

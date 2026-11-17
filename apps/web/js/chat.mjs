@@ -6,7 +6,7 @@ import { load, setNav } from './state.mjs';
 import { confirmDo } from './machine.mjs';
 import { convDisplayName, openConversationSafe, toastConvErr } from './listmenu.mjs';
 import { detailSave, refreshDeptSuggest, renderList, showView } from './contacts.mjs';
-import { COL_STATUS, openProjectDetail, openTaskBoard, openTaskCardDialog, prPillOf } from './projects.mjs';
+import { COL_STATUS, openProjectDetail, openTaskCardDialog, prPillOf } from './projects.mjs';
 import { openFlowRun, setListTitle } from './flowpages.mjs';
 import { openChatLogDrawer, openGroupDrawer } from './groups.mjs';
 import { closeDrawer, fireExpert } from './experts.mjs';
@@ -526,43 +526,15 @@ export function setComposerReadonly(on, reason = 'gone') {
 
 
 
-/* ------------------------------------------------ 未读红点（本设备账本） */
+/* ------------------------------------------------ 未读红点（已移除） */
 
 /*
- * 未读是**纯前端账**（2026-11-05）：服务端会话没有已读字段（也不该为红点加），
- * 就用 localStorage 记"这个设备最后看到每个会话的什么时候"。口径：
- *   · 进会话（openConversation）= 看到该会话**当时**的最后一条 → 记它的 updatedAt；
- *     存会话自己的时间戳而不是 Date.now()，服务端/本机时钟有偏差也不会"看过了还亮"。
- *   · 正开着的会话永远不算未读（contacts.mjs 画行时排除 active）。
- *   · 只留最近 200 个会话，localStorage 别跟着使用年头无限长。
- * 存不进去（隐私模式）就静默放弃：红点会常亮，比报错强。
+ * 消息列表头像右上角的未读红点已按用户要求去掉（2026-11-17，contacts.mjs 画行处
+ * 有说明）。原来养着它的「本设备已读账本」—— localStorage `bandi.seenConvs` 记
+ * "这个设备最后看到每个会话的什么时候"，markConvSeen 进会话时记一笔、convUnread
+ * 画行时查 —— 只有红点这一个消费者，账本随之拆除。服务端会话本来就没有已读字段，
+ * 以后若要重做未读，先想清楚这笔账记在哪。
  */
-const SEEN_KEY = 'bandi.seenConvs';
-
-const seenMap = () => {
-  try { return JSON.parse(localStorage.getItem(SEEN_KEY) || '{}') || {}; } catch { return {}; }
-};
-
-export function markConvSeen(id, updatedAt) {
-  if (!id) return;
-  try {
-    const m = seenMap();
-    m[id] = Date.parse(updatedAt) || Date.now();
-    const keys = Object.keys(m);
-    if (keys.length > 200) {
-      keys.sort((a, b) => m[a] - m[b]).slice(0, keys.length - 200).forEach((k) => delete m[k]);
-    }
-    localStorage.setItem(SEEN_KEY, JSON.stringify(m));
-  } catch { /* 存不了就算了 */ }
-}
-
-/** 这行会话要不要画未读点（contacts.mjs 画行时调用） */
-export function convUnread(c) {
-  if (!c || !(c.messageCount > 0)) return false;        // 空壳会话（一段都没聊过）不算未读
-  if (c.id === S.conversation?.id) return false;        // 正开着的这行永远不亮
-  const at = Date.parse(c.updatedAt) || 0;
-  return at > (seenMap()[c.id] ?? 0);                   // 没记录 = 从没打开过 = 未读
-}
 
 export async function openConversation(id) {
   setRoute('conversation', { id });
@@ -579,7 +551,6 @@ export async function openConversation(id) {
   const switched = S.conversation?.id !== id;
   const d = await api('/api/conversations/' + encodeURIComponent(id));
   S.conversation = d.conversation;
-  markConvSeen(id, d.conversation.updatedAt);   // 进来看了 = 本设备已读（见 SEEN_KEY 那段）
   // 这段会话是不是**一个字都没说过**（详情页「发消息」连点复用它，见 openDirectChat）。
   // 依据是服务端刚给的 messages，不是本地猜测 —— 零额外请求、刷新后结论一致。
   S.convEmpty = (d.messages || []).length === 0;
@@ -667,7 +638,7 @@ export async function openConversation(id) {
     /*
      * 群设置入口从右上角齿轮挪到**群名**上（2026-11-05 用户要求）：
      * 一行里返回 + 群名 + 新会话 + 聊天记录 + 齿轮 = 五个可点目标，手机上挤成一团；
-     * iOS/微信都是点标题进群详情，齿轮在这里只是多一颗钮。
+     * 主流聊天 App 都是点标题进群详情，齿轮在这里只是多一颗钮。
      * 解散的群不开抽屉（点开是空抽屉），所以名字不给 head-name 类、也不绑事件。
      */
     const grpName = $('chatHead').querySelector('.head-name');
@@ -769,26 +740,6 @@ async function startFreshConversation(c) {
     $('input').focus();
   } catch (err) { toastConvErr(err); }
 }
-
-/* ------------------------------------------------ 立成卡（2026-10-24） */
-
-/*
- * 聊天派活**不进任务看板**（用户定的：不然闲聊一句就派活，看板很快糊掉）。
- * 立卡的唯一转正口在**输入区「＋」菜单的「任务卡」**（2026-10-24 从页头搬过去的）：
- * 把最近一轮活立成一张**真卡**（手工卡）—— 看板上好改状态、加描述、关联 PR，
- * 卡详情页里还能就地讨论；员工详情里聊天投影自动让位（服务端去重），同一件事只出现一次。
- * 工单会话（kind='exec'）自己就是任务卡，入口那层就不给（app.mjs 开菜单时按 kind 收掉这项）。
- */
-export async function makeConversationCard(conv) {
-  try {
-    const out = await post('/api/conversations/' + encodeURIComponent(conv.id) + '/card');
-    toast(out?.created ? '已立成任务卡 —— 到项目看板看它（讨论区就接着这场会话）' : '这场会话已经立过卡了');
-  } catch (err) {
-    toastConvErr(err);
-  }
-}
-
-
 
 /* ------------------------------------------------ 员工报的产出路径 → 可点 */
 
@@ -898,8 +849,18 @@ export function bubble(role, text, name, who, showName = false, at = '', atts = 
   const nameLine = (showName && !mine) || otherHuman ? `<div class="who-line">${esc(label)}</div>` : '';
   // 附件（2026-10-23）：图片直接画缩略图，其余文件给一颗可点的 chip（新标签页打开）
   const attsHtml = attsHtmlOf(atts);
-  // 卡票（2026-10-24）：PM 建卡 / 卡片回执这类消息带 meta，气泡顶上画一张可点的票
-  const ticket = cardTicketHtml(meta);
+  // 卡票（2026-10-24）：PM 建卡 / 卡片回执这类消息带 meta，气泡里画一张可点的票。
+  // 2026-11-15 起分两种形态（meta.mentionFirst）：文本在前、卡票在后 ——
+  // 派活卡 "@执行人"、回执卡 "@建卡人 请验收"（2026-11-16）；没标的维持票在前、说明在后。
+  const ticket = cardTicketHtml(meta, at);
+  const ticketAfter = meta?.mentionFirst === true;
+  /*
+   * 老回执（2026-11-16）：库里以前的可见回执是「【卡片回执】…」开头的一长串机器话，
+   * 现在新回执只写 "@建卡人 请验收" + 卡票。历史消息不刷库 —— 这类只画卡票、
+   * 不画那串文字，跟新消息一个观感（卡票上标题/状态/执行人都在，信息没丢）。
+   * 只认带 card meta 的，避免误伤正文里恰好提到"卡片回执"的普通消息。
+   */
+  const legacyReceipt = meta?.type === 'card' && /^【(卡片|子卡)回执】/.test(String(text ?? '').trim());
   /*
    * 停止生成（2026-10-29 用户实报「点停止生成，对方的消息完全消失」）：
    * 人停的那一轮，回话是**掐在半句上**的（服务端带 meta.stopped 落库，见 runs.mjs 的 persistReply）。
@@ -911,24 +872,25 @@ export function bubble(role, text, name, who, showName = false, at = '', atts = 
    * 看着像界面坏了。服务端落库时已换占位文案，这里再兜一层 —— 老库里已存在的空白消息
    * 也照样能看清"这一轮没回话"。
    */
-  const bodyHtml = String(text ?? '').trim()
-    ? renderMarkdown(text)
-    : '<span class="bubble-empty">（这一轮没有回话 —— 模型输出为空或运行被中断，可以让他重跑一次）</span>';
+  const bodyHtml = legacyReceipt ? ''
+    : String(text ?? '').trim()
+      ? renderMarkdown(text)
+      : '<span class="bubble-empty">（这一轮没有回话 —— 模型输出为空或运行被中断，可以让他重跑一次）</span>';
   /*
    * 「证据」按钮（2026-11-09 P2）已于 2026-11-10 按用户口径移除：
    * 证据是给**后台/AI 查原因**用的（运行事件、`/api/runs/:id/evidence` 都还在），
    * 不在界面里体现 —— 气泡只放结论，不再挂按钮。
    */
     /* 手机端消息流降噪（2026-11-05 用户：「聊天页 UI 重新设计」）：
-       · nt = 3 分钟内不重复挂时间戳（时间只留在每组第一条下面，微信/iMessage 同口径；
+       · nt = 3 分钟内不重复挂时间戳（时间只留在每组第一条下面，主流聊天 App 同口径；
          桌面不受影响 —— .nt 的显示规则只写在 mobile.css 的 ≤900px 档里）；
        · tight = 同一人紧接着的下一句，行距收紧（换人才松开，段落感就出来了）。
        时间照常渲染进 DOM，只是被 CSS 藏 —— 桌面/手机共用一份 HTML。 */
     return `<div class="row ${mine ? 'me' : ''}${opts?.tight ? ' tight' : ''}${opts?.hideTime ? ' nt' : ''}">
     ${mine ? smAvatar('我', 'me') : smAvatar(label, '', p)}
     ${nameLine
-      ? `<div class="msg-main">${nameLine}<div class="bubble">${ticket}${bodyHtml}${attsHtml}${stoppedNote}</div></div>`
-      : `<div class="bubble">${ticket}${bodyHtml}${attsHtml}${stoppedNote}</div>`}
+      ? `<div class="msg-main">${nameLine}<div class="bubble">${ticketAfter ? bodyHtml + ticket : ticket + bodyHtml}${attsHtml}${stoppedNote}</div></div>`
+      : `<div class="bubble">${ticketAfter ? bodyHtml + ticket : ticket + bodyHtml}${attsHtml}${stoppedNote}</div>`}
     ${t ? `<div class="btime">${esc(t)}</div>` : ''}
   </div>`;
 }
@@ -937,6 +899,8 @@ export function bubble(role, text, name, who, showName = false, at = '', atts = 
  * 卡票（2026-10-24）：`meta = {type:'card', cardId, title, status, assignee}` 的消息，
  * 气泡顶上画一张票 —— 状态色点 + 标题 + 执行人，点它在**弹窗里**看卡（不离开这段对话）；
  * 角落那颗「看板」小按钮去任务看板（次入口，别抢主点击）。
+ * 2026-11-16 用户："上面有看板按钮，这个多余了" —— 撤掉标题行右侧的「打开 →」，
+ * 整卡依旧可点（弹窗里看卡详情），只是不再多画一颗看着像入口的字样。
  *
  * 票上的字段是**消息时刻的快照**（服务端落 meta 时写死的），不回查实时状态：
  * 聊天一屏可能好几张票，逐张回查太贵；点进详情页看的是实时的。
@@ -950,19 +914,25 @@ export function bubble(role, text, name, who, showName = false, at = '', atts = 
 let _colOfStatus = null;
 const colOfStatus = () => (_colOfStatus ??= Object.fromEntries(Object.entries(COL_STATUS).map(([k, v]) => [v, k])));
 
-export function cardTicketHtml(meta) {
+export function cardTicketHtml(meta, at) {
   if (!meta || meta.type !== 'card' || !meta.cardId) return '';
   const col = colOfStatus()[meta.status] ?? 'other';
+  // 落款行（2026-11-16 用户："把@去掉，在右下角放时间"）：执行人不带 @，
+  // 时间用这条消息自带的时间（气泡下方那条的同一口径），靠右。没有就都不画。
+  const stamp = at ? stampOf(at) : '';
+  const foot = (meta.assignee || stamp)
+    ? `<div class="ct-foot">${meta.assignee ? `<span class="ct-assignee">${esc(meta.assignee)}</span>` : ''}${stamp ? `<span class="ct-time">${esc(stamp)}</span>` : ''}</div>`
+    : '';
   const inner = `<div class="card-ticket" data-card-ticket="${esc(meta.cardId)}" title="打开任务卡详情">
     <i class="ct-spine ${esc(col)}"></i>
     <div class="ct-head">
-      <span class="ct-ico">📋</span><span class="ct-kind">任务卡</span><span class="ct-sep">·</span><span class="ct-status ${esc(col)}">${esc(statusText(meta.status || ''))}</span>${meta.assignee ? `<span class="ct-sep">·</span><span class="ct-assignee">@${esc(meta.assignee)}</span>` : ''}
-      <button type="button" class="ct-board" data-card-board="${esc(meta.cardId)}" title="在任务看板里看它">看板 ↗</button>
+      <span class="ct-ico">📋</span><span class="ct-kind">任务卡</span>
+      <span class="ct-status ${esc(col)}">${esc(statusText(meta.status || ''))}</span>
     </div>
     <div class="ct-row">
       <div class="ct-title">${esc(meta.title || '任务卡')}</div>
-      <span class="ct-open">打开 →</span>
     </div>
+    ${foot}
   </div>`;
   /*
    * 窄屏降级（2026-11 手机端增量，PRD P1-4）：body.mb-narrow（js/mobile.mjs 维护）时
@@ -975,7 +945,7 @@ export function cardTicketHtml(meta) {
   return inner;
 }
 
-/** 给画出来的卡票接上点击：主点击**在弹窗里**打开卡，「看板」进任务看板；窄屏摘要条管展开。 */
+/** 给画出来的卡票接上点击：整卡点开任务详情弹窗；窄屏摘要条管展开。 */
 export function wireCardTickets(root) {
   /*
    * 窄屏折叠摘要条（P1-4）：点摘要 → 内联展开/收起正文（就是下面那张完整的卡票，
@@ -1000,12 +970,6 @@ export function wireCardTickets(root) {
      */
     el.onclick = () => {
       openTaskCardDialog(el.dataset.cardTicket).catch((e) => toast(e.message, 'error'));
-    };
-  });
-  (root ?? $('chat')).querySelectorAll('[data-card-board]').forEach((el) => {
-    el.onclick = (e) => {
-      e.stopPropagation();
-      openTaskBoard().catch((err) => toast(err.message, 'error'));
     };
   });
 }
@@ -1192,7 +1156,7 @@ export function drawMessages(msgs, name, isGroup = false, runs = [], opts = {}) 
   /*
    * 消息流降噪（2026-11-05，手机端重设计配套）：
    *   · 3 分钟内不再重复挂时间戳（.nt，CSS 在手机档藏掉）—— 每条下面都挂一个时间
-   *     是把"仪表"当"内容"画，一屏下来全是灰字；微信/iMessage 都只在组头挂一次。
+   *     是把"仪表"当"内容"画，一屏下来全是灰字；主流聊天 App 都只在组头挂一次。
    *   · 同一人紧接着的下一句（.tight）行距收紧 —— 换人才松开，段落感就出来了。
    * 发送者口径与 bubble() 一致：自己（user 且无他人署名）记 'me'，
    * 其余按署名 > 群昵称 > 角色；运行块（stop/fail）单独算，永远不跟消息合并。
@@ -1420,8 +1384,8 @@ export async function send() {
       toast(`已派给 ${d.personaName}；排队中：${d.queued.join('、')}（前一个跑完自动接上）`);
     }
     // 立刻刷一次左侧列表。
-    // 服务端在写入这条消息时就会把它从"已从列表移除"里恢复（钉钉也是这个语义：
-    // 删掉会话后只要有新消息，会话就回到列表）。但列表数据是前端缓存的，
+    // 服务端在写入这条消息时就会把它从"已从列表移除"里恢复（删掉会话后只要有新消息，
+    // 会话就回到列表，这是通行语义）。但列表数据是前端缓存的，
     // 不主动刷就得等运行结束才更新 —— 那几十秒里会让人以为"消息发出去了却没记录"。
     await load();
   } catch (err) { toast(err.message, 'error'); load(); }
@@ -2113,7 +2077,7 @@ export function wirePersonaTaskLinks() {
  * （曾供"通讯录窄屏点行直接开聊"调用 —— 那条路 2026-11-03 用户拍板改回先看详情，见 contacts.mjs。）
  *
  * 口径（2026-10-24 用户拍板，改掉"每次新开一段"的旧口径 —— 想另起一段去聊天页头的
- * 「新会话」按钮，跟微信一致：名片「发消息」进的就是现有聊天）：
+ * 「新会话」按钮，主流做法：名片「发消息」进的就是现有聊天）：
  *   ① 你**正在聊的那段**最优先 —— "回到"就是回到刚才那儿；
  *   ② 否则最近**真聊过**的一段（空壳让位，和左栏代表会话同一个口径）；
  *   ③ 一段都没有（第一次找TA，或只剩被「不显示」收着的）→ 新建第一段。
@@ -2146,7 +2110,7 @@ export async function openDirectChat(persona) {
       : (await post('/api/conversations', { personaId: persona.id, title: `和 ${persona.name}` })).conversation.id;
     /*
      * 从通讯录点人开聊的，记下来源栏：手机上按返回要回**通讯录**，
-     * 不是被扔进「会话」列表（微信同款）。桌面窄屏之外没人读这个标记。
+     * 不是被扔进「会话」列表（主流做法）。桌面窄屏之外没人读这个标记。
      */
     if (S.nav === 'contacts') S.mbBackNav = 'contacts';
     setNav('messages');
@@ -2281,10 +2245,15 @@ function mbPaintPicker(host, items, value, emptyText = '') {
       continue;
     }
     const on = it.id === value;
+    // `disabled`：不可选的行（如"已被别的群关联"的项目）。渲染成灰行、不带 data-mb-pick ——
+    // 点击处理器靠 closest('[data-mb-pick]') 找行，没有这个属性就天然点不动（2026-11-17 群详情页用）。
+    const off = !!it.disabled;
     // `dot` = 行首那颗 6px 圆点（任务看板的 8 个状态用它带出 --st-* 色）。
     // 写在 label 里面而不是行首的 flex 子项：行首会和文字差出一整个 gap，点多宽就偏多少。
     // label/id 都可能是用户自己起的名字（模型显示名、运行时别名）→ 一律 esc
-    rows += `<div class="mb-picker-row${on ? ' on' : ''}" role="button" tabindex="0" data-mb-pick="${esc(it.id)}">
+    rows += `<div class="mb-picker-row${on ? ' on' : ''}${off ? ' off' : ''}" role="button" tabindex="0"${
+      off ? ' aria-disabled="true"' : ` data-mb-pick="${esc(it.id)}"`
+    }>
         <span class="mb-picker-main">
           <span class="mb-picker-label">${it.dot ? `<i class="mb-picker-dot" style="background:${esc(it.dot)}"></i>` : ''}${esc(it.label)}</span>
           ${it.sub ? `<span class="mb-picker-sub">${esc(it.sub)}</span>` : ''}
@@ -2497,7 +2466,7 @@ function renderDetailMobile(persona, runtimes) {
       </div>
 
       <!-- 主动作通栏（§20.3）：桌面那颗挤在头右上角的小蓝钮在手机上又重又挤，
-           落到正文末尾做整宽主按钮（微信资料页「发消息」同款位）。 -->
+           落到正文末尾做整宽主按钮（主流资料页「发消息」同款位）。 -->
       <button class="primary mb-msg-btn" id="dMsg" title="打开和TA的聊天 —— 有会话就接着最近那段聊，不会另开新会话">${backToChat ? '回到聊天' : '发消息'}</button>
     </div>`;
 
@@ -3643,7 +3612,7 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
   renderInstrView();
 
   /*
-   * 「回到聊天 / 发消息」= **接着最近那段继续聊**（2026-10-24 口径，与微信一致）。
+   * 「回到聊天 / 发消息」= **接着最近那段继续聊**（2026-10-24 口径，主流做法）。
    * 具体逻辑（当前会话优先 → 最近非空会话 → 新建）已提到模块级 `openDirectChat`
    * （2026-11 移动端增量：通讯录窄屏点员工行也走同一条路，那边没有 renderDetail
    * 的闭包可借）—— 这里只管先落盘再跳。
