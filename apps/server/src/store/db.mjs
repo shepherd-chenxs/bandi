@@ -27,7 +27,7 @@ fs.mkdirSync(dataDir, { recursive: true });
 
 /*
  * **`db` 只在 store/ 目录内可见**（2026-10-15 立规，2026-10-22 拆分后升级）。
- * 以前导出过，于是 quota.mjs 自己攒了一整套 SQL、server.mjs 也直接伸进来查一句 ——
+ * 以前导出过，于是业务模块自己攒 SQL、server.mjs 也直接伸进来查一句 ——
  * 想换库的时候要改的地方就散成了三处。规矩：**SQL 只出现在 store/ 目录里**
  * （见 docs/形态决策.md §十二 第 2 条）；外面要什么，就往域模块里加一个函数、
  * 再从 ../store.mjs 门面 re-export。
@@ -113,8 +113,9 @@ db.exec(`PRAGMA busy_timeout = 5000;`);
  *   · 9（2026-11-12）：状态词表统一成码（migrateStatusValuesToCodes：老库里的中文状态值一次性换码）。
  *   · 10（2026-11-13）：`workflow_templates` 加 `autonomous`（自主交付模板：无人工闸节点，实例终态与受阻
  *     自动写信箱汇报给人，让「数字员工自主跑完→汇报」而不让人逐步拍板）。
+ *   · 11（2026-11-16）：额度功能退场，老库 DROP `quotas`（限额不再生效，也不该再留一张死表）。
  */
-export const SCHEMA_VERSION = 10;
+export const SCHEMA_VERSION = 11;
 
 const dbVersion = Number(db.prepare('PRAGMA user_version').get()?.user_version ?? 0);
 if (dbVersion > SCHEMA_VERSION) {
@@ -216,7 +217,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_runs_conv ON runs (conversationId, startedAt);
   /*
    * 热路径索引（2026-10-28 性能审查）：
-   *   · runs.startedAt —— 额度闸 listRunUsageSince 每次"startedAt >= ?"全表扫（runs 只增不删）；
+   *   · runs.startedAt —— 按时间查运行（实例/报表按 startedAt 排序或过滤）；
    *   · messages.runId —— runBelongsToWorkflow / 按 run 反查消息。
    *   ⚠️ 只放**主 schema 里已建**的表 —— workflow_tasks / project_tasks 的索引
    *      在各自的建表块后面（放这里新库上会 no such table，整个模块加载失败）。
@@ -432,15 +433,9 @@ function migratePersonaRoleKeys() {
 migratePersonaRoleKeys();
 
 /*
- * 这次运行**实际用的模型**。
- *
- * 为什么非要落库：额度是**按模型**算的（限额挂在模型上，因为贵/便宜分在模型 id 上，
- * 不在供应商上 —— 本机所有模型都挂在同一个 magpie 网关下）。没有这一列，
- * "某个模型今天花了多少"就永远算不出来，按模型限额就是一句空话。
- *
- * 存的是**生效的那个模型**（员工绑的，或员工没绑时 CLI 自己的默认），不是员工表上的原始字段 ——
- * 后者为空时用量会掉进"认不出"的黑洞。解析见 models.effectiveModelOf。
- * 老记录这一列是 NULL：它们确实归不了因，界面上要当成一个单独的"认不出"桶摆出来，别装作没有。
+ * 这次运行**实际用的模型**：存生效的那个（员工绑的，或没绑时 CLI 自己的默认），
+ * 不是员工表上的原始字段 —— 后者为空时这一列就空了，等于没记。解析见 models.effectiveModelOf。
+ * 老记录的这一列是 NULL，界面按"没记"处理就行。
  */
 
 ensureColumn('runs', 'model', 'model TEXT');
@@ -960,29 +955,8 @@ db.exec(`
 ensureColumn('node_tasks', 'arg', 'arg TEXT');
 
 
-{
-  const cols = db.prepare('PRAGMA table_info(quotas)').all().map((c) => c.name);
-  if (cols.length && !cols.includes('model')) {
-    const had = db
-      .prepare('SELECT count(*) c FROM quotas WHERE dailyTokens IS NOT NULL OR dailyRuns IS NOT NULL')
-      .get().c;
-    if (had) {
-      console.warn('[迁移] 原来的「全站额度」在模型级里没有对应物，已丢弃 —— 去「设置 → 额度」按模型重设');
-    }
-    db.exec('DROP TABLE quotas');
-  }
-}
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS quotas (
-    model        TEXT PRIMARY KEY,
-    dailyTokens  INTEGER,
-    dailyRuns    INTEGER,
-    updatedAt    TEXT
-  );
-`);
-
-/** 全部限额行（给人看的形状由 quota.mjs 拼） */
+/* 版本 11（2026-11-16）：额度功能退场 —— 限额不再有人读，老库的表也别留着占位置。 */
+db.exec('DROP TABLE IF EXISTS quotas');
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS git_repos (
@@ -1185,6 +1159,44 @@ function migrateStatusValuesToCodes() {
 }
 
 migrateStatusValuesToCodes();
+
+/*
+ * 清掉内建流程旧名里的括号说明（2026-11-16，用户："去掉括号里的文案"）。
+ *
+ * 背景：出厂名「自主交付（自迭代，无人工拍板）」2026-11-16 简化成「自主交付」，
+ * 但**已经发起的实例标题是发起那一刻的快照**，ensure 刷模板名管不到它 —— 老单子上
+ * 还挂着那串括号。这里把存量标题里的 `（自迭代，无人工拍板）` 整段摘掉，改成新名，
+ * 只动这几张表的标题列、只动恰好含这段的，别的括号（项目名、想法正文）一根手指不碰。
+ *
+ * 幂等：UPDATE 只命中含旧串的行，跑过一次就再无命中；新发起的实例本来就是新名。
+ */
+function migrateSelfDeliveryTitleSuffix() {
+  const OLD = '自主交付（自迭代，无人工拍板）';
+  const NEW = '自主交付';
+  const targets = [
+    ['conversations', 'title'],
+    ['workflow_runs', 'title'],
+    ['project_tasks', 'title'],
+    ['notices', 'title'],
+  ];
+  const hasTable = (t) =>
+    !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(t);
+  const like = `%${OLD}%`;
+  let total = 0;
+  for (const [table, col] of targets) {
+    if (!hasTable(table)) continue;
+    const rows = db.prepare(`SELECT rowid AS rid, ${col} AS v FROM ${table} WHERE ${col} LIKE ?`).all(like);
+    const stmt = db.prepare(`UPDATE ${table} SET ${col} = ? WHERE rowid = ?`);
+    for (const r of rows) {
+      // JS 侧整段替换，避免 SQL 里拼中括号转义；只换这一处，其余原样
+      const updated = String(r.v).split(OLD).join(NEW);
+      if (updated !== r.v) total += Number(stmt.run(updated, r.rid).changes ?? 0);
+    }
+  }
+  if (total) console.log(`[迁移] ${total} 条标题清掉「（自迭代，无人工拍板）」旧名后缀`);
+}
+
+migrateSelfDeliveryTitleSuffix();
 
 /*
  * ------------------------------------------------------------------ 版本号落地

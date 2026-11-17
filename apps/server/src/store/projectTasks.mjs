@@ -119,20 +119,10 @@ export function getProjectTaskBySourceKey(sourceKey) {
   return db.prepare('SELECT * FROM project_tasks WHERE sourceKey = ? LIMIT 1').get(sourceKey) ?? null;
 }
 
-/**
- * 这场会话立过卡没有（2026-10-24「立成卡」用）。
- *
- * 一场会话最多立一张卡：立了卡之后聊天投影就该让位（不然看板上一件事两张卡），
- * 判据就是它 —— chatRows 拿它做去重，「再立一次」也靠它做幂等。
- */
-export function getProjectTaskByConversation(conversationId) {
-  if (!conversationId) return null;
-  return db
-    .prepare('SELECT * FROM project_tasks WHERE conversationId = ? ORDER BY createdAt DESC LIMIT 1')
-    .get(conversationId) ?? null;
-}
+/* 「这场会话是否立过卡」的单条查询随立卡功能 2026-11-16 撤了（它只服务幂等判断）。
+   批量版 conversationIdsWithCards() 留着：存量库里历史上立过的卡仍要去重。 */
 
-/** 这批会话里哪些已经立过卡（chatRows 去重用，一趟查完省得逐会话问） */
+/** 这批会话里哪些历史上立过卡（chatRows 去重用，一趟查完省得逐会话问） */
 export function conversationIdsWithCards() {
   return new Set(
     db

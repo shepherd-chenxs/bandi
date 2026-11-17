@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      深色档（2026-11-17）：壳跟面板主题（docs/形态决策.md §⑩）。色值对齐网页 style.css
+      深色变量（:root 默认档的 bg / panel / line / text / dim / accent 六个）：
+      #08090a / #111214 / #202225 / #e8e9ea / #9b9ea3 / #0a84ff。
+      状态胶囊沿用浅色档的 fg/bg/dot 三件套：fg 用网页深色的 ok（#3fb950）与 dim（#9b9ea3），
+      bg 取同色相的近黑低饱和底（比浅色档"淡底"反过来走"深底"），对比度 ≥ 4.5。
+    -->
+    <color name="bandi_page">#FF08090A</color>
+    <color name="bandi_card">#FF111214</color>
+    <color name="bandi_stroke">#FF202225</color>
+    <color name="bandi_text">#FFE8E9EA</color>
+    <color name="bandi_text_dim">#FF9B9EA3</color>
+    <color name="bandi_on_danger">#FFFFFFFF</color>
+    <color name="bandi_danger">#FFF85149</color>
+    <!-- 危险动作（删设备确认框）：对齐网页版全局 bad 色，不另起色号 -->
+    <color name="bandi_primary">#FF0A84FF</color>
+
+    <color name="bandi_chip_ok_fg">#FF3FB950</color>
+    <color name="bandi_chip_ok_bg">#FF12281B</color>
+    <color name="bandi_chip_ok_dot">#FF3FB950</color>
+    <color name="bandi_chip_off_fg">#FF9B9EA3</color>
+    <color name="bandi_chip_off_bg">#FF1A1B1E</color>
+    <color name="bandi_chip_off_dot">#FF6E7278</color>
+    <color name="bandi_chip_wait_fg">#FF9B9EA3</color>
+    <color name="bandi_chip_wait_dot">#FF55595F</color>
+
+    <color name="bandi_conn_ok_bg">#FF12281B</color>
+    <color name="bandi_conn_ok_fg">#FF3FB950</color>
+</resources>

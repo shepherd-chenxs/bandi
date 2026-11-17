@@ -284,12 +284,12 @@ export function startRun({ thread, member, task, standing = null, watermark = 0,
   /*
    * 这一次**实际用哪个模型**。
    *
-   * 它落进 `runs.model`（按模型限额全靠它），并作为 `model` 传给适配器 ——
+   * 它落进 `runs.model`（界面显示这次跑的哪个模型），并作为 `model` 传给适配器 ——
    * 适配器只负责把**模型名**递下去（codex 的 `-m`、dsh 的 `--patch`），
    * 走哪条地址、带谁的 Key 由 CLI 自己的配置决定，班底不碰。
    *
-   * 跟 workflows 的额度闸用的是**同一个解析**：闸盯的模型和账上记的、
-   * 实际传下去的必须是同一个，否则限额会盯错人。
+   * 跟 workflows 的 viewRun.model 用的是**同一个解析**：页面上写的、
+   * 账上记的、实际传下去的必须是同一个模型。
    */
   const eff = cliModels.effectiveModelOf({ family: rt?.family ?? null, model: member.model });
   // dsh 的补丁层是整块替换 config，所以要把 CLI 自己配的 provider 原样带回去（见 dsh.mjs）
@@ -312,7 +312,7 @@ export function startRun({ thread, member, task, standing = null, watermark = 0,
     projectId,
     runtime,
     runtimeId: rt?.id ?? null,
-    // 这次跑的是哪个模型（界面/额度要显示它），以及"从哪来的"（员工绑的 / CLI 默认）
+    // 这次跑的是哪个模型（界面要显示它），以及"从哪来的"（员工绑的 / CLI 默认）
     model: eff.id,
     modelFrom: eff.from,
     // 这一步的标记：回复落库时要带上它（流程面板按 taskId 取往来）

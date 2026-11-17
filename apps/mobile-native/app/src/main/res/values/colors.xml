@@ -1,19 +1,43 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!--
-      原生页（选择电脑 / 登录 / 连不上兜底）的底色。
+      原生页（登录 / 选择电脑 / 兜底）的配色，浅深两档各一份：浅色在这里（values/），
+      深色在 values-night/。壳按面板报来的主题铺（2026-11-17，见 docs/形态决策.md §⑩），
+      视图与取色从带主题配置的 Context 解析（MainActivity.buildBinding）。
 
       为什么不吃主题的 colorSurface（2026-11-12 用户："这个怎么看着有点粉，跟其他页风格不同"）：
       Material3 的 baseline 色板 surface 是 #FFFBFE —— 白里掺一点紫，正是"粉"的来源。
-      网页那套是 #F7F8F9（页面底 bg）+ #FFFFFF（卡片），白卡浮在浅灰上分层。
-      这里取同一个页面底色，卡片（代码里写死白）才浮得起来，壳里的原生页和 WebView 里的
-      页面看起来才是同一个产品。
-
-      深色：网页的页面底色是 #08090A。壳目前只做了浅色（卡片/文字都写死浅色档），
-      所以深色下也保持浅底，别把一页写死浅色的控件压到黑底上。
+      色值全部对齐网页 style.css 的主题变量（bg / panel / line / text / dim / accent 六个，
+      浅色 #f7f8f9 / #ffffff / #e4e6e9 / #1a1c1f / #5f646c / #0066cc；深色档见 values-night）。
+      网页改色这里跟着改，壳里的原生页和 WebView 里的页面才是同一个产品。
+      （2026-11-17 前"壳只做浅色"的口径随主题贯通一并作废。）
     -->
     <color name="bandi_page">#FFF7F8F9</color>
+    <!-- 设备卡片底：浅卡浮在浅灰页面上分层 -->
+    <color name="bandi_card">#FFFFFFFF</color>
+    <!-- 卡片发丝边：8% 黑 -->
+    <color name="bandi_stroke">#14000000</color>
+    <color name="bandi_text">#FF1A1C1F</color>
+    <color name="bandi_text_dim">#FF5F646C</color>
 
     <!-- 主按钮：网页主色（浅色档） #0066CC（Material3 默认的 #6750A4 紫是另一套风格） -->
+    <color name="bandi_on_danger">#FFFFFFFF</color>
+    <color name="bandi_danger">#FFCF222E</color>
+    <!-- 危险动作（删设备确认框）：对齐网页版全局 bad 色，不另起色号 -->
     <color name="bandi_primary">#FF0066CC</color>
+
+    <!-- 设备卡的状态胶囊（在线 / 离线 / 检测中）：浅色档沿用 2026-11-07 的对比度定稿
+         （在线 #15803D on #ECFDF5 ≈5.0:1，离线 #64748B on #F1F5F9 ≈4.6:1） -->
+    <color name="bandi_chip_ok_fg">#FF15803D</color>
+    <color name="bandi_chip_ok_bg">#FFECFDF5</color>
+    <color name="bandi_chip_ok_dot">#FF22C55E</color>
+    <color name="bandi_chip_off_fg">#FF64748B</color>
+    <color name="bandi_chip_off_bg">#FFF1F5F9</color>
+    <color name="bandi_chip_off_dot">#FF94A3B8</color>
+    <color name="bandi_chip_wait_fg">#FF64748B</color>
+    <color name="bandi_chip_wait_dot">#FFCBD5E1</color>
+
+    <!-- 面板顶部「已恢复连接」那条绿（1.4 秒即收） -->
+    <color name="bandi_conn_ok_bg">#FFE7F6EA</color>
+    <color name="bandi_conn_ok_fg">#FF1F6E33</color>
 </resources>

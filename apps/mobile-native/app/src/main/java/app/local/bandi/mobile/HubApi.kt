@@ -100,6 +100,22 @@ object HubApi {
         return try { JSONObject(text ?: "{}").getJSONArray("devices") } catch (_: Exception) { throw parseError(status, text) }
     }
 
+    /**
+     * 忘掉一台机器（2026-11-17 手机端删设备）：DELETE /v1/devices/:id。
+     * 中枢侧口径：user 只能删自己名下的，别人的回 404；被删的机器心跳收到
+     * 404 只警告不重试，不会"复活"，要回来必须在机器上重新登录。
+     */
+    fun remove(hub: String, session: String, deviceId: String) {
+        val base = normalizeHub(hub)
+        val (status, text) = try {
+            request("$base/v1/devices/${deviceId}", "DELETE", session, null)
+        } catch (e: Exception) {
+            throw netError(e, hub)
+        }
+        if (status == 401) throw HubException(401, "登录已过期，请重新登录")
+        if (status != 200) throw parseError(status, text)
+    }
+
     /** 签票 → ticket 字符串（一次性，5 分钟） */
     fun ticket(hub: String, session: String, deviceId: String): String {
         val base = normalizeHub(hub)

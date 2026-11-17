@@ -249,7 +249,7 @@ function isDirectLocalRequest(req) {
  * ⚠️ 一条不许漏（漏了等于给管理权），一条不许扩（扩了会把"用"也挡掉）。
  * 下面这张"明确允许"的单子跟禁止清单是**一对**，改任何一边都要回头看一眼另一边：
  *   员工增删改（下表中 model/runtime **字段级**那条除外，它落在 server.mjs 的 handler 里）、
- *   会话/消息、群、任务/项目、工作流、定时任务、技能、额度**读**、连接器**读**、
+ *   会话/消息、群、任务/项目、工作流、定时任务、技能、连接器**读**、
  *   设备**读**、`GET /api/lan`、`GET /api/state`、`/api/runs/<id>/stream`（SSE）。
  */
 const PANEL_FORBIDDEN = [
@@ -265,8 +265,6 @@ const PANEL_FORBIDDEN = [
   { method: /^POST$/, path: /^\/api\/ssh\/servers$/ }, //（含私钥路径）           server.mjs:258
   { method: /^POST$/, path: /^\/api\/git\/token$/ }, //                          server.mjs:2208
   { method: /^DELETE$/, path: /^\/api\/git\/token$/ }, //                        server.mjs:2223
-  // 3 改模型路由（每模型限额就是路由约束）                                     server.mjs:392
-  { method: /^POST$/, path: /^\/api\/quota$/ },
   //   第 15 条 `PUT|PATCH /api/personas/:id` **且 body 带 model 或 runtime**
   //   是**字段级**的（readBody 只有 handler 里有）→ 落在 server.mjs 的 handler（用 mayManage）
   // 4 局域网开关（角色 / 手机连接；监听地址不是可切的了，2026-11-03）
@@ -452,16 +450,7 @@ export function guard(auth, req, res, url) {
     if (handleShellEnter(req, res, auth, url)) return false;
   }
 
-  /*
-   * 数字员工的本机 AI 通道（2026-10-23，skills/bandi-avatar）：**真·回环**发起的 /api/ai/* 免令牌。
-   * 员工跑在 CLI 里，拿不到平台令牌，让技能教它 curl 时无凭据可用 —— 通道自身有
-   * 来源校验 + CSRF 闸双保险（routes/imageai.mjs）。
-   *
-   * 2026-10-31 修（IAM §5.3 第 2 条）：原来这里自己判 `req.socket.remoteAddress`，
-   * 反代后面外部请求也是 127.0.0.1 → 直接免令牌。现在统一用 `classifySource`：
-   * 只有 `loopback` 才豁免，`network` 一律走认证。
-   */
-  if (url.pathname.startsWith('/api/ai/') && source === 'loopback') return true;
+  /* 2026-11-16 生图通道整体退场：原 /api/ai/* 回环免令牌特例随之删除。 */
 
   if (!auth.required && source === 'loopback') {
     /*

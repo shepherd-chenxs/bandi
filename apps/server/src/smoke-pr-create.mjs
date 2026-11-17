@@ -758,6 +758,16 @@ try {
      */
     console.log('\n⑪ 流程：开发完成 → 建 PR → 审阅 → 合并（自动合）');
     prCreate.ensurePrDeliveryTemplate();
+    // 老库迁移：旧名 + 用户拖过的坐标 → ensure 刷成出厂名，坐标原样留住
+    {
+      const old = store.getWorkflowTemplate(prCreate.PR_DELIVERY_TEMPLATE_ID);
+      const oldNodes = JSON.parse(old.nodes).map((n) => (n.id === 'n2' ? { ...n, x: 777, y: 666 } : n));
+      store.upsertWorkflowTemplate({ id: old.id, name: '开发完成 → 建 PR → 审阅 → 合并', nodes: oldNodes, builtIn: true });
+      prCreate.ensurePrDeliveryTemplate();
+      const after = store.getWorkflowTemplate(prCreate.PR_DELIVERY_TEMPLATE_ID);
+      check('老库旧名 → 刷成「PR 交付」', after.name === 'PR 交付', String(after.name));
+      check('刷名不覆盖用户拖过的坐标', JSON.parse(after.nodes).find((n) => n.id === 'n2')?.x === 777, '');
+    }
     const flowProject = store.createProject({ name: '流程建 PR 项目', root: work });
     fs.writeFileSync(path.join(work, 'flow.js'), 'export const flow = 1;\n');
     store.updateGitRepoSettings(row.id, { autoMerge: true }); // 授权自动合并；管理员留空

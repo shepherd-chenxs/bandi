@@ -58,7 +58,7 @@ export function runWorkflowTask({ job, config }) {
   const started = startWorkflow({ templateId: tpl.id, title: job.name, intent, projectId });
 
   /*
-   * 第一步**可能一发起就卡住**（模板那个节点没点名 / 额度拦了）——
+   * 第一步**可能一发起就卡住**（模板那个节点没点名）——
    * 那不是"发起失败"（实例确实建出来了），但也不能只说"已发起"让人以为在跑。
    * 所以照实例自己算出来的状态说：在跑 / 等你指派 / 卡住了。
    */

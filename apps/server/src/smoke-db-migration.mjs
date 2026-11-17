@@ -55,6 +55,7 @@ const PROGRESS = JSON.stringify({
   elapsedMs: 27000,
 });
 
+let TITLE_DIR = null; // ④ 独立库目录，提到 try 外好让 finally 收得到
 try {
   /* 造一个"老库"：messages 表在、几行旧 meta 躺着。 */
   const pre = new DatabaseSync(DB);
@@ -115,9 +116,42 @@ try {
   const ro2 = new DatabaseSync(FRESH_DB, { readOnly: true });
   check('新库的结构版本也是 SCHEMA_VERSION', Number(ro2.prepare('PRAGMA user_version').get().user_version) === SCHEMA_VERSION, String(ro2.prepare('PRAGMA user_version').get().user_version));
   ro2.close();
+
+  console.log('\n④ 自主交付旧名后缀：从存量标题里摘掉，别的括号不碰（幂等）');
+
+  const OLD = '自主交付（自迭代，无人工拍板）';
+  // 独立库：先让 db.mjs 自己建好完整表结构（手搓表会缺索引列），再插数据，再启动验迁移。
+  TITLE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'bandi-migrate-title-'));
+  const TITLE_DB = path.join(TITLE_DIR, 'bandi.db');
+  const seed = bootOnce(TITLE_DB, TITLE_DIR); // 只为建表
+  check('独立库建表启动成功', seed.code === 0, seed.err.slice(-200));
+  const TT = '2026-11-16T00:00:00.000Z';
+  const pre2 = new DatabaseSync(TITLE_DB);
+  // project_tasks 由 store/projects.mjs 建，db.mjs 启动不带它 —— 手搓一张够迁移用的
+  pre2.exec('CREATE TABLE IF NOT EXISTS project_tasks (id TEXT PRIMARY KEY, projectId TEXT, title TEXT, status TEXT, createdAt TEXT, updatedAt TEXT)');
+  // 直接按各表必填列插，保持简单明了
+  pre2.prepare('INSERT INTO conversations (id, title, personaId, createdAt, updatedAt, kind) VALUES (?, ?, ?, ?, ?, ?)').run('c1', `${OLD}「班底」项目并排查设计漏洞`, '', TT, TT, 'group');
+  pre2.prepare('INSERT INTO conversations (id, title, personaId, createdAt, updatedAt, kind) VALUES (?, ?, ?, ?, ?, ?)').run('c2', '自主交付（另一个括号不该动）项目', '', TT, TT, 'group'); // 不同文案，必须原样
+  pre2.prepare('INSERT INTO workflow_runs (id, templateId, title, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?)').run('w1', 'bandi-self-delivery', `${OLD}「班底」项目`, TT, TT);
+  pre2.prepare('INSERT INTO project_tasks (id, projectId, title, status, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?)').run('p1', 'pj-x', `任务 · ${OLD} · 设计评审`, 'todo', TT, TT);
+  pre2.prepare('INSERT INTO notices (id, kind, title, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?)').run('n1', 'workflow.delivery.report', `流程 · ${OLD}`, TT, TT);
+  pre2.close();
+
+  const titlesBoot = bootOnce(TITLE_DB, TITLE_DIR);
+  check('独立库启动成功', titlesBoot.code === 0, titlesBoot.err.slice(-200));
+  const ro3 = new DatabaseSync(TITLE_DB, { readOnly: true });
+  const got = (id, table) => ro3.prepare(`SELECT title FROM ${table} WHERE id = ?`).get(id)?.title;
+  check('会话标题：旧名后缀摘掉，其余原样', got('c1', 'conversations') === '自主交付「班底」项目并排查设计漏洞', String(got('c1', 'conversations')));
+  check('流程实例 / 卡 / 通知标题同样清理', got('w1', 'workflow_runs') === '自主交付「班底」项目' && got('p1', 'project_tasks') === '任务 · 自主交付 · 设计评审' && got('n1', 'notices') === '流程 · 自主交付', `${got('w1', 'workflow_runs')} / ${got('p1', 'project_tasks')} / ${got('n1', 'notices')}`);
+  check('别的括号文案一根手指不碰', got('c2', 'conversations') === '自主交付（另一个括号不该动）项目', String(got('c2', 'conversations')));
+  check('日志报出清理条数（4 条）', /\[迁移\] 4 条标题清掉/.test(titlesBoot.out), titlesBoot.out.split('\n').filter((l) => /迁移/.test(l)).join(' | '));
+  ro3.close();
+  const second2 = bootOnce(TITLE_DB, TITLE_DIR);
+  check('再启动一次：不再打印这条迁移（幂等）', !/条标题清掉/.test(second2.out), second2.out.slice(-300));
 } finally {
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* 删不掉就算了 */ }
   try { fs.rmSync(FRESH_DIR, { recursive: true, force: true }); } catch { /* 删不掉就算了 */ }
+  if (TITLE_DIR) { try { fs.rmSync(TITLE_DIR, { recursive: true, force: true }); } catch { /* 删不掉就算了 */ } }
 }
 
 console.log(`\n结论：${failed ? `${failed} 项没过` : '全通过'}`);

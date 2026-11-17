@@ -19,7 +19,6 @@ export async function handleRuntime(req, res, url) {
   const renameDevice = /^\/api\/devices\/([^/]+)\/rename$/.exec(url.pathname);
   const addOne = /^\/api\/devices\/([^/]+)\/runtimes$/.exec(url.pathname);
   const oneRuntime = /^\/api\/devices\/([^/]+)\/runtimes\/([^/]+)$/.exec(url.pathname);
-  const probeOne = /^\/api\/devices\/([^/]+)\/runtimes\/([^/]+)\/probe$/.exec(url.pathname);
   const modelsOne = /^\/api\/runtimes\/([^/]+)\/models$/.exec(url.pathname);
 
   /** 这个运行时能用哪些模型 —— 每个族各找各的源头；查不到就如实说（见 cli-models.mjs） */
@@ -37,10 +36,7 @@ export async function handleRuntime(req, res, url) {
   /**
    * 检测一个**还没建**的路径行不行（跑一次 `--version`）。
    *
-   * 用在「安装」弹窗里：用户手填了一个安装目录 / 可执行文件，点「检测」先看看能不能跑，
-   * 再决定接不接入。现有的 `/runtimes/:rid/probe` 只针对**已经存在**的运行时，
-   * 所以这里单开一个。
-   *
+   * 留在契约里、当前无 UI 消费（「按路径接入」弹窗已撤）：见 docs/形态决策.md §十五 ①。
    * 会先过一遍 `resolveCliPath` —— 用户填目录时把它解析成里面的可执行文件，
    * 并把解析结果回给前端（让人看见实际用的是哪个文件）。
    */
@@ -239,7 +235,10 @@ export async function handleRuntime(req, res, url) {
     return sendJson(res, 201, { runtime: r.runtime, device: runtimes.publicDeviceById(did) });
   }
 
-  if ((req.method === 'PUT' || req.method === 'PATCH') && oneRuntime) {
+  /* PATCH 只服务列表页那颗启停开关（还有自愈测试改路径）。原来的详情页 2026-11-16 撤了 ——
+     它用的 PUT（保存）/ DELETE（删运行时）/ POST .../probe（检测）三条一并清掉，
+     CLI 详情不再可进，路径靠「识别本机运行时」自动探。 */
+  if (req.method === 'PATCH' && oneRuntime) {
     const did = decodeURIComponent(oneRuntime[1]);
     const rid = decodeURIComponent(oneRuntime[2]);
     const body = await readBody(req);
@@ -248,19 +247,6 @@ export async function handleRuntime(req, res, url) {
     if (!next) return fail(res, 404, 'E2022', '没有这个运行时');
     if (next.error) return fail(res, 400, 'E1021', next.error);
     return sendJson(res, 200, { runtime: next, device: runtimes.publicDeviceById(did) });
-  }
-
-  if (req.method === 'DELETE' && oneRuntime) {
-    const did = decodeURIComponent(oneRuntime[1]);
-    const rid = decodeURIComponent(oneRuntime[2]);
-    const r = runtimes.removeRuntime(did, rid);
-    if (r.error) return fail(res, 400, 'E1022', r.error);
-    return sendJson(res, 200, { removed: true, device: runtimes.publicDeviceById(did) });
-  }
-
-  if (req.method === 'POST' && probeOne) {
-    const r = await runtimes.probe(decodeURIComponent(probeOne[1]), decodeURIComponent(probeOne[2]));
-    return sendJson(res, 200, r);
   }
 
   return false;

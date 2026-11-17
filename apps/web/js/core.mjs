@@ -61,11 +61,8 @@ export const S = {
   catalogError: null,
   runtimeFamilies: [],
   theme: 'system',          // light | dark | system
-  rtLevel: 'devices',       // devices | cli（2026-11-01 设备详情页撤了，device 级随之作废）
   rtScan: null,             // 「识别本机运行时」的扫描结果（null = 这轮还没扫过）
   taskPoll: null,           // 「有活在做就自己刷」的定时器（见 scheduleTaskPoll）
-  rtDevice: null,
-  rtRuntime: null,
   groupThreadId: null,      // 正在看的群详情页（通讯录里点群进来）—— 存的是**群 id**，不是会话 id
   groupThread: null,        // 群身份行（groups 表那条：id/title/assistantPersonaId/members）
   /*
@@ -155,8 +152,6 @@ export const S = {
   flowRunId: null,
   flowRun: null,
   flowStarting: null,
-  // 服务端给的今日用量（GET /api/quota 那一整份）——实例页顶栏那句"今天已用 X"用它。
-  // 每次 paintRun 重新取：刚跑完的那一步花的 token 要立刻算进去。
 };
 
 /**

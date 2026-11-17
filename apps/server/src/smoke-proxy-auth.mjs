@@ -2,12 +2,12 @@
  * **反代形态下的鉴权**（IAM §5.3 / §15 的 P0 用例）。
  *
  * 背景：`auth.mjs` 原来只看进程监听地址 —— 只要监听的是回环，`auth.required = false`，
- * 于是**所有**请求（面板、会话、导出、/api/ai）都直接变成 operator。而反代（nginx /
+ * 于是**所有**请求（面板、会话、导出）都直接变成 operator。而反代（nginx /
  * cloudflared / frp）恰恰把外部流量转进 `127.0.0.1:8787`。两者一叠加 = 上反代那天全站免登录。
  *
  * 本用例钉住三类启动形态，每类都必须是"要么拒绝，要么照常"：
  *   ① `BANDI_HOST=127.0.0.1 + BANDI_TRUST_PROXY=1`（声明在代理后面）：
- *      - 带转发头的 /api/state、/api/local/status、/api/local/export、/api/ai/*、/api/events
+ *      - 带转发头的 /api/state、/api/local/status、/api/local/export、/api/events
  *        **全部 401**（一个都不许过）；
  *      - 带 root 令牌照样能用（proves setup 在 trustProxy 下也加载/生成了 token）；
  *      - 秘密闸动作（本机 probe）带令牌但**不带 X-Bandi-Local** → E4097，带了才过闸。
@@ -119,7 +119,7 @@ console.log('\n[1] BANDI_HOST=127.0.0.1 + BANDI_TRUST_PROXY=1（声明在代理�
     const token = fs.readFileSync(path.join(data, 'token'), 'utf8').trim();
     check('setup 在 trustProxy 下也生成了 root 令牌', token.length > 20, `${token.slice(0, 4)}…`);
 
-    for (const p of ['/api/state', '/api/local/status', '/api/ai/image-config', '/api/events']) {
+    for (const p of ['/api/state', '/api/local/status', '/api/events']) {
       const r = await raw(port, { path: p, headers: viaProxy });
       check(`带转发头的 ${p} → 401`, r.status === 401, `${r.status} ${codeOf(r)}`);
     }

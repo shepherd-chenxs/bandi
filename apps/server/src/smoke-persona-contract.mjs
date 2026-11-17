@@ -93,6 +93,22 @@ try {
   check('⑥ 不编数 + 不猜接口（别 foreach 试路径）', /不编数/.test(contract) && /不猜接口/.test(contract) && /foreach/.test(contract));
   check('⑦ 红线：删数据 / 动生产 / 对外发布', /删数据/.test(contract) && /(动生产|生产)/.test(contract) && /对外发布/.test(contract));
 
+  console.log('\n②-a 要雇主拍板必须 @ 雇主本人（2026-11-16 用户："这种要我决策的事情，要@我"，雇主 = 群主）');
+  check('⑨ 红线请雇主拍板 → 回话里 @ 雇主', /红线/.test(contract) && /@ 雇主本人/.test(contract) && /请他拍板/.test(contract));
+  check('⑩ 拍板 / 决策 / 确认 / 授权 / 卡住等人 → 必须 @ 雇主，不带 @ = 没交付',
+    /拍板 \/ 决策 \/ 确认/.test(contract) && /@ 雇主本人/.test(contract) && /没叫到他/.test(contract));
+  {
+    // 群主名注入群聊 prompt：让 AI 知道 @ 谁（续接轮也要有，不只首轮）
+    const grp = dispatch.buildGroupTask({
+      thread: { kind: 'group', title: '测试群' }, // 不带 ownerUserId → 走"群主是真人"兜底文案（本 smoke 不 boot store）
+      member: { personaId: 'p-x', instructions: '' },
+      trigger: { text: '卡住了' },
+      contextMessages: [],
+      firstTime: false,
+    });
+    check('群聊 prompt 每轮带群主提示（续接轮也有，不只首轮）', /群主/.test(grp) && /拍板/.test(grp) && /@/.test(grp), grp.split('\n').find((l) => /群主/.test(l)) ?? '');
+  }
+
   console.log('\n②-b 过程决策是本职（2026-11-14 甲方口径：我只要结果，别拿过程问我）');
   check('⑪ 方案 / 设计 / 实现 / 派下一张卡 = 自己定，不问雇主',
     /过程决策是你的本职/.test(contract) && /要不要给下游派下一张卡/.test(contract) && /不要拿这些问雇主/.test(contract));
@@ -102,11 +118,15 @@ try {
     /三种情况找他/.test(contract) && /真阻塞/.test(contract) && /交验收/.test(contract));
   check('⑪ "要不要我继续 / 要不要我派 / 你先看文档吗" = 没交付',
     /要不要我继续/.test(contract) && /算没交付/.test(contract));
+check('⑪ 对雇主用用户视角：代码路径 / 构建指令不进对雇主的回话（2026-11-15 验收实报）',
+  /用户视角/.test(contract) && /(代码路径|构建编译指令)/.test(contract) && /不进对雇主的回话/.test(contract));
+check('⑪ 建卡轮：卡票就是交付，回话一行即止（别再发安排叙述）',
+  /卡票就是交付/.test(contract) && /一行即止/.test(contract));
 
   console.log('\n②-c 统筹块：派下一张卡不用请示（PM 本职，2026-11-14 李俊实报）');
   const pm = dispatch.pmDispatchBlock({ persona: { id: 'p-pm' }, thread: { kind: 'group', members: [] }, project: { name: 'x' } });
   check('⑦ 方案定了直接建卡派下游（统筹本职）', /派下一张卡不用请示/.test(pm) && /统筹本职/.test(pm), pm.split('\n').at(-1) ?? '');
-  check('⑦ 不问"要不要派 / 你先看文档吗"；设计稿是执行人的功课', /要不要派/.test(pm) && /你先看文档吗/.test(pm) && /功课/.test(pm));
+  check('⑦ 派卡不请示、回话一行即止（卡票即交付，安排叙述=重复）', /不用请示/.test(pm) && /一行即止/.test(pm) && /功课/.test(pm));
 
   console.log('\n③ 交付形态判定（P5 新增 dispatch.guessDeliveryKind：问答 → answer / 做事 → do / 判不了 → null）');
   check('guessDeliveryKind 是导出函数', typeof dispatch.guessDeliveryKind === 'function');

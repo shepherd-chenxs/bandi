@@ -28,7 +28,7 @@
  * 只在窄屏生效：桌面端不认这些名字，引用处一律带桌面值兜底，两边互不影响。
  *
  * 语汇对照（桌面密排 → 移动端 App）：
- *   行圆角   6px  → 0（通栏行，靠内缩分割线分区，跟微信/Telegram 一致）
+ *   行圆角   6px  → 0（通栏行，靠内缩分割线分区，主流通讯 App 一致的做法）
  *   卡片圆角 10px → 12px
  *   控件圆角 6px  → 10px；输入条 22px（胶囊）
  *   行高     36px → 72px（拇指友好）
@@ -61,7 +61,7 @@
      * 52 给上下各留 4px 呼吸，热区仍居中，不破坏 44pt 触控下限。
      */
     --mb-nav: 52px;
-    --mb-pad: 16px;         /* 左右基准边距（微信同款） */
+    --mb-pad: 16px;         /* 左右基准边距 */
     --mb-avatar: 48px;
     /*
      * 底部 tab 栏（不含安全区）。2026-11-05 用户「底部 tab 栏增高」：50 → 56。
@@ -157,7 +157,7 @@
 
   /*
    * 窄屏整体字号上调一档（2026-11 用户反馈"比主流 App 小"）：
-   * 桌面正文 15px、单标题 15px；手机上和微信对齐到正文 16、标题 17。
+   * 桌面正文 15px、单标题 15px；手机上和主流 App 对齐到正文 16、标题 17。
    * 只动窄屏，桌面端一个像素不变。
    */
   :root { --t-page: 17px; }
@@ -289,13 +289,18 @@
  * 基本语法。三件事必须一起改，只改一件就会出现第一版那种"卡片缝 + 一条线"的混搭：
  *   ① 行不要圆角和左右内缩（.list-body padding 归零，行铺满）；
  *   ② 行与行之间不留缝（margin-top: 0），靠一条 1px 线分区；
- *   ③ 分割线从头像右侧起（微信/Telegram 都是），不是通栏的一条横杠。
+ *   ③ 分割线从头像右侧起（主流 IM 的通行做法），不是通栏的一条横杠。
  */
 @media (max-width: 900px) {
   .list-body {
     padding: 0 0 16px;
     background: var(--mb-surface, var(--side));
+    /* 微信同款（2026-11-17 用户圈出列表右缘一条空带："跟右边还留着一个滚动条的
+       间隙……微信就是直接顶到右边，没有间隙，可以滚动但是不展示滚动条"）：
+       滚动条不渲染（Chromium 占位 ~15px，行/灰条全被顶短），滚动能力不受影响。 */
+    scrollbar-width: none; /* Firefox */
   }
+  .list-body::-webkit-scrollbar { display: none; } /* Chromium / WebView */
 
   .item {
     position: relative;
@@ -312,7 +317,7 @@
     --mb-gutter: var(--mb-pad, 16px);
   }
 
-  /* 有头像的行：分割线从头像右侧起（微信/Telegram 的通行做法） */
+  /* 有头像的行：分割线从头像右侧起（主流 IM 的通行做法） */
   .item:has(> .avatar) {
     --mb-gutter: calc(var(--mb-pad, 16px) + var(--mb-avatar, 48px) + 12px);
   }
@@ -358,7 +363,7 @@
   .item:active { background: var(--mb-press, var(--active)); }
   .item.active { background: var(--sel); }
 
-  /* 头像 48px 圆角方（微信也是圆角方，不是正圆） */
+  /* 头像 48px 圆角方（主流 App 也是圆角方，不是正圆） */
   .item .avatar {
     width: var(--mb-avatar, 48px);
     height: var(--mb-avatar, 48px);
@@ -368,7 +373,7 @@
   }
 
   /*
-   * 字号/间距对齐微信：主标题 17/600、副标题 14、时间 12。
+   * 字号/间距对齐主流 IM：主标题 17/600、副标题 14、时间 12。
    * 桌面那套 13.5/12px 在手机上字太小、留白却很大，一屏扫过去没有层级。
    */
   .item .line1 b { font-size: 17px; font-weight: 600; }
@@ -495,7 +500,7 @@
 /*
  * 2026-10-31 用户："通讯录不是手机的风格，改成手机那种 ABC 的"。
  *
- * 形态照着手机系统通讯录 / 微信通讯录做：
+ * 形态照着手机系统通讯录 / 主流通讯录 App 做：
  *   上层是**容器入口**（群聊 / 部门，装在一张卡里，点进去是各自的列表页）；
  *   下层是全部员工，按拼音首字母分组，组头吸顶，右侧一条 A–Z 索引可点可滑。
  *
@@ -521,7 +526,7 @@
   /*
    * 通讯录的带头像行压矮一档（2026-10-31 用户："人物卡有点高，调小一些"）。
    * 通用行是 12+48+12 = 72px，一屏（844 高）只能看到 8 个人，扫起来太散；
-   * 这里是 9+42+9 = 60px，跟 iOS/微信通讯录同档，一屏 11 个人。
+   * 这里是 9+42+9 = 60px，跟主流手机通讯录同档，一屏 11 个人。
    * 只压通讯录（首页 + 群聊/部门子页 + 搜索态都用 .mb-cv）——
    * 消息列表行里还有时间戳和两行预览，压了反而挤，那边保持 72。
    * 用变量覆盖而不是重写 padding：分割线起点（--mb-gutter）和状态点的位置
@@ -555,11 +560,73 @@
     padding: 0;
     border: 0;
     background: transparent;
-    color: var(--accent);
+    /* 同上：返回=导航动作，走文字色（与 .mb-back 一套） */
+    color: var(--mb-text, var(--text));
     cursor: pointer;
   }
   .mb-head-back svg { width: 22px; height: 22px; }
   .mb-head-back:active { opacity: .55; }
+
+  /* 通讯录首页导航栏的放大镜（2026-11-17）：点进独立搜索页 ——
+     与 #listAction 同款修法（44×44 透明热区、无边框、tint 色），钉在 ＋ 左边 */
+  /* 放大镜走文字色（2026-11-17 用户："改成黑色"）：它是导航动作里唯一新加的图标，
+     黑色跟标题同一档，不再和蓝色的「＋」抢视线 */
+  .mb-head-search {
+    position: absolute;
+    right: 50px;
+    top: calc(env(safe-area-inset-top, 0px) + var(--mb-nav, 44px) / 2);
+    transform: translateY(-50%);
+    width: 44px;
+    height: 44px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--mb-text, var(--text));
+    cursor: pointer;
+  }
+  .mb-head-search svg { width: 22px; height: 22px; }
+  .mb-head-search:active { opacity: .45; }
+  /* 消息页没有 ＋（#listAction 那栏藏了），放大镜独占右格 */
+  .mb-head-search.solo { right: 6px; }
+
+  /* 搜索页（2026-11-17）：页面顶部一条搜索框 + 下面结果列表。
+     输入框沿用 .ls-field 的图标布局，底子用 fill 色、聚焦给外框（同输入区胶囊的配方） */
+  .mb-cv-search {
+    padding: 8px 12px;
+    background: var(--mb-surface, var(--side));
+    border-bottom: 0.5px solid var(--mb-hairline, var(--line));
+  }
+  .mb-cv-search .ls-field { position: relative; display: flex; align-items: center; width: 100%; }
+  .mb-cv-search input {
+    width: 100%;
+    /* 36 → 40（2026-11-17 用户："搜索框高度增加一些"） */
+    height: 40px;
+    padding: 0 30px;
+    border: 0;
+    border-radius: 10px;
+    background: var(--mb-fill, var(--input));
+    color: var(--mb-text, var(--text));
+    font-size: 15px;
+  }
+  .mb-cv-search input:focus {
+    outline: none;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
+  }
+  .mb-cv-search .ls-ico { position: absolute; left: 9px; color: var(--mb-text-3, var(--dim)); }
+  .mb-cv-search .ls-clear {
+    position: absolute;
+    right: 4px;
+    width: 26px;
+    height: 26px;
+    border: 0;
+    background: transparent;
+    color: var(--mb-text-3, var(--dim));
+    font-size: 16px;
+    line-height: 1;
+  }
+  .mb-cv-search .ls-clear[hidden] { display: none; }
 
   /* ── 入口卡：群聊 / 部门 ── */
   .mb-cv-entry {
@@ -708,15 +775,15 @@
 @keyframes mb-menu-in {
   from { opacity: 0; transform: translateY(-5px); }
 }
-/* ============================================================ 4c. 设置（微信设置页版式） */
+/* ============================================================ 4c. 设置（主流设置页版式） */
 /*
- * 2026-10-31 用户："设置这个页面不应该做成折叠，应该参考微信设置页的做法"。
+ * 2026-10-31 用户："设置这个页面不应该做成折叠，应该参考主流手机设置页的做法"。
  *
  * 改前手机端是**后台侧边栏**的语法：五组各挂一条可折叠的灰条组头（带 ∨ 箭头），
  * 点一下整组收起，行还缩进 17px。一屏只要滚两下就能看完的 10 项，本来不需要折叠；
  * 那条箭头反而让"这页到底能点哪儿"变含糊 —— 组头能点、行也能点，两种点法。
  *
- * 现在照主流手机设置页（iOS / 微信）做：灰底 + 一叠分组卡片。
+ * 现在照主流手机设置页做：灰底 + 一叠分组卡片。
  *   组标题 = 卡片**外面**的一行小灰字，死的（不可点、不收起）；
  *   卡片 = 白底 12px 圆角，卡内行 52px、行尾 chevron、分割线从行内边距起。
  * 桌面（>900px）仍是左栏导航 + 可折叠组头（那列只有 300px，收起确实省地方）。
@@ -766,7 +833,7 @@
   .mb-set-card .item:active { background: var(--mb-press, var(--active)); }
 
   /*
-   * 设置行的字是"条目"不是"标题"：微信同款常规字重，粗体会让十行全变重点。
+   * 设置行的字是"条目"不是"标题"：常规字重，粗体会让十行全变重点。
    *
    * ⚠️ 选择器必须带 `#listBody.mb-set` 这层 id —— style.css 有一条
    *    `#listBody .item[data-set] .line1 b { font-size: 12.5px }`（那是**桌面左栏**
@@ -795,7 +862,7 @@
  * 分段按钮 13px。桌面左栏 + 右栏挤在 1440 里，13px 是对的；手机上一屏只有一列，
  * 同样的 13px 就成了"缩印本"。
  *
- * 对齐主流 App（iOS / 微信设置子页）：
+ * 对齐主流 App 设置子页：
  *   行标签 16 / 分段按钮 15 / 段标题 14 / 说明 13 / 标签牌 11.5。
  * 不做 17 —— 设置子页的行是"标签 + 控件"两栏，右侧控件本身有内边距，17 会挤到换行。
  * 全部挂在 `#settingsView` 下：桌面零改动，也压得过 style.css 里那几条（id 起头）。
@@ -829,9 +896,6 @@
   #settingsView .set-row input,
   #settingsView .set-row select,
   #settingsView .set-row textarea { font-size: 16px; }
-
-  /* 成段说明（额度页"这个数字是怎么来的"）跟着正文走 */
-  #settingsView .set-note { font-size: 13px; line-height: 1.75; padding: 12px 16px; }
 
   /*
    * 二级信息（副标题 / 元数据 / 状态标签 / 小按钮）：桌面 11–12.5px，
@@ -889,26 +953,8 @@
   #settingsView .set-row > .machine-data,
   #settingsView .set-row > .plg-check { flex: 1 1 auto; min-width: 0; }
 
-  /*
-   * 「生图服务」那张表单：`.gr-conn.stack` 是三列网格
-   * `max-content | minmax(160px,520px) | max-content` —— 三列最小宽度加起来
-   * 就超过 390，输入框整截戳到卡片外被 overflow:hidden 切掉（"…/v1（填到 /v1 这级"只露半行）。
-   * 窄屏收成单列：字段名在上（小灰字）、输入框占满一行，跟主流 App 的表单页一致。
-   */
-  #settingsView .gr-conn.stack {
-    grid-template-columns: minmax(0, 1fr);
-    padding: 14px 16px;
-    row-gap: 0;
-  }
-  #settingsView .gr-conn.stack .gr-conn-row .row-label {
-    text-align: left;
-    margin-top: 12px;
-    font-size: 13px;
-    color: var(--dim);
-  }
-  #settingsView .gr-conn input { width: 100%; min-width: 0; }
-  #settingsView .gr-conn-status { grid-column: 1; text-align: left; }
-  #settingsView .gr-conn-actions { grid-column: 1; justify-content: flex-start; margin-top: 14px; }
+  /* 2026-11-16 生图服务退场：上面那段 .gr-conn.stack 窄屏单列规则随表单一起删。
+     弹窗里的 .gr-conn-actions 挂在 body（不在 #settingsView），不受影响。 */
   /* 表单下方的成段说明：桌面版是贴着卡片内居中的窄正文（max-width 560 + auto 边距），
      窄屏跟着正文同档，并且左右留出行内边距 —— 否则文字会顶到卡片圆角上 */
   #settingsView .set-hint {
@@ -1099,6 +1145,12 @@
 
   .input-wrap {
     display: grid;
+    /* 桌面 .input-wrap 是 relative（style.css:2883，当 mention-pop / 附件菜单的
+       定位基准）。手机档必须撤掉 —— 否则 ＋ 面板的绝对定位落在这里，bottom:0 =
+       胶囊下沿，整块面板从胶囊底往上铺，「上传文件」跑到输入框**上方**去
+       （2026-11-17 复现钉死）。撤掉后定位基准落到 .composer（16.11 已 relative），
+       面板才待在输入框下方的垫高区。mention-pop 改锚 composer，位置几乎不变。 */
+    position: static;
     grid-template-columns: auto minmax(0, 1fr) auto;
     grid-template-areas:
       "plus text send"
@@ -1135,11 +1187,18 @@
   .input-tools { display: contents; }
   .input-tools > * { margin: 0; }
 
-  /* 权限 / 模型：手机上收起（详见上面的注释） */
+  /* 权限 / 模型：手机上收起（详见上面的注释）。
+     上下文占用环一起收（2026-11-17 用户实报"手机端不显示这个"）：桌面它摆模型左边，
+     手机权限/模型都没了它没地方摆 —— display:contents 摊平后它会掉进网格下一行，
+     孤零零一颗圆环挂在输入框左下角。 */
   #dPermMount,
-  #dModelMount { display: none; }
+  #dModelMount,
+  .cring { display: none; }
 
-  .att-wrap { grid-area: plus; align-self: end; }
+  /* 桌面 .att-wrap 是 relative（当 popover 的定位基准）。手机档必须撤掉 ——
+     否则面板锚在「＋」按钮上，跑到输入框上方去（2026-11-17 用户实报）；
+     撤掉后绝对定位才落到 .composer 上，面板待在输入框下方的垫高区里。 */
+  .att-wrap { grid-area: plus; align-self: end; position: static; }
 
   button.att-add {
     width: 38px;
@@ -1177,65 +1236,61 @@
   /* 附件条（选了文件之后那排缩略图）横跨整条胶囊 */
   .att-strip { grid-area: strip; }
 
-  /* ── ＋ 菜单 → 底部抽屉（2026-11-05 用户："点击+号不要弹出卡片，改成打开底部抽屉"）
+  /* ── ＋ 菜单 → 输入框下方的面板（2026-11-17 用户："点 + 号，输入框向上顶起，
+     下面显示一个上传文件的入口"）
 
-     桌面那颗朝上弹的小 popover（style.css .attach-menu）在手机上是反模式：目标小、
-     悬在拇指上方、没有蒙层。按 PRD「关键弹窗改为底部抽屉」的同一套语言（dialog
-     贴底 + ::backdrop 那条）重做成 action sheet。DOM 与 hidden 开关一概不动 ——
-     还是 #attachMenu，app.mjs 的开合逻辑照旧。
+     旧形态是贴底抽屉（fixed 悬浮 + 黑蒙层），单条「上传文件」孤零零一条灰杠压在
+     页面最底下，和输入框脱节。现在改成「输入面板」形态：菜单开着时给
+     .composer 垫一块面板高度的 padding-bottom —— .composer 本来就吸底，垫高后
+     输入胶囊整体被顶起来，聊天区相应缩短；面板本体绝对定位在 .composer 的
+     padding 区里（.composer 16.11 那条已 position:relative），视觉上就是
+     输入框下方、原键盘位置的那块面板。没有蒙层，点别处照旧收起。
 
-     蒙层是菜单自己的 ::before：伪元素不是事件目标，点蒙层的 target 落回
-     #attachMenu 本体 —— app.mjs 的收起判定按这个补了一条（点本体 = 收）。 */
+     :has() 挂状态，app.mjs 的 hidden 开关一概不动。桌面那颗朝上弹的小 popover
+     （style.css .attach-menu）不归这条管。 */
+  .composer:has(.attach-menu:not([hidden])) {
+    padding-bottom: calc(200px + env(safe-area-inset-bottom, 0px));
+    transition: padding-bottom .18s ease-out;
+  }
   .attach-menu {
-    position: fixed;
+    position: absolute;
     left: 0;
     right: 0;
     bottom: 0;
-    z-index: 70; /* 压过 tabbar / backbar（60） */
+    z-index: 5;
     min-width: 0;
+    height: calc(200px + env(safe-area-inset-bottom, 0px));
     display: grid;
-    gap: 8px;
-    padding: 14px 12px calc(12px + env(safe-area-inset-bottom, 0px));
+    gap: 12px;
+    align-content: start;
+    padding: 18px 14px calc(14px + env(safe-area-inset-bottom, 0px));
     border: 0;
-    border-radius: 18px 18px 0 0;
-    background: var(--mb-surface, var(--panel));
-    box-shadow: 0 0 0 0.5px color-mix(in srgb, var(--text) 10%, transparent),
-                0 -12px 36px rgb(0 0 0 / .25);
-    animation: mb-attach-up .2s ease-out;
+    border-radius: 0;
+    /* 透明：面板坐在 .composer 的玻璃底上（backdrop-filter 罩整块含 padding 区），
+       跟输入胶囊同底色，不再另起一层 */
+    background: transparent;
+    box-shadow: none;
+    animation: mb-attach-fade .15s ease-out;
   }
-  .attach-menu::before {
-    content: '';
-    position: fixed;
-    inset: 0;
-    background: rgb(0 0 0 / .45);
-    z-index: -1;
-    animation: mb-attach-fade .2s ease-out;
-  }
-  /* 抓手：底部抽屉的标配暗示「这条可以往下捋」（实际收起走点蒙层 / 点按钮） */
-  .attach-menu::after {
-    content: '';
-    position: absolute;
-    top: 6px;
-    left: 50%;
-    width: 36px;
-    height: 4px;
-    border-radius: 2px;
-    transform: translateX(-50%);
-    background: color-mix(in srgb, var(--text) 18%, transparent);
-  }
+  /* 输入面板的入口块：白圆角方块 + 图标在上、字在下，靠左排；不是通栏大按钮 */
   .attach-menu .item {
-    padding: 15px 16px;
-    border-radius: 14px;
-    font-size: 16px;
+    width: 84px;
+    padding: 14px 0 11px;
+    border-radius: 16px;
+    display: grid;
+    justify-items: center;
+    gap: 7px;
+    font-size: 12px;
     text-align: center;
+    color: var(--mb-text, var(--text));
     background: var(--mb-fill, var(--input));
   }
-  .attach-menu .item:active { filter: brightness(.94); }
-  /* 滑入动画只能动 bottom 不能动 transform/translate —— 菜单一旦带变换就成了
-     自己 ::before（fixed 蒙层）的包含块，动画那 200ms 蒙层会缩成贴纸再突然铺开 */
-  @keyframes mb-attach-up {
-    from { bottom: -30%; opacity: .4; }
+  .attach-menu .item::before {
+    content: '📎';
+    font-size: 26px;
+    line-height: 1;
   }
+  .attach-menu .item:active { filter: brightness(.94); }
   @keyframes mb-attach-fade {
     from { opacity: 0; }
   }
@@ -1342,7 +1397,9 @@
 .mb-back {
   border: 0;
   background: transparent;
-  color: var(--accent, #3b6ef5);
+  /* 返回钮走文字色（2026-11-17 用户："返回按钮改成黑色"）：返回是导航动作，
+     跟标题同一档黑，不再用品牌蓝 */
+  color: var(--mb-text, var(--text));
   font: inherit;
   /* 只留一个 chevron 图标（2026-11 用户要求：< 这种），SVG 保证线条粗细稳定 */
   display: inline-flex;
@@ -1709,7 +1766,8 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
   body.mb-narrow .mb-set-card .item.mb-set-back {
     min-height: 48px;
     gap: 8px;
-    color: var(--dim);
+    /* 「‹ 我的」返回行：跟其他返回钮同一档文字色（2026-11-17 全站改黑），原来是 --dim */
+    color: var(--mb-text, var(--text));
   }
   body.mb-narrow .mb-set-card .item.mb-set-back svg {
     width: 18px;
@@ -1721,7 +1779,7 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
 
 /* ── 15b. 「我的」手机 iOS 风试点（2026-11-05）─────────────────────────
 
-   用户："现在的手机页面显得太线性化，跟主流的 APP（豆包、抖音、美团等）风格不太
+   用户："现在的手机页面显得太线性化，跟主流的 APP 风格不太
    一样。手机端改成 iOS 风是不是更好呢？先改我的页面，我看看效果。"
 
    "线性"指的是：整宽色块一条条往下摞，每块等宽等重等圆角，从上到下没有视觉锚点。
@@ -1730,7 +1788,7 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
 
    ① hero 承担视觉重心 —— 身份卡脱掉"卡"状态升格为通栏渐变 hero：顶部双 radial
       accent 辉光，向下淡入分组卡页底（--mb-cvbg），头像居中放大（62→78，带光环），
-      名字 20→22。豆包/美团个人中心的头部就是这个读法。
+      名字 20→22。主流个人中心页的头部就是这个读法。
    ② 卡片"浮"起来 —— hero 之后的第一张卡用负 margin 压到渐变下缘，形成
       "彩色头部 + 白卡上浮"的前后层次，线性感的正解就在这一步。
    ③ iOS 分组细节 —— 组头改成卡外 13px 常规字重灰字（与 .mb-set-head 同字阶）、
@@ -1752,8 +1810,8 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
         左右各留 20px 的圆角小盒 + 一圈投影，内容又只有三行 —— 页面被切成"两个
         浮在灰底上的盒子"，读起来像组件库 demo，不像一整页。
         这一版把卡整个拆掉：整页一片 surface（见 .me-body），辉光直接铺在这片面
-        上、通栏到底，列表也通栏、只用 hairline 分行。这是微信「我」/ Telegram
-        设置页的语法 —— 没有卡边、圆角、投影，页面才立得住。 */
+        上、通栏到底，列表也通栏、只用 hairline 分行。这是主流设置页的语法
+        —— 没有卡边、圆角、投影，页面才立得住。 */
   body.mb-narrow #settingsView .me-hero-sec {
     margin: 0;
     padding: 0;
@@ -1766,7 +1824,7 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
        上一版是"封面式"读法 —— min-height 248 + `align-content:end` 把三行压到下缘，
        头上留 ~78px 纯辉光。在对照稿里那叫留白，在真机 390 上就是**状态栏到头像
        之间一大段什么都没有**，页面像没加载完。
-       现在改成微信「我」的紧凑度：hero 高度由内容决定，上留 34（够让辉光探出
+       现在改成主流「我的」页的紧凑度：hero 高度由内容决定，上留 34（够让辉光探出
        一点、又不跟状态栏挤在一起），头像顶对齐、下面紧接 chip 行，
        hero 总高 ~188 —— 视觉重心回到头像本身，而不是头像上方那片空。 */
     min-height: 0;
@@ -1805,32 +1863,8 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
      中黑档，400 在深色底上发飘；名字 600 / 行文字 400 是 iOS 档，不动 */
   body.mb-narrow #settingsView .me-hero-sec .me-role { font-weight: 500; }
   body.mb-narrow #settingsView .me-hc .me-meta { font-size: 15px; }
-  /* chip 行：整行铺开（含头像下方），不缩在第 2 列 —— 第 2 列只有 ~200px，
-     设备名那一枚会被挤到第二行，身份区凭空多出一行碎块。 */
-  body.mb-narrow #settingsView .me-chips {
-    grid-column: 1 / -1;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    margin-top: 15px;
-  }
-  body.mb-narrow #settingsView .me-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    height: 27px;
-    padding: 0 10px;
-    border-radius: 7px;
-    font-size: 12px;
-    color: var(--mb-text-2, var(--dim));
-    background: color-mix(in srgb, var(--text) 6%, transparent);
-  }
-  body.mb-narrow #settingsView .me-chip svg { width: 12px; height: 12px; flex: none; }
-  body.mb-narrow #settingsView .me-chip.ac {
-    color: var(--mb-tint, var(--accent));
-    background: color-mix(in srgb, var(--mb-tint, var(--accent)) 12%, transparent);
-    font-weight: 500;
-  }
+  /* chip 行（.me-chips / .me-chip）2026-11-17 整体撤掉：两枚 chip 都被用户删了
+     （「中枢账号」冗余、「这台机器」与清单里的「当前设备」行重复）。别再拿回来。 */
   /* 信箱从"裸图标"变圆形钮：白面上一颗 40px 的圆面，未读角标压在它外缘 ——
      位置稳定，也不用靠颜色提示"这里能点"。 */
   body.mb-narrow #settingsView .me-hc .me-inbox-icon {
@@ -1842,27 +1876,31 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     background: var(--mb-press, var(--active));
   }
 
-  /* 字阶对齐主流 App（同上反馈）：属性行 15/14 → 16/15（微信/美团"标签+详情"
+  /* 字阶对齐主流 App（同上反馈）：属性行 15/14 → 16/15（主流 App "标签+详情"
      行的读法，iOS 表格行是 17），等宽地址 13 → 14 —— 再大就顶到换行了 */
   body.mb-narrow #settingsView .me-k { font-size: 16px; }
   body.mb-narrow #settingsView .me-v { font-size: 15px; }
   body.mb-narrow #settingsView .me-v-mono { font-size: 14px; }
 
   /* ② 第一节清单与英雄区的接缝：没有卡了，两者都贴在同一个 surface 上，
-        分界只靠一条通栏 hairline —— 这也正是 iOS / Telegram 设置页的分节法。 */
+        分界只靠一条通栏 hairline —— 这也正是主流设置页的分节法。 */
   body.mb-narrow #settingsView .me-hero-sec + .set-sec {
     position: relative;
     margin-top: 0;
   }
 
-  /* ②b 设置清单（2026-11-11 深夜第四版：按「微信 · 我」的分组语法重排）
-        微信那一页不是"卡"，是**分组块**：一块满宽、无圆角、无描边、无投影的白，
+  /* ②b 设置清单（2026-11-11 深夜第四版：按主流「我的」页的分组语法重排）
+        主流那一页不是"卡"，是**分组块**：一块满宽、无圆角、无描边、无投影的白，
         与上一块之间隔 10px 页底灰，块内行与行之间一条内缩 20 的 hairline。
         和第三版被否掉的"12px 圆角小盒子"是两回事 —— 那个输在"小 + 浮"，
-        这个赢在"满宽 + 只靠灰间隔分组"（用户 23:1x 截图："参考微信我的页面的布局"）。 */
+        这个赢在"满宽 + 只靠灰间隔分组"（用户 23:1x 截图："参考主流「我的」页的布局"）。 */
   body.mb-narrow #settingsView .me-one-sec { margin-top: 10px; }
   /* 上面那句会被 `#settingsView .me-hero-sec + .set-sec { margin-top:0 }` 压掉
-     （那条多一个类，特异性更高）—— 分组块的 10px 灰间隔得自己再抬一档。 */
+     （那条多一个类，特异性更高）—— 分组块的灰间隔得自己再抬一档。
+     2026-11-17 用户拿群详情页做参照："我要的是这种间隙效果" —— 群详情页的缝是
+     10px（§群详情页 `#groupView .dcard { margin: 0 0 10px }`）。两页同一套语言，
+     这里就回到 10px；之前一度加到 16px 是为了补救"hero 不是白块"，现在 hero 补了
+     `--mb-surface` 白底（见 §17.3），10px 已经足够清楚。 */
   body.mb-narrow #settingsView .me-hero-sec + .me-one-sec { margin-top: 10px; }
   body.mb-narrow #settingsView .me-one-box {
     border: 0;
@@ -1873,7 +1911,7 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     overflow: hidden;
   }
   /* 行的左右留白自己给（20 = 页面左右留白，与 hero 的 20 一条线）；
-     64 是微信表格行的档（56 在 17px 字下偏挤，72 又太松） */
+     64 是主流表格行的档（56 在 17px 字下偏挤，72 又太松） */
   body.mb-narrow #settingsView .me-one-box .me-kv {
     min-height: 64px;
     padding: 12px 20px;
@@ -1899,13 +1937,12 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     min-height: 100%;
     /* 反吃 .detail-body 的 20/24 内边距：hero 与列表都通栏，左右留白由各自给 */
     padding: 0;
-    /* 整页一层极淡的 tint：从顶部右上角铺开、到 ~70% 高度化尽。
-       2026-11-11 第四版：底下那层从 surface 换成**页底灰** —— 微信「我」就是灰底，
-       白只留给分组块（封面区那点渐变落在灰上也不脏，反而比落在纯白上柔和）。 */
-    background:
-      radial-gradient(140% 78% at 96% -12%, color-mix(in srgb, var(--mb-tint, var(--accent)) 25%, transparent), transparent 60%),
-      radial-gradient(120% 66% at -4% -18%, color-mix(in srgb, var(--mb-tint, var(--accent)) 13%, transparent), transparent 58%),
-      var(--mb-cvbg, var(--mb-page, var(--bg)));
+    /*
+     * 页底 = `--mb-page`（2026-11-17 末版）。注意与群详情页同一套 token
+     * （见文件末尾 §群详情页）：那一页的灰缝用的就是 `--mb-page`，两页视觉必须一致。
+     * 早先这里是 `--mb-cvbg`，浅色下两者虽同值，深色下不同档 —— 统一到 page 更省事。
+     */
+    background: var(--mb-page, var(--bg));
   }
   body.mb-narrow #settingsView .me-body > .set-sec { flex: none; }
   body.mb-narrow #settingsView .me-foot {
@@ -1961,12 +1998,40 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     background: color-mix(in srgb, var(--bad) 10%, transparent);
   }
 
-  /* ④ 外观卡（2026-11-05）—— **2026-11-11 深夜第四版整段退场**：
-        当时是「左标签 + 右侧分段选项卡」（用户在桌面偏好设置那张截图上一眼拍的）。
-        现在这一行按「微信 · 我」的语法收成「主题 ‹值› ›」，点整行弹底部选择
-        （见 settings.mjs `#meThemeRow`）；分段控件在手机「我的」页不再出现。
-        DOM 已改，这里的 .me-theme-box / -row / -label / -seg / -sec 全部没有引用，
-        删掉而不是留着 —— 留着下次会有人照着它改。 */
+  /* ④ 主题行内分段开关（2026-11-17 第五版，用户："直接改成行内切换按钮，
+        不使用抽屉"）：行右端一枚两档分段（浅色｜深色），点档即生效，不再弹底部
+        选择。iOS 分段控件语法 —— 底槽是文字 8% 的灰，选中档浮一块 surface 圆片。
+        主题行因此从 <button> 退成 <div class="me-kv">（button 不能套 button），
+        行本身不再可点。 */
+  body.mb-narrow #settingsView .me-theme-seg {
+    flex: 0 0 auto;
+    margin-left: auto;   /* 推到行右缘 —— 左标签、右控件，跟「当前设备」等行同构 */
+    display: flex;
+    gap: 2px;
+    padding: 2px;
+    border-radius: 9px;
+    background: color-mix(in srgb, var(--text) 8%, transparent);
+  }
+  body.mb-narrow #settingsView .me-theme-seg button {
+    min-width: 52px;
+    height: 28px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    font: inherit;
+    font-size: 13px;
+    line-height: 1;
+    color: var(--mb-text-3, var(--dim));
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  body.mb-narrow #settingsView .me-theme-seg button.on {
+    background: var(--mb-surface, var(--panel));
+    color: var(--mb-text, var(--text));
+    font-weight: 500;
+    box-shadow: 0 1px 3px color-mix(in srgb, var(--text) 14%, transparent);
+  }
 
   /* ⑤ 通用 · 清除缓存（2026-11-06）：卡面复用「这台设备」的 .me-dev-box，
         行是 .me-kv 的 button 形态 —— 按钮默认样式全退掉，触控目标抬到 52 高，
@@ -2093,7 +2158,8 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     padding: 0;
     border: 0;
     background: transparent;
-    color: var(--accent, #3b6ef5);
+    /* 文字色（2026-11-17 返回钮全站改黑）：设置/个人资料/更改昵称三页的「←」 */
+    color: var(--mb-text, var(--text));
     cursor: pointer;
     -webkit-tap-highlight-color: transparent;
   }
@@ -2151,6 +2217,125 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
   body.mb-narrow #settingsView .me-inbox-dot[hidden] { display: none; }
 }
 
+/* ── 15e. 「我的 › 个人资料」子页（2026-11-17 用户："手机端点击头像跳转到个人
+   详情页，在个人详情页可以修改昵称。这个页面点击昵称弹窗修改的方式去掉"）─────
+   复用 15d 那套导航栏（.me-set-nav/.me-set-back/.me-set-title），本页只补：
+     ① 「我的」页头像按钮（.me-ava-btn）—— 清掉 button 默认样式，内里 .me-ava 尺寸不动，
+        仍是 me-hc grid 的第一列；
+     ② 资料页清单（.me-pf-sec）—— 2026-11-17 用户："这个页面太复杂了，显示两个就行"，
+        大头像 hero 整段删掉，只留昵称 + 手机号两行；昵称行 .pf-nick-row 点击进更改昵称页；
+     ③ 「更改昵称」整页（.me-set-nav-ne / .ne-box / .ne-input / .ne-hint / .me-nick-save）。
+   全部关在 mb-narrow，桌面「我的」页的铅笔/弹窗交互一个像素不动。 */
+@media (max-width: 900px) {
+  /* ① 头像按钮：清 button 默认，inline-flex 让内里 .me-ava（grid 第一列）撑开原尺寸 */
+  body.mb-narrow #settingsView .me-ava-btn {
+    display: inline-flex;
+    padding: 0;
+    margin: 0;
+    border: 0;
+    background: transparent;
+    line-height: 0;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  body.mb-narrow #settingsView .me-ava-btn:active { opacity: .82; }
+
+  /* ② 分组（2026-11-17 用户截图两版收口）——
+     第一版按主流设置页做成"灰底上的圆角卡"（左右 20 边距）；用户随即否掉：
+     **"两边、顶部不要有间隙"** —— 也就是说这一页要的是通栏块，不是浮起来的卡。
+     于是回到「我的」页分组块的语法：白块满宽、无圆角、无描边、顶部直接贴导航栏
+     hairline，块下方留 20 页底灰；块内仍是主流那套信息行（行高 52、两侧 17px、
+     分割线内缩到 label 文字沿）。
+     下面这批选择器都比 §15b 的通栏规则多一个 .me-pf-sec/.me-body 类，
+     特异性高一档，不用 !important 也能压住。
+     卡片通栏，所以 .detail-body 的 20/24 内边距要退掉，否则块左右各缩进 24 露出灰边。*/
+  body.mb-narrow:is(.mb-me-profile, .mb-me-nickedit) #settingsView .me-body {
+    padding: 0 0 24px;
+  }
+  body.mb-narrow #settingsView .me-pf-sec { margin: 0; }
+  body.mb-narrow #settingsView .me-pf-sec .me-one-box {
+    border-radius: 0;
+    box-shadow: none;
+  }
+  body.mb-narrow #settingsView .me-pf-sec .me-kv {
+    gap: 8px;
+    /* 高度读 --mb-row，跟「更改昵称」的输入框行同一个数（见 16.0 几何段）。
+       min-height **必须**一起写：§15b 给通栏块留了 min-height:64，只改 height
+       会被它顶回去 —— 这正是"两页一高一矮"的真凶（64 vs 52）。 */
+    height: var(--mb-row, 52px);
+    min-height: var(--mb-row, 52px);
+    padding: 0 20px;
+  }
+  body.mb-narrow #settingsView .me-pf-sec .me-k { font-size: 17px; }
+  /* 值是"用户填的东西"，跟 label 同档字号；昵称是黑字，手机号是只读灰字 */
+  body.mb-narrow #settingsView .me-pf-sec .me-v { font-size: 17px; }
+  body.mb-narrow #settingsView .me-pf-sec .pf-nick-row .me-v { color: var(--mb-text, var(--text)); }
+  body.mb-narrow #settingsView .me-pf-sec .me-kv + .me-kv::before { left: 20px; }
+  body.mb-narrow #settingsView .pf-nick-row { cursor: pointer; }
+  body.mb-narrow #settingsView .pf-nick-row:active { background: var(--mb-press, var(--active)); }
+  body.mb-narrow #settingsView .me-pf-ro .me-v { color: var(--mb-text-3, var(--dim)); }
+  /* 行尾箭头：浅灰细箭头（不是实心三角），20px 的字形 `›` 刚好 */
+  body.mb-narrow #settingsView .me-pf-sec .me-chevron {
+    flex: 0 0 auto;
+    margin-left: -2px;
+    color: var(--mb-text-3, var(--dim));
+    font-size: 20px;
+    font-style: normal;
+    line-height: 1;
+    transform: translateY(-1px);
+  }
+
+  /* ④「更改昵称」页 —— 主流设置页同款：导航栏右上角「保存」，中间一条输入框 + 说明。
+     导航栏复用 15d 那套；只把第三列从 48px 放宽到 60px 容纳「保存」文字钮，
+     标题仍居中（grid 中间 1fr 不偏）。 */
+  body.mb-narrow #settingsView .me-set-nav-ne { grid-template-columns: 48px 1fr 60px; }
+  body.mb-narrow #settingsView .me-nick-save {
+    justify-self: end;
+    margin-right: 12px;
+    padding: 6px 2px;
+    border: 0;
+    background: transparent;
+    color: var(--accent, #3b6ef5);
+    font: inherit;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  body.mb-narrow #settingsView .me-nick-save:active { opacity: .5; }
+  /* 同页语法：跟个人资料页一样通栏（两边、顶部不留缝），块下方才是灰；
+     行高也读同一个 --mb-row —— 两页的行必须一样高（用户并排比过） */
+  body.mb-narrow #settingsView .ne-sec { margin: 0; }
+  body.mb-narrow #settingsView .ne-box {
+    display: flex;
+    align-items: center;
+    height: var(--mb-row, 52px);
+    background: var(--mb-surface, var(--side));
+    border-radius: 0;
+    padding: 0 20px;
+  }
+  body.mb-narrow #settingsView .ne-input {
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    font-size: 16px; /* ≥16px 防 iOS 聚焦缩放 */
+  }
+  body.mb-narrow #settingsView .ne-input:focus { outline: none; }
+  body.mb-narrow #settingsView .ne-input::placeholder { color: var(--mb-text-3, var(--dim)); }
+  body.mb-narrow #settingsView .ne-hint {
+    margin: 10px 20px 0;
+    /* 说明压在灰页底上（块外），38% 那档只有 ~2.7:1、13px 字发虚 —— 提一档 */
+    color: var(--mb-text-2, var(--dim));
+    font-size: 13px;
+    line-height: 1.6;
+  }
+}
+
 /*
  * mobile-patch.css —— 消息页 iOS 化（视觉 Phase 1 + 体验 Phase 2）补丁片段
  * ══════════════════════════════════════════════════════════════════════════════
@@ -2178,7 +2363,7 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
  * 与 §0 的差异，一句话说清为什么：
  *   · --mb-surface 从 var(--panel)（深 #111214）提到 #1C1C1E：iOS 深色的卡面是
  *     secondarySystemGroupedBackground，比"自定义深灰"亮一档，行与行之间才分得开；
- *   · --mb-page 深色取**纯黑**：消息页的底就该是最深的（微信/iMessage 都这样），
+ *   · --mb-page 深色取**纯黑**：消息页的底就该是最深的（主流聊天 App 都这样），
  *     灰底留给通讯录/设置那种"卡片浮在灰上"的页面；
  *   · --mb-chatbg 改纯白/纯黑：灰气泡要浮在这层上，底灰一深气泡就糊了；
  *   · --mb-fill / --mb-press 从 color-mix 换成 iOS 官方那两个 rgba：color-mix 的
@@ -2224,7 +2409,15 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
 
     /* ── 几何：双主题共用（只改两处校准 + 一个新增） ── */
     --mb-r-ava: 12px;        /* 头像圆角 10 → 12（跟卡片同档，视觉规范 2.4） */
-    --mb-r-bubble: 18px;     /* 气泡 16 → 18（iMessage/微信实测档，16 略方） */
+    --mb-r-bubble: 18px;     /* 气泡 16 → 18（主流聊天 App 实测档，16 略方） */
+    /*
+     * 「我的 › 个人资料」与「更改昵称」两页的行高 —— **必须同高**
+     * （2026-11-17 用户并排截图："这两个高度一致吗？不一致就改成一致"）。
+     * 上一版一个写 min-height:52、一个靠 input 的 height:52 顶起来，Android WebView
+     * 里 input 的行盒会被字体撑出几像素，看着就一高一矮。现在两页都读这一个 token，
+     * 而且容器用固定 height（不是 min-height），高度不再受内容/平台字体影响。
+     */
+    --mb-row: 52px;
     /*
      * tab 栏高度不再在这里覆写：深色原来单独给 49（比浅色矮 1px），
      * 2026-11-05 基数抬到 56 后这 1px 的差没意义，反而让两主题切换时栏高跳动。
@@ -2346,7 +2539,9 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     border: 0;
     border-radius: 0;
     background: transparent;
-    color: var(--mb-tint, var(--accent));
+    /* 「＋」也走文字色（2026-11-17 用户："加号也改成黑色"）：跟放大镜同一档，
+       两颗粒导航动作看起来是一套；原来它是全站唯一的蓝图标，在黑标题旁显得跳 */
+    color: var(--mb-text, var(--text));
     font-size: 24px;
     line-height: 1;
   }
@@ -2382,11 +2577,11 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
 
 /*
  * 三处修订（视觉规范 3.1 + 差异清单 #6/#7）：
- *   ① 名字 600 → 500：一屏名字全 600 就没有主次了，微信会话名是常规字重；
+ *   ① 名字 600 → 500：一屏名字全 600 就没有主次了，主流会话名是常规字重；
  *   ② 预览文字从 --dim 归 --mb-text-2、时间 12px 归 --mb-text-3：
  *      iOS 的时间戳永远是最弱一档，弱色比"独立灰"更退后；
  *   ③ 选中态 --sel（淡蓝）→ --mb-fill（灰）：手机上点进详情列表就藏了，
- *      持久蓝底没有信息价值；灰是微信/设置页的通行做法。
+ *      持久蓝底没有信息价值；灰是主流设置页的通行做法。
  */
 @media (max-width: 900px) {
   .list-body { background: var(--mb-surface, var(--side)); }
@@ -2399,6 +2594,13 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
   /* 按压：无 transition —— 按下即变、抬起即回，加过渡反而"显肉"（UX §3.1） */
   .item:active { background: var(--mb-press, var(--active)); transition: none; }
   .item.active { background: var(--mb-fill, var(--sel)); }
+  /* 会话行选中态手机上**不画**（2026-11-17 用户拍板："进列表就清掉" —— 主流做法）：
+     从聊天页退回列表走的是"摘类回显旧 DOM"（mobile.mjs leaveDetail 不重渲染），
+     contacts.mjs convRowHTML 里那个"窄屏不算 active"的渲染条件管不住已画出来的
+     旧类，这里按 `[data-conv]` 精确兜底。通讯录的群/员工行（data-group/data-persona）
+     和按压态 .item:active 都不动 —— 前者是另一套选中语义，后者是点击反馈。
+     桌面照旧：左栏靠 .item.active（--sel 淡蓝）标"当前选中"。 */
+  .item[data-conv].active { background: none; }
 
   .item .avatar {
     border-radius: var(--mb-r-ava, 10px);
@@ -2422,54 +2624,17 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
   .item .line2 .dot.busy { background: var(--mb-online, var(--ok)); animation: none; }
 }
 
-/* ============================================================ 16.5 未读红点（新增） */
+/* ============================================================ 16.5 未读红点（已移除） */
 
 /*
- * 长在头像右上角，不是行右侧 —— 行右侧留给时间（主流 IM 惯例）。
- * 落位沿用 §4 那颗"忙点"的思路：偏移要压在头像圆角的弧上，不是压在矩形角上。
- * 18px 的角标取 −9px（圆心正好在角上）：一半在头像里、一半在行底上。
- *
- * 2px 的"骑角描边"用 box-shadow ring 画而不是 border：border 会把 18px 吃掉内圈、
- * 数字被挤，ring 不占宽度 —— 所以 >99 变 "99+" 时宽度只往右长，行高恒 72 不跳。
- *
- * ⚠️ 需要一行 JS 配合（CSS 造不出节点）：contacts.mjs 的会话行模板里补
- *    `<span class="unread" aria-hidden="true">N</span>`（无数字时加 .dot-only）。
+ * 这一节原来放的是消息列表头像右上角的未读红点：无数字时一颗 8px 纯点（.dot-only），
+ * 骑在头像圆角的弧上，2px 描边取行面色，不压行右侧（那里留给时间）。
+ * 2026-11-17 用户要求去掉 —— contacts.mjs 会话行模板里的
+ * `<span class="unread dot-only">` 已同步删除，喂它的 chat.mjs 未读账本
+ * （SEEN_KEY / markConvSeen / convUnread）只有这一个消费者，一并拆除。
+ * 这里只留一段说明，避免以后有人照着旧注释再把节点加回来。
+ * 后续小节编号保持原样，不为此重新编号。
  */
-@media (max-width: 900px) {
-  .item > .unread {
-    position: absolute;
-    left: calc(var(--mb-pad, 16px) + var(--mb-avatar, 48px) - 9px);
-    top: calc(var(--mb-item-pad, 12px) - 9px);
-    min-width: 18px;
-    height: 18px;
-    padding: 0 5px;
-    border-radius: 9px;
-    display: grid;
-    place-items: center;
-    background: var(--mb-unread, var(--bad));
-    color: var(--mb-on-bubble, var(--on-solid));
-    font-size: 11px;
-    font-weight: 600;
-    line-height: 1;
-    font-variant-numeric: tabular-nums;
-    /* 骑角描边：颜色必须等于**行面**色，否则白圈会跟着页面底变灰 */
-    box-shadow: 0 0 0 2px var(--mb-surface, var(--side));
-    z-index: 1;
-    pointer-events: none;
-  }
-
-  /* 无数字的未读：8px 纯点（UX §2"未读"）*/
-  .item > .unread.dot-only {
-    left: calc(var(--mb-pad, 16px) + var(--mb-avatar, 48px) - 4px);
-    top: calc(var(--mb-item-pad, 12px) - 4px);
-    min-width: 8px;
-    width: 8px;
-    height: 8px;
-    padding: 0;
-    border-radius: 50%;
-    font-size: 0;
-  }
-}
 
 /* ============================================================ 16.6 归档固定条 */
 
@@ -2574,14 +2739,15 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     pointer-events: none;
   }
 
-  /* 返回 chevron：tint 色 + 44×44 热区（UX §5.1 / §1.3） */
+  /* 返回 chevron：44×44 热区（UX §5.1 / §1.3）；颜色走文字色（2026-11-17 全站返回钮改黑，
+     原来这行 tint 会盖掉 .mb-back 的颜色） */
   .mb-chat-back {
     width: 44px;
     height: 44px;
     display: grid;
     place-items: center;
     padding: 0;
-    color: var(--mb-tint, var(--accent));
+    color: var(--mb-text, var(--text));
   }
   .mb-chat-back:active { opacity: 0.5; }
 
@@ -2592,7 +2758,7 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
    * 聊天头改版（2026-11-05 用户：「头像去掉、点名字进详情、去掉现在闲着、按钮不要边框」）
    *
    * 一行里原来有五个东西：← 头像 名字 状态字 ＋钮 ⟲钮 —— 390px 上名字只剩一百来像素，
-   * 稍长就换行，整条头忽高忽低。这一版按 iOS/微信的语法收成三个：
+   * 稍长就换行，整条头忽高忽低。这一版按主流聊天页的语法收成三个：
    *   ←（44）+ 名字（可点，进详情）+ ＋/⟲（两颗 44 热区、纯图标）。
    * 桌面端 2026-11-11 也撤了头像（详情的入口本来就在名字上），两边都不再有 .head-avatar。
    */
@@ -2673,12 +2839,12 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
 /* ============================================================ 16.9 聊天气泡 */
 
 /*
- * 从"密排风格的块"（8px 圆角 + 1px 描边 + 白底压白底）改成 iMessage 语法：
+ * 从"密排风格的块"（8px 圆角 + 1px 描边 + 白底压白底）改成主流聊天气泡的语法：
  * 入站灰 #E9E9EB / #2C2C2E，出站系统蓝实底白字，圆角 18，无边框无阴影。
  *
  * 为什么必须灰/蓝两档：现在的淡蓝 #eef4fd 让"整页都是蓝的"，主色失去指向性；
- * 灰 = 别人说的、蓝 = 我说的，语义不用猜。切尾角**不做** —— iMessage 与微信都是
- * 对称圆角，切角是 Telegram Android 的语汇，还要每侧多维护两套 radius。
+ * 灰 = 别人说的、蓝 = 我说的，语义不用猜。切尾角**不做** —— 主流聊天 App 都是
+ * 对称圆角，切角是另一派 Android 客户端的语汇，还要每侧多维护两套 radius。
  */
 @media (max-width: 900px) {
   .chat { background: var(--mb-chatbg, var(--bg)); }
@@ -2701,7 +2867,7 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
   }
 
   /* 进度胶囊跟手机气泡同一套语言：无描边、走气泡底色。
-     桌面那圈 1px 线在 iMessage 式的手机上显得脏（这边所有气泡都不描边）。
+     桌面那圈 1px 线在无边框气泡式的手机上显得脏（这边所有气泡都不描边）。
      宽度上限也跟着气泡的 82%，不然长命令的胶囊会比正文泡还宽。 */
   .rp { max-width: 82%; }
   .rp-head {
@@ -2737,7 +2903,7 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
 /* ============================================================ 16.10 时间戳 / 日期分隔 */
 
 @media (max-width: 900px) {
-  /* 11 → 12：11px 中文低于手机可读下限（微信/Telegram 都在 12 档） */
+  /* 11 → 12：11px 中文低于手机可读下限（主流 IM 都在 12 档） */
   .btime {
     left: 40px;
     font-size: 12px;
@@ -2762,7 +2928,7 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
 /*
  * 外底改玻璃 + 顶边 hairline（与聊天头对称）；胶囊底 --mb-fill；
  * 发送钮改实底蓝 —— 发送是页面上唯一的主按钮，主按钮必须实色
- * （微信绿钮 / iMessage 蓝箭头同理）。
+ * （主流聊天 App 的发送钮同理）。
  */
 @media (max-width: 900px) {
   .composer {
@@ -2908,7 +3074,7 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
  *  3. 清缓存刷新，浅/深两套各走一遍：导航栏、tab 栏、聊天头、输入条四条玻璃栏的
  *     底色与 hairline 是否一致；气泡灰/蓝两档是否分得清；
  *  4. 三处 JS 配合（CSS 造不出节点，都不改状态机）：
- *     · contacts.mjs 会话行模板补 `<span class="unread">N</span>`（无数字加 .dot-only）；
+ *     · contacts.mjs 会话行模板的未读红点已删（2026-11-17 用户要求，见 16.5）；
  *     · chat.mjs drawMessages 按天插 `<div class="mb-day"><span>今天</span></div>`；
  *     · chat.mjs chatHead 右侧**不**再放状态字（2026-11-05 用户已删，见 16.13）；
  *  5. 长按出菜单：mobile.mjs 补 touchstart 起 500ms 定时器、move>10px 取消，
@@ -3029,8 +3195,8 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
   .mb-az span { color: var(--mb-text-2, var(--dim)); }
   .mb-az span.on { color: var(--mb-tint, var(--accent)); }
 
-  /* 子页「←」：交互色统一 tint */
-  .mb-head-back { color: var(--mb-tint, var(--accent)); }
+  /* 子页「←」：同 .mb-back 一样走文字色（2026-11-17 返回钮统一改黑，不用 tint） */
+  .mb-head-back { color: var(--mb-text, var(--text)); }
 
   /* 忙点：iOS systemGreen（桌面 --ok 偏暗，压在纯白行上发灰、不够"活"） */
   .item > .dot.busy { background: var(--mb-online, var(--ok)); }
@@ -3054,8 +3220,20 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
      2026-11-11 深夜第三版：卡拆掉、辉光回到通栏 `.me-hero-sec` 自己身上 ——
      它现在铺在整页那片 surface 上（见 §15b 的 .me-body），底就是 surface。
      ⚠️ 别再挂到 `.me-hero-card`：那张"卡"已经是透明壳，挂上去会重新长出一块
-     带底的矩形，通栏就断了。 */
-  body.mb-narrow #settingsView .me-hero-sec { background: none; }
+     带底的矩形，通栏就断了。
+
+     2026-11-17 收口（用户拿群详情页截图："我要的是这种间隙效果"）：hero 得是**白块**。
+     之前光晕直接叠在灰底上，hero 底部就成了"灰 + 一点蓝"（240,241,247），而缝是
+     #F2F2F7（242,242,247）—— 差 2/255，缝读不出来。群详情页之所以清楚，是因为它
+     hero 是纯白：白 → 灰缝 → 白块，三段分明。
+     所以这里补 `--mb-surface` 打底，光晕叠在白上（更透亮，也不会再把缝染色）。
+     百分比按 hero 高度（~190px）给，不是按整页 —— 别照抄旧的 140%/78%。 */
+  body.mb-narrow #settingsView .me-hero-sec {
+    background:
+      radial-gradient(150% 92% at 96% -14%, color-mix(in srgb, var(--mb-tint, var(--accent)) 25%, transparent), transparent 62%),
+      radial-gradient(130% 78% at -4% -20%, color-mix(in srgb, var(--mb-tint, var(--accent)) 13%, transparent), transparent 58%),
+      var(--mb-surface, var(--side));
+  }
 
   /* 属性行分割线与其它卡内线同档：0.5px hairline */
   body.mb-narrow #settingsView .me-kv + .me-kv::before { height: 0.5px; background: var(--mb-hairline, var(--line)); }
@@ -3069,9 +3247,9 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
  *
  *   1. 时间戳只在每组第一条下面挂（chat.mjs drawMessages 打 .nt —— 3 分钟内
  *      不重复）。之前每条下面都挂一个 12px 灰字，一屏八行就是八个时间，
- *      "仪表"比"内容"还多；微信/iMessage 都只在组头挂一次。
+ *      "仪表"比"内容"还多；主流聊天 App 都只在组头挂一次。
  *   2. 同一人紧接着的下一句（.tight）行距收紧，换人才松开 —— 语句成段，
- *      对话的节奏感就出来了（iMessage 的 tight grouping 同款思路）。
+ *      对话的节奏感就出来了（主流聊天 App tight grouping 的同款思路）。
  *   3. 聊天页头像从桌面那套 6px 小圆角换成 10px squircle —— 32px 的面上 6px
  *      圆角接近纯方，跟列表行（48px/r12）放一起明显更"网页"。
  *   4. 代码块 overflow-x —— 长行在气泡里被硬裁（用户截图可见 res.status( 被切），
@@ -3348,7 +3526,8 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     padding: 0;
     border: 0;
     background: transparent;
-    color: var(--mb-tint, var(--accent));
+    /* 文字色（2026-11-17 返回钮全站改黑） */
+    color: var(--mb-text, var(--text));
     cursor: pointer;
   }
   #mbPicker .mb-picker-back svg { width: 22px; height: 22px; }
@@ -3525,6 +3704,11 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
    * 不做整行染色）；sub 保持灰 —— 层级在，蓝只落在"选中的那一项"上。
    */
   #mbPicker .mb-picker-row.on .mb-picker-label { color: var(--mb-tint, var(--accent)); }
+  /* 不可选行（2026-11-17，群详情页「关联项目」里已被别的群占着的项目）：
+     压淡 + 箭头光标退掉，但不藏 —— 占用说明就在 sub 那行里，看得见才知道为什么点不动 */
+  #mbPicker .mb-picker-row.off { cursor: default; }
+  #mbPicker .mb-picker-row.off .mb-picker-label,
+  #mbPicker .mb-picker-row.off .mb-picker-sub { color: var(--mb-text-3, var(--dim)); opacity: .6; }
   #mbPicker .mb-picker-check {
     flex: 0 0 auto;
     width: 18px;
@@ -3554,6 +3738,19 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
  * 转屏到宽档时它照样完整可用（交互规格 §11）。
  */
 @media (max-width: 900px) {
+  /*
+   * 类型锚点的四档色（2026-11-17"头像位用任务卡类型"）：manual 蓝 = --accent
+   * （与桌面 .kb-tag.manual 同源）、flow 紫 = --st-idea、repo 橙 = --warn
+   * （与 .kb-tag.repo 同源）、未知来源 = 中性灰。四档全部借用已按双主题校准的
+   * 语义 token，不新增 hex；行上挂 --src-c、锚点取用（见 projects.mjs kbMobileRow）。
+   */
+  :root {
+    --src-manual: var(--accent);
+    --src-flow: var(--st-idea);
+    --src-repo: var(--warn);
+    --src-other: var(--mb-text-2, var(--dim));
+  }
+
   /* ── §1 顶部导航栏 ──
      高度 / 玻璃底 / hairline 沿用 `body.no-list .detail-head`（§3）；但这一栏**要自己钉死**，
      不能只靠那一档 —— 2026-11-11 用户截图：标题「任务看板」压在状态 tab 上、返回箭头压着
@@ -3598,8 +3795,8 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     transform: translateY(-50%);
   }
   /* margin-left:-6px：图标视觉贴到 16 的基准边距上，44 的热区一点不缩 */
-  .kb-l-navbtn.back { left: 10px; margin-left: -6px; color: var(--mb-tint, var(--accent)); }
-  .kb-l-navbtn.add { right: 10px; color: var(--mb-tint, var(--accent)); }
+  .kb-l-navbtn.back { left: 10px; margin-left: -6px; color: var(--mb-text, var(--text)); }
+  .kb-l-navbtn.add { right: 10px; color: var(--mb-text, var(--text)); }
   /*
    * 任务卡的「讨论」气泡（2026-11-06 定稿 —— 当日口径改了几轮：11-05 建气泡 →
    * 11-06 上午撤掉换底部评论条 → 用户说"右边的评论入口不见了"把气泡加回来 →
@@ -3659,7 +3856,8 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     gap: 8px;
     flex: 0 0 auto;
     height: 44px;
-    padding: 0 8px 0 var(--mb-pad, 16px);
+    /* 左 16→8：与下面列表的外缘对齐（2026-11-17 间隙收窄） */
+    padding: 0 8px;
     background: var(--mb-page, var(--bg));
   }
   .kb-l-tabs {
@@ -3772,30 +3970,30 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
   }
   #kbList::-webkit-scrollbar { width: 0; height: 0; }   /* 全屏列表是原生观感，不要桌面滚动条 */
 
-  /* ── §3 列表：一张分组卡 + 连续行 ── */
+  /* ── §3 列表：连续行（2026-11-17 用户："外面的卡片层去掉，节省空间"）──
+     原来是一张 inset 分组卡（圆角 + surface 底 + 0.5px 描边 + overflow 裁按压底色），
+     现在行直接铺在页面底上，卡壳全撤 —— 上下左右各省一圈，一屏多露一条行。
+     行间 hairline 与按压底色原样保留（plain list 的语法，不再依赖卡壳裁剪）。 */
   .kb-l-list {
-    padding: 4px var(--mb-pad, 16px) calc(24px + env(safe-area-inset-bottom, 0px));
-  }
-  .kb-l-group {
-    overflow: hidden;            /* 圆角裁掉首末行的按压底色 */
-    border-radius: var(--mb-r-card, 12px);
-    background: var(--mb-surface, var(--side));
-    box-shadow: 0 0 0 0.5px color-mix(in srgb, var(--text) 9%, transparent);
+    /* 左右 16→8（2026-11-17 用户："左右的间隙减小一些，显得舒展"） */
+    padding: 4px 8px calc(24px + env(safe-area-inset-bottom, 0px));
   }
   .kb-l-row {
     position: relative;
     display: flex;
-    flex-direction: column;
-    gap: 4px;
-    min-height: 68px;
-    padding: 11px 16px;
+    align-items: center;
+    gap: 12px;
+    min-height: 72px;
+    /* 左内边 16→8（2026-11-17 用户："图标跟左侧的间隙再减小"）：加列表外层 8，锚点距屏 16 */
+    padding: 11px 16px 11px 8px;
     cursor: pointer;
   }
-  /* 行间 hairline 内缩 16（微信/iOS 列表的语法），不是通栏一条横杠 */
+  /* 行间 hairline 从文字起点起（左 8 边距 + 40 锚点 + 12 间距），锚点下方留白 ——
+     iOS 分组列表的语法，也是 2026-11-17 短信节奏重排的一部分 */
   .kb-l-row:not(:last-child)::after {
     content: '';
     position: absolute;
-    left: 16px;
+    left: 60px;
     right: 0;
     bottom: 0;
     height: 0.5px;
@@ -3803,30 +4001,49 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     pointer-events: none;
   }
   .kb-l-row:active { background: var(--mb-press, var(--active)); }
-  /* 标题行：标题占左（可两行），状态（点+词）钉在右上角 —— 与标题首行齐顶 */
-  .kb-l-line {
-    display: flex;
-    align-items: flex-start;
-    gap: 10px;
-    min-width: 0;
+  /*
+   * 类型锚点（2026-11-17 用户："头像位用任务卡类型"）：占住短信头像位，40 的圆。
+   * 底色 = 类型色 12%（与状态胶囊同浓度、同配方），图标 = 类型色原值 ——
+   * 色由行上的 `--src-c` 给（--src-manual/-flow/-repo/-other，projects.mjs 注释有出处）。
+   * 深浅主题都不用另调：色源全部来自已校准的语义 token。
+   */
+  .kb-l-anchor {
+    flex: 0 0 auto;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    color: var(--src-c, var(--mb-text-2, var(--dim)));
+    background: color-mix(in srgb, var(--src-c, var(--mb-text-2, var(--dim))) 12%, transparent);
   }
-  .kb-l-title {
+  .kb-l-anchor svg { width: 21px; height: 21px; }
+  /* 中栏：元信息（执行人/项目）在上、标题在下 —— 2026-11-17 用户："像是短信那样"，
+     短信列表是"名字一行小字在上、正文预览一行在下"，这里名字=执行人、预览=任务标题。
+     min-width:0 是标题截断的前提（flex 子项不缩省略号就出不来） */
+  .kb-l-mid {
     flex: 1 1 auto;
     min-width: 0;
-    font-size: 16px;
-    font-weight: 500;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  /* 标题 = 短信的"正文预览"行：比原来小一号、降为常规字重、灰一档，
+     单行截断 —— 两行标题会把整列的"扫"变成"读" */
+  .kb-l-title {
+    min-width: 0;
+    font-size: 15px;
+    font-weight: 400;
     line-height: 1.4;
-    color: var(--mb-text, var(--text));
-    word-break: break-word;
-    display: -webkit-box;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
+    color: var(--mb-text-2, var(--dim));
+    white-space: nowrap;
     overflow: hidden;
+    text-overflow: ellipsis;
   }
   /*
-   * 元信息行的收缩优先级（390px 下最多四段，状态已挪去右上角）：
-   *   时间 0 0 auto → 永不缩；卡片类型签 0 0 auto → 永不缩（它是"这活谁推的"，缩掉就没意义了）；
-   *   执行人 1 1 auto → 第一个被省略；项目 pill 0 1 auto + max-width 40% → 第二个被省略。
+   * 元信息行的收缩优先级（390px 下最多三段，类型已挪去锚点、时间已拆去右栏）：
+   *   月日 0 0 auto → 永不缩；执行人 1 1 auto → 第一个被省略；
+   *   项目 pill 0 1 auto + max-width 40% → 第二个被省略。
    */
   .kb-l-meta {
     display: flex;
@@ -3845,12 +4062,11 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     background: var(--st-c, var(--st-other));
   }
   /*
-   * 状态胶囊（2026-11-08 评审定稿，替代原来的「6px 圆点 + 灰字」）：
+   * 状态胶囊（2026-11-08 评审定稿，替代原来的「6px 圆点 + 灰字」；
+   * 2026-11-17 从标题右上角挪到右栏、与时间上下同列）：
    * 底色取 `--st-*` 12% —— 正是那套色校对比度时用的底（style.css §状态色注释），
    * 字取 `--st-*` 原值，浅/深主题各自成立，不新增 hex。
-   * **不再画点**：胶囊已经是"色 + 词"，再点一颗是把同一句话说两遍；
-   * 原来待办(青) 与已完成(绿) 在 6px 上几乎是同一颗色，胶囊化后靠底色面积分开了。
-   * 高 20 配标题首行（16×1.4≈22），margin-top 2 让两者视觉齐顶。
+   * **不再画点**：胶囊已经是"色 + 词"，再点一颗是把同一句话说两遍。
    */
   .kb-l-state {
     flex: 0 0 auto;
@@ -3858,7 +4074,6 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     align-items: center;
     height: 20px;
     padding: 0 8px;
-    margin-top: 2px;
     border-radius: 999px;
     font-size: 12px;
     font-weight: 500;
@@ -3866,6 +4081,17 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     white-space: nowrap;
     color: var(--st-c, var(--st-other));
     background: color-mix(in srgb, var(--st-c, var(--st-other)) 12%, transparent);
+  }
+  /* 右栏：时分在上、状态胶囊在下，右缘齐平。min-width 让各行右栏等宽，
+     标题的截断点不因右栏内容长短而左右跳 */
+  .kb-l-end {
+    flex: 0 0 auto;
+    /* 日期+时分合一段后右栏变宽（「11-17 09:00」≈78px），64 → 80 保证不换行挤压标题 */
+    min-width: 80px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 5px;
   }
   .kb-l-pill {
     flex: 0 1 auto;
@@ -3882,30 +4108,9 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     color: var(--mb-text-2, var(--dim));
   }
   /*
-   * 卡片类型小签（2026-11-08 用户要求：手机列表要显示卡片类型标签）。
-   * 与项目 pill **同高同圆角，但只描边不填底** —— 两个都填底会像并排两块按钮；
-   * 描边这枚读起来是"标签"，填底那个仍是"归属"。文字用中性灰（不抢右上角状态点，
-   * 那一点仍是行里唯一的实色）。「仓库值班」是机器写进来的，单独上暖色，扫列表时能分出来。
-   */
-  .kb-l-src {
-    flex: 0 0 auto;
-    padding: 2px 6px;
-    border-radius: 6px;
-    line-height: 16px;
-    font-size: 11px;
-    font-weight: 500;
-    white-space: nowrap;
-    color: var(--mb-text-2, var(--dim));
-    box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--text) 16%, transparent);
-  }
-  .kb-l-src.repo {
-    color: var(--warn);
-    box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--warn) 32%, transparent);
-  }
-  /*
    * 执行人（2026-11-08 二次修订）：**纯文字**，不带首字头像 —— 用户实拍项目名一长时
-   * 来源签 / 项目 pill / 头像 / 名字挤一行就乱，头像是最先被牺牲的。
-   * 行里的彩色依旧只有右上角的状态胶囊。
+   * 类型签 / 项目 pill / 头像 / 名字挤一行就乱，头像是最先被牺牲的。
+   * 类型签（kb-l-src）2026-11-17 整组撤了：类型挪进行首锚点，一个信息不画两遍。
    */
   .kb-l-who {
     flex: 1 1 auto;
@@ -3913,7 +4118,9 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    color: var(--mb-text-2, var(--dim));
+    /* 短信层级：名字行比下面的标题预览重一档（名字=发件人，标题=灰预览） */
+    color: var(--mb-text, var(--text));
+    font-weight: 500;
   }
   /* 未指派：虚线小框（服务端的「（没点名）」这类括号话换成这句，见 projects.mjs） */
   .kb-l-none {
@@ -3926,10 +4133,14 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
     white-space: nowrap;
     color: var(--mb-text-3, var(--dim));
   }
+  /* 月日：创建时间的日期段，沉在元信息行尾（年份同屏省略；完整时间戳在读屏 aria-label 里） */
+  /* 右栏上行：创建时间「MM-DD HH:MM」（2026-11-17 日期并进来，一段不折行） */
   .kb-l-time {
     flex: 0 0 auto;
-    font-size: 12.5px;
+    font-size: 12px;
+    line-height: 1.4;
     font-variant-numeric: tabular-nums;
+    white-space: nowrap;
     color: var(--mb-text-3, var(--dim));
   }
   /* ── §4 空态 / 错误态：一种版式，两个文案 ──
@@ -4133,10 +4344,11 @@ body.kb-new-open .mb-tabbar { display: none; }   /* 进创建页隐底部 tab，
 /*
  * 2026-11-06 再设计（方案 A「卡片预览式重排」）：原来「执行配置」一张长表
  * （状态/方式/执行人/项目/流程五行顺排）读起来像填设置 —— 行多、主次不分，
- * 「立即开始」这个最重的后果埋在中间。改成按建卡的思考顺序分两段卡：
- * **怎么干**（两张大卡二选一，选中的人/流程回显在卡上，› 箭头进选择页）
- * → **更多设置**（状态/项目/立即开始直接铺开，2026-11-06 三改：折叠摘要撤掉）。
- * 同日二次收敛：中段的「派给谁」chips /「选流程」行撤掉，卡上回显替代。
+ * 「立即开始」这个最重的后果埋在中间。改成按建卡的思考顺序分两段卡。
+ * 2026-11-17 用户再改口径：怎么干撤三张大卡（radio 卡皮随之退役），收成
+ * 「执行方式 / 执行对象」两行 value cell（与状态/项目同一套 .kb-new-row 语汇），
+ * 选择页走 §20.5 mbPicker —— 大卡专属的 .kb-new-modes/.kb-new-radio*/.kb-new-gopick/
+ * .kb-new-rpick 样式已随模板删除。
  * #kbNewGroup 只是各段卡的流式容器，卡样式下沉到 .kb-new-card。
  */
 .kb-new-group { margin: 0; }   /* 边距下沉到 .kb-new-card（"去发布 ›"行自己带 padding） */
@@ -4213,103 +4425,7 @@ body.kb-new-open .mb-tabbar { display: none; }   /* 进创建页隐底部 tab，
   transform: rotate(45deg);
 }
 
-/*
- * 执行方式：两张独立大卡（视觉规格 §5.4，2026-11-06 二版）。选中 = 1.5px tint 环 +
- * 标题染 tint —— 不用 ✓（页面上已经两颗：选择页行尾 + 开关）、不用圆点（圆点逼出
- * 48 的左缩进，是表单感主因）、不加 tint 淡底（深色几乎不可见、浅色像 ：active 残留）。
- * 非 .is-card 的裸 radio 皮已随模板退役，这里只保留大卡一种形态。
- */
-/* .kb-new-modes 是两张卡的容器：把 .kb-new-card 的皮褪掉，卡面/环由每张 radio 自己画；
-   overflow:visible 让 › 的 44px 热区能向卡外溢 2px */
-.kb-new-modes {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  background: none;
-  box-shadow: none;
-  border-radius: 0;
-  overflow: visible;
-}
-.kb-new-radio {
-  position: relative;
-  display: flex;
-  align-items: flex-start;
-  cursor: pointer;
-}
-.kb-new-radio:focus-visible,
-.kb-new-radio:has(input:focus-visible) { outline: 2px solid var(--mb-tint, var(--accent)); outline-offset: -2px; }
-/* 真的 <input> 收起来（读屏与键盘照旧认它） */
-.kb-new-radio input {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: 0;
-  opacity: 0;
-  pointer-events: none;
-}
-.kb-new-radio.is-card {
-  min-height: 0;
-  padding: 12px 46px 12px 16px;   /* 右侧 46 = 44 › 热区 + 2 光学余量 */
-  border: 0;
-  border-radius: var(--mb-r-card, 12px);
-  background: var(--mb-surface, var(--side));
-  box-shadow: 0 0 0 0.5px color-mix(in srgb, var(--mb-text, var(--text)) 9%, transparent);
-  transition: box-shadow 120ms;
-}
-/* 按压：不换底色档位，只混 6% 正文色（两张主题都成立）；环不变 —— 状态变化零位移 */
-.kb-new-radio.is-card:active {
-  background: color-mix(in srgb, var(--mb-text, var(--text)) 6%, var(--mb-surface, var(--side)));
-}
-/* 选中：1.5px tint 60% 环（唯一的"第二种彩"），背景保持 surface；标题染 tint（字重不变，不换行） */
-.kb-new-radio.is-card:has(input:checked) {
-  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--mb-tint, var(--accent)) 60%, transparent);
-}
-.kb-new-radio:has(input:checked) .kb-new-rtitle { color: var(--mb-tint, var(--accent)); }
-.kb-new-radio:has(input:disabled) { cursor: default; }
-.kb-new-radio:has(input:disabled) .kb-new-rtitle { color: var(--mb-text-3, var(--dim)); }
-.kb-new-rtxt { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
-.kb-new-rtitle { font-size: 15px; font-weight: 500; line-height: 1.33; color: var(--mb-text, var(--text)); }
-.kb-new-rsub { margin-top: 2px; font-size: 12.5px; line-height: 1.35; color: var(--mb-text-3, var(--dim)); }
-/* 卡尾 › 箭头（选择页唯一入口）：热区 44×44，绝对定位右缘 -2px 是光学对齐 —— 箭头视觉
-   右缘落在卡边内 16px，与下方设置行的箭头同一条竖线；44px 热区向卡外溢 2px（卡外还有
-   16px 页边距，不会出屏）。.kb-new-modes 的 overflow:visible 保它不被裁。 */
-.kb-new-gopick {
-  position: absolute;
-  right: -2px;
-  top: 50%;
-  transform: translateY(-50%);
-  display: grid;
-  place-items: center;
-  width: 44px;
-  height: 44px;
-  border: 0;
-  padding: 0;
-  border-radius: 10px;
-  background: transparent;
-  font: inherit;
-  cursor: pointer;
-}
-.kb-new-gopick:active { background: var(--mb-press, var(--active)); }
-.kb-new-gopick:focus-visible { outline: 2px solid var(--mb-tint, var(--accent)); outline-offset: -2px; }
-
-/* 选中回显（视觉规格 §6.2）：标题**正下方**、解释之上 —— "给了谁"必须比"怎么走"更亮。
-   单行省略是有意的：流程名可以很长，两张卡必须同高；全文在选择页里看。 */
-.kb-new-rpick {
-  margin-top: 3px;
-  font-size: 13.5px;
-  font-weight: 400;
-  line-height: 1.35;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: var(--mb-text-3, var(--dim));
-}
-.kb-new-rpick.is-on {
-  color: var(--mb-text, var(--text));
-  font-weight: 500;
-}
-
-/* 「还没有已发布的流程」时那条文字链：贴着流程卡的文字轨道起点（左 16），不再右对齐 */
+/* 「还没有已发布的流程」时那条文字链：贴着对象行的文字轨道起点（左 16），不再右对齐 */
 .kb-new-pub { display: flex; justify-content: flex-start; padding: 8px 16px 0; }
 .kb-new-link {
   display: inline-flex;
@@ -4584,8 +4700,8 @@ body.kb-new-open .mb-tabbar { display: none; }   /* 进创建页隐底部 tab，
     color: var(--mb-text-3, var(--dim));
   }
 
-  /* ── 讨论流的排版（2026-11-06 向抖音观感精修）：它在抽屉里（§22b），这里只管字号/头像/留白 ──
-   * 抖音的那几把尺子：头像更大（36）、用户名是**灰色**不加粗（黑色留给正文）、
+  /* ── 讨论流的排版（2026-11-06 向主流短视频社区评论区观感精修）：它在抽屉里（§22b），这里只管字号/头像/留白 ──
+   * 那几把尺子：头像更大（36）、用户名是**灰色**不加粗（黑色留给正文）、
    * 「回复」是纯灰字不是按钮、每条之间留白更松 —— 黑色越少越高级。 */
   .tc-page.tc-m .tc-threads { padding: 0; gap: 20px; }
   .tc-page.tc-m .tc-topic + .tc-topic:not(.pre) { border-top: 0; padding-top: 0; margin-top: 20px; }
@@ -4598,9 +4714,9 @@ body.kb-new-open .mb-tabbar { display: none; }   /* 进创建页隐底部 tab，
   .tc-page.tc-m .tc-cmt-text { font-size: 15px; line-height: 1.6; }
   .tc-page.tc-m .tc-cmt-at { font-size: 11.5px; }
   .tc-page.tc-m .tc-statebar { border-radius: 10px; padding: 9px 12px; font-size: 12.5px; }
-  /* 折叠条照抖音（2026-11-06）：手机正文 15px，折叠条跟一档 13px 灰字 */
+  /* 折叠条跟正文一档（2026-11-06）：手机正文 15px，折叠条跟一档 13px 灰字 */
   .tc-page.tc-m .tc-replies-toggle { font-size: 13px; }
-  /* 「回复」照抖音是纯灰字（不是描边小药丸）：点完会有按压反馈，够了 */
+  /* 「回复」是纯灰字（不是描边小药丸）：点完会有按压反馈，够了 */
   .tc-page.tc-m .tc-topic-meta .tc-reply,
   .tc-page.tc-m .tc-topic-foot .tc-reply {
     border: 0;
@@ -4652,7 +4768,7 @@ body.kb-new-open .mb-tabbar { display: none; }   /* 进创建页隐底部 tab，
 
 /*
  * 2026-11-05 用户口径：讨论别摊在卡页上 —— 卡页只留"这件事本身"（状态/标题/描述/属性卡），
- * 讨论整体收进导航栏那颗气泡按钮，点开是**抖音评论区**那套：底部升起一张面板，
+ * 讨论整体收进导航栏那颗气泡按钮，点开是**主流评论区**那套：底部升起一张面板，
  * 上面遮罩压住整页，面板里只有「讨论流（自己滚）+ 输入条（吸底）」。
  *
  * 三个值为什么是这么定的：
@@ -4788,9 +4904,9 @@ body.kb-new-open .mb-tabbar { display: none; }   /* 进创建页隐底部 tab，
 .tc-sheet-body::-webkit-scrollbar { width: 0; height: 0; }
 .tc-sheet-body .tc-threads { display: flex; flex-direction: column; gap: 20px; }
 
-/* ── 输入条两态（2026-11-06 用户发抖音截图拍板）────────────────────────
+/* ── 输入条两态（2026-11-06 用户发截图拍板）────────────────────────
  * 单行态（默认，键盘没起来）：工具栏（＋/档位/发送）、回复横幅、附件条整条藏掉，
- * textarea 压成 42px 的药丸 —— 就是抖音评论区底部那条"留下你的友善评论吧"。
+ * textarea 压成 42px 的药丸 —— 就是主流评论区底部那种占位语的药丸输入条。
  * 展开态（.expanded）：完整输入区回来（回复横幅/附件/档位/发送都在）。
  * 切换的 JS 在 projects.mjs（tcCompact / tcExpand）：聚焦展开、失焦 120ms 收回。
  * 放在 §21 输入条样式之后：同特异性靠后者赢，42px 才压得过上面那条 44px。 */
@@ -4814,9 +4930,9 @@ body.kb-new-open .mb-tabbar { display: none; }   /* 进创建页隐底部 tab，
   .tc-sheet .tc-input-box textarea { transition: none; }
 }
 
-/* ── 展开态的视觉弱化（2026-11-06 用户发抖音截图：唤起键盘后"后面似乎灰了一些"）
+/* ── 展开态的视觉弱化（2026-11-06 用户发截图：唤起键盘后"后面似乎灰了一些"）
  * 键盘起来 = .expanded（键盘信号我们只有这一枚），给输入区**后面**的所有东西
- * （讨论流 / 抽屉头部 /  grip）盖一层暗 scrim —— 抖音那个"打字时列表退后"的层次。
+ * （讨论流 / 抽屉头部 /  grip）盖一层暗 scrim —— "打字时列表退后"的层次。
  * 实现：panel::after 铺满整张面板（z:1），输入条抬到 z:2 浮在 scrim 之上；
  * pointer-events:none 不挡 ✕/放大键的点击，只暗不掉功能。 */
 .tc-sheet .tc-composer { position: relative; z-index: 2; }
@@ -4835,7 +4951,7 @@ body.kb-new-open .mb-tabbar { display: none; }   /* 进创建页隐底部 tab，
   -webkit-backdrop-filter: none;
   backdrop-filter: none;                     /* 纯色底了，玻璃模糊没有意义还耗电 */
 }
-/* 卡本体是**灰药丸**浮在白区上（2026-11-06 精修，抖音同款）：脚下 composer 和键盘
+/* 卡本体是**灰药丸**浮在白区上（2026-11-06 精修，主流评论区同款）：脚下 composer 和键盘
    连成一片白，卡回 --mb-fill 灰底、去描边 —— 描边框在纯白上显得生硬，灰药丸才是
    "输入框"的质感（跟单行态同一颗，只是长高了）。 */
 .tc-page.tc-m .tc-sheet.expanded .tc-input-box {
@@ -5721,4 +5837,50 @@ body.tc-sheet-open .tc-page.tc-m .tc-main-scroll { overflow: hidden; }
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
   }
+}
+
+/* ── 群详情页（2026-11-17 两轮收口）─────────────────────────────────────
+   第一轮"不使用卡片式布局"撤掉了 .dcard 的卡壳；这一轮用户圈着「群成员」块与
+   「群名称」块之间的缝说"在这里显示灰色背景，参考主流群管理页" —— 也就是
+   主流的分组块语法：**灰页底 + 满宽白块**（跟「我的」页 2026-11-11 那套同一语言）：
+     · 页面本身灰（--mb-page），块是满宽、无圆角、无描边的白；
+     · hero（头像 + 群名 + 发消息）自成一白块，块间灰缝 10px；
+     · 「群成员」一块、「群名称/关联项目/群助手/群主」一块。
+   聊天页齿轮开出来的「群设置抽屉」不在这个选择器里，保持卡片形态不动。 */
+@media (max-width: 900px) {
+  body.mb-narrow #groupView,
+  body.mb-narrow #groupView .detail-body {
+    background: var(--mb-page, var(--bg));
+  }
+  /* 白块通栏，页左右不再留 16 —— 留白由块内的 padding 自己给 */
+  body.mb-narrow #groupView .detail-body { padding: 0 0 10px; }
+
+  /* hero：满宽白块，hairline 分界换成灰缝 */
+  body.mb-narrow #groupView .hero {
+    margin: 0 0 10px;
+    padding: 16px;
+    border-bottom: 0;
+    background: var(--mb-surface, var(--side));
+  }
+
+  /* 分组块：满宽白，块与块之间露 10px 页底灰 */
+  body.mb-narrow #groupView .dcard {
+    margin: 0 0 10px;
+    padding: 12px 16px 14px;
+    border: 0;
+    border-radius: 0;
+    background: var(--mb-surface, var(--side));
+    box-shadow: none;
+  }
+  /* 「群成员 N」这行整行去掉（2026-11-17 用户："去掉这行"）：宫格 + 底下
+     「查看全部群成员（N）」已经把人数说了两遍，这行纯重复。
+     群设置抽屉不在 #groupView 里，那边的分节头保留。 */
+  body.mb-narrow #groupView .dcard > h4 { display: none; }
+  /* 信息行：行高抬到触屏档、字号 15；行间 hairline 两端随块内边距内缩 16 */
+  body.mb-narrow #groupView .info-row {
+    min-height: 48px;
+    padding: 12px 0;
+    font-size: 15px;
+  }
+  body.mb-narrow #groupView .hint-line { margin: 10px 0 0; }
 }

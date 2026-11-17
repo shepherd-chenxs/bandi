@@ -14,7 +14,6 @@
  * ⚠️ 一步的执行走的是和"发消息"完全相同的链路（dispatch.mjs），不另造执行引擎。
  */
 import * as store from './store.mjs';
-import * as quota from './quota.mjs';
 import * as runs from './runs.mjs';
 import * as cliModels from './cli-models.mjs';
 import * as runtimes from './runtimes.mjs';
@@ -69,7 +68,7 @@ export function registerActionNode(kind, handler) {
 const LEGACY_TEMPLATE_ID = 'bandi-flow';
 
 /**
- * 内建模板：班底交付流程。
+ * 内建模板：班底交付（出厂名 2026-11-16 简化）。
  * **带真实的分支**：测试不通过退回开发，发布失败退回重测 —— 这才叫流程。
  * x/y 是给画布用的坐标（拖过就存下来）；没有坐标时界面自己排一个。
  *
@@ -83,7 +82,7 @@ const LEGACY_TEMPLATE_ID = 'bandi-flow';
  */
 export const BUILT_IN_TEMPLATE = {
   id: 'bandi-delivery',
-  name: '班底交付流程',
+  name: '班底交付',
   builtIn: true,
   start: 'n1',
   nodes: [
@@ -144,6 +143,10 @@ export function ensureBuiltInTemplate() {
   const wantManual = new Set(BUILT_IN_TEMPLATE.nodes.filter((n) => n.manual === true).map((n) => n.id));
   const byId = new Map(BUILT_IN_TEMPLATE.nodes.map((n) => [n.id, n]));
   let touched = false;
+  /* 名字是平台口径（2026-11-16 用户："名称简约一些"）：内建模板启动时刷成出厂名。
+     只对 builtIn 做 —— 用户接管（builtIn=0）后改的名字随他去，别替人决定。 */
+  const name = cur.builtIn && cur.name !== BUILT_IN_TEMPLATE.name ? BUILT_IN_TEMPLATE.name : cur.name;
+  if (name !== cur.name) touched = true;
   const fixed = nodes.map((n, i) => {
     const next = { ...n };
     if (needCoords) {
@@ -165,7 +168,7 @@ export function ensureBuiltInTemplate() {
     }
     return next;
   });
-  if (touched) store.upsertWorkflowTemplate({ id: cur.id, name: cur.name, nodes: fixed, builtIn: !!cur.builtIn });
+  if (touched) store.upsertWorkflowTemplate({ id: cur.id, name, nodes: fixed, builtIn: !!cur.builtIn });
   return store.getWorkflowTemplate(BUILT_IN_TEMPLATE.id);
 }
 
@@ -393,11 +396,11 @@ function nodeById(tpl, id) {
 }
 
 /**
- * 这一步**实际会用哪个模型** —— 额度是按模型算的，所以闸开口之前先要问出这个。
+ * 这一步**实际会用哪个模型** —— 实例页顶栏显示用。
  *
  * 跟 runs.mjs 记进 `runs.model` 的是**同一个函数、同一份输入**：
- * 两边各算各的话，闸盯的模型和账上记的模型迟早不是同一个（那限额就成了摆设）。
- * 解析不出来就是 null（比如 claude 没有可读的默认值）—— 那种情况不拦，见 quota.overQuotaFor。
+ * 两边各算各的话，页面上写的和账上记的迟早不是同一个模型。
+ * 解析不出来就是 null（比如 claude 没有可读的默认值）—— 页面就不显示。
  */
 function modelOfTask(task) {
   const persona = task?.assigneePersonaId ? store.getPersona(task.assigneePersonaId) : null;
@@ -407,7 +410,7 @@ function modelOfTask(task) {
 }
 
 /** 把当前这一步**派出去**（起流程后得有人按这一下；起流程 ≠ 自动开跑） */
-export function startCurrentStep(runId, { force = false } = {}) {
+export function startCurrentStep(runId) {
   const run = store.getWorkflowRun(runId);
   if (!run) throw new Error('流程不存在');
   if (run.status !== 'doing') throw new Error(`流程已经「${store.workflowLabel(run.status)}」了`);
@@ -419,7 +422,7 @@ export function startCurrentStep(runId, { force = false } = {}) {
   const stepNode = nodeById(store.getWorkflowTemplate(run.templateId), task.nodeId);
 
   /*
-   * **动作节点**（见 ACTION_NODES 顶部注释）：干活的是平台自己，不派给人、不查额度。
+   * **动作节点**（见 ACTION_NODES 顶部注释）：干活的是平台自己，不派给人。
    * handler.run 是异步的（要调 GitHub），这里标「进行中」后立刻返回 ——
    * 跟派活给 agent 的返回时机一致，调用方（到站自动派活/人点重跑）不用等结果。
    * 跑挂了 handler 那边兜底标「失败」，不会永远停在「进行中」。
@@ -480,36 +483,6 @@ export function startCurrentStep(runId, { force = false } = {}) {
     };
     Promise.resolve().then(() => runActionWithRetry(1));
     return viewRun(store.getWorkflowRun(runId));
-  }
-  /*
-   * **额度闸**：派活之前拦一道。
-   *
-   * 为什么拦在这儿：所有派活（手动点 / 到站即派活 / 重跑）都走 startCurrentStep，
-   * 一个口子就够，不用到处堵。
-   *
-   * **按模型算**：闸查的是"这一步要用的那个模型"今天还剩多少，不是全站一个总数 ——
-   * 贵和便宜分在模型上（本机所有模型都挂在同一个 magpie 网关下），全站总数会把
-   * 免费的和收费的一起管住。要用的模型由 modelOfTask 解析（员工绑的，或 CLI 默认）。
-   *
-   * 超了怎么办 —— 用户选的方案：**停下来等人**（不是静默拒绝派活）。
-   *   · 标「已阻塞」+ 写明原因：跟"没点名""失败等人处理"同一档语义，
-   *     界面上那一步立刻红字说清"是额度拦的、怎么接着跑"，不会被误当成故障
-   *   · `force: true` 是「继续一次」：明确知道要超支，放这一步过去（不循环拦）
-   *   · 不打断**正在跑**的那一次 —— 只在派活前拦
-   */
-  if (!force && task.status !== 'blocked') {
-    const why = quota.overQuotaFor(modelOfTask(task).id);
-    if (why) {
-      store.updateWorkflowTask(task.id, {
-        status: 'blocked',
-        // 出路那句从 quota 导出：实例页要拿**同一句**来认"这是额度拦的"（quotaBlocked）
-        note: `${why}。${quota.CONTINUE_HINT}`,
-        endedAt: store.nowIso(),
-      });
-      store.touchWorkflowRun(runId);
-      notifyDeliveryReport(store.getWorkflowRun(runId), `${why}。${quota.CONTINUE_HINT}`, 'blocked');
-      throw new Error(why);
-    }
   }
   if (!task.assigneePersonaId) {
     // **没点名 = 已阻塞**（不是"失败"，也不是单独一个"待指派"状态）：
@@ -1062,7 +1035,7 @@ function goto(runId, target, why) {
    * 没勾就该一路跑下去 —— 通过、驳回、非人工节点的自动流转，三条路都走这儿。
    *
    * 派不出去也不留人管：他正忙 → 退回「待办」，重试节拍（30 秒一次）会再派；
-   * 额度超了 / 没点名 → 已阻塞（等人处理，语义就对）；真失败 → 失败。
+   * 没点名 → 已阻塞（等人处理，语义就对）；真失败 → 失败。
    * 所以这里 catch 住只写日志 —— 以前那种"停在待开始、等人点派活按钮"的状态已经不存在了
    * （2026-10-17 用户要求：去掉派活按钮和待开始，待办就直接执行）。
    *
@@ -1172,10 +1145,7 @@ export function viewRun(run, { withTasks = false, cache = null } = {}) {
     startedAt: cur?.startedAt ?? null,
     elapsedMs: elapsed || null,
     lastNote: cur?.note ?? null,
-    /*
-     * 当前这一步**会用哪个模型** —— 实例页顶栏要显示"这个模型今天用掉多少 / 还剩多少"，
-     * 额度闸拦的也正好是它。跟闸、跟 runs.model 是同一个解析（modelOfTask）。
-     */
+    // 当前这一步会用哪个模型（跟 runs.model 同一解析），实例页顶栏显示用
     model: cur ? modelOfTask(cur).id : null,
     taskCount: tasks.length,
     // 出口：界面按它决定给哪几个按钮、按钮上写去哪
@@ -1192,16 +1162,6 @@ export function viewRun(run, { withTasks = false, cache = null } = {}) {
     updatedAt: run.updatedAt,
     stuck,
     waiting,
-    /*
-     * 这一步是**额度拦下的**吗 —— 界面据此决定给不给「继续一次」。
-     *
-     * 为什么非要分出来：别的阻塞（比如"没点名"）放行了也没用 ——
-     * `startCurrentStep` 会在下一道检查里照样抛，白点一次、白弹一次错。
-     * 认法是"备注里有没有那句出路"，而那句话由 quota.CONTINUE_HINT 单点定义，
-     * 所以这里不是在匹配一段随手写的文案。
-     */
-    quotaBlocked:
-      cur?.status === 'blocked' && String(cur.note ?? '').includes(quota.CONTINUE_HINT),
     // 人能把这一步改成哪些状态（待办 / 已阻塞 / 已完成）。
     // **状态只在这一处定义**，界面照着渲染，不再各写一套判断。
     // 终态流程不给；当前已经是某个状态就不重复给那个。
@@ -1573,7 +1533,7 @@ export function setStepStatus(runId, wanted) {
     });
     store.touchWorkflowRun(runId);
     // 改成待办 = 要它（再）跑：马上派一次。派不出去也不留人管 ——
-    // 他正忙 → 退回待办，重试节拍会接着派；额度超了 → 已阻塞（那个本来就该等人）。
+    // 他正忙 → 退回待办，重试节拍会接着派；没点名 → 已阻塞（那个本来就该等人）。
     try {
       return startCurrentStep(runId);
     } catch {
@@ -1640,7 +1600,7 @@ export function stepStatusChoices(runId) {
  * 待办即执行），这里就是补位的那只手。
  *
  * 只捞「当前步骤 + 待办 + 有经办人」的：已阻塞/失败本来就该等人，别去动它；
- * 额度闸在 startCurrentStep 里会照常拦（拦下就变已阻塞，不会在这儿打转）。
+ * 派活的条件照常在 startCurrentStep 里查（查不过就变已阻塞，不会在这儿打转）。
  */
 export function retryPendingSteps() {
   const started = [];

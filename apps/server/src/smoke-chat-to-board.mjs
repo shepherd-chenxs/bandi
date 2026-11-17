@@ -3,10 +3,7 @@
  *   · 聊天派活**不进看板**（项目看板 / 全局面板都收不到）—— 看板收正式的活：
  *     流程、手工卡、仓库值班、PM 建的卡；PUT 也不再认 onBoard（开关已删）；
  *   · 员工详情的「任务」**照收**聊天行（那页按人筛过，"他手上有什么"要连聊天接的活一起看见）；
- *   · 「立成卡」（POST /api/conversations/:id/card）是聊天活进看板的**唯一**通道：
- *     状态照最近一轮折算（完成→待验收）、挂对项目、指向这场会话；
- *     员工详情里聊天投影让位（不出现同一件事两行）；再立一次幂等（created:false）；
- *   · 没归属的会话立卡 → 400 说清楚为什么（手工卡必须挂项目，硬规矩不开口子）。
+ *   · 2026-11-16 起「立成卡」整条链路撤了（入口 / 接口 / 业务逻辑），这段验收只留上两条。
  *
  * 用 fixtures/fake-agent.js 当运行时；隔离：临时数据目录 + 临时端口 + 临时项目目录。
  * 跑法：node apps/server/src/smoke-chat-to-board.mjs
@@ -131,35 +128,6 @@ try {
   check('onBoard 开关已删（PUT 不认它 → E1037）', put.status === 400 && put.body.code === 'E1037', `${put.status} ${put.body.code}`);
   check('空改体同样被拒（E1037）', (await req('PUT', `/api/conversations/${conv}`, {})).body.code === 'E1037');
 
-  console.log('\n② 立成卡：真卡进看板，员工详情里聊天投影让位');
-  const card = await req('POST', `/api/conversations/${conv}/card`);
-  check('立卡收下（201）', card.status === 201 && card.body.created === true, `${card.status}`);
-  const t = card.body.task ?? {};
-  check('卡指向这场会话', t.conversationId === conv, String(t.conversationId));
-  check('标题取最近一句用户话', t.title === '把首页那句文案改掉', String(t.title));
-  check('状态折成「待验收」（跑完等人验收）', t.status === 'review', String(t.status));
-  check('执行人是跑这轮的人', t.assigneePersonaId === dev.id, String(t.assigneePersonaId));
-  check('挂在项目上', t.projectId === project.id, String(t.projectId));
-  const afterCard = await boardSources(`/api/projects/${project.id}/tasks`);
-  check('看板上是卡、不是聊天投影', afterCard.chat === 0 && afterCard.manual === 1, JSON.stringify(afterCard));
-  const mine2 = (await req('GET', `/api/personas/${dev.id}/tasks`)).body;
-  check('员工详情改由卡代表（不重复出两行）',
-    (mine2.rows ?? []).filter((r) => r.source === 'chat').length === 0 &&
-    (mine2.rows ?? []).filter((r) => r.source === 'manual').length === 1);
-
-  console.log('\n③ 幂等：再立一次不建第二张');
-  const again = await req('POST', `/api/conversations/${conv}/card`);
-  check('返回 200 + created:false', again.status === 200 && again.body.created === false, `${again.status}`);
-  check('还是原来那张卡', again.body.task?.id === t.id, `${again.body.task?.id} vs ${t.id}`);
-
-  console.log('\n④ 没归属的会话立卡 → 400 说清楚');
-  const stray = (await req('POST', '/api/personas', {
-    name: '崔老三', runtime: rtId, sandbox: 'danger-full-access', cwd: tmp, instructions: '你是崔老三。',
-  })).body.persona;
-  const strayConv = (await req('POST', '/api/conversations', { personaId: stray.id })).body.conversation.id;
-  await talk(strayConv, '顺手看看这个');
-  const bad = await req('POST', `/api/conversations/${strayConv}/card`);
-  check('400 + 文案说清要先配项目', bad.status === 400 && /项目/.test(bad.body.error ?? ''), `${bad.status} ${bad.body.error ?? ''}`);
 } catch (e) {
   check('冒烟跑完', false, String(e?.stack ?? e));
 } finally {

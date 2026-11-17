@@ -56,7 +56,7 @@ console.log('\nA. 清单与 PDP 的纯逻辑校验');
 {
   // 同一路径多方法/多登记时的优先级（smoke-auth ⑥ 的教训：方法感知别丢）
   check('/api/local/status 解析到 session 条目（分机状态页）', findRoute('/api/local/status', 'GET')?.id === 'local.status.forUser');
-  check('POST /api/quota 解析到 noPanel 条目（方法感知）', findRoute('/api/quota', 'POST')?.id === 'quota.write' && findRoute('/api/quota', 'GET')?.id === 'quota.read');
+  check('POST /api/lan 解析到 noPanel 条目（方法感知）', findRoute('/api/lan', 'POST')?.id === 'lan.write' && findRoute('/api/lan', 'GET')?.id === 'lan.read');
   check('本机安装任务三条都登记（原 nodes.dispatch 改挂 /api/install/tasks）',
     findRoute('/api/install/tasks', 'POST')?.id === 'localTasks.dispatch'
     && findRoute('/api/install/tasks', 'GET')?.id === 'localTasks.list'
@@ -78,7 +78,7 @@ console.log('\nB. 覆盖率扫描：handler 里的 /api 字面量必须已登记
     for (const line of fs.readFileSync(f, 'utf8').split('\n')) {
       if (!lineRe.test(line)) continue;
       for (const m of line.matchAll(litRe)) {
-        let lit = m[0].replace(/\/+$/, ''); // 前缀字面量（startsWith('/api/ai/')）去尾斜杠
+        let lit = m[0].replace(/\/+$/, ''); // 前缀字面量（startsWith('/api/local/')）去尾斜杠
         if (!lit || lit === '/api') continue;
         scanned += 1;
         if (!literalRegistered(lit)) misses.push(`${path.basename(f)}: ${lit}`);

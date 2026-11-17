@@ -34,7 +34,7 @@ const EVAL_DETAIL = [
 
 export const SELF_DELIVERY_TEMPLATE = {
   id: SELF_DELIVERY_TEMPLATE_ID,
-  name: '自主交付（自迭代，无人工拍板）',
+  name: '自主交付',
   builtIn: true,
   start: 'n1',
   autonomous: true,
@@ -137,6 +137,10 @@ export function ensureSelfDeliveryTemplate() {
    * 连线（approve/reject）、点名（roleKey/personaId）、manual 都是用户的选择，永不覆盖。
    */
   let touched = false;
+  /* 名字是平台口径（2026-11-16 用户："名称简约一些"）：内建模板启动时刷成出厂名。
+     用户接管（builtIn=0）早已 return，不会走到这里。 */
+  const name = cur.name !== SELF_DELIVERY_TEMPLATE.name ? SELF_DELIVERY_TEMPLATE.name : cur.name;
+  if (name !== cur.name) touched = true;
   const byId = new Map(SELF_DELIVERY_TEMPLATE.nodes.map((n) => [n.id, n]));
   const nodes = (() => {
     try {
@@ -166,6 +170,6 @@ export function ensureSelfDeliveryTemplate() {
     nodes.push(...missing.map((ref) => ({ ...ref })));
     touched = true;
   }
-  if (touched) store.upsertWorkflowTemplate({ id: cur.id, name: cur.name, nodes, builtIn: !!cur.builtIn });
+  if (touched) store.upsertWorkflowTemplate({ id: cur.id, name, nodes, builtIn: !!cur.builtIn });
   return store.getWorkflowTemplate(SELF_DELIVERY_TEMPLATE_ID);
 }
