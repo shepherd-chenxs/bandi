@@ -9,7 +9,7 @@ import { openConversationSafe } from './listmenu.mjs';
 import { renderList, showView } from './contacts.mjs';
 import { openWorkflows, wbCard } from './workflows.mjs';
 import { openProjectsPage, openTaskBoard, workbenchAutoSection, workbenchProjectSection } from './projects.mjs';
-import { setListTitle } from './flowpages.mjs';
+import { openFlowRun, setListTitle } from './flowpages.mjs';
 import { openCodeRepoPage, openSchedules } from './skills.mjs';
 import { setBusy, setComposer } from './chat.mjs';
 import { gidOf, paintDrawer, paintGroupDetail } from './groups.mjs';
@@ -742,10 +742,14 @@ export function renderWorkbenchGrid() {
     };
   });
   // 工作流：画节点、指派、发布（入口原来在 rail 的「工作流」，现在收进工作台）。
-  // 发布过的流程**不再有工作台磁贴**（2026-10-26 用户："这些入口去掉，现在直接在任务面板就可以建了"）——
-  // 发起统一走任务看板（建卡时执行方式选「由流程执行」），这里只剩"画流程"这一个入口。
+  // 已发布流程的磁贴 2026-11-16 加回自动化区（见 workbenchAutoSection 注释）——
+  // 任务看板那条路（建卡选「由流程执行」）仍在，这里是"发完直接跑"的近路。
   view.querySelector('[data-flow-design]')?.addEventListener('click', () => {
     openWorkflows().catch((e) => toast(e.message, 'error'));
+  });
+  // 已发布流程：点开看**这个流程的发起记录**，发起是那页上的「＋」（跟历史上撤掉前的行为一致）。
+  view.querySelectorAll('[data-flow-start]').forEach((el) => {
+    el.onclick = () => openFlowRun(el.dataset.flowStart).catch((e) => toast(e.message, 'error'));
   });
   // 项目：点一下进项目列表（增删改查都在那儿）
   view.querySelector('[data-projects]')?.addEventListener('click', () => {
@@ -1151,7 +1155,7 @@ export function openPluginForm(plugin, block, state = {}) {
  *
  * 为什么不是每条一个「纳管 / 移出」按钮：这类条目动辄七八个，逐条点等于点七次、
  * 刷新七次；而且「取消」和「这次没动」在接口上分不开。一次勾完、一次保存，
- * 跟额度页那张表同一个口径（**整表提交**）。
+ * 走**整表提交**：只发这次变动的条目，"取消"和"没动"在接口上分不开。
  *
  * 形态照 `openTaskCardDialog`：动态建 `<dialog>` + `wireDialogHead` + close 即 remove
  * （静态 `<dialog>` 只有插件表单那一个，再给它塞一套勾选逻辑会让那份 HTML 越来越杂）。

@@ -682,7 +682,6 @@ function registeredBy(raw) {
  */
 const ALLOW_ORPHANS = [
   { id: 'runtime.test', why: '契约保留、无 UI 消费：原「按路径接入」弹窗 2026-11-04 撤了（docs/形态决策.md §十五 ①），接口按当时口径保留' },
-  { id: 'ai.image', why: '外部/临时生图工具回环直调（前端设置页只消费 image-config / image-test）；生图能力唯一的 HTTP 出口' },
   { id: 'files.get', why: '附件/图片 URL 由服务端响应里的 url 字段回传（conversation.mjs / project.mjs 拼），前端不拼字面量' },
   { id: 'ssh.list', why: 'SSH 是**外部件**：远程连接面板由运行时装的插件按 manifest.permissions 声明后发起，仓内没有字面量调用' },
   { id: 'ssh.create', why: '同上（插件面板经通用插件通道发 /api/ssh/*，仓内仅 experts.mjs 的占位声明）' },
@@ -693,8 +692,6 @@ const ALLOW_ORPHANS = [
   { id: 'local.hosts.add', why: '同上：/api/local/hosts/* 是局域网手动加主机的一组本机接口，仓内入口已收' },
   { id: 'local.hosts.remove', why: '同上：/api/local/hosts/* 是局域网手动加主机的一组本机接口，仓内入口已收' },
   { id: 'local.hosts.test', why: '同上：/api/local/hosts/* 是局域网手动加主机的一组本机接口，仓内入口已收' },
-  { id: 'nodes.scope', why: '总机侧节点权限设置：面板入口 2026-11 收进 CLI（bandi nodes），HTTP 口按既有契约保留给脚本' },
-  { id: 'nodes.paths', why: '同上（节点可访问路径改由 CLI / 脚本驱动，HTTP 口保留）' },
   { id: 'control.restart', why: '改监听地址后的"重启控制面"：由桌面壳 / systemd 监护进程调用（仓内只有 config.mjs 的说明），走 machine:manage' },
   { id: 'status.project.one', why: '连接器 / 插件面板按项目 id 取状态详情；仓内通用面板用 pick 字段，不拼字面量' },
   { id: 'security.auditExport', why: '审计导出按钮在 admin 设置页里按 kind 拼查询串（抽取后是 /export${}，见 ② 的宽松尾段规则）；保留' },

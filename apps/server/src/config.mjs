@@ -138,7 +138,7 @@ export function clearListenHost() {
  *   · 其他风格 = 注册表里登记的一个**技能**，派活时把技能正文追加进任务
  *     （见 dispatch.stylePrefBlock —— 每轮都带、不走 firstTime，切换立即生效）。
  * 注册表写死在代码（同专家目录的口径：跟代码一起审）；存在 config.json 的
- * `replyStyle` 键里，跟控制面/生图那套共用一个文件。
+ * `replyStyle` 键里，跟控制面那套共用一个文件。
  */
 export const REPLY_STYLES = [
   { id: 'default', label: '默认', skill: null },

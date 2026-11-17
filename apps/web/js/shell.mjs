@@ -47,6 +47,28 @@ export function saveCollapsed() {
 export const prefersLight = () => window.matchMedia('(prefers-color-scheme: light)').matches;
 
 
+/**
+ * 手机形态（原生壳 / PWA / 窄屏窗口）砍掉「跟随系统」档（2026-11-17 用户拍板）。
+ *
+ * 为什么砍：原生壳把 WebView 的 prefers-color-scheme 用 uiMode 钉死成「上次面板报来的
+ * 主题」（MainActivity.buildBinding → applyOverrideConfiguration），system 档再读
+ * matchMedia 就是读自己上一次的值 —— 一旦进过深色就永远跟到深色，用户实报
+ * 「选了跟随系统反而是深色」。手机端没有可靠的系统深浅来源，不如不给这个选项。
+ *
+ * 判据用 body.mb-narrow（mobile.mjs 按 max-width:900px toggle），跟全站手机形态同源；
+ * 首屏 index.html 的内联脚本刷不到 body，那里用同一条 matchMedia 自己判。
+ *
+ * 只做运行时归一化、**不写回 localStorage** —— 存着的 'system' 留给桌面宽屏继续用，
+ * 手机窄屏打开时临时按浅色落地，两种形态互不污染。
+ */
+export const phoneNoSystem = () =>
+  document.body?.classList.contains('mb-narrow') || window.matchMedia('(max-width: 900px)').matches;
+
+export function normalizeTheme(v) {
+  return phoneNoSystem() && v === 'system' ? 'light' : v;
+}
+
+
 
 /* ------------------------------------------------------ 记住"上次停在哪" */
 
@@ -296,7 +318,30 @@ export function applyTheme() {
     const win = window.__TAURI__?.window?.getCurrentWindow?.();
     win?.setTheme?.(S.theme === 'system' ? null : resolved);
   } catch { /* 浏览器里没有 __TAURI__；壳被旧版 exe 带着跑时 IPC 可能没开 —— 都不影响网页本身 */ }
+  syncShellTheme();
   syncShellBar();
+}
+
+/*
+ * 面板主题 → Android 壳（2026-11-17 用户实报："改了深色主题，到选择电脑这一步时是浅色的"）。
+ *
+ * 之前壳只吃两条 bar 色（setSystemBarColor / setTopBarColor），原生屏（登录 / 设备列表）
+ * 自己不知道面板是深是浅 —— 一深一浅两截。applyTheme 在 boot 与用户换主题时都会跑，
+ * 顺手把**解析后的深浅**（布尔）报给壳，壳存起来、下一次画原生屏按它铺
+ * （apps/mobile-native MainActivity.applyPanelTheme）。「跟系统」那一档这里已经用
+ * prefersLight() 解析过了，报布尔，壳不用再猜一遍系统答案。
+ *
+ * 老壳没有 setTheme 方法（typeof 检测式）：跳过，行为一个字节不变；桌面 / PWA 没有
+ * BandiShell，同样跳过。同一主题值不重复跨进程调用（面板 boot 每次都跑 applyTheme）。
+ */
+let lastShellTheme;
+function syncShellTheme() {
+  const shell = window.BandiShell;
+  if (!shell || typeof shell.setTheme !== 'function') return;
+  const dark = document.documentElement.dataset.theme === 'dark';
+  if (dark === lastShellTheme) return;
+  lastShellTheme = dark;
+  try { shell.setTheme(dark); } catch { /* 桥不可用 —— 不影响网页本身 */ }
 }
 
 /**
@@ -448,8 +493,8 @@ if (typeof window !== 'undefined') {
  * 交给调用方决定，本函数只负责存值 + 应用到文档。
  */
 export function setTheme(theme, { keepPage = false } = {}) {
-  S.theme = theme;
-  try { localStorage.setItem(THEME_KEY, theme); } catch { /* 隐私模式下写不了就算了 */ }
+  S.theme = normalizeTheme(theme);
+  try { localStorage.setItem(THEME_KEY, S.theme); } catch { /* 隐私模式下写不了就算了 */ }
   applyTheme();
   if (!keepPage) openSettings('prefs');
 }

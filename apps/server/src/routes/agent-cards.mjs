@@ -154,7 +154,14 @@ function normalizeCard(body, project, { allowBackfill = false } = {}) {
   assertReadableText(title, '标题');
   assertReadableText(description, '描述');
   const assignee = body?.assigneePersonaId ? String(body.assigneePersonaId) : null;
-  if (assignee && !store.getPersona(assignee)) throw Object.assign(new Error('这张卡要派的人已经不在了'), { code: 'E2059' });
+  if (assignee && !store.getPersona(assignee))
+    throw Object.assign(
+      new Error(
+        `执行人「${String(body.assigneePersonaId).slice(0, 30)}」不存在 —— assignee 要填**员工 id**（p- 开头，` +
+          `GET /api/state 的 personas 里能查到），不是名字。名字 → id：先 GET /api/personas 对一遍。`,
+      ),
+      { code: 'E2059' },
+    );
   const explicitKey = String(body?.idempotencyKey ?? '').trim();
   if (explicitKey.length > KEY_MAX) throw Object.assign(new Error(`idempotencyKey 最多 ${KEY_MAX} 个字`), { code: 'E2059' });
   return {
@@ -284,17 +291,25 @@ function announceCard(convId, persona, task) {
   if (!convId) return;
   const assigneeName = task.assigneePersonaId ? (store.getPersona(task.assigneePersonaId)?.name ?? null) : null;
   const backfill = task.source === 'backfill';
+  /*
+   * 卡票的形态（2026-11-15 用户定）：**派给群成员的卡 = "@执行人" 在前、卡票在后** ——
+   * 一眼看出这活派给谁了；卡的标题/状态/执行人都在票上，不再复述一遍。
+   * 补记卡（backfill）和没指定执行人的卡维持原文字形态。
+   * mentionFirst 让气泡把文本画在卡票**上面**（chat.mjs 的渲染分支认这个标记）。
+   */
+  const mention = assigneeName && !backfill ? `@${assigneeName}` : null;
   store.addMessage({
     conversationId: convId,
     role: 'assistant',
     personaId: persona.id,
-    text: `【${backfill ? '补记' : '任务卡'}】${task.title} —— 已建立（${store.taskLabel(task.status)}${assigneeName ? `，交给了 ${assigneeName}` : ''}）`,
+    text: mention ?? `【${backfill ? '补记' : '任务卡'}】${task.title} —— 已建立（${store.taskLabel(task.status)}${assigneeName ? `，交给了 ${assigneeName}` : ''}）`,
     meta: {
       type: 'card',
       cardId: task.id,
       title: task.title,
       status: task.status,
       assignee: assigneeName,
+      ...(mention ? { mentionFirst: true } : {}),
       ...(backfill ? { backfill: true } : {}),
     },
   });

@@ -1,5 +1,5 @@
 /**
- * **PR 交付流程：开发完成 → 建 PR → 审阅 → 合并**（2026-10-25）。
+ * **PR 交付**（2026-10-25；模板出厂名 2026-11-16 由「开发完成 → 建 PR → 审阅 → 合并」简化）。
  *
  * 用户的需求一句话：「本地写的代码，我让仓库管家提交的时候能自动建 PR、推到服务端、合并；
  * 别人的 PR 能检测合并；或者我自己点按钮建 PR。」按钮那一半在 §「建 PR 与手动合并」已经做完，
@@ -54,7 +54,7 @@ const MERGE_DETAIL = '平台执行：管理员结论「值得合」+ CI 全绿 +
  */
 export const PR_DELIVERY_TEMPLATE = {
   id: PR_DELIVERY_TEMPLATE_ID,
-  name: '开发完成 → 建 PR → 审阅 → 合并',
+  name: 'PR 交付',
   builtIn: true,
   start: 'n1',
   nodes: [
@@ -103,6 +103,10 @@ export function ensurePrDeliveryTemplate() {
    * 连线（approve/reject）、点名（personaId）、manual 都是用户的选择，永不覆盖。
    */
   let touched = false;
+  /* 名字是平台口径（2026-11-16 用户："名称简约一些"）：内建模板启动时刷成出厂名。
+     用户接管（builtIn=0）早已 return，不会走到这里。 */
+  const name = cur.name !== PR_DELIVERY_TEMPLATE.name ? PR_DELIVERY_TEMPLATE.name : cur.name;
+  if (name !== cur.name) touched = true;
   const byId = new Map(PR_DELIVERY_TEMPLATE.nodes.map((n) => [n.id, n]));
   const nodes = (() => {
     try {
@@ -125,7 +129,7 @@ export function ensurePrDeliveryTemplate() {
     }
     return next;
   });
-  if (touched) store.upsertWorkflowTemplate({ id: cur.id, name: cur.name, nodes, builtIn: !!cur.builtIn });
+  if (touched) store.upsertWorkflowTemplate({ id: cur.id, name, nodes, builtIn: !!cur.builtIn });
   return store.getWorkflowTemplate(PR_DELIVERY_TEMPLATE_ID);
 }
 

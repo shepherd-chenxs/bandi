@@ -1,11 +1,11 @@
-/* connectors.mjs —— 插件、界面插件（市场那部分）、连接器：添加 / 修改、运行时：设备 → CLI → 详情。
+/* connectors.mjs —— 插件、界面插件（市场那部分）、连接器：添加 / 修改、运行时：这台机器页。
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
 import { esc, toast } from './shell.mjs';
 import { api, failHtml, initial, post } from './ui.mjs';
 import { setNav } from './state.mjs';
 import { openSettings } from './settings.mjs';
 import { mountRemoteAccessCard } from './securityadmin.mjs';
-import { confirmDo, paintLocalRuntimes, renderBackupSection, renderCliDetail, taskTail } from './machine.mjs';
+import { confirmDo, paintLocalRuntimes, renderBackupSection, taskTail } from './machine.mjs';
 import { renderList } from './contacts.mjs';
 import { openProjectsPage, openTaskBoard } from './projects.mjs';
 import { openPlugins } from './experts.mjs';
@@ -992,7 +992,7 @@ export function wireBackWb(root, back = () => openPlugins()) {
  *
  * ⚠️ 2026-10-19 设置 / 流程模块的面包屑撤掉之后，`settings` / `skills` / `flows`
  *    三个键没有宿主了，已删。`devices` / `device` 2026-10-20 又加回来了：
- *    运行时是多层页面（运行时 › 设备 › CLI），页头要用面包屑导航。
+ *    这台机器页是单层页面，两个键都回到这里（CLI 详情页 2026-11-16 撤了）。
  *    以后要在别处用，照原样加回来即可：settings→openSettings('prefs')、
  *    skills→openSettings('skills')、flows→openWorkflows()。
  */
@@ -1005,10 +1005,9 @@ export const CRUMB_GO = {
   // 带 arg 就是"项目清单里选中它"（面包屑里点某个项目的名字回到它的详情页）
   projects: (id) => openProjectsPage(id ?? undefined),
   board: () => openTaskBoard(),
-  // 运行时那两级：不是"分节"而是状态 —— 得先把 S.rtLevel 摆好，renderRuntimes 按它分发
-  devices: () => { S.rtLevel = 'devices'; S.rtDevice = null; S.rtRuntime = null; return renderRuntimes(); },
-  // 2026-11-01 设备详情页撤了：旧的 device 面包屑目标归到这台机器页
-  device: () => { S.rtLevel = 'devices'; S.rtDevice = null; S.rtRuntime = null; return renderRuntimes(); },
+  // 这台机器页（旧的设备详情页 / CLI 详情页已撤，都回到这里）
+  devices: () => renderRuntimes(),
+  device: () => renderRuntimes(),
   // 设置子页（技能等）的面包屑回设置首页
   settings: () => openSettings('prefs'),
   // 技能详情的面包屑回技能列表
@@ -1048,7 +1047,6 @@ export function breadcrumb(items) {
  */
 
 export async function renderRuntimes() {
-  if (S.rtLevel === 'cli' && S.rtDevice && S.rtRuntime) return renderCliDetail();
   return renderDeviceList();
 }
 
@@ -1058,9 +1056,6 @@ export async function renderRuntimes() {
    设备详情页与多机协同节都已撤掉，这页不再有设备清单或节点入口。 */
 
 export async function renderDeviceList() {
-  S.rtLevel = 'devices';
-  S.rtDevice = null;
-  S.rtRuntime = null;
   // 左栏只写「设置」（在 openSettings 里），这一页的标题「这台机器」在右页头
   $('settingsView').innerHTML = rtLoading('这台机器');
 

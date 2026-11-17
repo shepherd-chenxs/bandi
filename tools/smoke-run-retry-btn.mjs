@@ -5,6 +5,7 @@
  * 又加回来 —— 这种"删了加、加了删"最容易在下一次收拾界面时**又一次被顺手删掉**，
  * 而且删了不报错，只是失败那一步没有入口、人又得去猜。所以用源码级断言把三件事钉住：
  *   ① 按钮在（data-run-retry），且只在 失败 / 已阻塞 时出现（待办/进行中不出现，避免重复派活）；
+ *      —— 2026-11-16 额度退场后，原先「额度拦下的不摆这颗」特判与「继续一次」按钮一并撤掉；
  *   ② 点击走 `/retry` —— 跟"把状态改成待办"同一条路，不许另写一套派活；
  *   ③ 状态下拉**没被动**（这次只加入口，状态那套牵扯"想法拖进待办就自动开工"，要统一规划）。
  *
@@ -29,12 +30,12 @@ const check = (ok, msg, detail = '') => {
 console.log('① 按钮在，且只在需要它的时候出现');
 check(src.includes('data-run-retry'), '当前这一步那一行画出了「重跑这一步」（data-run-retry）');
 check(
-  /!v\.quotaBlocked && \(v\.taskStatus === 'failed' \|\| v\.taskStatus === 'blocked'\)/.test(src),
+  /\(v\.taskStatus === 'failed' \|\| v\.taskStatus === 'blocked'\)/.test(src),
   '只给「失败 / 已阻塞」（待办和进行中不出现 —— 那两个态点了只会重复派活）',
 );
 check(
-  /额度拦下的那一步不摆这颗/.test(src),
-  '额度拦下的不摆（那颗有自己的「继续一次」，重跑只会再撞一次闸）',
+  !src.includes('quotaBlocked') && !src.includes('data-run-force') && !wf.includes('quotaBlocked'),
+  '额度退场后不再有 quotaBlocked 特判 /「继续一次」按钮（2026-11-16）',
 );
 check(
   /data-run-retry[^>]*title="\$\{why\}/.test(src) || /title="\$\{why\}[^>]*data-run-retry/.test(src),

@@ -25,7 +25,7 @@ import './js/misc.mjs';
 // 而脚本是 defer 的 module，此刻 body 已经解析完，安全。
 import './js/mobile.mjs';
 
-import { THEME_KEY, applyTheme, esc, readCollapsed, toast } from './js/shell.mjs';
+import { THEME_KEY, applyTheme, esc, normalizeTheme, readCollapsed, toast } from './js/shell.mjs';
 import { api, closeHelpPop, hideTip, openCombo, post, showTip, tipAnchor, tipTimer, wireDialogHead } from './js/ui.mjs';
 import { load, setNav } from './js/state.mjs';
 import { openSettings } from './js/settings.mjs';
@@ -36,7 +36,7 @@ import { archiveFlowTemplate, deleteFlowTemplate, newTemplateDialog } from './js
 import { kbRepaint, kbRepaintRows, projectDialog } from './js/projects.mjs';
 import { doStartFlow, flowStart, openFlowStart, syncFlowTitle } from './js/flowpages.mjs';
 import { importPicked, openSkill, renderSkAssignList, renderGitRepos, scanImport, skAssignPicked, skAssignSkill } from './js/skills.mjs';
-import { addAtts, closeMentionPop, insertMention, linkPersonaId, linkPicked, makeConversationCard, mentionPop, openConversation, openDetail, renderLinkList, searchRefreshDetail, send, setBusy, setComposer, stopChatRun, updateMentionPop } from './js/chat.mjs';
+import { addAtts, closeMentionPop, insertMention, linkPersonaId, linkPicked, mentionPop, openConversation, openDetail, renderLinkList, searchRefreshDetail, send, setBusy, setComposer, stopChatRun, updateMentionPop } from './js/chat.mjs';
 import { deleteSessionFromLog, memberPicked, renderMemberCandidates } from './js/groups.mjs';
 import { applyFormDefaults, closeDrawer, pluginMust, refreshGroup, rerenderPanel, runFormFollow } from './js/experts.mjs';
 import { startEvents } from './js/events.mjs';
@@ -735,18 +735,15 @@ $('input').addEventListener('click', updateMentionPop);
 $('input').addEventListener('blur', () => setTimeout(closeMentionPop, 150));
 
 
-/* 「＋」的两项菜单（2026-10-24）：上传文件走原路；任务卡 = 原页头「立成卡」搬进来的，
-   逻辑在 chat.mjs 的 makeConversationCard。桌面朝上弹小卡片；手机端（mobile.css）
+/* 「＋」菜单（2026-11-16 起只剩上传文件）：桌面朝上弹小卡片，手机端（mobile.css）
    是贴底抽屉，蒙层是菜单自己的 ::before —— 伪元素不是事件目标，点蒙层时 target
    就是 #attachMenu 本体，按"点本体"收起。 */
 $('attach').onclick = (e) => {
   e.stopPropagation();
   const m = $('attachMenu');
-  m.querySelector('#attCard').hidden = S.conversation?.kind === 'exec';
   m.hidden = !m.hidden;
 };
 $('attFile').onclick = () => { $('attachMenu').hidden = true; $('filePick').click(); };
-$('attCard').onclick = () => { $('attachMenu').hidden = true; if (S.conversation) makeConversationCard(S.conversation); };
 document.addEventListener('click', (e) => {
   const m = $('attachMenu');
   if (!m) return;
@@ -783,7 +780,10 @@ setBusy(false);
 
 
 // 主题要在首屏渲染前定下来，否则会闪一下深色再变浅色
-try { S.theme = localStorage.getItem(THEME_KEY) || 'system'; } catch { S.theme = 'system'; }
+// 手机形态砍掉「跟随系统」（2026-11-17）：存着的 system 在手机上按浅色落地，不写回，
+// 桌面宽屏读到同一个 system 仍走跟随系统 —— 两种形态互不污染。
+try { S.theme = normalizeTheme(localStorage.getItem(THEME_KEY) || 'system'); }
+catch { S.theme = 'system'; }
 
 
 S.secCollapsed = readCollapsed();

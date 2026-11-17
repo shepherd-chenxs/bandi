@@ -1,7 +1,7 @@
-/* settings.mjs —— 设置、关于、额度。
+/* settings.mjs —— 设置、关于。
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
 import { esc, setRoute, setTheme, toast } from './shell.mjs';
-import { api, dt, failHtml, initial, openCtxMenu, post, showFail, wireDialogHead } from './ui.mjs';
+import { api, dt, failHtml, initial, post, showFail, wireDialogHead } from './ui.mjs';
 import { headRow, renderPlugins, renderRuntimes, rtLoading } from './connectors.mjs';
 import { openRemotePage, setPluginRerender } from './experts.mjs';
 import { askText, confirmDo } from './machine.mjs';
@@ -58,16 +58,17 @@ import { registerLayer } from './navstack.mjs';
 
 /*
  * 外观选项（2026-11-05 用户：「我的页面加一个主题选择的功能」）。
- * 键与桌面 设置 › 偏好 › 主题 完全同一套（'light' / 'dark' / 'system'），
- * 存的是 localStorage 的 bandi.theme —— 两处入口改的是同一个值，不存在两套口径。
+ * 手机形态只有浅色 / 深色两档 —— 2026-11-17 用户拍板砍掉「跟随系统」：原生壳把
+ * WebView 的 prefers-color-scheme 用 uiMode 钉死成上次主题，system 档读它就成了
+ * 自锁环（选了跟随系统反而是深色）。桌面 设置 › 偏好 › 主题 仍保留三档，互不影响。
+ * 存的是 localStorage 的 bandi.theme；手机即使从别处读到遗留 system，也会在
+ * shell.mjs normalizeTheme 按浅色落地，不会走到这里显示。
  */
 const THEME_OPTS = [
   ['light', '浅色'],
   ['dark', '深色'],
-  ['system', '跟随系统'],
 ];
-/** 主题当前值的中文名（手机「我的」页那行显示"深色"，不显示 dark） */
-const themeLabel = (v) => (THEME_OPTS.find(([k]) => k === v) ?? THEME_OPTS[2])[1];
+/* themeLabel 已随 2026-11-17 主题行改分段开关退场：不再有"值"文案可显示 */
 
 /*
  * 机器信息行渲染（2026-11-11 收拢到模块级）：「我的」页的桌面「这台机器」卡
@@ -91,6 +92,72 @@ const phoneMachineAll = (hello) =>
       ]
     : [];
 
+/*
+ * 身份三件套（2026-11-17 个人详情页抽离）：「我的」页与「我的 › 个人资料」子页
+ * 都从这一个口子取身份，头像/昵称的读法不写第二份 —— 免得改昵称后两页首字不一致。
+ * 昵称存在 users.nickname（服务端 /api/me 带出），**不是账号名** —— 改它不动署名；
+ * 2026-11-09 起它是全端显示名（通讯录 / 聊天署名 / 派活选人都先看它，见 shell.mjs
+ * 的 userLabel），这两页只是它的入口，不是它的全部生效范围。
+ */
+function meIdentity() {
+  const who = S.auth ?? null;
+  const isUser = who?.kind === 'user';
+  // 身份卡显示**中枢账号**（登录用的手机号）：本机名条只是实现细节（2026-11-07）
+  const name = isUser ? (who?.user?.hub || who?.user?.name || '') : '未登录';
+  const nick = isUser ? String(who?.user?.nickname ?? '').trim() : '';
+  // 3-4-4 分组（152 6416 0947）：11 位连排没法扫读，运营商 / 银行 App 都这么排
+  const isPhoneName = /^1\d{10}$/.test(name);
+  const phoneText = isPhoneName ? name.replace(/^(\d{3})(\d{4})(\d{4})$/, '$1 $2 $3') : name;
+  const displayName = nick || phoneText;
+  return { who, isUser, name, nick, isPhoneName, phoneText, displayName };
+}
+
+/**
+ * 头像 HTML（两页共用同一套读法）：有昵称取昵称首字；手机号当名字时那个"1"没有含义，
+ * 换成中性人形占位图标（iOS 联系人无头像时的读法）；其余取账号名首字。
+ * extraCls 给个人详情页放大用（me-ava-lg），「我的」页传空。
+ */
+function avatarHtml(id, extraCls = '') {
+  const { nick, isPhoneName, name } = id;
+  const cls = ['me-ava', extraCls, nick ? '' : isPhoneName ? 'me-ava-glyph' : ''].filter(Boolean).join(' ');
+  if (nick) return `<span class="${cls}">${esc(initial(nick))}</span>`;
+  if (isPhoneName)
+    return `<span class="${cls}" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="8.2" r="3.6"/><path d="M4.8 19.4c1.5-3.3 4.1-5 7.2-5s5.7 1.7 7.2 5"/></svg></span>`;
+  return `<span class="${cls}">${esc(initial(name))}</span>`;
+}
+
+/** 昵称文本清洗 + 20 字校验；不合法返回 null（已 toast），调用方据此退出 */
+function cleanNick(raw) {
+  const t = String(raw ?? '').replace(/\s+/g, ' ').trim();
+  if ([...t].length > 20) { toast('昵称最多 20 个字', 'error'); return null; }
+  return t;
+}
+
+/**
+ * 把昵称写到服务端 + 同步本地（S.auth / S.users，名册立等可见，见 2026-11-09 全端生效口径）。
+ * t = 已清洗的最终值；成功 true，旧服务端兜底 false（不抛），网络错误抛出由调用方 toast。
+ * 桌面弹窗（editNick）与手机个人详情页行内编辑共用这一把 —— 保存口径只有一处。
+ */
+async function persistNick(t) {
+  const who = S.auth;
+  const d = await api(`/api/users/${encodeURIComponent(who.user.id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ nickname: t }),
+  });
+  /*
+   * 旧服务端的兜底：它不认识 nickname，会「200 + 原样回 user」—— 不判这一下就会
+   * 弹"已保存"却什么都没发生（前端先换了、服务端还没重启的那一小段窗口）。
+   * 用 `in` 判而不是判 null：null 是"已清空"的合法值。
+   */
+  const u = d?.user ?? {};
+  if (!('nickname' in u)) { toast('服务端还是旧版本：重启班底后再改昵称', 'error'); return false; }
+  if (S.auth?.user) S.auth.user.nickname = u.nickname ?? null;
+  const mine = (S.users ?? []).find((x) => x.id === u.id);
+  if (mine) mine.nickname = u.nickname ?? null;
+  return true;
+}
+
 export async function openMe() {
   /*
    * 「我的 › 设置」子页自愈（2026-11-11）：openMe 是"回到个人中心"的唯一渲染口 ——
@@ -98,42 +165,18 @@ export async function openMe() {
    * 不然画面在「我的」、body 上还挂着子页标记，Esc/返回的判断就会错拍。
    */
   meSetOpen = false;
+  meProfileOpen = false;
+  nickEditOpen = false;
   document.body.classList.remove('mb-me-set');
+  document.body.classList.remove('mb-me-profile');
+  document.body.classList.remove('mb-me-nickedit');
   setRoute('me');
   setPluginRerender(null);
   showView('settings');
   setListTitle('我的');
-  const who = S.auth ?? null;
-  const isUser = who?.kind === 'user';
-  // 身份卡显示**中枢账号**（登录用的手机号）：本机名条只是实现细节（2026-11-07）
-  const name = isUser ? (who?.user?.hub || who?.user?.name || '') : '未登录';
-  /*
-   * 昵称（2026-11-08 用户："加一个昵称，'中枢账号 · 手机号登录'这个去掉"）。
-   *
-   * 身份卡两行现在是：**第一行昵称、第二行手机号**。
-   *   · 设了昵称 → 标题用昵称，副行给 3-4-4 分组的手机号；
-   *   · 没设昵称 → 标题退回手机号（页面不至于空着），副行给一个「＋ 设置昵称」入口；
-   *   · 没登录 → 标题「未登录」，副行保留原来那句说明（这句话只在这种情况才该出现）。
-   * 昵称存在 users.nickname（服务端 /api/me 带出），**不是账号名** —— 改它不动署名。
-   * 2026-11-09 起昵称是**全端显示名**（通讯录 / 聊天署名 / 派活选人都先看它，见 shell.mjs
-   * 的 userLabel）—— 身份卡只是它的入口，不再是它的全部生效范围。
-   */
-  const nick = isUser ? String(who?.user?.nickname ?? '').trim() : '';
-  /*
-   * 手机号当名字时的两件小事（2026-11-08 重设计，用户对着截图说"这个页面重新设计一下"）：
-   *   · 3-4-4 分组（152 6416 0947）—— 11 位连排没法扫读，运营商 / 银行 App 都这么排；
-   *   · 头像不再取首字符 —— "1526…" 的首字符是"1"，大蓝圈里孤零零一个数字既不是名字
-   *     也没有含义；换成中性的人形占位图标（iOS 联系人无头像时的同款读法）。
-   * 有了昵称之后头像取昵称首字（跟"有名字的人"同款读法）。
-   */
-  const isPhoneName = /^1\d{10}$/.test(name);
-  const phoneText = isPhoneName ? name.replace(/^(\d{3})(\d{4})(\d{4})$/, '$1 $2 $3') : name;
-  const displayName = nick || phoneText;
-  const avaHtml = nick
-    ? `<span class="me-ava">${esc(initial(nick))}</span>`
-    : isPhoneName
-      ? `<span class="me-ava me-ava-glyph" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="8.2" r="3.6"/><path d="M4.8 19.4c1.5-3.3 4.1-5 7.2-5s5.7 1.7 7.2 5"/></svg></span>`
-      : `<span class="me-ava">${esc(initial(name))}</span>`;
+  const id = meIdentity();
+  const { who, isUser, nick, phoneText, displayName } = id;
+  const avaHtml = avatarHtml(id);
   /*
    * 「有没有登录态可退」（2026-11-01 实报：回环形态点退出登录没反应）。
    *   · 登录账号 → 有；
@@ -195,31 +238,36 @@ export async function openMe() {
   /* 信箱未读数：hero 右上角那颗红点（me-inbox-dot）用；与左栏角标同源（S.noticesUnread） */
   const inboxUnread = Number(S.noticesUnread) || 0;
   /*
-   * 身份卡的两枚 chip（2026-11-11 方案 B「档案卡」）：**中枢账号** + **这台机器**。
-   * 它们回答的是"我是谁 / 我在哪台机器"—— 原来这两件事只靠一层全宽渐变和一行
-   * 灰字暗示，收成 chip 才有"档案"的读法。设备名取 hello.label/hostname，
-   * 与「当前设备」行同源；没登录 / 拉不到 hello 就不画那一枚。
+   * 身份卡不再有 chip 行（2026-11-11 方案 B 档案卡的两枚 chip 全撤）：
+   *   2026-11-17 用户先删「中枢账号」（副行手机号已经说明了"我是谁"），
+   *   同日再删「这台机器」—— 清单里就有「当前设备」行，重复。
+   *
+   * ⚠️ `devName` 仍要留着：下方「当前设备」行（#meSwitchDevice）和子页都读它。
+   * 它不是 chip 的余孽，是设备名的单点真源（hello.label 优先，退回 hostname）。
    */
   const devName = hello ? hello.label || hello.hostname || '' : '';
-  const heroChips = [
-    isUser
-      ? '<span class="me-chip ac"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3.2 19 6v5.4c0 4.2-2.8 7.4-7 9.4-4.2-2-7-5.2-7-9.4V6z"/></svg>中枢账号</span>'
-      : '',
-    devName ? `<span class="me-chip">${esc(devName)}</span>` : '',
-  ].join('');
   $('settingsView').innerHTML = `
     ${headRow('<b>我的</b>')}
     <div class="detail-body me-body">
       <section class="set-sec me-hero-sec">
         <div class="me-hero-card${onPhone ? ' me-hc' : ''}">
-          ${avaHtml}
+          ${
+            /* 头像（2026-11-17 用户："手机端点击头像跳转到个人详情页"）：手机端整颗
+               头像是进个人详情页的入口（.me-ava-btn 清除按钮样式、让里面 .me-ava 保持
+               原尺寸）；桌面头像仍是纯展示，不包按钮、不换交互。 */
+            onPhone
+              ? `<button type="button" class="me-ava-btn" id="meProfileOpen" aria-label="个人资料">${avaHtml}</button>`
+              : avaHtml
+          }
           <div class="me-who">
             <div class="me-name">
               <b>${esc(displayName)}</b>
               ${
                 /* 昵称入口（2026-11-08）：常驻小铅笔（55% 透明，不抢身份卡的戏）。
-                   不做 hover 才显形 —— 手机上没有 hover，藏了就等于没有。 */
-                isUser
+                   不做 hover 才显形 —— 手机上没有 hover，藏了就等于没有。
+                   ⚠️ 2026-11-17：手机端整条弹窗改昵称方式退场，铅笔只留桌面 ——
+                   手机上改昵称改走「点头像 › 个人详情页」的行内编辑。 */
+                isUser && !onPhone
                   ? `<button type="button" class="me-edit" id="meNickEdit" title="${nick ? '改昵称' : '设置昵称'}" aria-label="${nick ? '改昵称' : '设置昵称'}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 19.5h4l9.6-9.6a2.1 2.1 0 0 0-3-3L5.5 16.5v3z"/><path d="M13.8 7.2l3 3"/></svg></button>`
                   : ''
               }
@@ -227,15 +275,19 @@ export async function openMe() {
             ${
               /*
                * 副行（原「中枢账号 · 手机号登录」已删，2026-11-08 用户要求）：
-               *   登录 + 有昵称 → 手机号（账号身份还在，只是退到第二行）；
-               *   登录 + 没昵称 → 「＋ 设置昵称」，比一行灰字更说明下一步能干什么；
-               *   没登录       → 保留原来那句说明。
+               *   手机（2026-11-17）：有昵称 → 手机号；没昵称 → 引导点头像（原来那颗
+               *     「＋ 设置昵称」按钮连同弹窗一并撤掉，改去个人详情页设）；
+               *   桌面维持原口径：有昵称 → 手机号；没昵称 → 「＋ 设置昵称」按钮。
                */
               !isUser
                 ? `<span class="me-meta">这台机器还没有登录账号</span>`
-                : nick
-                  ? `<span class="me-meta">${esc(phoneText)}</span>`
-                  : `<button type="button" class="me-meta me-nick-set" id="meNickSet">＋ 设置昵称</button>`
+                : onPhone
+                  ? nick
+                    ? `<span class="me-meta">${esc(phoneText)}</span>`
+                    : `<span class="me-meta">点头像设置昵称</span>`
+                  : nick
+                    ? `<span class="me-meta">${esc(phoneText)}</span>`
+                    : `<button type="button" class="me-meta me-nick-set" id="meNickSet">＋ 设置昵称</button>`
             }
           </div>
           ${
@@ -255,7 +307,6 @@ export async function openMe() {
                  </button>`
               : ''
           }
-          ${onPhone && heroChips ? `<div class="me-chips">${heroChips}</div>` : ''}
         </div>
       </section>
       ${
@@ -290,17 +341,16 @@ export async function openMe() {
       }
       ${
         /*
-         * 「我的」页的分组清单（2026-11-11 深夜第四版，用户："这个页面可以参考微信
-         * 我的页面的布局"）。
+         * 「我的」页的分组清单（2026-11-11 深夜第四版，用户："这个页面可以参考主流
+         * 手机「我的」页的布局"）。
          *
-         * 微信那边不是"卡"，是**分组块**：一块满宽、无圆角、无描边、无投影的白，
+         * 那种页面不是"卡"，是**分组块**：一块满宽、无圆角、无描边、无投影的白，
          * 与上一块之间隔 10px 页底灰；块内行与行之间一条内缩 20 的 hairline。
          * 三行完全同构 —— 左边名称 17，右边值 15.5 灰 + ›。
          *
-         * 主题行因此从"行内分段选项卡"（2026-11-05 的形态）改成"值 + 箭头"：
-         * 分段铺在行里是三个里唯一一个"控件"，跟微信的读法不是一套；点整行弹底部
-         * 选择（复用 #ctxMenu 的手机 sheet 形态），与 iOS「设置 › 显示与亮度」同一个
-         * 交互 —— 值在行上永远看得见，改一次也只多一次点击。
+         * 主题行 2026-11-17 再改（用户："直接改成行内切换按钮，不使用抽屉"）：
+         * 行右端摆一枚两档的分段开关（浅色｜深色），点档即生效，不再弹底部选择。
+         * 这行不是 <button> 了 —— 分段开关自己就是按钮，button 不能套 button。
          *
          * 「当前设备」行条件沿用上一版：只在壳里 + 中枢账号会话画 —— 面板和启动页是
          * 两个 origin，"设备列表"只存在于壳的启动页上；桥 = 导航回启动页带
@@ -310,11 +360,15 @@ export async function openMe() {
         onPhone
           ? `<section class="set-sec me-one-sec">
                <div class="me-one-box" id="meOneBox">
-                 <button type="button" class="me-kv me-cache-row" id="meThemeRow">
+                 <div class="me-kv me-cache-row" id="meThemeRow">
                    <span class="me-k">主题</span>
-                   <span class="me-v" id="meThemeVal">${esc(themeLabel(S.theme))}</span>
-                   <i class="me-chevron" aria-hidden="true">›</i>
-                 </button>
+                   <span class="me-theme-seg" id="meThemeSeg" role="group" aria-label="主题切换">
+                     ${THEME_OPTS.map(
+                       ([v, label]) =>
+                         `<button type="button" data-theme-opt="${v}" class="${S.theme === v ? 'on' : ''}">${esc(label)}</button>`,
+                     ).join('')}
+                   </span>
+                 </div>
                  ${
                    shell && hello && isUser
                      ? `<button type="button" class="me-kv me-cache-row" id="meSwitchDevice">
@@ -383,25 +437,21 @@ export async function openMe() {
    * setTheme 仍带 keepPage：手机上「设置 › 偏好」那一页根本不存在，不 keepPage
    * 会被踢出「我的」再弹回来（2026-11-05 踩过）。
    */
-  const themeRow = $('meThemeRow');
-  if (themeRow) {
-    themeRow.onclick = () => {
-      const r = themeRow.getBoundingClientRect();
-      openCtxMenu(
-        r.left,
-        r.bottom + 6,
-        THEME_OPTS.map(([v, label]) => ({
-          /* 只有当前项带 ✓（三项都带前缀符号时，居中排版会被那个符号推歪半格，
-             看着像每行都"少了一点"）；选中即生效，不需要"确定" */
-          label: `${S.theme === v ? '✓ ' : ''}${label}`,
-          run: () => {
-            setTheme(v, { keepPage: true });
-            const val = $('meThemeVal');
-            if (val) val.textContent = label;
-          },
-        })),
-      );
-    };
+  /*
+   * 主题（2026-11-17 第五版）：行内分段开关，点档即生效 —— 不弹底部选择。
+   * setTheme 仍带 keepPage：手机上「设置 › 偏好」那一页根本不存在，不 keepPage
+   * 会被踢出「我的」再弹回来（2026-11-05 踩过）。
+   * 主题行不再是 <button>，整行点击无动作（me-kv 通用样式仍适用，见 mobile.css）。
+   */
+  const themeSeg = $('meThemeSeg');
+  if (themeSeg) {
+    const opts = [...themeSeg.querySelectorAll('[data-theme-opt]')];
+    for (const el of opts) {
+      el.onclick = () => {
+        setTheme(el.dataset.themeOpt, { keepPage: true });
+        for (const b of opts) b.classList.toggle('on', b === el);
+      };
+    }
   }
   $('meLogout')?.addEventListener('click', () => void logout());
   /*
@@ -421,30 +471,19 @@ export async function openMe() {
       ok: '保存',
     });
     if (v === null) return; // 取消
-    const t = String(v).replace(/\s+/g, ' ').trim();
-    if ([...t].length > 20) { toast('昵称最多 20 个字', 'error'); return; }
+    const t = cleanNick(v);
+    if (t === null) return;
     try {
-      const d = await api(`/api/users/${encodeURIComponent(who.user.id)}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nickname: t }),
-      });
-      /*
-       * 旧服务端的兜底：它不认识 nickname，会「200 + 原样回 user」—— 不判这一下就会
-       * 弹"已保存"却什么都没发生（前端先换了、服务端还没重启的那一小段窗口）。
-       * 用 `in` 判而不是判 null：null 是"已清空"的合法值。
-       */
-      const u = d?.user ?? {};
-      if (!('nickname' in u)) { toast('服务端还是旧版本：重启班底后再改昵称', 'error'); return; }
-      if (S.auth?.user) S.auth.user.nickname = u.nickname ?? null;
-      const mine = (S.users ?? []).find((x) => x.id === u.id);
-      if (mine) mine.nickname = u.nickname ?? null;
-      toast(t ? '昵称已保存' : '昵称已清除');
-      await openMe();
+      if (await persistNick(t)) {
+        toast(t ? '昵称已保存' : '昵称已清除');
+        await openMe();
+      }
     } catch (e) { toast(e.message, 'error'); }
   };
   $('meNickEdit')?.addEventListener('click', () => void editNick());
   $('meNickSet')?.addEventListener('click', () => void editNick());
+  /* 头像 → 个人详情页（2026-11-17，只手机端有这颗按钮） */
+  $('meProfileOpen')?.addEventListener('click', () => openMeProfile());
   /*
    * 信箱入口（2026-11-11 手机端）：hero 右上角那颗信封图标。走 mb-nav 事件让
    * mobile.mjs 统一 setNav —— 跟下面设置入口（goSet）同一条解环路子，
@@ -494,6 +533,192 @@ export async function openMe() {
     }
   });
 }
+
+/* ---------------------------------------------------------------- 我的 › 个人资料 */
+
+/*
+ * 「我的 › 个人资料」子页（2026-11-17 用户："手机端点击头像跳转到个人详情页，
+ * 在个人详情页可以修改昵称。这个页面点击昵称弹窗修改的方式去掉"）。
+ *
+ * 头像在「我的」页整颗可点（#meProfileOpen），进这一页；点昵称行 → 跳转独立的
+ * 「更改昵称」页（openNickEdit，主流做法），不再行内编辑、更不走 askText 弹窗。
+ * 只手机端有入口 —— 桌面「我的」页的铅笔/弹窗照旧，本页不会在桌面出现。
+ *
+ * 三级历史栈，每层"一格一类"互斥替换（与 openMeSet 同款自己收自己那一格）：
+ *   [我的] → [个人资料 mbMeProfile] → [更改昵称 mbNickEdit]
+ *   · 手势/返回键退当前那格；页内 ‹ / Esc 走各自的 close*；
+ *   · mobile.mjs 对 body.mb-me-profile / mb-me-nickedit 放行
+ *     （Esc 派 *-leave、popstate 不抢），渲染模块不反向 import。
+ */
+let meProfileOpen = false;
+let meProfilePopping = false;
+
+function openMeProfile() {
+  const id = meIdentity();
+  const { isUser, nick, phoneText } = id;
+  meProfileOpen = true;
+  nickEditOpen = false; // 重画 = 编辑页已收，别让旧开关残留（换栏后回「我的」也要干净）
+  document.body.classList.remove('mb-me-set', 'mb-me-nickedit');
+  document.body.classList.add('mb-me-profile');
+  $('settingsView').innerHTML = `
+    <header class="me-set-nav">
+      <button type="button" class="me-set-back" id="meProfileBack" aria-label="返回">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>
+      </button>
+      <span class="me-set-title">个人资料</span>
+      <span aria-hidden="true"></span>
+    </header>
+    <div class="detail-body me-body">
+      <!-- 只留昵称 + 手机号两行（2026-11-17 用户："这个页面太复杂了，显示两个就行"）：
+           头像 hero 那块整段删掉，名字和手机号在清单里各占一行，信息不重复。 -->
+      <section class="set-sec me-pf-sec">
+        <div class="me-one-box">
+          ${
+            isUser
+              ? `<div class="me-kv pf-nick-row" id="pfNickRow" role="button" tabindex="0">
+                   <span class="me-k">昵称</span>
+                   <span class="me-v" id="pfNickVal">${nick ? esc(nick) : '未设置'}</span>
+                   <i class="me-chevron" aria-hidden="true">›</i>
+                 </div>`
+              : ''
+          }
+          <div class="me-kv me-pf-ro">
+            <span class="me-k">手机号</span>
+            <span class="me-v">${esc(phoneText)}</span>
+          </div>
+        </div>
+      </section>
+    </div>`;
+  /* 当前格已带资料/编辑标记就复用，不重压（含时序坑：从编辑页保存返回时 history.back()
+     异步未落地，此刻 state 还是 mbNickEdit，若只看 mbMeProfile 会误判再压一格 → 幽灵格）。*/
+  if (!history.state?.mbMeProfile && !history.state?.mbNickEdit) history.pushState({ mbMeProfile: 1 }, '');
+  $('meProfileBack')?.addEventListener('click', () => void closeMeProfile(false));
+  wireNickRow(id);
+}
+
+/*
+ * 昵称行 → 独立「更改昵称」页（2026-11-17 用户二次拍板："参考主流的个人资料页，
+ * 点击昵称，跳转到更改昵称的页面进行更改"）—— 从行内编辑改成整页跳转：
+ *   · 行本身仍是 .me-kv 清单样式 + chevron，点击 / Enter / 空格进 openNickEdit；
+ *   · 保存口径与桌面弹窗共用 cleanNick / persistNick（单点，别抄第二份）。
+ */
+function wireNickRow(id) {
+  const row = $('pfNickRow');
+  if (!row || !id.isUser) return;
+  row.addEventListener('click', () => openNickEdit(id));
+  row.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openNickEdit(id); }
+  });
+}
+
+/*
+ * 「更改昵称」全屏子页（主流设置页同款）：‹ 返回 + 居中标题 + 右上角「保存」，
+ * 中间一条输入框 + 一行说明；留空 = 清除昵称（界面退回手机号）。
+ *
+ * 三级历史栈的第三格：
+ *   [我的] → [个人资料 mbMeProfile] → [更改昵称 mbNickEdit]
+ * 进页 pushState({mbNickEdit:1})，并摘掉 mb-me-profile —— 视觉层每层互斥替换
+ * （与 me-set / me-profile 一样"一层一格一类"），返回/保存都 closeNickEdit
+ * 退这一格、重画个人资料页。
+ */
+let nickEditOpen = false;
+let nickEditPopping = false;
+
+function openNickEdit(id) {
+  if (!id.isUser) return;
+  nickEditOpen = true;
+  document.body.classList.remove('mb-me-profile', 'mb-me-set');
+  document.body.classList.add('mb-me-nickedit');
+  $('settingsView').innerHTML = `
+    <header class="me-set-nav me-set-nav-ne">
+      <button type="button" class="me-set-back" id="nickEditBack" aria-label="返回">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>
+      </button>
+      <span class="me-set-title">更改昵称</span>
+      <button type="button" class="me-nick-save" id="nickEditSave">保存</button>
+    </header>
+    <div class="detail-body me-body">
+      <section class="set-sec ne-sec">
+        <div class="ne-box">
+          <input type="text" class="ne-input" id="nickEditInput" maxlength="40" value="${esc(id.nick)}" placeholder="请输入昵称" aria-label="昵称" />
+        </div>
+        <p class="ne-hint">昵称是全端的显示名：通讯录、聊天署名、派活选人都会用它。最多 20 个字，留空即清除。</p>
+      </section>
+    </div>`;
+  if (!history.state?.mbNickEdit) history.pushState({ mbNickEdit: 1 }, '');
+  $('nickEditBack')?.addEventListener('click', () => void closeNickEdit(false));
+  const input = $('nickEditInput');
+  const save = async () => {
+    const t = cleanNick(input?.value);
+    if (t === null) return;
+    try {
+      if (!(await persistNick(t))) return;
+      toast(t ? '昵称已保存' : '昵称已清除');
+      void closeNickEdit(false); // 退回个人资料页（它重画时读到新昵称）
+    } catch (e) { toast(e.message, 'error'); }
+  };
+  $('nickEditSave')?.addEventListener('click', () => void save());
+  input?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); void save(); }
+  });
+  requestAnimationFrame(() => { input?.focus(); input?.select(); });
+}
+
+/** 收「更改昵称」页回个人资料页：alreadyPopped = 手势/返回键的 popstate 已退过格 */
+async function closeNickEdit(alreadyPopped) {
+  if (!nickEditOpen) return;
+  nickEditOpen = false;
+  document.body.classList.remove('mb-me-nickedit');
+  if (!alreadyPopped && history.state?.mbNickEdit) {
+    nickEditPopping = true;
+    history.back();
+  }
+  // 重画个人资料页：persistNick 已同步新昵称，头像首字 / 大名字 / 昵称行一起刷新
+  await openMeProfile();
+}
+
+/** 收个人详情页回「我的」：alreadyPopped = 手势/返回键的 popstate 已替我们退过格 */
+async function closeMeProfile(alreadyPopped) {
+  if (!meProfileOpen) return;
+  meProfileOpen = false;
+  document.body.classList.remove('mb-me-profile');
+  if (!alreadyPopped && history.state?.mbMeProfile) {
+    meProfilePopping = true;
+    history.back();
+  }
+  await openMe();
+}
+
+window.addEventListener('popstate', () => {
+  if (meProfilePopping) { meProfilePopping = false; return; }
+  // 退格后仍落在个人资料页这一格 = 从更内层的「更改昵称」页退回来；
+  // 那格由 nickEdit 自己收并重画本页，这里别把自己也收掉直接回「我的」。
+  if (history.state?.mbMeProfile) return;
+  if (meProfileOpen && document.body.classList.contains('mb-me-profile')) void closeMeProfile(true);
+});
+document.addEventListener('mb-me-profile-leave', () => void closeMeProfile(false));
+
+window.addEventListener('popstate', () => {
+  if (nickEditPopping) { nickEditPopping = false; return; }
+  if (nickEditOpen && document.body.classList.contains('mb-me-nickedit')) void closeNickEdit(true);
+});
+document.addEventListener('mb-me-nickedit-leave', () => void closeNickEdit(false));
+
+/* 返回键层级：更改昵称 > 个人资料 > 设置 >「我的」（level 越大越靠内，先被收） */
+registerLayer({
+  name: 'me-profile',
+  level: 55,
+  cell: 'mbMeProfile',
+  active: () => document.body.classList.contains('mb-me-profile'),
+  close: () => void closeMeProfile(true),
+});
+registerLayer({
+  name: 'nick-edit',
+  level: 56,
+  cell: 'mbNickEdit',
+  active: () => document.body.classList.contains('mb-me-nickedit'),
+  close: () => void closeNickEdit(true),
+});
 
 /* ---------------------------------------------------------------- 我的 › 设置 */
 
@@ -774,15 +999,6 @@ export const SETTINGS_GROUPS = [
     ],
   },
   {
-    /* 额度与生图都是"管模型"的事：额度管花销，生图管一条图片通道 —— 放一组。 */
-    title: '模型与 AI',
-    icon: '<rect x="2" y="2" width="4.2" height="4.2" rx="1"/><rect x="7.8" y="2" width="4.2" height="4.2" rx="1"/><rect x="2" y="7.8" width="4.2" height="4.2" rx="1"/><rect x="7.8" y="7.8" width="4.2" height="4.2" rx="1"/>',
-    items: [
-      ['quota', '额度', '每个模型每天最多用多少'],
-      ['aiimage', '生图服务', '数字员工生成图片的通道'],
-    ],
-  },
-  {
     title: '扩展',
     icon: '<path d="M7 1.8l1.3 3.9L12.2 7 8.3 8.3 7 12.2 5.7 8.3 1.8 7l3.9-1.3z"/>',
     items: [
@@ -871,10 +1087,8 @@ export function openSettings(section) {
   renderList();
   if (S.settingsSection === 'runtimes') return renderRuntimes();
   if (S.settingsSection === 'plugins') return renderPlugins();
-  if (S.settingsSection === 'quota') return renderQuota();
   if (S.settingsSection === 'skills') return renderSkillCards();
   if (S.settingsSection === 'security') return renderSecurity();
-  if (S.settingsSection === 'aiimage') return renderImageAi();
   if (S.settingsSection === 'about') return renderAbout();
   if (S.settingsSection !== 'prefs') return;
 
@@ -958,130 +1172,6 @@ async function loadReplyStyle() {
   });
 }
 
-
-
-/* ---------------------------------------------------------------- 生图服务 */
-
-/**
- * 生图服务（2026-10-23）：数字员工生成图片的通道，技能「班底 · 头像生成手册」教员工 curl 它。
- *
- * 形态沿用代码托管的「居中紧凑簇」（.gr-conn）：标签 | 输入框(≤520px) | 按钮位，
- * 状态行压在输入框正下方 —— 这里是三行（地址 / Key / 模型），所以加了 .stack 修饰类拉开行距。
- * Key 的口径与 GitHub 令牌一致：保存后只回显掩码，点「修改」才解锁重填；
- * 保存时 Key 留空 = 保留原值（服务端 writeConfig 的语义），改个模型名不用重贴 Key。
- */
-export async function renderImageAi() {
-  S.settingsSection = 'aiimage';
-  const view = $('settingsView');
-  view.innerHTML = rtLoading('生图服务');
-  let cfg = null;
-  try {
-    cfg = await api('/api/ai/image-config');
-  } catch (e) {
-    view.innerHTML = `${headRow('<b>生图服务</b>')}<div class="empty">${failHtml(e)}</div>`;
-    return;
-  }
-  const configured = !!cfg?.configured;
-
-  view.innerHTML = `
-    ${headRow('<b>生图服务</b>')}
-    <div class="detail-body">
-      <section class="set-sec">
-        <div class="set-head"><b>生图通道</b><span class="set-tag">OpenAI 兼容 images API</span></div>
-        <div class="set-box">
-          <div class="gr-conn stack">
-            <div class="gr-conn-row">
-              <span class="row-label">接口地址</span>
-              <input id="aiBase" value="${esc(cfg?.baseUrl ?? '')}" autocomplete="off" spellcheck="false"
-                     placeholder="https://api.example.com/v1（填到 /v1 这级）" />
-              <span></span>
-            </div>
-            <div class="gr-conn-row">
-              <span class="row-label">API Key</span>
-              ${
-                configured
-                  ? `<input id="aiKey" class="locked" type="password" value="${esc(cfg?.keyHint ?? '')}" readonly data-locked="1"
-                          aria-label="已保存的 Key，只显示掩码" autocomplete="off" />
-                     <button id="aiKeyEdit">修改</button>`
-                  : `<input id="aiKey" type="password" placeholder="粘贴 API Key（保存后只显示掩码）" autocomplete="off" />
-                     <span></span>`
-              }
-            </div>
-            <div class="gr-conn-row">
-              <span class="row-label">模型</span>
-              <input id="aiModel" value="${esc(cfg?.model ?? '')}" autocomplete="off" spellcheck="false"
-                     placeholder="如 Kwai-Kolors/Kolors" />
-              <span></span>
-            </div>
-            <div class="gr-conn-actions">
-              <button class="primary" id="aiSave">保存配置</button>
-              <button id="aiTest">测试连接</button>
-            </div>
-            <div class="gr-conn-status" id="aiStatus">${
-              configured
-                ? `<b style="color:var(--ok)">已配置</b> —— 数字员工可生成图片，点「测试连接」验证`
-                : '未配置 —— 数字员工生成图片会失败（技能会提示用户来填）'
-            }</div>
-          </div>
-          <p class="set-hint">填任意 OpenAI 兼容的生图服务（SiliconFlow / 火山方舟 / 混元 / 自建中转）。
-          Key 存在本机数据目录，不上传、不进日志；数字员工通过技能「班底 · 头像生成手册」调用它生成头像等图片。</p>
-        </div>
-      </section>
-    </div>`;
-
-  const status = (html) => { $('aiStatus').innerHTML = html; };
-  const keyInput = () => $('aiKey');
-
-  /* 「修改」解锁 Key 框：清掉掩码变可编辑，语义是"这次保存会覆盖旧 Key"；
-     解锁后按钮变「取消」，点它退回掩码锁定态（飞书 Secret 同款） */
-  const aiKeyHint = cfg?.keyHint ?? '';
-  $('aiKeyEdit')?.addEventListener('click', () => {
-    const k = keyInput();
-    if (!k.dataset.locked) {
-      k.readOnly = true;
-      k.classList.add('locked');
-      k.dataset.locked = '1';
-      k.value = aiKeyHint;
-      k.placeholder = '';
-      $('aiKeyEdit').textContent = '修改';
-      return;
-    }
-    k.readOnly = false;
-    k.classList.remove('locked');
-    k.removeAttribute('data-locked');
-    k.value = '';
-    k.placeholder = '重新粘贴 API Key（留空则保留原值）';
-    k.focus();
-    $('aiKeyEdit').textContent = '取消';
-  });
-
-  $('aiSave')?.addEventListener('click', async () => {
-    const body = { baseUrl: $('aiBase').value.trim(), model: $('aiModel').value.trim() };
-    const k = keyInput();
-    /* 掩码态（data-locked=1）说明用户没动 Key —— 不传，服务端保留原值 */
-    if (!k.dataset.locked) body.apiKey = k.value.trim();
-    try {
-      await api('/api/ai/image-config', { method: 'PUT', body: JSON.stringify(body) });
-      toast('已保存', 'ok');
-      renderImageAi();
-    } catch (e) {
-      toast(e.message, 'error');
-    }
-  });
-
-  $('aiTest')?.addEventListener('click', async () => {
-    status('<span style="color:var(--dim)">测试中…</span>');
-    try {
-      const r = await api('/api/ai/image-test', { method: 'POST', body: '{}' });
-      status(
-        `<b style="color:var(--ok)">连接正常</b>` +
-          (r.modelListed === null ? '（服务未提供模型清单）' : r.modelListed ? ` —— 模型在服务清单里（共 ${r.models} 个）` : ` —— <b style="color:var(--warn,#c77d2e)">注意：模型「${esc(cfg?.model ?? '')}」不在服务清单（${r.models} 个）里，请核对拼写</b>`),
-      );
-    } catch (e) {
-      status(`<b style="color:var(--bad,#c0504d)">连不上</b> —— ${esc(e.message)}`);
-    }
-  });
-}
 
 
 
@@ -1189,232 +1279,4 @@ export async function renderAbout() {
         </div>
       </section>
     </div>`;
-}
-
-
-
-/* ---------------------------------------------------------------- 额度 */
-
-/**
- * 额度：**每个模型**每天最多用多少 token。
- *
- * 为什么按模型不按供应商：贵/便宜的分界线在**模型 id** 上，不在供应商上 ——
- * 本机 codex / dsh 只配了一个供应商（magpie 网关），
- * `group/auto-deepseek-v4-1-flash` 和 `opencode-zen-free/*` 都是它名下的模型。
- * 按供应商设额度 = 给 magpie 设一个数，会把免费的和收费的一起管住。
- *
- * 这一页是**开关**，闸本身在服务端（workflows.startCurrentStep 派活前拦一道）——
- * 所以这里只干三件事：把今天各模型的用量说清楚、让人逐行设上限、把口径写明白。
- *
- * 「已用多少」和「超没超」都来自服务端那一次读数（GET /api/quota），
- * 界面不自己再算一遍 —— 否则会出现"设置页看着没超、派活却被拦下"这种事。
- */
-export async function renderQuota() {
-  S.settingsSection = 'quota';
-  $('settingsView').innerHTML = rtLoading('额度');
-  let st;
-  try {
-    st = await api('/api/quota');
-  } catch (err) {
-    $('settingsView').innerHTML =
-      `${headRow('<b>额度</b>')}<div class="empty">${failHtml(err)}</div>`;
-    return;
-  }
-  paintQuota(st);
-}
-
-
-
-export function paintQuota(st) {
-  const today = st.today ?? { tokens: 0, runs: 0, tokensText: '0' };
-  const rows = st.models ?? [];
-  const un = st.unattributed ?? { tokens: 0, runs: 0 };
-  // 上限：null / 0 都是"不限制"。输入框留空就是它 —— 不摆一个"0"在里面，
-  // 那看着像"配额 0"，跟"不限制"正好是反的。
-  const cap = (v) => (v ? String(v) : '');
-  const withLimit = rows.filter((r) => r.limitTokens || r.limitRuns).length;
-
-  /*
-   * 分组版式（2026-10-29 用户定稿："左边是组列表，右边是这个组的模型"）：
-   * 组 = 模型 id 里第一个「/」前面那段（auto/…、group/…、opencode-zen-free/…），
-   * 没有斜杠的是别名 / 独立模型（haiku 这类），收进「未分组」垫底。
-   * 组只是**前端看的**：服务端 /api/quota 没有"组"这个概念，额度仍按模型一条条设，
-   * 保存也仍是整表提交（每一组一张表，全部留在 DOM 里，qSave 一把全收）。
-   * 选中组记在 S.quotaGroupPick（'*' = 全部），保存后重画时不丢。
-   */
-  const buckets = new Map();
-  for (const r of rows) {
-    const key = r.id.includes('/') ? r.id.slice(0, r.id.indexOf('/')) : '';
-    if (!buckets.has(key)) buckets.set(key, []);
-    buckets.get(key).push(r);
-  }
-  const groups = [...buckets.keys()]
-    .sort((a, b) => (a === '') - (b === '') || a.localeCompare(b))
-    .map((key) => ({ key, rows: buckets.get(key) }));
-  const pick = S.quotaGroupPick === '*' || buckets.has(S.quotaGroupPick) ? S.quotaGroupPick : '*';
-
-  const sideItem = (key, label, n, warn) =>
-    `<div class="ms-item${key === pick ? ' on' : ''}" data-qgroup="${esc(key)}">
-      <span class="ms-item-name">${esc(label)}</span>
-      ${warn ? '<span class="ms-dot-bad" title="这一组里有模型超了上限"></span>' : ''}
-      <span class="ms-item-n">${n}</span>
-    </div>`;
-
-  const rowHtml = (r) => `<tr data-model="${esc(r.id)}">
-      <td class="qt-id">
-        ${esc(r.id)}
-        <div class="qt-sub">${
-          r.over
-            ? `<span class="q-over">${esc(r.over)}</span>`
-            : r.available
-              ? esc(r.label)
-              : '<span class="q-warn">现在各运行时里都没有这个模型了（今天还跑过）</span>'
-        }</div>
-      </td>
-      <td class="qt-r ${r.over ? 'q-over' : ''}">${esc(r.usedText)}${
-        r.usedRuns ? `<div class="qt-sub">${r.usedRuns} 次</div>` : ''
-      }</td>
-      <td class="qt-r"><input class="num" data-q="tokens" type="number" min="0"
-        step="1000" placeholder="不限" value="${esc(cap(r.limitTokens))}" /></td>
-      <td class="qt-r"><input class="num" data-q="runs" type="number" min="0"
-        step="1" placeholder="不限" value="${esc(cap(r.limitRuns))}" /></td>
-    </tr>`;
-
-  $('settingsView').innerHTML = `
-    ${headRow('<b>额度</b>')}
-    <div class="detail-body">
-      <section class="set-sec">
-        <div class="set-head"><b>今天</b><span class="set-tag">本机时区 00:00 起算</span></div>
-        <div class="set-box">
-          <div class="set-row">
-            <span class="set-label">全部模型合计</span>
-            <span>${esc(today.tokensText)}<span class="dim"> · ${today.runs ?? 0} 次运行</span></span>
-          </div>
-          <div class="set-row">
-            <span class="set-label">已经设了上限的模型</span>
-            <span>${withLimit} 个<span class="dim"> / 共 ${rows.length} 个</span></span>
-          </div>
-          ${
-            /* 认不出模型的那批**必须单独摆出来**：它们算不进任何模型的额度，
-               藏着的话用户会以为"这些用量也在管着"，其实没有。 */
-            un.runs
-              ? `<div class="set-row">
-                   <span class="set-label">认不出模型的</span>
-                   <span class="q-warn">${esc(un.tokensText)} · ${un.runs} 次 —— 算不进任何模型的额度</span>
-                 </div>`
-              : ''
-          }
-        </div>
-        ${
-          un.runs
-            ? `<div class="hint-line">那 ${un.runs} 次是这次升级之前跑的：那时候还没记"用的是哪个模型"。
-                 从现在起新跑的都能认出模型。</div>`
-            : ''
-        }
-      </section>
-
-      <section class="set-sec">
-        <div class="set-head"><b>每个模型每天的上限</b><span class="set-tag">留空＝不限制</span></div>
-        ${
-          rows.length
-            ? `<div class="ms-split">
-                 <div class="ms-side" id="qtSide">
-                   <div class="ms-side-title">分组</div>
-                   ${sideItem('*', '全部', rows.length, rows.some((r) => r.over))}
-                   ${groups
-                     .map((g) => sideItem(g.key, g.key || '未分组', g.rows.length, g.rows.some((r) => r.over)))
-                     .join('')}
-                 </div>
-                 <div class="ms-main" id="qtTables">
-                   ${groups
-                     .map(
-                       (g) => `<div class="qt-group-head" ${pick === '*' ? '' : 'hidden'}>${esc(g.key || '未分组')}</div>
-                     <table class="quota-table" data-gtable="${esc(g.key)}" ${
-                       pick === '*' || pick === g.key ? '' : 'hidden'
-                     }>
-                       <thead>
-                         <tr>
-                           <th>模型</th>
-                           <th class="qt-r">今天已用</th>
-                           <th class="qt-r">上限 token</th>
-                           <th class="qt-r">上限次数</th>
-                         </tr>
-                       </thead>
-                       <tbody>
-                         ${g.rows.map(rowHtml).join('')}
-                       </tbody>
-                     </table>`,
-                     )
-                     .join('')}
-                   <div class="qt-save"><button class="primary" id="qSave">保存</button></div>
-                 </div>
-               </div>`
-            : `<div class="set-box"><div class="set-note">没读到任何模型 —— 各运行时的清单可能都没取到（看上面的提示），或者确实一个都没有。</div></div>`
-        }
-        <div class="hint-line" id="qMsg"></div>
-      </section>
-
-      <section class="set-sec">
-        <div class="set-head"><b>这个数字是怎么来的</b></div>
-        <div class="set-box">
-          <div class="set-note">
-            用量 = 每次运行自己报的 <code>totalTokens</code>，按<b>实际用的模型</b>分类加起来
-            （员工绑了模型就是它；没绑就是那个 CLI 自己的默认模型）。四条要知道的偏差：<br />
-            ① <b>只有约 80% 的运行有用量记录</b>（失败 / 被中途杀的那批没有）——
-               所以另配一道<b>次数</b>兜底闸，次数是 100% 准的；<br />
-            ② <b>缓存读占大头</b>（一次 12.5 万里，8.5 万是缓存读），按 totalTokens 一刀切会
-               <b>高估成本</b> —— 这一版不做分项加权，当趋势看，别当账单；<br />
-            ③ <b>归因不到就不拦</b>：认不出模型的运行（上面那一条）算不进任何额度，
-               也不会因为额度被拦 —— 拿一个猜出来的模型去拦人比不拦更糟；<br />
-            ④ 超了<b>不会静默拒绝派活</b>：那一步会标成「已阻塞」并写清是哪个模型超的，
-               在实例页点「继续一次」可以放一步过去。
-          </div>
-        </div>
-      </section>
-    </div>`;
-
-  /* 切组：只翻各表的 hidden / 左栏 .on，**不重画** —— 重画会把没保存的输入冲掉。
-     「全部」= 每张表都露出来（组名小标题跟着露），选某一组就只留那一组。 */
-  document.querySelectorAll('#qtSide .ms-item').forEach((el) => {
-    el.onclick = () => {
-      const key = el.dataset.qgroup ?? '*';
-      S.quotaGroupPick = key;
-      document.querySelectorAll('#qtSide .ms-item').forEach((x) => x.classList.toggle('on', x === el));
-      document.querySelectorAll('#qtTables [data-gtable]').forEach((t) => {
-        t.hidden = key !== '*' && t.dataset.gtable !== key;
-      });
-      document.querySelectorAll('#qtTables .qt-group-head').forEach((h) => {
-        h.hidden = key !== '*';
-      });
-    };
-  });
-
-  $('qSave').onclick = async () => {
-    /*
-     * **整表提交**：页面上每一行都发出去，留空 = null = 不限制。
-     * 只发填了的那些是不行的 —— 那样"把一个上限清空"跟"这次没动它"长得一样，删不掉。
-     * 分组版式下当前组之外的表是 hidden 的，但**都还在 DOM 里**，
-     * 所以照旧一表不落全收（这也正是"每组一张表都留在 DOM"的原因）。
-     */
-    const limits = {};
-    document.querySelectorAll('.quota-table tr[data-model]').forEach((tr) => {
-      const num = (k) => {
-        const raw = tr.querySelector(`[data-q="${k}"]`)?.value.trim() ?? '';
-        return raw === '' ? null : Number(raw);
-      };
-      limits[tr.dataset.model] = { dailyTokens: num('tokens'), dailyRuns: num('runs') };
-    });
-    $('qSave').disabled = true;
-    try {
-      const saved = await post('/api/quota', { limits });
-      // 存完用服务端返回的那一份重画：顺带把"今天已用"刷成最新的
-      paintQuota(saved);
-      $('qMsg').textContent = '已保存。';
-      $('qMsg').style.color = 'var(--ok)';
-    } catch (err) {
-      showFail($('qMsg'), err);
-      $('qMsg').style.color = 'var(--bad)';
-      $('qSave').disabled = false;
-    }
-  };
 }

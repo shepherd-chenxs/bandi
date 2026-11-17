@@ -9,7 +9,8 @@
  * 更新简报** @ 该员工 —— 他自己判断要不要修正。只覆盖最有价值的一档：
  *   · **群聊**（1:1 里雇主的新消息本来就由正常派活接管，不用这里管）；
  *   · 上一轮回复期间来了**其他同事**的新发言（role=assistant 的）——
- *     雇主自己的新消息会被正常派活机制处理，平台回执（【卡片回执】/【台账核对】）不算。
+ *     雇主自己的新消息会被正常派活机制处理；平台卡票消息（meta.type='card'，
+ *     派活卡/回执卡都算）与【台账核对】不算。
  *
  * 闸的纪律（Cumora 的教训直接搬）：
  *   · 每个群 5 分钟冷却 —— 忙碌房间里无限接力是真实风险；
@@ -34,7 +35,10 @@ export function stalePeersOf({ run, message }) {
   const peers = store
     .listMessagesSince(run.conversationId, run.watermark ?? 0, message.id)
     .filter((m) => m.role === 'assistant' && m.personaId && m.personaId !== run.personaId)
-    .filter((m) => !/^(【卡片回执】|【台账核对】)/.test(String(m.text ?? '')));
+    // 卡票消息是平台登记（派活/回执），不是同事在对话里发言 —— 2026-11-16 起回执文案
+    // 从【卡片回执】开头改成 "@建卡人 请验收"，前缀认不出来了，改认 meta.type='card'；
+    // 旧库里的老回执没 meta 标记，仍用前缀兜住。
+    .filter((m) => m.meta?.type !== 'card' && !/^(【卡片回执】|【台账核对】)/.test(String(m.text ?? '')));
   if (!peers.length) return null;
   return peers.slice(-MAX_LIST).map((m) => ({
     name: m.personaName ?? '同事',

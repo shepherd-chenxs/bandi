@@ -269,7 +269,8 @@ export async function openFlowRun(templateId, pickRunId) {
   // 左栏这一栏是「发起记录」：面包屑只到**二级**——工作台 › 流程名。
   // 中间不能插「流程编排」（2026-10-19 用户截图：「这个只是个二级标题，没有流程编排」）：
   // 发起记录不是编排页的子页，两者的上一级都只是工作台。
-  // 2026-10-26 起工作台上的已发布流程磁贴去掉了，这页主要从任务卡（流程执行的卡）点进来。
+  // 2026-11-16 起工作台「自动化」区又摆上了已发布流程磁贴，点它直接进这页看发起记录；
+  // 从任务卡（流程执行的卡）也能点进来。
   setListTitle([{ label: '工作台', to: 'workbench' }, { label: '发起记录' }]);
   setRoute('flowRun', { template: templateId ?? null, run: pickRunId ?? S.flowRunId ?? null });
   // 左栏顶上的「＋」在这儿是**发起一条**（不是新建模板）
@@ -386,7 +387,7 @@ export async function paintRun(id) {
   const draft = $('ncInput')?.value ?? '';
   const chatOpen = !!ncCtx && !$('ncCol')?.classList.contains('is-hidden');
 
-  // 顶栏那句「今天已用 X」已经去掉了（2026-10-17 用户要求），额度数据不用再跟着流程一起拉。
+  // 实例页只拉实例数据 —— 额度功能 2026-11-16 退场，曾经这里还要顺带拉今日用量。
   const v = await api('/api/workflows/runs/' + encodeURIComponent(id));
   S.flowRunId = id;
   S.flowRun = v;
@@ -601,9 +602,7 @@ export function runHTML(v) {
      * 接口仍是同一个 `/retry`（= setStepStatus 'todo'，改回待办并立刻派活），不是新实现。
      * ⚠️ 状态下拉**原样不动**：那套状态牵扯"想法拖进待办就自动开工"等多处，要统一规划。
      */
-    // 额度拦下的那一步不摆这颗：重跑会先改回待办、再撞一次同一道额度闸、又写一遍同样的
-    // 备注 —— 那是空转。它有自己的「继续一次」（见下面），别让人在两个按钮之间猜。
-    if (!v.quotaBlocked && (v.taskStatus === 'failed' || v.taskStatus === 'blocked')) {
+    if (v.taskStatus === 'failed' || v.taskStatus === 'blocked') {
       const why = v.taskStatus === 'failed' ? '这一步上次失败了' : '这一步被标成已阻塞';
       inlineActs.push(
         `<button class="primary" data-run-retry title="${why} —— 会重新派给经办人再办一次">重跑这一步</button>`,
@@ -614,13 +613,6 @@ export function runHTML(v) {
         inlineActs.push(`<button class="primary" data-run-decide="通过">确认这一步完成 → ${esc(v.outlets.approveTo ?? '')}</button>`);
       }
       if (v.outlets?.reject) inlineActs.push(`<button data-run-decide="驳回">驳回 → ${esc(v.outlets.rejectTo ?? '')}</button>`);
-    }
-    // **额度拦下的只给「继续一次」**：它走的不是"改回待办"（那会又撞一次额度闸、
-    // 又写一遍同样的备注），而是带 force 直接派 —— 这颗没别的路能替代，留着。
-    if (v.quotaBlocked) {
-      inlineActs.push(
-        '<button class="primary" data-run-force title="明确知道这一步会超出今天的额度，就放它过去">继续一次</button>',
-      );
     }
   }
 
@@ -1082,30 +1074,6 @@ export function wireRun(v) {
    * 服务端 `/status` 接口与 `statusChoices` 原样保留 —— 状态那套要统一规划（用户原话），
    * 这儿只是不再摆入口。
    */
-  /*
-   * 「继续一次」：这一步被**额度**拦下了，你明确知道要超支，放它过去。
-   *
-   * 走的是同一个派活接口（/start），只多带一个 force —— 闸在服务端，这里不是绕过它，
-   * 是跟它说清楚"这次是我拍的板"。注意**不能走 retry**：retry 会先把这一步改回「待办」，
-   * 于是派活时又撞一次额度闸、又写一遍同样的备注（那颗按钮在这会儿是空转）。
-   */
-  const forceBtn = view.querySelector('[data-run-force]');
-  if (forceBtn) {
-    forceBtn.onclick = async () => {
-      forceBtn.disabled = true;
-      try {
-        await api(`/api/workflows/runs/${encodeURIComponent(v.id)}/start`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ force: true }),
-        });
-        await paintRun(v.id);
-      } catch (e) {
-        toast(e.message, 'error');
-        forceBtn.disabled = false;
-      }
-    };
-  }
   // 收起这一栏
   const ncClose = view.querySelector('[data-nc-close]');
   if (ncClose) ncClose.onclick = closeNodeChat;

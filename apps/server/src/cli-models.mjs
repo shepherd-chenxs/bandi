@@ -219,8 +219,8 @@ const CLAUDE_HOME = process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), '.c
  * 现在的真实模型是什么"时，答案就在这份文件里，只是班底一直没去读。
  *
  * 顺带一个不是界面的收益：`effectiveModelOf()` 以前对 claude 一律"不知道" →
- * 没绑模型的 claude 员工，每次运行都记不进 `runs.model`，用量落进"认不出"的黑洞、
- * 按模型的额度永远拦不住。有了 `model` 这个字段就认得出来了。
+ * 没绑模型的 claude 员工，每次运行都记不进 `runs.model`，事后查"这次是谁跑的"
+ * 只能落进"认不出"的黑洞。有了 `model` 这个字段就认得出来了。
  *
  * 读不到（文件不在 / 不是 JSON）返回 null —— 调用方退回问网关那条路，
  * **不能因为读不到就让下拉变空**（前端会保住当前值）。

@@ -44,7 +44,6 @@ import { handleWorkflow } from './workflow.mjs';
 import { handleRun } from './run.mjs';
 import { handleGit } from './git.mjs';
 import { handleSchedules } from './schedules.mjs';
-import { handleImageAi } from './imageai.mjs';
 import { handlePrefs } from './prefs.mjs';
 import { handleFeishu } from './feishu.mjs';
 
@@ -82,7 +81,6 @@ export const CHAIN = [
   { id: 'run', handle: handleRun, note: '单次运行：事件流（SSE）与停止' },
   { id: 'git', handle: handleGit, note: '代码托管 / PR（路径最宽，排后面）' },
   { id: 'schedules', handle: handleSchedules, note: '定时任务' },
-  { id: 'imageai', handle: handleImageAi, note: '生图（回环免令牌，自己判来源）' },
   { id: 'prefs', handle: handlePrefs, note: '回复风格偏好' },
   { id: 'feishu', handle: handleFeishu, note: '飞书通道（挂在 /api/personas/:id/feishu）' },
 ];

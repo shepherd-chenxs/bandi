@@ -111,7 +111,6 @@ const RUN = [
   'apps/server/src/smoke-pr-review.mjs',
   'apps/server/src/smoke-project-profile.mjs',
   'apps/server/src/smoke-project-tasks.mjs',
-  'apps/server/src/smoke-quota.mjs',
   'apps/server/src/smoke-repo-cards.mjs',
   'apps/server/src/smoke-repo-patrol.mjs',
   'apps/server/src/smoke-run-events.mjs',

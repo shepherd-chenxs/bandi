@@ -1,9 +1,9 @@
 /* machine.mjs —— 这台机器。
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
 import { esc, toast } from './shell.mjs';
-import { api, cliAvatar, dt, failHtml, initial, post, showFail, wireDialogHead } from './ui.mjs';
+import { api, cliAvatar, dt, initial, post, wireDialogHead } from './ui.mjs';
 import { load } from './state.mjs';
-import { breadcrumb, headRow, renderRuntimes, rtLoading } from './connectors.mjs';
+import { renderRuntimes } from './connectors.mjs';
 import { $, LOCAL_BASE, S } from './core.mjs';
 
 
@@ -263,7 +263,7 @@ export const askCheckbox = (o) => askDialog({ ...o, field: false });
  *
  * `showPath`：**要不要把那行路径摆出来**。只有"路径本身出问题"才摆（2026-10-16 用户提的：
  * 健康时那行长路径是纯噪音）。「已停用 / 还没接入」也不摆 —— 要不要接看的是右边那个开关，
- * 不是路径。平时想看完整路径：悬停有 title，点进名字是 CLI 详情页（那儿本来就摆着路径 + 检测）。
+ * 不是路径。平时想看完整路径：悬停有 title（CLI 详情页 2026-11-16 撤了，不再有进详情的入口）。
  *
  * ⚠️ 判据一律 `=== false`，不能写 `!field`：旧后端没有这个字段时，`!undefined` 会把
  * 健康的行全染红（这条真踩过，见 git 历史里 rowOfRuntime 那段注释）。
@@ -335,11 +335,8 @@ export function taskTail(task) {
 export function scheduleTaskPoll(dev) {
   const t = dev?.task;
   if (!t || t.done) return;
-  // 2026-11-01 设备详情页撤了：安装任务长在「这台机器」页（devices 层、无 rtDevice）
-  if (S.rtLevel !== 'devices' || S.rtDevice) return;
   clearTimeout(S.taskPoll);
   S.taskPoll = setTimeout(async () => {
-    if (S.rtLevel !== 'devices' || S.rtDevice) return;
     let next;
     try {
       // 只取这一件活的进度（一条小请求），不重画整页
@@ -407,7 +404,7 @@ export async function paintLocalRuntimes(mount, deviceId, { onChange } = {}) {
     const sub = h.showPath ? `<div class="sub">${esc(r.path)}</div>` : '';
     return `<div class="row-item ${h.cls === 'tag-ok' ? '' : 'off'}">
       ${cliAvatar(r.family ?? r.id, r.label)}
-      <div class="who" data-open-cli="${esc(r.id)}" style="cursor:pointer" title="${esc(r.path)}">
+      <div class="who" title="${esc(r.path)}">
         <b>${esc(r.label)}${ver ? `<em class="tag-ok">${esc(ver)}</em>` : ''}${healthTag(r)}${healedTag(r)}</b>
         ${sub}
       </div>
@@ -503,126 +500,7 @@ export async function paintLocalRuntimes(mount, deviceId, { onChange } = {}) {
         }
       };
     });
-    mount.querySelectorAll('[data-open-cli]').forEach((el) => {
-      el.onclick = () => {
-        S.rtDevice = deviceId;
-        S.rtLevel = 'cli';
-        S.rtRuntime = el.dataset.openCli;
-        renderRuntimes();
-      };
-    });
     scheduleTaskPoll(dev); // 升级前留下的旧安装任务若还在跑，进度照样接上（新任务已无处可发起）
   };
   render();
-}
-
-
-
-/* ③ CLI 详情 */
-export async function renderCliDetail() {
-  $('settingsView').innerHTML = rtLoading('这台机器');
-
-  let dev;
-  let rt;
-  try {
-    dev = (await api('/api/devices/' + encodeURIComponent(S.rtDevice))).device;
-    rt = dev.runtimes.find((r) => r.id === S.rtRuntime);
-    if (!rt) throw new Error('这台设备上没有这个 CLI');
-  } catch (err) {
-    $('settingsView').innerHTML = `${headRow('<b>这台机器</b>')}<div class="empty">${failHtml(err)}</div>`;
-    return;
-  }
-
-  /* 运行时是**多层**的（运行时 › 这个 CLI）：页头用面包屑，上级能点回去。
-     左栏仍是「设置」的分节列表，所以面包屑从「运行时」这一层起。
-     （2026-11-01 设备详情页撤了 —— 中间那级「本机」没了，CLI 详情直接挂在这台机器下。） */
-  $('settingsView').innerHTML = `
-    ${headRow(breadcrumb([
-      { label: '这台机器', to: 'devices' },
-      { label: rt.label },
-    ]))}
-    <div class="detail-body">
-      <!--
-        这里原来有个「启用」勾选框。删掉了 —— 列表页那一行已经有开关（点一下立刻生效），
-        同一个状态在两处改是坏事：这页的勾选框还得配合下面的「保存」才生效，
-        两边的值还可能不一致。
-      -->
-
-      <section class="fx">
-        <label>可执行路径</label>
-        <div class="row-inline">
-          <input id="rtPath" value="${esc(rt.path)}" spellcheck="false" />
-          <button id="rtProbe">检测</button>
-        </div>
-        <div class="hint" id="rtResult" style="margin-top:8px"></div>
-      </section>
-
-      <section class="fx">
-        <label>沙箱模式</label>
-        <input id="rtSandboxes" value="${esc(rt.sandboxes.join(', '))}" spellcheck="false" />
-        <label class="sub-label">其中「跑不了命令」的（逗号分隔）</label>
-        <input id="rtBlocked" value="${esc(rt.blocked.join(', '))}" spellcheck="false" />
-      </section>
-
-      <div class="fx-actions">
-        <button class="primary" id="rtSave">保存</button>
-        ${rt.builtIn ? '' : '<button class="danger" id="rtDelete">删除这个运行时</button>'}
-      </div>
-    </div>`;
-
-  const p = (s) => s.split(',').map((x) => x.trim()).filter(Boolean);
-  const payload = () => ({
-    // 不带 enabled：启停归列表页那颗开关管，这一页不该动它。
-    // 服务端 `patch.enabled === undefined` 时会保留原值，所以这里不发就安全。
-    path: $('rtPath').value.trim(),
-    sandboxes: p($('rtSandboxes').value),
-    blocked: p($('rtBlocked').value),
-  });
-  const url = `/api/devices/${encodeURIComponent(S.rtDevice)}/runtimes/${encodeURIComponent(S.rtRuntime)}`;
-
-
-  const delBtn = $('rtDelete');
-  if (delBtn) {
-    delBtn.onclick = async () => {
-      if (!(await confirmDo(`删掉运行时「${rt.label}」？\n绑了它的员工需要改绑，否则会跑不起来。`))) return;
-      try {
-        await api(url, { method: 'DELETE' });
-        await load();
-        S.rtLevel = 'devices';
-        S.rtDevice = null;
-        S.rtRuntime = null;
-        renderRuntimes();
-      } catch (err) { toast(err.message, 'error'); }
-    };
-  }
-
-  $('rtSave').onclick = async () => {
-    try {
-      await api(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload()) });
-      $('rtResult').textContent = '已保存。';
-      $('rtResult').style.color = 'var(--ok)';
-      await load(); // 员工的权限下拉要跟着更新
-    } catch (err) {
-      showFail($('rtResult'), err);
-      $('rtResult').style.color = 'var(--bad)';
-    }
-  };
-
-  $('rtProbe').onclick = async () => {
-    $('rtResult').textContent = '检测中…';
-    $('rtResult').style.color = '';
-    try {
-      // 先存再探：探测走的就是这份路径
-      await api(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload()) });
-      const r = await post(url + '/probe', {});
-      $('rtResult').innerHTML = r.ok
-        ? `在线，版本：<code>${esc(r.version || '(没报版本号)')}</code>`
-        : `离线 —— ${esc(r.error || '未知原因')}`;
-      $('rtResult').style.color = r.ok ? 'var(--ok)' : 'var(--bad)';
-      await load();
-    } catch (err) {
-      showFail($('rtResult'), err);
-      $('rtResult').style.color = 'var(--bad)';
-    }
-  };
 }

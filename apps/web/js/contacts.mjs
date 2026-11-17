@@ -13,7 +13,7 @@ import { archivedEntryHTML, closeCtxMenu, convDisplayName, enterArchiveView, ope
 import { renderFlowList } from './workflows.mjs';
 import { renderRunList } from './flowpages.mjs';
 import { newSkill, openGitPickDialog, openImportDialog } from './skills.mjs';
-import { convUnread, openDetail } from './chat.mjs';
+import { openDetail } from './chat.mjs';
 import { gidOf, openGroupDetail } from './groups.mjs';
 import { $, S } from './core.mjs';
 import { openProjectsPage, renderProjectList } from './projects.mjs';
@@ -23,6 +23,8 @@ import { openGroupDialog } from './misc.mjs';
 import { openOrg, renderOrgList } from './org.mjs';
 // 信箱（2026-11-11 主从改版）：左栏清单归 inbox.mjs 画；两边互相 import，同样只在运行时调用
 import { renderInboxList } from './inbox.mjs';
+// 返回键层级（2026-11-17）：通讯录子页（部门/群聊/搜索）登记成一层，系统返回键才收它
+import { registerLayer } from './navstack.mjs';
 
 
 
@@ -183,12 +185,17 @@ export function renderList() {
    * 手机通讯录的两件挂件（右侧 A–Z 索引条、页头「←」）都挂在 #listBody 外面，
    * 重画 innerHTML 不会连带清掉 —— 每次进来先统一摘一遍，谁需要谁再挂。
    */
-  document.querySelectorAll('.list-panel > .mb-az, .list-head > .mb-head-back').forEach((el) => el.remove());
+  document.querySelectorAll('.list-panel > .mb-az, .list-head > .mb-head-back, .list-head > .mb-head-search').forEach((el) => el.remove());
   /* 手机列表的灰底：通讯录首页 `.mb-cv-root`、设置页 `.mb-set` —— 别的页面必须是白底，
      切栏时先摘掉，谁需要谁在自己的分支里加回来。 */
   $('listBody')?.classList.remove('mb-cv-root', 'mb-cv', 'mb-set');
   // 离开通讯录、或窗口拉回桌面宽度，都回首页：下次点回来不该还停在某个部门里
-  if (!isNarrowScreen()) mbCv.view = 'home';
+  if (!isNarrowScreen()) {
+    mbCv.view = 'home';
+    document.body.classList.remove('mb-cv-sub'); // 子页标记跟着收，别在桌面残留（Esc/popstate 判它）
+  }
+  // 离开消息栏 = 退出消息搜索页（内存态；跟通讯录 mbCv 同一个道理，切回来该看到列表）
+  if (S.nav !== 'messages') mbMsgSearch = false;
   /*
    * 代码托管页（工作台 › 代码托管）让位（2026-10-29）：左栏整栏（仓库清单 + 底部的
    * GitHub 连接条）归 renderGitRepos 管 —— 它还在 #listFoot 上挂了连接按钮。
@@ -224,6 +231,8 @@ export function renderList() {
   if (S.nav === 'messages') {
     // 归档子视图：左栏换一份列表（渲染完全走它自己，别在这儿混分支）
     if (S.archivedView) return renderArchiveList();
+    // 搜索页（2026-11-17）：自带输入框 + 实时结果，走自己的渲染（下面 renderMsgSearchPage）
+    if (mbMsgSearch) return renderMsgSearchPage();
     /* 工单会话（流程 / 任务卡）**不进消息列表** —— 从工作台 / 任务进去即可。
        所以这里既不平铺也不分组，直接按 kind 过滤掉。 */
     /*
@@ -244,82 +253,17 @@ export function renderList() {
      * 不在这层排序：输入的 S.conversations 已由服务端按 updatedAt DESC 排好，
      * filter 天然保住全局顺序（群与人混在一起按最后活跃时间排，跟以前一样）。
      */
-    const currentOf = new Map();  // 人 → 他的代表会话（挑选规则见 prefer）
-    const groupOf = new Map();    // 群 id → 这个群的代表会话（同上）
-    /*
-     * 代表会话怎么挑（2026-10-24）：
-     *   ① 你**正在看**的那段永远优先（2026-10-22 用户实报：从聊天记录点开老会话，
-     *      行要跟着走，预览和高亮才对得上）；
-     *   ② 其次**有消息的**压过空壳 —— 「新会话」开了还没发过字的空壳不该把行抢走，
-     *      不然预览没了、点进去是空面板，看着就像聊天记录丢了；
-     *   ③ 同档取更新的一段。
-     */
-    const prefer = (a, b) => {
-      if (!a) return b;
-      if (!b) return a;
-      if (S.conversation?.id === a.id) return a;
-      if (S.conversation?.id === b.id) return b;
-      const aEmpty = !(a.messageCount > 0);
-      const bEmpty = !(b.messageCount > 0);
-      if (aEmpty !== bEmpty) return aEmpty ? b : a;
-      return String(a.updatedAt) >= String(b.updatedAt) ? a : b;
-    };
-    for (const c of S.conversations ?? []) {
-      if (c.kind === 'exec') continue;
-      if (c.kind === 'group') {
-        groupOf.set(gidOf(c), prefer(groupOf.get(gidOf(c)), c));
-        continue;
-      }
-      currentOf.set(c.personaId, prefer(currentOf.get(c.personaId), c));
-    }
-    const rows = (S.conversations ?? [])
-      .filter((c) => {
-        if (c.kind === 'exec') return false;
-        if (c.kind === 'group') return groupOf.get(gidOf(c))?.id === c.id;
-        return currentOf.get(c.personaId)?.id === c.id;
-      })
-      .filter((c) => match(c.personaName) || match(c.title));
     const pById = new Map((S.personas ?? []).map((p) => [p.id, p]));   // 消息行头像要用
+    /*
+     * 收敛 + 行模板都抽成函数了（2026-11-17，见 convRepresentativeRows / convRowHTML）——
+     * 消息搜索页要画**同一份**行的同一套样子，复制一份迟早两边走偏。
+     * 这里只取数 + 按搜索词过滤（顺序：先收敛、再过滤，理由见上面那段）。
+     */
+    const rows = convRepresentativeRows()
+      .filter((c) => match(c.personaName) || match(c.title));
     $('listBody').innerHTML =
       (rows.length
-        ? rows.map((c) => {
-            const isGroup = c.kind === 'group';
-            const title = isGroup ? c.title : convDisplayName(c);
-            const avatar = isGroup
-              ? `<div class="avatar grp">${esc(initial(c.title))}</div>`
-              : personaAvatar(pById.get(c.personaId), '', c.personaName ?? title);
-            // 没聊过就**留白**（2026-10-20 用户要求）：不再显示「还没聊过」占位
-            const preview = esc(cut(plain(c.lastMessage), 34));
-            /*
-             * 群已解散（2026-10-20 用户定：解散后消息仍留在列表，只读）：
-             * 行上标「已解散」。人数不写 —— 解散时成员快照已经清了，写出来是 "0 人"。
-             */
-            const sub = isGroup
-              ? c.dissolvedAt
-                ? (preview ? `已解散 · ${preview}` : '已解散')
-                : (preview ? `${c.memberCount} 人 · ${preview}` : `${c.memberCount} 人`)
-              : preview;
-            /*
-             * 高亮按**人 / 群**命中，不只按会话 id：正在看某人的一段历史会话、或某个群的
-             * 一段老会话时，列表里那一行已经是"这个人的当前会话 / 这个群的最新一段"了，
-             * 不亮会显得左栏什么都没选中（跟通讯录 `S.persona.id === p.id` 一个口径）。
-             */
-            const active =
-              (S.conversation && S.conversation.id === c.id) ||
-              (isGroup
-                ? S.conversation?.groupId === gidOf(c)
-                : S.conversation?.kind === 'direct' && S.conversation.personaId === c.personaId);
-            return `<div class="item ${active ? 'active' : ''}" data-conv="${c.id}">
-              ${avatar}
-              <div class="who">
-                <div class="line1"><b>${esc(title)}</b><span>${hhmm(c.updatedAt)}</span></div>
-                <div class="line2"><span class="dot ${esc(c.status)}"></span>${sub}</div>
-              </div>
-              ${/* 未读红点（2026-11-05）：头像右上角纯点（本设备账本，见 chat.mjs convUnread），
-                    样式 mobile.css §16.5；桌面无样式且是空节点，不显示 */
-                convUnread(c) ? '<span class="unread dot-only" aria-hidden="true"></span>' : ''}
-            </div>`;
-          }).join('')
+        ? rows.map((c) => convRowHTML(c, pById)).join('')
         : '<div class="empty" style="padding:36px 12px">还没有消息<br />先去<strong>通讯录</strong>发起群聊或找个人聊</div>');
 
     $('listBody').querySelectorAll('[data-conv]').forEach((el) => {
@@ -335,6 +279,18 @@ export function renderList() {
       foot.innerHTML = archivedEntryHTML();
       const archEntry = foot.querySelector('#archEntry');
       if (archEntry) archEntry.onclick = () => enterArchiveView();
+    }
+
+    /*
+     * 手机（2026-11-17 用户："消息页也加上搜索图标"）：导航栏右下角放放大镜，
+     * 点进独立搜索页（同通讯录那套）；常驻搜索框在这栏收起。
+     * 桌面那栏的搜索框是常驻的，别动 —— 拉宽回来时把 hidden 摘掉。
+     */
+    if (isNarrowScreen()) {
+      $('search')?.closest('.list-search')?.classList.add('hidden');
+      mountMsgSearchBtn();
+    } else {
+      $('search')?.closest('.list-search')?.classList.remove('hidden');
     }
 
     /*
@@ -370,8 +326,8 @@ export function renderList() {
        写「搜索设置」比光秃秃的「搜索」明确。换栏时 state.setNav 会归位默认值。 */
     { const si = $('search'); if (si) si.placeholder = '搜索设置'; }
     /*
-     * 手机（≤900px）= **微信设置页**版式（2026-10-31 用户："设置这个页面不应该做成折叠，
-     * 应该参考微信设置页的做法"）：
+     * 手机（≤900px）= **主流设置页**版式（2026-10-31 用户："设置这个页面不应该做成折叠，
+     * 应该参考主流手机设置页的做法"）：
      *   一屏五组卡片，组标题是卡片外的一行小灰字 —— **不可点、不收起**；
      *   卡片内是行（右侧 chevron），点行开子页。
      * 旧版把组头做成可折叠的导航树（带 ∨ 箭头、收起后整组消失），那是后台侧边栏的语法，
@@ -571,6 +527,9 @@ export function renderList() {
     return;
   }
 
+  // 桌面通讯录：常驻搜索框是唯一搜索入口，把它还回来（手机分支在上面藏了它）
+  if (S.nav === 'contacts') $('search')?.closest('.list-search')?.classList.remove('hidden');
+
   $('listBody').innerHTML = !groups.length && !people.length && !users.length
     ? '<div class="empty" style="padding:36px 12px">通讯录还是空的<br />点右上角 ＋ 发起群聊或添加员工</div>'
     : (groups.length || !q ? sec('group', '群聊', groups.length, groups.length ? groupRows : '<div class="list-none">还没有群聊</div>') : '') +
@@ -589,6 +548,187 @@ export function renderList() {
 }
 
 
+
+/* -------------------------------------------------- 消息搜索页（手机） */
+
+/*
+ * 2026-11-17 用户："消息页也加上搜索图标" —— 跟通讯录搜索页同一套形态（导航栏放大镜 →
+ * 独立搜索页），只是数据换成会话清单：收敛照旧（一人一行 / 一群一行，convRepresentativeRows），
+ * 行模板与点击行为 = 消息列表同款（convRowHTML / openConversationSafe），零分叉。
+ * 开关是内存态，切栏即复位（renderList 顶部），不进路由、不压历史。
+ */
+let mbMsgSearch = false;
+
+/* 底部 tab 点「消息」= 明确要回会话列表（事件由 mobile.mjs 派发，同 mb-cv-home 的路子） */
+document.addEventListener('mb-msg-home', () => { mbMsgSearch = false; });
+
+/** 消息页导航栏的放大镜（＋ 在这栏本来就藏了，所以靠右 6px 独占那一格） */
+function mountMsgSearchBtn() {
+  const head = document.querySelector('.list-head');
+  if (!head || head.querySelector('.mb-head-search')) return;
+  const s = document.createElement('button');
+  s.type = 'button';
+  s.className = 'mb-head-search solo';
+  s.setAttribute('aria-label', '搜索');
+  s.innerHTML =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="M15.8 15.8 20.5 20.5"/></svg>';
+  s.addEventListener('click', () => {
+    mbMsgSearch = true;
+    renderList();
+  });
+  head.appendChild(s);
+}
+
+/** 消息搜索页：页头「← + 搜索」、顶部一条输入框、下面实时结果。 */
+function renderMsgSearchPage() {
+  const body = $('listBody');
+  const head = document.querySelector('.list-head');
+  const el = $('listTitle');
+  if (el) el.innerHTML = '<b title="搜索">搜索</b>';
+  if (head && !head.querySelector('.mb-head-back')) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'mb-head-back';
+    btn.setAttribute('aria-label', '返回消息');
+    btn.innerHTML =
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>';
+    btn.addEventListener('click', () => {
+      mbMsgSearch = false;
+      renderList();
+    });
+    head.prepend(btn);
+  }
+  $('search')?.closest('.list-search')?.classList.add('hidden');
+  body.classList.remove('mb-cv-root');
+  body.innerHTML = `
+    <div class="mb-cv-search"><div class="ls-field">
+      <svg class="ls-ico" width="13" height="13" viewBox="0 0 13 13" aria-hidden="true">
+        <circle cx="5.5" cy="5.5" r="4" fill="none" stroke="currentColor" stroke-width="1.4"/>
+        <path d="M8.7 8.7 12 12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+      </svg>
+      <input id="msgSearchInput" placeholder="搜索会话或群聊" aria-label="搜索会话" autocomplete="off" />
+      <button id="msgSearchClear" class="ls-clear" type="button" aria-label="清空搜索" hidden>×</button>
+    </div></div>
+    <div id="msgSearchRes"></div>`;
+  const input = $('msgSearchInput');
+  const res = $('msgSearchRes');
+  const clear = $('msgSearchClear');
+  const paint = () => {
+    const term = input.value.trim().toLowerCase();
+    clear.hidden = !term;
+    if (!term) {
+      res.innerHTML = '<div class="empty" style="padding:36px 12px">输入名字或群名<br />找会话</div>';
+      return;
+    }
+    const m = (s) => String(s || '').toLowerCase().includes(term);
+    const pById = new Map((S.personas ?? []).map((p) => [p.id, p]));
+    const rows = convRepresentativeRows().filter((c) => m(c.title) || m(c.personaName));
+    res.innerHTML = rows.length
+      ? rows.map((c) => convRowHTML(c, pById)).join('')
+      : '<div class="empty" style="padding:36px 12px">没找到匹配的会话</div>';
+    res.querySelectorAll('[data-conv]').forEach((el2) => {
+      el2.onclick = () => openConversationSafe(el2.dataset.conv);
+    });
+  };
+  input.addEventListener('input', paint);
+  clear.addEventListener('click', () => {
+    input.value = '';
+    input.focus();
+    paint();
+  });
+  input.focus();
+  paint();
+}
+
+/* -------------------------------------------------- 消息列表：收敛 + 行模板（列表页 / 搜索页共用） */
+
+/*
+ * 下面两个函数是 2026-11-17 从 renderList 的消息分支原样抽出来的（消息搜索页要画同一份行）。
+ * 收敛规则与注释都是原样搬的，别当成新逻辑重审。
+ */
+function convRepresentativeRows() {
+  const currentOf = new Map();  // 人 → 他的代表会话（挑选规则见 prefer）
+  const groupOf = new Map();    // 群 id → 这个群的代表会话（同上）
+  /*
+   * 代表会话怎么挑（2026-10-24）：
+   *   ① 你**正在看**的那段永远优先（2026-10-22 用户实报：从聊天记录点开老会话，
+   *      行要跟着走，预览和高亮才对得上）；
+   *   ② 其次**有消息的**压过空壳 —— 「新会话」开了还没发过字的空壳不该把行抢走，
+   *      不然预览没了、点进去是空面板，看着就像聊天记录丢了；
+   *   ③ 同档取更新的一段。
+   */
+  const prefer = (a, b) => {
+    if (!a) return b;
+    if (!b) return a;
+    if (S.conversation?.id === a.id) return a;
+    if (S.conversation?.id === b.id) return b;
+    const aEmpty = !(a.messageCount > 0);
+    const bEmpty = !(b.messageCount > 0);
+    if (aEmpty !== bEmpty) return aEmpty ? b : a;
+    return String(a.updatedAt) >= String(b.updatedAt) ? a : b;
+  };
+  for (const c of S.conversations ?? []) {
+    if (c.kind === 'exec') continue;
+    if (c.kind === 'group') {
+      groupOf.set(gidOf(c), prefer(groupOf.get(gidOf(c)), c));
+      continue;
+    }
+    currentOf.set(c.personaId, prefer(currentOf.get(c.personaId), c));
+  }
+  return (S.conversations ?? []).filter((c) => {
+    if (c.kind === 'exec') return false;
+    if (c.kind === 'group') return groupOf.get(gidOf(c))?.id === c.id;
+    return currentOf.get(c.personaId)?.id === c.id;
+  });
+}
+
+/** 一条消息行（群 / 单聊），pById 供头像用。 */
+function convRowHTML(c, pById) {
+  const isGroup = c.kind === 'group';
+  const title = isGroup ? c.title : convDisplayName(c);
+  const avatar = isGroup
+    ? `<div class="avatar grp">${esc(initial(c.title))}</div>`
+    : personaAvatar(pById.get(c.personaId), '', c.personaName ?? title);
+  // 没聊过就**留白**（2026-10-20 用户要求）：不再显示「还没聊过」占位
+  const preview = esc(cut(plain(c.lastMessage), 34));
+  /*
+   * 群已解散（2026-10-20 用户定：解散后消息仍留在列表，只读）：
+   * 行上标「已解散」。人数不写 —— 解散时成员快照已经清了，写出来是 "0 人"。
+   */
+  const sub = isGroup
+    ? c.dissolvedAt
+      ? (preview ? `已解散 · ${preview}` : '已解散')
+      : (preview ? `${c.memberCount} 人 · ${preview}` : `${c.memberCount} 人`)
+    : preview;
+  /*
+   * 高亮按**人 / 群**命中，不只按会话 id：正在看某人的一段历史会话、或某个群的
+   * 一段老会话时，列表里那一行已经是"这个人的当前会话 / 这个群的最新一段"了，
+   * 不亮会显得左栏什么都没选中（跟通讯录 `S.persona.id === p.id` 一个口径）。
+   *
+   * 2026-11-17 用户（手机端拍板："进列表就清掉"）：从会话退回列表后，那行灰底
+   * 不再亮 —— 主流做法。实现上**不清 S.conversation**（聊天页返回恢复、未读账本
+   * 都还读它），只把 active 判定收窄：`body.mb-narrow`（手机形态，mobile.mjs 维护）
+   * 下一律不亮。桌面左栏不变 —— 它靠这个标"当前选中"。
+   */
+  const active =
+    !document.body.classList.contains('mb-narrow') &&
+    ((S.conversation && S.conversation.id === c.id) ||
+    (isGroup
+      ? S.conversation?.groupId === gidOf(c)
+      : S.conversation?.kind === 'direct' && S.conversation.personaId === c.personaId));
+  /*
+   * 未读红点已按用户要求去掉（2026-11-17）：头像右上角那颗纯点（2026-11-05 加，
+   * 长在头像右上角）不再输出。喂它的 chat.mjs 未读账本（convUnread）只有这一个
+   * 消费者，已一并拆除；样式见 mobile.css §16.5 的移除说明。
+   */
+  return `<div class="item ${active ? 'active' : ''}" data-conv="${c.id}">
+              ${avatar}
+              <div class="who">
+                <div class="line1"><b>${esc(title)}</b><span>${hhmm(c.updatedAt)}</span></div>
+                <div class="line2"><span class="dot ${esc(c.status)}"></span>${sub}</div>
+              </div>
+            </div>`;
+}
 
 /* -------------------------------------------------- 通讯录行模板（桌面 / 手机共用） */
 
@@ -659,7 +799,7 @@ function bindContactRows() {
 /* ---------------------------------------------------- 通讯录（手机）：ABC 索引 */
 
 /*
- * 形态（2026-10-31，对着手机系统通讯录 / 微信通讯录做的）：
+ * 形态（2026-10-31，对着手机系统通讯录 / 主流通讯录 App 做的）：
  *
  *   ┌ 群聊   2  › ┐      ← 容器入口：点进去是各自的列表（列表内换页，不是详情态）
  *   ┌ 部门   3  › ┐
@@ -680,9 +820,62 @@ const mbCv = { view: 'home', dept: '' };
 document.addEventListener('mb-cv-home', () => {
   mbCv.view = 'home';
   mbCv.dept = '';
+  document.body.classList.remove('mb-cv-sub');
 });
 
-const CV_TITLE = { home: '通讯录', groups: '群聊', depts: '部门', users: '成员' };
+const CV_TITLE = { home: '通讯录', groups: '群聊', depts: '部门', users: '成员', search: '搜索' };
+
+/*
+ * 子页的历史格（2026-11-17 用户实报"部门页按系统返回跳到工作台"）：
+ * 子页原先只换画面不进历史 —— 壳的返回键问 navstack，这层没登记，
+ * 一路落到"非首页 tab 回家"，直接被送回工作台。照 me-set 那套规矩补上：
+ *   · 进子页 pushState({mbCvSub:1}) 一格 + body.mb-cv-sub 视觉标记；
+ *   · ‹ 按钮 / Esc：cvHome(false) —— 自己退格再收画面；
+ *   · 手势/系统返回键：那格历史已经退了（popstate 落地的格不再带 mbCvSub），只收画面；
+ *   · mobile.mjs 对 body.mb-cv-sub 放行（Esc 派 mb-cv-sub-leave、popstate 不抢不补井）。
+ * 子页之间（首页→部门列表→某部门）共用同一格：只有从 home 出发才 push，
+ * 返回也统一回首页 —— 与页内那颗「←」同一个去处，语义一致。
+ */
+let cvPopping = false; // 自己 history.back() 触发的 popstate，别当手势再收一次画面
+
+function cvEnter(view, dept = '') {
+  mbCv.view = view;
+  mbCv.dept = dept;
+  document.body.classList.add('mb-cv-sub');
+  // 当前格已带标记（reload 直落的场景）就复用，不重压 —— 多压一格，返回就得多按一次空的
+  if (!history.state?.mbCvSub) history.pushState({ mbCvSub: 1 }, '');
+  renderList();
+}
+
+function cvHome(alreadyPopped) {
+  mbCv.view = 'home';
+  mbCv.dept = '';
+  document.body.classList.remove('mb-cv-sub');
+  if (!alreadyPopped && history.state?.mbCvSub) {
+    cvPopping = true;
+    history.back();
+  }
+  renderList();
+}
+
+/* 手势 / 系统返回键：只收画面，不再退格（那格历史系统已经退了）。
+   判据看落地的格：详情页关掉落回来的那格仍带 mbCvSub（子页还开着），不能当子页返回收掉。 */
+window.addEventListener('popstate', (e) => {
+  if (cvPopping) { cvPopping = false; return; }
+  if (mbCv.view !== 'home' && document.body.classList.contains('mb-cv-sub') && !e.state?.mbCvSub) cvHome(true);
+});
+/* Esc：mobile.mjs 的 keydown 对 body.mb-cv-sub 放行时派这个事件 */
+document.addEventListener('mb-cv-sub-leave', () => cvHome(false));
+
+/* 返回键的层级（navstack.mjs）：子页压在列表之上、详情之下 ——
+   从部门页点人物会开出详情，返回键必须先收详情再收子页（detail level 10）。 */
+registerLayer({
+  name: 'cv-sub',
+  level: 5,
+  cell: 'mbCvSub',
+  active: () => document.body.classList.contains('mb-cv-sub'),
+  close: () => cvHome(true),
+});
 
 /** 入口行 / 部门行的图标（40px 圆角方块里的线性图标，跟底部 tab 同一套笔画） */
 const CV_ICON_GROUP = '<div class="mb-cv-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19.5c.9-3.2 3-5 5.5-5s4.6 1.8 5.5 5"/><circle cx="16.8" cy="9.4" r="2.5"/><path d="M15.7 14.9c2.4.3 4.2 1.9 4.9 4.6"/></svg></div>';
@@ -698,10 +891,31 @@ const CV_ICON_USER = '<div class="mb-cv-ico"><svg viewBox="0 0 24 24" fill="none
 function paintCvHead() {
   const head = document.querySelector('.list-head');
   head?.querySelector('.mb-head-back')?.remove();
+  head?.querySelector('.mb-head-search')?.remove();
   const title = mbCv.view === 'dept' ? (mbCv.dept || '部门') : (CV_TITLE[mbCv.view] ?? '通讯录');
   const el = $('listTitle');
   if (el) el.innerHTML = `<b title="${esc(title)}">${esc(title)}</b>`;
-  if (mbCv.view === 'home' || !head) return;
+  // 「＋」（发起群聊/添加员工）只在**首页**摆（2026-11-17 用户："部门页不要发起群聊的加号"）：
+  // 子页（群聊/部门/成员/搜索）是纯浏览与查找，新建动作不属于那里；
+  // 回首页时照常还回来（setNav 只在换栏时管它，同栏内的视图切换归这儿）
+  $('listAction')?.classList.toggle('hidden', mbCv.view !== 'home');
+  if (!head) return;
+  /*
+   * 首页导航栏的放大镜（2026-11-17 用户："添加搜索图标，点击跳转到搜索页"）：
+   * 手机通讯录的搜索入口从常驻搜索框改成导航栏图标 —— 点进去是独立搜索页
+   * （见 renderCvSearchPage），常驻框在手机上不再显示。桌面不走这条分支。
+   */
+  if (mbCv.view === 'home') {
+    const s = document.createElement('button');
+    s.type = 'button';
+    s.className = 'mb-head-search';
+    s.setAttribute('aria-label', '搜索');
+    s.innerHTML =
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="M15.8 15.8 20.5 20.5"/></svg>';
+    s.addEventListener('click', () => cvEnter('search'));
+    head.appendChild(s);
+    return;
+  }
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'mb-head-back';
@@ -713,9 +927,7 @@ function paintCvHead() {
 }
 
 function goCvHome() {
-  mbCv.view = 'home';
-  mbCv.dept = '';
-  renderList();
+  cvHome(false);
 }
 
 /** 右侧 A–Z 索引条：点一下跳，按住上下滑一路扫（手机通讯录的核心手势）。 */
@@ -804,6 +1016,17 @@ function renderMobileContacts({ q, groups, people, users = [], hasOtherUsers = f
   body.classList.add('mb-cv');
   paintCvHead();
 
+  /* 常驻搜索框在手机通讯录收起（2026-11-17）：入口改成导航栏放大镜 → 独立搜索页。
+     桌面分支会主动摘掉 hidden（下面 576 行那段），互不越界。 */
+  $('search')?.closest('.list-search')?.classList.add('hidden');
+
+  /* 搜索页（2026-11-17 用户："点击跳转到搜索页进行搜索操作"）：
+     自带输入框 + 实时结果，行模板与点击行为跟列表页完全同一套。 */
+  if (mbCv.view === 'search') {
+    renderCvSearchPage(body, { groups, people, users });
+    return;
+  }
+
   /* 搜索：不画入口区、不画字母头 —— 结果本来就只有几条，再按字母切碎反而难扫。 */
   if (q) {
     const rows = groups.map(groupRowHTML).join('') + users.map(userRowHTML).join('') + people.map(personRowHTML).join('');
@@ -833,16 +1056,12 @@ function renderMobileContacts({ q, groups, people, users = [], hasOtherUsers = f
     body.innerHTML = depts.length
       ? depts.map((g) => `<div class="item mb-cv-row" data-cv-dept="${esc(g.dept)}">
           ${CV_ICON_DEPT}
-          <div class="who"><div class="line1"><b>${esc(g.dept)}</b></div></div>
-          <span class="mb-cv-n">${g.rows.length}</span>
+          <!-- 2026-11-17 用户："人数放到部门后面，放到括号里显示"——右侧独立数字（.mb-cv-n）撤掉 -->
+          <div class="who"><div class="line1"><b>${esc(g.dept)}（${g.rows.length}）</b></div></div>
         </div>`).join('')
       : '<div class="empty" style="padding:36px 12px">还没有部门<br />部门在员工资料里填</div>';
     body.querySelectorAll('[data-cv-dept]').forEach((el) => {
-      el.onclick = () => {
-        mbCv.view = 'dept';
-        mbCv.dept = el.dataset.cvDept;
-        renderList();
-      };
+      el.onclick = () => cvEnter('dept', el.dataset.cvDept);
     });
     return;
   }
@@ -885,10 +1104,7 @@ function renderMobileContacts({ q, groups, people, users = [], hasOtherUsers = f
 
   bindContactRows();
   body.querySelectorAll('[data-cv]').forEach((el) => {
-    el.onclick = () => {
-      mbCv.view = el.dataset.cv;
-      renderList();
-    };
+    el.onclick = () => cvEnter(el.dataset.cv);
   });
   if (az.length) {
     /* 卡的下缘（相对面板）：索引条要避开它 —— 见 mountAzIndex 里 avoidTop 的注释 */
@@ -897,6 +1113,54 @@ function renderMobileContacts({ q, groups, people, users = [], hasOtherUsers = f
     const avoidTop = panelBox && entryBox ? Math.max(0, entryBox.bottom - panelBox.top) : 0;
     mountAzIndex(az.map((g) => g.letter), avoidTop);
   }
+}
+
+/*
+ * 通讯录搜索页（2026-11-17）：导航栏放大镜进来，自带输入框 + 实时结果。
+ * 数据直接用 renderMobileContacts 传进来的 groups / people / users（shared q 为空时的全量），
+ * 本页再按输入词过滤一遍 —— 行模板（groupRowHTML / userRowHTML / personRowHTML）和
+ * 点击绑定（bindContactRows）跟列表页完全同一套，点结果 = 点列表行，行为零分叉。
+ * 返回 = 页头「←」（paintCvHead 给非 home 视图统一挂的那颗，goCvHome 回首页）。
+ */
+function renderCvSearchPage(body, { groups, people, users }) {
+  body.classList.remove('mb-cv-root');
+  body.innerHTML = `
+    <div class="mb-cv-search"><div class="ls-field">
+      <svg class="ls-ico" width="13" height="13" viewBox="0 0 13 13" aria-hidden="true">
+        <circle cx="5.5" cy="5.5" r="4" fill="none" stroke="currentColor" stroke-width="1.4"/>
+        <path d="M8.7 8.7 12 12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+      </svg>
+      <input id="cvSearchInput" placeholder="搜索群聊、部门、成员" aria-label="搜索通讯录" autocomplete="off" />
+      <button id="cvSearchClear" class="ls-clear" type="button" aria-label="清空搜索" hidden>×</button>
+    </div></div>
+    <div id="cvSearchRes"></div>`;
+  const input = $('cvSearchInput');
+  const res = $('cvSearchRes');
+  const clear = $('cvSearchClear');
+  const paint = () => {
+    const term = input.value.trim().toLowerCase();
+    clear.hidden = !term;
+    if (!term) {
+      res.innerHTML = '<div class="empty" style="padding:36px 12px">输入名字或部门<br />找群聊和成员</div>';
+      return;
+    }
+    const m = (s) => String(s || '').toLowerCase().includes(term);
+    const gs = groups.filter((g) => m(g.title));
+    const ps = people.filter((p) => m(p.name) || m(p.department));
+    const us = users.filter((u) => m(u.name) || m(u.nickname));
+    res.innerHTML =
+      gs.map(groupRowHTML).join('') + us.map(userRowHTML).join('') + ps.map(personRowHTML).join('')
+      || '<div class="empty" style="padding:36px 12px">没找到匹配的人或群</div>';
+    bindContactRows();
+  };
+  input.addEventListener('input', paint);
+  clear.addEventListener('click', () => {
+    input.value = '';
+    input.focus();
+    paint();
+  });
+  input.focus();
+  paint();
 }
 
 
@@ -1162,7 +1426,7 @@ export function showPlaceholder(title) {  $('placeholderView').innerHTML = `
 }
 
 /**
- * 通讯录的主区空态（2026-10-24 对齐微信）：切到通讯录但还没选人时，
+ * 通讯录的主区空态（2026-10-24 对齐主流通讯录 App）：切到通讯录但还没选人时，
  * 右边不残留上一段聊天 —— 摆一个安静的占位。点左栏的群/员工才进详情。
  */
 export function showContactsHome() {

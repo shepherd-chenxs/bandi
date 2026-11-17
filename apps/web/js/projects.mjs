@@ -34,13 +34,25 @@ import { registerLayer, registerUp } from './navstack.mjs';
  * `schedulesOnly`（2026-11-06 手机端开放定时任务）：窄屏宫格只画「定时任务」一格 ——
  * 工作流设计器（画布拖节点）在窄屏没法用，仍是 PC 独有。调用方见 experts.mjs 的
  * renderWorkbenchGrid：手机形态的功能子集从"全都不给"放开到"给定时任务"这一格。
+ *
+ * 已发布的流程也摆在这一组（2026-11-16 用户："已经发布的流程，显示在自动化这个区域吧"）：
+ * 它跟「工作流」是同一件事的两面 —— 一个是画流程，一个是把画好发布的流程拿来跑，
+ * 放一起才找得到。之前（2026-10-26）以"任务面板里能直接建"为由撤掉了这些磁贴，
+ * 结果发完流程想跑一条，得先记住去任务看板选「由流程执行」—— 现在把入口加回来。
+ * 只列 `S.flowPublished`（state.load() 取回来的，服务端只给 publishedAt 非空的）：
+ * 草稿/归档的发不起来，列出来只会让人点开吃一鼻子灰。点开进该流程的发起记录页，
+ * 发起是那页上的「＋」（接线在 experts.mjs 的宫格渲染里）。
  */
 export function workbenchAutoSection({ schedulesOnly = false } = {}) {
+  const published = schedulesOnly ? [] : S.flowPublished ?? [];
   return `
     <div class="wb-sec">自动化</div>
     <div class="wb-grid">
       ${wbCard('cron', ICON_WB_CLOCK, '定时任务', '到点自动做一件事：指派人 / 团队协作 / 流程任务', 'data-schedules')}
       ${schedulesOnly ? '' : wbCard('flow', ICON_WB_FLOW, '工作流', '画流程：节点、指派、发布', 'data-flow-design')}
+      ${published
+        .map((f) => wbCard('flow', ICON_WB_FLOW, f.name, '点开看这个流程的发起记录', `data-flow-start="${esc(f.id)}"`))
+        .join('')}
     </div>`;
 }
 
@@ -1067,6 +1079,32 @@ const TC_ICON_CHEVRONS_UP =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 11.5l5-5 5 5"/><path d="M7 18l5-5 5 5"/></svg>';
 const TC_ICON_CHEVRONS_DOWN =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 5.5l5 5 5-5"/><path d="M7 12.5l5 5 5-5"/></svg>';
+/* 卡页 PR 区标题右边的两颗入口（2026-11-16 用户："在标题右边放两个图标，一个新建一个关联，
+   点开弹窗，界面更简洁"）：＋ = 就地建 PR，链环 = 关联已有 PR。常驻标题旁（已关联也能换）。 */
+const TC_ICON_PLUS =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>';
+const TC_ICON_LINK =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>';
+
+/*
+ * 行首「类型锚点」（2026-11-17 用户："头像位用任务卡类型"）：借短信列表的头像位，
+ * 短信在那里回答"谁"，这里用图标+色回答"这活谁推的"——手动/流程/仓库值班各一枚。
+ * 色与桌面 .kb-tag.manual(accent)/.kb-tag.repo(warn) 同源，flow 取 --st-idea 的紫
+ * （--st-* 本来就是按"压在 12% 淡底上 ≥4.5"校准过的，锚点淡底正好同一场景）。
+ * 三枚同笔语汇（24 视窗 / stroke 1.9 / round cap），与页头三颗图标是一套。
+ * manual 用**清单卡**（clipboard-check，2026-11-17 三改：铅笔像"编辑"、手掌太抽象，
+ * 用户点名"换成普通的任务卡图标"）——带夹子的卡片上压一个勾，直接读出"一张任务卡"。
+ * 未知来源回落一枚中性方框 —— 锚点缺位整列左边缘就不齐了。
+ */
+const KB_SRC_ANCHOR = {
+  manual:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="2.5" width="8" height="4" rx="1"/><path d="M16 4.5h2a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-13a2 2 0 0 1 2-2h2"/><path d="m9.2 13.5 2 2 3.8-4"/></svg>',
+  flow:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="5.5" cy="6" r="2.2"/><circle cx="18.5" cy="18" r="2.2"/><path d="M8 6h5.2a2.7 2.7 0 0 1 0 5.4h-2.9a2.7 2.7 0 0 0 0 5.4H16"/></svg>',
+  repo:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 8.3L12 4.5l7.5 3.8v7.4L12 19.5l-7.5-3.8z"/><path d="M4.5 8.3L12 12.1l7.5-3.8"/><path d="M12 12.1v7.4"/></svg>',
+  _: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="3.5"/><path d="M9 12h6"/></svg>',
+};
 
 /**
  * 看板的**窄屏形态**（2026-11 二版，视觉规格 v2）：手机上看不了多列横排 + 拖拽 ——
@@ -1281,24 +1319,27 @@ function kbMobileEmpty({ text = '', sub = '', cta = '', act = '' } = {}) {
 }
 
 /**
- * 窄屏列表的一行：标题行 + 元信息行。
- * 标题行 = `[标题（≤2 行）] ……… [状态胶囊]`—— 状态钉在**右上角**（2026-11-08 用户：
- * 「状态放卡片右上角」），扫一眼竖列表时视线路径最短；
- * 元信息行 = `[来源签] [项目 pill（仅全局面板）] [执行人] ……… [创建时间]`。
+ * 窄屏列表的一行（2026-11-17 二改：短信节奏三栏）：
+ *   [类型锚点] [标题 / 元信息] ……… [时分 / 状态胶囊]
+ * 借短信列表的三栏扫读格 —— 眼睛只做纵向运动，不横向折返：
+ *   · 左锚点占住短信头像位，回答"这活谁推的"（manual/flow/repo 图标+色，见 KB_SRC_ANCHOR）；
+ *   · 中间两行：标题单行截断 + 元信息（项目 pill / 执行人 / 月日）；
+ *   · 右栏上下两行：时分在上、状态胶囊在下，右边缘齐平。
  *
- * 状态从「6px 点 + 灰字」改成**浅底胶囊**（2026-11-08 用户评审定的，规格 §3.2 同步）：
- * 原来待办(青 #22d3ee) 与已完成(绿 #3fb950) 在 6px 的点上几乎是同一颗色，
- * 而状态词是 `--mb-text-2` 灰 —— 最该被扫到的信息用了最弱的一档。
- * 现在底色 = `--st-*` 12%（就是那套色校准对比度时用的底），字 = `--st-*` 原值。
- * **不再画点**：胶囊自己已经是"色 + 词"，再加点是把同一句话说两遍。
+ * 状态胶囊从标题右侧挪到右下（与时间同列）：原来它跟标题抢第一行，现在时间和状态
+ * 上下对齐成一列 —— 扫读时右边缘一条线。色不变：底取 `--st-*` 12%、字取原值。
+ *
+ * **类型签撤了**（kb-l-src，2026-11-08 用户要的"显示卡片类型标签"）：类型信息整个
+ * 挪进锚点 —— 图标管"扫"，行 aria-label 里的 source_text 管"读"（读屏/搜索都在），
+ * 一个信息不再画两遍。PR / 设备标签照旧不画。
+ *
+ * 时间拆两段（"2026-11-16 21:57" → 月日 + 时分）：月日沉进元信息行、时分占右上，
+ * 年份同一屏内省略 —— 腾出的宽度给标题，少截两个字。拆不开（老数据只有一段）
+ * 就整串留在元信息行，右上空着也比错着强。
  *
  * 跳转属性与 kbCard 完全同款 —— 「本地卡」（手工/仓库值班/协作）带 data-kb-open 进整页详情，
  * 流程卡带 data-kb-flow、聊天卡带 data-kb-conv，wireBoard 的开卡逻辑原样复用，不复制粘贴。
  * **不画 chevron**：三路跳转里两种是弹窗，箭头会骗人（以为是"推进一层页面"）。
- * 来源标签**要画**（2026-11-08 用户：「手机的任务看板列表要显示卡片类型标签」）——
- * 流程 / 手动 / 仓库值班 三种会出现在看板上（聊天派活不上板，见 chatRows 注释）。
- * 它是一枚 11px 描边小签、放在元信息行最前：桌面那枚 .kb-tag 是带色的，窄屏收成中性，
- * 让右上角的状态胶囊独占彩色。PR / 设备标签照旧不画 —— 那些在 390px 下是噪声。
  * **不带**拖拽属性与删除按钮：那两个手势是桌面看板的，窄屏的删改在卡片详情页里做。
  */
 export function kbMobileRow(r, isAll) {
@@ -1311,23 +1352,16 @@ export function kbMobileRow(r, isAll) {
     ? `data-kb-open="${esc(r.manual_id)}" tabindex="0"`
     : '';
   /*
-   * 状态色：行上挂 `--st-c`，圆点取它的原值（不混明度 —— --st-* 已按"压在淡底上 ≥4.5"
+   * 状态色：行上挂 `--st-c`，胶囊取它的原值（不混明度 —— --st-* 已按"压在淡底上 ≥4.5"
    * 双主题校准过，再乘个 60~70% 会让浅色档糊在灰底上）。列 key 优先用行自带的 `col`
    * （桌面 kbCard 也用它），老数据没有就按状态词反查 COL_STATUS。
+   * 类型色 `--src-c` 同一模式：行上挂、锚点取（KB_SRC_ANCHOR 注释里有三档色的出处）。
    */
   const colKey = r.col || r.status || 'other';
+  const srcKey = KB_SRC_ANCHOR[r.source] ? r.source : '_';
   // 全局面板的行才带 project_name（项目看板的行服务端已经摘掉了）
   const proj = isAll && r.project_name
     ? `<span class="kb-l-pill">${esc(r.project_name)}</span>`
-    : '';
-  /*
-   * 卡片类型（2026-11-08 用户要求）：服务端给的 `source_text`（流程 / 手动 / 仓库值班）。
-   * 只认 source_text、不自己按 source 翻译 —— 说法只有一个来源（project-tasks.mjs 的
-   * flowRows / SOURCE_TEXT / chatRows），前端不再抄一份词表。
-   * 没有 source_text 的老数据不画空签。
-   */
-  const src = r.source_text
-    ? `<span class="kb-l-src${r.source ? ` ${esc(r.source)}` : ''}">${esc(r.source_text)}</span>`
     : '';
   /*
    * 执行人（2026-11-08 二次修订）：**纯文字**，不带头像 —— 用户实拍：项目名一长，
@@ -1346,20 +1380,25 @@ export function kbMobileRow(r, isAll) {
    * 时间是**创建时间**的绝对写法（2026-11-08 用户：不要"几小时前"，直接给创建时间）。
    * 值取服务端的 `created`（卡/实例/会话的建档时间），老服务端没有这个字段就回落 `at`
    * （最后动静时间）。服务端 `stamp()` 已按本机时区出串，前端不再自己算差。
+   * 2026-11-17 用户："日期放到右上角和时间一起" —— 月日 + 时分合成一段
+   * 「MM-DD HH:MM」进右栏上行，元信息行不再放日期。
+   * 拆段只认 `YYYY-MM-DD HH:MM` 整齐格式 —— 不整齐就整串进右栏。
    */
-  const at = r.created || r.at || '';
+  const atRaw = String(r.created || r.at || '').trim();
+  const atSeg = atRaw.split(/\s+/);
+  const isDay = /^\d{4}-\d{2}-\d{2}$/.test(atSeg[0] || '');
+  const dayPart = atSeg.length > 1 && isDay ? atSeg[0].slice(5) : '';
+  const timePart = atSeg.length > 1 && isDay ? (atSeg[1] || '') : '';
+  const stamp = dayPart ? `${dayPart} ${timePart}` : atRaw;
   // `title`（原来放 note）在触屏上永远看不到 —— 换 aria-label，读屏才拿得到同样的信息
-  return `<article class="kb-l-row" style="--st-c: var(--st-${esc(colKey)})" ${jump} ${open}
-      aria-label="${esc(`${r.task}，${statusText(r.status)}，${who}${r.source_text ? `，${r.source_text}` : ''}${at ? `，${at}` : ''}`)}">
-    <div class="kb-l-line">
+  return `<article class="kb-l-row" style="--st-c: var(--st-${esc(colKey)}); --src-c: var(--src-${srcKey === '_' ? 'other' : esc(srcKey)})" ${jump} ${open}
+      aria-label="${esc(`${r.task}，${statusText(r.status)}，${who}${r.source_text ? `，${r.source_text}` : ''}${atRaw ? `，${atRaw}` : ''}`)}">
+    <span class="kb-l-anchor${srcKey === '_' ? '' : ` ${esc(srcKey)}`}" aria-hidden="true">${KB_SRC_ANCHOR[srcKey]}</span>
+    <div class="kb-l-mid">
+      <div class="kb-l-meta">${proj}${whoHtml}</div>
       <div class="kb-l-title">${esc(r.task)}</div>
-      <span class="kb-l-state">${esc(statusText(r.status))}</span>
     </div>
-    <div class="kb-l-meta">
-      ${src}${proj}
-      ${whoHtml}
-      <span class="kb-l-time">${esc(at)}</span>
-    </div>
+    <div class="kb-l-end">${stamp ? `<span class="kb-l-time">${esc(stamp)}</span>` : ''}<span class="kb-l-state">${esc(statusText(r.status))}</span></div>
   </article>`;
 }
 
@@ -1418,17 +1457,7 @@ function kbEnsureNew() {
    * 逐行 addEventListener 的话，每选一次值都得重新绑一遍，漏一处那行就"点不动了"。
    */
   el.querySelector('#kbNewGroup').addEventListener('click', (e) => {
-    // 大卡尾的 › 箭头：切到这张卡的模式（preventDefault 挡住 label 的默认激活，
-    // 模式由这里显式设，不然 radio 的 change 和这里各画一遍），再跳选择页
-    const gopick = e.target.closest('[data-kb-gopick]');
-    if (gopick && kbNewState) {
-      e.preventDefault();
-      const which = gopick.dataset.kbGopick ?? '';
-      kbNewState.mode = which === 'flow' || which === 'group' ? which : 'person';
-      paintKbNew();
-      kbNewPick(which);
-      return;
-    }
+    // 行是整段重画的，委托到这里：选择行（执行方式/执行对象/状态/项目）→ kbNewPick
     const row = e.target.closest('[data-kb-pick]');
     if (row) { kbNewPick(row.dataset.kbPick); return; }
     const pub = e.target.closest('[data-kb-gopub]');
@@ -1437,8 +1466,6 @@ function kbEnsureNew() {
   el.querySelector('#kbNewGroup').addEventListener('change', (e) => {
     const r = e.target;
     if (!kbNewState) return;
-    // 执行方式 radio：切模式只换显示，两边已选的值都留着（与桌面 syncMode 同口径）
-    if (r?.name === 'kbNewMode') { kbNewState.mode = r.value; paintKbNew(); return; }
     // 「立即开始」勾选框（收在「更多设置」里）：只记用户的意愿；能不能勾、
     // 锁在勾上还是取消，全部由 kbNewSyncStart / paintKbNew 算
     if (r?.id === 'kbNewStart') { kbNewState.startNow = r.checked; paintKbNew(); }
@@ -1549,6 +1576,9 @@ const kbNewProjItems = () => (S.projects ?? []).map((p) => ({ id: p.id, label: p
 const kbNewFlowItems = () => (S.flowPublished ?? []).map((f) => ({ id: f.id, label: f.name }));
 const kbNewItemLabel = (items, id) => items.find((it) => !it.header && it.id === String(id ?? ''))?.label ?? '';
 
+/** 执行方式的三个选项（行值 + 选择页副行一句"怎么走"，副行文案从三张大卡时代原样搬来） */
+const KB_NEW_MODE_LABEL = { person: '派给他', group: '团队协作', flow: '由流程执行' };
+
 /** 一个 value cell（label 左 · 值右 ›）。`empty` = 还没选（值走 --mb-text-3 灰）。
  *  aria-label 拼当前值（交互规格 §4：读屏不用翻右边的值也能知道这行是什么、现在选了啥） */
 function kbNewRowHtml(key, label, value, empty = false) {
@@ -1577,7 +1607,7 @@ function kbStartState(st) {
     return {
       can: false,
       lockOn: picked && !idea,
-      why: !picked ? '先选一条流程（实际不可达：radio 已置灰）'
+      why: !picked ? '先选一条流程 —— 还没有已发布的流程就先去发布'
         : idea ? '「想法」先不发起，拖到「进行中」才发'
           : '选了流程就立即发起；想先挂着就把状态改成「想法」',
     };
@@ -1602,59 +1632,40 @@ function kbStartState(st) {
 /**
  * 画创建页主体（2026-11-06 再设计，方案 A「卡片预览式重排」）。
  *
- * 信息分层照建卡的思考顺序：**怎么干**（三张大卡二选一：派给他 / 团队协作 / 由流程执行，
- * 选中的人/群/流程回显在卡上）
+ * 信息分层照建卡的思考顺序：**怎么干**（2026-11-17 用户改口径：三张大卡收成
+ * 「执行方式 / 执行对象」两行 —— 方式三选一在选择页里挑，对象的清单跟着方式换）
  * → **更多设置**（状态/项目/立即开始，直接铺开 —— 2026-11-06 三改：折叠摘要撤掉，
  * 页面本来就短，收起来反而多一跳）。
- * 原来的「执行配置」一张长表在手机上读起来像填设置；再设计时中段的「派给谁」chips /
- * 「选流程」行也撤了 —— 卡上的 › 箭头是进选择页的唯一入口，选中结果**回显在卡上**。
+ * 行皮复用 kbNewRowHtml（与状态/项目同一套 value cell 语汇），选择页走 §20.5 mbPicker。
  */
 function kbNewGroupHtml(st, ss) {
   const published = S.flowPublished ?? [];
   const sec = (t) => `<div class="kb-new-sec">${esc(t)}</div>`;
   const card = (inner, cls = '', attrs = '') => `<div class="kb-new-card${cls ? ` ${cls}` : ''}"${attrs ? ` ${attrs}` : ''}>${inner}</div>`;
-  /*
-   * 卡尾的 › 箭头（2026-11-06 用户要的）：点它**跳到对应的选择页** —— 派给他 → 执行人
-   * （带搜索），由流程执行 → 流程。跳之前先把模式切过去（选人这件事本身就声明了
-   * "派给他"）。没已发布流程时流程卡置灰，箭头也不画（点了只会进一张空清单，
-   * 副标题和「去发布 ›」已经把话说完了）。
-   */
-  const goPick = (which, label) => `<button type="button" class="kb-new-gopick" data-kb-gopick="${esc(which)}" aria-label="${esc(label)}">
-      <i class="kb-new-chev" aria-hidden="true"></i>
-    </button>`;
-  /*
-   * mode() 模板（2026-11-06 视觉规格 §5.4）：撤圆点（它逼出 48 的左缩进，是表单感主因），
-   * 回显值从解释之后**挪到标题正下方**（"给了谁"必须比"怎么走"更亮 —— 值的阅读顺序 =
-   * 想事的顺序）。radio 的 aria-label 拼回显值（交互规格 §4），label 挂 tabindex="-1"
-   * 仅供程序聚焦（提交被挡时把焦点送到流程卡，交互规格 §3.4 D3）。
-   */
-  const mode = (val, title, sub, echo, echoOn, disabled = false) => `<label class="kb-new-radio is-card" tabindex="-1" data-kb-modecard="${esc(val)}">
-      <input type="radio" name="kbNewMode" value="${esc(val)}"${st.mode === val ? ' checked' : ''}${
-        disabled ? ' disabled' : ''} aria-label="${esc(echoOn ? `${title}，已选 ${echo}` : title)}" />
-      <span class="kb-new-rtxt">
-        <span class="kb-new-rtitle">${esc(title)}</span>
-        <span class="kb-new-rpick${echoOn ? ' is-on' : ''}">${esc(echo)}</span>
-        <span class="kb-new-rsub">${esc(sub)}</span>
-      </span>
-      ${disabled ? '' : (val === 'person' ? goPick('who', '选执行人') : val === 'group' ? goPick('group', '选群') : goPick('flow', '选流程'))}
-    </label>`;
+
+  /* 执行对象回显：跟当前方式走（人 / 群 / 流程各管各的值，切换不互清 —— 与桌面 syncMode 同口径） */
+  let target = '未分配';
+  let targetEmpty = true;
+  if (st.mode === 'group') {
+    target = st.groupId ? (kbNewGroupLabel(st.groupId) || '未选择') : '未选择';
+    targetEmpty = !st.groupId;
+  } else if (st.mode === 'flow') {
+    target = st.flowId ? (kbNewItemLabel(kbNewFlowItems(), st.flowId) || '未选择') : '未选择';
+    targetEmpty = !st.flowId;
+  } else {
+    target = st.who ? (kbNewItemLabel(kbNewWhoItems(), st.who) || '未分配') : '未分配';
+    targetEmpty = !st.who;
+  }
 
   const parts = [];
-  const groups = teamGroupItems();
 
-  /* ── 怎么干：执行方式三张大卡（2026-11-09 加团队协作），选中的人/群/流程回显在第三行 ── */
+  /* ── 怎么干：执行方式（三选一）+ 执行对象（清单随方式走），2026-11-17 用户定的模式 ── */
   parts.push(sec('怎么干'));
   parts.push(card(
-    mode('person', '派给他', '发到他的会话里去做，进展在那条会话里看',
-      st.who ? kbNewItemLabel(kbNewWhoItems(), st.who) : '未分配', !!st.who) +
-    mode('group', '团队协作', groups.length ? '派进群聊里执行，群助手（PM）拆子卡盯进度' : '还没有群助手是项目经理的群',
-      st.groupId ? kbNewGroupLabel(st.groupId) : '未选择', !!st.groupId, !groups.length) +
-    mode('flow', '由流程执行', published.length ? '卡跟着流程走，按步骤办' : '还没有已发布的流程',
-      st.flowId ? kbNewItemLabel(kbNewFlowItems(), st.flowId) : '未选择', !!st.flowId, !published.length),
-    'kb-new-modes',
-    'role="radiogroup" aria-label="执行方式"',
+    kbNewRowHtml('mode', '执行方式', KB_NEW_MODE_LABEL[st.mode] ?? '派给他') +
+    kbNewRowHtml('target', '执行对象', target, targetEmpty),
   ));
-  // 无已发布流程：选进去只会看到一张空清单 —— 置灰，并在卡下给一条去发布的路
+  // 无已发布流程：选进去只会看到一张空清单 —— 对象行在选择页里给 note 指路，这里给一条去发布的路
   if (!published.length) {
     parts.push('<div class="kb-new-pub"><button type="button" class="kb-new-link" data-kb-gopub aria-label="去发布流程">去发布 ›</button></div>');
   }
@@ -1744,6 +1755,25 @@ function kbNewSyncStart(ss = null) {
 function kbNewPick(which) {
   const st = kbNewState;
   if (!st) return;
+  // 执行对象：清单跟着当前执行方式走（人 / 群 / 流程），落到下面各自的分支
+  if (which === 'target') which = st.mode === 'group' ? 'group' : st.mode === 'flow' ? 'flow' : 'who';
+  // 执行方式：三项选择页（副行一句话说清"怎么走"，文案从三张大卡时代原样搬来；
+  // 没合规群/没已发布流程也**不禁用** —— 选过去对象行会给 note 指路，页面下方还有「去发布 ›」）
+  if (which === 'mode') {
+    const groups = teamGroupItems();
+    const published = S.flowPublished ?? [];
+    mbOpenPicker({
+      title: '执行方式',
+      items: [
+        { id: 'person', label: KB_NEW_MODE_LABEL.person, sub: '发到他的会话里去做，进展在那条会话里看' },
+        { id: 'group', label: KB_NEW_MODE_LABEL.group, sub: groups.length ? '派进群聊里执行，群助手（PM）拆子卡盯进度' : '还没有群助手是项目经理的群' },
+        { id: 'flow', label: KB_NEW_MODE_LABEL.flow, sub: published.length ? '卡跟着流程走，按步骤办' : '还没有已发布的流程' },
+      ],
+      value: st.mode,
+      onPick: (v) => { st.mode = v; paintKbNew(); },
+    });
+    return;
+  }
   if (which === 'status') {
     // 只有 8 项 → 不给搜索；行首带状态色圆点
     mbOpenPicker({
@@ -1778,8 +1808,8 @@ function kbNewPick(which) {
     return;
   }
   if (which === 'group') {
-    // 团队协作（2026-11-09）：只列群助手是项目经理的群（teamGroupItems 已滤）；没合规群时
-    // 这张卡是置灰的（goPick 不画），走不到这里
+    // 团队协作（2026-11-09）：只列群助手是项目经理的群（teamGroupItems 已滤）；
+    // 没合规群时清单是空的，靠 note 指路
     mbOpenPicker({
       title: '团队协作 · 选群',
       items: teamGroupItems(),
@@ -1843,14 +1873,14 @@ async function kbNewSubmit() {
   const flow = st.mode === 'flow';
   if (flow && !st.flowId) {
     toast('先选一条流程 —— 还没有已发布的流程就去工作台 → 流程 里发布一条');
-    // 流程卡：radio 已置灰（无已发布流程），焦点落到卡本身（label 挂了 tabindex="-1"）
-    kbNewEl?.querySelector('[data-kb-modecard="flow"]')?.focus();
+    // 焦点落到「执行对象」行（交互规格 §3.4 D3：说缺什么就把视线送过去）
+    kbNewEl?.querySelector('[data-kb-pick="target"]')?.focus();
     return;
   }
   const groupMode = st.mode === 'group';
   if (groupMode && !st.groupId) {
     toast('先选一个群 —— 群助手是项目经理的群才能接团队协作的活');
-    kbNewEl?.querySelector('[data-kb-modecard="group"]')?.focus();
+    kbNewEl?.querySelector('[data-kb-pick="target"]')?.focus();
     return;
   }
 
@@ -3058,7 +3088,18 @@ export let tcDlgStream = null;
 
 /** 关掉任务卡弹窗（同一时刻只该有一个；开新的之前先收掉旧的） */
 export function closeTaskCardDialog() {
-  document.getElementById('tcDlg')?.close?.();
+  const old = document.getElementById('tcDlg');
+  old?.close?.();
+  /*
+   * close 事件是**排队异步**的：上面这行此刻只"请求关闭"，旧壳还挂在文档上。
+   * 而紧接着 openTaskCardDialog 会建一个**同 id** 的新弹窗 —— paint 里 `$('tcDlgBody')`
+   * 按 id 查到的是旧壳，内容画进一段等死的子树；等 close 事件跑了 remove()，
+   * 新弹窗留一张白纸，`$('tcTitleText')` 一类按 id 的接线全部 null 炸
+   * （2026-11-16 实测：开着卡 A 的弹窗直接开卡 B，B 是空的）。
+   * 所以就地摘掉旧壳 —— close 事件稍后照常派发（监听在元素上，脱离文档也触发），
+   * 里面的清场逻辑一条不少，只是 remove() 变成空操作。
+   */
+  old?.remove();
 }
 
 
@@ -3451,7 +3492,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
         //      除非用户手动收起过这条（collapsedTopics），手动操作优先。
         // 折叠照旧（全铺开确实杂），但他的回话不再被藏住：这轮新到的回复让议题
         // 自动展开、回复本身高亮 —— 除非用户手动收起过这条（collapsedTopics），
-        // 手动操作优先。折叠条本身照抖音（2026-11-06 用户发截图拍板）：只报条数。
+        // 手动操作优先。折叠条本身照主流评论区（2026-11-06 用户发截图拍板）：只报条数。
         const hasNew = t.items.some((m) => !seenReplies.has(m.id));
         const isOpen = openTopics.has(t.id) || (hasNew && !collapsedTopics.has(t.id));
         let replies = `<div class="tc-replies" data-replies="${esc(t.id)}"></div>`;
@@ -3459,7 +3500,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
           const items = t.items.map((m, i) =>
             cmtItem(m, !seenReplies.has(m.id), i === t.items.length - 1 ? t.id : null),
           ).join('');
-          // 折叠条两态文案照抖音（2026-11-06 用户发截图拍板）：左一条短灰线，
+          // 折叠条两态文案照主流评论区（2026-11-06 用户发截图拍板）：左一条短灰线，
           // 折叠「展开N条回复 ⌄」/ 展开「收起N条回复 ⌃」—— 不再露最新回复预览
           // （2026-10-24 那版"作者：摘要"撤了；藏话的问题仍由 hasNew 自动展开兜着）。
           replies = `<details class="tc-replies" data-replies="${esc(t.id)}"${isOpen ? ' open' : ''}>
@@ -3775,7 +3816,19 @@ export async function paintTaskCardPage(taskId, opts = {}) {
         <div class="tc-prop"><span class="tc-prop-k">来源</span><span class="tc-prop-v">${isFlowCard ? '流程' : isRepo ? '仓库值班' : '手动建卡'}</span></div>
 
         ${flowOnly ? '' : `
-        <h3>Pull Request</h3>
+        <!-- PR 区入口收进标题右边两颗图标（2026-11-16 用户："一个新建一个关联，点开弹窗，界面更简洁"）：
+             常驻两颗（已关联也能换链 / 再建），按钮不再摊在右栏里。 -->
+        <div class="tc-pr-head">
+          <h3>Pull Request</h3>
+          <span class="tc-pr-acts">
+            <button type="button" class="tc-pr-ic" id="tcPrCreateOpen"
+                    title="新建 PR：把项目目录里的改动提交成新分支并开 PR（前提：这个目录是已接入仓库的克隆）"
+                    aria-label="新建 PR">${TC_ICON_PLUS}</button>
+            <button type="button" class="tc-pr-ic" id="tcPrLinkOpen"
+                    title="关联已有 PR：贴 PR 链接，或 owner/name#123"
+                    aria-label="关联已有 PR">${TC_ICON_LINK}</button>
+          </span>
+        </div>
         ${
           task.prRepo && task.prNumber
             ? `<div class="tc-prop"><span class="tc-prop-k">关联的 PR</span><div class="tc-prop-v">
@@ -3792,11 +3845,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
                  ${task.prState === 'open' ? '<button id="tcPrMerge">合并</button>' : ''}
                  <button id="tcPrUnlink">取消关联</button>
                </div>`
-            : `<div class="tc-pr-add">
-                 <input id="tcPrUrl" placeholder="PR 链接 或 owner/name#123" />
-                 <button class="primary" id="tcPrLink">关联</button>
-                  <button id="tcPrCreate" title="把项目目录里的改动提交成新分支并开 PR（前提：这个目录是已接入仓库的克隆）">建 PR</button>
-               </div>
+            : `<div class="counter left">还没关联 PR —— 点标题旁的 ＋ 新建，或点链环图标关联一个已有的。</div>
                <div class="counter left">合并后这张卡会转到「待验收」——不自动「已完成」，等验收人点头。</div>`
         }`}
 
@@ -3818,7 +3867,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
         /* 讨论抽屉（2026-11-05 用户口径）：讨论不摊在卡页上，收进一张抽屉 ——
            入口是导航栏右上角那颗💬气泡（#tcCmtBtn，2026-11-06 定稿：卡页底部那条
            常驻评论条是过渡产物，已删；入口只留一处）。
-           点开是抖音评论区那套：底部升起一张面板，上面遮罩压住整页，里面只有"讨论流 + 输入条"。
+           点开是主流评论区那套：底部升起一张面板，上面遮罩压住整页，里面只有"讨论流 + 输入条"。
            它挂在 .tc-page 里面（position:fixed，不参与 flex 布局），为的是继续吃到
            `.tc-page.tc-m .tc-composer` 那一套玻璃输入条样式；页面重画时跟着一起换新。
            历史栈与「手机全屏选择页」同一套：开抽屉压一格，返回手势/返回键只收这一格。
@@ -3891,7 +3940,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
 
   /* ---------------- 讨论抽屉（手机，2026-11-05 用户口径） ----------------
    *
-   * 「讨论别摊在卡页上，收进一颗气泡按钮，点开像抖音评论区」——
+   * 「讨论别摊在卡页上，收进一颗气泡按钮，点开像主流评论区」——
    * 卡页因此只剩：状态 → 标题 → 描述 → 属性卡 → 脚注；讨论流和输入条整体搬进抽屉。
    *
    * 历史栈与「手机全屏选择页」（chat.mjs 的 mbPicker）/「新建任务」页同一套：
@@ -3928,8 +3977,8 @@ export async function paintTaskCardPage(taskId, opts = {}) {
   };
 
   /*
-   * 输入条两态（2026-11-06 用户发抖音截图拍板）：抽屉底部平时是**一条单行评论条**
-   * （工具栏整条藏掉、textarea 压成药丸、placeholder 换成抖音那句）—— 键盘没起来
+   * 输入条两态（2026-11-06 用户发截图拍板）：抽屉底部平时是**一条单行评论条**
+   * （工具栏整条藏掉、textarea 压成药丸、placeholder 换成评论区那句占位语）—— 键盘没起来
    * 就该长这样；点它（或点某条评论的「回复」）才展开成完整输入区，键盘跟着起来；
    * 输入框失焦（键盘收了）120ms 后收回单行 —— 延迟是给「点发送」让路的：
    * mousedown 先 blur，click 还没落，立刻收会把发送键藏没了。
@@ -3940,7 +3989,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
   /*
    * 抽屉顶边钉住（2026-11-06 用户口径：键盘唤起后抽屉**别往上走**）。
    * 面板高度是 78%，而 .tc-sheet 的高度 = 可见视口 —— 键盘一起来视口变矮，
-   * 78% 跟着变矮，面板顶边就自己往上跳一格（约 0.22 × 键盘高）。抖音那种手感
+   * 78% 跟着变矮，面板顶边就自己往上跳一格（约 0.22 × 键盘高）。主流评论区那种手感
    * 是"抽屉待在原地、键盘从下面吃掉一截"。所以展开态把顶边钉成固定 px
    * （mobile.css 的 .tc-sheet.expanded .tc-sheet-panel 用 --tc-panel-top + bottom:0
    * 定高），这里负责在键盘还没起来时把这个位置记下来。
@@ -4016,7 +4065,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
       if (sheet.classList.contains('expanded')) return;
       if (!e.target.closest('.tc-composer')) return;
       tcExpand();
-      tcInput?.focus();   // 点单行条就是想打字：键盘跟着起来（抖音同款）
+      tcInput?.focus();   // 点单行条就是想打字：键盘跟着起来（主流评论区同款）
     });
     sheetMaxBtn?.addEventListener('click', () => {
       tcSheetMax = !tcSheetMax;
@@ -4512,24 +4561,30 @@ export async function paintTaskCardPage(taskId, opts = {}) {
   /* ---------------- PR 联动（卡片 ↔ GitHub PR） ---------------- */
   // （prStateText 在上面画模板之前就定义了 —— 手机行/桌面右栏两处都用它）
 
-  $('tcPrLink')?.addEventListener('click', async (e) => {
+  /* 「关联」图标（2026-11-16）：入口从常驻输入行收进标题旁的链环图标 —— 点开弹窗贴链接，
+     确认后走原管道。空着提交不算错（人可能点错了），直接回去。 */
+  $('tcPrLinkOpen')?.addEventListener('click', async (e) => {
     e.preventDefault();
-    const url = $('tcPrUrl').value.trim();
-    if (!url) return toast('先贴 PR 链接（或 owner/name#123）');
-    const btn = $('tcPrLink');
+    const url = await askText({
+      title: '关联已有 PR',
+      body: '贴这张卡对应的 PR 链接，或 owner/name#123 —— 关联后卡会跟着这个 PR 的状态走（合并即转「待验收」）。',
+      placeholder: 'PR 链接 或 owner/name#123',
+      ok: '关联',
+    });
+    if (url === null) return;
+    if (!url.trim()) return toast('先贴 PR 链接（或 owner/name#123）');
+    const btn = $('tcPrLinkOpen');
     btn.disabled = true;
-    btn.textContent = '查询中…';
     try {
       const r = await api(`/api/projects/tasks/${encodeURIComponent(taskId)}/pr`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url }),
+        body: JSON.stringify({ url: url.trim() }),
       });
       await paintTaskCardPage(taskId, opts);
       toast(`已关联：${r.pr.repo}#${r.pr.number} —— ${prStateText(r.pr.state)}`);
     } catch (err) {
       btn.disabled = false;
-      btn.textContent = '关联';
       toast(err.message, 'error');
     }
   });
@@ -4568,7 +4623,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
    * 比不摆更容易让人以为已经看过了。要看改动、挑文件、处理凭据那类拦截，
    * 用「工作台 → 研发 → 代码托管」里那颗「建 PR」（完整弹窗）。撞到凭据拦截时下面会把这条指出来。
    */
-  $('tcPrCreate')?.addEventListener('click', async (e) => {
+  $('tcPrCreateOpen')?.addEventListener('click', async (e) => {
     e.preventDefault();
     const title = await askText({
       title: `给这张卡建一个 PR`,
@@ -4579,7 +4634,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     });
     if (title === null) return;
     if (!title.trim()) return toast('标题不能是空的');
-    const btn = $('tcPrCreate');
+    const btn = $('tcPrCreateOpen');
     btn.disabled = true;
     btn.textContent = '提交中…';
     try {
@@ -4591,8 +4646,8 @@ export async function paintTaskCardPage(taskId, opts = {}) {
       await paintTaskCardPage(taskId, opts);
       toast(r.created ? `PR #${r.pr.number} 已建好（分支 ${r.branch}）` : `这个分支已经有 open PR：#${r.pr.number}，已挂回这张卡`);
     } catch (err) {
+      // 按钮是图标（svg），不能像旧文字钮那样 textContent 回填 —— 解禁即可，重画也会换新
       btn.disabled = false;
-      btn.textContent = '建 PR';
       const m = String(err.message ?? err);
       toast(/凭据|就是要提交/.test(m) ? `${m}\n\n要强行提交这些文件：去「工作台 → 研发 → 代码托管」那一行的「建 PR」，那里有勾选。` : m, 'error');
     }

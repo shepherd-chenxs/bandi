@@ -1,0 +1,550 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>班底 · 任务看板（短信节奏重排）</title>
+<style>
+/* ═══════════════════════════════════════════════════════════════
+   任务看板 · 手机端 · 短信节奏重排
+
+   设计判断（为什么这么摆）：
+   ① 借的不是"短信的样子"，是它的三栏扫读格：
+      左锚点 / 中两行 / 右两行。眼睛只做纵向运动，不横向折返。
+   ② 头像位换成**类型锚点**（2026-11-17 用户拍板）。短信用头像回答"谁"，
+      任务要用图标+色回答"这活谁推的"——手动（铅笔·蓝）/ 流程（节点·紫）/
+      仓库值班（盒子·橙），三档色与桌面 .kb-tag.manual/.kb-tag.repo 同源。
+      状态退到右下胶囊——它描述"现在怎样"，不该占身份位。
+   ③ 状态徽章从标题右侧挪到右下、与时间同列。原来它跟标题抢
+      第一行，现在时间和状态上下对齐成一列，右边缘齐平。
+   ④ 日期拆开：月日进元信息行，时分留在右上。年份同一屏内省略
+      （列表全是 2026），腾出的宽度给标题，少截两个字。
+   ⑤ 分隔线从文字起点开始（left:68px），不到锚点下方——iOS 的
+      标志性细节，也是项目 ios-messages.html 已有的语汇。
+   ⑥ 字段一个没删：状态 / 来源 / 项目 / 负责人 / 日期 / 时间
+      全部保留，只换了位置和权重。
+
+   色板直接取项目 ios-messages.html 的 iOS 语义色，不新造蓝。
+   ═══════════════════════════════════════════════════════════════ */
+
+:root {
+  color-scheme: light;
+
+  --bg:        #f2f2f7;   /* iOS systemGroupedBackground */
+  --card:      #ffffff;
+  --fill:      #78788014;
+  --fill-2:    #78788028;
+  --sep:       #3c3c431f;
+  --sep-strong:#3c3c4338;
+
+  /* 文字四档：t2 用 #5f646c 而非 iOS 原生 60% 黑，
+     后者在白底只有约 3.5:1，13px 正文过不了 WCAG AA */
+  --t1: #1a1c1f;
+  --t2: #5f646c;
+  --t3: #6b6e73;
+  --t4: #8e9298;
+
+  --blue:   #007aff;
+  --purple: #af52de;
+  --green:  #34c759;
+  --red:    #ff3b30;
+  --orange: #ff9500;
+
+  --src-manual-bg: rgba(0,122,255,.12);  --src-manual-fg: #007aff;
+  --src-flow-bg:   rgba(175,82,222,.12); --src-flow-fg:   #9340b5;
+  --src-repo-bg:   rgba(255,149,0,.14);  --src-repo-fg:   #b96a00;
+
+  --done-bg: #e8f6ed;  --done-fg: #1e7a45;
+  --fail-bg: #ffedeb;  --fail-fg: #c0291f;
+  --block-bg:#fff3e1;  --block-fg:#b96a00;
+
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
+          "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --bg:        #000000;
+  --card:      #1c1c1e;
+  --fill:      #7878805c;
+  --fill-2:    #7878807a;
+  --sep:       #54545899;
+  --sep-strong:#545458a0;
+
+  --t1: #f5f5f7;
+  --t2: #c8c8ce;
+  --t3: #a5a5ab;
+  --t4: #8e8e94;
+
+  --blue:   #0a84ff;
+  --purple: #bf5af2;
+  --green:  #30d158;
+  --red:    #ff453a;
+  --orange: #ff9f0a;
+
+  --src-manual-bg: rgba(10,132,255,.20);  --src-manual-fg: #6db2ff;
+  --src-flow-bg:   rgba(191,90,242,.20);  --src-flow-fg:   #d9a0f0;
+  --src-repo-bg:   rgba(255,159,10,.20);  --src-repo-fg:   #ffb340;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+
+body {
+  font-family: var(--font);
+  background: #e9eaee;
+  color: var(--t1);
+  -webkit-font-smoothing: antialiased;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 18px;
+  padding: 24px 16px;
+  font-variant-numeric: tabular-nums;
+}
+:root[data-theme='dark'] body { background: #141416; }
+
+/* 设备外框：只做预览容器，不属于产品 UI */
+.phone {
+  width: 390px; height: 844px;
+  background: var(--card);
+  border-radius: 28px;
+  overflow: hidden;
+  display: flex; flex-direction: column;
+  box-shadow: 0 0 0 1px rgba(0,0,0,.06), 0 18px 50px rgba(20,22,28,.13);
+}
+
+/* ── 状态栏（设备层，保留截图口径） ── */
+.status {
+  height: 36px; flex: 0 0 auto;
+  display: flex; align-items: center;
+  padding: 0 20px; gap: 6px;
+  font-size: 12px; font-weight: 600; color: var(--t1);
+}
+.status .loc { color: var(--t3); display: flex; }
+.status .loc svg { width: 12px; height: 12px; }
+.status .right { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+.status .right svg { width: 15px; height: 15px; color: var(--t1); }
+.status .pct { font-size: 11px; font-weight: 600; }
+
+/* ── 导航栏 ── */
+.nav {
+  height: 46px; flex: 0 0 auto;
+  display: flex; align-items: center;
+  padding: 0 14px;
+  border-bottom: 0.5px solid var(--sep);
+}
+.nav .back, .nav .add {
+  width: 34px; height: 34px;
+  display: grid; place-items: center;
+  border: 0; background: none; padding: 0;
+  color: var(--blue); cursor: pointer;
+  border-radius: 8px;
+}
+.nav .back:hover, .nav .add:hover { background: var(--fill); }
+:root[data-theme='dark'] .nav .back:hover,
+:root[data-theme='dark'] .nav .add:hover { background: var(--fill-2); }
+.nav .back svg { width: 20px; height: 20px; }
+.nav .add svg  { width: 22px; height: 22px; }
+.nav h1 {
+  margin: 0; flex: 1; text-align: center;
+  font-size: 16px; font-weight: 600; letter-spacing: -.01em;
+}
+
+/* ── 筛选条（保持原位，不动它） ── */
+.filters {
+  height: 52px; flex: 0 0 auto;
+  display: flex; align-items: center; gap: 7px;
+  padding: 0 14px;
+  border-bottom: 0.5px solid var(--sep);
+  overflow-x: auto;
+}
+.filters::-webkit-scrollbar { height: 0; }
+.chip {
+  height: 29px; padding: 0 12px;
+  border-radius: 999px;
+  border: 0; background: var(--fill);
+  color: var(--t2); font: inherit; font-size: 13px;
+  white-space: nowrap; flex: 0 0 auto;
+  cursor: pointer; transition: background-color .12s, color .12s;
+  display: inline-flex; align-items: center; gap: 5px;
+}
+.chip:hover { background: var(--fill-2); }
+.chip .n { font-size: 11.5px; opacity: .65; }
+.chip.on { background: rgba(0,122,255,.14); color: var(--blue); font-weight: 500; }
+:root[data-theme='dark'] .chip.on { background: rgba(10,132,255,.22); }
+.chip.on .n { opacity: .8; }
+.refresh {
+  margin-left: auto; flex: 0 0 auto;
+  width: 29px; height: 29px;
+  display: grid; place-items: center;
+  border: 0; background: none; color: var(--t3);
+  cursor: pointer; border-radius: 8px;
+}
+.refresh:hover { background: var(--fill); }
+.refresh svg { width: 17px; height: 17px; }
+
+/* ── 列表 ── */
+.list { flex: 1; min-height: 0; overflow-y: auto; background: var(--card); }
+.list::-webkit-scrollbar { width: 0; }
+
+.row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 11px 16px;
+  min-height: 76px;
+  cursor: pointer;
+  position: relative;
+  transition: background-color .1s ease;
+}
+.row:active { background: var(--fill); }
+/* 内嵌分隔线：从文字起点起，锚点下方留白 —— iOS 的标志细节 */
+.row + .row::before {
+  content: ""; position: absolute;
+  top: 0; left: 68px; right: 0;
+  height: 0.5px; background: var(--sep);
+}
+
+/* 左：状态锚点（占住短信头像的位置） */
+/* 左：类型锚点（占住短信头像的位置）—— 手动 / 流程 / 仓库值班 */
+.anchor {
+  width: 40px; height: 40px; border-radius: 50%;
+  flex: 0 0 auto;
+  display: grid; place-items: center;
+}
+.anchor svg { width: 21px; height: 21px; }
+.anchor.manual { background: var(--src-manual-bg); color: var(--src-manual-fg); }
+.anchor.flow   { background: var(--src-flow-bg);   color: var(--src-flow-fg); }
+.anchor.repo   { background: var(--src-repo-bg);   color: var(--src-repo-fg); }
+
+/* 中：标题 + 元信息 */
+.mid { flex: 1; min-width: 0; }
+.title {
+  font-size: 15.5px; font-weight: 500; color: var(--t1);
+  line-height: 1.35; letter-spacing: -.01em;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.meta {
+  margin-top: 3px;
+  font-size: 12.5px; color: var(--t2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.meta .dot { color: var(--t4); padding: 0 4px; }
+
+/* 右：时间 + 状态，同列右对齐 */
+.end { flex: 0 0 auto; width: 78px; text-align: right; }
+.time { font-size: 11.5px; color: var(--t3); line-height: 1.5; }
+.badge {
+  display: inline-block;
+  margin-top: 5px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 10.5px; font-weight: 500;
+  line-height: 1.5;
+}
+.badge.blocked { background: var(--block-bg); color: var(--block-fg); }
+.badge.failed  { background: var(--fail-bg);   color: var(--fail-fg); }
+.badge.done    { background: var(--done-bg);   color: var(--done-fg); }
+
+/* ── 底部 tabbar（保持原位） ── */
+.tabbar {
+  height: 58px; flex: 0 0 auto;
+  display: flex;
+  padding: 6px 6px 0;
+  border-top: 0.5px solid var(--sep);
+  background: var(--card);
+}
+.tab {
+  flex: 1; border: 0; background: none; padding: 0;
+  display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 3px;
+  color: var(--t3); font: inherit; font-size: 10px;
+  cursor: pointer; border-radius: 8px;
+}
+.tab svg { width: 23px; height: 23px; }
+.tab.on { color: var(--blue); }
+.tab:not(.on):hover { color: var(--t2); }
+
+/* ── Android 三键导航（设备层，与截图一致） ── */
+.sysnav {
+  height: 34px; flex: 0 0 auto;
+  display: flex; align-items: center; justify-content: space-around;
+  color: var(--t3);
+}
+.sysnav svg { width: 17px; height: 17px; }
+
+/* 锚点规格条：三档类型色一览（设计稿控件，不属于产品 UI） */
+.src-spec {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 12px; color: #5f646c;
+}
+:root[data-theme='dark'] .src-spec { color: #c8c8ce; }
+.src-spec .anchor { width: 34px; height: 34px; }
+.src-spec .anchor svg { width: 18px; height: 18px; }
+.src-spec span:last-child { margin-right: 8px; }
+
+/* 设计稿控件：主题切换，不属于产品 UI */
+.theme-toggle {
+  display: inline-flex; align-items: center; gap: 7px;
+  height: 30px; padding: 0 13px;
+  border-radius: 999px;
+  border: 1px solid rgba(0,0,0,.12);
+  background: #fff; color: #5f646c;
+  font: inherit; font-size: 12px; cursor: pointer;
+}
+:root[data-theme='dark'] .theme-toggle {
+  background: #1c1c1e; border-color: rgba(255,255,255,.16); color: #c8c8ce;
+}
+.theme-toggle:hover { color: var(--blue); }
+.theme-toggle svg { width: 14px; height: 14px; }
+</style>
+</head>
+<body>
+
+<div class="phone" role="group" aria-label="任务看板手机端界面">
+
+  <!-- 状态栏 -->
+  <div class="status" aria-hidden="true">
+    <span>10:15</span>
+    <span class="loc">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M21 3L3 10.5l7.2 2.3 2.3 7.2L21 3z"/></svg>
+    </span>
+    <span class="right">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <path d="M4.5 5.5l15 13M9 12.6a4.2 4.2 0 0 1 6 0M6 9.4a8.5 8.5 0 0 1 12 0"/>
+      </svg>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M2.5 8.5a15 15 0 0 1 19 0M6 12.2a10 10 0 0 1 12 0M9.5 15.8a5 5 0 0 1 5 0"/>
+        <circle cx="12" cy="19" r="1" fill="currentColor" stroke="none"/>
+      </svg>
+      <svg viewBox="0 0 26 24" fill="none" stroke="currentColor" stroke-width="1.7">
+        <rect x="1.5" y="6.5" width="19" height="11" rx="3"/>
+        <path d="M22 10v4" stroke-linecap="round" stroke-width="2.6"/>
+        <rect x="3.5" y="8.5" width="13" height="7" rx="1.5" fill="currentColor" stroke="none"/>
+      </svg>
+      <span class="pct">100</span>
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M13 2L5.5 13.2h5.2L10 22l8.5-11.4h-5.2L13 2z"/></svg>
+    </span>
+  </div>
+
+  <!-- 导航栏 -->
+  <div class="nav">
+    <button class="back" aria-label="返回">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M15 5l-7 7 7 7"/>
+      </svg>
+    </button>
+    <h1>任务看板</h1>
+    <button class="add" aria-label="新建任务">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round">
+        <path d="M12 5v14M5 12h14"/>
+      </svg>
+    </button>
+  </div>
+
+  <!-- 筛选条 -->
+  <div class="filters" role="group" aria-label="任务状态筛选">
+    <button class="chip on" aria-pressed="true">全部 <span class="n">17</span></button>
+    <button class="chip" aria-pressed="false">已阻塞 <span class="n">1</span></button>
+    <button class="chip" aria-pressed="false">失败 <span class="n">1</span></button>
+    <button class="chip" aria-pressed="false">已完成 <span class="n">13</span></button>
+    <button class="refresh" aria-label="刷新">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M20 12a8 8 0 1 1-2.6-5.9"/><path d="M20 4.5V9h-4.5"/>
+      </svg>
+    </button>
+  </div>
+
+  <!-- 列表 -->
+  <div class="list" id="list" role="list" aria-label="任务列表">
+
+    <div class="row" role="listitem" tabindex="0">
+      <span class="anchor manual" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2.5" width="8" height="4" rx="1"/><path d="M16 4.5h2a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-13a2 2 0 0 1 2-2h2"/><path d="m9.2 13.5 2 2 3.8-4"/></svg>
+      </span>
+      <div class="mid">
+        <div class="title">点击不要显示这个</div>
+        <div class="meta">手动<span class="dot">·</span>班底<span class="dot">·</span>贺韬<span class="dot">·</span>11-16</div>
+      </div>
+      <div class="end"><div class="time">21:57</div><span class="badge blocked">已阻塞</span></div>
+    </div>
+
+    <div class="row" role="listitem" tabindex="0">
+      <span class="anchor manual" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2.5" width="8" height="4" rx="1"/><path d="M16 4.5h2a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-13a2 2 0 0 1 2-2h2"/><path d="m9.2 13.5 2 2 3.8-4"/></svg>
+      </span>
+      <div class="mid">
+        <div class="title">自主迭代班底项目并排查设计漏洞</div>
+        <div class="meta">手动<span class="dot">·</span>班底<span class="dot">·</span>贺韬<span class="dot">·</span>11-13</div>
+      </div>
+      <div class="end"><div class="time">14:05</div><span class="badge failed">失败</span></div>
+    </div>
+
+    <div class="row" role="listitem" tabindex="0">
+      <span class="anchor manual" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2.5" width="8" height="4" rx="1"/><path d="M16 4.5h2a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-13a2 2 0 0 1 2-2h2"/><path d="m9.2 13.5 2 2 3.8-4"/></svg>
+      </span>
+      <div class="mid">
+        <div class="title">重编译交鉴 App 并推到已连手机，让雇主看到去气泡后的真机效果</div>
+        <div class="meta">手动<span class="dot">·</span>交鉴<span class="dot">·</span>马超<span class="dot">·</span>11-16</div>
+      </div>
+      <div class="end"><div class="time">22:16</div><span class="badge done">已完成</span></div>
+    </div>
+
+    <div class="row" role="listitem" tabindex="0">
+      <span class="anchor manual" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2.5" width="8" height="4" rx="1"/><path d="M16 4.5h2a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-13a2 2 0 0 1 2-2h2"/><path d="m9.2 13.5 2 2 3.8-4"/></svg>
+      </span>
+      <div class="mid">
+        <div class="title">易木首页点树不再弹话术气泡（去气泡留动效）</div>
+        <div class="meta">手动<span class="dot">·</span>交鉴<span class="dot">·</span>嘉辉<span class="dot">·</span>11-16</div>
+      </div>
+      <div class="end"><div class="time">22:00</div><span class="badge done">已完成</span></div>
+    </div>
+
+    <div class="row" role="listitem" tabindex="0">
+      <span class="anchor manual" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2.5" width="8" height="4" rx="1"/><path d="M16 4.5h2a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-13a2 2 0 0 1 2-2h2"/><path d="m9.2 13.5 2 2 3.8-4"/></svg>
+      </span>
+      <div class="mid">
+        <div class="title">元仓首页按新设计稿落地实现</div>
+        <div class="meta">手动<span class="dot">·</span>交鉴<span class="dot">·</span>嘉辉<span class="dot">·</span>11-15</div>
+      </div>
+      <div class="end"><div class="time">22:28</div><span class="badge done">已完成</span></div>
+    </div>
+
+    <div class="row" role="listitem" tabindex="0">
+      <span class="anchor manual" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2.5" width="8" height="4" rx="1"/><path d="M16 4.5h2a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-13a2 2 0 0 1 2-2h2"/><path d="m9.2 13.5 2 2 3.8-4"/></svg>
+      </span>
+      <div class="mid">
+        <div class="title">元仓首页整体重新设计（UI方案+高保真预览）</div>
+        <div class="meta">手动<span class="dot">·</span>交鉴<span class="dot">·</span>沈丹青<span class="dot">·</span>11-15</div>
+      </div>
+      <div class="end"><div class="time">22:21</div><span class="badge done">已完成</span></div>
+    </div>
+
+    <div class="row" role="listitem" tabindex="0">
+      <span class="anchor manual" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2.5" width="8" height="4" rx="1"/><path d="M16 4.5h2a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-13a2 2 0 0 1 2-2h2"/><path d="m9.2 13.5 2 2 3.8-4"/></svg>
+      </span>
+      <div class="mid">
+        <div class="title">元仓首页历史区改为中国朝代入口</div>
+        <div class="meta">手动<span class="dot">·</span>交鉴<span class="dot">·</span>嘉辉<span class="dot">·</span>11-15</div>
+      </div>
+      <div class="end"><div class="time">21:53</div><span class="badge done">已完成</span></div>
+    </div>
+
+    <div class="row" role="listitem" tabindex="0">
+      <span class="anchor manual" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2.5" width="8" height="4" rx="1"/><path d="M16 4.5h2a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-13a2 2 0 0 1 2-2h2"/><path d="m9.2 13.5 2 2 3.8-4"/></svg>
+      </span>
+      <div class="mid">
+        <div class="title">元仓首页八字区增加十神/十组组合资料展示</div>
+        <div class="meta">手动<span class="dot">·</span>交鉴<span class="dot">·</span>嘉辉<span class="dot">·</span>11-15</div>
+      </div>
+      <div class="end"><div class="time">21:40</div><span class="badge done">已完成</span></div>
+    </div>
+
+  </div>
+
+  <!-- 底部 tabbar -->
+  <nav class="tabbar" aria-label="主导航">
+    <button class="tab on">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round">
+        <rect x="3.4" y="3.4" width="7.2" height="7.2" rx="1.8"/>
+        <rect x="13.4" y="3.4" width="7.2" height="7.2" rx="1.8"/>
+        <rect x="3.4" y="13.4" width="7.2" height="7.2" rx="1.8"/>
+        <rect x="13.4" y="13.4" width="7.2" height="7.2" rx="1.8"/>
+      </svg>
+      工作台
+    </button>
+    <button class="tab">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round">
+        <circle cx="9.2" cy="8.4" r="3.2"/>
+        <path d="M3.6 19c0-2.9 2.4-5 5.6-5s5.6 2.1 5.6 5"/>
+        <circle cx="17.3" cy="9.6" r="2.3"/>
+        <path d="M16 19c0-2.1.9-3.6 2.7-4.1"/>
+      </svg>
+      通讯录
+    </button>
+    <button class="tab">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round">
+        <path d="M4.5 5.5h15v10H9.5l-5 3.6z"/>
+      </svg>
+      会话
+    </button>
+    <button class="tab">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round">
+        <circle cx="12" cy="8" r="3.4"/>
+        <path d="M4.8 19.2c0-3.4 3.1-5.6 7.2-5.6s7.2 2.2 7.2 5.6"/>
+      </svg>
+      我的
+    </button>
+  </nav>
+
+  <!-- 系统导航键 -->
+  <div class="sysnav" aria-hidden="true">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M4 6.5h16M4 12h16M4 17.5h16"/></svg>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>
+  </div>
+
+</div>
+
+<!-- 锚点规格条：三档类型色（截图数据全是「手动」，三枚锚点在这里交代齐） -->
+<div class="src-spec" role="group" aria-label="类型锚点规格">
+  <span class="anchor manual"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2.5" width="8" height="4" rx="1"/><path d="M16 4.5h2a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-13a2 2 0 0 1 2-2h2"/><path d="m9.2 13.5 2 2 3.8-4"/></svg></span><span>手动</span>
+  <span class="anchor flow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="5.5" cy="6" r="2.2"/><circle cx="18.5" cy="18" r="2.2"/><path d="M8 6h5.2a2.7 2.7 0 0 1 0 5.4h-2.9a2.7 2.7 0 0 0 0 5.4H16"/></svg></span><span>流程</span>
+  <span class="anchor repo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 8.3L12 4.5l7.5 3.8v7.4L12 19.5l-7.5-3.8z"/><path d="M4.5 8.3L12 12.1l7.5-3.8"/><path d="M12 12.1v7.4"/></svg></span><span>仓库值班</span>
+</div>
+
+<button class="theme-toggle" id="tt">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round">
+    <path d="M20.5 14.2A8.5 8.5 0 1 1 9.8 3.5a6.6 6.6 0 0 0 10.7 10.7z"/>
+  </svg>
+  <span id="ttLabel">深色预览</span>
+</button>
+
+<script>
+(function () {
+  var root = document.documentElement;
+
+  var btn = document.getElementById('tt');
+  var lab = document.getElementById('ttLabel');
+  var k = 'bandi.design.board.sms.theme';
+  var cur = 'light';
+  try { cur = localStorage.getItem(k) || 'light'; } catch (e) {}
+  function applyTheme(t) {
+    if (t === 'dark') root.setAttribute('data-theme', 'dark');
+    else root.removeAttribute('data-theme');
+    lab.textContent = t === 'dark' ? '浅色预览' : '深色预览';
+    try { localStorage.setItem(k, t); } catch (e) {}
+  }
+  applyTheme(cur);
+  btn.addEventListener('click', function () {
+    applyTheme(root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
+  });
+
+  var chips = document.querySelectorAll('.chip');
+  chips.forEach(function (c) {
+    c.addEventListener('click', function () {
+      chips.forEach(function (x) {
+        x.classList.remove('on');
+        x.setAttribute('aria-pressed', 'false');
+      });
+      c.classList.add('on');
+      c.setAttribute('aria-pressed', 'true');
+    });
+  });
+
+  var tabs = document.querySelectorAll('.tab');
+  tabs.forEach(function (t) {
+    t.addEventListener('click', function () {
+      tabs.forEach(function (x) { x.classList.remove('on'); });
+      t.classList.add('on');
+    });
+  });
+})();
+</script>
+</body>
+</html>

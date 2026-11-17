@@ -203,6 +203,7 @@ workflows.ensureBuiltInTemplate();
 const upgraded = workflows.nodesOf(store.getWorkflowTemplate('bandi-delivery'));
 check('老种子：部署节点补上了 manual', upgraded.find((n) => n.id === 'n5')?.manual === true);
 check('老种子：坐标也一并补上', upgraded.every((n) => Number.isFinite(n.x) && Number.isFinite(n.y)));
+check('老库旧名 → 内建模板刷成「班底交付」', store.getWorkflowTemplate('bandi-delivery')?.name === '班底交付', String(store.getWorkflowTemplate('bandi-delivery')?.name));
 seed5({ x: 1, y: 1, manual: false });
 workflows.ensureBuiltInTemplate();
 check('用户明确关掉（manual: false）→ 不被覆盖', workflows.nodesOf(store.getWorkflowTemplate('bandi-delivery')).find((n) => n.id === 'n5')?.manual === false);

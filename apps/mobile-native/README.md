@@ -38,15 +38,20 @@ versionCode/Name 从 `apps/desktop/version.json` 生成（major*1e6+minor*1e3+pa
 
 ```
 app/src/main/java/app/local/bandi/mobile/
-├── MainActivity.kt   单 Activity 三视图（登录 / 设备列表 / 面板）+ 返回键分流
+├── MainActivity.kt   单 Activity 三视图（登录 / 设备列表 / 面板）+ 返回键分流 + 主题铺色
 ├── HubApi.kt         中枢三条调用（phone-login / devices / ticket），错误统一人话
 ├── Probe.kt          局域网探活：裸 TCP GET /api/hello，4 秒超时，认 platform=bandi
-├── SessionStore.kt   中枢会话与地址的本机存储（密码从不落盘）
-└── BandiShell.kt     addJavascriptInterface 桥：面板「当前设备 / 退出登录」回调壳
+├── SessionStore.kt   中枢会话与地址、面板主题的本机存储（密码从不落盘）
+└── BandiShell.kt     addJavascriptInterface 桥：面板「当前设备 / 退出登录 / 主题」回调壳
 ```
 
 面板侧的桥在 `apps/web/js/settings.mjs`：功能检测 `window.BandiShell`（原生壳）
 优先，旧 Tauri 壳的 `__BANDI_SHELL__` hash 流兜底，浏览器 / PWA 走各自原路径。
+
+主题壳跟面板（2026-11-17，`docs/形态决策.md` §⑩）：面板 `applyTheme` 报解析后的深浅
+（`shell.mjs syncShellTheme` → `BandiShell.setTheme`），壳存住、下次画原生屏按它铺；
+深色色值对齐网页 style.css（`res/values-night/`）。进门冷加载的 WebView 底色也跟主题，
+不再白闪。
 
 ## 与 Tauri 壳的关系
 

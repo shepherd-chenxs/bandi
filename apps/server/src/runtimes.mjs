@@ -441,20 +441,6 @@ export function addRuntime(deviceId, { family, label, path: cliPath, note } = {}
   return { runtime: publicRuntime(getRuntime(deviceId, id)) };
 }
 
-/** 删运行时。预置的不让删 —— 删了就没有默认执行端了 */
-export function removeRuntime(deviceId, runtimeId) {
-  const rt = getRuntime(deviceId, runtimeId);
-  if (!rt) return { error: '没有这个运行时' };
-  if (SEEDED.includes(runtimeId)) return { error: '预置运行时不能删，只能停用' };
-
-  const saved = readSaved();
-  const scoped = ensureScoped(saved, deviceId);
-  delete scoped[runtimeId];
-  writeSaved(saved);
-  return { removed: true };
-}
-
-/** 实探一次：跑 `--version`，验证路径有效并拿版本号 */
 /**
  * 探测前先判一次"班底起得来吗"，起不来就直接给一句人话。
  *
@@ -484,17 +470,6 @@ function unlaunchableReason(familyId, p) {
     return `这是个 ${ext} 批处理脚本，班底不能直接启动它 —— 请指向它背后的 .exe`;
   }
   return '这个文件班底起不来';
-}
-
-export async function probe(deviceId, runtimeId) {
-  const rt = getRuntime(deviceId, runtimeId);
-  if (!rt) return { ok: false, error: '没有这个运行时' };
-  const why = unlaunchableReason(rt.family, rt.path);
-  if (why) return { ok: false, error: why, path: rt.path };
-  const adapter = ADAPTERS[rt.adapter];
-  if (!adapter?.probe) return { ok: false, error: '这个协议族没有实现探测' };
-  const r = await adapter.probe(rt.path);
-  return { ...r, path: rt.path };
 }
 
 function publicRuntime(r) {

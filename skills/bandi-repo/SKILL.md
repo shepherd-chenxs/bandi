@@ -66,7 +66,7 @@ git log -L <行号>,<行号+3>:<用例文件>   # 例：git log -L 766,769:apps/
 
 **节点 / 远程 / 局域网**：`smoke-node` 节点报到掉线 · `smoke-node-jobs` 节点领活 · `smoke-node-panel` 节点配置面 · `smoke-node-task` 一键装运行时 · `smoke-lan-join` 加入总机 · `smoke-lan-origin` 局域网来源闸 · `smoke-runtime-heal` 路径自愈 · `smoke-lifecycle` 控制面起停 · `smoke-ssh` 服务器与密钥 · `smoke-pair` 手机配对 · `smoke-data-dir` 数据落点与远程访问
 
-**飞书 / 连接器 / 插件**：`smoke-feishu` 飞书通道 · `smoke-connectors` 连接器接口 · `smoke-plugin-blocks` 插件新版式块 · `smoke-status` 研发面板 · `smoke-quota` 模型额度
+**飞书 / 连接器 / 插件**：`smoke-feishu` 飞书通道 · `smoke-connectors` 连接器接口 · `smoke-plugin-blocks` 插件新版式块 · `smoke-status` 研发面板
 
 **群 / 专家 / 内置员工**：`smoke-group-dissolve` 群解散（消息留只读）· `smoke-group-mentions` 群 @ 排队 · `smoke-experts` 专家库 · `smoke-steward` 系统管家崔老三 · `smoke-autostart` 开机自启
 
