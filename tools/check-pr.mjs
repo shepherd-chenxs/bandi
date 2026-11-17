@@ -142,6 +142,11 @@ const ASSERT_WAIVERS = {
   'apps/server/src/smoke-autostart.mjs': '自启目标只剩 control-plane（节点自启随多机删除）：目标清单/安装/状态仍有覆盖',
   'apps/server/src/smoke-conversation-delete.mjs': 'node_jobs 远程执行台账随多机删除，删掉 1 条相关断言；会话删除语义断言（含四列置空）不变',
   'apps/server/src/smoke-run-progress.mjs': '过程快照/进度卡重做为单行气泡 + 共用 run-live 状态机（v176–v190）：旧断言改写为新断言，非放松',
+  // 本批（2026-11-16）：立成卡链路（POST /api/conversations/:id/card）与额度/生图整体退场。
+  // 删掉的断言随被测对象一起下线；替代验收 = 冒烟余下断言 + run-smokes 全绿。
+  'apps/server/src/smoke-chat-to-board.mjs': '立成卡链路 2026-11-16 撤除：11 条立卡相关断言随接口下线；聊天不进看板 / 员工详情收聊天行两条主验收保留',
+  'apps/server/src/smoke-project-tasks.mjs': 'ghostCard（会话立卡 → 400）断言随立成卡链路撤除删除：接口已不存在',
+  'apps/server/src/smoke-quota.mjs': '额度模块整体退场（quota.mjs / GET /api/quota / 迁移 DROP quotas）：被测对象不存在，无替代',
 };
 
 /*
