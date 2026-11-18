@@ -22,7 +22,9 @@ serde_json = { version = "1", features = ["preserve_order"] }
 # 薄壳只需要 tauri：窗口 + 进程。
 # `v1.0.0` 那条「SSH 服务器登记」线整体删掉之后，serde_yaml / russh / tokio / getrandom /
 # chrono 全都不需要了 —— russh 尤其大（连带几百个 crate），卸掉后构建快一个量级。
-tauri = { version = "2", features = [] }
+# `webview-data-url`：服务起不来时错误页走 data: URL（src/lib.rs），没这个 feature
+# debug 构建会直接 panic 闪退，连报错都看不到（2026-11-19 修）。
+tauri = { version = "2", features = ["webview-data-url"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
