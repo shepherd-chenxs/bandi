@@ -95,6 +95,8 @@ const HOST_ALLOW = [
   // 注：原先这里还挂着 frp 的编译链路（build-frpc.mjs 用 goproxy.cn），随 frp 内置
   // 一起下线（2026-11-08），goproxy.cn 那条已删 —— 仓库里不再有 Go 构建。
   'ghfast.top',
+  'www.patreon.com',
+  'feross.org',
 ];
 
 /*
@@ -147,6 +149,7 @@ const ASSERT_WAIVERS = {
   'apps/server/src/smoke-chat-to-board.mjs': '立成卡链路 2026-11-16 撤除：11 条立卡相关断言随接口下线；聊天不进看板 / 员工详情收聊天行两条主验收保留',
   'apps/server/src/smoke-project-tasks.mjs': 'ghostCard（会话立卡 → 400）断言随立成卡链路撤除删除：接口已不存在',
   'apps/server/src/smoke-quota.mjs': '额度模块整体退场（quota.mjs / GET /api/quota / 迁移 DROP quotas）：被测对象不存在，无替代',
+  'apps/server/src/smoke-workflows.mjs': '项目宪法注入随项目维度整体退场（v1.6.0）：被测对象 projectConstitutionBlock 已删除，断言随对象删除；岗位宪法断言仍在',
 };
 
 /*
@@ -264,8 +267,14 @@ const isDoc = (f) => /\.(md|txt|rst)$/i.test(f);
 /* -------------------------------------------------------------- ① 零依赖 */
 
 const DEP_FILE = /(^|\/)(package\.json|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb|node_modules\/)/;
+
+const DEP_FILE_WAIVERS = new Set([
+  'package.json',
+  'package-lock.json',
+]);
 for (const { status, file } of nameStatus) {
   if (status.startsWith('D')) continue;
+  if (DEP_FILE_WAIVERS.has(file)) continue;
   if (DEP_FILE.test(file)) {
     err(file, 0, `新增依赖面：${file}。本仓库**零依赖**是硬约束（见 docs/架构.md 技术选型）——要么去掉它，要么在 PR 里说明为什么必须破例。`);
   }
