@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { dataDir, repoRoot } from './config.mjs';
+import { pluginsPath, repoRoot } from './config.mjs';
 
 /**
  * 插件（界面插槽）＋ 插件市场。
@@ -88,7 +88,7 @@ import { dataDir, repoRoot } from './config.mjs';
  */
 export const pluginsRoot = path.join(repoRoot, 'plugins');
 export const catalogRoot = path.join(repoRoot, 'apps', 'server', 'catalog', 'plugins');
-const LEDGER = path.join(dataDir, 'plugins.json');
+const LEDGER = () => pluginsPath();
 
 export const KNOWN_SLOTS = ['plugins', 'persona.section', 'settings.section'];
 /* settings.section（2026-10-26）：设置页分节面板 —— 前端用同一套声明式渲染画进
@@ -421,7 +421,7 @@ function scan(root) {
 
 function readLedger() {
   try {
-    const j = JSON.parse(fs.readFileSync(LEDGER, 'utf8'));
+    const j = JSON.parse(fs.readFileSync(LEDGER(), 'utf8'));
     return j && typeof j === 'object' && !Array.isArray(j) ? j : {};
   } catch {
     return {};
@@ -429,8 +429,9 @@ function readLedger() {
 }
 
 function writeLedger(obj) {
-  fs.mkdirSync(dataDir, { recursive: true });
-  fs.writeFileSync(LEDGER, JSON.stringify(obj, null, 2), 'utf8');
+  const target = pluginsPath();
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, JSON.stringify(obj, null, 2), 'utf8');
 }
 
 /** 已装插件：目录在 plugins/ 下的那些（账本里没记录的**也算已装**，否则手写进去的插件会凭空消失） */
@@ -528,4 +529,4 @@ export function uninstall(id) {
   return { removed: true, path: dest };
 }
 
-export const ledgerPath = LEDGER;
+export const ledgerPath = () => pluginsPath();

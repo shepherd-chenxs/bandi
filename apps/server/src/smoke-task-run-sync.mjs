@@ -168,6 +168,83 @@ check('完成 + 有回话 → 仍是「完成」', status.conversationStatusFor(
 check('人停的 / 失败的 → 原样（不改成阻塞）', status.conversationStatusFor('stopped', '') === 'stopped' && status.conversationStatusFor('failed', '') === 'failed');
 check('空回话占位文案带「没有回话」', String(status.EMPTY_REPLY_TEXT).includes('没有回话'));
 
+console.log('\n⑦ 被时间上限掐的：说清"跑了多久就收了"，别写成"没交回结论"（2026-11-19 实报 pt-a0d785d8）');
+const cBudget = makeRunningCard('到点上收的活', 'r-budget');
+pt.onTaskRunFinished({
+  id: 'r-budget',
+  status: 'done',
+  finalText: 'Let me look at the dispatch module.\n\n（这一轮有 2 分钟没有进展（进程没动静了），我先停在这儿 —— 回一句「继续」，我接着原来的会话往下做，之前做的不用重来。）',
+  usageRecord: { limitHit: 'idle', idleMs: 120000, toolCalls: 33 },
+});
+const cBudget2 = store.getProjectTask(cBudget.id);
+check('状态仍是已阻塞（不许自己跳待验收）', cBudget2.status === 'blocked', cBudget2.status);
+check('说明写了多久没动静（不是"跑太久"）', /有 2 分钟没有任何进展就收了/.test(cBudget2.description), JSON.stringify(cBudget2.description.slice(-130)));
+check('说明不许说成"活太长被砍"', !/跑了 2 分钟/.test(cBudget2.description), JSON.stringify(cBudget2.description.slice(-130)));
+check('说明给了下一步（再派一次 / 回一句「继续」）', /再派一次/.test(cBudget2.description), JSON.stringify(cBudget2.description.slice(-60)));
+check('不再写"没有交回可验收的结论"（那不是实情）',
+  !/没有交回可验收的结论/.test(cBudget2.description), JSON.stringify(cBudget2.description.slice(-80)));
+
+/*
+ * ⑧ 2026-11-19 实报（用户截图）：卡第二次到「已阻塞」，回执与第一次**逐字相同** —— 唤醒 PM 的
+ * silent 消息一模一样，模型判定"平台把上一条重发了"，回一句"我上次已处理"就收工：卡明明还挂
+ * 「已阻塞」，PM 却对雇主说"已重新开跑，在等他补交证据"。
+ * 修法：每条回执带本轮指纹（第 N 轮 / 起跑→收尾 / 时长 / runId），两轮字面必须不同。
+ */
+console.log('\n⑧ 第二次到同一状态：回执必须带本轮指纹（不许和上一条逐字一样）');
+const pmPersona = store.createPersona({ name: '回执测试PM', role: '项目经理', roleKey: 'pm' });
+const roundCard = store.createProjectTask({
+  projectId: project.id,
+  title: '回执轮次的卡',
+  status: 'blocked',
+  creatorConvId: null,
+});
+// 一卡一会话（exec 会话，execScope = task:<卡id>）—— 轮次就是在这里数出来的
+const execConv = store.ensureExecConversation({
+  personaId: pmPersona.id,
+  scope: `task:${roundCard.id}`,
+  title: '任务 · 回执轮次',
+  projectId: project.id,
+});
+const run1 = store.createRun({ conversationId: execConv.id, runtime: 'codex', personaId: pmPersona.id });
+store.finishRun(run1.id, { status: 'done' });
+const run2 = store.createRun({ conversationId: execConv.id, runtime: 'codex', personaId: pmPersona.id });
+store.finishRun(run2.id, { status: 'done' });
+
+const why = '跑完了，但没有交回可验收的结论（没写 [完成]，也没写 [受阻]）—— 卡停在「已阻塞」';
+const text1 = pt.cardReceiptText({
+  task: { ...roundCard, conversationId: execConv.id, runId: run1.id },
+  personaName: '贺韬',
+  why,
+});
+const text2 = pt.cardReceiptText({
+  task: { ...roundCard, conversationId: execConv.id, runId: run2.id },
+  personaName: '贺韬',
+  why,
+});
+check('第一轮回执带「第 1 轮」', /【卡片回执 · 第 1 轮】/.test(text1), text1.slice(0, 60));
+check('第二轮回执带「第 2 轮」', /【卡片回执 · 第 2 轮】/.test(text2), text2.slice(0, 60));
+check('两轮回执不是同一段字（这是这次的病根）', text1 !== text2);
+check('带本轮的 runId（能对上台账）', text1.includes(run1.id) && text2.includes(run2.id));
+check('带起跑 → 收尾时刻', /\d\d:\d\d → \d\d:\d\d/.test(text2), text2.match(/（这一轮[^）]*）/)?.[0] ?? '');
+check('第二轮明说"不是重发"', /不是上一条回执的重发/.test(text2));
+// 待验收是好事，措辞不能照抄"又停在这里"（2026-11-19 实跑：报「待验收」写成"又停在这里"像又出事了）
+const textReview = pt.cardReceiptText({
+  task: { ...roundCard, status: 'review', conversationId: execConv.id, runId: run2.id },
+  personaName: '贺韬',
+  why: '跑完了，员工回报完成（[完成]），等你验收',
+});
+check('待验收态写"交回的结果"，不写"又停在这里"',
+  /交回的结果/.test(textReview) && !/又停在这里/.test(textReview), textReview.match(/⚠️[^：]*/)?.[0] ?? '');
+check('第一轮不说"重发"（没跑过第二轮，别添乱）', !/重发/.test(text1));
+check('群卡（一卡一会话不成立）不瞎数轮次', (() => {
+  const t = pt.cardReceiptText({
+    task: { ...roundCard, conversationId: null, runId: run1.id },
+    personaName: '贺韬',
+    why,
+  });
+  return /【卡片回执】/.test(t) && !/第 \d+ 轮/.test(t);
+})());
+
 try {
   fs.rmSync(tmp, { recursive: true, force: true });
 } catch {

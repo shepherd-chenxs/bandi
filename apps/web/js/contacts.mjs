@@ -6,7 +6,7 @@
  * 手机那种 ABC 的"）：上方一组入口（群聊 / 部门，点进去是各自的列表），下方全部员工
  * 按拼音首字母 A–Z 分组 + 右侧索引条。**只走窄屏**，桌面仍是部门分组。
  * A–Z 的首字母判定沿用 2026-10-20 那版的边界字方案（见 nameInitial 注释）。 */
-import { esc, personSubtitle, saveCollapsed, toast, userLabel } from './shell.mjs';
+import { esc, personSubtitle, roleNameOf, saveCollapsed, toast, userLabel } from './shell.mjs';
 import { ICON_CLOUD, ICON_FOLDER, cut, hhmm, initial, personaAvatar, plain } from './ui.mjs';
 import { openSettings, settingsGroups } from './settings.mjs';
 import { archivedEntryHTML, closeCtxMenu, convDisplayName, enterArchiveView, openConversationSafe, renderArchiveList } from './listmenu.mjs';
@@ -18,9 +18,6 @@ import { gidOf, openGroupDetail } from './groups.mjs';
 import { $, S } from './core.mjs';
 import { openProjectsPage, renderProjectList } from './projects.mjs';
 import { openGroupDialog } from './misc.mjs';
-// 组织架构（2026-11-11 Phase 3）：左栏子菜单与右区页面；两者互相 import 但只在运行时调用
-// （settings ↔ contacts 早就是同一个模式，函数声明提升保证了初始化顺序）
-import { openOrg, renderOrgList } from './org.mjs';
 // 信箱（2026-11-11 主从改版）：左栏清单归 inbox.mjs 画；两边互相 import，同样只在运行时调用
 import { renderInboxList } from './inbox.mjs';
 // 返回键层级（2026-11-17）：通讯录子页（部门/群聊/搜索）登记成一层，系统返回键才收它
@@ -217,12 +214,6 @@ export function renderList() {
   if (foot) foot.innerHTML = '';
   const q = S.filter.trim().toLowerCase();
   const match = (name) => !q || String(name || '').toLowerCase().includes(q);
-
-  // 组织架构（2026-11-11 Phase 3）：左栏是它的子菜单；右区由 openOrg 画
-  if (S.nav === 'org') {
-    renderOrgList();
-    return;
-  }
 
   /* 「已移除的会话」子视图已随归档功能一并删除（2026-10-20，用户要求）：
      「不显示」不再往某个归档列表里放，它的记录只在「聊天记录」抽屉里可见；
@@ -480,7 +471,9 @@ export function renderList() {
   const groups = (S.groups ?? [])
     .map((g) => ({ ...g, conv: latestConvOfGroup.get(g.id) ?? null }))
     .filter((g) => match(g.title));
-  const people = S.personas.filter((p) => match(p.name) || match(p.department));
+  // 搜索支持姓名 / 部门 / 岗位（2026-11-19 用户：「支持按照岗位搜」）——
+  // 岗位名从 roleKey 解析（roleNameOf），跟列表副标题显示的是同一个口径。
+  const people = S.personas.filter((p) => match(p.name) || match(p.department) || match(roleNameOf(p)));
   // 真人（2026-10-31 用户概念落地）：设置 → 用户里建的账号，通讯录单独一段，跟数字员工分开。
   // 自己不摆进来（2026-11-04 用户实报"用户不要显示在这里"）：通讯录是找别人的名册，
   // 自己（me = 回环 / 令牌的本机自动登录用户，或登录用户本人）摆在里面没有意义。
@@ -527,8 +520,12 @@ export function renderList() {
     return;
   }
 
-  // 桌面通讯录：常驻搜索框是唯一搜索入口，把它还回来（手机分支在上面藏了它）
-  if (S.nav === 'contacts') $('search')?.closest('.list-search')?.classList.remove('hidden');
+  // 桌面通讯录：常驻搜索框是唯一搜索入口，把它还回来（手机分支在上面藏了它）。
+  // 占位文案写清能搜什么（2026-11-19 起加上岗位），跟「拉人进群」搜索框同口径。
+  if (S.nav === 'contacts') {
+    $('search')?.closest('.list-search')?.classList.remove('hidden');
+    { const si = $('search'); if (si) si.placeholder = '搜索姓名 / 岗位 / 部门'; }
+  }
 
   $('listBody').innerHTML = !groups.length && !people.length && !users.length
     ? '<div class="empty" style="padding:36px 12px">通讯录还是空的<br />点右上角 ＋ 发起群聊或添加员工</div>'
@@ -1130,7 +1127,7 @@ function renderCvSearchPage(body, { groups, people, users }) {
         <circle cx="5.5" cy="5.5" r="4" fill="none" stroke="currentColor" stroke-width="1.4"/>
         <path d="M8.7 8.7 12 12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
       </svg>
-      <input id="cvSearchInput" placeholder="搜索群聊、部门、成员" aria-label="搜索通讯录" autocomplete="off" />
+      <input id="cvSearchInput" placeholder="搜索群聊、岗位、部门、成员" aria-label="搜索通讯录" autocomplete="off" />
       <button id="cvSearchClear" class="ls-clear" type="button" aria-label="清空搜索" hidden>×</button>
     </div></div>
     <div id="cvSearchRes"></div>`;
@@ -1146,7 +1143,7 @@ function renderCvSearchPage(body, { groups, people, users }) {
     }
     const m = (s) => String(s || '').toLowerCase().includes(term);
     const gs = groups.filter((g) => m(g.title));
-    const ps = people.filter((p) => m(p.name) || m(p.department));
+    const ps = people.filter((p) => m(p.name) || m(p.department) || m(roleNameOf(p)));
     const us = users.filter((u) => m(u.name) || m(u.nickname));
     res.innerHTML =
       gs.map(groupRowHTML).join('') + us.map(userRowHTML).join('') + ps.map(personRowHTML).join('')
@@ -1407,7 +1404,6 @@ export function showView(which) {
   // 只损失那一页，不该把整个 showView 炸掉连累所有页面白屏
   on('detailView', which === 'detail');
   on('settingsView', which === 'settings');
-  on('orgView', which === 'org');
   on('inboxView', which === 'inbox');
   on('groupView', which === 'group');
   on('expertsView', which === 'experts');

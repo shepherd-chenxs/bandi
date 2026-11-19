@@ -233,24 +233,14 @@ const auto = finishWith('t-auto', 'ar-auto');
 check('非 manual：自动往下走，approve=end → 流程收尾', auto.run?.status === 'done', `${auto.task?.status} / ${auto.run?.status}`);
 
 /*
- * ⑪ 内建模板的 detail 随平台更新（产物模板 / 收敛检查写进节点提示词）＋ 项目宪法的注入块。
+ * ⑪ 内建模板的 detail 随平台更新（产物模板 / 收敛检查写进节点提示词）。
  */
-console.log('\n⑪ 模板 detail 同步与项目宪法注入');
+console.log('\n⑪ 模板 detail 同步');
 workflows.ensureBuiltInTemplate();
 const details = new Map(workflows.nodesOf(store.getWorkflowTemplate('bandi-delivery')).map((n) => [n.id, n.detail]));
 check('谈需求指向 spec 模板', (details.get('n1') ?? '').includes('docs/模板/spec.md'), details.get('n1'));
 check('定计划指向 plan/task 模板且不写卡文件', (details.get('n2') ?? '').includes('docs/模板/plan.md') && (details.get('n2') ?? '').includes('docs/模板/task.md'));
 check('测试带收敛检查', (details.get('n4') ?? '').includes('收敛'), details.get('n4'));
-const dispatch = await import('./dispatch.mjs');
-const pj = store.createProject({ name: '宪法项目', root: tmp });
-check('没写宪法 → 什么都不注', dispatch.projectConstitutionBlock(pj.id) === '', JSON.stringify(dispatch.projectConstitutionBlock(pj.id)));
-store.updateProject(pj.id, { constitution: '零依赖，不许引入 npm 包' });
-const blk = dispatch.projectConstitutionBlock(pj.id);
-check('写了宪法 → 全文注入', blk.includes('零依赖，不许引入 npm 包'), blk);
-check('注入块带优先级规则（契约赢）', blk.includes('以契约为准'), blk.split('\n')[1]);
-store.updateProject(pj.id, { constitution: '   ' });
-check('清空宪法 → 回到不注入', dispatch.projectConstitutionBlock(pj.id) === '');
-check('updateProject 把空串归一成 NULL', store.getProject(pj.id).constitution === null, String(store.getProject(pj.id).constitution));
 
 /*
  * ⑫ 执行结果（2026-10-18 用户要求：简洁明了）—— 界面只按三种样子渲染：

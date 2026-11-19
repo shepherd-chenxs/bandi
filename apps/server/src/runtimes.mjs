@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { dataDir } from './config.mjs';
+import { runtimesPath } from './config.mjs';
 import { pathDirs, wellKnownBins } from './path-env.mjs';
 import * as codex from './codex.mjs';
 import * as claude from './claude.mjs';
@@ -20,7 +20,7 @@ import * as dsh from './dsh.mjs';
  * 现在只有一台"本机"，因为执行端就是本进程 spawn 子进程；
  * 设备记录里已经把将来远程设备要用的字段留出来了（kind/host/port/user/keyPath）。
  */
-const FILE = path.join(dataDir, 'runtimes.json');
+const FILE = () => runtimesPath();
 
 const FAMILIES = {
   codex: {
@@ -101,15 +101,16 @@ const LOCAL_DEVICE = {
 
 function readSaved() {
   try {
-    return JSON.parse(fs.readFileSync(FILE, 'utf8'));
+    return JSON.parse(fs.readFileSync(FILE(), 'utf8'));
   } catch {
     return {};
   }
 }
 
 function writeSaved(obj) {
-  fs.mkdirSync(dataDir, { recursive: true });
-  fs.writeFileSync(FILE, JSON.stringify(obj, null, 2), 'utf8');
+  const target = runtimesPath();
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, JSON.stringify(obj, null, 2), 'utf8');
 }
 
 /** 老格式（顶层直接是 codex/dsh）也要能读，不然升级会丢配置 */

@@ -829,24 +829,27 @@ const esc = escapeHtml;
  */
 
 /**
- * B 字母标（与 apps/web/index.html 同源的双椭圆镂空 B）。
- * key 用来区分同一页上的多处实例 —— mask 的 id 在文档里必须唯一。
+ * 品牌标「分玉」（design/logo/bandi-brand.md v2.1）：圆沿竖直直径切成两片、两片贴合、
+ * 右片下沉 —— 「分而后成班」。
+ *
+ * 三条口径，抄的是 `design/logo/bandi-icon-favicon.svg`，不是自己画的：
+ *   · 登录页是**门面**（与启动页、关于页同档），按 §三 主用「墨底反白」；
+ *   · 这里渲染成 40px，落在 §六「≤48px 一律用 favicon 光学版」档 —— 错位 22、放大 1.15、
+ *     单色无缝。**不要拿 icon-light 缩放**：全版 12 单位的缝在 20px mark 上只有 2px，一糊就是实心圆；
+ *   · §八 禁用清单：不渐变、不投影、不描边。标识的高级感来自克制，不是发光。
+ *
+ * 为什么内联而不是 `<img src>`：这一页零外部依赖、零脚本（脚本挂了人也得能登进来），
+ * 一个内联 svg 不必为它开静态路由。
+ *
+ * @param {'hub'} key 仅用于表达"这是门面位置"，目前只有一处；将来多处实例时靠它区分。
  */
-function brandSvg(key) {
-  const id = `b-hole-${key}`;
-  return `<svg viewBox="0 0 512 512" aria-hidden="true">
-  <defs>
-    <mask id="${id}">
-      <rect width="512" height="512" fill="#fff"/>
-      <ellipse cx="268" cy="206" rx="36" ry="29" fill="#000"/>
-      <ellipse cx="274" cy="340" rx="40" ry="31" fill="#000"/>
-    </mask>
-  </defs>
-  <g mask="url(#${id})" fill="#fff">
-    <rect x="154" y="138" width="72" height="236" rx="34"/>
-    <path d="M194,156 C272,142 338,168 338,208 C338,248 288,268 194,264 Z"/>
-    <path d="M194,282 C284,276 348,306 348,340 C348,372 288,388 194,382 Z"/>
-    <rect x="172" y="336" width="70" height="52" rx="26"/>
+function bandiMark(key = 'hub') {
+  return `<svg viewBox="0 0 512 512" role="img" aria-label="班底" data-mark="${key}">
+  <title>班底</title>
+  <rect width="512" height="512" rx="110" fill="#12161A"/>
+  <g transform="translate(256 256) scale(3.737) translate(-50 -54.8)" fill="#F2F1ED">
+    <path d="M50 4 A40 40 0 0 0 50 84 Z"/>
+    <path d="M50 4 A40 40 0 0 1 50 84 Z" transform="translate(0 22)"/>
   </g>
 </svg>`;
 }
@@ -892,7 +895,8 @@ function hubOf(auth) {
  * @param {{ hub: { host: string, name?: string|null }, error?: string|null, username?: string, mobile?: boolean }} args
  */
 function loginHubPage({ hub, error = null, username = '', mobile = false, csrf = '' }) {
-  const host = esc(hub?.host || '中枢');
+  // hub 现在没有落点：品牌区只留标 + 「班底」，「登录 xxx 上的账号」那行副标题已删。
+  // 形参留着是为了调用方（renderHubLoginPage / guard）不用跟着改 —— 要恢复那行，用它就是。
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -901,13 +905,14 @@ function loginHubPage({ hub, error = null, username = '', mobile = false, csrf =
 <title>班底 · 登录</title>
 <style>
   :root {
-    --bg: #101216;
-    --card: #171a20;
+    --bg: #0f1116;
+    --card: #16191f;
     --line: rgba(255,255,255,.10);
-    --line-strong: rgba(255,255,255,.20);
+    --line-strong: rgba(255,255,255,.14);
     --text: #e9ecf2;
     --dim: #8d94a5;
-    --input: rgba(255,255,255,.045);
+    --label: #c9cfdc;
+    --input: rgba(255,255,255,.04);
     --accent: #0a84ff;
     --btn: #0071e3;
     --bad: #ff8a80;
@@ -916,13 +921,14 @@ function loginHubPage({ hub, error = null, username = '', mobile = false, csrf =
   }
   @media (prefers-color-scheme: light) {
     :root {
-      --bg: #f7f8fb;
+      --bg: #f4f6f9;
       --card: #ffffff;
-      --line: rgba(15,23,42,.10);
-      --line-strong: rgba(15,23,42,.20);
-      --text: #1a1f2a;
-      --dim: #67718a;
-      --input: #f4f6fa;
+      --line: #e8ebf0;
+      --line-strong: #d9dee7;
+      --text: #101828;
+      --dim: #667085;
+      --label: #344054;
+      --input: #ffffff;
       --accent: #0066cc;
       --btn: #0066cc;
       --bad: #c0392b;
@@ -933,30 +939,42 @@ function loginHubPage({ hub, error = null, username = '', mobile = false, csrf =
   * { box-sizing: border-box; }
   body {
     margin: 0; min-height: 100dvh; background: var(--bg); color: var(--text);
-    display: grid; place-items: center; padding: 28px 20px calc(28px + env(safe-area-inset-bottom));
+    display: flex; flex-direction: column; align-items: center;
+    padding: 28px 20px calc(28px + env(safe-area-inset-bottom));
     font: 14.5px/1.6 system-ui, -apple-system, 'Segoe UI', 'Noto Sans SC', 'Microsoft YaHei', sans-serif;
     -webkit-text-size-adjust: 100%;
   }
-  .card { width: 100%; max-width: 372px; }
-  .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 26px; }
-  .logo {
-    width: 40px; height: 40px; border-radius: 11px; flex: none; display: grid; place-items: center;
-    background: linear-gradient(150deg, #4b6cb7, #182848);
-    box-shadow: 0 10px 22px -12px rgba(24,40,72,.85);
+  /* 一张卡：372px 的内容不再漂在底色上，脚注也才有归属。
+     垂直居中用 margin:auto 而不是 justify-content:center —— 内容比视口高时（手机键盘弹起）
+     auto 边距会收成 0、卡片从顶部开始，还能往下滚；justify-content 会把上下一起溢出，
+     标题被顶出屏幕后滚不回来。 */
+  .card {
+    width: 100%; max-width: 372px; margin: auto 0; padding: 24px 24px 20px;
+    background: var(--card); border: 1px solid var(--line); border-radius: 14px;
   }
-  .logo svg { width: 22px; height: 22px; }
-  h1 { margin: 0; font-size: 19px; font-weight: 650; letter-spacing: .2px; }
-  .tag { margin: 2px 0 0; font-size: 12.5px; color: var(--dim); }
-  form { margin: 0; display: flex; flex-direction: column; gap: 10px; }
-  label { display: block; font-size: 12.5px; color: var(--dim); margin-bottom: 6px; }
+  .brand { display: flex; align-items: center; gap: 11px; margin-bottom: 20px; }
+  /* 标识自带墨底与 21.5% 圆角（画在 svg 里），CSS 不再加底色/投影 —— VI §八 */
+  .logo { width: 40px; height: 40px; flex: none; }
+  .logo svg { display: block; width: 100%; height: 100%; }
+  /* 标题照 bandi-lockup-light.svg 的口径：34/80 字号比 → 40px 标识配 17~18px，700、字距 1（按比例 0.5px）。
+     别自创更细的字重：lockup 里的字标就是 700，改细了就不是同一套组合了。 */
+  h1 { margin: 0; font-size: 18px; font-weight: 700; letter-spacing: .5px; line-height: 1.3; }
+  form { margin: 0; display: flex; flex-direction: column; gap: 18px; }
+  /* 标签行：左 label 右提示。「11 位」这种约束放在框里当 placeholder，会跟 label 抢同一层灰 ——
+     一个框里两个灰字，人分不清哪个是名字哪个是说明。 */
+  .row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+  label { display: block; font-size: 12px; font-weight: 500; color: var(--label); }
+  .hint { font-size: 11px; color: var(--dim); }
   input {
-    width: 100%; height: 44px; padding: 0 13px; border-radius: 10px;
-    border: 1px solid var(--line); background: var(--input); color: var(--text);
+    width: 100%; height: 44px; padding: 0 12px; border-radius: 9px;
+    border: 1px solid var(--line-strong); background: var(--input); color: var(--text);
     font: inherit; outline: none; transition: border-color .15s, box-shadow .15s;
   }
-  input::placeholder { color: var(--dim); }
-  input:hover { border-color: var(--line-strong); }
-  input:focus { border-color: var(--accent); box-shadow: 0 0 0 3.5px color-mix(in srgb, var(--accent) 22%, transparent); }
+  input::placeholder { color: var(--dim); opacity: .8; }
+  input:hover { border-color: color-mix(in srgb, var(--text) 24%, transparent); }
+  /* 焦点靠"边框加粗"表达，不用外扩的 glow 环：3.5px 的外环会左右各顶出去，
+     一进页面（autofocus）就把唯一的那条左对齐线弄歪。inset 阴影长在盒子里，尺寸不变。 */
+  input:focus { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
   input:-webkit-autofill, input:-webkit-autofill:hover, input:-webkit-autofill:focus {
     -webkit-text-fill-color: var(--text);
     -webkit-box-shadow: 0 0 0 100px var(--card) inset;
@@ -964,55 +982,56 @@ function loginHubPage({ hub, error = null, username = '', mobile = false, csrf =
     transition: background-color 9999s ease-out;
   }
   .err {
-    margin: 0 0 14px; padding: 10px 12px; border-radius: 10px;
+    margin: 0 0 16px; padding: 10px 12px; border-radius: 9px;
     font-size: 12.5px; line-height: 1.5; color: var(--bad);
     background: var(--bad-bg); border: 1px solid color-mix(in srgb, var(--bad) 28%, transparent);
   }
+  /* 按钮是终点，不是第五个字段：比输入框高 2px、再拉开 6px；投影去掉（VI §八 禁发光） */
   button {
-    height: 44px; border-radius: 10px; border: 0; cursor: pointer;
-    background: var(--btn); color: #fff; font: inherit; font-weight: 600; letter-spacing: .3px;
-    box-shadow: 0 10px 22px -12px rgba(0,86,214,.75);
+    height: 46px; border-radius: 9px; border: 0; cursor: pointer; margin-top: 6px;
+    background: var(--btn); color: #fff; font: inherit; font-weight: 500; letter-spacing: 0;
     transition: filter .15s, transform .12s;
   }
   button:hover { filter: brightness(1.08); }
-  button:active { transform: translateY(1px); filter: brightness(.96); }
+  button:active { transform: translateY(1px); filter: brightness(.97); }
   button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  button.link {
-    height: auto; background: none; box-shadow: none; color: var(--dim);
-    font-weight: 400; letter-spacing: 0; padding: 6px; margin-top: 2px;
-  }
-  button.link:hover { color: var(--text); filter: none; }
-  button.link:active { transform: none; }
-  .foot { margin: 22px 0 0; font-size: 12px; color: var(--dim); text-align: center; }
-  .foot code { font: 11.5px/1 ui-monospace, Consolas, monospace; opacity: .8; }
+  button:disabled { opacity: .55; cursor: not-allowed; filter: none; transform: none; }
+  /* 脚注跟表单同一条左边界。"提交就自动创建"是这页最该被读到的一句，不能是唯一居中又最小的一行 */
+  .foot { margin: 14px 0 0; font-size: 12.5px; color: var(--dim); line-height: 1.6; }
+  .foot strong { font-weight: 500; color: var(--text); }
+  code { font-family: ui-monospace, Consolas, monospace; font-size: .92em; letter-spacing: 0; }
 </style>
 </head>
 <body>
   <div class="card">
     <div class="brand">
-      <div class="logo">${brandSvg('hub')}</div>
+      <div class="logo">${bandiMark('hub')}</div>
       <div>
         <h1>班底</h1>
-        <p class="tag">登录 <code>${host}</code> 上的账号</p>
       </div>
     </div>
-    ${error ? `<p class="err">${esc(error)}</p>` : ''}
+    ${error ? `<p class="err" role="alert">${esc(error)}</p>` : ''}
     <form method="post" action="/hub/login" autocomplete="on">
       <!-- _csrf 与 bandi_csrf Cookie 成对：提交端在 Origin 缺失/为 null 时靠它兜底（routes/hub.mjs） -->
       ${csrf ? `<input type="hidden" name="_csrf" value="${esc(csrf)}" />` : ''}
       <div>
-        <label for="u">手机号</label>
+        <div class="row">
+          <label for="u">手机号</label>
+          <span class="hint" id="u-hint">11 位</span>
+        </div>
         <input id="u" name="username" value="${esc(username)}" type="tel" inputmode="tel"
-               autocomplete="tel" maxlength="11" placeholder="11 位手机号"
+               autocomplete="tel" maxlength="11" aria-describedby="u-hint"
                autocapitalize="off" spellcheck="false" required ${mobile ? '' : 'autofocus'} />
       </div>
       <div>
-        <label for="p">密码</label>
+        <div class="row">
+          <label for="p">密码</label>
+        </div>
         <input id="p" name="password" type="password" autocomplete="current-password" required />
       </div>
       <button type="submit">登录</button>
     </form>
-    <p class="foot">没注册过？提交就自动创建 · 账号在中枢上，每台机器共用</p>
+    <p class="foot">没注册过？<strong>提交就自动创建</strong></p>
   </div>
 </body>
 </html>`;

@@ -21,9 +21,7 @@ function ensureProjects() {
   ensureColumn('conversations', 'projectId', 'projectId TEXT');
   ensureColumn('workflow_runs', 'projectId', 'projectId TEXT');
   ensureColumn('projects', 'builtIn', 'builtIn INTEGER NOT NULL DEFAULT 0');
-  // 项目宪法：本项目特有的硬约束，派活时注入首轮 prompt（见 dispatch.projectConstitutionBlock）。
-  // 存平台不落项目仓库 —— 可空 = 没写宪法，派活时什么都不注。
-  ensureColumn('projects', 'constitution', 'constitution TEXT');
+
   /*
    * **项目档案**（2026-10-23，PRD「项目面板改造」）：打开项目先要知道它是干什么的、谁在管。
    * 各列都**存平台**、可空；可空 = 没填，界面明说「未填写」，不猜也不写空串。
@@ -370,11 +368,6 @@ export function updateProject(id, fields) {
     name: fields.name ?? cur.name,
     root: fields.root ?? cur.root,
     extraRoots: fields.extraRoots === undefined ? cur.extraRoots : JSON.stringify(fields.extraRoots ?? []),
-    // 宪法：空串归一成 NULL（没写就是没写，别存一条 ''）
-    constitution:
-      fields.constitution === undefined
-        ? cur.constitution
-        : String(fields.constitution ?? '').trim() || null,
     // 档案五列：同样"不传不动、传空清掉"
     summary: fields.summary === undefined ? cur.summary : emptyToNull(fields.summary),
     pmPersonaId: fields.pmPersonaId === undefined ? cur.pmPersonaId : emptyToNull(fields.pmPersonaId),
@@ -383,11 +376,11 @@ export function updateProject(id, fields) {
     endedAt: fields.endedAt === undefined ? cur.endedAt : emptyToNull(fields.endedAt),
   };
   db.prepare(
-    `UPDATE projects SET name = ?, root = ?, extraRoots = ?, constitution = ?,
+    `UPDATE projects SET name = ?, root = ?, extraRoots = ?,
        summary = ?, pmPersonaId = ?, memberPersonaIds = ?, startedAt = ?, endedAt = ?, updatedAt = ?
      WHERE id = ?`,
   ).run(
-    next.name, next.root, next.extraRoots, next.constitution,
+    next.name, next.root, next.extraRoots,
     next.summary, next.pmPersonaId, next.memberPersonaIds, next.startedAt, next.endedAt, nowIso(), id,
   );
   return getProject(id);

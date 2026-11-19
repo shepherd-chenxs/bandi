@@ -429,7 +429,6 @@ export async function handleProject(req, res, url) {
       name: body.name === undefined ? undefined : String(body.name).trim(),
       root: body.root === undefined ? undefined : String(body.root).trim(),
       extraRoots: body.extraRoots,
-      constitution: body.constitution,
       summary: body.summary,
       pmPersonaId: body.pmPersonaId,
       memberPersonaIds: body.memberPersonaIds,

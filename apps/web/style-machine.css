@@ -1,0 +1,458 @@
+/*
+ * 这台机器 · 数据管理 · 插件页等 —— 2026-11-19 从 style.css 拆出（原文件 4841 行，按"哪一页用的"分段）。
+ *
+ * 拆分只做了**物理搬移**，规则内容一个字没改。因此有三条硬约束：
+ *   ① index.html 里这几个文件的 <link> **必须保持原顺序**（core → git → ide → task → toast → machine），
+ *      CSS 靠先后定胜负，顺序一乱覆盖关系就变；
+ *   ② 新规则写到对应的段里，别再往 core 里堆 —— 它是"全站基础"，改动影响所有页面；
+ *   ③ mobile.css 必须仍然排在最后（它靠这个位置覆盖上面全部）。
+ */
+
+/* ===== 这台机器 · 数据管理 · 瘦客户端横幅 =====
+   沿用全站变量（--panel/--line/--dim/--accent）与两档圆角规则：
+   6px 给行和输入控件、10px 给"面"。不引外部字体/图标库。 */
+
+/* —— 设置 →「这台机器」 —— */
+.machine-path { font-family: ui-monospace, monospace; font-size: 11.5px; overflow-wrap: anywhere; }
+
+/* ===== 数据管理 —— 「这台机器」页底下的一个区（2026-10-29 从设置独立分节降级）=====
+   2026-11-04 重设计：库路径从节头挪到卡上面一行小字（不再跟按钮挤一行）；
+   点隔的一行统计改成等宽分格的统计块（数字大、标签小）；快照条目压成单行
+   —— 文件名居左、来源·大小·时间右对齐。颜色/圆角全走全站 tokens，
+   深浅色主题自动跟随；区头的下间距由 `.fx` 提供。 */
+.dm-card { border: 1px solid var(--line); border-radius: 10px; background: var(--panel);
+           overflow: hidden; padding-bottom: 4px; }
+.dm-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; flex: none; min-width: 0; }
+/* 库文件路径一行：节头下面、卡片上面；超长省略，完整路径悬停有 title */
+.dm-pathline { display: flex; gap: 8px; align-items: baseline; min-width: 0;
+               margin: -2px 0 10px; font-size: 12px; color: var(--dim);
+               white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 统计块：每格自带左/上 1px 边框，容器用负 margin 抵掉最外沿（卡 overflow:hidden 裁掉）
+   —— 不用"缝隙露底色"的技巧：格子折行、末行缺格时也不会露出一条灰底 */
+.dm-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); }
+.dm-stat { background: var(--panel); padding: 12px 16px 11px; min-width: 0;
+           border-left: 1px solid var(--line); border-top: 1px solid var(--line);
+           margin: -1px 0 0 -1px; }
+.dm-stat b { display: block; font-size: 18px; font-weight: 650; line-height: 24px;
+             color: var(--text); font-variant-numeric: tabular-nums;
+             overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dm-stat span { display: block; margin-top: 1px; font-size: 12px; color: var(--dim); }
+/* 「最后修改」是长日期：数字不必 18px 那么大，行高对齐别的格子就行 */
+.dm-stat-time b { font-size: 14px; font-weight: 600; }
+/* —— 备份快照：矮列表（约五行就开始滚），只读 —— */
+.dm-snaps { padding: 10px 16px 8px; border-top: 1px solid var(--line); }
+.dm-snaps-head { display: flex; align-items: baseline; gap: 10px; padding: 0 0 4px;
+                 font-size: 12.5px; font-weight: 600; min-width: 0; }
+.dm-list-count { font-size: 12px; font-weight: 400; color: var(--dim);
+                 overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dm-snaps-body { max-height: 190px; overflow: auto; }
+.dm-item { display: flex; align-items: baseline; justify-content: space-between;
+           gap: 12px; padding: 6px 0 7px; min-width: 0; }
+.dm-item + .dm-item { border-top: 1px solid var(--line); }
+.dm-item-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+                white-space: nowrap; color: var(--text); }
+.dm-item-sub { flex: none; font-size: 12px; color: var(--dim); }
+.dm-empty { padding: 6px 0 10px; font-size: 12.5px; color: var(--dim); line-height: 1.75; }
+
+/* —— 「这台机器」· 运行时空态（2026-11-04）：识别不到 CLI 时的引导卡，
+      替换原来两行灰字 —— 虚线框是"这里是空的"的全站语言，居中排版别抢眼 —— */
+.rt-empty { border: 1px dashed var(--line); border-radius: 10px;
+            padding: 28px 20px 26px; margin: 2px 0 2px;
+            display: flex; flex-direction: column; align-items: center; gap: 6px;
+            text-align: center; color: var(--dim); }
+.rt-empty svg { width: 26px; height: 26px; color: var(--dim); margin-bottom: 3px; }
+.rt-empty b { color: var(--text); font-weight: 500; font-size: 13.5px; }
+.rt-empty span { font-size: 12px; line-height: 1.7; max-width: 430px; }
+/* 有内容但还没扫过时的一行提示（补版本号用） */
+.rt-hint { padding: 8px 2px 0; font-size: 12px; color: var(--dim); }
+/* 键盘可达：seg 主按钮补一圈可见焦点环（默认 UA 描边在深色底上几乎看不见） */
+.seg button:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* 等宽小字的"地址类"值（关于页实例标识 / 服务地址）：淡色，窄屏时任意断行不截断 */
+.machine-addr { font-family: ui-monospace, monospace;
+  font-size: 12px; color: var(--dim);
+  overflow-wrap: anywhere; }
+/* 关于页值列字号（2026-10-23 两轮）：原先 .machine-data 吃 body 的 14px、.machine-addr 是 12px mono 灰，
+   同一列 14/12 还一深一浅。第一轮统一成 13px（跟 .set-label 同档）后用户第二次拍板：
+   **值要比标签小一档**才好看 —— 标签 13px 是"这一行是什么"，值 12px 是内容本身，小一号主次才分明。
+   等宽字只留给「实例标识 / 服务地址」这类要成串复制的值，颜色仍回正文。 */
+.set-row .machine-data { font-size: 12px; }
+.set-row .machine-data .sub { font-size: 12px; color: var(--dim); }
+.set-row .machine-addr { font-size: 12px; color: var(--text); }
+
+/* —— 专家库（左侧一级栏，2026-10-23 改版）——
+   整页卡片墙（左栏收掉，body.no-list），一张完整卡片墙按目录顺序排，不按雇佣状态分段；
+   已雇佣的卡右上角一枚「已雇佣」胶囊（.expert-hired），动作只剩「雇佣」。
+   头像配色沿用员工那套（avatarStyle 内联配色）。 */
+#expertsView { display: none; height: 100%; overflow: auto; padding-bottom: 40px; background: var(--side); }
+#expertsView.shown { display: block; }
+#expertsView .detail-body { max-width: 1400px; }
+/* 页头搜索框（2026-10-23）：页头是 flex 的（.head-row），margin-left:auto 把它顶到标题右边；
+   样式抄 .list-search input 同一套变量（同款输入面），宽度够放下"搜花名 / 岗位 / 技能" */
+.expert-search { margin-left: auto; width: 240px; }
+.expert-search input { width: 100%; background: var(--input); color: var(--text);
+                       border: 1px solid var(--line); border-radius: 6px;
+                       padding: 6px 10px; font: inherit; font-size: 13px; }
+.expert-search input:focus { border-color: var(--accent); outline: none; }
+/* 卡片网格：auto-fill 自适配列宽 —— 宽屏一行 3~4 张，窄屏自动换行（同 .wb-grid 的思路） */
+.expert-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+               gap: 12px; justify-content: start; }
+.expert-card { display: flex; flex-direction: column; gap: 10px; padding: 14px;
+               border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.expert-top { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.expert-who { flex: 1; min-width: 0; }
+.expert-name { font-size: 13.5px; color: var(--text);
+               overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.expert-role { margin-top: 2px; font-size: 12px; color: var(--dim);
+               overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 一句话简介最多两行：卡片高度要跟同行别的基本齐平，简介再长也不许把卡撑高 */
+.expert-intro { font-size: 12px; color: var(--dim); line-height: 1.6;
+                display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+/* 卡片右上角（2026-10-21 用户要求）：雇佣动作和雇佣状态都是同一枚胶囊 ——
+   「雇佣」按钮与「已雇佣」胶囊同位同尺寸（复用 .pill 的字号/内边距），点完原地变胶囊。
+   未雇佣是蓝描边（accent，可点），已雇佣绿描边（ok，纯状态）。 */
+.expert-card { position: relative; }
+.expert-hired { position: absolute; top: 10px; right: 10px;
+                color: var(--ok); border-color: var(--ok); background: var(--panel); }
+button.expert-hire { color: var(--accent); border-color: var(--accent); cursor: pointer; }
+button.expert-hire:hover { background: color-mix(in srgb, var(--accent) 8%, var(--panel)); }
+/* 已雇佣胶囊可点 = 解聘（2026-10-23 用户要求"再点击一下解聘"）：平时绿描边纯状态的样子，
+   悬停转红提示这是破坏性动作，点了还有 confirmDo 确认兜底。 */
+button.expert-fire { cursor: pointer; }
+button.expert-fire:hover { color: var(--bad); border-color: var(--bad);
+                           background: color-mix(in srgb, var(--bad) 8%, var(--panel)); }
+/* 技能标签不再上卡片（2026-10-30 用户要求）：卡片内容定高（头部 + 两行简介），墙上一致；
+   技能清单只在详情弹窗的「技能」页签里看 */
+/* 卡片本体可点（2026-10-25）：点谁弹谁的详情卡 —— 右上角那两枚胶囊有自己的 onclick，
+   点击事件在 paintGrid 里拦了 closest('button')，不会连坐 */
+.expert-card[data-expert-key] { cursor: pointer; }
+.expert-card[data-expert-key]:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+
+/* —— 人物详情弹窗（#expertDlg，点专家卡弹出，2026-10-25）——
+   卡片墙一格只有一句话 + 技能名；全文（岗位说明、技能描述、雇佣动作）都在这扇弹窗里。
+   限高 86vh + 自身滚动：内容超过视口时原生 dialog 会上下溢出、**顶部被裁到够不着**
+   （IAB 小视口实测），限高后只在弹窗内部滚。 */
+/* 宽 640px、高固定（切页签框大小不变，2026-10-25 用户要求）。**滚动收进页签正文区**
+   （用户要求：滚动条只在正文区出现，头像/姓名/页签条保持固定）——弹窗自己不滚，
+   正文面板 [data-exd-panel] 内部滚。flex 纵列：头部区自然高、正文区吃剩余、动作区压底。 */
+/* ⚠️ 布局规则必须挂在 [open] 上：#expertDlg 是 index.html 里的**静态节点**，
+   一旦对关着的它写 display（哪怕 ID 选择器只写 flex），就会压过 UA 样式表的
+   `dialog:not([open]) { display: none }`（作者样式永远赢 UA）—— 弹窗没开也变成
+   一个悬浮空盒盖在页面上，×/Esc/close() 全都"无效"（它根本不是 open 状态）
+   （2026-10-25 用户实报"详情窗口关不掉"就是它）。 */
+#expertDlg[open] { width: 640px; height: min(640px, 84vh);
+                   display: flex; flex-direction: column; overflow: hidden; }
+#expertDlg > form { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+#exdBody { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+/* 正文面板：滚动条只落在这里。右留 8px 给滚动条、下留一点呼吸，左对齐正文其他区 */
+#exdBody > [data-exd-panel] { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 10px 8px 4px 0; }
+/* 动作区固定在弹窗底边（正文区自己滚，按钮永远在场，不需要 sticky 了）。
+   底边负 margin 盖掉 form 的 padding-bottom，与弹窗底边贴齐。 */
+#expertDlg .dlg-actions { margin: 12px -20px -20px; padding: 14px 20px;
+  background: var(--panel); border-top: 1px solid var(--line); }
+.exd-top { display: flex; align-items: flex-start; gap: 12px; margin-top: 14px; }
+.exd-who { flex: 1; min-width: 0; }
+/* 姓名行：名字 + 「岗位 · 状态」同一行（baseline 对齐），放不下就换行 */
+.exd-name-row { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.exd-name { font-size: 16px; font-weight: var(--w-title); color: var(--text); }
+.exd-role { font-size: 12.5px; color: var(--dim); }
+
+/* —— 插件/连接器详情弹窗（#plgDlg，点市场小卡弹出，2026-10-25）——
+   同 #expertDlg 的教训：布局规则必须挂 [open] —— 静态 dialog 节点一旦被作者样式
+   写了 display，会压过 UA 的 dialog:not([open]){display:none}，关着的弹窗变成
+   盖在页面上的空盒、还关不掉。 */
+/* 定高 460（2026-10-25 用户："详情卡大小要一致"）：装没装、插件/连接器内容长短差得多，
+   随内容伸缩就一张一个样。定高后 form 拆 flex 列 —— 头条钉住、正文自己滚、动作条吸底。 */
+#plgDlg[open] { width: 560px; height: 460px; max-height: 86vh; }
+/* 标题条（.dlg-head）自带 padding-bottom 6px，form 顶部不再加 —— 不然 6+16+14 三层叠下来，
+   卡标题离弹窗头上 36px，一大块空（2026-10-25 用户："详情卡标题和上面的间隙很大"） */
+#plgDlg > form { padding-top: 0; height: 100%; display: flex; flex-direction: column; }
+#plgDlg > form > .dlg-head { position: static; flex: 0 0 auto; }
+#plgDlgBody { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+#plgDlgTitle { font-size: 15px; }
+.plg-d-head { display: flex; gap: 12px; align-items: flex-start; margin: 8px 0 2px; }
+.plg-d-head .plg-ico { width: 38px; height: 38px; border-radius: 10px; }
+.plg-d-head .plg-ico svg { width: 20px; height: 20px; }
+.plg-d-who { flex: 1; min-width: 0; }
+#plgDlg .plg-desc { margin-top: 10px; }
+#plgDlg .plg-meta { margin-top: 5px; }
+#plgDlg .plg-req { margin-top: 8px; }
+/* 动作条吸底（margin-top:auto）：内容短的也不悬在半空，长的被正文滚动区顶住不越界 */
+#plgDlg .dlg-actions { margin: 12px -20px -20px; margin-top: auto; padding: 13px 20px;
+  background: var(--panel); border-top: 1px solid var(--line); justify-content: flex-end; }
+.exd-role .exd-on { color: var(--ok); }
+/* 简介跟在姓名下面（头像右侧那块），与页签上方留出间距 */
+.exd-intro { margin-top: 6px; font-size: 13px; line-height: 1.7; color: var(--text); }
+.exd-sec { margin-top: 14px; }
+.exd-sec > label { display: block; font-size: 11.5px; color: var(--dim); margin-bottom: 6px; }
+/* 页签条（复用 .tabs 那套观感，弹窗里上下边距收一点） */
+.exd-tabs { margin: 16px 0 2px; }
+/* 页签正文的第一段离页签条近一点（面板自带 10px 上内边距，再叠 14px 外边距太松） */
+#exdBody > [data-exd-panel] .exd-sec:first-child { margin-top: 2px; }
+/* 岗位说明：独立页签内自然排版（md-view 管排版），不再塞 320px 内嵌滚动框
+   （2026-10-25 用户反馈下拉体验不好）；超高由弹窗整体滚兜底 */
+.exd-instr { padding: 0; min-height: 0; font-size: 12.5px; }
+/* 技能清单：一行一个，名字在上、一句话描述在下 —— 卡片墙上 chip 的 title 悬停看不见全貌 */
+.exd-skills { display: flex; flex-direction: column; gap: 8px; }
+.exd-skill b { display: block; font-size: 12.5px; font-weight: 500; color: var(--text); }
+.exd-skill span { font-size: 12px; color: var(--dim); line-height: 1.6; }
+
+/* markdown 表格（2026-10-23）：两个渲染器（renderMarkdown/mdRender）输出的表格都带 .md-t，
+   只认这个类就不会误伤站内自己的表格（.plg-table 等）。
+   宽表横滚不撑破气泡；单元格内的行内代码照常生效。 */
+table.md-t { border-collapse: collapse; max-width: 100%; margin: 6px 0; font-size: 12.5px;
+             display: block; overflow-x: auto; }
+table.md-t th, table.md-t td { border: 1px solid var(--line); padding: 5px 9px;
+                               text-align: left; vertical-align: top; word-break: break-word; }
+table.md-t th { font-weight: 500; color: var(--text); white-space: nowrap;
+                background: color-mix(in srgb, var(--dim) 9%, transparent); }
+table.md-t code { font-size: 11.5px; }
+
+/* 员工报的产出路径（2026-10-24）：真实存在的文件 → 可点，点开用系统浏览器看 */
+#chat code[data-file] { cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+#chat code[data-file]:hover { color: var(--accent); }
+
+/* ══════════════════════════════════════════════════════════════════════
+   声明式插件的新版式块（2026-10-24 · 研发面板概览稿）
+   ─────────────────────────────────────────────────────────────────────
+   新增两种块 `stats`（一行数字卡）/ `cards`（卡片网格），外加两列版式
+   `.plg-layout`（主列 1fr + 右栏 340px，靠块上的 `aside: true` 触发）。
+
+   ⚠️ 这一整段是**纯新增**：上面老块的类（.plg-sec / .plg-table / .plg-item…）
+   一行都没动 —— ssh 那类老插件画出来必须和以前一模一样。
+   颜色只取设计变量（--panel / --line / --ok / --warn / --accent），
+   浅色主题自动跟着走，不在这里写死色值。
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* 两列版式：右栏固定 340px（稿子量出来的），主列吃掉剩下的。窄屏就上下叠。 */
+/* 上面那段是通栏的（说明 + KPI），这里要留出和下面之间的呼吸 ——
+   `.plg-block + .plg-block` 只管兄弟，管不到外面这层容器（截图里贴在一起过）。 */
+.plg-layout { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; align-items: start;
+              margin-top: 14px; }
+.plg-main-col, .plg-aside { min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+@media (max-width: 1100px) { .plg-layout { grid-template-columns: minmax(0, 1fr); } }
+
+/* 块外壳 + 标题行（heading / subheading / more 一行摆开） */
+.plg-block { min-width: 0; }
+.plg-block + .plg-block { margin-top: 14px; }
+.plg-block-head { display: flex; align-items: baseline; gap: 8px; margin: 0 0 8px; min-width: 0; }
+.plg-block-title { font-size: var(--t-sec); font-weight: var(--w-title); color: var(--text); }
+.plg-sec-sub { font-size: 11.5px; color: var(--dim); min-width: 0;
+               overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 「全部项目 ›」这类入口：本版只占位（不导航），所以做成一行弱色小字而不是按钮 */
+.plg-sec-more { margin-left: auto; flex: 0 0 auto; font-size: 12px; color: var(--accent); cursor: pointer; }
+.plg-sec-more:hover { text-decoration: underline; }
+/* 分节标题行右侧的**动作**按钮（2026-10-27，研发面板「选择项目」）：
+   跟 .plg-sec-more 同一个位置，区别是它能点出结果 —— more 只是给人看的一句说明。
+   ⚠️ 标题行是 baseline 对齐的，按钮得自己定高，否则会跟 11.5px 的副标题错开半行。 */
+.plg-sec-act { margin-left: auto; flex: 0 0 auto; height: 26px; padding: 0 10px;
+               font-size: 12px; line-height: 24px; border-radius: 6px;
+               border: 1px solid var(--line); background: var(--panel);
+               color: var(--text); cursor: pointer; }
+.plg-sec-act:hover { border-color: var(--accent); color: var(--accent); }
+.plg-sec-more + .plg-sec-act { margin-left: 10px; }   /* 两个都在时别挤成一块 */
+
+/* ── 多选纳管弹窗（插件 cards.manage，2026-10-27）──
+   动态建的 <dialog>：外面只有一层 .mg-wrap 负责左右 20px，.dlg-head 靠它的负边距铺满。 */
+dialog.mg-dlg { width: 520px; }
+.mg-wrap { padding: 0 20px 20px; }
+.mg-hint { margin: 8px 0 0; font-size: 12px; color: var(--dim); line-height: 1.65; }
+.mg-list { margin-top: 12px; max-height: min(52vh, 420px); overflow: auto;
+           border: 1px solid var(--line); border-radius: 8px; }
+.mg-item { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px;
+           border-bottom: 1px solid var(--line); cursor: pointer; }
+.mg-item:last-child { border-bottom: 0; }
+.mg-item:hover { background: var(--hover); }
+/* ⚠️ 全局 input 是 width:100% —— 不压回去的话勾选框占满整行，文字被挤成 0 宽竖条（实测踩过） */
+.mg-item input { margin: 3px 0 0; flex: 0 0 auto; width: auto; }
+.mg-who { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.mg-name { font-size: 13px; color: var(--text); }
+.mg-sub { font-size: 12px; color: var(--dim); }
+/* 路径这种长串要能断：不断的话一条长路径会把弹窗顶宽，勾选框被挤出屏幕 */
+.mg-note { font-size: 11.5px; color: var(--dim); opacity: .85; word-break: break-all; }
+.mg-actions { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
+.mg-count { margin-right: auto; font-size: 12px; color: var(--dim); }
+/* 历史记录弹窗那一排状态字（2026-10-27）：跟左栏实例列表同一个语义色。
+   ⚠️ `.flow-t.ok/.bad` 只认 `.item .line1` 那套选择器，弹窗里不在 .item 内，
+   不补这几条的话"已终止 / 等你验收"会全是一个灰。 */
+.mg-name .flow-t { margin-left: 6px; font-size: 11.5px; color: var(--dim); }
+.mg-name .flow-t.ok { color: var(--ok); }
+.mg-name .flow-t.bad { color: var(--bad); }
+.mg-name .flow-t.gray { color: var(--dim); }
+
+/* ── stats：一行数字卡 ── */
+/* 列数由块里的 `--plg-cols` 给（= items 的条数），宿主不猜。 */
+.plg-stats { display: grid; grid-template-columns: repeat(var(--plg-cols, 4), minmax(0, 1fr)); gap: 12px; }
+.plg-stat { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+            padding: 12px 14px; min-width: 0; }
+.plg-stat-lab { font-size: 11.5px; color: var(--dim); }
+/* 数字用等宽数字（tabular-nums）：一排数字卡并排时，位数不同也不会左右跳 */
+.plg-stat-num { margin-top: 2px; font-size: 24px; font-weight: var(--w-title);
+                letter-spacing: -.02em; color: var(--text); font-variant-numeric: tabular-nums; }
+.plg-stat-num small { font-size: 12px; font-weight: 400; color: var(--dim); margin-left: 4px; }
+.plg-stat-foot { margin-top: 6px; font-size: 11px; color: var(--dim); }
+/* tone 只改数字颜色（稿子：已纳管绿、未纳管黄、已发布蓝） */
+.plg-stat.ok .plg-stat-num { color: var(--ok); }
+.plg-stat.warn .plg-stat-num { color: var(--warn); }
+.plg-stat.accent .plg-stat-num { color: var(--accent); }
+@media (max-width: 900px) { .plg-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* ── cards：卡片网格 ── */
+.plg-cards { display: grid; grid-template-columns: repeat(var(--plg-cols, 3), minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 900px) { .plg-cards { grid-template-columns: minmax(0, 1fr); } }
+.plg-card { display: flex; flex-direction: column; gap: 10px; min-width: 0;
+            background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 13px 14px;
+            transition: border-color .12s, transform .12s; }
+/* 带 data-card-href 的卡可点（本版只到"看着能点"，导航接进平台是下一步） */
+.plg-card.has-href { cursor: pointer; }
+.plg-card.has-href:hover { border-color: var(--accent); transform: translateY(-1px); }
+.plg-card-top { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+.plg-card-who { flex: 1; min-width: 0; }
+/* 卡内标题 / 副标题都单行省略：卡片高度要齐，长名字不许把一格撑高 */
+.plg-card-title { font-size: 13.5px; font-weight: var(--w-title); color: var(--text);
+                  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plg-card-sub { margin-top: 2px; font-size: 12px; color: var(--dim);
+                overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plg-card-meta { font-size: 11.5px; color: var(--dim);
+                 overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 徽标：小圆点 + 文字，ok / warn / neutral 三档（稿子的「已纳管」「需处理」） */
+.plg-badge { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px; height: 20px;
+             padding: 0 8px; border-radius: 999px; font-size: 11px; white-space: nowrap; }
+.plg-badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.plg-badge.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 13%, transparent); }
+.plg-badge.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
+.plg-badge.neutral { color: var(--dim); background: var(--chip); }
+/* 卡内的「标签 — 值」行：左标签弱、右值主色，长值省略（路径那种） */
+.plg-card-line { display: flex; align-items: baseline; gap: 8px; min-width: 0; font-size: 11.5px; }
+.plg-card-line span { flex: 0 0 auto; color: var(--dim); }
+.plg-card-line b { min-width: 0; font-weight: 400; color: var(--text);
+                   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plg-card-lines { display: flex; flex-direction: column; gap: 3px; }
+/* 卡底那截（「最新发布」）用一条细线跟上面隔开 —— 跟稿子一致 */
+.plg-card-foot { display: flex; flex-direction: column; gap: 3px;
+                 border-top: 1px solid var(--line); padding-top: 9px; }
+
+/* ③ 开关关闭态轨道加深一档：--line 在深底上对比不足 3:1（WCAG 1.4.11 非文本下限），
+   看不出"这颗开关现在关着"。用 color-mix 把文字灰压进边框色，两种主题各自动适配。 */
+.switch > span { background: color-mix(in srgb, var(--dim) 45%, var(--line)); }
+
+/* 「证据」气泡按钮的样式随按钮一起移除（2026-11-10 用户口径：留后台、界面不体现）。 */
+
+/* ---------- 信箱（2026-11-11 用户拍板：一级栏） ----------
+ * 2026-11-11 用户："改成左侧列表，右边详情" —— 这一页从"整页单列清单"改回骨架的
+ * 三级语法：左栏（300px 二级列表）放通知清单，右区放选中那条的全文和事实。
+ * 所以清单行要按**左栏行**的密度来写（两行字 + 一截灰字），不再是整页那种大卡片；
+ * 右区是详情页，标题/正文/事实表各一档，跟别的详情页同一套字号。
+ */
+
+/* 左侧筛选（全部 / 未读）：钉在清单顶上（.list-body 自己滚，tab 不跟着跑） */
+.inbox-tabs { position: sticky; top: 0; z-index: 1; display: flex; gap: 4px;
+              padding: 4px 4px 8px; background: var(--side); }
+.inbox-tab { border: 1px solid transparent; background: transparent; color: var(--dim);
+             padding: 3px 9px; border-radius: 7px; font: inherit; font-size: 12px; cursor: pointer; }
+.inbox-tab:hover { background: var(--hover); color: var(--text); }
+.inbox-tab.on { background: var(--input); color: var(--text); border-color: var(--line); }
+.inbox-n { margin-left: 4px; font-size: 10.5px; color: var(--dim); }
+
+/* 清单行：行高/悬停/按压/分割线全用 .item 的那套，这里只补信箱自己的排版 */
+.inbox-item { align-items: flex-start; }
+.inbox-item .inbox-ico { margin-top: 1px; }
+.inbox-item .who { min-width: 0; }
+.inbox-item .line1 b { min-width: 0; }
+.inbox-item .line2 { margin-top: 2px; }
+/* 未读：标题加重 + 行底压一层极淡的 accent（跟角标同色系）。
+   不描边 —— 左栏是一叠连续的行，描边会把它变回一张张卡片。 */
+.inbox-item.unread { background: color-mix(in srgb, var(--accent) 5%, transparent); }
+.inbox-item.unread .line1 b { font-weight: 600; }
+.inbox-item.unread:hover { background: color-mix(in srgb, var(--accent) 9%, transparent); }
+/* 选中态压过未读底色：位置记忆恢复时可能"选中的那条还没标已读"（只有点开才算读），
+   两种底色同时存在时以选中为准，否则看不出右区这条是从左栏哪一行来的 */
+.inbox-item.active, .inbox-item.unread.active:hover { background: var(--sel); }
+/* 未读「新」角标（第一行时间旁；详情页元信息里也用它） */
+.inbox-new { flex: none; font-size: 10px; line-height: 15px; color: #fff; background: var(--accent);
+             border-radius: 8px; padding: 0 5px; }
+
+/* 严重度小圆标（清单行 / 详情页共用）：info 蓝、warn 黄、blocking 红 */
+.inbox-ico { width: 22px; height: 22px; border-radius: 50%; flex: none; display: flex;
+             align-items: center; justify-content: center; font-size: 12px; font-weight: 700; }
+.inbox-ico.info { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
+.inbox-ico.warn { background: color-mix(in srgb, var(--warn) 22%, transparent); color: var(--warn); }
+.inbox-ico.blocking { background: color-mix(in srgb, var(--bad) 22%, transparent); color: var(--bad); }
+.inbox-ico.big { width: 34px; height: 34px; font-size: 16px; }
+.inbox-code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px;
+              color: var(--dim); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+
+/* 左栏底部固定条（#listFoot）：普通态 = 管理 + 全部已读；管理模式 = 全选 / 删除所选 / 完成。
+   低频维护动作，同一档轻重，不抢清单的注意力（2026-11-12 批量删除进来后从单按钮改成一排） */
+.inbox-foot-row { display: flex; gap: 6px; }
+.inbox-foot-btn { flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px;
+                  padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px;
+                  background: transparent; color: var(--dim); font: inherit; font-size: 12.5px;
+                  cursor: pointer; white-space: nowrap; }
+.inbox-foot-btn:hover { color: var(--text); background: var(--hover); }
+.inbox-foot-btn:disabled { opacity: .45; cursor: default; }
+.inbox-foot-btn:disabled:hover { color: var(--dim); background: transparent; }
+.inbox-foot-btn.danger { color: var(--bad); }
+.inbox-foot-btn.danger:hover { background: color-mix(in srgb, var(--bad) 8%, transparent); }
+.inbox-foot-btn svg { flex: 0 0 auto; opacity: .8; }
+
+/* 管理模式下每行行首的勾选圆点：空心圈 / 勾中变实心 accent（跟「新」角标同色系） */
+.inbox-check { width: 22px; height: 22px; border-radius: 50%; flex: none; margin-top: 1px;
+               display: flex; align-items: center; justify-content: center;
+               border: 1.5px solid var(--line); color: #fff; }
+.inbox-check.on { background: var(--accent); border-color: var(--accent); }
+.inbox-check svg { width: 13px; height: 13px; }
+
+/* 详情页右上角的「删除」：平时是颗灰字按钮，悬停才染红（低频动作，别抢标题的视线） */
+.inbox-del { margin-left: auto; flex: none; padding: 5px 12px; border: 1px solid var(--line);
+             border-radius: 8px; background: transparent; color: var(--dim);
+             font: inherit; font-size: 12px; cursor: pointer; }
+.inbox-del:hover { color: var(--bad); border-color: var(--bad);
+                   background: color-mix(in srgb, var(--bad) 8%, transparent); }
+
+/* 右区空态：清单里没东西 / 有东西但没选，两句话各说各的（这是账本，不摆欢迎页） */
+.inbox-empty { margin: 64px auto 0; max-width: 380px; text-align: center; color: var(--dim); }
+.inbox-empty svg { width: 64px; height: 64px; opacity: .35; }
+.inbox-empty-title { margin-top: 12px; font-size: 14px; color: var(--text); }
+.inbox-empty-sub { margin-top: 4px; font-size: 12px; line-height: 1.7; }
+
+/* 右区详情：标题 + 灰字元信息 + 正文 + 事实表 */
+.inbox-detail { max-width: 760px; }
+.inbox-d-head { display: flex; align-items: flex-start; gap: 12px; }
+.inbox-d-head-main { min-width: 0; }
+.inbox-d-title { margin: 0; font-size: 18px; font-weight: 600; line-height: 1.45; word-break: break-word; }
+.inbox-d-meta { margin-top: 5px; font-size: 12px; color: var(--dim); }
+.inbox-d-text { margin: 18px 0 0; font-size: 13.5px; line-height: 1.8; color: var(--text);
+                word-break: break-word; white-space: pre-wrap; }
+/* 平台事实表：两列（名/值），一行一条 —— 靠细线分区，不靠大留白 */
+.inbox-facts { margin: 22px 0 0; padding: 0; border-top: 1px solid var(--line); }
+.inbox-fact { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 10px;
+              padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 12.5px; }
+.inbox-fact dt { color: var(--dim); }
+.inbox-fact dd { margin: 0; color: var(--text); word-break: break-word; }
+
+/* ═══ 上下文占用环（2026-11-12）═══════════════════════════════════════
+   输入区 input-tools 行、模型选择器与发送之间：20px 圆环 + 环心百分数。
+   数据来自 GET /api/conversations/:id/context（session-budget 的口径服务端算），
+   阈值色跟预算模块对齐：≥70% --warn 黄、≥90% --bad 红。平时 --dim 灰，
+   存在但不抢戏；解释全在 hover 弹层里，平时零文字（密排风格不留闲话的位置）。
+   环心**不放数字**（2026-11-12 用户：不要百分比，通过环能看出来）—— 精确值在弹层里。 */
+.cring { position: relative; width: 20px; height: 20px; flex: none; cursor: default; }
+.cring svg { display: block; width: 20px; height: 20px; transform: rotate(-90deg); }
+.cring .cring-track { stroke: var(--line); }
+.cring .cring-val { stroke: var(--dim); stroke-linecap: round;
+                    transition: stroke-dashoffset .3s, stroke .3s; }
+.cring.warn .cring-val { stroke: var(--warn); }
+.cring.bad  .cring-val { stroke: var(--bad); }
+/* hover 弹层：跟全站弹层同一套语汇（panel 底 + 1px 细线 + 小投影），箭头朝下指着环 */
+.cring .cring-tip { position: absolute; bottom: 26px; left: 50%; transform: translateX(-50%);
+                    background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+                    box-shadow: 0 4px 14px var(--shadow); padding: 7px 10px; white-space: nowrap;
+                    font-size: 12px; line-height: 1.5; color: var(--text); z-index: 30;
+                    opacity: 0; pointer-events: none; transition: opacity .12s; }
+.cring:hover .cring-tip { opacity: 1; }
+.cring .cring-tip::after { content: ""; position: absolute; top: 100%; left: 50%; margin-left: -5px;
+                           border: 5px solid transparent; border-top-color: var(--line); }
+.cring .cring-tip .t-main { font-weight: 600; }
+.cring .cring-tip .t-sub { color: var(--dim); font-size: 11px; margin-top: 1px; }

@@ -36,7 +36,7 @@
  */
 import path from 'node:path';
 import * as store from './store.mjs';
-import { dispatchToThread, dispatchEventToThread, projectConstitutionBlock } from './dispatch.mjs';
+import { dispatchToThread, dispatchEventToThread } from './dispatch.mjs';
 // 岗位判定（「项目经理 · 职责」第一段才是岗位）与运行钥匙共用同一处口径 —— 别再各写一份
 import { can, roleNameOf } from './roles.mjs';
 // 「卡由流程执行」那条路要真的起一条实例 —— 跟工作台点流程走的是同一个引擎入口，
@@ -45,6 +45,7 @@ import { startWorkflow, nodesOf } from './workflows.mjs';
 // 交付声明（2026-11-09 P4）：跑完 ≠ 完成 —— 卡落「待验收」只认员工首行/末行 `[完成]`，
 // 判据唯一实现在 delivery-claim.mjs（流程步骤用它的 `[受阻]` 那一半）。
 import { claimOf, blockedReasonOf } from './delivery-claim.mjs';
+import { humanSpan } from './runs.mjs';
 
 /** 排序权重：越小越"要人管"（平表用它；看板按列站队，不看这个） */
 const FLOW_RANK = { blocked: 0, failed: 1, review: 2, doing: 3, todo: 4, done: 5, cancelled: 6, idea: 7 };
@@ -938,7 +939,6 @@ function startCardInGroup(row, project) {
   const session = store.listGroupSessions(group.id)[0] ?? store.createGroupSession(group.id);
   if (!session) throw new Error('这个群的会话开不出来');
   const text = [
-    projectConstitutionBlock(project.id),
     `【任务 · ${project.name || project.id}】${row.title}（${row.id}）`,
     row.description ? `\n${row.description}` : '',
     '\n这是「团队协作」模式的卡：你是本群的群助手（项目经理），负责把活拆给群成员（子卡）、盯回执、把进度汇总回这张卡。',
@@ -1027,9 +1027,7 @@ export function startProjectTask(id, { allowIdea = false } = {}) {
     projectId: project.id,
   })?.id;
   if (!conv) throw new Error('这个执行人已经不在了');
-  const constitution = projectConstitutionBlock(project.id);
   const text = [
-    constitution,
     `【任务 · ${project.name || project.id}】${row.title}`,
     row.description ? `\n${row.description}` : '',
     `\n工作目录就是这个项目的目录：${project.root}`,
@@ -1141,6 +1139,26 @@ function endNoteOf(run, claim) {
     return `跑完了，员工自报受阻（[受阻]）${reason ? `：${reason}` : ''}，等你拍板`;
   }
   if (claim === 'silent') return '跑完了，但这一轮没有回话 —— 没有交回可验收的结论（没有 [完成] 声明），卡停在「已阻塞」';
+  /*
+   * 被**挂死检测**收的（2026-11-19 七改）：它**不是**"没交回结论"，也不是"活太长被砍"，
+   * 是**进程没动静了**。措辞必须点明这一点，否则人会把"卡死"读成"平台嫌我任务大"
+   * （实报 r-065508b4 / pt-a0d785d8）。
+   */
+  let limit = null;
+  try {
+    // 运行时把 usage 对象挂在 run.usageRecord 上（runs.mjs 的 finish）；库里那行是 JSON 串
+    const u = run.usageRecord ?? JSON.parse(run.usage ?? '{}');
+    // 老行只有 toolBudgetHit（次数尺子那阵的）或 limitHit:'time'（墙钟那阵的）
+    if (u?.limitHit || u?.toolBudgetHit) limit = u;
+  } catch {}
+  if (limit) {
+    const how = limit.idleMs
+      ? `有 ${humanSpan(limit.idleMs)}没有任何进展`
+      : limit.limitMs
+        ? `跑到 ${humanSpan(limit.limitMs)}`
+        : '到点上';
+    return `跑完了，但这一轮${how}就收了 —— 卡停在「已阻塞」；再派一次（或回一句「继续」）它接着原来的会话往下做，不用重来`;
+  }
   return '跑完了，但没有交回可验收的结论（没写 [完成]，也没写 [受阻]）—— 卡停在「已阻塞」';
 }
 
@@ -1326,6 +1344,79 @@ export function afterMerged(task) {
  * （实报：贺韬说"沙箱把命令全挡了，要么你本地查、要么你判迁移成没成"）。现在正常档：
  * 他能查台账、建卡、改卡、验收；"不许自己改仓库/部署"由身份卡与每轮合同约束。
  */
+/*
+ * ============================ 回执的「轮次戳」（2026-11-19） ============================
+ *
+ * 实报（pt-a0d785d8 / 用户截图 16:28）：卡第二次到「已阻塞」，回执的 `why` 与上一次
+ * **逐字相同** —— 唤醒 PM 的那条 silent 消息也就逐字相同。同一个会话里连着两段一模一样的话，
+ * 模型（合理但错误地）判定"平台把上一条又发了一遍"，于是回一句"我上次已经处理完了"就收工：
+ * 卡明摆着还挂「已阻塞」，PM 却对雇主说"已重新开跑，在等他补交证据"（09:25 那轮更糟，
+ * 它自认"属于 A 类进度查询、自己查台账"却一次接口都没调，直接复述了 08:28 的旧话）。
+ *
+ * 判据层的教训：**"发件人视角的重复" 和 "事件真的又发生了一次" 在文本上必须可分**，
+ * 靠模型"读懂了没有"兜不住。所以每条回执都带这一次才有的东西：本轮起跑/收尾时刻、
+ * 跑了多久、runId；这张卡如果是**一卡一会话**（exec 会话，execScope=`task:<卡id>`），
+ * 再带「第 N 轮」。字面不同了，"重发"这个假设就不成立。
+ *
+ * 不额外加列：运行行本身就是事实来源（`store.listRuns` 按 startedAt 倒序）。
+ * 群卡（派进群、一个会话跑很多张卡）**不数轮次** —— 那会把别人的轮次算进来，
+ * 宁可不给这个数字，也不能给个错的。
+ */
+function hhmm(iso) {
+  const ms = Date.parse(iso ?? '');
+  if (!Number.isFinite(ms)) return '—';
+  const d = new Date(ms);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+function receiptRoundOf(task) {
+  if (!task?.runId) return null;
+  const row = store.getRunRow(task.runId);
+  if (!row) return null;
+  const startMs = Date.parse(row.startedAt ?? '');
+  const endMs = Date.parse(row.endedAt ?? '');
+  let n = null;
+  const conv = task.conversationId ? store.getConversation(task.conversationId) : null;
+  if (conv?.execScope === `task:${task.id}`) {
+    const runs = store.listRuns(task.conversationId); // 新 → 旧
+    const idx = runs.findIndex((r) => r.id === task.runId);
+    if (idx >= 0) n = runs.length - idx;
+  }
+  return {
+    n,
+    runId: row.id,
+    clock: `${hhmm(row.startedAt)} → ${hhmm(row.endedAt)}`,
+    span: Number.isFinite(startMs) && Number.isFinite(endMs) && endMs > startMs ? humanSpan(endMs - startMs) : '',
+  };
+}
+
+/**
+ * 卡片回执的唤醒文案（**单点**，notifyCardOwner 只负责发）。
+ * 抽成导出是为了让 smoke 能断言"两轮的回执不一样"——文案本身是这次的修法。
+ */
+export function cardReceiptText({ task, personaName, why }) {
+  const round = receiptRoundOf(task);
+  const head = round?.n ? `【卡片回执 · 第 ${round.n} 轮】` : '【卡片回执】';
+  const stamp = round
+    ? `（这一轮 ${round.clock}${round.span ? `，跑了 ${round.span}` : ''}，runId=${round.runId}）`
+    : '';
+  // 只在本卡确实跑过不止一轮时说"不是重发" —— 第一轮说这句反而添乱
+  // 措辞按状态分：待验收是"交回结果"，阻塞/失败才是"又停在这里"（2026-11-19 实跑发现：报「待验收」时
+  // 写"又停在这里"，读起来像又出事了）
+  const antiDup =
+    round?.n > 1
+      ? `⚠️ 这是**新一轮**${task.status === 'review' ? '交回的结果' : '又停在这里'}，不是上一条回执的重发：同一张卡每跑一轮都会再报一次，字面很像，但不是同一件事 —— ` +
+        '上一轮你已经处理过，这一轮是退回去重跑之后的结果。回答雇主"现在什么情况"之前，先 GET 一次台账核卡，别凭上一句复述。'
+      : '';
+  return (
+    `@${personaName} ${head}你建的卡「${task.title}」（${task.id}）到「${store.taskLabel(task.status)}」了 —— ${why}${stamp}。` +
+    antiDup +
+    '请按你对雇主的承诺跟进：**你是这张卡的验收人** —— 看执行人交回的结论/证据；' +
+    '没交结论就把卡退回执行人补（PATCH status=待办 + startNow:true），或看证据直接判；' +
+    '需要补跑就派回去。**不要自己改仓库/部署/改配置**。'
+  );
+}
+
 function conversationOfPersona(personaId) {
   // 群优先：他在哪个群里说话，回执就落哪个群（雇主看得到）；没有群退他的 1:1
   const groups = store.listConversations().filter((c) => c.kind === 'group');
@@ -1369,9 +1460,13 @@ function notifyParentCoordinator(task, why) {
       parentId: parent.id,
     },
   });
+  const round = receiptRoundOf(task);
+  const stamp = round
+    ? `（这一轮 ${round.clock}${round.span ? `，跑了 ${round.span}` : ''}，runId=${round.runId}）`
+    : '';
   const res = dispatchEventToThread(
     session.id,
-    `@${assistant.name} 【子卡回执】你拆的子卡「${task.title}」（${task.id}）到「${store.taskLabel(task.status)}」了 —— ${why}。` +
+    `@${assistant.name} 【子卡回执】你拆的子卡「${task.title}」（${task.id}）到「${store.taskLabel(task.status)}」了 —— ${why}${stamp}。` +
       `请汇总到主卡「${parent.title}」（${parent.id}），并推进下一步。`,
     { personaId: assistant.id, projectId: parent.projectId, meta: { silent: true } },
   );
@@ -1427,11 +1522,9 @@ function notifyCardOwner(task, why) {
   //    ⚠️ 2026-11-12 修：这里以前扣 `sandbox: 'plan'`（只读），本意是"只调度别动手"——但只读沙箱
   //    连命令通道都挡，他连 GET 台账 / PATCH 卡都调不通（实报：卡阻塞后 PM 只能干看着，让雇主来点）。
   //    现在给正常档：他能查、能建卡、能改卡；"不许自己改仓库/部署"由身份卡与每轮合同约束。
-  const text =
-    `@${persona.name} 【卡片回执】你建的卡「${task.title}」（${task.id}）到「${store.taskLabel(task.status)}」了 —— ${why}。` +
-    '请按你对雇主的承诺跟进：**你是这张卡的验收人** —— 看执行人交回的结论/证据；' +
-    '没交结论就把卡退回执行人补（PATCH status=待办 + startNow:true），或看证据直接判；' +
-    '需要补跑就派回去。**不要自己改仓库/部署/改配置**。';
+  //   文案见 cardReceiptText（单点）：带**本轮指纹**（起跑/收尾时刻、时长、runId、第几轮），
+  //   让"卡又停了一次"和"上一条回执被重发"在字面上分得开 —— 2026-11-19 实报就是分不开。
+  const text = cardReceiptText({ task, personaName: persona.name, why });
   const res = dispatchEventToThread(convId, text, {
     personaId: persona.id,
     projectId: task.projectId,

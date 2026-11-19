@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { DatabaseSync } from 'node:sqlite';
+import DatabaseSync from 'better-sqlite3';
 
 import { dataDir, dbPath } from '../config.mjs';
 // 岗位 key 的旧文本映射（2026-11-11）：迁移时用，本模块保持与 roles.mjs 同一份口径
@@ -531,9 +531,9 @@ ensureColumn('conversations', 'groupId', 'groupId TEXT');
 /*
  * `groups.projectId`：这个群挂在哪个项目上（2026-11-11 用户拍板「一项目一群 + 可空可换」）。
  *
- * 为什么要这一列：群里的活原本用成员各自的 cwd 跑，项目目录/项目宪法/看板卡归属全靠人自觉；
+ * 为什么要这一列：群里的活原本用成员各自的 cwd 跑，项目目录/看板卡归属全靠人自觉；
  * 挂上项目之后，群会话派活时把这个 projectId 当 `opts.projectId` 传下去（见 dispatch.mjs），
- * 上面那三样就全自动了。
+ * 上面那两样就全自动了。
  *
  * **可空**：不关联就是纯聊天群，行为与从前一字不差（不传 projectId）。
  * **一群最多一个项目、一个项目最多归一个群**：唯一性在写入口（routes/group.mjs）挡，

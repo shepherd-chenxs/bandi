@@ -53,13 +53,14 @@
 import { esc } from './shell.mjs';
 import { applyRunEvent, clipEnds, createRunProgress, fmtAgo, fmtElapsed, fmtStepDur, progressView } from './run-progress.mjs';
 
-export function createProgressCard({ startedAt = Date.now(), onStop = null } = {}) {
+export function createProgressCard({ startedAt = Date.now(), lastEventAt = null, onStop = null } = {}) {
   // startedAt 可能是服务端 run 行的 ISO 字符串（重新打开页面接上跑中的运行时走这条路）——
   // 不先解析的话 Number.isFinite 落空、回落到 Date.now()，每刷一次页面计时就清零
   // （2026-11-09 用户实报：任务卡讨论区的用时每次重开页面都重新算）。
   // 主聊天页早就在调用侧 Date.parse 过（chat.mjs attachStream），这里收口到组件里兜底。
   const began = typeof startedAt === 'string' ? Date.parse(startedAt) : startedAt;
-  const progress = createRunProgress({ startedAt: Number.isFinite(began) ? began : Date.now() });
+  // lastEventAt：重画时接上"最后一次活动"（见 createRunProgress 的注释），不传就用现在
+  const progress = createRunProgress({ startedAt: Number.isFinite(began) ? began : Date.now(), lastEventAt });
 
   const el = document.createElement('div');
   el.className = 'rp';
@@ -180,11 +181,25 @@ export function createProgressCard({ startedAt = Date.now(), onStop = null } = {
      * 用户口径："不一定是日志，可以是思考过程，可以是执行过程，显示什么不重要，在动就行" ——
      * 所以哪个最新就报哪个，不存在"该显示哪一个"的纠结。
      */
+    /*
+     * **这一行报的是"最后一次动作在多久之前"**（2026-11-19）：长任务里人最需要的不是
+     * "已跑 40 分钟"（那个时刻在右上角跳），而是"它还动没动"。
+     *
+     * 三档递进，同一套措辞（`最后动作在 N 前`）：
+     *   · 20 秒内 → 报正在做的事（工具名 / 思考片段）；
+     *   · 20 秒 ~ 5 分钟 → 报"最后动作在 N 前"。这一档以前是空白（只写"进行中"），
+     *     长任务里看不出是在算还是卡了，只能靠 5 分钟那道"可能卡住了"硬等；
+     *   · ≥5 分钟 → 前面加"可能卡住了"并转警告色，但话说得留余地（它可能真在算长推理，
+     *     服务端要 10 分钟无事件才收口）。
+     */
     let logText;
-    if (v.stalled) logText = `可能卡住了 · 最后动静 ${fmtAgo(v.idleMs)}`;
+    if (v.stalled) logText = `可能卡住了 · 最后动作在 ${fmtAgo(v.idleMs)}`;
     else if (note) logText = note;
     else if (live) logText = actOf(live);
-    else if (v.elapsedMs > 60000) logText = '还没有输出，模型可能还在排队';
+    else if (v.idleMs > 20000)
+      // 用 idleMs（自**任何**事件）而不是 lastAgoMs（自最后一个工具步）：
+      // 模型长推理、一路在写正文但没调工具时，后者会一直指着很久以前的工具，报得比实际更旧
+      logText = v.stepCount ? `最后动作在 ${fmtAgo(v.idleMs)}` : `还没有动作 · ${fmtAgo(v.idleMs)}`;
     else logText = v.phaseText;
     setLog(logText);
     // 意图（开场白）从标题降级成悬停提示：单行里它比"正在做的那件事"更长也更旧

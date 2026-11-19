@@ -19,7 +19,7 @@
  * 这个文件原来是 837 行里 722 行注释 —— 改缓存策略前得先翻过 160 个版本。
  * 改法不变：动静态清单就 VERSION +1，并去那边补一条"为什么进这一版"。
  */
-const VERSION = 'v248';
+const VERSION = 'v252';
 const CACHE = `bandi-static-${VERSION}`;
 
 /*
@@ -29,6 +29,8 @@ const CACHE = `bandi-static-${VERSION}`;
  */
 const JS_MODULES = [
   '/js/chat.mjs',
+  // 2026-11-19 从 chat.mjs 拆出的选择器模块（权限 / 模型两颗下拉）—— 新增模块必须进这份清单
+  '/js/composer-pickers.mjs',
   '/js/connectors.mjs',
   '/js/contacts.mjs',
   '/js/core.mjs',
@@ -58,6 +60,13 @@ const JS_MODULES = [
 const CORE = [
   '/',
   '/style.css',
+  // 2026-11-19 拆出来的分页样式：**顺序与 index.html 一致**（core → git → ide → task → toast → machine），
+  // 少一张 = 那一页裸奔；VERSION 跟着 +1（v249 → v250），否则老客户端还用旧缓存。
+  '/style-git.css',
+  '/style-ide.css',
+  '/style-task.css',
+  '/style-toast.css',
+  '/style-machine.css',
   '/mobile.css',
   '/app.mjs',
   '/manifest.webmanifest',

@@ -1,0 +1,36 @@
+/*
+ * 轻提示 toast（替代 alert） —— 2026-11-19 从 style.css 拆出（原文件 4841 行，按"哪一页用的"分段）。
+ *
+ * 拆分只做了**物理搬移**，规则内容一个字没改。因此有三条硬约束：
+ *   ① index.html 里这几个文件的 <link> **必须保持原顺序**（core → git → ide → task → toast → machine），
+ *      CSS 靠先后定胜负，顺序一乱覆盖关系就变；
+ *   ② 新规则写到对应的段里，别再往 core 里堆 —— 它是"全站基础"，改动影响所有页面；
+ *   ③ mobile.css 必须仍然排在最后（它靠这个位置覆盖上面全部）。
+ */
+
+/* ===== 轻提示 toast（2026-10-18）：替代 alert，右下角堆叠、不打断操作 =====
+   为什么放右下：下面这一片极少有要点的东西（主内容是左栏 + 中间列表 + 右侧面板），
+   盖住它的代价最小；而从右上角冒出来会压住"设置/主题"那几个按钮。 */
+.toast-wrap { position: fixed; right: 22px; bottom: 22px; z-index: 90;
+              display: flex; flex-direction: column; gap: 8px; align-items: flex-end;
+              pointer-events: none; }
+/* 顶层化之后的 UA 样式回收（2026-11-03 实报）。#toastWrap 用 popover API 进顶层
+   （压过 dialog，见 shell.mjs toast），但浏览器对 [popover] 自带一整套默认样式：
+   inset:0 + margin:auto + width/height:fit-content + border:solid + Canvas 底。
+   上面只覆盖了 right/bottom，残留的 top:0/left:0 + auto margin 会把整个容器
+   **水平居中**（toast 从右下角跑到屏幕中央竖着堆）；toast 走光后空壳还挂着
+   自带边框和底色，渲染成一个"黑方块"。这里整套回收掉。 */
+#toastWrap:popover-open { inset: auto; right: 22px; bottom: 22px; margin: 0;
+                          border: 0; padding: 0; background: transparent; overflow: visible;
+                          width: auto; height: auto; }
+.toast { pointer-events: auto; cursor: pointer; max-width: min(440px, 78vw);
+         background: var(--panel); color: var(--text); border: 1px solid var(--line);
+         border-left: 3px solid var(--dim); border-radius: 10px;
+         box-shadow: 0 8px 26px var(--shadow); padding: 10px 13px;
+         font-size: 12.5px; line-height: 1.65; white-space: pre-line; overflow-wrap: anywhere;
+         opacity: 0; transform: translateY(8px) scale(.98);
+         transition: opacity .16s ease, transform .16s ease; }
+.toast.in { opacity: 1; transform: none; }
+.toast.error { border-left-color: var(--bad); }
+.toast.ok { border-left-color: var(--ok); }
+.toast-text { max-height: 40vh; overflow: auto; }

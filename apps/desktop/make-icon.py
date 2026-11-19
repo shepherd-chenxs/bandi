@@ -46,9 +46,11 @@ BUILD_RS = ROOT / "apps/desktop/build.rs"
 # 标准色（与 design/logo/bandi-brand.md 一致，改色两处一起改）
 INK = "#12161A"          # 墨 · 主色
 PAPER = "#F7F7F4"        # 浅底
-BONE = "#F2F1ED"         # 深底上的亮片
-JADE = "#2F7E74"         # 玉青 · 标准色（浅底用）
-JADE_LIGHT = "#5FB3A3"   # 浅玉（深底用；深底上玉青会闷）
+BONE = "#F2F1ED"         # 亮片（深底反白 / 浅底全墨）
+# 2026-11-19 用户拍板：「玉」统一改成白色，玉青 #2F7E74 / 浅玉 #5FB3A3 退出标识。
+# 分色退场后，两片同色 —— 标识全部的识别力只剩**错位**（右片下沉那一级台阶），
+# 所以错位档位是几何硬参数，比配色重要得多，别再拿它换。
+# 玉青仍留在产品状态语法里（§七「机器在干」），但不进标识。
 
 SS = 4                   # 超采样倍数
 
@@ -65,11 +67,13 @@ RATIO = 0.546                     # 图标内 mark 宽度占画布比（512 上�
 RATIO_GLYPH = 0.560               # 安卓自适应前景层（安全区 66/108，留够）
 
 SCHEMES = {
-    "dark": (BONE, JADE_LIGHT),
-    "light": (INK, JADE),
-    "mono": (BONE, BONE),
-    "mono-ink": (INK, INK),
+    "dark": (BONE, BONE),      # 墨底反白（app 图标主用）：两片同色，靠错位读形
+    "light": (INK, INK),       # 浅底全墨：同上（浅底上白色不可见，所以反向取墨）
+    "mono": (BONE, BONE),      # 透明底只画形（安卓自适应前景层），恒白
+    "mono-ink": (INK, INK),    # 预留：浅底透明底单色
 }
+# 注意：dark 与 mono、light 与 mono-ink 现在完全等价 —— 键留着是因为调用方按主题取名，
+# 塌成两个键会让 render(theme=) 的语义变糊。要改色改上面四行，别在调用点写死颜色。
 
 
 def _piece(gap: float, off: float, side: int, n: int = 300):

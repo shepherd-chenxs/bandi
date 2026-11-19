@@ -380,7 +380,8 @@ export function scheduleTaskPoll(dev) {
    "只要识别功能" —— 「未识别」段和「按路径接入」弹窗也整个去掉，这一区只剩
    识别（「识别本机运行时」）+ 接入（已识别列表上的开关）。
    deviceId = 设备列表里本机那条的 id；开关/识别的语义与原详情页完全一致。
-   onChange：改动成功后的回调 —— 不传就整页 renderRuntimes()。 */
+   onChange：改动成功后的回调 —— 不传就只重画这一节（paintLocalRuntimes 自己重拉最新数据，
+             不整页重建，避免点开关时整页闪）。 */
 export async function paintLocalRuntimes(mount, deviceId, { onChange } = {}) {
   if (!mount || !deviceId) return;
   let dev = null;
@@ -476,7 +477,12 @@ export async function paintLocalRuntimes(mount, deviceId, { onChange } = {}) {
             body: JSON.stringify({ enabled: el.checked }),
           });
           await load();
-          if (onChange) onChange(); else await renderRuntimes();
+          /* 只重画运行时这一节，别走 renderRuntimes()（2026-11-19 用户实报"点开关页面会闪"）：
+             renderRuntimes → renderDeviceList 第一行就把整个 #settingsView 换成 loading 再异步重建，
+             页头/远程连接卡/数据管理区全被推倒，点一个开关整页闪两次。
+             这里重新拉 devices/:id + families，enabled 与行顺序都拿最新的；
+             和上面「识别本机运行时」按钮（本函数 462 行）同一个范式。 */
+          if (onChange) onChange(); else await paintLocalRuntimes(mount, deviceId, { onChange });
         } catch (err) {
           toast(err.message, 'error');
           el.checked = !el.checked;
@@ -492,7 +498,9 @@ export async function paintLocalRuntimes(mount, deviceId, { onChange } = {}) {
             path: el.dataset.rtPath,
           });
           await load();
-          if (onChange) onChange(); else await renderRuntimes();
+          /* 同上面的 toggle：只重画这一节，不整页重建（否则闪）。接入会让这行从「还没接入」
+             挪进上面的列表，重拉数据正好拿到最新的分组和 enabled 状态。 */
+          if (onChange) onChange(); else await paintLocalRuntimes(mount, deviceId, { onChange });
         } catch (err) {
           toast(err.message, 'error');
           el.disabled = false;

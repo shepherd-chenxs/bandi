@@ -1,6 +1,6 @@
 /* projects.mjs —— 项目。
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
-import { esc, mdRender, personLabel, personaCan, roleNameOf, runtimeLabel, savePlace, setRoute, toast, userLabel } from './shell.mjs';
+import { esc, personLabel, personaCan, roleNameOf, runtimeLabel, savePlace, setRoute, toast, userLabel } from './shell.mjs';
 import { ICON_FOLDER, ICON_WB_BOARD, ICON_WB_CLOCK, ICON_WB_FLOW, api, createCombo, handleCopyPaths, post, personaAvatar, personaByName, renderMarkdown, smAvatar, wireDialogHead } from './ui.mjs';
 import { setNav } from './state.mjs';
 import { breadcrumb, headRow } from './connectors.mjs';
@@ -406,9 +406,9 @@ function openPjCal(btn, input) {
  * 换成 `.detail-head.fixed-head`（同代码托管 / 远程连接的吸顶头：50px 定高 + --side 底 +
  * 底部分隔线），名字 + 内置 pill + 目录 pill 在左、保存回执 + 任务/删除在右。
  * 原来是员工详情那套两行的 .p-head（2026-10-18 骨架），不吸顶。
- * 下面 tabs 两页：**基础信息**（名称/目录/附加目录/说明 + 任务统计）、**项目规章**（＝宪法）。
+ * 下面 tabs 两页：**基础信息**（名称/目录/说明 + 任务统计）、**项目成员**。
  * 字段仍是常驻输入区（没有"点编辑"那步）；tabs 一次渲染、切显隐 ——
- * 在基础信息改了一半去规章再回来，改动还在（同员工详情页的做法）。
+ * 在基础信息改了一半去成员再回来，改动还在（同员工详情页的做法）。
  */
 export async function renderProjDetail(p) {
   const box = $('projDetail');
@@ -425,12 +425,9 @@ export async function renderProjDetail(p) {
   } catch (e) {
     err = e.message;
   }
-  const extraText = (() => {
-    try { return JSON.parse(p.extraRoots || '[]').join('\n'); } catch { return ''; }
-  })();
   const stat = (label, n) => `<span class="kb-stat">${esc(label)} <b>${n ?? 0}</b></span>`;
-  // 手机端只留「项目成员」tab（2026-11-08 用户：「手机端的基础信息、项目规章去掉」）——
-  // 基础信息是大表单、规章是低频编辑，都适合在电脑上做；手机上不输出那两个页签，
+  // 手机端只留「项目成员」tab（2026-11-08 用户：「手机端的基础信息去掉」）——
+  // 基础信息是大表单，适合在电脑上做；手机上不输出那个页签，
   // 默认激活项目成员。注意面板 DOM 仍要渲染（hidden 而非不输出）：自动保存 collect()
   // 照常取值，服务端字段不缺。
   const onPhone = document.body.classList.contains('mb-narrow');
@@ -475,7 +472,6 @@ export async function renderProjDetail(p) {
     <div class="tabs">
       ${onPhone ? '' : '<button class="tab on" data-tab="basics">基础信息</button>'}
       <button class="tab${onPhone ? ' on' : ''}" data-tab="members">项目成员<span class="tab-n" id="pjMemberCount">${pjMembers(p).length}</span></button>
-      ${onPhone ? '' : '<button class="tab" data-tab="rules">项目规章</button>'}
     </div>
     <section class="tab-panel" data-panel="basics">
       <div class="group">
@@ -489,18 +485,14 @@ export async function renderProjDetail(p) {
         <div class="form-row">
           <div class="row-label">工作目录</div>
           <div>
-            <div class="row-with-btn">
+            <!-- 选择按钮收进输入框右缘（2026-11-19 用户：文件夹按钮做在框里，右边那颗去掉） -->
+            <div class="input-icon">
               <input id="pjRoot" value="${esc(p.root ?? '')}" placeholder="例如：E:\\02CodeSpace\\bandi" />
-              <button type="button" id="pjPick" title="选一个本机目录（AI 会在这里干活）">选择</button>
+              <button type="button" class="input-icon-btn" id="pjPick" title="选一个本机目录（AI 会在这里干活）" aria-label="选择目录">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7.5A1.5 1.5 0 0 1 5.5 6h4l2 2h7A1.5 1.5 0 0 1 20 9.5v8A1.5 1.5 0 0 1 18.5 19h-13A1.5 1.5 0 0 1 4 17.5z"/></svg>
+              </button>
             </div>
             <!-- （2026-10-20 用户："这些文案去掉"）原「AI 就在这个目录里干活。」删 -->
-          </div>
-        </div>
-        <div class="form-row top">
-          <div class="row-label">附加目录</div>
-          <div>
-            <textarea id="pjExtra" style="height:56px" placeholder="一行一个路径，例如 E:\\shared\\docs">${esc(extraText)}</textarea>
-            <div class="counter">一行一个，可留空 —— AI 还可以读写的其他目录。</div>
           </div>
         </div>
         <div class="form-row top">
@@ -546,33 +538,9 @@ export async function renderProjDetail(p) {
         </div>
         <div id="pjMemberRows"></div>
       </div>
-    </section>
-
-    <section class="tab-panel" data-panel="rules" hidden>
-      <div class="group">
-        <div class="form-row top">
-          <div class="row-label">宪法（本项目特有的硬约束）</div>
-          <div>
-            <!-- 预览/编辑（2026-10-24）：照「职责与身份设定」那套 —— 规章是 markdown，写少读多，默认预览；
-                 预览渲染的是 textarea 现值（当前草稿），切来切去不丢字。自增高：多高内容多高框。 -->
-            <div class="instr-wrap">
-              <div class="instr-head">
-                <div class="counter" id="pjConstCount"></div>
-                <div class="seg seg-sm" id="pjConstSeg">
-                  <button type="button" data-m="view" class="on">预览</button>
-                  <button type="button" data-m="edit">编辑</button>
-                </div>
-              </div>
-              <div id="pjConstView" class="md-view"></div>
-              <textarea id="projConstInput" hidden placeholder="只写本项目特有的（共通规矩契约已经管了）：&#10;例如：零依赖，不许引入 npm 包；端口固定 18787；改 store.mjs 的 SQL 必须先问人">${esc(p.constitution ?? '')}</textarea>
-            </div>
-            <div class="counter">派活时会全文带给 AI，并注明「只许加码，与契约冲突以契约为准」。</div>
-          </div>
-        </div>
-      </div>
     </section>`;
 
-  // 标签：一次渲染、切显隐 —— 不重建 DOM，所以在「基础信息」改了一半去「规章」再回来，改动还在
+  // 标签：一次渲染、切显隐 —— 不重建 DOM，所以在「基础信息」改了一半去「成员」再回来，改动还在
   // （切之前先 flush：刚敲完就切走，防抖那 700ms 不该把改动吞掉）
   const tabs = box.querySelectorAll('[data-tab]');
   const panels = box.querySelectorAll('[data-panel]');
@@ -609,8 +577,8 @@ export async function renderProjDetail(p) {
   const collect = () => ({
     name: $('pjName').value.trim(),
     root: $('pjRoot').value.trim(),
-    extraRoots: $('pjExtra').value.split('\n').map((s) => s.trim()).filter(Boolean),
-    constitution: $('projConstInput').value.trim(),
+    // 附加目录不再从 UI 收（2026-11-19 用户：「附加目录去掉」，同 chat.mjs 那条口径）：
+    // **不传 = 服务端不动库里原值**，老数据不会被清掉
     summary: $('pjSummary').value.trim(),
     pmPersonaId: pjPeople.pm,
     memberPersonaIds: pjPeople.members,
@@ -697,55 +665,10 @@ export async function renderProjDetail(p) {
   const stopFlush = () => { detailSave.flush = null; };
   detailSave.flush = (opts) => { pjSaveNow(opts); };
 
-  for (const id of ['pjName', 'pjRoot', 'pjExtra', 'projConstInput', 'pjSummary', 'pjStarted', 'pjEnded']) {
+  for (const id of ['pjName', 'pjRoot', 'pjSummary', 'pjStarted', 'pjEnded']) {
     $(id)?.addEventListener('input', () => schedulePjSave(700));
     $(id)?.addEventListener('blur', () => pjSaveNow());
   }
-
-  /* 项目规章 预览/编辑（2026-10-24）：照「职责与身份设定」那套 —— markdown 写少读多，默认预览。
-     预览渲染的是 textarea **现值**（当前草稿），切来切去不丢字，也不存在"预览回滚"；
-     切回预览顺手 pjSaveNow 一次，给自动保存兜底。自增高：多高内容多高框，滚动只留外层页面。 */
-  const pjConstEl = $('projConstInput');
-  const pjConstView = $('pjConstView');
-  let pjConstMode = 'view';
-  const pjConstFit = () => {
-    if (pjConstEl.hidden) return;
-    pjConstEl.style.height = 'auto';
-    pjConstEl.style.height = `${pjConstEl.scrollHeight}px`;
-  };
-  const pjConstSyncCount = () => { $('pjConstCount').textContent = `${pjConstEl.value.trim().length} 字`; };
-  const pjConstRenderView = () => {
-    const val = pjConstEl.value;
-    pjConstView.innerHTML = val.trim()
-      ? mdRender(val)
-      : '<div class="md-empty">还没写。写本项目特有的硬约束 —— 共通规矩契约已经管了。<button type="button" class="linkish" data-pj-const-edit>写一段</button></div>';
-  };
-  const pjConstSetMode = (m) => {
-    if (m === pjConstMode) return;
-    pjConstMode = m;
-    if (m === 'view') {
-      pjConstRenderView();
-      pjConstEl.hidden = true;
-      pjConstView.hidden = false;
-      pjSaveNow?.(); // 切回预览兜一次保存
-    } else {
-      pjConstView.hidden = true;
-      pjConstEl.hidden = false;
-      pjConstFit();
-      pjConstEl.focus();
-    }
-    $('pjConstSeg').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.m === m));
-  };
-  $('pjConstSeg')?.addEventListener('click', (e) => {
-    const b = e.target.closest('button[data-m]');
-    if (b) pjConstSetMode(b.dataset.m);
-  });
-  pjConstView.addEventListener('click', (e) => {
-    if (e.target.closest('[data-pj-const-edit]')) pjConstSetMode('edit');
-  });
-  pjConstEl.addEventListener('input', () => { pjConstSyncCount(); pjConstFit(); });
-  pjConstRenderView();
-  pjConstSyncCount();
 
   /* 项目经理：**从项目成员里选**（2026-10-24 用户定的口径）—— 全站公共的可搜索下拉。
      成员加了人要重建下拉（createCombo 是一次性挂载），所以包成 paintPmCombo：
@@ -5048,7 +4971,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
    * 原来讨论区只有一个三个点的 typing 气泡；现在换成和对话页**同一块运行进度卡**
    * （run-progress-card.mjs）：阶段 + 第几步 + 总用时、最近动作、卡住了把「停止生成」摆到眼前。
    */
-  const attach = (runId, topicId = replyTo, startedAt = null) => {
+  const attach = (runId, topicId = replyTo, startedAt = null, lastEventAt = null) => {
     if (!runId || stream || stale()) return; // 过期页面的实时气泡不许往现役页面的讨论区里塞
     liveRunId = runId; // 有这一轮在跑 → 露出「停止生成」
     syncStop();
@@ -5087,7 +5010,8 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     scrollThreads();
     const body = document.querySelector('#' + id + ' .tc-cmt-text');
     // 进度卡和对话页同一套；卡上的「停止生成」掐的是这一轮（abortRun 在上面，含界面立即停 + 服务端 abort）
-    const card = createProgressCard({ startedAt, onStop: () => abortRun() });
+    // lastEventAt：打开时正好在跑的那条路（见下面 attach 的调用方），空闲时长按服务端记的算
+    const card = createProgressCard({ startedAt, lastEventAt, onStop: () => abortRun() });
     body?.appendChild(card.el);
     /*
      * 直播回话状态机跟聊天页**共用一份**（run-live.mjs，2026-11-09 英文运行实报收口）：
@@ -5145,7 +5069,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     // （不掐的话它还在后台收消息，往一个已经从文档里摘掉的 DOM 里写）
     if (dlg) tcDlgStream = stream;
   };
-  if (runningRun) attach(runningRun.id, null, runningRun.startedAt); // 打开时正好在跑 → 接上，不等刷新
+  if (runningRun) attach(runningRun.id, null, runningRun.startedAt, runningRun.lastEventAt); // 打开时正好在跑 → 接上，不等刷新
 
   const sendText = async () => {
     const text = $('tcInput').value.trim();
@@ -5904,7 +5828,7 @@ export async function pickProjectDir(btnId, inputId) {
 
 /**
  * 新建项目的小弹窗（2026-10-18 用户定的分工）：**弹窗只问名字和路径**，
- * 附加根 / 说明 / 宪法这些都在右侧详情里编辑（renderProjDetail 的就地编辑）。
+ * 附加根 / 说明这些都在右侧详情里编辑（renderProjDetail 的就地编辑）。
  * 只管新建 —— 编辑走详情页，不再有「编辑弹窗」。
  */
 export function projectDialog() {
@@ -5917,9 +5841,11 @@ export function projectDialog() {
       <b>新建项目</b>
       <label>名字</label><input id="npName" placeholder="例如：班底" />
       <label>项目目录（AI 就在这儿干活）</label>
-      <div class="row-with-btn">
+      <div class="input-icon">
         <input id="npRoot" placeholder="例如：E:\\02CodeSpace\\bandi" />
-        <button type="button" id="npPick" title="选一个本机目录（AI 会在这里干活）">选择</button>
+        <button type="button" class="input-icon-btn" id="npPick" title="选一个本机目录（AI 会在这里干活）" aria-label="选择目录">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7.5A1.5 1.5 0 0 1 5.5 6h4l2 2h7A1.5 1.5 0 0 1 20 9.5v8A1.5 1.5 0 0 1 18.5 19h-13A1.5 1.5 0 0 1 4 17.5z"/></svg>
+        </button>
       </div>
       <div class="dlg-actions">
         <button type="button" value="cancel">取消</button>
@@ -5944,7 +5870,7 @@ export function projectDialog() {
         body: JSON.stringify({ name, root, extraRoots: [] }),
       });
       dlg.close();
-      // 存完回项目页并选中刚那个：附加根/干什么/宪法都在详情里补
+      // 存完回项目页并选中刚那个：简介/成员这些在详情里补
       await openProjectsPage(saved?.project?.id);
     } catch (err) {
       toast(err.message, 'error');

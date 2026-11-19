@@ -50,8 +50,6 @@ export const S = {
   membersExpanded: false,
   memberQuery: '',
   settingsSection: 'prefs',
-  // 组织架构（2026-11-11 Phase 3）：当前选中的子菜单（现在只有 'roles' = 岗位权限清单）
-  orgSection: 'roles',
   // 岗位与权限（/api/state 下发；roles.mjs 是唯一事实源）
   roles: [],
   permissions: {},

@@ -21,7 +21,14 @@
  * 对用户来说"调了一次工具"才是看得见的一步，所以计数按工具调用走。
  */
 
-/** 多久没有任何新事件就算"可能卡住了"（用户 2026-10-26 定 5 分钟） */
+/**
+ * 多久没有任何新事件就算"可能卡住了"（用户 2026-10-26 定 5 分钟）。
+ *
+ * ⚠️ 这个**只是提示**，不是判死（2026-11-19 对齐）：服务端要连续 10 分钟无事件
+ * （`BANDI_RUN_IDLE_MS`）才真收口 —— 5 分钟就警告是因为"人先看出来、自己决定要不要停"
+ * 比"等平台动手"更好。所以文案必须留余地（"可能"），别写成"已经卡死"：
+ * 长任务里模型真有可能一段长推理五六分钟不出事件，那时它还在干活。
+ */
 export const STALL_MS = 5 * 60 * 1000;
 
 /** 阶段 → 人话。界面只认这几个词，别在别处再翻译一遍 */
@@ -159,10 +166,32 @@ export function toolSummary(name, input, detail = null) {
  * 一次运行的进度状态（纯数据）。
  * `startedAt`：这次运行真正开始的时间（从服务端 run 行带过来；拿不到就用现在）。
  */
-export function createRunProgress({ startedAt = Date.now(), now = Date.now() } = {}) {
+export function createRunProgress({ startedAt = Date.now(), lastEventAt = null, now = Date.now() } = {}) {
+  const began = Number.isFinite(startedAt) ? startedAt : now;
+  /*
+   * **lastEventAt：服务端记的"最后一次活动"，重画时必须用它，不能用 now**（2026-11-19）。
+   *
+   * 场景：一轮已经卡了 8 分钟，你刷新页面。新建 state 时 lastEventAt 若取 now，idleMs 立刻
+   * 归零 —— 界面显示"刚动过"，你就一直等下去；服务端那边过 2 分钟其实已经收口了。
+   * 库里存的是持久事实，重画时就该认它。
+   *
+   * 夹在 [began, now] 之间：早于开始时间说明数据不对（不该发生），晚于现在就当它刚动过
+   * （本地与服务端有时钟偏差，往"更活跃"的方向兜，别凭空报"卡住"）。
+   */
+  /*
+   * ⚠️ 必须先挡 null / undefined 再 Number()：`Number(null)` 是 **0**（finite！），
+   * 会被夹到 startedAt 上，于是"没给这个字段"的老调用方全部变成"从开工那一刻起没动过"。
+   */
+  const last =
+    lastEventAt == null
+      ? NaN
+      : typeof lastEventAt === 'string'
+        ? Date.parse(lastEventAt)
+        : Number(lastEventAt);
+  const idleAt = Number.isFinite(last) ? Math.min(Math.max(last, began), now) : now;
   return {
-    startedAt: Number.isFinite(startedAt) ? startedAt : now,
-    lastEventAt: now,
+    startedAt: began,
+    lastEventAt: idleAt,
     phase: 'starting',
     turns: 0,
     steps: [],

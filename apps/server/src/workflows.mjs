@@ -17,7 +17,7 @@ import * as store from './store.mjs';
 import * as runs from './runs.mjs';
 import * as cliModels from './cli-models.mjs';
 import * as runtimes from './runtimes.mjs';
-import { dispatchToThread, projectConstitutionBlock } from './dispatch.mjs';
+import { dispatchToThread } from './dispatch.mjs';
 // 交付声明（2026-11-09 P4/P5）：标记的判据统一在 delivery-claim.mjs（首行/末行都认）；
 // 这里保留 blockedMark 同名导出（老调用方/冒烟兼容），引擎自己的受阻判定改用 claimOf。
 import { blockedMark, blockedReasonOf, claimOf, stripClaimMarks } from './delivery-claim.mjs';
@@ -523,7 +523,7 @@ export function startCurrentStep(runId) {
    * 消息列表里不出现（从工作台 / 流程页进去），不再淹没人和员工的对话。
    */
   /*
-   * try 从「找工单会话」就开始，不是从 dispatchToThread 才开始：会话、宪法、@ 名
+   * try 从「找工单会话」就开始，不是从 dispatchToThread 才开始：会话、@ 名
    * 这些准备动作也会抛（比如点名的人中途离职），早先它们会把任务留在「进行中」
    * 而没有任何收尾 —— 自主流程就那样静默卡住。失败收口只留一处，别再漏一个挂点。
    */
@@ -532,9 +532,7 @@ export function startCurrentStep(runId) {
     store.setWorkflowRunThread(runId, conv); // 记下"这一步在哪个会话"：删会话时凭它把流程实例的会话指针归零
     const at = store.getConversation(conv)?.kind === 'group' ? `@${store.getPersona(task.assigneePersonaId)?.name} ` : '';
     // 发起时填的「想法」就是发给第一个人的第一句 —— 后面几步也带上，作为起因的上下文
-    const constitution = projectConstitutionBlock(run.projectId);
     const text = [
-      constitution,
       `${at}【流程 · ${run.title}】`,
       run.intent ? `\n起因（发起人说的）：${run.intent}` : '',
       `\n这一步（第 ${task.visit} 次办理）：${task.nodeName}`,
