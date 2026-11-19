@@ -525,6 +525,13 @@ button.gr-pr-check:hover { background: var(--side); }
 .rp.warn .rp-phase { color: var(--warn); }
 .rp.warn .rp-head { border-color: color-mix(in srgb, var(--warn) 42%, var(--line));
                     background: color-mix(in srgb, var(--warn) 7%, var(--panel)); }
+/* 连不上模型（2026-11-19）：跟"可能卡住了"分开上色 —— 一个是"你去修网络"、
+   一个是"只能等"，混成同一种黄就没人会去动代理。用 bad 色，因为它真拦住了活。 */
+.rp.link .rp-dot { background: var(--bad); animation: none; }
+.rp.link .rp-dot::after { border-color: var(--bad); animation: none; opacity: 0; }
+.rp.link .rp-phase { color: var(--bad); }
+.rp.link .rp-head { border-color: color-mix(in srgb, var(--bad) 42%, var(--line));
+                    background: color-mix(in srgb, var(--bad) 6%, var(--panel)); }
 .rp.done .rp-dot { background: var(--ok); animation: none; }
 .rp.done .rp-head { border-color: color-mix(in srgb, var(--ok) 30%, var(--line)); }
 .rp.done .rp-dot::after, .rp.error .rp-dot::after { display: none; }

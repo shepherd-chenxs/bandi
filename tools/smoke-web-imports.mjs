@@ -139,11 +139,11 @@ for (const [f, raw] of src) {
   /* ① ②：import / 转导出 的具名成员必须存在于目标模块 */
   for (const m of code.matchAll(/(import|export)\s*\{([^}]*)\}\s*from\s*['"]\.\/([\w.-]+\.mjs)['"]/g)) {
     const [, kind, names, target] = m;
-    if (!exportsOf.has(target)) { problems.push(`${f}: ${kind} … from './${target}' —— 模块不存在`); continue; }
+    if (!exportsOf.has(target)) { problems.push(`${f}: ${kind} 从 ${target} 引成员 —— 模块不存在`); continue; }
     for (const part of names.split(',')) {
       const name = part.trim().split(/\s+as\s+/)[0].trim();
       if (!name) continue;
-      if (!exportsOf.get(target).has(name)) problems.push(`${f}: './${target}' 没有导出 ${name}`);
+      if (!exportsOf.get(target).has(name)) problems.push(`${f}: ${target} 没有导出 ${name}`);
     }
   }
 

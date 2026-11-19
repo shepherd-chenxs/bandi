@@ -51,7 +51,7 @@
  *     这一行显示什么不重要、在动就行，不再留"内容显不显示"的配置给用户配。
  */
 import { esc } from './shell.mjs';
-import { applyRunEvent, clipEnds, createRunProgress, fmtAgo, fmtElapsed, fmtStepDur, progressView } from './run-progress.mjs';
+import { applyRunEvent, clipEnds, createRunProgress, fmtAgo, fmtElapsed, fmtStepDur, linkText, progressView, waitText } from './run-progress.mjs';
 
 export function createProgressCard({ startedAt = Date.now(), lastEventAt = null, onStop = null } = {}) {
   // startedAt 可能是服务端 run 行的 ISO 字符串（重新打开页面接上跑中的运行时走这条路）——
@@ -161,6 +161,8 @@ export function createProgressCard({ startedAt = Date.now(), lastEventAt = null,
     }
     finishedPainted = false;
     el.classList.toggle('warn', v.stalled);
+    // 通道断了用自己的色（跟"可能卡住了"分开：一个要你去修网络，一个只能等）
+    el.classList.toggle('link', !!v.link);
     el.classList.toggle('done', false);
     el.classList.toggle('error', !!v.error);
 
@@ -192,14 +194,23 @@ export function createProgressCard({ startedAt = Date.now(), lastEventAt = null,
      *   · ≥5 分钟 → 前面加"可能卡住了"并转警告色，但话说得留余地（它可能真在算长推理，
      *     服务端要 10 分钟无事件才收口）。
      */
+    /*
+     * **连不上模型**排最前（2026-11-19 用户口径："要让我直接能看到你在重连，我看到会处理的"）：
+     * 这一档高于"卡住"也高于任何动作 —— 此刻没有动作是**正常**的（请求根本没发出去），
+     * 报"最后动作在 N 前"会让人以为活干挂了。要报的是"在重连第几次、已经等了多久"。
+     * 恢复后的 6 秒闪一帧"连上了"，让人知道故障过去了，不必再去翻代理。
+     */
     let logText;
-    if (v.stalled) logText = `可能卡住了 · 最后动作在 ${fmtAgo(v.idleMs)}`;
+    if (v.link) logText = linkText(v);
+    else if (v.justRecovered) logText = '模型连上了，继续';
+    else if (v.stalled) logText = `可能卡住了 · 最后动作在 ${fmtAgo(v.idleMs)}`;
     else if (note) logText = note;
     else if (live) logText = actOf(live);
     else if (v.idleMs > 20000)
       // 用 idleMs（自**任何**事件）而不是 lastAgoMs（自最后一个工具步）：
-      // 模型长推理、一路在写正文但没调工具时，后者会一直指着很久以前的工具，报得比实际更旧
-      logText = v.stepCount ? `最后动作在 ${fmtAgo(v.idleMs)}` : `还没有动作 · ${fmtAgo(v.idleMs)}`;
+      // 模型长推理、一路在写正文但没调工具时，后者会一直指着很久以前的工具，报得比实际更旧。
+      // 一步都没走时说"等模型回话"，不说"还没有动作" —— 后者像在说它偷懒（见 waitText）
+      logText = waitText(v);
     else logText = v.phaseText;
     setLog(logText);
     // 意图（开场白）从标题降级成悬停提示：单行里它比"正在做的那件事"更长也更旧
@@ -216,11 +227,19 @@ export function createProgressCard({ startedAt = Date.now(), lastEventAt = null,
      * 正常跑动时整块**恒为一行**，这是这次改版的本体。
      */
     let lastText = '';
-    if (v.error) lastText = esc(v.error);
+    if (v.link) lastText = esc(clipEnds(v.link.msg, 120));
+    else if (v.error) lastText = esc(v.error);
     else if (v.info) lastText = esc(v.info);
+    /*
+     * 开局一分多钟一个字没等到：说清这是**常见但可疑**的情形（2026-11-19 用户实拍问
+     * "他这个是在尝试连接吗"）。写"网络 / 代理"是因为实测那两类故障正是这么表现的
+     * （请求发出去、TLS 握手挂住、三四分钟后才吐第一条重连）。
+     * 不下结论、不催人动手 —— 它确实可能只是在长思考。
+     */
+    else if (!v.stepCount && v.idleMs >= 60000) lastText = '模型还没回话 —— 网络 / 代理不通时常见，它在自己重试';
     lastEl.hidden = !lastText;
     lastEl.innerHTML = lastText;
-    lastEl.classList.toggle('warn', v.stalled);
+    lastEl.classList.toggle('warn', v.stalled || !!v.link);
 
     // 明细运行中一律收起（2026-11-08 单行气泡）：胶囊只报"此刻在做什么"，
     // 想回看每步是收尾之后点胶囊的事 —— 也省掉每秒重画 8 行 DOM
@@ -234,12 +253,16 @@ export function createProgressCard({ startedAt = Date.now(), lastEventAt = null,
    */
   const paintFinished = (v) => {
     el.classList.remove('warn');
+    el.classList.remove('link');
     el.classList.add('done');
     const bad = v.phase === 'error';
     el.classList.toggle('error', bad);
     const n = v.steps.length;
     const ico = bad ? '✗' : v.status === 'stopped' ? '⏹' : '✓';
-    const label = bad ? '出错了' : (v.intent && n ? clipEnds(v.intent, 30) : v.status || '已结束');
+    // "没连上模型"单独说 —— 它跟"活干挂了"是两件事，人要做的事完全不同（查网络 vs 看代码）
+    const label = bad
+      ? (v.error.startsWith('模型没连上') ? '没连上模型' : '出错了')
+      : (v.intent && n ? clipEnds(v.intent, 30) : v.status || '已结束');
     const phCount = v.phases && v.phases.length >= 2 ? `${v.phases.length} 阶段 · ` : '';
     /*
      * 折叠头直接占日志槽（2026-11-08）：胶囊里没有第二行的位置。

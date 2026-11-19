@@ -258,6 +258,51 @@ const RUN_IDLE_MS = Number(process.env.BANDI_RUN_IDLE_MS ?? 10 * 60_000);
 const IDLE_TICK_MS = Math.min(30_000, Math.max(500, Math.floor(RUN_IDLE_MS / 4)));
 
 /**
+ * **模型通道断了**（2026-11-19 用户实报："连不上模型，要让我直接能看到你在重连，
+ * 我看到会处理的"）。
+ *
+ * 这条判据只回答一个问题："这条 error 是**上游模型/网络**的问题，还是这个任务本身的问题"。
+ *   · 是通道问题 → 前端进度卡当场报「连不上模型 · 重连 2/5 · 已等 43 秒」，
+ *     人一眼就知道该去看代理/网络，而不是以为活干挂了；
+ *   · 不是通道问题 → 老路（扣住、收尾时当失败原因）。
+ *
+ * 为什么必须单独挑出来放行（见 onEvent）：error 事件在续会话时是**扣住**的 ——
+ * 初衷是"会话不存在"那个必然失败别闪一下。但重连中的 error 恰恰是最该实时看到的东西，
+ * 被扣到进程结束才补发，用户那 7 分钟里只会看到界面一片死。
+ */
+const CHANNEL_FAIL_RE =
+  /(reconnecting|econnreset|econnrefused|etimedout|enotfound|eai_again|epipe|fetch failed|socket (?:disconnect|hang ?up)|tls handshake|network error|50[234]\b)/i;
+
+/** 这条 error 是不是"连不上模型"（导出给冒烟用） */
+export function isChannelError(message) {
+  return CHANNEL_FAIL_RE.test(String(message ?? ''));
+}
+
+/** 通道错误说人话：原文压成一行、留头留尾（ERR 码多半在尾巴上） */
+function channelReason(message) {
+  const one = String(message ?? '').replace(/\s+/g, ' ').trim();
+  if (one.length <= 140) return one || '没有拿到模型的第一句输出';
+  return `${one.slice(0, 100)}…${one.slice(-30)}`;
+}
+
+/**
+ * 空回话占位（**按原因分档**）。
+ *
+ * 以前一律是 `EMPTY_REPLY_TEXT`（"模型输出为空或运行被中断"）—— 那句话对"通道 502"
+ * 这种情形等于没说：人不知道是自己网络的问题，也不知道该做什么。分档之后，
+ * 通道类失败给的是**可执行的一句话**（查代理、修好回「继续」）。
+ */
+function emptyReplyText(run) {
+  const last = String(run?.lastErrMsg ?? '');
+  if (!isChannelError(last)) return EMPTY_REPLY_TEXT;
+  return (
+    `（这一轮没连上模型 —— ${channelReason(last)}。\n` +
+    '看一眼网络 / 代理（开着 Clash「系统代理」时最常见），好了回一句「继续」，' +
+    '我接着原来的会话往下做，之前做的不用重来）'
+  );
+}
+
+/**
  * 时长说人话（"48 秒" / "15 分钟"）：收口说明和卡片描述共用一套口径 ——
  * 两处各写一遍会出现「跑了 15 分钟」和「跑了 0 分钟」两种，就是因为除不尽时没兜。
  * 导出给 project-tasks 的 endNoteOf 用。
@@ -598,11 +643,22 @@ export function startRun({ thread, member, task, standing = null, watermark = 0,
         // 否则续会话失败又重开也失败时，最后只剩退出码（见 lastErrMsg 的注释）
         if (evt.type === 'error') {
           const m = String(evt.message ?? '').trim();
-          if (m) lastErrMsg = m;
-        }
-        if (sid && evt.type === 'error') {
-          held.push(evt);
-          return;
+          if (m) {
+            lastErrMsg = m;
+            // 挂到 run 上：收尾时 persistReply 要按它决定"空回话占位"写哪一句，
+            // 而 lastErrMsg 是 runOnce 作用域里的局部量，出不了这个函数
+            run.lastErrMsg = m;
+          }
+          /*
+           * **通道类错误不进 held**（2026-11-19）：held 的初衷只是"会话不存在"那个
+           * 必然失败别先闪一下；「重连 1/5 … ECONNRESET」跟会话无关，而且它是用户
+           * **最需要实时看到**的东西 —— 被扣到进程结束才补发，人只能干瞪着一片死。
+           * 详见 isChannelError 的注释。
+           */
+          if (sid && !isChannelError(m)) {
+            held.push(evt);
+            return;
+          }
         }
         pushEvent(run, evt);
       },
@@ -801,8 +857,16 @@ export const STOP_WATCHDOG_MS = 5000;
  *      不说清楚他会以为要从头再干一遍（那才是真正浪费几小时的地方）。
  */
 function idleNote(run) {
+  /*
+   * 最后一条是"连不上模型"时要写出来（2026-11-19）：不写的话，收口说明一律是
+   * "进程没动静了"，人只会去怀疑员工卡了，不会想到该去看代理 —— 而这条恰恰是**唯一**
+   * 他自己能修的那类故障。
+   */
+  const chan = isChannelError(run.lastErrMsg)
+    ? `最后一次是连不上模型（${channelReason(run.lastErrMsg)}），`
+    : '';
   return (
-    `\n\n（这一轮有 ${humanSpan(run.idleMs ?? RUN_IDLE_MS)}没有进展（进程没动静了），我先停在这儿 —— ` +
+    `\n\n（这一轮有 ${humanSpan(run.idleMs ?? RUN_IDLE_MS)}没有进展（${chan}进程没动静了），我先停在这儿 —— ` +
     `回一句「继续」，我接着原来的会话往下做，之前做的不用重来。）`
   );
 }
@@ -926,10 +990,14 @@ function persistReply(run, text, meta = null) {
    * 只动消息文本，`run.finalText` 保持原样（判卡状态 / 证据仍按原文）。
    */
   const blank = !raw.trim();
+  // 空回话**按原因分档**（见 emptyReplyText）：通道断了要写出"查代理、好了回继续"，
+  // 不能跟"模型输出为空"共用一句废话
   const shown = blank
-    ? EMPTY_REPLY_TEXT
+    ? emptyReplyText(run)
     : stripTrailingDoneMark(raw.replace(/^\s*\[完成\][ \t]*(?:\r?\n)*/, '')) || raw;
-  const finalMeta = blank ? { ...(meta ?? {}), emptyReply: true } : meta;
+  const finalMeta = blank
+    ? { ...(meta ?? {}), emptyReply: true, ...(isChannelError(run.lastErrMsg) ? { channelDown: true } : {}) }
+    : meta;
   const msg = store.addMessage({
     conversationId: run.conversationId,
     runId: run.id,

@@ -32,6 +32,29 @@
 export const STALL_MS = 5 * 60 * 1000;
 
 /** 阶段 → 人话。界面只认这几个词，别在别处再翻译一遍 */
+/**
+ * **"连不上模型"的识别**（2026-11-19 用户实报："连不上模型，要让我直接能看到你在重连，
+ * 我看到会处理的"）。
+ *
+ * 那一轮的真实经过：模型请求 TLS 握手就断了，CLI 吐了 `Reconnecting... 1/5 …ECONNRESET`，
+ * 然后重试 5 次、7 分钟，一个字没产出。而界面上这段时间**什么都没有** ——
+ * 事件被服务端扣住了（见 runs.mjs 的 isChannelError），用户只能看到"卡住了"。
+ *
+ * 判据只认**运行级 error 事件**里的通道特征（工具自己的报错走 tool_result，不在此列）：
+ * 认得出来就报「连不上模型 · 重连 2/5 · 已等 43 秒」，让人知道该去查代理/网络。
+ */
+export const CHANNEL_FAIL_RE =
+  /(reconnecting|econnreset|econnrefused|etimedout|enotfound|eai_again|epipe|fetch failed|socket (?:disconnect|hang ?up)|tls handshake|network error|50[234]\b)/i;
+
+/** 从 error 原文里抠重连轮次（codex 写 `Reconnecting... 2/5`，别家未必有） */
+function channelAttempt(message) {
+  const m = /reconnecting[^\d]{0,12}(\d+)\s*\/\s*(\d+)/i.exec(String(message ?? ''));
+  if (!m) return { attempt: 0, total: 0 };
+  const attempt = Number(m[1]);
+  const total = Number(m[2]);
+  return Number.isFinite(attempt) && Number.isFinite(total) ? { attempt, total } : { attempt: 0, total: 0 };
+}
+
 export const PHASE_TEXT = {
   starting: '准备中',
   thinking: '思考中',
@@ -198,6 +221,13 @@ export function createRunProgress({ startedAt = Date.now(), lastEventAt = null, 
     byCall: new Map(),
     error: '',
     info: '',
+    /*
+     * 通道状态（2026-11-19）：`{ at, attempt, total, msg }`，非空 = **此刻连不上模型**。
+     * 只看运行级 error 事件；任何一个别的类型的后续事件到了就说明通道回来了（见 applyRunEvent）。
+     * `recoveredAt` 记最后一次恢复的时刻，界面拿它闪一帧"模型连上了，继续"。
+     */
+    link: null,
+    recoveredAt: 0,
     done: false,
     status: '',
     // 意图（2026-11-05 评鉴）：第一件工具之前的回话原文 —— "他要干嘛"的人话，
@@ -307,20 +337,49 @@ export function applyRunEvent(state, evt, now = Date.now()) {
       state.phase = 'tool';
       break;
     }
-    case 'error':
-      state.phase = 'error';
-      state.error = clip(String(evt.message ?? evt.text ?? '').split('\n')[0] || '运行失败', 160);
+    case 'error': {
+      // 整行取第一行：上游常带调用栈/多段重试文本，摊出来只会把这一行撑爆
+      const raw = String(evt.message ?? evt.text ?? '').split('\n')[0] || '运行失败';
+      /*
+       * **连不上模型 ≠ 出错了**（2026-11-19）：这一档仍在自救（CLI 自己在重试），
+       * 界面报"正在重连 N 次、已等多久"，让人决定要不要去查代理。
+       * 不写 state.error —— 那个是"永久驻留的红字"，重连成功后它会一直挂着，等于骗人。
+       */
+      if (CHANNEL_FAIL_RE.test(raw)) {
+        state.link = { at: now, ...channelAttempt(raw), msg: raw.slice(0, 240) };
+        state.phase = 'thinking';
+        state.error = '';
+      } else {
+        state.link = null;
+        state.phase = 'error';
+        state.error = clip(raw, 160);
+      }
       break;
+    }
     case '__done': {
       state.done = true;
       state.status = String(evt.status ?? '');
       state.phase = evt.status === 'failed' ? 'error' : 'done';
       if (Number.isFinite(evt.elapsedMs)) state.finalElapsedMs = evt.elapsedMs;
+      // 到收尾还挂着 link = 一直没连上：结论行要说得出来原因，不能只剩"出错了"
+      if (state.link) {
+        state.error = `模型没连上：${clip(state.link.msg, 140)}`;
+        state.link = null;
+      }
       closeRunning(state);
       break;
     }
     default:
       break;
+  }
+  /*
+   * **通道回来的判据：任何一条不是 error 的事件**（tool / text / thinking / status…）。
+   * 模型侧一旦能出字，CLI 就不会再吐重连提示 —— 反过来，别的事件到了就说明通了。
+   * 记下时刻，界面闪一帧"模型连上了，继续"（`recoveredAt`）。
+   */
+  if (type !== 'error' && state.link) {
+    state.link = null;
+    state.recoveredAt = now;
   }
   return state;
 }
@@ -434,6 +493,14 @@ export function progressView(state, now = Date.now()) {
       : Math.max(0, now - state.startedAt),
     idleMs,
     stalled,
+    /*
+     * 通道状态（2026-11-19）：`link` 非空 = 此刻连不上模型，`linkWaitMs` = 已经等了多久
+     * （由每秒重画的 now 现算，所以"已等 43 秒"会自己走）。`justRecovered` = 刚恢复的那几秒，
+     * 界面用来说一句"连上了，继续"，再让位给正常日志。
+     */
+    link: state.link,
+    linkWaitMs: state.link ? Math.max(0, now - state.link.at) : 0,
+    justRecovered: !state.link && !!state.recoveredAt && now - state.recoveredAt < 6000,
     done: state.done,
     status: state.status,
     error: state.error,
@@ -468,6 +535,52 @@ export function fmtAgo(ms) {
   if (total < 60) return `${total} 秒前`;
   if (total < 3600) return `${Math.floor(total / 60)} 分钟前`;
   return `${Math.floor(total / 3600)} 小时前`;
+}
+
+/**
+ * 一段**正在累积**的时长说人话："43 秒" / "2 分 10 秒" / "1 小时 5 分"。
+ * 跟 fmtAgo 的区别：那个说的是"多久以前"（会加"前"），这个是"已经等了多久"。
+ */
+export function fmtSince(ms) {
+  const total = Math.max(0, Math.round(ms / 1000));
+  if (total < 60) return `${total} 秒`;
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  if (m < 60) return s ? `${m} 分 ${s} 秒` : `${m} 分钟`;
+  const h = Math.floor(m / 60);
+  const mm = m % 60;
+  return mm ? `${h} 小时 ${mm} 分` : `${h} 小时`;
+}
+
+/**
+ * 通道断了的**那一行字**（单点：卡片只调用它，文案要改只改这里）。
+ * 形状固定成「连不上模型 · 正在重连 2/5 · 已等 43 秒」—— 三件事分别是
+ * 怎么了 / 在自救没有 / 已经多久，人扫一眼就能决定要不要去动代理。
+ * 没有轮次信息（别家 CLI 不吐 Reconnecting）就省掉中间那段，不编。
+ */
+export function linkText(v) {
+  if (!v?.link) return '';
+  const step = v.link.attempt ? `正在重连 ${v.link.attempt}/${v.link.total}` : '正在重连';
+  return `连不上模型 · ${step} · 已等 ${fmtSince(v.linkWaitMs ?? 0)}`;
+}
+
+/**
+ * 静默期的那一行字（**两种静默不是一回事**，别用同一句话说）。
+ *
+ * 2026-11-19 用户实拍问："他这个是在尝试连接吗" —— 界面上写着「还没有动作 · 1 分钟前」，
+ * 看起来像"它什么都没干"。实际是**请求已经发出去了，在等模型第一个字**：
+ * 那段时间 CLI 既不吐 token 也不报错（重连提示要等首次请求真失败才出，实测三四分钟后），
+ * 界面一片空白纯属我们没说法。
+ *
+ * 所以分两档：
+ *   · 一步都没走 → 「等模型回话 · 已等 N」：球在对方，不是我方没干活；
+ *   · 走过几步后停住 → 「最后动作在 N 前」：活干到一半，哪一步停的。
+ */
+export function waitText(v) {
+  if (!v) return '';
+  return v.stepCount
+    ? `最后动作在 ${fmtAgo(v.idleMs)}`
+    : `等模型回话 · 已等 ${fmtSince(v.idleMs)}`;
 }
 
 /** 单步耗时：不到一秒也显示 1s（"0s"看着像没耗时） */
