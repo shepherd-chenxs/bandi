@@ -18,7 +18,9 @@ const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (p) => fs.readFileSync(path.join(repo, p), 'utf8').replace(/\r\n/g, '\n');
 const skills = read('apps/web/js/skills.mjs');
 const ui = read('apps/web/js/ui.mjs');
-const css = read('apps/web/style.css');
+// 2026-11-19 样式拆到两份（style.css 基础 + style-ide.css 组件），断言要扫**全部**分片：
+// 只读一份的话，下次搬家又是一片假红
+const css = ['apps/web/style.css', 'apps/web/style-ide.css'].map(read).join('\n');
 
 let bad = 0;
 let n = 0;

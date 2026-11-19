@@ -278,6 +278,17 @@ export function isChannelError(message) {
   return CHANNEL_FAIL_RE.test(String(message ?? ''));
 }
 
+/**
+ * **模型输出畸形**的硬信号：约束解码的特殊 token 泄漏到正文里。
+ *
+ * 正常的 reasoning / 正文永远不会带 `<|constrain|>`、`<|channel|>`、`<rfl:parameter` ——
+ * 它们只出现在"工具调用被降级成纯文本"的时候。见到就当"这轮的动作可能没真执行"。
+ */
+const MALFORMED_RE = /<\|(?:constrain|message|end|start|channel)\|>|<rfl:parameter/i;
+
+const MALFORMED_NOTE =
+  '模型输出格式异常（工具调用没走正常通道）—— 这一步可能没有真执行，别当它干完了';
+
 /** 通道错误说人话：原文压成一行、留头留尾（ERR 码多半在尾巴上） */
 function channelReason(message) {
   const one = String(message ?? '').replace(/\s+/g, ' ').trim();
@@ -622,6 +633,24 @@ export function startRun({ thread, member, task, standing = null, watermark = 0,
               /* 落库失败不能影响这一轮：最坏就是中断后要重新交代一次上下文 */
             }
           }
+          return;
+        }
+        /*
+         * **畸形输出：工具调用没走正常通道**（2026-11-19 实报，用户第 N 次问"这是停了吗"）。
+         *
+         * 现场（r-1be44a4d，19:16）：模型把要执行的动作以**原始 token 流**吐了出来 ——
+         * `<|constrain|>xml<|message|><rfl:parameter name="cmd">cd … python3 - <<'PY' …`，
+         * 外加 `<|end|>|assistant<|channel|>analysis<|message|>`。CLI 把它当 reasoning 收下，
+         * 于是**那条命令根本没执行**，模型紧接着就说"已补全、本地跑通"——
+         * 用户看到的是一句完整可信的假交付，工作区一个字没改。
+         *
+         * 这几个 token 是模型的约束解码标记，正常输出里**绝不会**出现（不是"措辞像不像"那种
+         * 软判断），所以拿来当硬信号：见到就记一条 error 推到前台，让人当场知道这轮不可信。
+         * 不中止、不重试 —— 模型可能下一步自己就恢复了；凭空掐活的老毛病不能再犯。
+         */
+        if (evt.type === 'thinking' && MALFORMED_RE.test(String(evt.text ?? ''))) {
+          run.lastErrMsg = MALFORMED_NOTE;
+          pushEvent(run, { type: 'error', message: MALFORMED_NOTE });
           return;
         }
         /*

@@ -152,5 +152,53 @@ check('占位还是老口径（不是"没连上模型"）', /模型输出为空/
 const meta3 = repliesOf(r3.id)[0]?.meta;
 check('meta 没有 channelDown', (typeof meta3 === 'string' ? JSON.parse(meta3 || '{}') : (meta3 ?? {})).channelDown !== true, '');
 
+/* ---------------------------- ④ 畸形输出：工具调用被吐成原始 token，命令其实没执行 */
+console.log('\n④ 模型把工具调用吐成原始 token（畸形）：当场标红，别让人以为它干完了');
+
+ADAPTERS.codex = ({ onEvent }) =>
+  new Promise((resolve) => {
+    onEvent({ type: 'status', phase: 'turn_start' });
+    // 真实样本（r-1be44a4d 那条 thinking，只截了头尾）：约束解码的标记漏进了正文
+    onEvent({
+      type: 'thinking',
+      text:
+        '<|constrain|>xml<|message|><rfl:parameter name="cmd">\ncd repo; python3 - <<PY\nPY\n</rfl:parameter>' +
+        '<|end|>|assistant<|channel|>analysis<|message|>',
+    });
+    setTimeout(() => {
+      // 紧接着就是一句完整可信的"已完成"—— 这正是假交付的形态
+      onEvent({ type: 'text', text: '已把冒烟清单补全，本地跑通。' });
+      resolve({
+        sessionId: 'sess-old',
+        finalText: '已把冒烟清单补全，本地跑通。',
+        exitCode: 0,
+        events: [],
+        usage: null,
+        stderr: '',
+      });
+    }, 500);
+  });
+
+const r4 = runs.startRun({ thread, member, task: '补冒烟清单', watermark: 0 });
+await sleep(250);
+const ev4 = eventsOf(r4.id);
+check(
+  '运行中就能查到「模型输出格式异常」',
+  ev4.some((e) => e?.type === 'error' && /输出格式异常/.test(String(e.message))),
+  `${ev4.length} 条：${ev4.map((e) => e?.type).join(',')}`,
+);
+check(
+  '畸形那条 thinking 不再当成思考推出去（它会误导人）',
+  !ev4.some((e) => e?.type === 'thinking'),
+  ev4.map((e) => e?.type).join(','),
+);
+await sleep(900);
+check('不中止：这一轮照常收尾', store.getRunStatus(r4.id)?.status === 'done', String(store.getRunStatus(r4.id)?.status));
+check(
+  '收尾后这条提示只出现一次',
+  eventsOf(r4.id).filter((e) => e?.type === 'error').length === 1,
+  String(eventsOf(r4.id).filter((e) => e?.type === 'error').length),
+);
+
 console.log(failed === 0 ? '\n全过' : `\n${failed} 项未过`);
 process.exit(failed === 0 ? 0 : 1);
