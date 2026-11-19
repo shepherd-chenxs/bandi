@@ -150,6 +150,14 @@ const ASSERT_WAIVERS = {
   'apps/server/src/smoke-project-tasks.mjs': 'ghostCard（会话立卡 → 400）断言随立成卡链路撤除删除：接口已不存在',
   'apps/server/src/smoke-quota.mjs': '额度模块整体退场（quota.mjs / GET /api/quota / 迁移 DROP quotas）：被测对象不存在，无替代',
   'apps/server/src/smoke-workflows.mjs': '项目宪法注入随项目维度整体退场（v1.6.0）：被测对象 projectConstitutionBlock 已删除，断言随对象删除；岗位宪法断言仍在',
+  // 本批（2026-11-19）：**研发面板整体下线**（10c70b4）—— 插件 manifest、/api/status/* 路由、
+  // status.mjs 连同它的验收用例一起退场；项目详情撤「项目成员」tab 与「项目负责人」，
+  // 新建群撤群名标签与群助手选择。删掉的是**被测对象**，不是把测试放松：
+  // 替代验收 = run-smokes 全绿（78 项）+ smoke-project-profile 余下的档案区断言
+  // + check-contracts 的路由对账。
+  'apps/server/src/smoke-status.mjs': '研发面板下线（2026-11-19）：status.mjs 与 /api/status/* 一并删除，这个冒烟无可测对象，无替代',
+  'apps/server/src/smoke-plugin-blocks.mjs': '研发面板下线（2026-11-19）带走插件面板断言：插件 manifest 已删；替代验收 = 本文件余下用例 + check-contracts',
+  'apps/server/src/smoke-project-profile.mjs': '项目详情撤「项目成员」tab 与「项目负责人」（2026-11-19）：相关断言随 UI 撤除；档案区剩余断言仍覆盖',
 };
 
 /*
