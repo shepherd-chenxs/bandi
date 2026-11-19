@@ -30,6 +30,14 @@ const RUN = [
   // 运行钥匙（"工作证"）在**强制鉴权形态**下的建卡通道 + 只读台账（2026-11-08 实报补：
   // 真机监听 0.0.0.0 时认证层不认 X-Bandi-Run-Token，PM/助理双双 401）。纯策略 + 端到端。
   'apps/server/src/smoke-run-credential.mjs',
+  // 单轮看护（2026-11-19，V7）：只认"10 分钟没动静"，跑得久不掐、工具次数只记不掐。
+  // 用伪造适配器驱动 runs.mjs（临时数据目录、不起真 CLI），几十毫秒一组。
+  'apps/server/src/smoke-run-limit.mjs',
+  // 连不上模型要实时看得见（2026-11-19 实报）：通道类 error 不许被 held 扣住；空回话按原因分档。
+  // 同样是伪造适配器 + 临时库，不联网。
+  'apps/server/src/smoke-run-channel.mjs',
+  // 服务重启后未完成步骤回待办并自动续跑（2026-11-19）：临时数据目录 + 临时端口起一次真服务端。
+  'apps/server/src/smoke-interrupt-recovery.mjs',
   // IAM 安全收编（Phase 1–3）的 6 个用例（2026-11-02 补登记）：策略表 / 审计 / CSRF /
   // 本机策略 / 反代鉴权 / 安全策略，全部临时数据目录、不联网
   // （bootstrap 与票据两条随 2026-11-07 本地账号退场删除 —— 被测机制没了，用例跟着删）
@@ -149,6 +157,12 @@ const RUN = [
   // 2026-10-30：分支行尾那颗 `›` 的链路（menu → folderize → combo → combo-menu → 菜单）。
   // 这条链任何一手漏了都不报错、只是箭头不见了，所以必须钉住。
   'tools/smoke-branch-menu.mjs',
+  // 前端纯逻辑的三条（2026-11-19，都不需要浏览器：run-progress.mjs 没有 DOM、没有 import）：
+  // 模块图守门（漏 import / 引用不存在的导出）、"最后动作在 N 前"与重连两档文案、静默期措辞。
+  // 这几条正是"界面看不出它在动"这类实报的回归钉，纯函数所以几十毫秒。
+  'tools/smoke-web-imports.mjs',
+  'tools/smoke-web-progress.mjs',
+  'tools/smoke-web-link.mjs',
 ];
 
 /** 不跑的：写明原因（要真实 CLI / 模型，会烧 token） */

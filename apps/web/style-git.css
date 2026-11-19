@@ -1,0 +1,170 @@
+/*
+ * 代码托管页（工作台 → 研发） —— 2026-11-19 从 style.css 拆出（原文件 4841 行，按"哪一页用的"分段）。
+ *
+ * 拆分只做了**物理搬移**，规则内容一个字没改。因此有三条硬约束：
+ *   ① index.html 里这几个文件的 <link> **必须保持原顺序**（core → git → ide → task → toast → machine），
+ *      CSS 靠先后定胜负，顺序一乱覆盖关系就变；
+ *   ② 新规则写到对应的段里，别再往 core 里堆 —— 它是"全站基础"，改动影响所有页面；
+ *   ③ mobile.css 必须仍然排在最后（它靠这个位置覆盖上面全部）。
+ */
+
+/* ===== 工作台 → 研发 → 代码托管 =====
+   2026-10-26 三改成主从版式（左栏仓库列表 + 右栏详情，跟「远程连接」同一套）：
+   表格版（.gr-tbl）和居中簇在页面上的用法已经拆了 —— 表格样式删掉；
+   .gr-meta / .gr-cell-ops 还被「建 PR」弹窗用着，留下。 */
+/* 2026-11-16 生图服务整体退场：原来这里的 .gr-conn 居中紧凑簇（基线与 .stack 多行版）
+   只服务那一张表单，已连同表单一起删；弹窗用的 .gr-conn-actions / .gr-conn-dlg 保留。 */
+.gr-conn-actions { display: flex; gap: 12px; justify-content: center; margin-top: 18px; }
+.set-hint { margin: 14px 0 0; font-size: 12px; color: var(--dim); line-height: 1.7;
+            max-width: 560px; margin-left: auto; margin-right: auto; text-align: center; }
+/* 远程连接页的说明横贯整页宽（不是紧凑簇里的短提示），居中会悬在半空 —— 靠左铺开 */
+#settingsView > .detail-body > .set-hint { max-width: none; margin-left: 0; margin-right: 0; text-align: left; }
+/* 代码托管页的 GitHub 连接 2026-10-26 五改：左栏只剩**一颗状态按钮**（用户：
+   "做成一个按钮区就行，点击打开弹窗，不要展示这么多"）。点开 gr-conn-dlg 才见表单。
+   按钮做成列表行同款高度，绿点表示已连、灰点未连，跟列表行视觉上接得住。 */
+.gr-side { margin: 2px 0 8px; min-width: 0; }
+/* 底部固定条里的连接按钮（2026-10-29 六改）：贴边站，不吃清单顶上那份外边距 */
+.list-foot .gr-side { margin: 0; }
+.gr-side-btn { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px;
+               border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
+               color: var(--text); font: inherit; font-size: 12.5px; cursor: pointer; text-align: left; }
+.gr-side-btn:hover { border-color: var(--accent); }
+.gr-dot { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; background: var(--dim); opacity: .55; }
+.gr-dot.ok { background: var(--ok); opacity: 1; }
+.gr-side-btn-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 连接弹窗：动态 dialog，行式表单（标签左、控件右） */
+.gr-conn-dlg { width: 600px; max-width: 92vw; }
+/* 仓库设置弹窗（2026-10-27，用户："仓库设置区太占地方 → 右上角设置按钮点开"）：
+   窄一点的纯信息弹窗，行沿用详情页的 .info-row（一行一条、上下细线）。
+   2026-10-29：巡检节拍换成全站 .combo —— 下拉浮层会盖住下面几行，
+   dialog 默认的滚动区会把它裁掉（同 #taskDlg / #flowStartDlg 那两次坑），所以这里必须 overflow: visible。 */
+.gr-set-dlg { width: 460px; max-width: 92vw; overflow: visible; }
+.gr-set-body { padding: 4px 0 2px; }
+.gr-set-dlg .info-row > b { text-align: right; min-width: 0; }
+/* 巡检节拍下拉：**.combo 默认按钮宽 100%**，不夹住就会铺满整行、把「巡检」两个字顶到最左。
+   限宽 + 贴右，跟上面「管理员」「自动合并」控件落在同一条竖线上。
+   ⚠️ 装它的那个 <b> 必须放开 overflow —— `.info-row > b` 是 `overflow: hidden`（给长路径省略号用的），
+      浮层是它的绝对定位后代，会被整块裁掉（第一次跑就踩了：DOM 里 open 着，屏幕上什么都没有）。
+   保存途中按不动（节拍是后端算出来建/停任务的，连点两次会抢着跑两条请求）。 */
+.gr-set-dlg .info-row > b.gr-patrol-cell { overflow: visible; }
+/* text-align 必须显式归左：这行的 <b> 是 text-align: right，组件里文字会跟着右对齐
+   —— 下拉条目全挤到右边、左边空一大片（浮层里本来就没有"右对齐"这回事）。 */
+.gr-set-dlg .gr-patrol-combo { width: 216px; max-width: 100%; margin-left: auto; text-align: left; }
+.gr-set-dlg .gr-patrol-combo.is-saving .combo-btn { opacity: .6; pointer-events: none; }
+.gr-set-path { font-family: ui-monospace, monospace; font-size: 11.5px;
+               overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 导航条上的齿轮钮：图标本身 15px，别让 .mini 的写法把它挤小 */
+.gr-set-btn { display: inline-flex; align-items: center; justify-content: center; }
+.gr-set-btn svg { width: 15px; height: 15px; }
+.gr-conn-dlg .gr-dlg-body { display: flex; flex-direction: column; gap: 12px; padding: 14px 0 4px; }
+.gr-dlg-row { display: flex; align-items: center; gap: 10px; }
+.gr-dlg-row input { flex: 1; min-width: 0; }
+.gr-dlg-row > button { flex: 0 0 auto; }
+/* 状态行跟输入框左缘对齐（2026-10-26 九改，用户："连接状态放到输入框下面"）：
+   行首放一个看不见的「令牌」占位（visibility 不占视觉、宽度与真标签同款），状态文本自然贴到输入框起点。 */
+.gr-dlg-row .gr-dlg-pad { visibility: hidden; flex: 0 0 auto; }
+.gr-dlg-status { flex: 1; min-width: 0; font-size: 12.5px; color: var(--dim); overflow: hidden;
+                 text-overflow: ellipsis; white-space: nowrap; }
+.gr-dlg-status b { font-weight: 500; }
+.gr-dlg-row .mini { margin-left: auto; flex: 0 0 auto; }
+/* 「断开连接」跟输入框同高同圆角（2026-10-26 八改）：.mini 基础是 26px 图标钮，
+   在弹窗里压回普通文本钮的个头（输入框 = padding 7px 9px + font 13px）。 */
+.gr-dlg-row .mini.auto { height: auto; padding: 9.5px 14px; font-size: 12.5px; line-height: 1.4; }
+/* 「连接 GitHub」跟输入框同一行、贴在行尾（2026-10-26 七改，用户："按钮放到输入框后面"）；
+   输入框 flex:1 吃掉剩余宽度，按钮不缩。 */
+.gr-dlg-row .primary { padding: 0 18px; }
+/* 修改密码弹窗（2026-11-10 用户："标签长度一致，后面的输入框对齐"）：
+   三栏标签宽度钉死取最宽的「确认新密码」，输入框左缘对齐。
+   作用域收在 pw-dlg —— GitHub 连接弹窗（gr-conn-dlg 裸类）标签短、行里还带按钮，
+   不跟着变宽。 */
+.gr-conn-dlg.pw-dlg .row-label { flex: 0 0 72px; }
+/* 弹窗里的只读令牌框（2026-10-26 十二改，用户："凸显输入框，弱化提示"）：
+   input.locked 公共类是"灰底灰字"的禁用相（设置页 AI Key 也在用，不动公共类），
+   本弹窗覆盖成白底 + 正文色 + 等宽字 —— 掩码值读起来像真实令牌，是这块的主角。 */
+.gr-conn-dlg input.locked { color: var(--text); background: var(--panel);
+                           font-family: ui-monospace, monospace; font-size: 12.5px; }
+/* 「怎么拿令牌」直接铺开（2026-10-26 六改）：浅底说明块；八改补了结构化列表 ——
+   一坨长段落没人读，拆成编号步骤 + 两条权限各占一行 + 小字例外说明。
+   十二改（用户："凸显输入框，弱化提示"）：填充底撤掉，改一条上分隔线的纯文字区，
+   编号/标题/权限卡全降灰 —— 帮助是背景信息，不再跟令牌框抢视线。 */
+.gr-dlg-help { margin-top: 0; padding: 12px 0 0; border-top: 1px solid var(--line);
+               font-size: 12px; color: var(--dim); line-height: 1.7; }
+.gr-dlg-help b { color: var(--text); font-weight: 500; }
+/* 说明区小标题（2026-10-26 十改，用户要"描述区加一个标题：怎么拿令牌"） */
+.gr-help-title { margin-bottom: 8px; font-size: 12px; font-weight: 500; color: var(--dim); }
+.gr-help-steps { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 8px; }
+.gr-help-steps li::marker { color: var(--dim); font-weight: 500; }
+.gr-help-perms { margin: 6px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 5px; }
+.gr-help-perms li { display: flex; flex-direction: column; gap: 1px; padding: 6px 10px;
+                    border: 0; border-radius: 7px; background: var(--side); }
+.gr-help-perms b { font-size: 12px; }
+.gr-help-perms span { font-size: 11.5px; }
+.gr-help-note { display: block; margin-top: 6px; font-size: 11.5px; color: var(--dim); }
+.gr-help-foot { margin: 10px 0 0; }
+.gr-help-foot .help-link { margin-top: 0; }
+/* 路径 + 同步时间：等宽字小一档，单行省略（悬停看全文），跟 machine-path 同一套。
+   「建 PR」弹窗头上的路径行也在用。 */
+.gr-meta { margin-top: 3px; font-family: ui-monospace, monospace; font-size: 11.5px;
+           color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 建 PR 弹窗里「这条 PR 会装哪些提交」：一条一行（2026-10-29 用户："一坨文字，阅读感极差"）。
+   别再用 `；` 把提交标题串成一行 —— 4 条就成一团，看不出有几条、哪条是哪个。 */
+.pr-commit-list { list-style: none; margin: 4px 0 2px; padding: 0; max-height: 132px; overflow: auto; }
+.pr-commit-list li { display: flex; gap: 8px; align-items: baseline; padding: 2px 0;
+                     font-size: 12px; line-height: 1.45; }
+.pr-commit-list li code { flex: 0 0 auto; font-family: ui-monospace, monospace; font-size: 11px;
+                          color: var(--dim); }
+.pr-commit-list li span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 建 PR 弹窗重设计（2026-10-29）：
+   · 概览三颗 chip（当前分支 / base / 领先）替掉「｜」串成的长句 —— 数字要一眼扫到；
+   · 提交清单收进浅底卡片，跟下面的表单在视觉上分两段；
+   · 标题、描述在前，分支两栏并排在后（都是短输入，竖排浪费半屏）；
+   · 动作条压底 + 上分隔线（同 #expertDlg 那套）。 */
+/* 尺寸**固定**（2026-10-29 用户："窗口固定大小"）：这颗弹窗的内容是异步长出来的
+   （「读工作区…」→ 概览 + 提交卡 → 表单出现），不定高就会从一丁点撑到满屏、位置还往上跳。
+   做法同 dialog.sch-dlg：定高 + form 转 flex 列 —— 概览自己滚（上限 240），
+   描述框吃掉剩余高度，动作条 margin-top:auto 钉底。窗口本身不再随内容变。 */
+dialog#repoPrDlg { width: 660px; height: min(720px, 92vh); max-height: 92vh;
+                   display: flex; flex-direction: column; overflow: hidden; }
+#repoPrDlg > form { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+#repoPrDlg .dlg-head { flex: 0 0 auto; }
+/* 概览区：异步回来前后占的是同一块地方；提交条数多了它自己滚，不推挤下面的表单 */
+#repoPrDlg #prState { flex: 0 0 auto; max-height: 240px; overflow: auto; }
+#repoPrDlg #prForm { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+/* ⚠️ 上面那条把 #prForm 设成了 display:flex —— 作者样式压过 UA 的 `[hidden]{display:none}`，
+   没这一条，「不可建 PR」时表单照样显示（老坑，见 MEMORY「断显隐看 computed display」）。 */
+#repoPrDlg #prForm[hidden] { display: none; }
+#repoPrDlg #prForm > label, #repoPrDlg .pr-fill-row { flex: 0 0 auto; }
+/* 描述框是这一屏唯一的"可伸缩项"：窗口高度固定，多出来的空间给它 */
+#repoPrDlg #prBody { flex: 1 1 auto; min-height: 96px; resize: none; }
+/* 提交清单不再自带滚动条（概览区整体滚就够了，套两层滚轮很难受） */
+#repoPrDlg .pr-commit-list { max-height: none; overflow: visible; }
+.pr-path { margin: 6px 0 0; }
+.pr-sum { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.pr-sum-item { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 11px;
+               border: 1px solid var(--line); border-radius: 999px; background: var(--side); font-size: 12px; }
+.pr-sum-k { color: var(--dim); white-space: nowrap; }
+.pr-sum-v { font-family: ui-monospace, monospace; font-size: 11.5px; color: var(--text);
+            max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pr-commits { margin-top: 10px; padding: 9px 12px 7px; border: 1px solid var(--line);
+              border-radius: 8px; background: var(--side); }
+.pr-commits-head { font-size: 12px; color: var(--dim); }
+.pr-commits-head b { color: var(--text); }
+.pr-commits-note { margin-left: 6px; font-size: 11px; }
+.pr-commit-list { margin-top: 2px; }
+.pr-commit-list li.dim { color: var(--dim); }
+.pr-warn { margin-top: 10px; font-size: 12.5px; color: var(--warn); }
+/* 字段 label 的灰色小注（原来塞在括号里，现在挪出来跟在标题后面） */
+#repoPrDlg label em { margin-left: 4px; font-style: normal; }
+#repoPrDlg #prTitle { font-size: 13.5px; }
+/* 动作条钉底：margin-top:auto 把剩余高度全吃掉（不是固定 16px —— 定高窗口里正文短了会浮在半空） */
+#repoPrDlg .dlg-actions { flex: 0 0 auto; margin: auto -20px -20px; padding: 14px 20px; border-top: 1px solid var(--line); }
+/* 管理员（2026-10-23 用户拍板）：不放 select —— 直接显示员工姓名的按钮，
+   点开 keeperDlg 弹窗搜索选人（人多时原生下拉又长又不能搜）。现在住在详情的 .info-row 里 */
+.gr-keeper-btn { max-width: 100%; height: 30px; padding: 0 12px; border-radius: 7px;
+                 border: 1px solid var(--line); background: var(--input); color: var(--text);
+                 font: inherit; font-size: 12.5px; cursor: pointer;
+                 overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gr-keeper-btn:hover { border-color: var(--accent); }
+.gr-cell-ops { text-align: right; white-space: nowrap; }
+.gr-cell-ops .mini.auto { padding: 0 12px; white-space: nowrap; }
+.gr-cell-ops .mini + .mini { margin-left: 6px; }

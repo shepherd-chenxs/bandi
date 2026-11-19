@@ -142,7 +142,7 @@ function matchFilter(n, q) {
 }
 
 function paintList() {
-  // 左栏属于当前的一级栏：切走了就不许画（同 renderFlowList / renderOrgList 的守卫）
+  // 左栏属于当前的一级栏：切走了就不许画（同 renderFlowList 的守卫）
   if (S.nav !== 'inbox') return;
   const body = $('listBody');
   if (!body) return;

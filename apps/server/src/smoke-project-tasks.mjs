@@ -443,7 +443,7 @@ for (const p of ['plugins/project-panel/manifest.json', 'apps/server/catalog/plu
    * 起止是一格（"开始 / 结束" + 两个 date 输入），标签不是「开始时间」，单独认它的输入框。
    *
    * 2026-10-24 设计稿 v1.0.1：档案里那排「成员」chip **整块撤掉**，成员单独成 tab
-   * （插在基础信息与项目规章之间，data-panel="members"）。负责人仍只在档案里，不进成员 tab。
+   * （插在基础信息之后，data-panel="members"）。负责人仍只在档案里，不进成员 tab。
    *
    * ⚠️ 2026-10-24 标签对 PRD 口径改过名：「干什么」→「项目简介」、「项目经理」→「项目负责人」。
    *    判的还是**这三项在不在**（PRD A1 的本意），不钉死那三个字 —— 通用工作区不该用
@@ -458,16 +458,15 @@ for (const p of ['plugins/project-panel/manifest.json', 'apps/server/catalog/plu
   check('项目详情档案区不再渲染「成员」那一行', !projSrc.includes('row-label">成员<'));
   check('项目详情档案区仍有开始 / 结束日期', projSrc.includes('id="pjStarted"') && projSrc.includes('id="pjEnded"'));
   check('项目详情不再去取版本数接口', !projSrc.includes('/api/status/projects/'));
-  // 成员的落点：tab 与面板都在，且顺序是基础信息 → 项目成员 → 项目规章
+  // 成员的落点：tab 与面板都在，且顺序是基础信息 → 项目成员
   check('项目详情有「项目成员」tab', projSrc.includes('data-tab="members"') && projSrc.includes('data-panel="members"'));
   {
     const atBasics = projSrc.indexOf('data-tab="basics"');
     const atMembers = projSrc.indexOf('data-tab="members"');
-    const atRules = projSrc.indexOf('data-tab="rules"');
     check(
-      'tabs 顺序是 基础信息 / 项目成员 / 项目规章',
-      atBasics >= 0 && atMembers > atBasics && atRules > atMembers,
-      `basics=${atBasics} members=${atMembers} rules=${atRules}`,
+      'tabs 顺序是 基础信息 / 项目成员',
+      atBasics >= 0 && atMembers > atBasics,
+      `basics=${atBasics} members=${atMembers}`,
     );
   }
   // 点成员行 = 进员工详情（复用 openDetail），不做就地展开

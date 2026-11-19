@@ -12,6 +12,8 @@ import { conversationStatusFor, EMPTY_REPLY_TEXT } from './store/status.mjs';
 import { codexContextOf } from './context-probe.mjs';
 import { acquirePowerLock, releasePowerLock } from './power-lock.mjs';
 import { agentGitEnv, gitAbilityBrief } from './agent-git.mjs';
+// 运行钥匙的能力清单（2026-11-19）：从 route-policy 生成，不再手写一份
+import { runCredentialBrief } from './capabilities.mjs';
 
 /**
  * 「这条会话在对面那个 CLI 里不存在」的报错特征。
@@ -197,20 +199,11 @@ export function subscribe(runId, res, sinceSeq = 0) {
  *
  * P5 压缩（922→约 330 字）：这层是**操作说明**，不是权限/交付说明 —— 原来的"查台账"那段
  * 与平台契约重复，删掉；被问"权限归谁"时模型曾把这段当答案素材复读，所以只留"怎么用钥匙"。
+ *
+ * 2026-11-19 搬去 `capabilities.mjs`：这里原来是手写的，"能调哪些接口"与 `route-policy`
+ * 的真源各写一份 —— 结果 prompt 说得出接口、却没说基址变量，模型连着试了 6 次命令。
+ * 现在清单由路由表生成，见那个文件顶部的两条规矩。
  */
-function runCredentialBrief(pm = false) {
-  return [
-    '【平台接口 · 运行钥匙】本轮环境变量 `BANDI_RUN_TOKEN` 是这次运行**现发**的钥匙（收尾作废、每轮都换）：',
-    '调平台接口时现场取（PowerShell `$env:BANDI_RUN_TOKEN`），请求头 `X-Bandi-Run-Token`；**不要抄历史命令里的旧值**。',
-    '`401 E2056` = 旧/错钥匙（重取一次重试，不是权限问题）；`403 E4034` = 这个接口不归运行钥匙管。',
-    ...(pm
-      ? [
-          '建卡走 `POST /api/agent/cards/batch`：体 `{cards:[…]}`、裸数组、单张卡都认；项目可省略（群派活默认用群关联项目）；失败先读 `{code,error}` 按提示改，**最多 2 次**，别整批重发；2 次仍失败就按【统筹职责】降级（群里 @ 人 + 报群主），不许自己写代码。',
-          '补卡（补记已经发生的活）：同接口带 `"backfill": true` + 实际状态的**码**（`review` 待验收 / `blocked` 已阻塞 / `done` 已完成 / `cancelled` 已取消 / `failed` 失败），补记不重跑；改卡走 `PATCH /api/projects/tasks/<id>`（只对你建的卡 / 你当群助手那张）。状态**只收码**，写中文会 400。',
-        ]
-      : []),
-  ].join('\n');
-}
 
 /**
  * 起一次运行。排队式：一个会话同一时间只允许一次运行（在 server 层拦）。
@@ -235,6 +228,101 @@ function runCredentialBrief(pm = false) {
  */
 const MAX_CONCURRENT = Number(process.env.BANDI_MAX_CONCURRENT_RUNS ?? 6);
 const MIN_SPAWN_INTERVAL_MS = Number(process.env.BANDI_MIN_SPAWN_INTERVAL_MS ?? 500);
+/**
+ * **单轮看护：只认"没动静"，绝不认"跑了多久"**（2026-11-19 七改）。
+ *
+ * 前六版全在同一个误区里打转：拿一个**数量**当"该停了"的判据（工具次数、正文字数、墙钟
+ * 时长）。用户一句话点破 —— **复杂功能跑几个小时是正常的**。按墙钟掐，掐的不是"病"，
+ * 是"活"，只是把大活砍成两半让人重来一遍。六版里三次砍掉正常任务，就是这个道理。
+ *
+ * 正确的判据是**状态**，不是量：进程还在但**事件流不动了** = 卡死；只要还有事件进来，
+ * 无论跑了 20 秒还是 5 小时，都是"在干活"。所以这里只看一件事：
+ *
+ *   连续 `BANDI_RUN_IDLE_MS`（默认 10 分钟）**一条事件都没有** → 判挂死，掐进程收口。
+ *
+ * 任何 type 的事件都算活着（thinking / text / tool / status / session）。工具次数照旧记进
+ * `usage.toolCalls` 供排障，但**永远不触发中止**。
+ *
+ * 已知代价：模型单次思考若超过 10 分钟不吐任何事件，会被误判（CLI 一般会流 thinking，
+ * 实测没碰到；真碰到就调 BANDI_RUN_IDLE_MS，别回来改判据）。
+ *
+ * 收口后**不是白干**：每轮都会 resume 上一轮的 CLI 会话（见 resumeId），中断只是把控制权
+ * 交还给人，下一句「继续」接着原来的会话往下做 —— 前提是 sessionId 已落库，所以
+ * **收到 session 事件当场就写库**（见 onEvent），不等收尾。
+ *
+ * **要再加新的中止条件，先回答两个问题**：①这个信号凭什么是"病"而不是"活"？
+ * ②长任务（几小时）会不会被它砍？两个都答不上来就别加。
+ */
+const RUN_IDLE_MS = Number(process.env.BANDI_RUN_IDLE_MS ?? 10 * 60_000);
+/** 巡检间隔：别太密（白烧 CPU），也别太稀（挂死后多等一分钟） */
+const IDLE_TICK_MS = Math.min(30_000, Math.max(500, Math.floor(RUN_IDLE_MS / 4)));
+
+/**
+ * **模型通道断了**（2026-11-19 用户实报："连不上模型，要让我直接能看到你在重连，
+ * 我看到会处理的"）。
+ *
+ * 这条判据只回答一个问题："这条 error 是**上游模型/网络**的问题，还是这个任务本身的问题"。
+ *   · 是通道问题 → 前端进度卡当场报「连不上模型 · 重连 2/5 · 已等 43 秒」，
+ *     人一眼就知道该去看代理/网络，而不是以为活干挂了；
+ *   · 不是通道问题 → 老路（扣住、收尾时当失败原因）。
+ *
+ * 为什么必须单独挑出来放行（见 onEvent）：error 事件在续会话时是**扣住**的 ——
+ * 初衷是"会话不存在"那个必然失败别闪一下。但重连中的 error 恰恰是最该实时看到的东西，
+ * 被扣到进程结束才补发，用户那 7 分钟里只会看到界面一片死。
+ */
+const CHANNEL_FAIL_RE =
+  /(reconnecting|econnreset|econnrefused|etimedout|enotfound|eai_again|epipe|fetch failed|socket (?:disconnect|hang ?up)|tls handshake|network error|50[234]\b)/i;
+
+/** 这条 error 是不是"连不上模型"（导出给冒烟用） */
+export function isChannelError(message) {
+  return CHANNEL_FAIL_RE.test(String(message ?? ''));
+}
+
+/**
+ * **模型输出畸形**的硬信号：约束解码的特殊 token 泄漏到正文里。
+ *
+ * 正常的 reasoning / 正文永远不会带 `<|constrain|>`、`<|channel|>`、`<rfl:parameter` ——
+ * 它们只出现在"工具调用被降级成纯文本"的时候。见到就当"这轮的动作可能没真执行"。
+ */
+const MALFORMED_RE = /<\|(?:constrain|message|end|start|channel)\|>|<rfl:parameter/i;
+
+const MALFORMED_NOTE =
+  '模型输出格式异常（工具调用没走正常通道）—— 这一步可能没有真执行，别当它干完了';
+
+/** 通道错误说人话：原文压成一行、留头留尾（ERR 码多半在尾巴上） */
+function channelReason(message) {
+  const one = String(message ?? '').replace(/\s+/g, ' ').trim();
+  if (one.length <= 140) return one || '没有拿到模型的第一句输出';
+  return `${one.slice(0, 100)}…${one.slice(-30)}`;
+}
+
+/**
+ * 空回话占位（**按原因分档**）。
+ *
+ * 以前一律是 `EMPTY_REPLY_TEXT`（"模型输出为空或运行被中断"）—— 那句话对"通道 502"
+ * 这种情形等于没说：人不知道是自己网络的问题，也不知道该做什么。分档之后，
+ * 通道类失败给的是**可执行的一句话**（查代理、修好回「继续」）。
+ */
+function emptyReplyText(run) {
+  const last = String(run?.lastErrMsg ?? '');
+  if (!isChannelError(last)) return EMPTY_REPLY_TEXT;
+  return (
+    `（这一轮没连上模型 —— ${channelReason(last)}。\n` +
+    '看一眼网络 / 代理（开着 Clash「系统代理」时最常见），好了回一句「继续」，' +
+    '我接着原来的会话往下做，之前做的不用重来）'
+  );
+}
+
+/**
+ * 时长说人话（"48 秒" / "15 分钟"）：收口说明和卡片描述共用一套口径 ——
+ * 两处各写一遍会出现「跑了 15 分钟」和「跑了 0 分钟」两种，就是因为除不尽时没兜。
+ * 导出给 project-tasks 的 endNoteOf 用。
+ */
+export function humanSpan(ms) {
+  const sec = Math.max(1, Math.round(Number(ms ?? 0) / 1000));
+  if (sec < 90) return `${sec} 秒`;
+  return `${Math.round(sec / 60)} 分钟`;
+}
 const RATE_LIMIT_COOLDOWN_MS = Number(process.env.BANDI_RATE_LIMIT_COOLDOWN_MS ?? 60_000);
 const RATE_LIMIT_RE = /(rate.?limit|429|temporarily limiting|使用量已达上限|请求过于频繁|限流)/i;
 let activeSpawns = 0;
@@ -374,7 +462,7 @@ export function startRun({ thread, member, task, standing = null, watermark = 0,
     ...(cred ? { BANDI_CONTROL_URL: controlUrl, BANDI_RUN_TOKEN: cred.token } : {}),
     ...gitEnv,
   };
-  // 每轮把"钥匙现取、别抄旧值"贴在任务末尾（见 runCredentialBrief 的说明）；
+  // 每轮把"钥匙现取、别抄旧值"贴在任务末尾（见 capabilities.mjs 的说明）；
   // 有建卡权限的岗位（现在只有项目经理）再多一句建卡口径（续接会话读不到新技能，这行每轮都在）
   /*
    * 权限档是这一族**实测跑不动命令**的档位（blocked，2026-11-13 claude 的 default/plan
@@ -468,6 +556,13 @@ export function startRun({ thread, member, task, standing = null, watermark = 0,
   const ctl = new AbortController();
   run.abortController = ctl;
   run.stoppedByUser = false;
+  /**
+   * 单轮工具计数（**只记不掐**，见 RUN_IDLE_MS 的注释）、"是否已被挂死检测收口"，
+   * 以及**最后一次活动时刻**（心跳，挂死判据的唯一输入）。
+   */
+  let toolCalls = 0;
+  let limitHit = false;
+  run.lastEventAt = Date.now();
 
   /**
    * 最近一条 error 事件的原文（2026-10-26 补）。
@@ -515,15 +610,84 @@ export function startRun({ thread, member, task, standing = null, watermark = 0,
       env: run.agentEnv ?? {},
       signal: ctl.signal,
       onEvent: (evt) => {
+        /*
+         * **心跳**（2026-11-19 七改）：任何事件都证明"进程还在动"，挂死检测只认这一行
+         * （见 RUN_IDLE_MS）。放在最前面 —— 连被扣住的 error 事件也算，它同样是活着的证据。
+         */
+        run.lastEventAt = Date.now();
+        /*
+         * **session 事件：只落库，不进事件流。**
+         *
+         * ① 中断那一轮也要能接着干：下一轮的「继续」全靠 resume 这个 id，而中断（挂死收口 /
+         *    人点停止 / 进程崩）时收尾路径未必拿得到 sessionId —— 事件里一出现就写库，
+         *    中断的代价就只剩"少做了几步"，不是"从头再来"。
+         * ② 它绝不能进 run.seq：`retryFresh` 靠 `run.seq === 0` 判断"这一轮还什么都没推出去，
+         *    可以安全换新会话重跑"，session 事件若能计数，续接失败就再也不会自动重试。
+         */
+        if (evt.type === 'session') {
+          if (evt.sessionId) {
+            run.sessionId = evt.sessionId;
+            try {
+              store.setMemberSession(thread.id, personaId, evt.sessionId, sessionScope, rt.family);
+            } catch {
+              /* 落库失败不能影响这一轮：最坏就是中断后要重新交代一次上下文 */
+            }
+          }
+          return;
+        }
+        /*
+         * **畸形输出：工具调用没走正常通道**（2026-11-19 实报，用户第 N 次问"这是停了吗"）。
+         *
+         * 现场（r-1be44a4d，19:16）：模型把要执行的动作以**原始 token 流**吐了出来 ——
+         * `<|constrain|>xml<|message|><rfl:parameter name="cmd">cd … python3 - <<'PY' …`，
+         * 外加 `<|end|>|assistant<|channel|>analysis<|message|>`。CLI 把它当 reasoning 收下，
+         * 于是**那条命令根本没执行**，模型紧接着就说"已补全、本地跑通"——
+         * 用户看到的是一句完整可信的假交付，工作区一个字没改。
+         *
+         * 这几个 token 是模型的约束解码标记，正常输出里**绝不会**出现（不是"措辞像不像"那种
+         * 软判断），所以拿来当硬信号：见到就记一条 error 推到前台，让人当场知道这轮不可信。
+         * 不中止、不重试 —— 模型可能下一步自己就恢复了；凭空掐活的老毛病不能再犯。
+         */
+        if (evt.type === 'thinking' && MALFORMED_RE.test(String(evt.text ?? ''))) {
+          run.lastErrMsg = MALFORMED_NOTE;
+          pushEvent(run, { type: 'error', message: MALFORMED_NOTE });
+          return;
+        }
+        /*
+         * 工具事件**只计数、不掐**（2026-11-19 六改，见 RUN_IDLE_MS 的注释）：
+         * 次数分不出"正经活"和"绕圈"，四次改三次误杀，这条尺子作废。
+         * 次数只进 usage 供排障（`summarizeRun` 拿它看"这轮有多重"）。
+         */
+        if (evt.type === 'tool') {
+          /*
+           * 收口之后**不再落工具事件**：abort 之后 CLI 未必立刻死（子进程正在收尾、
+           * 或适配器根本不认 signal），它还能继续吐一串 tool —— 实测有吐到 200 多条的，
+           * 库和 SSE 都被灌满。text / status 照旧推（收口前说的那些话要留下）。
+           */
+          if (limitHit) return;
+          toolCalls += 1;
+          run.toolCalls = toolCalls;
+        }
         // 先留一份真因，再走"扣住/推出去"那一套 —— 扣住的那几个也一样要记，
         // 否则续会话失败又重开也失败时，最后只剩退出码（见 lastErrMsg 的注释）
         if (evt.type === 'error') {
           const m = String(evt.message ?? '').trim();
-          if (m) lastErrMsg = m;
-        }
-        if (sid && evt.type === 'error') {
-          held.push(evt);
-          return;
+          if (m) {
+            lastErrMsg = m;
+            // 挂到 run 上：收尾时 persistReply 要按它决定"空回话占位"写哪一句，
+            // 而 lastErrMsg 是 runOnce 作用域里的局部量，出不了这个函数
+            run.lastErrMsg = m;
+          }
+          /*
+           * **通道类错误不进 held**（2026-11-19）：held 的初衷只是"会话不存在"那个
+           * 必然失败别先闪一下；「重连 1/5 … ECONNRESET」跟会话无关，而且它是用户
+           * **最需要实时看到**的东西 —— 被扣到进程结束才补发，人只能干瞪着一片死。
+           * 详见 isChannelError 的注释。
+           */
+          if (sid && !isChannelError(m)) {
+            held.push(evt);
+            return;
+          }
         }
         pushEvent(run, evt);
       },
@@ -559,6 +723,29 @@ export function startRun({ thread, member, task, standing = null, watermark = 0,
     }
   };
   // 同步 spawn：保证 adapter 注册 abort 监听在 requestStop() 之前，否则 abort 丢失（见 smoke-stop-watchdog 竞态）
+  /*
+   * **挂死检测**（见 RUN_IDLE_MS 的注释）：巡检式，不是一次性定时器 —— 因为判据是
+   * "多久没动静"而不是"一共跑了多久"，每来一条事件心跳就往后推，所以跑五个小时也不会响。
+   *
+   * 从"真的要起进程"这一刻才开始。排队（并发帽 / 间距 / 冷却）等多久都不算 —— 那段时间
+   * 还没有子进程，谈不上挂死。
+   *
+   * 判定后的动作：先掐（适配器认 signal 就直接杀），再看门狗兜"适配器不认 abort"那一层
+   * （复用人工停止同一条路径）；收尾由 finish 统一清掉这个 interval。
+   */
+  run.limitTimer = setInterval(() => {
+    if (run.finished || limitHit) return;
+    const idle = Date.now() - (run.lastEventAt ?? Date.now());
+    if (idle < RUN_IDLE_MS) return;
+    limitHit = true;
+    run.limitHit = true;
+    run.idleMs = idle;
+    run.limitMs = idle;
+    run.toolCalls = toolCalls;
+    ctl.abort();
+    armStopWatchdog(run);
+  }, IDLE_TICK_MS);
+  run.limitTimer.unref?.();
   try {
     first = runOnce(resumeId);
   } catch (err) {
@@ -579,7 +766,7 @@ export function startRun({ thread, member, task, standing = null, watermark = 0,
     .then((res) => {
       run.sessionId = res.sessionId;
       // **人主动停的**要和"跑挂了"分开：前者没有错，不该记成失败、也不该让流程判失败
-      const stopped = ctl.signal.aborted || run.stoppedByUser;
+      const stopped = !run.limitHit && (ctl.signal.aborted || run.stoppedByUser);
       // 各家适配器字段名不完全一样（codex/dsh 给 finalText，claude 给 text），这里归一
       const text = res.finalText ?? res.text ?? '';
       /*
@@ -587,14 +774,16 @@ export function startRun({ thread, member, task, standing = null, watermark = 0,
        * final 事件，见 pushEvent 的注释），这时用已经流出去的 text 事件兜底 ——
        * 用户屏幕上看到的就是这些字，丢掉它等于"对方刚说的话凭空消失"。
        */
-      const kept = text || (stopped ? run.streamedText : '');
+      const kept = text || ((stopped || run.limitHit) ? run.streamedText : '');
       // 跨运行时（或自动重开）时，先说一句"上下文带不过来"；权限档跑不动命令时，
       // 再提醒雇主一句（2026-11-13）—— 这轮八成白跑，别让他以为是员工"又连不上了"
       const blockedUserNote = sandboxBlocked
         ? `（这个员工的权限档「${effSandbox}」在无人审批的运行方式下跑不动命令，这轮命令类动作都会被拒 —— ` +
           `去「员工详情」把权限档放开（"完全权限"那档）再派。）\n\n`
         : '';
-      run.finalText = kept ? memoryNote + blockedUserNote + kept : kept;
+      // 收口说明只在两处出现（这里 / 看门狗），文案统一走 idleNote
+      const budgetNote = run.limitHit ? idleNote(run) : '';
+      run.finalText = kept ? memoryNote + blockedUserNote + kept + budgetNote : budgetNote.slice(2);
       run.exitCode = res.exitCode;
 
       // sessionId 写回**本作用域**那一行；水位线仍写主行（'' ）——
@@ -605,7 +794,7 @@ export function startRun({ thread, member, task, standing = null, watermark = 0,
 
       // 成功的判据：没标错，且没有非零退出码。
       // claude 在收到 result 就结算，不给 exitCode —— 所以不能只看 exitCode === 0。
-      const ok = !res.isError && (res.exitCode == null || res.exitCode === 0);
+      const ok = run.limitHit ? true : !res.isError && (res.exitCode == null || res.exitCode === 0);
       const status = stopped ? 'stopped' : ok ? 'done' : 'failed';
 
       // 回话落库（见 persistReply）。人停的那一轮也要落 —— 带 meta.stopped 给界面标「已停止生成」
@@ -625,7 +814,19 @@ export function startRun({ thread, member, task, standing = null, watermark = 0,
        * 单轮型才可用 perTurnTokens 兜底（见 session-budget.mjs 的 shouldRotate）。
        * 老数据没这个字段 → 判据按"未知"保守处理。
        */
-      const usage = res.usage || ctx ? { ...(res.usage ?? {}), ...(ctx ?? {}), runtimeFamily: rt.family } : null;
+      const usageBase = res.usage || ctx ? { ...(res.usage ?? {}), ...(ctx ?? {}), runtimeFamily: rt.family } : null;
+      /*
+       * 收口要**留痕**：store.summarizeRun / project-tasks 的 endNoteOf 都要判"这轮是被
+       * 挂死检测收的"（卡片上写"10 分钟没动静"，不是"没交回结论"）。
+       * 挂 usage 而不是加 DB 列 —— 这一列本来就是自由形态 JSON，为排障再走一次迁移不划算。
+       * `toolCalls` 无论掐没掐都记：它是"这轮有多重"的唯一依据（只记不掐）。
+       */
+      const usage = {
+        ...(usageBase ?? {}),
+        runtimeFamily: rt.family,
+        ...(toolCalls ? { toolCalls } : {}),
+        ...(run.limitHit ? { limitHit: 'idle', idleMs: run.idleMs ?? RUN_IDLE_MS, limitMs: run.limitMs } : {}),
+      };
 
       finish(run, {
         status,
@@ -675,11 +876,57 @@ export function startRun({ thread, member, task, standing = null, watermark = 0,
  */
 export const STOP_WATCHDOG_MS = 5000;
 
+/**
+ * 挂死收口的说明（两条收尾路径共用：适配器认 abort 的走 .then，不认的走看门狗）。
+ *
+ * 措辞的三个硬要求（都是踩出来的）：
+ *   ① 点明"**没动静**"而不是"跑了多久" —— 否则用户以为平台又按时间砍活；
+ *   ② 给出下一步（回一句「继续」），不然他只会觉得服务坏了；
+ *   ③ 说清"接着原来的会话，之前做的不用重来" —— 中断后 resume 是真的续上，
+ *      不说清楚他会以为要从头再干一遍（那才是真正浪费几小时的地方）。
+ */
+function idleNote(run) {
+  /*
+   * 最后一条是"连不上模型"时要写出来（2026-11-19）：不写的话，收口说明一律是
+   * "进程没动静了"，人只会去怀疑员工卡了，不会想到该去看代理 —— 而这条恰恰是**唯一**
+   * 他自己能修的那类故障。
+   */
+  const chan = isChannelError(run.lastErrMsg)
+    ? `最后一次是连不上模型（${channelReason(run.lastErrMsg)}），`
+    : '';
+  return (
+    `\n\n（这一轮有 ${humanSpan(run.idleMs ?? RUN_IDLE_MS)}没有进展（${chan}进程没动静了），我先停在这儿 —— ` +
+    `回一句「继续」，我接着原来的会话往下做，之前做的不用重来。）`
+  );
+}
+
 function armStopWatchdog(run) {
   if (run.finished || run.stopWatchdog) return;
   run.stopWatchdog = setTimeout(() => {
     run.stopWatchdog = null;
     if (run.finished) return;
+    /*
+     * 挂死收口也走到这里（适配器不认 abort 时，这是**唯一**的收尾路径，2026-11-19 七改）：
+     *   · 它不是"人停的"→ 记 done，别让界面显示「已停止生成」；
+     *   · 说明必须补在这儿 —— 正常路径拼 budgetNote 的那段 `.then` 永远不会执行；
+     *   · usage 也得在这儿写，否则摘要/卡片看不出"这轮是挂掉的"（原来传 null，摘要一片空白）。
+     */
+    if (run.limitHit) {
+      if (!run.finalText) run.finalText = (run.streamedText || '') + idleNote(run);
+      finish(run, {
+        status: 'done',
+        exitCode: null,
+        error: null,
+        usage: {
+          limitHit: 'idle',
+          idleMs: run.idleMs ?? RUN_IDLE_MS,
+          ...(run.toolCalls ? { toolCalls: run.toolCalls } : {}),
+        },
+        elapsedMs: null,
+      });
+      return;
+    }
+    // 人明确说了停：状态就得停
     finish(run, { status: 'stopped', exitCode: null, error: null, elapsedMs: null });
   }, STOP_WATCHDOG_MS);
   // 别让这颗定时器拖着进程不退
@@ -772,10 +1019,14 @@ function persistReply(run, text, meta = null) {
    * 只动消息文本，`run.finalText` 保持原样（判卡状态 / 证据仍按原文）。
    */
   const blank = !raw.trim();
+  // 空回话**按原因分档**（见 emptyReplyText）：通道断了要写出"查代理、好了回继续"，
+  // 不能跟"模型输出为空"共用一句废话
   const shown = blank
-    ? EMPTY_REPLY_TEXT
+    ? emptyReplyText(run)
     : stripTrailingDoneMark(raw.replace(/^\s*\[完成\][ \t]*(?:\r?\n)*/, '')) || raw;
-  const finalMeta = blank ? { ...(meta ?? {}), emptyReply: true } : meta;
+  const finalMeta = blank
+    ? { ...(meta ?? {}), emptyReply: true, ...(isChannelError(run.lastErrMsg) ? { channelDown: true } : {}) }
+    : meta;
   const msg = store.addMessage({
     conversationId: run.conversationId,
     runId: run.id,
@@ -817,6 +1068,10 @@ function finish(run, { status, exitCode = null, error = null, usage = null, elap
     clearTimeout(run.stopWatchdog);
     run.stopWatchdog = null;
   }
+  if (run.limitTimer) {
+    clearTimeout(run.limitTimer);
+    run.limitTimer = null;
+  }
   // 过了门的 run 收尾时把**并发名额**还掉（进门排队见 acquireSpawnGate）
   if (run.spawnSlotAcquired) {
     run.spawnSlotAcquired = false;
@@ -844,9 +1099,18 @@ function finish(run, { status, exitCode = null, error = null, usage = null, elap
    * 这里是**所有运行的唯一终点**，所以兜底放在这儿：停止的收尾把已经流出去的回话落库，
    * 一个字都没有的就不硬造消息（界面那边另画一条安静的状态行，见 chat.mjs 的 stopBlock）。
    */
-  if (status === 'stopped' && !run.replyPersisted && run.streamedText) {
+  if (
+    !run.replyPersisted &&
+    (run.finalText || run.streamedText) &&
+    (status === 'stopped' || run.limitHit)
+  ) {
+    /*
+     * 2026-11-19 七改把条件从 "只认 stopped" 扩到 "**挂死收口也算**"：那两条路径都等不到
+     * `.then` 的正常收尾，不在这里兜底，用户屏幕上就是一片空白（连"为什么停"都不知道）。
+     * finalText 优先 —— 看门狗路径已经把 idleNote 拼进去了。
+     */
     if (!run.finalText) run.finalText = run.streamedText;
-    persistReply(run, run.streamedText, replyMeta({ stopped: true }));
+    persistReply(run, run.finalText, replyMeta({ stopped: status === 'stopped' }));
   }
 
   store.finishRun(run.id, { status, exitCode, error, usage });
@@ -866,6 +1130,7 @@ function finish(run, { status, exitCode = null, error = null, usage = null, elap
   }
 
   // 钩子出错不能影响执行本身的收尾 —— 否则一条流程的推进逻辑会把发言也搞挂
+  run.usageRecord = usage ?? null; // 收尾钩子要判"是不是被预算掐的"（project-tasks 的 endNoteOf）
   for (const fn of finishHooks) {
     try {
       fn(run);

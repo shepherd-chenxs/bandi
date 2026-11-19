@@ -38,6 +38,18 @@ jobs:
         with:
           node-version: '22'
 
+      - name: 缓存 node_modules
+        id: cache-modules
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-modules-${{ hashFiles('package-lock.json') }}
+
+      - name: 安装依赖
+        shell: pwsh
+        if: steps.cache-modules.outputs.cache-hit != 'true'
+        run: npm ci
+
       - name: 策略检查（零依赖 / 地址白名单 / 断言完整性）
         shell: pwsh
         env:

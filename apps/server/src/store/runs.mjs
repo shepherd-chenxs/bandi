@@ -211,6 +211,83 @@ export function listRunEvents(runId, afterSeq = 0) {
     .all(runId, from);
 }
 
+/**
+ * **这一轮到底慢在哪**（2026-11-19）。
+ *
+ * 与 `compactRunEvidence` 的分工：那个答"这轮调了什么工具"（工具名 + 目标 + 错误），
+ * 给界面上的「证据」按钮看；这个答"时间花在哪"，给排障用 —— 实报 r-3e67b107 花了我
+ * 五轮手写 SQL 才拼出那 45 秒的构成，说明缺的就是这一层。
+ *
+ * 四个数是关键，别的都是辅助：
+ *   · `modelTurns`  —— 模型往返次数（thinking 事件数）。1 次是正常，6 次说明它在绕圈。
+ *   · `toolCalls`   —— 工具次数。和 modelTurns 一起看：6 轮 6 工具 = 每轮都在试。
+ *   · `firstAnswerAt` —— 第一次说出正文的时刻（相对开始）。**它之前的耗时是必要成本**。
+ *   · `afterAnswerMs` —— 说出正文之后又花了多久。**这个数就是"空转"的直接度量**：
+ *     答案已经在屏幕上了，剩下的时间都在自我核验 / 重复输出（实报是 34.5 秒）。
+ *
+ * 只读、无副作用，前端和 CLI 都能直接调。
+ */
+export function summarizeRun(runId) {
+  const run = getRunRow(runId);
+  if (!run) return null;
+  const rows = db.prepare('SELECT seq, evt, at FROM run_events WHERE runId = ? ORDER BY seq').all(runId);
+  const t0 = Date.parse(run.startedAt ?? '');
+  const rel = (t) => {
+    const v = Date.parse(t ?? '');
+    return Number.isFinite(v) && Number.isFinite(t0) ? v - t0 : null;
+  };
+
+  let modelTurns = 0;
+  let toolCalls = 0;
+  let firstAnswerAt = null;
+  /*
+   * usage 以 **runs 行**为准：收尾时 runs.mjs 会往里补 runtimeFamily / toolCalls / limitHit，
+   * 这些字段事件里没有（事件是适配器推的，平台补的值落不到那）。老运行行没 usage 才回退事件。
+   */
+  let usage = null;
+  try {
+    usage = run.usage ? JSON.parse(run.usage) : null;
+  } catch {
+    usage = null;
+  }
+  for (const r of rows) {
+    let evt;
+    try {
+      evt = JSON.parse(r.evt);
+    } catch {
+      continue;
+    }
+    if (evt?.type === 'thinking') modelTurns += 1;
+    else if (evt?.type === 'tool') toolCalls += 1;
+    else if (evt?.type === 'text' && firstAnswerAt === null) firstAnswerAt = rel(r.at);
+    else if (evt?.type === 'status' && evt.phase === 'turn_end' && evt.usage && !usage) usage = evt.usage;
+  }
+
+  const durationMs =
+    run.endedAt && Number.isFinite(t0) ? Date.parse(run.endedAt) - t0 : t0 ? (run.elapsedMs ?? null) : null;
+  return {
+    runId,
+    status: run.status,
+    startedAt: run.startedAt,
+    endedAt: run.endedAt,
+    durationMs,
+    modelTurns,
+    toolCalls,
+    firstAnswerAt,
+    afterAnswerMs: firstAnswerAt !== null && durationMs !== null ? durationMs - firstAnswerAt : null,
+    /*
+     * 被**挂死检测**收的（runs.mjs 记进 usage；那是本表唯一自由形态的 JSON 列，不加列迁移）。
+     * 值 `idle` = 连续无事件超时（2026-11-19 七改，唯一的主动收口理由）；
+     * 老行里的 `time`（旧墙钟上限）与 `toolBudgetHit`（更早的次数上限）仍认，免得历史数据看不出。
+     */
+    limitHit: usage?.limitHit ?? (usage?.toolBudgetHit === true ? 'tools' : null),
+    /** 无水事件了多久才判的挂死（毫秒）；只有 limitHit='idle' 时有 */
+    idleMs: usage?.idleMs ?? null,
+    usage,
+    events: rows.length,
+  };
+}
+
 /** 这次运行最后一条事件 —— 「到底了没有」就看它是不是终止事件 */
 
 export function lastRunEvent(runId) {
@@ -281,10 +358,23 @@ export function maxRunSeq(runId) {
 export function listRuns(conversationId) {
   /* 带上执行者名字（2026-10-23）：群聊"对方正在输入"的气泡要按名字找头像，
      runs 表只有 personaId，前端拿到名字才能命中 personas 的 avatar。 */
+  /*
+   * **lastEventAt**（2026-11-19）：最后一次活动时刻 = 这个 run 事件流的最后一条。
+   *
+   * 为什么必须由服务端给：前端刷新/重进会话时新建进度卡，`idleMs` 是按"本地最后一次收到
+   * 事件"算的 —— 重连那一刻它归零，明明已经卡了 8 分钟的运行，刷一下页面就显示"刚动过"，
+   * 人会一直等下去。库里这条是**持久事实**，重画时就该拿它。
+   *
+   * 子查询走主键 (runId, seq) 倒序取一条，不扫全表；单会话几十个 run 量级，代价可忽略。
+   * 没有事件（刚排队）→ NULL，前端退回"现在"。
+   */
   return db
-    .prepare(`SELECT r.*, p.name AS personaName
-                FROM runs r LEFT JOIN personas p ON p.id = r.personaId
-               WHERE r.conversationId = ? ORDER BY r.startedAt DESC`)
+    .prepare(
+      `SELECT r.*, p.name AS personaName,
+              (SELECT at FROM run_events WHERE runId = r.id ORDER BY seq DESC LIMIT 1) AS lastEventAt
+         FROM runs r LEFT JOIN personas p ON p.id = r.personaId
+        WHERE r.conversationId = ? ORDER BY r.startedAt DESC`,
+    )
     .all(conversationId);
 }
 

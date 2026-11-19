@@ -33,353 +33,25 @@ import { createLiveAnswer } from './run-live.mjs';
  * 权限下拉的选项：**跟随员工默认** + 运行时支持的那几个权限。
  * 默认项是"收回提权"的入口 —— 提权最怕的就是忘了收回，所以必须有一键还原。
  */
-export function permItems(rt) {
-  return [{ id: '', label: '跟随员工默认' }, ...sandboxItems(rt)];
-}
 
-
-
-/**
- * **会话级**权限下拉。
- *
- * 语义：默认跟随员工；在这里选一个具体权限 = **只对这个会话生效**（不动员工本身）。
- * 选回「跟随员工默认」= 收回。
- *
- * 被覆盖时组合框会**高亮 + 标题写明**，因为提权最大的风险是"忘了收回"——
- * 那等于长期敞着一个口子。
+/*
+ * 输入框的两颗选择器搬去 composer-pickers.mjs（2026-11-19）：这里 import 一份给本文件用，
+ * 再原样导出 —— flowpages.mjs 等 import 的是 './chat.mjs'，路径与名字都不变（barrel）。
  */
-export function convPermCombo({ mount, conversationId, runtime, value, personaSandbox, onDone }) {
-  mount.innerHTML = '';
-  const items = permItems(runtime);
-  if (!items.length) return null;
-  const labelOf = (id) => (items.find((it) => it.id === id) ?? {}).label ?? String(id ?? '');
-  // 员工默认权限的真实名（personaSandbox 为空 = 员工自己也没设，写「未设置」）。
-  // 按钮上直接写它 —— "跟随员工默认"这种说法不写出来，是什么就展示什么（用户 2026-10-18）；
-  // 清单里「跟随员工默认」那条照旧留着，当收回提权的入口。
-  const realLabel = () => (personaSandbox ? labelOf(personaSandbox) || personaSandbox : '未设置');
-  const combo = createCombo({
-    mount,
-    items,
-    value: value ?? '',
-    search: false,
-    buttonText: (id) => (id ? labelOf(id) : realLabel()),
-    onChange: async (id) => {
-      try {
-        await api('/api/conversations/' + encodeURIComponent(conversationId), {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sandbox: id || null }),
-        });
-        paint(id);
-        onDone?.();
-      } catch (err) {
-        toast(err.message, 'error');
-        onDone?.();
-      }
-    },
-  });
-  const paint = (id) => {
-    combo.el.classList.toggle('elevated', !!id);
-    combo.el.title = id
-      ? `这个会话单独设成了「${labelOf(id)}」——用完点这里选回「跟随员工默认」收回`
-      : `员工默认（${realLabel()}）——想单独设就点开选`;
-  };
-  paint(combo.value());
-  combo.el.classList.add('up'); // 往上弹（在输入区底部，往下弹会被切掉）
-  return combo;
-}
+import { renderComposerPerm, renderComposerModel, readModelList, modelItems } from './composer-pickers.mjs';
+export {
+  permItems,
+  convPermCombo,
+  groupPermCombo,
+  renderComposerPerm,
+  MODEL_LIST_TTL_MS,
+  modelListCache,
+  readModelList,
+  modelItems,
+  convModelCombo,
+  renderComposerModel,
+} from './composer-pickers.mjs';
 
-
-
-/**
- * **群聊**的权限下拉（2026-11-14 用户要求加回来）。
- *
- * 群和 1:1 不一样：成员可能跨运行时，员工详情那套"运行时方言"清单没法共用。
- * 这里给**通用三档**（canonical id，存 conversations.sandbox），派活时 runs 里的
- * `normalizeSandbox` 会按每个成员自己的运行时族换算 —— 完全权限 → codex `danger-full-access` /
- * claude `bypassPermissions`，工作区内读写 → `workspace-write` / `acceptEdits`，
- * 仅可查看 → `read-only` / `plan`。
- *
- * 语义与 1:1 的会话级覆盖同一条路：覆盖的是**这个群里派的活**，不动员工本身；
- * 选回「跟随员工默认」= 收回。程序化的只读约束（讨论模式）优先级更高，不受提权影响。
- */
-export function groupPermCombo({ mount, conversationId, value, onDone }) {
-  const items = [
-    { id: '', label: '跟随员工默认' },
-    { id: 'danger-full-access', label: SANDBOX_LABEL['danger-full-access'] },
-    { id: 'workspace-write', label: SANDBOX_LABEL['workspace-write'] },
-    { id: 'read-only', label: SANDBOX_LABEL['read-only'] },
-  ];
-  const labelOf = (id) => (items.find((it) => it.id === id) ?? {}).label ?? String(id ?? '');
-  const combo = createCombo({
-    mount,
-    items,
-    value: value ?? '',
-    search: false,
-    buttonText: (id) => (id ? labelOf(id) : '各随员工默认'),
-    onChange: async (id) => {
-      try {
-        await api('/api/conversations/' + encodeURIComponent(conversationId), {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sandbox: id || null }),
-        });
-        paint(id);
-        onDone?.();
-      } catch (err) {
-        toast(err.message, 'error');
-        onDone?.();
-      }
-    },
-  });
-  const paint = (id) => {
-    combo.el.classList.toggle('elevated', !!id);
-    combo.el.title = id
-      ? `这个群里派活统一按「${labelOf(id)}」跑 —— 用完点这里选回「跟随员工默认」收回`
-      : '没覆盖：@ 谁就按谁自己的员工默认权限跑 —— 想统一设就点开选';
-  };
-  paint(combo.value());
-  combo.el.classList.add('up'); // 往上弹（在输入区底部，往下弹会被切掉）
-  return combo;
-}
-
-
-
-export function renderComposerPerm(d) {
-  const mount = $('dPermMount');
-  if (!mount) return;
-  mount.innerHTML = '';
-  const conv = d.conversation;
-  /*
-   * 群聊也放权限下拉（2026-11-14 用户要求；原来"群里每个人权限不同，放个假的没意义"直接不放）。
-   * 放的**不是假的**：它写 conversations.sandbox，派活时 dispatch 会拿它盖过每个成员的默认 ——
-   * 见 dispatch.startMemberRun 的会话级覆盖。
-   */
-  if (conv.kind === 'group') {
-    groupPermCombo({
-      mount,
-      conversationId: conv.id,
-      value: conv.sandbox,
-      onDone: () => openConversation(conv.id),
-    });
-    return;
-  }
-  const rt = S.runtimes.find((x) => x.id === conv.runtime) ?? null;
-  convPermCombo({
-    mount,
-    conversationId: conv.id,
-    runtime: rt,
-    value: conv.sandbox,
-    personaSandbox: conv.personaSandbox,
-    onDone: () => openConversation(conv.id),
-  });
-}
-
-
-
-/**
- * 把服务端给的模型清单变成下拉项。
- *
- * 显示**显示名**，不是 `id · 显示名`。id 是真正传给 CLI 的那个值没错，但它又长又带
- * 供应商前缀（`opencode-zen-free/longcat-2.5-preview-free` 有 40 个字符），拼上去
- * 浮层里几乎全被它占满 —— 而显示名正是配置里专门给人看的那个。
- *
- * 搜索不受影响：`createCombo` 过滤时**同时匹配 `id` 和 `label`**，按 id 照样搜得到。
- *
- * 唯一要防的是**重名**：不同供应商可能起一样的显示名，那时两条长得一模一样、
- * 选哪个分不出来。所以只在**确实撞名**时，给撞上的那几条补回 id。
- */
-/**
- * 取某个运行时的模型清单，**60 秒内复用**。
- *
- * 为什么要缓存：以前只在点开下拉时读一次，现在输入区的按钮上要直接写出
- * "实际跑的是哪个模型"，所以每进一个会话都要读一遍。同一运行时下反复切会话
- * 没必要重复问（服务端那头是读 CLI 的配置文件，快归快，但也没必要每次都读）。
- * 60 秒是为了让"用户在 CLI 那边加了模型"这种事半分钟内能反映到界面上。
- */
-export const MODEL_LIST_TTL_MS = 60 * 1000;
-
-
-export const modelListCache = new Map();
-
- // runtimeId → { at, data }
-
-export async function readModelList(runtimeId, { fresh = false } = {}) {
-  const hit = modelListCache.get(runtimeId);
-  if (!fresh && hit && Date.now() - hit.at < MODEL_LIST_TTL_MS) return hit.data;
-  const data = await api('/api/runtimes/' + encodeURIComponent(runtimeId) + '/models');
-  modelListCache.set(runtimeId, { at: Date.now(), data });
-  return data;
-}
-
-
-
-export function modelItems(models) {
-  const list = models ?? [];
-  const seen = new Map();
-  for (const m of list) {
-    const n = String(m.name ?? '').trim();
-    if (n) seen.set(n, (seen.get(n) ?? 0) + 1);
-  }
-  const itemOf = (m) => {
-    const name = String(m.name ?? '').trim();
-    if (!name) return { id: m.id, label: m.id }; // 配置里没显示名，只能拿 id 顶
-    return { id: m.id, label: seen.get(name) > 1 ? `${name} · ${m.id}` : name };
-  };
-
-  /*
-   * 按 id 的前缀分组（`供应商/模型名` 里那一段）。实测这台机器上正好两组：
-   * workbuddy-ai (3) / opencode-zen-free (10)。
-   *
-   * 只有**一种**前缀时不加标题 —— 一个标题盖住全部条目，纯粹是噪音。
-   * 没有斜杠的 id 归到「其他」。
-   */
-  const groups = new Map();
-  for (const m of list) {
-    const id = String(m.id ?? '');
-    const at = id.indexOf('/');
-    // 服务端可以自己指定分组（claude 的别名就是这样：id 是 `sonnet`，不该混进「其他」）
-    const g = m.group != null ? String(m.group) : at > 0 ? id.slice(0, at) : '';
-    if (!groups.has(g)) groups.set(g, []);
-    groups.get(g).push(m);
-  }
-  if (groups.size < 2) return list.map(itemOf);
-
-  const out = [];
-  for (const [g, arr] of groups) {
-    out.push({ header: g || '其他' });
-    for (const m of arr) out.push(itemOf(m));
-  }
-  return out;
-}
-
-
-
-/**
- * **会话级**模型切换 —— 跟权限那颗一个模式，位置在发送按钮左边。
- *
- * 清单**直接问运行时**（服务端读 CLI 自己那份配置），不查任何本地账本 —— 见 cli-models.mjs。
- * 所以：
- *   · **只读一次**（这次会话里读过就记住；同一运行时下换会话复用缓存，要重读就重开会话）
- *   · **打开就后台读一次**：按钮上要写出"实际是哪个模型"，不能等点开才知道
- *   · **读不到不清空**：至少留着"跟随员工默认"，并把原因写进按钮的 title
- *
- * 语义和权限一样：默认跟随员工（员工没绑就是 CLI 自己的默认），
- * 在这儿选一个 = 只对这个会话生效；选回第一项 = 收回。
- */
-export function convModelCombo({ mount, conversationId, runtime, value, personaModel, onDone }) {
-  mount.innerHTML = '';
-  const FOLLOW = '跟随员工默认';
-  let items = [{ id: '', label: FOLLOW }];
-  let loaded = false;
-  let why = '';
-  // CLI 自己的默认模型名（读到才有）：员工没绑模型时，真正跑的就是它
-  let cliDefault = null;
-
-  /** id → 人看的名字（清单里有就用它的显示名，没有就拿 id 顶） */
-  const labelOfId = (id) => {
-    const hit = items.find((it) => it.id === id && it.id);
-    return hit && hit.label !== id ? hit.label : id;
-  };
-
-  const combo = createCombo({
-    mount,
-    items,
-    value: value ?? '',
-    search: true,
-    placeholder: '搜模型…（id 或显示名）',
-    empty: '没有匹配的模型',
-    // 浮层右缘对齐**整个输入框**的右缘：这颗贴着窗口右边（右边只剩发送/停止按钮），
-    // 只对齐按钮自己的右缘，和输入框边线之间会空出一截；左对齐更是直接探出窗口被切掉
-    // （2026-10-17 用户实报"框被挡住了，右边应该跟框对齐"）。
-    alignRightTo: () => mount.closest('.input-wrap'),
-    onOpen: () => { void load(); },
-    onChange: async (id) => {
-      try {
-        await api('/api/conversations/' + encodeURIComponent(conversationId), {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: id || null }),
-        });
-        paint(id);
-        onDone?.();
-      } catch (err) {
-        toast(err.message, 'error');
-        onDone?.();
-      }
-    },
-  });
-
-  const paint = (id) => {
-    /*
-     * 按钮上**直接写出实际用哪个模型**（2026-10-17 用户要求）。
-     * 以前只写在 title 里（要悬停才看得见），而"我这句话到底是哪个模型答的"
-     * 是这个页面最该一眼看清的事。
-     * 取值的顺序与实际派活一致：会话覆盖 → 员工绑定 → CLI 默认。
-     */
-    const effId = id || personaModel || cliDefault || '';
-    const followLabel = effId ? `${FOLLOW}：${labelOfId(effId)}` : FOLLOW;
-    // 第一项就是"跟随员工默认"，标签换成带模型名的写法（其余项不动）
-    if (items[0] && items[0].id === '' && items[0].label !== followLabel) {
-      items = [{ id: '', label: followLabel }, ...items.slice(1)];
-      combo.setItems(items, true); // 保住当前值，别把人家选的模型冲掉
-    }
-    combo.el.classList.toggle('elevated', !!id); // 有覆盖时高亮：跟权限那颗一个信号
-    combo.el.title = id
-      ? `这个会话单独用了「${id}」——点这里可以换，或选回「${FOLLOW}」收回`
-      : `${FOLLOW}${effId ? `（现在跑的是 ${effId}）` : '（CLI 自己的默认模型）'}${why ? `。${why}` : ''}`;
-  };
-
-  /** 读清单。失败不抛出去 —— 组合框照常能用，只是选项少。 */
-  const load = async () => {
-    if (loaded || !runtime) return;
-    loaded = true;
-    try {
-      const d = await readModelList(runtime.id);
-      const list = d.models ?? [];
-      const cur = combo.value();
-      const next = [{ id: '', label: FOLLOW }];
-      // 当前值不在清单里也要留着 —— 清单可能读不到，不能把人家选着的模型弄丢
-      if (cur && !list.some((m) => m.id === cur)) next.push({ id: cur, label: `（清单里没有）${cur}` });
-      next.push(...modelItems(list));
-      items = next;
-      why = list.length ? '' : (d.error ?? '这个运行时的清单是空的');
-      cliDefault = d.defaultModel ?? null;
-      combo.setItems(items);
-    } catch (err) {
-      loaded = false; // 失败就当没读过，下次展开再试
-      why = `取不到清单（${err.message}）`;
-    }
-    paint(combo.value());
-  };
-
-  paint(combo.value());
-  // 不等点开：先把默认模型名读回来，按钮上才写得出来
-  void load();
-  combo.el.classList.add('up'); // 往上弹（在输入区底部，往下弹会被切掉）
-  // 这颗下拉在发送按钮旁边（贴着窗口右边）—— 浮层得**右边缘对齐**，
-  // 否则默认的 left:0 会让它在按钮右侧探出窗口
-  combo.el.classList.add('right');
-  return combo;
-}
-
-
-
-export function renderComposerModel(d) {
-  const mount = $('dModelMount');
-  if (!mount) return;
-  mount.innerHTML = '';
-  // 群里每个人的模型可能不同，放一个"这个会话的模型"没意义 —— 跟权限那颗同一个判断
-  if (d.conversation.kind === 'group') return;
-  convModelCombo({
-    mount,
-    conversationId: d.conversation.id,
-    runtime: S.runtimes.find((x) => x.id === d.conversation.runtime) ?? null,
-    value: d.conversation.model,
-    personaModel: d.conversation.personaModel,
-    onDone: () => openConversation(d.conversation.id),
-  });
-}
 
 
 
@@ -616,10 +288,15 @@ export async function openConversation(id) {
     $('chatHead').innerHTML = `
       ${mbBackBtn}
       <div class="meta">
-        <div>${dissolved
-          ? `<b class="head-name-static">${esc(d.conversation.title)}</b> <span class="sub">${metaSub}</span>`
-          : `<b class="head-name" title="群设置">${esc(d.conversation.title)}</b> <span class="sub">${metaSub}</span> ${badge}`}</div>
+        <div><b class="head-name-static">${esc(d.conversation.title)}</b> <span class="sub">${metaSub}</span> ${badge}</div>
       </div>
+      ${dissolved ? '' : `<button class="icon-btn" id="toGroupSet" title="群设置">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
+             stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
+          <circle cx="12" cy="12" r="3"/>
+        </svg>
+      </button>`}
       <button class="icon-btn" id="toNewConv" title="给这个群开一段新会话（一次任务一段；旧段留在聊天记录里）">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
              stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -636,13 +313,12 @@ export async function openConversation(id) {
         </svg>
       </button>`;
     /*
-     * 群设置入口从右上角齿轮挪到**群名**上（2026-11-05 用户要求）：
-     * 一行里返回 + 群名 + 新会话 + 聊天记录 + 齿轮 = 五个可点目标，手机上挤成一团；
-     * 主流聊天 App 都是点标题进群详情，齿轮在这里只是多一颗钮。
-     * 解散的群不开抽屉（点开是空抽屉），所以名字不给 head-name 类、也不绑事件。
+     * 群设置入口（2026-11-19 用户：改回**按钮**，群名不再可点）：
+     * 之前（2026-11-05）把它挪到群名上，是为了给手机省一颗钮；现在用户点名要独立按钮，
+     * 群名恢复成纯标题（head-name-static，无热区、无手型），齿轮放在动作钮最左。
+     * 解散的群不开抽屉（点开是空抽屉），所以按钮不输出，名字同样不可点。
      */
-    const grpName = $('chatHead').querySelector('.head-name');
-    if (grpName && !dissolved) grpName.onclick = () => openGroupDrawer(d.conversation);
+    if (!dissolved) $('toGroupSet').onclick = () => openGroupDrawer(d.conversation);
     // 群聊天记录（2026-10-20 用户要求）：抽屉列出这个群的会话（含被「不显示」的那条）
     $('toChatLog').onclick = () => openChatLogDrawer(d.conversation);
     // 新会话（2026-10-24）：解散的群开不了（服务端 E2049），按钮也不给
@@ -714,7 +390,7 @@ export async function openConversation(id) {
   const last = d.runs[0];
   // 把这次运行的**开始时间**一起带过去：刷新/重进会话时，"已跑多久"要按真实起点算，
   // 不能从"我打开这一页"开始算（用户 2026-10-26 要看的就是"跑了多久、到哪一步"）
-  if (last && last.status === 'running') attachStream(last.id, last.personaName, last.startedAt);
+  if (last && last.status === 'running') attachStream(last.id, last.personaName, last.startedAt, last.lastEventAt);
   renderList();
 }
 
@@ -837,9 +513,11 @@ export function bubble(role, text, name, who, showName = false, at = '', atts = 
   // （调用方从名册解析好放 opts.senderNick），认人仍按账号名 —— 上面那行一个字没动。
   const label = mine ? '我' : otherHuman ? (opts?.senderNick || senderName) : (who || name || '数字员工');
   // 头像带图（2026-10-22）：优先按名字找员工；群聊消息有 personaName 直接命中，
-  // 1:1 改过名时名字可能对不上，再兜一层会话的 personaId
+  // 1:1 改过名时名字可能对不上，再兜一层会话的 personaId。
+  // 2026-11-19：调用方有 personaId 时直接给对象（opts.persona）—— 同名员工不会串人。
   const p = mine ? null
-    : (personaByName(label)
+    : (opts?.persona
+      ?? personaByName(label)
       ?? (S.conversation?.personaId ? S.personas.find((x) => x.id === S.conversation.personaId) ?? null : null));
   // 时间放在气泡**外面**的下方（2026-10-19 用户要求，别塞在气泡里）：绝对定位，不占布局
   const t = at ? stampOf(at) : '';
@@ -868,6 +546,24 @@ export function bubble(role, text, name, who, showName = false, at = '', atts = 
    */
   const stoppedNote = meta?.stopped ? '<div class="bubble-note">已停止生成</div>' : '';
   /*
+   * 点头像速改运行时/模型（2026-11-19 用户："群聊里面点击人物头像，要打开一个人物弹窗，
+   * 在这个弹窗里可以更改运行时和模型"）—— 模型额度用完了不必退出聊天去通讯录详情。
+   * 只有认得出数字员工（p）的头像可点；「我」的头像没有配置项，保持原样。
+   */
+  const avBase = mine ? smAvatar('我', 'me') : smAvatar(label, '', p);
+  /*
+   * 手机端不要这枚简卡（2026-11-19 用户：「手机端不需要员工简卡」）。
+   * 判据同 mobile.mjs 的 body.mb-narrow（启动即置，渲染时已可靠，见 mobile.mjs:36）。
+   * 手机端头像就是头像 —— 不渲染 button：省掉一个按下去什么都不会发生、
+   * 读屏还会念「查看运行时与模型」的死入口。点击委托那边另兜一层，
+   * 防窗口从宽拖窄 / 旋屏后 DOM 里还留着上一版按钮。
+   */
+  const phone = document.body.classList.contains('mb-narrow');
+  const avHtml = !mine && p && !phone
+    ? `<button type="button" class="av-peer" data-peer="${esc(p.id)}" title="换运行时 / 模型"
+         aria-label="查看 ${esc(label)} 的运行时与模型">${avBase}</button>`
+    : avBase;
+  /*
    * 空回话（2026-11-11 实报）：finalText 只剩 `"\n\n\n"` 时以前画出来是一条**空白气泡**，
    * 看着像界面坏了。服务端落库时已换占位文案，这里再兜一层 —— 老库里已存在的空白消息
    * 也照样能看清"这一轮没回话"。
@@ -887,7 +583,7 @@ export function bubble(role, text, name, who, showName = false, at = '', atts = 
        · tight = 同一人紧接着的下一句，行距收紧（换人才松开，段落感就出来了）。
        时间照常渲染进 DOM，只是被 CSS 藏 —— 桌面/手机共用一份 HTML。 */
     return `<div class="row ${mine ? 'me' : ''}${opts?.tight ? ' tight' : ''}${opts?.hideTime ? ' nt' : ''}">
-    ${mine ? smAvatar('我', 'me') : smAvatar(label, '', p)}
+    ${avHtml}
     ${nameLine
       ? `<div class="msg-main">${nameLine}<div class="bubble">${ticketAfter ? bodyHtml + ticket : ticket + bodyHtml}${attsHtml}${stoppedNote}</div></div>`
       : `<div class="bubble">${ticketAfter ? bodyHtml + ticket : ticket + bodyHtml}${attsHtml}${stoppedNote}</div>`}
@@ -1196,7 +892,7 @@ export function drawMessages(msgs, name, isGroup = false, runs = [], opts = {}) 
             return sep + `<div class="sys-line">${esc(it.m.text || '（上下文过长，已开新会话）')}</div>`;
           }
           return sep + (it.kind === 'msg'
-            ? bubble(it.m.role, it.m.text, name, it.m.personaName, isGroup, it.m.createdAt, it.m.atts, it.m.meta, it.m.senderUserName, { ...(opts ?? {}), runId: it.m.runId, senderNick: senderNickOf(it.m) })
+            ? bubble(it.m.role, it.m.text, name, it.m.personaName, isGroup, it.m.createdAt, it.m.atts, it.m.meta, it.m.senderUserName, { ...(opts ?? {}), runId: it.m.runId, senderNick: senderNickOf(it.m), persona: (S.personas ?? []).find((x) => x.id === it.m.personaId) ?? null })
             : it.kind === 'stop' ? stopBlock(it.r, isGroup) : failBlock(it.r, isGroup));
         })
         .join('')
@@ -1452,7 +1148,7 @@ export async function stopChatRun() {
 
 
 
-export function attachStream(runId, whoName = '', startedAt = null) {
+export function attachStream(runId, whoName = '', startedAt = null, lastEventAt = null) {
   if (S.es) S.es.close();
   // 这一轮的「收尾了」信号（停止生成会等它再重画，见 stopChatRun）。
   // 先把上一轮还在等的放掉，再挂新的一轮 —— 否则换会话/重连时旧 Promise 会一直吊着。
@@ -1499,6 +1195,8 @@ export function attachStream(runId, whoName = '', startedAt = null) {
    */
   const card = createProgressCard({
     startedAt: Number.isFinite(begun) ? begun : Date.now(),
+    // 重开页面接上跑中的一轮：空闲时长按服务端记的最后活动算，别按"刚连上"算
+    lastEventAt,
     onStop: () => stopChatRun().catch(() => {}),
   });
   body.appendChild(card.el); // 胶囊就住在这颗泡里（泡此时是 .live-line，自己不画框）
@@ -2455,14 +2153,8 @@ function renderDetailMobile(persona, runtimes) {
           <!-- 值文本的 id 还是 dModelText（异步补名那段照旧写它），外面多包一层只为放 › -->
           <div class="mb-nav-val"><span id="dModelText">${esc(persona.model || '跟随默认')}</span><i class="mb-chev" aria-hidden="true"></i></div>
         </div>
-        <div class="form-row">
-          <div class="row-label">并发数</div>
-          <!-- 并发数口径同桌面：空着 = 默认 6；服务端钳到 [1, 20]，手滑填坏也不打断保存。
-               外观（宽度/对齐）交给 §20.2，不再写内联样式 —— 内联优先级会压过重排。 -->
-          <input id="dMaxParallel" type="number" min="1" max="20" step="1"
-                 value="${persona.maxParallel ?? ''}"
-                 placeholder="6" />
-        </div>
+        <!-- 并发数（2026-11-19 用户拍板）：改为系统固定默认（store/personas.mjs 的
+             PERSONA_DEFAULT_MAX_PARALLEL），不再暴露给用户配置 —— 手机、桌面两处同步摘掉。 -->
       </div>
 
       <!-- 主动作通栏（§20.3）：桌面那颗挤在头右上角的小蓝钮在手机上又重又挤，
@@ -2494,7 +2186,7 @@ function renderDetailMobile(persona, runtimes) {
    */
   const rtItems = runtimes.map((r) => ({ id: r.id, label: r.label }));
   if (persona.builtin || String(persona.id ?? '').startsWith('p-expert-'))
-    rtItems.unshift({ id: 'auto', label: '自动（挑一个能用的）' });
+    rtItems.unshift({ id: 'auto', label: '自动' });
 
   /*
    * 两行都改成「点开全屏选择页」（2026-11-05 用户口径：不要下拉框）。
@@ -2637,8 +2329,9 @@ function renderDetailMobile(persona, runtimes) {
    *   · name 必填（缺了直接 E1011 拒掉）；
    *   · instructions 在路由里是无条件 `String(body.instructions ?? '')` —— 缺省会被兜成
    *     空串**清空职责设定**。
-   * 所以身份资料必须从现值原样带回；runtime / model / maxParallel 三个才是
+   * 所以身份资料必须从现值原样带回；runtime / model 两个才是
    * 精简表单真正能改的字段（model 与桌面同一字段名：'' = 交给 CLI 自己的默认）。
+   * 并发数 2026-11-19 摘掉，不传 = 服务端不动库里原值、统一走系统默认。
    */
   const collect = () => ({
     name: persona.name,
@@ -2647,8 +2340,6 @@ function renderDetailMobile(persona, runtimes) {
     instructions: persona.instructions ?? '',
     runtime: curRuntime,
     model: curModel,
-    // 空着 = 恢复默认（null）；数字服务端会钳位，这里只管传
-    maxParallel: $('dMaxParallel').value.trim() === '' ? null : Number($('dMaxParallel').value),
   });
   let lastSaved = JSON.stringify(collect());
 
@@ -2691,8 +2382,6 @@ function renderDetailMobile(persona, runtimes) {
   // 离开这一页（切视图 / 打开别的员工 / 关窗口）前兜底存一次 —— showView / openDetail 依赖它 flush
   detailSave.flush = (opts) => saveNow(opts);
 
-  $('dMaxParallel')?.addEventListener('input', () => scheduleSave(700));
-  $('dMaxParallel')?.addEventListener('blur', () => saveNow());
 
   // 「发消息 / 回到聊天」：先落盘再跳（通讯录进来没有未保存表单，saveNow 按 lastSaved 直接跳过）
   $('dMsg').onclick = async () => { await saveNow(); openDirectChat(persona); };
@@ -3053,6 +2742,12 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
       </tr>`).join('')
     : '<tr><td colspan="6" class="dim" style="padding-top:8px">还没有运行记录</td></tr>';
 
+  // 头上去掉「N 个技能」「最近运行」两个 pill，改成显示工作目录绑定的项目名
+  // （2026-11-19 用户）：root 跟 persona.cwd 对上的那个项目；对不上就把自定义路径原样挂上。
+  const cwdProject = (S.projects ?? []).find(
+    (p) => String(p.root ?? '').trim() === String(persona.cwd ?? '').trim(),
+  );
+
     $('detailView').innerHTML = `
     <div class="detail-body">
       <div class="p-head">
@@ -3070,8 +2765,15 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
           <div class="p-meta">
             <span class="pill">${esc(rt ? rt.label : persona.runtime === 'auto' ? '自动' : persona.runtime)}</span>
             <span class="pill">${esc(SANDBOX_LABEL[persona.sandbox] ?? persona.sandbox)}</span>
-            <span class="pill">${personaSkills.length} 个技能</span>
-            <span class="pill">最近运行 ${runs[0] ? dt(runs[0].startedAt) : '—'}</span>
+            ${
+              // 2026-11-19 用户：「N 个技能」「最近运行」两个 pill 去掉，换成工作目录对应的项目名。
+              // 对得上项目库 → 显示项目名（悬停看路径）；对不上的自定义路径 → 原样挂路径；没绑 → 不显示。
+              cwdProject
+                ? `<span class="pill" title="${esc(cwdProject.root)}">${esc(cwdProject.name || cwdProject.root)}</span>`
+                : persona.cwd
+                  ? `<span class="pill" title="自定义目录，不在项目库">${esc(persona.cwd)}</span>`
+                  : ''
+            }
           </div>
         </div>
         <div class="hero-actions">
@@ -3092,22 +2794,40 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
       </div>
 
       <div class="tabs">
-        <!-- 2026-10-29 用户定稿：顶层只留 概览/任务/能力/配置 —— 运行记录降成概览的子页，
-             执行配置搬进配置（后面集成飞书的入口也挂到配置下） -->
-        <button class="tab on" data-tab="overview">概览</button>
+        <!-- 2026-11-19 用户连改：去掉「能力」tab；又去掉「资料」子页（身份字段搬进配置的基本信息），
+             运行记录直接铺在原概览页；最后把「配置」和「运行记录」（原概览，已改名）交换位置，
+             顺序变成 配置 / 任务 / 运行记录。配置放第一，打开人就先看到基本信息。 -->
+        <button class="tab on" data-tab="config">配置</button>
         <button class="tab" data-tab="tasks">任务<span class="tab-n" id="dTasksN">${taskBoard?.total ?? 0}</span></button>
-        <button class="tab" data-tab="capability">能力<span class="tab-n">${personaSkills.length}</span></button>
-        <button class="tab" data-tab="config">配置</button>
+        <button class="tab" data-tab="overview">运行记录</button>
       </div>
 
       <section class="tab-panel" data-panel="overview">
+        <!-- 2026-11-19 用户拍板去掉「资料」子页：身份字段（名字/岗位/部门/职责）整体搬进
+             「配置」tab 的「基本信息」子页。概览只剩运行记录一页，二级导航（ov-nav）随之取消，
+             表格直接铺在这里 —— 一页就不需要再点一层。 -->
+        <div class="group">
+          <table class="runs"><thead><tr>
+            <th>时间</th><th>状态</th><th>退出码</th><th>tokens</th><th>耗时</th><th>错误</th>
+          </tr></thead><tbody>${runRows}</tbody></table>
+        </div>
+      </section>
+
+      <!-- 配置 tab（2026-11-19 起）：基本信息 / 执行配置 / 飞书 三个子页 -->
+      <section class="tab-panel" data-panel="config" hidden>
         <div class="ov-layout">
-          <nav class="ov-nav" aria-label="概览分区">
-            <button type="button" class="on" data-ov="profile">资料</button>
-            <button type="button" data-ov="runs">运行记录<span class="tab-n">${runs.length}</span></button>
+          <nav class="ov-nav" aria-label="配置分区">
+            <!-- 2026-11-19 用户拍板：原「概览 → 资料」子页整体搬进来，成为配置的第一页。
+                 身份字段（名字/岗位/部门/职责）在这里，默认打开就看到。 -->
+            <button type="button" class="on" data-ov="basic">基本信息</button>
+            <button type="button" data-ov="exec">执行配置</button>
+            <!-- 2026-10-29 用户定稿：飞书从「设置」搬进来，员工级 —— 一个数字员工一个飞书自建应用 -->
+            <button type="button" data-ov="feishu">飞书</button>
           </nav>
           <div class="ov-body">
-            <section class="ov-panel" data-ov-panel="profile">
+            <!-- 基本信息（原概览「资料」子页，2026-11-19 搬来）：DOM id 全部原样保留，
+                 保存 / 同步 / 职责设定编辑逻辑零改动。 -->
+            <section class="ov-panel" data-ov-panel="basic">
               <div class="group">
                 <!-- 「名字/岗位…随平台固定」提示条摘掉（2026-11-15 用户实报）：
                      锁定这件事输入框的 readonly + 悬停 title 已经说了，横幅纯属重复。
@@ -3161,28 +2881,7 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
               </div>
             </section>
 
-            <!-- 运行记录（2026-10-29）：从顶层 tab 降成概览的子页，表格原样搬过来 -->
-            <section class="ov-panel" data-ov-panel="runs" hidden>
-              <div class="group">
-                <table class="runs"><thead><tr>
-                  <th>时间</th><th>状态</th><th>退出码</th><th>tokens</th><th>耗时</th><th>错误</th>
-                </tr></thead><tbody>${runRows}</tbody></table>
-              </div>
-            </section>
-          </div>
-        </div>
-      </section>
-
-      <!-- 配置（2026-10-29 新增顶层 tab）：执行配置是第一个子页，后面集成飞书的入口也挂到这里 -->
-      <section class="tab-panel" data-panel="config" hidden>
-        <div class="ov-layout">
-          <nav class="ov-nav" aria-label="配置分区">
-            <button type="button" class="on" data-ov="exec">执行配置</button>
-            <!-- 2026-10-29 用户定稿：飞书从「设置」搬进来，员工级 —— 一个数字员工一个飞书自建应用 -->
-            <button type="button" data-ov="feishu">飞书</button>
-          </nav>
-          <div class="ov-body">
-            <section class="ov-panel" data-ov-panel="exec">
+            <section class="ov-panel" data-ov-panel="exec" hidden>
               <div class="group">
                 <div class="form-row">
                   <div class="row-label">Runtime</div>
@@ -3203,22 +2902,18 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
                   </div>
                 </div>
                 <div class="form-row">
-                  <!-- 附加目录摘掉后没有「主/附加」之分了，「（主）」随之去掉（2026-11-15） -->
+                  <!-- 工作目录从「手敲路径」改成「选项目」（2026-11-19 用户：项目一多，敲路径
+                       容易写错、写错地方还安静地不报错）。选项 = 项目库，见下方 cwdCombo。 -->
                   <div class="row-label">工作目录</div>
-                  <input id="dCwd" value="${esc(persona.cwd || '')}" />
+                  <div id="dCwdMount"></div>
                 </div>
                 <!-- 附加目录输入框摘掉（2026-11-15 用户实报「没啥用」）：完全权限模式下
                      这几行本来就没约束力，只有切回沙箱才有意义。已存的 rootDirs **保留在库里**：
                      collect() 不再传这个字段，服务端「不传不动」；将来要恢复沙箱编辑再把这个
                      form-row 加回来即可。 -->
-                <div class="form-row">
-                  <div class="row-label">并发数</div>
-                  <!-- 并发数（2026-10-24，参照同类产品）：这一个人名下同时最多几个活在跑。
-                       空着 = 默认 6；服务端钳到 [1, 20]，手滑填坏也不会打断保存。 -->
-                  <input id="dMaxParallel" type="number" min="1" max="20" step="1"
-                         style="width:120px;text-align:center" value="${persona.maxParallel ?? ''}"
-                         placeholder="6" />
-                </div>
+                <!-- 并发数（2026-11-19 用户拍板）：改为系统固定默认（store/personas.mjs 的
+                     PERSONA_DEFAULT_MAX_PARALLEL），不再暴露给用户配置。输入框摘掉，
+                     已存的 maxParallel 保留在库里、服务端机制不动（smoke 靠它造"忙"场景）。 -->
               </div>
             </section>
 
@@ -3240,81 +2935,10 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
         <div id="dTasksBody"></div>
       </section>
 
-      <section class="tab-panel" data-panel="capability" hidden>
-        <div class="sk-head">
-          <div>
-            <b>分配给智能体</b>
-            <div class="sk-hint">${
-              expertLocked
-                ? '雇佣员工的技能随专家包固定，不能添加、解绑或停用；不合适就解聘换人，想定制就自建一个员工。'
-                : builtinLocked
-                  ? '内置员工的技能随平台固定，不能添加、解绑或停用；想挂别的技能就另建一个员工。'
-                  : '关闭＝暂停使用（仍保留分配）；解绑＝取消分配（技能还在库里）。'
-            }</div>
-          </div>
-          ${identityLocked ? '' : '<button class="mini auto" id="linkSkill">＋ 添加技能</button>'}
-        </div>
-        <div class="sk-list" id="dSkills">
-          ${
-            personaSkills.length
-              ? personaSkills
-                  .map(
-                    (l) => `<div class="sk-row">
-                      <div class="sk-ico">${SKILL_ICON}</div>
-                      <div class="sk-main">
-                        <b>${esc(l.name)}</b>
-                        <div class="sk-desc">${esc(descOf(l.name) || '（技能库里已经没有这个文件了）')}</div>
-                      </div>
-                      ${
-                        /* 2026-10-22 用户要求去掉「随平台固定/随专家包固定」标签：锁定这件事
-                           sk-head 的提示语已经说清楚了，每行再挂一个标签是重复 —— 锁定的行
-                           什么都不挂（没有开关/解绑按钮，本身就是"动不了"的意思） */
-                        identityLocked
-                          ? ''
-                          : `<label class="switch sm" title="${l.enabled ? '暂停使用（保留分配）' : '恢复使用'}">
-                              <input type="checkbox" data-skill-toggle="${esc(l.name)}" ${l.enabled ? 'checked' : ''} /><span></span>
-                            </label>
-                            <button class="mini sm txt" data-unlink="${esc(l.name)}" title="解绑：只是不再分配给他，技能本身还在库里">解绑</button>`
-                      }
-                    </div>`,
-                  )
-                  .join('')
-              : `<div class="sk-blank">${SKILL_ICON} ${
-                  expertLocked
-                    ? '专家包清单里的技能都被删了才会空 —— 解聘再雇佣会重新挂上。'
-                    : builtinLocked
-                      ? '内置技能目录丢了才会空 —— 技能库恢复后重启服务会重新挂上。'
-                      : '还没分配技能。点右上角「＋ 添加技能」从库里挑。'
-                }</div>`
-          }
-        </div>
-
-        <!-- 从运行时继承：可折叠面板（默认折叠）。折叠时不扫描，展开第一次才去要列表，
-             省得每个员工详情都白跑一遍 runtime-skills。状态记在 data-open 上，不进持久化 ——
-             这种"列表长又低频看"的区块不值得占路由。 -->
-        <div class="sk-fold" id="dInheritFold" data-open="0" style="margin-top:26px">
-          <div class="sk-fold-head" id="dInheritHead" role="button" tabindex="0">
-            <span class="fold-arrow" aria-hidden="true">▸</span>
-            <span class="fold-title">
-              <b>从运行时继承</b>
-              <div class="sk-hint">自动从 <strong>${esc(rt ? rt.label : persona.runtime)}</strong> 发现；只要该智能体在这个运行时执行，就可以直接使用。</div>
-            </span>
-            <button class="mini auto" id="skRefresh" title="重新扫描运行时的技能目录">刷新</button>
-          </div>
-          <div class="sk-fold-body" id="dInheritBody" hidden>
-            <div class="sk-list" id="dInherit"></div>
-          </div>
-        </div>
-        ${
-          personaSkills.length > 8
-            ? '<div class="rm-hint">挂了 8 个以上：首轮清单会变长，模型「选得准」也会下降。建议改成"换"而不是"堆"。</div>'
-            : ''
-        }
-      </section>
-
     </div>`;
-  // 子页导航（概览：资料/运行记录；配置：执行配置）。两套 ov-layout 共用一套 data-ov 键
-  // （profile/runs/exec 互不重名），所以一次查询通吃；切之前先落盘 —— 藏起来的那栏改动不能丢
+  // 子页导航（2026-11-19：只剩「配置」一套 —— 基本信息/执行配置/飞书；
+  // 概览的「资料/运行记录」子导航已取消，运行记录直接铺在概览页）。
+  // 切之前先落盘 —— 藏起来的那栏改动不能丢
   const ovBtns = $('detailView').querySelectorAll('[data-ov]');
   const ovPanels = $('detailView').querySelectorAll('[data-ov-panel]');
   const showOv = (key) => {
@@ -3338,12 +2962,13 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
   // 标签：一次渲染、切显隐 —— 不重建 DOM，所以在「概览」改了一半去「能力」再回来，改动还在
   const tabs = $('detailView').querySelectorAll('[data-tab]');
   const panels = $('detailView').querySelectorAll('[data-panel]');
-  // 每个顶层 tab 有自己的默认子页（2026-10-29 tab 重排）：概览→资料，配置→执行配置
-  const OV_DEFAULT = { overview: 'profile', config: 'exec' };
+  // 默认子页（2026-11-19）：概览无子页（面板内已无 ov-panel，showOv 传什么都无妨）；
+  // 配置 → 基本信息（原「资料」，搬进来后设为默认打开）。
+  const OV_DEFAULT = { config: 'basic' };
   const showTab = (key) => {
     tabs.forEach((t) => t.classList.toggle('on', t.dataset.tab === key));
     panels.forEach((p) => { p.hidden = p.dataset.panel !== key; });
-    showOv(OV_DEFAULT[key] ?? 'profile');
+    showOv(OV_DEFAULT[key] ?? 'basic');
   };
   tabs.forEach((t) => {
     t.onclick = () => {
@@ -3351,7 +2976,8 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
       showTab(t.dataset.tab);
     };
   });
-  showTab('overview');
+  // 默认落在「配置」（2026-11-19 排到第一位后）—— 打开人先看基本信息，而不是常空的运行记录
+  showTab('config');
 
   /*
    * 任务页：数据是**打开这一页那一刻**取的快照（跟「运行记录」一样）。
@@ -3426,7 +3052,7 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
   // 模型：带搜索（23 个起步，不搜找不到）；Runtime / 权限选项少，不带搜索
   const modelCombo = createCombo({
     mount: $('dModelComboMount'),
-    items: [{ id: '', label: '（用 CLI 默认）' }],
+    items: [{ id: '', label: '默认' }],
     value: String(persona.model ?? '').trim(),
     search: true,
     placeholder: '搜模型…（id 或显示名）',
@@ -3468,21 +3094,18 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
       const keep = dropped ? '' : cur;
       // 「用 CLI 默认」后面带上**真实**的默认模型名（2026-10-17）：只写"默认"的话，
       // 人根本不知道它落到哪个模型上 —— 用户就问过"claude code 现在的真实模型是什么"。
-      const items = [{ id: '', label: d.defaultModel ? `（用 CLI 默认：${d.defaultModel}）` : '（用 CLI 默认）' }];
+      // 文案去掉括号（2026-11-19 用户）：「（用 CLI 默认：xxx）」→「默认：xxx」
+      const items = [{ id: '', label: d.defaultModel ? `默认：${d.defaultModel}` : '默认' }];
       // 只剩清单读不到这一种情况会走到这 —— 那也不能把人家绑着的模型弄丢
       if (keep && !known) items.push({ id: keep, label: `（清单里没有）${keep}` });
       items.push(...modelItems(list));
       // 第二个参数是 keepValue：对齐时要真的把值换成 ''，所以只在没对齐时才保留
       modelCombo.setItems(items, keep === cur);
       if (note) {
-        // 对齐了值就要报一声 —— 这不在"成功时不留说明文字"（2026-10-17，指的清单解释）之列：
-        // 改的是人家绑着的模型，不说人根本不知道为什么变成默认了。
-        if (dropped) {
-          note.textContent = `原来绑的 ${cur} 已不在这台 CLI 的清单里，已切回「用 CLI 默认${d.defaultModel ? `：${d.defaultModel}` : ''}」—— 要用回去，先把它加回网关再「刷新」，或直接手工填。`;
-        } else {
-          // 清单正常时**不留任何说明文字**（2026-10-17 用户要求去掉）：下拉自己会说话。
-          note.textContent = list.length ? '' : (d.error ?? '这个运行时的清单是空的') + ' —— 模型名也可以直接填';
-        }
+        // 对齐了值（绑的模型不在清单里 → 切回默认）也不再写那行长说明（2026-11-19 用户：
+        // 「这个也去掉」）—— 下拉自己会显示切到了哪个默认模型，不需要再解释一遍。
+        // 清单正常 / 为空时同样不留说明（为空时给一句最短提示，见下）。
+        note.textContent = dropped || list.length ? '' : (d.error ?? '这个运行时的清单是空的') + ' —— 模型名也可以直接填';
       }
     } catch (err) {
       // 读不到就降级：别清空下拉，让人至少还能看见当前值、还能手工填
@@ -3509,7 +3132,7 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
    */
   const rtItems = runtimes.map((r) => ({ id: r.id, label: r.label }));
   if (persona.builtin || String(persona.id ?? '').startsWith('p-expert-'))
-    rtItems.unshift({ id: 'auto', label: '自动（挑一个能用的）' });
+    rtItems.unshift({ id: 'auto', label: '自动' });
 
   const rtCombo = createCombo({
     mount: $('dRuntimeMount'),
@@ -3526,13 +3149,37 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
       fillModels(id, { align: true }).finally(() => scheduleSave(300));
     },
   });
-  // auto 没有自己的模型清单 —— 问它只会拿到一个 404，在界面上写成"取不到模型列表"纯属误导
-  if (persona.runtime === 'auto') {
-    const note = $('dModelNote');
-    if (note) note.textContent = '运行时是自动挑的，模型跟着它自己的默认走';
-  } else {
-    fillModels(persona.runtime);
+  // auto 没有自己的模型清单 —— 问它只会拿到一个 404，在界面上写成"取不到模型列表"纯属误导。
+  // 运行时是自动时下面那行说明也去掉（2026-11-19 用户：「说明去掉」），不显示任何 note。
+  if (persona.runtime !== 'auto') fillModels(persona.runtime);
+
+  /*
+   * 工作目录：从「手敲路径」改成「选项目」（2026-11-19 用户：项目一多，敲路径容易写错、
+   * 写错地方还安静地不报错）。选项 = 项目库（S.projects，load() 时拉好），每项 id 存项目的
+   * root，选中谁 = 把这个人的 cwd 设成谁；「不指定」= 空，回落到运行时默认目录。
+   *   · 老数据 / 自定义路径对不上任何项目 root → 单独列一项留着（hint 写"自定义目录"），
+   *     不擅自抹掉，跟模型下拉「（清单里没有）xxx」同口径；
+   *   · 搜项目名或路径都命中（createCombo 按 id + label 过滤，path 正好是 id）。
+   */
+  const cwdCur = String(persona.cwd ?? '').trim();
+  const cwdItems = [{ id: '', label: '不指定（用默认目录）' }];
+  for (const p of (S.projects ?? [])) {
+    const root = String(p.root ?? '').trim();
+    if (!root) continue;
+    cwdItems.push({ id: root, label: p.name || root, hint: root });
   }
+  if (cwdCur && !cwdItems.some((it) => it.id === cwdCur)) {
+    cwdItems.push({ id: cwdCur, label: cwdCur, hint: '自定义目录（不在项目库里）' });
+  }
+  const cwdCombo = createCombo({
+    mount: $('dCwdMount'),
+    items: cwdItems,
+    value: cwdCur,
+    search: true,
+    placeholder: '选项目…',
+    empty: '没有匹配的项目',
+    onChange: () => scheduleSave(300),
+  });
 
   /*
    * 「刷新」：清单是**打开页面那一刻**取的，运行时那边后来加了模型这边不知道 —— 点一下重新问一次。
@@ -3637,11 +3284,11 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
     runtime: rtCombo.value(),
     sandbox: sbCombo.value(),
     model: modelCombo.value(),
-    cwd: $('dCwd').value,
+    // 工作目录改成下拉选项目（2026-11-19）：值从 cwdCombo 取，不再有 #dCwd 输入框
+    cwd: cwdCombo.value(),
     // 附加目录不再从 UI 收（2026-11-15 摘掉输入框）：**不传 = 服务端不动库里原值**，
     // 已配置过的 rootDirs 原样保留，不会被这次保存清掉
-    // 空着 = 恢复默认（null）；数字服务端会钳位，这里只管传
-    maxParallel: $('dMaxParallel').value.trim() === '' ? null : Number($('dMaxParallel').value),
+    // 并发数同理（2026-11-19 摘掉）：不传 = 服务端不动库里原值，统一走系统默认 6
   });
   let lastSaved = JSON.stringify(collect());
   let saving = false;
@@ -3704,8 +3351,9 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
   detailSave.flush = (opts) => saveNow(opts);
 
   // 输入框：敲字防抖；失焦立刻存（没改动时 saveNow 按 lastSaved 直接跳过）
-  // dRoots 已摘（2026-11-15），不在列表里
-  for (const id of ['dName', 'dRole', 'dDept', 'dInstr', 'dCwd', 'dMaxParallel']) {
+  // dRoots 已摘（2026-11-15）、dCwd 改成下拉（2026-11-19，combo 自己 onChange → scheduleSave）、
+  // dMaxParallel 已摘（2026-11-19 并发数改系统默认），都不在列表里
+  for (const id of ['dName', 'dRole', 'dDept', 'dInstr']) {
     $(id)?.addEventListener('input', () => scheduleSave(700));
     $(id)?.addEventListener('blur', () => saveNow?.());
   }
@@ -3766,106 +3414,140 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
     } catch (err) { toast(err.message, 'error'); }
   });
 
-  /** 技能说明：从库里查（挂在员工上的可能已经不在库里了）。
-   *  写成函数声明：上面的模板就会用到它，const 会有 TDZ 问题 */
-  function descOf(name) {
-    return (allSkills.find((s) => s.name === name) ?? {}).description ?? '';
-  }
-
-  // 技能关联是**独立动作**，点完立刻生效，不跟"保存"混在一起
-  // （挂载关系跟群成员一样是张多对多表，用"改完再保存"反而容易互相覆盖）
-  $('dSkills').querySelectorAll('[data-unlink]').forEach((el) => {
-    el.onclick = async () => {
-      try {
-        await api(
-          `/api/personas/${encodeURIComponent(persona.id)}/skills/${encodeURIComponent(el.dataset.unlink)}`,
-          { method: 'DELETE' },
-        );
-        await openDetail(persona.id);
-      } catch (err) { toast(err.message, 'error'); }
-    };
-  });
-  $('dSkills').querySelectorAll('[data-skill-toggle]').forEach((el) => {
-    el.onchange = async () => {
-      try {
-        await api(
-          `/api/personas/${encodeURIComponent(persona.id)}/skills/${encodeURIComponent(el.dataset.skillToggle)}`,
-          { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: el.checked }) },
-        );
-        await openDetail(persona.id);
-      } catch (err) { toast(err.message, 'error'); el.checked = !el.checked; }
-    };
-  });
-  const linkBtn = $('linkSkill');
-  if (linkBtn) linkBtn.onclick = () => openLinkSkillDialog(persona, allSkills, personaSkills.map((l) => l.name));
-
-  // 从运行时继承：只发现、不改 CLI 的文件；"导入"才是把它拷进班底的库。
-  // 折叠面板默认收起 —— 展开那一刻才扫描（懒加载），折叠状态下不发请求；
-  // 「刷新」只在面板已展开时触发扫描，收起状态点它先展开再扫。
-  const fold = $('dInheritFold');
-  const body = $('dInheritBody');
-  const loadInherited = async () => {
-    const box = $('dInherit');
-    if (!box) return;
-    box.innerHTML = '<div class="sk-empty" style="border-style:solid">正在扫描…</div>';
-    try {
-      const d = await api('/api/personas/' + encodeURIComponent(persona.id) + '/runtime-skills');
-      const found = d.found ?? [];
-      box.innerHTML = found.length
-        ? found
-            .map(
-              (s) => `<div class="sk-row">
-                <div class="sk-ico">${SKILL_ICON}</div>
-                <div class="sk-main">
-                  <b>${esc(s.name)}</b>
-                  <div class="sk-desc">${esc(cut(s.description, 90) || '（没写描述）')}</div>
-                </div>
-                <button class="mini auto" data-inherit="${esc(s.name)}" data-dir="${esc(s.dir)}"
-                        title="拷进班底的技能库，之后就能分配给员工、也能改">导入</button>
-              </div>`,
-            )
-            .join('')
-        : `<div class="sk-empty">${SKILL_ICON} 该运行时中没有发现本地 skill。` +
-          (d.dirs?.length ? `（找过 ${esc(d.dirs.join('、'))}）` : '（这个运行时没有已知的技能目录）') +
-          '</div>';
-      box.querySelectorAll('[data-inherit]').forEach((el) => {
-        el.onclick = async () => {
-          el.disabled = true;
-          el.textContent = '导入中…';
-          try {
-            await post('/api/skills/import', { dirs: [el.dataset.dir + '\\' + el.dataset.inherit], overwrite: false });
-            await load();
-            await openDetail(persona.id);
-          } catch (err) { el.disabled = false; el.textContent = '导入'; toast(err.message, 'error'); }
-        };
-      });
-    } catch (err) {
-      box.innerHTML = '<div class="sk-empty">扫描失败：' + failHtml(err) + '</div>';
-    }
-  };
-  const setFold = (open) => {
-    fold.dataset.open = open ? '1' : '0';
-    body.hidden = !open;
-    $('dInheritHead').querySelector('.fold-arrow').textContent = open ? '▾' : '▸';
-    if (open && !body.dataset.loaded) {
-      body.dataset.loaded = '1';
-      loadInherited();
-    }
-  };
-  $('dInheritHead').onclick = (e) => {
-    if (e.target.closest('#skRefresh')) return; // 刷新是独立动作，别顺带折叠
-    setFold(fold.dataset.open !== '1');
-  };
-  $('dInheritHead').onkeydown = (e) => {
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setFold(fold.dataset.open !== '1'); }
-  };
-  const refresh = $('skRefresh');
-  if (refresh)
-    refresh.onclick = () => {
-      setFold(true); // 收着就点刷新 = 展开并重扫
-      loadInherited();
-    };
 }
+
+
+
+/* ------------------------------------------ 点头像：就地换运行时 / 模型（2026-11-19）
+
+   用户："群聊里面点击人物头像，要打开一个人物弹窗，在这个弹窗里可以更改运行时和模型。
+        以便模型额度用完之后可以及时更换"
+
+   两个下拉，改完立刻 PUT 落库（跟详情页自动保存同一套字段口径）：
+     · 服务端 PUT 要求 name 非空，且 instructions 不传会被写成空串 ——
+       所以发之前先取一次完整详情，把 name / instructions 原样带上（只改这两项）；
+     · 运行时连「自动」都没有的员工，清单就是 runtimes 全量；内置/雇佣员工多一条「自动」
+       （跟详情页 renderDetail 的 rtItems 同一条规则）；
+     · 换运行时后模型清单跟着换，对不上的模型自动切回默认 —— 同详情页 fillModels 的口径。
+*/
+export async function openPeerDialog(personaId) {
+  const dlg = $('peerDlg');
+  if (!dlg) return;
+
+  let d;
+  try {
+    d = await api('/api/personas/' + encodeURIComponent(personaId));
+  } catch (err) { toast(err.message, 'error'); return; }
+  const persona = d?.persona;
+  if (!persona) { toast('员工不存在', 'error'); return; }
+  const runtimes = d.runtimes ?? S.runtimes ?? [];
+
+  // 头部：头像 + 名字 + 岗位（部门）
+  const role = roleNameOf(persona);
+  $('peerAvatar').innerHTML = personaAvatar(persona);
+  $('peerName').textContent = persona.name;
+  $('peerRole').textContent = [role, persona.department].filter(Boolean).join(' · ');
+
+  let modelCombo = null;
+
+  /** 只改运行时/模型：其余字段原样回传，避免被服务端的"不传即清空"误伤 */
+  const save = async () => {
+    try {
+      const r = await api('/api/personas/' + encodeURIComponent(persona.id), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: persona.name,
+          instructions: persona.instructions ?? '',
+          runtime: rtCombo.value(),
+          // 模型清单还没画好就动运行时（极小概率）：用原值顶上，别把人家绑的模型抹掉
+          model: modelCombo ? modelCombo.value() : String(persona.model ?? '').trim(),
+        }),
+      });
+      const p = r?.persona;
+      if (p) {
+        Object.assign(persona, p);
+        // 名册里那份也合回去：详情页 / 左栏下次打开就是新值
+        const row = (S.personas ?? []).find((x) => x.id === p.id);
+        if (row) Object.assign(row, p);
+      }
+      toast('已保存，下一轮用它', 'ok');
+    } catch (err) { toast(err.message, 'error'); }
+  };
+
+  /** 模型清单：问运行时；换运行时（align）时对不上的模型切回默认，同详情页 fillModels */
+  const paintModels = async (runtimeId, { align = false } = {}) => {
+    const mount = $('peerModelMount');
+    if (!mount) return;
+    let keep = String(persona.model ?? '').trim();
+    let items = [{ id: '', label: '默认' }];
+    if (runtimeId !== 'auto') {
+      try {
+        const md = await readModelList(runtimeId, { fresh: true });
+        const list = md.models ?? [];
+        const known = list.some((m) => m.id === keep);
+        if (keep && !known && (align || list.length > 0)) keep = '';
+        // 「（清单里没有）xxx」排在模型清单前面，同详情页 fillModels
+        items = [{ id: '', label: md.defaultModel ? `默认：${md.defaultModel}` : '默认' }];
+        if (keep && !known) items.push({ id: keep, label: `（清单里没有）${keep}` });
+        items.push(...modelItems(list));
+      } catch {
+        // 清单取不到就降级：至少把当前值留着，别把人绑的模型弄丢
+        if (keep) items.push({ id: keep, label: keep });
+      }
+    }
+    if (!modelCombo) {
+      modelCombo = createCombo({
+        mount,
+        items,
+        value: keep,
+        search: true,
+        placeholder: '搜模型…（id 或显示名）',
+        empty: '没有匹配的模型',
+        onChange: () => save(),
+      });
+    } else {
+      modelCombo.setItems(items, true);
+      modelCombo.setValue(keep);
+    }
+    persona.model = keep;
+  };
+
+  // 运行时
+  const rtItems = runtimes.map((r) => ({ id: r.id, label: r.label }));
+  if (persona.builtin || String(persona.id ?? '').startsWith('p-expert-')) {
+    rtItems.unshift({ id: 'auto', label: '自动' });
+  }
+  const rtCombo = createCombo({
+    mount: $('peerRuntimeMount'),
+    items: rtItems,
+    value: persona.runtime,
+    search: false,
+    onChange: async (id) => {
+      persona.runtime = id;
+      await paintModels(id, { align: true }); // 对齐完再存，避免把旧模型名存给新运行时
+      await save();
+    },
+  });
+
+  await paintModels(persona.runtime); // auto 不发请求（没有自己的模型清单）
+  // 连点两下头像：showModal() 对已打开的 dialog 会抛 InvalidStateError，先收掉再开
+  if (dlg.open) dlg.close();
+  dlg.showModal();
+}
+
+
+
+/* 头像点击：`#chat` 里画出来的头像按钮（data-peer），一次委托到底 */
+document.addEventListener('click', (e) => {
+  const hit = e.target.closest?.('#chat .av-peer');
+  if (!hit) return;
+  // 手机端不弹简卡（判据同 renderBubble 的 phone）；这里再兜一层：
+  // 窗口从宽拖窄 / 旋屏之后，DOM 里可能还留着上一版渲染出来的按钮。
+  if (document.body.classList.contains('mb-narrow')) return;
+  e.preventDefault();
+  openPeerDialog(hit.dataset.peer);
+});
 
 
 

@@ -1,0 +1,14 @@
+{
+  "name": "bandi",
+  "version": "1.0.0",
+  "private": true,
+  "description": "bandi control plane",
+  "main": "apps/server/src/server.mjs",
+  "type": "module",
+  "scripts": {
+    "start": "node start.mjs"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.10.0"
+  }
+}

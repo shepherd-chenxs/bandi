@@ -178,11 +178,6 @@ export const ROUTES = {
     setNav('experts', { skipOpen: true });
     return openExperts();
   },
-  // 组织架构（2026-11-11 Phase 3）：一级栏 + 左栏子菜单；右区是岗位权限清单（只读）
-  org: ({ section } = {}) => {
-    if (section) S.orgSection = section;
-    return setNav('org');
-  },
   workflows: ({ template } = {}) => {
     setNav('workflows', { skipOpen: true });
     return openWorkflows(template ?? null);

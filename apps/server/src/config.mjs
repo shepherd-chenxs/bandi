@@ -283,3 +283,5 @@ export const port = Number(process.env.BANDI_PORT ?? DEFAULT_PORT);
 
 /** dsh 跑任务时的工作目录：agent 在这个目录里干活 */
 export const runCwd = process.env.BANDI_RUN_CWD ?? repoRoot;
+export const runtimesPath = () => process.env.BANDI_RUNTIMES ?? path.join(dataDir, 'runtimes.json');
+export const pluginsPath = () => process.env.BANDI_PLUGINS ?? path.join(dataDir, 'plugins.json');

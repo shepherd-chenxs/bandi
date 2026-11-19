@@ -98,12 +98,12 @@
      那个老 bug（#pluginView 因此被摘出这条规则）是同一个病。
      手机上不要槽位、也不要可见滚动条：宽度恒定，滚不滚都不会挤内容，
      老规则本来要防的抖动也就不存在了。 */
-  #detailView, #settingsView, #orgView, #inboxView, #groupView, #placeholderView {
+  #detailView, #settingsView, #inboxView, #groupView, #placeholderView {
     scrollbar-gutter: auto;
     scrollbar-width: none;
   }
   #detailView::-webkit-scrollbar, #settingsView::-webkit-scrollbar,
-  #orgView::-webkit-scrollbar, #inboxView::-webkit-scrollbar,
+  #inboxView::-webkit-scrollbar,
   #groupView::-webkit-scrollbar, #placeholderView::-webkit-scrollbar { width: 0; height: 0; }
 }
 
@@ -3314,7 +3314,7 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
  * 这里按全站手机端的分组卡语汇（§15b「我的」同款）重排：
  *   ① 身份卡：面浮起、头像 56、名字 20；桌面那行重复的「运行时」章已从模板删掉。
  *   ② 执行配置卡：iOS 分组行 —— 标签左（主文本色）、控件右（去边框、次级灰），
- *      行间 0.5px hairline；并发数输入框不再居中带框。
+ *      行间 0.5px hairline。
  *   ③ 「发消息」通栏主按钮（模板里已从头右上角挪到正文末尾）。
  * 只罩 #detailView（这页模板是 chat.mjs renderDetailMobile 独有的），桌面一位字节不变。
  */
@@ -3403,17 +3403,7 @@ body:not(.mb-narrow) .me-entry-sec { display: none; }
   body.mb-narrow #detailView .combo-chev { margin-right: 0; }
   /* 模型（只读）值同口径 */
   body.mb-narrow #detailView #dModelText { font-size: 15px; color: var(--mb-text-2, var(--dim)); }
-  /* 并发数：去框、右对齐、主文本色 —— 输入位仍是这个格子，placeholder=6 */
-  body.mb-narrow #detailView #dMaxParallel {
-    width: 72px;
-    padding: 0;
-    border: 0;
-    background: transparent;
-    font: inherit;
-    font-size: 15px;
-    color: var(--mb-text, var(--text));
-    text-align: right;
-  }
+  /* 并发数输入位（#dMaxParallel）2026-11-19 摘掉：改系统固定默认，不暴露给用户配置 */
 
   /* ── ③ 主动作通栏 ── */
   body.mb-narrow #detailView .mb-msg-btn {

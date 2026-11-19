@@ -1,0 +1,271 @@
+/*
+ * 任务卡详情页 —— 2026-11-19 从 style.css 拆出（原文件 4841 行，按"哪一页用的"分段）。
+ *
+ * 拆分只做了**物理搬移**，规则内容一个字没改。因此有三条硬约束：
+ *   ① index.html 里这几个文件的 <link> **必须保持原顺序**（core → git → ide → task → toast → machine），
+ *      CSS 靠先后定胜负，顺序一乱覆盖关系就变；
+ *   ② 新规则写到对应的段里，别再往 core 里堆 —— 它是"全站基础"，改动影响所有页面；
+ *   ③ mobile.css 必须仍然排在最后（它靠这个位置覆盖上面全部）。
+ */
+
+/* ===== 任务卡详情页（2026-10-18 二改：参照同类产品的任务详情，简洁一些） =====
+   形态：主区从上到下就是这件事本身 —— 大标题（点了就编辑）→ 描述 → 讨论；
+   属性全收右栏三段（属性 / Pull Request / 详情），页头不摆 pill 和大按钮。 */
+/* 底部内边距给足（22）：讨论区滚到底时，最后一行字别贴着那条横线
+   —— 弹窗里尤其明显（2026-10-19 用户提"下面挤"） */
+.tc-page { display: grid; grid-template-columns: minmax(0, 1fr) 286px;
+           gap: 0; flex: 1; min-height: 0; padding: 14px 18px 22px; }
+/* 竖线由**左栏自己**画（border-right），输入框横线也是左栏的 border-top ——
+   同源同宽，永远不会出现"横线比竖线短一截"（2026-10-19 用户连着问两次） */
+.tc-main { min-width: 0; display: flex; flex-direction: column; min-height: 0; overflow: hidden;
+           padding-left: 20px; border-right: 1px solid var(--line); }
+/* 右内边距 = 内容和滚动条之间的呼吸位；不加的话字一多就贴着滚动条（2026-10-19 用户指出） */
+.tc-main-scroll { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 18px;
+                  padding-right: 16px; }
+.tc-headblock { padding-top: 6px; }
+/*
+ * 「来自流程」那行（2026-10-19）：这张卡是从流程时间轴的某一步点进来的，写清哪条流程、哪一步。
+ * 它**排在标题上面** —— 先交代"这是件什么事里的"，再读标题；放标题下面会像一句副标题，
+ * 而这句其实是"你在哪儿"，性质不一样。
+ * 做成按钮（整行可点 = 回那条流程）：一个行内小胶囊，不带边框、悬停才浮起来 ——
+ * 跟 .head-back 那种"能点的字"同一档，不要在标题上方再画一块框。
+ */
+.tc-from { display: inline-flex; align-items: center; gap: 6px; max-width: 100%;
+           margin: 0 0 8px; padding: 2px 8px 2px 6px; border: 0; border-radius: 6px;
+           background: transparent; color: var(--dim); font-size: 12px; line-height: 1.5;
+           cursor: pointer; text-align: left; min-width: 0; }
+.tc-from:hover { background: var(--hover); color: var(--text); }
+.tc-from b { color: var(--text); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tc-from > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tc-from-sep { color: var(--line); flex: 0 0 auto; }
+.tc-from-k { flex: 0 0 auto; color: var(--dim); }
+.tc-title { margin: 0 0 12px; font-size: var(--t-detail); font-weight: var(--w-title); line-height: 1.4; padding: 0;
+            cursor: text; overflow-wrap: anywhere; outline: none; caret-color: var(--accent); }
+.tc-desc { flex: 1; min-width: 0; font-size: 13px; line-height: 1.75; cursor: text; outline: none; }
+/* 描述区内部块间距自己定（默认 <p> 有 1em 上边距）——
+   渲染态首段的下边距会让文字比编辑态低一截，点进去就"往上跳"（2026-10-18 用户实报）。
+   首块不留上边距、末块不留下边距，两种状态的第一行严格对齐。 */
+.tc-desc > :first-child { margin-top: 0; }
+.tc-desc > :last-child { margin-bottom: 0; }
+.tc-desc.empty:hover .dim { color: var(--text); } /* 「添加描述…」悬停时亮一点，示意可点 */
+.tc-desc p { margin: 0 0 8px; }
+.tc-desc h1, .tc-desc h2, .tc-desc h3, .tc-desc h4 { margin: 12px 0 6px; font-size: 14px; }
+.tc-desc ul, .tc-desc ol { margin: 0 0 8px; padding-left: 20px; }
+.tc-desc blockquote { margin: 0 0 8px; padding-left: 10px; border-left: 2px solid var(--line); color: var(--dim); }
+.tc-desc hr { margin: 10px 0; border: 0; border-top: 1px solid var(--line); }
+.tc-desc.editing { white-space: pre-wrap; } /* 编辑态换行照原样显示，跟渲染态行距一致 */
+.tc-desc pre { overflow: auto; margin: 0 0 8px; }
+/* 就地编辑**不加边框、不换元素**（2026-10-18 用户要求：有边框会抖）——
+   只读和可写共用同一套排版，外形一模一样，光标自己出现。 */
+.tc-main .group-title { display: flex; align-items: center; gap: 8px; }
+.tc-main .group-title .link-btn { margin-left: auto; background: none; border: 0; cursor: pointer;
+                                  color: var(--accent); font-size: 12px; padding: 0; }
+
+/* 右栏：三段（属性 / Pull Request / 详情），一户一行，标签窄、值占满 */
+.tc-side { min-width: 0; overflow: auto; border-left: 0; padding-left: 16px; }
+.tc-side h3 { font-size: var(--t-sec); color: var(--text); font-weight: var(--w-title); margin: 16px 0 8px;
+              padding-top: 16px; border-top: 1px solid var(--line); }
+.tc-side h3:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+.tc-prop { display: grid; grid-template-columns: 60px minmax(0, 1fr); align-items: center;
+           gap: 6px; padding: 4px 0; font-size: 12.5px; }
+.tc-prop-k { color: var(--dim); }
+.tc-prop-v { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* PR 区标题行（2026-11-16）：入口收进标题右边两颗图标钮（＋ 新建 / 链环 关联），
+   点开弹窗 —— 输入行不再常驻右栏。边框线归标题行管（h3 自身那套归零，免得双线）。 */
+.tc-pr-head { display: flex; align-items: center; justify-content: space-between; gap: 8px;
+              margin: 16px 0 8px; padding-top: 16px; border-top: 1px solid var(--line); }
+.tc-pr-head h3 { margin: 0; padding: 0; border: 0; }
+.tc-pr-acts { display: inline-flex; gap: 6px; }
+.tc-pr-ic { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px;
+            padding: 0; border: 1px solid var(--line); border-radius: 8px; background: none;
+            color: var(--dim); cursor: pointer; }
+.tc-pr-ic:hover { color: var(--text); background: var(--active); }
+.tc-pr-ic:disabled { opacity: 0.5; cursor: default; }
+.tc-pr-ic svg { width: 14px; height: 14px; }
+
+/* 页头那颗删除：平时不吭声（灰字），悬停才示警（参照同类产品：页面里没有大红按钮） */
+.detail-head .tc-del { background: none; border: 0; cursor: pointer; color: var(--dim);
+                       font-size: 12.5px; padding: 4px 8px; border-radius: 8px; }
+.detail-head .tc-del:hover { color: var(--bad); background: color-mix(in srgb, var(--bad) 10%, transparent); }
+
+/* 讨论区：参照同类产品不套卡片框 —— 主区从上到下就是一条线性的东西，
+   一圈一圈的框会把"标题-描述-讨论"的层次压没。
+   分隔线放在**区块顶上**（description 与讨论之间），"讨论"两个字压在线的下面。 */
+.tc-main .tc-comments.group { border: 0; background: none; border-radius: 0; padding: 14px 0 0;
+                              border-top: 1px solid var(--line); }
+.tc-main .tc-comments .group-title { padding-bottom: 0; border-bottom: 0; }
+/* 讨论区：照 B 站评论的排法 —— 没有背景框，头像 + 内容平铺，议题之间用留白分隔 */
+.tc-threads { display: flex; flex-direction: column; gap: 18px; padding: 2px 0 10px 10px; }
+.tc-topic { display: flex; gap: 9px; align-items: flex-start; padding: 0; }
+/* 主评论（议题）之间用分隔线隔开（2026-10-30 用户：\"主评论用分隔线隔开\"）；
+   开工说明那种折叠条（.pre）自带描边框，不再给它加线 —— 框本身就是分隔 */
+.tc-topic + .tc-topic:not(.pre) { border-top: 1px solid var(--line); padding-top: 14px; margin-top: 14px; }
+/* 正在回复的议题：淡蓝底整条圈出来 —— "回给哪条"要一眼看清（2026-10-24）。
+   横向负外边距抵消内边距：底色往两边各探出 8px，头像和正文的位置一格不动。 */
+.tc-topic.is-replying { background: color-mix(in srgb, var(--accent) 7%, transparent);
+                        border-radius: 8px; padding: 6px 8px; margin: 0 -8px; }
+/* "还没展开"的那条议题：原来是**虚线框**（iOS 那种"这里可以填"的暗示）。
+   密排风格没有虚线框 —— 虚线在密排风格里只表示"拖放目标"，不表示占位。
+   改成浅实线 + --side 淡底：它像一条"还没成型"的条目，不像一个空槽。 */
+.tc-topic.pre { border: 1px solid var(--line); border-radius: 6px; background: var(--side);
+                padding: 10px 12px 8px; }
+.tc-topic-body { min-width: 0; flex: 1; }
+.tc-topic-title { font-size: 13px; line-height: 1.7; margin-top: 3px; }
+/* 正文首段别带浏览器默认的 1em 上边距 —— 否则作者行和正文之间会空一大截（量出来 13px） */
+.tc-topic-title > :first-child { margin-top: 0; }
+.tc-topic-title > :last-child { margin-bottom: 0; }
+/* 作者行（头像 + 我 + 时间 + 回复）在正文上面，跟回复的样子一致 */
+.tc-topic-meta { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--dim);
+                 min-height: 20px; }
+.tc-topic-meta b { font-size: 12px; color: var(--text); font-weight: 500; }
+.tc-topic-meta .tc-reply { margin-left: auto; font-size: 11.5px; padding: 2px 8px; border-radius: 99px; }
+/* 议题落款行（2026-10-29 用户："这个上面不要留白"）：自己的评论头一行不再空着 ——
+   时间 + 回复按钮并成正文底下一行；他的回话名字仍在上面那行（tc-topic-meta） */
+.tc-topic-foot { display: flex; align-items: center; gap: 8px; margin-top: 1px; }
+.tc-topic-foot .tc-cmt-at { margin-top: 0; }
+.tc-topic-foot .tc-reply { font-size: 11.5px; padding: 2px 8px; border-radius: 99px; }
+/* 「重跑一次」（2026-10-30）：失败轮脚上的 multica 同款 —— 红字一眼知道是"再来一次"；
+   margin-left:auto 把它推到落款行最右，跟时间/回复不挤在一起 */
+.tc-topic-foot .tc-rerun { margin-left: auto; font-size: 11.5px; padding: 2px 8px; border-radius: 99px;
+                           border: 1px solid transparent; background: none; color: var(--bad); cursor: pointer; }
+.tc-topic-foot .tc-rerun:hover { border-color: var(--bad); background: color-mix(in srgb, var(--bad) 8%, transparent); }
+/* 评论头像：比 .avatar.sm 再小一号（讨论区一行里塞得下，不抢正文的视觉重量） */
+.tc-topic > .avatar, .tc-cmt > .avatar { width: 26px; height: 26px; flex-basis: 26px;
+                                        font-size: 11px; margin-top: 1px; }
+/* 回复区：只靠缩进区分层级，不画竖线（2026-10-19 用户要去掉左边那条线，照着 B 站评论的排法） */
+.tc-replies { margin-top: 8px; padding-left: 14px; }
+/* 无回复的空容器（接 live 气泡）：竖排 */
+.tc-replies:not(details) { display: flex; flex-direction: column; gap: 8px; }
+/* 有回复的折叠容器：summary 是开关，body 里才是回复列表 */
+/* 收工状态条（讨论区顶上一条）：一眼回答"他干完没有" —— 2026-10-30 用户："感知不到活什么时候干完" */
+.tc-statebar { display: flex; align-items: baseline; gap: 6px; font-size: 12px; line-height: 1.5;
+               padding: 8px 12px; border-radius: 8px; margin: 0 0 12px; border: 1px solid var(--line); }
+.tc-statebar.ok   { background: color-mix(in srgb, var(--ok) 10%, transparent);  border-color: var(--ok); }
+.tc-statebar.bad  { background: color-mix(in srgb, var(--bad) 10%, transparent); border-color: var(--bad); }
+.tc-statebar.warn { background: color-mix(in srgb, var(--warn) 14%, transparent); border-color: var(--warn); }
+.tc-statebar.idle { background: var(--chip); }
+/* 折叠条（2026-11-06 用户发截图拍板）：左一条短灰线 + 「展开N条回复」+ 细 chevron，
+   展开后文案换「收起N条回复」、chevron 翻头。不再露"作者：摘要"预览（2026-10-24 那版撤了），
+   他的回话不被藏的问题仍由"新回复自动展开"兜着。 */
+details.tc-replies > .tc-replies-toggle { cursor: pointer; list-style: none; font-size: 12px;
+                                         color: var(--dim); user-select: none;
+                                         display: flex; align-items: center; gap: 7px;
+                                         padding: 2px 0; }
+details.tc-replies > .tc-replies-toggle::-webkit-details-marker { display: none; }
+details.tc-replies > .tc-replies-toggle:hover { color: var(--text); }
+/* 折叠条前面的"——"：细灰短线，跟文字一档灰 */
+details.tc-replies > .tc-replies-toggle::before { content: ''; flex: 0 0 auto;
+                                                 width: 22px; height: 1px;
+                                                 background: color-mix(in srgb, currentColor 55%, transparent); }
+/* 细 chevron：折叠朝下、展开朝上（transform 翻面，一个 svg 两用） */
+.tc-replies-caret { flex: 0 0 auto; transition: transform 0.15s ease; }
+details.tc-replies[open] > .tc-replies-toggle .tc-replies-caret { transform: rotate(180deg); }
+.tc-replies-fold { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tc-replies-unfold { display: none; flex: 0 0 auto; }
+details.tc-replies[open] > .tc-replies-toggle .tc-replies-fold { display: none; }
+details.tc-replies[open] > .tc-replies-toggle .tc-replies-unfold { display: inline; }
+@media (prefers-reduced-motion: reduce) {
+  .tc-replies-caret { transition: none; }
+}
+.tc-replies-body { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.tc-cmt { display: flex; gap: 8px; }
+/* 这轮新到的回复：淡蓝底一闪（Reddit 新评论高亮那套）—— 新回话落地即所见，不用去点"N 条回复" */
+.tc-cmt.is-new { background: color-mix(in srgb, var(--accent) 9%, transparent);
+                 border-radius: 8px; padding: 5px 8px; margin-left: -8px; margin-right: -8px; }
+.tc-cmt-main { min-width: 0; flex: 1; }
+.tc-cmt-meta { display: flex; align-items: baseline; gap: 6px; font-size: 11.5px; color: var(--dim); }
+.tc-cmt-meta b { font-size: 12px; color: var(--text); font-weight: 500; }
+.tc-cmt-text { font-size: 12.5px; line-height: 1.7; overflow-wrap: anywhere; }
+.tc-cmt-text > :first-child { margin-top: 2px; }
+.tc-cmt-text > :last-child { margin-bottom: 0; }
+/* 时间落款：回复正文底下（2026-10-29 用户："时间放回复下面"）—— 头一行只留人，时间退到页脚位 */
+.tc-cmt-at { display: block; margin-top: 2px; font-size: 11px; color: var(--dim); }
+.tc-event { font-size: 12px; color: var(--dim); }
+.tc-event summary { cursor: pointer; padding: 2px 0; }
+.tc-event .tc-cmt-text { margin-top: 6px; }
+
+/* 输入区：固定在左栏底部（不随内容滚动），上面一条细线跟讨论区隔开 */
+/* 输入框宽度跟上面的分隔线一致（不再留 16px 右内边距，否则横线比框长出一截，看着不齐） */
+.tc-composer { flex: 0 0 auto; background: none; padding: 10px 0 0; border-top: 1px solid var(--line); }
+/* 输入盒自带边框（同主聊天 .input-wrap 的套路）：textarea / 附件条 / 工具栏全部**文档流**纵排。
+   旧版工具栏绝对定位浮在 textarea 上，文字一滚动就从按钮后面穿过去（2026-10-23 用户截图）——
+   文档流之后盒子随内容自动变高，谁也不压谁。 */
+.tc-input-box { display: flex; flex-direction: column; background: var(--input);
+                border: 1px solid var(--line); border-radius: 8px; }
+.tc-input-box:focus-within { border-color: var(--accent); }  /* 焦点环画在整个盒子上 */
+/* 用 .tc-input-box 压过文件后面的 input,select,textarea 通配规则（边框/内边距/底色都交给盒子） */
+.tc-input-box textarea { width: 100%; border: 0; border-radius: 0; background: transparent;
+                         padding: 10px 12px 4px; resize: none; min-height: 72px; }
+.tc-input-box textarea:focus { border-color: transparent; }   /* 边框交给盒子 */
+/* 输入框里不摆滚动条（2026-11-06 用户报）：文字多了能滚，但别在灰药丸边上挂一条
+   暗线 —— 手机上它会贴着圆角竖着画出来，很脏。滚轮/手指照样滚。 */
+.tc-input-box textarea::-webkit-scrollbar { width: 0; height: 0; display: none; }
+.tc-input-box textarea { scrollbar-width: none; }
+/* 框内底部一条：左边「要他怎么处理」，右边发送（文档流，不再绝对定位） */
+.tc-sendbar { display: flex; align-items: center; gap: 8px; padding: 4px 8px 8px; }
+.tc-mode-wrap { position: relative; }
+.tc-mode { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; line-height: 1;
+           padding: 5px 9px; border-radius: 99px; border: 1px solid var(--line);
+           background: var(--chip); color: var(--text); cursor: pointer; white-space: nowrap; }
+.tc-mode:hover { border-color: var(--accent); }
+.tc-mode .tc-caret { color: var(--dim); font-size: 10px; }
+/* 圆点：便签=灰（不出声），讨论=蓝（会说不动手），执行=绿（动手落地）。颜色就是这句的语义 */
+.tc-mode-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--dim); }
+.tc-mode[data-mode='note'] .tc-mode-dot { background: var(--dim); }
+.tc-mode[data-mode='note'] { color: var(--dim); }
+.tc-mode[data-mode='discuss'] .tc-mode-dot { background: var(--accent); }
+.tc-mode[data-mode='execute'] .tc-mode-dot { background: var(--ok); }
+.tc-mode-menu { position: absolute; left: 0; bottom: calc(100% + 6px); z-index: 40; width: 268px;
+                background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+                box-shadow: 0 8px 24px var(--shadow); padding: 4px; }
+.tc-mode-menu[hidden] { display: none; }
+.tc-mode-menu button { display: block; width: 100%; text-align: left; padding: 7px 9px; border: 0;
+                       border-radius: 7px; background: none; cursor: pointer; }
+.tc-mode-menu button:hover { background: var(--hover); }
+.tc-mode-menu button.on { background: var(--sel); }
+.tc-mode-menu b { display: block; font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 2px; }
+.tc-mode-menu span { font-size: 12px; color: var(--dim); line-height: 1.4; }
+.tc-sendbar .tc-send { margin-left: auto; }
+/* 跑着时发送键原地变成「停止生成」（2026-10-29 用户："就像是对话面板输入框那样"）——
+   不再单摆一颗停止按钮：一眼只有一个人能点的键。色用「停」的语义（红），别跟主键蓝混淆 */
+.tc-sendbar .tc-send.stopping { background: color-mix(in srgb, var(--bad) 14%, var(--input));
+                                color: var(--bad); }
+.tc-sendbar .tc-send.stopping:hover { background: color-mix(in srgb, var(--bad) 24%, var(--input)); }
+/* 附件条落回文档流（夹在 textarea 和工具栏之间），显示时把盒子自然撑高 */
+.tc-input-box .att-strip { position: static; padding: 0 10px 2px; }
+.tc-sendbar button.att-add { flex: 0 0 auto; }
+/* 评论上的小标记（「便签」）。中性色 —— 它是提示，不是警告 */
+.tc-tag { font-size: 11px; line-height: 1; padding: 2px 6px; border-radius: 99px;
+          background: var(--chip); color: var(--dim); border: 1px solid var(--line); }
+.tc-composer-foot { display: flex; align-items: center; gap: 10px; margin-top: 6px; min-height: 0; }
+.tc-composer-foot .counter { margin-left: auto; }
+/* 输入框停靠态（2026-10-24 重做回复机制）：点哪条议题的「回复」，整个输入框就搬进那条议题下面 ——
+   在哪回复就在哪输入，"在回哪条"靠位置本身表达（GitHub 会话 / YouTube / Discord 的规矩）。
+   原来的「回复到」下拉废了：议题一多，条目全是"时间+截断的一行字"，认不出哪条是哪条。 */
+.tc-composer.inline { border-top: 0; padding: 10px 0 2px; }
+/* 停靠时的回复横幅：一句话说清在回哪条，✕ 取消（Discord 的 replying-to 条） */
+.tc-reply-banner { display: flex; align-items: center; gap: 8px; margin: 0 0 6px;
+                   font-size: 12px; color: var(--dim); }
+/* 平时它必须真的不占位：`display:flex` 会盖掉浏览器自带的 `[hidden]{display:none}`，
+   不补这一条，没有停靠时那行就一直在 —— 文字是空的，只剩最右边一颗 ✕ 孤零零挂在
+   输入框上方，谁也不知道它是什么（2026-10-26 用户截图问"这个按钮是干嘛的"）。
+   同一个坑在本文件里出现过两次（.tc-stop[hidden] 也是这么补的）。 */
+.tc-reply-banner[hidden] { display: none; }
+.tc-reply-banner-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+                        white-space: nowrap; color: var(--text); }
+.tc-reply-undock { flex: 0 0 auto; width: 20px; height: 20px; padding: 0; line-height: 1;
+                   border: 0; border-radius: 50%; background: var(--chip); color: var(--dim);
+                   cursor: pointer; font-size: 11px; }
+.tc-reply-undock:hover { color: var(--bad); background: color-mix(in srgb, var(--bad) 12%, transparent); }
+/* 输入框停靠期间，底部这颗虚线幽灵按钮就是"开新话题"的回路（开新条目那一行那个味道） */
+.tc-new-topic { width: 100%; text-align: left; font-size: 12.5px; color: var(--dim);
+                padding: 10px 12px; border: 1px dashed var(--line); border-radius: 8px;
+                background: none; cursor: pointer; }
+.tc-new-topic:hover { color: var(--text); border-color: var(--accent); }
+.tc-new-topic[hidden] { display: none; }
+@media (max-width: 1100px) {
+  .tc-page { grid-template-columns: minmax(0, 1fr); }
+  /* 单列时右栏落到下面：左栏那条竖线要收掉，改用右栏自己的上边框 */
+  .tc-main { border-right: 0; }
+  .tc-side { border-left: 0; padding-left: 0; border-top: 1px solid var(--line); padding-top: 12px; }
+}

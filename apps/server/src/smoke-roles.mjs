@@ -186,6 +186,12 @@ try {
   const expertsSrc = fs.readFileSync(path.join(SRC, 'experts.mjs'), 'utf8');
   const dispatchSrc = fs.readFileSync(path.join(SRC, 'dispatch.mjs'), 'utf8');
   /*
+   * 合同拼装 2026-11-19 拆去了 dispatch/contract.mjs（dispatch.mjs 只做 barrel 原样再导出）。
+   * 断言必须扫到**分片本体** —— 只读 barrel 的话，"搬家"会被误判成"这段话没了"，
+   * 于是 PR 闸门红在一个根本没坏的地方。
+   */
+  const contractSrc = fs.readFileSync(path.join(SRC, 'dispatch/contract.mjs'), 'utf8');
+  /*
    * 身份卡那句「专长之外的活也接，先声明再照常做完」是"PM 自己上手"的直接授权：
    * 用户让他更新 thinkpad，他 SSH 装 Maven，运维（马超）在群也没派。改成"先建卡派给对应岗位"。
    */
@@ -207,8 +213,8 @@ try {
   check('统筹合同：普通执行任务默认 todo，不许用 idea 让雇主点状态', /一律建 `todo`（待办）/.test(pmBlock) && /不要建 `idea`/.test(pmBlock));
   check('统筹合同：雇主已授权可逆执行动作', /被雇主授权/.test(pmBlock));
   check('建卡通道：只收码、省略 = todo、idea 只用于真拍板', /status 只收码/.test(dispatchSrc) && /省略 = `todo`/.test(dispatchSrc) && /`idea` 只用于真正要雇主定的/.test(dispatchSrc));
-  check('平台契约：例行部署/迁移不用等雇主拍板', /例行部署 \/ 迁移/.test(dispatchSrc));
-  check('员工宪法对 PM 有统筹岗特别约定（覆盖"超常项照接"）', /统筹岗的特别约定/.test(dispatchSrc) && /constitutionBlock\(\{ roleKey/.test(dispatchSrc));
+  check('平台契约：例行部署/迁移不用等雇主拍板', /例行部署 \/ 迁移/.test(contractSrc));
+  check('员工宪法对 PM 有统筹岗特别约定（覆盖"超常项照接"）', /统筹岗的特别约定/.test(contractSrc) && /constitutionBlock\(\{ roleKey/.test(dispatchSrc));
 } finally {
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* 删不掉就算了 */ }
 }

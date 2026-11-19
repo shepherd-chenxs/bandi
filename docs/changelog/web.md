@@ -1735,3 +1735,111 @@ v247 手机上仍复现「上传文件」在输入框上方。隔离复现（tmp
 随之改锚 composer，位置几乎不变。已复现页回归验证通过。
 
 `sw.js` → v248。
+## v249（2026-11-19）项目详情去掉「项目规章」tab
+
+用户拍板：「项目规章这个 tab 去掉，相关代码清理。没啥用。实际使用证明，用户不会去用它」。
+
+- 前端（`projects.mjs`）：删掉 `rules` 页签与面板 —— 宪法编辑框、预览/编辑切换、markdown 渲染
+  全部移除；项目详情只剩「基础信息 / 项目成员」两页。规章专属样式（`#pjConstView` /
+  `#projConstInput` / `.proj-const-edit`）一并删除。
+- 后端：不再读写 `projects.constitution`；`dispatch.projectConstitutionBlock` 及流程每一步、
+  团队协作卡、个人执行卡三处注入点全部移除；契约「项目宪法（在平台，不在项目里）」一节删除。
+  老库里的 `constitution` 列保留不删（不做破坏性迁移，只是没人再读它）。
+- 冒烟：项目详情 tab 顺序断言改为「基础信息 → 项目成员」；流程冒烟⑪的宪法注入四连删除。
+
+`sw.js` → v249（js/style 内容都变了，逼客户端整包重建）。
+
+## v250（2026-11-19）style.css 按页拆分（纯物理搬移）
+
+`style.css` 4841 行，找一个分页的规则要翻四千行；拆成 6 个文件：
+
+| 文件 | 内容 | 行数 |
+|---|---|---|
+| `style.css` | 全站基础 + 工作台（**新规则别往这里堆**） | 2087 |
+| `style-git.css` | 代码托管页 | 170 |
+| `style-ide.css` | 代码托管 · IDE 式一站式 | 1823 |
+| `style-task.css` | 任务卡详情页 | 271 |
+| `style-toast.css` | 轻提示 toast | 36 |
+| `style-machine.css` | 这台机器 / 数据管理 / 插件页 | 499 |
+
+- **规则内容一个字没改**，只换了文件。`index.html` 里六个 `<link>` 的顺序就是覆盖顺序
+  （core → git → ide → task → toast → machine），`mobile.css` 仍然压最后 —— 这是它覆盖全站的前提。
+- 拆点选在花括号深度为 0 的位置（脚本逐个校验过），不存在把一个 `@media` 块劈两半的情况。
+
+`sw.js` → v250：预缓存清单多了 5 个 css。不升版本的话，老客户端仍用旧缓存 ——
+`/style-ide.css` 这类请求拿不到，那几页会裸奔。
+
+## v251（2026-11-19）修 v250 拆分带出的「sandboxItems is not defined」
+
+v250 把输入框那两颗选择器搬到 `js/composer-pickers.mjs` 时，函数体里用到的两个名字没有跟着
+搬过来 import：`sandboxItems`（`permItems` 里）与 `openConversation`（选完权限/模型后重画这一屏）。
+语法检查全过、首页照常打开 —— 直到点开一段会话，输入框右下角才弹一条英文报错。
+
+- `composer-pickers.mjs` 补上 `sandboxItems`（来自 `misc.mjs`）与 `openConversation`（来自
+  `chat.mjs`；与 `listmenu.mjs` 同一种环形依赖，函数声明有提升、调用都在函数体内，安全）。
+- 新增 `tools/smoke-web-imports.mjs`：静态扫前端模块图 —— ① import 的具名成员目标必须导出
+  ② 目标文件必须存在 ③ **用了别人导出的名字却没 import**（本轮的形态）。反向验证过：把
+  `sandboxItems` 那半句删掉，脚本立刻报错。
+
+`sw.js` → v251：`composer-pickers.mjs` 内容变了，不升版本老客户端仍拿缓存里那份坏的。
+
+## v252（2026-11-19）长任务：把"最后动作在多久前"摆到明面上
+
+起因是服务端那套"按量掐"（工具次数 / 墙钟 15 分钟）被推翻 —— 复杂功能跑几个小时是正常的，
+按时间中断是把活砍两半。服务端改成只看"连不连得动"（10 分钟无事件才收口）之后，界面这边
+得跟上同一个口径：**人要知道它还在不在动**。
+
+- **`run-progress.mjs`**：`createRunProgress` 收 `lastEventAt`（服务端记的最后一次活动，
+  ISO 串或毫秒），夹在 `[startedAt, now]` 之间。重画时不再用 `now` —— 否则一轮已经卡了
+  8 分钟，刷新一下 `idleMs` 归零，界面显示"刚动过"，人会一直等下去。
+- **`run-progress-card.mjs`**：日志行新增中间一档「最后动作在 N 前」（20 秒 ~ 5 分钟）。
+  以前这一档是空白（只写"进行中"），长任务里看不出在算还是卡了；≥5 分钟的警告文案也从
+  「可能卡住了 · 最后动静 N 分钟前」改成「可能卡住了 · 最后动作在 N 前」，留余地不判死。
+- **`chat.mjs` / `projects.mjs`**：`attachStream` 与讨论区的 `attach` 多带一个 `lastEventAt`，
+  重开页面/打开任务卡时接上真实活动时刻；对话页从 `listRuns` 的 `lastEventAt` 取。
+- 服务端 `store/runs.mjs` 的 `listRuns` 加子查询 `(SELECT at FROM run_events ... ORDER BY seq
+  DESC LIMIT 1) AS lastEventAt` —— 走主键，不扫全表。
+
+`sw.js` → v252（`run-progress.mjs` / `run-progress-card.mjs` / `chat.mjs` / `projects.mjs` 都变了）。
+
+## v253（2026-11-19）连不上模型时，界面上要看得见"在重连"
+
+用户实报："连不上模型，要让我直接能看到你在重连，我看到会处理的。"
+
+那次故障的经过：模型请求 TLS 握手就断，CLI 吐 `Reconnecting... 1/5 … ECONNRESET`，重试五次、
+七分钟、零输出。但界面上**这段时间什么都没有** —— 事件被服务端扣住了（见下），人只能看着
+一片死，不知道该去查代理。
+
+- **`run-progress.mjs`**：新增 `CHANNEL_FAIL_RE` 与 `state.link`。运行级 error 里认得出通道
+  特征（ECONNRESET / fetch failed / 502 / Reconnecting / TLS handshake…）就进 `link`，
+  **不**进 `state.error` —— 后者是常驻红字，重连成功后它会一直挂着，等于骗人。
+  `link` 里记 `{ at, attempt, total, msg }`，重连轮次从 `Reconnecting... 2/5` 里抠。
+  任何一条非 error 事件到了就算通道回来了：清 `link`、记 `recoveredAt`。
+  收尾时 `link` 还挂着 → 结论写成「模型没连上：<原文>」（不是干巴巴的"出错了"）。
+  新增 `fmtSince`（"43 秒" / "2 分 10 秒"），跟 `fmtAgo` 分工：一个问"已经等了多久"，
+  一个问"多久以前"。
+- **`run-progress-card.mjs`**：日志行最上面加一档「连不上模型 · 正在重连 2/5 · 已等 43 秒」，
+  优先级高于"可能卡住了"和任何动作 —— 此刻没有动作是正常的（请求根本没发出去），
+  报"最后动作在 N 前"会让人以为活干挂了。恢复后闪 6 秒「模型连上了，继续」，再让位给正常日志。
+  第二行摆通道原文（小字），人一眼能看出是 ECONNRESET 还是 502。
+  收尾折叠头：通道原因写「没连上模型」，不再是笼统的「出错了」。
+- **`style-ide.css`**：新增 `.rp.link`（bad 色）—— 跟 `.rp.warn`（卡住了）分开上色，
+  一个要你去修网络、一个只能等，同一种黄就没人会去动代理。
+
+`sw.js` → v253（`run-progress.mjs` / `run-progress-card.mjs` / `style-ide.css` 都变了）。
+
+## v254（2026-11-19）「还没有动作」改成「等模型回话 · 已等 N」
+
+用户实拍问："他这个是在尝试连接吗" —— 截图里进度卡写着「还没有动作 · 1 分钟前」，
+看着像它什么都没干。实际是请求已经发出去了、在等模型的第一个字：那段时间 CLI
+既不吐 token 也不报错（codex 的重连提示要等首次请求真失败才出，实测三四分钟后）。
+
+- **`run-progress.mjs`**：新增 `waitText(v)`，**两种静默分开说** ——
+  一步都没走 → 「等模型回话 · 已等 1 分 4 秒」（球在对方）；
+  走过几步后停住 → 「最后动作在 N 前」（活干到一半停在哪一步）。
+  以前两种共用一个「还没有动作」，把"在等上游"说成了"我方没干活"。
+- **`run-progress-card.mjs`**：静默满 60 秒且一步没走时，第二行给一句
+  「模型还没回话 —— 网络 / 代理不通时常见，它在自己重试」。不下结论、不催人动手：
+  它确实可能只是在长思考，但那两类故障正是这么表现的（请求发出去、TLS 握手挂住）。
+
+`sw.js` → v254（`run-progress.mjs` / `run-progress-card.mjs` 变了）。

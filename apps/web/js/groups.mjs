@@ -935,7 +935,9 @@ export let memberCandidates = [];
 /** 候选列表：一律不预选；勾选状态记在 memberPicked 里，搜索重画也不会丢 */
 export function renderMemberCandidates() {
   const q = ($('mSearch').value || '').trim().toLowerCase();
-  const rows = memberCandidates.filter((p) => !q || p.name.toLowerCase().includes(q));
+  // 姓名 + 岗位都能搜（2026-11-19 用户：「这个搜索要支持按岗位搜索」）——
+  // 跟项目成员弹窗（projects.mjs 的 candidates）同一个拼法
+  const rows = memberCandidates.filter((p) => !q || `${p.name}${roleNameOf(p)}`.toLowerCase().includes(q));
   $('mList').innerHTML = rows.length
     ? rows
         .map(
@@ -945,10 +947,23 @@ export function renderMemberCandidates() {
           </label>`,
         )
         .join('')
-    : '<div class="dim" style="padding:10px 2px">没找到</div>';
+    // 有人没搜到 vs 一个候选都不剩（刚把最后一批拉进来）：两种「空」说清楚
+    : `<div class="dim" style="padding:10px 2px">${memberCandidates.length ? '没找到' : '都拉进来了'}</div>`;
   $('mList').querySelectorAll('input').forEach((el) => {
     el.onchange = () => { if (el.checked) memberPicked.add(el.value); else memberPicked.delete(el.value); };
   });
+}
+
+/** 拉人成功后：把已入群的从候选里摘掉、清空勾选并重画 —— 弹窗**不关**，可以接着拉下一批
+ *  （2026-11-19 用户：「点击拉进来，窗口不要消失，要能继续拉人。要关闭有上面的关闭按钮」）。
+ *  memberCandidates 是 `let` 导出、外部不能重新赋值，所以这里原地 splice。 */
+export function consumeMemberCandidates(ids) {
+  const gone = new Set(ids);
+  for (let i = memberCandidates.length - 1; i >= 0; i--) {
+    if (gone.has(memberCandidates[i].id)) memberCandidates.splice(i, 1);
+  }
+  memberPicked.clear();
+  renderMemberCandidates();
 }
 
 

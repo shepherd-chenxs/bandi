@@ -21,6 +21,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bandi-persona-'));
 process.env.BANDI_DATA = tmp;
@@ -30,6 +31,7 @@ process.env.BANDI_DB = path.join(tmp, 'bandi.db');
 const { dbPath } = await import('./config.mjs');
 const experts = await import('./experts.mjs');
 const dispatch = await import('./dispatch.mjs');
+const repoRootOfApp = path.resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 const steward = await import('./steward.mjs');
 
 if (!path.resolve(dbPath).toLowerCase().startsWith(path.resolve(tmp).toLowerCase())) {
@@ -68,9 +70,14 @@ try {
     contract.split('\n').find((l) => /直接回答/.test(l)) ?? '');
   check('① 问答题不许拿工作报告顶替答案 + 指向 bandi-report',
     /(答案|结论)/.test(contract) && /(工作报告|工作汇报)/.test(contract) && /bandi-report/.test(contract));
-  check('② 必须交代归谁动手（明说不用你动 / 说清要他做什么）',
-    /(不用你动)/.test(contract) && /(给权限|拍板)/.test(contract) && /(那我要干嘛|没交付)/.test(contract),
-    contract.split('\n').find((l) => /交代归谁动手/.test(l)) ?? '');
+  // 2026-11-19 用户实报（「为什么总是有"不用你动"这句话，很奇怪」）：这句以前是**模板**，现在改成
+  // 例外 —— 只在他可能以为要自己动手时说，一轮最多一次；顺利态直接给结果，句尾不许挂它。
+  check('② 归谁动手：默认不写，「不用你动」是例外不是结语',
+    /归谁动手：默认不写/.test(contract) && /(例外|不是结语)/.test(contract) && /(一轮最多一次|能不说就不说)/.test(contract) && /(给权限|拍板)/.test(contract) && /(那我要干嘛|没交付)/.test(contract),
+    contract.split('\n').find((l) => /归谁动手/.test(l)) ?? '');
+  check('② 顺利态第一行直接给结果，模板里不再有「顺利，不用你动」',
+    !/顺利，不用你动/.test(contract) && /顺利[^\n]*直接说结果/.test(contract),
+    contract.split('\n').find((l) => /三态/.test(l)) ?? '');
   check('③ 依据默认不写，只三种情况附（追问 / 改变决定 / 不可逆确认）',
     /依据默认不写/.test(contract) && /为什么/.test(contract) && /改变他的决定/.test(contract) && /确认/.test(contract),
     contract.split('\n').find((l) => /依据默认不写/.test(l)) ?? '');
@@ -127,6 +134,17 @@ check('⑪ 建卡轮：卡票就是交付，回话一行即止（别再发安排
   const pm = dispatch.pmDispatchBlock({ persona: { id: 'p-pm' }, thread: { kind: 'group', members: [] }, project: { name: 'x' } });
   check('⑦ 方案定了直接建卡派下游（统筹本职）', /派下一张卡不用请示/.test(pm) && /统筹本职/.test(pm), pm.split('\n').at(-1) ?? '');
   check('⑦ 派卡不请示、回话一行即止（卡票即交付，安排叙述=重复）', /不用请示/.test(pm) && /一行即止/.test(pm) && /功课/.test(pm));
+
+  console.log('\n②b 仓库地图（2026-11-19 三改：不给结构它每次都要从 0 摸）');
+  const brief = dispatch.repoBriefBlock(repoRootOfApp);
+  check('给了 cwd 与顶层目录', /cwd = /.test(brief) && /apps\//.test(brief), brief.split('\n')[1] ?? '');
+  check('列出子目录与脚本数（省掉一次 Glob）', /apps\/\s+——/.test(brief) && /\(\d+\)/.test(brief),
+    (brief.split('\n').find((l) => l.startsWith('- apps/')) ?? ''));
+  check('写了"Read 不能读目录"', /Read` 只能读\*\*文件\*\*/.test(brief));
+  check('写了"同一条别查第二遍"', /不要查第二遍/.test(brief));
+  check('写了"判架构读到哪里够，别全仓扫"', /不要全仓扫/.test(brief));
+  check('体积可控（≤2000 字，别把地图写成目录树）', brief.length <= 2000, `${brief.length} 字`);
+  check('给不存在/空路径时安静返回空串', dispatch.repoBriefBlock('X:////nope') === '' && dispatch.repoBriefBlock('') === '');
 
   console.log('\n③ 交付形态判定（P5 新增 dispatch.guessDeliveryKind：问答 → answer / 做事 → do / 判不了 → null）');
   check('guessDeliveryKind 是导出函数', typeof dispatch.guessDeliveryKind === 'function');
@@ -186,9 +204,30 @@ check('⑪ 建卡轮：卡票就是交付，回话一行即止（别再发安排
   check('运行钥匙提醒里不再重复汇报格式（已在平台契约里）', !/汇报（每轮都算/.test(runsSrc));
   // P5（2026-11-09）：这层是**操作说明**，不是权限/交付说明 —— 查台账那段与平台契约重复，
   // 且被问"权限归谁"时模型会把它当答案素材复读。只留"怎么用钥匙"，故断言它不再带台账口径。
-  const briefSrc = runsSrc.match(/function runCredentialBrief[\s\S]*?\n\}/)?.[0] ?? '';
-  check('运行钥匙提醒只讲"怎么用钥匙"（P5 起不再复读查台账）',
-    /BANDI_RUN_TOKEN/.test(briefSrc) && /不要抄历史命令/.test(briefSrc) && !/api\/tasks/.test(briefSrc));
+  /*
+   * P5（2026-11-09）：这层是**操作说明**，不是权限/交付说明 —— 查台账那段与平台契约重复，
+   * 且被问"权限归谁"时模型会把它当答案素材复读。只留"怎么用钥匙"。
+   *
+   * 2026-11-19 修正口径：只留"怎么用密钥"**不够**。实报 r-3e67b107 里那段只说了
+   * `BANDI_RUN_TOKEN`，没说基址在 `BANDI_CONTROL_URL`，模型为了找入口连试 6 次命令，
+   * 45.6 秒里 34 秒耗在这上面。所以判据从"别提接口"改成"三样齐全"：
+   * 基址 + 头名 + 能调的清单（清单由 route-policy 的 run:true 生成，不是手写第二份）。
+   * 同时仍然不许出现"要查全部卡就调 X"这种**诱导句** —— 那类话才是昨天的真凶。
+   */
+  const briefSrc = fs.readFileSync(new URL('./capabilities.mjs', import.meta.url), 'utf8');
+  check(
+    '运行钥匙提醒说清"怎么用"（基址 + 头名 + 别抄旧值）',
+    /BANDI_RUN_TOKEN/.test(briefSrc) &&
+      /BANDI_CONTROL_URL/.test(briefSrc) &&
+      /X-Bandi-Run-Token/.test(briefSrc) &&
+      /别抄历史命令/.test(briefSrc),
+  );
+  check('能力清单由路由表生成，不是手写第二份', /from '\.\/security\/route-policy\.mjs'/.test(briefSrc));
+  // 查**运行时输出**而不是源码：capabilities.mjs 的注释里留着那句旧文案当反例，
+  // 源码断言会被注释误伤（第一版就踩了）。
+  const briefText = (await import('./capabilities.mjs')).runCredentialBrief({ pm: false });
+  check('运行时文案里没有"要查全部卡就调…"的诱导句', !/要查全部卡/.test(briefText));
+  check('运行时文案带基址变量与头名', /BANDI_CONTROL_URL/.test(briefText) && /X-Bandi-Run-Token/.test(briefText));
   console.log('\n⑥ 任务台账：每个员工都能看到自己未完的卡（P3a，不是只给某个人）');
   const store = await import('./store.mjs');
   const dev = store.createPersona({ name: '台账测试员', runtime: 'codex', cwd: tmp, instructions: '' });

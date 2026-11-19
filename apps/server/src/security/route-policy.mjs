@@ -33,6 +33,15 @@ const id1 = '([^/]+)'; // 一段动态 id
 /** 动态段模式速写：p('/api/conversations', id1) → /^\/api\/conversations\/([^/]+)$/ */
 const p = (...parts) => new RegExp(`^${parts.map(seg).join('\\/')}$`);
 
+/*
+ * `call` 字段（2026-11-19）：这条路由**从外面怎么调**的人话写法，只给 `run: true` 的条目写。
+ *
+ * 为什么要有它：`path` 是正则（p() 拼的），模型看不了；以前"运行钥匙能干什么"是在
+ * dispatch / runs 里**手写一遍**，于是出现了"prompt 说可以调 GET /api/tasks、模型却不知道
+ * 基址在哪、连试 6 次命令"这种结构性问题（实报 r-3e67b107，45.6 秒）。
+ * 现在只有这一份：能调什么 = run:true 的条目，怎么调 = 同一行的 call；
+ * 注入文案由 capabilities.mjs 从这里生成，写不出不存在的接口。
+ */
 /* ------------------------------------------------------------------ 清单 */
 
 export const ROUTES = [
@@ -71,7 +80,7 @@ export const ROUTES = [
   { id: 'local.hosts.test', m: ['POST'], path: p('/api/local/hosts/test'), auth: 'local' },
 
   /* ------------------------------------------------- 登录用户与手机设备共用 */
-  { id: 'state.read', m: ['GET'], path: p('/api/state'), auth: 'session', run: true, note: '运行钥匙可读（秘书台账：谁在忙 / 有哪些会话）' },
+  { id: 'state.read', m: ['GET'], path: p('/api/state'), auth: 'session', run: true, call: 'GET /api/state', note: '运行钥匙可读（台账全量：花名册人 id / 谁在忙 / 会话；PM 先读这条，别找 /api/personas）' },
   { id: 'me.read', m: ['GET'], path: p('/api/me'), auth: 'session', note: '「我是谁」—— 登录完第一件事' },
   // 改中枢密码（2026-11-10）：只认会话里的 user（operator 没有中枢账号），
   // handler 里再判 kind —— 这里登记的是"存在"。真验证在中枢（/v1/auth/password）。
@@ -86,8 +95,8 @@ export const ROUTES = [
   // 岗位清单（2026-11-11）：岗位系统内置、权限挂在岗位上 —— 只读下发，界面画岗位下拉与权限矩阵
   { id: 'roles.list', m: ['GET'], path: p('/api/roles'), auth: 'session' },
   { id: 'workflows.list', m: ['GET'], path: p('/api/workflows'), auth: 'session' },
-  { id: 'projects.list', m: ['GET'], path: p('/api/projects'), auth: 'session', run: true, note: '运行钥匙可读（PM brief：拿项目 id / 目录；秘书台账）' },
-  { id: 'tasks.list', m: ['GET'], path: p('/api/tasks'), auth: 'session', run: true, note: '运行钥匙可读（秘书台账：全部任务卡）' },
+  { id: 'projects.list', m: ['GET'], path: p('/api/projects'), auth: 'session', run: true, call: 'GET /api/projects', note: '运行钥匙可读（PM brief：拿项目 id / 目录；秘书台账）' },
+  { id: 'tasks.list', m: ['GET'], path: p('/api/tasks'), auth: 'session', run: true, call: 'GET /api/tasks', note: '运行钥匙可读（秘书台账：全部任务卡）' },
   { id: 'prefs.read', m: ['GET'], path: p('/api/prefs'), auth: 'session', note: '回复风格读：设备也放行（手机设置页要画）' },
   // 2026-11-04 补登（用户实报 E4090）：v2.8 默认拒绝时漏了 PUT —— 设置 › 偏好的
   // 「言简意赅」开关点的就是它，一点就 404 E4090。语义：改**全体数字员工**的沟通
@@ -95,19 +104,21 @@ export const ROUTES = [
   // 「设备形态不渲染那一节」的前端口径对齐（设备打它 → E4033，不是 404）。
   { id: 'prefs.write', m: ['PUT'], path: p('/api/prefs'), auth: 'session', noPanel: true },
   { id: 'events.sse', m: ['GET'], path: p('/api/events'), auth: 'session', noPanel: true, note: '全局 SSE；panel 禁（只许单运行流）' },
-  { id: 'runtimes.list', m: ['GET'], path: p('/api/runtimes'), auth: 'session', run: true, note: '分机模式页要机器名/版本；运行钥匙可读（值班手册：CLI 配没配好）' },
+  { id: 'runtimes.list', m: ['GET'], path: p('/api/runtimes'), auth: 'session', run: true, call: 'GET /api/runtimes', note: '分机模式页要机器名/版本；运行钥匙可读（值班手册：CLI 配没配好）' },
   { id: 'local.status.forUser', m: ['GET'], path: p('/api/local/status'), auth: 'session', note: '与 local.status 同路径：登记处放行，handler 的 authorizeLocal 照旧把员外身份拦下（E4091）' },
   { id: 'run.stream', m: ['GET'], path: p('/api/runs', id1, 'stream'), auth: 'session', note: '单运行事件流（SSE）' },
   // 证据索引（2026-11-09 检修 P2）：聊天里「证据」按钮点它 —— 只回工具/错误/时长摘要，
   // 完整事件仍走 stream 回放。只读、不新增任何写面。
   { id: 'run.evidence', m: ['GET'], path: p('/api/runs', id1, 'evidence'), auth: 'session', note: '运行证据摘要（工具/错误/时长）；细节走 stream' },
+  // 耗时摘要（2026-11-19）：模型往返次数 / 首次出话时刻 / 之后空转多久 —— 排障用，只读
+  { id: 'run.summary', m: ['GET'], path: p('/api/runs', id1, 'summary'), auth: 'session', note: '耗时摘要（轮次 / 工具数 / 空转时长）' },
   { id: 'conv.detail', m: ['GET'], path: p('/api/conversations', id1), auth: 'session' },
   // 上下文占用环（2026-11-12）：只读摘要（单轮上下文 / 预算阈值 / 轮换预览），无写面。
   // 与 conv.detail 同档 —— 输入区那颗环跟会话详情一起可见。
   { id: 'conv.context', m: ['GET'], path: p('/api/conversations', id1, 'context'), auth: 'session' },
   { id: 'conv.send', m: ['POST'], path: p('/api/conversations', id1, 'messages'), auth: 'session' },
   { id: 'card.detail', m: ['GET'], path: p('/api/projects/tasks', id1), auth: 'session' },
-  { id: 'card.patch', m: ['PATCH'], path: p('/api/projects/tasks', id1), auth: 'session', run: true, note: '手机审批只放 {status, note}（字段级闸在 project.mjs）；2026-11-09 起运行钥匙可改**自己建的/自己当群助手的**卡（让 PM 能退待办/重跑/取消，不把活留成空话）' },
+  { id: 'card.patch', m: ['PATCH'], path: p('/api/projects/tasks', id1), auth: 'session', run: true, call: 'PATCH /api/projects/tasks/{id}', note: '手机审批只放 {status, note}（字段级闸在 project.mjs）；2026-11-09 起运行钥匙可改**自己建的/自己当群助手的**卡（让 PM 能退待办/重跑/取消，不把活留成空话）' },
   { id: 'card.comments', m: ['GET', 'POST'], path: p('/api/projects/tasks', id1, 'comments'), auth: 'session' },
   { id: 'card.files', m: ['GET', 'POST'], path: p('/api/projects/tasks', id1, 'files'), auth: 'session' },
   { id: 'card.pr', m: ['GET', 'POST'], path: p('/api/projects/tasks', id1, 'pr(?:/refresh|/create|/merge)?'), auth: 'session' },
@@ -115,7 +126,7 @@ export const ROUTES = [
   { id: 'card.create', m: ['POST'], path: p('/api/projects', id1, 'tasks'), auth: 'session',
     note: '手机建卡（2026-11-03 实机放开）："人不在电脑前想起一件事要派下去"是手机端核心场景，绑人后建卡署名走 actorUser=归属人。只开**建**——删卡/改归属留在桌面；PATCH 的 {status, note} 字段级闸仍在 project.mjs' },
   { id: 'persona.detail', m: ['GET'], path: p('/api/personas', id1), auth: 'session' },
-  { id: 'persona.tasks', m: ['GET'], path: p('/api/personas', id1, 'tasks'), auth: 'session', run: true, note: '运行钥匙可读（秘书台账：单个人手上的活）' },
+  { id: 'persona.tasks', m: ['GET'], path: p('/api/personas', id1, 'tasks'), auth: 'session', run: true, call: 'GET /api/personas/{id}/tasks', note: '运行钥匙可读（秘书台账：单个人手上的活）' },
   { id: 'group.detail', m: ['GET'], path: p('/api/groups', id1), auth: 'session' },
   { id: 'run.abort', m: ['POST'], path: p('/api/runs', id1, 'abort'), auth: 'session', note: '能派不能停 = 会话永远「正在输入」' },
 
@@ -250,8 +261,8 @@ export const ROUTES = [
   { id: 'experts.list', m: ['GET'], path: p('/api/experts'), auth: 'session' },
   { id: 'expert.hire', m: ['POST'], path: p('/api/experts', id1, 'hire'), auth: 'session' },
   { id: 'expert.fire', m: ['POST'], path: p('/api/experts', id1, 'fire'), auth: 'session' },
-  { id: 'agent.cards', m: ['POST'], path: p('/api/agent/cards'), auth: 'session', run: true, note: '建卡通道：运行钥匙可达；建卡权按岗位认（403 E2057 在 handler，agent-auth）' },
-  { id: 'agent.cards.batch', m: ['POST'], path: p('/api/agent/cards/batch'), auth: 'session', run: true, note: '批量建卡通道：先全量校验再建，一张不合格整批拒；运行钥匙可达' },
+  { id: 'agent.cards', m: ['POST'], path: p('/api/agent/cards'), auth: 'session', run: true, call: 'POST /api/agent/cards', note: '建卡通道：运行钥匙可达；建卡权按岗位认（403 E2057 在 handler，agent-auth）' },
+  { id: 'agent.cards.batch', m: ['POST'], path: p('/api/agent/cards/batch'), auth: 'session', run: true, call: 'POST /api/agent/cards/batch', note: '批量建卡通道：先全量校验再建，一张不合格整批拒；运行钥匙可达' },
   { id: 'users.list', m: ['GET'], path: p('/api/users'), auth: 'session', noPanel: true },
   { id: 'users.create', m: ['POST'], path: p('/api/users'), auth: 'session', noPanel: true, note: '建影子账号（预占名字，等中枢账号首次登录时绑定）' },
   { id: 'users.one', m: ['GET', 'PATCH', 'DELETE'], path: p('/api/users', id1), auth: 'session', noPanel: true },

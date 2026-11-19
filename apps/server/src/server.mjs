@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { DatabaseSync } from 'node:sqlite';
+import DatabaseSync from 'better-sqlite3';
 import { port, repoRoot, host, hostSource, dataDir, dbPath, extraOrigins, trustProxy, localSecretDisabled } from './config.mjs';
 import * as netmode from './netmode.mjs';
 import * as store from './store.mjs';
@@ -248,7 +248,7 @@ const routes = {
       plugins: plugins.marketList(),
       pluginsRoot: plugins.pluginsRoot,
       catalogRoot: plugins.catalogRoot,
-      ledgerPath: plugins.ledgerPath,
+      ledgerPath: plugins.ledgerPath(),
     });
   },
 
@@ -771,24 +771,32 @@ runs.onRunFinish((run) => {
     console.error('[群聊] 排队补派失败：', e?.message ?? e);
   }
 });
-// 进程重启会把在跑的执行判死（reapStaleRuns），可工作流的任务还写着「进行中」——
-// 那条任务就永远卡住了。所以启动时把这类任务也收尾，别让人对着一个假"进行中"等。
+// 进程重启会把在跑的执行判死（reapStaleRuns）。这里只识别“上次确实在跑”的步骤，
+// 恢复逻辑在下方统一处理，避免先改成别的状态再把证据洗掉。
 const stuckTasks = store
   .listWorkflowRuns()
   .filter((r) => r.status === 'doing')
   .flatMap((r) => store.listWorkflowTasks(r.id))
   .filter((t) => t.status === 'doing');
-for (const t of stuckTasks) {
-  store.updateWorkflowTask(t.id, {
-    // **「已阻塞」不是「进行中」**：进程重启后这次执行已经没了，
-    // 还写"进行中"的话界面上计时器继续走、徽标说在跑 —— 但它永远不会自己动（用户实报）。
-    // 已阻塞 = "卡住了、等人处理"，跟"跑挂了（失败）"也不一样：失败的可以重跑，这个要先决定怎么办。
-    status: 'blocked',
-    note: '服务重启，这一步被中断',
-    endedAt: store.nowIso(),
-  });
+if (stuckTasks.length) console.log(`[中断恢复] 找到 ${stuckTasks.length} 个上次中断的工作流任务`);
+
+// 中断恢复：把上次“进行中”的步骤放回待办，交给 30 秒调度器续跑；已完成步骤不受影响。
+try {
+  const interruptedTasks = stuckTasks.filter((t) => t.status === 'doing');
+  for (const task of interruptedTasks) {
+    store.updateWorkflowTask(task.id, {
+      status: 'todo',
+      agentRunId: null,
+      endedAt: null,
+      note: null,
+      result: null,
+      decision: null,
+    });
+  }
+  if (interruptedTasks.length) console.log(`[中断恢复] 已放回 ${interruptedTasks.length} 个中断步骤，等待自动续跑`);
+} catch (err) {
+  console.error(`[中断恢复] 恢复失败：${err?.message ?? err}`);
 }
-if (stuckTasks.length) console.log(`收了 ${stuckTasks.length} 个被中断的工作流任务`);
 
 /*
  * 定时任务的心跳（2026-10-17）：30 秒一跳，挑**到点的**任务串行跑。

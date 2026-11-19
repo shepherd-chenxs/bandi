@@ -50,6 +50,13 @@
   } catch (e) { /* 读不了就算了，交给 app.mjs */ }
 </script>
 <link rel="stylesheet" href="/style.css" />
+<!-- 分页样式（2026-11-19 从 style.css 物理拆出，规则内容没改）：**顺序必须保持**，
+     CSS 靠先后定胜负 —— core 全站基础先来，后面按"哪一页"逐段补，mobile.css 永远压最后。 -->
+<link rel="stylesheet" href="/style-git.css" />
+<link rel="stylesheet" href="/style-ide.css" />
+<link rel="stylesheet" href="/style-task.css" />
+<link rel="stylesheet" href="/style-toast.css" />
+<link rel="stylesheet" href="/style-machine.css" />
 <!-- 移动端样式（2026-11 手机端增量）：全部新规则只在这个文件（style.css 不新增移动规则），
      断点 900px / 600px，类名 mb- 前缀 —— 必须排在 style.css 之后才能覆盖它 -->
 <link rel="stylesheet" href="/mobile.css" />
@@ -90,17 +97,6 @@
       <path d="M15.8 19.2c0-2.2 1-3.7 2.8-4.2" />
     </svg>
     <span>通讯录</span>
-  </button>
-  <!-- 组织架构（2026-11-11 Phase 3）：岗位是系统内置的固定清单，权限与技能包挂在岗位上。
-       这一栏放"组织长什么样"的常驻视图，第一个子菜单 = 岗位权限清单（见 js/org.mjs）。 -->
-  <button class="nav-btn" data-nav="org">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-      <rect x="9" y="3" width="6" height="5" rx="1.2" />
-      <rect x="3" y="16" width="6" height="5" rx="1.2" />
-      <rect x="15" y="16" width="6" height="5" rx="1.2" />
-      <path d="M12 8v4M6 16v-2.4h12V16M12 12v1.6" />
-    </svg>
-    <span>组织架构</span>
   </button>
   <!-- 专家库（2026-10-22 补回）：app.mjs 整条链路早就备好了（ROUTES.experts、
        setNav('experts') 的分支、#expertsView 整页），唯独 rail 上这颗按钮一直没建 ——
@@ -206,8 +202,6 @@
        右区这个容器放选中那条的详情（2026-11-11 用户："改成左侧列表，右边详情"）。
        空态/「全部已读」等交互都在右区和左栏底部固定条里，见 js/inbox.mjs。 -->
   <div id="inboxView"></div>
-  <!-- 组织架构（2026-11-11 Phase 3）：一级栏 + 左栏子菜单，右区是岗位权限清单 -->
-  <div id="orgView"></div>
   <div id="groupView"></div>
   <!-- 专家库整页（2026-10-22 补）：app.mjs 的 showView / openExperts 都引用 #expertsView，
        但这个容器一直没建 —— 每次切页面 showView 在 $('expertsView').classList 上抛
@@ -259,8 +253,8 @@
     <b>新建项目群</b>
     <label>群名</label><input id="gTitle" placeholder="例如：班底平台 v0.1" />
     <label>群助手（没人被 @ 时由他接话）</label><div id="gAssistantMount"></div>
-    <label>成员（群主自动在列）</label>
-    <div id="gMembers" class="members"></div>
+    <!-- 成员勾选去掉（2026-11-19 用户：发起群聊只要群名 + 群助手就够了）；
+         服务端建群时会把群助手自动加进群成员，群里要再加人走「拉人进群」。 -->
     <div class="dlg-actions">
       <button type="button" value="cancel">取消</button>
       <button class="primary" id="gOk" value="ok">创建</button>
@@ -285,11 +279,12 @@
   <form method="dialog">
     <b>拉人进群</b>
     <div class="dim" style="font-size:12px;margin-top:2px">新人会从「最近 20 条消息之前」开始读，既能看到近期背景，又不会把整段历史灌进去。</div>
-    <input id="mSearch" placeholder="搜索数字员工" style="margin-top:12px" />
+    <input id="mSearch" placeholder="搜索姓名 / 岗位" style="margin-top:12px" />
     <div id="mList" class="members" style="margin-top:10px"></div>
     <div class="dlg-actions">
       <button type="button" value="cancel">取消</button>
-      <button class="primary" id="mOk" value="ok">拉进来</button>
+      <!-- 拉进来**不提交表单**：弹窗留着继续拉，关闭走右上角的 ×（2026-11-19 用户要求） -->
+      <button type="button" class="primary" id="mOk">拉进来</button>
     </div>
   </form>
 </dialog>
@@ -318,6 +313,33 @@
     <div class="dlg-actions">
       <button type="button" value="cancel">取消</button>
       <button class="primary" id="aOk" value="ok">就他了</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- 群 / 聊天里点头像（2026-11-19 用户）：就地换运行时与模型 ——
+     模型额度用完能马上换，不用退出聊天去通讯录详情。改完立刻写库（PUT /api/personas/:id）。
+     ⚠️ overflow: visible —— 模型下拉是 .combo 自绘浮层，dialog 默认 overflow:auto 会把它裁掉。 -->
+<dialog id="peerDlg" style="overflow:visible">
+  <form method="dialog">
+    <b>员工简卡</b>
+    <div class="peer-head">
+      <div id="peerAvatar"></div>
+      <div class="peer-id">
+        <b id="peerName"></b>
+        <div class="dim" id="peerRole"></div>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="row-label">Runtime</div>
+      <div id="peerRuntimeMount"></div>
+    </div>
+    <div class="form-row">
+      <div class="row-label">模型</div>
+      <div id="peerModelMount"></div>
+    </div>
+    <div class="dlg-actions">
+      <button type="button" value="cancel">关闭</button>
     </div>
   </form>
 </dialog>

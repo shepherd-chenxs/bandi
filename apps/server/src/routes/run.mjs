@@ -10,6 +10,18 @@ export async function handleRun(req, res, url) {
   const stream = /^\/api\/runs\/([^/]+)\/stream$/.exec(url.pathname);
   const abort = /^\/api\/runs\/([^/]+)\/abort$/.exec(url.pathname);
   const evidence = /^\/api\/runs\/([^/]+)\/evidence$/.exec(url.pathname);
+  const summary = /^\/api\/runs\/([^/]+)\/summary$/.exec(url.pathname);
+
+  /*
+   * **耗时摘要**（2026-11-19）：与 evidence 是两件事 —— 那个答"调了什么工具"，
+   * 这个答"时间花在哪"（模型往返几次、第一次出话在几秒、之后又空转多久）。
+   * 排障时不想再手写 SQL 拼时间轴（实报 r-3e67b107 就拼了五轮）。
+   */
+  if (req.method === 'GET' && summary) {
+    const sm = store.summarizeRun(decodeURIComponent(summary[1]));
+    if (!sm) return fail(res, 404, 'E2036', '这次运行不存在（或已被清理）');
+    return sendJson(res, 200, sm), true;
+  }
 
   /*
    * 证据索引（2026-11-09 检修 P2）：回话正文不贴命令/输出，前端「证据」按钮点它拿

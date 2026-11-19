@@ -173,10 +173,25 @@ console.log('\n⑥ 聊天页接线（静态断言，防"归约器写了没人用
   const liveSrc = fs.readFileSync(new URL('../../web/js/run-live.mjs', import.meta.url), 'utf8');
   const projSrc = fs.readFileSync(new URL('../../web/js/projects.mjs', import.meta.url), 'utf8');
   const runsSrc = fs.readFileSync(new URL('./runs.mjs', import.meta.url), 'utf8');
+  const storeRunsSrc = fs.readFileSync(new URL('./store/runs.mjs', import.meta.url), 'utf8');
   check('chat.mjs 引用了 run-progress.mjs', /from '\.\/run-progress\.mjs'/.test(chatSrc));
   check('streamRun 把每个原始事件交给 onEvent', /h\.onEvent\?\.\(evt\)/.test(chatSrc));
-  check('attachStream 接收 startAt 并按真实开始时间计时', /attachStream\(runId, whoName = '', startedAt = null\)/.test(chatSrc));
-  check('重进会话时把 run.startedAt 带过去', /attachStream\(last\.id, last\.personaName, last\.startedAt\)/.test(chatSrc));
+  check(
+    'attachStream 接收 startAt 并按真实开始时间计时',
+    /attachStream\(runId, whoName = '', startedAt = null, lastEventAt = null\)/.test(chatSrc),
+  );
+  check('重进会话时把 run.startedAt 带过去', /attachStream\(last\.id, last\.personaName, last\.startedAt/.test(chatSrc));
+  /*
+   * **2026-11-19 加**：重画时接上"最后一次活动"（`lastEventAt`）。
+   * 为什么钉这条：一轮已经卡了 8 分钟，刷新页面若按"刚连上"算空闲，界面显示"刚动过"，
+   * 人会一直等下去。整条链路四段都要在，少一段就是丢：
+   * listRuns 给 → attachStream 收 → card 传 → createRunProgress 认。
+   */
+  check('重进会话时把 run.lastEventAt 也带过去', /attachStream\(last\.id, last\.personaName, last\.startedAt, last\.lastEventAt\)/.test(chatSrc));
+  check('listRuns 查了 run_events 的最后一条时刻', /AS lastEventAt/.test(storeRunsSrc));
+  check('进度卡把 lastEventAt 传给状态机', /createProgressCard\(\{[^}]*lastEventAt/s.test(chatSrc) || /lastEventAt,[\s\S]{0,40}onStop/.test(chatSrc));
+  // 日志行的中间一档：「最后动作在 N 前」/「还没有动作」——长任务里人靠它判断在算还是卡了
+  check('日志行报了"最后动作在多久前"', /最后动作在 \$\{fmtAgo\(v\.idleMs\)\}/.test(cardSrc) && /还没有动作/.test(cardSrc));
   check('不再用三个点占位', !/class="typing"><i><\/i><i><\/i><i><\/i>/.test(chatSrc));
   // 2026-11-05 评鉴：停止钮从"卡住才出现"改成**常驻卡头**（收尾才隐掉），打断是第一类操作
   check('停止钮常驻卡头（收尾才隐掉）', /class="rp-stop" title="停止生成" hidden/.test(cardSrc) && /createProgressCard\(\{[\s\S]*?onStop/.test(chatSrc));

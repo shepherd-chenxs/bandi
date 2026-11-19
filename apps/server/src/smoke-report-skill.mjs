@@ -31,6 +31,8 @@ const notice = read('skills/bandi-report/NOTICE.md');
 const experts = read('apps/server/src/experts.mjs');
 const roles = read('apps/server/src/roles.mjs');
 const dispatchSrc = read('apps/server/src/dispatch.mjs');
+// 2026-11-19：契约正文搬去 dispatch/contract.mjs（dispatch.mjs 只做再导出，见 barrel 注释）
+const contractSrc = read('apps/server/src/dispatch/contract.mjs');
 const runsSrc = read('apps/server/src/runs.mjs');
 const pmSkill = read('skills/bandi-expert-pm/SKILL.md');
 
@@ -60,8 +62,9 @@ console.log('\n④ 平台注入与 PM 技能都指向它（一处维护）');
  */
 check('每轮契约由 dispatch 统一产出（platformContractBlock）', /platformContractBlock/.test(dispatchSrc));
 // P5 后第 1 条先判交付形态（问答/做事），"已做完"这类汇报措辞挪进了任务合同的做事分支
-check('契约含结论 / 不空转 / Next 禁令 / 交付形态', /结论/.test(dispatchSrc) && /不空转/.test(dispatchSrc) && /Next:/.test(dispatchSrc) && /交付形态/.test(dispatchSrc));
-check('契约指向 bandi-report（全文入口，不重复长文）', /bandi-report/.test(dispatchSrc) && /bandi-report/.test(pmSkill));
+check('契约含结论 / 不空转 / Next 禁令 / 交付形态',
+  /结论/.test(contractSrc) && /不空转/.test(contractSrc) && /Next:/.test(contractSrc) && /交付形态/.test(contractSrc));
+check('契约指向 bandi-report（全文入口，不重复长文）', /bandi-report/.test(contractSrc) && /bandi-report/.test(pmSkill));
 // P5 压缩了运行钥匙提醒（操作说明只留怎么用钥匙；建卡/改卡口径在 PM 首轮 brief 与 PM 技能里）
 check('运行钥匙提醒只讲怎么用钥匙（不重复汇报/建卡口径）', /BANDI_RUN_TOKEN/.test(runsSrc) && /E2056/.test(runsSrc) && !/汇报（每轮都算/.test(runsSrc) && !/查台账：问进度/.test(runsSrc));
 

@@ -37,7 +37,7 @@ import { kbRepaint, kbRepaintRows, projectDialog } from './js/projects.mjs';
 import { doStartFlow, flowStart, openFlowStart, syncFlowTitle } from './js/flowpages.mjs';
 import { importPicked, openSkill, renderSkAssignList, renderGitRepos, scanImport, skAssignPicked, skAssignSkill } from './js/skills.mjs';
 import { addAtts, closeMentionPop, insertMention, linkPersonaId, linkPicked, mentionPop, openConversation, openDetail, renderLinkList, searchRefreshDetail, send, setBusy, setComposer, stopChatRun, updateMentionPop } from './js/chat.mjs';
-import { deleteSessionFromLog, memberPicked, renderMemberCandidates } from './js/groups.mjs';
+import { consumeMemberCandidates, deleteSessionFromLog, memberPicked, renderMemberCandidates } from './js/groups.mjs';
 import { applyFormDefaults, closeDrawer, pluginMust, refreshGroup, rerenderPanel, runFormFollow } from './js/experts.mjs';
 import { startEvents } from './js/events.mjs';
 import { $, S } from './js/core.mjs';
@@ -382,6 +382,9 @@ $('plgFormOk').onclick = async (e) => {
 
 
 $('mSearch').oninput = renderMemberCandidates;
+// Enter 别触发表单的隐式提交（method=dialog 会直接把弹窗关掉）——
+// 现在弹窗只有在点「拉进来」/ 右上角 × 时才动（2026-11-19）
+$('mSearch').addEventListener('keydown', (e) => { if (e.key === 'Enter') e.preventDefault(); });
 
 
 
@@ -392,19 +395,25 @@ $('mOk').onclick = async (e) => {
   if (!personaIds.length) return;
   try {
     await post(`/api/groups/${encodeURIComponent(threadId)}/members`, { personaIds });
-    $('memberDlg').close();
+    /*
+     * 拉完成**不关弹窗**（2026-11-19 用户：「点击拉进来，窗口不要消失，要能继续拉人。
+     * 要关闭有上面的关闭按钮」）：已入群的从候选里摘掉、勾选清空，列表原地刷新，
+     * 可以接着拉下一批；关闭走右上角 × 或「取消」。
+     */
+    consumeMemberCandidates(personaIds);
+    toast(`已拉进 ${personaIds.length} 人`);
     await refreshGroup(threadId);
   } catch (err) { toast(err.message, 'error'); }
 };
 
 
 
-// （群助手换人 → 重画成员格，由 gAssistantCombo 的 onChange 负责）
+// 发起群聊：只要群名 + 群助手（2026-11-19 用户去掉了成员勾选）。
+// 服务端建群时会把群助手自动加进群成员，再加人走聊天页「拉人进群」。
 
 $('gOk').onclick = async (e) => {
   e.preventDefault();
   const assistantPersonaId = gAssistantCombo.value();
-  const memberIds = [...$('gMembers').querySelectorAll('input:checked')].map((i) => i.value);
   /*
    * 群名**本地先拦**（2026-10-20 用户截图：空名点创建，弹「E1006：服务异常」）。
    * 空名根本不用发请求 —— 服务端对空标题回的是通用错误码，界面上就成了
@@ -417,7 +426,7 @@ $('gOk').onclick = async (e) => {
     return;
   }
   try {
-    const d = await post('/api/groups', { title, assistantPersonaId, memberIds });
+    const d = await post('/api/groups', { title, assistantPersonaId });
     $('groupDlg').close();
     await load();
     setNav('messages');
