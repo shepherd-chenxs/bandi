@@ -19,6 +19,13 @@ export const PERMISSIONS = {
   'card.split': '拆子卡（团队协作里把主卡拆给群成员）',
   'card.advance': '改自己建的 / 自己当群助手那张团队卡（状态、重跑、改派）',
   'team.coordinate': '当群助手承接团队卡（拆子卡、盯回执、汇总回主卡）',
+  /*
+   * 交付权（2026-11-19）：把「提交 → 推送 → 开 PR」交给平台一条命令做完。
+   * 以前 agent 只能用 shell 一条条拼（9 条命令 = 9 次模型往返 = 6 分钟纯等待，
+   * 实报 r-4c85d92c），平台明明有原子动作却没给它通道。权限位就是那道门：
+   * 只有该动仓库的岗位拿得到，不是人人可推。
+   */
+  'repo.deliver': '交付：提交 → 推送 → 开 PR（一条命令，别自己拼 git）',
   // 预留：验收权本期**不下放**，仍是雇主的动作（2026-11-11 用户拍板，见设计文档第三节）
   'task.review': '验收：待验收 → 完成 / 退回（预留，所有岗位默认为空）',
 };
@@ -61,7 +68,7 @@ export const ROLES = [
     skills: ['bandi-expert-copywriter', 'doc-coauthoring'] },
   { key: 'director', name: '短视频编导', kind: 'expert', permissions: [],
     skills: ['bandi-expert-director', 'brainstorming'] },
-  { key: 'repo-keeper', name: '仓库管家', kind: 'expert', permissions: [],
+  { key: 'repo-keeper', name: '仓库管家', kind: 'expert', permissions: ['repo.deliver'],
     skills: ['bandi-expert-keeper', 'bandi-git', 'verification-before-completion'] },
   { key: 'assistant', name: '助理', kind: 'builtin', permissions: [],
     skills: ['bandi-expert-secretary', 'bandi-report'] },

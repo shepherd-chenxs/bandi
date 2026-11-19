@@ -259,6 +259,16 @@ export const ROUTES = [
   { id: 'expert.fire', m: ['POST'], path: p('/api/experts', id1, 'fire'), auth: 'session' },
   { id: 'agent.cards', m: ['POST'], path: p('/api/agent/cards'), auth: 'session', run: true, call: 'POST /api/agent/cards', note: '建卡通道：运行钥匙可达；建卡权按岗位认（403 E2057 在 handler，agent-auth）' },
   { id: 'agent.cards.batch', m: ['POST'], path: p('/api/agent/cards/batch'), auth: 'session', run: true, call: 'POST /api/agent/cards/batch', note: '批量建卡通道：先全量校验再建，一张不合格整批拒；运行钥匙可达' },
+  /*
+   * 交付/闸门两条（2026-11-19）：**这就是"少绕几圈"的机制**。
+   *
+   * 以前 agent 交付要自己拼 `git add / commit / push` + 建 PR，6 条命令 = 6 次模型往返
+   * （实报 9 条命令、6 分钟纯等待，命令本身 6 秒）。现在一条命令做一个动作，
+   * 平台侧把确定性流程一次跑完。登记在这里 = 能力清单自动注入（capabilities.mjs 只读这张表），
+   * 所以不需要另外教它"能干什么"。
+   */
+  { id: 'agent.gate', m: ['POST'], path: p('/api/agent/gate'), auth: 'session', run: true, call: 'POST /api/agent/gate', note: '跑全量闸门：只回"过没过 + 挂了哪几项 + 日志路径"，别自己一条条跑用例' },
+  { id: 'agent.deliver', m: ['POST'], path: p('/api/agent/deliver'), auth: 'session', run: true, call: 'POST /api/agent/deliver', note: '交付：提交 → 推送 → 开 PR 一条命令做完，体 {title, message}；别自己拼 git 命令' },
   { id: 'users.list', m: ['GET'], path: p('/api/users'), auth: 'session', noPanel: true },
   { id: 'users.create', m: ['POST'], path: p('/api/users'), auth: 'session', noPanel: true, note: '建影子账号（预占名字，等中枢账号首次登录时绑定）' },
   { id: 'users.one', m: ['GET', 'PATCH', 'DELETE'], path: p('/api/users', id1), auth: 'session', noPanel: true },

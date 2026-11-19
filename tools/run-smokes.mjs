@@ -33,6 +33,9 @@ const RUN = [
   // 单轮看护（2026-11-19，V7）：只认"10 分钟没动静"，跑得久不掐、工具次数只记不掐。
   // 用伪造适配器驱动 runs.mjs（临时数据目录、不起真 CLI），几十毫秒一组。
   'apps/server/src/smoke-run-limit.mjs',
+  // 交付动作（2026-11-19）：把"提交→推送→开PR"和"跑全量闸门"做成两条运行钥匙可达的动作。
+  // 治的是"6 条命令 = 6 次模型往返 = 6 分钟纯等待"（实报 r-4c85d92c）；纯静态断言，不起服务。
+  'apps/server/src/smoke-agent-deliver.mjs',
   // 连不上模型要实时看得见（2026-11-19 实报）：通道类 error 不许被 held 扣住；空回话按原因分档。
   // 同样是伪造适配器 + 临时库，不联网。
   'apps/server/src/smoke-run-channel.mjs',
