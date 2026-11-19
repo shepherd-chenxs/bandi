@@ -1489,6 +1489,7 @@ body:has(#pluginView.shown .fixed-head)::after {
 .dev-title { display: flex; align-items: center; gap: 10px; font-size: var(--t-detail); font-weight: var(--w-title); }
 .dev-sub { color: var(--dim); font-size: 12.5px; margin-top: 5px; }
 /* 对话里"没跑成"那块：一句人话在上面，完整报错折在下面 */
+.fail-link { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
 .fail-more { margin-top: 6px; }
 .fail-more > summary { cursor: pointer; color: var(--dim); font-size: 12px; }
 .fail-more > pre { margin: 6px 0 0; padding: 8px 10px; max-height: 220px; overflow: auto;

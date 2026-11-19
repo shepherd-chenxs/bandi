@@ -1,6 +1,6 @@
 /* chat.mjs —— 进对话、发消息、输入框里的 @ 选人、员工详情、员工详情 →「任务」、关联技能。
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
-import { esc, mdRender, roleNameOf, savePlace, setRoute, toast } from './shell.mjs';
+import { esc, mdRender, openRoute, roleNameOf, savePlace, setRoute, toast } from './shell.mjs';
 import { AVATAR_FILE, api, createCombo, cut, dt, failHtml, headerBadgeHtml, initial, personaAvatar, personaByName, post, renderMarkdown, setHeaderBadge, smAvatar } from './ui.mjs';
 import { load, setNav } from './state.mjs';
 import { confirmDo } from './machine.mjs';
@@ -765,7 +765,13 @@ export function firstMeaningfulLine(text) {
  */
 export function failBlock(r, showName = false) {
   const full = String(r.error ?? '').trim();
-  const why = firstMeaningfulLine(full) || '运行失败（这次没留下原因）';
+  const why = firstMeaningfulLine(full) || '这次没留下原因';
+  // 文案里的人肉导航变成真链接（2026-11-19）：「设置 → 运行时」点一下直接跳过去，
+  // 不用让用户照着文字自己找。esc 之后再替换 —— 这六个字不会被转义，链接是这里拼的可控 HTML。
+  const whyHtml = esc(why).replaceAll(
+    '设置 → 运行时',
+    '<a class="fail-link" href="#" data-goto-runtimes>设置 → 运行时</a>',
+  );
   // 原因本身就是退出码时**别再补一句**「（退出码 1）」—— 2026-10-26 用户截图里看到的是
   // 「没跑成：退出码 1（退出码 1）」，同一件事说了两遍，还是最没信息量的那件事。
   const code = r.exitCode == null || /退出码/.test(why) ? '' : `（退出码 ${r.exitCode}）`;
@@ -784,8 +790,8 @@ export function failBlock(r, showName = false) {
   return `<div class="row">
     ${smAvatar(label, '', p)}
     ${nameLine
-      ? `<div class="msg-main">${nameLine}<div class="bubble"><div class="step bad">没跑成：${esc(why)}${esc(code)}</div>${more}</div></div>`
-      : `<div class="bubble"><div class="step bad">没跑成：${esc(why)}${esc(code)}</div>${more}</div>`}
+      ? `<div class="msg-main">${nameLine}<div class="bubble"><div class="step bad">这轮没跑起来——${whyHtml}${esc(code)}</div>${more}</div></div>`
+      : `<div class="bubble"><div class="step bad">这轮没跑起来——${whyHtml}${esc(code)}</div>${more}</div>`}
   </div>`;
 }
 
@@ -3536,6 +3542,15 @@ export async function openPeerDialog(personaId) {
   dlg.showModal();
 }
 
+
+
+/* 失败气泡里的「设置 → 运行时」链接：点一下直接跳到那一页，不用照着文字自己找 */
+document.addEventListener('click', (e) => {
+  const hit = e.target.closest?.('[data-goto-runtimes]');
+  if (!hit) return;
+  e.preventDefault();
+  openRoute({ view: 'settings', section: 'runtimes' });
+});
 
 
 /* 头像点击：`#chat` 里画出来的头像按钮（data-peer），一次委托到底 */
