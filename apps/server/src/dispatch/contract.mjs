@@ -14,6 +14,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { replyStyle, REPLY_STYLES } from '../config.mjs';
 import * as skills from '../skills.mjs';
 
@@ -438,8 +439,119 @@ export function repoBriefBlock(cwd) {
     '- 读文件**一次读完**：有 `Read` 就先用 `Read`；非用 shell 不可时**必须显式 UTF-8** —— Windows 的 `Get-Content` 默认按 ANSI(GBK) 解码，UTF-8 文件里的中文会变成 `绛栫暐妫€鏌` 这种乱码，之后所有补丁都匹配不上（实测：改一个 yml 因此磨了 12 分钟、十几条工具调用）。只看一段用 `-TotalCount N` / `-Tail N`；**别用 `Select-Object -First 200` 分页读** —— 截断会逼你把同一个文件读第二、第三遍（实测 `dispatch.mjs` 被读 4 遍）。',
     '- **改文件用 `apply_patch`，不要用 shell 写**（`Set-Content` / `>` / `Add-Content` 会改掉编码和换行；文件里含 `${{ }}`、`${}` 这类字面量时，PowerShell 还会把它当变量展开直接报错）。`apply_patch` 报了「成功」也要 `git diff <file>` 复核一眼 —— 实测出现过返回 Success 但文件一个字节没变。',
     '- **往外部接口发中文 JSON 时，显式声明 UTF-8**：shell 默认按 ANSI 编码发出去，中文全变 `?`（实测：GitHub 的 PR 标题被编成 `fix(ui): ????????`，改完还得靠 API 拉回来才发现）。要么先把 JSON 转成 UTF-8 字节再发，要么在 Content-Type 里带 charset；**发完一定 GET 回来确认对端收到的是中文**，别改完就当好了。',
+    '- **命令报错 = 结论作废**：单行别用 `&&` / `||`（PowerShell 5.1 直接 ParserError、整条作废，用 `;` 或一条条发）；报错就整条重跑，**不许只重跑没报错的那半句**（实测：丢的正是最关键那半句，于是结论相反）。自己不认识的东西（没做过的提交、莫名多出的文件）**先当异常查**，别用"应该是别人弄的 / 应该已经在远端"解释掉。',
   );
   const text = lines.join('\n');
   repoBriefCache.set(root, { at: Date.now(), text });
   return text;
+}
+
+/**
+ * **仓库状态实测块**（2026-11-19 六改）。
+ *
+ * 起因（雇主实报「为什么张坤告诉我是一致的，这是个非常严重的问题」）：
+ * 22:48 有人往 `fix/v1.6.0-contract-utf8` 上推了一个提交（`10c70b4` 下线研发面板），
+ * 22:52 雇主问「有没有建 PR」，22:53 张坤答「**没有未提交的代码，PR #81 已合并，不需要再建 PR**」——
+ * 而那一个提交当时既没进 main、也没开 PR。
+ *
+ * 它不是没查，是**查的三样都不回答这个问题**（r-67dae659 的实测事件）：
+ *   ① `git status` 干净 → 只说明没改文件，跟"有没有并入主线"无关；
+ *   ② `git log origin/同名分支..HEAD` 空 → 只说明**推上去了**，不代表合进去了；
+ *   ③ open PR 列表空 → 只说明"现在没有开着的 PR"，不代表"没有该开的"。
+ * 唯一能回答的是 `git rev-list --count origin/main..HEAD`，它**一次都没跑**：
+ * 唯一沾边的那条被 `||`（PowerShell 5.1 语法错）带崩了，它只重跑了无害的另一半就下了结论。
+ *
+ * 所以不再指望它自己拼命令：**平台直接把事实算出来喂进去**，和仓库地图同一思路
+ * （盲区里的东西直接给，别让人现摸）。它只要引用，不许重算。
+ *
+ * **不缓存**：这是"当下状态"，推完提交下一句就要看见新的。一套命令实测 0.4 秒、
+ * 一轮派活只跑一次，为省这点时间冒"报旧状态"的风险不值（缓存一分钟的地图是结构，不是状态）。
+ */
+function gitOut(cwd, args) {
+  return execFileSync('git', args, {
+    cwd,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+    timeout: 5_000,
+    windowsHide: true,
+  }).trim();
+}
+
+const gitTry = (cwd, args, fallback = null) => {
+  try {
+    return gitOut(cwd, args);
+  } catch {
+    return fallback;
+  }
+};
+
+function buildGitState(root) {
+  if (gitTry(root, ['rev-parse', '--is-inside-work-tree']) !== 'true') return '';
+  const head = gitTry(root, ['rev-parse', '--short', 'HEAD']);
+  const branch = gitTry(root, ['rev-parse', '--abbrev-ref', 'HEAD']) || '（未知）';
+  if (!head) return ''; // 空仓（还没有第一个提交）：没有可判的东西
+
+  const lines = ['【仓库状态 · 平台刚测的】'];
+
+  // ①② upstream 那一对最容易骗人的信号，原文列出来，但立刻标注它说明不了什么
+  const upstream = gitTry(root, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
+  const unpushed = upstream ? Number(gitTry(root, ['rev-list', '--count', `${upstream}..HEAD`], '0')) || 0 : null;
+  lines.push(
+    `- 分支：${branch}（HEAD ${head}）` +
+      (upstream ? `；upstream ${upstream}（${unpushed ? `还有 ${unpushed} 个没推` : '已同步'}）` : '；没有 upstream'),
+  );
+
+  const dirty = gitTry(root, ['status', '--porcelain']);
+  const dirtyCount = dirty == null ? null : dirty ? dirty.split('\n').length : 0;
+  lines.push(
+    `- 工作区：${dirtyCount == null ? '读不出来' : dirtyCount ? `**有 ${dirtyCount} 个改动没提交**` : '干净'}` +
+      '（只说明有没有改文件，**不等于**已并入主线）',
+  );
+
+  // ③ 唯一判据
+  const hasBase = gitTry(root, ['rev-parse', '--verify', '--quiet', 'origin/main']) != null;
+  if (!hasBase) {
+    lines.push(
+      '- 基线：本地没有 `origin/main` 引用（没 fetch 过 / 没有远端）→ **判不了一致性，别下结论**，先 `git fetch origin` 或看 `git branch -r`。',
+    );
+  } else {
+    const ahead = Number(gitTry(root, ['rev-list', '--count', 'origin/main..HEAD'], '-1'));
+    const behind = Number(gitTry(root, ['rev-list', '--count', 'HEAD..origin/main'], '-1'));
+    if (ahead < 0 || behind < 0) {
+      lines.push('- 基线 `origin/main`：算不出来 → **判不了一致性，别下结论**。');
+    } else {
+      lines.push(`- 基线 \`origin/main\`：**领先 ${ahead} 个提交**，落后 ${behind} 个（判据 = \`git rev-list --count origin/main..HEAD\`）`);
+      if (ahead > 0) {
+        const list = (gitTry(root, ['log', '--oneline', '-5', 'origin/main..HEAD']) || '')
+          .split('\n')
+          .filter(Boolean)
+          .map((x) => `  · ${x}`);
+        lines.push(`- **没进 main 的提交**（共 ${ahead} 个${ahead > 5 ? '，只列前 5' : ''}）：`, ...list);
+        lines.push(
+          `- **平台判定：本地有 ${ahead} 个提交没进主线 → ${behind ? '与 main 已分叉，先 `git pull --rebase` 对齐，然后' : ''}要开 PR / 合并。此刻不能说「和仓库一致」「不需要建 PR」。**`,
+        );
+      } else {
+        lines.push(
+          `- **平台判定：HEAD 已在 main 里 → 代码与主线一致**${behind ? `（本地落后 ${behind} 个，要 \`git pull --ff-only\` 才等于远端最新）` : ''}。`,
+        );
+      }
+      lines.push('（`origin/main` 是本地缓存，可能落后远端；要判"远端最新"得先 `git fetch origin`。）');
+    }
+  }
+
+  lines.push(
+    '- 引用就照上面这段说，**不要自己拼命令重算**；「工作区干净」「与同名分支同步」「没有 open PR」这三条都**不能**替代上面的领先数。',
+  );
+  return lines.join('\n');
+}
+
+/** 不是 git 仓库 / git 不可用 / 空仓 → 安静返回空串（宁可少一段，也不能挡住派活） */
+export function gitStateBlock(cwd) {
+  const root = String(cwd ?? '').trim();
+  if (!root) return '';
+  try {
+    return buildGitState(root);
+  } catch {
+    return '';
+  }
 }
