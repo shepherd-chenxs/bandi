@@ -437,7 +437,7 @@ export function repoBriefBlock(cwd) {
     '- 判"架构 / 结构 / 怎么组织的"这类问题：`docs/架构.md` + 各 `apps/*/src` 的入口文件（server.mjs、http.mjs 这类）读两三个就够下判断，**不要全仓扫**；没读到的地方就说"未验证"。',
     '- 读文件**一次读完**：有 `Read` 就先用 `Read`；非用 shell 不可时**必须显式 UTF-8** —— Windows 的 `Get-Content` 默认按 ANSI(GBK) 解码，UTF-8 文件里的中文会变成 `绛栫暐妫€鏌` 这种乱码，之后所有补丁都匹配不上（实测：改一个 yml 因此磨了 12 分钟、十几条工具调用）。只看一段用 `-TotalCount N` / `-Tail N`；**别用 `Select-Object -First 200` 分页读** —— 截断会逼你把同一个文件读第二、第三遍（实测 `dispatch.mjs` 被读 4 遍）。',
     '- **改文件用 `apply_patch`，不要用 shell 写**（`Set-Content` / `>` / `Add-Content` 会改掉编码和换行；文件里含 `${{ }}`、`${}` 这类字面量时，PowerShell 还会把它当变量展开直接报错）。`apply_patch` 报了「成功」也要 `git diff <file>` 复核一眼 —— 实测出现过返回 Success 但文件一个字节没变。',
-    '- 往外部接口发中文 JSON（比如 GitHub API 的 PR 标题）时，**shell 默认按 ANSI 编码发出去，中文会变 `?`** —— PowerShell 的 `Invoke-RestMethod -Body $json` 和 `Set-Content` 都这样。必须显式 UTF-8：`-Body ([System.Text.Encoding]::UTF8.GetBytes($json))`，或用 .NET `HttpClient` + `StringContent($json, [Text.Encoding]::UTF8, 'application/json')`。发完后再 GET 一遍确认对端真收到中文，别改完就当好了。（实测：PR #80 标题被编成 `fix(ui): ????????`。）',
+    '- **往外部接口发中文 JSON 时，显式声明 UTF-8**：shell 默认按 ANSI 编码发出去，中文全变 `?`（实测：GitHub 的 PR 标题被编成 `fix(ui): ????????`，改完还得靠 API 拉回来才发现）。要么先把 JSON 转成 UTF-8 字节再发，要么在 Content-Type 里带 charset；**发完一定 GET 回来确认对端收到的是中文**，别改完就当好了。',
   );
   const text = lines.join('\n');
   repoBriefCache.set(root, { at: Date.now(), text });
