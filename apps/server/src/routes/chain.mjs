@@ -64,7 +64,7 @@ export const CHAIN = [
   { id: 'users', handle: handleUsers, note: '账号 / 登录 / 安全（含 /api/me）' },
   { id: 'project', handle: handleProject, note: '项目、看板卡、评论、附件' },
   { id: 'workspace', handle: handleWorkspace, note: '工作区文件读取 + 系统打开' },
-  { id: 'status', handle: handleStatus, note: '状态账本 / 托管 / 项目状态' },
+  { id: 'status', handle: handleStatus, note: '控制面重启' },
   { id: 'fs', handle: handleFs, note: '目录列举（选工作目录用）' },
   { id: 'group', handle: handleGroup, note: '群聊' },
   { id: 'skill', handle: handleSkill, note: '技能包' },

@@ -5,7 +5,6 @@ import { sendJson, fail, readBody } from '../http.mjs';
 import * as store from '../store.mjs';
 import * as runs from '../runs.mjs';
 import * as workflows from '../workflows.mjs';
-import * as status from '../status.mjs';
 import { ensureTaskCardForStep } from '../project-tasks.mjs';
 
 export async function handleWorkflow(req, res, url) {

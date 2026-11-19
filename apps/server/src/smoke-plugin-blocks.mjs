@@ -3,7 +3,7 @@
  *
  * 为什么要单开一个用例：这次给宿主加的是**版式能力**，宿主里的算子（filter / sort / limit /
  * calc 四种聚合）一旦算错，页面只是"数字不对"，不会报错 —— 没人会去点。所以这几种算子
- * 全部拿纯函数直接钉住，再顺手校验两份 manifest 与几个"写错了要拦住"的形状。
+ * 全部拿纯函数直接钉住，再顺手校验 ssh 的 manifest 与几个"写错了要拦住"的形状。
  *
  * 不启服务、不碰真实 data/（插件数据整形是纯函数，见 apps/web/js/plugin-data.mjs）。
  * 跑法：node apps/server/src/smoke-plugin-blocks.mjs
@@ -25,7 +25,7 @@ const check = (label, ok, detail = '') => {
 };
 
 /* 一份最小的合法面板，用来测"形状写错了会不会被拦" */
-const base = (blocks, perms = ['GET:/api/status/projects']) => ({
+const base = (blocks, perms = ['GET:/api/plugins']) => ({
   id: 'x',
   label: 'X',
   panel: { slot: 'plugins', mode: 'declarative', blocks },
@@ -39,16 +39,16 @@ console.log('① 新块通过校验');
 {
   const ok = validateManifest(
     base([
-      { type: 'stats', source: { api: '/api/status/projects', pick: 'projects' }, items: [{ label: '总数', value: '{n}', calc: 'count' }] },
+      { type: 'stats', source: { api: '/api/plugins', pick: 'projects' }, items: [{ label: '总数', value: '{n}', calc: 'count' }] },
       {
         type: 'cards',
         heading: '项目进度',
         subheading: '已纳管 {shown_count} 个',
-        source: { api: '/api/status/projects', pick: 'projects', filter: { field: 'ok', is: true }, sort: { by: 'updated', dir: 'desc' }, limit: 5 },
+        source: { api: '/api/plugins', pick: 'projects', filter: { field: 'ok', is: true }, sort: { by: 'updated', dir: 'desc' }, limit: 5 },
         columns: 3,
         card: { title: '{name}', badge: '{status_text}', badgeTone: 'ok', lines: [{ label: '版本', value: '{version_count}' }], href: '#/project/{id}' },
       },
-      { type: 'list', aside: true, source: { api: '/api/status/projects', pick: 'projects' }, title: '{name}', subtitle: '{updated}' },
+      { type: 'list', aside: true, source: { api: '/api/plugins', pick: 'projects' }, title: '{name}', subtitle: '{updated}' },
     ]),
     'x',
   );
@@ -70,23 +70,23 @@ console.log('\n② 写错了要拦住（不然只是"画出来不对"，没人�
       .some((e) => e.includes('缺 where')));
   check('tone 只认三档',
     errs([{ type: 'stats', items: [{ label: '总数', value: '{n}', calc: 'count', tone: 'red' }] }]).some((e) => e.includes('tone')));
-  check('cards 缺 card', errs([{ type: 'cards', source: { api: '/api/status/projects' } }]).some((e) => e.includes('要有 card')));
+  check('cards 缺 card', errs([{ type: 'cards', source: { api: '/api/plugins' } }]).some((e) => e.includes('要有 card')));
   check('cards.card 缺 title',
-    errs([{ type: 'cards', source: { api: '/api/status/projects' }, card: { subtitle: '{x}' } }]).some((e) => e.includes('缺 title')));
+    errs([{ type: 'cards', source: { api: '/api/plugins' }, card: { subtitle: '{x}' } }]).some((e) => e.includes('缺 title')));
   check('cards.badgeTone 不认识的档位',
-    errs([{ type: 'cards', source: { api: '/api/status/projects' }, card: { title: '{n}', badgeTone: 'danger' } }])
+    errs([{ type: 'cards', source: { api: '/api/plugins' }, card: { title: '{n}', badgeTone: 'danger' } }])
       .some((e) => e.includes('badgeTone')));
   check('aside 只给 cards / list',
-    errs([{ type: 'table', aside: true, source: { api: '/api/status/projects' }, columns: [{ label: 'A', key: 'a' }] }])
+    errs([{ type: 'table', aside: true, source: { api: '/api/plugins' }, columns: [{ label: 'A', key: 'a' }] }])
       .some((e) => e.includes('aside 只支持')));
   check('source.filter 缺 field',
-    errs([{ type: 'cards', source: { api: '/api/status/projects', filter: { is: true } }, card: { title: '{n}' } }])
+    errs([{ type: 'cards', source: { api: '/api/plugins', filter: { is: true } }, card: { title: '{n}' } }])
       .some((e) => e.includes('filter 缺 field')));
   check('source.sort.dir 只认 asc / desc',
-    errs([{ type: 'cards', source: { api: '/api/status/projects', sort: { by: 'updated', dir: 'down' } }, card: { title: '{n}' } }])
+    errs([{ type: 'cards', source: { api: '/api/plugins', sort: { by: 'updated', dir: 'down' } }, card: { title: '{n}' } }])
       .some((e) => e.includes('sort.dir')));
   check('source.limit 要是正整数',
-    errs([{ type: 'cards', source: { api: '/api/status/projects', limit: 0 }, card: { title: '{n}' } }])
+    errs([{ type: 'cards', source: { api: '/api/plugins', limit: 0 }, card: { title: '{n}' } }])
       .some((e) => e.includes('limit')));
 }
 
@@ -142,53 +142,9 @@ console.log('\n③ filter / sort / limit / calc 算得对');
     String(calcVars({ s: { sumIf: { field: 'released_count', where: 'ok' } } }, trap).s));
 }
 
-/* ------------------------------------------------------ ④ 两份 manifest */
+/* ------------------------------------- ④ 老插件不受影响（形状没被新规则波及） */
 
-console.log('\n④ 两份 manifest 逐字节一致、结构照稿');
-{
-  const A = 'plugins/project-panel/manifest.json';
-  const B = 'apps/server/catalog/plugins/project-panel/manifest.json';
-  check('两份 manifest 逐字节一致', fs.readFileSync(path.join(repoRoot, A)).equals(fs.readFileSync(path.join(repoRoot, B))));
-
-  const m = readJson(A);
-  check('面板校验通过', validateManifest(m, 'project-panel').errors.length === 0, validateManifest(m, 'project-panel').errors.join('；'));
-  check('不再有 split（左列表 + 右详情已否）', !m.panel.split);
-  const types = m.panel.blocks.map((b) => b.type);
-  check('区块顺序：text → stats → cards（主列）→ cards（右栏）→ list（右栏）',
-    types.join(',') === 'text,stats,cards,cards,list', types.join(','));
-  const aside = m.panel.blocks.filter((b) => b.aside).map((b) => b.heading ?? b.type);
-  check('右栏两块（需要处理 / 最近动态）', aside.join(',') === '需要处理,最近动态', aside.join(','));
-  /*
-   * 2026-10-27 起面板要能「选择纳管哪些项目」，于是多两个口：账本全量（只读）+ 整表提交。
-   * 断言收紧成**穷举**而不是"含这三个" —— 插件一旦多申一个写权限，这里就该红。
-   */
-  check('权限只有三条（面板数据 + 账本 + 纳管保存）',
-    m.permissions.join(',') === 'GET:/api/status/projects,GET:/api/status/ledger,POST:/api/status/managed',
-    m.permissions.join(','));
-  const manage = m.panel.blocks.find((b) => b.manage)?.manage;
-  check('「选择项目」挂在项目进度那张卡的标题行（不是独立一节）',
-    !!manage && m.panel.blocks.find((b) => b.manage)?.heading === '项目进度', JSON.stringify(manage?.label));
-  check('选择弹窗的数据源是账本全量、保存走整表提交',
-    manage?.source?.api === '/api/status/ledger' && manage?.save?.api === '/api/status/managed' && manage?.save?.field === 'ids',
-    JSON.stringify([manage?.source?.api, manage?.save]));
-  check('首屏没有版本明细表', !m.panel.blocks.some((b) => b.type === 'table'));
-  const stats = m.panel.blocks.find((b) => b.type === 'stats');
-  check('KPI 四项（已纳入 / 有进度 / 缺进度 / 已发布）', stats.items.length === 4, stats.items.map((i) => i.label).join(' | '));
-  check('KPI 的聚合是写在 manifest 里的 calc（宿主没有业务字眼）',
-    stats.items.every((i) => i.calc !== undefined), JSON.stringify(stats.items.map((i) => i.calc)));
-  const main = m.panel.blocks.filter((b) => b.type === 'cards' && !b.aside)[0];
-  check('主列卡片只画已纳管（filter ok:true）', main.source.filter?.field === 'ok' && main.source.filter?.is === true);
-  check('主列三列（照稿）', main.columns === 3);
-  check('筛掉的条数进 subheading（{shown_count}）', /\{shown_count\}/.test(main.subheading), main.subheading);
-  check('卡片可点（data-card-href 的模板）', String(main.card.href).includes('{id}'), String(main.card.href));
-  check('卡上带「最新发布」两字段，字段没落时用 fallback 文案',
-    main.card.foot?.[0]?.label === '最新发布' && /latest_released_version/.test(main.card.foot[0].value) && !!main.card.foot[0].fallback,
-    JSON.stringify(main.card.foot?.[0]));
-}
-
-/* ------------------------------------- ⑤ 老插件不受影响（形状没被新规则波及） */
-
-console.log('\n⑤ 老插件（ssh）的 manifest 照样合法');
+console.log('\n④ 老插件（ssh）的 manifest 照样合法');
 for (const p of ['plugins/ssh/manifest.json', 'apps/server/catalog/plugins/ssh/manifest.json']) {
   if (!fs.existsSync(path.join(repoRoot, p))) continue;
   const m = readJson(p);

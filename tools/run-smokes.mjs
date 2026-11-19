@@ -136,7 +136,6 @@ const RUN = [
   'apps/server/src/smoke-schedules.mjs',
   'apps/server/src/smoke-steward.mjs',
   'apps/server/src/smoke-ssh.mjs',
-  'apps/server/src/smoke-status.mjs',
   'apps/server/src/smoke-stop-keep.mjs',
   'apps/server/src/smoke-stop-watchdog.mjs',
   'apps/server/src/smoke-task-comments.mjs',

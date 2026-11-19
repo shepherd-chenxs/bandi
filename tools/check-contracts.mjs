@@ -693,7 +693,6 @@ const ALLOW_ORPHANS = [
   { id: 'local.hosts.remove', why: '同上：/api/local/hosts/* 是局域网手动加主机的一组本机接口，仓内入口已收' },
   { id: 'local.hosts.test', why: '同上：/api/local/hosts/* 是局域网手动加主机的一组本机接口，仓内入口已收' },
   { id: 'control.restart', why: '改监听地址后的"重启控制面"：由桌面壳 / systemd 监护进程调用（仓内只有 config.mjs 的说明），走 machine:manage' },
-  { id: 'status.project.one', why: '连接器 / 插件面板按项目 id 取状态详情；仓内通用面板用 pick 字段，不拼字面量' },
   { id: 'security.auditExport', why: '审计导出按钮在 admin 设置页里按 kind 拼查询串（抽取后是 /export${}，见 ② 的宽松尾段规则）；保留' },
   { id: 'security.auditClear', why: '清空审计日志：破坏性动作，只在 admin 设置页的确认流程里出现（前端字符串拼接，静态只是一条 /clear）' },
 ];

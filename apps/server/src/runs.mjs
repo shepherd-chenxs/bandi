@@ -437,10 +437,10 @@ export function startRun({ thread, member, task, standing = null, watermark = 0,
        2026-11-19 文案改版：显示运行时**名字**而不是 rt-xxx 机器 ID；前端失败气泡会在
        前面补「这轮没跑起来——」，并把「设置 → 运行时」做成真链接，这里只写原因和引导。 */
     const err = !rt && runtime === 'auto'
-      ? '他想自动挑一个运行时，但这台机器上还没有能用的。去「设置 → 运行时」接一个。'
+      ? '我想自动挑一个运行时，但这台机器上还没有能用的。去「设置 → 运行时」接一个。'
       : rt
-        ? `他挂的运行时「${rt.name || runtime}」已经被停用了。去「设置 → 运行时」换一个，或者重新启用。`
-        : `他挂的运行时「${runtime}」在这台机器上找不到了。去「设置 → 运行时」换一个。`;
+        ? `我挂的运行时「${rt.label || runtime}」已经被停用了。去「设置 → 运行时」换一个。`
+        : `我挂的运行时「${runtime}」在这台机器上找不到了。去「设置 → 运行时」换一个。`;
     finish(run, {
       status: 'failed',
       exitCode: null,

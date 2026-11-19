@@ -26,7 +26,6 @@ import * as workflows from './workflows.mjs';
 import * as prReview from './pr-review.mjs';
 import * as prCreate from './pr-create.mjs';
 import * as selfDelivery from './self-delivery.mjs';
-import * as status from './status.mjs';
 import { projectTasks, allTasks, personaTasks, createProjectTask, updateProjectTask, startProjectTask, onTaskRunFinished, afterMerged, upsertRepoCard, ensureTaskCardForStep } from './project-tasks.mjs';
 import * as git from './git-repos.mjs';
 import * as schedules from './schedules.mjs';
@@ -250,22 +249,6 @@ const routes = {
       catalogRoot: plugins.catalogRoot,
       ledgerPath: plugins.ledgerPath(),
     });
-  },
-
-  /**
-   * 项目进度总览 —— 「研发面板」（插件 project-panel）的数据源（只读）。
-   *
-   * 项目清单来自平台自己的项目账本，但**只出被选中纳管的那些**（2026-10-27 用户：
-   * 「要能选择把哪些项目纳管进来」）。没选进来的项目不是"出错"，是不在关心范围里 ——
-   * 全摊出来再把读不到进度文件的标红，等于让噪音把进度淹掉。
-   * 选哪些在 `GET /api/status/ledger`（账本全量）+ `POST /api/status/managed`（整表提交）。
-   *
-   * 纳管进来但读不到 `.bandi/status.yaml` 的**照样列出来**（标「缺进度文件」），
-   * 不自动踢出去、不猜 —— 那是"该去补一份"，不是"不该纳管"。
-   */
-  'GET /api/status/projects': async (req, res) => {
-    // 人名由这一层查（status.mjs 只读文件、不碰库；见 routes/status.mjs 的说明）
-    sendJson(res, 200, { projects: status.listProjectCards(store.listManagedProjects(), (id) => store.getPersona(id)) });
   },
 
   /** 服务器登记总览 —— 只出安全字段（不出私钥路径）。界面插件的数据源 */

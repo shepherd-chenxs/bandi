@@ -214,7 +214,7 @@ table.md-t code { font-size: 11.5px; }
 #chat code[data-file]:hover { color: var(--accent); }
 
 /* ══════════════════════════════════════════════════════════════════════
-   声明式插件的新版式块（2026-10-24 · 研发面板概览稿）
+   声明式插件的新版式块（2026-10-24 · 插件概览稿）
    ─────────────────────────────────────────────────────────────────────
    新增两种块 `stats`（一行数字卡）/ `cards`（卡片网格），外加两列版式
    `.plg-layout`（主列 1fr + 右栏 340px，靠块上的 `aside: true` 触发）。
@@ -243,7 +243,7 @@ table.md-t code { font-size: 11.5px; }
 /* 「全部项目 ›」这类入口：本版只占位（不导航），所以做成一行弱色小字而不是按钮 */
 .plg-sec-more { margin-left: auto; flex: 0 0 auto; font-size: 12px; color: var(--accent); cursor: pointer; }
 .plg-sec-more:hover { text-decoration: underline; }
-/* 分节标题行右侧的**动作**按钮（2026-10-27，研发面板「选择项目」）：
+/* 分节标题行右侧的**动作**按钮（2026-10-27，插件 cards.manage「选择…」）：
    跟 .plg-sec-more 同一个位置，区别是它能点出结果 —— more 只是给人看的一句说明。
    ⚠️ 标题行是 baseline 对齐的，按钮得自己定高，否则会跟 11.5px 的副标题错开半行。 */
 .plg-sec-act { margin-left: auto; flex: 0 0 auto; height: 26px; padding: 0 10px;

@@ -251,10 +251,8 @@
 <dialog id="groupDlg">
   <form method="dialog">
     <b>新建项目群</b>
-    <label>群名</label><input id="gTitle" placeholder="例如：班底平台 v0.1" />
-    <label>群助手（没人被 @ 时由他接话）</label><div id="gAssistantMount"></div>
-    <!-- 成员勾选去掉（2026-11-19 用户：发起群聊只要群名 + 群助手就够了）；
-         服务端建群时会把群助手自动加进群成员，群里要再加人走「拉人进群」。 -->
+    <input id="gTitle" placeholder="群名" />
+    <!-- 群助手默认贺韬，建群后可在群设置里更换；加人走「拉人进群」。 -->
     <div class="dlg-actions">
       <button type="button" value="cancel">取消</button>
       <button class="primary" id="gOk" value="ok">创建</button>

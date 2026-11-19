@@ -1,8 +1,8 @@
 /* misc.mjs —— 新建群、换群助手、绑定、列表项右键菜单（绑定）、版本提醒。
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。
  * 2026-11-11 起「新建员工」整段撤掉（用户拍板：不保留自建员工，岗位固定、只能从专家库雇佣）。 */
-import { esc, personLabel, restorePlace, roleNameOf, toast } from './shell.mjs';
-import { api, createCombo } from './ui.mjs';
+import { esc, restorePlace, roleNameOf, toast } from './shell.mjs';
+import { api } from './ui.mjs';
 import { load } from './state.mjs';
 import { openPluginForm, pluginFormId, refreshGroup } from './experts.mjs';
 import { $, S } from './core.mjs';
@@ -41,23 +41,9 @@ export function sandboxItems(runtime) {
 
 /* ---------------------------------------------------------------- 新建群 */
 
-// 「群助手」下拉：员工可能很多，带搜索
-// 2026-11-19：发起群聊只留群名 + 群助手，成员勾选去掉 —— 服务端建群时会把群助手
-// 自动加进群成员（store.createGroup 把 assistantPersonaId 一并写进 group_members），
-// 群里要再加人走聊天页的「拉人进群」。所以这里 onChange 不需要再重画成员格。
-export const gAssistantCombo = createCombo({
-  mount: $('gAssistantMount'),
-  search: true,
-  placeholder: '搜员工…',
-});
-
-
-
 export function openGroupDialog() {
   if (!S.personas.length) return toast('先建至少一个数字员工，群里只能放数字员工');
   $('gTitle').value = '';
-  gAssistantCombo.setItems(S.personas.map((p) => ({ id: p.id, label: personLabel(p) })), false);
-  gAssistantCombo.setValue(S.personas[0]?.id ?? '');
   $('groupDlg').showModal();
 }
 

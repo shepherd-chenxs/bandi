@@ -5,7 +5,6 @@
 
 import { sendJson, fail, readBody } from '../http.mjs';
 import * as store from '../store.mjs';
-import * as status from '../status.mjs';
 import { updateProjectTask, afterMerged, createProjectTask } from '../project-tasks.mjs';
 import * as git from '../git-repos.mjs';
 import * as commitMsg from '../commit-msg.mjs';

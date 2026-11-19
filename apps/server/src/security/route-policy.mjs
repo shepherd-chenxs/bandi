@@ -230,10 +230,6 @@ export const ROUTES = [
   { id: 'workspace.file', m: ['GET', 'POST'], path: p('/api/workspace/file'), auth: 'session' },
   { id: 'open.path', m: ['POST'], path: p('/api/open'), auth: 'session' },
   { id: 'fs.dirs', m: ['GET'], path: p('/api/fs/dirs'), auth: 'session', noPanel: true, note: '任意目录列举 = 摸操作员整块磁盘' },
-  { id: 'status.ledger', m: ['GET'], path: p('/api/status/ledger'), auth: 'session' },
-  { id: 'status.managed', m: ['POST'], path: p('/api/status/managed'), auth: 'session' },
-  { id: 'status.projects', m: ['GET'], path: p('/api/status/projects'), auth: 'session' },
-  { id: 'status.project.one', m: ['GET'], path: p('/api/status/projects', id1), auth: 'session' }, // 详情（版本/要点）—— 2026-10-31 收尾回归抓漏补登
   { id: 'plugins.list', m: ['GET'], path: p('/api/plugins'), auth: 'session' },
   { id: 'plugin.action', m: ['POST'], path: p('/api/plugins', id1, '(?:install|enable|disable)'), auth: 'session', noPanel: true, note: '插件装卸 = 在总机上落代码' },
   { id: 'plugin.delete', m: ['DELETE'], path: p('/api/plugins', id1), auth: 'session', noPanel: true },
