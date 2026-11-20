@@ -32,6 +32,9 @@
 .gr-dot { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; background: var(--dim); opacity: .55; }
 .gr-dot.ok { background: var(--ok); opacity: 1; }
 .gr-side-btn-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* PR 区未连 GitHub 账号时只放一个「连接」按钮（2026-11-20 形态改造）：
+   没账号不是"错误状态"，是这块功能还没启用 —— 区域照画，点一下就有，别整块消失。 */
+.gr-pr-off { padding: 10px 4px; }
 /* 连接弹窗：动态 dialog，行式表单（标签左、控件右） */
 .gr-conn-dlg { width: 600px; max-width: 92vw; }
 /* 仓库设置弹窗（2026-10-27，用户："仓库设置区太占地方 → 右上角设置按钮点开"）：

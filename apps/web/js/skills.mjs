@@ -102,8 +102,9 @@ export async function openGitConnDlg(st = null, onDone = null) {
     const form = document.createElement('form');
     form.method = 'dialog';
     form.innerHTML = `
-      <b>GitHub 连接</b>
+      <b>GitHub 账号</b>
       <div class="gr-dlg-body">
+        <div class="gr-help-note">只管建 PR、合并、从账号里添加仓库。提交和推送走 git 自己的凭据，不用连这里。</div>
         ${
           st.connected
             ? `<div class="gr-dlg-row">
@@ -624,16 +625,23 @@ export async function renderGitRepos(root = $('pluginView')) {
 
   const foot = $('listFoot');
   if (foot) {
-    foot.innerHTML = `
+    /*
+     * GitHub 账号入口只关 PR / 合并的事（2026-11-20 改形态，学 IDEA）：
+     * 以前未连接时这儿常驻一条「GitHub 未连接 · 点击连接」，用户会读成
+     * "没连上，那我提交/推送是不是也不能用" —— 文案怎么改都在解释，不如不放。
+     * 现在：已连接才显示账号（点开可断开）；未连接什么都不显示，入口只留在
+     * 真正需要它的地方（PR 区、从账号添加仓库）。
+     */
+    foot.innerHTML = st.connected
+      ? `
     <div class="gr-side">
       <button type="button" class="gr-side-btn" id="gitConnOpen"
-              title="${st.connected ? 'GitHub 连接设置：令牌、断开' : '连接 GitHub（令牌只存本机）'}">
-        <span class="gr-dot${st.connected ? ' ok' : ''}"></span>
-        <span class="gr-side-btn-label">${
-          st.connected ? `GitHub 已连接${st.login ? ` · @${esc(st.login)}` : ''}` : 'GitHub 未连接 · 点击连接'
-        }</span>
+              title="GitHub 账号设置：令牌、断开">
+        <span class="gr-dot ok"></span>
+        <span class="gr-side-btn-label">GitHub${st.login ? ` · @${esc(st.login)}` : ''}</span>
       </button>
-    </div>`;
+    </div>`
+      : '';
     foot.querySelector('#gitConnOpen')?.addEventListener('click', () => openGitConnDlg(st, refresh));
   }
 
@@ -737,11 +745,13 @@ export async function renderGitRepos(root = $('pluginView')) {
          <section class="fx"><div id="grPush"><div class="sk-blank">读推送状态…</div></div></section>
        </div>
       <!--
-        拉取请求 + PR 列表只有 GitHub 关联的仓库才有（2026-10-30 重新定位：本地代码托管不走 GitHub，
-        名字随便起，没有 owner/name 就查不到 PR —— 硬画出来只会永远"取不到"）。
-        本地托管改成一句说明：代码在本机管，提交 / 推送 / 分支照常。
+        PR 区只跟「这个仓库有没有 GitHub 地址」和「账号连没连」有关（2026-11-20 改形态）：
+        · 有 GitHub 地址 + 已连接 → 正常画建 PR / 合并那几张卡
+        · 有 GitHub 地址 + 没连接 → 区域照画，里面只放一个「连接」行动按钮 ——
+          这不是错误状态，是"PR 功能还没启用"，点一下就能用
+        · 没有 GitHub 地址 → 代码在本机管，提交 / 推送 / 分支照常，不出 PR 卡
       -->
-      ${ghLinked ? `<div class="plg-sec">
+      ${ghLinked ? (st.connected ? `<div class="plg-sec">
         <div class="plg-sec-head">
           <label class="plg-sec-title">拉取请求</label><span class="dim" id="grPullsHead"></span>
           <button type="button" class="mini auto gr-pulls-refresh" id="grPullsRefresh" title="从 GitHub 重新取一次">刷新</button>
@@ -756,8 +766,13 @@ export async function renderGitRepos(root = $('pluginView')) {
         <section class="fx"><div id="grReview"><div class="sk-blank">取 PR…</div></div></section>
       </div>` : `<div class="plg-sec">
         <div class="plg-sec-head"><label class="plg-sec-title">拉取请求</label></div>
-        <section class="fx"><div class="sk-blank">这是本地托管的仓库（没有关联 GitHub 仓库）—— 代码在本机管理，
-          提交、推送、切分支都照常，只是不出 PR / 合并那几张卡。要接 GitHub 上的 PR，用「＋」从账号里加仓库。</div></section>
+        <section class="fx"><div class="gr-pr-off">
+          <button type="button" class="primary" id="grPrConnect">连接 GitHub 账号</button>
+        </div></section>
+      </div>`) : `<div class="plg-sec">
+        <div class="plg-sec-head"><label class="plg-sec-title">拉取请求</label></div>
+        <section class="fx"><div class="sk-blank">这个仓库没有 GitHub 地址 —— 代码在本机管理，
+          提交、推送、切分支都照常。要接 GitHub 上的 PR，用「＋」从账号里加仓库。</div></section>
       </div>`}
        <div class="plg-sec">
          <div class="plg-sec-head"><label class="plg-sec-title">历史</label></div>
@@ -811,7 +826,12 @@ export async function renderGitRepos(root = $('pluginView')) {
       inp.focus();
       return true;
     }
-    if (op === 'pr') { openRepoPrDialog(sel, refresh); return true; }
+    if (op === 'pr') {
+      // 没连账号时，这一下就是"启用 PR 功能"的入口：先弹账号框，连完原地重画（2026-11-20 改形态）
+      if (!st.connected) { openGitConnDlg(st, refresh); return false; }
+      openRepoPrDialog(sel, refresh);
+      return true;
+    }
     return false;
   };
 
@@ -1053,8 +1073,11 @@ export async function renderGitRepos(root = $('pluginView')) {
    */
   if (sel) {
     fillChanges(sel);
-    if (ghLinked) fillPulls(sel);   // 本地托管的仓库没有 PR 区，别去连 GitHub
+    // PR 要调 GitHub API：没地址、或账号没连，都别去请求（没连时那格放的是「连接」按钮）
+    if (ghLinked && st.connected) fillPulls(sel);
     fillLog(sel);
+    // PR 区未连接时的那个「连接 GitHub 账号」：连完原地重画，PR 卡就出现了
+    $('grPrConnect')?.addEventListener('click', () => openGitConnDlg(st, refresh));
     // PR 区右上那颗「刷新」：只重取 PR（合并/建 PR 之外，比如在 GitHub 上手动关了 PR 时用）
     $('grPullsRefresh')?.addEventListener('click', () => {
       fillPulls(sel).catch((e) => toast(e.message, 'error'));
