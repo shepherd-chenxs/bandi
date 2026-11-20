@@ -31,7 +31,8 @@
       "runtime/plugins": "plugins",
       "runtime/LICENSE": "LICENSE",
       "runtime/NOTICE": "NOTICE",
-      "runtime/node-LICENSE.txt": "node-LICENSE.txt"
+      "runtime/node-LICENSE.txt": "node-LICENSE.txt",
+      "runtime/third-party": "third-party"
     },
     "copyright": "Copyright 2026 牧羊人",
     "publisher": "牧羊人",

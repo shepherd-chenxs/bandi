@@ -66,6 +66,10 @@ jobs:
             throw "tag 是 ${{ github.ref_name }}，但 version.json 是 $want —— 版本真源唯一，先改 version.json 再打 tag。"
           }
 
+      - name: 装依赖（better-sqlite3 的原生模块随包分发）
+        # Node 版本必须与下面 fetch-node 取的 22.x 同一 ABI 线，否则原生模块装不进包
+        run: npm ci
+
       - name: 取 Node 运行时（安装包必须自带，不许要求用户自装）
         run: node apps/desktop/fetch-node.mjs
 

@@ -97,6 +97,9 @@ const HOST_ALLOW = [
   'ghfast.top',
   'www.patreon.com',
   'feross.org',
+  // SQLite 官方项目主页（2026-11-20）：NOTICE 里标注 better-sqlite3 内置的数据库引擎
+  // 出处与许可（public domain）—— 是官方源，不是中转站/网关。
+  'sqlite.org',
 ];
 
 /*

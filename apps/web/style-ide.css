@@ -51,17 +51,18 @@
 .gr-branch .combo-group, .gr-branch .combo-group.combo-sub { font-weight: 400; }
 /* 改动卡（2026-10-27 改分栏，用户："左边文件，右边输入区和提交"；标题同日改「提交」）：
    左 = 文件清单（diff 展开跟文件行走），右 = 提交说明 + 提交按钮，中间一条分隔线。
-   区域高度固定（460px），文件多了在左栏里滚 —— 卡片不再跟着 62 个文件无限撑高。 */
-.gr-chg-split { display: flex; align-items: stretch; gap: 0; height: 460px; }
+   区域高度固定，文件多了在左栏里滚 —— 卡片不再跟着几十个文件无限撑高。
+   2026-11-20 用户："这个高度改小一些"：460 → 380。 */
+.gr-chg-split { display: flex; align-items: stretch; gap: 0; height: 380px; }
 .gr-chg-split .gr-chg-list { flex: 1; min-width: 0; overflow-y: auto; }
 .gr-commit-side { flex: 0 0 320px; display: flex; flex-direction: column; gap: 10px;
                   padding: 12px 0 12px 14px; margin-left: 3px; border-left: 1px solid var(--line); }
                   /* margin-left 12→3（2026-10-27 用户："滚动条跟右边的间隙减小"）：
                      左栏滚动条槽已占住列表右缘，分隔线再退 12px 就是一段死空 —— 贴近它。 */
 /* 提交说明框（2026-10-29 三调，用户："撑满太高了看着不舒服，高度减一点"）：
-   从撑满（flex:1 ≈ 400px）退到定高 320px，按钮紧跟在框下面、列底留白；
-   resize: vertical 留着 —— 高低不合意自己拖。 */
-.gr-commit-side textarea { width: 100%; flex: 0 0 auto; height: 320px; resize: vertical; }
+   从撑满（flex:1 ≈ 400px）退到定高；2026-11-20 随整卡降到 380 再收到 240 ——
+   按钮紧跟在框下面、列底留白；resize: vertical 留着 —— 高低不合意自己拖。 */
+.gr-commit-side textarea { width: 100%; flex: 0 0 auto; height: 240px; resize: vertical; }
 /* 提交按钮美化（2026-10-29 用户："提交按钮美化一下"）：仍是全局 primary 的实心底
    （--btn-solid / --on-solid，跟暗色主题不脱钩），只在动作条这颗上加一点体面 ——
    定高 32px、600 字重、顶部一道 1px 内高光（同 668 行实心钮的作法）、

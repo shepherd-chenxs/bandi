@@ -4,10 +4,16 @@ Copyright 2026 牧羊人
 本产品由 牧羊人 开发。
 
 第三方说明：
-  · frp（https://github.com/fatedier/frp，Apache-2.0）—— 安装包随附的 `vendor/frp/bandi-tunnel`
-    是它的客户端二进制（源码未修改，从官方 v0.72.0 标签重新编译并改名，以避免杀软对官方
-    二进制的误报），外网访问（中枢转发）用它建立隧道。许可副本随二进制一起放在
-    `vendor/frp/frp-LICENSE.txt`；本产品与该项目无隶属关系，也不代表其背书。
+  · better-sqlite3（https://github.com/WiseLibs/better-sqlite3，MIT）—— 控制面的数据库驱动。
+    安装包的 `apps/node_modules/better-sqlite3` 是它的发行版（含原生模块
+    `build/Release/better_sqlite3.node`，源码未修改）。许可原文随包放在安装目录的
+    `third-party/better-sqlite3-LICENSE.txt`。
+  · SQLite（https://sqlite.org，public domain）—— better-sqlite3 内置的数据库引擎，
+    已编译进上面那个原生模块。
+  · bindings（https://github.com/TooTallNate/node-bindings，MIT）与
+    file-uri-to-path（https://github.com/TooTallNate/file-uri-to-path，MIT）——
+    better-sqlite3 加载原生模块用的运行时依赖，许可原文同在 `third-party/` 下。
+  · Node.js —— 安装包自带 `node.exe`，其许可声明见安装目录的 `node-LICENSE.txt`。
   · 本仓库**不分发** Codex CLI / Claude Code / DeepSeek Harness 等 agent CLI ——
     由使用者自行安装、自备凭据，各自的许可与条款归各自。
   · magpie（本机模型网关）是**独立项目**，不随本仓库分发；

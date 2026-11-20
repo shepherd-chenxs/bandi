@@ -47,11 +47,16 @@ BANDI_SHELL FAILED <说明>       起不来
 ## 打包
 
 ```sh
+npm ci                                # 0) 装第三方运行时依赖（better-sqlite3 的原生模块在这里）
 node apps/desktop/fetch-node.mjs      # 1) 取 Node 运行时 ＋ 它的 LICENSE（82 MB，不进版本控制）
-node apps/desktop/stage-runtime.mjs   # 2) 把运行时与许可文本摊到 runtime/（安装包要带它们）
+node apps/desktop/stage-runtime.mjs   # 2) 把运行时、依赖与许可文本摊到 runtime/（安装包要带它们）
 cd apps/desktop
 npx --yes @tauri-apps/cli@2 build     # 3) 出安装包
 ```
+
+⚠️ **Node 版本要对齐**：`better-sqlite3` 的原生模块按 Node ABI 编译，必须和第 1 步取的
+22.x 一致（`npm rebuild better-sqlite3`）。版本错位时装出来的软件一启动就是
+`NODE_MODULE_VERSION` 不匹配 —— 不是打包漏带，是这个二进制选错了运行环境。
 
 产物：`target/release/bundle/nsis/班底_<版本>_x64-setup.exe`（约 22 MB；装完约 86 MB，其中 82 MB 是 node.exe）。
 
@@ -64,7 +69,7 @@ workflow 里还有一步：上传前把这个 Release 上名字不对的旧资�
 ⚠️ **产物没有代码签名**：下载的人会看到 SmartScreen「未知发布者」；要消掉得买证书（OV/EV 或
 Azure Trusted Signing），再在 workflow 里加一步 signtool。Release 正文里已写明这一点。
 
-**安装包里的许可文本（已打通，别删那几条映射）**：随包分发必须带三份文件 —— `stage-runtime.mjs`
+**安装包里的许可文本（已打通，别删那几条映射）**：随包分发必须带这些文件 —— `stage-runtime.mjs`
 把它们摊进 `runtime/`，`tauri.conf.json` 的 `bundle.resources` 各有映射，装完落在**安装目录根**上：
 
 | 文件 | 为什么 |
@@ -72,10 +77,11 @@ Azure Trusted Signing），再在 workflow 里加一步 signtool。Release 正�
 | `LICENSE` | Apache-2.0 第 4 条（a）：随分发给用户一份许可副本 |
 | `NOTICE` | 同条（d）：保留 NOTICE（署名与第三方说明） |
 | `node-LICENSE.txt` | 安装包把 `node.exe` 一起分发 —— 再分发 Node 就得带它的许可声明（那份里含它自己的一串第三方：OpenSSL / V8 / npm / ICU…） |
+| `third-party/` | better-sqlite3 / bindings / file-uri-to-path 的 MIT 许可原文 —— 随包分发它们就得带版权与许可声明 |
 
 `node-LICENSE.txt` 由第 1 步从 Node 压缩包里取（**只取 `node.exe` 就漏了它**），另两份从仓库根拷；
 两个脚本都是**缺文件即失败**，不做"少一个也能装"的兜底 —— 那种兜底正是缺口被漏过去的方式。
-**验收不看配置看产物**：装完打开安装目录，这三个文件都在。
+**验收不看配置看产物**：装完打开安装目录，这些文件与 `third-party/` 都在。
 （`resources` 的源路径跳不出 `apps/desktop/`，所以只能走摊平这条路。）
 
 **第 1 步为什么必须**：`v1.0.0` 的 B2 —— 不许要求用户自装运行时，安装包必须自带 Node。
