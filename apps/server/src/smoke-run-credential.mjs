@@ -8,7 +8,7 @@
  *
  * 钉三件事：
  *   ① **纯策略**：run 身份只放行清单里 `run: true` 的几扇门（建卡 + 只读台账），
- *      其余一律 E4034；operator / 登录用户的放行面不变（抽两条防回归）。
+ *      其余一律 E4034；本机钥匙 / 登录用户的放行面不变（抽两条防回归）。
  *   ② **强制鉴权模式端到端**：真起服务（`BANDI_HOST=0.0.0.0`）+ 真跑一轮假 agent
  *      （fixtures/fake-agent.js 的 CREATE_CARD / PROBE 两个开关）——
  *      运行钥匙能建卡（201）、能读 /api/projects /api/state /api/tasks /api/runtimes（200）、
@@ -73,8 +73,9 @@ console.log('① 纯策略：run 身份 = 清单里 run:true 那几扇门，别�
     const d = authorize({ who: run, method: m, pathname: p });
     check(`拒绝 ${m} ${p}`, d === 'E4034', d);
   }
-  // 防回归：这次只加 run 一档，operator / 登录用户的面不许被收窄
-  check('operator 照旧全权', authorize({ who: { kind: 'operator' }, method: 'GET', pathname: '/api/users' }) === 'allow');
+  // 防回归：这次只加 run 一档，人的面不许被收窄（本机钥匙已合成成 user，见 guard）
+  check('本机钥匙合成的机主照旧全权',
+    authorize({ who: { kind: 'user', userId: 'u-owner', via: 'local-key' }, method: 'GET', pathname: '/api/users' }) === 'allow');
   check('登录用户照旧全权', authorize({ who: { kind: 'user', userId: 'u-x' }, method: 'DELETE', pathname: '/api/users/u-y' }) === 'allow');
 }
 

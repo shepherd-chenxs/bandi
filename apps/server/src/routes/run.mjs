@@ -4,7 +4,6 @@
 import { sendJson, fail } from '../http.mjs';
 import * as store from '../store.mjs';
 import * as runs from '../runs.mjs';
-import * as status from '../status.mjs';
 
 export async function handleRun(req, res, url) {
   const stream = /^\/api\/runs\/([^/]+)\/stream$/.exec(url.pathname);

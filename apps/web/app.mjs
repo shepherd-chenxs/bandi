@@ -41,7 +41,7 @@ import { consumeMemberCandidates, deleteSessionFromLog, memberPicked, renderMemb
 import { applyFormDefaults, closeDrawer, pluginMust, refreshGroup, rerenderPanel, runFormFollow } from './js/experts.mjs';
 import { startEvents } from './js/events.mjs';
 import { $, S } from './js/core.mjs';
-import { boot, gAssistantCombo, openGroupDialog, openPluginAdd, startVersionWatch } from './js/misc.mjs';
+import { boot, openGroupDialog, openPluginAdd, startVersionWatch } from './js/misc.mjs';
 
 
 
@@ -408,12 +408,10 @@ $('mOk').onclick = async (e) => {
 
 
 
-// 发起群聊：只要群名 + 群助手（2026-11-19 用户去掉了成员勾选）。
-// 服务端建群时会把群助手自动加进群成员，再加人走聊天页「拉人进群」。
+// 发起群聊只填群名，群助手默认贺韬；建好后可在群设置里更换。
 
 $('gOk').onclick = async (e) => {
   e.preventDefault();
-  const assistantPersonaId = gAssistantCombo.value();
   /*
    * 群名**本地先拦**（2026-10-20 用户截图：空名点创建，弹「E1006：服务异常」）。
    * 空名根本不用发请求 —— 服务端对空标题回的是通用错误码，界面上就成了
@@ -426,7 +424,7 @@ $('gOk').onclick = async (e) => {
     return;
   }
   try {
-    const d = await post('/api/groups', { title, assistantPersonaId });
+    const d = await post('/api/groups', { title, assistantPersonaId: 'p-expert-hetao' });
     $('groupDlg').close();
     await load();
     setNav('messages');

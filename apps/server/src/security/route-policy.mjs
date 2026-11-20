@@ -10,16 +10,14 @@
  *                 拒绝仍由 decide()/handler 负责 —— 分两步收，一次全收必翻车）；
  *   · `auth`   —— `public`（guard 在认证前放行）/ `session`（要身份，按 kind 判）/
  *                 `local`（本机接口，handler 里走 authorizeLocal）；
- *   · `noPanel`—— 原为节点 panel 令牌的禁止标记（原 PANEL_FORBIDDEN 逐条迁进来）；
- *                 节点令牌 2026-11-09 随多机子系统整体删除后，该标记仅作管理动作的
- *                 存档语义保留（运行时已无 panel 身份会来查它）；
  *   · `run`    —— **运行钥匙**（数字员工进程，`X-Bandi-Run-Token`）可达：建卡通道 +
  *                 只读台账。没标的一律 403 `E4034`。2026-11-08 全员群实报 401 后补：
  *                 真机监听 0.0.0.0 时认证层不认这把钥匙，建卡与台账整条断掉；
  *                 现在开哪几扇门全凭这个标记（见 policy.mjs 的 run 分支）。
  *
  * 2026-11-07：`perm` / `member` 字段与角色体系一起退场 —— 登录用户全权，
- * 分级只剩机器身份（operator / run）自己的边界。手机设备那条（`device` 标）随配对
+ * 分级只剩 `run`（一轮活）自己的边界；`operator` 2026-11-20 下线（本机钥匙 →
+ * 机主本人，不再是第三种身份）。手机设备那条（`device` 标）随配对
  * 体系同日退场：手机现在也是登录进来的 user。多机节点的全部条目
  * （nodes.* / run.events / run.finish）2026-11-09 随子系统整体删除；
  * 本机软件商店安装任务通道改挂 `/api/install/tasks`（原 /api/nodes/local/tasks）。
@@ -82,9 +80,9 @@ export const ROUTES = [
   /* ------------------------------------------------- 登录用户与手机设备共用 */
   { id: 'state.read', m: ['GET'], path: p('/api/state'), auth: 'session', run: true, call: 'GET /api/state', note: '运行钥匙可读（台账全量：花名册人 id / 谁在忙 / 会话；PM 先读这条，别找 /api/personas）' },
   { id: 'me.read', m: ['GET'], path: p('/api/me'), auth: 'session', note: '「我是谁」—— 登录完第一件事' },
-  // 改中枢密码（2026-11-10）：只认会话里的 user（operator 没有中枢账号），
-  // handler 里再判 kind —— 这里登记的是"存在"。真验证在中枢（/v1/auth/password）。
-  { id: 'me.password', m: ['POST'], path: p('/api/me/password'), auth: 'session', noPanel: true, note: '「我的 › 修改密码」：转发中枢，本机不存密码' },
+  // 改中枢密码（2026-11-10）：本机不存密码，真验证在中枢（/v1/auth/password）。
+  // 这里登记的是"存在"；handler 里要求有真实账号（运行钥匙过不来）。
+  { id: 'me.password', m: ['POST'], path: p('/api/me/password'), auth: 'session', note: '「我的 › 修改密码」：转发中枢，本机不存密码' },
   { id: 'skills.list', m: ['GET'], path: p('/api/skills'), auth: 'session' },
   // 信箱（2026-11-11）：列表 / 未读数 / 标记已读 —— 都是登录用户自己的界面状态
   { id: 'notices.list', m: ['GET'], path: p('/api/notices'), auth: 'session' },
@@ -102,8 +100,8 @@ export const ROUTES = [
   // 「言简意赅」开关点的就是它，一点就 404 E4090。语义：改**全体数字员工**的沟通
   // 偏好（存 config.json，下一轮派活生效），登录用户可改、设备不给 —— 与 settings.mjs
   // 「设备形态不渲染那一节」的前端口径对齐（设备打它 → E4033，不是 404）。
-  { id: 'prefs.write', m: ['PUT'], path: p('/api/prefs'), auth: 'session', noPanel: true },
-  { id: 'events.sse', m: ['GET'], path: p('/api/events'), auth: 'session', noPanel: true, note: '全局 SSE；panel 禁（只许单运行流）' },
+  { id: 'prefs.write', m: ['PUT'], path: p('/api/prefs'), auth: 'session' },
+  { id: 'events.sse', m: ['GET'], path: p('/api/events'), auth: 'session', note: '全局 SSE；panel 禁（只许单运行流）' },
   { id: 'runtimes.list', m: ['GET'], path: p('/api/runtimes'), auth: 'session', run: true, call: 'GET /api/runtimes', note: '分机模式页要机器名/版本；运行钥匙可读（值班手册：CLI 配没配好）' },
   { id: 'local.status.forUser', m: ['GET'], path: p('/api/local/status'), auth: 'session', note: '与 local.status 同路径：登记处放行，handler 的 authorizeLocal 照旧把员外身份拦下（E4091）' },
   { id: 'run.stream', m: ['GET'], path: p('/api/runs', id1, 'stream'), auth: 'session', note: '单运行事件流（SSE）' },
@@ -178,14 +176,14 @@ export const ROUTES = [
   { id: 'schedule.one', m: ['PATCH', 'DELETE'], path: p('/api/schedules', id1), auth: 'session' },
   { id: 'schedule.run', m: ['POST'], path: p('/api/schedules', id1, 'run'), auth: 'session' },
   { id: 'skill.create', m: ['POST'], path: p('/api/skills'), auth: 'session' },
-  { id: 'skill.discover', m: ['POST'], path: p('/api/skills/discover'), auth: 'session', noPanel: true, note: 'body 里 root 是任意本机路径 —— 供应链投毒面，panel 收' },
-  { id: 'skill.import', m: ['POST'], path: p('/api/skills/import'), auth: 'session', noPanel: true, note: '同上' },
+  { id: 'skill.discover', m: ['POST'], path: p('/api/skills/discover'), auth: 'session', note: 'body 里 root 是任意本机路径 —— 供应链投毒面，panel 收' },
+  { id: 'skill.import', m: ['POST'], path: p('/api/skills/import'), auth: 'session', note: '同上' },
   { id: 'skill.one', m: ['GET', 'PUT', 'PATCH', 'DELETE'], path: p('/api/skills', id1), auth: 'session' },
   { id: 'skill.personas', m: ['POST'], path: p('/api/skills', id1, 'personas'), auth: 'session' },
   { id: 'connector.list', m: ['GET'], path: p('/api/connectors'), auth: 'session' },
   { id: 'connector.catalog', m: ['GET'], path: p('/api/connectors/catalog'), auth: 'session' },
-  { id: 'connector.create', m: ['POST'], path: p('/api/connectors'), auth: 'session', noPanel: true },
-  { id: 'connector.one', m: ['PUT', 'PATCH', 'DELETE'], path: p('/api/connectors', id1), auth: 'session', noPanel: true },
+  { id: 'connector.create', m: ['POST'], path: p('/api/connectors'), auth: 'session' },
+  { id: 'connector.one', m: ['PUT', 'PATCH', 'DELETE'], path: p('/api/connectors', id1), auth: 'session' },
   { id: 'connector.probe', m: ['POST'], path: p('/api/connectors', id1, 'probe'), auth: 'session' },
   { id: 'git.status', m: ['GET'], path: p('/api/git/status'), auth: 'session' },
   { id: 'git.whoami', m: ['GET'], path: p('/api/git/whoami'), auth: 'session' },
@@ -193,7 +191,7 @@ export const ROUTES = [
   { id: 'git.repos.list', m: ['GET'], path: p('/api/git/repos'), auth: 'session' },
   { id: 'git.repos.create', m: ['POST'], path: p('/api/git/repos'), auth: 'session' },
   { id: 'git.repos.dir', m: ['GET'], path: p('/api/git/repos-dir'), auth: 'session' },
-  { id: 'git.token', m: ['POST', 'DELETE'], path: p('/api/git/token'), auth: 'session', noPanel: true, note: '连接器凭据' },
+  { id: 'git.token', m: ['POST', 'DELETE'], path: p('/api/git/token'), auth: 'session', note: '连接器凭据' },
   { id: 'git.prs.refresh', m: ['POST'], path: p('/api/git/prs/refresh'), auth: 'session' },
   { id: 'git.repo.one', m: ['GET', 'DELETE'], path: p('/api/git/repos', id1), auth: 'session' },
   { id: 'git.repo.settings', m: ['POST'], path: p('/api/git/repos', id1, 'settings'), auth: 'session' },
@@ -222,55 +220,61 @@ export const ROUTES = [
   { id: 'git.repo.pr.fix', m: ['POST'], path: p('/api/git/repos', id1, 'prs', '(\\d+)', 'fix'), auth: 'session' },
   { id: 'git.repo.pr.merge', m: ['POST'], path: p('/api/git/repos', id1, 'prs', '(\\d+)', 'merge'), auth: 'session' },
   { id: 'ssh.list', m: ['GET'], path: p('/api/ssh/servers'), auth: 'session' },
-  { id: 'ssh.create', m: ['POST'], path: p('/api/ssh/servers'), auth: 'session', noPanel: true, note: '含私钥路径' },
-  { id: 'ssh.one', m: ['DELETE', 'PUT'], path: p('/api/ssh/servers', id1), auth: 'session', noPanel: true },
-  { id: 'ssh.key', m: ['GET', 'POST'], path: p('/api/ssh/servers', id1, 'key'), auth: 'session', noPanel: true, note: 'GET=读公钥/引导步骤（详情页），POST=生成密钥对' },
+  { id: 'ssh.create', m: ['POST'], path: p('/api/ssh/servers'), auth: 'session', note: '含私钥路径' },
+  { id: 'ssh.one', m: ['DELETE', 'PUT'], path: p('/api/ssh/servers', id1), auth: 'session' },
+  { id: 'ssh.key', m: ['GET', 'POST'], path: p('/api/ssh/servers', id1, 'key'), auth: 'session', note: 'GET=读公钥/引导步骤（详情页），POST=生成密钥对' },
   { id: 'ssh.test', m: ['POST'], path: p('/api/ssh/servers', id1, 'test'), auth: 'session' },
-  { id: 'ssh.hostkey', m: ['POST'], path: p('/api/ssh/servers', id1, 'hostkey'), auth: 'session', noPanel: true, note: '清本机主机指纹并重测（弹窗「更新指纹并重试」按钮）；这是"我确认服务器换过身份"的操作' },
+  { id: 'ssh.hostkey', m: ['POST'], path: p('/api/ssh/servers', id1, 'hostkey'), auth: 'session', note: '清本机主机指纹并重测（弹窗「更新指纹并重试」按钮）；这是"我确认服务器换过身份"的操作' },
   { id: 'workspace.file', m: ['GET', 'POST'], path: p('/api/workspace/file'), auth: 'session' },
   { id: 'open.path', m: ['POST'], path: p('/api/open'), auth: 'session' },
-  { id: 'fs.dirs', m: ['GET'], path: p('/api/fs/dirs'), auth: 'session', noPanel: true, note: '任意目录列举 = 摸操作员整块磁盘' },
-  { id: 'status.ledger', m: ['GET'], path: p('/api/status/ledger'), auth: 'session' },
-  { id: 'status.managed', m: ['POST'], path: p('/api/status/managed'), auth: 'session' },
-  { id: 'status.projects', m: ['GET'], path: p('/api/status/projects'), auth: 'session' },
-  { id: 'status.project.one', m: ['GET'], path: p('/api/status/projects', id1), auth: 'session' }, // 详情（版本/要点）—— 2026-10-31 收尾回归抓漏补登
+  { id: 'fs.dirs', m: ['GET'], path: p('/api/fs/dirs'), auth: 'session', note: '任意目录列举 = 摸操作员整块磁盘' },
   { id: 'plugins.list', m: ['GET'], path: p('/api/plugins'), auth: 'session' },
-  { id: 'plugin.action', m: ['POST'], path: p('/api/plugins', id1, '(?:install|enable|disable)'), auth: 'session', noPanel: true, note: '插件装卸 = 在总机上落代码' },
-  { id: 'plugin.delete', m: ['DELETE'], path: p('/api/plugins', id1), auth: 'session', noPanel: true },
+  { id: 'plugin.action', m: ['POST'], path: p('/api/plugins', id1, '(?:install|enable|disable)'), auth: 'session', note: '插件装卸 = 在总机上落代码' },
+  { id: 'plugin.delete', m: ['DELETE'], path: p('/api/plugins', id1), auth: 'session' },
   /*
    * 本机软件商店安装任务（原 nodes.dispatch / nodes.task.one 改名保留，2026-11-09）：
    * 多机节点子系统删除后，nodeId 恒为 'local'，路径从 /api/nodes/local/tasks 改为
-   * /api/install/tasks，响应形状不变。auth 照搬原条目（session + noPanel）。
+   * /api/install/tasks，响应形状不变。auth 照搬原条目（session）。
    */
-  { id: 'localTasks.dispatch', m: ['POST'], path: p('/api/install/tasks'), auth: 'session', noPanel: true, note: '本机软件商店安装任务（一键装/常驻/打开面板）' },
+  { id: 'localTasks.dispatch', m: ['POST'], path: p('/api/install/tasks'), auth: 'session', note: '本机软件商店安装任务（一键装/常驻/打开面板）' },
   { id: 'localTasks.list', m: ['GET'], path: p('/api/install/tasks'), auth: 'session', note: '本机安装任务列表（新的在前）' },
   { id: 'localTasks.one', m: ['GET'], path: p('/api/install/tasks', id1), auth: 'session', note: '本机安装任务详情（装装进度轮询）' },
   { id: 'devices.list', m: ['GET'], path: p('/api/devices'), auth: 'session' },
   { id: 'devices.create', m: ['POST'], path: p('/api/devices'), auth: 'session' },
-  { id: 'devices.one', m: ['GET', 'DELETE'], path: p('/api/devices', id1), auth: 'session', noPanel: true },
-  { id: 'devices.rename', m: ['POST'], path: p('/api/devices', id1, 'rename'), auth: 'session', noPanel: true },
-  { id: 'devices.runtimes', m: ['POST'], path: p('/api/devices', id1, 'runtimes'), auth: 'session', noPanel: true },
-  { id: 'devices.runtime.one', m: ['PATCH'], path: p('/api/devices', id1, 'runtimes', id1), auth: 'session', noPanel: true },
+  { id: 'devices.one', m: ['GET', 'DELETE'], path: p('/api/devices', id1), auth: 'session' },
+  { id: 'devices.rename', m: ['POST'], path: p('/api/devices', id1, 'rename'), auth: 'session' },
+  { id: 'devices.runtimes', m: ['POST'], path: p('/api/devices', id1, 'runtimes'), auth: 'session' },
+  { id: 'devices.runtime.one', m: ['PATCH'], path: p('/api/devices', id1, 'runtimes', id1), auth: 'session' },
   { id: 'runtime.detect', m: ['GET'], path: p('/api/runtimes/detect'), auth: 'session' },
   { id: 'runtime.test', m: ['POST'], path: p('/api/runtimes/test'), auth: 'session' },
   { id: 'runtime.families', m: ['GET'], path: p('/api/runtime-families'), auth: 'session' },
   { id: 'runtime.models', m: ['GET'], path: p('/api/runtimes', id1, 'models'), auth: 'session', note: '只读模型清单（2026-11-05）：手机能设模型就得能读清单 —— 名字列表，无敏感' },
   { id: 'lan.read', m: ['GET'], path: p('/api/lan'), auth: 'session' },
-  { id: 'lan.write', m: ['POST'], path: p('/api/lan'), auth: 'session', noPanel: true, note: '局域网开关' },
-  { id: 'control.restart', m: ['POST'], path: p('/api/control-plane/restart'), auth: 'session', noPanel: true, note: '重启控制面（改了监听地址后生效；只给被 systemd/桌面壳监护的进程，E1061）' },
+  { id: 'lan.write', m: ['POST'], path: p('/api/lan'), auth: 'session', note: '局域网开关' },
+  { id: 'control.restart', m: ['POST'], path: p('/api/control-plane/restart'), auth: 'session', note: '重启控制面（改了监听地址后生效；只给被 systemd/桌面壳监护的进程，E1061）' },
   { id: 'experts.list', m: ['GET'], path: p('/api/experts'), auth: 'session' },
   { id: 'expert.hire', m: ['POST'], path: p('/api/experts', id1, 'hire'), auth: 'session' },
   { id: 'expert.fire', m: ['POST'], path: p('/api/experts', id1, 'fire'), auth: 'session' },
   { id: 'agent.cards', m: ['POST'], path: p('/api/agent/cards'), auth: 'session', run: true, call: 'POST /api/agent/cards', note: '建卡通道：运行钥匙可达；建卡权按岗位认（403 E2057 在 handler，agent-auth）' },
   { id: 'agent.cards.batch', m: ['POST'], path: p('/api/agent/cards/batch'), auth: 'session', run: true, call: 'POST /api/agent/cards/batch', note: '批量建卡通道：先全量校验再建，一张不合格整批拒；运行钥匙可达' },
-  { id: 'users.list', m: ['GET'], path: p('/api/users'), auth: 'session', noPanel: true },
-  { id: 'users.create', m: ['POST'], path: p('/api/users'), auth: 'session', noPanel: true, note: '建影子账号（预占名字，等中枢账号首次登录时绑定）' },
-  { id: 'users.one', m: ['GET', 'PATCH', 'DELETE'], path: p('/api/users', id1), auth: 'session', noPanel: true },
+  /*
+   * 交付/闸门两条（2026-11-19）：**这就是"少绕几圈"的机制**。
+   *
+   * 以前 agent 交付要自己拼 `git add / commit / push` + 建 PR，6 条命令 = 6 次模型往返
+   * （实报 9 条命令、6 分钟纯等待，命令本身 6 秒）。现在一条命令做一个动作，
+   * 平台侧把确定性流程一次跑完。登记在这里 = 能力清单自动注入（capabilities.mjs 只读这张表），
+   * 所以不需要另外教它"能干什么"。
+   */
+  { id: 'agent.gate', m: ['POST'], path: p('/api/agent/gate'), auth: 'session', run: true, call: 'POST /api/agent/gate', note: '跑全量闸门：只回"过没过 + 挂了哪几项 + 日志路径"，别自己一条条跑用例' },
+  { id: 'agent.deliver', m: ['POST'], path: p('/api/agent/deliver'), auth: 'session', run: true, call: 'POST /api/agent/deliver', note: '交付：提交 → 推送 → 开 PR 一条命令做完，体 {title, message}；别自己拼 git 命令' },
+  { id: 'users.list', m: ['GET'], path: p('/api/users'), auth: 'session' },
+  { id: 'users.create', m: ['POST'], path: p('/api/users'), auth: 'session', note: '建影子账号（预占名字，等中枢账号首次登录时绑定）' },
+  { id: 'users.one', m: ['GET', 'PATCH', 'DELETE'], path: p('/api/users', id1), auth: 'session' },
   { id: 'security.sessions', m: ['GET'], path: p('/api/security/sessions'), auth: 'session' },
   { id: 'security.revokeOthers', m: ['POST'], path: p('/api/security/sessions/revoke-others'), auth: 'session', note: '踢自己的其它会话，本人操作不算管理' },
   { id: 'security.audit', m: ['GET'], path: p('/api/security/audit'), auth: 'session' },
-  { id: 'security.auditExport', m: ['GET'], path: p('/api/security/audit/export'), auth: 'session', noPanel: true, note: '审计日志全量导出（2026-11-03）；读的是同一份数据，权限同 audit' },
-  { id: 'security.auditClear', m: ['POST'], path: p('/api/security/audit/clear'), auth: 'session', noPanel: true, note: '彻底清空审计日志（主表+归档一起删、不留痕迹；破坏性动作，走 security:manage 而不是 audit:read）' },
+  { id: 'security.auditExport', m: ['GET'], path: p('/api/security/audit/export'), auth: 'session', note: '审计日志全量导出（2026-11-03）；读的是同一份数据，权限同 audit' },
+  { id: 'security.auditClear', m: ['POST'], path: p('/api/security/audit/clear'), auth: 'session', note: '彻底清空审计日志（主表+归档一起删、不留痕迹；破坏性动作，走 security:manage 而不是 audit:read）' },
 ];
 
 /* ------------------------------------------------------------------ 查询 */
@@ -301,7 +305,7 @@ export function isRegistered(pathname, method) {
  *     能不能过"该看 session 那条；
  *   · **方法必须命中** —— 同一路径不同方法待遇不同（`GET /api/prefs` 与
  *     `PUT /api/prefs` 不是一回事；`GET /api/lan` 只读、`POST /api/lan`
- *     是 noPanel 的管理动作）。带 method 时**只认方法命中的条目**，找不到就
+ *     是写）。带 method 时**只认方法命中的条目**，找不到就
  *     返回 null（v2.8 修正：旧版回落到同路径其它方法的条目，未登记的方法会
  *     借别的条目的宽松标放行 —— 方法闸等于没有）。
  */

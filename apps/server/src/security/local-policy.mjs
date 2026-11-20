@@ -24,39 +24,40 @@
 export const LOCAL_POLICY = [
   // 只读状态：网络来源也放行、不要秘密 —— 反代后面的设置页要显示本机 / 协作状态，
   // 要秘密就等于永远显示不出来（IAM §10.1.2 也因此只 deny 破坏性路径）。
-  { method: 'GET', path: '/api/local/status', principals: ['operator', 'admin'], secret: 'never' },
+  { method: 'GET', path: '/api/local/status', principals: ['user'], secret: 'never' },
   // 外部件现状（2026-11-04）：插件页「软件」商店条目要画"装没装、网关/面板通不通" —— 只读
-  { method: 'GET', path: '/api/local/externals', principals: ['operator', 'admin'], secret: 'never' },
-  { method: 'GET', path: '/api/local/backups', principals: ['operator', 'admin'], secret: 'never' },
+  { method: 'GET', path: '/api/local/externals', principals: ['user'], secret: 'never' },
+  { method: 'GET', path: '/api/local/backups', principals: ['user'], secret: 'never' },
 
   /*
    * ⚠️ 导出/导入快照从 2026-11-01 起也是"网络来源不要秘密"档，
    * 用户拍板："不管是不是总机分机，这个导入导出都要一直显示"。监听 0.0.0.0 时，
    * `classifySource` 判 ③ 把**桌面壳自己的 127.0.0.1 请求也判成 network** ——
    * 秘密闸在这里就是「单向门」：对外一开，浏览器里的导出/导入就永远 E4097。
-   * 风险面（拿到 admin/operator 会话的人）：
+   * 风险面（拿到登录会话的人）：
    *   · 导出只是在服务端落一份快照文件、返回路径 —— 数据**不经由这个接口离开机器**；
    *   · 导入有确认框 + 导入前自动备份兜底；能拿到管理会话的攻击者本来就能删会话、
    *     改配置，不缺这一下破坏面。
    * 反代部署契约仍然 deny /api/local/*（IAM §10.1.2），那一道比秘密更硬。
    */
-  { method: 'POST', path: '/api/local/export', principals: ['operator', 'admin'], secret: 'never' },
-  { method: 'POST', path: '/api/local/import', principals: ['operator', 'admin'], secret: 'never' },
-  { method: 'POST', path: '/api/local/hosts/add', principals: ['operator', 'admin'], secret: 'network' },
-  { method: 'POST', path: '/api/local/hosts/test', principals: ['operator', 'admin'], secret: 'network' },
-  { method: 'POST', path: '/api/local/hosts/remove', principals: ['operator', 'admin'], secret: 'network' },
-  { method: 'POST', path: '/api/local/probe', principals: ['operator', 'admin'], secret: 'network' },
+  { method: 'POST', path: '/api/local/export', principals: ['user'], secret: 'never' },
+  { method: 'POST', path: '/api/local/import', principals: ['user'], secret: 'never' },
+  { method: 'POST', path: '/api/local/hosts/add', principals: ['user'], secret: 'network' },
+  { method: 'POST', path: '/api/local/hosts/test', principals: ['user'], secret: 'network' },
+  { method: 'POST', path: '/api/local/hosts/remove', principals: ['user'], secret: 'network' },
+  { method: 'POST', path: '/api/local/probe', principals: ['user'], secret: 'network' },
 ];
 
 /**
- * `req.bandiAuth` → 策略表里的身份名（IAM §2.1 那张表）。
+ * `req.bandiAuth` → 策略表里的身份名。
  * 认不出来的（revoked / 空）一律 `'anonymous'` —— 落进"不在 principals 里"，默认拒绝。
+ *
+ * 2026-11-20 起只有一种能动的身份：`user`（人）。本机钥匙在 guard 里已经合成成机主
+ * 本人，所以这里不再有 `operator` / `admin` 两个名字 —— 那两个名字曾经指同一件事。
  */
 export function principalKind(auth) {
   if (!auth) return 'anonymous';
-  if (auth.kind === 'operator') return 'operator';
-  // 登录用户 = 全权（2026-11-07 角色体系退场）：与 operator 同档对待
-  if (auth.kind === 'user') return 'admin';
+  if (auth.kind === 'user') return 'user';
   return 'anonymous';
 }
 
@@ -92,10 +93,10 @@ export function authorizeLocal({ method, pathname, source, principal, hasSecret 
     return deny(
       'E4091',
       403,
-      '当前身份不能做本机管理动作（需要操作员或管理员）',
+      '当前身份不能做本机管理动作（需要登录账号）',
       kind === 'anonymous'
-        ? '先登录，或带上操作员令牌（数据目录 token 文件）。'
-        : '本机管理动作只对操作员 / 管理员开放；普通账号请在桌面端操作。',
+        ? '先登录，或带上本机钥匙（数据目录 token 文件）。'
+        : '本机管理动作只对登录账号开放。',
     );
   }
 

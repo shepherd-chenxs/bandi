@@ -763,9 +763,26 @@ export function firstMeaningfulLine(text) {
  * 谁是执行者用 `r.personaName`（`listRuns` 已经 JOIN 出名字），1:1 老库兜会话那个人。
  * 「失败」这件事由气泡里的红字和页头徽标说，不需要头像再喊一遍。
  */
+/* 旧失败原因改口（2026-11-19）：失败原因是**落库时**写进 run.error 的字符串，后端改文案
+   不会回写历史记录 —— 老气泡里还是「运行时「rt-xxx」已被停用 —— 去「设置 → 运行时」看看」。
+   这里按旧措辞认一次，换成新口径，顺带把机器 ID 换成人能认的运行时名字。 */
+function rewordLegacyFail(why) {
+  // 三个版本都要认：「运行时「x」已被停用 —— 去…看看」（最早）、
+  // 「他挂的运行时「x」已经被停用了。去…换一个，或者重新启用。」（中间版）、以及下面的 auto
+  const legacy = why.match(/^(?:他挂的运行时|运行时)「([^」]+)」(已经被停用了|已被停用|在这台机器上找不到了|不存在)/);
+  if (legacy && why.includes('设置 → 运行时')) {
+    const name = S.runtimes?.find((x) => x.id === legacy[1])?.label || legacy[1];
+    return `我挂的运行时「${name}」${/停用/.test(legacy[2]) ? '已经被停用了' : '在这台机器上找不到了'}。去「设置 → 运行时」换一个。`;
+  }
+  if (why.includes('自动') && why.includes('还没有能用的运行时')) {
+    return '我想自动挑一个运行时，但这台机器上还没有能用的。去「设置 → 运行时」接一个。';
+  }
+  return why;
+}
+
 export function failBlock(r, showName = false) {
   const full = String(r.error ?? '').trim();
-  const why = firstMeaningfulLine(full) || '这次没留下原因';
+  const why = rewordLegacyFail(firstMeaningfulLine(full) || '这次没留下原因');
   // 文案里的人肉导航变成真链接（2026-11-19）：「设置 → 运行时」点一下直接跳过去，
   // 不用让用户照着文字自己找。esc 之后再替换 —— 这六个字不会被转义，链接是这里拼的可控 HTML。
   const whyHtml = esc(why).replaceAll(

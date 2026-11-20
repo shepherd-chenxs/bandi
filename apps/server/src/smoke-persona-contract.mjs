@@ -21,6 +21,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bandi-persona-'));
@@ -143,8 +144,50 @@ check('⑪ 建卡轮：卡票就是交付，回话一行即止（别再发安排
   check('写了"Read 不能读目录"', /Read` 只能读\*\*文件\*\*/.test(brief));
   check('写了"同一条别查第二遍"', /不要查第二遍/.test(brief));
   check('写了"判架构读到哪里够，别全仓扫"', /不要全仓扫/.test(brief));
-  check('体积可控（≤2000 字，别把地图写成目录树）', brief.length <= 2000, `${brief.length} 字`);
+  // 上限从 2000 抬到 2200（2026-11-19）：加了"命令报错=结论作废"这条实报规矩后正好顶到 2000，
+  // 零余量意味着下一次微调就红。这个数的本意是"别把地图写成目录树"，不是卡字数。
+  check('体积可控（≤2200 字，别把地图写成目录树）', brief.length <= 2200, `${brief.length} 字`);
   check('给不存在/空路径时安静返回空串', dispatch.repoBriefBlock('X:////nope') === '' && dispatch.repoBriefBlock('') === '');
+
+  /*
+   * ②c 仓库状态实测（2026-11-19 实报「为什么张坤告诉我是一致的」）：
+   * 分支上有一个没进 main 的提交，它拿"工作区干净 + 与同名分支同步 + 没 open PR"答了"一致"。
+   * 钉住的是：领先数必须由平台算出来，且结论必须跟着领先数变 —— 干净的工作区不能把结论带偏。
+   */
+  console.log('\n②c 仓库状态实测（不能拿"工作区干净"回答"和仓库一致吗"）');
+  const gitRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'bandi-gitstate-'));
+  const G = (...args) => execFileSync('git', args, { cwd: gitRepo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  const Gc = (msg) => G('-c', 'user.name=smoke', '-c', 'user.email=smoke@local', 'commit', '-m', msg);
+  try {
+    G('init', '-b', 'main');
+    fs.writeFileSync(path.join(gitRepo, 'a.txt'), 'a\n');
+    G('add', '-A');
+    Gc('init');
+    // 造出 origin/main 这个远端引用（不联网络）
+    G('update-ref', 'refs/remotes/origin/main', G('rev-parse', 'HEAD'));
+
+    const clean = dispatch.gitStateBlock(gitRepo);
+    check('干净且等于 main → 判定"与主线一致"', /领先 0 个提交/.test(clean) && /代码与主线一致/.test(clean), clean.split('\n').find((l) => /平台判定/.test(l)) ?? '');
+    check('把三个假信号点名（干净/同名分支/无 open PR）', /不等于\*\*已并入主线/.test(clean) && /没有 open PR/.test(clean));
+
+    G('checkout', '-b', 'feat/x');
+    fs.writeFileSync(path.join(gitRepo, 'b.txt'), 'b\n');
+    G('add', '-A');
+    Gc('feat: 新增 b');
+    const ahead1 = dispatch.gitStateBlock(gitRepo);
+    check('分支上多一个提交 → 领先 1，并列出该提交', /领先 1 个提交/.test(ahead1) && /新增 b/.test(ahead1), ahead1.split('\n').find((l) => /没进 main/.test(l)) ?? '');
+    check('领先时不许说"一致"/"不需要建 PR"', /要开 PR/.test(ahead1) && /不能说「和仓库一致」/.test(ahead1));
+
+    fs.writeFileSync(path.join(gitRepo, 'a.txt'), 'a changed\n');
+    const dirty = dispatch.gitStateBlock(gitRepo);
+    check('有未提交改动就直说（脏不影响领先数）', /有 1 个改动没提交/.test(dirty) && /领先 1 个提交/.test(dirty));
+    check('体积可控（≤1500 字）', ahead1.length <= 1500, `${ahead1.length} 字`);
+
+    check('非 git 目录安静返回空串', dispatch.gitStateBlock(os.tmpdir()) === '' || !fs.existsSync(path.join(os.tmpdir(), '.git')));
+    check('空路径返回空串', dispatch.gitStateBlock('') === '');
+  } finally {
+    try { fs.rmSync(gitRepo, { recursive: true, force: true }); } catch { /* 删不掉就算了 */ }
+  }
 
   console.log('\n③ 交付形态判定（P5 新增 dispatch.guessDeliveryKind：问答 → answer / 做事 → do / 判不了 → null）');
   check('guessDeliveryKind 是导出函数', typeof dispatch.guessDeliveryKind === 'function');

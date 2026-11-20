@@ -1,14 +1,14 @@
 /* projects.mjs —— 项目。
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
-import { esc, personLabel, personaCan, roleNameOf, runtimeLabel, savePlace, setRoute, toast, userLabel } from './shell.mjs';
-import { ICON_FOLDER, ICON_WB_BOARD, ICON_WB_CLOCK, ICON_WB_FLOW, api, createCombo, handleCopyPaths, post, personaAvatar, personaByName, renderMarkdown, smAvatar, wireDialogHead } from './ui.mjs';
+import { esc, personLabel, personaCan, savePlace, setRoute, toast, userLabel } from './shell.mjs';
+import { ICON_FOLDER, ICON_WB_BOARD, ICON_WB_CLOCK, ICON_WB_FLOW, api, createCombo, handleCopyPaths, post, personaByName, renderMarkdown, smAvatar, wireDialogHead } from './ui.mjs';
 import { setNav } from './state.mjs';
 import { breadcrumb, headRow } from './connectors.mjs';
 import { confirmDo, askText } from './machine.mjs';
 import { detailSave, showView } from './contacts.mjs';
 import { wbCard } from './workflows.mjs';
 import { hint, openFlowRun, paintRun, setListTitle } from './flowpages.mjs';
-import { attsHtmlOf, firstMeaningfulLine, isNarrowPh, mbOpenPicker, openConversation, openDetail, streamRun, timelineOf } from './chat.mjs';
+import { attsHtmlOf, firstMeaningfulLine, isNarrowPh, mbOpenPicker, openConversation, streamRun, timelineOf } from './chat.mjs';
 // 运行进度卡：对话页那一套（阶段/步数/用时/卡住提醒/停止生成）搬进任务卡讨论区 —— 2026-10-29 用户："对话里的那一套搬过来用"
 import { createProgressCard } from './run-progress-card.mjs';
 import { createLiveAnswer } from './run-live.mjs';
@@ -217,23 +217,18 @@ export async function openProjectsPage(selectId) {
 
 /* ------------------------------------------------------------ 项目档案 */
 /**
- * **项目档案**（2026-10-23，用户：「研发面板要展示这项目是干什么的、什么时候开始结束、
- * 成员有哪些、项目经理是谁」；2026-10-23 v0.2 收回到**四项**：迭代版本数是软件研发专属概念，
- * 以仓库 `status.yaml` 为前提，按判据归研发面板，通用工作区不展示 —— 见 PRD v0.2 改动 2）。
+ * **项目档案**（2026-10-23，用户：「要展示这项目是干什么的、什么时候开始结束」）。
+ * 常驻输入区放「项目简介」+ 起止日期；成员与负责人已下线（2026-11-19），
+ * 这里只把存量字段原样回传，不在界面上渲染。
  *
- * 摆的位置：tabs **上面**、常驻。2026-10-24 用户定的改动：「干什么」（summary）挪进
- * **基础信息** tab（原来「项目说明」的位置，那格是死字段已删）——这卡只剩项目经理 + 起止。
- *
- * 口径跟 PRD 一致：**读不到就说「未填写」**，不猜、不写空。两项分得清：
- *   · `未填写` —— 人没填；
- *   · `未填写（那个人已经不在了）` —— 填过，但那个员工被删了（服务端判，见 status.projectProfile）。
- * 开始时间没填时退回**建档时间**并标出处：两者可能差很远，混成一个数字等于骗人。
+ * 口径：**读不到就说「未填写」**，不猜、不写空。开始时间没填时退回**建档时间**并标出处：
+ * 两者可能差很远，混成一个数字等于骗人。
  */
 function pjPersona(id) {
   return (S.personas ?? []).find((x) => x.id === id) ?? null;
 }
 
-/** 项目的成员 id 名单（库里的 JSON 坏了就当没填 —— 跟服务端 status.projectProfile 一个口径） */
+/** 项目的成员 id 名单（库里的 JSON 坏了就当没填）—— 只为原样回传存量，不渲染 */
 function pjMembers(p) {
   try {
     const list = JSON.parse(p?.memberPersonaIds || '[]');
@@ -241,53 +236,6 @@ function pjMembers(p) {
   } catch {
     return [];
   }
-}
-
-/**
- * 「项目成员」tab 里的一行（2026-10-24 设计稿 v1.0.1）：
- * 头像 + 姓名 + 岗位 pill + 忙闲点 + 运行时；整行可点、右侧「看详情」都进员工详情。
- *
- * 两种行分得清：
- *   · 正常：人还在员工表里 —— 可点；
- *   · 异常：填过、但那个员工已经被删了 —— 灰名「那个人已经不在了」，**整行不可点、没有「看详情」**
- *     （这不是"没配成员"，是"配的那个人没了"，两种意思不能混）。
- *
- * 运行时那格**只认 auto**（`runtimeLabel`）：rt-id / codex / claude 都是技术细节，不上列表 ——
- * 2026-10-23 已拍板的口径，别照设计稿抄回去。
- */
-function memberRowHtml(id) {
-  const who = pjPersona(id);
-  if (!who) {
-    return `<div class="mbr-row gone">
-      <span class="avatar gone">×</span>
-      <div class="mbr-main">
-        <span class="mbr-name">那个人已经不在了</span>
-        <span class="gone-tag">员工已删除 · 保留当时记录</span>
-      </div>
-    </div>`;
-  }
-  const rt = runtimeLabel(who);
-  return `<div class="mbr-row" data-pj-open="${esc(who.id)}" title="进员工详情">
-    ${personaAvatar(who)}
-    <div class="mbr-main">
-      <span class="mbr-name">${esc(who.name)}</span>
-      <span class="pill role">${esc(roleNameOf(who) || '—')}</span>
-      <span class="dot${who.busy ? ' busy' : ''}" title="${who.busy ? '正在干活' : '现在闲着'}"></span>
-      ${rt ? `<span class="pill mbr-runtime">${esc(rt)}</span>` : ''}
-    </div>
-    <button type="button" class="mbr-act">看详情 ›</button>
-  </div>`;
-}
-
-/** 起止那行的说明：开始没填先说建档时间兜底，填了再看结束没填＝进行中（设计稿 v1.0.1 口径）。
- *  （2026-10-24：项目经理和起止从顶部档案卡搬进「基础信息」tab —— 档案卡整个撤掉。） */
-function pjDatesNote(p) {
-  const createdDay = String(p.createdAt ?? '').slice(0, 10);
-  return !p.startedAt
-    ? `开始时间未填，按建档时间 ${createdDay} 算`
-    : p.endedAt
-      ? ''
-      : '结束日期没填＝进行中';
 }
 
 
@@ -406,17 +354,16 @@ function openPjCal(btn, input) {
  * 换成 `.detail-head.fixed-head`（同代码托管 / 远程连接的吸顶头：50px 定高 + --side 底 +
  * 底部分隔线），名字 + 内置 pill + 目录 pill 在左、保存回执 + 任务/删除在右。
  * 原来是员工详情那套两行的 .p-head（2026-10-18 骨架），不吸顶。
- * 下面 tabs 两页：**基础信息**（名称/目录/说明 + 任务统计）、**项目成员**。
- * 字段仍是常驻输入区（没有"点编辑"那步）；tabs 一次渲染、切显隐 ——
- * 在基础信息改了一半去成员再回来，改动还在（同员工详情页的做法）。
+ * 下面只有一页：**基础信息**（名称/目录/说明/起止 + 任务统计）。
+ * 「项目成员」tab 与「项目负责人」已下线（2026-11-19 用户要求），
+ * 档案里的成员、负责人仍原样保留并随保存回传，只是界面上不再展示。
+ * 字段是常驻输入区（没有"点编辑"那步）。
  */
 export async function renderProjDetail(p) {
   const box = $('projDetail');
   if (!box) return;
   /*
-   * 只取任务统计（/tasks）。**不再取 /api/status 的版本数**（2026-10-23 v0.2）：
-   * 档案回到四项，版本数归研发面板；接口字段 `version_count` 本身保留，
-   * 那是插件的数据源，后端不动。
+   * 只取任务统计（/tasks）—— 版本数/进度那一套随研发面板一起下线了（2026-11-19）。
    */
   let data = null;
   let err = '';
@@ -426,10 +373,9 @@ export async function renderProjDetail(p) {
     err = e.message;
   }
   const stat = (label, n) => `<span class="kb-stat">${esc(label)} <b>${n ?? 0}</b></span>`;
-  // 手机端只留「项目成员」tab（2026-11-08 用户：「手机端的基础信息去掉」）——
-  // 基础信息是大表单，适合在电脑上做；手机上不输出那个页签，
-  // 默认激活项目成员。注意面板 DOM 仍要渲染（hidden 而非不输出）：自动保存 collect()
-  // 照常取值，服务端字段不缺。
+  // 手机端不输出页头行（2026-11-08 用户：「这一行去掉」）：名称/目录顶部导航栏已经有了，
+  // 任务 / 删除是低频操作留给电脑。原来手机上只留「项目成员」tab，那个 tab 下线后
+  // 手机上也直接显示基础信息。
   const onPhone = document.body.classList.contains('mb-narrow');
   box.innerHTML = `
     ${onPhone ? '' : `
@@ -457,23 +403,20 @@ export async function renderProjDetail(p) {
       </div>
     </div>`}
 
-    <!-- 任务统计挪到页头正下方（2026-10-24 用户：把任务标签提上去）—— 基础信息 tab 里不再放 -->
+    <!-- 任务统计挪到页头正下方（2026-10-24 用户：把任务标签提上去）—— 基础信息 tab 里不再放。
+         状态标签**跟着任务看板走**（2026-11-19 用户：「项目里的状态要和任务状态对应上」）：
+         不再手挑「待验收 / 已阻塞 / 失败」三样，而是把看板的全部状态列（想法…已取消）
+         按同一个顺序、同一个名字摊出来 —— 两处数字对不上时，人一眼就能看出是哪边错了。 -->
     ${err
       ? `<div class="dim" style="margin-top:14px">任务统计取不到：${esc(err)}</div>`
       : `<div class="kb-stats">
           ${stat('任务共', data?.total)}
-          ${stat('待验收', data?.waiting_count)}
-          ${stat('已阻塞', data?.blocked_count)}
-          ${stat('失败', data?.failed_count)}
+          ${(data?.columns ?? []).map((c) => stat(c.label, c.count)).join('')}
           ${stat('流程实例', data?.flow_count)}
           ${stat('聊天派活', data?.chat_count)}
         </div>`}
 
-    <div class="tabs">
-      ${onPhone ? '' : '<button class="tab on" data-tab="basics">基础信息</button>'}
-      <button class="tab${onPhone ? ' on' : ''}" data-tab="members">项目成员<span class="tab-n" id="pjMemberCount">${pjMembers(p).length}</span></button>
-    </div>
-    <section class="tab-panel" data-panel="basics">
+    <section class="tab-panel">
       <div class="group">
         <div class="form-row">
           <div class="row-label">项目名称</div>
@@ -502,10 +445,6 @@ export async function renderProjDetail(p) {
           </div>
         </div>
         <div class="form-row">
-          <div class="row-label">项目负责人</div>
-          <div id="pjPmMount"></div>
-        </div>
-        <div class="form-row">
           <div class="row-label">开始 / 结束</div>
           <div class="pj-dates">
             <!-- 自绘日历（2026-10-24）：原生 <input type=date> 的弹层是浏览器自己画的窗口，
@@ -520,36 +459,13 @@ export async function renderProjDetail(p) {
               <button type="button" class="pj-date-btn" id="pjEndedBtn" title="结束日期；没填就当作还在进行"></button>
               <input type="date" id="pjEnded" value="${esc(p.endedAt ?? '')}" hidden />
             </span>
-            ${pjDatesNote(p) ? `<span class="pj-dates-note">${esc(pjDatesNote(p))}</span>` : ''}
           </div>
         </div>
       </div>
 
-      <div class="kb-tip" style="margin-top:10px">点右上角「任务」进这个项目的看板：流程的每次办理和聊天派活都在那儿，卡片能拖、能点进源头。</div>
-    </section>
-
-    <section class="tab-panel" data-panel="members" hidden>
-      <div class="group pj-members">
-        <div class="pj-members-head">
-          <span class="pj-members-title">成员<span class="cnt" id="pjMemberCnt"></span></span>
-          <!-- 「＋ 添加成员」（2026-10-24）：点开**弹窗**选人 —— 可搜索、可勾选多人、统一确认。
-               原来是 createCombo 下拉（选一个加一个，手一抖就多加了人还没法反悔）。 -->
-          <button type="button" class="pj-members-add" id="pjMemberAdd">＋ 添加成员</button>
-        </div>
-        <div id="pjMemberRows"></div>
-      </div>
     </section>`;
 
-  // 标签：一次渲染、切显隐 —— 不重建 DOM，所以在「基础信息」改了一半去「成员」再回来，改动还在
-  // （切之前先 flush：刚敲完就切走，防抖那 700ms 不该把改动吞掉）
-  const tabs = box.querySelectorAll('[data-tab]');
-  const panels = box.querySelectorAll('[data-panel]');
-  const showTab = (key) => {
-    tabs.forEach((t) => t.classList.toggle('on', t.dataset.tab === key));
-    panels.forEach((sec) => { sec.hidden = sec.dataset.panel !== key; });
-  };
-  tabs.forEach((t) => { t.onclick = () => { pjSaveNow(); showTab(t.dataset.tab); }; });
-  showTab(onPhone ? 'members' : 'basics');
+  // 只有一个面板了（2026-11-19 用户：「项目成员这个 tab 去掉」），不再有切页逻辑
 
   $('pjPick').onclick = () => pickProjectDir('pjPick', 'pjRoot');
   handleCopyPaths(box); // 目录 pill 可点复制（整颗按钮，见 ui.mjs 的 handleCopyPaths）
@@ -567,9 +483,9 @@ export async function renderProjDetail(p) {
     pjState.textContent = text;
     pjState.className = 'save-state' + (kind ? ' ' + kind : '');
   };
-  /* 档案那几格（简介 / 项目经理 / 成员 / 起止）也是**改了自动存** —— 跟名字目录同一张单。
-   * 项目经理和成员是下拉选的，当前值记在 `pjPeople` 里（下拉本身不知道"清空"这个状态：
-   * 空串在 createCombo 里是一个普通条目，取值还是得我们自己记一份）。 */
+  /* 档案那几格（简介 / 起止）也是**改了自动存** —— 跟名字目录同一张单。
+   * 项目经理 / 成员这两项在界面上已下线（2026-11-19 用户要求），但档案里还有值：
+   * 原样读出来再原样回传，避免保存时把它们清掉。 */
   let pjPeople = {
     pm: p.pmPersonaId || '',
     members: pjMembers(p),
@@ -670,138 +586,8 @@ export async function renderProjDetail(p) {
     $(id)?.addEventListener('blur', () => pjSaveNow());
   }
 
-  /* 项目经理：**从项目成员里选**（2026-10-24 用户定的口径）—— 全站公共的可搜索下拉。
-     成员加了人要重建下拉（createCombo 是一次性挂载），所以包成 paintPmCombo：
-     渲染时调一次，「添加成员」确认后再调一次。
-     选完**立刻存**（下拉不是打字，没有"打了一半"的中间态，不必等防抖）。 */
-  const paintPmCombo = () => {
-    const mount = $('pjPmMount');
-    if (!mount) return;
-    mount.innerHTML = '';
-    // 读**活数据** pjPeople.members，别读渲染时的快照 p —— 加成员后要重建下拉，
-    // 快照里还是旧名单，新加的人就"看不到"（2026-10-24 用户踩过：加了喜儿，下拉里没有）
-    const memberIds = pjPeople.members;
-    const pmList = [
-      { id: '', label: '不设' },
-      ...(S.personas ?? []).filter((x) => memberIds.includes(x.id)).map((x) => ({ id: x.id, label: personLabel(x) })),
-    ];
-    // 兜底：现任项目经理不在成员里（老数据）也让他显示出来，别把现任抹成"未填写"
-    if (pjPeople.pm && !pmList.some((x) => x.id === pjPeople.pm)) {
-      const cur = (S.personas ?? []).find((x) => x.id === pjPeople.pm);
-      if (cur) pmList.push({ id: cur.id, label: personLabel(cur) });
-    }
-    createCombo({
-      mount,
-      items: pmList,
-      value: pjPeople.pm,
-      search: true,
-      placeholder: '搜数字员工…',
-      empty: '没有匹配的人',
-      /* 按钮上不写「不设」写「未填写」：清单里那个「不设」是一颗**动作**（点了等于清掉），
-         按钮上要显示的是**现状**（现在没有项目经理）。跟 PRD「读不到就写未填写」同口径。
-         （光给 `blank` 不管用 —— 清单里有一项 id 是空串，组件会拿它的 label 当按钮文案。） */
-      buttonText: (id) => (id ? pmList.find((x) => x.id === id)?.label ?? '未填写（那个人已经不在了）' : '未填写'),
-      onChange: (id) => {
-        pjPeople.pm = id ?? '';
-        schedulePjSave(0);
-      },
-    });
-  };
-  paintPmCombo();
-
-  /* 成员（2026-10-24 设计稿 v1.0.1）：从档案那排 chip 改成「项目成员」tab 里一行一个人。
-   * 加人走**弹窗**（openAddMembersDialog）：可搜索、可勾选多人、统一确认。
-   * 点行 / 「看详情」= 进员工详情（`openDetail`），**不做就地展开**。
-   * 重画只换这两块，不重画整页（重画会丢焦点、把标签弹回基础信息）。 */
-  const paintMemberRows = () => {
-    const host = $('pjMemberRows');
-    if (!host) return;
-    host.innerHTML = pjPeople.members.length
-      ? pjPeople.members.map(memberRowHtml).join('')
-      : `<div class="pj-members-empty">
-           <div class="big">还没有成员</div>
-           <div class="sub">点右上「＋ 添加成员」，从员工里挑人加进来</div>
-         </div>`;
-    // 只有"人还在"的行带 data-pj-open；已删的那行压根没有这个属性 → 整行不可点
-    host.querySelectorAll('[data-pj-open]').forEach((el) => {
-      el.onclick = () => openDetail(el.dataset.pjOpen).catch((e) => toast(e.message, 'error'));
-    });
-    const cnt = $('pjMemberCnt');
-    if (cnt) cnt.textContent = `${pjPeople.members.length} 人`;
-    const tabN = $('pjMemberCount');
-    if (tabN) tabN.textContent = String(pjPeople.members.length);
-  };
-
-  /**
-   * 「添加成员」弹窗（2026-10-24）：搜索 → 勾选多人 → 「添加」统一入队。
-   * 行的样式与交互照**新建项目群**那张弹窗（.members/.member 勾选列表，2026-10-24 用户点名）——
-   * 同一个产品里两种选人长相，人会觉得是两套系统。
-   * 候选只列**还不在成员里**的人（跟「拉人进群」一个路数：列出来也点不动，不如不列）。
-   * 确认才落库 —— 勾错了点「取消」就完了，选人阶段零成本。
-   */
-  const openAddMembersDialog = () => {
-    const candidates = (S.personas ?? []).filter((x) => !pjPeople.members.includes(x.id));
-    const picked = new Set();
-    const dlg = document.createElement('dialog');
-    dlg.className = 'pj-add-dlg';
-    dlg.innerHTML = `
-      <form method="dialog">
-        <b>添加成员</b>
-        <label>从员工里挑（可多选）</label>
-        <input class="pj-add-search" placeholder="搜数字员工…" />
-        <div class="members pj-add-members"></div>
-        <div class="dlg-actions">
-          <span class="pj-add-count"></span>
-          <button type="button" class="pj-add-cancel">取消</button>
-          <button class="primary pj-add-ok" disabled>添加</button>
-        </div>
-      </form>`;
-    document.body.append(dlg);
-    wireDialogHead(dlg.querySelector('form'));
-    const list = dlg.querySelector('.pj-add-members');
-    const search = dlg.querySelector('.pj-add-search');
-    const count = dlg.querySelector('.pj-add-count');
-    const ok = dlg.querySelector('.pj-add-ok');
-
-    const sync = () => {
-      count.textContent = `已选 ${picked.size} 人`;
-      ok.disabled = !picked.size;
-    };
-    const paint = () => {
-      const q = (search.value || '').trim().toLowerCase();
-      const hit = candidates.filter((x) => !q || `${x.name}${roleNameOf(x)}`.toLowerCase().includes(q));
-      list.innerHTML = hit.length
-        ? hit.map((x) => `
-            <label class="member">
-              <input type="checkbox" value="${esc(x.id)}" ${picked.has(x.id) ? 'checked' : ''} />
-              <span>${esc(x.name)}</span>
-              <em>${esc(roleNameOf(x) || '—')}</em>
-            </label>`).join('')
-        : `<div class="pj-add-empty">${candidates.length ? '没有匹配的人' : '没有可以加的人 —— 员工都在成员里了'}</div>`;
-    };
-    list.addEventListener('change', (e) => {
-      const input = e.target.closest('input[type="checkbox"]');
-      if (!input) return;
-      if (input.checked) picked.add(input.value); else picked.delete(input.value);
-      sync();
-    });
-    search.addEventListener('input', paint);
-    paint();
-    sync();
-    dlg.querySelector('.pj-add-cancel').onclick = () => dlg.close();
-    ok.onclick = () => {
-      for (const id of picked) if (!pjPeople.members.includes(id)) pjPeople.members.push(id);
-      paintMemberRows();
-      paintPmCombo(); // 项目经理从成员里选 —— 成员变了，下拉跟着收敛
-      setPjState('未保存…', 'wait');
-      schedulePjSave(0); // 成员在档案单里，走同一条自动保存链路
-    }; // 提交按钮自己会关掉 method="dialog" 的弹窗，不用再调 dlg.close()
-    dlg.addEventListener('close', () => dlg.remove());
-    dlg.showModal();
-    setTimeout(() => search.focus(), 30);
-  };
-  $('pjMemberAdd')?.addEventListener('click', openAddMembersDialog);
-  paintMemberRows();
+  // 「项目负责人」下拉已下线（2026-11-19 用户要求）；存量值由 collect() 原样回传。
+  // 「项目成员」tab 连同列表、添加成员弹窗也一起下线，成员名单同样原样回传。
 
   // 起止日期：按钮文案对齐真值 + 点开自绘日历（见 openPjCal）
   paintPjDates();

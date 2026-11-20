@@ -554,7 +554,7 @@ body.no-list .list-panel { display: none; }
 .item .line1 .flow-t.bad { color: var(--bad); }
 .item .line2 { font-size: 12px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* 兜底：左栏行只认两种写法 —— 标准的 .line1/.line2，或简写的直接 b/.sub。
-   简写也必须长得跟标准一模一样（2026-10-20 收口：「服务器与密钥 / 研发面板」的行
+   简写也必须长得跟标准一模一样（2026-10-20 收口：「服务器与密钥」的行
    原来没有任何规则 —— 标题是浏览器默认的 16px 加粗、副标题全色还折行，
    跟「项目」页一对比就是两套界面）。判据：副标题是路径 / 地址 / 状态这种次要信息。 */
 .item .who > b { font-weight: 500; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

@@ -7,7 +7,6 @@ import { sendJson, fail, readBody, readRawBody } from '../http.mjs';
 import * as store from '../store.mjs';
 import * as auth from '../auth.mjs';
 import { dispatchToThread } from '../dispatch.mjs';
-import * as status from '../status.mjs';
 import { projectTasks, allTasks, createProjectTask, updateProjectTask, startProjectTask, afterMerged, upsertRepoCard } from '../project-tasks.mjs';
 import * as git from '../git-repos.mjs';
 import { verifyRunCredential } from '../agent-auth.mjs';

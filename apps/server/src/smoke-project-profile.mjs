@@ -1,14 +1,11 @@
 /**
- * 项目档案（干什么 / 项目经理 / 成员 / 起止时间）的离线验收（2026-10-23）。
+ * 项目档案（简介 / 项目经理 / 成员 / 起止时间）的离线验收（2026-10-23）。
  *
- * 验的是用户口述的那几件事，以及两条口径：
- *   · **读不到就明说「未填写」**，不猜、不装成有数（PRD S1.2）；
- *   · **开始时间有出处**：手动填的标「填写」，没填退回建档时间并标「建档时间」——
- *     两者可能差很远，混成一个数字等于骗人（PRD 五.3）。
- *
- * 2026-10-23 PRD **v0.2**：档案 UI 回到**四项**，迭代版本数归研发面板、不再进档案。
- * 但 `version_count` / `version_count_text` 两个**后端字段留着**（那是研发面板的数据源），
- * 所以下面的用例继续断言它们 —— 只是口径变成"字段还在且算得对"，不再是"档案要展示它"。
+ * 2026-11-19 研发面板下线后，档案的读写只走平台自己的 `/api/projects`
+ * （`/api/status/*` 那一套随插件一起删了）。这里验的是用户口述的那几件事：
+ *   · **PATCH 语义**：只改一项，别的原样留着；
+ *   · **说错的当场拒**，而且不写半截；
+ *   · **传空 = 真的清掉**（空串 / 空数组）。
  *
  * 隔离：临时数据库、临时端口、临时项目目录 —— 不碰 data/ 里的真账。
  * 跑法：node apps/server/src/smoke-project-profile.mjs
@@ -45,21 +42,8 @@ const req = async (p, opt = {}) => {
 const put = (p, body) => req(p, { method: 'PUT', body: JSON.stringify(body) });
 const post = (p, body) => req(p, { method: 'POST', body: JSON.stringify(body ?? {}) });
 
-/* 一个"有进度文件"的项目根：两份版本记录，版本数应为 2 */
 const projRoot = path.join(tmp, 'proj');
-fs.mkdirSync(path.join(projRoot, '.bandi'), { recursive: true });
-fs.writeFileSync(
-  path.join(projRoot, '.bandi', 'status.yaml'),
-  `updated: 2026-10-23 10:00
-project: 档案项目
-versions:
-  - version: 1.0.0
-    title: 第一版
-  - version: 1.1.0
-    title: 第二版
-`,
-  'utf8',
-);
+fs.mkdirSync(projRoot, { recursive: true });
 
 const logPath = path.join(tmp, 'server.log');
 const logFd = fs.openSync(logPath, 'a');
@@ -98,28 +82,26 @@ if (!up) {
   process.exit(1);
 }
 
+/** 从项目列表里取那一条（GET /api/projects 回原始字段） */
+const fetchProject = async (id) => {
+  const list = (await req('/api/projects')).b?.projects ?? [];
+  return list.find((p) => p.id === id) ?? {};
+};
+
 try {
   const proj = (await post('/api/projects', { name: '档案项目', root: projRoot })).b?.project;
   const pm = (await post('/api/personas', { name: '贺韬', role: '项目经理' })).b?.persona;
   const dev = (await post('/api/personas', { name: '嘉辉', role: '研发' })).b?.persona;
   const qa = (await post('/api/personas', { name: '杜衡', role: '测试' })).b?.persona;
   check('造数：项目 + 三个人', !!proj && !!pm && !!dev && !!qa);
-  /* 2026-10-27：新建项目默认**不**进研发面板（纳管是用户选的），
-     这个用例要验总览卡上的字段，所以先把它纳管进来。 */
-  check('造数：把项目纳管进面板', (await post('/api/status/managed', { ids: [proj.id] })).status === 200);
 
-  console.log('\n① 没填时：四项都给出处，不猜');
-  const blank = (await req(`/api/status/projects/${encodeURIComponent(proj.id)}`)).b ?? {};
-  check('干什么 → 未填写', blank.summary_text === '未填写', String(blank.summary_text));
-  check('项目经理 → 未填写', blank.pm_name === '未填写', String(blank.pm_name));
-  check('成员 → 未填写', blank.members_text === '未填写', String(blank.members_text));
-  const createdDay = String(proj.createdAt ?? '').slice(0, 10);
-  check('开始时间退回建档时间，且标了出处', blank.started_text === `${createdDay}（建档时间）`, String(blank.started_text));
-  check('结束时间 → 未填写（进行中）', blank.ended_text === '未填写（进行中）', String(blank.ended_text));
-  // v0.2：版本数出档案了，但**字段**留着（研发面板的数据源，PRD 改动 2）
-  check('后端 version_count 仍按 status.yaml 算（2）', blank.version_count === 2, String(blank.version_count));
+  console.log('\n① 新建时：可空字段都还没填');
+  const blank = await fetchProject(proj.id);
+  check('简介 → null', blank.summary == null, String(blank.summary));
+  check('项目经理 → null', blank.pmPersonaId == null, String(blank.pmPersonaId));
+  check('成员 → 空', !blank.memberPersonaIds || blank.memberPersonaIds === '[]', String(blank.memberPersonaIds));
 
-  console.log('\n② 填齐之后：接口与看板都拿得到');
+  console.log('\n② 填齐之后：接口与列表都拿得到');
   const filled = await put(`/api/projects/${encodeURIComponent(proj.id)}`, {
     summary: '把平台做成一个能自己干活的班底',
     pmPersonaId: pm.id,
@@ -131,18 +113,11 @@ try {
   const saved = filled.b?.project ?? {};
   check('简介存下来了', saved.summary === '把平台做成一个能自己干活的班底', String(saved.summary));
   check('项目经理存的是员工 id', saved.pmPersonaId === pm.id, String(saved.pmPersonaId));
-  check('成员存成 JSON 数组', JSON.parse(saved.memberPersonaIds || '[]').length === 2, String(saved.memberPersonaIds));
+  check('成员存成 JSON 数组（按填的顺序）', saved.memberPersonaIds === JSON.stringify([dev.id, qa.id]), String(saved.memberPersonaIds));
 
-  const after = (await req(`/api/status/projects/${encodeURIComponent(proj.id)}`)).b ?? {};
-  check('干什么原文出来', after.summary_text === '把平台做成一个能自己干活的班底', String(after.summary_text));
-  check('项目经理显示姓名', after.pm_name === '贺韬', String(after.pm_name));
-  check('成员显示姓名（按填的顺序）', after.members_text === '嘉辉、杜衡', String(after.members_text));
-  check('成员明细带 id（界面画头像用）', (after.members ?? []).map((m) => m.id).join() === `${dev.id},${qa.id}`);
-  check('开始时间标「填写」', after.started_text === '2026-10-10（填写）', String(after.started_text));
-  check('结束时间显示填的那天', after.ended_text === '2026-12-31', String(after.ended_text));
-  check('总览卡也带简介', (await req('/api/status/projects')).b?.projects?.find((c) => c.id === proj.id)?.summary_text === '把平台做成一个能自己干活的班底');
-  const card = (await req('/api/status/projects')).b?.projects?.find((c) => c.id === proj.id);
-  check('总览卡的 version_count 也在（研发面板要用）', card?.version_count === 2, String(card?.version_count));
+  const after = await fetchProject(proj.id);
+  check('列表里也有简介', after.summary === '把平台做成一个能自己干活的班底', String(after.summary));
+  check('列表里也有起止日期', after.startedAt === '2026-10-10' && after.endedAt === '2026-12-31', `${after.startedAt} / ${after.endedAt}`);
 
   console.log('\n③ PATCH 语义：只改一项，别的原样');
   const only = await put(`/api/projects/${encodeURIComponent(proj.id)}`, { summary: '改了一句话' });
@@ -158,8 +133,8 @@ try {
   check('成员里有人不存在 → 400 E1081', ghostMember.status === 400 && ghostMember.b?.code === 'E1081', `${ghostMember.status} ${ghostMember.b?.code}`);
   const badDate = await put(`/api/projects/${encodeURIComponent(proj.id)}`, { startedAt: '2026/10/10' });
   check('日期格式不对 → 400 E1082', badDate.status === 400 && badDate.b?.code === 'E1082', `${badDate.status} ${badDate.b?.code}`);
-  const still = (await req(`/api/status/projects/${encodeURIComponent(proj.id)}`)).b ?? {};
-  check('被拒的三次都没动数据', still.pm_name === '贺韬' && still.summary_text === '改了一句话', `${still.pm_name} / ${still.summary_text}`);
+  const still = await fetchProject(proj.id);
+  check('被拒的三次都没动数据', still.pmPersonaId === pm.id && still.summary === '改了一句话', `${still.pmPersonaId} / ${still.summary}`);
 
   console.log('\n⑤ 清空：传空串 / 空数组就是真的清掉');
   const cleared = await put(`/api/projects/${encodeURIComponent(proj.id)}`, {
@@ -173,23 +148,6 @@ try {
   check('项目经理清成 null', clearedSaved.pmPersonaId === null, String(clearedSaved.pmPersonaId));
   check('成员清成空数组', clearedSaved.memberPersonaIds === '[]', String(clearedSaved.memberPersonaIds));
   check('结束时间清成 null', clearedSaved.endedAt === null, String(clearedSaved.endedAt));
-  const clearedView = (await req(`/api/status/projects/${encodeURIComponent(proj.id)}`)).b ?? {};
-  check('清完又回到「未填写」', clearedView.pm_name === '未填写' && clearedView.ended_text === '未填写（进行中）', `${clearedView.pm_name} / ${clearedView.ended_text}`);
-
-  console.log('\n⑥ 人已经不在了：说清楚，不装成没配');
-  await put(`/api/projects/${encodeURIComponent(proj.id)}`, { pmPersonaId: pm.id, memberPersonaIds: [dev.id] });
-  const del = await req(`/api/personas/${encodeURIComponent(pm.id)}`, { method: 'DELETE' });
-  check('删掉项目经理这个人 → 200', del.status === 200, String(del.status));
-  const gone = (await req(`/api/status/projects/${encodeURIComponent(proj.id)}`)).b ?? {};
-  check('项目经理标「那个人已经不在了」', gone.pm_name === '未填写（那个人已经不在了）', String(gone.pm_name));
-  check('成员还在（只删了 PM）', gone.members_text === '嘉辉', String(gone.members_text));
-
-  console.log('\n⑦ 读不到进度文件的项目：版本数不装成 0（字段留着给研发面板，档案不展示它）');
-  const offlineRoot = path.join(tmp, 'offline');
-  fs.mkdirSync(offlineRoot, { recursive: true });
-  const offline = (await post('/api/projects', { name: '没进度文件', root: offlineRoot })).b?.project;
-  const offlineView = (await req(`/api/status/projects/${encodeURIComponent(offline.id)}`)).b ?? {};
-  check('版本数显示「缺进度文件」而不是 0', offlineView.version_count_text === '缺进度文件', String(offlineView.version_count_text));
 } catch (err) {
   console.log('\n跑挂了：' + String(err?.message ?? err));
   failed += 1;

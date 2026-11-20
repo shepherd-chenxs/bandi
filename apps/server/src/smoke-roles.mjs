@@ -59,9 +59,17 @@ try {
   check('项目经理 = 建卡 / 拆子卡 / 改卡 / 承接团队卡（四条，不多不少）',
     [...roleOf('pm').permissions].sort().join(',') === 'card.advance,card.create,card.split,team.coordinate',
     roleOf('pm').permissions.join(','));
-  check('除项目经理外没有岗位带权限（本期：验收权不下放，task.review 全员为空）',
-    ROLES.filter((r) => r.key !== 'pm').every((r) => r.permissions.length === 0),
-    ROLES.filter((r) => r.permissions.length).map((r) => r.key).join(','));
+  /*
+   * 2026-11-19 改口径：原来断言"除 PM 外**一律没有**权限"。加了交付权 `repo.deliver`
+   * （只给仓库管家）之后，这条从"没人有权"变成"**只有一个例外**，而且例外只有一个权限"。
+   * 断言并没有放松：它现在同时盯住"谁有"和"有哪些"——多给一个岗位、多挂一个权限都会红。
+   */
+  check('非项目经理的权限只有一个例外：仓库管家的交付权（不多给、不多挂）',
+    ROLES.filter((r) => r.key !== 'pm' && r.permissions.length > 0)
+      .every((r) => r.key === 'repo-keeper' && [...r.permissions].sort().join(',') === 'repo.deliver'),
+    ROLES.filter((r) => r.permissions.length).map((r) => `${r.key}:${r.permissions.join('+')}`).join(','));
+  check('验收权仍不下放（task.review 全员为空）',
+    ROLES.every((r) => !r.permissions.includes('task.review')));
   /*
    * 岗位技能包（2026-11-11 Phase 3）：技能挂在岗位上，雇佣/同步按它自动挂载。
    * 每个岗位都要有包 —— 空包 = 雇回来一个"什么方法论都没有"的人。

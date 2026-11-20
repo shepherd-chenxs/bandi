@@ -236,7 +236,7 @@ try {
    * ⑤ 老路径不受影响：令牌照旧能过 API
    */
   const token = fs.readFileSync(path.join(tmp, 'token'), 'utf8').trim();
-  check('operator 令牌照旧能读 /api/state', (await get('/api/state', { 'X-Bandi-Token': token })).status === 200);
+  check('本机令牌照旧能读 /api/state', (await get('/api/state', { 'X-Bandi-Token': token })).status === 200);
 
   /*
    * ⑥ 壳的探活口（2026-11-10 晚）：`/api/ping` 免鉴权、带 `authRequired`、**不记审计**。

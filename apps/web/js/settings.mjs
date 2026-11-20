@@ -175,16 +175,16 @@ export async function openMe() {
   showView('settings');
   setListTitle('我的');
   const id = meIdentity();
-  const { who, isUser, nick, phoneText, displayName } = id;
+  const { isUser, nick, phoneText, displayName } = id;
   const avaHtml = avatarHtml(id);
   /*
    * 「有没有登录态可退」（2026-11-01 实报：回环形态点退出登录没反应）。
+   * 2026-11-20 起判据只有一条：**这是不是一次真正的登录**。
    *   · 登录账号 → 有；
-   *   · 操作员 via 'token'（非回环形态的面板令牌）→ 有，退出会清令牌 Cookie；
-   *   · 操作员 via 'loopback' → **没有** —— 回环是免登录信任，clear Cookie 重载还是操作员，
-   *     摆了按钮就是骗人；手机设备同理（它的凭据是配对令牌，退出=解绑，另有入口）。
+   *   · 回环信任 / 本机钥匙代表机主（`/api/me` 带 `via`）→ **没有** —— 清了 Cookie
+   *     重载还是同一个机主，摆了按钮就是骗人。
    */
-  const canLogout = isUser || (who?.kind === 'operator' && who?.via !== 'loopback');
+  const canLogout = isUser;
   /*
    * 手机形态功能子集（2026-11-03 用户拍板）：**手机只要一部分功能，甚至是简化版**。
    * 「我的」页在窄屏只留两块：身份卡 + 退场行。设置入口、账号安全双卡都不画 ——

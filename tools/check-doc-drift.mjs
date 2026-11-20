@@ -395,17 +395,25 @@ const num = (s) => (/^\d+$/.test(s) ? Number(s) : (CN[s] ?? NaN));
  */
 const COUNTS = [
   {
-    id: 'identify 身份种类',
-    file: 'apps/server/src/auth.mjs',
-    claim: /分([一二三四五六七八九十\d]+)类身份/,
-    why: 'identify() 每加/删一类，文件头那句"分N类身份"必须跟着改（2026-11-03 真漂过：四类写成三种）',
+    /*
+     * 2026-11-20 operator 下线后，身份表只剩 user / run 两种，且 `identify()`
+     * 不再负责全部合成（会话 → user、运行钥匙 → run、本机钥匙 → user）。
+     * 锚点因此落在 **policy.mjs 的分支**上 —— 那才是"权限判定认几种身份"的
+     * 唯一一处；auth.mjs 里还有 `createSession({kind:'shell'})`，那是**会话行**
+     * 的寿命标记，不是请求身份，不能混进来数（第一版就数错过了）。
+     */
+    id: '身份种类',
+    file: 'apps/server/src/security/policy.mjs',
+    claim: /身份只剩([一二两三四五六七八九十\d]+)种/,
+    why: '身份表每加/删一类，policy.mjs 文件头那句"身份只剩N种"必须跟着改（2026-11-03 漂过：四类写成三种；2026-11-20 operator 下线又是一次）',
     compute: () => {
-      const src = read('apps/server/src/auth.mjs');
-      const start = src.indexOf('export function identify(');
-      const end = src.indexOf('\n}\n', start);
-      if (start < 0 || end < 0) throw new Error('找不到 identify() 的函数体（改签名了？先修这个检查）');
-      const kinds = new Set([...src.slice(start, end).matchAll(/kind:\s*'([a-z]+)'/g)].map((m) => m[1]));
-      if (!kinds.size) throw new Error('identify() 里没有 kind: 字面量（结构变了？）');
+      const src = read('apps/server/src/security/policy.mjs');
+      const code = src
+        .split('\n')
+        .filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l))
+        .join('\n');
+      const kinds = new Set([...code.matchAll(/who\.kind\s*===\s*'([a-z]+)'/g)].map((m) => m[1]));
+      if (!kinds.size) throw new Error('policy.mjs 里没有 who.kind === 分支（结构变了？）');
       return { n: kinds.size, detail: [...kinds].join(' / ') };
     },
   },
@@ -467,8 +475,8 @@ const PHRASES = [
     why: '2026-10-31 已做账号体系（建号 → 账号磁贴 / 用户名+密码），当年"不做"的结论已被推翻',
   },
   {
-    re: /分?三(种|类)身份|五态/,
-    why: 'identify() 已是四类身份（operator/node/device/revoked），登录页是四态',
+    re: /分?三(种|类)身份|四类身份|五态/,
+    why: '2026-11-20 operator 下线后身份只剩两种（人 / 一轮活）；"三类身份""四类身份"都是已删除的旧表（operator / node / device / revoked）',
   },
   {
     re: /切到总机(模式)?并重启|先在?模式里切到总机/,

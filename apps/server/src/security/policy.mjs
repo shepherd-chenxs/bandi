@@ -9,11 +9,12 @@
  *   2. 身份种类各自的边界。
  *
  * **登录用户 = 全权**（2026-11-07）：账号全在身份中枢，能过中枢登录这一关，
- * 本机就不再有第二道分级 —— 角色/菜单权限那套已整体退场。机器身份
- * （operator / run）的边界原样保留：机器不是人，不因为"人可以全权"
- * 就跟着放宽。（`device` —— 手机配对设备令牌 —— 2026-11-07 随配对体系退场；
- * `node` —— 节点令牌 —— 2026-11-09 随多机节点子系统整体删除，无存量机，
- * 原经 auth.mjs `rules` 注入的归属判定一并消失，剩下的判定全是纯清单标记。）
+ * 本机就不再有第二道分级 —— 角色/菜单权限那套已整体退场。
+ *
+ * **身份只剩两种**（2026-11-20）：`user`（人，含"本机钥匙 → 机主"）与 `run`（一轮活）。
+ * `operator` 已下线 —— 它不是权限边界，只是"机器凭据"的另一个名字；能做的事登录用户
+ * 都能做，留着它只会让人以为存在一道事实上不存在的闸。
+ * （`device` 手机配对令牌 2026-11-07 退场；`node` 节点令牌 2026-11-09 随多机子系统删除。）
  *
  * 为什么不 import auth.mjs：auth 要 import 本模块（decide 是 PDP 包装），
  * 反向引一次就是环。
@@ -22,16 +23,13 @@
 import { findRoute } from './route-policy.mjs';
 
 export function authorize({ who, method, pathname }) {
-  if (!who) return 'allow'; // 不该发生：guard 只在 identify 到身份之后才问
+  if (!who) return 'allow'; // 不该发生：guard 只在认出身份之后才问
   const m = String(method ?? '').toUpperCase();
   const p = String(pathname ?? '');
   const api = p.startsWith('/api/');
   const route = api ? findRoute(p, m) : null;
 
-  // operator（回环 / 共享令牌）：清单内全通。清单本身在 guard 兜底（未登记 404）。
-  if (who.kind === 'operator') return 'allow';
-
-  // 登录用户：全放行（能过中枢登录这一关，本机不再有第二道分级）。
+  // 人：全放行（能过中枢登录这一关，本机不再有第二道分级）。
   if (who.kind === 'user') return 'allow';
 
   /*

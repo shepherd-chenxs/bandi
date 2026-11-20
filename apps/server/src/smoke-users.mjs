@@ -12,12 +12,13 @@
  *   ④ 本地账号只是影子：POST /api/users 只收 name，第一个账号自动 builtin；
  *      PATCH 只认 name / nickname / disabled；内置账号不可删不可禁（E3808）；
  *   ⑤ 昵称：PATCH 改 / 清空（空白 = 清除）/ 超长拦下，且**不动账号名**（署名不受影响）；
- *   ⑤ 退出登录：会话真删（回环退回 operator，不是还挂着一个 user）；
- *   ⑥ 安全接口只认会话里的身份 —— operator（机器凭据）打 /api/security/* → 401 E3810；
+ *   ⑤ 退出登录：会话真删（回环退回机主，不是还挂着一个登录态）；
+ *   ⑥ 安全接口：登录会话与回环机主都能读（2026-11-20 operator 下线，回环=机主全权）；
+ *     服务器形态下匿名（无任何凭据）才在 guard 被挡 401；
  *   ⑦ 会话落库：重启（顺手换成服务器形态）后原 Cookie 仍有效，死票 / 伪造票一律 401。
  *
- * 纯管理动作（建 / 列 / 删账号）走回环 operator：BANDI_HOST=127.0.0.1、不带会话
- * Cookie 即 operator，跟登录是两条独立的路，互不干扰。
+ * 纯管理动作（建 / 列 / 删账号）走回环：BANDI_HOST=127.0.0.1、不带会话 Cookie 即机主
+ * （localKeyWho 'loopback'），跟登录是两条独立的路，互不干扰。
  *
  * 隔离：临时数据目录 + 临时端口 + 假中枢（hub-stub.mjs），跑完全删，不碰 data/。
  * 跑法：SMOKE_PORT=8909 node apps/server/src/smoke-users.mjs
@@ -150,7 +151,7 @@ fs.writeFileSync(
 );
 
 try {
-  /* 回环形态：API 免登录（operator），面板要会话 —— 任务书的确定性底座 */
+  /* 回环形态：API 免登录（合成机主），面板要会话 —— 任务书的确定性底座 */
   start({ BANDI_HOST: '127.0.0.1' });
   if (!(await waitUp())) throw new Error('实例没起来：' + log.slice(-500));
 
@@ -169,10 +170,11 @@ try {
   check('用户名 / 密码字段在', html0.includes('name="username"') && html0.includes('name="password"'));
   check('登录即注册：没有单独的注册按钮', !html0.includes('value="register"') && (html0.match(/<button/g) ?? []).length === 1);
   const me0 = await call('GET', '/api/me');
-  check('回环 /api/me 照旧 operator（机器侧的闸没变）', me0.status === 200 && me0.body?.kind === 'operator',
-    `${me0.status} ${me0.body?.kind ?? me0.body?.code}`);
+  check('回环 /api/me → {kind:user, via:loopback}（operator 2026-11-20 下线）',
+    me0.status === 200 && me0.body?.kind === 'user' && me0.body?.via === 'loopback',
+    `${me0.status} ${me0.body?.kind ?? me0.body?.code}/${me0.body?.via ?? ''}`);
 
-  /* ============ ② 建阴影账号（预占名字），回环 operator 免登录 ============ */
+  /* ============ ② 建阴影账号（预占名字），回环 = 机主免登录 ============ */
   console.log('\n② POST /api/users 只收 name：第一个=内置，重名/空名/超长拦下');
   const cBoss = await call('POST', '/api/users', { body: { name: '老板' } });
   check('POST {name} → 201（预占影子账号）', cBoss.status === 201, `${cBoss.status} ${cBoss.raw?.slice(0, 80)}`);
@@ -186,7 +188,7 @@ try {
   /* ============ ③ GET /api/users 列表形状 ============ */
   console.log('\n③ GET /api/users：列表形状，零凭据字段');
   const users0 = await call('GET', '/api/users');
-  check('GET /api/users → 200（回环 operator 免登录）', users0.status === 200, String(users0.status));
+  check('GET /api/users → 200（回环 = 机主，免登录）', users0.status === 200, String(users0.status));
   check('hasUsers:true，正好两个账号', users0.body?.hasUsers === true && users0.body?.users?.length === 2,
     JSON.stringify(users0.body?.users?.map((u) => u.name)));
   const ALLOWED = new Set(['id', 'name', 'nickname', 'builtin', 'disabled', 'createdAt', 'updatedAt']);
@@ -294,9 +296,15 @@ try {
 
   /* ============ ⑤d 修改密码：本机只转发，真验证在中枢 ============ */
   console.log('\n⑤d 修改密码：/api/me/password 转发中枢 /v1/auth/password（假中枢同语义）');
-  const pwAnon = await call('POST', '/api/me/password', { body: { oldPassword: '甲-pass-123', newPassword: 'new-pass-456' } });
-  check('没登录 → 401 E3810（operator 没有中枢账号可改）',
-    pwAnon.status === 401 && pwAnon.body?.code === 'E3810', `${pwAnon.status} ${pwAnon.body?.code ?? ''}`);
+  /*
+   * 2026-11-20 改：回环请求现在就是"机主本人"，它有账号，所以这条路会真的走到中枢。
+   * 用**错旧密码**打这一枪 —— 证明"鉴权过了、进了转发"，又不会真的改掉密码。
+   * （"完全没有凭据 → 401"那条由 smoke-security-policy 的服务器形态覆盖：
+   *   0.0.0.0 下匿名请求在 guard 就被挡，到不了 handler。）
+   */
+  const pwAnon = await call('POST', '/api/me/password', { body: { oldPassword: 'wrong-pass-1', newPassword: 'new-pass-456' } });
+  check('回环 = 机主：改密码进到中枢验密（错旧密码 → H1004）',
+    pwAnon.status === 400 && pwAnon.body?.code === 'H1004', `${pwAnon.status} ${pwAnon.body?.code ?? ''}`);
   const pwShort = await call('POST', '/api/me/password', { cookie: sidA, body: { oldPassword: '甲-pass-123', newPassword: 'short' } });
   check('新密码太短 → 400 E3814（本机先拦，不出网）',
     pwShort.status === 400 && pwShort.body?.code === 'E3814', `${pwShort.status} ${pwShort.body?.code ?? ''}`);
@@ -316,14 +324,15 @@ try {
   check('再改回去 → 200（后续段落照旧用原密码）', pwBack.status === 200 && pwBack.body?.ok === true, String(pwBack.status));
 
   /* ============ ⑥ 退出登录 ============ */
-  console.log('\n⑥ 退出登录：会话真删（回环退回 operator）');
+  console.log('\n⑥ 退出登录：会话真删（回环退回机主）');
   const lo = await call('POST', '/api/logout', { cookie: sidA });
   check('POST /api/logout → 200 且种下 Max-Age=0 的清场 Cookie',
     lo.status === 200 && /bandi_sid=;/.test(lo.setCookie ?? '') && /Max-Age=0/.test(lo.setCookie ?? ''),
     String(lo.setCookie ?? '').slice(0, 90));
   const meAfter = await call('GET', '/api/me', { cookie: sidA });
-  check('退出后原票失效：回环退回 operator（不是还挂着一个 user）',
-    meAfter.status === 200 && meAfter.body?.kind === 'operator', `${meAfter.status} ${meAfter.body?.kind}`);
+  check('退出后原票失效：回环退回机主（不是还挂着一个登录态）',
+    meAfter.status === 200 && meAfter.body?.kind === 'user' && meAfter.body?.via === 'loopback',
+    `${meAfter.status} ${meAfter.body?.kind}/${meAfter.body?.via ?? ''}`);
 
   /* ============ ⑦ 第二个中枢账号：登录即放行，自动建自己的影子账号 ============ */
   console.log('\n⑦ 登录即放行：乙凭对密码直接进门（自动建影子账号「乙」）');
@@ -336,8 +345,8 @@ try {
       && listAfter.body.users.some((u) => u.name === '乙' && !u.builtin),
     JSON.stringify(listAfter.body?.users ?? []).slice(0, 140));
 
-  /* ============ ⑧ 安全接口：只认会话里的身份 ============ */
-  console.log('\n⑧ /api/security/* 只认会话身份（operator 是机器凭据，不是"我"）');
+  /* ============ ⑧ 安全接口：登录会话与回环机主都能读 ============ */
+  console.log('\n⑧ /api/security/* 会话与机主都能读（2026-11-20 operator 下线：回环=机主全权）');
   // ⑥ 把甲登出了（绑定还在 —— 绑定表与登录会话是两回事），再登一次拿活会话
   const again = await hubLogin(BASE, { username: '甲', password: '甲-pass-123', origin: BASE });
   check('绑过的账号再登录 → 照常 302', again.status === 302 && !!again.sid,
@@ -351,9 +360,14 @@ try {
     JSON.stringify(Object.keys(sess.body?.sessions?.[0] ?? {})));
   const audit = await call('GET', '/api/security/audit', { cookie: `bandi_sid=${again.sid}` });
   check('登录用户读审计日志 → 200', audit.status === 200 && Array.isArray(audit.body?.events), String(audit.status));
-  const opSec = await call('GET', '/api/security/sessions');
-  check('operator（免登录的机器身份）→ 401 E3810', opSec.status === 401 && opSec.body?.code === 'E3810',
-    `${opSec.status} ${opSec.body?.code ?? ''}`);
+  /*
+   * 2026-11-20：回环形态下不带凭据的请求 = 机主（localKeyWho 'loopback'），不再是 operator。
+   * 机主全权，安全口也放行 —— 原来"operator 摸安全口 → 401"的拒绝样本在回环下消失了；
+   * 服务器形态下匿名（无任何凭据）才会在 guard 被挡 401（⑩ 覆盖）。
+   */
+  const loopbackSec = await call('GET', '/api/security/sessions');
+  check('回环机主（无会话）读安全口 → 200（机主全权，不再是"机器不是人"）',
+    loopbackSec.status === 200, `${loopbackSec.status} ${loopbackSec.body?.code ?? ''}`);
 
   /* ============ ⑨ 登录失败：原地回登录页 ============ */
   console.log('\n⑨ 登录失败：原地回登录页（中枢的拒绝，本机不遮不掩）');

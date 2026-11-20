@@ -29,6 +29,7 @@ import { shouldRotate } from './session-budget.mjs';
 import {
   platformContractBlock,
   repoBriefBlock,
+  gitStateBlock,
   taskContractBlock,
   constitutionBlock,
   stylePrefBlock,
@@ -43,6 +44,7 @@ import { personaRoots, directMember, resolveTarget, parseMentions } from './disp
 export {
   platformContractBlock,
   repoBriefBlock,
+  gitStateBlock,
   guessDeliveryKind,
   taskContractBlock,
   constitutionBlock,
@@ -452,7 +454,13 @@ function startMemberRun(thread, member, opts, trigger) {
    */
   // 仓库地图：不给它结构，它每次都要从 0 摸一遍（2026-11-19 两次"只会查、不会答"的实报）
   const repoBrief = repoBriefBlock(member.cwd || repoRoot);
-  const standing = [platformContractBlock(), repoBrief, pmBlock].filter(Boolean).join('\n\n');
+  /*
+   * 仓库状态（2026-11-19 六改）：雇主问「本地和仓库一致吗 / 要不要建 PR」，
+   * 它拿"工作区干净 + 与同名分支同步 + 没 open PR"答了"一致"，而分支上躺着一个没进 main 的提交。
+   * 这三样都回答不了那个问题 —— 所以平台自己算好领先/落后几个提交，直接摆在它眼前（见 gitStateBlock）。
+   */
+  const gitState = gitStateBlock(member.cwd || repoRoot);
+  const standing = [platformContractBlock(), repoBrief, gitState, pmBlock].filter(Boolean).join('\n\n');
   const contractBlock = taskContractBlock({ card: opts.card, workflow: workflowTask, project, tasks: myTasks });
   const fullTask = [cardBlock, task, attBlock, stylePrefBlock(), contractBlock].filter(Boolean).join('\n\n');
 

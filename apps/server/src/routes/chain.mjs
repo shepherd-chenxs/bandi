@@ -27,6 +27,7 @@ import { handleEvents } from './events.mjs';
 import { handleConversation } from './conversation.mjs';
 import { handlePersona } from './persona.mjs';
 import { handleAgentCards } from './agent-cards.mjs';
+import { handleAgentDeliver } from './agent-deliver.mjs';
 import { handleExpert } from './expert.mjs';
 import { handleUsers } from './users.mjs';
 import { handleProject } from './project.mjs';
@@ -58,13 +59,15 @@ export const CHAIN = [
 
   // ── 员工"工作证"通道：自成一套身份（run token），不能跟在别的鉴权后面
   { id: 'agent-cards', handle: handleAgentCards, note: '建卡通道（X-Bandi-Run-Token）' },
+  // 交付/闸门动作（2026-11-19）：同一把钥匙，但这是"一口气做完一串"的通道 —— 见 agent-deliver.mjs 头注释
+  { id: 'agent-deliver', handle: handleAgentDeliver, note: '交付与闸门动作（X-Bandi-Run-Token）' },
 
   { id: 'expert', handle: handleExpert, note: '专家库' },
   // /api/me 是"每个页面启动都会问一次"的接口，能早一步就早一步
   { id: 'users', handle: handleUsers, note: '账号 / 登录 / 安全（含 /api/me）' },
   { id: 'project', handle: handleProject, note: '项目、看板卡、评论、附件' },
   { id: 'workspace', handle: handleWorkspace, note: '工作区文件读取 + 系统打开' },
-  { id: 'status', handle: handleStatus, note: '状态账本 / 托管 / 项目状态' },
+  { id: 'status', handle: handleStatus, note: '控制面重启' },
   { id: 'fs', handle: handleFs, note: '目录列举（选工作目录用）' },
   { id: 'group', handle: handleGroup, note: '群聊' },
   { id: 'skill', handle: handleSkill, note: '技能包' },
