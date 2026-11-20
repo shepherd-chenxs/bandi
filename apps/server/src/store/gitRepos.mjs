@@ -22,6 +22,10 @@ export function getGitRepoByFullName(fullName) {
 }
 
 
+/* 仓库管理员固定张坤（2026-11-20 用户："仓库管理员默认张坤、不允许改"）。
+   新增仓库直接写上，界面不再给修改入口；历史空值由 db.mjs 那次回填补齐。 */
+export const DEFAULT_KEEPER_ID = 'p-expert-zhangkun';
+
 export function addGitRepo({ fullName, owner, name, isPrivate = 0, defaultBranch = null, localPath, language = null }) {
   const row = {
     id: newId('gr'),
@@ -35,9 +39,9 @@ export function addGitRepo({ fullName, owner, name, isPrivate = 0, defaultBranch
     addedAt: nowIso(),
   };
   db.prepare(
-    `INSERT INTO git_repos (id, fullName, owner, name, isPrivate, defaultBranch, localPath, language, addedAt, lastSyncAt)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
-  ).run(row.id, row.fullName, row.owner, row.name, row.isPrivate, row.defaultBranch, row.localPath, row.language, row.addedAt);
+    `INSERT INTO git_repos (id, fullName, owner, name, isPrivate, defaultBranch, localPath, language, addedAt, lastSyncAt, keeperPersonaId)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
+  ).run(row.id, row.fullName, row.owner, row.name, row.isPrivate, row.defaultBranch, row.localPath, row.language, row.addedAt, DEFAULT_KEEPER_ID);
   return getGitRepo(row.id);
 }
 

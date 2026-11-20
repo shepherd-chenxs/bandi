@@ -982,6 +982,13 @@ db.exec(`
 ensureColumn('git_repos', 'keeperPersonaId', 'keeperPersonaId TEXT');
 ensureColumn('git_repos', 'autoMerge', 'autoMerge INTEGER NOT NULL DEFAULT 0');
 
+/* 2026-11-20 用户："仓库管理员默认张坤、不允许改" —— 历史仓库的空值一次性补齐。
+   幂等：只碰还空着的那几行。库里必须真是张坤，否则会出现"界面写着张坤、
+   实际没绑所以不审"的假象（没绑 = 不派审 = 自动合并永远等不到触发）。 */
+db.prepare(
+  "UPDATE git_repos SET keeperPersonaId = 'p-expert-zhangkun' WHERE keeperPersonaId IS NULL OR keeperPersonaId = ''",
+).run();
+
 
 export function getMetaValue(key) {
   const row = db.prepare('SELECT value FROM meta WHERE key = ?').get(key);

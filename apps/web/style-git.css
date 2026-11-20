@@ -35,6 +35,92 @@
 /* PR 区未连 GitHub 账号时只放一个「连接」按钮（2026-11-20 形态改造）：
    没账号不是"错误状态"，是这块功能还没启用 —— 区域照画，点一下就有，别整块消失。 */
 .gr-pr-off { padding: 10px 4px; }
+/* 代码托管详情工具栏（2026-11-20）：提交/推送、分支管理、PR、历史 四块常驻 DOM，
+   切 tab 只改显隐，不重拉数据也不重建节点。 */
+.gr-tabs { display: flex; gap: 2px; margin: 8px 0 4px; border-bottom: 1px solid var(--line); }
+.gr-tabs button { padding: 7px 12px; border: 0; background: none; color: var(--dim);
+                  font: inherit; font-size: 12.5px; cursor: pointer;
+                  border-radius: 0;
+                  border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.gr-tabs button:hover { color: var(--text); background: none; border-radius: 0; }
+.gr-tabs button:focus-visible { outline: none; border-radius: 0; }
+.gr-tabs button.on { color: var(--text); background: none; border-radius: 0;
+                     border-bottom-color: var(--accent); font-weight: 600; }
+/* 兜底（2026-11-20 用户："鼠标悬浮不要高亮显示块"）：把四种交互态的背景一次性压平，
+   不依赖上面单条规则的特异性 —— 之前 hover 时仍有一块浅色底。 */
+.gr-tabs button,
+.gr-tabs button:hover,
+.gr-tabs button:active,
+.gr-tabs button:focus,
+.gr-tabs button:focus-visible,
+.gr-tabs button.on {
+  background: transparent;
+  background-color: transparent;
+  box-shadow: none;
+  border-radius: 0;
+}
+.plg-sec[data-gr-tab] { display: none; }
+.plg-sec[data-gr-tab].on { display: block; }
+/* 导航条上的本地目录（2026-11-20 用户："这个去掉，换成本地目录"）：接替原来分支 pill 的位置，
+   等宽小字、降灰，路径长了省略号 —— 不撑破 50px 的固定导航条。 */
+.gr-head-path { font-family: ui-monospace, monospace; font-size: 11.5px; color: var(--dim);
+                min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 分支管理（2026-11-20）：列表从分支下拉浮层搬进 tab，样式按同一套视觉重画 ——
+   分组标题、文件夹、行（图标/名称/上游/↑↓/›菜单）。行是 button，键盘可达。 */
+/* 不自己做滚动容器（2026-11-20 用户："卡里出现滚动条别扭，期望在外部显示滚动条"）：
+   列表按内容自然撑高，滚动交给外层 #pluginView —— 分支再多也是整页滚，
+   不会被卡片的固定高度裁掉、也不会在卡里再套一条滚动条。 */
+.gr-br-list { padding: 2px 0 4px; }
+/* 主次（2026-11-20 用户："看着好混乱，没有主次"）：
+   分组标题是「章」—— 加粗、大一号、带分隔线；分支行才是内容 ——
+   当前分支靠行尾圆点 + 淡底标识（2026-11-20 用户："不要加粗，加一个圆点不是更好吗"）。
+   远程 / 标签默认收起，由标题右侧的 › 展开（JS 切 .off / .hide）。 */
+.gr-br-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  padding: 16px 4px 6px;
+  border-bottom: 1px solid var(--line, rgba(128, 128, 128, 0.18));
+}
+.gr-br-head:first-child { padding-top: 4px; }
+.gr-br-head.foldable { cursor: pointer; user-select: none; }
+.gr-br-head.foldable:hover { color: var(--accent); }
+.gr-br-caret { margin-left: auto; font-size: 12px; color: var(--dim); transition: transform 0.12s;
+               transform: rotate(90deg); }
+/* 展开时向下、收起时向右（2026-11-20 用户："箭头错了，折叠起来是向右的，展开式向下的"） */
+.gr-br-head.off .gr-br-caret { transform: rotate(0deg); }
+.gr-br-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  /* 行本身不可点（操作全在行尾 › 菜单里），光标别给成可点击的手型 */
+  cursor: default;
+}
+.gr-br-row:hover { background: var(--input); }
+.gr-br-row.on { background: var(--input); }
+/* 当前分支的标识（2026-11-20 用户："不要加粗，加一个圆点不是更好吗"、"圆点放左边"）：
+   6px 实心圆点，钉在行首（图标之前）；所有行都留这一格，名字左缘才不会因圆点有无而错位。 */
+.gr-br-mark { flex: 0 0 6px; display: inline-flex; align-items: center; }
+.gr-br-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.gr-br-ic { display: inline-flex; color: var(--dim); }
+.gr-br-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gr-br-hint { font-size: 10.5px; color: var(--dim); opacity: 0.7; }
+.gr-br-badge { color: var(--ok); font-size: 11px; }
+.gr-br-more { color: var(--dim); padding: 0 4px; cursor: pointer; }
+.gr-br-more:hover { color: var(--accent); }
+.gr-br-row.hide { display: none; }
+#grBranchNew { margin-left: auto; }
 /* 连接弹窗：动态 dialog，行式表单（标签左、控件右） */
 .gr-conn-dlg { width: 600px; max-width: 92vw; }
 /* 仓库设置弹窗（2026-10-27，用户："仓库设置区太占地方 → 右上角设置按钮点开"）：
@@ -54,6 +140,20 @@
    —— 下拉条目全挤到右边、左边空一大片（浮层里本来就没有"右对齐"这回事）。 */
 .gr-set-dlg .gr-patrol-combo { width: 216px; max-width: 100%; margin-left: auto; text-align: left; }
 .gr-set-dlg .gr-patrol-combo.is-saving .combo-btn { opacity: .6; pointer-events: none; }
+/* PR tab 的 PR自动化区（2026-11-20 从设置弹窗搬来）：上面那套限宽是 .gr-set-dlg 专属，
+   搬过来没带样式，.combo 的 width:100% 就撑满整行 —— 一行只有一个下拉，看着像大输入框。
+   收窄到 200px、贴右；浮层也锁同一宽度（用户："这两个改成一样宽"），
+   200 刚好装下最长的「每 12 小时（一天两次）」，不会折行也不会截断。 */
+[data-gr-tab="pr"] .info-row > b.gr-patrol-cell { overflow: visible; }
+[data-gr-tab="pr"] .gr-patrol-combo { width: 200px; max-width: 100%; margin-left: auto; text-align: left; }
+[data-gr-tab="pr"] .gr-patrol-combo .combo-btn { padding: 5px 8px; position: relative; justify-content: center; }
+/* 文字居中（2026-11-20 用户："文字居中"）：箭头脱离文档流贴右，文字才真正居中，
+   不会被右侧箭头挤偏；不这样做只能靠 flex:1 近似居中，还是会差几像素。 */
+[data-gr-tab="pr"] .gr-patrol-combo .combo-chev { position: absolute; right: 8px; margin: 0; }
+[data-gr-tab="pr"] .gr-patrol-combo .combo-pop { width: 200px; min-width: 0; max-width: min(200px, 92vw); }
+/* 「立即巡检」推到标题行最右（2026-11-20 用户："按钮右对齐"）：.plg-sec-head 是 flex，
+   margin-left:auto 吃掉中间空隙；id 唯一，不会影响别的分区头。 */
+#grPatrolRun { margin-left: auto; }
 .gr-set-path { font-family: ui-monospace, monospace; font-size: 11.5px;
                overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 导航条上的齿轮钮：图标本身 15px，别让 .mini 的写法把它挤小 */

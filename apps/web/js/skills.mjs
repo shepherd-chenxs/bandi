@@ -1,7 +1,7 @@
 /* skills.mjs —— 技能、从 GitHub 挑仓库（放进弹窗里）、定时任务、从本地导入、技能 → 发给数字员工（反方向挂载）。
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
 import { esc, mdRender, personaCan, roleNameOf, savePlace, setRoute, toast } from './shell.mjs';
-import { ICON_BRANCH, ICON_CLOUD, ICON_COMMIT, ICON_EDIT, ICON_FOLDER, ICON_GEAR, ICON_PLAY, ICON_PUSH, ICON_SYNC, ICON_TAG, ICON_TRASH, api, createCombo, createDateTimePick, cut, failHtml, initial, openCtxMenu, post, wireDialogHead } from './ui.mjs';
+import { ICON_BRANCH, ICON_CLOUD, ICON_EDIT, ICON_FOLDER, ICON_GEAR, ICON_PLAY, ICON_SYNC, ICON_TAG, ICON_TRASH, api, createCombo, createDateTimePick, cut, failHtml, initial, openCtxMenu, post, wireDialogHead } from './ui.mjs';
 import { load, setNav } from './state.mjs';
 import { openSettings } from './settings.mjs';
 import { setListTitle } from './flowpages.mjs';
@@ -708,27 +708,28 @@ export async function renderGitRepos(root = $('pluginView')) {
   const repoDetail = sel
     ? `<div class="plg-detail-head fixed-head">
          <b>${esc(sel.fullName)}</b>${sel.isPrivate ? '<span class="pill">私有</span>' : ''}
-         <span class="gr-branch" id="grBranchMount"></span>
-         <!-- 本地路径 2026-10-27 应用户要求从导航条摘掉 —— 左栏列表和齿轮弹窗里都还有，不丢信息 -->
+         <!-- 导航条上原来挂的是分支 pill，2026-11-20 用户："这个去掉，换成本地目录" ——
+              分支在「分支管理」tab 里有完整列表，导航条这块位置改放仓库的本地目录。 -->
+         <span class="gr-head-path" title="${esc(sel.localPath || '')}">${esc(sel.localPath || '')}</span>
          <!--
-           顶部常驻动作栏（2026-11-20，用户："入口分散、要多点几步，基础功能尽量傻瓜式"）：
-           更新 / 提交 / 推送 / 建 PR 原来只有点开分支下拉才找得到，现在直接摆在标题行；
-           亮不亮由工作区状态说了算（fillChanges 里统一刷），灰掉时 title 说明为什么。
+           标题行只留仓库设置（2026-11-20 用户："更新 / 提交 / 推送 / 建 PR 这几个按钮去掉"）：
+           各回各家 —— 提交、推送在「提交 / 推送」tab，更新在「分支管理」tab 的「更新项目」，
+           建 PR 在 PR tab。同一动作只留一个入口，标题行不重复。
          -->
          <div class="head-actions">
-           <button type="button" class="mini auto gr-act" data-gr-act="sync" disabled
-                   title="更新项目">${ICON_SYNC}<span>更新</span></button>
-           <button type="button" class="mini auto gr-act" data-gr-act="commit" disabled
-                   title="提交">${ICON_COMMIT}<span>提交</span></button>
-           <button type="button" class="mini auto gr-act" data-gr-act="push" disabled
-                   title="推送">${ICON_PUSH}<span>推送</span></button>
-           ${ghLinked ? `<button type="button" class="mini auto gr-act" data-gr-act="pr" disabled
-                   title="建 PR">${ICON_CLOUD}<span>建 PR</span></button>` : ''}
            <button class="mini gr-set-btn" data-git-settings="${esc(sel.id)}"
-                   title="仓库设置：管理员 / 自动合并 / 巡检 / 默认分支 / 上次同步" aria-label="仓库设置">${ICON_GEAR}</button>
+                   title="仓库设置：默认分支 / 上次同步 / 本地目录" aria-label="仓库设置">${ICON_GEAR}</button>
          </div>
        </div>
-       <div class="plg-sec">
+       <!-- 工具栏（2026-11-20，用户："顶部做成工具栏，像 tab 一样，点了显示对应区域"）：
+            纵向堆四块时一次只能看一块，还要一路滚；现在分段，默认落在「提交 / 推送」。 -->
+       <nav class="gr-tabs" id="grTabs" aria-label="仓库视图">
+         <button type="button" data-gr-tab-btn="commit">提交 / 推送</button>
+         <button type="button" data-gr-tab-btn="branch">分支管理</button>
+         <button type="button" data-gr-tab-btn="pr">PR</button>
+         <button type="button" data-gr-tab-btn="log">历史</button>
+       </nav>
+       <div class="plg-sec" data-gr-tab="commit">
          <div class="plg-sec-head"><label class="plg-sec-title">提交</label><span class="dim" id="grChgHead"></span></div>
          <section class="fx"><div id="grChanges"><div class="sk-blank">读工作区…</div></div></section>
        </div>
@@ -737,7 +738,7 @@ export async function renderGitRepos(root = $('pluginView')) {
          推和交是两件事：未推提交挤在「提交」卡里，会让人以为推送要跟着提交走。
          版式对齐「拉取请求」：动作（推送）钉在分节标题行右侧。
        -->
-       <div class="plg-sec">
+       <div class="plg-sec" data-gr-tab="commit">
          <div class="plg-sec-head">
            <label class="plg-sec-title">推送</label><span class="dim" id="grPushHead"></span>
            <button type="button" class="mini auto" id="grPushNow">推送</button>
@@ -751,30 +752,66 @@ export async function renderGitRepos(root = $('pluginView')) {
           这不是错误状态，是"PR 功能还没启用"，点一下就能用
         · 没有 GitHub 地址 → 代码在本机管，提交 / 推送 / 分支照常，不出 PR 卡
       -->
-      ${ghLinked ? (st.connected ? `<div class="plg-sec">
+      ${ghLinked ? (st.connected ? `<div class="plg-sec" data-gr-tab="pr">
         <div class="plg-sec-head">
           <label class="plg-sec-title">拉取请求</label><span class="dim" id="grPullsHead"></span>
           <button type="button" class="mini auto gr-pulls-refresh" id="grPullsRefresh" title="从 GitHub 重新取一次">刷新</button>
         </div>
         <section class="fx"><div id="grPulls"><div class="sk-blank">取 PR…</div></div></section>
       </div>
-      <div class="plg-sec">
+      <div class="plg-sec" data-gr-tab="pr">
         <div class="plg-sec-head">
           <label class="plg-sec-title">PR 列表</label><span class="dim" id="grReviewHead"></span>
           <button type="button" class="mini auto" id="grReviewRefresh" title="从 GitHub 重新取一次">刷新</button>
         </div>
         <section class="fx"><div id="grReview"><div class="sk-blank">取 PR…</div></div></section>
-      </div>` : `<div class="plg-sec">
+      </div>` : `<div class="plg-sec" data-gr-tab="pr">
         <div class="plg-sec-head"><label class="plg-sec-title">拉取请求</label></div>
         <section class="fx"><div class="gr-pr-off">
           <button type="button" class="primary" id="grPrConnect">连接 GitHub 账号</button>
         </div></section>
-      </div>`) : `<div class="plg-sec">
+      </div>`) : `<div class="plg-sec" data-gr-tab="pr">
         <div class="plg-sec-head"><label class="plg-sec-title">拉取请求</label></div>
         <section class="fx"><div class="sk-blank">这个仓库没有 GitHub 地址 —— 代码在本机管理，
           提交、推送、切分支都照常。要接 GitHub 上的 PR，用「＋」从账号里加仓库。</div></section>
       </div>`}
-       <div class="plg-sec">
+       <!-- PR自动化（2026-11-20 用户："自动合并不该藏在设置里，它就是 PR 这条链上的配置"）：
+            管理员 / 巡检节拍 / 自动合并是「发现 → 审 → 合」三段，收在同一区里。
+            但 autoMerge 不是巡检任务的字段 —— 巡检关掉、流程建 PR 时它照样生效，
+            所以这里是"同组配置"，不是"从属关系"。 -->
+       <div class="plg-sec" data-gr-tab="pr">
+         <div class="plg-sec-head">
+           <label class="plg-sec-title">PR自动化</label>
+           <button type="button" class="mini auto" id="grPatrolRun"
+                   title="现在就跑一次这个仓库的巡检（开没开节拍都能跑）">立即巡检</button>
+         </div>
+         <section class="fx" id="grPatrolBody">
+           <div class="info-row"><span>管理员</span><b>${esc(keeperName(sel.keeperPersonaId || 'p-expert-zhangkun') || '张坤')}</b></div>
+           <div class="info-row"><span>巡检节拍</span><b class="gr-patrol-cell">
+             <div class="gr-patrol-combo" id="grPatrolSel"
+                  title="到点自动拉这个仓库的 open PR / issue，写成看板上的值班卡"></div>
+           </b></div>
+           <div class="info-row"><span>上次巡检</span><b id="grPatrolLast" class="gr-patrol-last"></b></div>
+           <div class="info-row"><span>自动合并</span><b>
+             <label class="switch sm" title="开：管理员审阅通过且四道闸全过的 PR 直接合并；关：停在「待验收」，等你点「通过」">
+               <input type="checkbox" data-automerge ${sel.autoMerge ? 'checked' : ''} aria-label="自动合并" /><span></span>
+             </label>
+           </b></div>
+         </section>
+       </div>
+       <div class="plg-sec" data-gr-tab="branch">
+         <!-- 分支管理（2026-11-20 用户："这个移动到管理分支tab"）：原来塞在分支下拉里的
+              最近 / 本地 / 远程 / 标签 整块搬到这里，下拉只留操作项。 -->
+         <div class="plg-sec-head">
+           <label class="plg-sec-title">分支管理</label>
+           <button type="button" class="mini auto" id="grBranchNew">新建分支…</button>
+           <button type="button" class="mini auto" id="grBranchSync" title="git pull：拉取上游新提交">更新项目</button>
+         </div>
+         <section class="fx">
+           <div id="grBranchList" class="gr-br-list"><div class="sk-blank">正在读分支…</div></div>
+         </section>
+       </div>
+       <div class="plg-sec" data-gr-tab="log">
          <div class="plg-sec-head"><label class="plg-sec-title">历史</label></div>
          <section class="fx"><div id="grLog"><div class="sk-blank">读提交记录…</div></div></section>
        </div>`
@@ -787,6 +824,27 @@ export async function renderGitRepos(root = $('pluginView')) {
   view.innerHTML = `<div class="detail-body"><div class="plg-detail">${repoDetail}</div></div>`;
 
   const refresh = () => renderGitRepos(root);   // 重画回**同一个宿主**（设置页 / 工作台各画各的）
+
+  /*
+   * 工具栏切页（2026-11-20）：四块内容都常驻 DOM，切 tab 只改显隐 ——
+   * 不重拉数据、不重建节点，所以「提交」卡里正在写的说明切走再切回不会丢。
+   * 当前 tab 记内存态 S.gitTab，换仓库时保留在同一块。
+   */
+  const GR_TABS = ['commit', 'branch', 'pr', 'log'];
+  const showTab = (t) => {
+    const cur = GR_TABS.includes(t) ? t : 'commit';
+    S.gitTab = cur;
+    view.querySelectorAll('[data-gr-tab-btn]').forEach((b) => {
+      b.classList.toggle('on', b.dataset.grTabBtn === cur);
+    });
+    view.querySelectorAll('[data-gr-tab]').forEach((el) => {
+      el.classList.toggle('on', el.dataset.grTab === cur);
+    });
+  };
+  view.querySelectorAll('[data-gr-tab-btn]').forEach((b) => {
+    b.addEventListener('click', () => showTab(b.dataset.grTabBtn));
+  });
+  showTab(S.gitTab);
 
   /*
    * 顶部常驻动作（2026-11-20，用户："入口分散、要多点几步，基础功能尽量傻瓜式"）：
@@ -835,13 +893,6 @@ export async function renderGitRepos(root = $('pluginView')) {
     return false;
   };
 
-  view.querySelectorAll('[data-gr-act]').forEach((b) => {
-    b.onclick = () => runOp(b.dataset.grAct);
-  });
-
-
-
-
   /*
    * 「添加仓库」：入口在**左栏顶上的「＋」**（主从页的规矩，同 renderPluginMaster 的
    * add 表单）。一个入口两条路：点＋ → 选「手动接入」或「从 GitHub 添加」→ 各自开弹窗。
@@ -881,13 +932,9 @@ export async function renderGitRepos(root = $('pluginView')) {
     if (repo) repo.keeperPersonaId = kid || null;
   };
   const patrolPresets = () => (st.patrolPresets?.length ? st.patrolPresets : [{ id: 'off', label: '关闭' }]);
-  const patrolLastText = (p) => {
-    if (!p?.jobId) return '还没配节拍 —— 也可以先点「立即巡检」跑一次';
-    if (!p.lastStatus) return '还没跑过';
-    const body = p.lastStatus === 'ok' ? `✓ ${p.lastSummary || '完成'}` : `✗ ${p.lastError || '失败了（没有原因）'}`;
-    const when = p.lastRunAt ? String(p.lastRunAt).replace('T', ' ').slice(0, 16) : '';
-    return when ? `${when} · ${body}` : body;
-  };
+  /* 「上次巡检」只显示时间（2026-11-20 用户："这个文案去掉，这个属性只要显示时间就行了"）：
+     没跑过就空着，不再写「还没配节拍」「还没跑过」这类引导话术。 */
+  const patrolLastText = (p) => (p?.lastRunAt ? String(p.lastRunAt).replace('T', ' ').slice(0, 16) : '');
   const paintPatrolLast = (repo) => {
     const el = $('grPatrolLast');
     if (!el) return;
@@ -900,40 +947,14 @@ export async function renderGitRepos(root = $('pluginView')) {
     dlg.className = 'gr-set-dlg';
     const form = document.createElement('form');
     form.method = 'dialog';
-    const p = repo.patrol ?? { preset: 'off' };
-    /*
-     * 巡检节拍用全站 `.combo`（2026-10-29 用户："巡检使用公共组件"）。
-     * 原生 <select> 的弹出层是浏览器画的 —— 高度、配色、圆角跟站内其它下拉是两套东西。
-     * 「自定义（每周一）」不是**可选**的档：它只用来照实显示现状（人手工建过），选它等于什么都没做。
-     */
-    const patrolItems = patrolPresets().map((x) => ({ id: x.id, label: x.label }));
-    if (p.preset === 'custom') patrolItems.push({ id: 'custom', label: `自定义（${p.text || '当前节拍'}）` });
     form.innerHTML = `
       <b>仓库设置</b>
       <div class="gr-dlg-body gr-set-body">
-        <div class="info-row"><span>管理员</span><b>
-          <button type="button" class="gr-keeper-btn" data-k-cur="${esc(repo.keeperPersonaId ?? '')}"
-                  title="别人提了 PR，替你审的那个人。点击选择">${
-                    repo.keeperPersonaId ? esc(keeperName(repo.keeperPersonaId) || '未设置') : '<span class="dim">未设置</span>'
-                  }</button>
-        </b></div>
-        <div class="info-row"><span>自动合并</span><b>
-          <label class="switch sm" title="开：审阅通过且闸门全过的 PR 自动合并；关：停在「待验收」等你点">
-            <input type="checkbox" data-automerge ${repo.autoMerge ? 'checked' : ''} aria-label="自动合并" /><span></span>
-          </label>
-        </b></div>
-        <div class="info-row"><span>巡检</span><b class="gr-patrol-cell">
-          <div class="gr-patrol-combo" id="grPatrolSel"
-               title="到点自动拉这个仓库的 open PR / issue，写成看板上的值班卡"></div>
-        </b></div>
-        <div class="info-row"><span>上次巡检</span><b id="grPatrolLast" class="gr-patrol-last"></b></div>
         <div class="info-row"><span>默认分支</span><b>${esc(repo.defaultBranch || '—')}</b></div>
         <div class="info-row"><span>上次同步</span><b>${syncAt(repo.lastSyncAt)}</b></div>
         <div class="info-row"><span>本地目录</span><b class="gr-set-path" title="${esc(repo.localPath)}">${esc(repo.localPath)}</b></div>
       </div>
       <div class="dlg-actions">
-        <button type="button" class="mini auto" id="grPatrolRun"
-                title="现在就跑一次这个仓库的巡检（开没开节拍都能跑）">立即巡检</button>
         <button type="button" class="mini auto gr-set-remove" id="grSetRemove"
                 title="只移除记录，本地目录保留（低频、破坏性动作，收在设置里）">从清单移除…</button>
       </div>`;
@@ -941,63 +962,6 @@ export async function renderGitRepos(root = $('pluginView')) {
     document.body.append(dlg);
     wireDialogHead(form);
     dlg.addEventListener('close', () => dlg.remove());
-    paintPatrolLast(repo);
-
-    form.querySelector('.gr-keeper-btn').onclick = (e) => openKeeperDlg(repo.id, e.currentTarget.dataset.kCur ?? '');
-    form.querySelector('[data-automerge]').onchange = (e) => {
-      repo.autoMerge = e.currentTarget.checked ? 1 : 0;
-      saveRepoSettings(repo.id, { autoMerge: e.currentTarget.checked });
-    };
-    const patrolMount = form.querySelector('#grPatrolSel');
-    let patrolSaving = false;
-    const patrolCombo = createCombo({
-      mount: patrolMount,
-      items: patrolItems,
-      value: p.preset ?? 'off',
-      onChange: async (preset) => {
-        if (preset === 'custom' || patrolSaving) return; // 「自定义」只是现状展示，不是可选的档
-        patrolSaving = true;
-        patrolMount.classList.add('is-saving');
-        try {
-          const r = await post(`/api/git/repos/${encodeURIComponent(repo.id)}/patrol`, { preset });
-          repo.patrol = r.patrol;
-          // 存成预设之后，「自定义（…）」那条不再代表现状 —— 摘掉，免得还能选回一个不存在的档
-          patrolCombo.setItems(patrolItems.filter((x) => x.id !== 'custom'));
-          patrolCombo.setValue(r.patrol?.preset ?? preset);
-          toast('已保存');
-          paintPatrolLast(repo);
-          await refresh(); // 页面上的状态跟着库走（弹窗挂在 body 上，不受重画影响）
-        } catch (err) {
-          toast(err.message, 'error');
-          // 存失败要把按钮拉回真实值：combo 是"先画选中、再回调"的，不拉回来屏幕上就挂着一条假节拍
-          patrolCombo.setValue(repo.patrol?.preset ?? 'off');
-          await refresh();
-        } finally {
-          patrolSaving = false;
-          patrolMount.classList.remove('is-saving');
-        }
-      },
-    });
-    form.querySelector('#grPatrolRun').onclick = async (e) => {
-      const btn = e.currentTarget;
-      if (btn.disabled) return;
-      btn.disabled = true;
-      btn.classList.add('busy');
-      try {
-        const r = await post(`/api/git/repos/${encodeURIComponent(repo.id)}/patrol/run`, {});
-        toast(r.ok ? `巡检跑完了：${r.summary ?? '完成'}` : `这次没跑成：${r.error ?? '没有原因'}`);
-        // 上一次结果记在对应任务上：重新取一次，弹窗里那行才不是旧的
-        const st2 = await api('/api/git/status');
-        const fresh = (st2.repos ?? []).find((x) => x.id === repo.id);
-        if (fresh) repo.patrol = fresh.patrol;
-        paintPatrolLast(repo);
-      } catch (err) {
-        toast(err.message, 'error');
-      } finally {
-        btn.disabled = false;
-        btn.classList.remove('busy');
-      }
-    };
     // 移除入口（2026-10-27 从导航条搬进来）：确认后只删记录，本地克隆目录不动
     form.querySelector('#grSetRemove').onclick = async () => {
       if (!(await confirmDo('从清单移除这个仓库？（只删记录，本地克隆目录保留，里面可能有你没推的东西）'))) return;
@@ -1019,6 +983,80 @@ export async function renderGitRepos(root = $('pluginView')) {
       if (repo) openGitSettingsDlg(repo);
     };
   });
+
+  /*
+   * PR巡检折叠区（2026-11-20 用户："把这个功能移动到 PR 里，区域标题就叫 PR巡检"）：
+   * 原来在仓库设置弹窗里，现在搬到 PR tab —— 平时只露「节拍 + 上次结果 + 立即巡检」一行，
+   * 点「节拍」才展开下拉。背后仍是定时任务里那条 pr-scan，不是第二套调度。
+   */
+  const patrolMount = $('grPatrolSel');
+  if (patrolMount) {
+    const buildItems = () => {
+      const cur = sel.patrol ?? { preset: 'off' };
+      const items = patrolPresets().map((x) => ({ id: x.id, label: x.label }));
+      if (cur.preset === 'custom') items.push({ id: 'custom', label: `自定义（${cur.text || '当前节拍'}）` });
+      return items;
+    };
+    paintPatrolLast(sel);
+    /* 自动合并（2026-11-20 从仓库设置搬来）：跟巡检是「发现 → 审 → 合」同一条链看。
+       管理员固定张坤、不给改（2026-11-20 用户要求），所以这一块只剩一个开关。 */
+    const autoMergeBox = view.querySelector('[data-gr-tab="pr"] [data-automerge]');
+    if (autoMergeBox) {
+      autoMergeBox.onchange = (e) => {
+        sel.autoMerge = e.currentTarget.checked ? 1 : 0;
+        saveRepoSettings(sel.id, { autoMerge: e.currentTarget.checked });
+      };
+    }
+    let saving = false;
+    const combo = createCombo({
+      mount: patrolMount,
+      items: buildItems(),
+      value: (sel.patrol ?? { preset: 'off' }).preset ?? 'off',
+      onChange: async (preset) => {
+        if (preset === 'custom' || saving) return; // 「自定义」只是现状展示，不是可选的档
+        saving = true;
+        patrolMount.classList.add('is-saving');
+        try {
+          const r = await post(`/api/git/repos/${encodeURIComponent(sel.id)}/patrol`, { preset });
+          sel.patrol = r.patrol;
+          combo.setItems(buildItems());
+          combo.setValue(r.patrol?.preset ?? preset);
+          toast('已保存');
+          paintPatrolLast(sel);
+          /* 不 refresh()：整页重画会闪一下。这里已经就地换了值、重画了「上次巡检」，
+             节拍只影响这一行和后台那条定时任务，没有别处需要刷新。 */
+        } catch (err) {
+          toast(err.message, 'error');
+          combo.setValue(sel.patrol?.preset ?? 'off');
+        } finally {
+          saving = false;
+          patrolMount.classList.remove('is-saving');
+        }
+      },
+    });
+    const runBtn = $('grPatrolRun');
+    if (runBtn) {
+      runBtn.onclick = async () => {
+        if (runBtn.disabled) return;
+        runBtn.disabled = true;
+        runBtn.classList.add('busy');
+        try {
+          const r = await post(`/api/git/repos/${encodeURIComponent(sel.id)}/patrol/run`, {});
+          toast(r.ok ? `巡检跑完了：${r.summary ?? '完成'}` : `这次没跑成：${r.error ?? '没有原因'}`);
+          // 上一次结果记在对应任务上：重新取一次，那行才不是旧的
+          const st2 = await api('/api/git/status');
+          const fresh = (st2.repos ?? []).find((x) => x.id === sel.id);
+          if (fresh) sel.patrol = fresh.patrol;
+          paintPatrolLast(sel);
+        } catch (err) {
+          toast(err.message, 'error');
+        } finally {
+          runBtn.disabled = false;
+          runBtn.classList.remove('busy');
+        }
+      };
+    }
+  }
 
   /*
    * 管理员弹窗（keeperDlg，2026-10-23）：搜索过滤、**点哪行选哪行、选完即关**——
@@ -1073,6 +1111,7 @@ export async function renderGitRepos(root = $('pluginView')) {
    */
   if (sel) {
     fillChanges(sel);
+    fillBranchTab(sel);
     // PR 要调 GitHub API：没地址、或账号没连，都别去请求（没连时那格放的是「连接」按钮）
     if (ghLinked && st.connected) fillPulls(sel);
     fillLog(sel);
@@ -1525,7 +1564,7 @@ export async function renderGitRepos(root = $('pluginView')) {
 
   /*
    * 分支清单 → 下拉条目（2026-10-27，参照 IDE 的分支弹窗）：
-   * 顶部是常用操作（更新项目=同步、提交、推送、新建分支 —— 搜索框搜"推"也能命中操作），
+   * 顶部只剩两个操作（更新项目=同步、新建分支 —— 提交/推送在顶部动作栏，不重复），
    * 下面分组：最近（当前分支打头 + reflog 派生）/ 本地 / 远程 / 标签，三组都按 `/` 前缀分文件夹。
    *
    * 2026-10-27 二改（用户指 IDEA 截图："改成 idea 这种"）：
@@ -1547,30 +1586,30 @@ export async function renderGitRepos(root = $('pluginView')) {
     const arrows = `${u.ahead ? '↑' : ''}${u.behind ? '↓' : ''}`;
     return { ...(arrows ? { badge: arrows } : {}), hint: `${u.upstream}${u.gone ? '（gone）' : ''}` };
   };
-  const branchItems = (b) => [
-    { id: '__op-sync__', label: '更新项目', icon: ICON_SYNC },
-    { id: '__op-commit__', label: '提交…', icon: ICON_COMMIT },
-    { id: '__op-push__', label: '推送…', icon: ICON_PUSH },
-    { id: '__op-new__', label: '新建分支…', icon: ICON_BRANCH },
-    ...(b.recent?.length
+  /*
+   * 分支管理列表的分组（2026-11-20 用户："看着好混乱，没有主次"）：
+   * - 去掉了「最近」组：它和「本地分支」前几条完全重复，一屏里同样两行出现两次，是混乱主因。
+   * - 远程分支 / 标签默认收起：本地分支才是天天用的，远程几十条铺开只会淹掉主线。
+   */
+  const branchGroupItems = (b) => [
+    { header: '本地分支', foldable: false },
+    ...folderize((b.local ?? []).map((n) => ({ id: n, name: n, menu: true, ...branchMeta(b, n) })), '本地'),
+    ...(b.remote?.length
       ? [
-          { header: '最近', foldable: true },
-          ...folderize(
-            b.recent.map((n) => ({ id: n, name: n, menu: true, ...branchMeta(b, n) })),
-            '最近',
-            { keep: true },
-          ),
+          { header: '远程分支', foldable: true },
+          ...folderize((b.remote ?? []).map((n) => ({ id: n, name: n.replace(/^origin\//, ''), menu: true })), '远程'),
         ]
       : []),
-    { header: '本地分支', foldable: true },
-    ...folderize((b.local ?? []).map((n) => ({ id: n, name: n, menu: true, ...branchMeta(b, n) })), '本地'),
-    ...(b.remote?.length ? [{ header: '远程分支', foldable: true }, ...folderize((b.remote ?? []).map((n) => ({ id: n, name: n.replace(/^origin\//, ''), menu: true })), '远程')] : []),
-    ...(b.tags?.length ? [{ header: '标签', foldable: true }, ...b.tags.map((n) => ({ id: `tag:${n}`, label: n, icon: ICON_TAG, cls: 'br' }))] : []),
+    ...(b.tags?.length
+      ? [
+          { header: '标签', foldable: true },
+          ...b.tags.map((n) => ({ id: `tag:${n}`, label: n, icon: ICON_TAG, cls: 'br' })),
+        ]
+      : []),
   ];
 
   async function fillChanges(repo) {
     const box = $('grChanges');
-    const pillMount = $('grBranchMount');
     let state = null;
     try {
       state = (await api(`/api/git/repos/${encodeURIComponent(repo.id)}/changes`)).state;
@@ -1578,101 +1617,18 @@ export async function renderGitRepos(root = $('pluginView')) {
       if (box?.isConnected) box.innerHTML = `<div class="sk-blank">读不到工作区：${esc(e.message)}</div>`;
       return;
     }
-    if (!box?.isConnected || !pillMount?.isConnected) return;
-
-    /*
-     * 分支 pill（2026-10-27，样式参照同类编辑器的分支切换器、条目参参照 IDE 的分支弹窗）：
-     * 按钮上写当前分支，点开才取清单（onOpen），当前分支由 ✓ 表示；切分支的确认
-     * 先读一次本地状态，把「当前 → 目标」和 ahead / 脏工作区摆进确认框。
-     */
-    const combo = createCombo({
-      mount: pillMount,
-      items: branchItems({ local: [state.branch ?? '游离 HEAD'], remote: [] }),
-      value: state.branch ?? '',
-      search: true,
-      placeholder: '搜索分支和操作',
-      // 一打开先看操作项 +「最近」：本地 / 远程 / 标签三组默认收起（2026-10-27 用户：
-      // "本地、远程、标签改成默认折叠"）—— 分支多的时候展开着会一屏铺满，还得先滚。
-      defaultFolded: ['本地分支', '远程分支', '标签'],
-      /*
-       * 按钮上的角标（2026-10-27 用户："已提交，但是没有推送，是不是应该显示一下"）：
-       * ↑ = 本地有提交还没推到上游；↓ = 上游有新的还没拉下来。
-       * 同日二调（用户："不要数字，箭头颜色使用绿色"）：只画箭头、不带个数（个数在提交卡里），
-       * 单独一个绿 span —— buttonText 是纯文本，上不了色。
-       */
-      buttonText: (v) => v || '游离 HEAD',
-      // 按钮文案前的分支图标（2026-10-30 用户："左边加图标，像是idea那样"；边框同日去掉，见 style.css）
-      buttonIcon: ICON_BRANCH,
-      buttonBadge: () => {
-        const up = Number(state.unpushed ?? 0);
-        const down = Number(state.unpulled ?? 0);
-        return `${up > 0 ? '↑' : ''}${down > 0 ? '↓' : ''}`;
-      },
-      onChange: (id) => onBranchPick(repo, id, state.branch ?? '', combo),
-      onOpen: async () => {
-        try {
-          combo.setItems(branchItems(await api(`/api/git/repos/${encodeURIComponent(repo.id)}/branches`)));
-        } catch (e) {
-          toast(e.message, 'error');
-        }
-      },
-    });
-
-    /*
-     * 分支行的二级菜单（2026-10-30 用户："不使用右键了，直接加小箭头，点击展示二级菜单，就是 IDEA 的这种效果"）：
-     * 行尾那颗 `›` 由 combo 自己画（item.menu），点了只开菜单，不选分支 —— 事件从 ui.mjs 的
-     * `combo-menu` 事件过来，这里只管"哪条分支、开在哪儿"。
-     */
-    combo.el.addEventListener('combo-menu', (ev) => {
-      const id = ev.detail?.id ?? '';
-      if (!id) return;
-      const remote = id.startsWith('origin/');
-      const name = remote ? id.slice('origin/'.length) : id;
-      // 整颗浮到**面板外面**（2026-10-30 用户二调："我要的是在弹窗外"）：
-      // x 锚在面板（.combo-pop）右缘外 —— 菜单不压面板边；y 锚在**那一行**（.combo-item）
-      // 的顶上（菜单自带 4px 内边距，减 4 正好让菜单第一项和行顶对齐；
-      // 之前锚的是行尾 `›` 按钮，按钮在行内垂直居中，菜单整体矮了一截）。
-      const rowRect = ev.detail?.el?.closest?.('.combo-item')?.getBoundingClientRect?.();
-      const popRect = ev.detail?.el?.closest?.('.combo-pop')?.getBoundingClientRect?.();
-      openBranchMenu(
-        repo,
-        { x: popRect ? popRect.right : 0, y: rowRect ? rowRect.top - 4 : 0 },
-        { name, remote, cur: state.branch ?? '' },
-        // 签出收进二级菜单第一位（2026-10-30 用户："点击选项就打开，改成二级窗口的一个选项，放在第一位"）：
-        // 复用 onBranchPick 的切分支路径 —— 确认框（ahead / 脏工作区提醒）原样保留。
-        { checkout: () => onBranchPick(repo, id, state.branch ?? '', combo) },
-      );
-    });
+    if (!box?.isConnected) return;
 
     const dirty = state.dirty ?? [];
     const head = $('grChgHead');
     if (head?.isConnected) head.textContent = dirty.length ? `${dirty.length} 个未提交` : '';
 
     /*
-     * 顶部按钮跟着状态亮灰（2026-11-20）：让"下一步该点哪儿"直接长在按钮上，
-     * 不用挨个去四张卡里找；灰掉时 title 说明为什么。
-     */
-    const setAct = (op, ok, why) => {
-      const b = view.querySelector(`[data-gr-act="${op}"]`);
-      if (b) { b.disabled = !ok; b.title = why; }
-    };
-    const dirtyN = Number(state.dirtyCount ?? dirty.length);
-    const unpushedN = Number(state.unpushed ?? 0);
-    const aheadN = Number(state.ahead ?? 0);
-    setAct('sync', !!state.upstream, state.upstream ? `更新项目：从 ${state.upstream} 拉取最新` : '还没有上游 —— 先点一次「推送」');
-    setAct('commit', dirtyN > 0, dirtyN ? `提交 ${dirtyN} 个改动` : '没有未提交的改动');
-    setAct('push', unpushedN > 0, unpushedN ? `推送 ${unpushedN} 个提交` : '没有要推送的提交');
-    if (ghLinked) {
-      setAct('pr', unpushedN === 0 && aheadN > 0,
-        unpushedN > 0 ? `先推送这 ${unpushedN} 个提交` : (aheadN > 0 ? '用当前分支建 PR' : '当前分支没有领先 base 的提交'));
-    }
-
-    /*
      * 推送卡（2026-10-29 三改，用户："推送单独作为一个卡片"）：
      * 独立成一块，不再长在「提交」卡屁股上 —— 交是交、推是推。
      * 未推提交逐条摆出来（历史卡同款行：sha + 说明 + 作者·时间），按钮在分节标题行右侧。
      * 三种形态：有未推 / 没推过（无上游，首次推会设上游）/ 齐平（没得推，按钮收起来）。
-     * 上游有新的（unpulled）单独一行 —— 动作在分支下拉的「更新项目」里。
+     * 上游有新的（unpulled）单独一行 —— 动作在「分支管理」tab 的「更新项目」里。
      */
     const fillPushCard = () => {
       const pbox = $('grPush');
@@ -1705,7 +1661,7 @@ export async function renderGitRepos(root = $('pluginView')) {
         };
       }
       const behind = down > 0
-        ? `<div class="sk-blank">上游还有 ${down} 个新提交 —— 分支下拉里点「更新项目」拉下来</div>`
+        ? `<div class="sk-blank">上游还有 ${down} 个新提交 —— 到「分支管理」里点「更新项目」拉下来</div>`
         : '';
       const row = (c) => `<div class="gr-log-row" title="${esc(c.sha)} ${esc(c.subject)}">
           <span class="gr-log-sha">${esc(c.sha)}</span>
@@ -1935,19 +1891,10 @@ export async function renderGitRepos(root = $('pluginView')) {
   async function onBranchPick(repo, id, fallbackBranch, combo) {
     const apiRepo = (p) => `/api/git/repos/${encodeURIComponent(repo.id)}${p}`;
 
-    /* ---- 顶部操作区（IDE 式：更新项目 / 提交 / 推送 / 新建分支）---- */
-    /* 这四个动作与顶部常驻按钮共用 runOp（2026-11-20），改一处两边一起变 */
+    /* ---- 顶部操作区（IDE 式：更新项目 / 新建分支）---- */
+    /* 这两个动作与顶部常驻按钮共用 runOp（2026-11-20），改一处两边一起变 */
     if (id === '__op-sync__') {
       if (!(await runOp('sync'))) combo.setValue(fallbackBranch);
-      return;
-    }
-    if (id === '__op-push__') {
-      if (!(await runOp('push'))) combo.setValue(fallbackBranch);
-      return;
-    }
-    if (id === '__op-commit__') {
-      combo.setValue(fallbackBranch);
-      await runOp('commit');
       return;
     }
     if (id === '__op-new__') {
@@ -1996,7 +1943,110 @@ export async function renderGitRepos(root = $('pluginView')) {
     }
   }
 
-  /* 新建分支小弹窗（IDE「新建分支」）：从当前 HEAD 拉出并切过去；脏工作区不拦（checkout -b 不动文件） */
+  /*
+   * 分支管理 tab（2026-11-20 用户："这个移动到管理分支tab"）：
+   * 数据源、行内容、点击行为都沿用原来下拉里那套（branchGroupItems / onBranchPick / openBranchMenu），
+   * 只是从浮层搬进常驻区域 —— 分支多的时候不用先点开下拉再滚动。
+   * 下拉里已经没有列表，所以 onBranchPick 收不到 combo，这里给个哑的（它只在操作项里调 setValue）。
+   */
+  async function fillBranchTab(repo) {
+    const box = $('grBranchList');
+    if (!box) return;
+    const apiRepo = (p) => `/api/git/repos/${encodeURIComponent(repo.id)}${p}`;
+    let b = null;
+    let st = null;
+    try {
+      b = await api(apiRepo('/branches'));
+    } catch (e) {
+      if (box.isConnected) box.innerHTML = `<div class="sk-blank">读不到分支：${esc(e.message)}</div>`;
+      return;
+    }
+    // 当前分支要从 changes 里拿；读不到就当游离 HEAD，列表照画
+    try {
+      st = (await api(apiRepo('/changes'))).state;
+    } catch { /* 同上 */ }
+    if (!box.isConnected) return;
+
+    const cur = st?.branch ?? '';
+    // 远程 / 标签默认收起：本地分支才是天天用的，远程几十条铺开会淹掉主线
+    const folded = new Set(['远程分支', '标签']);
+    let group = '';
+    const rows = [];
+    for (const it of branchGroupItems(b)) {
+      if (it.header) {
+        group = it.header;
+        const off = it.foldable && folded.has(group);
+        rows.push(
+          `<div class="gr-br-head${it.foldable ? ' foldable' : ''}${off ? ' off' : ''}" data-gr-head="${esc(group)}">` +
+            `<span>${esc(group)}</span>` +
+            (it.foldable ? '<span class="gr-br-caret" aria-hidden="true">›</span>' : '') +
+            `</div>`,
+        );
+        continue;
+      }
+      const hide = folded.has(group) ? ' hide' : '';
+      // 2026-11-20 用户："不要这个" —— 不画文件夹标题行（chore/ 这种），分支直接平铺。
+      // 名字用全名（chore/xxx），前缀没丢，也就不需要缩进。
+      if (it.folder) continue;
+      const label = it.id.startsWith('origin/')
+        ? it.id.slice('origin/'.length)
+        : it.id.startsWith('tag:')
+          ? it.label
+          : it.id;
+      const on = it.id === cur;
+      rows.push(
+        `<button type="button" class="gr-br-row${on ? ' on' : ''}${hide}"` +
+          ` data-br-id="${esc(it.id)}" data-gr-of="${esc(group)}" title="${esc(it.hint || label)}">` +
+          `<span class="gr-br-mark">${on ? '<span class="gr-br-dot" title="当前分支" aria-label="当前分支"></span>' : ''}</span>` +
+          `<span class="gr-br-ic">${it.icon ?? ''}</span>` +
+          `<span class="gr-br-name">${esc(label)}</span>` +
+          (it.hint ? `<span class="gr-br-hint">${esc(it.hint)}</span>` : '') +
+          (it.badge ? `<span class="gr-br-badge">${esc(it.badge)}</span>` : '') +
+          (it.menu ? '<span class="gr-br-more" aria-hidden="true">›</span>' : '') +
+          `</button>`,
+      );
+    }
+    box.innerHTML = rows.join('') || '<div class="sk-blank">没有分支</div>';
+
+    const noCombo = { setValue: () => {} };
+    box.onclick = (e) => {
+      // 分组标题（远程 / 标签）可点开收起
+      const hd = e.target.closest('[data-gr-head].foldable');
+      if (hd) {
+        const g = hd.dataset.grHead;
+        const off = !folded.has(g);
+        if (off) folded.add(g);
+        else folded.delete(g);
+        hd.classList.toggle('off', off);
+        box.querySelectorAll('[data-gr-of]').forEach((n) => {
+          if (n.dataset.grOf === g) n.classList.toggle('hide', off);
+        });
+        return;
+      }
+      const row = e.target.closest('[data-br-id]');
+      if (!row || !box.contains(row)) return;
+      const id = row.dataset.brId;
+      // 行尾 › 只开菜单、不切分支（与下拉里的行为一致）
+      if (e.target.closest('.gr-br-more')) {
+        const remote = id.startsWith('origin/');
+        const name = remote ? id.slice('origin/'.length) : id;
+        const r = row.getBoundingClientRect();
+        openBranchMenu(repo, { x: r.right, y: r.top }, { name, remote, cur: id === cur ? name : '' }, {
+          checkout: () => onBranchPick(repo, id, cur, noCombo),
+        });
+        return;
+      }
+      // 行本身不触发任何操作（2026-11-20 用户："点击这个不要触发任何操作，
+      // 点击右边的箭头有选项卡，通过选项卡操作"）—— 切换 / 删除等都走行尾 › 的菜单。
+    };
+
+    const nb = $('grBranchNew');
+    if (nb) nb.onclick = () => openBranchNewDlg(repo);
+    const sb = $('grBranchSync');
+    if (sb) sb.onclick = () => runOp('sync');
+  }
+
+
   function openBranchNewDlg(repo) {
     document.getElementById('grBranchNewDlg')?.close();
     const dlg = document.createElement('dialog');

@@ -9,46 +9,9 @@
  */
 
 /* ===== 代码托管：IDE 式一站式（2026-10-27）=====
-   分支 pill / 改动卡（单文件 diff + 丢弃 + 提交）/ 历史卡。
-   pill 是 createCombo（全站公共下拉）套了个胶囊皮：搜索、分组、✓ 全是现成的。 */
-.gr-branch { display: inline-flex; max-width: 300px; vertical-align: middle; }
-/* 分支 pill（2026-10-30 用户："把边框去掉，左边加图标，像是idea那样"）：
-   无边框无底色、悬停只浮一层淡底 —— 跟 VS Code / IDEA 的分支切换器一个气质；
-   图标（.combo-btn-ic）降灰，让分支名当主角。 */
-.gr-branch .combo-btn { width: auto; height: 26px; padding: 0 10px; gap: 6px;
-                        border-color: transparent; background: transparent; }
-.gr-branch .combo-btn:hover { border-color: transparent; background: var(--hover); }
-.gr-branch .combo-btn-ic { flex: 0 0 auto; display: inline-flex; color: var(--dim); }
-.gr-branch .combo-btn-ic svg { width: 14px; height: 14px; }
-.gr-branch .combo-text { font-family: ui-monospace, monospace; font-size: 11.5px; }
-.gr-branch .combo-chev { width: 5px; height: 5px; margin-right: 0; }
-/* 分支弹窗比通用下拉大一档（2026-10-27 用户："大一些"）：分支名长（bandi/xxx-时间戳）、
-   条目多（操作 + 最近/本地/远程/标签），360px 宽 232px 高太挤。
-   尺寸**固定**（2026-10-27 二调，用户："这个框要固定大小，不要自动变高"）：
-   宽高都写死（高度只跟视口走一个上限），搜索过滤 / 分支列表异步回来 / 分组折叠时
-   框子都不跳；列表内部滚。 */
-.gr-branch .combo-pop { width: 440px; min-width: 0; max-width: min(440px, 92vw); }
-.gr-branch .combo-pop input { font-size: 13px; padding: 8px 10px; }
-.gr-branch .combo-list { height: min(420px, 62vh); max-height: none; }
-/* 分支行右内边距收窄（2026-10-30 用户："箭头与右边界的间隙减小"）：只收右侧，左对齐不动 */
-.gr-branch .combo-item { padding: 8px 4px 8px 10px; }
-/* 左名右源截断规则（2026-10-27 二调，用户："左边的要显示全，右边的可以加..."）：
-   左边本地名 flex-shrink:0 —— 按内容走全宽，永不截断；
-   右边远程名 margin-left:auto 顶到行右 + 允许收缩（min-width:0 是省略号生效的前提），
-   空间不够时先压右边、它先变 ...，右边顶不住了行才溢出（等宽小字，可接受）。 */
-.gr-branch .combo-item-label { font-size: 13px; flex: 0 0 auto; }
-.gr-branch .combo-hint { flex: 0 1 auto; min-width: 0; max-width: none; margin-left: auto; padding-left: 10px; }
-/* 行尾 `›` 钉在**最右**（2026-10-30 用户："箭头固定在右边"）：
-   有远程名（.combo-hint）的行，远程名自己 ml:auto 顶右，箭头跟在它后面 —— 本来就在最右；
-   没有远程名的行（本地分支），箭头会紧跟在名字后面悬在半空 —— 用 :has 补一个 ml:auto 把它推到行尾。 */
-.gr-branch .combo-item:not(:has(.combo-hint)) .combo-more { margin-left: auto; }
-/* 分组标题与动作项同规格（2026-10-27 二调，用户："下面的字体、大小要和上面一致，
-   鼠标放上去再显示蓝色"）：13px 正文色，不吃全局 combo 的 11px + 常驻强调色；
-   悬停才变强调色（覆盖 .combo-group.foldable:hover 的"悬停变正文色"）。
-   层级不再靠字号/颜色硬分，靠缩进（28px 折角列）+ 可折叠箭头。 */
-.gr-branch .combo-group { font-size: 13px; padding-top: 10px; color: var(--text); }
-.gr-branch .combo-group.foldable:hover { color: var(--accent); }
-.gr-branch .combo-group, .gr-branch .combo-group.combo-sub { font-weight: 400; }
+   改动卡（单文件 diff + 丢弃 + 提交）/ 历史卡。
+   分支 pill 已随「导航条改放本地目录」一起退场（2026-11-20），分支操作全在「分支管理」tab。 */
+
 /* 顶部常驻动作（2026-11-20，用户："入口分散、要多点几步，基础功能尽量傻瓜式"）：
    图标 + 短文字，灰掉时仍看得见但点不动，title 说明为什么不能点。
    选择器带 .plg-detail-head 是为了压过 .mini.auto 的 16px 内边距。 */
@@ -934,12 +897,6 @@ input, select, textarea { width: 100%; background: var(--input); color: var(--te
 .combo-group.combo-sub { padding: 5px 9px 3px 28px; font-size: 12.5px; font-weight: 500; color: var(--text); }
 .combo-group.combo-sub::before { margin-right: 5px; }
 .combo-group.combo-sub svg { width: 15px; height: 15px; margin: 0 8px 0 0; vertical-align: -3px; }
-/* 分支/标签条目（cls:'br'，分支弹窗专用）：图标列对齐到组标题文字的 28px 竖线，
-   跟文件夹图标同列同高 —— 同一层级的条目一眼排齐。顶部四条操作不带 br，留在最左。 */
-.gr-branch .combo-item.br { padding-left: 28px; }
-/* 文件夹叶子比平级分支再深一层（47 = 28 折角起 + 14 + 5，图标与父文件夹图标同列）。
-   ⚠️ 放在 .br 之后且带 .gr-branch 前缀 —— 叶子同时挂 br+sub，不加特异性会被 br 的 28px 压住。 */
-.gr-branch .combo-item.sub { padding-left: 47px; }
 /* 条目图标（2026-10-27，用户指 IDEA 截图"补充图标"）：统一弱灰 —— 图标是辅助语义，
    名字才是主角；尺寸跟文件夹图标同一个规格（15px），同一列里大小不跳。 */
 .combo-ic { flex: 0 0 auto; display: inline-flex; width: 15px; height: 15px; color: var(--dim); }
