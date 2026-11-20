@@ -190,13 +190,27 @@ export async function handleGit(req, res, url) {
    */
   if (req.method === 'GET' && url.pathname === '/api/git/status') {
     const connected = !!git.readToken();
+    /*
+     * ghRef（2026-11-20 修正）：GitHub API 用的 owner/name。
+     * 手动接入的克隆把 fullName 记成了目录名（`bandi`），前端原来拿"名字里有没有斜杠"
+     * 判断是不是 GitHub 仓库 —— origin 明明指着 github.com，PR / 合并那块却被判成本地
+     * 仓库不画，整条"建 PR → 合并"的路直接断掉。这里从 origin 解出真身带给前端，
+     * 名字只当展示用。（含 `/` 的行 githubRefOf 直接原样返回，不会多起 git 进程。）
+     */
+    const repos = await Promise.all(
+      git.listConnected().map(async (r) => ({
+        ...r,
+        patrol: patrol.viewOf(r),
+        ghRef: await git.githubRefOf(r),
+      }))
+    );
     return (
       sendJson(res, 200, {
         connected,
         login: connected ? git.cachedLogin() : null,
         hint: git.tokenHint(),
         // 仓库行上那「巡检」一行要的东西（节拍 / 上次结果）一次带齐，弹窗不再单独请求
-        repos: git.listConnected().map((r) => ({ ...r, patrol: patrol.viewOf(r) })),
+        repos,
         patrolPresets: patrol.PRESETS,
       }),
       true

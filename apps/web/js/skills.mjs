@@ -690,10 +690,12 @@ export async function renderGitRepos(root = $('pluginView')) {
    *   · 低频的「从清单移除」收进齿轮弹窗（破坏性动作不放在首屏）。
    */
   /*
-   * 这个仓库有没有 GitHub 身份（2026-10-30）：名字写成 owner/name 才算；
-   * 本地代码托管（"爻鉴"这种名字）没有 PR 可查，PR 那几张卡也就不画。
+   * 这个仓库有没有 GitHub 身份（2026-11-20 修正判据）：
+   * 原来拿「名字长得像 owner/name」当证据 —— 手动接入的克隆名字就是目录名（`bandi`），
+   * 明明 origin 指着 github.com，却被判成本地仓库，PR / 合并整块不画。
+   * 现在用服务端从 origin 解出来的 ghRef（owner/name），全文名只当展示用。
    */
-  const ghLinked = /^[\w.-]+\/[\w.-]+$/.test(sel?.fullName ?? '');
+  const ghLinked = /^[\w.-]+\/[\w.-]+$/.test(sel?.ghRef || '');
 
   const repoDetail = sel
     ? `<div class="plg-detail-head fixed-head">
