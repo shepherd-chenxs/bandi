@@ -49,7 +49,7 @@ const server = spawn(process.execPath, [path.join(here, 'server.mjs')], {
     BANDI_DATA: tmp,
     BANDI_DB: path.join(tmp, 'bandi.db'),
     BANDI_PORT: String(PORT),
-    // 强制鉴权：改卡权限要验**运行钥匙**（回环免鉴权形态下所有请求都是 operator，验不出来）
+    // 强制鉴权：改卡权限要验**运行钥匙**（回环免鉴权形态下所有请求都合成机主，验不出来）
     BANDI_HOST: '0.0.0.0',
     BANDI_TOKEN: OP_TOKEN,
     BANDI_FAKE_ECHO: 'full',

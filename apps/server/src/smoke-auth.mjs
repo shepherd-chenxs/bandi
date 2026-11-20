@@ -5,14 +5,15 @@
  *   · **机器层**（①-⑤、⑦-⑨）：令牌闸开不开只看**监听地址** ——
  *     只监听回环 → API 免鉴权（桌面版/单机；"单机不需要 token"是硬约束）；
  *     监听非回环 → **所有请求**都要令牌（服务器）；
- *     令牌三种带法都认：Cookie（浏览器）、`X-Bandi-Token` 头（脚本/CLI）、`?token=`（首次进）；
+ *     令牌两种带法都认：`X-Bandi-Token` 头（脚本/CLI）、`?token=`（首次进门当场换 bandi_sid 会话票）；
+ *     bandi_token Cookie 已下线（2026-11-20 operator 下线：钥匙不进浏览器）；
  *     没带/带错：API 给 401 JSON（带 `platform: 'bandi'`），浏览器给登录页；
  *     **`isUp()` 必须把 401 认成"是班底、只是要令牌"** —— 否则启动器会把它当成"没起来"而再起一个；
  *     令牌落盘、重启不变。
  *   · **人层**（③⑥）：面板 HTML 只给**登录会话**（bandi_sid）。本地账号体系已整体退场
  *     （BANDI_HUB=off 这个选项没了），唯一的登录是中枢账号密码框（POST /hub/login）——
  *     测试把 BANDI_HUB 指到假中枢（hub-stub.mjs），不然就会去连真的 hub.yuancang.space。
- *     **令牌不是人**：operator 抓面板 HTML 也只得到登录页，令牌继续管 API（脚本/CLI）。
+ *     面板只给会话：凭令牌（头 / 未换票的 `?token=`）抓面板 HTML 仍只得到登录页，令牌管 API。
  *
  * 隔离：临时数据目录 + 临时端口 + 假中枢。
  * 跑法：node apps/server/src/smoke-auth.mjs
@@ -187,14 +188,26 @@ try {
     staticNoTok.status === 401 && staticNoTok.json?.code === 'E4010' && /application\/json/.test(staticNoTok.headers.get('content-type') ?? ''),
     `${staticNoTok.status} ${staticNoTok.headers.get('content-type')}`);
 
-  console.log('\n④ 三种带法都认');
-  check('头 X-Bandi-Token', (await get(baseB, '/api/state', { 'X-Bandi-Token': token })).status === 200);
+  console.log('\n④ 令牌三种带法：头认 / ?token=（空库只摘不种）/ bandi_token Cookie 已不认');
+  check('头 X-Bandi-Token → 200', (await get(baseB, '/api/state', { 'X-Bandi-Token': token })).status === 200);
+  /*
+   * 2026-11-20 operator 下线：?token= 不再换 bandi_token Cookie，而是换 bandi_sid 会话票
+   * （见 guard 的 token → session 分支）。但**此刻库里还没有任何账号**（甲要到 ⑥ 才登录），
+   * localKeyWho 找不到机主 → 只摘掉 token 重定向到登录页，不种任何 Cookie。
+   * 等 ⑥ 有了机主，同一招就会种出 bandi_sid（⑥b 钉这个翻转）。
+   */
   const q = await get(baseB, `/?token=${encodeURIComponent(token)}`);
-  check('?token= 换 Cookie 并重定向', q.status === 302 && String(q.headers.get('set-cookie') ?? '').includes('bandi_token='), `${q.status}`);
+  const qSetCookie = String(q.headers.get('set-cookie') ?? '');
+  check('?token=（空库）→ 302 摘 token，不种 cookie（没机主，换不出会话）',
+    q.status === 302 && !qSetCookie.includes('bandi_sid=') && !qSetCookie.includes('bandi_token='),
+    `${q.status} set-cookie=${qSetCookie || '(空)'}`);
   check('重定向把令牌从地址里摘掉了', (q.headers.get('location') ?? '').includes('token') === false, String(q.headers.get('location')));
-  const cookie = String(q.headers.get('set-cookie') ?? '').split(';')[0];
-  check('Cookie HttpOnly（JS 偷不走）', /HttpOnly/i.test(String(q.headers.get('set-cookie'))));
-  check('带 Cookie 能读', (await get(baseB, '/api/state', { Cookie: cookie })).status === 200);
+  /*
+   * 钥匙不进浏览器（2026-11-20）：bandi_token Cookie 整条路删了，tokenOf 只认
+   * X-Bandi-Token 头 / ?token=，不再读 Cookie —— 带它读 API 一律 401。
+   */
+  const legacyCookie = await get(baseB, '/api/state', { Cookie: `bandi_token=${token}` });
+  check('bandi_token Cookie 已不认 → 401（钥匙不进浏览器）', legacyCookie.status === 401, `${legacyCookie.status}`);
   check('令牌错的 → 401', (await get(baseB, '/api/state', { 'X-Bandi-Token': 'wrong-token' })).status === 401);
   /*
    * bn_ 前缀曾是每节点令牌（2026-11-09 随多机子系统整体删除）：拿一枚 bn_ 假令牌来打，
@@ -204,14 +217,15 @@ try {
   check('bn_ 假令牌 → 401 E4010（节点令牌已删，与错令牌同罪）',
     bnTok.status === 401 && bnTok.json?.code === 'E4010', `${bnTok.status} ${bnTok.json?.code ?? ''}`);
   /*
-   * 错令牌不许换出面板（口径随 2026-11-07 一刀更新）：**令牌不是人** —— 面板 HTML 只给
-   * 登录会话，带令牌/错令牌抓首页一律得到中枢登录页。令牌继续管 API（上面那些 200）。
+   * 面板 HTML 只给登录会话（2026-11-20 口径依旧）：令牌虽然合成机主、能管 API，
+   * 但抓首页需要 bandi_sid 会话票 —— 错令牌 / 只带 bandi_token Cookie（已不认）都
+   * 拿不到会话，一律落到中枢登录页。
    */
   const badPage = await get(baseB, '/?token=wrong');
   check('错令牌 → 还是登录页，不是面板',
     badPage.status === 200 && badPage.text.includes('action="/hub/login"') && !badPage.text.includes('/app.mjs'));
-  const tokPage = await get(baseB, '/', { Cookie: cookie });
-  check('对令牌抓首页**同样**是登录页（令牌不是"我"，登录只认会话）',
+  const tokPage = await get(baseB, '/', { Cookie: `bandi_token=${token}` });
+  check('只带 bandi_token Cookie 抓首页 → 登录页（Cookie 钥匙已不认，没会话就是登录页）',
     tokPage.status === 200 && tokPage.text.includes('action="/hub/login"') && !tokPage.text.includes('/app.mjs'));
 
   console.log('\n⑤ isUp 必须把 401 认成"是班底、只是要令牌"');
@@ -241,6 +255,31 @@ try {
   const anon = await get(baseB, '/');
   check('同一台服务器，没会话就还是登录页（面板只给登录的人）',
     anon.status === 200 && anon.text.includes('action="/hub/login"') && !anon.text.includes('/app.mjs'));
+
+  /*
+   * ⑥b 2026-11-20 operator 下线：有了机主（甲刚登录建号），?token= 现在能换出 bandi_sid
+   * 会话票了 —— 这是「令牌三种带法」里唯一会种 Cookie 的那条，且种的是 bandi_sid（会话），
+   * 不是 bandi_token（机器钥匙）。钥匙不进浏览器，但首屏那一下可以凭钥匙当场换成会话票进门。
+   */
+  console.log('\n⑥b ?token= 有用户后换 bandi_sid（钥匙不进浏览器，首屏可凭钥匙换会话票）');
+  const q2 = await get(baseB, `/?token=${encodeURIComponent(token)}`);
+  const q2SetCookie = String(q2.headers.get('set-cookie') ?? '');
+  check('?token=（有用户）→ 302 种 bandi_sid（不再是 bandi_token）',
+    q2.status === 302 && q2SetCookie.includes('bandi_sid=') && !q2SetCookie.includes('bandi_token='),
+    `${q2.status} set-cookie=${q2SetCookie.slice(0, 90)}`);
+  check('bandi_sid Cookie HttpOnly（JS 偷不走）', /HttpOnly/i.test(q2SetCookie), q2SetCookie.slice(0, 90));
+  check('重定向摘掉 token', (q2.headers.get('location') ?? '').includes('token') === false, String(q2.headers.get('location')));
+  const sidFromToken = (q2SetCookie.match(/bandi_sid=([^;]*)/) ?? [])[1];
+  if (sidFromToken) {
+    check('凭 ?token= 换来的 bandi_sid 能读 API → 200',
+      (await get(baseB, '/api/state', { Cookie: `bandi_sid=${sidFromToken}` })).status === 200);
+    const panelByTok = await get(baseB, '/', { Cookie: `bandi_sid=${sidFromToken}`, Accept: 'text/html' });
+    check('凭换来的会话票抓首页 → 面板（这才是"我"）',
+      panelByTok.status === 200 && panelByTok.text.includes('/app.mjs'), `${panelByTok.status}`);
+  } else {
+    failed += 1;
+    console.log('  ✗ ?token= 没换到 bandi_sid（set-cookie=' + q2SetCookie.slice(0, 90) + '）');
+  }
 
   console.log('\n⑦ 令牌重启不变（否则每次重启都得重新登录）');
   await cleanup();

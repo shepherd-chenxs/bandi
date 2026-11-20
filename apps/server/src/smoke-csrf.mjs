@@ -5,10 +5,10 @@
  * 中枢账号密码框（POST /hub/login，假中枢 hub-stub.mjs 撑场）。本冒烟只钉
  * 「CSRF 双提交」这道闸在新世界下的口径：
  *
- *   · 带「Cookie 凭据」(bandi_sid / bandi_token) 的写请求，必须 bandi_csrf Cookie
+ *   · 带「会话 Cookie」(bandi_sid) 的写请求，必须 bandi_csrf Cookie
  *     与 X-Bandi-CSRF 头一致，否则 403 E4099；
  *   · 机器令牌 (X-Bandi-Token) 浏览器不会自动带，天然免疫，不校验；
- *   · 回环形态 (BANDI_HOST=127.0.0.1) 下无会话凭据的请求按 operator 算（= 全权），
+ *   · 回环形态 (BANDI_HOST=127.0.0.1) 下无会话凭据的请求合成机主（= 全权，2026-11-20 operator 下线），
  *     带 X-Bandi: 1 头的第一方 API 绕过照旧放行；
  *   · 登录页种下 bandi_csrf Cookie，并塞一个同值隐藏域 _csrf 给表单兜底。
  *
@@ -99,7 +99,7 @@ try {
   /* 假中枢：一个中枢账号。本机把登录表单转给它来造会话。 */
   const stub = await startHubStub({ deviceId: 'dev_self', accounts: { 甲: { password: '甲-pass-123' } } });
 
-  /* ============ ① 回环 + 中枢：登录页、operator 绕过、会话 CSRF ============ */
+  /* ============ ① 回环 + 中枢：登录页、机主绕过、会话 CSRF ============ */
   const BASE = `http://127.0.0.1:${PORT}`;
   fs.writeFileSync(
     path.join(HUB_DIR, 'hub.json'),
@@ -123,10 +123,10 @@ try {
   check('表单带同值隐藏域 _csrf（Cookie = 隐藏域）',
     !!csrfRaw && csrfRaw === csrfField, `cookie=${csrfRaw} field=${csrfField}`);
 
-  /* ③ operator 绕过：回环形态下无会话凭据的请求 = operator（= 全权），第一方 API 头照旧放行 */
-  console.log('\n③ operator 绕过：回环第一方 API');
+  /* ③ 机主绕过：回环形态下无会话凭据的请求 = 机主（= 全权，2026-11-20 operator 下线），第一方 API 头照旧放行 */
+  console.log('\n③ 机主绕过：回环第一方 API');
   const op = await call(BASE, 'POST', '/api/users', { body: { name: '操作员甲' } });
-  check('回环无凭据 + X-Bandi:1 → operator 放行（201）', op.status === 201, `${op.status} ${op.raw?.slice(0, 120)}`);
+  check('回环无凭据 + X-Bandi:1 → 机主放行（201）', op.status === 201, `${op.status} ${op.raw?.slice(0, 120)}`);
 
   /* ② 中枢登录拿 bandi_sid（唯一登录路：POST /hub/login） */
   console.log('\n② 中枢登录：POST /hub/login → 发 bandi_sid');

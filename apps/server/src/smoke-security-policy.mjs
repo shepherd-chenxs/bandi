@@ -1,14 +1,17 @@
 /*
  * smoke-security-policy.mjs —— 2026-11-07 验收（hub-only 模型，删本地凭据层 + 角色/菜单权限体系）：
- *   · A. 清单纯逻辑校验（登记项 id 唯一、无 perm/member/device 残留、compute/noPanel 标记、
- *        findRoute 优先级）；
+ *   · A. 清单纯逻辑校验（登记项 id 唯一、无 perm/member/device 残留、findRoute 优先级）；
  *   · B. 覆盖率扫描：routes/*.mjs + server.mjs 里出现的每个 /api 字面量必须已登记
  *     （"未登记即拒绝"的另一面 = "存在的接口必须登记"，漏登记 = 上线即 404 E4090）；
- *   · C. 身份 × 路由矩阵（调 PDP 纯函数 authorize）：operator / user / run 三种身份
+ *   · C. 身份 × 路由矩阵（调 PDP 纯函数 authorize）：本地机主（本机钥匙合成）/ user / run
  *        对基线、管理面、运行钥匙专用口的判定；
- *   · D. 起真服务（回环形态，免鉴权 operator）冒烟：/api/hello 起得来、operator 全通；
+ *   · D. 起真服务（回环形态，免鉴权）冒烟：/api/hello 起得来、机主全通；
  *   · E. 服务器形态（0.0.0.0）的真会话矩阵：中枢登录的普通用户摸原来 admin 专属的
  *        管理面 / 审计口（登录即全权），未登记路径照旧 404；本机安装任务通道可用。
+ *
+ * ⚠️ 2026-11-20：`operator` 身份下线 —— 本机钥匙（`X-Bandi-Token`）在 guard 里被
+ * 合成成 `kind:'user'` + 机主 userId，所以这个文件里凡是"机器身份"的用例都改叫
+ * "本机钥匙/机主"，**判定结果必须与登录用户逐条一致**（这正是它该被删的理由）。
  *
  * 跑法：`SMOKE_PORT=8908 node apps/server/src/smoke-security-policy.mjs`
  *   （端口从 process.env.SMOKE_PORT 派生，缺省 8908；D / E 先后共用同一端口）。
@@ -56,7 +59,7 @@ console.log('\nA. 清单与 PDP 的纯逻辑校验');
 {
   // 同一路径多方法/多登记时的优先级（smoke-auth ⑥ 的教训：方法感知别丢）
   check('/api/local/status 解析到 session 条目（分机状态页）', findRoute('/api/local/status', 'GET')?.id === 'local.status.forUser');
-  check('POST /api/lan 解析到 noPanel 条目（方法感知）', findRoute('/api/lan', 'POST')?.id === 'lan.write' && findRoute('/api/lan', 'GET')?.id === 'lan.read');
+  check('POST /api/lan 解析到写条目（方法感知）', findRoute('/api/lan', 'POST')?.id === 'lan.write' && findRoute('/api/lan', 'GET')?.id === 'lan.read');
   check('本机安装任务三条都登记（原 nodes.dispatch 改挂 /api/install/tasks）',
     findRoute('/api/install/tasks', 'POST')?.id === 'localTasks.dispatch'
     && findRoute('/api/install/tasks', 'GET')?.id === 'localTasks.list'
@@ -98,27 +101,32 @@ function literalRegistered(lit) {
 console.log('\nC. 身份 × 路由矩阵（PDP 纯函数 authorize）');
 {
   const who = {
-    operator: { kind: 'operator' },
+    localKey: { kind: 'user', userId: 'u-owner', via: 'local-key' },
     user: { kind: 'user' },
     run: { kind: 'run' },
   };
   const a = (w, method, pathname) => authorize({ who: w, method, pathname });
 
-  // operator：清单内全通（未登记由 guard 兜 404，PDP 不再二次挡）
-  check('operator 读 /api/state → allow', a(who.operator, 'GET', '/api/state') === 'allow');
+  // 本机钥匙：已经是"人"（未登记由 guard 兜 404，PDP 不再二次挡）
+  check('本机钥匙读 /api/state → allow', a(who.localKey, 'GET', '/api/state') === 'allow');
 
   // user（登录 = 全权，2026-11-07 起无角色闸）：连管理面 / 安全面都直接放行
   check('user 读 /api/users → allow（登录即全权）', a(who.user, 'GET', '/api/users') === 'allow');
   check('user 读 /api/security/audit → allow（无 roleHasPerm 闸）', a(who.user, 'GET', '/api/security/audit') === 'allow');
+
+  // **本机钥匙与登录用户逐条一致**（2026-11-20 的核心理由：它俩从来不差，所以只该留一个）
+  const SAME_AS_USER = ['/api/state', '/api/users', '/api/security/audit', '/api/agent/cards', '/api/tasks', '/index.html'];
+  const diffs = SAME_AS_USER.filter((p) => a(who.localKey, 'GET', p) !== a(who.user, 'GET', p));
+  check('本机钥匙与登录用户判定逐条相同（没有第二种人的边界）', diffs.length === 0, diffs.join(','));
 
   // run（运行钥匙）：只许清单标 run:true 的那几扇门
   check('run 建卡 → allow（agent.cards run:true）', a(who.run, 'POST', '/api/agent/cards') === 'allow');
   check('run 读台账 → allow（tasks.list run:true）', a(who.run, 'GET', '/api/tasks') === 'allow');
   check('run 读用户 → E4034（users.list 没标 run）', a(who.run, 'GET', '/api/users') === 'E4034');
 
-  // 节点 / revoked 身份随多机子系统整体删除（2026-11-09）：identify 不会再吐出来，
-  // 真有人伪造 → 落兜底 E4031。
+  // 节点 / revoked / operator 身份都已退场：identify 不会再吐出来，伪造 → 落兜底 E4031。
   check('伪造 node 身份 → 兜底 E4031', authorize({ who: { kind: 'node' }, method: 'GET', pathname: '/api/state' }) === 'E4031');
+  check('伪造 operator 身份 → 兜底 E4031（2026-11-20 下线）', authorize({ who: { kind: 'operator' }, method: 'GET', pathname: '/api/state' }) === 'E4031');
   check('伪造 revoked 身份 → 兜底 E4031', authorize({ who: { kind: 'revoked' }, method: 'GET', pathname: '/api/state' }) === 'E4031');
 }
 
@@ -195,16 +203,18 @@ function jar() {
 const stub = await startHubStub({ deviceId: 'dev_self', accounts: { 甲: { password: '甲-pass-123' } } });
 
 try {
-  console.log('\nD. 真服务（回环形态 127.0.0.1 + BANDI_HUB=off，免鉴权 operator）');
+  console.log('\nD. 真服务（回环形态 127.0.0.1 + BANDI_HUB=off，免鉴权）');
   startSrv({ BANDI_HOST: '127.0.0.1' });
   if (!(await waitUp())) throw new Error('服务没起来');
 
-  // 回环下无会话 cookie 的请求被标成 operator → 全通（不含只认登录会话的 /api/security/*）
+  // 回环下无会话 cookie 的请求按机主算 → 全通（不含只认登录会话的 /api/security/*）
   check('/api/hello → 200（服务起来了）', (await call('GET', '/api/hello')).status === 200);
-  check('operator 读 /api/state → 200', (await call('GET', '/api/state')).status === 200);
-  check('operator 读 /api/users → 200（回环免登录）', (await call('GET', '/api/users')).status === 200);
+  check('机主读 /api/state → 200', (await call('GET', '/api/state')).status === 200);
+  check('机主读 /api/users → 200（回环免登录）', (await call('GET', '/api/users')).status === 200);
   const me = await call('GET', '/api/me');
-  check('operator /api/me → 200 且 kind=operator', me.status === 200 && me.json?.kind === 'operator', `${me.status} ${me.json?.kind ?? ''}`);
+  check('回环 /api/me → {kind:user, via:loopback}（operator 已下线）',
+    me.status === 200 && me.json?.kind === 'user' && me.json?.via === 'loopback',
+    `${me.status} ${me.json?.kind ?? ''}/${me.json?.via ?? ''}`);
 
   console.log('\nE. 真服务（0.0.0.0 服务器形态）：会话身份矩阵');
   await killAll();
@@ -213,10 +223,10 @@ try {
   startSrv({ BANDI_HOST: '0.0.0.0', BANDI_TOKEN: OP_TOKEN, BANDI_HUB: stub.url });
   if (!(await waitUp())) throw new Error('服务器形态没起来');
 
-  // ① operator（共享令牌）：清单内全通，未登记 404
-  check('operator 读 /api/state → 200', (await call('GET', '/api/state', { headers: OP() })).status === 200);
+  // ① 本机钥匙（X-Bandi-Token → 机主）：清单内全通，未登记 404
+  check('本机钥匙读 /api/state → 200', (await call('GET', '/api/state', { headers: OP() })).status === 200);
   const nope = await call('GET', '/api/definitely/not/here', { headers: OP() });
-  check('未登记路径 → 404 E4090（连 operator 也不存在"清单外接口"）', nope.status === 404 && nope.json?.code === 'E4090', `${nope.status} ${nope.json?.code}`);
+  check('未登记路径 → 404 E4090（连机主也不存在"清单外接口"）', nope.status === 404 && nope.json?.code === 'E4090', `${nope.status} ${nope.json?.code}`);
 
   // ② 登录用户（中枢会话）：登录即全权 —— 原来 admin 专属的管理面与审计口全开
   const uj = jar();
@@ -241,10 +251,10 @@ try {
   check('登录用户打未登记子路径 → 404 E4090（不是 403）', unregByUser.status === 404 && unregByUser.json?.code === 'E4090', `${unregByUser.status} ${unregByUser.json?.code}`);
 
   // ③ 本机软件商店安装任务通道（原 /api/nodes/local/tasks 改挂，nodeId 恒 'local'）：
-  //    operator 的请求能进 handler（鉴权接缝钉住）。不真排任务 —— 用不认识的
+  //   机主的请求能进 handler（鉴权接缝钉住）。不真排任务 —— 用不认识的
   //    外部件 id 打到 E1045 这一步（命令表查无此物，在入队之前就拒），零副作用。
   const dispatch = await call('POST', '/api/install/tasks', { headers: OP(), body: { kind: 'external-install', family: 'smoke-不存在的部件' } });
-  check('operator 打安装任务通道 → 400 E1045（进到 handler、命令表查无此物）',
+  check('机主打安装任务通道 → 400 E1045（进到 handler、命令表查无此物）',
     dispatch.status === 400 && dispatch.json?.code === 'E1045', `${dispatch.status} ${dispatch.json?.code ?? ''}`);
   const badKind = await call('POST', '/api/install/tasks', { headers: OP(), body: { kind: '瞎写的', family: 'x' } });
   check('不认识的 kind → 400 E1043', badKind.status === 400 && badKind.json?.code === 'E1043', String(badKind.json?.code));

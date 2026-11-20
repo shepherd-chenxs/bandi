@@ -10,14 +10,15 @@
  *      影子账号 —— hub 绑定都指着它，删/禁它等于把管理员自己关在门外（E3808 两道）；
  *      名字是它的另一条腿：占用即 E3802；
  *   ② 登录即全权下的账号接口：普通中枢会话就能管影子账号、读审计、看/踢自己的会话
- *      （安全口只认**会话里**的身份 —— 回环 operator 反而不行，机器不是人）。
+ *      （会话与回环机主都能读安全口；踢会话需有效会话票 —— 2026-11-20 operator 下线后
+ *      回环免登录直接就是机主本人，不再是"机器不是人"）。
  *      多个中枢账号进门各自建**自己的**影子账号（登录即放行，2026-11-07 三改）——
  *      署名按人分，本地仍然没有"第二个管理员"这种东西。
  *
  * 流程（照 smoke-hub.mjs [4c] 的写法）：起一个假中枢 → 把本机 hub.json 指到它 →
  * 在回环（loopback）形态下 hubLogin 一次 → 中枢认人 → 绑本机第一个用户（builtin）。
- * 之后管理动作走 **回环 operator**（不带会话 Cookie 即 operator、全权），这正是
- * 老版「operator 能管理用户」那条意图在新世界的等价体。
+ * 之后管理动作走 **回环机主**（不带会话 Cookie 即 localKeyWho 'loopback'、全权）——
+ * 2026-11-20 operator 下线后，回环免登录不再是独立身份，它直接就是机主本人。
  *
  * 隔离：临时数据目录 + 临时端口 + 假中枢（hub-stub.mjs），跑完全删，不碰 data/。
  * 跑法：SMOKE_PORT=8904 node apps/server/src/smoke-admin-invariant.mjs
@@ -55,7 +56,7 @@ let child = null;
 let log = '';
 child = spawn(process.execPath, [SERVER], {
   cwd: repoRoot,
-  // 回环形态（BANDI_HOST:127.0.0.1）：API 免登录 operator；不指 BANDI_HUB，留着让 hub.json 生效
+  // 回环形态（BANDI_HOST:127.0.0.1）：API 免登录（合成机主）；不指 BANDI_HUB，留着让 hub.json 生效
   env: { ...process.env, BANDI_PORT: String(PORT), BANDI_HOST: '127.0.0.1', BANDI_DATA: dataDir, BANDI_DB: path.join(dataDir, 'bandi.db') },
   windowsHide: true,
   stdio: ['ignore', 'pipe', 'pipe'],
@@ -76,7 +77,7 @@ async function waitUp(ms = 15000) {
 }
 
 /*
- * 回环 operator（无会话 Cookie）不需要 CSRF 双提交；写请求统一带 X-Bandi:1 头。
+ * 回环机主（无会话 Cookie）不需要 CSRF 双提交；写请求统一带 X-Bandi:1 头。
  * cookie 只在「以登录用户身份」发请求时用，GET 不需要 CSRF，所以这里不处理逻辑写。
  */
 let CSRF = '';
@@ -109,10 +110,10 @@ try {
   check('对的账号密码 → 302 进面板', first.status === 302 && first.location === '/' && !!first.sid, `HTTP ${first.status}`);
   const sid = `bandi_sid=${first.sid}`;
 
-  /* ============ ② 回环 operator 看用户列表：第一个账号是 builtin ============ */
-  console.log('\n② 回环 operator（免登录）看用户列表');
+  /* ============ ② 回环机主看用户列表：第一个账号是 builtin ============ */
+  console.log('\n② 回环机主（免登录）看用户列表');
   const list0 = await call('GET', '/api/users');
-  check('GET /api/users → 200（回环 operator 免登录）', list0.status === 200, String(list0.status));
+  check('GET /api/users → 200（回环机主免登录）', list0.status === 200, String(list0.status));
   check('正好一个账号，hasUsers=true', list0.body?.hasUsers === true && list0.body?.users?.length === 1, JSON.stringify(list0.body?.users ?? []));
   const builtin = list0.body?.users?.[0];
   check('第一个账号 builtin=true（防锁死的锁）', builtin?.builtin === true && builtin?.id, JSON.stringify(builtin ?? {}));
@@ -161,11 +162,14 @@ try {
   const delThird = await call('DELETE', `/api/users/${encodeURIComponent(third.body?.user?.id)}`);
   check('删第三个账号 → 200', delThird.status === 200, String(delThird.status));
 
-  /* ============ ⑧ 登录即全权：安全口对普通会话开放 ============ */
-  console.log('\n⑧ 安全接口（审计 / 会话）对登录会话开放，且只认会话里的身份');
-  const opAudit = await call('GET', '/api/security/audit');
-  check('回环 operator 摸审计 → 401 E3810（口子只认会话里的身份，机器不是人）',
-    opAudit.status === 401 && opAudit.body?.code === 'E3810', `${opAudit.status} ${opAudit.body?.code ?? ''}`);
+  /* ============ ⑧ 登录即全权：安全口对会话与回环机主开放 ============ */
+  console.log('\n⑧ 安全接口（审计 / 会话）：登录会话与回环机主都能读');
+  /*
+   * 2026-11-20：回环形态下不带凭据 = 机主（localKeyWho 'loopback'），不再是 operator。
+   * 机主全权，安全口也放行 —— 原来"operator 摸安全口 → 401"的拒绝在回环下消失了。
+   */
+  const loopbackAudit = await call('GET', '/api/security/audit');
+  check('回环机主（无会话）读审计 → 200（机主全权）', loopbackAudit.status === 200, `${loopbackAudit.status}`);
   const audit = await call('GET', '/api/security/audit', { cookie: sid });
   check('登录会话读审计 → 200（原 admin 专属）', audit.status === 200 && Array.isArray(audit.body?.events), `${audit.status} ${audit.body?.code ?? ''}`);
   const sess = await call('GET', '/api/security/sessions', { cookie: sid });
@@ -194,10 +198,14 @@ try {
   check('踢其它会话 → 200 且踢掉 ≥1 条（乙那枚多的）', kick.status === 200 && (kick.body?.kicked ?? 0) >= 1, `${kick.status} ${kick.raw?.slice(0, 100)}`);
   const sessAfter = await call('GET', '/api/security/sessions', { cookie: `bandi_sid=${reg.sid}` });
   check('踢完后乙只剩当前这张票', sessAfter.status === 200 && (sessAfter.body?.sessions?.length ?? 0) === 1, JSON.stringify(sessAfter.body ?? {}).slice(0, 120));
-  const meKicked = await call('GET', '/api/security/audit', { cookie: `bandi_sid=${reg2.sid}` });
-  // ⚠️ 回环形态下死票在 /api/me 上会被 loopback operator 兜住（200），看不出死活 ——
-  // 安全口只认会话里的身份，才是死票的照妖镜。
-  check('被踢的那枚会话票摸安全口 → 401 E3810（会话真被删了）', meKicked.status === 401 && meKicked.body?.code === 'E3810', `${meKicked.status} ${meKicked.body?.code ?? ''}`);
+  /*
+   * 2026-11-20：回环形态下被踢的死票会被 loopback 机主兜住（读审计 200），安全口不再是
+   * 死票照妖镜。改用「必须有有效会话票」的 revoke-others：它在 handler 里验 sid，
+   * 被踢的票 store.userBySession 返回 null → 401 E3810，且无副作用（票无效，踢不到任何东西）。
+   */
+  const kickedTry = await call('POST', '/api/security/sessions/revoke-others', { cookie: `bandi_sid=${reg2.sid}` });
+  check('被踢的那枚会话票打 revoke-others → 401 E3810（会话真被删了）',
+    kickedTry.status === 401 && kickedTry.body?.code === 'E3810', `${kickedTry.status} ${kickedTry.body?.code ?? ''}`);
 } catch (err) {
   failed += 1;
   console.error('\n✗ 冒烟跑挂了：', err?.message ?? err);

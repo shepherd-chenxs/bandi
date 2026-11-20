@@ -90,17 +90,18 @@ export async function load(opts = {}) {
    * 我是谁（`/api/me`）。只问一次 —— `load()` 会被通讯录轮询、下拉刷新反复调，
    * 每拍都问一遍没有意义（身份在会话期间不变）。
    *
-   * 2026-11-07 起登录即全权：菜单不再按角色收敛（那套体系已退场），
-   * 这里只区分 operator / user 两种身份给「我的」页和退出按钮用。
-   * （第三种 `device` 随手机配对体系一起退场：手机也是登录进来的 user。）
+   * 2026-11-07 起登录即全权：菜单不再按角色收敛（那套体系已退场）。
+   * 2026-11-20 起身份只剩一种"人"（operator 下线）：`isUser` 表示**有没有登录态**
+   * —— `/api/me` 带 `via` 的（回环信任 / 本机钥匙代表机主）能干活，但没有"退出登录"
+   * 这件事，所以不算登录态。
    */
   if (S.auth === undefined) {
     try {
       const me = await api('/api/me');
       S.auth = me ?? null;   // ⚠️ 不能叫 S.me —— 那个字段是「本机用户」(/api/state 的 me)，groups.mjs 在用
       if (me) markAppUrl();   // 认证通过：给壳层的返回键分流报"此刻在工作台"
-      S.isUser = me?.kind === 'user';
-      S.isAdmin = true; // 登录即全权：operator 与登录用户都能看管理设置
+      S.isUser = me?.kind === 'user' && !me?.via;
+      S.isAdmin = true; // 登录即全权：能进到这儿就能看管理设置
     } catch {
       S.auth = null;
       S.isUser = false;

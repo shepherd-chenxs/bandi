@@ -1,32 +1,41 @@
 /**
- * 访问闸 —— **身份认证的唯一起点**（人走中枢，机器走令牌）。
+ * 访问闸 —— **身份认证的唯一起点**（人走中枢，一轮活走钥匙）。
  *
- * **人**（2026-11-07 起）：账号全在身份中枢，本机只渲染一个账号密码框（表单
- * `POST /hub/login` 转给中枢，见 `routes/hub.mjs`），手机走中枢票进门
- * （`GET /hub/enter`）。两条路最后都落到本机会话 `bandi_sid` —— 登录即全权，
- * 本机不再有第二套账号密码、角色或菜单权限（那两套已整体退场）。
+ * **身份只剩两种**（2026-11-20 operator 下线后收口）：
  *
- * **机器**：`bandi_token`（operator），规则多年未变：
+ *   · `user` —— **人**。账号全在身份中枢，本机只渲染一个账号密码框（表单
+ *     `POST /hub/login` 转给中枢，见 `routes/hub.mjs`），手机走中枢票进门
+ *     （`GET /hub/enter`）。两条路最后都落到本机会话 `bandi_sid` —— 登录即全权，
+ *     本机不再有第二套账号密码、角色或菜单权限（那两套已整体退场）。
+ *   · `run`  —— **一轮活**。数字员工的运行钥匙（`X-Bandi-Run-Token`，run 现发、收尾吊销），
+ *     只开放建卡通道与只读台账，见 `security/policy.mjs`。
  *
- *   · 只监听回环（桌面版 / 单机）→ **API 免鉴权**（脚本/冒烟/CLI 一个字节没变），
- *     但浏览器抓面板 HTML 要先有登录会话 —— API 的闸管机器和脚本，会话的闸管人；
+ * **`bandi_token` 不是第三种身份**（2026-11-20 下线 operator）：它只是**本机钥匙**，
+ * 证明"我能读这台机器的 0600 文件"，换出来的是**机主本人**（`localKeyWho()`）。
+ * 它当年被设成"操作员"，但那个身份能做的事登录用户都能做、能证明的事 `local_secret`
+ * 也能证明、署名前还要映射成第一个用户 —— 多一档身份换不来任何能力，只会让人以为
+ * 存在一道"只有总机能过"的闸（那道闸拦的是早已删除的面板令牌）。
+ *
+ * 形态：
+ *
+ *   · 只监听回环（桌面版 / 单机）→ **API 免鉴权**（脚本 / 冒烟 / CLI 一个字节没变），
+ *     但浏览器抓面板 HTML 要先有登录会话 —— API 的闸管脚本，会话的闸管人；
  *   · 监听非回环（服务器）→ 所有请求都要凭据。
  *
  * ⚠️ "本机"不是看 `remoteAddress` 是不是 `127.0.0.1`：反向代理会把来源变成回环。
  * 每次请求都用 `security/source.mjs` 的 `classifySource()` 现算，四条同时成立才算本机：
  * 未设 `BANDI_TRUST_PROXY`、无转发头、监听回环、peer 与 Host 都是本机。
  *
- * 令牌从哪来，按优先级：
+ * 钥匙从哪来，按优先级：
  *   1. `BANDI_TOKEN`（显式指定，方便容器/CI）
  *   2. 数据目录里的 `token` 文件（首次启动自动生成，权限 0600）
  *
- * 三种带法都认，各有各的用处：
- *   · **Cookie** `bandi_token` —— 浏览器（历史配对遗留；登录会话走 `bandi_sid`）。
- *   · **头** `X-Bandi-Token` —— 脚本与运维。
- *   · **查询** `?token=` —— 首次进来那一下，随即换成 Cookie 并重定向掉，
- *     免得令牌留在地址栏与历史里。
+ * 带法只剩两种：
+ *   · **头** `X-Bandi-Token` —— 脚本与运维（浏览器不会自动带，天然免疫 CSRF）。
+ *   · **查询** `?token=` —— 首次进来那一下，当场换成**会话票**并重定向掉，
+ *     免得钥匙留在地址栏与历史里（钥匙本身绝不进浏览器）。
  *
- * 要找回令牌就一条命令（控制面那台机器上）：
+ * 要找回钥匙就一条命令（控制面那台机器上）：
  *   Windows:  `type <数据目录>\token`      例：type E:\02CodeSpace\bandi\data\token
  *   Linux:    `cat  <数据目录>/token`      例：cat ~/bandi-data/token
  */
@@ -58,10 +67,10 @@ const HEADER = 'x-bandi-token';
  * **登录会话 Cookie**（2026-10-28 第三刀：账号、登录与角色分配）。
  *
  * 与 `bandi_token` 是**两条互不相干的路**：
- *   · `bandi_token` = 共享令牌（root 操作员）—— 本刀一个字节没动；
+ *   · `bandi_token` = 本机钥匙（换出机主本人）—— 不随登录态变化；
  *   · `bandi_sid`   = 某个**人**登录后的会话票，只对非回环浏览器有意义。
- * 两条同时存在时**令牌优先**（见 guard 里的注释）：一个陈旧的会话 Cookie 不该
- * 把握着 root 令牌的请求降权成普通用户。
+ * 两条同时存在时**钥匙优先**（见 guard 里的注释）：一个陈旧的会话 Cookie 不该
+ * 把手握本机钥匙的请求降权成普通账号。
  */
 const SID_COOKIE = 'bandi_sid';
 /** 会话 Cookie 存活天数 —— 必须与 `store.SESSION_DAYS` 一致（两处一起改） */
@@ -156,12 +165,16 @@ function parseCookies(header) {
   return out;
 }
 
-/** 这次请求带的令牌（三路取第一个非空的） */
+/**
+ * 这次请求带的**本机钥匙**（头优先，其次是地址栏那一下）。
+ *
+ * 2026-11-20 起**不认 `bandi_token` Cookie**：钥匙不是身份，不该在浏览器里长住；
+ * 地址栏那一次会当场换成会话票（见 guard），Cookie 那条路只剩"顺手清掉"。
+ */
 export function tokenOf(req, url) {
-  const cookie = parseCookies(req.headers.cookie)[COOKIE];
   const header = req.headers[HEADER];
   const query = url.searchParams.get('token');
-  return String(cookie || header || query || '');
+  return String(header || query || '');
 }
 
 /** 这次请求带的**登录会话**票（`bandi_sid`；没有就是空串） */
@@ -192,33 +205,36 @@ export function clearedTokenCookie() {
 
 
 /**
- * 这枚令牌**是谁的**（2026-10-16 加的，2026-11-09 再收）。
+ * 这枚**运行钥匙**是谁（`X-Bandi-Run-Token`，2026-11-08 补）。
  *
- * 这里分二类身份（手机设备令牌 2026-11-07、节点令牌 2026-11-09 均已退场；登录会话
- * `user` 不在这里判，由 `guard` 认 Cookie 后自己贴上去）：
- *   · `operator` —— 总机那枚（脚本 / CLI / 运维，以及 `?token=` 首次进场；
- *                   **浏览器面板走账号会话**，见 `guard` 的回环分支）；
- *   · `run`      —— 数字员工进程的**运行钥匙**（`X-Bandi-Run-Token`：run 现发、收尾吊销，
- *                  见 agent-auth.mjs）。它不是平台令牌 —— 只从"本机直连"认
- *                  （`isDirectLocalRequest`），权限最小，见 policy.mjs 的 run 分支。
+ * ⚠️ 2026-11-20 起**只剩它一种**。原先的 `operator`（总机那枚 `bandi_token`）已下线：
+ * 它作为身份是多余的 —— 能做的事登录用户都能做，能证明的事 `local_secret` 也能证明，
+ * 最后署名前还要映射成第一个用户。现在平台令牌只是**本机钥匙**，作用是"以机主身份行事"，
+ * 由 `guard` 的 `localKeyWho()` 直接合成 `kind:'user'`，不在这里判。
  *
- * 节点令牌 2026-11-09 随多机子系统整体删除，无存量机：`bn_` 前缀令牌一律认不出来，
- * 与"抄错了/令牌删了"同样落到 E4010（需要令牌），不再有"被吊销"的中间态。
+ * 运行钥匙**不走 tokenOf 的三路**（Cookie / 头 / 查询）—— 它是 agent 进程环境里的
+ * 一次性钥匙，走独立的 `X-Bandi-Run-Token` 头。验不过 → 当没认出来（外层按"带了但
+ * 无效"回 E2056）。
  */
-export function identify(auth, token, runToken = '') {
-  if (token) {
-    if (auth.token && timingSafeEqual(token, auth.token)) return { kind: 'operator' };
-  }
-  /*
-   * 运行钥匙（2026-11-08 补）：**不走 tokenOf 的三路**（Cookie / X-Bandi-Token / ?token=）——
-   * 它是 agent 进程环境里的一次性钥匙，走独立的 `X-Bandi-Run-Token` 头。谁给的见 guard，
-   * 这里只回答"这枚钥匙是谁"；验不过 → 当没认出来（外层按"带了但无效"回 E2056）。
-   */
+export function identify(runToken = '') {
   if (runToken) {
     const hit = verifyRunCredential(runToken);
     if (hit) return { kind: 'run', runId: hit.runId, personaId: hit.personaId };
   }
   return null;
+}
+
+/**
+ * 握着**本机钥匙**（`bandi_token`）的这次请求，在这台机器上算谁。
+ *
+ * 口径（2026-11-20 用户拍板下线 operator）：钥匙不是身份，它只证明"我能读这台机器的
+ * 0600 文件"—— 与 `local_secret` 同一档信任。所以它换不出更高的权力，只换一个"谁"：
+ * **本机第一个账号（机主）**。没有账号就先留空（`userId:null`），下游 `actorUser`
+ * 回落到占位名；这与过去 operator 的行为逐字等价，但不再多出一种身份。
+ */
+function localKeyWho(via = 'local-key') {
+  const owner = store.firstUser();
+  return { kind: 'user', userId: owner?.id ?? null, via };
 }
 
 /**
@@ -239,62 +255,16 @@ function isDirectLocalRequest(req) {
   return isLocalHost(h.host);
 }
 
-/**
- * **`panel` 禁止清单**（设计 §6.3 那张表，逐条翻译成精确正则）。
+/*
+ * 2026-11-20 删：`PANEL_FORBIDDEN` / `isPanelForbidden()` 整个退场。
  *
- * 口径：`panel` = 「看 + 用」；下列五类**管理动作**只有握着总机 `token` 文件的那台
- * （`operator`）能做。理由：一台被翻的瘦客户端不该能再拉别的机器进来、
- * 也不该能把别人家的连接器密钥翻出来。
+ * 它拦的是**面板令牌**（瘦客户端那台机器），而那个体系 2026-11-09 已随多机节点子系统
+ * 一起删除 —— 之后两个函数一个调用方都没有，`route-policy` 里配套的 `noPanel` 标记
+ * 也没有任何消费方。它不是"权限边界没生效"，而是**对象已经不存在了**。
  *
- * ⚠️ 一条不许漏（漏了等于给管理权），一条不许扩（扩了会把"用"也挡掉）。
- * 下面这张"明确允许"的单子跟禁止清单是**一对**，改任何一边都要回头看一眼另一边：
- *   员工增删改（下表中 model/runtime **字段级**那条除外，它落在 server.mjs 的 handler 里）、
- *   会话/消息、群、任务/项目、工作流、定时任务、技能、连接器**读**、
- *   设备**读**、`GET /api/lan`、`GET /api/state`、`/api/runs/<id>/stream`（SSE）。
+ * 顺手记下教训：一段写着"只有总机能做"的注释，即使代码已经死了，也会让人（包括写它
+ * 的人）以为那道闸还在。死代码要删，别留成"看起来在守门"的化石。
  */
-const PANEL_FORBIDDEN = [
-  // 1 删 / 改设备
-  { method: /^POST$/, path: /^\/api\/devices\/[^/]+\/rename$/ }, //             server.mjs:1496
-  { method: /^POST$/, path: /^\/api\/devices\/[^/]+\/runtimes$/ }, //            server.mjs:1525
-  { method: /^(PUT|PATCH)$/, path: /^\/api\/devices\/[^/]+\/runtimes\/[^/]+$/ }, // server.mjs:1534
-  { method: /^DELETE$/, path: /^\/api\/devices\/[^/]+\/runtimes\/[^/]+$/ }, //    server.mjs:1546
-  // 2 改连接器与凭据
-  { method: /^POST$/, path: /^\/api\/connectors$/ }, //                          server.mjs:939
-  { method: /^(PUT|PATCH)$/, path: /^\/api\/connectors\/[^/]+$/ }, //            server.mjs:973
-  { method: /^DELETE$/, path: /^\/api\/connectors\/[^/]+$/ }, //                 server.mjs:980
-  { method: /^POST$/, path: /^\/api\/ssh\/servers$/ }, //（含私钥路径）           server.mjs:258
-  { method: /^POST$/, path: /^\/api\/git\/token$/ }, //                          server.mjs:2208
-  { method: /^DELETE$/, path: /^\/api\/git\/token$/ }, //                        server.mjs:2223
-  //   第 15 条 `PUT|PATCH /api/personas/:id` **且 body 带 model 或 runtime**
-  //   是**字段级**的（readBody 只有 handler 里有）→ 落在 server.mjs 的 handler（用 mayManage）
-  // 4 局域网开关（角色 / 手机连接；监听地址不是可切的了，2026-11-03）
-  { method: /^POST$/, path: /^\/api\/lan$/ }, //（GET 允许 —— 只读）              server.mjs:1452
-  /*
-   * — **架构补充**：插件装卸 = 在总机上落代码，风险与"改连接器"同级
-   *   （设计 §6.3 最后一行，别漏）                          server.mjs:1565 / 1578
-   */
-  { method: /^POST$/, path: /^\/api\/plugins\/[^/]+\/(?:install|enable|disable)$/ },
-  { method: /^DELETE$/, path: /^\/api\/plugins\/[^/]+$/ },
-  /*
-   * — panel 只许「看 + 用」，这两条 GET 越界（设计口径：panel 的 SSE 只许
-   *   `/api/runs/<id>/stream`，不许订阅全局事件流；全盘目录列举更是越权读）
-   */
-  { method: /^GET$/, path: /^\/api\/events$/ }, // 全局 SSE：所有会话的运行事件
-  { method: /^GET$/, path: /^\/api\/fs\/dirs$/ }, // 任意目录列举：等于摸操作员整块磁盘
-  /*
-   * — 技能 discover/import：body 里 root/dirs/srcDir 是**任意本机路径**，导入的
-   *   SKILL.md 会整篇注入数字员工的首轮 prompt —— 与"插件装卸 = 落代码"同风险级
-   *   （供应链投毒面，panel 收）                                 server.mjs:273 / 280
-   */
-  { method: /^POST$/, path: /^\/api\/skills\/(?:discover|import)$/ },
-];
-
-/** 这个动作算不算"管理动作"（`panel` 令牌碰不得） */
-export function isPanelForbidden(method, pathname) {
-  const m = String(method ?? '').toUpperCase();
-  const p = String(pathname ?? '');
-  return PANEL_FORBIDDEN.some((r) => r.method.test(m) && r.path.test(p));
-}
 
 /**
  * **判定只有一处**（设计 §6.1）。`guard()` 里只调这一个函数，别的什么都不判。
@@ -304,9 +274,9 @@ export function isPanelForbidden(method, pathname) {
  * import 保持单向（auth → policy），security/ ↔ auth.mjs 不成环。
  * （原经 `rules` 注入的节点归属判定随多机子系统 2026-11-09 整体删除。）
  *
- * 三种令牌携带方式（Cookie / `X-Bandi-Token` / `?token=`）走的**都是这里** ——
- * `tokenOf()` 先统一取出令牌，`identify()` 再统一认出"是谁"。
- * 所以"面板令牌换个 Cookie 就变成操作员"这种事不会发生。
+ * 令牌从哪来（`X-Bandi-Token` 头 / `?token=` 查询）也走的**都是这里** ——
+ * `tokenOf()` 先统一取出，`guard` 再把它认成**机主本人**（`localKeyWho()`），
+ * 所以"同一枚钥匙换个携带方式就换出一套权限"不可能发生。
  *
  * 返回 `'allow' | 'E4031' | 'E4033' | 'E4034'`。
  *
@@ -319,10 +289,10 @@ export function decide(who, method, pathname) {
 /**
  * 这次请求的**操作人是谁**（2026-10-31 用户概念落地：消息署名 / 建卡人 / 看"我"是谁）。
  *
- * 四种答案：
- *   · 登录用户 → 他自己（多端各记各的，这是唯一精确的一档）；
- *   · operator（回环 / 共享令牌）→ **第一个用户**（"本机自动登录"：像一台共用电脑，
- *     没人显式登录时活都算机主的）。还没有任何用户 → null，调用方回落到 LOCAL_USER 占位。
+ * 只有一种答案：**这个人自己**。本机钥匙 / 回环信任在 guard 里已经被合成成
+ * `kind:'user'` + 机主的 userId（2026-11-20 operator 下线），所以这里不再有
+ * "机器身份映射成人"的特例；`userId` 为空（这台机器还没有任何账号）→ null，
+ * 调用方回落到 LOCAL_USER 占位。
  *
  * 只用于**落数据**（署名），绝不用于鉴权 —— 权限判定仍然只看 `decide()`，两码事别混。
  */
@@ -330,25 +300,22 @@ export function actorUser(req) {
   const a = req?.bandiAuth;
   if (!a) return null;
   if (a.kind === 'user' && a.userId) return store.getUser(a.userId);
-  if (a.kind === 'operator') return store.firstUser();
   return null;
 }
 
 /**
- * 这次请求是不是**这台机器的操作员**在做（handler 判字段级权限用）。
+ * 这次请求是不是**一个能动管理设置的人**在做（handler 判字段级权限用）。
  *
  * 存在的理由：`PUT /api/personas/:id` 里"body 带 model / runtime"这件事
  * `auth.mjs` 看不见（要 `readBody`），所以那一条必须落在 handler 里，一行判断即可。
  *
- * ⚠️ 回环形态（单机 / 桌面版）下 `guard` 会把身份标成 operator（见下面那段），
- * 否则单机上点「改模型」会被自己的闸挡掉。
- *
- * 2026-11-07 起登录即全权，operator 与登录用户**都算**（运行钥匙不算）。
+ * 2026-11-07 起登录即全权；2026-11-20 起本机钥匙也合成成 `user`，
+ * 所以这里只剩一个判据（运行钥匙不算）。**它不再是"只有机器才有的特权"**。
  */
 export function mayManage(req) {
   const a = req?.bandiAuth;
   if (!a) return false;
-  return a.kind === 'operator' || a.kind === 'user';
+  return a.kind === 'user';
 }
 
 
@@ -456,9 +423,9 @@ export function guard(auth, req, res, url) {
     /*
      * 回环形态（桌面版 / 单机）—— **API 与面板分开**：
      *
-     * · **API 仍是回环信任**：本机脚本 / 冒烟 / CLI 不带凭据照旧 = operator（一个字节没变）；
-     *   但**带着有效登录会话的浏览器按登录人算**（kind:'user'）—— 消息署名精确到人。
-     *   退出登录之后回 operator。
+     * · **API 仍是回环信任**：本机脚本 / 冒烟 / CLI 不带凭据照旧能干活；但**带有效
+     *   登录会话的浏览器按登录人算**，没会话就按机主算（消息署名精确到人）。
+     *   2026-11-20 起不再标成 `operator` —— 它直接就是**机主本人**（`localKeyWho`）。
      * · **面板要登录**：抓 HTML 一律给**中枢账号登录页**（2026-11-07 起只有这一张）。
      */
     const sid = sessionTokenOf(req);
@@ -473,11 +440,10 @@ export function guard(auth, req, res, url) {
         return true;
       }
     }
-    req.bandiAuth = { kind: 'operator', via: 'loopback' };
+    req.bandiAuth = localKeyWho('loopback');
     /*
-     * **面板只给"人"**：operator 是**机器凭据**（回环免登录 / 令牌），不是一个可以在
-     * 界面上当"我"的身份 —— 它没有 users 行，「我的」页画不出名字，用户看到的就是
-     * 一个空页 + 一段解释。所以门前移：没会话就给登录页。
+     * **面板只给"人"**：回环信任不是"我"—— 它没有会话，「我的」页画不出登录态，
+     * 退出登录按了也没用。所以门前移：没会话就给登录页。
      */
     if (wantsPanelHtml(req, url)) return serveLoginOrReenter(req, res, auth);
     return true;
@@ -490,14 +456,20 @@ export function guard(auth, req, res, url) {
    * "本机直连"认（见 isDirectLocalRequest 的说明）；反代进来的请求不认。
    */
   const runTok = isDirectLocalRequest(req) ? String(req.headers['x-bandi-run-token'] ?? '') : '';
-  let who = identify(auth, got, runTok);
+  let who = identify(runTok);
+
+  /*
+   * **本机钥匙 → 机主**（2026-11-20，operator 下线）。钥匙（`X-Bandi-Token` 头或
+   * `?token=`）不再是一种身份，它只证明"我能读这台机器的 0600 文件"，换出来的是
+   * **本机第一个账号**。所以脚本 / CLI / 运维的行为一个字节没变，但身份表里少了一档。
+   */
+  if (!who && got && auth.token && timingSafeEqual(got, auth.token)) who = localKeyWho();
 
   /*
    * **登录会话兜底**（2026-10-28 第三刀）。
    *
-   * 顺序是**令牌优先、会话兜底**，不是反过来：一个浏览器里同时躺着 `bandi_token`
-   * （root）和 `bandi_sid`（某次登录）时，握 root 令牌的请求不该被一个陈旧的会话票
-   * 降权。两条路都保留、互不覆盖，语义才最不容易出意外。
+   * 顺序是**钥匙优先、会话兜底**，不是反过来：手里握着本机钥匙的请求（运维 / 脚本）
+   * 不该被浏览器里一张陈旧的会话票降权到某个普通账号。两条路互不覆盖。
    *
    * 回环分支在更上面已经 return 了，所以桌面端永远走不到这里（免登录）。
    */
@@ -523,8 +495,8 @@ export function guard(auth, req, res, url) {
     const decision = decide(who, req.method, url.pathname);
 
     /*
-     * E4031 保留为 policy 的**兜底拒绝**（未知身份落这里）：现实中 identify() 只会
-     * 认出 operator / run、会话兜底只给 user，这个分支不该被走到 —— 留着它，
+     * E4031 保留为 policy 的**兜底拒绝**（未知身份落这里）：现实中 identify() 只认
+     * `run`，其余都是 `user`（会话或本机钥匙合成），这个分支不该被走到 —— 留着它，
      * 万一将来多出一种身份，默认是拒而不是放。
      */
     if (decision === 'E4031') {
@@ -534,7 +506,7 @@ export function guard(auth, req, res, url) {
           error: '这台机器只有算力权限，看不了面板',
           code: 'E4031',
           platform: 'bandi',
-          hint: '要看设备、对话、员工，请用操作员令牌（总机数据目录 token 文件里那枚），或让总机在设备详情里给这台机器开面板权限。',
+          hint: '要看设备、对话、员工，请用账号登录，或带本机钥匙（数据目录 token 文件里那枚）。',
         }),
       );
       return false;
@@ -575,43 +547,46 @@ export function guard(auth, req, res, url) {
     }
 
     /*
-     * 从地址栏进来的令牌：换成 Cookie 并**重定向掉**，免得它留在历史/Referer 里。
-     * ⚠️ 只对**操作员**令牌做这件事：节点令牌要是也能换成 Cookie，就等于把 master 发给了浏览器 ✗
-     * （那条是提权，正是这次改动要堵的东西）。
+     * 地址栏里的**本机钥匙**（`?token=`）：换一张**会话票**再 302，把它从历史 / Referer
+     * 里摘掉。
      *
-     * `panel` 令牌**刻意不开这条路**（设计 §6.2）：瘦客户端走反代，浏览器根本拿不到令牌
-     * （令牌在反代的头里）；而一旦给 panel 开 Cookie，总机令牌就落进了那台机器的浏览器
-     * Cookie 里 —— 比 URL 更长寿、更容易被同机进程读走，正好和决策 A 想收的口子相反。
+     * 2026-11-20 改：以前换的是 `bandi_token` Cookie —— 等于把根钥匙塞进浏览器（比 URL
+     * 更长寿、更难收回）。现在钥匙不进浏览器：换出来的是**机主本人的会话**，之后浏览器
+     * 只带 `bandi_sid`。没有账号（全新库）就只把 token 从地址里摘掉，落到登录页。
      */
-    if (who.kind === 'operator' && url.searchParams.get('token')) {
+    if (who.via === 'local-key' && url.searchParams.get('token')) {
+      const rest = url.pathname + (stripToken(url.searchParams) || '');
+      const owner = store.firstUser();
+      if (!owner || owner.disabled) {
+        res.writeHead(302, { Location: rest, 'Cache-Control': 'no-store' });
+        res.end();
+        return false;
+      }
+      const { token } = store.createSession(owner.id, {
+        ip: req.socket?.remoteAddress ?? null,
+        ua: req.headers['user-agent'] ?? '',
+        kind: 'local-key',
+      });
       res.writeHead(302, {
-        'Set-Cookie': cookieHeader(auth.token),
-        Location: url.pathname + (stripToken(url.searchParams) || ''),
+        'Set-Cookie': sessionCookie(token),
+        Location: rest,
         'Cache-Control': 'no-store',
       });
       res.end();
       return false;
     }
     /*
-     * **令牌不是人**（2026-11-01）：面板 HTML 只给登录账号。
-     * 带令牌抓首页（`?token=` 换完 Cookie 再进来、或手工填了 bandi_token）以前会直接
-     * 进面板当"操作员"，于是「我的」页永远没有密码/动态验证。现在统一给登录/建号页；
-     * 令牌继续管 **API**（脚本、CLI、节点、运维照旧 `X-Bandi-Token`，一个字没变）。
-     * 手机也一样走这条（2026-11-07 设备令牌退场）：手机浏览器打开面板 = 登录页，
-     * App 里是 WebView 带中枢会话进来，两种都不是"令牌当登录"。
+     * **钥匙不是登录态**（2026-11-01 的规矩，2026-11-20 之后更明确）：面板 HTML 只给会话。
+     * 拿钥匙抓首页（脚本 / 手工带头的浏览器）一律给登录页 —— 否则「我的」页会以一个
+     * 没有会话的身份渲染，退出登录按了也没用。API 照旧认这把钥匙。
      */
-    if (who.kind === 'operator' && wantsPanelHtml(req, url)) {
-      /*
-       * **顺手清掉这枚令牌 Cookie**（2026-11-01 实报：点了登录，输入框被刷空、还在登录页）。
-       * 面板不再认令牌，而 `令牌优先于会话` 会让这枚陈年 Cookie 把刚登录的人一直压回
-       * operator → 又挡回登录页 → 登录永远"没反应"。浏览器以会话为准，令牌只走请求头。
-       * 只清"确实是根令牌"的那枚（同名 Cookie 可能是别的东西，别误伤）。
-       */
-      const staleTok = String(parseCookies(req.headers.cookie)[COOKIE] || '');
-      const dropToken = !!staleTok && !!auth.token && timingSafeEqual(staleTok, auth.token);
-      return serveLoginOrReenter(req, res, auth, dropToken ? [clearedTokenCookie()] : []);
+    if (who.via === 'local-key' && wantsPanelHtml(req, url)) {
+      // 陈年 `bandi_token` Cookie 已经没有用了（tokenOf 不再读它），顺手清掉，别让它在
+      // 浏览器里躺一年。
+      const stale = String(parseCookies(req.headers.cookie)[COOKIE] || '');
+      return serveLoginOrReenter(req, res, auth, stale ? [clearedTokenCookie()] : []);
     }
-    req.bandiAuth = who; // 下游（比如"忘掉"、员工编辑的字段闸）据此知道这枚令牌是谁
+    req.bandiAuth = who; // 下游（署名、员工编辑的字段闸）据此知道这是谁
     return true;
   }
 
@@ -797,17 +772,11 @@ function stripToken(params) {
   return s ? `?${s}` : '';
 }
 
-function cookieHeader(token) {
-  // HttpOnly：JS 读不到，XSS 也偷不走；SameSite=Lax：跨站 POST 不带它（配合来源闸双保险）
-  return `${COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000`;
-}
-
-/**
- * 登录页 / ?token= 换 Cookie 用：把令牌包成 `bandi_token=…; HttpOnly; …` 那一行。
+/*
+ * 2026-11-20 删：`cookieHeader()` / `cookieValue()`。
+ * 它们只服务"把根钥匙塞进浏览器 Cookie"那条路 —— 那条路已经换成发会话票，
+ * 钥匙不再进浏览器。留着就是又一段"看起来还能用"的死代码。
  */
-export function cookieValue(token) {
-  return cookieHeader(token);
-}
 
 /** 定长比较，别让"比到第几个字符不同"泄漏出去 */
 function timingSafeEqual(a, b) {

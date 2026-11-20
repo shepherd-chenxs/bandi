@@ -476,7 +476,7 @@ function doMode() {
  *   · 服务器形态下浏览器根本做不了破坏性动作（要 `X-Bandi-Local`），
  *     "本机终端"就是唯一合法的执行者 —— 而它只能用同一套接口，不能开后门。
  * 两个头各管一件事，缺哪个由服务端说了算：
- *   X-Bandi-Token  身份（root 令牌 = operator）
+ *   X-Bandi-Token  **本机钥匙**（数据目录 token 文件）—— 服务端据此认定"机主本人在操作"
  *   X-Bandi-Local  "我在这台机器的文件系统上"（值 = 数据目录 local_secret）
  */
 function apiHeaders(extra = {}) {

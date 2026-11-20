@@ -7,11 +7,11 @@
  *  "痕"仍在，只是不再一行一次——见 ④ 里的两条降噪断言）。
  *
  *   ① 起假中枢（hub-stub.mjs），BANDI_HUB 指过去；服务器形态（0.0.0.0 + BANDI_TOKEN）起服务 ——
- *      匿名请求真的会吃 401（回环形态下没凭据 = operator，造不出拒绝样本）；
- *   ② 匿名 401 → guard 当场记 authz.deny；operator 令牌摸安全口 → 401 E3810（口子只认会话身份）；
- *   ③ 中枢表单登录换 bandi_sid，以登录用户身份做一串写操作；
- *   ④ 读审计：user.change 都有 actorKind='user' + actorId=本人；operator 令牌的写
- *      actorKind='operator'、actorId=null（机器不是人，不冒充任何账号）；
+ *      匿名请求真的会吃 401（回环形态下没凭据 = 机主，造不出拒绝样本）；
+ *   ② 匿名 401 → guard 当场记 authz.deny；空库时本机钥匙摸安全口 → 401 E3810（还没机主）；
+ *   ③ 中枢表单登录换 bandi_sid，以登录用户身份做一串写操作；本机钥匙也来一笔；
+ *   ④ 读审计：会话的写 actorKind='user' + actorId=本人；本机钥匙的写 actorKind='local-key'
+ *      + actorId=机主（权限上就是机主本人，只是没走登录会话）；有用户后本机钥匙能读审计（机主全权）；
  *   ⑤ kind 筛选、全量导出、清空（2026-11-10 起：主表+归档一起真删、不留痕迹）都对会话开放；
  *   ⑥ 停服务直接开库：append-only 触发器（v2.4 口径）+ 90 天归档。
  *
@@ -110,12 +110,18 @@ try {
   start();
   if (!(await waitUp())) throw new Error('实例没起来：' + log.slice(-500));
 
-  /* ============ ① 匿名与机器身份：拒绝都有痕 ============ */
-  console.log('① 匿名 401（guard 当场记 deny）；operator 令牌摸安全口 → 401 E3810');
+  /* ============ ① 匿名与拒绝都有痕 ============ */
+  console.log('① 匿名 401（guard 当场记 deny）；空库时机主钥匙摸安全口 → 401 E3810');
   const denied0 = await call('GET', '/api/users'); // 无凭据 → 401，guard 当场记
   check('匿名（无凭据）→ 401 E4010', denied0.status === 401 && denied0.body?.code === 'E4010', `${denied0.status} ${denied0.body?.code ?? ''}`);
+  /*
+   * 2026-11-20：operator 下线后，本机钥匙（X-Bandi-Token）合成成「机主本人」（kind:user）。
+   * 但**此刻库里还没有任何账号**（甲要到 ② 才登录建影子号），localKeyWho 的 userId 是 null，
+   * 安全口 handler 的 store.getUser(null) 拿不到账号 → 401 E3810。等 ② 有了机主，同一把钥匙
+   * 就能读审计了（④ 钉这个翻转）—— 这正是"机主全权"取代"机器不是人"的分界线。
+   */
   const opSec = await call('GET', '/api/security/audit', { headers: { 'X-Bandi-Token': TOKEN } });
-  check('operator 令牌摸审计 → 401 E3810（口子只认会话里的身份，机器不是人）',
+  check('空库时本机钥匙摸审计 → 401 E3810（还没机主，不是"机器不是人"）',
     opSec.status === 401 && opSec.body?.code === 'E3810', `${opSec.status} ${opSec.body?.code ?? ''}`);
 
   /* ============ ② 中枢表单登录换会话，拿登录用户的 id ============ */
@@ -135,8 +141,18 @@ try {
   const actorId = meA.body?.user?.id;
   check('拿到登录用户的 id（审计的 actorId 就该是它）', typeof actorId === 'string' && actorId.length > 0, String(actorId));
 
-  /* ============ ③ 两种身份各做一串写操作 ============ */
-  console.log('\n③ 写操作：登录用户（会话）与 operator（令牌）各来几笔');
+  /* ============ ③ 会话与本机钥匙各做一串写操作 ============ */
+  console.log('\n③ 写操作：登录用户（会话）与本机钥匙各来几笔');
+  /*
+   * 本机钥匙 /api/me：甲是第一个账号（机主），所以钥匙合成出来的人就是甲 ——
+   * via='local-key' 表示「没走登录会话」，但权限上就是机主本人。
+   */
+  const meOwner = await call('GET', '/api/me', { headers: { 'X-Bandi-Token': TOKEN } });
+  check('本机钥匙 /api/me → {kind:user, via:local-key}（机主本人）',
+    meOwner.status === 200 && meOwner.body?.kind === 'user' && meOwner.body?.via === 'local-key',
+    `${meOwner.status} ${JSON.stringify(meOwner.body ?? {})}`);
+  const ownerId = meOwner.body?.user?.id;
+  check('本机钥匙合成的机主 = 第一个账号（甲）', ownerId === actorId, `${ownerId} vs ${actorId}`);
   const mk = await call('POST', '/api/users', { cookie: sidA, body: { name: '小李' } });
   check('建影子账号 → 201', mk.status === 201, `${mk.status} ${mk.raw?.slice(0, 80)}`);
   const pid = mk.body?.user?.id;
@@ -145,7 +161,7 @@ try {
   const del = await call('DELETE', `/api/users/${encodeURIComponent(pid)}`, { cookie: sidA });
   check('删影子账号 → 200', del.status === 200 && del.body?.ok === true, String(del.status));
   const opMk = await call('POST', '/api/users', { headers: { 'X-Bandi-Token': TOKEN }, body: { name: '令牌建' } });
-  check('operator 令牌建号 → 201（机器身份照旧能干活）', opMk.status === 201, `${opMk.status} ${opMk.raw?.slice(0, 80)}`);
+  check('本机钥匙建号 → 201（机主身份照旧能干活）', opMk.status === 201, `${opMk.status} ${opMk.raw?.slice(0, 80)}`);
 
   /* ============ ④ 读审计：谁干的、干了什么，两种身份分开记 ============ */
   console.log('\n④ 读审计（以登录用户身份）：署名按身份分清楚');
@@ -153,19 +169,26 @@ try {
   check('登录用户读审计 → 200 且 events 是数组', audBefore.status === 200 && Array.isArray(audBefore.body?.events), String(audBefore.status));
   const evBefore = audBefore.body?.events ?? [];
   check('审计非空', evBefore.length > 0, `len=${evBefore.length}`);
-  const mine = (kind) => evBefore.filter((e) => e.kind === kind && e.actorId === actorId);
-  check("会话的建/禁/删 都记成 kind='user.change' 且 actorId=本人（≥3 条）",
-    mine('user.change').length >= 3, `user.change=${mine('user.change').length}`);
+  // 只数 actorKind='user' 的会话写（本机钥匙的写 actorKind='local-key'，actorId 虽也是机主，但不算"会话"）
+  const mine = (kind) => evBefore.filter((e) => e.kind === kind && e.actorKind === 'user' && e.actorId === actorId);
+  check("会话的建/禁/删 都记成 kind='user.change' 且 actorId=本人（正好 3 条）",
+    mine('user.change').length === 3, `user.change=${mine('user.change').length}`);
   check("user.change 含 POST/PATCH/DELETE 三条动作",
     ['POST /api/users', `PATCH /api/users/${pid}`, `DELETE /api/users/${pid}`].every((a) =>
       mine('user.change').some((e) => e.action === a && e.result === 'ok')),
     JSON.stringify(mine('user.change').map((e) => e.action)));
-  const opRow = evBefore.find((e) => e.kind === 'user.change' && e.action === 'POST /api/users' && e.actorKind === 'operator');
-  check('operator 令牌的写 actorKind=operator、actorId=null（机器不冒充任何账号）',
-    !!opRow && opRow.actorId === null && opRow.result === 'ok', JSON.stringify(opRow ?? null).slice(0, 160));
+  const opRow = evBefore.find((e) => e.kind === 'user.change' && e.action === 'POST /api/users' && e.actorKind === 'local-key');
+  check('本机钥匙的写 actorKind=local-key、actorId=机主（权限上机主本人，没走登录会话）',
+    !!opRow && opRow.actorId === ownerId && opRow.result === 'ok', JSON.stringify(opRow ?? null).slice(0, 160));
   check('登录用户的行都署名本人（没有别人的 actorId 混进来）',
     evBefore.filter((e) => e.actorKind === 'user').every((e) => e.actorId === actorId),
     JSON.stringify([...new Set(evBefore.filter((e) => e.actorKind === 'user').map((e) => e.actorId))]));
+  /*
+   * ① 里同一把钥匙摸审计还是 401（空库没机主），现在有机主了 → 能读。
+   * 这是 operator 下线后最关键的行为翻转：钥匙不再是"机器不是人"，它就是机主全权。
+   */
+  const ownAudit = await call('GET', '/api/security/audit', { headers: { 'X-Bandi-Token': TOKEN } });
+  check('有用户后本机钥匙读审计 → 200（机主全权）', ownAudit.status === 200, `${ownAudit.status}`);
   // 按 kind 精确圈定（server.mjs auditKindOf 的真值）：避免把 authz.deny 等也算进来
   const byKind = await call('GET', '/api/security/audit?kind=user.change', { cookie: sidA });
   check("kind 筛选有效：?kind=user.change 只回 user.change",

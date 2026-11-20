@@ -5,7 +5,7 @@
  * （routes/hub.mjs 转给中枢），本文件不再管认证 —— 剩下的是影子账号的维护与"我是谁"：
  *
  *   POST   /api/logout       → 退出（**免令牌**，凭据就是那张会话票本身）
- *   GET    /api/me           → 我是谁（operator / user）
+ *   GET    /api/me           → 我是谁（只有 `user` 一种答案；带 `via` 的是"没有登录态"的机主）
  *   POST   /api/me/password  → 改中枢账号的密码（转发中枢 /v1/auth/password，2026-11-10）
  *   GET    /api/users        → 账号列表（**不含任何凭据字段**）
  *   POST   /api/users        → 建影子账号（预占名字，等中枢账号首次登录时绑定）
@@ -110,9 +110,12 @@ export async function handleUsers(req, res, url) {
 
     /* ------------------------------------------------ 安全（会话 / 审计） */
     /*
-     * 口子，都只认**会话里**的身份：
+     * 安全口子认"人"的身份（kind:user）—— 2026-11-20 operator 下线后，登录会话、本机钥匙
+     * （X-Bandi-Token）、回环免登录都合成成机主本人，权限一致。空库时（还没任何账号）本机
+     * 钥匙的 userId 为 null，下面 store.getUser 拿不到 → 401；有了机主就放行。
+     * 唯一例外：revoke-others 要"保留当前这张票"，在 handler 里额外验会话票有效性。
      *   GET  /api/security/sessions               → 我的活动会话（设备/IP/最近活跃）
-     *   POST /api/security/sessions/revoke-others → 踢掉我其它设备（保留当前这张票）
+     *   POST /api/security/sessions/revoke-others → 踢掉我其它设备（保留当前这张票，需有效会话票）
      *   GET  /api/security/audit                  → 审计日志（kind/limit 游标翻页）
      *   GET  /api/security/audit/export           → 审计日志全量导出
      *   POST /api/security/audit/clear            → 彻底清空（主表+归档一起删，不留痕迹；2026-11-10 定）
@@ -170,28 +173,33 @@ export async function handleUsers(req, res, url) {
     if (method === 'GET' && p === '/api/me') {
       const who = req.bandiAuth;
       /*
-       * `via` 要带上（2026-11-01 实报：点「退出登录」没反应）：
-       *   · `loopback` = 本机免登录信任（回环形态 guard 在令牌识别**之前**就判成 operator），
-       *     这种身份**没有登录态可退** —— 清了 Cookie 重载还是操作员，前端据此不摆退出按钮；
-       *   · `token`    = 面板令牌（非回环形态）—— 退出会清掉令牌 Cookie，有效。
+       * `via` 只在**不是登录态**时带上（2026-11-01 实报："点退出登录没反应"）：
+       *   · `loopback`  = 回环免登录信任（单机形态）；
+       *   · `local-key` = 本机钥匙（数据目录 token）代表机主；
+       * 两种都**没有登录态可退** —— 清了 Cookie 重载还是同一个机主，前端据此不摆
+       * 退出按钮。真正的会话（含 `session-loopback` / `hub`）不带 via。
        */
-      if (who?.kind === 'operator') return sendJson(res, 200, { kind: 'operator', via: who.via ?? null }), true;
       if (who?.kind === 'user') {
         const me = meOf(who);
+        const synthesized = who.via === 'loopback' || who.via === 'local-key';
+        if (synthesized) {
+          return sendJson(res, 200, me ? { ...me, via: who.via } : { kind: 'user', via: who.via }), true;
+        }
         // 会话有效但账号被删了：当成没登录（前端会回登录页）
         if (!me) throw new UserError(401, 'E3810', '这个账号已经不在了，请重新登录');
         return sendJson(res, 200, me), true;
       }
       /*
-       * 到这儿只剩节点令牌（机器身份）：它没有"我是谁"可言 —— 前端问 /api/me 的只有
-       * 人和操作员。设备令牌那条 2026-11-07 随配对体系一起退场。
+       * 到这儿只剩运行钥匙（一轮活的临时凭证）：它没有"我是谁"可言。
        */
       throw new UserError(401, 'E3810', '还没登录');
     }
 
     /* ------------------------------------------------ 改中枢密码（2026-11-10） */
     /*
-     * `POST /api/me/password`：只认**会话里的 user**（operator 没有中枢账号可改）。
+     * `POST /api/me/password`：要求**有一个真实账号**（运行钥匙没有账号，过不来）。
+     * 2026-11-20 起本机钥匙也算"机主本人"，所以它也能改密码 —— 这与它本来就能
+     * 用 `local_secret` 换一张机主会话是同一种信任，不是新开的能力。
      * 验参 → 读 hub.json 拿设备凭据 → 转发中枢 `/v1/auth/password`（真验证在中枢：
      * 主机不存密码，这里也只过手明文一次，不落日志）。会话/票据不吊销 ——
      * 已登录的设备不受影响，下次登录用新密码。

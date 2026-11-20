@@ -452,6 +452,8 @@ QA 第 1 轮实测抓出两个 P0：① 设备令牌访问**非 /api 的静态 G
 
 **白名单只应作用于 `/api` 前缀**，实现落点：**改 `deviceMayReach()`（`auth.mjs:271`），不动 `decide()`** —— 函数体第一行加前缀短路：
 
+> **历史注记（2026-11-07 起作废）**：`device` 设备身份与 `deviceMayReach()` 已随配对体系整体退场（形态决策 ④），本节口径随之失效；下文 `auth.mjs:271` 等行号引用不再指向任何现存函数，仅作当年裁定的存档保留。
+
 ```js
 function deviceMayReach(method, pathname) {
   // 白名单只管 /api：同源静态（HTML/JS/CSS/manifest/图标/SW）与 panel 同权，无条件放行

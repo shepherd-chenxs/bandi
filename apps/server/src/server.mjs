@@ -543,8 +543,13 @@ const server = http.createServer(async (req, res) => {
       const actor = req.bandiAuth ?? {};
       auditId = store.add({
         kind: auditKindOf(url.pathname),
-        actorKind: actor.kind ?? null,
-        actorId: actor.userId ?? actor.deviceId ?? null,
+        /*
+         * 署名归"人"，但**怎么来的**要记清楚（2026-11-20 operator 下线）：
+         * 本机钥匙 / 回环信任不是登录会话，记成 `local-key` / `loopback` ——
+         * 这不是第三种身份（权限上它们就是机主本人），只是审计里不冒充"我登录了"。
+         */
+        actorKind: actor.via === 'local-key' || actor.via === 'loopback' ? actor.via : (actor.kind ?? null),
+        actorId: actor.userId ?? null,
         action: `${req.method} ${url.pathname}`,
         ip: clientIp(req),
         ua: req.headers['user-agent'] ?? '',
