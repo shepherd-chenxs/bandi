@@ -49,6 +49,16 @@
 .gr-branch .combo-group { font-size: 13px; padding-top: 10px; color: var(--text); }
 .gr-branch .combo-group.foldable:hover { color: var(--accent); }
 .gr-branch .combo-group, .gr-branch .combo-group.combo-sub { font-weight: 400; }
+/* 顶部常驻动作（2026-11-20，用户："入口分散、要多点几步，基础功能尽量傻瓜式"）：
+   图标 + 短文字，灰掉时仍看得见但点不动，title 说明为什么不能点。
+   选择器带 .plg-detail-head 是为了压过 .mini.auto 的 16px 内边距。 */
+.plg-detail-head .head-actions .gr-act { display: inline-flex; align-items: center; gap: 5px;
+                                         width: auto; padding: 0 10px; font-size: 12px; white-space: nowrap; }
+.plg-detail-head .head-actions .gr-act svg { width: 14px; height: 14px; }
+.plg-detail-head .head-actions .gr-act[disabled] { opacity: .45; cursor: not-allowed; }
+/* 窄屏只留图标，别把标题行挤爆 */
+body.mb-narrow .plg-detail-head .head-actions .gr-act { width: 26px; padding: 0; justify-content: center; }
+body.mb-narrow .plg-detail-head .head-actions .gr-act span { display: none; }
 /* 改动卡（2026-10-27 改分栏，用户："左边文件，右边输入区和提交"；标题同日改「提交」）：
    左 = 文件清单（diff 展开跟文件行走），右 = 提交说明 + 提交按钮，中间一条分隔线。
    区域高度固定，文件多了在左栏里滚 —— 卡片不再跟着几十个文件无限撑高。

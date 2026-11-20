@@ -700,7 +700,20 @@ export async function renderGitRepos(root = $('pluginView')) {
          <b>${esc(sel.fullName)}</b>${sel.isPrivate ? '<span class="pill">私有</span>' : ''}
          <span class="gr-branch" id="grBranchMount"></span>
          <!-- 本地路径 2026-10-27 应用户要求从导航条摘掉 —— 左栏列表和齿轮弹窗里都还有，不丢信息 -->
+         <!--
+           顶部常驻动作栏（2026-11-20，用户："入口分散、要多点几步，基础功能尽量傻瓜式"）：
+           更新 / 提交 / 推送 / 建 PR 原来只有点开分支下拉才找得到，现在直接摆在标题行；
+           亮不亮由工作区状态说了算（fillChanges 里统一刷），灰掉时 title 说明为什么。
+         -->
          <div class="head-actions">
+           <button type="button" class="mini auto gr-act" data-gr-act="sync" disabled
+                   title="更新项目">${ICON_SYNC}<span>更新</span></button>
+           <button type="button" class="mini auto gr-act" data-gr-act="commit" disabled
+                   title="提交">${ICON_COMMIT}<span>提交</span></button>
+           <button type="button" class="mini auto gr-act" data-gr-act="push" disabled
+                   title="推送">${ICON_PUSH}<span>推送</span></button>
+           ${ghLinked ? `<button type="button" class="mini auto gr-act" data-gr-act="pr" disabled
+                   title="建 PR">${ICON_CLOUD}<span>建 PR</span></button>` : ''}
            <button class="mini gr-set-btn" data-git-settings="${esc(sel.id)}"
                    title="仓库设置：管理员 / 自动合并 / 巡检 / 默认分支 / 上次同步" aria-label="仓库设置">${ICON_GEAR}</button>
          </div>
@@ -757,6 +770,52 @@ export async function renderGitRepos(root = $('pluginView')) {
   view.innerHTML = `<div class="detail-body"><div class="plg-detail">${repoDetail}</div></div>`;
 
   const refresh = () => renderGitRepos(root);   // 重画回**同一个宿主**（设置页 / 工作台各画各的）
+
+  /*
+   * 顶部常驻动作（2026-11-20，用户："入口分散、要多点几步，基础功能尽量傻瓜式"）：
+   * 更新 / 提交 / 推送 / 建 PR 原来只有点开分支下拉才找得到 —— 现在标题行直接点。
+   * 分支下拉里的同名项走这同一份实现，不养两条。
+   */
+  const runOp = async (op) => {
+    if (!sel) return false;
+    const apiRepo = (p) => `/api/git/repos/${encodeURIComponent(sel.id)}${p}`;
+    if (op === 'sync') {
+      try {
+        await api(apiRepo('/sync'), { method: 'POST' });
+        toast('已拉取最新');
+        await refresh();
+        return true;
+      } catch (e) { toast(e.message, 'error'); return false; }
+    }
+    if (op === 'push') {
+      try {
+        toast('推送中…');
+        const r = await post(apiRepo('/push'), {});
+        toast(`已推送 ${r.pushed}`);
+        await refresh();
+        return true;
+      } catch (e) { toast(e.message, 'error'); return false; }
+    }
+    if (op === 'commit') {
+      let st = null;
+      try { st = (await api(apiRepo('/changes'))).state; } catch { /* 读不到按干净处理 */ }
+      if (!st?.dirtyCount) {
+        toast(st?.canShip ? '工作区是干净的 —— 有没推的提交，点「推送」就行' : '工作区是干净的，没有可提交的改动');
+        return false;
+      }
+      const inp = document.getElementById('grCommitMsg');
+      if (!inp?.isConnected) { toast('改动卡不在页面上（工作区刚变干净？）'); return false; }
+      inp.scrollIntoView({ block: 'center' });
+      inp.focus();
+      return true;
+    }
+    if (op === 'pr') { openRepoPrDialog(sel, refresh); return true; }
+    return false;
+  };
+
+  view.querySelectorAll('[data-gr-act]').forEach((b) => {
+    b.onclick = () => runOp(b.dataset.grAct);
+  });
 
 
 
@@ -1565,6 +1624,25 @@ export async function renderGitRepos(root = $('pluginView')) {
     if (head?.isConnected) head.textContent = dirty.length ? `${dirty.length} 个未提交` : '';
 
     /*
+     * 顶部按钮跟着状态亮灰（2026-11-20）：让"下一步该点哪儿"直接长在按钮上，
+     * 不用挨个去四张卡里找；灰掉时 title 说明为什么。
+     */
+    const setAct = (op, ok, why) => {
+      const b = view.querySelector(`[data-gr-act="${op}"]`);
+      if (b) { b.disabled = !ok; b.title = why; }
+    };
+    const dirtyN = Number(state.dirtyCount ?? dirty.length);
+    const unpushedN = Number(state.unpushed ?? 0);
+    const aheadN = Number(state.ahead ?? 0);
+    setAct('sync', !!state.upstream, state.upstream ? `更新项目：从 ${state.upstream} 拉取最新` : '还没有上游 —— 先点一次「推送」');
+    setAct('commit', dirtyN > 0, dirtyN ? `提交 ${dirtyN} 个改动` : '没有未提交的改动');
+    setAct('push', unpushedN > 0, unpushedN ? `推送 ${unpushedN} 个提交` : '没有要推送的提交');
+    if (ghLinked) {
+      setAct('pr', unpushedN === 0 && aheadN > 0,
+        unpushedN > 0 ? `先推送这 ${unpushedN} 个提交` : (aheadN > 0 ? '用当前分支建 PR' : '当前分支没有领先 base 的提交'));
+    }
+
+    /*
      * 推送卡（2026-10-29 三改，用户："推送单独作为一个卡片"）：
      * 独立成一块，不再长在「提交」卡屁股上 —— 交是交、推是推。
      * 未推提交逐条摆出来（历史卡同款行：sha + 说明 + 作者·时间），按钮在分节标题行右侧。
@@ -1833,42 +1911,18 @@ export async function renderGitRepos(root = $('pluginView')) {
     const apiRepo = (p) => `/api/git/repos/${encodeURIComponent(repo.id)}${p}`;
 
     /* ---- 顶部操作区（IDE 式：更新项目 / 提交 / 推送 / 新建分支）---- */
+    /* 这四个动作与顶部常驻按钮共用 runOp（2026-11-20），改一处两边一起变 */
     if (id === '__op-sync__') {
-      try {
-        await api(apiRepo('/sync'), { method: 'POST' });
-        toast('已拉取最新');
-        await refresh();
-      } catch (e) {
-        toast(e.message, 'error');
-        combo.setValue(fallbackBranch);
-      }
+      if (!(await runOp('sync'))) combo.setValue(fallbackBranch);
       return;
     }
     if (id === '__op-push__') {
-      try {
-        toast('推送中…');
-        const r = await post(apiRepo('/push'), {});
-        toast(`已推送 ${r.pushed}`);
-        await refresh();
-      } catch (e) {
-        toast(e.message, 'error');
-        combo.setValue(fallbackBranch);
-      }
+      if (!(await runOp('push'))) combo.setValue(fallbackBranch);
       return;
     }
     if (id === '__op-commit__') {
       combo.setValue(fallbackBranch);
-      let st = null;
-      try {
-        st = (await api(apiRepo('/changes'))).state;
-      } catch { /* 读不到按干净处理 */ }
-      if (!st?.dirtyCount) {
-        return toast(st?.canShip ? '工作区是干净的 —— 有没推的提交用分支下拉的「推送…」' : '工作区是干净的，没有可提交的改动');
-      }
-      const inp = document.getElementById('grCommitMsg');
-      if (!inp?.isConnected) return toast('改动卡不在页面上（工作区刚变干净？）');
-      inp.scrollIntoView({ block: 'center' });
-      inp.focus();
+      await runOp('commit');
       return;
     }
     if (id === '__op-new__') {
