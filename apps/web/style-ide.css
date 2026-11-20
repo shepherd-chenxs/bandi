@@ -198,7 +198,6 @@ button.gr-pr-check:hover { background: var(--side); }
 .gr-pr-cta.dim { color: var(--dim); }
 .gr-pr-cta .mini { margin-left: auto; }
 .gr-cell-ops .mini[disabled] { opacity: .45; cursor: not-allowed; }
-.gr-set-remove { color: var(--bad); }
 
 /* 「与 base 比较」弹窗（2026-10-30：从「分支管理」里抽出来，右键分支 → 比较）：
    文件清单点一行懒取该文件 diff。 */

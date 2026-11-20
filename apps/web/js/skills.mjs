@@ -1,7 +1,7 @@
 /* skills.mjs —— 技能、从 GitHub 挑仓库（放进弹窗里）、定时任务、从本地导入、技能 → 发给数字员工（反方向挂载）。
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
 import { esc, mdRender, personaCan, roleNameOf, savePlace, setRoute, toast } from './shell.mjs';
-import { ICON_BRANCH, ICON_CLOUD, ICON_EDIT, ICON_FOLDER, ICON_GEAR, ICON_PLAY, ICON_SYNC, ICON_TAG, ICON_TRASH, api, createCombo, createDateTimePick, cut, failHtml, initial, openCtxMenu, post, wireDialogHead } from './ui.mjs';
+import { ICON_BRANCH, ICON_CLOUD, ICON_EDIT, ICON_FOLDER, ICON_PLAY, ICON_SYNC, ICON_TAG, ICON_TRASH, api, createCombo, createDateTimePick, cut, failHtml, initial, openCtxMenu, post, wireDialogHead } from './ui.mjs';
 import { load, setNav } from './state.mjs';
 import { openSettings } from './settings.mjs';
 import { setListTitle } from './flowpages.mjs';
@@ -678,6 +678,14 @@ export async function renderGitRepos(root = $('pluginView')) {
         S.gitSel = el.dataset.gitSel;
         renderGitRepos(root).catch((e) => toast(e.message, 'error'));
       };
+      /* 右键 = 仓库的快捷菜单（2026-11-20 用户："右键显示删除，右上角的设置按钮去掉"）：
+         低频、破坏性的动作从详情页标题行搬到这里，首屏不再挂齿轮。 */
+      el.oncontextmenu = (e) => {
+        e.preventDefault();
+        const repo = repos.find((r) => r.id === el.dataset.gitSel);
+        if (!repo) return;
+        openCtxMenu(e.clientX, e.clientY, [{ label: '取消托管', danger: true, run: () => removeRepo(repo) }]);
+      };
     });
   };
   paintRows();
@@ -687,15 +695,14 @@ export async function renderGitRepos(root = $('pluginView')) {
   if (sb) sb.oninput = paintRows;
 
   const keeperName = (id) => (S.personas ?? []).find((p) => p.id === id)?.name ?? '';
-  const syncAt = (t) => (t ? esc(String(t).replace('T', ' ').slice(0, 16)) : '从未');
 
   /*
    * 选中仓库的详情（2026-10-27 二改：PR 独立成一级区域）。
    * 用户："把 PR 作为一个区域进行展示，然后有那些 PR 待合并；现在有提交和推送，建 PR 或许也不用一个按钮了"。
-   * 所以导航条只剩「仓库名 + 分支 pill + 路径 + 齿轮」，动作按状态落在各区域里：
+   * 所以导航条只剩「仓库名 + 私有标记 + 路径」，动作按状态落在各区域里：
    *   · 提交区：有改动才亮；
    *   · 「拉取请求」区：待合并的 PR 都在这儿（含合并按钮）；当前分支还没 PR 时那儿出现「建 PR」；
-   *   · 低频的「从清单移除」收进齿轮弹窗（破坏性动作不放在首屏）。
+   *   · 低频的「从清单移除」在左栏仓库行的右键菜单里（破坏性动作不放在首屏）。
    */
   /*
    * 这个仓库有没有 GitHub 身份（2026-11-20 修正判据）：
@@ -711,15 +718,11 @@ export async function renderGitRepos(root = $('pluginView')) {
          <!-- 导航条上原来挂的是分支 pill，2026-11-20 用户："这个去掉，换成本地目录" ——
               分支在「分支管理」tab 里有完整列表，导航条这块位置改放仓库的本地目录。 -->
          <span class="gr-head-path" title="${esc(sel.localPath || '')}">${esc(sel.localPath || '')}</span>
-         <!--
-           标题行只留仓库设置（2026-11-20 用户："更新 / 提交 / 推送 / 建 PR 这几个按钮去掉"）：
-           各回各家 —— 提交、推送在「提交 / 推送」tab，更新在「分支管理」tab 的「更新项目」，
-           建 PR 在 PR tab。同一动作只留一个入口，标题行不重复。
-         -->
-         <div class="head-actions">
-           <button class="mini gr-set-btn" data-git-settings="${esc(sel.id)}"
-                   title="仓库设置：默认分支 / 上次同步 / 本地目录" aria-label="仓库设置">${ICON_GEAR}</button>
-         </div>
+         <!-- 当前本地分支（2026-11-20 用户："在右上角显示当前本地分支"）：
+              值在 fillChanges 里用同一次 /changes 的 state.branch 补上，切分支后重画自动跟上。 -->
+         <span class="gr-head-branch" title="当前本地分支">
+           <i class="gr-head-br-ic" aria-hidden="true">${ICON_BRANCH}</i><b id="grHeadBranch"></b>
+         </span>
        </div>
        <!-- 工具栏（2026-11-20，用户："顶部做成工具栏，像 tab 一样，点了显示对应区域"）：
             纵向堆四块时一次只能看一块，还要一路滚；现在分段，默认落在「提交 / 推送」。 -->
@@ -913,16 +916,6 @@ export async function renderGitRepos(root = $('pluginView')) {
       await refresh(); // 失败要把界面拉回真实值，别让假状态留在屏幕上
     }
   };
-  /*
-   * 仓库设置弹窗（2026-10-27，用户："仓库设置区太占地方 → 右上角设置按钮，点开展示"）：
-   * 原来占详情一整块卡的信息（管理员 / 自动合并 / 默认分支 / 上次同步 / 本地目录）收进这里。
-   * 动态建 dialog（openGitConnDlg 同款），close 即 remove；改动即时保存、弹窗不关。
-   *
-   * 2026-10-29：**巡检节拍也收进来了**（用户："这个功能放到代码托管是不是更好"）。
-   * 它背后仍是「定时任务」里一条 `pr-scan`（`config.repo` = 这个仓库），不是第二套调度 ——
-   * 仓库行只负责"选一个预设 + 看上次结果 + 现在跑一次"这三件窄事，
-   * 「每周 / 每月 / 单次」那些完整表单仍去「定时任务」页（那边会把它标成「随仓库」）。
-   */
   const paintKeeperBtns = (repoId, kid) => {
     document.querySelectorAll('.gr-keeper-btn[data-k-cur]').forEach((b) => {
       b.dataset.kCur = kid ?? '';
@@ -942,47 +935,20 @@ export async function renderGitRepos(root = $('pluginView')) {
     el.textContent = text;
     el.title = text;
   };
-  const openGitSettingsDlg = (repo) => {
-    const dlg = document.createElement('dialog');
-    dlg.className = 'gr-set-dlg';
-    const form = document.createElement('form');
-    form.method = 'dialog';
-    form.innerHTML = `
-      <b>仓库设置</b>
-      <div class="gr-dlg-body gr-set-body">
-        <div class="info-row"><span>默认分支</span><b>${esc(repo.defaultBranch || '—')}</b></div>
-        <div class="info-row"><span>上次同步</span><b>${syncAt(repo.lastSyncAt)}</b></div>
-        <div class="info-row"><span>本地目录</span><b class="gr-set-path" title="${esc(repo.localPath)}">${esc(repo.localPath)}</b></div>
-      </div>
-      <div class="dlg-actions">
-        <button type="button" class="mini auto gr-set-remove" id="grSetRemove"
-                title="只移除记录，本地目录保留（低频、破坏性动作，收在设置里）">从清单移除…</button>
-      </div>`;
-    dlg.append(form);
-    document.body.append(dlg);
-    wireDialogHead(form);
-    dlg.addEventListener('close', () => dlg.remove());
-    // 移除入口（2026-10-27 从导航条搬进来）：确认后只删记录，本地克隆目录不动
-    form.querySelector('#grSetRemove').onclick = async () => {
-      if (!(await confirmDo('从清单移除这个仓库？（只删记录，本地克隆目录保留，里面可能有你没推的东西）'))) return;
-      try {
-        const r = await api(`/api/git/repos/${encodeURIComponent(repo.id)}`, { method: 'DELETE' });
-        dlg.close();
-        toast(`已移除。本地目录还在：${r.keptPath}`);
-        await refresh();
-      } catch (e) {
-        toast(e.message, 'error');
-      }
-    };
-    dlg.showModal();
+  /*
+   * 从清单移除（2026-11-20 用户："右键显示删除，右上角的设置按钮去掉"）：
+   * 确认后只删记录，本地克隆目录不动。入口在左栏仓库行的右键菜单里。
+   */
+  const removeRepo = async (repo) => {
+    if (!(await confirmDo('该操作将移除该仓库在本平台的托管记录，但不会删除你的本地仓库。是否确认取消托管？'))) return;
+    try {
+      const r = await api(`/api/git/repos/${encodeURIComponent(repo.id)}`, { method: 'DELETE' });
+      toast(`已移除。本地目录还在：${r.keptPath}`);
+      await refresh();
+    } catch (e) {
+      toast(e.message, 'error');
+    }
   };
-  view.querySelectorAll('[data-git-settings]').forEach((el) => {
-    el.onclick = (e) => {
-      e.preventDefault();
-      const repo = repos.find((r) => r.id === el.dataset.gitSettings);
-      if (repo) openGitSettingsDlg(repo);
-    };
-  });
 
   /*
    * PR巡检折叠区（2026-11-20 用户："把这个功能移动到 PR 里，区域标题就叫 PR巡检"）：
@@ -1622,6 +1588,10 @@ export async function renderGitRepos(root = $('pluginView')) {
     const dirty = state.dirty ?? [];
     const head = $('grChgHead');
     if (head?.isConnected) head.textContent = dirty.length ? `${dirty.length} 个未提交` : '';
+    /* 标题行右上角的当前本地分支：跟提交卡吃同一份 /changes，切分支后整页重画会自动刷新；
+       读不到分支（游离 HEAD）就写「游离 HEAD」，别留一片空白让人以为没读到。 */
+    const hb = $('grHeadBranch');
+    if (hb?.isConnected) hb.textContent = state.branch || '游离 HEAD';
 
     /*
      * 推送卡（2026-10-29 三改，用户："推送单独作为一个卡片"）：

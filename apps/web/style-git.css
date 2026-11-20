@@ -65,6 +65,14 @@
    等宽小字、降灰，路径长了省略号 —— 不撑破 50px 的固定导航条。 */
 .gr-head-path { font-family: ui-monospace, monospace; font-size: 11.5px; color: var(--dim);
                 min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 标题行右上角的当前本地分支（2026-11-20 用户："在右上角显示当前本地分支"）：
+   齿轮撤掉后靠 margin-left:auto 顶到右沿；窄屏时最多占四成宽，超长省略，别把标题挤爆。 */
+.gr-head-branch { margin-left: auto; display: inline-flex; align-items: center; gap: 6px;
+                  min-width: 0; max-width: 40%; font-size: 12px; color: var(--dim); }
+.gr-head-br-ic { display: inline-flex; flex: 0 0 auto; }
+.gr-head-br-ic svg { width: 13px; height: 13px; }
+.gr-head-branch b { font-size: 12px; font-weight: 500; color: var(--text);
+                    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 分支管理（2026-11-20）：列表从分支下拉浮层搬进 tab，样式按同一套视觉重画 ——
    分组标题、文件夹、行（图标/名称/上游/↑↓/›菜单）。行是 button，键盘可达。 */
 /* 不自己做滚动容器（2026-11-20 用户："卡里出现滚动条别扭，期望在外部显示滚动条"）：
@@ -123,27 +131,9 @@
 #grBranchNew { margin-left: auto; }
 /* 连接弹窗：动态 dialog，行式表单（标签左、控件右） */
 .gr-conn-dlg { width: 600px; max-width: 92vw; }
-/* 仓库设置弹窗（2026-10-27，用户："仓库设置区太占地方 → 右上角设置按钮点开"）：
-   窄一点的纯信息弹窗，行沿用详情页的 .info-row（一行一条、上下细线）。
-   2026-10-29：巡检节拍换成全站 .combo —— 下拉浮层会盖住下面几行，
-   dialog 默认的滚动区会把它裁掉（同 #taskDlg / #flowStartDlg 那两次坑），所以这里必须 overflow: visible。 */
-.gr-set-dlg { width: 460px; max-width: 92vw; overflow: visible; }
-.gr-set-body { padding: 4px 0 2px; }
-.gr-set-dlg .info-row > b { text-align: right; min-width: 0; }
-/* 巡检节拍下拉：**.combo 默认按钮宽 100%**，不夹住就会铺满整行、把「巡检」两个字顶到最左。
-   限宽 + 贴右，跟上面「管理员」「自动合并」控件落在同一条竖线上。
-   ⚠️ 装它的那个 <b> 必须放开 overflow —— `.info-row > b` 是 `overflow: hidden`（给长路径省略号用的），
-      浮层是它的绝对定位后代，会被整块裁掉（第一次跑就踩了：DOM 里 open 着，屏幕上什么都没有）。
-   保存途中按不动（节拍是后端算出来建/停任务的，连点两次会抢着跑两条请求）。 */
-.gr-set-dlg .info-row > b.gr-patrol-cell { overflow: visible; }
-/* text-align 必须显式归左：这行的 <b> 是 text-align: right，组件里文字会跟着右对齐
-   —— 下拉条目全挤到右边、左边空一大片（浮层里本来就没有"右对齐"这回事）。 */
-.gr-set-dlg .gr-patrol-combo { width: 216px; max-width: 100%; margin-left: auto; text-align: left; }
-.gr-set-dlg .gr-patrol-combo.is-saving .combo-btn { opacity: .6; pointer-events: none; }
-/* PR tab 的 PR自动化区（2026-11-20 从设置弹窗搬来）：上面那套限宽是 .gr-set-dlg 专属，
-   搬过来没带样式，.combo 的 width:100% 就撑满整行 —— 一行只有一个下拉，看着像大输入框。
-   收窄到 200px、贴右；浮层也锁同一宽度（用户："这两个改成一样宽"），
-   200 刚好装下最长的「每 12 小时（一天两次）」，不会折行也不会截断。 */
+/* PR tab 的 PR自动化区（2026-11-20 从设置弹窗搬来）：.combo 的 width:100% 会撑满整行 ——
+   一行只有一个下拉，看着像大输入框。收窄到 200px、贴右；浮层也锁同一宽度
+   （用户："这两个改成一样宽"），200 刚好装下最长的「每 12 小时（一天两次）」。 */
 [data-gr-tab="pr"] .info-row > b.gr-patrol-cell { overflow: visible; }
 [data-gr-tab="pr"] .gr-patrol-combo { width: 200px; max-width: 100%; margin-left: auto; text-align: left; }
 [data-gr-tab="pr"] .gr-patrol-combo .combo-btn { padding: 5px 8px; position: relative; justify-content: center; }
@@ -154,11 +144,6 @@
 /* 「立即巡检」推到标题行最右（2026-11-20 用户："按钮右对齐"）：.plg-sec-head 是 flex，
    margin-left:auto 吃掉中间空隙；id 唯一，不会影响别的分区头。 */
 #grPatrolRun { margin-left: auto; }
-.gr-set-path { font-family: ui-monospace, monospace; font-size: 11.5px;
-               overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* 导航条上的齿轮钮：图标本身 15px，别让 .mini 的写法把它挤小 */
-.gr-set-btn { display: inline-flex; align-items: center; justify-content: center; }
-.gr-set-btn svg { width: 15px; height: 15px; }
 .gr-conn-dlg .gr-dlg-body { display: flex; flex-direction: column; gap: 12px; padding: 14px 0 4px; }
 .gr-dlg-row { display: flex; align-items: center; gap: 10px; }
 .gr-dlg-row input { flex: 1; min-width: 0; }
