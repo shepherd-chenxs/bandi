@@ -119,7 +119,7 @@ export const ROUTES = [
   { id: 'card.patch', m: ['PATCH'], path: p('/api/projects/tasks', id1), auth: 'session', run: true, call: 'PATCH /api/projects/tasks/{id}', note: '手机审批只放 {status, note}（字段级闸在 project.mjs）；2026-11-09 起运行钥匙可改**自己建的/自己当群助手的**卡（让 PM 能退待办/重跑/取消，不把活留成空话）' },
   { id: 'card.comments', m: ['GET', 'POST'], path: p('/api/projects/tasks', id1, 'comments'), auth: 'session' },
   { id: 'card.files', m: ['GET', 'POST'], path: p('/api/projects/tasks', id1, 'files'), auth: 'session' },
-  { id: 'card.pr', m: ['GET', 'POST'], path: p('/api/projects/tasks', id1, 'pr(?:/refresh|/create|/merge)?'), auth: 'session' },
+  { id: 'card.pr', m: ['GET', 'POST'], path: p('/api/projects/tasks', id1, 'pr(?:/refresh|/create|/merge)?'), auth: 'session', run: true, call: 'POST /api/projects/tasks/{id}/pr', note: '2026-11-21 起执行人可用运行钥匙**关联 / 刷新 / 建 PR**（干完活把 PR 挂到卡上，卡才有证据）；**合并 /merge 一律要人**（字段级闸在 routes/git.mjs）' },
   { id: 'board', m: ['GET'], path: p('/api/projects', id1, 'tasks'), auth: 'session' },
   { id: 'card.create', m: ['POST'], path: p('/api/projects', id1, 'tasks'), auth: 'session',
     note: '手机建卡（2026-11-03 实机放开）："人不在电脑前想起一件事要派下去"是手机端核心场景，绑人后建卡署名走 actorUser=归属人。只开**建**——删卡/改归属留在桌面；PATCH 的 {status, note} 字段级闸仍在 project.mjs' },

@@ -212,6 +212,49 @@ try {
     const runsSrc = fs.readFileSync(new URL('./runs.mjs', import.meta.url), 'utf8');
     check('runs.mjs 的内存 run 自带 startedAt（收尾判据的正本）',
       /startedAt:\s*row\.startedAt/.test(runsSrc));
+
+    /*
+     * **验收人退回卡**（2026-11-21 实报 pt-b82d3193，同一天第二个 403）。
+     *
+     * 贺韬是这张卡的建卡人、pm 岗、有 `card.advance` —— 权限全对，退回却被 403 挡住。
+     * 原因不是权限，是**他多带了一个 `note`**（想把"为什么退回"写清楚），而运行钥匙的字段
+     * 白名单里没这一项。于是他只能在群里口头说"未验收通过"，卡上干干净净，
+     * 执行人下一轮还得猜"到底缺什么"。
+     *
+     * 这里钉两件事：带 note 要放行；理由要**追加**进描述（不是覆盖原有验收标准）。
+     */
+    const pmId = store.listPersonas().find((p) => p.roleKey === 'pm')?.id ?? null;
+    if (pmId) {
+      const pmRun = store.createRun({ conversationId: groupConv.id, runtime: 'codex', personaId: pmId });
+      const pmToken = auth.issueRunCredential(pmRun.id, pmId).token;
+      const patchAsPm = async (rel, body) => {
+        const r = await fetch(BASE + rel, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', 'X-Bandi-Run-Token': pmToken },
+          body: JSON.stringify(body),
+        });
+        return { status: r.status, body: await r.json().catch(() => ({})) };
+      };
+      const own = pt.createProjectTask(project, {
+        title: '验收人退回测试卡',
+        description: '验收标准：PR 链接 + 工作区干净',
+        status: 'review',
+        personaId: dev.id,
+        createdBy: pmId,
+        creatorConvId: groupConv.id,
+      });
+      // 用 blocked（不触发自动派活，冒烟里不能真起 run）
+      const back = await patchAsPm(`/api/projects/tasks/${own.id}`, { status: 'blocked', note: '证据不全：缺 PR 链接' });
+      check('验收人带回退理由（note）→ 200（以前 403 全挡）', back.status === 200,
+        `${back.status} ${back.body.code ?? ''} ${back.body.error ?? ''}`);
+      const ownAfter = store.getProjectTask(own.id);
+      check('退回理由追加进描述，原验收标准没被覆盖',
+        ownAfter.status === 'blocked' && /\[退回\] 证据不全：缺 PR 链接/.test(ownAfter.description ?? '') &&
+          /验收标准：PR 链接/.test(ownAfter.description ?? ''),
+        (ownAfter.description ?? '').slice(-60));
+    } else {
+      check('库里有 pm 岗员工（否则这条测不了）', false, '找不到 roleKey=pm');
+    }
   }
 
   // 关库再删目录（Windows 上库还开着删不掉）

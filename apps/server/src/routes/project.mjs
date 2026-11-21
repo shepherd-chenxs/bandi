@@ -180,10 +180,10 @@ export async function handleProject(req, res, url) {
             return fail(res, 403, 'E4034', '运行钥匙只能改你建的卡，或你当群助手那张团队卡的卡；别的卡请让雇主在面板上改');
           }
         }
-        const allowed = new Set(['status', 'description', 'assigneePersonaId', 'startNow']);
+        const allowed = new Set(['status', 'description', 'assigneePersonaId', 'startNow', 'note']);
         const bad = Object.keys(body ?? {}).filter((k) => !allowed.has(k));
         if (bad.length) {
-          return fail(res, 403, 'E4034', `运行钥匙改卡只开放 状态 / 描述 / 执行人 / 重跑（收到：${bad.join('、')}）；范围、验收、流程归属请让雇主在面板上改`);
+          return fail(res, 403, 'E4034', `运行钥匙改卡只开放 状态 / 描述 / 执行人 / 重跑 / 说明（收到：${bad.join('、')}）；范围、验收、流程归属请让雇主在面板上改`);
         }
         /*
          * **验收人 = 派活人**（2026-11-11 用户定）：
@@ -198,6 +198,22 @@ export async function handleProject(req, res, url) {
     }
     try {
       const before = store.getProjectTask(id);
+      /*
+       * **退回也要能带理由**（2026-11-21 实报 pt-b82d3193）。
+       *
+       * 验收人退回卡时发的是 `{status:'todo', startNow:true, note:'证据不全…'}` —— 意图完全正确，
+       * 但运行钥匙的字段白名单里没有 `note`，整条请求被 403 挡在门外。结果：他只能在群里口头说
+       * "未验收通过"，卡上一个字都没留下；而执行人下一轮要重新猜"为什么被退"。
+       * （实报原文：「[受阻] 运行钥匙 403，无权调用 PATCH 接口退回卡」—— 他其实有权，是字段被挡。）
+       *
+       * 统一在这里把 `note` 折进描述尾部：**追加，不覆盖**（显式给 description 时以 description 为准）。
+       * 人和员工同一条口径 —— 手机审批传 note 以前也是被**静默丢掉**的。
+       */
+      if (body?.note && body.description === undefined) {
+        const curDesc = String(before?.description ?? '').trim();
+        const tag = ['todo', 'doing', 'blocked'].includes(String(body.status)) ? '退回' : '说明';
+        body.description = `${curDesc}${curDesc ? '\n\n' : ''}---\n[${tag}] ${String(body.note).trim()}`;
+      }
       // actorUser（2026-11-03 设备绑人后对设备返回归属人）→ 改状态就署到这个人头上，
       // 卡详情的「状态改动」行和"手机上批的卡是谁批的"都靠它
       const task = updateProjectTask(id, body, { autoStart: body.startNow !== true, actorUserId: auth.actorUser(req)?.id ?? null });
