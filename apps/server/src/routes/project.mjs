@@ -151,7 +151,34 @@ export async function handleProject(req, res, url) {
           can(runPersona, 'card.advance') &&
           (card.createdBy === runPersona.id || g?.assistantPersonaId === runPersona.id);
         if (!mine) {
-          return fail(res, 403, 'E4034', '运行钥匙只能改你建的卡，或你当群助手那张团队卡的卡；别的卡请让雇主在面板上改');
+          /*
+           * **执行人「报状态」的窄门**（2026-11-21）。
+           *
+           * 病根：人派给员工的卡 `createdBy` 是空的（人或面板建的），`mine` 永远不成立 ——
+           * 员工干完活**没有任何通道**动这张卡，只能靠回话里那行 `[完成]`。漏写一次，卡就白落
+           * 「已阻塞」（实报 pt-4b6bf1ec：活干完了、代码推了、冒烟 80 项全过，就漏了那三个字）。
+           * 文本约定当唯一判据，本身就是个不可靠的判据。
+           *
+           * 这里只开**最窄**的一扇门，三件事同时成立才放行：
+           *   · 他确实是卡上的执行人（`assigneePersonaId` = 他自己）；
+           *   · 请求体**只有** `status` 一个字段；
+           *   · 值只能是 `review`（待验收）。
+           * 于是"报状态"变成一次结构化动作，而**验收权仍在派活的人**：`done` 谁都替不了他点，
+           * 描述 / 执行人 / 重跑也一个不放（那都是改卡，不是报状态）。
+           */
+          const onlyReport =
+            !!runPersona &&
+            card.assigneePersonaId === runPersona.id &&
+            Object.keys(body ?? {}).length === 1 &&
+            String(body?.status ?? '') === 'review';
+          if (onlyReport) {
+            // 放行：落到下面同一套写库路径（状态码校验 / 归因 / 状态变没变都在那儿）
+          } else if (runPersona && card.assigneePersonaId === runPersona.id) {
+            return fail(res, 403, 'E4034',
+              '这张卡是人派给你的：你只能把它**上报成「待验收」**（PATCH {"status":"review"}，只放这一个字段）—— 改成「已完成」、改描述 / 执行人 / 重跑都归派活的人');
+          } else {
+            return fail(res, 403, 'E4034', '运行钥匙只能改你建的卡，或你当群助手那张团队卡的卡；别的卡请让雇主在面板上改');
+          }
         }
         const allowed = new Set(['status', 'description', 'assigneePersonaId', 'startNow']);
         const bad = Object.keys(body ?? {}).filter((k) => !allowed.has(k));

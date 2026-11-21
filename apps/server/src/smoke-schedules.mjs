@@ -285,6 +285,8 @@ const issues = [
   { number: 6, title: '其实是 PR', pull_request: {} }, // 必须被剔除
 ];
 let merged = false;
+/** 假 GitHub 上「自动检查」的结论（2026-11-21）：巡检要把这个抓回卡上 */
+let ciMode = 'success';
 const realFetch = globalThis.fetch;
 globalThis.fetch = async (url) => {
   const u = String(url);
@@ -293,10 +295,31 @@ globalThis.fetch = async (url) => {
   const one = /\/pulls\/(\d+)/.exec(u);
   if (one) {
     const n = Number(one[1]);
-    const hit = pulls.find((p) => p.number === n) ?? { number: n, title: '?', html_url: `https://github.com/smoke/demo/pull/${n}` };
+    const hit = pulls.find((p) => p.number === n) ?? {
+      number: n,
+      title: '?',
+      html_url: `https://github.com/smoke/demo/pull/${n}`,
+      head: { sha: `sha${n}` },
+    };
     // 只合 #11（#12 留着开着，用来证明"合了一张不会顺手把别的也改成已合并"）
     const isMerged = merged && n === 11;
     return json({ ...hit, state: isMerged ? 'closed' : 'open', merged: isMerged, merged_at: isMerged ? '2026-10-17T00:00:00Z' : null });
+  }
+  // 自动检查：`/commits/<sha>/check-runs`
+  const ck = /\/commits\/([^/]+)\/check-runs/.exec(u);
+  if (ck) {
+    if (ciMode === 'none') return json({ check_runs: [] });
+    if (ciMode === 'pending') return json({ check_runs: [{ name: 'gate', status: 'in_progress', conclusion: null }] });
+    if (ciMode === 'failure') {
+      return json({ check_runs: [
+        { name: 'gate', status: 'completed', conclusion: 'failure' },
+        { name: 'smoke', status: 'completed', conclusion: 'success' },
+      ] });
+    }
+    return json({ check_runs: [
+      { name: 'gate', status: 'completed', conclusion: 'success' },
+      { name: 'smoke', status: 'completed', conclusion: 'success' },
+    ] });
   }
   if (u.includes('/pulls?')) return json(merged ? [] : pulls);
   if (u.includes('/issues?')) return json(merged ? [] : issues);
@@ -338,6 +361,76 @@ try {
     err = e.message;
   }
   check('指定了没接入的仓库 → 抛错说清楚', /没有接入仓库/.test(err), err);
+
+  /*
+   * 2026-11-21 实修回归点：**本地代码托管接进来的行，fullName 只是目录名**。
+   * 巡检原来拿 fullName 去拼 GitHub 路径 → E1205「这行仓库没有 GitHub 身份」，
+   * 每 30 分钟失败一次，卡上的 prState 永远 null（界面「状态未知」）。
+   * 而收旧状态的 scope 又只装 fullName，卡里写的是 owner/name —— 就算接口通了也会被跳过。
+   * 这条用例把一个 fullName='demo-local' / ghRef='smoke/demo' 的仓库接进来，两个坑一起钉住。
+   */
+  store.addGitRepo({
+    fullName: 'demo-local',
+    owner: 'smoke',
+    name: 'demo-local',
+    localPath: fs.mkdtempSync(path.join(tmp, 'repo2-')),
+    ghRef: 'smoke/demo',
+  });
+  const before4 = Date.now();
+  await new Promise((r) => setTimeout(r, 15));
+  const out4 = await prWatch.prScan({ config: { repo: 'demo-local' } });
+  const cardAfter4 = store.getProjectTask(pr11.id);
+  check('fullName 只是目录名 → 按 ghRef 打接口（不再 E1205）', out4.failed.length === 0, JSON.stringify(out4.failed));
+  check('卡里写 owner/name 的也能被这次巡检收到（scope 两种写法都认）',
+    !!cardAfter4.prCheckedAt && Date.parse(cardAfter4.prCheckedAt) >= before4,
+    `${cardAfter4.prCheckedAt}`);
+  check('卡上的仓库写法归一到 owner/name', cardAfter4.prRepo === 'smoke/demo', cardAfter4.prRepo);
+
+  /* ------------------- ③b 自动检查抓回卡上 + 「已阻塞」按证据回到「待验收」（2026-11-21） */
+  console.log('\n③b CI 结论抓回卡上；漏写 [完成] 的卡按客观证据回到「待验收」');
+  const NOTE = '---\n[运行结束] 跑完了，但没有交回可验收的结论（没写 [完成]，也没写 [受阻]）—— 卡停在「已阻塞」';
+
+  // 复现实报 pt-4b6bf1ec：PR 合了、活干完了，但那轮漏写 [完成] → 卡停在「已阻塞」
+  store.updateProjectTask(pr11.id, { status: 'blocked', statusByUserId: null, description: NOTE });
+  const out5 = await prWatch.prScan({ config: {} });
+  const revived = store.getProjectTask(pr11.id);
+  check('已阻塞 + PR 已合并 → 巡检把它推到「待验收」', revived.status === 'review', revived.status);
+  check('结论里报了这张账', /按证据转待验收 1 张/.test(out5.summary), out5.summary);
+  check('描述里留了依据，不是静默改状态', /\[证据推进\]/.test(revived.description), revived.description.split('\n').at(-1));
+
+  // CI 全绿（PR 还开着）也是硬证据：代码推了、门禁过了，只差人合并/验收
+  const ciCard = store.createProjectTask({
+    projectId: project.id,
+    title: 'CI 绿了但漏写标记',
+    status: 'blocked',
+    description: NOTE,
+  });
+  store.updateProjectTask(ciCard.id, { prRepo: 'smoke/demo', prNumber: 13, prState: 'open' });
+  ciMode = 'success';
+  await prWatch.prScan({ config: {} });
+  const ciAfter = store.getProjectTask(ciCard.id);
+  check('巡检把 CI 结论写回卡上', ciAfter.prCiState === 'success' && !!ciAfter.prCiAt, `${ciAfter.prCiState} @ ${ciAfter.prCiAt}`);
+  check('CI 全绿 → 卡按证据回到「待验收」', ciAfter.status === 'review', ciAfter.status);
+
+  // CI 红：不能因为"漏写标记"就顺手放过去 —— 证据也可以是反对证据
+  const redCard = store.createProjectTask({
+    projectId: project.id,
+    title: 'CI 红着的活',
+    status: 'blocked',
+    description: NOTE,
+  });
+  store.updateProjectTask(redCard.id, { prRepo: 'smoke/demo', prNumber: 14, prState: 'open' });
+  ciMode = 'failure';
+  await prWatch.prScan({ config: {} });
+  const redAfter = store.getProjectTask(redCard.id);
+  check('CI 红 → 卡留在「已阻塞」不动', redAfter.status === 'blocked', redAfter.status);
+  check('红在哪也写回卡上（界面要说得清）', redAfter.prCiState === 'failure' && /gate/.test(redAfter.prCiFailed ?? ''), `${redAfter.prCiState} / ${redAfter.prCiFailed}`);
+
+  // 变绿之后下一轮巡检必须自己放行（别把一次红当成永久判决）
+  ciMode = 'success';
+  await prWatch.prScan({ config: {} });
+  check('后来变绿 → 下一轮自己推到「待验收」', store.getProjectTask(redCard.id).status === 'review', store.getProjectTask(redCard.id).status);
+  check('红名单在变绿后清空（不然界面会"全绿 + 一串红名字"）', store.getProjectTask(redCard.id).prCiFailed === null);
 } finally {
   globalThis.fetch = realFetch;
 }

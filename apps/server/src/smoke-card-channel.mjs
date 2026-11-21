@@ -147,6 +147,52 @@ try {
     check('看板行有 created_by / created_by_user_id', row && Object.prototype.hasOwnProperty.call(row, 'created_by_user_id') && Object.prototype.hasOwnProperty.call(row, 'created_by'), row ? JSON.stringify({ c: row.created_by, u: row.created_by_user_id }) : '没行');
   }
 
+  console.log('\n⑧ 执行人「报状态」：人派的卡只能自己上报到「待验收」');
+  {
+    /*
+     * 实报 pt-4b6bf1ec（2026-11-21）：活干完了、推了、冒烟全过，就漏了回话里那行 `[完成]`，
+     * 卡白落「已阻塞」。根因不是模型忘性，是**人派的卡没有任何接口通道**能报状态 ——
+     * 执行人手里只剩一条"贴字符串"的路。这里钉住新开的那扇最窄的门。
+     */
+    const devRun = store.createRun({ conversationId: groupConv.id, runtime: 'codex', personaId: dev.id });
+    const devToken = auth.issueRunCredential(devRun.id, dev.id).token;
+    const patchAsDev = async (rel, body) => {
+      const r = await fetch(BASE + rel, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'X-Bandi-Run-Token': devToken },
+        body: JSON.stringify(body),
+      });
+      return { status: r.status, body: await r.json().catch(() => ({})) };
+    };
+    // 人建的卡（createdBy 为空）+ 执行人 = 嘉辉，正是实报里那种卡
+    const assigned = pt.createProjectTask(project, { title: '人派给嘉辉的卡', status: 'blocked', personaId: dev.id });
+    const reported = await patchAsDev(`/api/projects/tasks/${assigned.id}`, { status: 'review' });
+    check('执行人上报「待验收」→ 200', reported.status === 200 && reported.body.task?.status === 'review',
+      `${reported.status} ${reported.body.task?.status ?? reported.body.error}`);
+    const noDone = await patchAsDev(`/api/projects/tasks/${assigned.id}`, { status: 'done' });
+    check('自己点「已完成」→ 403 E4034（验收权不下放）', noDone.status === 403 && noDone.body.code === 'E4034',
+      `${noDone.status} ${noDone.body.code}`);
+    const extra = await patchAsDev(`/api/projects/tasks/${assigned.id}`, { status: 'review', description: '顺手改描述' });
+    check('夹带别的字段 → 403（只许报状态，不许改卡）', extra.status === 403 && extra.body.code === 'E4034',
+      `${extra.status} ${extra.body.code}`);
+    const notMine = await patch(`/api/projects/tasks/${assigned.id}`, { status: 'review' }); // PM 的钥匙
+    check('别人的执行人可以看不能改 → 403', notMine.status === 403, `${notMine.status} ${notMine.body.code ?? ''}`);
+
+    /*
+     * 收尾这一步是关键：卡已经不在「进行中」，旧的 `onTaskRunFinished` 会直接 return ——
+     * 于是"执行人用接口报的状态"既不会补 `[运行结束]`，也不会给派活人发回执。
+     * 新口径：只要状态是这一轮内上报的 review，就补交代 + 发回执，但**不改状态**。
+     */
+    store.updateProjectTask(assigned.id, { runId: devRun.id });
+    pt.onTaskRunFinished(
+      { id: devRun.id, status: 'done', startedAt: new Date(Date.now() - 60_000).toISOString(), finalText: '' },
+      { notify: false },
+    );
+    const after = store.getProjectTask(assigned.id);
+    check('收尾不把上报过的卡写回「已阻塞」', after.status === 'review', after.status);
+    check('收尾补上「[运行结束]」那行', /\[运行结束\]/.test(after.description ?? ''), (after.description ?? '').slice(-46));
+  }
+
   // 关库再删目录（Windows 上库还开着删不掉）
   try { db = await import(pathToFileURL(path.join(repo, 'apps/server/src/store/db.mjs')).href); db.db.close(); } catch { /* 关不掉就算了 */ }
 } catch (e) {

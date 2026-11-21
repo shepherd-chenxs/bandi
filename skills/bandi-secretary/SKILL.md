@@ -43,7 +43,7 @@ curl -s --noproxy '*' -H "X-Bandi-Run-Token: ${BANDI_RUN_TOKEN}" \
 | 字段 | 说明什么 |
 | --- | --- |
 | `personas` | 有几个人。**空数组 = 连的是一套新库**（数据目录指错了，见 §2） |
-| `personas[].busy` / `busyLabel` | 谁在跑、跑的是哪条流程的哪一步 |
+| `personas[].busy` | 谁在跑（布尔，只有忙/闲；**没有"在干什么"**，要知道就去看会话或卡） |
 | `runtimes` | 每个 CLI 的 `enabled` / `pathExists` / `blocked`，直接回答"能不能派活" |
 | `repoRoot` / `platformRoot` | 服务是从哪个目录起的（决定它读哪份代码、哪个 skills/） |
 | `conversations` | 会话列表，判断"人是不是压根没聊过" |

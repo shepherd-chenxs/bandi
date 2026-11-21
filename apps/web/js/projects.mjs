@@ -8,7 +8,7 @@ import { confirmDo, askText } from './machine.mjs';
 import { detailSave, showView } from './contacts.mjs';
 import { wbCard } from './workflows.mjs';
 import { hint, openFlowRun, paintRun, setListTitle } from './flowpages.mjs';
-import { attsHtmlOf, firstMeaningfulLine, isNarrowPh, mbOpenPicker, openConversation, streamRun, timelineOf } from './chat.mjs';
+import { attsHtmlOf, firstMeaningfulLine, isMineHuman, isNarrowPh, mbOpenPicker, openConversation, streamRun, timelineOf } from './chat.mjs';
 // 运行进度卡：对话页那一套（阶段/步数/用时/卡住提醒/停止生成）搬进任务卡讨论区 —— 2026-10-29 用户："对话里的那一套搬过来用"
 import { createProgressCard } from './run-progress-card.mjs';
 import { createLiveAnswer } from './run-live.mjs';
@@ -3009,11 +3009,11 @@ export async function paintTaskCardPage(taskId, opts = {}) {
 
   // 真人署名（2026-10-31 用户概念落地）：消息带 senderUserName 且**不是自己** → 返回名字。
   // 卡评论区谁留的言各归各；没署名（员工/回执）或就是自己 → null，一切照旧。
-  // 昵称全端生效（2026-11-09）：画出来按昵称（名册里按 senderUserId 查），认人仍按账号名。
+  // 「是不是自己」认 senderUserId（2026-11-21，isMineHuman）—— 名字比对在"署名由服务端
+  // 拼好（昵称优先/打码）"之后会把自己的消息判成别人。显示名走 senderUserNick（服务端拼好）。
   const humanOf = (m) => {
-    if (!(m.role === 'user' && m.senderUserName && m.senderUserName !== (S.me?.name ?? '我'))) return null;
-    const u = (S.users ?? []).find((x) => x.id === m.senderUserId);
-    return u?.nickname || m.senderUserName;
+    if (!(m.role === 'user' && m.senderUserName && !isMineHuman(m))) return null;
+    return m.senderUserNick || m.senderUserName;
   };
 
   // 我自己的评论不再重复写名字 —— 头像上那个「我」就是名字，写两遍是噪声（他的回话仍然带名字）
@@ -3336,6 +3336,20 @@ export async function paintTaskCardPage(taskId, opts = {}) {
   /* PR 状态词（手机行 / 桌面右栏两处用） */
   const prStateText = (state) => (state === 'merged' ? '已合并' : state === 'closed' ? '已关闭' : state === 'open' ? '开着' : '状态未知');
   /*
+   * PR 上**自动检查**的结论（2026-11-21）。
+   * 为什么要摆出来：以前卡上只说"PR 开着/合了"，人看不出门禁绿没绿 —— 而"CI 全绿"正是
+   * 平台据以把「已阻塞」的卡推回「待验收」的硬证据（见 delivery-evidence.mjs）。
+   * 证据是平台下的判断，界面就得把依据摊在同一行，别让人再去 GitHub 翻一遍。
+   * 取不到（没查过/查不到）返回空串 —— 这一行宁可不显示，也不许显示"未知"来冒充结论。
+   */
+  const prCiText = (state) => (state === 'success' ? 'CI 全绿' : state === 'failure' ? 'CI 红' : state === 'pending' ? 'CI 还在跑' : state === 'none' ? '没配检查' : '');
+  const prCiTitle = (task) =>
+    task.prCiState === 'failure'
+      ? `自动检查没通过：${task.prCiFailed || '（详情去 GitHub 看）'}`
+      : task.prCiState === 'success'
+        ? '自动检查全过'
+        : '';
+  /*
    * **手机整页形态**（2026-11-05 任务卡手机版）：窄屏不再是"桌面页压小"——
    * 原来标题、描述、讨论、右栏属性表按桌面 grid 压成一列，属性表沉在讨论区底下，
    * 要滚到底才看得到执行人，页头还是三级面包屑。手机版按看板 v2 / 员工详情的同一套语汇：
@@ -3494,7 +3508,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
                      task.prRepo && task.prNumber
                        ? `<a class="tc-m-row" href="https://github.com/${esc(task.prRepo)}/pull/${task.prNumber}" target="_blank" rel="noreferrer">
                             <span class="tc-m-k">Pull Request</span>
-                            <span class="tc-m-v">#${task.prNumber} · ${esc(prStateText(task.prState))}</span><i class="tc-m-chev" aria-hidden="true"></i>
+                            <span class="tc-m-v">#${task.prNumber} · ${esc(prStateText(task.prState))}${prCiText(task.prCiState) ? ` · ${esc(prCiText(task.prCiState))}` : ''}</span><i class="tc-m-chev" aria-hidden="true"></i>
                           </a>`
                        : ''
                    }
@@ -3589,7 +3603,9 @@ export async function paintTaskCardPage(taskId, opts = {}) {
                  <span class="pill">${
                    task.prState === 'merged' ? '已合并' : task.prState === 'closed' ? '已关闭' : task.prState === 'open' ? '开着' : '状态未知'
                  }</span>
+                 ${prCiText(task.prCiState) ? `<span class="pill${task.prCiState === 'failure' ? ' ci-red' : ''}" title="${esc(prCiTitle(task) || prCiText(task.prCiState))}">${esc(prCiText(task.prCiState))}</span>` : ''}
                  ${task.prTitle ? `<div class="dim" style="font-size:12px;margin-top:4px">${esc(task.prTitle)}</div>` : ''}
+                 ${task.prCiState === 'failure' && task.prCiFailed ? `<div class="dim" style="font-size:11.5px;margin-top:2px">红在：${esc(task.prCiFailed)}</div>` : ''}
                  ${task.prCheckedAt ? `<div class="dim" style="font-size:11.5px;margin-top:2px">上次查：${esc(String(task.prCheckedAt).replace('T', ' ').slice(0, 16))}</div>` : ''}
                </div></div>
                <div class="dlg-actions">

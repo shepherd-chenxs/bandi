@@ -369,7 +369,7 @@ try {
     JSON.stringify(stLoop.body?.users ?? []));
 
   /* ============ ⑦c 署名打码（2026-11-21 独立操作平台） ============ */
-  console.log('\n⑦c 署名口径：真人名字昵称优先，账号名是手机号的打码后再出库');
+  console.log('\n⑦c 署名口径：认人走 id（账号名兜底），显示名昵称优先，手机号打码');
   /*
    * 消息署名走 store.listMessages 的 LEFT JOIN —— 这里直接在**烟测进程自己的临时库**
    * 里种一行手机号名字的真人 + 一条他发的消息，读出来验。动态 import 前先钉环境变量
@@ -382,18 +382,24 @@ try {
   fs.mkdirSync(process.env.BANDI_DATA, { recursive: true });
   const store = await import('./store.mjs');
   const phUser = store.createUser({ name: '13800138999' });
-  store.setNickname(phUser.id, '三儿');
-  check('displayNameOf 昵称优先', store.displayNameOf(store.getUser(phUser.id)) === '三儿',
-    store.displayNameOf(store.getUser(phUser.id)));
-  store.setNickname(phUser.id, '   ');
-  check('无昵称退回打码账号名：13800138999 → 138****8999',
-    store.displayNameOf(store.getUser(phUser.id)) === '138****8999',
-    store.displayNameOf(store.getUser(phUser.id)));
   const phConv = store.createConversation({ title: '署名打码', personaId: 'p-smoke' });
   store.addMessage({ conversationId: phConv.id, role: 'user', text: '嗯', senderUserId: phUser.id });
-  const phMsg = store.listMessages(phConv.id)[0];
-  check('消息署名出库已打码（senderUserName，别人的手机号不从聊天记录里漏出去）',
-    phMsg?.senderUserName === '138****8999', String(phMsg?.senderUserName));
+  /*
+   * 署名**两份口径**（2026-11-21）：senderUserName = 账号名（打码后，认人兜底用），
+   * senderUserNick = 显示名（昵称优先）。昵称混进认人字段的话，设了昵称的人自己的
+   * 消息一刷新就被判成别人（实报：发出去在右边，员工一回话翻到左边）。
+   */
+  store.setNickname(phUser.id, '三儿');
+  const nicked = store.listMessages(phConv.id)[0];
+  check('displayNameOf 昵称优先', store.displayNameOf(store.getUser(phUser.id)) === '三儿',
+    store.displayNameOf(store.getUser(phUser.id)));
+  check('署名账号名保持账号名（打码）—— 昵称不混进认人字段',
+    nicked?.senderUserName === '138****8999' && nicked?.senderUserNick === '三儿',
+    JSON.stringify({ userName: nicked?.senderUserName, userNick: nicked?.senderUserNick }));
+  store.setNickname(phUser.id, '   ');
+  const cleared = store.listMessages(phConv.id)[0];
+  check('无昵称显示名退回打码账号名：13800138999 → 138****8999',
+    cleared?.senderUserNick === '138****8999', String(cleared?.senderUserNick));
 
   /* ============ ⑧ 安全接口：登录会话与回环机主都能读 ============ */
   console.log('\n⑧ /api/security/* 会话与机主都能读（2026-11-20 operator 下线：回环=机主全权）');

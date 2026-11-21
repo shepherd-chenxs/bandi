@@ -171,22 +171,19 @@ const routes = {
        * 键是码、值是显示名：{ task: {todo:'待办',…}, run: {…}, workflow: {…}, node: {…} }
        */
       statusDict: store.statusDictionary(),
-      // 带上"忙不忙"：通讯录里要一眼看出谁能马上接活
-      // busyLabel：**他在干什么** —— 光一个"工作中"没用，得知道是哪条流程的哪一步
-      // （运行上挂的 workflowTask 就是答案；不属于任何流程的就是普通对话）
+      /*
+       * 带上"忙不忙"：通讯录里要一眼看出谁能马上接活。
+       *
+       * **只有忙/闲两态，不再带"他在干什么"**（2026-11-21 用户定）：
+       * 原来还拼过一个 busyLabel（流程「X」· 节点名 / 对话里），问题在于
+       * `activeRunForPersona()` 只挑**一条** run —— 一个员工同时被多处派活时
+       * （卡、群聊、流程），标签只能显示其中一个，**显示出来的那个就是错的**。
+       * 一份会挑错的信息比没有信息更糟，所以整条派生逻辑撤掉，标签只留「工作中」。
+       * 想知道他在干什么，去会话 / 卡上看，那里是一等事实。
+       */
       personas: store.listPersonas().map((p) => {
         const ar = store.activeRunForPersona(p.id);
-        let busyLabel = null;
-        if (ar) {
-          const t = store.getWorkflowTaskByAgentRun(ar.id);
-          if (t) {
-            const w = store.getWorkflowRun(t.runId);
-            busyLabel = `流程「${w?.title ?? '?'}」· ${t.nodeName}`;
-          } else {
-            busyLabel = '对话里';
-          }
-        }
-        return { ...p, busy: !!ar, busyLabel, busySince: ar?.startedAt ?? null };
+        return { ...p, busy: !!ar, busySince: ar?.startedAt ?? null };
       }),
       conversations: store.listConversations(),
       /*

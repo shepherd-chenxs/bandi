@@ -2063,3 +2063,21 @@ scrollHeight = clientHeight（整页不再多出滚动条）。减到 200 会溢
 
 `contacts.mjs` + `projects.mjs` + `state.mjs` + `core.mjs` + `mobile.css` 都动了，
 `sw.js` → v268。
+
+## v269（2026-11-21）自己发的消息翻到左边：认人改走 senderUserId
+
+用户实报："我在发消息的时候，我在右边，其他人在左边。你回复之后我的消息就到了左边。"
+
+根因在 v268 的署名口径上：消息署名（senderUserName）改成"昵称优先"后，前端「是不是
+自己」仍拿署名跟 S.me.name（**账号名**）比对 —— 账号名是手机号、昵称是"牧羊人"的话，
+一刷新自己的消息就被判成别人，翻到左边。员工一回话触发重画，正是用户看到的时机。
+
+- `store/messages.mjs`：署名拆成**两份** —— `senderUserName` 回归账号名（打码后，
+  认人兜底的契约不动），新增 `senderUserNick` = 显示名（昵称优先）。
+- `chat.mjs`：认人改 **isMineHuman（认 senderUserId，名字只兜没 id 的老消息）**；
+  气泡署名与分组 key 用 senderUserNick；`bubble()` 的 opts 带 senderUserId/senderUserNick。
+- `projects.mjs`：卡评论区 humanOf 同口径（isMineHuman + senderUserNick）。
+- `smoke-users.mjs` ⑦c：钉住"昵称不混进认人字段"（senderUserName=138****8999 且
+  senderUserNick=三儿 同时成立）。
+
+`chat.mjs` + `projects.mjs` 都动了，`sw.js` → v269。

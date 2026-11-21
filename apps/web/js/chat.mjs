@@ -497,21 +497,36 @@ export function stampOf(iso) {
 
 
 /** 真人昵称（2026-11-09 昵称全端生效）：按 senderUserId 从名册（S.users）取昵称；
- *  没带 id / 没设 / 查无此人 → ''。只管显示 —— 「是不是自己」仍按 senderUserName（账号名）认。 */
+ *  没带 id / 没设 / 查无此人 → ''。名册收敛（2026-11-21）后名册只含自己 —— 别人的
+ *  显示名走服务端拼好的 senderUserNick（见 bubble），这里只剩"自己那条"有用。 */
 const senderNickOf = (m) =>
   m?.senderUserId ? String((S.users ?? []).find((u) => u.id === m.senderUserId)?.nickname ?? '') : '';
+
+/**
+ * 这条真人消息是不是「我」发的（2026-11-21 改口径：**认 id 不认名**）。
+ * 带senderUserId 的消息按 id 比对 —— 以前按 senderUserName（账号名）跟 S.me.name 比，
+ * 在"署名由服务端拼好（昵称优先/手机号打码）"之后就不可靠了：设了昵称的人自己的
+ * 消息一刷新就被判成别人（实报：发出去在右边，员工一回话消息翻到左边）。
+ * 没带 id 的老消息退回账号名比对 —— senderUserName 的契约（= 账号名）没破。
+ */
+export function isMineHuman(m) {
+  if (!m || m.senderUserId != null) return String(m?.senderUserId ?? '') === String(S.me?.id ?? '');
+  return m.senderUserName != null && m.senderUserName === (S.me?.name ?? '我');
+}
 
 export function bubble(role, text, name, who, showName = false, at = '', atts = null, meta = null, senderName = null, opts = null) {
   /*
    * 真人署名（2026-10-31 用户概念落地）：消息带 senderUserName 且**不是自己** → 按别人画
    * （靠左、带头像、名字线）。多人一套班底时，群/卡评论区里谁说的话各归各；
    * 没有署名（员工、回执）或就是自己 → 行为与从前一字不差。
+   * 「是不是自己」（2026-11-21）：认 senderUserId（isMineHuman），名字只兜老消息 ——
+   * 署名改由服务端拼好（昵称优先/打码）之后按名字比会把昵称署名判成别人。
    */
-  const otherHuman = role === 'user' && senderName && senderName !== (S.me?.name ?? '我');
+  const otherHuman = role === 'user' && senderName && !isMineHuman({ senderUserId: opts?.senderUserId ?? null, senderUserName: senderName });
   const mine = role === 'user' && !otherHuman;
-  // 昵称全端生效（2026-11-09 用户："昵称不能只在我的页面里生效"）：别人的署名按昵称画
-  // （调用方从名册解析好放 opts.senderNick），认人仍按账号名 —— 上面那行一个字没动。
-  const label = mine ? '我' : otherHuman ? (opts?.senderNick || senderName) : (who || name || '数字员工');
+  // 昵称全端生效（2026-11-09 用户："昵称不能只在我的页面里生效"）：别人的署名按昵称画。
+  // 名册收敛（2026-11-21）后名册只含自己，别人的昵称由服务端随消息带出（senderUserNick）。
+  const label = mine ? '我' : otherHuman ? (opts?.senderNick || opts?.senderUserNick || senderName) : (who || name || '数字员工');
   // 头像带图（2026-10-22）：优先按名字找员工；群聊消息有 personaName 直接命中，
   // 1:1 改过名时名字可能对不上，再兜一层会话的 personaId。
   // 2026-11-19：调用方有 personaId 时直接给对象（opts.persona）—— 同名员工不会串人。
@@ -877,8 +892,8 @@ export function drawMessages(msgs, name, isGroup = false, runs = [], opts = {}) 
    *   · 3 分钟内不再重复挂时间戳（.nt，CSS 在手机档藏掉）—— 每条下面都挂一个时间
    *     是把"仪表"当"内容"画，一屏下来全是灰字；主流聊天 App 都只在组头挂一次。
    *   · 同一人紧接着的下一句（.tight）行距收紧 —— 换人才松开，段落感就出来了。
-   * 发送者口径与 bubble() 一致：自己（user 且无他人署名）记 'me'，
-   * 其余按署名 > 群昵称 > 角色；运行块（stop/fail）单独算，永远不跟消息合并。
+   * 发送者口径与 bubble() 一致（isMineHuman：认 senderUserId）：自己记 'me'，
+   * 其余按显示名 > 群昵称 > 角色；运行块（stop/fail）单独算，永远不跟消息合并。
    */
   const GAP = 3 * 60000;
   let prevT = NaN;
@@ -896,9 +911,9 @@ export function drawMessages(msgs, name, isGroup = false, runs = [], opts = {}) 
             if (key !== lastDay) { lastDay = key; sep = `<div class="mb-day"><span>${esc(dayLabel(t))}</span></div>`; }
           }
           const keyOf = it.kind === 'msg'
-            ? (it.m.role === 'user' && !(it.m.senderUserName && it.m.senderUserName !== (S.me?.name ?? '我'))
+            ? (it.m.role === 'user' && isMineHuman(it.m)
               ? 'me'
-              : (it.m.senderUserName || it.m.personaName || it.m.role))
+              : (it.m.senderUserNick || it.m.senderUserName || it.m.personaName || it.m.role))
             : `#${it.kind}`;
           /* 跨了天（sep 非空）就重新开组：日期头下面第一条永远带时间、不收紧 */
           const soon = !sep && !Number.isNaN(t) && !Number.isNaN(prevT) && t - prevT < GAP;
@@ -915,7 +930,7 @@ export function drawMessages(msgs, name, isGroup = false, runs = [], opts = {}) 
             return sep + `<div class="sys-line">${esc(it.m.text || '（上下文过长，已开新会话）')}</div>`;
           }
           return sep + (it.kind === 'msg'
-            ? bubble(it.m.role, it.m.text, name, it.m.personaName, isGroup, it.m.createdAt, it.m.atts, it.m.meta, it.m.senderUserName, { ...(opts ?? {}), runId: it.m.runId, senderNick: senderNickOf(it.m), persona: (S.personas ?? []).find((x) => x.id === it.m.personaId) ?? null })
+            ? bubble(it.m.role, it.m.text, name, it.m.personaName, isGroup, it.m.createdAt, it.m.atts, it.m.meta, it.m.senderUserName, { ...(opts ?? {}), runId: it.m.runId, senderNick: senderNickOf(it.m), senderUserId: it.m.senderUserId ?? null, senderUserNick: it.m.senderUserNick ?? null, persona: (S.personas ?? []).find((x) => x.id === it.m.personaId) ?? null })
             : it.kind === 'stop' ? stopBlock(it.r, isGroup) : failBlock(it.r, isGroup));
         })
         .join('')
@@ -2153,10 +2168,10 @@ function renderDetailMobile(persona, runtimes) {
         ${personaAvatar(persona)}
         <div class="p-head-main">
           <h2><span id="dNameText">${esc(persona.name)}</span>${persona.builtin ? '<span class="pill builtin" title="出厂就在的员工：名字、岗位与职责身份随平台固定，不能删">内置</span>' : ''}<span class="pill role" id="dRolePill"${roleNameOf(persona) ? '' : ' style="display:none"'}>${esc(roleNameOf(persona))}</span>${
+            // 忙/闲只两态（2026-11-21 用户）：不再拼「·流程/对话里」后缀 ——
+            // 员工同时被多处派活时那个后缀只能显示其中一条，一定是错的。
             persona.busy
-              ? `<span class="pill busy" id="dBusy" title="${esc(persona.busyLabel ?? '正在干活')}">${
-                  persona.busyLabel ? '工作中·' + esc(persona.busyLabel) : '工作中'
-                }</span>`
+              ? '<span class="pill busy" id="dBusy">工作中</span>'
               : '<span class="pill" id="dBusy">空闲</span>'
           }</h2>
         </div>
@@ -2777,10 +2792,10 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
         ${personaAvatar(persona)}
         <div class="p-head-main">
           <h2><span id="dNameText">${esc(persona.name)}</span>${persona.builtin ? '<span class="pill builtin" title="出厂就在的员工：名字、岗位与职责身份随平台固定，不能删">内置</span>' : ''}<span class="pill role" id="dRolePill"${roleNameOf(persona) ? '' : ' style="display:none"'}>${esc(roleNameOf(persona))}</span>${
+            // 忙/闲只两态（2026-11-21 用户）：不再拼「·流程/对话里」后缀 ——
+            // 员工同时被多处派活时那个后缀只能显示其中一条，一定是错的。
             persona.busy
-              ? `<span class="pill busy" id="dBusy" title="${esc(persona.busyLabel ?? '正在干活')}">${
-                  persona.busyLabel ? '工作中·' + esc(persona.busyLabel) : '工作中'
-                }</span>`
+              ? '<span class="pill busy" id="dBusy">工作中</span>'
               : '<span class="pill" id="dBusy">空闲</span>'
           }</h2>
           <!-- 顶部那段职责描述（p-desc）按用户要求去掉了：下面「资料」里本来就有完整的「职责与身份设定」 -->

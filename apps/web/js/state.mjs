@@ -117,8 +117,9 @@ export async function load(opts = {}) {
   if (open && el) {
     // 徽标要跟通讯录的绿点**同一个来源**（都看 /api/state 的 busy），
     // 否则会出现"绿点 + 详情写空闲"这种自相矛盾（用户实报）
-    el.textContent = open.busy ? (open.busyLabel ? '工作中·' + open.busyLabel : '工作中') : '空闲';
-    el.title = open.busyLabel ?? '';
+    // 只有忙/闲两态（2026-11-21 用户）：后缀「流程…/对话里」已撤 —— 员工可同时被多处
+    // 派活，挑一条显示必然是错的，标签只回答"能不能现在派活"。
+    el.textContent = open.busy ? '工作中' : '空闲';
     el.classList.toggle('busy', !!open.busy);
   }
 }
