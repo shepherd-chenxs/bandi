@@ -1532,18 +1532,9 @@ button.att-add:hover { color: var(--text); border: 0; background: var(--panel); 
 .ct-head { display: flex; align-items: center; gap: 6px; font-size: 11.5px; min-width: 0; }
 .ct-ico { flex: 0 0 auto; font-size: 12px; opacity: .85; }
 .ct-kind { flex: 0 0 auto; color: var(--dim); }
-/* 状态徽标：右上角，列色浅底 + 同色字，整卡只这一处带色，视线一眼落定 */
-.ct-status { flex: 0 0 auto; margin-left: auto; padding: 2px 8px; border-radius: 999px;
-             font-size: 11px; font-weight: 600; line-height: 1.6; color: var(--dim);
-             background: color-mix(in srgb, var(--dim) 10%, transparent); }
-.ct-status.idea { color: var(--st-idea); background: color-mix(in srgb, var(--st-idea) 13%, transparent); }
-.ct-status.todo { color: var(--st-todo); background: color-mix(in srgb, var(--st-todo) 13%, transparent); }
-.ct-status.doing { color: var(--st-doing); background: color-mix(in srgb, var(--st-doing) 13%, transparent); }
-.ct-status.review { color: var(--st-review); background: color-mix(in srgb, var(--st-review) 15%, transparent); }
-.ct-status.blocked { color: var(--st-blocked); background: color-mix(in srgb, var(--st-blocked) 13%, transparent); }
-.ct-status.failed { color: var(--st-failed); background: color-mix(in srgb, var(--st-failed) 13%, transparent); }
-.ct-status.done { color: var(--st-done); background: color-mix(in srgb, var(--st-done) 13%, transparent); }
-.ct-status.cancelled { color: var(--st-cancelled); background: color-mix(in srgb, var(--st-cancelled) 13%, transparent); }
+/* 2026-11-21 用户：「这个卡不要显示状态」—— 群里的卡票只留 📋 类型 + 标题 + 执行人/时间。
+   状态是**消息时刻的快照**，一屏几张票并排看反而误导（同一张卡在不同消息里颜色不一样）；
+   要状态就点进卡详情看实时的。原来那颗 .ct-status 徽标连同 8 条列色规则一并删掉。 */
 .ct-row { display: flex; align-items: baseline; gap: 10px; margin-top: 6px; min-width: 0; }
 .ct-title { flex: 1 1 auto; min-width: 0; font-size: 13.5px; font-weight: 600; color: var(--text);
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

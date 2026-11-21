@@ -1663,10 +1663,6 @@ body.mb-chat .chat-head .mb-chat-back {
  * 桌面（>900px）不动：左栏一级菜单里本来就有「设置」，再摆入口是重复。
  */
 
-/* 桌面不画这个入口（设置入口只属于手机形态）。挂 body.mb-narrow 而不是媒体查询，
-   与页面其余"行为折叠"的判据保持同一把尺子。 */
-body:not(.mb-narrow) .me-entry-sec { display: none; }
-
 @media (max-width: 900px) {
   /* 页底灰同设置页：白卡要浮在灰上才有"卡片"这层关系 */
   body.mb-narrow #settingsView { background: var(--mb-cvbg, var(--mb-page, var(--bg))); }

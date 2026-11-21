@@ -31,10 +31,9 @@ export async function openWorkflows(pickId = null, opts = {}) {
   // keepView：归档视图里删完模板别把自己弹回主清单（消息模块 keepArchiveView 同款）。
   setNav('workflows', { skipOpen: true, keepFlowArchiveView: !!opts.keepView });
   document.body.classList.remove('no-list');
-  // 左栏顶上就是"你在哪儿"：工作台 › 工作流（面包屑从右页头挪过来，见 setListTitle）
-  // 2026-10-26 用户拍板：这东西统一叫「工作流」—— 磁贴、面包屑、标题一处不落，
-  // 原来磁贴叫「流程编排」、页名也叫「流程编排」，跟"工作流"三个字来回换着说，人才会绕晕。
-  setListTitle([{ label: '工作台', to: 'workbench' }, { label: '工作流' }]);
+  // 左栏顶上就是"你在哪儿"：工作台 › 流程编排（面包屑从右页头挪过来，见 setListTitle）
+  // 2026-10-26 曾统一叫「工作流」；2026-11-21 用户改回「流程编排」—— 磁贴、面包屑、栏标题一处不落。
+  setListTitle([{ label: '工作台', to: 'workbench' }, { label: '流程编排' }]);
   setRoute('workflows', pickId ? { template: pickId } : {});
   $('listAction').classList.remove('hidden');
   $('listAction').title = '新建流程模板';

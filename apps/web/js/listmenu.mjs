@@ -197,11 +197,16 @@ export async function hideConversationRow(c, mode = 'hide') {
     // 服务端已把它从 listConversations 里剔除 → 下面的收敛会自动把上一条顶成「当前会话」
     S.conversations = r.conversations;
     if (r.hiddenConversations) S.hiddenConversations = r.hiddenConversations;
-    // 正在看的就是它：这段人还在（不显示），右栏留着无妨；人已删（归档）就回空态
-    if (mode === 'archive') {
-      if (S.conversation?.id === c.id) resetChatPane();
-      if (S.drawerKind === 'log') closeDrawer();
-    }
+    /*
+     * 正在看的就是它：右栏一起收掉（2026-11-21 用户实报后定的口径，推翻旧的
+     * 「这段人还在（不显示），右栏留着无妨」）—— 窗口开着、左栏却没这行只是难受的一半；
+     * 更糟的是 S.conversation 还指着这段隐藏会话，接着从通讯录「发消息」（openDirectChat
+     * 口径①「当前会话最优先」）会把它原样复用回来，而列表按 hiddenAt 剔行，永远没有这行 ——
+     * 窗口开着、消息列表空着。人已删（归档）本来就是这个待遇，两档拉平。
+     * 聊天记录抽屉不收：抽屉正是被收会话的合法入口，行还在里面。
+     */
+    if (S.conversation?.id === c.id) resetChatPane();
+    if (mode === 'archive' && S.drawerKind === 'log') closeDrawer();
     renderList();
   } catch (err) { toastConvErr(err); }   // E2001 不在映射表里 → 自动回落，行为与今天一致
 }

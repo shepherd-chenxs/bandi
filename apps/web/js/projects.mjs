@@ -49,7 +49,7 @@ export function workbenchAutoSection({ schedulesOnly = false } = {}) {
     <div class="wb-sec">自动化</div>
     <div class="wb-grid">
       ${wbCard('cron', ICON_WB_CLOCK, '定时任务', '到点自动做一件事：指派人 / 团队协作 / 流程任务', 'data-schedules')}
-      ${schedulesOnly ? '' : wbCard('flow', ICON_WB_FLOW, '工作流', '画流程：节点、指派、发布', 'data-flow-design')}
+      ${schedulesOnly ? '' : wbCard('flow', ICON_WB_FLOW, '流程编排', '画流程：节点、指派、发布', 'data-flow-design')}
       ${published
         .map((f) => wbCard('flow', ICON_WB_FLOW, f.name, '点开看这个流程的发起记录', `data-flow-start="${esc(f.id)}"`))
         .join('')}
