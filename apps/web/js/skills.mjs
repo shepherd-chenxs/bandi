@@ -1,7 +1,7 @@
 /* skills.mjs —— 技能、从 GitHub 挑仓库（放进弹窗里）、定时任务、从本地导入、技能 → 发给数字员工（反方向挂载）。
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
 import { esc, mdRender, personaCan, roleNameOf, savePlace, setRoute, toast } from './shell.mjs';
-import { ICON_BRANCH, ICON_CLOUD, ICON_COMMIT, ICON_EDIT, ICON_FOLDER, ICON_GEAR, ICON_PLAY, ICON_PUSH, ICON_SYNC, ICON_TAG, ICON_TRASH, api, createCombo, createDateTimePick, cut, failHtml, initial, openCtxMenu, post, wireDialogHead } from './ui.mjs';
+import { ICON_BRANCH, ICON_CLOUD, ICON_EDIT, ICON_FOLDER, ICON_PLAY, ICON_SYNC, ICON_TAG, ICON_TRASH, api, createCombo, createDateTimePick, cut, failHtml, initial, openCtxMenu, post, wireDialogHead } from './ui.mjs';
 import { load, setNav } from './state.mjs';
 import { openSettings } from './settings.mjs';
 import { setListTitle } from './flowpages.mjs';
@@ -102,27 +102,27 @@ export async function openGitConnDlg(st = null, onDone = null) {
     const form = document.createElement('form');
     form.method = 'dialog';
     form.innerHTML = `
-      <b>GitHub 连接</b>
+      <b>GitHub 访问令牌（PAT）</b>
       <div class="gr-dlg-body">
         ${
           st.connected
             ? `<div class="gr-dlg-row">
-                 <span class="row-label">令牌</span>
                  <input class="locked" value="${esc(st.hint || '******')}" readonly
                         aria-label="已保存的令牌，只显示头 2 位和尾 4 位" />
                  <button type="button" class="mini auto" id="gitDisconnect"
                          title="断开 GitHub（已接入的仓库记录和本地克隆都保留）">断开连接</button>
                </div>
                <div class="gr-dlg-row">
-                 <span class="row-label gr-dlg-pad" aria-hidden="true">令牌</span>
                  <span class="gr-dlg-status"><b style="color:var(--ok)">已连接</b><span id="gitWho">${
                    st.login ? ` —— @${esc(st.login)}` : ''
                  }</span></span>
                </div>`
             : `<div class="gr-dlg-row">
-                 <span class="row-label">令牌</span>
-                 <input id="gitToken" type="password" placeholder="粘贴 fine-grained PAT" autocomplete="off" />
-                 <button type="button" class="primary" id="gitConnect">连接 GitHub</button>
+                 <div class="plg-pw">
+                   <input id="gitToken" type="password" placeholder="粘贴Fine-grained personal access tokens" autocomplete="off" />
+                   <button type="button" class="plg-eye" id="gitTokenEye" title="显示 / 隐藏令牌"><svg class="ic-eye" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z"></path><circle cx="12" cy="12" r="2.6"></circle></svg><svg class="ic-eye-off" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 8a10.645 10.645 0 0 0 20 0"></path><path d="m15 18-.722-3.25"></path><path d="m20 15-1.726-2.05"></path><path d="m4 15 1.726-2.05"></path><path d="m9 18 .722-3.25"></path></svg></button>
+                 </div>
+                 <button type="button" class="primary" id="gitConnect">保存令牌</button>
                </div>`
         }
         ${/* 怎么拿令牌直接铺开（2026-10-26 六改，用户："把怎么拿令牌显示出来"），不再藏帮助按钮里 */ ''}
@@ -147,6 +147,15 @@ export async function openGitConnDlg(st = null, onDone = null) {
         });
     }
 
+    /* 令牌框的小眼睛（2026-11-20 用户："这里的眼睛怎么没了"）：跟插件表单的 .plg-eye 同一套，
+       点一下在密码/明文之间切。 */
+    form.querySelector('#gitTokenEye')?.addEventListener('click', (e) => {
+      const inp = form.querySelector('#gitToken');
+      const show = inp.type === 'password';
+      inp.type = show ? 'text' : 'password';
+      e.currentTarget.classList.toggle('on', show);
+    });
+
     form.querySelector('#gitConnect')?.addEventListener('click', async () => {
       const token = form.querySelector('#gitToken').value.trim();
       if (!token) return toast('先把令牌粘进来');
@@ -164,7 +173,7 @@ export async function openGitConnDlg(st = null, onDone = null) {
         await refresh();
       } catch (err) {
         btn.disabled = false;
-        btn.textContent = '连接 GitHub';
+        btn.textContent = '保存令牌';
         toast(err.message, 'error');
       }
     });
@@ -200,7 +209,7 @@ export async function mountGitAvailPicker(mount, onDone, onSelect = null) {
       /* 未连接（2026-10-30 用户："改成：GitHub 未连接，点击连接"）：文案本身可点，
          点了直接开 GitHub 连接弹窗，连上后原地重拉清单 —— 不用关弹窗绕去代码托管页。 */
       box.innerHTML =
-        '<div class="empty" style="padding:12px 4px"><a href="#" id="gitConnLink" class="git-conn-link">GitHub 未连接，点击连接</a></div>';
+        '<div class="empty" style="padding:12px 4px"><a href="#" id="gitConnLink" class="git-conn-link">GitHub 未配置访问令牌，去配置</a></div>';
       box.querySelector('#gitConnLink').onclick = async (e2) => {
         e2.preventDefault();
         await openGitConnDlg(null, () => mountGitAvailPicker(box, onDone, onSelect));
@@ -525,22 +534,20 @@ export async function openGitPickDialog(onDone) {
  * 「?」在**连上与没连上时都在** —— 而"给下一个仓库补授权""令牌 90 天到期要换"
  * 恰恰是**连着的时候**才要照着做，所以放在「?」里是覆盖面更全的那一处。 */
 export const GIT_TOKEN_HELP = `
-  <div class="gr-help-title">怎么拿令牌</div>
+  <div class="gr-help-title">令牌获取步骤</div>
   <ol class="gr-help-steps">
-    <li>在 GitHub 建：Settings → Developer settings → Personal access tokens → <b>Fine-grained tokens</b></li>
-    <li>权限勾两样 —— <b>两个是独立权限，缺一个就少一块功能</b>：
+    <li>在 GitHub 中创建：Settings → Developer settings → Personal access tokens → <b>Fine-grained tokens</b></li>
+    <li>点击 Add permissions，勾选 Contents 和 Pull requests 权限：
       <ul class="gr-help-perms">
-        <li><b>Contents: Read and write</b><span>克隆、推分支、合并都要它</span></li>
-        <li><b>Pull requests: Read and write</b><span>在平台里建 PR 要它</span></li>
+        <li><b>Contents: Read and write</b><span>用于克隆仓库、推送分支及合并</span></li>
+        <li><b>Pull requests: Read and write</b><span>用于在平台内创建 Pull Request</span></li>
       </ul>
-      <span class="gr-help-note">只勾 Contents：网页上能手动建 PR，但平台里建会 403；
-      只勾 Pull requests：能建 PR 但推不上分支。只想读别人提的 PR（审阅）不勾也能跑。</span>
     </li>
-    <li>Repository access：选你要接入的那几个仓库</li>
+    <li>Repository access：选择需要接入的仓库</li>
   </ol>
-  <p class="gr-help-foot">令牌只存在本机数据目录，不进日志。
+  <p class="gr-help-foot">令牌仅保存在本机数据目录，不写入日志。
   <a class="help-link" href="https://github.com/settings/personal-access-tokens"
-     target="_blank" rel="noreferrer">去 GitHub 建一个 →</a></p>`;
+     target="_blank" rel="noreferrer">前往 GitHub 创建 →</a></p>`;
 
 
 
@@ -569,6 +576,29 @@ export async function openCodeRepoPage() {
 }
 
 
+
+/* ------------------------------------------------------------------ 历史卡的状态
+ *
+ * 为什么在**模块顶层**、不在 renderGitRepos 里（2026-11-20 用户实拍"历史渲染不出来"）：
+ * 历史那几个函数（logGraphRows / renderLogGraph / fillLog）全嵌在 renderGitRepos 体内，
+ * 而 renderGitRepos 在函数体**前段**（`if (sel)` 那段）就调 fillLog(sel) —— 此时函数体还没
+ * 执行到后面的 `const/let`，闭包里读到的就是暂时性死区：
+ *   `Uncaught (in promise) ReferenceError: Cannot access 'logRepoId' before initialization`
+ * 表现是历史卡永远停在「读提交记录…」（async 函数在第一个 await 之前就抛，没人接住）。
+ * 放模块顶层既躲开死区，也让「加载更多」的档位在页面重画（提交/推送后 refresh）之间保住。
+ */
+const LOG_ROW_H = 26;        // 26px 一行（Git Graph / GitLens 同档）：再密字会挤，再疏树就散
+const LOG_LANE_W = 18;       // 18px 一列：再宽分叉弧就被拉平成斜线，两条线看着像平行直线
+const LOG_LANE_MAX = 7;      // 超过 7 条 lane 开始压缩，整块最宽约 126px
+/*
+ * 历史一次拉多少（2026-11-20 用户："为啥在 idea 上展示这么多，bandi 只展示一部分"）：
+ * 原来写死 50 条，IDEA 的 Log 是几百上千条一路滚下来的 —— 首屏 500，底部「加载更多」逐档 +500，
+ * 到 2000 封顶（再多一张 SVG 画几千条线会拖慢整页，那才该上虚拟滚动）。
+ */
+const LOG_PAGE = 500;
+const LOG_PAGE_MAX = 2000;
+let logRepoId = null;        // 当前 limit 是给哪个仓库的
+let logLimit = LOG_PAGE;
 
 /**
  * 代码托管页。
@@ -624,16 +654,23 @@ export async function renderGitRepos(root = $('pluginView')) {
 
   const foot = $('listFoot');
   if (foot) {
-    foot.innerHTML = `
+    /*
+     * GitHub 账号入口只关 PR / 合并的事（2026-11-20 改形态，学 IDEA）：
+     * 以前未连接时这儿常驻一条「GitHub 未连接 · 点击连接」，用户会读成
+     * "没连上，那我提交/推送是不是也不能用" —— 文案怎么改都在解释，不如不放。
+     * 现在：已连接才显示账号（点开可断开）；未连接什么都不显示，入口只留在
+     * 真正需要它的地方（PR 区、从账号添加仓库）。
+     */
+    foot.innerHTML = st.connected
+      ? `
     <div class="gr-side">
       <button type="button" class="gr-side-btn" id="gitConnOpen"
-              title="${st.connected ? 'GitHub 连接设置：令牌、断开' : '连接 GitHub（令牌只存本机）'}">
-        <span class="gr-dot${st.connected ? ' ok' : ''}"></span>
-        <span class="gr-side-btn-label">${
-          st.connected ? `GitHub 已连接${st.login ? ` · @${esc(st.login)}` : ''}` : 'GitHub 未连接 · 点击连接'
-        }</span>
+              title="GitHub 账号设置：令牌、断开">
+        <span class="gr-dot ok"></span>
+        <span class="gr-side-btn-label">GitHub${st.login ? ` · @${esc(st.login)}` : ''}</span>
       </button>
-    </div>`;
+    </div>`
+      : '';
     foot.querySelector('#gitConnOpen')?.addEventListener('click', () => openGitConnDlg(st, refresh));
   }
 
@@ -659,7 +696,9 @@ export async function renderGitRepos(root = $('pluginView')) {
         .map(
           (r) => `<div class="item${sel && r.id === sel.id ? ' active' : ''}" data-git-sel="${esc(r.id)}">
             <div class="who">
-              <div class="line1"><b>${esc(r.fullName)}</b></div>
+              <div class="line1"><b>${esc(r.fullName)}</b>${
+                r.localPathExists === false ? '<span class="pill" style="color:var(--warn)" title="本地目录被改名或挪走了 —— 仓库身份不受影响">目录找不到</span>' : ''
+              }</div>
               <div class="line2" title="${esc(r.localPath)}">${esc(r.localPath)}</div>
             </div>
           </div>`,
@@ -670,6 +709,18 @@ export async function renderGitRepos(root = $('pluginView')) {
         S.gitSel = el.dataset.gitSel;
         renderGitRepos(root).catch((e) => toast(e.message, 'error'));
       };
+      /* 右键 = 仓库的快捷菜单（2026-11-20 用户："右键显示删除，右上角的设置按钮去掉"）：
+         低频、破坏性的动作从详情页标题行搬到这里，首屏不再挂齿轮。 */
+      el.oncontextmenu = (e) => {
+        e.preventDefault();
+        const repo = repos.find((r) => r.id === el.dataset.gitSel);
+        if (!repo) return;
+        openCtxMenu(e.clientX, e.clientY, [
+          // 目录改名/挪位置后重新指一下（身份不变）；正常时也能用，换台机器接着干
+          { label: '重新定位目录', run: () => relocate(repo) },
+          { label: '取消托管', danger: true, run: () => removeRepo(repo) },
+        ]);
+      };
     });
   };
   paintRows();
@@ -679,33 +730,50 @@ export async function renderGitRepos(root = $('pluginView')) {
   if (sb) sb.oninput = paintRows;
 
   const keeperName = (id) => (S.personas ?? []).find((p) => p.id === id)?.name ?? '';
-  const syncAt = (t) => (t ? esc(String(t).replace('T', ' ').slice(0, 16)) : '从未');
 
   /*
    * 选中仓库的详情（2026-10-27 二改：PR 独立成一级区域）。
    * 用户："把 PR 作为一个区域进行展示，然后有那些 PR 待合并；现在有提交和推送，建 PR 或许也不用一个按钮了"。
-   * 所以导航条只剩「仓库名 + 分支 pill + 路径 + 齿轮」，动作按状态落在各区域里：
+   * 所以导航条只剩「仓库名 + 私有标记 + 路径」，动作按状态落在各区域里：
    *   · 提交区：有改动才亮；
    *   · 「拉取请求」区：待合并的 PR 都在这儿（含合并按钮）；当前分支还没 PR 时那儿出现「建 PR」；
-   *   · 低频的「从清单移除」收进齿轮弹窗（破坏性动作不放在首屏）。
+   *   · 低频的「从清单移除」在左栏仓库行的右键菜单里（破坏性动作不放在首屏）。
    */
   /*
-   * 这个仓库有没有 GitHub 身份（2026-10-30）：名字写成 owner/name 才算；
-   * 本地代码托管（"爻鉴"这种名字）没有 PR 可查，PR 那几张卡也就不画。
+   * 这个仓库有没有 GitHub 身份（2026-11-20 修正判据）：
+   * 原来拿「名字长得像 owner/name」当证据 —— 手动接入的克隆名字就是目录名（`bandi`），
+   * 明明 origin 指着 github.com，却被判成本地仓库，PR / 合并整块不画。
+   * 现在用服务端从 origin 解出来的 ghRef（owner/name），全文名只当展示用。
    */
-  const ghLinked = /^[\w.-]+\/[\w.-]+$/.test(sel?.fullName ?? '');
+  const ghLinked = /^[\w.-]+\/[\w.-]+$/.test(sel?.ghRef || '');
 
   const repoDetail = sel
     ? `<div class="plg-detail-head fixed-head">
          <b>${esc(sel.fullName)}</b>${sel.isPrivate ? '<span class="pill">私有</span>' : ''}
-         <span class="gr-branch" id="grBranchMount"></span>
-         <!-- 本地路径 2026-10-27 应用户要求从导航条摘掉 —— 左栏列表和齿轮弹窗里都还有，不丢信息 -->
-         <div class="head-actions">
-           <button class="mini gr-set-btn" data-git-settings="${esc(sel.id)}"
-                   title="仓库设置：管理员 / 自动合并 / 巡检 / 默认分支 / 上次同步" aria-label="仓库设置">${ICON_GEAR}</button>
-         </div>
+         <!-- 导航条上原来挂的是分支 pill，2026-11-20 用户："这个去掉，换成本地目录" ——
+              分支在「分支管理」tab 里有完整列表，导航条这块位置改放仓库的本地目录。 -->
+         <span class="gr-head-path" title="${esc(sel.localPath || '')}">${esc(sel.localPath || '')}</span>
+         ${
+           sel.localPathExists === false
+             ? `<span class="pill" style="color:var(--warn)" title="本地目录被改名或挪走了 —— 仓库身份不受影响，重新指一下就行">本地目录找不到</span>
+                <button type="button" class="mini" id="grRelocate">重新定位</button>`
+             : ''
+         }
+         <!-- 当前本地分支（2026-11-20 用户："在右上角显示当前本地分支"）：
+              值在 fillChanges 里用同一次 /changes 的 state.branch 补上，切分支后重画自动跟上。 -->
+         <span class="gr-head-branch" title="当前本地分支">
+           <i class="gr-head-br-ic" aria-hidden="true">${ICON_BRANCH}</i><b id="grHeadBranch"></b>
+         </span>
        </div>
-       <div class="plg-sec">
+       <!-- 工具栏（2026-11-20，用户："顶部做成工具栏，像 tab 一样，点了显示对应区域"）：
+            纵向堆四块时一次只能看一块，还要一路滚；现在分段，默认落在「提交 / 推送」。 -->
+       <nav class="gr-tabs" id="grTabs" aria-label="仓库视图">
+         <button type="button" data-gr-tab-btn="commit">提交 / 推送</button>
+         <button type="button" data-gr-tab-btn="branch">分支管理</button>
+         <button type="button" data-gr-tab-btn="pr">PR</button>
+         <button type="button" data-gr-tab-btn="log">历史</button>
+       </nav>
+       <div class="plg-sec" data-gr-tab="commit">
          <div class="plg-sec-head"><label class="plg-sec-title">提交</label><span class="dim" id="grChgHead"></span></div>
          <section class="fx"><div id="grChanges"><div class="sk-blank">读工作区…</div></div></section>
        </div>
@@ -714,7 +782,7 @@ export async function renderGitRepos(root = $('pluginView')) {
          推和交是两件事：未推提交挤在「提交」卡里，会让人以为推送要跟着提交走。
          版式对齐「拉取请求」：动作（推送）钉在分节标题行右侧。
        -->
-       <div class="plg-sec">
+       <div class="plg-sec" data-gr-tab="commit">
          <div class="plg-sec-head">
            <label class="plg-sec-title">推送</label><span class="dim" id="grPushHead"></span>
            <button type="button" class="mini auto" id="grPushNow">推送</button>
@@ -722,29 +790,75 @@ export async function renderGitRepos(root = $('pluginView')) {
          <section class="fx"><div id="grPush"><div class="sk-blank">读推送状态…</div></div></section>
        </div>
       <!--
-        拉取请求 + PR 列表只有 GitHub 关联的仓库才有（2026-10-30 重新定位：本地代码托管不走 GitHub，
-        名字随便起，没有 owner/name 就查不到 PR —— 硬画出来只会永远"取不到"）。
-        本地托管改成一句说明：代码在本机管，提交 / 推送 / 分支照常。
+        PR 区只跟「这个仓库有没有 GitHub 地址」和「账号连没连」有关（2026-11-20 改形态）：
+        · 有 GitHub 地址 + 已连接 → 正常画建 PR / 合并那几张卡
+        · 有 GitHub 地址 + 没连接 → 区域照画，里面只放一个「连接」行动按钮 ——
+          这不是错误状态，是"PR 功能还没启用"，点一下就能用
+        · 没有 GitHub 地址 → 代码在本机管，提交 / 推送 / 分支照常，不出 PR 卡
       -->
-      ${ghLinked ? `<div class="plg-sec">
+      ${ghLinked ? (st.connected ? `<div class="plg-sec" data-gr-tab="pr">
         <div class="plg-sec-head">
           <label class="plg-sec-title">拉取请求</label><span class="dim" id="grPullsHead"></span>
           <button type="button" class="mini auto gr-pulls-refresh" id="grPullsRefresh" title="从 GitHub 重新取一次">刷新</button>
         </div>
         <section class="fx"><div id="grPulls"><div class="sk-blank">取 PR…</div></div></section>
       </div>
-      <div class="plg-sec">
+      <div class="plg-sec" data-gr-tab="pr">
         <div class="plg-sec-head">
           <label class="plg-sec-title">PR 列表</label><span class="dim" id="grReviewHead"></span>
           <button type="button" class="mini auto" id="grReviewRefresh" title="从 GitHub 重新取一次">刷新</button>
         </div>
         <section class="fx"><div id="grReview"><div class="sk-blank">取 PR…</div></div></section>
-      </div>` : `<div class="plg-sec">
+      </div>` : `<div class="plg-sec" data-gr-tab="pr">
         <div class="plg-sec-head"><label class="plg-sec-title">拉取请求</label></div>
-        <section class="fx"><div class="sk-blank">这是本地托管的仓库（没有关联 GitHub 仓库）—— 代码在本机管理，
-          提交、推送、切分支都照常，只是不出 PR / 合并那几张卡。要接 GitHub 上的 PR，用「＋」从账号里加仓库。</div></section>
+        <section class="fx"><div class="gr-pr-off">
+          <button type="button" class="primary" id="grPrConnect">配置 GitHub 访问令牌（PAT）</button>
+        </div></section>
+      </div>`) : `<div class="plg-sec" data-gr-tab="pr">
+        <div class="plg-sec-head"><label class="plg-sec-title">拉取请求</label></div>
+        <section class="fx"><div class="sk-blank">这个仓库没有 GitHub 地址 —— 代码在本机管理，
+          提交、推送、切分支都照常。要接 GitHub 上的 PR，用「＋」从账号里加仓库。</div></section>
       </div>`}
-       <div class="plg-sec">
+       ${ghLinked && st.connected ? `
+       <!-- PR自动化（2026-11-20 用户："自动合并不该藏在设置里，它就是 PR 这条链上的配置"）：
+            管理员 / 巡检节拍 / 自动合并是「发现 → 审 → 合」三段，收在同一区里。
+            但 autoMerge 不是巡检任务的字段 —— 巡检关掉、流程建 PR 时它照样生效，
+            所以这里是"同组配置"，不是"从属关系"。
+            2026-11-20 用户："没有连接 github 账号时不要显示这个" —— 整块跟着账号连接状态走，
+            没连（或仓库根本不是 GitHub 仓库）就不画，只剩上面那张「配置 GitHub 访问令牌」卡。 -->
+       <div class="plg-sec" data-gr-tab="pr">
+         <div class="plg-sec-head">
+           <label class="plg-sec-title">PR自动化</label>
+           <button type="button" class="mini auto" id="grPatrolRun"
+                   title="现在就跑一次这个仓库的巡检（开没开节拍都能跑）">立即巡检</button>
+         </div>
+         <section class="fx" id="grPatrolBody">
+           <div class="info-row"><span>管理员</span><b>${esc(keeperName(sel.keeperPersonaId || 'p-expert-zhangkun') || '张坤')}</b></div>
+           <div class="info-row"><span>巡检节拍</span><b class="gr-patrol-cell">
+             <div class="gr-patrol-combo" id="grPatrolSel"
+                  title="到点自动拉这个仓库的 open PR / issue，写成看板上的值班卡"></div>
+           </b></div>
+           <div class="info-row"><span>上次巡检</span><b id="grPatrolLast" class="gr-patrol-last"></b></div>
+           <div class="info-row"><span>自动合并</span><b>
+             <label class="switch sm" title="开：管理员审阅通过且四道闸全过的 PR 直接合并；关：停在「待验收」，等你点「通过」">
+               <input type="checkbox" data-automerge ${sel.autoMerge ? 'checked' : ''} aria-label="自动合并" /><span></span>
+             </label>
+           </b></div>
+         </section>
+       </div>` : ''}
+       <div class="plg-sec" data-gr-tab="branch">
+         <!-- 分支管理（2026-11-20 用户："这个移动到管理分支tab"）：原来塞在分支下拉里的
+              最近 / 本地 / 远程 / 标签 整块搬到这里，下拉只留操作项。 -->
+         <div class="plg-sec-head">
+           <label class="plg-sec-title">分支管理</label>
+           <button type="button" class="mini auto" id="grBranchNew">新建分支…</button>
+           <button type="button" class="mini auto" id="grBranchSync" title="git pull：拉取上游新提交">更新项目</button>
+         </div>
+         <section class="fx">
+           <div id="grBranchList" class="gr-br-list"><div class="sk-blank">正在读分支…</div></div>
+         </section>
+       </div>
+       <div class="plg-sec" data-gr-tab="log">
          <div class="plg-sec-head"><label class="plg-sec-title">历史</label></div>
          <section class="fx"><div id="grLog"><div class="sk-blank">读提交记录…</div></div></section>
        </div>`
@@ -758,8 +872,126 @@ export async function renderGitRepos(root = $('pluginView')) {
 
   const refresh = () => renderGitRepos(root);   // 重画回**同一个宿主**（设置页 / 工作台各画各的）
 
+  /*
+   * 重新定位本地目录（2026-11-20 用户："如果我本地仓库改个名字是不是就找不到了？这显然不合理的吧"）。
+   * 身份（ghRef / remoteUrl）不跟路径走：改名、挪位置之后重选一下目录就行 ——
+   * GitHub 关联、PR、管理员这些配置一条都不用重配。
+   * 后端会核对 .git 与 origin，选成别的仓库直接拒绝（见 git-repos.mjs 的 relocateRepo）。
+   */
+  const relocate = async (repo) => {
+    try {
+      const picked = await pickLocalDir({ title: `重新定位「${repo.fullName}」的本地目录`, startPath: repo.localPath || '' });
+      if (!picked) return;
+      const r = await api(`/api/git/repos/${encodeURIComponent(repo.id)}/relocate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ localPath: picked }),
+      });
+      toast(`「${r.repo.fullName}」已指到 ${r.repo.localPath}`);
+      await refresh();
+    } catch (e) {
+      toast(e.message ?? String(e), 'error');
+    }
+  };
+  $('grRelocate')?.addEventListener('click', () => sel && relocate(sel));
 
+  /*
+   * 就地刷新（2026-11-20 用户："点击提交、推送之后页面会闪……框大小不要变"）：
+   * 老做法 await refresh() 会整页重建，骨架屏「读工作区…/读推送状态…」闪一下、卡片高度跟着跳。
+   * 这里只重取数据、重画这两块的内容，页面结构和滚动位置都不动；
+   * 刷新前的高度记一笔，内容变短（提交完工作区干净、推送完已同步）就补 min-height ——
+   * 空态照常显示在原来的框里，框不缩。keepDraft 用于推送：正在写的提交说明别被刷掉。
+   */
+  const softRefresh = async ({ keepDraft = false } = {}) => {
+    if (!sel) return;
+    const keepFrame = (id) => {
+      const f = $(id)?.closest('.fx');
+      if (!f) return null;
+      f.style.minHeight = '';
+      return { f, h: f.offsetHeight };
+    };
+    const chg = keepFrame('grChanges');
+    const push = keepFrame('grPush');
+    const draft = $('grCommitMsg')?.value ?? '';
+    await fillChanges(sel);
+    for (const k of [chg, push]) {
+      if (k?.f.isConnected && k.h && k.f.offsetHeight < k.h) k.f.style.minHeight = `${k.h}px`;
+    }
+    const mi = $('grCommitMsg');
+    if (keepDraft && mi && draft && !mi.value) mi.value = draft;
+    // 另外三块不在当前 tab 上也顺手刷新一下，切过去时不会看到旧数据
+    fillBranchTab(sel);
+    fillLog(sel);
+    if (ghLinked && st.connected) fillPulls(sel);
+  };
 
+  /*
+   * 工具栏切页（2026-11-20）：四块内容都常驻 DOM，切 tab 只改显隐 ——
+   * 不重拉数据、不重建节点，所以「提交」卡里正在写的说明切走再切回不会丢。
+   * 当前 tab 记内存态 S.gitTab，换仓库时保留在同一块。
+   */
+  const GR_TABS = ['commit', 'branch', 'pr', 'log'];
+  const showTab = (t) => {
+    const cur = GR_TABS.includes(t) ? t : 'commit';
+    S.gitTab = cur;
+    view.querySelectorAll('[data-gr-tab-btn]').forEach((b) => {
+      b.classList.toggle('on', b.dataset.grTabBtn === cur);
+    });
+    view.querySelectorAll('[data-gr-tab]').forEach((el) => {
+      el.classList.toggle('on', el.dataset.grTab === cur);
+    });
+  };
+  view.querySelectorAll('[data-gr-tab-btn]').forEach((b) => {
+    b.addEventListener('click', () => showTab(b.dataset.grTabBtn));
+  });
+  showTab(S.gitTab);
+
+  /*
+   * 顶部常驻动作（2026-11-20，用户："入口分散、要多点几步，基础功能尽量傻瓜式"）：
+   * 更新 / 提交 / 推送 / 建 PR 原来只有点开分支下拉才找得到 —— 现在标题行直接点。
+   * 分支下拉里的同名项走这同一份实现，不养两条。
+   */
+  const runOp = async (op) => {
+    if (!sel) return false;
+    const apiRepo = (p) => `/api/git/repos/${encodeURIComponent(sel.id)}${p}`;
+    if (op === 'sync') {
+      try {
+        await api(apiRepo('/sync'), { method: 'POST' });
+        toast('已拉取最新');
+        await refresh();
+        return true;
+      } catch (e) { toast(e.message, 'error'); return false; }
+    }
+    if (op === 'push') {
+      try {
+        toast('推送中…');
+        const r = await post(apiRepo('/push'), {});
+        toast(`已推送 ${r.pushed}`);
+        await softRefresh({ keepDraft: true });
+        return true;
+      } catch (e) { toast(e.message, 'error'); return false; }
+    }
+    if (op === 'commit') {
+      let st = null;
+      try { st = (await api(apiRepo('/changes'))).state; } catch { /* 读不到按干净处理 */ }
+      if (!st?.dirtyCount) {
+        toast(st?.canShip ? '工作区是干净的 —— 有没推的提交，点「推送」就行' : '工作区是干净的，没有可提交的改动');
+        return false;
+      }
+      const inp = document.getElementById('grCommitMsg');
+      if (!inp?.isConnected) { toast('改动卡不在页面上（工作区刚变干净？）'); return false; }
+      inp.scrollIntoView({ block: 'center' });
+      inp.focus();
+      return true;
+    }
+    if (op === 'pr') {
+      // 没连账号时，这一下就是"启用 PR 功能"的入口：先弹账号框，连完原地重画（2026-11-20 改形态）
+      if (!st.connected) { openGitConnDlg(st, refresh); return false; }
+      openRepoPrDialog(sel, refresh);
+      return true;
+    }
+    return false;
+  };
 
   /*
    * 「添加仓库」：入口在**左栏顶上的「＋」**（主从页的规矩，同 renderPluginMaster 的
@@ -781,16 +1013,6 @@ export async function renderGitRepos(root = $('pluginView')) {
       await refresh(); // 失败要把界面拉回真实值，别让假状态留在屏幕上
     }
   };
-  /*
-   * 仓库设置弹窗（2026-10-27，用户："仓库设置区太占地方 → 右上角设置按钮，点开展示"）：
-   * 原来占详情一整块卡的信息（管理员 / 自动合并 / 默认分支 / 上次同步 / 本地目录）收进这里。
-   * 动态建 dialog（openGitConnDlg 同款），close 即 remove；改动即时保存、弹窗不关。
-   *
-   * 2026-10-29：**巡检节拍也收进来了**（用户："这个功能放到代码托管是不是更好"）。
-   * 它背后仍是「定时任务」里一条 `pr-scan`（`config.repo` = 这个仓库），不是第二套调度 ——
-   * 仓库行只负责"选一个预设 + 看上次结果 + 现在跑一次"这三件窄事，
-   * 「每周 / 每月 / 单次」那些完整表单仍去「定时任务」页（那边会把它标成「随仓库」）。
-   */
   const paintKeeperBtns = (repoId, kid) => {
     document.querySelectorAll('.gr-keeper-btn[data-k-cur]').forEach((b) => {
       b.dataset.kCur = kid ?? '';
@@ -800,13 +1022,9 @@ export async function renderGitRepos(root = $('pluginView')) {
     if (repo) repo.keeperPersonaId = kid || null;
   };
   const patrolPresets = () => (st.patrolPresets?.length ? st.patrolPresets : [{ id: 'off', label: '关闭' }]);
-  const patrolLastText = (p) => {
-    if (!p?.jobId) return '还没配节拍 —— 也可以先点「立即巡检」跑一次';
-    if (!p.lastStatus) return '还没跑过';
-    const body = p.lastStatus === 'ok' ? `✓ ${p.lastSummary || '完成'}` : `✗ ${p.lastError || '失败了（没有原因）'}`;
-    const when = p.lastRunAt ? String(p.lastRunAt).replace('T', ' ').slice(0, 16) : '';
-    return when ? `${when} · ${body}` : body;
-  };
+  /* 「上次巡检」只显示时间（2026-11-20 用户："这个文案去掉，这个属性只要显示时间就行了"）：
+     没跑过就空着，不再写「还没配节拍」「还没跑过」这类引导话术。 */
+  const patrolLastText = (p) => (p?.lastRunAt ? String(p.lastRunAt).replace('T', ' ').slice(0, 16) : '');
   const paintPatrolLast = (repo) => {
     const el = $('grPatrolLast');
     if (!el) return;
@@ -814,130 +1032,94 @@ export async function renderGitRepos(root = $('pluginView')) {
     el.textContent = text;
     el.title = text;
   };
-  const openGitSettingsDlg = (repo) => {
-    const dlg = document.createElement('dialog');
-    dlg.className = 'gr-set-dlg';
-    const form = document.createElement('form');
-    form.method = 'dialog';
-    const p = repo.patrol ?? { preset: 'off' };
-    /*
-     * 巡检节拍用全站 `.combo`（2026-10-29 用户："巡检使用公共组件"）。
-     * 原生 <select> 的弹出层是浏览器画的 —— 高度、配色、圆角跟站内其它下拉是两套东西。
-     * 「自定义（每周一）」不是**可选**的档：它只用来照实显示现状（人手工建过），选它等于什么都没做。
-     */
-    const patrolItems = patrolPresets().map((x) => ({ id: x.id, label: x.label }));
-    if (p.preset === 'custom') patrolItems.push({ id: 'custom', label: `自定义（${p.text || '当前节拍'}）` });
-    form.innerHTML = `
-      <b>仓库设置</b>
-      <div class="gr-dlg-body gr-set-body">
-        <div class="info-row"><span>管理员</span><b>
-          <button type="button" class="gr-keeper-btn" data-k-cur="${esc(repo.keeperPersonaId ?? '')}"
-                  title="别人提了 PR，替你审的那个人。点击选择">${
-                    repo.keeperPersonaId ? esc(keeperName(repo.keeperPersonaId) || '未设置') : '<span class="dim">未设置</span>'
-                  }</button>
-        </b></div>
-        <div class="info-row"><span>自动合并</span><b>
-          <label class="switch sm" title="开：审阅通过且闸门全过的 PR 自动合并；关：停在「待验收」等你点">
-            <input type="checkbox" data-automerge ${repo.autoMerge ? 'checked' : ''} aria-label="自动合并" /><span></span>
-          </label>
-        </b></div>
-        <div class="info-row"><span>巡检</span><b class="gr-patrol-cell">
-          <div class="gr-patrol-combo" id="grPatrolSel"
-               title="到点自动拉这个仓库的 open PR / issue，写成看板上的值班卡"></div>
-        </b></div>
-        <div class="info-row"><span>上次巡检</span><b id="grPatrolLast" class="gr-patrol-last"></b></div>
-        <div class="info-row"><span>默认分支</span><b>${esc(repo.defaultBranch || '—')}</b></div>
-        <div class="info-row"><span>上次同步</span><b>${syncAt(repo.lastSyncAt)}</b></div>
-        <div class="info-row"><span>本地目录</span><b class="gr-set-path" title="${esc(repo.localPath)}">${esc(repo.localPath)}</b></div>
-      </div>
-      <div class="dlg-actions">
-        <button type="button" class="mini auto" id="grPatrolRun"
-                title="现在就跑一次这个仓库的巡检（开没开节拍都能跑）">立即巡检</button>
-        <button type="button" class="mini auto gr-set-remove" id="grSetRemove"
-                title="只移除记录，本地目录保留（低频、破坏性动作，收在设置里）">从清单移除…</button>
-      </div>`;
-    dlg.append(form);
-    document.body.append(dlg);
-    wireDialogHead(form);
-    dlg.addEventListener('close', () => dlg.remove());
-    paintPatrolLast(repo);
+  /*
+   * 从清单移除（2026-11-20 用户："右键显示删除，右上角的设置按钮去掉"）：
+   * 确认后只删记录，本地克隆目录不动。入口在左栏仓库行的右键菜单里。
+   */
+  const removeRepo = async (repo) => {
+    if (!(await confirmDo('该操作将移除该仓库在本平台的托管记录，但不会删除你的本地仓库。是否确认取消托管？'))) return;
+    try {
+      const r = await api(`/api/git/repos/${encodeURIComponent(repo.id)}`, { method: 'DELETE' });
+      toast(`已移除。本地目录还在：${r.keptPath}`);
+      await refresh();
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  };
 
-    form.querySelector('.gr-keeper-btn').onclick = (e) => openKeeperDlg(repo.id, e.currentTarget.dataset.kCur ?? '');
-    form.querySelector('[data-automerge]').onchange = (e) => {
-      repo.autoMerge = e.currentTarget.checked ? 1 : 0;
-      saveRepoSettings(repo.id, { autoMerge: e.currentTarget.checked });
+  /*
+   * PR巡检折叠区（2026-11-20 用户："把这个功能移动到 PR 里，区域标题就叫 PR巡检"）：
+   * 原来在仓库设置弹窗里，现在搬到 PR tab —— 平时只露「节拍 + 上次结果 + 立即巡检」一行，
+   * 点「节拍」才展开下拉。背后仍是定时任务里那条 pr-scan，不是第二套调度。
+   */
+  const patrolMount = $('grPatrolSel');
+  if (patrolMount) {
+    const buildItems = () => {
+      const cur = sel.patrol ?? { preset: 'off' };
+      const items = patrolPresets().map((x) => ({ id: x.id, label: x.label }));
+      if (cur.preset === 'custom') items.push({ id: 'custom', label: `自定义（${cur.text || '当前节拍'}）` });
+      return items;
     };
-    const patrolMount = form.querySelector('#grPatrolSel');
-    let patrolSaving = false;
-    const patrolCombo = createCombo({
+    paintPatrolLast(sel);
+    /* 自动合并（2026-11-20 从仓库设置搬来）：跟巡检是「发现 → 审 → 合」同一条链看。
+       管理员固定张坤、不给改（2026-11-20 用户要求），所以这一块只剩一个开关。 */
+    const autoMergeBox = view.querySelector('[data-gr-tab="pr"] [data-automerge]');
+    if (autoMergeBox) {
+      autoMergeBox.onchange = (e) => {
+        sel.autoMerge = e.currentTarget.checked ? 1 : 0;
+        saveRepoSettings(sel.id, { autoMerge: e.currentTarget.checked });
+      };
+    }
+    let saving = false;
+    const combo = createCombo({
       mount: patrolMount,
-      items: patrolItems,
-      value: p.preset ?? 'off',
+      items: buildItems(),
+      value: (sel.patrol ?? { preset: 'off' }).preset ?? 'off',
       onChange: async (preset) => {
-        if (preset === 'custom' || patrolSaving) return; // 「自定义」只是现状展示，不是可选的档
-        patrolSaving = true;
+        if (preset === 'custom' || saving) return; // 「自定义」只是现状展示，不是可选的档
+        saving = true;
         patrolMount.classList.add('is-saving');
         try {
-          const r = await post(`/api/git/repos/${encodeURIComponent(repo.id)}/patrol`, { preset });
-          repo.patrol = r.patrol;
-          // 存成预设之后，「自定义（…）」那条不再代表现状 —— 摘掉，免得还能选回一个不存在的档
-          patrolCombo.setItems(patrolItems.filter((x) => x.id !== 'custom'));
-          patrolCombo.setValue(r.patrol?.preset ?? preset);
+          const r = await post(`/api/git/repos/${encodeURIComponent(sel.id)}/patrol`, { preset });
+          sel.patrol = r.patrol;
+          combo.setItems(buildItems());
+          combo.setValue(r.patrol?.preset ?? preset);
           toast('已保存');
-          paintPatrolLast(repo);
-          await refresh(); // 页面上的状态跟着库走（弹窗挂在 body 上，不受重画影响）
+          paintPatrolLast(sel);
+          /* 不 refresh()：整页重画会闪一下。这里已经就地换了值、重画了「上次巡检」，
+             节拍只影响这一行和后台那条定时任务，没有别处需要刷新。 */
         } catch (err) {
           toast(err.message, 'error');
-          // 存失败要把按钮拉回真实值：combo 是"先画选中、再回调"的，不拉回来屏幕上就挂着一条假节拍
-          patrolCombo.setValue(repo.patrol?.preset ?? 'off');
-          await refresh();
+          combo.setValue(sel.patrol?.preset ?? 'off');
         } finally {
-          patrolSaving = false;
+          saving = false;
           patrolMount.classList.remove('is-saving');
         }
       },
     });
-    form.querySelector('#grPatrolRun').onclick = async (e) => {
-      const btn = e.currentTarget;
-      if (btn.disabled) return;
-      btn.disabled = true;
-      btn.classList.add('busy');
-      try {
-        const r = await post(`/api/git/repos/${encodeURIComponent(repo.id)}/patrol/run`, {});
-        toast(r.ok ? `巡检跑完了：${r.summary ?? '完成'}` : `这次没跑成：${r.error ?? '没有原因'}`);
-        // 上一次结果记在对应任务上：重新取一次，弹窗里那行才不是旧的
-        const st2 = await api('/api/git/status');
-        const fresh = (st2.repos ?? []).find((x) => x.id === repo.id);
-        if (fresh) repo.patrol = fresh.patrol;
-        paintPatrolLast(repo);
-      } catch (err) {
-        toast(err.message, 'error');
-      } finally {
-        btn.disabled = false;
-        btn.classList.remove('busy');
-      }
-    };
-    // 移除入口（2026-10-27 从导航条搬进来）：确认后只删记录，本地克隆目录不动
-    form.querySelector('#grSetRemove').onclick = async () => {
-      if (!(await confirmDo('从清单移除这个仓库？（只删记录，本地克隆目录保留，里面可能有你没推的东西）'))) return;
-      try {
-        const r = await api(`/api/git/repos/${encodeURIComponent(repo.id)}`, { method: 'DELETE' });
-        dlg.close();
-        toast(`已移除。本地目录还在：${r.keptPath}`);
-        await refresh();
-      } catch (e) {
-        toast(e.message, 'error');
-      }
-    };
-    dlg.showModal();
-  };
-  view.querySelectorAll('[data-git-settings]').forEach((el) => {
-    el.onclick = (e) => {
-      e.preventDefault();
-      const repo = repos.find((r) => r.id === el.dataset.gitSettings);
-      if (repo) openGitSettingsDlg(repo);
-    };
-  });
+    const runBtn = $('grPatrolRun');
+    if (runBtn) {
+      runBtn.onclick = async () => {
+        if (runBtn.disabled) return;
+        runBtn.disabled = true;
+        runBtn.classList.add('busy');
+        try {
+          const r = await post(`/api/git/repos/${encodeURIComponent(sel.id)}/patrol/run`, {});
+          toast(r.ok ? `巡检跑完了：${r.summary ?? '完成'}` : `这次没跑成：${r.error ?? '没有原因'}`);
+          // 上一次结果记在对应任务上：重新取一次，那行才不是旧的
+          const st2 = await api('/api/git/status');
+          const fresh = (st2.repos ?? []).find((x) => x.id === sel.id);
+          if (fresh) sel.patrol = fresh.patrol;
+          paintPatrolLast(sel);
+        } catch (err) {
+          toast(err.message, 'error');
+        } finally {
+          runBtn.disabled = false;
+          runBtn.classList.remove('busy');
+        }
+      };
+    }
+  }
 
   /*
    * 管理员弹窗（keeperDlg，2026-10-23）：搜索过滤、**点哪行选哪行、选完即关**——
@@ -991,9 +1173,16 @@ export async function renderGitRepos(root = $('pluginView')) {
    * 一律先看节点还连不连着 DOM（建 PR 弹窗 paintState 同款防抖）。
    */
   if (sel) {
-    fillChanges(sel);
-    if (ghLinked) fillPulls(sel);   // 本地托管的仓库没有 PR 区，别去连 GitHub
+    /* 先发历史：它只跑一次 `git log`，是全屏里最轻的一块，先出画面；
+       改动要 `git status -uall` 扫整个工作区（本机实测十几次串行 git 调用 ≈ 1s），
+       跟着发就会把 git 进程队列和磁盘抢满，历史要排到后面才回。 */
     fillLog(sel);
+    fillChanges(sel);
+    fillBranchTab(sel);
+    // PR 要调 GitHub API：没地址、或账号没连，都别去请求（没连时那格放的是「连接」按钮）
+    if (ghLinked && st.connected) fillPulls(sel);
+    // PR 区未连接时的那个「配置 GitHub 访问令牌」按钮：连完原地重画，PR 卡就出现了
+    $('grPrConnect')?.addEventListener('click', () => openGitConnDlg(st, refresh));
     // PR 区右上那颗「刷新」：只重取 PR（合并/建 PR 之外，比如在 GitHub 上手动关了 PR 时用）
     $('grPullsRefresh')?.addEventListener('click', () => {
       fillPulls(sel).catch((e) => toast(e.message, 'error'));
@@ -1029,7 +1218,9 @@ export async function renderGitRepos(root = $('pluginView')) {
       const d = await api(`/api/git/repos/${encodeURIComponent(repo.id)}/prs`);
       prs = d.prs ?? [];
     } catch (e) {
-      const msg = `<div class="sk-blank">取不到 PR：${esc(e.message)}</div>`;
+      // 错误码不重复摆一遍（2026-11-20 用户："提示太冗余了"）：message 已带「E1079：」前缀，
+      // 前面再拼一次只会读成两截报错。
+      const msg = `<div class="sk-blank">PR获取失败：${esc(String(e.message ?? e).replace(/^E\d{4}：/, ''))}</div>`;
       if (box.isConnected) box.innerHTML = msg;
       if (reviewBox?.isConnected) reviewBox.innerHTML = msg;
       return;
@@ -1091,8 +1282,10 @@ export async function renderGitRepos(root = $('pluginView')) {
 
     /*
      * PR 清单用**表格**（2026-10-30 用户："做成表格的方式，人多了会有很多个 PR"）。
-     * 一行一条、五列（PR / 分支 / 作者 / 检查 / 合并），表头吸顶、条数多了表内滚动 ——
+     * 一行一条、四列（PR / 作者 / 检查 / 合并），表头吸顶、条数多了表内滚动 ——
      * 不再一条一张卡把页面撑得老长；列宽固定，扫一眼就能对齐着比。
+     * 「分支」列 2026-11-20 撤掉（用户："分支这一栏不要了，直接放到 PR 下面"）：
+     * refs 挪进 PR 格、标题下一行，既不占一整列，也不会被截断看不清。
      */
     const rowHtml = (p) => {
       const why = blockReason(p);
@@ -1108,8 +1301,8 @@ export async function renderGitRepos(root = $('pluginView')) {
                     title="打开关联的任务卡">已关联卡</button>` : ''}
               ${p.mergeableState === 'dirty' ? '<span class="pill bad">有冲突</span>' : ''}
             </div>
+            <div class="gr-pr-refs" title="${esc(p.headRef || '?')} → ${esc(p.baseRef || '?')}">${esc(p.headRef || '?')} → ${esc(p.baseRef || '?')}</div>
           </div>
-          <div class="gr-pr-refs">${esc(p.headRef || '?')} → ${esc(p.baseRef || '?')}</div>
           <div class="gr-pr-who">${esc(p.author || '?')}</div>
           <div class="gr-pr-c4">${checkPill(p)}</div>
           <div class="gr-pr-c5">
@@ -1125,7 +1318,7 @@ export async function renderGitRepos(root = $('pluginView')) {
         </div>`;
     };
     const tableHead = `<div class="gr-pr-tr gr-pr-th">
-        <span>PR</span><span>分支</span><span>作者</span><span>状态</span><span>操作</span>
+        <span>PR</span><span>作者</span><span>状态</span><span>操作</span>
       </div>`;
 
     /*
@@ -1269,9 +1462,12 @@ export async function renderGitRepos(root = $('pluginView')) {
    *   "作为用户，代码不是我写的……我只要一个按钮，点了 agent 帮我去修"；
    *   "这些去掉，这些都不是我关心的。这里放一个处理人，选择之后点击确定，就开始修复"；
    *   "这一步是建任务卡修复"。
-   * 所以弹窗只剩三样：**结果标题、处理人下拉、确定**。
+   * 所以弹窗只剩三样：**结果标题、处理人、确定**。
    * 技术细节（runs / job / step）、修复指引、重跑按钮全部撤掉 —— 那些是工程师看的，
    * 真要查去 GitHub 更快。确定 = 服务端建一张任务卡派给这个人（卡在看板上可追、可改人、留痕）。
+   *
+   * 2026-11-20 用户："选人处理这个框太丑了，借鉴拉人这个窗口去做" ——
+   * 原生下拉换成「拉人进群」那套：搜索框（姓名 / 岗位）+ 成员卡片单选列表。
    */
   function openGateDlg(repo, pr) {
     document.getElementById('repoGateDlg')?.close();
@@ -1286,18 +1482,35 @@ export async function renderGitRepos(root = $('pluginView')) {
       return k === 'dev' ? 0 : k === 'test' ? 1 : k === 'ops' ? 2 : 3;
     };
     const people = [...(S.personas ?? [])].sort((a, b) => rank(a) - rank(b));
-    const opts = people
-      .map((p) => `<option value="${esc(p.id)}">${esc(p.name)}${roleNameOf(p) ? ` · ${esc(roleNameOf(p))}` : ''}</option>`)
-      .join('');
+    let gatePick = people[0]?.id ?? '';
+
+    /* 搜索按姓名 + 岗位过滤（跟 #mSearch 同一个拼法）；重画时选中态跟着 gatePick 走 */
+    const paintPeople = () => {
+      const q = ($('gateSearch')?.value || '').trim().toLowerCase();
+      const rows = people.filter((p) => !q || `${p.name}${roleNameOf(p)}`.toLowerCase().includes(q));
+      $('gateList').innerHTML = rows.length
+        ? rows
+            .map(
+              (p) => `<label class="member">
+                <input type="radio" name="gateWho" value="${esc(p.id)}" ${p.id === gatePick ? 'checked' : ''} />
+                <span>${esc(p.name)}</span><em>${esc(roleNameOf(p) || '—')}</em>
+              </label>`,
+            )
+            .join('')
+        : '<div class="dim" style="padding:10px 2px">没找到</div>';
+      $('gateList').querySelectorAll('input[name="gateWho"]').forEach((el) => {
+        el.onchange = () => { gatePick = el.value; };
+      });
+    };
 
     dlg.innerHTML = `
       <form method="dialog">
         <b>检查没过 · #${pr.number}</b>
         <div class="gr-meta gr-gate-refs">${esc(pr.headRef ?? '?')} → ${esc(pr.baseRef ?? '?')}</div>
         <div id="gateBody">
-          <label class="gr-gate-pick-label" for="gateWho">处理人</label>
-          <select id="gateWho" ${people.length ? '' : 'disabled'}>${opts || '<option>还没有员工</option>'}</select>
-          <div class="gr-gate-hint">确定后建一张任务卡交给他（只建卡、不开对话）；修好会把改动推上去，检查自动重跑。</div>
+          <div class="dim gr-gate-intro">确定后建一张任务卡交给他（只建卡、不开对话）；修好会把改动推上去，检查自动重跑。</div>
+          <input id="gateSearch" placeholder="搜索姓名 / 岗位" autocomplete="off" />
+          <div id="gateList" class="members"></div>
         </div>
         <div class="dlg-actions">
           <button type="button" value="cancel">关闭</button>
@@ -1307,7 +1520,12 @@ export async function renderGitRepos(root = $('pluginView')) {
     document.body.append(dlg);
     wireDialogHead(dlg.querySelector('form'));
     dlg.addEventListener('close', () => dlg.remove());
+    paintPeople();
+    $('gateSearch').oninput = paintPeople;
+    /* 搜索框里回车别触发隐式提交 —— 这里一提交就直接建卡了（同 #mSearch 的处理） */
+    $('gateSearch').addEventListener('keydown', (e) => { if (e.key === 'Enter') e.preventDefault(); });
     dlg.showModal();
+    $('gateSearch').focus();
 
     const body = $('gateBody');
     const go = $('gateGo');
@@ -1323,7 +1541,8 @@ export async function renderGitRepos(root = $('pluginView')) {
     go?.addEventListener('click', async (e) => {
       e.preventDefault();
       if (handoff) return goWatch();   // 已经建完了，这颗钮改叫「去看进展」
-      const personaId = $('gateWho')?.value ?? null;
+      const personaId = $('gateList')?.querySelector('input[name="gateWho"]:checked')?.value ?? null;
+      if (!personaId) return toast('先选一个人');
       go.disabled = true;
       go.textContent = '建卡中…';
       try {
@@ -1441,7 +1660,7 @@ export async function renderGitRepos(root = $('pluginView')) {
 
   /*
    * 分支清单 → 下拉条目（2026-10-27，参照 IDE 的分支弹窗）：
-   * 顶部是常用操作（更新项目=同步、提交、推送、新建分支 —— 搜索框搜"推"也能命中操作），
+   * 顶部只剩两个操作（更新项目=同步、新建分支 —— 提交/推送在顶部动作栏，不重复），
    * 下面分组：最近（当前分支打头 + reflog 派生）/ 本地 / 远程 / 标签，三组都按 `/` 前缀分文件夹。
    *
    * 2026-10-27 二改（用户指 IDEA 截图："改成 idea 这种"）：
@@ -1463,30 +1682,30 @@ export async function renderGitRepos(root = $('pluginView')) {
     const arrows = `${u.ahead ? '↑' : ''}${u.behind ? '↓' : ''}`;
     return { ...(arrows ? { badge: arrows } : {}), hint: `${u.upstream}${u.gone ? '（gone）' : ''}` };
   };
-  const branchItems = (b) => [
-    { id: '__op-sync__', label: '更新项目', icon: ICON_SYNC },
-    { id: '__op-commit__', label: '提交…', icon: ICON_COMMIT },
-    { id: '__op-push__', label: '推送…', icon: ICON_PUSH },
-    { id: '__op-new__', label: '新建分支…', icon: ICON_BRANCH },
-    ...(b.recent?.length
+  /*
+   * 分支管理列表的分组（2026-11-20 用户："看着好混乱，没有主次"）：
+   * - 去掉了「最近」组：它和「本地分支」前几条完全重复，一屏里同样两行出现两次，是混乱主因。
+   * - 远程分支 / 标签默认收起：本地分支才是天天用的，远程几十条铺开只会淹掉主线。
+   */
+  const branchGroupItems = (b) => [
+    { header: '本地分支', foldable: false },
+    ...folderize((b.local ?? []).map((n) => ({ id: n, name: n, menu: true, ...branchMeta(b, n) })), '本地'),
+    ...(b.remote?.length
       ? [
-          { header: '最近', foldable: true },
-          ...folderize(
-            b.recent.map((n) => ({ id: n, name: n, menu: true, ...branchMeta(b, n) })),
-            '最近',
-            { keep: true },
-          ),
+          { header: '远程分支', foldable: true },
+          ...folderize((b.remote ?? []).map((n) => ({ id: n, name: n.replace(/^origin\//, ''), menu: true })), '远程'),
         ]
       : []),
-    { header: '本地分支', foldable: true },
-    ...folderize((b.local ?? []).map((n) => ({ id: n, name: n, menu: true, ...branchMeta(b, n) })), '本地'),
-    ...(b.remote?.length ? [{ header: '远程分支', foldable: true }, ...folderize((b.remote ?? []).map((n) => ({ id: n, name: n.replace(/^origin\//, ''), menu: true })), '远程')] : []),
-    ...(b.tags?.length ? [{ header: '标签', foldable: true }, ...b.tags.map((n) => ({ id: `tag:${n}`, label: n, icon: ICON_TAG, cls: 'br' }))] : []),
+    ...(b.tags?.length
+      ? [
+          { header: '标签', foldable: true },
+          ...b.tags.map((n) => ({ id: `tag:${n}`, label: n, icon: ICON_TAG, cls: 'br' })),
+        ]
+      : []),
   ];
 
   async function fillChanges(repo) {
     const box = $('grChanges');
-    const pillMount = $('grBranchMount');
     let state = null;
     try {
       state = (await api(`/api/git/repos/${encodeURIComponent(repo.id)}/changes`)).state;
@@ -1494,82 +1713,22 @@ export async function renderGitRepos(root = $('pluginView')) {
       if (box?.isConnected) box.innerHTML = `<div class="sk-blank">读不到工作区：${esc(e.message)}</div>`;
       return;
     }
-    if (!box?.isConnected || !pillMount?.isConnected) return;
-
-    /*
-     * 分支 pill（2026-10-27，样式参照同类编辑器的分支切换器、条目参参照 IDE 的分支弹窗）：
-     * 按钮上写当前分支，点开才取清单（onOpen），当前分支由 ✓ 表示；切分支的确认
-     * 先读一次本地状态，把「当前 → 目标」和 ahead / 脏工作区摆进确认框。
-     */
-    const combo = createCombo({
-      mount: pillMount,
-      items: branchItems({ local: [state.branch ?? '游离 HEAD'], remote: [] }),
-      value: state.branch ?? '',
-      search: true,
-      placeholder: '搜索分支和操作',
-      // 一打开先看操作项 +「最近」：本地 / 远程 / 标签三组默认收起（2026-10-27 用户：
-      // "本地、远程、标签改成默认折叠"）—— 分支多的时候展开着会一屏铺满，还得先滚。
-      defaultFolded: ['本地分支', '远程分支', '标签'],
-      /*
-       * 按钮上的角标（2026-10-27 用户："已提交，但是没有推送，是不是应该显示一下"）：
-       * ↑ = 本地有提交还没推到上游；↓ = 上游有新的还没拉下来。
-       * 同日二调（用户："不要数字，箭头颜色使用绿色"）：只画箭头、不带个数（个数在提交卡里），
-       * 单独一个绿 span —— buttonText 是纯文本，上不了色。
-       */
-      buttonText: (v) => v || '游离 HEAD',
-      // 按钮文案前的分支图标（2026-10-30 用户："左边加图标，像是idea那样"；边框同日去掉，见 style.css）
-      buttonIcon: ICON_BRANCH,
-      buttonBadge: () => {
-        const up = Number(state.unpushed ?? 0);
-        const down = Number(state.unpulled ?? 0);
-        return `${up > 0 ? '↑' : ''}${down > 0 ? '↓' : ''}`;
-      },
-      onChange: (id) => onBranchPick(repo, id, state.branch ?? '', combo),
-      onOpen: async () => {
-        try {
-          combo.setItems(branchItems(await api(`/api/git/repos/${encodeURIComponent(repo.id)}/branches`)));
-        } catch (e) {
-          toast(e.message, 'error');
-        }
-      },
-    });
-
-    /*
-     * 分支行的二级菜单（2026-10-30 用户："不使用右键了，直接加小箭头，点击展示二级菜单，就是 IDEA 的这种效果"）：
-     * 行尾那颗 `›` 由 combo 自己画（item.menu），点了只开菜单，不选分支 —— 事件从 ui.mjs 的
-     * `combo-menu` 事件过来，这里只管"哪条分支、开在哪儿"。
-     */
-    combo.el.addEventListener('combo-menu', (ev) => {
-      const id = ev.detail?.id ?? '';
-      if (!id) return;
-      const remote = id.startsWith('origin/');
-      const name = remote ? id.slice('origin/'.length) : id;
-      // 整颗浮到**面板外面**（2026-10-30 用户二调："我要的是在弹窗外"）：
-      // x 锚在面板（.combo-pop）右缘外 —— 菜单不压面板边；y 锚在**那一行**（.combo-item）
-      // 的顶上（菜单自带 4px 内边距，减 4 正好让菜单第一项和行顶对齐；
-      // 之前锚的是行尾 `›` 按钮，按钮在行内垂直居中，菜单整体矮了一截）。
-      const rowRect = ev.detail?.el?.closest?.('.combo-item')?.getBoundingClientRect?.();
-      const popRect = ev.detail?.el?.closest?.('.combo-pop')?.getBoundingClientRect?.();
-      openBranchMenu(
-        repo,
-        { x: popRect ? popRect.right : 0, y: rowRect ? rowRect.top - 4 : 0 },
-        { name, remote, cur: state.branch ?? '' },
-        // 签出收进二级菜单第一位（2026-10-30 用户："点击选项就打开，改成二级窗口的一个选项，放在第一位"）：
-        // 复用 onBranchPick 的切分支路径 —— 确认框（ahead / 脏工作区提醒）原样保留。
-        { checkout: () => onBranchPick(repo, id, state.branch ?? '', combo) },
-      );
-    });
+    if (!box?.isConnected) return;
 
     const dirty = state.dirty ?? [];
     const head = $('grChgHead');
     if (head?.isConnected) head.textContent = dirty.length ? `${dirty.length} 个未提交` : '';
+    /* 标题行右上角的当前本地分支：跟提交卡吃同一份 /changes，切分支后整页重画会自动刷新；
+       读不到分支（游离 HEAD）就写「游离 HEAD」，别留一片空白让人以为没读到。 */
+    const hb = $('grHeadBranch');
+    if (hb?.isConnected) hb.textContent = state.branch || '游离 HEAD';
 
     /*
      * 推送卡（2026-10-29 三改，用户："推送单独作为一个卡片"）：
      * 独立成一块，不再长在「提交」卡屁股上 —— 交是交、推是推。
      * 未推提交逐条摆出来（历史卡同款行：sha + 说明 + 作者·时间），按钮在分节标题行右侧。
      * 三种形态：有未推 / 没推过（无上游，首次推会设上游）/ 齐平（没得推，按钮收起来）。
-     * 上游有新的（unpulled）单独一行 —— 动作在分支下拉的「更新项目」里。
+     * 上游有新的（unpulled）单独一行 —— 动作在「分支管理」tab 的「更新项目」里。
      */
     const fillPushCard = () => {
       const pbox = $('grPush');
@@ -1593,7 +1752,7 @@ export async function renderGitRepos(root = $('pluginView')) {
           try {
             const r = await post(`/api/git/repos/${encodeURIComponent(repo.id)}/push`, {});
             toast(`已推送 ${r.pushed}`);
-            await refresh();
+            await softRefresh({ keepDraft: true });
           } catch (err) {
             pbtn.disabled = false;
             pbtn.textContent = '推送';
@@ -1602,7 +1761,7 @@ export async function renderGitRepos(root = $('pluginView')) {
         };
       }
       const behind = down > 0
-        ? `<div class="sk-blank">上游还有 ${down} 个新提交 —— 分支下拉里点「更新项目」拉下来</div>`
+        ? `<div class="sk-blank">上游还有 ${down} 个新提交 —— 到「分支管理」里点「更新项目」拉下来</div>`
         : '';
       const row = (c) => `<div class="gr-log-row" title="${esc(c.sha)} ${esc(c.subject)}">
           <span class="gr-log-sha">${esc(c.sha)}</span>
@@ -1805,7 +1964,7 @@ export async function renderGitRepos(root = $('pluginView')) {
         const r = await post(`/api/git/repos/${encodeURIComponent(repo.id)}/commit`, payload);
         const moved = r.autoBranch ? `（从 ${r.autoBranch.from} 新建）` : '';
         toast(`已提交 ${(r.committed?.sha ?? '').slice(0, 7)} 到 ${r.branch}${moved}（${r.files} 个文件）`);
-        await refresh();
+        await softRefresh();
       } catch (e) {
         commitBtn.disabled = false;
         // 凭据闸 v2：只有"内容扫出密钥"那档灰区才弹危险确认（报错里带「显式确认放行」才弹）；
@@ -1832,43 +1991,10 @@ export async function renderGitRepos(root = $('pluginView')) {
   async function onBranchPick(repo, id, fallbackBranch, combo) {
     const apiRepo = (p) => `/api/git/repos/${encodeURIComponent(repo.id)}${p}`;
 
-    /* ---- 顶部操作区（IDE 式：更新项目 / 提交 / 推送 / 新建分支）---- */
+    /* ---- 顶部操作区（IDE 式：更新项目 / 新建分支）---- */
+    /* 这两个动作与顶部常驻按钮共用 runOp（2026-11-20），改一处两边一起变 */
     if (id === '__op-sync__') {
-      try {
-        await api(apiRepo('/sync'), { method: 'POST' });
-        toast('已拉取最新');
-        await refresh();
-      } catch (e) {
-        toast(e.message, 'error');
-        combo.setValue(fallbackBranch);
-      }
-      return;
-    }
-    if (id === '__op-push__') {
-      try {
-        toast('推送中…');
-        const r = await post(apiRepo('/push'), {});
-        toast(`已推送 ${r.pushed}`);
-        await refresh();
-      } catch (e) {
-        toast(e.message, 'error');
-        combo.setValue(fallbackBranch);
-      }
-      return;
-    }
-    if (id === '__op-commit__') {
-      combo.setValue(fallbackBranch);
-      let st = null;
-      try {
-        st = (await api(apiRepo('/changes'))).state;
-      } catch { /* 读不到按干净处理 */ }
-      if (!st?.dirtyCount) {
-        return toast(st?.canShip ? '工作区是干净的 —— 有没推的提交用分支下拉的「推送…」' : '工作区是干净的，没有可提交的改动');
-      }
-      const inp = document.getElementById('grCommitMsg');
-      if (!inp?.isConnected) return toast('改动卡不在页面上（工作区刚变干净？）');
-      inp.scrollIntoView({ block: 'center' });
-      inp.focus();
+      if (!(await runOp('sync'))) combo.setValue(fallbackBranch);
       return;
     }
     if (id === '__op-new__') {
@@ -1917,7 +2043,110 @@ export async function renderGitRepos(root = $('pluginView')) {
     }
   }
 
-  /* 新建分支小弹窗（IDE「新建分支」）：从当前 HEAD 拉出并切过去；脏工作区不拦（checkout -b 不动文件） */
+  /*
+   * 分支管理 tab（2026-11-20 用户："这个移动到管理分支tab"）：
+   * 数据源、行内容、点击行为都沿用原来下拉里那套（branchGroupItems / onBranchPick / openBranchMenu），
+   * 只是从浮层搬进常驻区域 —— 分支多的时候不用先点开下拉再滚动。
+   * 下拉里已经没有列表，所以 onBranchPick 收不到 combo，这里给个哑的（它只在操作项里调 setValue）。
+   */
+  async function fillBranchTab(repo) {
+    const box = $('grBranchList');
+    if (!box) return;
+    const apiRepo = (p) => `/api/git/repos/${encodeURIComponent(repo.id)}${p}`;
+    let b = null;
+    let st = null;
+    try {
+      b = await api(apiRepo('/branches'));
+    } catch (e) {
+      if (box.isConnected) box.innerHTML = `<div class="sk-blank">读不到分支：${esc(e.message)}</div>`;
+      return;
+    }
+    // 当前分支要从 changes 里拿；读不到就当游离 HEAD，列表照画
+    try {
+      st = (await api(apiRepo('/changes'))).state;
+    } catch { /* 同上 */ }
+    if (!box.isConnected) return;
+
+    const cur = st?.branch ?? '';
+    // 远程 / 标签默认收起：本地分支才是天天用的，远程几十条铺开会淹掉主线
+    const folded = new Set(['远程分支', '标签']);
+    let group = '';
+    const rows = [];
+    for (const it of branchGroupItems(b)) {
+      if (it.header) {
+        group = it.header;
+        const off = it.foldable && folded.has(group);
+        rows.push(
+          `<div class="gr-br-head${it.foldable ? ' foldable' : ''}${off ? ' off' : ''}" data-gr-head="${esc(group)}">` +
+            `<span>${esc(group)}</span>` +
+            (it.foldable ? '<span class="gr-br-caret" aria-hidden="true">›</span>' : '') +
+            `</div>`,
+        );
+        continue;
+      }
+      const hide = folded.has(group) ? ' hide' : '';
+      // 2026-11-20 用户："不要这个" —— 不画文件夹标题行（chore/ 这种），分支直接平铺。
+      // 名字用全名（chore/xxx），前缀没丢，也就不需要缩进。
+      if (it.folder) continue;
+      const label = it.id.startsWith('origin/')
+        ? it.id.slice('origin/'.length)
+        : it.id.startsWith('tag:')
+          ? it.label
+          : it.id;
+      const on = it.id === cur;
+      rows.push(
+        `<button type="button" class="gr-br-row${on ? ' on' : ''}${hide}"` +
+          ` data-br-id="${esc(it.id)}" data-gr-of="${esc(group)}" title="${esc(it.hint || label)}">` +
+          `<span class="gr-br-mark">${on ? '<span class="gr-br-dot" title="当前分支" aria-label="当前分支"></span>' : ''}</span>` +
+          `<span class="gr-br-ic">${it.icon ?? ''}</span>` +
+          `<span class="gr-br-name">${esc(label)}</span>` +
+          (it.hint ? `<span class="gr-br-hint">${esc(it.hint)}</span>` : '') +
+          (it.badge ? `<span class="gr-br-badge">${esc(it.badge)}</span>` : '') +
+          (it.menu ? '<span class="gr-br-more" aria-hidden="true">›</span>' : '') +
+          `</button>`,
+      );
+    }
+    box.innerHTML = rows.join('') || '<div class="sk-blank">没有分支</div>';
+
+    const noCombo = { setValue: () => {} };
+    box.onclick = (e) => {
+      // 分组标题（远程 / 标签）可点开收起
+      const hd = e.target.closest('[data-gr-head].foldable');
+      if (hd) {
+        const g = hd.dataset.grHead;
+        const off = !folded.has(g);
+        if (off) folded.add(g);
+        else folded.delete(g);
+        hd.classList.toggle('off', off);
+        box.querySelectorAll('[data-gr-of]').forEach((n) => {
+          if (n.dataset.grOf === g) n.classList.toggle('hide', off);
+        });
+        return;
+      }
+      const row = e.target.closest('[data-br-id]');
+      if (!row || !box.contains(row)) return;
+      const id = row.dataset.brId;
+      // 行尾 › 只开菜单、不切分支（与下拉里的行为一致）
+      if (e.target.closest('.gr-br-more')) {
+        const remote = id.startsWith('origin/');
+        const name = remote ? id.slice('origin/'.length) : id;
+        const r = row.getBoundingClientRect();
+        openBranchMenu(repo, { x: r.right, y: r.top }, { name, remote, cur: id === cur ? name : '' }, {
+          checkout: () => onBranchPick(repo, id, cur, noCombo),
+        });
+        return;
+      }
+      // 行本身不触发任何操作（2026-11-20 用户："点击这个不要触发任何操作，
+      // 点击右边的箭头有选项卡，通过选项卡操作"）—— 切换 / 删除等都走行尾 › 的菜单。
+    };
+
+    const nb = $('grBranchNew');
+    if (nb) nb.onclick = () => openBranchNewDlg(repo);
+    const sb = $('grBranchSync');
+    if (sb) sb.onclick = () => runOp('sync');
+  }
+
+
   function openBranchNewDlg(repo) {
     document.getElementById('grBranchNewDlg')?.close();
     const dlg = document.createElement('dialog');
@@ -2084,25 +2313,283 @@ export async function renderGitRepos(root = $('pluginView')) {
     openCtxMenu(pos.x, pos.y, items);
   }
 
+  /*
+   * 历史图形树（2026-11-20 用户："我想要 idea 的那个图形树效果"）。
+   *
+   * 按 gitk / IDEA Log 的 lane 思路排线：每条 lane 记着「下一个该出现的提交」，
+   * 扫到某条提交时它落在哪条 lane，就画节点；父提交接上同一 lane，额外的父
+   * （merge 的第二父）另起一条 lane。多个 lane 同时等一个提交就是分支汇合，
+   * 这一行把它们连到节点上。后端 %P/%D 已经给齐，前端只负责几何。
+   *
+   * 行高与 lane 宽必须和 CSS 里的 #grLog .gr-log-row 对齐（26px），否则上下行
+   * 的竖线接不上 —— 树会一节一节断开。
+   *
+   * 三个常量的**声明在模块顶层**（不在这里）：这些函数都嵌在 renderGitRepos 里，
+   * 而 renderGitRepos 的函数体在 fillLog 被调用之后才执行到本行 —— 声明放这儿就是
+   * 暂时性死区（2026-11-20 实报"历史渲染不出来"：`Cannot access 'logRepoId' before
+   * initialization`，整段日志卡在「读提交记录…」）。凡是 `await` 之前就会用到的
+   * 常量/状态，一律放模块顶层。
+   */
+
+  function logGraphRows(commits) {
+    const rows = [];
+    const lanes = [];
+    /*
+     * 颜色跟着**分支**走，不跟着列号走（2026-11-20，对齐 IDEA）。
+     *
+     * 按列号取色看着没问题，直到某一列收束：它被下一条分支复用时，颜色就"换主人"了 ——
+     * 同一条分支往下走几行突然由绿变蓝。IDEA 的口径是一条分支一个色，一路到底。
+     * 所以颜色号挂在 lane 上一起走：出生时领一个，第一父继承本列时颜色原样跟着，
+     * 收束时和 lanes 一起清空。
+     *
+     * 领色规则是"当前**没被占**的最左色号"（不是自增取模）：自增取模时，1 号色和 9 号色
+     * 隔着 8 次出生，却可能在屏幕上同时活着 —— 两条线一个颜色，等于没上色（实测 354 行里
+     * 撞了 20 行）。8 色全占满才退回自增（那时必然撞色，无解，除非扩色板）。
+     */
+    const LANE_PALETTE = 8;
+    const laneColors = [];
+    let cursor = LANE_PALETTE - 1;
+    const takeColor = () => {
+      const used = new Set();
+      for (const c of laneColors) {
+        if (c == null) continue;
+        used.add(((c % LANE_PALETTE) + LANE_PALETTE) % LANE_PALETTE);
+      }
+      // 从上次用过的下一个色号开始找 --- 只取"最左空位"会让整棵树永远只有 0/1/2 三个色
+      for (let k = 1; k <= LANE_PALETTE; k += 1) {
+        const i = (cursor + k) % LANE_PALETTE;
+        if (!used.has(i)) { cursor = i; return i; }
+      }
+      cursor = (cursor + 1) % LANE_PALETTE;
+      return cursor;   // 满员兜底：8 列全占着，只能撞色
+    };
+    const trim = (arr) => {
+      let last = arr.length - 1;
+      while (last >= 0 && arr[last] == null) last -= 1;
+      return arr.slice(0, last + 1);
+    };
+    commits.forEach((c, index) => {
+      const key = c.full || c.sha;
+      let lane = lanes.indexOf(key);
+      let born = false;
+      if (lane < 0) {
+        /* 新分支（某个 ref 的顶端）第一次出现：优先复用左侧已收束的空列。
+           以前直接 push 到末尾，空列留在中间，分支就"隔着一列空白"从右边冒出来。 */
+        lane = lanes.indexOf(null);
+        if (lane < 0) { lane = lanes.length; lanes.push(key); laneColors.push(takeColor()); }
+        else { lanes[lane] = key; laneColors[lane] = takeColor(); }
+        born = true;
+      }
+      const start = trim(lanes.slice());
+      const startColors = trim(laneColors.slice());
+      // 已有别的 lane 也在等这条提交（多分支指向同一 commit）→ 本行汇入节点
+      const joins = [];
+      for (let i = 0; i < start.length; i += 1) {
+        if (i !== lane && start[i] === key) joins.push(i);
+      }
+      for (const i of joins) { lanes[i] = null; laneColors[i] = null; }
+      /* 节点颜色要**在这里**取定：根提交（没有父）下面会把本列清空，
+         等到 rows.push 时再读就成了 null（第一版就踩了，末行节点变默认色）。 */
+      const laneColor = laneColors[lane];
+      const parents = Array.isArray(c.parents) ? c.parents : [];
+      const parentLanes = [];
+      if (parents.length) {
+        lanes[lane] = parents[0];
+        parentLanes.push(lane);
+        for (const p of parents.slice(1)) {
+          let pl = lanes.indexOf(p);
+          if (pl < 0) {
+            pl = lanes.indexOf(null);          // 优先复用左侧已收束的空位，树更紧凑
+            if (pl < 0) { pl = lanes.length; lanes.push(null); laneColors.push(takeColor()); }
+            else laneColors[pl] = takeColor(); // 空列换主人：新分支领新色，别沿用上一条的颜色
+            lanes[pl] = p;
+          }
+          parentLanes.push(pl);
+        }
+      } else {
+        lanes[lane] = null;
+        laneColors[lane] = null;
+      }
+      rows.push({
+        commit: c,
+        lane,
+        laneColor,                     // 本行节点的颜色（born 时刚领的、或继承来的）
+        born,
+        /* 这一行的**合并出线**（斜着弯到下一行的那几条）落在了哪些列。
+           下一行据此知道「这一列是从节点斜着过来的，头顶没有竖直段」——
+           否则会补一截从行顶到圆点的竖线，悬在点上成一撮断头茬（用户："这个冒头的茬不太美观"）。 */
+        diagInto: parentLanes.filter((pl) => pl !== lane),
+        start,
+        startColors,                   // 与 start 同长：入线仍用**旧分支**的颜色
+        end: trim(lanes.slice()),
+        endColors: trim(laneColors.slice()),   // 与 end 同长：出线弯到的那列用**它的**颜色
+        joins,
+        parentLanes,
+        last: index === commits.length - 1,
+      });
+    });
+    return rows;
+  }
+
+  /* `%D` 的一串 ref 拆成胶囊：HEAD -> main / tag: v1 / origin/main / feat/x */
+  function logRef(raw) {
+    let s = String(raw ?? '').trim();
+    if (!s) return null;
+    if (s === 'HEAD') return { kind: 'head', name: 'HEAD' };
+    let head = false;
+    if (s.startsWith('HEAD -> ')) { head = true; s = s.slice(8); }
+    if (s.startsWith('origin/HEAD -> ')) s = s.slice(14);
+    if (s.startsWith('tag: ')) return { kind: 'tag', name: s.slice(5) };
+    if (s === 'stash' || s.startsWith('stash@')) return { kind: 'ref', name: 'stash' };
+    return { kind: head ? 'head' : (s.includes('/') ? 'remote' : 'branch'), name: s };
+  }
+
+  /*
+   * 画树：所有线画在**一整块覆盖层 SVG** 里（不是每行一个 svg）。
+   *
+   * 为什么必须是一块（2026-11-20 二改，用户贴 Git Graph 截图："bandi 也要这个效果"）：
+   * 分行画时，分叉曲线只能在**本行 26px 内**收完 —— 而它本该从本行节点一路弯到
+   * 下一行节点的 (X(pl), H+cy)，跨了 1.5 行。跨行那半截要么画不出来、要么靠 overflow
+   * 硬溢出（还会被下一行的底盖掉），拐点就成了个小弯钩，跟 Git Graph 顺下来的弧线不是一回事。
+   * 整块 SVG 一次画完，曲线天然连续。
+   *
+   * 层叠：SVG 绝对定位盖在行之上（z-index 2，pointer-events: none）——
+   * hover 底色在下面、线在上面才是对的；反过来行底色会把跨行曲线切掉。
+   * 圆点必须画在**所有线之后**，否则线会从点上穿过去。
+   */
+  function renderLogGraph(commits) {
+    const rows = logGraphRows(commits);
+    const width = Math.max(1, ...rows.map((r) => Math.max(r.start.length, r.end.length)));
+    const laneW = width > LOG_LANE_MAX
+      ? Math.max(14, Math.floor((LOG_LANE_MAX * LOG_LANE_W) / width))
+      : LOG_LANE_W;
+    const H = LOG_ROW_H;
+    const cy = H / 2;
+    const gw = Math.max(width * laneW, laneW);
+    const totalH = rows.length * H;
+    /* 参数是**颜色号**（不是列号）：列会被复用、颜色不会 —— 见 logGraphRows 的 laneColors。
+       颜色号可能很大（只增不减），取模时先补正再 +1（`-1 % 8` 是 -1，不补会拼出 --gr-lane-0）。 */
+    const color = (ci) => `var(--gr-lane-${((((Number(ci) || 0) % 8) + 8) % 8) + 1})`;
+    const X = (i) => i * laneW + laneW / 2;
+    const lines = [];
+    const dots = [];
+    const items = [];
+
+    rows.forEach((r, ri) => {
+      const c = r.commit;
+      const key = c.full || c.sha;
+      const top = ri * H;
+      const cx = X(r.lane);
+      /* 本行节点是被上一行的合并出线**斜着**送过来的（不是竖直续下来的）——
+         见 logGraphRows 里 diagInto 的注释。 */
+      const prev = ri > 0 ? rows[ri - 1] : null;
+      const arrivedDiag = !!(prev && Array.isArray(prev.diagInto) && prev.diagInto.includes(r.lane));
+      /* 参数是颜色号：入线用**原分支**的颜色（startColors 是与 start 同长的快照），
+         出线弯到的那一列用**那一列**的颜色（endColors），弯过去才不换色。 */
+      const p = (d, ci) => lines.push(`<path d="${d}" stroke="${color(ci)}"/>`);
+
+      /* 入口：每一列在本行上半截怎么走 */
+      for (let i = 0; i < r.start.length; i += 1) {
+        const s = r.start[i];
+        if (s == null) continue;
+        const ci = r.startColors[i];
+        if (i === r.lane) {
+          /* born = 这条 lane 是本行才出现的（分支顶端）：上一行同位置没有线，
+             再画「从行顶到节点」的入口线就成了半空断下来的断头线，跳过。
+             diagInto = 上一行的合并出线是**斜着**弯到本行节点中心的，头顶本来就没有竖线，
+             再补一截就又冒出个茬（2026-11-20 用户："这个冒头的茬不太美观"）。 */
+          if (!r.born && !arrivedDiag) p(`M${X(i)} ${top}V${top + cy}`, ci);
+        } else if (s === key) {
+          /* 别的 lane 也在等这条提交（多分支指向同一 commit）：从行顶弯进本行节点 */
+          p(`M${X(i)} ${top}C${X(i)} ${top + cy * 0.62} ${cx} ${top + cy * 0.62} ${cx} ${top + cy}`, ci);
+        } else {
+          p(`M${X(i)} ${top}V${top + H}`, ci);   // 别的分支贯穿本行
+        }
+      }
+      /* 出线：父提交那一列从节点往下走；跨列时一路弯到**下一行的节点**（H + cy） */
+      if (ri < rows.length - 1) {
+        for (const pl of r.parentLanes) {
+          if (pl === r.lane) p(`M${cx} ${top + cy}V${top + H}`, r.laneColor);
+          else {
+            p(`M${cx} ${top + cy}C${cx} ${top + cy + H * 0.55} ${X(pl)} ${top + H + cy - H * 0.55} ${X(pl)} ${top + H + cy}`, r.endColors[pl] ?? r.laneColor);
+          }
+        }
+      }
+
+      /* refs：去重、HEAD 排最前、最多挂三颗 —— 再多就把提交说明挤没了 */
+      const refs = [];
+      const seen = new Set();
+      for (const raw of String(c.refs ?? '').split(',')) {
+        const ref = logRef(raw);
+        if (!ref || seen.has(ref.name)) continue;
+        seen.add(ref.name);
+        refs.push(ref);
+      }
+      refs.sort((a, b) => (a.kind === 'head' ? -1 : b.kind === 'head' ? 1 : 0));
+      const shown = refs.slice(0, 3);
+      const chips = shown
+        .map((ref) => `<span class="gr-ref gr-ref-${ref.kind}" title="${esc(ref.name)}">${esc(ref.name)}</span>`)
+        .join('')
+        + (refs.length > shown.length ? `<span class="gr-ref gr-ref-more">+${refs.length - shown.length}</span>` : '');
+      const isHead = refs.some((ref) => ref.kind === 'head');
+
+      /* 节点：普通提交实心，**合并提交空心**（Git Graph / IDEA 同一个约定）——
+         一眼能看出"这条提交把两条线收成一条"，不然只能靠数线。 */
+      const isMerge = (c.parents || []).length > 1;
+      if (isHead) {
+        dots.push(`<circle cx="${cx}" cy="${top + cy}" r="7.5" fill="none" stroke="${color(r.laneColor)}" stroke-width="1.4" opacity=".45"/>`);
+      }
+      dots.push(isMerge
+        ? `<circle cx="${cx}" cy="${top + cy}" r="4" fill="var(--panel)" stroke="${color(r.laneColor)}" stroke-width="2.2"/>`
+        : `<circle cx="${cx}" cy="${top + cy}" r="4.4" fill="${color(r.laneColor)}" stroke="var(--panel)" stroke-width="2"/>`);
+
+      /* 图形列只留**占位宽**（宽高由覆盖层 SVG 画），文字各列按固定宽度对齐：
+         sha 62 / 说明弹性 / 胶囊紧随说明 / 作者 108 / 日期 78 右对齐 —— Git Graph 的列形。 */
+      items.push(`<div class="gr-log-row" title="${esc(c.sha)} ${esc(c.subject)}">
+        <span class="gr-log-graph" style="width:${gw}px"></span>
+        <span class="gr-log-sha">${esc(c.sha)}</span>
+        <span class="gr-log-sub">${esc(c.subject)}</span>
+        ${chips ? `<span class="gr-log-refs">${chips}</span>` : ''}
+        <span class="gr-log-gap"></span>
+        <span class="gr-log-who">${esc(c.author)}</span>
+        <span class="gr-log-date">${esc(String(c.date ?? '').slice(5, 16))}</span>
+      </div>`);
+    });
+
+    return `<div class="gr-log-wrap">
+      <svg class="gr-log-lines" width="${gw}" height="${totalH}" viewBox="0 0 ${gw} ${totalH}" aria-hidden="true">${lines.join('')}${dots.join('')}</svg>
+      <div class="gr-log-rows">${items.join('')}</div>
+    </div>`;
+  }
+
+  /* 历史的翻页状态与常量在模块顶层（见文件前部"历史卡的状态"一段）——
+     放在这里会被 fillLog 提前访问到，就是暂时性死区。 */
+
   async function fillLog(repo) {
     const box = $('grLog');
     if (!box) return;
+    // 换仓库回到首档：上一个仓库"已经加载到 900 条"不该套到新仓库上
+    if (logRepoId !== repo.id) { logRepoId = repo.id; logLimit = LOG_PAGE; }
     try {
-      const d = await api(`/api/git/repos/${encodeURIComponent(repo.id)}/log`);
+      const d = await api(`/api/git/repos/${encodeURIComponent(repo.id)}/log?limit=${logLimit}`);
       if (!box.isConnected) return;
       if (!d.commits?.length) {
         box.innerHTML = `<div class="sk-blank">${esc(d.note || '还没有提交')}</div>`;
         return;
       }
-      box.innerHTML = d.commits
-        .map(
-          (c) => `<div class="gr-log-row" title="${esc(c.sha)} ${esc(c.subject)}">
-            <span class="gr-log-sha">${esc(c.sha)}</span>
-            <span class="gr-log-sub">${esc(c.subject)}</span>
-            <span class="gr-log-who">${esc(c.author)} · ${esc(String(c.date ?? '').slice(5, 16))}</span>
-          </div>`,
-        )
-        .join('');
+      /* more 由服务端多拉一条算出来 —— 不确定就不摆按钮，点了没反应比没有按钮更糟 */
+      const hasMore = d.more && logLimit < LOG_PAGE_MAX;
+      box.innerHTML = renderLogGraph(d.commits)
+        + (hasMore ? `<div class="gr-log-more"><button type="button" class="mini" id="grLogMore">加载更多（已显示 ${d.commits.length} 条）</button></div>` : '');
+      const more = box.querySelector('#grLogMore');
+      if (more) {
+        more.onclick = () => {
+          if (more.disabled) return;          // 连点两下别变成 +600
+          more.disabled = true;
+          logLimit = Math.min(logLimit + LOG_PAGE, LOG_PAGE_MAX);
+          fillLog(repo);
+        };
+      }
     } catch (e) {
       if (box.isConnected) box.innerHTML = `<div class="sk-blank">读不到提交记录：${esc(e.message)}</div>`;
     }

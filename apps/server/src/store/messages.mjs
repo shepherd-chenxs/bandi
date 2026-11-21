@@ -1,6 +1,7 @@
 /* store/messages.mjs —— 2026-10-22 由 store.mjs 按域拆出。SQL 只在 store/ 目录内。 */
 
 import { db, ensureColumn, newId, nowIso } from './db.mjs';
+import { maskAccountName } from './users.mjs';
 import { createConversation, listHiddenConversations } from './conversations.mjs';
 import { emitConv } from '../events.mjs';
 
@@ -26,12 +27,15 @@ export function getMessageByRowid(conversationId, rowid) {
 }
 
 
-/** 真人署名带出来（用户删号后 name 为空 —— 界面回落"我"，不报错） */
+/** 真人署名带出来（用户删号后名字为空 —— 界面回落"我"，不报错）。
+ *  显示名口径（2026-11-21 独立操作平台）：**昵称优先**，没有昵称退回账号名；
+ *  账号名是手机号的在 parseAtts 里统一打码 —— 别人的手机号不从署名里漏出去。 */
 const SENDER_JOIN = 'LEFT JOIN users u ON u.id = m.senderUserId';
+const SENDER_NAME = "COALESCE(NULLIF(u.nickname, ''), u.name) AS senderUserName";
 
 export function listMessages(conversationId) {  return db
     .prepare(
-      `SELECT m.*, p.name AS personaName, u.name AS senderUserName
+      `SELECT m.*, p.name AS personaName, ${SENDER_NAME}
          FROM messages m LEFT JOIN personas p ON p.id = m.personaId ${SENDER_JOIN}
         WHERE m.conversationId = ? ORDER BY m.createdAt, m.rowid`,
     )
@@ -47,7 +51,7 @@ export function listMessages(conversationId) {  return db
 export function listMessagesByTask(taskId) {
   return db
     .prepare(
-      `SELECT m.*, p.name AS personaName, u.name AS senderUserName
+      `SELECT m.*, p.name AS personaName, ${SENDER_NAME}
          FROM messages m LEFT JOIN personas p ON p.id = m.personaId ${SENDER_JOIN}
         WHERE m.taskId = ? ORDER BY m.createdAt, m.rowid`,
     )
@@ -63,7 +67,7 @@ export function listMessagesByTask(taskId) {
 export function listMessagesSince(conversationId, afterRowid, excludeMessageId = null) {
   return db
     .prepare(
-      `SELECT m.rowid AS rid, m.*, p.name AS personaName, u.name AS senderUserName
+      `SELECT m.rowid AS rid, m.*, p.name AS personaName, ${SENDER_NAME}
          FROM messages m LEFT JOIN personas p ON p.id = m.personaId ${SENDER_JOIN}
         WHERE m.conversationId = ? AND m.rowid > ? ORDER BY m.rowid`,
     )
@@ -80,6 +84,8 @@ function parseAtts(m) {
   if (m.meta) {
     try { m.meta = JSON.parse(m.meta); } catch { m.meta = null; }
   }
+  // 署名打码（2026-11-21 独立操作平台）：昵称/账号名拼好后过一遍 —— 手机号形态的名字出不了库
+  if (m.senderUserName) m.senderUserName = maskAccountName(m.senderUserName);
   return m;
 }
 

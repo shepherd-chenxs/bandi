@@ -63,21 +63,32 @@
 
 /* 右栏：三段（属性 / Pull Request / 详情），一户一行，标签窄、值占满 */
 .tc-side { min-width: 0; overflow: auto; border-left: 0; padding-left: 16px; }
-.tc-side h3 { font-size: var(--t-sec); color: var(--text); font-weight: var(--w-title); margin: 16px 0 8px;
-              padding-top: 16px; border-top: 1px solid var(--line); }
-.tc-side h3:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+/* 右栏分段标题：标题下面一条分隔线（2026-11-20 用户："加分隔线"）。
+   原来线在标题**上面**，人看到的是一条悬空线；改成标题自带下划线，段与段之间一眼分开。 */
+.tc-side h3 { font-size: var(--t-sec); color: var(--text); font-weight: var(--w-title);
+              margin: 16px 0 10px; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
+.tc-side h3:first-child { margin-top: 0; }
 .tc-prop { display: grid; grid-template-columns: 60px minmax(0, 1fr); align-items: center;
            gap: 6px; padding: 4px 0; font-size: 12.5px; }
+/*
+ * PR 那一行是多行值（链接/状态 + 标题 + 上次查询时间），且不再带标签
+ * （2026-11-20 用户："去掉关联的 PR 这个标签"）：整块从左边直接开始，
+ * 不占 60px 的标签列，也就不会出现左边悬空的空白。
+ */
+.tc-prop-pr { padding: 4px 0; font-size: 12.5px; min-width: 0; }
 .tc-prop-k { color: var(--dim); }
 .tc-prop-v { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 /* PR 区标题行（2026-11-16）：入口收进标题右边两颗图标钮（＋ 新建 / 链环 关联），
-   点开弹窗 —— 输入行不再常驻右栏。边框线归标题行管（h3 自身那套归零，免得双线）。 */
+   点开弹窗 —— 输入行不再常驻右栏。
+   2026-11-20：分隔线跟其他段一致，放在标题**下面**（用户："加在标题下"），
+   原来挂在标题行顶部，看着是悬在标题上方的一条线。 */
 .tc-pr-head { display: flex; align-items: center; justify-content: space-between; gap: 8px;
-              margin: 16px 0 8px; padding-top: 16px; border-top: 1px solid var(--line); }
+              margin: 16px 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
 .tc-pr-head h3 { margin: 0; padding: 0; border: 0; }
 .tc-pr-acts { display: inline-flex; gap: 6px; }
+/* 2026-11-21 用户："去掉边框"——两颗图标钮不画描边，只留悬停底色当可点的反馈 */
 .tc-pr-ic { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px;
-            padding: 0; border: 1px solid var(--line); border-radius: 8px; background: none;
+            padding: 0; border: 0; border-radius: 8px; background: none;
             color: var(--dim); cursor: pointer; }
 .tc-pr-ic:hover { color: var(--text); background: var(--active); }
 .tc-pr-ic:disabled { opacity: 0.5; cursor: default; }
@@ -137,13 +148,19 @@
 /* 无回复的空容器（接 live 气泡）：竖排 */
 .tc-replies:not(details) { display: flex; flex-direction: column; gap: 8px; }
 /* 有回复的折叠容器：summary 是开关，body 里才是回复列表 */
-/* 收工状态条（讨论区顶上一条）：一眼回答"他干完没有" —— 2026-10-30 用户："感知不到活什么时候干完" */
-.tc-statebar { display: flex; align-items: baseline; gap: 6px; font-size: 12px; line-height: 1.5;
-               padding: 8px 12px; border-radius: 8px; margin: 0 0 12px; border: 1px solid var(--line); }
-.tc-statebar.ok   { background: color-mix(in srgb, var(--ok) 10%, transparent);  border-color: var(--ok); }
-.tc-statebar.bad  { background: color-mix(in srgb, var(--bad) 10%, transparent); border-color: var(--bad); }
-.tc-statebar.warn { background: color-mix(in srgb, var(--warn) 14%, transparent); border-color: var(--warn); }
-.tc-statebar.idle { background: var(--chip); }
+/* 收工状态条（讨论区顶上一条）：一眼回答"他干完没有" —— 2026-10-30 用户："感知不到活什么时候干完"。
+   2026-11-20 用户截图："这个红框提示" 太抢眼 —— 不再整条染色画框，
+   改成中性底 + 左侧语义色圆点、只有结论词着色（跟全站的徽标语义同一套）。 */
+.tc-statebar { display: flex; align-items: flex-start; gap: 7px; font-size: 12px; line-height: 1.5;
+               padding: 8px 12px; border-radius: 8px; margin: 0 0 12px;
+               border: 1px solid var(--line); background: var(--chip); color: var(--dim); }
+.tc-statebar::before { content: ''; flex: 0 0 auto; width: 6px; height: 6px; border-radius: 50%;
+                       margin-top: 6px; background: var(--tc-tone, var(--dim)); }
+.tc-statebar b { color: var(--tc-tone, var(--text)); font-weight: 600; }
+.tc-statebar.ok   { --tc-tone: var(--ok); }
+.tc-statebar.bad  { --tc-tone: var(--bad); }
+.tc-statebar.warn { --tc-tone: var(--warn); }
+.tc-statebar.idle { --tc-tone: var(--dim); }
 /* 折叠条（2026-11-06 用户发截图拍板）：左一条短灰线 + 「展开N条回复」+ 细 chevron，
    展开后文案换「收起N条回复」、chevron 翻头。不再露"作者：摘要"预览（2026-10-24 那版撤了），
    他的回话不被藏的问题仍由"新回复自动展开"兜着。 */
@@ -187,6 +204,16 @@ details.tc-replies[open] > .tc-replies-toggle .tc-replies-unfold { display: inli
 /* 输入区：固定在左栏底部（不随内容滚动），上面一条细线跟讨论区隔开 */
 /* 输入框宽度跟上面的分隔线一致（不再留 16px 右内边距，否则横线比框长出一截，看着不齐） */
 .tc-composer { flex: 0 0 auto; background: none; padding: 10px 0 0; border-top: 1px solid var(--line); }
+/* 右边也要留出呼吸位（2026-11-20 用户："这个输入框跟右边要有间隙"）。
+   之前框的右沿就压在左栏那条竖线上（0 间隙），左边却有 20 —— 一边贴死一边留白，看着歪。
+   这里用 **margin-right 而不是 padding-right**：分隔线画在元素的 border-box 上，padding 会让线
+   比框多出 16px（2026-10-19 用户提过"横线比框长出一截"）；margin 让线跟框一起收，
+   三者右沿落在同一条线上 —— 框、分隔线、讨论列（`.tc-main-scroll` 的 padding-right 16）。
+   竖线照旧通到底：它是 `.tc-main` 的 border-right，跟这条横线不是同一条边。
+   ⚠️ 只管**贴在底部的那个**：`.tc-main >` 限定住，停靠进议题的 `.tc-composer.inline`
+   和手机抽屉里那份不受影响（它们各自有自己的内边距）。 */
+.tc-main > .tc-composer,
+.tc-main > .tc-new-topic { margin-right: 16px; }
 /* 输入盒自带边框（同主聊天 .input-wrap 的套路）：textarea / 附件条 / 工具栏全部**文档流**纵排。
    旧版工具栏绝对定位浮在 textarea 上，文字一滚动就从按钮后面穿过去（2026-10-23 用户截图）——
    文档流之后盒子随内容自动变高，谁也不压谁。 */

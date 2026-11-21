@@ -40,7 +40,7 @@ const check = (label, ok, detail = '') => {
  */
 const { repoRoot, dbPath } = await import('./config.mjs');
 const store = await import('./store.mjs');
-const { projectTasks, allTasks, personaTasks } = await import('./project-tasks.mjs');
+const { projectTasks, allTasks, personaTasks, startProjectTask, recoverInterruptedCards } = await import('./project-tasks.mjs');
 
 if (!path.resolve(dbPath).toLowerCase().startsWith(path.resolve(tmp).toLowerCase())) {
   console.log(`✗ 临时库没生效：dbPath=${dbPath} 不在 ${tmp} 下 —— 拒绝继续（避免写进真库）`);
@@ -327,6 +327,52 @@ try {
   check('派不出去也不会留下 runId（看板不会显示"在跑"）', !store.getProjectTask(autoId)?.runId, String(store.getProjectTask(autoId)?.runId));
   check('撞忙要落排队标记（节拍会自己再试）', !!store.getProjectTask(autoId)?.queuedAt, String(store.getProjectTask(autoId)?.queuedAt));
   store.updateProjectTask(autoId, { queuedAt: null }); // 别给后面的用例留下会自动开工的卡
+
+  /*
+   * 「在跑」的判据 = **那条运行还活着**，不是"卡上挂着 runId"（2026-11-20 用户实报：
+   * 重启把运行判死后，卡停在「进行中」+ 死 runId，点「重跑一次」永远回 E1048
+   * 「这张卡已经在跑了」，界面上没有任何出口；只能把卡手动改回「待办」才绕得开）。
+   * 两条一起钉，缺一条都会退回到"焊死"：
+   *   ① 运行还活着 → 照旧挡；
+   *   ② 运行已经没了（进程重启判死 / 库里根本没有这条）→ 不算在跑，放它去派。
+   * ② 这里派活仍会被**个人并发闸**挡下（上一条用例已经把他配成 maxParallel=1、手上有一条在跑），
+   * 正好借这个"必挡"当保险：验证的是错因，不是真跑一轮 agent。
+   */
+  const liveRun = store.activeRun(devConv.id);
+  check('前置：他手上有一条在跑的 run', !!liveRun?.id, String(liveRun?.id));
+  store.updateProjectTask(autoId, { status: 'doing', runId: liveRun?.id ?? null });
+  let dupErr = null;
+  try { startProjectTask(autoId); } catch (e) { dupErr = e; }
+  check('运行还活着 → 派发仍被挡（这张卡已经在跑了）', /已经在跑了/.test(String(dupErr?.message ?? '')), String(dupErr?.message ?? '没挡住'));
+
+  store.updateProjectTask(autoId, { status: 'doing', runId: 'r-早就没了' });
+  let staleErr = null;
+  try { startProjectTask(autoId); } catch (e) { staleErr = e; }
+  check(
+    '死 runId 不算在跑：错因不该是「已经在跑了」',
+    !!staleErr && !/已经在跑了/.test(String(staleErr.message ?? '')),
+    String(staleErr?.message ?? '居然真派出去了'),
+  );
+  check('放它去派之后卡退回「待办」（不留在假「进行中」）', store.getProjectTask(autoId)?.status === 'todo', String(store.getProjectTask(autoId)?.status));
+  store.updateProjectTask(autoId, { queuedAt: null });
+
+  /*
+   * **存量**僵尸卡（2026-11-20）：上一次开机（旧代码）就判死过的那批 —— 运行早已 `failed`，
+   * 卡还挂在「进行中」。启动清账的 reap 只认 `running` 的行，碰不到它们，只修那条路的话
+   * 重启一次也治不好（实报 pt-4b6bf1ec 就是这种存量）。所以另有一遍全库收尾，这条钉住它。
+   */
+  store.updateProjectTask(autoId, { status: 'doing', runId: orphanTurn.id }); // orphanTurn：造数据时就 finish 成 failed 的那条
+  const rec = recoverInterruptedCards();
+  check('存量僵尸卡被收尾成「失败」', store.getProjectTask(autoId)?.status === 'failed' && rec.fixed.includes(autoId),
+    `${store.getProjectTask(autoId)?.status} ${JSON.stringify(rec)}`);
+  check('卡描述里补了「[运行结束] 跑挂了」那行', /\[运行结束\] 跑挂了/.test(String(store.getProjectTask(autoId)?.description ?? '')),
+    String(store.getProjectTask(autoId)?.description ?? '').slice(-40));
+  const recAgain = recoverInterruptedCards();
+  check('真在跑的卡一个都不动（recover 幂等，不重复收尾）', recAgain.fixed.length === 0, JSON.stringify(recAgain));
+  store.updateProjectTask(autoId, { status: 'doing', runId: 'r-这条运行库里没有' });
+  const rec2 = recoverInterruptedCards();
+  check('悬空的 runId 只摘掉、不臆测结果', !store.getProjectTask(autoId)?.runId && rec2.dropped.includes(autoId), JSON.stringify(rec2));
+  store.updateProjectTask(autoId, { status: 'todo' });
 
   /*
    * 工单会话（2026-10-18）：一张卡一条，不再复用执行人那条 1:1。

@@ -80,26 +80,52 @@ export function buildPrompt(digest) {
 }
 
 /**
- * 挑一个能跑的运行时，**claude 优先**。
+ * 挑能跑的运行时，**claude 优先**，按偏好排成一条候选链。
  *
  * 为什么不直接用 `resolveForRun('auto')`：auto 取的是清单里第一个（这台机器上是 Codex），
  * 而实测 codex 这条短跑会卡到超时（31 秒空手而归）。这个活只要"读一段文本、写一行字"，
  * 谁的空载最快就用谁 —— 顺序写死在这儿，别让它随机挑。
+ *
+ * 2026-11-20 改成返回**整条链**：用户机器上 claude 的默认模型被网关改了名，
+ * CLI 直接报 `unrecognized_model`（秒失败），原来只挑一个就退兜底，
+ * 按钮永远只出「chore(xxx): 更新 N 个文件」这种废稿。坏一个换下一个，别让整颗按钮陪葬。
  */
-function pickRuntime(prefer = ['claude', 'codex', 'dsh']) {
+function pickRuntimes(prefer = ['claude', 'codex', 'dsh']) {
   const all = [];
   for (const d of loadDevices()) {
     for (const r of d.runtimes ?? []) if (r.enabled && r.path) all.push(r);
   }
   const rank = (f) => (prefer.indexOf(f) >= 0 ? prefer.indexOf(f) : 99);
-  return all.sort((a, b) => rank(a.family) - rank(b.family))[0] ?? null;
+  return all.sort((a, b) => rank(a.family) - rank(b.family));
+}
+
+/** 只要一个的调用点（PR 草稿仍按单运行时走） */
+function pickRuntime(prefer) {
+  return pickRuntimes(prefer)[0] ?? null;
+}
+
+/**
+ * 把 CLI 的原始报错翻成一句能照做的话。
+ *
+ * `unrecognized_model` 是 claude-code 在 stderr 上的告警原样：
+ * `{claude-code:unrecognized_model} ["model":"grouper/never-stuck"]…` ——
+ * 直接摆给用户，等于让他自己猜这个模型名该去哪儿改。
+ */
+function explainAdapterError(rt, err) {
+  const label = rt.label ?? rt.family;
+  const s = String(err ?? '');
+  if (/unrecognized_model/i.test(s)) {
+    const model = /"model"\s*:\s*"([^"]+)"/.exec(s)?.[1];
+    return `${label} 不认模型名${model ? `「${model}」` : ''}（去「设置 → 运行时」换一个它能用的模型）`;
+  }
+  return `${label} 没跑成：${s}`;
 }
 
 /**
  * @returns {Promise<{message:string, source:'model'|'rule', note?:string}>}
  *   source=rule 时 note 说明为什么没走成模型（界面上小字带一句，别让人以为是模型写的）
  */
-export async function suggestCommitMessage(row, { paths = null, timeoutMs = 30000 } = {}) {
+export async function suggestCommitMessage(row, { paths = null, timeoutMs = 45000 } = {}) {
   /*
    * **不带 diff 正文**（2026-10-29 实测）：同一份改动，喂 4000 字 diff 要 **40 秒**，
    * 只给文件清单 + `--stat` 是 **6.3 秒**，而写一行说明的质量没差 —— 一行字要的是
@@ -108,39 +134,47 @@ export async function suggestCommitMessage(row, { paths = null, timeoutMs = 3000
   const digest = await changeDigest(row, { paths, maxDiffChars: 0 });
 
   const md = fallbackMessage(digest);
-  const rt = pickRuntime();
-  const adapter = rt ? adapterFor(rt.family) : null;
-  if (!rt || !adapter) {
-    return { message: md, source: 'rule', note: rt ? `没有 ${rt.family} 的适配器` : '没有可用的运行时（设置 → 运行时）' };
-  }
+  const rts = pickRuntimes();
+  if (!rts.length) return { message: md, source: 'rule', note: '没有可用的运行时（设置 → 运行时）' };
 
-  const ctl = new AbortController();
-  // 15 秒实测不够（2026-10-30）：Claude Code 冷启动到吐字这台机器要 17 秒+，每次都掐死在临门一脚，
-  // 界面永远只见"没给出可用的说明"。30 秒是"真挂了"和"慢"的分界。
-  const timer = setTimeout(() => ctl.abort(), timeoutMs);
-  try {
-    const out = await adapter({
-      task: buildPrompt(digest),
-      cwd: row.localPath,
-      cliPath: rt.path,
-      // 只要措辞，不要它动手：codex 的 read-only 等于"工具全禁"，正合适；claude/dsh 没有这档
-      ...(rt.family === 'codex' ? { sandbox: 'read-only' } : {}),
-      signal: ctl.signal,
-    });
-    // 适配器失败是**正常 resolve**（text 空 + error 带真话），不是 reject —— 不接住它，
-    // 真话就被扔了，永远报成"没给出可用的说明"（2026-10-30 实测踩过）
-    if (out?.isError || out?.error) {
-      return { message: md, source: 'rule', note: `模型没跑成：${out.error}` };
+  /*
+   * 一个运行时坏了不该让整颗按钮变成废纸（2026-11-20）：
+   * 按候选链一个个试，**总预算** timeoutMs 摊给它们 —— claude 的 unrecognized_model
+   * 是秒失败的，剩下的时间全给 codex。15 秒实测不够（2026-10-30）：Claude Code
+   * 冷启动到吐字这台机器要 17 秒+；45 秒 = 30 秒单跑 + 15 秒给下一个接手。
+   */
+  const deadline = Date.now() + timeoutMs;
+  const why = [];
+  for (const rt of rts) {
+    const adapter = adapterFor(rt.family);
+    if (!adapter) { why.push(`没有 ${rt.family} 的适配器`); continue; }
+    const left = deadline - Date.now();
+    if (left < 3000) { why.push('时间用完了'); break; }
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), left);
+    try {
+      const out = await adapter({
+        task: buildPrompt(digest),
+        cwd: row.localPath,
+        cliPath: rt.path,
+        // 只要措辞，不要它动手：codex 的 read-only 等于"工具全禁"，正合适；claude/dsh 没有这档
+        ...(rt.family === 'codex' ? { sandbox: 'read-only' } : {}),
+        signal: ctl.signal,
+      });
+      // 适配器失败是**正常 resolve**（text 空 + error 带真话），不是 reject —— 不接住它，
+      // 真话就被扔了，永远报成"没给出可用的说明"（2026-10-30 实测踩过）
+      if (out?.isError || out?.error) { why.push(explainAdapterError(rt, out.error)); continue; }
+      const msg = pickMessage(out?.text);
+      if (msg) return { message: msg, source: 'model' };
+      why.push(`${rt.label ?? rt.family} 没给出可用的说明`);
+    } catch (e) {
+      const label = rt.label ?? rt.family;
+      why.push(ctl.signal.aborted ? `${label} 等了 ${Math.round(left / 1000)} 秒没回` : `${label}：${e?.message ?? e}`);
+    } finally {
+      clearTimeout(timer);
     }
-    const msg = pickMessage(out?.text);
-    if (msg) return { message: msg, source: 'model' };
-    return { message: md, source: 'rule', note: `${rt.label ?? rt.family} 没给出可用的说明` };
-  } catch (e) {
-    const why = ctl.signal.aborted ? `等了 ${Math.round(timeoutMs / 1000)} 秒没回` : String(e?.message ?? e);
-    return { message: md, source: 'rule', note: `模型没跑成：${why}` };
-  } finally {
-    clearTimeout(timer);
   }
+  return { message: md, source: 'rule', note: why.join('；') };
 }
 
 /* ------------------------------------------------------------------ PR 草稿 */

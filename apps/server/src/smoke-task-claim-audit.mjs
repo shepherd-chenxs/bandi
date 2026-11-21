@@ -178,6 +178,61 @@ check('打回后仍未建 → 升级信箱（最后手段）', store.listNotices
 audit.reconcile({ run });
 check('信箱按 run 去重（不刷屏）', store.listNotices().length === beforeNotice + 1, '');
 
+console.log('\n⑦ 环境类断言必须实测（2026-11-21 第 3 档）：0 次工具就宣布环境有问题 → 记信箱');
+// 判据是**可证伪**的：`[受阻]` + 本轮 0 条 tool 事件 + 环境事实理由 = 不可能验证过
+const envRun = store.createRun({ conversationId: conv.id, runtime: 'rt-fake', personaId: persona.id });
+const envBlocked = {
+  id: envRun.id,
+  conversationId: conv.id,
+  personaId: persona.id,
+  finalText: '钩子目录不存在，全局钩子已经失效。\n[受阻] 全局钩子没装，需要你重新安装后再跑。',
+};
+const mEnv = audit.auditRunReply({ run: envBlocked });
+check('0 次工具 + [受阻] 说"不存在/失效" → 抓（凭推断宣布机器状态）',
+  mEnv.length === 1 && mEnv[0].kind === 'unverified-env', JSON.stringify(mEnv));
+const envNoMark = {
+  id: envRun.id,
+  conversationId: conv.id,
+  personaId: persona.id,
+  finalText: '钩子目录不存在，全局钩子已经失效，我先绕过用别的方案，其余照做完了。\n[完成]',
+};
+check('没有 [受阻]（还在干活）→ 不抓', audit.auditRunReply({ run: envNoMark }).length === 0,
+  JSON.stringify(audit.auditRunReply({ run: envNoMark })));
+const envEntitle = {
+  id: envRun.id,
+  conversationId: conv.id,
+  personaId: persona.id,
+  finalText: '[受阻] 我没有部署权限，账号也没授权这台机器，需要你开权限。',
+};
+check('权限 / 授权类受阻 → 不抓（那本来就不该自己跑去试）',
+  audit.auditRunReply({ run: envEntitle }).length === 0, JSON.stringify(audit.auditRunReply({ run: envEntitle })));
+const envNotEnv = {
+  id: envRun.id,
+  conversationId: conv.id,
+  personaId: persona.id,
+  finalText: '[受阻] 找不到你说的那条任务，我没法继续。',
+};
+check('「找不到那条任务」→ 不算环境断言（"不存在/找不到"必须挨着环境名词）',
+  audit.auditRunReply({ run: envNotEnv }).length === 0, JSON.stringify(audit.auditRunReply({ run: envNotEnv })));
+const runWithTool2 = store.createRun({ conversationId: conv.id, runtime: 'rt-fake', personaId: persona.id });
+store.appendRunEvent(runWithTool2.id, 1, { type: 'tool', name: 'Bash', input: { command: 'ls -la ~/.codex' } });
+const envVerified = { ...envBlocked, id: runWithTool2.id };
+check('真调过工具（哪怕只一条）→ 不抓（分不清验的是哪条，宁可漏报）',
+  audit.auditRunReply({ run: envVerified }).length === 0, JSON.stringify(audit.auditRunReply({ run: envVerified })));
+
+const beforeEnvNotice = store.listNotices().length;
+const beforeEnvMsgs = store.listMessages(conv.id).length;
+const envRecon = audit.reconcile({ run: envBlocked });
+// 注意：上面 ④ 用未来的 nowMs 扫过停留卡，那条通知的 updatedAt 在未来 —— 别用 at(-1)/[0] 取"最新"
+const envNotice = store.listNotices().find((n) => /没跑任何命令/.test(n.title ?? ''));
+check('处置：记信箱一条（info，不是红账）',
+  store.listNotices().length === beforeEnvNotice + 1 && envRecon.unverified.length === 1 &&
+    envNotice?.severity === 'info', JSON.stringify({ title: envNotice?.title, sev: envNotice?.severity }));
+check('处置：**不唤醒任何人**（会话里没多出一条 @ 他的消息）',
+  store.listMessages(conv.id).length === beforeEnvMsgs, `${store.listMessages(conv.id).length} vs ${beforeEnvMsgs}`);
+audit.reconcile({ run: envBlocked });
+check('信箱按 run 去重（同一轮不刷屏）', store.listNotices().length === beforeEnvNotice + 1, '');
+
 try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* 库句柄还开着，删不掉就算了 */ }
 if (failed) { console.log(`\n✗ ${failed} 项没过`); process.exit(1); }
 console.log('\n✓ 全部通过');

@@ -34,7 +34,7 @@ export const S = {
   runtimes: [],
   personas: [],
   conversations: [],
-  // 真人名册（/api/state 的 users，2026-10-31 用户概念落地）：通讯录成员段、派活选真人
+  // 真人名册（/api/state 的 users；2026-11-21 独立操作平台起只含自己）：派活给自己、署名自解析
   users: [],
   skills: [],
   skill: null,

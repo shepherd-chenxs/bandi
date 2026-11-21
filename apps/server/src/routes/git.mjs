@@ -3,6 +3,7 @@
  * 2026-10-25 加了写侧出口（建 PR / 列 open PR / 手动合并）；编排本体在 ../git-repos.mjs，
  * 这里只做"取那一条记录 + 把错误说人话 + 回写卡片"。 */
 
+import fs from 'node:fs';
 import { sendJson, fail, readBody } from '../http.mjs';
 import * as store from '../store.mjs';
 import { updateProjectTask, afterMerged, createProjectTask } from '../project-tasks.mjs';
@@ -154,9 +155,16 @@ async function mergeOne(repo, number, body = {}, taskId = null) {
     console.warn(`[代码托管] 合并后本地收尾没成：${e?.message ?? e}`);
   }
 
+  /*
+   * 卡上记的 prRepo 有两种口径：PR 巡检/流程写的是 owner/name（ghRef），
+   * 2026-11-20 之前从卡上建 PR 的那条路写的是显示名 fullName（可能只是目录名）。
+   * 收尾时两个都认，别让一张老卡永远停在「进行中」。
+   */
+  const repoRow = store.getGitRepoByRef(repo);
+  const repoAliases = new Set([repo, repoRow?.fullName].filter(Boolean));
   const touched = [];
   for (const t of store.listProjectTasksWithPr()) {
-    if (t.prRepo !== repo || Number(t.prNumber) !== number) continue;
+    if (!repoAliases.has(t.prRepo) || Number(t.prNumber) !== number) continue;
     const next = store.updateProjectTask(t.id, { prState: 'merged', prTitle: pull.title, prCheckedAt: new Date().toISOString() });
     afterMerged(next);
     touched.push(t.id);
@@ -190,13 +198,33 @@ export async function handleGit(req, res, url) {
    */
   if (req.method === 'GET' && url.pathname === '/api/git/status') {
     const connected = !!git.readToken();
+    /*
+     * ghRef（2026-11-20 修正）：GitHub API 用的 owner/name。
+     * 手动接入的克隆把 fullName 记成了目录名（`bandi`），前端原来拿"名字里有没有斜杠"
+     * 判断是不是 GitHub 仓库 —— origin 明明指着 github.com，PR / 合并那块却被判成本地
+     * 仓库不画，整条"建 PR → 合并"的路直接断掉。这里从 origin 解出真身带给前端，
+     * 名字只当展示用。（含 `/` 的行 githubRefOf 直接原样返回，不会多起 git 进程。）
+     */
+    const repos = await Promise.all(
+      git.listConnected().map(async (r) => ({
+        ...r,
+        patrol: patrol.viewOf(r),
+        ghRef: await git.githubRefOf(r),
+        /*
+         * 本地目录还在不在（2026-11-20，目录重定位）：改个目录名 / 挪个位置之后，
+         * 身份（ghRef）不受影响，但本地这些操作（改动、分支、推送）会全断。
+         * 界面拿这个显示「本地目录找不到」并给「重新定位」，别让人对着一堆 E12xx 猜。
+         */
+        localPathExists: !!(r.localPath && fs.existsSync(r.localPath)),
+      }))
+    );
     return (
       sendJson(res, 200, {
         connected,
         login: connected ? git.cachedLogin() : null,
         hint: git.tokenHint(),
         // 仓库行上那「巡检」一行要的东西（节拍 / 上次结果）一次带齐，弹窗不再单独请求
-        repos: git.listConnected().map((r) => ({ ...r, patrol: patrol.viewOf(r) })),
+        repos,
         patrolPresets: patrol.PRESETS,
       }),
       true
@@ -253,7 +281,17 @@ export async function handleGit(req, res, url) {
   }
 
   if (req.method === 'GET' && url.pathname === '/api/git/repos') {
-    return sendJson(res, 200, { repos: git.listConnected().map((r) => ({ ...r, patrol: patrol.viewOf(r) })) }), true;
+    return sendJson(
+      res,
+      200,
+      {
+        repos: git.listConnected().map((r) => ({
+          ...r,
+          patrol: patrol.viewOf(r),
+          localPathExists: !!(r.localPath && fs.existsSync(r.localPath)),
+        })),
+      },
+    ), true;
   }
 
   /* 默认克隆基目录（2026-10-30，IDEA 同款）：弹窗「目录」格显示它，URL 认出项目名再拼上去 */
@@ -293,6 +331,35 @@ export async function handleGit(req, res, url) {
       autoMerge: body.autoMerge === undefined ? undefined : !!body.autoMerge,
     });
     return sendJson(res, 200, { repo: row }), true;
+  }
+
+  /*
+   * ---- 目录重定位（2026-11-20）----
+   *
+   * 用户："如果我本地仓库改个名字是不是就找不到了？这显然不合理的吧"。
+   * 身份（ghRef/remoteUrl）已经跟路径解耦；这里只做一件事：把 localPath 这个指针
+   * 挪到新目录，前提是校验过"新目录确实是同一个仓库"（逻辑在 git.relocateRepo）。
+   * 不在这里做任何"猜"：origin 对不上就拒绝，接错行比找不到更难查。
+   */
+  const repoRelocate = /^\/api\/git\/repos\/([^/]+)\/relocate$/.exec(url.pathname);
+  if (repoRelocate && req.method === 'POST') {
+    if (!store.getGitRepo(decodeURIComponent(repoRelocate[1]))) {
+      return fail(res, 404, 'E1076', '仓库不在清单里'), true;
+    }
+    try {
+      const body = await readBody(req);
+      const row = await git.relocateRepo(decodeURIComponent(repoRelocate[1]), body.localPath);
+      return sendJson(res, 200, {
+        repo: {
+          ...row,
+          patrol: patrol.viewOf(row),
+          ghRef: await git.githubRefOf(row),
+          localPathExists: !!(row.localPath && fs.existsSync(row.localPath)),
+        },
+      }), true;
+    } catch (e) {
+      return failWith(res, 'E1115', e), true;
+    }
   }
 
   /*
@@ -361,9 +428,15 @@ export async function handleGit(req, res, url) {
     if (!git.readToken()) return fail(res, 400, 'E1070', '先连接 GitHub（工作台 → 研发 → 代码托管）'), true;
     if (req.method === 'GET') {
       try {
-        const prs = await git.listPullsForRepo(row.fullName);
+        /* GitHub API 只认 owner/name：本地托管接进来的行 fullName 可能只是目录名（`xuke`），
+           直接拼会变成 /repos/xuke/pulls → 404（2026-11-20 用户实报"配了令牌还是访问不到仓库"）。
+           统一用 ghRef 解析，见 git-repos.mjs 的 githubRefOf。 */
+        const ref = await git.githubRefOf(row);
+        const prs = await git.listPullsForRepo(ref);
         // 已经挂在某张卡上的 PR 标出来：界面上"这张卡有 PR 了"和"这个 PR 没人管"是两件事
-        const linked = new Map(store.listProjectTasksWithPr().filter((t) => t.prRepo === row.fullName).map((t) => [Number(t.prNumber), t.id]));
+        // 卡上的 prRepo 可能是 ghRef 也可能是老卡上的 fullName —— 两个都算（见 mergeOne 的说明）
+        const refAliases = new Set([ref, row.fullName].filter(Boolean));
+        const linked = new Map(store.listProjectTasksWithPr().filter((t) => refAliases.has(t.prRepo)).map((t) => [Number(t.prNumber), t.id]));
         /*
          * 2026-10-27「PR 区域」：每个 PR 再附一个 checks 汇总，界面才说得清"这条能不能合"
          * （我们的 main 有分支保护，`gate` 不绿合不了）。
@@ -374,7 +447,7 @@ export async function handleGit(req, res, url) {
           prs.map(async (p) => {
             let checks = { state: 'unknown', total: 0, failed: [], pending: [] };
             try {
-              checks = await git.pullChecks(row.fullName, p.headSha);
+              checks = await git.pullChecks(ref, p.headSha);
             } catch {
               /* 查不到就 unknown（界面显示"检查未知"），不挡合并按钮之外的别的事 */
             }
@@ -408,7 +481,8 @@ export async function handleGit(req, res, url) {
     if (!git.readToken()) return fail(res, 400, 'E1070', '先连接 GitHub（工作台 → 研发 → 代码托管）'), true;
     const body = await readBody(req);
     try {
-      return sendJson(res, 200, await mergeOne(row.fullName, Number(repoMergePr[2]), body)), true;
+      // 同 /prs：API 只认 owner/name，fullName 可能只是目录名（见 githubRefOf）
+      return sendJson(res, 200, await mergeOne(await git.githubRefOf(row), Number(repoMergePr[2]), body)), true;
     } catch (e) {
       return failWith(res, 'E1088', e), true;
     }
@@ -423,12 +497,13 @@ export async function handleGit(req, res, url) {
     if (!row) return fail(res, 404, 'E1076', '仓库不在清单里'), true;
     if (!git.readToken()) return fail(res, 400, 'E1070', '先连接 GitHub（工作台 → 研发 → 代码托管）'), true;
     try {
-      const pull = await git.fetchPull(row.fullName, Number(repoPrChecks[2]));
+      const ref = await git.githubRefOf(row);
+      const pull = await git.fetchPull(ref, Number(repoPrChecks[2]));
       if (req.method === 'GET') {
-        return sendJson(res, 200, await git.gateDetail(row.fullName, pull.headSha)), true;
+        return sendJson(res, 200, await git.gateDetail(ref, pull.headSha)), true;
       }
       if (req.method === 'POST' && repoPrChecks[3]) {
-        return sendJson(res, 200, await git.rerunGate(row.fullName, pull.headSha)), true;
+        return sendJson(res, 200, await git.rerunGate(ref, pull.headSha)), true;
       }
     } catch (e) {
       return failWith(res, 'E1079', e), true;
@@ -455,8 +530,9 @@ export async function handleGit(req, res, url) {
     const body = await readBody(req).catch(() => ({}));
     const wantedId = body?.personaId ? String(body.personaId) : null;   // 界面上选的处理人；没选就按岗位挑
     try {
-      const pull = await git.fetchPull(row.fullName, number);
-      const detail = await git.gateDetail(row.fullName, pull.headSha);
+      const ref = await git.githubRefOf(row);
+      const pull = await git.fetchPull(ref, number);
+      const detail = await git.gateDetail(ref, pull.headSha);
       if (detail.state === 'success') return fail(res, 400, 'E1121', '这条 PR 的检查已经全绿了，不用修'), true;
       if (detail.state === 'pending') return fail(res, 409, 'E1122', '检查还在跑 —— 等它出结果，真红了再让它修'), true;
       if (detail.state !== 'failure' || !(detail.failed ?? []).length) {
@@ -488,7 +564,7 @@ export async function handleGit(req, res, url) {
       });
       // 挂到 PR 上：PR 行会显示「已关联卡」，合完/卡到终态也能互相回写
       try {
-        store.updateProjectTask(task.id, { prRepo: row.fullName, prNumber: number, prTitle: String(pull.title ?? '') });
+        store.updateProjectTask(task.id, { prRepo: ref, prNumber: number, prTitle: String(pull.title ?? '') });
       } catch { /* 挂不上不影响派活 */ }
       return sendJson(res, 201, {
         taskId: task.id,
@@ -526,12 +602,15 @@ export async function handleGit(req, res, url) {
       const row = git.repoForCwd(project.root);
       if (!row) return fail(res, 400, 'E1079', `项目目录不在任何已接入的仓库里：${project.root} —— 去「工作台 → 研发 → 代码托管」把它接进来`), true;
       if (!git.readToken()) return fail(res, 400, 'E1070', '先连接 GitHub（工作台 → 研发 → 代码托管）'), true;
-      const repoRow = store.getGitRepoByFullName(row.fullName);
+      // repoForCwd 只给 {fullName, branch} —— 这里要的是库里的整行（localPath/ghRef 都要用）
+      const repoRow = store.getGitRepoByRef(row.fullName);
+      if (!repoRow) return fail(res, 400, 'E1079', `仓库 ${row.fullName} 已经不在清单里了 —— 去「工作台 → 研发 → 代码托管」重新接一次`), true;
+      const ref = await git.githubRefOf(repoRow);
       try {
         // push:true —— 卡上这条路要"提交 + 推送 + 建 PR"一口气跑完（agent 干完活手上就是脏文件）
         const out = await git.openPr(repoRow, { ...prRequestOf(body, task), push: true });
         const next = store.updateProjectTask(taskId, {
-          prRepo: repoRow.fullName,
+          prRepo: ref,
           prNumber: out.pr.number,
           prState: out.pr.state,
           prTitle: out.pr.title,
@@ -624,7 +703,10 @@ export async function handleGit(req, res, url) {
       .filter((x) => !only || x.projectId === only)
       .slice(0, 50)) {
       try {
-        const snap = await git.fetchPull(t.prRepo, t.prNumber);
+        // 卡上记的可能是 ghRef，也可能是老卡上的显示名 —— 统一还原成 GitHub 认的 owner/name
+        const cardRow = store.getGitRepoByRef(t.prRepo);
+        if (!cardRow) throw new Error(`卡上记的仓库 ${t.prRepo} 已经不在清单里了 —— 去「代码托管」重新接一次`);
+        const snap = await git.fetchPull(await git.githubRefOf(cardRow), t.prNumber);
         const next = store.updateProjectTask(t.id, {
           prState: snap.state,
           prTitle: snap.title,
@@ -780,7 +862,8 @@ export async function handleGit(req, res, url) {
     const row = store.getGitRepo(decodeURIComponent(repoLog[1]));
     if (!row) return fail(res, 404, 'E1076', '仓库不在清单里'), true;
     try {
-      return sendJson(res, 200, await git.recentLog(row)), true;
+      /* ?limit= 由前端给（「加载更多」逐档加）：解析不出数字就退回 recentLog 自己的默认 50 */
+      return sendJson(res, 200, await git.recentLog(row, url.searchParams.get('limit'))), true;
     } catch (e) {
       return failWith(res, 'E1106', e), true;
     }

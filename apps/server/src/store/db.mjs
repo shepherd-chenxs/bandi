@@ -114,8 +114,11 @@ db.exec(`PRAGMA busy_timeout = 5000;`);
  *   · 10（2026-11-13）：`workflow_templates` 加 `autonomous`（自主交付模板：无人工闸节点，实例终态与受阻
  *     自动写信箱汇报给人，让「数字员工自主跑完→汇报」而不让人逐步拍板）。
  *   · 11（2026-11-16）：额度功能退场，老库 DROP `quotas`（限额不再生效，也不该再留一张死表）。
+ *   · 12（2026-11-20）：`git_repos` 加 `ghRef` / `remoteUrl`（仓库身份落库：GitHub API 用的
+ *     owner/name 在接入时记一次，之后本地目录改名/挪位置不再影响；见 git-repos.mjs 的
+ *     backfillRepoIdentity / relocateRepo）。
  */
-export const SCHEMA_VERSION = 11;
+export const SCHEMA_VERSION = 12;
 
 const dbVersion = Number(db.prepare('PRAGMA user_version').get()?.user_version ?? 0);
 if (dbVersion > SCHEMA_VERSION) {
@@ -981,6 +984,27 @@ db.exec(`
  */
 ensureColumn('git_repos', 'keeperPersonaId', 'keeperPersonaId TEXT');
 ensureColumn('git_repos', 'autoMerge', 'autoMerge INTEGER NOT NULL DEFAULT 0');
+
+/*
+ * 仓库身份落库（2026-11-20 用户："idea 怎么做的，trae 怎么做的？如果我本地仓库改个名字
+ * 是不是就找不到了？这显然不合理的吧"）。
+ *
+ *   · ghRef：GitHub API 认的 owner/name。接入时从 remote 解析一次就写死在这里；
+ *     fullName 只当显示名，localPath 只是"代码现在放在哪"的指针 —— 三者不再互相顶替。
+ *   · remoteUrl：接入时的远端地址。目录重定位（relocateRepo）拿它核对"新目录是不是同一个仓库"。
+ *
+ * 老库回填**不在这里做**：读 origin 要起 git 子进程，而 SQL 只归 store/ 管。
+ * 回填在 git-repos.mjs 的 backfillRepoIdentity()，由 server.mjs 启动时调用（幂等）。
+ */
+ensureColumn('git_repos', 'ghRef', 'ghRef TEXT');
+ensureColumn('git_repos', 'remoteUrl', 'remoteUrl TEXT');
+
+/* 2026-11-20 用户："仓库管理员默认张坤、不允许改" —— 历史仓库的空值一次性补齐。
+   幂等：只碰还空着的那几行。库里必须真是张坤，否则会出现"界面写着张坤、
+   实际没绑所以不审"的假象（没绑 = 不派审 = 自动合并永远等不到触发）。 */
+db.prepare(
+  "UPDATE git_repos SET keeperPersonaId = 'p-expert-zhangkun' WHERE keeperPersonaId IS NULL OR keeperPersonaId = ''",
+).run();
 
 
 export function getMetaValue(key) {

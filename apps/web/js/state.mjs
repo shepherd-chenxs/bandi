@@ -64,7 +64,8 @@ export async function load(opts = {}) {
   // 页面不猜：字段没有（旧服务）就当 not-required，行为与从前一致。
   S.localSecret = s.localSecret ?? 'not-required';
   S.bandiSource = s.source ?? 'loopback';
-  // 真人名册（2026-10-31 用户概念落地）：通讯录「成员」段与看板派活选真人用
+  // 真人名册（2026-11-21 独立操作平台）：服务端只下发**自己**一行 —— 看板派活"给自己
+  // 派活"与署名自解析用；别人的名字只在署名处出现（服务端拼好：昵称优先，手机号打码）
   S.users = s.users ?? [];
   // 信箱未读数（2026-11-11）：左栏徽标；收件箱页面自己再拉一次列表
   S.noticesUnread = s.noticesUnread ?? 0;

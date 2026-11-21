@@ -2616,7 +2616,8 @@ export function wireBoard(view, { refresh, taskProject = () => null }) {
           hint(`已经派给${who ? `「${who}」` : '执行人'}开跑了 —— 进展在他那条会话里看`);
         } else if (toStatus === 'doing') {
           // 真人执行的卡（2026-10-31）：有执行人、但不起会话 —— 别说成"没有执行人"
-          hint((S.users ?? []).some((u) => u.id === res.task?.assigneeUserId)
+          // （2026-11-21 独立操作平台：名册只有自己，判断改用服务端字段，不查 S.users）
+          hint(res.task?.assigneeUserId != null
             ? '卡移到「进行中」了；这张卡派给了真人，不起会话也不自动开跑'
             : '卡移到「进行中」了；这张卡没有执行人，所以不会自动开跑');
         }
@@ -2974,9 +2975,20 @@ export async function paintTaskCardPage(taskId, opts = {}) {
   if (stale()) return; // 会话在途中人换页了：往下整页 innerHTML 会把旧卡的内容盖到新卡上
   const runningRun = (conv?.runs ?? []).find((r) => r.status === 'running') ?? null;
   // 跑挂了的运行 id 集合：这些轮次的回话/占位行带「重跑一次」按钮（2026-10-30 用户："失败了可以再让它重新跑一次"）。
-  // threadsHtml 每次重画会按最新 runs 重算 —— 重跑后新回话属于新 run，旧失败轮的按钮留着无妨（multica 同款）。
-  let failedRunIds = new Set((conv?.runs ?? []).filter((r) => r.status === 'failed').map((r) => r.id));
+  // **只认最后一轮**（2026-11-20 用户："点击重跑之后，他已经重跑了，这个按钮还显示"）：
+  // 重跑一旦起跑，旧失败轮的按钮就必须消失，否则人会以为没点上、反复点。
+  const failedRunIdsOf = (runs) => {
+    let latest = null;
+    for (const r of runs ?? []) {
+      if (!latest || String(r.startedAt ?? '') > String(latest.startedAt ?? '')) latest = r;
+    }
+    return latest?.status === 'failed' ? new Set([latest.id]) : new Set();
+  };
+  let failedRunIds = failedRunIdsOf(conv?.runs ?? []);
+  /* 执行人显示名：派给**别的真人**的卡，名册里查不到（2026-11-21 独立操作平台，名册只
+     下发自己）—— 兜底接服务端 detail 拼好的 assigneeUserName（昵称优先，手机号打码）。 */
   let whoName = conv?.conversation?.personaName ?? assignee?.name
+    ?? task.assigneeUserName
     ?? (task.assigneeGroupId ? `团队协作 · ${(S.groups ?? []).find((g) => g.id === task.assigneeGroupId)?.title ?? '群'}` : '执行人');
 
   /**
@@ -3031,7 +3043,9 @@ export async function paintTaskCardPage(taskId, opts = {}) {
       main = `<div class="tc-cmt-text">${renderMarkdown(m.text)}${attsHtmlOf(m.atts)}</div>`;
     }
     // 「重跑一次」：失败轮的回话（或没落回话的失败占位）脚上带一颗 —— multica 同款（2026-10-30）
-    const failedRid = m.pseudo === 'fail' ? m.run?.id : (m.runId && failedRunIds.has(m.runId) ? m.runId : null);
+    const failedRid = m.pseudo === 'fail'
+      ? (failedRunIds.has(m.run?.id) ? m.run.id : null)
+      : (m.runId && failedRunIds.has(m.runId) ? m.runId : null);
     const rerunBtn = failedRid
       ? `<button type="button" class="tc-rerun" data-rerun="${esc(failedRid)}"
              title="让它带着同样的说明再跑一轮（续同一个会话，不用重发）">↻ 重跑一次</button>`
@@ -3143,7 +3157,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     const last = runs.filter((r) => r.endedAt).sort((a, b) => String(b.endedAt).localeCompare(String(a.endedAt)))[0];
     const when = last?.endedAt ? `（${esc(cmtTime(last.endedAt))} 收工）` : '';
     if (st === 'review')
-      return `<div class="tc-statebar ok"><b>✅ 活干完了</b> —— 等验收人验收${when}。上面他最后一句话就是结论。</div>`;
+      return `<div class="tc-statebar ok"><b>活干完了</b> —— 等验收人验收${when}。上面他最后一句话就是结论。</div>`;
     if (st === 'failed')
       return `<div class="tc-statebar bad"><b>这轮没跑成</b> —— 没干完。他消息脚上有「↻ 重跑一次」，点一下接着来。</div>`;
     if (st === 'blocked')
@@ -3160,7 +3174,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     }
     const banner = stateBanner(d);
     // 时间线 = 消息 + 没跑成的那几轮运行（中断/停止的占位也按时间排进去，见 topicsOf）
-    failedRunIds = new Set((d?.runs ?? []).filter((r) => r.status === 'failed').map((r) => r.id));
+    failedRunIds = failedRunIdsOf(d?.runs ?? []);
     const topics = topicsOf(timelineOf(msgs, d?.runs ?? []));
     // 首屏先把库里已有的都记"见过"：高亮只给**这一页打开之后**新到的回话，
     // 不然每次进卡满屏蓝，跟没折一样。
@@ -3186,6 +3200,18 @@ export async function paintTaskCardPage(taskId, opts = {}) {
           : headHuman
             ? `<div class="tc-topic-meta"><b>${esc(headHuman)}</b>${noteTag}</div>`
             : '';
+        // 议题头也会是「失败那一轮的回话」：讨论区只有一条回话时它直接当主评论，
+        // 而重跑钮原来只画在回复脚上（cmtItem）—— 于是横幅说"消息脚上有重跑"，
+        // 人却哪儿都找不到（2026-11-20 用户实报："哪有重跑按钮"）。主评论这里补同一颗。
+        const headRid = t.head
+          ? (t.head.pseudo === 'fail'
+              ? (failedRunIds.has(t.head.run?.id) ? t.head.run.id : null)
+              : (t.head.runId && failedRunIds.has(t.head.runId) ? t.head.runId : null))
+          : null;
+        const headRerun = headRid
+          ? `<button type="button" class="tc-rerun" data-rerun="${esc(headRid)}"
+               title="让它带着同样的说明再跑一轮（续同一个会话，不用重发）">↻ 重跑一次</button>`
+          : '';
         const foot = t.head
           ? `<div class="tc-topic-foot">
                ${/* 自己的评论没有作者行（名字/时间都在落款），便签标记就落到落款这一行 ——
@@ -3193,6 +3219,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
                ${meta ? '' : noteTag}
                <time class="tc-cmt-at">${esc(cmtTime(t.head.createdAt))}</time>
                <button type="button" class="tc-reply" data-reply="${esc(t.head.id)}">回复</button>
+               ${headRerun}
              </div>`
           : '';
         // 折叠照旧（全铺开确实杂），但他的回话不再被藏住：
@@ -3258,6 +3285,18 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     });
     if (stale()) return; // 等回包的这会儿人换卡了：进度卡/页头别再往新卡上写
     if (res?.task) { task = res.task; refreshHeader(); }
+    // 已经交出去了：旧失败轮的按钮立刻收掉，不等下一次整块重画
+    // （2026-11-20 用户："点击重跑之后，他已经重跑了，这个按钮还显示"）
+    for (const b of $('tcThreads')?.querySelectorAll('[data-rerun]') ?? []) b.remove();
+    /*
+     * 顶上那条收工横幅也得跟着收（2026-11-20 用户："点击重跑之后，这个是不是应该不显示了"）。
+     *
+     * 它是照**上一轮**的结果写的话（「这轮没跑成 —— 没干完…」），而新一轮已经起来了，
+     * 留着就是当着他的面说反话。不用重新算：stateBanner 里本来就写着"他正在跑时不画"，
+     * 整块重画时这条自然消失 —— 这里只是提前把同一个结论落到 DOM 上。
+     * 没拿到 runId（在排队 → 走下面的 refreshThread）也无所谓：重画会把对的横幅补回来。
+     */
+    $('tcThreads')?.querySelector('.tc-statebar')?.remove();
     toast(`已重新交给 ${whoName}`);
     // 进度卡落在**点重跑的那条议题**里（不是"最后一个议题"—— 中间插了新评论就会挂错位置）
     if (res?.task?.runId) attach(res.task.runId, topicId); // 直接接上新一轮的实时进度
@@ -3312,10 +3351,14 @@ export async function paintTaskCardPage(taskId, opts = {}) {
   const stKey = task.status ?? 'other';
   // 团队协作（2026-11-09）：群**单独一行**，不再混进「执行人」（2026-11-09 用户：「群聊混在指派人里」）
   const groupAssignee = task.assigneeGroupId ? (S.groups ?? []).find((g) => g.id === task.assigneeGroupId) : null;
+  /* 执行人回显（2026-11-21 独立操作平台）：名册只下发自己，派给**别的真人**的卡在前端
+     查不到名字 —— 服务端在 detail 里补好了 assigneeUserName（昵称优先，手机号打码），
+     这里兜底接住。 */
   const whoLabel = flowOnly
     ? '（由流程执行）'
     : assignee?.name
       ?? userLabel((S.users ?? []).find((u) => u.id === task.assigneeUserId))
+      ?? task.assigneeUserName
       ?? '未分配';
   const groupLabel = groupAssignee ? `团队协作 · ${groupAssignee.title}` : '未选择';
   // 执行方式 / 执行对象两格（2026-11-09 用户定名）：方式 = 派给人 | 团队协作；对象跟着方式换清单
@@ -3540,7 +3583,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
         </div>
         ${
           task.prRepo && task.prNumber
-            ? `<div class="tc-prop"><span class="tc-prop-k">关联的 PR</span><div class="tc-prop-v">
+            ? `<div class="tc-prop-pr"><div class="tc-prop-v">
                  <a href="https://github.com/${esc(task.prRepo)}/pull/${task.prNumber}" target="_blank" rel="noreferrer"
                     style="color:var(--accent)">${esc(task.prRepo)}#${task.prNumber}</a>
                  <span class="pill">${
@@ -3564,9 +3607,11 @@ export async function paintTaskCardPage(taskId, opts = {}) {
         <div class="tc-prop"><span class="tc-prop-k">更新时间</span><span class="tc-prop-v" id="tcAt">${esc(String(task.updatedAt ?? '').replace('T', ' ').slice(0, 16))}</span></div>
         ${
           /* 状态改动归因（2026-11-03）：谁最后一次由人改的状态、什么时候。
-             只在**人**改过状态后才有（系统收状态不冒充人）；老卡两列是 NULL 就不显示这行。 */
+             只在**人**改过状态后才有（系统收状态不冒充人）；老卡两列是 NULL 就不显示这行。
+             改卡人是别人时名册里查不到（2026-11-21 独立操作平台）—— 兜底接服务端拼好的
+             statusByUserName（昵称优先，手机号打码）。 */
           task.statusByUserId
-            ? `<div class="tc-prop"><span class="tc-prop-k">状态改动</span><span class="tc-prop-v">${esc(userLabel((S.users ?? []).find((u) => u.id === task.statusByUserId)) ?? '那个人已经不在了')}<span class="dim"> · ${esc(String(task.statusAt ?? '').replace('T', ' ').slice(0, 16))}</span></span></div>`
+            ? `<div class="tc-prop"><span class="tc-prop-k">状态改动</span><span class="tc-prop-v">${esc(userLabel((S.users ?? []).find((u) => u.id === task.statusByUserId)) ?? task.statusByUserName ?? '那个人已经不在了')}<span class="dim"> · ${esc(String(task.statusAt ?? '').replace('T', ' ').slice(0, 16))}</span></span></div>`
             : ''
         }
       </aside>`
@@ -3968,7 +4013,7 @@ export async function paintTaskCardPage(taskId, opts = {}) {
     const wv = String(whoCombo?.value() ?? '');
     const p = wv && !wv.startsWith('u:') ? (S.personas ?? []).find((x) => x.id === wv) ?? null : null;
     const u = wv.startsWith('u:') ? (S.users ?? []).find((x) => x.id === wv.slice(2)) : null;
-    el.textContent = p?.name ?? userLabel(u) ?? '未分配';
+    el.textContent = p?.name ?? userLabel(u) ?? task.assigneeUserName ?? '未分配';
   };
   /* 执行方式切档：执行对象那格换挂载（桌面）+ 手机行回显。切方式本身**不落库** ——
      只有对象真的换了（assigneePatch 对照服务端现值）才会 PATCH。 */

@@ -1160,7 +1160,17 @@ export async function api(path, opts) {
     console.error(
       `[班底] ${code}：${explained ? detail : '服务异常'} · ${opts?.method ?? 'GET'} ${path} → HTTP ${r.status}`,
     );
-    const err = new Error(explained ? `${code}：${clipLine(detail)}` : `${code}：服务异常`);
+    /*
+     * 界面上只留前半句人话（2026-11-20 用户："报错不够简洁，原始信息不要显示"）：
+     * 领域层（如 git 推送）会把 `原始信息：fatal: ...` 垫在末尾给排障用，
+     * 那是给控制台的，不该糊在 toast 上 —— 这里截到它之前；
+     * 顺带去掉和前缀重复的 `[E1204]`（GitError 自带，外面又拼了一遍码）。
+     * 完整原文仍然留在 err.detail 与控制台里。
+     */
+    const human = explained
+      ? detail.split('原始信息：')[0].replace(new RegExp(`^\\[${code}\\]\\s*`), '').trim()
+      : '';
+    const err = new Error(explained ? `${code}：${clipLine(human || detail)}` : `${code}：服务异常`);
     err.code = code;
     err.detail = detail;
     err.status = r.status;

@@ -125,7 +125,8 @@ check('驳回走引擎默认出口 → 流程收尾', store.getWorkflowRun(run2.
 
 console.log('\n⑦ 仓库值班设置：绑定 / 解绑 / 授权开关都存得住');
 const repo = store.addGitRepo({ fullName: 'a/b', owner: 'a', name: 'b', localPath: tmp });
-check('新仓库默认：没管理员、没授权', !repo.keeperPersonaId && !repo.autoMerge);
+// 2026-11-20 用户："仓库管理员默认张坤、不允许改" —— 新建仓库直接写入 keeperPersonaId，autoMerge 仍默认关（0）
+check('新仓库默认：管理员是张坤、不允许改；自动合并默认关', repo.keeperPersonaId === 'p-expert-zhangkun' && !repo.autoMerge);
 const bound = store.updateGitRepoSettings(repo.id, { keeperPersonaId: 'p-cuilaosan', autoMerge: true });
 check('绑定 + 授权存住了', bound.keeperPersonaId === 'p-cuilaosan' && bound.autoMerge === 1);
 const unbound = store.updateGitRepoSettings(repo.id, { keeperPersonaId: '' });

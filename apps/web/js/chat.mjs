@@ -2761,7 +2761,7 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
         <td>${r.exitCode ?? '—'}</td>
         <td>${r.usage ? (r.usage.totalTokens ?? '—') : '—'}</td>
         <td>${r.endedAt ? Math.round((new Date(r.endedAt) - new Date(r.startedAt)) / 1000) + 's' : '—'}</td>
-        <td class="dim">${esc(r.error || '')}</td>
+        <td class="dim"><span class="run-err" title="${esc(r.error || '')}">${esc(r.error || '')}</span></td>
       </tr>`).join('')
     : '<tr><td colspan="6" class="dim" style="padding-top:8px">还没有运行记录</td></tr>';
 

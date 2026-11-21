@@ -126,6 +126,9 @@ const RUN = [
   'apps/server/src/smoke-repo-patrol.mjs',
   'apps/server/src/smoke-run-events.mjs',
   'apps/server/src/smoke-run-progress.mjs',
+  // 失败分型 + 自动续跑（2026-11-21）：环境性失败自己再跑一次、确定性失败一次都不试，
+  // 且接线是真的（假适配器演"第一次挂、第二次成"，不烧模型）。判据文案全部取自真库样本。
+  'apps/server/src/smoke-run-retry.mjs',
   'apps/server/src/smoke-runtime-heal.mjs',
   // 运行时识别不依赖进程 PATH 快照（2026-11-04）：注册表实时 PATH + 固定落点。
   // ⚠️ 这条会临时改 HKCU\Environment\Path（原样写回）—— 真注册表用例
@@ -335,9 +338,15 @@ for (const f of targets) {
     env: { ...process.env, BANDI_HOST: process.env.BANDI_HOST ?? '127.0.0.1' },
     stdio: ['ignore', 'pipe', 'pipe'],
     encoding: 'utf8',
+    /*
+     * **硬超时**（2026-11-20）：这里原来没有 timeout，用例真卡住时 spawnSync 会永远等，
+     * 跑的人只能靠猜「是不是残留进程在干扰」。10 分钟远高于最慢的用例，超了就是真卡死。
+     */
+    timeout: 10 * 60 * 1000,
   });
   const ms = Date.now() - t0;
-  const ok = r.status === 0;
+  const timedOut = r.error?.code === 'ETIMEDOUT';
+  const ok = r.status === 0 && !timedOut;
   console.log(`  ${ok ? '✓' : '✗'} ${path.basename(f)}  ${(ms / 1000).toFixed(1)}s`);
   results.push({ f, ok, ms });
   if (!ok) {
@@ -368,8 +377,18 @@ for (const f of targets) {
     if (hits.length) {
       console.log(`    ---- 没过的断言（${hits.length} 条，带 文件:行）----`);
       for (const h of hits) console.log(`    ${h.at ? '@' + h.at : '@?（标签跨行了，自己搜一下）'}  ${h.line}`);
+    } else if (timedOut) {
+      /*
+       * **别再说"挂"**（2026-11-20 用户实报）：上一版写「用例多半是抛异常挂的」，
+       * agent 把"挂"读成了"进程挂住"，转头去按进程名全量清 node、把自己杀掉。
+       * 超时和抛异常是两件事，分开说，各自给下一步。
+       */
+      console.log('    ---- 超时（10 分钟没结束）：用例真卡住了，不是"残留进程"；先看它最后一行输出在哪一步 ----');
     } else {
-      console.log('    ---- 没有 ✗ 行：用例多半是抛异常挂的，看下面的尾部 ----');
+      console.log('    ---- 没有 ✗ 行：用例是**异常退出**（不是卡住），下面是异常栈顶 ----');
+      const lines = out.split('\n');
+      const at = lines.findIndex((l) => /\b[A-Za-z]*Error\b|跑挂了|^error:/.test(l));
+      if (at >= 0) console.log(lines.slice(at, at + 12).map((l) => '    ' + l).join('\n'));
     }
     if (logRel) console.log(`    ---- 完整输出（${out.length} 字节）----\n    ${logRel}`);
     const tail = out.split('\n').slice(-15).join('\n');

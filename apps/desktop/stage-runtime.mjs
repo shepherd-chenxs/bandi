@@ -57,6 +57,63 @@ copyTree(path.join(repo, 'apps', 'web'), path.join(out, 'apps', 'web'));
 fs.mkdirSync(path.join(out, 'apps', 'desktop'), { recursive: true });
 copyTree(path.join(here, 'shell.mjs'), path.join(out, 'apps', 'desktop', 'shell.mjs'));
 
+/*
+ * 第三方运行时依赖（2026-11-20）：控制面 `import DatabaseSync from 'better-sqlite3'`，
+ * 安装包里必须带它和它的两个运行时依赖，否则装出来的软件一启动就
+ * `Cannot find package 'better-sqlite3'` —— 开发机上因为仓库根有 node_modules，
+ * 这个缺口一直没暴露。落点 `apps/node_modules/`：安装后目录与仓库同构，
+ * Node 从 `apps/server/src/store/db.mjs` 往上找正好命中。
+ *
+ * 只拷运行时用得着的：`deps/`（SQLite C 源码，9.5 MB）和 `src/`（C++ 源码）不进包，
+ * 真正要的只有 `lib/` + `build/Release/*.node`；`prebuild-install` 只在 npm install
+ * 时用，也不进包。
+ *
+ * ⚠️ `.node` 是原生模块，ABI 跟着 Node 版本走：必须用 `fetch-node.mjs` 取的 22.x
+ * 装 / `npm rebuild better-sqlite3` 过，版本错位就是 NODE_MODULE_VERSION 不匹配。
+ * 这里只验文件在不在，ABI 由构建环境保证。
+ */
+const RUNTIME_PACKAGES = ['better-sqlite3', 'bindings', 'file-uri-to-path'];
+const runtimeNm = path.join(out, 'apps', 'node_modules');
+/** 编译期才用得到的物料：SQLite/C++ 源码与构建脚本，装到用户机器上纯属占地方。 */
+const buildOnly = (p) => /[\\/](deps|src)[\\/]/.test(p) || /[\\/]binding\.gyp$/.test(p);
+for (const pkg of RUNTIME_PACKAGES) {
+  const from = path.join(repo, 'node_modules', pkg);
+  if (!fs.existsSync(from)) {
+    console.error(`缺 ${from}\n  —— 先「npm ci」再跑本脚本（第三方运行时依赖要跟着进包）。`);
+    process.exit(1);
+  }
+  copyTree(from, path.join(runtimeNm, pkg), { filter: (f) => !buildOnly(f) });
+}
+const addon = path.join(runtimeNm, 'better-sqlite3', 'build', 'Release', 'better_sqlite3.node');
+if (!fs.existsSync(addon)) {
+  console.error(`缺 ${addon}\n  —— better-sqlite3 的原生模块没编出来：npm rebuild better-sqlite3 后重跑。`);
+  process.exit(1);
+}
+
+/**
+ * 第三方许可文本（2026-11-20）：better-sqlite3 与它的运行时依赖都是 MIT，
+ * 随包分发就得带版权与许可声明（MIT 的硬要求）。三份原文摊进 `runtime/third-party/`，
+ * 由 `bundle.resources` 映射到安装目录的 `third-party/`，NOTICE 里点名它们在哪。
+ */
+const THIRD_PARTY = [
+  ['better-sqlite3', 'better-sqlite3-LICENSE.txt'],
+  ['bindings', 'bindings-LICENSE.md'],
+  ['file-uri-to-path', 'file-uri-to-path-LICENSE.txt'],
+];
+fs.mkdirSync(path.join(out, 'third-party'), { recursive: true });
+for (const [pkg, name] of THIRD_PARTY) {
+  const lic = ['LICENSE', 'LICENSE.md', 'LICENSE.txt']
+    .map((n) => path.join(repo, 'node_modules', pkg, n))
+    .find((p) => fs.existsSync(p));
+  if (!lic) {
+    console.error(`缺 ${pkg} 的 LICENSE（node_modules/${pkg}/）—— 许可文本必须随包，缺了直接失败。`);
+    process.exit(1);
+  }
+  fs.copyFileSync(lic, path.join(out, 'third-party', name));
+  files += 1;
+  bytes += fs.statSync(path.join(out, 'third-party', name)).size;
+}
+
 /** 平台的技能库与已装插件目录：控制面会从仓库根读它们（缺了不致命，但会"少了东西"） */
 for (const d of ['skills', 'plugins']) {
   const src = path.join(repo, d);
@@ -102,8 +159,10 @@ for (const line of [
   '  apps/server    控制面',
   '  apps/web       界面',
   '  apps/desktop/shell.mjs  壳的 Node 半',
+  '  apps/node_modules  better-sqlite3 + bindings + file-uri-to-path',
   '  skills, plugins',
   '  LICENSE, NOTICE, node-LICENSE.txt  随包分发的许可文本',
+  '  third-party/   better-sqlite3 等三份 MIT 许可原文',
 ]) {
   console.log(line);
 }

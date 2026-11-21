@@ -668,13 +668,6 @@
   /* 分割线跟着图标右侧起（默认是 16px，那样会从图标身上穿过去） */
   .item:has(> .mb-cv-ico) { --mb-gutter: calc(var(--mb-pad, 16px) + 36px + 12px); }
 
-  .mb-cv-n {
-    margin-left: auto;
-    font-size: 15px;
-    color: var(--dim);
-    font-variant-numeric: tabular-nums;
-  }
-
   /* ── A–Z 组头（吸顶灰条） ── */
   .mb-az-head {
     position: sticky;

@@ -121,15 +121,40 @@ export function listUsers() {
 }
 
 /**
- * 账号名册：**所有能进面板的身份都能看**的极简版 —— 只有 id / 名字 / 昵称 / 是不是内置。
- * 给通讯录的「成员」段与看板派活选真人用。昵称（2026-11-09）跟着名册走：显示名是
- * "团队里有谁"的一部分，跟名字一样不算秘密；改/清昵称仍只在 mayManage 后面（PATCH）。
+ * 账号名册的**极简一行**：只有 id / 名字 / 昵称 / 是不是内置。
+ *
+ * 「独立操作平台」口径（2026-11-21 用户拍板：「中枢是将军令，每个人登录都是独立的
+ * 操作平台」）：名册不再对他人下发 —— /api/state 只带**自己**这一行，看板派活选真人
+ * 也就只剩自己；全量名册（含中枢绑定）只留给机主（routes/users.mjs GET /api/users）。
+ * 昵称（2026-11-09）跟着名册走：显示名是署名的一部分，改/清昵称仍只在 PATCH 后面。
  */
-export function listUserBriefs() {
-  return db
-    .prepare('SELECT id, name, nickname, builtin FROM users ORDER BY builtin DESC, createdAt ASC, id ASC')
-    .all()
-    .map((r) => ({ id: r.id, name: r.name, nickname: r.nickname ?? null, builtin: !!r.builtin }));
+const BRIEF_FIELDS = 'id, name, nickname, builtin';
+const briefRow = (r) => ({ id: r.id, name: r.name, nickname: r.nickname ?? null, builtin: !!r.builtin });
+
+/** 自己那一行名册（null = 没这个人） */
+export function userBrief(id) {
+  const r = db.prepare(`SELECT ${BRIEF_FIELDS} FROM users WHERE id = ?`).get(String(id ?? ''));
+  return r ? briefRow(r) : null;
+}
+
+/* ------------------------------------------------------------------ 显示名 */
+
+/**
+ * 账号名是手机号时打码（2026-11-21 独立操作平台：别人的手机号不从署名里漏出去）。
+ * 13800138999 → 138****8999；昵称与普通名字原样过。
+ */
+export function maskAccountName(name) {
+  const s = String(name ?? '');
+  return /^1\d{10}$/.test(s) ? `${s.slice(0, 3)}****${s.slice(7)}` : s;
+}
+
+/**
+ * 真人显示名（署名口径，2026-11-21）：**昵称优先**，没有昵称就退回打码后的账号名。
+ * 真人只在署名处出现 —— 群消息署名、看板卡执行人、状态改动归因都走这里拼名字。
+ */
+export function displayNameOf(user) {
+  if (!user) return null;
+  return user.nickname || maskAccountName(user.name) || null;
 }
 
 export function getUser(id) {
