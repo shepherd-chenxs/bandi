@@ -13,6 +13,10 @@
  *      （声称的动作，run 收尾时早就该落库 —— 这轮没做就是没做）。
  * 「已派 … doing」这类只核存在性：卡可能已经跑完进了下一态，状态词对不上不算撒谎。
  *
+ * **2026-11-21 增补（第 3 档）**：另核一件可证伪的事 —— `[受阻]` + 本轮 0 条工具事件
+ * + 理由是环境事实（不存在 / 没装 / 被占用 / 连不上…）= 这个判断不可能验证过。
+ * 处置与上面几种不同：**只记信箱、不唤醒**（详见 unverifiedEnvClaim / reconcile 的注释）。
+ *
  * 时机：挂在 runs.onRunFinish、且注册在 onTaskRunFinished **之后**（server.mjs 的注册
  * 顺序保证）—— 先让 [完成] 标记把卡状态流转完，再核对，避免"员工刚声明交付、
  * 卡还在待验收"的假阳性。
@@ -25,6 +29,7 @@
 import * as store from './store.mjs';
 import { candidateRoots, resolveInRoots } from './routes/workspace.mjs';
 import { dispatchEventToThread } from './dispatch.mjs';
+import { claimOf, blockedReasonOf, BLOCKED_MARK } from './delivery-claim.mjs';
 
 /** 卡号：pt- 前缀 + 6~16 位十六进制（平台 newId 的实际形态） */
 const ID_RE = /\bpt-[0-9a-f]{6,16}\b/gi;
@@ -49,6 +54,29 @@ const SKIP_SENTENCE_RE = /(还没|将(要|会|落盘|写入|创建|生成|复制
  * （排除句）永远追不完，白名单才能零误判：没有正向声明 = 没有核对对象。
  */
 const FILE_CLAIM_RE = /(落盘|已写入|已保存|已生成|已创建|已放到|已复制|已落到|证据|已存在)/;
+/**
+ * **环境类事实断言**（2026-11-21 第 3 档：环境类结论必须先实测再停）。
+ *
+ * 起因是那个被反复问的问题——"为什么同样一件事，WorkBuddy 能做完，bandi 遇到问题就报失败停"。
+ * 复盘时挑出其中最便宜的一处浪费：**凭代码推断宣布机器状态**（钩子不在 / 端口被占 /
+ * 进程残留 / 依赖没装 / 连不通），然后据此 `[受阻]`。这类判断一条命令就能证伪，
+ * 而且**环境是流动的**——停下来那一刻的结论，第二天多半已经不成立。
+ *
+ * 只认"关于机器与仓库的事实"这类词；**权限 / 授权 / 审批 / 沙箱被拒不算**（entitlement）：
+ * 那本来就不该自己跑去试，报了是对的，绝不能因此打回。
+ */
+const ENV_CLAIM_RE = new RegExp(
+  // ① 本身就只描述机器 / 仓库状态的词，直接认
+  '(?:没装|未安装|装不上|没启动|未启动|没起来|被占用|已经被占|已失效|失效了|连不上|拒绝连接' +
+    '|端口[^。；\\n]{0,10}(?:不通|冲突|已用)|进程[^。；\\n]{0,12}(?:残留|还在|没退)' +
+    '|command not found|not recognized as an internal|ENOENT|EADDRINUSE|ECONNREFUSED|getaddrinfo|ETIMEDOUT)' +
+    // ② "不存在 / 找不到 / 不通" 太泛（"找不到这张卡"不是环境判断）→ 必须挨着环境名词
+    '|(?:文件|目录|文件夹|路径|端口|进程|命令|依赖|模块|钩子|服务|脚本|分支|证书|配置|环境变量)[^。；\\n]{0,10}(?:不存在|找不到|不通)' +
+    '|(?:不存在|找不到|不通)[^。；\\n]{0,10}(?:文件|目录|文件夹|路径|端口|进程|命令|依赖|模块|钩子|服务|脚本|分支|证书|配置|环境变量)',
+  'i',
+);
+/** 权限 / 授权 / 审批 / 沙箱类受阻：报了是对的，不归这条核对管 */
+const ENTITLEMENT_RE = /(权限|授权|审批|被拒|无权|没资格|沙箱|sandbox|approval)/i;
 /** 打回重做的预算：同一轮里同一处不一致只打回一次 —— 重做还不行才升级信箱 */
 const MAX_BOUNCE = 1;
 const bounceBudget = new Map(); // key: runId:id:kind → 已打回次数
@@ -134,6 +162,44 @@ function auditFileClaims(text, convId, notices) {
   }
 }
 
+/** 本轮的工具事件条数（只数 type:'tool' —— thinking 里"想过"不算调过） */
+function toolEventCount(runId) {
+  return store
+    .listRunEvents(runId, 0)
+    .map((e) => {
+      try { return JSON.parse(e.evt); } catch { return null; }
+    })
+    .filter((e) => e?.type === 'tool').length;
+}
+
+/**
+ * **②-d 环境类断言必须实测过**（2026-11-21 第 3 档；契约第 13 条的执行侧核对）。
+ *
+ * 判据是**可证伪的**，不靠措辞推测：`[受阻]` + 本轮 **0 条 tool 事件** + 理由是环境事实
+ * （不存在 / 没装 / 被占用 / 连不上…）→ 这条判断在数学上**不可能验证过**（一次工具都没调）。
+ * 三种情况明确不管：
+ *   · 不是 `[受阻]`（还在干活、只是中间提了一句环境）→ 不归这条管；
+ *   · 理由含权限 / 授权 / 审批 / 沙箱 → 那是 entitlement，本来就不该自己跑去试；
+ *   · 调过任何工具 → 分不清他验的是哪一条，**宁可漏报不误报**（跟文件核对同一个口径）。
+ *
+ * 处置：**只记信箱，不自动重跑**。这一条和"打回重做"不同 —— 它未必是谎，只是"该验没验"，
+ * 自动唤醒要花一次真跑、而且在"每轮都收尾"的链路上容易滚成循环（一次错判 = 一直重跑）。
+ * 信箱里写清"这不是失败，是可能本来能过"，把决定权交给雇主。
+ */
+function unverifiedEnvClaim({ run, text }) {
+  if (!run?.id) return null; // 没有 run id 就查不了事件 → 不敢下判断
+  if (claimOf(text) !== 'blocked') return null;
+  const lines = String(text ?? '').split('\n').map((l) => l.trim()).filter(Boolean);
+  const reason = lines.filter((l) => l.startsWith(BLOCKED_MARK)).join(' ') || blockedReasonOf(text) || lines.at(-1) || '';
+  if (!reason || !ENV_CLAIM_RE.test(reason) || ENTITLEMENT_RE.test(reason)) return null;
+  if (toolEventCount(run.id) > 0) return null;
+  return {
+    id: 'env:unverified',
+    kind: 'unverified-env',
+    line: `「${reason.replace(/^\[受阻\]\s*/, '').slice(0, 80)}」—— 这一轮**一条工具都没调过**，这个环境判断没有实测（先跑一条能验它的命令再说）`,
+  };
+}
+
 export function auditRunReply({ run }) {
   const text = String(run?.finalText ?? '');
   if (!text.trim() || !run?.conversationId) return [];
@@ -188,6 +254,9 @@ export function auditRunReply({ run }) {
   for (const s of claimSentences) {
     auditFileClaims(s, run.conversationId, notices);
   }
+  // ②-d 环境类断言必须实测过（2026-11-21 第 3 档）—— 见 unverifiedEnvClaim 注释
+  const envNote = unverifiedEnvClaim({ run, text });
+  if (envNote) notices.push(envNote);
   return notices;
 }
 
@@ -216,10 +285,21 @@ export function reconcile({ run }) {
   const applied = [];
   const bounced = [];
   const escalated = [];
+  const unverified = [];
 
   for (const m of mismatches) {
     const bKey = `${run.id}:${m.id}:${m.kind}`;
     const times = bounceBudget.get(bKey) ?? 0;
+
+    /*
+     * **环境判断未实测**（2026-11-21 第 3 档）：只记信箱，不唤醒、不打回。
+     * 它不是谎（模型没声称做了动作），而是"该验没验"；自动唤醒会花一次真跑，
+     * 且在"每轮都收尾"的链路上容易滚成循环。判断留给雇主：点重跑，他自己会先验。
+     */
+    if (m.kind === 'unverified-env') {
+      unverified.push(`· ${m.line}`);
+      continue;
+    }
 
     if (m.kind === 'status') {
       // **验收人（建卡人）的文字验收**：决定已表达，程序照办 —— 账做平
@@ -259,6 +339,22 @@ export function reconcile({ run }) {
     }
   }
 
+  // 环境判断未实测 → 信箱一条（severity info：这不是红账，是"可能本来能过"）
+  if (unverified.length) {
+    store.addNotice({
+      kind: 'audit',
+      severity: 'info',
+      title: '【实测核对】这一轮没跑任何命令，环境判断未验证',
+      detail:
+        unverified.join('\n') +
+        '\n\n这不是失败，是"可能本来能过"：环境是流动的，凭推断停下的结论多半已经过期。' +
+        '点一次重跑，让他先跑一条命令验了再决定停不停。',
+      conversationId: convId ?? null,
+      personaId: run.personaId ?? null,
+      dedupeKey: `claim-audit:env:${run.id}`,
+    });
+  }
+
   // 打回过后还没平的账 → 升级信箱给雇主（最后手段，不是第一反应）
   if (escalated.length) {
     store.addNotice({
@@ -271,5 +367,5 @@ export function reconcile({ run }) {
       dedupeKey: `claim-audit:${run.id}`,
     });
   }
-  return { mismatches, applied, bounced, escalated };
+  return { mismatches, applied, bounced, escalated, unverified };
 }

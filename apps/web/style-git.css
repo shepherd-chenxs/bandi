@@ -42,8 +42,8 @@
                   font: inherit; font-size: 12.5px; cursor: pointer;
                   border-radius: 0;
                   border-bottom: 2px solid transparent; margin-bottom: -1px; }
-.gr-tabs button:hover { color: var(--text); background: none; border-radius: 0; }
-.gr-tabs button:focus-visible { outline: none; border-radius: 0; }
+.gr-tabs button:hover { color: var(--text); background: none; border-radius: 0; border-bottom-color: transparent; }
+.gr-tabs button:focus-visible { outline: none; border-radius: 0; border-bottom-color: transparent; }
 .gr-tabs button.on { color: var(--text); background: none; border-radius: 0;
                      border-bottom-color: var(--accent); font-weight: 600; }
 /* 兜底（2026-11-20 用户："鼠标悬浮不要高亮显示块"）：把四种交互态的背景一次性压平，
@@ -61,18 +61,32 @@
 }
 .plg-sec[data-gr-tab] { display: none; }
 .plg-sec[data-gr-tab].on { display: block; }
+/* 四个 tab 的标题顶间距统一（2026-11-20 用户："标题跟上部的间隙统一，提交那个 tab 的标题跟上部的间隙就很小"）。
+   根因不在 tab 条，在 style.css 的 `.plg-sec + .plg-sec { margin-top: 14px }`：它按**DOM 相邻**算，
+   而 `.plg-sec[data-gr-tab]{display:none}` 不影响相邻关系 —— 被隐藏的兄弟照样把它自己的 14px 让给下一块，
+   于是除**第一块**（提交，前面只有 tab 条）以外，其余 tab 的面板都白拿了 14px。补齐第一块，
+   四个 tab 就都是 18px（tab 条 margin-bottom 4 + 14）。
+   ⚠️ 只补 margin 还不够：标题行里有按钮的 tab（分支管理 / PR）行更高，`align-items:center` 会把
+   标题再往下压 2px，量出来 16 对 14。给标题行钉一个最小高，四块才真的严丝合缝。 */
+.gr-tabs + .plg-sec { margin-top: 14px; }
+.plg-detail > .plg-sec[data-gr-tab] > .plg-sec-head { min-height: 26px; }
 /* 导航条上的本地目录（2026-11-20 用户："这个去掉，换成本地目录"）：接替原来分支 pill 的位置，
    等宽小字、降灰，路径长了省略号 —— 不撑破 50px 的固定导航条。 */
-.gr-head-path { font-family: ui-monospace, monospace; font-size: 11.5px; color: var(--dim);
+.gr-head-path { font-family: ui-monospace, monospace; font-size: 11.5px; color: var(--dim); line-height: 1;
                 min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 标题行右上角的当前本地分支（2026-11-20 用户："在右上角显示当前本地分支"）：
-   齿轮撤掉后靠 margin-left:auto 顶到右沿；窄屏时最多占四成宽，超长省略，别把标题挤爆。 */
-.gr-head-branch { margin-left: auto; display: inline-flex; align-items: center; gap: 6px;
+   齿轮撤掉后靠 margin-left:auto 顶到右沿；窄屏时最多占四成宽，超长省略，别把标题挤爆。
+   line-height 全部归 1：固定导航条里这行是小字，默认行高会把纵向中心各自算偏，
+   看着就跟左边标题、路径不在一条水平线上。 */
+.gr-head-branch { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; line-height: 1;
                   min-width: 0; max-width: 40%; font-size: 12px; color: var(--dim); }
-.gr-head-br-ic { display: inline-flex; flex: 0 0 auto; }
-.gr-head-br-ic svg { width: 13px; height: 13px; }
-.gr-head-branch b { font-size: 12px; font-weight: 500; color: var(--text);
+.gr-head-br-ic { display: inline-flex; align-items: center; align-self: center; }
+.gr-head-br-ic svg { display: block; width: 13px; height: 13px; }
+.gr-head-branch b { font-size: 12px; font-weight: 500; line-height: 1; color: var(--text);
                     min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 拉取请求 / PR 列表标题行右上角的「刷新」推右对齐（2026-11-20 用户："刷新按钮右对齐"），
+   与「立即巡检」「推送」同类做法：留给 margin-left:auto，标题和状态字靠左。 */
+#grPullsRefresh, #grReviewRefresh { margin-left: auto; }
 /* 分支管理（2026-11-20）：列表从分支下拉浮层搬进 tab，样式按同一套视觉重画 ——
    分组标题、文件夹、行（图标/名称/上游/↑↓/›菜单）。行是 button，键盘可达。 */
 /* 不自己做滚动容器（2026-11-20 用户："卡里出现滚动条别扭，期望在外部显示滚动条"）：
@@ -144,13 +158,25 @@
 /* 「立即巡检」推到标题行最右（2026-11-20 用户："按钮右对齐"）：.plg-sec-head 是 flex，
    margin-left:auto 吃掉中间空隙；id 唯一，不会影响别的分区头。 */
 #grPatrolRun { margin-left: auto; }
+/* 推送行的「推送」钮同理贴右沿（2026-11-20 用户："按钮右对齐"）。 */
+#grPushNow { margin-left: auto; }
 .gr-conn-dlg .gr-dlg-body { display: flex; flex-direction: column; gap: 12px; padding: 14px 0 4px; }
 .gr-dlg-row { display: flex; align-items: center; gap: 10px; }
 .gr-dlg-row input { flex: 1; min-width: 0; }
+/* 令牌框的小眼睛（2026-11-20 用户："这里的眼睛怎么没了"）：复用 .plg-pw / .plg-eye，
+   外面多包一层后要把它撑成行内的弹性项，输入框才会照常吃满宽度。 */
+.gr-dlg-row .plg-pw { flex: 1; min-width: 0; }
+.gr-dlg-row .plg-pw input { width: 100%; }
+/* 2026-11-20 用户："怎么又两个" —— WebView2 / Edge 对 type=password 自带一颗「显示密码」的眼睛，
+   和我们自绘的 .plg-eye 并排出现。把原生那颗关掉，只留我们自己的。 */
+.gr-conn-dlg input::-ms-reveal,
+.gr-conn-dlg input::-ms-clear { display: none; }
+/* 明文时换成闭眼图标（2026-11-20 用户："明文状态要显示闭眼的图标"）：
+   两颗 SVG 叠在同一颗按钮里按 .on 切显示，按钮尺寸不变。 */
+#gitTokenEye .ic-eye-off { display: none; }
+#gitTokenEye.on .ic-eye { display: none; }
+#gitTokenEye.on .ic-eye-off { display: block; }
 .gr-dlg-row > button { flex: 0 0 auto; }
-/* 状态行跟输入框左缘对齐（2026-10-26 九改，用户："连接状态放到输入框下面"）：
-   行首放一个看不见的「令牌」占位（visibility 不占视觉、宽度与真标签同款），状态文本自然贴到输入框起点。 */
-.gr-dlg-row .gr-dlg-pad { visibility: hidden; flex: 0 0 auto; }
 .gr-dlg-status { flex: 1; min-width: 0; font-size: 12.5px; color: var(--dim); overflow: hidden;
                  text-overflow: ellipsis; white-space: nowrap; }
 .gr-dlg-status b { font-weight: 500; }
@@ -158,9 +184,10 @@
 /* 「断开连接」跟输入框同高同圆角（2026-10-26 八改）：.mini 基础是 26px 图标钮，
    在弹窗里压回普通文本钮的个头（输入框 = padding 7px 9px + font 13px）。 */
 .gr-dlg-row .mini.auto { height: auto; padding: 9.5px 14px; font-size: 12.5px; line-height: 1.4; }
-/* 「连接 GitHub」跟输入框同一行、贴在行尾（2026-10-26 七改，用户："按钮放到输入框后面"）；
-   输入框 flex:1 吃掉剩余宽度，按钮不缩。 */
-.gr-dlg-row .primary { padding: 0 18px; }
+/* 「保存令牌」跟输入框同一行、贴在行尾（2026-10-26 七改，用户："按钮放到输入框后面"）；
+   输入框 flex:1 吃掉剩余宽度，按钮不缩。
+   2026-11-20 用户："保存令牌按钮高度调高一些" —— 钉成 34px，跟输入框（7px 内边距 + 13px 字）齐高。 */
+.gr-dlg-row .primary { height: 34px; padding: 0 18px; }
 /* 修改密码弹窗（2026-11-10 用户："标签长度一致，后面的输入框对齐"）：
    三栏标签宽度钉死取最宽的「确认新密码」，输入框左缘对齐。
    作用域收在 pw-dlg —— GitHub 连接弹窗（gr-conn-dlg 裸类）标签短、行里还带按钮，
@@ -187,7 +214,6 @@
                     border: 0; border-radius: 7px; background: var(--side); }
 .gr-help-perms b { font-size: 12px; }
 .gr-help-perms span { font-size: 11.5px; }
-.gr-help-note { display: block; margin-top: 6px; font-size: 11.5px; color: var(--dim); }
 .gr-help-foot { margin: 10px 0 0; }
 .gr-help-foot .help-link { margin-top: 0; }
 /* 路径 + 同步时间：等宽字小一档，单行省略（悬停看全文），跟 machine-path 同一套。

@@ -29,6 +29,18 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bandi-prcreate-'));
  */
 const emptyGitConfig = path.join(tmp, 'gitconfig-empty');
 fs.writeFileSync(emptyGitConfig, '');
+/*
+ * **连运行时注入的 git 配置一起清掉**（2026-11-20 用户实报：同一份 smoke 本机手动跑绿、
+ * 派给研发员工跑必红，红了三轮）。
+ *
+ * 根因不在被测代码：agent-git 用 `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_n` / `GIT_CONFIG_VALUE_n`
+ * 给 agent 的子进程注入 `core.hooksPath=<数据目录>\git-hooks`，这份环境变量被 smoke 继承后，
+ * **临时仓库也挂上了班底的 pre-push 闸** —— 于是「显式放行」那一档被自己的钩子拦下（E1299）。
+ * 测试只认自己钉的配置：先把继承来的 KEY/VALUE 删干净，再设 GLOBAL/SYSTEM。
+ */
+for (const k of Object.keys(process.env)) {
+  if (k === 'GIT_CONFIG_COUNT' || /^GIT_CONFIG_(?:KEY|VALUE)_\d+$/.test(k)) delete process.env[k];
+}
 process.env.GIT_CONFIG_GLOBAL = emptyGitConfig;
 process.env.GIT_CONFIG_SYSTEM = emptyGitConfig;
 const PORT = Number(process.env.SMOKE_PORT ?? 8896);
@@ -69,7 +81,7 @@ const makeRepo = (name) => {
   g(['init', '-q', '-b', 'main', work]);
   g(['-c', 'user.name=chu', '-c', 'user.email=chu@example.invalid', 'commit', '-q', '--allow-empty', '-m', 'init'], work);
   g(['remote', 'add', 'origin', bare], work);
-  g(['push', '-q', 'origin', 'main'], work);
+ g(['-c', 'core.hooksPath=', 'push', '-q', 'origin', 'main'], work);
   return { bare, work };
 };
 
@@ -143,9 +155,9 @@ check('分档：实锤档（.env / id_rsa）直接拦，判据代码 / token-buc
 check('内容扫描：私钥块与已知令牌命中', secretPaths.scanContentForSecrets('k.pem', '-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n') === '私钥块（PEM/OpenSSH 等）' && secretPaths.scanContentForSecrets('token.json', '{"token": "sk-proj-abcdefghijklmnopqrstuvwx"}') === 'OpenAI 风格密钥（sk-…）');
 check('内容扫描：占位值 / 测试豁免位算干净（拦测试假密钥等于逼人搬走测试）', secretPaths.scanContentForSecrets('token.json', '{"token": "占位值待填"}') === null && secretPaths.scanContentForSecrets('tests/fixtures/token.json', '{"token": "sk-proj-abcdefghijklmnopqrstuvwx"}') === null);
 /* 报错规范（2026-11-14，docs/契约.md「十一」）：常见错 = 错误码 + 一句人话 + 出路，原始信息垫底 */
-check('推送翻译：代理没通 → E1204 连不上 GitHub（curl 原文只垫底）', (() => {
+check('推送翻译：代理没通 → E1204 连不上 GitHub（不报代理端口，curl 原文只垫底）', (() => {
   const t = git.translatePushFailure("fatal: unable to access 'https://github.com/shepherd-chenxs/bandi.git/': Failed to connect to github.com:443 over proxy 127.0.0.1 after 0 ms: Could not connect to server");
-  return t.code === 'E1204' && /连接不上 github\.com/.test(t.text) && /代理 127\.0\.0\.1/.test(t.text) && /原始信息：/.test(t.text);
+  return t.code === 'E1204' && /连接不上 github\.com/.test(t.text) && !/代理 127\.0\.0\.1/.test(t.text) && /原始信息：/.test(t.text);
 })(), JSON.stringify(git.translatePushFailure('Failed to connect to github.com:443 over proxy 127.0.0.1: x')));
 check('推送翻译五档全带码', (() => {
   const a = git.translatePushFailure('! [remote rejected] main -> main (push declined due to repository rule violations)');
@@ -255,7 +267,7 @@ const trimRepo = makeRepo('trim');
 fs.writeFileSync(path.join(trimRepo.work, 'base.txt'), 'v1\n');
 g(['-C', trimRepo.work, 'add', 'base.txt'], trimRepo.work);
 g(['-C', trimRepo.work, '-c', 'user.name=trim', '-c', 'user.email=trim@example.invalid', 'commit', '-q', '-m', 'base'], trimRepo.work);
-g(['-C', trimRepo.work, 'push', '-q', 'origin', 'main'], trimRepo.work);
+g(['-C', trimRepo.work, '-c', 'core.hooksPath=', 'push', '-q', 'origin', 'main'], trimRepo.work);
 fs.writeFileSync(path.join(trimRepo.work, 'base.txt'), 'v2\n');
 const trimRow = (await git.connectRepo('smoke/trim', null, trimRepo.work)).repo;
 const trimState = await git.workState(trimRow);
@@ -516,8 +528,8 @@ try {
   nf = e;
 }
 check(
-  '404 → 点名仓库 + 指路令牌授权（不再是一句干巴巴的 Not Found，2026-11-14 流程实报）',
-  !!nf && /访问不了仓库 smoke\/demo/.test(nf.message) && /仓库授权/.test(nf.message) && /Not Found/.test(nf.message),
+  '404 → 点名仓库 + 指向令牌授权（2026-11-20 收敛成一句书面语）',
+  !!nf && /无法访问仓库 smoke\/demo/.test(nf.message) && /仓库授权/.test(nf.message) && /404/.test(nf.message),
   String(nf?.message ?? nf).slice(0, 140),
 );
 check('404 的 status 照旧挂在错误上（程序判定走 status，不走文案）', nf?.status === 404 && nf?.githubMessage === 'Not Found', JSON.stringify({ s: nf?.status, g: nf?.githubMessage }));

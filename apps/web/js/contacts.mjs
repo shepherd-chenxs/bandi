@@ -6,7 +6,7 @@
  * 手机那种 ABC 的"）：上方一组入口（群聊 / 部门，点进去是各自的列表），下方全部员工
  * 按拼音首字母 A–Z 分组 + 右侧索引条。**只走窄屏**，桌面仍是部门分组。
  * A–Z 的首字母判定沿用 2026-10-20 那版的边界字方案（见 nameInitial 注释）。 */
-import { esc, personSubtitle, roleNameOf, saveCollapsed, toast, userLabel } from './shell.mjs';
+import { esc, personSubtitle, roleNameOf, saveCollapsed, toast } from './shell.mjs';
 import { ICON_CLOUD, ICON_FOLDER, cut, hhmm, initial, personaAvatar, plain } from './ui.mjs';
 import { openSettings, settingsGroups } from './settings.mjs';
 import { archivedEntryHTML, closeCtxMenu, convDisplayName, enterArchiveView, openConversationSafe, renderArchiveList } from './listmenu.mjs';
@@ -474,14 +474,10 @@ export function renderList() {
   // 搜索支持姓名 / 部门 / 岗位（2026-11-19 用户：「支持按照岗位搜」）——
   // 岗位名从 roleKey 解析（roleNameOf），跟列表副标题显示的是同一个口径。
   const people = S.personas.filter((p) => match(p.name) || match(p.department) || match(roleNameOf(p)));
-  // 真人（2026-10-31 用户概念落地）：设置 → 用户里建的账号，通讯录单独一段，跟数字员工分开。
-  // 自己不摆进来（2026-11-04 用户实报"用户不要显示在这里"）：通讯录是找别人的名册，
-  // 自己（me = 回环 / 令牌的本机自动登录用户，或登录用户本人）摆在里面没有意义。
-  // 只过滤通讯录这一处 —— 看板派活那些读的是全量 S.users，自己给自己派活是合法操作。
-  const users = (S.users ?? []).filter((u) => u.id !== S.me?.id && (match(u.name) || match(u.nickname)));
-  // 名册里除了自己还有没有别人：单人部署时「成员」段整段不画 ——
-  // 摆一个"成员 0 · 还没有成员"反而误导（人其实有，就是自己）。
-  const hasOtherUsers = (S.users ?? []).some((u) => u.id !== S.me?.id);
+  /* 真人账号不再是通讯录对象（2026-11-21 用户拍板：「中枢是将军令，每个人登录都是
+     独立的操作平台。看到别的成员，这个不合理」）——「成员」段整段退场（桌面、手机
+     入口/子页/搜索都撤）。名册本来就只下发自己（/api/state），真人想在界面上露面
+     只剩署名一条路：群消息、看板卡、状态改动，名字由服务端拼好（昵称优先，手机号打码）。 */
   /**
    * 分段标题。收起时**整段内容不渲染**（不是单纯 display:none）——
    * 收起就没有它的 DOM，点了也不会先闪一下再消失。
@@ -516,7 +512,7 @@ export function renderList() {
    * 桌面继续走部门分组 —— 下面这一整段一行不动。
    */
   if (S.nav === 'contacts' && isNarrowScreen()) {
-    renderMobileContacts({ q, groups, people, users, hasOtherUsers });
+    renderMobileContacts({ q, groups, people });
     return;
   }
 
@@ -527,10 +523,9 @@ export function renderList() {
     { const si = $('search'); if (si) si.placeholder = '搜索姓名 / 岗位 / 部门'; }
   }
 
-  $('listBody').innerHTML = !groups.length && !people.length && !users.length
+  $('listBody').innerHTML = !groups.length && !people.length
     ? '<div class="empty" style="padding:36px 12px">通讯录还是空的<br />点右上角 ＋ 发起群聊或添加员工</div>'
     : (groups.length || !q ? sec('group', '群聊', groups.length, groups.length ? groupRows : '<div class="list-none">还没有群聊</div>') : '') +
-      (hasOtherUsers && (users.length || !q) ? sec('users', '成员', users.length, users.length ? users.map(userRowHTML).join('') : '<div class="list-none">还没有成员 —— 在「设置 → 用户」里创建</div>') : '') +
       (people.length || !q ? sec('person', '数字员工', people.length, people.length ? personRows : '<div class="list-none">还没有数字员工</div>') : '');
 
   $('listBody').querySelectorAll('[data-sec]').forEach((el) => {
@@ -751,23 +746,6 @@ const personRowHTML = (p) => `<div class="item ${S.persona && S.persona.id === p
         <i class="dot ${p.busy ? 'busy' : ''}" title="${p.busy ? '正在干活' : '现在闲着'}"></i>
       </div>`;
 
-/**
- * 真人行（2026-10-31 用户概念落地）：只摆名字 —— 成员没有会话、没有忙闲，
- * 点不出详情页（要管账号去「设置 → 用户」），所以不给 data-* 也不绑点击。
- * 昵称全端生效（2026-11-09 用户："昵称不能只在我的页面里生效"）：这里画的是昵称
- * （没设退回账号名），头像也取昵称首字 —— 跟「我的」身份卡同一个读法；搜索两边都能搜到。
- * ⚠️ 但要给 `data-nodetail`（2026-11-03）：mobile.mjs 的列表点击委托兜着 `.item`，
- * 不标记的话手机上点成员行会进一个**空的详情态**（主区摆出来却没人往里画 ——
- * 用户实报"详情页空白"的另一半）。
- */
-const userRowHTML = (u) => `<div class="item" data-nodetail>
-        <div class="avatar">${esc(initial(userLabel(u)))}</div>
-        <div class="who">
-          <div class="line1"><b>${esc(userLabel(u))}</b></div>
-          ${u.builtin ? '<div class="line2">管理员</div>' : ''}
-        </div>
-      </div>`;
-
 /** 列表里三类行的点击绑定（桌面 / 手机共用）。 */
 function bindContactRows() {
   const body = $('listBody');
@@ -820,7 +798,7 @@ document.addEventListener('mb-cv-home', () => {
   document.body.classList.remove('mb-cv-sub');
 });
 
-const CV_TITLE = { home: '通讯录', groups: '群聊', depts: '部门', users: '成员', search: '搜索' };
+const CV_TITLE = { home: '通讯录', groups: '群聊', depts: '部门', search: '搜索' };
 
 /*
  * 子页的历史格（2026-11-17 用户实报"部门页按系统返回跳到工作台"）：
@@ -877,8 +855,6 @@ registerLayer({
 /** 入口行 / 部门行的图标（40px 圆角方块里的线性图标，跟底部 tab 同一套笔画） */
 const CV_ICON_GROUP = '<div class="mb-cv-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19.5c.9-3.2 3-5 5.5-5s4.6 1.8 5.5 5"/><circle cx="16.8" cy="9.4" r="2.5"/><path d="M15.7 14.9c2.4.3 4.2 1.9 4.9 4.6"/></svg></div>';
 const CV_ICON_DEPT = '<div class="mb-cv-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="8.5" width="7" height="12" rx="1"/><rect x="13.5" y="3.5" width="7" height="17" rx="1"/><path d="M6 12h1M6 15.5h1M16 7h1M16 10.5h1M16 14h1"/></svg></div>';
-// 成员 = 单人（与 ICON_PERSON 同一套笔画，包上入口卡的壳）
-const CV_ICON_USER = '<div class="mb-cv-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="8" r="3.2"/><path d="M4 19.5c0-3.4 2.7-5.6 6-5.6s6 2.2 6 5.6"/></svg></div>';
 
 /**
  * 列表页头：子页把标题换成子页名，并在左边补一颗「←」——
@@ -893,7 +869,7 @@ function paintCvHead() {
   const el = $('listTitle');
   if (el) el.innerHTML = `<b title="${esc(title)}">${esc(title)}</b>`;
   // 「＋」（发起群聊/添加员工）只在**首页**摆（2026-11-17 用户："部门页不要发起群聊的加号"）：
-  // 子页（群聊/部门/成员/搜索）是纯浏览与查找，新建动作不属于那里；
+  // 子页（群聊/部门/搜索）是纯浏览与查找，新建动作不属于那里；
   // 回首页时照常还回来（setNav 只在换栏时管它，同栏内的视图切换归这儿）
   $('listAction')?.classList.toggle('hidden', mbCv.view !== 'home');
   if (!head) return;
@@ -942,7 +918,7 @@ function mountAzIndex(letters, avoidTop = 0) {
   panel.append(idx);
   /*
    * 索引条只在**字母名单区**里垂直居中，别压到上面的入口卡（2026-11-06 实测：
-   * 390 宽时 A 压到「成员」行的数字＋箭头，320 宽直接盖住「部门」的 chevron ——
+   * 390 宽时 A 会压到入口行的箭头，320 宽直接盖住「部门」的 chevron ——
    * 索引条是绝对定位 top:50% 全高居中，根本不知道上面还有一张卡）。
    * avoidTop = 入口卡在面板里的下缘（px）。条的可用区从卡下 8px 起到面板底 8px 止，
    * 在这段里继续居中 —— CSS 里那条 top:50% 只在 avoidTop=0（旧调用方）时原样生效。
@@ -998,8 +974,8 @@ function mountAzIndex(letters, avoidTop = 0) {
   idx.querySelector('span')?.classList.add('on');
 }
 
-/** 手机通讯录的全部四种视图。groups / people / users 已按搜索词过滤过（users 已去掉自己）。 */
-function renderMobileContacts({ q, groups, people, users = [], hasOtherUsers = false }) {
+/** 手机通讯录的全部视图。groups / people 已按搜索词过滤过（成员段 2026-11-21 退场）。 */
+function renderMobileContacts({ q, groups, people }) {
   const body = $('listBody');
   /*
    * 灰底只给**首页**：那里有入口卡要"浮起来"，ABC 名单也需要灰底衬托白行。
@@ -1020,22 +996,15 @@ function renderMobileContacts({ q, groups, people, users = [], hasOtherUsers = f
   /* 搜索页（2026-11-17 用户："点击跳转到搜索页进行搜索操作"）：
      自带输入框 + 实时结果，行模板与点击行为跟列表页完全同一套。 */
   if (mbCv.view === 'search') {
-    renderCvSearchPage(body, { groups, people, users });
+    renderCvSearchPage(body, { groups, people });
     return;
   }
 
   /* 搜索：不画入口区、不画字母头 —— 结果本来就只有几条，再按字母切碎反而难扫。 */
   if (q) {
-    const rows = groups.map(groupRowHTML).join('') + users.map(userRowHTML).join('') + people.map(personRowHTML).join('');
+    const rows = groups.map(groupRowHTML).join('') + people.map(personRowHTML).join('');
     body.innerHTML = rows || '<div class="empty" style="padding:36px 12px">没找到匹配的人或群</div>';
     bindContactRows();
-    return;
-  }
-
-  if (mbCv.view === 'users') {
-    body.innerHTML = users.length
-      ? users.map(userRowHTML).join('')
-      : '<div class="empty" style="padding:36px 12px">还没有成员<br />到「设置 → 用户」里创建</div>';
     return;
   }
 
@@ -1077,7 +1046,7 @@ function renderMobileContacts({ q, groups, people, users = [], hasOtherUsers = f
   const entry = `<div class="mb-cv-entry">
       <!-- 2026-11-05 用户：「群聊和部门不要显示数字」——
            入口行是导航（点进去才是内容），右侧只该有箭头；数字在这里既不是状态
-           也不可操作，纯占位。成员那行保留（它只有多账号时才出现，是个例外项）。 -->
+           也不可操作，纯占位。 -->
       <div class="item mb-cv-row" data-cv="groups">
         ${CV_ICON_GROUP}
         <div class="who"><div class="line1"><b>群聊</b></div></div>
@@ -1086,11 +1055,6 @@ function renderMobileContacts({ q, groups, people, users = [], hasOtherUsers = f
         ${CV_ICON_DEPT}
         <div class="who"><div class="line1"><b>部门</b></div></div>
       </div>
-      ${hasOtherUsers ? `<div class="item mb-cv-row" data-cv="users">
-        ${CV_ICON_USER}
-        <div class="who"><div class="line1"><b>成员</b></div></div>
-        <span class="mb-cv-n">${users.length}</span>
-      </div>` : ''}
     </div>`;
   const list = az
     .map((g) => `<div class="mb-az-head" data-letter="${g.letter}">${g.letter}</div>${g.rows.map(personRowHTML).join('')}`)
@@ -1114,12 +1078,12 @@ function renderMobileContacts({ q, groups, people, users = [], hasOtherUsers = f
 
 /*
  * 通讯录搜索页（2026-11-17）：导航栏放大镜进来，自带输入框 + 实时结果。
- * 数据直接用 renderMobileContacts 传进来的 groups / people / users（shared q 为空时的全量），
- * 本页再按输入词过滤一遍 —— 行模板（groupRowHTML / userRowHTML / personRowHTML）和
+ * 数据直接用 renderMobileContacts 传进来的 groups / people（shared q 为空时的全量），
+ * 本页再按输入词过滤一遍 —— 行模板（groupRowHTML / personRowHTML）和
  * 点击绑定（bindContactRows）跟列表页完全同一套，点结果 = 点列表行，行为零分叉。
  * 返回 = 页头「←」（paintCvHead 给非 home 视图统一挂的那颗，goCvHome 回首页）。
  */
-function renderCvSearchPage(body, { groups, people, users }) {
+function renderCvSearchPage(body, { groups, people }) {
   body.classList.remove('mb-cv-root');
   body.innerHTML = `
     <div class="mb-cv-search"><div class="ls-field">
@@ -1127,7 +1091,7 @@ function renderCvSearchPage(body, { groups, people, users }) {
         <circle cx="5.5" cy="5.5" r="4" fill="none" stroke="currentColor" stroke-width="1.4"/>
         <path d="M8.7 8.7 12 12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
       </svg>
-      <input id="cvSearchInput" placeholder="搜索群聊、岗位、部门、成员" aria-label="搜索通讯录" autocomplete="off" />
+      <input id="cvSearchInput" placeholder="搜索群聊、岗位、部门" aria-label="搜索通讯录" autocomplete="off" />
       <button id="cvSearchClear" class="ls-clear" type="button" aria-label="清空搜索" hidden>×</button>
     </div></div>
     <div id="cvSearchRes"></div>`;
@@ -1138,15 +1102,14 @@ function renderCvSearchPage(body, { groups, people, users }) {
     const term = input.value.trim().toLowerCase();
     clear.hidden = !term;
     if (!term) {
-      res.innerHTML = '<div class="empty" style="padding:36px 12px">输入名字或部门<br />找群聊和成员</div>';
+      res.innerHTML = '<div class="empty" style="padding:36px 12px">输入名字或部门<br />找群聊和人</div>';
       return;
     }
     const m = (s) => String(s || '').toLowerCase().includes(term);
     const gs = groups.filter((g) => m(g.title));
     const ps = people.filter((p) => m(p.name) || m(p.department) || m(roleNameOf(p)));
-    const us = users.filter((u) => m(u.name) || m(u.nickname));
     res.innerHTML =
-      gs.map(groupRowHTML).join('') + us.map(userRowHTML).join('') + ps.map(personRowHTML).join('')
+      gs.map(groupRowHTML).join('') + ps.map(personRowHTML).join('')
       || '<div class="empty" style="padding:36px 12px">没找到匹配的人或群</div>';
     bindContactRows();
   };

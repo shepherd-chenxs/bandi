@@ -195,6 +195,7 @@ export const ROUTES = [
   { id: 'git.prs.refresh', m: ['POST'], path: p('/api/git/prs/refresh'), auth: 'session' },
   { id: 'git.repo.one', m: ['GET', 'DELETE'], path: p('/api/git/repos', id1), auth: 'session' },
   { id: 'git.repo.settings', m: ['POST'], path: p('/api/git/repos', id1, 'settings'), auth: 'session' },
+  { id: 'git.repo.relocate', m: ['POST'], path: p('/api/git/repos', id1, 'relocate'), auth: 'session', note: '本地目录改名/挪位置后重新指一下（身份不变，E1115）' },
   { id: 'git.repo.patrol', m: ['POST'], path: p('/api/git/repos', id1, 'patrol'), auth: 'session' },
   { id: 'git.repo.patrolRun', m: ['POST'], path: p('/api/git/repos', id1, 'patrol', 'run'), auth: 'session' },
   { id: 'git.repo.changes', m: ['GET'], path: p('/api/git/repos', id1, 'changes'), auth: 'session' },

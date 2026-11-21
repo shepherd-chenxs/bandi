@@ -178,7 +178,7 @@ export async function pullReviewMaterial(repo, number) {
  * 返回实例视图；失败往上抛（调用方决定卡上怎么写、要不要下个节拍重试）。
  */
 export async function startPrReview({ repo, pr, projectId }) {
-  const row = store.getGitRepoByFullName(repo);
+  const row = store.getGitRepoByRef(repo);
   const keeperId = row?.keeperPersonaId;
   if (!keeperId || !store.getPersona(keeperId)) throw new Error(`仓库 ${repo} 没绑管理员（或绑的人已删）`);
 
@@ -309,7 +309,7 @@ async function runMergeNode({ runId, task }) {
     store.touchWorkflowRun(runId);
     return;
   }
-  const repoRow = store.getGitRepoByFullName(repo);
+  const repoRow = store.getGitRepoByRef(repo);
   if (!repoRow?.autoMerge) {
     store.updateWorkflowTask(task.id, {
       status: 'review',

@@ -848,7 +848,12 @@ main { min-height: 0; }
 /* 标题在**卡片外面**：上面是 .plg-sec-head，下面才是卡 */
 .plg-sec + .plg-sec { margin-top: 14px; }
 .plg-sec-head { display: flex; align-items: center; gap: 10px; margin: 0 0 8px; }
-.plg-sec-title { font-size: var(--t-sec); font-weight: var(--w-title); color: var(--text); }
+.plg-sec-title { font-size: var(--t-sec); font-weight: var(--w-title); color: var(--text);
+                 margin: 0; }   /* style-ide.css 的全局 label 有 margin: 12px 0 4px，
+                                   在 align-items:center 的标题行里上下不对称，会把标题压低约 4px */
+/* 标题行里的状态小字（「7 个未提交」「已同步」）比标题小一档（2026-11-20 用户："字体小一些"）：
+   .dim 只给了颜色，字号原来随正文，跟加粗标题一样大，看着抢戏。 */
+.plg-sec-head .dim { font-size: 12px; }
 .plg-detail-head { display: flex; align-items: center; gap: 10px; margin: 0 0 14px; flex-wrap: wrap; }
 .plg-detail-head b { font-size: var(--t-page); font-weight: var(--w-title); }
 .plg-detail-head .dim { font-size: 12px; }

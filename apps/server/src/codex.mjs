@@ -2,6 +2,7 @@ import { agentEnv } from './git-repos.mjs';
 import fs from 'node:fs';
 import { spawn } from 'node:child_process';
 import { runCwd } from './config.mjs';
+import { killProcessTree, logCleanup } from './process-tree.mjs';
 
 export const runtimeName = 'codex';
 
@@ -154,11 +155,18 @@ export function normalize(evt) {
 }
 
 /**
+ * 「按进程名全量清杀」的典型写法（2026-11-20）。
+ * 只认"按名字"的那几种，针对具体 PID 的 Stop-Process 不算（那是允许的清理方式）。
+ */
+const SELF_KILL_RE = /Get-Process\s+node[^\n]*Stop-Process|taskkill[^\n]*\/IM\s+node|killall\s+node|pkill[^\n]*\bnode\b/i;
+
+/**
  * 跑一次 Codex，契约与 dsh 适配器一致：
  * 任务走 stdin，stdout 按行 JSON，回调统一词汇的事件。
  *
  * @returns {Promise<{sessionId:string|null, finalText:string, exitCode:number|null,
- *                    events:object[], usage:object|null, turnReason:object|null, stderr:string}>}
+ *                    events:object[], usage:object|null, turnReason:object|null, stderr:string,
+ *                    cleanup?:{ok:boolean,killed:number[],method:string}}>}
  */
 export function runTask({
   task,
@@ -192,12 +200,22 @@ export function runTask({
     let usage = null;
     let turnReason = null;
     let stderr = '';
+    /** 最后一条命令的原文（失败归因用：见 settle 里的 selfKilled） */
+    let lastCommand = '';
 
     let settled = false;
-    const settle = (code) => {
+    let cleanup = null;
+    const settle = (code, { clean = false } = {}) => {
       if (settled) return;
       settled = true;
-      resolve({
+      /*
+       * **自杀归因**（2026-11-20 用户实报）：研发员工为了"清理残留 node 进程"跑了
+       * `Get-Process node | Stop-Process -Force`，把 codex（本身就是 node 起的）一起杀了，
+       * 三轮都以退出码 -1（4294967295）结束，界面只剩一句天书，人和 agent 都只能往网络 /
+       * 模型上猜。这里直接说破原因，写进 res.error，卡片上读的就是这句话。
+       */
+      const selfKilled = (code === -1 || code === 4294967295) && SELF_KILL_RE.test(lastCommand);
+      const done = () => resolve({
         sessionId: resolvedSessionId,
         finalText,
         exitCode: code,
@@ -206,6 +224,25 @@ export function runTask({
         usage,
         turnReason,
         stderr,
+        cleanup,
+        ...(selfKilled
+          ? {
+              error: {
+                message: `这一轮是被自己的清理命令杀掉的：${lastCommand.slice(0, 140)} —— codex 本身就是 node 起的，按进程名全杀会把运行时一起终止。测试像卡住时先看超时和 tmp/smoke-fail-*.log，别清进程。`,
+              },
+            }
+          : {}),
+      });
+      /*
+       * 失败收尾先收进程树（2026-11-20 用户实报："子进程在跑，然后告诉我任务失败了"）：
+       * codex 失败时它起的命令子进程可能还活着 —— 不清理，重跑就会和残留进程打架。
+       * 成功（turn.completed）不清理：CLI 还要落盘会话文件，杀了会毁掉 --resume。
+       */
+      if (!clean || !child.pid) return done();
+      killProcessTree(child.pid).then((r) => {
+        cleanup = r;
+        logCleanup('codex', r);
+        done();
       });
     };
 
@@ -219,6 +256,10 @@ export function runTask({
         return;
       }
       events.push(raw);
+
+      // 记下最后一条命令（失败归因用）：codex 的 item.command 可能是字符串，也可能是 argv 数组
+      const cmd = raw?.item?.command;
+      if (cmd) lastCommand = Array.isArray(cmd) ? cmd.join(' ') : String(cmd);
 
       const evt = normalize(raw);
       if (evt.type === 'session') resolvedSessionId = evt.sessionId;
@@ -235,7 +276,8 @@ export function runTask({
       // 注意**不杀进程**：它可能还在落盘会话文件，杀了会毁掉 --resume。
       // 只是不再等它，让它在后台自己退干净。
       if (raw.type === 'turn.completed' || raw.type === 'turn.failed') {
-        setImmediate(() => settle(raw.type === 'turn.completed' ? 0 : 1));
+        const failedTurn = raw.type === 'turn.failed';
+        setImmediate(() => settle(failedTurn ? 1 : 0, { clean: failedTurn }));
       }
     };
 
@@ -257,7 +299,7 @@ export function runTask({
     child.on('error', reject);
     child.on('close', (code) => {
       if (buf.trim()) handle(buf);
-      settle(code); // 已经因 turn_end 收尾过的话，这里是空操作
+      settle(code, { clean: code !== 0 }); // 已经因 turn_end 收尾过的话，这里是空操作
     });
 
     if (signal) {

@@ -359,8 +359,8 @@ try {
   const permMsg = tpf('remote: Permission denied\nfatal: unable to access', { branch: 'x' });
   check('权限不够 → E1203，指向 Contents: write', permMsg.code === 'E1203' && /Contents: write/.test(permMsg.text), String(permMsg.text).slice(0, 100));
   const netMsg = tpf("fatal: unable to access 'https://github.com/x/y.git/': Failed to connect to github.com:443 over proxy 127.0.0.1 after 0 ms: Could not connect to server");
-  check('代理没通 → E1204 连不上 GitHub（2026-11-14 实报那一档，curl 原文只垫底）',
-    netMsg.code === 'E1204' && /连接不上 github\.com/.test(netMsg.text) && /代理 127\.0\.0\.1/.test(netMsg.text) && /原始信息：/.test(netMsg.text), String(netMsg.text).slice(0, 120));
+  check('代理没通 → E1204 连不上 GitHub（不再报代理端口，curl 原文只垫底）',
+    netMsg.code === 'E1204' && /连接不上 github\.com/.test(netMsg.text) && !/代理 127\.0\.0\.1/.test(netMsg.text) && /原始信息：/.test(netMsg.text), String(netMsg.text).slice(0, 120));
 
   console.log('\n⑨ 已提交没推送：workState 的上游 / unpushed（分支按钮上的 ↑N 吃它）');
   const upBare = path.join(tmp, 'up-bare.git');
@@ -371,7 +371,9 @@ try {
   g(['add', '-A'], upDir);
   g(['commit', '-q', '-m', 'c1'], upDir);
   g(['remote', 'add', 'origin', upBare], upDir);
-  g(['push', '-q', '-u', 'origin', 'main'], upDir);
+  // 测试目的是验证 connectRepo 识别 upstream，不是验证 pre-push 闸；
+  // pre-push 闸拦的是"推保护分支 main"，这里本地裸仓的 main 命中该规则，加 --no-verify 让测试按本意走。
+  g(['push', '-q', '-u', '--no-verify', 'origin', 'main'], upDir);
   const upRow = (await git.connectRepo('smoke/up', info('upstream'), upDir)).repo;
   const up1 = await git.workState(upRow);
   check('上游识别成 origin/main', up1.upstream === 'origin/main', String(up1.upstream));
@@ -405,6 +407,69 @@ try {
   check('检查没跑过 → 说"先让检查跑绿"', /检查/.test(m3) && /跑绿/.test(m3), m3.slice(0, 120));
   const m4 = emr('At least 1 approving review is required by reviewers with write access.');
   check('需要审阅 → 指向去 GitHub 过审', /审阅/.test(m4), m4.slice(0, 120));
+
+  /*
+   * ⑪ 仓库身份落库（2026-11-20 用户："如果我本地仓库改个名字是不是就找不到了？这显然不合理的吧"）。
+   *
+   * 病根：GitHub API 用的 owner/name 原来是**每次**从本地 origin 现推的，
+   * 而「本地代码托管」接进来的 fullName 可能只是目录名 —— 目录一改名，PR 那一路全断。
+   * 现在身份在接入时写进 git_repos.ghRef，localPath 只是可重定位的指针。
+   */
+  console.log('\n⑪ 仓库身份：ghRef 落库、纯本地不硬凑、目录改名后仍认得出');
+  const store = await import('./store.mjs');
+
+  // 裸目录名 + GitHub origin：接入时就把真身记下来
+  const bareDir = mkLocal('bare-dir', 'https://github.com/acme/widget.git');
+  const bareOut = await git.connectRepo('widget-local', null, bareDir);
+  check('裸目录名 + GitHub origin → ghRef 记成 acme/widget', bareOut.repo.ghRef === 'acme/widget', String(bareOut.repo.ghRef));
+  check('remoteUrl 也留了一份（重定位拿它核对）', /github\.com\/acme\/widget/.test(bareOut.repo.remoteUrl ?? ''), String(bareOut.repo.remoteUrl));
+  check('githubRefOf 直接读库里的身份', (await git.githubRefOf(bareOut.repo)) === 'acme/widget', await git.githubRefOf(bareOut.repo));
+
+  // 纯本地仓库：没有 origin，不许硬凑一个假 owner/name 去打 GitHub
+  const pureDir = mkLocal('pure-dir', null);
+  const pureOut = await git.connectRepo('纯本地仓库', null, pureDir);
+  check('纯本地仓库 → ghRef 留空（不硬凑）', !pureOut.repo.ghRef, String(pureOut.repo.ghRef));
+  check('纯本地仓库 githubRefOf 返回显示名', (await git.githubRefOf(pureOut.repo)) === '纯本地仓库', await git.githubRefOf(pureOut.repo));
+
+  // 目录改名：身份不跟路径走
+  const movedDir = path.join(tmp, 'widget-moved');
+  fs.renameSync(bareDir, movedDir);
+  check('目录改名后 githubRefOf 照样认得出', (await git.githubRefOf(bareOut.repo)) === 'acme/widget', await git.githubRefOf(bareOut.repo));
+  const moved = await git.relocateRepo(bareOut.repo.id, movedDir);
+  check('重定位：localPath 指到新目录', path.resolve(moved.localPath) === path.resolve(movedDir), moved.localPath);
+  check('重定位：ghRef 不变', moved.ghRef === 'acme/widget', String(moved.ghRef));
+  const otherDir = mkLocal('other-dir', 'https://github.com/acme/other.git');
+  let wrongRelocate = '';
+  try {
+    await git.relocateRepo(bareOut.repo.id, otherDir);
+  } catch (e) {
+    wrongRelocate = e.message;
+  }
+  check('重定位到别的仓库 → 拒绝（不张冠李戴）', /不是同一个仓库/.test(wrongRelocate), wrongRelocate);
+
+  // 同一条路再走一次 HTTP：路由没在 route-policy 登记会回 404 E4090，函数测试测不出来
+  const httpDir = mkLocal('http-dir', 'https://github.com/acme/http.git');
+  const httpOut = await git.connectRepo('http-local', null, httpDir);
+  const httpMoved = path.join(tmp, 'http-moved');
+  fs.renameSync(httpDir, httpMoved);
+  const httpOk = await req(`/api/git/repos/${encodeURIComponent(httpOut.repo.id)}/relocate`, {
+    method: 'POST',
+    body: JSON.stringify({ localPath: httpMoved }),
+  });
+  check('HTTP 重新定位 → 200，指针换到新目录', httpOk.status === 200 && path.resolve(httpOk.b?.repo?.localPath ?? '') === path.resolve(httpMoved), `${httpOk.status} ${httpOk.b?.repo?.localPath}`);
+  const httpBad = await req(`/api/git/repos/${encodeURIComponent(httpOut.repo.id)}/relocate`, {
+    method: 'POST',
+    body: JSON.stringify({ localPath: path.join(tmp, 'no-such-dir') }),
+  });
+  check('HTTP 选了个不存在的目录 → 400 且说清楚', httpBad.status === 400 && /目录不存在/.test(httpBad.b?.error ?? ''), httpBad.b?.error);
+
+  // 老库回填：手写一行没有 ghRef 的记录，回填函数按 origin 补上
+  const legacyDir = mkLocal('legacy-dir', 'https://github.com/acme/legacy.git');
+  const legacy = store.addGitRepo({ fullName: 'legacy-box', owner: '', name: 'legacy-box', localPath: legacyDir });
+  check('手写的旧行一开始没有 ghRef', !legacy.ghRef, String(legacy.ghRef));
+  await git.backfillRepoIdentity();
+  check('回填把旧行的 ghRef 补出来', store.getGitRepo(legacy.id)?.ghRef === 'acme/legacy', String(store.getGitRepo(legacy.id)?.ghRef));
+  check('回填幂等：再跑一次没有新变化', (await git.backfillRepoIdentity()) === 0);
 
 } finally {
   child.kill();

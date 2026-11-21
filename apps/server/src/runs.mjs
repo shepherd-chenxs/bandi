@@ -7,7 +7,9 @@ import { ADAPTERS } from './adapters.mjs';
 import { controlUrl, issueRunCredential, revokeRunCredential } from './agent-auth.mjs';
 // 建卡口径的判据（2026-11-11）：有建卡权限的岗位才多注入一段，见 roles.mjs
 import { can } from './roles.mjs';
-import { stripTrailingDoneMark } from './delivery-claim.mjs';
+import { stripTrailingDoneMark, claimOf } from './delivery-claim.mjs';
+// 失败分型 + 自动续跑（2026-11-21）：判据与提示语都在那个模块里，这里只做编排
+import { classifyFailure, retryBrief, MAX_AUTO_RETRY, AUTO_RETRY_DELAY_MS } from './run-retry.mjs';
 import { conversationStatusFor, EMPTY_REPLY_TEXT } from './store/status.mjs';
 import { codexContextOf } from './context-probe.mjs';
 import { acquirePowerLock, releasePowerLock } from './power-lock.mjs';
@@ -589,10 +591,15 @@ export function startRun({ thread, member, task, standing = null, watermark = 0,
    *
    * 返回值里 `held` 是扣住的那几个；确认不是会话丢失时再按原顺序补发。
    */
-  const runOnce = (sid) => {
+  const runOnce = (sid, extra = null) => {
     const held = [];
     const p = adapter({
-      task: agentTask,
+      /*
+       * 自动续跑时在任务原文后面贴一段"先复核再动手"（见 run-retry.mjs 的 retryBrief）。
+       * 不改 agentTask 本体：同一轮重发的还是同一张任务单，续跑只是多一句提醒 ——
+       * 续接的会话里它已经读过了，这句是压在末尾的"当场指令"，权重比历史更靠后但更近。
+       */
+      task: extra ? `${agentTask}\n\n${extra}` : agentTask,
       // out-of-band 不变量（平台契约 + PM 统筹）：claude 走 --append-system-prompt-file；
       // codex / dsh 没有等价 flag，standing 已在上方拼回任务文本（行为不变）
       systemPrompt: useOutOfBand ? standing : null,
@@ -750,121 +757,246 @@ export function startRun({ thread, member, task, standing = null, watermark = 0,
     armStopWatchdog(run);
   }, IDLE_TICK_MS);
   run.limitTimer.unref?.();
+  /*
+   * ── 自动续跑（2026-11-21）────────────────────────────────────────────────
+   * 用户的原始疑问：同一个任务 zcode 能做到底，bandi 撞一下就报失败停下。
+   * 根因不在模型，在**外层没有循环**：一次 run = 一次 spawn，进程一退平台只拿到终态，
+   * 而判据是"exitCode 非 0 / isError"这一个布尔 —— 通道抖一下、进程被杀一次、
+   * 供应商 502 一下，全都落成卡面「失败」，等人来点「重跑一次」。
+   *
+   * 这里补的就是外层：**同一条会话、有限次**再跑一遍。四条硬约束：
+   *   ① 只续"看得出是环境问题"的（判据全在 run-retry.mjs，规则来自真库样本）；
+   *      配置错 / 没登录 / 权限档 / 上下文满 / 限流 一律不续 —— 不拿 token 换必然的失败；
+   *   ② 人工停（stopped）、挂死收口（limitHit）、交付声明已下（[完成]/[受阻]）都不续；
+   *   ③ 续跑首句要求它**先复核上一轮诊断**（环境是流动的，停下来的结论会过期）；
+   *   ④ 次数上限 MAX_AUTO_RETRY（默认 2），可用 BANDI_RUN_AUTO_RETRY 关掉。
+   *
+   * 为什么不塞进 finish()：finish 会写库、吊销钥匙、推进流程、通知卡主 ——
+   * 那正是"这一轮结束了"。续跑要的恰恰是"还没结束"，所以必须在 settle 里、finish 之前拦。
+   */
+  let attemptNo = 0;
+  let autoRetries = 0;
+  let retrySuffix = '';
+
+  /** 起一次尝试：held 的补发也收在这里，调用方只关心"最后拿到了什么" */
+  const runAttempt = (sid, extra) => {
+    attemptNo += 1;
+    const a = runOnce(sid, extra);
+    return a.p.then(async (res) => {
+      // 续接失败且原因是"这条会话不在"→ 自动新开一条重跑；其它错照原样往上走。
+      // `run.seq === 0`：**这一轮还什么都没推出去**才敢重跑 —— 已经出过话再重跑，
+      // 用户会看到同一件事被说两遍（会话找不到是启动即失败，正常情况下 seq 就是 0）。
+      if (sid && run.seq === 0 && !ctl.signal.aborted && SESSION_GONE.test(errorTextOf(res))) {
+        return retryFresh();
+      }
+      // 不是会话丢失：把扣住的 error 事件按原顺序补发，画面与以前完全一致
+      for (const evt of a.held) pushEvent(run, evt);
+      return res;
+    });
+  };
+
+  /** 这一轮真的到头了才走这里（成功 / 停止 / 放弃续跑） */
+  function settle(res) {
+    run.sessionId = res.sessionId ?? run.sessionId;
+    // **人主动停的**要和"跑挂了"分开：前者没有错，不该记成失败、也不该让流程判失败
+    const stopped = !run.limitHit && (ctl.signal.aborted || run.stoppedByUser);
+    // 成功的判据：没标错，且没有非零退出码。
+    // claude 在收到 result 就结算，不给 exitCode —— 所以不能只看 exitCode === 0。
+    const ok = run.limitHit ? true : !res.isError && (res.exitCode == null || res.exitCode === 0);
+
+    /*
+     * **续跑判定**（放在算 finalText / 落库之前：续跑的那一轮不许先落一条回话，
+     * 否则界面上会变成"他说完了一段 + 又说了一段"，两段之间还没有任何交代）。
+     */
+    if (!ok && !stopped) {
+      const errText = errorTextOf(res) || lastErrMsg;
+      const verdict = classifyFailure({
+        error: errText,
+        exitCode: res.exitCode,
+        channelDown: isChannelError(errText),
+        claim: claimOf(res.finalText ?? res.text ?? ''),
+        sandboxBlocked,
+      });
+      if (verdict.retry && autoRetries < MAX_AUTO_RETRY) {
+        autoRetries += 1;
+        // 续跑必须 resume **这条**会话：session 事件一出现就落过库了，这里再保险一次
+        // （codex 有些版本只在结算里给 sessionId，不补这一下就只能新开会话重来）
+        if (res.sessionId) {
+          run.sessionId = res.sessionId;
+          try {
+            store.setMemberSession(thread.id, personaId, res.sessionId, sessionScope, rt.family);
+          } catch { /* 落库失败最多是续跑丢上下文，不该把这一轮搞挂 */ }
+        }
+        // 前台看得见"在重试"：进度卡读 status.text（见 run-progress.mjs 的 info）
+        pushEvent(run, {
+          type: 'status',
+          phase: 'auto_retry',
+          text: `第 ${attemptNo} 次尝试没跑完（${verdict.why}），自动续跑 ${autoRetries}/${MAX_AUTO_RETRY}`,
+        });
+        console.warn(
+          `[续跑] run ${run.id} 第 ${attemptNo} 次失败（${verdict.kind}: ${verdict.why}），` +
+            `自动重试 ${autoRetries}/${MAX_AUTO_RETRY}`,
+        );
+        // 定时器挂到 run 上：finish() 是所有终点的唯一出口，它得能把这个还没醒的定时器掐掉
+        // （人点了停止 / 看门狗收尾之后还去 spawn 一条新进程，是最不该发生的那种"鬼运行"）
+        run.autoRetryTimer = setTimeout(() => {
+          run.autoRetryTimer = null;
+          // 等这一秒半里人可能点了停止 —— 抢在起进程之前再确认一次
+          if (run.finished || ctl.signal.aborted || run.stoppedByUser) return;
+          /*
+           * 这里的 try 不能省：`runAttempt` 里 spawn 是**同步**发生的，启动路径失效时
+           * launchCommand 会当场抛 —— 定时器回调里抛出去就是 uncaught exception，
+           * 整个服务跟着倒。首次尝试有外面的 try/catch 接，续跑只有这一层。
+           */
+          try {
+            runAttempt(
+              run.sessionId ?? null,
+              retryBrief({ attempt: attemptNo + 1, max: MAX_AUTO_RETRY + 1, why: verdict.why }),
+            )
+              .then(settle)
+              .catch(fail);
+          } catch (err) {
+            fail(err);
+          }
+        }, AUTO_RETRY_DELAY_MS);
+        run.autoRetryTimer.unref?.();
+        return;
+      }
+      /*
+       * 不续（或次数用尽）：把**为什么没续**写进失败原因。没有这句话的话，
+       * 卡面只有"跑挂了：unknown MCP server 'filesystem'"，人还是不知道平台试过没有、
+       * 为什么没再试 —— 而这正是这次改动的出发点。
+       */
+      retrySuffix = verdict.retry
+        ? `（已自动续跑 ${autoRetries} 次仍失败）`
+        : `（未自动续跑：${verdict.why}）`;
+    }
+
+    // 各家适配器字段名不完全一样（codex/dsh 给 finalText，claude 给 text），这里归一
+    const text = res.finalText ?? res.text ?? '';
+    /*
+     * 停止生成（2026-10-29）：CLI 被掐死时往往**来不及发 final**（dsh 的 finalText 只来自
+     * final 事件，见 pushEvent 的注释），这时用已经流出去的 text 事件兜底 ——
+     * 用户屏幕上看到的就是这些字，丢掉它等于"对方刚说的话凭空消失"。
+     */
+    const kept = text || ((stopped || run.limitHit) ? run.streamedText : '');
+    // 跨运行时（或自动重开）时，先说一句"上下文带不过来"；权限档跑不动命令时，
+    // 再提醒雇主一句（2026-11-13）—— 这轮八成白跑，别让他以为是员工"又连不上了"
+    const blockedUserNote = sandboxBlocked
+      ? `（这个员工的权限档「${effSandbox}」在无人审批的运行方式下跑不动命令，这轮命令类动作都会被拒 —— ` +
+        `去「员工详情」把权限档放开（"完全权限"那档）再派。）\n\n`
+      : '';
+    // 收口说明只在两处出现（这里 / 看门狗），文案统一走 idleNote
+    const budgetNote = run.limitHit ? idleNote(run) : '';
+    /*
+     * 续跑过的那一轮，正文前面补一句交代（2026-11-21）：不补的话历史里只剩最后一次尝试，
+     * 用户看着"他说得好好地就没下文了"，其实中间断过两次 —— 断过就得写出来。
+     */
+    const retryNote = autoRetries
+      ? `（这一轮中途断了 ${autoRetries} 次，已自动续跑接上；下面是接着做完的结果。）\n\n`
+      : '';
+    run.finalText = kept ? retryNote + memoryNote + blockedUserNote + kept + budgetNote : budgetNote.slice(2);
+    run.exitCode = res.exitCode;
+
+    // sessionId 写回**本作用域**那一行；水位线仍写主行（'' ）——
+    // 它记的是"在这个会话里读到哪儿"，与 runtime 会话作用域无关。
+    // 同时记下**是哪个族给的**这个 id：换运行时后不能拿它去 resume（见上面 familyCrossed）。
+    if (res.sessionId) store.setMemberSession(thread.id, personaId, res.sessionId, sessionScope, rt.family);
+    if (watermark) store.setMemberWatermark(thread.id, personaId, watermark);
+
+    const status = stopped ? 'stopped' : ok ? 'done' : 'failed';
+
+    // 回话落库（见 persistReply）。人停的那一轮也要落 —— 带 meta.stopped 给界面标「已停止生成」
+    persistReply(run, run.finalText, replyMeta({ stopped }));
+
+    /*
+     * **真实上下文**（2026-11-12，用户实报「一个会话上下文就爆了」后加）：
+     * `res.usage.inputTokens` 是**整轮所有 API 调用求和**（工具活每步都重发上下文、缓存反复命中），
+     * 拿它当"单轮上下文"会把一次重活判成 234 万 —— 实际最后一调才 6 万（窗口 95 万）。
+     * Codex 自己的会话转录里记着真数，收尾时读一次挂进 usage，轮换判据和上下文环都用它。
+     * 探不到就不挂（回退旧口径），探测失败绝不能影响 run 收尾。
+     */
+    const ctx = rt.family === 'codex' ? codexContextOf(res.sessionId) : null;
+    /*
+     * runtimeFamily 一起记：轮换判据要知道"这个 usage 是哪种运行时给的" ——
+     * 多调用型（codex/dsh）的 inputTokens 是整轮求和，**不能**当窗口用；
+     * 单轮型才可用 perTurnTokens 兜底（见 session-budget.mjs 的 shouldRotate）。
+     * 老数据没这个字段 → 判据按"未知"保守处理。
+     */
+    const usageBase = res.usage || ctx ? { ...(res.usage ?? {}), ...(ctx ?? {}), runtimeFamily: rt.family } : null;
+    /*
+     * 收口要**留痕**：store.summarizeRun / project-tasks 的 endNoteOf 都要判"这轮是被
+     * 挂死检测收的"（卡片上写"10 分钟没动静"，不是"没交回结论"）。
+     * 挂 usage 而不是加 DB 列 —— 这一列本来就是自由形态 JSON，为排障再走一次迁移不划算。
+     * `toolCalls` 无论掐没掐都记：它是"这轮有多重"的唯一依据（只记不掐）。
+     */
+    const usage = {
+      ...(usageBase ?? {}),
+      runtimeFamily: rt.family,
+      ...(toolCalls ? { toolCalls } : {}),
+      ...(run.limitHit ? { limitHit: 'idle', idleMs: run.idleMs ?? RUN_IDLE_MS, limitMs: run.limitMs } : {}),
+      // 自动续跑的次数（2026-11-21）：排障时要能看出"这轮到底试了几次"，
+      // 以及最后一次是被什么样的错挡下的（卡面只写一句，细节留在这儿）。
+      ...(autoRetries ? { autoRetries } : {}),
+      // 失败收尾时清理掉的残留进程（2026-11-20）：写进 usage 是为了排障时能查到
+      // "这一轮结束时到底收了哪些 PID"，不用去翻服务端控制台。
+      ...(res.cleanup?.killed?.length ? { processCleanup: res.cleanup } : {}),
+    };
+
+    /*
+     * 清理动作直接写进这一轮的失败原因（2026-11-20 用户："把清理动作记进日志"）：
+     * 任务卡的「[运行结束] …」读的就是 error，写在这里不用另开一套日志通道。
+     */
+    const cleanupNote = res.cleanup?.killed?.length
+      ? `（收尾时清理了 ${res.cleanup.killed.length} 个残留进程：${res.cleanup.killed.join(', ')}）`
+      : '';
+    const failReason = res.error?.message || res.error || res.stderr?.trim() || res.turnReason?.error?.message || lastErrMsg || `退出码 ${res.exitCode}`;
+
+    finish(run, {
+      status,
+      exitCode: res.exitCode ?? null,
+      // retrySuffix：为什么没再试一次 / 试了几次仍然不行（2026-11-21）——
+      // 卡面「跑挂了：…」读的就是这一句，人得知道平台到底试过没有。
+      error: stopped ? null : ok ? null : `${failReason}${cleanupNote}${retrySuffix}`,
+      usage,
+      elapsedMs: Date.now() - startedAt,
+    });
+  }
+
+  /**
+   * 「起不来」的兜底（原 .catch 原样搬出来，供首次尝试和每次续跑共用）。
+   *
+   * 有两种冒出来的方式，以前只兜住了前一种：
+   *   ① **同步**抛 —— `launchCommand()` 在返回 promise 之前就抛，下面那个 catch 兜住；
+   *   ② **异步**抛 —— 子进程的 'error' 事件（`spawn EINVAL` / `ENOENT`：
+   *      路径给的是 .cmd shim，或者文件根本不在）。
+   * 第 ② 种以前直接落成光秃秃的 `spawn EINVAL`，用户看着这句话不知道该改哪儿
+   * （2026-10-15 实测：挑一个班底自己说 launchable=false 的运行时派活就是这个结果）。
+   * 判据：**一条事件都没产出**且错误码是启动类的 —— 那这次进程根本没起来，
+   * 补上跟同步那条一样的人话。
+   */
+  function fail(err) {
+    // finish 是防重入的：续跑期间人点了停止、看门狗已经收过尾，这里的迟到结算会被丢掉
+    if (run.finished) return;
+    const msg = String(err?.message ?? err);
+    const neverStarted = run.seq === 0 && /EINVAL|ENOENT|EACCES|EPERM/.test(msg);
+    finish(run, {
+      // 掐子进程会让 promise 以异常收尾 —— 人主动停的不算失败
+      status: ctl.signal.aborted || run.stoppedByUser ? 'stopped' : 'failed',
+      exitCode: null,
+      // retrySuffix 也要带上：续跑那一轮起不来时，人得知道前面已经试过几次
+      error: ctl.signal.aborted ? null : neverStarted ? `起不来：${msg}${retrySuffix}` : `${msg}${retrySuffix}`,
+      elapsedMs: Date.now() - startedAt,
+    });
+  }
+
   try {
-    first = runOnce(resumeId);
+    first = runAttempt(resumeId, null);
   } catch (err) {
     finish(run, { status: 'failed', exitCode: null, error: `起不来：${err?.message ?? err}` });
     return run;
   }
-  first.p.then(async (res) => {
-      // 续接失败且原因是"这条会话不在"→ 自动新开一条重跑；其它错照原样往上走。
-      // `run.seq === 0`：**这一轮还什么都没推出去**才敢重跑 —— 已经出过话再重跑，
-      // 用户会看到同一件事被说两遍（会话找不到是启动即失败，正常情况下 seq 就是 0）。
-      if (resumeId && run.seq === 0 && !ctl.signal.aborted && SESSION_GONE.test(errorTextOf(res))) {
-        return retryFresh();
-      }
-      // 不是会话丢失：把扣住的 error 事件按原顺序补发，画面与以前完全一致
-      for (const evt of first.held) pushEvent(run, evt);
-      return res;
-    })
-    .then((res) => {
-      run.sessionId = res.sessionId;
-      // **人主动停的**要和"跑挂了"分开：前者没有错，不该记成失败、也不该让流程判失败
-      const stopped = !run.limitHit && (ctl.signal.aborted || run.stoppedByUser);
-      // 各家适配器字段名不完全一样（codex/dsh 给 finalText，claude 给 text），这里归一
-      const text = res.finalText ?? res.text ?? '';
-      /*
-       * 停止生成（2026-10-29）：CLI 被掐死时往往**来不及发 final**（dsh 的 finalText 只来自
-       * final 事件，见 pushEvent 的注释），这时用已经流出去的 text 事件兜底 ——
-       * 用户屏幕上看到的就是这些字，丢掉它等于"对方刚说的话凭空消失"。
-       */
-      const kept = text || ((stopped || run.limitHit) ? run.streamedText : '');
-      // 跨运行时（或自动重开）时，先说一句"上下文带不过来"；权限档跑不动命令时，
-      // 再提醒雇主一句（2026-11-13）—— 这轮八成白跑，别让他以为是员工"又连不上了"
-      const blockedUserNote = sandboxBlocked
-        ? `（这个员工的权限档「${effSandbox}」在无人审批的运行方式下跑不动命令，这轮命令类动作都会被拒 —— ` +
-          `去「员工详情」把权限档放开（"完全权限"那档）再派。）\n\n`
-        : '';
-      // 收口说明只在两处出现（这里 / 看门狗），文案统一走 idleNote
-      const budgetNote = run.limitHit ? idleNote(run) : '';
-      run.finalText = kept ? memoryNote + blockedUserNote + kept + budgetNote : budgetNote.slice(2);
-      run.exitCode = res.exitCode;
-
-      // sessionId 写回**本作用域**那一行；水位线仍写主行（'' ）——
-      // 它记的是"在这个会话里读到哪儿"，与 runtime 会话作用域无关。
-      // 同时记下**是哪个族给的**这个 id：换运行时后不能拿它去 resume（见上面 familyCrossed）。
-      if (res.sessionId) store.setMemberSession(thread.id, personaId, res.sessionId, sessionScope, rt.family);
-      if (watermark) store.setMemberWatermark(thread.id, personaId, watermark);
-
-      // 成功的判据：没标错，且没有非零退出码。
-      // claude 在收到 result 就结算，不给 exitCode —— 所以不能只看 exitCode === 0。
-      const ok = run.limitHit ? true : !res.isError && (res.exitCode == null || res.exitCode === 0);
-      const status = stopped ? 'stopped' : ok ? 'done' : 'failed';
-
-      // 回话落库（见 persistReply）。人停的那一轮也要落 —— 带 meta.stopped 给界面标「已停止生成」
-      persistReply(run, run.finalText, replyMeta({ stopped }));
-
-      /*
-       * **真实上下文**（2026-11-12，用户实报「一个会话上下文就爆了」后加）：
-       * `res.usage.inputTokens` 是**整轮所有 API 调用求和**（工具活每步都重发上下文、缓存反复命中），
-       * 拿它当"单轮上下文"会把一次重活判成 234 万 —— 实际最后一调才 6 万（窗口 95 万）。
-       * Codex 自己的会话转录里记着真数，收尾时读一次挂进 usage，轮换判据和上下文环都用它。
-       * 探不到就不挂（回退旧口径），探测失败绝不能影响 run 收尾。
-       */
-      const ctx = rt.family === 'codex' ? codexContextOf(res.sessionId) : null;
-      /*
-       * runtimeFamily 一起记：轮换判据要知道"这个 usage 是哪种运行时给的" ——
-       * 多调用型（codex/dsh）的 inputTokens 是整轮求和，**不能**当窗口用；
-       * 单轮型才可用 perTurnTokens 兜底（见 session-budget.mjs 的 shouldRotate）。
-       * 老数据没这个字段 → 判据按"未知"保守处理。
-       */
-      const usageBase = res.usage || ctx ? { ...(res.usage ?? {}), ...(ctx ?? {}), runtimeFamily: rt.family } : null;
-      /*
-       * 收口要**留痕**：store.summarizeRun / project-tasks 的 endNoteOf 都要判"这轮是被
-       * 挂死检测收的"（卡片上写"10 分钟没动静"，不是"没交回结论"）。
-       * 挂 usage 而不是加 DB 列 —— 这一列本来就是自由形态 JSON，为排障再走一次迁移不划算。
-       * `toolCalls` 无论掐没掐都记：它是"这轮有多重"的唯一依据（只记不掐）。
-       */
-      const usage = {
-        ...(usageBase ?? {}),
-        runtimeFamily: rt.family,
-        ...(toolCalls ? { toolCalls } : {}),
-        ...(run.limitHit ? { limitHit: 'idle', idleMs: run.idleMs ?? RUN_IDLE_MS, limitMs: run.limitMs } : {}),
-      };
-
-      finish(run, {
-        status,
-        exitCode: res.exitCode ?? null,
-        error: stopped
-          ? null
-          : ok
-            ? null
-            : res.error?.message || res.error || res.stderr?.trim() || res.turnReason?.error?.message || lastErrMsg || `退出码 ${res.exitCode}`,
-        usage,
-        elapsedMs: Date.now() - startedAt,
-      });
-    })
-    .catch((err) => {
-      const msg = String(err?.message ?? err);
-      /*
-       * 「起不来」有两种冒出来的方式，以前只兜住了前一种：
-       *   ① **同步**抛 —— `launchCommand()` 在返回 promise 之前就抛，上面那个 catch 兜住；
-       *   ② **异步**抛 —— 子进程的 'error' 事件（`spawn EINVAL` / `ENOENT`：
-       *      路径给的是 .cmd shim，或者文件根本不在）。
-       * 第 ② 种以前直接落成光秃秃的 `spawn EINVAL`，用户看着这句话不知道该改哪儿
-       * （2026-10-15 实测：挑一个班底自己说 launchable=false 的运行时派活就是这个结果）。
-       * 判据：**一条事件都没产出**且错误码是启动类的 —— 那这次进程根本没起来，
-       * 补上跟同步那条一样的人话。
-       */
-      const neverStarted = run.seq === 0 && /EINVAL|ENOENT|EACCES|EPERM/.test(msg);
-      finish(run, {
-        // 掐子进程会让 promise 以异常收尾 —— 人主动停的不算失败
-        status: ctl.signal.aborted || run.stoppedByUser ? 'stopped' : 'failed',
-        exitCode: null,
-        error: ctl.signal.aborted ? null : neverStarted ? `起不来：${msg}` : msg,
-        elapsedMs: Date.now() - startedAt,
-      });
-    });
+  first.then(settle).catch(fail);
 
   return run;
 }
@@ -1075,6 +1207,12 @@ function finish(run, { status, exitCode = null, error = null, usage = null, elap
   if (run.limitTimer) {
     clearTimeout(run.limitTimer);
     run.limitTimer = null;
+  }
+  // 还没醒的自动续跑定时器也一起掐（2026-11-21）：收尾之后再去 spawn 一条进程，
+  // 就是"状态已经结束、进程还在跑"的鬼运行 —— 这个文件里有太多地方吃过它的亏。
+  if (run.autoRetryTimer) {
+    clearTimeout(run.autoRetryTimer);
+    run.autoRetryTimer = null;
   }
   // 过了门的 run 收尾时把**并发名额**还掉（进门排队见 acquireSpawnGate）
   if (run.spawnSlotAcquired) {

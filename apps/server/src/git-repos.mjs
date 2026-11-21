@@ -243,7 +243,7 @@ const ghFetch = async (pathname, { token, method = 'GET', body, timeoutMs = GH_T
           ? `这个令牌没有权限做这件事（403）：${msg}`
           : r.status === 404
             ? repo404
-              ? `没找到（404）：${msg} —— GitHub 上访问不了仓库 ${repo404[1]}。最常见的原因是令牌没勾选这个仓库（fine-grained PAT 只对勾选过的仓库有权限），去「工作台 → 研发 → 代码托管」检查令牌的仓库授权；也可能是仓库或对应资源（分支 / PR）已改名、删除`
+              ? `无法访问仓库 ${repo404[1]}（404），请检查该访问令牌的仓库授权。`
               : `没找到（404）：${msg}`
             : `GitHub ${r.status}：${msg}`,
     );
@@ -253,6 +253,28 @@ const ghFetch = async (pathname, { token, method = 'GET', body, timeoutMs = GH_T
   }
   return data;
 };
+
+/**
+ * GitHub API 的仓库路径：`/repos/owner/name...`（2026-11-20 仓库身份修正）。
+ *
+ * 为什么单独一个函数（用户："如果我本地仓库改个名字是不是就找不到了？这显然不合理的吧"）：
+ * 「本地代码托管」接进来的行，fullName 可能只是目录名（`bandi`）。原来直接拼
+ * `/repos/${repo}/pulls` 会得到 `/repos/bandi/pulls` —— GitHub 把它读成
+ * "owner=bandi、repo=pulls"，必然 404；而 404 又被翻译成"检查令牌授权"，
+ * 人换多少次令牌都没用。拼路径的地方**一处收口**，缺 owner/name 就当场说清楚（E1205），
+ * 不再伪装成远端 404（fail-fast，保留 E1xxx 语义）。
+ */
+function repoApiPath(ref, tail = '') {
+  const slug = String(ref ?? '').trim();
+  if (!/^[\w.-]+\/[\w.-]+$/.test(slug)) {
+    throw new GitError(
+      'E1205',
+      `这行仓库没有 GitHub 身份（owner/name），拼出来的地址会是 /repos/${slug || '…'}${tail}。`
+        + '先去它的本地目录确认 origin 指向 github.com，或用「仓库 URL」重新接入（令牌权限不用改）。',
+    );
+  }
+  return `/repos/${slug}${tail}`;
+}
 
 /** 拿令牌验一次身份：能读到自己是谁就算连上了 */
 export async function verifyToken(token) {
@@ -281,6 +303,13 @@ export async function listAvailableRepos() {
 }
 
 /* ---------------------------------------------------------------- git 子进程 */
+
+/**
+ * 并发里「这一格没东西可跑」的占位：`Promise.all` 里不接受 undefined，
+ * 又不想为分支条件写两套代码 —— 等它跟真实结果同形（code 1 = 没跑成），下游的
+ * `if (x.code === 0)` 自然把它当失败跳过，判定逻辑一个字都不用改。
+ */
+const IDLE_GIT = Promise.resolve({ code: 1, out: '' });
 
 /** 异步跑一个命令（别用 spawnSync 卡住整个控制面）
  *
@@ -411,6 +440,27 @@ function repoFromRemote(url) {
 }
 
 /**
+ * origin URL → **GitHub 的** owner/name（2026-11-20，仓库身份落库）。
+ *
+ * 和 repoFromRemote 的区别只有一个，但很重要：**只认 github.com**。
+ * repoFromRemote 认的是"任意站点的 owner/name"（本地托管时拿来填 owner/name 两列）；
+ * 这个函数回答的是"这行仓库在 GitHub 那边是谁"—— gitee 的 origin 不能变成 GitHub API 的 slug。
+ *
+ * 认三种写法：`git@github.com:owner/name.git`、`ssh://git@github.com/owner/name.git`、
+ * `https://github.com/owner/name(.git)`（www 也认）。认不出返回 null。
+ */
+function ghRefFromRemote(url) {
+  const s = String(url ?? '')
+    .trim()
+    .replace(/^git@([^:]+):/, 'https://$1/')
+    .replace(/^ssh:\/\/git@([^/]+)\//, 'https://$1/')
+    .replace(/\.git$/, '')
+    .replace(/\/$/, '');
+  const m = /^https?:\/\/(?:www\.)?github\.com\/([\w.-]+)\/([\w.-]+)$/i.exec(s);
+  return m ? `${m[1]}/${m[2]}` : null;
+}
+
+/**
  * 按 **URL** 接入（2026-10-30，弹窗加「仓库 URL」来源，IDEA 克隆仓库同款）：
  *   · github.com 的 URL → 按 owner/name 接入，GitHub 全功能（元数据、PR 照常）；
  *   · 别的站（gitee 等）→ 克隆 / 记路径照常，但 fullName 带上 host 前缀
@@ -432,7 +482,11 @@ export async function connectByRemoteUrl(remoteUrl, localPath = null) {
   const clean = isGh ? `${owner}/${name}` : `${host}/${owner}/${name}`;
   if (store.getGitRepoByFullName(clean)) throw new Error('这个仓库已经接入过了');
 
-  const recordUrl = (dir, note, warning, defaultBranch) => {
+  const recordUrl = (dir, note, warning, defaultBranch, remote = null) => {
+    /* 身份在**接入这一刻**定下来（2026-11-20）：ghRef 从 origin 解析，解析不出来但用户
+       给的就是 github.com 的 URL，就用 URL 里的 owner/name。之后本地目录怎么改名/挪位置，
+       这一行都还是同一个仓库。 */
+    const ghRef = ghRefFromRemote(remote) ?? (isGh ? clean : null);
     const row = store.addGitRepo({
       fullName: clean,
       owner,
@@ -441,6 +495,8 @@ export async function connectByRemoteUrl(remoteUrl, localPath = null) {
       defaultBranch: defaultBranch ?? null,
       localPath: dir,
       language: null,
+      ghRef,
+      remoteUrl: remote ? String(remote).trim() : null,
     });
     return { repo: store.touchGitRepoSync(row.id), note, warning };
   };
@@ -469,7 +525,7 @@ export async function connectByRemoteUrl(remoteUrl, localPath = null) {
       else if (!sameRepo(origin.out, `${host}/${owner}/${name}`))
         warning = `本地 origin 指向 ${origin.out.trim()}，跟 ${raw} 不一致（fork 或镜像？）`;
       const head = await run('git', ['symbolic-ref', '--short', 'HEAD'], { cwd: dir, env: GIT_ENV });
-      return recordUrl(dir, '使用本地已有目录（没有另建克隆）', warning, head.code === 0 ? head.out : null);
+      return recordUrl(dir, '使用本地已有目录（没有另建克隆）', warning, head.code === 0 ? head.out : null, origin.code === 0 ? origin.out : null);
     }
   }
 
@@ -499,12 +555,12 @@ export async function connectByRemoteUrl(remoteUrl, localPath = null) {
   let warning = null;
   if (isGh) {
     try {
-      await ghFetch(`/repos/${clean}`);
+      await ghFetch(repoApiPath(clean));
     } catch {
       warning = '令牌读不到这个仓库的元数据（私有仓库要授权），已按 URL 接入';
     }
   }
-  return recordUrl(dir, note, warning, head.code === 0 ? head.out : null);
+  return recordUrl(dir, note, warning, head.code === 0 ? head.out : null, raw);
 }
 
 /**
@@ -542,15 +598,19 @@ export async function connectRepo(fullName, info = null, localPath = null) {
     if (meta) return meta;
     if (!ghName) return null;
     try {
-      meta = await ghFetch(`/repos/${clean}`);
+      meta = await ghFetch(repoApiPath(clean));
     } catch {
       meta = null;
     }
     return meta;
   };
   /* originFull = 从本地 origin 反推出的 owner/name（只为填 owner/name 两列，不强求） */
-  const record = (dir, note, warning = null, m = null, originFull = null) => {
+  const record = (dir, note, warning = null, m = null, originFull = null, remote = null) => {
     const slug = originFull ?? (ghName ? clean : null);
+    /* 身份落库（2026-11-20）：**origin 说什么就是什么** —— 裸目录名 + GitHub origin
+       也要认得出 owner/name；origin 不是 GitHub（纯本地 / gitee）时 ghRef 留空，
+       绝不用 fullName 硬凑一个假的 slug。 */
+    const ghRef = ghRefFromRemote(remote) ?? (ghName ? clean : null);
     const row = store.addGitRepo({
       fullName: clean,
       owner: m?.owner?.login ?? (slug ? slug.split('/')[0] : ''),
@@ -559,6 +619,8 @@ export async function connectRepo(fullName, info = null, localPath = null) {
       defaultBranch: m?.default_branch ?? null,
       localPath: dir,
       language: m?.language ?? null,
+      ghRef,
+      remoteUrl: remote ? String(remote).trim() : null,
     });
     return { repo: store.touchGitRepoSync(row.id), note, warning };
   };
@@ -592,7 +654,7 @@ export async function connectRepo(fullName, info = null, localPath = null) {
       /* 本地托管：不去查 GitHub，默认分支用本地 HEAD（origin 指向哪个托管站都无所谓） */
       const head = await run('git', ['symbolic-ref', '--short', 'HEAD'], { cwd: dir, env: GIT_ENV });
       const m = { default_branch: head.code === 0 ? head.out : null };
-      return record(dir, '使用本地已有目录（本地代码托管，不走 GitHub PR）', warning, m, originFull);
+      return record(dir, '使用本地已有目录（本地代码托管，不走 GitHub PR）', warning, m, originFull, origin.code === 0 ? origin.out : null);
     }
     const m = await getMeta();
     if (!m) warning = (warning ? warning + '；' : '') + '令牌读不到这个仓库（私有仓库要授权才读得到元数据），已按本地信息接入';
@@ -601,7 +663,7 @@ export async function connectRepo(fullName, info = null, localPath = null) {
       const head = await run('git', ['symbolic-ref', '--short', 'HEAD'], { cwd: dir, env: GIT_ENV });
       meta = { default_branch: head.code === 0 ? head.out : null };
     }
-    return record(dir, '使用本地已有目录（没有另建克隆）', warning, m ?? meta, originFull);
+    return record(dir, '使用本地已有目录（没有另建克隆）', warning, m ?? meta, originFull, origin.code === 0 ? origin.out : null);
     }
   }
   const meta2 = await getMeta();
@@ -634,7 +696,7 @@ export async function connectRepo(fullName, info = null, localPath = null) {
     note = emptyDirTarget ? '已克隆到你选的目录' : '已克隆';
   }
 
-  return record(dir, note);
+  return record(dir, note, null, null, null, url);
 }
 
 /** 拉一下已接入的仓库（fast-forward；分叉了就说清楚） */
@@ -696,7 +758,7 @@ export function isPlatformBranchName(name) {
  *        base 缺省用仓库记录的默认分支；head 为空 = 「当前分支就是要收的那条」（手动「回 base」按钮）
  */
 export async function settleAfterMerge(repo, { base = null, head = null, headSha = null, deleteLocal = true } = {}) {
-  const row = store.getGitRepoByFullName(repo);
+  const row = store.getGitRepoByRef(repo);
   if (!row?.localPath || !isGitRepo(row.localPath)) {
     return { settled: false, skipped: 'no-local', note: '本地没有这个仓库的克隆，没动本地' };
   }
@@ -801,20 +863,25 @@ export function removeRepo(id) {
 export async function listBranches(row) {
   const cwd = row.localPath;
   if (!isGitRepo(cwd)) throw new Error(`本地目录不是 git 仓库（没有 .git）：${cwd}`);
-  const headRef = await gitIn(cwd, ['symbolic-ref', '--short', '-q', 'HEAD']);
-  const local = await gitIn(cwd, ['for-each-ref', 'refs/heads', '--format=%(refname:short)']);
+  /* 这六条**互不依赖**（HEAD、本地、远程、标签、上游、reflog），一次并发发完。
+     串行时 6×65ms ≈ 400ms，是分支下拉"点开要等一下"的全部原因（2026-11-20 实测 545ms）。 */
+  const [headRef, local, remote, tags, ups, rl] = await Promise.all([
+    gitIn(cwd, ['symbolic-ref', '--short', '-q', 'HEAD']),
+    gitIn(cwd, ['for-each-ref', 'refs/heads', '--format=%(refname:short)']),
+    gitIn(cwd, ['for-each-ref', 'refs/remotes', '--format=%(refname:short)']),
+    gitIn(cwd, ['for-each-ref', 'refs/tags', '--format=%(refname:short)', '--sort=-creatordate']),
+    /*
+     * 每个本地分支的上游 + 领先/落后（2026-10-27，对齐 IDEA 分支弹窗）：
+     * IDEA 在「最近 / 本地分支」每行右边写 `origin/main`，分支名后面带 `↗1 / ↘2`。
+     * 一个 for-each-ref 就够（`%(upstream:short)` + `%(upstream:track)` 是 git 自己算好的），
+     * 不用逐分支 rev-list —— 分支多了也不会把下拉拖慢。
+     */
+    gitIn(cwd, ['for-each-ref', 'refs/heads', '--format=%(refname:short)\t%(upstream:short)\t%(upstream:track)']),
+    gitIn(cwd, ['reflog', '--format=%gs', '-n', '80']),
+  ]);
   if (local.code !== 0) throw new Error(`读本地分支失败：${local.out.split('\n').slice(-3).join(' ')}`);
-  const remote = await gitIn(cwd, ['for-each-ref', 'refs/remotes', '--format=%(refname:short)']);
-  const tags = await gitIn(cwd, ['for-each-ref', 'refs/tags', '--format=%(refname:short)', '--sort=-creatordate']);
   const current = headRef.code === 0 ? headRef.out : null;
   const localNames = local.out.split('\n').map((s) => s.trim()).filter(Boolean);
-  /*
-   * 每个本地分支的上游 + 领先/落后（2026-10-27，对齐 IDEA 分支弹窗）：
-   * IDEA 在「最近 / 本地分支」每行右边写 `origin/main`，分支名后面带 `↗1 / ↘2`。
-   * 一个 for-each-ref 就够（`%(upstream:short)` + `%(upstream:track)` 是 git 自己算好的），
-   * 不用逐分支 rev-list —— 分支多了也不会把下拉拖慢。
-   */
-  const ups = await gitIn(cwd, ['for-each-ref', 'refs/heads', '--format=%(refname:short)\t%(upstream:short)\t%(upstream:track)']);
   const localUpstreams = {};
   if (ups.code === 0) {
     for (const line of ups.out.split('\n')) {
@@ -830,7 +897,6 @@ export async function listBranches(row) {
       };
     }
   }
-  const rl = await gitIn(cwd, ['reflog', '--format=%gs', '-n', '80']);
   // 「最近」= 当前分支打头（IDEA 也把它列在最近里，带 ✓），后面按 reflog 的切出顺序
   const recent = current ? [current] : [];
   if (rl.code === 0) {
@@ -1096,10 +1162,7 @@ export function gitNetworkFailure(text) {
   if (!/Failed to connect|Could not resolve host|Connection (timed out|refused)|connect(?:ion)? timed out|over proxy|SSL certificate problem/i.test(t)) return null;
   const raw = t.split('\n').map((l) => l.trim()).filter(Boolean).slice(-2).join(' ');
   const host = t.match(/(?:Failed to connect to|Could not resolve host:)\s*([^\s:]+)/i)?.[1] ?? 'github.com';
-  const proxy = t.match(/over proxy ([^\s]+)/i)?.[1];
-  return proxy
-    ? `连接不上 ${host}（代理 ${proxy} 没通 —— 代理没开或端口变了）。检查网络/代理，恢复后重试。原始信息：${raw}`
-    : `连接不上 ${host}（网络不通，或域名解析不了）。检查网络后重试。原始信息：${raw}`;
+  return `连接不上 ${host}。检查网络/代理，恢复后重试。原始信息：${raw}`;
 }
 
 /**
@@ -1198,18 +1261,44 @@ export async function fetchRepo(row) {
   return { fetched: true };
 }
 
-/** HEAD 最近 N 条提交（不联网）。空仓库（一条提交都没有）不算错，回空清单 */
+/**
+ * HEAD 最近 N 条提交（不联网）。空仓库（一条提交都没有）不算错，回空清单。
+ *
+ * 2026-11-20 用户："我想要 idea 的那个图形树效果" —— 后端补上画树需要的三样东西：
+ *   · `--branches --remotes --tags HEAD`：只沿 HEAD 走永远是一条直线，分支分叉/合并不存在；
+ *   · `%P`（父哈希）+ `%H`（全长）：前端按 lane 连父子线，短哈希不够做精确匹配；
+ *   · `%D`（refs）：节点上挂「当前分支 / 远程分支 / 标签」的胶囊。
+ * `--topo-order` 保证父提交永远排在子提交之后，并行开发时才不会画成回环。
+ *
+ * 条数（2026-11-20 用户："为啥在 idea 上展示这么多，bandi 只展示一部分"）：
+ * 原来写死 50 条，而 IDEA 的 Log 是几百上千条一路滚下来的 —— 下限放到 300，
+ * 并多拉一条回来判断「后面还有没有」，前端据此决定要不要摆「加载更多」。
+ * 上限 2000：一次 SVG 画几千条线会拖慢整页，再多就该上虚拟滚动了。
+ */
 export async function recentLog(row, limit = 50) {
   const cwd = row.localPath;
   if (!isGitRepo(cwd)) throw new Error(`本地目录不是 git 仓库（没有 .git）：${cwd}`);
-  const n = Math.max(1, Math.min(Number(limit) || 50, 200));
-  const log = await gitIn(cwd, ['log', `--max-count=${n}`, '--date=iso-local', '--pretty=format:%h%x09%an%x09%ad%x09%s']);
+  const n = Math.max(1, Math.min(Number(limit) || 50, 2000));
+  const log = await gitIn(cwd, [
+    'log', `--max-count=${n + 1}`, '--topo-order', '--date=iso-local',
+    '--branches', '--remotes', '--tags', 'HEAD',
+    '--pretty=format:%H%x09%h%x09%P%x09%an%x09%ad%x09%D%x09%s',
+  ]);
   if (log.code !== 0) return { commits: [], note: log.out.split('\n').filter(Boolean).slice(-1)[0] ?? null };
-  const commits = log.out.split('\n').filter(Boolean).map((line) => {
-    const [sha, author, date, ...rest] = line.split('\t');
-    return { sha, author, date, subject: rest.join('\t') };
+  const rows = log.out.split('\n').filter(Boolean).map((line) => {
+    const [full, sha, parents, author, date, refs, ...rest] = line.split('\t');
+    return {
+      sha,
+      full,
+      parents: parents ? parents.split(' ').filter(Boolean) : [],
+      author,
+      date,
+      refs: refs || '',
+      subject: rest.join('\t'),
+    };
   });
-  return { commits };
+  const more = rows.length > n;
+  return { commits: more ? rows.slice(0, n) : rows, more };
 }
 
 /**
@@ -1388,7 +1477,9 @@ export async function deleteBranch(row, { branch, remote = false, base = null } 
   if (askRemote) {
     if (!isPlatformBranchName(name)) throw new Error(`远端只删平台建的分支（<type>/<短描述> 或老的 bandi/…）；${name} 不是，要删请去 GitHub 上删`);
     if (!readToken()) throw new Error('先连接 GitHub 才能删远端分支（令牌只存本机）');
-    const open = await findOpenPullForHead(row.fullName, name, row.owner).catch(() => null);
+    // API 只认 owner/name：本地托管行 fullName 可能只是目录名（见 githubRefOf）
+    const ref = await githubRefOf(row);
+    const open = await findOpenPullForHead(ref, name, row.owner).catch(() => null);
     if (open) throw new Error(`这条分支上还有开着的 PR #${open.number} —— 先把它合掉或关掉，再删分支`);
     const f = await gitIn(cwd, [...gitAuthArgs(), 'fetch', '--prune', 'origin'], { timeoutMs: GIT_PUSH_MS });
     if (f.code !== 0) throw new Error(`拉远端分支状态没成（查网络 / 令牌）：${f.out.split('\n').slice(-2).join(' ')}`);
@@ -1399,7 +1490,7 @@ export async function deleteBranch(row, { branch, remote = false, base = null } 
       timeoutMs: GIT_FAST_MS,
     });
     if (merged.code !== 0) throw new Error(`${name} 还有没合并进 ${baseName} 的提交 —— 先合并（建 PR）再删，别用删分支丢代码`);
-    await deleteRemoteBranch(row.fullName, name);
+    await deleteRemoteBranch(ref, name);
     return { deleted: name, remote: true };
   }
 
@@ -1509,7 +1600,7 @@ export function prFieldsOf(pr) {
  * 所以巡检是"列表发现新的 + 按卡上记的再查一遍旧的"，两件事都得有。
  */
 export async function listOpenPulls(repo) {
-  const list = await ghFetch(`/repos/${repo}/pulls?state=open&per_page=30&sort=updated&direction=desc`);
+  const list = await ghFetch(repoApiPath(repo, '/pulls?state=open&per_page=30&sort=updated&direction=desc'));
   return (Array.isArray(list) ? list : []).map((p) => ({
     number: Number(p.number),
     title: String(p.title ?? ''),
@@ -1561,7 +1652,7 @@ export function summarizeChecks(runs) {
 /** 查一条提交的 checks 汇总（PR 区每行用；失败降级成 unknown，不挡别的 PR 显示） */
 export async function pullChecks(repo, sha) {
   if (!sha) return { state: 'unknown', total: 0, failed: [], pending: [] };
-  const data = await ghFetch(`/repos/${repo}/commits/${sha}/check-runs?per_page=100`);
+  const data = await ghFetch(repoApiPath(repo, `/commits/${sha}/check-runs?per_page=100`));
   return summarizeChecks(data?.check_runs);
 }
 
@@ -1575,7 +1666,7 @@ export async function pullChecks(repo, sha) {
  */
 export async function gateDetail(repo, sha) {
   if (!sha) return { state: 'unknown', total: 0, failed: [], pending: [], runs: [], jobs: [] };
-  const data = await ghFetch(`/repos/${repo}/commits/${sha}/check-runs?per_page=100`);
+  const data = await ghFetch(repoApiPath(repo, `/commits/${sha}/check-runs?per_page=100`));
   const runs = (Array.isArray(data?.check_runs) ? data.check_runs : []).map((r) => ({
     name: r.name ?? '',
     status: r.status ?? '',
@@ -1588,11 +1679,11 @@ export async function gateDetail(repo, sha) {
   const summary = summarizeChecks(data?.check_runs);
   let jobs = [];
   try {
-    const wl = await ghFetch(`/repos/${repo}/actions/runs?head_sha=${sha}&per_page=10`);
+    const wl = await ghFetch(repoApiPath(repo, `/actions/runs?head_sha=${sha}&per_page=10`));
     const bad = (Array.isArray(wl?.workflow_runs) ? wl.workflow_runs : [])
       .find((w) => ['failure', 'timed_out', 'cancelled', 'action_required'].includes(w.conclusion));
     if (bad) {
-      const jd = await ghFetch(`/repos/${repo}/actions/runs/${bad.id}/jobs?per_page=20`);
+      const jd = await ghFetch(repoApiPath(repo, `/actions/runs/${bad.id}/jobs?per_page=20`));
       jobs = (Array.isArray(jd?.jobs) ? jd.jobs : [])
         .filter((j) => j.conclusion !== 'success')
         .map((j) => ({
@@ -1617,12 +1708,12 @@ export async function gateDetail(repo, sha) {
  */
 export async function rerunGate(repo, sha) {
   if (!sha) throw new Error('这个 PR 拿不到 head 提交 —— 重跑不了，去 GitHub 页面上点 Re-run');
-  const wl = await ghFetch(`/repos/${repo}/actions/runs?head_sha=${sha}&per_page=20`);
+  const wl = await ghFetch(repoApiPath(repo, `/actions/runs?head_sha=${sha}&per_page=20`));
   const bad = (Array.isArray(wl?.workflow_runs) ? wl.workflow_runs : [])
     .find((w) => ['failure', 'timed_out', 'cancelled', 'action_required'].includes(w.conclusion));
   if (!bad) throw new Error('没有失败的检查可重跑 —— 要么还在跑，要么已经全绿（等一下再刷新看看）');
   try {
-    await ghFetch(`/repos/${repo}/actions/runs/${bad.id}/rerun`, { method: 'POST' });
+    await ghFetch(repoApiPath(repo, `/actions/runs/${bad.id}/rerun`), { method: 'POST' });
   } catch (e) {
     /*
      * 403 最常见：细粒度 PAT 默认「Actions 只读」，重跑要写权限 —— 这得人去改令牌，
@@ -1641,7 +1732,7 @@ export async function rerunGate(repo, sha) {
 
 /** 列出开着的 issue（剔除 PR —— GitHub 的 issues 接口把 PR 也当 issue 返回） */
 export async function listOpenIssues(repo) {
-  const list = await ghFetch(`/repos/${repo}/issues?state=open&per_page=30&sort=updated&direction=desc`);
+  const list = await ghFetch(repoApiPath(repo, '/issues?state=open&per_page=30&sort=updated&direction=desc'));
   return (Array.isArray(list) ? list : [])
     .filter((x) => !x.pull_request)
     .map((x) => ({
@@ -1655,7 +1746,7 @@ export async function listOpenIssues(repo) {
 
 /** 查一个 PR 的当前状态（走平台令牌）；state 归一成 open / merged / closed */
 export async function fetchPull(repo, number) {
-  const pr = await ghFetch(`/repos/${repo}/pulls/${number}`);
+  const pr = await ghFetch(repoApiPath(repo, `/pulls/${number}`));
   return {
     repo,
     number: Number(number),
@@ -1684,7 +1775,7 @@ export async function fetchPull(repo, number) {
  * 再大的 PR 说明它本来就该人多花时间看，而不是让模型硬吞。
  */
 export async function listPullFiles(repo, number) {
-  const list = await ghFetch(`/repos/${repo}/pulls/${number}/files?per_page=50`);
+  const list = await ghFetch(repoApiPath(repo, `/pulls/${number}/files?per_page=50`));
   let budget = 24000;
   return (Array.isArray(list) ? list : []).map((f) => {
     let patch = typeof f.patch === 'string' ? f.patch : null;
@@ -1715,7 +1806,7 @@ export async function getChecks(repo, sha) {
   if (!sha) return { state: 'none' };
   let runs = [];
   try {
-    const data = await ghFetch(`/repos/${repo}/commits/${sha}/check-runs?per_page=100`);
+    const data = await ghFetch(repoApiPath(repo, `/commits/${sha}/check-runs?per_page=100`));
     runs = Array.isArray(data?.check_runs) ? data.check_runs : [];
   } catch {
     /* check-runs 拿不到（老令牌/仓库禁用 Actions）就按"没有 CI"算，别让闸卡死 */
@@ -1773,7 +1864,7 @@ export async function mergePull(repo, number, { commitTitle = null, mergeMethod 
   // 乐观锁：拿闸判据看下的那个 head SHA 去合，期间有人推提交就撞 409，而不是合掉一份没看过的改动
   if (sha) body.sha = sha;
   try {
-    const data = await ghFetch(`/repos/${repo}/pulls/${number}/merge`, { method: 'PUT', body });
+    const data = await ghFetch(repoApiPath(repo, `/pulls/${number}/merge`), { method: 'PUT', body });
     return { merged: !!data.merged, message: data.message ?? '', sha: data.sha ?? null };
   } catch (e) {
     if (e?.status === 409) throw new Error('这个 PR 在你看的这段时间里被人推了新提交（409）：刷新后重看再合');
@@ -2021,37 +2112,51 @@ async function resolveBase(row, askedBase) {
 export async function workState(row) {
   const cwd = row.localPath;
   if (!isGitRepo(cwd)) throw new Error(`本地目录不是 git 仓库（没有 .git）：${cwd}`);
-  const origin = await gitIn(cwd, ['remote', 'get-url', 'origin']);
-  const hasRemote = origin.code === 0 && !!origin.out;
-  const headRef = await gitIn(cwd, ['symbolic-ref', '--short', '-q', 'HEAD']);
-  const branch = headRef.code === 0 ? headRef.out : null;
-  const base = row.defaultBranch || null;
-
   /*
-   * ⚠️ **trim:false**：`-z` 的第一条记录可以以空格开头（" M path"）。run() 默认 trim 会
-   * 吃掉那个空格，记录整体错位、路径首字母被 slice(3) 切掉 —— 2026-10-25 实报：
-   * 弹窗把 `apps/...` 显示成 `pps/...`，提交时 `git add` 报 pathspec 不存在。
+   * 这里的 git 调用**必须并发**（2026-11-20 实测 + 改）。
+   *
+   * 单次 `git <任何子命令>` 在 Windows 上是 65~70ms —— `git --version` 自己也要 65ms，
+   * 慢的是进程启动，不是 git 运算。原来这 11 次串行 = 730ms，点开仓库就是"卡一下"，
+   * 用户体感上会算到「历史」那张卡头上。
+   *
+   * 现在拆成三层 Promise.all：还是 11 个进程，wall time 落到 ~350ms，**命令和解析一个字没动**。
+   * 别为了"少开进程"去合并命令：实测 11→8 只多省 40ms，却要动 status/upstream 的解析
+   * （`pps/` 那类事故就出在这段）。要提速就并行，别改命令。
+   *
+   * 顺序说明：verify 和 status/remote/HEAD 一起发；`count/log/back` 只依赖 branch+base，
+   * 不等 verify —— base 不存在时它们本来就只报错、结果被忽略（`baseKnown` 兜住），行为不变。
    */
-  const st = await gitIn(cwd, ['status', '--porcelain', '--untracked-files=all', '-z'], { trim: false });
+  const base = row.defaultBranch || null;
+  const [origin, headRef, st, verify] = await Promise.all([
+    gitIn(cwd, ['remote', 'get-url', 'origin']),
+    gitIn(cwd, ['symbolic-ref', '--short', '-q', 'HEAD']),
+    /*
+     * ⚠️ **trim:false**：`-z` 的第一条记录可以以空格开头（" M path"）。run() 默认 trim 会
+     * 吃掉那个空格，记录整体错位、路径首字母被 slice(3) 切掉 —— 2026-10-25 实报：
+     * 弹窗把 `apps/...` 显示成 `pps/...`，提交时 `git add` 报 pathspec 不存在。
+     */
+    gitIn(cwd, ['status', '--porcelain', '--untracked-files=all', '-z'], { trim: false }),
+    base ? gitIn(cwd, ['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${base}`]) : IDLE_GIT,
+  ]);
+  const hasRemote = origin.code === 0 && !!origin.out;
+  const branch = headRef.code === 0 ? headRef.out : null;
   if (st.code !== 0) throw new Error(`读工作区状态失败：${st.out.split('\n').slice(-3).join(' ')}`);
   const dirty = parseStatusZ(st.out);
 
   let ahead = null;
   let aheadCommits = [];
   let behind = null;
-  let baseKnown = false;
-  if (base && branch) {
-    const verify = await gitIn(cwd, ['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${base}`]);
-    baseKnown = verify.code === 0 && verify.out !== '';
-    if (baseKnown) {
-      const count = await gitIn(cwd, ['rev-list', '--count', `origin/${base}..HEAD`]);
-      if (count.code === 0) ahead = Number(count.out) || 0;
-      const log = await gitIn(cwd, ['log', '--format=%h %s', `origin/${base}..HEAD`, '-n', '20']);
-      if (log.code === 0) aheadCommits = log.out.split('\n').filter(Boolean).map((l) => ({ sha: l.slice(0, 7), subject: l.slice(8) }));
-      const back = await gitIn(cwd, ['rev-list', '--count', `HEAD..origin/${base}`]);
-      if (back.code === 0) behind = Number(back.out) || 0;
-    }
-  }
+  const baseKnown = !!base && !!branch && verify.code === 0 && verify.out !== '';
+  // 三层里的第二层：base 的三个查询 + 上游名，四个一起发（detached / 没 base 时退化成 IDLE）
+  const [count, log, back, up] = await Promise.all([
+    baseKnown ? gitIn(cwd, ['rev-list', '--count', `origin/${base}..HEAD`]) : IDLE_GIT,
+    baseKnown ? gitIn(cwd, ['log', '--format=%h %s', `origin/${base}..HEAD`, '-n', '20']) : IDLE_GIT,
+    baseKnown ? gitIn(cwd, ['rev-list', '--count', `HEAD..origin/${base}`]) : IDLE_GIT,
+    branch ? gitIn(cwd, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']) : IDLE_GIT,
+  ]);
+  if (count.code === 0) ahead = Number(count.out) || 0;
+  if (log.code === 0) aheadCommits = log.out.split('\n').filter(Boolean).map((l) => ({ sha: l.slice(0, 7), subject: l.slice(8) }));
+  if (back.code === 0) behind = Number(back.out) || 0;
 
   /*
    * 上游（`@{u}`）与"已提交、还没推送"的计数（2026-10-27 用户实报：提交完没推，界面看不出来）。
@@ -2064,23 +2169,23 @@ export async function workState(row) {
   let unpushed = null;
   let unpulled = null;
   let unpushedCommits = [];
-  if (branch) {
-    const up = await gitIn(cwd, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
-    if (up.code === 0 && up.out) {
-      upstream = up.out;
-      const a = await gitIn(cwd, ['rev-list', '--count', '@{u}..HEAD']);
-      if (a.code === 0) unpushed = Number(a.out) || 0;
-      const b = await gitIn(cwd, ['rev-list', '--count', 'HEAD..@{u}']);
-      if (b.code === 0) unpulled = Number(b.out) || 0;
+  if (up.code === 0 && up.out) {
+    upstream = up.out;
+    // 三层里的第三层：两个计数 + 推送清单，三个一起发
+    const [a, b, ul] = await Promise.all([
+      gitIn(cwd, ['rev-list', '--count', '@{u}..HEAD']),
+      gitIn(cwd, ['rev-list', '--count', 'HEAD..@{u}']),
       // 推送区要展示的清单（2026-10-29 用户："提交下面加一个推送区，展示没有推送的提交"）：
       // 跟「历史」卡同款格式（sha / 作者 / 时间 / 说明），上限 20 条，多出来的只报数
-      const ul = await gitIn(cwd, ['log', '--max-count=20', '--date=iso-local', '--pretty=format:%h%x09%an%x09%ad%x09%s', '@{u}..HEAD']);
-      if (ul.code === 0) {
-        unpushedCommits = ul.out.split('\n').filter(Boolean).map((line) => {
-          const [sha, author, date, ...rest] = line.split('\t');
-          return { sha, author, date, subject: rest.join('\t') };
-        });
-      }
+      gitIn(cwd, ['log', '--max-count=20', '--date=iso-local', '--pretty=format:%h%x09%an%x09%ad%x09%s', '@{u}..HEAD']),
+    ]);
+    if (a.code === 0) unpushed = Number(a.out) || 0;
+    if (b.code === 0) unpulled = Number(b.out) || 0;
+    if (ul.code === 0) {
+      unpushedCommits = ul.out.split('\n').filter(Boolean).map((line) => {
+        const [sha, author, date, ...rest] = line.split('\t');
+        return { sha, author, date, subject: rest.join('\t') };
+      });
     }
   }
 
@@ -2144,23 +2249,108 @@ export function nothingNewForPr(st) {
 /**
  * GitHub API 用的仓库引用（`owner/name`）。
  *
- * 「本地代码托管」接进来的行（2026-11-14 流程实报）：fullName 只记了目录名（`bandi`），
- * 没有 owner 段 —— 推送走 origin 没事，API 却按 `/repos/{fullName}/...` 拼，
- * `/repos/bandi/pulls` 在 GitHub 上必然 404，换什么令牌都救不了
- * （这个 404 之前一直被误判成"令牌没授权这个仓库"）。
- * 行里没 owner 段就从本地 origin 解出真身；解不出（没有 origin / 不是 GitHub 地址）
- * 原样返回 —— 让后续的 404 文案去说话，这里不猜。
+ * 2026-11-20 重写（用户："如果我本地仓库改个名字是不是就找不到了？这显然不合理的吧"）：
+ * 身份改成**接入时落库**（git_repos.ghRef），这里只是读取 —— 本地目录改名、挪位置、
+ * 甚至盘符变了，都不再影响"这行仓库在 GitHub 那边是谁"。
+ *
+ * 读取顺序：
+ *   ① 库里的 ghRef（正常路径，不碰磁盘）；
+ *   ② 老库没有 ghRef：从本地 origin 解一次，**顺手回写**（下次就不用再解）；
+ *   ③ 都没有：原样返回 fullName —— 让 `repoApiPath` 去说"这行没有 GitHub 身份"（E1205），
+ *      不再拼一个假地址去打 GitHub、再把人引到"检查令牌授权"的假原因上。
  */
 export async function githubRefOf(row) {
+  const stored = String(row?.ghRef ?? '').trim();
+  if (/^[\w.-]+\/[\w.-]+$/.test(stored)) return stored;
   const name = String(row?.fullName ?? '');
-  if (name.includes('/')) return name;
-  try {
-    const r = await gitIn(row.localPath, ['remote', 'get-url', 'origin']);
-    if (r.code !== 0) return name;
-    const m = String(r.out ?? '').trim().match(/github\.com[/:]([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/i);
-    if (m) return `${m[1]}/${m[2]}`;
-  } catch { /* origin 读不到就原样返回 */ }
+  // 没有本地目录时**不许**跑 git：cwd 为空会继承服务进程的工作目录，
+  // 于是把"平台自己那个仓库"的 origin 当成这行的真身 —— 张冠李戴比 404 更难查。
+  if (row?.localPath) {
+    try {
+      const r = await gitIn(row.localPath, ['remote', 'get-url', 'origin']);
+      if (r.code === 0) {
+        const ref = ghRefFromRemote(r.out);
+        if (ref) {
+          // row.id 不存在（冒烟里手搓的行）就不写 —— 一次读操作不该改库
+          if (row.id) {
+            try {
+              store.setGitRepoIdentity(row.id, { ghRef: ref, remoteUrl: String(r.out).trim() });
+            } catch {
+              /* 写不进去只影响下次再解一次 */
+            }
+          }
+          return ref;
+        }
+      }
+    } catch {
+      /* origin 读不到就按 fullName 兜底 */
+    }
+  }
   return name;
+}
+
+/**
+ * 老库的仓库身份回填（2026-11-20，**幂等**）。
+ *
+ * 2026-11-20 之前 `git_repos` 没有 ghRef：GitHub API 用的 owner/name 是每次从本地
+ * origin 现推的。本地目录一改名，PR / 合并那一路就全断 —— 身份不该长在路径上。
+ *
+ * 现在接入时已经写库；这个函数只管**老行**：启动时扫一遍，ghRef 空着的按 origin 补上。
+ * 读 origin 要起 git 子进程，所以不能放 db.mjs（SQL 只归 store/），由 server.mjs 启动时调用。
+ * 读不出来（没有 origin / 不是 GitHub 地址 / 目录不在了）就跳过 —— 下次启动再试，不拦启动。
+ */
+export async function backfillRepoIdentity() {
+  let fixed = 0;
+  for (const row of store.listGitRepos()) {
+    if (/^[\w.-]+\/[\w.-]+$/.test(String(row.ghRef ?? '').trim())) continue;
+    if (!row.localPath || !isGitRepo(row.localPath)) continue;
+    const r = await gitIn(row.localPath, ['remote', 'get-url', 'origin']).catch(() => null);
+    if (!r || r.code !== 0 || !String(r.out ?? '').trim()) continue;
+    const remote = String(r.out).trim();
+    const ghRef = ghRefFromRemote(remote);
+    store.setGitRepoIdentity(row.id, { ghRef: ghRef ?? null, remoteUrl: remote });
+    if (ghRef) fixed += 1;
+  }
+  return fixed;
+}
+
+/**
+ * 目录重定位（2026-11-20）：本地克隆被改名 / 挪走后，把这行指到新位置。
+ *
+ * 身份（ghRef / remoteUrl）**不跟着路径走** —— 这正是"改个目录名就找不到仓库"要修的病根。
+ * 这里只改 localPath 这个指针，前提是新目录确实是同一个仓库：
+ *   · 有 .git；
+ *   · origin 能读出来，且跟这行记的身份对得上（对不上就**拒绝**，不是警告 ——
+ *     接错行会造成"张冠李戴"，比找不到更难查）。
+ *
+ * 界面还没接（2026-11-20 先定后端与交互方案）；冒烟直接调它钉行为。
+ */
+export async function relocateRepo(id, newLocalPath) {
+  const row = store.getGitRepo(id);
+  if (!row) throw new Error('仓库不在清单里');
+  const raw = String(newLocalPath ?? '').trim();
+  if (!raw) throw new Error('要指定新目录');
+  const dir = path.resolve(raw);
+  if (!fs.existsSync(dir)) throw new Error(`目录不存在：${dir}`);
+  if (!isGitRepo(dir)) throw new Error(`这个目录不是 git 仓库（没有 .git）：${dir}`);
+  const dup = store.getGitRepoByPath(dir);
+  if (dup && dup.id !== row.id) throw new Error(`这个目录已经接给仓库 ${dup.fullName} 了`);
+
+  const origin = await gitIn(dir, ['remote', 'get-url', 'origin']);
+  if (origin.code !== 0) throw new Error('这个目录没有 origin —— 认不出是不是同一个仓库，没敢接');
+  const remote = String(origin.out ?? '').trim();
+  // 这行记的身份：ghRef 优先，其次从 remoteUrl 反推（老库可能只有 remoteUrl）
+  const want = /^[\w.-]+\/[\w.-]+$/.test(String(row.ghRef ?? '').trim()) ? String(row.ghRef).trim() : repoFromRemote(row.remoteUrl);
+  const got = repoFromRemote(remote);
+  if (want && got && want.toLowerCase() !== got.toLowerCase()) {
+    throw new Error(`新目录的 origin 指向 ${remote}，跟这行记的 ${want} 不是同一个仓库 —— 先确认再改`);
+  }
+
+  store.setGitRepoPath(row.id, dir);
+  // 顺手补身份（老的本地托管行可能一直没有 ghRef）
+  const ghRef = ghRefFromRemote(remote);
+  if (ghRef && ghRef !== row.ghRef) store.setGitRepoIdentity(row.id, { ghRef, remoteUrl: remote });
+  return store.getGitRepo(row.id);
 }
 
 /**
@@ -2261,7 +2451,8 @@ export async function commitAndPush(row, { branch = null, message = null, paths 
     }
   }
 
-  const push = await gitIn(row.localPath, [...gitAuthArgs(), 'push', '--set-upstream', 'origin', `refs/heads/${branchName}:refs/heads/${branchName}`], { timeoutMs: GIT_PUSH_MS });
+    const pushEnv = allowSecrets ? { ...GIT_ENV, BANDI_HOOK_ALLOW_SECRETS: '1' } : GIT_ENV;
+    const push = await gitIn(row.localPath, [...gitAuthArgs(), 'push', '--set-upstream', 'origin', `refs/heads/${branchName}:refs/heads/${branchName}`], { timeoutMs: GIT_PUSH_MS, env: pushEnv });
   if (push.code !== 0) {
     const t = translatePushFailure(String(push.out ?? ''), {
       branch: branchName,
@@ -2280,7 +2471,7 @@ export async function commitAndPush(row, { branch = null, message = null, paths 
  */
 export async function findOpenPullForHead(repo, branch, owner = null) {
   const who = owner || String(repo).split('/')[0];
-  const list = await ghFetch(`/repos/${repo}/pulls?state=open&head=${encodeURIComponent(`${who}:${branch}`)}`);
+  const list = await ghFetch(repoApiPath(repo, `/pulls?state=open&head=${encodeURIComponent(`${who}:${branch}`)}`));
   const hit = (Array.isArray(list) ? list : [])[0];
   if (!hit) return null;
   return normalizePull(repo, hit);
@@ -2317,7 +2508,7 @@ export async function createPull(repo, { head, base, title, body = '', draft = f
   if (!head || !base) throw new Error('要说清源分支和 base');
   if (head === base) throw new Error(`源分支和 base 是同一个（${base}）—— GitHub 没有可比的东西`);
   try {
-    const pr = await ghFetch(`/repos/${repo}/pulls`, { method: 'POST', body: { title: t, head, base, body: String(body ?? ''), draft: !!draft } });
+    const pr = await ghFetch(repoApiPath(repo, '/pulls'), { method: 'POST', body: { title: t, head, base, body: String(body ?? ''), draft: !!draft } });
     return { pr: normalizePull(repo, pr), created: true };
   } catch (e) {
     const m = String(e?.githubMessage ?? e?.message ?? e);
@@ -2344,7 +2535,7 @@ export async function listPullsForRepo(repo) {
 /** 合完删源分支（可选，对应 `gh pr merge --delete-branch`）；失败不谎报成功 */
 export async function deleteRemoteBranch(repo, branch) {
   const b = assertBranchName(branch);
-  await ghFetch(`/repos/${repo}/git/refs/heads/${b}`, { method: 'DELETE' });
+  await ghFetch(repoApiPath(repo, `/git/refs/heads/${b}`), { method: 'DELETE' });
   return { deleted: b };
 }
 

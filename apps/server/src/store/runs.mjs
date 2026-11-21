@@ -466,10 +466,15 @@ export function activeRunForPersona(personaId) {
  *
  * 运行状态在内存里，进程一死（重启、崩溃）就没了，可 DB 里那行还写着「跑中」——
  * 于是这个会话会永远被"他还在跑"挡住。所以每次启动先把残留的「跑中」判死。
+ *
+ * **返回值是这些被判死的运行行（带 status/error/endedAt），不是条数**（2026-11-20 改）。
+ * 为什么：判死只改了 runs 与 conversations，**看板卡不在这两本账里** ——
+ * 卡停在「进行中」+ 指向一条已经死掉的 runId，而派发闸门看的就是这个组合，
+ * 于是"这张卡已经在跑了"把它永久焊死，界面上没有任何出口（用户实报 pt-4b6bf1ec / E1048）。
+ * 启动处拿到这些行要顺手把卡收掉（`onTaskRunFinished`），收卡的口径只留一份。
  */
-
 export function reapStaleRuns() {
-  const stale = db.prepare("SELECT id, conversationId FROM runs WHERE status = 'running'").all();
+  const stale = db.prepare("SELECT * FROM runs WHERE status = 'running'").all();
   for (const r of stale) {
     const note = '服务重启，这次运行被中断';
     db.prepare("UPDATE runs SET status = 'failed', error = ?, endedAt = ? WHERE id = ?").run(note, nowIso(), r.id);
@@ -494,8 +499,12 @@ export function reapStaleRuns() {
       elapsedMs: null,
       connectors: null,
     });
+    // 回给调用方的行要跟库里一致（回收卡片时按 status=failed 走"跑挂了"那条口径）
+    r.status = 'failed';
+    r.error = note;
+    r.endedAt = nowIso();
   }
-  return stale.length;
+  return stale;
 }
 
 /* --------------------------------------------------------- 执行节点注册表 */

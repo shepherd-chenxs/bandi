@@ -57,7 +57,7 @@ export function parseRefLines(text) {
  * 被自己的名字拦过一回）：文件名只能说明"像"，说明不了"是" —— 实锤档（.env/私钥类）
  * 直接拦；像凭据档**内容说了算**，内容给不出的（纯判定/二进制/已删除）不凭名字拦。
  */
-export function judgeRef({ remoteRef = '', files = [], force = false, contents = null } = {}) {
+export function judgeRef({ remoteRef = '', files = [], force = false, contents = null, allowSecrets = false } = {}) {
   const why = [];
   if (isProtectedRef(remoteRef)) why.push(`${remoteRef.replace('refs/heads/', '')} 是受保护分支：请推到自己的分支，再开 PR 合进去`);
   if (force) why.push('这次推送会改写远端已有历史（非快进）—— 推上去就收不回来，先合一次再推');
@@ -75,7 +75,7 @@ export function judgeRef({ remoteRef = '', files = [], force = false, contents =
     const w = scanContentForSecrets(p, text);
     if (w) hits.push(`${p}：${w}`);
   }
-  if (hits.length) {
+  if (hits.length && !allowSecrets) {
     why.push(
       `内容扫描发现像真实密钥的东西：${hits.slice(0, 4).join('；')}${hits.length > 4 ? ` 等 ${hits.length} 个` : ''}` +
         ' —— 提交即泄露：挪进 tests/fixtures 这类豁免位、改占位值，或回平台让雇主显式确认放行',
@@ -173,7 +173,8 @@ function main() {
       if (text === null) secretNotes.push(`${r.remoteRef} ${p} 内容没法扫（二进制/太大/已删除），按名字放行`);
       else if (!scanContentForSecrets(p, text)) secretNotes.push(`${r.remoteRef} ${p} 名字像凭据、内容干净，放行`);
     }
-    for (const why of judgeRef({ remoteRef: r.remoteRef, files, force, contents })) problems.push(`${r.remoteRef}：${why}`);
+    const allowSecrets = /^(1|true)$/i.test(String(process.env.BANDI_HOOK_ALLOW_SECRETS ?? ''));
+    for (const why of judgeRef({ remoteRef: r.remoteRef, files, force, contents, allowSecrets })) problems.push(`${r.remoteRef}：${why}`);
   }
 
   audit({

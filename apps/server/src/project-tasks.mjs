@@ -330,7 +330,7 @@ function manualRows(t) {
     col: COL_OF_MANUAL[t.status] ?? 'other',
     rank: FLOW_RANK[t.status] ?? RANK_OTHER,
     assignee: persona?.name
-      ?? user?.name
+      ?? (user ? store.displayNameOf(user) : null)
       ?? (group ? `团队协作 · ${group.title}` : (t.flowTemplateId && !t.flowRunId ? '（还没发起）' : '未分配')),
     assignee_id: t.assigneePersonaId ?? (t.assigneeUserId ? `u:${t.assigneeUserId}` : null) ?? (group ? `g:${group.id}` : null),
     assignee_user_id: t.assigneeUserId ?? null,
@@ -370,6 +370,22 @@ function manualRows(t) {
     pr: t.prRepo && t.prNumber ? { repo: t.prRepo, number: t.prNumber, state: t.prState ?? null, title: t.prTitle ?? null } : null,
     conversation_id: t.conversationId,
     run_id: t.runId,
+  };
+}
+
+/**
+ * 任务卡详情的**真人署名**（2026-11-21 独立操作平台）：GET /api/projects/tasks/:id
+ * 返回的是库里的原始行，前端名册（/api/state.users）如今只含自己，派给**别的真人**
+ * 的卡在前端查不到名字 —— 执行人、状态改动归因这两个署名位由服务端在这里拼好。
+ * 名字口径与看板卡脚同源（displayNameOf：昵称优先，手机号打码）。
+ */
+export function withTaskUserNames(t) {
+  if (!t) return t;
+  const nameOf = (id) => store.displayNameOf(store.getUser(id));
+  return {
+    ...t,
+    assigneeUserName: t.assigneeUserId ? nameOf(t.assigneeUserId) : null,
+    statusByUserName: t.statusByUserId ? nameOf(t.statusByUserId) : null,
   };
 }
 
@@ -985,6 +1001,24 @@ function startCardInGroup(row, project) {
   });
 }
 
+/**
+ * 「这张卡还在跑吗」—— **判据是那条运行还活着，不是"卡上挂着 runId"**（2026-11-20 修）。
+ *
+ * 实报（pt-4b6bf1ec / 用户："在跑吗？"+ E1048「存了，但没派出去：这张卡已经在跑了」）：
+ * 卡是「进行中」、runId 指向 r-a6da3259，而那条运行 22:09 就被"服务重启"判死了 ——
+ * 旧判据只看 `status==='doing' && row.runId`，于是**永远**判定在跑：重跑被拦、界面没有出口，
+ * 只有把卡手动改回「待办」才能绕开。
+ * 归因分两层，缺一条都不够：
+ *   · **状态层**：重启判死的运行必须顺手把卡收掉（server.mjs 启动处调 onTaskRunFinished）；
+ *   · **判据层**：闸门这边再兜一层 —— 只要那条运行不是 `running`，就不算在跑。
+ *     这样任何路径留下的死 runId（崩溃、旧版本写下的残留、手工改库）都不会把卡焊死。
+ * 代价是一次按主键的 `SELECT status`（走 idx），比"卡死一张卡"便宜得多。
+ */
+function cardStillRunning(row) {
+  if (row.status !== 'doing' || !row.runId) return false;
+  return store.getRunStatus(row.runId)?.status === 'running';
+}
+
 export function startProjectTask(id, { allowIdea = false } = {}) {
   const row = store.getProjectTask(id);
   if (!row) throw new Error('任务不存在');
@@ -1006,14 +1040,14 @@ export function startProjectTask(id, { allowIdea = false } = {}) {
    */
   if (row.assigneeGroupId) {
     if (!allowIdea && row.status === 'idea') throw new Error('「想法」还没决定要不要做，先挪到「待办」再开始');
-    if (row.status === 'doing' && row.runId) throw new Error('这张卡已经在跑了');
+    if (cardStillRunning(row)) throw new Error('这张卡已经在跑了');
     return startCardInGroup(row, project);
   }
   if (!row.assigneePersonaId) throw new Error('先指定执行人，再开始');
   const persona = store.getPersona(row.assigneePersonaId);
   if (!persona) throw new Error('指定的执行人不在了');
   if (!allowIdea && row.status === 'idea') throw new Error('「想法」还没决定要不要做，先挪到「待办」再开始');
-  if (row.status === 'doing' && row.runId) throw new Error('这张卡已经在跑了');
+  if (cardStillRunning(row)) throw new Error('这张卡已经在跑了');
 
   /*
    * **这张卡自己的工单会话**（2026-10-18）：一条卡一条，返工续它。
@@ -1284,8 +1318,13 @@ export function findRecentSameTitle({ projectId, title, exceptPersonaId, withinM
  *     （「失败」「已阻塞」都不会被自动重派：重派只认「待办」+ queuedAt）。
  *
  * 只动"当前还是进行中"的卡：人已经手动改过状态（比如直接拖到已完成）就不覆盖 —— **卡的状态是人的指令**。
+ *
+ * `notify:false`（2026-11-20 加）：只收卡、不发回执。给**启动清账**用（reapStaleRuns 出来的
+ * 那些运行）—— 它们是"上次开机时被打断"的旧事，不是刚发生的新结果：启动那一刻服务器还没
+ * 开始接请求，却要挨个去唤醒建卡人的会话（每个都是一次真派活），一波重启就是一片莫名其妙的
+ * 运行。卡照样落到「失败」、描述里照样补那行「跑挂了：服务重启…」，人打开看板就看得到。
  */
-export function onTaskRunFinished(run) {
+export function onTaskRunFinished(run, { notify = true } = {}) {
   if (!run?.id) return;
   const task = store.getProjectTaskByRunId(run.id);
   if (!task || task.status !== 'doing') return;
@@ -1299,7 +1338,43 @@ export function onTaskRunFinished(run) {
     status: next,
     description: `${descr}${descr ? '\n\n' : ''}---\n[运行结束] ${why}`,
   });
-  notifyCardOwner(updated, why);
+  if (notify) notifyCardOwner(updated, why);
+}
+
+/**
+ * 开机扫一遍**僵尸卡**：「卡说在跑，运行其实早就没了」（2026-11-20）。
+ *
+ * 为什么要单独扫、不能只靠 reapStaleRuns 带：reap 只处理"这一次开机时还在 running"的运行。
+ * 上一次开机就用旧代码判死过的那批（运行已是 failed，卡还挂在「进行中」）不会被它碰到 ——
+ * 实报的 pt-4b6bf1ec 正是这种存量：只修 reap 那条路，重启一次也不会好。
+ *
+ * 判据（三样同时成立才算僵尸，任缺一条都不动）：
+ *   · 卡是「进行中」；
+ *   · 卡上挂着 runId（人手动拖进「进行中」的卡没有 runId，那是**合法**状态，别当僵尸）；
+ *   · 那条运行不是 `running`（含"库里根本没有这条"）。
+ *
+ * 收尾口径复用 `onTaskRunFinished`（唯一一份），但 `notify:false` —— 这是旧账，
+ * 不该在启动时挨个去唤醒建卡人的会话。运行行都查不到的那种（手工改库/旧版本残留）
+ * 没法臆测它跑成没跑成：只把 runId 摘掉，让人自己看。
+ */
+export function recoverInterruptedCards() {
+  const fixed = [];
+  const dropped = [];
+  for (const p of store.listProjects()) {
+    for (const t of store.listProjectTasks(p.id)) {
+      if (t.status !== 'doing' || !t.runId) continue;
+      const run = store.getRunRow(t.runId);
+      if (run?.status === 'running') continue; // 真在跑，一个像素都不动
+      if (!run) {
+        store.updateProjectTask(t.id, { runId: null });
+        dropped.push(t.id);
+        continue;
+      }
+      onTaskRunFinished(run, { notify: false });
+      fixed.push(t.id);
+    }
+  }
+  return { fixed, dropped };
 }
 
 /**

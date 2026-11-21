@@ -121,8 +121,119 @@ body.mb-narrow .plg-detail-head .head-actions .gr-act span { display: none; }
 .gr-diff-pre .hunk { color: var(--accent); }
 .gr-diff-pre .meta { color: var(--dim); }
 /* 历史卡：sha 等宽、主题吃满、作者/时间靠右降灰 */
-/* 历史卡固定高度（2026-10-27，用户："历史卡片固定高度"）：提交多了卡内滚，不再撑长整页。 */
-#grLog { height: 380px; overflow-y: auto; }
+/* 历史卡固定高度（2026-10-27，用户："历史卡片固定高度"）：提交多了卡内滚，不再撑长整页。
+   2026-11-20 用户："这个框高度增加，下面还有很大的空白" —— 400px 一行 30px 只露 13 条，
+   右下角空一大片。改成跟视口走：窗口越高露得越多，仍卡内滚动。
+
+   2026-11-20 二次调（用户又贴图："这个框高度增加"）：原来减 320px，把卡片上下真正的开销
+   算多了 —— 真页量（1280×900、803 可用高）：卡片上沿 159px（detail-body 20 + tabs 50 +
+   分区标题 30 + fx 14 + 页头余量），下沿到内容底 35px（fx 14 + detail-body 20），
+   再往下 #pluginView 还有 40px 底部留白，合计 234px。所以减 240px 既铺满又不让整页多出滚动条
+   （减 200 会多出 34px，卡片底被顶出屏幕 —— 卡内滚 + 整页滚，两套滚动条叠着，反而难用）。
+   ⚠️ 改这里要连着看上面这串开销：给 tabs 加高、给 .fx 加内边距、给 #pluginView 加 padding-bottom，
+   都要同步把这个数改小，否则卡片底部会被顶出屏幕、多出一条整页滚动条。 */
+#grLog { height: clamp(420px, calc(100vh - 240px), 2000px); overflow-y: auto; }
+/* 卡片下方那块空（2026-11-20 用户第三次贴图："这个间隙再小一些"）。
+   真页量（1406×803）：卡框（.fx 的边框）下沿到窗口底还有 61px 纯空 ——
+   .detail-body 的 20 + #pluginView 的 40 + 边框 1。这页是「一张定高卡铺满整页」的版式，
+   底下留这么宽一条空，看着像页面没画完。
+   只在这一页收掉，两个内边距都收到 12 → 卡框下沿离窗口底 24px。
+   作用域用 `:has(#grLog)` 自己界定（该卡片只在这页存在）：比在 JS 里挂 class
+   少一处「离开时忘了摘」的坑 —— 历史卡没了，内边距自己就回到 40。
+   ⚠️ 卡高常量要跟着动：上面那条减 240 是按「底部共 76px（fx 15 + body 20 + view 41）」算的，
+   现在底部 39px（15 + 12 + 12），240 - 37 = 203；取 205 留 2px 余量（宁可差两像素，
+   也别让整页多出一条滚动条）。改这里的两条内边距，那个数要一起改。 */
+#pluginView:has(#grLog) { padding-bottom: 12px; }
+#pluginView:has(#grLog) > .detail-body { padding-bottom: 12px; }
+#pluginView:has(#grLog) #grLog { height: clamp(420px, calc(100vh - 205px), 2000px); }
+/* 历史卡滚动条的位置（2026-11-20 用户："这个滚动条跟左边的间隙增大，跟右边的间隙减小"）。
+   全局滚动条是 11px 槽 + 左右各 3px 透明边（style.css 的 ::-webkit-scrollbar），杆只占 5px，
+   而且贴在 #grLog 的右边界上；#grLog 又缩在 .fx 的 16px 右内边距里 —— 于是「杆 ↔ 日期」只剩 4px、
+   「杆 ↔ 卡片边框」却有 19px，正好是拧着的。
+   做法：卡片右内边距 16 → 6（滚动条整体右移 10px），行右内边距 12 → 22 把日期列拽回原位 ——
+   量出来「杆 ↔ 日期」4 → 14px、「杆 ↔ 边框」19 → 9px，日期那一列一个像素都没动。
+   ⚠️ 行右内边距在下面 `#grLog .gr-log-row` 的 padding 简写里，改这里要连着改那一条。 */
+.plg-sec[data-gr-tab="log"] > .fx { padding-right: 6px; }
+/* 历史图形树（2026-11-20 用户："我想要 idea 的那个图形树效果"）：
+   左侧一列彩色 lane —— 节点圆点 + 分叉/汇合曲线，SHA 与分支胶囊跟在节点右边。
+   lane 色板单独一组变量：深色档偏亮（压在近黑底上才看得清），浅色档在下面覆盖。 */
+:root {
+  --gr-lane-1: #4e9cff;
+  --gr-lane-2: #3fb950;
+  --gr-lane-3: #d29922;
+  --gr-lane-4: #bc8cff;
+  --gr-lane-5: #39c5cf;
+  --gr-lane-6: #f778ba;
+  --gr-lane-7: #8bc34a;
+  --gr-lane-8: #ff8f5a;
+}
+:root[data-theme='light'] {
+  --gr-lane-1: #0969da;
+  --gr-lane-2: #1a7f37;
+  --gr-lane-3: #9a6700;
+  --gr-lane-4: #8250df;
+  --gr-lane-5: #1b7c83;
+  --gr-lane-6: #bf3989;
+  --gr-lane-7: #4d7c0f;
+  --gr-lane-8: #bc4c00;
+}
+/* 行高钉死 26px：SVG 整块按 26 一行画（skills.mjs 的 LOG_ROW_H），行高变了线就会错位。
+   右内边距 22（不是两侧都 12）：给滚动条让位，见上面 `.plg-sec[data-gr-tab="log"] > .fx` 那条注释。 */
+#grLog .gr-log-row { height: 26px; padding: 0 22px 0 12px; align-items: center; gap: 8px; }
+/* 五百行全量布局一次要 ~100ms（用户："为啥 idea 读那么快，bandi 这么慢"），
+   content-visibility 让浏览器**跳过屏幕外行**的布局与绘制 —— 实测布局 99ms → 12ms、首帧 107ms → 20ms。
+   安全前提就两条，改这里时别破坏：行高是固定的 26px（含 border-box）、行上没有过渡动画。 */
+#grLog .gr-log-row { content-visibility: auto; contain-intrinsic-size: auto 26px; }
+/* 行分隔线会把竖向的分支线切成一段一段（IDEA 里也没有），历史卡保持无横线 */
+#grLog .gr-log-row + .gr-log-row { border-top: 0; }
+#grLog .gr-log-row:hover { background: var(--hover); }
+/* 分支胶囊（HEAD / 本地分支 / 远程 / 标签）：不参与收缩，宁可挤提交说明也不能被压没 */
+.gr-log-refs { display: flex; align-items: center; gap: 4px; flex: 0 0 auto;
+               min-width: 0; max-width: 46%; overflow: hidden; }
+/* 一棵树一块 SVG（2026-11-20 二改）：线条画在**覆盖层**上，行只提供高度与文字。
+   层叠反了（线在行底下）跨行的分叉曲线就会被下一行的底色切掉，所以 SVG z-index 压上面，
+   但必须 pointer-events:none，不然整块会把行的 hover / 点击全吃掉。 */
+.gr-log-wrap { position: relative; }
+/* 覆盖层的左偏移必须等于行内边距（上面那条 padding 的 12px），
+   否则第一列节点会贴到容器边上、与后面占位区错开半个 lane。 */
+.gr-log-lines { position: absolute; left: 12px; top: 0; z-index: 2; pointer-events: none; }
+.gr-log-lines path { fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.gr-log-rows { position: relative; z-index: 1; }
+/* 图形列只占位（宽由行内 style 给），真正画线的是上面那块 SVG */
+.gr-log-graph { flex: 0 0 auto; align-self: stretch; }
+/* 列宽固定、右端对齐：sha 62 / 说明弹性 / 胶囊紧随说明 / 作者 108 / 日期 78（Git Graph 的列形）。
+   说明用 max-width 兜住 —— 不加的话超长说明会把胶囊和作者列顶出去。 */
+#grLog .gr-log-sha { flex: 0 0 62px; color: var(--dim); font-size: 11px; letter-spacing: -.2px; }
+/* 说明列必须有下限：胶囊是 flex:0 0 auto（不肯缩），说明是 0 1 auto（先缩）——
+   两条长胶囊（chore/v1.6.0-… + origin/…）就能把说明压成「refact…」（2026-11-20 真页实拍）。
+   下限 200px 之后，宁可让胶囊被裁，也不能把提交说明挤没。 */
+#grLog .gr-log-sub { flex: 0 1 auto; min-width: 200px; max-width: 56%; font-size: 12.5px; }
+/* 14px 而不是 8px：胶囊被裁的时候紧贴着作者列，看着像两列糊在一起 */
+#grLog .gr-log-gap { flex: 1 1 auto; min-width: 14px; }
+/* 胶囊组改成可缩（0 1 auto）：它原来是 0 0 auto，宽度只受 34% 上限约束，缩不下来的是它，
+   最后被挤死的反而是左边的提交说明。 */
+#grLog .gr-log-refs { flex: 0 1 auto; min-width: 0; max-width: 34%; }
+/* 胶囊**不缩**（0 0 auto）：让它可缩的话，三条胶囊会一起塌成 "c… o… f…"（试过，比裁掉更难读）。
+   宁可整组按 34% 裁掉最后一条，也别让每条都变残句。 */
+#grLog .gr-ref { flex: 0 0 auto; height: 17px; padding: 0 6px; font-size: 10.5px; line-height: 15px; }
+#grLog .gr-log-who { flex: 0 0 108px; font-size: 11.5px; color: var(--dim);
+                     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#grLog .gr-log-date { flex: 0 0 78px; text-align: right; font-size: 11.5px; color: var(--dim);
+                      font-variant-numeric: tabular-nums; }
+/* 历史卡底部「加载更多」（2026-11-20）：300 条一档，按钮跟着树一起滚，别悬浮在卡外 */
+.gr-log-more { padding: 8px 12px 14px; text-align: center; }
+
+.gr-ref { flex: 0 0 auto; display: inline-block; height: 18px; padding: 0 7px;
+         border: 1px solid transparent; border-radius: 5px; background: var(--chip);
+         font-size: 11px; line-height: 16px; color: var(--text); white-space: nowrap;
+         max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
+/* HEAD / 当前分支：实底蓝 + 白字（IDEA 同款的分支标签观感） */
+.gr-ref-head { color: #fff; background: color-mix(in srgb, var(--accent) 82%, #000); }
+/* 本地分支：淡蓝底蓝字；标签：淡黄底黄字；远程：灰底灰字 */
+.gr-ref-branch { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.gr-ref-tag { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
+.gr-ref-remote { color: var(--dim); background: var(--chip); }
+.gr-ref-ref, .gr-ref-more { color: var(--dim); background: transparent; }
 /* 推送区（2026-10-29 用户："提交下面加一个推送区，展示没有推送的提交"）：
    标题行（个数 + 推送钮钉右）+ 提交清单（复用 .gr-log-row 的行形与分隔线）。 */
 /* 推送卡（2026-10-29 三改，用户："推送单独作为一个卡片"）：
@@ -136,23 +247,26 @@ body.mb-narrow .plg-detail-head .head-actions .gr-act span { display: none; }
 .gr-log-who { flex: 0 0 auto; font-size: 11.5px; color: var(--dim); }
 
 /* 代码托管：拉取请求区（2026-10-27，PR 从「建 PR 弹窗下半屏」搬成常驻区域）。
-   2026-10-30 用户："做成表格的方式，人多了会有很多个 PR" —— 一条一张卡改成五列表格：
-   表头吸顶、条数多了表内滚动，列宽固定好对齐着比。 */
+   2026-10-30 用户："做成表格的方式，人多了会有很多个 PR" —— 一条一张卡改成表格：
+   表头吸顶、条数多了表内滚动，列宽固定好对齐着比。
+   2026-11-20：「分支」列撤掉，refs 放到 PR 标题下面（用户："分支这一栏不要了，直接放到 PR 下面"）。 */
 .gr-pulls-refresh { margin-left: auto; white-space: nowrap; flex: 0 0 auto; }
 .gr-pr-table { border: 1px solid var(--line); border-radius: 9px; overflow: auto; max-height: 420px; }
-.gr-pr-tr { display: grid; grid-template-columns: minmax(0, 1fr) 232px 120px 124px 76px;
-            align-items: center; gap: 10px; padding: 7px 10px; min-width: 660px; }
+.gr-pr-tr { display: grid; grid-template-columns: minmax(0, 1fr) 120px 124px 76px;
+            align-items: center; gap: 10px; padding: 7px 10px; min-width: 560px; }
 .gr-pr-tr + .gr-pr-tr { border-top: 1px solid var(--line); }
 .gr-pr-th { position: sticky; top: 0; z-index: 1; background: var(--side);
             font-size: 11px; color: var(--dim); letter-spacing: .02em; padding: 6px 10px; border-top: 0; }
 .gr-pr-tr:not(.gr-pr-th):hover { background: var(--side); }
 .gr-pr-c1 { min-width: 0; }
-.gr-pr-title { font-size: 13.5px; font-weight: 500; min-width: 0;
+.gr-pr-title { font-size: 13.5px; font-weight: 400; min-width: 0;
               overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.gr-pr-title b { font-family: ui-monospace, monospace; font-size: 12.5px; color: var(--accent); margin-right: 2px; }
+/* PR 编号也不加粗（2026-11-20 用户："不要加粗"）：原来 <b> 自带 700，整行看着偏重 */
+.gr-pr-title b { font-family: ui-monospace, monospace; font-size: 12.5px; font-weight: 400; color: var(--accent); margin-right: 2px; }
 .gr-pr-title .pill { margin-left: 6px; }
 .gr-pr-title .pill.bad { color: var(--bad); }
-.gr-pr-refs { font-family: ui-monospace, monospace; font-size: 11.5px; color: var(--dim);
+/* 分支 refs 从独立一列挪到 PR 标题下面（2026-11-20 用户："分支这一栏不要了，直接放到 PR 下面"） */
+.gr-pr-refs { font-family: ui-monospace, monospace; font-size: 11.5px; color: var(--dim); margin-top: 2px;
               overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gr-pr-who { font-size: 12px; color: var(--dim);
              overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -177,15 +291,13 @@ body.mb-narrow .plg-detail-head .head-actions .gr-act span { display: none; }
 button.gr-pr-check { cursor: pointer; background: none; font: inherit; }
 button.gr-pr-check:hover { background: var(--side); }
 /* 检查徽标在表格的第 4 列（2026-10-30 改表格后不再竖排） */
-/* 检查没过的弹窗（2026-10-29 七改，用户："这些去掉……这里放一个处理人，选择之后点击确定，就开始修复"）：
-   弹窗只剩三样 —— 结果标题 / 处理人下拉 / 确定。技术细节与修复指引全撤（那些不是用户关心的）。
-   确定 = 服务端建一张任务卡派给这个人。 */
-.gr-gate-dlg { width: 420px; }
+/* 检查没过的弹窗（2026-11-20 用户："选人处理这个框太丑了，借鉴拉人这个窗口去做"）：
+   原生下拉换成「拉人进群」同款 —— 说明 + 搜索框 + 成员卡片单选列表；确定仍 = 建一张任务卡派给他。 */
+.gr-gate-dlg { width: 480px; }
 .gr-gate-refs { margin: 6px 0 0; }
-.gr-gate-pick-label { display: block; margin: 14px 0 6px; font-size: 12px; color: var(--dim); }
-#gateWho { width: 100%; height: 32px; padding: 0 8px; border-radius: 7px;
-           border: 1px solid var(--line); background: var(--input); color: var(--text); font: inherit; font-size: 13px; }
-.gr-gate-hint { margin-top: 8px; font-size: 11.5px; color: var(--dim); line-height: 1.6; }
+.gr-gate-intro { margin-top: 2px; font-size: 12px; line-height: 1.6; }
+/* 列表高度与 #mList 一致：搜索只剩一条时窗口不跟着缩，滚动槽位留在弹窗内边距里 */
+#gateList { height: 220px; overflow-y: scroll; margin-top: 10px; margin-right: -11px; align-content: start; }
 .gr-gate-done { margin-top: 14px; font-size: 13px; line-height: 1.7; }
 .gr-gate-err { margin-top: 10px; font-size: 12px; color: var(--bad); line-height: 1.6; }
 /* PR 按阶段分组（2026-10-27 用户："需要建 PR、审核中、等待合并的分开一下"）：
@@ -936,10 +1048,33 @@ textarea { resize: vertical; }
 input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .actions { display: flex; gap: 10px; margin-top: 20px; }
+/*
+ * 运行记录表（2026-11-21 用户："感觉布局有点拥挤，美化一下"）：
+ *   · 行高和左右留白放松，分隔线更浅；
+ *   · 退出码 / tokens / 耗时右对齐 + 等宽数字，扫一眼能比大小；
+ *   · 状态按码上色（原来只写了 st-完成 / st-失败，而库里存的是 done / failed，颜色一直没生效）；
+ *   · 超长错误收成两行（悬停看全文），不再一行错误把整张表撑得老高。
+ */
 .runs { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-.runs th { text-align: left; color: var(--dim); font-weight: 400; padding: 4px 8px 6px 0; }
-.runs td { padding: 5px 8px 5px 0; border-top: 1px solid var(--line); }
-.runs .st-完成 { color: var(--ok); } .runs .st-失败 { color: var(--bad); } .runs .st-跑中 { color: var(--warn); }
+.runs th { text-align: left; color: var(--dim); font-weight: 400; padding: 6px 12px 8px 0;
+           border-bottom: 1px solid var(--line); }
+.runs td { padding: 9px 12px 9px 0; vertical-align: top;
+           border-top: 1px solid color-mix(in srgb, var(--line) 55%, transparent); }
+.runs tbody tr:hover td { background: color-mix(in srgb, var(--active) 60%, transparent); }
+/* 时间列给够宽度（2026-11-21 用户："这一列宽度增加"）：日期和时间原来被挤成两行，
+   现在固定一行显示，剩下的宽度让「错误」列去摊。 */
+.runs th:first-child, .runs td:first-child { width: 104px; white-space: nowrap; }
+/* 数字列右对齐：表头和值一致，否则看着是歪的 */
+.runs th:nth-child(3), .runs th:nth-child(4), .runs th:nth-child(5),
+.runs td:nth-child(3), .runs td:nth-child(4), .runs td:nth-child(5) {
+  text-align: right; font-variant-numeric: tabular-nums;
+}
+.runs td:last-child { max-width: 560px; }
+.runs .run-err { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+                 overflow: hidden; line-height: 1.55; }
+.runs .st-完成, .runs .st-done { color: var(--ok); }
+.runs .st-失败, .runs .st-failed { color: var(--bad); }
+.runs .st-跑中, .runs .st-running { color: var(--warn); }
 
 /* ---------- 对话框 ---------- */
 /* padding 放在 form 上而不是 dialog 上：dialog 的内边距会落进滚动区，
@@ -1462,11 +1597,11 @@ dialog .member:has(input:disabled) span { color: var(--dim); }
 .tag-inline { color: var(--accent); font-style: normal; font-size: 11px;
               border: 1px solid var(--accent); border-radius: 99px; padding: 0 6px; margin-left: 6px; }
 
-/* 搜索框（群成员宫格 / 拉人对话框 / 换群助手对话框） */
-.dcard-search, #mSearch, #aSearch { width: 100%; background: var(--input); color: var(--text);
+/* 搜索框（群成员宫格 / 拉人对话框 / 换群助手对话框 / 处理人对话框） */
+.dcard-search, #mSearch, #aSearch, #gateSearch { width: 100%; background: var(--input); color: var(--text);
                           border: 1px solid var(--line); border-radius: 8px;
                           padding: 6px 10px; font: inherit; font-size: 12.5px; margin-top: 10px; }
-.dcard-search:focus, #mSearch:focus, #aSearch:focus { outline: none; border-color: var(--accent); }
+.dcard-search:focus, #mSearch:focus, #aSearch:focus, #gateSearch:focus { outline: none; border-color: var(--accent); }
 .mgrid-empty { color: var(--dim); font-size: 12.5px; padding: 12px 2px 0; }
 
 /* 项目页（工作台里的「项目」入口点进来）：**两个区、中间一条分隔线**（2026-10-18）。

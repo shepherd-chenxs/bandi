@@ -26,7 +26,7 @@ import * as workflows from './workflows.mjs';
 import * as prReview from './pr-review.mjs';
 import * as prCreate from './pr-create.mjs';
 import * as selfDelivery from './self-delivery.mjs';
-import { projectTasks, allTasks, personaTasks, createProjectTask, updateProjectTask, startProjectTask, onTaskRunFinished, afterMerged, upsertRepoCard, ensureTaskCardForStep } from './project-tasks.mjs';
+import { projectTasks, allTasks, personaTasks, createProjectTask, updateProjectTask, startProjectTask, onTaskRunFinished, recoverInterruptedCards, afterMerged, upsertRepoCard, ensureTaskCardForStep } from './project-tasks.mjs';
 import * as git from './git-repos.mjs';
 import * as schedules from './schedules.mjs';
 import * as steward from './steward.mjs';
@@ -147,11 +147,15 @@ const routes = {
       platformRoot: repoRoot,
       me: actor ? { id: actor.id, name: actor.name } : store.LOCAL_USER,
       /*
-       * 账号名册（2026-10-31）：通讯录的「成员」段与看板派活选真人用。
-       * 只有 id / 名字 / 是不是内置 —— "团队里有谁"不是秘密，不要求管理权限；
-       * salt/hash 与增删改仍在 mayManage 后面（/api/users）。
+       * 名册只下发**自己**（2026-11-21 用户拍板：「中枢是将军令，每个人登录都是独立的
+       * 操作平台。看到别的成员，这个不合理」）。以前是全量 listUserBriefs —— 通讯录把它
+       * 画成「成员」段，谁的会话都能点名册；现在真人互不可见，名册对每个会话就是自己
+       * 一行（看板派活"给自己派活"、署名自解析都靠它）。真人想在界面上露面只剩**署名**
+       * 一条路：群消息、看板卡、状态改动 —— 名字由服务端拼好（昵称优先，手机号打码）。
+       * 回环 / 本地钥匙的操作员 = 机主 = 第一个用户，看到的也是自己；设备令牌、运行钥匙
+       * actor 为 null → 空数组（设备不是人）。全量名册只留给机主（GET /api/users）。
        */
-      users: store.listUserBriefs(),
+      users: actor ? [store.userBrief(actor.id)] : [],
       // 信箱未读数（2026-11-11）：左栏「信箱」徽标；页面打开时 /api/notices 会再给一份
       noticesUnread: store.countUnreadNotices(),
       /*
@@ -647,7 +651,29 @@ const server = http.createServer(async (req, res) => {
 });
 
 const reaped = store.reapStaleRuns();
-if (reaped) console.log(`清理了 ${reaped} 条被中断的运行`);
+if (reaped.length) console.log(`清理了 ${reaped.length} 条被中断的运行`);
+
+/*
+ * 看板卡的中断恢复（2026-11-20）：判死的运行还要把**卡**收掉。
+ *
+ * 只清 runs 不够 —— 卡的「进行中」是另一本账，它不会自己回退。用户实报（pt-4b6bf1ec）：
+ * 卡停在「进行中」、runId 指向一条 22:09 就被判死的运行，点「重跑一次」永远回 E1048
+ * 「这张卡已经在跑了」，界面上没有任何出口。跟下面工作流步骤的「中断恢复」是同一个道理，
+ * 只是看板卡原来漏了这一半。
+ *
+ * 扫的是**全库的僵尸卡**，不只是这次 reap 出来的那几条：上一次开机（旧代码）就判死过的那批
+ * 运行已经是 failed，reap 碰不到它们，只修 reap 那条路的话重启一次也治不好存量。
+ * 收卡口径复用 onTaskRunFinished（唯一一份：按运行结果落到「失败」/「待验收」/「已阻塞」，
+ * 描述补一行「[运行结束] …」），但 `notify:false`：这是上次开机的旧账，不该在启动时
+ * 挨个去唤醒建卡人的会话（每个都是一次真派活）。一条失败不能拦住开机 —— 全部包在 try 里。
+ */
+try {
+  const { fixed, dropped } = recoverInterruptedCards();
+  if (fixed.length) console.log(`[中断恢复] ${fixed.length} 张卡停在「进行中」但运行已结束，已按结果收尾：${fixed.join('、')}`);
+  if (dropped.length) console.log(`[中断恢复] ${dropped.length} 张卡挂着的运行记录已不存在，摘掉 runId：${dropped.join('、')}`);
+} catch (e) {
+  console.error(`[中断恢复] 僵尸卡收尾失败：${e?.message ?? e}`);
+}
 
 // 工作流：内建模板保证存在；**把引擎挂在 run 完成点上** —— 推进由平台做，不靠数字员工自觉
 workflows.ensureBuiltInTemplate();
@@ -820,6 +846,16 @@ try {
 } catch (e) {
   console.warn(`[本机] 安装任务收尸失败（不影响启动）：${e?.message ?? e}`);
 }
+
+/* 仓库身份回填（2026-11-20）：老库的 git_repos 没有 ghRef —— 按本地 origin 补一次。
+ * 身份改成"接入时落库、之后不随目录名变化"（用户："改个名字是不是就找不到了？这显然不合理的吧"）。
+ * 幂等、只碰空着的行；读 origin 要起 git 子进程，所以放在领域模块里、不阻塞启动。 */
+git
+  .backfillRepoIdentity()
+  .then((n) => {
+    if (n) console.log(`[代码托管] ${n} 个仓库补齐了 GitHub 身份（owner/name）`);
+  })
+  .catch((e) => console.warn(`[代码托管] 仓库身份回填失败（不影响启动）：${e?.message ?? e}`));
 
 server.listen(port, SERVER.boundHost, logListen);
 

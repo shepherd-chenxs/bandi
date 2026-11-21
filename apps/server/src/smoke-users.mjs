@@ -275,9 +275,8 @@ try {
   check('昵称**不改账号名**（名字还是甲，署名不受影响）', meNick.body?.user?.name === '甲',
     String(meNick.body?.user?.name));
   /*
-   * 名册也带昵称（2026-11-09 昵称全端生效）：通讯录成员段、聊天里别人的署名、
-   * 派活选真人读的都是 /api/state 的 users（listUserBriefs）—— 它不带昵称的话，
-   * 昵称就还是只活在「我的」页，正是用户点名要改掉的那个状态。
+   * 名册也带昵称（2026-11-09 昵称全端生效）：署名、派活选真人的显示名源 ——
+   * 2026-11-21 起名册只下发自己（独立操作平台），自己的昵称仍然跟着名册走。
    */
   const stNick = await call('GET', '/api/state', { cookie: sidA });
   const briefNick = (stNick.body?.users ?? []).find((u) => u.id === meAId);
@@ -344,6 +343,57 @@ try {
     listAfter.status === 200 && listAfter.body?.users?.length === 3
       && listAfter.body.users.some((u) => u.name === '乙' && !u.builtin),
     JSON.stringify(listAfter.body?.users ?? []).slice(0, 140));
+
+  /* ============ ⑦b 互不可见（2026-11-21 独立操作平台） ============ */
+  console.log('\n⑦b 互不可见：影子账号的名册只有自己，中枢绑定名单（手机号）不对普通会话开放');
+  /*
+   * 用户拍板：「中枢是将军令，每个人登录都是独立的操作平台。看到别的成员，这个不合理。」
+   * 名册（/api/state.users）只下发自己；全量名册 + hubAccounts（手机号、进门时间）只对
+   * 机主（回环 / 本地钥匙）开放 —— 乙的会话两个都该收敛成"只有乙"。
+   */
+  const sidB = `bandi_sid=${second.sid}`;
+  const listB = await call('GET', '/api/users', { cookie: sidB });
+  check('乙读 /api/users → 200，但名册只含自己（机器上还有谁不是同事该知道的事）',
+    listB.status === 200 && listB.body?.users?.length === 1 && listB.body?.users?.[0]?.name === '乙',
+    JSON.stringify(listB.body?.users ?? []));
+  check('乙看不到 hubAccounts（手机号与进门时间是机主的账本）',
+    listB.status === 200 && Array.isArray(listB.body?.hubAccounts) && listB.body.hubAccounts.length === 0,
+    JSON.stringify(listB.body?.hubAccounts ?? null));
+  const stB = await call('GET', '/api/state', { cookie: sidB });
+  check('乙读 /api/state 名册只含自己（通讯录「成员」段据此整段不画）',
+    stB.status === 200 && stB.body?.users?.length === 1 && stB.body?.users?.[0]?.name === '乙',
+    JSON.stringify(stB.body?.users ?? []));
+  const stLoop = await call('GET', '/api/state');
+  check('回环机主的 /api/state 名册也只有自己一行（机主看全量名册走 /api/users）',
+    stLoop.status === 200 && stLoop.body?.users?.length === 1,
+    JSON.stringify(stLoop.body?.users ?? []));
+
+  /* ============ ⑦c 署名打码（2026-11-21 独立操作平台） ============ */
+  console.log('\n⑦c 署名口径：真人名字昵称优先，账号名是手机号的打码后再出库');
+  /*
+   * 消息署名走 store.listMessages 的 LEFT JOIN —— 这里直接在**烟测进程自己的临时库**
+   * 里种一行手机号名字的真人 + 一条他发的消息，读出来验。动态 import 前先钉环境变量
+   * （config/store 在模块加载时读 BANDI_DATA，忘了钉就会往开发者**真库**里写 ——
+   * 同 smoke-shell-enter.mjs 的坑注）；下面的服务端子进程 start() 显式传自己的
+   * BANDI_DATA/BANDI_DB，不受这里的污染。
+   */
+  process.env.BANDI_DATA = path.join(tmp, 'smoke-store');
+  process.env.BANDI_DB = path.join(process.env.BANDI_DATA, 'bandi.db');
+  fs.mkdirSync(process.env.BANDI_DATA, { recursive: true });
+  const store = await import('./store.mjs');
+  const phUser = store.createUser({ name: '13800138999' });
+  store.setNickname(phUser.id, '三儿');
+  check('displayNameOf 昵称优先', store.displayNameOf(store.getUser(phUser.id)) === '三儿',
+    store.displayNameOf(store.getUser(phUser.id)));
+  store.setNickname(phUser.id, '   ');
+  check('无昵称退回打码账号名：13800138999 → 138****8999',
+    store.displayNameOf(store.getUser(phUser.id)) === '138****8999',
+    store.displayNameOf(store.getUser(phUser.id)));
+  const phConv = store.createConversation({ title: '署名打码', personaId: 'p-smoke' });
+  store.addMessage({ conversationId: phConv.id, role: 'user', text: '嗯', senderUserId: phUser.id });
+  const phMsg = store.listMessages(phConv.id)[0];
+  check('消息署名出库已打码（senderUserName，别人的手机号不从聊天记录里漏出去）',
+    phMsg?.senderUserName === '138****8999', String(phMsg?.senderUserName));
 
   /* ============ ⑧ 安全接口：登录会话与回环机主都能读 ============ */
   console.log('\n⑧ /api/security/* 会话与机主都能读（2026-11-20 operator 下线：回环=机主全权）');

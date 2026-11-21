@@ -7,7 +7,8 @@
  *   POST   /api/logout       → 退出（**免令牌**，凭据就是那张会话票本身）
  *   GET    /api/me           → 我是谁（只有 `user` 一种答案；带 `via` 的是"没有登录态"的机主）
  *   POST   /api/me/password  → 改中枢账号的密码（转发中枢 /v1/auth/password，2026-11-10）
- *   GET    /api/users        → 账号列表（**不含任何凭据字段**）
+ *   GET    /api/users        → 账号列表（**不含任何凭据字段**；2026-11-21 起全量只对机主开放，
+ *                               其他登录会话只看到自己一行、hubAccounts 恒空）
  *   POST   /api/users        → 建影子账号（预占名字，等中枢账号首次登录时绑定）
  *   PATCH  /api/users/:id    → 改名 / 改昵称 / 启用禁用
  *   DELETE /api/users/:id    → 删账号
@@ -240,11 +241,25 @@ export async function handleUsers(req, res, url) {
 
     if (method === 'GET' && p === '/api/users') {
       /*
+       * **名册只对机主开放**（2026-11-21 用户拍板：「中枢是将军令，每个人登录都是独立的
+       * 操作平台。看到别的成员，这个不合理」）。回环 / 本地钥匙的操作员 = 机主 = 第一个
+       * 用户，能看到全量名册与 `hubAccounts`（CLI `bandi user list` 走的正是这条路）；
+       * 其他登录会话（影子账号）只看到自己一行，hubAccounts 恒空 —— 别人的手机号、
+       * 谁什么时候进过门，都不是同事该知道的事。
        * `hubAccounts`（2026-11-07）：这台机器认下的**中枢账号**名单 —— 「认证在中枢、
        * 授权在本机」里"授权"那一半的可视形态：有行 = 票验过后能进门。
        * userName 带出来是给「中枢账号绑着哪个影子账号」看的（一机一用户是常态，
        * 但预占影子账号时会出现多行绑同一个人的情况，页面上要能对上号）。
        */
+      const actor = auth.actorUser(req);
+      const isOwner = !!actor && actor.id === store.firstUser()?.id;
+      if (!isOwner) {
+        return sendJson(res, 200, {
+          users: actor ? [store.userBrief(actor.id)] : [],
+          hasUsers: store.hasUsers(),
+          hubAccounts: [],
+        }), true;
+      }
       const hubAccounts = store
         .listHubLinks()
         .map((l) => ({

@@ -119,7 +119,8 @@ $('listBody').addEventListener('click', (e) => {
   if (!row) return;
   // 点「＋」菜单或分组折叠标题这类不换页的行不动：折叠标题带 data-sec，排除
   if (e.target.closest('[data-sec]')) return;
-  // 真人「成员」行没有详情页（管账号去「设置 → 用户」）—— 点了不该摆出一个空详情态
+  // 标了 data-nodetail 的行没有详情页 —— 点了不该摆出一个空详情态
+  // （原来只有通讯录的真人「成员」行用；2026-11-21 成员段退场后暂时无人挂，留作通用护栏）
   if (e.target.closest('[data-nodetail]')) return;
   // 手机通讯录的"入口行"（群聊 / 部门）和部门行是**列表内换页**，不是进详情 ——
   // 让它们走折叠的话，列表会被藏起来换成一页空的主区（2026-10-31）。
@@ -320,7 +321,7 @@ $('listBody').addEventListener(
     if (!isNarrow()) return;
     const row = e.target.closest('[data-conv], [data-persona], [data-group], [data-set], .item');
     if (!row || e.target.closest('[data-sec]')) return;
-    // 真人「成员」行不进详情（同上）：不该压历史，也不该让手势返回落到空详情上
+    // data-nodetail 的行不进详情（同上）：不该压历史，也不该让手势返回落到空详情上
     if (e.target.closest('[data-nodetail]')) return;
     // 列表内换页的行（通讯录入口 / 部门 / 设置页的「← 我的」）不压历史：
     // 它们不是"进详情"，没有可返回的上一层

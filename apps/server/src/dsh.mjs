@@ -4,6 +4,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { dataDir, dshProfile, runCwd } from './config.mjs';
+import { killProcessTree, logCleanup } from './process-tree.mjs';
 
 /* ------------------------------------------------ 账本 → 「这一次怎么走」的补丁层 */
 
@@ -251,7 +252,13 @@ export function runDsh({
     child.on('error', reject);
     child.on('close', (code) => {
       if (buf.trim()) handle(buf);
-      resolve({ sessionId: resolvedSessionId, finalText, exitCode: code, events, usage, turnReason, stderr });
+      const out = { sessionId: resolvedSessionId, finalText, exitCode: code, events, usage, turnReason, stderr };
+      /* 失败收尾先收进程树（2026-11-20）：命令行子进程不能留给下一轮重跑。 */
+      if (code === 0 || !child.pid) return resolve(out);
+      killProcessTree(child.pid).then((cleanup) => {
+        logCleanup('dsh', cleanup);
+        resolve({ ...out, cleanup });
+      });
     });
 
     if (signal) {

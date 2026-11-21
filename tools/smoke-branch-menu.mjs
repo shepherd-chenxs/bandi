@@ -32,7 +32,9 @@ const check = (ok, msg, detail = '') => {
 
 /* --------------------------------------------- ① 分支条目要带 menu，分组别丢 */
 
-check(/b\.recent\.map\(\(n\) => \(\{ id: n, name: n, menu: true,/.test(skills), '「最近」的条目带 menu');
+// 2026-11-20 决定：去掉「最近」组（与「本地分支」完全重复，一屏出现两次是混乱主因）。
+// 断言跟着决定改：确认 recent 组已移除，语义不松、断言数不减。
+check(!/b\.recent|\.recent\b/.test(skills), '已去掉「最近」组（与「本地分支」重复，去重后只保留一组）');
 check(/\(b\.local \?\? \[\]\)\.map\(\(n\) => \(\{ id: n, name: n, menu: true,/.test(skills), '「本地分支」的条目带 menu');
 check(/\(b\.remote \?\? \[\]\)\.map\(\(n\) => \(\{ id: n, name: n\.replace\([^)]*\), menu: true \}\)/.test(skills), '「远程分支」的条目带 menu');
 check(
@@ -58,7 +60,9 @@ check(/if \(hit\.dataset\.menu\) \{[\s\S]{0,120}fireItemMenu\(hit\)/.test(ui), '
 
 /* ---------------------------------------------------------- ③ 页面接住并开菜单 */
 
-check(/addEventListener\('combo-menu',/.test(skills), 'skills 页监听 combo-menu');
+// 2026-11-20 决定：分支管理从浮层搬进常驻 tab，不再靠 `combo-menu` 全局监听；
+// 而是在 `fillBranchTab` 里直接调用 `openBranchMenu`（带 checkout）。
+check(/fillBranchTab[\s\S]{0,4000}openBranchMenu\(repo/.test(skills), '分支管理 tab 走 openBranchMenu（不再靠 combo-menu 全局监听）');
 check(/openBranchMenu\(\s*repo,\s*\{ x:/.test(skills), '事件带着"开在哪儿"（贴箭头）');
 /*
  * 2026-10-30 决定改了：签出从「点整行」挪进二级菜单第一位（用户原话："点击选项就打开，改成二级
@@ -73,7 +77,7 @@ check(
   '签出是可选的第 4 个参数（不传就不摆这一项）',
 );
 check(
-  /checkout: \(\) => onBranchPick\(repo, id, state\.branch \?\? '', combo\)/.test(skills),
+  /checkout: \(\) => onBranchPick\(repo, id, cur, noCombo\)/.test(skills),
   '菜单里那一项接回复用原有的切分支路径（确认框还在）',
 );
 check(/openCtxMenu\(pos\.x, pos\.y, items\)/.test(skills), '菜单落到全站那一套 #ctxMenu 上');

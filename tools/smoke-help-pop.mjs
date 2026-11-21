@@ -41,7 +41,7 @@ check(/const GIT_TOKEN_HELP\s*=/.test(src), '「怎么拿令牌」抽成了 GIT_
 const helpUses = (src.match(/\$\{GIT_TOKEN_HELP\}/g) ?? []).length;
 check(helpUses === 1, `「怎么拿令牌」只铺一处（实际 ${helpUses} 处）`);
 check(/<div class="gr-dlg-help">\$\{GIT_TOKEN_HELP\}<\/div>/.test(src), '「怎么拿令牌」铺在连接弹窗里');
-check(/<b>GitHub 连接<\/b>/.test(src), '连接弹窗标题是「GitHub 连接」');
+check(/<b>GitHub 访问令牌（PAT）<\/b>/.test(src), '连接弹窗标题是「GitHub 访问令牌（PAT）」（2026-11-20 用户："连接 GitHub 有歧义"）');
 check(!/id="gitTokenHelp"/.test(src), '老的标题旁「?」按钮不再出现（说明已改成铺开）');
 check(/function openGitConnDlg\(/.test(src), '有 openGitConnDlg（连接弹窗）');
 /* 2026-10-29 六改：状态按钮从左栏中部搬进 `#listFoot` 底栏，绑定从 `$('gitConnOpen')`
@@ -85,9 +85,10 @@ check(iUn > 0 && iConn >= 0, '连接弹窗里「已连接 / 未连接」两个�
 const conn = iConn >= 0 ? connDlg.slice(iConn, iUn) : '';
 const unconn = iUn > 0 ? connDlg.slice(iUn) : '';
 
-// 同一骨架：两边都是「令牌 | 输入框 | 按钮」那一行
-const rowShape = /class="gr-dlg-row">\s*<span class="row-label">令牌<\/span>/;
-check(rowShape.test(conn) && rowShape.test(unconn), '两个状态都是「令牌」那一行（同一骨架）');
+// 同一骨架：两边都是「输入框 | 按钮」那一行（2026-11-20 用户："令牌标签去掉"）
+check(!/class="row-label">令牌</.test(conn) && !/class="row-label">令牌</.test(unconn),
+  '两个状态都不再有「令牌」标签');
+check(/placeholder="粘贴Fine-grained personal access tokens"/.test(unconn), '输入框提示词是「粘贴Fine-grained personal access tokens」');
 
 check(/<input[^>]*readonly/.test(conn), '连上后输入框是只读的');
 check(/<input[^>]*class="locked"/.test(conn), '只读框带 .locked（看得见、点得出来不能改）');
@@ -105,13 +106,15 @@ check((conn.match(/<input/g) ?? []).length === 1 && (conn.match(/<button/g) ?? [
   '已连接态只有输入框 + 按钮（各一个，没有多余控件）');
 
 check(/id="gitToken"[^>]*type="password"/.test(unconn), '没连上时还是可填的密码框');
-check(/id="gitConnect"/.test(unconn), '没连上时按钮是「连接 GitHub」');
-check(/>连接 GitHub</.test(unconn), '按钮文案是「连接 GitHub」');
+check(/id="gitConnect"/.test(unconn), '没连上时按钮是「保存令牌」');
+check(/>保存令牌</.test(unconn), '按钮文案是「保存令牌」（2026-11-20 用户："连接 GitHub 有歧义，应该是 PAT 令牌"）');
 check(!/后 4 位/.test(connDlg), '输入框提示里不再写"后 4 位"（已过时）');
-// 令牌表单只剩「令牌标签 + 输入框 + 连接按钮」（老结构靠 row-with-btn 正则钉、会跨块误匹配，
-// 这里按分支段内计数）。
-check((unconn.match(/<input/g) ?? []).length === 1 && (unconn.match(/<button/g) ?? []).length === 1,
-  '令牌表单只有输入框 + 连接按钮（各一个，没有多余控件）');
+// 令牌表单只剩「输入框 + 小眼睛 + 保存令牌」（老结构靠 row-with-btn 正则钉、会跨块误匹配，
+// 这里按分支段内计数）。2026-11-20 加回小眼睛，按钮数从 1 变 2。
+check((unconn.match(/<input/g) ?? []).length === 1 && (unconn.match(/<button/g) ?? []).length === 2,
+  '令牌表单是输入框 + 小眼睛 + 保存令牌（没有多余控件）');
+check(/id="gitTokenEye"/.test(unconn), '输入框带显示/隐藏的小眼睛');
+check(/class="ic-eye-off"/.test(unconn), '小眼睛里还备着一颗闭眼图标（明文时换上）');
 
 /* ---------------------------------- 加仓库：一个入口「＋ 添加仓库」→ 菜单 → 弹窗 */
 // 2026-10-17：原来是「＋ 手动接入」在标题上 + 页面底部常驻一整块「从 GitHub 添加」。

@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { runCwd } from './config.mjs';
+import { killProcessTree, logCleanup } from './process-tree.mjs';
 
 /**
  * Claude Code 适配器（headless）。
@@ -180,10 +181,18 @@ export function runTask({
       onEvent(ev);
     };
 
-    const finish = (extra) => {
+    let cleanup = null;
+    const finish = (extra, { clean = false } = {}) => {
       if (settled) return;
       settled = true;
-      resolve({ text, sessionId: resolvedSessionId, usage, events, thinkingTicks, ...extra });
+      const done = () => resolve({ text, sessionId: resolvedSessionId, usage, events, thinkingTicks, cleanup, ...extra });
+      /* 失败收尾先收进程树（2026-11-20）：CLI 起的命令子进程不能留给下一轮重跑。 */
+      if (!clean || !child.pid) return done();
+      killProcessTree(child.pid).then((r) => {
+        cleanup = r;
+        logCleanup('claude', r);
+        done();
+      });
     };
 
     const handle = (j) => {
@@ -243,7 +252,10 @@ export function runTask({
           emit({ type: 'error', text: String(sawError) });
         }
         emit({ type: 'final', text, usage });
-        finish({ isError: j.is_error, error: sawError, stopReason: j.stop_reason });
+        finish(
+          { isError: j.is_error, error: sawError, stopReason: j.stop_reason },
+          { clean: !!j.is_error }, // 失败轮：把还活着的命令子进程一起收掉
+        );
       }
       // user / tool_result 事件忽略：工具调用已经在上面的 tool_use 里报过了
     };
@@ -279,17 +291,14 @@ export function runTask({
       if (settled) return;
       // 没等到 result 就退出了：把 stderr 带回去，别交了白卷还说成功
       const tail = stderr.trim().split(/\r?\n/).filter(Boolean).slice(-3).join(' | ');
-      settled = true;
-      resolve({
-        text,
-        sessionId: resolvedSessionId,
-        usage,
-        events,
-        thinkingTicks,
-        isError: true,
-        exitCode: code,
-        error: tail || `进程退出码 ${code}，且没有收到 result 事件`,
-      });
+      finish(
+        {
+          isError: true,
+          exitCode: code,
+          error: tail || `进程退出码 ${code}，且没有收到 result 事件`,
+        },
+        { clean: true },
+      );
     });
 
     if (signal) {

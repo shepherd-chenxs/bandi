@@ -7,7 +7,7 @@ import { sendJson, fail, readBody, readRawBody } from '../http.mjs';
 import * as store from '../store.mjs';
 import * as auth from '../auth.mjs';
 import { dispatchToThread } from '../dispatch.mjs';
-import { projectTasks, allTasks, createProjectTask, updateProjectTask, startProjectTask, afterMerged, upsertRepoCard } from '../project-tasks.mjs';
+import { projectTasks, allTasks, createProjectTask, updateProjectTask, startProjectTask, afterMerged, upsertRepoCard, withTaskUserNames } from '../project-tasks.mjs';
 import * as git from '../git-repos.mjs';
 import { verifyRunCredential } from '../agent-auth.mjs';
 // 岗位权限（2026-11-11）：运行钥匙能改哪些卡，除了归属还要看岗位有没有 card.advance
@@ -112,11 +112,13 @@ export async function handleProject(req, res, url) {
     }
   }
 
-  // 单张本地卡：拿**全文**（看板行里的标题/描述是截断过的 —— 卡片详情要看完整描述）
+  // 单张本地卡：拿**全文**（看板行里的标题/描述是截断过的 —— 卡片详情要看完整描述）。
+  // 真人署名（2026-11-21 独立操作平台）：名册只下发自己，派给**别的真人**的卡在前端
+  // 查不到名字 —— 执行人 / 状态改动归因由服务端补好（withTaskUserNames）。
   const taskOne = /^\/api\/projects\/tasks\/([^/]+)$/.exec(url.pathname);
   if (req.method === 'GET' && taskOne) {
     const t = store.getProjectTask(decodeURIComponent(taskOne[1]));
-    return t ? sendJson(res, 200, { task: t }) : fail(res, 404, 'E2039', '任务不存在');
+    return t ? sendJson(res, 200, { task: withTaskUserNames(t) }) : fail(res, 404, 'E2039', '任务不存在');
   }
 
   // 改一张本地卡（拖到别的列 = 改状态；也能改标题 / 描述 / **执行人**）。
