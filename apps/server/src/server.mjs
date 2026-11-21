@@ -171,22 +171,19 @@ const routes = {
        * 键是码、值是显示名：{ task: {todo:'待办',…}, run: {…}, workflow: {…}, node: {…} }
        */
       statusDict: store.statusDictionary(),
-      // 带上"忙不忙"：通讯录里要一眼看出谁能马上接活
-      // busyLabel：**他在干什么** —— 光一个"工作中"没用，得知道是哪条流程的哪一步
-      // （运行上挂的 workflowTask 就是答案；不属于任何流程的就是普通对话）
+      /*
+       * 带上"忙不忙"：通讯录里要一眼看出谁能马上接活。
+       *
+       * **只有忙/闲两态，不再带"他在干什么"**（2026-11-21 用户定）：
+       * 原来还拼过一个 busyLabel（流程「X」· 节点名 / 对话里），问题在于
+       * `activeRunForPersona()` 只挑**一条** run —— 一个员工同时被多处派活时
+       * （卡、群聊、流程），标签只能显示其中一个，**显示出来的那个就是错的**。
+       * 一份会挑错的信息比没有信息更糟，所以整条派生逻辑撤掉，标签只留「工作中」。
+       * 想知道他在干什么，去会话 / 卡上看，那里是一等事实。
+       */
       personas: store.listPersonas().map((p) => {
         const ar = store.activeRunForPersona(p.id);
-        let busyLabel = null;
-        if (ar) {
-          const t = store.getWorkflowTaskByAgentRun(ar.id);
-          if (t) {
-            const w = store.getWorkflowRun(t.runId);
-            busyLabel = `流程「${w?.title ?? '?'}」· ${t.nodeName}`;
-          } else {
-            busyLabel = '对话里';
-          }
-        }
-        return { ...p, busy: !!ar, busyLabel, busySince: ar?.startedAt ?? null };
+        return { ...p, busy: !!ar, busySince: ar?.startedAt ?? null };
       }),
       conversations: store.listConversations(),
       /*
@@ -857,7 +854,19 @@ git
   })
   .catch((e) => console.warn(`[代码托管] 仓库身份回填失败（不影响启动）：${e?.message ?? e}`));
 
-server.listen(port, SERVER.boundHost, logListen);
+server.listen(port, SERVER.boundHost, () => {
+  logListen();
+  /*
+   * **本进程是"能派活的进程"的唯一标记**（2026-11-21 实报后加）。
+   *
+   * 运行钥匙（`rt-…`）只存在**本进程内存**里（agent-auth 的 creds），服务端鉴权也只认自己内存那一份。
+   * 所以在脚本 / CLI 里直接 import dispatch 派活，会出现两个问题，而且都不报错：
+   *   ① 那把钥匙在服务进程里查不到 → 员工一调接口就是 401（实报：贺韬拿到"失效钥匙"，卡退不回去）；
+   *   ② 那个 run 的 SSE 与收尾钩子都在脚本进程里 → 脚本一退出，run 就成孤儿，卡永远挂在「进行中」。
+   * 这里立个旗，`issueRunCredential` 见到没有它就当场警告 —— 别再让下一轮人靠猜。
+   */
+  globalThis.__BANDI_SERVING = true;
+});
 
 /*
  * 身份中枢（2026-11-06）：加入了就接着报心跳 —— 中枢靠它画「在线」，

@@ -201,7 +201,7 @@ export function updateProjectTask(id, fields) {
     `UPDATE project_tasks
         SET title = ?, description = ?, status = ?, assigneePersonaId = ?, assigneeUserId = ?,
             conversationId = ?, runId = ?, prRepo = ?, prNumber = ?, prState = ?, prTitle = ?,
-            prCheckedAt = ?, queuedAt = ?, sourceKey = ?, sourceRunId = ?,
+            prCheckedAt = ?, prCiState = ?, prCiFailed = ?, prCiAt = ?, queuedAt = ?, sourceKey = ?, sourceRunId = ?,
             flowTemplateId = ?, flowRunId = ?,
             creatorConvId = ?, notifiedFor = ?,
             assigneeGroupId = ?, parentTaskId = ?,
@@ -220,6 +220,10 @@ export function updateProjectTask(id, fields) {
     next.prState ?? null,
     next.prTitle ?? null,
     next.prCheckedAt ?? null,
+    // 自动检查的结论：同样是"新增列，老行 NULL"，写回 null 幂等（见 store/projects.mjs 的 ensureColumn）
+    next.prCiState ?? null,
+    next.prCiFailed ?? null,
+    next.prCiAt ?? null,
     next.queuedAt ?? null,
     // `?? null` 而不是直接取：老库里这两列刚 ALTER 出来，历史行是 NULL —— 写回 null 是幂等的
     next.sourceKey ?? null,

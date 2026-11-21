@@ -151,12 +151,39 @@ export async function handleProject(req, res, url) {
           can(runPersona, 'card.advance') &&
           (card.createdBy === runPersona.id || g?.assistantPersonaId === runPersona.id);
         if (!mine) {
-          return fail(res, 403, 'E4034', '运行钥匙只能改你建的卡，或你当群助手那张团队卡的卡；别的卡请让雇主在面板上改');
+          /*
+           * **执行人「报状态」的窄门**（2026-11-21）。
+           *
+           * 病根：人派给员工的卡 `createdBy` 是空的（人或面板建的），`mine` 永远不成立 ——
+           * 员工干完活**没有任何通道**动这张卡，只能靠回话里那行 `[完成]`。漏写一次，卡就白落
+           * 「已阻塞」（实报 pt-4b6bf1ec：活干完了、代码推了、冒烟 80 项全过，就漏了那三个字）。
+           * 文本约定当唯一判据，本身就是个不可靠的判据。
+           *
+           * 这里只开**最窄**的一扇门，三件事同时成立才放行：
+           *   · 他确实是卡上的执行人（`assigneePersonaId` = 他自己）；
+           *   · 请求体**只有** `status` 一个字段；
+           *   · 值只能是 `review`（待验收）。
+           * 于是"报状态"变成一次结构化动作，而**验收权仍在派活的人**：`done` 谁都替不了他点，
+           * 描述 / 执行人 / 重跑也一个不放（那都是改卡，不是报状态）。
+           */
+          const onlyReport =
+            !!runPersona &&
+            card.assigneePersonaId === runPersona.id &&
+            Object.keys(body ?? {}).length === 1 &&
+            String(body?.status ?? '') === 'review';
+          if (onlyReport) {
+            // 放行：落到下面同一套写库路径（状态码校验 / 归因 / 状态变没变都在那儿）
+          } else if (runPersona && card.assigneePersonaId === runPersona.id) {
+            return fail(res, 403, 'E4034',
+              '这张卡是人派给你的：你只能把它**上报成「待验收」**（PATCH {"status":"review"}，只放这一个字段）—— 改成「已完成」、改描述 / 执行人 / 重跑都归派活的人');
+          } else {
+            return fail(res, 403, 'E4034', '运行钥匙只能改你建的卡，或你当群助手那张团队卡的卡；别的卡请让雇主在面板上改');
+          }
         }
-        const allowed = new Set(['status', 'description', 'assigneePersonaId', 'startNow']);
+        const allowed = new Set(['status', 'description', 'assigneePersonaId', 'startNow', 'note']);
         const bad = Object.keys(body ?? {}).filter((k) => !allowed.has(k));
         if (bad.length) {
-          return fail(res, 403, 'E4034', `运行钥匙改卡只开放 状态 / 描述 / 执行人 / 重跑（收到：${bad.join('、')}）；范围、验收、流程归属请让雇主在面板上改`);
+          return fail(res, 403, 'E4034', `运行钥匙改卡只开放 状态 / 描述 / 执行人 / 重跑 / 说明（收到：${bad.join('、')}）；范围、验收、流程归属请让雇主在面板上改`);
         }
         /*
          * **验收人 = 派活人**（2026-11-11 用户定）：
@@ -171,6 +198,22 @@ export async function handleProject(req, res, url) {
     }
     try {
       const before = store.getProjectTask(id);
+      /*
+       * **退回也要能带理由**（2026-11-21 实报 pt-b82d3193）。
+       *
+       * 验收人退回卡时发的是 `{status:'todo', startNow:true, note:'证据不全…'}` —— 意图完全正确，
+       * 但运行钥匙的字段白名单里没有 `note`，整条请求被 403 挡在门外。结果：他只能在群里口头说
+       * "未验收通过"，卡上一个字都没留下；而执行人下一轮要重新猜"为什么被退"。
+       * （实报原文：「[受阻] 运行钥匙 403，无权调用 PATCH 接口退回卡」—— 他其实有权，是字段被挡。）
+       *
+       * 统一在这里把 `note` 折进描述尾部：**追加，不覆盖**（显式给 description 时以 description 为准）。
+       * 人和员工同一条口径 —— 手机审批传 note 以前也是被**静默丢掉**的。
+       */
+      if (body?.note && body.description === undefined) {
+        const curDesc = String(before?.description ?? '').trim();
+        const tag = ['todo', 'doing', 'blocked'].includes(String(body.status)) ? '退回' : '说明';
+        body.description = `${curDesc}${curDesc ? '\n\n' : ''}---\n[${tag}] ${String(body.note).trim()}`;
+      }
       // actorUser（2026-11-03 设备绑人后对设备返回归属人）→ 改状态就署到这个人头上，
       // 卡详情的「状态改动」行和"手机上批的卡是谁批的"都靠它
       const task = updateProjectTask(id, body, { autoStart: body.startNow !== true, actorUserId: auth.actorUser(req)?.id ?? null });

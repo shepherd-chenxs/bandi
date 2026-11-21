@@ -37,6 +37,8 @@
 import path from 'node:path';
 import * as store from './store.mjs';
 import { dispatchToThread, dispatchEventToThread } from './dispatch.mjs';
+// 「活到底做成没有」的客观证据（PR 合并 / CI 全绿）—— 判据单独一份，别在这里重写一遍
+import { evidenceOf, evidenceNote } from './delivery-evidence.mjs';
 // 岗位判定（「项目经理 · 职责」第一段才是岗位）与运行钥匙共用同一处口径 —— 别再各写一份
 import { can, roleNameOf } from './roles.mjs';
 // 「卡由流程执行」那条路要真的起一条实例 —— 跟工作台点流程走的是同一个引擎入口，
@@ -1327,15 +1329,38 @@ export function findRecentSameTitle({ projectId, title, exceptPersonaId, withinM
 export function onTaskRunFinished(run, { notify = true } = {}) {
   if (!run?.id) return;
   const task = store.getProjectTaskByRunId(run.id);
-  if (!task || task.status !== 'doing') return;
+  if (!task) return;
+  /*
+   * 卡不在「进行中」→ 人已经动过（拖到别的列 / 点了验收），**不覆盖**：卡的状态是人的指令。
+   *
+   * 唯一例外（2026-11-21）：**执行人自己用接口把卡上报成「待验收」**（routes/project.mjs 那扇窄门）。
+   * 那不是"人改的"，是这一轮的交付动作 —— 必须补上 `[运行结束]` 那行、给派活人发回执，
+   * 否则卡上永远缺一句"这轮干了什么"，人也收不到「请验收」。
+   * 判据：状态是 review 且 `statusAt` 不早于本轮开始 —— 早就在待验收的卡不算（那是上一轮的事）。
+   *
+   * ⚠️ **起点从哪拿**（2026-11-21 实报 pt-b82d3193，这条判据第一版是死的）：
+   * 第一版直接读 `run.startedAt`，可 `finishHooks` 拿到的是 runs.mjs 里的**内存 run 对象**，
+   * 那个对象当时没有 `startedAt` 字段（只有 DB 行有）→ `!!run.startedAt` 恒为 false →
+   * 判据never成立 → 员工用接口报的「待验收」既不补 `[运行结束]`、也不发回执，全程无声。
+   * 现在两头都堵：runs.mjs 的内存 run 补了这个字段（正本），这里再回 DB 兜一次底（防回归）——
+   * 回执这种东西**静默失效**最贵，宁可多一次行读取。
+   */
+  const runStartedAt = run.startedAt ?? store.getRunRow(run.id)?.startedAt ?? null;
+  const reportedByThisRun =
+    task.status === 'review' &&
+    !!runStartedAt &&
+    !!task.statusAt &&
+    Date.parse(task.statusAt) >= Date.parse(runStartedAt);
+  if (task.status !== 'doing' && !reportedByThisRun) return;
   // 完成态还要看**交付声明**：进程退出码 0 只说明这一轮结束了，不说明活干成了
   const claim = claimOf(finalReplyTextOf(run));
-  const next = cardStatusAfterRun(run.status, claim);
-  if (!next) return;
-  const why = endNoteOf(run, claim);
+  const next = task.status === 'doing' ? cardStatusAfterRun(run.status, claim) : null;
+  if (task.status === 'doing' && !next) return;
+  // 已经上报过的不再按文本标记重判（标记漏写也不该把它写回"没交回结论"）
+  const why = next ? endNoteOf(run, claim) : '跑完了，执行人已把卡上报「待验收」，等你验收';
   const descr = `${task.description ?? ''}`.trim();
   const updated = store.updateProjectTask(task.id, {
-    status: next,
+    ...(next ? { status: next } : {}),
     description: `${descr}${descr ? '\n\n' : ''}---\n[运行结束] ${why}`,
   });
   if (notify) notifyCardOwner(updated, why);
@@ -1391,6 +1416,43 @@ export function afterMerged(task) {
     return updated;
   }
   return task;
+}
+
+/**
+ * 卡卡在「已阻塞」、但**客观证据**说明活其实做完了 → 推到「待验收」（2026-11-21）。
+ *
+ * 这一条专治实报 pt-4b6bf1ec：活干完了、PR 合并了、80 项冒烟全过，只因回话里漏写
+ * `[完成]`，卡在「已阻塞」躺了一天，还得人来问"这是完成了吗"。以前只有 `afterMerged`
+ * 管「进行中」→「待验收」，**阻塞的卡没人管**：PR 后来合了它也不会动。
+ *
+ * 四道闸，缺一不动（宁可不动，也不能替人翻案）：
+ *   ① 只能是「已阻塞」—— 「进行中」归 afterMerged，「失败」要让人看见跑挂了（不能因为
+ *      PR 合了就把"这轮崩了"这个信息抹掉），「待验收/已完成」更不该被系统改回去；
+ *   ② 证据必须是 strong（见 delivery-evidence.mjs）：PR 合并 / CI 全绿且新鲜；
+ *   ③ 人手动改成«已阻塞»的卡不动（`statusByUserId` 非空 = 人压着这事）；
+ *   ④ 员工自己说"做不成/要拍板"（`[受阻]`）的不动 —— 证据强不代表他的顾虑消失。
+ *
+ * 推进的终点**只有「待验收」**：证据再硬也不越过验收人。这是 11-09「平台替员工宣布完成」
+ * 那条实报划下来的线，至今不变。
+ */
+export function advanceByEvidence(task) {
+  if (!task || task.status !== 'blocked') return task;
+  // ③ 人压着的账，不替人翻
+  if (task.statusByUserId) return task;
+  // ④ 员工自报受阻的不翻案（只看尾部：最近一次 [运行结束] 一定在最后）
+  const tail = String(task.description ?? '').slice(-400);
+  if (tail.includes('员工自报受阻')) return task;
+
+  const ev = evidenceOf(task);
+  if (ev.verdict !== 'strong') return task;
+
+  const descr = String(task.description ?? '').trim();
+  const updated = store.updateProjectTask(task.id, {
+    status: 'review',
+    description: `${descr}${descr ? '\n\n' : ''}---\n[证据推进] ${evidenceNote(ev)}`,
+  });
+  notifyCardOwner(updated, `${ev.why} —— 已按证据转到「待验收」，等你点头`);
+  return updated;
 }
 
 /**

@@ -126,6 +126,9 @@ const RUN = [
   'apps/server/src/smoke-repo-patrol.mjs',
   'apps/server/src/smoke-run-events.mjs',
   'apps/server/src/smoke-run-progress.mjs',
+  // 交付的两条腿（2026-11-21）：客观证据（PR 合并 / CI 全绿）→ 已阻塞的卡回到「待验收」。
+  // 四道闸全钉：只动已阻塞、只认强证据、人压着的与自报受阻的不翻案、终点不越过验收人。
+  'apps/server/src/smoke-delivery-evidence.mjs',
   // 失败分型 + 自动续跑（2026-11-21）：环境性失败自己再跑一次、确定性失败一次都不试，
   // 且接线是真的（假适配器演"第一次挂、第二次成"，不烧模型）。判据文案全部取自真库样本。
   'apps/server/src/smoke-run-retry.mjs',

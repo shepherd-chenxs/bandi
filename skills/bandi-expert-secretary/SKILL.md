@@ -35,7 +35,7 @@ curl -s --noproxy '*' -H "X-Bandi-Run-Token: ${BANDI_RUN_TOKEN}" "$BASE/api/stat
 
 | 台账 | 看什么 |
 | --- | --- |
-| `/api/state` | 谁在忙（`personas[].busy / busyLabel`）、有哪些会话 |
+| `/api/state` | 谁在忙（`personas[].busy`：布尔，只有忙/闲）、有哪些会话 |
 | `/api/tasks` | 全部任务卡：哪张在「进行中」、哪些「待确认」等他验收、哪些「已阻塞」等人 |
 | `/api/projects` | 有哪些项目、各挂在哪个目录 |
 | `/api/personas/<id>/tasks` | 单个人手上的活 |

@@ -402,6 +402,7 @@ export function repoForCwd(cwd) {
       /* HEAD 读不到（裸仓库/异常克隆）就不带分支 —— 节点按默认分支处理 */
     }
     return { fullName: r.fullName, branch };
+    return { fullName: r.fullName, branch, localPath: r.localPath };
   }
   return null;
 }

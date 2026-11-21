@@ -1506,6 +1506,9 @@ body:has(#pluginView.shown .fixed-head)::after {
 .pill.busy { color: var(--ok); border-color: var(--ok); }
 /* 岗位（2026-10-17）：这人在团队里是什么 —— 比 runtime 更该被一眼看到，所以给它加一点分量 */
 .pill.role { color: var(--accent); border-color: var(--accent); }
+/* PR 自动检查（2026-11-21）：卡上那颗 CI 结论。红了要能一眼看见 —— 它同时是平台
+   "不许把这张卡放到待验收"的依据，用告警色而不是中性的 --dim。 */
+.pill.ci-red { color: var(--bad); border-color: var(--bad); }
 /* 内置员工（2026-10-18）：出厂就在、删不掉。用中性色 —— 它是身份说明，不是状态告警 */
 .pill.builtin { color: var(--text); background: var(--readonly); }
 /* 目录 pill（2026-10-24，设计稿 v1.0.1）：整颗是按钮，点了复制路径。

@@ -397,6 +397,17 @@ export function startRun({ thread, member, task, standing = null, watermark = 0,
 
   const run = {
     id: row.id,
+    /*
+     * **这一轮是什么时候开始的**（2026-11-21 实报 pt-b82d3193 后补）。
+     *
+     * DB 行里一直有 `startedAt`，内存对象却漏了 —— 而 `finishHooks` 能拿到的只有这个对象。
+     * 收尾钩子要用它判"卡是不是**本轮内**被上报成待验收的"（见 project-tasks 的
+     * `reportedByThisRun`），字段一缺就是 `Date.parse(undefined)` → 判据恒不成立 →
+     * 回执照**静默**不发：员工把卡报成待验收，群里一条「请验收」都没有，人得自己去翻看板。
+     *
+     * 别把它改成 `Date.now()`：收尾要用的是**起点**，不是收尾那一刻。
+     */
+    startedAt: row.startedAt,
     conversationId: thread.id,
     personaId,
     projectId,

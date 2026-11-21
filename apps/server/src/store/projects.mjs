@@ -388,4 +388,21 @@ ensureColumn('project_tasks', 'prTitle', 'prTitle TEXT');
 
 ensureColumn('project_tasks', 'prCheckedAt', 'prCheckedAt TEXT');
 
+/*
+ * PR 上**自动检查**的结论（2026-11-21 用户："卡算不算完成，要看客观事实"）。
+ *
+ * 在这之前卡上只有 `prState`（open/merged/closed）—— 能回答"合没合"，回答不了
+ * "CI 绿没绿"。而"代码推上去了、检查全过"恰恰是**除合并之外最硬的一条完成证据**，
+ * 也是"员工忘了写 [完成]"时唯一能替他把卡推进「待验收」的东西。
+ *   · `prCiState`：success | failure | pending | none | unknown（归约口径见 git-repos 的 summarizeChecks）
+ *   · `prCiFailed`：红了的检查名（顿号分隔，最多 5 个）—— 界面要能说清"红在哪"
+ *   · `prCiAt`：这次结论是什么时候取的（CI 会变，隔夜的"全绿"不能当今天的证据）
+ * 查不到就**不写**（保留上一次结论）：接口抖动不该把已有的证据抹成未知。
+ */
+ensureColumn('project_tasks', 'prCiState', 'prCiState TEXT');
+
+ensureColumn('project_tasks', 'prCiFailed', 'prCiFailed TEXT');
+
+ensureColumn('project_tasks', 'prCiAt', 'prCiAt TEXT');
+
 /** 所有关联了 PR 的卡（批量刷新用） */

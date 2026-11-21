@@ -147,6 +147,116 @@ try {
     check('看板行有 created_by / created_by_user_id', row && Object.prototype.hasOwnProperty.call(row, 'created_by_user_id') && Object.prototype.hasOwnProperty.call(row, 'created_by'), row ? JSON.stringify({ c: row.created_by, u: row.created_by_user_id }) : '没行');
   }
 
+  console.log('\n⑧ 执行人「报状态」：人派的卡只能自己上报到「待验收」');
+  {
+    /*
+     * 实报 pt-4b6bf1ec（2026-11-21）：活干完了、推了、冒烟全过，就漏了回话里那行 `[完成]`，
+     * 卡白落「已阻塞」。根因不是模型忘性，是**人派的卡没有任何接口通道**能报状态 ——
+     * 执行人手里只剩一条"贴字符串"的路。这里钉住新开的那扇最窄的门。
+     */
+    const devRun = store.createRun({ conversationId: groupConv.id, runtime: 'codex', personaId: dev.id });
+    const devToken = auth.issueRunCredential(devRun.id, dev.id).token;
+    const patchAsDev = async (rel, body) => {
+      const r = await fetch(BASE + rel, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'X-Bandi-Run-Token': devToken },
+        body: JSON.stringify(body),
+      });
+      return { status: r.status, body: await r.json().catch(() => ({})) };
+    };
+    // 人建的卡（createdBy 为空）+ 执行人 = 嘉辉，正是实报里那种卡
+    const assigned = pt.createProjectTask(project, { title: '人派给嘉辉的卡', status: 'blocked', personaId: dev.id });
+    const reported = await patchAsDev(`/api/projects/tasks/${assigned.id}`, { status: 'review' });
+    check('执行人上报「待验收」→ 200', reported.status === 200 && reported.body.task?.status === 'review',
+      `${reported.status} ${reported.body.task?.status ?? reported.body.error}`);
+    const noDone = await patchAsDev(`/api/projects/tasks/${assigned.id}`, { status: 'done' });
+    check('自己点「已完成」→ 403 E4034（验收权不下放）', noDone.status === 403 && noDone.body.code === 'E4034',
+      `${noDone.status} ${noDone.body.code}`);
+    const extra = await patchAsDev(`/api/projects/tasks/${assigned.id}`, { status: 'review', description: '顺手改描述' });
+    check('夹带别的字段 → 403（只许报状态，不许改卡）', extra.status === 403 && extra.body.code === 'E4034',
+      `${extra.status} ${extra.body.code}`);
+    const notMine = await patch(`/api/projects/tasks/${assigned.id}`, { status: 'review' }); // PM 的钥匙
+    check('别人的执行人可以看不能改 → 403', notMine.status === 403, `${notMine.status} ${notMine.body.code ?? ''}`);
+
+    /*
+     * 收尾这一步是关键：卡已经不在「进行中」，旧的 `onTaskRunFinished` 会直接 return ——
+     * 于是"执行人用接口报的状态"既不会补 `[运行结束]`，也不会给派活人发回执。
+     * 新口径：只要状态是这一轮内上报的 review，就补交代 + 发回执，但**不改状态**。
+     */
+    store.updateProjectTask(assigned.id, { runId: devRun.id });
+    /*
+     * ⚠️ **这里传的对象必须是 finishHooks 真实拿到的那种形态**（2026-11-21 血的教训）。
+     *
+     * 第一版这条冒烟传的是 `{ id, status, startedAt, finalText }` —— 比真实内存 run **多一个**
+     * `startedAt`。于是判据在测试里成立、在线上恒不成立：runs.mjs 的内存 run 当时根本没有这个
+     * 字段（只有 DB 行有），`!!run.startedAt` 永远 false，员工用接口报的「待验收」既不补
+     * `[运行结束]`、也不发回执，**全程无声**（实报 pt-b82d3193：张坤把卡报成待验收，
+     * 群里一条「请验收」都没有，人得自己去翻看板）。
+     *
+     * 所以这里故意**只传真实的三个字段**：造一个比真对象更完整的假对象，等于把 bug 藏起来。
+     * `notify:false` 是有意的：这套冒烟会真起服务，notify 会去唤醒建卡人（一次真派活）。
+     * 回执与补描述在同一条分支上（判据过了两个都执行），判据由「补了 [运行结束]」证伪。
+     */
+    const memoryRun = { id: devRun.id, status: 'done', finalText: '' };
+    check('（前提）真实内存 run 形态里没有 startedAt', !('startedAt' in memoryRun), '带了 startedAt 就等于又造了个假对象，测不出这次的问题');
+    pt.onTaskRunFinished(memoryRun, { notify: false });
+    const after = store.getProjectTask(assigned.id);
+    check('收尾不把上报过的卡写回「已阻塞」', after.status === 'review', after.status);
+    check('run 不带 startedAt 也补上「[运行结束]」（从库里兜底，不许静默失效）',
+      /\[运行结束\]/.test(after.description ?? ''), (after.description ?? '').slice(-46));
+
+    /*
+     * 兜底之外还要钉**正本**：`finishHooks` 只拿得到 runs.mjs 那个内存对象，
+     * 它要是又漏了 startedAt，这里靠 DB 兜住的每一天都是"侥幸没坏"。
+     */
+    const runsSrc = fs.readFileSync(new URL('./runs.mjs', import.meta.url), 'utf8');
+    check('runs.mjs 的内存 run 自带 startedAt（收尾判据的正本）',
+      /startedAt:\s*row\.startedAt/.test(runsSrc));
+
+    /*
+     * **验收人退回卡**（2026-11-21 实报 pt-b82d3193，同一天第二个 403）。
+     *
+     * 贺韬是这张卡的建卡人、pm 岗、有 `card.advance` —— 权限全对，退回却被 403 挡住。
+     * 原因不是权限，是**他多带了一个 `note`**（想把"为什么退回"写清楚），而运行钥匙的字段
+     * 白名单里没这一项。于是他只能在群里口头说"未验收通过"，卡上干干净净，
+     * 执行人下一轮还得猜"到底缺什么"。
+     *
+     * 这里钉两件事：带 note 要放行；理由要**追加**进描述（不是覆盖原有验收标准）。
+     */
+    const pmId = store.listPersonas().find((p) => p.roleKey === 'pm')?.id ?? null;
+    if (pmId) {
+      const pmRun = store.createRun({ conversationId: groupConv.id, runtime: 'codex', personaId: pmId });
+      const pmToken = auth.issueRunCredential(pmRun.id, pmId).token;
+      const patchAsPm = async (rel, body) => {
+        const r = await fetch(BASE + rel, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', 'X-Bandi-Run-Token': pmToken },
+          body: JSON.stringify(body),
+        });
+        return { status: r.status, body: await r.json().catch(() => ({})) };
+      };
+      const own = pt.createProjectTask(project, {
+        title: '验收人退回测试卡',
+        description: '验收标准：PR 链接 + 工作区干净',
+        status: 'review',
+        personaId: dev.id,
+        createdBy: pmId,
+        creatorConvId: groupConv.id,
+      });
+      // 用 blocked（不触发自动派活，冒烟里不能真起 run）
+      const back = await patchAsPm(`/api/projects/tasks/${own.id}`, { status: 'blocked', note: '证据不全：缺 PR 链接' });
+      check('验收人带回退理由（note）→ 200（以前 403 全挡）', back.status === 200,
+        `${back.status} ${back.body.code ?? ''} ${back.body.error ?? ''}`);
+      const ownAfter = store.getProjectTask(own.id);
+      check('退回理由追加进描述，原验收标准没被覆盖',
+        ownAfter.status === 'blocked' && /\[退回\] 证据不全：缺 PR 链接/.test(ownAfter.description ?? '') &&
+          /验收标准：PR 链接/.test(ownAfter.description ?? ''),
+        (ownAfter.description ?? '').slice(-60));
+    } else {
+      check('库里有 pm 岗员工（否则这条测不了）', false, '找不到 roleKey=pm');
+    }
+  }
+
   // 关库再删目录（Windows 上库还开着删不掉）
   try { db = await import(pathToFileURL(path.join(repo, 'apps/server/src/store/db.mjs')).href); db.db.close(); } catch { /* 关不掉就算了 */ }
 } catch (e) {

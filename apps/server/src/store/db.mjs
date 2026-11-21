@@ -117,8 +117,10 @@ db.exec(`PRAGMA busy_timeout = 5000;`);
  *   · 12（2026-11-20）：`git_repos` 加 `ghRef` / `remoteUrl`（仓库身份落库：GitHub API 用的
  *     owner/name 在接入时记一次，之后本地目录改名/挪位置不再影响；见 git-repos.mjs 的
  *     backfillRepoIdentity / relocateRepo）。
+ *   · 13（2026-11-21）：`project_tasks` 加 `prCiState` / `prCiFailed` / `prCiAt` —— PR 上自动检查的
+ *     结论落卡（"CI 绿没绿"从此是卡上的一等事实，见 delivery-evidence.mjs）。
  */
-export const SCHEMA_VERSION = 12;
+export const SCHEMA_VERSION = 13;
 
 const dbVersion = Number(db.prepare('PRAGMA user_version').get()?.user_version ?? 0);
 if (dbVersion > SCHEMA_VERSION) {

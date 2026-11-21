@@ -23,6 +23,19 @@ const creds = new Map(); // token -> { runId, personaId }
  */
 export function issueRunCredential(runId, personaId, { local = true } = {}) {
   if (!local) return null;
+  /*
+   * **只在服务进程里发钥匙**（2026-11-21 实报）：creds 是**本进程**的内存 Map，服务端鉴权也只认
+   * 自己那份。脚本 / CLI 直接 import dispatch 派活时，钥匙签在脚本进程里 —— 员工拿去调
+   * `PATCH /api/projects/tasks/...` 一律 401（实报：贺韬只能回一句"API 钥匙失效，退不回卡"），
+   * 而且那个 run 的收尾钩子也在脚本进程里，脚本一退就成了孤儿。
+   * 旗子由 server.mjs 在 listen 成功后立（见那里注释）。这里只警告不阻断 —— 冒烟测试要能跑。
+   */
+  if (!globalThis.__BANDI_SERVING) {
+    console.warn(
+      `[运行钥匙] 当前进程没有 HTTP 服务（脚本/CLI 直接派活？）—— run ${runId} 拿到的钥匙只在本地内存，` +
+        `客户端调接口会 401，收尾钩子也随脚本退出而丢。派活请走服务端接口。`,
+    );
+  }
   const token = `rt-${randomUUID().replace(/-/g, '')}`;
   creds.set(token, { runId, personaId });
   return { token };

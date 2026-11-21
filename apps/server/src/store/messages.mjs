@@ -28,10 +28,15 @@ export function getMessageByRowid(conversationId, rowid) {
 
 
 /** 真人署名带出来（用户删号后名字为空 —— 界面回落"我"，不报错）。
- *  显示名口径（2026-11-21 独立操作平台）：**昵称优先**，没有昵称退回账号名；
- *  账号名是手机号的在 parseAtts 里统一打码 —— 别人的手机号不从署名里漏出去。 */
+ *  **两份口径**（2026-11-21，独立操作平台）：
+ *   · `senderUserName` = **账号名**（打码后）—— 认人用。契约同 2026-10-31：前端拿它跟
+ *     S.me.name 兜底比对。昵称不能混进来 —— 混了的话，设了昵称的人自己的消息一刷新
+ *     就被当成别人（实报：发出去在右边，员工一回话消息翻到左边）。
+ *   · `senderUserNick` = **显示名**（昵称优先，退打码账号名）—— 画署名用。名册收敛后
+ *     前端名册只剩自己，别人的显示名只能由服务端拼好。
+ *  两份都在 parseAtts 里打码 —— 手机号形态的名字出不了库。 */
 const SENDER_JOIN = 'LEFT JOIN users u ON u.id = m.senderUserId';
-const SENDER_NAME = "COALESCE(NULLIF(u.nickname, ''), u.name) AS senderUserName";
+const SENDER_NAME = 'u.name AS senderUserName, u.nickname AS senderUserNick';
 
 export function listMessages(conversationId) {  return db
     .prepare(
@@ -84,8 +89,10 @@ function parseAtts(m) {
   if (m.meta) {
     try { m.meta = JSON.parse(m.meta); } catch { m.meta = null; }
   }
-  // 署名打码（2026-11-21 独立操作平台）：昵称/账号名拼好后过一遍 —— 手机号形态的名字出不了库
+  // 署名出库（2026-11-21 独立操作平台）：账号名打码（手机号形态出不了库）；
+  // 显示名 = 昵称 || 打码账号名。认人走 senderUserId，名字只做兜底与展示。
   if (m.senderUserName) m.senderUserName = maskAccountName(m.senderUserName);
+  m.senderUserNick = m.senderUserNick || (m.senderUserName ? maskAccountName(m.senderUserName) : null);
   return m;
 }
 
