@@ -184,13 +184,34 @@ try {
      * 新口径：只要状态是这一轮内上报的 review，就补交代 + 发回执，但**不改状态**。
      */
     store.updateProjectTask(assigned.id, { runId: devRun.id });
-    pt.onTaskRunFinished(
-      { id: devRun.id, status: 'done', startedAt: new Date(Date.now() - 60_000).toISOString(), finalText: '' },
-      { notify: false },
-    );
+    /*
+     * ⚠️ **这里传的对象必须是 finishHooks 真实拿到的那种形态**（2026-11-21 血的教训）。
+     *
+     * 第一版这条冒烟传的是 `{ id, status, startedAt, finalText }` —— 比真实内存 run **多一个**
+     * `startedAt`。于是判据在测试里成立、在线上恒不成立：runs.mjs 的内存 run 当时根本没有这个
+     * 字段（只有 DB 行有），`!!run.startedAt` 永远 false，员工用接口报的「待验收」既不补
+     * `[运行结束]`、也不发回执，**全程无声**（实报 pt-b82d3193：张坤把卡报成待验收，
+     * 群里一条「请验收」都没有，人得自己去翻看板）。
+     *
+     * 所以这里故意**只传真实的三个字段**：造一个比真对象更完整的假对象，等于把 bug 藏起来。
+     * `notify:false` 是有意的：这套冒烟会真起服务，notify 会去唤醒建卡人（一次真派活）。
+     * 回执与补描述在同一条分支上（判据过了两个都执行），判据由「补了 [运行结束]」证伪。
+     */
+    const memoryRun = { id: devRun.id, status: 'done', finalText: '' };
+    check('（前提）真实内存 run 形态里没有 startedAt', !('startedAt' in memoryRun), '带了 startedAt 就等于又造了个假对象，测不出这次的问题');
+    pt.onTaskRunFinished(memoryRun, { notify: false });
     const after = store.getProjectTask(assigned.id);
     check('收尾不把上报过的卡写回「已阻塞」', after.status === 'review', after.status);
-    check('收尾补上「[运行结束]」那行', /\[运行结束\]/.test(after.description ?? ''), (after.description ?? '').slice(-46));
+    check('run 不带 startedAt 也补上「[运行结束]」（从库里兜底，不许静默失效）',
+      /\[运行结束\]/.test(after.description ?? ''), (after.description ?? '').slice(-46));
+
+    /*
+     * 兜底之外还要钉**正本**：`finishHooks` 只拿得到 runs.mjs 那个内存对象，
+     * 它要是又漏了 startedAt，这里靠 DB 兜住的每一天都是"侥幸没坏"。
+     */
+    const runsSrc = fs.readFileSync(new URL('./runs.mjs', import.meta.url), 'utf8');
+    check('runs.mjs 的内存 run 自带 startedAt（收尾判据的正本）',
+      /startedAt:\s*row\.startedAt/.test(runsSrc));
   }
 
   // 关库再删目录（Windows 上库还开着删不掉）

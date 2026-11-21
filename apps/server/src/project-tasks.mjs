@@ -1337,12 +1337,20 @@ export function onTaskRunFinished(run, { notify = true } = {}) {
    * 那不是"人改的"，是这一轮的交付动作 —— 必须补上 `[运行结束]` 那行、给派活人发回执，
    * 否则卡上永远缺一句"这轮干了什么"，人也收不到「请验收」。
    * 判据：状态是 review 且 `statusAt` 不早于本轮开始 —— 早就在待验收的卡不算（那是上一轮的事）。
+   *
+   * ⚠️ **起点从哪拿**（2026-11-21 实报 pt-b82d3193，这条判据第一版是死的）：
+   * 第一版直接读 `run.startedAt`，可 `finishHooks` 拿到的是 runs.mjs 里的**内存 run 对象**，
+   * 那个对象当时没有 `startedAt` 字段（只有 DB 行有）→ `!!run.startedAt` 恒为 false →
+   * 判据never成立 → 员工用接口报的「待验收」既不补 `[运行结束]`、也不发回执，全程无声。
+   * 现在两头都堵：runs.mjs 的内存 run 补了这个字段（正本），这里再回 DB 兜一次底（防回归）——
+   * 回执这种东西**静默失效**最贵，宁可多一次行读取。
    */
+  const runStartedAt = run.startedAt ?? store.getRunRow(run.id)?.startedAt ?? null;
   const reportedByThisRun =
     task.status === 'review' &&
-    !!run.startedAt &&
+    !!runStartedAt &&
     !!task.statusAt &&
-    Date.parse(task.statusAt) >= Date.parse(run.startedAt);
+    Date.parse(task.statusAt) >= Date.parse(runStartedAt);
   if (task.status !== 'doing' && !reportedByThisRun) return;
   // 完成态还要看**交付声明**：进程退出码 0 只说明这一轮结束了，不说明活干成了
   const claim = claimOf(finalReplyTextOf(run));
