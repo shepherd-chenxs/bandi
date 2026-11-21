@@ -854,7 +854,19 @@ git
   })
   .catch((e) => console.warn(`[代码托管] 仓库身份回填失败（不影响启动）：${e?.message ?? e}`));
 
-server.listen(port, SERVER.boundHost, logListen);
+server.listen(port, SERVER.boundHost, () => {
+  logListen();
+  /*
+   * **本进程是"能派活的进程"的唯一标记**（2026-11-21 实报后加）。
+   *
+   * 运行钥匙（`rt-…`）只存在**本进程内存**里（agent-auth 的 creds），服务端鉴权也只认自己内存那一份。
+   * 所以在脚本 / CLI 里直接 import dispatch 派活，会出现两个问题，而且都不报错：
+   *   ① 那把钥匙在服务进程里查不到 → 员工一调接口就是 401（实报：贺韬拿到"失效钥匙"，卡退不回去）；
+   *   ② 那个 run 的 SSE 与收尾钩子都在脚本进程里 → 脚本一退出，run 就成孤儿，卡永远挂在「进行中」。
+   * 这里立个旗，`issueRunCredential` 见到没有它就当场警告 —— 别再让下一轮人靠猜。
+   */
+  globalThis.__BANDI_SERVING = true;
+});
 
 /*
  * 身份中枢（2026-11-06）：加入了就接着报心跳 —— 中枢靠它画「在线」，
