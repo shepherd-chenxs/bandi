@@ -34,7 +34,8 @@ const dispatchSrc = read('apps/server/src/dispatch.mjs');
 // 2026-11-19：契约正文搬去 dispatch/contract.mjs（dispatch.mjs 只做再导出，见 barrel 注释）
 const contractSrc = read('apps/server/src/dispatch/contract.mjs');
 const runsSrc = read('apps/server/src/runs.mjs');
-const pmSkill = read('skills/bandi-expert-pm/SKILL.md');
+// 2026-11-22：岗位方法论从技能库搬去 roles/packs/（岗位手册，随岗位注入、用户不可见）
+const pmSkill = read('apps/server/src/roles/packs/pm.md');
 
 console.log('① 技能文件：frontmatter + 正文要件');
 check('frontmatter 有 name: bandi-report', /^---[\s\S]*?\nname: bandi-report\n/.test(skill));
@@ -49,8 +50,9 @@ check('NOTICE 带 MIT License 全文', /MIT License/.test(notice) && /Permission
 check('NOTICE 链接 minto-pyramid 上游', /millwright-labs\/minto-pyramid-skill/.test(notice));
 check('NOTICE 链接 pyramid-principle-for-operators 上游', /wilsonwu-ai\/pyramid-principle-for-operators/.test(notice));
 
-console.log('\n③ 岗位技能包默认挂载（不需要人工去技能库点）');
+console.log('\n③ 岗位默认挂载（不需要人工去技能库点）');
 // 2026-11-11 Phase 3：技能清单从专家包搬到**岗位**上（roles.mjs），雇佣/同步时自动挂载。
+// 2026-11-22：岗位方法论搬去 roles/packs/，通用技能包只剩跨岗位技能（bandi-report 仍在）。
 check('PM 岗位技能包里有 bandi-report', /key: 'pm'[\s\S]*?skills: \[[^\]]*'bandi-report'/.test(roles), '');
 check('助理岗位技能包里有 bandi-report', /key: 'assistant'[\s\S]*?skills: \[[^\]]*'bandi-report'/.test(roles), '');
 check('专家包不再各写一份技能清单（单一来源在 roles.mjs）', !/^\s*skills: \[/m.test(experts), '');

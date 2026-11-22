@@ -23,6 +23,8 @@ import * as store from './store.mjs';
 import * as skills from './skills.mjs';
 // 岗位 key 的合法清单（2026-11-11）：每个专家包都必须对上一个内置岗位
 import { isRoleKey, roleOf, roleSkills } from './roles.mjs';
+// 岗位本命手册（2026-11-22）：从技能库搬到 roles/packs/，随岗位注入、用户不可见
+import { rolePackBody, rolePackMeta } from './roles/pack.mjs';
 
 /**
  * 出厂目录（就这十四位，不做成配置 —— 岗位指令是跟代码一起审的，进配置反而没人管）。
@@ -289,9 +291,9 @@ export const EXPERTS = [
 ];
 
 /*
- * 加载期自检（2026-11-11 岗位固定）：每个专家包都必须对上一个**合法**的内置岗位 key，
- * 且那个岗位要带**技能包**（Phase 3 起技能挂在岗位上，包里不再各写一份清单）。
- * 漏写 / 写错 key 的后果是"这个人雇回来没有任何权限/技能"，要等到真去建卡才暴露 ——
+ * 加载期自检（2026-11-11 岗位固定；2026-11-22 岗位手册）：每个专家包都必须对上一个**合法**的
+ * 内置岗位 key，且那个岗位要有**岗位手册**（`roles/packs/<playbook>.md`，首批注入按它做）。
+ * 漏写 / 写错 key 的后果是"这个人雇回来没有任何权限/方法论"，要等到真去建卡才暴露 ——
  * 那太晚；启动就炸，改的人当场知道。判据与 roles.mjs 同一份。
  */
 {
@@ -299,9 +301,9 @@ export const EXPERTS = [
   if (bad.length) {
     throw new Error(`experts.mjs：这些专家包没有合法的岗位 key（见 roles.mjs）—— ${bad.map((x) => x.key).join('、')}`);
   }
-  const noSkills = EXPERTS.filter((x) => !(roleOf(x.roleKey)?.skills ?? []).length);
-  if (noSkills.length) {
-    throw new Error(`experts.mjs：这些专家包对应的岗位没有技能包（见 roles.mjs 的 skills）—— ${noSkills.map((x) => x.key).join('、')}`);
+  const noPack = EXPERTS.filter((x) => !rolePackBody(roleOf(x.roleKey)?.playbook));
+  if (noPack.length) {
+    throw new Error(`experts.mjs：这些专家包对应的岗位没有岗位手册（见 roles/packs/）—— ${noPack.map((x) => x.key).join('、')}`);
   }
 }
 
@@ -334,6 +336,8 @@ export function listExperts() {
       // 岗位说明全文（2026-10-25）：卡片墙上只有一句话 intro，前端点人物卡弹的
       // 详情卡要给全文 —— 指令本来就跟代码一起审，给前端看不算泄密。
       instructions: x.instructions ?? '',
+      // 岗位本命手册（2026-11-22）：随岗位固定、不进技能库；详情卡拿它做只读展示
+      playbook: rolePackMeta(roleOf(x.roleKey)?.playbook),
       skills: roleSkills(x.roleKey).map((n) => {
         const s = skills.getSkill(n);
         return { name: n, description: s?.description ?? '' };

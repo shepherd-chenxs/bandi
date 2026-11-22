@@ -77,7 +77,12 @@ try {
     check('全都是未雇佣', list0.every((x) => x.hired === false && x.hiredPersona === null));
     check('固定 id（解聘再雇佣靠它接旧会话）', list0.every((x) => x.id === `p-expert-${x.key}`), list0.map((x) => x.id).join(','));
     check('每人都有名字 / 岗位 / 一句话简介', list0.every((x) => x.name && x.role && x.intro));
-    check('技能都带 description（前端画标签不用再查技能接口）', list0.every((x) => x.skills.length >= 1 && x.skills.every((s) => s.name && s.description)));
+    /*
+     * 岗位手册（2026-11-22）：方法论从技能库搬到 roles/packs/，每个专家都必须有手册（界面详情卡要展示）。
+     * 通用技能标签仍要带 description；**允许为空**（UI / 系统管家只有手册，不挂通用技能）。
+     */
+    check('每人都有岗位手册（name + description），技能标签带 description（可为空）',
+      list0.every((x) => !!x.playbook?.name && !!x.playbook?.description && Array.isArray(x.skills) && x.skills.every((s) => s.name && s.description)));
     check('出厂员工只有内置管家一个（专家目录 ≠ 员工）', (await req('/api/state')).b.personas.every((p) => p.id !== 'p-expert-jiahui'));
 
     /* ------------------------------- ② 雇佣 jiahui：人进来、技能挂好 */
@@ -116,8 +121,8 @@ try {
     const db = new DatabaseSync(path.join(tmp, 'bandi.db'), { readOnly: true });
     const linked = db.prepare('SELECT skillName FROM persona_skills WHERE personaId = ?').all('p-expert-jiahui').map((r) => r.skillName);
     db.close();
-    check('岗位技能挂上了', linked.includes('bandi-expert-dev'), linked.join(',') || '(空)');
-    check('通用技能也挂上了', ['test-driven-development', 'systematic-debugging', 'verification-before-completion'].every((s) => linked.includes(s)), linked.join(','));
+    check('岗位包不再进技能挂载', !linked.includes('bandi-expert-dev'), linked.join(',') || '(空)');
+    check('通用技能四项都挂上了', ['bandi-repo', 'test-driven-development', 'systematic-debugging', 'verification-before-completion'].every((s) => linked.includes(s)), linked.join(','));
     check('没挂目录之外的技能', linked.every((s) => dev1.skills.some((x) => x.name === s)), linked.join(','));
 
     /* ------------------------------- ③ 幂等：重复雇佣不报错不重复建 */

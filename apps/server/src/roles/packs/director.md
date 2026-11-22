@@ -1,5 +1,5 @@
 ---
-name: bandi-expert-director
+name: 短视频编导
 description: 短视频编导的岗位方法论 —— 出选题、写镜头级脚本、备拍摄清单。被雇佣的短视频编导开工前照这一份做。
 ---
 

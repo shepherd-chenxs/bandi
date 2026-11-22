@@ -1,5 +1,5 @@
 ---
-name: bandi-expert-pm
+name: 项目经理
 description: 项目经理的岗位方法论 —— 拆活、盯进度、验收把关。被雇佣的项目经理开工前照这一份做。
 ---
 

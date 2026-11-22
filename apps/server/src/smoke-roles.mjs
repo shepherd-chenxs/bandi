@@ -23,7 +23,8 @@ import { spawnSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import { pathToFileURL } from 'node:url';
 
-import { PERMISSIONS, ROLES, can, isRoleKey, legacyRoleKey, roleCan, roleOf, roleSkills } from './roles.mjs';
+import { PERMISSIONS, ROLES, can, isRoleKey, legacyRoleKey, roleCan, roleOf, roleSkills, rolePlaybook } from './roles.mjs';
+import { rolePackBody } from './roles/pack.mjs';
 
 const repo = path.resolve(import.meta.dirname, '..', '..', '..');
 const SRC = path.join(repo, 'apps', 'server', 'src');
@@ -71,15 +72,21 @@ try {
   check('验收权仍不下放（task.review 全员为空）',
     ROLES.every((r) => !r.permissions.includes('task.review')));
   /*
-   * 岗位技能包（2026-11-11 Phase 3）：技能挂在岗位上，雇佣/同步按它自动挂载。
-   * 每个岗位都要有包 —— 空包 = 雇回来一个"什么方法论都没有"的人。
+   * 岗位手册 + 通用技能包（2026-11-22）：岗位方法论从技能库搬到 `roles/packs/<key>.md`，
+   * 随岗位固定、用户不可见。每个岗位都必须有手册；通用技能包**允许为空**（UI / 系统管家）。
    */
-  check('每个岗位都有技能包（≥1 个）', ROLES.every((r) => (r.skills ?? []).length > 0),
-    ROLES.filter((r) => !(r.skills ?? []).length).map((r) => r.key).join(',') || '(全有)');
-  check('项目经理的技能包 = 岗位方法论 + 汇报口径',
-    ['bandi-expert-pm', 'bandi-report'].every((s) => roleSkills('pm').includes(s)), roleSkills('pm').join(','));
-  check('系统管家的技能包 = bandi-secretary', roleSkills('steward').join(',') === 'bandi-secretary', roleSkills('steward').join(','));
+  check('每个岗位都有岗位手册（playbook 非空）',
+    ROLES.every((r) => !!r.playbook && rolePackBody(r.playbook).length > 0),
+    ROLES.filter((r) => !r.playbook || !rolePackBody(r.playbook).length).map((r) => r.key).join(',') || '(全有)');
+  check('项目经理：手册 = pm，通用技能含 bandi-report、不含已搬走的 bandi-expert-pm',
+    rolePlaybook('pm') === 'pm' && rolePackBody('pm').length > 0 &&
+      roleSkills('pm').includes('bandi-report') && !roleSkills('pm').includes('bandi-expert-pm'),
+    `playbook=${rolePlaybook('pm')} skills=${roleSkills('pm').join(',')}`);
+  check('系统管家：手册 = steward（通用技能包为空是预期）',
+    rolePlaybook('steward') === 'steward' && rolePackBody('steward').length > 0,
+    `playbook=${rolePlaybook('steward')} skills=${roleSkills('steward').join(',') || '(空)'}`);
   check('未知岗位没有技能包（不猜）', roleSkills('ceo').length === 0);
+  check('未知岗位没有岗位手册（不猜）', rolePlaybook('ceo') === null);
   check('专家包不再各写一份技能清单（单一来源在 roles.mjs）',
     !/^\s*skills: \[/m.test(fs.readFileSync(path.join(SRC, 'experts.mjs'), 'utf8')), '');
 

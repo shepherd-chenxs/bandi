@@ -1,5 +1,5 @@
 ---
-name: bandi-expert-qa
+name: QA 工程师
 description: QA 工程师的岗位方法论 —— 立验收标准、定回归口径、把发布关；与测试工程师分工：他执行你把关。被雇佣的 QA 专家开工前照这一份做。
 ---
 

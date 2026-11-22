@@ -1,5 +1,5 @@
 ---
-name: bandi-expert-analyst
+name: 数据运营
 description: 数据运营的岗位方法论 —— 对口径、四段复盘、验证别人的判断。被雇佣的数据运营开工前照这一份做。
 ---
 

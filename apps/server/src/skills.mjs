@@ -18,21 +18,13 @@ const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
  * 判定按**目录名**（frontmatter 的 name 可以跟目录不一致，但落盘位置只有一个）。
  */
 const BUILTIN = new Set([
-  'bandi-expert-architect',
-  'bandi-expert-dev',
-  'bandi-expert-ops',
-  'bandi-expert-pm',
-  'bandi-expert-product',
-  'bandi-expert-qa',
-  'bandi-expert-secretary',
-  'bandi-expert-test',
-  'bandi-expert-ui',
+  // 2026-11-22：岗位本命手册已从技能库搬进 roles/packs/，不再是 skill ——
+  // 原先那批 `bandi-expert-*` / `bandi-secretary` 条目随之退场，别再加回来。
   // 2026-10-30：分支怎么起名、提交怎么写 —— 服务端按同一条校验，给仓库管家挂上
   'bandi-git',
   // 2026-10-30：本仓库的门禁地图（红在哪、只跑一条的命令、改代码还是改断言）。
   // 随仓库走、被"修 gate"这种活反复用到，所以按出厂技能管 —— 不让运行时改。
   'bandi-repo',
-  'bandi-secretary',
   'brainstorming',
   'doc-coauthoring',
   'receiving-code-review',

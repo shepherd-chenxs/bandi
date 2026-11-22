@@ -17,6 +17,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { replyStyle, REPLY_STYLES } from '../config.mjs';
 import * as skills from '../skills.mjs';
+import { rolePackBlock } from '../roles/pack.mjs';
 
 /**
  * **平台行为契约**（2026-11-09 全面检修 P0；P5 按"交付形态"重写）：**每一轮派活都注入**，
@@ -269,6 +270,12 @@ export function buildDirectTask(thread, text, firstTime, skillLines = [], connLi
   const parts = [];
   // 宪法必须在身份之前（见 constitutionBlock 注释：要压得住"后续对话请一直保持"的身份块）
   parts.push(constitutionBlock({ roleKey }));
+  /*
+   * 岗位手册（2026-11-22）：从技能库搬出来，随岗位走、用户不可见。
+   * 位置同宪法 —— 排在身份块之前，方法必须压在「后续对话请一直保持」那句下面那句之前。
+   */
+  const packBlock = rolePackBlock(roleKey);
+  if (packBlock) parts.push(packBlock, '');
   const rules = (thread.personaInstructions ?? '').trim();
   if (rules) parts.push('你在本次会话中的身份与职责设定如下（后续对话请一直保持）：', '', rules, '');
   if (skillLines.length) parts.push(...skillsBlock(skillLines));

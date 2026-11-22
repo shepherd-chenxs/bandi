@@ -39,41 +39,59 @@ const PM_PERMISSIONS = ['card.create', 'card.split', 'card.advance', 'team.coord
  *   · `builtin` —— 平台保留岗位（系统管家 / 助理），**不进新建员工下拉**，
  *                  只能由平台初始化或专家库雇佣（2026-11-11 用户拍板）。
  *
- * `skills` = **岗位技能包**（2026-11-11 Phase 3）：雇佣/同步时按它自动挂载，
- * 人身上不再各写一份清单。技能名必须存在于技能库（skills/ 下），
- * 挂了不存在的技能会被跳过（缺一个技能不该把雇佣整个弄挂）。
+ * `playbook` = **岗位本命手册**（2026-11-22）：文件在 `roles/packs/<playbook>.md`，
+ * 随岗位固定、用户不可见，首轮随派活注入全文（读取见 roles/pack.mjs）。
+ *
+ * `skills` = **通用技能包**（2026-11-11 Phase 3；2026-11-22 起只装跨岗位通用的方法论）：
+ * 雇佣/同步时按它自动挂载，人身上不再各写一份清单。技能名必须存在于技能库（skills/ 下），
+ * 挂了不存在的技能会被跳过（缺一个技能不该把雇佣整个弄挂）。空数组是合法的（如 UI、系统管家）。
  */
 export const ROLES = [
   { key: 'pm', name: '项目经理', kind: 'expert', permissions: PM_PERMISSIONS,
-    skills: ['bandi-expert-pm', 'verification-before-completion', 'bandi-report'] },
+    playbook: 'pm',
+    skills: ['verification-before-completion', 'bandi-report'] },
   { key: 'qa', name: 'QA 工程师', kind: 'expert', permissions: [],
-    skills: ['bandi-expert-qa', 'verification-before-completion', 'webapp-testing'] },
+    playbook: 'qa',
+    skills: ['verification-before-completion', 'webapp-testing'] },
   { key: 'product', name: '产品经理', kind: 'expert', permissions: [],
-    skills: ['bandi-expert-product', 'brainstorming', 'doc-coauthoring'] },
+    playbook: 'product',
+    skills: ['brainstorming', 'doc-coauthoring'] },
   { key: 'architect', name: '架构师', kind: 'expert', permissions: [],
-    skills: ['bandi-expert-architect', 'brainstorming', 'requesting-code-review'] },
+    playbook: 'architect',
+    skills: ['brainstorming', 'requesting-code-review'] },
   { key: 'ui', name: 'UI 设计师', kind: 'expert', permissions: [],
-    skills: ['bandi-expert-ui'] },
+    playbook: 'ui',
+    skills: [] },
   { key: 'dev', name: '研发工程师', kind: 'expert', permissions: [],
-    skills: ['bandi-expert-dev', 'bandi-repo', 'test-driven-development', 'systematic-debugging', 'verification-before-completion'] },
+    playbook: 'dev',
+    skills: ['bandi-repo', 'test-driven-development', 'systematic-debugging', 'verification-before-completion'] },
   { key: 'test', name: '测试工程师', kind: 'expert', permissions: [],
-    skills: ['bandi-expert-test', 'bandi-repo', 'webapp-testing', 'systematic-debugging'] },
+    playbook: 'test',
+    skills: ['bandi-repo', 'webapp-testing', 'systematic-debugging'] },
   { key: 'ops', name: '运维工程师', kind: 'expert', permissions: [],
-    skills: ['bandi-expert-ops', 'systematic-debugging', 'verification-before-completion'] },
+    playbook: 'ops',
+    skills: ['systematic-debugging', 'verification-before-completion'] },
   { key: 'editor', name: '内容主编', kind: 'expert', permissions: [],
-    skills: ['bandi-expert-editor', 'brainstorming'] },
+    playbook: 'editor',
+    skills: ['brainstorming'] },
   { key: 'analyst', name: '数据运营', kind: 'expert', permissions: [],
-    skills: ['bandi-expert-analyst', 'verification-before-completion'] },
+    playbook: 'analyst',
+    skills: ['verification-before-completion'] },
   { key: 'copywriter', name: '文案策划', kind: 'expert', permissions: [],
-    skills: ['bandi-expert-copywriter', 'doc-coauthoring'] },
+    playbook: 'copywriter',
+    skills: ['doc-coauthoring'] },
   { key: 'director', name: '短视频编导', kind: 'expert', permissions: [],
-    skills: ['bandi-expert-director', 'brainstorming'] },
+    playbook: 'director',
+    skills: ['brainstorming'] },
   { key: 'repo-keeper', name: '仓库管家', kind: 'expert', permissions: ['repo.deliver'],
-    skills: ['bandi-expert-keeper', 'bandi-git', 'verification-before-completion'] },
+    playbook: 'repo-keeper',
+    skills: ['bandi-git', 'verification-before-completion'] },
   { key: 'assistant', name: '助理', kind: 'builtin', permissions: [],
-    skills: ['bandi-expert-secretary', 'bandi-report'] },
+    playbook: 'assistant',
+    skills: ['bandi-report'] },
   { key: 'steward', name: '系统管家', kind: 'builtin', permissions: [],
-    skills: ['bandi-secretary'] },
+    playbook: 'steward',
+    skills: [] },
 ];
 
 const BY_KEY = new Map(ROLES.map((r) => [r.key, r]));
@@ -81,8 +99,11 @@ const BY_KEY = new Map(ROLES.map((r) => [r.key, r]));
 /** 按 key 找岗位；找不到返回 null（调用的地方负责把话说清楚，别硬猜） */
 export const roleOf = (key) => BY_KEY.get(String(key ?? '')) ?? null;
 
-/** 这个岗位的**技能包**（2026-11-11 Phase 3）：雇佣/同步时自动挂载；未知岗位 → [] */
+/** 这个岗位的**通用技能包**（2026-11-11 Phase 3）：雇佣/同步时自动挂载；未知岗位 → [] */
 export const roleSkills = (key) => roleOf(key)?.skills ?? [];
+
+/** 岗位本命手册的 key（没有 playbook 的岗位返回 null） */
+export const rolePlaybook = (key) => roleOf(key)?.playbook ?? null;
 
 /** 这个岗位在不在内置清单里（给路由校验用） */
 export const isRoleKey = (key) => BY_KEY.has(String(key ?? ''));

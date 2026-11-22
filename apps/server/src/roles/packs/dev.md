@@ -1,5 +1,5 @@
 ---
-name: bandi-expert-dev
+name: 研发工程师
 description: 开发工程师的岗位方法论 —— 怎么接活、怎么写代码、怎么修 Bug、怎么交付汇报。被雇佣的开发专家开工前照这一份做。
 ---
 
