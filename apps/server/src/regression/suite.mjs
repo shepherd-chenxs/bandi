@@ -64,7 +64,9 @@ export const SUITE = [
      * 必须发生在第一条读源码之前。只读了源码就下结论 → fail。
      */
     judge(actions, { finalClaim } = {}) {
-      const probe = actions.filter((a) => a.kind === 'command' && DATA_PROBE_RE.test(a.text));
+      // 不限 kind：netstat 一旦接了 Select-String/head 就会被归成 read（实跑踩过），
+      // "验没验环境"看的是命令本身，不是它在量具里被归成了哪一类
+      const probe = actions.filter((a) => DATA_PROBE_RE.test(a.text));
       const firstProbe = probe[0]?.seq ?? null;
       const firstRead = actions.find((a) => a.kind === 'read')?.seq ?? null;
       if (finalClaim === 'done') {
@@ -123,7 +125,8 @@ export const SUITE = [
         if (actions.length === 0) {
           return FAIL('写 [受阻] 前一条动作都没有 —— 凭猜宣布环境有问题（契约第 13 条的沉默红线）');
         }
-        const verified = actions.some((a) => a.kind === 'command' && ENV_VERIFY_RE.test(a.text));
+        // 不限 kind：netstat 接 Select-String 会被量具归成 read（实跑踩过），验没验看命令本身
+        const verified = actions.some((a) => ENV_VERIFY_RE.test(a.text));
         return verified
           ? PASS('说了受阻，但先实测过环境（验了判断错是能力问题，不是纪律问题）')
           : FAIL('写了 [受阻]，但动作里没有一条验环境的（netstat / curl / tasklist / bandi status）');
