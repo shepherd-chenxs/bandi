@@ -103,6 +103,9 @@ function normalize(id, raw = {}) {
     runtimes: Array.isArray(raw.runtimes) ? raw.runtimes.map(String).filter(Boolean) : [],
     failOnStartup: raw.failOnStartup === true,
     note: String(raw.note ?? ''),
+    /* 实探到的工具名（2026-11-22）：卡片第三行要说明"接过来什么能力"，靠它。
+       只由 probe 写回（setTools），用户配置里写不进来 —— 它是事实，不是声明。 */
+    tools: Array.isArray(raw.tools) ? raw.tools.map(String).filter(Boolean) : [],
     /* 内置（2026-10-26）：出厂自带的连接器 —— 不进推荐清单、卸不掉（403）。
        走 normalize 是为了 saveEntry 合并时把标记保住（current 里带着就丢不了）。 */
     builtin: raw.builtin === true,
@@ -172,6 +175,21 @@ export function setEnabled(id, enabled) {
   return saveEntry(id, { enabled: !!enabled });
 }
 
+/**
+ * 把实探到的工具名记进账本（2026-11-22）。
+ *
+ * 只写 `tools` 这一个字段，不走 saveEntry —— 那条路要过 validate、还会把别的字段
+ * 按 patch 重算一遍；这里只是记一个事实，不该有能力改动配置。
+ * 卡片第三行「简述接过来的能力」就吃这个（旧的 note 是手写的，会过期）。
+ */
+export function setTools(id, tools) {
+  const saved = readSaved();
+  if (!saved[id]) return { ok: false };
+  saved[id].tools = Array.isArray(tools) ? tools.map(String).filter(Boolean) : [];
+  writeSaved(saved);
+  return { ok: true, tools: saved[id].tools };
+}
+
 export function removeEntry(id) {
   const saved = readSaved();
   if (!(id in saved)) return { removed: false };
@@ -196,11 +214,14 @@ export function publicList() {
     args: e.args,
     cwd: e.cwd,
     url: e.url,
+    // 一句话说明（2026-11-22：卡上要显示简述，之前没给，卡片只能退回完整命令路径）
+    note: e.note,
     env: Object.entries(e.env).map(([k, v]) => ({ key: k, kind: isRef(v) ? 'ref' : 'literal' })),
     headers: Object.entries(e.headers).map(([k, v]) => ({ key: k, kind: isRef(v) ? 'ref' : 'literal' })),
     bearerTokenEnv: e.bearerTokenEnv,
     runtimes: e.runtimes,
     failOnStartup: e.failOnStartup,
+    tools: e.tools,
     builtin: !!e.builtin,
     warnings: warnings(e),
   }));
@@ -450,6 +471,10 @@ function writeClaudeConfig(entries, notes) {
 
 /* ------------------------------------------------------------------ 实探 */
 
+/** 探针结果短缓存（60s）：卡片要显示版本号后会反复探，别每次都拉起进程。只缓存成功。 */
+const probeCache = new Map(); // id -> { at, data }
+const PROBE_TTL = 60_000;
+
 /**
  * 实探一条连接器：真把它拉起来，走一遍 MCP 握手，把工具名单拿回来。
  * 装完能不能用，点一下就知道 —— 跟运行时管理里的「探测版本」是同一个心思。
@@ -462,6 +487,10 @@ export function probe(id, { timeoutMs = 20000 } = {}) {
   if (e.transport !== 'stdio') {
     return Promise.resolve({ ok: false, error: '只探得了 stdio 类型；http 类型的探测还没做' });
   }
+  // 探针结果短缓存（2026-11-22）：连接器卡片要显示版本号后会反复探 —— 60s 内同一条
+  // 直接回缓存，不重复拉起进程。只缓存成功；失败下次照常真探。
+  const hit = probeCache.get(id);
+  if (hit && Date.now() - hit.at < PROBE_TTL) return Promise.resolve(hit.data);
 
   // 引用型凭据：从**本进程**的环境解析（子进程也是这么继承的）。缺了直接说，别等它起不来
   const env = { ...process.env };
@@ -498,6 +527,7 @@ export function probe(id, { timeoutMs = 20000 } = {}) {
       } catch {
         /* 已经退了 */
       }
+      if (result.ok) probeCache.set(id, { at: Date.now(), data: result });
       resolve({ ...result, command: `${l.command} ${l.args.join(' ')}`.trim() });
     };
 
@@ -508,6 +538,9 @@ export function probe(id, { timeoutMs = 20000 } = {}) {
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', (c) => (err += c));
     child.stdout.setEncoding('utf8');
+    // serverInfo 在 **initialize**（id=1）的响应里 —— tools/list 的响应没有这个键，
+    // 从那儿取永远是 null（2026-11-22 显示版本号时实踩）
+    let handshakeInfo = null;
     child.stdout.on('data', (chunk) => {
       buf += chunk;
       let i;
@@ -522,13 +555,14 @@ export function probe(id, { timeoutMs = 20000 } = {}) {
           continue;
         }
         if (msg.id === 1 && msg.result) {
+          handshakeInfo = msg.result.serverInfo ?? null;
           send({ jsonrpc: '2.0', method: 'notifications/initialized' });
           send({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
         } else if (msg.id === 1 && msg.error) {
           done({ ok: false, error: `握手被拒：${msg.error.message}` });
         } else if (msg.id === 2) {
           const tools = (msg.result?.tools ?? []).map((t) => t.name);
-          done({ ok: true, tools, serverInfo: msg.result?.serverInfo ?? null });
+          done({ ok: true, tools, serverInfo: handshakeInfo });
         }
       }
     });

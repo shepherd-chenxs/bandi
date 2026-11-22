@@ -608,14 +608,16 @@ export function bubble(role, text, name, who, showName = false, at = '', atts = 
 
 /*
  * 卡票（2026-10-24）：`meta = {type:'card', cardId, title, status, assignee}` 的消息，
- * 气泡顶上画一张票 —— 状态色点 + 标题 + 执行人，点它在**弹窗里**看卡（不离开这段对话）；
- * 角落那颗「看板」小按钮去任务看板（次入口，别抢主点击）。
+ * 气泡顶上画一张票 —— 标题 + 执行人，左边一条列色竖线；点它在**弹窗里**看卡（不离开这段对话）。
  * 2026-11-16 用户："上面有看板按钮，这个多余了" —— 撤掉标题行右侧的「打开 →」，
  * 整卡依旧可点（弹窗里看卡详情），只是不再多画一颗看着像入口的字样。
+ * 2026-11-21 用户："这个卡不要显示状态" —— 右上角那颗状态徽标删掉（截图里那颗「待验收」）。
+ *   它是**消息时刻的快照**，同一张卡在不同消息里颜色不一样，一屏几张票并排反而误导；
+ *   要看状态就点进卡详情，那里是实时的。
  *
  * 票上的字段是**消息时刻的快照**（服务端落 meta 时写死的），不回查实时状态：
  * 聊天一屏可能好几张票，逐张回查太贵；点进详情页看的是实时的。
- * 状态色复用看板那套 --st-* 变量（COL_STATUS 反查列 key，class 同名）。
+ * 左侧竖线仍按列色取 --st-*（COL_STATUS 反查列 key，class 同名）—— 那是排版分隔，不是文字状态。
  *
  * ⚠️ 反查表必须**惰性建**：chat.mjs 和 projects.mjs 互相 import（循环依赖），
  * app.mjs 先加载 projects —— 它回头拉 chat 时 COL_STATUS 还在 TDZ 里，
@@ -638,7 +640,6 @@ export function cardTicketHtml(meta, at) {
     <i class="ct-spine ${esc(col)}"></i>
     <div class="ct-head">
       <span class="ct-ico">📋</span><span class="ct-kind">任务卡</span>
-      <span class="ct-status ${esc(col)}">${esc(statusText(meta.status || ''))}</span>
     </div>
     <div class="ct-row">
       <div class="ct-title">${esc(meta.title || '任务卡')}</div>
@@ -1833,7 +1834,21 @@ export async function openDirectChat(persona) {
   directChatOpening = persona.id;
   try {
     const mine = (S.conversations ?? []).filter((c) => c.kind === 'direct' && c.personaId === persona.id);
-    const current = S.conversation?.kind === 'direct' && S.conversation.personaId === persona.id ? S.conversation : null;
+    /*
+     * 「当前会话」必须是**还在列表里**的那段（2026-11-21 用户实报）：被「不显示」的会话
+     * 服务端按 hiddenAt 剔出 S.conversations，拿它当「当前会话」复用 = 窗口开着、
+     * 消息列表永远没这行。两个判据中其一条就不算「当前」：
+     *   · 行上直接带 hiddenAt —— 本窗口眼见为实；
+     *   · S.conversations 里已经没有它 —— 别的窗口刚收走、本窗口这行还是旧数据
+     *     （通讯录页 5 秒轮询会把列表刷成真的，这个判据兜住轮询前的窗口期）。
+     * 不算「当前」就落进口径③「只剩被「不显示」收着的 → 新建第一段」。
+     */
+    const cur = S.conversation;
+    const current =
+      cur?.kind === 'direct' && cur.personaId === persona.id &&
+      !cur.hiddenAt && (S.conversations ?? []).some((x) => x.id === cur.id)
+        ? cur
+        : null;
     const target = current
       ?? [...mine].sort((a, b) => {
         const ae = !(a.messageCount > 0);

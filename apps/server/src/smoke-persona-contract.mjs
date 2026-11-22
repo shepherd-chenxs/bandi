@@ -101,10 +101,10 @@ try {
   check('⑥ 不编数 + 不猜接口（别 foreach 试路径）', /不编数/.test(contract) && /不猜接口/.test(contract) && /foreach/.test(contract));
   check('⑦ 红线：删数据 / 动生产 / 对外发布', /删数据/.test(contract) && /(动生产|生产)/.test(contract) && /对外发布/.test(contract));
 
-  console.log('\n②-a 要雇主拍板必须 @ 雇主本人（2026-11-16 用户："这种要我决策的事情，要@我"，雇主 = 群主）');
-  check('⑨ 红线请雇主拍板 → 回话里 @ 雇主', /红线/.test(contract) && /@ 雇主本人/.test(contract) && /请他拍板/.test(contract));
-  check('⑩ 拍板 / 决策 / 确认 / 授权 / 卡住等人 → 必须 @ 雇主，不带 @ = 没交付',
-    /拍板 \/ 决策 \/ 确认/.test(contract) && /@ 雇主本人/.test(contract) && /没叫到他/.test(contract));
+  console.log('\n②-a 要雇主拍板必须 @ 群主（2026-11-16 用户："这种要我决策的事情，要@我"；2026-11-21 实报：照抄「雇主本人」= 谁也没 @ 到）');
+  check('⑨ 红线请雇主拍板 → 回话里 @ 群主', /红线/.test(contract) && /@ 群主/.test(contract) && /请他拍板/.test(contract));
+  check('⑩ 拍板 / 决策 / 确认 / 授权 / 卡住等人 → 必须 @ 群主，不带 @ = 没交付',
+    /拍板 \/ 决策 \/ 确认/.test(contract) && /@ 群主/.test(contract) && /没叫到他/.test(contract));
   {
     // 群主名注入群聊 prompt：让 AI 知道 @ 谁（续接轮也要有，不只首轮）
     const grp = dispatch.buildGroupTask({

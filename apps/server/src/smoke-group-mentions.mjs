@@ -162,6 +162,21 @@ try {
   check('嘉辉是首轮：带身份与群名注入', jiaReply.includes('你在一个项目群里'), jiaReply.slice(0, 80));
   check('嘉辉的 prompt 里有他的那份活', jiaReply.includes('做B'), jiaReply.slice(0, 120));
   check('嘉辉看得到沈丹青的回复（水位线在补派那一刻才算）', jiaReply.includes('做A'), jiaReply.slice(0, 160));
+  /*
+   * 群成员名单（2026-11-21 用户实报：普通成员感知不到"我在哪个群、群里还有谁"，
+   * 被问"看一下咱们小组的成员"只能反问雇主）。首轮回显里必须有一份**每轮都带**的
+   * 名单 —— 三个人都在、标出群助手；数据源是群级真源，不是建会话快照。
+   * 名单行是**可原样转述的数据**：不含「你自己」这类第二人称标注（实报：模型把
+   * 「贺韬（项目经理，你自己）」原样抄进回话）；"哪条是我"由单独的说明行交代。
+   */
+  /* 回显整段压成一行，按「上面名单里」锚点把名单数据行与身份说明行切开再各自断言 */
+  const rosterSeg = (jiaReply.split('群成员（都能直接 @ 到）：')[1] ?? '').split('上面名单里')[0];
+  check('嘉辉的 prompt 带群成员名单（含群助手标记，名单行不含身份标注）',
+    /群成员（都能直接 @ 到）：/.test(jiaReply) && ['贺韬', '沈丹青', '嘉辉'].every((n) => rosterSeg.includes(n)) &&
+      /群助手/.test(rosterSeg) && !/你自己/.test(rosterSeg),
+    rosterSeg.slice(0, 130));
+  check('身份说明单独成行（「嘉辉」是你自己，别抄进回话）',
+    /上面名单里「嘉辉」是你自己/.test(jiaReply) && /别抄进回话/.test(jiaReply), '身份说明行在回显里');
 
   console.log('\n⑤ 老规则不回退：@ 一个人照旧；没 @ 照旧归群助手');
   const single = await req('POST', `/api/conversations/${convId}/messages`, { text: '@嘉辉 单独补一句文案' });

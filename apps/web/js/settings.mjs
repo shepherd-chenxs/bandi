@@ -249,185 +249,140 @@ export async function openMe() {
   $('settingsView').innerHTML = `
     ${headRow('<b>我的</b>')}
     <div class="detail-body me-body">
+      ${
+        /* 两栏改版（2026-11-21 用户拍板「左卡右信息两栏」）：桌面原来四张整宽卡
+           （身份 / 这台机器 / 登录密码 / 退出登录）摊在 980 版心里，行行"左标签右远值"，
+           大片留白。收成两栏 —— 左边竖排身份卡（头像居中、名字、手机号，修改密码与
+           退出登录收进卡底），右边只剩「这台机器」信息卡。手机分支一字不动
+           （hero 通栏 + me-one-sec 那套，样式在 mobile.css §15b-e）。 */
+        onPhone
+          ? `
       <section class="set-sec me-hero-sec">
-        <div class="me-hero-card${onPhone ? ' me-hc' : ''}">
+        <div class="me-hero-card me-hc">
           ${
-            /* 头像（2026-11-17 用户："手机端点击头像跳转到个人详情页"）：手机端整颗
-               头像是进个人详情页的入口（.me-ava-btn 清除按钮样式、让里面 .me-ava 保持
-               原尺寸）；桌面头像仍是纯展示，不包按钮、不换交互。 */
-            onPhone
-              ? `<button type="button" class="me-ava-btn" id="meProfileOpen" aria-label="个人资料">${avaHtml}</button>`
-              : avaHtml
+            /* 头像（2026-11-17 用户："手机端点击头像跳转到个人详情页"）：整颗头像是
+               进个人详情页的入口（.me-ava-btn 清除按钮样式、让里面 .me-ava 保持原尺寸）。 */
+            `<button type="button" class="me-ava-btn" id="meProfileOpen" aria-label="个人资料">${avaHtml}</button>`
           }
           <div class="me-who">
             <div class="me-name">
               <b>${esc(displayName)}</b>
-              ${
-                /* 昵称入口（2026-11-08）：常驻小铅笔（55% 透明，不抢身份卡的戏）。
-                   不做 hover 才显形 —— 手机上没有 hover，藏了就等于没有。
-                   ⚠️ 2026-11-17：手机端整条弹窗改昵称方式退场，铅笔只留桌面 ——
-                   手机上改昵称改走「点头像 › 个人详情页」的行内编辑。 */
-                isUser && !onPhone
-                  ? `<button type="button" class="me-edit" id="meNickEdit" title="${nick ? '改昵称' : '设置昵称'}" aria-label="${nick ? '改昵称' : '设置昵称'}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 19.5h4l9.6-9.6a2.1 2.1 0 0 0-3-3L5.5 16.5v3z"/><path d="M13.8 7.2l3 3"/></svg></button>`
-                  : ''
-              }
             </div>
             ${
-              /*
-               * 副行（原「中枢账号 · 手机号登录」已删，2026-11-08 用户要求）：
-               *   手机（2026-11-17）：有昵称 → 手机号；没昵称 → 引导点头像（原来那颗
-               *     「＋ 设置昵称」按钮连同弹窗一并撤掉，改去个人详情页设）；
-               *   桌面维持原口径：有昵称 → 手机号；没昵称 → 「＋ 设置昵称」按钮。
-               */
+              /* 副行（2026-11-17）：有昵称 → 手机号；没昵称 → 引导点头像
+                 （「＋ 设置昵称」按钮连同弹窗已撤，改去个人详情页设）。 */
               !isUser
                 ? `<span class="me-meta">这台机器还没有登录账号</span>`
-                : onPhone
-                  ? nick
-                    ? `<span class="me-meta">${esc(phoneText)}</span>`
-                    : `<span class="me-meta">点头像设置昵称</span>`
-                  : nick
-                    ? `<span class="me-meta">${esc(phoneText)}</span>`
-                    : `<button type="button" class="me-meta me-nick-set" id="meNickSet">＋ 设置昵称</button>`
+                : nick
+                  ? `<span class="me-meta">${esc(phoneText)}</span>`
+                  : `<span class="me-meta">点头像设置昵称</span>`
             }
           </div>
           ${
-            /* 信箱图标（2026-11-11 用户："在信息区加一个信箱图标，点击之后跳转到
-               信箱页面"）：hero 右缘的一颗图标钮 —— 身份区里放得下、不用钻清单；
-             * 行为与下面「平台通知」行同一把 mb-nav（窄屏才画，桌面左栏已有信箱）。
-             * 右上角未读红点（me-inbox-dot）与行尾读数同源（S.noticesUnread），
-             * inbox.mjs 的 paintInboxBadge 会一并刷新 —— 0 未读时隐藏，>99 折成 99+。
-               图形 = 信箱页空态那只信封（rect + 双折线），线宽 1.8 同 hero 铅笔。 */
-            onPhone
-              ? `<button type="button" class="me-inbox-icon" id="meInboxIcon" aria-label="信箱">
-                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                     <rect x="3" y="5.5" width="18" height="13" rx="2"/>
-                     <path d="M3.6 6.6 12 13l8.4-6.4"/>
-                     <path d="M3 16.5l5.4-4.2M21 16.5l-5.4-4.2"/>
-                   </svg><i class="me-inbox-dot" id="meInboxDot"${inboxUnread ? '' : ' hidden'}>${inboxUnread > 99 ? '99+' : inboxUnread}</i>
-                 </button>`
-              : ''
+            /* 信箱图标（2026-11-11）：hero 右缘一颗图标钮，行为与「平台通知」行同一把
+               mb-nav（窄屏才画，桌面左栏已有信箱）。红点与行尾读数同源（S.noticesUnread），
+               inbox.mjs 的 paintInboxBadge 会一并刷新 —— 0 未读隐藏，>99 折成 99+。 */
+            `<button type="button" class="me-inbox-icon" id="meInboxIcon" aria-label="信箱">
+                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                   <rect x="3" y="5.5" width="18" height="13" rx="2"/>
+                   <path d="M3.6 6.6 12 13l8.4-6.4"/>
+                   <path d="M3 16.5l5.4-4.2M21 16.5l-5.4-4.2"/>
+                 </svg><i class="me-inbox-dot" id="meInboxDot"${inboxUnread ? '' : ' hidden'}>${inboxUnread > 99 ? '99+' : inboxUnread}</i>
+               </button>`
           }
         </div>
       </section>
       ${
-        /* 当前机器（2026-11-07）：这台电脑的名字 / 系统 / 实例标识 —— 「我的」页原本
-           只有账号没有机器，用户问"这台设备呢"。桌面画全四行；手机窄屏的同名三行卡
-           2026-11-11 起搬进「我的 › 设置」子页（openMeSet）—— 手机上"这台机器"
-           指的是**连过去的那台班底机**，跟"这台设备"（手机自己）不是一回事。 */
-        !onPhone && machineRows
-          ? `<section class="set-sec me-dev-sec">
-               <div class="set-head"><b>这台机器</b></div>
-               <div class="me-dev-box">${machineRows}</div>
-             </section>`
-          : ''
-      }
-      ${
-        /* 修改密码（2026-11-10 二次安家）：桌面「我的」页的独立入口。
-           最初放进下面的 me-entry-sec（与「设置」同卡），但「设置进左栏」那轮改版在
-           mobile.css 里 `body:not(.mb-narrow) .me-entry-sec { display:none }` 把整卡
-           在桌面藏死了 —— 用户两报「入口呢」。这里自立一张卡：类名避开 me-entry-sec，
-           绕开那条隐藏规则；行用桌面原生的 .set-row + 按钮（.me-entry 系只有窄屏才有
-           样式，桌面裸奔）。手机形态白名单仍不含改密码，故依旧 !onPhone。 */
-        !onPhone && isUser
-          ? `<section class="set-sec me-pwd-sec">
-               <div class="set-box">
-                 <div class="set-row">
-                   <span class="set-label">登录密码</span>
-                   <button type="button" id="mePassword">修改密码</button>
-                 </div>
+        /* 「我的」页的分组清单（2026-11-11 深夜第四版）：分组块 —— 满宽、无圆角、
+           无描边，块间 10px 页底灰；行间内缩 20 的 hairline。
+           主题行（2026-11-17 第五版）：行内分段开关，点档即生效，不再弹底部选择。
+           「当前设备」行只在壳里 + 中枢账号会话画 —— 设备列表只存在于壳的启动页。
+           「设置」行进 openMeSet 子页（机器 · 缓存 · 退出）。 */
+        `<section class="set-sec me-one-sec">
+             <div class="me-one-box" id="meOneBox">
+               <div class="me-kv me-cache-row" id="meThemeRow">
+                 <span class="me-k">主题</span>
+                 <span class="me-theme-seg" id="meThemeSeg" role="group" aria-label="主题切换">
+                   ${THEME_OPTS.map(
+                     ([v, label]) =>
+                       `<button type="button" data-theme-opt="${v}" class="${S.theme === v ? 'on' : ''}">${esc(label)}</button>`,
+                   ).join('')}
+                 </span>
                </div>
-             </section>`
-          : ''
+               ${
+                 shell && hello && isUser
+                   ? `<button type="button" class="me-kv me-cache-row" id="meSwitchDevice">
+                        <span class="me-k">当前设备</span>
+                        <span class="me-v">${esc(devName || '—')}</span>
+                        <i class="me-chevron" aria-hidden="true">›</i>
+                      </button>`
+                   : ''
+               }
+               <button type="button" class="me-kv me-cache-row" id="meSetEntry">
+                 <span class="me-k">设置</span>
+                 <span class="me-v">机器 · 缓存 · 退出</span>
+                 <i class="me-chevron" aria-hidden="true">›</i>
+               </button>
+             </div>
+           </section>`
       }
-      ${
-        /*
-         * 「我的」页的分组清单（2026-11-11 深夜第四版，用户："这个页面可以参考主流
-         * 手机「我的」页的布局"）。
-         *
-         * 那种页面不是"卡"，是**分组块**：一块满宽、无圆角、无描边、无投影的白，
-         * 与上一块之间隔 10px 页底灰；块内行与行之间一条内缩 20 的 hairline。
-         * 三行完全同构 —— 左边名称 17，右边值 15.5 灰 + ›。
-         *
-         * 主题行 2026-11-17 再改（用户："直接改成行内切换按钮，不使用抽屉"）：
-         * 行右端摆一枚两档的分段开关（浅色｜深色），点档即生效，不再弹底部选择。
-         * 这行不是 <button> 了 —— 分段开关自己就是按钮，button 不能套 button。
-         *
-         * 「当前设备」行条件沿用上一版：只在壳里 + 中枢账号会话画 —— 面板和启动页是
-         * 两个 origin，"设备列表"只存在于壳的启动页上；桥 = 导航回启动页带
-         * #bandi-devices（原生壳直接调 BandiShell）。
-         * 桌面不画这一块：桌面左栏有「设置」，主题在 设置 › 偏好，重复入口没有意义。
-         */
-        onPhone
-          ? `<section class="set-sec me-one-sec">
-               <div class="me-one-box" id="meOneBox">
-                 <div class="me-kv me-cache-row" id="meThemeRow">
-                   <span class="me-k">主题</span>
-                   <span class="me-theme-seg" id="meThemeSeg" role="group" aria-label="主题切换">
-                     ${THEME_OPTS.map(
-                       ([v, label]) =>
-                         `<button type="button" data-theme-opt="${v}" class="${S.theme === v ? 'on' : ''}">${esc(label)}</button>`,
-                     ).join('')}
-                   </span>
-                 </div>
+      ${hello?.version ? `<div class="me-foot">班底 v${esc(hello.version)}</div>` : ''}
+      `
+          : `
+      <div class="me-layout">
+        <aside class="me-side">
+          <div class="me-hero-card me-side-card">
+            ${avaHtml}
+            <div class="me-who">
+              <div class="me-name">
+                <b>${esc(displayName)}</b>
+                ${
+                  /* 昵称入口（2026-11-08）：常驻小铅笔（55% 透明，不抢身份卡的戏）。
+                     不做 hover 才显形 —— 手机上没有 hover，藏了就等于没有。 */
+                  isUser
+                    ? `<button type="button" class="me-edit" id="meNickEdit" title="${nick ? '改昵称' : '设置昵称'}" aria-label="${nick ? '改昵称' : '设置昵称'}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 19.5h4l9.6-9.6a2.1 2.1 0 0 0-3-3L5.5 16.5v3z"/><path d="M13.8 7.2l3 3"/></svg></button>`
+                    : ''
+                }
+              </div>
+              ${
+                /* 副行：有昵称 → 手机号；没昵称 → 「＋ 设置昵称」按钮（桌面原口径）。 */
+                !isUser
+                  ? `<span class="me-meta">这台机器还没有登录账号</span>`
+                  : nick
+                    ? `<span class="me-meta">${esc(phoneText)}</span>`
+                    : `<button type="button" class="me-meta me-nick-set" id="meNickSet">＋ 设置昵称</button>`
+              }
+            </div>
+            ${
+              /* 动作收进身份卡底（2026-11-21 两栏改版）：修改密码与退出登录原来各占
+                 一张整宽卡、一颗按钮孤零零挂在行尾 —— 竖排满宽按钮放进卡里，
+                 "账号的事在账号卡上办"。id 不动（mePassword/meLogout/meGoLogin），
+                 接线照旧。 */
+              `<div class="me-side-actions">
+                 ${isUser ? '<button type="button" class="me-side-btn" id="mePassword">修改密码</button>' : ''}
                  ${
-                   shell && hello && isUser
-                     ? `<button type="button" class="me-kv me-cache-row" id="meSwitchDevice">
-                          <span class="me-k">当前设备</span>
-                          <span class="me-v">${esc(devName || '—')}</span>
-                          <i class="me-chevron" aria-hidden="true">›</i>
-                        </button>`
-                     : ''
+                   canLogout
+                     ? '<button type="button" class="me-side-btn me-side-danger" id="meLogout">退出登录</button>'
+                     : '<button type="button" class="me-side-btn" id="meGoLogin">去登录</button>'
                  }
-                 <button type="button" class="me-kv me-cache-row" id="meSetEntry">
-                   <span class="me-k">设置</span>
-                   <span class="me-v">机器 · 缓存 · 退出</span>
-                   <i class="me-chevron" aria-hidden="true">›</i>
-                 </button>
-               </div>
-             </section>`
-          : ''
-      }
-      <!-- 「设置」入口（2026-11-01）：只在窄屏显示（桌面左栏已经有设置，再摆一个是重复）。
-           走事件而不是 import setNav —— settings ← state 是反向依赖，会成环
-           （mobile.mjs 里通讯录那个 mb-cv-home 同一套办法）。
-           ⚠️ 2026-11-03 反转：手机功能收成白名单子集后，设置页整个是 PC 独有的 ——
-           窄屏**不画**这个入口（画了就是把整页设置重新暴露给手机）。 -->
-      ${
-        onPhone
-          ? ''
-          : `<section class="set-sec me-entry-sec">
-        <div class="set-box">
-          <div class="set-row me-entry" id="meSettings" role="button" tabindex="0">
-            <span class="me-entry-ico">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.1"/><path d="M19.4 14.5a1.6 1.6 0 0 0 .32 1.77l.06.06a1.94 1.94 0 1 1-2.75 2.75l-.06-.06a1.6 1.6 0 0 0-1.77-.32 1.6 1.6 0 0 0-.97 1.47V20a1.94 1.94 0 1 1-3.88 0v-.1a1.6 1.6 0 0 0-1.05-1.47 1.6 1.6 0 0 0-1.77.32l-.06.06a1.94 1.94 0 1 1-2.75-2.75l.06-.06a1.6 1.6 0 0 0 .32-1.77 1.6 1.6 0 0 0-1.47-.97H4a1.94 1.94 0 1 1 0-3.88h.1a1.6 1.6 0 0 0 1.47-1.05 1.6 1.6 0 0 0-.32-1.77l-.06-.06a1.94 1.94 0 1 1 2.75-2.75l.06.06a1.6 1.6 0 0 0 1.77.32h.08A1.6 1.6 0 0 0 11.9 4.1V4a1.94 1.94 0 1 1 3.88 0v.1a1.6 1.6 0 0 0 .97 1.47 1.6 1.6 0 0 0 1.77-.32l.06-.06a1.94 1.94 0 1 1 2.75 2.75l-.06.06a1.6 1.6 0 0 0-.32 1.77v.08a1.6 1.6 0 0 0 1.47.97H20a1.94 1.94 0 1 1 0 3.88h-.1a1.6 1.6 0 0 0-1.47.97z"/></svg>
-            </span>
-            <span class="set-label">设置</span>
-            <span class="me-chevron" aria-hidden="true">›</span>
+               </div>`
+            }
           </div>
+        </aside>
+        <div class="me-main">
+          ${
+            /* 当前机器（2026-11-07）：设备名 / 系统 / 版本 / 本机地址 / 实例标识 ——
+               桌面画全四行（machineAll）；手机的同名三行卡在「我的 › 设置」子页。 */
+            machineRows
+              ? `<section class="set-sec me-dev-sec">
+                   <div class="set-head"><b>这台机器</b></div>
+                   <div class="me-dev-box">${machineRows}</div>
+                 </section>`
+              : ''
+          }
         </div>
-      </section>`
-      }
-      ${
-        /* 退场动作整宽一行：个人中心的"走人"动作用整行 + 文字染色，比右下角一颗
-           小按钮稳。退出登录染 --bad（"走人"的分量）；断开连接/去登录是中性动作，不染。
-           （2026-11-07：账号安全双卡随本地密码/OTP 退场 —— 密码与动态验证都在中枢上管。）
-           2026-11-11 用户："退出按钮放到设置页面" —— 手机上这一行搬进「我的 › 设置」
-           子页底部（openMeSet 同款模板），「我的」页只留身份/外观/设备/设置入口；
-           桌面不动（桌面没有子页，这行仍是「我的」页的收尾）。 */
-        onPhone
-          ? ''
-          : `<section class="set-sec me-out-sec">
-           <div class="me-out-box">${
-             canLogout
-               ? '<button class="me-out me-out-danger" id="meLogout">退出登录</button>'
-               : '<button class="me-out" id="meGoLogin">去登录</button>'
-           }</div>
-         </section>`
-      }
-      ${/* 版本行收口（2026-11-11 方案 B）：两张卡之后页面原来剩一段空白，看着像"没画完"。
-           一行 11.5px 的版本号把它收住 —— 空白变成呼吸，也顺手回答了"我这是哪一版"。
-           只在手机形态画；桌面那张「这台机器」卡里已经有版本行。 */ ''}
-      ${onPhone && hello?.version ? `<div class="me-foot">班底 v${esc(hello.version)}</div>` : ''}
+      </div>
+      `}
     </div>`;
   /*
    * 主题（2026-11-11 第四版）：这一行改成「值 + 箭头」，点整行弹底部选择 ——
@@ -521,15 +476,6 @@ export async function openMe() {
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
       goPwd();
-    }
-  });
-  // 设置入口：交给 mobile.mjs 转一次 setNav（反向 import 会成环，见上面的注释）
-  const goSet = () => document.dispatchEvent(new CustomEvent('mb-nav', { detail: { nav: 'settings' } }));
-  $('meSettings')?.addEventListener('click', goSet);
-  $('meSettings')?.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      goSet();
     }
   });
 }
@@ -1152,9 +1098,6 @@ async function loadReplyStyle() {
           <div class="seg" id="styleSeg">
             ${styles.map((s) => `<button data-style-opt="${esc(s.id)}" class="${s.id === cur ? 'on' : ''}">${esc(s.label)}</button>`).join('')}
           </div>
-        </div>
-        <div class="set-row">
-          <p class="hint">「言简意赅」：动作先行、最多五步、一次只问一件事 —— 只管对话里的汇报，文档/稿子/结论表这些交付物不受影响。切换后下一轮对话就生效。</p>
         </div>
       </div>
     </section>`;

@@ -1293,13 +1293,32 @@ body:has(#pluginView.shown .fixed-head)::after {
 .set-head b { font-size: var(--t-sec); font-weight: var(--w-title); }
 .set-tag { font-size: 10.5px; color: var(--dim); border: 1px solid var(--line);
            border-radius: 4px; padding: 0 5px; line-height: 16px; }
-/* ── 「我的」页（2026-11-03 重设计）────────────────────────────────
-   三段式个人中心：身份卡 → 账号安全双卡 → 退场整行。
-   版心收窄到 980px：这页只有三块内容，铺满 1400px 只会显得空。
-   （选择器带 #settingsView —— 否则压不过上面 #settingsView .detail-body 的 1400px。） */
-#settingsView .me-body { max-width: 980px; }
-/* 身份卡：头像 + 名字 + 身份章 + 一行说明。左上角一层极淡的 accent 渐变，
-   让这张卡跟下面"功能卡"区分开 —— 页面唯一的视觉重心就在这。 */
+/* ── 「我的」页（2026-11-21 两栏改版）────────────────────────────────
+   左身份卡 + 右信息列：身份卡竖排（头像居中、名字、手机号，修改密码/退出登录
+   收进卡底），右列「这台机器」属性卡。版心 1080 —— 两栏 300px + 1fr 才放得下。
+   （选择器带 #settingsView —— 否则压不过上面 #settingsView .detail-body 的 1400px。）
+   手机（mb-narrow）另有整套 hero 通栏样式（mobile.css §15b-e），这里不碰。 */
+#settingsView .me-body { max-width: 1080px; }
+.me-layout { display: grid; grid-template-columns: 300px 1fr; gap: 22px; align-items: stretch; }
+/* 左侧身份卡：竖排。accent 渐变卡面沿用旧 hero —— 页面唯一的视觉重心还在它身上。 */
+.me-side-card { display: flex; flex-direction: column; align-items: center; gap: 10px;
+                padding: 26px 20px 18px; height: 100%; box-sizing: border-box; }
+.me-side .me-ava { width: 84px; height: 84px; font-size: 33px; line-height: 84px; }
+.me-side .me-ava-glyph svg { width: 38px; height: 38px; }
+.me-side .me-who { align-items: center; text-align: center; }
+.me-side .me-name { justify-content: center; max-width: 100%; }
+/* 动作收进卡底（2026-11-21）：修改密码/退出登录竖排满宽，随右列高度顶到卡底
+   （margin-top:auto）—— "账号的事在账号卡上办"，不再各占一张整宽卡。 */
+.me-side-actions { display: flex; flex-direction: column; gap: 8px; width: 100%;
+                   margin-top: auto; padding-top: 16px; }
+.me-side-btn { width: 100%; padding: 9px 14px; border: 1px solid var(--line);
+               border-radius: 8px; background: transparent; color: var(--text);
+               font-size: 13px; cursor: pointer; }
+.me-side-btn:hover { background: var(--hover); }
+.me-side-danger { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 30%, var(--line)); }
+.me-side-danger:hover { background: color-mix(in srgb, var(--bad) 8%, transparent); }
+.me-side-danger:focus-visible { outline: 2px solid var(--bad); outline-offset: 1px; }
+/* 身份卡水平形态：仅手机 hero 用（桌面走上面的竖排 .me-side-card）。 */
 .me-hero-card { display: flex; align-items: center; gap: 16px; padding: 18px 20px;
                 border: 1px solid var(--line); border-radius: 10px;
                 background: linear-gradient(115deg, color-mix(in srgb, var(--accent) 9%, transparent), transparent 46%),
@@ -1316,9 +1335,6 @@ body:has(#pluginView.shown .fixed-head)::after {
 .me-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .me-name b { font-size: 17px; font-weight: var(--w-title); line-height: 1.4;
              white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.me-role { flex: none; font-size: 11px; line-height: 18px; padding: 0 8px; border-radius: 99px;
-           color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent);
-           border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent); }
 .me-meta { font-size: 12.5px; color: var(--dim); }
 /* 昵称（2026-11-08 用户："加一个昵称，'中枢账号 · 手机号登录'这个去掉"）：
    标题 = 昵称（没设就退回手机号），副行 = 手机号 / 「＋ 设置昵称」。
@@ -1340,26 +1356,10 @@ body:has(#pluginView.shown .fixed-head)::after {
 .me-k { flex: none; font-size: 12.5px; color: var(--dim); }
 .me-v { flex: 1; min-width: 0; font-size: 12.5px; text-align: right; word-break: break-all; }
 .me-v-mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12px; }
-/* 账号安全：双卡网格（容器不够宽时 auto-fit 自动落成单列）。 */
-.me-sec-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
-.me-sec-card { border: 1px solid var(--line); border-radius: 10px; background: var(--panel);
-               padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
-.me-sec-head { display: flex; align-items: center; gap: 10px; }
-.me-sec-ico { flex: none; width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center;
-              color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
-.me-sec-ico svg { width: 18px; height: 18px; }
-.me-sec-head b { font-size: 13.5px; font-weight: var(--w-title); }
-/* 状态章：小圆点 + 状态词。绿 = 已设置/已开启，橙 = 免密（该补的），灰 = 未开启（可选的）。 */
-.me-state { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 6px;
-            font-size: 12px; color: var(--dim); }
-.me-state i { width: 6px; height: 6px; border-radius: 99px; background: currentColor; }
-.me-state.is-ok { color: var(--ok); }
-.me-state.is-warn { color: var(--warn); }
-.me-sec-desc { margin: 0; font-size: 12.5px; color: var(--dim); line-height: 1.7; }
-.me-sec-meta { font-size: 12px; color: var(--dim); }
-.me-sec-foot { display: flex; justify-content: flex-end; }
 /* 退场整行：退出登录是"走人"的动作 —— 文字染 --bad、hover 才铺淡红底；
-   断开连接/去登录是中性动作，不染。 */
+   断开连接/去登录是中性动作，不染。
+   （桌面 2026-11-21 起动作收进左侧身份卡 .me-side-btn —— 这套只剩手机
+   「我的 › 设置」子页底部在用，mobile.css §15b 另有窄屏覆盖。） */
 .me-out-box { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); overflow: hidden; }
 .me-out { display: block; width: 100%; text-align: left; padding: 12px 16px; border: 0;
           background: transparent; color: var(--text); font-size: 13px; cursor: pointer; }
@@ -1565,8 +1565,15 @@ button.pill.gr-pr-task:hover { color: var(--accent); border-color: var(--accent)
 /* 「设置 → 技能」主区的技能卡片：宫格，一张一个技能。
    技能列表从左侧栏搬到了主区（见 app.mjs 的 renderSkillCards），所以它得是"卡片"而不是"行"。 */
 .sk-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
-.sk-card { display: flex; align-items: flex-start; gap: 12px; padding: 14px;
+/* 上下布局（2026-11-22 用户，与插件卡同批）：头行 = 图标 + 名称（+内置标签），
+   描述整行铺满 —— 不再缩在图标右侧 */
+.sk-card { display: flex; flex-direction: column; gap: 6px; padding: 14px;
            border: 1px solid var(--line); border-radius: 10px; background: var(--side); cursor: pointer; }
+.sk-card .sk-head { display: flex; align-items: center; gap: 12px; min-width: 0; }
+/* 防御（2026-11-22 实拍）：sw 换版有个"CSS 新了、JS 还旧"的混合窗口 —— 旧标记里
+   头像直接躺在纵排卡上，交叉轴把它拉成一条宽带。钉死尺寸，混合态最多排得不一样，
+   不会变形。 */
+.sk-card > .avatar, .sk-card .sk-head .avatar { flex: 0 0 38px; width: 38px; height: 38px; align-self: flex-start; }
 .sk-card:hover { border-color: var(--accent); }
 .sk-card .who { flex: 1; min-width: 0; }
 .sk-card .who b { font-weight: 500; font-size: 14px; }
@@ -1821,7 +1828,8 @@ dialog.pj-add-dlg .dlg-head { margin: 0 -20px; padding: 14px 12px 6px 20px; }
 .pt-title { font-size: 13px; line-height: 1.45; word-break: break-word; }
 .pt-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 5px; }
 .pt-state { font-size: 11.5px; white-space: nowrap; }
-/* 状态色照看板列（跟 .ct-status 同一套 token）：颜色跟着**列**走，不按中文词面自己猜 */
+/* 状态色照看板列（同一套 --st-* token）：颜色跟着**列**走，不按中文词面自己猜。
+   （群里卡票那颗 .ct-status 已于 2026-11-21 去掉，这里的取值口径不变。） */
 .pt-state.idea { color: var(--st-idea); }
 .pt-state.todo { color: var(--st-todo); }
 .pt-state.doing { color: var(--st-doing); }

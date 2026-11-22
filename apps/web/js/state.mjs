@@ -213,7 +213,7 @@ export function setNav(nav, opts = {}) {
     nav === 'messages' ? '消息'
     : nav === 'inbox' ? '信箱'
     : nav === 'contacts' ? '通讯录'
-    : nav === 'workflows' ? '工作流'
+    : nav === 'workflows' ? '流程编排'
     : nav === 'plugins' ? '工作台'
     : nav === 'experts' ? '专家库'
     : nav === 'me' ? '我的'

@@ -29,7 +29,7 @@ import { THEME_KEY, applyTheme, esc, normalizeTheme, readCollapsed, toast } from
 import { api, closeHelpPop, hideTip, openCombo, post, showTip, tipAnchor, tipTimer, wireDialogHead } from './js/ui.mjs';
 import { load, setNav } from './js/state.mjs';
 import { openSettings } from './js/settings.mjs';
-import { CRUMB_GO, connEditing, connSetTransport, connTransport, parseKeyValues, renderPlugins, renderRuntimes } from './js/connectors.mjs';
+import { CRUMB_GO, commitConnJson, connEditing, renderPlugins, renderRuntimes } from './js/connectors.mjs';
 import { closeCtxMenu, hideConversationRow, openCtxMenu, removeConversationForever, wipeScopeOf } from './js/listmenu.mjs';
 import { addMenu, addMenuAnchor, closeAddMenu, contactAddItems, detailSave, gitAddRepoItems, openAddMenu, renderList } from './js/contacts.mjs';
 import { archiveFlowTemplate, deleteFlowTemplate, newTemplateDialog } from './js/workflows.mjs';
@@ -143,48 +143,24 @@ document.addEventListener('click', (e) => {
 
 
 
-$('connTransport').addEventListener('click', (e) => {
-  const b = e.target.closest('[data-tr]');
-  if (b) connSetTransport(b.dataset.tr);
-});
-
-
-
 $('cOk').onclick = async (e) => {
   e.preventDefault();
-  const id = $('cId').value.trim();
-  const body = {
-    id,
-    label: $('cLabel').value.trim() || id,
-    transport: connTransport,
-    command: connTransport === 'stdio' ? $('cCommand').value.trim() : '',
-    args: connTransport === 'stdio' ? $('cArgs').value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean) : [],
-    cwd: connTransport === 'stdio' ? $('cCwd').value.trim() : '',
-    url: connTransport === 'streamable-http' ? $('cUrl').value.trim() : '',
-    bearerTokenEnv: connTransport === 'streamable-http' ? $('cBearer').value.trim() : '',
-    runtimes: [...$('cRuntimes').querySelectorAll('input:checked')].map((el) => el.value),
-  };
-  // 凭据留空＝不动（新建时留空就是没有）
-  const envText = $('cEnv').value.trim();
-  if (envText || !connEditing) body.env = parseKeyValues(envText);
-  const hdrText = $('cHdr').value.trim();
-  if (hdrText || !connEditing) body.headers = parseKeyValues(hdrText);
-
+  // 连接器弹窗只剩一个 JSON 框（2026-11-22 用户：不做界面化的字段翻译）。
+  // 一次可能贴多条 —— 解析与逐条提交都在 js/connectors.mjs 的 commitConnJson 里。
+  const btn = $('cOk');
+  btn.disabled = true;
   try {
-    if (connEditing) {
-      await api(`/api/connectors/${encodeURIComponent(connEditing.id)}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-    } else {
-      await post('/api/connectors', body);
-    }
+    const r = await commitConnJson($('connJson').value, connEditing);
     $('connDlg').close();
     S.pluginTab = 'installed';
     await renderPlugins();
+    if (r.failed.length) toast(`没装成：${r.failed.join('；')}`, 'error');
+    else if (r.ignored.length) toast(`装好了 ${r.ids.length} 条；这些键不认，已忽略：${r.ignored.join('、')}`);
+    else toast(`已装 ${r.ids.length} 条`);
   } catch (err) {
     toast(err.message, 'error');
+  } finally {
+    btn.disabled = false;
   }
 };
 

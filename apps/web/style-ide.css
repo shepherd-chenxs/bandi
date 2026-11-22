@@ -1082,8 +1082,17 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line);
          border-radius: 8px; padding: 0; width: 480px; max-width: 92vw; }
 dialog > form { padding: 0 20px 20px; }
-/* 字段多（名字/类型/命令/参数/环境变量/请求头…）的那个，给宽一点 */
-#connDlg { width: 640px; }
+/* 连接器弹窗（2026-11-22 起只剩一个 JSON 框）：比常规弹窗宽 —— 一行 mcpServers 展开
+   （args 数组、env 对象）很容易超 480。 */
+#connDlg { width: 680px; }
+#connDlg form > b { display: block; margin-bottom: 6px; }
+.conn-note { font-size: 11.5px; color: var(--dim); margin-top: 4px; line-height: 1.5; }
+/* JSON 框：够高、等宽、允许竖向拉伸（配置长短差得多，别写死高度） */
+.conn-json { width: 100%; height: 320px; resize: vertical; box-sizing: border-box;
+             font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+             font-size: 12px; line-height: 1.55; tab-size: 2;
+             background: var(--side); color: var(--text); border: 1px solid var(--line);
+             border-radius: 6px; padding: 10px 12px; }
 /* 起流程：场地那个下拉是**弹窗的最后一个字段**，展开时会超出弹窗底边 ——
    dialog 默认的滚动区会把它直接裁掉（撞过）。这个弹窗要 overflow: visible。
    教训：对话框里放下拉，别把它放在最后一个字段，否则得单独开这个口子。 */
@@ -1354,8 +1363,10 @@ body:not(.mb-narrow) #groupView .mgrid { grid-template-columns: repeat(6, 1fr); 
    紧跟标题行，上下边距比整页页签收一档 —— `.tabs` 自带 18/22px，在详情里会顶出一道空档。 */
 .plg-detail .plg-tabs { margin-bottom: 0; }
 .plg-detail .plg-tabs .tabs { margin: 2px 0 14px; }
-/* 2026-10-25 二轮：卡改小（minmax 330→236），一屏能看更多；详情挪进点击弹窗 */
-.plg-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(236px, 1fr)); gap: 8px; }
+/* 2026-11-22 用户："一行3个"：auto-fill 换固定三列（窗口再宽也 3 个）；
+   窄窗（≤900px，跟 style-machine 的 .plg-cards 先例同档）回落单列 */
+.plg-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+@media (max-width: 900px) { .plg-grid { grid-template-columns: minmax(0, 1fr); } }
 /* 空态（2026-10-26）：撤掉「个人」页那块「手工添加」之后，页面常常只剩这一段。
    全局 `.empty` 是 60px 上下内边距、纯文字居中 —— 整页看上去是一片空。
    这里改成虚线框：**框本身就在说"这格还空着"**，文案只负责指路上哪儿加。 */
@@ -1377,8 +1388,13 @@ body:not(.mb-narrow) #groupView .mgrid { grid-template-columns: repeat(6, 1fr); 
 .plg-grid .plg-card:hover { border-color: color-mix(in srgb, var(--dim) 55%, transparent); }
 /* 可点的详情卡：指针 + 悬停一档提亮（区别于不可点的行） */
 .plg-card-click { cursor: pointer; }
-/* 卡上简介只留两行，全文进详情弹窗 */
-.plg-desc-clamp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+/* 卡上简介只留两行，全文进详情弹窗。
+   2026-11-22 修：`display:-webkit-box` 在**卡片里根本不生效** —— 卡片是 flex 容器，
+   简介是 flex item，按规范会被 blockify（computed display 变成 `flow-root`），
+   `-webkit-line-clamp` 随之失效。横排时看不出来（宽度被 flex 限住，普通换行兜住了），
+   改纵排后立刻现形：长路径按 max-content 一路撑出去，被卡片 overflow:hidden 硬裁。
+   改成限高截断，跟 -webkit-box 无关，任何布局下都成立。3em = 12.5px × 1.5 × 2 行。 */
+.plg-desc-clamp { display: block; max-height: 3em; overflow: hidden; }
 /*
  * 卡上「安装」图标钮（2026-10-25 用户："安装这个按钮太大了，改成图标按钮"）：
  * 文字胶囊换 26×26 幽灵小方钮，口径跟定时任务卡的 .sch-ic 一致 ——
@@ -1392,6 +1408,17 @@ body:not(.mb-narrow) #groupView .mgrid { grid-template-columns: repeat(6, 1fr); 
 .plg-grid .plg-card .plg-ibtn svg { width: 15px; height: 15px; display: block; }
 .plg-grid .plg-card .plg-ibtn:hover { background: var(--hover); color: var(--accent); }
 .plg-grid .plg-card .plg-ibtn:disabled { opacity: .45; }
+/* 软件卡（magpie 这类）：上下布局（2026-11-22 用户）—— 头行 = 图标+标题+安装钮，
+   标签、说明各自一行铺满。与上面同名 .plg-card 的横排同权重（0,2,0），靠后赢；
+   定高 104 撑不住三段，改成内容自适应。右填充 16px：纵排后没有安装钮占位，
+   长路径/长标题会一路顶到卡边（2026-11-22 用户实报），给右侧留口气。
+   ⚠️ `align-items: stretch` 是必须的，别删：上面 .plg-card 是横排、带了
+   `align-items: flex-start`，纵排时它会变成"每行按内容收缩、不撑满卡宽" ——
+   于是说明文字只占左半截、右边留一大块空白（2026-11-22 用户第二次实报，
+   截图里那条竖线就是文字溢出的裁切边）。 */
+.plg-grid .sw-card { flex-direction: column; align-items: stretch; height: auto; padding-right: 16px; }
+.sw-card .sw-head { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.sw-card .sw-head .plg-title { flex: 1; min-width: 0; }
 .plg-card-main { flex: 1; min-width: 0; }
 .plg-ico { flex: 0 0 auto; width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center;
            background: var(--chip); border: 1px solid var(--line); font-size: 14px; font-weight: 600; }
@@ -1403,7 +1430,10 @@ body:not(.mb-narrow) #groupView .mgrid { grid-template-columns: repeat(6, 1fr); 
 /* 界面插件卡的标签行（2026-10-25 用户定稿）：标签在**名称下面**单独一行（仍在图标右侧），
    不再跟名称挤同一行 —— 名称长短不影响标签起点，一列卡看下来更齐 */
 .plg-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
-.plg-desc { margin-top: 3px; font-size: 12.5px; color: var(--dim); line-height: 1.5; }
+/* `overflow-wrap: anywhere` 不是装饰：卡上说明常是 Windows 路径（`E:\...\electron.exe`），
+   反斜杠不是断行点、整串又没有空格，默认规则下它**永远不换行** —— 宽度撑满后会直接
+   溢出卡外被裁掉（2026-11-22 实报）。anywhere 只在放不下时才断，正常词不会被打碎。 */
+.plg-desc { margin-top: 3px; font-size: 12.5px; color: var(--dim); line-height: 1.5; overflow-wrap: anywhere; }
 .plg-meta { margin-top: 3px; font-size: 11.5px; color: var(--dim); word-break: break-all; }
 .plg-req, .plg-warn { margin-top: 4px; font-size: 11.5px; color: var(--warn); }
 .plg-row { align-items: flex-start; }
@@ -1532,18 +1562,9 @@ button.att-add:hover { color: var(--text); border: 0; background: var(--panel); 
 .ct-head { display: flex; align-items: center; gap: 6px; font-size: 11.5px; min-width: 0; }
 .ct-ico { flex: 0 0 auto; font-size: 12px; opacity: .85; }
 .ct-kind { flex: 0 0 auto; color: var(--dim); }
-/* 状态徽标：右上角，列色浅底 + 同色字，整卡只这一处带色，视线一眼落定 */
-.ct-status { flex: 0 0 auto; margin-left: auto; padding: 2px 8px; border-radius: 999px;
-             font-size: 11px; font-weight: 600; line-height: 1.6; color: var(--dim);
-             background: color-mix(in srgb, var(--dim) 10%, transparent); }
-.ct-status.idea { color: var(--st-idea); background: color-mix(in srgb, var(--st-idea) 13%, transparent); }
-.ct-status.todo { color: var(--st-todo); background: color-mix(in srgb, var(--st-todo) 13%, transparent); }
-.ct-status.doing { color: var(--st-doing); background: color-mix(in srgb, var(--st-doing) 13%, transparent); }
-.ct-status.review { color: var(--st-review); background: color-mix(in srgb, var(--st-review) 15%, transparent); }
-.ct-status.blocked { color: var(--st-blocked); background: color-mix(in srgb, var(--st-blocked) 13%, transparent); }
-.ct-status.failed { color: var(--st-failed); background: color-mix(in srgb, var(--st-failed) 13%, transparent); }
-.ct-status.done { color: var(--st-done); background: color-mix(in srgb, var(--st-done) 13%, transparent); }
-.ct-status.cancelled { color: var(--st-cancelled); background: color-mix(in srgb, var(--st-cancelled) 13%, transparent); }
+/* 2026-11-21 用户：「这个卡不要显示状态」—— 群里的卡票只留 📋 类型 + 标题 + 执行人/时间。
+   状态是**消息时刻的快照**，一屏几张票并排看反而误导（同一张卡在不同消息里颜色不一样）；
+   要状态就点进卡详情看实时的。原来那颗 .ct-status 徽标连同 8 条列色规则一并删掉。 */
 .ct-row { display: flex; align-items: baseline; gap: 10px; margin-top: 6px; min-width: 0; }
 .ct-title { flex: 1 1 auto; min-width: 0; font-size: 13.5px; font-weight: 600; color: var(--text);
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

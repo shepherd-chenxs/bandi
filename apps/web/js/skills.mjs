@@ -4517,11 +4517,13 @@ function paintSkillGrid() {
       ? `<div class="sk-grid">${list
           .map(
             (s) => `<div class="sk-card${s.builtin ? ' builtin' : ''}" data-sk="${esc(s.name)}">
-                    <div class="avatar skill">${esc(initial(s.name))}</div>
-                    <div class="who">
-                      <b>${esc(s.name)}${s.builtin ? '<em class="tag-dim" title="内置技能：只允许用，不许改（不能编辑、不能删、不能覆盖导入）">内置</em>' : ''}</b>
-                      <div class="sub">${esc((s.description || '').trim() || '（还没写描述 —— 模型靠这一句决定什么时候用它）')}</div>
+                    <div class="sk-head">
+                      <div class="avatar skill">${esc(initial(s.name))}</div>
+                      <div class="who">
+                        <b>${esc(s.name)}${s.builtin ? '<em class="tag-dim" title="内置技能：只允许用，不许改（不能编辑、不能删、不能覆盖导入）">内置</em>' : ''}</b>
+                      </div>
                     </div>
+                    <div class="sub">${esc((s.description || '').trim() || '（还没写描述 —— 模型靠这一句决定什么时候用它）')}</div>
                   </div>`,
           )
           .join('')}</div>`

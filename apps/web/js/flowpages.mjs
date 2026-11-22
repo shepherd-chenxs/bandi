@@ -1513,8 +1513,8 @@ export async function openDesigner(templateId = null) {
     clearDraft(); // 和模板一样 → 留着没意义，还会下次误报
   }
 
-  // 左栏顶上：工作台 › 工作流（当前流程名在页头那个输入框里，不再往面包屑里塞第三段）
-  setListTitle([{ label: '工作台', to: 'workbench' }, { label: '工作流' }]);
+  // 左栏顶上：工作台 › 流程编排（当前流程名在页头那个输入框里，不再往面包屑里塞第三段）
+  setListTitle([{ label: '工作台', to: 'workbench' }, { label: '流程编排' }]);
   renderFlowList();
   paintDesigner();
 }

@@ -232,6 +232,35 @@ function requireSubCard({ persona, card }) {
 }
 
 /**
+ * **普通卡的执行人必须是发起会话那个群的成员**（2026-11-21 用户实报）：
+ * 雇主在群里问了一句「这个群能为我干嘛」，贺韬把工作区里 12 个未提交的改动当成了活，
+ * 建卡 @ 了一个**不在群里**的嘉辉去提交 —— 卡票进了群，被派的人却看不见这场对话，
+ * 雇主对着 5 人群的名单也对不出这个人，卡成了黑箱。子卡早有同款边界
+ * （requireSubCard：「子卡的执行人不在主卡那个群里」），这里把同一条规矩补到**普通卡**上：
+ * 发起会话是群 → 执行人必须在群。1:1 发起的卡不约束（没有"这个群"可依）；
+ * 补记卡（backfill）不派活、只是补账，不拦 —— 干过活的人未必还在群里。
+ */
+function requireAssigneeInOriginGroup({ convId, card }) {
+  if (!convId || !card.assignee || card.backfill) return;
+  const conv = store.getConversation(convId);
+  const gid = conv?.kind === 'group' ? conv.groupId || conv.id : null;
+  if (!gid) return;
+  const group = store.getGroup(gid);
+  if (!group || group.dissolvedAt) return;
+  if (group.members.some((m) => m.personaId === card.assignee)) return;
+  const name = store.getPersona(card.assignee)?.name ?? card.assignee;
+  const roster = group.members.map((m) => store.getPersona(m.personaId)?.name ?? m.personaId).join('、');
+  throw Object.assign(
+    new Error(
+      `执行人「${name}」不在发起这场派活的群里（群成员：${roster}）—— 群里派活只能派给群成员` +
+        `（【统筹职责】"群里可用"名单就是全部可选）；这人确实该干，先请雇主在群设置里把他拉进群，` +
+        `或改派群里对应岗位的人；实在没人能干，按统筹职责 C 类直接汇报雇主。`,
+    ),
+    { code: 'E2059' },
+  );
+}
+
+/**
  * 建一张（含幂等命中）。返回 `{ task, deduped }`。
  * `startNow` 允许调用方推迟派活（批量口先建完一批、再统一开跑）。
  * **补记卡永远不派活**（`backfill`）—— 活已经干过了，建卡只是补账，重跑等于再干一遍。
@@ -381,6 +410,7 @@ export async function handleAgentCards(req, res, url) {
       card = normalizeCard(body, cardProject, { allowBackfill: true });
       validateGroupCard(card);
       requireSubCard({ persona, card });
+      requireAssigneeInOriginGroup({ convId, card });
       assertNoSameTitle({ persona, card });
     } catch (e) {
       noticeCardFailure({ cred, persona, convId, code: e.code ?? 'E2059', message: e.message });
@@ -423,6 +453,7 @@ export async function handleAgentCards(req, res, url) {
       const card = normalizeCard(raw, project, { allowBackfill: true });
       validateGroupCard(card);
       requireSubCard({ persona, card });
+      requireAssigneeInOriginGroup({ convId, card });
       assertNoSameTitle({ persona, card });
       plan.push(card);
     } catch (e) {

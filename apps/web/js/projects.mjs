@@ -49,7 +49,7 @@ export function workbenchAutoSection({ schedulesOnly = false } = {}) {
     <div class="wb-sec">自动化</div>
     <div class="wb-grid">
       ${wbCard('cron', ICON_WB_CLOCK, '定时任务', '到点自动做一件事：指派人 / 团队协作 / 流程任务', 'data-schedules')}
-      ${schedulesOnly ? '' : wbCard('flow', ICON_WB_FLOW, '工作流', '画流程：节点、指派、发布', 'data-flow-design')}
+      ${schedulesOnly ? '' : wbCard('flow', ICON_WB_FLOW, '流程编排', '画流程：节点、指派、发布', 'data-flow-design')}
       ${published
         .map((f) => wbCard('flow', ICON_WB_FLOW, f.name, '点开看这个流程的发起记录', `data-flow-start="${esc(f.id)}"`))
         .join('')}
@@ -3613,8 +3613,8 @@ export async function paintTaskCardPage(taskId, opts = {}) {
                  ${task.prState === 'open' ? '<button id="tcPrMerge">合并</button>' : ''}
                  <button id="tcPrUnlink">取消关联</button>
                </div>`
-            : `<div class="counter left">还没关联 PR —— 点标题旁的 ＋ 新建，或点链环图标关联一个已有的。</div>
-               <div class="counter left">合并后这张卡会转到「待验收」——不自动「已完成」，等验收人点头。</div>`
+            : '' /* 2026-11-21 用户："去掉这个说明"：未关联 PR 时这块不再写引导文案，
+                    新建 / 关联入口就在标题旁，标题下面直接接「详情」段。 */
         }`}
 
         <h3>详情</h3>
