@@ -683,7 +683,8 @@ prReview.ensurePrReviewTemplate();
 prCreate.ensurePrDeliveryTemplate();
 // 自主交付流程（2026-11-13）：保证内建模板存在并发布，全程无人工拍板节点
 selfDelivery.ensureSelfDeliveryTemplate();
-// 出厂就有一个人能说话：内置系统管家「崔老三」（2026-10-23 前是秘书「喜儿」；幂等，已有则只补 builtin 标记）
+// 出厂就有一个人能说话：内置系统管家「张三」（2026-11-22 用户改名，前名崔老三；2026-10-23 前是秘书「喜儿」；幂等，已有则只补 builtin 标记；
+// 存量库的名字由下面的 syncSteward 刷成新出厂值 —— 2026-10-23 喜儿→崔老三的名额换人走的同一条路）
 // **部署即装**（2026-10-22）：不管谁部署、用什么方式起（安装包 / 源码 start.cmd /
 // systemd / 开机自启），服务起来那一刻「bandi」全局命令就在。幂等 —— 装好了什么都不写。
 // 闸门与实现见 cli-install.mjs（BANDI_DATA 显式指定 = 测试/沙箱，默认不动真实用户目录）。

@@ -68,7 +68,7 @@ git log -L <行号>,<行号+3>:<用例文件>   # 例：git log -L 766,769:apps/
 
 **飞书 / 连接器 / 插件**：`smoke-feishu` 飞书通道 · `smoke-connectors` 连接器接口 · `smoke-plugin-blocks` 插件新版式块
 
-**群 / 专家 / 内置员工**：`smoke-group-dissolve` 群解散（消息留只读）· `smoke-group-mentions` 群 @ 排队 · `smoke-experts` 专家库 · `smoke-steward` 系统管家崔老三 · `smoke-autostart` 开机自启
+**群 / 专家 / 内置员工**：`smoke-group-dissolve` 群解散（消息留只读）· `smoke-group-mentions` 群 @ 排队 · `smoke-experts` 专家库 · `smoke-steward` 系统管家张三 · `smoke-autostart` 开机自启
 
 **桌面壳 / 前端静态**：`apps/desktop/smoke-shell.mjs` 壳的 Node 那一半 · `tools/smoke-help-pop.mjs` 标题旁 ? 弹层
 
