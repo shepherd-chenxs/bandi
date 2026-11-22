@@ -2568,3 +2568,13 @@ skill 的隐私，我看 workbuddy 就做的很好"（截图 = WorkBuddy 的技�
 
 `js/skills.mjs` / `app.mjs` / `style.css` / `index.html` / `routes/skill.mjs` 动了，
 `sw.js` → v317。
+
+## v318（2026-11-22）技能卡弹窗补个标题
+
+用户截图圈了弹窗顶上那块空白："加个标题：技能卡"。
+
+`<form>` 顶上裸写一个 `<b>技能卡</b>`（跟「员工简卡」「关联项目」那几个弹窗同一种写法），
+原来 `.skv-head` 顶上那 18px 留白让给标题接管，头像行收到 10px —— 免得标题和名字之间
+隔出一条河。
+
+只动 `index.html` + `style.css`，`sw.js` → v318。

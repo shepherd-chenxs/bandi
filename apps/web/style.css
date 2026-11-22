@@ -1595,7 +1595,9 @@ button.pill.gr-pr-task:hover { color: var(--accent); border-color: var(--accent)
    等于把方法论摊在界面上。改成弹窗后只给名字 / 描述 / 挂在谁身上 / 动作，
    正文不上界面；内置技能的正文连服务端都不下发（routes/skill.mjs 的 GET）。
    卡片上描述截三行，这里要看全 —— 不截断、行高放宽到 1.65。 */
-#skViewDlg .skv-head { display: flex; align-items: center; gap: 12px; padding-top: 18px; }
+#skViewDlg form > b { display: block; padding-top: 18px; font-size: 13px; }
+/* 顶上那 18px 的气由标题接管了（标题在上面），头像行只留 10px 的间隔 */
+#skViewDlg .skv-head { display: flex; align-items: center; gap: 12px; padding-top: 10px; }
 #skViewDlg .skv-head .avatar { flex: 0 0 40px; width: 40px; height: 40px; font-size: 15px; }
 #skViewDlg .skv-title { min-width: 0; display: flex; align-items: center; gap: 2px; }
 #skViewDlg .skv-title b { font-size: 15px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

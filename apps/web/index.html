@@ -379,6 +379,9 @@
      弹窗只放：名字 / 描述 / 挂在谁身上 / 动作 —— 不再有正文预览框。 -->
 <dialog id="skViewDlg">
   <form method="dialog">
+    <!-- 标题（2026-11-22 用户："加个标题：技能卡"）：跟员工简卡同一种写法，
+         让弹窗顶上有个名分，也把原来 .skv-head 顶上那 18px 空白接管过来。 -->
+    <b>技能卡</b>
     <div class="skv-head">
       <div class="avatar skill" id="skvAvatar"></div>
       <div class="skv-title"><b id="skvName"></b><em class="tag-dim" id="skvBuiltin" hidden>内置</em></div>
