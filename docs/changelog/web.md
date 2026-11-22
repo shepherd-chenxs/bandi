@@ -2121,3 +2121,270 @@ scrollHeight = clientHeight（整页不再多出滚动条）。减到 200 会溢
   `S.conversations` —— 兜多窗口/轮询前的窗口期），不算「当前」就落口径③新建第一段。
 
 `chat.mjs` + `listmenu.mjs` 都动了，`sw.js` → v271。
+
+## v272（2026-11-22）添加连接器弹窗撤掉顶部说明行
+
+用户："这个说明去掉"。`connDlg` 顶部那句「连接器 = 一条外部能力的登记…」删掉 ——
+连接器页自身已有说明，弹窗重复一遍是噪音。
+
+只动了 `index.html`（connDlg 静态文案），`sw.js` → v272。
+
+## v273（2026-11-22）连接器弹窗：字段改叫 id / 名称，id 可留空自动生成
+
+用户拍板两件事：①「名字 / 显示名」容易混淆，改叫 **id / 名称**；②「id 自动生成不更好吗」。
+
+- `index.html`：connDlg 两个标签改名；id 标签写明"可留空自动生成 —— 它是 MCP 服务器名、
+  工具名的前缀，定了就别再改"；placeholder 换成宝螺的真实例子。
+- `app.mjs`：新建时 id 留空 → 自动生成 `conn-xxxxxx`。仍可手填：id 是工具名的前缀
+  （mcp__<id>__<工具>）、codex 里按它去 tool_search，语义化的名字（baoluo / github）
+  对模型找工具有帮助 —— 所以生成只是兜底，不是强制。
+- `connectors.mjs`：openConnDialog 注释同步（id 留空生成的口径）。
+
+`index.html` + `app.mjs` + `connectors.mjs` 都动了，`sw.js` → v273。
+
+## v274（2026-11-22）添加/编辑连接器弹窗改左标签右输入
+
+用户："改成左标签，右输入框的模式。因为 PC 端是横屏。"
+
+- `index.html`：connDlg 重排成设置页同款 `.form-row` 骨架（左 `.row-label` + 右字段）；
+  长说明（"一行一个 KEY=值""留空自动生成"那几句）从输入框上方收进标签的 `.fx-note`，
+  右列只留字段。元素 id 全部未动，JS 接线零改动。
+- `style-ide.css`：`#connDlg` 640 → 680px，标签列 150px，行高收到弹窗密度（9px）；
+  多行字段挂 `.top` 让标签顶对齐。`sw.js` → v274。
+
+## v275（2026-11-22）连接器弹窗 id 行的注释撤掉
+
+用户："去掉"。id 行的 .fx-note（"留空自动生成；字母数字…"）整条撤掉 —— placeholder
+已经说了"留空自动生成"，编辑态 id 本来就锁定，重复说明把行撑高。行从 .top 改回居中。
+
+只动 `index.html`，`sw.js` → v275。
+
+## v276（2026-11-22）连接器弹窗：凭据键提示空态不再显示
+
+用户："去掉"。「目前没有环境变量 / 目前没有请求头」两句空态噪音撤掉 ——
+凭据键提示（"现有：XXX（留空＝不动）"）只在编辑真有键的连接器时出现（凭据值
+不回吐，键名得有个地方告诉用户）。display:none 切换，元素 id 未动。
+
+`index.html` + `connectors.mjs` 都动了，`sw.js` → v276。
+
+## v277（2026-11-22）连接器弹窗：字段说明挪到输入框下方
+
+用户："这些说明放到输入框下面"。左列只留字段名（id/名称/参数/工作目录/环境变量/
+请求头/给哪些运行时用），各字段的说明（"一行一个 KEY=值""可空"…"都不勾＝全部"）
+统一变成输入框下方的小字 `.conn-note` —— 左列不再被长说明撑出高低差。
+
+`index.html` + `style-ide.css`（新增 .conn-note）动了，`sw.js` → v277。
+
+## v278（2026-11-22）连接器弹窗标签右对齐
+
+用户："标签右对齐"。`#connDlg .row-label { text-align: right }` —— 标签贴住输入框那一侧，
+主流设置表单的做法。只动 `style-ide.css`，`sw.js` → v278。
+
+## v279（2026-11-22）连接器弹窗标签右对齐改回左对齐
+
+用户："改回来"。v278 的 text-align: right 撤掉，标签回左对齐。只动 `style-ide.css`，
+`sw.js` → v279。
+
+## v280（2026-11-22）连接器弹窗：请求头归入 http 类型专属区
+
+用户："这个模式有请求头吗"——stdio 是本机子进程，没有 HTTP 请求，请求头只有
+远端服务（http）用。原来它挂在公共区，选 stdio 时看着像"该填但没填"。
+挪进 #cHttp（端点 URL / Bearer / 请求头一组），connSetTransport 的显隐切换
+顺带管住它；环境变量（stdio/http 都能用的凭据通道）保持公共，放 http 块之后。
+
+`index.html` 动了（id 未动、JS 零改动），`sw.js` → v280。
+
+## v281（2026-11-22）连接器弹窗：环境变量归入 stdio 专属区（核对出最后一个混杂字段）
+
+用户："再核对一下，两种模式的参数还有没有混杂的"。对着 connectors.mjs 的三条接线
+（codex / dsh / claude）逐字段核：**http 接线只吃 url / headers / bearerTokenEnv，
+条目上的 env 从来没人读**（headers 里的 env: 引用是从班底进程环境解析的）。
+环境变量挪进 #cStdio（与请求头归 http 对称），公共区只剩 id / 名称 / 类型 / 运行时。
+编辑 http 条目时旧 env 不丢：PATCH 不带 env 字段 = 账本合并保留。
+
+`index.html` 动了（id 未动、JS 零改动），`sw.js` → v281。
+
+## v282（2026-11-22）插件页：分节标签与说明行撤掉
+
+用户："这些说明去掉"。撤掉四处：①「软件」分节头的「独立软件 · 装在这台机器上」标签；
+②已安装页脚注「它们独立运行、自己管自己…」；③「连接器」分节头的「接进运行时的外部
+工具」标签；④连接器卡下的三行说明（点卡看详情 / npm 缓存 / Codex tool_search）。
+公开页「点「安装」= 拿官方安装包…」的脚注不在截图范围，保留；卡片自身的小标签
+（独立软件/已安装/网关在跑等）也保留。
+
+`connectors.mjs` 动了，`sw.js` → v282。
+
+## v283（2026-11-22）插件公开页：两处说明撤掉
+
+用户："去掉"。①公开页「软件」脚注「点「安装」= 拿官方安装包…」（与 v282 已安装页
+脚注同批）；②公开页「连接器」分节头标签「随仓库走的清单」。
+
+`connectors.mjs` 动了，`sw.js` → v283。
+
+## v284（2026-11-22）软件卡改上下布局
+
+用户："这个卡现在是左右布局，改成上下布局"（magpie 那张）。swCardHTML 重排：
+头行 = 图标 + 标题 + 安装钮（.sw-head），标签行、说明行各自铺满卡宽；
+`.plg-grid .sw-card` 纵排（与 .plg-grid .plg-card 横排同权重靠后赢），定高 104 改内容自适应。
+
+`connectors.mjs` + `style-ide.css` 动了，`sw.js` → v284。
+
+## v285（2026-11-22）插件模块其余卡统一上下布局
+
+用户："插件模块的其他卡也这么改"。三张卡换成与软件卡同款 sw-card 纵排：
+①界面插件卡（plgPanelCardHTML，配置有问题标签跟标题同行、安装钮进头行）；
+②已安装连接器卡（plgConnCardHTML，plg-warn 警示行铺满卡宽移到说明下）；
+③公开连接器卡（plgCardHTML，下载钮进头行）。CSS 的 .sw-card 规则上一版已就位。
+
+`connectors.mjs` 动了，`sw.js` → v285。
+
+## v286（2026-11-22）插件页签「个人」改「自定义」
+
+用户："个人改成自定义"。PLG_TABS 里的页签文案改掉（分节头「本机来源」不动）。
+只动 `connectors.mjs`，`sw.js` → v286。
+
+## v287（2026-11-22）连接器弹窗：不做界面化翻译，只剩一个 JSON 框
+
+用户："这个是有技术含量的。即便你做成界面化，用户也不会用的。那不如省事一点，不做这个
+界面化的翻译。" 于是把 #connDlg 的字段表单（id / 名称 / 类型 / 可执行文件 / 参数 / 工作目录 /
+环境变量 / URL / Bearer / 请求头 / 运行时）整块删掉，换成一个 textarea：贴一段 `mcpServers`，
+形状与 Claude Desktop / Cursor / 本仓 renderClaudeConfig 一致（导出即导入）。可一次贴多条。
+
+纯解析拆到新模块 `js/connjson.mjs`（不碰 DOM，node 直接可测）：吃
+`{"mcpServers":{...}}` / 单条内层对象 / 顶层 id→配置 三种形态；`${X}`、`${env:X}` 归一成
+`env:X`；认不出的键收集后 toast 一句（不静默吞）。改条目时 id 以账本为准。
+
+**同日修正（用户追问「代价没看懂」时查出来的真 bug）**：最初版本「改」时把 env 回填成
+`env:KEY`、原文没写的字段落成 `{}` —— 前者会让字面量凭据变成引用（那个环境变量可能不存在，
+一条跑得好的连接器当场不能用），后者更狠，直接清空凭据。现在 `entryToMcp` 不输出 env/headers，
+`parseConnJson` 只在原文**真写了** env/headers 才放进 body（不写＝服务端 merge 保留原值，
+显式 `env: {}` 才是清空），弹窗多一行灰字「现有凭据键：X、Y，不动就别写」。
+merge 语义已实测：只改 args 后凭据字节不变；`env:{}` 才清。
+
+连带清掉 `connTransport` / `connSetTransport` / `parseKeyValues` 三个导出（app.mjs 同步）。
+`connectors.mjs`、`app.mjs`、`index.html`、`style-ide.css`、`sw.js` 动了，`sw.js` → v287。
+
+## v288（2026-11-22）插件页签切换不再闪（基于 v287 之上）
+
+用户："切换 tab 页面会闪"。页签点击原来走 `renderPlugins()` 全量重画：先把整页抹成
+「加载中…」、再发 5 个 API 请求、重建整页 —— 而换页签时数据都在内存里，只有 #plgBody
+的内容不同。新增 `switchPlgTab(key)` 轻量路径：翻页签 on 态 + 换 #plgBody + 重新接线，
+不动页签条、不发请求、不碰滚动位置。renderPlugins 保留给进页/装完/卸完那些**真需要
+重新拉数**的时机。
+
+与 v287（连接器弹窗 textarea 化）无交叠：只动 `wirePlugins` 的页签分支。`connectors.mjs`
+动了，`sw.js` → v288。
+
+## v289（2026-11-22）插件卡墙固定一行 3 个
+
+用户："改成一行3个"。`.plg-grid` 的 auto-fill(minmax 236) 换成固定三列（窗口再宽
+也 3 个）；≤900px 窄窗回落单列（照 style-machine 的 .plg-cards 先例）。
+只动 `style-ide.css`，`sw.js` → v289。
+
+## v290（2026-11-22）插件页：分节标题撤掉，软件/界面插件/连接器拼一面卡墙
+
+用户："标题去掉，也不要区分软件和连接器，都放一起展示"。公开页与已安装页都改成
+**单一 .plg-grid**（软件卡 → 界面插件卡 → 连接器卡顺序混排），「软件」「界面插件」
+「连接器」三个分节头删除；swSectionHTML 整个函数退场（两张页都不再分节）。
+「自定义」页只有一个来源（本机连接器），分节头「本机来源」保留。
+
+`connectors.mjs` 动了，`sw.js` → v290。
+
+## v291（2026-11-22）sw-card 补右填充
+
+用户："这个卡要有右填充，现在文字直接靠近右边的边界了"。纵排卡没有安装钮占位，
+长路径/长标题一路顶到卡边 —— `.plg-grid .sw-card` 补 `padding-right: 16px`。
+只动 `style-ide.css`，`sw.js` → v291。
+
+## v292（2026-11-22）自定义页分节头「本机来源」撤掉
+
+用户："去掉"。自定义页只剩一种卡，分节头没有信息量 —— 连 section 壳一起退场，
+卡片墙/空态直接铺。只动 `connectors.mjs`，`sw.js` → v292。
+
+## v293（2026-11-22）卡片右侧空白带：两个叠加的布局 bug
+
+用户第二次报「右边还是没有填充」，圈出卡内右侧那片空白。headless + 本机钥匙进真页面量出来：
+
+1. **`.plg-desc` 宽 390 而卡片内容宽只有 292** —— 上面 `.plg-grid .plg-card` 是横排、
+   带着 `align-items: flex-start`，`.sw-card` 改纵排时**没把它改回 stretch**，
+   于是每一行都按内容收缩、不撑满卡宽；长路径（Windows 反斜杠不是断行点、整串无空格）
+   按 max-content 一路撑出去，被卡片 `overflow:hidden` 硬裁 —— 那条竖线就是裁切边。
+2. **`-webkit-line-clamp` 在卡片里一直没生效** —— 卡片是 flex 容器，`.plg-desc` 是 flex item，
+   按规范 display 被 blockify（computed 变 `flow-root`），`-webkit-box` 那套随之作废。
+   横排时宽度被 flex 限住所以看不出来，纵排后立刻现形。
+
+修：`.plg-grid .sw-card` 补 `align-items: stretch`；`.plg-desc` 补 `overflow-wrap: anywhere`；
+`.plg-desc-clamp` 改成 `display:block + max-height:3em`（不再依赖 -webkit-box，任何布局都成立）。
+
+只动 `style-ide.css`，`sw.js` → v293。
+
+## v294（2026-11-22）连接器卡片第三行改成简述
+
+用户："这个改成简述" —— 卡上第三行原样铺 `命令 + 全部参数`，一个 electron 的绝对路径就吃满
+两行截断，看过去全是 `E:/CodeSpace/github/...`，等于没说明。
+
+三档取值（`plgConnCardHTML`）：目录里的官方描述 → 自己写的 `note` → `connBrief()` 摘要。
+摘要规则：本地进程只留 `命令文件名 + 脚本文件名`（`electron.exe bridge.cjs`），位置参数里
+**包名优先于绝对路径**（`npx @scope/pkg` 不该被后面的目录顶掉）；远端服务只给域名。
+
+连带修一个哑火：`publicList()` 从来没把 `note` 发给前端，详情弹窗里 `c.note` 那段一直是死代码
+（永远不显示）。现在补上了 —— 服务端改动，**要重启服务/桌面 App 才生效**。
+
+`connectors.mjs`（服务端）、`connjson.mjs`、`connectors.mjs`（前端）、`tools/check-connjson.mjs`
+（+5 条断言）、`sw.js` → v294。
+
+## v295（2026-11-22）卡片简述改成"接过来的能力"，工具清单进账本
+
+用户："简述 baoluo 接过来的能力" —— 上一版的兜底是「连接方式」（`electron.exe bridge.cjs`），
+那说的是怎么启动，不是用户关心的"这玩意儿能干什么"。
+
+- **服务端**：`tools` 进账本（`normalize` 保留，`publicList` 下发）。装/改完
+  `routes/connector.mjs` 里 `rememberTools()` 顺手 `probe()` 一次写回（fire-and-forget，
+  20s 自己放弃，**不挡保存**）；`POST /probe` 探到也写回。
+- **前端**：卡片第三行顺序 → 目录描述 → `note` → `toolsBrief(tools)` → 连接方式兜底。
+  `toolsBrief` 在 `connjson.mjs`（纯函数）：去掉连接器 id 前缀（`baoluo_`），
+  前 5 个用「、」连，超过就收成「等 N 个工具」。
+- **详情弹窗**：多一行「接过来的 N 个工具：a、b、c…」（全清单，卡上装不下）。
+- 宝螺账本那句 `note` 按实探的 12 个工具重写：
+  「解析链接、下载、转录、写脚本、分镜、配音、合成、生图」（完整版 45 字在 264px 卡上会截掉
+  最后两个字，去掉「共 12 个工具」的尾巴后两行刚好）。
+
+在临时实例（BANDI_DATA=tmp/tdata，端口 18799）上登录实截：卡 321 宽、正文 292、
+两行 38px、`overflowX:false`，以「生图」结尾无省略号。**服务端改动要重启才生效。**
+`sw.js` → v295。
+
+## v296（2026-11-22）连接器卡显示版本号（探针 serverInfo.version）
+
+用户："显示宝螺的版本号"。版本唯一可靠来源是 MCP 握手的 `serverInfo.version`
+（宝螺 headless 报自己 package.json 的 1.1.0）。
+
+- **服务端** `connectors.mjs`：`probe()` 加 60s 成功缓存 —— 卡片要显示版本后会反复探，
+  60s 内同一条回缓存不重复拉起进程；与 v295 的 rememberTools 探针互补（保存时真探
+  写回工具清单，60s 内卡片补标签直接吃缓存）。**服务端改动要重启生效。**
+- **前端** `connectors.mjs`：`plgConnCardHTML` 标签行加版本小标签（缓存命中直接画）；
+  新增 `probeConnVersions()` 后台探（渲染/换页签后触发，5 分钟 TTL，失败放开下轮再试），
+  探到就地往 .plg-tags 尾部补 `v1.1.0`。公开页没有账本卡不探；内置（ssh）与 http 类型
+  跳过（http 探不了）。
+
+`connectors.mjs`（前端+服务端）、`sw.js` 动了，`sw.js` → v296。
+
+  **补充（同日）**：探针路由从 tools/list 的响应里取 serverInfo —— 那个响应没有这个键，
+  永远 null。改从 **initialize（id=1）** 的响应里拿。另：常驻服务是"先到先得"（端口被占
+  + 健康通过 = 新实例安静退出），换代码后必须杀掉旧 `--service` 进程才会换血。
+
+## v297（2026-11-22）技能卡改上下布局
+
+用户："这个改成上下布局"（技能卡，与插件卡同批）。头行 = 图标 + 名称（+内置标签），
+描述整行铺满 —— 不再缩在图标右侧。`.sk-card` 改纵排 + 新增 `.sk-head` 行，
+标记在 `skills.mjs` 的 paintSkillGrid 里重排。
+
+`skills.mjs` + `style.css` 动了，`sw.js` → v297。
+
+## v298（2026-11-22）技能卡图标钉死正方形圆角
+
+用户："这个是字体图标，应该是方形的""应该是正方形圆角，不是长方形"。实拍里图标被拉成
+宽长条 —— sw 换版有个"CSS 新了、JS 还旧"的混合窗口：旧标记里头像直接躺在纵排卡上，
+交叉轴把它拉满。防御规则把技能卡里的头像钉死 38×38（.avatar.skill 自带 8px 圆角），
+任何混合态最多排得不一样，不会变形。
+
+`style.css` 动了，`sw.js` → v298。

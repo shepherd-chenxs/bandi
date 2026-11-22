@@ -1565,8 +1565,15 @@ button.pill.gr-pr-task:hover { color: var(--accent); border-color: var(--accent)
 /* 「设置 → 技能」主区的技能卡片：宫格，一张一个技能。
    技能列表从左侧栏搬到了主区（见 app.mjs 的 renderSkillCards），所以它得是"卡片"而不是"行"。 */
 .sk-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
-.sk-card { display: flex; align-items: flex-start; gap: 12px; padding: 14px;
+/* 上下布局（2026-11-22 用户，与插件卡同批）：头行 = 图标 + 名称（+内置标签），
+   描述整行铺满 —— 不再缩在图标右侧 */
+.sk-card { display: flex; flex-direction: column; gap: 6px; padding: 14px;
            border: 1px solid var(--line); border-radius: 10px; background: var(--side); cursor: pointer; }
+.sk-card .sk-head { display: flex; align-items: center; gap: 12px; min-width: 0; }
+/* 防御（2026-11-22 实拍）：sw 换版有个"CSS 新了、JS 还旧"的混合窗口 —— 旧标记里
+   头像直接躺在纵排卡上，交叉轴把它拉成一条宽带。钉死尺寸，混合态最多排得不一样，
+   不会变形。 */
+.sk-card > .avatar, .sk-card .sk-head .avatar { flex: 0 0 38px; width: 38px; height: 38px; align-self: flex-start; }
 .sk-card:hover { border-color: var(--accent); }
 .sk-card .who { flex: 1; min-width: 0; }
 .sk-card .who b { font-weight: 500; font-size: 14px; }

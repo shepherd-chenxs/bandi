@@ -19,7 +19,7 @@
  * 这个文件原来是 837 行里 722 行注释 —— 改缓存策略前得先翻过 160 个版本。
  * 改法不变：动静态清单就 VERSION +1，并去那边补一条"为什么进这一版"。
  */
-const VERSION = 'v271';
+const VERSION = 'v298';
 const CACHE = `bandi-static-${VERSION}`;
 
 /*
@@ -32,6 +32,9 @@ const JS_MODULES = [
   // 2026-11-19 从 chat.mjs 拆出的选择器模块（权限 / 模型两颗下拉）—— 新增模块必须进这份清单
   '/js/composer-pickers.mjs',
   '/js/connectors.mjs',
+  // 2026-11-22 连接器弹窗改成「贴一段 mcpServers」后拆出的纯解析模块（不碰 DOM）——
+  // 新增模块必须进这份清单，否则老客户端整页白。
+  '/js/connjson.mjs',
   '/js/contacts.mjs',
   '/js/core.mjs',
   '/js/events.mjs',

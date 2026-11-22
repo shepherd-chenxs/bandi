@@ -57,7 +57,6 @@ export const S = {
   connectors: [],
   catalog: [],
   catalogError: null,
-  runtimeFamilies: [],
   theme: 'system',          // light | dark | system
   rtScan: null,             // 「识别本机运行时」的扫描结果（null = 这轮还没扫过）
   taskPoll: null,           // 「有活在做就自己刷」的定时器（见 scheduleTaskPoll）

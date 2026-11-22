@@ -423,51 +423,18 @@
   </form>
 </dialog>
 
+<!-- 添加连接器（2026-11-22 用户拍板：MCP 本身有技术含量，做成界面化翻译用户也不会用，
+     干脆不做 —— 弹窗里就是一个 JSON 框，贴 mcpServers 那一层，可一次多条；
+     解析在 js/connjson.mjs 的 parseConnJson（机械映射、不搞预览），这里只管提交。
+     形状与 Claude Desktop / Cursor / 本仓导出的 claude 配置一致：导出即导入。 -->
 <dialog id="connDlg">
   <form method="dialog">
     <b id="connDlgTitle">添加连接器</b>
-    <div class="dim" style="font-size:12px;margin-top:2px">
-      连接器 = 一条外部能力的登记。班底只登记和接线，代码在 codex / dsh 自己的进程里跑。
+    <div class="conn-note" style="margin:6px 0 8px">
+      贴一段 <code>mcpServers</code> 配置，可一次贴多条；凭据写 <code>env:变量名</code> 表示引用环境变量。
+      <span id="connKeys"></span>
     </div>
-
-    <label>名字（字母数字 _ -，1–32 位；两个运行时都用它当服务器的名字）</label>
-    <input id="cId" placeholder="例如 filesystem" spellcheck="false" />
-    <label>显示名</label>
-    <input id="cLabel" placeholder="例如 文件系统" />
-
-    <label>类型</label>
-    <div class="seg" id="connTransport">
-      <button type="button" data-tr="stdio">本地进程（stdio）</button>
-      <button type="button" data-tr="streamable-http">远端服务（http）</button>
-    </div>
-
-    <div id="cStdio">
-      <label>可执行文件</label>
-      <input id="cCommand" placeholder="例如 npx / node / 某个 exe 的绝对路径" spellcheck="false" />
-      <label>参数（一行一个）</label>
-      <textarea id="cArgs" style="height:70px" spellcheck="false" placeholder="-y&#10;@modelcontextprotocol/server-filesystem&#10;E:某个目录"></textarea>
-      <label>工作目录（可空）</label>
-      <input id="cCwd" spellcheck="false" />
-    </div>
-
-    <div id="cHttp" class="plg-hidden">
-      <label>端点 URL</label>
-      <input id="cUrl" placeholder="https://example.com/mcp" spellcheck="false" />
-      <label>Bearer 令牌的环境变量名（可空）</label>
-      <input id="cBearer" placeholder="例如 MCP_TOKEN" spellcheck="false" />
-    </div>
-
-    <label>环境变量（一行一个 KEY=值；值写成 env:名字 表示引用环境变量）</label>
-    <div class="dim" style="font-size:11.5px" id="cEnvKeys">目前没有环境变量</div>
-    <textarea id="cEnv" style="height:64px" spellcheck="false" placeholder="GITHUB_PERSONAL_ACCESS_TOKEN=env:GITHUB_PERSONAL_ACCESS_TOKEN"></textarea>
-
-    <label>请求头（只有 http 用；一行一个 KEY=值，规则同上）</label>
-    <div class="dim" style="font-size:11.5px" id="cHdrKeys">目前没有请求头</div>
-    <textarea id="cHdr" style="height:52px" spellcheck="false" placeholder="Authorization=env:MCP_TOKEN"></textarea>
-
-    <label>给哪些运行时用（都不勾＝全部）</label>
-    <div id="cRuntimes" class="plg-rts"></div>
-
+    <textarea id="connJson" class="conn-json" spellcheck="false"></textarea>
     <div class="dlg-actions">
       <button type="button" value="cancel">取消</button>
       <button class="primary" id="cOk" value="ok">保存</button>

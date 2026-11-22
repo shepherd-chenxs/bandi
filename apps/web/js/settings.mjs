@@ -1099,9 +1099,6 @@ async function loadReplyStyle() {
             ${styles.map((s) => `<button data-style-opt="${esc(s.id)}" class="${s.id === cur ? 'on' : ''}">${esc(s.label)}</button>`).join('')}
           </div>
         </div>
-        <div class="set-row">
-          <p class="hint">「言简意赅」：动作先行、最多五步、一次只问一件事 —— 只管对话里的汇报，文档/稿子/结论表这些交付物不受影响。切换后下一轮对话就生效。</p>
-        </div>
       </div>
     </section>`;
   $('styleSeg')?.querySelectorAll('[data-style-opt]').forEach((el) => {
