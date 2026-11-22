@@ -29,7 +29,7 @@ import { THEME_KEY, applyTheme, esc, normalizeTheme, readCollapsed, toast } from
 import { api, closeHelpPop, hideTip, openCombo, post, showTip, tipAnchor, tipTimer, wireDialogHead } from './js/ui.mjs';
 import { load, setNav } from './js/state.mjs';
 import { openSettings } from './js/settings.mjs';
-import { CRUMB_GO, commitConnJson, connEditing, renderPlugins, renderRuntimes } from './js/connectors.mjs';
+import { CRUMB_GO, commitConnJson, connEditing, renderRuntimes, repaintExtensions } from './js/connectors.mjs';
 import { closeCtxMenu, hideConversationRow, openCtxMenu, removeConversationForever, wipeScopeOf } from './js/listmenu.mjs';
 import { addMenu, addMenuAnchor, closeAddMenu, contactAddItems, detailSave, gitAddRepoItems, openAddMenu, renderList } from './js/contacts.mjs';
 import { archiveFlowTemplate, deleteFlowTemplate, newTemplateDialog } from './js/workflows.mjs';
@@ -152,8 +152,10 @@ $('cOk').onclick = async (e) => {
   try {
     const r = await commitConnJson($('connJson').value, connEditing);
     $('connDlg').close();
+    // 连接器与插件已拆成两个分节（2026-11-22）：装完重画**用户当前待的那一页**
     S.pluginTab = 'installed';
-    await renderPlugins();
+    S.connTab = 'installed';
+    await repaintExtensions();
     if (r.failed.length) toast(`没装成：${r.failed.join('；')}`, 'error');
     else if (r.ignored.length) toast(`装好了 ${r.ids.length} 条；这些键不认，已忽略：${r.ignored.join('、')}`);
     else toast(`已装 ${r.ids.length} 条`);

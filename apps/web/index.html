@@ -382,16 +382,22 @@
     <!-- 标题（2026-11-22 用户："加个标题：技能卡"）：跟员工简卡同一种写法，
          让弹窗顶上有个名分，也把原来 .skv-head 顶上那 18px 空白接管过来。 -->
     <b>技能卡</b>
-    <div class="skv-head">
-      <div class="avatar skill" id="skvAvatar"></div>
-      <div class="skv-title"><b id="skvName"></b><em class="tag-dim" id="skvBuiltin" hidden>内置</em></div>
+    <!-- 两栏（2026-11-22 用户："左边是卡，右边是绑定的数字员工"）：
+         左栏 = 技能卡本体（头像 / 名字 / 描述），右栏 = 挂载。
+         骨架照定时任务弹窗的 .sch-cols（左吃余宽、右定宽、竖线当分界）。 -->
+    <div class="skv-cols">
+      <div class="skv-main">
+        <div class="skv-head">
+          <div class="avatar skill" id="skvAvatar"></div>
+          <div class="skv-title"><b id="skvName"></b><em class="tag-dim" id="skvBuiltin" hidden>内置</em></div>
+        </div>
+        <div class="skv-desc" id="skvDesc"></div>
+      </div>
+      <div class="skv-side">
+        <label>挂在哪些员工上 <span class="count" id="skvCount"></span></label>
+        <div class="chips" id="skvChips"></div>
+      </div>
     </div>
-    <div class="skv-desc" id="skvDesc"></div>
-    <div class="skv-sec">
-      <label>挂在哪些员工上 <span class="count" id="skvCount"></span></label>
-      <div class="chips" id="skvChips"></div>
-    </div>
-    <div class="skv-note dim" id="skvNote" hidden>内置技能：正文随平台发布，界面上不展示。</div>
     <div class="dlg-actions">
       <div class="skv-left">
         <button type="button" id="skvEdit" hidden>编辑正文</button>

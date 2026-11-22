@@ -1,7 +1,7 @@
 /* experts.mjs —— 专家库、界面插件。
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
 import { esc, savePlace, setRoute, toast } from './shell.mjs';
-import { ICON_WB_CODE, ICON_WB_SSH, api, failHtml, initial, personaAvatar, post, renderMarkdown, wireDialogHead } from './ui.mjs';
+import { ICON_WB_CODE, ICON_WB_SSH, api, failHtml, initial, personaAvatar, post, wireDialogHead } from './ui.mjs';
 import { load, setNav } from './state.mjs';
 import { breadcrumb, headRow } from './connectors.mjs';
 import { askText, confirmDo } from './machine.mjs';
@@ -56,11 +56,15 @@ export async function loadExperts() {
  */
 let expertQ = '';
 
-/** 专家卡按搜索词过滤：命中**花名 / 岗位 / 一句话介绍 / 技能名**任一处即留（不区分大小写）。
- * 已雇佣的按**他现在的名字**匹配（用户改过名的话，搜新名要能搜到）。 */
+/** 专家卡按搜索词过滤：命中**花名 / 岗位 / 一句话介绍 / 擅长**任一处即留（不区分大小写）。
+ * 已雇佣的按**他现在的名字**匹配（用户改过名的话，搜新名要能搜到）。
+ * 技能名也在串里但不出现在界面上 —— 搜 `bandi-repo` 能搜到人，搜「拆活」也能（2026-11-22）。 */
 function expertMatches(x, q) {
   const name = x.hiredPersona?.name || x.name || '';
-  const hay = [name, x.role, x.intro, ...(x.skills ?? []).map((s) => s.name)].join('\n').toLowerCase();
+  const hay = [name, x.role, x.department, x.intro, ...(x.skills ?? []).map((s) => s.name), ...(x.strengths ?? []).map((s) => `${s.t} ${s.d ?? ''}`)]
+    .filter(Boolean)
+    .join('\n')
+    .toLowerCase();
   return hay.includes(q);
 }
 
@@ -118,11 +122,15 @@ export function expertCard(x) {
 
 /**
  * 人物详情弹窗（2026-10-25 用户要求：点人物卡，弹出人物详情卡）。
- * 版式（2026-10-25 二改：简介上移常驻、首个页签改名「技能」）：
- *   · 头部＝大头像、花名/岗位/雇佣状态；
- *   · **简介放页签上方**，两个页签都看得见；
- *   · 页签「技能」＝技能清单（名 + 一句话描述）；「岗位说明」＝instructions 全文自然排版
- *     （本来就是 markdown，走 renderMarkdown）。
+ *
+ * **2026-11-22 重做版式**：用户："主要介绍一下这个人，以及能力就可以，不要暴露技术相关细节"。
+ * 原来两个页签（「技能」= 技能 key + 英文说明、「岗位说明」= 指令全文）全是开发视角：
+ * `verification-before-completion` 配一段英文，雇主读完不知道这人会干什么。
+ * 现在就是一页「这个人」：
+ *   头像 + 花名 + 岗位 + 一句话简介 + **擅长**（三四条中文短语，服务端的 strengths）
+ *   下面是雇佣/解聘。
+ * 技能挂载、岗位手册、指令原文一个字没删（都还在服务端、还在生效），只是不再摆到脸上 ——
+ * 要看它们去 `data/` 或代码里看，界面上没有"这人的提示词"这种入口。
  * 雇佣/解聘按钮与卡片右上角那枚胶囊**等价**（同一个 hireExpert / fireExpert），
  * 动作完不关弹窗：afterExpertAction 刷新的是墙和 S.experts，这里按新数据原地重画。
  */
@@ -132,49 +140,27 @@ function paintExpertDetail(x) {
   const avatar = hired
     ? personaAvatar(x.hiredPersona, 'big', x.name)
     : personaAvatar({ name: x.name, avatar: `expert-${x.key}.png` }, 'big', x.name);
+  const str = x.strengths ?? [];
   $('exdBody').innerHTML = `
     <div class="exd-top">
       ${avatar}
       <div class="exd-who">
         <div class="exd-name-row">
           <span class="exd-name">${esc(name)}</span>
-          <span class="exd-role">${esc(x.role || '')} · ${hired ? '<span class="exd-on">已雇佣</span>' : '待雇佣'}</span>
+          <span class="exd-role">${esc(x.role || '')}${x.department ? ' · ' + esc(x.department) : ''} · ${hired ? '<span class="exd-on">已雇佣</span>' : '待雇佣'}</span>
         </div>
         ${x.intro ? `<div class="exd-intro">${esc(x.intro)}</div>` : ''}
       </div>
     </div>
-    <div class="tabs exd-tabs">
-      <button type="button" class="tab on" data-exd-tab="d">技能</button>
-      ${x.instructions ? '<button type="button" class="tab" data-exd-tab="i">岗位说明</button>' : ''}
-    </div>
-    <div data-exd-panel="d">
-      ${x.playbook
-        ? `<div class="exd-sec"><label>岗位手册</label><div class="exd-skill"><b>${esc(x.playbook.name || '')}</b>${x.playbook.description ? `<span>${esc(x.playbook.description)}</span>` : ''}</div><div class="hint">随岗位固定，不单独挂载</div></div>`
-        : ''}
-      ${x.skills?.length
-        ? `<div class="exd-sec"><label>通用技能</label><div class="exd-skills">${x.skills
-            .map((s) => `<div class="exd-skill"><b>${esc(s.name)}</b>${s.description ? `<span>${esc(s.description)}</span>` : ''}</div>`)
-            .join('')}</div></div>`
-        : ''}
-      ${!x.playbook && !x.skills?.length
-        ? '<div class="exd-sec"><div class="hint">没有挂技能</div></div>'
-        : ''}
-    </div>
-    ${x.instructions ? `<div data-exd-panel="i" hidden><div class="md-view exd-instr">${renderMarkdown(x.instructions)}</div></div>` : ''}
+    ${str.length
+      ? `<div class="exd-sec"><label>擅长</label><div class="exd-skills">${str
+          .map((s) => `<div class="exd-skill"><b>${esc(s.t)}</b>${s.d ? `<span>${esc(s.d)}</span>` : ''}</div>`)
+          .join('')}</div></div>`
+      : ''}
     <div class="dlg-actions">
       <button type="button" class="${hired ? 'danger' : 'primary'}" id="exdAct">${hired ? '解聘' : '雇佣'}</button>
       <button type="button" value="cancel">关闭</button>
     </div>`;
-  // 页签切换（样式复用设置页/插件面板那套 .tabs）
-  $('exdBody').querySelectorAll('[data-exd-tab]').forEach((t) => {
-    t.onclick = () => {
-      $('exdBody').querySelectorAll('[data-exd-tab]').forEach((b) => b.classList.toggle('on', b === t));
-      $('exdBody').querySelectorAll('[data-exd-panel]').forEach((p) => {
-        if (p.dataset.exdPanel === t.dataset.exdTab) p.removeAttribute('hidden');
-        else p.setAttribute('hidden', '');
-      });
-    };
-  });
   $('exdAct').onclick = async (e) => {
     e.preventDefault();
     const btn = e.currentTarget;

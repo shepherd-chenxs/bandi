@@ -85,7 +85,6 @@ function paintSkillCard(skill, personas) {
   $('skvChips').innerHTML = personas.length
     ? personas.map((p) => `<span class="chip" style="padding:1px 10px">${esc(p.name)}</span>`).join('')
     : '<span class="dim" style="font-size:12px">还没挂给任何人</span>';
-  $('skvNote').hidden = !builtin;
   $('skvEdit').hidden = builtin;
   $('skvDelete').hidden = builtin;
 

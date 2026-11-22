@@ -1,9 +1,9 @@
 /* chat.mjs —— 进对话、发消息、输入框里的 @ 选人、员工详情、员工详情 →「任务」、关联技能。
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
-import { esc, mdRender, openRoute, roleNameOf, savePlace, setRoute, toast } from './shell.mjs';
+import { esc, openRoute, roleNameOf, savePlace, setRoute, toast } from './shell.mjs';
 import { AVATAR_FILE, api, createCombo, cut, dt, failHtml, headerBadgeHtml, initial, personaAvatar, personaByName, post, renderMarkdown, setHeaderBadge, smAvatar } from './ui.mjs';
 import { load, setNav } from './state.mjs';
-import { confirmDo } from './machine.mjs';
+import { askText, confirmDo } from './machine.mjs';
 import { convDisplayName, openConversationSafe, toastConvErr } from './listmenu.mjs';
 import { detailSave, refreshDeptSuggest, renderList, showView } from './contacts.mjs';
 import { COL_STATUS, openProjectDetail, openTaskCardDialog, prPillOf } from './projects.mjs';
@@ -12,7 +12,7 @@ import { openChatLogDrawer, openGroupDrawer } from './groups.mjs';
 import { closeDrawer, fireExpert } from './experts.mjs';
 import { $, S, statusText } from './core.mjs';
 import { registerLayer } from './navstack.mjs';
-import { SANDBOX_LABEL, sandboxItems } from './misc.mjs';
+import { sandboxItems } from './misc.mjs';
 // 运行进度：纯逻辑在 run-progress.mjs（冒烟在 Node 里测）；画卡片这一层在 run-progress-card.mjs
 // （对话页 / 任务卡讨论区共用同一份，2026-10-29 用户："对话里的那一套搬过来用"）
 import { fmtElapsed } from './run-progress.mjs';
@@ -2776,14 +2776,9 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
   }
 
   const rt = runtimes.find((r) => r.id === persona.runtime);
-  // 身份/技能锁定（2026-10-23；2026-10-22 用户定：内置员工按专家团那个模式收编）
-  // 两种来源同一套语义，判据与服务端 experts.lockKindOf 对齐：
-  //   expert  = 专家库雇来的（固定 id 前缀 p-expert-），随专家包固定，出路是解聘后自建；
-  //   builtin = 出厂的（现在是崔老三），随平台固定，出路是另建一个员工。
-  // 锁的只是「他是谁 + 他会什么」；运行时/沙箱/工作目录/模型/头像仍旧可改。
-  const expertLocked = String(persona.id || '').startsWith('p-expert-');
-  const builtinLocked = !expertLocked && !!persona.builtin;
-  const identityLocked = expertLocked || builtinLocked;
+  // 身份/技能锁（2026-10-23）的判据仍在服务端 experts.lockKindOf（expert = p-expert-* 专家包
+  // 雇来的；builtin = 出厂内置）。**前端这一页不再需要它**（2026-11-22）：身份三行整块删了，
+  // 剩下的字段（部门 / 运行时 / 权限 / 模型 / 工作目录）都不进身份锁，谁都能改。
   const runRows = runs.length
     ? runs.map((r) => `<tr>
         <td>${dt(r.startedAt)}</td>
@@ -2801,6 +2796,20 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
     (p) => String(p.root ?? '').trim() === String(persona.cwd ?? '').trim(),
   );
 
+  /*
+   * 「基本信息」里的身份三行 —— 名字 / 岗位 / 职责与身份设定 —— **一律不画**（2026-11-22 用户
+   * 两轮拍板：先在专家雇来的员工上圈掉，紧接着"自己建的也不要显示"）。
+   *
+   * 理由：这三项一摆出来就带出"能不能改"的问题。锁定的员工（专家包雇的 `p-expert-*` / 内置
+   * `builtin`）改不动；自建的虽然能改，但名字和岗位在页头本来就看得见，改名字/写职责也不是
+   * 雇主天天要干的事，占着三行只把「部门」挤成一小格。现在基本信息页只剩「部门」一行 ——
+   * 部门是组织归属，不进身份锁，谁都该能改。
+   *
+   * 连带影响（别再往回加）：`#dName` / `#dInstr` 两个节点从此不存在 → 职责预览/编辑那段监听
+   * 已整段删除；`collect()` 仍**照发**库里的 name/instructions（服务端 name 必填、instructions
+   * 缺省会写空串，不是"不传不动"），只是页面上不再有改它们的入口。
+   */
+
     $('detailView').innerHTML = `
     <div class="detail-body">
       <div class="p-head">
@@ -2814,10 +2823,17 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
               : '<span class="pill" id="dBusy">空闲</span>'
           }</h2>
           <!-- 顶部那段职责描述（p-desc）按用户要求去掉了：下面「资料」里本来就有完整的「职责与身份设定」 -->
-          <!-- 运行时放第二行（2026-10-17 用户要求）：名字旁边只留岗位和忙闲，引擎属于"配置"不是"身份" -->
+          <!-- 身份行只留「这个人是谁」：岗位 / 忙闲（在 h2）＋ 他归在哪个部门、负责哪个项目（p-meta）。
+               运行时（Codex CLI）和沙箱（完全权限）**从身份行撤掉**（2026-11-22 用户：
+               「不要展示技术性…用户是不懂技术的普通人」）—— 那两项属于配置，在「执行配置」
+               里有专门的行；挂在名字底下只是把一个引擎型号糊在雇主脸上。 -->
+          <!-- 部门从「配置 → 基本信息」搬到这里（2026-11-22 用户：那页只剩它一行、单占一个页签不
+               合适）：部门是"他在哪个组"，跟岗位一样属于这个人的身份标签，看到人就该看得见、点得改。
+               pill 本身就是入口 —— 点开是统一的文字弹窗（带已有部门的下拉建议，防止
+               「技术部 / 技术 部」散成两个组）；改完左栏分组立刻跟着挪。 -->
           <div class="p-meta">
-            <span class="pill">${esc(rt ? rt.label : persona.runtime === 'auto' ? '自动' : persona.runtime)}</span>
-            <span class="pill">${esc(SANDBOX_LABEL[persona.sandbox] ?? persona.sandbox)}</span>
+            <button type="button" class="pill dept-pill" id="dDeptBtn" title="点击修改部门（留空 = 未分配）">${esc(String(persona.department ?? '').trim()) || '未分配部门'}</button>
+            <input type="hidden" id="dDept" value="${esc(persona.department || '')}" />
             ${
               // 2026-11-19 用户：「N 个技能」「最近运行」两个 pill 去掉，换成工作目录对应的项目名。
               // 对得上项目库 → 显示项目名（悬停看路径）；对不上的自定义路径 → 原样挂路径；没绑 → 不显示。
@@ -2866,82 +2882,29 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
         </div>
       </section>
 
-      <!-- 配置 tab（2026-11-19 起）：基本信息 / 执行配置 / 飞书 三个子页 -->
+      <!-- 配置 tab：执行配置 / 飞书 两个子页（原来的「基本信息」整页撤掉，2026-11-22 ——
+           身份三行删了以后它只剩「部门」一行，单占一个页签太空；部门已搬到页头那枚可点的 pill） -->
       <section class="tab-panel" data-panel="config" hidden>
         <div class="ov-layout">
           <nav class="ov-nav" aria-label="配置分区">
-            <!-- 2026-11-19 用户拍板：原「概览 → 资料」子页整体搬进来，成为配置的第一页。
-                 身份字段（名字/岗位/部门/职责）在这里，默认打开就看到。 -->
-            <button type="button" class="on" data-ov="basic">基本信息</button>
-            <button type="button" data-ov="exec">执行配置</button>
+            <button type="button" class="on" data-ov="exec">执行配置</button>
             <!-- 2026-10-29 用户定稿：飞书从「设置」搬进来，员工级 —— 一个数字员工一个飞书自建应用 -->
             <button type="button" data-ov="feishu">飞书</button>
           </nav>
           <div class="ov-body">
-            <!-- 基本信息（原概览「资料」子页，2026-11-19 搬来）：DOM id 全部原样保留，
-                 保存 / 同步 / 职责设定编辑逻辑零改动。 -->
-            <section class="ov-panel" data-ov-panel="basic">
-              <div class="group">
-                <!-- 「名字/岗位…随平台固定」提示条摘掉（2026-11-15 用户实报）：
-                     锁定这件事输入框的 readonly + 悬停 title 已经说了，横幅纯属重复。
-                     内置和专家包雇佣两个分支共用它，一并去掉。 -->
-                <div class="form-row">
-                  <div class="row-label">名字</div>
-                  <input id="dName" value="${esc(persona.name)}" ${identityLocked ? `readonly title="${expertLocked ? '雇佣员工的名字随专家包固定' : '内置员工的名字随平台固定'}"` : ''} />
-                </div>
-                <div class="form-row">
-                  <div class="row-label">岗位</div>
-                  <div>
-                    <!-- 岗位固定（2026-11-11 用户拍板：不允许调岗）：只读展示。
-                         岗位决定权限，换岗 = 解聘后重新雇佣；服务端对"岗位变了"也直接拒（E2055）。 -->
-                    <div class="ro" id="dRoleText">${esc(roleNameOf(persona) || '未设岗位')}</div>
-                  </div>
-                </div>
-                <div class="form-row">
-                  <div class="row-label">部门</div>
-                  <div>
-                    <!-- 部门**不进身份锁**（2026-10-25）：锁的是"他是谁/他会什么"，组织归属是用户的权 ——
-                         雇佣专家只带出厂默认（技术部/内容部/行政部），之后随便调、也能清空落「未分配」 -->
-                    <input id="dDept" list="deptSuggest" placeholder="比如：技术部（留空 = 未分配）" value="${esc(persona.department || '')}" />
-                  </div>
-                </div>
-                <div class="form-row top">
-                  <div class="row-label">职责与身份设定</div>
-                  <div>
-                    <!-- 预览/编辑（2026-10-21）：这个字段写少读多，默认预览。
-                         预览渲染的是 textarea 现值（当前草稿），不是存库值 —— 编辑一半切过去不丢字 -->
-                    <!-- 框头合成（2026-10-22 用户定稿）：字数 + 预览/编辑切段贴在框上沿当"框头"，
-                         不再悬空一行 —— 右边不孤零零飘按钮，左边由字数补位不显空 -->
-                    <div class="instr-wrap">
-                      <div class="instr-head">
-                        <div class="counter" id="dInstrCount"></div>
-                        ${
-                          /* 身份锁定：被锁员工（雇佣专家 / 内置员工）不画预览/编辑切换 —— 只读预览，下面的监听都带 ?. 兜底 */
-                          identityLocked
-                            ? ''
-                            : `<div class="seg seg-sm" id="dInstrSeg">
-                                <button type="button" data-m="view" class="on">预览</button>
-                                <button type="button" data-m="edit">编辑</button>
-                              </div>`
-                        }
-                      </div>
-                      <div id="dInstrView" class="md-view"></div>
-                      <!-- 高度不写死（2026-10-21）：随内容撑开（fitInstr），滚动只留外层页面 -->
-                      <textarea id="dInstr" hidden ${identityLocked ? 'readonly' : ''}>${esc(persona.instructions)}</textarea>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </section>
 
-            <section class="ov-panel" data-ov-panel="exec" hidden>
+            <section class="ov-panel" data-ov-panel="exec">
               <div class="group">
                 <div class="form-row">
-                  <div class="row-label">Runtime</div>
+                  <!-- 标签用中文（2026-11-22）：原来写英文 Runtime，同一个概念手机端叫「运行时」，
+                       一页里冒出个英文单词只会让不懂技术的人卡住。 -->
+                  <div class="row-label">运行时</div>
                   <div id="dRuntimeMount"></div>
                 </div>
                 <div class="form-row">
-                  <div class="row-label">权限（沙箱）</div>
+                  <!-- 「沙箱」是行话（2026-11-22 去掉）：这行其实是"他能动多大的手"，值本身就是
+                       人话（完全权限 / 只读…），标签不必再解释一遍实现机制。 -->
+                  <div class="row-label">权限</div>
                   <div id="dSandboxMount"></div>
                 </div>
                 <div class="form-row">
@@ -3015,13 +2978,12 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
   // 标签：一次渲染、切显隐 —— 不重建 DOM，所以在「概览」改了一半去「能力」再回来，改动还在
   const tabs = $('detailView').querySelectorAll('[data-tab]');
   const panels = $('detailView').querySelectorAll('[data-panel]');
-  // 默认子页（2026-11-19）：概览无子页（面板内已无 ov-panel，showOv 传什么都无妨）；
-  // 配置 → 基本信息（原「资料」，搬进来后设为默认打开）。
-  const OV_DEFAULT = { config: 'basic' };
+  // 默认子页（2026-11-22）：配置 → 执行配置（「基本信息」整页撤掉后它成了第一页）
+  const OV_DEFAULT = { config: 'exec' };
   const showTab = (key) => {
     tabs.forEach((t) => t.classList.toggle('on', t.dataset.tab === key));
     panels.forEach((p) => { p.hidden = p.dataset.panel !== key; });
-    showOv(OV_DEFAULT[key] ?? 'basic');
+    showOv(OV_DEFAULT[key] ?? 'exec');
   };
   tabs.forEach((t) => {
     t.onclick = () => {
@@ -3251,65 +3213,12 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
     }
   });
 
-  const instrCount = $('dInstrCount');
-  const dInstrTA = $('dInstr');
   /*
-   * 自增高（2026-10-21 用户要求）：textarea 有多高显示多高，不给自己滚 ——
-   * 滚动条只留外层页面一条。hidden 时 scrollHeight 是 0，跳过（切进编辑态时会再算）。
+   * 「职责与身份设定」预览/编辑整段已删（2026-11-22 用户："自己建的也不要显示"）——
+   * 那一行不再画，`#dInstr` / `#dInstrView` / `#dInstrSeg` 三个节点全没了，监听留着只会在
+   * null 上炸。以后要把职责编辑放回来，得连 DOM 带这段逻辑一起重建。
    */
-  const fitInstr = () => {
-    if (dInstrTA.hidden) return;
-    dInstrTA.style.height = 'auto';
-    dInstrTA.style.height = `${dInstrTA.scrollHeight}px`;
-  };
-  const syncCount = () => { if (instrCount) instrCount.textContent = dInstrTA.value.trim().length + ' 字'; };
-  dInstrTA.addEventListener('input', () => { syncCount(); fitInstr(); });
-  syncCount();
 
-  /*
-   * 「职责与身份设定」预览/编辑（2026-10-21）：人设这类 markdown **写少读多**，默认预览。
-   *   · 预览渲染的是 textarea **现值**（当前草稿）—— 编辑一半切过去看到的就是刚写的，
-   *     切回编辑一个字不少；不读存库值，就不存在"预览回滚"的坑。
-   *   · 切回预览顺手 saveNow 一次：自动保存靠失焦/防抖，切换这个动作兜个底。
-   *   · 空内容给占位 +「写一段」直达编辑，不留一块白板让人猜。
-   */
-  const dInstrEl = $('dInstr');
-  const dInstrViewEl = $('dInstrView');
-  let instrMode = 'view';
-  const renderInstrView = () => {
-    const val = dInstrEl.value;
-    dInstrViewEl.innerHTML = val.trim()
-      ? mdRender(val)
-      : /* 身份锁定：雇佣员工不给「写一段」入口（本来也不该走到空值这一支） */
-        expertLocked
-        ? '<div class="md-empty">暂无设定。</div>'
-        : '<div class="md-empty">暂无设定。<button type="button" class="linkish" data-edit-instr>写一段</button></div>';
-  };
-  const setInstrMode = (m) => {
-    if (m === instrMode) return;
-    instrMode = m;
-    if (m === 'view') {
-      renderInstrView();
-      dInstrEl.hidden = true;
-      dInstrViewEl.hidden = false;
-      saveNow?.();
-    } else {
-      dInstrViewEl.hidden = true;
-      dInstrEl.hidden = false;
-      fitInstr();
-      dInstrEl.focus();
-    }
-    $('dInstrSeg').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.m === m));
-  };
-  // 身份锁定：雇佣员工没有 #dInstrSeg（上面不画），监听挂不上就跳过
-  $('dInstrSeg')?.addEventListener('click', (e) => {
-    const b = e.target.closest('button[data-m]');
-    if (b) setInstrMode(b.dataset.m);
-  });
-  dInstrViewEl.addEventListener('click', (e) => {
-    if (e.target.closest('[data-edit-instr]')) setInstrMode('edit');
-  });
-  renderInstrView();
 
   /*
    * 「回到聊天 / 发消息」= **接着最近那段继续聊**（2026-10-24 口径，主流做法）。
@@ -3325,15 +3234,19 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
    * 分寸：
    *   · 输入框防抖 700ms；下拉选完 300ms；失焦立刻存；
    *     切分区 / 切标签 / 点「发消息」/ 打开别的员工 / 关页面 都先 flush（见 flushDetailSave）。
-   *   · **不重画整页**：重画会丢焦点、把标签弹回概览；只把名字/岗位在页头和左栏同步一下。
-   *   · 名字空着不提交（服务端 E1011 会拒），状态直接写"名字不能空"。
+   *   · **不重画整页**：重画会丢焦点、把标签弹回概览；只把部门和页头同步一下。
+   *   · 名字/职责页面上不再能改（2026-11-22 三行撤掉），但 PUT 仍会带上库里现值 —— 见 collect。
    *   · 保存中又来改动 → 存完补一次（串行；同时打两个 PUT 会互相覆盖）。
    */
   const collect = () => ({
-    name: $('dName').value,
-    // 岗位不可改（2026-11-11 用户拍板）：详情页不再有岗位输入框，PUT 也不带 role/roleKey
+    // 名字 / 职责这两项页面上已经没有输入框了（2026-11-22："自己建的也不要显示"），但**不能不带**：
+    // 服务端 PUT 里 `name` 是必填（空 → E1011 拒绝整次保存），`instructions` 不传会被写成空串
+    // （`String(body.instructions ?? '')`，不是字段级"不传不动"）。所以照样发库里现值 ——
+    // 值与库一致，身份锁那条"值真的变了才拦"（E2055）就不会误判，部门这次改动能存下去。
+    name: persona.name,
+    instructions: persona.instructions ?? '',
+    // 岗位不可改（2026-11-11 用户拍板）：页面上没有岗位输入框，PUT 也不带 role/roleKey
     department: $('dDept').value,
-    instructions: $('dInstr').value,
     runtime: rtCombo.value(),
     sandbox: sbCombo.value(),
     model: modelCombo.value(),
@@ -3349,7 +3262,8 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
   saveNow = async ({ keepalive = false } = {}) => {
     if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
     const payload = collect();
-    if (!payload.name.trim()) { setSaveState('名字不能空 · 未保存', 'bad'); return false; }
+    // 名字输入框已经没有了（2026-11-22），"名字不能空"这条校验跟着退场——PUT 不带 name，
+    // 库里那个名字原样留着，不存在被清空的风险。
     const json = JSON.stringify(payload);
     if (json === lastSaved) { setSaveState(''); return true; }
     if (saving) { saveQueued = true; return false; }
@@ -3373,6 +3287,9 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
         // 页头（名字 / 岗位 / 头像）与左栏名字同步 —— 不重画整页
         const nameEl = $('dNameText');
         if (nameEl) nameEl.textContent = p.name;
+        // 页头那枚「部门」pill 跟着刷（清空时显示占位文案，别留个空胶囊）
+        const deptEl = $('dDeptBtn');
+        if (deptEl) deptEl.textContent = String(p.department ?? '').trim() || '未分配部门';
         const roleEl = $('dRolePill');
         if (roleEl) { const rn = roleNameOf(p); roleEl.textContent = rn; roleEl.style.display = rn ? '' : 'none'; }
         const av = $('detailView')?.querySelector('.p-head .avatar');
@@ -3403,13 +3320,35 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
   // 离开这一页（切视图 / 打开别的员工 / 关窗口）前兜底存一次
   detailSave.flush = (opts) => saveNow(opts);
 
+  /*
+   * 页头那枚「部门」pill（2026-11-22 从「配置 → 基本信息」搬来）：整颗就是入口，点开是站里
+   * 统一的文字弹窗（askText），带 `deptSuggest` 的已有部门建议 —— 部门是自由文本，不防手滑就会
+   * 散成「技术部 / 技术 部」两个组。留空 = 未分配。
+   * 改的是隐藏的 #dDept（collect 读它），随后走同一条 saveNow：成功后左栏分组立刻挪、页头
+   * pill 由 saveNow 里那段同步刷新；失败就把隐藏值回滚，pill 显示的还是库里那份。
+   */
+  $('dDeptBtn')?.addEventListener('click', async () => {
+    const box = $('dDept');
+    const cur = box?.value ?? '';
+    const v = await askText({
+      title: '部门',
+      value: cur,
+      placeholder: '比如：技术部（留空 = 未分配）',
+      list: 'deptSuggest',
+      ok: '保存',
+    });
+    if (v === null) return; // 取消
+    const next = v.trim();
+    if (next === cur.trim()) return; // 没变就别白存一次
+    box.value = next;
+    const ok = await saveNow?.();
+    if (!ok) box.value = cur;
+  });
+
   // 输入框：敲字防抖；失焦立刻存（没改动时 saveNow 按 lastSaved 直接跳过）
   // dRoots 已摘（2026-11-15）、dCwd 改成下拉（2026-11-19，combo 自己 onChange → scheduleSave）、
-  // dMaxParallel 已摘（2026-11-19 并发数改系统默认），都不在列表里
-  for (const id of ['dName', 'dRole', 'dDept', 'dInstr']) {
-    $(id)?.addEventListener('input', () => scheduleSave(700));
-    $(id)?.addEventListener('blur', () => saveNow?.());
-  }
+  // dMaxParallel 已摘（2026-11-19 并发数改系统默认）；dName / dInstr 随身份三行一起撤（2026-11-22），
+  // dDept 现在也是隐藏字段（入口在页头 pill），这一页已经没有手输框了。
 
   /* 更多操作（⋯）：点开才露删除。删除是破坏性动作，平时收起来，别让它跟「发消息」平起平坐 */
   $('dMore')?.addEventListener('click', (e) => {

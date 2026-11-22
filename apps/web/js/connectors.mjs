@@ -14,7 +14,7 @@ import { openPlugins } from './experts.mjs';
 // 只剩单向（collab.mjs 引这儿的 headRow / paintModeCard），成环风险反而小了一截。
 import { $, LOCAL_BASE, S } from './core.mjs';
 // 连接器 JSON 的纯解析（不碰 DOM）—— 2026-11-22 起界面只剩一个 JSON 框，见 connjson.mjs 头注释
-import { connBrief, connJsonText, parseConnJson, toolsBrief } from './connjson.mjs';
+import { connJsonText, parseConnJson, toolsBrief } from './connjson.mjs';
 
 
 
@@ -29,10 +29,18 @@ import { connBrief, connJsonText, parseConnJson, toolsBrief } from './connjson.m
  *
  * 装一条 = 把清单条目落成账本里的一行，班底只**接线**：代码在 codex / dsh 自己的进程里跑。
  */
+/* 插件页签（2026-11-22 起只剩界面插件 + 独立软件）：连接器搬去「设置 › 扩展 › 连接器」，
+   所以「个人」这个只服务连接器的页签也跟着搬过去（见 CONN_TABS）。 */
 export const PLG_TABS = [
   ['installed', '已安装'],
   ['catalog', '公开'],
-  ['personal', '自定义'],
+];
+
+/* 连接器页签：装了的（含本机来源、手工粘的）/ 清单里可装的。
+   没有「自定义」那一页 —— 它本来画的也是本机来源的连接器，跟「已安装」重复。 */
+export const CONN_TABS = [
+  ['installed', '已安装'],
+  ['catalog', '可添加'],
 ];
 
 
@@ -160,28 +168,23 @@ export async function renderPlugins() {
 
   // 旧会话可能还停在已撤掉的「界面插件」页签上 —— 归一到「已安装」（装了的界面插件就在那）
   if (S.pluginTab === 'panels') S.pluginTab = 'installed';
+  // 「个人」页签 2026-11-22 随连接器拆页一起撤掉，停在那一档的旧会话归一到「已安装」
+  if (S.pluginTab === 'personal') S.pluginTab = 'installed';
   /* 市场卡墙只认 slot='plugins' 的：settings.section 的（远程连接）是内置设置分节，不在这儿摆摊
      （2026-10-26 收编）；内置连接器（builtin）同理 —— 随功能出厂，不进卡墙。 */
   const marketPanels = S.plugins.filter((p) => p.panel?.slot === 'plugins');
   const panelsInstalled = marketPanels.filter((p) => p.installed).length;
-  const userConns = S.connectors.filter((c) => !c.builtin);
   const swInstalled = extSoftware().filter((e) => e.installed).length;
 
+  /* 计数只算**这一页有的东西**（2026-11-22 拆页）：连接器已经搬去「连接器」页，
+     它的数字再挂在这里就成了对不上的账。 */
   const counts = {
-    installed: userConns.length + panelsInstalled + swInstalled,
-    catalog: publicCatalog().length + marketPanels.length + (S.extSoftware?.catalog ?? []).length,
-    personal: localConnectors().filter((c) => !c.builtin).length,   // 「个人」＝你自己的本机来源（示例已不再摆）
+    installed: panelsInstalled + swInstalled,
+    catalog: marketPanels.length + (S.extSoftware?.catalog ?? []).length,
   };
 
   $('settingsView').innerHTML = `
-    ${headRow(
-      '<b>插件</b>',
-      /* 「添加连接器」从「个人」页里那块「手工添加」搬到了页头右上（2026-10-26 用户：
-         "添加按钮单独提出来，手工添加这个区没啥用"）。放在页头是因为它是**全局动作**
-         —— 在哪个页签都能粘一条 MCP 配置，不必先切到「个人」。
-         位置照卡片墙页的老规矩：动作/搜索一律页头右上（.expert-search / .sk-search 同款位置）。 */
-      `<button class="btn-sm" data-manual="1">＋ 添加连接器</button>`,
-    )}
+    ${headRow('<b>插件</b>')}
     <div class="detail-body">
       <div class="seg plg-tabs">
         ${PLG_TABS.map(
@@ -196,11 +199,107 @@ export async function renderPlugins() {
 
   $('plgBody').innerHTML =
     S.pluginTab === 'catalog' ? plgCatalogHTML()
-    : S.pluginTab === 'personal' ? plgPersonalHTML()
     : plgInstalledHTML();
   wirePlugins();
   wirePanelMarket();
+  /* 连接器的版本探针（probeConnVersions）跟着连接器搬去 renderConnectors —— 这页已经没有
+     MCP 卡，再探一遍只会白白拉起宝螺那种本机进程。 */
+}
+
+
+
+/* --------------------------------------------------------------- 连接器（独立分节）*/
+
+/**
+ * 「设置 › 扩展 › 连接器」（2026-11-22 用户："加个子菜单，连接器。把宝螺移动过去"）。
+ *
+ * 跟「插件」拆开以后各管各的：
+ *   · 插件   = 装进班底里的**界面插件** + 自己管自己的**独立软件**（mappie）
+ *   · 连接器 = MCP 来源（宝螺、github、ssh…），装一条 = 账本里多一行，班底只接线
+ *
+ * 只拉两个接口：`/api/connectors`（账本）和 `/api/connectors/catalog`（清单）。不碰
+ * `/api/plugins` 和 `/api/local/externals` —— 那是插件页的账，拉来也没人看。
+ */
+export async function renderConnectors() {
+  $('settingsView').innerHTML = rtLoading('连接器');
+  let list;
+  let cat;
+  try {
+    [list, cat] = await Promise.all([api('/api/connectors'), api('/api/connectors/catalog')]);
+  } catch (err) {
+    $('settingsView').innerHTML = `${headRow('<b>连接器</b>')}<div class="empty">${failHtml(err)}</div>`;
+    return;
+  }
+  S.connectors = list.connectors ?? [];
+  S.catalog = cat.catalog ?? [];
+  S.catalogError = cat.error ?? null;
+  // 旧会话可能停在「自定义」那一页（拆页前的页签）—— 归一到「已安装」
+  if (S.connTab !== 'catalog') S.connTab = 'installed';
+
+  const counts = {
+    installed: S.connectors.filter((c) => !c.builtin).length,
+    catalog: publicCatalog().length,
+  };
+
+  $('settingsView').innerHTML = `
+    ${headRow(
+      '<b>连接器</b>',
+      /* 「添加连接器」跟着搬过来：它是连接器页的**主动作**，在所有页签都能粘一条 MCP 配置。
+         位置照卡片墙页的老规矩：动作一律页头右上（.expert-search / .sk-search 同款）。 */
+      `<button class="btn-sm" data-manual="1">＋ 添加连接器</button>`,
+    )}
+    <div class="detail-body">
+      <div class="seg plg-tabs">
+        ${CONN_TABS.map(
+          ([key, label]) =>
+            `<button data-conntab="${key}" class="${S.connTab === key ? 'on' : ''}">${label}${
+              counts[key] ? ` ${counts[key]}` : ''
+            }</button>`,
+        ).join('')}
+      </div>
+      <div id="plgBody"></div>
+    </div>`;
+  paintConnBody();
+}
+
+/** 连接器页的卡墙内容（两个页签共用一次拼装，切页签时只换这个） */
+function connBodyHTML() {
+  if (S.connTab === 'catalog') {
+    const err = S.catalogError ? `<div class="plg-warn">${esc(S.catalogError)}</div>` : '';
+    const cards = publicCatalog().map(plgCardHTML);
+    return cards.length
+      ? `${err}<div class="plg-grid">${cards.join('')}</div>`
+      : `${err}<div class="empty">清单是空的</div>`;
+  }
+  const conns = S.connectors.filter((c) => !c.builtin);   // 内置的（远程连接 SSH）随功能出厂，不上卡墙
+  if (!conns.length) {
+    /* 空态自己承担引导（跟原「自定义」页同一套虚线框）：整页只剩一句话时中间空一大块 */
+    return `<div class="plg-empty">还没有连接器<br /><span class="dim">点右上角「＋ 添加连接器」粘一条 MCP 配置；也可以去「可添加」挑现成的。</span></div>`;
+  }
+  return `<div class="plg-grid">${conns.map(plgConnCardHTML).join('')}</div>`;
+}
+
+function paintConnBody() {
+  const body = $('plgBody');
+  if (!body) return;
+  body.innerHTML = connBodyHTML();
+  wirePlugins();          // 卡 / 安装钮 / 「添加连接器」都走同一套接线（下面 data-conntab 那份也在里面）
   probeConnVersions();
+}
+
+/** 连接器页签切换：只换 #plgBody，不整页重画（同插件页那条"别闪"的经验） */
+function switchConnTab(key) {
+  S.connTab = key;
+  $('settingsView')?.querySelectorAll('[data-conntab]').forEach((el) => el.classList.toggle('on', el.dataset.conntab === key));
+  paintConnBody();
+}
+
+/**
+ * 两个扩展页共用的重画入口：动作（装/卸/删/改）落在哪一页，就重画哪一页。
+ * 卡片、详情弹窗、安装轮询里原来都写死 `renderPlugins()`，拆页后必须改走这里。
+ */
+export function repaintExtensions() {
+  return S.settingsSection === 'connectors' ? renderConnectors() : renderPlugins();
 }
 
 
@@ -270,7 +369,7 @@ export function wirePanelMarket() {
         } else {
           await post(`/api/plugins/${encodeURIComponent(id)}/${act}`, {});
         }
-        await renderPlugins();   // 重新拉市场并重画
+        await repaintExtensions();   // 重新拉市场并重画
         renderList();            // rail 的入口也要跟着变
       } catch (err) {
         toast(err.message, 'error');
@@ -282,21 +381,34 @@ export function wirePanelMarket() {
 
 
 
-export function plgCredentials(c) {
-  const items = [...(c.env ?? []), ...(c.headers ?? [])];
-  if (!items.length) return '';
-  return `<div class="chips">${items
-    .map((it) => `<span class="chip"><span class="chip-label">${esc(it.key)}${it.kind === 'ref' ? '（引用环境变量）' : '（已写死）'}</span></span>`)
-    .join('')}</div>`;
-}
+/* 凭据键名（`GITHUB_TOKEN（已写死）`）曾经在这里画成芯片。
+   2026-11-22 撤：用户是"不懂技术的普通人"，一串大写下划线对他只是噪音；
+   密钥配错时由 warnings 兜（那时候才需要看见键名）。 */
 
 
 
 /**
+ * 装完的提示（2026-11-22 用户："用户是不懂技术的普通人"）。
+ *
+ * 原来那句是「它要用环境变量：GITHUB_TOKEN\n班底进程里没有的话，运行时会明确报出来」——
+ * 「环境变量」「班底进程」「运行时」三个内部词堆在一起，用户读完不知道要去做什么。
+ * 现在先说**要干什么**（去配一把访问凭据 + 去哪找），再说**填的时候用哪个名字**。
+ * 名字不能整句藏掉：界面上真要填它（设置 → 插件 → 自定义 → 改 → env），
+ * 藏了就成了"知道要配、不知道配叫啥"。
+ */
+function toastConnInstalled(cid, r) {
+  const needs = (r?.needs ?? []).filter(Boolean);
+  if (!needs.length) return;
+  const label = publicCatalog().find((x) => x.id === cid)?.label ?? '这个连接器';
+  toast(`装好了。「${label}」还得配一把访问凭据才能用 —— 去它的说明里找申请方式。\n填的时候用这个名字：${needs.join('、')}`);
+}
+
+/**
  * 已装连接器卡（2026-10-25 用户：「这个也做成卡片，测和改不要了，改太复杂了，用户操作不了」）：
- * 跟市场小卡同款 —— 图标 / 名称 / 标签 / 两行截断说明，卡上**没有任何按钮**；
- * 停用/启用、卸载都进详情弹窗（点卡即出）。测/改整个撤掉 —— 实探和手编 JSON 是排障用的，
- * 日常用户用不上，编辑需求走配置文件。
+ * 跟市场小卡同款 —— 图标 / 名称 / 标签 / 两行截断说明。
+ * 2026-11-22 用户："这里放一个开关控制启用停用" —— 头行右端加一颗开关，
+ * 卡上就这**一个**控件，其余（卸载、看全文）仍进详情弹窗（点卡即出）。
+ * 测/改整个撤掉 —— 实探和手编 JSON 是排障用的，日常用户用不上，编辑需求走配置文件。
  * 说明文字优先借 catalog 同款连接器的简介（装的时候本来就从那来），借不到退启动命令行。
  */
 /**
@@ -308,10 +420,9 @@ export function plgCredentials(c) {
  * `tools` 由服务端 probe 后写回账本（`setTools`），是事实，不是文案。
  */
 export function plgConnCardHTML(c) {
-  const desc = publicCatalog().find((x) => x.id === c.id)?.description || c.note || toolsBrief(c.tools) || connBrief(c);
+  const desc = publicCatalog().find((x) => x.id === c.id)?.description || c.note || toolsBrief(c.tools) || (c.transport === 'streamable-http' ? '连到远端服务的连接器' : '装在这台电脑上的连接器');
   const tags = [
-    `<span class="set-tag">${c.transport === 'stdio' ? '本地进程' : '远端服务'}</span>`,
-    `<span class="set-tag">${esc(c.source?.kind ?? '手工')}</span>`,
+    `<span class="set-tag">${c.transport === 'stdio' ? '本机' : '云端'}</span>`,
     // 版本号（2026-11-22 用户："显示宝螺的版本号"）：探针握手拿的 serverInfo.version，
     // renderPlugins/switchPlgTab 之后由 probeConnVersions 后台补进 DOM
     ...(S.connVersion?.[c.id] ? [`<span class="set-tag" data-connver="1">v${esc(String(S.connVersion[c.id]))}</span>`] : []),
@@ -322,6 +433,9 @@ export function plgConnCardHTML(c) {
     <div class="sw-head">
       <div class="plg-ico">${plgIconFor(c)}</div>
       <div class="plg-title"><b>${esc(c.label)}</b></div>
+      <label class="switch sm" title="${c.enabled ? '启用中 —— 关掉就不再接线' : '已停用 —— 打开就重新接线'}">
+        <input type="checkbox" data-conn-toggle="${esc(c.id)}" ${c.enabled ? 'checked' : ''} /><span></span>
+      </label>
     </div>
     <div class="plg-tags">${tags}</div>
     <div class="plg-desc plg-desc-clamp">${esc(desc)}</div>
@@ -332,19 +446,18 @@ export function plgConnCardHTML(c) {
 
 
 /**
- * 「已安装」：装了的都在这 —— 界面插件（启用/停用/卸载）+ 连接器（测/改/停/卸）。
- * 界面插件和连接器各一段（段头说清是什么），卡上的「界面」标签负责逐卡认。
+ * 「已安装」（插件页）：界面插件（启用/停用/卸载）+ 独立软件。
+ * 连接器 2026-11-22 搬去「设置 › 扩展 › 连接器」，这页不再画它们。
  */
 export function plgInstalledHTML() {
   const panels = S.plugins.filter((p) => p.installed && p.panel?.slot === 'plugins');
-  const conns = S.connectors.filter((c) => !c.builtin);
   const probed = extSoftware();
   const sw = (S.extSoftware?.catalog ?? []).filter((e) => probed.some((p) => p.id === e.id && p.installed));
-  if (!panels.length && !conns.length && !sw.length) {
-    return '<div class="empty">还没装任何东西<br />去「公开」挑一个，或在「个人」里手工粘一条</div>';
+  if (!panels.length && !sw.length) {
+    return '<div class="empty">还没装任何插件或软件<br />去「公开」挑一个</div>';
   }
-  // 2026-11-22 用户："不要区分软件和连接器，都放一起展示"（与公开页同一面卡墙）
-  const cards = [...sw.map((e) => swCardHTML(e, probed)), ...panels.map(plgPanelCardHTML), ...conns.map(plgConnCardHTML)];
+  // 2026-11-22 用户："不要区分软件和连接器，都放一起展示"（连接器已拆走，软件和界面插件仍同一面墙）
+  const cards = [...sw.map((e) => swCardHTML(e, probed)), ...panels.map(plgPanelCardHTML)];
   return `<div class="plg-grid">${cards.join('')}</div>`;
 }
 
@@ -417,7 +530,7 @@ async function installSoftware(id, btn) {
   try {
     const r = await post('/api/install/tasks', { kind: 'external-install', family: id });
     if (!r.task?.id) throw new Error('任务没排上');
-    await renderPlugins(); // 立刻重画：卡片这会儿就该变成「安装中」，不等轮询
+    await repaintExtensions(); // 立刻重画：卡片这会儿就该变成「安装中」，不等轮询
     renderList();
   } catch (err) {
     if (btn) btn.disabled = false;
@@ -484,7 +597,7 @@ export function openPlgDetail(kind, id) {
           if (act === 'uninstall') await api(`/api/plugins/${encodeURIComponent(p.id)}`, { method: 'DELETE' });
           else await post(`/api/plugins/${encodeURIComponent(p.id)}/${act}`, {});
           dlg.close();
-          await renderPlugins();
+          await repaintExtensions();
           renderList();
         } catch (err) {
           el.disabled = false;
@@ -595,7 +708,7 @@ export function openPlgDetail(kind, id) {
             await post('/api/install/tasks', { kind: 'external-serve', family: id });
             dlg.close();
             toast('在起它的面板了 —— 起好后重新点开这个软件，就能直接打开面板。');
-            await renderPlugins();
+            await repaintExtensions();
             renderList();
           } catch (err) {
             el.disabled = false;
@@ -620,22 +733,26 @@ export function openPlgDetail(kind, id) {
         .map((r) => `${esc(r.key)}${r.present ? '' : '（当前环境里没有）'}`)
         .join('、')}</div>`
     : '';
-  const where = c.command ? `${c.command} ${(c.args ?? []).join(' ')}`.trim() : c.url;
   const desc = (led ? publicCatalog().find((x) => x.id === c.id)?.description : c.description) ?? '';
   let acts = '';
   let ledgerBits = '';
   if (led) {
-    /* 装了的：停用/启用 + 卸载都收进弹窗（卡上无钮，测/改已撤 —— 2026-10-25 用户口径） */
-    acts =
-      `<button data-dlg-act="toggle">${led.enabled ? '停用' : '启用'}</button>` +
-      `<button class="danger" data-dlg-act="uninstall">卸载</button>`;
+    /* 装了的：弹窗里只剩卸载。启停已上卡片右上角的开关（2026-11-22 用户：
+       "里面的控制按钮可以去掉了"）—— 同一件事不再摆两处，免得一个入口改了另一个人不知道。 */
+    acts = `<button class="danger" data-dlg-act="uninstall">卸载</button>`;
+    /* **详情只说人话**（2026-11-22 用户："不要展示技术性或者路径这些，用户是不懂技术的普通人"）。
+       原来这里铺了五行技术内部件，全撤：
+         · 完整启动命令（`E:\...\electron.exe E:\...\bridge.cjs`）
+         · `给：codex、claude`（运行时是内部概念）
+         · 工具原始名（`baoluo_parse_link`…，英文+下划线，对用户是乱码）
+         · 凭据键名（`ELECTRON_RUN_AS_NODE（已写死）`）
+         · source.kind（`local`，纯内部字段）
+       能力件数保留 —— 那是用户唯一关心的"它能干什么"。 */
+    const nTools = (led.tools ?? []).filter(Boolean).length;
     ledgerBits = `
-      <div class="plg-meta">${esc(where || '（没写启动方式）')}</div>
-      <div class="plg-meta">给：${led.runtimes?.length ? led.runtimes.map(esc).join('、') : '全部运行时'}</div>
-      ${led.tools?.length ? `<div class="plg-meta">接过来的 ${led.tools.length} 个工具：${esc(led.tools.join('、'))}</div>` : ''}
-      ${plgCredentials(led)}
+      ${nTools ? `<div class="plg-meta">${esc(toolsBrief(led.tools))}</div>` : ''}
       ${(led.warnings ?? []).map((w) => `<div class="plg-warn">${esc(w)}</div>`).join('')}
-      ${led.enabled ? '' : '<div class="plg-warn">已停用 —— 只是没接进运行时，文件还在；启用即恢复。</div>'}`;
+      ${led.enabled ? '' : '<div class="plg-warn">已停用 —— 只是暂时没接给数字员工用；打开卡片右上角的开关就恢复。</div>'}`;
   } else {
     acts = `<button class="primary" data-dlg-act="install">安装</button>`;
   }
@@ -644,11 +761,10 @@ export function openPlgDetail(kind, id) {
       <div class="plg-ico">${plgIconFor(c)}</div>
       <div class="plg-d-who">
         <div class="plg-title"><b>${esc(c.label)}</b></div>
-        <div class="plg-tags">${led && !led.enabled ? '<span class="set-tag">已停用</span>' : ''}<span class="set-tag">${c.transport === 'stdio' ? '本地进程' : '远端服务'}</span><span class="set-tag">${esc(c.source?.kind ?? '手工')}</span></div>
+        <div class="plg-tags">${led && !led.enabled ? '<span class="set-tag">已停用</span>' : ''}<span class="set-tag">${c.transport === 'stdio' ? '本机' : '云端'}</span></div>
       </div>
     </div>
     ${desc ? `<div class="plg-desc">${esc(desc)}</div>` : ''}
-    <div class="plg-meta">${esc(c.source?.kind ?? '')}${c.source?.ref ? ' · ' + esc(c.source.ref) : ''}</div>
     ${req}
     ${c.note ? `<div class="plg-meta">${esc(c.note)}</div>` : ''}
     ${ledgerBits}
@@ -670,24 +786,16 @@ export function openPlgDetail(kind, id) {
           const r = await post('/api/connectors', { from: c.id });
           dlg.close();
           S.pluginTab = 'installed';
-          await renderPlugins();
-          const needs = (r.needs ?? []).filter((k) => k);
-          if (needs.length) {
-            toast(`装好了。它要用环境变量：${needs.join('、')}\n班底进程里没有的话，运行时会明确报出来。`);
-          }
+          S.connTab = 'installed';
+          await repaintExtensions();
+          toastConnInstalled(c.id, r);
           return;
         }
-        if (act === 'toggle') {
-          await api(`/api/connectors/${encodeURIComponent(c.id)}`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ enabled: !led.enabled }),
-          });
-        } else if (act === 'uninstall') {
+        if (act === 'uninstall') {
           await api(`/api/connectors/${encodeURIComponent(c.id)}`, { method: 'DELETE' });
         }
         dlg.close();
-        await renderPlugins();
+        await repaintExtensions();
       } catch (err) {
         el.disabled = false;
         toast(err.message, 'error');
@@ -701,15 +809,13 @@ export function openPlgDetail(kind, id) {
 
 export function plgCatalogHTML() {
   const err = S.catalogError ? `<div class="plg-warn">${esc(S.catalogError)}</div>` : '';
-  const list = publicCatalog();
   const panels = S.plugins.filter((p) => p.panel?.slot === 'plugins');   // settings.section 的不进市场（内置设置分节）
-  /* 2026-11-22 用户："标题去掉，也不要区分软件和连接器，都放一起展示"：
-     软件 / 界面插件 / 连接器拼进**同一面卡墙**，不再各立分节头 */
+  /* 软件 / 界面插件拼在**同一面卡墙**（2026-11-22 用户："标题去掉，也不要区分…都放一起展示"）。
+     连接器不再混进来 —— 它的「可添加」在连接器页，清单来源也是另一个接口。 */
   const probed = extSoftware();
   const cards = [
     ...(S.extSoftware?.catalog ?? []).map((e) => swCardHTML(e, probed)),
     ...panels.map(plgPanelCardHTML),
-    ...list.map(plgCardHTML),
   ];
   if (!cards.length) return `${err}<div class="empty">清单是空的</div>`;
   return `${err}<div class="plg-grid">${cards.join('')}</div>`;
@@ -717,18 +823,10 @@ export function plgCatalogHTML() {
 
 
 
-export function plgPersonalHTML() {
-  const mine = localConnectors().filter((c) => !c.builtin);   // 内置的不算"个人"（远程连接 SSH 随功能出厂）
-  return `
-    ${
-      mine.length
-        ? `<div class="plg-grid">${mine.map(plgConnCardHTML).join('')}</div>`
-        /* 空态自己承担引导（原来的「手工添加」区块已经撤掉，按钮在页头右上）：
-           全局 `.empty` 是 60px 上下内边距，整页只剩这一段时中间空一大块，
-           所以这里用虚线框 ——「这里还没有东西，加上就在右上」比一句话更像个位置。 */
-        : `<div class="plg-empty">还没有本机来源的连接器<br /><span class="dim">点右上角「＋ 添加连接器」，粘一条 MCP 配置就能装。</span></div>`
-    }`;
-}
+/* 「个人（本机来源）」这一页 2026-11-22 删掉：它画的本来就是账本里 source.kind='local' 的连接器，
+   跟「已安装」重复；连接器拆成独立分节后，账本卡全在「连接器 › 已安装」里，
+   手工添加的入口是那页页头右上的「＋ 添加连接器」。 */
+
 
 
 
@@ -742,12 +840,8 @@ function switchPlgTab(key) {
   S.pluginTab = key;
   const root = $('settingsView');
   root.querySelectorAll('[data-plgtab]').forEach((el) => el.classList.toggle('on', el.dataset.plgtab === key));
-  $('plgBody').innerHTML =
-    S.pluginTab === 'catalog' ? plgCatalogHTML()
-    : S.pluginTab === 'personal' ? plgPersonalHTML()
-    : plgInstalledHTML();
+  $('plgBody').innerHTML = S.pluginTab === 'catalog' ? plgCatalogHTML() : plgInstalledHTML();
   wirePlugins(); // 新 body 里的卡/按钮重新接线；页签钮是 onclick 覆盖式绑定，不会叠
-  probeConnVersions();
 }
 
 /**
@@ -760,7 +854,7 @@ function switchPlgTab(key) {
 const CONN_VER_TTL = 5 * 60 * 1000;
 
 export async function probeConnVersions() {
-  if (S.pluginTab === 'catalog') return;
+  if (S.connTab === 'catalog') return;   // 清单卡没有账本条目，没得探
   const targets = (S.connectors ?? []).filter((c) => {
     if (c.builtin || c.transport !== 'stdio') return false;   // 内置的不上卡墙；http 探不了
     const at = S.connVersionAt?.[c.id];
@@ -791,13 +885,39 @@ export function wirePlugins() {
   root.querySelectorAll('[data-plgtab]').forEach((el) => {
     el.onclick = () => switchPlgTab(el.dataset.plgtab);
   });
+  // 连接器页的两枚页签（同一份接线函数给两个页面用，选择器各管各的，不会互相误绑）
+  root.querySelectorAll('[data-conntab]').forEach((el) => {
+    el.onclick = () => switchConnTab(el.dataset.conntab);
+  });
 
-  /* 小卡点开详情；卡内按钮（安装）自己有 handler，不冒泡成「看详情」 */
+  /* 小卡点开详情；卡内控件（安装钮、启停开关）自己有 handler，不冒泡成「看详情」 */
   root.querySelectorAll('[data-plgview]').forEach((el) => {
     el.onclick = (ev) => {
-      if (ev.target.closest('button')) return;
+      if (ev.target.closest('button, .switch')) return;
       const [kind, id] = el.dataset.plgview.split(':');
       openPlgDetail(kind, id);
+    };
+  });
+
+  /* 连接器卡右上角的启停开关（2026-11-22 用户："这里放一个开关控制启用停用"）。
+     只改账本那一行；**不平移整页** —— 成功后就地重画卡墙（跟运行时开关同一条"别闪"的经验）。 */
+  root.querySelectorAll('[data-conn-toggle]').forEach((el) => {
+    el.onchange = async () => {
+      const id = el.dataset.connToggle;
+      const enabled = el.checked;
+      try {
+        await api(`/api/connectors/${encodeURIComponent(id)}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled }),
+        });
+        const c = S.connectors.find((x) => x.id === id);
+        if (c) c.enabled = enabled;
+        paintConnBody();
+      } catch (err) {
+        el.checked = !enabled; // 没存上就把开关拨回去，别让人以为真停了
+        toast(err.message, 'error');
+      }
     };
   });
 
@@ -806,12 +926,11 @@ export function wirePlugins() {
       el.disabled = true;
       try {
         const r = await post('/api/connectors', { from: el.dataset.install });
+        // 装完回「已安装」——两个页面各记各的页签
         S.pluginTab = 'installed';
-        await renderPlugins();
-        const needs = (r.needs ?? []).filter((k) => k);
-        if (needs.length) {
-          toast(`装好了。它要用环境变量：${needs.join('、')}\n班底进程里没有的话，运行时会明确报出来。`);
-        }
+        S.connTab = 'installed';
+        await repaintExtensions();
+        toastConnInstalled(el.dataset.install, r);
       } catch (err) {
         el.disabled = false;
         toast(err.message, 'error');
@@ -868,7 +987,7 @@ function watchBusySoftware() {
       }
     }
     if (dirty) {
-      await renderPlugins();
+      await repaintExtensions();
       renderList();
     } else {
       watchBusySoftware(); // 接着盯
