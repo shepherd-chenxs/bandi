@@ -497,10 +497,12 @@ async function main() {
   // —— 临时环境（真实库一个字不碰）——
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bandi-regression-'));
   const dbFile = path.join(dataDir, 'bandi.db');
-  // runtimes.json 照抄真实登记（见 findCodexRuntime）—— 临时实例才知道这台机器的 codex 在哪
+  // runtimes.json 照抄真实登记（见 findCodexRuntime）—— 临时实例才知道这台机器的 codex 在哪。
+  // id 用 'codex'：HTTP 建员工不带 runtime 时路由默认就是它（SEEDED 里的历史内置 id），
+  // 照抄真实的 rt-xxx id 反而对不上（实跑踩过：运行时「codex」找不到了，秒挂）。
   fs.writeFileSync(
     path.join(dataDir, 'runtimes.json'),
-    JSON.stringify({ devices: { local: { runtimes: { [codex.id]: codex.entry } } } }, null, 2),
+    JSON.stringify({ devices: { local: { runtimes: { codex: codex.entry } } } }, null, 2),
   );
   // cleanCommand 所在的 progress-ledger.mjs 链着 store —— 数据目录必须在 import 它之前设好
   process.env.BANDI_DATA = dataDir;
@@ -509,7 +511,7 @@ async function main() {
   const { cleanCommand } = await import('../apps/server/src/progress-ledger.mjs');
 
   console.log(`[回归] 数据目录 ${dataDir}`);
-  console.log(`[回归] codex 运行时 ${codex.id}（照抄真实登记：${codex.entry.path}）`);
+  console.log(`[回归] codex 运行时 codex（照抄真实登记：${codex.entry.path}）`);
 
   // —— 起临时实例 ——
   const serverLog = { buf: '' };
@@ -540,7 +542,7 @@ async function main() {
     startedAt: new Date().toISOString(),
     port: PORT,
     dataDir,
-    codexRuntime: { id: codex.id, path: codex.entry.path },
+    codexRuntime: { id: 'codex', path: codex.entry.path },
     questions: [],
   };
 
