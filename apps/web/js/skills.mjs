@@ -750,26 +750,45 @@ export async function renderGitRepos(root = $('pluginView')) {
   const repoDetail = sel
     ? `<div class="plg-detail-head fixed-head">
          <b>${esc(sel.fullName)}</b>${sel.isPrivate ? '<span class="pill">私有</span>' : ''}
-         <!-- 导航条上原来挂的是分支 pill，2026-11-20 用户："这个去掉，换成本地目录" ——
-              分支在「分支管理」tab 里有完整列表，导航条这块位置改放仓库的本地目录。 -->
-         <span class="gr-head-path" title="${esc(sel.localPath || '')}">${esc(sel.localPath || '')}</span>
+         <!-- 当前本地分支（2026-11-22 用户："这两个位置换一下"；"分支管理改成点击打开
+              下拉框的方式操作"）：pill 变成下拉开关 —— 内容（本地/远程/标签 + 新建分支/
+              更新项目）挂在下面的 .gr-branch-drop 浮层里，「分支管理」tab 退场；
+              值在 fillChanges 里用同一次 /changes 的 state.branch 补上，切分支后重画跟上。 -->
+         <button type="button" class="gr-head-branch" id="grHeadBranchBtn" title="分支管理：切分支 / 远程 / 标签">
+           <i class="gr-head-br-ic" aria-hidden="true">${ICON_BRANCH}</i><b id="grHeadBranch"></b>
+           <span class="gr-head-caret" aria-hidden="true">▾</span>
+         </button>
          ${
            sel.localPathExists === false
              ? `<span class="pill" style="color:var(--warn)" title="本地目录被改名或挪走了 —— 仓库身份不受影响，重新指一下就行">本地目录找不到</span>
                 <button type="button" class="mini" id="grRelocate">重新定位</button>`
              : ''
          }
-         <!-- 当前本地分支（2026-11-20 用户："在右上角显示当前本地分支"）：
-              值在 fillChanges 里用同一次 /changes 的 state.branch 补上，切分支后重画自动跟上。 -->
-         <span class="gr-head-branch" title="当前本地分支">
-           <i class="gr-head-br-ic" aria-hidden="true">${ICON_BRANCH}</i><b id="grHeadBranch"></b>
-         </span>
+         <!-- 导航条上原来挂的是分支 pill，2026-11-20 用户："这个去掉，换成本地目录"；
+              2026-11-22 与分支换位 —— 目录退到行尾（margin-left:auto 顶右沿）。 -->
+         <span class="gr-head-path" title="${esc(sel.localPath || '')}">${esc(sel.localPath || '')}</span>
+         <!-- 分支管理下拉：绝对定位在头部之下；数据由 fillBranchTab 填（refresh 顺手刷新） -->
+         <div id="grBranchDrop" class="gr-branch-drop plg-hidden">
+           <!-- 动作区（2026-11-22 用户："做成这种效果"，指 JetBrains 分支弹窗）：
+                动作行左对齐铺满（图标 + 文字），分隔线隔开下面的分支树 -->
+           <div class="gr-drop-actions">
+             <button type="button" class="gr-drop-act" id="grBranchSync" title="git pull：拉取上游新提交">
+               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+               <span>更新项目…</span>
+             </button>
+             <button type="button" class="gr-drop-act" id="grBranchNew">
+               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+               <span>新建分支…</span>
+             </button>
+           </div>
+           <div class="gr-drop-sep"></div>
+           <div id="grBranchList" class="gr-br-list"><div class="sk-blank">正在读分支…</div></div>
+         </div>
        </div>
        <!-- 工具栏（2026-11-20，用户："顶部做成工具栏，像 tab 一样，点了显示对应区域"）：
             纵向堆四块时一次只能看一块，还要一路滚；现在分段，默认落在「提交 / 推送」。 -->
        <nav class="gr-tabs" id="grTabs" aria-label="仓库视图">
          <button type="button" data-gr-tab-btn="commit">提交 / 推送</button>
-         <button type="button" data-gr-tab-btn="branch">分支管理</button>
          <button type="button" data-gr-tab-btn="pr">PR</button>
          <button type="button" data-gr-tab-btn="log">历史</button>
        </nav>
@@ -846,18 +865,6 @@ export async function renderGitRepos(root = $('pluginView')) {
            </b></div>
          </section>
        </div>` : ''}
-       <div class="plg-sec" data-gr-tab="branch">
-         <!-- 分支管理（2026-11-20 用户："这个移动到管理分支tab"）：原来塞在分支下拉里的
-              最近 / 本地 / 远程 / 标签 整块搬到这里，下拉只留操作项。 -->
-         <div class="plg-sec-head">
-           <label class="plg-sec-title">分支管理</label>
-           <button type="button" class="mini auto" id="grBranchNew">新建分支…</button>
-           <button type="button" class="mini auto" id="grBranchSync" title="git pull：拉取上游新提交">更新项目</button>
-         </div>
-         <section class="fx">
-           <div id="grBranchList" class="gr-br-list"><div class="sk-blank">正在读分支…</div></div>
-         </section>
-       </div>
        <div class="plg-sec" data-gr-tab="log">
          <div class="plg-sec-head"><label class="plg-sec-title">历史</label></div>
          <section class="fx"><div id="grLog"><div class="sk-blank">读提交记录…</div></div></section>
@@ -930,7 +937,7 @@ export async function renderGitRepos(root = $('pluginView')) {
    * 不重拉数据、不重建节点，所以「提交」卡里正在写的说明切走再切回不会丢。
    * 当前 tab 记内存态 S.gitTab，换仓库时保留在同一块。
    */
-  const GR_TABS = ['commit', 'branch', 'pr', 'log'];
+  const GR_TABS = ['commit', 'pr', 'log'];
   const showTab = (t) => {
     const cur = GR_TABS.includes(t) ? t : 'commit';
     S.gitTab = cur;
@@ -945,6 +952,42 @@ export async function renderGitRepos(root = $('pluginView')) {
     b.addEventListener('click', () => showTab(b.dataset.grTabBtn));
   });
   showTab(S.gitTab);
+
+  /*
+   * 分支下拉（2026-11-22 用户："分支管理改成点击打开下拉框的方式操作"）：
+     点击头部 pill 开合；开时顺手 fillBranchTab 刷一遍数据，点外面 / Esc 收起；
+     切完分支 refresh() 整页重画，浮层自然消失，不用专门收。 */
+  const grDrop = $('grBranchDrop');
+  const grPill = $('grHeadBranchBtn');
+  const closeGrDrop = () => {
+    grDrop?.classList.add('plg-hidden');
+    document.removeEventListener('pointerdown', grDropOutside, true);
+    document.removeEventListener('keydown', grDropEsc, true);
+  };
+  const grDropOutside = (e) => {
+    if (!grDrop || grDrop.contains(e.target) || grPill?.contains(e.target)) return;
+    closeGrDrop();
+  };
+  const grDropEsc = (e) => {
+    if (e.key === 'Escape') closeGrDrop();
+  };
+  grPill?.addEventListener('click', () => {
+    if (!grDrop) return;
+    const show = grDrop.classList.contains('plg-hidden');
+    grDrop.classList.toggle('plg-hidden', !show);
+    if (show) {
+      fillBranchTab(sel);
+      // 锚到分支 pill 正下方（2026-11-22 用户："窗口应该显示在当前分支下面"）：
+      // pill 的横向位置现算，超出导航条右沿就往回收，别探出窗口
+      const headW = grDrop.parentElement?.clientWidth ?? 800;
+      grDrop.style.left = Math.max(12, Math.min(grPill.offsetLeft, headW - grDrop.offsetWidth - 16)) + 'px';
+      grDrop.style.right = 'auto';
+      document.addEventListener('pointerdown', grDropOutside, true);
+      document.addEventListener('keydown', grDropEsc, true);
+    } else {
+      closeGrDrop();
+    }
+  });
 
   /*
    * 顶部常驻动作（2026-11-20，用户："入口分散、要多点几步，基础功能尽量傻瓜式"）：
@@ -1688,7 +1731,7 @@ export async function renderGitRepos(root = $('pluginView')) {
    * - 远程分支 / 标签默认收起：本地分支才是天天用的，远程几十条铺开只会淹掉主线。
    */
   const branchGroupItems = (b) => [
-    { header: '本地分支', foldable: false },
+    { header: '本地分支', foldable: true },
     ...folderize((b.local ?? []).map((n) => ({ id: n, name: n, menu: true, ...branchMeta(b, n) })), '本地'),
     ...(b.remote?.length
       ? [
@@ -2078,8 +2121,8 @@ export async function renderGitRepos(root = $('pluginView')) {
         const off = it.foldable && folded.has(group);
         rows.push(
           `<div class="gr-br-head${it.foldable ? ' foldable' : ''}${off ? ' off' : ''}" data-gr-head="${esc(group)}">` +
-            `<span>${esc(group)}</span>` +
             (it.foldable ? '<span class="gr-br-caret" aria-hidden="true">›</span>' : '') +
+            `<span>${esc(group)}</span>` +
             `</div>`,
         );
         continue;
@@ -2098,7 +2141,9 @@ export async function renderGitRepos(root = $('pluginView')) {
         `<button type="button" class="gr-br-row${on ? ' on' : ''}${hide}"` +
           ` data-br-id="${esc(it.id)}" data-gr-of="${esc(group)}" title="${esc(it.hint || label)}">` +
           `<span class="gr-br-mark">${on ? '<span class="gr-br-dot" title="当前分支" aria-label="当前分支"></span>' : ''}</span>` +
-          `<span class="gr-br-ic">${it.icon ?? ''}</span>` +
+          // 空图标不占格子（2026-11-22 用户："点跟分支的间隙小一些"）：flex 的 gap 会给
+          // 每个兄弟都算一份，空 span 白吃一个 8px 间隙，圆点和分支名之间就空了一截
+          (it.icon ? `<span class="gr-br-ic">${it.icon}</span>` : '') +
           `<span class="gr-br-name">${esc(label)}</span>` +
           (it.hint ? `<span class="gr-br-hint">${esc(it.hint)}</span>` : '') +
           (it.badge ? `<span class="gr-br-badge">${esc(it.badge)}</span>` : '') +
@@ -2126,18 +2171,18 @@ export async function renderGitRepos(root = $('pluginView')) {
       const row = e.target.closest('[data-br-id]');
       if (!row || !box.contains(row)) return;
       const id = row.dataset.brId;
-      // 行尾 › 只开菜单、不切分支（与下拉里的行为一致）
-      if (e.target.closest('.gr-br-more')) {
-        const remote = id.startsWith('origin/');
-        const name = remote ? id.slice('origin/'.length) : id;
-        const r = row.getBoundingClientRect();
-        openBranchMenu(repo, { x: r.right, y: r.top }, { name, remote, cur: id === cur ? name : '' }, {
-          checkout: () => onBranchPick(repo, id, cur, noCombo),
-        });
-        return;
-      }
-      // 行本身不触发任何操作（2026-11-20 用户："点击这个不要触发任何操作，
-      // 点击右边的箭头有选项卡，通过选项卡操作"）—— 切换 / 删除等都走行尾 › 的菜单。
+      // 整行都是操作卡的点击区（2026-11-22 用户："点击区为整行"，原先行尾 › 才开菜单）：
+      // 点行任意位置弹出操作卡，锚在行右端；切换 / 删除等都走卡。
+      const remote = id.startsWith('origin/');
+      const name = remote ? id.slice('origin/'.length) : id;
+      const r = row.getBoundingClientRect();
+      // 操作卡弹到浮层外面、且**贴住**面板（2026-11-22 用户："再往右一些，显示在窗口外面"、
+      // "选项卡贴住窗口，不要有间隙"）：锚挂面板右沿（含边框），卡左缘与面板右缘齐平 ——
+      // 在外面但不留缝。右边放不下时 openCtxMenu 会自己往左翻（只好盖回面板，总比出屏好）。
+      const dr = row.closest('.gr-branch-drop')?.getBoundingClientRect();
+      openBranchMenu(repo, { x: dr ? dr.right : r.right, y: r.top }, { name, remote, cur: id === cur ? name : '' }, {
+        checkout: () => onBranchPick(repo, id, cur, noCombo),
+      });
     };
 
     const nb = $('grBranchNew');
@@ -2348,6 +2393,9 @@ export async function renderGitRepos(root = $('pluginView')) {
      */
     const LANE_PALETTE = 8;
     const laneColors = [];
+    /* 第二父的「挂起出线」（2026-11-22 第三轮茬修复）：第二父不占 lane，出线挂在这里，
+       等它的提交节点出现时一条大弧线直接画过去（render 里的 recv 段） */
+    const pending = [];
     let cursor = LANE_PALETTE - 1;
     const takeColor = () => {
       const used = new Set();
@@ -2391,25 +2439,28 @@ export async function renderGitRepos(root = $('pluginView')) {
       /* 节点颜色要**在这里**取定：根提交（没有父）下面会把本列清空，
          等到 rows.push 时再读就成了 null（第一版就踩了，末行节点变默认色）。 */
       const laneColor = laneColors[lane];
+      /* 第二父出线（2026-11-22 用户："这个茬处理一下"，第三轮）：
+         原来第二父不在等待列时**新占一条 lane**，出线变成「跳到新列 → 竖线等几行 →
+         弯回父提交节点」的三段 S 形（f41163f/b78a5b1 的茬就是它）。现在改成
+         **pending 出线**：不占列，挂起等父提交的节点出现时，一条大弧线直接从
+         合并节点画过去（Git Graph 同款）—— 中间不再有等待竖线和回弯。 */
       const parents = Array.isArray(c.parents) ? c.parents : [];
       const parentLanes = [];
       if (parents.length) {
         lanes[lane] = parents[0];
         parentLanes.push(lane);
         for (const p of parents.slice(1)) {
-          let pl = lanes.indexOf(p);
-          if (pl < 0) {
-            pl = lanes.indexOf(null);          // 优先复用左侧已收束的空位，树更紧凑
-            if (pl < 0) { pl = lanes.length; lanes.push(null); laneColors.push(takeColor()); }
-            else laneColors[pl] = takeColor(); // 空列换主人：新分支领新色，别沿用上一条的颜色
-            lanes[pl] = p;
-          }
-          parentLanes.push(pl);
+          const pl = lanes.indexOf(p);
+          if (pl >= 0) parentLanes.push(pl);   // 已有 lane 在等它 → 出线一跳弯过去（原逻辑）
+          else pending.push({ fromRow: index, fromLane: lane, color: takeColor(), target: p });
         }
       } else {
         lanes[lane] = null;
         laneColors[lane] = null;
       }
+      /* 挂着的 pending 出线，目标提交在本行出现 → 收下（画线用，render 里连大弧线） */
+      const recv = pending.filter((pe) => pe.target === key);
+      for (const pe of recv) pending.splice(pending.indexOf(pe), 1);
       rows.push({
         commit: c,
         lane,
@@ -2425,6 +2476,7 @@ export async function renderGitRepos(root = $('pluginView')) {
         endColors: trim(laneColors.slice()),   // 与 end 同长：出线弯到的那列用**它的**颜色
         joins,
         parentLanes,
+        recv,                          // 本行收束的 pending 出线（跨行大弧线画到节点）
         last: index === commits.length - 1,
       });
     });
@@ -2506,14 +2558,27 @@ export async function renderGitRepos(root = $('pluginView')) {
           p(`M${X(i)} ${top}V${top + H}`, ci);   // 别的分支贯穿本行
         }
       }
-      /* 出线：父提交那一列从节点往下走；跨列时一路弯到**下一行的节点**（H + cy） */
+      /* 出线：父提交那一列从节点往下走；跨列时一路弯到**下一行的节点**（H + cy）。
+         控制点收紧（0.55 → 0.32，2026-11-22 用户："这个茬处理一下"）：曲线贴着源竖线
+         走到接近行底才弯出去，跨过中间等待竖线的交叉点下移——不再横穿行中部
+         在节点右侧留出一截斜茬。 */
       if (ri < rows.length - 1) {
         for (const pl of r.parentLanes) {
           if (pl === r.lane) p(`M${cx} ${top + cy}V${top + H}`, r.laneColor);
           else {
-            p(`M${cx} ${top + cy}C${cx} ${top + cy + H * 0.55} ${X(pl)} ${top + H + cy - H * 0.55} ${X(pl)} ${top + H + cy}`, r.endColors[pl] ?? r.laneColor);
+            p(`M${cx} ${top + cy}C${cx} ${top + cy + H * 0.32} ${X(pl)} ${top + H + cy - H * 0.32} ${X(pl)} ${top + H + cy}`, r.endColors[pl] ?? r.laneColor);
           }
         }
+      }
+      /* 第二父 pending 出线收束：从合并节点一条大弧线跨行画到本行节点
+         （弧线跨多少行都行 —— 整块 SVG，不再有中间等待竖线和回弯的 S 形茬） */
+      for (const pe of r.recv ?? []) {
+        const x0 = X(pe.fromLane);
+        const y0 = pe.fromRow * H + cy;
+        const x1 = cx;
+        const y1 = top + cy;
+        const ym = (y0 + y1) / 2;
+        lines.push(`<path d="M${x0} ${y0}C${x0} ${ym} ${x1} ${ym} ${x1} ${y1}" stroke="${color(pe.color)}"/>`);
       }
 
       /* refs：去重、HEAD 排最前、最多挂三颗 —— 再多就把提交说明挤没了 */
