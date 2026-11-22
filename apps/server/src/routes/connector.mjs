@@ -6,6 +6,27 @@ import * as runtimes from '../runtimes.mjs';
 import * as connectors from '../connectors.mjs';
 import * as catalog from '../catalog.mjs';
 
+/**
+ * 装/改完顺手实探一次，把工具名记进账本（2026-11-22）。
+ *
+ * 卡片第三行要「简述接过来的能力」，不探就只有启动命令 —— 用户看不出它能干什么。
+ * fire-and-forget：探不到就当没探（前端退回 note / 命令摘要），**不许挡保存**，
+ * 也不给它加超时兜底 —— probe 自己 20s 会放弃。
+ */
+function rememberTools(id) {
+  try {
+    if (connectors.get(id)?.transport !== 'stdio') return;
+    connectors
+      .probe(id)
+      .then((r) => {
+        if (r.ok) connectors.setTools(id, r.tools);
+      })
+      .catch(() => {});
+  } catch {
+    /* 记不上不影响保存 */
+  }
+}
+
 export async function handleConnector(req, res, url) {
   const one = /^\/api\/connectors\/([^/]+)$/.exec(url.pathname);
   const probeOne = /^\/api\/connectors\/([^/]+)\/probe$/.exec(url.pathname);
@@ -43,25 +64,32 @@ export async function handleConnector(req, res, url) {
         enabled: true,
       });
       if (r.error) return fail(res, 400, 'E1040', r.error, r);
+      rememberTools(c.id);
       return sendJson(res, 201, { ...r, needs: c.requires, note: c.note });
     }
 
     // ② 手工装 / 改一条
     const id = String(body.id ?? '').trim();
     const r = connectors.saveEntry(id, body);
-    return r.error ? fail(res, 400, 'E1041', r.error, r) : sendJson(res, 201, r);
+    if (r.error) return fail(res, 400, 'E1041', r.error, r);
+    rememberTools(id);
+    return sendJson(res, 201, r);
   }
 
   if (req.method === 'POST' && probeOne) {
     const id = decodeURIComponent(probeOne[1]);
-    return sendJson(res, 200, await connectors.probe(id));
+    const r = await connectors.probe(id);
+    if (r.ok) connectors.setTools(id, r.tools); // 探到了就记下来，卡片下次就能说明能力
+    return sendJson(res, 200, r);
   }
 
   if ((req.method === 'PUT' || req.method === 'PATCH') && one) {
     const id = decodeURIComponent(one[1]);
     if (!connectors.get(id)) return fail(res, 404, 'E2020', '没有这条连接器');
     const r = connectors.saveEntry(id, await readBody(req));
-    return r.error ? fail(res, 400, 'E1042', r.error, r) : sendJson(res, 200, r);
+    if (r.error) return fail(res, 400, 'E1042', r.error, r);
+    rememberTools(id);
+    return sendJson(res, 200, r);
   }
 
   if (req.method === 'DELETE' && one) {

@@ -257,6 +257,30 @@ try {
     }
   }
 
+  console.log('\n⑨ 群会话建卡：执行人必须是群成员（2026-11-21 实报：贺韬把活派给了不在群里的嘉辉，卡成了黑箱）');
+  {
+    /*
+     * 雇主在群里问「这个群能为我干嘛」，贺韬建卡 @ 了**不在群里**的嘉辉 —— 卡票进了群，
+     * 被派的人却看不见这场对话。以前只有**子卡**校验"执行人不在主卡群里"，普通卡没有 ——
+     * 这里钉住补上的闸：发起会话是群 → 执行人必须在群；1:1 建卡不受这条管。
+     */
+    experts.hireExpert('lijun');                       // 群外人：李俊没进「通道验收群」
+    const outsider = store.getPersona('p-expert-lijun');
+    const rejected = await post('/api/agent/cards', JSON.stringify(card({
+      title: '派给群外人的卡', status: 'todo', assigneePersonaId: outsider.id, idempotencyKey: 'p2-outsider',
+    })));
+    check('执行人不在群里 → 400 E2059', rejected.status === 400 && rejected.body.code === 'E2059',
+      `${rejected.status} ${rejected.body.code ?? ''} ${String(rejected.body.error ?? '').slice(0, 60)}`);
+    check('错误话术点破「不在群里」并给出群成员名单', /不在发起这场派活的群里/.test(rejected.body.error ?? '') && /嘉辉/.test(rejected.body.error ?? ''),
+      String(rejected.body.error ?? '').slice(0, 90));
+    // 正向对照：同一条通道、执行人在群里 → 照常建（idea 不派活，冒烟里不起 run）
+    const insider = await post('/api/agent/cards', JSON.stringify(card({
+      title: '派给群内人的卡', status: 'idea', assigneePersonaId: dev.id, idempotencyKey: 'p2-insider',
+    })));
+    check('执行人在群里 → 照常 201', insider.status === 201 && !!insider.body.task?.id,
+      `${insider.status} ${String(insider.body.error ?? '').slice(0, 60)}`);
+  }
+
   // 关库再删目录（Windows 上库还开着删不掉）
   try { db = await import(pathToFileURL(path.join(repo, 'apps/server/src/store/db.mjs')).href); db.db.close(); } catch { /* 关不掉就算了 */ }
 } catch (e) {
