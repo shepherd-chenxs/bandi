@@ -147,6 +147,27 @@ console.log('\n⑥ 只有卡、没有运行记录 → 只给卡状态（不编�
   check('没有轮次行', !block.includes('跑了'), '');
 }
 
+console.log('\n⑥b 按卡归集：卡换会话派活，旧会话的轮次看得见（R4-1）');
+{
+  const projB = store.createProject({ name: 'bandi-b', root: 'E:/repob' });
+  const cardB = store.createProjectTask({ projectId: projB.id, title: '跨会话的活', status: 'doing', conversationId: null });
+  // 工单会话（execScope = task:<卡id>）里跑过几轮 —— 看板派活 / 卡评论 / 流程步骤落的就是这类会话
+  const execConv = store.ensureExecConversation({ personaId: me.id, scope: `task:${cardB.id}`, title: '任务 · 跨会话的活' });
+  const run = store.createRun({ conversationId: execConv.id, runtime: 'codex', personaId: me.id });
+  let seqB = 0;
+  store.appendRunEvent(run.id, ++seqB, { type: 'tool', name: 'file_change', detail: { changes: [{ path: 'E:/repob/apps/x.mjs', kind: 'update' }] } });
+  store.finishRun(run.id, { status: 'done', exitCode: 0 });
+  // 卡换会话派活：conversationId 更新成新会话（两条派活路径都这么写），旧会话从此不在卡上
+  const convNew = store.createConversation({ kind: 'direct', title: '卡的新会话', personaId: me.id });
+  store.updateProjectTask(cardB.id, { conversationId: convNew.id });
+
+  const block = progressBlock({ conversationId: convNew.id, personaId: me.id, root: 'E:/repob' });
+  check('新会话能看见卡', block.includes(cardB.id) && block.includes('跨会话的活'), block.slice(0, 120));
+  check('旧会话（工单会话）的轮次按卡归集进来', block.includes('跑了 1 轮'), block);
+  check('标注跨了 2 段会话', block.includes('跨 2 段会话'), '');
+  check('旧会话里改过的文件也在', block.includes('apps/x.mjs'), block);
+}
+
 console.log('\n⑦ 超长真的截得住（截在行边界、块头不丢）');
 {
   const proj3 = store.createProject({ name: 'bandi-3', root: 'E:/repo3' });

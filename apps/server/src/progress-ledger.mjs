@@ -199,9 +199,49 @@ export function progressBlock({ conversationId, personaId = null, root = null } 
     card = store.getProjectTaskByConversation(conversationId);
   } catch { /* 老库没这张表也不影响交接 */ }
 
+  /*
+   * **按卡归集**（2026-11-22，缺口①的尾巴）：原来只按 conversationId 回溯 —— 卡被换会话
+   * 派活（群协作卡换段 / 1:1 删了重开 / 卡改派）时，旧会话的轮次新会话看不到，"干到哪了"
+   * 只剩最近一段。改法：**有卡就按卡把会话找齐**，没卡（纯聊天）退回按会话，行为不变。
+   *
+   * 卡的轮次可能散在三类会话里：
+   *   ① 卡现在的 conversationId（群协作卡每派一次就跟着挪，见 project-tasks 的两条派活路径）；
+   *   ② 工单会话（execScope = `task:<卡id>`）—— 看板派活 / 卡评论 / 流程步骤都落在这类会话，
+   *      改派换人还会再开一条，按 scope 反查才找得全（store.listConversationsByExecScope）；
+   *   ③ 群协作卡所在群的历史段（旧段的轮次）。
+   * 已知边界（如实记，不硬凑）：聊天派活投影的卡，早期 1:1 里的轮次没有任何持久线索
+   * （触发消息不带卡标记、runs.taskId 记的是流程 id），删了会话就真找不回 —— 那部分退回现状。
+   */
+  let cardConvIds = null; // null = 没卡：按会话回溯（原行为）
+  if (card) {
+    const ids = new Set();
+    if (card.conversationId) ids.add(card.conversationId);
+    try {
+      for (const c of store.listConversationsByExecScope(`task:${card.id}`)) ids.add(c.id);
+    } catch { /* 老库没有这个函数就少找一类，不挡交接 */ }
+    if (card.assigneeGroupId) {
+      try {
+        for (const s of store.listGroupSessions(card.assigneeGroupId)) ids.add(s.id);
+      } catch { /* 同上 */ }
+    }
+    cardConvIds = [...ids];
+  }
+
   let all = [];
   try {
-    all = store.listRuns(conversationId).filter((r) => r.status !== 'running');
+    const seen = new Set();
+    all = (cardConvIds ?? [conversationId])
+      .flatMap((cid) => store.listRuns(cid))
+      .filter((r) => {
+        if (r.status === 'running') return false;
+        if (seen.has(r.id)) return false; // 同一条 run 理论上只属一条会话，防手滑重复计数
+        seen.add(r.id);
+        return true;
+      });
+    if (cardConvIds && cardConvIds.length > 1) {
+      // 多条会话拼起来要重新按时间排，明细才真是"新的在上"
+      all.sort((a, b) => String(b.startedAt ?? '').localeCompare(String(a.startedAt ?? '')));
+    }
   } catch { /* 拿不到就只交接卡 */ }
 
   const mine = personaId ? all.filter((r) => r.personaId === personaId) : all;
@@ -224,7 +264,12 @@ export function progressBlock({ conversationId, personaId = null, root = null } 
   if (rows.length) {
     const count = { done: 0, failed: 0, stopped: 0 };
     for (const r of rows) if (count[r.status] != null) count[r.status] += 1;
-    const summary = [`- ${scoped ? '你在这之前跑了' : '这个会话跑了'} ${rows.length} 轮`, `完成 ${count.done}`, `失败 ${count.failed}`];
+    // 有卡 = 轮次按卡归集（可能跨多条会话），口径就得跟着说"这张卡"；没卡才是"这个会话"
+    const cross = cardConvIds && cardConvIds.length > 1 ? `（跨 ${cardConvIds.length} 段会话）` : '';
+    const scopeNoun = card
+      ? (scoped ? `你在这张卡上之前跑了 ${rows.length} 轮${cross}` : `这张卡跑了 ${rows.length} 轮${cross}`)
+      : `${scoped ? '你在这之前跑了' : '这个会话跑了'} ${rows.length} 轮`;
+    const summary = [`- ${scopeNoun}`, `完成 ${count.done}`, `失败 ${count.failed}`];
     if (count.stopped) summary.push(`被停 ${count.stopped}`);
     lines.push(summary.join('，'));
 

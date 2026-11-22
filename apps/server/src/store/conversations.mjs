@@ -63,6 +63,18 @@ export function ensureExecConversation({ personaId, scope, title, projectId = nu
   return getConversation(row.id);
 }
 
+/**
+ * 一个 execScope（如 `task:pt-xxx`）下的**全部**工单会话（2026-11-22，事实账按卡归集）。
+ *
+ * `ensureExecConversation` 是"这个人 × 这个 scope"的一条 —— 卡改派给另一个人就会再开一条，
+ * 于是同一张卡的轮次散在多条会话里。按卡归集要的是**不管执行人是谁**的全部：按 scope 反查。
+ */
+export function listConversationsByExecScope(scope) {
+  return db
+    .prepare("SELECT * FROM conversations WHERE kind = 'exec' AND execScope = ? ORDER BY updatedAt DESC")
+    .all(scope);
+}
+
 /** 这个员工手上正在跑几件（每人并发上限靠它） */
 
 export function setConversationModel(id, model) {
