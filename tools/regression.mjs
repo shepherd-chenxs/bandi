@@ -94,8 +94,8 @@ async function api(method, urlPath, body) {
  * 改文件 / 读文件 / 普通命令。
  * 已知局限（量具的边界，报告里 actions 原文可查，人工可复核）：
  *   · `kill-port` 这类复合词不算清杀（kill 后面必须跟空白）；
- *   · 单跑某个 smoke 文件（node apps/server/src/smoke-x.mjs）不在手册认的测试清单里，
- *     归 command —— 手册写的就是 `node tools/run-smokes.mjs`，量具与手册同源才公平。
+ *   · 单跑某个 smoke 文件（node apps/server/src/smoke-*.mjs 里随便哪一个）不在手册认的
+ *     测试清单里，归 command —— 手册写的就是 `node tools/run-smokes.mjs`，量具与手册同源才公平。
  */
 const KIND_RULES = [
   { kind: 'process', re: /Stop-Process|taskkill\b|pkill\b|killall\b|\bkill\s/i },
