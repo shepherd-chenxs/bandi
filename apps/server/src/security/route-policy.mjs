@@ -143,6 +143,15 @@ export const ROUTES = [
   { id: 'persona.runtimeSkills', m: ['GET', 'PUT'], path: p('/api/personas', id1, 'runtime-skills'), auth: 'session' },
   { id: 'persona.skills', m: ['GET', 'POST'], path: p('/api/personas', id1, 'skills'), auth: 'session' },
   { id: 'persona.skill.one', m: ['PUT', 'DELETE'], path: p('/api/personas', id1, 'skills', id1), auth: 'session' },
+  /*
+   * 经验簿（2026-11-22，缺口①）：跨会话记住的"口径"与"踩过的坑"。
+   *   · 读：运行钥匙也能读（自己那份账，派活时平台已经替你注入了，跑起来想核对时用得上）；
+   *   · 写：**不给运行钥匙** —— 员工能在对话里自己记一条口径，是刻意留的路（听到雇主定规矩时
+   *     落盘），走的是他自己那条 CLI 的登录；但"运行中途改自己的经验簿"没有必要，
+   *     而且会让"谁记的"变模糊（source 只有 audit / manual 两种）。要开，先想清楚这一点。
+   */
+  { id: 'persona.notes', m: ['GET', 'POST', 'DELETE'], path: p('/api/personas', id1, 'notes'), auth: 'session', run: true, call: 'GET /api/personas/{id}/notes', note: '运行钥匙只读：这个人记住了哪些口径与坑；?all=1 才清空' },
+  { id: 'persona.note.one', m: ['DELETE'], path: p('/api/personas', id1, 'notes', id1), auth: 'session' },
   { id: 'persona.feishu', m: ['GET', 'PUT', 'POST'], path: p('/api/personas', id1, 'feishu(?:/test|/start|/stop)?'), auth: 'session' },
   { id: 'group.create', m: ['POST'], path: p('/api/groups'), auth: 'session',
     note: '手机建群（2026-11-05 实机：E4033，与 conv.create 同一个坑——路由没打 device 标）。只开**建**：改名/解散/换群助手/踢人仍是桌面的事' },

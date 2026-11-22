@@ -29,6 +29,8 @@ export * from './store/projects.mjs';
 export * from './store/projectTasks.mjs';
 // 信箱（2026-11-11）：平台事实的落库账本 —— 建卡失败等事件先记这儿，界面与以后的摘要都读它
 export * from './store/notices.mjs';
+// 经验簿（2026-11-22）：跨会话记住的口径与踩过的坑 —— 只收"能指回一件真事"的条目
+export * from './store/notes.mjs';
 export * from './store/nodeTasks.mjs';
 export * from './store/workflows.mjs';
 export * from './store/gitRepos.mjs';

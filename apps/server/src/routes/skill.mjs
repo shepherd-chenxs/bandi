@@ -36,7 +36,13 @@ export async function handleSkill(req, res, url) {
       const pidLock = experts.lockKindOf(pid);
       if (pidLock) {
         const who = store.getPersona(pid);
-        return fail(res, 403, 'E2054', `「${who?.name ?? pid}」是${LOCK_MSG[pidLock].who}，技能${pidLock === 'expert' ? '随专家包' : '随平台'}固定，不能添加`);
+        // LOCK_MSG 在 experts.mjs（2026-11-22 修：原来这里裸用了一个本模块没有的常量，必 500）
+        return fail(
+          res,
+          403,
+          'E2054',
+          `「${who?.name ?? pid}」是${experts.LOCK_MSG[pidLock].who}，技能${pidLock === 'expert' ? '随专家包' : '随平台'}固定，不能添加`,
+        );
       }
       if (store.listPersonaSkills(pid).includes(skillName)) { skipped.push(pid); continue; }
       store.linkPersonaSkill(pid, skillName);

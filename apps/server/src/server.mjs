@@ -12,6 +12,9 @@ import * as runs from './runs.mjs';
 import * as skills from './skills.mjs';
 import * as runtimes from './runtimes.mjs';
 import * as taskClaimAudit from './task-claim-audit.mjs';
+import * as criteriaAudit from './criteria-audit.mjs';
+// 经验簿（2026-11-22）：跨会话记住的口径与踩过的坑 —— 写入口径极窄，见 experience.mjs 文件头
+import * as experience from './experience.mjs';
 import * as freshness from './freshness.mjs';
 import * as externals from './externals.mjs';
 import * as plugins from './plugins.mjs';
@@ -773,6 +776,15 @@ runs.onRunFinish(onTaskRunFinished);
 // 注册在 onTaskRunFinished **之后**（finishHooks 先来先到）—— 先让 [完成] 标记把卡状态
 // 流转完再核对，避免"员工刚声明交付、卡还在待验收"的假阳性。机制见 task-claim-audit.mjs。
 runs.onRunFinish((run) => taskClaimAudit.reconcile({ run }));
+// 判据核对（2026-11-22，缺口②的执行侧）：这个岗声称完成，判据要求的动作到底做没做。
+// 必须注册在台账核对**之后** —— 先让 [完成] 把卡流转完，再看动作够不够（理由见 criteria-audit.mjs）。
+runs.onRunFinish((run) => criteriaAudit.reconcile({ run }));
+/*
+ * 经验簿采集（2026-11-22，缺口①）：把上一行 / 上两行**已经写进信箱的核对结论**抄成他的"坑"。
+ * 必须排在两个核对之后（先有结论再采集，一个来源两处读）；它不判任何事、不抛错，
+ * 采集失败只打一行日志 —— 收尾链路不能被一段账卡住。见 experience.mjs。
+ */
+runs.onRunFinish((run) => experience.harvest({ run }));
 // 群里 @ 多人的排队（2026-10-24）：会话一次只跑一个 —— 前一个收尾，队里下一个立刻补上。
 // 挂在流程/任务卡钩子之后：它们推进的是各自 exec 会话的活，跟群排队互不挡道。
 runs.onRunFinish((run) => {

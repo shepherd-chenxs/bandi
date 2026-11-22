@@ -94,6 +94,19 @@ const RUN = [
   // 技能隐私（2026-11-22「技能页只显示简介」）：内置技能的正文不许出服务端
   // （GET /api/skills/:name → body:'' + bodyHidden），自建技能照旧回正文，写入闸照旧 403
   'apps/server/src/smoke-skill-privacy.mjs',
+  // 本轮方法论内联（2026-11-22）：派活时按任务文本匹配、命中的技能正文直接进上下文，
+  // 不再只给路径赌模型去读。钉死四条边界：命中 / 不误伤 / 有上限 / 只教做法不改交付形态。
+  'apps/server/src/smoke-skill-inline.mjs',
+  // 岗位判据（2026-11-22，缺口②）：手册里"能核对的动作"进本轮契约、收尾按工具事件核。
+  // 钉死：只吃 `## 判据` 段 / 核动作不核措辞 / 判不了记跳不记失败 / 红线只抓按进程名。
+  'apps/server/src/smoke-role-criteria.mjs',
+  // 经验簿（2026-11-22，缺口①）：跨会话记住"口径"与"踩过的坑"，只收能指回真事的条目。
+  // 钉死：两类 / 反复犯合并 hits / 只采核对结论 / 注入有配额不印空壳 / 接口写入口径窄。
+  'apps/server/src/smoke-experience.mjs',
+  // 「这段活干到哪了」（2026-11-22，缺口①后半）：换会话时交接事实账（卡状态 / 轮次成败 /
+  // 改过哪些文件 / 反复失败的原因），不是只交接"最近几条消息"。
+  // 钉死：只认改动类事件（Read 的 path 不算）/ 报错说人话 / 没历史不印空壳 / 有上限。
+  'apps/server/src/smoke-progress-ledger.mjs',
   'apps/server/src/smoke-lan-origin.mjs',
   'apps/server/src/smoke-lifecycle.mjs',
   // 身份中枢进门（2026-11-06）：验票九类负样本 + /hub/enter 正路 + 本地授权表 + 服务器形态

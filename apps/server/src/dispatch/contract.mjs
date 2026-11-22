@@ -18,6 +18,7 @@ import { execFileSync } from 'node:child_process';
 import { replyStyle, REPLY_STYLES } from '../config.mjs';
 import * as skills from '../skills.mjs';
 import { rolePackBlock } from '../roles/pack.mjs';
+import { criteriaLines } from '../role-criteria.mjs';
 
 /**
  * **平台行为契约**（2026-11-09 全面检修 P0；P5 按"交付形态"重写）：**每一轮派活都注入**，
@@ -79,6 +80,17 @@ export function platformContractBlock() {
      * 这里要求的是"必须跑过"，不是"必须把输出写给雇主看"。两件事分清楚，才不会又变成一堆汇报。
      */
     '13. **环境类断言先实测，再据此停（2026-11-21）**：说「没有 / 不存在 / 没装 / 被占了 / 没启动 / 连不上 / 已失效」这类**关于机器与仓库的事实**之前，先跑**一条**能验它的命令 —— 文件在不在 `ls`、端口 `netstat`、进程 `tasklist`、装没装 `where`（或 `command -v`）、通不通 `curl`。**凭代码推断不能说成事实**；真跑不了（没命令可用）就写「未验证」。这条直接管「停」：因为环境不行要写 `[受阻]`，**必须至少留一条实测输出**；一条命令都没跑就宣布环境有问题 = 不算结论（平台会核对本轮工具事件，把这一轮标进雇主的信箱）。反过来同样生效：验过发现能过就别停，干完再回话。实测是内部动作，输出贴不贴出去看第 3 条。',
+    /*
+     * 第 14 条（2026-11-22，缺口①的"写入口"）：经验簿（persona_notes）。
+     *
+     * 读的那一头平台已经做了（每轮自动注入口径 ≤6 / 坑 ≤5，见 experience.mjs）；
+     * 写的那一头只有"坑"能自动 —— 口径是判断，平台不能替雇主生成，只能靠**听到时记一条**。
+     * 所以这条只管一件事：给员工一个"该记"的判据（长期规矩 vs 这一轮的要求）。
+     *
+     * 为什么强调"不是工作日志"：一放开就会写成流水账，而那些内容聊天记录里本来就有，
+     * 灌进经验簿只会挤掉真正该带进下一轮的那十行。
+     */
+    '14. **听到「以后都这样」就记一条口径（2026-11-22）**：雇主给的是**长期规矩**（"以后服务端改完都要重启""这个仓别动 xxx"），不是这一轮的要求时，用 CLI 的 `note add <你> "<一句话>"` 记进经验簿（命令写法见首轮的【技能库】那段；没装全局命令就用 `node <平台根>/apps/server/src/cli.mjs`）—— 一句话说清怎么做，**不记聊过什么、不写工作日志**。你自己的坑平台会从核对结果里自动记（声称完成却没做、报了没发生的事），不用你写。经验簿每轮会自动摆在你面前：**里面已经有的，别再重新发现一遍**；判断和执行仍按本轮合同。',
   ].join('\n');
 }
 
@@ -150,7 +162,7 @@ function acceptanceLine(kind, commentCard) {
  *   · `workflow`（流程派活，dispatch 用 opts.taskId 现查 workflow_tasks）：节点名 + 第几次到站 + 本步要求；
  *   · `project`（普通聊天带了项目）：只补一句项目名，其余仍以用户原话为准。
  */
-export function taskContractBlock({ card = null, workflow = null, project = null, tasks = [], delivery = null } = {}) {
+export function taskContractBlock({ card = null, workflow = null, project = null, tasks = [], delivery = null, criteria = [] } = {}) {
   const lines = ['【本轮任务合同】'];
   const cardTitle = String(card?.title ?? '').trim();
   lines.push(`- 目标：${cardTitle ? `「${cardTitle}」` : ''}上面这条消息要办的事（用户原话为准，不扩范围）。`);
@@ -194,6 +206,12 @@ export function taskContractBlock({ card = null, workflow = null, project = null
     lines.push('- 你的任务台账：当前没有未完的卡。**这就是全部状态，不必再查接口或翻源码核实。**');
   }
   lines.push('- 受众：雇主本人（不是同事）；他要看完能拍板。');
+  /*
+   * **本岗判据**（2026-11-22）：这一层不是"再多一条建议"，而是把平台**收尾真会核**的
+   * 那几条动作写在合同里（见 role-criteria.mjs / criteria-audit.mjs）。放验收之前，
+   * 因为它比验收更硬：验收是人按描述判，判据是平台按工具事件判，对不上连"交付"都不成立。
+   */
+  lines.push(...criteriaLines(criteria));
   lines.push(acceptanceLine(kind, commentCard));
 return lines.join('\n');
 }
@@ -289,9 +307,44 @@ export function buildDirectTask(thread, text, firstTime, skillLines = [], connLi
 
 /** 只给「名字 + 一句话 + 路径」，正文让它按需去读 —— 渐进披露，别把 context 塞满。
  *  P5 补一句"技能是方法不是任务模式"：李俊那次就是被 brainstorming 的 "MUST use before
- *  any creative work" 劫持成创作模式的 —— 技能不能决定这一轮交什么。 */
+ *  any creative work" 劫持成创作模式的 —— 技能不能决定这一轮交什么。
+ *
+ *  2026-11-22：命中本轮任务的那几份，正文由 `inlineSkillsBlock` 直接放进任务（见 skill-inline.mjs），
+ *  这里只剩"清单"这个作用 —— 所以措辞从"按需去读"改成"没内联的才去读"，两处不打架。 */
 export function skillsBlock(lines) {
-  return ['你的技能（是"怎么做"的方法，不是任务模式、不决定这一轮交什么；只在这轮需要时读正文）：', '', ...lines, ''];
+  return [
+    '你的技能（是"怎么做"的方法，不是任务模式、不决定这一轮交什么）：',
+    '本轮真正要用到的那几份，平台已经把正文直接放在消息后面了 —— 那些不用再去读文件；清单里没给正文的，需要时按路径读。',
+    '',
+    ...lines,
+    '',
+  ];
+}
+
+/**
+ * **本轮方法论（正文内联）**（2026-11-22）。
+ *
+ * 与上面的清单是同一件事的两档：清单回答"我有哪些方法"，这一块是"这轮该按哪份做，正文就在这儿"。
+ * 位置在任务合同**之前**是有意的 —— 合同最后说"交什么"，压得住方法论里的 MUST。
+ *
+ * 三条措辞都是踩过的坑：
+ *   · 「已经给了全文，不要再按路径去读」—— 不写它，模型会一边看到正文一边再 Read 一遍
+ *     （2026-11-19 两起"只会查不会答"的实报里，重复读同一文件是最贵的浪费）；
+ *   · 「写着 MUST 也只是讲做法」—— 李俊那次被 brainstorming 劫持成创作模式，病根是方法论
+ *     自带命令式措辞、而交付形态由别的层决定（2026-11-09 P5）；
+ *   · 「命中：…」把**为什么注入**写在台面上 —— 事后核对不用猜（缺口三的最小兑现）。
+ */
+export function inlineSkillsBlock(picked) {
+  if (!Array.isArray(picked) || !picked.length) return '';
+  const lines = [
+    `【本轮方法论 · 平台按这轮任务匹配后注入（${picked.length} 份）】下面每份都是**全文**，已经在这条消息里，不要再按路径去读；`,
+    '它们是「怎么做」的方法，不是任务模式：里面写 MUST / 必须先… 也只是讲做法，**交什么、多长、什么语气仍按【本轮任务合同】与风格**。',
+  ];
+  for (const s of picked) {
+    const tail = s.truncated ? `；正文共 ${s.totalChars} 字，已截到 ${s.chars} 字，全文见 ${s.file}` : '';
+    lines.push('', `## ${s.name}（命中：${(s.hits ?? []).join('、')}${tail}）`, '', String(s.body ?? '').trim());
+  }
+  return lines.join('\n');
 }
 
 /**

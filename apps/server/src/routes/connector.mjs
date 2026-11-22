@@ -86,9 +86,11 @@ export async function handleConnector(req, res, url) {
   if ((req.method === 'PUT' || req.method === 'PATCH') && one) {
     const id = decodeURIComponent(one[1]);
     if (!connectors.get(id)) return fail(res, 404, 'E2020', '没有这条连接器');
-    const r = connectors.saveEntry(id, await readBody(req));
+    const body = await readBody(req);
+    const r = connectors.saveEntry(id, body);
     if (r.error) return fail(res, 400, 'E1042', r.error, r);
-    rememberTools(id);
+    /* 停用就别再把它拉起来实探了 —— 卡上开关一点就走到这里，探针会把刚关掉的进程又启一遍 */
+    if (connectors.get(id)?.enabled) rememberTools(id);
     return sendJson(res, 200, r);
   }
 

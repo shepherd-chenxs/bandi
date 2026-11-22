@@ -119,8 +119,10 @@ db.exec(`PRAGMA busy_timeout = 5000;`);
  *     backfillRepoIdentity / relocateRepo）。
  *   · 13（2026-11-21）：`project_tasks` 加 `prCiState` / `prCiFailed` / `prCiAt` —— PR 上自动检查的
  *     结论落卡（"CI 绿没绿"从此是卡上的一等事实，见 delivery-evidence.mjs）。
+ *   · 14（2026-11-22）：新表 `persona_notes`（经验簿：跨会话记住"这个团队的口径"和"这个人踩过的坑"，
+ *     见 store/notes.mjs 与 experience.mjs）。
  */
-export const SCHEMA_VERSION = 13;
+export const SCHEMA_VERSION = 14;
 
 const dbVersion = Number(db.prepare('PRAGMA user_version').get()?.user_version ?? 0);
 if (dbVersion > SCHEMA_VERSION) {
@@ -1073,6 +1075,35 @@ for (const ddl of [
 
 db.prepare("UPDATE schedule_jobs SET repeat = 'interval' WHERE repeat IS NULL").run();
 
+
+/*
+ * 经验簿（2026-11-22，缺口①的最小版）：**跨会话**该记住的东西，落在库里，而不是留在某条 CLI 会话里。
+ *
+ * 只收两类，且都要求"能指回一件发生过的事"：
+ *   · kind='repo'    这个团队的口径（"服务端改完必须重启""静态资源直读不用重启"…）
+ *   · kind='pitfall' 这个人踩过的坑（平台核出来过：声称完成却没跑测试、报了没发生过的执行…）
+ * **不记"聊过什么"** —— 聊天摘要是心理安慰，还占上下文；要细节去翻会话与 run_events。
+ *
+ * source 只有两种：'audit'（平台从核对结果里自动记的，带 runId 可回溯）与 'manual'（人显式记的）。
+ * hits 是"这件事又被证实了几次"，不是点赞数 —— 淘汰的是 hits 低且最久没动的那些。
+ */
+db.exec(`
+  CREATE TABLE IF NOT EXISTS persona_notes (
+    id         TEXT PRIMARY KEY,
+    personaId  TEXT NOT NULL,
+    kind       TEXT NOT NULL,
+    text       TEXT NOT NULL,
+    source     TEXT NOT NULL DEFAULT 'manual',
+    hits       INTEGER NOT NULL DEFAULT 1,
+    evidence   TEXT,
+    dedupe     TEXT NOT NULL,
+    createdAt  TEXT NOT NULL,
+    updatedAt  TEXT NOT NULL,
+    UNIQUE (personaId, dedupe)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_persona_notes_persona ON persona_notes (personaId, kind, updatedAt DESC);
+`);
 
 export function backupTo(file) {
   db.exec(`VACUUM INTO '${String(file).replace(/'/g, "''")}'`);

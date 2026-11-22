@@ -47,6 +47,9 @@ const EXEMPT = new Set([
   'tools/check-ghost-refs.mjs',
   'tools/check-doc-drift.mjs',
   'tools/check-pr.mjs',
+  // 施工单：通篇写的是**待创建**的位置（"新建 tools/x.mjs"），交付后文件才存在。
+  // 它的引用是要人照着去建，不是指路 —— 按"空路"报红等于逼施工单不敢写路径。
+  'docs/交接-2026-11-22-回归集与三个尾巴.md',
 ]);
 
 /** 扫哪些文件 */

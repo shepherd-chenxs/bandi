@@ -31,8 +31,10 @@
  */
 import fs from 'node:fs';
 import http from 'node:http';
+import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline/promises';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { repoRoot, dataDir, dbPath, port as defaultPort, host as listenHost, clearListenHost } from './config.mjs';
 import { ensureRunning, stopRunning, isUp, listeners, urlOf, openUrl, sleep, processInfo } from './lifecycle.mjs';
@@ -576,6 +578,278 @@ async function cmdUser(argv) {
   return `不认识的子命令：user ${sub}\n（bandi user list | create <名字>）`;
 }
 
+/* ------------------------------------------------------------------ skill */
+
+/*
+ * 技能库的命令行口子（2026-11-22）。
+ *
+ * 用户的原话：「github 上有个技能比较火，你看看好不好用，好用就给 xxx 员工装上。
+ * 或者我给他一个 skill，让他给我装上。」—— 也就是**员工要能自己装技能**。
+ *
+ * 员工（codex/dsh）本来就会跑 shell，缺的只是一条看懂就能照着敲的命令。界面那个
+ * 「设置 → 技能」页当天撤了（技能不是一种要人打理的东西，是专家的一项能力），
+ * 但技能库和挂载都还在 —— 这组命令就是它们现在的正规入口。
+ *
+ * 全部走既有 HTTP 接口，不另开后门（本机钥匙 = 机主，能过 /api/skills/* 那道闸）：
+ * 界面能干的事，这里一件不多、一件不少。装之前先 `show` —— 从网上拉的技能等于往
+ * 上下文里塞别人写的字，是提示注入面，别让它默默装。
+ */
+
+const SKILL_USAGE = `用法：
+  bandi skill ls                          技能库里有什么
+  bandi skill show <名字>                 它教人干什么（含挂在谁身上、正文开头）
+  bandi skill add <目录|SKILL.md|git地址>  装进来（--overwrite 覆盖同名非内置）
+  bandi skill link <技能> <员工...>        挂到员工身上（名字或 id，可多个）
+  bandi skill unlink <技能> <员工...>      从员工身上摘掉`;
+
+/*
+ * 经验簿（2026-11-22，缺口①）：**跨会话**该记住的两样 —— 这个团队的口径、这个人踩过的坑。
+ *
+ * 为什么给员工一条命令而不是只给界面：最常见的场景是"雇主在聊天里说了一句以后都这么办"，
+ * 那一刻能把它落盘的只有他自己。命令短、参数少，他才可能真的顺手记一条。
+ *
+ * 坑那类是平台自己记的（收尾核对没过 → 自动进经验簿），**不在这里手工补** ——
+ * 手工写的"坑"没人能核，最后会变成自我批评的散文。这里 `--pit` 只留给"人明确指出的错"。
+ */
+const NOTE_USAGE = `用法：
+  bandi note ls <员工>                他记住了什么（口径 / 坑，各几条）
+  bandi note add <员工> <一句话>       记一条口径（--pit 记成"踩过的坑"）
+  bandi note rm <员工> <id>           删一条
+  bandi note forget <员工> --yes      整个忘掉（换人、重来）`;
+
+async function cmdNote(argv) {
+  const words = argv.filter((a) => !a.startsWith('-'));
+  const sub = (words[1] ?? '').toLowerCase();
+  if (!sub || !['ls', 'list', 'add', 'rm', 'del', 'forget'].includes(sub)) return NOTE_USAGE;
+  const who = words[2];
+  if (!who) return NOTE_USAGE;
+
+  const svc = await needService();
+  if (svc.error) return svc.error;
+  const P = svc.port;
+
+  const st = await api(P, { path: '/api/state' });
+  if (st.status !== 200) return red(errText(st));
+  const persona = (st.json?.personas ?? []).find((p) => p.id === who || p.name === who);
+  if (!persona) return red(`没有这个员工：${who}（先 bandi status 看有谁）`);
+  const base = `/api/personas/${encodeURIComponent(persona.id)}/notes`;
+
+  if (sub === 'ls' || sub === 'list') {
+    const r = await api(P, { path: base });
+    if (r.status !== 200) return red(errText(r));
+    const notes = r.json?.notes ?? [];
+    if (!notes.length) return dim(`${persona.name} 的经验簿是空的（这很正常：口径要人给，坑要平台核出来）`);
+    const repo = notes.filter((n) => n.kind === 'repo');
+    const pits = notes.filter((n) => n.kind === 'pitfall');
+    const line = (n) =>
+      `  ${dim(n.id)}${n.hits > 1 ? dim(` ×${n.hits}`) : ''}  ${n.text}${n.source === 'audit' ? dim('  [平台核出]') : ''}`;
+    return [
+      `${bold(persona.name)} 的经验簿（${notes.length}/${r.json?.limit ?? 200}）`,
+      repo.length ? `\n口径 ${repo.length} 条：\n${repo.map(line).join('\n')}` : '',
+      pits.length ? `\n坑 ${pits.length} 条（×n = 被核出过几次）：\n${pits.map(line).join('\n')}` : '',
+      '',
+      dim('进上下文的只有：口径取最近 6 条、坑取被核出次数最多的 5 条 —— 其余只在这里看得到，删了就不再提。'),
+    ]
+      .filter(Boolean)
+      .join('\n');
+  }
+
+  if (sub === 'add') {
+    const text = words.slice(3).join(' ').trim();
+    if (!text) return red('要记什么？一句话写出来：bandi note add <员工> "服务端改完必须重启"');
+    const kind = argv.includes('--pit') ? 'pitfall' : 'repo';
+    const r = await api(P, { method: 'POST', path: base, body: { text, kind } });
+    if (r.status !== 200 && r.status !== 201) return red(errText(r));
+    const n = r.json?.note ?? {};
+    return r.json?.merged
+      ? dim(`这条已经有过了，次数 +1（现在 ${n.hits} 次）：${n.text}`)
+      : green(`记下了（${kind === 'pitfall' ? '坑' : '口径'}）：${n.text}`);
+  }
+
+  if (sub === 'rm' || sub === 'del') {
+    const id = words[3];
+    if (!id) return `删哪一条？先 bandi note ls ${persona.name} 看 id`;
+    const r = await api(P, { method: 'DELETE', path: `${base}/${encodeURIComponent(id)}` });
+    if (r.status !== 200) return red(errText(r));
+    return green(`删掉了：${id}`);
+  }
+
+  // forget
+  if (!argv.includes('--yes')) {
+    const r = await api(P, { path: base });
+    const n = (r.json?.notes ?? []).length;
+    return `这会清空 ${persona.name} 的 ${n} 条经验（含平台核出来的坑），不能撤销。确认就加 --yes。`;
+  }
+  const r = await api(P, { method: 'DELETE', path: `${base}?all=1` });
+  if (r.status !== 200) return red(errText(r));
+  return green(`已清空 ${persona.name} 的 ${r.json?.removed ?? 0} 条经验`);
+}
+
+
+async function cmdSkill(argv) {
+  const words = argv.filter((a) => !a.startsWith('-'));
+  const sub = (words[1] ?? '').toLowerCase();
+  const svc = await needService();
+  if (svc.error) return svc.error;
+  const P = svc.port;
+
+  const getSkills = async () => {
+    const r = await api(P, { path: '/api/skills' });
+    if (r.status !== 200) return { error: red(errText(r)) };
+    return { skills: r.json?.skills ?? [], root: r.json?.skillsRoot ?? '' };
+  };
+  const getPersonas = async () => {
+    const r = await api(P, { path: '/api/state' });
+    if (r.status !== 200) return { error: red(errText(r)) };
+    return { personas: r.json?.personas ?? [] };
+  };
+  /** 名字或 id → persona；认不出的留进 miss，一次说完 */
+  const pick = (personas, keys) => {
+    const hit = [];
+    const miss = [];
+    for (const k of keys) {
+      const p = personas.find((x) => x.id === k || x.name === k);
+      if (p) {
+        if (!hit.some((h) => h.id === p.id)) hit.push(p);
+      } else miss.push(k);
+    }
+    return { hit, miss };
+  };
+
+  if (!sub || sub === 'ls' || sub === 'list') {
+    const { skills, root, error } = await getSkills();
+    if (error) return error;
+    if (!skills.length) return `技能库是空的（${root}）—— 装一个：${cyan('bandi skill add <git地址>')}`;
+    return [
+      ...skills.map((s) => `  ${s.name}${s.builtin ? dim(' · 内置') : ''}\n    ${dim(s.description || '（未写描述）')}`),
+      '',
+      dim(`共 ${skills.length} 个 · 库在 ${root}`),
+    ].join('\n');
+  }
+
+  if (sub === 'show') {
+    const name = words[2];
+    if (!name) return SKILL_USAGE;
+    const r = await api(P, { path: '/api/skills/' + encodeURIComponent(name) });
+    if (r.status !== 200) return red(errText(r));
+    const s = r.json?.skill ?? {};
+    const who = (r.json?.personas ?? []).map((p) => p.name).join('、') || '还没挂给任何人';
+    const body = String(s.body ?? '').trim();
+    const lines = body ? body.split(/\r?\n/) : [];
+    return [
+      `${bold(s.name)}${s.builtin ? dim(' · 内置（只读）') : ''}`,
+      `描述：${s.description || '（未写描述）'}`,
+      `挂在：${who}`,
+      `文件：${s.file}`,
+      '',
+      lines.slice(0, 40).join('\n') || dim('（正文为空）'),
+      lines.length > 40 ? dim(`\n…还有 ${lines.length - 40} 行，全文看 ${s.file}`) : '',
+      '',
+      dim('看着合适再挂；不合适就换一个，或摘掉：bandi skill unlink'),
+    ].join('\n');
+  }
+
+  if (sub === 'add') {
+    const src = words[2];
+    if (!src) return SKILL_USAGE;
+    const isUrl = /^(https?:\/\/|git@|ssh:\/\/)/.test(src);
+    let tmp = null;
+    try {
+      let target = src;
+      if (isUrl) {
+        // clone 到临时目录再按目录处理：git 地址背后可能是单技能仓库，也可能是 skills/ 一堆
+        tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bandi-skill-'));
+        const g = spawnSync('git', ['clone', '--depth', '1', src, tmp], { encoding: 'utf8' });
+        if (g.error?.code === 'ENOENT') return red('这台机器上没有 git —— 先装 git，或把目录下到本地再 add 那个路径');
+        if (g.status !== 0) {
+          const why = String(g.stderr ?? '').trim().split('\n').filter(Boolean).slice(-2).join(' ');
+          return red(`拉不下来：${why || 'git clone 失败'}`);
+        }
+        target = tmp;
+      }
+      if (!fs.existsSync(target)) return red(`没有这个路径：${src}`);
+      let dir = path.resolve(target);
+      if (fs.statSync(dir).isFile()) dir = path.dirname(dir); // 给的是 SKILL.md 本身 → 用它的目录
+
+      const dirs = [];
+      // discoverSkills 只走子目录，根目录自己带 SKILL.md 时它看不见 —— 这里补一手
+      if (fs.existsSync(path.join(dir, 'SKILL.md'))) dirs.push(dir);
+      const d = await api(P, { method: 'POST', path: '/api/skills/discover', body: { root: dir } });
+      for (const f of d.json?.found ?? []) if (f.dir && !dirs.includes(f.dir)) dirs.push(f.dir);
+      if (!dirs.length) return red('这个来源里没找到 SKILL.md —— 确认地址/目录对不对');
+
+      const imp = await api(P, {
+        method: 'POST',
+        path: '/api/skills/import',
+        body: { dirs, overwrite: argv.includes('--overwrite') },
+      });
+      if (imp.status !== 200) return red(errText(imp));
+      const ok = imp.json?.imported ?? [];
+      const skip = imp.json?.skipped ?? [];
+      const out = [];
+      for (const i of ok) out.push(`${green('已装')} ${i.name}`);
+      for (const s of skip) out.push(`${yellow('跳过')} ${s.name ?? s.dir}：${s.reason}`);
+      if (ok.length) out.push('', dim(`接着挂给谁：${cyan(`bandi skill link ${ok[0].name} <员工>`)}`));
+      return out.join('\n') || '什么也没装';
+    } finally {
+      if (tmp) {
+        try {
+          fs.rmSync(tmp, { recursive: true, force: true });
+        } catch {
+          /* 临时目录清不掉不致命 */
+        }
+      }
+    }
+  }
+
+  if (sub === 'link' || sub === 'unlink') {
+    const name = words[2];
+    const who = words.slice(3);
+    if (!name || !who.length) return SKILL_USAGE;
+    const { personas, error } = await getPersonas();
+    if (error) return error;
+    const { hit, miss } = pick(personas, who);
+    if (miss.length) {
+      return red(`没找到这些员工：${miss.join('、')}${dim('（名字要一字不差；bandi skill show <技能> 能看到挂了谁）')}`);
+    }
+
+    if (sub === 'link') {
+      const r = await api(P, {
+        method: 'POST',
+        path: `/api/skills/${encodeURIComponent(name)}/personas`,
+        body: { personaIds: hit.map((p) => p.id) },
+      });
+      if (r.status !== 200) return red(errText(r));
+      const added = r.json?.added ?? [];
+      const names = hit.filter((p) => added.includes(p.id)).map((p) => p.name);
+      const already = hit.length - names.length;
+      return [
+        names.length ? `${green('已挂上')} ${names.join('、')} → ${name}` : '',
+        already ? dim(`${already} 个本来就挂着`) : '',
+        dim('下一轮派活起生效（正在聊的这轮不会中途变）'),
+      ]
+        .filter(Boolean)
+        .join('\n');
+    }
+
+    const done = [];
+    const bad = [];
+    for (const p of hit) {
+      const r = await api(P, {
+        method: 'DELETE',
+        path: `/api/personas/${encodeURIComponent(p.id)}/skills/${encodeURIComponent(name)}`,
+      });
+      if (r.status === 200) done.push(p.name);
+      else bad.push(`${p.name}：${errText(r)}`);
+    }
+    return [done.length ? `${green('已摘掉')} ${done.join('、')}` : '', ...bad.map((b) => red(b))]
+      .filter(Boolean)
+      .join('\n');
+  }
+
+  return SKILL_USAGE;
+}
+
 /* ------------------------------------------------------------------ hub */
 
 /*
@@ -715,6 +989,10 @@ const HELP = `班底 · 命令行
                            导出数据快照（服务器形态下这是唯一入口）
   bandi user list          账号列表
   bandi user create <名字> 建影子账号（预占名字，中枢账号首次登录时自动绑定）
+  bandi skill ls           技能库：ls / show <名字> / add <目录|SKILL.md|git地址>
+                           / link <技能> <员工> / unlink <技能> <员工>
+  bandi note ls <员工>     经验簿（跨会话记住的）：ls / add <员工> <一句话>（--pit 记成坑）
+                           / rm <员工> <id> / forget <员工> --yes
   bandi install-cli        把 bandi 装成一个全局命令
                            [--dir 目录] [--path] [--remove] [--dry-run]
   bandi version | help
@@ -819,6 +1097,20 @@ async function main() {
       const out = await cmdUser(argv);
       console.log(out);
       return /^用法|不认识的子命令/.test(out) ? 2 : 0;
+    }
+
+    case 'skill':
+    case 'skills': {
+      const out = await cmdSkill(argv);
+      console.log(out);
+      return /^用法/.test(out) ? 2 : 0;
+    }
+
+    case 'note':
+    case 'notes': {
+      const out = await cmdNote(argv);
+      console.log(out);
+      return /^用法/.test(out) ? 2 : 0;
     }
 
     case 'install-cli':

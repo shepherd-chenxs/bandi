@@ -67,6 +67,16 @@ export function listNotices({ limit = 100 } = {}) {
     .all(n);
 }
 
+/**
+ * 某一轮落下的通知。经验簿（experience.mjs）用它把"这一轮被核出的事"变成一条坑 ——
+ * 不去重算事件，直接读核对模块已经写下的结论（一个来源，两处读）。
+ */
+export function listNoticesForRun(runId) {
+  const id = String(runId ?? '').trim();
+  if (!id) return [];
+  return db.prepare('SELECT * FROM notices WHERE runId = ? ORDER BY rowid ASC').all(id);
+}
+
 /** 未读数（左栏徽标） */
 export function countUnreadNotices() {
   return Number(db.prepare('SELECT COUNT(*) AS c FROM notices WHERE readAt IS NULL').get()?.c ?? 0);
