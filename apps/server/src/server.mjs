@@ -15,6 +15,8 @@ import * as taskClaimAudit from './task-claim-audit.mjs';
 import * as criteriaAudit from './criteria-audit.mjs';
 // 经验簿（2026-11-22）：跨会话记住的口径与踩过的坑 —— 写入口径极窄，见 experience.mjs 文件头
 import * as experience from './experience.mjs';
+// 启动清账开关（2026-11-22）：回归实例与其子进程树共用同一个临时库，不能跑 reap
+import { shouldReapOnBoot } from './regression/settle.mjs';
 import * as freshness from './freshness.mjs';
 import * as externals from './externals.mjs';
 import * as plugins from './plugins.mjs';
@@ -650,7 +652,14 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-const reaped = store.reapStaleRuns();
+/*
+ * 启动清账只在「单实例独占这个库」时成立（2026-11-22 回归踩到）：
+ * 回归集用一次性临时库，但 agentEnv() 会把 BANDI_DATA 传给员工 CLI；员工照岗位
+ * 判据跑 run-smokes 时，冒烟里测「服务启停」的用例会另起 server 实例、继承同一个库，
+ * 它一启动就 reapStaleRuns()，把回归实例**此刻正在跑**的那轮判成 interrupted。
+ * 开关沿 env 传到整棵子进程树，整棵树都跳过清账；真实 18787 不设它，行为不变。
+ */
+const reaped = shouldReapOnBoot() ? store.reapStaleRuns() : [];
 if (reaped.length) console.log(`清理了 ${reaped.length} 条被中断的运行`);
 
 /*

@@ -49,6 +49,8 @@ const { SUITE, listSuite } = await import('../apps/server/src/regression/suite.m
 // claimOf 是纯函数（不 import store），随时能用；cleanCommand 在 progress-ledger.mjs 里，
 // 那个模块链着 store —— 推迟到临时数据目录设好之后再 import（见 main()）。
 import { claimOf } from '../apps/server/src/delivery-claim.mjs';
+// 终态指纹 / 稳态状态机：纯函数，冒烟直接测它（apps/server/src/regression/settle.mjs）
+import { TERMINAL, settleStep } from '../apps/server/src/regression/settle.mjs';
 // data-dir.mjs 是零依赖的纯路径模块（不读 BANDI_DATA），给的是**真实**用户数据目录
 import { userDataDir } from '../apps/server/src/data-dir.mjs';
 
@@ -307,45 +309,32 @@ async function waitServerReady(child, log) {
 }
 
 /**
- * 等这一轮跑完。
+ * 等这一轮跑完。稳态判定抽在 apps/server/src/regression/settle.mjs（纯函数，有冒烟）。
  *
- * **必须"稳定成立"才算结束**（2026-11-22 第三次跑踩到）：员工中途执行 `bandi restart`
- * 起了一个**共用同一个临时库**的新实例，新实例启动时 reapStaleRuns 把还在跑的这轮判死
- * （claim='interrupted'）—— 而旧实例并没被杀掉，它跑完后又把状态写回 done。于是同一个 run
- * 的 status 在库里来回改写两次，只读连接读到哪个全看运气：量具按"刚看到 failed"收工，
- * 抽到的是半截动作，报告写 interrupted，实际那一轮是 done 且动作完整。
- *
- * 所以读到终态后再观察 SETTLE_MS：状态变了就重新计时，稳定了才返回。
+ * **为什么"稳定"必须连 claim 一起看**（2026-11-22 第四次跑，库里的 error 字段实证）：
+ * 只看 status 会读到一个中间态 —— reapStaleRuns() 先写 status='failed', claim='interrupted'，
+ * 之后旧实例真跑完，finishRun() 又写 status='failed', claim='silent'（COALESCE 覆盖成功）。
+ * status 从头到尾是 failed，旧逻辑 6 秒一到就收工，量具拿到 interrupted，
+ * 把一轮其实走完收尾的题错记成"不作数"。指纹带上 claim 后，两次写入指纹不同 →
+ * 重新计时 → 等真落款稳定才返回。
  */
-const SETTLE_MS = 6000;
-
 async function waitRunDone(runId, db) {
   const t0 = Date.now();
   let last = null;
-  let settled = null;
-  let settledAt = 0;
-  const TERMINAL = ['done', 'failed', 'stopped'];
+  let state = { key: null, since: 0, done: false };
   while (Date.now() - t0 < TIMEOUT_MS) {
     await sleep(POLL_MS);
     let row = null;
     try {
-      row = db.prepare('SELECT status FROM runs WHERE id = ?').get(runId);
+      // claim 一起读：终态指纹 = status|claim，见 settle.mjs
+      row = db.prepare('SELECT status, claim FROM runs WHERE id = ?').get(runId);
     } catch (e) {
       if (!/SQLITE_BUSY|database is locked/i.test(String(e))) throw e;
       continue; // 库被服务端短暂锁住，下一拍再读
     }
     last = row?.status ?? last;
-    if (!row || !TERMINAL.includes(row.status)) {
-      // 还在跑（或刚被写成 running）：任何"已稳定"的判断都作废
-      settled = null;
-      continue;
-    }
-    if (settled !== row.status) {
-      settled = row.status;
-      settledAt = Date.now();
-      continue;
-    }
-    if (Date.now() - settledAt >= SETTLE_MS) return { status: row.status, timedOut: false };
+    state = settleStep(state, row, Date.now());
+    if (state.done) return { status: row.status, timedOut: false };
   }
   // 超时：掐掉（requestStop = 掐子进程 + 看门狗），再给它 20 秒收尾
   try {
@@ -354,8 +343,8 @@ async function waitRunDone(runId, db) {
   for (let i = 0; i < 7; i += 1) {
     await sleep(POLL_MS);
     try {
-      const row = db.prepare('SELECT status FROM runs WHERE id = ?').get(runId);
-      if (row && ['done', 'failed', 'stopped'].includes(row.status)) return { status: row.status, timedOut: true };
+      const row = db.prepare('SELECT status, claim FROM runs WHERE id = ?').get(runId);
+      if (row && TERMINAL.includes(row.status)) return { status: row.status, timedOut: true };
     } catch { /* 同上 */ }
   }
   return { status: last ?? 'running', timedOut: true };
@@ -456,13 +445,30 @@ async function runQuestion(q, db, cleanCommand) {
     result.finalClaim = claim;
     result.claimSource = claimSource;
     result.finalTextHead = clip(finalText, 200);
+    /*
+     * **把平台/模型的事故如实记下来，不混进员工结论**（2026-11-22 第四次跑）：
+     * codex 撞额度墙时会在 runs.error 里留 "stream disconnected ... Sign up for free"，
+     * 这一轮动作是残的，但既不是员工谎报、也不是量具坏了。改判据去"照顾"它就是作弊，
+     * 静默不记更糟 —— 明天看报告会把它当成员工真实水平。所以只记事实、不动判定。
+     */
+    try {
+      const err = db.prepare('SELECT error FROM runs WHERE id = ?').get(runId)?.error ?? '';
+      if (/stream disconnected|rate.?limit|429|Sign up for free|使用量已达上限|quota/i.test(err)) {
+        result.infraError = clip(err, 160);
+      }
+    } catch { /* 老库/锁住：没有这个事实就不记，不编 */ }
 
     // —— 判 ——
     /*
-     * **被打断的轮次不作数**（2026-11-22 第二次跑踩到）：员工自己重启了服务端
-     * （题 5 的题面就是"改完必须重启"，它照做了），回归实例跟着重启，这一轮的 run
-     * 被 reapStaleRuns 判死（claim='interrupted'）。这种轮次既不该判 pass 也不该判 fail ——
-     * 它的动作是残的，拿残的动作去判等于用半张考卷打分。
+     * **被打断的轮次不作数**（2026-11-22 第二次跑踩到）：这一轮被 reapStaleRuns()
+     * 判死（claim='interrupted'），没走到收尾，动作是残的 —— 拿半张考卷打分既不该
+     * pass 也不该 fail。
+     *
+     * 注意归因别写错（第四次跑的库里 error 字段实证）：判死的**不一定是题 5 员工
+     * 自己重启**，更常见的是员工照岗位判据跑 run-smokes，冒烟里另起的 server 实例
+     * 继承了同一个 BANDI_DATA，启动时 reap 把回归实例正在跑的这轮判死。已在 spawn
+     * env 里下放 BANDI_SKIP_REAP=1 让整棵子进程树跳过清账；剩下的 interrupted
+     * 就是真的被打断了。
      */
     if (claim === 'interrupted') {
       result.status = 'interrupted';
@@ -580,6 +586,14 @@ async function main() {
       BANDI_DB: dbFile,
       BANDI_PORT: String(PORT),
       BANDI_HOST: '127.0.0.1',
+      /*
+       * 启动清账跳过（2026-11-22 第四次跑的根因）：临时库是一次性的，没有「上一世
+       * 遗留的僵尸 running」要收。但 agentEnv() 把整个 env 传给员工 CLI，员工跑
+       * run-smokes 时冒烟里测「服务启停」的用例会另起 server 实例、继承同一个
+       * BANDI_DATA —— 它启动就 reapStaleRuns()，把回归实例正在跑的那轮判死。
+       * 这个变量沿 env 传到整棵子进程树，所有实例都不清账；真实 18787 不受影响。
+       */
+      BANDI_SKIP_REAP: '1',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
@@ -619,6 +633,8 @@ async function main() {
       if (r.claimSource && r.claimSource !== 'runs.claim') {
         console.log(`   ⚠ 落款取自 ${r.claimSource} —— 这一轮可能写过 [完成]，结论别当真`);
       }
+      // 模型/平台事故：结论成色不足，但不是员工的错（额度恢复后重跑这题才有真基线）
+      if (r.infraError) console.log(`   ⚠ 这一轮撞上模型通道错误（不是员工行为）：${clip(r.infraError, 72)}`);
       if (r.diffStat) console.log(`   diff：${r.diffStat.replace(/\n/g, '；')}`);
     }
 
@@ -650,6 +666,13 @@ async function main() {
     `\n小结：${report.questions.length} 题 —— pass ${counts.pass ?? 0} / fail ${counts.fail ?? 0} /`
     + ` unjudgeable ${counts.unjudgeable ?? 0} / timeout ${counts.timeout ?? 0} / interrupted ${counts.interrupted ?? 0}`,
   );
+  const infra = report.questions.filter((r) => r.infraError).length;
+  if (infra) {
+    console.log(
+      `   ⚠ ${infra} 题撞上模型通道错误（额度/流断连）—— 结论成色不足，`
+      + '不是员工水平；额度恢复后用同一套题重跑才算真基线',
+    );
+  }
   const undetermined = (counts.unjudgeable ?? 0) + (counts.timeout ?? 0) + (counts.interrupted ?? 0);
   if (undetermined * 2 > report.questions.length) {
     console.error('[回归] unjudgeable/timeout 过半 —— 事件抽取有问题，回头修跑法再跑，这轮结果不可信');

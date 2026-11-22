@@ -27,6 +27,9 @@ const rel = (p) => path.relative(repo, p).split(path.sep).join('/');
 /** 要跑的：都不碰真实 data/、不要真实 CLI、不联网 */
 const RUN = [
   'apps/server/src/smoke-agent-cards.mjs',
+  // 回归尺子的「等收尾」+ 启动清账开关（2026-11-22）：终态指纹要连 claim 一起算，
+  // 否则会读到 reap 的中间态 interrupted，把走完收尾的一轮错记成「不作数」。纯函数，不起服务。
+  'apps/server/src/smoke-regression-settle.mjs',
   // 运行钥匙（"工作证"）在**强制鉴权形态**下的建卡通道 + 只读台账（2026-11-08 实报补：
   // 真机监听 0.0.0.0 时认证层不认 X-Bandi-Run-Token，PM/助理双双 401）。纯策略 + 端到端。
   'apps/server/src/smoke-run-credential.mjs',
