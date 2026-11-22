@@ -86,12 +86,20 @@ export function createRun({ conversationId, runtime, personaId = null, model = n
 }
 
 
-export function finishRun(id, { status, exitCode = null, error = null, usage = null }) {
-  db.prepare('UPDATE runs SET status = ?, exitCode = ?, error = ?, usage = ?, endedAt = ? WHERE id = ?').run(
+/**
+ * 收尾落库。`claim` = 这一轮的交付落款（done / blocked / unclaimed / silent），
+ * **由调用方从 finalText 原文判好传进来** —— 消息落库时那个 `[完成]` 会被剥掉，
+ * 事后从 messages 判就是永远 unclaimed（2026-11-22 回归量具踩过，见 db.mjs 版本 15）。
+ */
+export function finishRun(id, { status, exitCode = null, error = null, usage = null, claim = null }) {
+  db.prepare(
+    'UPDATE runs SET status = ?, exitCode = ?, error = ?, usage = ?, claim = COALESCE(?, claim), endedAt = ? WHERE id = ?',
+  ).run(
     status,
     exitCode,
     error,
     usage ? JSON.stringify(usage) : null,
+    claim,
     nowIso(),
     id,
   );

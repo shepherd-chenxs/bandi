@@ -1266,7 +1266,18 @@ function finish(run, { status, exitCode = null, error = null, usage = null, elap
     persistReply(run, run.finalText, replyMeta({ stopped: status === 'stopped' }));
   }
 
-  store.finishRun(run.id, { status, exitCode, error, usage });
+  store.finishRun(run.id, {
+    status,
+    exitCode,
+    error,
+    usage,
+    /*
+     * 交付落款（2026-11-22）：**在这里、按原文判一次并存下来**。上面 persistReply 已经把
+     * `[完成]` 从落库的消息里剥掉了（那是给平台的机器信号，不进界面），事后从 messages
+     * 判不出来 —— 判据核对、回归量具都读这一列，别再各自去猜。
+     */
+    claim: claimOf(run.finalText ?? run.streamedText ?? ''),
+  });
   /*
    * 空回话不装作「完成」（2026-11-11 实报）：run 自身状态如实记「完成」（进程正常退出），
    * 但**会话**上什么都没交回来 → 标「已阻塞」，头部的状态胶囊不再显示绿色「完成」。

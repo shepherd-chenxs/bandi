@@ -121,8 +121,11 @@ db.exec(`PRAGMA busy_timeout = 5000;`);
  *     结论落卡（"CI 绿没绿"从此是卡上的一等事实，见 delivery-evidence.mjs）。
  *   · 14（2026-11-22）：新表 `persona_notes`（经验簿：跨会话记住"这个团队的口径"和"这个人踩过的坑"，
  *     见 store/notes.mjs 与 experience.mjs）。
+ *   · 15（2026-11-22）：`runs` 加 `claim` —— 这一轮的**交付落款**（done / blocked / unclaimed / silent）。
+ *     落库的是 `run.finalText` 原文判出来的值，因为落库的消息会把 `[完成]` 剥掉（见 runs.mjs 的
+ *     persistReply），事后从 messages 里再也判不出来。回归量具与判据核对从此读同一列。
  */
-export const SCHEMA_VERSION = 14;
+export const SCHEMA_VERSION = 15;
 
 const dbVersion = Number(db.prepare('PRAGMA user_version').get()?.user_version ?? 0);
 if (dbVersion > SCHEMA_VERSION) {
@@ -935,6 +938,13 @@ function migrateAddExecConversation() {
   ensureColumn('conversations', 'projectId', 'projectId TEXT');
   // 这次执行在哪个项目里干活 —— 项目互斥（同一目录同时只跑一个）靠它判
   ensureColumn('runs', 'projectId', 'projectId TEXT');
+  /*
+   * 交付落款（2026-11-22，结构版本 15）：**必须在落库前从原文判**。
+   * persistReply 会把首行/末行那个单独的 `[完成]` 剥掉（那是给平台的机器信号，不是给人看的标题），
+   * 所以 messages 里事后判不出来 —— 2026-11-22 的回归量具就是这么把 4 条"写了 [完成]"读成
+   * unclaimed 的。判据核对与回归量具现在都读这一列。
+   */
+  ensureColumn('runs', 'claim', 'claim TEXT');
 }
 migrateAddExecConversation();
 

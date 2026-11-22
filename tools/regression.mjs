@@ -360,6 +360,27 @@ function finalAssistantText(db, convId, personaId) {
   return row?.text ?? '';
 }
 
+/**
+ * 这一轮的**交付落款**。
+ *
+ * **必须读 `runs.claim`，不能从消息里判**（2026-11-22 的 v1 基线就是这么错了一次）：
+ * `persistReply` 落库时会把首行/末行那个单独的 `[完成]` 剥掉（它是给平台的机器信号，
+ * 不是给人看的标题，见 runs.mjs），所以从 messages 里判出来永远是 unclaimed ——
+ * 五道题四道走了"没声明完成但有动作就 pass"的宽松分支，报告与平台核对结论**相反**。
+ *
+ * 老库没有这一列 / 这一列还是空（升级前跑过的轮次）：回退从消息判，但标 `source`，
+ * 报告里能看出这条结论的成色 —— 别让它静默冒充。
+ */
+function claimOfRun(db, runId, convId, personaId) {
+  try {
+    const row = db.prepare('SELECT claim FROM runs WHERE id = ?').get(runId);
+    if (row?.claim) return { claim: row.claim, source: 'runs.claim' };
+  } catch {
+    /* 老库没这一列：走回退 */
+  }
+  return { claim: claimOf(finalAssistantText(db, convId, personaId)), source: 'messages(可能偏低)' };
+}
+
 async function runQuestion(q, db, cleanCommand) {
   const t0 = Date.now();
   const result = { id: q.id, status: 'fail', why: '', actions: [], finalClaim: 'silent', durationMs: 0, diffStat: '' };
@@ -405,8 +426,9 @@ async function runQuestion(q, db, cleanCommand) {
     const actions = extractActions(db, runId, cleanCommand);
     result.actions = actions.slice(0, 12); // 报告只留前 12 条 —— 够看清"先干了什么"
     const finalText = finalAssistantText(db, conv.id, persona.id);
-    const claim = claimOf(finalText);
+    const { claim, source: claimSource } = claimOfRun(db, runId, conv.id, persona.id);
     result.finalClaim = claim;
+    result.claimSource = claimSource;
     result.finalTextHead = clip(finalText, 200);
 
     // —— 判 ——
@@ -558,6 +580,10 @@ async function main() {
       report.questions.push(r);
       const dur = r.durationMs >= 60000 ? `${Math.round(r.durationMs / 60000)} 分钟` : `${Math.round(r.durationMs / 1000)} 秒`;
       console.log(`   ${r.status.toUpperCase()} · ${dur} · 落款 ${r.finalClaim} · ${clip(r.why, 72)}`);
+      // 落款取自消息 = 那条 [完成] 已被落库剥掉，判出来只会偏低，报告里必须看得见
+      if (r.claimSource && r.claimSource !== 'runs.claim') {
+        console.log(`   ⚠ 落款取自 ${r.claimSource} —— 这一轮可能写过 [完成]，结论别当真`);
+      }
       if (r.diffStat) console.log(`   diff：${r.diffStat.replace(/\n/g, '；')}`);
     }
 
@@ -593,6 +619,14 @@ async function main() {
   if (undetermined * 2 > report.questions.length) {
     console.error('[回归] unjudgeable/timeout 过半 —— 事件抽取有问题，回头修跑法再跑，这轮结果不可信');
     process.exit(2);
+  }
+  // 落款来源混着来 = 这轮的 pass 有一半是"没声明完成但有动作"的宽松分支，判别力要打折
+  const fallback = report.questions.filter((r) => r.claimSource && r.claimSource !== 'runs.claim').length;
+  if (fallback) {
+    console.error(
+      `[回归] ${fallback} 题的落款只能从消息里判（[完成] 落库时被剥掉了）——`
+        + `这些题的 pass 可能虚高，升级后再跑一次才是真基线`,
+    );
   }
 }
 
