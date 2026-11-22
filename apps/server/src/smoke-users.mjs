@@ -27,15 +27,37 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { repoRoot } from './config.mjs';
-import { sleep, stopRunning } from './lifecycle.mjs';
-// 假中枢 + 登录帮手：造会话只有一条真路 —— 起个假中枢，让本机把登录表单转给它
-import { startHubStub, hubLogin } from './hub-stub.mjs';
 
 const PORT = Number(process.env.SMOKE_PORT ?? 8909);
 const BASE = `http://127.0.0.1:${PORT}`;
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bandi-users-'));
+/** 子进程（真服务端）用的目录 —— 由 start() 显式传 BANDI_DATA，跟本进程各用一口 */
 const dataDir = path.join(tmp, 'data');
+
+/*
+ * ⚠️⚠️ 钉数据目录必须排在**任何读环境变量的模块**之前。
+ *
+ * `config.mjs` 在**模块加载那一刻**就把 BANDI_DATA 解析成 dataDir / dbPath，之后再改
+ * `process.env` 一律无效（模块已经缓存了旧值）。这里原来正是错的：头顶静态
+ * `import { repoRoot } from './config.mjs'` 先把 config 加载成**真数据目录**，
+ * 到 ⑦c 才 `process.env.BANDI_DATA = …/smoke-store` 再 `await import('./store.mjs')` ——
+ * 那句钉子等于没钉，store 复用的还是已经加载好的真库。
+ *
+ * 后果（2026-11-22 用户实报"这个怎么又显示出来了，我记得删除好几次了"才查出来）：
+ * 每跑一次全量闸门，开发者**真库**里就多一个 `13800138999` 账号 + 一条「署名打码」会话，
+ * 点进去只读（`p-smoke` 这个员工根本不存在）—— 用户删一次，下次跑冒烟又种回来。
+ *
+ * 所以：静态 import 全部挪到钉子之后，用动态 import（同 smoke-shell-enter.mjs 的写法）。
+ */
+process.env.BANDI_DATA = path.join(tmp, 'smoke-store');
+process.env.BANDI_DB = path.join(process.env.BANDI_DATA, 'bandi.db');
+fs.mkdirSync(process.env.BANDI_DATA, { recursive: true });
+
+const { repoRoot } = await import('./config.mjs');
+const { sleep, stopRunning } = await import('./lifecycle.mjs');
+// 假中枢 + 登录帮手：造会话只有一条真路 —— 起个假中枢，让本机把登录表单转给它
+const { startHubStub, hubLogin } = await import('./hub-stub.mjs');
+
 const SERVER = path.join(repoRoot, 'apps', 'server', 'src', 'server.mjs');
 const TOKEN = 'smoke-users-token';
 
@@ -371,16 +393,20 @@ try {
   /* ============ ⑦c 署名打码（2026-11-21 独立操作平台） ============ */
   console.log('\n⑦c 署名口径：认人走 id（账号名兜底），显示名昵称优先，手机号打码');
   /*
-   * 消息署名走 store.listMessages 的 LEFT JOIN —— 这里直接在**烟测进程自己的临时库**
-   * 里种一行手机号名字的真人 + 一条他发的消息，读出来验。动态 import 前先钉环境变量
-   * （config/store 在模块加载时读 BANDI_DATA，忘了钉就会往开发者**真库**里写 ——
-   * 同 smoke-shell-enter.mjs 的坑注）；下面的服务端子进程 start() 显式传自己的
-   * BANDI_DATA/BANDI_DB，不受这里的污染。
+   * 消息署名走 store.listMessages 的 LEFT JOIN —— 这里直接在**烟测进程自己的临时库**里
+   * 种一行手机号名字的真人 + 一条他发的消息，读出来验。
+   *
+   * 临时库在文件头顶就钉好了（`process.env.BANDI_DATA = …/smoke-store`，见那里的长注释：
+   * 钉子排在所有静态 import 之前才有效）。下面这颗断言是**兜底**：万一以后又有人往头上
+   * 加一个静态 `import './config.mjs'`，钉子会静默失效、这里开始往真库写 —— 与其等用户
+   * 在消息列表里发现"署名打码"，不如当场红给自己看。
    */
-  process.env.BANDI_DATA = path.join(tmp, 'smoke-store');
-  process.env.BANDI_DB = path.join(process.env.BANDI_DATA, 'bandi.db');
-  fs.mkdirSync(process.env.BANDI_DATA, { recursive: true });
   const store = await import('./store.mjs');
+  const { dataDir: storeDataDir } = await import('./config.mjs');
+  if (!path.resolve(storeDataDir).startsWith(path.resolve(tmp))) {
+    console.error(`\n✗ 冒烟用的库不在临时目录里：${storeDataDir}\n  拒绝继续 —— 再写下去就污染开发者的真库了（检查文件头顶的 BANDI_DATA 钉子是否还在 import 之前）`);
+    process.exit(1);
+  }
   const phUser = store.createUser({ name: '13800138999' });
   const phConv = store.createConversation({ title: '署名打码', personaId: 'p-smoke' });
   store.addMessage({ conversationId: phConv.id, role: 'user', text: '嗯', senderUserId: phUser.id });
@@ -400,6 +426,20 @@ try {
   const cleared = store.listMessages(phConv.id)[0];
   check('无昵称显示名退回打码账号名：13800138999 → 138****8999',
     cleared?.senderUserNick === '138****8999', String(cleared?.senderUserNick));
+
+  /* ============ ⑦d 删账号连中枢绑定一起清（2026-11-22） ============ */
+  console.log('\n⑦d 删账号 → hub_links 里那行一起走（不留悬空绑定）');
+  /*
+   * 病根：`deleteUser` 以前只删 user_sessions + users，`hub_links` 留着 —— 那个人下次
+   * 从中枢登进来，`bindHubAccount` 拿回一行指向已不存在的用户，`getUser()` 为 null，
+   * 被当成"账号被停用"（403 E7004），而界面上根本没有这个人可以恢复，从此登不进这台机器。
+   */
+  const probe = store.createUser({ name: 'hub-link-probe' });
+  store.linkHubAccount({ accountId: 'acc-probe', userId: probe.id, login: 'probe' });
+  const beforeDel = store.hubLinkOf('acc-probe');
+  store.deleteUser(probe.id);
+  check('删账号前绑定在、删完绑定没了', !!beforeDel && store.hubLinkOf('acc-probe') === null,
+    JSON.stringify({ before: !!beforeDel, after: store.hubLinkOf('acc-probe') }));
 
   /* ============ ⑧ 安全接口：登录会话与回环机主都能读 ============ */
   console.log('\n⑧ /api/security/* 会话与机主都能读（2026-11-20 operator 下线：回环=机主全权）');

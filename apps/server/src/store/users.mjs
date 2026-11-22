@@ -225,11 +225,19 @@ export function setDisabled(id, disabled) {
   return getUser(id);
 }
 
-/** 删账号（连会话一起清）—— 内置账号的保护在路由层，那是产品规则 */
+/**
+ * 删账号（连会话、**中枢绑定**一起清）—— 内置账号的保护在路由层，那是产品规则。
+ *
+ * `hub_links` 必须跟着删（2026-11-22 补）：它是"这台机器认不认这个中枢账号"的授权表，
+ * 留着悬空行 = 那个人下次从中枢登进来，`bindHubAccount` 拿回一行指向**已不存在的用户**，
+ * `getUser()` 为 null，于是被当成"账号被停用"——403 E7004，可界面上根本没有这个人可以恢复。
+ * 悬空行是删不掉、也修不好的死结，所以在删人的同一个事务里把它带走。
+ */
 export function deleteUser(id) {
   const cur = db.prepare('SELECT id FROM users WHERE id = ?').get(String(id ?? ''));
   if (!cur) return { ok: false, reason: 'missing' };
   db.prepare('DELETE FROM user_sessions WHERE userId = ?').run(cur.id);
+  db.prepare('DELETE FROM hub_links WHERE userId = ?').run(cur.id);
   db.prepare('DELETE FROM users WHERE id = ?').run(cur.id);
   return { ok: true, id: cur.id };
 }
