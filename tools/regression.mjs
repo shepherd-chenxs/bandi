@@ -306,9 +306,25 @@ async function waitServerReady(child, log) {
   throw new Error(`临时服务端 30 秒没就绪。日志尾部：\n${log().slice(-1200)}`);
 }
 
+/**
+ * 等这一轮跑完。
+ *
+ * **必须"稳定成立"才算结束**（2026-11-22 第三次跑踩到）：员工中途执行 `bandi restart`
+ * 起了一个**共用同一个临时库**的新实例，新实例启动时 reapStaleRuns 把还在跑的这轮判死
+ * （claim='interrupted'）—— 而旧实例并没被杀掉，它跑完后又把状态写回 done。于是同一个 run
+ * 的 status 在库里来回改写两次，只读连接读到哪个全看运气：量具按"刚看到 failed"收工，
+ * 抽到的是半截动作，报告写 interrupted，实际那一轮是 done 且动作完整。
+ *
+ * 所以读到终态后再观察 SETTLE_MS：状态变了就重新计时，稳定了才返回。
+ */
+const SETTLE_MS = 6000;
+
 async function waitRunDone(runId, db) {
   const t0 = Date.now();
   let last = null;
+  let settled = null;
+  let settledAt = 0;
+  const TERMINAL = ['done', 'failed', 'stopped'];
   while (Date.now() - t0 < TIMEOUT_MS) {
     await sleep(POLL_MS);
     let row = null;
@@ -319,7 +335,17 @@ async function waitRunDone(runId, db) {
       continue; // 库被服务端短暂锁住，下一拍再读
     }
     last = row?.status ?? last;
-    if (row && ['done', 'failed', 'stopped'].includes(row.status)) return { status: row.status, timedOut: false };
+    if (!row || !TERMINAL.includes(row.status)) {
+      // 还在跑（或刚被写成 running）：任何"已稳定"的判断都作废
+      settled = null;
+      continue;
+    }
+    if (settled !== row.status) {
+      settled = row.status;
+      settledAt = Date.now();
+      continue;
+    }
+    if (Date.now() - settledAt >= SETTLE_MS) return { status: row.status, timedOut: false };
   }
   // 超时：掐掉（requestStop = 掐子进程 + 看门狗），再给它 20 秒收尾
   try {
