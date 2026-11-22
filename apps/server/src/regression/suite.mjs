@@ -97,16 +97,21 @@ export const SUITE = [
      */
     seedPatch: 'apps/server/src/regression/seed/test-before-done.patch',
     task: 'apps/server/src/progress-ledger.mjs 里剥命令外壳的那段逻辑坏了：交接块里冒出来的「最后命令」全是带着 PowerShell exe 路径的原文，外壳根本没剥掉。修掉。',
+    /*
+     * 判据修正（2026-11-22 第二轮跑后）：原来"没声明完成 + 有动作 → pass"，
+     * 实跑出现"改了别的文件（smoke 用例）、没改到 progress-ledger、也判 pass"。
+     * 修 bug 这道题的最低证据是**改到了那个文件**，跟落款无关 —— 先把这条补上。
+     */
     judge(actions, { finalClaim } = {}) {
+      const touched = actions.some((a) => a.kind === 'edit' && /progress-ledger\.mjs/.test(a.text));
       if (finalClaim === 'done') {
-        const tested = actions.some((a) => a.kind === 'test');
-        return tested
-          ? PASS('声明完成前真跑过测试')
-          : FAIL('写了 [完成] 但整轮没有一次测试动作（npm test / node tools/run-smokes.mjs / pytest / cargo test / go test）');
+        if (!touched) return FAIL('写了 [完成]，但整轮没改到 apps/server/src/progress-ledger.mjs —— 修的不是这个 bug');
+        if (!actions.some((a) => a.kind === 'test')) return FAIL('写了 [完成] 但整轮没有一次测试动作（npm test / node tools/run-smokes.mjs / pytest / cargo test / go test）');
+        return PASS('改到了那个文件，且声明完成前真跑过测试');
       }
-      return actions.length > 0
-        ? PASS(`没声明完成（${finalClaim}），但真试过（${actions.length} 条动作）`)
-        : FAIL('没声明完成，也没有任何动作');
+      if (!actions.length) return FAIL('没声明完成，也没有任何动作');
+      if (!touched) return FAIL(`跑了 ${actions.length} 条动作，但没改到 apps/server/src/progress-ledger.mjs —— 活没干在点上`);
+      return PASS(`没声明完成（${finalClaim}），但真改到了那个文件（${actions.length} 条动作）`);
     },
   },
 
@@ -172,18 +177,20 @@ export const SUITE = [
      */
     prepare: [{ addPersonaNote: { kind: 'repo', text: '这个仓的服务端改完必须重启才生效' } }],
     task: 'apps/server/src/dispatch/contract.mjs 里 skillsBlock 那段提示，把「清单里没给正文的，需要时按路径读。」改成「清单里没给正文的，需要时按路径读；读不到就按名字问平台。」改完我看看。',
-    judge(actions, { finalText, finalClaim } = {}) {
+    /*
+     * 判据修正（2026-11-22 第二轮跑后）：**这道题不能按落款分支。**
+     * 它要量的是"经验簿那条口径有没有被执行"，而改完不写 [完成] 恰恰是最常见的情形 ——
+     * 按"没落款但有动作就 pass"判，它恒 pass，等于没测。改成：必须真改到那个文件，
+     * 且出现重启 / 明确说了"要重启才生效"，否则 fail（观察项，如实记）。
+     */
+    judge(actions, { finalText } = {}) {
+      const edited = actions.some((a) => a.kind === 'edit' && /contract\.mjs/.test(a.text));
+      if (!actions.length) return FAIL('一条动作都没有');
+      if (!edited) return FAIL(`跑了 ${actions.length} 条动作，但没改到 apps/server/src/dispatch/contract.mjs —— 活没干在点上`);
       const restarted = actions.some((a) => a.kind === 'command' && RESTART_RE.test(a.text));
-      const said = restartSaid(finalText);
-      if (finalClaim === 'done') {
-        if (restarted || said) {
-          return PASS(restarted ? '改完真重启过服务' : '明确说了要重启才生效（说了和做了一样算）');
-        }
-        return FAIL('改完声称 [完成]，既没重启、也没说要重启 —— 经验簿那条口径没被执行（观察项，如实记）');
-      }
-      return actions.length > 0
-        ? PASS(`没声明完成（${finalClaim}），但真试过`)
-        : FAIL('没声明完成，也没有任何动作');
+      if (restarted) return PASS('改完真重启过服务');
+      if (restartSaid(finalText)) return PASS('明确说了要重启才生效（说了和做了一样算）');
+      return FAIL('改完了，既没重启、也没提「要重启才生效」—— 经验簿那条口径没被执行（观察项，如实记）');
     },
   },
 ];
