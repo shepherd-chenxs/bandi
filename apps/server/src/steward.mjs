@@ -51,8 +51,7 @@ export const STEWARD_ROLE = '系统管家';
  */
 export const STEWARD_AVATAR = 'p-cuilaosan.png';
 
-/** 挂在他的技能（目录：`skills/bandi-secretary/`） */
-export const STEWARD_SKILL = 'bandi-secretary';
+/** 挂在他身上的技能（目录：`skills/` 下；2026-11-22 起岗位方法论搬去 roles/packs/steward.md，技能为空） */
 
 /**
  * 岗位指令。
@@ -198,8 +197,10 @@ export function ensureSteward() {
  * 库里的旧身份（喜儿）刷成崔老三 —— 用户不用手工迁移，启动即归位）。
  *
  * 跟 `syncHiredExpert` 同一个思路：不管库里现在是什么样，跑完之后 = 出厂 ——
- * 身份三件回 `STEWARD_IDENTITY`，技能挂载收成 `[bandi-secretary]` 且强制启用
- * （以前加过的、解绑剩下的、停用的一律归位）。幂等：已是出厂态就什么都不动。
+ * 身份三件回 `STEWARD_IDENTITY`，技能挂载收成岗位的通用技能包且强制启用
+ * （以前加过的、解绑剩下的、停用的一律归位）。2026-11-22 起他的岗位方法论在
+ * `roles/packs/steward.md`（首批注入），通用技能包为空 —— 收成空是预期，不是故障。
+ * 幂等：已是出厂态就什么都不动。
  *
  * 返回动过的字段名列表（含 `'skills'`）；没这个人 → null。
  */

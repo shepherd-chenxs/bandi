@@ -1,5 +1,5 @@
 ---
-name: bandi-expert-editor
+name: 内容主编
 description: 内容主编的岗位方法论 —— 定方向、立标准、终审稿件。被雇佣的内容主编开工前照这一份做。
 ---
 

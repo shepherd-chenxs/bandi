@@ -34,9 +34,9 @@ process.env.BANDI_DB = path.join(tmp, 'bandi.db');
 
 const store = await import('./store.mjs');
 const steward = await import('./steward.mjs');
-const skills = await import('./skills.mjs');
 const runtimes = await import('./runtimes.mjs');
 const dispatch = await import('./dispatch.mjs');
+const { rolePackBody } = await import('./roles/pack.mjs');
 
 /* ------------------------------------------------- ① seed：出厂就在，且只建一次 */
 console.log('① seed：建一次、幂等、不改用户后来的修改');
@@ -137,14 +137,14 @@ console.log('\n①a-2 复活清理：旧版快照 seed 出的 p-xier，启动即
   db.prepare(`DELETE FROM conversations WHERE id = 'c-res-test'`).run();
 }
 
-/* 技能：只在新建那次挂，之后用户摘掉就摘掉了 */
+/* 技能：2026-11-22 起岗位方法论搬到 roles/packs/steward.md，通用技能包为空（出厂态就是空） */
+check('岗位手册 steward 存在且非空', rolePackBody('steward').length > 0);
+const syncedSkills = steward.syncSteward();
 const linked = store.listPersonaSkillLinks(steward.STEWARD_ID).map((l) => l.name);
-check('技能库里有 bandi-secretary', !!skills.getSkill(steward.STEWARD_SKILL));
-check('她挂上了这个技能', linked.includes(steward.STEWARD_SKILL), linked.join(',') || '(空)');
-store.unlinkPersonaSkill(steward.STEWARD_ID, steward.STEWARD_SKILL);
+check('syncSteward 把技能收成空包（岗位手册才是本命）', linked.length === 0, linked.join(',') || '(空)');
+check('syncSteward 报告技能变了', Array.isArray(syncedSkills) && syncedSkills.includes('skills'), JSON.stringify(syncedSkills));
 steward.ensureSteward();
-check('用户把技能摘掉后，启动不会偷偷挂回去', !store.listPersonaSkills(steward.STEWARD_ID).includes(steward.STEWARD_SKILL));
-store.linkPersonaSkill(steward.STEWARD_ID, steward.STEWARD_SKILL);
+check('启动不会偷偷挂回技能（空包就是出厂态）', store.listPersonaSkills(steward.STEWARD_ID).length === 0);
 
 /* --------------------------------------------- ①b 不可删（store 是最后一道） */
 console.log('\n①b 不可删：store 层拦截，且只拦她一个');

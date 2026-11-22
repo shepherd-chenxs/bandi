@@ -1,5 +1,5 @@
 ---
-name: bandi-expert-copywriter
+name: 文案策划
 description: 文案策划的岗位方法论 —— 问清 brief、交稿就能用、标题给一排备选。被雇佣的文案策划开工前照这一份做。
 ---
 

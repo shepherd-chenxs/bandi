@@ -148,11 +148,17 @@ function paintExpertDetail(x) {
       ${x.instructions ? '<button type="button" class="tab" data-exd-tab="i">岗位说明</button>' : ''}
     </div>
     <div data-exd-panel="d">
+      ${x.playbook
+        ? `<div class="exd-sec"><label>岗位手册</label><div class="exd-skill"><b>${esc(x.playbook.name || '')}</b>${x.playbook.description ? `<span>${esc(x.playbook.description)}</span>` : ''}</div><div class="hint">随岗位固定，不单独挂载</div></div>`
+        : ''}
       ${x.skills?.length
-        ? `<div class="exd-sec"><div class="exd-skills">${x.skills
+        ? `<div class="exd-sec"><label>通用技能</label><div class="exd-skills">${x.skills
             .map((s) => `<div class="exd-skill"><b>${esc(s.name)}</b>${s.description ? `<span>${esc(s.description)}</span>` : ''}</div>`)
             .join('')}</div></div>`
-        : '<div class="exd-sec"><div class="hint">没有挂技能</div></div>'}
+        : ''}
+      ${!x.playbook && !x.skills?.length
+        ? '<div class="exd-sec"><div class="hint">没有挂技能</div></div>'
+        : ''}
     </div>
     ${x.instructions ? `<div data-exd-panel="i" hidden><div class="md-view exd-instr">${renderMarkdown(x.instructions)}</div></div>` : ''}
     <div class="dlg-actions">

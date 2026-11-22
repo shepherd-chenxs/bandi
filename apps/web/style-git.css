@@ -26,9 +26,11 @@
 /* 底部固定条里的连接按钮（2026-10-29 六改）：贴边站，不吃清单顶上那份外边距 */
 .list-foot .gr-side { margin: 0; }
 .gr-side-btn { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px;
-               border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
+               /* 2026-11-22 用户："去掉这个按钮的边框"：描边改透明（保留 1px 占位，尺寸不变），
+                  悬停反馈从变色描边换成淡底色。 */
+               border: 1px solid transparent; border-radius: 8px; background: var(--panel);
                color: var(--text); font: inherit; font-size: 12.5px; cursor: pointer; text-align: left; }
-.gr-side-btn:hover { border-color: var(--accent); }
+.gr-side-btn:hover { background: var(--hover); }
 .gr-dot { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; background: var(--dim); opacity: .55; }
 .gr-dot.ok { background: var(--ok); opacity: 1; }
 .gr-side-btn-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -72,18 +74,42 @@
 .plg-detail > .plg-sec[data-gr-tab] > .plg-sec-head { min-height: 26px; }
 /* 导航条上的本地目录（2026-11-20 用户："这个去掉，换成本地目录"）：接替原来分支 pill 的位置，
    等宽小字、降灰，路径长了省略号 —— 不撑破 50px 的固定导航条。 */
+/* 目录退到行尾（2026-11-22 用户："这两个位置换一下"）：margin-left:auto 顶右沿，
+   长了省略号，别把左边标题和分支挤爆 */
 .gr-head-path { font-family: ui-monospace, monospace; font-size: 11.5px; color: var(--dim); line-height: 1;
-                min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* 标题行右上角的当前本地分支（2026-11-20 用户："在右上角显示当前本地分支"）：
-   齿轮撤掉后靠 margin-left:auto 顶到右沿；窄屏时最多占四成宽，超长省略，别把标题挤爆。
+                margin-left: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 当前本地分支紧跟标题（2026-11-22 用户："这两个位置换一下"，原在右上角）：
+   窄屏时最多占四成宽，超长省略，别把标题挤爆。
    line-height 全部归 1：固定导航条里这行是小字，默认行高会把纵向中心各自算偏，
-   看着就跟左边标题、路径不在一条水平线上。 */
-.gr-head-branch { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; line-height: 1;
+   看着就跟右边路径不在一条水平线上。 */
+.gr-head-branch { display: inline-flex; align-items: center; gap: 6px; line-height: 1;
                   min-width: 0; max-width: 40%; font-size: 12px; color: var(--dim); }
 .gr-head-br-ic { display: inline-flex; align-items: center; align-self: center; }
 .gr-head-br-ic svg { display: block; width: 13px; height: 13px; }
 .gr-head-branch b { font-size: 12px; font-weight: 500; line-height: 1; color: var(--text);
                     min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* pill 是下拉开关（2026-11-22 用户："分支管理改成点击打开下拉框的方式操作"）：
+   hover 提示可点，尾随小箭头示意有浮层。
+   再高一些（2026-11-22 用户："这个阴影框高度增加一些"）：竖向 padding 4→7px，
+   圆角 7→9px 保持同样的圆度比例 */
+.gr-head-branch { cursor: pointer; border: 0; background: none; padding: 7px 6px; border-radius: 9px; }
+.gr-head-branch:hover { background: var(--hover); }
+.gr-head-caret { font-size: 10px; line-height: 1; color: var(--dim); }
+/* 分支管理下拉：绝对定位在 fixed-head（sticky = 定位祖先）之下，常驻 DOM、plg-hidden 开合；
+   数据由 fillBranchTab 填，refresh 顺手刷新，不依赖开关状态 */
+.gr-branch-drop { position: absolute; top: calc(100% + 4px); width: min(520px, 92vw);
+                  max-height: 62vh; overflow: auto; z-index: 30;
+                  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+                  box-shadow: 0 10px 28px var(--shadow); padding: 6px 8px 10px; }
+/* 动作区（照 JetBrains 分支弹窗）：动作行左对齐铺满（图标 + 文字 + hover 提亮），
+   分隔线隔开下面的分支树 —— 原来右对齐的两个文字按钮退场 */
+.gr-drop-actions { display: flex; flex-direction: column; gap: 2px; padding: 2px 0 6px; }
+.gr-drop-act { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 10px;
+               border: 0; border-radius: 8px; background: none; color: var(--text);
+               font-size: 13px; text-align: left; cursor: pointer; }
+.gr-drop-act:hover { background: var(--hover); }
+.gr-drop-act svg { width: 15px; height: 15px; flex: 0 0 auto; color: var(--dim); }
+.gr-drop-sep { height: 1px; background: var(--line); margin: 4px 2px 6px; }
 /* 拉取请求 / PR 列表标题行右上角的「刷新」推右对齐（2026-11-20 用户："刷新按钮右对齐"），
    与「立即巡检」「推送」同类做法：留给 margin-left:auto，标题和状态字靠左。 */
 #grPullsRefresh, #grReviewRefresh { margin-left: auto; }
@@ -110,7 +136,9 @@
 .gr-br-head:first-child { padding-top: 4px; }
 .gr-br-head.foldable { cursor: pointer; user-select: none; }
 .gr-br-head.foldable:hover { color: var(--accent); }
-.gr-br-caret { margin-left: auto; font-size: 12px; color: var(--dim); transition: transform 0.12s;
+/* 折叠箭头放标题**左边**（2026-11-22 用户："按钮放标题左边"，照 JetBrains 的
+   "∨ 分组名"）—— 展开向下、收起向右的方向逻辑不变，只是位置挪到文字前 */
+.gr-br-caret { margin-right: 3px; font-size: 17px; color: var(--dim); transition: transform 0.12s;
                transform: rotate(90deg); }
 /* 展开时向下、收起时向右（2026-11-20 用户："箭头错了，折叠起来是向右的，展开式向下的"） */
 .gr-br-head.off .gr-br-caret { transform: rotate(0deg); }
@@ -129,17 +157,26 @@
   /* 行本身不可点（操作全在行尾 › 菜单里），光标别给成可点击的手型 */
   cursor: default;
 }
-.gr-br-row:hover { background: var(--input); }
+/* hover 态（2026-11-22 用户："鼠标放到行上要加一些效果"）：底色提亮一档 +
+   行尾操作箭头点亮成 accent —— 当前分支行用更实的底色区分 */
+.gr-br-row:hover { background: var(--hover); }
+.gr-br-row:hover .gr-br-more { color: var(--accent); }
 .gr-br-row.on { background: var(--input); }
+/* 当前分支行也要有 hover（2026-11-22 用户："鼠标放到当前分支，没有显示悬停效果"）：
+   .on 与 :hover 特异性打平、.on 又写在后，悬停时 --input 把 --hover 压住了 ——
+   单独给 .on:hover 定一档；圆点还在，悬停不丢「当前分支」的标识 */
+.gr-br-row.on:hover { background: var(--hover); }
 /* 当前分支的标识（2026-11-20 用户："不要加粗，加一个圆点不是更好吗"、"圆点放左边"）：
    6px 实心圆点，钉在行首（图标之前）；所有行都留这一格，名字左缘才不会因圆点有无而错位。 */
-.gr-br-mark { flex: 0 0 6px; display: inline-flex; align-items: center; }
+/* 当前分支的圆点往右挪一档（2026-11-22 用户："这个标往右一些"）：
+   所有行共用同一列 mark，整体平移不破坏对齐 */
+.gr-br-mark { flex: 0 0 6px; margin-left: 6px; display: inline-flex; align-items: center; }
 .gr-br-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
 .gr-br-ic { display: inline-flex; color: var(--dim); }
 .gr-br-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gr-br-hint { font-size: 10.5px; color: var(--dim); opacity: 0.7; }
 .gr-br-badge { color: var(--ok); font-size: 11px; }
-.gr-br-more { color: var(--dim); padding: 0 4px; cursor: pointer; }
+.gr-br-more { color: var(--dim); font-size: 15px; padding: 0 6px; cursor: pointer; }
 .gr-br-more:hover { color: var(--accent); }
 .gr-br-row.hide { display: none; }
 #grBranchNew { margin-left: auto; }

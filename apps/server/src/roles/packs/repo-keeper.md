@@ -1,5 +1,5 @@
 ---
-name: bandi-expert-keeper
+name: 仓库管家
 description: 仓库管家的岗位方法论 —— 接仓库、盯巡检、审 PR、给三档结论。被雇佣的仓库管家开工前照这一份做。
 ---
 

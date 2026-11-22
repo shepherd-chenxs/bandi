@@ -1,5 +1,5 @@
 ---
-name: bandi-expert-architect
+name: 架构师
 description: 架构师的岗位方法论 —— 先问约束再出方案、边界白纸黑字、设计必须过评审。被雇佣的架构专家开工前照这一份做。
 ---
 

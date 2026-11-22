@@ -18,6 +18,7 @@ import { controlUrl } from './agent-auth.mjs';
 // 建卡通道的判据（2026-11-11）：只给**有建卡权限的岗位**（现在只有项目经理），
 // 不再解析 role 文本 —— 见 roles.mjs / 设计文档
 import { can, roleOf } from './roles.mjs';
+import { rolePackBlock } from './roles/pack.mjs';
 import { shouldRotate } from './session-budget.mjs';
 
 /** 带 code 的错误：路由按它决定 400 还是 409 */
@@ -243,6 +244,9 @@ export function buildGroupTask({ thread, member, trigger, contextMessages, first
     lines.push(`你在一个项目群里。群名：${thread.title}`, '');
     // 宪法同样排在身份之前（同 buildDirectTask，见 constitutionBlock 注释）
     lines.push(constitutionBlock({ roleKey }));
+    // 岗位手册（2026-11-22）：随岗位固定、用户不可见，位置同宪法（排在身份之前）
+    const packBlock = rolePackBlock(roleKey);
+    if (packBlock) lines.push(packBlock, '');
     lines.push('你的职责与身份设定如下（后续对话请一直保持）：', (member.instructions ?? '').trim(), '');
     if (skillLines.length) lines.push(...skillsBlock(skillLines));
     if (connLines.length) lines.push(...connectionsBlock(connLines));
