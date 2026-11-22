@@ -91,6 +91,9 @@ const RUN = [
   'apps/server/src/smoke-group-project.mjs',
   // 汇报技能 bandi-report：结论先行口径、上游 MIT 出处、专家包默认挂载、平台注入指向它
   'apps/server/src/smoke-report-skill.mjs',
+  // 技能隐私（2026-11-22「技能页只显示简介」）：内置技能的正文不许出服务端
+  // （GET /api/skills/:name → body:'' + bodyHidden），自建技能照旧回正文，写入闸照旧 403
+  'apps/server/src/smoke-skill-privacy.mjs',
   'apps/server/src/smoke-lan-origin.mjs',
   'apps/server/src/smoke-lifecycle.mjs',
   // 身份中枢进门（2026-11-06）：验票九类负样本 + /hub/enter 正路 + 本地授权表 + 服务器形态

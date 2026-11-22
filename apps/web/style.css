@@ -1589,6 +1589,24 @@ button.pill.gr-pr-task:hover { color: var(--accent); border-color: var(--accent)
                    border: 1px solid var(--line); border-radius: 6px;
                    padding: 6px 10px; font: inherit; font-size: 13px; }
 .sk-search input:focus { border-color: var(--accent); outline: none; }
+
+/* ── 技能弹窗（2026-11-22 用户拍板：技能页点开**只看简介**）──
+   为什么要这个弹窗：详情页原来把 SKILL.md 正文整段铺出来（预览 + 编辑），
+   等于把方法论摊在界面上。改成弹窗后只给名字 / 描述 / 挂在谁身上 / 动作，
+   正文不上界面；内置技能的正文连服务端都不下发（routes/skill.mjs 的 GET）。
+   卡片上描述截三行，这里要看全 —— 不截断、行高放宽到 1.65。 */
+#skViewDlg .skv-head { display: flex; align-items: center; gap: 12px; padding-top: 18px; }
+#skViewDlg .skv-head .avatar { flex: 0 0 40px; width: 40px; height: 40px; font-size: 15px; }
+#skViewDlg .skv-title { min-width: 0; display: flex; align-items: center; gap: 2px; }
+#skViewDlg .skv-title b { font-size: 15px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#skViewDlg .skv-desc { margin-top: 12px; font-size: 13px; line-height: 1.65; }
+#skViewDlg .skv-sec { margin-top: 16px; }
+#skViewDlg .skv-sec > label { display: block; font-size: 11.5px; color: var(--dim); margin-bottom: 7px; }
+#skViewDlg .skv-sec .count { color: var(--dim); font-size: 11.5px; }
+#skViewDlg .skv-note { margin-top: 12px; font-size: 11.5px; line-height: 1.5; }
+/* 动作条：「编辑正文 / 删除」靠左（只有自建技能才有），「添加到数字员工 / 关闭」靠右 */
+#skViewDlg .dlg-actions { align-items: center; }
+#skViewDlg .skv-left { margin-right: auto; display: flex; gap: 8px; }
 /* ── 头像只有**两类**，别再加第三类（2026-10-20 收口）──
    ① 身份类（人 / 群）：**深底白字**。颜色承担"这是谁"，色相要能区分，字必须近白
       （人＝avatarStyle() 按名字哈希发色，群＝.avatar.grp 固定深绿）。

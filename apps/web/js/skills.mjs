@@ -27,14 +27,92 @@ let chgSelRepo = null;
 
 /* ---------------------------------------------------------------- 技能 */
 
+/**
+ * 技能**编辑页**（自建技能的正文在这里改）。
+ *
+ * 2026-11-22 起它不再是"点卡片的默认去处" —— 卡片点开是弹窗（`openSkillCard`），
+ * 只显示简介。这条路径只剩两个入口：新建技能创建完之后，以及弹窗里的「编辑正文」。
+ * 内置技能到不了这里（弹窗不给那个按钮，正文服务端也不下发）。
+ */
 export async function openSkill(name) {
-  setRoute('skill', { name });
   const d = await api('/api/skills/' + encodeURIComponent(name));
+  /* 内置技能没有正文（服务端不下发，`bodyHidden`）→ 没有可编辑的东西，
+     别把人丢进一个空编辑页；直接开弹窗（含位置记忆里残留的旧 route）。 */
+  if (d.skill.bodyHidden) {
+    skCardName = d.skill.name;
+    paintSkillCard(d.skill, d.personas ?? []);
+    if (!$('skViewDlg').open) $('skViewDlg').showModal();
+    return;
+  }
+  setRoute('skill', { name });
   S.skill = d.skill;
   showView('settings'); // 技能现在住在「设置 → 技能」里，主区还是 settingsView
   renderList();
   renderSkillEditor(d.skill, false, d.personas ?? []);
   savePlace();
+}
+
+/**
+ * 技能**弹窗**（2026-11-22 用户拍板："技能页改成弹窗显示，不要显示技能的详细内容，
+ * 只要显示简介就行" —— 保护 skill 的隐私）。
+ *
+ * 弹窗里只有：名字 / 描述 / 挂在谁身上 / 动作。**没有正文**（连折叠都没有）：
+ *   · 内置技能：服务端就不下发正文（`body` 置空 + `bodyHidden`，见 routes/skill.mjs），
+ *     界面上也没有编辑入口 —— 想要改它只能复制一个改名新建；
+ *   · 自建技能：多一个「编辑正文」，点了才进 `openSkill` 那条编辑页。
+ *
+ * 不动路由：弹窗是暂态的（关掉就回到卡片墙），没必要为一层弹窗往历史里压格子。
+ */
+let skCardName = null; // 弹窗当前那张卡的技能名（挂载完回来重画用）
+
+export async function openSkillCard(name) {
+  const d = await api('/api/skills/' + encodeURIComponent(name));
+  skCardName = d.skill.name;
+  paintSkillCard(d.skill, d.personas ?? []);
+  const dlg = $('skViewDlg');
+  if (!dlg.open) dlg.showModal();
+  return d;
+}
+
+/** 画弹窗本体（首开与"挂载后重画"共用这一份，别写两份） */
+function paintSkillCard(skill, personas) {
+  const builtin = !!skill.builtin;
+  $('skvAvatar').textContent = initial(skill.name);
+  $('skvName').textContent = skill.name;
+  $('skvBuiltin').hidden = !builtin;
+  $('skvDesc').textContent = (skill.description || '').trim() || '（还没写描述 —— 模型靠这一句决定什么时候用它）';
+  $('skvCount').textContent = personas.length ? String(personas.length) : '';
+  $('skvChips').innerHTML = personas.length
+    ? personas.map((p) => `<span class="chip" style="padding:1px 10px">${esc(p.name)}</span>`).join('')
+    : '<span class="dim" style="font-size:12px">还没挂给任何人</span>';
+  $('skvNote').hidden = !builtin;
+  $('skvEdit').hidden = builtin;
+  $('skvDelete').hidden = builtin;
+
+  $('skvEdit').onclick = () => {
+    $('skViewDlg').close();
+    openSkill(skill.name).catch((e) => toast(e.message, 'error'));
+  };
+
+  $('skvDelete').onclick = async () => {
+    if (!(await confirmDo(`删掉技能「${skill.name}」？\n文件会被删除，所有挂载一并解除。`))) return;
+    try {
+      await api('/api/skills/' + encodeURIComponent(skill.name), { method: 'DELETE' });
+      $('skViewDlg').close();
+      S.skill = null;
+      await load();
+      openSettings('skills'); // 删完回卡片列表
+    } catch (err) { toast(err.message, 'error'); }
+  };
+
+  $('skvAssign').onclick = () => openSkillAssignDialog(skill.name, personas.map((p) => p.id));
+}
+
+/** 挂载完回到弹窗重画（弹窗开着时用；关着说明是从编辑页发起的，那边自己重画） */
+export function refreshSkillCard() {
+  if (!skCardName || !$('skViewDlg').open) return false;
+  openSkillCard(skCardName).catch((e) => toast(e.message, 'error'));
+  return true;
 }
 
 
@@ -4538,7 +4616,8 @@ let skQ = '';
 /**
  * 技能按搜索词过滤：命中**技能名 / 描述**任一处即留（不区分大小写）。
  * 正文（SKILL.md 的 Markdown）**不参与** —— 28 份方法论里"流程""代码"遍地都是，
- * 搜出来一大片命中，那不叫搜索。要翻正文就在详情页里找。
+ * 搜出来一大片命中，那不叫搜索。而且 2026-11-22 起正文根本不进界面（技能弹窗只有简介），
+ * 更没法拿它搜。
  */
 function skillMatches(s, q) {
   return `${s.name}\n${s.description ?? ''}`.toLowerCase().includes(q);
@@ -4594,7 +4673,8 @@ function paintSkillGrid() {
           .join('')}</div>`
       : `<div class="empty" style="padding:36px 12px">没有匹配「${esc(skQ.trim())}」的技能 —— 试试技能名或描述里的词。</div>`;
   $('skGrid').querySelectorAll('[data-sk]').forEach((el) => {
-    el.onclick = () => openSkill(el.dataset.sk).catch((e) => toast(e.message, 'error'));
+    // 2026-11-22 起点卡片开**弹窗**（只看简介），不再跳编辑页
+    el.onclick = () => openSkillCard(el.dataset.sk).catch((e) => toast(e.message, 'error'));
   });
 }
 

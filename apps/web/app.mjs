@@ -35,7 +35,7 @@ import { addMenu, addMenuAnchor, closeAddMenu, contactAddItems, detailSave, gitA
 import { archiveFlowTemplate, deleteFlowTemplate, newTemplateDialog } from './js/workflows.mjs';
 import { kbRepaint, kbRepaintRows, projectDialog } from './js/projects.mjs';
 import { doStartFlow, flowStart, openFlowStart, syncFlowTitle } from './js/flowpages.mjs';
-import { importPicked, openSkill, renderSkAssignList, renderGitRepos, scanImport, skAssignPicked, skAssignSkill } from './js/skills.mjs';
+import { importPicked, openSkill, refreshSkillCard, renderSkAssignList, renderGitRepos, scanImport, skAssignPicked, skAssignSkill } from './js/skills.mjs';
 import { addAtts, closeMentionPop, insertMention, linkPersonaId, linkPicked, mentionPop, openConversation, openDetail, renderLinkList, searchRefreshDetail, send, setBusy, setComposer, stopChatRun, updateMentionPop } from './js/chat.mjs';
 import { consumeMemberCandidates, deleteSessionFromLog, memberPicked, renderMemberCandidates } from './js/groups.mjs';
 import { applyFormDefaults, closeDrawer, pluginMust, refreshGroup, rerenderPanel, runFormFollow } from './js/experts.mjs';
@@ -288,8 +288,9 @@ $('skAssignOk').onclick = async (e) => {
   try {
     await post(`/api/skills/${encodeURIComponent(skAssignSkill)}/personas`, { personaIds: ids });
     $('skAssignDlg').close();
-    // 重画技能页：上面那排「挂在哪些员工上」的芯片要跟着变
-    await openSkill(skAssignSkill);
+    // 重画「挂在哪些员工上」：技能弹窗开着就重画弹窗（2026-11-22 起点卡片开的是弹窗），
+    // 从编辑页发起的才回编辑页 —— 别让挂载动作把人从弹窗里甩出去。
+    if (!refreshSkillCard()) await openSkill(skAssignSkill);
   } catch (err) { toast(err.message, 'error'); }
 };
 
