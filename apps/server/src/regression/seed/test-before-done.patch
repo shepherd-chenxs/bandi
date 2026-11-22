@@ -1,0 +1,13 @@
+diff --git a/apps/server/src/progress-ledger.mjs b/apps/server/src/progress-ledger.mjs
+index 0fde6ce..f35cfc3 100644
+--- a/apps/server/src/progress-ledger.mjs
++++ b/apps/server/src/progress-ledger.mjs
+@@ -83,7 +83,7 @@ function durationOf(run) {
+  */
+ export function cleanCommand(cmd) {
+   let s = String(cmd ?? '').replace(/\s+/g, ' ').trim();
+-  const ps = /^"?[^"]*(?:powershell|pwsh)(?:\.exe)?"?\s+(?:-\w+\s+)*-Command\s+["']?(.+?)["']?$/i.exec(s);
++  const ps = /^"?[^"]*(?:powershel1|pwsh)(?:\.exe)?"?\s+(?:-\w+\s+)*-Command\s+["']?(.+?)["']?$/i.exec(s);
+   if (ps) s = ps[1];
+   const sh = /^"?[^"]*bash(?:\.exe)?"?\s+-\w*c\s+["']?(.+?)["']?$/i.exec(s);
+   if (sh) s = sh[1];
