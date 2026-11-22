@@ -139,8 +139,12 @@ function toAction(row, evt, cleanCommand) {
  * 同 stdio），调用方感知不到 —— `node tools/regression.mjs` 在任何版本下都能用。
  */
 function ensureWorkingNode() {
+  // ⚠️ 探测必须真的 new 一次：better-sqlite3 的原生绑定是**懒加载**的，
+  // 只 require JS 壳永远不炸（v26 实测假阳性），到 new Database 才 dlopen。
   const probe = (node) =>
-    spawnSync(node, ['-e', "require('better-sqlite3')"], { cwd: repoRoot, windowsHide: true }).status === 0;
+    spawnSync(node, ['-e', "const D=require('better-sqlite3'); new D(':memory:')"], {
+      cwd: repoRoot, windowsHide: true,
+    }).status === 0;
   if (probe(process.execPath)) return process.execPath;
   const override = process.env.BANDI_REGRESSION_NODE;
   const candidates = [];
