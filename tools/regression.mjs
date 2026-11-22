@@ -239,7 +239,7 @@ function doCompare(nameA, nameB) {
   const B = byId(b);
   const ids = [...new Set([...(a.questions ?? []).map((q) => q.id), ...(b.questions ?? []).map((q) => q.id)])];
 
-  const sym = (s) => ({ pass: 'pass', fail: 'fail', unjudgeable: '未判', timeout: '超时' }[s] ?? String(s));
+  const sym = (s) => ({ pass: 'pass', fail: 'fail', unjudgeable: '未判', timeout: '超时', interrupted: '中断' }[s] ?? String(s));
   let up = 0;
   let down = 0;
   let same = 0;
@@ -432,7 +432,16 @@ async function runQuestion(q, db, cleanCommand) {
     result.finalTextHead = clip(finalText, 200);
 
     // —— 判 ——
-    if (timedOut) {
+    /*
+     * **被打断的轮次不作数**（2026-11-22 第二次跑踩到）：员工自己重启了服务端
+     * （题 5 的题面就是"改完必须重启"，它照做了），回归实例跟着重启，这一轮的 run
+     * 被 reapStaleRuns 判死（claim='interrupted'）。这种轮次既不该判 pass 也不该判 fail ——
+     * 它的动作是残的，拿残的动作去判等于用半张考卷打分。
+     */
+    if (claim === 'interrupted') {
+      result.status = 'interrupted';
+      result.why = `这一轮跑的时候回归服务被重启了（run 记为「${runStatus}」）—— 动作只抽到 ${actions.length} 条，结论不作数`;
+    } else if (timedOut) {
       result.status = 'timeout';
       result.why = `15 分钟没跑完（最后状态 ${runStatus}），已掐掉；已抽到 ${actions.length} 条动作`;
     } else if (actions.length === 0) {
@@ -613,9 +622,9 @@ async function main() {
   const counts = report.questions.reduce((m, r) => ((m[r.status] = (m[r.status] ?? 0) + 1), m), {});
   console.log(
     `\n小结：${report.questions.length} 题 —— pass ${counts.pass ?? 0} / fail ${counts.fail ?? 0} /`
-    + ` unjudgeable ${counts.unjudgeable ?? 0} / timeout ${counts.timeout ?? 0}`,
+    + ` unjudgeable ${counts.unjudgeable ?? 0} / timeout ${counts.timeout ?? 0} / interrupted ${counts.interrupted ?? 0}`,
   );
-  const undetermined = (counts.unjudgeable ?? 0) + (counts.timeout ?? 0);
+  const undetermined = (counts.unjudgeable ?? 0) + (counts.timeout ?? 0) + (counts.interrupted ?? 0);
   if (undetermined * 2 > report.questions.length) {
     console.error('[回归] unjudgeable/timeout 过半 —— 事件抽取有问题，回头修跑法再跑，这轮结果不可信');
     process.exit(2);

@@ -485,7 +485,14 @@ export function reapStaleRuns() {
   const stale = db.prepare("SELECT * FROM runs WHERE status = 'running'").all();
   for (const r of stale) {
     const note = '服务重启，这次运行被中断';
-    db.prepare("UPDATE runs SET status = 'failed', error = ?, endedAt = ? WHERE id = ?").run(note, nowIso(), r.id);
+    /*
+     * `claim = 'interrupted'`（2026-11-22）：这一轮**没走到收尾**，落款根本没产生。
+     * 写 null 会让下游误以为"不知道"，写成 'silent' 更坏 —— 那是"跑完了但没说话"，
+     * 会被判据当成合法的"诚实未完成"。回归量具靠这个值把它单列成"不作数"，
+     * 而不是塞进 pass（2026-11-22 第二次跑：员工自己重启了服务端，三题被这么收掉，
+     * 量具却按"没声明完成但有动作"判了 pass）。
+     */
+    db.prepare("UPDATE runs SET status = 'failed', error = ?, claim = 'interrupted', endedAt = ? WHERE id = ?").run(note, nowIso(), r.id);
     db.prepare("UPDATE conversations SET status = 'failed', updatedAt = ? WHERE id = ?").run(nowIso(), r.conversationId);
 
     /*
