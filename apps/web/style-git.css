@@ -113,6 +113,10 @@
 /* 拉取请求 / PR 列表标题行右上角的「刷新」推右对齐（2026-11-20 用户："刷新按钮右对齐"），
    与「立即巡检」「推送」同类做法：留给 margin-left:auto，标题和状态字靠左。 */
 #grPullsRefresh, #grReviewRefresh { margin-left: auto; }
+/* 「建 PR」挪到「合并请求」标题行、刷新右边（2026-11-23 用户："这个按钮放右上角刷新右边是不是更好"）：
+   刷新保持淡，建 PR 用主色实心，两颗并排仍有主次；不可建时禁用，原因写在 title + 卡片说明里。 */
+#grPrCreate { margin-left: 8px; }
+#grPrCreate[disabled] { opacity: .45; cursor: not-allowed; }
 /* 分支管理（2026-11-20）：列表从分支下拉浮层搬进 tab，样式按同一套视觉重画 ——
    分组标题、文件夹、行（图标/名称/上游/↑↓/›菜单）。行是 button，键盘可达。 */
 /* 不自己做滚动容器（2026-11-20 用户："卡里出现滚动条别扭，期望在外部显示滚动条"）：
@@ -319,3 +323,20 @@ dialog#repoPrDlg { width: 660px; height: min(720px, 92vh); max-height: 92vh;
 .gr-cell-ops { text-align: right; white-space: nowrap; }
 .gr-cell-ops .mini.auto { padding: 0 12px; white-space: nowrap; }
 .gr-cell-ops .mini + .mini { margin-left: 6px; }
+/* 行内主按钮不做实心蓝（2026-11-23 用户："合并按钮是行内按钮，换个样式"）：
+   PR 列表末列（.gr-pr-c5）里"处理 + 合并"并排，格子窄，实心蓝会撑得拥挤、
+   辅助钮也抢不过主钮。改成描边蓝 + hover 填色，disabled 保持现状。
+   注意：作用域钉在 .gr-pr-c5，不是 .gr-cell-ops —— 那是建 PR 弹窗里另一套东西。 */
+.gr-pr-c5 .mini.auto.primary {
+  background: transparent; border-color: var(--accent); color: var(--accent);
+}
+.gr-pr-c5 .mini.auto.primary:hover:not(:disabled) {
+  background: var(--accent); color: var(--on-solid);
+}
+/* 行内主按钮的兜底：建 PR 弹窗（.gr-cell-ops）里的主钮也同样描边 */
+.gr-cell-ops .mini.auto.primary {
+  background: transparent; border-color: var(--accent); color: var(--accent);
+}
+.gr-cell-ops .mini.auto.primary:hover:not(:disabled) {
+  background: var(--accent); color: var(--on-solid);
+}
