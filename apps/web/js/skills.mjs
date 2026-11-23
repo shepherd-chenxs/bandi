@@ -1475,12 +1475,11 @@ export async function renderGitRepos(root = $('pluginView')) {
       const show = list.slice(0, 6);
       const hidden = Math.max(0, total - 6);
       const extra = hidden > 0 ? `<li class="dim">…另有 ${hidden} 条</li>` : '';
-      return `<div class="pr-commits" style="margin-top:8px">
-        <div class="pr-commits-head">这条分支领先 base <b>${total}</b> 条提交${list.length < total ? `<span class="dim">（显示前 ${list.length} 条）</span>` : ''}</div>
+      return `<div class="pr-commits-head" style="margin-top:8px">领先 base <b>${total}</b> 条提交${list.length < total ? `<span class="dim">（显示前 ${list.length} 条）</span>` : ''}</div>
         <ul class="pr-commit-list">
           ${show.map((c) => `<li><code>${esc(c.sha)}</code><span title="${esc(c.subject)}">${esc(c.subject)}</span></li>`).join('')}
           ${extra}
-        </ul></div>`;
+        </ul>`;
     };
 
     /*
