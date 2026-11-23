@@ -900,7 +900,8 @@ export async function renderGitRepos(root = $('pluginView')) {
                和「推送」「立即巡检」同一档位置；卡片只留"为什么不能建"的解释。 -->
           <button type="button" class="mini auto primary" id="grPrCreate" disabled>建 PR</button>
         </div>
-        <section class="fx"><div id="grPulls"><div class="sk-blank">取 PR…</div></div></section>
+        <!-- 卡片自己滚：说明 + 提交清单是同一块内容，共用外层滚动条，不再给清单套一层（2026-11-23 用户） -->
+        <section class="fx gr-pulls-card"><div id="grPulls"><div class="sk-blank">取 PR…</div></div></section>
       </div>
       <div class="plg-sec" data-gr-tab="pr">
         <div class="plg-sec-head">
@@ -1460,25 +1461,13 @@ export async function renderGitRepos(root = $('pluginView')) {
      * 不再按"能不能合"分卡 —— 状态列自己会说（未开始/进行中/未通过/已通过），
      * 合并按钮在能合的行上自己亮。原「审核」「合并」两块合成一张「PR 列表」表。
      */
-    const groupHtml = (title, inner, count) =>
-      `<div class="gr-pr-group">
-        <div class="gr-pr-group-head">${esc(title)}${count ? `<span class="gr-pr-group-count">${count}</span>` : ''}</div>
-        ${inner}
-      </div>`;
-
-    const renderCommitList = (state, skipHead) => {
+    /* 提交全部铺在「合并请求」卡片上，不再包一层 <ul> 当独立区块（2026-11-23 用户：
+       "清单直接放到外层卡片上。不要自己单独做一个区"）。每条就是卡片里的一行，
+       和上面的说明文字同属一个滚动容器（.gr-pulls-card）；建 PR 弹窗里那张清单另算。 */
+    const renderCommitList = (state) => {
       const list = state?.aheadCommits;
       if (!list?.length) return '';
-      const total = Number(state?.ahead ?? list.length);
-      const show = list.slice(0, 6);
-      const hidden = Math.max(0, total - 6);
-      const extra = hidden > 0 ? `<li class="dim">…另有 ${hidden} 条</li>` : '';
-      const head = skipHead ? '' : `<div class="pr-commits-head" style="margin-top:8px">领先 base <b>${total}</b> 条提交${list.length < total ? `<span class="dim">（显示前 ${list.length} 条）</span>` : ''}</div>`;
-      return `${head}
-        <ul class="pr-commit-list">
-          ${show.map((c) => `<li><code>${esc(c.sha)}</code><span title="${esc(c.subject)}">${esc(c.subject)}</span></li>`).join('')}
-          ${extra}
-        </ul>`;
+      return list.map((c) => `<div class="gr-pr-commit"><code>${esc(c.sha)}</code><span title="${esc(c.subject)}">${esc(c.subject)}</span></div>`).join('');
     };
 
     const aheadCount = Number(state?.ahead ?? 0);
@@ -1507,14 +1496,14 @@ export async function renderGitRepos(root = $('pluginView')) {
             createWhy = !state?.upstream
               ? '当前分支还没设上游，先在「推送」卡推送'
               : '当前分支有未推送的提交，先在「推送」卡推送';
-            cta = `<div class="gr-pr-cta">当前分支 <b>${esc(cur)}</b> 还没有 PR —— 先去上面「推送」卡推送，推完右上角「建 PR」就能点。</div>${renderCommitList(state, true)}`;
+            cta = `<div class="gr-pr-cta">当前分支 <b>${esc(cur)}</b> 还没有 PR —— 先去上面「推送」卡推送，推完右上角「建 PR」就能点。</div>${renderCommitList(state)}`;
           } else {
             const n = ahead === null ? '' : `（领先 ${esc(base)} ${ahead} 个提交）`;
             const extra = state?.dirtyCount
               ? `；未提交的 ${state.dirtyCount} 个改动不会进这条 PR`
               : '';
             canCreate = true;
-            cta = `<div class="gr-pr-cta">当前分支 <b>${esc(cur)}</b> 还没有 PR${state?.dirtyCount ? `；未提交的 ${state.dirtyCount} 个改动不会进这条 PR` : ''} —— 可以点右上角「建 PR」。</div>${renderCommitList(state, true)}`;
+            cta = `<div class="gr-pr-cta">当前分支 <b>${esc(cur)}</b> 还没有 PR${state?.dirtyCount ? `；未提交的 ${state.dirtyCount} 个改动不会进这条 PR` : ''}</div>${renderCommitList(state)}`;
           }
         } else if (state?.dirtyCount) {
           createWhy = '当前分支有未提交改动，先在「提交」里提交';
@@ -1533,7 +1522,7 @@ export async function renderGitRepos(root = $('pluginView')) {
         const dirtyHint = state?.dirtyCount
           ? `另外还有 ${state.dirtyCount} 个改动没提交，建 PR 时不会带上。`
           : '';
-        cta = `<div class="gr-pr-cta">当前就在主干 <b>${esc(base)}</b> 上 —— 直接推主干多半会被保护拒收。${dirtyHint}点右上角「建 PR」，系统会从当前 HEAD 拉一条新分支推上去。</div>${renderCommitList(state, true)}`;
+        cta = `<div class="gr-pr-cta">当前就在主干 <b>${esc(base)}</b> 上 —— 直接推主干多半会被保护拒收。${dirtyHint}点右上角「建 PR」，系统会从当前 HEAD 拉一条新分支推上去。</div>${renderCommitList(state)}`;
       } else if (cur === base && state?.dirtyCount) {
         createWhy = '在 base 上有未提交改动，先在「提交」里提交';
         cta = `<div class="gr-pr-cta">当前就在 base（<b>${esc(base)}</b>）上，有 ${state.dirtyCount} 个未提交改动 —— 先在「提交」里提交，提交完右上角「建 PR」就能点。</div>`;
@@ -1554,10 +1543,11 @@ export async function renderGitRepos(root = $('pluginView')) {
       if (prs.length > 0) parts.push(`${prs.length} 条 PR`);
       head.textContent = parts.join(' · ');
     }
-    const ctaGroup = cta ? groupHtml('待建 PR', cta, 0) : '';
+    /* 说明和提交行直接铺进卡片，不套 group / ul（2026-11-23 用户："清单直接放到外层卡片上。
+       不要自己单独做一个区"）；领先条数已在标题后面，card 里不再有组头。 */
     if (reviewHead?.isConnected) reviewHead.textContent = prs.length ? `${prs.length} 条 PR` : '暂无';
     box.innerHTML =
-      ctaGroup ||
+      cta ||
       `<div class="sk-blank">${prs.length ? '当前分支没有待建的 PR —— 提交并推送后，右上角「建 PR」会亮起' : '没有进行中的 PR —— 点右上角「建 PR」开第一条'}</div>`;
     if (reviewBox?.isConnected) {
       reviewBox.innerHTML = listHtml(prs, '还没有 PR —— 用右上角「建 PR」开第一条');
@@ -2913,8 +2903,7 @@ export function openRepoPrDialog(repo, onDone) {
           ? `<div class="pr-commits">
           <div class="pr-commits-head">这条 PR 会装 <b>${state.aheadCommits.length}</b> 条提交<span class="pr-commits-note">${unpushedN > 0 ? '已提交、还没推' : '已推到远端'}</span></div>
           <ul class="pr-commit-list">
-            ${state.aheadCommits.slice(0, 6).map((c) => `<li><code>${esc(c.sha)}</code><span title="${esc(c.subject)}">${esc(c.subject)}</span></li>`).join('')}
-            ${state.aheadCommits.length > 6 ? `<li class="dim">…另有 ${state.aheadCommits.length - 6} 条</li>` : ''}
+            ${state.aheadCommits.map((c) => `<li><code>${esc(c.sha)}</code><span title="${esc(c.subject)}">${esc(c.subject)}</span></li>`).join('')}
           </ul></div>`
           : ''
       }
