@@ -302,6 +302,8 @@ dialog#repoPrDlg { width: 660px; height: min(720px, 92vh); max-height: 92vh;
             max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pr-commits { margin-top: 10px; padding: 9px 12px 7px; border: 1px solid var(--line);
               border-radius: 8px; background: var(--side); }
+/* PR管理 tab 里内嵌在合并请求卡片中时去掉卡片外壳 —— 已经是卡片里了 */
+.gr-pr-group .pr-commits { margin-top: 10px; padding: 0; border: none; border-radius: 0; background: transparent; }
 .pr-commits-head { font-size: 12px; color: var(--dim); }
 .pr-commits-head b { color: var(--text); }
 .pr-commits-note { margin-left: 6px; font-size: 11px; }
