@@ -1101,8 +1101,9 @@ export function requestStop(runId) {
  * 工作流引擎靠它推进流程（`workflows.onAgentRunFinished`）。
  */
 const finishHooks = [];
-export function onRunFinish(fn) {
-  finishHooks.push(fn);
+export function onRunFinish(fn, label = '') {
+  // label 只在钩子抛错时用于定位（匿名箭头函数没有可读的 fn.name）。
+  finishHooks.push({ fn, label: label || fn?.name || '未命名钩子' });
 }
 
 /**
@@ -1295,10 +1296,17 @@ function finish(run, { status, exitCode = null, error = null, usage = null, elap
 
   // 钩子出错不能影响执行本身的收尾 —— 否则一条流程的推进逻辑会把发言也搞挂
   run.usageRecord = usage ?? null; // 收尾钩子要判"是不是被预算掐的"（project-tasks 的 endNoteOf）
-  for (const fn of finishHooks) {
+  for (const { fn, label } of finishHooks) {
     try {
       fn(run);
-    } catch { /* 忽略 */ }
+    } catch (err) {
+      /*
+       * 2026-11-23：以前这里是空 catch —— 钩子一抛错就静默消失（流程不推进、卡不
+       * 收尾、判据不核对），事后连"哪一环挂了"都查不到。只记日志，不改收尾状态、
+       * 不写 run_events（判据只看 tool 事件，别让日志污染量具）。
+       */
+      console.error(`[收尾钩子] ${label} 出错（run ${run.id}，status ${status}）：${err?.stack ?? err}`);
+    }
   }
 
   run.done = {
