@@ -1548,9 +1548,11 @@ export async function renderGitRepos(root = $('pluginView')) {
     if (reviewHead?.isConnected) reviewHead.textContent = prs.length ? `${prs.length} 条 PR` : '暂无';
     box.innerHTML =
       cta ||
-      `<div class="sk-blank">${prs.length ? '当前分支没有待建的 PR —— 提交并推送后，右上角「建 PR」会亮起' : '没有进行中的 PR —— 点右上角「建 PR」开第一条'}</div>`;
+      /* 空态只报事实，不指路（2026-11-23 用户圈了「—— 点右上角「建 PR」开第一条」："——以及后面的说明去掉"）。
+         按钮本就钉在标题行右侧，空态再指一遍是废话；prs 两种状态都收掉，换仓库也一致。 */
+      `<div class="sk-blank">${prs.length ? '当前分支没有待建的 PR' : '没有进行中的 PR'}</div>`;
     if (reviewBox?.isConnected) {
-      reviewBox.innerHTML = listHtml(prs, '还没有 PR —— 用右上角「建 PR」开第一条');
+      reviewBox.innerHTML = listHtml(prs, '还没有 PR');
     }
 
     /*
