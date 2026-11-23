@@ -880,7 +880,7 @@ export async function renderGitRepos(root = $('pluginView')) {
        -->
        <div class="plg-sec" data-gr-tab="commit">
          <div class="plg-sec-head">
-           <label class="plg-sec-title">推送</label><span class="dim" id="grPushHead"></span>
+           <label class="plg-sec-title">推送</label>
            <button type="button" class="mini auto" id="grPushNow">推送</button>
          </div>
          <section class="fx"><div id="grPush"><div class="sk-blank">读推送状态…</div></div></section>
@@ -1880,9 +1880,7 @@ export async function renderGitRepos(root = $('pluginView')) {
       const n = Number(state.unpushed ?? 0);
       const list = state.unpushedCommits ?? [];
       const down = Number(state.unpulled ?? 0);
-      const phead = $('grPushHead');
       const pbtn = $('grPushNow');
-      if (phead) phead.textContent = n > 0 ? `${n} 个提交还没推` : up ? '已同步' : '还没推过';
       if (pbtn) {
         pbtn.classList.toggle('hidden', n === 0 && !!up);   // 齐平就没得推（`.mini.hidden` 才有 display:none）
         pbtn.disabled = false;
