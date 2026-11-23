@@ -411,6 +411,9 @@ export function startRun({ thread, member, task, standing = null, watermark = 0,
     conversationId: thread.id,
     personaId,
     projectId,
+    // 在哪个仓库根上干的活：收尾时抽"验证命令 / 常改文件"要是按仓库隔离的（见 experience.harvestFacts）。
+    // 只放在内存对象上 —— 事实采集本来就在收尾时同步做完，不需要落库重建。
+    root: member.cwd ?? null,
     runtime,
     runtimeId: rt?.id ?? null,
     // 这次跑的是哪个模型（界面要显示它），以及"从哪来的"（员工绑的 / CLI 默认）

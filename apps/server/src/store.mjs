@@ -31,6 +31,8 @@ export * from './store/projectTasks.mjs';
 export * from './store/notices.mjs';
 // 经验簿（2026-11-22）：跨会话记住的口径与踩过的坑 —— 只收"能指回一件真事"的条目
 export * from './store/notes.mjs';
+// 长期记忆的事实层（2026-11-23）：平台从跑通的轮次里抽出的验证命令 / 重启方式 / 常改文件
+export * from './store/facts.mjs';
 export * from './store/nodeTasks.mjs';
 export * from './store/workflows.mjs';
 export * from './store/gitRepos.mjs';

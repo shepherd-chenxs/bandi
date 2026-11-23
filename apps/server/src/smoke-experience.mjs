@@ -6,8 +6,10 @@
  *   ② 同一个坑反复犯 = **一条 hits+1**，不是五条各说一遍（否则注入时全是重复）；
  *   ③ 采集只认平台核对写下的通知（kind='audit'），建卡失败那类不记成"他的坑"；
  *      同一个 run 收尾被重放也不该把次数刷成 2；
- *   ④ 注入有配额（口径 6 / 坑 5）且按次数排；一条都没有时**不印空壳**；
- *   ⑤ 接口写入口径窄：第三类 400、清空要显式 ?all=1、不能跨人删。
+ *   ④ 注入有配额（口径 4 / 事实 3 / 坑 3）且按本轮任务相关度取；一条都没有时**不印空壳**；
+ *   ⑤ 事实层只从**跑通**那一轮抽（命令 / 重启 / 常改文件），按仓库隔离，重复只累次数，
+ *      只改过一次的文件不进注入；
+ *   ⑥ 接口写入口径窄：第三类 400、清空要显式 ?all=1、不能跨人删；事实层只读 + 删。
  *
  * 跑法：node apps/server/src/smoke-experience.mjs
  * 隔离：临时数据目录 + 临时库 + 临时端口，跑完关库删目录。
@@ -108,7 +110,7 @@ try {
     check('建卡失败不记成"他的坑"（那是我方的问题）', exp.harvest({ run: r3 }).length === 0);
   }
 
-  console.log('③ 注入：两类分开、有配额、按次数排、有总长上限');
+  console.log('③ 注入：三类分开、有配额、按次数/相关度排、有总长上限');
   {
     store.addPersonaNote({ personaId: me.id, kind: 'repo', text: '服务端改完必须重启（18787 是壳拉起的）' });
     const block = exp.experienceBlock(me.id);
@@ -120,12 +122,82 @@ try {
     for (let i = 0; i < 12; i += 1) store.addPersonaNote({ personaId: me.id, kind: 'pitfall', text: `坑 ${i}` });
     const big = exp.experienceBlock(me.id);
     const lines = big.split('\n').filter((l) => l.startsWith('  - '));
-    check('口径只带 6 条、坑只带 5 条（11 行，不是 24 行）', lines.length === 11, `${lines.length} 行`);
+    check('口径只带 4 条、坑只带 3 条（7 行，不是 24 行）', lines.length === 7, `${lines.length} 行`);
     check('整块不超过上限（超了就不是提醒而是墙）', big.length <= exp.INJECT.blockMax + 1, `${big.length} 字`);
     check('路人的经验簿不受影响（按人隔离）', exp.experienceBlock(other.id) === '');
   }
 
-  console.log('④ 接口：写入口径窄，删要指得准');
+  console.log('④ 事实层：只从跑通那轮抽、按仓库隔离、重复只累次数');
+  {
+    store.deletePersonaFacts(me.id);
+    const ROOT = 'E:/Repo/One';
+    const mkRun = (status) => {
+      const row = store.createRun({ conversationId: conv.id, runtime: 'codex', personaId: me.id });
+      return { id: row.id, personaId: me.id, status, root: ROOT, conversationId: conv.id };
+    };
+    const push = (runId, evt) => {
+      const seq = store.maxRunSeq(runId) + 1;
+      store.appendRunEvent(runId, seq, evt);
+    };
+
+    const okRun = mkRun('done');
+    push(okRun.id, { type: 'tool', name: 'command_execution', detail: { command: 'node tools/run-smokes.mjs' } });
+    push(okRun.id, { type: 'tool', name: 'command_execution', detail: { command: 'bandi restart' } });
+    push(okRun.id, {
+      type: 'tool',
+      name: 'apply_patch',
+      detail: {
+        changes: [
+          { path: 'E:/Repo/One/apps/server/src/a.mjs' },
+          { path: 'E:/Repo/One/apps/server/src/a.mjs' },
+          { path: 'E:/Repo/One/tmp/scratch.mjs' },
+          { path: 'E:/Other/repo/b.mjs' },
+        ],
+      },
+    });
+    const got = exp.harvestFacts({ run: okRun });
+    const kinds = store.listPersonaFacts(me.id).map((f) => f.kind).sort();
+    check('跑通一轮 → 抽出命令 / 重启 / 常改文件', got.length === 3 && kinds.join(',') === 'command,path,restart', kinds.join(','));
+    check(
+      '临时目录与别的仓库的路径不记（按仓库根过滤）',
+      store.listPersonaFacts(me.id).filter((f) => f.kind === 'path').map((f) => f.text).join() === '常改：apps/server/src/a.mjs',
+    );
+    check('同一个 run 重放采集 → 不刷次数', exp.harvestFacts({ run: okRun }).length === 0);
+
+    const failRun = mkRun('failed');
+    push(failRun.id, { type: 'tool', name: 'command_execution', detail: { command: 'npm test' } });
+    check('没跑通的那轮不抽（没验证过的命令不进长期记忆）', exp.harvestFacts({ run: failRun }).length === 0);
+
+    // 第二轮再跑一遍同样的命令与文件：hits 累加，不新增行
+    const again = mkRun('done');
+    push(again.id, { type: 'tool', name: 'command_execution', detail: { command: 'node tools/run-smokes.mjs' } });
+    push(again.id, { type: 'tool', name: 'apply_patch', detail: { changes: [{ path: 'E:/Repo/One/apps/server/src/a.mjs' }] } });
+    exp.harvestFacts({ run: again });
+    const hit = store.listPersonaFacts(me.id).find((f) => f.text.startsWith('冒烟验证'));
+    check('同一件事第二轮 → 一条 hits=2（不是两行）', hit?.hits === 2, `hits=${hit?.hits}`);
+
+    // 别的仓库的事实不能带进这个仓的注入
+    store.addPersonaFact({ personaId: me.id, scope: 'E:/Repo/Two', kind: 'command', text: '测试：npm test' });
+    const recalled = exp.memoryBlock({ personaId: me.id, query: '帮我跑一下冒烟验证', root: ROOT });
+    check('注入带上了该仓的事实', /冒烟验证/.test(recalled) && /重启/.test(recalled) && /常改：apps\/server\/src\/a\.mjs/.test(recalled));
+    check('别的仓的事实不串进来', !/npm test/.test(recalled));
+    check(
+      '按本轮任务相关度排：最相关的第一条',
+      recalled.split('\n').find((l) => l.startsWith('  - ') && /冒烟验证|重启|常改/.test(l))?.includes('冒烟验证'),
+      recalled.split('\n').find((l) => l.startsWith('  - ') && /冒烟验证|重启|常改/.test(l)) ?? '',
+    );
+
+    store.deletePersonaFacts(me.id);
+    const first = mkRun('done');
+    push(first.id, { type: 'tool', name: 'apply_patch', detail: { changes: [{ path: 'E:/Repo/One/only-once.mjs' }] } });
+    exp.harvestFacts({ run: first });
+    check(
+      '只改过一次的文件不进注入（多半是这一轮的临时脚本）',
+      !/only-once\.mjs/.test(exp.memoryBlock({ personaId: me.id, query: 'only-once', root: ROOT })),
+    );
+  }
+
+  console.log('⑤ 接口：写入口径窄，删要指得准');
   {
     await import(url('server.mjs'));
     let up = false;
@@ -175,9 +247,28 @@ try {
 
     const missing = await send('GET', `/api/personas/${encodeURIComponent('p-nope')}/notes`);
     check('员工不存在 → 404', missing.status === 404);
+
+    // 事实层：只读 + 删，没有手写入口
+    const fbase = `/api/personas/${encodeURIComponent(me.id)}/facts`;
+    store.deletePersonaFacts(me.id); // 前一段留下的 only-once 不参与这一段的计数
+    store.addPersonaFact({ personaId: me.id, kind: 'command', text: '测试：npm test' });
+    const fList = await send('GET', fbase);
+    check('GET facts 能列出平台事实', fList.status === 200 && (fList.body.facts ?? []).length === 1);
+    const fPost = await send('POST', fbase, { text: '手写事实' });
+    check('事实层没有 POST（人写的东西走口径）', fPost.status >= 400, String(fPost.status));
+    const fid = (fList.body.facts ?? [])[0]?.id;
+    const fCross = await send('DELETE', `/api/personas/${encodeURIComponent(other.id)}/facts/${fid}`);
+    check('事实不能跨人删（id 对但人不符 → 404）', fCross.status === 404);
+    const fAllRefused = await send('DELETE', fbase);
+    check('事实清空也要显式 ?all=1（防手滑）', fAllRefused.status === 400);
+    const fGone = await send('DELETE', `${fbase}/${fid}`);
+    check('删一条事实 → 200', fGone.status === 200 && fGone.body.removed === 1);
+    store.addPersonaFact({ personaId: me.id, kind: 'restart', text: '重启：bandi restart' });
+    const fWiped = await send('DELETE', `${fbase}?all=1`);
+    check('事实 ?all=1 → 清空并回条数', fWiped.status === 200 && fWiped.body.removed === 1);
   }
 
-  console.log('⑤ 接线：注入位置与采集时机（读源码钉住，别只看单测）');
+  console.log('⑥ 接线：注入位置、召回依据与采集时机（读源码钉住，别只看单测）');
   {
     const dispatchSrc = fs.readFileSync(path.join(repoRoot, 'apps', 'server', 'src', 'dispatch.mjs'), 'utf8');
     const serverSrc = fs.readFileSync(path.join(repoRoot, 'apps', 'server', 'src', 'server.mjs'), 'utf8');
@@ -188,11 +279,18 @@ try {
     const iClaim = serverSrc.indexOf('taskClaimAudit.reconcile');
     const iCrit = serverSrc.indexOf('criteriaAudit.reconcile');
     const iHarvest = serverSrc.indexOf('experience.harvest');
+    const iHarvestFacts = serverSrc.indexOf('experience.harvestFacts');
     check(
       '采集注册在两个核对之后（先有结论再抄进经验簿）',
       iClaim > 0 && iCrit > iClaim && iHarvest > iCrit,
       `${iClaim} < ${iCrit} < ${iHarvest}`,
     );
+    check('事实采集在经验簿之后注册（两块各记各的，谁失败都不挡对方）', iHarvestFacts > iHarvest);
+    check(
+      '注入走 memoryBlock 且带本轮任务做召回、带仓库根做隔离',
+      /memoryBlock\(\{\s*personaId: member\.personaId,\s*query: matchText,\s*root: member\.cwd \|\| repoRoot,/.test(dispatchSrc),
+    );
+    check('召回依据与技能内联用同一份 matchText（不额外引入群聊历史）', /planSkillInline\(matchText, skillNames\)/.test(dispatchSrc));
   }
 } catch (e) {
   console.error('  冒烟自身出错：', e?.stack ?? e);

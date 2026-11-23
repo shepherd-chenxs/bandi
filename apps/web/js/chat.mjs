@@ -3522,7 +3522,86 @@ export async function openPeerDialog(personaId) {
     },
   });
 
+  /*
+   * 长期记忆（2026-11-23，缺口①补完）：口径 / 平台事实 / 坑 —— 简卡里只给**看与删**。
+   *
+   * 不给"加"是故意的：口径要人给（bandi note add，写入口径在服务端卡着），
+   * 事实只能从跑通那一轮的 run_events 里抽（experience.harvestFacts）——
+   * 界面上随手加一条"事实"，就分不清哪条是平台证明过的了。
+   *
+   * 失败不挡简卡：读不到就显示一行"读不到"，换运行时/模型照常。
+   */
+  const paintMemory = async () => {
+    const mount = $('peerMemoryMount');
+    if (!mount) return;
+    mount.innerHTML = '<div class="dim pm-empty">读取中…</div>';
+    let notes = [];
+    let facts = [];
+    try {
+      const [rn, rf] = await Promise.all([
+        api('/api/personas/' + encodeURIComponent(persona.id) + '/notes'),
+        api('/api/personas/' + encodeURIComponent(persona.id) + '/facts'),
+      ]);
+      notes = rn?.notes ?? [];
+      facts = rf?.facts ?? [];
+    } catch {
+      mount.innerHTML = '<div class="dim pm-empty">读不到（服务端连不上）。</div>';
+      return;
+    }
+    const groups = [
+      ['口径', notes.filter((n) => n.kind === 'repo'), 'notes'],
+      ['平台事实', facts, 'facts'],
+      ['坑', notes.filter((n) => n.kind === 'pitfall'), 'notes'],
+    ].filter(([, list]) => list.length);
+    if (!groups.length) {
+      mount.innerHTML =
+        '<div class="dim pm-empty">还没有记忆。口径用 <code>bandi note add</code> 记；事实会在跑通一轮后自动记。</div>';
+      return;
+    }
+    mount.innerHTML = '';
+    for (const [title, list, kind] of groups) {
+      const box = document.createElement('div');
+      box.className = 'pm-group';
+      const head = document.createElement('div');
+      head.className = 'pm-head';
+      head.textContent = `${title} ${list.length}`;
+      box.appendChild(head);
+      for (const item of list) {
+        const row = document.createElement('div');
+        row.className = 'pm-item';
+        const txt = document.createElement('span');
+        txt.textContent = Number(item.hits) > 1 ? `${item.text}（×${item.hits}）` : item.text;
+        txt.title = item.text;
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'pm-del';
+        del.textContent = '×';
+        del.title = '删掉这条（删了就不再提醒他）';
+        del.addEventListener('click', async () => {
+          del.disabled = true;
+          const pid = encodeURIComponent(persona.id);
+          const fid = encodeURIComponent(item.id);
+          const path = kind === 'facts'
+            ? '/api/personas/' + pid + '/facts/' + fid
+            : '/api/personas/' + pid + '/notes/' + fid;
+          try {
+            await api(path, { method: 'DELETE' });
+            toast('删掉了', 'ok');
+            await paintMemory();
+          } catch (err) {
+            del.disabled = false;
+            toast(err.message, 'error');
+          }
+        });
+        row.append(txt, del);
+        box.appendChild(row);
+      }
+      mount.appendChild(box);
+    }
+  };
+
   await paintModels(persona.runtime); // auto 不发请求（没有自己的模型清单）
+  await paintMemory();
   // 连点两下头像：showModal() 对已打开的 dialog 会抛 InvalidStateError，先收掉再开
   if (dlg.open) dlg.close();
   dlg.showModal();

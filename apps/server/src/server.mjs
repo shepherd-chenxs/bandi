@@ -810,6 +810,12 @@ runs.onRunFinish((run) => criteriaAudit.reconcile({ run }), '判据核对');
  * 采集失败只打一行日志 —— 收尾链路不能被一段账卡住。见 experience.mjs。
  */
 runs.onRunFinish((run) => experience.harvest({ run }), '经验簿采集');
+/*
+ * 长期记忆的事实层（2026-11-23，缺口①补完）：只从"跑通"的那一轮的 run_events 里抽
+ * 验证命令 / 重启方式 / 常改文件（见 experience.factsFromEvents）。排在收尾链最后，
+ * 不判事、不抛错；它与经验簿各记各的，谁失败都不影响对方。
+ */
+runs.onRunFinish((run) => experience.harvestFacts({ run }), '长期记忆采集');
 // 群里 @ 多人的排队（2026-10-24）：会话一次只跑一个 —— 前一个收尾，队里下一个立刻补上。
 // 挂在流程/任务卡钩子之后：它们推进的是各自 exec 会话的活，跟群排队互不挡道。
 runs.onRunFinish((run) => {

@@ -612,10 +612,10 @@ const SKILL_USAGE = `用法：
  * 手工写的"坑"没人能核，最后会变成自我批评的散文。这里 `--pit` 只留给"人明确指出的错"。
  */
 const NOTE_USAGE = `用法：
-  bandi note ls <员工>                他记住了什么（口径 / 坑，各几条）
+  bandi note ls <员工>                他记住了什么（口径 / 事实 / 坑）
   bandi note add <员工> <一句话>       记一条口径（--pit 记成"踩过的坑"）
-  bandi note rm <员工> <id>           删一条
-  bandi note forget <员工> --yes      整个忘掉（换人、重来）`;
+  bandi note rm <员工> <id>           删一条（事实也可以删，id 形如 pf-xxxx）
+  bandi note forget <员工> --yes      整个忘掉（口径、事实、坑一起清）`;
 
 async function cmdNote(argv) {
   const words = argv.filter((a) => !a.startsWith('-'));
@@ -635,20 +635,24 @@ async function cmdNote(argv) {
   const base = `/api/personas/${encodeURIComponent(persona.id)}/notes`;
 
   if (sub === 'ls' || sub === 'list') {
-    const r = await api(P, { path: base });
+    const [r, rf] = await Promise.all([api(P, { path: base }), api(P, { path: `/api/personas/${encodeURIComponent(persona.id)}/facts` })]);
     if (r.status !== 200) return red(errText(r));
     const notes = r.json?.notes ?? [];
-    if (!notes.length) return dim(`${persona.name} 的经验簿是空的（这很正常：口径要人给，坑要平台核出来）`);
+    const facts = rf.status === 200 ? (rf.json?.facts ?? []) : [];
+    if (!notes.length && !facts.length) {
+      return dim(`${persona.name} 的长期记忆是空的（口径要人给，事实要跑通一轮才会记，坑要平台核出来）`);
+    }
     const repo = notes.filter((n) => n.kind === 'repo');
     const pits = notes.filter((n) => n.kind === 'pitfall');
     const line = (n) =>
       `  ${dim(n.id)}${n.hits > 1 ? dim(` ×${n.hits}`) : ''}  ${n.text}${n.source === 'audit' ? dim('  [平台核出]') : ''}`;
     return [
-      `${bold(persona.name)} 的经验簿（${notes.length}/${r.json?.limit ?? 200}）`,
+      `${bold(persona.name)} 的长期记忆（口径 ${repo.length} / 事实 ${facts.length} / 坑 ${pits.length}）`,
       repo.length ? `\n口径 ${repo.length} 条：\n${repo.map(line).join('\n')}` : '',
+      facts.length ? `\n事实 ${facts.length} 条（平台从跑通的轮次里抽的，×n = 在几轮里被证实）：\n${facts.map(line).join('\n')}` : '',
       pits.length ? `\n坑 ${pits.length} 条（×n = 被核出过几次）：\n${pits.map(line).join('\n')}` : '',
       '',
-      dim('进上下文的只有：口径取最近 6 条、坑取被核出次数最多的 5 条 —— 其余只在这里看得到，删了就不再提。'),
+      dim('进上下文的只有：口径 4 条、事实 3 条、坑 3 条（按本轮任务相关度取）—— 其余只在这里看得到，删了就不再提。'),
     ]
       .filter(Boolean)
       .join('\n');
@@ -669,20 +673,30 @@ async function cmdNote(argv) {
   if (sub === 'rm' || sub === 'del') {
     const id = words[3];
     if (!id) return `删哪一条？先 bandi note ls ${persona.name} 看 id`;
-    const r = await api(P, { method: 'DELETE', path: `${base}/${encodeURIComponent(id)}` });
+    // 事实的 id 是 pf- 开头，走事实接口；其余都按经验簿处理
+    const path = id.startsWith('pf-')
+      ? `/api/personas/${encodeURIComponent(persona.id)}/facts/${encodeURIComponent(id)}`
+      : `${base}/${encodeURIComponent(id)}`;
+    const r = await api(P, { method: 'DELETE', path });
     if (r.status !== 200) return red(errText(r));
     return green(`删掉了：${id}`);
   }
 
   // forget
   if (!argv.includes('--yes')) {
-    const r = await api(P, { path: base });
+    const [r, rf] = await Promise.all([api(P, { path: base }), api(P, { path: `/api/personas/${encodeURIComponent(persona.id)}/facts` })]);
     const n = (r.json?.notes ?? []).length;
-    return `这会清空 ${persona.name} 的 ${n} 条经验（含平台核出来的坑），不能撤销。确认就加 --yes。`;
+    const f = (rf.json?.facts ?? []).length;
+    return `这会清空 ${persona.name} 的 ${n} 条经验（含平台核出来的坑）和 ${f} 条事实，不能撤销。确认就加 --yes。`;
   }
-  const r = await api(P, { method: 'DELETE', path: `${base}?all=1` });
+  const [r, rf] = await Promise.all([
+    api(P, { method: 'DELETE', path: `${base}?all=1` }),
+    api(P, { method: 'DELETE', path: `/api/personas/${encodeURIComponent(persona.id)}/facts?all=1` }),
+  ]);
   if (r.status !== 200) return red(errText(r));
-  return green(`已清空 ${persona.name} 的 ${r.json?.removed ?? 0} 条经验`);
+  if (rf.status !== 200) return red(errText(rf));
+  const total = (r.json?.removed ?? 0) + (rf.json?.removed ?? 0);
+  return green(`已清空 ${persona.name} 的 ${total} 条长期记忆`);
 }
 
 

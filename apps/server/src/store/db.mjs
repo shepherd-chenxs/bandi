@@ -124,8 +124,10 @@ db.exec(`PRAGMA busy_timeout = 5000;`);
  *   · 15（2026-11-22）：`runs` 加 `claim` —— 这一轮的**交付落款**（done / blocked / unclaimed / silent）。
  *     落库的是 `run.finalText` 原文判出来的值，因为落库的消息会把 `[完成]` 剥掉（见 runs.mjs 的
  *     persistReply），事后从 messages 里再也判不出来。回归量具与判据核对从此读同一列。
+ *   · 16（2026-11-23）：新表 `persona_facts` —— 长期记忆的事实层：平台从**跑通那一轮**的
+ *     run_events 里抽出的验证命令 / 重启方式 / 常改文件，按仓库 scope 隔离（见 store/facts.mjs）。
  */
-export const SCHEMA_VERSION = 15;
+export const SCHEMA_VERSION = 16;
 
 const dbVersion = Number(db.prepare('PRAGMA user_version').get()?.user_version ?? 0);
 if (dbVersion > SCHEMA_VERSION) {
@@ -1113,6 +1115,37 @@ db.exec(`
   );
 
   CREATE INDEX IF NOT EXISTS idx_persona_notes_persona ON persona_notes (personaId, kind, updatedAt DESC);
+`);
+
+/*
+ * 长期记忆的事实层（2026-11-23，缺口①补完）：**平台自己从跑通的轮次里抽出来的事实**。
+ *
+ * 与 `persona_notes` 的分工：
+ *   · 口径 / 坑（notes）是"人给的规矩"和"被核出来的错"，一句话一条；
+ *   · 事实（facts）是"这个仓里怎么跑、常改哪儿"，来源是 `run_events` 里**真的发生过**的
+ *     tool 事件 —— 验证命令、重启命令、改动集中的文件。不生成摘要，不猜意图。
+ *
+ * `scope` 是仓库根（小写、正斜杠），'' 表示不分仓库。没有 scope 的话，"这个仓用 npm test"
+ * 会被带进另一个仓，比不记更坏 —— 注入时只认当前仓库 + 全局那批。
+ * hits = 这件事在几轮里被重复证实（不是点赞数）；淘汰规则与经验簿一致。
+ */
+db.exec(`
+  CREATE TABLE IF NOT EXISTS persona_facts (
+    id         TEXT PRIMARY KEY,
+    personaId  TEXT NOT NULL,
+    scope      TEXT NOT NULL DEFAULT '',
+    kind       TEXT NOT NULL,
+    text       TEXT NOT NULL,
+    source     TEXT NOT NULL DEFAULT 'audit',
+    hits       INTEGER NOT NULL DEFAULT 1,
+    evidence   TEXT,
+    dedupe     TEXT NOT NULL,
+    createdAt  TEXT NOT NULL,
+    updatedAt  TEXT NOT NULL,
+    UNIQUE (personaId, dedupe)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_persona_facts_persona ON persona_facts (personaId, scope, kind, updatedAt DESC);
 `);
 
 export function backupTo(file) {

@@ -36,6 +36,9 @@ export async function handlePersona(req, res, url) {
   // 经验簿（2026-11-22，缺口①）：这个人的口径与踩过的坑
   const notesOf = /^\/api\/personas\/([^/]+)\/notes$/.exec(url.pathname);
   const noteOne = /^\/api\/personas\/([^/]+)\/notes\/([^/]+)$/.exec(url.pathname);
+  // 长期记忆的事实层（2026-11-23，缺口①补完）：平台从跑通轮次里抽出的命令/常改文件
+  const factsOf = /^\/api\/personas\/([^/]+)\/facts$/.exec(url.pathname);
+  const factOne = /^\/api\/personas\/([^/]+)\/facts\/([^/]+)$/.exec(url.pathname);
 
   // 删员工：级联清关系数据；是他的群助手就先拦下（换人再删）
   // （one 的正则到行尾为止，所以只可能命中 /api/personas/<id> 这一种路径）
@@ -229,6 +232,46 @@ export async function handlePersona(req, res, url) {
     if (!note || note.personaId !== persona.id) return fail(res, 404, 'E2040', '经验簿里没有这一条');
     store.deletePersonaNote(noteId);
     return sendJson(res, 200, { removed: 1, id: noteId });
+  }
+
+  /*
+   * 长期记忆的事实层（2026-11-23，缺口①补完）：GET 看平台记下了什么 / DELETE 删一条或清空。
+   *
+   * 这里**没有 POST**：事实只从跑通那一轮的 run_events 里抽（experience.harvestFacts），
+   * 人给的东西属于"口径"，走上面 notes 的入口。分开是为了让"谁说的"永远分得清 ——
+   * 两条路要是混成一个接口，过半年就没人知道某条到底是谁记的。
+   */
+  if (factsOf) {
+    const persona = store.getPersona(decodeURIComponent(factsOf[1]));
+    if (!persona) return fail(res, 404, 'E2008', '员工不存在');
+
+    if (req.method === 'GET') {
+      const facts = store.listPersonaFacts(persona.id, { limit: store.MAX_FACTS_PER_PERSONA });
+      return sendJson(res, 200, {
+        persona: { id: persona.id, name: persona.name },
+        facts,
+        limit: store.MAX_FACTS_PER_PERSONA,
+      });
+    }
+
+    if (req.method === 'DELETE') {
+      if (url.searchParams.get('all') !== '1') {
+        return fail(res, 400, 'E2041', '删一条用 DELETE /api/personas/:id/facts/:factId；清空要显式加 ?all=1');
+      }
+      const removed = store.deletePersonaFacts(persona.id);
+      return sendJson(res, 200, { removed });
+    }
+  }
+
+  if (req.method === 'DELETE' && factOne) {
+    const persona = store.getPersona(decodeURIComponent(factOne[1]));
+    if (!persona) return fail(res, 404, 'E2008', '员工不存在');
+    const factId = decodeURIComponent(factOne[2]);
+    const fact = store.getPersonaFact(factId);
+    // 不跨人删：只能删自己名下那条
+    if (!fact || fact.personaId !== persona.id) return fail(res, 404, 'E2041', '长期记忆里没有这一条');
+    store.deletePersonaFact(factId);
+    return sendJson(res, 200, { removed: 1, id: factId });
   }
 
   if ((req.method === 'PUT' || req.method === 'PATCH') && one) {

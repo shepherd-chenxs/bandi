@@ -131,8 +131,16 @@ const summary = {
              FROM persona_notes n LEFT JOIN personas p ON p.id = n.personaId
             ORDER BY n.hits DESC, n.updatedAt DESC LIMIT 5`,
         ),
+        // 事实层（2026-11-23 补）：平台从跑通轮次里抽的，不是人写的 —— 一直是 0 = 还没跑通一轮
+        facts: hasTable('persona_facts')
+          ? {
+              total: one('SELECT COUNT(*) AS n FROM persona_facts').n,
+              people: one('SELECT COUNT(DISTINCT personaId) AS n FROM persona_facts').n,
+              byKind: all('SELECT kind, COUNT(*) AS n, SUM(hits) AS hits FROM persona_facts GROUP BY kind'),
+            }
+          : { total: 0, people: 0, byKind: [], missing: true },
       }
-    : { total: 0, repo: 0, pitfall: 0, people: 0, byPersona: [], top: [], missing: true },
+    : { total: 0, repo: 0, pitfall: 0, people: 0, byPersona: [], top: [], facts: { total: 0, people: 0, byKind: [] }, missing: true },
 };
 
 if (asJson) {
@@ -179,6 +187,11 @@ if (!crit.total) {
  */
 const xp = summary.experience;
 console.log(`\n经验簿：${xp.total} 条（口径 ${xp.repo} · 坑 ${xp.pitfall}）· ${xp.people} 人有过记录`);
+const fc = xp.facts ?? {};
+if (!xp.missing) {
+  const kindText = (fc.byKind ?? []).map((k) => `${k.kind} ${k.n}`).join(' · ') || '空';
+  console.log(`长期记忆事实：${fc.total ?? 0} 条（${kindText}）· ${fc.people ?? 0} 人`);
+}
 if (xp.missing) {
   console.log('  （库里还没这张表：启动过一次服务就会自动补上）');
 } else if (!xp.total) {

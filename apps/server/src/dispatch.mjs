@@ -65,7 +65,7 @@ export {
 export { personaRoots, directMember, parseMentions, resolveTarget } from './dispatch/routing.mjs';
 
 // 经验簿注入（2026-11-22，缺口①）：这个人跨会话该记住的口径与坑（见 experience.mjs）
-import { experienceBlock } from './experience.mjs';
+import { memoryBlock } from './experience.mjs';
 // 「这段活干到哪了」（2026-11-22，缺口①后半）：交接用事实账，不用聊天摘要
 import { progressBlock } from './progress-ledger.mjs';
 const fail = (message, code = 'bad') => Object.assign(new Error(message), { code });
@@ -615,12 +615,16 @@ function startMemberRun(thread, member, opts, trigger) {
    * 历史里随便一句"报错"就会把排障方法论塞进一条问进度的消息里，那是噪声不是帮助。
    * （这里的"依据"是**匹配**用的，别和上面的岗位判据混：判据是收尾核对用的。）
    */
-  const skillInline = planSkillInline(
-    [trigger.text, opts.card?.title, opts.card?.description, workflowTask?.nodeName, workflowTask?.detail]
-      .filter(Boolean)
-      .join('\n'),
-    skillNames,
-  );
+  const matchText = [
+    trigger.text,
+    opts.card?.title,
+    opts.card?.description,
+    workflowTask?.nodeName,
+    workflowTask?.detail,
+  ]
+    .filter(Boolean)
+    .join('\n');
+  const skillInline = planSkillInline(matchText, skillNames);
   /*
    * 回复风格块也会内联一份技能正文（stylePrefBlock → REPLY_STYLES[].skill）。
    * 同一份正文在一条任务里出现两遍既费 token 又会被模型当成两件事，所以这里把风格那份排掉。
@@ -628,11 +632,16 @@ function startMemberRun(thread, member, opts, trigger) {
   const styleSkill = REPLY_STYLES.find((x) => x.id === replyStyle())?.skill ?? '';
   const inlinePicked = skillInline.picked.filter((s) => s.name !== styleSkill);
   /*
-   * **经验簿**（2026-11-22，缺口①）：这个人跨会话该记住的口径与坑。
+   * **长期记忆**（2026-11-22 缺口①；2026-11-23 补事实层与召回）。
    * 位置在"这轮要干什么"（task）之后、"附件/风格/方法"之前 —— 先知道活是什么，再看
    * "我以前在这台机器上栽在哪"，比把它堆在最前面更相关（见 experience.mjs 的配额与取舍）。
+   * 用同一份 `matchText` 做召回：和本轮任务不沾边的口径/坑/事实不该占他的注意力。
    */
-  const expBlock = experienceBlock(member.personaId);
+  const expBlock = memoryBlock({
+    personaId: member.personaId,
+    query: matchText,
+    root: member.cwd || repoRoot,
+  });
   const fullTask = [cardBlock, task, expBlock, attBlock, stylePrefBlock(), inlineSkillsBlock(inlinePicked), contractBlock]
     .filter(Boolean)
     .join('\n\n');

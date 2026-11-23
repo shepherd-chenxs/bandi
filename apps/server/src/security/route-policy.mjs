@@ -152,6 +152,10 @@ export const ROUTES = [
    */
   { id: 'persona.notes', m: ['GET', 'POST', 'DELETE'], path: p('/api/personas', id1, 'notes'), auth: 'session', run: true, call: 'GET /api/personas/{id}/notes', note: '运行钥匙只读：这个人记住了哪些口径与坑；?all=1 才清空' },
   { id: 'persona.note.one', m: ['DELETE'], path: p('/api/personas', id1, 'notes', id1), auth: 'session' },
+  /* 长期记忆的事实层（2026-11-23）：只读 + 删。**没有 POST** —— 事实只从跑通的那一轮里抽，
+     人写的东西走上面 notes（口径）；两条路混在一起"谁记的"就分不清了。 */
+  { id: 'persona.facts', m: ['GET', 'DELETE'], path: p('/api/personas', id1, 'facts'), auth: 'session', run: true, call: 'GET /api/personas/{id}/facts', note: '运行钥匙只读：平台从跑通轮次里抽出的验证命令/常改文件；?all=1 才清空' },
+  { id: 'persona.fact.one', m: ['DELETE'], path: p('/api/personas', id1, 'facts', id1), auth: 'session' },
   { id: 'persona.feishu', m: ['GET', 'PUT', 'POST'], path: p('/api/personas', id1, 'feishu(?:/test|/start|/stop)?'), auth: 'session' },
   { id: 'group.create', m: ['POST'], path: p('/api/groups'), auth: 'session',
     note: '手机建群（2026-11-05 实机：E4033，与 conv.create 同一个坑——路由没打 device 标）。只开**建**：改名/解散/换群助手/踢人仍是桌面的事' },

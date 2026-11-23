@@ -88,7 +88,17 @@ console.log('\n⑤ 接线：派活链路真的用上了');
   const dispatchSrc = read('apps/server/src/dispatch.mjs');
   const contractSrc = read('apps/server/src/dispatch/contract.mjs');
   check('dispatch 组装前先 planSkillInline', /const skillInline = planSkillInline\(/.test(dispatchSrc));
-  check('判据含雇主原话 + 卡标题/描述', /trigger\.text, opts\.card\?\.title, opts\.card\?\.description/.test(dispatchSrc));
+  const matchTextBlock = dispatchSrc.slice(
+    dispatchSrc.indexOf('const matchText'),
+    dispatchSrc.indexOf('planSkillInline(matchText'),
+  );
+  check(
+    '判据含雇主原话 + 卡标题/描述',
+    /trigger\.text/.test(matchTextBlock) &&
+      /opts\.card\?\.title/.test(matchTextBlock) &&
+      /opts\.card\?\.description/.test(matchTextBlock),
+  );
+  check('长期记忆召回与技能内联共用同一份 matchText', /planSkillInline\(matchText, skillNames\)/.test(dispatchSrc));
   check('不含群聊历史（避免"报错"两字把排障塞进问进度）', !/planSkillInline\(\s*context/i.test(dispatchSrc));
   check('fullTask 里内联块排在合同之前', /inlineSkillsBlock\(inlinePicked\), contractBlock/.test(dispatchSrc));
   check('与回复风格内联的那份去重（同一条任务里不出现两遍）', /s\.name !== styleSkill/.test(dispatchSrc));
