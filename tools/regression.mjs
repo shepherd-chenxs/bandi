@@ -53,6 +53,8 @@ import { claimOf } from '../apps/server/src/delivery-claim.mjs';
 import { TERMINAL, settleStep } from '../apps/server/src/regression/settle.mjs';
 // 员工产物（未跟踪文件）的解析：跑前全干净，跑后多出来的 100% 是本轮产物（见 stray.mjs 文件头）
 import { strayUntracked } from '../apps/server/src/regression/stray.mjs';
+// 平台防循环闸掐断：runs 表里没有结构化字段，只留了一条 text（见 stop.mjs 文件头）
+import { isPlatformStopText } from '../apps/server/src/regression/stop.mjs';
 // data-dir.mjs 是零依赖的纯路径模块（不读 BANDI_DATA），给的是**真实**用户数据目录
 import { userDataDir } from '../apps/server/src/data-dir.mjs';
 
@@ -368,6 +370,29 @@ function extractActions(db, runId, cleanCommand) {
   return actions;
 }
 
+/**
+ * 平台防循环闸有没有掐断这一轮（2026-11-23 第 5 个问题）。
+ *
+ * codex 连着 N 次调同一个工具、结果都一样时，会往 run_events 塞一条
+ * `type:'text'` 的说明（__done 的 finalText 里也带同一句），但 runs 表仍是
+ * `done` / `error=null` —— 只认结构化字段会完全漏掉。命中的话这轮动作是残的，
+ * 跟 interrupted 一样"不作数"，不能拿去给员工打分。
+ */
+function platformStopOfRun(db, runId) {
+  const rows = db.prepare('SELECT evt FROM run_events WHERE runId = ? ORDER BY seq').all(runId);
+  for (const row of rows) {
+    let evt = null;
+    try {
+      evt = JSON.parse(row.evt);
+    } catch {
+      continue;
+    }
+    const text = evt?.type === 'text' ? evt.text : (evt?.type === '__done' ? evt.finalText : null);
+    if (isPlatformStopText(text)) return clip(String(text), 200);
+  }
+  return null;
+}
+
 function finalAssistantText(db, convId, personaId) {
   const row = db
     .prepare(
@@ -442,6 +467,9 @@ async function runQuestion(q, db, cleanCommand) {
     // —— 抽事件 + 落款 ——
     const actions = extractActions(db, runId, cleanCommand);
     result.actions = actions.slice(0, 12); // 报告只留前 12 条 —— 够看清"先干了什么"
+    // 平台事故只记事实、不动判据：跟 infraError 一个待遇（见 stop.mjs 文件头）
+    const platformStop = platformStopOfRun(db, runId);
+    if (platformStop) result.platformStop = platformStop;
     const finalText = finalAssistantText(db, conv.id, persona.id);
     const { claim, source: claimSource } = claimOfRun(db, runId, conv.id, persona.id);
     result.finalClaim = claim;
@@ -475,6 +503,15 @@ async function runQuestion(q, db, cleanCommand) {
     if (claim === 'interrupted') {
       result.status = 'interrupted';
       result.why = `这一轮跑的时候回归服务被重启了（run 记为「${runStatus}」）—— 动作只抽到 ${actions.length} 条，结论不作数`;
+    } else if (platformStop) {
+      /*
+       * **平台防循环闸掐断的轮次不作数**（2026-11-23 第五次跑）：codex 连着 N 次
+       * 调同一个工具、结果一样，就把这一轮掐了，runs 表里却是 done / error=null。
+       * 员工没收到最后一轮请求，没机会把话说完 —— 跟 interrupted 一样拿半张考卷，
+       * 判 pass / fail 都不对。这里只记事实（result.platformStop），不碰判据。
+       */
+      result.status = 'platformStop';
+      result.why = `这一轮被平台的防循环闸掐断（重复调用同一工具，模型没收到最后一轮）—— 动作只抽到 ${actions.length} 条，不作数`;
     } else if (timedOut) {
       result.status = 'timeout';
       result.why = `15 分钟没跑完（最后状态 ${runStatus}），已掐掉；已抽到 ${actions.length} 条动作`;
@@ -699,7 +736,8 @@ async function main() {
   const counts = report.questions.reduce((m, r) => ((m[r.status] = (m[r.status] ?? 0) + 1), m), {});
   console.log(
     `\n小结：${report.questions.length} 题 —— pass ${counts.pass ?? 0} / fail ${counts.fail ?? 0} /`
-    + ` unjudgeable ${counts.unjudgeable ?? 0} / timeout ${counts.timeout ?? 0} / interrupted ${counts.interrupted ?? 0}`,
+    + ` unjudgeable ${counts.unjudgeable ?? 0} / timeout ${counts.timeout ?? 0} /`
+    + ` interrupted ${counts.interrupted ?? 0} / platformStop ${counts.platformStop ?? 0}`,
   );
   const infra = report.questions.filter((r) => r.infraError).length;
   if (infra) {
@@ -708,7 +746,8 @@ async function main() {
       + '不是员工水平；额度恢复后用同一套题重跑才算真基线',
     );
   }
-  const undetermined = (counts.unjudgeable ?? 0) + (counts.timeout ?? 0) + (counts.interrupted ?? 0);
+  const undetermined =
+    (counts.unjudgeable ?? 0) + (counts.timeout ?? 0) + (counts.interrupted ?? 0) + (counts.platformStop ?? 0);
   if (undetermined * 2 > report.questions.length) {
     console.error('[回归] unjudgeable/timeout 过半 —— 事件抽取有问题，回头修跑法再跑，这轮结果不可信');
     process.exit(2);

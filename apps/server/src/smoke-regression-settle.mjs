@@ -10,6 +10,8 @@
  *   ② 回归临时库被员工起的共库服务实例 reap 判死 —— 启动时该跳过清账。
  *   ③ 员工写临时验证脚本（正常专业行为）被旧复原逻辑当成脏树，`exit 1` 把已经
  *      算完的判分连同报告一起丢了 —— 跑前全干净，跑后多出来的 `??` 就是本轮产物。
+ *   ④ 平台防循环闸掐断（codex 连着 N 次调同一个工具）没有任何结构化字段，
+ *      只在会话里留了一条 text —— 旧量具把被掐断的半张考卷判成员工 fail。
  *
  *   node apps/server/src/smoke-regression-settle.mjs
  */
@@ -21,6 +23,7 @@ import {
   shouldReapOnBoot,
 } from './regression/settle.mjs';
 import { strayUntracked } from './regression/stray.mjs';
+import { isPlatformStopText } from './regression/stop.mjs';
 
 let failed = 0;
 const check = (label, ok, detail = '') => {
@@ -119,6 +122,16 @@ check(
 );
 check('带空格的路径保持原样（-z 不转义）', strayUntracked('?? a b/c d.txt\0')[0] === 'a b/c d.txt');
 check('多个产物全收', strayUntracked('?? a/\0?? b.txt\0').length === 2);
+
+console.log('\n⑤ 平台防循环闸：只认那句固定文案，不误伤正常回话');
+const stopText = '这一轮在发给模型之前已被停止：Agent 连续 8 次调用了同一个工具，每次得到的结果都一样（exec_command ...）。模型陷入了重复，再继续每一轮都只是多一次请求而没有进展，所以这一轮没有发出。告诉 Agent 接下来怎么做，对话就会继续；在 设置 › 模型 › 回复 › 停止循环的回复 中可以关闭这项检查。';
+check('11-23 题 5 实测那句 → 命中', isPlatformStopText(stopText));
+check('null / 空串 / undefined 都不命中', !isPlatformStopText(null) && !isPlatformStopText('') && !isPlatformStopText(undefined));
+check('正常员工回话不命中', !isPlatformStopText('端口 18795 当前没有被任何进程占用，说明现在是空闲的。'));
+check('回话里随口提「循环」不命中', !isPlatformStopText('我循环检查了三遍，确认没有残留进程。'));
+check('只留下「停止循环的回复」半截也命中', isPlatformStopText('可在 设置 › 模型 › 回复 › 停止循环的回复 中关闭'));
+check('只留下「连续 8 次调用了同一个工具」也命中', isPlatformStopText('Agent 连续 8 次调用了同一个工具，结果都一样'));
+check('文案前后带别的内容仍命中（不锚定开头）', isPlatformStopText('前缀 ' + stopText + ' 后缀'));
 
 console.log(`\n${failed ? `✗ ${failed} 条没过` : '✓ 全过'}`);
 process.exit(failed ? 1 : 0);
