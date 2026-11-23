@@ -1461,12 +1461,10 @@ export async function renderGitRepos(root = $('pluginView')) {
      * 合并按钮在能合的行上自己亮。原「审核」「合并」两块合成一张「PR 列表」表。
      */
     const groupHtml = (title, inner, count) =>
-      count
-        ? `<div class="gr-pr-group">
-        <div class="gr-pr-group-head">${esc(title)}<span class="gr-pr-group-count">${count}</span></div>
+      `<div class="gr-pr-group">
+        <div class="gr-pr-group-head">${esc(title)}${count ? `<span class="gr-pr-group-count">${count}</span>` : ''}</div>
         ${inner}
-      </div>`
-        : '';
+      </div>`;
 
     const renderCommitList = (state, skipHead) => {
       const list = state?.aheadCommits;
@@ -1543,16 +1541,21 @@ export async function renderGitRepos(root = $('pluginView')) {
     }
     syncCreateBtn();
 
-    const ctaGroup = cta ? groupHtml('待建 PR', cta, aheadCount) : '';
     /* PR 列表套上表头；空态给一句话（不再是"一个 PR 一张卡"） */
     const listHtml = (prsIn, emptyText) =>
       prsIn.length
         ? `<div class="gr-pr-table">${tableHead}${prsIn.map(rowHtml).join('')}</div>`
         : `<div class="sk-blank">${emptyText}</div>`;
-    if (head?.isConnected) head.textContent = prs.length ? `${prs.length} 条 PR` : '';
-    if (reviewHead?.isConnected) reviewHead.textContent = prs.length ? `${prs.length} 条 PR` : '暂无';
-
     /* 两张卡各管一段：合并请求 = 待建 CTA；PR 列表 = 全部 PR（能不能合看状态列 + 合并按钮） */
+    // count 放到「合并请求」标题后面的 span 里，不再在 group 卡片里重复
+    if (head?.isConnected) {
+      const parts = [];
+      if (aheadCount > 0) parts.push(`领先 ${aheadCount}`);
+      if (prs.length > 0) parts.push(`${prs.length} 条 PR`);
+      head.textContent = parts.join(' · ');
+    }
+    const ctaGroup = cta ? groupHtml('待建 PR', cta, 0) : '';
+    if (reviewHead?.isConnected) reviewHead.textContent = prs.length ? `${prs.length} 条 PR` : '暂无';
     box.innerHTML =
       ctaGroup ||
       `<div class="sk-blank">${prs.length ? '当前分支没有待建的 PR —— 提交并推送后，右上角「建 PR」会亮起' : '没有进行中的 PR —— 点右上角「建 PR」开第一条'}</div>`;
