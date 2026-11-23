@@ -1468,6 +1468,19 @@ export async function renderGitRepos(root = $('pluginView')) {
       </div>`
         : '';
 
+    const renderCommitList = (state) => {
+      const list = state?.aheadCommits;
+      if (!list?.length) return '';
+      const show = list.slice(0, 6);
+      const extra = list.length > 6 ? `<li class="dim">…另有 ${list.length - 6} 条</li>` : '';
+      return `<div class="pr-commits" style="margin-top:8px">
+        <div class="pr-commits-head">这条分支领先 base <b>${list.length}</b> 条提交</div>
+        <ul class="pr-commit-list">
+          ${show.map((c) => `<li><code>${esc(c.sha)}</code><span title="${esc(c.subject)}">${esc(c.subject)}</span></li>`).join('')}
+          ${extra}
+        </ul></div>`;
+    };
+
     /*
      * 当前分支还没有 PR 时给一行说明；按钮本身钉在「合并请求」标题行（2026-11-23 用户：
      * "这个按钮放右上角刷新右边是不是更好"）。卡片只解释现在为什么不能建、要先做什么。
@@ -1492,14 +1505,14 @@ export async function renderGitRepos(root = $('pluginView')) {
             createWhy = !state?.upstream
               ? '当前分支还没设上游，先在「推送」卡推送'
               : '当前分支有未推送的提交，先在「推送」卡推送';
-            cta = `<div class="gr-pr-cta">当前分支 <b>${esc(cur)}</b> 还没有 PR —— 先去上面「推送」卡推送，推完右上角「建 PR」就能点。</div>`;
+            cta = `<div class="gr-pr-cta">当前分支 <b>${esc(cur)}</b> 还没有 PR —— 先去上面「推送」卡推送，推完右上角「建 PR」就能点。</div>${renderCommitList(state)}`;
           } else {
             const n = ahead === null ? '' : `（领先 ${esc(base)} ${ahead} 个提交）`;
             const extra = state?.dirtyCount
               ? `；未提交的 ${state.dirtyCount} 个改动不会进这条 PR`
               : '';
             canCreate = true;
-            cta = `<div class="gr-pr-cta">当前分支 <b>${esc(cur)}</b> 还没有 PR ${n}${extra} —— 可以点右上角「建 PR」。</div>`;
+            cta = `<div class="gr-pr-cta">当前分支 <b>${esc(cur)}</b> 还没有 PR ${n}${extra} —— 可以点右上角「建 PR」。</div>${renderCommitList(state)}`;
           }
         } else if (state?.dirtyCount) {
           createWhy = '当前分支有未提交改动，先在「提交」里提交';
@@ -1518,7 +1531,7 @@ export async function renderGitRepos(root = $('pluginView')) {
         const dirtyHint = state?.dirtyCount
           ? `另外还有 ${state.dirtyCount} 个改动没提交，建 PR 时不会带上。`
           : '';
-        cta = `<div class="gr-pr-cta">当前就在主干 <b>${esc(base)}</b> 上，有 ${state.ahead} 个提交还没推上去 —— 直接推主干多半会被保护拒收。${dirtyHint}点右上角「建 PR」，系统会从当前 HEAD 拉一条新分支推上去。</div>`;
+        cta = `<div class="gr-pr-cta">当前就在主干 <b>${esc(base)}</b> 上，有 ${state.ahead} 个提交还没推上去 —— 直接推主干多半会被保护拒收。${dirtyHint}点右上角「建 PR」，系统会从当前 HEAD 拉一条新分支推上去。</div>${renderCommitList(state)}`;
       } else if (cur === base && state?.dirtyCount) {
         createWhy = '在 base 上有未提交改动，先在「提交」里提交';
         cta = `<div class="gr-pr-cta">当前就在 base（<b>${esc(base)}</b>）上，有 ${state.dirtyCount} 个未提交改动 —— 先在「提交」里提交，提交完右上角「建 PR」就能点。</div>`;
