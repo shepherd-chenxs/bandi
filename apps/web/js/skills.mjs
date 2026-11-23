@@ -866,7 +866,7 @@ export async function renderGitRepos(root = $('pluginView')) {
             纵向堆四块时一次只能看一块，还要一路滚；现在分段，默认落在「提交 / 推送」。 -->
        <nav class="gr-tabs" id="grTabs" aria-label="仓库视图">
          <button type="button" data-gr-tab-btn="commit">提交 / 推送</button>
-         <button type="button" data-gr-tab-btn="pr">PR</button>
+         <button type="button" data-gr-tab-btn="pr">PR管理</button>
          <button type="button" data-gr-tab-btn="log">历史</button>
        </nav>
        <div class="plg-sec" data-gr-tab="commit">
@@ -876,11 +876,11 @@ export async function renderGitRepos(root = $('pluginView')) {
        <!--
          推送独立成一块（2026-10-29 三改，用户："推送单独作为一个卡片"）。
          推和交是两件事：未推提交挤在「提交」卡里，会让人以为推送要跟着提交走。
-         版式对齐「拉取请求」：动作（推送）钉在分节标题行右侧。
+         版式对齐「合并请求」：动作（推送）钉在分节标题行右侧。
        -->
        <div class="plg-sec" data-gr-tab="commit">
          <div class="plg-sec-head">
-           <label class="plg-sec-title">推送</label><span class="dim" id="grPushHead"></span>
+           <label class="plg-sec-title">推送</label>
            <button type="button" class="mini auto" id="grPushNow">推送</button>
          </div>
          <section class="fx"><div id="grPush"><div class="sk-blank">读推送状态…</div></div></section>
@@ -894,10 +894,14 @@ export async function renderGitRepos(root = $('pluginView')) {
       -->
       ${ghLinked ? (st.connected ? `<div class="plg-sec" data-gr-tab="pr">
         <div class="plg-sec-head">
-          <label class="plg-sec-title">拉取请求</label><span class="dim" id="grPullsHead"></span>
+          <label class="plg-sec-title">合并请求</label><span class="dim" id="grPullsHead"></span>
           <button type="button" class="mini auto gr-pulls-refresh" id="grPullsRefresh" title="从 GitHub 重新取一次">刷新</button>
+          <!-- 建 PR 从待建卡挪到标题行（2026-11-23 用户："这个按钮放右上角刷新右边是不是更好"）：
+               和「推送」「立即巡检」同一档位置；卡片只留"为什么不能建"的解释。 -->
+          <button type="button" class="mini auto primary" id="grPrCreate" disabled>建 PR</button>
         </div>
-        <section class="fx"><div id="grPulls"><div class="sk-blank">取 PR…</div></div></section>
+        <!-- 卡片自己滚：说明 + 提交清单是同一块内容，共用外层滚动条，不再给清单套一层（2026-11-23 用户） -->
+        <section class="fx gr-pulls-card"><div id="grPulls"><div class="sk-blank">取 PR…</div></div></section>
       </div>
       <div class="plg-sec" data-gr-tab="pr">
         <div class="plg-sec-head">
@@ -906,12 +910,12 @@ export async function renderGitRepos(root = $('pluginView')) {
         </div>
         <section class="fx"><div id="grReview"><div class="sk-blank">取 PR…</div></div></section>
       </div>` : `<div class="plg-sec" data-gr-tab="pr">
-        <div class="plg-sec-head"><label class="plg-sec-title">拉取请求</label></div>
+        <div class="plg-sec-head"><label class="plg-sec-title">合并请求</label></div>
         <section class="fx"><div class="gr-pr-off">
           <button type="button" class="primary" id="grPrConnect">配置 GitHub 访问令牌（PAT）</button>
         </div></section>
       </div>`) : `<div class="plg-sec" data-gr-tab="pr">
-        <div class="plg-sec-head"><label class="plg-sec-title">拉取请求</label></div>
+        <div class="plg-sec-head"><label class="plg-sec-title">合并请求</label></div>
         <section class="fx"><div class="sk-blank">这个仓库没有 GitHub 地址 —— 代码在本机管理，
           提交、推送、切分支都照常。要接 GitHub 上的 PR，用「＋」从账号里加仓库。</div></section>
       </div>`}
@@ -925,8 +929,7 @@ export async function renderGitRepos(root = $('pluginView')) {
        <div class="plg-sec" data-gr-tab="pr">
          <div class="plg-sec-head">
            <label class="plg-sec-title">PR自动化</label>
-           <button type="button" class="mini auto" id="grPatrolRun"
-                   title="现在就跑一次这个仓库的巡检（开没开节拍都能跑）">立即巡检</button>
+           <button type="button" class="mini auto primary" id="grPatrolRun">立即巡检</button>
          </div>
          <section class="fx" id="grPatrolBody">
            <div class="info-row"><span>管理员</span><b>${esc(keeperName(sel.keeperPersonaId || 'p-expert-zhangkun') || '张坤')}</b></div>
@@ -1334,6 +1337,15 @@ export async function renderGitRepos(root = $('pluginView')) {
     if (!box) return;
     let prs = [];
     let state = null;
+    /* 标题行的「建 PR」跟着状态亮灭（2026-11-23 用户："放右上角刷新右边"）：
+       位置固定在标题行，卡片只说为什么还不能建 —— 按钮不再跟着卡片内容跑。 */
+    let canCreate = false;
+    let createWhy = '读不到本地仓库状态';
+    const syncCreateBtn = () => {
+      const b = $('grPrCreate');
+      if (!b?.isConnected) return;
+      b.disabled = !canCreate;
+    };
     try {
       const d = await api(`/api/git/repos/${encodeURIComponent(repo.id)}/prs`);
       prs = d.prs ?? [];
@@ -1341,6 +1353,8 @@ export async function renderGitRepos(root = $('pluginView')) {
       // 错误码不重复摆一遍（2026-11-20 用户："提示太冗余了"）：message 已带「E1079：」前缀，
       // 前面再拼一次只会读成两截报错。
       const msg = `<div class="sk-blank">PR获取失败：${esc(String(e.message ?? e).replace(/^E\d{4}：/, ''))}</div>`;
+      createWhy = 'PR 获取失败，点刷新重试';
+      syncCreateBtn();
       if (box.isConnected) box.innerHTML = msg;
       if (reviewBox?.isConnected) reviewBox.innerHTML = msg;
       return;
@@ -1355,6 +1369,7 @@ export async function renderGitRepos(root = $('pluginView')) {
     const base = state?.base || repo.defaultBranch || 'main';
     const cur = state?.branch || '';
     const mine = prs.find((p) => p.headRef && p.headRef === cur);
+    if (mine) createWhy = '当前分支已经有 PR —— 去下面「PR 列表」看';
 
     /*
      * gate 一句话（2026-10-30 用户："检查改成状态。有未开始、进行中、未通过"）：
@@ -1432,8 +1447,8 @@ export async function renderGitRepos(root = $('pluginView')) {
             ${p.checks?.state === 'failure'
               ? `<button type="button" class="mini auto" data-pr-gate="${p.number}" title="检查没过 —— 选个处理人，建一张任务卡去修">处理</button>`
               : ''}
-            <button type="button" class="mini auto" data-pr-merge="${p.number}"
-                    ${why ? `disabled title="${esc(why)}"` : 'title="合并进 base（走平台令牌；本地会自动收尾）"'}>合并</button>
+            <button type="button" class="mini auto ${why ? '' : 'primary'}" data-pr-merge="${p.number}"
+                    ${why ? `disabled title="${esc(why)}"` : ''}>合并</button>
           </div>
         </div>`;
     };
@@ -1446,20 +1461,25 @@ export async function renderGitRepos(root = $('pluginView')) {
      * 不再按"能不能合"分卡 —— 状态列自己会说（未开始/进行中/未通过/已通过），
      * 合并按钮在能合的行上自己亮。原「审核」「合并」两块合成一张「PR 列表」表。
      */
-    const groupHtml = (title, inner, count) =>
-      count
-        ? `<div class="gr-pr-group">
-        <div class="gr-pr-group-head">${esc(title)}<span class="gr-pr-group-count">${count}</span></div>
-        ${inner}
-      </div>`
-        : '';
+    /* 提交全部铺在「合并请求」卡片上，不再包一层 <ul> 当独立区块（2026-11-23 用户：
+       "清单直接放到外层卡片上。不要自己单独做一个区"）。每条就是卡片里的一行，
+       和上面的说明文字同属一个滚动容器（.gr-pulls-card）；建 PR 弹窗里那张清单另算。 */
+    const renderCommitList = (state) => {
+      const list = state?.aheadCommits;
+      if (!list?.length) return '';
+      return list.map((c) => `<div class="gr-pr-commit"><code>${esc(c.sha)}</code><span title="${esc(c.subject)}">${esc(c.subject)}</span></div>`).join('');
+    };
+
+    const aheadCount = Number(state?.ahead ?? 0);
 
     /*
-     * 当前分支还没有 PR 时给一行 CTA：这是「建 PR」按钮的新家（导航条那颗去掉了）。
+     * 当前分支还没有 PR 时给一行说明；按钮本身钉在「合并请求」标题行（2026-11-23 用户：
+     * "这个按钮放右上角刷新右边是不是更好"）。卡片只解释现在为什么不能建、要先做什么。
      *
      * 门槛只有一条（2026-10-29 用户："提交和建 PR 一起，说不清也不好控制"）：**有领先 base 的提交**。
      * 建 PR 只推已提交的东西，不再顺手提交脏文件 —— 提交是「提交」那一栏的事。
-     * 所以：有提交 → 给按钮（脏文件只是明说"不会进这条 PR"）；没提交只有脏文件 → 引导先提交。
+     * 所以：有提交且已推送 → 标题行的按钮亮起（脏文件只是明说"不会进这条 PR"）；
+     *       没提交只有脏文件 → 引导先提交。
      */
     let cta = '';
     if (!mine) {
@@ -1467,66 +1487,79 @@ export async function renderGitRepos(root = $('pluginView')) {
         const ahead = state?.ahead;
         if ((ahead ?? 0) > 0) {
           /*
-           * 没推送时不给按钮（2026-10-30 用户："还没有推送，要这个建PR按钮干啥？"）——
-           * 建出来也是被服务端"先推送"顶回来，白点一下。推送是「推送」卡的事，推完这里再亮。
+           * 没推送时不亮标题行的按钮（2026-10-30 用户："还没有推送，要这个建PR按钮干啥？"）——
+           * 建出来也是被服务端"先推送"顶回来，白点一下。推送是「推送」卡的事，推完再亮。
            * 文案只说一件事（2026-10-30 用户："去掉这两条，没有啥用"）：去推送，推完能建。
            */
           const unpushed = Number(state?.unpushed ?? 0);
           if (unpushed > 0 || !state?.upstream) {
-            cta = `<div class="gr-pr-cta">当前分支 <b>${esc(cur)}</b> 还没有 PR —— 先去上面「推送」卡推送，推完这里就能建 PR。</div>`;
+            createWhy = !state?.upstream
+              ? '当前分支还没设上游，先在「推送」卡推送'
+              : '当前分支有未推送的提交，先在「推送」卡推送';
+            cta = `<div class="gr-pr-cta">当前分支 <b>${esc(cur)}</b> 还没有 PR —— 先去上面「推送」卡推送，推完右上角「建 PR」就能点。</div>${renderCommitList(state)}`;
           } else {
             const n = ahead === null ? '' : `（领先 ${esc(base)} ${ahead} 个提交）`;
             const extra = state?.dirtyCount
               ? `；未提交的 ${state.dirtyCount} 个改动不会进这条 PR`
               : '';
-            cta = `<div class="gr-pr-cta">
-              <span>当前分支 <b>${esc(cur)}</b> 还没有 PR ${n}${extra}</span>
-              <button type="button" class="mini auto" id="grPrCreate">建 PR</button>
-            </div>`;
+            canCreate = true;
+            cta = `<div class="gr-pr-cta">当前分支 <b>${esc(cur)}</b> 还没有 PR${state?.dirtyCount ? `；未提交的 ${state.dirtyCount} 个改动不会进这条 PR` : ''}</div>${renderCommitList(state)}`;
           }
         } else if (state?.dirtyCount) {
-          cta = `<div class="gr-pr-cta">当前分支 <b>${esc(cur)}</b> 有 ${state.dirtyCount} 个未提交改动 —— 先在「提交」里提交，提交完这里就能建 PR。</div>`;
+          createWhy = '当前分支有未提交改动，先在「提交」里提交';
+          cta = `<div class="gr-pr-cta">当前分支 <b>${esc(cur)}</b> 有 ${state.dirtyCount} 个未提交改动 —— 先在「提交」里提交，提交完右上角「建 PR」就能点。</div>`;
         } else {
+          createWhy = '当前分支和 base 没有差异，没有可建的 PR';
           cta = `<div class="gr-pr-cta dim">当前分支 <b>${esc(cur)}</b> 和 base（${esc(base)}）没有差异 —— 没有可建的 PR。</div>`;
         }
       } else if (cur === base && (state?.ahead ?? 0) > 0) {
         /*
          * 人在 base 上提交了但推不上去（2026-10-29 用户实报："手动提交了但不能推送，没看到建 PR 的按钮"）：
          * 后端接得住 —— 建 PR 会从当前 HEAD 拉一条新分支推上去（base 不动）。
-         * 只在 base 上「有脏改动、没提交」时不给按钮：PR 里没东西可装，先去「提交」。
+         * 只在 base 上「有脏改动、没提交」时不亮标题行的按钮：PR 里没东西可装，先去「提交」。
          */
-        const extra = state?.dirtyCount ? `；未提交的 ${state.dirtyCount} 个改动不会进这条 PR` : '';
-        cta = `<div class="gr-pr-cta">
-            <span>当前就在 base（<b>${esc(base)}</b>）上，有 ${state.ahead} 个已提交还没推上去${extra} —— 直接推主干多半会被保护拒收，建 PR 会从当前 HEAD 拉一条新分支推上去</span>
-            <button type="button" class="mini auto" id="grPrCreate">建 PR</button>
-          </div>`;
+        canCreate = true;
+        const dirtyHint = state?.dirtyCount
+          ? `另外还有 ${state.dirtyCount} 个改动没提交，建 PR 时不会带上。`
+          : '';
+        cta = `<div class="gr-pr-cta">当前就在主干 <b>${esc(base)}</b> 上 —— 直接推主干多半会被保护拒收。${dirtyHint}点右上角「建 PR」，系统会从当前 HEAD 拉一条新分支推上去。</div>${renderCommitList(state)}`;
       } else if (cur === base && state?.dirtyCount) {
-        cta = `<div class="gr-pr-cta">当前就在 base（<b>${esc(base)}</b>）上，有 ${state.dirtyCount} 个未提交改动 —— 先在「提交」里提交，提交完这里就能建 PR。</div>`;
+        createWhy = '在 base 上有未提交改动，先在「提交」里提交';
+        cta = `<div class="gr-pr-cta">当前就在 base（<b>${esc(base)}</b>）上，有 ${state.dirtyCount} 个未提交改动 —— 先在「提交」里提交，提交完右上角「建 PR」就能点。</div>`;
       }
     }
+    syncCreateBtn();
 
-    const ctaGroup = cta ? groupHtml('待建 PR', cta, 1) : '';
     /* PR 列表套上表头；空态给一句话（不再是"一个 PR 一张卡"） */
     const listHtml = (prsIn, emptyText) =>
       prsIn.length
         ? `<div class="gr-pr-table">${tableHead}${prsIn.map(rowHtml).join('')}</div>`
         : `<div class="sk-blank">${emptyText}</div>`;
-    if (head?.isConnected) head.textContent = prs.length ? `${prs.length} 条 PR` : '';
+    /* 两张卡各管一段：合并请求 = 待建 CTA；PR 列表 = 全部 PR（能不能合看状态列 + 合并按钮） */
+    // count 放到「合并请求」标题后面的 span 里，不再在 group 卡片里重复
+    if (head?.isConnected) {
+      const parts = [];
+      if (aheadCount > 0) parts.push(`领先 ${aheadCount}`);
+      if (prs.length > 0) parts.push(`${prs.length} 条 PR`);
+      head.textContent = parts.join(' · ');
+    }
+    /* 说明和提交行直接铺进卡片，不套 group / ul（2026-11-23 用户："清单直接放到外层卡片上。
+       不要自己单独做一个区"）；领先条数已在标题后面，card 里不再有组头。 */
     if (reviewHead?.isConnected) reviewHead.textContent = prs.length ? `${prs.length} 条 PR` : '暂无';
-
-    /* 两张卡各管一段：拉取请求 = 待建 CTA；PR 列表 = 全部 PR（能不能合看状态列 + 合并按钮） */
     box.innerHTML =
-      ctaGroup ||
-      `<div class="sk-blank">${prs.length ? '当前分支没有待建的 PR —— 有新提交时这里会出现「建 PR」' : '没有进行中的 PR —— 建 PR 后会出现在这里'}</div>`;
+      cta ||
+      `<div class="sk-blank">${prs.length ? '当前分支没有待建的 PR —— 提交并推送后，右上角「建 PR」会亮起' : '没有进行中的 PR —— 点右上角「建 PR」开第一条'}</div>`;
     if (reviewBox?.isConnected) {
-      reviewBox.innerHTML = listHtml(prs, '还没有 PR —— 在「拉取请求」卡建第一个 PR');
+      reviewBox.innerHTML = listHtml(prs, '还没有 PR —— 用右上角「建 PR」开第一条');
     }
 
     /*
-     * 绑定：「刷新」重取一次；行上的动作（建 PR / gate 明细 / 合并）在两块卡里都有，
+     * 绑定：「建 PR」是标题行常驻节点，fillPulls 会被刷新反复调用 —— 用 onclick 覆盖，别叠加监听；
+     * 「刷新」在 renderGitRepos 里绑；行上的动作（gate 明细 / 合并）在两块卡里都有，
      * 用同一个 scope 列表跑一遍 —— 漏绑就是"点了没反应"。
      */
-    $('grPrCreate')?.addEventListener('click', () => openRepoPrDialog(repo, refresh));
+    const createBtn = $('grPrCreate');
+    if (createBtn?.isConnected) createBtn.onclick = () => openRepoPrDialog(repo, refresh);
     const scopes = [box, reviewBox].filter((el) => el?.isConnected);
     scopes.forEach((scope) => {
       scope.querySelectorAll('[data-pr-gate]').forEach((b) => {
@@ -1857,9 +1890,7 @@ export async function renderGitRepos(root = $('pluginView')) {
       const n = Number(state.unpushed ?? 0);
       const list = state.unpushedCommits ?? [];
       const down = Number(state.unpulled ?? 0);
-      const phead = $('grPushHead');
       const pbtn = $('grPushNow');
-      if (phead) phead.textContent = n > 0 ? `${n} 个提交还没推` : up ? '已同步' : '还没推过';
       if (pbtn) {
         pbtn.classList.toggle('hidden', n === 0 && !!up);   // 齐平就没得推（`.mini.hidden` 才有 display:none）
         pbtn.disabled = false;
@@ -2872,8 +2903,7 @@ export function openRepoPrDialog(repo, onDone) {
           ? `<div class="pr-commits">
           <div class="pr-commits-head">这条 PR 会装 <b>${state.aheadCommits.length}</b> 条提交<span class="pr-commits-note">${unpushedN > 0 ? '已提交、还没推' : '已推到远端'}</span></div>
           <ul class="pr-commit-list">
-            ${state.aheadCommits.slice(0, 6).map((c) => `<li><code>${esc(c.sha)}</code><span title="${esc(c.subject)}">${esc(c.subject)}</span></li>`).join('')}
-            ${state.aheadCommits.length > 6 ? `<li class="dim">…另有 ${state.aheadCommits.length - 6} 条</li>` : ''}
+            ${state.aheadCommits.map((c) => `<li><code>${esc(c.sha)}</code><span title="${esc(c.subject)}">${esc(c.subject)}</span></li>`).join('')}
           </ul></div>`
           : ''
       }

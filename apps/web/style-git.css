@@ -113,6 +113,10 @@
 /* 拉取请求 / PR 列表标题行右上角的「刷新」推右对齐（2026-11-20 用户："刷新按钮右对齐"），
    与「立即巡检」「推送」同类做法：留给 margin-left:auto，标题和状态字靠左。 */
 #grPullsRefresh, #grReviewRefresh { margin-left: auto; }
+/* 「建 PR」挪到「合并请求」标题行、刷新右边（2026-11-23 用户："这个按钮放右上角刷新右边是不是更好"）：
+   刷新保持淡，建 PR 用主色实心，两颗并排仍有主次；不可建时禁用，原因写在 title + 卡片说明里。 */
+#grPrCreate { margin-left: 8px; }
+#grPrCreate[disabled] { opacity: .45; cursor: not-allowed; }
 /* 分支管理（2026-11-20）：列表从分支下拉浮层搬进 tab，样式按同一套视觉重画 ——
    分组标题、文件夹、行（图标/名称/上游/↑↓/›菜单）。行是 button，键盘可达。 */
 /* 不自己做滚动容器（2026-11-20 用户："卡里出现滚动条别扭，期望在外部显示滚动条"）：
@@ -259,7 +263,30 @@
            color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 建 PR 弹窗里「这条 PR 会装哪些提交」：一条一行（2026-10-29 用户："一坨文字，阅读感极差"）。
    别再用 `；` 把提交标题串成一行 —— 4 条就成一团，看不出有几条、哪条是哪个。 */
-.pr-commit-list { list-style: none; margin: 4px 0 2px; padding: 0; max-height: 132px; overflow: auto; }
+/* 合并请求卡片里的提交直接是卡片中的一行，不包 ul / 不另起区（2026-11-23 用户：
+   "清单直接放到外层卡片上。不要自己单独做一个区"）。说明和全量条目共用卡片滚动条。
+
+   视觉分层（2026-11-23 像素君）：说明是"要你做什么"，正文色 13px；提交是佐证，
+   整体退到 11.5px，sha 再淡一号并固定列宽，标题左对齐成一列 —— 扫读有落点，不再糊成一坨。
+   不靠边框/底色分区，只靠字号、颜色和 12px 呼吸。 */
+.gr-pulls-card { max-height: 260px; overflow: auto; }
+/* 状态说明弱化（2026-11-23 用户圈了这句："这个应该弱化视觉效果"）：
+   它不是结论也不是标题，只是交代当前分支的状态。退到次要文字色 12px，
+   分支名保主色但去加粗 —— 定位还认得出，不再压过下面的提交行。 */
+.gr-pulls-card .gr-pr-cta { padding: 0 12px 10px; font-size: 12px; line-height: 1.55;
+                            color: var(--dim); }
+.gr-pulls-card .gr-pr-cta b { color: var(--text); font-weight: 400; }
+.gr-pr-commit { display: flex; gap: 10px; align-items: baseline; padding: 3px 12px;
+                font-size: 12px; line-height: 1.5; }
+/* PR 两块卡片的空态跟提交行同为 12px（2026-11-23 用户："都改成12"）：
+   .sk-blank 全局是 12.5px，这里只压这两块，别动别处的空态。 */
+#grPulls > .sk-blank, #grReview > .sk-blank { font-size: 12px; color: var(--dim); }
+.gr-pr-commit code { flex: 0 0 56px; font-family: ui-monospace, monospace; font-size: 10.5px;
+                     color: var(--dim); }
+.gr-pr-commit span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+                     white-space: nowrap; }
+/* 建 PR 弹窗里那张清单是另一处用法：保留 ul，靠 #prState 概览整体滚，不自带滚动条 */
+.pr-commit-list { list-style: none; margin: 2px 0 0; padding: 0; }
 .pr-commit-list li { display: flex; gap: 8px; align-items: baseline; padding: 2px 0;
                      font-size: 12px; line-height: 1.45; }
 .pr-commit-list li code { flex: 0 0 auto; font-family: ui-monospace, monospace; font-size: 11px;
@@ -287,8 +314,6 @@ dialog#repoPrDlg { width: 660px; height: min(720px, 92vh); max-height: 92vh;
 #repoPrDlg #prForm > label, #repoPrDlg .pr-fill-row { flex: 0 0 auto; }
 /* 描述框是这一屏唯一的"可伸缩项"：窗口高度固定，多出来的空间给它 */
 #repoPrDlg #prBody { flex: 1 1 auto; min-height: 96px; resize: none; }
-/* 提交清单不再自带滚动条（概览区整体滚就够了，套两层滚轮很难受） */
-#repoPrDlg .pr-commit-list { max-height: none; overflow: visible; }
 .pr-path { margin: 6px 0 0; }
 .pr-sum { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .pr-sum-item { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 11px;
@@ -301,8 +326,6 @@ dialog#repoPrDlg { width: 660px; height: min(720px, 92vh); max-height: 92vh;
 .pr-commits-head { font-size: 12px; color: var(--dim); }
 .pr-commits-head b { color: var(--text); }
 .pr-commits-note { margin-left: 6px; font-size: 11px; }
-.pr-commit-list { margin-top: 2px; }
-.pr-commit-list li.dim { color: var(--dim); }
 .pr-warn { margin-top: 10px; font-size: 12.5px; color: var(--warn); }
 /* 字段 label 的灰色小注（原来塞在括号里，现在挪出来跟在标题后面） */
 #repoPrDlg label em { margin-left: 4px; font-style: normal; }
@@ -319,3 +342,20 @@ dialog#repoPrDlg { width: 660px; height: min(720px, 92vh); max-height: 92vh;
 .gr-cell-ops { text-align: right; white-space: nowrap; }
 .gr-cell-ops .mini.auto { padding: 0 12px; white-space: nowrap; }
 .gr-cell-ops .mini + .mini { margin-left: 6px; }
+/* 行内主按钮不做实心蓝（2026-11-23 用户："合并按钮是行内按钮，换个样式"）：
+   PR 列表末列（.gr-pr-c5）里"处理 + 合并"并排，格子窄，实心蓝会撑得拥挤、
+   辅助钮也抢不过主钮。改成描边蓝 + hover 填色，disabled 保持现状。
+   注意：作用域钉在 .gr-pr-c5，不是 .gr-cell-ops —— 那是建 PR 弹窗里另一套东西。 */
+.gr-pr-c5 .mini.auto.primary {
+  background: transparent; border-color: var(--accent); color: var(--accent);
+}
+.gr-pr-c5 .mini.auto.primary:hover:not(:disabled) {
+  background: var(--accent); color: var(--on-solid);
+}
+/* 行内主按钮的兜底：建 PR 弹窗（.gr-cell-ops）里的主钮也同样描边 */
+.gr-cell-ops .mini.auto.primary {
+  background: transparent; border-color: var(--accent); color: var(--accent);
+}
+.gr-cell-ops .mini.auto.primary:hover:not(:disabled) {
+  background: var(--accent); color: var(--on-solid);
+}
