@@ -1523,6 +1523,12 @@ button.pill.copy-pill[aria-pressed='true'] { color: var(--ok); border-color: var
    整颗是按钮，点了开那张任务卡 —— hover 换描边，和 copy-pill 同一个反馈語彙 */
 button.pill.gr-pr-task { background: transparent; cursor: pointer; font-family: inherit; }
 button.pill.gr-pr-task:hover { color: var(--accent); border-color: var(--accent); }
+/* 部门 pill（2026-11-22）：整颗是按钮，点开改部门。同 copy-pill 的重置 —— 压掉 button 的
+   默认底色/行高，看起来仍是一颗 pill；hover 换字色 + 描边给"这里能点"的回音。
+   员工详情页头，跟岗位 pill、项目 pill 并排。 */
+button.pill.dept-pill { background: transparent; cursor: pointer; font-family: inherit; }
+button.pill.dept-pill:hover { color: var(--text); border-color: var(--accent); }
+button.pill.dept-pill:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .pill-ok { display: inline-flex; align-items: center; gap: 5px;
            font-size: 11.5px; font-weight: 400; color: var(--ok); }
 .pill-ok::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
@@ -1589,6 +1595,41 @@ button.pill.gr-pr-task:hover { color: var(--accent); border-color: var(--accent)
                    border: 1px solid var(--line); border-radius: 6px;
                    padding: 6px 10px; font: inherit; font-size: 13px; }
 .sk-search input:focus { border-color: var(--accent); outline: none; }
+
+/* ── 技能弹窗（2026-11-22 用户拍板：技能页点开**只看简介**）──
+   为什么要这个弹窗：详情页原来把 SKILL.md 正文整段铺出来（预览 + 编辑），
+   等于把方法论摊在界面上。改成弹窗后只给名字 / 描述 / 挂在谁身上 / 动作，
+   正文不上界面；内置技能的正文连服务端都不下发（routes/skill.mjs 的 GET）。
+   卡片上描述截三行，这里要看全 —— 不截断、行高放宽到 1.65。 */
+/* 定宽**定高**（2026-11-22 用户："卡大小固定"）：描述有的一行有的十几行，
+   高度随内容跳的话翻两张卡窗口就变个样 —— 照定时任务弹窗 sch-dlg 的定高惯例，
+   窗口钉死，长的内容在自己栏里滚（左描述 / 右 chips 各滚各的）。
+   ⚠️ 布局规则必须挂在 [open] 上（style-machine.css #expertDlg 的教训）：
+   skViewDlg 是 index.html 里的静态节点，display 一旦不挂 [open]，
+   就压过 UA 的 dialog:not([open]){display:none} —— 关着的弹窗变成盖在页面上的空盒。 */
+#skViewDlg[open] { width: 680px; height: min(460px, 88vh); display: flex; flex-direction: column; }
+#skViewDlg > form { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+#skViewDlg form > b { display: block; padding-top: 18px; font-size: 13px; }
+/* 顶上那 18px 的气由标题接管了（标题在上面），头像行只留 10px 的间隔 */
+#skViewDlg .skv-head { display: flex; align-items: center; gap: 12px; padding-top: 10px; }
+#skViewDlg .skv-head .avatar { flex: 0 0 40px; width: 40px; height: 40px; font-size: 15px; }
+#skViewDlg .skv-title { min-width: 0; display: flex; align-items: center; gap: 2px; }
+#skViewDlg .skv-title b { font-size: 15px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#skViewDlg .skv-desc { margin-top: 12px; font-size: 13px; line-height: 1.65; }
+/* 两栏（2026-11-22 用户："左边是卡，右边是绑定的数字员工"）：
+   照定时任务弹窗 .sch-cols 的骨架 —— 左栏吃余宽，右栏定宽，中间一条竖线当分界
+   （border 撑满栏高，比分一个空 div 省事，也不会错位）。
+   栏区吃掉定高窗口的余量，描述长就在左栏里滚，动作条始终钉在底边。 */
+#skViewDlg .skv-cols { flex: 1 1 auto; min-height: 0; display: flex; gap: 20px; align-items: stretch; }
+#skViewDlg .skv-main { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+#skViewDlg .skv-desc { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+#skViewDlg .skv-side { flex: 0 0 220px; min-width: 0; padding: 10px 0 0 20px; border-left: 1px solid var(--line); overflow-y: auto; }
+/* 右栏标签顶上与左栏头像行同档起步（.skv-head 的 padding-top 同为 10px） */
+#skViewDlg .skv-side > label { display: block; font-size: 11.5px; color: var(--dim); margin-bottom: 7px; }
+#skViewDlg .skv-side .count { color: var(--dim); font-size: 11.5px; }
+/* 动作条：「编辑正文 / 删除」靠左（只有自建技能才有），「添加到数字员工 / 关闭」靠右 */
+#skViewDlg .dlg-actions { align-items: center; flex: 0 0 auto; }
+#skViewDlg .skv-left { margin-right: auto; display: flex; gap: 8px; }
 /* ── 头像只有**两类**，别再加第三类（2026-10-20 收口）──
    ① 身份类（人 / 群）：**深底白字**。颜色承担"这是谁"，色相要能区分，字必须近白
       （人＝avatarStyle() 按名字哈希发色，群＝.avatar.grp 固定深绿）。

@@ -119,8 +119,15 @@ db.exec(`PRAGMA busy_timeout = 5000;`);
  *     backfillRepoIdentity / relocateRepo）。
  *   · 13（2026-11-21）：`project_tasks` 加 `prCiState` / `prCiFailed` / `prCiAt` —— PR 上自动检查的
  *     结论落卡（"CI 绿没绿"从此是卡上的一等事实，见 delivery-evidence.mjs）。
+ *   · 14（2026-11-22）：新表 `persona_notes`（经验簿：跨会话记住"这个团队的口径"和"这个人踩过的坑"，
+ *     见 store/notes.mjs 与 experience.mjs）。
+ *   · 15（2026-11-22）：`runs` 加 `claim` —— 这一轮的**交付落款**（done / blocked / unclaimed / silent）。
+ *     落库的是 `run.finalText` 原文判出来的值，因为落库的消息会把 `[完成]` 剥掉（见 runs.mjs 的
+ *     persistReply），事后从 messages 里再也判不出来。回归量具与判据核对从此读同一列。
+ *   · 16（2026-11-23）：新表 `persona_facts` —— 长期记忆的事实层：平台从**跑通那一轮**的
+ *     run_events 里抽出的验证命令 / 重启方式 / 常改文件，按仓库 scope 隔离（见 store/facts.mjs）。
  */
-export const SCHEMA_VERSION = 13;
+export const SCHEMA_VERSION = 16;
 
 const dbVersion = Number(db.prepare('PRAGMA user_version').get()?.user_version ?? 0);
 if (dbVersion > SCHEMA_VERSION) {
@@ -933,6 +940,13 @@ function migrateAddExecConversation() {
   ensureColumn('conversations', 'projectId', 'projectId TEXT');
   // 这次执行在哪个项目里干活 —— 项目互斥（同一目录同时只跑一个）靠它判
   ensureColumn('runs', 'projectId', 'projectId TEXT');
+  /*
+   * 交付落款（2026-11-22，结构版本 15）：**必须在落库前从原文判**。
+   * persistReply 会把首行/末行那个单独的 `[完成]` 剥掉（那是给平台的机器信号，不是给人看的标题），
+   * 所以 messages 里事后判不出来 —— 2026-11-22 的回归量具就是这么把 4 条"写了 [完成]"读成
+   * unclaimed 的。判据核对与回归量具现在都读这一列。
+   */
+  ensureColumn('runs', 'claim', 'claim TEXT');
 }
 migrateAddExecConversation();
 
@@ -1073,6 +1087,66 @@ for (const ddl of [
 
 db.prepare("UPDATE schedule_jobs SET repeat = 'interval' WHERE repeat IS NULL").run();
 
+
+/*
+ * 经验簿（2026-11-22，缺口①的最小版）：**跨会话**该记住的东西，落在库里，而不是留在某条 CLI 会话里。
+ *
+ * 只收两类，且都要求"能指回一件发生过的事"：
+ *   · kind='repo'    这个团队的口径（"服务端改完必须重启""静态资源直读不用重启"…）
+ *   · kind='pitfall' 这个人踩过的坑（平台核出来过：声称完成却没跑测试、报了没发生过的执行…）
+ * **不记"聊过什么"** —— 聊天摘要是心理安慰，还占上下文；要细节去翻会话与 run_events。
+ *
+ * source 只有两种：'audit'（平台从核对结果里自动记的，带 runId 可回溯）与 'manual'（人显式记的）。
+ * hits 是"这件事又被证实了几次"，不是点赞数 —— 淘汰的是 hits 低且最久没动的那些。
+ */
+db.exec(`
+  CREATE TABLE IF NOT EXISTS persona_notes (
+    id         TEXT PRIMARY KEY,
+    personaId  TEXT NOT NULL,
+    kind       TEXT NOT NULL,
+    text       TEXT NOT NULL,
+    source     TEXT NOT NULL DEFAULT 'manual',
+    hits       INTEGER NOT NULL DEFAULT 1,
+    evidence   TEXT,
+    dedupe     TEXT NOT NULL,
+    createdAt  TEXT NOT NULL,
+    updatedAt  TEXT NOT NULL,
+    UNIQUE (personaId, dedupe)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_persona_notes_persona ON persona_notes (personaId, kind, updatedAt DESC);
+`);
+
+/*
+ * 长期记忆的事实层（2026-11-23，缺口①补完）：**平台自己从跑通的轮次里抽出来的事实**。
+ *
+ * 与 `persona_notes` 的分工：
+ *   · 口径 / 坑（notes）是"人给的规矩"和"被核出来的错"，一句话一条；
+ *   · 事实（facts）是"这个仓里怎么跑、常改哪儿"，来源是 `run_events` 里**真的发生过**的
+ *     tool 事件 —— 验证命令、重启命令、改动集中的文件。不生成摘要，不猜意图。
+ *
+ * `scope` 是仓库根（小写、正斜杠），'' 表示不分仓库。没有 scope 的话，"这个仓用 npm test"
+ * 会被带进另一个仓，比不记更坏 —— 注入时只认当前仓库 + 全局那批。
+ * hits = 这件事在几轮里被重复证实（不是点赞数）；淘汰规则与经验簿一致。
+ */
+db.exec(`
+  CREATE TABLE IF NOT EXISTS persona_facts (
+    id         TEXT PRIMARY KEY,
+    personaId  TEXT NOT NULL,
+    scope      TEXT NOT NULL DEFAULT '',
+    kind       TEXT NOT NULL,
+    text       TEXT NOT NULL,
+    source     TEXT NOT NULL DEFAULT 'audit',
+    hits       INTEGER NOT NULL DEFAULT 1,
+    evidence   TEXT,
+    dedupe     TEXT NOT NULL,
+    createdAt  TEXT NOT NULL,
+    updatedAt  TEXT NOT NULL,
+    UNIQUE (personaId, dedupe)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_persona_facts_persona ON persona_facts (personaId, scope, kind, updatedAt DESC);
+`);
 
 export function backupTo(file) {
   db.exec(`VACUUM INTO '${String(file).replace(/'/g, "''")}'`);

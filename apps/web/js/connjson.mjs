@@ -40,46 +40,16 @@ export function connJsonText(entry) {
 }
 
 /**
- * 工具名 → 一句能力（`download、transcribe、tts 等 12 个工具`）。
+ * 工具清单 → 一句人话（`能替数字员工做 12 件事`）。
  *
- * 这是"接过来的能力"的**事实**来源（服务端 probe 时写进账本的 tools），
- * 只有在条目没写 note 时才用得上 —— note 是人话，优先。
- * 公共前缀是连接器 id（`baoluo_parse_link`），摆在卡上纯占地方，去掉。
+ * 这是"接过来的能力"的**事实**来源（服务端 probe 时写进账本的 tools）。
+ * **2026-11-22 用户："不要展示技术性或者路径这些，用户是不懂技术的普通人。"**
+ * 所以只报件数，不列 `baoluo_parse_link` 这种原始工具名 —— 那是给开发看的，
+ * 摆到卡片和详情里等于没说。具体名字留在账本（data/connectors.json）里，排障时查。
  */
 export function toolsBrief(tools) {
-  const names = (tools ?? []).filter(Boolean);
-  if (!names.length) return '';
-  const i = names[0].indexOf('_');
-  const pre = i > 0 && names.every((n) => n.startsWith(names[0].slice(0, i + 1))) ? names[0].slice(0, i + 1) : '';
-  const short = names.map((n) => (pre && n.startsWith(pre) ? n.slice(pre.length) : n).replace(/[_-]+/g, ' '));
-  const head = short.slice(0, 5).join('、');
-  return short.length > 5 ? `${head} 等 ${short.length} 个工具` : head;
-}
-/**
- * 最后一级兜底：这东西的连接方式（2026-11-22 用户："这个改成简述"）。
- *
- * 之前直接把 `命令 + 全部参数` 铺上去，一个 electron 的绝对路径就吃满两行截断，
- * 卡上只剩 `E:\CodeSpace\github\...`，等于没说明。这里给的是**最短能认出来的称呼**：
- *   本地进程 → `electron.exe bridge.cjs`（绝对路径只留文件名）
- *   远端服务 → 域名
- * 完整命令行在详情弹窗里，卡上不承担"可复制"的职责。
- */
-export function connBrief(c) {
-  if (c.transport === 'streamable-http') {
-    try {
-      return new URL(c.url).host;
-    } catch {
-      return c.url || '远端服务';
-    }
-  }
-  const base = (p) => String(p ?? '').split(/[\\/]/).filter(Boolean).pop() ?? '';
-  // 绝对路径只留文件名（bridge.cjs），包名原样（@scope/pkg 的 / 不是目录分隔的意思）
-  const isPath = (a) => /^([A-Za-z]:[\\/]|[\\/]|\.{1,2}[\\/])/.test(String(a));
-  const pos = (c.args ?? []).filter((a) => !String(a).startsWith('-'));
-  const pkg = pos.find((a) => !isPath(a)); // 包名/子命令优先：npx 那条真正的身份是包名，不是它后面的目录
-  const file = pos.find(isPath);
-  const rest = pkg || (file ? base(file) : '');
-  return [base(c.command), rest].filter(Boolean).join(' ') || '本地进程';
+  const n = (tools ?? []).filter(Boolean).length;
+  return n ? `能替数字员工做 ${n} 件事` : '';
 }
 
 /** 别家的引用写法统一成账本的 `env:名字`（`${env:X}` / `${X}`），别的一律原样 */

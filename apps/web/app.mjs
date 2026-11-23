@@ -29,13 +29,13 @@ import { THEME_KEY, applyTheme, esc, normalizeTheme, readCollapsed, toast } from
 import { api, closeHelpPop, hideTip, openCombo, post, showTip, tipAnchor, tipTimer, wireDialogHead } from './js/ui.mjs';
 import { load, setNav } from './js/state.mjs';
 import { openSettings } from './js/settings.mjs';
-import { CRUMB_GO, commitConnJson, connEditing, renderPlugins, renderRuntimes } from './js/connectors.mjs';
+import { CRUMB_GO, commitConnJson, connEditing, renderRuntimes, repaintExtensions } from './js/connectors.mjs';
 import { closeCtxMenu, hideConversationRow, openCtxMenu, removeConversationForever, wipeScopeOf } from './js/listmenu.mjs';
 import { addMenu, addMenuAnchor, closeAddMenu, contactAddItems, detailSave, gitAddRepoItems, openAddMenu, renderList } from './js/contacts.mjs';
 import { archiveFlowTemplate, deleteFlowTemplate, newTemplateDialog } from './js/workflows.mjs';
 import { kbRepaint, kbRepaintRows, projectDialog } from './js/projects.mjs';
 import { doStartFlow, flowStart, openFlowStart, syncFlowTitle } from './js/flowpages.mjs';
-import { importPicked, openSkill, renderSkAssignList, renderGitRepos, scanImport, skAssignPicked, skAssignSkill } from './js/skills.mjs';
+import { importPicked, openSkill, refreshSkillCard, renderSkAssignList, renderGitRepos, scanImport, skAssignPicked, skAssignSkill } from './js/skills.mjs';
 import { addAtts, closeMentionPop, insertMention, linkPersonaId, linkPicked, mentionPop, openConversation, openDetail, renderLinkList, searchRefreshDetail, send, setBusy, setComposer, stopChatRun, updateMentionPop } from './js/chat.mjs';
 import { consumeMemberCandidates, deleteSessionFromLog, memberPicked, renderMemberCandidates } from './js/groups.mjs';
 import { applyFormDefaults, closeDrawer, pluginMust, refreshGroup, rerenderPanel, runFormFollow } from './js/experts.mjs';
@@ -152,8 +152,10 @@ $('cOk').onclick = async (e) => {
   try {
     const r = await commitConnJson($('connJson').value, connEditing);
     $('connDlg').close();
+    // 连接器与插件已拆成两个分节（2026-11-22）：装完重画**用户当前待的那一页**
     S.pluginTab = 'installed';
-    await renderPlugins();
+    S.connTab = 'installed';
+    await repaintExtensions();
     if (r.failed.length) toast(`没装成：${r.failed.join('；')}`, 'error');
     else if (r.ignored.length) toast(`装好了 ${r.ids.length} 条；这些键不认，已忽略：${r.ignored.join('、')}`);
     else toast(`已装 ${r.ids.length} 条`);
@@ -288,8 +290,9 @@ $('skAssignOk').onclick = async (e) => {
   try {
     await post(`/api/skills/${encodeURIComponent(skAssignSkill)}/personas`, { personaIds: ids });
     $('skAssignDlg').close();
-    // 重画技能页：上面那排「挂在哪些员工上」的芯片要跟着变
-    await openSkill(skAssignSkill);
+    // 重画「挂在哪些员工上」：技能弹窗开着就重画弹窗（2026-11-22 起点卡片开的是弹窗），
+    // 从编辑页发起的才回编辑页 —— 别让挂载动作把人从弹窗里甩出去。
+    if (!refreshSkillCard()) await openSkill(skAssignSkill);
   } catch (err) { toast(err.message, 'error'); }
 };
 

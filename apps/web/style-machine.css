@@ -141,7 +141,12 @@ button.expert-fire:hover { color: var(--bad); border-color: var(--bad);
    `dialog:not([open]) { display: none }`（作者样式永远赢 UA）—— 弹窗没开也变成
    一个悬浮空盒盖在页面上，×/Esc/close() 全都"无效"（它根本不是 open 状态）
    （2026-10-25 用户实报"详情窗口关不掉"就是它）。 */
-#expertDlg[open] { width: 640px; height: min(640px, 84vh);
+/* 高度随内容（2026-11-22 改）：原来定高 min(640,84vh)，为的是"切页签框大小不变"。
+   页签撤了（详情只剩「这人是谁 + 擅长」），定高就只剩一大片白 —— 改成 fit-content，
+   长内容依旧被 max-height 兜住、内部自己滚。
+   注意**不能写 `height: auto`**：模态 dialog 的 UA 样式带 `inset: 0`，abspos 下
+   top/bottom 都非 auto 且 height:auto 会被拉伸（#plgDlg 上实测过），`fit-content` 才收得住。 */
+#expertDlg[open] { width: 640px; height: fit-content; min-height: 320px; max-height: 84vh;
                    display: flex; flex-direction: column; overflow: hidden; }
 #expertDlg > form { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 #exdBody { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
@@ -162,9 +167,12 @@ button.expert-fire:hover { color: var(--bad); border-color: var(--bad);
    同 #expertDlg 的教训：布局规则必须挂 [open] —— 静态 dialog 节点一旦被作者样式
    写了 display，会压过 UA 的 dialog:not([open]){display:none}，关着的弹窗变成
    盖在页面上的空盒、还关不掉。 */
-/* 定高 460（2026-10-25 用户："详情卡大小要一致"）：装没装、插件/连接器内容长短差得多，
-   随内容伸缩就一张一个样。定高后 form 拆 flex 列 —— 头条钉住、正文自己滚、动作条吸底。 */
-#plgDlg[open] { width: 560px; height: 460px; max-height: 86vh; }
+/* 高度随内容伸缩（2026-11-22 改）：原先定高 460（2026-10-25 用户："详情卡大小要一致"），
+   那时正文里塞着启动命令、运行时、工具名、凭据键一大堆技术行，撑得住。这些行按
+   「用户是不懂技术的普通人」删掉后，连接器详情只剩三四行，460 的盒子空出三分之二 ——
+   一片大白看着像没加载完。改成内容自适应：短的贴内容、长的被 max-height 兜住（正文自己滚）。
+   min-height 保住「别缩成一个窄条」的下限。 */
+#plgDlg[open] { width: 560px; height: fit-content; min-height: 230px; max-height: 86vh; }
 /* 标题条（.dlg-head）自带 padding-bottom 6px，form 顶部不再加 —— 不然 6+16+14 三层叠下来，
    卡标题离弹窗头上 36px，一大块空（2026-10-25 用户："详情卡标题和上面的间隙很大"） */
 #plgDlg > form { padding-top: 0; height: 100%; display: flex; flex-direction: column; }

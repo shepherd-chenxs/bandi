@@ -1112,6 +1112,17 @@ dialog > form { padding: 0 20px 20px; }
 /* 标签列收窄（2026-11-19 用户）：默认 132px 在 400 宽的简卡里太占地方，
    把宽度让给下拉 —— 「Runtime」「模型」两个字 72px 足够 */
 #peerDlg .form-row { grid-template-columns: 72px minmax(0, 1fr); gap: 10px; }
+/* 长期记忆（2026-11-23）：简卡里只给看与删，不给加 —— 事实由平台在跑通一轮后自己记，
+   口径走 bandi note add。列表限高滚动：记得多了不能让简卡长出屏幕。 */
+#peerDlg .peer-memory-row { align-items: start; }
+.peer-memory { max-height: 220px; overflow: auto; padding-right: 2px; }
+.pm-empty { font-size: 12px; line-height: 1.6; }
+.pm-group + .pm-group { margin-top: 8px; }
+.pm-head { font-size: 12px; color: var(--muted, #888); margin-bottom: 2px; }
+.pm-item { display: flex; align-items: flex-start; gap: 6px; font-size: 12px; line-height: 1.5; padding: 2px 0; }
+.pm-item span { flex: 1; min-width: 0; word-break: break-word; }
+.pm-del { flex: none; border: 0; background: transparent; color: var(--muted, #999); cursor: pointer; font-size: 14px; line-height: 1; padding: 0 2px; }
+.pm-del:hover { color: var(--danger, #d33); }
 /* 新建任务（2026-11-11 用户：照「新建定时任务」弹窗改成左右两栏）：
    骨架直接复用 .sch-cols（见下面 dialog.sch-dlg 一节的说明）——
    左 = 要写的（任务标题 + 描述，描述撑满高度）；右 = 要选的（状态 / 执行方式 / 执行对象 / 关联项目）。

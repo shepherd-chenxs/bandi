@@ -64,7 +64,7 @@ check('内置标记也还在', after.builtin === 1);
 /* syncSteward：不管库里什么样，跑完 = 出厂 —— 2026-10-23 喜儿→崔老三的存量迁移就走的这条路 */
 const synced = steward.syncSteward();
 const back = store.getPersona(steward.STEWARD_ID);
-check('syncSteward 把改过的名字刷回出厂', back.name === steward.STEWARD_NAME && back.name === '崔老三', back.name);
+check('syncSteward 把改过的名字刷回出厂', back.name === steward.STEWARD_NAME && back.name === '张三', back.name);
 check('指令也回到出厂', back.instructions === steward.STEWARD_INSTRUCTIONS);
 check('返回了动过的字段清单（给启动日志用）', Array.isArray(synced) && synced.includes('name') && synced.includes('instructions'), JSON.stringify(synced));
 const synced2 = steward.syncSteward();
@@ -123,9 +123,9 @@ console.log('\n①a-2 复活清理：旧版快照 seed 出的 p-xier，启动即
 
   check('清理跑一次 → 报告真的清了', steward.removeResurrectedSteward() === true);
   check('复活行删掉了', !store.getPersona('p-xier'));
-  check('现任崔老三没被误伤', !!store.getPersona(steward.STEWARD_ID));
-  check('复活期间的会话并回崔老三', db.prepare(`SELECT personaId FROM conversations WHERE id = 'c-res-test'`).get()?.personaId === steward.STEWARD_ID);
-  check('技能挂载并回崔老三', db.prepare(`SELECT COUNT(*) AS n FROM persona_skills WHERE personaId = ?`).get(steward.STEWARD_ID)?.n >= 1);
+  check('现任张三没被误伤', !!store.getPersona(steward.STEWARD_ID));
+  check('复活期间的会话并回张三', db.prepare(`SELECT personaId FROM conversations WHERE id = 'c-res-test'`).get()?.personaId === steward.STEWARD_ID);
+  check('技能挂载并回张三', db.prepare(`SELECT COUNT(*) AS n FROM persona_skills WHERE personaId = ?`).get(steward.STEWARD_ID)?.n >= 1);
   check('再跑一次 → 幂等（无事发生）', steward.removeResurrectedSteward() === false);
 
   // 全链路：ensureSteward 自己就该清（这才是真正挡住复活的路径）
@@ -250,7 +250,7 @@ try {
     const st = await req('/api/state');
     const born = (st.b?.personas ?? []).find((p) => p.id === steward.STEWARD_ID);
     check('全新一套库里，他一装好就在', !!born, JSON.stringify((st.b?.personas ?? []).map((p) => p.name)));
-    check('出厂就是崔老三（2026-10-23 名额换人，seed/sync 负责刷）', born?.name === '崔老三', born?.name);
+    check('出厂就是张三（2026-11-22 改名；2026-10-23 名额换人，seed/sync 负责刷）', born?.name === '张三', born?.name);
     check('/api/state 带出 builtin（前端徽标靠它）', born?.builtin === 1);
     check('人的总数就是 1（没多建几个）', (st.b?.personas ?? []).length === 1);
 
@@ -268,7 +268,7 @@ try {
     check('改名/改指令 → 403 E2055（身份锁死，不是 200）', ren.status === 403 && ren.b?.code === 'E2055', `${ren.status} ${ren.b?.code ?? ''}`);
     const ren2 = await req(`/api/personas/${steward.STEWARD_ID}`, {
       method: 'PUT',
-      body: JSON.stringify({ name: '崔老三', instructions: steward.STEWARD_INSTRUCTIONS, runtime: 'auto' }),
+      body: JSON.stringify({ name: '张三', instructions: steward.STEWARD_INSTRUCTIONS, runtime: 'auto' }),
     });
     check('身份没变、只顺手带 runtime → 200（锁判的是"值真的变了"）', ren2.status === 200, `${ren2.status} ${ren2.b?.code ?? ''}`);
     check('存完还是 auto', ren2.b?.persona?.runtime === 'auto', ren2.b?.persona?.runtime);

@@ -36,7 +36,13 @@ export async function handleSkill(req, res, url) {
       const pidLock = experts.lockKindOf(pid);
       if (pidLock) {
         const who = store.getPersona(pid);
-        return fail(res, 403, 'E2054', `「${who?.name ?? pid}」是${LOCK_MSG[pidLock].who}，技能${pidLock === 'expert' ? '随专家包' : '随平台'}固定，不能添加`);
+        // LOCK_MSG 在 experts.mjs（2026-11-22 修：原来这里裸用了一个本模块没有的常量，必 500）
+        return fail(
+          res,
+          403,
+          'E2054',
+          `「${who?.name ?? pid}」是${experts.LOCK_MSG[pidLock].who}，技能${pidLock === 'expert' ? '随专家包' : '随平台'}固定，不能添加`,
+        );
       }
       if (store.listPersonaSkills(pid).includes(skillName)) { skipped.push(pid); continue; }
       store.linkPersonaSkill(pid, skillName);
@@ -59,7 +65,20 @@ export async function handleSkill(req, res, url) {
   if (req.method === 'GET') {
     const s = skills.getSkill(name);
     if (!s) return fail(res, 404, 'E2017', '没有这个 skill');
-    return sendJson(res, 200, { skill: s, personas: store.listPersonas().filter((p) => store.listPersonaSkills(p.id).includes(name)).map((p) => ({ id: p.id, name: p.name })) });
+    /*
+     * **内置技能的正文不下发**（2026-11-22 用户拍板："技能页只显示简介，保护 skill 的隐私"）。
+     *
+     * 只在前端不画不算数 —— 打开开发者工具看一眼这个接口就全拿到了。所以档口在这里：
+     * `body` 置空 + `bodyHidden:true`（前端据此知道"这是刻意不给的"，而不是文件是空的）。
+     *
+     * 为什么敢删：正文没有任何客户端的用途 ——
+     *   · 界面上内置技能不再有编辑入口（只读，改也改不了：PUT 本来就 403）；
+     *   · 数字员工要正文是**直接读文件** `skills/<名字>/SKILL.md`（技能目录挂在员工 cwd 下），
+     *     从不经这条接口。
+     * 自建技能照旧回正文 —— 用户自己写的东西得能改。
+     */
+    const skill = s.builtin ? { ...s, body: '', bodyHidden: true } : s;
+    return sendJson(res, 200, { skill, personas: store.listPersonas().filter((p) => store.listPersonaSkills(p.id).includes(name)).map((p) => ({ id: p.id, name: p.name })) });
   }
 
   if (req.method === 'PUT' || req.method === 'PATCH') {

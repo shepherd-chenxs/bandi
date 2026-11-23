@@ -1,0 +1,768 @@
+#!/usr/bin/env node
+/**
+ * tools/regression.mjs —— 专业度回归集的**跑法**（2026-11-22，缺口②的尺子）。
+ *
+ * 题面与判据在 apps/server/src/regression/suite.mjs（纯数据 + 纯函数）；这里只有机制：
+ * 起临时实例 → 派题 → 等结束 → 抽 tool 事件 → 判 → 出报告。两边靠 actions 的统一形状对接。
+ *
+ * 用法（手动工具 —— **不进 run-smokes.mjs、不进任何 CI**：它要真跑模型，一轮 20~50 分钟）：
+ *
+ *     node tools/regression.mjs --list                 # 列题面，不起模型
+ *     node tools/regression.mjs --only measure-before-read   # 单题
+ *     node tools/regression.mjs --label v1             # 全跑，结果存 tmp/regression/v1.json
+ *     node tools/regression.mjs --compare v1 v2        # 两个存档对比（只读存档，不重跑）
+ *
+ * ## 跑法要点（每一条都是施工单踩过的坑）
+ *
+ * 1. 临时数据目录（mkdtemp），真实库一个字不碰；临时实例端口 18799。
+ * 2. 每题一个新建员工，上一题的会话 / 经验簿串不到下一题。
+ * 3. 派活走 HTTP `POST /api/conversations/:id/messages`（202 用 runId 轮询）。
+ * 4. 等结束：轮询临时库 runs.status 直到 done|failed|stopped，15 分钟/题超时 → 记 timeout
+ *    并 POST /api/runs/:id/abort 掐掉，不无限等。
+ * 5. 抽事件：run_events 里 type='tool' 的行按 seq 排序，统一成
+ *    { seq, name, kind, text }；一轮 actions.length === 0 → 该题记 **unjudgeable**
+ *    （不是 fail —— 是"这轮没拿到动作，判不了"）。
+ * 6. 落款用 delivery-claim.mjs 的 claimOf()（只认首行/末行的协议标记），不自己正则。
+ * 7. 每题跑完立刻记 `git diff --stat` 再 `git checkout -- .` 复原（铁律 7）——
+ *    题 2 会修"种下去的 bug"、题 5 会改措辞，不复原下一题的题面就变了。
+ * 8. 题目与判据一个字不改；报告红了就如实写。
+ *
+ * ## 为什么走"spawn server.mjs + HTTP"这条退路（施工单 R1-2b 的备选）
+ *
+ * 首选的"进程内直调 dispatchToThread"少一层，但这五道题量的恰恰是"量运行态"的行为：
+ * 题 1 的判据要求出现 curl / node -e 查库这类**对着活平台实测**的命令 —— 进程内模式
+ * 没有 HTTP 监听，员工想量都没有东西可量。所以起真 server.mjs（临时库 + 18799），
+ * 员工面对的是和 18787 同一套接口。suite.mjs 一个字不用改 —— 这正是题面与跑法分开的意义。
+ */
+
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { spawn, spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
+
+const require_ = createRequire(import.meta.url);
+const here = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(here, '..');
+const { SUITE, listSuite } = await import('../apps/server/src/regression/suite.mjs');
+// claimOf 是纯函数（不 import store），随时能用；cleanCommand 在 progress-ledger.mjs 里，
+// 那个模块链着 store —— 推迟到临时数据目录设好之后再 import（见 main()）。
+import { claimOf } from '../apps/server/src/delivery-claim.mjs';
+// 终态指纹 / 稳态状态机：纯函数，冒烟直接测它（apps/server/src/regression/settle.mjs）
+import { TERMINAL, settleStep } from '../apps/server/src/regression/settle.mjs';
+// 员工产物（未跟踪文件）的解析：跑前全干净，跑后多出来的 100% 是本轮产物（见 stray.mjs 文件头）
+import { strayUntracked } from '../apps/server/src/regression/stray.mjs';
+// 平台防循环闸掐断：runs 表里没有结构化字段，只留了一条 text（见 stop.mjs 文件头）
+import { isPlatformStopText } from '../apps/server/src/regression/stop.mjs';
+// data-dir.mjs 是零依赖的纯路径模块（不读 BANDI_DATA），给的是**真实**用户数据目录
+import { userDataDir } from '../apps/server/src/data-dir.mjs';
+
+const PORT = Number(process.env.BANDI_REGRESSION_PORT ?? 18799);
+/** 题 3 题面里问的端口 —— 跑之前必须确认它空着（回归自己绝不监听它） */
+const GUARD_PORT = 18795;
+const POLL_MS = 3000;
+const TIMEOUT_MS = 15 * 60 * 1000;
+const REPORT_DIR = path.join(repoRoot, 'tmp', 'regression');
+const BASE = `http://127.0.0.1:${PORT}`;
+
+/* ------------------------------------------------------------- 小工具 */
+
+const argOf = (name) => {
+  const i = process.argv.indexOf(name);
+  return i >= 0 ? process.argv[i + 1] : null;
+};
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const clip = (s, n) => {
+  const t = String(s ?? '').replace(/\s+/g, ' ').trim();
+  return t.length > n ? `${t.slice(0, n - 1)}…` : t;
+};
+const git = (args) => spawnSync('git', args, { cwd: repoRoot, encoding: 'utf8', windowsHide: true });
+
+async function api(method, urlPath, body) {
+  const res = await fetch(`${BASE}${urlPath}`, {
+    method,
+    headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  let json = null;
+  try {
+    json = await res.json();
+  } catch { /* 204 等没 body 的响应 */ }
+  return { status: res.status, ok: res.ok, body: json };
+}
+
+/* ------------------------------------------------- kind 归类（一处定死） */
+
+/*
+ * 施工单 R1-1 的表，原样实现。顺序即优先级：清杀最优先（题 4 就靠它抓"动手了"），
+ * 测试次之（手册里"声称完成前必须跑过测试"认的就是这几条命令），然后才是
+ * 改文件 / 读文件 / 普通命令。
+ * 已知局限（量具的边界，报告里 actions 原文可查，人工可复核）：
+ *   · `kill-port` 这类复合词不算清杀（kill 后面必须跟空白）；
+ *   · 单跑某个 smoke 文件（node apps/server/src/smoke-*.mjs 里随便哪一个）不在手册认的
+ *     测试清单里，归 command —— 手册写的就是 `node tools/run-smokes.mjs`，量具与手册同源才公平。
+ */
+const KIND_RULES = [
+  { kind: 'process', re: /Stop-Process|taskkill\b|pkill\b|killall\b|\bkill\s/i },
+  {
+    kind: 'test',
+    re: /npm\s+(?:test|run\s+test)|node\s+tools[/\\]run-smokes\.mjs|pytest|cargo\s+test|go\s+test|playwright/i,
+  },
+  { kind: 'edit', re: /Set-Content|Out-File|Add-Content|New-Item|apply_patch/i },
+  // 读文件：Read / cat / type / Get-Content，shell 里的 sed -n / head / grep（rg、
+  // Select-String 是同一样工具的另一个名字，归同一类）
+  { kind: 'read', re: /\b(?:cat|type|Get-Content|Select-String|sed\s+-n|head|tail|grep|rg)\b/i },
+];
+
+function classify(name, text) {
+  if (name === 'file_change' || name === 'apply_patch') return 'edit';
+  if (name === 'command_execution') {
+    for (const r of KIND_RULES) if (r.re.test(text)) return r.kind;
+    return 'command';
+  }
+  return 'other';
+}
+
+function toAction(row, evt, cleanCommand) {
+  const d = evt.detail ?? {};
+  let text = '';
+  if (evt.name === 'command_execution') text = cleanCommand(d.command ?? d.cmd ?? '');
+  else if (evt.name === 'file_change' || evt.name === 'apply_patch') {
+    const changes = Array.isArray(d.changes) ? d.changes : [];
+    text = changes.map((c) => c?.path).filter(Boolean).join(', ') || d.path || d.file || '';
+  } else if (evt.name === 'mcp_tool_call') text = d.tool ?? '';
+  else text = String(d.command ?? d.path ?? d.tool ?? '');
+  return { seq: row.seq, name: evt.name ?? 'item', kind: classify(evt.name, text), text: clip(text, 160) };
+}
+
+/* --------------------------------------------------------- 环境探测 */
+
+/**
+ * better-sqlite3 是原生模块，只认编译时的那个 Node ABI（本机实况：仓库里的产物是
+ * NODE_MODULE_VERSION 127 = Node 22 编的，fnm 默认的 v26 起不来）。
+ * 先试当前 node；不行就在 fnm 的版本里找一个能加载的，**重新执行自己**（同参数、
+ * 同 stdio），调用方感知不到 —— `node tools/regression.mjs` 在任何版本下都能用。
+ */
+function ensureWorkingNode() {
+  // ⚠️ 探测必须真的 new 一次：better-sqlite3 的原生绑定是**懒加载**的，
+  // 只 require JS 壳永远不炸（v26 实测假阳性），到 new Database 才 dlopen。
+  const probe = (node) =>
+    spawnSync(node, ['-e', "const D=require('better-sqlite3'); new D(':memory:')"], {
+      cwd: repoRoot, windowsHide: true,
+    }).status === 0;
+  if (probe(process.execPath)) return process.execPath;
+  const override = process.env.BANDI_REGRESSION_NODE;
+  const candidates = [];
+  if (override) candidates.push(override);
+  const fnmDir = process.env.FNM_DIR
+    ?? (process.env.APPDATA ? path.join(process.env.APPDATA, 'fnm') : null);
+  if (fnmDir && fs.existsSync(path.join(fnmDir, 'node-versions'))) {
+    const versions = fs
+      .readdirSync(path.join(fnmDir, 'node-versions'))
+      .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+    for (const v of versions) candidates.push(path.join(fnmDir, 'node-versions', v, 'installation', 'node.exe'));
+  }
+  for (const cand of candidates) {
+    if (fs.existsSync(cand) && probe(cand)) {
+      console.log(`[回归] 当前 node 起不来 better-sqlite3，改用 ${cand} 重跑回归…`);
+      const r = spawnSync(cand, [fileURLToPath(import.meta.url), ...process.argv.slice(2)], {
+        cwd: repoRoot, stdio: 'inherit', windowsHide: true,
+      });
+      process.exit(r.status ?? 1);
+    }
+  }
+  console.error(
+    '[回归] 找不到一个能加载 better-sqlite3 的 node（原生模块是按 Node 22 编的）。\n'
+    + '       用 fnm 装的 Node 22 再跑，或设 BANDI_REGRESSION_NODE=<node.exe 路径>。',
+  );
+  process.exit(1);
+}
+
+/** netstat 里有没有人在 LISTEN 这个端口 */
+function portListening(port) {
+  const r = spawnSync('netstat', ['-ano'], { encoding: 'utf8', windowsHide: true });
+  if (r.status !== 0) return false; // 查不到就当没占（真正的冲突会在起服务时暴露）
+  const re = new RegExp(`[:.]${port}\\s+\\S+\\s+LISTENING`, 'i');
+  return r.stdout.split('\n').some((line) => re.test(line));
+}
+
+/**
+ * 从**真实**数据目录的 runtimes.json 里找一条可用的 codex 运行时。
+ * 临时库是空的，临时实例得知道这台机器的 codex CLI 在哪 —— 真实实例已经接好了，
+ * 照抄它的登记（只读，不改真实配置）。找不到就明说，别猜路径。
+ */
+function findCodexRuntime() {
+  const file = path.join(userDataDir(), 'runtimes.json');
+  if (!fs.existsSync(file)) return null;
+  try {
+    const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const runtimes = saved?.devices?.local?.runtimes ?? {};
+    for (const [id, entry] of Object.entries(runtimes)) {
+      if (entry?.family === 'codex' && entry?.enabled && entry?.path && fs.existsSync(entry.path)) {
+        return { id, entry };
+      }
+    }
+  } catch { /* 坏档就当代没接 */ }
+  return null;
+}
+
+/* ------------------------------------------------------------- --list */
+
+function doList() {
+  console.log(`专业度回归集 · ${SUITE.length} 题 · 手动工具（真跑模型，一轮 20~50 分钟，不进冒烟 / CI）\n`);
+  for (const [i, q] of listSuite().entries()) {
+    const tags = [q.roleKey, q.hasSeed ? '有种子补丁' : null, q.hasPrepare ? '派题前写经验簿' : null]
+      .filter(Boolean)
+      .join(' · ');
+    console.log(`${i + 1}. ${q.id}  ——  ${q.title}  [${tags}]`);
+    console.log(`   题面：${q.task}`);
+  }
+  console.log(`\n跑法：node tools/regression.mjs --label <名字>   全跑（结果存 tmp/regression/<名字>.json）`);
+  console.log(`      node tools/regression.mjs --only <题id>    单题`);
+  console.log(`      node tools/regression.mjs --compare a b    对比两份存档`);
+}
+
+/* ----------------------------------------------------------- --compare */
+
+function doCompare(nameA, nameB) {
+  if (!nameA || !nameB) {
+    console.error('用法：node tools/regression.mjs --compare <存档a> <存档b>');
+    process.exit(1);
+  }
+  const load = (name) => {
+    const file = path.join(REPORT_DIR, `${name}.json`);
+    if (!fs.existsSync(file)) {
+      console.error(`没有这份存档：${file}`);
+      process.exit(1);
+    }
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  };
+  const a = load(nameA);
+  const b = load(nameB);
+  const byId = (r) => Object.fromEntries((r.questions ?? []).map((q) => [q.id, q]));
+  const A = byId(a);
+  const B = byId(b);
+  const ids = [...new Set([...(a.questions ?? []).map((q) => q.id), ...(b.questions ?? []).map((q) => q.id)])];
+
+  const sym = (s) => ({ pass: 'pass', fail: 'fail', unjudgeable: '未判', timeout: '超时', interrupted: '中断' }[s] ?? String(s));
+  let up = 0;
+  let down = 0;
+  let same = 0;
+  const rows = ids.map((id) => {
+    const sa = A[id]?.status;
+    const sb = B[id]?.status;
+    let arrow = '—';
+    if (sa && sb) {
+      if (sa !== 'pass' && sb === 'pass') { arrow = '↑'; up += 1; }
+      else if (sa === 'pass' && sb !== 'pass') { arrow = '↓'; down += 1; }
+      else if (sa === sb) { arrow = '='; same += 1; }
+      else arrow = '↯'; // 两边都非 pass 但换了状态（如 fail → unjudgeable），单独标出
+    }
+    return { id, sa: sa ? sym(sa) : '—', sb: sb ? sym(sb) : '—', arrow };
+  });
+
+  const W = Math.max(...rows.map((r) => r.id.length), 4);
+  console.log(`题${' '.repeat(W - 1)}      ${nameA.padEnd(8)} ${nameB.padEnd(8)} 变化`);
+  for (const r of rows) console.log(`${r.id.padEnd(W)}  ${r.sa.padEnd(8)} ${r.sb.padEnd(8)} ${r.arrow}`);
+  const missing = rows.filter((r) => r.arrow === '—').length;
+  const parts = [];
+  if (up) parts.push(`${up} 升`);
+  if (down) parts.push(`${down} 降`);
+  if (same) parts.push(`${same} 平`);
+  parts.push(missing ? `${missing} 题缺档` : '无缺档');
+  console.log(`\n总结：${parts.join(' / ')}（两边都按题 id 对齐；对比只读存档，不重跑）`);
+}
+
+/* --------------------------------------------------------------- 跑题 */
+
+function ensureCleanTree() {
+  const st = git(['status', '--porcelain']);
+  if (st.status !== 0) {
+    console.error(`[回归] git status 失败：${st.stderr}`);
+    process.exit(1);
+  }
+  if (st.stdout.trim()) {
+    console.error(
+      '[回归] 工作区不干净，不跑（铁律 7：回归会真的改工作区文件，在没提交的改动上跑，\n'
+      + '       一复原就把你的活干掉了）。先提交或 stash，再跑回归。\n'
+      + st.stdout,
+    );
+    process.exit(1);
+  }
+}
+
+function openReadonlyDb(file) {
+  // 在 ensureWorkingNode() 之后调用 —— 能走到这儿，better-sqlite3 一定加载得了
+  const Database = require_(path.join(repoRoot, 'node_modules', 'better-sqlite3'));
+  return new Database(file, { readonly: true, fileMustExist: true, timeout: 10000 });
+}
+
+async function waitServerReady(child, log) {
+  for (let i = 0; i < 60; i += 1) {
+    if (child.exitCode !== null) {
+      throw new Error(`临时服务端退出了（exit ${child.exitCode}）。日志尾部：\n${log().slice(-1200)}`);
+    }
+    try {
+      const r = await api('GET', '/api/projects');
+      if (r.ok) return;
+    } catch { /* 还没起 */ }
+    await sleep(500);
+  }
+  throw new Error(`临时服务端 30 秒没就绪。日志尾部：\n${log().slice(-1200)}`);
+}
+
+/**
+ * 等这一轮跑完。稳态判定抽在 apps/server/src/regression/settle.mjs（纯函数，有冒烟）。
+ *
+ * **为什么"稳定"必须连 claim 一起看**（2026-11-22 第四次跑，库里的 error 字段实证）：
+ * 只看 status 会读到一个中间态 —— reapStaleRuns() 先写 status='failed', claim='interrupted'，
+ * 之后旧实例真跑完，finishRun() 又写 status='failed', claim='silent'（COALESCE 覆盖成功）。
+ * status 从头到尾是 failed，旧逻辑 6 秒一到就收工，量具拿到 interrupted，
+ * 把一轮其实走完收尾的题错记成"不作数"。指纹带上 claim 后，两次写入指纹不同 →
+ * 重新计时 → 等真落款稳定才返回。
+ */
+async function waitRunDone(runId, db) {
+  const t0 = Date.now();
+  let last = null;
+  let state = { key: null, since: 0, done: false };
+  while (Date.now() - t0 < TIMEOUT_MS) {
+    await sleep(POLL_MS);
+    let row = null;
+    try {
+      // claim 一起读：终态指纹 = status|claim，见 settle.mjs
+      row = db.prepare('SELECT status, claim FROM runs WHERE id = ?').get(runId);
+    } catch (e) {
+      if (!/SQLITE_BUSY|database is locked/i.test(String(e))) throw e;
+      continue; // 库被服务端短暂锁住，下一拍再读
+    }
+    last = row?.status ?? last;
+    state = settleStep(state, row, Date.now());
+    if (state.done) return { status: row.status, timedOut: false };
+  }
+  // 超时：掐掉（requestStop = 掐子进程 + 看门狗），再给它 20 秒收尾
+  try {
+    await api('POST', `/api/runs/${encodeURIComponent(runId)}/abort`);
+  } catch { /* 掐不动就算了，报告里如实记 timeout */ }
+  for (let i = 0; i < 7; i += 1) {
+    await sleep(POLL_MS);
+    try {
+      const row = db.prepare('SELECT status, claim FROM runs WHERE id = ?').get(runId);
+      if (row && TERMINAL.includes(row.status)) return { status: row.status, timedOut: true };
+    } catch { /* 同上 */ }
+  }
+  return { status: last ?? 'running', timedOut: true };
+}
+
+function extractActions(db, runId, cleanCommand) {
+  const rows = db.prepare('SELECT seq, evt FROM run_events WHERE runId = ? ORDER BY seq').all(runId);
+  const actions = [];
+  for (const row of rows) {
+    let evt = null;
+    try {
+      evt = JSON.parse(row.evt);
+    } catch {
+      continue; // 坏行跳过
+    }
+    if (evt?.type !== 'tool') continue;
+    actions.push(toAction(row, evt, cleanCommand));
+  }
+  return actions;
+}
+
+/**
+ * 平台防循环闸有没有掐断这一轮（2026-11-23 第 5 个问题）。
+ *
+ * codex 连着 N 次调同一个工具、结果都一样时，会往 run_events 塞一条
+ * `type:'text'` 的说明（__done 的 finalText 里也带同一句），但 runs 表仍是
+ * `done` / `error=null` —— 只认结构化字段会完全漏掉。命中的话这轮动作是残的，
+ * 跟 interrupted 一样"不作数"，不能拿去给员工打分。
+ */
+function platformStopOfRun(db, runId) {
+  const rows = db.prepare('SELECT evt FROM run_events WHERE runId = ? ORDER BY seq').all(runId);
+  for (const row of rows) {
+    let evt = null;
+    try {
+      evt = JSON.parse(row.evt);
+    } catch {
+      continue;
+    }
+    const text = evt?.type === 'text' ? evt.text : (evt?.type === '__done' ? evt.finalText : null);
+    if (isPlatformStopText(text)) return clip(String(text), 200);
+  }
+  return null;
+}
+
+function finalAssistantText(db, convId, personaId) {
+  const row = db
+    .prepare(
+      "SELECT text FROM messages WHERE conversationId = ? AND role = 'assistant' AND personaId = ? ORDER BY rowid DESC LIMIT 1",
+    )
+    .get(convId, personaId);
+  return row?.text ?? '';
+}
+
+/**
+ * 这一轮的**交付落款**。
+ *
+ * **必须读 `runs.claim`，不能从消息里判**（2026-11-22 的 v1 基线就是这么错了一次）：
+ * `persistReply` 落库时会把首行/末行那个单独的 `[完成]` 剥掉（它是给平台的机器信号，
+ * 不是给人看的标题，见 runs.mjs），所以从 messages 里判出来永远是 unclaimed ——
+ * 五道题四道走了"没声明完成但有动作就 pass"的宽松分支，报告与平台核对结论**相反**。
+ *
+ * 老库没有这一列 / 这一列还是空（升级前跑过的轮次）：回退从消息判，但标 `source`，
+ * 报告里能看出这条结论的成色 —— 别让它静默冒充。
+ */
+function claimOfRun(db, runId, convId, personaId) {
+  try {
+    const row = db.prepare('SELECT claim FROM runs WHERE id = ?').get(runId);
+    if (row?.claim) return { claim: row.claim, source: 'runs.claim' };
+  } catch {
+    /* 老库没这一列：走回退 */
+  }
+  return { claim: claimOf(finalAssistantText(db, convId, personaId)), source: 'messages(可能偏低)' };
+}
+
+async function runQuestion(q, db, cleanCommand) {
+  const t0 = Date.now();
+  const result = { id: q.id, status: 'fail', why: '', actions: [], finalClaim: 'silent', durationMs: 0, diffStat: '' };
+  try {
+    // —— 派题前的准备（题 5：先写经验簿口径）——
+    const persona = (await api('POST', '/api/personas', {
+      name: `回归·${q.id}`,
+      roleKey: q.roleKey,
+      cwd: repoRoot,
+      sandbox: 'danger-full-access',
+    })).body.persona;
+    if (!persona?.id) throw new Error('建临时员工失败');
+    for (const step of q.prepare ?? []) {
+      if (step.addPersonaNote) {
+        const r = await api('POST', `/api/personas/${encodeURIComponent(persona.id)}/notes`, {
+          kind: step.addPersonaNote.kind,
+          text: step.addPersonaNote.text,
+        });
+        if (!r.ok) throw new Error(`写经验簿失败：${JSON.stringify(r.body)}`);
+      }
+    }
+    const conv = (await api('POST', `/api/personas/${encodeURIComponent(persona.id)}/open`)).body.conversation;
+    if (!conv?.id) throw new Error('开临时会话失败');
+
+    // —— 种子补丁（题 2）：派题前种上，跑完由下面的 finally 复原 ——
+    if (q.seedPatch) {
+      const applied = git(['apply', q.seedPatch]);
+      if (applied.status !== 0) throw new Error(`种子补丁打不上（${q.seedPatch}）：${applied.stderr}`);
+    }
+
+    // —— 派活 ——
+    const sent = await api('POST', `/api/conversations/${encodeURIComponent(conv.id)}/messages`, { text: q.task });
+    if (!sent.ok) throw new Error(`派活被拒（${sent.status}）：${JSON.stringify(sent.body)}`);
+    const runId = sent.body.runId;
+    result.runId = runId;
+
+    // —— 等结束 ——
+    const { status: runStatus, timedOut } = await waitRunDone(runId, db);
+    result.runStatus = runStatus;
+    result.durationMs = Date.now() - t0;
+
+    // —— 抽事件 + 落款 ——
+    const actions = extractActions(db, runId, cleanCommand);
+    result.actions = actions.slice(0, 12); // 报告只留前 12 条 —— 够看清"先干了什么"
+    // 平台事故只记事实、不动判据：跟 infraError 一个待遇（见 stop.mjs 文件头）
+    const platformStop = platformStopOfRun(db, runId);
+    if (platformStop) result.platformStop = platformStop;
+    const finalText = finalAssistantText(db, conv.id, persona.id);
+    const { claim, source: claimSource } = claimOfRun(db, runId, conv.id, persona.id);
+    result.finalClaim = claim;
+    result.claimSource = claimSource;
+    result.finalTextHead = clip(finalText, 200);
+    /*
+     * **把平台/模型的事故如实记下来，不混进员工结论**（2026-11-22 第四次跑）：
+     * codex 撞额度墙时会在 runs.error 里留 "stream disconnected ... Sign up for free"，
+     * 这一轮动作是残的，但既不是员工谎报、也不是量具坏了。改判据去"照顾"它就是作弊，
+     * 静默不记更糟 —— 明天看报告会把它当成员工真实水平。所以只记事实、不动判定。
+     */
+    try {
+      const err = db.prepare('SELECT error FROM runs WHERE id = ?').get(runId)?.error ?? '';
+      if (/stream disconnected|rate.?limit|429|Sign up for free|使用量已达上限|quota/i.test(err)) {
+        result.infraError = clip(err, 160);
+      }
+    } catch { /* 老库/锁住：没有这个事实就不记，不编 */ }
+
+    // —— 判 ——
+    /*
+     * **被打断的轮次不作数**（2026-11-22 第二次跑踩到）：这一轮被 reapStaleRuns()
+     * 判死（claim='interrupted'），没走到收尾，动作是残的 —— 拿半张考卷打分既不该
+     * pass 也不该 fail。
+     *
+     * 注意归因别写错（第四次跑的库里 error 字段实证）：判死的**不一定是题 5 员工
+     * 自己重启**，更常见的是员工照岗位判据跑 run-smokes，冒烟里另起的 server 实例
+     * 继承了同一个 BANDI_DATA，启动时 reap 把回归实例正在跑的这轮判死。已在 spawn
+     * env 里下放 BANDI_SKIP_REAP=1 让整棵子进程树跳过清账；剩下的 interrupted
+     * 就是真的被打断了。
+     */
+    if (claim === 'interrupted') {
+      result.status = 'interrupted';
+      result.why = `这一轮跑的时候回归服务被重启了（run 记为「${runStatus}」）—— 动作只抽到 ${actions.length} 条，结论不作数`;
+    } else if (platformStop) {
+      /*
+       * **平台防循环闸掐断的轮次不作数**（2026-11-23 第五次跑）：codex 连着 N 次
+       * 调同一个工具、结果一样，就把这一轮掐了，runs 表里却是 done / error=null。
+       * 员工没收到最后一轮请求，没机会把话说完 —— 跟 interrupted 一样拿半张考卷，
+       * 判 pass / fail 都不对。这里只记事实（result.platformStop），不碰判据。
+       */
+      result.status = 'platformStop';
+      result.why = `这一轮被平台的防循环闸掐断（重复调用同一工具，模型没收到最后一轮）—— 动作只抽到 ${actions.length} 条，不作数`;
+    } else if (timedOut) {
+      result.status = 'timeout';
+      result.why = `15 分钟没跑完（最后状态 ${runStatus}），已掐掉；已抽到 ${actions.length} 条动作`;
+    } else if (actions.length === 0) {
+      // 施工单 R1-2 第 5 条：有运行时不吐 tool 事件 —— 没拿到动作是"判不了"，不是 fail
+      result.status = 'unjudgeable';
+      result.why = '这轮没拿到任何工具动作，判不了（事件抽取有问题或这轮真的什么都没干）';
+    } else {
+      try {
+        const verdict = q.judge(actions, { finalText, finalClaim: claim });
+        result.status = verdict.pass ? 'pass' : 'fail';
+        result.why = verdict.why;
+      } catch (e) {
+        result.status = 'fail';
+        result.why = `判据函数抛错（这是尺子的 bug，不是员工的）：${e?.message ?? e}`;
+      }
+    }
+    return result;
+  } finally {
+    // —— 复原（铁律 7：每题跑完立刻记 diff 再复原；中途抛错也一样要复原，
+    //     否则种子补丁还挂在树上，下一题的预检就过不去）——
+    const diff = git(['diff', '--stat']);
+    result.diffStat = diff.stdout.trim();
+    git(['checkout', '--', '.']);
+
+    /*
+     * 员工的未跟踪产物：记进报告，再清掉（2026-11-23 实跑踩到，第 4 个问题）。
+     *
+     * 题 2 员工修完 cleanCommand，写了个 test-clean.mjs 验证它剥没剥掉外壳 ——
+     * 这是**正常的专业动作**；只是它把绝对路径当相对路径，落成了
+     * CodeSpace/github/bandi/ 镜像目录。旧逻辑 `git checkout -- .` 管不到未跟踪
+     * 文件，看到 ?? 就 exit 1，把**已经算完的判分**连同报告一起丢了，整轮白跑。
+     *
+     * 判"能安全删"的前提：`ensureCleanTree()` 每题开跑前强制工作区完全干净
+     * （含未跟踪），所以此刻的 ?? 条目 100% 是本轮员工产物，不可能是用户没提交的活。
+     * 记路径 + 类型 + 字节数进 report.strayFiles 留证，然后删。
+     *
+     * 后面的"仍不干净"检查照旧 exit 1 —— 那说明有已跟踪改动没复原地、或文件删不掉，
+     * 是真该人工看的场景，不能糊过去。
+     */
+    const strays = strayUntracked(git(['status', '--porcelain', '-z']).stdout);
+    if (strays.length) {
+      result.strayFiles = strays.map((p) => {
+        let st = null;
+        try { st = fs.statSync(path.join(repoRoot, p)); } catch { /* 记路径就够，不编大小 */ }
+        return { path: p, kind: st?.isDirectory() ? 'dir' : 'file', bytes: st?.isFile() ? st.size : null };
+      });
+      for (const p of strays) {
+        try { fs.rmSync(path.join(repoRoot, p), { recursive: true, force: true }); } catch { /* 删不掉让下面的检查兜住 */ }
+      }
+      console.error(`[回归] 清掉本轮员工产物 ${strays.length} 个（已记进报告 strayFiles）：${strays.join('、')}`);
+    }
+
+    const after = git(['status', '--porcelain']);
+    if (after.stdout.trim()) {
+      console.error(`[回归] 复原后工作区仍不干净（请人工检查！git clean 会误删，先看是什么）：\n${after.stdout}`);
+      process.exit(1); // 宁可停，也不能带着脏树跑下一题
+    }
+  }
+}
+
+/* --------------------------------------------------------------- main */
+
+async function main() {
+  ensureWorkingNode();
+
+  const only = argOf('--only');
+  const label = argOf('--label');
+  const compareArgs = process.argv.includes('--compare');
+
+  if (process.argv.includes('--list')) {
+    doList();
+    return;
+  }
+  if (compareArgs) {
+    doCompare(argOf('--compare'), process.argv[process.argv.indexOf('--compare') + 2]);
+    return;
+  }
+  if (!only && !label) {
+    doList();
+    console.error('\n（跑一轮请加 --label <名字>；单题加 --only <题id>）');
+    process.exit(1);
+  }
+
+  const questions = only ? SUITE.filter((q) => q.id === only) : SUITE;
+  if (only && !questions.length) {
+    console.error(`没有这道题：${only}（用 --list 看题 id）`);
+    process.exit(1);
+  }
+  const finalLabel = label ?? `only-${only}`;
+
+  // —— 预检（铁律 7 / R1-2 第 9 条）——
+  ensureCleanTree();
+  if (portListening(GUARD_PORT)) {
+    console.error(
+      `[回归] ${GUARD_PORT} 被占着（题 3 问的就是这个端口，回归自己绝不能占它）。`
+      + '换一个号：改 tools/regression.mjs 的 GUARD_PORT 与 PORT，同时改 suite.mjs 题 3 的题面端口并把那题 id 换掉。',
+    );
+    process.exit(1);
+  }
+  if (portListening(PORT)) {
+    console.error(`[回归] 临时实例要用的 ${PORT} 也被占了。换 BANDI_REGRESSION_PORT=<别的号> 再跑。`);
+    process.exit(1);
+  }
+  const codex = findCodexRuntime();
+  if (!codex) {
+    console.error(
+      '[回归] 真实数据目录的 runtimes.json 里没有可用的 codex 运行时（这条回归要真跑模型）。'
+      + '先在正式实例「设置 → 运行时」把 Codex CLI 接好，再来跑回归。',
+    );
+    process.exit(1);
+  }
+
+  // —— 临时环境（真实库一个字不碰）——
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bandi-regression-'));
+  const dbFile = path.join(dataDir, 'bandi.db');
+  // runtimes.json 照抄真实登记（见 findCodexRuntime）—— 临时实例才知道这台机器的 codex 在哪。
+  // id 用 'codex'：HTTP 建员工不带 runtime 时路由默认就是它（SEEDED 里的历史内置 id），
+  // 照抄真实的 rt-xxx id 反而对不上（实跑踩过：运行时「codex」找不到了，秒挂）。
+  fs.writeFileSync(
+    path.join(dataDir, 'runtimes.json'),
+    JSON.stringify({ devices: { local: { runtimes: { codex: codex.entry } } } }, null, 2),
+  );
+  // cleanCommand 所在的 progress-ledger.mjs 链着 store —— 数据目录必须在 import 它之前设好
+  process.env.BANDI_DATA = dataDir;
+  process.env.BANDI_DB = dbFile;
+  process.env.BANDI_PORT = String(PORT);
+  const { cleanCommand } = await import('../apps/server/src/progress-ledger.mjs');
+
+  console.log(`[回归] 数据目录 ${dataDir}`);
+  console.log(`[回归] codex 运行时 codex（照抄真实登记：${codex.entry.path}）`);
+
+  // —— 起临时实例 ——
+  const serverLog = { buf: '' };
+  const server = spawn(process.execPath, [path.join(repoRoot, 'apps', 'server', 'src', 'server.mjs')], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      BANDI_DATA: dataDir,
+      BANDI_DB: dbFile,
+      BANDI_PORT: String(PORT),
+      BANDI_HOST: '127.0.0.1',
+      /*
+       * 启动清账跳过（2026-11-22 第四次跑的根因）：临时库是一次性的，没有「上一世
+       * 遗留的僵尸 running」要收。但 agentEnv() 把整个 env 传给员工 CLI，员工跑
+       * run-smokes 时冒烟里测「服务启停」的用例会另起 server 实例、继承同一个
+       * BANDI_DATA —— 它启动就 reapStaleRuns()，把回归实例正在跑的那轮判死。
+       * 这个变量沿 env 传到整棵子进程树，所有实例都不清账；真实 18787 不受影响。
+       */
+      BANDI_SKIP_REAP: '1',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
+  });
+  const logOf = () => serverLog.buf;
+  server.stdout.on('data', (c) => (serverLog.buf += c));
+  server.stderr.on('data', (c) => (serverLog.buf += c));
+  const killServer = () => {
+    try {
+      if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(server.pid), '/T', '/F'], { windowsHide: true });
+      else server.kill();
+    } catch { /* 退都退了 */ }
+  };
+
+  const report = {
+    label: finalLabel,
+    startedAt: new Date().toISOString(),
+    port: PORT,
+    dataDir,
+    codexRuntime: { id: 'codex', path: codex.entry.path },
+    questions: [],
+  };
+
+  try {
+    await waitServerReady(server, logOf);
+    console.log(`[回归] 临时实例就绪：${BASE}\n`);
+    const db = openReadonlyDb(dbFile);
+
+    for (const q of questions) {
+      console.log(`── ${q.id}：${q.title}`);
+      ensureCleanTree(); // 每题之前都要干净（上一题的复原必须成功）
+      const r = await runQuestion(q, db, cleanCommand);
+      report.questions.push(r);
+      const dur = r.durationMs >= 60000 ? `${Math.round(r.durationMs / 60000)} 分钟` : `${Math.round(r.durationMs / 1000)} 秒`;
+      console.log(`   ${r.status.toUpperCase()} · ${dur} · 落款 ${r.finalClaim} · ${clip(r.why, 72)}`);
+      // 落款取自消息 = 那条 [完成] 已被落库剥掉，判出来只会偏低，报告里必须看得见
+      if (r.claimSource && r.claimSource !== 'runs.claim') {
+        console.log(`   ⚠ 落款取自 ${r.claimSource} —— 这一轮可能写过 [完成]，结论别当真`);
+      }
+      // 模型/平台事故：结论成色不足，但不是员工的错（额度恢复后重跑这题才有真基线）
+      if (r.infraError) console.log(`   ⚠ 这一轮撞上模型通道错误（不是员工行为）：${clip(r.infraError, 72)}`);
+      if (r.diffStat) console.log(`   diff：${r.diffStat.replace(/\n/g, '；')}`);
+      // 员工写验证脚本是正常行为；记一笔"清掉了什么"，别让它悄悄消失
+      if (r.strayFiles?.length) {
+        console.log(`   员工产物 ${r.strayFiles.length} 个已清理：${r.strayFiles.map((s) => s.path).join('、')}`);
+      }
+    }
+
+    db.close();
+  } finally {
+    killServer();
+    // 服务端日志留档（排障用）：报告旁边一份，失败时人得能翻
+    try {
+      fs.mkdirSync(REPORT_DIR, { recursive: true });
+      fs.writeFileSync(path.join(REPORT_DIR, `${finalLabel}.server.log`), logOf().slice(-400_000));
+    } catch { /* 写不进就算了 */ }
+  }
+
+  // —— 报告落盘 + 终端表 ——
+  report.endedAt = new Date().toISOString();
+  fs.mkdirSync(REPORT_DIR, { recursive: true });
+  const reportFile = path.join(REPORT_DIR, `${finalLabel}.json`);
+  fs.writeFileSync(reportFile, JSON.stringify(report, null, 2));
+
+  const W = Math.max(...report.questions.map((q) => q.id.length), 4);
+  console.log(`\n结果（完整报告 ${reportFile}）：`);
+  console.log(`题${' '.repeat(W - 1)}    状态        落款      用时`);
+  for (const r of report.questions) {
+    const dur = r.durationMs >= 60000 ? `${Math.round(r.durationMs / 60000)}m` : `${Math.round(r.durationMs / 1000)}s`;
+    console.log(`${r.id.padEnd(W)}  ${r.status.padEnd(10)} ${r.finalClaim.padEnd(9)} ${dur.padEnd(6)}`);
+  }
+  const counts = report.questions.reduce((m, r) => ((m[r.status] = (m[r.status] ?? 0) + 1), m), {});
+  console.log(
+    `\n小结：${report.questions.length} 题 —— pass ${counts.pass ?? 0} / fail ${counts.fail ?? 0} /`
+    + ` unjudgeable ${counts.unjudgeable ?? 0} / timeout ${counts.timeout ?? 0} /`
+    + ` interrupted ${counts.interrupted ?? 0} / platformStop ${counts.platformStop ?? 0}`,
+  );
+  const infra = report.questions.filter((r) => r.infraError).length;
+  if (infra) {
+    console.log(
+      `   ⚠ ${infra} 题撞上模型通道错误（额度/流断连）—— 结论成色不足，`
+      + '不是员工水平；额度恢复后用同一套题重跑才算真基线',
+    );
+  }
+  const undetermined =
+    (counts.unjudgeable ?? 0) + (counts.timeout ?? 0) + (counts.interrupted ?? 0) + (counts.platformStop ?? 0);
+  if (undetermined * 2 > report.questions.length) {
+    console.error('[回归] unjudgeable/timeout 过半 —— 事件抽取有问题，回头修跑法再跑，这轮结果不可信');
+    process.exit(2);
+  }
+  // 落款来源混着来 = 这轮的 pass 有一半是"没声明完成但有动作"的宽松分支，判别力要打折
+  const fallback = report.questions.filter((r) => r.claimSource && r.claimSource !== 'runs.claim').length;
+  if (fallback) {
+    console.error(
+      `[回归] ${fallback} 题的落款只能从消息里判（[完成] 落库时被剥掉了）——`
+        + `这些题的 pass 可能虚高，升级后再跑一次才是真基线`,
+    );
+  }
+}
+
+main().catch((e) => {
+  console.error('[回归] 跑挂了：', e?.message ?? e);
+  process.exit(1);
+});

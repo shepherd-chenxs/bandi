@@ -47,7 +47,17 @@ import { poke as pokeHeartbeat } from '../hub/join.mjs';
  */
 function bindHubAccount(accountId, login) {
   const existing = store.hubLinkOf(accountId);
-  if (existing) return existing;
+  if (existing) {
+    /*
+     * 悬空绑定自愈（2026-11-22）：表里还有这行、可它指向的本机用户已经被删了。
+     * 老代码直接 `return existing`，后面 `getUser()` 拿到 null，就被判成
+     * 「账号在这台机器上被停用了」—— 403 E7004，而界面里根本没有这个人可以恢复，
+     * 那个人从此登不进这台机器（真踩：删冒烟账号留下的悬空行）。
+     * `deleteUser` 现在会连带清这张表，这里再兜一道：行是坏的，就丢掉重绑。
+     */
+    if (store.getUser(existing.userId)) return existing;
+    store.removeHubLink(accountId);
+  }
   const base = String(login ?? '').trim() || accountId;
   const name = store.hasUsers() && store.nameTaken(base) ? `${base}·${accountId}` : base;
   const user = store.createUser({ name });

@@ -1,5 +1,5 @@
 /**
- * 内置员工「崔老三」—— 这台机器上的系统管家。
+ * 内置员工「张三」（2026-11-22 用户改名，前名崔老三）—— 这台机器上的系统管家。
  *
  * ## 为什么要有他（第一性原理，2026-10-18 用户定的）
  *
@@ -28,7 +28,8 @@ import { roleSkills } from './roles.mjs';
 /*
  * 固定 id：seed 幂等就靠它（`personas.id` 是主键）。
  *
- * id 跟人走（2026-10-23 用户定）：这个名额现在是「崔老三」，id 就叫 `p-cuilaosan`。
+ * id 跟人走（2026-10-23 用户定）：这个名额现在是「张三」（2026-11-22 用户改名，前名崔老三），
+ * id 沿用 `p-cuilaosan` 不动 —— 改 id 要搬 13 张表的引用，名字不跟着 id 走。
  * 之前顶着「喜儿」时用过 `p-xier` —— 存量库由 `migrateStewardId()` 在 seed 前一次性
  * 搬到新 id（连同 13 张表里的引用），见下面那个函数。
  */
@@ -37,8 +38,8 @@ export const STEWARD_ID = 'p-cuilaosan';
 /** 旧库里内置名额的 id（喜儿时代的遗产）。只给 `migrateStewardId()` 用，别处别引。 */
 export const LEGACY_STEWARD_ID = 'p-xier';
 
-/** seed 会把他建成这个名字；之后用户改名，我们**不覆盖** */
-export const STEWARD_NAME = '崔老三';
+/** seed 会把他建成这个名字；存量库的名字由 `syncSteward` 刷成出厂值（2026-11-22 改名走的就是这条路） */
+export const STEWARD_NAME = '张三';
 
 /** 出厂岗位（身份三件之一；`syncSteward` 与建号共用同一个值） */
 export const STEWARD_ROLE = '系统管家';
@@ -63,7 +64,7 @@ export const STEWARD_AVATAR = 'p-cuilaosan.png';
  * （同 experts.mjs 的措辞治理，起因见那边注释）。平台层的对冲是
  * `dispatch.constitutionBlock()`（员工宪法，注入时排在身份之前）。
  */
-export const STEWARD_INSTRUCTIONS = `你是「崔老三」，这台机器上的系统管家。擅长：看服务/数据库/日志定位机器问题、帮雇主建改数字员工、把第一条流程和对话跑通。专长之外的活也接，先声明再照常做完。说话先结论再依据；机器现状每次现查，不凭记忆。`;
+export const STEWARD_INSTRUCTIONS = `你是「张三」，这台机器上的系统管家。擅长：看服务/数据库/日志定位机器问题、帮雇主建改数字员工、把第一条流程和对话跑通。专长之外的活也接，先声明再照常做完。说话先结论再依据；机器现状每次现查，不凭记忆。`;
 
 /**
  * 首轮注入的「机器现状」。

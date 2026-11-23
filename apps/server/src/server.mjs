@@ -12,6 +12,12 @@ import * as runs from './runs.mjs';
 import * as skills from './skills.mjs';
 import * as runtimes from './runtimes.mjs';
 import * as taskClaimAudit from './task-claim-audit.mjs';
+import * as criteriaAudit from './criteria-audit.mjs';
+// 经验簿（2026-11-22）：跨会话记住的口径与踩过的坑 —— 写入口径极窄，见 experience.mjs 文件头
+import * as experience from './experience.mjs';
+// 启动清账开关（2026-11-22）：回归实例与其子进程树共用同一个临时库，不能跑 reap
+import { shouldReapOnBoot } from './regression/settle.mjs';
+import { acquireInstanceLock } from './instance-lock.mjs';
 import * as freshness from './freshness.mjs';
 import * as externals from './externals.mjs';
 import * as plugins from './plugins.mjs';
@@ -647,7 +653,24 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-const reaped = store.reapStaleRuns();
+/*
+ * 启动清账只在「单实例独占这个库」时成立（2026-11-22 回归踩到，2026-11-23 落锁）：
+ * 回归集用一次性临时库，但 agentEnv() 会把 BANDI_DATA 传给员工 CLI；员工照岗位
+ * 判据跑 run-smokes 时，冒烟里测「服务启停」的用例会另起 server 实例、继承同一个库，
+ * 它一启动就 reapStaleRuns()，把回归实例**此刻正在跑**的那轮判成 interrupted。
+ *
+ * 以前只靠 `BANDI_SKIP_REAP=1` 沿 env 传下去，靠调用方自觉；现在先看实例锁：
+ * 数据目录已被另一个活着的实例占用 → 跳过清账与僵尸卡恢复（别动别人正在跑的活）。
+ * 真实 18787 是单实例，拿得到锁，行为与以前完全一致。细节见 instance-lock.mjs。
+ */
+const instance = acquireInstanceLock();
+if (!instance.sole) {
+  console.log(
+    `[实例锁] 数据目录已被另一个实例占用（pid ${instance.holder?.pid ?? '未知'}）——`
+      + ' 本次跳过启动清账与僵尸卡恢复，共库多实例别动别人的在跑轮次',
+  );
+}
+const reaped = instance.sole && shouldReapOnBoot() ? store.reapStaleRuns() : [];
 if (reaped.length) console.log(`清理了 ${reaped.length} 条被中断的运行`);
 
 /*
@@ -664,12 +687,16 @@ if (reaped.length) console.log(`清理了 ${reaped.length} 条被中断的运行
  * 描述补一行「[运行结束] …」），但 `notify:false`：这是上次开机的旧账，不该在启动时
  * 挨个去唤醒建卡人的会话（每个都是一次真派活）。一条失败不能拦住开机 —— 全部包在 try 里。
  */
-try {
-  const { fixed, dropped } = recoverInterruptedCards();
-  if (fixed.length) console.log(`[中断恢复] ${fixed.length} 张卡停在「进行中」但运行已结束，已按结果收尾：${fixed.join('、')}`);
-  if (dropped.length) console.log(`[中断恢复] ${dropped.length} 张卡挂着的运行记录已不存在，摘掉 runId：${dropped.join('、')}`);
-} catch (e) {
-  console.error(`[中断恢复] 僵尸卡收尾失败：${e?.message ?? e}`);
+if (instance.sole) {
+  try {
+    const { fixed, dropped } = recoverInterruptedCards();
+    if (fixed.length) console.log(`[中断恢复] ${fixed.length} 张卡停在「进行中」但运行已结束，已按结果收尾：${fixed.join('、')}`);
+    if (dropped.length) console.log(`[中断恢复] ${dropped.length} 张卡挂着的运行记录已不存在，摘掉 runId：${dropped.join('、')}`);
+  } catch (e) {
+    console.error(`[中断恢复] 僵尸卡收尾失败：${e?.message ?? e}`);
+  }
+} else {
+  // 共库多实例：这轮"僵尸卡"可能是别人正在跑的活，跳过（与上面的启动清账同一条理由）。
 }
 
 // 工作流：内建模板保证存在；**把引擎挂在 run 完成点上** —— 推进由平台做，不靠数字员工自觉
@@ -680,7 +707,8 @@ prReview.ensurePrReviewTemplate();
 prCreate.ensurePrDeliveryTemplate();
 // 自主交付流程（2026-11-13）：保证内建模板存在并发布，全程无人工拍板节点
 selfDelivery.ensureSelfDeliveryTemplate();
-// 出厂就有一个人能说话：内置系统管家「崔老三」（2026-10-23 前是秘书「喜儿」；幂等，已有则只补 builtin 标记）
+// 出厂就有一个人能说话：内置系统管家「张三」（2026-11-22 用户改名，前名崔老三；2026-10-23 前是秘书「喜儿」；幂等，已有则只补 builtin 标记；
+// 存量库的名字由下面的 syncSteward 刷成新出厂值 —— 2026-10-23 喜儿→崔老三的名额换人走的同一条路）
 // **部署即装**（2026-10-22）：不管谁部署、用什么方式起（安装包 / 源码 start.cmd /
 // systemd / 开机自启），服务起来那一刻「bandi」全局命令就在。幂等 —— 装好了什么都不写。
 // 闸门与实现见 cli-install.mjs（BANDI_DATA 显式指定 = 测试/沙箱，默认不动真实用户目录）。
@@ -765,14 +793,29 @@ try {
 } catch (err) {
   console.log(`审计归档清理失败（不影响启动）：${err?.message ?? err}`);
 }
-runs.onRunFinish(workflows.onAgentRunFinished);
+runs.onRunFinish(workflows.onAgentRunFinished, '工作流推进');
 // 任务卡同理（2026-10-17）：运行跑完/被停/跑挂了，卡不能永远挂在「进行中」——
 // 完成 → 待验收；人停的 → 已阻塞、跑挂的 → 失败（都不回「待办」，否则会被自动重新派活 → 死循环）
-runs.onRunFinish(onTaskRunFinished);
+runs.onRunFinish(onTaskRunFinished, '看板卡收尾');
 // 台账核对（2026-11-14 用户拍板）：回话声称的卡号 / 状态和台账对，不符就跟平台更正。
 // 注册在 onTaskRunFinished **之后**（finishHooks 先来先到）—— 先让 [完成] 标记把卡状态
 // 流转完再核对，避免"员工刚声明交付、卡还在待验收"的假阳性。机制见 task-claim-audit.mjs。
-runs.onRunFinish((run) => taskClaimAudit.reconcile({ run }));
+runs.onRunFinish((run) => taskClaimAudit.reconcile({ run }), '台账核对');
+// 判据核对（2026-11-22，缺口②的执行侧）：这个岗声称完成，判据要求的动作到底做没做。
+// 必须注册在台账核对**之后** —— 先让 [完成] 把卡流转完，再看动作够不够（理由见 criteria-audit.mjs）。
+runs.onRunFinish((run) => criteriaAudit.reconcile({ run }), '判据核对');
+/*
+ * 经验簿采集（2026-11-22，缺口①）：把上一行 / 上两行**已经写进信箱的核对结论**抄成他的"坑"。
+ * 必须排在两个核对之后（先有结论再采集，一个来源两处读）；它不判任何事、不抛错，
+ * 采集失败只打一行日志 —— 收尾链路不能被一段账卡住。见 experience.mjs。
+ */
+runs.onRunFinish((run) => experience.harvest({ run }), '经验簿采集');
+/*
+ * 长期记忆的事实层（2026-11-23，缺口①补完）：只从"跑通"的那一轮的 run_events 里抽
+ * 验证命令 / 重启方式 / 常改文件（见 experience.factsFromEvents）。排在收尾链最后，
+ * 不判事、不抛错；它与经验簿各记各的，谁失败都不影响对方。
+ */
+runs.onRunFinish((run) => experience.harvestFacts({ run }), '长期记忆采集');
 // 群里 @ 多人的排队（2026-10-24）：会话一次只跑一个 —— 前一个收尾，队里下一个立刻补上。
 // 挂在流程/任务卡钩子之后：它们推进的是各自 exec 会话的活，跟群排队互不挡道。
 runs.onRunFinish((run) => {
@@ -781,7 +824,7 @@ runs.onRunFinish((run) => {
   } catch (e) {
     console.error('[群聊] 排队补派失败：', e?.message ?? e);
   }
-});
+}, '群里排队');
 // 进程重启会把在跑的执行判死（reapStaleRuns）。这里只识别“上次确实在跑”的步骤，
 // 恢复逻辑在下方统一处理，避免先改成别的状态再把证据洗掉。
 const stuckTasks = store

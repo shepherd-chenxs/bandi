@@ -86,12 +86,20 @@ export function createRun({ conversationId, runtime, personaId = null, model = n
 }
 
 
-export function finishRun(id, { status, exitCode = null, error = null, usage = null }) {
-  db.prepare('UPDATE runs SET status = ?, exitCode = ?, error = ?, usage = ?, endedAt = ? WHERE id = ?').run(
+/**
+ * 收尾落库。`claim` = 这一轮的交付落款（done / blocked / unclaimed / silent），
+ * **由调用方从 finalText 原文判好传进来** —— 消息落库时那个 `[完成]` 会被剥掉，
+ * 事后从 messages 判就是永远 unclaimed（2026-11-22 回归量具踩过，见 db.mjs 版本 15）。
+ */
+export function finishRun(id, { status, exitCode = null, error = null, usage = null, claim = null }) {
+  db.prepare(
+    'UPDATE runs SET status = ?, exitCode = ?, error = ?, usage = ?, claim = COALESCE(?, claim), endedAt = ? WHERE id = ?',
+  ).run(
     status,
     exitCode,
     error,
     usage ? JSON.stringify(usage) : null,
+    claim,
     nowIso(),
     id,
   );
@@ -477,7 +485,14 @@ export function reapStaleRuns() {
   const stale = db.prepare("SELECT * FROM runs WHERE status = 'running'").all();
   for (const r of stale) {
     const note = '服务重启，这次运行被中断';
-    db.prepare("UPDATE runs SET status = 'failed', error = ?, endedAt = ? WHERE id = ?").run(note, nowIso(), r.id);
+    /*
+     * `claim = 'interrupted'`（2026-11-22）：这一轮**没走到收尾**，落款根本没产生。
+     * 写 null 会让下游误以为"不知道"，写成 'silent' 更坏 —— 那是"跑完了但没说话"，
+     * 会被判据当成合法的"诚实未完成"。回归量具靠这个值把它单列成"不作数"，
+     * 而不是塞进 pass（2026-11-22 第二次跑：员工自己重启了服务端，三题被这么收掉，
+     * 量具却按"没声明完成但有动作"判了 pass）。
+     */
+    db.prepare("UPDATE runs SET status = 'failed', error = ?, claim = 'interrupted', endedAt = ? WHERE id = ?").run(note, nowIso(), r.id);
     db.prepare("UPDATE conversations SET status = 'failed', updatedAt = ? WHERE id = ?").run(nowIso(), r.conversationId);
 
     /*

@@ -110,6 +110,21 @@ export function getProjectTaskByRunId(runId) {
 }
 
 /**
+ * 这场会话是哪张卡的（2026-11-22，缺口①：会话轮换要把"这张卡干到哪了"交接过去）。
+ *
+ * 一个会话只挂一张卡（2026-11-22 实查库里没有一对多），所以按 conversationId 取一条。
+ * 派活时 `opts.card` 里没有 id（三个入口都只传了标题/描述/状态），
+ * 靠会话反查比给每个入口加字段更不容易漏。
+ */
+export function getProjectTaskByConversation(conversationId) {
+  if (!conversationId) return null;
+  return (
+    db.prepare('SELECT * FROM project_tasks WHERE conversationId = ? ORDER BY updatedAt DESC LIMIT 1').get(conversationId) ??
+    null
+  );
+}
+
+/**
  * 按「流程的一步」找它那张卡（`sourceKey = flow:<runId>:<nodeId>:<visit>`，见 ensureTaskCardForStep）。
  * 有索引不需要（这张表最多几百行，走主键扫描也就一瞬）；真要慢了再加。
  */

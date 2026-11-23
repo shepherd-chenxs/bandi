@@ -49,6 +49,40 @@ export function listMessages(conversationId) {  return db
 }
 
 /**
+ * 最后 n 条消息（2026-11-22，会话交接用）。
+ *
+ * 为什么不在调用方 `listMessages(...).slice(-8)`：那是**把整个会话读出来再扔掉 99%**。
+ * 卡评论区那种会话能攒上千条、每条带正文大字段，而轮换偏偏发生在"会话已经很长"的时候 ——
+ * 越贵的时候越这么读，正好撞在最痛的点上。
+ */
+export function tailMessages(conversationId, n = 8) {
+  const limit = Math.min(Math.max(Number(n) || 8, 1), 50);
+  return db
+    .prepare(
+      `SELECT * FROM (
+         SELECT m.rowid, m.conversationId, m.role, m.text, m.personaId, m.createdAt, ${SENDER_NAME}
+           FROM messages m ${SENDER_JOIN}
+          WHERE m.conversationId = ? ORDER BY m.rowid DESC LIMIT ?
+       ) ORDER BY rowid`,
+    )
+    .all(conversationId, limit);
+}
+
+/**
+ * 这个人在这个会话里**最后一条回话**（2026-11-22，缺口①：交接要带上"上次落款"）。
+ *
+ * 只取一条、只取正文——交接块要的是 `[完成]` / `[受阻]` 这种协议值，
+ * 不是把整段聊天再读一遍（listMessages 会把整个会话捞出来，长会话很贵）。
+ */
+export function lastAssistantMessage(conversationId, personaId = null) {
+  if (!conversationId) return null;
+  const sql = personaId
+    ? "SELECT rowid, text, personaId, createdAt FROM messages WHERE conversationId = ? AND role = 'assistant' AND personaId = ? ORDER BY rowid DESC LIMIT 1"
+    : "SELECT rowid, text, personaId, createdAt FROM messages WHERE conversationId = ? AND role = 'assistant' ORDER BY rowid DESC LIMIT 1";
+  return (personaId ? db.prepare(sql).get(conversationId, personaId) : db.prepare(sql).get(conversationId)) ?? null;
+}
+
+/**
  * 某一步流程的往来消息（按 taskId 归属，2026-10-26 起派活都带这个标记）。
  * 给 `viewTask`（apps/server/src/workflows.mjs）用：一个任务一次点查，
  * 别把**整个会话**的消息（含正文大字段）捞出来再在 JS 里筛掉 99%。

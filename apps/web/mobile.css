@@ -1345,6 +1345,20 @@
     border-bottom: 1px solid var(--line);
   }
 
+  /* 技能卡弹窗（#skViewDlg）：抽屉里塞不下左右两栏（左卡 / 右挂载），竖排 ——
+     照 sch-dlg 竖排同款：分界竖线转 90° 贴在挂载栏顶上。
+     style.css 里那份也是 ID 选择器，这里靠本文件后加载压过它。
+     桌面的定高在抽屉里会撑出半截空壳 —— 高度还给内容（上限交给 dialog[open] 的 82vh）。 */
+  #skViewDlg[open] { height: auto; }
+  #skViewDlg .skv-cols { flex-direction: column; gap: 0; }
+  #skViewDlg .skv-side {
+    flex: 0 0 auto;
+    margin-top: 14px;
+    padding: 14px 0 0;
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+
   /*
    * 建卡弹窗（#taskDlg）→ **全屏工作纸**（2026-11-03 实机："手机建卡没有完成按钮"）。
    *

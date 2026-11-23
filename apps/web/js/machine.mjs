@@ -174,7 +174,7 @@ export function rich(s) {
 
 
 
-export function askDialog({ title, body = '', field = false, value = '', placeholder = '', check = null, ok = '确定', danger = false, big = false }) {
+export function askDialog({ title, body = '', field = false, value = '', placeholder = '', list = '', check = null, ok = '确定', danger = false, big = false }) {
   const dlg = $('askDlg');
   /*
    * 大按钮档（2026-11-07 手机实机截图：「取消和退出按钮做大一些」）。
@@ -192,6 +192,12 @@ export function askDialog({ title, body = '', field = false, value = '', placeho
   const input = $('askInput');
   input.value = value;
   input.placeholder = placeholder;
+  /*
+   * 建议列表（2026-11-22，部门用）：传 datalist 的 id 就挂上，不传就摘掉 ——
+   * 这个 input 是全站共用的，上一次调用挂着的 list 不能漏到下一次（否则改群名时会弹出部门名）。
+   */
+  if (list) input.setAttribute('list', list);
+  else input.removeAttribute('list');
   // 勾选框（可选）：让"要不要走镜像"变成一个勾，而不是让用户去填地址
   // ⚠️ 用 `block` + 左对齐：弹窗那个 <form> 本身是居中的，勾选框要是只顾着 flex
   // 就会被摆到文字上面或右边去（这个位置我调了两次才落对）

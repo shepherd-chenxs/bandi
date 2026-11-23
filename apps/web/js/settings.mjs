@@ -2,7 +2,7 @@
  * 2026-10-22 由 app.js（15537 行单文件）拆出，原生 ESM、无打包器；逻辑逐字搬运。 */
 import { esc, setRoute, setTheme, toast } from './shell.mjs';
 import { api, dt, failHtml, initial, post, showFail, wireDialogHead } from './ui.mjs';
-import { headRow, renderPlugins, renderRuntimes, rtLoading } from './connectors.mjs';
+import { headRow, renderConnectors, renderPlugins, renderRuntimes, rtLoading } from './connectors.mjs';
 import { openRemotePage, setPluginRerender } from './experts.mjs';
 import { askText, confirmDo } from './machine.mjs';
 import { renderList, showView } from './contacts.mjs';
@@ -949,7 +949,19 @@ export const SETTINGS_GROUPS = [
     icon: '<path d="M7 1.8l1.3 3.9L12.2 7 8.3 8.3 7 12.2 5.7 8.3 1.8 7l3.9-1.3z"/>',
     items: [
       ['plugins', '插件', '扩展点'],
-      ['skills', '技能', '给数字员工用的能力包'],
+      /* 「连接器」独立成节（2026-11-22 用户："加个子菜单，连接器。把宝螺移动过去"）：
+       * 原来连接器和界面插件、独立软件挤在「插件」一面卡墙里（当时用户说不要区分）——
+       * 但现在连接器越装越多，跟"装到班底里的界面插件""自己管自己的独立软件"混在一起，
+       * 找一条 MCP 来源要翻整个卡墙。拆开：插件 = 界面插件 + 独立软件；连接器 = MCP 来源。 */
+      ['connectors', '连接器', 'MCP 与本机能力'],
+      /* 「技能」不再单独成节（2026-11-22 用户拍板）：
+       *   「skill 只是一个过渡期的产品，早晚会被淘汰掉……不需要显示这个模块，主要是以专家的
+       *     方式体现。我需要某个 skill 的能力，直接在对话窗口让某个专家挂上，不再需要从一个
+       *     单独的入口来操作。」
+       * 所以这里只撤**入口**：技能数据、专家/员工身上的挂载、技能卡弹窗全都留着（专家详情要显示
+       * 他挂了哪些技能）。openSettings('skills') 的渲染分支也留着 —— 老深链接和
+       * shell.mjs 的 `skill` 路由还能到，只是左栏不再列。
+       * ⚠️ 别再把它加回来：技能不是一种"要管理的东西"，是专家的一项能力。 */
     ],
   },
   {
@@ -1033,6 +1045,7 @@ export function openSettings(section) {
   renderList();
   if (S.settingsSection === 'runtimes') return renderRuntimes();
   if (S.settingsSection === 'plugins') return renderPlugins();
+  if (S.settingsSection === 'connectors') return renderConnectors();
   if (S.settingsSection === 'skills') return renderSkillCards();
   if (S.settingsSection === 'security') return renderSecurity();
   if (S.settingsSection === 'about') return renderAbout();

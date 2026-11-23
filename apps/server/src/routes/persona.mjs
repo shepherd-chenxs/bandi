@@ -12,6 +12,8 @@ import * as runtimes from '../runtimes.mjs';
 import { personaRoots } from '../dispatch.mjs';
 import { personaTasks } from '../project-tasks.mjs';
 import * as experts from '../experts.mjs';
+// 经验簿（2026-11-22）：口径与踩过的坑 —— 写入必过它，别在路由里直接拼 store.addPersonaNote
+import * as experience from '../experience.mjs';
 // 岗位与权限（2026-11-11）：岗位是内置清单，roleKey 是权限判据 —— 见 roles.mjs
 import * as roles from '../roles.mjs';
 // 飞书员工级配置（2026-10-29）：删员工要顺手清掉他的飞书配置并停通道。
@@ -20,28 +22,8 @@ import * as feishu from '../feishu.mjs';
 
 const AVATAR_FILE = /^[A-Za-z0-9._-]+\.(png|jpe?g|webp)$/i;
 
-/**
- * 锁定话术（2026-10-22 收编内置员工时统一；2026-10-23 名额上是崔老三，话术跟着名额走、不带人名）。
- *
- * 同一组闸口，两种来源：
- *   - expert ：专家库雇来的（p-expert-<key>），随**专家包**固定，出路是解聘后自建；
- *   - builtin：出厂的（崔老三），随**平台**固定，出路是另建一个员工。
- * 判据只有 experts.lockKindOf 一处；这里只负责"怎么说人话"。
- */
-const LOCK_MSG = {
-  expert: {
-    who: '雇佣员工',
-    skills: '雇佣员工的技能随专家包固定',
-    identity: '雇佣员工的名字与职责身份随专家包固定',
-    hint: '想定制就解聘后自建一个员工',
-  },
-  builtin: {
-    who: '内置员工',
-    skills: '内置员工的技能随平台固定',
-    identity: '内置员工的名字与职责身份随平台固定',
-    hint: '想按自己的需要定制，就另建一个员工',
-  },
-};
+/* 锁定话术 2026-11-22 搬到 experts.mjs 导出（routes/skill.mjs 也要用，各写一份必错） */
+const { LOCK_MSG } = experts;
 
 /** 员工详情与配置 */
 export async function handlePersona(req, res, url) {
@@ -51,6 +33,12 @@ export async function handlePersona(req, res, url) {
   const skillOne = /^\/api\/personas\/([^/]+)\/skills\/([^/]+)$/.exec(url.pathname);
   const runtimeSkills = /^\/api\/personas\/([^/]+)\/runtime-skills$/.exec(url.pathname);
   const personaTasksOf = /^\/api\/personas\/([^/]+)\/tasks$/.exec(url.pathname);
+  // 经验簿（2026-11-22，缺口①）：这个人的口径与踩过的坑
+  const notesOf = /^\/api\/personas\/([^/]+)\/notes$/.exec(url.pathname);
+  const noteOne = /^\/api\/personas\/([^/]+)\/notes\/([^/]+)$/.exec(url.pathname);
+  // 长期记忆的事实层（2026-11-23，缺口①补完）：平台从跑通轮次里抽出的命令/常改文件
+  const factsOf = /^\/api\/personas\/([^/]+)\/facts$/.exec(url.pathname);
+  const factOne = /^\/api\/personas\/([^/]+)\/facts\/([^/]+)$/.exec(url.pathname);
 
   // 删员工：级联清关系数据；是他的群助手就先拦下（换人再删）
   // （one 的正则到行尾为止，所以只可能命中 /api/personas/<id> 这一种路径）
@@ -187,6 +175,103 @@ export async function handlePersona(req, res, url) {
     const persona = store.getPersona(decodeURIComponent(personaTasksOf[1]));
     if (!persona) return fail(res, 404, 'E2008', '员工不存在');
     return sendJson(res, 200, personaTasks(persona));
+  }
+
+  /*
+   * 经验簿（2026-11-22，缺口①）：GET 看他记住了什么 / POST 记一条口径 / DELETE 删一条。
+   *
+   * **写入口径极窄**，这是故意的：
+   *   · 只收 kind='repo'（团队口径）与 'pitfall'（踩过的坑），第三类一律 400；
+   *   · 不收批量 —— 一次灌十条等于又造了一个垃圾上下文，而这块的配额只有 6+5 条进上下文；
+   *   · 正文上限在 store 里（300 字）：超过 300 字那不是一条口径，是一份文档，该进 docs/。
+   * `source` 由服务端定：接口来的都是 'manual'（平台自动记的那批由 experience.harvest 写，
+   * 不从这里进）。这样"谁说的"永远分得清。
+   */
+  if (notesOf) {
+    const persona = store.getPersona(decodeURIComponent(notesOf[1]));
+    if (!persona) return fail(res, 404, 'E2008', '员工不存在');
+
+    if (req.method === 'GET') {
+      const notes = store.listPersonaNotes(persona.id, { limit: 200 });
+      return sendJson(res, 200, {
+        persona: { id: persona.id, name: persona.name },
+        notes,
+        limit: store.MAX_NOTES_PER_PERSONA,
+      });
+    }
+
+    if (req.method === 'POST') {
+      const body = await readBody(req);
+      const text = String(body.text ?? body.note ?? '').trim();
+      if (!text) return fail(res, 400, 'E2027', '记什么？正文不能为空（一句话说清这条口径）');
+      const kind = String(body.kind ?? 'repo').trim() || 'repo';
+      try {
+        const { note, merged } = experience.remember({ personaId: persona.id, kind, text, source: 'manual' });
+        return sendJson(res, merged ? 200 : 201, { note, merged });
+      } catch (e) {
+        return fail(res, 400, 'E2027', e?.message ?? '经验簿写不进去');
+      }
+    }
+
+    if (req.method === 'DELETE') {
+      // ?all=1 才是"整个忘掉"，要显式写 —— 免得一个手滑把攒了半年的口径清空
+      if (url.searchParams.get('all') !== '1') {
+        return fail(res, 400, 'E2040', '删一条用 DELETE /api/personas/:id/notes/:noteId；清空要显式加 ?all=1');
+      }
+      const removed = store.deletePersonaNotes(persona.id);
+      return sendJson(res, 200, { removed });
+    }
+  }
+
+  if (req.method === 'DELETE' && noteOne) {
+    const persona = store.getPersona(decodeURIComponent(noteOne[1]));
+    if (!persona) return fail(res, 404, 'E2008', '员工不存在');
+    const noteId = decodeURIComponent(noteOne[2]);
+    const note = store.getPersonaNote(noteId);
+    // 不跨人删：只能删自己名下那条（id 撞上也得对得上人）
+    if (!note || note.personaId !== persona.id) return fail(res, 404, 'E2040', '经验簿里没有这一条');
+    store.deletePersonaNote(noteId);
+    return sendJson(res, 200, { removed: 1, id: noteId });
+  }
+
+  /*
+   * 长期记忆的事实层（2026-11-23，缺口①补完）：GET 看平台记下了什么 / DELETE 删一条或清空。
+   *
+   * 这里**没有 POST**：事实只从跑通那一轮的 run_events 里抽（experience.harvestFacts），
+   * 人给的东西属于"口径"，走上面 notes 的入口。分开是为了让"谁说的"永远分得清 ——
+   * 两条路要是混成一个接口，过半年就没人知道某条到底是谁记的。
+   */
+  if (factsOf) {
+    const persona = store.getPersona(decodeURIComponent(factsOf[1]));
+    if (!persona) return fail(res, 404, 'E2008', '员工不存在');
+
+    if (req.method === 'GET') {
+      const facts = store.listPersonaFacts(persona.id, { limit: store.MAX_FACTS_PER_PERSONA });
+      return sendJson(res, 200, {
+        persona: { id: persona.id, name: persona.name },
+        facts,
+        limit: store.MAX_FACTS_PER_PERSONA,
+      });
+    }
+
+    if (req.method === 'DELETE') {
+      if (url.searchParams.get('all') !== '1') {
+        return fail(res, 400, 'E2041', '删一条用 DELETE /api/personas/:id/facts/:factId；清空要显式加 ?all=1');
+      }
+      const removed = store.deletePersonaFacts(persona.id);
+      return sendJson(res, 200, { removed });
+    }
+  }
+
+  if (req.method === 'DELETE' && factOne) {
+    const persona = store.getPersona(decodeURIComponent(factOne[1]));
+    if (!persona) return fail(res, 404, 'E2008', '员工不存在');
+    const factId = decodeURIComponent(factOne[2]);
+    const fact = store.getPersonaFact(factId);
+    // 不跨人删：只能删自己名下那条
+    if (!fact || fact.personaId !== persona.id) return fail(res, 404, 'E2041', '长期记忆里没有这一条');
+    store.deletePersonaFact(factId);
+    return sendJson(res, 200, { removed: 1, id: factId });
   }
 
   if ((req.method === 'PUT' || req.method === 'PATCH') && one) {

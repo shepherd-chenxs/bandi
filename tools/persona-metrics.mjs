@@ -35,6 +35,10 @@ const one = (sql, ...p) => db.prepare(sql).get(...p);
 
 const rounds = (x, d = 1) => (x == null ? 0 : Number(Number(x).toFixed(d)));
 const pct = (n, total) => (total ? rounds((n / total) * 100) : 0);
+/** 表在不在：新增的表可能还没被哪次启动补上（这里是只读脚本，不能自己去建表） */
+const hasTable = (name) => !!one("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", name);
+/** 判据核对是"最近的账"：30 天窗口够看趋势，又不会被陈年记录淹没 */
+const SINCE_30D = new Date(Date.now() - 30 * 86400_000).toISOString();
 
 /* ---------------------------------------------------------------- 回话 */
 const msgs = all("SELECT text, personaId FROM messages WHERE role = 'assistant'");
@@ -86,6 +90,57 @@ const summary = {
          FROM runs r LEFT JOIN personas p ON p.id = r.personaId GROUP BY who ORDER BY n DESC`,
     ),
   },
+  /*
+   * 判据核对（2026-11-22，缺口②的可比数）：**判据只在有人声称完成时核**，所以它量的不是
+   * "干得好不好"，而是"声称完成时动作到位没有"—— 这正是 persona 汇报指标（字数/首行/Next:，
+   * 全是文风）量不到的那一半。判据未过 = 一轮声称完成的 run 里动作没发生（进信箱那些）。
+   * 从 notices 的 dedupeKey（'criteria:<runId>'）数，不重算事件：一张账只有一处写。
+   */
+  criteria: {
+    total: one("SELECT COUNT(*) AS n FROM notices WHERE dedupeKey LIKE 'criteria:%'").n,
+    last30: one("SELECT COUNT(*) AS n FROM notices WHERE dedupeKey LIKE 'criteria:%' AND createdAt >= ?", SINCE_30D).n,
+    unread: one("SELECT COUNT(*) AS n FROM notices WHERE dedupeKey LIKE 'criteria:%' AND readAt IS NULL").n,
+    byPersona: all(
+      `SELECT COALESCE(p.name, '(未知)') AS who, COUNT(*) AS n
+         FROM notices nt LEFT JOIN personas p ON p.id = nt.personaId
+        WHERE nt.dedupeKey LIKE 'criteria:%' GROUP BY who ORDER BY n DESC`,
+    ),
+  },
+  /*
+   * 经验簿（2026-11-22，缺口①的可比数）。它量的不是"记了多少字"，而是**跨会话的积累有没有发生**：
+   *   · 坑：平台核出来的错，反复犯会合并成一条（hits 涨）—— 所以"坑的条数不涨、hits 在涨"
+   *     说明提醒没起作用；"条数也在涨"说明在犯新类型的错。这两种读法完全不同。
+   *   · 口径：只能人给（接口/CLI）。一直是 0 = 这条链路没人用，不是"没问题"。
+   */
+  experience: hasTable('persona_notes')
+    ? {
+        total: one('SELECT COUNT(*) AS n FROM persona_notes').n,
+        repo: one("SELECT COUNT(*) AS n FROM persona_notes WHERE kind = 'repo'").n,
+        pitfall: one("SELECT COUNT(*) AS n FROM persona_notes WHERE kind = 'pitfall'").n,
+        people: one('SELECT COUNT(DISTINCT personaId) AS n FROM persona_notes').n,
+        byPersona: all(
+          `SELECT COALESCE(p.name, '(未知)') AS who,
+                  SUM(CASE WHEN n.kind = 'repo' THEN 1 ELSE 0 END) AS repo,
+                  SUM(CASE WHEN n.kind = 'pitfall' THEN 1 ELSE 0 END) AS pit,
+                  SUM(n.hits) AS hits
+             FROM persona_notes n LEFT JOIN personas p ON p.id = n.personaId
+            GROUP BY who ORDER BY pit DESC, repo DESC`,
+        ),
+        top: all(
+          `SELECT COALESCE(p.name, '(未知)') AS who, n.kind, n.text, n.hits
+             FROM persona_notes n LEFT JOIN personas p ON p.id = n.personaId
+            ORDER BY n.hits DESC, n.updatedAt DESC LIMIT 5`,
+        ),
+        // 事实层（2026-11-23 补）：平台从跑通轮次里抽的，不是人写的 —— 一直是 0 = 还没跑通一轮
+        facts: hasTable('persona_facts')
+          ? {
+              total: one('SELECT COUNT(*) AS n FROM persona_facts').n,
+              people: one('SELECT COUNT(DISTINCT personaId) AS n FROM persona_facts').n,
+              byKind: all('SELECT kind, COUNT(*) AS n, SUM(hits) AS hits FROM persona_facts GROUP BY kind'),
+            }
+          : { total: 0, people: 0, byKind: [], missing: true },
+      }
+    : { total: 0, repo: 0, pitfall: 0, people: 0, byPersona: [], top: [], facts: { total: 0, people: 0, byKind: [] }, missing: true },
 };
 
 if (asJson) {
@@ -112,6 +167,41 @@ console.log(`\n运行 ${runs.total} 次 · 失败 ${runs.failed} 次（${pct(run
 for (const p of runs.byPersona) {
   if (!p.fail && !p.ok) continue;
   console.log(`  ${p.who}\t总 ${p.n}\t完成 ${p.ok}\t失败 ${p.fail}${p.n ? `（${pct(p.fail, p.n)}%）` : ''}`);
+}
+
+/*
+ * 判据核对：**这里才是"专业度"的可比数**。上面那些（字数 / 首行 / Next:）量的是汇报文风，
+ * 判据量的是"声称完成时，这个岗位要求跑的那件事到底跑了没有"。
+ */
+const crit = summary.criteria;
+console.log(`\n判据核对（按工具事件判，不看回话怎么写）：未过 ${crit.total} 轮 · 近 30 天 ${crit.last30} 轮 · 未读 ${crit.unread}`);
+if (!crit.total) {
+  console.log('  （还没有记录：判据只在有人声称完成时核；没声称过完成就没有账）');
+} else {
+  for (const p of crit.byPersona) console.log(`  ${p.who}\t未过 ${p.n} 轮`);
+}
+
+/*
+ * 经验簿：跨会话的积累有没有真的发生。读法见上面 summary 里的注释 ——
+ * 「坑的条数不涨、hits 在涨」= 提醒没拦住；「口径一直是 0」= 这条链路没人用。
+ */
+const xp = summary.experience;
+console.log(`\n经验簿：${xp.total} 条（口径 ${xp.repo} · 坑 ${xp.pitfall}）· ${xp.people} 人有过记录`);
+const fc = xp.facts ?? {};
+if (!xp.missing) {
+  const kindText = (fc.byKind ?? []).map((k) => `${k.kind} ${k.n}`).join(' · ') || '空';
+  console.log(`长期记忆事实：${fc.total ?? 0} 条（${kindText}）· ${fc.people ?? 0} 人`);
+}
+if (xp.missing) {
+  console.log('  （库里还没这张表：启动过一次服务就会自动补上）');
+} else if (!xp.total) {
+  console.log('  （空的：口径要人给（bandi note add），坑要平台核出来 —— 没声称过完成就没有坑）');
+} else {
+  for (const p of xp.byPersona) console.log(`  ${p.who}\t口径 ${p.repo ?? 0} · 坑 ${p.pit ?? 0}\t累计被核出 ${p.hits ?? 0} 次`);
+  if (xp.top.length) {
+    console.log('  最常犯的：');
+    for (const t of xp.top) console.log(`    ${t.who}\t×${t.hits}\t${String(t.text ?? '').slice(0, 60)}`);
+  }
 }
 console.log('\n（基线参考：2026-11-09 检修前 · 回话均 260 字、>500 字 10.5%、Next: 31.5%、失败 40/174）');
 db.close();

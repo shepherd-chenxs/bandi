@@ -411,6 +411,9 @@ export function startRun({ thread, member, task, standing = null, watermark = 0,
     conversationId: thread.id,
     personaId,
     projectId,
+    // 在哪个仓库根上干的活：收尾时抽"验证命令 / 常改文件"要是按仓库隔离的（见 experience.harvestFacts）。
+    // 只放在内存对象上 —— 事实采集本来就在收尾时同步做完，不需要落库重建。
+    root: member.cwd ?? null,
     runtime,
     runtimeId: rt?.id ?? null,
     // 这次跑的是哪个模型（界面要显示它），以及"从哪来的"（员工绑的 / CLI 默认）
@@ -1101,8 +1104,9 @@ export function requestStop(runId) {
  * 工作流引擎靠它推进流程（`workflows.onAgentRunFinished`）。
  */
 const finishHooks = [];
-export function onRunFinish(fn) {
-  finishHooks.push(fn);
+export function onRunFinish(fn, label = '') {
+  // label 只在钩子抛错时用于定位（匿名箭头函数没有可读的 fn.name）。
+  finishHooks.push({ fn, label: label || fn?.name || '未命名钩子' });
 }
 
 /**
@@ -1266,7 +1270,18 @@ function finish(run, { status, exitCode = null, error = null, usage = null, elap
     persistReply(run, run.finalText, replyMeta({ stopped: status === 'stopped' }));
   }
 
-  store.finishRun(run.id, { status, exitCode, error, usage });
+  store.finishRun(run.id, {
+    status,
+    exitCode,
+    error,
+    usage,
+    /*
+     * 交付落款（2026-11-22）：**在这里、按原文判一次并存下来**。上面 persistReply 已经把
+     * `[完成]` 从落库的消息里剥掉了（那是给平台的机器信号，不进界面），事后从 messages
+     * 判不出来 —— 判据核对、回归量具都读这一列，别再各自去猜。
+     */
+    claim: claimOf(run.finalText ?? run.streamedText ?? ''),
+  });
   /*
    * 空回话不装作「完成」（2026-11-11 实报）：run 自身状态如实记「完成」（进程正常退出），
    * 但**会话**上什么都没交回来 → 标「已阻塞」，头部的状态胶囊不再显示绿色「完成」。
@@ -1284,10 +1299,17 @@ function finish(run, { status, exitCode = null, error = null, usage = null, elap
 
   // 钩子出错不能影响执行本身的收尾 —— 否则一条流程的推进逻辑会把发言也搞挂
   run.usageRecord = usage ?? null; // 收尾钩子要判"是不是被预算掐的"（project-tasks 的 endNoteOf）
-  for (const fn of finishHooks) {
+  for (const { fn, label } of finishHooks) {
     try {
       fn(run);
-    } catch { /* 忽略 */ }
+    } catch (err) {
+      /*
+       * 2026-11-23：以前这里是空 catch —— 钩子一抛错就静默消失（流程不推进、卡不
+       * 收尾、判据不核对），事后连"哪一环挂了"都查不到。只记日志，不改收尾状态、
+       * 不写 run_events（判据只看 tool 事件，别让日志污染量具）。
+       */
+      console.error(`[收尾钩子] ${label} 出错（run ${run.id}，status ${status}）：${err?.stack ?? err}`);
+    }
   }
 
   run.done = {

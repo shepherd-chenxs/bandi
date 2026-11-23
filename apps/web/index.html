@@ -336,6 +336,10 @@
       <div class="row-label">模型</div>
       <div id="peerModelMount"></div>
     </div>
+    <div class="form-row peer-memory-row">
+      <div class="row-label">长期记忆</div>
+      <div id="peerMemoryMount" class="peer-memory"></div>
+    </div>
     <div class="dlg-actions">
       <button type="button" value="cancel">关闭</button>
     </div>
@@ -369,6 +373,45 @@
     <div class="dlg-actions">
       <button type="button" value="cancel">取消</button>
       <button class="primary" id="nSkillOk" value="ok">创建</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- 技能弹窗（2026-11-22 用户拍板：技能页点开**只看简介**，不摆正文 —— 保护 skill 的隐私）。
+     两条口径：① 内置技能的正文连服务端都不下发（见 routes/skill.mjs 的 GET），
+     界面上也就没有编辑入口；② 自建技能多一个「编辑正文」，点了才进原来的编辑页。
+     弹窗只放：名字 / 描述 / 挂在谁身上 / 动作 —— 不再有正文预览框。 -->
+<dialog id="skViewDlg">
+  <form method="dialog">
+    <!-- 标题（2026-11-22 用户："加个标题：技能卡"）：跟员工简卡同一种写法，
+         让弹窗顶上有个名分，也把原来 .skv-head 顶上那 18px 空白接管过来。 -->
+    <b>技能卡</b>
+    <!-- 两栏（2026-11-22 用户："左边是卡，右边是绑定的数字员工"）：
+         左栏 = 技能卡本体（头像 / 名字 / 描述），右栏 = 挂载。
+         骨架照定时任务弹窗的 .sch-cols（左吃余宽、右定宽、竖线当分界）。 -->
+    <div class="skv-cols">
+      <div class="skv-main">
+        <div class="skv-head">
+          <div class="avatar skill" id="skvAvatar"></div>
+          <div class="skv-title"><b id="skvName"></b><em class="tag-dim" id="skvBuiltin" hidden>内置</em></div>
+        </div>
+        <div class="skv-desc" id="skvDesc"></div>
+      </div>
+      <div class="skv-side">
+        <label>挂在哪些员工上 <span class="count" id="skvCount"></span></label>
+        <div class="chips" id="skvChips"></div>
+      </div>
+    </div>
+    <div class="dlg-actions">
+      <div class="skv-left">
+        <button type="button" id="skvEdit" hidden>编辑正文</button>
+        <button type="button" class="danger" id="skvDelete" hidden>删除</button>
+      </div>
+      <button type="button" id="skvAssign">＋ 添加到数字员工</button>
+      <!-- 值写 cancel 是刻意的：app.mjs 里那个 document 级监听只认
+           `button[type="button"][value="cancel"]`（标了 type 就不会走 form 的隐式提交，
+           所以取消类按钮统一靠它关窗）。换成别就得再补一套关窗逻辑。 -->
+      <button class="primary" type="button" value="cancel">关闭</button>
     </div>
   </form>
 </dialog>
