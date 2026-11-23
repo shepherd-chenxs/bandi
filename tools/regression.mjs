@@ -51,6 +51,8 @@ const { SUITE, listSuite } = await import('../apps/server/src/regression/suite.m
 import { claimOf } from '../apps/server/src/delivery-claim.mjs';
 // 终态指纹 / 稳态状态机：纯函数，冒烟直接测它（apps/server/src/regression/settle.mjs）
 import { TERMINAL, settleStep } from '../apps/server/src/regression/settle.mjs';
+// 员工产物（未跟踪文件）的解析：跑前全干净，跑后多出来的 100% 是本轮产物（见 stray.mjs 文件头）
+import { strayUntracked } from '../apps/server/src/regression/stray.mjs';
 // data-dir.mjs 是零依赖的纯路径模块（不读 BANDI_DATA），给的是**真实**用户数据目录
 import { userDataDir } from '../apps/server/src/data-dir.mjs';
 
@@ -497,6 +499,35 @@ async function runQuestion(q, db, cleanCommand) {
     const diff = git(['diff', '--stat']);
     result.diffStat = diff.stdout.trim();
     git(['checkout', '--', '.']);
+
+    /*
+     * 员工的未跟踪产物：记进报告，再清掉（2026-11-23 实跑踩到，第 4 个问题）。
+     *
+     * 题 2 员工修完 cleanCommand，写了个 test-clean.mjs 验证它剥没剥掉外壳 ——
+     * 这是**正常的专业动作**；只是它把绝对路径当相对路径，落成了
+     * CodeSpace/github/bandi/ 镜像目录。旧逻辑 `git checkout -- .` 管不到未跟踪
+     * 文件，看到 ?? 就 exit 1，把**已经算完的判分**连同报告一起丢了，整轮白跑。
+     *
+     * 判"能安全删"的前提：`ensureCleanTree()` 每题开跑前强制工作区完全干净
+     * （含未跟踪），所以此刻的 ?? 条目 100% 是本轮员工产物，不可能是用户没提交的活。
+     * 记路径 + 类型 + 字节数进 report.strayFiles 留证，然后删。
+     *
+     * 后面的"仍不干净"检查照旧 exit 1 —— 那说明有已跟踪改动没复原地、或文件删不掉，
+     * 是真该人工看的场景，不能糊过去。
+     */
+    const strays = strayUntracked(git(['status', '--porcelain', '-z']).stdout);
+    if (strays.length) {
+      result.strayFiles = strays.map((p) => {
+        let st = null;
+        try { st = fs.statSync(path.join(repoRoot, p)); } catch { /* 记路径就够，不编大小 */ }
+        return { path: p, kind: st?.isDirectory() ? 'dir' : 'file', bytes: st?.isFile() ? st.size : null };
+      });
+      for (const p of strays) {
+        try { fs.rmSync(path.join(repoRoot, p), { recursive: true, force: true }); } catch { /* 删不掉让下面的检查兜住 */ }
+      }
+      console.error(`[回归] 清掉本轮员工产物 ${strays.length} 个（已记进报告 strayFiles）：${strays.join('、')}`);
+    }
+
     const after = git(['status', '--porcelain']);
     if (after.stdout.trim()) {
       console.error(`[回归] 复原后工作区仍不干净（请人工检查！git clean 会误删，先看是什么）：\n${after.stdout}`);
@@ -636,6 +667,10 @@ async function main() {
       // 模型/平台事故：结论成色不足，但不是员工的错（额度恢复后重跑这题才有真基线）
       if (r.infraError) console.log(`   ⚠ 这一轮撞上模型通道错误（不是员工行为）：${clip(r.infraError, 72)}`);
       if (r.diffStat) console.log(`   diff：${r.diffStat.replace(/\n/g, '；')}`);
+      // 员工写验证脚本是正常行为；记一笔"清掉了什么"，别让它悄悄消失
+      if (r.strayFiles?.length) {
+        console.log(`   员工产物 ${r.strayFiles.length} 个已清理：${r.strayFiles.map((s) => s.path).join('、')}`);
+      }
     }
 
     db.close();

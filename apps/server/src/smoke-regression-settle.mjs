@@ -8,6 +8,8 @@
  *      而 finishRun 之后真落款是 failed|silent —— status 一样，claim 不同。
  *      旧量具 6 秒一到就收工，把走完收尾的一轮错记成「不作数」。
  *   ② 回归临时库被员工起的共库服务实例 reap 判死 —— 启动时该跳过清账。
+ *   ③ 员工写临时验证脚本（正常专业行为）被旧复原逻辑当成脏树，`exit 1` 把已经
+ *      算完的判分连同报告一起丢了 —— 跑前全干净，跑后多出来的 `??` 就是本轮产物。
  *
  *   node apps/server/src/smoke-regression-settle.mjs
  */
@@ -18,6 +20,7 @@ import {
   settleStep,
   shouldReapOnBoot,
 } from './regression/settle.mjs';
+import { strayUntracked } from './regression/stray.mjs';
 
 let failed = 0;
 const check = (label, ok, detail = '') => {
@@ -101,6 +104,21 @@ check('不设变量 → 照常清账（真实 18787 行为不变）', shouldReap
 check('设了 BANDI_SKIP_REAP=1 → 跳过', shouldReapOnBoot({ BANDI_SKIP_REAP: '1' }) === false);
 check('设成别的值不算开关', shouldReapOnBoot({ BANDI_SKIP_REAP: '0' }) === true);
 check('大小写敏感，不猜', shouldReapOnBoot({ bandi_skip_reap: '1' }) === true);
+
+console.log('\n④ 员工产物解析：只挑未跟踪，不误伤已跟踪改动');
+check('空输入 → 没有产物', strayUntracked('').length === 0);
+check('null 输入 → 没有产物', strayUntracked(null).length === 0);
+check('单个镜像目录（11-23 实跑那个）', JSON.stringify(strayUntracked('?? CodeSpace/\0')) === '["CodeSpace/"]');
+check(
+  '混着已跟踪改动：只拿 ?? 那条',
+  JSON.stringify(strayUntracked(' M apps/x.mjs\0?? tmp/a.txt\0A  apps/y.mjs\0')) === '["tmp/a.txt"]',
+);
+check(
+  '重命名的两条记录（R  new\\0old\\0）不误抓成产物',
+  strayUntracked('R  new.mjs\0old.mjs\0').length === 0,
+);
+check('带空格的路径保持原样（-z 不转义）', strayUntracked('?? a b/c d.txt\0')[0] === 'a b/c d.txt');
+check('多个产物全收', strayUntracked('?? a/\0?? b.txt\0').length === 2);
 
 console.log(`\n${failed ? `✗ ${failed} 条没过` : '✓ 全过'}`);
 process.exit(failed ? 1 : 0);
