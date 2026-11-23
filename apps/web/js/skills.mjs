@@ -937,12 +937,14 @@ export async function renderGitRepos(root = $('pluginView')) {
              <div class="gr-patrol-combo" id="grPatrolSel"
                   title="到点自动拉这个仓库的 open PR / issue，写成看板上的值班卡"></div>
            </b></div>
-           <div class="info-row"><span>上次巡检</span><b id="grPatrolLast" class="gr-patrol-last"></b></div>
+           <!-- 自动合并 / 上次巡检 对调（2026-11-23 用户："这两行换一下位置"）：
+                自动合并是常设开关，跟上面管理员 / 节拍同属配置；上次巡检只是一次结果，沉到末尾。 -->
            <div class="info-row"><span>自动合并</span><b>
              <label class="switch sm" title="开：管理员审阅通过且四道闸全过的 PR 直接合并；关：停在「待验收」，等你点「通过」">
                <input type="checkbox" data-automerge ${sel.autoMerge ? 'checked' : ''} aria-label="自动合并" /><span></span>
              </label>
            </b></div>
+           <div class="info-row"><span>上次巡检</span><b id="grPatrolLast" class="gr-patrol-last"></b></div>
          </section>
        </div>` : ''}
        <div class="plg-sec" data-gr-tab="log">
