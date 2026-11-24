@@ -10,7 +10,7 @@
  * 钉住的口径：
  *   ① claude 族真接线（--mcp-config 内容寻址文件，stdio/http/env 引用各一）；
  *   ② promptLines 以 resolve 的结果为准 —— 参数没生成，提示词就缩回去，不许骗模型；
- *   ③ codex / dsh 两条老路不回归；
+ *   ③ codex 旧路不回归；
  *   ④ runtimes 的 blocked：claude 族默认带 default/plan；老库存的旧默认 [] 跟随新口径，
  *      用户自己改过的原样保留。
  *
@@ -91,12 +91,10 @@ for (const e of connectors.list()) connectors.setEnabled(e.id, false);
 check('全部停用后 promptLines 回空（不许骗模型）', connectors.promptLines('claude').length === 0, JSON.stringify(connectors.promptLines('claude')));
 connectors.setEnabled('srv', true);
 
-console.log('\n⑤ codex / dsh 两条老路不回归');
+console.log('\n⑤ codex 旧路不回归');
 const wc = connectors.resolve('codex');
 check('codex 仍走 -c 参数', wc.args.length > 0 && wc.args[0] === '-c', JSON.stringify(wc.args.slice(0, 3)));
-const wd = connectors.resolve('dsh');
-check('dsh 仍走 --patch + 文件', wd.args[0] === '--patch' && !!wd.files[0] && fs.existsSync(wd.files[0]), JSON.stringify(wd.args));
-check('dsh 的提示词口径是 tool_search', connectors.promptLines('codex').some((l) => /tool_search/.test(l)), '');
+check('codex 的提示词口径是 tool_search', connectors.promptLines('codex').some((l) => /tool_search/.test(l)), '');
 
 console.log('\n⑥ runtimes：claude 的 blocked 带 default/plan，存量旧默认 [] 跟随新口径');
 // claude 默认（没存 blocked）→ 族默认
@@ -137,7 +135,7 @@ check('--append-system-prompt-file 进命令行（排在 --add-dir 之前）',
   oaArgs.includes('--append-system-prompt-file') && oaArgs.includes('C:/tmp/standing.md') &&
     (!oaArgs.includes('--add-dir') || oaArgs.indexOf('--append-system-prompt-file') < oaArgs.indexOf('--add-dir')),
   JSON.stringify(oaArgs));
-check('不传 standing → 不出 flag（codex/dsh 旧路径不受影响）',
+check('不传 standing → 不出 flag（codex 旧路径不受影响）',
   !claudeAdapter.buildArgs({}).includes('--append-system-prompt-file'), '');
 check('统一迁移：把员工的沙箱档搬到本族完全权限（幂等，已是对的不再写）',
   (() => {

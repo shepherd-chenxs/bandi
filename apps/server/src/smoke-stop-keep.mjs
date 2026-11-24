@@ -3,7 +3,7 @@
  *
  * 实报原话：「我点击停止生成，对方的消息完全消失，这个体验不太友好」。
  * 病根有两层，各修一处，都得钉住：
- *   ① 服务端：停止 = 掐子进程，适配器多半**等不到 final**（dsh 的 finalText 只来自 final 事件；
+ *   ① 服务端：停止 = 掐子进程，适配器多半**等不到 final**（finalText 只来自 final 事件；
  *      看门狗强制收尾那条路更根本走不到 `.then`）→ 他说到哪儿，库里一个字都没有 → 重画后整段消失。
  *      修法 = `pushEvent` 把 text 事件攒一份，`finish()`（所有运行的唯一终点）给「已停止」兜底落库，
  *      消息带 `meta.stopped`（界面据此标「已停止生成」）。
@@ -65,7 +65,7 @@ const doneEventOf = (runId) =>
 console.log('\n① 看门狗兜底：流出来的话照样落库');
 ADAPTERS.codex = ({ onEvent }) =>
   new Promise(() => {
-    // 模拟 dsh 一路吐 text 分块，随后人点了停止，子进程被掐、promise 永远不结算
+    // 模拟适配器一路吐 text 分块，随后人点了停止，子进程被掐、promise 永远不结算
     onEvent({ type: 'text', text: '我先看了仓库，' });
     onEvent({ type: 'text', text: '接着准备提交。' });
   });

@@ -79,7 +79,7 @@ const fail = (message, code = 'bad') => Object.assign(new Error(message), { code
  * 为什么必须有它：经办人只有一个 1:1 会话，而那个会话被**多条流程共用**；
  * sessionId 又恰恰是 agent 的上下文本身。不隔离的话，第 2 条流程会直接续接
  * 第 1 条流程的会话，带着上一条流程的记忆开跑 —— 而用户要的是
- * 「每次发起一个新流程，都相当于 dsh 新开一个会话」。
+ * 「每次发起一个新流程，都相当于新开一个会话」。
  *
  * 同一条流程内（包括驳回打回、一步多轮）作用域不变，所以上下文是连续的；
  * 换一条流程才换作用域。`opts.sessionScope` 显式给了就用它（测试口子）。
@@ -591,7 +591,7 @@ function startMemberRun(thread, member, opts, trigger) {
    * 平台契约 + PM 统筹块是**每轮一模一样**的不变量，却一直混在任务文本里 ——
    * resume 会话下它随历史越积越多，每轮还全价重发。拆出来单独传：
    * claude 族走 `--append-system-prompt-file`（out-of-band，稳定前缀吃得进缓存）；
-   * codex / dsh 没有等价 flag，由 runs 按族原样拼回（行为不变）。
+   * codex 没有等价 flag，由 runs 按族原样拼回（行为不变）。
    * 动态部分（本轮活 / 台账 / 卡 / 风格）照旧走任务文本。
    */
   // 仓库地图：不给它结构，它每次都要从 0 摸一遍（2026-11-19 两次"只会查、不会答"的实报）
@@ -650,7 +650,7 @@ function startMemberRun(thread, member, opts, trigger) {
     thread,
     member,
     task: fullTask,
-    // 不变量单独带（claude 走 out-of-band；codex/dsh 由 runs 拼回任务文本）
+    // 不变量单独带（claude 走 out-of-band；codex 由 runs 拼回任务文本）
     standing,
     watermark: trigger.rowid,
     workflowTaskId: opts.taskId ?? null,

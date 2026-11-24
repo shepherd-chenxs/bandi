@@ -256,29 +256,18 @@ export const extraOrigins = (process.env.BANDI_ORIGINS ?? '')
   .map((s) => s.trim().replace(/\/+$/, ''))
   .filter(Boolean);
 
-/**
- * 这里原来有个 `dshCli`（`BANDI_DSH_CLI ?? 'D:\AppData\Local\Programs\...\dsh.cmd'`）。
- * 已经删掉了，两个原因：
- *   ① 它**没有任何地方在用** —— 死代码
- *   ② 那个字面量是开发那台机器的布局，留着就是把人往死路径上带
- * dsh 的可执行文件现在由「设置 → 运行时」探测决定，存在 runtimes.json 里。
- */
-
-/** 我们自己的 profile（不共用 desktop，那个被 Electron 独占） */
-export const dshProfile = process.env.BANDI_DSH_PROFILE ?? 'headless';
+/** 可执行文件路径一律由「设置 → 运行时」探测、存进 runtimes.json —— 配置里不写死字面量路径。 */
 
 /*
- * 这里原来有一对 `gatewayKeyEnv` / `gatewayKey`，spawn dsh 子进程时注入
- * `MAGPIE_GATEWAY_KEY`。去掉了 —— 它属于"平台替 CLI 配供应商凭据"那一类事，
- * 而凭据是 CLI 自己的：profile 里写 `apiKeyEnv: MAGPIE_GATEWAY_KEY`，
- * 值由 dsh 自己从 `$DSH_HOME/.env` 读（实测：清掉 bandi 的注入，
- * `dsh --profile headless --json -` 照样跑通）。
+ * 这里原来有一对 `gatewayKeyEnv` / `gatewayKey`，spawn 子进程时注入网关凭据。
+ * 去掉了 —— 它属于"平台替 CLI 配供应商凭据"那一类事，而凭据是 CLI 自己的：
+ * 派活由 CLI 带着自己的凭据去跑，班底不注入。
  */
 
 /** 服务端端口（`BANDI_PORT` 优先，默认见上面 `DEFAULT_PORT`） */
 export const port = Number(process.env.BANDI_PORT ?? DEFAULT_PORT);
 
-/** dsh 跑任务时的工作目录：agent 在这个目录里干活 */
+/** agent 跑任务时的工作目录：agent 在这个目录里干活 */
 export const runCwd = process.env.BANDI_RUN_CWD ?? repoRoot;
 export const runtimesPath = () => process.env.BANDI_RUNTIMES ?? path.join(dataDir, 'runtimes.json');
 export const pluginsPath = () => process.env.BANDI_PLUGINS ?? path.join(dataDir, 'plugins.json');

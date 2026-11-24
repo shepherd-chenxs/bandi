@@ -103,10 +103,9 @@ for (const [label, evt] of [
   check(`${label}：走老路（error 有值、link 空）`, s.link === null && s.error !== '', `${s.link}/${s.error.slice(0, 30)}`);
 }
 
-const s6 = mk();
-applyRunEvent(s6, { type: 'tool_call', callId: 'x', tool: 'shell', input: { command: 'curl https://x' } }, at(0.5));
-applyRunEvent(s6, { type: 'tool_result', callId: 'x', status: 'error', result: 'curl: (28) ETIMEDOUT' }, at(1));
-check('工具自己超时（tool_result）不算通道断', s6.link === null && s6.steps[0]?.error.includes('ETIMEDOUT'), JSON.stringify(s6.steps[0]?.status));
+/* （2026-11-24）原第⑥组前有一条 dsh 专属用例：tool_call/tool_result 事件形状只有 dsh
+ * 会发，"工具自己的超时不许冒充通道断"就是靠它拦住的。dsh 下线（v1.7.3）后事件形状
+ * 不复存在，用例随之删除；claude/codex 的工具事件不带结果回执，错误走 ⑤ 的老路。 */
 
 /* ---------------------------------------------- ⑥ 静默期：等模型回话 vs 走了一半停住 */
 console.log('\n⑥ 静默期两种说法不能混（用户实拍："他这个是在尝试连接吗"）');

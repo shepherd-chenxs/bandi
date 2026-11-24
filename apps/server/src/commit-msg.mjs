@@ -90,7 +90,7 @@ export function buildPrompt(digest) {
  * CLI 直接报 `unrecognized_model`（秒失败），原来只挑一个就退兜底，
  * 按钮永远只出「chore(xxx): 更新 N 个文件」这种废稿。坏一个换下一个，别让整颗按钮陪葬。
  */
-function pickRuntimes(prefer = ['claude', 'codex', 'dsh']) {
+function pickRuntimes(prefer = ['claude', 'codex']) {
   const all = [];
   for (const d of loadDevices()) {
     for (const r of d.runtimes ?? []) if (r.enabled && r.path) all.push(r);
@@ -157,7 +157,7 @@ export async function suggestCommitMessage(row, { paths = null, timeoutMs = 4500
         task: buildPrompt(digest),
         cwd: row.localPath,
         cliPath: rt.path,
-        // 只要措辞，不要它动手：codex 的 read-only 等于"工具全禁"，正合适；claude/dsh 没有这档
+        // 只要措辞，不要它动手：codex 的 read-only 等于"工具全禁"，正合适；claude 没有这档
         ...(rt.family === 'codex' ? { sandbox: 'read-only' } : {}),
         signal: ctl.signal,
       });

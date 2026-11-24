@@ -1521,7 +1521,7 @@ export function agentEnv() {
    * 把**我们自己的 node 目录**塞到 PATH 最前（2026-11-03，手机会话实报）。
    *
    * 背景：班底服务本身就是 node 跑的，但这台机器的 node 往往**不在 PATH 上**
-   * （桌面壳用打包进 target/debug 的那份 node.exe 起服务）。CLI（dsh 一族）内部
+   * （桌面壳用打包进 target/debug 的那份 node.exe 起服务）。agent CLI 内部
    * 会经 cmd 再拉 `node`（.cmd shim / 工具脚本），一拉就是 cmd 的
    * 「'node' 不是内部或外部命令」—— GBK 字节落到库里就是一串 ◆ 乱码，一次运行
    * 刷六七行，把真正的报错顶到看不见。

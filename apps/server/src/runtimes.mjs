@@ -5,13 +5,12 @@ import { runtimesPath } from './config.mjs';
 import { pathDirs, wellKnownBins } from './path-env.mjs';
 import * as codex from './codex.mjs';
 import * as claude from './claude.mjs';
-import * as dsh from './dsh.mjs';
 
 /**
  * 运行时（agent CLI）管理。
  *
  * 两层概念：
- * - **协议族（family）**：codex / claude / dsh。写在代码里 —— 每接一个要写它的事件
+ * - **协议族（family）**：codex / claude。写在代码里 —— 每接一个要写它的事件
  *   词汇映射（`claude.mjs` 那套），不是配置能变出来的。
  * - **运行时实例（runtime）**：某台设备上的一个具体配置（哪个可执行文件、什么名字、开不开）。
  *   同一族可以加多个实例（比如两个 Codex，一个带自定义参数）。
@@ -59,18 +58,9 @@ const FAMILIES = {
      * 落点 `~/.local/bin` —— path-env.mjs 的 wellKnownBins 认得，装完即见，不用重启班底）。
      */
   },
-  dsh: {
-    id: 'dsh',
-    label: 'DeepSeek Harness（headless）',
-    adapter: 'dsh',
-    sandboxes: ['workspace-write'],
-    blocked: [],
-    fullSandbox: 'workspace-write',
-    note: 'dsh.cmd 不在 PATH 上，路径必须是绝对路径。这个 CLI 是 Windows 桌面端自带的 —— 要用就装桌面端。',
-  },
 };
 
-const ADAPTERS = { codex, claude, dsh };
+const ADAPTERS = { codex, claude };
 
 /** 族 id → 人看的名字。报错和说明文字里用（别在界面/日志里裸奔一个 `claude`） */
 export function familyLabel(id) {
@@ -78,7 +68,8 @@ export function familyLabel(id) {
 }
 
 /** 预置在本机的运行时：id 固定，可改不可删（删了就没有默认执行端了） */
-const SEEDED = ['codex', 'dsh'];
+// v1.7.3（2026-11-24）下线 dsh，claude 接棒预置位。
+const SEEDED = ['codex', 'claude'];
 
 const LOCAL_ID = 'local';
 
@@ -180,8 +171,8 @@ function makeRuntime(familyId, id, label, savedEntry = {}) {
  * 目前只会产出本机一条：其他设备要等**远程执行**做出来才有意义，
  * 现在凭空列出来只会是点不动的假象。
  *
- * ⚠️ **不再预置 codex / dsh 两条空壳。** 以前无论有没有配置，都会拿
- * `f.defaultPath`（写死的开发机路径）造出这两条 —— 换台机器就是两个指向空气的运行时。
+ * ⚠️ **不再预置空壳运行时。** 以前无论有没有配置，都会拿
+ * `f.defaultPath`（写死的开发机路径）预置几条 —— 换台机器就是几个指向空气的运行时。
  * 现在"有什么"完全由 `runtimes.json` 说了算：要么是探测到之后接进来的，
  * 要么是用户手填的。新机器一开始列表是空的，点「识别本机运行时」就有了。
  */
@@ -191,7 +182,7 @@ export function loadDevices() {
 
   const runtimes = [];
   for (const [id, entry] of Object.entries(perDevice)) {
-    // 老格式里 `codex` / `dsh` 这两条的 id 本身就是族名，entry 里没有 family 字段
+    // 老格式里顶层键的 id 本身就是族名，entry 里没有 family 字段
     const fam = entry?.family ?? (FAMILIES[id] ? id : null);
     const r = makeRuntime(fam, id, entry?.label, entry ?? {});
     // 上一次自动更正过的痕迹，从配置里带回来（界面据此标出来，见 healLocalRuntimes）
@@ -302,11 +293,59 @@ export function migratePersonaSandboxesToFull({ listPersonas, updatePersona }) {
 }
 
 /**
+ * 绑了 dsh 的员工 → claude（2026-11-24 v1.7.3 下线 dsh）。启动时跑一遍，幂等：
+ *   · dsh 运行时实例从 runtimes.json 里清掉（族已删，留着也永远不显示）；
+ *   · 绑在 dsh 实例上的员工改绑 claude（这台机器探测到能用的 claude 就绑它的 id，
+ *     否则落 'auto'——内置员工那个口，谁现在能用谁接）。
+ * listPersonas / updatePersona 由调用方注入（同 migratePersonaSandboxesToFull 的原因）。
+ */
+export function migrateDshPersonasToClaude({ listPersonas, updatePersona }) {
+  // 先收集信息（loadDevices 只调这一次）：这台机器上能用的 claude 实例 id
+  const claudeId =
+    loadDevices()
+      .flatMap((d) => d.runtimes)
+      .find((r) => r.family === 'claude' && r.enabled && launchable(r.family, r.path))?.id ?? null;
+
+  // 再动配置文件（照抄 healLocalRuntimes 的防递归套路：只用 readSaved/writeSaved，
+  // 不碰任何会回到 loadDevices 的入口）。dsh 条目判断：entry.family==='dsh'，
+  // 或老格式（顶层键）id 本身是 'dsh'。
+  const saved = readSaved();
+  const dshIds = new Set();
+  let removed = 0;
+  if (saved?.dsh) {
+    dshIds.add('dsh');
+    delete saved.dsh;
+    removed += 1;
+  }
+  const scoped = saved?.devices?.[LOCAL_ID]?.runtimes;
+  if (scoped && typeof scoped === 'object') {
+    for (const [id, entry] of Object.entries(scoped)) {
+      if (entry?.family === 'dsh' || id === 'dsh') {
+        dshIds.add(id);
+        delete scoped[id];
+        removed += 1;
+      }
+    }
+  }
+  if (removed) writeSaved(saved);
+
+  if (!dshIds.size) return 0;
+  let moved = 0;
+  for (const p of listPersonas()) {
+    if (dshIds.has(p.runtime)) {
+      updatePersona(p.id, { runtime: claudeId ?? 'auto' });
+      moved += 1;
+    }
+  }
+  return moved;
+}
+
+/**
  * 给一次运行找执行端：员工只记 runtime id，哪台设备来跑由这里挑。
  *
  * **`auto` = 用当下能跑的第一个**（2026-10-18）。
  * 只有内置的系统管家用它（2026-10-23 前是喜儿）：新装的机器上还没有任何运行时，他不该因为"没绑定"就没法用；
- * 用户接上任意一个 CLI（Claude Code / Codex / dsh…）之后，她下一次派活就自动落过去。
+ * 用户接上任意一个 CLI（Claude Code / Codex…）之后，她下一次派活就自动落过去。
  *
  * 普通员工**不该**用 auto —— 他们干的是具体活，该明确绑一个（否则换机器/换 CLI 时
  * 行为会悄悄变）。这条只是给"出厂就在、但出厂时可能一台 CLI 都没有"的那个人留的。
@@ -455,14 +494,11 @@ function unlaunchableReason(familyId, p) {
   if (launchable(familyId, p)) return null;
   const ext = path.extname(p).toLowerCase();
   const isScript = ext === '.cmd' || ext === '.bat';
-  // 按族给"该指向什么"，别一律说"换成 .exe"——dsh 根本没有 .exe 那种形态
+  // 按族给"该指向什么"，别一律说"换成 .exe"
   if (familyId === 'codex') {
     return isScript
       ? 'codex 是用 node 起的，PATH 上那个 .cmd 喂不进 node —— 请指向 .js 真身（node_modules\\@openai\\codex\\bin\\codex.js）'
       : 'codex 是用 node 起的，路径要指向 .js';
-  }
-  if (familyId === 'dsh') {
-    return 'dsh 要桌面包布局（Electron + app.asar），npm 装的那个 .cmd shim 起不来 —— 装一个 DeepSeek Harness 桌面端';
   }
   if (isScript) {
     if (familyId === 'claude') {
@@ -624,9 +660,8 @@ function npmPrefixes() {
 /**
  * "桌面应用可能装在哪儿"的那些根目录。
  *
- * 为什么不能只认 `%LOCALAPPDATA%\Programs`：**这台机器就不是那样装的** ——
- * DSH 桌面端在 `D:\AppData\Local\Programs\`，而 `LOCALAPPDATA` 指的是
- * `C:\Users\admin\AppData\Local`（两套 AppData）。
+ * 为什么不能只认 `%LOCALAPPDATA%\Programs`：有的桌面应用装在**别的盘**的 AppData 下，
+ * 而 `LOCALAPPDATA` 只指一个盘 —— 其它盘上的 Programs 这个变量看不见。
  *
  * 所以补一条：从 PATH 里那些**本身就住在 `\AppData\` 下面**的条目推盘符
  * （比如 PATH 里有 `D:\AppData\nodejs`，就再试一个 `D:\AppData\Local\Programs`）。
@@ -705,21 +740,6 @@ const DETECT = {
     }
     return out;
   },
-  dsh() {
-    const out = [];
-    // 桌面包布局排前面：bandi 的 dsh 启动方式就是照着它写的（Electron + app.asar 里的 cli.js）。
-    // npm 装的那个 shim 文件虽然在，但 spawn 一个 .cmd 在 Node 22 上直接 EINVAL（实测），
-    // 所以它排后面、并且在 detectFamily 里会被标成"起不来"。
-    for (const root of appRoots()) {
-      out.push({
-        path: path.join(root, 'DeepSeek Harness', 'resources', 'runtime', 'cli', 'bin', 'dsh.cmd'),
-        source: 'DSH 桌面端自带',
-      });
-    }
-    const shim = findOnPath(['dsh']);
-    if (shim) out.push({ path: shim, source: `PATH 上的 ${path.basename(shim)}（npm 装的，班底起不来）` });
-    return out;
-  },
 };
 
 const exists = (p) => {
@@ -737,8 +757,6 @@ const exists = (p) => {
  *   · codex 是 `node <xxx.js>` 起的 → 只能给 .js。给 PATH 上那个 codex.cmd
  *     会存进去一个永远起不来的实例（spawn .cmd 在 Node 22 上是 EINVAL）
  *   · claude 是直接 spawn 路径 → 只给 .exe（.cmd 同样 EINVAL）
- *   · dsh 要桌面包布局（Electron + app.asar）→ 认 resources 下那个，
- *     npm 装的 dsh.cmd 会用 dsh.isLaunchable() 挡掉
  */
 const UNDER_DIR = {
   codex: ['node_modules/@openai/codex/bin/codex.js', 'bin/codex.js', 'codex.js'],
@@ -747,7 +765,6 @@ const UNDER_DIR = {
     'bin/claude.exe',
     'claude.exe',
   ],
-  dsh: ['resources/runtime/cli/bin/dsh.cmd', 'bin/dsh.cmd', 'dsh.cmd'],
 };
 
 /**
@@ -756,7 +773,6 @@ const UNDER_DIR = {
  * 为什么每族的标准不一样：各族启动方式不同（见各自 mjs 的 launchCommand）：
  *   · codex ：`node <xxx.js>` —— 只认 .js。PATH 上那个 codex.cmd 喂不进 node
  *   · claude：**直接 spawn 这个路径** —— .cmd / .bat 在 Node 22 上必 EINVAL
- *   · dsh   ：Electron + app.asar 的桌面包布局 —— 用 dsh.isLaunchable 判
  *
  * ⚠️ 不判的后果（2026-10-15 用户实报）：探测把「文件在、班底起不来」的那个
  * 当成 usable 排在**前面**，而 claude 的 npm shim 恰好是 PATH 上第一个 ——
@@ -782,7 +798,6 @@ function launchable(familyId, p) {
     return !bad.includes(ext);
   }
   if (familyId === 'codex') return ext === '.js';
-  if (familyId === 'dsh') return dsh.isLaunchable(p);
   return true;
 }
 
@@ -840,7 +855,7 @@ export function detectFamily(familyId) {
   return out.sort((a, b) => Number(b.usable) - Number(a.usable));
 }
 
-/** 三个族一起探（「添加运行时」那一步用） */
+/** 两个族一起探（「添加运行时」那一步用） */
 export function detectAll() {
   return Object.values(FAMILIES).map((f) => ({
     id: f.id,
@@ -878,7 +893,7 @@ export async function probePath(familyId, cliPath) {
  * magpie 的装/常驻/打开面板），想要模型的话去那边看。
  */
 
-/** 可添加的协议族（「添加协议族」里那三个选项） */
+/** 可添加的协议族（「添加协议族」里那些选项） */
 export function publicFamilies() {
   return Object.values(FAMILIES).map((f) => {
     const found = detectFamily(f.id);

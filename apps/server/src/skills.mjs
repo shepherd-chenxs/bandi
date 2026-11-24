@@ -123,7 +123,6 @@ export function runtimeSkillDirs(family) {
   const map = {
     codex: [path.join(home, '.codex', 'skills')],
     claude: [path.join(home, '.claude', 'skills')],
-    dsh: [path.join(process.env.DSH_HOME ?? path.join(home, '.dsh'), 'skills')],
   };
   return (map[family] ?? []).filter((d) => fs.existsSync(d));
 }

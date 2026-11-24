@@ -27,7 +27,7 @@ import { connJsonText, parseConnJson, toolsBrief } from './connjson.mjs';
  * · 已安装 —— 装了的：界面插件（启用/停用/卸载）+ 连接器账本（data/connectors.json：启停、实探、改、卸载）；
  * · 个人 —— 本机来源的（source.kind === 'local'）+ 手工粘一条。
  *
- * 装一条 = 把清单条目落成账本里的一行，班底只**接线**：代码在 codex / dsh 自己的进程里跑。
+ * 装一条 = 把清单条目落成账本里的一行，班底只**接线**：代码在 codex / claude 自己的进程里跑。
  */
 /* 插件页签（2026-11-22 起只剩界面插件 + 独立软件）：连接器搬去「设置 › 扩展 › 连接器」，
    所以「个人」这个只服务连接器的页签也跟着搬过去（见 CONN_TABS）。 */

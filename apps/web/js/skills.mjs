@@ -1056,6 +1056,21 @@ export async function renderGitRepos(root = $('pluginView')) {
   };
   const grDropOutside = (e) => {
     if (!grDrop || grDrop.contains(e.target) || grPill?.contains(e.target)) return;
+    /*
+     * 右键操作卡（#ctxMenu）是**级联第二层**：卡挂在 body 下、锚在下拉面板右沿，
+     * 但不属于面板 DOM。不跳过的话，点卡会把第一层下拉先收走 —— 卡成了孤儿
+     * （2026-11-24 用户两图实报：面板没了、卡孤零零悬着）。
+     * 桌面没有蒙层（.ctx-scrim 桌面 display:none），点卡边框影子落到底层页面上，
+     * 所以除了 closest("#ctxMenu")（点卡本体；手机上还有 #ctxScrim 蒙层可点），
+     * 还要跟 app.mjs 同口径的"卡矩形 ±8px"容差 —— 手落在影子里不算点外面。
+     */
+    if (e.target.closest?.('#ctxMenu') || e.target.closest?.('#ctxScrim')) return;
+    const m = document.getElementById('ctxMenu');
+    if (m && !m.hidden) {
+      const r = m.getBoundingClientRect();
+      if (e.clientX >= r.left - 8 && e.clientX <= r.right + 8
+        && e.clientY >= r.top - 8 && e.clientY <= r.bottom + 8) return;
+    }
     closeGrDrop();
   };
   const grDropEsc = (e) => {

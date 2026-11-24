@@ -26,7 +26,7 @@ import { createLiveAnswer } from './run-live.mjs';
 /**
  * 输入框里的「权限」选择。
  * 注意：班底的权限是**员工级**的字段（跟员工详情里那个是同一个），
- * 不是像 DSH 那样按会话存 —— 所以这里改的是这个员工的所有对话，界面上也说清楚。
+ * 权限按**员工**存、不按会话存 —— 所以这里改的是这个员工的所有对话，界面上也说清楚。
  * 群里每个人权限不同，放一个假的没意义，直接不放。
  */
 /**
@@ -1286,8 +1286,8 @@ export function attachStream(runId, whoName = '', startedAt = null, lastEventAt 
 
   // 实时输出走**共用**的 streamRun（流程实例页的节点对话也是它）
   S.es = streamRun(runId, {
-    // 每个原始事件都喂给进度卡：dsh 的 tool_call/tool_result、codex 的 tool、
-    // claude 的 status 都靠它 —— 旧的 onText/onTool 只覆盖了其中一部分。
+    // 每个原始事件都喂给进度卡：codex 的 tool、claude 的 status 都靠它 ——
+    // 旧的 onText/onTool 只覆盖了其中一部分。
     onEvent: (evt) => { live.applyEvent(evt); card.applyEvent(evt); },
     onText: (chunk) => live.pushText(chunk),
     onRunError: (msg) => {
@@ -1332,7 +1332,7 @@ export function attachStream(runId, whoName = '', startedAt = null, lastEventAt 
  *
  * @param {string} runId
  * @param {object} h
- *   onEvent(evt)         **每一个原始事件**（dsh 的 tool_call/tool_result/status 也走这儿；
+ *   onEvent(evt)         **每一个原始事件**（codex/claude 的 status 也走这儿；
  *                        运行进度归约器用它，别的调用方可以不理）
  *   onText(chunk)        他的回话（追加）
  *   onRunError(message)  运行报错
@@ -1367,7 +1367,7 @@ export function streamRun(runId, h = {}) {
       return h.onDone?.(evt);
     }
     if (evt.type === 'text') return h.onText?.(evt.text);
-    // claude 的 error 事件字段是 `text`，dsh/codex 是 `message` —— 两个都认
+    // claude 的 error 事件字段是 `text`，codex 是 `message` —— 两个都认
     if (evt.type === 'error') return h.onRunError?.(evt.message ?? evt.text);
     if (evt.type === 'thinking') return h.onThinking?.(evt.text);
     if (evt.type === 'tool') return h.onTool?.(evt.name);
@@ -3079,7 +3079,7 @@ export function renderDetail({ persona, runtimes, runs, platformRoot, skills: pe
    * 模型下拉的清单 —— **直接问运行时**（服务端去读 CLI 自己那份配置），不再走账本。
    *
    * 为什么按运行时问：模型列表在 CLI 背后的服务端手里，不在班底手里。
-   * 每个族问法不同（codex 读本地目录文件、dsh 发一次 HTTP、claude 读 settings.json /
+   * 每个族问法不同（codex 读本地目录文件、claude 读 settings.json /
    * 网关 /v1/models），这些差异由服务端的 cli-models 收拾掉。
    *
    * ⚠️ 读不到时**不能把下拉清空**：那样连原来绑着的模型都不见了，人只看到一个空框。

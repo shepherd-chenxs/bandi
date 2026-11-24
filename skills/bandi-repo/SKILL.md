@@ -72,7 +72,7 @@ git log -L <行号>,<行号+3>:<用例文件>   # 例：git log -L 766,769:apps/
 
 **桌面壳 / 前端静态**：`apps/desktop/smoke-shell.mjs` 壳的 Node 那一半 · `tools/smoke-help-pop.mjs` 标题旁 ? 弹层
 
-不跑（要真实 CLI / 模型，别去动它们）：`smoke-codex` / `smoke-dsh` / `smoke-mcp` / `smoke-plugin-e2e`。
+不跑（要真实 CLI / 模型，别去动它们）：`smoke-codex` / `smoke-mcp` / `smoke-plugin-e2e`。
 
 ## 五、踩过的坑（都写在这里了，别再踩一遍）
 

@@ -198,8 +198,7 @@ const RUN = [
 /** 不跑的：写明原因（要真实 CLI / 模型，会烧 token） */
 const SKIP = {
   'apps/server/src/smoke-codex.mjs': '要真实 Codex CLI 与模型',
-  'apps/server/src/smoke-dsh.mjs': '要真实 dsh 与模型',
-  'apps/server/src/smoke-mcp.mjs': '② 真起 codex / dsh 让模型调 MCP 工具',
+  'apps/server/src/smoke-mcp.mjs': '② 真起 codex 让模型调 MCP 工具',
   'apps/server/src/smoke-plugin-e2e.mjs': '要 codex 真去 tool_search 调到工具',
 };
 

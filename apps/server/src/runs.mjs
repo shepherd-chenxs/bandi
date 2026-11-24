@@ -122,8 +122,8 @@ function pushEvent(run, evt) {
   /*
    * 把**已经说出口的回复**攒一份（2026-10-29，用户实报「点停止生成，对方的消息完全消失」）。
    *
-   * 为什么要在推给订阅者**之前**就攒：人一点停止，子进程被掐，适配器多半**等不到 final 事件**
-   * （dsh 的 finalText 只来自 final）；收尾时 `run.finalText` 是空的 → 那条回话一个字都没落库，
+   * 为什么要在推给订阅者**之前**就攒：人一点停止，子进程被掐，适配器多半**等不到 final 事件**；
+   * 收尾时 `run.finalText` 是空的 → 那条回话一个字都没落库，
    * 界面从库里重画时它整段消失。用户看到的字就在下面这几行里，先留住它们。
    *
    * 按**分块**累加：前端的实时气泡也是逐块追加的（chat.mjs 的 onText），
@@ -367,7 +367,7 @@ export function startRun({ thread, member, task, standing = null, watermark = 0,
    * **不变量与任务分家**（2026-11-15，借鉴 Cumora 的 out-of-band standing prompt）：
    * `standing`（平台契约 + PM 统筹块，每轮一模一样）在 claude 族走
    * `--append-system-prompt-file`（out-of-band：不占任务文本、resume 会话里不积累、
-   * 稳定前缀吃得进缓存）；codex / dsh 没有等价 flag，拼回任务文本，行为与从前一字不差。
+   * 稳定前缀吃得进缓存）；codex 没有等价 flag，拼回任务文本，行为与从前一字不差。
    */
   const useOutOfBand = standing && rt?.family === 'claude';
   const baseTask = standing && !useOutOfBand ? `${standing}\n\n${task}` : task;
@@ -375,15 +375,13 @@ export function startRun({ thread, member, task, standing = null, watermark = 0,
    * 这一次**实际用哪个模型**。
    *
    * 它落进 `runs.model`（界面显示这次跑的哪个模型），并作为 `model` 传给适配器 ——
-   * 适配器只负责把**模型名**递下去（codex 的 `-m`、dsh 的 `--patch`），
+   * 适配器只负责把**模型名**递下去（codex 的 `-m`），
    * 走哪条地址、带谁的 Key 由 CLI 自己的配置决定，班底不碰。
    *
    * 跟 workflows 的 viewRun.model 用的是**同一个解析**：页面上写的、
    * 账上记的、实际传下去的必须是同一个模型。
    */
   const eff = cliModels.effectiveModelOf({ family: rt?.family ?? null, model: member.model });
-  // dsh 的补丁层是整块替换 config，所以要把 CLI 自己配的 provider 原样带回去（见 dsh.mjs）
-  const provider = cliModels.cliProviderOf(rt?.family ?? null);
   const row = store.createRun({
     conversationId: thread.id,
     runtime,
@@ -572,7 +570,7 @@ export function startRun({ thread, member, task, standing = null, watermark = 0,
   // ⚠️ **必须真的能停**：以前 run 对象上根本没有 abortController，
   //    而界面（和"终止流程"）都在调 `run.abortController?.abort()` ——
   //    于是点了"停止生成"只是改了数据库，**子进程还在跑**（状态说停了、实际没停）。
-  //    这里给每次运行配一个，并把 signal 交给适配器（codex/claude/dsh 都认 signal，会 kill 子进程）。
+  //    这里给每次运行配一个，并把 signal 交给适配器（codex/claude 都认 signal，会 kill 子进程）。
   const ctl = new AbortController();
   run.abortController = ctl;
   run.stoppedByUser = false;
@@ -615,7 +613,7 @@ export function startRun({ thread, member, task, standing = null, watermark = 0,
        */
       task: extra ? `${agentTask}\n\n${extra}` : agentTask,
       // out-of-band 不变量（平台契约 + PM 统筹）：claude 走 --append-system-prompt-file；
-      // codex / dsh 没有等价 flag，standing 已在上方拼回任务文本（行为不变）
+      // codex 没有等价 flag，standing 已在上方拼回任务文本（行为不变）
       systemPrompt: useOutOfBand ? standing : null,
       sessionId: sid,
       cwd: member.cwd || undefined,
@@ -628,8 +626,6 @@ export function startRun({ thread, member, task, standing = null, watermark = 0,
       // 模型传**解析出来的那个**（不只是员工绑的）：账上记的、传给 CLI 的必须是同一个，
       // 否则按模型限额会盯错人（员工没绑时，实际用的是 CLI 默认值）
       model: eff.id,
-      // 只有 dsh 用得上：补丁层整块替换 config，得把 CLI 自己的 provider 带回去
-      provider,
       cliPath: rt.path,
       connectorArgs: wiring.args,
       env: run.agentEnv ?? {},
@@ -886,11 +882,10 @@ export function startRun({ thread, member, task, standing = null, watermark = 0,
         : `（未自动续跑：${verdict.why}）`;
     }
 
-    // 各家适配器字段名不完全一样（codex/dsh 给 finalText，claude 给 text），这里归一
+    // 各家适配器字段名不完全一样（codex 给 finalText，claude 给 text），这里归一
     const text = res.finalText ?? res.text ?? '';
     /*
-     * 停止生成（2026-10-29）：CLI 被掐死时往往**来不及发 final**（dsh 的 finalText 只来自
-     * final 事件，见 pushEvent 的注释），这时用已经流出去的 text 事件兜底 ——
+     * 停止生成（2026-10-29）：CLI 被掐死时往往**来不及发 final**，这时用已经流出去的 text 事件兜底 ——
      * 用户屏幕上看到的就是这些字，丢掉它等于"对方刚说的话凭空消失"。
      */
     const kept = text || ((stopped || run.limitHit) ? run.streamedText : '');
@@ -933,7 +928,7 @@ export function startRun({ thread, member, task, standing = null, watermark = 0,
     const ctx = rt.family === 'codex' ? codexContextOf(res.sessionId) : null;
     /*
      * runtimeFamily 一起记：轮换判据要知道"这个 usage 是哪种运行时给的" ——
-     * 多调用型（codex/dsh）的 inputTokens 是整轮求和，**不能**当窗口用；
+     * 多调用型（codex）的 inputTokens 是整轮求和，**不能**当窗口用；
      * 单轮型才可用 perTurnTokens 兜底（见 session-budget.mjs 的 shouldRotate）。
      * 老数据没这个字段 → 判据按"未知"保守处理。
      */

@@ -120,7 +120,6 @@
   --tile-skill-bg: #241f33;  --tile-skill-fg: #c3b3f0;    /* 技能（8.36） */
   --tile-codex-bg: #23262b;  --tile-codex-fg: #e8e9ea;    /* Codex / OpenAI（12.49） */
   --tile-claude-bg: #2b211d; --tile-claude-fg: #e79a7a;   /* Claude / Anthropic（6.95） */
-  --tile-dsh-bg: #1c2038;    --tile-dsh-fg: #8fa3ff;      /* DeepSeek（6.74） */
   /* （--tile-magpie-* 2026-11-01 随「外部件」段一起删了 —— git 历史里有） */
   --av-grp: #2b7062; --av-grp-2: #123028;      /* 群（5.84） */
   --av-dim: #2b3a55; --av-dim-2: #1a2233;      /* 旧小号头像底色（已弃用，见 .avatar.sm） */
@@ -206,7 +205,6 @@
   --tile-skill-bg: #efeafc;  --tile-skill-fg: #4a3390;    /* 8.23 */
   --tile-codex-bg: #f3f4f6;  --tile-codex-fg: #111827;    /* 16.12 */
   --tile-claude-bg: #fdf1ec; --tile-claude-fg: #b04e2e;   /* 4.77 */
-  --tile-dsh-bg: #eef1ff;    --tile-dsh-fg: #3f5ae0;      /* 4.98 */
   --av-grp: #2b7062; --av-grp-2: #1f5a4e;
   --av-dim: #52688c; --av-dim-2: #3d4f6e;
   /* 浅色小头像：四档都要**压得住白字**（实测 7.75 / 7.79 / 8.06 / 7.9:1）。
@@ -1646,7 +1644,6 @@ button.pill.dept-pill:focus-visible { outline: 2px solid var(--accent); outline-
 .avatar.cli svg { width: 21px; height: 21px; display: block; }
 .avatar.cli[data-brand='codex']  { background: var(--tile-codex-bg);  color: var(--tile-codex-fg); }
 .avatar.cli[data-brand='claude'] { background: var(--tile-claude-bg); color: var(--tile-claude-fg); }
-.avatar.cli[data-brand='dsh']    { background: var(--tile-dsh-bg);    color: var(--tile-dsh-fg); }
 /* 💤 `.avatar.proj`（项目详情那枚蓝色「班」字方块）2026-10-19 用户要求去掉，已删 ——
    项目名本身就是标题，色块没有信息量；别再加回来。员工头像那枚 `.avatar` 仍在用。 */
 /* 技能图标块：同属"物品类"（淡底深字），颜色走 --tile-skill-* 一对 token，

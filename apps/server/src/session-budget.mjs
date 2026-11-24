@@ -8,8 +8,8 @@
  * 这里的判据是**平台侧可观测的四个量**，不看模型内部：
  *   · 轮数（这段会话跑了几轮）；
  *   · 年龄（这段会话开了多久）；
- *   · 累计 input（会话总消耗，dsh 的 usage 是会话累计）；
- *   · 单轮上下文（dsh 用相邻两轮 usage 差值估算；单轮型运行时直接用最近一轮）。
+ *   · 累计 input（会话总消耗；历史上 dsh 是累计口径，已下线）；
+ *   · 单轮上下文（多调用型运行时用相邻两轮 usage 差值估算；单轮型直接用最近一轮）。
  *
  * 任一超限 → `shouldRotate()` 返回原因列表；dispatch 据此清掉 member_sessions 的 sessionId，
  * 下一轮按 firstTime 重开，并注入最近几条消息的「上下文交接」。四个阈值都可用环境变量覆盖
@@ -45,7 +45,7 @@ export const SESSION_BUDGET = Object.freeze({
   /**
    * 单轮上下文上限（默认 10 万）——**只在拿不到真实上下文信号时兜底**。
    *
-   * ⚠️ 对多调用型运行时（codex/dsh）这个口径是错的：它们的 usage 是整轮求和，
+   * ⚠️ 对多调用型运行时（codex）这个口径是错的：它的 usage 是整轮求和，
    * 不是窗口大小。2026-11-12 实报：234 万的"单轮"其实最后一调才 6 万、窗口 95 万。
    * 现在 codex 族在收尾时会把真实上下文（contextTokens / contextWindow）挂进 usage
    * （见 context-probe.mjs），有它就走 maxContextRatio，没有才退回这个数。
@@ -62,7 +62,7 @@ export const SESSION_BUDGET = Object.freeze({
 /**
  * 这一轮实际吃进去的上下文量。
  *
- * dsh 的 usage 是**会话累计**（inputTokens 单调增），所以相邻两轮的差值 ≈ 这一轮的上下文；
+ * 多调用型运行时的 usage 是**会话累计**（inputTokens 单调增），所以相邻两轮的差值 ≈ 这一轮的上下文；
  * 只有一轮时没法做差，直接拿累计值（第一轮累计 = 单轮）。如果出现非单调（换运行时/重置），
  * 退回累计值 —— 宁可误判一次轮换，也别把大上下文放过去。
  */
@@ -101,12 +101,12 @@ export function shouldRotate({ rounds = 0, ageMs = 0, usage = null, prevUsage = 
   } else {
     /*
      * 没有真实上下文信号时的兜底：**只有单轮型运行时**的 inputTokens 才≈窗口。
-     * codex / dsh 是多调用型 —— usage 是整轮所有 API 调用的求和（2026-11-12 实测：
+     * codex 是多调用型 —— usage 是整轮所有 API 调用的求和（2026-11-12 实测：
      * 求和 234 万、真实最后一调 6 万、窗口 95 万），拿它当窗口判就是"一天八次轮换"的元凶，
-     * 所以这两族**不在这一条上判**，交给 累计 / 轮数 / 年龄 三条兜底（探到真实值就走比例口径）。
+     * 所以它**不在这一条上判**，交给 累计 / 轮数 / 年龄 三条兜底（探到真实值就走比例口径）。
      * 运行时族未知（本字段是 2026-11-12 才加的，老数据没有）→ 保守保留旧判据。
      */
-    const multiCall = usage?.runtimeFamily === 'codex' || usage?.runtimeFamily === 'dsh';
+    const multiCall = usage?.runtimeFamily === 'codex';
     const turn = perTurnTokens(usage, prevUsage);
     if (!multiCall && turn >= budget.maxTurnTokens) reasons.push(`单轮上下文 ≈ ${turn} tokens ≥ ${budget.maxTurnTokens}`);
   }

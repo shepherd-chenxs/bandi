@@ -255,7 +255,7 @@ export async function handleConversation(req, res, url) {
    * 为什么由服务端算：轮换的判据（member_sessions 的 sessionId/startedAt、相邻两轮
    * usage 差值）全在这边 —— 前端自己从 runs 里猜，口径一定会跟 dispatch 的轮换走样。
    * 这里就是把 startMemberRun 里那套 shouldRotate 的输入**原样**摆出来给界面看：
-   *   · 单轮上下文 turn = perTurnTokens(最近一轮, 上一轮)（dsh 累计口径做差、单轮型直取）；
+   *   · 单轮上下文 turn = perTurnTokens(最近一轮, 上一轮)（多调用型做差、单轮型直取）；
    *   · 预算 budget = SESSION_BUDGET（四个阈值都给，界面当前只用 maxTurnTokens）；
    *   · rotate = 现在派活会不会轮换（预览，给人看原因）。
    *

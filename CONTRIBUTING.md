@@ -8,7 +8,7 @@
 
 所以**执行路径的改动请先开 issue 说一声**，不要直接提 PR。具体是这些地方：
 
-- `apps/server/src/codex.mjs` / `dsh.mjs` —— `runTask` / `spawn`（起 agent CLI 进程；
+- `apps/server/src/codex.mjs` / `claude.mjs` —— `runTask` / `spawn`（起 agent CLI 进程；
   `node.mjs` 那条分机执行链已随多机子系统 2026-11-09 删除）
 - `apps/server/src/externals.mjs` —— `commandFor` / `mirrors`（外部件的命令与镜像）
 - `apps/web/js/*.mjs` —— 任何把字符串拼进 `data-*` 再执行的写法（前端已拆原生 ESM，无打包器）
