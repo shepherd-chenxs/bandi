@@ -292,35 +292,23 @@
 .pr-commit-list li code { flex: 0 0 auto; font-family: ui-monospace, monospace; font-size: 11px;
                           color: var(--dim); }
 .pr-commit-list li span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* 建 PR 弹窗重设计（2026-10-29）：
-   · 概览三颗 chip（当前分支 / base / 领先）替掉「｜」串成的长句 —— 数字要一眼扫到；
-   · 提交清单收进浅底卡片，跟下面的表单在视觉上分两段；
-   · 标题、描述在前，分支两栏并排在后（都是短输入，竖排浪费半屏）；
-   · 动作条压底 + 上分隔线（同 #expertDlg 那套）。 */
-/* 尺寸**固定**（2026-10-29 用户："窗口固定大小"）：这颗弹窗的内容是异步长出来的
-   （「读工作区…」→ 概览 + 提交卡 → 表单出现），不定高就会从一丁点撑到满屏、位置还往上跳。
-   做法同 dialog.sch-dlg：定高 + form 转 flex 列 —— 概览自己滚（上限 240），
-   描述框吃掉剩余高度，动作条 margin-top:auto 钉底。窗口本身不再随内容变。 */
-dialog#repoPrDlg { width: 660px; height: min(720px, 92vh); max-height: 92vh;
+/* 建 PR 弹窗（2026-11-24 收口）：标题 → 描述 → base 竖排，状态区只留告警；
+   窗口定高 560，描述框吃满剩余高度 —— 不在中间留空白；动作条压底 + 上分隔线。 */
+dialog#repoPrDlg { width: 660px; height: min(560px, 92vh); max-height: 92vh;
                    display: flex; flex-direction: column; overflow: hidden; }
 #repoPrDlg > form { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 #repoPrDlg .dlg-head { flex: 0 0 auto; }
-/* 概览区：异步回来前后占的是同一块地方；提交条数多了它自己滚，不推挤下面的表单 */
-#repoPrDlg #prState { flex: 0 0 auto; max-height: 240px; overflow: auto; }
+/* 状态提示区：异步回来前后占的是同一块地方；告警多了它自己滚，不推挤下面的表单 */
+#repoPrDlg #prState { flex: 0 0 auto; max-height: 120px; overflow: auto; }
 #repoPrDlg #prForm { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 /* ⚠️ 上面那条把 #prForm 设成了 display:flex —— 作者样式压过 UA 的 `[hidden]{display:none}`，
    没这一条，「不可建 PR」时表单照样显示（老坑，见 MEMORY「断显隐看 computed display」）。 */
 #repoPrDlg #prForm[hidden] { display: none; }
-#repoPrDlg #prForm > label, #repoPrDlg .pr-fill-row { flex: 0 0 auto; }
-/* 描述框是这一屏唯一的"可伸缩项"：窗口高度固定，多出来的空间给它 */
-#repoPrDlg #prBody { flex: 1 1 auto; min-height: 96px; resize: none; }
-.pr-path { margin: 6px 0 0; }
-.pr-sum { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-.pr-sum-item { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 11px;
-               border: 1px solid var(--line); border-radius: 999px; background: var(--side); font-size: 12px; }
-.pr-sum-k { color: var(--dim); white-space: nowrap; }
-.pr-sum-v { font-family: ui-monospace, monospace; font-size: 11.5px; color: var(--text);
-            max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#repoPrDlg #prForm > label { flex: 0 0 auto; }
+/* 描述框吃满 560px 弹窗的剩余高度（2026-11-24："你增加 pr 描述的高度"，填掉中间空白）；
+   保底 180px，想再写长自己往下拖。 */
+#repoPrDlg #prBody { flex: 1 1 auto; min-height: 180px; resize: vertical; }
+/* 2026-11-24：目录地址、四枚状态 chip 与标题行按钮都已撤掉，对应样式同步删。 */
 .pr-commits { margin-top: 10px; padding: 9px 12px 7px; border: 1px solid var(--line);
               border-radius: 8px; background: var(--side); }
 .pr-commits-head { font-size: 12px; color: var(--dim); }
@@ -330,8 +318,9 @@ dialog#repoPrDlg { width: 660px; height: min(720px, 92vh); max-height: 92vh;
 /* 字段 label 的灰色小注（原来塞在括号里，现在挪出来跟在标题后面） */
 #repoPrDlg label em { margin-left: 4px; font-style: normal; }
 #repoPrDlg #prTitle { font-size: 13.5px; }
-/* 动作条钉底：margin-top:auto 把剩余高度全吃掉（不是固定 16px —— 定高窗口里正文短了会浮在半空） */
-#repoPrDlg .dlg-actions { flex: 0 0 auto; margin: auto -20px -20px; padding: 14px 20px; border-top: 1px solid var(--line); }
+/* 动作条压底：margin-top:auto 吃掉剩余高度（描述框已接管空白，这里只管贴底）；
+   上分隔线按用户 2026-11-24 要求去掉。 */
+#repoPrDlg .dlg-actions { flex: 0 0 auto; margin: auto -20px -20px; padding: 14px 20px; }
 /* 管理员（2026-10-23 用户拍板）：不放 select —— 直接显示员工姓名的按钮，
    点开 keeperDlg 弹窗搜索选人（人多时原生下拉又长又不能搜）。现在住在详情的 .info-row 里 */
 .gr-keeper-btn { max-width: 100%; height: 30px; padding: 0 12px; border-radius: 7px;
