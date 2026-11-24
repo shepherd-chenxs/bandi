@@ -2935,15 +2935,6 @@ export function openRepoPrDialog(repo, onDone) {
         <div class="pr-sum-item"><span class="pr-sum-k">领先 base</span><span class="pr-sum-v">${esc(String(ahead))}</span></div>
         ${pushChip}
       </div>
-      ${
-        state.aheadCommits?.length
-          ? `<div class="pr-commits">
-          <div class="pr-commits-head">这条 PR 会装 <b>${state.aheadCommits.length}</b> 条提交<span class="pr-commits-note">${unpushedN > 0 ? '已提交、还没推' : '已推到远端'}</span></div>
-          <ul class="pr-commit-list">
-            ${state.aheadCommits.map((c) => `<li><code>${esc(c.sha)}</code><span title="${esc(c.subject)}">${esc(c.subject)}</span></li>`).join('')}
-          </ul></div>`
-          : ''
-      }
       ${state.canPr ? '' : '<div class="pr-warn">当前分支没有领先 base 的提交 —— 没有东西可以进 PR：先在「提交」里提交，再来建。</div>'}
       ${state.canPr && !state.canPrNow ? '<div class="pr-warn">这条分支还有没推送的提交 —— 建不了 PR。先关掉这个窗，在「提交」卡的推送区点「推送」，推完再回来。</div>' : ''}`;
     const form = $('prForm');
