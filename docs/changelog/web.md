@@ -791,7 +791,7 @@ v13（2026-11-01 七改）：设备行加「取消配对」（已踢出行的清
    v179（2026-11-08 frp 不再内置，隧道层整块下线）：用户决定「把 frp 从 bandi 里移掉，
    不内置，以后需要我自己装」。所以删的不是一个二进制，而是**这层能力**：
    ① `hub/tunnel.mjs`（生 frpc.toml / 起停 / 重连 / 收尸）、`vendor/frp/`（17 MB exe）、
-      `apps/desktop/fetch-frpc.mjs`、`build-frpc.mjs`、`smoke-tunnel.mjs`、`deploy/relay-aliyun/` 全删；
+      桌面侧的 frpc 下载/构建脚本、`smoke-tunnel.mjs`、`deploy/relay-aliyun/` 全删；
    ② `/api/hello` 的 `relay` 字段、「我的」页桌面/手机两处外网状态行 + `.me-relay/.me-dot` 样式删；
       状态行没有真相可显示了 —— 进程不归我们管，编个状态比不显示更害人；
    ③ 打包链路：`stage-runtime.mjs` 不再拷 `vendor/frp`，`tauri.conf.json` 去掉 `runtime/vendor → vendor`
@@ -1391,7 +1391,7 @@ v13（2026-11-01 七改）：设备行加「取消配对」（已踢出行的清
   语义待用户手动过一遍（本机 adb 注入按键被 INJECT_EVENTS 拒）。
   改动：js/navstack.mjs（新）、mobile/chat/projects/skills/settings/flowpages.mjs（登记）、
   sw.js（+navstack 预缓存，VERSION v224 → v226，v225 是壳专属条目不动静态）、
-  apps/mobile-native/MainActivity.kt（webBack）。
+  原生壳的 MainActivity（webBack，文件后来随原生壳调整，路径已不在）。
 
 
   v227（2026-11-11 21:4x 补齐其余下钻页的上一层，用户实报"任务看板按返回直接退出了"）：
