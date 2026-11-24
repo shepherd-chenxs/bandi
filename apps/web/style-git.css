@@ -305,8 +305,8 @@ dialog#repoPrDlg { width: 660px; height: min(720px, 92vh); max-height: 92vh;
                    display: flex; flex-direction: column; overflow: hidden; }
 #repoPrDlg > form { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 #repoPrDlg .dlg-head { flex: 0 0 auto; }
-/* 概览区：异步回来前后占的是同一块地方；提交条数多了它自己滚，不推挤下面的表单 */
-#repoPrDlg #prState { flex: 0 0 auto; max-height: 240px; overflow: auto; }
+/* 状态提示区：异步回来前后占的是同一块地方；告警多了它自己滚，不推挤下面的表单 */
+#repoPrDlg #prState { flex: 0 0 auto; max-height: 120px; overflow: auto; }
 #repoPrDlg #prForm { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 /* ⚠️ 上面那条把 #prForm 设成了 display:flex —— 作者样式压过 UA 的 `[hidden]{display:none}`，
    没这一条，「不可建 PR」时表单照样显示（老坑，见 MEMORY「断显隐看 computed display」）。 */
@@ -315,12 +315,7 @@ dialog#repoPrDlg { width: 660px; height: min(720px, 92vh); max-height: 92vh;
 /* 描述框是这一屏唯一的"可伸缩项"：窗口高度固定，多出来的空间给它 */
 #repoPrDlg #prBody { flex: 1 1 auto; min-height: 96px; resize: none; }
 .pr-path { margin: 6px 0 0; }
-.pr-sum { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-.pr-sum-item { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 11px;
-               border: 1px solid var(--line); border-radius: 999px; background: var(--side); font-size: 12px; }
-.pr-sum-k { color: var(--dim); white-space: nowrap; }
-.pr-sum-v { font-family: ui-monospace, monospace; font-size: 11.5px; color: var(--text);
-            max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 2026-11-24：pr-sum 四枚状态 chip 已去掉（当前分支/base/领先/推送），样式一并删。 */
 .pr-commits { margin-top: 10px; padding: 9px 12px 7px; border: 1px solid var(--line);
               border-radius: 8px; background: var(--side); }
 .pr-commits-head { font-size: 12px; color: var(--dim); }

@@ -2906,35 +2906,12 @@ export function openRepoPrDialog(repo, onDone) {
       $('prSubmit').disabled = true;
       return;
     }
-    const dirty = state.dirtyCount;
-    /* base 没记录时不能说 "origin/null"（那是假话，也看不出该做什么） */
-    const ahead = !state.base
-      ? '不知道（没记录 base 分支）'
-      : state.ahead === null
-        ? `不知道（本地还没有 origin/${state.base}，点开分支下拉「更新项目」拉一次）`
-        : `${state.ahead} 个提交`;
-    /* 推送状态（推送和建 PR 拆开后弹窗要管的第一件事）：没推完 = 现在建不了，指路推送区 */
-    const unpushedN = Number(state.unpushed ?? 0);
-    const pushChip = !state.upstream
-      ? '<div class="pr-sum-item"><span class="pr-sum-k">推送</span><span class="pr-sum-v">没推过（还没有上游）</span></div>'
-      : unpushedN > 0
-        ? `<div class="pr-sum-item"><span class="pr-sum-k">推送</span><span class="pr-sum-v">还有 ${unpushedN} 个没推</span></div>`
-        : '<div class="pr-sum-item"><span class="pr-sum-k">推送</span><span class="pr-sum-v">已推到远端</span></div>';
     /*
-     * 这个窗只讲**这条 PR 会装什么**（2026-10-29 用户："应该是这个 PR 相关的内容，没推送的讲他干嘛？"）：
-     * 已提交、还没推的就是全部内容；没提交的东西跟这颗按钮无关，不摆进来占地方。
-     */
-    /*
-     * 概览重设计（2026-10-29）：「当前分支 / base / 领先」从竖线串成的长句改成 chip ——
-     * 数字和分支名是要被扫到的，不是被读的；提交清单收进浅底卡片，跟下面的表单区分开。
+     * 2026-11-24：顶部四枚状态 chip（当前分支 / base / 领先 base / 推送）按用户要求去掉 ——
+     * 分支在页面标题的分支选择器里、base 就在下面的输入框里，推送状态在「提交 / 推送」卡；
+     * 这里只留**挡住建 PR 的两条告警**，不重复摆扫一眼就知道的东西。
      */
     box.innerHTML = `
-      <div class="pr-sum">
-        <div class="pr-sum-item"><span class="pr-sum-k">当前分支</span><span class="pr-sum-v" title="${esc(state.branch)}">${esc(state.branch)}</span></div>
-        <div class="pr-sum-item"><span class="pr-sum-k">base</span><span class="pr-sum-v" title="${esc(state.base || '未记录')}">${esc(state.base || '未记录')}</span></div>
-        <div class="pr-sum-item"><span class="pr-sum-k">领先 base</span><span class="pr-sum-v">${esc(String(ahead))}</span></div>
-        ${pushChip}
-      </div>
       ${state.canPr ? '' : '<div class="pr-warn">当前分支没有领先 base 的提交 —— 没有东西可以进 PR：先在「提交」里提交，再来建。</div>'}
       ${state.canPr && !state.canPrNow ? '<div class="pr-warn">这条分支还有没推送的提交 —— 建不了 PR。先关掉这个窗，在「提交」卡的推送区点「推送」，推完再回来。</div>' : ''}`;
     const form = $('prForm');
