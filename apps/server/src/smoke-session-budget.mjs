@@ -4,7 +4,7 @@
  *
  * 钉住四件事：
  *   ① 阈值（轮数 / 年龄 / 累计 tokens / 单轮上下文 / 真实上下文比例）任一超限 → 该轮换；
- *   ② dsh 的 usage 是会话累计，相邻两轮差值才是"这一轮的上下文"（非单调时退回累计值）；
+ *   ② 多调用型运行时的 usage 是会话累计，相邻两轮差值才是"这一轮的上下文"（非单调时退回累计值）；
  *   ③ **有真实上下文信号时以它为准**（2026-11-12 实报：整轮求和 234 万其实最后一调才 6 万、
  *      窗口 95 万 —— 旧口径把"活得重"判成"上下文满"，一天八次轮换）；
  *   ④ 阈值可用环境变量覆盖，默认值有边界、不为 0。
@@ -43,7 +43,7 @@ const byTurn = shouldRotate({ usage: { inputTokens: 10_200_000 }, prevUsage: { i
 check('单轮上下文 = 相邻两轮差值，到上限 → 换', byTurn.rotate && byTurn.reasons.some((r) => r.includes('单轮')), byTurn.reasons.join('；'));
 check('两项都超 → 原因都列出来', shouldRotate({ rounds: B.maxRounds, ageMs: B.maxHours * HOUR }).reasons.length === 2);
 
-console.log('\n③ 差值口径：dsh 累计 / 单轮型运行时 / 非单调');
+console.log('\n③ 差值口径：累计 / 单轮型运行时 / 非单调');
 check('两轮累计 10.2M / 10M → 单轮 200k', perTurnTokens({ inputTokens: 10_200_000 }, { inputTokens: 10_000_000 }) === 200_000);
 check('只有一轮 → 直接拿累计（首轮=单轮）', perTurnTokens({ inputTokens: 80_000 }, null) === 80_000);
 check('非单调（换运行时/重置）→ 退回累计值', perTurnTokens({ inputTokens: 50_000 }, { inputTokens: 80_000 }) === 50_000);
@@ -68,8 +68,6 @@ console.log('\n③b 真实上下文口径（2026-11-12 实报：234 万其实最
   // 探不到真实上下文时：多调用型运行时不能再拿求和当窗口判（否则又回到一天八次轮换）
   check('无真实上下文 + codex 族求和 234 万 → 不用求和判超限',
     shouldRotate({ usage: { inputTokens: 2_344_363, runtimeFamily: 'codex' } }).rotate === false);
-  check('无真实上下文 + dsh 族同样不为求和所动',
-    shouldRotate({ usage: { inputTokens: 5_000_000, runtimeFamily: 'dsh' } }).rotate === false);
   check('无真实上下文 + 单轮型（claude）120k → 仍判超限',
     shouldRotate({ usage: { inputTokens: 120_000, runtimeFamily: 'claude' } }).rotate === true);
   check('运行时族未知（老数据）+ 120k → 保守判超限',

@@ -774,7 +774,7 @@ button.gr-pr-check:hover { background: var(--side); }
 .combo.up .combo-pop { top: auto; bottom: calc(100% + 6px); }
 /* 贴着窗口右边的那种下拉（发送按钮旁边那颗）：浮层**右边缘跟按钮右边缘对齐**。
    默认是 left:0（从按钮往右长），浮层最宽 360px —— 按钮靠右时就会一路探出窗口
-   （用户截图实报："应该像是 dsh 那样"）。 */
+   （用户截图实报过想要这种对齐）。 */
 .combo.right .combo-pop { left: auto; right: 0; }
 
 
@@ -1964,7 +1964,7 @@ dialog .member:has(input:disabled) span { color: var(--dim); }
                                           border-color: var(--accent); color: var(--accent); }
 .composer .input-tools button.stopping:hover { background: color-mix(in srgb, var(--accent) 28%, var(--input)); }
 
-/* 他在办时那颗按钮是 DSH 的「停止生成」：**浅蓝圆 + 白色圆角方块**
+/* 他在办时那颗按钮是「停止生成」：**浅蓝圆 + 白色圆角方块**
    （不是压暗成灰色 —— 那是"禁用"的样子，不是"可以停下来"） */
 .nc-say .nc-send.stopping { background: color-mix(in srgb, var(--accent) 78%, #ffffff); }
 .nc-say .nc-send.stopping:hover { background: var(--accent); }

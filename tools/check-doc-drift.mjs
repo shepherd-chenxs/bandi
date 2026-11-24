@@ -315,7 +315,6 @@ function inVersionRecord(lines, i) {
 const REF_ALLOW = {
   'Node.js': '模板里的运行时名字，不是仓库文件',
   'ReleaseNote.md': '文档目录方案里的文件名示例，不是仓库里已有的文件',
-  'cli.js': 'dsh / Electron 包内部的文件（docs/00-项目总基线/00.2 总体设计/bandi架构设计说明书.md 讲的是外部 CLI 自己的结构）',
   'qrcode.js': 'vendored 的来源文件，在 npm 包里；仓库里只有转出的 vendor/qrcode.mjs（原文已写明）',
   'bandi-hub/contract.md': '身份中枢的契约文档在**另一个仓库**（github.com/shepherd-chenxs/bandi-hub），本仓库里没有它的拷贝',
 };

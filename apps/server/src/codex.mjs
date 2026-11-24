@@ -45,7 +45,7 @@ function probeCommand({ file, args, env }) {
         stdio: ['ignore', 'pipe', 'pipe'],
       });
     } catch (e) {
-      // 同 dsh.mjs：spawn 会同步抛，在 Promise executor 里抛就是 reject → HTTP 500
+      // 同 claude.mjs：spawn 会同步抛，在 Promise executor 里抛就是 reject → HTTP 500
       resolve({ ok: false, error: `起不来：${[e?.code, e?.message].filter(Boolean).join(' ')}` });
       return;
     }
@@ -124,7 +124,7 @@ function mapUsage(u) {
   };
 }
 
-/** 把 Codex 的事件词汇翻译成平台统一的词汇（与 dsh 适配器一致） */
+/** 把 Codex 的事件词汇翻译成平台统一的词汇（与 claude 适配器一致） */
 export function normalize(evt) {
   switch (evt.type) {
     case 'thread.started':
@@ -161,7 +161,7 @@ export function normalize(evt) {
 const SELF_KILL_RE = /Get-Process\s+node[^\n]*Stop-Process|taskkill[^\n]*\/IM\s+node|killall\s+node|pkill[^\n]*\bnode\b/i;
 
 /**
- * 跑一次 Codex，契约与 dsh 适配器一致：
+ * 跑一次 Codex，契约与 claude 适配器一致：
  * 任务走 stdin，stdout 按行 JSON，回调统一词汇的事件。
  *
  * @returns {Promise<{sessionId:string|null, finalText:string, exitCode:number|null,
@@ -305,7 +305,7 @@ export function runTask({
     if (signal) {
       signal.addEventListener('abort', () => {
         try { child.kill(); } catch { /* ignore */ }
-        // 只杀直接子进程不够：孙进程占着 stdout 管道会让 'close' 永远不来（见 dsh.mjs 同款注释）
+        // 只杀直接子进程不够：孙进程占着 stdout 管道会让 'close' 永远不来（见 claude.mjs 同款注释）
         if (process.platform === 'win32' && child.pid) {
           try { spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }); } catch { /* ignore */ }
         }

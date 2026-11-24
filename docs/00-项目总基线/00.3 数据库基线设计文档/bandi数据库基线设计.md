@@ -216,7 +216,7 @@
 | `scope` | TEXT | NOT NULL DEFAULT `''`，联合 PK | `''`＝普通会话；`wf:<实例id>`＝某条流程（隔离上下文） |
 | `sessionId` | TEXT | | CLI 给的会话 id |
 | `lastSeenRowid` | INTEGER | NOT NULL DEFAULT 0 | 读到哪儿的水位线 |
-| `family` | TEXT | 补列 DEFAULT `''` | 这条 sessionId 是哪个运行时族（codex/claude/dsh）给的 |
+| `family` | TEXT | 补列 DEFAULT `''` | 这条 sessionId 是哪个运行时族（codex/claude）给的 |
 | `startedAt` | TEXT | 补列 | 会话起点，用于上下文预算轮换 |
 
 ### 3.8 persona_skills —— 技能挂载

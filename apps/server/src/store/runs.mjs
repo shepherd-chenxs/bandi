@@ -120,7 +120,7 @@ export function countRunsSince(conversationId, personaId, sinceIso) {
 
 /**
  * 这条会话最近几轮的 usage（新的在前；没有 usage 的跳过）。
- * dsh 的 usage 是**会话累计**（inputTokens 单调增）→ 预算模块用相邻两轮的差值估算"这一轮的上下文"；
+ * 多调用型运行时的 usage 是**会话累计**（inputTokens 单调增）→ 预算模块用相邻两轮的差值估算"这一轮的上下文"；
  * 单轮型运行时（codex/claude）则直接拿最近一轮的 inputTokens。
  */
 export function listRecentRunUsage(conversationId, personaId, limit = 2) {

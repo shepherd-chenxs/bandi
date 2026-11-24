@@ -16,7 +16,7 @@
         ├─ 身份中枢登录（bandi-hub，认证在中枢、授权在本机）
         ├─ 派活链路 dispatch → runs → adapters
         │        ↓ spawn 子进程
-        │   codex exec ／ claude -p ／ dsh headless   ← 执行端永远在本机
+        │   codex exec ／ claude -p                  ← 执行端永远在本机
         ├─ 代码托管（仓库接入 → 克隆 → agent 干活 → PR 巡检/审阅/合并）
         ├─ 存储与记忆（SQLite 库 ＋ 数据目录文件）
         └─ 出站通道（飞书长连接、GitHub API、身份中枢心跳）
@@ -27,7 +27,7 @@
 
 ### 1.2 主体功能
 
-1. **集成 agent CLI** —— 接 **codex / claude / dsh** 三族 CLI（`apps/server/src/adapters.mjs`）。
+1. **集成 agent CLI** —— 接 **codex / claude** 两族 CLI（`apps/server/src/adapters.mjs`）。
    三个适配器输出**同一套事件词汇**，上层不关心底层是哪个 CLI；CLI 自己装、凭据自备，
    班底只识别、只调用，不代装。
 2. **创建数字员工** —— 一个数字员工 = 名字 ＋ 职责指令 ＋ **岗位手册（平台内置，随岗位固定，不可见）** ＋
@@ -49,7 +49,7 @@ apps/
       server.mjs        分发入口：精确 key 表在前，动态段交给 routes/chain.mjs
       routes/           按域拆的路由模块（chain.mjs 按数组下标先匹配先赢）
       store/            **唯一持库者** —— SQL 只出现在这个目录里（store/db.mjs）
-      adapters.mjs      协议族 → 适配器注册表（codex / claude / dsh）
+      adapters.mjs      协议族 → 适配器注册表（codex / claude）
       runtimes.mjs      运行时族与实例管理（设备 → CLI → 详情，设备现在只有"本机"）
       dispatch.mjs      「派活」链路：解析目标 → 拼首轮任务 → 起一次 run
       runs.mjs          run 台账与收尾编排（settle）
@@ -71,7 +71,7 @@ apps/
 
 | 层 | 选型 | 为什么 |
 | --- | --- | --- |
-| 执行端 | 子进程拉起 `codex exec --json` / `claude -p --output-format stream-json` / dsh headless，读 stdout 的按行 JSON | 三个 CLI 都自带一次性模式，自行退出 |
+| 执行端 | 子进程拉起 `codex exec --json` / `claude -p --output-format stream-json`，读 stdout 的按行 JSON | 两个 CLI 都自带一次性模式，自行退出 |
 | 服务端 | 一个薄 Node 进程：`node:http` ＋ SSE | 仓库零依赖，一个人能维护 |
 | 存储 | **better-sqlite3**（原生模块） | 2026-10-22 从 node:sqlite 换来；桌面安装包随附其运行时必需文件。SQL 只出现在 `store/` 目录里；结构代次 `PRAGMA user_version`（`SCHEMA_VERSION` 落后就拒绝启动 —— 老程序打开新库会静默产出半对的数据，那比报错难查得多） |
 | 前端 | 一张静态页（不引构建工具） | 原生 ES modules、无打包器、无框架，形态定了之后结论是**不换框架** |
@@ -120,28 +120,28 @@ apps/
 
 两层概念（`apps/server/src/runtimes.mjs`）：
 
-- **协议族（family）**：codex / claude / dsh，写在代码里 —— 每接一个要写它的事件
+- **协议族（family）**：codex / claude，写在代码里 —— 每接一个要写它的事件
   词汇映射，不是配置能变出来的。
 - **运行时实例（runtime）**：某台设备上的一个具体配置（哪个可执行文件、什么名字、开不开）。
   同一族可以加多个实例。
 
 - 设备只有一台 `local`（执行端就是本进程 spawn 子进程）；`kind/host/port/user/keyPath`
   字段是给将来 SSH 设备预留的。
-- 预置运行时是 `codex` 和 `dsh`（可改不可删）；**claude 不预置但可识别**，接入走
-  「设置 → 运行时」识别，可执行路径无字面量默认值（`BANDI_CLAUDE_EXE` 仅供开发指定）。
-- 沙箱语义三家不同：codex 只有 `danger-full-access` 在无人审批下跑得动命令；
+- 预置运行时是 `codex` 和 `claude`（可改不可删；2026-11-24 v1.7.3 起 dsh 下线、
+  claude 接棒预置位），可执行路径无字面量默认值（`BANDI_CLAUDE_EXE` 仅供开发指定）。
+- 沙箱语义两家不同：codex 只有 `danger-full-access` 在无人审批下跑得动命令；
   claude 对应概念是 `--permission-mode`（`default` / `plan` 档在 headless 下被禁用，
-  `acceptEdits` 保留 —— 它能自动放行编辑）；dsh 只有 `workspace-write`。
+  `acceptEdits` 保留 —— 它能自动放行编辑）。
 - 「生成提交说明」（`apps/server/src/commit-msg.mjs`）是**一次性短跑**：不建 run、不留会话，
   运行时按候选链逐个尝试、单个失败自动切下一个，全部失败退规则兜底 —— 按钮永远给得出东西。
 
 ### 4.2 统一事件词汇
 
-三个适配器都产出这套，前端只认这一套：
+两个适配器都产出这套，前端只认这一套：
 
 | 事件 | 含义 |
 | --- | --- |
-| `session` | 本次运行的会话标识（Codex 的 thread_id／claude 的 session_id／dsh 的 sessionId） |
+| `session` | 本次运行的会话标识（Codex 的 thread_id／claude 的 session_id） |
 | `status` | `turn_start` / `step_start` / `step_end` / `turn_end`（带 usage） |
 | `thinking` | 推理文本 |
 | `text` | 助手正式回复 |
@@ -151,7 +151,7 @@ apps/
 
 ### 4.3 怎么算做完了
 
-一条可复现的链路，不靠感觉。三个 runtime 都已实测通过：
+一条可复现的链路，不靠感觉。两个 runtime 都已实测通过：
 
 ```sh
 # Codex：新会话 + 续接
@@ -161,15 +161,11 @@ codex exec resume <thread_id> --json -                  # 同一 thread，上下
 # Claude Code：同样的两件事
 claude -p --output-format stream-json --verbose -       # 结算事件 {"type":"result","subtype":"success",...}
 claude --resume <session_id> -p --output-format stream-json --verbose -
-
-# dsh：同样的两件事
-dsh --profile headless --json -                         # session 事件给出 sessionId
-dsh --profile headless --json --session-id <id> -       # turn 变成 2
 ```
 
 **平台的验收 = 在界面上点出同一件事，落进同一份事件流。**
 
-### 4.4 三家适配器的已知不对称
+### 4.4 两家适配器的已知不对称
 
 - **Codex**：`exec` 收 `-C <目录>` 与 `-s <沙箱模式>`；但 `exec resume <id>` **两个都不收**，
   续接靠进程 cwd 与会话记录。`-p <name>` 可叠加 `$CODEX_HOME/<name>.config.toml`。
@@ -180,15 +176,9 @@ dsh --profile headless --json --session-id <id> -       # turn 变成 2
   会以为它不是 result）。`--resume <session_id>` 能续接记忆。`system/thinking_tokens` 极其
   密集，适配器**直接丢弃**，否则会把 SSE 和界面冲爆；stderr 上混非 JSON 告警行，解析要跳过。
   沙箱对应 `--permission-mode`，超出 `PERMISSION_MODES` 的值不传给 CLI。
-- **dsh**（`apps/server/src/dsh.mjs`）：CLI 不在 PATH 上，真实做法是 `ELECTRON_RUN_AS_NODE=1`
-  起 Electron 可执行文件再跑 `app.asar` 里的 `cli.js`；`.cmd` 过 shell 有引号坑，
-  所以直接起 exe ＋ 参数数组。班底只把**模型名**用 `--patch` 传下去；走哪条地址、带谁的 Key
-  由 profile 自己的配置决定（凭据由 dsh 从 `$DSH_HOME/.env` 读，班底不注入）。
-  ⚠️ 补丁层是**整块替换 `config`**、不是逐字段合并 —— 只写 `model` 会把 profile 里的
-  `provider:` 一起冲掉，所以那一行必须原样读回来再写回去。
 
 **中途递话**：Codex 有 `codex queue --thread <id> --message <text>`，能给正在跑的会话递话；
-claude / dsh headless 没有对应能力（每次调用只跑一个任务）。这是**排期问题，不是能力问题**，
+claude headless 没有对应能力（每次调用只跑一个任务）。这是**排期问题，不是能力问题**，
 接口按"排队式"设计，留出递话的位置。
 
 ## 5. 派活链路：一轮任务的合同
@@ -402,7 +392,7 @@ agent 在克隆目录里干活；项目 / 任务卡**引用**仓库。凭据规�
   不叫插件是因为市场来的能力不进班底进程 —— 班底只登记（账本）＋ 接线（翻译成每个 CLI
   能吃的启动参数），代码在它自己的进程里跑，隔离是白捡的。
   现在只有 `mcp` 一种 kind（stdio / streamable-http）；三家接线方式不同：
-  codex 走 `-c`、dsh 走 `--patch`、claude 走 `--mcp-config`。
+  codex 走 `-c`、claude 走 `--mcp-config`。
   ⚠️ **接线与提示词必须同进退**：往首轮注入"你有 ssh 连接器"的前提是 `resolve(family)`
   真的生成了启动参数，不然模型会拿提示词去找一个不存在的工具。
 

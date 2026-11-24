@@ -12,8 +12,8 @@ import { dataDir, repoRoot } from './config.mjs';
  *   ① 登记：它从哪来、要什么凭据、给哪些运行时用（这就是"账本"）
  *   ② 接线：把这条登记翻译成每个 agent CLI 能吃的启动参数
  * 代码在它自己的进程里跑，班底既不 import 它、也不监督它 —— 隔离是白捡的。
- * 代价：能力边界取决于 CLI 支持什么（三家怎么吃 MCP 各不相同 ——
- * codex 走 `-c`、dsh 走 `--patch`、claude 走 `--mcp-config`，下面三节各写各的）。
+ * 代价：能力边界取决于 CLI 支持什么（各家怎么吃 MCP 不一样 ——
+ * codex 走 `-c`、claude 走 `--mcp-config`，下面各写各的）。
  *
  * ⚠️ **接线与提示词必须同进退**（2026-11-13 实报）：`promptLines` 往员工首轮注入
  * "你有 ssh 连接器"的前提是 `resolve(family)` 真的生成了启动参数。账本上有、参数
@@ -22,7 +22,7 @@ import { dataDir, repoRoot } from './config.mjs';
  * "有 ssh 连接器"的提示带偏的：mcp__* 里根本没有，ToolSearch 也搜不到）。
  *
  * 现在只有一种 kind：`mcp`（stdio / streamable-http）。
- * 以后要加别的 kind（比如 codex / dsh 自己的插件包），在这里加一个 resolve 分支，
+ * 以后要加别的 kind，在这里加一个 resolve 分支，
  * 存储形状和账本格式都不用动。
  */
 
@@ -32,8 +32,8 @@ export const KINDS = [
 ];
 
 /**
- * id 规则：dsh 的 serverName 要求 [A-Za-z0-9_-]{1,32}，codex 更宽松 —— 取交集，
- * 这样同一个 id 两个运行时都能用，不会出现"codex 能用、dsh 装不上"。
+ * id 规则：[A-Za-z0-9_-]{1,32} —— 按各运行时里最严的口径取的，
+ * 这样同一个 id 谁都能用，不会出现"这边能用、那边装不上"。
  */
 const SAFE_ID = /^[A-Za-z0-9_-]{1,32}$/;
 export function isValidId(id) {
@@ -43,7 +43,7 @@ export function isValidId(id) {
 /** 账本路径。测试用 BANDI_CONNECTORS 指到临时文件，绝不碰真实账本 */
 const bookFile = () => process.env.BANDI_CONNECTORS ?? path.join(dataDir, 'connectors.json');
 
-/** 生成的 dsh 覆盖层放这儿（内容寻址，不是用户数据，可以随时删） */
+/** 生成的连接器配置文件放这儿（内容寻址，不是用户数据，可以随时删） */
 const patchDir = () => process.env.BANDI_CONNECTORS_DIR ?? path.join(dataDir, 'connectors');
 
 /* ------------------------------------------------------------------ 读写 */
@@ -292,7 +292,7 @@ export function ensureBuiltinConnectors() {
 /**
  * Windows 上 `npx` / `npm` 是 .cmd 垫片：直接起会 ENOENT —— Node 和 CLI 的 MCP 客户端
  * 都不会自己解析 PATHEXT（实测：spawn npx → ENOENT；cmd /c npx → 270ms 起来）。
- * 所以统一在这一处补一层 cmd /c，codex、dsh、实探三条路都走它，不各写一遍。
+ * 所以统一在这一处补一层 cmd /c，codex、claude、实探三条路都走它，不各写一遍。
  *
  * 绝对路径的 .exe 不动 —— 那条是实测最稳的形态。
  */
@@ -338,72 +338,18 @@ function codexArgs(entries, notes) {
         );
       }
       if (dropped.length) {
-        notes.push(`${e.id}：codex 不支持环境变量引用（${dropped.join('、')}），这层没接；dsh 那边有`);
+        notes.push(`${e.id}：codex 不支持环境变量引用（${dropped.join('、')}），这层没接`);
       }
-      if (e.cwd) notes.push(`${e.id}：codex 的 MCP 配置不吃 cwd，已跳过；dsh 那边有`);
+      if (e.cwd) notes.push(`${e.id}：codex 的 MCP 配置不吃 cwd，已跳过`);
     } else {
       args.push('-c', `${base}.url=${tomlString(e.url)}`);
       if (e.bearerTokenEnv) args.push('-c', `${base}.bearer_token_env_var=${tomlString(e.bearerTokenEnv)}`);
       if (Object.keys(e.headers).length) {
-        notes.push(`${e.id}：codex 的 MCP 配置没有 headers，已跳过（用 bearerTokenEnv 或 dsh 那边配）`);
+        notes.push(`${e.id}：codex 的 MCP 配置没有 headers，已跳过（用 bearerTokenEnv）`);
       }
     }
   }
   return args;
-}
-
-/* -------------------------------------------------------------- 接线：dsh */
-
-const yamlScalar = (v) =>
-  typeof v === 'boolean' || typeof v === 'number' ? String(v) : `'${String(v).replace(/'/g, "''")}'`;
-
-/** 引用写成 `!!js process.env.NAME` —— 密钥不进文件，与官方 mcp-bundle 模板同一写法 */
-const yamlValue = (v) => (isRef(v) ? `!!js process.env.${refName(v)}` : yamlScalar(v));
-
-function renderDshPatch(entries) {
-  const lines = [
-    '# 由班底生成（apps/server/src/connectors.mjs）—— 别手改，改 data/connectors.json。',
-    '# 每次运行用 dsh --patch <本文件> 叠加在 headless profile 之上。',
-    '- insert:',
-  ];
-  for (const e of entries) {
-    lines.push(`    - id: mcp-${e.id}`);
-    lines.push("      name: '@deepseek-ai/dsh-mcp-client'");
-    lines.push('      config:');
-    lines.push(`        serverName: ${yamlScalar(e.id)}`);
-    lines.push(`        transport: ${yamlScalar(e.transport)}`);
-    if (e.transport === 'stdio') {
-      const l = launcher(e);
-      lines.push(`        command: ${yamlScalar(l.command)}`);
-      if (l.args.length) lines.push(`        args: [${l.args.map(yamlScalar).join(', ')}]`);
-      if (e.cwd) lines.push(`        cwd: ${yamlScalar(e.cwd)}`);
-      const keys = Object.keys(e.env);
-      if (keys.length) {
-        lines.push('        env:');
-        for (const k of keys) lines.push(`          ${yamlScalar(k)}: ${yamlValue(e.env[k])}`);
-      }
-    } else {
-      lines.push(`        url: ${yamlScalar(e.url)}`);
-      const keys = Object.keys(e.headers);
-      if (keys.length) {
-        lines.push('        headers:');
-        for (const k of keys) lines.push(`          ${yamlScalar(k)}: ${yamlValue(e.headers[k])}`);
-      }
-    }
-    if (e.failOnStartup) lines.push('        failOnStartupError: true');
-  }
-  return lines.join('\n') + '\n';
-}
-
-/** 内容寻址：同一份配置只写一个文件，运行期不会互相踩；不做清理（几百字节，留着便于排查） */
-function writeDshPatch(entries) {
-  const yml = renderDshPatch(entries);
-  const hash = crypto.createHash('sha1').update(yml).digest('hex').slice(0, 12);
-  const dir = patchDir();
-  fs.mkdirSync(dir, { recursive: true });
-  const file = path.join(dir, `dsh-mcp-${hash}.patch.yml`);
-  if (!fs.existsSync(file)) fs.writeFileSync(file, yml, 'utf8');
-  return file;
 }
 
 /* ------------------------------------------------------------ 接线：claude */
@@ -411,15 +357,14 @@ function writeDshPatch(entries) {
 /**
  * claude：走 `--mcp-config <文件>`（官方口子：一个 JSON，根键 `mcpServers`）。
  *
- * 与 dsh 同款思路：整份配置落一个**内容寻址**的文件，不碰用户自己的
+ * 整份配置落一个**内容寻址**的文件，不碰用户自己的
  * `~/.claude.json` —— 用户在 claude 里自己配的 MCP 照常加载，这份是叠上去的
  * （**不加** `--strict-mcp-config`，那是"只用这一份"的开关，替用户做减法的事不干）。
  *
- * `env:NAME` 引用在这里的处境介于 codex 与 dsh 之间：
- *   · 文件里只能写字面量（claude 不会帮我们解 `!!js`，dsh 那种"引用留在文件里、
- *     运行时才解析"表达不了），所以**从本进程环境解析后落字面量** —— 密钥会进
- *     生成的文件（在班底数据目录里、不进 shell 历史与命令行，比 codex 内联进
- *     命令行好一点，但仍然落盘，这点不藏着）。
+ * `env:NAME` 引用在这里只能写字面量（claude 不会帮我们解 `!!js` 那种
+ * "引用留在文件里、运行时才解析"的写法），所以**从本进程环境解析后落字面量** ——
+ * 密钥会进生成的文件（在班底数据目录里、不进 shell 历史与命令行，比 codex 内联进
+ * 命令行好一点，但仍然落盘，这点不藏着）。
  *   · 引用的变量本进程没有 → 丢掉这个键。`resolve()` 顶上已经对缺引用统一记了
  *     note（"引用了环境变量 X，但当前进程环境里没有它"），这里不重复说。
  */
@@ -431,7 +376,7 @@ function renderClaudeConfig(entries, notes) {
       const l = launcher(e);
       const server = { command: l.command };
       if (l.args.length) server.args = l.args;
-      if (e.cwd) notes.push(`${e.id}：claude 的 MCP 配置不吃 cwd，已跳过；dsh 那边有`);
+      if (e.cwd) notes.push(`${e.id}：claude 的 MCP 配置不吃 cwd，已跳过`);
       const env = {};
       for (const [k, v] of Object.entries(e.env)) {
         const val = resolveRef(v);
@@ -458,7 +403,7 @@ function renderClaudeConfig(entries, notes) {
   return JSON.stringify({ mcpServers: servers }, null, 2) + '\n';
 }
 
-/** 同 dsh 的内容寻址写法：同内容只写一次，运行期不互相踩 */
+/** 内容寻址写法：同内容只写一次，运行期不互相踩 */
 function writeClaudeConfig(entries, notes) {
   const json = renderClaudeConfig(entries, notes);
   const hash = crypto.createHash('sha1').update(json).digest('hex').slice(0, 12);
@@ -589,7 +534,7 @@ export function activeFor(family) {
  *
  * 为什么必须有一段提示词：codex 把外部工具放在 **tool_search 后面**，不在预置工具列表里 ——
  * 实测里模型会直接说"没有 echo 工具"。不告诉它去搜，"装上了"就只是账本上的一行。
- * dsh / claude 那边工具是直接列出来的（claude 开了 tool_search 时会延迟暴露），
+ * claude 那边工具是直接列出来的（开了 tool_search 时会延迟暴露），
  * 命名都是 mcp__<连接器>__<工具>，所以只提一句。
  *
  * ⚠️ 以 **resolve 的结果**为准，不看账本开关：args 真的生成了才算"这轮有连接器"。
@@ -614,7 +559,7 @@ export function promptLines(family) {
 /**
  * 给一次运行算出"要往 CLI 参数里加什么"。
  *
- * @param family 协议族（codex / claude / dsh）—— 按族算，因为同一族的多个实例共用一套命令行
+ * @param family 协议族（codex / claude）—— 按族算，因为同一族的多个实例共用一套命令行
  * @returns {{args:string[], files:string[], active:string[], notes:string[]}}
  *   失败不抛：接不上就记 notes，运行照跑（连接器坏了不该让人连话都说不了）
  */
@@ -625,8 +570,8 @@ export function resolve(family) {
 
   out.active = entries.map((e) => e.id);
 
-  // 引用型凭据要由**本进程**的环境提供（子进程继承它）。缺了的话 dsh 会整条激活失败，
-  // 报的是 "invalid config" —— 在这儿先说清楚，别让人对着一条莫名的警告猜。
+  // 引用型凭据要由**本进程**的环境提供（子进程继承它）。缺了的话整条激活会失败，
+  // 报的是一句莫名的配置错误 —— 在这儿先说清楚，别让人对着一条莫名的警告猜。
   for (const e of entries) {
     for (const [k, v] of Object.entries({ ...e.env, ...e.headers })) {
       if (isRef(v) && process.env[refName(v)] === undefined) {
@@ -638,10 +583,6 @@ export function resolve(family) {
   try {
     if (family === 'codex') {
       out.args = codexArgs(entries, out.notes);
-    } else if (family === 'dsh') {
-      const file = writeDshPatch(entries);
-      out.files = [file];
-      out.args = ['--patch', file];
     } else if (family === 'claude') {
       // 2026-11-13 接上（此前一直走上面的"还没接"分支）：马超在 claude 上搜不到
       // mcp__ssh__* 就是这一行缺了 —— 连接器账本开着、提示词也注入了，工具却没挂

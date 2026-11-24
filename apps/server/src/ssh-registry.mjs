@@ -6,7 +6,7 @@ import crypto from 'node:crypto';
 /**
  * 服务器登记表（~/.bandi/servers.yaml）的读写。
  *
- * **为什么单独一个模块**：这份契约有三方在共用（班底平台、MCP server、DSH 插件），
+ * **为什么单独一个模块**：这份契约有两方在共用（班底平台、MCP server），
  * 而 MCP 那个文件在**模块顶层就接 stdin 跑循环**——被 import 会抢走 stdin。
  * 所以把读写抽到这里：谁都能 import，且没有任何副作用。
  * （原来这些函数长在 mcp/bandi-ssh.mjs 里，逐字搬过来的，行为不变。）

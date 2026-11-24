@@ -142,7 +142,7 @@ export function runTask({
         standingFile = path.join(os.tmpdir(), `bandi-standing-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.md`);
         fs.writeFileSync(standingFile, String(systemPrompt), { encoding: 'utf8', mode: 0o600 });
       } catch {
-        // 临时文件写不进 → 退回任务文本通道（与 codex/dsh 行为一致），契约不丢
+        // 临时文件写不进 → 退回任务文本通道（与 codex 行为一致），契约不丢
         taskText = `${String(systemPrompt)}\n\n${task}`;
         standingFile = null;
       }
@@ -304,7 +304,7 @@ export function runTask({
     if (signal) {
       signal.addEventListener('abort', () => {
         try { child.kill(); } catch { /* ignore */ }
-        // 只杀直接子进程不够：孙进程占着 stdout 管道会让 'close' 永远不来（见 dsh.mjs 同款注释）
+        // 只杀直接子进程不够：孙进程占着 stdout 管道会让 'close' 永远不来（见 codex.mjs 同款注释）
         if (process.platform === 'win32' && child.pid) {
           try { spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }); } catch { /* ignore */ }
         }

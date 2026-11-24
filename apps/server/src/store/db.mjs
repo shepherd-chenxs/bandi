@@ -208,14 +208,14 @@ db.exec(`
   -- 'wf:<流程实例id>' = 某一条流程。为什么必须分作用域：经办人只有一个 1:1 会话，
   -- 而那个会话被**多条流程共用**，sessionId 又恰恰是"上下文"本身 —— 不隔离的话，
   -- 新起一条流程会直接续接上一条流程的会话，带着旧记忆开跑。
-  -- 隔离之后：**发起一条新流程 = 这个员工那边开一条全新会话**（等于 dsh 新开一个 session）。
+  -- 隔离之后：**发起一条新流程 = 这个员工那边开一条全新会话**。
   CREATE TABLE IF NOT EXISTS member_sessions (
     threadId       TEXT NOT NULL,
     personaId      TEXT NOT NULL,
     scope          TEXT NOT NULL DEFAULT '',
     sessionId      TEXT,
     lastSeenRowid  INTEGER NOT NULL DEFAULT 0,
-    -- 这个 sessionId 是**哪个运行时族**（codex / claude / dsh）给的。见下面 ensureColumn 的说明
+    -- 这个 sessionId 是**哪个运行时族**（codex / claude）给的。见下面 ensureColumn 的说明
     family         TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (threadId, personaId, scope)
   );

@@ -7,15 +7,13 @@
  */
 import { runTask as runCodex } from './codex.mjs';
 import { runTask as runClaude } from './claude.mjs';
-import { runDsh } from './dsh.mjs';
 
 export const ADAPTERS = {
   codex: (opts) => runCodex(opts),
   claude: (opts) => runClaude(opts),
-  dsh: (opts) => runDsh(opts),
 };
 
-/** 这个协议族有没有适配器（族是代码里写死的三家，不是配置能变出来的） */
+/** 这个协议族有没有适配器（族是代码里写死的两家，不是配置能变出来的） */
 export function adapterFor(family) {
   return ADAPTERS[family] ?? null;
 }

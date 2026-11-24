@@ -956,8 +956,8 @@ export function wireRun(v) {
   // ⚠️ 一律用 `onclick =` 而不是 addEventListener：**这个函数会被重复调用**
   //    （增量更新之后要重新接按钮），addEventListener 会叠加成"点一次发两条"。
   const send = view.querySelector('#ncSend');
-  // 他在办的时候，这颗按钮不是"发送"，是"停止生成" —— 跟 DSH 一样
-  //（DSH 运行中那颗按钮的文案就是 input.stop = 停止生成，图标是方块）
+  // 他在办的时候，这颗按钮不是"发送"，是"停止生成"
+  //（运行中那颗按钮的文案就是 input.stop = 停止生成，图标是方块）
   // ⚠️ 按**按钮自己的状态**判断走哪条路，别依赖 ncCtx（那是右侧对话栏的东西，
   //    没开栏时它是 null，点击会掉进 sendNodeChat —— 空输入，看着像"点了没反应"）
   if (send) send.onclick = () => (send.classList.contains('stopping') ? stopNodeRun() : sendNodeChat());
@@ -1173,7 +1173,7 @@ export let ncStream = null;
 /** 亮/灭「正在输入中」：做成左边一个气泡（三个点依次跳），
  *  不是顶栏上的一行字。列表每次重画就被冲掉，所以这里每次重新插。 */
 export function setTyping(on) {
-  // 他在办 → 发送键变成 DSH 那颗「停止生成」（方块）
+  // 他在办 → 发送键变成「停止生成」（方块）
   const send = $('ncSend');
   if (send) {
     send.innerHTML = on
@@ -1196,7 +1196,7 @@ export function setTyping(on) {
 
 
 
-/** 停止生成：掐掉这一步正在跑的那次运行（跟 DSH 那颗方块按钮一个意思） */
+/** 停止生成：掐掉这一步正在跑的那次运行 */
 export async function stopNodeRun() {
   const id = ncRunningId;
   if (!id) return;

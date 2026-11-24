@@ -3,8 +3,7 @@
  *
  * 背景（2026-10-26 用户实问）：数字员工在跑的时候，聊天页只有三个点 ——
  * 不知道他在想、在调工具、还是已经卡住了。底层其实一直有事件
- * （dsh headless 的 JSONL、codex/claude 的适配事件都原样落在 `run_events`，
- * SSE 重连还会重放），缺的是"事件 → 人话"这一层。
+ * （codex/claude 的适配事件都原样落在 `run_events`，SSE 重连还会重放），缺的是"事件 → 人话"这一层。
  *
  * 这一层**不碰 DOM**（纯逻辑），好处有两个：
  *   · 聊天页用它画实时状态；流程实例页的节点对话将来可以共用同一份；
@@ -13,11 +12,10 @@
  * 写进回话消息的 meta.progress，历史里画成可展开的收起行；用户实判没啥用，砍了）。
  * 所以这里只服务"正在跑"的那一块，跑完 300ms 整页重画就没了，不需要收尾快照这条路。
  *
- * 四家 runtime 的词不一样，这里收敛成三种语义：
+ * 各家 runtime 的词不一样，这里收敛成三种语义：
  *   · 阶段：status(phase) / thinking / text / error / __done
- *   · **一步 = 一次工具调用**（dsh: `tool_call` → `tool_result`；codex/claude 只有 `tool`）
+ *   · **一步 = 一次工具调用**（codex/claude 都只有 `tool`，没有结果事件）
  *   · 收尾：`__done`（带最终状态）
- * dsh 那边还有 `step_start`/`step_end` 的"步"边界，但那是模型的一步里可能调多个工具；
  * 对用户来说"调了一次工具"才是看得见的一步，所以计数按工具调用走。
  */
 
@@ -40,7 +38,7 @@ export const STALL_MS = 5 * 60 * 1000;
  * 然后重试 5 次、7 分钟，一个字没产出。而界面上这段时间**什么都没有** ——
  * 事件被服务端扣住了（见 runs.mjs 的 isChannelError），用户只能看到"卡住了"。
  *
- * 判据只认**运行级 error 事件**里的通道特征（工具自己的报错走 tool_result，不在此列）：
+ * 判据只认**运行级 error 事件**里的通道特征（工具自己的报错不算运行级，不在此列）：
  * 认得出来就报「连不上模型 · 重连 2/5 · 已等 43 秒」，让人知道该去查代理/网络。
  */
 export const CHANNEL_FAIL_RE =
@@ -218,7 +216,6 @@ export function createRunProgress({ startedAt = Date.now(), lastEventAt = null, 
     phase: 'starting',
     turns: 0,
     steps: [],
-    byCall: new Map(),
     error: '',
     info: '',
     /*
@@ -258,8 +255,8 @@ export function applyRunEvent(state, evt, now = Date.now()) {
   state.lastEventAt = now;
   const type = String(evt.type ?? '');
 
-  // 除了"结果事件"，任何新动静都意味着上一个还在跑的动作已经有下文了
-  if (type !== 'tool_result') closeRunning(state);
+  // 任何新动静都意味着上一个还在跑的动作已经有下文了
+  closeRunning(state);
 
   switch (type) {
     case 'status': {
@@ -305,35 +302,6 @@ export function applyRunEvent(state, evt, now = Date.now()) {
         endedAt: null,
         error: '',
       });
-      state.phase = 'tool';
-      break;
-    }
-    case 'tool_call': {
-      // dsh：有 id、有输入，后面会跟一条 tool_result
-      const step = {
-        callId: evt.callId ?? null,
-        name: evt.tool ?? evt.name ?? '工具',
-        input: evt.input ?? null,
-        detail: null,
-        status: 'running',
-        at: now,
-        endedAt: null,
-        error: '',
-      };
-      state.steps.push(step);
-      if (step.callId) state.byCall.set(step.callId, step);
-      state.phase = 'tool';
-      break;
-    }
-    case 'tool_result': {
-      const step = evt.callId
-        ? state.byCall.get(evt.callId)
-        : [...state.steps].reverse().find((s) => s.status === 'running');
-      if (step) {
-        step.status = evt.status === 'error' ? 'error' : 'done';
-        step.endedAt = now;
-        if (step.status === 'error') step.error = clip(evt.result, 120);
-      }
       state.phase = 'tool';
       break;
     }

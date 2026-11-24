@@ -1112,7 +1112,7 @@ export function startProjectTask(id, { allowIdea = false } = {}) {
 /**
  * 这一轮员工最终说了什么 —— **交付声明只从这里读**（收尾钩子 `onTaskRunFinished` 用）。
  *
- * 内存里的 `finalText` 可能是空串（dsh 的 finalText 只来自 final 事件，被停/异常时没有），
+ * 内存里的 `finalText` 可能是空串（finalText 只来自 final 事件，被停/异常时没有），
  * 那就按"空回话"算 —— 不要拿 streamedText 替它开脱：屏幕上的过程话不是交付。
  *
  * P5（2026-11-09）：落库的回话会剥掉首行 `[完成]`（那是机器信号、不给雇主看，见

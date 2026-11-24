@@ -14,10 +14,10 @@ import { $, S } from './core.mjs';
 /** 沙箱选项。带 blocked 的那两档实测在 headless 下跑不了命令，必须在界面上说清楚 */
 /**
  * 权限的中文名。**id 是给运行时用的，界面上一律显示中文** ——
- * `read-only` 这种裸英文对用户没意义（DSH 里也是"完全权限"这么写的）。
+ * `read-only` 这种裸英文对用户没意义。
  */
 export const SANDBOX_LABEL = {
-  // codex / dsh 这套
+  // codex 这套
   'read-only': '仅可查看',
   'workspace-write': '工作区内读写',
   'danger-full-access': '完全权限',

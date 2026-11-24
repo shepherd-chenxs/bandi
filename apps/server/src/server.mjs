@@ -741,6 +741,18 @@ try {
 } catch (err) {
   console.log(`内置员工同步失败（不影响启动）：${err?.message ?? err}`);
 }
+// dsh 下线迁移（2026-11-24 v1.7.3）：绑在 dsh 实例上的员工改绑 claude（这台机器没有
+// 能用的 claude 就落 'auto'），runtimes.json 里的 dsh 实例一并清掉。幂等：没有 dsh 痕迹不写。
+// 放在沙箱统一迁移**之前** —— 改绑之后沙箱档才能按 claude 族算对（bypassPermissions）。
+try {
+  const migrated = runtimes.migrateDshPersonasToClaude({
+    listPersonas: () => store.listPersonas(),
+    updatePersona: (id, patch) => store.updatePersona(id, patch),
+  });
+  if (migrated) console.log(`已把 ${migrated} 个绑在 dsh 上的员工改绑到 claude（dsh 运行时实例已清掉）`);
+} catch (err) {
+  console.log(`dsh 员工迁移失败（不影响启动）：${err?.message ?? err}`);
+}
 // 员工沙箱档统一到「完全权限」（2026-11-14 用户口径：所有数字员工权限设为完全权限，
 // "默认"这类无人审批跑不动命令的档不再出现 —— 下拉里也已滤掉，见 runtimes.makeRuntime）。
 // 幂等：已是对的员工不会写。放在 steward seed / 同步之后 —— 内置员工也要被覆盖到。
