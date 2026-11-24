@@ -1435,7 +1435,15 @@ body:not(.mb-narrow) #groupView .mgrid { grid-template-columns: repeat(6, 1fr); 
 .sw-card .sw-head .plg-title { flex: 1; min-width: 0; }
 .plg-card-main { flex: 1; min-width: 0; }
 .plg-ico { flex: 0 0 auto; width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center;
-           background: var(--chip); border: 1px solid var(--line); font-size: 14px; font-weight: 600; }
+           font-size: 14px; font-weight: 600;
+           /* 默认壳：灰底灰线，字色继承 —— 卡上没给色时还是老样子 */
+           background: var(--chip); border: 1px solid var(--line); color: inherit;
+           /* 2026-11-24 起连接器卡图标带色：--ico-c 由 icoChip/plgColorFor 内联给出。
+              图形描边吃这个色（svg 是 currentColor），底与边框各混一层淡淡的。
+              color-mix 不支持时整段声明被丢弃，回落上面两行 */
+           color: var(--ico-c, inherit);
+           background: color-mix(in srgb, var(--ico-c, var(--chip)) 12%, var(--chip));
+           border-color: color-mix(in srgb, var(--ico-c, var(--line)) 30%, var(--line)); }
 /* 头像图形（2026-10-25 起 .plg-ico 里放的是描边 SVG，不再是首字）：
    17px 在 32px 方块里留白合适，描边粗细跟左侧导航一个观感 */
 .plg-ico svg { width: 17px; height: 17px; }

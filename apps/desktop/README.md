@@ -4,7 +4,7 @@
 
 界面不在这里 —— 用 `apps/web`（`apps/desktop/ui/` 那第二套前端已于 2026-10-15 删除）。
 "控制面起没起、要不要起、退出收不收"的判断也**不在这里** —— 在 `shell.mjs`（Node），
-与 `start.cmd` 共用 `apps/server/src/lifecycle.mjs`。理由见 [形态决策](../../docs/形态决策.md) §十二：
+与 `start.cmd` 共用 `apps/server/src/lifecycle.mjs`。理由见 [产品决策更新日志](../../docs/01-迭代版本包/产品决策.md)「2026-10-15 技术选型复审」：
 同一件事各写一份，必然两边跑偏。
 
 ## 结构
@@ -149,7 +149,7 @@ Add-Type -AssemblyName System.Drawing
 实测（静默安装 + **把 node 从 PATH 里剥掉**再运行）：
 
 - 装出来的目录：`bandi-desktop.exe`、`node.exe`、`apps/**`（控制面 + 界面 + `shell.mjs`）、`skills/`、`plugins/`
-- 双击 → 窗口标题「班底 <版本>」（版本真源 `version.json`）、里面就是平台界面
+- 双击 → 窗口标题「BANDI」（2026-11-24 起不带版本号；版本看「我的」页，真源 `version.json`）、里面就是平台界面
 - **PATH 上没有 node，照样跑** —— 用的是安装目录里那份 `node.exe`（控制面的 `repoRoot` 就是安装目录）
 - 关掉窗口 → 它起的控制面被收掉；卸载 → 目录与注册表都干净（**要连数据一起清，卸载时选「完全卸载」，见下**）
 

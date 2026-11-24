@@ -114,10 +114,16 @@ for (const [pkg, name] of THIRD_PARTY) {
   bytes += fs.statSync(path.join(out, 'third-party', name)).size;
 }
 
-/** 平台的技能库与已装插件目录：控制面会从仓库根读它们（缺了不致命，但会"少了东西"） */
+/**
+ * 平台的技能库与已装插件目录：控制面会从仓库根读它们（缺了不致命，但会"少了东西"）。
+ * plugins 目录**必须落一个空壳**：tauri.conf.json 把 runtime/plugins 列为必打资源，
+ * 全新 clone 没装过插件时根目录没有 plugins/，缺了这个目录 tauri build 直接失败
+ * （2026-11-24 实测：`resource path 'runtime\plugins' doesn't exist`）。
+ */
 for (const d of ['skills', 'plugins']) {
   const src = path.join(repo, d);
   if (fs.existsSync(src)) copyTree(src, path.join(out, d));
+  else fs.mkdirSync(path.join(out, d), { recursive: true });
 }
 
 /**

@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "班底",
-  "version": "1.5.21",
+  "version": "1.7.0",
   "identifier": "app.local.desktop-shell",
   "build": {
     "beforeDevCommand": "",
@@ -38,7 +38,7 @@
     "publisher": "牧羊人",
     "category": "Utility",
     "shortDescription": "客户端薄壳：拉起本地控制面",
-    "longDescription": "薄壳：拉起本地控制面并把窗口指向它，界面复用 apps/web（不再自带第二套前端）。形态与角色划分见 docs/形态决策.md。",
+    "longDescription": "薄壳：拉起本地控制面并把窗口指向它，界面复用 apps/web（不再自带第二套前端）。当前产品形态见 docs/00-项目总基线/00.2 总体设计/bandi产品设计说明书.md。",
     "windows": {
       "nsis": {
         "installerIcon": "icons/icon.ico",
