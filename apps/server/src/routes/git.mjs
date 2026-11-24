@@ -19,7 +19,7 @@ import * as patrol from '../repo-patrol.mjs';
  */
 
 /**
- * catch 出口统一走这里（2026-11-14 报错规范，见 docs/契约.md「报错规范」）：领域错（GitError 等）自带
+ * catch 出口统一走这里（2026-11-14 报错规范，码表见 error-codes.mjs）：领域错（GitError 等）自带
  * 更准的码（E12xx 一类），**优先透传**它的 —— 路由的码只做兜底。文案不动，人话在领域层已经写好。
  */
 const failWith = (res, fallbackCode, e) => fail(res, 400, e?.code ?? fallbackCode, String(e?.message ?? e));

@@ -235,7 +235,7 @@ export function startDetached({ port, dataDir, logFile, extraEnv = {}, stripEnv 
  *   `{ action: 'failed' }`   没起来（带日志尾部）
  *
  * `force` = 强制重启：即便是我们自己的、正在跑的，也先收掉再起
- * （会打断正在跑的活 —— 见 docs/形态决策.md「重启的代价」）。
+ * （会打断正在跑的活 —— 见 deploy/README.md「重启的代价」）。
  *
  * `onSpawn(pid)` = **刚 spawn 出来、还没等它健康**时的一次回调（可选）。
  * 为什么要它（2026-10-22 实报）：桌面壳需要"这个服务是我起的"这份记录才能收摊，

@@ -5,7 +5,7 @@
  * （purgeConversation / purgeDissolvedGroup / purgePersonaHistory —— 删除链路要跨
  * 会话/群/员工三域复用，收不回来）。实现按域拆进 ./store/*.mjs，这里只负责 re-export。
  * 调用方一律 `import * as store from './store.mjs'`，不受拆分影响。
- * 规矩不变：**SQL 只出现在 store/ 目录里**（docs/形态决策.md §十二）；
+ * 规矩不变：**SQL 只出现在 store/ 目录里**（决策见 docs/01-迭代版本包/产品决策.md「2026-10-15 技术选型复审」）；
  * `db` 本体从这里开始不再外泄 —— 只有 store/ 内的模块拿得到。
  *
  * 域地图：db=连接/建表/迁移 · personas=数字员工 · personaSkills=技能挂载 ·

@@ -20,6 +20,12 @@
  *   ④ **陈旧结论**：一张短语表（"默认只听本机""把令牌填进登录页"…），命中就报；
  *      同时在**历史注记**里豁免（见下）。仓库惯例是"保留历史 + 加批注"，
  *      那些句子是**故意留着**的，不能一视同仁地打红。
+ *   ⑤ **错误码**：文档与源码里的 E12xx 都必须在 `error-codes.mjs` 的码表里。
+ *   ⑥ **代码禁引 docs/**（2026-11-24）：运行时不许依赖 docs/ —— 员工要照着做的材料
+ *      （判据、模板）一律放 skills/（有 skillDigest 登记兜底）；写死在提示词里的
+ *      docs/ 路径没人管，改名就静默 404（真踩过：workflows.mjs 指着已不存在的
+ *      `docs/模板/` 指挥 agent 写文档）。只扫非注释行；借鉴性指路在 PROMPT_ALLOW
+ *      白名单里逐条写明理由。
  *
  * 关于"新旧怎么区分"（这是本工具唯一的判断题，尽量说清楚）：
  *   · 命中后先看**上下 8 行内**有没有"历史措辞"——原先 / 曾经 / 已被 / 取代 / 删掉 / 改成 / ✗ 之类。
@@ -35,15 +41,15 @@
  *   · 拿不准就**跳过并打印**（`·` 开头的行）：误报一次，人就开始整片忽略它的输出。
  *
  * 不扫什么（**故意**的）：
- *   · `docs/design/*`、`docs/prd/*`、`docs/mobile/pwa-prd.md`、`docs/交接-*.md` ——
- *     时间点快照，改它等于篡改历史；它们和新实现的关系靠"谁取代了谁"那句话来交代。
- *   · 但**快照也得登记**：根目录 / docs / docs/mobile / deploy 下新出现的 .md
+ *   · `docs/05-归档区/*` —— 时间点快照（交接单、PRD、旧设计稿），
+ *     改它等于篡改历史；它们和新实现的关系靠"谁取代了谁"那句话来交代。
+ *   · 但**快照也得登记**：根目录 / docs / docs 各分类目录 / deploy 下出现的 .md
  *     如果既不在活文档表、也不在快照表里，直接报错 —— 和 run-smokes 的"不许有没人管的用例"同理，
  *     不然新文档天生不受检，等于没这道闸。
  *
  * 跑法：
- *   node tools/check-doc-drift.mjs                 # 四类全跑
- *   node tools/check-doc-drift.mjs --only=phrases  # 只跑一类（refs / lines / counts / phrases）
+ *   node tools/check-doc-drift.mjs                 # 六类全跑
+ *   node tools/check-doc-drift.mjs --only=phrases  # 只跑一类（refs / lines / counts / phrases / codes / prompts）
  *   node tools/check-doc-drift.mjs --verbose       # 连"命中但有历史批注"的那些也列出来
  *   node tools/check-doc-drift.mjs --strict        # ② 的软提醒也算失败
  * 退出码：0 干净 / 1 有漂移 / 2 参数不认识
@@ -67,15 +73,15 @@ const LIVE = [
   ['SECURITY.md', '安全默认与部署建议'],
   ['CONTRIBUTING.md', '开发约定（含注释规约）'],
   ['deploy/README.md', '部署手册：单机部署、隧道、排障'],
-  ['docs/架构.md', '模块表与数据流'],
-  ['docs/快速开始.md', '安装、启动、命令行与前置条件'],
-  ['docs/形态决策.md', '单机 / 隧道的取舍与已撤体系档案'],
-  ['docs/契约.md', '接口契约'],
-  ['docs/审阅经验.md', 'PR 审阅踩过的坑'],
-  ['docs/头像生成规范.md', '头像生成口径'],
+  ['docs/00-项目总基线/00.2 总体设计/bandi架构设计说明书.md', '模块表与数据流'],
+  ['docs/00-项目总基线/快速开始.md', '安装、启动、命令行与前置条件'],
+  ['docs/00-项目总基线/00.2 总体设计/bandi产品设计说明书.md', '产品设计：定位、场景、功能与交互口径'],
   ['apps/mobile-native/README.md', '原生手机壳：构建、结构、与 Tauri 壳的关系'],
-  ['docs/mobile/pwa-design.md', '手机端实现说明（头部已声明为快照性质，但仍是现行实现的主要参考）'],
-  ['docs/mobile/sequence-diagram.mermaid', '手机配对的时序图'],
+  ['docs/02-变更管理/README.md', '变更管理分类说明'],
+  ['docs/03-过程文档/README.md', '过程文档分类说明'],
+  ['docs/04-交付物&培训材料/README.md', '目录说明：模板已迁 skills（运行时材料归技能库，2026-11-24）'],
+  ['skills/bandi-pr-review/references/审阅经验.md', 'PR 审阅判据台账（运行时材料归技能库，2026-11-24 迁）'],
+  ['docs/多迭代版本项目文档管理方案.md', 'docs 目录的组织规范'],
 ];
 
 /**
@@ -83,28 +89,36 @@ const LIVE = [
  * 值写清楚它是什么时间的什么决定 —— 有人想改它之前先看到这句。
  */
 const SNAPSHOT = {
-  'docs/mobile/pwa-prd.md': '2026-10 手机端 PRD（需求快照；实现口径见 pwa-design）',
+  // 增量日志是 append-only：每一版/每一天的条目写的是**当时**的文件与行为，
+  // 按现行口径去查它，等于要求把历史改成现在 —— 所以进快照表，只登记不回写。
+  'docs/01-迭代版本包/产品决策.md': '产品决策更新日志（版本 → 日期，只追加不回写）',
+  'docs/01-迭代版本包/web.md': '前端改动日志（版本条目，只追加不回写）',
+  'docs/05-归档区/pwa-prd.md': '2026-10 手机端 PRD（需求快照；实现口径见 pwa-design）',
   // 配对体系（扫码/邀请码/设备令牌）2026-11-07 整体退场：pwa-design 里那些路径与
   // smoke-pair / pairing.mjs 等文件名只作历史记录，不再拿"文件在不在"去判它。
-  'docs/mobile/pwa-design.md': '2026-11 手机配对体系设计快照（该体系 2026-11-07 整体退场，见 docs/形态决策.md §十五 ④）',
-  'docs/PRD-2026-10-23-PR审阅与授权合并.md': '2026-10-23 需求快照',
-  'docs/PRD-2026-10-23-项目面板改造.md': '2026-10-23 需求快照',
-  'docs/交接-2026-10-18.md': '2026-10-18 交接快照',
-  'docs/交接-2026-11-13-完全自主交付.md': '2026-11-13 完全自主交付交接快照',
+  'docs/05-归档区/pwa-design.md': '2026-11 手机配对体系设计快照（该体系 2026-11-07 整体退场，见 docs/01-迭代版本包/产品决策.md「2026-11-07」）',
+  'docs/05-归档区/PRD-2026-10-23-PR审阅与授权合并.md': '2026-10-23 需求快照',
+  'docs/05-归档区/PRD-2026-10-23-项目面板改造.md': '2026-10-23 需求快照',
+  // 2026-11-24 整理目录时从 docs/prd/ 收进归档区（此前在 docs/prd/ 下，不在扫描范围、也没登记）
+  'docs/05-归档区/2026-10-20-会话改造.md': '2026-10-20 会话改造需求快照',
+  'docs/05-归档区/2026-10-20-局域网加入总机.md': '2026-10-20 局域网加入总机需求快照（该机制 2026-11-09 整体删除）',
+  'docs/05-归档区/2026-10-20-局域网加入总机-增量1.md': '2026-10-20 局域网加入总机需求快照·增量一',
+  'docs/05-归档区/交接-2026-10-18.md': '2026-10-18 交接快照',
+  'docs/05-归档区/交接-2026-11-13-完全自主交付.md': '2026-11-13 完全自主交付交接快照',
   // 2026-11-13 补登记：上一轮自主迭代（1f83bd5）落下的交接快照，漏登记让对账一直红着
-  'docs/交接-2026-11-13-修复自主交付第一步派活崩溃.md': '2026-11-13 自主交付第一步派活崩溃修复的交接快照',
+  'docs/05-归档区/交接-2026-11-13-修复自主交付第一步派活崩溃.md': '2026-11-13 自主交付第一步派活崩溃修复的交接快照',
   // 2026-11-22 补登记：本轮「岗位本命技能搬出技能库」的施工单/交接快照
-  'docs/交接-2026-11-22-岗位包搬出技能库.md': '2026-11-22 岗位本命技能搬出技能库（岗位手册）交接快照',
+  'docs/05-归档区/交接-2026-11-22-岗位包搬出技能库.md': '2026-11-22 岗位本命技能搬出技能库（岗位手册）交接快照',
   // 2026-11-22 补登记：交给 zcode 的施工单（专业度回归集 + 三个尾巴）
-  'docs/交接-2026-11-22-回归集与三个尾巴.md': '2026-11-22 专业度回归集与三个尾巴的施工单快照',
+  'docs/05-归档区/交接-2026-11-22-回归集与三个尾巴.md': '2026-11-22 专业度回归集与三个尾巴的施工单快照',
   // 同一轮的"开场指令"：可粘给执行者的短版，正文以施工单为准
-  'docs/交接-2026-11-22-zcode开场指令.md': '2026-11-22 回归集施工的开场指令（施工单的入口摘要）',
+  'docs/05-归档区/交接-2026-11-22-zcode开场指令.md': '2026-11-22 回归集施工的开场指令（施工单的入口摘要）',
   // 深夜收口：根因重定位 + 修复 + 明早待办（快照，不回写）
-  'docs/交接-2026-11-22-回归集收口.md': '2026-11-22 专业度回归集收口交接快照（根因重定位、修复与明早待办）',
+  'docs/05-归档区/交接-2026-11-22-回归集收口.md': '2026-11-22 专业度回归集收口交接快照（根因重定位、修复与明早待办）',
   // 2026-11-23 中午：给接手人的剩余工作交接（自包含，P0~P6 + 铁律 + 文件索引）
-  'docs/交接-2026-11-23-剩余工作.md': '2026-11-23 剩余工作交接快照（P0~P6、铁律、文件索引与留档口径）',
+  'docs/05-归档区/交接-2026-11-23-剩余工作.md': '2026-11-23 剩余工作交接快照（P0~P6、铁律、文件索引与留档口径）',
   // 深夜：田螺姑娘进 bandi + 成片链路的验收交接（快照，不回写）
-  'docs/交接-田螺姑娘与成片链路-2026-11-23.md': '2026-11-23 田螺姑娘进 bandi 与成片能点开的验收交接快照',
+  'docs/05-归档区/交接-田螺姑娘与成片链路-2026-11-23.md': '2026-11-23 田螺姑娘进 bandi 与成片能点开的验收交接快照',
 };
 
 /**
@@ -157,7 +171,7 @@ const onlyArg = (() => {
 const strict = argv.includes('--strict');
 /** --verbose：把"命中但被历史批注豁免"的那些也列出来（想彻底清零时挨条看） */
 const verbose = argv.includes('--verbose');
-const SECTIONS = ['refs', 'lines', 'counts', 'phrases'];
+const SECTIONS = ['refs', 'lines', 'counts', 'phrases', 'codes', 'prompts'];
 const want = onlyArg ? SECTIONS.filter((s) => s === onlyArg) : SECTIONS;
 if (onlyArg && !want.length) {
   console.error(`--only=${onlyArg} 不认识。可选：${SECTIONS.join(' / ')}`);
@@ -178,7 +192,17 @@ const warn = (msg) => {
 /* ============================================================ 0. 清单完整性 */
 
 {
-  const roots = ['', 'docs', 'docs/mobile', 'deploy'];
+  const roots = [
+    '',
+    'docs',
+    'docs/00-项目总基线',
+    'docs/01-迭代版本包',
+    'docs/02-变更管理',
+    'docs/03-过程文档',
+    'docs/04-交付物&培训材料',
+    'docs/05-归档区',
+    'deploy',
+  ];
   const found = roots.flatMap((d) =>
     fs
       .readdirSync(path.join(repo, d))
@@ -284,7 +308,9 @@ function inVersionRecord(lines, i) {
  * 这份表越短越好，长到需要解释"为什么不加规则"的时候就该改规则了。
  */
 const REF_ALLOW = {
-  'cli.js': 'dsh / Electron 包内部的文件（docs/架构.md 讲的是外部 CLI 自己的结构）',
+  'Node.js': '模板里的运行时名字，不是仓库文件',
+  'ReleaseNote.md': '文档目录方案里的文件名示例，不是仓库里已有的文件',
+  'cli.js': 'dsh / Electron 包内部的文件（docs/00-项目总基线/00.2 总体设计/bandi架构设计说明书.md 讲的是外部 CLI 自己的结构）',
   'qrcode.js': 'vendored 的来源文件，在 npm 包里；仓库里只有转出的 vendor/qrcode.mjs（原文已写明）',
   'bandi-hub/contract.md': '身份中枢的契约文档在**另一个仓库**（github.com/shepherd-chenxs/bandi-hub），本仓库里没有它的拷贝',
 };
@@ -527,6 +553,102 @@ if (want.includes('phrases')) {
   }
   if (!hits) console.log('  ✓ 没有命中任何旧说法');
   else if (exempt) console.log(`  · 另有 ${exempt} 处命中但附近有日期/历史批注（历史注记，保留是对的）`);
+}
+
+/* ============================================================ 5. 错误码 */
+
+/**
+ * **码表只有一份**（`apps/server/src/error-codes.mjs` 的 `GIT_CODES`）。
+ * 手抄一份到文档 / 或在调用点现编一个码，都会让"这个码是什么意思"重新变成考古。
+ * 这里对两个方向都查：文档提到的码要在表里，源码里抛的码也要在表里。
+ */
+if (want.includes('codes')) {
+  console.log('\n== ⑤ 错误码（文档与源码里的 E12xx 都在码表里吗）==');
+  const { GIT_CODES } = await import(
+    new URL('../apps/server/src/error-codes.mjs', import.meta.url).href
+  );
+  const known = new Set(Object.keys(GIT_CODES));
+  const CODE = /\bE12\d{2}\b/g;
+  const hardBefore = hard;
+  let checked = 0;
+
+  for (const [file] of LIVE) {
+    const lines = read(file).split('\n');
+    lines.forEach((line, i) => {
+      for (const m of line.matchAll(CODE)) {
+        checked += 1;
+        if (!known.has(m[0])) bad(`${file}:${i + 1} 提到 ${m[0]} —— 码表里没有这个码（${'error-codes.mjs'}）`);
+      }
+    });
+  }
+  for (const file of ALL_FILES.filter((f) => f.startsWith('apps/server/src/') && f.endsWith('.mjs') && !f.endsWith('error-codes.mjs'))) {
+    const lines = read(file).split('\n');
+    lines.forEach((line, i) => {
+      for (const m of line.matchAll(CODE)) {
+        checked += 1;
+        if (!known.has(m[0])) bad(`${file}:${i + 1} 用了 ${m[0]} —— 没登记进 GIT_CODES`);
+      }
+    });
+  }
+  if (hard > hardBefore) { /* 红项已在上面逐条列过 */ }
+  else if (checked) console.log(`  ✓ ${known.size} 个码，文档与源码共 ${checked} 处引用，全部登记在案`);
+  else console.log('  （没有 E12xx 引用）');
+}
+
+/* ============================================================ 6. 代码禁引 docs/ */
+
+/**
+ * **运行时不许依赖 docs/**（2026-11-24 用户定的边界）。
+ * 文档供人借鉴；员工要**照着做**的材料（判据、模板）一律放 skills/ ——
+ * 那边有 skillDigest 登记表兜底，文件没了自动从清单消失；而写死在提示词里的
+ * docs/ 路径没有任何闸门，改名就静默 404。白名单逐条写明理由，只收三类：
+ * 借鉴性指路、被交付项目里的产物落点、测试夹具。注释行不扫（给人的考古线索）。
+ */
+const DOCS_BAN = /docs\/.+?\.md/gi;
+const PROMPT_ALLOW = {
+  'apps/server/src/dispatch/contract.mjs|docs/00-项目总基线/00.2 总体设计/bandi架构设计说明书.md':
+    '借鉴指路：架构说明书是给 agent 的参考读物，不承载执行逻辑',
+  'apps/server/src/self-delivery.mjs|docs/模板/spec.md':
+    '被交付项目里的产物落点（spec → plan → 代码 → PR 的交接约定），运行时**写进去**的目标，不是本仓库文档',
+  'apps/server/src/self-delivery.mjs|docs/模板/plan.md':
+    '同上：被交付项目里的产物落点',
+  'apps/server/src/smoke-pr-review.mjs|docs/token.md':
+    '测试夹具：模拟被审 PR 里的文件名，不是本仓库文件',
+  'apps/server/src/smoke-workflows.mjs|docs/需求.md':
+    '测试夹具：模拟用户项目的产物路径',
+  'tools/check-contracts.mjs|docs/01-迭代版本包/产品决策.md':
+    '给人看的豁免理由文案（考古线索），不进任何提示词',
+  'tools/check-pr.mjs|docs/00-项目总基线/00.2 总体设计/bandi架构设计说明书.md':
+    '借鉴指路：闸门报错文案里告诉人去哪读选型依据，不承载执行逻辑',
+  'tools/smoke-prepush-guard.mjs|docs/a.md':
+    '测试夹具：模拟普通文件名（应放过的输入），不是本仓库文件',
+};
+
+if (want.includes('prompts')) {
+  console.log('\n== ⑥ 代码与提示词禁引 docs/ 路径（运行时材料归 skills/）==');
+  let checkedPrompts = 0;
+  for (const file of ALL_FILES.filter((f) =>
+    (f.startsWith('apps/server/src/') || f.startsWith('tools/') || f.startsWith('apps/web/js/'))
+      && /\.(mjs|js)$/.test(f)
+      && f !== 'tools/check-doc-drift.mjs', // 自己的登记表里全是 docs/ 路径，不扫自己
+  )) {
+    const lines = read(file).split('\n');
+    lines.forEach((line, i) => {
+      const t = line.trim();
+      if (t.startsWith('//') || t.startsWith('*') || t.startsWith('/*') || t.startsWith('*/')) return;
+      for (const m of line.matchAll(DOCS_BAN)) {
+        checkedPrompts += 1;
+        const key = `${file}|${m[0]}`;
+        if (PROMPT_ALLOW[key]) {
+          if (verbose) console.log(`  · ${file}:${i + 1} ${m[0]} —— 白名单：${PROMPT_ALLOW[key]}`);
+          continue;
+        }
+        bad(`${file}:${i + 1} 引用 ${m[0]} —— 运行时不许依赖 docs/：员工要照着做的放 skills/；确实是给人的借鉴就进 PROMPT_ALLOW 白名单写明理由`);
+      }
+    });
+  }
+  if (!checkedPrompts) console.log('  （没有 docs/ 引用）');
+  else if (!hard) console.log(`  ✓ ${checkedPrompts} 处 docs/ 引用全部在白名单内（理由用 --verbose 看）`);
 }
 
 /* ============================================================ 结论 */

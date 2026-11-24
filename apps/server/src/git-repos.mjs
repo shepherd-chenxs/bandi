@@ -22,6 +22,10 @@ import * as store from './store.mjs';
 import { classifySecretSuspects, findSecretPaths, scanContentForSecrets } from './secret-paths.mjs';
 // agent 子进程的 PATH 要拼上"此刻"的机器 PATH —— 见 agentEnv() 里的说明
 import { pathDirs } from './path-env.mjs';
+import { gitFail, gitFailure } from './error-codes.mjs';
+
+// 码与文案的唯一出口在 error-codes.mjs；这里转出去，调用方（`git.GitError`）不用改。
+export { GitError } from './error-codes.mjs';
 
 const TOKEN_FILE = path.join(dataDir, 'github-token');
 const REPOS_DIR = path.join(dataDir, 'repos');
@@ -267,7 +271,7 @@ const ghFetch = async (pathname, { token, method = 'GET', body, timeoutMs = GH_T
 function repoApiPath(ref, tail = '') {
   const slug = String(ref ?? '').trim();
   if (!/^[\w.-]+\/[\w.-]+$/.test(slug)) {
-    throw new GitError(
+    gitFail(
       'E1205',
       `这行仓库没有 GitHub 身份（owner/name），拼出来的地址会是 /repos/${slug || '…'}${tail}。`
         + '先去它的本地目录确认 origin 指向 github.com，或用「仓库 URL」重新接入（令牌权限不用改）。',
@@ -541,7 +545,7 @@ export async function connectByRemoteUrl(remoteUrl, localPath = null) {
     const r = await run('git', [...auth, 'fetch', '--prune', 'origin'], { cwd: dir, env: GIT_ENV });
     if (r.code !== 0) {
       const net = gitNetworkFailure(r.out);
-      if (net) throw new GitError('E1204', net);
+      if (net) gitFail('E1204', net);
       throw new Error(`本地已有目录、但拉取失败：${r.out.split('\n').slice(-3).join(' ')}`);
     }
     note = '本地已有克隆，已拉取';
@@ -681,7 +685,7 @@ export async function connectRepo(fullName, info = null, localPath = null) {
     const r = await run('git', [...gitAuthArgs(), 'fetch', '--prune', 'origin'], { cwd: dir, env: GIT_ENV });
     if (r.code !== 0) {
       const net = gitNetworkFailure(r.out);
-      if (net) throw new GitError('E1204', net);
+      if (net) gitFail('E1204', net);
       throw new Error(`本地已有目录、但拉取失败：${r.out.split('\n').slice(-3).join(' ')}`);
     }
     note = '本地已有克隆，已拉取';
@@ -691,7 +695,7 @@ export async function connectRepo(fullName, info = null, localPath = null) {
     const r = await run('git', [...gitAuthArgs(), 'clone', '--quiet', url, dir], { env: GIT_ENV });
     if (r.code !== 0) {
       const net = gitNetworkFailure(r.out);
-      if (net) throw new GitError('E1204', net);
+      if (net) gitFail('E1204', net);
       throw new Error(`克隆失败：${r.out.split('\n').slice(-3).join(' ')}`);
     }
     note = emptyDirTarget ? '已克隆到你选的目录' : '已克隆';
@@ -716,7 +720,7 @@ export async function syncRepo(id) {
       throw new Error('本地和远端分叉了（各有各的提交），拉不动 —— 先把你的提交推出去，或去那个目录把历史理一下');
     }
     const net = gitNetworkFailure(out);
-    if (net) throw new GitError('E1204', net);
+    if (net) gitFail('E1204', net);
     throw new Error(`拉取没成功：${out.split('\n').slice(-4).join(' ')}`);
   }
   return store.touchGitRepoSync(row.id);
@@ -1139,20 +1143,6 @@ export async function changeDigest(row, { paths = null, maxDiffChars = 4000 } = 
   };
 }
 
-/**
- * 带错误码的领域错（docs/契约.md「报错规范」，2026-11-14）。
- *
- * 文案自带 `[码]` 前缀 —— 流程卡、信箱、toast 这些**不经过路由**的出口，直接显示就是
- * 合规形态（码 + 人话一起到，用户不用在别处查这个错是什么）；`.code` 是给程序用的：
- * 路由 catch 优先透传它（不再盖一层路由自己的码），流程引擎/审计按码归类常见错。
- */
-export class GitError extends Error {
-  constructor(code, message) {
-    super(`[${code}] ${String(message ?? '')}`);
-    this.name = 'GitError';
-    this.code = code;
-  }
-}
 
 /**
  * 「连不上远端」的识别与翻译（push / fetch / clone 共用，**纯函数**，E1204）。
@@ -1169,7 +1159,7 @@ export function gitNetworkFailure(text) {
 /**
  * 把 `git push` 的失败输出翻译成**报错规范**的形态（**纯函数**，冒烟直接钉）。
  *
- * 报错规范（2026-11-14 定，全文见 docs/契约.md「报错规范」）：
+ * 报错规范（2026-11-14 定；码表唯一真源是 apps/server/src/error-codes.mjs）：
  * 每条面向人的错 = **错误码 + 一句结论 + 出路**，原始输出永远垫底 —— 排障要它，但它不该抢第一眼。
  * 2026-11-14 实报：代理没通时，用户在流程卡上看到的是一整条 curl 原文
  * （"Failed to connect to github.com:443 over proxy 127.0.0.1 …"）。这属于**常见报错**，
@@ -1209,27 +1199,27 @@ export function translatePushFailure(out, { branch = null, remote = 'origin', ba
   if (/push declined due to repository rule|must be made through a pull request|protected branch|required status check|GH006/i.test(text)) {
     const who = `${remote}${branch ? ` 的 ${branch}` : ''}`;
     return base && branch === base
-      ? { code: 'E1201', text: `推不上去：${who} 是 base 分支、有保护规则${rules} —— 不能直接推。改成切一条新分支推上去、建 PR，等 gate 检查绿了再合并。平台**不会强推**，也绕不过保护。原始信息：${raw}` }
-      : { code: 'E1201', text: `推不上去：${who} 分支有保护规则${rules} —— 不能直接推。改成推一条新分支、建 PR（平台不会强推，也绕不过保护）。原始信息：${raw}` };
+      ? gitFailure('E1201', `推不上去：${who} 是 base 分支、有保护规则${rules} —— 不能直接推。改成切一条新分支推上去、建 PR，等 gate 检查绿了再合并。平台**不会强推**，也绕不过保护。原始信息：${raw}`)
+      : gitFailure('E1201', `推不上去：${who} 分支有保护规则${rules} —— 不能直接推。改成推一条新分支、建 PR（平台不会强推，也绕不过保护）。原始信息：${raw}`);
   }
   // ② 快进不了：远端有你本地没有的提交（这才是"先更新"那种）（E1202）
   if (/rejected|non-fast-forward/i.test(text)) {
-    return {
-      code: 'E1202',
-      text: rejectedHint === 'rename'
+    return gitFailure(
+      'E1202',
+      rejectedHint === 'rename'
         ? `远端已经有一个不同的 ${branch ?? '同名'} 分支（推送被拒）。平台**不会强推** —— 换一个分支名，或先在那个目录把分支理干净。原始信息：${raw}`
         : `远端有本地没有的提交（推送被拒）。平台**不会强推** —— 点开分支下拉的「更新项目」拉一次再推；分叉了拉不动就去那个目录理历史。原始信息：${raw}`,
-    };
+    );
   }
   // ③ 权限（E1203）
   if (/Permission denied|403|Authentication failed|invalid credentials|Write access/i.test(text)) {
-    return { code: 'E1203', text: `推不上去：这个令牌对 ${remote} 没有 Contents: write（或在 Repository access 里没选中它）。原始信息：${raw}` };
+    return gitFailure('E1203', `推不上去：这个令牌对 ${remote} 没有 Contents: write（或在 Repository access 里没选中它）。原始信息：${raw}`);
   }
   // ④ 连不上远端（网络 / 代理 / DNS）—— 最高频的一档，curl 原文不糊脸上（E1204）
   const net = gitNetworkFailure(text);
-  if (net) return { code: 'E1204', text: net };
+  if (net) return gitFailure('E1204', net);
   // ⑤ 没认出来的也带码（E1299）：排障时能和"常见档"区分开，原文附上
-  return { code: 'E1299', text: `推送失败（没认出的原因）：${text.trim() || 'git 没给原因'}` };
+  return gitFailure('E1299', `推送失败（没认出的原因）：${text.trim() || 'git 没给原因'}`);
 }
 
 /**
@@ -1245,7 +1235,7 @@ export async function pushCurrent(row) {
   const push = await gitIn(row.localPath, [...gitAuthArgs(), 'push', '--set-upstream', 'origin', `refs/heads/${st.branch}:refs/heads/${st.branch}`], { timeoutMs: GIT_PUSH_MS });
   if (push.code !== 0) {
     const t = translatePushFailure(String(push.out ?? ''), { branch: st.branch, base: row.defaultBranch ?? null });
-    throw new GitError(t.code, t.text);
+    gitFail(t.code, t.text);
   }
   return { pushed: st.branch };
 }
@@ -1257,7 +1247,8 @@ export async function fetchRepo(row) {
   if (r.code !== 0) {
     // 连不上是 fetch 的最高频失败（和推送同一张码表，E1204），别把 curl 原文糊给人
     const net = gitNetworkFailure(r.out);
-    throw net ? new GitError('E1204', net) : new Error(`拉取没成功：${r.out.split('\n').slice(-3).join(' ')}`);
+    if (net) gitFail('E1204', net);
+    throw new Error(`拉取没成功：${r.out.split('\n').slice(-3).join(' ')}`);
   }
   return { fetched: true };
 }
@@ -2460,7 +2451,7 @@ export async function commitAndPush(row, { branch = null, message = null, paths 
       base: targetBase,
       rejectedHint: 'rename',
     });
-    throw new GitError(t.code, t.text);
+    gitFail(t.code, t.text);
   }
 
   return { branch: branchName, base: targetBase, committed, files: picked, secretNotes };

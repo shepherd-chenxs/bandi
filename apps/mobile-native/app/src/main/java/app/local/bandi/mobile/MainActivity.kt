@@ -48,7 +48,7 @@ class MainActivity : AppCompatActivity() {
     private val pool = Executors.newFixedThreadPool(6)
 
     /*
-     * 壳跟面板的主题（2026-11-17，docs/形态决策.md §⑩）。
+     * 壳跟面板的主题（2026-11-17，docs/00-项目总基线/00.2 总体设计/bandi产品设计说明书.md「6. 客户端形态」）。
      *
      *   panelDark     面板报来的已解析主题（true=深 / false=浅 / null=还没报过 → 跟系统），
      *                 内存缓存 SessionStore 那份，onCreate 读一次、面板报话时更新；

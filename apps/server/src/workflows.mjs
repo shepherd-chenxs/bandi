@@ -88,12 +88,12 @@ export const BUILT_IN_TEMPLATE = {
   nodes: [
     {
       id: 'n1', name: '谈需求', x: 220, y: 60,
-      detail: '把这次要做的东西谈清楚：目标、边界、验收标准、不做什么。产出按 docs/模板/spec.md 的骨架写进需求文档（快照型，放 10-需求/10-版本/），每条验收场景要能执行、能复现。',
+      detail: '把这次要做的东西谈清楚：目标、边界、验收标准、不做什么。产出按 skills/bandi-doc-templates/references/spec.md 的骨架写进需求文档（快照型，放 10-需求/10-版本/），每条验收场景要能执行、能复现。',
       approve: 'n2', reject: END, // 需求本身不成立 → 直接结束，不用往后走
     },
     {
       id: 'n2', name: '定计划', x: 480, y: 60,
-      detail: '把需求拆成任务卡，给出排期和版本号。方案按 docs/模板/plan.md 写进排期文档；任务拆成看板上的卡（卡描述的格式按 docs/模板/task.md），每张卡标覆盖的场景编号 —— 不写卡文件。',
+      detail: '把需求拆成任务卡，给出排期和版本号。方案按 skills/bandi-doc-templates/references/plan.md 写进排期文档；任务拆成看板上的卡（卡描述的格式按 skills/bandi-doc-templates/references/task.md），每张卡标覆盖的场景编号 —— 不写卡文件。',
       approve: 'n3', reject: 'n1', // 计划谈不拢 → 回去把需求重谈清楚
     },
     {

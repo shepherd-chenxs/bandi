@@ -2,7 +2,7 @@
 <resources>
     <!--
       原生页（登录 / 选择电脑 / 兜底）的配色，浅深两档各一份：浅色在这里（values/），
-      深色在 values-night/。壳按面板报来的主题铺（2026-11-17，见 docs/形态决策.md §⑩），
+      深色在 values-night/。壳按面板报来的主题铺（2026-11-17，见 docs/00-项目总基线/00.2 总体设计/bandi产品设计说明书.md「6. 客户端形态」），
       视图与取色从带主题配置的 Context 解析（MainActivity.buildBinding）。
 
       为什么不吃主题的 colorSurface（2026-11-12 用户："这个怎么看着有点粉，跟其他页风格不同"）：

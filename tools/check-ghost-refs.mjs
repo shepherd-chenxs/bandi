@@ -30,11 +30,13 @@ const SKIP_DIR = /(^|\/)(node_modules|build|target|runtime|\.git|dist)(\/|$)/;
 const EXTS = ['mjs', 'js', 'css', 'html', 'md', 'kt', 'json', 'kts'];
 
 /*
- * **按时日归档的设计/PRD 文档**（`docs/design/`、`docs/prd/`、`docs/mobile/`）不查：记的是当时的设计，
- * 引用的是当时存在的文件。文件后来删了，文档不该跟着改 —— 那是历史，不是错误。
- * 活文档（架构 / 契约 / 形态决策）照查。
+ * **归档区**（`docs/05-归档区/`：交接单、PRD、手机旧设计、需求快照）不查：
+ * 记的是当时的设计，引用的是当时存在的文件。文件后来删了，文档不该跟着改 —— 那是历史，不是错误。
+ * 同理 `docs/01-迭代版本包/` 是**只追加的增量日志**（产品决策 / 前端改动），每条写的是当时的事实。
+ * 活文档（00-项目总基线 / 02 / 03 / 04）照查。
+ * `docs/design/` 下的旧设计稿已于 2026-11-24 清理（备份在 git 分支 backup/before-design-cleanup）。
  */
-const ARCHIVE_DIR = /^docs\/(design|prd|mobile|模板|changelog)\//;
+const ARCHIVE_DIR = /^docs\/(05-归档区|01-迭代版本包)\//;
 
 /*
  * **按文件豁免**，每条都得说清为什么：
@@ -47,9 +49,6 @@ const EXEMPT = new Set([
   'tools/check-ghost-refs.mjs',
   'tools/check-doc-drift.mjs',
   'tools/check-pr.mjs',
-  // 施工单：通篇写的是**待创建**的位置（"新建 tools/x.mjs"），交付后文件才存在。
-  // 它的引用是要人照着去建，不是指路 —— 按"空路"报红等于逼施工单不敢写路径。
-  'docs/交接-2026-11-22-回归集与三个尾巴.md',
 ]);
 
 /** 扫哪些文件 */

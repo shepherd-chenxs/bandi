@@ -36,9 +36,9 @@
 ### 4. 改了行为，就要一起改文档和注释（这条最容易欠账）
 
 **活文档**（行为变了必须同步，否则按缺陷算）：`README.md`、`SECURITY.md`、`CONTRIBUTING.md`、
-`docs/架构.md`、`docs/形态决策.md`（含「已经撤掉过什么」）、`docs/mobile/pwa-design.md`、`deploy/README.md`。
+`docs/00-项目总基线/bandi架构设计说明书.md`、`docs/00-项目总基线/00.2 总体设计/bandi产品设计说明书.md`（现行产品形态）、`docs/01-迭代版本包/产品决策.md`（含「已经撤掉过什么」）、`docs/05-归档区/pwa-design.md`、`deploy/README.md`。
 
-**时间点快照**（`docs/design/*`、`docs/prd/*`、`docs/mobile/pwa-prd.md`）：**不回写历史**，
+**时间点快照**（`docs/prd/*`、`docs/05-归档区/pwa-prd.md`、`docs/05-归档区/交接-*.md`）：**不回写历史**，
 但新的决策文件里要写明取代了谁；活文档里提到它们时，注明"哪一版起变了"。
 
 **最容易腐烂的三类注释**，改动时必须一起扫：
@@ -58,7 +58,7 @@ node tools/check-doc-drift.mjs --verbose  # 连"命中但有历史批注"的那�
 node tools/run-smokes.mjs                 # 门禁跑的就是这条，里面已经带上它了
 ```
 
-它查什么、怎么区分"历史注记"和"又写回去了"、为什么不扫 `docs/design/*`，
+它查什么、怎么区分"历史注记"和"又写回去了"、为什么不扫 `docs/prd/*`，
 都写在那个文件顶部。**新增文档要登记**（活文档表 / 快照表二选一），否则它会报错 ——
 和 `run-smokes` 的"不许有没人管的用例"是同一条思路：没人管的文档 = 天生不受检。
 
