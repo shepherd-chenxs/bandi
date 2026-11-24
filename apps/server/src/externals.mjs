@@ -315,8 +315,9 @@ export async function declared() {
  * （`magpie daemon web` 会打印带密钥的链接），并**缓存 10 分钟**：密钥跨重启不变，
  * 没必要每次心跳都 spawn 一个进程。
  *
- * 2026-11-04 从 node.mjs 搬到这里：**本机**那条路（routes/local.mjs 的软件商店）也要用它 ——
- * 不然本机界面上给的是 declared() 里"按局域网地址猜的"那条，点开一片 401。
+ * 2026-11-04 从当时的节点客户端搬到这里（该文件已随多机子系统于 2026-11-09 删除）：
+ * **本机**那条路（routes/local.mjs 的软件商店）也要用它 —— 不然本机界面上给的是
+ * declared() 里"按局域网地址猜的"那条，点开一片 401。
  */
 const panelCache = new Map();
 export async function panelUrlFor(id, port) {

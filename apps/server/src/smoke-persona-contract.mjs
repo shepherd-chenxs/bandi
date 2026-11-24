@@ -3,7 +3,7 @@
  *
  * 用户实拍：数字员工回复信息一大堆、不利于管理者决策；怀疑"职责与身份设定"起了反作用。
  * P0 的修法是**把行为规则从身份里搬出来、改成每轮注入**：
- *   ① 14 个专家 + 系统管家的出厂身份卡只回答"我是谁"（≤240 字，不写边界/流程/禁令）；
+ *   ① 15 个专家 + 系统管家的出厂身份卡只回答"我是谁"（≤240 字，不写边界/流程/禁令）；
  *   ② 平台行为契约（platformContractBlock）每轮注入，优先级声明高于身份；
  *   ③ 本轮任务合同（taskContractBlock）每轮注入，卡评论区带上卡标题与验收标准；
  *   ④ 汇报口径不再只给项目经理（旧 pmCardBrief 里的那段已搬走）；
@@ -50,9 +50,9 @@ const BANNED = /核心三件事|分寸（|只管|不要揽|别的不要揽|红�
 
 try {
   console.log('① 出厂身份卡只回答"我是谁"（≤240 字，不写边界/流程/禁令）');
-  check('专家目录还是 14 位', experts.EXPERTS.length === 14, String(experts.EXPERTS.length));
+  check('专家目录还是 15 位', experts.EXPERTS.length === 15, String(experts.EXPERTS.length));
   const tooLong = experts.EXPERTS.filter((x) => x.instructions.length > 240).map((x) => `${x.name}:${x.instructions.length}`);
-  check('14 张身份卡都 ≤240 字', tooLong.length === 0, tooLong.join(', '));
+  check('15 张身份卡都 ≤240 字', tooLong.length === 0, tooLong.join(', '));
   const bannedHit = experts.EXPERTS.filter((x) => BANNED.test(x.instructions)).map((x) => x.name);
   check('身份卡里没有"只管/别揽/核心三件事/红线"这类边界话术', bannedHit.length === 0, bannedHit.join(', '));
   check('系统管家身份卡也 ≤200 字', steward.STEWARD_INSTRUCTIONS.length <= 200, `${steward.STEWARD_INSTRUCTIONS.length} 字`);

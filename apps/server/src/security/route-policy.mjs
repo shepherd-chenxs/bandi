@@ -281,6 +281,12 @@ export const ROUTES = [
    */
   { id: 'agent.gate', m: ['POST'], path: p('/api/agent/gate'), auth: 'session', run: true, call: 'POST /api/agent/gate', note: '跑全量闸门：只回"过没过 + 挂了哪几项 + 日志路径"，别自己一条条跑用例' },
   { id: 'agent.deliver', m: ['POST'], path: p('/api/agent/deliver'), auth: 'session', run: true, call: 'POST /api/agent/deliver', note: '交付：提交 → 推送 → 开 PR 一条命令做完，体 {title, message}；别自己拼 git 命令' },
+  /*
+   * 产物发进聊天（2026-11-23）：做出了成片 / 图 / 报告，用这条把本地文件登记成本次会话附件，
+   * 回话里就带一颗能点开的 chip（也把返回的 url 写进回话文本兜底）。
+   * 登记在表里 = 每轮能力清单自动注入，续接会话不会"忘了自己能把文件发出去"。
+   */
+  { id: 'agent.files', m: ['POST'], path: p('/api/agent/files'), auth: 'session', run: true, call: 'POST /api/agent/files', note: '把做好的本地文件发进聊天：体 {path: 文件绝对路径, name?: 显示名}；回 file.url 可点开，附件随你的回话显示' },
   { id: 'users.list', m: ['GET'], path: p('/api/users'), auth: 'session' },
   { id: 'users.create', m: ['POST'], path: p('/api/users'), auth: 'session', note: '建影子账号（预占名字，等中枢账号首次登录时绑定）' },
   { id: 'users.one', m: ['GET', 'PATCH', 'DELETE'], path: p('/api/users', id1), auth: 'session' },

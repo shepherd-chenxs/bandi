@@ -77,7 +77,7 @@ try {
   const afterWrite = JSON.parse(fs.readFileSync(path.join(process.env.BANDI_DATA, 'config.json'), 'utf8'));
   check('写进去了', afterWrite.listenHost === '192.168.5.9', JSON.stringify(afterWrite));
 
-  // 同一个文件里还有别的键（controlPlane / replyStyle …）—— 不许顺手弄丢
+  // 同一个文件里还有别的键（用已删除节点子系统的 controlPlane 当"无关键"样本，再好不过）
   fs.writeFileSync(
     path.join(process.env.BANDI_DATA, 'config.json'),
     JSON.stringify({ controlPlane: 'http://localhost:8787', replyStyle: 'concise' }),

@@ -126,6 +126,10 @@ db.exec(`PRAGMA busy_timeout = 5000;`);
  *     persistReply），事后从 messages 里再也判不出来。回归量具与判据核对从此读同一列。
  *   · 16（2026-11-23）：新表 `persona_facts` —— 长期记忆的事实层：平台从**跑通那一轮**的
  *     run_events 里抽出的验证命令 / 重启方式 / 常改文件，按仓库 scope 隔离（见 store/facts.mjs）。
+ *   · 17（2026-11-24）：`git_repos.requireGate` —— 仓库级「合并前等检查」开关，默认 1（拦）。
+ *     baoluo 这种没配 CI 的仓库，GitHub 一条 check-run 都不会有，checks.state 恒为 none，
+ *     前端 blockReason 就永远灰着合并按钮（2026-11-24 用户实报）。按仓库关掉后 none 不拦，
+ *     真有 gate 的仓库仍照旧等绿，不用为个别仓库放宽全局规则。
  */
 export const SCHEMA_VERSION = 17;
 
@@ -1000,6 +1004,11 @@ db.exec(`
  */
 ensureColumn('git_repos', 'keeperPersonaId', 'keeperPersonaId TEXT');
 ensureColumn('git_repos', 'autoMerge', 'autoMerge INTEGER NOT NULL DEFAULT 0');
+/*
+ * requireGate（2026-11-24）：**默认 1 = 合并前等检查**（保持既有仓库行为不变）。
+ * 只有明确关掉的仓库（没配 CI 的）才跳过 none 拦截，见前端 blockReason 与 PR 设置卡。
+ */
+ensureColumn('git_repos', 'requireGate', 'requireGate INTEGER NOT NULL DEFAULT 1');
 
 /*
  * 仓库身份落库（2026-11-20 用户："idea 怎么做的，trae 怎么做的？如果我本地仓库改个名字

@@ -39,6 +39,9 @@ const RUN = [
   // 交付动作（2026-11-19）：把"提交→推送→开PR"和"跑全量闸门"做成两条运行钥匙可达的动作。
   // 治的是"6 条命令 = 6 次模型往返 = 6 分钟纯等待"（实报 r-4c85d92c）；纯静态断言，不起服务。
   'apps/server/src/smoke-agent-deliver.mjs',
+  // 产物发进聊天（2026-11-23）：员工把本地成片/图登记成会话附件，回话带可点 chip。
+  // 纯静态断言，不起服务。
+  'apps/server/src/smoke-agent-files.mjs',
   // 连不上模型要实时看得见（2026-11-19 实报）：通道类 error 不许被 held 扣住；空回话按原因分档。
   // 同样是伪造适配器 + 临时库，不联网。
   'apps/server/src/smoke-run-channel.mjs',
@@ -155,9 +158,9 @@ const RUN = [
   // 运行时识别不依赖进程 PATH 快照（2026-11-04）：注册表实时 PATH + 固定落点。
   // ⚠️ 这条会临时改 HKCU\Environment\Path（原样写回）—— 真注册表用例
   'apps/server/src/smoke-runtime-detect.mjs',
-  // 纯静态断言（不联网）：手机该走的路由必须带 device 标，桌面专属的必须没有
+  // 纯静态断言（不联网）：登录页形状、/api/me、昵称与安全接口口径
   'apps/server/src/smoke-users.mjs',
-  // 状态词表一致性（2026-11-08）：八态/运行态/节点态、状态⇄看板列、建表默认值。
+  // 状态词表一致性（2026-11-08）：任务八态/运行态、状态⇄看板列、建表默认值。
   // 纯数据 + 源码文本，不开库不起服务 —— 改状态相关代码后单独跑它最快
   // （node apps/server/src/smoke-status-vocab.mjs）
   'apps/server/src/smoke-status-vocab.mjs',

@@ -22,7 +22,7 @@
 
 - [docs/快速开始.md](docs/快速开始.md)：安装、启动、命令行和常见问题
 - [docs/架构.md](docs/架构.md)：架构与设计说明
-- [deploy/README.md](deploy/README.md)：部署、节点和远程访问
+- [deploy/README.md](deploy/README.md)：部署与远程访问
 - [SECURITY.md](SECURITY.md)：安全边界与报告方式
 
 ## 许可

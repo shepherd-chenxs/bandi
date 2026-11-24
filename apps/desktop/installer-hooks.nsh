@@ -33,6 +33,7 @@
   ; ── 1. 先把可能在跑的东西收掉 ────────────────────────────────────────────
   ; 自启那条 .cmd 是**带循环**的：光删文件它会把控制面再拉起来，库一直占着就删不干净。
   ; 只杀这三类进程（node / cmd / wscript）**并且**命令行里带本安装目录或 bandi-node 的 ——
+  ; bandi-node 是已下线节点子系统的老数据目录，这里只为给老用户清场；
   ; 不碰用户自己别的 node，也**不会误伤卸载器自己**（它叫 uninstall.exe，不在名单里）。
   ; ⚠️ 别想着用 $$PID 排除自己：那是 PowerShell 自己的 PID，不是卸载器的。
   nsExec::ExecToLog 'taskkill /F /IM "bandi-desktop.exe" /T'
@@ -43,13 +44,13 @@
   Pop $0
   Sleep 1500
 
-  ; ── 2. 撤掉开机自启（文件在 Startup 与 %APPDATA%\bandi-node） ──────────────
+  ; ── 2. 撤掉开机自启（文件在 Startup；bandi-node 是已删除节点子系统的历史残留） ──
   nsExec::ExecToLog '"$INSTDIR\node.exe" "$INSTDIR\apps\server\src\autostart.mjs" remove'
   Pop $0
 
   ; ── 3. 数据与登记表 ──────────────────────────────────────────────────────
   RMDir /r "$APPDATA\bandi"         ; 控制面数据：库、访问令牌、端口、插件与连接器、日志、备份
-  RMDir /r "$APPDATA\bandi-node"    ; 节点数据 + 自启脚本（.cmd）
+  RMDir /r "$APPDATA\bandi-node"    ; 历史残留：已下线节点子系统的数据 + 自启脚本（.cmd）
   RMDir /r "$PROFILE\.bandi"        ; 服务器登记表 servers.yaml
   ; 自启项（autostart.mjs 已经删过，这里兜底）。
   ; ⚠️ 是 $SMSTARTUP 不是 $STARTUP —— NSIS 没有后者。上面那句 SetShellVarContext current
@@ -61,7 +62,7 @@
 !macroend
 
 ; ─────────────────────────────────────────────────────────────────────────────
-; 装完：把 `bandi` 注册成一个全局命令（状态一屏 / 起停 / 日志 / 节点状态）。
+; 装完：把 `bandi` 注册成一个全局命令（状态一屏 / 起停 / 日志 / 本机形态）。
 ;
 ; 逻辑**只在 cli.mjs 里一份** —— 写 shim、读改写用户 PATH（连 REG_SZ / REG_EXPAND_SZ 一起认）
 ; 都在那儿。NSIS 里再抄一遍 PATH 处理，两边必然跑偏；而 PATH 写坏是"当天看不出、第二天

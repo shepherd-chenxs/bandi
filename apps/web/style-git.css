@@ -293,7 +293,7 @@
                           color: var(--dim); }
 .pr-commit-list li span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 建 PR 弹窗（2026-11-24 收口）：标题 → 描述 → base 竖排，状态区只留告警；
-   窗口定高 560，描述框吃满剩余高度 —— 不在中间留空白；动作条压底 + 上分隔线。 */
+   窗口定高 560，描述框吃满剩余高度 —— 不在中间留空白；动作条压底、无分隔线。 */
 dialog#repoPrDlg { width: 660px; height: min(560px, 92vh); max-height: 92vh;
                    display: flex; flex-direction: column; overflow: hidden; }
 #repoPrDlg > form { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }

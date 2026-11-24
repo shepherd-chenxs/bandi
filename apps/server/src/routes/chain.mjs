@@ -6,8 +6,8 @@
  *
  * **为什么必须集中**：每个 `handleX` 自己判自己那段路径，判不到就 `return false`，
  * 于是「谁先谁后」只存在于 server.mjs 的**书写顺序**里 —— 那是最难 review 的一种契约：
- *   · 顺序错了不报错，只是某条路由被更早的通配条目抢走（`/api/nodes/register` 被
- *     `/api/nodes/:id` 抢走就是真踩过的，见 route-policy 里那条注释）；
+ *   · 顺序错了不报错，只是某条路由被更早的通配条目抢走（历史上的 `/api/nodes/register`
+ *     被 `/api/nodes/:id` 抢走就是真踩过的；端点已删，教训保留，见 route-policy 注释）；
  *   · 加一个模块要"插在对的位置"，而"对的位置"没有任何文字说明；
  *   · 十几个路由文件的文件头都写着「主分发顺序见 ../server.mjs 的 CHAIN」——
  *     而那个 `CHAIN` 从来不存在（2026-11-08 之前的漂移：注释指着一个没有的符号）。
@@ -28,6 +28,7 @@ import { handleConversation } from './conversation.mjs';
 import { handlePersona } from './persona.mjs';
 import { handleAgentCards } from './agent-cards.mjs';
 import { handleAgentDeliver } from './agent-deliver.mjs';
+import { handleAgentFiles } from './agent-files.mjs';
 import { handleExpert } from './expert.mjs';
 import { handleUsers } from './users.mjs';
 import { handleProject } from './project.mjs';
@@ -61,6 +62,8 @@ export const CHAIN = [
   { id: 'agent-cards', handle: handleAgentCards, note: '建卡通道（X-Bandi-Run-Token）' },
   // 交付/闸门动作（2026-11-19）：同一把钥匙，但这是"一口气做完一串"的通道 —— 见 agent-deliver.mjs 头注释
   { id: 'agent-deliver', handle: handleAgentDeliver, note: '交付与闸门动作（X-Bandi-Run-Token）' },
+  // 产物发进聊天（2026-11-23）：同一把钥匙，把本地产物登记成会话附件，回话带可点链接
+  { id: 'agent-files', handle: handleAgentFiles, note: '产物入库通道（X-Bandi-Run-Token）' },
 
   { id: 'expert', handle: handleExpert, note: '专家库' },
   // /api/me 是"每个页面启动都会问一次"的接口，能早一步就早一步

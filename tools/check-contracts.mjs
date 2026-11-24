@@ -28,11 +28,11 @@
  *      `LOCAL_BASE = '/api/local'`），否则 `api('/api/conversations/' + id)` 这种最常见
  *      的写法会被误报成"只调了前缀"。
  *   ③ **无调用方端点（warning，不失败）**：清单里有、但仓内找不到任何使用点的端点。
- *      使用点比 ② 扫得**宽**：除前端/插件/手机外，还算上服务端内部的跨机调用
- *      （`node.mjs` 调远端 `/api/nodes/*`、`collab-branch.mjs` 调中心、`cli.mjs` 的
- *      `path: '/api/...'`）—— 这些是真实的契约消费方，不算僵尸。
- *      但 ③ 只 warning、不红：因为"没有使用点"可能是**外部契约**（仓外 CLI / 已装出去的
- *      旧客户端 / 分公司机器），不是错误。所以每条要么进下面的 ALLOW 表（附一句理由），
+ *      使用点比 ② 扫得**宽**：除前端/插件/手机外，还算上服务端内部的跨模块调用
+ *      （`collab-branch.mjs` 调中心、`cli.mjs` 的 `path: '/api/...'`）—— 这些是真实的
+ *      契约消费方，不算僵尸。
+ *      但 ③ 只 warning、不红：因为"没有使用点"可能是**外部契约**（仓外 CLI / 历史客户端），
+ *      不是错误。所以每条要么进下面的 ALLOW 表（附一句理由），
  *      要么就老实当"疑似僵尸"打出来给人复核。改行为边界（新增可删的端点）先改 ALLOW。
  *
  * 不查什么（**故意**的）：
@@ -676,7 +676,7 @@ function registeredBy(raw) {
 
 /*
  * ③ 的"无调用方但**故意保留**"清单。每条必须有一句 reason：
- * 要么是**仓外调用方**（装出去的 CLI / 分公司机器 / 远端节点 / 手机旧客户端），
+ * 要么是**仓外调用方**（装出去的 CLI / 历史客户端），
  * 要么是**兼容垫片**（新前端已改走别的路，但旧客户端还认这条），要么是**明确预留**。
  * ⚠️ 不要往这里加"顺手能删但其实有人用"的条目 —— 这里只豁免 warning，不豁免 ①/②。
  */
@@ -688,10 +688,10 @@ const ALLOW_ORPHANS = [
   { id: 'ssh.one', why: '同上（插件面板经通用插件通道发 /api/ssh/*）' },
   { id: 'ssh.key', why: '同上（插件面板经通用插件通道发 /api/ssh/*）' },
   { id: 'ssh.test', why: '同上（插件面板经通用插件通道发 /api/ssh/*）' },
-  { id: 'local.probe', why: '仓外 CLI / 存量面板的局域网探测口；设置里的入口已收，服务端按本机接口口径保留' },
-  { id: 'local.hosts.add', why: '同上：/api/local/hosts/* 是局域网手动加主机的一组本机接口，仓内入口已收' },
-  { id: 'local.hosts.remove', why: '同上：/api/local/hosts/* 是局域网手动加主机的一组本机接口，仓内入口已收' },
-  { id: 'local.hosts.test', why: '同上：/api/local/hosts/* 是局域网手动加主机的一组本机接口，仓内入口已收' },
+  { id: 'local.probe', why: '历史「加入总机」探测口，前端入口与 handler 已随多机子系统删除；仅在策略表里保留为 X-Bandi-Local 秘密闸的测试靶子（smoke-proxy-auth）' },
+  { id: 'local.hosts.add', why: '同上：历史局域网手动加主机接口，handler 已删；策略条目仅作本机接口口径的保留样本' },
+  { id: 'local.hosts.remove', why: '同上：历史局域网手动加主机接口，handler 已删；策略条目仅作本机接口口径的保留样本' },
+  { id: 'local.hosts.test', why: '同上：历史局域网手动加主机接口，handler 已删；策略条目仅作本机接口口径的保留样本' },
   { id: 'control.restart', why: '改监听地址后的"重启控制面"：由桌面壳 / systemd 监护进程调用（仓内只有 config.mjs 的说明），走 machine:manage' },
   { id: 'security.auditExport', why: '审计导出按钮在 admin 设置页里按 kind 拼查询串（抽取后是 /export${}，见 ② 的宽松尾段规则）；保留' },
   { id: 'security.auditClear', why: '清空审计日志：破坏性动作，只在 admin 设置页的确认流程里出现（前端字符串拼接，静态只是一条 /clear）' },

@@ -944,6 +944,14 @@ export async function renderGitRepos(root = $('pluginView')) {
                <input type="checkbox" data-automerge ${sel.autoMerge ? 'checked' : ''} aria-label="自动合并" /><span></span>
              </label>
            </b></div>
+           <!-- 检查门槛（2026-11-24）：按仓库决定「检查还没起来」要不要灰掉合并按钮。
+                没配 CI 的仓库一条 check-run 都不会有，gate 恒为「未开始」，开着这关就永远合不了。
+                默认开（既有仓库行为不变），只在没 CI 的仓库上关掉。 -->
+           <div class="info-row"><span>检查门槛</span><b>
+             <label class="switch sm" title="开：合并前等 GitHub 检查通过（没检查就拦）；关：仓库没配 CI 时用，检查「未开始」不再拦合并">
+               <input type="checkbox" data-requiregate ${sel.requireGate !== 0 ? 'checked' : ''} aria-label="检查门槛" /><span></span>
+             </label>
+           </b></div>
            <div class="info-row"><span>上次巡检</span><b id="grPatrolLast" class="gr-patrol-last"></b></div>
          </section>
        </div>` : ''}
@@ -1195,6 +1203,15 @@ export async function renderGitRepos(root = $('pluginView')) {
         saveRepoSettings(sel.id, { autoMerge: e.currentTarget.checked });
       };
     }
+    /* 检查门槛（2026-11-24）：跟 autoMerge 一样改了就存，同属这张仓库设置单。
+       存失败 saveRepoSettings 会整页重绘拉回真实值，不留假状态。 */
+    const gateBox = view.querySelector('[data-gr-tab="pr"] [data-requiregate]');
+    if (gateBox) {
+      gateBox.onchange = (e) => {
+        sel.requireGate = e.currentTarget.checked ? 1 : 0;
+        saveRepoSettings(sel.id, { requireGate: e.currentTarget.checked });
+      };
+    }
     let saving = false;
     const combo = createCombo({
       mount: patrolMount,
@@ -1395,11 +1412,19 @@ export async function renderGitRepos(root = $('pluginView')) {
        * `none` = 这条 head 上**还没有任何检查结果**（刚建 PR、workflow 还没起，或仓库没配 CI）。
        * 不能当"可以合"：main 有分支保护，没检查一样会被 GitHub 拒 —— 见 blockReason。
        */
-      if (s === 'none') return '<span class="gr-pr-check none" title="这条提交上还没有检查结果 —— 刚建的 PR 等 gate 起来">未开始</span>';
+      /* 关掉检查门槛的仓库（没配 CI）：none 永远不会有 gate 起来，写"未开始"像卡住了。
+         改成"无检查"——如实说这仓库没跑检查，跟亮着的合并按钮不矛盾。 */
+      if (s === 'none') return repo.requireGate === 0
+        ? '<span class="gr-pr-check none" title="这个仓库没配 CI 检查，检查门槛已关 —— 由 GitHub 自己判能不能合">无检查</span>'
+        : '<span class="gr-pr-check none" title="这条提交上还没有检查结果 —— 刚建的 PR 等 gate 起来">未开始</span>';
       return `<button type="button" class="gr-pr-check none" data-pr-gate="${p.number}"
                 title="没查到检查状态（网络/权限）—— 点开看明细">未知</button>`;
     };
-    /* 合并为什么按不了：返回 null = 能合 */
+    /* 合并为什么按不了：返回 null = 能合
+     * requireGate（2026-11-24）：按仓库决定「检查还没起来」拦不拦。默认 1 = 拦（既有行为不变）；
+     * 没配 CI 的仓库关掉后，none 不再拦 —— GitHub 说 mergeable 就能合，让按钮亮起来。
+     * 真实失败（failure）/ 在跑（pending）/ 冲突 / 草稿照旧拦，跟这开关无关。 */
+    const requireGate = repo.requireGate !== 0;
     const blockReason = (p) => {
       if (p.draft) return '草稿不能合 —— 先去 GitHub 上标为可审阅';
       if (p.mergeable === false || p.mergeableState === 'dirty') return '有冲突，合不了 —— 先把 base 合进分支或在本地解决';
@@ -1411,8 +1436,9 @@ export async function renderGitRepos(root = $('pluginView')) {
        * 2026-10-30 用户实报（#48 刚建完就出现在「合并」区）：`none` 不是"能合"，是"检查还没起来"。
        * 刚建的 PR 会先落在这一档（gate 起跑前有几秒到几十秒），归进「审核」等它；
        * 没配 CI 的仓库同理 —— 那本来就该去 GitHub 上看着合，不该在「可以合」里假装就绪。
+       * 2026-11-24 起这条按仓库可关：requireGate=0 的仓库跳过，交给 GitHub 自己判。
        */
-      if (p.checks?.state === 'none') return '这条提交上还没有检查结果 —— 等 gate 起来（刚建的 PR 一般几十秒）';
+      if (requireGate && p.checks?.state === 'none') return '这条提交上还没有检查结果 —— 等 gate 起来（刚建的 PR 一般几十秒）';
       if (p.checks?.state === 'unknown') return null; // 没拿到检查状态不拦 —— 由 GitHub 自己判，失败原话带回
       return null;
     };
@@ -2534,10 +2560,17 @@ export async function renderGitRepos(root = $('pluginView')) {
       let born = false;
       if (lane < 0) {
         /* 新分支（某个 ref 的顶端）第一次出现：优先复用左侧已收束的空列。
-           以前直接 push 到末尾，空列留在中间，分支就"隔着一列空白"从右边冒出来。 */
+           以前直接 push 到末尾，空列留在中间，分支就"隔着一列空白"从右边冒出来。
+
+           颜色沿用 merge 点引出它时挂的那条 pending 弧线的色（2026-11-23 借鉴 IDEA
+           2024.2："重要分支行固定在左侧、保持指定颜色"）—— 原来这里无条件 takeColor()
+           另领一个，结果分叉弧线一个色、分支节点往下又一个色，看着像同条线中途换色。
+           pending 在 merge 行就已 record 好色，这里直接复用，一路到底不换。 */
         lane = lanes.indexOf(null);
-        if (lane < 0) { lane = lanes.length; lanes.push(key); laneColors.push(takeColor()); }
-        else { lanes[lane] = key; laneColors[lane] = takeColor(); }
+        const incoming = pending.find((pe) => pe.target === key);
+        const newColor = incoming ? incoming.color : takeColor();
+        if (lane < 0) { lane = lanes.length; lanes.push(key); laneColors.push(newColor); }
+        else { lanes[lane] = key; laneColors[lane] = newColor; }
         born = true;
       }
       const start = trim(lanes.slice());

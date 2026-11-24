@@ -2990,6 +2990,32 @@ resize: vertical 留着，想临时拉高自己拖。
 
 `js/skills.mjs` 动了，`sw.js` → v360。
 
+## v361（2026-11-23）提交图：分叉弧线沿用分支颜色，不再中途换色
+
+借鉴 IDEA 2024.2「重要分支行固定左侧、保持指定颜色」。选定 B 方案：保持当前
+分支最左（本来就是 lane 0），只修同一条分支跨 merge 换色。
+
+根因：分支节点用 born 时 `takeColor()` 领的色，而 merge 点引出它的那条 pending
+弧线在挂起时**又另领一个色** —— 同一条分支在分叉处弧线一个色、节点往下又一个色。
+改法：born 时若该 commit 已在 pending 里（有弧线指向它），直接复用那条弧线的色，
+不再另领。
+
+诊断：把真 `logGraphRows` 抽出来喂本仓 60 条真实 log，逐行核对 100% 弧线与
+目标分支节点同色；当前分支始终 lane 0，每条分支 born 后沿第一父链不跳列。
+`node --check` + 四道闸全绿。
+
+`js/skills.mjs` 动了，`sw.js` → v361。
+
+## v363（2026-11-24）建 PR 弹窗去掉四枚状态标签
+
+用户圈了弹窗顶部那排 chip：「当前分支 / base / 领先 base / 推送 已推到远端」，要求全去掉。
+
+分支在页面标题的分支选择器里，base 就在下面的输入框里，推送状态在「提交 / 推送」卡 ——
+弹窗不再重复摆这三件事，只留真正挡住建 PR 的两条告警（没领先 base、还有未推提交）。
+`.pr-sum*` 样式同步删；`#prState` 的 max-height 从 240 收到 120，避免空占位。
+
+`js/skills.mjs`、`style-git.css` 动了，`sw.js` → v363。
+（上一版 v362 去掉提交清单时没补这条 changelog，版本沿革里留了个空档，这里补注。）
 ## v365（2026-11-24）PR 标题/描述说明挪进输入框
 
 用户圈了标题行旁的灰字「一句话说清这个 PR 干了什么」："放到输入提示里，原来的提示去掉"；
@@ -3018,3 +3044,14 @@ auto，而是让描述框吃满 560px 里的剩余空间：`flex:1 1 auto; min-h
 （服务端 `allowDraft`、列表里的草稿 pill、自动审阅跳过草稿）保留，仓外建的草稿仍按原规则处理。
 
 `js/skills.mjs`、`style-git.css`、`style-ide.css` 动了，`sw.js` → v365。
+
+## v366（2026-11-24）遗留分支并回 main：节点清理与检查门槛
+
+`docs/v1.5.0-readme-slim` 的 PR #90 被关掉未合并，main 上只合了 #91 的 README 瘦身。
+把该分支未进 main 的提交并回主干：清掉已下线多机节点子系统的残留（部署手册的
+`BANDI_CONTROL_PLANE` / `start-node.cmd` / 加入总机防火墙段落、`bandi node` 命令、安全政策里的
+节点与邀请码口径）；PR 弹窗去掉四枚状态 chip；仓库设置新增「检查门槛」开关，
+`requireGate=0` 的仓库在检查未开始时不再拦合并。README 以 #91 版本为底，只保留链接描述的修正。
+
+`README.md`、`deploy/README.md`、`SECURITY.md`、`docs/快速开始.md`、`js/skills.mjs`、
+`apps/server/src/security/*` 等动了，`sw.js` → v366。

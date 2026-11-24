@@ -182,9 +182,9 @@ export const WORKFLOW_RUN_LABEL = Object.freeze({
 });
 
 /**
- * 节点作业的生命周期（`node_tasks`）—— 跟上面几套**不是一回事**，
- * 别为了"统一"把它们并进去：那是**另一台机器上的活**的领取状态，
- * 卡和流程根本看不见它。
+ * 本机安装作业的生命周期（`node_tasks`）—— 跟上面几套**不是一回事**，
+ * 别为了"统一"把它们并进去：它只记本机软件商店的「装上 / 常驻 / 打开面板」，
+ * 卡和流程根本看不见它。表名与状态词保留是历史兼容，不再代表远端节点。
  */
 export const NODE_JOB_STATUS = Object.freeze({
   PENDING: 'pending',
