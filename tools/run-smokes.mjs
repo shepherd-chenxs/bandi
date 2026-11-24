@@ -39,6 +39,9 @@ const RUN = [
   // 交付动作（2026-11-19）：把"提交→推送→开PR"和"跑全量闸门"做成两条运行钥匙可达的动作。
   // 治的是"6 条命令 = 6 次模型往返 = 6 分钟纯等待"（实报 r-4c85d92c）；纯静态断言，不起服务。
   'apps/server/src/smoke-agent-deliver.mjs',
+  // 产物发进聊天（2026-11-23）：员工把本地成片/图登记成会话附件，回话带可点 chip。
+  // 纯静态断言，不起服务。
+  'apps/server/src/smoke-agent-files.mjs',
   // 连不上模型要实时看得见（2026-11-19 实报）：通道类 error 不许被 held 扣住；空回话按原因分档。
   // 同样是伪造适配器 + 临时库，不联网。
   'apps/server/src/smoke-run-channel.mjs',

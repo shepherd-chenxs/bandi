@@ -1188,6 +1188,9 @@ function persistReply(run, text, meta = null) {
     //    就只剩"我"这侧的消息，他的回话整段看不见（用户实报）
     taskId: run.workflowTaskId ?? null,
     parentId: trigger?.parentId ?? trigger?.id ?? null,
+    // 员工用 POST /api/agent/files 登记的产物（成片 / 图 / 报告…）随回话一起落库，
+    // 前端 attsHtmlOf 画成可点 chip（2026-11-23）。普通轮次是 undefined，行为不变。
+    atts: run.artifactAtts?.length ? run.artifactAtts : null,
     meta: finalMeta,
   });
   run.replyPersisted = true;

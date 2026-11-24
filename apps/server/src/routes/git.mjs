@@ -329,6 +329,7 @@ export async function handleGit(req, res, url) {
     const row = store.updateGitRepoSettings(id, {
       keeperPersonaId: keeper,
       autoMerge: body.autoMerge === undefined ? undefined : !!body.autoMerge,
+      requireGate: body.requireGate === undefined ? undefined : !!body.requireGate,
     });
     return sendJson(res, 200, { repo: row }), true;
   }

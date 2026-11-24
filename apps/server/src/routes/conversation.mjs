@@ -33,9 +33,11 @@ export function safeConv(id) {
   return /^[A-Za-z0-9_-]+$/.test(s) ? s : null;
 }
 
-const ATT_MIME = {
+export const ATT_MIME = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
   '.webp': 'image/webp', '.svg': 'image/svg+xml', '.bmp': 'image/bmp',
+  '.mp4': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime',
+  '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.m4a': 'audio/mp4',
   '.pdf': 'application/pdf', '.txt': 'text/plain; charset=utf-8', '.md': 'text/markdown; charset=utf-8',
   '.csv': 'text/csv; charset=utf-8', '.json': 'application/json; charset=utf-8',
   '.zip': 'application/zip', '.doc': 'application/msword',
