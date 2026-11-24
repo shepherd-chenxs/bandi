@@ -161,6 +161,13 @@ const ASSERT_WAIVERS = {
   'apps/server/src/smoke-status.mjs': '研发面板下线（2026-11-19）：status.mjs 与 /api/status/* 一并删除，这个冒烟无可测对象，无替代',
   'apps/server/src/smoke-plugin-blocks.mjs': '研发面板下线（2026-11-19）带走插件面板断言：插件 manifest 已删；替代验收 = 本文件余下用例 + check-contracts',
   'apps/server/src/smoke-project-profile.mjs': '项目详情撤「项目成员」tab 与「项目负责人」（2026-11-19）：相关断言随 UI 撤除；档案区剩余断言仍覆盖',
+  // 本批（2026-11-24）：**dsh 运行时整体下线**（v1.7.3，用户拍板"彻底删"）—— dsh.mjs 适配器、
+  // connectors 的 --patch 接线、cli-models 的 dsh 读法连同被测断言一起退场，不是"测试被放松"：
+  // 替代验收 = run-smokes 全绿 + codex/claude 余下断言 + check-doc-drift。
+  'apps/server/src/smoke-dsh.mjs': 'dsh 运行时下线（v1.7.3）：dsh.mjs 已删，这个冒烟无可测对象',
+  'apps/server/src/smoke-mcp.mjs': 'dsh 运行时下线（v1.7.3）：dsh 的静态/实测段随被测对象删除；codex/claude 段保留并补了 claude --mcp-config 落盘断言',
+  'apps/server/src/smoke-connector-wiring.mjs': 'dsh 运行时下线（v1.7.3）：⑤ 段 dsh --patch 断言随被测对象删除；claude 接线断言仍覆盖',
+  'apps/server/src/smoke-session-budget.mjs': 'dsh 运行时下线（v1.7.3）：dsh 累计口径（runtimeFamily:dsh）用例随被测对象删除；codex 多调用口径用例保留',
 };
 
 /*
