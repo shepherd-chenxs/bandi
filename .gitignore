@@ -97,6 +97,10 @@ bandi.backup-*
 .workbuddy/
 # ZCode 会话的工作文件（plans/ 交接计划、临时核对清单）—— 本机过程产物，不入库
 .zcode/
+# 各家工具在本机落的过程产物，不入库（2026-11-24 用户拍板）
+.codeartsdoer/
+.screenshots/
+.trae-html-share-packages/
 /dist/
 
 # 界面核对产物（本机截图 / 探针文本；2026-10-22 数据管理页核对时产生的临时文件，不入库）
