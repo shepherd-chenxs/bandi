@@ -11,7 +11,7 @@
  * 节点不点具体人，只点岗位（roleKey）—— 引擎到站时按岗位找一个该岗位的员工办，
  * 忙了退回待办、30 秒节拍重试，跨机器也能复用（不硬编 personaId）。
  *
- * 跨步骤交接靠项目文档落盘（docs/模板/*.md），下游节点读目录拿上游产出：
+ * 跨步骤交接靠项目文档落盘（写进被交付项目的 docs/模板/*.md），下游节点读目录拿上游产出：
  *   spec.md（需求） → plan.md（方案/排期） → 代码改动 → PR → 汇报。
  *
  * 节点出口都是二值 approve/reject，没有条件表达式；驳回走连线回前一步，
@@ -44,7 +44,7 @@ export const SELF_DELIVERY_TEMPLATE = {
       roleKey: 'pm',
       detail: [
         '把这次要做的东西谈清楚：目标、边界、验收标准、不做什么。',
-        '产出按 docs/模板/spec.md 的骨架写进 docs/模板/spec.md（放 docs/模板/），',
+        '产出按 skills/bandi-doc-templates/references/spec.md 的骨架写进 docs/模板/spec.md（放项目 docs/ 下），',
         '每条验收场景要能执行、能复现。这份 spec 是后面所有步骤的共识基准。',
         '约束：这是「自主交付」模板，不设部署节点，不绕过"部署永远要人下令"；',
         '交付物是 PR + 报告，合并/上线由雇主择时操作。',
@@ -56,9 +56,9 @@ export const SELF_DELIVERY_TEMPLATE = {
       roleKey: 'architect',
       detail: [
         '读 docs/模板/spec.md，把需求拆成任务、给出排期和版本号。',
-        '方案按 docs/模板/plan.md 写进 docs/模板/plan.md；列出改哪些文件、',
+        '方案按 skills/bandi-doc-templates/references/plan.md 写进 docs/模板/plan.md；列出改哪些文件、',
         '哪些是设计漏洞可能出现的地方、怎么回滚。',
-        '任务拆成看板上的卡（卡描述格式按 docs/模板/task.md），每张卡标覆盖的场景编号。',
+        '任务拆成看板上的卡（卡描述格式按 skills/bandi-doc-templates/references/task.md），每张卡标覆盖的场景编号。',
       ].join('\n'),
       approve: 'n3', reject: 'n1',
     },

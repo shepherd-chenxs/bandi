@@ -5,7 +5,7 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-// 版本真源沿用全仓唯一一份：apps/desktop/version.json（窗口标题/安装包/本 App 三处同源）。
+// 版本真源沿用全仓唯一一份：apps/desktop/version.json（安装包/本 App 两处同源；窗口标题 2026-11-24 起不带版本）。
 // versionCode 方案照搬 Tauri 壳的 tauri.properties：major*1e6 + minor*1e3 + patch，
 // 1.5.19 = 1005019 > 旧壳的 1005000，覆盖安装走升级。
 val appVersion: String = Regex("\"version\"\\s*:\\s*\"([^\"]+)\"")

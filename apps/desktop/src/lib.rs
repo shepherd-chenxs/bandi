@@ -5,7 +5,7 @@
 //!
 //! 分工：Rust 只管窗口与进程；"控制面起没起、要不要起、退出收不收"在
 //! `apps/desktop/shell.mjs`（Node），与 `start.cmd` 共用 `apps/server/src/lifecycle.mjs`。
-//! 详见 `docs/形态决策.md` §十二。
+//! 分工的历史理由见 `docs/01-迭代版本包/产品决策.md`「2026-10-15 技术选型复审」；现行产品形态见 `docs/00-项目总基线/00.2 总体设计/bandi产品设计说明书.md`。
 //!
 //! `v1.0.0` 那条「SSH 服务器登记」线（`store` / `guide` / `keys` / `ssh` 四个模块、
 //! 以及 `~/.bandi/servers.yaml` 那套登记册）已整体删除 —— 它跟"节点"模型相冲。
@@ -35,18 +35,21 @@ use std::time::Duration;
 use tauri::webview::PageLoadEvent;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
-/// 版本真源经 build.rs 注入的编译期常量。标题上的版本号只认它。
+/// 版本真源经 build.rs 注入的编译期常量。兜底页（offline.html）显示版本号时用它；
+/// 窗口标题 2026-11-24 起不带版本（见 window_title）。
 const APP_VERSION: &str = env!("APP_VERSION");
 
-/// 窗口标题：`班底 v1.5.21`，需要后缀时拼 `班底 v1.5.21 · 没起来`。
+/// 窗口标题：`BANDI`，需要后缀时拼 `BANDI · 没起来`。
 ///
 /// 2026-11-10 用户拍板：版本号从左边栏品牌标下面挪到标题栏「班底」后面 ——
 /// 原生标题栏里只能整串设文字，所以版本直接编在标题里（`suffix` 为空时不带那个点）。
+/// 2026-11-24 用户拍板：标题定名 `BANDI`，不再带版本号 —— 版本看「我的」页
+/// （settings.mjs 的页脚 / 版本行，数据来自服务端 hello.version）。
 fn window_title(suffix: &str) -> String {
     if suffix.is_empty() {
-        format!("班底 v{APP_VERSION}")
+        "BANDI".to_string()
     } else {
-        format!("班底 v{APP_VERSION} · {suffix}")
+        format!("BANDI · {suffix}")
     }
 }
 

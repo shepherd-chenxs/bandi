@@ -238,8 +238,8 @@ check('非 manual：自动往下走，approve=end → 流程收尾', auto.run?.s
 console.log('\n⑪ 模板 detail 同步');
 workflows.ensureBuiltInTemplate();
 const details = new Map(workflows.nodesOf(store.getWorkflowTemplate('bandi-delivery')).map((n) => [n.id, n.detail]));
-check('谈需求指向 spec 模板', (details.get('n1') ?? '').includes('docs/模板/spec.md'), details.get('n1'));
-check('定计划指向 plan/task 模板且不写卡文件', (details.get('n2') ?? '').includes('docs/模板/plan.md') && (details.get('n2') ?? '').includes('docs/模板/task.md'));
+check('谈需求指向 spec 模板', (details.get('n1') ?? '').includes('skills/bandi-doc-templates/references/spec.md'), details.get('n1'));
+check('定计划指向 plan/task 模板且不写卡文件', (details.get('n2') ?? '').includes('skills/bandi-doc-templates/references/plan.md') && (details.get('n2') ?? '').includes('skills/bandi-doc-templates/references/task.md'));
 check('测试带收敛检查', (details.get('n4') ?? '').includes('收敛'), details.get('n4'));
 
 /*

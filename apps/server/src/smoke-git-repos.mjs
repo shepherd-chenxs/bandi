@@ -347,7 +347,7 @@ try {
     'error: failed to push some refs to https://github.com/shepherd-chenxs/bandi.git',
   ].join('\n');
   const protMsg = tpf(protOut, { branch: 'main', base: 'main' });
-  // 2026-11-14 起返回 { code, text }（报错规范，docs/契约.md「十一」）—— 码和人话分开钉
+  // 2026-11-14 起返回 { code, text }（报错规范，码表见 error-codes.mjs）—— 码和人话分开钉
   check('规则集拒推 → E1201，说"有保护规则、走 PR"（不再叫人去同步）', protMsg.code === 'E1201' && /保护规则/.test(protMsg.text) && /PR/.test(protMsg.text) && !/先点「同步」/.test(protMsg.text), String(protMsg.text).slice(0, 140));
   check('把 remote: 里的规则原话带上（PR / gate）', /pull request/i.test(protMsg.text) && /required status check/i.test(protMsg.text), String(protMsg.text).slice(0, 220));
   check('base 分支被拒时明确"切一条新分支"', /新分支/.test(protMsg.text), String(protMsg.text).slice(0, 220));

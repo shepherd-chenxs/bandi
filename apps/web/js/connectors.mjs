@@ -66,8 +66,9 @@ export const connectorById = (id) => S.connectors.find((c) => c.id === id) ?? nu
 
 /*
  * 插件/连接器卡的头像图形（2026-10-25 用户要求：文字方块换图形；同日二改：按 17px 重设计）。
- * 描边风格跟左侧导航、contacts 那套 ICON_* 一致（viewBox 24 / stroke 1.7 / round），
- * 颜色继承 .plg-ico 的字色（currentColor），不另配色。
+ * 描边风格跟左侧导航、contacts 那套 ICON_* 一致（viewBox 24 / stroke 1.7 / round）。
+ * 2026-11-24 用户拍板：图标不再一律灰 —— plgColorFor 给每类/每个连接器配一个主色，
+ * 图形描边吃这个色，底与边框在 CSS 里各混一层淡淡的（见 style-ide.css 的 .plg-ico）。
  *
  * 设计约束：.plg-ico svg 最终只有 17px —— 一颗图标**一个主形、最多一处细节**，
  * 笔画再多就糊。六个类别的取舍：
@@ -104,6 +105,32 @@ export const PLG_ICONS = {
 export const plgIconFor = (c) => CONN_ICONS[c?.id] ?? PLG_ICONS[c?.category] ?? PLG_ICONS.connector;
 
 /*
+ * 配色（2026-11-24）：一颗图标一个主色，选色标准是「双主题下都读得清 + 互相拉得开」。
+ * 先按产品 id 认（品牌联想），认不出按类别给色，再兜底 —— 跟 plgIconFor 的认法平行。
+ */
+const CONN_COLORS = {
+  'chrome-devtools': '#4285f4', // Chrome 蓝
+  github: '#8250df',            // GitHub 紫
+  'sequential-thinking': '#d29922', // 琥珀 —— 思考的暖色
+  everything: '#1a7f64',        // 青绿 —— 仪表盘
+  filesystem: '#f0883e',        // 橙 —— 文件夹
+  memory: '#2da44e',            // 绿 —— 存储
+  ssh: '#bf3989',               // 品红 —— 终端
+  'echo-local': '#12a5b0',      // 青蓝 —— 声呐
+  baoluo: '#d64545',            // 珊瑚红 —— 媒体全链路
+};
+const CAT_COLORS = {
+  开发: '#4285f4', 生产力: '#d29922', 运维: '#1a7f64', 个人: '#bf3989',
+  panel: '#8250df', connector: '#f0883e', 软件: '#2da44e',
+};
+/** 卡上图标的主色：先产品 id 再类别，认不出返回 undefined（回落老灰） */
+export const plgColorFor = (c) => CONN_COLORS[c?.id] ?? CAT_COLORS[c?.category];
+
+/* 图标方块壳：给了色就内联 --ico-c（CSS 据此描边 + 混底），没给色保持原样 */
+const icoChip = (svg, color) =>
+  color ? `<div class="plg-ico" style="--ico-c:${color}">${svg}</div>` : `<div class="plg-ico">${svg}</div>`;
+
+/*
  * 每个连接器自己的品牌形（2026-10-25 二轮：用户要的是「产品自己的图标」，
  * 不是类别通配）。仍然 17px 一个主形最多一处细节，描边语言与全局一致。
  */
@@ -124,6 +151,10 @@ export const CONN_ICONS = {
   ssh: IC('<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M7 9.6l3.3 2.9L7 15.4"/><path d="M12.6 15.6H17"/>'),
   // 回声 → 声呐：源点 + 两道外扩波（界面不再摆这张示例卡，但手工装过的人还得有图标）
   'echo-local': IC('<path d="M8.6 12h.01"/><path d="M11.7 8.6a4.8 4.8 0 0 1 0 6.8M14.6 6a9 9 0 0 1 0 12"/>'),
+  // 宝螺 → 螺线：半径 1.8 → 3.6 → 5.4 → 7.2 → 8.6 的五段半圆交替上鼓/下鼓，
+  // 末段只放大一小步（半圈多一点就收），两圈半，壳口朝右 —— 呼应「螺」字
+  // （媒体全链路：解析链接 → 成片），也是现有图标里没有的形
+  baoluo: IC('<path d="M10.8 12.2A1.8 1.8 0 0 1 14.4 12.2A3.6 3.6 0 0 1 7.2 12.2A5.4 5.4 0 0 1 18 12.2A7.2 7.2 0 0 1 3.6 12.2A8.6 8.6 0 0 1 20.8 12.2"/>'),
 };
 
 /*
@@ -341,7 +372,7 @@ export function plgPanelCardHTML(p) {
 
   return `<div class="plg-card plg-card-click sw-card" data-plgview="panel:${esc(p.id)}" title="点击看详情">
     <div class="sw-head">
-      <div class="plg-ico">${PLG_ICONS.panel}</div>
+      <div class="plg-ico" style="--ico-c:${CAT_COLORS.panel}">${PLG_ICONS.panel}</div>
       <div class="plg-title"><b>${esc(p.label)}</b>${p.valid ? '' : '<span class="set-tag" style="color:var(--bad);border-color:var(--bad)">配置有问题</span>'}</div>
       ${act}
     </div>
@@ -431,7 +462,7 @@ export function plgConnCardHTML(c) {
   const warn = (c.warnings ?? []).map((w) => `<div class="plg-warn">${esc(w)}</div>`).join('');
   return `<div class="plg-card plg-card-click sw-card" data-plgview="conn:${esc(c.id)}" title="点击看详情">
     <div class="sw-head">
-      <div class="plg-ico">${plgIconFor(c)}</div>
+      ${icoChip(plgIconFor(c), plgColorFor(c))}
       <div class="plg-title"><b>${esc(c.label)}</b></div>
       <label class="switch sm" title="${c.enabled ? '启用中 —— 关掉就不再接线' : '已停用 —— 打开就重新接线'}">
         <input type="checkbox" data-conn-toggle="${esc(c.id)}" ${c.enabled ? 'checked' : ''} /><span></span>
@@ -466,7 +497,7 @@ export function plgInstalledHTML() {
 export function plgCardHTML(c) {
   return `<div class="plg-card plg-card-click sw-card" data-plgview="conn:${esc(c.id)}" title="点击看详情">
     <div class="sw-head">
-      <div class="plg-ico">${plgIconFor(c)}</div>
+      ${icoChip(plgIconFor(c), plgColorFor(c))}
       <div class="plg-title"><b>${esc(c.label)}</b></div>
       ${c.installed ? '' : ibtn(`data-install="${esc(c.id)}"`)}
     </div>
@@ -508,7 +539,7 @@ function swCardHTML(e, probedList) {
     : esc(e.note);
   return `<div class="plg-card plg-card-click sw-card" data-plgview="ext:${esc(e.id)}" title="点击看详情">
     <div class="sw-head">
-      <div class="plg-ico">${PLG_ICONS.软件}</div>
+      <div class="plg-ico" style="--ico-c:${CAT_COLORS.软件}">${PLG_ICONS.软件}</div>
       <div class="plg-title"><b>${esc(e.label)}</b></div>
       ${installed || busy ? '' : ibtn(`data-ext-install="${esc(e.id)}"`)}
     </div>
@@ -569,7 +600,7 @@ export function openPlgDetail(kind, id) {
     }
     body.innerHTML = `
       <div class="plg-d-head">
-        <div class="plg-ico">${PLG_ICONS.panel}</div>
+        <div class="plg-ico" style="--ico-c:${CAT_COLORS.panel}">${PLG_ICONS.panel}</div>
         <div class="plg-d-who">
           <div class="plg-title"><b>${esc(p.label)}</b></div>
           <div class="plg-tags">${tags}</div>
@@ -662,7 +693,7 @@ export function openPlgDetail(kind, id) {
     if (e.home) acts += `<button data-dlg-act="ext-home">打开官网</button>`;
     body.innerHTML = `
       <div class="plg-d-head">
-        <div class="plg-ico">${PLG_ICONS.软件}</div>
+        <div class="plg-ico" style="--ico-c:${CAT_COLORS.软件}">${PLG_ICONS.软件}</div>
         <div class="plg-d-who">
           <div class="plg-title"><b>${esc(e.label)}</b></div>
           <div class="plg-tags">${tags}</div>
@@ -758,7 +789,7 @@ export function openPlgDetail(kind, id) {
   }
   body.innerHTML = `
     <div class="plg-d-head">
-      <div class="plg-ico">${plgIconFor(c)}</div>
+      ${icoChip(plgIconFor(c), plgColorFor(c))}
       <div class="plg-d-who">
         <div class="plg-title"><b>${esc(c.label)}</b></div>
         <div class="plg-tags">${led && !led.enabled ? '<span class="set-tag">已停用</span>' : ''}<span class="set-tag">${c.transport === 'stdio' ? '本机' : '云端'}</span></div>

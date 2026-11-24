@@ -22,7 +22,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..', '..', '..');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bandi-prcreate-'));
 /*
- * **把开发者本机的 git 配置隔掉**（2026-10-25，对齐 `docs/审阅经验.md` 第 1 条：
+ * **把开发者本机的 git 配置隔掉**（2026-10-25，对齐 `skills/bandi-pr-review/references/审阅经验.md` 第 1 条：
  * 测试不许依赖开发者本机状态）。不这么做的话，提交身份那一档断言会"本地绿、换台机器红"——
  * 因为开发者往往全局配了 `user.name/user.email`，平台那条"仓库没配身份才兜底"的分支
  * 在他机器上永远走不到，断言就成了永远为真的空话。
@@ -154,7 +154,7 @@ const gateClass = secretPaths.classifySecretSuspects(['.env', 'id_rsa', 'src/sec
 check('分档：实锤档（.env / id_rsa）直接拦，判据代码 / token-bucket / pem 归内容说了算', JSON.stringify(gateClass.keyfiles) === '[".env","id_rsa"]' && JSON.stringify(gateClass.wordy) === '["src/secret-paths.mjs","a/token-bucket.mjs","cert.pem"]', JSON.stringify(gateClass));
 check('内容扫描：私钥块与已知令牌命中', secretPaths.scanContentForSecrets('k.pem', '-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n') === '私钥块（PEM/OpenSSH 等）' && secretPaths.scanContentForSecrets('token.json', '{"token": "sk-proj-abcdefghijklmnopqrstuvwx"}') === 'OpenAI 风格密钥（sk-…）');
 check('内容扫描：占位值 / 测试豁免位算干净（拦测试假密钥等于逼人搬走测试）', secretPaths.scanContentForSecrets('token.json', '{"token": "占位值待填"}') === null && secretPaths.scanContentForSecrets('tests/fixtures/token.json', '{"token": "sk-proj-abcdefghijklmnopqrstuvwx"}') === null);
-/* 报错规范（2026-11-14，docs/契约.md「十一」）：常见错 = 错误码 + 一句人话 + 出路，原始信息垫底 */
+/* 报错规范（2026-11-14，码表见 error-codes.mjs）：常见错 = 错误码 + 一句人话 + 出路，原始信息垫底 */
 check('推送翻译：代理没通 → E1204 连不上 GitHub（不报代理端口，curl 原文只垫底）', (() => {
   const t = git.translatePushFailure("fatal: unable to access 'https://github.com/shepherd-chenxs/bandi.git/': Failed to connect to github.com:443 over proxy 127.0.0.1 after 0 ms: Could not connect to server");
   return t.code === 'E1204' && /连接不上 github\.com/.test(t.text) && !/代理 127\.0\.0\.1/.test(t.text) && /原始信息：/.test(t.text);

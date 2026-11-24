@@ -9,7 +9,7 @@
  * ⚠️ 2026-10-17 改：原来 ① 断言**本机**登记表里有某台机器、还比对磁盘上的 ~/.ssh/*.pub，
  *    ② 无条件把真登记表拷进临时目录，③ 直接连那台机器 —— 换台机器（CI、新同事）必然挂。
  *    现在：夹具自己造（登记与公钥都在临时目录里现造），真连那半截改成**显式 opt-in**。
- *    教训写在 docs/审阅经验.md 第一条（测试不许依赖开发者本机状态）。
+ *    教训写在 skills/bandi-pr-review/references/审阅经验.md 第一条（测试不许依赖开发者本机状态）。
  *
  * 跑法：node apps/server/src/smoke-ssh.mjs
  *       BANDI_SSH_LIVE=某台机器 node apps/server/src/smoke-ssh.mjs   # 连上真机器再验一遍

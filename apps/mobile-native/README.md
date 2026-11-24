@@ -14,7 +14,7 @@ Tauri 壳（`apps/mobile/`）的替代者。壳只干三件事，全部在原生
 存密码弹窗走凭据管理器，View 层排除标志（importantForAutofill /
 setSavePassword）与字段形态改造全部无效（小米密码保险箱 com.miui.passwords
 的系统悬浮窗，dumpsys autofill 请求历史可证）。登录搬到原生层后弹窗失去
-触发条件。完整决策记录见 `docs/形态决策.md` §十五 ⑤。
+触发条件。完整决策记录见 `docs/01-迭代版本包/产品决策.md`「2026-11-07 手机壳换原生」。
 
 ## 构建
 
@@ -48,7 +48,7 @@ app/src/main/java/app/local/bandi/mobile/
 面板侧的桥在 `apps/web/js/settings.mjs`：功能检测 `window.BandiShell`（原生壳）
 优先，旧 Tauri 壳的 `__BANDI_SHELL__` hash 流兜底，浏览器 / PWA 走各自原路径。
 
-主题壳跟面板（2026-11-17，`docs/形态决策.md` §⑩）：面板 `applyTheme` 报解析后的深浅
+主题壳跟面板（2026-11-17，`docs/01-迭代版本包/产品决策.md`「2026-11-17 手机壳跟面板主题」）：面板 `applyTheme` 报解析后的深浅
 （`shell.mjs syncShellTheme` → `BandiShell.setTheme`），壳存住、下次画原生屏按它铺；
 深色色值对齐网页 style.css（`res/values-night/`）。进门冷加载的 WebView 底色也跟主题，
 不再白闪。

@@ -76,7 +76,7 @@ const HOST_ALLOW = [
   'x',
   // 飞书开放平台（2026-10-28）：用户**自建飞书应用**的官方 API 域名 ——
   // 不是中转站/网关；飞书通道（apps/server/src/feishu.mjs）按官方协议直连它，
-  // 与 larksuite/node-sdk 用的是同一个 host。见 docs/架构.md「飞书通道」。
+  // 与 larksuite/node-sdk 用的是同一个 host。见 docs/00-项目总基线/00.2 总体设计/bandi架构设计说明书.md「飞书通道」。
   'open.feishu.cn',
   '127.0.0.1',
   'localhost',
@@ -107,7 +107,7 @@ const HOST_ALLOW = [
  * 旧用例 / 旧断言，在这里登记 file → 理由（口径出处 + 新验收在哪）才放行；
  * 没登记的净删照拦 —— 这张表只豁免「口径变化带走的那批」，不是放松的口子。
  * 本批（2026-11-07）：本地账号体系 / 角色 / 协作中心退场 + 登录即放行改写，
- * 见 docs/形态决策.md §十五 ②③④；替代验收 = 各冒烟的 hub 登录路径
+ * 见 docs/01-迭代版本包/产品决策.md（2026-11-07 各条）；替代验收 = 各冒烟的 hub 登录路径
  * + run-smokes 全绿。
  */
 const ASSERT_WAIVERS = {
@@ -123,23 +123,23 @@ const ASSERT_WAIVERS = {
   'apps/server/src/smoke-security-policy.mjs': '角色权限词表 / 最后一个管理员保护退场（§二十六）：机器身份边界保留',
   'apps/server/src/smoke-users.mjs': '影子账号从「收敛首账号」改「登录即放行各建影子」（§二十八），断言随口径重写',
   // 本批（2026-11-08）：手机配对体系（扫码 / 邀请码 / 设备令牌）整体退场收尾，
-  // 见 docs/形态决策.md §十五 ④；替代验收 = 各冒烟的 hub 登录路径 + run-smokes 全绿。
-  'apps/server/src/smoke-pair.mjs': '配对链路整套退场（§十五 ④）：手机只走中枢账号登录；替代验收 smoke-hub / smoke-auth 的登录路径',
-  'apps/server/src/smoke-device-routes.mjs': 'device 身份与 device 白名单退场（§十五 ④）：无手机专属路由可测；机器身份边界仍在 smoke-security-policy',
-  'apps/server/src/smoke-lan-origin.mjs': 'LAN 令牌口径随「全部都要登录」退场（§十五 ④），断言改写为 hub 登录口径（改写保留 5 条，净减 1 条为删除令牌段用例）',
+  // 见 docs/01-迭代版本包/产品决策.md「2026-11-07 手机不做配对令牌」；替代验收 = 各冒烟的 hub 登录路径 + run-smokes 全绿。
+  'apps/server/src/smoke-pair.mjs': '配对链路整套退场（产品决策更新日志 2026-11-07）：手机只走中枢账号登录；替代验收 smoke-hub / smoke-auth 的登录路径',
+  'apps/server/src/smoke-device-routes.mjs': 'device 身份与 device 白名单退场（产品决策更新日志 2026-11-07）：无手机专属路由可测；机器身份边界仍在 smoke-security-policy',
+  'apps/server/src/smoke-lan-origin.mjs': 'LAN 令牌口径随「全部都要登录」退场（产品决策更新日志 2026-11-07），断言改写为 hub 登录口径（改写保留 5 条，净减 1 条为删除令牌段用例）',
   // 本批（2026-11-08）：内置 frp 整块下线（用户决定：不内置，需要时另外装）。
   // 隧道进程管理（tunnel.mjs）已删，这个冒烟**没有可测的对象**，不是"测试被放松"。
   // 留下来的 hub/relay.mjs 只供两道闸认域名，闸的放行由 smoke-lan-origin 覆盖。
   'apps/server/src/smoke-tunnel.mjs': '内置 frp 下线（2026-11-08 用户决定）：隧道进程层整体删除，无替代；两道闸由 smoke-lan-origin 覆盖',
   // 本批（2026-11-09）：**多机协同 / 算力节点子系统整体删除**（用户拍板"无存量机"，
-  // 见 docs/形态决策.md「2026-11-09 彻底删除」）——节点报到 / 派活 / 面板 / 邀请码加入
+  // 见 docs/01-迭代版本包/产品决策.md「2026-11-09 多机子系统彻底删除」）——节点报到 / 派活 / 面板 / 邀请码加入
   // 连同被测对象一起退场，留下的本机路径另有覆盖（autostart 只剩 control-plane、
   // 安装任务通道改 /api/local/tasks 由 smoke-local-tasks 覆盖）。不是"测试被放松"。
-  'apps/server/src/smoke-node.mjs': '节点报到随多机子系统删除（形态决策 2026-11-09）：无替代对象',
-  'apps/server/src/smoke-node-jobs.mjs': '节点派活随多机子系统删除（形态决策 2026-11-09）：无替代对象',
-  'apps/server/src/smoke-node-panel.mjs': '节点面板随多机子系统删除（形态决策 2026-11-09）：无替代对象',
-  'apps/server/src/smoke-node-task.mjs': '节点任务协议随多机子系统删除（形态决策 2026-11-09）：无替代对象；本机任务改 /api/local/tasks 由 smoke-local-tasks 覆盖',
-  'apps/server/src/smoke-lan-join.mjs': '邀请码加入分机随多机子系统删除（形态决策 2026-11-09）：无替代场景',
+  'apps/server/src/smoke-node.mjs': '节点报到随多机子系统删除（产品决策更新日志 2026-11-09）：无替代对象',
+  'apps/server/src/smoke-node-jobs.mjs': '节点派活随多机子系统删除（产品决策更新日志 2026-11-09）：无替代对象',
+  'apps/server/src/smoke-node-panel.mjs': '节点面板随多机子系统删除（产品决策更新日志 2026-11-09）：无替代对象',
+  'apps/server/src/smoke-node-task.mjs': '节点任务协议随多机子系统删除（产品决策更新日志 2026-11-09）：无替代对象；本机任务改 /api/local/tasks 由 smoke-local-tasks 覆盖',
+  'apps/server/src/smoke-lan-join.mjs': '邀请码加入分机随多机子系统删除（产品决策更新日志 2026-11-09）：无替代场景',
   'apps/server/src/smoke-stop-watchdog.mjs': '远端运行看门狗场景随多机删除（无 remote run / abortRemote）；本机 watchdog 两条场景保留',
   // 其余两处是**口径改写**（不是删覆盖）：自启目标从 node+control-plane 收成一个；
   // 进度卡从"过程快照收起行"改成"单行气泡 + 共用 run-live 状态机"（v176–v190），
@@ -198,11 +198,11 @@ const note = (file, msg) => notices.push({ file, msg });
 /* ------------------------------------------------------------ 收集 diff */
 
 /*
- * diff 里的路径有两种写法：`b/docs/形态决策.md`，以及 git 认为"特殊"时加引号 + 八进制转义的
+ * diff 里的路径有两种写法：`b/docs/00-项目总基线/00.2 总体设计/bandi产品设计说明书.md`，以及 git 认为"特殊"时加引号 + 八进制转义的
  * `"b/docs/\345\275\242..."` —— **非 ASCII 文件名默认就是后者**（core.quotepath 默认 true）。
  *
  * 2026-10-27 实报：原来只认裸 `b/`，引号路径一个都认不出，于是中文名文件的所有改动行
- * 都被算到**上一个文件**头上 —— `docs/形态决策.md` 里那条早就在的第三方链接，被报成
+ * 都被算到**上一个文件**头上 —— `docs/00-项目总基线/00.2 总体设计/bandi产品设计说明书.md` 里那条早就在的第三方链接，被报成
  * `design/v1.0.1/ios-workbench.html:10` 的"新增白名单外地址"硬违规（文档本该只提示）。
  *
  * 修法两层，缺一不可：
@@ -287,7 +287,7 @@ for (const { status, file } of nameStatus) {
   if (status.startsWith('D')) continue;
   if (DEP_FILE_WAIVERS.has(file)) continue;
   if (DEP_FILE.test(file)) {
-    err(file, 0, `新增依赖面：${file}。本仓库**零依赖**是硬约束（见 docs/架构.md 技术选型）——要么去掉它，要么在 PR 里说明为什么必须破例。`);
+    err(file, 0, `新增依赖面：${file}。本仓库**零依赖**是硬约束（见 docs/00-项目总基线/00.2 总体设计/bandi架构设计说明书.md 技术选型）——要么去掉它，要么在 PR 里说明为什么必须破例。`);
   }
 }
 

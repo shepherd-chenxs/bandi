@@ -1,7 +1,7 @@
 /*
  * store/db.mjs —— 连接、建表、迁移、工具（唯一持库者）。
  *
- * 2026-10-22 由 store.mjs 拆分而来（见 docs/形态决策.md §十二「SQL 收口」）：
+ * 2026-10-22 由 store.mjs 拆分而来（决策见 docs/01-迭代版本包/产品决策.md「2026-10-15 技术选型复审」）：
  * SQL 只出现在 **store/ 目录**里；store/ 之外的模块一律从 ../store.mjs 门面拿函数。
  * 本文件是 store/ 内唯一的 DatabaseSync 持有点，域模块从这里 import { db }。
  */
@@ -29,7 +29,7 @@ fs.mkdirSync(dataDir, { recursive: true });
  * **`db` 只在 store/ 目录内可见**（2026-10-15 立规，2026-10-22 拆分后升级）。
  * 以前导出过，于是业务模块自己攒 SQL、server.mjs 也直接伸进来查一句 ——
  * 想换库的时候要改的地方就散成了三处。规矩：**SQL 只出现在 store/ 目录里**
- * （见 docs/形态决策.md §十二 第 2 条）；外面要什么，就往域模块里加一个函数、
+ * （决策见 docs/01-迭代版本包/产品决策.md「2026-10-15 技术选型复审」）；外面要什么，就往域模块里加一个函数、
  * 再从 ../store.mjs 门面 re-export。
  */
 /*
@@ -804,7 +804,7 @@ ensureColumn('workflow_runs', 'currentNodeId', 'currentNodeId TEXT');
 ensureColumn('workflow_tasks', 'result', 'result TEXT');
 
 /*
- * PR 审阅与授权合并（2026-10-23，docs/PRD-2026-10-23-PR审阅与授权合并.md）：
+ * PR 审阅与授权合并（2026-10-23，docs/05-归档区/PRD-2026-10-23-PR审阅与授权合并.md）：
  *   · workflow_runs 记 prRepo/prNumber —— 实例要拿它写回值班卡、执行合并。
  *     放在 runs 上而不是重新建关联表：一条审阅实例就是一个 PR，1:1 的东西不配多一张表。
  *   · git_repos 的两列（绑定管理员 + 授权开关）在**建表之后**补，见下面 git_repos 那段 ——

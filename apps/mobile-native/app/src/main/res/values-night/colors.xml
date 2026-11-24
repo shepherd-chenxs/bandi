@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!--
-      深色档（2026-11-17）：壳跟面板主题（docs/形态决策.md §⑩）。色值对齐网页 style.css
+      深色档（2026-11-17）：壳跟面板主题（docs/00-项目总基线/00.2 总体设计/bandi产品设计说明书.md「6. 客户端形态」）。色值对齐网页 style.css
       深色变量（:root 默认档的 bg / panel / line / text / dim / accent 六个）：
       #08090a / #111214 / #202225 / #e8e9ea / #9b9ea3 / #0a84ff。
       状态胶囊沿用浅色档的 fg/bg/dot 三件套：fg 用网页深色的 ok（#3fb950）与 dim（#9b9ea3），

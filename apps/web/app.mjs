@@ -782,8 +782,9 @@ applyTheme();
 
 boot();
 
-// 版本号在**窗口标题栏**里（壳的 window_title()，见 apps/desktop/src/lib.rs）；
-// 左栏不再挂版本号，前端这里没有要填的东西。
+// 版本号看「我的」页页脚 / 设置里的版本行（js/settings.mjs，数据来自服务端 hello.version）；
+// 窗口标题栏 2026-11-24 起定名「BANDI」、不带版本（见 apps/desktop/src/lib.rs 的 window_title），
+// 前端这里没有要填的东西。
 
 
 // 全局事件流（SSE）：后台有人往任何会话说话，开着的窗口和左栏立刻跟上（见 js/events.mjs）
