@@ -58,7 +58,7 @@ console.log('\nA. 清单与 PDP 的纯逻辑校验');
 }
 {
   // 同一路径多方法/多登记时的优先级（smoke-auth ⑥ 的教训：方法感知别丢）
-  check('/api/local/status 解析到 session 条目（分机状态页）', findRoute('/api/local/status', 'GET')?.id === 'local.status.forUser');
+  check('/api/local/status 解析到 session 条目（登录用户可看本机状态）', findRoute('/api/local/status', 'GET')?.id === 'local.status.forUser');
   check('POST /api/lan 解析到写条目（方法感知）', findRoute('/api/lan', 'POST')?.id === 'lan.write' && findRoute('/api/lan', 'GET')?.id === 'lan.read');
   check('本机安装任务三条都登记（原 nodes.dispatch 改挂 /api/install/tasks）',
     findRoute('/api/install/tasks', 'POST')?.id === 'localTasks.dispatch'

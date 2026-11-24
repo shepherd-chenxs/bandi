@@ -22,7 +22,7 @@
  * （曾经的 `/api/restart` 就登记在这儿，2026-11-03 连接口一起删了）。
  */
 export const LOCAL_POLICY = [
-  // 只读状态：网络来源也放行、不要秘密 —— 反代后面的设置页要显示本机 / 协作状态，
+  // 只读状态：网络来源也放行、不要秘密 —— 反代后面的设置页要显示本机状态，
   // 要秘密就等于永远显示不出来（IAM §10.1.2 也因此只 deny 破坏性路径）。
   { method: 'GET', path: '/api/local/status', principals: ['user'], secret: 'never' },
   // 外部件现状（2026-11-04）：插件页「软件」商店条目要画"装没装、网关/面板通不通" —— 只读
@@ -31,7 +31,7 @@ export const LOCAL_POLICY = [
 
   /*
    * ⚠️ 导出/导入快照从 2026-11-01 起也是"网络来源不要秘密"档，
-   * 用户拍板："不管是不是总机分机，这个导入导出都要一直显示"。监听 0.0.0.0 时，
+   * 用户拍板："不管从哪台机器访问，这个导入导出都要一直显示"。监听 0.0.0.0 时，
    * `classifySource` 判 ③ 把**桌面壳自己的 127.0.0.1 请求也判成 network** ——
    * 秘密闸在这里就是「单向门」：对外一开，浏览器里的导出/导入就永远 E4097。
    * 风险面（拿到登录会话的人）：
@@ -42,6 +42,8 @@ export const LOCAL_POLICY = [
    */
   { method: 'POST', path: '/api/local/export', principals: ['user'], secret: 'never' },
   { method: 'POST', path: '/api/local/import', principals: ['user'], secret: 'never' },
+  // 下面四条是历史「加入总机 / 手动加主机」接口的策略存根：handler 已随多机子系统删除
+  // （2026-11-09），保留只为穷举 secret:'network' 档的安全闸（smoke-proxy-auth）。
   { method: 'POST', path: '/api/local/hosts/add', principals: ['user'], secret: 'network' },
   { method: 'POST', path: '/api/local/hosts/test', principals: ['user'], secret: 'network' },
   { method: 'POST', path: '/api/local/hosts/remove', principals: ['user'], secret: 'network' },

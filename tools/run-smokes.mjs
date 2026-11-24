@@ -158,9 +158,9 @@ const RUN = [
   // 运行时识别不依赖进程 PATH 快照（2026-11-04）：注册表实时 PATH + 固定落点。
   // ⚠️ 这条会临时改 HKCU\Environment\Path（原样写回）—— 真注册表用例
   'apps/server/src/smoke-runtime-detect.mjs',
-  // 纯静态断言（不联网）：手机该走的路由必须带 device 标，桌面专属的必须没有
+  // 纯静态断言（不联网）：登录页形状、/api/me、昵称与安全接口口径
   'apps/server/src/smoke-users.mjs',
-  // 状态词表一致性（2026-11-08）：八态/运行态/节点态、状态⇄看板列、建表默认值。
+  // 状态词表一致性（2026-11-08）：任务八态/运行态、状态⇄看板列、建表默认值。
   // 纯数据 + 源码文本，不开库不起服务 —— 改状态相关代码后单独跑它最快
   // （node apps/server/src/smoke-status-vocab.mjs）
   'apps/server/src/smoke-status-vocab.mjs',

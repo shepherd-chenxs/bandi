@@ -24,7 +24,7 @@ export const repoRoot = path.resolve(here, '..', '..', '..');
 
 /**
  * 运行时数据目录（SQLite、`runtimes.json`、`plugins.json`、`connectors.json`、
- * `node.json`、`model-routes/` …—— 有 7 处从它派生）。
+ * `hub.json`、`token`、`model-routes/` …—— 有 7 处从它派生）。
  *
  * **默认只有一个：本机用户数据目录**（`userDataDir()`；Windows 是 `%APPDATA%\bandi`）。
  * 命令行、桌面壳（开发版与安装版）走的是**同一个默认** —— 2026-10-18 收敛掉了原先
@@ -45,8 +45,8 @@ export const dataDir = process.env.BANDI_DATA
 export const dbPath = process.env.BANDI_DB ?? path.join(dataDir, 'bandi.db');
 
 /**
- * 监听地址。**永远对外**（2026-11-03 用户拍板：手机和节点永远都可以连进来，
- * 让不让进由「分机/总机」和「手机连接」两个开关管，不由监听地址管）。
+ * 监听地址。**永远对外**（2026-11-03 用户拍板：手机和远端机器都走同一套鉴权，
+ * 让不让进由账号登录、本机钥匙和来源白名单管，不由监听地址管）。
  *
  * `BANDI_HOST` 仍可显式覆盖（部署要钉具体网卡地址；`127.0.0.1` 只留给调试）。
  * 曾经的 `allowLan` 键与"只听本机"形态已整个删除 —— 配置总会有遗漏，
@@ -54,16 +54,15 @@ export const dbPath = process.env.BANDI_DB ?? path.join(dataDir, 'bandi.db');
  */
 
 /*
- * **这台机器已经加入某台总机了吗**（2026-10-20，设计 §4.4）。
- *
- * 判据就是 `node.mjs` 读的那份 `<数据目录>/config.json` 里有没有 `controlPlane` ——
- * 有 = 它是某台总机的节点（也就是"瘦客户端"）。
+ * `<数据目录>/config.json` 的**就地只读**快照 —— 现在只用来取 `listenHost`。
  *
  * 为什么**就地读 JSON、不 import `local-mode`**：
  *   · `store.mjs` import 了本文件，而 `local-mode` 若要 import `store`（它不 import，但这条链很容易被
  *     后来的人接上）就成环 —— 启动时就炸；
  *   · 而且本文件在**任何模块之前**被求值，import 一个会读配置的模块只会把初始化顺序搞乱。
- * 读失败（没有文件 / 坏了 / 不是 JSON 对象）一律当"没加入" —— 那是最保守的形态（只听回环）。
+ * 读失败（没有文件 / 坏了 / 不是 JSON 对象）一律当"没配" —— 交给下面的缺省监听地址。
+ * 曾经这里还从 `controlPlane` 推 `clientJoined`（"是不是某台总机的节点"），该身份
+ * 随多机子系统于 2026-11-09 删除，不要再往回加。
  */
 const clientCfg = (() => {
   try {
@@ -73,8 +72,6 @@ const clientCfg = (() => {
     return {};
   }
 })();
-
-export const clientJoined = typeof clientCfg.controlPlane === 'string' && clientCfg.controlPlane.trim() !== '';
 
 /**
  * 监听地址的**合法写法**（2026-11-04）。空 / 认不出来 = null（调用方当"没配"）。
@@ -174,8 +171,8 @@ export function writeReplyStyle(id) {
  *   ① `BANDI_HOST` 环境变量 —— 显式钉（调试 / 特殊部署 / 桌面壳）。最高优先。
  *   ② 数据目录 `config.json` 的 `listenHost` —— **主路**：界面可改、重启生效、
  *      升级重装都不丢（`writeListenHost` / `clearListenHost`）。
- *   ③ 缺省 `0.0.0.0` —— **永远对外**（2026-11-03 用户拍板：手机和节点永远都能连进来，
- *      让不让进由「总机/分机」和「手机连接」两个开关管，不由监听地址管）。
+ *   ③ 缺省 `0.0.0.0` —— **永远对外**（2026-11-03 用户拍板：手机和远端机器都走同一套鉴权，
+ *      让不让进由账号登录、本机钥匙和来源白名单管，不由监听地址管）。
  *
  * 为什么②要落在数据目录：systemd 单元每次重装都会被 `deploy/install.sh` 覆盖写，
  * 11-04 的事故就是三次升级把 `0.0.0.0` 写回了 `127.0.0.1`，外面全连不上。

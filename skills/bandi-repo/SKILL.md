@@ -56,7 +56,7 @@ git log -L <行号>,<行号+3>:<用例文件>   # 例：git log -L 766,769:apps/
 
 前缀都在 `apps/server/src/`，`--only` 直接用文件名。
 
-**账号 / 权限 / 登录**：`smoke-auth` 访问令牌 · `smoke-roles` 角色与菜单 · `smoke-device-roles` 设备角色下发 · `smoke-users` 账号登录与角色分配 · `smoke-personas` 岗位字段
+**账号 / 登录 / 安全闸**：`smoke-auth` 鉴权与登录页 · `smoke-hub` 中枢登录 · `smoke-users` 账号形状与昵称 · `smoke-security-policy` 身份边界 · `smoke-personas` 岗位字段
 
 **会话 / 聊天 / 运行态**：`smoke-conversation-delete` 永久删会话 · `smoke-chat-to-board` 聊天派活与看板 · `smoke-run-progress` 运行进度（进到哪一步了）· `smoke-run-events` 运行事件流断线补缺口 · `smoke-stop-keep` 停止生成不许丢已说出口的话 · `smoke-stop-watchdog` 停止看门狗 · `smoke-events` 全局 SSE
 
@@ -64,7 +64,7 @@ git log -L <行号>,<行号+3>:<用例文件>   # 例：git log -L 766,769:apps/
 
 **PR / 代码托管**：`smoke-git-repos` 仓库接入 · `smoke-pr-create` 建 PR / 列 open PR / 手动合并 / **gate 明细+重跑+让 AI 修** · `smoke-pr-link` PR 联动 · `smoke-pr-review` 审阅与授权合并 · `smoke-repo-cards` 仓库值班写卡 · `smoke-repo-patrol` 仓库巡检
 
-**节点 / 远程 / 局域网**：`smoke-node` 节点报到掉线 · `smoke-node-jobs` 节点领活 · `smoke-node-panel` 节点配置面 · `smoke-node-task` 一键装运行时 · `smoke-lan-join` 加入总机 · `smoke-lan-origin` 局域网来源闸 · `smoke-runtime-heal` 路径自愈 · `smoke-lifecycle` 控制面起停 · `smoke-ssh` 服务器与密钥 · `smoke-pair` 手机配对 · `smoke-data-dir` 数据落点与远程访问
+**网络 / 远程 / 本机**：`smoke-network` 监听与来源 · `smoke-lan-origin` 局域网来源闸 · `smoke-runtime-heal` 路径自愈 · `smoke-lifecycle` 控制面起停 · `smoke-ssh` 服务器与密钥 · `smoke-data-dir` 数据落点与远程访问（节点 / 手机配对的旧用例已随子系统删除）
 
 **飞书 / 连接器 / 插件**：`smoke-feishu` 飞书通道 · `smoke-connectors` 连接器接口 · `smoke-plugin-blocks` 插件新版式块
 
