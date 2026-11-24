@@ -127,7 +127,7 @@ db.exec(`PRAGMA busy_timeout = 5000;`);
  *   · 16（2026-11-23）：新表 `persona_facts` —— 长期记忆的事实层：平台从**跑通那一轮**的
  *     run_events 里抽出的验证命令 / 重启方式 / 常改文件，按仓库 scope 隔离（见 store/facts.mjs）。
  */
-export const SCHEMA_VERSION = 16;
+export const SCHEMA_VERSION = 17;
 
 const dbVersion = Number(db.prepare('PRAGMA user_version').get()?.user_version ?? 0);
 if (dbVersion > SCHEMA_VERSION) {

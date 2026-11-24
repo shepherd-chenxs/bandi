@@ -2807,37 +2807,32 @@ export function openRepoPrDialog(repo, onDone) {
   /* 尺寸全交给 style.css 的 dialog#repoPrDlg（660 × min(720px, 92vh) 定高）：
      这里再写 inline 宽高的话会压过那条规则，两边改一处忘一处。 */
   /*
-   * 2026-10-29 重设计：
-   *   · 内容按「先写什么 → 再往哪推」排：标题、描述在前，base 在后；
-   *   · 推送和建 PR 拆开（用户："这里只是建 PR 就可以，前面的推送已经做了"）：
-   *     没有「新分支名」栏了 —— head 就是当前分支；没推完的提交弹窗建不了，指路推送区。
-   *   · 长说明从 placeholder 挪进 label 的 <em> —— 填之前就该看见要求，填完才看得见提示没用。
-   * 控件 id（prTitle/prBody/prBase/prDraft/prFillBtn/prSubmit）不变，
-   * 行为契约不变：「建 PR」不标 type="button"（回车即提交），其余钮必须标。
+   * 2026-11-24 重排（用户圈图连提三条）：
+   *   · 目录地址不摆了（页面顶部已经选着仓库，没必要在弹窗里重复一遍）；
+   *   · 「自动填充」从标题行挪到底部动作条，紧挨「建 PR」左边；
+   *   · 底部「关闭」删掉 —— 右上角 wireDialogHead 造的 × 已经是关闭入口。
+   * 内容仍是「先写什么 → 再往哪推」：标题、描述在前，base 在后；推送与建 PR 拆开。
+   * 控件 id（prTitle/prBody/prBase/prFillBtn/prSubmit）不变；草稿开关按用户要求去掉，
+   * 建出来就是正式 PR（`draft:false` 写死）。行为契约不变：
+   * 「建 PR」不标 type="button"（回车即提交），其余钮必须标。
    */
   dlg.innerHTML = `
     <form method="dialog">
-      <b>建 PR · ${esc(repo.fullName)}</b>
-      <div class="gr-meta pr-path">${esc(repo.localPath)}</div>
+      <b>新建PR</b>
 
       <div id="prState"><div class="sk-blank">读工作区…</div></div>
 
       <div id="prForm" hidden>
-        <div class="pr-fill-row">
-          <label style="flex:1">PR 标题<em>一句话说清这个 PR 干了什么</em></label>
-          <button type="button" class="btn-sm" id="prFillBtn" title="按这条分支领先 base 的提交，自动填标题和描述">自动填充</button>
-        </div>
-        <input id="prTitle" placeholder="例如：代码托管：加建 PR 与手动合并" autocomplete="off" />
-        <label>PR 描述<em>改了什么 + 怎么验的；没跑过验证就写「未验证」—— 别写「安全」「已修复」</em></label>
-        <textarea id="prBody" rows="4" placeholder="改了什么 + 怎么验的。"></textarea>
-        <label>合进哪个分支（base）<em>base 不动</em></label>
+        <label>PR 标题</label>
+        <input id="prTitle" placeholder="一句话说清这个 PR 干了什么" autocomplete="off" />
+        <label>PR 描述</label>
+        <textarea id="prBody" rows="3" placeholder="改了什么 + 怎么验的；没跑过验证就写「未验证」—— 别写「安全」「已修复」"></textarea>
+        <label>合进哪个分支</label>
         <input id="prBase" autocomplete="off" />
-        <label class="check"><input type="checkbox" id="prDraft" />
-          <span>先建成草稿<em>——草稿不会被自动合并，等你在 GitHub 上标为可审阅</em></span></label>
       </div>
 
       <div class="dlg-actions">
-        <button type="button" value="cancel">关闭</button>
+        <button type="button" class="btn-sm" id="prFillBtn" title="按这条分支领先 base 的提交，自动填标题和描述">自动填充</button>
         <button class="primary" id="prSubmit" disabled>建 PR</button>
       </div>
     </form>`;
@@ -2873,44 +2868,9 @@ export function openRepoPrDialog(repo, onDone) {
       $('prSubmit').disabled = true;
       return;
     }
-    const dirty = state.dirtyCount;
-    /* base 没记录时不能说 "origin/null"（那是假话，也看不出该做什么） */
-    const ahead = !state.base
-      ? '不知道（没记录 base 分支）'
-      : state.ahead === null
-        ? `不知道（本地还没有 origin/${state.base}，点开分支下拉「更新项目」拉一次）`
-        : `${state.ahead} 个提交`;
-    /* 推送状态（推送和建 PR 拆开后弹窗要管的第一件事）：没推完 = 现在建不了，指路推送区 */
-    const unpushedN = Number(state.unpushed ?? 0);
-    const pushChip = !state.upstream
-      ? '<div class="pr-sum-item"><span class="pr-sum-k">推送</span><span class="pr-sum-v">没推过（还没有上游）</span></div>'
-      : unpushedN > 0
-        ? `<div class="pr-sum-item"><span class="pr-sum-k">推送</span><span class="pr-sum-v">还有 ${unpushedN} 个没推</span></div>`
-        : '<div class="pr-sum-item"><span class="pr-sum-k">推送</span><span class="pr-sum-v">已推到远端</span></div>';
-    /*
-     * 这个窗只讲**这条 PR 会装什么**（2026-10-29 用户："应该是这个 PR 相关的内容，没推送的讲他干嘛？"）：
-     * 已提交、还没推的就是全部内容；没提交的东西跟这颗按钮无关，不摆进来占地方。
-     */
-    /*
-     * 概览重设计（2026-10-29）：「当前分支 / base / 领先」从竖线串成的长句改成 chip ——
-     * 数字和分支名是要被扫到的，不是被读的；提交清单收进浅底卡片，跟下面的表单区分开。
-     */
+    /* 2026-11-24：四枚状态 chip 和提交清单都已撤掉，这里只留挡住建 PR 的告警；
+       分支/base/推送状态分别由页面标题选择器、下方输入框、「提交 / 推送」卡承载。 */
     box.innerHTML = `
-      <div class="pr-sum">
-        <div class="pr-sum-item"><span class="pr-sum-k">当前分支</span><span class="pr-sum-v" title="${esc(state.branch)}">${esc(state.branch)}</span></div>
-        <div class="pr-sum-item"><span class="pr-sum-k">base</span><span class="pr-sum-v" title="${esc(state.base || '未记录')}">${esc(state.base || '未记录')}</span></div>
-        <div class="pr-sum-item"><span class="pr-sum-k">领先 base</span><span class="pr-sum-v">${esc(String(ahead))}</span></div>
-        ${pushChip}
-      </div>
-      ${
-        state.aheadCommits?.length
-          ? `<div class="pr-commits">
-          <div class="pr-commits-head">这条 PR 会装 <b>${state.aheadCommits.length}</b> 条提交<span class="pr-commits-note">${unpushedN > 0 ? '已提交、还没推' : '已推到远端'}</span></div>
-          <ul class="pr-commit-list">
-            ${state.aheadCommits.map((c) => `<li><code>${esc(c.sha)}</code><span title="${esc(c.subject)}">${esc(c.subject)}</span></li>`).join('')}
-          </ul></div>`
-          : ''
-      }
       ${state.canPr ? '' : '<div class="pr-warn">当前分支没有领先 base 的提交 —— 没有东西可以进 PR：先在「提交」里提交，再来建。</div>'}
       ${state.canPr && !state.canPrNow ? '<div class="pr-warn">这条分支还有没推送的提交 —— 建不了 PR。先关掉这个窗，在「提交」卡的推送区点「推送」，推完再回来。</div>' : ''}`;
     const form = $('prForm');
@@ -2971,7 +2931,7 @@ export function openRepoPrDialog(repo, onDone) {
           title,
           body: $('prBody').value,
           base: $('prBase').value.trim() || null,
-          draft: $('prDraft').checked,
+          draft: false,
         }),
       });
       toast(r.created ? `PR #${r.pr.number} 建好了：${r.pr.url}` : `这个分支已经有一个 open PR：#${r.pr.number}（没新建）`);
