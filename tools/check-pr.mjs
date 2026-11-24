@@ -168,6 +168,7 @@ const ASSERT_WAIVERS = {
   'apps/server/src/smoke-mcp.mjs': 'dsh 运行时下线（v1.7.3）：dsh 的静态/实测段随被测对象删除；codex/claude 段保留并补了 claude --mcp-config 落盘断言',
   'apps/server/src/smoke-connector-wiring.mjs': 'dsh 运行时下线（v1.7.3）：⑤ 段 dsh --patch 断言随被测对象删除；claude 接线断言仍覆盖',
   'apps/server/src/smoke-session-budget.mjs': 'dsh 运行时下线（v1.7.3）：dsh 累计口径（runtimeFamily:dsh）用例随被测对象删除；codex 多调用口径用例保留',
+  'tools/smoke-web-link.mjs': 'dsh 运行时下线（v1.7.3）：tool_call/tool_result 事件形状只有 dsh 会发，该用例随事件形状删除；工具报错路径由 ⑤ 组断言覆盖',
 };
 
 /*
