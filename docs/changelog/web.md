@@ -1,0 +1,2041 @@
+# Web 静态缓存的版本沿革（sw.js 的 VERSION）
+
+> 从 `apps/web/sw.js` 头部搬出来的（2026-11-08）。那份 changelog 当时占了 837 行里的
+> 600 多行 —— 文件 86% 是注释，改缓存策略前要先翻过 160 个版本。
+>
+> **`VERSION` 仍是唯一旋钮**：预缓存清单变了（新增 js 模块、改了静态布局）就 +1，
+> 逼所有客户端整包重建；同时在这里补一条记录，写清"为什么进这一版"。
+>
+> 这份记录**允许**提到已删除的文件（`pairing.mjs`、`pair.html` 之类）—— 它记的是历史，
+> 不是指路。`tools/check-ghost-refs.mjs` 也按这个口径把 `docs/changelog/` 划进归档区。
+
+```
+v13（2026-11-01 七改）：设备行加「取消配对」（已踢出行的清理动作，直删不确认）——
+   pairing.mjs + mobile.css 变了，逼客户端换缓存。
+
+   v14（2026-11-01 八改）：默认端口 8787 → 18787（高位、固定不漂），
+   pair-claim / machine / collab / projects 的示例地址与提示跟着换。
+
+   v16（2026-11-01 十改）：撤掉 v15 的「已连接」区（与下方「已配对的手机」重复，
+   用户看过实际效果后不要了）—— 在线状态仍能在设备行的「最近活跃」里看到。
+   pairing.mjs + mobile.css 又变了，v15 已可能被客户端缓存，必须再进一版。
+
+   v17（2026-11-01 十一改）：一机一刀 —— pair-claim.mjs 上报 clientKey
+   （同一台手机重配复用同一条设备记录），旧缓存的脚本不会带这个字段。
+
+   v18（2026-11-01 十二改）：断开连接 ≠ 取消配对 —— pairing.mjs / mobile.mjs /
+   pair-claim.mjs（resume）/ mobile.css / settings.mjs 全动了，必须再进一版。
+
+   v19（2026-11-01 十三改）：401 遮罩加「重新连接 / 再试一次」按钮（mobile.mjs +
+   mobile.css）—— 连接页不再靠返回键进入，只有配对失效时从遮罩主动回去。
+
+   v20（2026-11-01 十四改）：手机壳语音输入 —— 输入条多一个麦克风（桌面浏览器里不出现），
+   新增 js/voice.mjs + .voice-* 样式；壳侧加了 Kotlin 的 SpeechPlugin（不走 Tauri IPC，
+   走 WebView 的 addJavascriptInterface（Tauri 壳 README，已随 apps/mobile 删除）。
+
+   v21（2026-11-01 十五改）：内嵌识别起不来时自动降级到系统语音输入面板；
+   面板一弹就关（引擎自身没麦克风权限）给出具体提示 —— 只改 js/voice.mjs。
+
+   v22（2026-11-01 十六改）：「这台机器」页的数据管理区头拿到卡片外（跟设备/运行时
+   同款 .fx-head），统计 + 快照包进 .dm-card —— machine.mjs + style.css + mobile.css。
+
+   v23（2026-11-01 十七改）：导出/导入快照按钮任何形态都显示（总机/局域网形态
+   不再藏按钮换 CLI 指路）—— 只改 js/machine.mjs。
+
+   v24（2026-11-01 十八改）：协作中心搬进设置 —— 工作台撤磁贴（experts.mjs），
+   中心页长在设置 →「协作」组（settings.mjs + collab.mjs + shell.mjs），
+   旧缓存的入口/页面都对不上，必须再进一版。
+
+   v25（2026-11-01 十九改）：协作中心设备表的空态收成一句「还没有设备。」（原来那句
+   指路把「添加设备 + 接入码」两步都念了一遍，表格正上方就是按钮，属于废话）—— 只改 collab.mjs。
+
+   v26（2026-11-01 二十改）：协作中心撤「我派出去的活」表（用户："任务面板已经有了"）——
+   看板的只读协作卡上长出「验收/撤销」（projects.mjs + style.css），中心页只剩设备名录
+   （collab.mjs 少拉一路 /api/collab/tasks）。
+
+   v27（2026-11-01 二十改续）：「退出协作」按钮任何形态都显示（用户："是不是少一个退出
+   协作的按钮"）—— 服务端把 /api/local/collab/leave 改成 secret:'never'（单向门，同
+   restart/export），前端不再按 localSecret 藏按钮；未加入时 serverMode 的指路只说 join。
+
+   v28（2026-11-02 二十一改）：模式卡（分机/总机）从「手机连接」页搬到「协作中心」页顶
+   （用户："放到协作中心更合适"）—— pairing.mjs 撤两处挂载、回环指路改去协作中心；
+   collab.mjs 设备节上面挂 paintModeCard。
+
+   v29（2026-11-02 二十二改）：模式卡 explicit 态的说明句改桌面/部署两用口径（桌面壳
+   起 spawn 时会按 netmode.allowLan 显式传 BANDI_HOST=0.0.0.0，见 shell.mjs —— 桌面
+   对外机器自此进 explicit，卡上不再有重启/只在本机使用）。
+
+   v30（2026-11-02 二十三改）：「协作」分节从「这台机器」页搬到「协作中心」页
+   （用户："把这个协作移到协作中心，通过分机和总机开关控制显示和隐藏"）——
+   collab.mjs 的 renderCollabSection 长在 #clBranchMount（模式卡下、设备表上），
+   分机给加入入口、总机一行指路、已加入任何角色都显示状态卡；模式卡新增
+   onRoleChange（切角色成功只重画那一节）；connectors.mjs 撤挂载与 import。
+
+   v31（2026-11-02 三十一改）：「连接总机」一律真加入（用户截图："这里应该是连接"）
+   —— collab/join 放宽成 secret:'never'（local-policy.mjs），joinCommandDialog
+   （终端执行变体）删除；CLI 只服务无头机器。
+
+   v32（2026-11-02 三十二改）：「连接总机」弹窗删掉三段说明文案（用户："删掉这个文案"）
+   —— 那一坨「还是一台完整的班底 / 多一个协作项目 / 别跟算力节点邀请码混用」不再出现，
+   弹窗只剩地址 + 接入码 + 按钮。
+
+   v33（2026-11-02 三十三改）：「手机连接」页顶加「连接」总开关卡（左标签右开关）
+   —— 关 = 邀请码 / 已配对两节整个隐藏，服务端断开全部手机、拒绝扫码 / 连回来
+   （POST /api/pair/enabled，E1707；状态存 netmode.json 的 pairEnabled）。
+
+   v34（2026-11-03 二十四改）：「对外服务」这一维整个删除（用户拍板：监听永远对外，
+   缺省 0.0.0.0）—— connectors.mjs 撤掉 allowLan 开关 /「重启生效」/「只在本机使用」
+   整套第三态 UI，角色（总机/分机）切换立刻生效；v29 里"壳按 netmode.allowLan 传
+   0.0.0.0"的机制随之作废（壳现在无条件钉 BANDI_HOST=0.0.0.0，见 shell.mjs）。
+
+   v35（2026-11-03 二十五改）：v33 那张页顶「连接」总开关卡撤掉（用户："邀请码改成连接，
+   右边加开关，上面的可以去掉了"）—— 分节标题「邀请码」改叫「连接」，开关贴到标题行最右，
+   关掉只换卡片体文案；已配对列表不再跟着藏 —— pairing.mjs + style.css。
+
+   v36（2026-11-03 二十六改）：关闭态从「一行灰字套空框」换成引导卡（图标 + 一句话 +
+   「打开手机连接」主按钮，按钮扳分节头那颗开关）；设备计数「还没有」改「0 台」；
+   关闭态下设备区只说「暂无配对设备」（原来与引导卡重复说一遍"打开开关"）；
+   页头加「已开启 / 已关闭」状态标签；开关关闭态轨道加深（对比 < 3:1，WCAG 1.4.11）
+   —— pairing.mjs + style.css。
+
+   v37（2026-11-03 二十七改）：「连接」卡开 / 关两态等高（用户："这两个框要一样大"）——
+   实测关态 247、开态 223，拨开关整页抖一下。关态内边距 34/30 收成 22/18，
+   卡上加 min-height 223 兜底 + 内容垂直居中；pairing.mjs 分节补 .pair-sec 类
+   —— pairing.mjs + style.css。
+
+   v38（2026-11-03 二十八改）：设备绑人 + 审批归因上手机（2026-11-03 服务端两项落地的客户端侧）——
+   · pair-claim.mjs：配对 / 连回来的成功页亮一下归属人「正在以「小李」的身份进入工作台…」
+     （claim / resume 回执都带 owner，换手重配改了归属时第一眼就能看见）；
+   · pair-claim.mjs：E3001 文案跟上 11-03（「切到总机并重启」这套已经删了，
+     改成"重新扫一次二维码"）；
+   · pairing.mjs：设备列表加「使用者」列（服务端 listDevices 带 ownerName）；
+   · settings.mjs：「我的」页设备身份加「以「张三」的身份使用」；
+   · projects.mjs：卡详情（手机上批卡的同一页）加「状态改动：谁 · 什么时候」行
+     （statusByUserId/statusAt，服务端随卡返回，无需新接口）
+   —— pair-claim.mjs + pairing.mjs + settings.mjs + projects.mjs。
+
+   v39（2026-11-03 二十九改）：建卡弹窗在手机上重设计为**全屏工作纸**（实机实报
+   "建卡没有完成按钮"——按钮被抽屉裁出屏幕外）：mobile.css 600px 档 #taskDlg 满屏
+   贴边、高度跟 --mb-vh（键盘弹起动作条贴键盘上方）、「创建任务」满宽独占一行、
+   藏 Ctrl↵；form 转列布局描述吃富余高度，动作条钉底 —— mobile.css。
+
+   v40（2026-11-03 三十改）：toast 送进**顶层**（popover API）—— 开着的 dialog 在浏览器
+   顶层，普通层的 toast 被连 backdrop 一起盖住，弹窗里的一切报错（校验失败 / 接口 403）
+   在手机上都"看不见"，表现成"点了没反应"（建卡 403 这么藏了一下午）—— shell.mjs。
+
+   v43（2026-11-03）：审计日志行收成单行（结果字跟 action 走、时间右对齐）、类型筛选换
+   createCombo 挪进分节头且去边框、.sec-scroll 加 scrollbar-gutter 防抖；「接入码」弹窗
+   ① 删掉「模式卡在分机一档才出现…」那句括号说明 —— securityadmin.mjs + style.css + collab.mjs。
+
+   v44（2026-11-03 用户："只要地址和接入码两个，其他说明不要"）：接入码弹窗重设计成
+   两张可点复制的字段卡（地址 / 接入码），有效期提示、①②步骤、CLI 命令、E4011 警告、
+   回环监听警告、「复制整条命令」全撤 —— collab.mjs + style.css（.cl-inv-*）。
+
+   v45（2026-11-03）：接入码弹窗的标签挪到框外（"标签放框外面"）—— collab.mjs 结构改
+   .cl-inv-field（label）+ .cl-inv-box（button），style.css 对应改。
+
+   v46（2026-11-03 账户为主，用户："以账户为主，设备只是它的一个属性"）：「我的」页
+   身份卡标题改取**账号**（设备绑了归属人就是归属账号的名字）；设备信息（型号 /
+   配对地址 / 配对时间）从身份卡退出来，落成「这台设备」属性卡三行 label + value
+   —— settings.mjs + style.css（.me-dev-box/.me-kv）+ mobile.css。
+
+   v47（2026-11-03 用户："通讯录点人物，详情页是空白的"）：三处 ——
+   · 通讯录窄屏点「数字员工」行改回**先进详情页**（详情里点「发消息」再开聊）—— contacts.mjs；
+   · 手机员工详情补「模型」行（只读，显示名异步问运行时）—— chat.mjs renderDetailMobile；
+   · 非列表路径进详情（刷新直达 / 项目成员）没人打 mb-detail-open，main 被 mobile.css
+     整个藏掉 → 内容画了也看不见（"空白"根因）：渲染方派 `mb-detail` 事件、mobile.mjs
+     补折叠态与历史；真人「成员」行标 `data-nodetail` 不再摆空详情态
+     —— chat.mjs + mobile.mjs + contacts.mjs。
+
+   v48（2026-11-03 用户："手机端锁定竖屏"）：壳体钉竖屏（AndroidManifest 的
+   screenOrientation=portrait），PWA 那条路补上 MIME —— `.webmanifest` 原来落进
+   application/octet-stream，Chrome 直接作废整份 manifest（没有 orientation、没有独立
+   窗口）；服务端 http.mjs 加 application/manifest+json。SW 升版本是为了让装过的手机
+   重拉那份 manifest（预缓存清单里有它，旧响应的头还是错的）。
+
+   v50（2026-11-04 用户："安装入口去掉，只识别不提供安装"）：「这台机器」页的
+   「未安装」段降为「未识别」—— 一键安装 / 复制命令 / 安装命令与进度全撤，只留
+   「按路径接入」；wireInstallRuntime / runNodeTask / wireCopyButtons 等一并删除
+   —— machine.mjs + app.mjs。
+
+   v51（2026-11-04 用户："只要识别功能，未识别这块不要了"）：「未识别」段连同
+   「按路径接入」弹窗整条撤掉（openAddRuntime / testAddRuntimePath / addRtDlg），
+   「运行时」区只剩识别 + 已识别列表的接入开关 —— machine.mjs + app.mjs + index.html。
+
+   v52（2026-11-04 用户："重新设计一下这个页面"）：「这台机器」页重设计 —— 运行时
+   空态换成虚线引导卡（.rt-empty）；数据管理把点隔统计行改成等宽分格统计块、库路径
+   挪出按钮行、快照条目压成单行 —— machine.mjs + style.css + mobile.css。
+
+   v53（2026-11-04 用户："邀请码和地址太大了"）：手机连接页邀请码卡紧凑化 ——
+   21px 地址 / 30px 大码收成「标签|值|动作」的紧凑单行，倒计时贴到码后面
+   —— pairing.mjs + mobile.css。
+
+   v54（2026-11-04）：协作中心总机模式不再画「协作」分节；两张表的行尾操作列补
+   「操作」表头（协作中心 / 手机连接），pair-table 操作列改左对齐；手机连接页
+   没配对过就不显示「已配对的手机」整节 —— collab.mjs + pairing.mjs + style.css。
+
+   v55（2026-11-04 用户："关于放到最后，加个图标"）：设置左栏「关于」拆出「通用」组、
+   独立一条钉在整列最后，行上加 info 小图标（条目级图标仅此一处）—— settings.mjs +
+   contacts.mjs + style.css。
+
+   v56（2026-11-04 用户回退）：撤回 v54 里"没配对过不显示已配对的手机"—— 0 台照旧
+   给空状态卡（v54 的其余改动保留：总机藏协作分节、操作表头、pair-table 左对齐）
+   —— pairing.mjs。
+
+   v57（2026-11-04 用户："手机端，输入框的提示词去掉"）：手机端对话输入框占位提示
+   整个不显示（屏幕小，胶囊里垫一句提示词难看；忙态「他还在说…」一并去掉）——
+   chat.mjs（主会话）+ projects.mjs（议题讨论区）+ flowpages.mjs（节点聊天）共用
+   chat.mjs 导出的 isNarrowPh 一把尺；桌面文案原样。顺手补登记两个漏清单的模块
+   （run-progress-card.mjs / thinking-live.mjs：在线时 fetch 兜底看不出问题，
+   离线就是 504 白块）。
+
+   v58（2026-11-05 用户："去掉输入框下面的那个：一次只跑一条xxxx"）：手机端忙态
+   输入框下面那行「一次只跑一条。要打断就点「停止生成」」不再显示 —— 打断入口本来
+   就在按钮上，屏幕小不再挂说明；桌面保留 —— chat.mjs（主会话 #hint）+
+   projects.mjs（议题 tcHint2）。
+   v59（2026-11-05 手机端 iOS 风试点）：「我的」页手机形态重画 —— settings.mjs 注释
+   更新 + mobile.css 新增 §15b（渐变 hero / 卡片上浮 / iOS 退场行），样式全在
+   mobile.css，无新模块，清单不动。
+   v60（2026-11-05 用户："字体是不是比主流 APP 小啊"）：§15b 字阶上调 —— 属性行
+   15/14→16/15、mono 地址 13→14、说明行 13→14、退场行 16→17，仍只动 mobile.css。
+   v61（2026-11-05 用户："字体粗细呢"）：身份章 400→500（badge 中黑档），
+   名字 600 / 行文字 400 是 iOS 档不动。
+   v62（2026-11-05 用户："手机语音输入的时候，弹窗有点难看"）：语音浮层 iOS 化 ——
+   毛玻璃卡 / 状态字 12.5→15 / 取消改胶囊钮 / 波形加宽加高，只动 mobile.css。
+   v63（2026-11-05 用户三报"点返回退到登录页"）：历史栈卫生 —— mobile.mjs 回收详情压的
+   历史格（幽灵格）、开机截断启动页 forward 残留、跨文档退回旧文档自动续连（/pair?resume=1）。
+   返回键从此只关详情 / 在根页交还系统，摸不到登录页。
+   v64（2026-11-05 用户要的临时测试标志）：「我的 → 这台设备」多一行"手机端版本"，
+   读 SW 实际激活的缓存版本（settings.mjs）。验收完连标志一起删。
+   v65（2026-11-05 用户四报"两次返回退到扫码页"）：根页井 —— 返回键在根页原地不动
+   （⑦c），App 不再被返回键退出、重开不再落启动页；扫码页只剩断开连接/配对失效能到
+   （mobile.mjs ⑦b 去掉 length 门槛，根页标记改成无条件预留）。
+   v66（2026-11-05）：进度卡命令块样式收编 —— .rp .rp-act code 提一档优先级，
+   不再吃 .bubble code 的边框（用户问"这框是模型给的还是我们的"，实为样式漏进）。
+   v67（2026-11-05）：命令块选型「深底亮字」—— --active 底 + --text 字，
+   两套主题下都恰好比气泡暗一档（候选预览页里用户点的）。
+   v68（2026-11-05）：进度卡"步数/用时"钉死不缩 —— 此前窄泡里被 flex 压成竖排
+   （"2 步""00:21"断成四行，用户实拍）；折叠行的"· N 步 · 用时 ▾"同步成块不拆行。
+   v69（2026-11-05）：命令块规则从 .rp 根挪到 .rp-step 层 —— 收尾的过程收起行
+   （根 .rp-note）此前没被罩住，静态回话里的命令块还带 .bubble code 的边框（用户报）。
+   v70（2026-11-05）：聊天气泡的行内码（.bubble code）统一深底亮字、撤边框 ——
+   正文里的 `code` 也是胶囊，跟进度卡命令块同一套语言（用户拿 8787 那颗报的）。
+
+   v71（2026-11-05 用户："整个机制去掉，不要有残留"）：手机壳语音输入整个拆除 ——
+   voice.mjs 删文件、app.mjs 撤挂载、mobile.css 撤 §15；壳侧 SpeechPlugin.kt /
+   lib.rs 注册 / Manifest 录音权限同步拆（同上，壳 README 已删）。清单少一个
+   文件，升版本让老客户端丢掉缓存的 voice.mjs。
+   v72（2026-11-05）：v70 的行内码改色被 .bubble :not(pre) > code（2026-10-19 的
+   行内码特异规则，0-1-2 压过 0-1-1）盖住只生效了一半 —— 该规则随旧设计一并撤掉，
+   行内码底色真正落到 --active 深底亮字。
+   v73（2026-11-05）：用户在候选页改选「纯等宽」—— 行内码/命令块全部无底无框，
+   区分只靠等宽字（.bubble code 与 .rp-step .rp-act code 同步换）。
+
+   v74（2026-11-05 用户："点击+号不要弹出卡片，改成打开底部抽屉"）：＋ 菜单手机端
+   重做成贴底 action sheet —— #attachMenu 在 900 档改 fixed 贴底（蒙层 = 自身 ::before，
+   抓手 = ::after，大行 16px 居中，滑入动 bottom 不动 transform —— 带变换会把 fixed
+   蒙层的包含块劫走）；点蒙层 target 落回 #attachMenu 本体，app.mjs 收起判定补一条。
+   桌面 popover 原样 —— app.mjs + mobile.css。
+
+   v75（2026-11-05 用户："阶段字体小一些"）：进度卡的段标题原来继承气泡正文 14px，
+   比它下面 12px 的命令行还大。`.rp-ph` 钉 12px、段头计数 11.5→11px，
+   层次靠 600 字重 + 正文色 —— style.css（实时卡与历史收起行共用）。
+
+   v76（2026-11-05 用户："箭头不要用实心箭头"+"向右折叠、向下展开"）：进度卡折叠行末尾
+   的实心 ▾/▴ 换成 mask 描边 chevron（跟分支弹窗同一套），收起转 -90° 朝右、展开 0° 朝下，
+   JS 只切 .is-open 类不再改文字 —— style.css + chat.mjs + run-progress-card.mjs。
+
+   v77（2026-11-05）：① 手机建群 E4033（用户报"E4003"）—— group.create / group.sessions
+   没打 device 标（conv.create 同一个坑），route-policy 补上，只开建群 + 落新段；
+   ② 群「续 @」—— @ 过谁后续的话自动续 @ 谁（localStorage 按群存，WorkBuddy 选专家
+   同款）：发送时话里 @ 了人 → 记住他原话照发；没 @ → 把记住那位续到句首；输入条上方
+   一颗可摘的「@名字」胶囊 —— index.html + chat.mjs + style.css + mobile.css。
+
+   v78（2026-11-05 用户："群输入框下面的文案去掉"）：群聊空闲时 #hint 那句
+   「在输入框里打 @ 就会弹出群成员；不 @ 就找群助手。」不再写（chat.mjs setBusy）。
+   #hint 元素保留 —— 还兼职临时提示和输入框被锁的原因行。
+
+   v79（2026-11-05 用户："手机端 APP 风格跟主流 APP 不太一致"→ 消息页 iOS 化）：
+   mobile.css 追加 §16.0–16.12 —— token 修订（灰底白面双层 / 文字三档 / --mb-tint
+   系统蓝 / 气泡 #0071E3）/ 四条栏玻璃化 / 会话行 / 未读红点样式 / 贴底 action
+   sheet。mobile.mjs 新增 ⑧ 长按会话行合成 contextmenu（出 sheet 用）。清单不动。
+
+   v80（2026-11-05 承 v79，补齐遗留三件）：① 聊天页日期分隔 —— chat.mjs drawMessages
+   按天插 `.mb-day`（今天/昨天/M月D日，样式 §16.10）；② 聊天头单聊状态字
+   「正在干活/现在闲着」（persona.busy，桌面 display:none §16.13）；③ 未读红点数据 ——
+   chat.mjs localStorage 账本（SEEN_KEY，进会话记 updatedAt，上限 200），contacts.mjs
+   会话行画 `.unread.dot-only`（§16.5）。chat.mjs + contacts.mjs + mobile.css。
+
+   v81（2026-11-05 承 v80，iOS 化推广到其余三个 tab）：mobile.css 追加 §17 ——
+   分组页 token 校准（--mb-cvbg → #F2F2F7/#000、--dim/--line 在手机上等于
+   iOS 次色/hairline、新增 --mb-card-edge 深色卡边浅色不画）+ 工作台（页底/组头
+   13px/磁贴名 17/卡内 hairline）+ 通讯录（A-Z 组头/索引条 tint/忙点 systemGreen/
+   子页返回 tint）+ 我的（hero 辉光 tint、退场红 systemRed、卡内线 0.5px）。
+   只改 mobile.css，换值不换名。
+
+   v82（2026-11-05 承 v81，桌面 rail 加回版本号）：index.html 品牌块包 .rail-brand +
+   `<button id="railVer">`，style.css 补样式，misc.mjs 新增 initRailVersion()（/api/hello）——
+   首页骨架与 js/*.mjs 都变了，必须逼客户端整包重建。
+
+   v83（2026-11-05 承 v82，通讯录两处小修，用户点名）：① 入口卡「群聊 / 部门」
+   去掉右侧数量字（contacts.mjs 行模板删 .mb-cv-n，成员行保留）；② ＋ 钮去边框
+   （mobile.css §16.1 #listAction 补 border:0 —— §17.0 把 --line 换成 hairline 色后，
+   桌面按钮底子的 1px 描边在透明钮上显形成了一个方框）。contacts.mjs + mobile.css。
+
+   v84（2026-11-05 承 v83，聊天页消息流降噪，用户：「聊天页 UI 重新设计」）：
+   ① 时间戳只在每组第一条下挂 —— chat.mjs drawMessages 给 3 分钟内的后续消息打
+   .nt（mobile.css §18.0 手机档藏掉并收回占位高度；桌面共用 HTML、显示规则不动）；
+   ② 同人连发打 .tight 行距收紧（6→2px），换人才松开；③ 聊天页头像 6px→10px
+   squircle（32px 面上 6px 接近纯方）；④ 代码块 overflow-x 防长行被硬裁。
+   chat.mjs + mobile.css。
+
+   v85（2026-11-05 承 v84，聊天页导航栏改版，用户：「导航栏重新设计一下，现在看着有点挤」）：
+   ① 手机端撤掉聊天头左上角头像（窄屏 display:none，桌面保留）；
+   ② 名字成为详情入口 —— 单聊点名字进员工详情，群聊点名字进群设置，群设置的齿轮钮删除；
+   ③ 右侧「正在干活 / 现在闲着」整句去掉（§16.13 段落作废，只留说明）；
+   ④ 新会话 / 聊天记录两颗钮去掉桌面按钮底子的 1px 描边，44×44 纯图标热区。
+   chat.mjs + mobile.css + style.css。
+
+   v86（2026-11-05 承 v85，聊天头顶栏配色，用户：「顶部导航栏颜色统一改成跟内容区一致」）：
+   body.mb-chat .chat-head 的 --mb-nav-glass 玻璃底换成 --mb-chatbg（浅 #FFF / 深 #000，
+   与 .chat 同源），backdrop-filter 取消（底不透明后无意义）；分界只剩 0.5px hairline。
+   mobile.css。
+
+   v87（2026-11-05 承 v86，手机「我的」页加外观选择，用户：「我的页面加一个主题选择的功能」）：
+   ① settings.mjs openMe 手机形态渲染「外观」卡（浅色/深色/跟随系统三行单选，
+      hero 渐变下第一张上浮卡；桌面不加 —— 偏好设置里已有同一入口）；
+   ② shell.mjs setTheme 加 { keepPage } 参数：手机点完留在「我的」页原地换肤，
+      不再重绘设置 › 偏好（那页在手机上不存在）；值仍是 bandi.theme，两处入口同一口径。
+   settings.mjs + shell.mjs + mobile.css（§15b 外观卡）。
+
+   v88（2026-11-05 承 v87，导航栏加高，用户：「导航栏高度增加」）：
+   --mb-nav 44 → 52。这一个 token 同时喂 .list-head（§3/§16.2）与 .chat-head（§16.8）
+   的 min-height/height，还有 #listAction 的垂直居中 top —— 44 是 iOS 基准值，
+   但这里 17px 粗体标题 + 44×44 图标热区，上下零余量显贴边；52 各留 4px，
+   热区仍居中。mobile.css §16.0。
+
+   v89（2026-11-05 承 v88，群人数并回群名行，用户：「群人数显示在群名后面，不要折行」）：
+   上一版人数是第二行副标题，群聊头比单聊高一截。现在一行四样：群名 + 人数 + 徽章 + 钮；
+   不折行靠"只有群名可收缩"（.head-name flex:0 1 auto + 省略号），.sub flex:none + nowrap，
+   徽章 flex:none —— 名字不够放截自己，人数/徽章/动作钮永不挪窝。
+   解散群同名同行（"已解散"），群名改 .head-name-static（可截断、无点击热区）。
+   顺手删掉群聊模板尾部一个多余的 </button>（上一轮编辑遗留，浏览器容忍但脏）。
+   chat.mjs + mobile.css §16.8。
+
+   v90（2026-11-05 承 v89，三 tab 顶栏统一，用户：「工作台、通讯录、消息的导航栏风格怎么不一致」）：
+   工作台/专家库等整页视图的 .detail-head 原来还是桌面那套（50 高白底左对齐无线），
+   跟列表页的"52 玻璃栏 + 居中标题 + hairline"不是一回事。现在 body.no-list .detail-head
+   手机档对齐列表页：高度走 --mb-nav、--mb-nav-glass 玻璃底、0.5px hairline（::after）、
+   标题居中 17/600（head-title 转居中，带 actions 的页标题在剩余空间居中，同列表页结构）。
+   mobile.css §3。
+
+   v91（2026-11-05 承 v90，详情页返回栏同高，用户：「也拉到 52 同高」）：
+   ① body.mb-detail-open 首行 44px → calc(--mb-nav + 安全区)：返回栏高度与首页导航栏
+      同一个 token，刘海机上也不再出现"44 高却带 safe padding"的挤压；
+   ② .mb-backbar 手机档底色 --mb-surface → --mb-nav-glass 玻璃 + blur，底边 1px → 0.5px
+      hairline（::after），与三 tab 顶栏同一套视觉。聊天页让位规则（body.mb-chat 单行）不受影响。
+   mobile.css §2/§10。
+
+   v92（2026-11-05 承 v91，**取文件策略改了**，用户：「手机端没变化」）：
+   根因不是样式没写对，是 SW 的 stale-while-revalidate —— index/css/js 全部缓存优先，
+   改完代码第一下必然拿旧文件（缓存靠后台悄悄换新），手机上就是"改了跟没改一样"。
+   现在分成两类：代码类（导航 + .css/.js/.mjs/.html/.webmanifest）**网络优先**，断网回退缓存；
+   图片类（图标/头像）仍缓存优先。内网往返毫秒级，换来"刷新即最新"。
+   · 光改 SW 不够：浏览器 HTTP 缓存层仍会用 304 把旧文件喂回来 → 取代码类时加 cache:'no-store'
+     （实测：不加，改完 CSS 首次刷新还是旧的；加了才真生效）。
+   · 版本升级（activate 时检测到旧缓存被删）→ 给所有窗口 postMessage 'bandi:sw-updated'，
+     页面侧（index.html）收到就 location.reload() 一次 —— 手机上 App 挂着不关也能换掉旧画面。
+     用 postMessage 而非 clients.navigate：后者在部分 WebView/无头环境会卡死（实测 3 分钟不回）。
+   · index.html 的注册改成 register().then(r => r.update())：每次打开都主动查一次版本，
+     不指望浏览器"导航时顺便检查"的时机（实测重开一次都未必触发）。
+   sw.js + index.html + mobile.css（#verBanner 手机位置）。
+
+   v93（2026-11-05 承 v92，「我的」外观卡改分段选项卡，用户：「也改成这种选项卡的方式」，
+   指桌面偏好设置「主题 + 分段选项卡」那张截图）：三行单选（对勾式）→ 一行布局，
+   左「主题」标签 + 右 .seg 分段（浅色/深色/跟随系统，选中白格浮起）。
+   结构与桌面 .set-row + .seg 完全同构；右对齐分段总宽 ~240px，390/320 都放得下，
+   没有当初担心的「跟随系统挤两行」。事件绑定不变（#meThemeBox [data-theme-opt] 委托）。
+   settings.mjs + mobile.css §15b。
+
+   v94（2026-11-05 承 v93，底部 tab 栏加高，用户：「手机端底部 tab 栏增高」）：
+   --mb-tab 50 → 56。深色主题原来单独覆写成 49（比浅色矮 1px），一并删掉 ——
+   基数抬高后那 1px 的差只剩"切换主题时栏高跳动"这一个副作用。
+   mobile.css §16 / §16.7。
+
+   v95（2026-11-05 修「断开连接点了没反应」）：openMe 里那段**临时**的「手机端版本」
+   探针用了裸 `caches?.keys?.()` —— 局域网 http 是非安全上下文，`caches` 这个标识符
+   根本不存在，可选链拦不住 ReferenceError → 渲染后立刻抛错，后面所有按钮绑定
+   （#meDisconnect / #meLogout / 主题分段）全部没执行 = 看着能点、其实无处理器。
+   那段探针本来就写着"验收完删"，删掉即可。settings.mjs。
+
+   v96（2026-11-05 重排数字员工详情页，用户：「手机端数字员工详情页UI有点丑」）：
+   chat.mjs renderDetailMobile（删重复的运行时章、发消息挪到正文末尾通栏）+
+   mobile.css §20（身份卡 / iOS 分组行 / 通栏主按钮）。
+
+   v97（2026-11-05 运行时/模型换全屏选择页，用户：「不要使用下拉框」）：
+   chat.mjs（mbPicker 模块级选择页 + renderDetailMobile 两行改导航行、collect 补 model）+
+   mobile.mjs（popstate/Esc 各一行守卫）+ mobile.css §20.5。
+
+   v98（2026-11-05 选择页视觉二版，用户：「选择模型页有点丑」）：
+   chat.mjs mbPaintPicker（header 开新卡、卡外小节标签、行副标题 sub、字符 ✓ 换 SVG）+
+   模型页调用（「跟随默认」带真实默认名副标题、顶部说明行）+ mobile.css §20.5 列表重排。
+   v99（2026-11-05 选择页卡片左右间隙不一致，用户实测反馈）：
+   mobile.css §20.5 —— 选择页滚动条隐藏（占 11px 宽导致卡片左 16/右 27）；
+   说明行/组标题缩进 4→16 对齐卡内文字列。
+   v100（2026-11-05 返回键四刀：Cookie 判据换 URL 标记）：
+   state.mjs markAppUrl（认证通过后网址打 #bandi-app，壳层分流用）——
+   Cookie 登录过就一直在，停在登录页也被误判已登录、返回键被吞（用户实报）。
+   v101（2026-11-05 手机端任务看板二版 + 独立新建任务页，视觉规格 v2 → v2.1）：
+   projects.mjs（窄屏错误态改走窄屏、renderBoardMobile 重写成三槽导航栏 + 胶囊筛选条 +
+   单张分组卡连续行 + 刷新转圈、kbMobileRow 新语汇、新增 .kb-new 全屏创建页 +
+   提交/历史/popstate、主按钮 aria-disabled）+
+   chat.mjs（mbOpenPicker export + 可选 search（固定搜索行/场景占位/「没有匹配的」）+
+   行首 dot）+ mobile.mjs（popstate/Esc 各加一行 kb-new-open 守卫）+
+   mobile.css §21/§21.1（kb-l-* / kb-new-* / #kbList 滚动宿主 / 选择页搜索行）+
+   style.css（退役的 kb-m-* 一整段删除）。
+   v102（2026-11-05 任务卡手机版）：projects.mjs paintTaskCardPage 窄屏分支（三槽导航栏 +
+   状态胶囊 + tc-m-* 属性卡 + 状态/执行人走 mbOpenPicker + 回复不搬家 + {tcCard:true} 一格历史）+
+   mobile.css §22（tc-m-*）。
+   v103（2026-11-05 收口）：手机默认档改「便签」（DEFAULT_MODE，发完回默认档）+ saveNow 守卫
+   认手机精简 payload（只 {status}，别再 .trim() 炸掉状态保存）+ 自己的便签把「便签」标记
+   落到落款行（无作者行时原本整枚标记丢失）。
+   v104（2026-11-05 讨论抽屉）：手机任务卡的讨论整体收进导航栏气泡按钮 —— 点开是评论区面板
+   那套底部抽屉（projects.mjs 的 .tc-sheet + mobile.css §22b）。卡页因此只剩状态/标题/描述/
+   属性卡；讨论流 + 输入条搬进抽屉，开抽屉压一格 {tcSheet:true} 历史（mobile.mjs popstate/Esc
+   各加一行 tc-sheet-open 守卫），900px 断点跨越时重画当前卡（mbTC 画的时候才定）。
+   v105（2026-11-05 讨论抽屉「最大化」）：抽屉头部加一颗铺满整屏 / 还原的圆钮
+   （projects.mjs TC_ICON_CHEVRONS_* + tcSheetMax 模块级偏好 + mobile.css .tc-sheet.max：
+   高度 78%↔100%、圆角收掉、顶部让出安全区、grip 收起）。
+   v106（2026-11-05 评论三档放开 + 默认改「讨论」）：服务端撤掉设备令牌只许便签的档位闸
+   （project.mjs，E3702 退役），手机讨论/执行与桌面同链路；DEFAULT_MODE 归一 'discuss'
+   （同日先定的手机默认便签作废），发完回默认档的注释跟着改。
+   v107（2026-11-06 新建任务再设计·方案 A）：创建页从「执行配置」一张长表改成三段卡 ——
+   怎么干（执行方式两张独立大卡，选中描边染 tint）→ 派给谁（chips 横滑直选，真人描边
+   分家，>6 人给「全部 ›」进原搜索选择页）/ 选流程 → 更多设置（状态/项目/立即开始收进
+   一行摘要 + 内联展开，摘要替勾选框说话；缺项目提交时自动撑开）。勾选意愿记进
+   kbNewState.startNow（收起时框不在 DOM）；chips 重画保留 scrollLeft。
+   v108（2026-11-06 大卡尾 › 箭头）：「派给他 / 由流程执行」两张卡右侧各加一枚 ›，
+   点击先把模式切过去再跳对应选择页（执行人带搜索 / 流程）；preventDefault 挡住
+   label 对 radio 的默认激活，模式由委托显式设。无已发布流程时流程卡不画箭头。
+   v109（2026-11-06 二次收敛）：「派给谁」chips 行与「选流程」行撤掉 —— 卡上 › 箭头
+   成为进选择页的唯一入口，选中的人/流程回显在大卡第三行（.kb-new-rpick：有选择染
+   主题色，不派活/未选择保持灰）；chips 的委托分支、scrollLeft 搬运与样式一并退役。
+   v110（2026-11-06 三改）：「更多设置」不再折叠 —— 摘要行与展开态撤掉，状态/项目/
+   立即开始（勾选框 + 动态说明）直接铺开成一段卡；st.more 与 data-kb-more 退役。
+   v111（2026-11-06 新建任务页二版·视觉/交互规格落地）：projects.mjs（模板三处：
+   撤 radio 圆点、回显值上移到标题正下方、勾选框换开关皮 .kb-new-sw 且退役
+   .kb-new-check-in/.kb-new-box；节头「更多设置」→「建好之后」；主按钮文案随模式
+   （创建并发起流程/创建并派活/创建任务）；被挡提交焦点落到缺的那格（项目行/流程卡），
+   失败焦点回主按钮；成功 toast 带结果「已创建，{名}这就开始」；aria 补全：
+   radiogroup/aria-label/describedby）+ mobile.css §21.1（.kb-new 高度改 --mb-vh、
+   导航栏收口 .kb-new-bar 自带高度、草稿区卡化、hairline 左缩进 16、选中态
+   1.5px tint 环 + 标题染 tint、开关 46×28、提交中保持蓝色只灰 aria-disabled）。
+   桌面端零变化（DOM 只在窄屏渲染）。 */
+/*    v112（2026-11-06）：任务卡手机端评论入口改版（评论区面板那套）——
+   projects.mjs（卡页底部新增常驻单行评论条 .tc-m-cmtbar，点它升起讨论抽屉；
+   导航栏「讨论」气泡按钮撤掉，议题数挪到评论条右侧，KB_ICON_CHAT 随之删除）+
+   mobile.css（§22b 新增 .tc-m-cmtbar 玻璃吸底条样式；.tc-main-scroll 底部留白
+   24→80px 让开评论条；删除气泡按钮的死样式 .kb-l-navbtn.cmt / .tc-cmt-n）。
+
+   v113（2026-11-06 手机端开放定时任务）：工作台宫格窄屏放开「定时任务」磁贴 ——
+   experts.mjs（phoneSchedules = 手机 && 非设备 && 非受限角色，渲染
+   workbenchAutoSection({schedulesOnly:true})）+ projects.mjs（workbenchAutoSection
+   加 schedulesOnly 参数，工作流设计器仍 PC 独有）+ mobile.css §23（列表单列、
+   动作按钮触屏常显 34×34、弹窗两栏转竖排、≤600 全屏工作纸）。清单没加新模块，
+   但 experts/projects/mobile.css 都变了，照例进一版逼客户端整包重建。
+
+   v114（2026-11-06 手机端「我的」加清除缓存）：settings.mjs（mb-narrow 渲染
+   「通用 · 清除缓存」行，行尾异步显示 bandi-static-* 缓存体积；点击 confirmDo
+   后清空 Cache Storage + 注销 Service Worker + 重载 —— 自愈"手机端没变化"）+
+   mobile.css §15b（.me-cache-row 按钮行样式，52 高、--mb-press 反馈）。
+
+   v115（2026-11-06 用户「把气泡加回来」）：任务卡讨论入口两个并存 —— 导航栏
+   💬气泡（projects.mjs 恢复 KB_ICON_CHAT + #tcCmtBtn/#tcCmtN，mobile.css 恢复
+   .kb-l-navbtn.cmt / .tc-cmt-n）+ 底部评论条 .tc-m-cmtbar 照旧；两颗点开同一张
+   讨论抽屉，paintCmtBadge 三处数字同刷。
+
+   v116（2026-11-06 用户发截图拍板）：抽屉输入条两态 —— 键盘没起来时抽屉底部
+   是一条 42px 单行评论条（工具栏/回复横幅/附件条藏掉，placeholder「留下你的友善评论吧」；
+   手机 placeholder 平时是空串由 tcCompact 单独填），点它聚焦展开成完整输入区
+   （projects.mjs tcCompact/tcExpand：聚焦展开、失焦 120ms 收回给"点发送"让路）；
+   mobile.css §22b 加 .tc-sheet:not(.expanded) 系列规则。
+
+   v117（2026-11-06 用户二报「手机端没有显示定时任务」的根因）：App 从后台**恢复**
+   不触发 load，index.html 那条"每次打开查一次 SW 版本"就永远不跑 —— 页面挂着
+   多旧就多旧（设备 API 显示手机一直在线 = 页面从没重载过）。现在回前台
+   （visibilitychange → visible）也 update() 一次，再挂 10 分钟兜底间隔；
+   新版本 activate 的 postMessage 自动重载链路不动 —— index.html。
+
+   v118（2026-11-06 用户发截图：唤起键盘后"后面灰了一些"）—— 抽屉展开态
+   （.expanded = 键盘起来的唯一信号）给输入区后面的内容盖一层暗 scrim：
+   mobile.css §22b 的 .tc-sheet-panel::after（z:1、rgba(0,0,0,.30)、0.2s 淡入）+
+   .tc-sheet .tc-composer 抬 z:2 浮在 scrim 上；pointer-events:none 不挡 ✕/放大。
+
+   v119（2026-11-06 用户「键盘唤起的抽屉顶部加圆角」）：铺满整屏（.max）会归零
+   面板圆角，一打字抽屉顶就成直角 —— mobile.css §22b 加
+   .tc-sheet.expanded .tc-sheet-panel { border-radius:16px 16px 0 0 }（同特异性
+   写在 .max 之后，靠先后赢）。
+
+   v120（2026-11-06 用户报"评论输入框上滑动出现了这个"）：卡页底部那条常驻评论条
+   （.tc-m-cmtbar）是设计残留 —— 键盘唤起时它被顶到键盘上方，跟抽屉的输入区同屏
+   打架。入口当天已定稿在导航栏💬气泡（#tcCmtBtn），这条整块删掉：projects.mjs
+   去 DOM/接线/角标刷新（paintCmtBadge 回到两处数字），mobile.css 删样式并把
+   .tc-main-scroll 底部留白 80→24px（当初就是给评论条让的位）。
+
+   v121（2026-11-06 用户「评论框为什么没贴键盘、还能往上滑」的根因）：壳侧
+   edge-to-edge 开了之后 Android 不再 adjustResize，键盘是盖在 WebView 上的 ——
+   窗口不缩、visualViewport 不缩，web 侧再怎么调都贴不住。修在 MainActivity.kt：
+   根内容视图的底部 padding 取 max(导航栏, ime())，键盘弹多少 WebView 就矮多少；
+   web 侧配套 mobile.css —— .tc-sheet.expanded 高度改吃 100%（布局视口）而不是
+   可能滞后的 --mb-vh，body.tc-sheet-open 锁住整页滚动。
+
+   v122（2026-11-06 用户「键盘唤起后抽屉会往上去，期望是它不要动」）：面板高度是
+   78%、而 sheet 高度 = 可见视口 —— 键盘弹起视口变矮，78% 跟着变矮、顶边往上跳
+   ≈0.22×键盘高。改为展开态顶边钉死：projects.mjs 新增 pinSheetTop（键盘没起来时
+   记下顶边位置喂 --tc-panel-top），mobile.css 的 .tc-sheet.expanded .tc-sheet-panel
+   改 absolute + top:var(--tc-panel-top) + bottom:0 —— 键盘只吃掉抽屉下半截，
+   抽屉本体原地不动；.expanded.max 顶边归 0。
+
+   v123（2026-11-06 用户红框「加上圆角」）：展开态输入条玻璃底的上缘两角圆 16
+   （与面板顶角同档），顶上 hairline 分隔线收掉 —— 玻璃底浮在 scrim 上成一
+   张"输入卡"。mobile.css §22b。
+
+   v124（2026-11-06 用户「键盘唤起后把便签/讨论/执行三颗放到输入框下面」）：
+   projects.mjs composerBlock 在 att-strip 与 sendbar 之间加 #tcModeChips（三颗
+   chip，data-chip），paintMode 同步选中态（.on + data-mode），点击切档位后焦点
+   留在输入框；mobile.css §22b 只在 .tc-sheet.expanded 显示这一行，同时把那颗
+   「讨论 ▾」下拉（.tc-mode-wrap）收掉。桌面与单行态零变化。
+
+   v125（2026-11-06 用户改口径：「按钮放到输入框外面，在键盘和输入框之间」）：
+   #tcModeChips 从 .tc-input-box 里搬出来，挂到 .tc-composer 的卡片之后 ——
+   三颗落在输入卡底边与键盘之间那条区域（composer 底部 padding 托着）；
+   mobile.css 里去掉左右内边距、加 margin-top:6px。
+
+   v126（2026-11-06 用户「把发送按钮也拿出来，放到输入框下面靠右」）：展开态
+   .tc-send 绝对定位到 .tc-composer 右下（right:10px、bottom 与 composer padding
+   同档、高 30 与三颗齐平），卡片内的 ＋ 行保留；三颗加 padding-right:96px 让位。
+   用绝对定位而非改 DOM —— 桌面/单行态还要吃卡内那颗，同一节点两套位置。
+   mobile.css §22b。
+
+   v127（2026-11-06 用户「发送评论之后，要收起键盘恢复到单行输入的状态」）：
+   sendText 的收尾按成败分岔 —— 发出去（sent）就 blur + tcCompact 回单行态；
+   没发出去仍 focus 留输入框，改完能直接再发。projects.mjs。
+
+   v128（2026-11-06 用户「输入卡要和键盘一个颜色」）：新增 --mb-kb 键盘面板色
+   （深 #1C1C1E / 浅 #FFFFFF），展开态把 composer 与 .tc-input-box 都染成它、
+   关掉玻璃模糊 —— 输入区连成一张"键盘延长面"，接缝不分你我。mobile.css。
+
+   v129（2026-11-06 用户发截图「折叠评论做成这种方式」）：回复折叠条照主流评论区
+   重做 —— 左短灰线 + 「展开N条回复 ⌄」/展开态「收起N条回复 ⌃」（chevron 翻面），
+   撤掉"作者：摘要"预览（replySnippet 下岗）；新回复自动展开的兜底逻辑不动。
+   projects.mjs threadsHtml + style.css 折叠条区 + mobile.css 手机端 13px。
+
+   v130（2026-11-06 用户「评论区不够好看」→ 向主流评论区精修一轮）：① 展开态输入卡
+   从白底描边改回 --mb-fill 灰药丸（白区+灰药丸才是主流评论区的质感，描边框在纯白上生硬）、
+   focus 边框压掉、textarea 单行时垂直居中（padding 12/14/6）；② 用户名改灰
+   （--mb-text-2 13px/500，黑色只留给正文）；③ 头像 32→36；④ 列表 gap 16→20；
+   ⑤ 「回复」从描边小药丸改纯灰字。mobile.css 手机档，桌面不动。
+
+   v131（2026-11-06 用户「输入框里的滚动条去掉」）：.tc-input-box textarea 隐藏
+   webkit 滚动条（width/height 0 + display:none）并加 scrollbar-width:none ——
+   手机上那条暗线会贴着灰药丸的圆角竖着画出来；滚动能力保留。style.css。
+
+   v132（2026-11-06 用户「加号拿出来放到按钮区。按钮区高度增加」）：展开态
+   sendbar 高度归零（卡内不再留空条），＋ 绝对定位到卡外那行最左（36 圆、
+   hairline 描边），三颗/发送同档 36 高、基线对齐，chips 行左让 54 / 右让 100，
+   composer 底部 padding 8→10 —— 按钮区从 44 抬到 54。mobile.css §22b。
+
+   v133（2026-11-06 用户「键盘唤起后输入框还是多行模式，不要改成一行」）：
+   展开态 textarea 从 §7 的 44px 单行档改回多行 —— height:auto + min-height:72
+   + max-height:140（再多在框里滚），padding 12/14/10。mobile.css §22b。
+
+   v134（2026-11-06 用户「手机端工作台显示定时任务入口」——这条是**二报后**的真根因）：
+   上一轮把宫格那一格按「管理员真人账号」放开（判据里的 !devMode），可手机走的是
+   **配对设备**令牌（/api/me 回 kind:'device'），正好被 devMode 那一支挡住 ——
+   所以无论怎么刷缓存都刷不出来。这回两头一起改：
+     · experts.mjs：phoneSchedules 判据改成「窄屏 + 不是被角色砍过的账号」，
+       设备形态也放；工作流设计器仍不给（窄屏画不了画布）。
+     · 服务端 route-policy：schedule.list/create/one/run 四条 + wf.tpl.list（只读
+       清单，建任务时选流程要用）打上 device 标 —— 不打就是"格子点得进去、
+       点一下 E4033"。smoke-device-routes 把这几条钉进 MUST_DEVICE。
+   ⚠️ 服务端白名单改动要**重启服务**才生效（前端刷新只换静态资源）。
+
+   v135（2026-11-06 用户两连报：「新建定时任务看着有点混乱」+「做法改成选项按钮、
+   交给谁做成一行菜单跳新页面选（参考任务面板的新建任务）」）：
+     · 根因之一是真 bug：≤900 竖排后内容一高，flex 把两段压扁，段里的标签/输入框
+       溢出画到下一段身上 —— 「做什么/交给谁叠在一起、名字框切一半」。sch-cols 开
+       滚动 + 两段 flex-shrink:0（mobile.css §23）。
+     · ≤600 形态重做（skills.mjs + mobile.css §23）：做法 4 种全排成一排选项按钮
+       （.sch-seg，不再藏进下拉）；选人/项目/仓库/流程全换成「一行菜单 + ›」，
+       点开推任务面板那张全屏选择页（chat.mjs mbOpenPicker 新增 host 参数 ——
+       **必须挂进 modal dialog 本体**，top layer 之下任何 z-index 都压不上去）；
+       选完回填行尾。值仍走 Map<key,{value()}>，readSchConfig 一字未改。
+       手机上不再自动聚焦名字框（一进来就顶键盘会把做法那排挤没）。
+     · 桌面（>600）两栏 + 下拉一字未动（CDP 1280×800 复核过）。
+   动了 skills.mjs / chat.mjs / mobile.css，必须进一版逼客户端换缓存。
+
+   v136（2026-11-06 用户：「定时任务顶部导航栏对标任务面板的」）：窄屏列表页换三槽
+   导航栏（‹ 返回工作台 / 居中标题 / ＋ 新建），撤面包屑 —— 与看板定稿同一规矩。
+   复用 .kb-l-head / .kb-l-navbtn / .kb-l-navtitle（mobile.css §21 原样生效，零新 CSS）；
+   看板的两颗内联 SVG（KB_ICON_BACK / KB_ICON_PLUS）从 projects.mjs export 共用，
+   不许各画一份漂移。桌面（>900）headRow + 面包屑一行不动。
+   动了 skills.mjs / projects.mjs。
+
+   v137（2026-11-06 用户：「定时任务点击添加按钮，现在是打开抽屉操作的，改成跳转到一个
+   新的页面。对标任务面板的做法」）：手机（≤600）新建/编辑定时任务从满屏 dialog 换成
+   整页 .sch-page（借 .kb-new 那套外框：滑入、玻璃底顶栏、页脚贴键盘、压一格历史、
+   有草稿返回先问放弃）。skills.mjs 新增 schEnsurePage/schOpenPage/schTryClose/schClosePage，
+   mobile.mjs 的 Esc/popstate 给 .sch-page-open 放行；mobile.css §23 重写（弹窗规则换页规则）。
+   桌面（>600）仍是两栏 dialog，一字未动。
+
+   v138（2026-11-06 用户：「新建定时任务的定时器，不要使用下拉，改成使用抽屉」）：手机
+   （≤600）重复区去掉 .combo 下拉 —— 「重复」变一行菜单点开**底部抽屉**（.sch-sheet，
+   整组选项摊开 + 当前值打勾 + 取消，压一格历史），「星期 / 月份」同款抽屉；间隔 / 日期 /
+   时间仍是输入框但排成同一行语汇（.sch-pick-static）。skills.mjs 新增 schSheet 四件套 +
+   schRepeatBodyPhone / mountSchRepeatPicks；mobile.css §23 加抽屉与行样式。
+   桌面（>600）重复区仍是下拉，一字未动。
+
+   v139（2026-11-06 用户：「重复方式为每天时，时间的选择方式是系统自带的，不好看」）：
+   「时间」那一行不再用原生 <input type="time">（Android 弹系统时钟盘，另一套皮还压页脚）
+   —— 换成一行菜单点开**抽屉里的时:分转轮**（两列 scroll-snap 滚轮 + 中线高亮槽 +
+   上下渐隐 + 取消/完成，同一张 .sch-sheet 面板按需换内容）。skills.mjs 的抽屉从写死
+   清单改成 schShowSheet（清单 / 转轮两种内容），新增 schOpenTimeSheet / schWheelCol；
+   值仍落在 hidden #schAt，保存那段一字未改。mobile.css §23 加 .sch-time / .sch-wheel-i。
+   桌面（>600）时间仍是原生 input，一字未动。
+
+   v140（2026-11-06 用户：「重复方式为单次时，时间也不好看，你重新设计一下，跟其他的统一」）：
+   「单次」原来是一个自建日历浮层（.combo + .dt-pop，日历格 + 两个原生 <select> 选时分 ——
+   手机上又弹回系统滚轮）。拆成**两行**与「每月」同构：「日期」= 一行菜单点开抽屉里的
+   月历（点某一天即收，schOpenDateSheet + .sch-date-* 样式），「时间」= 上一轮那颗转轮。
+   两行各自改动都拼回 hidden #schRunAt（YYYY-MM-DDTHH:MM），保存段一字未改；
+   mountSchRepeatPicks 里手机那颗 .sch-dt 挂载点随之删掉。坑：月历格子用 repeat(7,1fr)
+   会被固定 38px 圆点把每列顶到 62px，周日整列被裁出面板 —— 必须 minmax(0,1fr)。
+   桌面（>600）「单次」仍是那颗日历浮层，一字未动。
+
+   v148（2026-11-07）：协作子系统整体退场 —— 预缓存清单删 /js/collab.mjs（模块本体
+   已删，清单项还留着会把整张模块图 404 掉：app.mjs 那行 import 就是「侧边栏点不动」
+   的元凶）。同批下线的还有 /js/roleadmin.mjs、/js/roles.mjs（角色/菜单体系退场）。
+
+   v149（2026-11-07 用户：「这个系统版本从哪里来的」）：「我的 › 这台机器 › 系统 / 版本」
+   那行的左边（原 `navigator.platform`）报的是**看页面那台电脑**的平台 —— Windows 上远程
+   看 Linux 主机会写 Win32。改由服务端 `/api/hello` 新增的 `os` 字段回答（README 契约
+   加字段不动既有键）。settings.mjs 变了，进一版逼客户端换。
+
+   v150（2026-11-07 用户：「修改手机端」）：手机「我的」页也有了「这台机器」卡 ——
+   原来这张卡只在桌面画（手机窄屏当成"语义不对"整段跳过），可手机用户恰恰想知道
+   自己连的是哪台机、跑的哪版。窄屏拆三行（设备名 / 系统 / 版本），不合并成一行：
+   `.me-v` 是 break-all，内核号会被拦腰断字。顺带把「通用 · 清除缓存」挪到它后面，
+   两张设备卡读在一起。settings.mjs 变了，进一版。
+
+   v151（2026-11-07 用户：「当前设备菜单 + 退出回登录页」）：手机「我的」页壳里多一行
+   「当前设备」（显示这台面板是哪台机器），点了导航回启动页的设备列表换一台；
+   「退出登录」在壳里不再落在面板的登录页，而是回启动页最开始的登录页（意图经
+   #bandi-devices / #bandi-bye 传给 launcher.js boot）。两行只在壳里渲染
+   （window.__BANDI_SHELL__ 由壳注入），浏览器 / PWA 行为不变。settings.mjs 变了，进一版。
+
+   v152（2026-11-07 原生壳）：壳换成 Kotlin 原生 App（apps/mobile-native），桥升级成
+   addJavascriptInterface 的 `window.BandiShell`（页面第一行起可用）：「当前设备」
+   与「退出登录」优先调方法（openDeviceList / onLoggedOut），旧 Tauri 壳的
+   __BANDI_SHELL__ hash 流保留作兜底，浏览器 / PWA 照旧走各自路径。settings.mjs 变了，进一版。
+
+   v153（2026-11-07 实机截图）：退出登录的确认弹窗写着「这台浏览器上的登录票」——
+   同一个弹窗在手机壳里也出现，手机上叫"浏览器"是错的，改成「这台设备」。进一版逼客户端换。
+
+   v154（2026-11-07 用户：「点击退出不要使用抽屉，要使用弹窗」）：移动端的确认弹窗
+   （#askDlg，confirmDo 共用）从底部抽屉改成居中小卡片 —— 确认框是"一句话 + 两个
+   按钮"的小东西，抽屉又矮又贴底，按钮正好怼在导航栏上。内容型弹窗仍是抽屉，
+   只有确认框改居中。mobile.css 变了，进一版。
+
+   v155（2026-11-07 用户：「文案改成：是否确认退出当前账号？取消和退出按钮做大一些」）：
+   退出登录的确认框正文收成一句问句（撤掉登录票/访问令牌那段解释），两颗按钮升到
+   44px 高的拇指档 —— 新开关 askDialog/confirmDo 的 `big`，挂 `#askDlg.ask-big`，
+   只有这个弹窗开。settings.mjs / machine.mjs / style.css 都变了，进一版。
+
+   v156（2026-11-07 用户发「账号设置 › 退出登录」截图：「参考这个改」）：`ask-big`
+   从"右对齐的两颗大按钮"改成参考图那张卡片 —— 标题 18px 居中、说明 15px 居中灰字、
+   两颗按钮**等宽铺满**、高 46px / 圆角 10px、弹窗 400px 窄卡片 + 20px 圆角 + 投影。
+   顺带把 #askBody 的字号行高从 index.html 的内联 style 搬进 style.css（内联压过
+   `.ask-big`，改不动），焦点环从浏览器默认的黑描边换成主题色。index.html /
+   style.css / sw.js 变了，进一版。
+
+   v157（2026-11-07 用户实机截图：「怎么跟你的展示图不一样」）：v156 的预览是静态
+   HTML，而真身里 `<b id="askTitle">` 会被 ui.mjs 的 wireDialogHead() 搬进 `.dlg-head`
+   （flex + 左对齐 + 左右 -20px 负边距 + 右上角 ×）—— 于是标题贴左、× 露出来，跟
+   参考图/展示图都不一样。补两条：`.dlg-head` 归零并居中（确认框没有长内容，不用吸顶）、
+   `.dlg-close` 藏掉（参考图没有关闭按钮）。style.css 变了，进一版。
+
+   v158（2026-11-07 用户：「点击退出没有反应」）：**真根因不是样式** —— logout() 从
+   useradmin.mjs 并进来后是模块级函数，却引用了 openMe() 里的局部 `const nativeShell`，
+   严格模式走到那行直接 `ReferenceError: nativeShell is not defined`：/api/logout 已经
+   执行（会话真删了）、页面却没跳 = 看着"没反应"。改成在 logout() 里按 `window.BandiShell`
+   现取一次，桥调用失败再兜底重载。settings.mjs 变了，进一版。
+
+   v159（2026-11-07 用户：「去掉下面的说明文案」）：手机工作台磁贴只留图标 + 名字 ——
+   `.wb-page .wb-desc { display: none }`（≤900 档），桌面 >900 那版照旧带说明；
+   17.1 段那条 .wb-desc 的 color 规则随之撤掉。mobile.css 变了，进一版。
+
+   v160（2026-11-07 用户：「老体系去掉」）：手机配对体系整体退场 —— 桌面端「手机连接」
+   分节（二维码 / 9 位邀请码 / 连接开关 / 已配对设备表）、扫码落地页 pair.html 与
+   pairing / pair-claim 两个模块、vendor/qrcode 一起删；「我的」页的「这台手机」卡与
+   「断开连接」按钮随之消失（手机就是登录进来的账号，退出走「退出登录」）。
+   手机端只剩一条路：中枢账号登录（App 里 WebView 带会话进门）。sw.js / settings /
+   state / mobile / experts 都变了，进一版。
+
+   v161（2026-11-08 用户：「导航栏统一一下。+号去掉。」）：手机端项目页导航栏不再放
+   「＋ 新建项目」那颗钮（#listAction 窄屏隐藏，桌面端原样保留）—— 消息 / 工作台 /
+   我的这些手机页导航栏都是干净的，就项目页多一颗，看着不统一。空态文案随之收掉
+   「点右上角 ＋ 新建一个」的引导（手机上没有那颗钮）。projects.mjs 变了，进一版。
+
+   v162（2026-11-08 用户：「标题直接使用项目就可以」）：手机端项目页导航栏标题不再写
+   「工作台 › 项目」面包屑，只写「项目」—— 回宫格走底部导航（工作台 tab），面包屑
+   不用兼任入口；桌面端保留完整两级。projects.mjs 变了，进一版。
+
+   v163（2026-11-08 用户：「手机端的基础信息、项目规章去掉」）：手机端项目详情页只留
+   「项目成员」一个页签（默认激活），基础信息 / 项目规章两个页签不输出 —— 大表单与
+   低频编辑适合电脑上做。面板 DOM 仍渲染（hidden 不删）：自动保存 collect() 照常取值，
+   服务端字段不缺。projects.mjs 变了，进一版。
+
+   v164（2026-11-08 用户：「这一行去掉」）：手机端项目详情页整行页头（名称 / 目录 pill /
+   任务 / 删除）不输出 —— 名称顶部导航栏（‹ 项目名）已有，任务 / 删除是低频操作留给
+   电脑。#pjTasks 绑定补了可选链（元素可能不存在）。projects.mjs 变了，进一版。
+
+   v165（2026-11-08 用户：「目录去掉」）：手机端项目列表行不再显示目录路径（.line2）——
+   路径太长挤占一行；搜索仍按目录命中，只是不展示。桌面端原样。projects.mjs 变了，进一版。
+
+   v166（2026-11-08 用户：「这个怎么点不开」）：修任务看板**卡片点不开** —— 任务卡整页
+   渲染里还留着一处 `isCollab` 引用（协作中心 2026-11-07 整体退场时删了变量、漏了这一处），
+   openTaskCardPage 抛 ReferenceError，表现就是点了卡片毫无反应、页面停在看板。
+   删掉「总公司」那一支（来源只剩 流程 / 仓库值班 / 手动建卡）。projects.mjs 变了，进一版。
+
+   v167（2026-11-08 用户圈了执行人问「这是一个流程项目。不应该是这个卡吧」）：**还没发起的
+   流程卡改成「发起台」形态** —— ① 执行人从"只有一个选项的假下拉"改成纯文本「由流程执行」
+   （执行人由流程当前节点决定，服务端本来就拒绝改派，摆下拉只会让人以为能选）；② 讨论
+   区 / 输入条 / PR 区不渲染（发起前没有经办人、没开工，这两块只会是空的）；③ 说明行旁
+   加「发起流程」按钮（确认后等价于状态改「进行中」，走同一条保存管道，发起后自动带去
+   流程实例页）。已发起的流程卡照旧直达实例页，普通手工卡一律不变。projects.mjs 变了，进一版。
+
+   v168（2026-11-08 用户：「右边加一块固定面板。用来展示各种状态的数量，当前是全部项目
+   还是某个项目」）：任务看板右侧加**固定统计面板** —— 标题写当前范围（全局面板「全部项目」
+   / 项目看板写项目名），下面按状态列数量（跟列头同一套状态色），底部合计。数字取筛选前的
+   真实分布（列头上的才是筛后），拖卡/建卡删卡后随 kbRepaint 一起刷新；面板钉在右边，
+   不随列横向滚。两块看板（全局 / 项目）共用。projects.mjs + style.css 变了，进一版。
+
+   v169（2026-11-08 用户：「点击应该直接进度到任务卡，不应该有中间那个」）：手机上看板点
+   **流程卡**不再经过「发起记录」列表页 —— 带着具体实例跳进 openFlowRun 时（pickRunId 有值）
+   窄屏直接派 mb-detail 铺开实例页 + 顶上返回栏；返回落在发起记录列表（它就是上一级）。
+   从「发起记录」入口浏览着进的仍先看列表。flowpages.mjs 变了，进一版。
+
+   v170（2026-11-08 用户：「点返回还是能跳转到发起记录」）：手机直达实例页（上一条）返回时
+   不再落到这页左栏的「发起记录」，改成画回**点进来的那一页**（看板 / 项目 / 任务卡 / 会话）；
+   来路存进当前那格历史（flowDirect），刷新后还认得回去，拿不到来路就回看板。界面态
+   body.flow-direct-open：mobile.mjs 的「‹ 返回」/ Esc / 手势返回看到它就把收场交给
+   flowpages（leaveDetail 走 flow-direct-leave 事件）。flowpages.mjs + mobile.mjs 变了，进一版。
+```
++
++   v171（2026-11-08 用户圈了状态词：「状态放卡片右上角」）：窄屏看板行的状态（点+词）从
++   元信息行挪到**标题行右上角**，与标题首行齐顶（词 12.5px 抬 2px 对齐 16px 标题）——
++   竖列表扫状态视线路径最短。元信息行剩 项目 pill / 执行人 / 时间 三段（收缩优先级注释
++   随之更新：执行人先让、pill 后让）。kbMobileRow + mobile.css 变了，进一版。
++
++   v172（2026-11-08 用户圈了「（没派活）」：「要能选人」）：手机任务卡页的执行人行从只读
++   改成**可点行**（带 chevron）—— 点开全屏选择页（mbOpenPicker，与状态胶囊同一套），选项
++   与桌面 combo 同口径（不指定 / 真人 u: 前缀 / 数字员工，带搜索）；选中立刻刷行上名字并
++   落库（待办+人 = 自动开工，同桌面）。手机 snapshot 随之带上执行人字段；还没发起的流程卡
++   保持只读（服务端本来就拒绝改派）。projects.mjs 变了，进一版。
+
+   v173（2026-11-08 用户圈了看板工具栏的「刷新 PR」：「去掉，放在这里不伦不类的」）：
+   任务看板工具栏的「刷新 PR（n）」按钮**整颗移除**（kbPrRefreshHtml + 点击绑定一并删，
+   工具栏回到 筛选 / 列设置 / 刷新 三件）。PR 状态更新能力不受影响：单卡详情里的
+   「刷新状态」照旧，服务端 `POST /api/git/prs/refresh` 保留。projects.mjs 变了，进一版。
+
+   v174（2026-11-08 修 v168 引入的语法错误）：openBoardPage 收尾的 `}` 在加 wireKbStats()
+   那次编辑里被吃掉了 —— 模块整个 parse 失败，SPA 起不来，表现是**全页点不动**（消息页
+   空列表、导航无响应）。补回闭合括号。诊断教训：`--input-type=module --check`（stdin）
+   是可靠语法闸；报错行只是第一个撞上的 export，真正失衡点在它之前的函数体里。
+
+   v175（2026-11-08 用户圈了页头「筛选 / 列设置 / 刷新」三颗钮：「改成图标，不要文字」）：
+   任务看板页头三颗钮改**纯图标**（icon 15px、padding 收成方钮），文字含义挪进
+   title / aria-label；筛选的   计数角标保留（有筛选时图标旁仍带数字）。kbFilterBar /
+   kbColsSettingHtml + style.css 变了，进一版。
+
+   v176（2026-11-08 用户圈了刷新图标：「这个刷新按钮是不是没有用啊」）：按钮本身**有用**
+   （CDP 实测点击确实重抓 /api/tasks 重画整页 —— AI/别的设备改的任务不实时推过来，这是
+   唯一入口），但数据没变时画面一动不动、又没有反馈，看起来像死的。点下去加转圈反馈
+   （只转图标，尺寸不动，同手机端 .kb-l-refresh 的 spinning）。projects.mjs + style.css
+   变了，进一版。
+
+   v177（2026-11-08 用户：「还是慢」）：**代码类资源从网络优先改回缓存优先**
+   （sw.js fetch 的 isCode 分支）。11-05 改成网络优先治的是"改完看不到"，理由是
+   "局域网里那点往返不算事"——局域网成立，走中枢中转不成立：实测 style.css
+   TTFB 5.4s / 总计 8.8s、app.mjs 2.9s，23 个文件按 HTTP/1.1 同域 6 并发算
+   ≈ 10 秒起步，每次打开全部重下，SW 缓存等于废掉。
+   现在：命中缓存直接回、后台悄悄换新（stale-while-revalidate）；
+   **主动刷新（导航 request.cache === 'reload'）仍然全量走网络，并且先清空
+   整个静态缓存**——只换 HTML 不换 js 会出现"新结构配旧脚本"，宁慢一次给一整套。
+   "改完看不到"由 startVersionWatch 的 /api/web-version 指纹提示条兜底（misc.mjs:505），
+   不需要 SW 再当第二道保险。仅 sw.js 变；VERSION v176 → v177 逼客户端换新 SW。
+
+   v178（2026-11-08 头像瘦身 + 懒加载，3M 带宽前置准备）：avatars/ 里 23 张 **256² PNG
+   平均 93 KB**，而页面最大只显示 58px —— 照片存 PNG（无损）压不动，是格式选错。
+   走中转/3Mbps 时一屏 20 张 ≈ 1.86 MB ≈ 5 秒，比整个应用外壳（brotli 595 KB）还贵，
+   且每进一次列表重来一遍（头像不在 SW 预缓存清单）。
+   ① `tools/avatar-webp.mjs`（需 `npm i --no-save sharp`）生成同名 .webp：160px/q82，
+      合计 2139 KB → **58 KB（-97%）**，3M 下满屏头像 5.7s → 0.2s；原 PNG 一张没删。
+   ② `http.mjs serveStatic` 按 `Accept: image/webp` 内容协商换发 webp；**只要 webp 存在
+      两种响应都挂 Vary: Accept**（中间缓存把无 Vary 的 PNG 存下来发给所有人，webp 就白做）。
+      头像 Cache-Control 放宽为 `public, max-age=86400`（改头像代价 = 明天才看到；
+      代码类仍 no-store，语义不同别混）。personas.avatar 存的文件名、onerror 兜底全不动。
+   ③ ui.mjs / chat.mjs / groups.mjs 的头像 <img> 加 `loading="lazy" decoding="async"`
+      —— 屏幕外的不拉，首屏列表只付可见部分的流量。
+
+   v179（2026-11-08 frp 不再内置，隧道层整块下线）：用户决定「把 frp 从 bandi 里移掉，
+   不内置，以后需要我自己装」。所以删的不是一个二进制，而是**这层能力**：
+   ① `hub/tunnel.mjs`（生 frpc.toml / 起停 / 重连 / 收尸）、`vendor/frp/`（17 MB exe）、
+      桌面侧的 frpc 下载/构建脚本、`smoke-tunnel.mjs`、`deploy/relay-aliyun/` 全删；
+   ② `/api/hello` 的 `relay` 字段、「我的」页桌面/手机两处外网状态行 + `.me-relay/.me-dot` 样式删；
+      状态行没有真相可显示了 —— 进程不归我们管，编个状态比不显示更害人；
+   ③ 打包链路：`stage-runtime.mjs` 不再拷 `vendor/frp`，`tauri.conf.json` 去掉 `runtime/vendor → vendor`
+      映射（不删它，桌面打包会因「资源路径不存在」直接失败 —— 删 `runtime/vendor` 后才暴露，
+      所以是**先删映射再删目录**），`pack-linux.mjs` / `install.sh` 的 frpc 取包与 chmod 一并撤；
+   ④ **`hub/relay.mjs` 保留，故意的**：它不只喂隧道进程，还给 `http.mjs` 供 Host 守卫与写请求
+      Origin 白名单。自己装 frp 后域名照样打进来，这两闸不认它就是「页面能开、改任何设置都 403」。
+      自建路径写进 `<数据目录>/tunnel.json`（或等中枢心跳下发）。
+   顺带：`run-smokes` 去掉 smoke-tunnel 条目（不删会让整条冒烟因文件不存在而红）；
+   `check-pr` 白名单去掉只服务于 frp 编译的 `goproxy.cn`，`ghfast.top` 留着（取 Node 仍在用）；
+   smoke-tunnel 的删除登记进 ASSERT_WAIVERS（写明「无替代」，不是放松闸门）。
+   **影响**：本机重启后隧道不再自动起 —— 手机/外网这次真的断了，要自己装 frp 才回来。
+
+   v180（2026-11-08 头像外圈"黑边"根修）：那不是 border（avatarStyle 的 inline 早已把
+   border-color 设 transparent），是 `overflow:hidden + border-radius` 裁切的**抗锯齿渗边**——
+   图片边缘落在非整数设备像素上时，裁切边把图与垫底的 hsl(hue 34% 26%) 深色字母底混出
+   1px 暗环；框色随人变（张坤 rgb(89,44,66)=hsl335°、贺韬 rgb(44,44,89)=hsl235°）就是铁证，
+   素材 PNG/WebP 四边逐像素扫过均无描边。修法：`.avatar .av-img` 外扩 1px
+   （inset:-1px + calc(100%+2px)），裁切边落在图片内部像素上，底色不参与混色；
+   cover 多裁 2px 源图，38px 显示尺寸下不可见。`.mavatar`（群磁贴，不裁切、图自身圆角）
+   与 `.mp-avatar` 未动，那边没有这个现象。
+
+   v181（2026-11-08 v180 头像改动整体回退，用户要求"回退成原来的样子"）：
+   v180 的"外扩 1px"没解决问题（对比渲染证明新旧两格暗环一模一样），真正的成因是
+   `background-clip` 默认 `border-box` —— 深色字母底画进了 1px 边框区，而图片只铺
+   padding-box，永远盖不住那圈，于是透出一圈随人变色的暗环（控制变量实验：去背景消失、
+   去 border 仍在、`background-clip:padding-box` 消失）。但该修法让图片顶到外沿、
+   视觉上"贴边了"，用户不接受，故 **`style.css` / `ui.mjs` 与头像有关的改动全部还原为
+   HEAD 状态**（`.avatar`、`.avatar.sm`、`avatarStyle()` 行内样式、`.av-img` 均无 diff）。
+   头像的 `loading="lazy" decoding="async"`（v178）与 WebP 内容协商不动 —— 那是另一笔账。
+   结论留档：外圈暗环 = 深色字母底从透明边框透出，不是素材描边、不是 border、不是裁切。
+
+   v183（2026-11-08 历史"过程收起行"砍掉，用户："运行进度卡是落库了吗？感觉也没啥用"）：
+   回话气泡顶上那行「✓ 意图 · N 步 · 用时 ▾」连同展开明细整个删掉，服务端也不再给
+   回话消息摘 meta.progress 快照；**实时进度卡（调用工具 N 步 / 停止按钮 / 卡住判定）
+   原样保留**。砍的理由：这边跑的 codex 系 runtime 不发工具结果事件，快照里 174/174
+   个步骤状态都是「已发起」、耗时全 null，展开只剩一串截断的命令 —— 既不知道成没成、
+   也不知道单步多久；真正有用的"走到哪步、卡没卡、能不能停"本来只活在直播里、不进历史。
+   run_events 仍全量落库（重连重放 / 排错用），只是不再给回话消息摘快照。
+   老消息里已有的 meta.progress 由**数据库迁移**清掉（结构版本 1→2，见 store/db.mjs 的
+   migrateDropMessageProgress）：只动有 progress 的行、清完只剩空对象就把 meta 置 NULL、
+   坏 JSON 跳过；本机实测清 32 条，`stopped` 等兄弟字段原样保留。
+   改动：runs.mjs（progressMeta/replyMeta 收成只记 stopped）、chat.mjs（删
+   progressNoteHtml 与 data-rp-note 接线）、run-progress.mjs（删 summarizeEvents）、
+   style.css（删 .rp-note* 与 .rp-note-arrow 组合选择器）、smoke-run-progress.mjs
+   （断言改成「不再渲染 / 不再落库」）、store/db.mjs（SCHEMA_VERSION 1→2 + 迁移）、
+   smoke-db-migration.mjs（新用例，已登记 run-smokes）。仅内容改动，预缓存清单没动，
+   但 VERSION 仍 +1：js/css 都变了，逼客户端整包换新。
+   v184（2026-11-08 「我的」页恢复定稿版式，用户拍板）：今晚两轮改动整体撤回 ——
+   ① 齿轮 + 「我的 › 设置」子页（meSetOpen，把这台机器/通用搬进子页）；
+   ② mobile.css §24 的 Airbnb 重排（去渐变 hero、大标题锚点、主题挪页尾、退出改浅红胶囊）。
+   两轮都是未提交的工作区改动，定稿版式在 HEAD（6bdd441）里 —— settings.mjs / mobile.css
+   的 me 部分整体回到 HEAD，只保留 frp 下线必须删的外网状态行（relayText / relayPhone）。
+   mobile.mjs 的两行 me-set popstate/Esc 守卫一并撤。齿轮改动留档在 git stash（stash@{0}），
+   哪天要再上齿轮/子页从那里取。教训照旧：**设计定稿之后不要再"顺手"改版式** ——
+   每次重排都要过用户。
+   v185（2026-11-08 「我的」页加昵称，删掉「中枢账号 · 手机号登录」，用户拍板）：
+   身份卡改成两行 —— **第一行昵称、第二行手机号**。没设昵称时标题退回手机号（页面不至于
+   空着）、副行给一个「＋ 设置昵称」入口；右侧常驻小铅笔（55% 透明不抢戏，**不做 hover
+   才显形**：手机没有 hover）。点开用全站统一的 askText 弹窗改，留空 = 清除。
+   昵称存 `users.nickname`（结构版本 2→3），**与账号名分开**：name 是中枢影子名
+   （通讯录 / 消息署名用它），改昵称只动展示名、不动署名 —— 合成一个字段的话，改昵称
+   就等于改账号名，改错了还找不回来。
+   服务端：/api/me 的 user 多一个 nickname（null = 没设）；PATCH /api/users/:id 接受
+   nickname（空白 = 清除，超过 20 字 E3813）；smoke-users 加 ⑤c 钉「改 / 清空 / 超长 /
+   不动账号名」，③ 的字段集与 ⑤ 的 /api/me 形状断言同步更新。
+   改动：settings.mjs（身份卡两行 + 编辑接线）、style.css（.me-edit / .me-nick-set）、
+   mobile.css（铅笔触控区 34px）、store/users.mjs（nickname 列 + setNickname）、
+   store/db.mjs（SCHEMA_VERSION 2→3）、routes/users.mjs（meOf + PATCH nickname）。
+   ⚠️ 服务端要重启一次（加列 + 新接口）才生效；前端刷新即可看到新身份卡。
+   v186（2026-11-08 运行进度卡改成「单行气泡刷日志」，用户："这个看着不好看，
+   我觉得改成单行气泡刷日志更好看 —— 重要的不是显示的是什么，是在动"）：
+   运行中的那块从**多行小卡**压成**一行**：日志写"此刻正在做的那一件事"（跑着的那个
+   工具，codex 系没有结果事件时退到最后一步），新动作到了上滑换掉；步数与用时收到右端，
+   中间用 1px 竖线隔开（不加的话"搜索 xxx 10 步"会连读成一句）；停止钮缩成同高的小 chip
+   （描边压到 line 的 78%，一行的尽头必须有出口，但不该比日志亮）。
+   **不给自己加边框和底色**：这块本来就在 .bubble 里，再套一颗胶囊就是框里套框 ——
+   用户截图那块丑，一半来自这两层框。所以气泡本身就是那颗单行泡。
+   "在动"的三层信号：点的呼吸 + 从点上荡开的细圈（不看事件、一直在走，模型憋 40 秒不
+   说话时全靠它）、日志行上滑（只在文字真变时播，每秒重画不重放动画）、秒数在走。
+   卡住的判断直接写进日志行（"可能卡住了 · 最后动静 N 分钟前"），不再单独占一行；
+   步骤明细保留，收尾后点这一行展开（任务卡页没有整页重画，那里还要能回看）。
+   失败时错误原文露在下面一行红字（步骤级 error 也认 —— codex 系多半只有它）。
+   改动：run-progress-card.mjs（DOM 一行化 + setLog 的换行动画 + 收尾折叠进日志槽，
+   运行中不再每秒重画 8 行步骤）、style.css（.rp 整段重写：去外壳、点扩散圈、
+   .rp-roll、竖线、chip 停止钮、窄屏只藏步数）。仅前端改动，VERSION 仍 +1。
+
+   v187（2026-11-08 用户实拍对比："我的是这个效果，跟你的图不太一样"）：单行气泡一版
+   在真站里没成立，两个根因都不是配色 ——
+   ① **位置**：进度那一行 append 在正文 `.bubble` **里面**，回话一长气泡就被撑成一大块，
+      那行只剩"小字标题"的观感，跟预览里那颗独立小泡完全不是一回事；
+   ② **内容不动**：日志挂在"最后一步"上，而 codex/claude 的 MCP 调用（`mcp_tool_call` /
+      `mcp__server__tool`）以前只能出"调用工具"四个字、没有目标 —— 一跑几分钟同一句，
+      看着像死在那儿（下面正文其实早就在流）。
+   改法是**换 DOM 而不是换皮**：chat.mjs 的正在跑那行多一层 `.live-col`，进度卡与 `.bubble`
+   成了兄弟节点 —— 进度自己一颗 30px 高的胶囊（`.rp-head` 加回描边/底色/999px 圆角，
+   宽度上限跟气泡同档 90%；手机 82%、无描边，跟主流聊天 App 那套一致），回话另起一颗气泡。
+   日志同时修正：`toolSummary` 从 `detail.server/tool` 或名字 `mcp__server__tool` 里把工具名
+   读出来当目标（"调用工具 aliyun · DescribeInstances"）；且只有**真在跑**或**刚落下去
+   20 秒内**的工具才占这一行，其余时间报阶段（写回话 / 思考中），不再挂着旧工具名撒谎。
+   步骤明细、收尾折叠、错误原文那一行都不变。
+   改动：chat.mjs（.live-col + insertBefore）、style.css（.live-col、.rp-head 胶囊化、
+   三态描边）、mobile.css（手机胶囊无描边 + 82%）、run-progress.mjs（mcpLabel + detail 字段）、
+   run-progress-card.mjs（日志的 20 秒新鲜度）。smoke-run-progress ⑥ 换新断言、
+   ③ 补两条 MCP。仅前端改动，刷新即可（SW v187 逼客户端换缓存）。
+   v188（2026-11-08 实时气泡改回**一颗泡**：日志行被正文原地顶掉，用户拍板 A）：
+   用户口径：「单行气泡刷日志，显示什么不重要，重要的是在动；真正的回复出来后
+   代替这个单行日志气泡」。三版落实：
+   · chat.mjs 只建**一颗** .bubble（先挂 .live-line：泡自己不画框），进度胶囊住在里面；
+     真正的回复一到 → enterAnswer 移除胶囊、摘掉 .live-line，同一个泡原地变回话泡 ——
+     日志泡和回话泡不会并排出现（二版是 .live-col 下两颗兄弟泡，用户实拍还是两块）；
+   · 工具之前的正文只是「中间话」：先攒着不画，第一件工具一到就丢；纯聊天（整轮没工具）
+     在 turn_end 时画回来，回话不丢；
+   · 思考片段也刷在这一行（「思考过程」开着时）：优先级 报错/卡住 > 思考片段 > 正在跑的
+     工具 > 阶段词。原来那块"思考直播"灰字块与 .think 样式随之退场；
+   · 「真正的回复」判据按用户口径 A：工具之后的正文一开流就顶掉日志行（不是等整轮跑完）。
+   改动：chat.mjs（单泡 + enterAnswer/pendingText）、run-progress-card.mjs（showThinking +
+   日志行优先级）、style.css（.bubble.live-line，删 .think）、sw.js（预缓存清单去掉
+   thinking-live.mjs，VERSION v187 → v188）、smoke-run-progress.mjs（三版断言）。
+
+   v189（2026-11-08 「思考过程」配置退场，用户："上一个改动还有一个小尾巴，把这个配置去掉吧，没啥用了"）：
+   员工配置里那个「思考过程」开关整个删掉（桌面 配置 › 执行配置 + 手机员工详情两处），
+   showThinking 也从 persona 建/改接口退场（老库 personas.showThinking 列留着不读，
+   同 users 的死列惯例；接口收到这个字段会被当未知字段忽略）。
+   理由：实时气泡已经收成"一行在动"的日志，显示什么不重要（思考片段/工具/阶段轮着刷就行），
+   再留一个"内容显不显示"的配置没有意义。
+   行为变化：思考片段**固定**刷在那一行（原来只在开关开着时进），工具/正文一到就换掉。
+   改动：chat.mjs（去两处开关与保存字段）、run-progress-card.mjs（去 showThinking，
+   思考固定进日志行）、mobile.css（去该开关的 iOS 尺寸规则）、routes/persona.mjs /
+   server.mjs / store/personas.mjs / store/conversations.mjs（去 showThinking 读写）、
+   route-policy.mjs（设备可改字段 4→3）、smoke-run-progress.mjs（断言改成"思考固定进这一行、
+   开关已退场"）。VERSION v188 → v189。
+   v190（2026-11-09 单气泡直播收进共用状态机，任务卡讨论区补上；英文中间话不再铺段落）：
+   用户实拍（沈丹青任务卡讨论区）：进度胶囊下面堆了十几段英文中间话 —— 讨论区没接
+   聊天页那套「单行日志 → 回复顶掉」的设计，把每个 text 事件当正文一段段 add 了。
+   另外英文工作流会在**每次工具调用之间**"解说"一句，这些 text 在事件流里跟真回复长得
+   一样，按旧规则（工具之后的正文=回复）会提前把日志行顶掉、中间话照样铺开。
+   收口成一份共用状态机 `js/run-live.mjs`（chat.mjs / projects.mjs 共用）：
+   · 跑着时只留那一行日志（思考片段 / 工具 / 阶段轮着刷）；
+   · text 一律不直播，先攒着；后面又来了工具事件 → 那段是中间话，丢弃；
+   · turn_end / 收尾时还没被工具顶掉的，才是真正的回复 → 顶掉日志行、落进同一颗泡。
+   代价（明确接受）：回复不再逐字流、收尾时整段出现 —— 换来"整轮只有一行在动"。
+   改动：新增 run-live.mjs；chat.mjs（去内联状态机改用它）；projects.mjs（讨论区接入）；
+   sw.js（预缓存清单 + VERSION v189 → v190）；smoke-run-progress.mjs（断言改钉共用状态机）。   v191（2026-11-09 团队协作：任务卡可派给群，群助手（必须 PM 岗）动态承接）：
+  看板建卡弹窗的「执行人」多第三档：团队协作 · 群名（只列群助手是项目经理的群；后端建卡/派发
+  还会再校验一次）。卡上不记协调人 —— 派发、子卡授权、回执都现读群上的群助手，换人自动跟随。
+  群助手可拆子卡（parentTaskId，一层、派本群成员、不能派给自己），子卡回执唤醒群助手；
+  群卡片详情执行人一栏显示「团队协作 · 群名」，可改回派人/真人（改派走同一条 PATCH）。
+  改动：projects.mjs（建卡/详情执行人清单接入团队协作、快照发 assigneeGroupId）；
+  sw.js（VERSION v190 → v191）。后端改动见 store/db.mjs（结构版本 4）、project-tasks.mjs、
+  routes/agent-cards.mjs、routes/project.mjs；新增 smoke-group-tasks.mjs（已登记）。
+
+   v192（2026-11-09 多机协同 / 算力节点子系统彻底删除，用户拍板：无存量机）：
+  服务端节点端点全删；本机软件商店安装任务端点从 /api/nodes/local/tasks 改挂
+  /api/local/tasks（POST 下发、GET 列表、GET /:tid 查询，响应形状不变）。
+  前端跟着清：
+  · misc.mjs 删掉节点状态页 renderNodeMode 与 boot 的 client.joined 分岔 —— 所有机器都走正常面板；
+  · connectors.mjs 四处安装任务改走 /api/local/tasks，模式页 / 邀请码 / 加入的历史注释块清干净；
+  · machine.mjs 去掉 nodeOnline 离线标注，设备详情的任务进度轮询改走 /api/local/tasks/:tid；
+  · style.css / mobile.css 删 node-mode、#nodeView、joinwiz、machine-* 等无人使用的死代码；
+  · core.mjs 的本机身份注释改成与本机安装任务相符的说法。
+  改动：misc.mjs / machine.mjs / connectors.mjs / core.mjs / style.css / mobile.css；
+  sw.js（VERSION v191 → v192）。
+
+   v194（2026-11-09 员工详情「任务」页：卡片 → 表格 → **按日期分组** → **顶部状态筛选**，
+   用户三连拍板「任务做成表格」「任务记录参考浏览器这种方式，按照日期来」
+   「不要单独列出来。而是在上方加状态筛选」）：
+   ① 原来是竖着摞一串看板卡（.kb-card）。那形状在看板上是对的（列里能拖、一叠一叠看），
+      到了员工详情就不合适 —— 主区一栏宽、又不给拖，卡片的"面"只是白占纵向高度，
+      手上十件活要滚三屏。改成表格：一行一件事，**任务（标题 + 项目/来源/PR 标签）/ 状态 / 时间**。
+   ② 分堆从"生命周期"换成**按天分组**（照浏览器历史那套）：「今天 · 2026年11月9日 星期一」
+      「昨天 · …」「2026年11月7日 星期六」…；日期进了段标题，行里只留 HH:mm（右对齐，
+      完整时间在 title 上）。新的在前，日期用行上的 `at`（服务端 stamp() 的本地时间）。
+   ③ 「要人管」（已阻塞 / 失败 / 待验收）**不再单独成段**：它曾经钉在表头当跨天收件箱，
+      既占掉小半屏又和日期段抢同一批行。现在是一颗**筛选胶囊**（全部 / 要人管 / 进行中 /
+      待办 / 已完成 / 已取消，各带件数），表格因此严格按天分组、只有一套排序。
+      筛选是纯前端 —— 不重新请求；件数为 0 的档不画（当前选中的那档除外，否则筛空后
+      连自己在哪一档都看不出来）；筛空时给一句「看全部 N 件」。
+   ④ 顺手去掉手工卡那行左侧的 2px 蓝竖条（用户圈图「这个去掉，不好看」）：它本来是从看板
+      卡上抄来的身份标记，可表格里连续几行手工卡一画，竖条首尾相接成了一条贯穿整段的
+      装饰线 —— 反倒不像"这一行是人加的"。身份交给标题下面那颗「手动」标签说。
+   状态那一格的颜色按**看板列**上色（--st-*，跟列头同一套），不按中文词面猜。
+   改动：chat.mjs（personaTaskCard → personaTaskRow、personaTasksHtml 加 filter 入参并铺 <table>、
+   新增 TASK_FILTERS / filterOfCol / ymdOf / taskDayLabel，筛选点击委托在 #dTasksBody 上；
+   PERSONA_TASK_GROUPS / PERSONA_URGENT_COLS 退场）；
+   style.css（.pt-cards / .pt-group / .pt-hint / .pt-at-day 退场，新增 .pt-tbl / .pt-sec / .pt-row /
+   .pt-filters / .pt-filter / .pt-fnum / .pt-reset 等，含 ≤560px 的收窄）；sw.js（VERSION v193 → v194）。
+
+
+   v195（2026-11-09 昵称全端生效，用户："用户的昵称不能只在我的页面里生效"）：
+   昵称之前只在「我的」身份卡活着，其它显示真人的地方（通讯录成员、聊天里别人的署名、
+   派活选真人、任务指派人）走的还是账号影子名 —— 等于白设。收口成一个口径：
+   **昵称 = 全端显示名，账号名 = 身份口径**（「是不是自己」的判断、署名存储一字不动，
+   只换"画出来叫什么"）：
+   · 服务端 listUserBriefs（/api/state 的 users 名册）带上 nickname —— 通讯录成员段、
+     派活选真人、任务执行人的数据源一次喂齐；
+   · 别人的真人署名按昵称画：chat.mjs 新增 senderNickOf（按 senderUserId 从名册查昵称，
+     走 opts.senderNick 进 bubble）；projects.mjs 的 humanOf 同口径；认人仍按
+     senderUserName（账号名）比，检测逻辑一个字没动；
+   · contacts.mjs 成员行名字 / 头像首字吃昵称（跟「我的」身份卡同款读法），搜索账号名、
+     昵称都命中；
+   · shell.mjs 新增 userLabel（昵称优先，没设退账号名，查无此人 → null 好接 ?? 兜底），
+     projects.mjs 派活选人、任务执行人、状态改动显示全走它；
+   · settings.mjs 弹窗文案改成"全端显示名"，保存后同步名册里自己那条（派活选人立等可见）。
+   改动：store/users.mjs（briefs + nickname 列注释改口径）、routes/users.mjs（meOf 注释）、
+   shell.mjs、chat.mjs、contacts.mjs、projects.mjs、settings.mjs；smoke-users.mjs（⑤c 加钉：
+   /api/state 名册带昵称且不改账号名）；sw.js（VERSION v194 → v195）。
+
+
+  v196（2026-11-10 审计「清空」改成真删除，用户口径：不要备份、不要留痕）：
+  用户原话："我不喜欢现在的清空的做法，我想要的清空是真的清空，不留备份的那种。点击清空，出一个确认窗口，确认了就真的清除。"
+  旧行为（2026-11-03）：先归档再删 + 主表留一条 audit.clear 痕迹 —— 清空后列表里还剩一行、
+  归档表里还留一份，等于"能恢复的备份"，被否。
+  新行为：确认窗口文案写明"不可恢复"；确认后服务端把主表 + 归档表一起 DELETE（临时摘删除触发器，
+  删完装回），清空拒绝聚合内存窗口，再 WAL checkpoint(TRUNCATE) + VACUUM 回收旧页；不留任何痕迹。
+  改动：store/audit.mjs（clearAll 改真删，返回 {events, archived}）、routes/users.mjs（回执带 archived）、
+  securityadmin.mjs（确认文案/按钮"彻底清空"/标题提示"清空=彻底删除"）、route-policy 注释、
+  smoke-audit.mjs（断言主表+归档都空、清空后审计照常工作）、smoke-security-policy.mjs（同口径）；
+  sw.js（VERSION v195 → v196）。
+
+
+
+  v197（2026-11-10 删掉气泡里的「证据」按钮，用户口径：证据留后台、界面不体现）：
+  用户原话："证据没啥用，用户不会去看"；"如果是留了痕的，在后台就行，不需要在界面里体现"；
+  "如果出了问题，我只会让AI去帮我查原因，我自己是不会去的。"
+  改动：聊天气泡与任务卡讨论区不再挂「证据」入口（删 data-evi / evidenceChipHtml / 点击展开逻辑），
+  style.css 删 .evi-chip / .evi-body；后台一律不动：/api/runs/:id/evidence、/stream 运行事件、
+  审计痕迹照旧。smoke-run-events 改成钉"界面没有入口、接口照旧可用"；
+  sw.js VERSION v196 → v197。
+
+
+
+  v198（2026-11-10 「我的」页加「修改密码」，用户："加个修改密码的功能"）：
+  密码在中枢上（本机不存），所以这是一条三层链：中枢 bandi-hub 新端点 `POST /v1/auth/password`
+  （设备凭据 `Device <token>` 代绑定账号办事：验旧密码、写新 salt 的新派生值；拒绝面 H2004 /
+  H1004 / H3001）→ 班底服务端 `POST /api/me/password`（只认会话 user，读 hub.json 拿设备凭据
+  转发；route-policy 登记为 me.password；错误码 E3814/E3815/E3816，中枢原话带回）→
+  「我的」页入口（桌面 isUser 才画，与「设置」并成一张卡两行）+ 三栏弹窗（当前密码 / 新密码 /
+  确认，gr-conn-dlg 同款，form 不设 method='dialog' —— 回车要走提交）。
+  已登录的会话与其它设备不吊销：下次登录用新密码。
+  改动：bandi-hub（src/db.mjs 加 getDeviceVerified / getLocalCredentialByAccount /
+  updateLocalCredential、src/index.mjs 加端点、contract.md §三 补一行、
+  test/password-change.test.mjs 新建）；apps/server（hub/client.mjs 加 changePassword、
+  hub-stub.mjs 加同语义假端点、routes/users.mjs 加转发、security/route-policy.mjs 登记）；
+  apps/web（settings.mjs 入口行 + openPasswordDialog）；smoke-users.mjs 加 ⑤d（改密全链 +
+  新旧密码登录进退）；sw.js VERSION v197 → v198。
+
+
+  v199（2026-11-10 换新标「b·i」，品牌重设计定稿）：
+  bandi 读作 b and i：b=班底里的数字员工、i=你，中间铜金点(#B08D57)是 & 的最简形式。
+  字形全部自绘几何（圆角竖笔 + 整圆碗圈 + 圆点），无字体依赖；旧的「鼓包 B」退役。
+  index.html：左栏 rail 内联 SVG 换 b·i 光学参数（22px 下铜点 1px 会糊，不带）；
+  favicon 从 icon-192 换成 favicon-32/16 两档，apple-touch-icon 换 icon-180（iOS 自己裁圆角）。
+  光栅产物全部由重写的 apps/desktop/make-icon.py 生成：desktop(ico/png)、web(512/192/180/32/16)、
+  mobile-native（tauri 资源 + Square*/StoreLogo + icns）、安卓五档 mipmap（含 round/foreground）；
+  矢量源 apps/desktop/icons/icon.svg 与 design/logo/*.svg 同一套几何。sw.js 预缓存补
+  favicon-32/16，VERSION v198 → v199。
+
+
+  v199 附记（同日 18:50 修改密码入口搬家）：首次实现把入口放进「我的」页 me-entry-sec
+  （与「设置」同卡），但「设置进左栏」改版在 mobile.css 里
+  `body:not(.mb-narrow) .me-entry-sec { display:none }` 把整卡在桌面藏死 ——
+  桌面上永远看不见（用户两报「入口呢」）。现改为「我的」页独立一张卡
+  （me-pwd-sec，.set-row + 按钮，桌面原生样式，类名绕开隐藏规则），
+  me-entry-sec 恢复原样；sw.js 已在 v199（随未提交的改版工作），本改动搭车发布。
+
+
+  v200（2026-11-10 18:56 改密弹窗标签对齐）：三栏标签（当前密码 / 新密码 / 确认新密码）
+  宽度钉死 72px（取最宽的「确认新密码」），输入框左缘对齐。作用域收在新增的
+  pw-dlg 类（gr-conn-dlg.pw-dlg .row-label），不影响 GitHub 连接弹窗。
+
+
+  v201（2026-11-10 18:5x 应用图标换「牛头」，品牌二次定稿）：用户圈了任务栏里喜鹊/鲸鱼两个
+  图标指定风格 —— 深炭动物剪影 + 白色圆角方块底。牛 = 实干的班底，铜金鼻环 (#B08D57) =
+  「你牵着它走」（≥128px 才画，小尺寸会糊）。字形全部自绘贝塞尔，无字体/素材版权；
+  ≤48px 自动切光学小版（去耳/眼/鼻孔/鼻环，整组放大 1.18，口鼻负形加大）。
+  index.html 左栏 rail 内联 SVG 换反白牛头（口鼻 evenodd 镂空透栏底色）；图标光栅产物
+  全部由重写的 apps/desktop/make-icon.py 再生成（desktop/web/mobile/android 全目标，
+  文件名不变）；矢量源 apps/desktop/icons/icon.svg 与 design/logo/bandi-icon-*.svg 同步。
+  「b·i」字标资产保留在 design/logo/ 作字标用。本条仅内容替换、预缓存清单未动，
+  VERSION 仍随发布 +1（v200 → v201）强制整包重建，避免新旧标混用。
+
+
+  v202（2026-11-10 19:0x 应用图标三次定稿「全身牛 · 简笔画」）：用户指定要**全身**且走
+  简笔画线描（此前二次稿是实心牛头剪影）。圆头细线（笔画 18/512）勾出侧视全身牛，
+  白瓷底磁贴不变；铜金鼻环 (#B08D57) ≥64px 才画。≤64px 切光学小版：去远侧腿/四蹄/鼻孔、
+  笔画 18→32、整组放大 1.16（中心 296,300）。make-icon.py 画笔从 d.line(joint=curve)
+  改成**偏移轮廓多边形**（梳齿毛刺修复）。index.html 左栏 rail 内联 SVG 换反白线描
+  （笔画 40 再加粗，22px 下不带眼/鼻环）；矢量源 icon.svg 与 design/logo/bandi-icon-*.svg
+  同步（mono 版天然单色、favicon 版为光学小版）。VERSION v201 → v202。
+
+
+  v203（2026-11-10 20:1x 应用图标四次定稿「分玉」，整代换标）：用户要求不参考现行标重做。
+  终稿「分玉」——整圆被竖直弦切开、右片下沉错位（《说文》「班，分瑞玉也，从珏从刀」，
+  分玉成班 = 把活切开派下去；圆=完整的活，缝=随时可插手的切口，错位=成员不在同一进度）。
+  色系弃 AI 蓝：墨 #12161A / 玉青 #2F7E74（深底浅玉 #5FB3A3）/ 朱砂 #C8402F 只给"人"。
+  make-icon.py 几何换代（弓形解析解 + 三档光学参数：缝 6/12/18，小尺寸重绘不缩放，
+  ≤32px 单色）；save_ico 改手拼 PNG-in-ICO 每档单独重绘；跑完自动顶 build.rs mtime。
+  index.html 左栏 rail 换反白极小版内联 SVG，.rail-logo 底改墨色（弃蓝渐变）；
+  design/logo/bandi-icon-*.svg 与 bandi-brand.md（v2.0 规范）同步重写。
+  本条仅内容替换、预缓存清单未动，VERSION v202 → v203 强制整包重建。
+
+
+  v204（2026-11-10 20:3x rail 标与任务栏图标一致性修正）：用户截图对比发现左栏 rail
+  的 mark 在 34px 方块里只占 ~41% 宽（svg 只有 22px 塞在 tile 里、scale 0.8），而
+  任务栏 exe 图标 ≤32px 极小版 mark 占 ~58%——同一颗标两处大小不一。改为 svg 铺满
+  34px tile、scale 0.73（mark 宽 19.9px / 高 24.8px，与 make-icon.py 极小版
+  0.546×80/86×1.15 同比例），缝 18 / 错位 22 参数不变。仅 index.html 内容替换，
+  VERSION v203 → v204 强制整包重建。
+
+
+  v205（2026-11-10 20:4x 修正 make-icon.py 弦位反转 bug）：_piece() 左右两片的弦
+  位置写反（左片弦在 CX+gap、右片弦在 CX-gap），两片在中缝重叠 2×gap，缝永远被
+  盖死——ico/全部位图里"分玉"实际是无缝双拼，仅手写 SVG（rail/favicon）有缝，
+  造成 rail 与任务栏图标不一致的观感。修正弦位后全目标重生成，缝隙在 16~256px
+  全档可见。VERSION v204 → v205。
+
+
+  v205（2026-11-10 20:4x 修正 make-icon.py 弦位反转 bug）：_piece() 左右两片的弦
+  位置写反（左片弦在 CX+gap、右片弦在 CX-gap），两片在中缝重叠 2×gap，缝永远被
+  盖死——ico/全部位图里"分玉"实际是无缝双拼，仅手写 SVG（rail/favicon）有缝，
+  造成 rail 与任务栏图标不一致的观感。修正弦位后全目标重生成，缝隙在 16~256px
+  全档可见。VERSION v204 → v205。
+
+
+  v206（2026-11-10 20:5x rail 标改双色调）：用户圈选主用图标配色，要求 rail 同款。
+  rail-logo 从单色骨白改为 SCHEMES.dark 双色（左片 #F2F1ED / 右片 #5FB3A3），
+  与任务栏 exe 图标同配色；34px 实测两色可辨。仅 index.html，VERSION v205 → v206。
+
+
+  v206（2026-11-10 20:5x rail 标改双色调）：用户圈选主用图标配色，要求 rail 同款。
+  rail-logo 从单色骨白改为 SCHEMES.dark 双色（左片 #F2F1ED / 右片 #5FB3A3），
+  与任务栏 exe 图标同配色；34px 实测两色可辨。仅 index.html，VERSION v205 → v206。
+
+
+  v207（2026-11-10 20:5x 小图标档放开双色）：取消 ≤32px 强制单色（弦位修正后
+  16px 每片 ~7px 宽，骨白/浅玉可辨），标题栏/任务栏/favicon 与主图标配色统一；
+  安卓自适应前景层仍为单色剪影。全目标重生成，VERSION v206 → v207。
+
+
+  v207（2026-11-10 20:5x 小图标档放开双色）：取消 ≤32px 强制单色（弦位修正后
+  16px 每片 ~7px 宽，骨白/浅玉可辨），标题栏/任务栏/favicon 与主图标配色统一；
+  安卓自适应前景层仍为单色剪影。全目标重生成，VERSION v206 → v207。
+
+
+  v208（2026-11-10 20:58 rail 试验「班」字印）：用户要求左栏改"班字印看看"。
+  rail-logo 从分玉 mark 换为墨底白文印（骨白班字，Noto Sans SC/YaHei 900、22px）。
+  仅 rail 试验位，分玉仍是正式标（exe/favicon/design/logo 未动）；确认方向后再
+  决定回退或转正（转正需 make-icon.py 加字印档 + design/logo 加字印版）。
+  VERSION v207 → v208。
+
+
+  v208（2026-11-10 20:58 rail 试验「班」字印）：用户要求左栏改"班字印看看"。
+  rail-logo 从分玉 mark 换为墨底白文印（骨白班字，Noto Sans SC/YaHei 900、22px）。
+  仅 rail 试验位，分玉仍是正式标（exe/favicon/design/logo 未动）；确认方向后再
+  决定回退或转正（转正需 make-icon.py 加字印档 + design/logo 加字印版）。
+  VERSION v207 → v208。
+
+
+  v209（2026-11-10 21:01 撤掉左栏品牌块）：标题栏已有应用图标 + 「班底」文字，
+  左栏再挂一颗标 = 同一身份说两遍。删除 .rail-brand/.rail-logo 及其 CSS
+  （无 JS 引用），rail padding 12px → 10px/12px 保持首项节奏。应用标只留在
+  exe 图标、favicon、design/logo 与对外物料。VERSION v208 → v209。
+
+
+  v209（2026-11-10 21:01 撤掉左栏品牌块）：标题栏已有应用图标 + 「班底」文字，
+  左栏再挂一颗标 = 同一身份说两遍。删除 .rail-brand/.rail-logo 及其 CSS
+  （无 JS 引用），rail padding 12px → 10px/12px 保持首项节奏。应用标只留在
+  exe 图标、favicon、design/logo 与对外物料。VERSION v208 → v209。
+
+
+  v210（2026-11-10 21:09 左栏顶部字标定稿）：用户拍板撤掉图形标后顶部改放纯文字
+  字标——「班底」（15px/600）+ BANDI（9px/字距 3px），无底色块，颜色走 --text/--dim
+  随深浅主题；rail padding-top 10 → 14。应用图形标（分玉）仍只在 exe/favicon/
+  design/logo。VERSION v209 → v210。
+
+
+  v211（2026-11-11 17:xx Phase 2 · 岗位固定落到界面）：
+  ① 撤「新建员工」入口：联系人「＋」里删「添加数字员工」，删 personaDlg 与 #roleSuggest，
+     misc.mjs 的新建员工整段（pRuntime/pSandbox 下拉、openPersonaDialog）拆掉 ——
+     用户拍板不保留自建员工（岗位固定、只能从专家库雇佣），自建私有专家入口以后单独做；
+  ② 员工详情「岗位」改只读展示（.ro），不再有输入框；详情 PUT 不再带 role/roleKey
+     （服务端对"岗位变了"直接 E2055 拒，不允许调岗）；手机精简版页头的岗位章改从 roleKey 取；
+  ③ /api/state 下发 roles/permissions（S.roles）：人名标签、通讯录副标题、@ 选人、项目成员、
+     群成员、换群助手弹窗里的岗位名统一从 roleKey 取，不再自己拆「岗位 · 职责」；
+  ④ 团队协作可选群（建卡弹窗 + 定时任务执行方式）改按「承接团队卡」权限筛；
+     群设置里群助手不具备该权限时挂一条 warn-line 提醒（只提示不拦，用户拍板选 A）。
+  VERSION v210 → v211。
+
+
+  v212（2026-11-11 18:xx Phase 3 · 组织架构 + 岗位技能包）：
+  ① 左侧一级栏新增「组织架构」（data-nav="org"，图标=三层组织树），左栏二级菜单为
+     「岗位权限清单」；右区只读表格：岗位 / 类型 / 在岗 / 权限 / 技能包 —— 新增 js/org.mjs，
+     index.html 加 #orgView，style.css 加 .org-table 系列，state/shell/contacts 接上路由与列表；
+  ② 技能包从专家包移到**岗位**上（服务端 roles.mjs 的 skills），雇佣/同步按岗位自动挂载，
+     experts.mjs 不再各写一份清单；岗位权限清单页把技能列出来（悬停看技能描述）。
+  VERSION v211 → v212。
+
+
+  v213（2026-11-11 19:xx 看板「只看我的 / 全量」+ 验收人）：
+  ① 任务看板筛选条新增「只看我的 / 全量」开关（默认只看我的，记进位置；「我的」= 我派的卡
+     + 指定我执行的卡）；看板行带 created_by_user_id / created_by；
+  ② 验收人 = 派活人：不是我派的卡拖到「已完成」/ 在卡详情改「已完成」时，先弹一句代验收确认；
+     「待验收」的文案从"等你点头"改成"等验收人点头"；补记卡（source=backfill）也能拖能开。
+  VERSION v212 → v213。
+
+
+  v214（2026-11-11 20:xx 左栏「信箱」）：
+  ① 左栏最上面新增一级栏「信箱」（信箱图标 + 未读角标），整页通知列表
+     （js/inbox.mjs + #inboxView + .inbox-* 样式 + state/shell/contacts 接路由）；
+  ② 只读平台事实：建卡失败等由服务端写 notices 表；本页可「全部 / 未读」切换、点一条标已读、
+     「全部已读」；不做弹框、不往群里播报（用户拍板）；
+  ③ 未读数随 /api/state 下发 + 30 秒一次轻量轮询刷新角标。
+  VERSION v213 → v214。
+
+
+  v215（2026-11-11 21:xx 信箱改主从：左侧列表 / 右侧详情，用户："改成左侧列表，右边详情"）：
+  旧版把整页通知清单铺在主区（inbox 挂 no-list，左栏整列收掉），一条条是整页大卡片 ——
+  视觉上"只有清单、没有详情"，全文/错误码/员工/次数挤在同一张卡里，一屏也放不下几条。
+  改回骨架的三级语法（跟通讯录、组织架构同一套），不再走 no-list：
+  ① 左栏二级列表 = 通知清单（js/inbox.mjs 新增 renderInboxList）：全部/未读两颗 tab 钉在
+     清单顶上，一行一条（严重度圆标 + 标题/时间 + 摘要 + 类型·员工·×次数 + 未读「新」标）；
+     「全部已读」收进左栏底部固定条 #listFoot（有未读才占高度，跟消息/工作流的「已归档」同位）。
+  ② 右区 #inboxView = 选中那条的详情：标题、类型/严重度/最近发生、全文、平台事实表
+     （错误码 / 员工 / 次数 / 已读状态）；没选中时是说明性空态（保留"这里放需要你知道、
+     但不该打断你的事…"那句，多一句"在左侧选一条通知，查看详情"）。
+  ③ 已读语义不变（点开一条 = 这条已读、全部已读 = 清零，服务端接口一字未动）；
+     交互改成"先本地画、后请求"：点一下右区立刻出内容，标已读失败也不影响读。
+  ④ 路由 setRoute('inbox', { id })：刷新后回到原来那条详情；窄屏沿用 mobile.mjs 的通用主从
+     折叠（点行展开、返回栏显示通知标题），刷新直达详情时派 mb-detail 补折叠态。
+  改动：inbox.mjs（主从重写：数据缓存 + 左栏渲染 + 详情/空态）、state.mjs（inbox 不挂
+  no-list，左栏保留、搜索框仍收掉 —— 筛选归两颗 tab）、contacts.mjs（renderList 的 inbox
+  分支接 renderInboxList，原先是直接 return）、shell.mjs（ROUTES.inbox 认 id）、
+  index.html（#inboxView 注释）、style.css（.inbox-* 整组重写 + 详情/空态样式，删旧整页
+  卡片样式）、mobile.css（§24 手机档：清单行/详情页字阶、页内重复页头收掉）；
+  sw.js（VERSION v214 → v215）。
+
+
+  v216（2026-11-11 22:xx 手机端补「信箱」入口，用户："更新手机端"）：
+  上一版把信箱改成"左列表 + 右详情"只在桌面成立 —— 窄屏（≤900px）左栏整列被收掉、
+  底部四 tab 里没有信箱，手机用户**根本进不去**这一页（未读角标也无处显示）。
+  按手机端的白名单口径把这一栏放行：
+  ① mobile.mjs 底部导航补第 5 颗 tab「信箱」（图标同桌面左栏那枚信封，排在会话与我的之间），
+     映射 setNav('inbox')；高亮仍走 syncTabs 的 .nav-btn.active 对齐，不用另写一套；
+  ② tab 上挂未读角标 #mbInboxBadge：数字与桌面左栏 #inboxBadge 同源（S.noticesUnread），
+     0 藏、>99 显示 99+，syncTabs 的 1s 轮询顺手同步；
+  ③ 信箱页本身不用改：窄屏沿用通用主从折叠（列表 → 点行进详情 → 返回栏回列表，
+     刷新直达详情时 inbox.mjs 派 mb-detail 补折叠态）。
+  改动：mobile.mjs（第 5 颗 tab + syncInboxTabBadge）、mobile.css（.mb-tab-badge 角标 +
+  "四 tab"注释改"五 tab"）；sw.js（VERSION v215 → v216）。
+
+
+  v217（2026-11-11 22:xx 手机端信箱入口改到「我的」页，用户："手机端把信箱入口做到我的页面"）：
+  v216 把信箱做成底部第 5 颗 tab，用户改口径：入口放进「我的」页，tab 栏保持四颗。改法：
+  ① mobile.mjs 撤掉第 5 颗 tab 与 syncInboxTabBadge（tab 栏回到 工作台/通讯录/会话/我的），
+     mobile.css 删 .mb-tab-badge 角标样式 —— 上一版的东西一件不留；
+  ② 「我的」页窄屏新增一张「信箱」卡（set-head「信箱」+ 一行 button.me-kv.me-cache-row：
+     「平台通知 / N 条未读 / ›」），点它派 mb-nav 事件让 mobile.mjs 统一 setNav('inbox')；
+     桌面不画这一行（左栏一级栏已有信箱，重复入口没必要）；
+  ③ 行尾读数与左栏角标同源（S.noticesUnread）：inbox.mjs 的 paintInboxBadge 顺手刷新
+     #meInboxCount —— 页面开着时读掉一条，「我的」那一行不用重进也会变；
+  ④ 进入信箱后底部仍亮「我的」（跟设置页同一条规则）：它是「我的」的下一级，
+     不然底部一个 tab 都不亮，看着像"哪儿都没选中"。
+  改动：mobile.mjs、mobile.css、settings.mjs（openMe 的 me-inbox-sec + meInbox 点击）、
+  inbox.mjs（paintInboxBadge 同步「我的」页读数）；sw.js（VERSION v216 → v217）。
+
+
+  v218（2026-11-11 「我的 › 设置」子页，用户："做一个设置菜单，把这两个放到设置页面去"）：
+  手机「我的」页上的「这台机器」「通用」两张卡整体搬进新的设置子页，「我的」页
+  只留一行「设置」入口（卡面与「信箱」入口同款：button.me-kv.me-cache-row +
+  chevron，me-set-sec）。改法：
+  ① settings.mjs 新增 openMeSet / closeMeSet（模块级，入口行点击时把 hello / 壳标记 /
+     isUser 带进去，子页不重拉接口）：子页 = 「‹ 返回」行 + 「这台机器」三行卡
+     （phoneMachineAll 提为模块级，machineRowHtml 收拢共用）+「通用」卡（清除缓存 +
+     当前设备，wireCacheRow 原样搬）；桌面「我的」页的「这台机器」四行卡不动；
+  ② 页面级子页不开新一级栏：S.nav 仍是 'me'，底部 tab 亮「我的」（与信箱同理）；
+  ③ 历史栈照"详情压一格"老规矩（kb-new / sch-page 同款，自己收自己那一格）：
+     进来 pushState({mbMeSet:1})；返回行/Esc（mobile.mjs 放行派 mb-me-set-leave）/
+     手势（settings.mjs 的 popstate，alreadyPopped 只收画面）都走 closeMeSet 回
+     openMe；tab / mb-nav 换栏时连类带历史格一起收（幽灵格规矩）。
+  改动：settings.mjs（openMe 撤两张卡 + meSetEntry 入口 + 子页三函数）、mobile.mjs
+  （Esc / popstate / tab / mb-nav 四处守卫）；sw.js（VERSION v217 → v218）。
+
+
+  v219（2026-11-11 19:5x 设置子页导航栏，用户："设置页加一个导航栏。返回按钮放到导航栏左侧，使用图标按钮"）：
+  「我的 › 设置」子页顶部那张「‹ 返回」卡（.me-set-back-sec）撤掉，换成一条导航栏 ——
+  规格照整页头（body.no-list .detail-head，§3 同一把尺子）：--mb-nav 高 + safe-area、
+  玻璃底 + 0.5px hairline、sticky 吸顶；返回 = 左侧纯图标钮（.mb-back 同款 accent
+  chevron 22px，aria-label="返回"），标题「设置」居中 17/600（三列 grid 48/1fr/48，
+  图标钮不挤偏标题）。样式 §15d，全部关在 body.mb-narrow #settingsView 里，桌面不动。
+  返回接线不变（仍 #meSetBack → closeMeSet(false)）。
+  改动：settings.mjs（openMeSet 模板换 me-set-nav）、mobile.css（§15d）；sw.js
+  （VERSION v218 → v219）。
+
+
+  v220（2026-11-11 20:0x 「当前设备」挪回「我的」页，用户："把这个当前设备切换菜单放到我的页面"）：
+  设置子页「通用」卡里的「当前设备」行（回壳设备列表的桥）挪回「我的」页 —— 切设备
+  是手机上的高频动作，不值得为一行钻进设置二级页。改法：
+  ① 「我的」页窄屏新增「设备」卡（set-head「设备」+ 一行 button.me-kv.me-cache-row，
+     me-devswitch-sec），位置在「外观」与「设置」之间；显示条件与原行同口径
+     （壳里 + 中枢账号会话），点击 = BandiShell.openDeviceList() / 启动页
+     #bandi-devices（接线随行挪回 openMe）；
+  ② 设置子页「通用」卡只剩「清除缓存」一行，openMeSet 签名收窄成 { hello }
+     （shell / nativeShell / isUser 不再被子页用）。
+  改动：settings.mjs；sw.js（VERSION v219 → v220）。
+
+
+  v221（2026-11-11 20:1x 「我的」hero 加信箱图标，用户："在信息区加一个信箱图标，点击之后跳转到信箱页面"）：
+  身份卡右缘加一颗信箱图标钮（me-inbox-icon，红框位置）—— 信封线稿（信箱页空态同款
+  图形，线宽 1.8 同 hero 铅笔）、36px 触控、margin-left:auto 推到右缘垂直居中；
+  右上角未读红点（me-inbox-dot，--bad 药丸，0 未读隐藏、>99 折 99+）。改法：
+  ① settings.mjs：openMe 的 hero 模板窄屏追加图标钮（onPhone 才画，桌面左栏已有信箱），
+     点击派 mb-nav inbox —— 与下面「平台通知」行同一把 setNav 路子；
+  ② inbox.mjs：paintInboxBadge 顺手刷 #meInboxDot —— 读掉条数不重进「我的」，
+     红点也跟着藏/显（与 #meInboxCount 同源）；
+  ③ mobile.css §15d 追加 .me-inbox-icon / .me-inbox-dot（全关在 mb-narrow + settingsView）。
+  改动：settings.mjs、inbox.mjs、mobile.css；sw.js（VERSION v220 → v221）。
+
+
+  v222（2026-11-11 20:5x 信箱页头返回钮，用户："加一个返回图标按钮"）：
+  手机信箱列表页头（.list-head）左侧加返回图标钮 —— 信箱在手机上是「我的」的
+  下一级（tab 高亮同款规矩），页头给实体返回钮，与通讯录子页的「←」同一个类
+  （.mb-head-back：absolute 钉左缘、accent chevron 22px、44px 触控、标题照旧居中）。
+  点击派 mb-nav {nav:'me'} 回「我的」（mobile.mjs 统一转 setNav）。改法：
+  ① inbox.mjs 新增 paintHeadBack()，paintList 顶部调 —— 只在 body.mb-narrow 挂
+     （桌面信箱是一级栏，没有"回来"的概念）；renderList 每次重画先摘 .mb-head-back
+     （contacts.mjs 通用清扫），所以每次 paintList 重挂，挂前查重防
+     paintListKeepScroll（筛选切换不走 renderList）时叠两颗；
+  ② 样式零新增：.mb-head-back 的规则 mobile.css §5/§17.2 里已有。
+  改动：inbox.mjs；sw.js（VERSION v221 → v222）。
+
+
+  v223（2026-11-11 20:5x 「我的」页撤信箱入口行，用户："这个去掉"）：
+  「我的」页窄屏那张「信箱 / 平台通知」卡（me-inbox-sec，行尾未读读数）整卡撤掉 ——
+  hero 右上角已有信箱图标（带未读红点），这一行成了重复入口。改法：
+  ① settings.mjs：删 inboxEntry 模板与 #meInbox 接线；inboxUnread 保留（hero 红点
+     的初始值还要用）；
+  ② inbox.mjs：paintInboxBadge 里刷 #meInboxCount 的那段随之退场（元素没了），
+     只刷左栏角标 + #meInboxDot。
+  桌面端不受影响（那行本来 onPhone 才画）。
+  改动：settings.mjs、inbox.mjs；sw.js（VERSION v222 → v223）。
+
+
+  v224（2026-11-11 21:0x 退出按钮搬进设置子页，用户："退出按钮放到设置页面"）：
+  手机「我的」页底部那行「退出登录」搬进「我的 › 设置」子页末尾（「通用」卡之后，
+  同款 .me-out-box + .me-out 整宽行）；「我的」页瘦成 身份卡 + 外观 + 设备 + 设置。
+  改法：
+  ① settings.mjs openMe：me-out-sec 加 onPhone 判 —— 窄屏不画，桌面照旧（桌面
+     没有设置子页，这行仍是「我的」页的收尾）；
+  ② openMeSet 签名加 canLogout（入口行从 openMe 带进来），模板末尾追加退场行，
+     接线同主页：meLogout → logout()、meGoLogin → location.reload()（回环操作员
+     没有可退的登录态，画「去登录」的老口径不变）。
+  样式零新增（mobile.css 的 .me-out 规则本来就关在 #settingsView + mb-narrow 里）。
+  改动：settings.mjs；sw.js（VERSION v223 → v224）。
+
+
+  v225（2026-11-11 21:1x 壳 · 设备列表按来源分两套按钮，用户："这个页面是登录页面后跳转的
+  页面，如果是登录跳转的，就要维持现在这个样子"）：选择电脑页不再一套按钮走到底 ——
+  · 登录后 / 冷启动进来（根页面）：维持原样，右上角「退出登录」，无返回；
+  · 面板里点「当前设备」进来（下级页面）：左上角「返回」回面板，不画退出。
+  实现（App 侧，改完要重装 APK）：
+  ① MainActivity.showDevices(fromPanel = false)：入口带来源，按来源切
+     devBackBtn / logoutBtn 的显隐，并把标题左内边距在"有返回钮"时收成 0（标题不右移）；
+     showDevicesFromPanel() 传 true；
+  ② 新增 lastPanelOrigin —— showDevices() 的 stopConnWatch() 会把 connOrigin 清掉
+     （离开面板停探活），返回需要"刚才在谁那儿"这份独立记忆；backToPanel() = showPanel(lastPanelOrigin)，
+     WebView 一直没卸载，回去是原样（不重载、不丢状态）；
+  ③ 系统返回键同一语义：设备列表 + devicesFromPanel → 回面板（原来会直接退回桌面）；
+  ④ 布局 activity_main.xml 标题行加 devBackBtn（gone 起步）、标题补 id；新增 ic_back.xml。
+  改动：apps/mobile-native（MainActivity.kt / activity_main.xml / drawable/ic_back.xml）。
+
+
+  v226（2026-11-11 21:4x 返回键改「问网页」，用户拍板上 B 方案）：
+  起因（用户实报"定时任务页按系统返回直接退出 APP"）：壳的返回键问 WebView canGoBack ——
+  那是浏览器历史不是 App 层级。换机器时 onPageFinished 的 clearHistory() 把网页开机种的
+  "井"（mobile.mjs ⑦b）一起抹掉，从此 canGoBack 恒 false，**任何页面**按返回都退后台；
+  反过来不压格的页面（定时任务等下钻页）按返回只有"没反应"。历史还是共享状态，为此已经
+  打了七八处"幽灵格"补丁。这次换成：**壳问网页，网页答唯一真源** ——
+  ① 新增 js/navstack.mjs（叶子模块，只依赖 core）：registerLayer（浮层/子页，level 越大
+     越靠内；cell=它压的那格历史标记，格在就退历史让各模块 popstate 收画面，格没了
+     （clearHistory 后）就直调 close）、registerUp（下钻页的上一层 = 页内 ‹ 同一个函数）、
+     registerHomeUp（非首页 tab 回工作台）。判断链：栈顶层 → 下钻页 → 回家 → 交还壳。
+  ② 各层的主人自己登记（谁的状态谁报）：mobile.mjs（detail L10 / dialog L90 / 家）、
+     chat.mjs（picker L100）、projects.mjs（tc-sheet L80 / kb-new L70 / taskCard 下钻）、
+     skills.mjs（sch-sheet L66 / sch-page L65 / schedules 下钻 → 工作台）、
+     settings.mjs（me-set L50）、flowpages.mjs（flow-direct L40）。
+  ③ mobile.mjs 挂 window.bandiCanGoUp / bandiBack；根页返回不再吞掉 —— 退到桌面
+     （Android 标准，原先靠"井"做成"按了没反应"）。
+  ④ 壳 MainActivity.webBack()：evaluateJavascript 问 bandiCanGoUp —— true → bandiBack()；
+     false → moveTaskToBack；'legacy'（旧缓存没钩子）→ 退回 canGoBack 老逻辑。
+  ⑤ 根页井（⑦b/⑦c）保留：它只服务浏览器手势返回，壳不再消费它。
+  新增行为：定时任务页按返回 → 回工作台（schBackToWorkbench，页内 ‹ 同一函数）；任务卡、
+  新建任务、定时任务编辑页、讨论抽屉、设置子页、选择页、弹窗、流程实例页 → 各自退一层；
+  非首页 tab（通讯录/会话/我的）→ 回工作台；工作台根页 → 退后台。
+  验证：node --check 全过；navstack 行为冒烟 13 项全过（含 clearHistory 后 length=1 的
+  收画面路径、active 抛错不卡链、level 优先级）；assembleDebug 通过并已装机；真机返回键
+  语义待用户手动过一遍（本机 adb 注入按键被 INJECT_EVENTS 拒）。
+  改动：js/navstack.mjs（新）、mobile/chat/projects/skills/settings/flowpages.mjs（登记）、
+  sw.js（+navstack 预缓存，VERSION v224 → v226，v225 是壳专属条目不动静态）、
+  原生壳的 MainActivity（webBack，文件后来随原生壳调整，路径已不在）。
+
+
+  v227（2026-11-11 21:4x 补齐其余下钻页的上一层，用户实报"任务看板按返回直接退出了"）：
+  v226 只登记了定时任务 / 任务卡两处下钻，任务看板等项目页一按返回还是退后台。这次把
+  全部下钻页的上层补齐 —— 每处都与该页页内 ‹ / 面包屑**同一个去处**，不另造一份：
+  · projects.mjs：projects → 工作台（手机上项目清单页头只写「项目」，系统返回键是唯一
+    回宫格的路）；project → 项目清单；taskBoard → 全局看板回工作台 / 项目看板回清单
+    （按 S.boardAll 分流，与 data-kb-back 同一把 if）；
+  · skills.mjs：codeRepos → 工作台；skill → 「设置 › 技能」清单（openSettings('skills')）；
+  · experts.mjs：remote / plugin → 工作台宫格；
+  · workflows.mjs：workflows → 工作台宫格；
+  · flowpages.mjs：flowRun → 工作台（2026-10-19 口径「上一级只是工作台」）；
+    designer → 工作流清单（退出不丢东西：草稿一直在本地，重开自动恢复并提示）。
+  至此路由表 21 个 view 全部有交代：12 个下钻页走 registerUp，会话/人物/群聊等走
+  mb-detail 层，非首页 tab 走 registerHomeUp，剩下的就是工作台宫格根页（退后台）。
+  改动：projects/skills/experts/workflows/flowpages.mjs（各 1-4 行登记）；sw.js
+  （VERSION v226 → v227）。纯网页改动，壳不用重装。
+
+
+  v228（2026-11-11 21:5x 修「侧边栏点击不动了」）：v227 给 flowpages.mjs 补了
+  `registerUp('flowRun' | 'designer', …)` 两行，却只 import 了 registerLayer ——
+  **registerUp 未定义**。ESM 模块图在求值 flowpages.mjs 那一格就抛
+  `ReferenceError: registerUp is not defined`，而 app.mjs 的 boot 语句（含
+  `document.querySelectorAll('.nav-btn').forEach(b => b.onclick = …)`）排在所有
+  import 之后 —— 一抛，整个面板只剩静态骨架：**一级栏 8 颗按钮全部点不动**，
+  也不是"某颗按钮的 handler 写错了"。页面无任何可见报错，最容易被当成 CSS / 遮罩问题。
+  改法：flowpages.mjs 的 import 补上 registerUp（一行）。教训：`node --check` 只查语法，
+  **查不出未定义的标识符** —— 这类改动必须真开一次页面看控制台。
+  验证：无头 Edge 挂本机会话跑真实面板，8 颗按钮逐颗点击，视图切换全部正确
+  （inbox/chat/org/experts/plugin/settings/me），boot 无异常。
+  改动：js/flowpages.mjs（import 一行）；sw.js（VERSION v227 → v228，把撞上坏版本的
+  客户端整包换掉）。
+
+
+  v229（2026-11-11 22:0x 岗位表列宽，用户："技能包列窄一些"）：auto 布局下技能章是
+  nowrap 的，浏览器按内容给宽度 —— **最长的那个技能名说了算**，技能包一列吃掉右半边
+  （630px 的表里 ~420px），权限被挤成一团。改成 `table-layout: fixed` + 按百分比定列
+  （16 / 12.5 / 13.5 / 26 / 32），技能包只留「最长一条技能名 verification-before-
+  completion ≈ 172px」+ 内边距的宽度（202px），腾出来的给权限。多出来的章在章与章之间
+  换行，技能包内不做截断（`max-width:100%` + 省略号只作窄屏兜底）。表补 `min-width:
+  630px`（五列都不夹字的底线，再窄就横向滚，.org-scroll 本来就 overflow-x:auto）。
+  验证：真面板 1093×760 —— 表宽 = 容器 630、无横向滚、五列 101/79/85/164/202、
+  零截断、最长技能名完整显示；390×844 窄屏走横向滚。
+  改动：style.css（岗位表那一段）。
+
+  v230（2026-11-11 22:2x 空回话兜底，用户实报「空白气泡，还以为界面坏了」）：
+  群「爻鉴」r-f0512961：模型把工具调用写成 `<dots_function_call><invoke …>` 正文文本、turn
+  直接 completed，`finalText` 只剩 `"\n\n\n"` —— 界面是一条空白气泡，会话头还写着绿色「完成」。
+  ① 气泡：正文为空/纯空白时显示「（这一轮没有回话 —— 模型输出为空或运行被中断，可以让他
+     重跑一次）」；老库里已有的空白消息同样生效（chat.mjs 的 bubble 兜底）；
+  ② 会话状态：`完成 + 空回话` 落「已阻塞」（store/status.mjs 的 conversationStatusFor），
+     不再显示「完成」；新增 `.badge.已阻塞` 橙色；
+  ③ 服务端同步：新回话落库时空白正文换成同一句占位、带 meta.emptyReply；
+     `run.finalText` 保持原样（卡状态/证据仍按原文判）。
+  VERSION v229 → v230。
+
+  v230（2026-11-11 22:4x 「我的」页方案 B「档案卡」上线）：用户对着 A/B 两稿拍了 B。
+  手机形态从「通栏渐变头 + 三张组头卡 + 一长条空白」改成**两张卡**：
+    · 身份卡：渐变从通栏收进卡内右上角，头像 56 / 名字 22，账号与设备落成两枚 chip，
+      信箱从裸图标变 36px 圆形钮（未读角标压在它外缘）；
+    · 设置卡：主题 / 当前设备 / 设置三行**一张卡、无组头** —— 原来「外观 / 设备 / 设置」
+      三张单行卡把页面切成三段，"设置"还既当组名又当行名；主题分段这次吃掉整行剩余宽度
+      （每格 47 → ~100px）；
+    · 页脚一行版本号，`.me-body` 改 flex 列 + `min-height:100%`，`margin-top:auto`
+      把它钉在视口底部 —— 内容比一屏短时空白才像"呼吸"，不像"没画完"。
+  桌面零改动（全部挂 body.mb-narrow）。`sw.js` VERSION v229 → v230。
+  改动：js/settings.mjs（hero 加 .me-hc + chips、三个移动端 section 并成 .me-one-sec、
+  版本行）；mobile.css（§15b ① 重写 + ②b 新增、§17.3 的 hero 辉光改挂卡片）。
+
+
+  v231（2026-11-11 23:0x 「我的」页去卡片，用户：\"卡片式布局在真机上不好看，很小家子气\"）：
+  方案 B 的\"两张卡\"在对照稿里成立、上真机就散了 —— 病根不在配色，在**卡的语法**：
+  左右各留 20px 的圆角小盒 + 一圈投影，内容又只有三行，页面被切成\"两个浮在灰底上的
+  盒子\"，读起来像组件库 demo。这一版把卡整个拆掉：
+    · 整页一片 surface（`.me-body:has(> .me-hero-sec)` 通栏 + min-height:100%，退掉
+      detail-body 的 20/24 内边距），一层从顶部右上铺开的淡 tint 贯穿到 ~70% 高度 ——
+      稀疏页面用颜色占位，不用空白占位；
+    · 身份区升格为\"封面\"：min-height 292，内容压在下缘（grid align-content:end），
+      头像 76→84、名字 22→27、chip 行改为整行铺开（原来挤在第 2 列会把设备名顶到
+      第二行）；
+    · 清单三行**通栏**、无圆角无投影，行高 56→72、字号 16/15→17/15.5，分割线内缩 20；
+    · 版本行从\"钉在视口底\"改为紧跟清单（钉底会变成一段白里的一颗孤字）。
+  桌面零改动（全部 body.mb-narrow）。⚠️「我的 › 设置」子页也用 `detail-body me-body`，
+  通栏规则必须用 `:has(> .me-hero-sec)` 限定，否则子页的灰底分组卡会被一起摊平。
+  `sw.js` VERSION v230 → v231。改动：mobile.css（§15b ① / ②b / .me-body / .me-foot、
+  §17.3 的 hero 辉光回到通栏）。
+
+
+  v233（2026-11-11 23:4x 会话轮换的聊天灰字，用户："这事太小，直接在聊天里加一行灰字就可以"）：
+  上下文预算超限、同一段聊天里换掉员工内部 CLI 会话时，聊天区落一行居中灰字
+  「（上下文过长，已开新会话；最近进展已交接）」——`role=system` + `meta.type=session-rotated`，
+  chat.mjs 渲染成 `.sys-line`，不占气泡、不算回话、**不进信箱**（原方案是信箱 info，用户否掉）。
+  改动：chat.mjs（timeline 渲染）、style.css（.sys-line）、dispatch.mjs（落消息）；
+  `sw.js` VERSION v232 → v233。
+
+  v234（2026-11-11 23:2x 修「右边空了一块」）：截图右侧那条从上贯穿到底的白/灰带，
+  是 `#settingsView` 的 `scrollbar-gutter: stable`（style.css 里为桌面防抖加的）在
+  **常驻预留 11px 滚动条槽位**；而这一版的整页白底 + 渐变画在 `.me-body` 上、宽度只到
+  content box —— 右边那 11px 露出的是页底 `--mb-cvbg` 灰（真机 DPR 放大成视觉上明显
+  的一条带）。同一个坑早就在 #pluginView 上踩过一次（那条注释还留着）。
+  改法（落在 §1 全局触感，一处管全部）：手机形态（≤900px）下 `#detailView /
+  #settingsView / #orgView / #inboxView / #groupView / #placeholderView` 一律
+  `scrollbar-gutter:auto` + 不画可见滚动条（`scrollbar-width:none` +
+  `::-webkit-scrollbar{width:0}`）—— 宽度恒定、滚不滚都不挤内容，老规则要防的抖动
+  也就不存在了；「我的」页再补一层同色背景兜底。顺带修好「我的 › 设置」子页卡片
+  左右不对称（左 24 / 右 35 → 两侧均 24）。
+  验证：390×844 真视口 —— `#settingsView` clientWidth 379 → 390、`.me-body` 宽 390、
+  右缘三列像素与渐变连续（无 #f2f2f7 灰带）；深色同；子页卡片 24 / 342 / 24；1440
+  桌面零改动（`narrow:false`，滚条槽位照旧）。改动：mobile.css（§1 新增一条；
+  §15b 旧的单点补丁只留背景兜底）。`sw.js` → v234（v233 已被会话轮换那条占用）。
+
+
+  v235（2026-11-11 23:3x 「我的」页按主流「我的」页的分组语法重排，用户："这个页面可以
+  参考主流「我的」页的布局"）：
+    · 三行从"整页一片白 + 行间 hairline"改成**分组块**：一块满宽、无圆角、无描边、
+      无投影的白，与封面之间隔 10px 页底灰（页底从 surface 换成 `--mb-cvbg`）；
+      行高 72 → 64（17px 字下的主流档），分割线仍内缩 20；
+    · 主题行从"行内分段选项卡"（2026-11-05 的形态）改成**值与箭头**：右边显示
+      「深色 ›」，点整行弹底部三选（复用 #ctxMenu 的手机 sheet，当前项带 ✓），
+      选中即换肤、弹层收起 —— 与 iOS「设置 › 显示与亮度」同一个读法。
+      三行至此完全同构（名称 17 / 值 15.5 灰 / ›），不再有一个"控件"夹在表格里。
+      分段控件在手机「我的」页退场（`.me-theme-*` 那 60 行样式一并删除，DOM 已无引用）。
+    · `.me-hero-sec + .me-one-sec` 的 10px 要单独写一条：`… + .set-sec { margin-top:0 }`
+      多一个类，特异性更高，会把间隔压成 0（第一版实测 margin-top 计算值 0px）。
+  验证：390×844 真视口 —— 块 top 258（= 封面底 248 + 10）、三行各 64、左右顶到边；
+  点行弹 sheet（浅色/✓深色/跟随系统）、选浅色后值就地变「浅色」且留在「我的」；
+  深色下块与页底分得开、分割线可见；360 窄屏值不折行；「我的 › 设置」子页与 1440
+  桌面零改动。改动：js/settings.mjs（主题行 + openCtxMenu）、mobile.css §15b。
+  `sw.js` → v235。
+
+## v236（2026-11-11 深夜）「我的」：顶部那片空收掉
+
+用户圈图："这个上面太空了" —— 状态栏到头像之间 ~78px 什么也没有。
+
+原因不在留白值，在**结构**：上一版是"封面式 hero"，`min-height:248px` +
+`.me-hc { align-content:end }` 把三行内容压到封面下缘，头上那段是留给辉光的。
+在对照稿（宽屏、旁边有别的元素）里成立，真机 390 上就成了"页面没加载完"。
+
+改法（`mobile.css` §15b）：
+- `.me-hero-card`：`min-height:248px → 0`（高度由内容定），
+  `padding: 30px…30px → 34px…28px`；
+- `.me-hc`：`align-content:end → start`（保留兜底，别再靠余高排版）。
+
+量值（390×844）：hero 248→202，头像 top 78→34，chip 底 174，分组块 top 212
+（原 258）。深色、360×780、「我的 › 设置」子页、1440 桌面均回归通过。
+`sw.js` → v236。
+
+## v237（2026-11-11 深夜）底部 tab 栏与系统导航栏同色
+
+用户截图（红框圈住 tab 栏 + 导航键区）："底部导航栏跟系统导航栏改成一个颜色"。
+
+根因不是配色偏好，是**两块不同的面**：Android 15+ 强制 edge-to-edge，壳把 WebView
+用 `padding-bottom = 导航栏 inset` 抬上去（§返回键/键盘那套），屏幕最底下那条带露的是
+**窗口背景**（主题纯白/纯黑），网页画不到；而 tab 栏是 `--mb-nav-glass` 的 72% 玻璃，
+压在页面上合成出 ~#F5F5F9 —— 一灰一白，永远一道缝。
+
+改法：颜色只留一份来源，两边都取它。
+
+- `mobile.css`：新增 `--mb-chrome`（浅 `#F2F2F7` / 深 `#1C1C1E`）；`.mb-tabbar`
+  改实色 `var(--mb-chrome)`，顺手摘掉已经没意义的 `backdrop-filter`（不透明后只剩 GPU 开销）。
+- `shell.mjs`：`applyTheme()` 末尾调 `syncShellBar()` —— 把 `--mb-chrome` 报给
+  `window.BandiShell.setSystemBarColor()`；再挂一个 body class 的 MutationObserver，
+  页面切进/切出详情页（tab 栏显隐变了）也重报一次。**没有 tab 栏的页面报空串**，
+  壳收起色块恢复窗口背景 —— 详情/聊天页页面自己铺到底，本来就没有缝，别硬塞一条灰。
+- `mobile-native`：`BandiShell.setSystemBarColor(css)` → `MainActivity.applySystemBarColor()`，
+  在 DecorView 上贴一条只有导航键区那么高的色块（高度跟 insets 走，键盘弹起时 navBottom=0
+  自己收起），并按亮度反着设 `isAppearanceLightNavigationBars`（深底画深色键 = 没有键）。
+  登录页/设备列表 `resetSystemBarColor()`。
+  ⚠️ 没改窗口背景：那会把顶部状态栏那条带也染色，hero 渐变上会多一条灰边。
+
+验证（真机 3330495e，色值取自 adb screencap）：浅色下 tab 栏与导航键区同为
+`#F2F2F7`、深色同为 `#1C1C1E`，中间只剩 tab 栏自己那根 hairline。
+桌面/无壳环境：`BandiShell` 不存在，功能检测跳过，行为不变。`sw.js` → v237。
+
+## v238（2026-11-11 深夜）底部选择面板被自己的蒙层压暗
+
+用户截图（主题 浅色/深色/跟随系统 那个底部 sheet）："这个窗口怎么这么不明显"。
+不是配色选得浅，是**蒙层画在了面板上面**：
+
+`.ctx-menu::before` 用 `z-index:-1` 想画到菜单背后，可 `.ctx-menu` 自己是
+`position:fixed` + `z-index:70`，**自成一个层叠上下文** —— 在这个上下文里负 z-index
+的子元素画在"元素背景之上、内容之下"，于是那层 40% 的黑正正好压在 sheet 的白底上：
+白 → #999，弹窗和背后的暗页糊成一片，只剩按钮（内容层）浮着。
+
+改法：蒙层换成真元素 `#ctxScrim`（挂 body 下，`z-index:69`，压在菜单 70 下面）：
+- `ui.mjs`：`openCtxMenu` 建它、`closeCtxMenu` 摘它；收起走 `click` 不走 `mousedown`
+  （mousedown 就摘的话，紧跟的 click 会落到蒙层下面那一层页面上）；
+- `app.mjs`：全局 mousedown 那条跳过 `#ctxScrim`，别抢在它前面关；
+- `mobile.css` §16.12：删 `.ctx-menu::before`，新增 `.ctx-scrim`（桌面 `display:none`）。
+
+验证（390×844）：sheet 底色取回 `#FFFFFF`（原来采样 #949496），背后页面压暗到 #999；
+点蒙层 → 菜单关、`#ctxScrim` 一并摘除；深色下 sheet `#1C1C1E` 同样分得开。
+`sw.js` → v238。
+
+## v239（2026-11-11 深夜）信箱详情返回栏标题改「详情」
+
+用户截图："导航栏标题改成详情"。
+
+原来返回栏取的是行标题 —— 通知的标题是**整句告警**（"会话已轮换（上下文过长）"），
+塞进那一格被省略号截成半句，而正文里紧接着又原样写了一遍：同一句话出现两次，还一次是残的。
+
+改法：只在信箱通知这一类（`[data-notice]`）把标题定成「详情」：
+- `mobile.mjs` 行点击委托：`row.matches('[data-notice]') ? '详情' : rowTitle(row)`；
+- `inbox.mjs` 刷新后从位置记忆直达详情那条路（派 `mb-detail` 事件）同样传「详情」。
+
+会话 / 员工 / 群那几类不动：返回栏显示人名或标题是用户先前明确要的。
+验证（390×844）：点一条通知 → `.mb-back-title` = 详情，正文标题照旧。
+`sw.js` → v239。
+
+## v240（2026-11-11 深夜）底部 tab 栏改纯白
+
+用户圈住 tab 栏 + 导航键区："改成白色，看看效果"。
+
+只动一个值：`--mb-chrome` 浅色 `#F2F2F7` → `#FFFFFF`（`mobile.css` §16 的浅色 token 块）。
+v237 起这个 token 就是唯一来源 —— tab 栏用它、壳拿它刷系统导航栏那条带，所以改一处两边一起变。
+深色不动（`#1C1C1E`，深色下白栏会刺眼）。
+
+效果（390×844，工作台）：页面底 `#F7F8F9`，白栏从灰底上浮起来，栏顶那条 hairline 是唯一分界；
+图标在纯白上更亮。代价是**会话列表那种白底页**上栏与内容同色，只剩一根线。
+验证：真机 strip 取色 `#FFFEFF`（= 网页报过去的 `#FFFFFF`）。`sw.js` → v240。
+
+## v241（2026-11-11 深夜）顶部导航栏拍白，跟底部同色
+
+用户："顶部导航栏也改成白色，跟底部导航栏一个色"。
+
+顶部这一排栏原来都吃 `--mb-nav-glass`（浅色 rgba(242,242,247,.72) 玻璃，合成 ~#F5F5F9），
+v240 把 tab 栏拍白以后，页面成了"灰头 + 白脚"。这轮把七条顶部栏统一到 `--mb-chrome`：
+
+- `.list-head`（列表页头）
+- `body.no-list .detail-head`（整页头）
+- `body.mb-detail-open .mb-backbar`（详情返回栏）
+- `body.mb-narrow #settingsView .me-set-nav`（设置子页头）
+- `#mbPicker .mb-picker-bar`（全屏选择页头）
+- `.kb-new .kb-new-bar`（创建页头）
+- `#pluginView .tc-m-head`（任务卡页头）
+
+新增 `mobile.css §25` 一条合并规则（放文件末尾，同特异性靠后来赢 —— 原规则散在
+§4/§15b/§16.2/§20/§21，不必逐条回去改），并把已经不透明的 `backdrop-filter` 摘掉。
+底部两条 compositor（`.composer` / `.tc-composer`）仍是玻璃，不在"顶栏"范围里。
+
+验证（390×844）：工作台 / 我的 / 设置子页，`.list-head` 与 `.me-set-nav` 计算值
+`rgb(255,255,255)`、`backdrop-filter: none`，与 `.mb-tabbar` 一致；页面底灰
+`#F7F8F9` 仍是分界来源。深色下随 `--mb-chrome` 变 `#1C1C1E`。`sw.js` → v241。
+
+## v242（2026-11-12 凌晨）「选择电脑」页发粉：原生页底色归到网页那一档
+
+用户截图（选择电脑页）："这个怎么看着有点粉，跟其他页风格不同"。
+
+不是谁调了色 —— 是**没人调过**：壳的主题一直是 Material3 默认（`Theme.Material3.DayNight`），
+它的 baseline surface 是 `#FFFBFE`（白里掺紫），而网页那套页面底是 `#F7F8F9`。两套色板并排，
+原生页就"粉"了；卡片在代码里写死纯白，压在粉底上几乎浮不起来。
+
+改法（`apps/mobile-native`）：
+
+- 新增 `values/colors.xml`：`bandi_page #F7F8F9`、`bandi_primary #0066CC`；
+- `themes.xml`：`android:windowBackground` / `android:colorBackground` → `@color/bandi_page`，
+  `colorPrimary` → `@color/bandi_primary`（Material3 默认紫 `#6750A4` 的「刷新」按钮也一并归队）；
+- `activity_main.xml`：两处 `?attr/colorSurface`（连不上兜底 / 离线蒙版）→ `@color/bandi_page`；
+- `MainActivity`：
+  · `window.isNavigationBarContrastEnforced = false` —— 3-button 模式下系统会在导航键区盖一层
+    半透明白把底下往白里拉（页面底 `#F7F8F9` 被抬成 `#FEFEFE`），v237 那套色块其实一直没画到，
+    看着"像生效"只是因为白色本来就接近 scrim 的结果。关掉后画什么是什么；
+  · 原生页新增 `paintSystemBarPage()`（登录 / 设备列表用它把导航键区刷成页面底色），
+    `resetSystemBarColor()` 保留给"网页页自己没有底栏"的情形。
+
+`shell.mjs`：没有 tab 栏的页面（详情 / 聊天 / 看板）不再报空串，改报**页面自己的底色**
+（`pageBottomColor()`：body → html 的 computed background，非实色才退空串）——
+聊天页纯黑底时最底那条带不会再镶一圈浅灰。
+
+验证（真机 3330495e，`adb exec-out screencap` + `tmp/scan.mjs` 逐列断色）：
+- 选择电脑页：整页到最底 `#F7F8F9`（原来内容 `#F7F8F9`、最底一条 `#FEFEFE`），
+  卡片纯白、按钮 `#0066CC`；
+- 面板页：tab 栏与导航键区同为 `#FFFFFF`，中间无过渡带。
+`sw.js` → v242。
+
+## v245（2026-11-12 凌晨）状态栏那条带跟顶栏同色
+
+用户截图（工作台，红框圈住状态栏 + 标题栏）："这两个统一一下颜色" ——
+状态栏那一行（0:14、电量）是浅灰 `#F2F2F7`，紧挨着的「工作台」标题栏是白的。
+
+跟底部同一个病根、同一套解法：Android 15+ edge-to-edge 下，壳给根内容视图补了
+`padding-top = 状态栏 inset`，WebView 落在安全区里，**那条带露的是窗口背景**（页面底色）。
+v241 把七条顶部栏拍白之后，页内是白的、带是灰的，反而更刺眼。
+
+- `BandiShell.setTopBarColor(css)` → `MainActivity.applyTopBarColor()`：在 DecorView 顶上
+  贴一条状态栏那么高的色块（高度跟 `statusInset` 走），并按亮度调状态栏图标明暗。
+  原生页由 `paintSystemBarPage()` 一并刷成 `@color/bandi_page`。
+- `shell.mjs` 新增 `topBarColor()`：**问"视口顶端那 1px 是谁"**（`elementFromPoint`，
+  再往上找第一个不透明底色），比枚举 `.list-head / .mb-backbar…` 准 —— 同一个
+  `.mb-backbar` 在 DOM 里可能有几份（详情层、聊天层各一个），按选择器取到的是第一个，
+  深色聊天页就报过 `#1C1C1E` 而头顶其实是纯黑。取不到再退回选择器、最后 `--mb-chrome`。
+- 首次上报补了 `load` + 0.6s + 1.6s 三次重报（清缓存值强制重发）：`applyTheme` 跑在 boot
+  早期，那时「我的」页的顶栏还没套上样式，`elementFromPoint` 落到 `#settingsView`，
+  报的是页面底色 `#F2F2F7`，画完其实是白栏 —— 之后 class 不变就再没机会纠正。
+- `showPanel()` 进面板前把两条带都清掉（颜色交回网页），别让人在半路看到原生页的灰。
+
+顺带：debug 包的 `setupWebView` 里开了 `WebView.setWebContentsDebuggingEnabled`，
+配 `adb forward tcp:9222 localabstract:webview_devtools_remote_<pid>` 就能从电脑端
+CDP 进壳里的页面（这台手机 `adb shell input` 被系统禁掉，点不动卡片 —— 以前只能
+改代码重编一轮看一张图，现在直接点、直接读计算样式）。
+
+真机取色（`adb exec-out screencap` + `tmp/scan.mjs` 逐列断色）：
+浅色工作台 / 我的：状态栏带到顶栏一整片 `#FFFFFF`；深色工作台：`#1C1C1E` 一整个；
+深色聊天页：顶部 `#000000`（chat-head 黑）、底部 `#070809`（body 底）。
+`sw.js` → v245。
+
+## v246（2026-11-12 夜）状态只存码，中文退成显示名
+
+用户拍板：「系统里永远只能有状态码，不能既有状态码又有其他」。起因是数字员工建卡连续
+两次 400 E2058 —— 一次中文状态被 shell 打烂成 `??`（重试 9 次全废），一次模型改写成
+`todo` 而接口只认「待办」。同一个状态有两套写法，就一定有人写第二套。
+
+- 词表（`apps/server/src/store/status.mjs`）：任务八态 = `idea/todo/doing/review/blocked/failed/done/cancelled`，
+  运行七码 = `pending/running/done/failed/stopped/interrupted/blocked`，流程三码在 `WORKFLOW_RUN_STATUS`；
+  中文只留在 `TASK_LABEL` / `RUN_LABEL` / `WORKFLOW_RUN_LABEL`，**全系统仅此一份**。
+- 库：老库启动一次性把 323 条中文状态换成码（`migrateStatusValuesToCodes`，幂等）；建表默认值改码。
+- 接口：入参只收码。写中文名 400 `E2058`，报错直接告诉他该写哪个码（`「待办」是显示名，请写 "todo"`）；
+  建卡口以前会**静默落回 todo**，现在先挡（把「已完成」悄悄建成待办比 400 更坏）。
+- 前端：`S.statusDict` 随 `/api/state` 下发，渲染统一走 `statusText(code)`；
+  看板/流程/卡票/CSS 状态类全部改码；本模块里不再写第二份中文状态表。
+
+`sw.js` → v246（js/style 都动了，逼客户端整包重建）。
+
+## v247（2026-11-17）手机 ＋ 菜单改主流聊天 App 式输入面板
+
+用户实报两层：① 旧的贴底抽屉形态（fixed + 黑蒙层 + 通栏「上传文件」灰杠）和输入框脱节，
+要求改成「点 ＋ → 输入框向上顶起、下方原键盘位置铺面板、里面放上传入口」的主流聊天 App 形态
+（mobile.css ＋ 菜单段重写，`.composer:has()` 垫高 + 面板绝对定位到 composer 底部）；
+② 首刷没生效 —— 桌面 `.att-wrap{position:relative}` 把面板锚在了「＋」按钮上，
+手机档改 `position:static` 让面板落到输入框下方。
+
+`sw.js` → v247（mobile.css 内容变了，逼客户端整包重建 + 自动重载）。
+
+## v248（2026-11-17）＋ 面板定位基准钉死：.input-wrap 撤 relative
+
+v247 手机上仍复现「上传文件」在输入框上方。隔离复现（tmp/attach-test，真实 CSS +
+470px 视口 headless 截图）钉死真凶：style.css:2883 `.input-wrap{position:relative}`
+才是面板的定位基准，bottom:0 = 胶囊下沿，整块面板从胶囊底**往上**铺 200px。
+手机档（mobile.css 900px 档）给 `.input-wrap` 加 `position:static`，基准落到
+`.composer`（16.11 已 relative），面板才落进输入框下方的垫高区。mention-pop
+随之改锚 composer，位置几乎不变。已复现页回归验证通过。
+
+`sw.js` → v248。
+## v249（2026-11-19）项目详情去掉「项目规章」tab
+
+用户拍板：「项目规章这个 tab 去掉，相关代码清理。没啥用。实际使用证明，用户不会去用它」。
+
+- 前端（`projects.mjs`）：删掉 `rules` 页签与面板 —— 宪法编辑框、预览/编辑切换、markdown 渲染
+  全部移除；项目详情只剩「基础信息 / 项目成员」两页。规章专属样式（`#pjConstView` /
+  `#projConstInput` / `.proj-const-edit`）一并删除。
+- 后端：不再读写 `projects.constitution`；`dispatch.projectConstitutionBlock` 及流程每一步、
+  团队协作卡、个人执行卡三处注入点全部移除；契约「项目宪法（在平台，不在项目里）」一节删除。
+  老库里的 `constitution` 列保留不删（不做破坏性迁移，只是没人再读它）。
+- 冒烟：项目详情 tab 顺序断言改为「基础信息 → 项目成员」；流程冒烟⑪的宪法注入四连删除。
+
+`sw.js` → v249（js/style 内容都变了，逼客户端整包重建）。
+
+## v250（2026-11-19）style.css 按页拆分（纯物理搬移）
+
+`style.css` 4841 行，找一个分页的规则要翻四千行；拆成 6 个文件：
+
+| 文件 | 内容 | 行数 |
+|---|---|---|
+| `style.css` | 全站基础 + 工作台（**新规则别往这里堆**） | 2087 |
+| `style-git.css` | 代码托管页 | 170 |
+| `style-ide.css` | 代码托管 · IDE 式一站式 | 1823 |
+| `style-task.css` | 任务卡详情页 | 271 |
+| `style-toast.css` | 轻提示 toast | 36 |
+| `style-machine.css` | 这台机器 / 数据管理 / 插件页 | 499 |
+
+- **规则内容一个字没改**，只换了文件。`index.html` 里六个 `<link>` 的顺序就是覆盖顺序
+  （core → git → ide → task → toast → machine），`mobile.css` 仍然压最后 —— 这是它覆盖全站的前提。
+- 拆点选在花括号深度为 0 的位置（脚本逐个校验过），不存在把一个 `@media` 块劈两半的情况。
+
+`sw.js` → v250：预缓存清单多了 5 个 css。不升版本的话，老客户端仍用旧缓存 ——
+`/style-ide.css` 这类请求拿不到，那几页会裸奔。
+
+## v251（2026-11-19）修 v250 拆分带出的「sandboxItems is not defined」
+
+v250 把输入框那两颗选择器搬到 `js/composer-pickers.mjs` 时，函数体里用到的两个名字没有跟着
+搬过来 import：`sandboxItems`（`permItems` 里）与 `openConversation`（选完权限/模型后重画这一屏）。
+语法检查全过、首页照常打开 —— 直到点开一段会话，输入框右下角才弹一条英文报错。
+
+- `composer-pickers.mjs` 补上 `sandboxItems`（来自 `misc.mjs`）与 `openConversation`（来自
+  `chat.mjs`；与 `listmenu.mjs` 同一种环形依赖，函数声明有提升、调用都在函数体内，安全）。
+- 新增 `tools/smoke-web-imports.mjs`：静态扫前端模块图 —— ① import 的具名成员目标必须导出
+  ② 目标文件必须存在 ③ **用了别人导出的名字却没 import**（本轮的形态）。反向验证过：把
+  `sandboxItems` 那半句删掉，脚本立刻报错。
+
+`sw.js` → v251：`composer-pickers.mjs` 内容变了，不升版本老客户端仍拿缓存里那份坏的。
+
+## v252（2026-11-19）长任务：把"最后动作在多久前"摆到明面上
+
+起因是服务端那套"按量掐"（工具次数 / 墙钟 15 分钟）被推翻 —— 复杂功能跑几个小时是正常的，
+按时间中断是把活砍两半。服务端改成只看"连不连得动"（10 分钟无事件才收口）之后，界面这边
+得跟上同一个口径：**人要知道它还在不在动**。
+
+- **`run-progress.mjs`**：`createRunProgress` 收 `lastEventAt`（服务端记的最后一次活动，
+  ISO 串或毫秒），夹在 `[startedAt, now]` 之间。重画时不再用 `now` —— 否则一轮已经卡了
+  8 分钟，刷新一下 `idleMs` 归零，界面显示"刚动过"，人会一直等下去。
+- **`run-progress-card.mjs`**：日志行新增中间一档「最后动作在 N 前」（20 秒 ~ 5 分钟）。
+  以前这一档是空白（只写"进行中"），长任务里看不出在算还是卡了；≥5 分钟的警告文案也从
+  「可能卡住了 · 最后动静 N 分钟前」改成「可能卡住了 · 最后动作在 N 前」，留余地不判死。
+- **`chat.mjs` / `projects.mjs`**：`attachStream` 与讨论区的 `attach` 多带一个 `lastEventAt`，
+  重开页面/打开任务卡时接上真实活动时刻；对话页从 `listRuns` 的 `lastEventAt` 取。
+- 服务端 `store/runs.mjs` 的 `listRuns` 加子查询 `(SELECT at FROM run_events ... ORDER BY seq
+  DESC LIMIT 1) AS lastEventAt` —— 走主键，不扫全表。
+
+`sw.js` → v252（`run-progress.mjs` / `run-progress-card.mjs` / `chat.mjs` / `projects.mjs` 都变了）。
+
+## v253（2026-11-19）连不上模型时，界面上要看得见"在重连"
+
+用户实报："连不上模型，要让我直接能看到你在重连，我看到会处理的。"
+
+那次故障的经过：模型请求 TLS 握手就断，CLI 吐 `Reconnecting... 1/5 … ECONNRESET`，重试五次、
+七分钟、零输出。但界面上**这段时间什么都没有** —— 事件被服务端扣住了（见下），人只能看着
+一片死，不知道该去查代理。
+
+- **`run-progress.mjs`**：新增 `CHANNEL_FAIL_RE` 与 `state.link`。运行级 error 里认得出通道
+  特征（ECONNRESET / fetch failed / 502 / Reconnecting / TLS handshake…）就进 `link`，
+  **不**进 `state.error` —— 后者是常驻红字，重连成功后它会一直挂着，等于骗人。
+  `link` 里记 `{ at, attempt, total, msg }`，重连轮次从 `Reconnecting... 2/5` 里抠。
+  任何一条非 error 事件到了就算通道回来了：清 `link`、记 `recoveredAt`。
+  收尾时 `link` 还挂着 → 结论写成「模型没连上：<原文>」（不是干巴巴的"出错了"）。
+  新增 `fmtSince`（"43 秒" / "2 分 10 秒"），跟 `fmtAgo` 分工：一个问"已经等了多久"，
+  一个问"多久以前"。
+- **`run-progress-card.mjs`**：日志行最上面加一档「连不上模型 · 正在重连 2/5 · 已等 43 秒」，
+  优先级高于"可能卡住了"和任何动作 —— 此刻没有动作是正常的（请求根本没发出去），
+  报"最后动作在 N 前"会让人以为活干挂了。恢复后闪 6 秒「模型连上了，继续」，再让位给正常日志。
+  第二行摆通道原文（小字），人一眼能看出是 ECONNRESET 还是 502。
+  收尾折叠头：通道原因写「没连上模型」，不再是笼统的「出错了」。
+- **`style-ide.css`**：新增 `.rp.link`（bad 色）—— 跟 `.rp.warn`（卡住了）分开上色，
+  一个要你去修网络、一个只能等，同一种黄就没人会去动代理。
+
+`sw.js` → v253（`run-progress.mjs` / `run-progress-card.mjs` / `style-ide.css` 都变了）。
+
+## v254（2026-11-19）「还没有动作」改成「等模型回话 · 已等 N」
+
+用户实拍问："他这个是在尝试连接吗" —— 截图里进度卡写着「还没有动作 · 1 分钟前」，
+看着像它什么都没干。实际是请求已经发出去了、在等模型的第一个字：那段时间 CLI
+既不吐 token 也不报错（codex 的重连提示要等首次请求真失败才出，实测三四分钟后）。
+
+- **`run-progress.mjs`**：新增 `waitText(v)`，**两种静默分开说** ——
+  一步都没走 → 「等模型回话 · 已等 1 分 4 秒」（球在对方）；
+  走过几步后停住 → 「最后动作在 N 前」（活干到一半停在哪一步）。
+  以前两种共用一个「还没有动作」，把"在等上游"说成了"我方没干活"。
+- **`run-progress-card.mjs`**：静默满 60 秒且一步没走时，第二行给一句
+  「模型还没回话 —— 网络 / 代理不通时常见，它在自己重试」。不下结论、不催人动手：
+  它确实可能只是在长思考，但那两类故障正是这么表现的（请求发出去、TLS 握手挂住）。
+
+`sw.js` → v254（`run-progress.mjs` / `run-progress-card.mjs` 变了）。
+
+## v255（2026-11-20）「历史」改成 IDEA 那样带分支线的图形树
+
+用户实拍问："我想要 idea 的那个图形树效果" —— 历史卡原来一条条平铺提交，
+分叉、合并、哪个分支停在哪个提交全看不出来。
+
+- **`git-repos.mjs`**：`recentLog` 不再只沿 HEAD 走，改 `--branches --remotes --tags HEAD`
+  + `--topo-order`（分支/远程/标签都进图，父永远排在子后面）；`--pretty` 补 `%H`（全长）、
+  `%P`（父哈希）、`%D`（refs），返回体多 `full` / `parents` / `refs` 三个字段。
+- **`skills.mjs`**：新增 `logGraphRows` / `renderLogGraph` —— 每条 lane 记「下一个该出现的提交」，
+  额外父另起一条 lane、多个 lane 等同一提交就是汇合；每行输出一段 SVG（节点圆点 + 贯穿竖线 +
+分叉/汇合曲线）。分支胶囊挂在提交说明后面（HEAD 蓝底白字、tag 黄、远程灰、本地分支淡蓝）。
+- **`style-ide.css`**：历史行钉死 30px（上下行靠它对齐，SVG 每行按 30 画）；lane 22px
+  一列（3 条分支就是 66px，不再是挤在左边的一条竖线）；新增
+  `--gr-lane-1..8` 深浅两套色板与 `.gr-ref*` 胶囊；行 hover 回底色。
+
+`sw.js` → v255（`skills.mjs` / `style-ide.css` 变了）。
+
+## v256（2026-11-20）历史图形树二改：分支列拉开、分支标签露出来
+
+用户实拍："这个就是你给我的成果吗" —— 根因是控制面还跑着 20:41 启动的旧代码（21:24 才改完
+`git-repos.mjs`），`/log` 没有 `parents/refs`，新前端只能画出一列孤立蓝点，分支标签也全空。
+重启后数据齐了，同时把第一版"挤成一条竖线"的视觉问题一并改掉：
+
+- `node start.mjs --restart` 后 `/log` 已确认返回 `full` / `parents` / `refs`（50 条、merge 双父）。
+- **`skills.mjs`**：lane 14px → **22px**、行高 26 → **30px**；节点 4 → 4.5px 并加 2px 底色描边，
+  HEAD 节点外套一圈淡环；refs 去重、HEAD 排最前、最多挂 3 颗 + `+N`。
+- **`style-ide.css`**：refs 由 `flex: 0 1 auto` 改成**不收缩**（原来长提交说明会把它挤到 0 宽）；
+  HEAD 改实底蓝 + 白字；历史卡里的 sha 降灰、提交说明 13px、列间距 12px。
+
+`sw.js` → v256。
+## v257（2026-11-20）图形树：分支顶端不再画「断头线」
+
+用户实拍红框问："这个怎么没闭合" —— 指的是远程分支 `origin/chore/v1.5.21-...` 的顶端
+（`ba33b5c`）在列表中间第一次出现时，左侧绿线从行顶凭空伸下来一截，看着像从上一行断掉。
+根因不是 lane 断了，是拓扑序把分支顶端排在中间：它上方本来就没有可见的父/兄弟提交。
+
+- **`skills.mjs`**：`logGraphRows` 记录 `born`（这条 lane 是不是本行才出现的）；新分支优先
+  复用左侧已收束的空列（不再隔着空列跑到最右）；渲染时 born lane **不画**从行顶到节点的
+  入口线，节点就是干净的起点。
+- 用 50 条真实提交做了连续性断言：每行与上一行 lane 状态逐位一致、所有父边都有落点。
+
+`sw.js` → v257。
+## v258（2026-11-20）历史卡跟着视口长高
+
+用户实拍："这个框高度增加，下面还有很大的空白" —— 400px 的卡、30px 一行只露 13 条，
+右下角空掉半屏；实际后面还有几十条，只是被卡高裁掉了。
+
+- **`style-ide.css`**：`#grLog` 400px → `clamp(420px, 100vh - 320px, 1200px)`：
+  窗口越高一次露得越多（900 高的窗口约 20 条），最矮 420、最高 1200，仍然卡内滚动。
+
+`sw.js` → v258。
+## v259（2026-11-20）图形树整块 SVG、首屏 500 条、接口并行、颜色跟分支走
+
+用户连问三句："bandi 也要这个效果（Git Graph 截图）"、"为啥 idea 展示这么多、bandi 只一部分"、
+"为啥 idea 读那么快、bandi 这么慢"。三件事根因各不相同，一起收在这一版：
+
+- **`skills.mjs` · 树改成一块覆盖层 SVG**：原来每行一个 `<svg>`，分叉曲线只能在本行 26px 内
+  收完，跨行那半截靠 overflow 溢出、还会被下一行底色盖掉（看着是个小弯钩）。现在线和点统一画在
+  `.gr-log-wrap > svg.gr-log-lines`（绝对定位、`z-index:2`、`pointer-events:none`），出线能从本行
+  节点一路弯到下一行节点 `(X(pl), H+cy)`；圆点排在所有线**之后**画，线不会从点上穿过。
+  行高 30→26、lane 22→18（24 太宽会把弧线拉平成斜线），合并提交画空心点、HEAD 加外环。
+- **`git-repos.mjs` / `routes/git.mjs` · 首屏 50 → 500 条**：`recentLog` 写死 `--max-count=50`
+  且路由不透传 limit，界面只能回溯到几十条。现在拉 `n+1` 判 `more`，返回 `{commits, more}`，
+  前端底部「加载更多」逐档 +500 到 2000 封顶（换仓库回首档）。
+- **`style-ide.css` · `content-visibility: auto`**：500 行全量布局一次 ~100ms（布局 99ms、首帧 107ms），
+  跳过屏外行后 **布局 12~16ms、首帧 20~23ms**。前提是行高固定 26px 且行上无过渡动画。
+- **`git-repos.mjs` · `workState` / `listBranches` 改并发**：单次 `git` 启动在 Windows 上是 65~70ms
+  （`git --version` 也 65ms），慢的是进程不是运算。`workState` 11 次串行 730ms → 三层
+  `Promise.all` 约 350ms；`listBranches` 6 次串行 545ms → 并发 208ms。命令与解析一个字没动
+  （合并命令只多省 40ms，却要动 status/upstream 解析，不值）。
+- **`skills.mjs` · 颜色跟着分支走**：原来按 `lane index % 8` 取色，某列收束后被别的分支复用时
+  颜色就"换主人"（同一条线半路变蓝）。现在颜色号挂在 lane 上、出生时领、第一父继承、收束时清空；
+  领色取"当前没被占的下一个色号"（自增取模会让 1 号色和 9 号色同时在屏——实测 354 行撞 20 行）。
+
+- **修 TDZ（2026-11-20 用户实拍没有渲染出来）**：`let logRepoId` / `let logLimit` 原先写在
+  `renderGitRepos` 函数体**末尾**，而函数体前段就调了 `fillLog(sel)` —— 闭包里读到的还是暂时性死区，
+  抛 `Cannot access 'logRepoId' before initialization`，async 函数在**第一个 await 之前**就挂了，
+  所以历史卡永远停在「读提交记录…」（既不报错也不渲染）。这几个常量/状态已提到模块顶层。
+  真页截图还暴露出列宽被挤：说明列 `min-width: 0`、胶囊组 `flex: 0 0 auto`，两条长分支名就能把
+  说明压成「refact…」。现在说明列 `min-width: 200px`、胶囊组改可缩、行内留 14px 间距，胶囊整组按
+  34% 裁（不让每条胶囊自己缩 —— 那样会一起塌成 "c… o… f…"）。
+
+## v261（2026-11-20）历史卡高度：100vh-320 → 100vh-240
+
+用户贴图"这个框高度增加"：卡片下面还空着一大片。真页量（1280×900，可用高 803px）：卡片上沿 159px、
+下沿到内容底 35px、`#pluginView` 底部留白 40px，合计 234px —— 原来减 320 多减了 86px。
+改成 `clamp(420px, calc(100vh - 240px), 2000px)`：卡片 483 → **563px**，且 `#pluginView` 的
+scrollHeight = clientHeight（整页不再多出滚动条）。减到 200 会溢出 34px、卡片底被顶出屏幕
+（卡内滚 + 整页滚两套滚动条），所以停在 240。
+
+`sw.js` → v261。
+
+## v262（2026-11-20）四个 tab 的标题顶间距统一
+
+用户贴图："标题跟上部的间隙统一，提交那个 tab 的标题跟上部的间隙就很小"。
+
+根因不是 tab 条，是 `style.css` 的 `.plg-sec + .plg-sec { margin-top: 14px }` —— 它按 **DOM 相邻**
+算，而 `.plg-sec[data-gr-tab] { display:none }` 不影响相邻关系：被隐藏的兄弟照样把 14px 让给下一块。
+于是除**第一块**（「提交」，前面只有 tab 条）以外，其余 tab 的面板都白拿了 14px —— 量出来提交 0、
+其它 14，差的就是这一截。
+
+- `style-git.css`：`.gr-tabs + .plg-sec { margin-top: 14px }` 补齐第一块。
+- 只补 margin 还差 2px：标题行里有按钮的 tab（分支管理 / PR）行更高，`align-items:center` 把标题
+  又压低 2px。加 `.plg-detail > .plg-sec[data-gr-tab] > .plg-sec-head { min-height: 26px }`，
+  四个 tab 实测**全是 16px**（tab 条 margin-bottom 4 + 14 + 居中余量）。
+
+`sw.js` → v262。
+
+## v263（2026-11-20）历史卡滚动条右移：日期让位、贴近卡片边框
+
+用户贴图："这个滚动条跟左边的间隙增大，跟右边的间隙减小"。
+
+全局滚动条是 11px 槽 + 左右各 3px 透明边（`style.css` 的 `::-webkit-scrollbar`），杆只占 5px，
+而且贴在滚动容器的**右边界**上；`#grLog` 又缩在 `.fx` 的 16px 右内边距里 —— 于是「杆 ↔ 日期」
+只有 15px、「杆 ↔ 卡片边框」却有 20px，正好拧着。
+
+- `style-ide.css`：`.plg-sec[data-gr-tab="log"] > .fx { padding-right: 6px }` 把滚动条整体右移 10px；
+  `#grLog .gr-log-row` 的右内边距 12 → 22 把日期列拽回原位（实测日期右边 1182px 一个字没动）。
+- 实测（经典滚动条，1280×900）：「杆 ↔ 日期」15 → **25px**，「杆 ↔ 边框」20 → **10px**；
+  行 hover 底色左右内缩仍是 17 / 18px，没有变成一头长一头短。
+- 注意：`::-webkit-scrollbar-thumb` 默认透明、只在 hover 时显示，静态截图看不见杆 ——
+  这类调整只能靠 `getBoundingClientRect` + `offsetWidth - clientWidth` 量，别拿截图判断。
+
+`sw.js` → v263。
+
+## v264（2026-11-20）图形树去掉「冒头的茬」
+
+用户贴图（合并节点下方的红框）："这个冒头的茬不太美观"。
+
+合并提交的第二父会**新开一列**，出线从节点斜着弯到下一行那个节点的中心。下一行那一列的
+「入口竖线」原本无条件补一段 `M X lane 行顶 V 节点中心` —— 可它头顶根本没有竖线（线是从
+左边斜着进来的），于是这一小截就悬在圆点上方，成了茬。354 行里 **75 行**都有。
+
+- `skills.mjs`：`logGraphRows` 给每行记 `diagInto`（这行的合并出线斜着落进了哪些列）；
+  `renderLogGraph` 画入口竖线时多一个条件 —— `if (!r.born && !arrivedDiag)`。
+- 自检（真实 354 条）：去掉 75 处茬；**悬空节点 0**（判据是"上一行该列是否还活着 / 本节是否
+  合并曲线 / 是否分支顶端"，三者都不满足才算悬空 —— 第一版拿 `prev.lane === lane` 当判据，
+  把 12 个正常的贯穿列误判成悬空）。
+- 验证方式：CDP 打开真页 → 滚到指定行 → `Page.captureScreenshot` 带 `clip` 把图形列裁出来
+  放大 5 倍逐行看。**`clip.y` 必须在视口内**，超出视口拍到的是空白/旧内容。
+
+`sw.js` → v264。
+
+## v265（2026-11-20）历史卡底部留白收窄：61 → 24px
+
+用户贴图（卡片下方那块空，画了红框）："这个间隙再小一些"。
+
+真页量（1406×803）：卡框（`.fx` 的边框）下沿到窗口底还有 **61px** 纯空 ——
+`.detail-body` 的 20 + `#pluginView` 的 40 + 边框 1。这页是「一张定高卡铺满整页」的版式，
+底下留这么宽一条空，看着像页面没画完。
+
+- `style-ide.css`：新增三条**只用在这一页**的规则 —— `#pluginView:has(#grLog)` 下
+  `padding-bottom` 12、`.detail-body` 的 `padding-bottom` 12，卡框下沿离窗口底 **24px**。
+  作用域交给 `:has(#grLog)` 自己界定（该卡片只在这页存在），不在 JS 里挂 class ——
+  少一处「离开时忘了摘」的坑，历史卡一没，内边距自己回 40。
+- 卡高常量跟着改：`100vh - 240px` → **`100vh - 205px`**（240 是按「底部 76px」算的，
+  现在底部 39px，240 - 37 = 203，取 205 留 2px 余量，宁可差两像素也不让整页多出滚动条）。
+- 自检（CDP 1406×803）：卡高 563 → **598**、`gapToPvBottom` 76 → **41**、
+  卡框到窗口底 61 → **26px**；`documentElement.scrollHeight === innerHeight` 仍成立（没多出整页滚动条）。
+
+`sw.js` → v265。
+
+## v266（2026-11-20）点「重跑一次」后，收工横幅跟着收掉
+
+用户贴图（红框圈着讨论区顶上那条红字）："点击重跑按钮之后，这个是不是应该不显示了"。
+
+那条横幅（`.tc-statebar.bad`「这轮没跑成 —— 没干完。他消息脚上有「↻ 重跑一次」…」）
+是照**上一轮**的结果写的话。重跑已经把活交出去了，横幅却留在原地 —— 一边跑一边说"没跑成"，
+等于当着他的面说反话（截图里横幅底下就是「他还在说…」的实时进度）。
+
+- `projects.mjs` 的 `rerunTask`：派活成功后，除了收掉旧失败轮的 `[data-rerun]` 按钮，
+  再把 `#tcThreads` 里的 `.tc-statebar` 一并摘掉。
+- 不重新算横幅，因为 `stateBanner` 本来就写着"他正在跑时不画"（跑着时进度卡就是信号）——
+  整块重画时这条自然会消失，这里只是把同一个结论提前落到 DOM 上。
+- 没拿到 `runId`（在排队 → 走 `refreshThread`）也不受影响：重画会按新状态补回对的那条。
+
+`sw.js` → v266。
+
+## v267（2026-11-20）任务卡输入框右边留出 16px
+
+用户贴图（红框圈着输入框右沿）："这个输入框跟右边要有间隙"。
+
+真页量（1400×900，`.tc-main` 左栏 86→1096）：输入框 106→**1095**，右沿正好压在左栏的
+`border-right`（那条跟右栏之间的竖线）上 —— 右边 0 间隙，左边却有 20（`.tc-main` 的
+`padding-left`）。一边贴死一边留白，看着歪。
+
+- `style-task.css`：`.tc-main > .tc-composer, .tc-main > .tc-new-topic { margin-right: 16px }`。
+- **用 margin 不用 padding**：横线画在元素的 border-box 上，加 padding 会让线比框多出 16px
+  （2026-10-19 用户提过"横线比框长出一截，看着不齐"）；margin 让线跟框一起收。
+- 16 不是随手取的：`.tc-main-scroll` 的 `padding-right` 就是 16 —— 收完后**框、分隔线、
+  讨论列三者右沿落在同一条线上**（106→1079）。
+- 只作用于**贴在底部的那个**：`.tc-main >` 限定住，停靠进议题的 `.tc-composer.inline`
+  与手机抽屉里那份不匹配（各自有自己的内边距），实测停靠后 `margin-right: 0` 未受影响。
+
+`sw.js` → v267。

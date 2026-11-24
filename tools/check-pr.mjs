@@ -239,7 +239,12 @@ const removed = new Map();
   let newLine = 0;
   for (const raw of diff.split('\n')) {
     if (raw.startsWith('+++ ')) {
-      const p = raw.slice(4);
+      /*
+       * git 对**带空格的路径**会在 diff 头部行尾补一个制表符（`+++ b/docs/00.5 xxx/bandi运维操作手册.md\t`，
+       * 用来跟行尾可能出现的其他信息消歧）—— 不剥掉的话 isDoc 判不出这是文档，
+       * 本该"仅提示"的文档地址被升成硬违规（2026-11-24 PR #97 实报，运维手册 0.0.0.0:18787 撞闸）。
+       */
+      const p = raw.slice(4).replace(/\t+$/, '');
       if (p === '/dev/null') {
         /*
          * 删除文件：**必须把 file 摘掉**（2026-11-09 PR #64 抓到）——
