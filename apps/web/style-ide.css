@@ -1920,10 +1920,6 @@ dialog .member:has(input:disabled) span { color: var(--dim); }
 .fp-row.file { font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; }
 .fp-row.file em { color: var(--dim); font-style: normal; font-size: 11.5px; flex: none; }
 .fp-row.file.on { background: var(--rail-active); color: var(--accent); }
-/* PR 弹窗的「自动填充」行（2026-10-29）：钮贴在标题 label 右侧，别占一整行 */
-.pr-fill-row { display: flex; align-items: center; gap: 8px; }
-.pr-fill-row button:disabled { opacity: .6; cursor: default; }
-
 /* 节点面板里的「需要我确认才进入下一步」开关 */
 .vd-switch { display: flex; align-items: center; gap: 8px; margin-top: 14px; cursor: pointer; }
 .vd-switch input { width: auto; }

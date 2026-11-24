@@ -3016,3 +3016,42 @@ resize: vertical 留着，想临时拉高自己拖。
 
 `js/skills.mjs`、`style-git.css` 动了，`sw.js` → v363。
 （上一版 v362 去掉提交清单时没补这条 changelog，版本沿革里留了个空档，这里补注。）
+## v365（2026-11-24）PR 标题/描述说明挪进输入框
+
+用户圈了标题行旁的灰字「一句话说清这个 PR 干了什么」："放到输入提示里，原来的提示去掉"；
+描述行旁那段写法要求也照同样口径处理。
+
+两个 label 后面不再挂 `<em>` 说明：标题 placeholder 从「例如：代码托管：加建 PR 与手动合并」
+换成「一句话说清这个 PR 干了什么」；描述 placeholder 从「改了什么 + 怎么验的。」
+换成「改了什么 + 怎么验的；没跑过验证就写「未验证」—— 别写「安全」「已修复」」。
+随后用户又圈了 base 行的「（base）base 不动」："这个描述去掉" —— 整段从 label 删除，
+字段只显示「合进哪个分支」，输入框仍由 `state.base` 预填。控件 id / 校验 / 自动填充都不变。
+
+最后一轮用户圈了整窗："目录地址去掉，自动填充按钮放到底部建 PR 按钮左边，关闭按钮去掉因为右上角
+有关闭按钮。" 三处照办：删 `.pr-path` 那行，`#prFillBtn` 从标题行挪进 `.dlg-actions`（仍在
+「建 PR」左侧、仍是 `type="button"`），底部「关闭」删除，只留右上角 ×。顺手把已无引用的
+`.pr-sum*` / `.pr-fill-row` 样式和 `paintState` 里遗留的 `ahead` / `pushChip` 死变量清干净。
+
+又圈了描述框 "这个框高度减小"、窗口 "这个窗口高度同步减小"：`rows` 4→3，窗口定高
+720 → 560（`min(560px, 92vh)`），描述框一度改成固定 180px。
+最后用户圈着中间那块空白说 "这么大的空白去掉 / 你增加 pr 描述的高度" —— 正解不是把窗口改
+auto，而是让描述框吃满 560px 里的剩余空间：`flex:1 1 auto; min-height:180px; resize:vertical`；
+动作条继续 `margin-top:auto` 压底。空白没了，异步内容加载时窗口也不跳。
+最后又圈了动作条上方的分隔线："这个分隔线去掉" —— `#repoPrDlg .dlg-actions` 的 `border-top` 删除。
+
+最后两处：标题从「建 PR · <仓库名>」改成「新建PR」；「先建成草稿」勾选框删除，`draft`
+固定传 `false` —— 建出来就是正式 PR，不再需要去 GitHub 点 Ready for review。其他草稿闸
+（服务端 `allowDraft`、列表里的草稿 pill、自动审阅跳过草稿）保留，仓外建的草稿仍按原规则处理。
+
+`js/skills.mjs`、`style-git.css`、`style-ide.css` 动了，`sw.js` → v365。
+
+## v366（2026-11-24）遗留分支并回 main：节点清理与检查门槛
+
+`docs/v1.5.0-readme-slim` 的 PR #90 被关掉未合并，main 上只合了 #91 的 README 瘦身。
+把该分支未进 main 的提交并回主干：清掉已下线多机节点子系统的残留（部署手册的
+`BANDI_CONTROL_PLANE` / `start-node.cmd` / 加入总机防火墙段落、`bandi node` 命令、安全政策里的
+节点与邀请码口径）；PR 弹窗去掉四枚状态 chip；仓库设置新增「检查门槛」开关，
+`requireGate=0` 的仓库在检查未开始时不再拦合并。README 以 #91 版本为底，只保留链接描述的修正。
+
+`README.md`、`deploy/README.md`、`SECURITY.md`、`docs/快速开始.md`、`js/skills.mjs`、
+`apps/server/src/security/*` 等动了，`sw.js` → v366。
