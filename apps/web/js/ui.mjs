@@ -697,7 +697,21 @@ function showCtxScrim() {
   const el = document.createElement('div');
   el.id = 'ctxScrim';
   el.className = 'ctx-scrim';
-  el.addEventListener('click', () => closeCtxMenu());
+  /*
+   * 蒙层收起也要吃**边缘容差**（2026-11-24）：卡带 24px 投影，视觉"卡边"比真实边框
+   * 大一圈 —— 用户瞄边框的手常落在边框外 1~3px 的影子里，落到的是蒙层。不加容差的话
+   * 这次 click 把卡收走（app.mjs 的 mousedown 容差只管 mousedown，管不到蒙层 click），
+   * 级联里"点边框窗口消失"从这里再漏一遍。容差口径与 app.mjs 的 8px 保持一致。
+   */
+  el.addEventListener('click', (e) => {
+    const m = document.getElementById('ctxMenu');
+    if (m && !m.hidden) {
+      const r = m.getBoundingClientRect();
+      if (e.clientX >= r.left - 8 && e.clientX <= r.right + 8
+        && e.clientY >= r.top - 8 && e.clientY <= r.bottom + 8) return;
+    }
+    closeCtxMenu();
+  });
   document.body.append(el);
 }
 
