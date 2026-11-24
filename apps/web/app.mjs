@@ -137,8 +137,11 @@ document.addEventListener('click', (e) => {
 // ⚠️ `e.target.isConnected`：combo 内部的点击若恰好把所点的元素重画掉了（折叠标题就是这样
 //    —— onclick 里 paint() 换掉 innerHTML），事件冒到这儿时 target 已经离场，
 //    closest('.combo') 找不到祖先，会被误判成"点外面"把弹层关掉（2026-10-27 用户实报）。
+// ⚠️ 点在右键操作卡（#ctxMenu / #ctxScrim）里也不算"点外面"：分支行的操作卡锚在下拉面板
+//    右沿、但挂在 body 下 —— 不跳过的话，点卡的瞬间面板先被收走，卡成了孤儿（2026-11-24）。
 document.addEventListener('click', (e) => {
-  if (openCombo && e.target.isConnected && !e.target.closest('.combo')) openCombo.close();
+  if (openCombo && e.target.isConnected && !e.target.closest('.combo')
+      && !e.target.closest?.('#ctxMenu') && !e.target.closest?.('#ctxScrim')) openCombo.close();
 });
 
 
@@ -597,9 +600,19 @@ $('drawer').addEventListener('contextmenu', (e) => {
 // 用 click 会跟它抢顺序（有时先关、有时后关，表现为"点了一下什么都没发生"）
 // 蒙层 #ctxScrim 要跳过：它自己在 click 里关（mousedown 就关的话，紧跟着的 click
 // 会落到蒙层下面那一层页面上，等于"关弹窗顺手点开了底下那一条"）。
+// 边缘容差 8px（2026-11-24 用户实报"点边框卡就没了"）：卡带 24px 大投影，看着的
+// "卡边"比真实边框大一圈，瞄边框的手常落在边框外 1~3px 的影子里 —— 影子一圈内的
+// 点击不算"点外面"，不然卡像被点穿了一样消失。
 document.addEventListener('mousedown', (e) => {
   if (e.target.closest?.('#ctxScrim')) return;
-  if (!e.target.closest?.('#ctxMenu')) closeCtxMenu();
+  if (e.target.closest?.('#ctxMenu')) return;
+  const m = document.getElementById('ctxMenu');
+  if (m && !m.hidden) {
+    const r = m.getBoundingClientRect();
+    const { clientX: x, clientY: y } = e;
+    if (x >= r.left - 8 && x <= r.right + 8 && y >= r.top - 8 && y <= r.bottom + 8) return;
+  }
+  closeCtxMenu();
 });
 
 
