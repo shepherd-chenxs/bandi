@@ -286,14 +286,10 @@ body.no-list { grid-template-columns: 68px minmax(0, 1fr); }
 body.no-list .list-panel { display: none; }
 
 /* ---------- 一级：图标栏 ---------- */
-/* 顶部字标（2026-11-10）：纯文字「班底」+ BANDI，无底色块——图形标与标题栏图标重复，
-   字标补住顶部空白又不抢戏。颜色走 --text/--dim，深浅主题自动适配。 */
+/* 左栏顶部不再放字标（2026-11-28 用户拍板撤掉）：字标已在字标与图形标之间反复过一次，
+   这次直接空出顶部，靠 .rail 自身的 14px 上内边距收住。 */
 .rail { background: var(--rail); border-right: 1px solid var(--line);
         display: flex; flex-direction: column; align-items: center; padding: 14px 0 12px; gap: 6px; }
-.rail-brand { display: grid; justify-items: center; gap: 4px; margin-bottom: 12px;
-              line-height: 1; user-select: none; }
-.rail-brand-zh { font-size: 15px; font-weight: 600; letter-spacing: 2px; text-indent: 2px; color: var(--text); }
-.rail-brand-en { font-size: 9px; font-weight: 500; letter-spacing: 3px; text-indent: 3px; color: var(--dim); }
 .nav-btn { width: 56px; border: 0; background: transparent; color: var(--dim); cursor: pointer;
            display: grid; justify-items: center; gap: 3px; padding: 8px 0; border-radius: 10px;
            font: inherit; font-size: 11px; }

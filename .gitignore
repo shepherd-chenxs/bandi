@@ -101,6 +101,7 @@ bandi.backup-*
 .codeartsdoer/
 .screenshots/
 .trae-html-share-packages/
+.security/
 /dist/
 
 # 界面核对产物（本机截图 / 探针文本；2026-10-22 数据管理页核对时产生的临时文件，不入库）
