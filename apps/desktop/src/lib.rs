@@ -94,6 +94,33 @@ const HEALTH_MISSES: u32 = 2;
 /// 兜底页。`include_str!` 进二进制：服务没起来时**不能再依赖任何磁盘上的东西**。
 const OFFLINE_HTML: &str = include_str!("offline.html");
 
+/// 压掉 WebView2 的**默认网页右键菜单**（2026-11-28，用户实报「桌面端右键显示网页菜单栏」）。
+///
+/// WebView2 在 Windows 上右键会兜出一张浏览器菜单（刷新 / 打印 / 另存为……）——
+/// 那是网页的东西，桌面壳里不该有。这里用 `initialization_script` 在**每个页面**
+/// （包括 `data:` 兜底页 / 错误页）加载前注入一段脚本：`contextmenu` 一律
+/// `preventDefault`，这张菜单就弹不出来了。
+///
+/// 两个保留项，别一刀切：
+///   · **编辑框**（文本类 input / textarea / contentEditable）不拦 —— 右键剪切/复制/
+///     粘贴是 Windows 文本编辑的原生习惯，砍掉等于丢了右键粘贴。普通按钮型控件
+///     （checkbox / button）不在白名单里，照压；
+///   · 页面**自己**的右键菜单不受影响：`app.mjs` 在 `#listBody` 上有 contextmenu
+///     委托（卡片操作菜单），事件冒泡到 document 之前它先处理、并自带 preventDefault；
+///     这段脚本只给"没人管的区域"兜底，不抢它的活。
+///
+/// 放壳里而不是 `apps/web`：浏览器里右键菜单是有用的（开发者要检查元素），这条约束
+/// 属于"桌面壳"这个形态 —— 和 `disable_drag_drop_handler` 一个道理。
+const SUPPRESS_WEB_CONTEXT_MENU: &str = r#"
+document.addEventListener('contextmenu', function (e) {
+  var t = e.target;
+  var editable = t && (t.isContentEditable === true ||
+    t.tagName === 'TEXTAREA' ||
+    (t.tagName === 'INPUT' && /^(text|search|url|tel|password|email|number)$/.test(t.type)));
+  if (!editable) e.preventDefault();
+}, false);
+"#;
+
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![pick_directory, pick_file])
@@ -201,6 +228,10 @@ pub fn run() {
                  * frontend on Windows since we replace the drag drop handler of WebView2"。
                  */
                 .disable_drag_drop_handler()
+                /*
+                 * 压掉默认网页右键菜单（2026-11-28，见 `SUPPRESS_WEB_CONTEXT_MENU` 的注释）。
+                 */
+                .initialization_script(SUPPRESS_WEB_CONTEXT_MENU)
                 /*
                  * **先藏起来，等页面画完再露脸。**
                  *
